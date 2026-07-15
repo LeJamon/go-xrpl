@@ -158,6 +158,9 @@ type CreateOpts struct {
 	HolderCount *uint32
 	// Flags are the transaction flags
 	Flags uint32
+	// MutableFlags marks which capabilities can later be mutated (DynamicMPT).
+	// Use a pointer so a value of 0 is still transmitted (an error case).
+	MutableFlags *uint32
 	// Err is the expected error code (nil means expect success)
 	Err string
 }
@@ -207,6 +210,14 @@ type SetOpts struct {
 	ID string
 	// Flags are the transaction flags (tfMPTLock, tfMPTUnlock)
 	Flags uint32
+	// Metadata replaces the hex-encoded metadata (DynamicMPT). A pointer so
+	// that &"" (remove the field) differs from nil (absent).
+	Metadata *string
+	// TransferFee replaces the transfer fee (DynamicMPT). Pointer so 0 (remove)
+	// differs from nil (absent).
+	TransferFee *uint16
+	// MutableFlags sets/clears the mutable capability flags (DynamicMPT).
+	MutableFlags *uint32
 	// Err is the expected error code (empty means expect success)
 	Err string
 }
@@ -238,6 +249,9 @@ func (m *MPTTester) Create(opts CreateOpts) {
 	}
 	if opts.Metadata != nil {
 		create.MPTokenMetadata = opts.Metadata
+	}
+	if opts.MutableFlags != nil {
+		create.MutableFlags = opts.MutableFlags
 	}
 	if opts.Flags != 0 {
 		create.SetFlags(opts.Flags)
@@ -373,6 +387,15 @@ func (m *MPTTester) Set(opts SetOpts) {
 	if opts.Holder != nil {
 		set.Holder = opts.Holder.Address
 	}
+	if opts.Metadata != nil {
+		set.MPTokenMetadata = opts.Metadata
+	}
+	if opts.TransferFee != nil {
+		set.TransferFee = opts.TransferFee
+	}
+	if opts.MutableFlags != nil {
+		set.MutableFlags = opts.MutableFlags
+	}
 	if opts.Flags != 0 {
 		set.SetFlags(opts.Flags)
 	}
@@ -395,14 +418,8 @@ func (m *MPTTester) Pay(src, dest *jtx.Account, amount int64, expectedErr ...str
 
 	mptAmount := m.MPTAmount(amount)
 
-	// Use stored issuance ID, or compute it from current sequence if not yet created
-	id := m.id
-	if id == "" {
-		id = makeMPTIDHex(m.env.Seq(m.issuer), m.issuer)
-	}
-
 	result := m.env.Submit(
-		paybuilder.PayIssued(src, dest, mptAmount).MPTIssuanceID(id).Build(),
+		paybuilder.PayIssued(src, dest, mptAmount).Build(),
 	)
 
 	if len(expectedErr) > 0 && expectedErr[0] != "" {
@@ -422,7 +439,6 @@ func (m *MPTTester) PayWithSendMax(src, dest *jtx.Account, amount int64, sendMax
 	mptSendMax := m.MPTAmount(sendMax)
 	result := m.env.Submit(
 		paybuilder.PayIssued(src, dest, mptAmount).
-			MPTIssuanceID(m.id).
 			SendMax(mptSendMax).
 			Build(),
 	)
@@ -443,7 +459,6 @@ func (m *MPTTester) PayWithFlags(src, dest *jtx.Account, amount int64, flags uin
 	mptAmount := m.MPTAmount(amount)
 	result := m.env.Submit(
 		paybuilder.PayIssued(src, dest, mptAmount).
-			MPTIssuanceID(m.id).
 			Flags(flags).
 			Build(),
 	)
@@ -462,7 +477,7 @@ func (m *MPTTester) PayFull(src, dest *jtx.Account, amount, sendMax, deliverMin 
 	m.t.Helper()
 
 	mptAmount := m.MPTAmount(amount)
-	builder := paybuilder.PayIssued(src, dest, mptAmount).MPTIssuanceID(m.id)
+	builder := paybuilder.PayIssued(src, dest, mptAmount)
 
 	if sendMax != 0 {
 		mptSendMax := m.MPTAmount(sendMax)
@@ -527,11 +542,11 @@ func (m *MPTTester) Claw(issuer, holder *jtx.Account, amount int64, expectedErr 
 // serializes as a 33-byte MPToken amount rather than being misrouted through the
 // IOU path (which loses precision and rejects values above 16 significant digits).
 func (m *MPTTester) MPTAmount(amount int64) tx.Amount {
-	if m.id != "" {
-		return state.NewMPTAmountWithIssuanceID(amount, m.issuer.Address, m.id)
+	id := m.id
+	if id == "" {
+		id = makeMPTIDHex(m.env.Seq(m.issuer), m.issuer)
 	}
-	// Issuance not yet created: fall back to a raw MPT value (no embedded ID).
-	return state.NewMPTAmountDirect(amount, "MPT", m.issuer.Address)
+	return state.NewMPTAmountWithIssuanceID(amount, m.issuer.Address, id)
 }
 
 // mptokenAmount reads the holder's MPToken balance from the ledger.
@@ -585,6 +600,116 @@ func (m *MPTTester) RequireMPTokenAmount(holder *jtx.Account, expected int64) {
 	m.t.Helper()
 	require.Equal(m.t, uint64(expected), m.mptokenAmount(holder),
 		"MPToken amount mismatch for holder %s", holder.Name)
+}
+
+// issuance reads and parses the MPTokenIssuance SLE for this tester.
+func (m *MPTTester) issuance() *state.MPTokenIssuanceData {
+	m.t.Helper()
+	mptID := decodeMPTID(m.id)
+	data, err := m.env.Ledger().Read(keylet.MPTIssuance(mptID))
+	require.NoError(m.t, err)
+	require.NotNil(m.t, data, "MPTokenIssuance %s not found", m.id)
+	issuance, err := state.ParseMPTokenIssuance(data)
+	require.NoError(m.t, err)
+	return issuance
+}
+
+// CheckIssuanceFlags asserts the issuance's sfFlags value.
+// Reference: rippled MPTTester::checkFlags().
+func (m *MPTTester) CheckIssuanceFlags(expected uint32) {
+	m.t.Helper()
+	require.Equal(m.t, expected, m.issuance().Flags, "issuance flags mismatch")
+}
+
+// CheckMutableFlags asserts the issuance's sfMutableFlags value.
+func (m *MPTTester) CheckMutableFlags(expected uint32) {
+	m.t.Helper()
+	require.Equal(m.t, expected, m.issuance().MutableFlags, "issuance MutableFlags mismatch")
+}
+
+// CheckMetadata asserts the issuance metadata equals hexMetadata.
+// Reference: rippled MPTTester::checkMetadata().
+func (m *MPTTester) CheckMetadata(hexMetadata string) {
+	m.t.Helper()
+	require.Equal(m.t, strings.ToUpper(hexMetadata), strings.ToUpper(m.issuance().MPTokenMetadata),
+		"issuance metadata mismatch")
+}
+
+// IsMetadataPresent reports whether the issuance carries a metadata field.
+func (m *MPTTester) IsMetadataPresent() bool {
+	m.t.Helper()
+	return m.issuance().MPTokenMetadata != ""
+}
+
+// CheckTransferFee asserts the issuance transfer fee.
+// Reference: rippled MPTTester::checkTransferFee().
+func (m *MPTTester) CheckTransferFee(expected uint16) {
+	m.t.Helper()
+	require.Equal(m.t, expected, m.issuance().TransferFee, "issuance transfer fee mismatch")
+}
+
+// IsTransferFeePresent reports whether the issuance carries a transfer fee.
+func (m *MPTTester) IsTransferFeePresent() bool {
+	m.t.Helper()
+	return m.issuance().TransferFee != 0
+}
+
+// HolderLockedAmount returns a holder's escrowed MPT balance (MPToken
+// sfLockedAmount). A missing entry or field reads as 0.
+func (m *MPTTester) HolderLockedAmount(holder *jtx.Account) uint64 {
+	m.t.Helper()
+	mptID := decodeMPTID(m.id)
+	issuanceKey := keylet.MPTIssuance(mptID)
+	tokenKey := keylet.MPToken(issuanceKey.Key, holder.ID)
+
+	data, err := m.env.Ledger().Read(tokenKey)
+	if err != nil || data == nil {
+		return 0
+	}
+	token, err := state.ParseMPToken(data)
+	if err != nil {
+		m.t.Fatalf("failed to parse MPToken entry: %v", err)
+	}
+	if token.LockedAmount == nil {
+		return 0
+	}
+	return *token.LockedAmount
+}
+
+// IssuanceLockedAmount returns the total escrowed amount on the issuance
+// (sfLockedAmount). A missing entry or field reads as 0.
+func (m *MPTTester) IssuanceLockedAmount() uint64 {
+	m.t.Helper()
+	issuance := m.readIssuance()
+	if issuance == nil || issuance.LockedAmount == nil {
+		return 0
+	}
+	return *issuance.LockedAmount
+}
+
+// IssuanceOutstandingAmount returns the issuance sfOutstandingAmount.
+func (m *MPTTester) IssuanceOutstandingAmount() uint64 {
+	m.t.Helper()
+	issuance := m.readIssuance()
+	if issuance == nil {
+		return 0
+	}
+	return issuance.OutstandingAmount
+}
+
+func (m *MPTTester) readIssuance() *state.MPTokenIssuanceData {
+	mptID := decodeMPTID(m.id)
+	issuanceKey := keylet.MPTIssuance(mptID)
+
+	data, err := m.env.Ledger().Read(issuanceKey)
+	if err != nil || data == nil {
+		return nil
+	}
+	issuance, err := state.ParseMPTokenIssuance(data)
+	if err != nil {
+		m.t.Fatalf("failed to parse MPTokenIssuance entry: %v", err)
+	}
+	return issuance
 }
 
 // --------------------------------------------------------------------------
@@ -660,6 +785,30 @@ const (
 
 	// MPTokenAuthorize flags
 	TfMPTUnauthorize = mpttx.MPTokenAuthorizeFlagUnauthorize
+
+	// MPTokenIssuanceCreate MutableFlags (DynamicMPT)
+	TmfMPTCanMutateCanLock     = mpttx.TmfMPTCanMutateCanLock
+	TmfMPTCanMutateRequireAuth = mpttx.TmfMPTCanMutateRequireAuth
+	TmfMPTCanMutateCanEscrow   = mpttx.TmfMPTCanMutateCanEscrow
+	TmfMPTCanMutateCanTrade    = mpttx.TmfMPTCanMutateCanTrade
+	TmfMPTCanMutateCanTransfer = mpttx.TmfMPTCanMutateCanTransfer
+	TmfMPTCanMutateCanClawback = mpttx.TmfMPTCanMutateCanClawback
+	TmfMPTCanMutateMetadata    = mpttx.TmfMPTCanMutateMetadata
+	TmfMPTCanMutateTransferFee = mpttx.TmfMPTCanMutateTransferFee
+
+	// MPTokenIssuanceSet MutableFlags (DynamicMPT)
+	TmfMPTSetCanLock       = mpttx.TmfMPTSetCanLock
+	TmfMPTClearCanLock     = mpttx.TmfMPTClearCanLock
+	TmfMPTSetRequireAuth   = mpttx.TmfMPTSetRequireAuth
+	TmfMPTClearRequireAuth = mpttx.TmfMPTClearRequireAuth
+	TmfMPTSetCanEscrow     = mpttx.TmfMPTSetCanEscrow
+	TmfMPTClearCanEscrow   = mpttx.TmfMPTClearCanEscrow
+	TmfMPTSetCanTrade      = mpttx.TmfMPTSetCanTrade
+	TmfMPTClearCanTrade    = mpttx.TmfMPTClearCanTrade
+	TmfMPTSetCanTransfer   = mpttx.TmfMPTSetCanTransfer
+	TmfMPTClearCanTransfer = mpttx.TmfMPTClearCanTransfer
+	TmfMPTSetCanClawback   = mpttx.TmfMPTSetCanClawback
+	TmfMPTClearCanClawback = mpttx.TmfMPTClearCanClawback
 
 	// Payment flags for MPT payment tests
 	TfNoRippleDirect = payment.PaymentFlagNoDirectRipple

@@ -29,7 +29,7 @@ func TestValidateWithCanonicality_HighS(t *testing.T) {
 		lowSDER = "3045022100E1617F1A3C85B5BC8FA6224F893FE9068BEA8F8D075EE144F6F9D255C829761802206FD9B361CDE83A0C3D5654232F1D7CFB1A614E9A8F9B1A861564029065516E64"
 	)
 
-	algo := SECP256K1()
+	algo := Algorithm{}
 
 	require.True(t, algo.Validate(msg, pubHex, lowSDER),
 		"baseline: low-S DER must verify under strict (mustBeFullyCanonical=true)")
@@ -40,8 +40,8 @@ func TestValidateWithCanonicality_HighS(t *testing.T) {
 	require.NoError(t, err)
 	highSBytes, err := hex.DecodeString(highSDER)
 	require.NoError(t, err)
-	require.Equal(t, rootcrypto.CanonicityFullyCanonical, rootcrypto.ECDSACanonicality(lowSBytes))
-	require.Equal(t, rootcrypto.CanonicityCanonical, rootcrypto.ECDSACanonicality(highSBytes))
+	require.Equal(t, rootcrypto.CanonicalityFullyCanonical, rootcrypto.ECDSACanonicality(lowSBytes))
+	require.Equal(t, rootcrypto.CanonicalityCanonical, rootcrypto.ECDSACanonicality(highSBytes))
 
 	require.False(t, algo.Validate(msg, pubHex, highSDER),
 		"high-S DER must be rejected under strict (mustBeFullyCanonical=true)")

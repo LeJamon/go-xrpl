@@ -67,10 +67,10 @@ func (m *mockAccountCurrenciesLedgerService) GetGenesisAccount() (string, error)
 	return "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh", nil
 }
 func (m *mockAccountCurrenciesLedgerService) GetLedgerBySequence(seq uint32) (types.LedgerReader, error) {
-	return nil, errors.New("not implemented")
+	return accountQueryLedgerBySequence(seq, m.currentLedgerIndex, m.validatedLedgerIndex)
 }
 func (m *mockAccountCurrenciesLedgerService) GetLedgerByHash(hash [32]byte) (types.LedgerReader, error) {
-	return nil, errors.New("not implemented")
+	return accountQueryLedgerByHash(hash, m.validatedLedgerIndex)
 }
 func (m *mockAccountCurrenciesLedgerService) SubmitTransaction(txJSON []byte, txBlobHex ...string) (*types.SubmitResult, error) {
 	return nil, errors.New("not implemented")
@@ -148,7 +148,7 @@ func (m *mockAccountCurrenciesLedgerService) GetAccountCurrencies(_ context.Cont
 		Validated:         true,
 	}, nil
 }
-func (m *mockAccountCurrenciesLedgerService) GetAccountNFTs(_ context.Context, account string, ledgerIndex string, limit uint32) (*types.AccountNFTsResult, error) {
+func (m *mockAccountCurrenciesLedgerService) GetAccountNFTs(_ context.Context, account string, ledgerIndex string, limit uint32, _ string) (*types.AccountNFTsResult, error) {
 	return nil, errors.New("not implemented")
 }
 func (m *mockAccountCurrenciesLedgerService) GetGatewayBalances(_ context.Context, account string, hotWallets []string, ledgerIndex string) (*types.GatewayBalancesResult, error) {
@@ -211,7 +211,7 @@ func TestAccountCurrenciesBadInput(t *testing.T) {
 			// missing account field
 			name:          "Missing account field - empty params",
 			params:        map[string]any{},
-			expectedError: "Missing required parameter: account",
+			expectedError: "Missing field 'account'.",
 			expectedCode:  types.RpcINVALID_PARAMS,
 		},
 		{
@@ -220,7 +220,7 @@ func TestAccountCurrenciesBadInput(t *testing.T) {
 			params: map[string]any{
 				"account": 1,
 			},
-			expectedError: "Invalid parameters:",
+			expectedError: "Invalid field 'account'.",
 			expectedCode:  types.RpcINVALID_PARAMS,
 		},
 		{
@@ -229,7 +229,7 @@ func TestAccountCurrenciesBadInput(t *testing.T) {
 			params: map[string]any{
 				"account": 1.1,
 			},
-			expectedError: "Invalid parameters:",
+			expectedError: "Invalid field 'account'.",
 			expectedCode:  types.RpcINVALID_PARAMS,
 		},
 		{
@@ -238,7 +238,7 @@ func TestAccountCurrenciesBadInput(t *testing.T) {
 			params: map[string]any{
 				"account": true,
 			},
-			expectedError: "Invalid parameters:",
+			expectedError: "Invalid field 'account'.",
 			expectedCode:  types.RpcINVALID_PARAMS,
 		},
 		{
@@ -573,9 +573,9 @@ func TestAccountCurrenciesResponseFields(t *testing.T) {
 	err = json.Unmarshal(resultJSON, &resp)
 	require.NoError(t, err)
 
-	// Verify all required fields are present
-	assert.Contains(t, resp, "ledger_hash")
-	assert.Contains(t, resp, "ledger_index")
+	assert.Contains(t, resp, "ledger_current_index")
+	assert.NotContains(t, resp, "ledger_hash")
+	assert.NotContains(t, resp, "ledger_index")
 	assert.Contains(t, resp, "receive_currencies")
 	assert.Contains(t, resp, "send_currencies")
 	assert.Contains(t, resp, "validated")

@@ -6,8 +6,11 @@
 package ledgerfields
 
 import (
+	"errors"
+	"fmt"
+
 	"github.com/LeJamon/go-xrpl/codec/binarycodec"
-	"github.com/LeJamon/go-xrpl/crypto/common"
+	"github.com/LeJamon/go-xrpl/crypto/sha512half"
 	"github.com/LeJamon/go-xrpl/protocol"
 )
 
@@ -18,10 +21,13 @@ func init() {
 // RippleState is the typed representation of a RippleState ledger entry.
 // The present bitset tracks which fields appear on the decoded blob so the
 // emit methods only write entries that actually exist. The struct carries
-// every on-wire field — including those excluded from metadata
-// (sMD_Never) — so Decode → Encode is byte-identical.
+// every canonical field declared in the spec — including those excluded from
+// metadata (sMD_Never) — so decoding and re-encoding does not drop them.
 type RippleState struct {
 	present           uint64
+	decoded           bool
+	dirty             bool
+	decodedBinary     []byte
 	Flags             uint32
 	Balance           any    // Amount (XRP string | IOU map)
 	LowLimit          any    // Amount (XRP string | IOU map)
@@ -51,16 +57,157 @@ const (
 	ripplestateBitPreviousTxnLgrSeq
 )
 
+// SetFlags assigns Flags and updates its serialized presence.
+func (r *RippleState) SetFlags(value uint32) {
+	r.Flags = value
+	r.dirty = true
+	r.present |= ripplestateBitFlags
+}
+
+// SetBalance assigns Balance and updates its serialized presence.
+func (r *RippleState) SetBalance(value any) {
+	r.Balance = value
+	r.dirty = true
+	r.present |= ripplestateBitBalance
+}
+
+// SetLowLimit assigns LowLimit and updates its serialized presence.
+func (r *RippleState) SetLowLimit(value any) {
+	r.LowLimit = value
+	r.dirty = true
+	r.present |= ripplestateBitLowLimit
+}
+
+// SetHighLimit assigns HighLimit and updates its serialized presence.
+func (r *RippleState) SetHighLimit(value any) {
+	r.HighLimit = value
+	r.dirty = true
+	r.present |= ripplestateBitHighLimit
+}
+
+// SetLowNode assigns LowNode and updates its serialized presence.
+func (r *RippleState) SetLowNode(value string) {
+	r.LowNode = value
+	r.dirty = true
+	r.present |= ripplestateBitLowNode
+}
+
+// SetHighNode assigns HighNode and updates its serialized presence.
+func (r *RippleState) SetHighNode(value string) {
+	r.HighNode = value
+	r.dirty = true
+	r.present |= ripplestateBitHighNode
+}
+
+// SetLowQualityIn assigns LowQualityIn and updates its serialized presence.
+func (r *RippleState) SetLowQualityIn(value uint32) {
+	r.LowQualityIn = value
+	r.dirty = true
+	r.present |= ripplestateBitLowQualityIn
+}
+
+// SetLowQualityOut assigns LowQualityOut and updates its serialized presence.
+func (r *RippleState) SetLowQualityOut(value uint32) {
+	r.LowQualityOut = value
+	r.dirty = true
+	r.present |= ripplestateBitLowQualityOut
+}
+
+// SetHighQualityIn assigns HighQualityIn and updates its serialized presence.
+func (r *RippleState) SetHighQualityIn(value uint32) {
+	r.HighQualityIn = value
+	r.dirty = true
+	r.present |= ripplestateBitHighQualityIn
+}
+
+// SetHighQualityOut assigns HighQualityOut and updates its serialized presence.
+func (r *RippleState) SetHighQualityOut(value uint32) {
+	r.HighQualityOut = value
+	r.dirty = true
+	r.present |= ripplestateBitHighQualityOut
+}
+
+// SetPreviousTxnID assigns PreviousTxnID and updates its serialized presence.
+func (r *RippleState) SetPreviousTxnID(value string) {
+	r.PreviousTxnID = value
+	r.dirty = true
+	r.present |= ripplestateBitPreviousTxnID
+}
+
+// SetPreviousTxnLgrSeq assigns PreviousTxnLgrSeq and updates its serialized presence.
+func (r *RippleState) SetPreviousTxnLgrSeq(value uint32) {
+	r.PreviousTxnLgrSeq = value
+	r.dirty = true
+	r.present |= ripplestateBitPreviousTxnLgrSeq
+}
+
+func (r *RippleState) validateRequired() error {
+	if r.decoded && !r.dirty {
+		return nil
+	}
+	if r.present&ripplestateBitFlags == 0 {
+		return errors.New("ledgerfields: RippleState: required field Flags is not set")
+	}
+	if r.present&ripplestateBitBalance == 0 {
+		return errors.New("ledgerfields: RippleState: required field Balance is not set")
+	}
+	if r.present&ripplestateBitLowLimit == 0 {
+		return errors.New("ledgerfields: RippleState: required field LowLimit is not set")
+	}
+	if r.present&ripplestateBitHighLimit == 0 {
+		return errors.New("ledgerfields: RippleState: required field HighLimit is not set")
+	}
+	return nil
+}
+
+func (r *RippleState) validateDecoded() error {
+	if r.present&ripplestateBitFlags == 0 {
+		return errors.New("ledgerfields: RippleState: required field Flags is missing")
+	}
+	if r.present&ripplestateBitBalance == 0 {
+		return errors.New("ledgerfields: RippleState: required field Balance is missing")
+	}
+	if r.present&ripplestateBitLowLimit == 0 {
+		return errors.New("ledgerfields: RippleState: required field LowLimit is missing")
+	}
+	if r.present&ripplestateBitHighLimit == 0 {
+		return errors.New("ledgerfields: RippleState: required field HighLimit is missing")
+	}
+	if r.present&ripplestateBitPreviousTxnID == 0 {
+		return errors.New("ledgerfields: RippleState: required field PreviousTxnID is missing")
+	}
+	if r.present&ripplestateBitPreviousTxnLgrSeq == 0 {
+		return errors.New("ledgerfields: RippleState: required field PreviousTxnLgrSeq is missing")
+	}
+	return nil
+}
+
 // Decode populates the struct from binary ledger-entry data via a streaming
-// reader. Unknown / sMD_Never fields are skipped without allocation.
+// reader and enforces the current rippled ledger template.
 func (r *RippleState) Decode(data []byte) error {
+	return r.decode(data, false)
+}
+
+func (r *RippleState) decodeLegacy(data []byte) error {
+	return r.decode(data, true)
+}
+
+func (r *RippleState) decode(data []byte, legacy bool) error {
 	*r = RippleState{}
 	sr := newStreamReader(data)
+	seenFields := make(map[[2]int]struct{})
+	sawLedgerEntryType := false
+	preserveDecodedBinary := false
 	for sr.hasMore() {
 		typeCode, fieldCode, err := sr.readFieldHeader()
 		if err != nil {
 			return err
 		}
+		fieldID := [2]int{typeCode, fieldCode}
+		if _, exists := seenFields[fieldID]; exists {
+			return fmt.Errorf("ledgerfields: RippleState: duplicate field type=%d field=%d", typeCode, fieldCode)
+		}
+		seenFields[fieldID] = struct{}{}
 		switch typeCode {
 		case 1: // UInt16
 			u16Val, err := sr.readUint16()
@@ -70,7 +217,10 @@ func (r *RippleState) Decode(data []byte) error {
 			val := int(u16Val)
 			switch fieldCode {
 			case 1:
-				_ = val // synthetic LedgerEntryType; discard
+				if val != 114 {
+					return fmt.Errorf("ledgerfields: RippleState: LedgerEntryType is %d, want 114", val)
+				}
+				sawLedgerEntryType = true
 			default:
 				return newErrUnknownField("RippleState", typeCode, fieldCode)
 			}
@@ -133,7 +283,8 @@ func (r *RippleState) Decode(data []byte) error {
 				return newErrUnknownField("RippleState", typeCode, fieldCode)
 			}
 		case 6: // Amount
-			val, err := sr.readAmountAny()
+			val, badCurrency, err := sr.readAmountAnyAllowBadCurrency()
+			preserveDecodedBinary = preserveDecodedBinary || badCurrency
 			if err != nil {
 				return err
 			}
@@ -153,6 +304,16 @@ func (r *RippleState) Decode(data []byte) error {
 		default:
 			return newErrUnknownField("RippleState", typeCode, fieldCode)
 		}
+	}
+	if !sawLedgerEntryType {
+		return errors.New("ledgerfields: RippleState: missing LedgerEntryType")
+	}
+	if preserveDecodedBinary {
+		r.decodedBinary = append([]byte(nil), data...)
+	}
+	r.decoded = true
+	if !legacy {
+		return r.validateDecoded()
 	}
 	return nil
 }
@@ -340,11 +501,23 @@ func (r *RippleState) ToMap() map[string]any {
 	return out
 }
 
-// Encode serializes the receiver to canonical XRPL binary. Round-trip
-// invariant: Decode(data); Encode() == data for any byte sequence that
-// Decode accepts.
+// Encode serializes the receiver to canonical XRPL binary. Legacy decode
+// aliases and non-canonical input ordering are emitted in canonical form.
 func (r *RippleState) Encode() ([]byte, error) {
-	return binarycodec.EncodeBytes(r.ToMap())
+	if err := r.validateRequired(); err != nil {
+		return nil, err
+	}
+	if r.decoded && !r.dirty && len(r.decodedBinary) != 0 {
+		return append([]byte(nil), r.decodedBinary...), nil
+	}
+	out := r.ToMap()
+	if r.present&ripplestateBitPreviousTxnID == 0 {
+		out["PreviousTxnID"] = "0000000000000000000000000000000000000000000000000000000000000000"
+	}
+	if r.present&ripplestateBitPreviousTxnLgrSeq == 0 {
+		out["PreviousTxnLgrSeq"] = uint32(0)
+	}
+	return binarycodec.EncodeBytes(out)
 }
 
 // Hash returns the SHAMap account-state leaf hash for this entry,
@@ -355,6 +528,6 @@ func (r *RippleState) Hash(index [32]byte) ([32]byte, error) {
 	if err != nil {
 		return [32]byte{}, err
 	}
-	prefix := protocol.HashPrefixLeafNode
-	return common.Sha512Half(prefix[:], data, index[:]), nil
+	prefix := protocol.HashPrefixLeafNode()
+	return sha512half.Sum(prefix[:], data, index[:]), nil
 }

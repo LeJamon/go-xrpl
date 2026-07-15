@@ -16,32 +16,33 @@ Running conformance tests (timeout=300s)...
 =========================================
  CONFORMANCE SUMMARY
 =========================================
- Total:    1271 pass /  244 fail / 1515  (83.8%)
- In scope: 1098 pass /   43 fail / 1141  (96.2%)
- Out:       173 pass /  201 fail /  374
+ Total:    1334 pass /  120 fail / 1454  (91.7%)
+ Skipped:    64
+ In scope: 1260 pass /    0 fail / 1260  (100.0%)
+ Out:        74 pass /  120 fail /  194
 =========================================
 
 Per-suite breakdown:
 
 Suite                                          Pass  Fail Total   Rate
 -----                                          ----  ---- -----   ----
-app/AccountDelete                                15     1    16    93%
+app/AccountDelete                                16     0    16   100%
 app/AccountTxPaging                               1     0     1   100%
-app/AMM                                          34     8    42    80%
-app/AMMClawback                                  11     1    12    91%
+app/AMM                                          42     0    42   100%
+app/AMMClawback                                  12     0    12   100%
 app/AMMExtended                                  44     0    44   100%
 app/Batch                                         5    25    30    16%
 app/Check                                        14     0    14   100%
 app/Clawback                                     10     0    10   100%
 app/Credentials                                  42     0    42   100%
-app/Delegate                                     11     5    16    68%
+app/Delegate                                     16     0    16   100%
 app/DeliverMin                                    1     0     1   100%
-app/DepositAuth                                   3     1     4    75%
+app/DepositAuth                                   4     0     4   100%
 app/DepositPreauth                               11     0    11   100%
 app/DID                                           5     0     5   100%
 app/Discrepancy                                   1     0     1   100%
 app/Escrow                                       18     0    18   100%
-app/EscrowToken                                  30     4    34    88%
+app/EscrowToken                                  32     0    32   100%
 app/FixNFTokenPageLinks                           3     0     3   100%
 app/Flow                                         17     0    17   100%
 app/Freeze                                       13     0    13   100%
@@ -51,35 +52,35 @@ app/MPToken                                      20     0    20   100%
 app/MultiSign                                    21     0    21   100%
 app/NetworkID                                     1     0     1   100%
 app/NetworkOPs                                    1     0     1   100%
-app/NFTokenAllFeatures                           35     1    36    97%
-app/NFTokenAuth                                   5     4     9    55%
-app/NFTokenBaseUtil                              35     1    36    97%
-app/NFTokenBurnAllFeatures                        3     1     4    75%
-app/NFTokenBurnBaseUtil                           4     1     5    80%
-app/NFTokenBurnWOfixFungTokens                    4     1     5    80%
-app/NFTokenBurnWOFixNFTPageLinks                  4     1     5    80%
-app/NFTokenBurnWOFixTokenRemint                   4     1     5    80%
-app/NFTokenDir                                    4     1     5    80%
-app/NFTokenDisallowIncoming                      35     1    36    97%
-app/NFTokenWOfixV1                               35     1    36    97%
-app/NFTokenWOMintOffer                           35     1    36    97%
-app/NFTokenWOModify                              35     1    36    97%
-app/NFTokenWOTokenRemint                         35     1    36    97%
-app/NFTokenWOTokenReserve                        35     1    36    97%
-app/OfferAllFeatures                             56     3    59    94%
-app/OfferBaseUtil                                57     3    60    95%
-app/OfferWOFillOrKill                            56     3    59    94%
-app/OfferWOPermDEX                               56     3    59    94%
-app/OfferWOSmallQOffers                          56     3    59    94%
-app/OfferWTakerDryOffer                          56     3    59    94%
+app/NFTokenAllFeatures                           36     0    36   100%
+app/NFTokenAuth                                   5     0     5   100%
+app/NFTokenBaseUtil                              36     0    36   100%
+app/NFTokenBurnAllFeatures                        4     0     4   100%
+app/NFTokenBurnBaseUtil                           5     0     5   100%
+app/NFTokenBurnWOfixFungTokens                    5     0     5   100%
+app/NFTokenBurnWOFixNFTPageLinks                  5     0     5   100%
+app/NFTokenBurnWOFixTokenRemint                   5     0     5   100%
+app/NFTokenDir                                    5     0     5   100%
+app/NFTokenDisallowIncoming                      36     0    36   100%
+app/NFTokenWOfixV1                               36     0    36   100%
+app/NFTokenWOMintOffer                           36     0    36   100%
+app/NFTokenWOModify                              36     0    36   100%
+app/NFTokenWOTokenRemint                         36     0    36   100%
+app/NFTokenWOTokenReserve                        36     0    36   100%
+app/OfferAllFeatures                             59     0    59   100%
+app/OfferBaseUtil                                60     0    60   100%
+app/OfferWOFillOrKill                            59     0    59   100%
+app/OfferWOPermDEX                               59     0    59   100%
+app/OfferWOSmallQOffers                          59     0    59   100%
+app/OfferWTakerDryOffer                          59     0    59   100%
 app/Oracle                                        7     0     7   100%
 app/Path                                         45     0    45   100%
 app/PayChan                                      24     0    24   100%
 app/PayStrand                                     4     0     4   100%
 app/PermissionedDEX                              11     0    11   100%
 app/PermissionedDomains                           6     0     6   100%
-app/ReducedOffer                                  4     1     5    80%
-app/Regression                                    6     1     7    85%
+app/ReducedOffer                                  5     0     5   100%
+app/Regression                                    7     0     7   100%
 app/SetAuth                                       1     0     1   100%
 app/SetRegularKey                                 9     0     9   100%
 app/SetTrust                                     14     0    14   100%
@@ -88,9 +89,9 @@ app/ThinBook                                      1     0     1   100%
 app/Ticket                                        8     0     8   100%
 app/Transaction_ordering                          3     0     3   100%
 app/TrustAndBalance                              13     0    13   100%
-app/TxQMetaInfo                                  17     3    20    85%
-app/TxQPosNegFlows                               15     2    17    88%
-app/Vault                                        45   141   186    24%
+app/TxQMetaInfo                                  19     0    19   100%
+app/TxQPosNegFlows                               17     0    17   100%
+app/Vault                                        52    80   132    39%
 app/XChain                                        1    14    15     6%
 app/XChainSim                                     0     1     1     0%
 ledger/BookDirs                                   1     0     1   100%

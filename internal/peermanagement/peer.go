@@ -279,6 +279,18 @@ func (p *Peer) RemoteIP() string {
 	return host
 }
 
+func (p *Peer) remoteEndpoint() (Endpoint, bool) {
+	p.mu.RLock()
+	conn := p.conn
+	p.mu.RUnlock()
+
+	if conn == nil {
+		return Endpoint{}, false
+	}
+	endpoint, err := ParseEndpoint(conn.RemoteAddr().String())
+	return endpoint, err == nil
+}
+
 // Inbound returns true if this is an inbound connection.
 func (p *Peer) Inbound() bool {
 	return p.inbound
@@ -464,6 +476,15 @@ func (p *Peer) CheckTracking(peerSeq, validSeq uint32) {
 			}
 		}
 	}
+}
+
+// CheckTrackingAgainst compares the peer's advertised ledger range to a
+// quorum-validated sequence.
+func (p *Peer) CheckTrackingAgainst(validSeq uint32) {
+	p.mu.RLock()
+	peerSeq := p.lastLedgerSeq
+	p.mu.RUnlock()
+	p.CheckTracking(peerSeq, validSeq)
 }
 
 func (p *Peer) ServerDomain() string {
@@ -876,6 +897,13 @@ func (p *Peer) readLoop(ctx context.Context) error {
 				p.IncBadData("compression-unnegotiated")
 				return fmt.Errorf("peer sent a compressed frame without negotiating compression")
 			}
+		}
+
+		if !message.IsKnownMessageType(header.MessageType) {
+			continue
+		}
+
+		if header.Compressed {
 			payload, err = DecompressLZ4(payload, int(header.UncompressedSize))
 			if err != nil {
 				p.IncBadData("decompress-lz4-failed")
@@ -1005,11 +1033,7 @@ func (p *Peer) runPingTick(now time.Time) error {
 		PType: message.PingTypePing,
 		Seq:   seq,
 	}
-	encoded, err := message.Encode(ping)
-	if err != nil {
-		return nil
-	}
-	wireMsg, err := message.BuildWireMessage(message.TypePing, encoded)
+	wireMsg, err := message.EncodeFrame(ping)
 	if err != nil {
 		return nil
 	}
@@ -1564,7 +1588,7 @@ func (p *Peer) Info() PeerInfo {
 		pubKeyBytes = p.remotePubKey.Bytes()
 	}
 
-	stats := p.traffic.GetTotalStats()
+	stats := p.traffic.TotalStats()
 
 	var closedLedger string
 	if p.hasClosedLedger {

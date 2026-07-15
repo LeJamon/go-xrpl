@@ -36,27 +36,24 @@ func (p *PermissionedDomainSet) TxType() tx.Type {
 	return tx.TypePermissionedDomainSet
 }
 
+// GetFlagsMask adopts the engine FlagsMasker seam. PermissionedDomainSet defines
+// no type-specific flags, so the base universal mask is checked at preflight0
+// (before the credentials array checks), matching rippled's default
+// Transactor::getFlagsMask.
+func (p *PermissionedDomainSet) GetFlagsMask(rules *amendment.Rules) uint32 {
+	return tx.TfUniversalMask
+}
+
 // Reference: rippled PermissionedDomainSet.cpp preflight()
 func (p *PermissionedDomainSet) Validate() error {
 	if err := p.BaseTx.Validate(); err != nil {
 		return err
 	}
 
-	// Check for invalid flags (tfUniversalMask)
-	// Reference: rippled PermissionedDomainSet.cpp:41-45
-	if err := tx.CheckFlags(p.GetFlags(), tx.TfUniversalMask); err != nil {
-		return err
-	}
-
-	// If DomainID is present, it must be a valid non-zero 256-bit hash.
-	if p.DomainID != "" {
-		if _, err := tx.ParseHash256NonZero(p.DomainID); err != nil {
-			return err
-		}
-	}
-
-	// Validate AcceptedCredentials array
-	// Reference: rippled PermissionedDomainSet.cpp checkArray()
+	// credentials::checkArray runs FIRST (rippled preflight order): array bounds,
+	// then per-credential zero-issuer / credential-type / duplicate checks. Only
+	// after it succeeds is the DomainID present-and-zero check evaluated.
+	// Reference: rippled PermissionedDomainSet.cpp preflight() -> CredentialHelpers.cpp checkArray().
 	if len(p.AcceptedCredentials) == 0 {
 		return ErrPermDomainEmptyCredentials
 	}
@@ -70,6 +67,16 @@ func (p *PermissionedDomainSet) Validate() error {
 
 		if data.Issuer == "" {
 			return ErrPermDomainNoIssuer
+		}
+		// A zero (all-0x00) issuer AccountID is temINVALID_ACCOUNT_ID, and it
+		// precedes the credential-type rules. A zero AccountID decodes to the
+		// non-empty classic address, so the "" check above cannot catch it.
+		// rippled rejects only the zero account (`!issuer`); a well-formed
+		// non-zero account decodes here and is used to key the duplicate set.
+		// Reference: CredentialHelpers.cpp checkArray -> `if (!issuer) return temINVALID_ACCOUNT_ID`.
+		issuerID, decErr := state.DecodeAccountID(data.Issuer)
+		if decErr == nil && issuerID == ([20]byte{}) {
+			return ter.Errorf(ter.TemINVALID_ACCOUNT_ID, "credential issuer account is invalid")
 		}
 
 		if data.CredentialType == "" {
@@ -87,11 +94,29 @@ func (p *PermissionedDomainSet) Validate() error {
 			return ErrPermDomainCredTypeTooLong
 		}
 
-		key := data.Issuer + ":" + data.CredentialType
+		// Duplicates are detected on the decoded (issuer, credentialType) bytes so
+		// two entries differing only in credential-type hex case still collide,
+		// mirroring rippled's sha512Half(issuer, ct) dedup key. A non-decodable
+		// placeholder issuer falls back to its raw string.
+		var issuerKey string
+		if decErr == nil {
+			issuerKey = string(issuerID[:])
+		} else {
+			issuerKey = data.Issuer
+		}
+		key := issuerKey + "\x00" + string(credTypeBytes)
 		if seen[key] {
 			return ErrPermDomainDuplicateCredential
 		}
 		seen[key] = true
+	}
+
+	// If DomainID is present, it must be a valid non-zero 256-bit hash. Checked
+	// after the credentials array. Reference: rippled PermissionedDomainSet.cpp preflight().
+	if p.DomainID != "" {
+		if _, err := tx.ParseHash256NonZero(p.DomainID); err != nil {
+			return err
+		}
 	}
 
 	return nil
@@ -116,28 +141,54 @@ func (p *PermissionedDomainSet) RequiredAmendments() [][32]byte {
 }
 
 // Reference: rippled PermissionedDomainSet.cpp preclaim() + doApply()
+// Preclaim runs the ledger-aware checks in rippled PermissionedDomainSet::preclaim
+// order: every AcceptedCredentials issuer must exist (tecNO_ISSUER); when a
+// DomainID is given, the domain must exist (tecNO_ENTRY) and be owned by the
+// sender (tecNO_PERMISSION). The mutation stays in Apply (rippled doApply).
+func (p *PermissionedDomainSet) Preclaim(view tx.LedgerView, config tx.EngineConfig) ter.Result {
+	accountID, err := state.DecodeAccountID(p.Account)
+	if err != nil {
+		return ter.TemBAD_SRC_ACCOUNT
+	}
+
+	for _, cred := range p.AcceptedCredentials {
+		issuerID, derr := state.DecodeAccountID(cred.Credential.Issuer)
+		if derr != nil {
+			return ter.TemINVALID
+		}
+		if exists, _ := view.Exists(keylet.Account(issuerID)); !exists {
+			return ter.TecNO_ISSUER
+		}
+	}
+
+	if p.DomainID != "" {
+		domainBytes, derr := hex.DecodeString(p.DomainID)
+		if derr != nil || len(domainBytes) != 32 {
+			return ter.TemINVALID
+		}
+		var domainID [32]byte
+		copy(domainID[:], domainBytes)
+		data, rerr := view.Read(keylet.PermissionedDomainByID(domainID))
+		if rerr != nil || data == nil {
+			return ter.TecNO_ENTRY
+		}
+		existing, perr := state.ParsePermissionedDomain(data)
+		if perr != nil {
+			return ter.TefINTERNAL
+		}
+		if existing.Owner != accountID {
+			return ter.TecNO_PERMISSION
+		}
+	}
+	return ter.TesSUCCESS
+}
+
 func (p *PermissionedDomainSet) Apply(ctx *tx.ApplyContext) ter.Result {
 	ctx.Log.Trace("permissioned domain set apply",
 		"account", p.Account,
 		"domainID", p.DomainID,
 		"credentialCount", len(p.AcceptedCredentials),
 	)
-
-	// Preclaim: verify each issuer account exists
-	// Reference: rippled PermissionedDomainSet.cpp preclaim() lines 70-85
-	for _, cred := range p.AcceptedCredentials {
-		issuerID, err := state.DecodeAccountID(cred.Credential.Issuer)
-		if err != nil {
-			return ter.TemINVALID
-		}
-		issuerData, err := ctx.View.Read(keylet.Account(issuerID))
-		if err != nil || issuerData == nil {
-			ctx.Log.Warn("permissioned domain set: issuer does not exist",
-				"issuer", cred.Credential.Issuer,
-			)
-			return ter.TecNO_ISSUER
-		}
-	}
 
 	// Sort credentials by (Issuer bytes, CredentialType bytes) ascending
 	// Reference: rippled PermissionedDomainSet.cpp makeSorted()

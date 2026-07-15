@@ -21,12 +21,20 @@ const maxNestingDepth = 10
 // and the associated value is the field's value. This structure allows us to represent nested
 // and complex structures of the Ripple protocol.
 type STObject struct {
-	binarySerializer *serdes.BinarySerializer
+	binarySerializer   *serdes.BinarySerializer
+	skipJSONArrayLimit bool
 }
 
 // NewSTObject returns a new STObject with the given binary serializer.
 func NewSTObject(bs *serdes.BinarySerializer) *STObject {
 	return &STObject{binarySerializer: bs}
+}
+
+// NewTrustedSTObject returns an STObject for protocol objects constructed by
+// trusted internal code. It preserves all structural validation while skipping
+// the JSON-input-only array element limit.
+func NewTrustedSTObject(bs *serdes.BinarySerializer) *STObject {
+	return &STObject{binarySerializer: bs, skipJSONArrayLimit: true}
 }
 
 // FromJSON converts a JSON object into a serialized byte slice.
@@ -51,7 +59,13 @@ func (t *STObject) FromJSON(json any) ([]byte, error) {
 			continue
 		}
 
-		st := GetSerializedType(v.Type)
+		st := SerializedTypeFor(v.Type)
+		setSkipJSONArrayLimit(st, t.skipJSONArrayLimit)
+		if !t.skipJSONArrayLimit {
+			if err := checkJSONArraySize(v.FieldName, v.Type, fimap[v]); err != nil {
+				return nil, err
+			}
+		}
 		b, err := st.FromJSON(fimap[v])
 		if err != nil {
 			return nil, err
@@ -61,7 +75,36 @@ func (t *STObject) FromJSON(json any) ([]byte, error) {
 			return nil, err
 		}
 	}
-	return t.binarySerializer.GetSink(), nil
+	return t.binarySerializer.Bytes(), nil
+}
+
+// checkJSONArraySize enforces MaxJSONArrayElements on a JSON array field before
+// it is serialized, mirroring rippled's per-array-field maxSTParsedJSONArraySize
+// cap. Only STArray/Vector256/PathSet field values are JSON arrays; the outer
+// PathSet array is capped here, its inner paths in PathSet.FromJSON.
+func checkJSONArraySize(fieldName, fieldType string, value any) error {
+	switch fieldType {
+	case "STArray", "Vector256", "PathSet":
+		if n, ok := jsonArrayLen(value); ok && n > MaxJSONArrayElements {
+			return &JSONArrayTooLargeError{Field: fieldName}
+		}
+	}
+	return nil
+}
+
+// jsonArrayLen reports the length of a JSON array value in any of the shapes the
+// codec accepts, or (0, false) if the value is not an array.
+func jsonArrayLen(value any) (int, bool) {
+	switch v := value.(type) {
+	case []any:
+		return len(v), true
+	case []map[string]any:
+		return len(v), true
+	case []string:
+		return len(v), true
+	default:
+		return 0, false
+	}
 }
 
 // ToJSON takes a BinaryParser and optional parameters, and converts the serialized byte data
@@ -134,7 +177,7 @@ func (t *STObject) toJSON(p *serdes.BinaryParser, depth int) (map[string]any, bo
 			return nil, false, fmt.Errorf("duplicate field detected: %q", fi.FieldName)
 		}
 
-		st := GetSerializedType(fi.Type)
+		st := SerializedTypeFor(fi.Type)
 		if st == nil {
 			return nil, false, fmt.Errorf("unknown type %q for field %q", fi.Type, fi.FieldName)
 		}
@@ -224,7 +267,7 @@ func createFieldInstanceMapFromJson(json map[string]any) (map[definitions.FieldI
 	if !hasX {
 		m := make(map[definitions.FieldInstance]any, len(json))
 		for k, v := range json {
-			fi, err := defs.GetFieldInstanceByFieldName(k)
+			fi, err := defs.FieldInstanceByName(k)
 			if err != nil {
 				return nil, err
 			}
@@ -272,7 +315,7 @@ func createFieldInstanceMapFromJson(json map[string]any) (map[definitions.FieldI
 
 	m := make(map[definitions.FieldInstance]any, len(processedJSON))
 	for k, v := range processedJSON {
-		fi, err := defs.GetFieldInstanceByFieldName(k)
+		fi, err := defs.FieldInstanceByName(k)
 		if err != nil {
 			return nil, err
 		}
@@ -289,11 +332,17 @@ func createFieldInstanceMapFromJson(json map[string]any) (map[definitions.FieldI
 func parseSpecialFields(k string, v any) (any, error) {
 	if k == "PermissionValue" {
 		if strValue, ok := v.(string); ok {
-			permissionValue, err := definitions.Get().GetDelegatablePermissionValueByName(strValue)
-			if err != nil {
-				return nil, err
+			if permissionValue, err := definitions.Get().DelegatablePermissionValue(strValue); err == nil {
+				return uint32(permissionValue), nil
 			}
-			return uint32(permissionValue), nil
+			// A value with no registered name may be supplied in its decimal form
+			// (the round-trip of an unknown sfPermissionValue). Parse it as a plain
+			// UINT32 so it re-encodes rather than erroring.
+			n, err := strconv.ParseUint(strValue, 10, 32)
+			if err != nil {
+				return nil, fmt.Errorf("PermissionValue: unknown permission %q", strValue)
+			}
+			return uint32(n), nil
 		}
 	}
 
@@ -303,7 +352,7 @@ func parseSpecialFields(k string, v any) (any, error) {
 	// entry type 112). By resolving here we guarantee the ledger entry map wins.
 	if k == "LedgerEntryType" {
 		if strValue, ok := v.(string); ok {
-			code, err := definitions.Get().GetLedgerEntryTypeCodeByLedgerEntryTypeName(strValue)
+			code, err := definitions.Get().LedgerEntryTypeCode(strValue)
 			if err != nil {
 				return nil, err
 			}
@@ -357,22 +406,26 @@ func enumToStr(fieldName string, value any) (any, error) {
 		}
 		switch fieldName {
 		case "TransactionType":
-			return definitions.Get().GetTransactionTypeNameByTransactionTypeCode(int32(code))
+			return definitions.Get().TransactionTypeName(int32(code))
 		case "TransactionResult":
-			return definitions.Get().GetTransactionResultNameByTransactionResultTypeCode(int32(code))
+			return definitions.Get().TransactionResultName(int32(code))
 		default:
-			return definitions.Get().GetLedgerEntryTypeNameByLedgerEntryTypeCode(int32(code))
+			return definitions.Get().LedgerEntryTypeName(int32(code))
 		}
 	case "PermissionValue":
 		code, ok := value.(uint32)
 		if !ok {
 			return nil, fmt.Errorf("PermissionValue: expected uint32 but got %T", value)
 		}
-		// Convert permission value to permission name if available, otherwise return numeric value
-		if name, err := definitions.Get().GetDelegatablePermissionNameByValue(int32(code)); err == nil {
+		// Convert the permission value to its name when one is registered.
+		if name, err := definitions.Get().DelegatablePermissionName(int32(code)); err == nil {
 			return name, nil
 		}
-		return value, nil
+		// sfPermissionValue is a plain UINT32; a value with no registered name is
+		// still valid on the wire. Emit its decimal form so it round-trips through
+		// the string-typed struct field and reaches the delegatability check
+		// rather than failing to decode.
+		return strconv.FormatUint(uint64(code), 10), nil
 	default:
 		return value, nil
 	}

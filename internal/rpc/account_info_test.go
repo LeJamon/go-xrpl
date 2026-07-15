@@ -57,10 +57,33 @@ func (m *mockLedgerService) GetGenesisAccount() (string, error) {
 	return "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh", nil
 }
 func (m *mockLedgerService) GetLedgerBySequence(seq uint32) (types.LedgerReader, error) {
-	return nil, errors.New("not implemented")
+	return accountQueryLedgerBySequence(seq, m.currentLedgerIndex, m.validatedLedgerIndex)
 }
 func (m *mockLedgerService) GetLedgerByHash(hash [32]byte) (types.LedgerReader, error) {
-	return nil, errors.New("not implemented")
+	return accountQueryLedgerByHash(hash, m.validatedLedgerIndex)
+}
+
+func accountQueryLedgerBySequence(seq, current, validated uint32) (types.LedgerReader, error) {
+	if seq == 0 || (seq > validated && seq != current) {
+		return nil, svcerr.ErrLedgerNotFound
+	}
+	return &mockLedgerReader{
+		seq:       seq,
+		closed:    seq != current,
+		validated: seq <= validated,
+	}, nil
+}
+
+func accountQueryLedgerByHash(hash [32]byte, validated uint32) (types.LedgerReader, error) {
+	if hash == ([32]byte{}) {
+		return nil, svcerr.ErrLedgerNotFound
+	}
+	return &mockLedgerReader{
+		seq:       validated,
+		hash:      hash,
+		closed:    true,
+		validated: true,
+	}, nil
 }
 func (m *mockLedgerService) SubmitTransaction(txJSON []byte, txBlobHex ...string) (*types.SubmitResult, error) {
 	return nil, errors.New("not implemented")
@@ -126,7 +149,7 @@ func (m *mockLedgerService) GetAccountChannels(_ context.Context, account string
 func (m *mockLedgerService) GetAccountCurrencies(_ context.Context, account string, ledgerIndex string) (*types.AccountCurrenciesResult, error) {
 	return nil, errors.New("not implemented")
 }
-func (m *mockLedgerService) GetAccountNFTs(_ context.Context, account string, ledgerIndex string, limit uint32) (*types.AccountNFTsResult, error) {
+func (m *mockLedgerService) GetAccountNFTs(_ context.Context, account string, ledgerIndex string, limit uint32, _ string) (*types.AccountNFTsResult, error) {
 	return nil, errors.New("not implemented")
 }
 func (m *mockLedgerService) GetGatewayBalances(_ context.Context, account string, hotWallets []string, ledgerIndex string) (*types.GatewayBalancesResult, error) {
@@ -205,13 +228,13 @@ func TestAccountInfoErrorValidation(t *testing.T) {
 		{
 			name:          "Missing account field - empty params",
 			params:        map[string]any{},
-			expectedError: "Missing required parameter: account",
+			expectedError: "Missing field 'account'.",
 			expectedCode:  types.RpcINVALID_PARAMS,
 		},
 		{
 			name:          "Missing account field - nil params",
 			params:        nil,
-			expectedError: "Missing required parameter: account",
+			expectedError: "Missing field 'account'.",
 			expectedCode:  types.RpcINVALID_PARAMS,
 		},
 		{
@@ -219,7 +242,7 @@ func TestAccountInfoErrorValidation(t *testing.T) {
 			params: map[string]any{
 				"account": 12345,
 			},
-			expectedError: "Invalid parameters:",
+			expectedError: "Invalid field 'account'.",
 			expectedCode:  types.RpcINVALID_PARAMS,
 		},
 		{
@@ -227,7 +250,7 @@ func TestAccountInfoErrorValidation(t *testing.T) {
 			params: map[string]any{
 				"account": 1.5,
 			},
-			expectedError: "Invalid parameters:",
+			expectedError: "Invalid field 'account'.",
 			expectedCode:  types.RpcINVALID_PARAMS,
 		},
 		{
@@ -235,7 +258,7 @@ func TestAccountInfoErrorValidation(t *testing.T) {
 			params: map[string]any{
 				"account": true,
 			},
-			expectedError: "Invalid parameters:",
+			expectedError: "Invalid field 'account'.",
 			expectedCode:  types.RpcINVALID_PARAMS,
 		},
 		{
@@ -243,8 +266,7 @@ func TestAccountInfoErrorValidation(t *testing.T) {
 			params: map[string]any{
 				"account": nil,
 			},
-			// Note: JSON null gets unmarshaled as empty string in Go, triggering missing parameter error
-			expectedError: "Missing required parameter: account",
+			expectedError: "Invalid field 'account'.",
 			expectedCode:  types.RpcINVALID_PARAMS,
 		},
 		{
@@ -252,7 +274,7 @@ func TestAccountInfoErrorValidation(t *testing.T) {
 			params: map[string]any{
 				"account": map[string]any{"nested": "value"},
 			},
-			expectedError: "Invalid parameters:",
+			expectedError: "Invalid field 'account'.",
 			expectedCode:  types.RpcINVALID_PARAMS,
 		},
 		{
@@ -260,7 +282,7 @@ func TestAccountInfoErrorValidation(t *testing.T) {
 			params: map[string]any{
 				"account": []string{"value1", "value2"},
 			},
-			expectedError: "Invalid parameters:",
+			expectedError: "Invalid field 'account'.",
 			expectedCode:  types.RpcINVALID_PARAMS,
 		},
 		{
@@ -441,7 +463,7 @@ func TestAccountInfoLedgerSpecification(t *testing.T) {
 			},
 		},
 		{
-			name: "ledger_index: invalid string",
+			name: "ledger_index: invalid string -> invalidParams",
 			params: map[string]any{
 				"account":      validAccount,
 				"ledger_index": "invalid_ledger",
@@ -452,7 +474,7 @@ func TestAccountInfoLedgerSpecification(t *testing.T) {
 				mock.accountInfoErr = errors.New("ledger index malformed")
 			},
 			expectError:  true,
-			expectedCode: 73, // internal (rippled rpcINTERNAL) for ledger not found
+			expectedCode: types.RpcINVALID_PARAMS,
 		},
 		{
 			name: "ledger_hash: valid hash",
@@ -800,7 +822,7 @@ func TestAccountInfoMalformedAddresses(t *testing.T) {
 		{"node public key format", "n94JNrQYkDrpt62bbSR7nVEhdyAvcJXRAsjEkFYyqRkh9SUTYEqV", types.RpcACT_MALFORMED},
 		{"seed string", "foo", types.RpcACT_MALFORMED},
 		{"short string", "r", types.RpcACT_MALFORMED},
-		{"empty string", "", types.RpcINVALID_PARAMS},
+		{"empty string", "", types.RpcACT_MALFORMED},
 		{"too short address", "rHb9CJAWyB4rj91VRWn96DkukG", types.RpcACT_MALFORMED},
 		{"too long address", "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyThExtraChars", types.RpcACT_MALFORMED},
 		{"invalid characters", "rHb9CJAWyB4rj91VRWn96DkukG4bwdty!@", types.RpcACT_MALFORMED},
@@ -983,7 +1005,7 @@ func TestAccountInfoLedgerIndexFormats(t *testing.T) {
 		{"string closed", "closed", true},
 		{"integer 1", 1, true},
 		{"integer 2", 2, true},
-		{"integer 100", 100, true},
+		{"integer 100", 100, false},
 		{"string integer", "2", true},
 		{"float 2.0", 2.0, true}, // JSON numbers are floats
 	}

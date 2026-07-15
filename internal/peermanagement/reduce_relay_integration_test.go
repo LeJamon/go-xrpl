@@ -112,7 +112,7 @@ func TestOverlay_ReduceRelay_NaturalSelection_EndToEnd(t *testing.T) {
 	require.Equal(t, RelaySlotSelected, state,
 		"slot must have transitioned to Selected after numPeers × MaxMessageThreshold messages")
 
-	selected := slot.GetSelected()
+	selected := slot.Selected()
 	require.Equal(t, MaxSelectedPeers, len(selected),
 		"exactly MaxSelectedPeers must be picked as the source set")
 

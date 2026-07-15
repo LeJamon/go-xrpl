@@ -1,6 +1,7 @@
 package nftoken
 
 import (
+	"strings"
 	"testing"
 
 	binarycodec "github.com/LeJamon/go-xrpl/codec/binarycodec"
@@ -56,7 +57,7 @@ func TestNFTokenPage_ThreadingPointersRoundTrip(t *testing.T) {
 	}
 }
 
-func TestNFTokenPage_FreshEntryOmitsThreadingPointers(t *testing.T) {
+func TestNFTokenPage_FreshEntryIncludesDefaultThreadingPointers(t *testing.T) {
 	page := &state.NFTokenPageData{
 		NFTokens: []state.NFTokenData{{NFTokenID: [32]byte{0xAA}, URI: "DEAD"}},
 	}
@@ -68,10 +69,10 @@ func TestNFTokenPage_FreshEntryOmitsThreadingPointers(t *testing.T) {
 	if err != nil {
 		t.Fatalf("decode: %v", err)
 	}
-	if _, ok := fields["PreviousTxnID"]; ok {
-		t.Error("fresh page must not serialize PreviousTxnID")
+	if got, ok := fields["PreviousTxnID"]; !ok || got != strings.Repeat("0", 64) {
+		t.Errorf("fresh page PreviousTxnID = %v", got)
 	}
-	if _, ok := fields["PreviousTxnLgrSeq"]; ok {
-		t.Error("fresh page must not serialize PreviousTxnLgrSeq")
+	if got, ok := fields["PreviousTxnLgrSeq"]; !ok || got != uint32(0) {
+		t.Errorf("fresh page PreviousTxnLgrSeq = %v", got)
 	}
 }

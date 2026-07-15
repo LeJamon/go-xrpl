@@ -94,7 +94,7 @@ func allGuestMethods() []guestMethodEntry {
 		{"unsubscribe", &handlers.UnsubscribeMethod{}},
 		{"owner_info", &handlers.OwnerInfoMethod{}},
 		{"simulate", &handlers.SimulateMethod{}},
-		{"json", &handlers.JsonMethod{}},
+		{"json", &handlers.JSONMethod{}},
 		{"channel_verify", &handlers.ChannelVerifyMethod{}},
 		{"vault_info", &handlers.VaultInfoMethod{}},
 		{"amm_info", &handlers.AMMInfoMethod{}},

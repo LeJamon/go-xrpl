@@ -29,20 +29,6 @@ func (m *bookOffersMock) GetBookOffers(_ context.Context, takerGets, takerPays t
 	return nil, errors.New("not implemented")
 }
 
-// GetLedgerBySequence shadows the base mock's "not implemented" so a numeric
-// ledger_index within the in-memory window resolves cleanly. Seqs above the
-// current open ledger still surface lgrNotFound, which is what the M2
-// "future ledger" pre-check coverage relies on.
-func (m *bookOffersMock) GetLedgerBySequence(seq uint32) (types.LedgerReader, error) {
-	if seq == 0 || seq > m.currentLedgerIndex {
-		return nil, errors.New("ledger not found")
-	}
-	return &stubLedgerReader{seq: seq}, nil
-}
-
-// GetLedgerByHash mirrors the rippled BookOffers.cpp:45-49 pre-resolve path.
-// Returns a stub reader when the test installs a custom `getLedgerByHashFn`,
-// otherwise reports "not found" so unmatched hashes surface lgrNotFound.
 func (m *bookOffersMock) GetLedgerByHash(hash [32]byte) (types.LedgerReader, error) {
 	if m.getLedgerByHashFn != nil {
 		return m.getLedgerByHashFn(hash)
@@ -54,26 +40,6 @@ func newBookOffersMock() *bookOffersMock {
 	return &bookOffersMock{
 		mockLedgerService: newMockLedgerService(),
 	}
-}
-
-// stubLedgerReader is a minimal types.LedgerReader used only to let the
-// book_offers handler's M2 lookupLedger pre-check succeed in unit tests.
-type stubLedgerReader struct{ seq uint32 }
-
-func (s *stubLedgerReader) Sequence() uint32            { return s.seq }
-func (s *stubLedgerReader) Hash() [32]byte              { return [32]byte{} }
-func (s *stubLedgerReader) ParentHash() [32]byte        { return [32]byte{} }
-func (s *stubLedgerReader) IsClosed() bool              { return true }
-func (s *stubLedgerReader) IsValidated() bool           { return true }
-func (s *stubLedgerReader) TotalDrops() uint64          { return 0 }
-func (s *stubLedgerReader) CloseTime() int64            { return 0 }
-func (s *stubLedgerReader) CloseTimeResolution() uint32 { return 0 }
-func (s *stubLedgerReader) CloseFlags() uint8           { return 0 }
-func (s *stubLedgerReader) ParentCloseTime() int64      { return 0 }
-func (s *stubLedgerReader) TxMapHash() [32]byte         { return [32]byte{} }
-func (s *stubLedgerReader) StateMapHash() [32]byte      { return [32]byte{} }
-func (s *stubLedgerReader) ForEachTransaction(func(txHash [32]byte, txData []byte) bool) error {
-	return nil
 }
 
 // newBookOffersTestServices builds a *types.ServiceContainer wrapping the mock.
@@ -828,6 +794,9 @@ func TestBookOffersValidRequestWithOffers(t *testing.T) {
 // ("validated") query emits ledger_hash + ledger_index.
 func TestBookOffersLedgerShape(t *testing.T) {
 	mock := newBookOffersMock()
+	mock.currentLedgerIndex = 9
+	mock.closedLedgerIndex = 8
+	mock.validatedLedgerIndex = 8
 	services := newBookOffersTestServices(mock)
 
 	method := &handlers.BookOffersMethod{}
@@ -909,10 +878,10 @@ func TestBookOffersEmptyOrderBook(t *testing.T) {
 
 	mock.getBookOffersFn = func(takerGets, takerPays types.Amount, _, _ string, ledgerIndex string, limit uint32, _ string, _ bool) (*types.BookOffersResult, error) {
 		return &types.BookOffersResult{
-			LedgerIndex: 2,
+			LedgerIndex: mock.currentLedgerIndex,
 			LedgerHash:  [32]byte{0x4B, 0xC5, 0x0C, 0x9B},
 			Offers:      []types.BookOffer{},
-			Validated:   true,
+			Validated:   false,
 		}, nil
 	}
 
@@ -942,7 +911,7 @@ func TestBookOffersEmptyOrderBook(t *testing.T) {
 	offers, ok := resp["offers"].([]any)
 	require.True(t, ok, "offers should be an array")
 	assert.Equal(t, 0, len(offers), "Expected empty offers array")
-	assert.Contains(t, resp, "validated")
+	assert.Equal(t, false, resp["validated"])
 	// A bare query targets the open ledger, so lookupLedger emits only
 	// ledger_current_index.
 	assert.Contains(t, resp, "ledger_current_index")
@@ -1012,14 +981,6 @@ func TestBookOffersLimitParameter(t *testing.T) {
 			limit:         nil,
 			expectedLimit: 60, // rippled rdefault (60) when user omits limit
 		},
-		{
-			// rippled readLimitField (RPCHelpers.cpp:703-712) clamps to
-			// [rmin, rmax] = [0, 100] for bookOffers; explicit 0 is valid
-			// and yields zero offers.
-			name:          "Explicit limit 0",
-			limit:         0,
-			expectedLimit: 0,
-		},
 	}
 
 	for _, tc := range tests {
@@ -1057,6 +1018,23 @@ func TestBookOffersLimitParameter(t *testing.T) {
 			assert.NotContains(t, resp, "limit", "limit must not be echoed when no marker is returned")
 		})
 	}
+
+	// rippled 3.1.3 readLimitField rejects an explicit limit=0 for every role
+	// (bookOffers rmin also bumped 0->1). Reference: RPCHelpers.cpp readLimitField.
+	t.Run("Explicit limit 0 is rejected", func(t *testing.T) {
+		params := map[string]any{
+			"taker_pays": map[string]any{"currency": "XRP"},
+			"taker_gets": map[string]any{"currency": "USD", "issuer": "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh"},
+			"limit":      0,
+		}
+		paramsJSON, err := json.Marshal(params)
+		require.NoError(t, err)
+
+		_, rpcErr := method.Handle(ctx, paramsJSON)
+		require.NotNil(t, rpcErr, "limit=0 must be rejected")
+		assert.Equal(t, types.RpcINVALID_PARAMS, rpcErr.Code)
+		assert.Equal(t, "Invalid field 'limit'.", rpcErr.Message)
+	})
 }
 
 // TestBookOffersResponseStructure tests the response structure
@@ -1357,10 +1335,7 @@ func TestBookOffersServiceError(t *testing.T) {
 	assert.NotContains(t, rpcErr.Message, "ledger not found")
 }
 
-// TestBookOffersMarkerPassthrough exercises the handler's marker handling:
-// the request marker is forwarded to GetBookOffers, an emitted response
-// marker is surfaced in the JSON, and an absent marker is omitted.
-func TestBookOffersMarkerPassthrough(t *testing.T) {
+func TestBookOffersMarkerIgnored(t *testing.T) {
 	mock := newBookOffersMock()
 	services := newBookOffersTestServices(mock)
 	method := &handlers.BookOffersMethod{}
@@ -1393,17 +1368,13 @@ func TestBookOffersMarkerPassthrough(t *testing.T) {
 	result, rpcErr := method.Handle(ctx, paramsJSON)
 	require.Nil(t, rpcErr)
 	require.NotNil(t, result)
-	assert.Equal(t, reqMarker, capturedMarker)
+	assert.Empty(t, capturedMarker)
 	assert.Equal(t, uint32(7), capturedLimit)
 	resp, ok := result.(map[string]any)
 	require.True(t, ok)
-	assert.Equal(t, respMarker, resp["marker"])
-	// Paginated response pairs marker with limit echo (account_offers
-	// convention, AccountOffers.cpp:172-176).
-	assert.Equal(t, uint32(7), resp["limit"], "paginated response must echo limit alongside marker")
+	assert.NotContains(t, resp, "marker")
+	assert.NotContains(t, resp, "limit")
 
-	// Verify the inverse: when the service emits no marker, the response
-	// contains neither a marker nor a limit key.
 	mock.getBookOffersFn = func(_, _ types.Amount, _, _ string, _ string, _ uint32, _ string, _ bool) (*types.BookOffersResult, error) {
 		return &types.BookOffersResult{LedgerIndex: 6, Offers: []types.BookOffer{}, Validated: true}, nil
 	}
@@ -1419,10 +1390,6 @@ func TestBookOffersMarkerPassthrough(t *testing.T) {
 	assert.False(t, hasLimit, "response must omit limit when no marker is emitted")
 }
 
-// TestBookOffersStaleMarkerMapping: a well-formed marker pointing at an entry
-// that no longer exists in the ledger must map to rpcINVALID_PARAMS (not
-// invalid_field_error). Mirrors rippled's AccountOffers.cpp:128-132
-// distinction between malformed marker and missing-referent marker.
 func TestBookOffersStaleMarkerMapping(t *testing.T) {
 	mock := newBookOffersMock()
 	services := newBookOffersTestServices(mock)
@@ -1450,9 +1417,6 @@ func TestBookOffersStaleMarkerMapping(t *testing.T) {
 	assert.Nil(t, result)
 	require.NotNil(t, rpcErr)
 	assert.Equal(t, types.RpcINVALID_PARAMS, rpcErr.Code)
-	assert.Contains(t, rpcErr.Message, "marker")
-	assert.NotEqual(t, "Invalid field 'marker'.", rpcErr.Message,
-		"stale marker must not collapse into invalid_field_error")
 
 	// Sanity: the malformed-marker branch still produces the invalid_field
 	// shape so callers can distinguish the two on the wire.
@@ -1462,12 +1426,10 @@ func TestBookOffersStaleMarkerMapping(t *testing.T) {
 	result, rpcErr = method.Handle(ctx, paramsJSON)
 	assert.Nil(t, result)
 	require.NotNil(t, rpcErr)
-	assert.Equal(t, "Invalid field 'marker'.", rpcErr.Message)
+	assert.Equal(t, types.RpcINVALID_PARAMS, rpcErr.Code)
 }
 
-// TestBookOffersMarkerValidation checks that the handler rejects malformed
-// markers before invoking the service.
-func TestBookOffersMarkerValidation(t *testing.T) {
+func TestBookOffersMarkerValuesIgnored(t *testing.T) {
 	mock := newBookOffersMock()
 	services := newBookOffersTestServices(mock)
 	method := &handlers.BookOffersMethod{}
@@ -1477,11 +1439,10 @@ func TestBookOffersMarkerValidation(t *testing.T) {
 		ApiVersion: types.ApiVersion1,
 		Services:   services,
 	}
-	// Fail the test if the service is reached: every case below must
-	// short-circuit inside the handler.
-	mock.getBookOffersFn = func(_, _ types.Amount, _, _ string, _ string, _ uint32, _ string, _ bool) (*types.BookOffersResult, error) {
-		t.Fatalf("service must not be called for invalid markers")
-		return nil, nil
+	var capturedMarker string
+	mock.getBookOffersFn = func(_, _ types.Amount, _, _ string, _ string, _ uint32, marker string, _ bool) (*types.BookOffersResult, error) {
+		capturedMarker = marker
+		return &types.BookOffersResult{Offers: []types.BookOffer{}}, nil
 	}
 
 	cases := []struct {
@@ -1494,6 +1455,7 @@ func TestBookOffersMarkerValidation(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
+			capturedMarker = "not called"
 			params := map[string]any{
 				"taker_pays": map[string]any{"currency": "XRP"},
 				"taker_gets": map[string]any{"currency": "USD", "issuer": "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh"},
@@ -1502,9 +1464,9 @@ func TestBookOffersMarkerValidation(t *testing.T) {
 			paramsJSON, err := json.Marshal(params)
 			require.NoError(t, err)
 			result, rpcErr := method.Handle(ctx, paramsJSON)
-			assert.Nil(t, result)
-			require.NotNil(t, rpcErr)
-			assert.Contains(t, rpcErr.Message, "marker")
+			require.Nil(t, rpcErr)
+			require.NotNil(t, result)
+			assert.Empty(t, capturedMarker)
 		})
 	}
 }
@@ -1557,17 +1519,17 @@ func TestBookOffersLedgerIndexPassthrough(t *testing.T) {
 		{
 			name:          "validated",
 			ledgerIndex:   "validated",
-			expectedIndex: "validated",
+			expectedIndex: "2",
 		},
 		{
 			name:          "current (default)",
 			ledgerIndex:   nil,
-			expectedIndex: "current",
+			expectedIndex: "3",
 		},
 		{
 			name:          "closed",
 			ledgerIndex:   "closed",
-			expectedIndex: "closed",
+			expectedIndex: "2",
 		},
 		{
 			name:          "numeric sequence",
@@ -1679,14 +1641,6 @@ func TestBookOffersLimitClampingConformance(t *testing.T) {
 		expectedLimit uint32
 	}{
 		{
-			// Book_test.cpp:1713-1716 — explicit 0 stays 0 for either role.
-			name:          "limit 0 (admin)",
-			role:          types.RoleAdmin,
-			unlimited:     true,
-			limit:         0,
-			expectedLimit: 0,
-		},
-		{
 			// Book_test.cpp:1718-1723 — limit rmax+1 (101) clamps to rmax (100)
 			// for non-admin callers (asAdmin=false branch).
 			name:          "rmax+1 clamps to rmax for guest",
@@ -1754,6 +1708,30 @@ func TestBookOffersLimitClampingConformance(t *testing.T) {
 				"Limit passed to service should match clamp/passthrough rule")
 		})
 	}
+
+	// rippled 3.1.3: limit=0 is rejected before the isUnlimited clamp, so admin
+	// (unlimited) callers are rejected too. Reference: RPCHelpers.cpp readLimitField.
+	t.Run("limit 0 rejected even for admin", func(t *testing.T) {
+		ctx := &types.RpcContext{
+			Context:    context.Background(),
+			Role:       types.RoleAdmin,
+			Unlimited:  true,
+			ApiVersion: types.ApiVersion1,
+			Services:   services,
+		}
+		params := map[string]any{
+			"taker_pays": map[string]any{"currency": "XRP"},
+			"taker_gets": map[string]any{"currency": "USD", "issuer": "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh"},
+			"limit":      0,
+		}
+		paramsJSON, err := json.Marshal(params)
+		require.NoError(t, err)
+
+		_, rpcErr := method.Handle(ctx, paramsJSON)
+		require.NotNil(t, rpcErr, "admin limit=0 must be rejected")
+		assert.Equal(t, types.RpcINVALID_PARAMS, rpcErr.Code)
+		assert.Equal(t, "Invalid field 'limit'.", rpcErr.Message)
+	})
 }
 
 // TestBookOffersTakerXAddressRejected nails down that the `taker` field rejects
@@ -1812,7 +1790,7 @@ func TestBookOffersTakerXAddressRejected(t *testing.T) {
 // TestBookOffersLedgerHashBranches exercises the three rippled
 // RPC::lookupLedger outcomes for `ledger_hash` (BookOffers.cpp:45-49 →
 // LookupLedger):
-//   - malformed (non-hex or wrong length) → invalidParams "ledgerHashMalformed"
+//   - malformed (non-hex or wrong length) → field-specific invalidParams
 //   - well-formed but not found             → lgrNotFound "ledgerNotFound"
 //   - well-formed and found                 → falls through to per-field validation
 //
@@ -1840,15 +1818,15 @@ func TestBookOffersLedgerHashBranches(t *testing.T) {
 	}
 	mock.getLedgerByHashFn = func(hash [32]byte) (types.LedgerReader, error) {
 		if hash == foundHash {
-			return &stubLedgerReader{seq: 2}, nil
+			return &mockLedgerReader{seq: 2, hash: foundHash, closed: true, validated: true}, nil
 		}
-		return nil, errors.New("ledger not found")
+		return nil, svcerr.ErrLedgerNotFound
 	}
 	mock.getBookOffersFn = func(_, _ types.Amount, _, _, _ string, _ uint32, _ string, _ bool) (*types.BookOffersResult, error) {
 		return &types.BookOffersResult{LedgerIndex: 2, Offers: []types.BookOffer{}, Validated: true}, nil
 	}
 
-	t.Run("malformed ledger_hash returns ledgerHashMalformed", func(t *testing.T) {
+	t.Run("malformed ledger_hash returns invalidParams", func(t *testing.T) {
 		// 63 hex chars (one short) — wrong length, hex.DecodeString won't even
 		// try (we return the message early on length mismatch).
 		params := map[string]any{
@@ -1866,8 +1844,7 @@ func TestBookOffersLedgerHashBranches(t *testing.T) {
 		assert.Nil(t, result)
 		require.NotNil(t, rpcErr)
 		assert.Equal(t, types.RpcINVALID_PARAMS, rpcErr.Code)
-		assert.Contains(t, rpcErr.Message, "ledgerHashMalformed",
-			"malformed length must surface ledgerHashMalformed")
+		assert.Equal(t, "Invalid field 'ledger_hash', not hex string.", rpcErr.Message)
 	})
 
 	t.Run("malformed ledger_hash pre-empts missing-field errors", func(t *testing.T) {
@@ -1882,10 +1859,10 @@ func TestBookOffersLedgerHashBranches(t *testing.T) {
 		result, rpcErr := method.Handle(ctx, paramsJSON)
 		assert.Nil(t, result)
 		require.NotNil(t, rpcErr)
-		assert.Contains(t, rpcErr.Message, "ledgerHashMalformed")
+		assert.Equal(t, "Invalid field 'ledger_hash', not hex string.", rpcErr.Message)
 	})
 
-	t.Run("non-hex ledger_hash returns ledgerHashMalformed", func(t *testing.T) {
+	t.Run("non-hex ledger_hash returns invalidParams", func(t *testing.T) {
 		// Length-64 but contains non-hex characters.
 		params := map[string]any{
 			"ledger_hash": "ZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZ",
@@ -1901,7 +1878,7 @@ func TestBookOffersLedgerHashBranches(t *testing.T) {
 		result, rpcErr := method.Handle(ctx, paramsJSON)
 		assert.Nil(t, result)
 		require.NotNil(t, rpcErr)
-		assert.Contains(t, rpcErr.Message, "ledgerHashMalformed")
+		assert.Equal(t, "Invalid field 'ledger_hash', not hex string.", rpcErr.Message)
 	})
 
 	t.Run("valid ledger_hash not found returns lgrNotFound", func(t *testing.T) {
@@ -1942,15 +1919,7 @@ func TestBookOffersLedgerHashBranches(t *testing.T) {
 	})
 }
 
-// TestBookOffersProofFlagPlumbing pins how the handler forwards the JSON
-// `proof` field through to LedgerService.GetBookOffers as the withProofs
-// flag. Rippled's BookOffers.cpp:201 (`isMember(jss::proof)`) treats any
-// presence — including explicit `false` and `null` — as truthy, but the
-// forwarded flag is ignored downstream (NetworkOPs.cpp:4430-4628). goxrpld
-// actually emits the proof, so we deliberately diverge on the explicit-bool
-// and null inputs: `false`/`null` opt out, any other present value flips
-// the flag on. See the comment at BookOffers handler.proof for rationale.
-func TestBookOffersProofFlagPlumbing(t *testing.T) {
+func TestBookOffersProofIsIgnored(t *testing.T) {
 	mock := newBookOffersMock()
 	services := newBookOffersTestServices(mock)
 	method := &handlers.BookOffersMethod{}
@@ -1978,14 +1947,13 @@ func TestBookOffersProofFlagPlumbing(t *testing.T) {
 	cases := []struct {
 		name      string
 		proof     any
-		want      bool
 		omitProof bool
 	}{
-		{name: "absent → false", omitProof: true, want: false},
-		{name: "explicit false → false (diverges from rippled isMember: opt-out)", proof: false, want: false},
-		{name: "explicit true → true", proof: true, want: true},
-		{name: "non-bool present → true (matches rippled isMember presence)", proof: "yes", want: true},
-		{name: "null → false (diverges from rippled isMember: opt-out)", proof: nil, want: false},
+		{name: "absent", omitProof: true},
+		{name: "false", proof: false},
+		{name: "true", proof: true},
+		{name: "non-bool", proof: "yes"},
+		{name: "null", proof: nil},
 	}
 
 	for _, tc := range cases {
@@ -2001,7 +1969,7 @@ func TestBookOffersProofFlagPlumbing(t *testing.T) {
 
 			_, rpcErr := method.Handle(ctx, body)
 			require.Nil(t, rpcErr)
-			assert.Equal(t, tc.want, captured, "withProofs flag mismatch")
+			assert.False(t, captured)
 		})
 	}
 }

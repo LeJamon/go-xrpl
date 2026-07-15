@@ -17,7 +17,7 @@ func testParser(data []byte) *serdes.BinaryParser {
 // failing the test if the field is not found.
 func getFieldInstance(t *testing.T, fieldName string) definitions.FieldInstance {
 	t.Helper()
-	fi, err := definitions.Get().GetFieldInstanceByFieldName(fieldName)
+	fi, err := definitions.Get().FieldInstanceByName(fieldName)
 	if err != nil {
 		t.Fatalf("failed to get field instance for %s: %v", fieldName, err)
 	}

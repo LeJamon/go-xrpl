@@ -109,7 +109,15 @@ func TestEncodeXAddress(t *testing.T) {
 
 	for _, tc := range testcases {
 		t.Run(tc.name, func(t *testing.T) {
-			actual, err := EncodeXAddress(tc.input, tc.tag, tc.tagFlag, tc.testnetFlag)
+			var tag *uint32
+			if tc.tagFlag {
+				tag = &tc.tag
+			}
+			network := Mainnet
+			if tc.testnetFlag {
+				network = Testnet
+			}
+			actual, err := EncodeXAddress(tc.input, tag, network)
 			if tc.expectedErr != nil {
 				require.Error(t, err)
 				require.Equal(t, tc.expectedErr.Error(), err.Error())
@@ -199,7 +207,7 @@ func TestDecodeXAddress(t *testing.T) {
 			} else {
 				require.Equal(t, tc.expectedAccountId, actualAccountId)
 				require.Equal(t, tc.expectedTag, actualTag)
-				require.Equal(t, tc.expectedTestnet, actualTestnet)
+				require.Equal(t, tc.expectedTestnet, actualTestnet == Testnet)
 			}
 		})
 	}
@@ -246,7 +254,7 @@ func TestXAddressToClassicAddress(t *testing.T) {
 			} else {
 				require.Equal(t, tc.expectedClassicAddress, actualClassicAddress)
 				require.Equal(t, tc.expectedTag, actualTag)
-				require.Equal(t, tc.expectedTestnet, actualTestnet)
+				require.Equal(t, tc.expectedTestnet, actualTestnet == Testnet)
 			}
 		})
 	}
@@ -289,7 +297,15 @@ func TestClassicAddressToXAddress(t *testing.T) {
 
 	for _, tc := range testcases {
 		t.Run(tc.name, func(t *testing.T) {
-			actual, err := ClassicAddressToXAddress(tc.input, tc.tag, tc.tagFlag, tc.testnetFlag)
+			var tag *uint32
+			if tc.tagFlag {
+				tag = &tc.tag
+			}
+			network := Mainnet
+			if tc.testnetFlag {
+				network = Testnet
+			}
+			actual, err := ClassicAddressToXAddress(tc.input, tag, network)
 			if tc.expectedErr != nil {
 				require.Error(t, err)
 				require.Equal(t, tc.expectedErr.Error(), err.Error())

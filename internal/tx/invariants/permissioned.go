@@ -5,6 +5,7 @@ import (
 	"encoding/hex"
 	"fmt"
 
+	"github.com/LeJamon/go-xrpl/amendment"
 	"github.com/LeJamon/go-xrpl/internal/ledger/state"
 	"github.com/LeJamon/go-xrpl/keylet"
 	"github.com/LeJamon/go-xrpl/ledger/entry"
@@ -14,55 +15,119 @@ import (
 // ValidPermissionedDomain
 // ---------------------------------------------------------------------------
 //
-// Reference: rippled InvariantCheck.cpp — ValidPermissionedDomain (lines 1538-1635)
+// Reference: rippled InvariantCheck.cpp — ValidPermissionedDomain
 //
-// Only checks for PermissionedDomainSet with tesSUCCESS.
-// visitEntry: for PermissionedDomain entries with "after" data, validates:
-//   - AcceptedCredentials array exists, is non-empty, has size <= 10
-//   - All entries are unique
-//   - Entries are sorted by (Issuer, CredentialType) lexicographically.
+// Pre-fixCleanup3_1_3: only PermissionedDomainSet with tesSUCCESS is checked;
+// the single affected domain must have an AcceptedCredentials array that is
+// non-empty, at most maxPermissionedDomainCredentials, unique, and sorted.
+//
+// Post-fixCleanup3_1_3: enforced for every transaction —
+//   - a failed (non-tesSUCCESS) transaction must not touch any domain,
+//   - at most one domain may be affected,
+//   - PermissionedDomainSet must leave exactly one non-deleted valid domain,
+//   - PermissionedDomainDelete must delete exactly one domain,
+//   - any other transaction must touch no domain.
 
-func checkValidPermissionedDomain(tx Transaction, result Result, entries []InvariantEntry) *InvariantViolation {
-	if tx.TxType() != TypePermissionedDomainSet || result != TesSUCCESS {
-		return nil
-	}
+// pdSleStatus mirrors rippled's ValidPermissionedDomain::SleStatus: the parsed
+// domain (from the entry's after-image) plus whether the entry was deleted.
+type pdSleStatus struct {
+	pd       *state.PermissionedDomainData
+	isDelete bool
+}
 
+func checkValidPermissionedDomain(tx Transaction, result Result, entries []InvariantEntry, rules *amendment.Rules) *InvariantViolation {
+	// Collect one status per touched PermissionedDomain entry. rippled's
+	// visitEntry inspects the entry's after-image (for a delete, that is the
+	// erased SLE), which maps to After when present, else Before.
+	var statuses []pdSleStatus
 	for _, e := range entries {
-		// Only check PermissionedDomain entries that have an "after" state.
-		if e.After == nil {
+		afterImage := e.After
+		if afterImage == nil {
+			afterImage = e.Before
+		}
+		if afterImage == nil || state.EntryType(afterImage) != "PermissionedDomain" {
 			continue
 		}
-
-		// Check both before and after: if before exists and is not PermissionedDomain, skip.
-		// If after exists and is not PermissionedDomain, skip.
-		// Reference: rippled lines 1544-1547
-		if e.Before != nil {
-			beforeType := state.EntryType(e.Before)
-			if beforeType != "PermissionedDomain" {
-				continue
-			}
-		}
-		afterType := state.EntryType(e.After)
-		if afterType != "PermissionedDomain" {
-			continue
-		}
-
-		// Parse the PermissionedDomain from the "after" data.
-		pd, err := state.ParsePermissionedDomain(e.After)
+		pd, err := state.ParsePermissionedDomain(afterImage)
 		if err != nil {
 			return &InvariantViolation{
 				Name:    "ValidPermissionedDomain",
 				Message: fmt.Sprintf("could not parse PermissionedDomain SLE: %v", err),
 			}
 		}
+		statuses = append(statuses, pdSleStatus{pd: pd, isDelete: e.IsDelete})
+	}
 
-		// Validate AcceptedCredentials.
-		if v := validatePermissionedDomainCredentials(pd); v != nil {
-			return v
+	if rules != nil && rules.Enabled(amendment.FeatureFixCleanup3_1_3) {
+		return checkValidPermissionedDomainNew(tx, result, statuses)
+	}
+
+	// Pre-fixCleanup3_1_3: only PermissionedDomainSet with tesSUCCESS.
+	if tx.TxType() != TypePermissionedDomainSet || result != TesSUCCESS || len(statuses) == 0 {
+		return nil
+	}
+	return validatePermissionedDomainCredentials(statuses[0].pd)
+}
+
+func checkValidPermissionedDomainNew(tx Transaction, result Result, statuses []pdSleStatus) *InvariantViolation {
+	// A failed transaction must not touch any domain object.
+	if result != TesSUCCESS {
+		if len(statuses) != 0 {
+			return &InvariantViolation{
+				Name:    "ValidPermissionedDomain",
+				Message: "failed transaction affected a permissioned domain",
+			}
+		}
+		return nil
+	}
+
+	if len(statuses) > 1 {
+		return &InvariantViolation{
+			Name:    "ValidPermissionedDomain",
+			Message: "transaction affected more than 1 permissioned domain entry",
 		}
 	}
 
-	return nil
+	switch tx.TxType() {
+	case TypePermissionedDomainSet:
+		if len(statuses) == 0 {
+			return &InvariantViolation{
+				Name:    "ValidPermissionedDomain",
+				Message: "no domain objects affected by PermissionedDomainSet",
+			}
+		}
+		if statuses[0].isDelete {
+			return &InvariantViolation{
+				Name:    "ValidPermissionedDomain",
+				Message: "domain object deleted by PermissionedDomainSet",
+			}
+		}
+		return validatePermissionedDomainCredentials(statuses[0].pd)
+
+	case TypePermissionedDomainDelete:
+		if len(statuses) == 0 {
+			return &InvariantViolation{
+				Name:    "ValidPermissionedDomain",
+				Message: "no domain objects affected by PermissionedDomainDelete",
+			}
+		}
+		if !statuses[0].isDelete {
+			return &InvariantViolation{
+				Name:    "ValidPermissionedDomain",
+				Message: "domain object modified, but not deleted by PermissionedDomainDelete",
+			}
+		}
+		return nil
+
+	default:
+		if len(statuses) != 0 {
+			return &InvariantViolation{
+				Name:    "ValidPermissionedDomain",
+				Message: "domain object(s) affected by an unauthorized transaction",
+			}
+		}
+		return nil
+	}
 }
 
 // credKey is a map key for checking credential uniqueness.
@@ -155,7 +220,11 @@ func validatePermissionedDomainCredentials(pd *state.PermissionedDomainData) *In
 // lsfHybridInvariant is the ledger flag for hybrid offers.
 const lsfHybridInvariant = entry.LsfHybrid
 
-func checkValidPermissionedDEX(tx Transaction, result Result, entries []InvariantEntry, view ReadView) *InvariantViolation {
+func checkValidPermissionedDEX(tx Transaction, result Result, entries []InvariantEntry, view ReadView, rules *amendment.Rules) *InvariantViolation {
+	// Post-fixCleanup3_1_3 a hybrid offer must carry exactly one AdditionalBooks
+	// entry (size == 1); before the amendment, only a missing field or size > 1
+	// was rejected (an empty array slipped through).
+	hybridSizeStrict := rules != nil && rules.Enabled(amendment.FeatureFixCleanup3_1_3)
 	txType := tx.TxType()
 
 	// Only check for Payment and OfferCreate with tesSUCCESS.
@@ -165,30 +234,35 @@ func checkValidPermissionedDEX(tx Transaction, result Result, entries []Invarian
 	}
 
 	var (
-		regularOffers bool
-		badHybrids    bool
-		domains       = make(map[[32]byte]bool)
+		regularOffers    bool // post-fixCleanup3_2_0: only non-deleted regular offers
+		regularOffersOld bool // pre-fixCleanup3_2_0: any touched regular offer
+		badHybrids       bool
+		domains          = make(map[[32]byte]bool)
 	)
 
 	var zeroHash [32]byte
 
 	for _, e := range entries {
-		if e.After == nil {
+		// rippled visitEntry inspects the entry's final state (its "after"); for a
+		// delete that is the erased SLE, which goXRPL carries as Before.
+		image := e.After
+		if image == nil {
+			image = e.Before
+		}
+		if image == nil {
 			continue
 		}
 
-		afterType := state.EntryType(e.After)
-
-		switch afterType {
+		switch state.EntryType(image) {
 		case "DirectoryNode":
 			// Check if the DirNode has a DomainID field.
 			// Reference: rippled lines 1643-1647
-			if domainID, present := extractDomainIDFromBinary(e.After); present {
+			if domainID, present := extractDomainIDFromBinary(image); present {
 				domains[domainID] = true
 			}
 
 		case "Offer":
-			offer, err := state.ParseLedgerOffer(e.After)
+			offer, err := state.ParseLedgerOffer(image)
 			if err != nil {
 				return &InvariantViolation{
 					Name:    "ValidPermissionedDEX",
@@ -199,18 +273,32 @@ func checkValidPermissionedDEX(tx Transaction, result Result, entries []Invarian
 			if offer.DomainID != zeroHash {
 				domains[offer.DomainID] = true
 			} else {
-				regularOffers = true
+				// A deleted regular offer counts only for the pre-fixCleanup3_2_0
+				// set: the amendment stops the invariant firing on a domain
+				// transaction that legitimately deletes a regular offer.
+				regularOffersOld = true
+				if !e.IsDelete {
+					regularOffers = true
+				}
 			}
 
 			// A hybrid offer is malformed unless it carries both a present
-			// DomainID and a present AdditionalBooks STArray of at most one
-			// entry. Presence is keyed on the field being on the wire, not on
-			// its value: a present all-zero DomainID and a present empty array
-			// both satisfy presence (mirrors rippled isFieldPresent).
+			// DomainID and a present AdditionalBooks STArray. Presence is keyed
+			// on the field being on the wire, not on its value: a present
+			// all-zero DomainID and a present empty array both satisfy presence
+			// (mirrors rippled isFieldPresent). Post-fixCleanup3_1_3 the array
+			// must hold exactly one entry (size != 1 fails); before it, only a
+			// missing field or size > 1 failed.
 			if (offer.Flags & lsfHybridInvariant) != 0 {
-				_, domainPresent := extractDomainIDFromBinary(e.After)
-				abCount := countAdditionalBooksFromBinary(e.After)
-				if !domainPresent || abCount < 0 || abCount > 1 {
+				_, domainPresent := extractDomainIDFromBinary(image)
+				abCount := countAdditionalBooksFromBinary(image)
+				var abBad bool
+				if hybridSizeStrict {
+					abBad = abCount != 1
+				} else {
+					abBad = abCount < 0 || abCount > 1
+				}
+				if !domainPresent || abBad {
 					badHybrids = true
 				}
 			}
@@ -282,9 +370,14 @@ func checkValidPermissionedDEX(tx Transaction, result Result, entries []Invarian
 		}
 	}
 
-	// No regular offers should be affected by domain transactions.
-	// Reference: rippled lines 1710-1715
-	if regularOffers {
+	// No regular offers should be affected by domain transactions. Post
+	// fixCleanup3_2_0 a legitimately deleted regular offer no longer counts.
+	// Reference: rippled lines 1710-1715 (#7118).
+	hasRegularOffers := regularOffersOld
+	if rules != nil && rules.Enabled(amendment.FeatureFixCleanup3_2_0) {
+		hasRegularOffers = regularOffers
+	}
+	if hasRegularOffers {
 		return &InvariantViolation{
 			Name:    "ValidPermissionedDEX",
 			Message: "domain transaction affected regular offers",

@@ -11,8 +11,10 @@ type portContextKey struct{}
 // It is injected by PortMiddleware and consumed by roleForRequest
 // and WebSocketServer to enforce per-port access control and limits.
 type PortContext struct {
-	PortName  string
-	AdminNets []net.IPNet
+	PortName      string
+	AdminNets     []net.IPNet
+	AdminUser     string
+	AdminPassword string
 	// SecureGatewayNets is the per-port secure_gateway allowlist. A
 	// peer in this set may carry X-Forwarded-For / X-User for
 	// downstream client-IP attribution and (with X-User) is promoted

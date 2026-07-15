@@ -26,7 +26,11 @@ func makeStubLedger(t *testing.T, seq uint32, hash, parentHash [32]byte) *ledger
 		ParentHash:  parentHash,
 		Validated:   true,
 	}
-	return ledger.NewFromHeader(hdr, stateMap, txMap, drops.Fees{})
+	l, err := ledger.NewFromHeader(hdr, stateMap, txMap, drops.Fees{})
+	if err != nil {
+		t.Fatalf("NewFromHeader: %v", err)
+	}
+	return l
 }
 
 // TestAdoptLedgerWithState_FixMismatchInvalidatesDivergedTail pins F5:

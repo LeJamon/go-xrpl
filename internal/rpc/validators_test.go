@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/hex"
 	"encoding/json"
+	"math"
 	"strings"
 	"testing"
 
@@ -92,6 +93,51 @@ func TestValidatorsEmptyList(t *testing.T) {
 	// Quorum should be 0 for stub
 	assert.Equal(t, float64(0), resp["validation_quorum"],
 		"Stub should return validation_quorum of 0")
+}
+
+func TestValidatorsDisabledQuorumUsesRippledWireValue(t *testing.T) {
+	services := &types.ServiceContainer{
+		Ledger:           newMockLedgerService(),
+		ValidationQuorum: func() int { return math.MaxInt },
+	}
+	method := &handlers.ValidatorsMethod{}
+	ctx := &types.RpcContext{
+		Context: context.Background(), Role: types.RoleAdmin,
+		ApiVersion: types.ApiVersion1, Services: services,
+	}
+
+	result, rpcErr := method.Handle(ctx, nil)
+	require.Nil(t, rpcErr)
+	encoded, err := json.Marshal(result)
+	require.NoError(t, err)
+	var resp map[string]any
+	require.NoError(t, json.Unmarshal(encoded, &resp))
+	assert.Equal(t, float64(math.MaxUint32), resp["validation_quorum"])
+}
+
+func TestValidatorsUsesEffectiveTrustedKeys(t *testing.T) {
+	const localKey = "nLocalValidator"
+	services := &types.ServiceContainer{
+		Ledger: newMockLedgerService(),
+		LocalStaticTrustedKeysBase58: func() []string {
+			return nil
+		},
+		TrustedValidatorKeysBase58: func() []string {
+			return []string{localKey}
+		},
+	}
+
+	result, rpcErr := (&handlers.ValidatorsMethod{}).Handle(&types.RpcContext{
+		Context:    context.Background(),
+		Role:       types.RoleAdmin,
+		ApiVersion: types.ApiVersion1,
+		Services:   services,
+	}, nil)
+	require.Nil(t, rpcErr)
+
+	resp := result.(map[string]any)
+	assert.Equal(t, []string{localKey}, resp["trusted_validator_keys"])
+	assert.Equal(t, []string{}, resp["local_static_keys"])
 }
 
 // TestValidatorsAdminOnly tests that the validators method requires admin role.
@@ -262,7 +308,7 @@ func TestValidationCreateHexSeed(t *testing.T) {
 	const hexSeed = "DEDCE9CE67B451D852FD4E846FCDE31C" // 32 hex chars = 16-byte seed
 	entropy, err := hex.DecodeString(hexSeed)
 	require.NoError(t, err)
-	base58Seed, err := addresscodec.EncodeSeed(entropy, secp256k1.SECP256K1())
+	base58Seed, err := addresscodec.EncodeSeed(entropy, secp256k1.Algorithm{})
 	require.NoError(t, err)
 
 	fromHex := callValidationCreate(t, method, ctx, hexSeed)

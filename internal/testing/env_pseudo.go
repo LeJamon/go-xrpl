@@ -1,4 +1,4 @@
-package testing
+package jtx
 
 import (
 	"time"
@@ -42,7 +42,7 @@ func (e *TestEnv) EnableFeatureNow(name string) {
 // surfaces loudly instead of silently running the test against the wrong rules.
 func (e *TestEnv) requireKnownAmendment(name string) {
 	e.t.Helper()
-	if amendment.GetFeatureByName(name) == nil {
+	if amendment.FeatureByName(name) == nil {
 		e.t.Fatalf("unknown amendment name %q", name)
 	}
 }
@@ -66,7 +66,7 @@ func (e *TestEnv) SetNetworkID(id uint32) {
 // the engine rules themselves only switch at Close.
 // Reference: rippled's Env::enabled() in test/jtx/Env.h
 func (e *TestEnv) FeatureEnabled(name string) bool {
-	f := amendment.GetFeatureByName(name)
+	f := amendment.FeatureByName(name)
 	if f == nil {
 		return false
 	}

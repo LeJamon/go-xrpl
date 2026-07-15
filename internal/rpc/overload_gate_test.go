@@ -92,7 +92,8 @@ func TestHTTPOverloadAdminUnlimitedBypass(t *testing.T) {
 	pushOverDropThreshold(t, srv.loadTracker, "127.0.0.1")
 
 	req := httptest.NewRequest("POST", "/", strings.NewReader(`{"method":"stop","params":[{}]}`))
-	req.RemoteAddr = "127.0.0.1:1234" // localhost fallback → RoleAdmin → Unlimited
+	req.RemoteAddr = "127.0.0.1:1234"
+	req = withLoopbackAdmin(req)
 	rr := httptest.NewRecorder()
 	srv.ServeHTTP(rr, req)
 

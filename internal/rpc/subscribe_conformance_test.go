@@ -389,7 +389,7 @@ func TestSubscribeConformanceEmptyUnsubscribeRequest(t *testing.T) {
 func TestSubscribeConformanceLedgerResponseFields(t *testing.T) {
 	sm := newTestSubscriptionManager()
 
-	response := sm.GetSubscribeResponse(
+	response := sm.SubscribeResponse(
 		2, // ledgerIndex
 		"ABC123DEF456ABC123DEF456ABC123DEF456ABC123DEF456ABC123DEF456AB", // ledgerHash (64 hex)
 		735000000, // ledgerTime
@@ -729,7 +729,7 @@ func mustBook(t *testing.T, pays, gets map[string]any) types.BookRequest {
 }
 
 // TestSubscribeConformanceBadTaker verifies an unparseable book taker is
-// rpcBAD_ISSUER (Subscribe.cpp:301-305).
+// rpcACT_MALFORMED (rippled 3.2.0 #6529 changed this from rpcBAD_ISSUER).
 func TestSubscribeConformanceBadTaker(t *testing.T) {
 	sm := newTestSubscriptionManager()
 	conn := newTestConnection("test-conn-1")
@@ -745,9 +745,9 @@ func TestSubscribeConformanceBadTaker(t *testing.T) {
 		Books: []types.BookRequest{book},
 	}, true)
 	require.NotNil(t, err)
-	assert.Equal(t, types.RpcBAD_ISSUER, err.Code)
-	assert.Equal(t, "badIssuer", err.ErrorString)
-	assert.Equal(t, "Issuer account malformed.", err.Message)
+	assert.Equal(t, types.RpcACT_MALFORMED, err.Code)
+	assert.Equal(t, "actMalformed", err.ErrorString)
+	assert.Equal(t, "Account malformed.", err.Message)
 }
 
 // TestSubscribeConformanceDomain verifies the book domain parse

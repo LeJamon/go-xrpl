@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"strings"
 
-	binarycodec "github.com/LeJamon/go-xrpl/codec/binarycodec"
+	"github.com/LeJamon/go-xrpl/internal/tx/ledgerfields"
 )
 
 // PermissionedDomainData holds the parsed fields of a PermissionedDomain ledger entry.
@@ -30,7 +30,7 @@ type PermissionedDomainCredential struct {
 // SerializePermissionedDomain serializes a PermissionedDomain ledger entry using the binary codec.
 // Reference: rippled PermissionedDomainSet.cpp doApply()
 func SerializePermissionedDomain(pd *PermissionedDomainData, ownerAddress string) ([]byte, error) {
-	creds := make([]map[string]any, 0, len(pd.AcceptedCredentials))
+	creds := make([]any, 0, len(pd.AcceptedCredentials))
 	for _, c := range pd.AcceptedCredentials {
 		issuerStr, err := EncodeAccountID(c.Issuer)
 		if err != nil {
@@ -44,68 +44,54 @@ func SerializePermissionedDomain(pd *PermissionedDomainData, ownerAddress string
 		})
 	}
 
-	jsonObj := map[string]any{
-		"LedgerEntryType":     "PermissionedDomain",
-		"Owner":               ownerAddress,
-		"Sequence":            pd.Sequence,
-		"OwnerNode":           fmt.Sprintf("%X", pd.OwnerNode),
-		"Flags":               uint32(0),
-		"AcceptedCredentials": creds,
-	}
+	entry := &ledgerfields.PermissionedDomain{}
+	entry.SetOwner(ownerAddress)
+	entry.SetSequence(pd.Sequence)
+	entry.SetOwnerNode(fmt.Sprintf("%X", pd.OwnerNode))
+	entry.SetFlags(0)
+	entry.SetAcceptedCredentials(creds)
 
 	// Emit only once threaded; a fresh entry's pointers are stamped by the apply layer.
 	var emptyHash [32]byte
 	if pd.PreviousTxnID != emptyHash {
-		jsonObj["PreviousTxnID"] = strings.ToUpper(hex.EncodeToString(pd.PreviousTxnID[:]))
-		jsonObj["PreviousTxnLgrSeq"] = pd.PreviousTxnLgrSeq
+		entry.SetPreviousTxnID(strings.ToUpper(hex.EncodeToString(pd.PreviousTxnID[:])))
+		entry.SetPreviousTxnLgrSeq(pd.PreviousTxnLgrSeq)
 	}
 
-	hexStr, err := binarycodec.Encode(jsonObj)
-	if err != nil {
-		return nil, err
-	}
-
-	return hex.DecodeString(hexStr)
+	return entry.Encode()
 }
 
 // ParsePermissionedDomain parses a PermissionedDomain ledger entry from binary data.
 func ParsePermissionedDomain(data []byte) (*PermissionedDomainData, error) {
-	pd := &PermissionedDomainData{}
+	var decoded ledgerfields.PermissionedDomain
+	if err := decoded.Decode(data); err != nil {
+		return nil, fmt.Errorf("failed to decode PermissionedDomain: %w", err)
+	}
+	fields := decoded.ToMap()
+	pd := &PermissionedDomainData{
+		Sequence:          decoded.Sequence,
+		PreviousTxnLgrSeq: decoded.PreviousTxnLgrSeq,
+	}
 
-	err := WalkFields(data, func(f Field) error {
-		switch f.TypeCode {
-		case stUInt32:
-			switch f.FieldCode {
-			case 4: // Sequence
-				pd.Sequence = f.UInt32()
-			case 5: // PreviousTxnLgrSeq
-				pd.PreviousTxnLgrSeq = f.UInt32()
-			}
-		case stUInt64:
-			if f.FieldCode == 4 { // OwnerNode
-				pd.OwnerNode = f.UInt64()
-			}
-		case stHash256:
-			if f.FieldCode == 5 { // PreviousTxnID
-				pd.PreviousTxnID = f.Hash256()
-			}
-		case stAccountID:
-			if f.FieldCode == 2 { // Owner
-				if id, ok := f.AccountID(); ok {
-					pd.Owner = id
-				}
-			}
-		case stArray:
-			if f.FieldCode == 28 { // AcceptedCredentials
-				creds, err := parseAcceptedCredentials(f.Value)
-				if err != nil {
-					return err
-				}
-				pd.AcceptedCredentials = creds
-			}
+	var err error
+	if _, ok := fields["Owner"]; ok {
+		pd.Owner, err = decodeLedgerAccount("PermissionedDomain.Owner", decoded.Owner)
+		if err != nil {
+			return nil, err
 		}
-		return nil
-	})
+	}
+	if _, ok := fields["OwnerNode"]; ok {
+		pd.OwnerNode, err = parseLedgerUint64("PermissionedDomain.OwnerNode", decoded.OwnerNode)
+		if err != nil {
+			return nil, err
+		}
+	}
+	if _, ok := fields["PreviousTxnID"]; ok {
+		if err := decodeLedgerHex("PermissionedDomain.PreviousTxnID", decoded.PreviousTxnID, pd.PreviousTxnID[:]); err != nil {
+			return nil, err
+		}
+	}
+	pd.AcceptedCredentials, err = decodeAcceptedCredentials(decoded.AcceptedCredentials)
 	if err != nil {
 		return nil, err
 	}
@@ -113,34 +99,38 @@ func ParsePermissionedDomain(data []byte) (*PermissionedDomainData, error) {
 	return pd, nil
 }
 
-// parseAcceptedCredentials decodes the AcceptedCredentials STArray content; each
-// element is a Credential STObject.
-func parseAcceptedCredentials(content []byte) ([]PermissionedDomainCredential, error) {
+func decodeAcceptedCredentials(values []any) ([]PermissionedDomainCredential, error) {
 	var creds []PermissionedDomainCredential
-	err := WalkFields(content, func(elem Field) error {
-		if elem.TypeCode != stObject || elem.FieldCode != 33 { // Credential
-			return nil
+	for i, value := range values {
+		wrapper, ok := value.(map[string]any)
+		if !ok {
+			return nil, fmt.Errorf("PermissionedDomain.AcceptedCredentials[%d]: expected object, got %T", i, value)
 		}
-		var c PermissionedDomainCredential
-		if err := WalkFields(elem.Value, func(inner Field) error {
-			switch inner.TypeCode {
-			case stAccountID:
-				if inner.FieldCode == 4 { // Issuer
-					if id, ok := inner.AccountID(); ok {
-						c.Issuer = id
-					}
-				}
-			case stBlob:
-				if inner.FieldCode == 31 { // CredentialType
-					c.CredentialType = append([]byte(nil), inner.VLBytes()...)
-				}
+		value, ok = wrapper["Credential"]
+		if !ok {
+			continue
+		}
+		fields, ok := value.(map[string]any)
+		if !ok {
+			return nil, fmt.Errorf("PermissionedDomain.AcceptedCredentials[%d].Credential: expected object, got %T", i, value)
+		}
+
+		var credential PermissionedDomainCredential
+		if issuer, ok := fields["Issuer"].(string); ok {
+			decodedIssuer, err := decodeLedgerAccount(fmt.Sprintf("PermissionedDomain.AcceptedCredentials[%d].Credential.Issuer", i), issuer)
+			if err != nil {
+				return nil, err
 			}
-			return nil
-		}); err != nil {
-			return err
+			credential.Issuer = decodedIssuer
 		}
-		creds = append(creds, c)
-		return nil
-	})
-	return creds, err
+		if credentialType, ok := fields["CredentialType"].(string); ok {
+			decodedType, err := hex.DecodeString(credentialType)
+			if err != nil {
+				return nil, fmt.Errorf("PermissionedDomain.AcceptedCredentials[%d].Credential.CredentialType: invalid hex: %w", i, err)
+			}
+			credential.CredentialType = decodedType
+		}
+		creds = append(creds, credential)
+	}
+	return creds, nil
 }

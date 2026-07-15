@@ -92,6 +92,8 @@ func encodeTrustLine(t *testing.T) []byte {
 			"issuer":   balanceIssuer,
 			"value":    "20",
 		},
+		"PreviousTxnID":     "0000000000000000000000000000000000000000000000000000000000000000",
+		"PreviousTxnLgrSeq": uint32(0),
 	}
 	hexStr, err := binarycodec.Encode(jsonObj)
 	if err != nil {

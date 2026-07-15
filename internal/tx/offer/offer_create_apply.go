@@ -1,7 +1,6 @@
 package offer
 
 import (
-	"github.com/LeJamon/go-xrpl/amendment"
 	"github.com/LeJamon/go-xrpl/internal/ledger/state"
 	"github.com/LeJamon/go-xrpl/internal/tx"
 	"github.com/LeJamon/go-xrpl/internal/tx/payment"
@@ -105,8 +104,6 @@ func (o *OfferCreate) ApplyCreate(ctx *tx.ApplyContext) ter.Result {
 //   - result: the transaction result code
 //   - applyMain: true to apply sb, false to apply sbCancel
 func (o *OfferCreate) applyGuts(ctx *tx.ApplyContext, sb, sbCancel *payment.PaymentSandbox) (ter.Result, bool) {
-	rules := ctx.Rules()
-
 	flags := o.GetFlags()
 	bPassive := (flags & OfferCreateFlagPassive) != 0
 	bImmediateOrCancel := (flags & OfferCreateFlagImmediateOrCancel) != 0
@@ -131,10 +128,7 @@ func (o *OfferCreate) applyGuts(ctx *tx.ApplyContext, sb, sbCancel *payment.Paym
 
 	// Reference: lines 623-636
 	if tx.HasExpired(o.Expiration, ctx.Config.ParentCloseTime) {
-		if rules.DepositPreauthEnabled() {
-			return ter.TecEXPIRED, false // Apply cancel sandbox for expired offers
-		}
-		return ter.TesSUCCESS, true
+		return ter.TecEXPIRED, false // Apply cancel sandbox for expired offers
 	}
 
 	crossed := false
@@ -163,20 +157,17 @@ func (o *OfferCreate) applyGuts(ctx *tx.ApplyContext, sb, sbCancel *payment.Paym
 		return result, false
 	}
 
-	// Handle FillOrKill - offer was NOT fully filled if we reach here
-	// Reference: lines 789-795
-	// CRITICAL: For FoK, apply sbCancel to discard crossing changes
+	// Handle FillOrKill - offer was NOT fully filled if we reach here.
+	// Reference: lines 789-795. For FoK, apply sbCancel to discard crossing changes.
 	if bFillOrKill {
-		if rules.Enabled(amendment.FeatureFix1578) {
-			return ter.TecKILLED, false // Apply cancel sandbox
-		}
-		return ter.TesSUCCESS, false // Pre-amendment: still apply cancel sandbox
+		return ter.TecKILLED, false // Apply cancel sandbox
 	}
 
-	// Handle ImmediateOrCancel
-	// Reference: lines 799-809
+	// Handle ImmediateOrCancel. Any IOC offer that transfers absolutely no
+	// funds returns tecKILLED rather than tesSUCCESS.
+	// Reference: lines 799-809.
 	if bImmediateOrCancel {
-		if !crossed && rules.Enabled(amendment.FeatureImmediateOfferKilled) {
+		if !crossed {
 			return ter.TecKILLED, false // No crossing - apply cancel sandbox
 		}
 		return ter.TesSUCCESS, true // Crossing happened - apply main sandbox
@@ -257,27 +248,24 @@ func adjustOwnerCountInView(view tx.LedgerView, accountID [20]byte, delta int) {
 }
 
 // applyHybridInSandbox handles hybrid offer placement in a specific view/sandbox.
+// openRate is the exchange rate for the open-book directory: pre-fixCleanup3_2_0
+// this was recomputed from the (post-crossing) amounts and could differ from the
+// domain-book rate due to rounding; the amendment passes the original placement
+// rate so the two directories agree.
 // Reference: rippled CreateOffer.cpp applyHybrid() lines 528-573
-func applyHybridInSandbox(view tx.LedgerView, offer *state.LedgerOffer, offerKey keylet.Keylet, takerPays, takerGets tx.Amount) ter.Result {
+func applyHybridInSandbox(view tx.LedgerView, offer *state.LedgerOffer, offerKey keylet.Keylet, takerPays, takerGets tx.Amount, openRate uint64) ter.Result {
 	offer.Flags |= lsfHybrid
 
 	// Also place in open book (without domain)
-	takerPaysCurrency := keylet.CurrencyBytes(takerPays.Currency)
-	takerPaysIssuer := state.GetIssuerBytes(takerPays.Issuer)
-	takerGetsCurrency := keylet.CurrencyBytes(takerGets.Currency)
-	takerGetsIssuer := state.GetIssuerBytes(takerGets.Issuer)
-
-	uRate := state.GetRate(takerGets, takerPays)
-
-	bookBase := keylet.BookDir(takerPaysCurrency, takerPaysIssuer, takerGetsCurrency, takerGetsIssuer)
-	openBookDirKey := keylet.Quality(bookBase, uRate)
+	bookBase, err := offerBookBase(takerPays, takerGets, nil)
+	if err != nil {
+		return ter.TefINTERNAL
+	}
+	openBookDirKey := keylet.Quality(bookBase, openRate)
 
 	bookDirResult, err := state.DirInsert(view, openBookDirKey, offerKey.Key, true, func(dir *state.DirectoryNode) {
-		dir.TakerPaysCurrency = takerPaysCurrency
-		dir.TakerPaysIssuer = takerPaysIssuer
-		dir.TakerGetsCurrency = takerGetsCurrency
-		dir.TakerGetsIssuer = takerGetsIssuer
-		dir.ExchangeRate = uRate
+		_ = setBookDirectoryAssets(dir, takerPays, takerGets)
+		dir.ExchangeRate = openRate
 		// No DomainID for open book
 	})
 	if err != nil {

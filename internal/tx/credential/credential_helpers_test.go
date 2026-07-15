@@ -1,0 +1,124 @@
+package credential
+
+import (
+	"context"
+	"encoding/hex"
+	"testing"
+
+	"github.com/stretchr/testify/require"
+
+	"github.com/LeJamon/go-xrpl/amendment"
+	addresscodec "github.com/LeJamon/go-xrpl/codec/addresscodec"
+	"github.com/LeJamon/go-xrpl/drops"
+	"github.com/LeJamon/go-xrpl/internal/ledger/state"
+	"github.com/LeJamon/go-xrpl/internal/tx"
+	"github.com/LeJamon/go-xrpl/internal/tx/ter"
+	"github.com/LeJamon/go-xrpl/keylet"
+	xrpllog "github.com/LeJamon/go-xrpl/log"
+)
+
+// mapView is a minimal in-memory tx.LedgerView for helper-level tests.
+type mapView struct{ data map[[32]byte][]byte }
+
+func newMapView() *mapView { return &mapView{data: make(map[[32]byte][]byte)} }
+
+func (m *mapView) Read(k keylet.Keylet) ([]byte, error)      { return m.data[k.Key], nil }
+func (m *mapView) Exists(k keylet.Keylet) (bool, error)      { _, ok := m.data[k.Key]; return ok, nil }
+func (m *mapView) Insert(k keylet.Keylet, data []byte) error { m.data[k.Key] = data; return nil }
+func (m *mapView) Update(k keylet.Keylet, data []byte) error { m.data[k.Key] = data; return nil }
+func (m *mapView) Erase(k keylet.Keylet) error               { delete(m.data, k.Key); return nil }
+func (m *mapView) AdjustDropsDestroyed(drops.XRPAmount)      {}
+func (m *mapView) ForEach(fn func(key [32]byte, data []byte) bool) error {
+	for k, v := range m.data {
+		if !fn(k, v) {
+			break
+		}
+	}
+	return nil
+}
+func (m *mapView) Succ([32]byte) ([32]byte, []byte, bool, error) { return [32]byte{}, nil, false, nil }
+func (m *mapView) TxExists([32]byte) bool                        { return false }
+func (m *mapView) Rules() *amendment.Rules                       { return nil }
+func (m *mapView) LedgerSeq() uint32                             { return 0 }
+
+// TestRemoveExpiredCredentials_DeletionFailure mirrors rippled's
+// testRemoveExpiredCorruption (Credentials_test.cpp): an expired accepted
+// credential whose issuer account has been erased makes deleteSLE fail with
+// tecINTERNAL. Under fixCleanup3_1_3 that failure aborts verifyDepositPreauth
+// (tecINTERNAL); before the amendment it is swallowed and the caller still
+// returns tecEXPIRED. (PR #6715)
+func TestRemoveExpiredCredentials_DeletionFailure(t *testing.T) {
+	var subjectID, issuerID [20]byte
+	subjectID[0], subjectID[19] = 0x01, 0x11
+	issuerID[0], issuerID[19] = 0x02, 0x22
+
+	subjectAddr, err := addresscodec.EncodeAccountIDToClassicAddress(subjectID[:])
+	require.NoError(t, err)
+
+	credType := []byte("abcde")
+	credKey := keylet.Credential(subjectID, issuerID, credType)
+	credIDHex := hex.EncodeToString(credKey.Key[:])
+
+	const expiration = uint32(100)
+	const closeTime = uint32(200) // strictly after expiration -> expired
+
+	buildCtx := func(rules *amendment.Rules) *tx.ApplyContext {
+		view := newMapView()
+
+		// Accepted, expired credential owned across the subject and issuer dirs.
+		exp := expiration
+		credBlob, serr := serializeCredentialEntry(&CredentialEntry{
+			Subject:        subjectID,
+			Issuer:         issuerID,
+			CredentialType: credType,
+			Expiration:     &exp,
+			Flags:          LsfCredentialAccepted,
+			HasSubjectNode: true,
+		})
+		require.NoError(t, serr)
+		require.NoError(t, view.Insert(credKey, credBlob))
+
+		// The subject account exists; the issuer account is intentionally absent
+		// so deleteSLE's owner-account existence check fails with tecINTERNAL.
+		subjAcct := &state.AccountRoot{Account: subjectAddr, Balance: 100_000_000, Sequence: 1}
+		subjBlob, aerr := state.SerializeAccountRoot(subjAcct)
+		require.NoError(t, aerr)
+		require.NoError(t, view.Insert(keylet.Account(subjectID), subjBlob))
+
+		return &tx.ApplyContext{
+			View:      view,
+			Account:   subjAcct,
+			AccountID: subjectID,
+			Config: tx.EngineConfig{
+				Rules:           rules,
+				ParentCloseTime: closeTime,
+			},
+			Metadata: &tx.Metadata{},
+			Log:      xrpllog.Discard(),
+			Ctx:      context.Background(),
+		}
+	}
+
+	// fixCleanup3_1_3 is supported-by-default, so the off arm must disable it
+	// explicitly rather than rely on the preset lacking it.
+	fix313On := amendment.NewRulesBuilder().
+		FromPreset(amendment.PresetAllSupported).
+		Enable(amendment.FeatureID("fixCleanup3_1_3")).
+		Build()
+	fix313Off := amendment.NewRulesBuilder().
+		FromPreset(amendment.PresetAllSupported).
+		Disable(amendment.FeatureID("fixCleanup3_1_3")).
+		Build()
+
+	t.Run("before fix: deletion failure swallowed, tecEXPIRED", func(t *testing.T) {
+		ctx := buildCtx(fix313Off)
+		result := VerifyDepositPreauth(ctx, []string{credIDHex}, subjectID, [20]byte{}, nil)
+		require.Equal(t, ter.TecEXPIRED, result)
+	})
+
+	t.Run("after fix: deletion failure aborts, tecINTERNAL", func(t *testing.T) {
+		ctx := buildCtx(fix313On)
+		result := VerifyDepositPreauth(ctx, []string{credIDHex}, subjectID, [20]byte{}, nil)
+		require.Equal(t, ter.TecINTERNAL, result)
+	})
+}

@@ -1,0 +1,331 @@
+syntax = "proto3";
+package protocol;
+option go_package = "github.com/LeJamon/go-xrpl/internal/peermanagement/proto";
+
+// Message types for the XRPL peer protocol
+enum MessageType {
+    mtUNKNOWN                   = 0;
+    mtMANIFESTS                 = 2;
+    mtPING                      = 3;
+    mtCLUSTER                   = 5;
+    mtENDPOINTS                 = 15;
+    mtTRANSACTION               = 30;
+    mtGET_LEDGER                = 31;
+    mtLEDGER_DATA               = 32;
+    mtPROPOSE_LEDGER            = 33;
+    mtSTATUS_CHANGE             = 34;
+    mtHAVE_SET                  = 35;
+    mtVALIDATION                = 41;
+    mtGET_OBJECTS               = 42;
+    mtVALIDATORLIST             = 54;
+    mtSQUELCH                   = 55;
+    mtVALIDATORLISTCOLLECTION   = 56;
+    mtPROOF_PATH_REQ            = 57;
+    mtPROOF_PATH_RESPONSE       = 58;
+    mtREPLAY_DELTA_REQ          = 59;
+    mtREPLAY_DELTA_RESPONSE     = 60;
+    mtHAVE_TRANSACTIONS         = 63;
+    mtTRANSACTIONS              = 64;
+}
+
+// Provides the current ephemeral key for a validator
+message TMManifest {
+    optional bytes stobject = 1;
+}
+
+message TMManifests {
+    repeated TMManifest list = 1;
+    bool history = 2 [deprecated=true];
+}
+
+// Cluster node status
+message TMClusterNode {
+    optional string public_key = 1;
+    optional uint32 report_time = 2;
+    optional uint32 node_load = 3;
+    string node_name = 4;
+    string address = 5;
+}
+
+// Load sources
+message TMLoadSource {
+    optional string name = 1;
+    optional uint32 cost = 2;
+    uint32 count = 3;
+}
+
+// Cluster status
+message TMCluster {
+    repeated TMClusterNode cluster_nodes = 1;
+    repeated TMLoadSource load_sources = 2;
+}
+
+// Public key
+message TMPublicKey {
+    optional bytes public_key = 1;
+}
+
+// Transaction status
+enum TransactionStatus {
+    tsUNKNOWN           = 0;
+    tsNEW               = 1;
+    tsCURRENT           = 2;
+    tsCOMMITED          = 3;
+    tsREJECT_CONFLICT   = 4;
+    tsREJECT_INVALID    = 5;
+    tsREJECT_FUNDS      = 6;
+    tsHELD_SEQ          = 7;
+    tsHELD_LEDGER       = 8;
+}
+
+message TMTransaction {
+    optional bytes raw_transaction = 1;
+    optional TransactionStatus status = 2;
+    uint64 receive_timestamp = 3;
+    bool deferred = 4;
+}
+
+message TMTransactions {
+    repeated TMTransaction transactions = 1;
+}
+
+// Node status
+enum NodeStatus {
+    nsUNKNOWN       = 0;
+    nsCONNECTING    = 1;
+    nsCONNECTED     = 2;
+    nsMONITORING    = 3;
+    nsVALIDATING    = 4;
+    nsSHUTTING      = 5;
+}
+
+// Node events
+enum NodeEvent {
+    neUNKNOWN           = 0;
+    neCLOSING_LEDGER    = 1;
+    neACCEPTED_LEDGER   = 2;
+    neSWITCHED_LEDGER   = 3;
+    neLOST_SYNC         = 4;
+}
+
+message TMStatusChange {
+    NodeStatus new_status = 1;
+    NodeEvent new_event = 2;
+    uint32 ledger_seq = 3;
+    bytes ledger_hash = 4;
+    bytes ledger_hash_previous = 5;
+    uint64 network_time = 6;
+    optional uint32 first_seq = 7;
+    optional uint32 last_seq = 8;
+}
+
+// Ledger proposal
+message TMProposeSet {
+    optional uint32 propose_seq = 1;
+    optional bytes current_tx_hash = 2;
+    optional bytes node_pub_key = 3;
+    optional uint32 close_time = 4;
+    optional bytes signature = 5;
+    optional bytes previous_ledger = 6;
+    bool checked_signature = 7 [deprecated=true];
+    repeated bytes added_transactions = 10;
+    repeated bytes removed_transactions = 11;
+    uint32 hops = 12 [deprecated=true];
+}
+
+// Transaction set status
+enum TxSetStatus {
+    tsUNKNOWN_SET   = 0;
+    tsHAVE          = 1;
+    tsCAN_GET       = 2;
+    tsNEED          = 3;
+}
+
+message TMHaveTransactionSet {
+    optional TxSetStatus status = 1;
+    optional bytes hash = 2;
+}
+
+// Validator list
+message TMValidatorList {
+    optional bytes manifest = 1;
+    optional bytes blob = 2;
+    optional bytes signature = 3;
+    optional uint32 version = 4;
+}
+
+// Validator list v2
+message ValidatorBlobInfo {
+    bytes manifest = 1;
+    optional bytes blob = 2;
+    optional bytes signature = 3;
+}
+
+message TMValidatorListCollection {
+    optional uint32 version = 1;
+    optional bytes manifest = 2;
+    repeated ValidatorBlobInfo blobs = 3;
+}
+
+// Validation message
+message TMValidation {
+    optional bytes validation = 1;
+    bool checked_signature = 2 [deprecated=true];
+    uint32 hops = 3 [deprecated=true];
+}
+
+// Endpoints for peer discovery
+message TMEndpoints {
+    optional uint32 version = 1;
+
+    message TMEndpointv2 {
+        optional string endpoint = 1;
+        optional uint32 hops = 2;
+    }
+    repeated TMEndpointv2 endpoints_v2 = 3;
+}
+
+// Indexed object
+message TMIndexedObject {
+    bytes hash = 1;
+    bytes node_id = 2;
+    bytes index = 3;
+    bytes data = 4;
+    uint32 ledger_seq = 5;
+}
+
+// Object types
+enum ObjectType {
+    otUNKNOWN           = 0;
+    otLEDGER            = 1;
+    otTRANSACTION       = 2;
+    otTRANSACTION_NODE  = 3;
+    otSTATE_NODE        = 4;
+    otCAS_OBJECT        = 5;
+    otFETCH_PACK        = 6;
+    otTRANSACTIONS      = 7;
+}
+
+message TMGetObjectByHash {
+    // Previously used - don't reuse.
+    reserved 3;
+
+    optional ObjectType type = 1;
+    optional bool query = 2;
+    bytes ledger_hash = 4;
+    bool fat = 5;
+    repeated TMIndexedObject objects = 6;
+}
+
+// Ledger node
+message TMLedgerNode {
+    optional bytes nodedata = 1;
+    bytes nodeid = 2;
+}
+
+// Ledger info types
+enum TMLedgerInfoType {
+    liBASE          = 0;
+    liTX_NODE       = 1;
+    liAS_NODE       = 2;
+    liTS_CANDIDATE  = 3;
+}
+
+// Ledger types
+enum TMLedgerType {
+    ltACCEPTED      = 0;
+    ltCURRENT       = 1;
+    ltCLOSED        = 2;
+}
+
+// Query type
+enum TMQueryType {
+    qtINDIRECT      = 0;
+}
+
+message TMGetLedger {
+    optional TMLedgerInfoType itype = 1;
+    optional TMLedgerType ltype = 2;
+    bytes ledger_hash = 3;
+    optional uint32 ledger_seq = 4;
+    repeated bytes node_ids = 5;
+    optional uint64 request_cookie = 6;
+    optional TMQueryType query_type = 7;
+    uint32 query_depth = 8;
+}
+
+// Reply errors
+enum TMReplyError {
+    reNO_ERROR      = 0;
+    reNO_LEDGER     = 1;
+    reNO_NODE       = 2;
+    reBAD_REQUEST   = 3;
+}
+
+message TMLedgerData {
+    optional bytes ledger_hash = 1;
+    optional uint32 ledger_seq = 2;
+    optional TMLedgerInfoType type = 3;
+    repeated TMLedgerNode nodes = 4;
+    optional uint32 request_cookie = 5;
+    TMReplyError error = 6;
+}
+
+// Ping/Pong
+message TMPing {
+    enum PingType {
+        ptPING = 0;
+        ptPONG = 1;
+    }
+    optional PingType type = 1;
+    optional uint32 seq = 2;
+    optional uint64 ping_time = 3;
+    optional uint64 net_time = 4;
+}
+
+// Squelch for reduce-relay
+message TMSquelch {
+    optional bool squelch = 1;
+    optional bytes validator_pub_key = 2;
+    uint32 squelch_duration = 3;
+}
+
+// Ledger map types
+enum TMLedgerMapType {
+    lmUNKNOWN       = 0;
+    lmTRANSACTION   = 1;
+    lmACCOUNT_STATE = 2;
+}
+
+// Proof path request/response
+message TMProofPathRequest {
+    optional bytes key = 1;
+    optional bytes ledger_hash = 2;
+    optional TMLedgerMapType type = 3;
+}
+
+message TMProofPathResponse {
+    optional bytes key = 1;
+    optional bytes ledger_hash = 2;
+    optional TMLedgerMapType type = 3;
+    bytes ledger_header = 4;
+    repeated bytes path = 5;
+    TMReplyError error = 6;
+}
+
+// Replay delta for ledger sync
+message TMReplayDeltaRequest {
+    optional bytes ledger_hash = 1;
+}
+
+message TMReplayDeltaResponse {
+    optional bytes ledger_hash = 1;
+    bytes ledger_header = 2;
+    repeated bytes transaction = 3;
+    TMReplyError error = 4;
+}
+
+// Have transactions (reduce-relay)
+message TMHaveTransactions {
+    repeated bytes hashes = 1;
+}

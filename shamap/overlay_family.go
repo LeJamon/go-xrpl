@@ -14,6 +14,7 @@ import "context"
 type OverlayFamily struct {
 	base    Family
 	overlay Family
+	cache   *FullBelowCache
 }
 
 // NewOverlayFamily returns a Family that reads overlay-then-base and writes
@@ -22,7 +23,12 @@ func NewOverlayFamily(base, overlay Family) *OverlayFamily {
 	if base == nil || overlay == nil {
 		panic("shamap: NewOverlayFamily requires non-nil base and overlay")
 	}
-	return &OverlayFamily{base: base, overlay: overlay}
+	return &OverlayFamily{base: base, overlay: overlay, cache: NewFullBelowCache()}
+}
+
+// FullBelowCache returns the cache shared by maps backed by this family.
+func (f *OverlayFamily) FullBelowCache() *FullBelowCache {
+	return f.cache
 }
 
 // Fetch returns the node from the overlay if present, otherwise from the base.

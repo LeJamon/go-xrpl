@@ -6,6 +6,8 @@ import (
 	"github.com/LeJamon/go-xrpl/internal/tx/ter"
 )
 
+var noAccountID = [20]byte{19: 1}
+
 // StrandContext tracks state during strand building for loop detection.
 // Reference: rippled Steps.h StrandContext
 type StrandContext struct {
@@ -35,11 +37,6 @@ type StrandContext struct {
 	// ParentCloseTime is the parent ledger close time (Ripple epoch seconds).
 	// Used by BookStep for offer expiration and AMM auction slot expiry checks.
 	ParentCloseTime uint32
-	// Fix1781 indicates whether the fix1781 amendment is enabled.
-	// When true, XRP endpoint steps are included in circular payment loop detection.
-	// When false, XRP endpoint loop checks are skipped (pre-amendment behavior).
-	// Reference: rippled XRPEndpointStep.cpp check(): ctx.view.rules().enabled(fix1781)
-	Fix1781 bool
 }
 
 // NewStrandContext creates a new context for strand building
@@ -105,14 +102,8 @@ func (ctx *StrandContext) CheckBookStepLoop(bookOut Issue) ter.Result {
 }
 
 // CheckXRPEndpointLoop checks XRP endpoint step for loops.
-// This check is gated on the fix1781 amendment. When fix1781 is not enabled,
-// the check is skipped entirely (pre-amendment behavior allows circular XRP paths).
-// Reference: rippled XRPEndpointStep.cpp lines 365-375
+// Reference: rippled XRPEndpointStep.cpp check() (seenDirectAssets insert).
 func (ctx *StrandContext) CheckXRPEndpointLoop(isLast bool) ter.Result {
-	if !ctx.Fix1781 {
-		return ter.TesSUCCESS
-	}
-
 	xrpIssue := Issue{Currency: "XRP", Issuer: [20]byte{}}
 	issuesIndex := 0
 	if !isLast {
@@ -157,6 +148,7 @@ const (
 	PathTypeCurrency uint8 = 0x10
 	// PathTypeIssuer indicates path element has issuer
 	PathTypeIssuer uint8 = 0x20
+	PathTypeMPT    uint8 = 0x40
 )
 
 // ToStrands converts payment paths to executable strands
@@ -169,7 +161,6 @@ const (
 //   - paths: Payment paths from transaction
 //   - addDefaultPath: Whether to add the default path (direct)
 //   - offerCrossing: Whether strands are built for offer crossing (skips trust-line checks)
-//   - fix1781: Whether the fix1781 amendment gates XRP-endpoint loop detection
 //
 // Returns: List of executable strands, error if any path is invalid
 // Reference: rippled PaySteps.cpp toStrands()
@@ -181,31 +172,32 @@ func ToStrands(
 	paths [][]PathStep,
 	addDefaultPath bool,
 	offerCrossing bool,
-	fix1781 bool,
+	parentCloseTime ...uint32,
 ) ([]Strand, ter.Result) {
-	// Validate source and destination are not XRP pseudo-accounts
-	// Reference: rippled PaySteps.cpp:148-150
-	var xrpAccount [20]byte
-	if src == xrpAccount || dst == xrpAccount {
-		return nil, ter.TemBAD_PATH
-	}
-
 	dstIssue := GetIssue(dstAmt)
 	// If dstIssue has zero issuer for non-XRP currency, default to dst.
 	// RippleState balances store zero issuer; the destination account is the implied issuer.
-	// Reference: rippled treats noAccount() issuer as the destination for deliver amounts.
-	if !dstIssue.IsXRP() && dstIssue.Issuer == [20]byte{} {
+	if !dstIssue.IsXRP() && !dstIssue.IsMPT && dstIssue.Issuer == [20]byte{} {
 		dstIssue.Issuer = dst
+	}
+	if dstIssue.Issuer == noAccountID || !dstIssue.IsConsistent() {
+		return nil, ter.TemBAD_PATH
 	}
 
 	var srcIssue *Issue
 	if srcAmt != nil {
 		issue := GetIssue(*srcAmt)
 		// Same fallback for source issue
-		if !issue.IsXRP() && issue.Issuer == [20]byte{} {
+		if !issue.IsXRP() && !issue.IsMPT && issue.Issuer == [20]byte{} {
 			issue.Issuer = src
 		}
+		if issue.Issuer == noAccountID || !issue.IsConsistent() {
+			return nil, ter.TemBAD_PATH
+		}
 		srcIssue = &issue
+	}
+	if result := validateStrandEndpoints(src, dst, dstIssue, srcIssue); result != ter.TesSUCCESS {
+		return nil, result
 	}
 
 	var strands []Strand
@@ -213,7 +205,7 @@ func ToStrands(
 
 	// Add default path if requested
 	if addDefaultPath {
-		strand, result := ToStrandWithLoopCheck(view, src, dst, dstIssue, srcIssue, nil, true, offerCrossing, fix1781)
+		strand, result := ToStrandWithLoopCheck(view, src, dst, dstIssue, srcIssue, nil, true, offerCrossing, parentCloseTime...)
 		if result != ter.TesSUCCESS {
 			// For tem* errors, fail immediately
 			if isTemMalformed(result) || len(paths) == 0 {
@@ -230,7 +222,7 @@ func ToStrands(
 
 	// Convert each explicit path to a strand
 	for _, path := range paths {
-		strand, result := ToStrandWithLoopCheck(view, src, dst, dstIssue, srcIssue, path, false, offerCrossing, fix1781)
+		strand, result := ToStrandWithLoopCheck(view, src, dst, dstIssue, srcIssue, path, false, offerCrossing, parentCloseTime...)
 		if result != ter.TesSUCCESS {
 			lastFailResult = result
 			// For tem* errors, fail immediately
@@ -277,17 +269,17 @@ func ToStrandWithLoopCheck(
 	path []PathStep,
 	isDefaultPath bool,
 	offerCrossing bool,
-	fix1781 bool,
+	parentCloseTime ...uint32,
 ) (Strand, ter.Result) {
 	// Create strand context for loop detection
 	ctx := NewStrandContext(view, src, dst)
 	ctx.StrandDeliver = dstIssue
 	ctx.IsDefaultPath = isDefaultPath
+	if len(parentCloseTime) > 0 {
+		ctx.ParentCloseTime = parentCloseTime[0]
+	}
 	if offerCrossing {
 		ctx.OfferCrossing = true
-	}
-	if fix1781 {
-		ctx.Fix1781 = true
 	}
 
 	// Use the context-aware strand builder
@@ -305,9 +297,11 @@ type normNode struct {
 	account     [20]byte
 	currency    string
 	issuer      [20]byte
+	mptID       [24]byte
 	hasAccount  bool
 	hasCurrency bool
 	hasIssuer   bool
+	hasMPT      bool
 }
 
 // initialCurIssue returns the starting currency issue for a strand: the source
@@ -315,6 +309,12 @@ type normNode struct {
 // delivered currency. XRP normalizes to the zero issuer.
 // Per rippled: Issue{currency, src}.
 func initialCurIssue(src [20]byte, dstIssue Issue, srcIssue *Issue) Issue {
+	if srcIssue != nil && srcIssue.IsMPT {
+		return *srcIssue
+	}
+	if srcIssue == nil && dstIssue.IsMPT {
+		return dstIssue
+	}
 	var curIssue Issue
 	if srcIssue != nil {
 		curIssue = Issue{Currency: srcIssue.Currency, Issuer: src}
@@ -337,11 +337,106 @@ func ToStrandWithContext(
 	path []PathStep,
 	isDefaultPath bool,
 ) (Strand, ter.Result) {
+	if result := validateStrandEndpoints(src, dst, dstIssue, srcIssue); result != ter.TesSUCCESS {
+		return nil, result
+	}
+	// Path-element shape validation runs here, at strand-construction time (during
+	// doApply), not in Payment preflight — mirroring rippled toStrand. This lets
+	// preclaim codes (tecNO_DST, tecDST_TAG_NEEDED, …) win over a malformed path,
+	// exactly as rippled orders them.
+	if r := validatePathElementShapes(path); r != ter.TesSUCCESS {
+		return nil, r
+	}
 	normPath := buildNormalizedPath(ctx, src, dst, dstIssue, srcIssue, path)
 	if len(normPath) < 2 {
 		return nil, ter.TemBAD_PATH
 	}
 	return ctx.buildStrandSteps(src, dst, dstIssue, srcIssue, normPath)
+}
+
+func validateStrandEndpoints(src, dst [20]byte, dstIssue Issue, srcIssue *Issue) ter.Result {
+	var xrpAccount [20]byte
+	if src == xrpAccount || dst == xrpAccount || src == noAccountID || dst == noAccountID {
+		return ter.TemBAD_PATH
+	}
+	if dstIssue.Issuer == noAccountID || !dstIssue.IsConsistent() {
+		return ter.TemBAD_PATH
+	}
+	if srcIssue != nil && (srcIssue.Issuer == noAccountID || !srcIssue.IsConsistent()) {
+		return ter.TemBAD_PATH
+	}
+	return ter.TesSUCCESS
+}
+
+// validatePathElementShapes rejects malformed path elements with temBAD_PATH,
+// mirroring rippled toStrand(): an element must set at least one of
+// account/currency/issuer; an account element may not also carry
+// currency or issuer; the XRP pseudo-account may not appear as account or issuer;
+// and a currency+issuer pair must agree on XRP-ness.
+func validatePathElementShapes(path []PathStep) ter.Result {
+	const xrpPseudoAccount = "rrrrrrrrrrrrrrrrrrrrrhoLvTp"
+	for index, elem := range path {
+		typeBits := uint8(elem.Type)
+		if typeBits&^(PathTypeAccount|PathTypeCurrency|PathTypeIssuer|PathTypeMPT) != 0 {
+			return ter.TemBAD_PATH
+		}
+		hasAccount := hasAccount(elem)
+		hasCurrency := hasCurrency(elem)
+		hasIssuer := hasIssuer(elem)
+		hasMPTAsset := hasMPT(elem)
+
+		if !hasAccount && !hasCurrency && !hasIssuer && !hasMPTAsset {
+			return ter.TemBAD_PATH
+		}
+		if hasAccount && (hasCurrency || hasIssuer) {
+			return ter.TemBAD_PATH
+		}
+		if hasIssuer && elem.Issuer == xrpPseudoAccount {
+			return ter.TemBAD_PATH
+		}
+		if hasAccount && elem.Account == xrpPseudoAccount {
+			return ter.TemBAD_PATH
+		}
+		if hasIssuer {
+			issuer, err := state.DecodeAccountID(elem.Issuer)
+			if err == nil && issuer == noAccountID {
+				return ter.TemBAD_PATH
+			}
+		}
+		if hasAccount {
+			account, err := state.DecodeAccountID(elem.Account)
+			if err == nil && account == noAccountID {
+				return ter.TemBAD_PATH
+			}
+		}
+		if hasCurrency && hasIssuer {
+			isXRPCurrency := elem.Currency == "XRP"
+			isXRPIssuer := elem.Issuer == xrpPseudoAccount
+			if isXRPCurrency != isXRPIssuer {
+				return ter.TemBAD_PATH
+			}
+		}
+		if hasMPTAsset && (hasCurrency || hasAccount) {
+			return ter.TemBAD_PATH
+		}
+		if hasMPTAsset {
+			id, ok := decodeMPTID(elem.MPTIssuanceID)
+			if !ok {
+				return ter.TemBAD_PATH
+			}
+			if hasIssuer {
+				issuer, err := state.DecodeAccountID(elem.Issuer)
+				if err != nil || issuer != mptIssuer(id) {
+					return ter.TemBAD_PATH
+				}
+			}
+		}
+		if index > 0 && hasMPT(path[index-1]) &&
+			(hasAccount || (hasIssuer && !hasCurrency && !hasMPTAsset)) {
+			return ter.TemBAD_PATH
+		}
+	}
+	return ter.TesSUCCESS
 }
 
 // buildNormalizedPath expands an explicit path into the normalized node list
@@ -360,14 +455,20 @@ func buildNormalizedPath(
 	var normPath []normNode
 
 	// Add source node
-	normPath = append(normPath, normNode{
-		account:     src,
-		currency:    curIssue.Currency,
-		issuer:      curIssue.Issuer,
-		hasAccount:  true,
-		hasCurrency: true,
-		hasIssuer:   true,
-	})
+	sourceNode := normNode{
+		account:    src,
+		currency:   curIssue.Currency,
+		issuer:     curIssue.Issuer,
+		hasAccount: true,
+		hasIssuer:  true,
+	}
+	if curIssue.IsMPT {
+		sourceNode.mptID = curIssue.MPTID
+		sourceNode.hasMPT = true
+	} else {
+		sourceNode.hasCurrency = true
+	}
+	normPath = append(normPath, sourceNode)
 
 	// If sendMaxIssue has a different account (issuer) than src, insert it
 	// This is the key for cross-issuer ripple payments!
@@ -408,23 +509,32 @@ func buildNormalizedPath(
 				node.hasIssuer = true
 			}
 		}
+		if hasMPT(elem) {
+			if id, ok := decodeMPTID(elem.MPTIssuanceID); ok {
+				node.mptID = id
+				node.hasMPT = true
+				if !node.hasIssuer {
+					node.issuer = mptIssuer(id)
+					node.hasIssuer = true
+				}
+			}
+		}
 		normPath = append(normPath, node)
 	}
 
-	// Find the last element with a currency to check if we need a currency/issuer step.
-	// Reference: rippled PaySteps.cpp lines 219-231
-	lastCurrency := curIssue.Currency
-	var lastCurrencyIssuer [20]byte
-	lastCurrencyIssuerSet := false
+	lastAsset := curIssue
 	for i := len(normPath) - 1; i >= 0; i-- {
-		if normPath[i].hasCurrency {
-			lastCurrency = normPath[i].currency
-			if normPath[i].hasIssuer {
-				lastCurrencyIssuer = normPath[i].issuer
-				lastCurrencyIssuerSet = true
-			} else if normPath[i].hasAccount {
-				lastCurrencyIssuer = normPath[i].account
-				lastCurrencyIssuerSet = true
+		node := normPath[i]
+		if node.hasMPT {
+			lastAsset = NewMPTIssue(node.mptID)
+			break
+		}
+		if node.hasCurrency {
+			lastAsset = Issue{Currency: node.currency}
+			if node.hasIssuer {
+				lastAsset.Issuer = node.issuer
+			} else if node.hasAccount {
+				lastAsset.Issuer = node.account
 			}
 			break
 		}
@@ -437,17 +547,27 @@ func buildNormalizedPath(
 	//   if ((lastCurrency.getCurrency() != deliver.currency) ||
 	//       (offerCrossing &&
 	//        lastCurrency.getIssuerID() != deliver.account))
-	needCurrencyStep := lastCurrency != dstIssue.Currency
-	if !needCurrencyStep && ctx.OfferCrossing && lastCurrencyIssuerSet {
-		needCurrencyStep = lastCurrencyIssuer != dstIssue.Issuer
+	needCurrencyStep := lastAsset.IsMPT != dstIssue.IsMPT
+	if !needCurrencyStep {
+		if lastAsset.IsMPT {
+			needCurrencyStep = lastAsset.MPTID != dstIssue.MPTID
+		} else {
+			needCurrencyStep = lastAsset.Currency != dstIssue.Currency
+			if !needCurrencyStep && ctx.OfferCrossing {
+				needCurrencyStep = lastAsset.Issuer != dstIssue.Issuer
+			}
+		}
 	}
 	if needCurrencyStep {
-		normPath = append(normPath, normNode{
-			currency:    dstIssue.Currency,
-			issuer:      dstIssue.Issuer,
-			hasCurrency: true,
-			hasIssuer:   true,
-		})
+		node := normNode{issuer: dstIssue.Issuer, hasIssuer: true}
+		if dstIssue.IsMPT {
+			node.mptID = dstIssue.MPTID
+			node.hasMPT = true
+		} else {
+			node.currency = dstIssue.Currency
+			node.hasCurrency = true
+		}
+		normPath = append(normPath, node)
 	}
 
 	// Add destination issuer account if needed (for multi-hop through issuer)
@@ -506,14 +626,20 @@ func (ctx *StrandContext) buildStrandSteps(
 		next := normPath[i+1]
 		isLast := i == len(normPath)-2
 
-		// Update current issue based on current node
-		if cur.hasAccount {
-			curIssue.Issuer = cur.account
-		} else if cur.hasIssuer {
-			curIssue.Issuer = cur.issuer
+		// MPT issuers are immutable because the issuer is embedded in the ID.
+		if cur.hasMPT {
+			curIssue = NewMPTIssue(cur.mptID)
+		} else if !curIssue.IsMPT {
+			if cur.hasAccount {
+				curIssue.Issuer = cur.account
+			} else if cur.hasIssuer {
+				curIssue.Issuer = cur.issuer
+			}
 		}
 		if cur.hasCurrency {
 			curIssue.Currency = cur.currency
+			curIssue.MPTID = [24]byte{}
+			curIssue.IsMPT = false
 			if curIssue.IsXRP() {
 				curIssue.Issuer = [20]byte{}
 			}
@@ -521,6 +647,17 @@ func (ctx *StrandContext) buildStrandSteps(
 
 		// Handle account-to-account transitions (DirectStep or implied steps)
 		if cur.hasAccount && next.hasAccount {
+			if curIssue.IsMPT {
+				step, result := NewMPTEndpointStep(
+					ctx, cur.account, next.account, curIssue, prevStep, len(strand) == 0, isLast,
+				)
+				if result != ter.TesSUCCESS {
+					return nil, result
+				}
+				strand = append(strand, step)
+				prevStep = step
+				continue
+			}
 			// Check if we need an implied account step
 			// Per rippled: if curIssue.account != cur.account AND curIssue.account != next.account
 			if !curIssue.IsXRP() && curIssue.Issuer != cur.account && curIssue.Issuer != next.account {
@@ -582,20 +719,24 @@ func (ctx *StrandContext) buildStrandSteps(
 					prevStep = directStep
 				}
 			}
-		} else if cur.hasAccount && !next.hasAccount && (next.hasCurrency || next.hasIssuer) {
+		} else if cur.hasAccount && !next.hasAccount && (next.hasCurrency || next.hasIssuer || next.hasMPT) {
 			// Account to offer (currency change)
 			// Reference: rippled PaySteps.cpp toStep()
 
 			// Determine output issue first (needed for XRP continue check)
-			outCurrency := curIssue.Currency
-			if next.hasCurrency {
-				outCurrency = next.currency
+			outIssue := curIssue
+			if next.hasMPT {
+				outIssue = NewMPTIssue(next.mptID)
+			} else {
+				if next.hasCurrency {
+					outIssue.Currency = next.currency
+					outIssue.IsMPT = false
+					outIssue.MPTID = [24]byte{}
+				}
+				if next.hasIssuer {
+					outIssue.Issuer = next.issuer
+				}
 			}
-			outIssuer := curIssue.Issuer
-			if next.hasIssuer {
-				outIssuer = next.issuer
-			}
-			outIssue := Issue{Currency: outCurrency, Issuer: outIssuer}
 			// XRP must have zero issuer
 			if outIssue.IsXRP() {
 				outIssue.Issuer = [20]byte{}
@@ -617,7 +758,7 @@ func (ctx *StrandContext) buildStrandSteps(
 				if outIssue.IsXRP() {
 					continue
 				}
-			} else if !curIssue.IsXRP() && curIssue.Issuer != cur.account {
+			} else if !curIssue.IsXRP() && !curIssue.IsMPT && curIssue.Issuer != cur.account {
 				// May need implied DirectStep first for IOU
 				// Check for loop BEFORE creating step
 				if result := ctx.CheckDirectStepLoop(cur.account, curIssue.Issuer, curIssue.Currency); result != ter.TesSUCCESS {
@@ -639,7 +780,7 @@ func (ctx *StrandContext) buildStrandSteps(
 			}
 			// Same in/out issue means an invalid book (book_.in == book_.out).
 			// Reference: rippled BookStep::check() line 1346: returns temBAD_PATH
-			if curIssue.Currency == outIssue.Currency && curIssue.Issuer == outIssue.Issuer {
+			if curIssue.Equal(outIssue) {
 				return nil, ter.TemBAD_PATH
 			}
 			// Check for book loop BEFORE creating step
@@ -648,6 +789,7 @@ func (ctx *StrandContext) buildStrandSteps(
 			}
 			bookStep := NewBookStep(curIssue, outIssue, src, dst, prevStep, false)
 			bookStep.defaultPath = ctx.IsDefaultPath
+			bookStep.strandDeliver = ctx.StrandDeliver
 			// Validate book step (noRipple, issuer existence, etc.)
 			// Reference: rippled BookStep.cpp make_BookStepHelper() calls check(ctx)
 			if result := bookStep.Check(view); result != ter.TesSUCCESS {
@@ -668,6 +810,10 @@ func (ctx *StrandContext) buildStrandSteps(
 					return nil, result
 				}
 				strand = append(strand, step)
+			} else if curIssue.IsMPT {
+				if curIssue.Issuer != next.account {
+					return nil, ter.TemBAD_PATH
+				}
 			} else if curIssue.Issuer != next.account {
 				// IOU: implied DirectStep from curIssue.Issuer to next account
 				// Check for loop BEFORE creating step
@@ -682,18 +828,22 @@ func (ctx *StrandContext) buildStrandSteps(
 				strand = append(strand, directStep)
 				prevStep = directStep
 			}
-		} else if !cur.hasAccount && !next.hasAccount && (next.hasCurrency || next.hasIssuer) {
+		} else if !cur.hasAccount && !next.hasAccount && (next.hasCurrency || next.hasIssuer || next.hasMPT) {
 			// Offer to offer (consecutive currency changes)
 			// Reference: rippled PaySteps.cpp toStep() lines 105-130
-			outCurrency := curIssue.Currency
-			if next.hasCurrency {
-				outCurrency = next.currency
+			outIssue := curIssue
+			if next.hasMPT {
+				outIssue = NewMPTIssue(next.mptID)
+			} else {
+				if next.hasCurrency {
+					outIssue.Currency = next.currency
+					outIssue.IsMPT = false
+					outIssue.MPTID = [24]byte{}
+				}
+				if next.hasIssuer {
+					outIssue.Issuer = next.issuer
+				}
 			}
-			outIssuer := curIssue.Issuer
-			if next.hasIssuer {
-				outIssuer = next.issuer
-			}
-			outIssue := Issue{Currency: outCurrency, Issuer: outIssuer}
 			// XRP must have zero issuer
 			if outIssue.IsXRP() {
 				outIssue.Issuer = [20]byte{}
@@ -707,7 +857,7 @@ func (ctx *StrandContext) buildStrandSteps(
 			}
 			// Same in/out issue means an invalid book (book_.in == book_.out).
 			// Reference: rippled BookStep::check() line 1346: returns temBAD_PATH
-			if curIssue.Currency == outIssue.Currency && curIssue.Issuer == outIssue.Issuer {
+			if curIssue.Equal(outIssue) {
 				return nil, ter.TemBAD_PATH
 			}
 			// Check for book loop BEFORE creating step
@@ -716,6 +866,7 @@ func (ctx *StrandContext) buildStrandSteps(
 			}
 			bookStep := NewBookStep(curIssue, outIssue, src, dst, prevStep, false)
 			bookStep.defaultPath = ctx.IsDefaultPath
+			bookStep.strandDeliver = ctx.StrandDeliver
 			// Validate book step (noRipple, issuer existence, etc.)
 			// Reference: rippled BookStep.cpp make_BookStepHelper() calls check(ctx)
 			if result := bookStep.Check(view); result != ter.TesSUCCESS {
@@ -756,15 +907,13 @@ func hasIssuer(elem PathStep) bool {
 	return elem.Issuer != "" || (elem.Type&int(PathTypeIssuer)) != 0
 }
 
+func hasMPT(elem PathStep) bool {
+	return elem.MPTIssuanceID != "" || (elem.Type&int(PathTypeMPT)) != 0
+}
+
 // issuesEqual compares two Issues for equality
 func issuesEqual(a, b Issue) bool {
-	if a.IsXRP() != b.IsXRP() {
-		return false
-	}
-	if a.IsXRP() {
-		return true // Both XRP
-	}
-	return a.Currency == b.Currency && a.Issuer == b.Issuer
+	return a.Equal(b)
 }
 
 // strandsEqual compares two strands for equality

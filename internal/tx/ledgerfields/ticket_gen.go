@@ -6,8 +6,11 @@
 package ledgerfields
 
 import (
+	"errors"
+	"fmt"
+
 	"github.com/LeJamon/go-xrpl/codec/binarycodec"
-	"github.com/LeJamon/go-xrpl/crypto/common"
+	"github.com/LeJamon/go-xrpl/crypto/sha512half"
 	"github.com/LeJamon/go-xrpl/protocol"
 )
 
@@ -18,10 +21,12 @@ func init() {
 // Ticket is the typed representation of a Ticket ledger entry.
 // The present bitset tracks which fields appear on the decoded blob so the
 // emit methods only write entries that actually exist. The struct carries
-// every on-wire field — including those excluded from metadata
-// (sMD_Never) — so Decode → Encode is byte-identical.
+// every canonical field declared in the spec — including those excluded from
+// metadata (sMD_Never) — so decoding and re-encoding does not drop them.
 type Ticket struct {
 	present           uint64
+	decoded           bool
+	dirty             bool
 	Account           string // AccountID (base58)
 	OwnerNode         string // UInt64 (lowercase hex, no leading zeros)
 	TicketSequence    uint32
@@ -39,16 +44,114 @@ const (
 	ticketBitPreviousTxnLgrSeq
 )
 
+// SetAccount assigns Account and updates its serialized presence.
+func (t *Ticket) SetAccount(value string) {
+	t.Account = value
+	t.dirty = true
+	t.present |= ticketBitAccount
+}
+
+// SetOwnerNode assigns OwnerNode and updates its serialized presence.
+func (t *Ticket) SetOwnerNode(value string) {
+	t.OwnerNode = value
+	t.dirty = true
+	t.present |= ticketBitOwnerNode
+}
+
+// SetTicketSequence assigns TicketSequence and updates its serialized presence.
+func (t *Ticket) SetTicketSequence(value uint32) {
+	t.TicketSequence = value
+	t.dirty = true
+	t.present |= ticketBitTicketSequence
+}
+
+// SetFlags assigns Flags and updates its serialized presence.
+func (t *Ticket) SetFlags(value uint32) {
+	t.Flags = value
+	t.dirty = true
+	t.present |= ticketBitFlags
+}
+
+// SetPreviousTxnID assigns PreviousTxnID and updates its serialized presence.
+func (t *Ticket) SetPreviousTxnID(value string) {
+	t.PreviousTxnID = value
+	t.dirty = true
+	t.present |= ticketBitPreviousTxnID
+}
+
+// SetPreviousTxnLgrSeq assigns PreviousTxnLgrSeq and updates its serialized presence.
+func (t *Ticket) SetPreviousTxnLgrSeq(value uint32) {
+	t.PreviousTxnLgrSeq = value
+	t.dirty = true
+	t.present |= ticketBitPreviousTxnLgrSeq
+}
+
+func (t *Ticket) validateRequired() error {
+	if t.decoded && !t.dirty {
+		return nil
+	}
+	if t.present&ticketBitAccount == 0 {
+		return errors.New("ledgerfields: Ticket: required field Account is not set")
+	}
+	if t.present&ticketBitOwnerNode == 0 {
+		return errors.New("ledgerfields: Ticket: required field OwnerNode is not set")
+	}
+	if t.present&ticketBitTicketSequence == 0 {
+		return errors.New("ledgerfields: Ticket: required field TicketSequence is not set")
+	}
+	if t.present&ticketBitFlags == 0 {
+		return errors.New("ledgerfields: Ticket: required field Flags is not set")
+	}
+	return nil
+}
+
+func (t *Ticket) validateDecoded() error {
+	if t.present&ticketBitAccount == 0 {
+		return errors.New("ledgerfields: Ticket: required field Account is missing")
+	}
+	if t.present&ticketBitOwnerNode == 0 {
+		return errors.New("ledgerfields: Ticket: required field OwnerNode is missing")
+	}
+	if t.present&ticketBitTicketSequence == 0 {
+		return errors.New("ledgerfields: Ticket: required field TicketSequence is missing")
+	}
+	if t.present&ticketBitFlags == 0 {
+		return errors.New("ledgerfields: Ticket: required field Flags is missing")
+	}
+	if t.present&ticketBitPreviousTxnID == 0 {
+		return errors.New("ledgerfields: Ticket: required field PreviousTxnID is missing")
+	}
+	if t.present&ticketBitPreviousTxnLgrSeq == 0 {
+		return errors.New("ledgerfields: Ticket: required field PreviousTxnLgrSeq is missing")
+	}
+	return nil
+}
+
 // Decode populates the struct from binary ledger-entry data via a streaming
-// reader. Unknown / sMD_Never fields are skipped without allocation.
+// reader and enforces the current rippled ledger template.
 func (t *Ticket) Decode(data []byte) error {
+	return t.decode(data, false)
+}
+
+func (t *Ticket) decodeLegacy(data []byte) error {
+	return t.decode(data, true)
+}
+
+func (t *Ticket) decode(data []byte, legacy bool) error {
 	*t = Ticket{}
 	sr := newStreamReader(data)
+	seenFields := make(map[[2]int]struct{})
+	sawLedgerEntryType := false
 	for sr.hasMore() {
 		typeCode, fieldCode, err := sr.readFieldHeader()
 		if err != nil {
 			return err
 		}
+		fieldID := [2]int{typeCode, fieldCode}
+		if _, exists := seenFields[fieldID]; exists {
+			return fmt.Errorf("ledgerfields: Ticket: duplicate field type=%d field=%d", typeCode, fieldCode)
+		}
+		seenFields[fieldID] = struct{}{}
 		switch typeCode {
 		case 1: // UInt16
 			u16Val, err := sr.readUint16()
@@ -58,7 +161,10 @@ func (t *Ticket) Decode(data []byte) error {
 			val := int(u16Val)
 			switch fieldCode {
 			case 1:
-				_ = val // synthetic LedgerEntryType; discard
+				if val != 84 {
+					return fmt.Errorf("ledgerfields: Ticket: LedgerEntryType is %d, want 84", val)
+				}
+				sawLedgerEntryType = true
 			default:
 				return newErrUnknownField("Ticket", typeCode, fieldCode)
 			}
@@ -119,6 +225,13 @@ func (t *Ticket) Decode(data []byte) error {
 		default:
 			return newErrUnknownField("Ticket", typeCode, fieldCode)
 		}
+	}
+	if !sawLedgerEntryType {
+		return errors.New("ledgerfields: Ticket: missing LedgerEntryType")
+	}
+	t.decoded = true
+	if !legacy {
+		return t.validateDecoded()
 	}
 	return nil
 }
@@ -246,11 +359,20 @@ func (t *Ticket) ToMap() map[string]any {
 	return out
 }
 
-// Encode serializes the receiver to canonical XRPL binary. Round-trip
-// invariant: Decode(data); Encode() == data for any byte sequence that
-// Decode accepts.
+// Encode serializes the receiver to canonical XRPL binary. Legacy decode
+// aliases and non-canonical input ordering are emitted in canonical form.
 func (t *Ticket) Encode() ([]byte, error) {
-	return binarycodec.EncodeBytes(t.ToMap())
+	if err := t.validateRequired(); err != nil {
+		return nil, err
+	}
+	out := t.ToMap()
+	if t.present&ticketBitPreviousTxnID == 0 {
+		out["PreviousTxnID"] = "0000000000000000000000000000000000000000000000000000000000000000"
+	}
+	if t.present&ticketBitPreviousTxnLgrSeq == 0 {
+		out["PreviousTxnLgrSeq"] = uint32(0)
+	}
+	return binarycodec.EncodeBytes(out)
 }
 
 // Hash returns the SHAMap account-state leaf hash for this entry,
@@ -261,6 +383,6 @@ func (t *Ticket) Hash(index [32]byte) ([32]byte, error) {
 	if err != nil {
 		return [32]byte{}, err
 	}
-	prefix := protocol.HashPrefixLeafNode
-	return common.Sha512Half(prefix[:], data, index[:]), nil
+	prefix := protocol.HashPrefixLeafNode()
+	return sha512half.Sum(prefix[:], data, index[:]), nil
 }

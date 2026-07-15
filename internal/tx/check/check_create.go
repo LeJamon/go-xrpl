@@ -4,6 +4,7 @@ import (
 	"github.com/LeJamon/go-xrpl/amendment"
 	"github.com/LeJamon/go-xrpl/internal/ledger/state"
 	"github.com/LeJamon/go-xrpl/internal/tx"
+	"github.com/LeJamon/go-xrpl/internal/tx/mptutil"
 	"github.com/LeJamon/go-xrpl/internal/tx/ter"
 	"github.com/LeJamon/go-xrpl/keylet"
 )
@@ -41,14 +42,14 @@ func (c *CheckCreate) TxType() tx.Type {
 }
 
 // Validate implements preflight validation matching rippled's CreateCheck::preflight().
+// GetFlagsMask adopts the engine FlagsMasker seam. CreateCheck defines no
+// type-specific flags, so it uses the base universal mask, checked at preflight0.
+func (c *CheckCreate) GetFlagsMask(rules *amendment.Rules) uint32 {
+	return tx.TfUniversalMask
+}
+
 func (c *CheckCreate) Validate() error {
 	if err := c.BaseTx.Validate(); err != nil {
-		return err
-	}
-
-	// No flags allowed except universal flags
-	// Reference: CreateCheck.cpp L41-46
-	if err := tx.CheckFlags(c.GetFlags(), tx.TfUniversalMask); err != nil {
 		return err
 	}
 
@@ -68,9 +69,13 @@ func (c *CheckCreate) Validate() error {
 		return ter.Errorf(ter.TemBAD_AMOUNT, "SendMax must be positive")
 	}
 
+	if badMPTAsset(c.SendMax) {
+		return ter.Errorf(ter.TemBAD_CURRENCY, "invalid MPT issuance")
+	}
+
 	// Cannot use bad currency (XRP as IOU or null currency)
 	// Reference: CreateCheck.cpp L63-67
-	if !c.SendMax.IsNative() {
+	if !c.SendMax.IsNative() && !c.SendMax.IsMPT() {
 		if c.SendMax.Currency == "XRP" || c.SendMax.Currency == "\x00\x00\x00" || c.SendMax.Currency == "" {
 			return ter.Errorf(ter.TemBAD_CURRENCY, "invalid currency")
 		}
@@ -85,12 +90,30 @@ func (c *CheckCreate) Validate() error {
 	return nil
 }
 
+func badMPTAsset(amount tx.Amount) bool {
+	if !amount.IsMPT() {
+		return false
+	}
+	id, err := mptutil.DecodeID(amount.MPTIssuanceID())
+	return err != nil || mptutil.Issuer(id) == ([20]byte{})
+}
+
 func (c *CheckCreate) Flatten() (map[string]any, error) {
 	return tx.ReflectFlatten(c)
 }
 
 func (c *CheckCreate) RequiredAmendments() [][32]byte {
-	return [][32]byte{amendment.FeatureChecks}
+	return nil
+}
+
+// CheckExtraFeatures gates an MPT-denominated SendMax on the MPTokensV2
+// amendment, mirroring rippled CheckCreate::checkExtraFeatures. Runs before the
+// common preflight, so an MPT SendMax without the amendment surfaces temDISABLED.
+func (c *CheckCreate) CheckExtraFeatures(rules *amendment.Rules) error {
+	if !rules.MPTokensV2Enabled() && c.SendMax.IsMPT() {
+		return ter.Errorf(ter.TemDISABLED, "MPT SendMax requires MPTokensV2 amendment")
+	}
+	return nil
 }
 
 // Apply implements preclaim + doApply matching rippled's CreateCheck.
@@ -112,11 +135,8 @@ func (c *CheckCreate) Apply(ctx *tx.ApplyContext) ter.Result {
 
 	// Check DisallowIncoming flag on destination
 	// Reference: CreateCheck.cpp L93-98
-	rules := ctx.Rules()
-	if rules.Enabled(amendment.FeatureDisallowIncoming) {
-		if destAccount.Flags&state.LsfDisallowIncomingCheck != 0 {
-			return ter.TecNO_PERMISSION
-		}
+	if destAccount.Flags&state.LsfDisallowIncomingCheck != 0 {
+		return ter.TecNO_PERMISSION
 	}
 
 	// Check RequireDestTag on destination
@@ -125,9 +145,24 @@ func (c *CheckCreate) Apply(ctx *tx.ApplyContext) ter.Result {
 		return ter.TecDST_TAG_NEEDED
 	}
 
-	// IOU-specific checks
-	// Reference: CreateCheck.cpp L116-161
-	if !c.SendMax.IsNative() {
+	if c.SendMax.IsMPT() {
+		mptID, err := mptutil.DecodeID(c.SendMax.MPTIssuanceID())
+		if err != nil {
+			return ter.TecOBJECT_NOT_FOUND
+		}
+		accountID := ctx.AccountID
+		issuerID := mptutil.Issuer(mptID)
+
+		if mptutil.IsGlobalFrozen(ctx.View, mptID) ||
+			(accountID != issuerID && mptutil.IsFrozen(ctx.View, mptID, accountID)) ||
+			(destID != issuerID && mptutil.IsFrozen(ctx.View, mptID, destID)) {
+			return ter.TecLOCKED
+		}
+		if result := mptutil.CanTransfer(ctx.View, mptID, accountID, destID); result != ter.TesSUCCESS {
+			return result
+		}
+	} else if !c.SendMax.IsNative() {
+		// Reference: CreateCheck.cpp L116-161
 		issuerID, err := state.DecodeAccountID(c.SendMax.Issuer)
 		if err != nil {
 			return ter.TefINTERNAL
@@ -140,12 +175,14 @@ func (c *CheckCreate) Apply(ctx *tx.ApplyContext) ter.Result {
 		if err != nil {
 			return ter.TefINTERNAL
 		}
-		issuerAccount, err := state.ParseAccountRoot(issuerData)
-		if err != nil {
-			return ter.TefINTERNAL
-		}
-		if issuerAccount.Flags&state.LsfGlobalFreeze != 0 {
-			return ter.TecFROZEN
+		if issuerData != nil {
+			issuerAccount, err := state.ParseAccountRoot(issuerData)
+			if err != nil {
+				return ter.TefINTERNAL
+			}
+			if issuerAccount.Flags&state.LsfGlobalFreeze != 0 {
+				return ter.TecFROZEN
+			}
 		}
 
 		accountID := ctx.AccountID
@@ -186,21 +223,17 @@ func (c *CheckCreate) Apply(ctx *tx.ApplyContext) ter.Result {
 
 	checkKey := keylet.Check(accountID, sequence)
 
-	// Serialize check
-	checkData, err := serializeCheck(c, accountID, destID, sequence, c.SendMax)
+	// Build the check SLE and insert its initial (pre-directory) form; the
+	// directory page fields are filled in and the entry re-serialized below.
+	checkSLE := newCheckData(c, accountID, destID, sequence, c.SendMax)
+	checkData, err := state.SerializeCheckFromData(checkSLE)
 	if err != nil {
-		return ter.TefINTERNAL
+		return ctx.Internal("SerializeCheckFromData", err)
 	}
 
 	// Insert check
 	if err := ctx.View.Insert(checkKey, checkData); err != nil {
-		return ter.TefINTERNAL
-	}
-
-	// Parse the check SLE to update with directory page numbers
-	checkSLE, err := state.ParseCheck(checkData)
-	if err != nil {
-		return ter.TefINTERNAL
+		return ctx.Internal("insert check", err)
 	}
 
 	// Insert check into destination's owner directory (not self-send).
@@ -233,10 +266,10 @@ func (c *CheckCreate) Apply(ctx *tx.ApplyContext) ter.Result {
 	// Re-serialize check with updated OwnerNode/DestinationNode
 	updatedData, err := state.SerializeCheckFromData(checkSLE)
 	if err != nil {
-		return ter.TefINTERNAL
+		return ctx.Internal("SerializeCheckFromData", err)
 	}
 	if err := ctx.View.Update(checkKey, updatedData); err != nil {
-		return ter.TefINTERNAL
+		return ctx.Internal("update check", err)
 	}
 
 	// Increase owner count
@@ -252,8 +285,8 @@ func isTrustLineFrozenBySelf(view tx.LedgerView, accountID, issuerID [20]byte, c
 	if accountID == issuerID {
 		return false
 	}
-	tl, ok := readRippleState(view, accountID, issuerID, currency)
-	if !ok {
+	tl, err := tx.ReadRippleState(view, accountID, issuerID, currency)
+	if err != nil || tl == nil {
 		return false
 	}
 	freezeFlag := state.LsfLowFreeze
@@ -261,21 +294,4 @@ func isTrustLineFrozenBySelf(view tx.LedgerView, accountID, issuerID [20]byte, c
 		freezeFlag = state.LsfHighFreeze
 	}
 	return tl.Flags&freezeFlag != 0
-}
-
-func readRippleState(view tx.LedgerView, accountID, issuerID [20]byte, currency string) (*state.RippleState, bool) {
-	key := keylet.Line(accountID, issuerID, currency)
-	exists, _ := view.Exists(key)
-	if !exists {
-		return nil, false
-	}
-	data, err := view.Read(key)
-	if err != nil {
-		return nil, false
-	}
-	tl, err := state.ParseRippleState(data)
-	if err != nil {
-		return nil, false
-	}
-	return tl, true
 }

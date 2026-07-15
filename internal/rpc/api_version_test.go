@@ -73,7 +73,7 @@ func allHandlers() map[string]types.MethodHandler {
 		"channel_authorize":   &handlers.ChannelAuthorizeMethod{},
 		"channel_verify":      &handlers.ChannelVerifyMethod{},
 		"wallet_propose":      &handlers.WalletProposeMethod{},
-		"json":                &handlers.JsonMethod{},
+		"json":                &handlers.JSONMethod{},
 		"manifest":            &handlers.ManifestMethod{},
 		"amm_info":            &handlers.AMMInfoMethod{},
 		"vault_info":          &handlers.VaultInfoMethod{},

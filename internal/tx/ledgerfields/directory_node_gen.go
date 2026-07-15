@@ -6,8 +6,11 @@
 package ledgerfields
 
 import (
+	"errors"
+	"fmt"
+
 	"github.com/LeJamon/go-xrpl/codec/binarycodec"
-	"github.com/LeJamon/go-xrpl/crypto/common"
+	"github.com/LeJamon/go-xrpl/crypto/sha512half"
 	"github.com/LeJamon/go-xrpl/protocol"
 )
 
@@ -18,10 +21,12 @@ func init() {
 // DirectoryNode is the typed representation of a DirectoryNode ledger entry.
 // The present bitset tracks which fields appear on the decoded blob so the
 // emit methods only write entries that actually exist. The struct carries
-// every on-wire field — including those excluded from metadata
-// (sMD_Never) — so Decode → Encode is byte-identical.
+// every canonical field declared in the spec — including those excluded from
+// metadata (sMD_Never) — so decoding and re-encoding does not drop them.
 type DirectoryNode struct {
 	present           uint64
+	decoded           bool
+	dirty             bool
 	Flags             uint32
 	RootIndex         string // Hash256 (uppercase hex)
 	Indexes           []string
@@ -30,8 +35,10 @@ type DirectoryNode struct {
 	Owner             string // AccountID (base58)
 	TakerPaysCurrency string // Hash160 (uppercase hex)
 	TakerPaysIssuer   string // Hash160 (uppercase hex)
+	TakerPaysMPT      string
 	TakerGetsCurrency string // Hash160 (uppercase hex)
 	TakerGetsIssuer   string // Hash160 (uppercase hex)
+	TakerGetsMPT      string
 	ExchangeRate      string // UInt64 (lowercase hex, no leading zeros)
 	NFTokenID         string // Hash256 (uppercase hex)
 	DomainID          string // Hash256 (uppercase hex)
@@ -48,8 +55,10 @@ const (
 	directorynodeBitOwner
 	directorynodeBitTakerPaysCurrency
 	directorynodeBitTakerPaysIssuer
+	directorynodeBitTakerPaysMPT
 	directorynodeBitTakerGetsCurrency
 	directorynodeBitTakerGetsIssuer
+	directorynodeBitTakerGetsMPT
 	directorynodeBitExchangeRate
 	directorynodeBitNFTokenID
 	directorynodeBitDomainID
@@ -57,16 +66,179 @@ const (
 	directorynodeBitPreviousTxnLgrSeq
 )
 
+// SetFlags assigns Flags and updates its serialized presence.
+func (d *DirectoryNode) SetFlags(value uint32) {
+	d.Flags = value
+	d.dirty = true
+	d.present |= directorynodeBitFlags
+}
+
+// SetRootIndex assigns RootIndex and updates its serialized presence.
+func (d *DirectoryNode) SetRootIndex(value string) {
+	d.RootIndex = value
+	d.dirty = true
+	d.present |= directorynodeBitRootIndex
+}
+
+// SetIndexes assigns Indexes and updates its serialized presence.
+func (d *DirectoryNode) SetIndexes(value []string) {
+	d.Indexes = value
+	d.dirty = true
+	d.present |= directorynodeBitIndexes
+}
+
+// SetIndexNext assigns IndexNext and updates its serialized presence.
+func (d *DirectoryNode) SetIndexNext(value string) {
+	d.IndexNext = value
+	d.dirty = true
+	d.present |= directorynodeBitIndexNext
+}
+
+// SetIndexPrevious assigns IndexPrevious and updates its serialized presence.
+func (d *DirectoryNode) SetIndexPrevious(value string) {
+	d.IndexPrevious = value
+	d.dirty = true
+	d.present |= directorynodeBitIndexPrevious
+}
+
+// SetOwner assigns Owner and updates its serialized presence.
+func (d *DirectoryNode) SetOwner(value string) {
+	d.Owner = value
+	d.dirty = true
+	d.present |= directorynodeBitOwner
+}
+
+// SetTakerPaysCurrency assigns TakerPaysCurrency and updates its serialized presence.
+func (d *DirectoryNode) SetTakerPaysCurrency(value string) {
+	d.TakerPaysCurrency = value
+	d.dirty = true
+	d.present |= directorynodeBitTakerPaysCurrency
+}
+
+// SetTakerPaysIssuer assigns TakerPaysIssuer and updates its serialized presence.
+func (d *DirectoryNode) SetTakerPaysIssuer(value string) {
+	d.TakerPaysIssuer = value
+	d.dirty = true
+	d.present |= directorynodeBitTakerPaysIssuer
+}
+
+// SetTakerPaysMPT assigns TakerPaysMPT and updates its serialized presence.
+func (d *DirectoryNode) SetTakerPaysMPT(value string) {
+	d.TakerPaysMPT = value
+	d.dirty = true
+	d.present |= directorynodeBitTakerPaysMPT
+}
+
+// SetTakerGetsCurrency assigns TakerGetsCurrency and updates its serialized presence.
+func (d *DirectoryNode) SetTakerGetsCurrency(value string) {
+	d.TakerGetsCurrency = value
+	d.dirty = true
+	d.present |= directorynodeBitTakerGetsCurrency
+}
+
+// SetTakerGetsIssuer assigns TakerGetsIssuer and updates its serialized presence.
+func (d *DirectoryNode) SetTakerGetsIssuer(value string) {
+	d.TakerGetsIssuer = value
+	d.dirty = true
+	d.present |= directorynodeBitTakerGetsIssuer
+}
+
+// SetTakerGetsMPT assigns TakerGetsMPT and updates its serialized presence.
+func (d *DirectoryNode) SetTakerGetsMPT(value string) {
+	d.TakerGetsMPT = value
+	d.dirty = true
+	d.present |= directorynodeBitTakerGetsMPT
+}
+
+// SetExchangeRate assigns ExchangeRate and updates its serialized presence.
+func (d *DirectoryNode) SetExchangeRate(value string) {
+	d.ExchangeRate = value
+	d.dirty = true
+	d.present |= directorynodeBitExchangeRate
+}
+
+// SetNFTokenID assigns NFTokenID and updates its serialized presence.
+func (d *DirectoryNode) SetNFTokenID(value string) {
+	d.NFTokenID = value
+	d.dirty = true
+	d.present |= directorynodeBitNFTokenID
+}
+
+// SetDomainID assigns DomainID and updates its serialized presence.
+func (d *DirectoryNode) SetDomainID(value string) {
+	d.DomainID = value
+	d.dirty = true
+	d.present |= directorynodeBitDomainID
+}
+
+// SetPreviousTxnID assigns PreviousTxnID and updates its serialized presence.
+func (d *DirectoryNode) SetPreviousTxnID(value string) {
+	d.PreviousTxnID = value
+	d.dirty = true
+	d.present |= directorynodeBitPreviousTxnID
+}
+
+// SetPreviousTxnLgrSeq assigns PreviousTxnLgrSeq and updates its serialized presence.
+func (d *DirectoryNode) SetPreviousTxnLgrSeq(value uint32) {
+	d.PreviousTxnLgrSeq = value
+	d.dirty = true
+	d.present |= directorynodeBitPreviousTxnLgrSeq
+}
+
+func (d *DirectoryNode) validateRequired() error {
+	if d.decoded && !d.dirty {
+		return nil
+	}
+	if d.present&directorynodeBitFlags == 0 {
+		return errors.New("ledgerfields: DirectoryNode: required field Flags is not set")
+	}
+	if d.present&directorynodeBitRootIndex == 0 {
+		return errors.New("ledgerfields: DirectoryNode: required field RootIndex is not set")
+	}
+	if d.present&directorynodeBitIndexes == 0 {
+		return errors.New("ledgerfields: DirectoryNode: required field Indexes is not set")
+	}
+	return nil
+}
+
+func (d *DirectoryNode) validateDecoded() error {
+	if d.present&directorynodeBitFlags == 0 {
+		return errors.New("ledgerfields: DirectoryNode: required field Flags is missing")
+	}
+	if d.present&directorynodeBitRootIndex == 0 {
+		return errors.New("ledgerfields: DirectoryNode: required field RootIndex is missing")
+	}
+	if d.present&directorynodeBitIndexes == 0 {
+		return errors.New("ledgerfields: DirectoryNode: required field Indexes is missing")
+	}
+	return nil
+}
+
 // Decode populates the struct from binary ledger-entry data via a streaming
-// reader. Unknown / sMD_Never fields are skipped without allocation.
+// reader and enforces the current rippled ledger template.
 func (d *DirectoryNode) Decode(data []byte) error {
+	return d.decode(data, false)
+}
+
+func (d *DirectoryNode) decodeLegacy(data []byte) error {
+	return d.decode(data, true)
+}
+
+func (d *DirectoryNode) decode(data []byte, legacy bool) error {
 	*d = DirectoryNode{}
 	sr := newStreamReader(data)
+	seenFields := make(map[[2]int]struct{})
+	sawLedgerEntryType := false
 	for sr.hasMore() {
 		typeCode, fieldCode, err := sr.readFieldHeader()
 		if err != nil {
 			return err
 		}
+		fieldID := [2]int{typeCode, fieldCode}
+		if _, exists := seenFields[fieldID]; exists {
+			return fmt.Errorf("ledgerfields: DirectoryNode: duplicate field type=%d field=%d", typeCode, fieldCode)
+		}
+		seenFields[fieldID] = struct{}{}
 		switch typeCode {
 		case 1: // UInt16
 			u16Val, err := sr.readUint16()
@@ -76,7 +248,10 @@ func (d *DirectoryNode) Decode(data []byte) error {
 			val := int(u16Val)
 			switch fieldCode {
 			case 1:
-				_ = val // synthetic LedgerEntryType; discard
+				if val != 100 {
+					return fmt.Errorf("ledgerfields: DirectoryNode: LedgerEntryType is %d, want 100", val)
+				}
+				sawLedgerEntryType = true
 			default:
 				return newErrUnknownField("DirectoryNode", typeCode, fieldCode)
 			}
@@ -187,9 +362,31 @@ func (d *DirectoryNode) Decode(data []byte) error {
 			default:
 				return newErrUnknownField("DirectoryNode", typeCode, fieldCode)
 			}
+		case 21: // Hash192
+			val, err := sr.readHash(24)
+			if err != nil {
+				return err
+			}
+			switch fieldCode {
+			case 3:
+				d.TakerPaysMPT = val
+				d.present |= directorynodeBitTakerPaysMPT
+			case 4:
+				d.TakerGetsMPT = val
+				d.present |= directorynodeBitTakerGetsMPT
+			default:
+				return newErrUnknownField("DirectoryNode", typeCode, fieldCode)
+			}
 		default:
 			return newErrUnknownField("DirectoryNode", typeCode, fieldCode)
 		}
+	}
+	if !sawLedgerEntryType {
+		return errors.New("ledgerfields: DirectoryNode: missing LedgerEntryType")
+	}
+	d.decoded = true
+	if !legacy {
+		return d.validateDecoded()
 	}
 	return nil
 }
@@ -216,11 +413,17 @@ func (d *DirectoryNode) emitAll(out map[string]any, skipDefault bool) {
 	if d.present&directorynodeBitTakerPaysIssuer != 0 && !(skipDefault && isZeroHexString(d.TakerPaysIssuer)) {
 		out["TakerPaysIssuer"] = d.TakerPaysIssuer
 	}
+	if d.present&directorynodeBitTakerPaysMPT != 0 && !(skipDefault && isZeroHexString(d.TakerPaysMPT)) {
+		out["TakerPaysMPT"] = d.TakerPaysMPT
+	}
 	if d.present&directorynodeBitTakerGetsCurrency != 0 && !(skipDefault && isZeroHexString(d.TakerGetsCurrency)) {
 		out["TakerGetsCurrency"] = d.TakerGetsCurrency
 	}
 	if d.present&directorynodeBitTakerGetsIssuer != 0 && !(skipDefault && isZeroHexString(d.TakerGetsIssuer)) {
 		out["TakerGetsIssuer"] = d.TakerGetsIssuer
+	}
+	if d.present&directorynodeBitTakerGetsMPT != 0 && !(skipDefault && isZeroHexString(d.TakerGetsMPT)) {
+		out["TakerGetsMPT"] = d.TakerGetsMPT
 	}
 	if d.present&directorynodeBitExchangeRate != 0 && !(skipDefault && isZeroHexString(d.ExchangeRate)) {
 		out["ExchangeRate"] = d.ExchangeRate
@@ -261,8 +464,10 @@ func (d *DirectoryNode) EmitPreviousFields(prev Entry, out map[string]any) {
 	emitIfChangedString(out, "Owner", prv.Owner, d.Owner, prv.present&directorynodeBitOwner, d.present&directorynodeBitOwner)
 	emitIfChangedString(out, "TakerPaysCurrency", prv.TakerPaysCurrency, d.TakerPaysCurrency, prv.present&directorynodeBitTakerPaysCurrency, d.present&directorynodeBitTakerPaysCurrency)
 	emitIfChangedString(out, "TakerPaysIssuer", prv.TakerPaysIssuer, d.TakerPaysIssuer, prv.present&directorynodeBitTakerPaysIssuer, d.present&directorynodeBitTakerPaysIssuer)
+	emitIfChangedString(out, "TakerPaysMPT", prv.TakerPaysMPT, d.TakerPaysMPT, prv.present&directorynodeBitTakerPaysMPT, d.present&directorynodeBitTakerPaysMPT)
 	emitIfChangedString(out, "TakerGetsCurrency", prv.TakerGetsCurrency, d.TakerGetsCurrency, prv.present&directorynodeBitTakerGetsCurrency, d.present&directorynodeBitTakerGetsCurrency)
 	emitIfChangedString(out, "TakerGetsIssuer", prv.TakerGetsIssuer, d.TakerGetsIssuer, prv.present&directorynodeBitTakerGetsIssuer, d.present&directorynodeBitTakerGetsIssuer)
+	emitIfChangedString(out, "TakerGetsMPT", prv.TakerGetsMPT, d.TakerGetsMPT, prv.present&directorynodeBitTakerGetsMPT, d.present&directorynodeBitTakerGetsMPT)
 	emitIfChangedString(out, "ExchangeRate", prv.ExchangeRate, d.ExchangeRate, prv.present&directorynodeBitExchangeRate, d.present&directorynodeBitExchangeRate)
 	emitIfChangedString(out, "NFTokenID", prv.NFTokenID, d.NFTokenID, prv.present&directorynodeBitNFTokenID, d.present&directorynodeBitNFTokenID)
 	emitIfChangedString(out, "DomainID", prv.DomainID, d.DomainID, prv.present&directorynodeBitDomainID, d.present&directorynodeBitDomainID)
@@ -292,11 +497,17 @@ func (d *DirectoryNode) EmitChangeOrigFields(out map[string]any) {
 	if d.present&directorynodeBitTakerPaysIssuer != 0 {
 		out["TakerPaysIssuer"] = d.TakerPaysIssuer
 	}
+	if d.present&directorynodeBitTakerPaysMPT != 0 {
+		out["TakerPaysMPT"] = d.TakerPaysMPT
+	}
 	if d.present&directorynodeBitTakerGetsCurrency != 0 {
 		out["TakerGetsCurrency"] = d.TakerGetsCurrency
 	}
 	if d.present&directorynodeBitTakerGetsIssuer != 0 {
 		out["TakerGetsIssuer"] = d.TakerGetsIssuer
+	}
+	if d.present&directorynodeBitTakerGetsMPT != 0 {
+		out["TakerGetsMPT"] = d.TakerGetsMPT
 	}
 	if d.present&directorynodeBitExchangeRate != 0 {
 		out["ExchangeRate"] = d.ExchangeRate
@@ -372,11 +583,17 @@ func (d *DirectoryNode) ToMap() map[string]any {
 	if d.present&directorynodeBitTakerPaysIssuer != 0 {
 		out["TakerPaysIssuer"] = d.TakerPaysIssuer
 	}
+	if d.present&directorynodeBitTakerPaysMPT != 0 {
+		out["TakerPaysMPT"] = d.TakerPaysMPT
+	}
 	if d.present&directorynodeBitTakerGetsCurrency != 0 {
 		out["TakerGetsCurrency"] = d.TakerGetsCurrency
 	}
 	if d.present&directorynodeBitTakerGetsIssuer != 0 {
 		out["TakerGetsIssuer"] = d.TakerGetsIssuer
+	}
+	if d.present&directorynodeBitTakerGetsMPT != 0 {
+		out["TakerGetsMPT"] = d.TakerGetsMPT
 	}
 	if d.present&directorynodeBitExchangeRate != 0 {
 		out["ExchangeRate"] = d.ExchangeRate
@@ -396,11 +613,14 @@ func (d *DirectoryNode) ToMap() map[string]any {
 	return out
 }
 
-// Encode serializes the receiver to canonical XRPL binary. Round-trip
-// invariant: Decode(data); Encode() == data for any byte sequence that
-// Decode accepts.
+// Encode serializes the receiver to canonical XRPL binary. Legacy decode
+// aliases and non-canonical input ordering are emitted in canonical form.
 func (d *DirectoryNode) Encode() ([]byte, error) {
-	return binarycodec.EncodeBytes(d.ToMap())
+	if err := d.validateRequired(); err != nil {
+		return nil, err
+	}
+	out := d.ToMap()
+	return binarycodec.EncodeBytes(out)
 }
 
 // Hash returns the SHAMap account-state leaf hash for this entry,
@@ -411,6 +631,6 @@ func (d *DirectoryNode) Hash(index [32]byte) ([32]byte, error) {
 	if err != nil {
 		return [32]byte{}, err
 	}
-	prefix := protocol.HashPrefixLeafNode
-	return common.Sha512Half(prefix[:], data, index[:]), nil
+	prefix := protocol.HashPrefixLeafNode()
+	return sha512half.Sum(prefix[:], data, index[:]), nil
 }

@@ -76,6 +76,15 @@ const (
 	TxTypeVaultWithdraw                TxType = 69 // ttVAULT_WITHDRAW
 	TxTypeVaultClawback                TxType = 70 // ttVAULT_CLAWBACK
 	TxTypeBatch                        TxType = 71 // ttBATCH
+	TxTypeLoanBrokerSet                TxType = 74 // ttLOAN_BROKER_SET
+	TxTypeLoanBrokerDelete             TxType = 75 // ttLOAN_BROKER_DELETE
+	TxTypeLoanBrokerCoverDeposit       TxType = 76 // ttLOAN_BROKER_COVER_DEPOSIT
+	TxTypeLoanBrokerCoverWithdraw      TxType = 77 // ttLOAN_BROKER_COVER_WITHDRAW
+	TxTypeLoanBrokerCoverClawback      TxType = 78 // ttLOAN_BROKER_COVER_CLAWBACK
+	TxTypeLoanSet                      TxType = 80 // ttLOAN_SET
+	TxTypeLoanDelete                   TxType = 81 // ttLOAN_DELETE
+	TxTypeLoanManage                   TxType = 82 // ttLOAN_MANAGE
+	TxTypeLoanPay                      TxType = 84 // ttLOAN_PAY
 
 	// System-generated transaction types (pseudo-transactions).
 	TxTypeAmendment TxType = 100 // ttAMENDMENT
@@ -212,6 +221,24 @@ func (t TxType) String() string {
 		return "VaultClawback"
 	case TxTypeBatch:
 		return "Batch"
+	case TxTypeLoanBrokerSet:
+		return "LoanBrokerSet"
+	case TxTypeLoanBrokerDelete:
+		return "LoanBrokerDelete"
+	case TxTypeLoanBrokerCoverDeposit:
+		return "LoanBrokerCoverDeposit"
+	case TxTypeLoanBrokerCoverWithdraw:
+		return "LoanBrokerCoverWithdraw"
+	case TxTypeLoanBrokerCoverClawback:
+		return "LoanBrokerCoverClawback"
+	case TxTypeLoanSet:
+		return "LoanSet"
+	case TxTypeLoanDelete:
+		return "LoanDelete"
+	case TxTypeLoanManage:
+		return "LoanManage"
+	case TxTypeLoanPay:
+		return "LoanPay"
 	case TxTypeAmendment:
 		return "EnableAmendment"
 	case TxTypeFee:
@@ -288,6 +315,15 @@ var txTypeNameMap = map[string]TxType{
 	"VaultWithdraw":                     TxTypeVaultWithdraw,
 	"VaultClawback":                     TxTypeVaultClawback,
 	"Batch":                             TxTypeBatch,
+	"LoanBrokerSet":                     TxTypeLoanBrokerSet,
+	"LoanBrokerDelete":                  TxTypeLoanBrokerDelete,
+	"LoanBrokerCoverDeposit":            TxTypeLoanBrokerCoverDeposit,
+	"LoanBrokerCoverWithdraw":           TxTypeLoanBrokerCoverWithdraw,
+	"LoanBrokerCoverClawback":           TxTypeLoanBrokerCoverClawback,
+	"LoanSet":                           TxTypeLoanSet,
+	"LoanDelete":                        TxTypeLoanDelete,
+	"LoanManage":                        TxTypeLoanManage,
+	"LoanPay":                           TxTypeLoanPay,
 	"EnableAmendment":                   TxTypeAmendment,
 	"SetFee":                            TxTypeFee,
 	"UNLModify":                         TxTypeUNLModify,

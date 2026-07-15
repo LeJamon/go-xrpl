@@ -163,7 +163,7 @@ func TestFeeMetrics_Update(t *testing.T) {
 	fm := NewFeeMetrics(cfg)
 
 	// Initial state
-	snapshot := fm.GetSnapshot()
+	snapshot := fm.Snapshot()
 	if snapshot.TxnsExpected != cfg.MinimumTxnInLedgerStandalone {
 		t.Errorf("Initial TxnsExpected = %d, want %d",
 			snapshot.TxnsExpected, cfg.MinimumTxnInLedgerStandalone)
@@ -178,7 +178,7 @@ func TestFeeMetrics_Update(t *testing.T) {
 	}
 
 	// Median of [256, 256, 300, 400, 500] = 300
-	snapshot = fm.GetSnapshot()
+	snapshot = fm.Snapshot()
 	if snapshot.EscalationMultiplier < 300 {
 		// Should be at least the median, but minimum is 128000
 		if snapshot.EscalationMultiplier != cfg.MinimumEscalationMultiplier {
@@ -205,7 +205,7 @@ func TestFeeMetrics_TimeLeap(t *testing.T) {
 	}
 	fm.Update(feeLevels, false, cfg)
 
-	snapshot := fm.GetSnapshot()
+	snapshot := fm.Snapshot()
 	txnsBeforeTimeLeap := snapshot.TxnsExpected
 
 	// Now simulate a time leap (slow consensus)
@@ -215,7 +215,7 @@ func TestFeeMetrics_TimeLeap(t *testing.T) {
 	}
 	fm.Update(smallLedger, true, cfg)
 
-	snapshot = fm.GetSnapshot()
+	snapshot = fm.Snapshot()
 	// With 50% decrease, new expected should be less
 	if snapshot.TxnsExpected >= txnsBeforeTimeLeap {
 		t.Errorf("After time leap, TxnsExpected = %d, should be less than %d",

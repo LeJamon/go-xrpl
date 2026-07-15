@@ -9,6 +9,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/LeJamon/go-xrpl/amendment"
 	addresscodec "github.com/LeJamon/go-xrpl/codec/addresscodec"
 	"github.com/LeJamon/go-xrpl/internal/ledger/service/svcerr"
 	"github.com/LeJamon/go-xrpl/internal/rpc/handlers"
@@ -18,11 +19,9 @@ import (
 	"github.com/LeJamon/go-xrpl/internal/tx/ter"
 )
 
-// The simulate handler now performs an STTx-ctor-parity Validate()
-// (rippled Simulate.cpp:332-343). Without all tx types registered,
-// ParseJSON falls back to the BaseTx stub whose Validate is permissive
-// and does not catch per-type missing-required-field errors. Register
-// once at package init so handler tests observe production semantics.
+// The simulate handler parses the concrete transaction type before applying
+// its STTx structural template. Register all types so tests use the same
+// concrete parsing path as production.
 func init() {
 	txall.RegisterAll()
 }
@@ -39,6 +38,7 @@ type mockLedgerServiceSimulate struct {
 	lastSeqHasTicket     bool
 	feeAutofillCallCount int
 	seqAutofillCallCount int
+	transactionRules     *amendment.Rules
 }
 
 func newMockLedgerServiceSimulate() *mockLedgerServiceSimulate {
@@ -53,7 +53,12 @@ func newMockLedgerServiceSimulate() *mockLedgerServiceSimulate {
 		},
 		autofillSeq:       1,
 		currentNetworkFee: 10,
+		transactionRules:  amendment.EmptyRules(),
 	}
+}
+
+func (m *mockLedgerServiceSimulate) TransactionRules() *amendment.Rules {
+	return m.transactionRules
 }
 
 func (m *mockLedgerServiceSimulate) SimulateTransaction(txJSON []byte) (*types.SubmitResult, error) {
@@ -279,6 +284,23 @@ func TestSimulateMethod_TxnSignature(t *testing.T) {
 		assert.Equal(t, "Transaction should not be signed.", rpcErr.Message)
 	})
 
+	t.Run("Present non-string TxnSignature is signed", func(t *testing.T) {
+		params := map[string]any{
+			"tx_json": map[string]any{
+				"TransactionType": "AccountSet",
+				"Account":         validAccountAddress,
+				"TxnSignature":    true,
+			},
+		}
+		paramsJSON, err := json.Marshal(params)
+		require.NoError(t, err)
+
+		_, rpcErr := method.Handle(ctx, paramsJSON)
+		require.NotNil(t, rpcErr)
+		assert.Equal(t, types.RpcTX_SIGNED, rpcErr.Code)
+		assert.Equal(t, "transactionSigned", rpcErr.ErrorString)
+	})
+
 	t.Run("Empty TxnSignature — allowed", func(t *testing.T) {
 		params := map[string]any{
 			"tx_json": map[string]any{
@@ -353,6 +375,30 @@ func TestSimulateMethod_SignedMultisig(t *testing.T) {
 		require.NotNil(t, rpcErr)
 		assert.Equal(t, types.RpcTX_SIGNED, rpcErr.Code)
 		assert.Equal(t, "Transaction should not be signed.", rpcErr.Message)
+	})
+
+	t.Run("Present non-string signer TxnSignature is signed", func(t *testing.T) {
+		params := map[string]any{
+			"tx_json": map[string]any{
+				"TransactionType": "AccountSet",
+				"Account":         validAccountAddress,
+				"Signers": []any{
+					map[string]any{
+						"Signer": map[string]any{
+							"Account":      validAccountAddress,
+							"TxnSignature": 1,
+						},
+					},
+				},
+			},
+		}
+		paramsJSON, err := json.Marshal(params)
+		require.NoError(t, err)
+
+		_, rpcErr := method.Handle(ctx, paramsJSON)
+		require.NotNil(t, rpcErr)
+		assert.Equal(t, types.RpcTX_SIGNED, rpcErr.Code)
+		assert.Equal(t, "transactionSigned", rpcErr.ErrorString)
 	})
 
 	t.Run("Invalid Signers field — not an array", func(t *testing.T) {
@@ -497,6 +543,84 @@ func TestSimulateMethod_SuccessfulSimulation(t *testing.T) {
 	assert.Equal(t, validAccountAddress, txJSON["Account"])
 	assert.Equal(t, "", txJSON["SigningPubKey"])
 	assert.Equal(t, "", txJSON["TxnSignature"])
+}
+
+func TestSimulateMethod_MPTokensV2UsesCurrentRules(t *testing.T) {
+	const (
+		amountID  = "000000010000000000000000000000000000000000000001"
+		sendMaxID = "000000020000000000000000000000000000000000000002"
+	)
+
+	mock := newMockLedgerServiceSimulate()
+	mock.transactionRules = amendment.NewRulesBuilder().
+		FromPreset(amendment.PresetAllSupported).
+		Enable(amendment.FeatureMPTokensV1).
+		Enable(amendment.FeatureMPTokensV2).
+		Build()
+	ctx := &types.RpcContext{
+		Context:    context.Background(),
+		Role:       types.RoleUser,
+		ApiVersion: types.ApiVersion2,
+		Services:   newSimulateTestServices(mock),
+	}
+	params := map[string]any{
+		"tx_json": map[string]any{
+			"TransactionType": "Payment",
+			"Account":         validAccountAddress,
+			"Destination":     "r4bbzCamAis69rNoRdSaMSmPb1kDUHXcAL",
+			"Amount": map[string]any{
+				"mpt_issuance_id": amountID,
+				"value":           "10",
+			},
+			"SendMax": map[string]any{
+				"mpt_issuance_id": sendMaxID,
+				"value":           "20",
+			},
+			"Paths": []any{
+				[]any{map[string]any{"mpt_issuance_id": amountID}},
+			},
+		},
+	}
+	paramsJSON, err := json.Marshal(params)
+	require.NoError(t, err)
+
+	result, rpcErr := (&handlers.SimulateMethod{}).Handle(ctx, paramsJSON)
+	require.Nil(t, rpcErr)
+	require.NotNil(t, result)
+}
+
+func TestSimulateMethod_TypeSpecificPreflightTERIsSimulationResult(t *testing.T) {
+	mock := newMockLedgerServiceSimulate()
+	mock.simulateResult = &types.SubmitResult{
+		EngineResult:        "temBAD_AMOUNT",
+		EngineResultCode:    -298,
+		EngineResultMessage: "Malformed: Bad amount.",
+		Applied:             false,
+		CurrentLedger:       3,
+	}
+	ctx := &types.RpcContext{
+		Context:    context.Background(),
+		Role:       types.RoleUser,
+		ApiVersion: types.ApiVersion2,
+		Services:   newSimulateTestServices(mock),
+	}
+	params := map[string]any{
+		"tx_json": map[string]any{
+			"TransactionType": "Payment",
+			"Account":         validAccountAddress,
+			"Destination":     "r4bbzCamAis69rNoRdSaMSmPb1kDUHXcAL",
+			"Amount":          "0",
+		},
+	}
+	paramsJSON, err := json.Marshal(params)
+	require.NoError(t, err)
+
+	result, rpcErr := (&handlers.SimulateMethod{}).Handle(ctx, paramsJSON)
+	require.Nil(t, rpcErr)
+	response := result.(map[string]any)
+	assert.Equal(t, "temBAD_AMOUNT", response["engine_result"])
+	assert.Equal(t, -298, response["engine_result_code"])
+	assert.Equal(t, "Malformed: Bad amount.", response["engine_result_message"])
 }
 
 func TestSimulateMethod_SrcActMalformed(t *testing.T) {
@@ -860,21 +984,20 @@ func TestSimulateMethod_SequenceFeeAutofill(t *testing.T) {
 			"GetAutofillSequence must be skipped when Sequence is supplied")
 	})
 
-	t.Run("out-of-range Sequence is rejected as invalid_field", func(t *testing.T) {
+	t.Run("unsupported wide JSON Sequence has bad type", func(t *testing.T) {
 		mock := newMockLedgerServiceSimulate()
 
-		// 2^33 — well within float64 precision, well outside uint32.
+		// STParsedJSON only accepts JSON integer categories supported by JsonCpp.
 		paramsJSON := []byte(`{"tx_json":{"TransactionType":"AccountSet","Account":"` +
 			validAccountAddress + `","Sequence":8589934592}}`)
 
 		_, rpcErr := method.Handle(makeCtx(mock), paramsJSON)
 		require.NotNil(t, rpcErr)
-		assert.Equal(t, types.RpcINVALID_PARAMS, rpcErr.Code,
-			"out-of-range Sequence must surface invalid_field, not silent truncation")
-		assert.Equal(t, "Invalid field 'tx.Sequence'.", rpcErr.Message)
+		assert.Equal(t, types.RpcINVALID_PARAMS, rpcErr.Code)
+		assert.Equal(t, "Field 'tx_json.Sequence' has bad type.", rpcErr.Message)
 	})
 
-	t.Run("fractional Sequence is rejected as invalid_field", func(t *testing.T) {
+	t.Run("fractional Sequence has bad type", func(t *testing.T) {
 		mock := newMockLedgerServiceSimulate()
 
 		paramsJSON := []byte(`{"tx_json":{"TransactionType":"AccountSet","Account":"` +
@@ -882,7 +1005,8 @@ func TestSimulateMethod_SequenceFeeAutofill(t *testing.T) {
 
 		_, rpcErr := method.Handle(makeCtx(mock), paramsJSON)
 		require.NotNil(t, rpcErr)
-		assert.Equal(t, "Invalid field 'tx.Sequence'.", rpcErr.Message)
+		assert.Equal(t, types.RpcINVALID_PARAMS, rpcErr.Code)
+		assert.Equal(t, "Field 'tx_json.Sequence' has bad type.", rpcErr.Message)
 	})
 
 	t.Run("Custom NetworkID > 1024 is autofilled", func(t *testing.T) {
@@ -1160,31 +1284,132 @@ func TestSimulateMethod_UnknownField(t *testing.T) {
 		Services:   newSimulateTestServices(mock),
 	}
 
+	tests := []struct {
+		name    string
+		fields  map[string]any
+		message string
+	}{
+		{
+			name:    "top-level keys use JsonCpp lexical order",
+			fields:  map[string]any{"zBogus": true, "aBogus": true},
+			message: "Field 'tx_json.aBogus' is unknown.",
+		},
+		{
+			name: "nested STObject",
+			fields: map[string]any{
+				"Signer": map[string]any{"Bogus": true},
+			},
+			message: "Field 'tx_json.Signer.Bogus' is unknown.",
+		},
+		{
+			name: "nested STArray object",
+			fields: map[string]any{
+				"Signers": []any{
+					map[string]any{
+						"Signer": map[string]any{
+							"Account": validAccountAddress,
+							"Bogus":   true,
+						},
+					},
+				},
+			},
+			message: "Error at 'tx_json.Signers.[0].Signer'. Field 'tx_json.Signers.[0].Signer.Bogus' is unknown.",
+		},
+		{
+			name: "STArray entry has multiple keys",
+			fields: map[string]any{
+				"Memos": []any{
+					map[string]any{
+						"Memo":   map[string]any{},
+						"Signer": map[string]any{},
+					},
+				},
+			},
+			message: "Field 'tx_json.Memos[0]' must be an object with a single key/object value.",
+		},
+		{
+			name: "STArray wrapper value is not an object",
+			fields: map[string]any{
+				"Memos": []any{map[string]any{"Memo": "not-an-object"}},
+			},
+			message: "Field 'tx_json.Memos[0]' must be an object with a single key/object value.",
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			txJSON := map[string]any{
+				"TransactionType": "AccountSet",
+				"Account":         validAccountAddress,
+			}
+			for name, value := range test.fields {
+				txJSON[name] = value
+			}
+			paramsJSON, err := json.Marshal(map[string]any{"tx_json": txJSON})
+			require.NoError(t, err)
+
+			_, rpcErr := method.Handle(ctx, paramsJSON)
+			require.NotNil(t, rpcErr)
+			assert.Equal(t, types.RpcINVALID_PARAMS, rpcErr.Code)
+			assert.Equal(t, test.message, rpcErr.Message)
+		})
+	}
+}
+
+// TestSimulateMethod_MissingRequiredField mirrors rippled
+// TestSimulateMethod_MetaSyntheticFields verifies the rippled 3.0.0 synthetic
+// metadata enrichment (Simulate.cpp:277-288): a simulated Payment's meta gains
+// a delivered_amount derived from the transaction Amount when the engine did
+// not record one. Mirrors Simulate_test.cpp testSuccessfulTransactionAdditionalMetadata.
+func TestSimulateMethod_MetaSyntheticFields(t *testing.T) {
+	method := &handlers.SimulateMethod{}
+	mock := newMockLedgerServiceSimulate()
+	mock.simulateResult = &types.SubmitResult{
+		EngineResult:     "tesSUCCESS",
+		EngineResultCode: 0,
+		Applied:          false,
+		CurrentLedger:    4_594_095,
+		Metadata: &types.SubmitMetadata{
+			JSON: map[string]any{
+				"AffectedNodes":     []any{},
+				"TransactionIndex":  uint32(0),
+				"TransactionResult": "tesSUCCESS",
+			},
+			Blob: []byte{0xAB},
+		},
+	}
+
+	ctx := &types.RpcContext{
+		Context:    context.Background(),
+		Role:       types.RoleUser,
+		ApiVersion: types.ApiVersion2,
+		Services:   newSimulateTestServices(mock),
+	}
 	params := map[string]any{
 		"tx_json": map[string]any{
-			"TransactionType": "AccountSet",
+			"TransactionType": "Payment",
 			"Account":         validAccountAddress,
-			"foo":             "bar",
+			"Destination":     "r4bbzCamAis69rNoRdSaMSmPb1kDUHXcAL",
+			"Amount":          "100",
 		},
 	}
 	paramsJSON, err := json.Marshal(params)
 	require.NoError(t, err)
 
-	_, rpcErr := method.Handle(ctx, paramsJSON)
-	require.NotNil(t, rpcErr)
-	assert.Equal(t, types.RpcINVALID_PARAMS, rpcErr.Code)
-	assert.Equal(t, "Field 'tx_json.foo' is unknown.", rpcErr.Message,
-		"rippled Simulate_test.cpp:372-384 emits this exact error_message")
+	result, rpcErr := method.Handle(ctx, paramsJSON)
+	require.Nil(t, rpcErr)
+	resp := result.(map[string]any)
+
+	meta, ok := resp["meta"].(map[string]any)
+	require.True(t, ok, "meta must be a JSON object")
+	assert.Equal(t, "100", meta["delivered_amount"],
+		"a Payment's simulated meta must carry delivered_amount")
 }
 
-// TestSimulateMethod_MissingRequiredField mirrors rippled
 // Simulate_test.cpp:300-312. A Payment without Destination must surface
 // as `error: "invalidTransaction"` + `error_exception: <reason>`, the
-// envelope rippled emits when STTx construction throws
-// (Simulate.cpp:338-342). The exact exception text is go-xrpl-side
-// (`tx.Payment.Validate()` returns "Destination is required" rather
-// than rippled's "Field 'Destination' is required but missing."); the
-// envelope key is the conformance contract under test.
+// envelope and exact exception rippled emits when STTx construction throws
+// (Simulate.cpp:338-342).
 func TestSimulateMethod_MissingRequiredField(t *testing.T) {
 	method := &handlers.SimulateMethod{}
 	mock := newMockLedgerServiceSimulate()
@@ -1209,14 +1434,35 @@ func TestSimulateMethod_MissingRequiredField(t *testing.T) {
 	require.NotNil(t, rpcErr)
 	assert.Equal(t, "invalidTransaction", rpcErr.ErrorString,
 		"rippled Simulate.cpp:340 hard-codes error=invalidTransaction")
-	assert.NotEmpty(t, rpcErr.ErrorException,
-		"missing-required-field must populate the error_exception envelope, "+
-			"not error_message")
-	assert.Contains(t, rpcErr.ErrorException, "Destination",
-		"the exception text must name the missing field so callers can act")
+	assert.Equal(t, "Field 'Destination' is required but missing.", rpcErr.ErrorException)
 	assert.Empty(t, rpcErr.Message,
 		"error_message must be empty when error_exception is populated — "+
 			"matches rippled Simulate.cpp:338-342 where only error_exception is set")
+}
+
+func TestSimulateMethod_DisallowedTemplateField(t *testing.T) {
+	mock := newMockLedgerServiceSimulate()
+	ctx := &types.RpcContext{
+		Context:    context.Background(),
+		Role:       types.RoleUser,
+		ApiVersion: types.ApiVersion2,
+		Services:   newSimulateTestServices(mock),
+	}
+	params := map[string]any{
+		"tx_json": map[string]any{
+			"TransactionType": "AccountSet",
+			"Account":         validAccountAddress,
+			"Amount":          "1",
+		},
+	}
+	paramsJSON, err := json.Marshal(params)
+	require.NoError(t, err)
+
+	_, rpcErr := (&handlers.SimulateMethod{}).Handle(ctx, paramsJSON)
+	require.NotNil(t, rpcErr)
+	assert.Equal(t, "invalidTransaction", rpcErr.ErrorString)
+	assert.Equal(t, "Field 'Amount' found in disallowed location.", rpcErr.ErrorException)
+	assert.Empty(t, rpcErr.Message)
 }
 
 func TestSimulateMethod_RequiredRole(t *testing.T) {

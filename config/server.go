@@ -1,6 +1,7 @@
 package config
 
 import (
+	"errors"
 	"fmt"
 	"net"
 	"strings"
@@ -9,13 +10,21 @@ import (
 // ServerConfig represents the [server] section
 // This defines the ports that the server will listen on and default values
 type ServerConfig struct {
-	Ports    []string `toml:"ports" mapstructure:"ports"`       // List of port names to enable
-	Port     int      `toml:"port" mapstructure:"port"`         // Default port number
-	IP       string   `toml:"ip" mapstructure:"ip"`             // Default IP address
-	Protocol string   `toml:"protocol" mapstructure:"protocol"` // Default protocol
-	Limit    int      `toml:"limit" mapstructure:"limit"`       // Default connection limit
-	User     string   `toml:"user" mapstructure:"user"`         // Default HTTP basic auth user
-	Password string   `toml:"password" mapstructure:"password"` // Default HTTP basic auth password
+	Ports         []string `toml:"ports" mapstructure:"ports"`       // List of port names to enable
+	Port          int      `toml:"port" mapstructure:"port"`         // Default port number
+	IP            string   `toml:"ip" mapstructure:"ip"`             // Default IP address
+	Protocol      string   `toml:"protocol" mapstructure:"protocol"` // Default protocol
+	Limit         int      `toml:"limit" mapstructure:"limit"`       // Default connection limit
+	User          string   `toml:"user" mapstructure:"user"`         // Default HTTP basic auth user
+	Password      string   `toml:"password" mapstructure:"password"` // Default HTTP basic auth password
+	Admin         []string `toml:"admin" mapstructure:"admin"`       // Default administrative networks
+	AdminUser     string   `toml:"admin_user" mapstructure:"admin_user"`
+	AdminPassword string   `toml:"admin_password" mapstructure:"admin_password"`
+	SecureGateway []string `toml:"secure_gateway" mapstructure:"secure_gateway"` // Default trusted proxy networks
+	// MaxConnections is the process-wide ceiling on concurrent HTTP + WebSocket
+	// connections. 0 keeps the bounded built-in default; a negative value
+	// disables the global cap (per-port limits still apply).
+	MaxConnections int `toml:"max_connections" mapstructure:"max_connections"`
 }
 
 // PortConfig represents individual port configurations like [port_rpc_admin_local]
@@ -59,17 +68,18 @@ type PortConfig struct {
 }
 
 // HasPeer returns true if the port supports peer protocol
-func (p *PortConfig) HasPeer() bool {
+func (p PortConfig) HasPeer() bool {
 	return strings.Contains(p.Protocol, "peer")
 }
 
 // HasGRPC returns true if the port supports the gRPC protocol
-func (p *PortConfig) HasGRPC() bool {
+func (p PortConfig) HasGRPC() bool {
 	return strings.Contains(p.Protocol, "grpc")
 }
 
-// GetBindAddress returns the full bind address (IP:Port)
-func (p *PortConfig) GetBindAddress() string {
+// BindAddress returns the full bind address (IP:Port). It uses a value
+// receiver so it is callable directly on map elements (config.Ports[name]).
+func (p PortConfig) BindAddress() string {
 	if p.IP == "" {
 		return ":0" // Invalid, but will be caught by validation
 	}
@@ -82,16 +92,16 @@ func (p *PortConfig) GetBindAddress() string {
 // Validate performs validation on the port configuration
 func (p *PortConfig) Validate() error {
 	if p.Port == 0 {
-		return fmt.Errorf("port number is required")
+		return errors.New("port number is required")
 	}
 	if p.Port < 1 || p.Port > 65535 {
 		return fmt.Errorf("port number must be between 1 and 65535, got %d", p.Port)
 	}
 	if p.IP == "" {
-		return fmt.Errorf("IP address is required")
+		return errors.New("IP address is required")
 	}
 	if p.Protocol == "" {
-		return fmt.Errorf("protocol is required")
+		return errors.New("protocol is required")
 	}
 
 	// Validate protocol combinations
@@ -143,18 +153,18 @@ func (p *PortConfig) validateProtocols() error {
 	}
 
 	if hasWebSocket && hasNonWebSocket {
-		return fmt.Errorf("websocket and non-websocket protocols cannot be combined on the same port")
+		return errors.New("websocket and non-websocket protocols cannot be combined on the same port")
 	}
 
 	if peerCount > 1 {
-		return fmt.Errorf("only one peer protocol can be specified per port")
+		return errors.New("only one peer protocol can be specified per port")
 	}
 
 	// gRPC has its own listener and wire framing, so it cannot share a
 	// port with HTTP/WS/peer — mirroring rippled's dedicated [port_grpc]
 	// section (GRPCServer.cpp).
 	if grpcCount > 0 && (hasWebSocket || hasNonWebSocket || peerCount > 0) {
-		return fmt.Errorf("grpc protocol cannot be combined with other protocols on the same port")
+		return errors.New("grpc protocol cannot be combined with other protocols on the same port")
 	}
 
 	return nil

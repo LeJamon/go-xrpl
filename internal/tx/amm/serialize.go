@@ -1,13 +1,12 @@
 package amm
 
 import (
-	"encoding/hex"
 	"fmt"
 	"strings"
 
-	binarycodec "github.com/LeJamon/go-xrpl/codec/binarycodec"
 	"github.com/LeJamon/go-xrpl/internal/ledger/state"
 	"github.com/LeJamon/go-xrpl/internal/tx"
+	"github.com/LeJamon/go-xrpl/internal/tx/ledgerfields"
 )
 
 // ParseAMMData deserializes an AMM ledger entry from binary codec format.
@@ -17,118 +16,110 @@ func ParseAMMData(data []byte) (*AMMData, error) {
 }
 
 // parseAMMData deserializes an AMM ledger entry from binary codec (SLE) format.
-// The data is first decoded via binarycodec.Decode into a JSON map, then the
-// fields are extracted and converted to the AMMData struct.
 // Reference: rippled include/xrpl/protocol/detail/ledger_entries.macro ltAMM
 func parseAMMData(data []byte) (*AMMData, error) {
-	hexStr := hex.EncodeToString(data)
-	fields, err := binarycodec.Decode(hexStr)
-	if err != nil {
+	var decoded ledgerfields.AMM
+	if err := decoded.Decode(data); err != nil {
 		return nil, fmt.Errorf("failed to decode AMM binary: %w", err)
 	}
 
+	account, err := state.DecodeAccountID(decoded.Account)
+	if err != nil {
+		return nil, fmt.Errorf("failed to decode AMM Account: %w", err)
+	}
+	asset, err := issueValueToAsset("Asset", decoded.Asset)
+	if err != nil {
+		return nil, err
+	}
+	asset2, err := issueValueToAsset("Asset2", decoded.Asset2)
+	if err != nil {
+		return nil, err
+	}
+	lpTokenBalance, err := amountValueToAmount("LPTokenBalance", decoded.LPTokenBalance)
+	if err != nil {
+		return nil, err
+	}
+	ownerNode, err := parseHexUint64(decoded.OwnerNode)
+	if err != nil {
+		return nil, fmt.Errorf("failed to parse AMM OwnerNode: %w", err)
+	}
+
 	amm := &AMMData{
-		VoteSlots: make([]VoteSlotData, 0),
-	}
-
-	// Account (r-address string → [20]byte)
-	if acctStr, ok := fields["Account"].(string); ok {
-		id, err := state.DecodeAccountID(acctStr)
-		if err != nil {
-			return nil, fmt.Errorf("failed to decode AMM Account: %w", err)
-		}
-		amm.Account = id
-	}
-
-	// Asset (Issue object)
-	if assetObj, ok := fields["Asset"].(map[string]any); ok {
-		amm.Asset = issueMapToAsset(assetObj)
-	}
-
-	// Asset2 (Issue object)
-	if asset2Obj, ok := fields["Asset2"].(map[string]any); ok {
-		amm.Asset2 = issueMapToAsset(asset2Obj)
-	}
-
-	// TradingFee (UInt16)
-	amm.TradingFee = getFieldUint16(fields, "TradingFee")
-
-	// OwnerNode (UInt64 as hex string)
-	if ownerNodeStr, ok := fields["OwnerNode"].(string); ok {
-		amm.OwnerNode, _ = parseHexUint64(ownerNodeStr)
-	}
-
-	// PreviousTxnID / PreviousTxnLgrSeq (threading pointers) — preserve them so a
-	// no-op modification re-serializes byte-identically (see AMMData docs).
-	if prevTxnID, ok := fields["PreviousTxnID"].(string); ok {
-		amm.PreviousTxnID = prevTxnID
-	}
-	amm.PreviousTxnLgrSeq = getFieldUint32(fields, "PreviousTxnLgrSeq")
-
-	// LPTokenBalance (Amount object)
-	if lptObj, ok := fields["LPTokenBalance"].(map[string]any); ok {
-		bal, err := amountMapToAmount(lptObj)
-		if err != nil {
-			return nil, fmt.Errorf("failed to parse AMM LPTokenBalance: %w", err)
-		}
-		amm.LPTokenBalance = bal
+		Account:           account,
+		Asset:             asset,
+		Asset2:            asset2,
+		TradingFee:        uint16(decoded.TradingFee),
+		LPTokenBalance:    lpTokenBalance,
+		OwnerNode:         ownerNode,
+		VoteSlots:         make([]VoteSlotData, 0, len(decoded.VoteSlots)),
+		PreviousTxnID:     decoded.PreviousTxnID,
+		PreviousTxnLgrSeq: decoded.PreviousTxnLgrSeq,
 	}
 
 	// VoteSlots (STArray of VoteEntry objects)
-	if voteSlotsArr, ok := fields["VoteSlots"].([]any); ok {
-		for _, entry := range voteSlotsArr {
-			entryMap, ok := entry.(map[string]any)
-			if !ok {
-				continue
-			}
-			voteEntryObj, ok := entryMap["VoteEntry"].(map[string]any)
-			if !ok {
-				continue
-			}
-			var slot VoteSlotData
-			if acctStr, ok := voteEntryObj["Account"].(string); ok {
-				slot.Account, _ = state.DecodeAccountID(acctStr)
-			}
-			slot.TradingFee = getFieldUint16(voteEntryObj, "TradingFee")
-			slot.VoteWeight = getFieldUint32(voteEntryObj, "VoteWeight")
-			amm.VoteSlots = append(amm.VoteSlots, slot)
+	for i, entry := range decoded.VoteSlots {
+		entryMap, ok := entry.(map[string]any)
+		if !ok {
+			return nil, fmt.Errorf("failed to parse AMM VoteSlots[%d]: unexpected entry type %T", i, entry)
 		}
+		voteEntryObj, ok := entryMap["VoteEntry"].(map[string]any)
+		if !ok {
+			return nil, fmt.Errorf("failed to parse AMM VoteSlots[%d]: missing VoteEntry", i)
+		}
+		var slot VoteSlotData
+		acctStr, ok := voteEntryObj["Account"].(string)
+		if !ok {
+			return nil, fmt.Errorf("failed to parse AMM VoteSlots[%d]: unexpected Account type %T", i, voteEntryObj["Account"])
+		}
+		slot.Account, err = state.DecodeAccountID(acctStr)
+		if err != nil {
+			return nil, fmt.Errorf("failed to parse AMM VoteSlots[%d] Account: %w", i, err)
+		}
+		slot.TradingFee = getFieldUint16(voteEntryObj, "TradingFee")
+		slot.VoteWeight = getFieldUint32(voteEntryObj, "VoteWeight")
+		amm.VoteSlots = append(amm.VoteSlots, slot)
 	}
 
 	// AuctionSlot (STObject, optional)
-	if auctionObj, ok := fields["AuctionSlot"].(map[string]any); ok {
+	if decoded.AuctionSlot != nil {
+		auctionObj := decoded.AuctionSlot
 		slot := &AuctionSlotData{
 			AuthAccounts: make([][20]byte, 0),
 		}
-		if acctStr, ok := auctionObj["Account"].(string); ok {
-			slot.Account, _ = state.DecodeAccountID(acctStr)
+		acctStr, ok := auctionObj["Account"].(string)
+		if !ok {
+			return nil, fmt.Errorf("failed to parse AMM AuctionSlot: unexpected Account type %T", auctionObj["Account"])
+		}
+		slot.Account, err = state.DecodeAccountID(acctStr)
+		if err != nil {
+			return nil, fmt.Errorf("failed to parse AMM AuctionSlot Account: %w", err)
 		}
 		slot.Expiration = getFieldUint32(auctionObj, "Expiration")
 		slot.DiscountedFee = getFieldUint16(auctionObj, "DiscountedFee")
-		if priceObj, ok := auctionObj["Price"].(map[string]any); ok {
-			price, err := amountMapToAmount(priceObj)
-			if err != nil {
-				return nil, fmt.Errorf("failed to parse AMM AuctionSlot Price: %w", err)
-			}
-			slot.Price = price
+		slot.Price, err = amountValueToAmount("AuctionSlot Price", auctionObj["Price"])
+		if err != nil {
+			return nil, err
 		}
 		if authArr, ok := auctionObj["AuthAccounts"].([]any); ok {
 			slot.AuthAccountsPresent = true
-			for _, authEntry := range authArr {
+			for i, authEntry := range authArr {
 				authMap, ok := authEntry.(map[string]any)
 				if !ok {
-					continue
+					return nil, fmt.Errorf("failed to parse AMM AuctionSlot AuthAccounts[%d]: unexpected entry type %T", i, authEntry)
 				}
 				authAcctObj, ok := authMap["AuthAccount"].(map[string]any)
 				if !ok {
-					continue
+					return nil, fmt.Errorf("failed to parse AMM AuctionSlot AuthAccounts[%d]: missing AuthAccount", i)
 				}
-				if acctStr, ok := authAcctObj["Account"].(string); ok {
-					id, err := state.DecodeAccountID(acctStr)
-					if err == nil {
-						slot.AuthAccounts = append(slot.AuthAccounts, id)
-					}
+				authAccount, ok := authAcctObj["Account"].(string)
+				if !ok {
+					return nil, fmt.Errorf("failed to parse AMM AuctionSlot AuthAccounts[%d]: unexpected Account type %T", i, authAcctObj["Account"])
 				}
+				id, err := state.DecodeAccountID(authAccount)
+				if err != nil {
+					return nil, fmt.Errorf("failed to parse AMM AuctionSlot AuthAccounts[%d] Account: %w", i, err)
+				}
+				slot.AuthAccounts = append(slot.AuthAccounts, id)
 			}
 		}
 		amm.AuctionSlot = slot
@@ -137,8 +128,26 @@ func parseAMMData(data []byte) (*AMMData, error) {
 	return amm, nil
 }
 
-// serializeAMMData serializes an AMMData entry using the standard binary codec
-// format. Builds a JSON map of AMM fields and encodes it via binarycodec.Encode.
+func issueValueToAsset(field string, value any) (tx.Asset, error) {
+	issue, ok := value.(map[string]any)
+	if !ok {
+		return tx.Asset{}, fmt.Errorf("failed to parse AMM %s: unexpected Issue type %T", field, value)
+	}
+	return issueMapToAsset(issue), nil
+}
+
+func amountValueToAmount(field string, value any) (tx.Amount, error) {
+	amount, ok := value.(map[string]any)
+	if !ok {
+		return tx.Amount{}, fmt.Errorf("failed to parse AMM %s: unexpected Amount type %T", field, value)
+	}
+	parsed, err := amountMapToAmount(amount)
+	if err != nil {
+		return tx.Amount{}, fmt.Errorf("failed to parse AMM %s: %w", field, err)
+	}
+	return parsed, nil
+}
+
 // Reference: rippled include/xrpl/protocol/detail/ledger_entries.macro ltAMM
 // IMPORTANT: Asset balances are NOT stored - they are read from AccountRoot/trustlines.
 func serializeAMMData(amm *AMMData) ([]byte, error) {
@@ -153,48 +162,31 @@ func serializeAMMData(amm *AMMData) ([]byte, error) {
 	if lptBal.Currency == "" {
 		lptBal = state.NewIssuedAmountFromValue(
 			lptBal.Mantissa(), lptBal.Exponent(),
-			GenerateAMMLPTCurrency(amm.Asset.Currency, amm.Asset2.Currency),
+			GenerateAMMLPTCurrencyForAssets(amm.Asset, amm.Asset2),
 			accountAddr)
 	}
 
-	jsonObj := map[string]any{
-		"LedgerEntryType": "AMM",
-		"Account":         accountAddr,
-		"Asset":           assetToIssueMap(amm.Asset),
-		"Asset2":          assetToIssueMap(amm.Asset2),
-		"OwnerNode":       fmt.Sprintf("%x", amm.OwnerNode),
-		"LPTokenBalance":  amountToAmountMap(lptBal),
-		// sfFlags is a soeREQUIRED common field (LedgerFormats.cpp commonFields)
-		// — present at its default 0 from the SLE template. AMM never sets flags,
-		// but rippled still serializes Flags=0; omitting it forks account_hash.
-		"Flags": uint32(0),
-	}
+	entry := &ledgerfields.AMM{}
+	entry.SetAccount(accountAddr)
+	entry.SetAsset(assetToIssueMap(amm.Asset))
+	entry.SetAsset2(assetToIssueMap(amm.Asset2))
+	entry.SetOwnerNode(fmt.Sprintf("%x", amm.OwnerNode))
+	entry.SetLPTokenBalance(amountToAmountMap(lptBal))
+	entry.SetFlags(0)
+	entry.SetTradingFee(amm.TradingFee)
 
-	// sfTradingFee is soeDEFAULT on ltAMM (ledger_entries.macro:388). rippled's
-	// initializeFeeAuctionVote (AMMUtils.cpp:376-379) only sets it when non-zero
-	// and makeFieldAbsent's it otherwise, so a 0% AMM has no sfTradingFee in
-	// state. Emitting TradingFee:0 forks account_hash.
-	if amm.TradingFee != 0 {
-		jsonObj["TradingFee"] = amm.TradingFee
-	}
-
-	// soeOPTIONAL: emit only once the apply layer has threaded the AMM (see AMMData docs).
 	if amm.PreviousTxnID != "" {
-		jsonObj["PreviousTxnID"] = amm.PreviousTxnID
-		jsonObj["PreviousTxnLgrSeq"] = amm.PreviousTxnLgrSeq
+		entry.SetPreviousTxnID(amm.PreviousTxnID)
+		entry.SetPreviousTxnLgrSeq(amm.PreviousTxnLgrSeq)
 	}
 
-	// VoteSlots (STArray of VoteEntry objects)
 	if len(amm.VoteSlots) > 0 {
 		voteSlots := make([]any, 0, len(amm.VoteSlots))
 		for _, slot := range amm.VoteSlots {
 			slotAcctAddr, err := state.EncodeAccountID(slot.Account)
 			if err != nil {
-				continue
+				return nil, fmt.Errorf("failed to encode AMM vote account: %w", err)
 			}
-			// sfTradingFee is soeDEFAULT on the inner sfVoteEntry template
-			// (InnerObjectFormats.cpp:71-74); rippled only sets it when non-zero
-			// (AMMUtils.cpp:351-352). Account/VoteWeight are soeREQUIRED.
 			ve := map[string]any{
 				"Account":    slotAcctAddr,
 				"VoteWeight": slot.VoteWeight,
@@ -205,13 +197,14 @@ func serializeAMMData(amm *AMMData) ([]byte, error) {
 			voteEntry := map[string]any{"VoteEntry": ve}
 			voteSlots = append(voteSlots, voteEntry)
 		}
-		jsonObj["VoteSlots"] = voteSlots
+		entry.SetVoteSlots(voteSlots)
 	}
 
-	// AuctionSlot (STObject, optional)
 	if amm.AuctionSlot != nil {
-		slotAcctAddr, _ := state.EncodeAccountID(amm.AuctionSlot.Account)
-		// Ensure AuctionSlot Price has proper currency and issuer
+		slotAcctAddr, err := state.EncodeAccountID(amm.AuctionSlot.Account)
+		if err != nil {
+			return nil, fmt.Errorf("failed to encode AMM auction account: %w", err)
+		}
 		slotPrice := amm.AuctionSlot.Price
 		if slotPrice.Currency == "" {
 			slotPrice = state.NewIssuedAmountFromValue(
@@ -231,7 +224,7 @@ func serializeAMMData(amm *AMMData) ([]byte, error) {
 			for _, authID := range amm.AuctionSlot.AuthAccounts {
 				authAcctAddr, err := state.EncodeAccountID(authID)
 				if err != nil {
-					continue
+					return nil, fmt.Errorf("failed to encode AMM authorized account: %w", err)
 				}
 				authAccounts = append(authAccounts, map[string]any{
 					"AuthAccount": map[string]any{
@@ -241,20 +234,19 @@ func serializeAMMData(amm *AMMData) ([]byte, error) {
 			}
 			auctionSlot["AuthAccounts"] = authAccounts
 		}
-		jsonObj["AuctionSlot"] = auctionSlot
+		entry.SetAuctionSlot(auctionSlot)
 	}
 
-	hexStr, err := binarycodec.Encode(jsonObj)
-	if err != nil {
-		return nil, fmt.Errorf("failed to encode AMM: %w", err)
-	}
-
-	return hex.DecodeString(hexStr)
+	return entry.Encode()
 }
 
 // issueMapToAsset converts a binary codec Issue map to a tx.Asset.
 func issueMapToAsset(m map[string]any) tx.Asset {
 	asset := tx.Asset{}
+	if mptID, ok := m["mpt_issuance_id"].(string); ok {
+		asset.MPTIssuanceID = strings.ToUpper(mptID)
+		return asset
+	}
 	if currency, ok := m["currency"].(string); ok {
 		asset.Currency = currency
 	}
@@ -266,6 +258,9 @@ func issueMapToAsset(m map[string]any) tx.Asset {
 
 // assetToIssueMap converts a tx.Asset to a binary codec Issue map.
 func assetToIssueMap(asset tx.Asset) map[string]any {
+	if asset.IsMPT() {
+		return map[string]any{"mpt_issuance_id": strings.ToUpper(asset.MPTIssuanceID)}
+	}
 	isXRP := isXRPAsset(asset)
 	if isXRP {
 		return map[string]any{"currency": "XRP"}

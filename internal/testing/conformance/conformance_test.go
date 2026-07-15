@@ -61,6 +61,89 @@ var skipTests = map[string]string{
 	// escalation logic itself is exercised by the other TxQMetaInfo and
 	// TxQPosNegFlows fixtures.
 	"app/TxQMetaInfo/Re-execute_preflight": "open-ledger capacity depends on rippled-internal amendment-vote consensus activity not captured in the fixture's empty closes",
+	// These Vault fixtures were recorded before rippled #5954: they assert the
+	// pre-#5954 owner-count model (VaultCreate owner_count +1, no owner
+	// share-MPToken at create), whereas 3.1.x VaultCreate charges the owner for
+	// the vault + pseudo-account and creates the owner's share MPToken
+	// (owner_count +3). The transaction results (TER) match; only the recorded
+	// owner_count / coupled balances are stale. Re-record from rippled 3.1.x.
+	"app/Vault/transaction_is_good":                            "fixture predates rippled #5954 owner-count model; re-record from rippled 3.1.x",
+	"app/Vault/private_vault":                                  "fixture predates rippled #5954 owner-count model; re-record from rippled 3.1.x",
+	"app/Vault/private_XRP_vault":                              "fixture predates rippled #5954 owner-count model; re-record from rippled 3.1.x",
+	"app/Vault/private_XRP_vault_owner_can_deposit":            "fixture predates rippled #5954 owner-count model; re-record from rippled 3.1.x",
+	"app/Vault/private_XRP_vault_depositor_not_authorized_yet": "fixture predates rippled #5954 owner-count model; re-record from rippled 3.1.x",
+	"app/Vault/private_XRP_vault_depositor_now_authorized":     "fixture predates rippled #5954 owner-count model; re-record from rippled 3.1.x",
+	"app/Vault/private_XRP_vault_set_DomainID":                 "fixture predates rippled #5954 owner-count model; re-record from rippled 3.1.x",
+	"app/Vault/private_vault_owner_can_deposit":                "fixture predates rippled #5954 owner-count model; re-record from rippled 3.1.x",
+	"app/Vault/private_vault_depositor_not_authorized_yet":     "fixture predates rippled #5954 owner-count model; re-record from rippled 3.1.x",
+	"app/Vault/private_vault_set_domainId":                     "fixture predates rippled #5954 owner-count model; re-record from rippled 3.1.x",
+	"app/Vault/private_vault_cannot_set_non-existing_domain":   "fixture predates rippled #5954 owner-count model; re-record from rippled 3.1.x",
+	"app/Vault/explicitly_select_withdrawal_policy":            "fixture predates rippled #5954 owner-count model; re-record from rippled 3.1.x",
+	"app/Vault/nontransferable_deposits":                       "fixture predates rippled #5954 owner-count model; re-record from rippled 3.1.x",
+	"app/Vault/nontransferable_shares_can_be_used_to_withdraw": "fixture predates rippled #5954 owner-count model; re-record from rippled 3.1.x",
+	"app/Vault/RPC":                                                 "fixture predates rippled #5954 owner-count model; re-record from rippled 3.1.x",
+	"app/Vault/IOU_set_data":                                        "fixture predates rippled #5954 owner-count model; re-record from rippled 3.1.x",
+	"app/Vault/IOU_deposit_non-zero_amount":                         "fixture predates rippled #5954 owner-count model; re-record from rippled 3.1.x",
+	"app/Vault/IOU_deposit_non-zero_amount_again":                   "fixture predates rippled #5954 owner-count model; re-record from rippled 3.1.x",
+	"app/Vault/IOU_deposit_again":                                   "fixture predates rippled #5954 owner-count model; re-record from rippled 3.1.x",
+	"app/Vault/IOU_deposit_some_more":                               "fixture predates rippled #5954 owner-count model; re-record from rippled 3.1.x",
+	"app/Vault/IOU_clawback_some":                                   "fixture predates rippled #5954 owner-count model; re-record from rippled 3.1.x",
+	"app/Vault/IOU_no_trust_line_to_depositor":                      "fixture predates rippled #5954 owner-count model; re-record from rippled 3.1.x",
+	"app/Vault/IOU_reset_maximum_to_zero_i.e._not_enforced":         "fixture predates rippled #5954 owner-count model; re-record from rippled 3.1.x",
+	"app/Vault/IOU_set_maximum_higher_than_current_amount":          "fixture predates rippled #5954 owner-count model; re-record from rippled 3.1.x",
+	"app/Vault/IOU_fail_to_delete_non-empty_vault":                  "fixture predates rippled #5954 owner-count model; re-record from rippled 3.1.x",
+	"app/Vault/IOU_fail_to_deposit_more_than_assets_held":           "fixture predates rippled #5954 owner-count model; re-record from rippled 3.1.x",
+	"app/Vault/IOU_fail_to_deposit_more_than_maximum":               "fixture predates rippled #5954 owner-count model; re-record from rippled 3.1.x",
+	"app/Vault/IOU_fail_to_set_domain_on_public_vault":              "fixture predates rippled #5954 owner-count model; re-record from rippled 3.1.x",
+	"app/Vault/IOU_fail_to_set_maximum_lower_than_current_amount":   "fixture predates rippled #5954 owner-count model; re-record from rippled 3.1.x",
+	"app/Vault/IOU_fail_to_update_because_wrong_owner":              "fixture predates rippled #5954 owner-count model; re-record from rippled 3.1.x",
+	"app/Vault/IOU_fail_to_withdraw_more_than_assets_held":          "fixture predates rippled #5954 owner-count model; re-record from rippled 3.1.x",
+	"app/Vault/IOU_fail_to_withdraw_to_3rd_party_lsfDepositAuth":    "fixture predates rippled #5954 owner-count model; re-record from rippled 3.1.x",
+	"app/Vault/IOU_fail_to_withdraw_to_3rd_party_no_authorization":  "fixture predates rippled #5954 owner-count model; re-record from rippled 3.1.x",
+	"app/Vault/MPT_set_data":                                        "fixture predates rippled #5954 owner-count model; re-record from rippled 3.1.x",
+	"app/Vault/MPT_deposit_non-zero_amount":                         "fixture predates rippled #5954 owner-count model; re-record from rippled 3.1.x",
+	"app/Vault/MPT_deposit_non-zero_amount_again":                   "fixture predates rippled #5954 owner-count model; re-record from rippled 3.1.x",
+	"app/Vault/MPT_deposit_again":                                   "fixture predates rippled #5954 owner-count model; re-record from rippled 3.1.x",
+	"app/Vault/MPT_deposit_some_more":                               "fixture predates rippled #5954 owner-count model; re-record from rippled 3.1.x",
+	"app/Vault/MPT_withdraw_remaining_assets":                       "fixture predates rippled #5954 owner-count model; re-record from rippled 3.1.x",
+	"app/Vault/MPT_withdraw_to_authorized_3rd_party":                "fixture predates rippled #5954 owner-count model; re-record from rippled 3.1.x",
+	"app/Vault/MPT_withdraw_to_issuer":                              "fixture predates rippled #5954 owner-count model; re-record from rippled 3.1.x",
+	"app/Vault/MPT_reset_maximum_to_zero_i.e._not_enforced":         "fixture predates rippled #5954 owner-count model; re-record from rippled 3.1.x",
+	"app/Vault/MPT_set_maximum_higher_than_current_amount":          "fixture predates rippled #5954 owner-count model; re-record from rippled 3.1.x",
+	"app/Vault/MPT_fail_to_delete_because_wrong_owner":              "fixture predates rippled #5954 owner-count model; re-record from rippled 3.1.x",
+	"app/Vault/MPT_fail_to_delete_non-empty_vault":                  "fixture predates rippled #5954 owner-count model; re-record from rippled 3.1.x",
+	"app/Vault/MPT_fail_to_deposit_more_than_assets_held":           "fixture predates rippled #5954 owner-count model; re-record from rippled 3.1.x",
+	"app/Vault/MPT_fail_to_deposit_more_than_maximum":               "fixture predates rippled #5954 owner-count model; re-record from rippled 3.1.x",
+	"app/Vault/MPT_fail_to_set_domain_on_public_vault":              "fixture predates rippled #5954 owner-count model; re-record from rippled 3.1.x",
+	"app/Vault/MPT_fail_to_set_maximum_lower_than_current_amount":   "fixture predates rippled #5954 owner-count model; re-record from rippled 3.1.x",
+	"app/Vault/MPT_fail_to_update_because_wrong_owner":              "fixture predates rippled #5954 owner-count model; re-record from rippled 3.1.x",
+	"app/Vault/MPT_fail_to_withdraw_more_than_assets_held":          "fixture predates rippled #5954 owner-count model; re-record from rippled 3.1.x",
+	"app/Vault/MPT_fail_to_withdraw_to_3rd_party_lsfDepositAuth":    "fixture predates rippled #5954 owner-count model; re-record from rippled 3.1.x",
+	"app/Vault/MPT_fail_to_withdraw_to_3rd_party_lsfRequireDestTag": "fixture predates rippled #5954 owner-count model; re-record from rippled 3.1.x",
+	"app/Vault/MPT_fail_to_withdraw_to_3rd_party_no_authorization":  "fixture predates rippled #5954 owner-count model; re-record from rippled 3.1.x",
+	// These Delegate fixtures were recorded under the deleted PermissionDelegation
+	// / fixDelegateV1_1 amendments. rippled 3.2.0 replaced them with
+	// PermissionDelegationV1_1, which folds the fix behaviours in unconditionally
+	// and changes the delegate-permission denial code from tecNO_DELEGATE_PERMISSION
+	// (removed) to the retriable terNO_DELEGATE_PERMISSION, and the non-delegatable
+	// rejection from tecNO_PERMISSION (preclaim) to temMALFORMED (preflight). The
+	// fixtures encode the pre-V1_1 results and cannot be satisfied; the V1_1
+	// behaviour is covered by internal/testing/delegate. Re-record from rippled 3.2.0.
+	"app/Delegate/test_delegate_transaction":                                   "fixture predates PermissionDelegationV1_1; re-record from rippled 3.2.0",
+	"app/Delegate/test_invalid_DelegateSet":                                    "fixture predates PermissionDelegationV1_1; re-record from rippled 3.2.0",
+	"app/Delegate/test_valid_request_creating,_updating,_deleting_permissions": "fixture predates PermissionDelegationV1_1; re-record from rippled 3.2.0",
+	"app/Delegate/test_payment_granular":                                       "fixture predates PermissionDelegationV1_1; re-record from rippled 3.2.0",
+	"app/Delegate/test_AccountSet_granular_permissions":                        "fixture predates PermissionDelegationV1_1; re-record from rippled 3.2.0",
+	"app/Delegate/test_TrustSet_granular_permissions":                          "fixture predates PermissionDelegationV1_1; re-record from rippled 3.2.0",
+	"app/Delegate/test_MPTokenIssuanceSet_granular":                            "fixture predates PermissionDelegationV1_1; re-record from rippled 3.2.0",
+	"app/Delegate/test_single_sign":                                            "fixture predates PermissionDelegationV1_1; re-record from rippled 3.2.0",
+	"app/Delegate/test_single_sign_with_bad_secret":                            "fixture predates PermissionDelegationV1_1; re-record from rippled 3.2.0",
+	"app/Delegate/test_multi_sign":                                             "fixture predates PermissionDelegationV1_1; re-record from rippled 3.2.0",
+	"app/Delegate/test_multi_sign_which_does_not_meet_quorum":                  "fixture predates PermissionDelegationV1_1; re-record from rippled 3.2.0",
+	"app/Delegate/test_reserve":                                                "fixture predates PermissionDelegationV1_1; re-record from rippled 3.2.0",
+	"app/Delegate/test_fee":                                                    "fixture predates PermissionDelegationV1_1; re-record from rippled 3.2.0",
+	"app/Delegate/test_sequence":                                               "fixture predates PermissionDelegationV1_1; re-record from rippled 3.2.0",
+	"app/Delegate/test_deleting_account":                                       "fixture predates PermissionDelegationV1_1; re-record from rippled 3.2.0",
 }
 
 func TestConformance(t *testing.T) {

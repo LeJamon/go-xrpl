@@ -33,6 +33,17 @@ var (
 	ErrUnknownField = errors.New("unknown field")
 )
 
+// AsArrayTooLargeError reports whether err is a JSON array-size-cap violation
+// raised during JSON->binary encoding and, if so, returns rippled's error
+// message. RPC entry points map it to invalidParams.
+func AsArrayTooLargeError(err error) (string, bool) {
+	var e *types.JSONArrayTooLargeError
+	if errors.As(err, &e) {
+		return e.Error(), true
+	}
+	return "", false
+}
+
 const (
 	txMultiSigPrefix          = "534D5400"
 	paymentChannelClaimPrefix = "434C4D00"
@@ -63,14 +74,29 @@ func hexUpper(src []byte) string {
 // EncodeBytes does not mutate the caller-supplied map. An unknown field name
 // is treated as an error rather than silently dropped — see [ErrUnknownField].
 func EncodeBytes(json map[string]any) ([]byte, error) {
+	return encodeBytes(json, false)
+}
+
+// EncodeBytesTrusted encodes a protocol object constructed by trusted internal
+// code. Unlike EncodeBytes, it does not apply the JSON-input-only 512-element
+// array limit. Unknown fields and all binary-format validation remain enforced.
+func EncodeBytesTrusted(json map[string]any) ([]byte, error) {
+	return encodeBytes(json, true)
+}
+
+func encodeBytes(json map[string]any, trusted bool) ([]byte, error) {
 	defs := definitions.Get()
 	for k := range json {
-		if _, ok := defs.Fields[k]; !ok {
+		if !defs.HasField(k) {
 			return nil, fmt.Errorf("%w: %q", ErrUnknownField, k)
 		}
 	}
 
-	st := types.NewSTObject(serdes.NewBinarySerializer(serdes.DefaultFieldIDCodec()))
+	serializer := serdes.NewBinarySerializer(serdes.DefaultFieldIDCodec())
+	st := types.NewSTObject(serializer)
+	if trusted {
+		st = types.NewTrustedSTObject(serializer)
+	}
 	return st.FromJSON(json)
 }
 
@@ -220,7 +246,7 @@ func removeNonSigningFields(json map[string]any) map[string]any {
 	defs := definitions.Get()
 	out := make(map[string]any, len(json))
 	for k, v := range json {
-		fi, _ := defs.GetFieldInstanceByFieldName(k)
+		fi, _ := defs.FieldInstanceByName(k)
 		if fi != nil && !fi.IsSigningField {
 			continue
 		}

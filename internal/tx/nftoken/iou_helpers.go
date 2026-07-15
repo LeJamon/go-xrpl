@@ -7,7 +7,6 @@ import (
 	addresscodec "github.com/LeJamon/go-xrpl/codec/addresscodec"
 	"github.com/LeJamon/go-xrpl/internal/ledger/state"
 	"github.com/LeJamon/go-xrpl/internal/tx"
-	"github.com/LeJamon/go-xrpl/internal/tx/payment"
 	"github.com/LeJamon/go-xrpl/internal/tx/ter"
 	"github.com/LeJamon/go-xrpl/keylet"
 )
@@ -119,55 +118,17 @@ func offerIOUToAmount(offer *state.NFTokenOfferData) (tx.Amount, error) {
 	return state.NewIssuedAmountFromDecimalString(offer.AmountIOU.Value, offer.AmountIOU.Currency, issuerAddr)
 }
 
-// accountSendIOU transfers IOU between accounts via trust lines.
-// Handles three cases:
-//  1. from == IOU issuer: issuer creates tokens → credit receiver
-//  2. to == IOU issuer: holder redeems tokens → debit sender
-//  3. third party: two trust line modifications with optional transfer rate
+// accountSendIOU transfers IOU between accounts via trust lines, applying the
+// issuer's transfer rate to the sender's leg on a third-party transfer.
 //
 // Reference: rippled View.cpp accountSend → rippleSendIOU → rippleCreditIOU
 func accountSendIOU(view tx.LedgerView, from, to [20]byte, amount tx.Amount) ter.Result {
-	if amount.IsZero() || from == to {
-		return ter.TesSUCCESS
-	}
-
-	issuerID, err := state.DecodeAccountID(amount.Issuer)
-	if err != nil {
-		return ter.TefINTERNAL
-	}
-
-	if from == issuerID || to == issuerID {
-		// Direct: issuer is one side — no transfer fee
-		return tx.RippleCredit(view, from, to, amount)
-	}
-
-	// Third party: sender → issuer (with transfer rate) and issuer → receiver
-	transferRate := payment.GetTransferRate(view, issuerID)
-	if transferRate != payment.QualityOne {
-		// Charge the sender amount * transferRate, rounded to nearest. rippled's
-		// rippleSendIOU uses multiply() (round-to-nearest), not the round-up
-		// multiplyRound(), so MulRatio(..., roundUp=true) would diverge by 1 ulp.
-		rateAmount := state.NewIssuedAmountFromValue(int64(transferRate), -9, amount.Currency, amount.Issuer)
-		senderAmount := amount.Mul(rateAmount, false)
-		// Credit receiver the original amount
-		if r := tx.RippleCredit(view, issuerID, to, amount); r != ter.TesSUCCESS {
-			return r
-		}
-		// Debit sender the increased amount
-		return tx.RippleCredit(view, from, issuerID, senderAmount)
-	}
-
-	// No transfer rate — direct credit/debit
-	if r := tx.RippleCredit(view, issuerID, to, amount); r != ter.TesSUCCESS {
-		return r
-	}
-	return tx.RippleCredit(view, from, issuerID, amount)
+	return tx.RippleSendIOU(view, from, to, amount, false)
 }
 
-// payIOU wraps accountSendIOU with post-hoc balance validation.
-// With fixNonFungibleTokensV1_2, after the payment is processed, it checks that
-// neither party's balance went negative (which would indicate insufficient funds
-// to cover the IOU transfer rate).
+// payIOU wraps accountSendIOU with post-hoc balance validation: after the
+// payment is processed, it checks that neither party's balance went negative
+// (which would indicate insufficient funds to cover the IOU transfer rate).
 // Reference: rippled NFTokenAcceptOffer.cpp pay()
 func payIOU(ctx *tx.ApplyContext, from, to [20]byte, amount tx.Amount) ter.Result {
 	if amount.IsZero() {
@@ -176,9 +137,6 @@ func payIOU(ctx *tx.ApplyContext, from, to [20]byte, amount tx.Amount) ter.Resul
 
 	result := accountSendIOU(ctx.View, from, to, amount)
 
-	if !ctx.Rules().Enabled(amendment.FeatureFixNonFungibleTokensV1_2) {
-		return result
-	}
 	if result != ter.TesSUCCESS {
 		return result
 	}
@@ -228,42 +186,6 @@ func accountIOUBalanceSignum(view tx.LedgerView, accountID [20]byte, amount tx.A
 	}
 
 	return balance.Signum()
-}
-
-// accountHoldsIOU returns the IOU balance without the issuer exception.
-// This matches rippled's accountHolds behavior: the issuer is NOT treated as
-// having unlimited funds (unlike AccountFunds).
-// Used for pre-fixNonFungibleTokensV1_2 fund checks.
-func accountHoldsIOU(view tx.LedgerView, accountID [20]byte, amount tx.Amount) tx.Amount {
-	issuerID, err := state.DecodeAccountID(amount.Issuer)
-	if err != nil {
-		return tx.NewIssuedAmount(0, 0, amount.Currency, amount.Issuer)
-	}
-
-	// NO issuer exception here (unlike AccountFunds)
-
-	trustLineKey := keylet.Line(accountID, issuerID, amount.Currency)
-	data, err := view.Read(trustLineKey)
-	if err != nil || data == nil {
-		return tx.NewIssuedAmount(0, 0, amount.Currency, amount.Issuer)
-	}
-
-	rs, err := state.ParseRippleState(data)
-	if err != nil {
-		return tx.NewIssuedAmount(0, 0, amount.Currency, amount.Issuer)
-	}
-
-	accountIsLow := state.CompareAccountIDs(accountID, issuerID) < 0
-	balance := rs.Balance
-	if !accountIsLow {
-		balance = balance.Negate()
-	}
-
-	if balance.Signum() <= 0 {
-		return tx.NewIssuedAmount(0, 0, amount.Currency, amount.Issuer)
-	}
-
-	return state.NewIssuedAmountFromValue(balance.IOU().Mantissa(), balance.IOU().Exponent(), amount.Currency, amount.Issuer)
 }
 
 // checkIssuerTrustLineForAccept checks that the NFT issuer has a trust line for the

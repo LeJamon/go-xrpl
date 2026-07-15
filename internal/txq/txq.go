@@ -80,12 +80,12 @@ func (q *TxQ) incTxQFull() {
 	q.txqFull.Add(1)
 }
 
-// GetMetrics returns the current queue metrics.
-func (q *TxQ) GetMetrics(txInLedger uint32) Metrics {
+// Metrics returns the current queue metrics.
+func (q *TxQ) Metrics(txInLedger uint32) Metrics {
 	q.mu.Lock()
 	defer q.mu.Unlock()
 
-	snapshot := q.feeMetrics.GetSnapshot()
+	snapshot := q.feeMetrics.Snapshot()
 	openLedgerFeeLevel := ScaleFeeLevel(snapshot, txInLedger)
 
 	minProcessingFeeLevel := BaseLevel
@@ -137,13 +137,13 @@ func (q *TxQ) Size() int {
 	return len(q.byFee)
 }
 
-// GetRequiredFeeLevel returns the fee level required to bypass the queue
+// RequiredFeeLevel returns the fee level required to bypass the queue
 // and get directly into the open ledger.
-func (q *TxQ) GetRequiredFeeLevel(txInLedger uint32) FeeLevel {
+func (q *TxQ) RequiredFeeLevel(txInLedger uint32) FeeLevel {
 	q.mu.Lock()
 	defer q.mu.Unlock()
 
-	snapshot := q.feeMetrics.GetSnapshot()
+	snapshot := q.feeMetrics.Snapshot()
 	return ScaleFeeLevel(snapshot, txInLedger)
 }
 
@@ -235,14 +235,14 @@ func (q *TxQ) rebuildByFee() {
 	})
 
 	for _, a := range accounts {
-		for _, c := range q.byAccount[a].GetSortedCandidates() {
+		for _, c := range q.byAccount[a].SortedCandidates() {
 			q.insertByFee(c)
 		}
 	}
 }
 
-// GetAccountTxs returns details of all queued transactions for an account.
-func (q *TxQ) GetAccountTxs(account [20]byte) []*CandidateDetails {
+// AccountTxs returns details of all queued transactions for an account.
+func (q *TxQ) AccountTxs(account [20]byte) []*CandidateDetails {
 	q.mu.Lock()
 	defer q.mu.Unlock()
 
@@ -252,14 +252,14 @@ func (q *TxQ) GetAccountTxs(account [20]byte) []*CandidateDetails {
 	}
 
 	result := make([]*CandidateDetails, 0, aq.Count())
-	for _, c := range aq.GetSortedCandidates() {
+	for _, c := range aq.SortedCandidates() {
 		result = append(result, candidateDetails(c))
 	}
 	return result
 }
 
-// GetAllTxs returns details of all queued transactions, ordered by fee (highest first).
-func (q *TxQ) GetAllTxs() []*CandidateDetails {
+// AllTxs returns details of all queued transactions, ordered by fee (highest first).
+func (q *TxQ) AllTxs() []*CandidateDetails {
 	q.mu.Lock()
 	defer q.mu.Unlock()
 

@@ -7,12 +7,12 @@ import (
 	"github.com/LeJamon/go-xrpl/internal/rpc/types"
 )
 
-// JsonMethod handles the json RPC method.
+// JSONMethod handles the json RPC method.
 // This is a proxy that forwards calls to other RPC methods.
 // Reference: rippled JSON.cpp
-type JsonMethod struct{ BaseHandler }
+type JSONMethod struct{ BaseHandler }
 
-func (m *JsonMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (any, *types.RpcError) {
+func (m *JSONMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (any, *types.RpcError) {
 	var request struct {
 		Method string          `json:"method"`
 		Params json.RawMessage `json:"params,omitempty"`

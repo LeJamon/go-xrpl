@@ -44,92 +44,74 @@ func testPartialCrossNewXrpIouQChange(t *testing.T) {
 	bob := jtx.NewAccount("bob")
 	USD := func(amount float64) tx.Amount { return jtx.USD(gw, amount) }
 
-	// Test with and without fixReducedOffersV1
-	for _, withFix := range []bool{false, true} {
-		name := "withoutFixReducedOffersV1"
-		if withFix {
-			name = "withFixReducedOffersV1"
+	env := newEnvWithFeatures(t, nil)
+
+	// Fund generously so no offers are underfunded
+	env.FundAmount(gw, uint64(jtx.XRP(10000000)))
+	env.FundAmount(alice, uint64(jtx.XRP(10000000)))
+	env.FundAmount(bob, uint64(jtx.XRP(10000000)))
+	env.Close()
+
+	env.Trust(alice, USD(10000000))
+	env.Trust(bob, USD(10000000))
+	env.Close()
+
+	result := env.Submit(paymentBuilder.PayIssued(gw, bob, USD(10000000)).Build())
+	jtx.RequireTxSuccess(t, result)
+	env.Close()
+
+	// bob's offer (new offer) is the same every time:
+	// TakerPays = XRP(1) = 1000000 drops, TakerGets = USD(1)
+	bobTakerPays := tx.NewXRPAmount(1000000)                    // XRP(1)
+	bobTakerGets := tx.NewIssuedAmount(1, 0, "USD", gw.Address) // USD(1)
+
+	var blockedCount uint32
+	// alice's offer has a slightly smaller TakerPays with each iteration
+	for mantissaReduce := uint64(1000000000); mantissaReduce <= 5000000000; mantissaReduce += 20000000 {
+		// alice's offer: takerPays = USD with reduced mantissa, takerGets = XRP(1) - 1 drop
+		aliceUSD := tx.NewIssuedAmount(bobTakerGets.Mantissa()-int64(mantissaReduce), bobTakerGets.Exponent(), "USD", gw.Address)
+		aliceXRP := tx.NewXRPAmount(bobTakerPays.Drops() - 1)
+
+		// Put alice's offer in the ledger
+		aliceOfferSeq := env.Seq(alice)
+		result := env.Submit(OfferCreate(alice, aliceUSD, aliceXRP).Build())
+		jtx.RequireTxSuccess(t, result)
+		env.Close()
+
+		// bob's offer partially crosses alice's
+		initialQuality := qualityRate(bobTakerPays, bobTakerGets)
+		bobOfferSeq := env.Seq(bob)
+		result = env.Submit(OfferCreate(bob, bobTakerPays, bobTakerGets).Sell().Build())
+		jtx.RequireTxSuccess(t, result)
+		env.Close()
+
+		// alice's offer should be fully consumed
+		if OfferInLedger(env, alice, aliceOfferSeq) {
+			blockedCount++
+			// Clean up
+			env.Submit(OfferCancel(alice, aliceOfferSeq).Build())
+			env.Submit(OfferCancel(bob, bobOfferSeq).Build())
+			env.Close()
+			continue
 		}
-		t.Run(name, func(t *testing.T) {
-			var disabled []string
-			if !withFix {
-				disabled = []string{"fixReducedOffersV1"}
+
+		// Check bob's remaining offer
+		bobOffer := GetOffer(env, bob, bobOfferSeq)
+		if bobOffer != nil {
+			reducedQuality := qualityRate(bobOffer.TakerPays, bobOffer.TakerGets)
+			if qualityWorseThan(reducedQuality, initialQuality) {
+				blockedCount++
 			}
-			env := newEnvWithFeatures(t, disabled)
+		}
 
-			// Fund generously so no offers are underfunded
-			env.FundAmount(gw, uint64(jtx.XRP(10000000)))
-			env.FundAmount(alice, uint64(jtx.XRP(10000000)))
-			env.FundAmount(bob, uint64(jtx.XRP(10000000)))
-			env.Close()
-
-			env.Trust(alice, USD(10000000))
-			env.Trust(bob, USD(10000000))
-			env.Close()
-
-			result := env.Submit(paymentBuilder.PayIssued(gw, bob, USD(10000000)).Build())
-			jtx.RequireTxSuccess(t, result)
-			env.Close()
-
-			// bob's offer (new offer) is the same every time:
-			// TakerPays = XRP(1) = 1000000 drops, TakerGets = USD(1)
-			bobTakerPays := tx.NewXRPAmount(1000000)                    // XRP(1)
-			bobTakerGets := tx.NewIssuedAmount(1, 0, "USD", gw.Address) // USD(1)
-
-			var blockedCount uint32
-			// alice's offer has a slightly smaller TakerPays with each iteration
-			for mantissaReduce := uint64(1000000000); mantissaReduce <= 5000000000; mantissaReduce += 20000000 {
-				// alice's offer: takerPays = USD with reduced mantissa, takerGets = XRP(1) - 1 drop
-				aliceUSD := tx.NewIssuedAmount(bobTakerGets.Mantissa()-int64(mantissaReduce), bobTakerGets.Exponent(), "USD", gw.Address)
-				aliceXRP := tx.NewXRPAmount(bobTakerPays.Drops() - 1)
-
-				// Put alice's offer in the ledger
-				aliceOfferSeq := env.Seq(alice)
-				result := env.Submit(OfferCreate(alice, aliceUSD, aliceXRP).Build())
-				jtx.RequireTxSuccess(t, result)
-				env.Close()
-
-				// bob's offer partially crosses alice's
-				initialQuality := qualityRate(bobTakerPays, bobTakerGets)
-				bobOfferSeq := env.Seq(bob)
-				result = env.Submit(OfferCreate(bob, bobTakerPays, bobTakerGets).Sell().Build())
-				jtx.RequireTxSuccess(t, result)
-				env.Close()
-
-				// alice's offer should be fully consumed
-				if OfferInLedger(env, alice, aliceOfferSeq) {
-					blockedCount++
-					// Clean up
-					env.Submit(OfferCancel(alice, aliceOfferSeq).Build())
-					env.Submit(OfferCancel(bob, bobOfferSeq).Build())
-					env.Close()
-					continue
-				}
-
-				// Check bob's remaining offer
-				bobOffer := GetOffer(env, bob, bobOfferSeq)
-				if bobOffer != nil {
-					reducedQuality := qualityRate(bobOffer.TakerPays, bobOffer.TakerGets)
-					if qualityWorseThan(reducedQuality, initialQuality) {
-						blockedCount++
-					}
-				}
-
-				// Clean up
-				env.Submit(OfferCancel(alice, aliceOfferSeq).Build())
-				env.Submit(OfferCancel(bob, bobOfferSeq).Build())
-				env.Close()
-			}
-
-			if withFix {
-				require.Equal(t, uint32(0), blockedCount,
-					"With fixReducedOffersV1, no offers should have bad rates")
-			} else {
-				require.True(t, blockedCount >= 170,
-					"Without fixReducedOffersV1, expected >= 170 bad rates, got %d", blockedCount)
-			}
-		})
+		// Clean up
+		env.Submit(OfferCancel(alice, aliceOfferSeq).Build())
+		env.Submit(OfferCancel(bob, bobOfferSeq).Build())
+		env.Close()
 	}
+
+	require.Equal(t, uint32(0), blockedCount,
+		"With fixReducedOffersV1, no offers should have bad rates")
 }
 
 // TestReducedOffer_PartialCrossOldXrpIouQChange exercises partial cross where
@@ -145,88 +127,71 @@ func testPartialCrossOldXrpIouQChange(t *testing.T) {
 	bob := jtx.NewAccount("bob")
 	USD := func(amount float64) tx.Amount { return jtx.USD(gw, amount) }
 
-	for _, withFix := range []bool{false, true} {
-		name := "withoutFixReducedOffersV1"
-		if withFix {
-			name = "withFixReducedOffersV1"
+	env := newEnvWithFeatures(t, nil)
+
+	env.FundAmount(gw, uint64(jtx.XRP(10000000)))
+	env.FundAmount(alice, uint64(jtx.XRP(10000000)))
+	env.FundAmount(bob, uint64(jtx.XRP(10000000)))
+	env.Close()
+
+	env.Trust(alice, USD(10000000))
+	env.Trust(bob, USD(10000000))
+	env.Close()
+
+	result := env.Submit(paymentBuilder.PayIssued(gw, alice, USD(10000000)).Build())
+	jtx.RequireTxSuccess(t, result)
+	env.Close()
+
+	// alice's offer (old offer) is the same every time:
+	aliceTakerPays := tx.NewXRPAmount(1000000) // XRP(1)
+	aliceTakerGets := tx.NewIssuedAmount(1, 0, "USD", gw.Address)
+
+	var blockedCount uint32
+	for mantissaReduce := uint64(1000000000); mantissaReduce <= 4000000000; mantissaReduce += 20000000 {
+		// bob's offer: slightly smaller TakerPays (USD)
+		bobUSD := tx.NewIssuedAmount(aliceTakerGets.Mantissa()-int64(mantissaReduce), aliceTakerGets.Exponent(), "USD", gw.Address)
+		bobXRP := tx.NewXRPAmount(aliceTakerPays.Drops() - 1)
+
+		initialQuality := qualityRate(aliceTakerPays, aliceTakerGets)
+
+		// Put alice's offer in the ledger
+		aliceOfferSeq := env.Seq(alice)
+		result := env.Submit(OfferCreate(alice, aliceTakerPays, aliceTakerGets).Build())
+		jtx.RequireTxSuccess(t, result)
+		env.Close()
+
+		// bob's offer partially crosses alice's
+		bobOfferSeq := env.Seq(bob)
+		result = env.Submit(OfferCreate(bob, bobUSD, bobXRP).Build())
+		jtx.RequireTxSuccess(t, result)
+		env.Close()
+
+		// bob's offer should not have made it into the ledger
+		if OfferInLedger(env, bob, bobOfferSeq) {
+			blockedCount++
+			env.Submit(OfferCancel(alice, aliceOfferSeq).Build())
+			env.Submit(OfferCancel(bob, bobOfferSeq).Build())
+			env.Close()
+			continue
 		}
-		t.Run(name, func(t *testing.T) {
-			var disabled []string
-			if !withFix {
-				disabled = []string{"fixReducedOffersV1"}
+
+		// Check alice's remaining offer
+		aliceOffer := GetOffer(env, alice, aliceOfferSeq)
+		if aliceOffer != nil {
+			reducedQuality := qualityRate(aliceOffer.TakerPays, aliceOffer.TakerGets)
+			if qualityWorseThan(reducedQuality, initialQuality) {
+				blockedCount++
 			}
-			env := newEnvWithFeatures(t, disabled)
+		}
 
-			env.FundAmount(gw, uint64(jtx.XRP(10000000)))
-			env.FundAmount(alice, uint64(jtx.XRP(10000000)))
-			env.FundAmount(bob, uint64(jtx.XRP(10000000)))
-			env.Close()
-
-			env.Trust(alice, USD(10000000))
-			env.Trust(bob, USD(10000000))
-			env.Close()
-
-			result := env.Submit(paymentBuilder.PayIssued(gw, alice, USD(10000000)).Build())
-			jtx.RequireTxSuccess(t, result)
-			env.Close()
-
-			// alice's offer (old offer) is the same every time:
-			aliceTakerPays := tx.NewXRPAmount(1000000) // XRP(1)
-			aliceTakerGets := tx.NewIssuedAmount(1, 0, "USD", gw.Address)
-
-			var blockedCount uint32
-			for mantissaReduce := uint64(1000000000); mantissaReduce <= 4000000000; mantissaReduce += 20000000 {
-				// bob's offer: slightly smaller TakerPays (USD)
-				bobUSD := tx.NewIssuedAmount(aliceTakerGets.Mantissa()-int64(mantissaReduce), aliceTakerGets.Exponent(), "USD", gw.Address)
-				bobXRP := tx.NewXRPAmount(aliceTakerPays.Drops() - 1)
-
-				initialQuality := qualityRate(aliceTakerPays, aliceTakerGets)
-
-				// Put alice's offer in the ledger
-				aliceOfferSeq := env.Seq(alice)
-				result := env.Submit(OfferCreate(alice, aliceTakerPays, aliceTakerGets).Build())
-				jtx.RequireTxSuccess(t, result)
-				env.Close()
-
-				// bob's offer partially crosses alice's
-				bobOfferSeq := env.Seq(bob)
-				result = env.Submit(OfferCreate(bob, bobUSD, bobXRP).Build())
-				jtx.RequireTxSuccess(t, result)
-				env.Close()
-
-				// bob's offer should not have made it into the ledger
-				if OfferInLedger(env, bob, bobOfferSeq) {
-					blockedCount++
-					env.Submit(OfferCancel(alice, aliceOfferSeq).Build())
-					env.Submit(OfferCancel(bob, bobOfferSeq).Build())
-					env.Close()
-					continue
-				}
-
-				// Check alice's remaining offer
-				aliceOffer := GetOffer(env, alice, aliceOfferSeq)
-				if aliceOffer != nil {
-					reducedQuality := qualityRate(aliceOffer.TakerPays, aliceOffer.TakerGets)
-					if qualityWorseThan(reducedQuality, initialQuality) {
-						blockedCount++
-					}
-				}
-
-				// Clean up
-				env.Submit(OfferCancel(alice, aliceOfferSeq).Build())
-				env.Submit(OfferCancel(bob, bobOfferSeq).Build())
-				env.Close()
-			}
-
-			if withFix {
-				require.Equal(t, uint32(0), blockedCount,
-					"With fixReducedOffersV1, no offers should have bad rates")
-			} else {
-				require.True(t, blockedCount > 10,
-					"Without fixReducedOffersV1, expected > 10 bad rates, got %d", blockedCount)
-			}
-		})
+		// Clean up
+		env.Submit(OfferCancel(alice, aliceOfferSeq).Build())
+		env.Submit(OfferCancel(bob, bobOfferSeq).Build())
+		env.Close()
 	}
+
+	require.Equal(t, uint32(0), blockedCount,
+		"With fixReducedOffersV1, no offers should have bad rates")
 }
 
 // TestReducedOffer_UnderFundedXrpIouQChange exercises underfunded XRP/IOU offers.
@@ -241,87 +206,70 @@ func testUnderFundedXrpIouQChange(t *testing.T) {
 	gw := jtx.NewAccount("gw")
 	USD := func(amount float64) tx.Amount { return jtx.USD(gw, amount) }
 
-	for _, withFix := range []bool{false, true} {
-		name := "withoutFixReducedOffersV1"
-		if withFix {
-			name = "withFixReducedOffersV1"
+	env := newEnvWithFeatures(t, nil)
+
+	env.FundAmount(gw, uint64(jtx.XRP(10000)))
+	env.FundAmount(alice, uint64(jtx.XRP(10000)))
+	env.FundAmount(bob, uint64(jtx.XRP(10000)))
+	env.Close()
+	env.Trust(alice, USD(1000))
+	env.Trust(bob, USD(1000))
+	env.Close()
+
+	var blockedOrderBookCount int
+	// Loop from USD(0.45) to USD(1) in steps of USD(0.025)
+	for initialBobUSDFloat := 0.45; initialBobUSDFloat <= 1.0; initialBobUSDFloat += 0.025 {
+		initialBobUSD := USD(initialBobUSDFloat)
+
+		// Underfund bob's offer
+		result := env.Submit(paymentBuilder.PayIssued(gw, bob, initialBobUSD).Build())
+		jtx.RequireTxSuccess(t, result)
+		env.Close()
+
+		bobOfferSeq := env.Seq(bob)
+		result = env.Submit(OfferCreate(bob, tx.NewXRPAmount(2), USD(1)).Build())
+		jtx.RequireTxSuccess(t, result)
+		env.Close()
+
+		// alice places a crossing offer
+		aliceOfferSeq := env.Seq(alice)
+		result = env.Submit(OfferCreate(alice, USD(1), tx.NewXRPAmount(2)).Build())
+		jtx.RequireTxSuccess(t, result)
+		env.Close()
+
+		// Check for order book blocking:
+		// If bob's offer is still in the ledger AND alice received no USD
+		bobsOfferGone := !OfferInLedger(env, bob, bobOfferSeq)
+		aliceBalanceUSD := env.IOUBalance(alice, gw, "USD")
+		aliceHasUSD := aliceBalanceUSD != nil && aliceBalanceUSD.Signum() > 0
+
+		if aliceHasUSD {
+			require.Equal(t, 0, aliceBalanceUSD.Compare(initialBobUSD),
+				"alice should have received exactly initialBobUSD, got %v", aliceBalanceUSD)
+			bobBalanceUSD := env.IOUBalance(bob, gw, "USD")
+			require.True(t, bobBalanceUSD == nil || bobBalanceUSD.Signum() == 0,
+				"bob's USD balance should be 0 after crossing")
+			require.True(t, bobsOfferGone, "bob's offer should be gone when alice got USD")
 		}
-		t.Run(name, func(t *testing.T) {
-			var disabled []string
-			if !withFix {
-				disabled = []string{"fixReducedOffersV1"}
-			}
-			env := newEnvWithFeatures(t, disabled)
 
-			env.FundAmount(gw, uint64(jtx.XRP(10000)))
-			env.FundAmount(alice, uint64(jtx.XRP(10000)))
-			env.FundAmount(bob, uint64(jtx.XRP(10000)))
-			env.Close()
-			env.Trust(alice, USD(1000))
-			env.Trust(bob, USD(1000))
-			env.Close()
+		if !bobsOfferGone && !aliceHasUSD {
+			blockedOrderBookCount++
+		}
 
-			var blockedOrderBookCount int
-			// Loop from USD(0.45) to USD(1) in steps of USD(0.025)
-			for initialBobUSDFloat := 0.45; initialBobUSDFloat <= 1.0; initialBobUSDFloat += 0.025 {
-				initialBobUSD := USD(initialBobUSDFloat)
-
-				// Underfund bob's offer
-				result := env.Submit(paymentBuilder.PayIssued(gw, bob, initialBobUSD).Build())
-				jtx.RequireTxSuccess(t, result)
-				env.Close()
-
-				bobOfferSeq := env.Seq(bob)
-				result = env.Submit(OfferCreate(bob, tx.NewXRPAmount(2), USD(1)).Build())
-				jtx.RequireTxSuccess(t, result)
-				env.Close()
-
-				// alice places a crossing offer
-				aliceOfferSeq := env.Seq(alice)
-				result = env.Submit(OfferCreate(alice, USD(1), tx.NewXRPAmount(2)).Build())
-				jtx.RequireTxSuccess(t, result)
-				env.Close()
-
-				// Check for order book blocking:
-				// If bob's offer is still in the ledger AND alice received no USD
-				bobsOfferGone := !OfferInLedger(env, bob, bobOfferSeq)
-				aliceBalanceUSD := env.IOUBalance(alice, gw, "USD")
-				aliceHasUSD := aliceBalanceUSD != nil && aliceBalanceUSD.Signum() > 0
-
-				if aliceHasUSD {
-					require.Equal(t, 0, aliceBalanceUSD.Compare(initialBobUSD),
-						"alice should have received exactly initialBobUSD, got %v", aliceBalanceUSD)
-					bobBalanceUSD := env.IOUBalance(bob, gw, "USD")
-					require.True(t, bobBalanceUSD == nil || bobBalanceUSD.Signum() == 0,
-						"bob's USD balance should be 0 after crossing")
-					require.True(t, bobsOfferGone, "bob's offer should be gone when alice got USD")
-				}
-
-				if !bobsOfferGone && !aliceHasUSD {
-					blockedOrderBookCount++
-				}
-
-				// Clean up offers, zero out balances, then close (matching rippled order)
-				env.Submit(OfferCancel(alice, aliceOfferSeq).Build())
-				env.Submit(OfferCancel(bob, bobOfferSeq).Build())
-				if bal := env.IOUBalance(alice, gw, "USD"); bal != nil && bal.Signum() > 0 {
-					env.Submit(paymentBuilder.PayIssued(alice, gw, *bal).Build())
-				}
-				if bal := env.IOUBalance(bob, gw, "USD"); bal != nil && bal.Signum() > 0 {
-					env.Submit(paymentBuilder.PayIssued(bob, gw, *bal).Build())
-				}
-				env.Close()
-			}
-
-			if withFix {
-				require.Equal(t, 0, blockedOrderBookCount,
-					"With fixReducedOffersV1, no order book blocking should occur")
-			} else {
-				require.True(t, blockedOrderBookCount > 15,
-					"Without fixReducedOffersV1, expected > 15 blocked, got %d", blockedOrderBookCount)
-			}
-		})
+		// Clean up offers, zero out balances, then close (matching rippled order)
+		env.Submit(OfferCancel(alice, aliceOfferSeq).Build())
+		env.Submit(OfferCancel(bob, bobOfferSeq).Build())
+		if bal := env.IOUBalance(alice, gw, "USD"); bal != nil && bal.Signum() > 0 {
+			env.Submit(paymentBuilder.PayIssued(alice, gw, *bal).Build())
+		}
+		if bal := env.IOUBalance(bob, gw, "USD"); bal != nil && bal.Signum() > 0 {
+			env.Submit(paymentBuilder.PayIssued(bob, gw, *bal).Build())
+		}
+		env.Close()
 	}
+
+	require.Equal(t, 0, blockedOrderBookCount,
+		"With fixReducedOffersV1, no order book blocking should occur")
 }
 
 // TestReducedOffer_UnderFundedIouIouQChange exercises underfunded IOU/IOU offers.
@@ -345,105 +293,88 @@ func testUnderFundedIouIouQChange(t *testing.T) {
 
 	endLoop := jtx.IssuedCurrencyFromMantissa(gw, "USD", 50, -81)
 
-	for _, withFix := range []bool{false, true} {
-		name := "withoutFixReducedOffersV1"
-		if withFix {
-			name = "withFixReducedOffersV1"
+	env := newEnvWithFeatures(t, nil)
+
+	env.FundAmount(gw, uint64(jtx.XRP(10000)))
+	env.FundAmount(alice, uint64(jtx.XRP(10000)))
+	env.FundAmount(bob, uint64(jtx.XRP(10000)))
+	env.Close()
+	env.Trust(alice, jtx.USD(gw, 1000))
+	env.Trust(bob, jtx.USD(gw, 1000))
+	env.Trust(alice, EUR(1000))
+	env.Trust(bob, EUR(1000))
+	env.Close()
+
+	var blockedOrderBookCount int
+	// Loop from tinyUSD to endLoop in increments of tinyUSD
+	currentBobUSD := tinyUSD
+	for currentBobUSD.Compare(endLoop) <= 0 {
+		// Underfund bob's offer
+		result := env.Submit(paymentBuilder.PayIssued(gw, bob, currentBobUSD).Build())
+		jtx.RequireTxSuccess(t, result)
+		result = env.Submit(paymentBuilder.PayIssued(gw, alice, EUR(100)).Build())
+		jtx.RequireTxSuccess(t, result)
+		env.Close()
+
+		// This offer is underfunded
+		bobOfferSeq := env.Seq(bob)
+		result = env.Submit(OfferCreate(bob, eurOffer, usdOffer).Build())
+		jtx.RequireTxSuccess(t, result)
+		env.Close()
+
+		// alice places a crossing offer
+		aliceOfferSeq := env.Seq(alice)
+		result = env.Submit(OfferCreate(alice, usdOffer, eurOffer).Build())
+		jtx.RequireTxSuccess(t, result)
+		env.Close()
+
+		// Check for order book blocking
+		bobsOfferGone := !OfferInLedger(env, bob, bobOfferSeq)
+		aliceBalanceUSD := env.IOUBalance(alice, gw, "USD")
+		aliceHasUSD := aliceBalanceUSD != nil && aliceBalanceUSD.Signum() > 0
+
+		if aliceHasUSD {
+			require.Equal(t, 0, aliceBalanceUSD.Compare(currentBobUSD),
+				"alice should have received exactly initialBobUSD, got %v", aliceBalanceUSD)
+			bobBalanceUSD := env.IOUBalance(bob, gw, "USD")
+			require.True(t, bobBalanceUSD == nil || bobBalanceUSD.Signum() == 0,
+				"bob's USD balance should be 0 after crossing")
+			require.True(t, bobsOfferGone, "bob's offer should be gone when alice got USD")
 		}
-		t.Run(name, func(t *testing.T) {
-			var disabled []string
-			if !withFix {
-				disabled = []string{"fixReducedOffersV1"}
-			}
-			env := newEnvWithFeatures(t, disabled)
 
-			env.FundAmount(gw, uint64(jtx.XRP(10000)))
-			env.FundAmount(alice, uint64(jtx.XRP(10000)))
-			env.FundAmount(bob, uint64(jtx.XRP(10000)))
-			env.Close()
-			env.Trust(alice, jtx.USD(gw, 1000))
-			env.Trust(bob, jtx.USD(gw, 1000))
-			env.Trust(alice, EUR(1000))
-			env.Trust(bob, EUR(1000))
-			env.Close()
+		if !bobsOfferGone && !aliceHasUSD {
+			blockedOrderBookCount++
+		}
 
-			var blockedOrderBookCount int
-			// Loop from tinyUSD to endLoop in increments of tinyUSD
-			currentBobUSD := tinyUSD
-			for currentBobUSD.Compare(endLoop) <= 0 {
-				// Underfund bob's offer
-				result := env.Submit(paymentBuilder.PayIssued(gw, bob, currentBobUSD).Build())
-				jtx.RequireTxSuccess(t, result)
-				result = env.Submit(paymentBuilder.PayIssued(gw, alice, EUR(100)).Build())
-				jtx.RequireTxSuccess(t, result)
-				env.Close()
+		// Clean up offers, zero out balances, then close (matching rippled order)
+		env.Submit(OfferCancel(alice, aliceOfferSeq).Build())
+		env.Submit(OfferCancel(bob, bobOfferSeq).Build())
 
-				// This offer is underfunded
-				bobOfferSeq := env.Seq(bob)
-				result = env.Submit(OfferCreate(bob, eurOffer, usdOffer).Build())
-				jtx.RequireTxSuccess(t, result)
-				env.Close()
+		// Zero out IOU balances
+		if bal := env.IOUBalance(alice, gw, "EUR"); bal != nil && bal.Signum() > 0 {
+			env.Submit(paymentBuilder.PayIssued(alice, gw, *bal).Build())
+		}
+		if bal := env.IOUBalance(alice, gw, "USD"); bal != nil && bal.Signum() > 0 {
+			env.Submit(paymentBuilder.PayIssued(alice, gw, *bal).Build())
+		}
+		if bal := env.IOUBalance(bob, gw, "EUR"); bal != nil && bal.Signum() > 0 {
+			env.Submit(paymentBuilder.PayIssued(bob, gw, *bal).Build())
+		}
+		if bal := env.IOUBalance(bob, gw, "USD"); bal != nil && bal.Signum() > 0 {
+			env.Submit(paymentBuilder.PayIssued(bob, gw, *bal).Build())
+		}
+		env.Close()
 
-				// alice places a crossing offer
-				aliceOfferSeq := env.Seq(alice)
-				result = env.Submit(OfferCreate(alice, usdOffer, eurOffer).Build())
-				jtx.RequireTxSuccess(t, result)
-				env.Close()
-
-				// Check for order book blocking
-				bobsOfferGone := !OfferInLedger(env, bob, bobOfferSeq)
-				aliceBalanceUSD := env.IOUBalance(alice, gw, "USD")
-				aliceHasUSD := aliceBalanceUSD != nil && aliceBalanceUSD.Signum() > 0
-
-				if aliceHasUSD {
-					require.Equal(t, 0, aliceBalanceUSD.Compare(currentBobUSD),
-						"alice should have received exactly initialBobUSD, got %v", aliceBalanceUSD)
-					bobBalanceUSD := env.IOUBalance(bob, gw, "USD")
-					require.True(t, bobBalanceUSD == nil || bobBalanceUSD.Signum() == 0,
-						"bob's USD balance should be 0 after crossing")
-					require.True(t, bobsOfferGone, "bob's offer should be gone when alice got USD")
-				}
-
-				if !bobsOfferGone && !aliceHasUSD {
-					blockedOrderBookCount++
-				}
-
-				// Clean up offers, zero out balances, then close (matching rippled order)
-				env.Submit(OfferCancel(alice, aliceOfferSeq).Build())
-				env.Submit(OfferCancel(bob, bobOfferSeq).Build())
-
-				// Zero out IOU balances
-				if bal := env.IOUBalance(alice, gw, "EUR"); bal != nil && bal.Signum() > 0 {
-					env.Submit(paymentBuilder.PayIssued(alice, gw, *bal).Build())
-				}
-				if bal := env.IOUBalance(alice, gw, "USD"); bal != nil && bal.Signum() > 0 {
-					env.Submit(paymentBuilder.PayIssued(alice, gw, *bal).Build())
-				}
-				if bal := env.IOUBalance(bob, gw, "EUR"); bal != nil && bal.Signum() > 0 {
-					env.Submit(paymentBuilder.PayIssued(bob, gw, *bal).Build())
-				}
-				if bal := env.IOUBalance(bob, gw, "USD"); bal != nil && bal.Signum() > 0 {
-					env.Submit(paymentBuilder.PayIssued(bob, gw, *bal).Build())
-				}
-				env.Close()
-
-				// Increment
-				var err error
-				currentBobUSD, err = currentBobUSD.Add(tinyUSD)
-				if err != nil {
-					break
-				}
-			}
-
-			if withFix {
-				require.Equal(t, 0, blockedOrderBookCount,
-					"With fixReducedOffersV1, no order book blocking should occur")
-			} else {
-				require.True(t, blockedOrderBookCount > 20,
-					"Without fixReducedOffersV1, expected > 20 blocked, got %d", blockedOrderBookCount)
-			}
-		})
+		// Increment
+		var err error
+		currentBobUSD, err = currentBobUSD.Add(tinyUSD)
+		if err != nil {
+			break
+		}
 	}
+
+	require.Equal(t, 0, blockedOrderBookCount,
+		"With fixReducedOffersV1, no order book blocking should occur")
 }
 
 // TestReducedOffer_SellPartialCrossOldXrpIouQChange exercises tfSell partial

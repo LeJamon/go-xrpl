@@ -13,6 +13,8 @@ import (
 // ledgers; older seqs fall through to the relational DB
 const historyWindow = 256
 
+const persistedLedgerCacheSize = historyWindow
+
 // evictOldHistoryLocked drops ledgerHistory + tx-index entries older than the
 // historyWindow. Caller must hold s.mu.
 func (s *Service) evictOldHistoryLocked(latestValidatedSeq uint32) {
@@ -51,6 +53,21 @@ func (s *Service) deleteHistoryLocked(seq uint32) {
 		delete(s.ledgerByHash, old.Hash())
 		delete(s.ledgerHistory, seq)
 	}
+}
+
+func (s *Service) cachePersistedLedgerLocked(l *ledger.Ledger) {
+	hash := l.Hash()
+	if _, ok := s.persistedLedgers[hash]; ok {
+		return
+	}
+	s.persistedLedgers[hash] = l
+	s.persistedLedgerFIFO = append(s.persistedLedgerFIFO, hash)
+	if len(s.persistedLedgerFIFO) <= persistedLedgerCacheSize {
+		return
+	}
+	oldest := s.persistedLedgerFIFO[0]
+	s.persistedLedgerFIFO = s.persistedLedgerFIFO[1:]
+	delete(s.persistedLedgers, oldest)
 }
 
 // caps the pending-validation stash so a node that never reaches quorum can't
@@ -103,6 +120,7 @@ func (s *Service) drainPendingValidationLocked(hash [32]byte) *LedgerAcceptedEve
 // rather than promoting a fork.
 type pendingValidationEntry struct {
 	expectedHash [32]byte
+	signTime     time.Time
 	at           time.Time
 }
 
@@ -113,12 +131,13 @@ const pendingValidationTTL = 10 * time.Minute
 // stashPendingLedgerValidationLocked stores a (seq, expectedHash, at) entry
 // drained when ledgerHistory[seq] lands, LRU-evicting at the cap.
 // Caller must hold s.mu.
-func (s *Service) stashPendingLedgerValidationLocked(seq uint32, expectedHash [32]byte) {
+func (s *Service) stashPendingLedgerValidationLocked(seq uint32, expectedHash [32]byte, signTime time.Time) {
 	if _, exists := s.pendingLedgerValidations[seq]; !exists {
 		s.pendingLedgerValidationsOrder = append(s.pendingLedgerValidationsOrder, seq)
 	}
 	s.pendingLedgerValidations[seq] = pendingValidationEntry{
 		expectedHash: expectedHash,
+		signTime:     signTime,
 		at:           time.Now(),
 	}
 
@@ -138,9 +157,10 @@ func (s *Service) stashPendingLedgerValidationLocked(seq uint32, expectedHash [3
 }
 
 // drainPendingLedgerValidationLocked removes any stashed validation at seq and,
-// on hash match within pendingValidationTTL, promotes adopted to validated and
-// returns true. Expired/mismatched entries are deleted (else a later adopt at the
-// same seq could match a stale notification). Caller must hold s.mu.
+// on hash match within pendingValidationTTL and a successful current-quorum
+// recheck, promotes adopted to validated and returns true. Rejected entries are
+// deleted so a later adopt cannot match a stale notification. Caller must hold
+// s.mu.
 func (s *Service) drainPendingLedgerValidationLocked(seq uint32, adopted *ledger.Ledger) bool {
 	entry, ok := s.pendingLedgerValidations[seq]
 	if !ok {
@@ -164,14 +184,29 @@ func (s *Service) drainPendingLedgerValidationLocked(seq uint32, adopted *ledger
 		return false
 	}
 
-	_ = adopted.SetValidated()
+	signTime := entry.signTime
+	if s.pendingValidationResolver != nil && !s.config.Standalone {
+		var accepted bool
+		signTime, accepted = s.pendingValidationResolver(seq, entry.expectedHash)
+		if !accepted {
+			return false
+		}
+	}
+
 	// The validated tip is monotonic (rippled LedgerMaster::setFullLedger,
 	// LedgerMaster.cpp:948): a below-tip match marks the ledger validated but
 	// must not rewind the pointer.
 	if s.validatedLedger != nil && seq <= s.validatedLedger.Sequence() {
+		_ = adopted.SetValidated()
 		return false
 	}
+
+	if signTime.IsZero() {
+		signTime = adopted.CloseTime()
+	}
+	_ = adopted.SetValidated()
 	s.validatedLedger = adopted
+	s.validatedSignTime = signTime
 	s.evictOldHistoryLocked(seq)
 	return true
 }

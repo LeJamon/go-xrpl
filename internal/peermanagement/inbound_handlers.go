@@ -307,11 +307,10 @@ func (o *Overlay) serveFetchPack(peerID PeerID, req *message.GetObjectByHash) {
 	reply := &message.GetObjectByHash{
 		ObjType:    message.ObjectTypeFetchPack,
 		Query:      false,
-		Seq:        req.Seq,
 		LedgerHash: append([]byte(nil), req.LedgerHash...),
 		Objects:    objects,
 	}
-	encodeAndSend(peer, message.TypeGetObjects, reply, "fetch-pack reply")
+	encodeAndSend(peer, reply, "fetch-pack reply")
 }
 
 // handleHaveTransactionsMessage processes mtHAVE_TRANSACTIONS from a
@@ -378,7 +377,7 @@ func (o *Overlay) handleHaveTransactionsMessage(evt Event) {
 	if !exists {
 		return
 	}
-	encodeAndSend(peer, message.TypeGetObjects, req, "TMGetObjectByHash request")
+	encodeAndSend(peer, req, "TMGetObjectByHash request")
 }
 
 // endpointsIngestMaxEntries bounds an inbound TMEndpoints frame.
@@ -393,6 +392,24 @@ const endpointsIngestMaxEntries = 1024
 // ingest, so one frame cannot enqueue an unbounded address batch even
 // while staying under the 1024 wholesale-reject bound.
 const endpointsIngestSampleMax = 64
+
+// isValidGossipAddress mirrors rippled PeerFinder is_valid_address
+// (Logic.h): an address advertised in TMEndpoints gossip is usable only
+// if it is specified, not loopback, publicly routable, and carries a
+// non-zero port. The is_loopback check is redundant with isPublicIP but
+// kept for structural fidelity with rippled.
+func isValidGossipAddress(host net.IP, port uint16) bool {
+	if host == nil || host.IsUnspecified() {
+		return false
+	}
+	if host.IsLoopback() {
+		return false
+	}
+	if !isPublicIP(host) {
+		return false
+	}
+	return port != 0
+}
 
 // handleEndpointsMessage processes mtENDPOINTS from a peer and feeds the
 // advertised addresses into Discovery, the gossip half of overlay peer
@@ -466,13 +483,25 @@ func (o *Overlay) handleEndpointsMessage(evt Event) {
 		}
 
 		address := tm.Endpoint
+		host := parsed.Host
 		if tm.Hops == 0 {
 			// hops==0 describes the sender; trust the socket IP over
 			// the self-reported host (PeerImp.cpp:1234-1235).
 			if remoteIP == "" {
 				continue
 			}
+			host = remoteIP
 			address = Endpoint{Host: remoteIP, Port: parsed.Port}.String()
+		}
+
+		// Discard addresses that aren't publicly routable when endpoint
+		// verification is on (rippled PeerFinder is_valid_address, gated
+		// on config verifyEndpoints). The check runs on the post-rewrite
+		// host so a hops==0 peer behind a private socket is dropped too.
+		// A silent drop, not a charge: the address parsed fine, it is
+		// just not gossip-worthy.
+		if o.cfg.VerifyEndpoints && !isValidGossipAddress(net.ParseIP(host), parsed.Port) {
+			continue
 		}
 
 		accepted = append(accepted, ingestEndpoint{address: address, hops: tm.Hops})
@@ -553,7 +582,7 @@ func (o *Overlay) serveDoTransactions(peerID PeerID, req *message.GetObjectByHas
 		reply.Transactions = append(reply.Transactions, message.Transaction{
 			RawTransaction:   blob,
 			Status:           message.TxStatusCurrent,
-			ReceiveTimestamp: uint64(time.Now().Unix() - protocol.RippleEpochUnix),
+			ReceiveTimestamp: uint64(protocol.RippleSeconds(time.Now())),
 		})
 	}
 	if len(reply.Transactions) == 0 {
@@ -564,13 +593,70 @@ func (o *Overlay) serveDoTransactions(peerID PeerID, req *message.GetObjectByHas
 	if !exists {
 		return
 	}
-	encodeAndSend(peer, message.TypeTransactions, reply, "TMTransactions reply")
+	encodeAndSend(peer, reply, "TMTransactions reply")
+}
+
+// hardMaxReplyNodes bounds a single generic by-hash request. Mirrors
+// rippled Tuning::kHardMaxReplyNodes: each requested object costs a
+// NodeStore fetch, so an unbounded query is a per-object fetch DoS. A
+// request carrying more than this many objects is rejected outright
+// (feeInvalidData); the fetch loop is capped at the same value as
+// defense in depth.
+const hardMaxReplyNodes = 12288
+
+// Differential pricing for generic get-object-by-hash requests, mirroring
+// rippled 3.2.0's Tuning.h get-object constants. The first
+// getObjFreeObjects requested objects are free; beyond that each billable
+// object costs getObjCostPerHit (store hit) or getObjCostPerMiss (store
+// miss, billed first) plus a one-shot size-band surcharge. Tuned so a
+// single all-miss max-size request exceeds resource.DropThreshold in one
+// message while an honest 8-hash request stays free.
+const (
+	getObjFreeObjects    = 16
+	getObjCostPerHit     = 1
+	getObjCostPerMiss    = 8
+	getObjBandSmallMax   = 4 * 16 // 4 legit hashes/type * SHAMap branch factor
+	getObjBandMediumMax  = getObjBandSmallMax * 16
+	getObjBandSmallCost  = 0
+	getObjBandMediumCost = 100
+	getObjBandLargeCost  = 1000
+)
+
+// getObjectByHashFee computes the work-proportional charge for a served
+// generic get-object-by-hash request. Misses are billed ahead of hits, so
+// a request full of non-existent hashes is the most expensive. The request
+// size (not the number of lookups actually performed) drives the charge,
+// to discourage large speculative requests.
+func getObjectByHashFee(requested, found int) resource.Charge {
+	billable := requested - getObjFreeObjects
+	if billable < 0 {
+		billable = 0
+	}
+	billableMisses := requested - found
+	if billableMisses < 0 {
+		billableMisses = 0
+	}
+	if billableMisses > billable {
+		billableMisses = billable
+	}
+	billableHits := billable - billableMisses
+
+	band := getObjBandSmallCost
+	switch {
+	case requested > getObjBandMediumMax:
+		band = getObjBandLargeCost
+	case requested > getObjBandSmallMax:
+		band = getObjBandMediumCost
+	}
+
+	dynamic := billableHits*getObjCostPerHit + billableMisses*getObjCostPerMiss + band
+	return resource.NewCharge(dynamic, "GetObject differential")
 }
 
 // serveGetObjects answers an inbound mtGET_OBJECTS query for generic
 // node-store objects by hash. Mirrors rippled
 // PeerImp::onMessage(TMGetObjectByHash) generic branch
-// (PeerImp.cpp:2483-2538): echo the request's type/seq/ledger-hash into
+// (PeerImp.cpp:2483-2538): echo the request's type/ledger-hash into
 // a query=false reply, look each requested hash up in the local node
 // store, and append the blobs we hold.
 //
@@ -603,22 +689,41 @@ func (o *Overlay) serveGetObjects(peerID PeerID, req *message.GetObjectByHash) {
 		return
 	}
 
-	// A generic by-hash request is legitimate but moderately burdensome
-	// to serve. Rippled charges feeModerateBurdenPeer once it reaches
-	// this branch, ahead of the fetch loop (PeerImp.cpp:2503-2505).
+	// Reject oversized requests before touching the node store. The
+	// legitimate upper bound (an InboundLedger asks for at most 8 hashes)
+	// is far below this cap; anything past it is non-conforming and is
+	// charged feeInvalidData (PeerImp.cpp:2500-2506).
+	if len(req.Objects) > hardMaxReplyNodes {
+		peer.Charge(resource.FeeInvalidData, "oversized get object request")
+		return
+	}
+
+	// Base burden for a legitimate by-hash request, charged ahead of the
+	// fetch loop; the work-proportional differential is added afterwards.
+	// Rippled charges the base at admission in onMessage and the
+	// differential in the worker (PeerImp.cpp:2544, 2656).
 	peer.Charge(resource.FeeModerateBurdenPeer, "get object by hash request")
 
 	reply := &message.GetObjectByHash{
 		Query:   false,
 		ObjType: req.ObjType,
-		Seq:     req.Seq,
 		Objects: make([]message.IndexedObject, 0, len(req.Objects)),
 	}
 	if len(req.LedgerHash) != 0 {
 		reply.LedgerHash = append([]byte(nil), req.LedgerHash...)
 	}
 
-	for _, obj := range req.Objects {
+	// Defense in depth: the oversize gate above already rejects requests
+	// larger than hardMaxReplyNodes, but cap the fetch loop at the same
+	// value so a future caller invoking this directly can't drive
+	// unbounded node-store lookups (PeerImp.cpp:2622-2623).
+	requested := len(req.Objects)
+	iterLimit := requested
+	if iterLimit > hardMaxReplyNodes {
+		iterLimit = hardMaxReplyNodes
+	}
+	for i := 0; i < iterLimit; i++ {
+		obj := req.Objects[i]
 		// Rippled only processes objects carrying a uint256-sized hash
 		// (PeerImp.cpp:2511); others are silently skipped.
 		if len(obj.Hash) != 32 {
@@ -643,7 +748,13 @@ func (o *Overlay) serveGetObjects(peerID PeerID, req *message.GetObjectByHash) {
 		reply.Objects = append(reply.Objects, out)
 	}
 
-	encodeAndSend(peer, message.TypeGetObjects, reply, "TMGetObjectByHash reply")
+	// Work-proportional differential charge on top of the base burden:
+	// billed per requested object beyond the free tier (misses first) plus
+	// a size-band surcharge, discouraging large speculative requests
+	// (computeGetObjectByHashFee, PeerImp.cpp:2656).
+	peer.Charge(getObjectByHashFee(requested, len(reply.Objects)), "processed get object by hash request")
+
+	encodeAndSend(peer, reply, "TMGetObjectByHash reply")
 }
 
 // handleTransactionsBatchMessage processes mtTRANSACTIONS (a batched

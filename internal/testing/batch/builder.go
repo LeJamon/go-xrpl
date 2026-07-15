@@ -10,13 +10,14 @@ import (
 
 	"github.com/LeJamon/go-xrpl/crypto/ed25519"
 	"github.com/LeJamon/go-xrpl/crypto/secp256k1"
-	"github.com/LeJamon/go-xrpl/internal/testing"
+	jtx "github.com/LeJamon/go-xrpl/internal/testing"
 	"github.com/LeJamon/go-xrpl/internal/tx"
 	"github.com/LeJamon/go-xrpl/internal/tx/account"
 	batchtx "github.com/LeJamon/go-xrpl/internal/tx/batch"
 	"github.com/LeJamon/go-xrpl/internal/tx/check"
 	"github.com/LeJamon/go-xrpl/internal/tx/payment"
 	"github.com/LeJamon/go-xrpl/internal/tx/ticket"
+	"github.com/LeJamon/go-xrpl/internal/tx/vault"
 	"github.com/LeJamon/go-xrpl/keylet"
 )
 
@@ -28,14 +29,14 @@ func CalcBatchFee(baseFee uint64, numSigners uint32, numInnerTxns uint32) uint64
 }
 
 // CalcBatchFeeFromEnv calculates the expected batch fee using the env's base fee.
-func CalcBatchFeeFromEnv(env *testing.TestEnv, numSigners uint32, numInnerTxns uint32) uint64 {
+func CalcBatchFeeFromEnv(env *jtx.TestEnv, numSigners uint32, numInnerTxns uint32) uint64 {
 	return CalcBatchFee(env.BaseFee(), numSigners, numInnerTxns)
 }
 
 // BatchBuilder provides a fluent interface for building Batch transactions in tests.
 // Reference: rippled test/jtx/batch.h outer() + inner() classes
 type BatchBuilder struct {
-	account   *testing.Account
+	account   *jtx.Account
 	seq       *uint32
 	ticketSeq *uint32
 	fee       uint64
@@ -54,13 +55,13 @@ type BatchBuilder struct {
 type signSpec struct {
 	index          int
 	multi          bool
-	signerAccounts []*testing.Account
-	signingKeys    []*testing.Account
+	signerAccounts []*jtx.Account
+	signingKeys    []*jtx.Account
 }
 
 // NewBatchBuilder creates a new BatchBuilder for the given account.
 // Reference: rippled test/jtx/batch.h outer()
-func NewBatchBuilder(account *testing.Account, seq uint32, fee uint64, flag uint32) *BatchBuilder {
+func NewBatchBuilder(account *jtx.Account, seq uint32, fee uint64, flag uint32) *BatchBuilder {
 	return &BatchBuilder{
 		account: account,
 		seq:     &seq,
@@ -86,10 +87,10 @@ func (b *BatchBuilder) AddInnerTx(txn tx.Transaction) *BatchBuilder {
 // The signature passed here is a placeholder; the real signature over the batch
 // digest is computed in Build().
 // Reference: rippled test/jtx/batch.h sig class
-func (b *BatchBuilder) AddSigner(account *testing.Account, signature string) *BatchBuilder {
+func (b *BatchBuilder) AddSigner(account *jtx.Account, signature string) *BatchBuilder {
 	b.signSpecs = append(b.signSpecs, signSpec{
 		index:       len(b.signers),
-		signingKeys: []*testing.Account{account},
+		signingKeys: []*jtx.Account{account},
 	})
 	b.signers = append(b.signers, batchtx.BatchSigner{
 		BatchSigner: batchtx.BatchSignerData{
@@ -105,10 +106,10 @@ func (b *BatchBuilder) AddSigner(account *testing.Account, signature string) *Ba
 // The 'account' is the BatchSigner.Account, and 'regKey' provides the signing key.
 // The real signature is computed in Build().
 // Reference: rippled test/jtx/batch.h sig(Reg{account, regKey})
-func (b *BatchBuilder) AddSignerWithRegKey(account, regKey *testing.Account, signature string) *BatchBuilder {
+func (b *BatchBuilder) AddSignerWithRegKey(account, regKey *jtx.Account, signature string) *BatchBuilder {
 	b.signSpecs = append(b.signSpecs, signSpec{
 		index:       len(b.signers),
-		signingKeys: []*testing.Account{regKey},
+		signingKeys: []*jtx.Account{regKey},
 	})
 	b.signers = append(b.signers, batchtx.BatchSigner{
 		BatchSigner: batchtx.BatchSignerData{
@@ -125,10 +126,10 @@ func (b *BatchBuilder) AddSignerWithRegKey(account, regKey *testing.Account, sig
 // cryptographically valid for signingKey yet is verified against the unrelated
 // pubKey, so it fails — reproducing rippled's temBAD_SIGNATURE vector where the
 // SigningPubKey and TxnSignature come from different keys (Batch_test.cpp:568-575).
-func (b *BatchBuilder) AddMismatchedSigner(account, pubKey, signingKey *testing.Account) *BatchBuilder {
+func (b *BatchBuilder) AddMismatchedSigner(account, pubKey, signingKey *jtx.Account) *BatchBuilder {
 	b.signSpecs = append(b.signSpecs, signSpec{
 		index:       len(b.signers),
-		signingKeys: []*testing.Account{signingKey},
+		signingKeys: []*jtx.Account{signingKey},
 	})
 	b.signers = append(b.signers, batchtx.BatchSigner{
 		BatchSigner: batchtx.BatchSignerData{
@@ -143,7 +144,7 @@ func (b *BatchBuilder) AddMismatchedSigner(account, pubKey, signingKey *testing.
 // AddGarbageSigner adds a single-sign batch signer with account's public key but
 // a fixed garbage signature that never verifies (no real signature is computed
 // in Build()). Reproduces a corrupted-signature submission.
-func (b *BatchBuilder) AddGarbageSigner(account *testing.Account) *BatchBuilder {
+func (b *BatchBuilder) AddGarbageSigner(account *jtx.Account) *BatchBuilder {
 	b.signers = append(b.signers, batchtx.BatchSigner{
 		BatchSigner: batchtx.BatchSignerData{
 			Account:           account.Address,
@@ -159,8 +160,8 @@ func (b *BatchBuilder) AddGarbageSigner(account *testing.Account) *BatchBuilder 
 // are the individual signers providing their keys.
 // Nested signers are sorted by binary AccountID, the order the verifier requires.
 // Reference: rippled test/jtx/batch.h msig(masterAccount, {signer1, signer2, ...})
-func (b *BatchBuilder) AddMultiSignBatchSigner(masterAccount *testing.Account, signerAccounts []*testing.Account) *BatchBuilder {
-	sorted := make([]*testing.Account, len(signerAccounts))
+func (b *BatchBuilder) AddMultiSignBatchSigner(masterAccount *jtx.Account, signerAccounts []*jtx.Account) *BatchBuilder {
+	sorted := make([]*jtx.Account, len(signerAccounts))
 	copy(sorted, signerAccounts)
 	// Nested signers must be in strictly-increasing binary AccountID order, the
 	// order the verifier enforces (Batch.verifyBatchMultiSign). base58 address
@@ -198,7 +199,7 @@ func (b *BatchBuilder) AddMultiSignBatchSigner(masterAccount *testing.Account, s
 // use regular keys. Each RegKeySigner specifies the account and the key used to sign.
 // Nested signers are sorted by binary AccountID, the order the verifier requires.
 // Reference: rippled test/jtx/batch.h msig(masterAccount, {Reg{account, regKey}, ...})
-func (b *BatchBuilder) AddMultiSignBatchSignerWithRegKeys(masterAccount *testing.Account, signers []RegKeySigner) *BatchBuilder {
+func (b *BatchBuilder) AddMultiSignBatchSignerWithRegKeys(masterAccount *jtx.Account, signers []RegKeySigner) *BatchBuilder {
 	sorted := make([]RegKeySigner, len(signers))
 	copy(sorted, signers)
 	// Sort by raw 20-byte AccountID — the strictly-increasing binary order the
@@ -207,8 +208,8 @@ func (b *BatchBuilder) AddMultiSignBatchSignerWithRegKeys(masterAccount *testing
 		return bytes.Compare(sorted[i].Account.ID[:], sorted[j].Account.ID[:]) < 0
 	})
 	nestedSigners := make([]tx.SignerWrapper, len(sorted))
-	signerAccounts := make([]*testing.Account, len(sorted))
-	signingKeys := make([]*testing.Account, len(sorted))
+	signerAccounts := make([]*jtx.Account, len(sorted))
+	signingKeys := make([]*jtx.Account, len(sorted))
 	for i, s := range sorted {
 		nestedSigners[i] = tx.SignerWrapper{
 			Signer: tx.Signer{
@@ -240,8 +241,8 @@ func (b *BatchBuilder) AddMultiSignBatchSignerWithRegKeys(masterAccount *testing
 // Account is the signer's account, SigningKey is the account whose public key is used.
 // For master key signing, Account == SigningKey. For regular key signing, SigningKey is the reg key account.
 type RegKeySigner struct {
-	Account    *testing.Account
-	SigningKey *testing.Account
+	Account    *jtx.Account
+	SigningKey *jtx.Account
 }
 
 // Build constructs the Batch transaction.
@@ -289,16 +290,16 @@ func (b *BatchBuilder) signBatchSigners(batch *batchtx.Batch) {
 // signBatchMessage signs raw message bytes with the account's key, mirroring
 // rippled's ripple::sign over the serializeBatch slice. The crypto scheme hashes
 // the message internally.
-func signBatchMessage(acc *testing.Account, msg []byte) string {
+func signBatchMessage(acc *jtx.Account, msg []byte) string {
 	priv := prefixedPrivateKeyHex(acc)
 	if acc.IsEd25519() {
-		sig, err := ed25519.ED25519().Sign(string(msg), priv)
+		sig, err := ed25519.Algorithm{}.Sign(string(msg), priv)
 		if err != nil {
 			return ""
 		}
 		return sig
 	}
-	sig, err := secp256k1.SECP256K1().Sign(string(msg), priv)
+	sig, err := secp256k1.Algorithm{}.Sign(string(msg), priv)
 	if err != nil {
 		return ""
 	}
@@ -307,7 +308,7 @@ func signBatchMessage(acc *testing.Account, msg []byte) string {
 
 // prefixedPrivateKeyHex returns the key-type-prefixed private key hex expected by
 // the crypto signing helpers (0xED for ed25519, 0x00 for secp256k1).
-func prefixedPrivateKeyHex(acc *testing.Account) string {
+func prefixedPrivateKeyHex(acc *jtx.Account) string {
 	if acc.IsEd25519() {
 		return "ED" + acc.PrivateKeyHex()
 	}
@@ -334,7 +335,7 @@ func MakeFakeInnerTx() tx.Transaction {
 // MakeInnerPayment creates an inner Payment transaction suitable for batch inclusion.
 // Sets Fee=0, SigningPubKey="", and adds tfInnerBatchTxn flag.
 // Reference: rippled test/jtx/batch.h inner class with Payment
-func MakeInnerPayment(from, to *testing.Account, amountDrops int64, seq uint32) *payment.Payment {
+func MakeInnerPayment(from, to *jtx.Account, amountDrops int64, seq uint32) *payment.Payment {
 	p := payment.NewPayment(from.Address, to.Address, tx.NewXRPAmount(amountDrops))
 	p.Fee = "0"
 	p.SigningPubKey = ""
@@ -345,21 +346,33 @@ func MakeInnerPayment(from, to *testing.Account, amountDrops int64, seq uint32) 
 
 // MakeInnerPaymentXRPWithDelegate creates an inner XRP Payment with a Delegate field.
 // Reference: rippled batch::inner(pay(...), seq) with tx[jss::Delegate] = delegate.human()
-func MakeInnerPaymentXRPWithDelegate(from, to *testing.Account, xrp int64, seq uint32, delegate *testing.Account) *payment.Payment {
+func MakeInnerPaymentXRPWithDelegate(from, to *jtx.Account, xrp int64, seq uint32, delegate *jtx.Account) *payment.Payment {
 	p := MakeInnerPaymentXRP(from, to, xrp, seq)
 	p.GetCommon().Delegate = delegate.Address
 	return p
 }
 
 // MakeInnerPaymentXRP creates an inner Payment for an XRP amount in whole XRP units.
-func MakeInnerPaymentXRP(from, to *testing.Account, xrp int64, seq uint32) *payment.Payment {
-	return MakeInnerPayment(from, to, testing.XRP(xrp), seq)
+func MakeInnerPaymentXRP(from, to *jtx.Account, xrp int64, seq uint32) *payment.Payment {
+	return MakeInnerPayment(from, to, jtx.XRP(xrp), seq)
+}
+
+// MakeInnerVaultCreate creates a well-formed inner VaultCreate. VaultCreate is on
+// the Batch inner-type blocklist, so a batch containing it is rejected with
+// temINVALID_INNER_BATCH regardless of the inner's other fields.
+func MakeInnerVaultCreate(account *jtx.Account, seq uint32) *vault.VaultCreate {
+	v := vault.NewVaultCreate(account.Address, tx.Asset{Currency: "XRP"})
+	v.Fee = "0"
+	v.SigningPubKey = ""
+	v.SetSequence(seq)
+	v.SetFlags(tx.TfInnerBatchTxn)
+	return v
 }
 
 // NewBatchBuilderWithTicket creates a new BatchBuilder where the outer batch uses a TicketSequence.
 // Sequence is set to 0 and TicketSequence is set to the given ticketSeq.
 // Reference: rippled batch::outer(alice, 0, batchFee, flag) + ticket::use(ticketSeq)
-func NewBatchBuilderWithTicket(account *testing.Account, ticketSeq uint32, fee uint64, flag uint32) *BatchBuilder {
+func NewBatchBuilderWithTicket(account *jtx.Account, ticketSeq uint32, fee uint64, flag uint32) *BatchBuilder {
 	zero := uint32(0)
 	return &BatchBuilder{
 		account:   account,
@@ -374,8 +387,8 @@ func NewBatchBuilderWithTicket(account *testing.Account, ticketSeq uint32, fee u
 // MakeInnerPaymentXRPWithTicket creates an inner Payment for XRP that uses a TicketSequence.
 // Sequence is set to 0 and TicketSequence is set to the given ticketSeq.
 // Reference: rippled batch::inner(pay(...), 0, ticketSeq)
-func MakeInnerPaymentXRPWithTicket(from, to *testing.Account, xrp int64, ticketSeq uint32) *payment.Payment {
-	p := payment.NewPayment(from.Address, to.Address, tx.NewXRPAmount(testing.XRP(xrp)))
+func MakeInnerPaymentXRPWithTicket(from, to *jtx.Account, xrp int64, ticketSeq uint32) *payment.Payment {
+	p := payment.NewPayment(from.Address, to.Address, tx.NewXRPAmount(jtx.XRP(xrp)))
 	p.Fee = "0"
 	p.SigningPubKey = ""
 	zero := uint32(0)
@@ -388,7 +401,7 @@ func MakeInnerPaymentXRPWithTicket(from, to *testing.Account, xrp int64, ticketS
 // MakeInnerTicketCreate creates an inner TicketCreate transaction for batch inclusion.
 // Sets Fee=0, SigningPubKey="", and adds tfInnerBatchTxn flag.
 // Reference: rippled batch::inner(ticket::create(account, count), seq)
-func MakeInnerTicketCreate(account *testing.Account, count uint32, seq uint32) *ticket.TicketCreate {
+func MakeInnerTicketCreate(account *jtx.Account, count uint32, seq uint32) *ticket.TicketCreate {
 	tc := ticket.NewTicketCreate(account.Address, count)
 	tc.Fee = "0"
 	tc.SigningPubKey = ""
@@ -400,7 +413,7 @@ func MakeInnerTicketCreate(account *testing.Account, count uint32, seq uint32) *
 // MakeInnerCheckCreate creates an inner CheckCreate transaction for batch inclusion.
 // Sets Fee=0, SigningPubKey="", and adds tfInnerBatchTxn flag.
 // Reference: rippled batch::inner(check::create(from, to, amount), seq)
-func MakeInnerCheckCreate(from, to *testing.Account, sendMax tx.Amount, seq uint32) *check.CheckCreate {
+func MakeInnerCheckCreate(from, to *jtx.Account, sendMax tx.Amount, seq uint32) *check.CheckCreate {
 	cc := check.NewCheckCreate(from.Address, to.Address, sendMax)
 	cc.Fee = "0"
 	cc.SigningPubKey = ""
@@ -412,7 +425,7 @@ func MakeInnerCheckCreate(from, to *testing.Account, sendMax tx.Amount, seq uint
 // MakeInnerCheckCreateWithTicket creates an inner CheckCreate that uses a TicketSequence.
 // Sequence is set to 0 and TicketSequence is set to the given ticketSeq.
 // Reference: rippled batch::inner(check::create(...), 0, ticketSeq)
-func MakeInnerCheckCreateWithTicket(from, to *testing.Account, sendMax tx.Amount, ticketSeq uint32) *check.CheckCreate {
+func MakeInnerCheckCreateWithTicket(from, to *jtx.Account, sendMax tx.Amount, ticketSeq uint32) *check.CheckCreate {
 	cc := check.NewCheckCreate(from.Address, to.Address, sendMax)
 	cc.Fee = "0"
 	cc.SigningPubKey = ""
@@ -426,7 +439,7 @@ func MakeInnerCheckCreateWithTicket(from, to *testing.Account, sendMax tx.Amount
 // MakeInnerCheckCash creates an inner CheckCash transaction with Amount for batch inclusion.
 // Sets Fee=0, SigningPubKey="", and adds tfInnerBatchTxn flag.
 // Reference: rippled batch::inner(check::cash(account, checkID, amount), seq)
-func MakeInnerCheckCash(account *testing.Account, checkID string, amount tx.Amount, seq uint32) *check.CheckCash {
+func MakeInnerCheckCash(account *jtx.Account, checkID string, amount tx.Amount, seq uint32) *check.CheckCash {
 	cc := check.NewCheckCash(account.Address, checkID)
 	cc.SetExactAmount(amount)
 	cc.Fee = "0"
@@ -439,7 +452,7 @@ func MakeInnerCheckCash(account *testing.Account, checkID string, amount tx.Amou
 // MakeInnerAccountDelete creates an inner AccountDelete transaction for batch inclusion.
 // Sets Fee=0, SigningPubKey="", and adds tfInnerBatchTxn flag.
 // Reference: rippled batch::inner(acctdelete(account, dest), seq)
-func MakeInnerAccountDelete(from, dest *testing.Account, seq uint32) *account.AccountDelete {
+func MakeInnerAccountDelete(from, dest *jtx.Account, seq uint32) *account.AccountDelete {
 	ad := account.NewAccountDelete(from.Address, dest.Address)
 	ad.Fee = "0"
 	ad.SigningPubKey = ""
@@ -451,7 +464,7 @@ func MakeInnerAccountDelete(from, dest *testing.Account, seq uint32) *account.Ac
 // MakeInnerAccountSet creates an inner AccountSet (noop) transaction for batch inclusion.
 // Sets Fee=0, SigningPubKey="", and adds tfInnerBatchTxn flag.
 // Reference: rippled batch::inner(noop(account), seq) — noop is AccountSet with no flags.
-func MakeInnerAccountSet(acc *testing.Account, seq uint32) *account.AccountSet {
+func MakeInnerAccountSet(acc *jtx.Account, seq uint32) *account.AccountSet {
 	as := account.NewAccountSet(acc.Address)
 	as.Fee = "0"
 	as.SigningPubKey = ""
@@ -462,7 +475,7 @@ func MakeInnerAccountSet(acc *testing.Account, seq uint32) *account.AccountSet {
 
 // GetCheckIndex returns the hex-encoded check keylet key for an account and sequence.
 // This mirrors rippled's getCheckIndex(account, sequence) helper in Batch_test.cpp.
-func GetCheckIndex(account *testing.Account, seq uint32) string {
+func GetCheckIndex(account *jtx.Account, seq uint32) string {
 	chk := keylet.Check(account.ID, seq)
 	return hex.EncodeToString(chk.Key[:])
 }

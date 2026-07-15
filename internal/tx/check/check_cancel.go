@@ -30,15 +30,15 @@ func (c *CheckCancel) TxType() tx.Type {
 	return tx.TypeCheckCancel
 }
 
+// GetFlagsMask adopts the engine FlagsMasker seam. CancelCheck defines no
+// type-specific flags, so it uses the base universal mask, checked at preflight0.
+func (c *CheckCancel) GetFlagsMask(rules *amendment.Rules) uint32 {
+	return tx.TfUniversalMask
+}
+
 // Validate implements preflight validation matching rippled's CancelCheck::preflight().
 func (c *CheckCancel) Validate() error {
 	if err := c.BaseTx.Validate(); err != nil {
-		return err
-	}
-
-	// No flags allowed except universal flags
-	// Reference: CancelCheck.cpp L42-47
-	if err := tx.CheckFlags(c.GetFlags(), tx.TfUniversalMask); err != nil {
 		return err
 	}
 
@@ -54,10 +54,48 @@ func (c *CheckCancel) Flatten() (map[string]any, error) {
 }
 
 func (c *CheckCancel) RequiredAmendments() [][32]byte {
-	return [][32]byte{amendment.FeatureChecks}
+	return nil
 }
 
-// Apply implements preclaim + doApply matching rippled's CancelCheck.
+// Preclaim runs CheckCancel's ledger-aware checks: the check must exist
+// (tecNO_ENTRY) and, while it is not yet expired, only its creator or destination
+// may cancel it (tecNO_PERMISSION). Extracting these from Apply makes them visible
+// to the preclaim-only paths (TxQ admission, simulate), matching rippled where
+// they live in CancelCheck::preclaim.
+// Reference: rippled CheckCancel.cpp preclaim().
+func (c *CheckCancel) Preclaim(view tx.LedgerView, config tx.EngineConfig) ter.Result {
+	checkID, decErr := hex.DecodeString(c.CheckID)
+	if decErr != nil || len(checkID) != 32 {
+		return ter.TemINVALID
+	}
+	var checkKeyBytes [32]byte
+	copy(checkKeyBytes[:], checkID)
+	checkKey := keylet.Keylet{Key: checkKeyBytes}
+
+	checkData, readErr := view.Read(checkKey)
+	if readErr != nil || checkData == nil {
+		return ter.TecNO_ENTRY
+	}
+	if state.EntryType(checkData) != "Check" {
+		return ter.TecNO_ENTRY
+	}
+	check, parseErr := state.ParseCheck(checkData)
+	if parseErr != nil {
+		return ter.TefINTERNAL
+	}
+	accountID, acctErr := state.DecodeAccountID(c.Account)
+	if acctErr != nil {
+		return ter.TemBAD_SRC_ACCOUNT
+	}
+	if !tx.HasExpiredField(check.Expiration, config.ParentCloseTime) {
+		if check.Account != accountID && check.DestinationID != accountID {
+			return ter.TecNO_PERMISSION
+		}
+	}
+	return ter.TesSUCCESS
+}
+
+// Apply implements doApply matching rippled's CancelCheck::doApply.
 func (c *CheckCancel) Apply(ctx *tx.ApplyContext) ter.Result {
 	ctx.Log.Trace("check cancel apply",
 		"account", c.Account,
@@ -96,20 +134,6 @@ func (c *CheckCancel) Apply(ctx *tx.ApplyContext) ter.Result {
 
 	accountID := ctx.AccountID
 	isCreator := check.Account == accountID
-	isDestination := check.DestinationID == accountID
-
-	// Permission check based on expiration
-	// Reference: CancelCheck.cpp L64-83
-	// If expiration exists AND current time < expiration (not yet expired):
-	//   Only creator or destination can cancel
-	// If expired or no expiration: anyone can cancel expired, but only creator/dest for non-expired
-	// If the check is not yet expired, only the creator or destination may
-	// cancel it; once expired, anyone can.
-	if !tx.HasExpiredField(check.Expiration, ctx.Config.ParentCloseTime) {
-		if !isCreator && !isDestination {
-			return ter.TecNO_PERMISSION
-		}
-	}
 
 	// --- doApply ---
 

@@ -75,7 +75,7 @@ func TestSme_TypeAndStateAccessors(t *testing.T) {
 
 func TestSme_SetFullAndSetLedgerSeq(t *testing.T) {
 	sm := New(TypeState)
-	sm.SetFull()
+	sm.setFull()
 	sm.SetLedgerSeq(42)
 	sm.mu.RLock()
 	seq := sm.ledgerSeq
@@ -85,7 +85,7 @@ func TestSme_SetFullAndSetLedgerSeq(t *testing.T) {
 		t.Errorf("ledgerSeq = %d, want 42", seq)
 	}
 	if !full {
-		t.Error("full should be true after SetFull()")
+		t.Error("full should be true after setFull()")
 	}
 }
 
@@ -143,7 +143,7 @@ func TestSme_SnapshotOnInvalidReturnsError(t *testing.T) {
 	sm.mu.Lock()
 	sm.state = StateInvalid
 	sm.mu.Unlock()
-	if _, err := sm.Snapshot(false); err == nil {
+	if _, err := sm.SnapshotImmutable(); err == nil {
 		t.Error("Snapshot on invalid map should return error")
 	}
 }
@@ -188,16 +188,16 @@ func TestSme_PutItemWithNodeTypeOnImmutable(t *testing.T) {
 		t.Fatalf("SetImmutable: %v", err)
 	}
 	k := sme_keyFromByte(0x01)
-	err := sm.PutItemWithNodeType(NewItem(k, sme_data12(1)), NodeTypeTransactionNoMeta)
+	err := sm.putItemWithNodeType(NewItem(k, sme_data12(1)), NodeTypeTransactionNoMeta)
 	if !errors.Is(err, ErrImmutable) {
-		t.Errorf("PutItemWithNodeType on immutable: want ErrImmutable, got %v", err)
+		t.Errorf("putItemWithNodeType on immutable: want ErrImmutable, got %v", err)
 	}
 }
 
 func TestSme_PutItemWithNodeTypeNilItem(t *testing.T) {
 	sm := New(TypeTransaction)
-	if err := sm.PutItemWithNodeType(nil, NodeTypeTransactionNoMeta); !errors.Is(err, ErrNilItem) {
-		t.Errorf("PutItemWithNodeType(nil): want ErrNilItem, got %v", err)
+	if err := sm.putItemWithNodeType(nil, NodeTypeTransactionNoMeta); !errors.Is(err, ErrNilItem) {
+		t.Errorf("putItemWithNodeType(nil): want ErrNilItem, got %v", err)
 	}
 }
 
@@ -282,7 +282,7 @@ func TestSme_MutableSnapshot(t *testing.T) {
 	}
 	origHash, _ := sm.Hash()
 
-	snap, err := sm.Snapshot(true) // mutable
+	snap, err := sm.SnapshotMutable() // mutable
 	if err != nil {
 		t.Fatalf("Snapshot(mutable): %v", err)
 	}
@@ -317,7 +317,7 @@ func TestSme_ImmutableSnapshotCachesSize(t *testing.T) {
 	if sz1 != 5 {
 		t.Errorf("Size = %d, want 5", sz1)
 	}
-	snap, err := sm.Snapshot(false)
+	snap, err := sm.SnapshotImmutable()
 	if err != nil {
 		t.Fatalf("Snapshot: %v", err)
 	}
@@ -348,7 +348,7 @@ func TestSme_FlushDirtyNilRoot(t *testing.T) {
 	sm.mu.Lock()
 	sm.root = nil
 	sm.mu.Unlock()
-	batch, err := sm.FlushDirty(false)
+	batch, err := sm.FlushDirty()
 	if err != nil {
 		t.Fatalf("FlushDirty with nil root: %v", err)
 	}
@@ -529,7 +529,7 @@ func TestSme_AddKnownNodeUnchecked(t *testing.T) {
 		t.Fatalf("AddRootNode: %v", err)
 	}
 	for _, w := range wireNodes {
-		nid, err := UnmarshalBinary(w.NodeID)
+		nid, err := ParseNodeID(w.NodeID)
 		if err != nil {
 			t.Fatalf("UnmarshalBinary: %v", err)
 		}
@@ -627,7 +627,7 @@ func TestSme_AddKnownNodeHashMismatch(t *testing.T) {
 	}
 
 	for _, w := range wireNodes {
-		nid, _ := UnmarshalBinary(w.NodeID)
+		nid, _ := ParseNodeID(w.NodeID)
 		if nid.IsRoot() {
 			continue
 		}
@@ -761,7 +761,7 @@ func TestSme_AddRootNodeAlreadySet(t *testing.T) {
 	// Add depth-1 child so root HasChildren() returns true
 	wireNodes, _ := source.WalkWireNodes()
 	for _, w := range wireNodes {
-		nid, _ := UnmarshalBinary(w.NodeID)
+		nid, _ := ParseNodeID(w.NodeID)
 		if nid.IsRoot() {
 			continue
 		}
@@ -834,7 +834,7 @@ func TestSme_BackedSnapshotFlushes(t *testing.T) {
 	if err := sm.Put(k, sme_data12(1)); err != nil {
 		t.Fatalf("Put: %v", err)
 	}
-	snap, err := sm.Snapshot(false)
+	snap, err := sm.SnapshotImmutable()
 	if err != nil {
 		t.Fatalf("Snapshot: %v", err)
 	}
@@ -919,7 +919,7 @@ func TestSme_AddKnownNodeSuccess(t *testing.T) {
 	}
 
 	for _, w := range wireNodes {
-		nid, err := UnmarshalBinary(w.NodeID)
+		nid, err := ParseNodeID(w.NodeID)
 		if err != nil {
 			t.Fatalf("UnmarshalBinary: %v", err)
 		}
@@ -927,7 +927,7 @@ func TestSme_AddKnownNodeSuccess(t *testing.T) {
 			continue
 		}
 		if nid.Depth() == 1 {
-			node, err2 := DeserializeNodeFromWire(w.Data)
+			node, err2 := deserializeNodeFromWire(w.Data)
 			if err2 != nil {
 				continue
 			}

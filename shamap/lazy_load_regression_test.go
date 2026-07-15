@@ -33,7 +33,7 @@ func llr_buildBacked(t *testing.T, family *memoryFamily, n byte) *SHAMap {
 			t.Fatalf("Put(%d): %v", i, err)
 		}
 	}
-	batch, err := sm.FlushDirty(true)
+	batch, err := sm.FlushDirtyAndRelease()
 	if err != nil {
 		t.Fatalf("FlushDirty: %v", err)
 	}
@@ -74,7 +74,7 @@ func TestFindDifferenceBackedLazyLoad(t *testing.T) {
 		t.Fatalf("FindDifference: %v", err)
 	}
 
-	want := map[Key]bool{modifiedKey: true, addedKey: true}
+	want := map[[32]byte]bool{modifiedKey: true, addedKey: true}
 	if len(keys) != len(want) {
 		t.Fatalf("FindDifference on backed maps: got %d keys, want %d (%x)", len(keys), len(want), keys)
 	}
@@ -123,11 +123,11 @@ func TestSnapshotSharedSubtreeFlushRace(t *testing.T) {
 	}
 
 	// Unbacked snapshot: shares the still-dirty tree with the source.
-	snap, err := sm.Snapshot(false)
+	snap, err := sm.SnapshotImmutable()
 	if err != nil {
 		t.Fatalf("Snapshot: %v", err)
 	}
-	mutable, err := sm.Snapshot(true)
+	mutable, err := sm.SnapshotMutable()
 	if err != nil {
 		t.Fatalf("Snapshot(mutable): %v", err)
 	}
@@ -135,7 +135,7 @@ func TestSnapshotSharedSubtreeFlushRace(t *testing.T) {
 	var wg sync.WaitGroup
 	flush := func(m *SHAMap) {
 		defer wg.Done()
-		if _, err := m.FlushDirty(false); err != nil {
+		if _, err := m.FlushDirty(); err != nil {
 			t.Errorf("FlushDirty: %v", err)
 		}
 	}

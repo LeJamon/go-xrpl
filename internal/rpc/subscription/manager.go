@@ -94,6 +94,7 @@ func (sm *Manager) HandleSubscribe(conn *types.Connection, request types.Subscri
 
 	sm.mu.Lock()
 	defer sm.mu.Unlock()
+	conn.SetAPIVersion(request.ApiVersion)
 
 	// Streams. "rt_transactions" is the deprecated alias rippled keeps around
 	// (Subscribe.cpp:151-156); we fold it into the canonical
@@ -453,10 +454,10 @@ func validateBook(book types.BookRequest, includeTaker bool) *types.RpcError {
 		return types.RpcErrorBadMarket()
 	}
 
-	// Optional taker — an unparseable account is rpcBAD_ISSUER
-	// (Subscribe.cpp:301-305).
+	// Optional taker — an unparseable account is rpcACT_MALFORMED
+	// (rippled 3.2.0 #6529 changed this from rpcBAD_ISSUER, Subscribe.cpp).
 	if includeTaker && book.Taker != "" && !isValidXRPLAddress(book.Taker) {
-		return types.RpcErrorBadIssuer()
+		return types.RpcErrorActMalformed("Account malformed.")
 	}
 
 	// Optional domain (Subscribe.cpp:308-315).
@@ -705,7 +706,7 @@ func (sm *Manager) HandleUnsubscribe(conn *types.Connection, request types.Subsc
 
 // HasStreamSubscriptions reports whether the connection still holds any
 // stream subscription. Account and book subscriptions don't count — this
-// mirrors NetworkOPs::tryRemoveRpcSub, which only scans the stream maps
+// mirrors NetworkOPs::tryRemoveRPCSub, which only scans the stream maps
 // when deciding whether a url subscription's registry entry can be dropped.
 func (sm *Manager) HasStreamSubscriptions(connID string) bool {
 	sm.mu.RLock()
@@ -734,6 +735,12 @@ func (sm *Manager) BroadcastToStream(streamType types.SubscriptionType, data []b
 	deliver(sm.collectStreamTargets(streamType), data)
 }
 
+// BroadcastToStreamVersioned selects the transaction representation recorded
+// by each subscriber's latest subscribe request.
+func (sm *Manager) BroadcastToStreamVersioned(streamType types.SubscriptionType, v1, v2 []byte) {
+	deliverVersioned(sm.collectStreamTargets(streamType), v1, v2)
+}
+
 func (sm *Manager) collectStreamTargets(streamType types.SubscriptionType) []*types.Connection {
 	sm.mu.RLock()
 	defer sm.mu.RUnlock()
@@ -755,10 +762,24 @@ func deliver(targets []*types.Connection, data []byte) {
 	}
 }
 
+func deliverVersioned(targets []*types.Connection, v1, v2 []byte) {
+	for _, c := range targets {
+		data := v2
+		if c.APIVersion() == types.ApiVersion1 {
+			data = v1
+		}
+		c.TrySend(data)
+	}
+}
+
 // BroadcastToAccounts sends a message to every connection subscribed to
 // any of the named accounts on the SubAccounts stream.
 func (sm *Manager) BroadcastToAccounts(data []byte, accounts []string) {
 	deliver(sm.collectAccountTargets(types.SubAccounts, accounts), data)
+}
+
+func (sm *Manager) BroadcastToAccountsVersioned(v1, v2 []byte, accounts []string) {
+	deliverVersioned(sm.collectAccountTargets(types.SubAccounts, accounts), v1, v2)
 }
 
 // BroadcastToAccountsProposed sends a message to accounts_proposed
@@ -767,7 +788,23 @@ func (sm *Manager) BroadcastToAccountsProposed(data []byte, accounts []string) {
 	deliver(sm.collectAccountTargets(types.SubAccountsProposed, accounts), data)
 }
 
+func (sm *Manager) BroadcastToAccountsProposedVersioned(v1, v2 []byte, accounts []string) {
+	deliverVersioned(sm.collectAccountTargets(types.SubAccountsProposed, accounts), v1, v2)
+}
+
+// BroadcastToAcceptedAccountsVersioned unions normal and real-time account
+// listeners so a connection subscribed through both receives one accepted tx.
+func (sm *Manager) BroadcastToAcceptedAccountsVersioned(v1, v2 []byte, accounts []string) {
+	deliverVersioned(sm.collectAccountTargetsForStreams(
+		[]types.SubscriptionType{types.SubAccounts, types.SubAccountsProposed}, accounts,
+	), v1, v2)
+}
+
 func (sm *Manager) collectAccountTargets(stream types.SubscriptionType, accounts []string) []*types.Connection {
+	return sm.collectAccountTargetsForStreams([]types.SubscriptionType{stream}, accounts)
+}
+
+func (sm *Manager) collectAccountTargetsForStreams(streams []types.SubscriptionType, accounts []string) []*types.Connection {
 	if len(accounts) == 0 {
 		return nil
 	}
@@ -782,13 +819,20 @@ func (sm *Manager) collectAccountTargets(stream types.SubscriptionType, accounts
 	}
 	var targets []*types.Connection
 	for _, conn := range sm.Connections {
-		cfg, ok := conn.Subscriptions[stream]
-		if !ok {
-			continue
-		}
-		for _, subAcc := range cfg.Accounts {
-			if accountSet[subAcc] {
-				targets = append(targets, conn)
+		matched := false
+		for _, stream := range streams {
+			cfg, ok := conn.Subscriptions[stream]
+			if !ok {
+				continue
+			}
+			for _, subAcc := range cfg.Accounts {
+				if accountSet[subAcc] {
+					targets = append(targets, conn)
+					matched = true
+					break
+				}
+			}
+			if matched {
 				break
 			}
 		}
@@ -799,13 +843,25 @@ func (sm *Manager) collectAccountTargets(stream types.SubscriptionType, accounts
 // BroadcastToOrderBook sends a message to order book subscribers whose
 // configured TakerGets/TakerPays match the broadcast's currency pair.
 func (sm *Manager) BroadcastToOrderBook(data []byte, takerGets, takerPays types.CurrencySpec) {
-	deliver(sm.collectOrderBookTargets(takerGets, takerPays), data)
+	sm.BroadcastToOrderBooks(data, []types.OrderBookSpec{{TakerGets: takerGets, TakerPays: takerPays}})
 }
 
-func (sm *Manager) collectOrderBookTargets(takerGets, takerPays types.CurrencySpec) []*types.Connection {
+func (sm *Manager) BroadcastToOrderBooks(data []byte, books []types.OrderBookSpec) {
+	deliver(sm.collectOrderBookTargets(books), data)
+}
+
+func (sm *Manager) BroadcastToOrderBookVersioned(v1, v2 []byte, takerGets, takerPays types.CurrencySpec) {
+	sm.BroadcastToOrderBooksVersioned(v1, v2, []types.OrderBookSpec{{TakerGets: takerGets, TakerPays: takerPays}})
+}
+
+func (sm *Manager) BroadcastToOrderBooksVersioned(v1, v2 []byte, books []types.OrderBookSpec) {
+	deliverVersioned(sm.collectOrderBookTargets(books), v1, v2)
+}
+
+func (sm *Manager) collectOrderBookTargets(books []types.OrderBookSpec) []*types.Connection {
 	sm.mu.RLock()
 	defer sm.mu.RUnlock()
-	if len(sm.Connections) == 0 {
+	if len(sm.Connections) == 0 || len(books) == 0 {
 		return nil
 	}
 	var targets []*types.Connection
@@ -821,8 +877,13 @@ func (sm *Manager) collectOrderBookTargets(takerGets, takerPays types.CurrencySp
 		// state collapsed to per-BookRequest storage.
 		matched := false
 		for _, b := range cfg.Books {
-			if types.BookMatchesCurrency(b, takerGets, takerPays) {
-				matched = true
+			for _, book := range books {
+				if types.BookMatches(b, book) {
+					matched = true
+					break
+				}
+			}
+			if matched {
 				break
 			}
 		}
@@ -854,8 +915,8 @@ func (sm *Manager) ConnectionCount() int {
 	return len(sm.Connections)
 }
 
-// GetConnection returns a connection by ID
-func (sm *Manager) GetConnection(connID string) *types.Connection {
+// Connection returns a connection by ID
+func (sm *Manager) Connection(connID string) *types.Connection {
 	sm.mu.RLock()
 	defer sm.mu.RUnlock()
 	return sm.Connections[connID]
@@ -873,10 +934,10 @@ func (sm *Manager) IsSubscribed(connID string, streamType types.SubscriptionType
 	return ok
 }
 
-// GetConnectionSubscriptions returns a copy of the subscriptions for a
+// ConnectionSubscriptions returns a copy of the subscriptions for a
 // connection. A copy (not the live map) so the caller can iterate without
 // holding sm.mu while HandleSubscribe / HandleUnsubscribe mutate the original.
-func (sm *Manager) GetConnectionSubscriptions(connID string) map[types.SubscriptionType]types.SubscriptionConfig {
+func (sm *Manager) ConnectionSubscriptions(connID string) map[types.SubscriptionType]types.SubscriptionConfig {
 	sm.mu.RLock()
 	defer sm.mu.RUnlock()
 	conn := sm.Connections[connID]
@@ -886,8 +947,8 @@ func (sm *Manager) GetConnectionSubscriptions(connID string) map[types.Subscript
 	return maps.Clone(conn.Subscriptions)
 }
 
-// GetSubscribeResponse creates a subscribe confirmation response
-func (sm *Manager) GetSubscribeResponse(ledgerIndex uint32, ledgerHash string, ledgerTime uint32, feeBase uint64, reserveBase uint64, reserveInc uint64) types.SubscribeResponse {
+// SubscribeResponse creates a subscribe confirmation response
+func (sm *Manager) SubscribeResponse(ledgerIndex uint32, ledgerHash string, ledgerTime uint32, feeBase uint64, reserveBase uint64, reserveInc uint64) types.SubscribeResponse {
 	return types.SubscribeResponse{
 		Status:      "success",
 		LedgerIndex: ledgerIndex,

@@ -9,7 +9,6 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/LeJamon/go-xrpl/amendment"
 	txcore "github.com/LeJamon/go-xrpl/internal/tx"
 
 	addresscodec "github.com/LeJamon/go-xrpl/codec/addresscodec"
@@ -22,24 +21,12 @@ import (
 )
 
 // Bounds on the size of a multi-signer array, mirroring rippled
-// STTx::minMultiSigners / STTx::maxMultiSigners. The maximum is amendment-gated:
-// featureExpandedSignerList raises it from 8 to 32.
+// STTx::minMultiSigners / STTx::kMaxMultiSigners. It governs both the regular
+// Signers array and a Batch signer's nested Signers array.
 const (
-	MinMultiSigners    = 1
-	maxSignersBase     = 8
-	maxSignersExpanded = 32
+	MinMultiSigners = 1
+	MaxMultiSigners = 32
 )
-
-// MaxMultiSigners returns the upper bound on a multi-signer array for the given
-// rules: 32 with featureExpandedSignerList enabled, 8 otherwise. It governs both
-// the regular Signers array and a Batch signer's nested Signers array.
-// Reference: rippled STTx::maxMultiSigners.
-func MaxMultiSigners(rules *amendment.Rules) int {
-	if rules != nil && rules.Enabled(amendment.FeatureExpandedSignerList) {
-		return maxSignersExpanded
-	}
-	return maxSignersBase
-}
 
 // Signature verification errors
 var (
@@ -328,6 +315,158 @@ func VerifyMultiSignature(tx txcore.Transaction, lookup SignerListLookup, mustBe
 	return nil
 }
 
+// VerifyMultiSignatureCrypto verifies only the per-signer cryptographic
+// signatures of a multi-signed transaction. Unlike VerifyMultiSignature it does
+// NOT consult the ledger signer list, quorum, or per-signer key authorization —
+// those are view-dependent preclaim checks (rippled Transactor::checkMultiSign).
+// It mirrors rippled STTx::checkMultiSign, which is reached from preflight2 and
+// is crypto-only. The structural rules (bounds, sorted, unique, no self-sign)
+// are enforced separately before this runs, so any error here is preflight2's
+// Validity::SigBad, which the caller maps to temINVALID.
+func VerifyMultiSignatureCrypto(tx txcore.Transaction, mustBeFullyCanonical bool) error {
+	common := tx.GetCommon()
+
+	if !IsMultiSigned(tx) {
+		if common.TxnSignature != "" {
+			return VerifySignature(tx, mustBeFullyCanonical)
+		}
+		return ErrMissingSignature
+	}
+	if len(common.Signers) == 0 {
+		return ErrNoSigners
+	}
+
+	txMap, err := tx.Flatten()
+	if err != nil {
+		return fmt.Errorf("failed to flatten transaction: %w", err)
+	}
+
+	for _, signerWrapper := range common.Signers {
+		signer := signerWrapper.Signer
+		if signer.SigningPubKey == "" {
+			return ErrBadSignature
+		}
+		pubKeyBytes, decErr := hex.DecodeString(signer.SigningPubKey)
+		if decErr != nil || len(pubKeyBytes) == 0 {
+			return ErrBadSignature
+		}
+		signingPayload, encErr := binarycodec.EncodeForMultisigning(copyMap(txMap), signer.Account)
+		if encErr != nil {
+			return fmt.Errorf("failed to encode for multi-signing: %w", encErr)
+		}
+		if !verifySignatureForKey(signingPayload, signer.SigningPubKey, signer.TxnSignature, mustBeFullyCanonical) {
+			return ErrBadSignature
+		}
+	}
+
+	return nil
+}
+
+// counterpartyPrefix labels every error surfaced from the nested
+// CounterpartySignature check, matching rippled's "Counterparty: " prefix.
+const counterpartyPrefix = "Counterparty: "
+
+// VerifyCounterpartySignature cryptographically verifies the nested
+// sfCounterpartySignature object, mirroring rippled STTx::checkSign(sigObject).
+// It runs after the top-level signature passes and is crypto-only: no
+// signer-list or quorum authorization applies, because there is no counterparty
+// account on the ledger to authorize against — this is wire-format groundwork
+// for future multi-role transactions.
+//
+// A single-signed object (non-empty SigningPubKey) is verified against the same
+// signing payload the top-level single signer covers; a multi-signed object
+// (empty SigningPubKey + Signers) has each nested signer verified against the
+// multi-signing payload. Unlike a top-level multi-sign, the counterparty may
+// sign for the transaction's own Account. Every error is prefixed
+// "Counterparty: " to match rippled's messages.
+func VerifyCounterpartySignature(tx txcore.Transaction, cp *txcore.CounterpartySignature, mustBeFullyCanonical bool) error {
+	if cp.SigningPubKey != "" {
+		return verifyCounterpartySingleSign(tx, cp, mustBeFullyCanonical)
+	}
+	return verifyCounterpartyMultiSign(tx, cp, mustBeFullyCanonical)
+}
+
+// verifyCounterpartySingleSign verifies a single-signed counterparty object. A
+// nested Signers array alongside a SigningPubKey means the object is signed two
+// ways and is rejected. Reference: rippled singleSignHelper.
+func verifyCounterpartySingleSign(tx txcore.Transaction, cp *txcore.CounterpartySignature, mustBeFullyCanonical bool) error {
+	if len(cp.Signers) > 0 {
+		return errors.New(counterpartyPrefix + "Cannot both single- and multi-sign.")
+	}
+	payload, err := getSigningPayload(tx)
+	if err != nil {
+		return errors.New(counterpartyPrefix + "Invalid signature.")
+	}
+	if !verifySignatureForKey(payload, cp.SigningPubKey, cp.TxnSignature, mustBeFullyCanonical) {
+		return errors.New(counterpartyPrefix + "Invalid signature.")
+	}
+	return nil
+}
+
+// verifyCounterpartyMultiSign verifies a multi-signed counterparty object. Each
+// nested signer signs the transaction's multi-signing payload suffixed with its
+// own account ID; signers must be sorted by account ID with no duplicates. A
+// direct TxnSignature alongside the Signers array is rejected as signed two
+// ways. Reference: rippled multiSignHelper (txnAccountID unseated, so a signer
+// may equal the transaction Account).
+func verifyCounterpartyMultiSign(tx txcore.Transaction, cp *txcore.CounterpartySignature, mustBeFullyCanonical bool) error {
+	// An empty SigningPubKey with no Signers is neither a single- nor a
+	// multi-signature (rippled multiSignHelper's !isFieldPresent(sfSigners) arm).
+	if len(cp.Signers) == 0 {
+		return errors.New(counterpartyPrefix + "Empty SigningPubKey.")
+	}
+	if cp.TxnSignature != "" {
+		return errors.New(counterpartyPrefix + "Cannot both single- and multi-sign.")
+	}
+	if len(cp.Signers) > MaxMultiSigners {
+		return errors.New(counterpartyPrefix + "Invalid Signers array size.")
+	}
+
+	txMap, err := tx.Flatten()
+	if err != nil {
+		return errors.New(counterpartyPrefix + "Invalid signature.")
+	}
+
+	var lastAccountID [20]byte
+	for _, sw := range cp.Signers {
+		signer := sw.Signer
+		accountID, decErr := state.DecodeAccountID(signer.Account)
+		if decErr != nil {
+			return fmt.Errorf("%sInvalid signature on account %s.", counterpartyPrefix, signer.Account)
+		}
+		if lastAccountID == accountID {
+			return errors.New(counterpartyPrefix + "Duplicate Signers not allowed.")
+		}
+		if bytes.Compare(lastAccountID[:], accountID[:]) > 0 {
+			return errors.New(counterpartyPrefix + "Unsorted Signers array.")
+		}
+		lastAccountID = accountID
+
+		payload, encErr := binarycodec.EncodeForMultisigning(copyMap(txMap), signer.Account)
+		if encErr != nil {
+			return fmt.Errorf("%sInvalid signature on account %s.", counterpartyPrefix, signer.Account)
+		}
+		if !verifySignatureForKey(payload, signer.SigningPubKey, signer.TxnSignature, mustBeFullyCanonical) {
+			return fmt.Errorf("%sInvalid signature on account %s.", counterpartyPrefix, signer.Account)
+		}
+	}
+	return nil
+}
+
+// SignCounterparty produces a single-signed CounterpartySignature over the
+// transaction's signing payload — the same payload the top-level signer covers
+// (rippled STTx::sign with a signatureTarget writes into the nested object).
+// The transaction must already carry the top-level SigningPubKey the primary
+// signer used, since that key is part of the signed data. pubKeyHex is the
+// counterparty's public key, placed in the returned object.
+func SignCounterparty(tx txcore.Transaction, pubKeyHex, privateKeyHex string) (*txcore.CounterpartySignature, error) {
+	sig, err := SignTransaction(tx, privateKeyHex)
+	if err != nil {
+		return nil, err
+	}
+	return &txcore.CounterpartySignature{SigningPubKey: pubKeyHex, TxnSignature: sig}, nil
+}
+
 // copyMap creates a shallow copy of a map to avoid modifying the original
 func copyMap(m map[string]any) map[string]any {
 	result := make(map[string]any, len(m))
@@ -376,12 +515,12 @@ func verifySignatureForKey(messageHex, pubKeyHex, signatureHex string, mustBeFul
 	switch keyType {
 	case 0xED:
 		// ED25519
-		algo := ed25519.ED25519()
+		algo := ed25519.Algorithm{}
 		return algo.Validate(msgStr, pubKeyHex, signatureHex)
 
 	case 0x02, 0x03:
 		// SECP256K1 (compressed public key)
-		algo := secp256k1.SECP256K1()
+		algo := secp256k1.Algorithm{}
 		return algo.ValidateWithCanonicality(msgStr, pubKeyHex, signatureHex, mustBeFullyCanonical)
 
 	default:
@@ -421,7 +560,7 @@ func SignTransaction(tx txcore.Transaction, privateKeyHex string) (string, error
 	switch keyType {
 	case 0xED:
 		// ED25519
-		algo := ed25519.ED25519()
+		algo := ed25519.Algorithm{}
 		signature, err = algo.Sign(msgStr, privateKeyHex)
 		if err != nil {
 			return "", fmt.Errorf("ED25519 signing failed: %w", err)
@@ -429,7 +568,7 @@ func SignTransaction(tx txcore.Transaction, privateKeyHex string) (string, error
 
 	case 0x00:
 		// SECP256K1
-		algo := secp256k1.SECP256K1()
+		algo := secp256k1.Algorithm{}
 		signature, err = algo.Sign(msgStr, privateKeyHex)
 		if err != nil {
 			return "", fmt.Errorf("SECP256K1 signing failed: %w", err)
@@ -488,7 +627,7 @@ func SignTransactionForMultiSign(tx txcore.Transaction, signerAccount string, pr
 	switch keyType {
 	case 0xED:
 		// ED25519
-		algo := ed25519.ED25519()
+		algo := ed25519.Algorithm{}
 		signature, err = algo.Sign(msgStr, privateKeyHex)
 		if err != nil {
 			return "", fmt.Errorf("ED25519 signing failed: %w", err)
@@ -496,7 +635,7 @@ func SignTransactionForMultiSign(tx txcore.Transaction, signerAccount string, pr
 
 	case 0x00:
 		// SECP256K1
-		algo := secp256k1.SECP256K1()
+		algo := secp256k1.Algorithm{}
 		signature, err = algo.Sign(msgStr, privateKeyHex)
 		if err != nil {
 			return "", fmt.Errorf("SECP256K1 signing failed: %w", err)

@@ -19,11 +19,17 @@ type ProofPath struct {
 // The path consists of serialized nodes from leaf to root.
 // Returns nil if the key does not exist in the map.
 func (sm *SHAMap) GetProofPath(key [32]byte) (*ProofPath, error) {
+	return sm.GetProofPathContext(context.Background(), key)
+}
+
+// GetProofPathContext returns a proof while forwarding ctx to lazy storage
+// fetches.
+func (sm *SHAMap) GetProofPathContext(ctx context.Context, key [32]byte) (*ProofPath, error) {
 	sm.mu.RLock()
 	defer sm.mu.RUnlock()
 
 	stack := newNodeStack()
-	leaf, err := sm.walkToKey(context.Background(), key, stack, true)
+	leaf, err := sm.walkToKey(ctx, key, stack, true)
 	if err != nil {
 		return nil, err
 	}
@@ -106,7 +112,7 @@ func VerifyProofPathWithValue(rootHash [32]byte, key [32]byte, path [][]byte) []
 
 		// Deserialize the node from wire format
 		// This may fail if the data is malformed (e.g., from network)
-		node, err := DeserializeNodeFromWire(nodeData)
+		node, err := deserializeNodeFromWire(nodeData)
 		if err != nil {
 			return nil
 		}

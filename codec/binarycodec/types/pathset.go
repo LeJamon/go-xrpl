@@ -1,8 +1,10 @@
 package types
 
 import (
+	"encoding/hex"
 	"errors"
 	"fmt"
+	"strings"
 
 	addresscodec "github.com/LeJamon/go-xrpl/codec/addresscodec"
 	"github.com/LeJamon/go-xrpl/codec/binarycodec/serdes"
@@ -12,9 +14,10 @@ const (
 	typeAccount  = 0x01
 	typeCurrency = 0x10
 	typeIssuer   = 0x20
+	typeMPT      = 0x40
 	// typeAll is the union of the legal path-step type bits. rippled rejects any
 	// step byte carrying a bit outside this set (STPathSet.cpp:84).
-	typeAll = typeAccount | typeCurrency | typeIssuer
+	typeAll = typeAccount | typeCurrency | typeIssuer | typeMPT
 
 	pathsetEndByte    = 0x00
 	pathSeparatorByte = 0xFF
@@ -31,7 +34,9 @@ func serializePathCurrency(currency string) ([]byte, error) {
 
 // PathSet is the binary codec for the PathSet field type — the set of payment
 // paths carried by a Payment transaction.
-type PathSet struct{}
+type PathSet struct {
+	skipJSONArrayLimit bool
+}
 
 // ErrInvalidPathSet is an error that's thrown when an invalid path set is provided.
 var ErrInvalidPathSet = errors.New("invalid path set: expected [][]any")
@@ -44,6 +49,11 @@ var ErrEmptyPath = errors.New("empty path")
 // (STPathSet.cpp:88): a step byte carrying a type bit outside typeAll.
 var ErrBadPathElement = errors.New("bad path element")
 
+// ErrBadPathElementMPTCurrency mirrors rippled's reject of a step carrying both
+// the currency and MPT type bits (STPathSet.cpp:95-96) — a path asset is either
+// a currency or an MPT, never both.
+var ErrBadPathElementMPTCurrency = errors.New("bad path element: MPT and Currency")
+
 // FromJSON attempts to serialize a path set from a JSON representation of a slice of paths to a byte array.
 // It returns the byte array representation of the path set, or an error if the provided json does not represent a valid path set.
 func (p PathSet) FromJSON(json any) ([]byte, error) {
@@ -53,6 +63,16 @@ func (p PathSet) FromJSON(json any) ([]byte, error) {
 	}
 	if _, ok := outer[0].([]any); !ok {
 		return nil, ErrInvalidPathSet
+	}
+
+	// rippled caps each inner path (STI_PATHSET) at maxSTParsedJSONArraySize as
+	// well as the outer array; the outer array is capped by checkJSONArraySize.
+	if !p.skipJSONArrayLimit {
+		for i, path := range outer {
+			if inner, ok := path.([]any); ok && len(inner) > MaxJSONArrayElements {
+				return nil, &JSONArrayTooLargeError{Field: fmt.Sprintf("Paths[%d]", i)}
+			}
+		}
 	}
 
 	if !isPathSet(outer) {
@@ -118,6 +138,9 @@ func annotateStepType(step map[string]any) {
 	if _, ok := step["currency"]; ok {
 		stepType |= typeCurrency
 	}
+	if _, ok := step["mpt_issuance_id"]; ok {
+		stepType |= typeMPT
+	}
 	if _, ok := step["issuer"]; ok {
 		stepType |= typeIssuer
 	}
@@ -146,20 +169,27 @@ func isPathSet(v []any) bool {
 }
 
 // isPathStep determines if a map represents a valid path step.
-// It checks if any of the keys "account", "currency" or "issuer" are present in the map.
+// It checks if any of the keys "account", "currency", "mpt_issuance_id" or
+// "issuer" are present in the map.
 func isPathStep(v map[string]any) bool {
-	return v["account"] != nil || v["currency"] != nil || v["issuer"] != nil
+	return v["account"] != nil || v["currency"] != nil || v["mpt_issuance_id"] != nil || v["issuer"] != nil
 }
 
 // pathStepMaxLen is the upper bound for a single serialized path step:
-// 1 type byte + 20 bytes account + 20 bytes currency + 20 bytes issuer.
-const pathStepMaxLen = 1 + 20 + 20 + 20
+// 1 type byte + 20 bytes account + 24 bytes MPT issuance id + 20 bytes issuer.
+// The MPT id (192 bits) and currency (160 bits) are mutually exclusive, so the
+// larger MPT width bounds the step.
+const pathStepMaxLen = 1 + 20 + 24 + 20
 
 // newPathStep creates a path step from a map representation.
 // It generates a byte array representation of the path step, encoding account, currency, and issuer information as appropriate.
 func newPathStep(v map[string]any) ([]byte, error) {
 	out := make([]byte, 1, pathStepMaxLen)
 	dataType := 0x00
+
+	if v["currency"] != nil && v["mpt_issuance_id"] != nil {
+		return nil, ErrBadPathElementMPTCurrency
+	}
 
 	if v["account"] != nil {
 		addr, ok := v["account"].(string)
@@ -172,6 +202,21 @@ func newPathStep(v map[string]any) ([]byte, error) {
 		}
 		out = append(out, account...)
 		dataType |= typeAccount
+	}
+	if v["mpt_issuance_id"] != nil {
+		id, ok := v["mpt_issuance_id"].(string)
+		if !ok {
+			return nil, errors.New("path step: mpt_issuance_id is not a string")
+		}
+		mptID, err := hex.DecodeString(id)
+		if err != nil {
+			return nil, fmt.Errorf("path step: mpt_issuance_id %q: %w", id, err)
+		}
+		if len(mptID) != MPTIssuanceIDByteLength {
+			return nil, fmt.Errorf("path step: mpt_issuance_id %q: %w", id, ErrBadPathElement)
+		}
+		out = append(out, mptID...)
+		dataType |= typeMPT
 	}
 	if v["currency"] != nil {
 		curr, ok := v["currency"].(string)
@@ -255,40 +300,54 @@ func parsePathStep(parser *serdes.BinaryParser, dataType byte) (map[string]any, 
 	if dataType&^byte(typeAll) != 0 {
 		return nil, ErrBadPathElement
 	}
+	// A path asset is a currency or an MPT, never both (STPathSet.cpp:95-96).
+	if dataType&typeCurrency != 0 && dataType&typeMPT != 0 {
+		return nil, ErrBadPathElementMPTCurrency
+	}
 
 	step := make(map[string]any)
 
-	operations := []struct {
-		typeKey byte
-		key     string
-	}{
-		{typeAccount, "account"},
-		{typeCurrency, "currency"},
-		{typeIssuer, "issuer"},
-	}
-
-	for _, op := range operations {
-		if dataType&op.typeKey != 0 {
-			bytes, err := parser.ReadBytes(20) // AccountID or Currency size
-			if err != nil {
-				return nil, err
-			}
-
-			if op.typeKey == typeCurrency {
-				value, err := deserializeCurrencyCode(bytes)
-				if err != nil {
-					return nil, err
-				}
-				step[op.key] = value
-			} else {
-				value, err := addresscodec.Encode(bytes, []byte{addresscodec.AccountAddressPrefix}, addresscodec.AccountAddressLength)
-				if err != nil {
-					return nil, err
-				}
-				step[op.key] = value
-			}
+	if dataType&typeAccount != 0 {
+		account, err := readAccountID(parser)
+		if err != nil {
+			return nil, err
 		}
+		step["account"] = account
+	}
+	if dataType&typeCurrency != 0 {
+		bytes, err := parser.ReadBytes(20)
+		if err != nil {
+			return nil, err
+		}
+		value, err := deserializeCurrencyCode(bytes)
+		if err != nil {
+			return nil, err
+		}
+		step["currency"] = value
+	}
+	if dataType&typeMPT != 0 {
+		bytes, err := parser.ReadBytes(MPTIssuanceIDByteLength)
+		if err != nil {
+			return nil, err
+		}
+		step["mpt_issuance_id"] = strings.ToUpper(hex.EncodeToString(bytes))
+	}
+	if dataType&typeIssuer != 0 {
+		issuer, err := readAccountID(parser)
+		if err != nil {
+			return nil, err
+		}
+		step["issuer"] = issuer
 	}
 
 	return step, nil
+}
+
+// readAccountID reads a 20-byte account id and encodes it as a classic address.
+func readAccountID(parser *serdes.BinaryParser) (string, error) {
+	bytes, err := parser.ReadBytes(20)
+	if err != nil {
+		return "", err
+	}
+	return addresscodec.Encode(bytes, []byte{addresscodec.AccountAddressPrefix}, addresscodec.AccountAddressLength)
 }

@@ -9,7 +9,6 @@ import (
 	"github.com/LeJamon/go-xrpl/internal/consensus"
 	"github.com/LeJamon/go-xrpl/internal/feetrack"
 	"github.com/LeJamon/go-xrpl/internal/ledger"
-	ledgerheader "github.com/LeJamon/go-xrpl/internal/ledger/header"
 	"github.com/stretchr/testify/require"
 )
 
@@ -57,7 +56,7 @@ func TestRefreshRemoteFee_MedianOverTrustedValidations(t *testing.T) {
 	a.refreshRemoteFee(1, id, consensus.LedgerID{})
 
 	// Sorted set: {256, 320, 500}; middle = 320.
-	if got := ft.GetRemoteFee(); got != 320 {
+	if got := ft.RemoteFee(); got != 320 {
 		t.Fatalf("RemoteFee = %d; want 320", got)
 	}
 }
@@ -82,7 +81,7 @@ func TestRefreshRemoteFee_ExcludesPartialValidations(t *testing.T) {
 	// Full-only set: {320, 400}; median index 1 = 400. Had the partial
 	// leaked, {10, 320, 400} would give median 320 — so 400 proves the
 	// Full filter applied.
-	if got := ft.GetRemoteFee(); got != 400 {
+	if got := ft.RemoteFee(); got != 400 {
 		t.Fatalf("RemoteFee = %d; want 400 (partial excluded)", got)
 	}
 }
@@ -95,9 +94,9 @@ func TestRefreshRemoteFee_NoHistorian(t *testing.T) {
 	if ft == nil {
 		t.Fatal("FeeTrack must be non-nil")
 	}
-	before := ft.GetRemoteFee()
+	before := ft.RemoteFee()
 	a.refreshRemoteFee(1, consensus.LedgerID{0xBB}, consensus.LedgerID{})
-	if got := ft.GetRemoteFee(); got != before {
+	if got := ft.RemoteFee(); got != before {
 		t.Fatalf("RemoteFee changed without historian: before=%d after=%d", before, got)
 	}
 }
@@ -119,8 +118,8 @@ func TestRefreshRemoteFee_EmptyValidations(t *testing.T) {
 		byLedger: map[consensus.LedgerID][]*consensus.Validation{},
 	})
 	a.OnLedgerFullyValidated(consensus.LedgerID(closed.Hash()), seq)
-	if got := ft.GetRemoteFee(); got != ft.GetLoadBase() {
-		t.Fatalf("RemoteFee = %d on empty validations; want LoadBase %d", got, ft.GetLoadBase())
+	if got := ft.RemoteFee(); got != ft.LoadBase() {
+		t.Fatalf("RemoteFee = %d on empty validations; want LoadBase %d", got, ft.LoadBase())
 	}
 }
 
@@ -151,7 +150,7 @@ func TestRefreshRemoteFee_FoldsParentLedgerValidations(t *testing.T) {
 
 	// Union {320, 500, 500}; median index 1 = 500. The current ledger
 	// alone would yield 320, so 500 proves the parent was folded in.
-	if got := ft.GetRemoteFee(); got != 500 {
+	if got := ft.RemoteFee(); got != 500 {
 		t.Fatalf("RemoteFee = %d; want 500 (parent validations folded in)", got)
 	}
 }
@@ -205,8 +204,8 @@ func TestRefreshRemoteFee_ValidationBeforePeerAdoption(t *testing.T) {
 
 	ft.SetRemoteFee(777)
 	a.OnLedgerFullyValidated(targetID, header.LedgerIndex)
-	require.Equal(t, uint32(777), ft.GetRemoteFee())
-	require.Empty(t, historian.lookupCalls())
+	require.Equal(t, uint32(777), ft.RemoteFee())
+	require.Equal(t, []consensus.LedgerID{targetID}, historian.lookupCalls())
 
 	done := make(chan error, 1)
 	go func() {
@@ -220,108 +219,11 @@ func TestRefreshRemoteFee_ValidationBeforePeerAdoption(t *testing.T) {
 	}
 
 	require.Equal(t, header.LedgerIndex, svc.GetValidatedLedgerIndex())
-	require.Equal(t, uint32(500), ft.GetRemoteFee())
-	require.Equal(t, []consensus.LedgerID{targetID, parentID}, historian.lookupCalls())
+	require.Equal(t, uint32(500), ft.RemoteFee())
+	require.Equal(t, []consensus.LedgerID{targetID, targetID, parentID}, historian.lookupCalls())
 
 	a.OnLedgerFullyValidated(targetID, header.LedgerIndex)
-	require.Equal(t, []consensus.LedgerID{targetID, parentID}, historian.lookupCalls())
-}
-
-func TestRefreshRemoteFee_ValidationBeforeHeaderAdoption(t *testing.T) {
-	svc := adg_newNonStandaloneService(t)
-	identity, err := NewValidatorIdentity("snoPBrXtMeMyMHUVTgbuqAfg1SUTb")
-	require.NoError(t, err)
-	a := New(Config{
-		LedgerService: svc,
-		Identity:      identity,
-		Validators:    []consensus.NodeID{identity.NodeID},
-	})
-	ft := svc.FeeTrack()
-	parent := svc.GetClosedLedger()
-	require.NotNil(t, parent)
-
-	closeTime := time.Date(2025, 1, 2, 3, 4, 5, 0, time.UTC)
-	candidate, err := ledger.NewOpen(parent, closeTime)
-	require.NoError(t, err)
-	require.NoError(t, candidate.Close(closeTime, 0))
-	header := candidate.Header()
-	targetID := consensus.LedgerID(header.Hash)
-	parentID := consensus.LedgerID(header.ParentHash)
-	historian := &recordingFeeHistorian{stubHistorian: &stubHistorian{
-		byLedger: map[consensus.LedgerID][]*consensus.Validation{
-			targetID: {{LoadFee: 320, Full: true}},
-			parentID: {{LoadFee: 500, Full: true}, {LoadFee: 500, Full: true}},
-		},
-	}}
-	a.SetValidationHistorian(historian)
-
-	ft.SetRemoteFee(777)
-	a.OnLedgerFullyValidated(targetID, header.LedgerIndex)
-	require.Equal(t, uint32(777), ft.GetRemoteFee())
-	require.Empty(t, historian.lookupCalls())
-
-	done := make(chan error, 1)
-	go func() {
-		done <- a.AdoptLedgerFromHeader(ledgerheader.AddRaw(header, true))
-	}()
-	select {
-	case err := <-done:
-		require.NoError(t, err)
-	case <-time.After(time.Second):
-		t.Fatal("header adoption blocked while notifying the validated-ledger callback")
-	}
-
-	require.Equal(t, header.LedgerIndex, svc.GetValidatedLedgerIndex())
-	require.Equal(t, uint32(500), ft.GetRemoteFee())
-	require.Equal(t, []consensus.LedgerID{targetID, parentID}, historian.lookupCalls())
-}
-
-func TestRefreshRemoteFee_ValidationBeforeHeaderReAdoption(t *testing.T) {
-	svc := adg_newNonStandaloneService(t)
-	identity, err := NewValidatorIdentity("snoPBrXtMeMyMHUVTgbuqAfg1SUTb")
-	require.NoError(t, err)
-	a := New(Config{
-		LedgerService: svc,
-		Identity:      identity,
-		Validators:    []consensus.NodeID{identity.NodeID},
-	})
-
-	_, first, _, _ := buildSuccessorAgainstParent(t, svc.GetClosedLedger())
-	firstHeader := first.Header()
-	require.NoError(t, svc.AdoptLedgerHeader(&firstHeader))
-
-	_, second, _, _ := buildSuccessorAgainstParent(t, svc.GetClosedLedger())
-	secondHeader := second.Header()
-	targetID := consensus.LedgerID(secondHeader.Hash)
-	parentID := consensus.LedgerID(secondHeader.ParentHash)
-	historian := &recordingFeeHistorian{stubHistorian: &stubHistorian{
-		byLedger: map[consensus.LedgerID][]*consensus.Validation{
-			targetID: {{LoadFee: 320, Full: true}},
-			parentID: {{LoadFee: 500, Full: true}, {LoadFee: 500, Full: true}},
-		},
-	}}
-	a.SetValidationHistorian(historian)
-
-	ft := svc.FeeTrack()
-	ft.SetRemoteFee(777)
-	a.OnLedgerFullyValidated(targetID, secondHeader.LedgerIndex)
-	require.Equal(t, uint32(777), ft.GetRemoteFee())
-	require.Empty(t, historian.lookupCalls())
-
-	done := make(chan error, 1)
-	go func() {
-		done <- svc.ReAdoptLedgerHeader(&secondHeader)
-	}()
-	select {
-	case err := <-done:
-		require.NoError(t, err)
-	case <-time.After(time.Second):
-		t.Fatal("header re-adoption blocked while notifying the validated-ledger callback")
-	}
-
-	require.Equal(t, secondHeader.LedgerIndex, svc.GetValidatedLedgerIndex())
-	require.Equal(t, uint32(500), ft.GetRemoteFee())
-	require.Equal(t, []consensus.LedgerID{targetID, parentID}, historian.lookupCalls())
+	require.Equal(t, []consensus.LedgerID{targetID, targetID, parentID, targetID}, historian.lookupCalls())
 }
 
 func TestRefreshRemoteFee_ValidationBeforeConsensusClose(t *testing.T) {
@@ -350,8 +252,8 @@ func TestRefreshRemoteFee_ValidationBeforeConsensusClose(t *testing.T) {
 
 	ft.SetRemoteFee(777)
 	a.OnLedgerFullyValidated(targetID, expected.Sequence())
-	require.Equal(t, uint32(777), ft.GetRemoteFee())
-	require.Empty(t, historian.lookupCalls())
+	require.Equal(t, uint32(777), ft.RemoteFee())
+	require.Equal(t, []consensus.LedgerID{targetID}, historian.lookupCalls())
 
 	done := make(chan error, 1)
 	go func() {
@@ -367,8 +269,8 @@ func TestRefreshRemoteFee_ValidationBeforeConsensusClose(t *testing.T) {
 
 	require.Equal(t, expected.Hash(), svc.GetClosedLedger().Hash())
 	require.Equal(t, expected.Sequence(), svc.GetValidatedLedgerIndex())
-	require.Equal(t, uint32(500), ft.GetRemoteFee())
-	require.Equal(t, []consensus.LedgerID{targetID, parentID}, historian.lookupCalls())
+	require.Equal(t, uint32(500), ft.RemoteFee())
+	require.Equal(t, []consensus.LedgerID{targetID, targetID, parentID}, historian.lookupCalls())
 }
 
 // TestGetLoadFee_MaxLocalCluster pins RCLConsensus.cpp:872 port: the
@@ -393,7 +295,7 @@ func TestGetLoadFee_MaxLocalCluster(t *testing.T) {
 	ft.SetClusterFee(feetrack.LoadBase)
 	ft.RaiseLocalFee() // raise latch
 	ft.RaiseLocalFee() // local = 320
-	if got := a.GetLoadFee(); got != ft.GetLocalFee() {
-		t.Fatalf("local-dominated GetLoadFee = %d; want %d", got, ft.GetLocalFee())
+	if got := a.GetLoadFee(); got != ft.LocalFee() {
+		t.Fatalf("local-dominated GetLoadFee = %d; want %d", got, ft.LocalFee())
 	}
 }

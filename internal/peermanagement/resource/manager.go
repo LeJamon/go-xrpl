@@ -71,8 +71,10 @@ type Manager struct {
 	entries map[key]*entry
 	imports map[string]*importRecord
 
-	stop chan struct{}
-	wg   sync.WaitGroup
+	stop     chan struct{}
+	stopped  bool
+	wg       sync.WaitGroup
+	stopOnce sync.Once
 }
 
 // NewManager returns a Manager that uses now() for its clock. If clock
@@ -98,41 +100,37 @@ func NewManager(clock Clock, journal *slog.Logger) *Manager {
 // called for clean shutdown.
 func (m *Manager) Start() {
 	m.mu.Lock()
-	if m.stop != nil {
+	if m.stopped || m.stop != nil {
 		m.mu.Unlock()
 		return
 	}
-	m.stop = make(chan struct{})
-	m.mu.Unlock()
-
+	stop := make(chan struct{})
+	m.stop = stop
 	m.wg.Add(1)
-	go m.run()
-}
-
-// Stop signals the periodic-activity goroutine to exit and blocks until it has.
-func (m *Manager) Stop() {
-	m.mu.Lock()
-	stop := m.stop
-	m.stop = nil
 	m.mu.Unlock()
-	if stop == nil {
-		return
-	}
-	close(stop)
-	m.wg.Wait()
+
+	go m.run(stop)
 }
 
-func (m *Manager) run() {
+// Stop permanently stops periodic activity and blocks until its goroutine exits.
+func (m *Manager) Stop() {
+	m.stopOnce.Do(func() {
+		m.mu.Lock()
+		m.stopped = true
+		stop := m.stop
+		m.mu.Unlock()
+		if stop != nil {
+			close(stop)
+		}
+		m.wg.Wait()
+	})
+}
+
+func (m *Manager) run(stop <-chan struct{}) {
 	defer m.wg.Done()
 	ticker := time.NewTicker(time.Second)
 	defer ticker.Stop()
 	for {
-		m.mu.Lock()
-		stop := m.stop
-		m.mu.Unlock()
-		if stop == nil {
-			return
-		}
 		select {
 		case <-stop:
 			return

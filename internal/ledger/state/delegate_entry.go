@@ -4,20 +4,26 @@ import (
 	"encoding/hex"
 	"fmt"
 	"slices"
+	"strconv"
 	"strings"
 
 	addresscodec "github.com/LeJamon/go-xrpl/codec/addresscodec"
-	binarycodec "github.com/LeJamon/go-xrpl/codec/binarycodec"
 	"github.com/LeJamon/go-xrpl/codec/binarycodec/definitions"
+	"github.com/LeJamon/go-xrpl/internal/tx/ledgerfields"
 )
 
 // DelegateData holds parsed fields from a Delegate ledger entry.
 // Reference: rippled ledger_entries.macro ltDELEGATE
 type DelegateData struct {
-	Account     [20]byte // Account that granted the delegation
-	Authorize   [20]byte // Account that received the delegation
-	OwnerNode   uint64
-	Permissions []uint32 // Permission values (txType+1 or granular permission)
+	Account   [20]byte // Account that granted the delegation
+	Authorize [20]byte // Account that received the delegation
+	OwnerNode uint64
+	// DestinationNode is the page of the entry in the authorized account's owner
+	// directory. Optional: only present on entries created once the Delegate
+	// object is linked into both accounts' directories.
+	DestinationNode    uint64
+	HasDestinationNode bool
+	Permissions        []uint32 // Permission values (txType+1 or granular permission)
 	// Round-trips so a no-op modify re-serializes byte-identically and the apply
 	// layer's unchanged-entry guard prunes it (ApplyStateTable.cpp:154-157).
 	PreviousTxnID     [32]byte
@@ -28,77 +34,96 @@ type DelegateData struct {
 // Extracts Account, Authorize, OwnerNode, and the Permissions array.
 // Reference: rippled DelegateUtils.cpp — sfPermissions array with sfPermissionValue fields
 func ParseDelegate(data []byte) (*DelegateData, error) {
-	entry := &DelegateData{}
-
-	err := WalkFields(data, func(f Field) error {
-		switch f.TypeCode {
-		case stUInt32:
-			if f.FieldCode == 5 { // PreviousTxnLgrSeq
-				entry.PreviousTxnLgrSeq = f.UInt32()
-			}
-		case stUInt64:
-			if f.FieldCode == 4 { // OwnerNode
-				entry.OwnerNode = f.UInt64()
-			}
-		case stHash256:
-			if f.FieldCode == 5 { // PreviousTxnID
-				entry.PreviousTxnID = f.Hash256()
-			}
-		case stAccountID:
-			switch f.FieldCode {
-			case 1: // Account
-				if id, ok := f.AccountID(); ok {
-					entry.Account = id
-				}
-			case 5: // Authorize
-				if id, ok := f.AccountID(); ok {
-					entry.Authorize = id
-				}
-			}
-		case stArray:
-			if f.FieldCode == 29 { // Permissions
-				perms, err := parseDelegatePermissions(f.Value)
-				if err != nil {
-					return err
-				}
-				entry.Permissions = perms
-			}
-		}
-		return nil
-	})
-	if err != nil {
+	var decoded ledgerfields.Delegate
+	if err := decoded.Decode(data); err != nil {
 		return nil, fmt.Errorf("failed to decode Delegate: %w", err)
+	}
+	fields := decoded.ToMap()
+	entry := &DelegateData{
+		HasDestinationNode: fields["DestinationNode"] != nil,
+		PreviousTxnLgrSeq:  decoded.PreviousTxnLgrSeq,
+	}
+
+	var err error
+	if _, ok := fields["Account"]; ok {
+		entry.Account, err = decodeLedgerAccount("Delegate.Account", decoded.Account)
+		if err != nil {
+			return nil, err
+		}
+	}
+	if _, ok := fields["Authorize"]; ok {
+		entry.Authorize, err = decodeLedgerAccount("Delegate.Authorize", decoded.Authorize)
+		if err != nil {
+			return nil, err
+		}
+	}
+	if _, ok := fields["OwnerNode"]; ok {
+		entry.OwnerNode, err = parseLedgerUint64("Delegate.OwnerNode", decoded.OwnerNode)
+		if err != nil {
+			return nil, err
+		}
+	}
+	if entry.HasDestinationNode {
+		entry.DestinationNode, err = parseLedgerUint64("Delegate.DestinationNode", decoded.DestinationNode)
+		if err != nil {
+			return nil, err
+		}
+	}
+	if _, ok := fields["PreviousTxnID"]; ok {
+		if err := decodeLedgerHex("Delegate.PreviousTxnID", decoded.PreviousTxnID, entry.PreviousTxnID[:]); err != nil {
+			return nil, err
+		}
+	}
+	entry.Permissions, err = decodeDelegatePermissions(decoded.Permissions)
+	if err != nil {
+		return nil, err
 	}
 
 	return entry, nil
 }
 
-// parseDelegatePermissions decodes the Permissions STArray content; each element
-// is a Permission STObject carrying a UInt32 PermissionValue. Zero values are
-// skipped.
-func parseDelegatePermissions(content []byte) ([]uint32, error) {
+func decodeDelegatePermissions(values []any) ([]uint32, error) {
 	var perms []uint32
-	err := WalkFields(content, func(elem Field) error {
-		if elem.TypeCode != stObject || elem.FieldCode != 15 { // Permission
-			return nil
+	for i, value := range values {
+		wrapper, ok := value.(map[string]any)
+		if !ok {
+			return nil, fmt.Errorf("Delegate.Permissions[%d]: expected object, got %T", i, value)
 		}
-		return WalkFields(elem.Value, func(inner Field) error {
-			if inner.TypeCode == stUInt32 && inner.FieldCode == 52 { // PermissionValue
-				if v := inner.UInt32(); v > 0 {
-					perms = append(perms, v)
-				}
-			}
-			return nil
-		})
-	})
-	return perms, err
+		value, ok = wrapper["Permission"]
+		if !ok {
+			continue
+		}
+		permission, ok := value.(map[string]any)
+		if !ok {
+			return nil, fmt.Errorf("Delegate.Permissions[%d].Permission: expected object, got %T", i, value)
+		}
+		value, ok = permission["PermissionValue"]
+		if !ok {
+			continue
+		}
+		var permissionValue uint32
+		switch value := value.(type) {
+		case string:
+			permissionValue = LookupPermissionValue(value)
+		case uint32:
+			permissionValue = value
+		default:
+			return nil, fmt.Errorf("Delegate.Permissions[%d].Permission.PermissionValue: expected string, got %T", i, value)
+		}
+		if permissionValue > 0 {
+			perms = append(perms, permissionValue)
+		}
+	}
+	return perms, nil
 }
 
 // SerializeDelegate serializes a Delegate ledger entry. prevTxnID/prevTxnLgrSeq
 // are the threading pointers carried over from an existing entry on the modify
 // path; pass the zero hash on create (the apply layer stamps them afterward).
+// destinationNode is the (optional) page in the authorized account's owner
+// directory; pass nil to omit the field, matching its soeOPTIONAL status.
 // Reference: rippled DelegateSet.cpp doApply()
-func SerializeDelegate(account, authorize [20]byte, permissions []uint32, ownerNode uint64, prevTxnID [32]byte, prevTxnLgrSeq uint32) ([]byte, error) {
+func SerializeDelegate(account, authorize [20]byte, permissions []uint32, ownerNode uint64, destinationNode *uint64, prevTxnID [32]byte, prevTxnLgrSeq uint32) ([]byte, error) {
 	accountAddr, err := addresscodec.EncodeAccountIDToClassicAddress(account[:])
 	if err != nil {
 		return nil, fmt.Errorf("failed to encode account address: %w", err)
@@ -109,7 +134,7 @@ func SerializeDelegate(account, authorize [20]byte, permissions []uint32, ownerN
 	}
 
 	// Build Permissions array
-	permsArray := make([]map[string]any, len(permissions))
+	permsArray := make([]any, len(permissions))
 	for i, pv := range permissions {
 		permsArray[i] = map[string]any{
 			"Permission": map[string]any{
@@ -118,28 +143,29 @@ func SerializeDelegate(account, authorize [20]byte, permissions []uint32, ownerN
 		}
 	}
 
-	jsonObj := map[string]any{
-		"LedgerEntryType": "Delegate",
-		"Account":         accountAddr,
-		"Authorize":       authorizeAddr,
-		"Permissions":     permsArray,
-		"OwnerNode":       fmt.Sprintf("%X", ownerNode),
-		"Flags":           uint32(0),
+	entry := &ledgerfields.Delegate{}
+	entry.SetAccount(accountAddr)
+	entry.SetAuthorize(authorizeAddr)
+	entry.SetPermissions(permsArray)
+	entry.SetOwnerNode(fmt.Sprintf("%X", ownerNode))
+	entry.SetFlags(0)
+
+	if destinationNode != nil {
+		entry.SetDestinationNode(fmt.Sprintf("%X", *destinationNode))
 	}
 
 	// Emit only once threaded; a fresh entry's pointers are stamped by the apply layer.
 	var emptyHash [32]byte
 	if prevTxnID != emptyHash {
-		jsonObj["PreviousTxnID"] = strings.ToUpper(hex.EncodeToString(prevTxnID[:]))
-		jsonObj["PreviousTxnLgrSeq"] = prevTxnLgrSeq
+		entry.SetPreviousTxnID(strings.ToUpper(hex.EncodeToString(prevTxnID[:])))
+		entry.SetPreviousTxnLgrSeq(prevTxnLgrSeq)
 	}
 
-	hexStr, err := binarycodec.Encode(jsonObj)
+	data, err := entry.Encode()
 	if err != nil {
 		return nil, fmt.Errorf("failed to encode Delegate: %w", err)
 	}
-
-	return hex.DecodeString(hexStr)
+	return data, nil
 }
 
 // HasTxPermission checks if the Delegate SLE grants permission for the given
@@ -150,13 +176,26 @@ func (d *DelegateData) HasTxPermission(txType uint32) bool {
 	return slices.Contains(d.Permissions, txPermission)
 }
 
-// LookupPermissionValue converts a permission name (e.g., "Payment") to its
-// numeric delegatable permission value using the definitions package.
-// Returns 0 if the name is not found.
+// LookupPermissionValue converts a permission value to its numeric form. It
+// accepts a permission name (e.g. "Payment") and, for values that have no
+// registered name, a plain decimal string. rippled's sfPermissionValue is a
+// plain UINT32, so a wire value with no known name decodes to its decimal form
+// (see the codec's enumToStr); accepting it here lets those values round-trip
+// and reach the delegatability check. Returns 0 when neither form resolves.
 func LookupPermissionValue(name string) uint32 {
-	pv, err := definitions.Get().GetDelegatablePermissionValueByName(name)
-	if err != nil {
-		return 0
+	if pv, err := definitions.Get().DelegatablePermissionValue(name); err == nil {
+		return uint32(pv)
 	}
-	return uint32(pv)
+	if n, err := strconv.ParseUint(name, 10, 32); err == nil {
+		return uint32(n)
+	}
+	return 0
+}
+
+// IsGranularPermissionValue reports whether the numeric permission value is a
+// registered granular permission (rippled getGranularName != nullopt). Unknown
+// values in the granular range are not granular and must fall through to the
+// transaction-type delegatability path.
+func IsGranularPermissionValue(value uint32) bool {
+	return definitions.Get().IsGranularPermission(int32(value))
 }

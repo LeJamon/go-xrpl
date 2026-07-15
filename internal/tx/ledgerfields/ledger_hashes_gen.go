@@ -6,8 +6,11 @@
 package ledgerfields
 
 import (
+	"errors"
+	"fmt"
+
 	"github.com/LeJamon/go-xrpl/codec/binarycodec"
-	"github.com/LeJamon/go-xrpl/crypto/common"
+	"github.com/LeJamon/go-xrpl/crypto/sha512half"
 	"github.com/LeJamon/go-xrpl/protocol"
 )
 
@@ -18,10 +21,12 @@ func init() {
 // LedgerHashes is the typed representation of a LedgerHashes ledger entry.
 // The present bitset tracks which fields appear on the decoded blob so the
 // emit methods only write entries that actually exist. The struct carries
-// every on-wire field — including those excluded from metadata
-// (sMD_Never) — so Decode → Encode is byte-identical.
+// every canonical field declared in the spec — including those excluded from
+// metadata (sMD_Never) — so decoding and re-encoding does not drop them.
 type LedgerHashes struct {
 	present             uint64
+	decoded             bool
+	dirty               bool
 	Flags               uint32
 	FirstLedgerSequence uint32
 	LastLedgerSequence  uint32
@@ -35,16 +40,82 @@ const (
 	ledgerhashesBitHashes
 )
 
+// SetFlags assigns Flags and updates its serialized presence.
+func (l *LedgerHashes) SetFlags(value uint32) {
+	l.Flags = value
+	l.dirty = true
+	l.present |= ledgerhashesBitFlags
+}
+
+// SetFirstLedgerSequence assigns FirstLedgerSequence and updates its serialized presence.
+func (l *LedgerHashes) SetFirstLedgerSequence(value uint32) {
+	l.FirstLedgerSequence = value
+	l.dirty = true
+	l.present |= ledgerhashesBitFirstLedgerSequence
+}
+
+// SetLastLedgerSequence assigns LastLedgerSequence and updates its serialized presence.
+func (l *LedgerHashes) SetLastLedgerSequence(value uint32) {
+	l.LastLedgerSequence = value
+	l.dirty = true
+	l.present |= ledgerhashesBitLastLedgerSequence
+}
+
+// SetHashes assigns Hashes and updates its serialized presence.
+func (l *LedgerHashes) SetHashes(value []string) {
+	l.Hashes = value
+	l.dirty = true
+	l.present |= ledgerhashesBitHashes
+}
+
+func (l *LedgerHashes) validateRequired() error {
+	if l.decoded && !l.dirty {
+		return nil
+	}
+	if l.present&ledgerhashesBitFlags == 0 {
+		return errors.New("ledgerfields: LedgerHashes: required field Flags is not set")
+	}
+	if l.present&ledgerhashesBitHashes == 0 {
+		return errors.New("ledgerfields: LedgerHashes: required field Hashes is not set")
+	}
+	return nil
+}
+
+func (l *LedgerHashes) validateDecoded() error {
+	if l.present&ledgerhashesBitFlags == 0 {
+		return errors.New("ledgerfields: LedgerHashes: required field Flags is missing")
+	}
+	if l.present&ledgerhashesBitHashes == 0 {
+		return errors.New("ledgerfields: LedgerHashes: required field Hashes is missing")
+	}
+	return nil
+}
+
 // Decode populates the struct from binary ledger-entry data via a streaming
-// reader. Unknown / sMD_Never fields are skipped without allocation.
+// reader and enforces the current rippled ledger template.
 func (l *LedgerHashes) Decode(data []byte) error {
+	return l.decode(data, false)
+}
+
+func (l *LedgerHashes) decodeLegacy(data []byte) error {
+	return l.decode(data, true)
+}
+
+func (l *LedgerHashes) decode(data []byte, legacy bool) error {
 	*l = LedgerHashes{}
 	sr := newStreamReader(data)
+	seenFields := make(map[[2]int]struct{})
+	sawLedgerEntryType := false
 	for sr.hasMore() {
 		typeCode, fieldCode, err := sr.readFieldHeader()
 		if err != nil {
 			return err
 		}
+		fieldID := [2]int{typeCode, fieldCode}
+		if _, exists := seenFields[fieldID]; exists {
+			return fmt.Errorf("ledgerfields: LedgerHashes: duplicate field type=%d field=%d", typeCode, fieldCode)
+		}
+		seenFields[fieldID] = struct{}{}
 		switch typeCode {
 		case 1: // UInt16
 			u16Val, err := sr.readUint16()
@@ -54,7 +125,10 @@ func (l *LedgerHashes) Decode(data []byte) error {
 			val := int(u16Val)
 			switch fieldCode {
 			case 1:
-				_ = val // synthetic LedgerEntryType; discard
+				if val != 104 {
+					return fmt.Errorf("ledgerfields: LedgerHashes: LedgerEntryType is %d, want 104", val)
+				}
+				sawLedgerEntryType = true
 			default:
 				return newErrUnknownField("LedgerHashes", typeCode, fieldCode)
 			}
@@ -91,6 +165,13 @@ func (l *LedgerHashes) Decode(data []byte) error {
 		default:
 			return newErrUnknownField("LedgerHashes", typeCode, fieldCode)
 		}
+	}
+	if !sawLedgerEntryType {
+		return errors.New("ledgerfields: LedgerHashes: missing LedgerEntryType")
+	}
+	l.decoded = true
+	if !legacy {
+		return l.validateDecoded()
 	}
 	return nil
 }
@@ -200,11 +281,14 @@ func (l *LedgerHashes) ToMap() map[string]any {
 	return out
 }
 
-// Encode serializes the receiver to canonical XRPL binary. Round-trip
-// invariant: Decode(data); Encode() == data for any byte sequence that
-// Decode accepts.
+// Encode serializes the receiver to canonical XRPL binary. Legacy decode
+// aliases and non-canonical input ordering are emitted in canonical form.
 func (l *LedgerHashes) Encode() ([]byte, error) {
-	return binarycodec.EncodeBytes(l.ToMap())
+	if err := l.validateRequired(); err != nil {
+		return nil, err
+	}
+	out := l.ToMap()
+	return binarycodec.EncodeBytes(out)
 }
 
 // Hash returns the SHAMap account-state leaf hash for this entry,
@@ -215,6 +299,6 @@ func (l *LedgerHashes) Hash(index [32]byte) ([32]byte, error) {
 	if err != nil {
 		return [32]byte{}, err
 	}
-	prefix := protocol.HashPrefixLeafNode
-	return common.Sha512Half(prefix[:], data, index[:]), nil
+	prefix := protocol.HashPrefixLeafNode()
+	return sha512half.Sum(prefix[:], data, index[:]), nil
 }

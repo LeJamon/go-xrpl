@@ -14,7 +14,7 @@ import (
 // TxQ snapshot. When the TxQ hook isn't wired (standalone tests,
 // pre-startup) the handler falls back to rippled's idle-state
 // defaults — reference_level=256, drops fields equal to base_fee.
-type FeeMethod struct{}
+type FeeMethod struct{ BaseHandler }
 
 const (
 	feeBaseLevel        uint64 = 256 // rippled TxQ.h baseLevel
@@ -127,14 +127,6 @@ func levelFromDrops(drops, baseFee uint64) uint64 {
 	}
 	quo, _ := bits.Div64(hi, lo, baseFee)
 	return quo
-}
-
-func (m *FeeMethod) RequiredRole() types.Role {
-	return types.RoleGuest
-}
-
-func (m *FeeMethod) SupportedApiVersions() []int {
-	return []int{types.ApiVersion1, types.ApiVersion2, types.ApiVersion3}
 }
 
 func (m *FeeMethod) RequiredCondition() types.Condition {

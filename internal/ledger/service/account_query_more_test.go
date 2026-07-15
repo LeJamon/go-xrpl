@@ -14,6 +14,7 @@ import (
 	"github.com/LeJamon/go-xrpl/internal/ledger/service/svcerr"
 	"github.com/LeJamon/go-xrpl/internal/ledger/state"
 	"github.com/LeJamon/go-xrpl/keylet"
+	"github.com/LeJamon/go-xrpl/protocol"
 )
 
 // lsfCredentialAccepted mirrors credential.LsfCredentialAccepted; duplicated
@@ -56,8 +57,11 @@ func insertNFTokenPageEntry(t *testing.T, svc *Service, ownerAddr string, tokens
 		})
 	}
 	jsonObj := map[string]any{
-		"LedgerEntryType": "NFTokenPage",
-		"NFTokens":        nftArray,
+		"LedgerEntryType":   "NFTokenPage",
+		"NFTokens":          nftArray,
+		"Flags":             uint32(0),
+		"PreviousTxnID":     strings.Repeat("0", 64),
+		"PreviousTxnLgrSeq": uint32(0),
 	}
 	data, err := binarycodec.EncodeBytes(jsonObj)
 	if err != nil {
@@ -66,6 +70,27 @@ func insertNFTokenPageEntry(t *testing.T, svc *Service, ownerAddr string, tokens
 	if err := svc.openLedger.Insert(keylet.NFTokenPageMax(ownerID), data); err != nil {
 		t.Fatalf("insert NFTokenPage: %v", err)
 	}
+}
+
+func insertNFTokenPageAt(t *testing.T, svc *Service, pageKey [32]byte, tokens []state.NFTokenData, next [32]byte) {
+	t.Helper()
+	data, err := state.SerializeNFTokenPage(&state.NFTokenPageData{
+		NextPageMin: next,
+		NFTokens:    tokens,
+	})
+	if err != nil {
+		t.Fatalf("serialize NFTokenPage: %v", err)
+	}
+	if err := svc.openLedger.Insert(keylet.Keylet{Key: pageKey}, data); err != nil {
+		t.Fatalf("insert NFTokenPage: %v", err)
+	}
+}
+
+func accountNFTWithOrder(issuer [20]byte, order byte) [32]byte {
+	var tokenID [32]byte
+	copy(tokenID[4:24], issuer[:])
+	tokenID[31] = order
+	return tokenID
 }
 
 func TestGetAccountNFTs_DecodesTokenFields(t *testing.T) {
@@ -87,7 +112,7 @@ func TestGetAccountNFTs_DecodesTokenFields(t *testing.T) {
 		{NFTokenID: tokenID, URI: uriHex},
 	})
 
-	res, err := svc.GetAccountNFTs(context.Background(), ownerAddr, "current", 0)
+	res, err := svc.GetAccountNFTs(context.Background(), ownerAddr, "current", 0, "")
 	if err != nil {
 		t.Fatalf("GetAccountNFTs: %v", err)
 	}
@@ -116,11 +141,101 @@ func TestGetAccountNFTs_DecodesTokenFields(t *testing.T) {
 
 	t.Run("account not found", func(t *testing.T) {
 		stranger, _ := addressFromBytes(t, 0x99)
-		_, err := svc.GetAccountNFTs(context.Background(), stranger, "current", 0)
+		_, err := svc.GetAccountNFTs(context.Background(), stranger, "current", 0, "")
 		if !errors.Is(err, svcerr.ErrAccountNotFound) {
 			t.Fatalf("want ErrAccountNotFound, got %v", err)
 		}
 	})
+}
+
+func TestGetAccountNFTs_MarkerPagination(t *testing.T) {
+	svc := newOfferTestService(t)
+	ownerAddr, ownerID := addressFromBytes(t, 0x20)
+	insertAccountRoot(t, svc, ownerAddr, 1_000_000_000_000, 0)
+	_, issuerID := addressFromBytes(t, 0x40)
+
+	tokens := [5][32]byte{
+		accountNFTWithOrder(issuerID, 0x10),
+		accountNFTWithOrder(issuerID, 0x20),
+		accountNFTWithOrder(issuerID, 0x50),
+		accountNFTWithOrder(issuerID, 0x60),
+		accountNFTWithOrder(issuerID, 0x70),
+	}
+	pageBoundary := tokens[1]
+	pageBoundary[31] = 0x40
+	firstPage := keylet.NFTokenPageForToken(keylet.NFTokenPageMin(ownerID), pageBoundary).Key
+	lastPage := keylet.NFTokenPageMax(ownerID).Key
+	insertNFTokenPageAt(t, svc, firstPage, []state.NFTokenData{
+		{NFTokenID: tokens[0]},
+		{NFTokenID: tokens[1]},
+	}, lastPage)
+	insertNFTokenPageAt(t, svc, lastPage, []state.NFTokenData{
+		{NFTokenID: tokens[2]},
+		{NFTokenID: tokens[3]},
+		{NFTokenID: tokens[4]},
+	}, [32]byte{})
+
+	first, err := svc.GetAccountNFTs(context.Background(), ownerAddr, "current", 2, "")
+	if err != nil {
+		t.Fatalf("first page: %v", err)
+	}
+	if len(first.AccountNFTs) != 2 {
+		t.Fatalf("first page count = %d, want 2", len(first.AccountNFTs))
+	}
+	if first.AccountNFTs[0].NFTokenID != formatHashHex(tokens[0]) ||
+		first.AccountNFTs[1].NFTokenID != formatHashHex(tokens[1]) {
+		t.Fatalf("first page order = %#v", first.AccountNFTs)
+	}
+	if first.Marker != formatHashHex(tokens[1]) {
+		t.Fatalf("first marker = %q, want %q", first.Marker, formatHashHex(tokens[1]))
+	}
+
+	second, err := svc.GetAccountNFTs(context.Background(), ownerAddr, "current", 2, first.Marker)
+	if err != nil {
+		t.Fatalf("second page: %v", err)
+	}
+	if len(second.AccountNFTs) != 2 ||
+		second.AccountNFTs[0].NFTokenID != formatHashHex(tokens[2]) ||
+		second.AccountNFTs[1].NFTokenID != formatHashHex(tokens[3]) {
+		t.Fatalf("second page order = %#v", second.AccountNFTs)
+	}
+	if second.Marker != formatHashHex(tokens[3]) {
+		t.Fatalf("second marker = %q, want %q", second.Marker, formatHashHex(tokens[3]))
+	}
+
+	last, err := svc.GetAccountNFTs(context.Background(), ownerAddr, "current", 2, second.Marker)
+	if err != nil {
+		t.Fatalf("last page: %v", err)
+	}
+	if len(last.AccountNFTs) != 1 || last.AccountNFTs[0].NFTokenID != formatHashHex(tokens[4]) {
+		t.Fatalf("last page = %#v", last.AccountNFTs)
+	}
+	if last.Marker != "" {
+		t.Fatalf("terminal marker = %q, want empty", last.Marker)
+	}
+
+	exact, err := svc.GetAccountNFTs(context.Background(), ownerAddr, "current", 2, formatHashHex(tokens[2]))
+	if err != nil {
+		t.Fatalf("exact-limit page: %v", err)
+	}
+	if len(exact.AccountNFTs) != 2 || exact.Marker != formatHashHex(tokens[4]) {
+		t.Fatalf("exact-limit page = %#v, marker %q", exact.AccountNFTs, exact.Marker)
+	}
+	afterExact, err := svc.GetAccountNFTs(context.Background(), ownerAddr, "current", 2, exact.Marker)
+	if err != nil {
+		t.Fatalf("after exact-limit page: %v", err)
+	}
+	if len(afterExact.AccountNFTs) != 0 || afterExact.Marker != "" {
+		t.Fatalf("after exact-limit page = %#v, marker %q", afterExact.AccountNFTs, afterExact.Marker)
+	}
+
+	invalid := tokens[1]
+	invalid[31] = 0x30
+	for _, marker := range []string{"bad", "0", formatHashHex(invalid)} {
+		if _, err := svc.GetAccountNFTs(context.Background(), ownerAddr, "current", 2, marker); !errors.Is(err, svcerr.ErrInvalidMarker) {
+			t.Errorf("marker %q: got %v, want ErrInvalidMarker", marker, err)
+		}
+	}
 }
 
 // insertCredentialEntry inserts a Credential ledger entry and returns its key.
@@ -136,12 +251,15 @@ func insertCredentialEntry(t *testing.T, svc *Service, subjectID, issuerID [20]b
 		t.Fatalf("encode issuer: %v", err)
 	}
 	jsonObj := map[string]any{
-		"LedgerEntryType": "Credential",
-		"Subject":         subjectAddr,
-		"Issuer":          issuerAddr,
-		"CredentialType":  hex.EncodeToString(credType),
-		"IssuerNode":      "0",
-		"SubjectNode":     "0",
+		"LedgerEntryType":   "Credential",
+		"Subject":           subjectAddr,
+		"Issuer":            issuerAddr,
+		"CredentialType":    hex.EncodeToString(credType),
+		"IssuerNode":        "0",
+		"SubjectNode":       "0",
+		"Flags":             uint32(0),
+		"PreviousTxnID":     strings.Repeat("0", 64),
+		"PreviousTxnLgrSeq": uint32(0),
 	}
 	if accepted {
 		jsonObj["Flags"] = lsfCredentialAccepted
@@ -326,7 +444,7 @@ func TestGetDepositAuthorized_Credentials(t *testing.T) {
 		// Expiration one hour ahead in Ripple-epoch seconds. Guards against
 		// comparing a Ripple-epoch expiration with Unix-epoch close time,
 		// which would falsely expire every credential.
-		exp := uint32(toRippleTime(time.Now().Add(time.Hour)))
+		exp := protocol.ToRippleTime(time.Now().Add(time.Hour))
 		key := insertCredentialEntry(t, svc, srcID, issuerID, []byte("FUTURE"), true, &exp)
 		res, err := svc.GetDepositAuthorized(context.Background(), srcAddr, dstAddr, "current",
 			[]string{formatHashHex(key)})

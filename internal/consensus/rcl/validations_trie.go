@@ -24,25 +24,22 @@ type acquiringKey struct {
 // The trie is rebuilt from the current byNode / trusted / negUNL state.
 func (vt *ValidationTracker) SetLedgerAncestryProvider(p LedgerAncestryProvider) {
 	vt.mu.Lock()
-	defer vt.mu.Unlock()
-
 	if p == nil {
 		vt.ancestry = nil
 		vt.trie = nil
 		vt.trieTips = nil
 		vt.acquiring = nil
+		vt.mu.Unlock()
 		return
 	}
 	vt.ancestry = p
 	vt.rebuildTrieLocked()
+	vt.mu.Unlock()
+	vt.checkAcquired()
 }
 
 // rebuildTrieLocked resets the trie and reseeds it from byNode.
 // Caller must hold vt.mu (write); no-op if ancestry is unset.
-//
-// Resolution runs under vt.mu — admin-only path (trust rotation,
-// negUNL change, provider swap). Add() relies on the trie staying
-// consistent with byNode while the lock is held.
 func (vt *ValidationTracker) rebuildTrieLocked() {
 	if vt.ancestry == nil {
 		return
@@ -58,12 +55,7 @@ func (vt *ValidationTracker) rebuildTrieLocked() {
 		if !vt.trusted[nodeID] {
 			continue
 		}
-		lgr, ok := vt.ancestry.LedgerByID(v.LedgerID)
-		if !ok {
-			vt.parkLocked(acquiringKey{seq: v.LedgerSeq, id: v.LedgerID}, nodeID)
-			continue
-		}
-		vt.insertTipLocked(nodeID, lgr)
+		vt.parkLocked(acquiringKey{seq: v.LedgerSeq, id: v.LedgerID}, nodeID)
 	}
 }
 
@@ -73,15 +65,21 @@ func (vt *ValidationTracker) rebuildTrieLocked() {
 // while its latest validation is parked. Silent no-op if the trie is
 // unavailable.
 //
-// preResolved is the ledger Add() walked outside vt.mu to avoid
-// serialising cold-LRU lookups; if nil or stale we resolve under lock.
+// preResolved is the ledger Add() walked outside vt.mu. preResolvedTrie
+// identifies the trie that was current during that lookup.
 // prior is the (seq, id) of the node's superseded validation, cleared
 // from any parked entry first.
 //
 // Precondition: caller holds vt.mu (write) and has verified nodeID is
 // trusted. negUNL validators are intentionally inserted (they steer
 // GetPreferred); exclusion happens on the quorum/support read paths.
-func (vt *ValidationTracker) updateTrieLocked(nodeID consensus.NodeID, validation *consensus.Validation, preResolved ledgertrie.Ledger, prior *acquiringKey) {
+func (vt *ValidationTracker) updateTrieLocked(
+	nodeID consensus.NodeID,
+	validation *consensus.Validation,
+	preResolved ledgertrie.Ledger,
+	preResolvedTrie *ledgertrie.Trie,
+	prior *acquiringKey,
+) {
 	if vt.trie == nil || vt.ancestry == nil {
 		return
 	}
@@ -89,42 +87,69 @@ func (vt *ValidationTracker) updateTrieLocked(nodeID consensus.NodeID, validatio
 	if prior != nil {
 		vt.unparkLocked(*prior, nodeID)
 	}
-	vt.checkAcquiredLocked()
-
 	key := acquiringKey{seq: validation.LedgerSeq, id: validation.LedgerID}
-	if parked, ok := vt.acquiring[key]; ok {
-		parked[nodeID] = struct{}{}
+	if preResolved != nil && preResolved.ID() == validation.LedgerID &&
+		preResolved.Seq() == validation.LedgerSeq && vt.trie == preResolvedTrie {
+		if parked, ok := vt.acquiring[key]; ok {
+			parked[nodeID] = struct{}{}
+			for parkedNode := range parked {
+				current := vt.byNode[parkedNode]
+				if current == nil || current.LedgerSeq != key.seq || current.LedgerID != key.id || !vt.trusted[parkedNode] {
+					continue
+				}
+				vt.insertTipLocked(parkedNode, preResolved)
+			}
+			delete(vt.acquiring, key)
+			return
+		}
+		vt.insertTipLocked(nodeID, preResolved)
+		return
+	}
+	vt.parkLocked(key, nodeID)
+}
+
+// checkAcquired replays parked validations whose ledgers are now locally
+// available. Resolution runs outside vt.mu because the production ancestry
+// provider enters the ledger service.
+func (vt *ValidationTracker) checkAcquired() {
+	vt.mu.RLock()
+	if vt.trie == nil || vt.ancestry == nil || len(vt.acquiring) == 0 {
+		vt.mu.RUnlock()
+		return
+	}
+	trie := vt.trie
+	ancestry := vt.ancestry
+	keys := make([]acquiringKey, 0, len(vt.acquiring))
+	for key := range vt.acquiring {
+		keys = append(keys, key)
+	}
+	vt.mu.RUnlock()
+
+	resolved := make(map[acquiringKey]ledgertrie.Ledger, len(keys))
+	for _, key := range keys {
+		if lgr, ok := ancestry.LedgerByID(key.id); ok && lgr.ID() == key.id && lgr.Seq() == key.seq {
+			resolved[key] = lgr
+		}
+	}
+	if len(resolved) == 0 {
 		return
 	}
 
-	lgr := preResolved
-	if lgr == nil || lgr.ID() != validation.LedgerID {
-		var ok bool
-		lgr, ok = vt.ancestry.LedgerByID(validation.LedgerID)
-		if !ok {
-			// Park until acquisition lands. The fetch itself is armed by
-			// the router on every trusted current validation
-			// (maybeAcquireFromValidation); replay happens on the next
-			// checkAcquiredLocked poll.
-			vt.parkLocked(key, nodeID)
-			return
-		}
+	vt.mu.Lock()
+	defer vt.mu.Unlock()
+	if vt.trie != trie {
+		return
 	}
-	vt.insertTipLocked(nodeID, lgr)
-}
-
-// checkAcquiredLocked replays parked validations whose ledger has become
-// locally resolvable into the trie (rippled checkAcquired). Polled from
-// updateTrieLocked on every trusted validation and from every trie read
-// (GetPreferred, ProposersFinished, GetTrustedSupport) — rippled's
-// updateTrie / withTrie cadence. Caller must hold vt.mu (write).
-func (vt *ValidationTracker) checkAcquiredLocked() {
-	for key, nodes := range vt.acquiring {
-		lgr, ok := vt.ancestry.LedgerByID(key.id)
+	for key, lgr := range resolved {
+		nodes, ok := vt.acquiring[key]
 		if !ok {
 			continue
 		}
 		for nodeID := range nodes {
+			current := vt.byNode[nodeID]
+			if current == nil || current.LedgerSeq != key.seq || current.LedgerID != key.id || !vt.trusted[nodeID] {
+				continue
+			}
 			vt.insertTipLocked(nodeID, lgr)
 		}
 		delete(vt.acquiring, key)
@@ -166,18 +191,18 @@ func (vt *ValidationTracker) insertTipLocked(nodeID consensus.NodeID, lgr ledger
 	vt.trieTips[nodeID] = lgr
 }
 
-// GetJsonTrie returns a JSON-serializable snapshot of the ancestry trie's
+// GetJSONTrie returns a JSON-serializable snapshot of the ancestry trie's
 // support state for diagnosing preferred-ledger divergence. Returns nil when
 // the trie is disabled (no ancestry provider wired) or a serialization panic
 // is trapped. Guarded by vt.mu.
-func (vt *ValidationTracker) GetJsonTrie() map[string]any {
+func (vt *ValidationTracker) GetJSONTrie() map[string]any {
 	vt.mu.RLock()
 	defer vt.mu.RUnlock()
 	if vt.trie == nil {
 		return nil
 	}
 	var res map[string]any
-	if safeTrieCall("GetJson", func() { res = vt.trie.GetJson() }) {
+	if safeTrieCall("GetJSON", func() { res = vt.trie.GetJSON() }) {
 		return nil
 	}
 	return res

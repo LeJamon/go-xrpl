@@ -41,7 +41,7 @@ func (f *snd_fakeOverlay) BroadcastValidation(v *consensus.Validation) error {
 func (f *snd_fakeOverlay) BroadcastStatusChange(sc *message.StatusChange) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	frame, err := encodeFrame(message.TypeStatusChange, sc)
+	frame, err := message.EncodeFrame(sc)
 	if err != nil {
 		return err
 	}
@@ -199,6 +199,7 @@ func (f *snd_fakeOverlay) PeersWithLedger([32]byte, uint32, []uint64, int) []uin
 }
 func (f *snd_fakeOverlay) PeerWithTxSet([32]byte, uint64) (uint64, bool) { return 0, false }
 func (f *snd_fakeOverlay) NotePeerHasTxSet(uint64, [32]byte)             {}
+func (f *snd_fakeOverlay) CheckTracking(uint32)                          {}
 
 func snd_newAdaptorWithFake(t *testing.T, fake *snd_fakeOverlay) *Adaptor {
 	t.Helper()

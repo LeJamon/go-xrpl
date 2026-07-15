@@ -11,7 +11,7 @@ import (
 	"github.com/LeJamon/go-xrpl/internal/consensus"
 	"github.com/LeJamon/go-xrpl/internal/peermanagement"
 	"github.com/LeJamon/go-xrpl/internal/peermanagement/message"
-	testenv "github.com/LeJamon/go-xrpl/internal/testing"
+	jtx "github.com/LeJamon/go-xrpl/internal/testing"
 	"github.com/LeJamon/go-xrpl/internal/testing/payment"
 	"github.com/LeJamon/go-xrpl/internal/tx"
 	"github.com/stretchr/testify/assert"
@@ -192,10 +192,10 @@ func TestRouterDispatchesTransaction(t *testing.T) {
 	// Build a real signed payment blob; the open-ledger Submit path
 	// rejects un-parseable blobs, so the inbound tx must be a valid
 	// XRPL Payment for HasTx to be true after dispatch.
-	env := testenv.NewTestEnv(t)
+	env := jtx.NewTestEnv(t)
 	env.SetVerifySignatures(true)
-	master := testenv.MasterAccount()
-	alice := testenv.NewAccount("alice")
+	master := jtx.MasterAccount()
+	alice := jtx.NewAccount("alice")
 	txn := payment.Pay(master, alice, 100_000_000).Sequence(1).Build()
 	env.SignWith(txn, master)
 	txMap, err := txn.Flatten()
@@ -242,10 +242,10 @@ func TestRouterDispatchesPreDecodedTransaction(t *testing.T) {
 	ctx := t.Context()
 	go router.Run(ctx)
 
-	env := testenv.NewTestEnv(t)
+	env := jtx.NewTestEnv(t)
 	env.SetVerifySignatures(true)
-	master := testenv.MasterAccount()
-	alice := testenv.NewAccount("alice")
+	master := jtx.MasterAccount()
+	alice := jtx.NewAccount("alice")
 	txn := payment.Pay(master, alice, 100_000_000).Sequence(1).Build()
 	env.SignWith(txn, master)
 	txMap, err := txn.Flatten()

@@ -20,7 +20,7 @@ import (
 )
 
 func TestRPCInternalErrorSanitizesCause(t *testing.T) {
-	logs := captureRPCErrorLogs(t)
+	logs := captureRpcErrorLogs(t)
 
 	rpcErr := rpcInternalError("test operation failed", errors.New("backend detail"))
 
@@ -33,7 +33,7 @@ func TestRPCInternalErrorSanitizesCause(t *testing.T) {
 }
 
 func TestRPCInternalInvariantErrorIsCanonicalAndLogged(t *testing.T) {
-	logs := captureRPCErrorLogs(t)
+	logs := captureRpcErrorLogs(t)
 
 	rpcErr := rpcInternalInvariantError("test invariant failed")
 
@@ -44,7 +44,7 @@ func TestRPCInternalInvariantErrorIsCanonicalAndLogged(t *testing.T) {
 }
 
 func TestRPCTransactionSubmissionErrorPreservesFixedMessage(t *testing.T) {
-	logs := captureRPCErrorLogs(t)
+	logs := captureRpcErrorLogs(t)
 	cause := errors.New("backend submission detail")
 
 	rpcErr := rpcTransactionSubmissionError("test submission failed", cause)
@@ -58,7 +58,7 @@ func TestRPCTransactionSubmissionErrorPreservesFixedMessage(t *testing.T) {
 }
 
 func TestRPCDBDeserializationErrorIsCanonicalAndLogged(t *testing.T) {
-	logs := captureRPCErrorLogs(t)
+	logs := captureRpcErrorLogs(t)
 	cause := errors.New("corrupt stored transaction")
 
 	rpcErr := rpcDBDeserializationError("test transaction decode failed", cause)
@@ -71,7 +71,7 @@ func TestRPCDBDeserializationErrorIsCanonicalAndLogged(t *testing.T) {
 	require.Contains(t, logs.String(), cause.Error())
 }
 
-func captureRPCErrorLogs(t *testing.T) *bytes.Buffer {
+func captureRpcErrorLogs(t *testing.T) *bytes.Buffer {
 	t.Helper()
 	original := xrpllog.Root()
 	t.Cleanup(func() { xrpllog.SetRoot(original) })
@@ -210,7 +210,7 @@ func (a *rpcInternalErrorAuditor) scanFile(pkg *packages.Package, file *ast.File
 	})
 
 	approvedCalls := a.approvedInternalConstructorCalls(pkg, file)
-	approvedLiterals := a.approvedRPCErrorFactoryLiterals(pkg, file)
+	approvedLiterals := a.approvedRpcErrorFactoryLiterals(pkg, file)
 	ast.Inspect(file, func(node ast.Node) bool {
 		switch node := node.(type) {
 		case *ast.CallExpr:
@@ -239,7 +239,7 @@ func (a *rpcInternalErrorAuditor) scanFile(pkg *packages.Package, file *ast.File
 				a.report(pkg, node, "NewRpcError may only be called directly")
 			}
 		case *ast.CompositeLit:
-			if !isRPCErrorType(pkg.TypesInfo.TypeOf(node)) {
+			if !isRpcErrorType(pkg.TypesInfo.TypeOf(node)) {
 				break
 			}
 			if _, approved := approvedLiterals[node]; approved {
@@ -253,26 +253,26 @@ func (a *rpcInternalErrorAuditor) scanFile(pkg *packages.Package, file *ast.File
 			}
 		case *ast.AssignStmt:
 			for _, lhs := range node.Lhs {
-				if a.isRPCErrorField(pkg, lhs) {
+				if a.isRpcErrorField(pkg, lhs) {
 					a.report(pkg, lhs, "RpcError fields must not be mutated")
-				} else if isRPCErrorMutationTarget(pkg, lhs) {
+				} else if isRpcErrorMutationTarget(pkg, lhs) {
 					a.report(pkg, lhs, "RpcError values must not be mutated")
 				}
 			}
 		case *ast.IncDecStmt:
-			if a.isRPCErrorField(pkg, node.X) {
+			if a.isRpcErrorField(pkg, node.X) {
 				a.report(pkg, node.X, "RpcError fields must not be mutated")
 			}
 		case *ast.RangeStmt:
 			if node.Tok == token.ASSIGN {
 				for _, field := range []ast.Expr{node.Key, node.Value} {
-					if field != nil && a.isRPCErrorField(pkg, field) {
+					if field != nil && a.isRpcErrorField(pkg, field) {
 						a.report(pkg, field, "RpcError fields must not be mutated")
 					}
 				}
 			}
 		case *ast.UnaryExpr:
-			if node.Op.String() == "&" && a.isRPCErrorField(pkg, node.X) {
+			if node.Op.String() == "&" && a.isRpcErrorField(pkg, node.X) {
 				a.report(pkg, node.X, "RpcError fields must not be addressable for mutation")
 			}
 		}
@@ -311,7 +311,7 @@ func (a *rpcInternalErrorAuditor) approvedInternalConstructorCalls(pkg *packages
 	return approved
 }
 
-func (a *rpcInternalErrorAuditor) approvedRPCErrorFactoryLiterals(pkg *packages.Package, file *ast.File) map[*ast.CompositeLit]struct{} {
+func (a *rpcInternalErrorAuditor) approvedRpcErrorFactoryLiterals(pkg *packages.Package, file *ast.File) map[*ast.CompositeLit]struct{} {
 	approved := make(map[*ast.CompositeLit]struct{})
 	if !a.isErrorsImplementation(pkg, file) {
 		return approved
@@ -327,7 +327,7 @@ func (a *rpcInternalErrorAuditor) approvedRPCErrorFactoryLiterals(pkg *packages.
 			continue
 		}
 		found = true
-		literal, exact := exactRPCErrorFactory(pkg, function, object)
+		literal, exact := exactRpcErrorFactory(pkg, function, object)
 		if !exact {
 			a.report(pkg, function, "NewRpcError must remain an exact field-copy factory")
 			continue
@@ -340,7 +340,7 @@ func (a *rpcInternalErrorAuditor) approvedRPCErrorFactoryLiterals(pkg *packages.
 	return approved
 }
 
-func exactRPCErrorFactory(pkg *packages.Package, function *ast.FuncDecl, object *gotypes.Func) (*ast.CompositeLit, bool) {
+func exactRpcErrorFactory(pkg *packages.Package, function *ast.FuncDecl, object *gotypes.Func) (*ast.CompositeLit, bool) {
 	signature, _ := object.Type().(*gotypes.Signature)
 	if signature == nil || signature.Recv() != nil || function.Recv != nil || function.Type.TypeParams != nil ||
 		signature.Variadic() || signature.Params().Len() != 4 || signature.Results().Len() != 1 ||
@@ -348,7 +348,7 @@ func exactRPCErrorFactory(pkg *packages.Package, function *ast.FuncDecl, object 
 		!isBasicType(signature.Params().At(1).Type(), gotypes.String) ||
 		!isBasicType(signature.Params().At(2).Type(), gotypes.String) ||
 		!isBasicType(signature.Params().At(3).Type(), gotypes.String) ||
-		!isRPCErrorPointer(signature.Results().At(0).Type()) || function.Body == nil || len(function.Body.List) != 1 {
+		!isRpcErrorPointer(signature.Results().At(0).Type()) || function.Body == nil || len(function.Body.List) != 1 {
 		return nil, false
 	}
 	result, ok := function.Body.List[0].(*ast.ReturnStmt)
@@ -360,7 +360,7 @@ func exactRPCErrorFactory(pkg *packages.Package, function *ast.FuncDecl, object 
 		return nil, false
 	}
 	literal, ok := unparen(address.X).(*ast.CompositeLit)
-	if !ok || !isRPCErrorType(pkg.TypesInfo.TypeOf(literal)) || len(literal.Elts) != 4 {
+	if !ok || !isRpcErrorType(pkg.TypesInfo.TypeOf(literal)) || len(literal.Elts) != 4 {
 		return nil, false
 	}
 	expected := map[string]*gotypes.Var{
@@ -416,7 +416,7 @@ func exactInternalConstructorCall(pkg *packages.Package, function *ast.FuncDecl,
 	signature, _ := object.Type().(*gotypes.Signature)
 	if signature == nil || function.Recv != nil || function.Type.TypeParams != nil ||
 		signature.Params().Len() != 0 || signature.Results().Len() != 1 ||
-		!isRPCErrorPointer(signature.Results().At(0).Type()) || function.Body == nil || len(function.Body.List) != 1 {
+		!isRpcErrorPointer(signature.Results().At(0).Type()) || function.Body == nil || len(function.Body.List) != 1 {
 		return nil, false
 	}
 	result, ok := function.Body.List[0].(*ast.ReturnStmt)
@@ -459,7 +459,7 @@ func rpcErrorLiteralCode(pkg *packages.Package, literal *ast.CompositeLit) const
 	return constant.MakeInt64(0)
 }
 
-func (a *rpcInternalErrorAuditor) isRPCErrorField(pkg *packages.Package, expr ast.Expr) bool {
+func (a *rpcInternalErrorAuditor) isRpcErrorField(pkg *packages.Package, expr ast.Expr) bool {
 	selector, ok := unparen(expr).(*ast.SelectorExpr)
 	if !ok {
 		return false
@@ -483,11 +483,11 @@ func (a *rpcInternalErrorAuditor) isRPCErrorField(pkg *packages.Package, expr as
 	}
 }
 
-func isRPCErrorMutationTarget(pkg *packages.Package, expr ast.Expr) bool {
+func isRpcErrorMutationTarget(pkg *packages.Package, expr ast.Expr) bool {
 	expr = unparen(expr)
 	switch expr.(type) {
 	case *ast.StarExpr, *ast.IndexExpr:
-		return isRPCErrorType(pkg.TypesInfo.TypeOf(expr))
+		return isRpcErrorType(pkg.TypesInfo.TypeOf(expr))
 	default:
 		return false
 	}
@@ -554,7 +554,7 @@ func isRPCFunction(function *gotypes.Func, name string) bool {
 	return signature != nil && signature.Recv() == nil
 }
 
-func isRPCErrorType(value gotypes.Type) bool {
+func isRpcErrorType(value gotypes.Type) bool {
 	if value == nil {
 		return false
 	}
@@ -570,20 +570,22 @@ func isRPCErrorType(value gotypes.Type) bool {
 		return true
 	}
 	structure, ok := named.Underlying().(*gotypes.Struct)
-	return ok && isRPCErrorStructShape(structure)
+	return ok && isRpcErrorStructShape(structure)
 }
 
-func isRPCErrorStructShape(structure *gotypes.Struct) bool {
+func isRpcErrorStructShape(structure *gotypes.Struct) bool {
 	fields := []struct {
-		name string
-		kind gotypes.BasicKind
-		tag  string
+		name    string
+		kind    gotypes.BasicKind
+		tag     string
+		mapType bool
 	}{
 		{name: "Code", kind: gotypes.Int, tag: `json:"error_code"`},
 		{name: "ErrorString", kind: gotypes.String, tag: `json:"error"`},
 		{name: "Type", kind: gotypes.String, tag: `json:"type"`},
 		{name: "Message", kind: gotypes.String, tag: `json:"error_message,omitempty"`},
 		{name: "ErrorException", kind: gotypes.String, tag: `json:"error_exception,omitempty"`},
+		{name: "Extra", tag: `json:"-"`, mapType: true},
 		{name: "bareToken", kind: gotypes.Bool},
 		{name: "invalidApiVersion", kind: gotypes.Bool},
 		{name: "overloaded", kind: gotypes.Bool},
@@ -593,19 +595,31 @@ func isRPCErrorStructShape(structure *gotypes.Struct) bool {
 	}
 	for i, expected := range fields {
 		field := structure.Field(i)
-		if field.Name() != expected.name || !isBasicType(field.Type(), expected.kind) || structure.Tag(i) != expected.tag {
+		if field.Name() != expected.name || structure.Tag(i) != expected.tag {
+			return false
+		}
+		if expected.mapType {
+			mapType, ok := field.Type().(*gotypes.Map)
+			if !ok || !isBasicType(mapType.Key(), gotypes.String) {
+				return false
+			}
+			value, ok := mapType.Elem().Underlying().(*gotypes.Interface)
+			if !ok || !value.Empty() {
+				return false
+			}
+		} else if !isBasicType(field.Type(), expected.kind) {
 			return false
 		}
 	}
 	return true
 }
 
-func isRPCErrorPointer(value gotypes.Type) bool {
+func isRpcErrorPointer(value gotypes.Type) bool {
 	if value == nil {
 		return false
 	}
 	pointer, ok := gotypes.Unalias(value).(*gotypes.Pointer)
-	return ok && isRPCErrorType(pointer.Elem())
+	return ok && isRpcErrorType(pointer.Elem())
 }
 
 func rpcErrorStruct(value gotypes.Type) (*gotypes.Struct, bool) {

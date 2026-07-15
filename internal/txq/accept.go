@@ -37,7 +37,7 @@ func (q *TxQ) Accept(ctx AcceptContext) bool {
 	// The fee snapshot is constant for the whole Accept pass (only
 	// ProcessClosedLedger mutates it, under the same lock), so take it once
 	// before the loop rather than re-fetching every iteration (TxQ.cpp:1447).
-	snapshot := q.feeMetrics.GetSnapshot()
+	snapshot := q.feeMetrics.Snapshot()
 
 	// Process candidates from highest fee to lowest
 	i := 0
@@ -55,7 +55,7 @@ func (q *TxQ) Accept(ctx AcceptContext) bool {
 		// For sequence-based transactions, they must be applied in order.
 		// Check if this is the first sequence transaction for the account.
 		if !candidate.SeqProxy.IsTicket {
-			firstSeqTx := aq.GetFirstSeqTx()
+			firstSeqTx := aq.FirstSeqTx()
 			if firstSeqTx != nil && candidate.SeqProxy.Value > firstSeqTx.SeqProxy.Value {
 				// There's an earlier sequence transaction, skip this one for now
 				i++
@@ -181,7 +181,7 @@ func (q *TxQ) eraseAndAdvance(idx *int, c *Candidate) {
 // idx when the dropped element sits before the current one in byFee so the
 // caller's i++ lands on the right next candidate (TxQ.cpp:1541-1556).
 func (q *TxQ) dropLastForAccount(aq *AccountQueue, current *Candidate, idx *int) {
-	sorted := aq.GetSortedCandidates()
+	sorted := aq.SortedCandidates()
 	if len(sorted) == 0 {
 		return
 	}

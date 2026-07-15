@@ -3,11 +3,14 @@ package credential
 import (
 	"bytes"
 	"encoding/hex"
+	"errors"
+	"fmt"
 	"sort"
 
-	binarycodec "github.com/LeJamon/go-xrpl/codec/binarycodec"
+	"github.com/LeJamon/go-xrpl/amendment"
 	"github.com/LeJamon/go-xrpl/internal/ledger/state"
 	"github.com/LeJamon/go-xrpl/internal/tx"
+	"github.com/LeJamon/go-xrpl/internal/tx/ledgerfields"
 	"github.com/LeJamon/go-xrpl/internal/tx/ter"
 	"github.com/LeJamon/go-xrpl/keylet"
 	"github.com/LeJamon/go-xrpl/ledger/entry"
@@ -30,8 +33,9 @@ type CredentialEntry struct {
 	Flags          uint32   // Credential flags (lsfAccepted)
 
 	// Directory node hints
-	IssuerNode  uint64
-	SubjectNode uint64
+	IssuerNode     uint64
+	SubjectNode    uint64
+	HasSubjectNode bool
 
 	// Transaction threading
 	PreviousTxnID     [32]byte
@@ -50,97 +54,67 @@ func (c *CredentialEntry) SetAccepted() {
 
 // ParseCredentialEntry parses a Credential ledger entry from binary data
 func ParseCredentialEntry(data []byte) (*CredentialEntry, error) {
-	hexStr := hex.EncodeToString(data)
-	jsonObj, err := binarycodec.Decode(hexStr)
+	var decoded ledgerfields.Credential
+	if err := decoded.Decode(data); err != nil {
+		return nil, fmt.Errorf("parse credential: %w", err)
+	}
+	fields := decoded.ToMap()
+
+	subject, err := state.DecodeAccountID(decoded.Subject)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("parse credential Subject: %w", err)
+	}
+	issuer, err := state.DecodeAccountID(decoded.Issuer)
+	if err != nil {
+		return nil, fmt.Errorf("parse credential Issuer: %w", err)
+	}
+	credentialType, err := hex.DecodeString(decoded.CredentialType)
+	if err != nil {
+		return nil, fmt.Errorf("parse credential CredentialType: %w", err)
+	}
+	issuerNode, err := tx.ParseUint64Hex(decoded.IssuerNode)
+	if err != nil {
+		return nil, fmt.Errorf("parse credential IssuerNode: %w", err)
 	}
 
-	cred := &CredentialEntry{}
+	cred := &CredentialEntry{
+		Subject:           subject,
+		Issuer:            issuer,
+		CredentialType:    credentialType,
+		Flags:             decoded.Flags,
+		IssuerNode:        issuerNode,
+		PreviousTxnLgrSeq: decoded.PreviousTxnLgrSeq,
+	}
 
-	// Parse Subject
-	if subject, ok := jsonObj["Subject"].(string); ok {
-		subjectID, err := state.DecodeAccountID(subject)
-		if err == nil {
-			cred.Subject = subjectID
+	if _, ok := fields["Expiration"]; ok {
+		expiration := decoded.Expiration
+		cred.Expiration = &expiration
+	}
+
+	if _, ok := fields["URI"]; ok {
+		cred.URI, err = hex.DecodeString(decoded.URI)
+		if err != nil {
+			return nil, fmt.Errorf("parse credential URI: %w", err)
 		}
 	}
 
-	// Parse Issuer
-	if issuer, ok := jsonObj["Issuer"].(string); ok {
-		issuerID, err := state.DecodeAccountID(issuer)
-		if err == nil {
-			cred.Issuer = issuerID
+	if _, ok := fields["SubjectNode"]; ok {
+		cred.SubjectNode, err = tx.ParseUint64Hex(decoded.SubjectNode)
+		if err != nil {
+			return nil, fmt.Errorf("parse credential SubjectNode: %w", err)
 		}
+		cred.HasSubjectNode = true
 	}
 
-	// Parse CredentialType (Blob/VL field stored as hex)
-	if credType, ok := jsonObj["CredentialType"].(string); ok {
-		decoded, err := hex.DecodeString(credType)
-		if err == nil {
-			cred.CredentialType = decoded
+	if _, ok := fields["PreviousTxnID"]; ok {
+		previousTxnID, err := hex.DecodeString(decoded.PreviousTxnID)
+		if err != nil {
+			return nil, fmt.Errorf("parse credential PreviousTxnID: %w", err)
 		}
-	}
-
-	// Parse Expiration (optional)
-	// The binary codec returns UInt32 fields as native uint32, not float64.
-	if exp := jsonObj["Expiration"]; exp != nil {
-		switch v := exp.(type) {
-		case uint32:
-			cred.Expiration = &v
-		case float64:
-			expVal := uint32(v)
-			cred.Expiration = &expVal
-		case int:
-			expVal := uint32(v)
-			cred.Expiration = &expVal
-		case int64:
-			expVal := uint32(v)
-			cred.Expiration = &expVal
+		if len(previousTxnID) != len(cred.PreviousTxnID) {
+			return nil, fmt.Errorf("parse credential PreviousTxnID: decoded length %d, want %d", len(previousTxnID), len(cred.PreviousTxnID))
 		}
-	}
-
-	// Parse URI (optional, Blob/VL field stored as hex)
-	if uri, ok := jsonObj["URI"].(string); ok {
-		decoded, err := hex.DecodeString(uri)
-		if err == nil {
-			cred.URI = decoded
-		}
-	}
-
-	// Parse Flags - handle multiple possible types from JSON decoder
-	if flags := jsonObj["Flags"]; flags != nil {
-		switch v := flags.(type) {
-		case float64:
-			cred.Flags = uint32(v)
-		case uint32:
-			cred.Flags = v
-		case int:
-			cred.Flags = uint32(v)
-		case int64:
-			cred.Flags = uint32(v)
-		}
-	}
-
-	// Parse IssuerNode
-	if issuerNode, ok := jsonObj["IssuerNode"].(string); ok {
-		cred.IssuerNode, _ = tx.ParseUint64Hex(issuerNode)
-	}
-
-	// Parse SubjectNode
-	if subjectNode, ok := jsonObj["SubjectNode"].(string); ok {
-		cred.SubjectNode, _ = tx.ParseUint64Hex(subjectNode)
-	}
-
-	// Parse PreviousTxnID
-	if prevTxnID, ok := jsonObj["PreviousTxnID"].(string); ok {
-		bytes, _ := hex.DecodeString(prevTxnID)
-		copy(cred.PreviousTxnID[:], bytes)
-	}
-
-	// Parse PreviousTxnLgrSeq
-	if prevSeq, ok := jsonObj["PreviousTxnLgrSeq"].(float64); ok {
-		cred.PreviousTxnLgrSeq = uint32(prevSeq)
+		copy(cred.PreviousTxnID[:], previousTxnID)
 	}
 
 	return cred, nil
@@ -148,60 +122,62 @@ func ParseCredentialEntry(data []byte) (*CredentialEntry, error) {
 
 // serializeCredentialEntry serializes a Credential entry to binary format
 func serializeCredentialEntry(cred *CredentialEntry) ([]byte, error) {
-	jsonObj := map[string]any{
-		"LedgerEntryType": "Credential",
+	if cred == nil {
+		return nil, errors.New("serialize credential: nil entry")
 	}
 
 	subjectStr, err := state.EncodeAccountID(cred.Subject)
-	if err == nil && subjectStr != "" {
-		jsonObj["Subject"] = subjectStr
+	if err != nil {
+		return nil, fmt.Errorf("serialize credential subject: %w", err)
+	}
+	if subjectStr == "" {
+		return nil, errors.New("serialize credential: empty subject")
 	}
 
 	issuerStr, err := state.EncodeAccountID(cred.Issuer)
-	if err == nil && issuerStr != "" {
-		jsonObj["Issuer"] = issuerStr
+	if err != nil {
+		return nil, fmt.Errorf("serialize credential issuer: %w", err)
+	}
+	if issuerStr == "" {
+		return nil, errors.New("serialize credential: empty issuer")
 	}
 
-	if len(cred.CredentialType) > 0 {
-		jsonObj["CredentialType"] = hex.EncodeToString(cred.CredentialType)
+	if len(cred.CredentialType) == 0 {
+		return nil, errors.New("serialize credential: empty credential type")
 	}
+
+	var sle ledgerfields.Credential
+	sle.SetSubject(subjectStr)
+	sle.SetIssuer(issuerStr)
+	sle.SetCredentialType(hex.EncodeToString(cred.CredentialType))
+	sle.SetIssuerNode(tx.FormatUint64Hex(cred.IssuerNode))
+	sle.SetFlags(cred.Flags)
 
 	if cred.Expiration != nil {
-		jsonObj["Expiration"] = *cred.Expiration
+		sle.SetExpiration(*cred.Expiration)
 	}
 
 	if len(cred.URI) > 0 {
-		jsonObj["URI"] = hex.EncodeToString(cred.URI)
+		sle.SetURI(hex.EncodeToString(cred.URI))
 	}
 
-	// sfFlags is a soeREQUIRED common field on every ledger entry, so rippled
-	// always serializes it (including Flags:0 before lsfAccepted is set). Omitting
-	// it when zero diverges the SLE state and drops PreviousFields.Flags on accept.
-	jsonObj["Flags"] = cred.Flags
-
-	// sfIssuerNode and sfSubjectNode are both soeREQUIRED on ltCREDENTIAL, so
-	// rippled always serializes them — including SubjectNode:0 for a self-issued
-	// credential (subject == issuer), where doApply leaves it at the template
-	// default instead of inserting into the subject's directory.
-	// Reference: rippled Credentials.cpp:175,180-195; ledger_entries.macro ltCREDENTIAL.
-	jsonObj["IssuerNode"] = tx.FormatUint64Hex(cred.IssuerNode)
-	jsonObj["SubjectNode"] = tx.FormatUint64Hex(cred.SubjectNode)
+	if cred.HasSubjectNode && cred.Subject != cred.Issuer {
+		sle.SetSubjectNode(tx.FormatUint64Hex(cred.SubjectNode))
+	}
 
 	var zeroHash [32]byte
 	if cred.PreviousTxnID != zeroHash {
-		jsonObj["PreviousTxnID"] = hex.EncodeToString(cred.PreviousTxnID[:])
+		sle.SetPreviousTxnID(hex.EncodeToString(cred.PreviousTxnID[:]))
+		sle.SetPreviousTxnLgrSeq(cred.PreviousTxnLgrSeq)
+	} else if cred.PreviousTxnLgrSeq != 0 {
+		return nil, errors.New("serialize credential: PreviousTxnLgrSeq set without PreviousTxnID")
 	}
 
-	if cred.PreviousTxnLgrSeq > 0 {
-		jsonObj["PreviousTxnLgrSeq"] = cred.PreviousTxnLgrSeq
-	}
-
-	hexStr, err := binarycodec.Encode(jsonObj)
+	data, err := sle.Encode()
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("serialize credential: %w", err)
 	}
-
-	return hex.DecodeString(hexStr)
+	return data, nil
 }
 
 // CheckCredentialExpired checks if a credential has expired
@@ -281,13 +257,16 @@ func ValidCredentials(view tx.LedgerView, subject [20]byte, credentialIDs []stri
 	return ter.TesSUCCESS
 }
 
-// RemoveExpiredCredentials deletes any expired credentials in credentialIDs
-// from the ledger, adjusting owner directories and counts. It returns true if
-// at least one credential was expired.
+// removeExpired is the shared per-credential deletion loop. anyExpired reports
+// whether any credential was expired; failTER is the first failing deletion TER
+// (tesSUCCESS if none failed). When stopOnFailure is true it returns immediately
+// on the first deletion failure — the success-path behaviour rippled gates on
+// fixCleanup3_1_3; otherwise every expired credential is processed and failures
+// are only logged (the tec-recovery cleanup).
 // Reference: rippled CredentialHelpers.cpp credentials::removeExpired()
-func RemoveExpiredCredentials(ctx *tx.ApplyContext, credentialIDs []string) bool {
+func removeExpired(ctx *tx.ApplyContext, credentialIDs []string, stopOnFailure bool) (anyExpired bool, failTER ter.Result) {
 	closeTime := ctx.Config.ParentCloseTime
-	anyExpired := false
+	failTER = ter.TesSUCCESS
 
 	for _, idHex := range credentialIDs {
 		credIDBytes, err := hex.DecodeString(idHex)
@@ -309,12 +288,43 @@ func RemoveExpiredCredentials(ctx *tx.ApplyContext, credentialIDs []string) bool
 		}
 
 		if CheckCredentialExpired(cred, closeTime) {
-			_ = DeleteSLE(ctx, credKey, cred)
+			if r := DeleteSLE(ctx, credKey, cred); r != ter.TesSUCCESS {
+				ctx.Log.Error("removeExpiredCredentials: failed to delete expired credential", "ter", r.String())
+				if stopOnFailure {
+					return anyExpired, r
+				}
+				if failTER == ter.TesSUCCESS {
+					failTER = r
+				}
+			}
 			anyExpired = true
 		}
 	}
 
-	return anyExpired
+	return anyExpired, failTER
+}
+
+// RemoveExpiredCredentials deletes any expired credentials in credentialIDs on a
+// transaction's success path, adjusting owner directories and counts. It returns
+// whether at least one credential was expired and the TER to abort with. Under
+// fixCleanup3_1_3 a deletion failure aborts the transaction (returns the failing
+// TER); before the amendment the failure is swallowed (returns tesSUCCESS),
+// matching rippled removeExpired.
+func RemoveExpiredCredentials(ctx *tx.ApplyContext, credentialIDs []string) (bool, ter.Result) {
+	fix313 := ctx.Rules().Enabled(amendment.FeatureID("fixCleanup3_1_3"))
+	anyExpired, failTER := removeExpired(ctx, credentialIDs, fix313)
+	if fix313 {
+		return anyExpired, failTER
+	}
+	return anyExpired, ter.TesSUCCESS
+}
+
+// RemoveExpiredCredentialsOnTec runs the tec-recovery cleanup: every expired
+// credential is deleted and a deletion failure is only logged, never propagated,
+// matching rippled Transactor::removeExpiredCredentials. This path is unchanged
+// by fixCleanup3_1_3.
+func RemoveExpiredCredentialsOnTec(ctx *tx.ApplyContext, credentialIDs []string) {
+	removeExpired(ctx, credentialIDs, false)
 }
 
 // VerifyDepositPreauth enforces deposit authorization for a transaction
@@ -327,8 +337,14 @@ func RemoveExpiredCredentials(ctx *tx.ApplyContext, credentialIDs []string) bool
 func VerifyDepositPreauth(ctx *tx.ApplyContext, credentialIDs []string, src, dst [20]byte, dstAccount *state.AccountRoot) ter.Result {
 	credentialsPresent := len(credentialIDs) > 0
 
-	if credentialsPresent && RemoveExpiredCredentials(ctx, credentialIDs) {
-		return ter.TecEXPIRED
+	if credentialsPresent {
+		anyExpired, r := RemoveExpiredCredentials(ctx, credentialIDs)
+		if r != ter.TesSUCCESS {
+			return r
+		}
+		if anyExpired {
+			return ter.TecEXPIRED
+		}
 	}
 
 	if dstAccount != nil && (dstAccount.Flags&state.LsfDepositAuth) != 0 && src != dst {

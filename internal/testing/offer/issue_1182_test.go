@@ -12,21 +12,14 @@ import (
 
 func TestOffer_IoCSell_GlobalFrozenTaker(t *testing.T) {
 	for _, tc := range []struct {
-		name                 string
-		frozen               bool
-		immediateOfferKilled bool
+		name   string
+		frozen bool
 	}{
-		{name: "crosses", immediateOfferKilled: true},
-		{name: "globally_frozen_taker", frozen: true, immediateOfferKilled: true},
-		{name: "globally_frozen_taker_legacy", frozen: true},
+		{name: "crosses"},
+		{name: "globally_frozen_taker", frozen: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			env := jtx.NewTestEnv(t)
-			if tc.immediateOfferKilled {
-				env.EnableFeature("ImmediateOfferKilled")
-			} else {
-				env.DisableFeature("ImmediateOfferKilled")
-			}
 
 			const coreCurrency = "434F524500000000000000000000000000000000"
 			issuer := jtx.NewAccount("core issuer")
@@ -73,7 +66,7 @@ func TestOffer_IoCSell_GlobalFrozenTaker(t *testing.T) {
 				takerGets,
 			).ImmediateOrCancel().Sell().Build())
 
-			if tc.frozen && tc.immediateOfferKilled {
+			if tc.frozen {
 				jtx.RequireTxClaimed(t, result, jtx.TecKILLED)
 			} else {
 				jtx.RequireTxSuccess(t, result)

@@ -15,11 +15,31 @@ import (
 )
 
 // preclaim validates the transaction against the current ledger state.
-// Mirrors rippled's Transactor::operator()() pre-application pipeline:
+// Mirrors rippled's invoke_preclaim pipeline (applySteps.cpp, PR #6192):
 //
-//	checkSeqProxy → checkPriorTxAndLastLedger → checkFee → checkPermission →
-//	checkSign (+ checkBatchSign) → tx-type preclaim.
-func (e *Engine) preclaim(tx txcore.Transaction, txHash [32]byte) ter.Result {
+//	checkSeqProxy → checkPriorTxAndLastLedger → checkSign (+ checkBatchSign) →
+//	checkFee → checkPermission → tx-type preclaim.
+//
+// The signature stage precedes the fee and permission checks so that no
+// fee-charging TER is ever returned before the signature has been verified.
+func (e *Engine) preclaim(tx txcore.Transaction, txHash [32]byte) (result ter.Result) {
+	// Any panic reachable from adversarial ledger state — most commonly an
+	// IOUAmount / XRPLNumber arithmetic overflow while reading a crafted balance
+	// or amount — is recovered and surfaced as tefEXCEPTION so it can never
+	// terminate the node. The ledger-mutation invariant violations that rippled
+	// converted to catchable exceptions in 3.1.2 (ApplyStateTable / ApplyView
+	// directory ops) are reachable only from preclaim/doApply contexts; doApply
+	// is already covered by invokeApply. Mirrors rippled applySteps.cpp
+	// preclaim() wrapping invoke_preclaim in try{...}catch(std::exception){
+	// tefEXCEPTION }.
+	defer func() {
+		if r := recover(); r != nil {
+			e.logger.Error("transaction preclaim panic recovered, returning tefEXCEPTION",
+				"txHash", hex.EncodeToString(txHash[:]), "panic", r)
+			result = ter.TefEXCEPTION
+		}
+	}()
+
 	common := tx.GetCommon()
 
 	// Resolve and parse the source account; this is shared by all subsequent steps.
@@ -34,28 +54,36 @@ func (e *Engine) preclaim(tx txcore.Transaction, txHash [32]byte) ter.Result {
 	if result := e.checkPriorTxAndLastLedger(common, account, txHash); result != ter.TesSUCCESS {
 		return result
 	}
-	if result := e.checkFee(tx, common, account); result != ter.TesSUCCESS {
-		return result
-	}
-	if result := e.checkPermission(tx, common, accountID); result != ter.TesSUCCESS {
-		return result
-	}
+
+	// The signature is verified before the fee and permission checks so that a
+	// transaction that fails both signature verification and a fee/permission
+	// check reports the signature failure. No fee-charging TER (terINSUF_FEE_B,
+	// ...) may precede the signature check, which would risk charging a fee on
+	// an unauthorized transaction.
+	// Reference: rippled applySteps.cpp invoke_preclaim (PR #6192).
 	if result := e.checkSign(tx, common); result != ter.TesSUCCESS {
 		return result
 	}
-
-	// Step 6: checkBatchSign — batch signer authorization
-	// Reference: rippled Batch::checkSign -> Transactor::checkBatchSign
-	// This checks that each BatchSigner is authorized to act as their account.
-	// This runs even when SkipSignatureVerification is true because it checks
-	// authorization (account existence, master key, regular key), not crypto.
+	// checkBatchSign is part of the signature stage (rippled Batch::checkSign =
+	// Transactor::checkSign + Transactor::checkBatchSign), so it moves ahead of
+	// checkFee together with checkSign. It verifies each BatchSigner is
+	// authorized to act as their account and runs even under
+	// SkipSignatureVerification because it checks authorization (account
+	// existence, master/regular key), not crypto.
 	if bsp, ok := tx.(txcore.BatchSignerProvider); ok {
 		if result := e.checkBatchSign(bsp.GetBatchSigners()); result != ter.TesSUCCESS {
 			return result
 		}
 	}
 
-	// Step 7: Transaction-specific preclaim checks.
+	if result := e.checkFee(tx, common, account); result != ter.TesSUCCESS {
+		return result
+	}
+	if result := e.checkPermission(tx, common, accountID); result != ter.TesSUCCESS {
+		return result
+	}
+
+	// Transaction-specific preclaim checks.
 	// These run after all common preclaim checks and are subject to the
 	// TapRETRY gate in Apply(). tec results from preclaim are NOT applied
 	// when TapRETRY is set (likelyToClaimFee = false), matching rippled's
@@ -66,7 +94,7 @@ func (e *Engine) preclaim(tx txcore.Transaction, txHash [32]byte) ter.Result {
 		// Wrap the base view so Rules() reports the engine's rules: the base
 		// ledger returns nil, which would silently disable rules-gated reads
 		// (e.g. accountFunds' frozen-LP-token check) during preclaim.
-		preclaimView := rulesView{LedgerView: e.view, rules: e.config.GetRules()}
+		preclaimView := rulesView{LedgerView: e.view, rules: e.config.RequireRules()}
 		if result := preclaimer.Preclaim(preclaimView, e.config); result != ter.TesSUCCESS {
 			return result
 		}
@@ -99,9 +127,7 @@ func (e *Engine) checkSeqProxy(common *txcore.Common, accountID [20]byte, accoun
 	// Check for both Sequence (non-zero) and TicketSequence set → temSEQ_AND_TICKET
 	// Reference: rippled Transactor::checkSeqProxy in Transactor.cpp line 375
 	if common.Sequence != nil && *common.Sequence != 0 && common.TicketSequence != nil {
-		if e.rules().Enabled(amendment.FeatureTicketBatch) {
-			return ter.TemSEQ_AND_TICKET
-		}
+		return ter.TemSEQ_AND_TICKET
 	}
 
 	// Check sequence number or ticket
@@ -183,7 +209,7 @@ func (e *Engine) checkFee(tx txcore.Transaction, common *txcore.Common, account 
 	//     pseudo-tx gating the OpenLedger flag also controls.
 	if e.config.OpenLedger ||
 		(e.config.EnforceLoadFee && e.config.FeeTrack != nil &&
-			e.config.FeeTrack.GetLoadFactor() > feetrack.LoadBase) {
+			e.config.FeeTrack.LoadFactor() > feetrack.LoadBase) {
 		if r := e.enforceFeeFloor(fee, baseFeeForTx); r != ter.TesSUCCESS {
 			return r
 		}
@@ -300,19 +326,28 @@ func (e *Engine) checkPermission(tx txcore.Transaction, common *txcore.Common, a
 	delegateKeylet := keylet.Delegate(accountID, delegateID)
 	delegateData, readErr := e.view.Read(delegateKeylet)
 	if readErr != nil || delegateData == nil {
-		return ter.TecNO_DELEGATE_PERMISSION
+		return ter.TerNO_DELEGATE_PERMISSION
 	}
 	delegateEntry, parseErr := state.ParseDelegate(delegateData)
 	if parseErr != nil {
-		return ter.TecNO_DELEGATE_PERMISSION
+		return ter.TerNO_DELEGATE_PERMISSION
 	}
-	// Check if the delegate SLE grants permission for this tx type.
-	// In rippled: permissionValue == tx.getTxnType() + 1
-	txTypeValue := uint32(tx.TxType())
-	if !delegateEntry.HasTxPermission(txTypeValue) {
-		return ter.TecNO_DELEGATE_PERMISSION
+	// A transaction-level grant (permissionValue == txType + 1) authorizes
+	// every action of this transaction type.
+	if delegateEntry.HasTxPermission(uint32(tx.TxType())) {
+		return ter.TesSUCCESS
 	}
-	return ter.TesSUCCESS
+	// Otherwise a granular permission may still authorize a specific slice of
+	// the transaction's behaviour. Transaction types that support granular
+	// delegation evaluate their own rules here.
+	if checker, ok := tx.(txcore.DelegatePermissionChecker); ok {
+		return checker.CheckDelegatePermission(txcore.DelegatePermissionContext{
+			View:        e.view,
+			Rules:       e.config.RequireRules(),
+			Permissions: delegateEntry.Permissions,
+		})
+	}
+	return ter.TerNO_DELEGATE_PERMISSION
 }
 
 // checkSign performs signature authorization for both single-signed and
@@ -323,6 +358,22 @@ func (e *Engine) checkPermission(tx txcore.Transaction, common *txcore.Common, a
 //
 //	auto const idAccount = ctx.tx[~sfDelegate].value_or(ctx.tx[sfAccount]);
 func (e *Engine) checkSign(tx txcore.Transaction, common *txcore.Common) ter.Result {
+	// Under LendingProtocol a pseudo-account (AMM / Vault / LoanBroker) can never
+	// authorize a transaction: rippled Transactor::checkSign returns tefBAD_AUTH
+	// for any tx signed by a pseudo-account, at the top of the signature stage.
+	if e.rules().Enabled(amendment.FeatureLendingProtocol) {
+		idAccount := common.Account
+		if common.Delegate != "" {
+			idAccount = common.Delegate
+		}
+		if idAccountID, err := state.DecodeAccountID(idAccount); err == nil {
+			if data, rerr := e.view.Read(keylet.Account(idAccountID)); rerr == nil && data != nil {
+				if ar, perr := state.ParseAccountRoot(data); perr == nil && ar.IsPseudoAccount() {
+					return ter.TefBAD_AUTH
+				}
+			}
+		}
+	}
 	if sign.IsMultiSigned(tx) {
 		return e.checkMultiSign(common)
 	}
@@ -396,48 +447,24 @@ func (e *Engine) checkSingleSign(common *txcore.Common) ter.Result {
 
 	isMasterDisabled := (idAccountRoot.Flags & state.LsfDisableMaster) != 0
 
-	if e.rules().Enabled(amendment.FeatureFixMasterKeyAsRegularKey) {
-		// With fixMasterKeyAsRegularKey: check regular key first, then master.
-		// This allows the master key to serve as a regular key even when
-		// master signing is disabled (e.g., regkey(alice, alice) + disable master).
-		// Reference: rippled Transactor::checkSingleSign lines 691-713
-		if signerAddress == idAccountRoot.RegularKey {
-			// Signed with regular key — allowed
-			return ter.TesSUCCESS
-		}
-		if !isMasterDisabled && signerAddress == idAccount {
-			// Signed with enabled master key — allowed
-			return ter.TesSUCCESS
-		}
-		if isMasterDisabled && signerAddress == idAccount {
-			// Signed with disabled master key
-			return ter.TefMASTER_DISABLED
-		}
-		// Signed with an unauthorized key
-		return ter.TefBAD_AUTH
-	}
-
-	// Without fixMasterKeyAsRegularKey: check master key first.
-	// If signer == account, it's a master key sign attempt.
-	// The regular key is only checked if signer != account.
-	// Reference: rippled Transactor::checkSingleSign lines 715-737
-	if signerAddress == idAccount {
-		// Signing with the master key. Continue if it is not disabled.
-		if isMasterDisabled {
-			return ter.TefMASTER_DISABLED
-		}
-		return ter.TesSUCCESS
-	}
+	// Check regular key first, then master. This allows the master key to serve
+	// as a regular key even when master signing is disabled (e.g., regkey(alice,
+	// alice) + disable master).
+	// Reference: rippled Transactor::checkSingleSign.
 	if signerAddress == idAccountRoot.RegularKey {
-		// Signing with the regular key. Continue.
+		// Signed with regular key — allowed
 		return ter.TesSUCCESS
 	}
-	if idAccountRoot.RegularKey != "" {
-		// Signing key does not match master or regular key.
-		return ter.TefBAD_AUTH
+	if !isMasterDisabled && signerAddress == idAccount {
+		// Signed with enabled master key — allowed
+		return ter.TesSUCCESS
 	}
-	// No regular key on account and signing key does not match master key.
-	return ter.TefBAD_AUTH_MASTER
+	if isMasterDisabled && signerAddress == idAccount {
+		// Signed with disabled master key
+		return ter.TefMASTER_DISABLED
+	}
+	// Signed with an unauthorized key
+	return ter.TefBAD_AUTH
 }
 
 // checkBatchSign verifies that each batch signer is authorized to sign for their account.

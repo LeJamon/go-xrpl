@@ -1,7 +1,28 @@
 //revive:disable:var-naming
 package types
 
-import "errors"
+import (
+	"errors"
+	"fmt"
+)
+
+// MaxJSONArrayElements caps how many elements a single JSON array field may hold
+// when encoding JSON to binary, matching rippled's STParsedJSON
+// maxSTParsedJSONArraySize (STParsedJSON.h). Fields exceeding it are rejected.
+const MaxJSONArrayElements = 512
+
+// JSONArrayTooLargeError is returned when a JSON array field exceeds
+// MaxJSONArrayElements during JSON->binary encoding. Field names the offending
+// field so RPC entry points can surface rippled's exact invalidParams message.
+type JSONArrayTooLargeError struct {
+	Field string
+}
+
+func (e *JSONArrayTooLargeError) Error() string {
+	return fmt.Sprintf(
+		"Field '%s' exceeds allowed JSON array size of %d elements per field.",
+		e.Field, MaxJSONArrayElements)
+}
 
 var (
 	errNotValidJSON         = errors.New("not a valid json")

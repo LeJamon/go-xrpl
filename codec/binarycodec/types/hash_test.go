@@ -28,19 +28,19 @@ func TestHash_FromJson(t *testing.T) {
 			json:        "031G020000000000000000000000000000000000000000000000000000000000",
 			length:      32,
 			expected:    nil,
-			expectedErr: &ErrInvalidHexString{Err: hex.InvalidByteError('G')},
+			expectedErr: &InvalidHexStringError{Err: hex.InvalidByteError('G')},
 		},
 		{
 			name:        "Invalid hash type",
 			json:        123,
 			length:      32,
-			expectedErr: &ErrInvalidHashType{},
+			expectedErr: &InvalidHashTypeError{},
 		},
 		{
 			name:        "Invalid hash length",
 			json:        "031602000000000000000000000000000000000000000000000000000000000000",
 			length:      32,
-			expectedErr: &ErrInvalidHashLength{Expected: 32},
+			expectedErr: &InvalidHashLengthError{Expected: 32},
 		},
 	}
 

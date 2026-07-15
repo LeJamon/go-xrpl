@@ -27,11 +27,17 @@ type RpcError struct {
 	Message        string `json:"error_message,omitempty"`
 	ErrorException string `json:"error_exception,omitempty"`
 
+	// Extra carries additional result fields merged into the error envelope
+	// alongside error/error_code/error_message. Mirrors rippled's
+	// RPC::injectError, which adds the error keys to an already-populated
+	// result (e.g. ledger_entry returns the computed `index` on entryNotFound).
+	Extra map[string]any `json:"-"`
+
 	// bareToken marks errors rippled emits as a lone `error` token via a direct
 	// jvResult[jss::error] = "..." assignment (e.g. VaultInfo.cpp:101,
-	// LedgerEntry.cpp:1044, TransactionEntry.cpp:71) rather than RPC::inject_error.
-	// rippled's bare path writes neither error_code nor error_message, so the
-	// wire emitters omit both when this is set.
+	// TransactionEntry.cpp:71) rather than RPC::inject_error. rippled's bare path
+	// writes neither error_code nor error_message, so the wire emitters omit both
+	// when this is set.
 	bareToken bool
 
 	// invalidApiVersion marks the unsupported-api_version rejection, which
@@ -51,6 +57,18 @@ type RpcError struct {
 	// envelope. Transport writers special-case this flag the same way they do
 	// invalidApiVersion / forbidden.
 	overloaded bool
+}
+
+// WithExtra returns a copy of the error carrying additional result fields that
+// the response builder merges into the error envelope, mirroring rippled's
+// RPC::injectError (which adds error keys to an existing result).
+func (e *RpcError) WithExtra(fields map[string]any) *RpcError {
+	if e == nil {
+		return nil
+	}
+	cp := *e
+	cp.Extra = fields
+	return &cp
 }
 
 // IsBareToken reports whether this error mirrors a rippled bare-token response
@@ -111,6 +129,19 @@ func (e RpcError) ErrorObject() map[string]any {
 		"error_code":    e.Code,
 		"error_message": e.Message,
 	}
+}
+
+// ResponseFields returns the error fields used in XRPL response envelopes.
+func (e RpcError) ResponseFields() map[string]any {
+	fields := map[string]any{"error": e.ErrorString}
+	if !e.IsBareToken() {
+		fields["error_code"] = e.Code
+		fields["error_message"] = e.Message
+	}
+	for key, value := range e.Extra {
+		fields[key] = value
+	}
+	return fields
 }
 
 // rippled error_code_i enum, mirrored 1:1 by value (ErrorCodes.h:42-160).
@@ -213,6 +244,10 @@ const (
 	RpcBAD_CREDENTIALS       = 95 // deposit_authorized + credentials
 	RpcTX_SIGNED             = 96 // Simulate
 	RpcDOMAIN_MALFORMED      = 97 // Pathfinding
+
+	// ledger_entry (rippled 3.0.0, PR #5237)
+	RpcENTRY_NOT_FOUND        = 98
+	RpcUNEXPECTED_LEDGER_TYPE = 99
 )
 
 // go-xrpl-specific error codes for conditions rippled does not assign an
@@ -257,6 +292,32 @@ func RpcErrorMethodNotFound() *RpcError {
 
 func RpcErrorLgrNotFound(message string) *RpcError {
 	return NewRpcError(RpcLGR_NOT_FOUND, "lgrNotFound", "lgrNotFound", message)
+}
+
+func RpcErrorLgrNotValidated() *RpcError {
+	return NewRpcError(RpcLGR_NOT_VALIDATED, "lgrNotValidated", "lgrNotValidated", "Ledger not validated.")
+}
+
+func RpcErrorNoNetwork(message string) *RpcError {
+	if message == "" {
+		message = "Not synced to the network."
+	}
+	return NewRpcError(RpcNO_NETWORK, "noNetwork", "noNetwork", message)
+}
+
+func RpcErrorNotSynced(message string) *RpcError {
+	if message == "" {
+		message = "Not synced to the network."
+	}
+	return NewRpcError(RpcNOT_SYNCED, "notSynced", "notSynced", message)
+}
+
+func RpcErrorLgrIdxsInvalid() *RpcError {
+	return NewRpcError(RpcLGR_IDXS_INVALID, "lgrIdxsInvalid", "lgrIdxsInvalid", "Ledger indexes invalid.")
+}
+
+func RpcErrorLgrIdxMalformed() *RpcError {
+	return NewRpcError(RpcLGR_IDX_MALFORMED, "lgrIdxMalformed", "lgrIdxMalformed", "Ledger index malformed.")
 }
 
 func RpcErrorActNotFound(message string) *RpcError {
@@ -461,6 +522,23 @@ func RpcErrorExpectedFieldHighFee(field, expectedType string) *RpcError {
 		"Invalid field '"+field+"', not "+expectedType+".")
 }
 
+// RpcErrorMalformedField reports a present-but-wrong-type selector subfield.
+// It carries a field-specific token (e.g. "malformedBroker", "malformedSeq"),
+// the rpcINVALID_PARAMS code, and rippled's expected_field_message, matching the
+// invalidFieldError path in rippled's ledger_entry field parsers.
+func RpcErrorMalformedField(token, field, expectedType string) *RpcError {
+	return NewRpcError(RpcINVALID_PARAMS, token, token,
+		"Invalid field '"+field+"', not "+expectedType+".")
+}
+
+// RpcErrorMalformedRequestMissingField reports an absent required selector
+// subfield. rippled's missingFieldError leaves the token at its "malformedRequest"
+// default and sets the message to missing_field_message.
+func RpcErrorMalformedRequestMissingField(field string) *RpcError {
+	return NewRpcError(RpcINVALID_PARAMS, "malformedRequest", "malformedRequest",
+		"Missing field '"+field+"'.")
+}
+
 // RpcErrorSigningMalformed returns an error when a transaction's signing is malformed
 // (matches rippled rpcSIGNING_MALFORMED, code 63, token "signingMalformed").
 func RpcErrorSigningMalformed() *RpcError {
@@ -474,6 +552,22 @@ func RpcErrorPublicMalformed() *RpcError {
 	return NewRpcError(RpcPUBLIC_MALFORMED, "publicMalformed", "publicMalformed", "Public key is malformed.")
 }
 
+func RpcErrorBadSeed() *RpcError {
+	return NewRpcError(RpcBAD_SEED, "badSeed", "badSeed", "Disallowed seed.")
+}
+
+func RpcErrorBadKeyType(message string) *RpcError {
+	return NewRpcError(RpcBAD_KEY_TYPE, "badKeyType", "badKeyType", message)
+}
+
+func RpcErrorChannelMalformed() *RpcError {
+	return NewRpcError(RpcCHANNEL_MALFORMED, "channelMalformed", "channelMalformed", "Payment channel is malformed.")
+}
+
+func RpcErrorChannelAmountMalformed() *RpcError {
+	return NewRpcError(RpcCHANNEL_AMT_MALFORMED, "channelAmtMalformed", "channelAmtMalformed", "Payment channel amount is malformed.")
+}
+
 // RpcErrorMissingField returns an error for missing required field (matches rippled missing_field_error)
 func RpcErrorMissingField(field string) *RpcError {
 	return NewRpcError(RpcINVALID_PARAMS, "invalidParams", "invalidParams", "Missing field '"+field+"'.")
@@ -484,6 +578,12 @@ func RpcErrorMissingField(field string) *RpcError {
 // without a numeric code; we use rpcUNKNOWN (-1) as the closest approximation.
 func RpcErrorFieldNotFoundTransaction() *RpcError {
 	e := NewRpcError(RpcUNKNOWN, "fieldNotFoundTransaction", "fieldNotFoundTransaction", "Missing field 'tx_hash'.")
+	e.bareToken = true
+	return e
+}
+
+func RpcErrorMalformedRequestBare() *RpcError {
+	e := NewRpcError(RpcUNKNOWN, "malformedRequest", "malformedRequest", "")
 	e.bareToken = true
 	return e
 }
@@ -517,13 +617,36 @@ func RpcErrorOracleMalformed() *RpcError {
 	return NewRpcError(RpcORACLE_MALFORMED, "oracleMalformed", "oracleMalformed", "Oracle request is malformed.")
 }
 
-// RpcErrorEntryNotFound returns the error rippled emits for a missing ledger
-// entry (LedgerEntry.cpp:1044, VaultInfo.cpp:101): a bare "entryNotFound"
-// token with no numeric code, so the code is rpcUNKNOWN (-1).
+// RpcErrorEntryNotFound returns rippled's rpcENTRY_NOT_FOUND (code 98, token
+// "entryNotFound"). rippled 3.0.0 promoted the ledger_entry handler's missing
+// entry from a bare token to RPC::make_error(rpcENTRY_NOT_FOUND)
+// (LedgerEntry.cpp:838,850; ErrorCodes.cpp:121), so it now carries the numeric
+// code and an error_message. An empty message defaults to rippled's canonical
+// "Entry not found." string. The bare-token form survives as
+// RpcErrorEntryNotFoundBare for the handlers rippled left unchanged.
 func RpcErrorEntryNotFound(message string) *RpcError {
+	if message == "" {
+		message = "Entry not found."
+	}
+	return NewRpcError(RpcENTRY_NOT_FOUND, "entryNotFound", "entryNotFound", message)
+}
+
+// RpcErrorEntryNotFoundBare returns the bare "entryNotFound" token (no numeric
+// code or error_message) that rippled still emits via a direct
+// jvResult[jss::error] assignment in handlers not covered by the 3.0.0
+// ledger_entry refactor (VaultInfo.cpp:101), so the code is rpcUNKNOWN (-1).
+func RpcErrorEntryNotFoundBare(message string) *RpcError {
 	e := NewRpcError(RpcUNKNOWN, "entryNotFound", "entryNotFound", message)
 	e.bareToken = true
 	return e
+}
+
+// RpcErrorUnexpectedLedgerType returns rippled's rpcUNEXPECTED_LEDGER_TYPE
+// (code 99, token "unexpectedLedgerType"), emitted by the 3.0.0 ledger_entry
+// handler when the object found does not match the type implied by the request
+// selector (LedgerEntry.cpp:853-856; ErrorCodes.cpp:122).
+func RpcErrorUnexpectedLedgerType() *RpcError {
+	return NewRpcError(RpcUNEXPECTED_LEDGER_TYPE, "unexpectedLedgerType", "unexpectedLedgerType", "Unexpected ledger type.")
 }
 
 // RpcErrorTransactionNotFound returns the error rippled's transaction_entry

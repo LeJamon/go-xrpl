@@ -9,13 +9,15 @@ import (
 	tx "github.com/LeJamon/go-xrpl/internal/tx"
 	"github.com/LeJamon/go-xrpl/internal/tx/payment"
 	"github.com/LeJamon/go-xrpl/internal/tx/payment/pathfinder"
+	"github.com/LeJamon/go-xrpl/keylet"
 )
 
 // PathFindSession holds the state for a persistent WebSocket path_find session.
 // Each WebSocket connection can have at most one active session (matching rippled).
 // Reference: rippled PathRequest class + PathFind.cpp handler
 type PathFindSession struct {
-	mu sync.Mutex
+	mu        sync.Mutex
+	computeMu sync.Mutex
 
 	// Request parameters (immutable after creation)
 	srcAccount    [20]byte
@@ -25,13 +27,12 @@ type PathFindSession struct {
 	srcCurrencies []payment.Issue
 	convertAll    bool
 
-	// Original string representations for response formatting
+	// Canonical account strings for response formatting
 	srcAccountStr string
 	dstAccountStr string
-	dstAmountRaw  json.RawMessage
 
-	// Last computed result (updated on each ledger close)
-	lastResult *pathfinder.PathRequestResult
+	// Last response state (updated on each ledger close)
+	lastStatus *PathFindEvent
 
 	// Request ID from the original create command
 	id any
@@ -44,10 +45,7 @@ type pathFindCreateRequest struct {
 	DestinationAccount string          `json:"destination_account"`
 	DestinationAmount  json.RawMessage `json:"destination_amount"`
 	SendMax            json.RawMessage `json:"send_max,omitempty"`
-	SourceCurrencies   []struct {
-		Currency string `json:"currency"`
-		Issuer   string `json:"issuer,omitempty"`
-	} `json:"source_currencies,omitempty"`
+	SourceCurrencies   json.RawMessage `json:"source_currencies,omitempty"`
 }
 
 // ParseAndCreateSession parses a path_find create request and creates a session.
@@ -81,10 +79,8 @@ func ParseAndCreateSession(params json.RawMessage, id any) (*PathFindSession, *r
 			"Destination account is malformed.")
 	}
 
-	// Parse destination amount. MPT amounts parse but the pathfinder has
-	// no MPT support, so they are rejected as malformed.
 	dstAmount, amtErr := state.AmountFromJSON(request.DestinationAmount)
-	if amtErr != nil || dstAmount.IsMPT() {
+	if amtErr != nil || !pathfinder.IsValidAsset(dstAmount) {
 		return nil, rpctypes.RpcErrorDstAmtMalformed("Destination amount/currency/issuer is malformed.")
 	}
 
@@ -102,7 +98,7 @@ func ParseAndCreateSession(params json.RawMessage, id any) (*PathFindSession, *r
 			return nil, rpctypes.RpcErrorDstAmtMalformed("Destination amount/currency/issuer is malformed.")
 		}
 		amt, smErr := state.AmountFromJSON(request.SendMax)
-		if smErr != nil || amt.IsMPT() || (amt.Signum() <= 0 && amt.Value() != "-1") {
+		if smErr != nil || !pathfinder.IsValidAsset(amt) || (amt.Signum() <= 0 && amt.Value() != "-1") {
 			return nil, rpctypes.RpcErrorSendMaxMalformed("SendMax amount malformed.")
 		}
 		sendMax = &amt
@@ -110,19 +106,98 @@ func ParseAndCreateSession(params json.RawMessage, id any) (*PathFindSession, *r
 
 	// Parse optional source_currencies
 	var srcCurrencies []payment.Issue
-	for _, sc := range request.SourceCurrencies {
-		issue := payment.Issue{Currency: sc.Currency}
-		if sc.Issuer != "" {
-			issuerID, decErr := state.DecodeAccountID(sc.Issuer)
-			if decErr != nil {
-				return nil, rpctypes.NewRpcError(rpctypes.RpcINVALID_PARAMS, "srcIsrMalformed", "invalidParams",
-					"Source issuer is malformed.")
-			}
-			issue.Issuer = issuerID
-		} else if sc.Currency != "XRP" && sc.Currency != "" {
-			issue.Issuer = srcAccount
+	if request.SourceCurrencies != nil {
+		var entries []json.RawMessage
+		if err := json.Unmarshal(request.SourceCurrencies, &entries); err != nil || len(entries) == 0 || len(entries) > 18 {
+			return nil, rpctypes.RpcErrorSrcCurMalformed("Source currency is malformed.")
 		}
-		srcCurrencies = append(srcCurrencies, issue)
+		var sendMaxIssue payment.Issue
+		if sendMax != nil {
+			sendMaxIssue = payment.GetIssue(*sendMax)
+		}
+		seen := make(map[payment.Issue]bool)
+		add := func(issue payment.Issue) {
+			if !seen[issue] {
+				seen[issue] = true
+				srcCurrencies = append(srcCurrencies, issue)
+			}
+		}
+
+		for _, raw := range entries {
+			var fields map[string]json.RawMessage
+			if err := json.Unmarshal(raw, &fields); err != nil {
+				return nil, rpctypes.RpcErrorSrcCurMalformed("Source currency is malformed.")
+			}
+			rawCurrency, hasCurrency := fields["currency"]
+			rawMPT, hasMPT := fields["mpt_issuance_id"]
+			if hasCurrency == hasMPT {
+				return nil, rpctypes.RpcErrorSrcCurMalformed("Source currency is malformed.")
+			}
+			if hasMPT {
+				if _, hasIssuer := fields["issuer"]; hasIssuer {
+					return nil, rpctypes.RpcErrorSrcCurMalformed("Source currency is malformed.")
+				}
+				var value string
+				if err := json.Unmarshal(rawMPT, &value); err != nil {
+					return nil, rpctypes.RpcErrorSrcCurMalformed("Source currency is malformed.")
+				}
+				mptID, ok := pathfinder.ParseSourceMPTID(value)
+				if !ok {
+					return nil, rpctypes.RpcErrorSrcCurMalformed("Source currency is malformed.")
+				}
+				issue := payment.NewMPTIssue(mptID)
+				if sendMax != nil {
+					if !issue.Equal(sendMaxIssue) {
+						continue
+					}
+					if sendMaxIssue.Issuer != srcAccount {
+						return nil, rpctypes.RpcErrorSrcIsrMalformed("Source issuer is malformed.")
+					}
+				}
+				add(issue)
+				continue
+			}
+
+			var currency string
+			if err := json.Unmarshal(rawCurrency, &currency); err != nil || !keylet.IsValidCurrencyCode(currency) {
+				return nil, rpctypes.RpcErrorSrcCurMalformed("Source currency is malformed.")
+			}
+			if currency == "" {
+				currency = "XRP"
+			}
+			var issuer [20]byte
+			if rawIssuer, hasIssuer := fields["issuer"]; hasIssuer {
+				var issuerString string
+				if err := json.Unmarshal(rawIssuer, &issuerString); err != nil {
+					return nil, rpctypes.RpcErrorSrcIsrMalformed("Source issuer is malformed.")
+				}
+				issuerID, decErr := state.DecodeAccountID(issuerString)
+				if decErr != nil {
+					return nil, rpctypes.RpcErrorSrcIsrMalformed("Source issuer is malformed.")
+				}
+				issuer = issuerID
+			}
+			if currency == "XRP" {
+				if issuer != [20]byte{} {
+					return nil, rpctypes.RpcErrorSrcCurMalformed("Source currency is malformed.")
+				}
+			} else if issuer == [20]byte{} {
+				issuer = srcAccount
+			}
+
+			if sendMax != nil {
+				if sendMaxIssue.IsMPT || currency != sendMaxIssue.Currency {
+					continue
+				}
+				if issuer != srcAccount && sendMaxIssue.Issuer != srcAccount && issuer != sendMaxIssue.Issuer {
+					return nil, rpctypes.RpcErrorSrcIsrMalformed("Source issuer is malformed.")
+				}
+				if issuer == srcAccount && sendMaxIssue.Issuer != srcAccount {
+					issuer = sendMaxIssue.Issuer
+				}
+			}
+			add(payment.Issue{Currency: currency, Issuer: issuer})
+		}
 	}
 
 	session := &PathFindSession{
@@ -132,9 +207,8 @@ func ParseAndCreateSession(params json.RawMessage, id any) (*PathFindSession, *r
 		sendMax:       sendMax,
 		srcCurrencies: srcCurrencies,
 		convertAll:    convertAll,
-		srcAccountStr: request.SourceAccount,
-		dstAccountStr: request.DestinationAccount,
-		dstAmountRaw:  request.DestinationAmount,
+		srcAccountStr: state.EncodeAccountIDSafe(srcAccount),
+		dstAccountStr: state.EncodeAccountIDSafe(dstAccount),
 		id:            id,
 	}
 
@@ -142,62 +216,118 @@ func ParseAndCreateSession(params json.RawMessage, id any) (*PathFindSession, *r
 }
 
 // Execute runs pathfinding against the given ledger view and stores the result.
-// Returns the formatted PathFindEvent for sending to the client.
-func (s *PathFindSession) Execute(view tx.LedgerView) *PathFindEvent {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-
+// Full updates are returned in pushed-event form; the initial fast result is
+// returned in response-result form.
+func (s *PathFindSession) Execute(view tx.LedgerView, fullReply bool) *PathFindEvent {
 	pr := pathfinder.NewPathRequest(
 		s.srcAccount, s.dstAccount,
 		s.dstAmount, s.sendMax,
 		s.srcCurrencies, s.convertAll,
 	)
-	result := pr.Execute(view)
-	s.lastResult = result
-
-	return s.buildEvent(result, true)
+	return s.executeAndStore(func() *pathfinder.PathRequestResult {
+		return pr.Execute(view)
+	}, fullReply)
 }
 
-// GetLastResult returns the last computed result as a PathFindEvent (for status).
-func (s *PathFindSession) GetLastResult() *PathFindEvent {
+func (s *PathFindSession) executeAndStore(
+	execute func() *pathfinder.PathRequestResult,
+	fullReply bool,
+) *PathFindEvent {
+	s.computeMu.Lock()
+	defer s.computeMu.Unlock()
+
+	result := execute()
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.storeResultLocked(result, fullReply)
+}
+
+func (s *PathFindSession) storeResultLocked(result *pathfinder.PathRequestResult, fullReply bool) *PathFindEvent {
+	status := s.buildEvent(result, fullReply)
+	s.lastStatus = status
+
+	event := clonePathFindEvent(status)
+	if fullReply {
+		event.Type = "path_find"
+	}
+	return event
+}
+
+// Status returns the stored response state with rippled's success marker.
+func (s *PathFindSession) Status() *PathFindEvent {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	if s.lastResult == nil {
-		return s.buildEvent(&pathfinder.PathRequestResult{}, false)
+	status := s.statusLocked()
+	status.Status = "success"
+	return clonePathFindEvent(status)
+}
+
+// Close returns the stored response state with the closed marker set.
+func (s *PathFindSession) Close() *PathFindEvent {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	status := s.statusLocked()
+	status.Closed = true
+	return clonePathFindEvent(status)
+}
+
+func (s *PathFindSession) statusLocked() *PathFindEvent {
+	if s.lastStatus == nil {
+		s.lastStatus = s.buildEvent(&pathfinder.PathRequestResult{}, false)
 	}
-	return s.buildEvent(s.lastResult, false)
+	return s.lastStatus
 }
 
 // buildEvent formats a PathRequestResult into a PathFindEvent for the WebSocket client.
 func (s *PathFindSession) buildEvent(result *pathfinder.PathRequestResult, fullReply bool) *PathFindEvent {
 	alternatives := make([]PathAlternative, 0, len(result.Alternatives))
 	for _, alt := range result.Alternatives {
-		var srcAmtJSON json.RawMessage
-		if alt.SourceAmount.IsNative() {
-			srcAmtJSON, _ = json.Marshal(alt.SourceAmount.Value())
-		} else {
-			srcAmtJSON, _ = json.Marshal(map[string]string{
-				"currency": alt.SourceAmount.Currency,
-				"issuer":   alt.SourceAmount.Issuer,
-				"value":    alt.SourceAmount.Value(),
-			})
-		}
-		alternatives = append(alternatives, PathAlternative{
-			SourceAmount:  srcAmtJSON,
+		alternative := PathAlternative{
+			SourceAmount:  pathFindAmountJSON(alt.SourceAmount),
 			PathsComputed: convertToRPCPathSteps(alt.PathsComputed),
-		})
+		}
+		if s.convertAll {
+			alternative.DestinationAmount = pathFindAmountJSON(alt.DestinationAmount)
+		}
+		alternatives = append(alternatives, alternative)
 	}
 
 	return &PathFindEvent{
-		Type:               "path_find",
 		ID:                 s.id,
 		SourceAccount:      s.srcAccountStr,
 		DestinationAccount: s.dstAccountStr,
-		DestinationAmount:  s.dstAmountRaw,
+		DestinationAmount:  pathFindAmountJSON(s.dstAmount),
 		FullReply:          fullReply,
 		Alternatives:       alternatives,
 	}
+}
+
+func clonePathFindEvent(event *PathFindEvent) *PathFindEvent {
+	clone := *event
+	return &clone
+}
+
+func pathFindAmountJSON(amount tx.Amount) json.RawMessage {
+	var value any
+	if amount.IsNative() {
+		value = amount.Value()
+	} else if amount.IsMPT() {
+		value = map[string]string{
+			"mpt_issuance_id": amount.MPTIssuanceID(),
+			"value":           amount.Value(),
+		}
+	} else {
+		value = map[string]string{
+			"currency": amount.Currency,
+			"issuer":   amount.Issuer,
+			"value":    amount.Value(),
+		}
+	}
+	encoded, _ := json.Marshal(value)
+	return encoded
 }
 
 // convertToRPCPathSteps converts payment.PathStep slices to rpctypes.PathStep slices.
@@ -210,11 +340,12 @@ func convertToRPCPathSteps(paths [][]payment.PathStep) [][]rpctypes.PathStep {
 		steps := make([]rpctypes.PathStep, len(path))
 		for j, step := range path {
 			steps[j] = rpctypes.PathStep{
-				Account:  step.Account,
-				Currency: step.Currency,
-				Issuer:   step.Issuer,
-				Type:     uint8(step.Type),
-				TypeHex:  step.TypeHex,
+				Account:       step.Account,
+				Currency:      step.Currency,
+				Issuer:        step.Issuer,
+				MPTIssuanceID: step.MPTIssuanceID,
+				Type:          uint8(step.Type),
+				TypeHex:       step.TypeHex,
 			}
 		}
 		result[i] = steps

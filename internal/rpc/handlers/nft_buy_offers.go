@@ -27,24 +27,27 @@ func (m *NftBuyOffersMethod) Handle(ctx *types.RpcContext, params json.RawMessag
 // ledger service before binding fetch.
 // Reference: rippled NFTOffers.cpp doNFTBuyOffers / doNFTSellOffers
 func handleNFTOffers(ctx *types.RpcContext, params json.RawMessage, fetch func(ctx context.Context, nftID [32]byte, ledgerIndex string, limit uint32, marker string) (*types.NFTOffersResult, error)) (any, *types.RpcError) {
-	var request struct {
-		NFTokenID string `json:"nft_id"`
-		types.LedgerSpecifier
-		Limit  *uint32 `json:"limit,omitempty"`
-		Marker string  `json:"marker,omitempty"`
+	if rpcErr := validateJsonCppIntegerRange(params); rpcErr != nil {
+		return nil, rpcErr
+	}
+	fields := make(map[string]json.RawMessage)
+	if params != nil {
+		if err := json.Unmarshal(params, &fields); err != nil {
+			return nil, types.RpcErrorInvalidParams("Invalid parameters.")
+		}
 	}
 
-	if err := ParseParams(params, &request); err != nil {
-		return nil, err
-	}
-
-	// Check for missing nft_id parameter - matching rippled's missing_field_error
-	if request.NFTokenID == "" {
+	nftIDRaw, hasNFTID := fields["nft_id"]
+	if !hasNFTID {
 		return nil, types.RpcErrorMissingField("nft_id")
+	}
+	nftIDValue, validString := jsonCppStringRaw(nftIDRaw)
+	if !validString {
+		return nil, types.RpcErrorInvalidField("nft_id")
 	}
 
 	// Validate and parse the NFT ID - must be a 64-character hex string (32 bytes)
-	nftIDHex := strings.ToUpper(request.NFTokenID)
+	nftIDHex := strings.ToUpper(nftIDValue)
 	if len(nftIDHex) != 64 {
 		return nil, types.RpcErrorInvalidField("nft_id")
 	}
@@ -57,27 +60,36 @@ func handleNFTOffers(ctx *types.RpcContext, params json.RawMessage, fetch func(c
 	var nftID [32]byte
 	copy(nftID[:], nftIDBytes)
 
-	ledgerIndex, selErr := resolveLedgerSelector(request.LedgerSpecifier)
+	// Apply rippled's readLimitField with nftOffers tuning (NFTOffers.cpp:69):
+	// absent limit -> default, explicit 0 -> invalidParams, else clamp.
+	limit, limitErr := ReadLimitField(params, LimitNFTOffers, ctx.Unlimited)
+	if limitErr != nil {
+		return nil, limitErr
+	}
+	parsedLedgerSpec, _, ledgerSpecErr := parseLedgerSpecifier(params)
+	if ledgerSpecErr != nil {
+		return nil, ledgerSpecErr
+	}
+	ledgerIndex, selErr := resolveLedgerSelector(parsedLedgerSpec)
 	if selErr != nil {
 		return nil, selErr
 	}
-
-	// Apply limit clamping matching rippled's readLimitField with nftOffers tuning.
-	// Reference: NFTOffers.cpp line 69: readLimitField(limit, RPC::Tuning::nftOffers, context)
-	var userLimit uint32
-	if request.Limit != nil {
-		userLimit = *request.Limit
+	if _, _, lookupErr := LookupLedger(ctx, parsedLedgerSpec); lookupErr != nil {
+		return nil, lookupErr
 	}
-	limit := ClampLimit(userLimit, LimitNFTOffers, ctx.Unlimited)
 
-	// Validate marker if provided - must be a valid hex string
-	marker := request.Marker
-	if marker != "" {
-		if len(marker) != 64 {
-			return nil, types.RpcErrorInvalidParams("Invalid marker")
-		}
-		if _, err := hex.DecodeString(marker); err != nil {
-			return nil, types.RpcErrorInvalidParams("Invalid marker")
+	marker := ""
+	if markerRaw, hasMarker := fields["marker"]; hasMarker {
+		var markerIsString bool
+		marker, markerIsString = rawJSONString(markerRaw)
+		if !markerIsString || marker == "" {
+			if _, err := fetch(ctx.Context, nftID, ledgerIndex, limit, ""); errors.Is(err, svcerr.ErrObjectNotFound) {
+				return nil, types.RpcErrorObjectNotFound("The requested object was not found.")
+			}
+			if !markerIsString {
+				return nil, types.RpcErrorExpectedField("marker", "string")
+			}
+			return nil, types.RpcErrorInvalidParams("Invalid parameters.")
 		}
 	}
 
@@ -90,7 +102,7 @@ func handleNFTOffers(ctx *types.RpcContext, params json.RawMessage, fetch func(c
 		case errors.Is(err, svcerr.ErrObjectNotFound):
 			return nil, types.RpcErrorObjectNotFound("The requested object was not found.")
 		case errors.Is(err, svcerr.ErrInvalidMarker):
-			return nil, types.RpcErrorInvalidParams("Invalid marker")
+			return nil, types.RpcErrorInvalidParams("Invalid parameters.")
 		}
 		return nil, rpcInternalError("nft_offers: ledger query failed", err)
 	}
@@ -123,11 +135,8 @@ func buildNFTOffersResponse(nftIDHex string, result *types.NFTOffersResult, limi
 	}
 
 	response := map[string]any{
-		"nft_id":       nftIDHex,
-		"offers":       offers,
-		"ledger_hash":  FormatLedgerHash(result.LedgerHash),
-		"ledger_index": result.LedgerIndex,
-		"validated":    result.Validated,
+		"nft_id": nftIDHex,
+		"offers": offers,
 	}
 
 	// rippled includes limit and marker only when there are more results (pagination).

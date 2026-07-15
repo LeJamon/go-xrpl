@@ -6,12 +6,12 @@ import (
 	"fmt"
 	"sort"
 	"strconv"
-	"strings"
 
 	binarycodec "github.com/LeJamon/go-xrpl/codec/binarycodec"
 	"github.com/LeJamon/go-xrpl/internal/ledger/state"
 	"github.com/LeJamon/go-xrpl/keylet"
 	ledgerentry "github.com/LeJamon/go-xrpl/ledger/entry"
+	"github.com/LeJamon/go-xrpl/protocol"
 	"github.com/LeJamon/go-xrpl/shamap"
 )
 
@@ -105,6 +105,18 @@ func directoryPlacements(entryType string, fields map[string]any) []dirPlacement
 			if sub, ok := metaAccountID(fields, "Subject"); ok {
 				add(keylet.OwnerDirPage(sub, metaUint64(fields["SubjectNode"])), dirSorted)
 			}
+		}
+		return out
+
+	case "Vault":
+		if owner, ok := metaAccountID(fields, "Owner"); ok {
+			add(keylet.OwnerDirPage(owner, metaUint64(fields["OwnerNode"])), dirSorted)
+		}
+		return out
+
+	case "MPTokenIssuance":
+		if issuer, ok := metaAccountID(fields, "Issuer"); ok {
+			add(keylet.OwnerDirPage(issuer, metaUint64(fields["OwnerNode"])), dirSorted)
 		}
 		return out
 	}
@@ -227,10 +239,7 @@ func applyDirDelta(members [][32]byte, d *dirDelta) [][32]byte {
 func decodeIndexes(v any) [][32]byte {
 	var out [][32]byte
 	appendHex := func(s string) {
-		b, err := hex.DecodeString(s)
-		if err == nil && len(b) == 32 {
-			var k [32]byte
-			copy(k[:], b)
+		if k, err := protocol.Hash256FromHex(s); err == nil {
 			out = append(out, k)
 		}
 	}
@@ -254,7 +263,7 @@ func decodeIndexes(v any) [][32]byte {
 func encodeIndexes(members [][32]byte) []string {
 	out := make([]string, len(members))
 	for i, k := range members {
-		out[i] = strings.ToUpper(hex.EncodeToString(k[:]))
+		out[i] = protocol.Hash256Hex(k)
 	}
 	return out
 }

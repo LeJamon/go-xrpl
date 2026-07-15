@@ -3,8 +3,34 @@ package mpt
 import (
 	"testing"
 
+	"github.com/LeJamon/go-xrpl/amendment"
 	"github.com/LeJamon/go-xrpl/internal/tx"
+	"github.com/LeJamon/go-xrpl/internal/tx/ter"
 )
+
+// preflightMPTFlags runs an MPT type's preflight body in engine order: the
+// preflight0 flags mask (GetFlagsMask, enforced by the engine ahead of the fee
+// and per-type field checks) then the rules-free Validate().
+func preflightMPTFlags(m interface {
+	GetFlags() uint32
+	GetFlagsMask(*amendment.Rules) uint32
+	Validate() error
+}, rules *amendment.Rules) error {
+	if m.GetFlags()&m.GetFlagsMask(rules) != 0 {
+		return ter.Errorf(ter.TemINVALID_FLAG, "invalid flags")
+	}
+	return m.Validate()
+}
+
+// preflightMPTSet runs MPTokenIssuanceSet's preflight body in engine order: the
+// preflight0 flags mask, the rules-free Validate() (IssuanceID) then
+// PreflightRules() (the DomainID/Holder, lock/unlock, no-op and mutation checks).
+func preflightMPTSet(m *MPTokenIssuanceSet, rules *amendment.Rules) error {
+	if err := preflightMPTFlags(m, rules); err != nil {
+		return err
+	}
+	return m.PreflightRules(rules)
+}
 
 // Helper functions for pointers
 func ptrUint8MPT(v uint8) *uint8 {
@@ -99,7 +125,7 @@ func TestMPTokenIssuanceCreateValidation(t *testing.T) {
 				return tx
 			}(),
 			expectError: true,
-			errorMsg:    "temINVALID_FLAG: invalid flags for MPTokenIssuanceCreate",
+			errorMsg:    "temINVALID_FLAG: invalid flags",
 		},
 		{
 			name: "TransferFee exceeds max - temBAD_TRANSFER_FEE",
@@ -150,7 +176,7 @@ func TestMPTokenIssuanceCreateValidation(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			err := tt.tx.Validate()
+			err := preflightMPTFlags(tt.tx, allRules())
 			if tt.expectError {
 				if err == nil {
 					t.Errorf("expected error containing %q, got nil", tt.errorMsg)
@@ -220,13 +246,13 @@ func TestMPTokenIssuanceDestroyValidation(t *testing.T) {
 				return tx
 			}(),
 			expectError: true,
-			errorMsg:    "temINVALID_FLAG: invalid flags for MPTokenIssuanceDestroy",
+			errorMsg:    "temINVALID_FLAG: invalid flags",
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			err := tt.tx.Validate()
+			err := preflightMPTFlags(tt.tx, allRules())
 			if tt.expectError {
 				if err == nil {
 					t.Errorf("expected error containing %q, got nil", tt.errorMsg)
@@ -315,7 +341,7 @@ func TestMPTokenIssuanceSetValidation(t *testing.T) {
 				return tx
 			}(),
 			expectError: true,
-			errorMsg:    "temINVALID_FLAG: invalid flags for MPTokenIssuanceSet",
+			errorMsg:    "temINVALID_FLAG: invalid flags",
 		},
 		{
 			name: "holder same as account - temMALFORMED",
@@ -331,7 +357,12 @@ func TestMPTokenIssuanceSetValidation(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			err := tt.tx.Validate()
+			// Run the full preflight body: the flags mask and IssuanceID checks
+			// live in Validate(), the DomainID/Holder and lock/unlock shape checks
+			// in PreflightRules(). allRules() excludes SingleAssetVault (and
+			// DynamicMPT is unsupported), so the no-op check does not disturb
+			// these cases.
+			err := preflightMPTSet(tt.tx, allRules())
 			if tt.expectError {
 				if err == nil {
 					t.Errorf("expected error containing %q, got nil", tt.errorMsg)
@@ -345,6 +376,66 @@ func TestMPTokenIssuanceSetValidation(t *testing.T) {
 			}
 		})
 	}
+}
+
+// TestMPTokenIssuanceSetPreflightOrder pins the MPTokenIssuanceSet precedence
+// findings: the mutation-fields-require-DynamicMPT temDISABLED gate leads the
+// preflight body (so it beats the DomainID+Holder temMALFORMED check), the flags
+// mask (Validate) precedes the DomainID+Holder check, and the "changes nothing"
+// no-op check is a preflight (not apply-time) rejection.
+// Reference: rippled MPTokenIssuanceSet.cpp preflight().
+func TestMPTokenIssuanceSetPreflightOrder(t *testing.T) {
+	const validID = "000000000000000000000000000000000000000000000001"
+	const someDomain = "1111111111111111111111111111111111111111111111111111111111111111"
+
+	// Finding: isMutate temDISABLED (DynamicMPT off) wins over DomainID+Holder.
+	t.Run("mutation temDISABLED beats DomainID+Holder", func(t *testing.T) {
+		m := NewMPTokenIssuanceSet("rAlice", validID)
+		m.MutableFlags = ptrUint32AccountSet(TmfMPTSetCanLock) // mutation → isMutate
+		dom := someDomain
+		m.DomainID = &dom
+		m.hasDomainID = true
+		m.Holder = "rBob" // DomainID+Holder together → temMALFORMED if reached
+		if err := preflightMPTSet(m, allRules()); err == nil || err.Error() != "temDISABLED: mutation fields require DynamicMPT" {
+			t.Fatalf("got %v, want temDISABLED", err)
+		}
+	})
+
+	// Finding: the flags mask (Validate) precedes the DomainID+Holder check
+	// (PreflightRules), so an undefined flag bit wins over temMALFORMED.
+	t.Run("flags mask beats DomainID+Holder", func(t *testing.T) {
+		m := NewMPTokenIssuanceSet("rAlice", validID)
+		m.SetFlags(0x00000004) // undefined bit → temINVALID_FLAG
+		dom := someDomain
+		m.DomainID = &dom
+		m.hasDomainID = true
+		m.Holder = "rBob"
+		if err := preflightMPTSet(m, allRules()); err == nil || err.Error() != "temINVALID_FLAG: invalid flags" {
+			t.Fatalf("got %v, want temINVALID_FLAG", err)
+		}
+	})
+
+	// Finding: the "changes nothing" no-op check is enforced in preflight (under
+	// SingleAssetVault), before signature verification.
+	t.Run("no-op is a preflight temMALFORMED", func(t *testing.T) {
+		savRules := amendment.NewRulesBuilder().FromPreset(amendment.PresetAllSupported).EnableByName("SingleAssetVault").Build()
+		m := NewMPTokenIssuanceSet("rAlice", validID) // flags 0, no domain, no mutation
+		if err := m.PreflightRules(savRules); err == nil || err.Error() != "temMALFORMED: MPTokenIssuanceSet changes nothing" {
+			t.Fatalf("got %v, want temMALFORMED (no-op)", err)
+		}
+	})
+}
+
+// allRules mirrors rippled's testSetValidation(all - featureSingleAssetVault):
+// every supported amendment except SingleAssetVault, so the SAV/DynamicMPT
+// "changes nothing" no-op rejection does not fire and the legacy Set-validation
+// shape checks are exercised in isolation. The SAV-on no-op behaviour has its
+// own coverage via a rules set that enables SingleAssetVault.
+func allRules() *amendment.Rules {
+	return amendment.NewRulesBuilder().
+		FromPreset(amendment.PresetAllSupported).
+		DisableByName("SingleAssetVault").
+		Build()
 }
 
 // TestMPTokenAuthorizeValidation tests MPTokenAuthorize transaction validation.
@@ -420,7 +511,7 @@ func TestMPTokenAuthorizeValidation(t *testing.T) {
 				return tx
 			}(),
 			expectError: true,
-			errorMsg:    "temINVALID_FLAG: invalid flags for MPTokenAuthorize",
+			errorMsg:    "temINVALID_FLAG: invalid flags",
 		},
 		{
 			name: "holder same as account - temMALFORMED",
@@ -436,7 +527,7 @@ func TestMPTokenAuthorizeValidation(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			err := tt.tx.Validate()
+			err := preflightMPTFlags(tt.tx, allRules())
 			if tt.expectError {
 				if err == nil {
 					t.Errorf("expected error containing %q, got nil", tt.errorMsg)

@@ -1,8 +1,6 @@
 package payment
 
 import (
-	"fmt"
-
 	tx "github.com/LeJamon/go-xrpl/internal/tx"
 	"github.com/LeJamon/go-xrpl/internal/tx/ter"
 )
@@ -15,7 +13,10 @@ import (
 // txHash/ledgerSeq the book step threads through other helpers are unused here.
 func (s *BookStep) creditTrustline(sb *PaymentSandbox, account, issuer [20]byte, amount tx.Amount, _ [32]byte, _ uint32) error {
 	if r := tx.RippleCredit(sb, issuer, account, amount); r != ter.TesSUCCESS {
-		return fmt.Errorf("creditTrustline: %s", r)
+		// Carry the typed TER so throwConsumeFailure builds a flowError with the
+		// real result code (mirroring rippled's Throw<FlowException>(dr)), rather
+		// than flattening it to a plain string that collapses to tefINTERNAL.
+		return ter.Errorf(r, "creditTrustline failed")
 	}
 	return nil
 }
@@ -26,7 +27,7 @@ func (s *BookStep) creditTrustline(sb *PaymentSandbox, account, issuer [20]byte,
 // deletes the line once the holding empties on a fully default line.
 func (s *BookStep) debitTrustline(sb *PaymentSandbox, account, issuer [20]byte, amount tx.Amount, _ [32]byte, _ uint32) error {
 	if r := tx.RippleCredit(sb, account, issuer, amount); r != ter.TesSUCCESS {
-		return fmt.Errorf("debitTrustline: %s", r)
+		return ter.Errorf(r, "debitTrustline failed")
 	}
 	return nil
 }

@@ -166,7 +166,7 @@ func TestAddRedirectCandidate_BootCacheRouting(t *testing.T) {
 	assert.Empty(t, d.peers, "redirect must not enter the gossip set when a boot cache exists")
 	d.mu.RUnlock()
 
-	eps := d.bootCache.GetEndpoints(10)
+	eps := d.bootCache.Endpoints(10)
 	require.Len(t, eps, 1)
 	assert.Equal(t, "192.0.2.20:51235", eps[0].Address)
 }

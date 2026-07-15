@@ -62,7 +62,7 @@ func TestGotStateNodes_OutOfOrderNotRejected(t *testing.T) {
 	nodes := make([]message.LedgerNode, 0, len(wireNodes))
 	maxDepth := 0
 	for _, w := range wireNodes {
-		nid, err := shamap.UnmarshalBinary(w.NodeID)
+		nid, err := shamap.ParseNodeID(w.NodeID)
 		if err != nil {
 			t.Fatalf("UnmarshalBinary: %v", err)
 		}
@@ -79,8 +79,8 @@ func TestGotStateNodes_OutOfOrderNotRejected(t *testing.T) {
 	}
 	// Deepest-first: every non-frontier node is ahead of its parent stub.
 	sort.SliceStable(nodes, func(i, j int) bool {
-		a, _ := shamap.UnmarshalBinary(nodes[i].NodeID)
-		b, _ := shamap.UnmarshalBinary(nodes[j].NodeID)
+		a, _ := shamap.ParseNodeID(nodes[i].NodeID)
+		b, _ := shamap.ParseNodeID(nodes[j].NodeID)
 		return a.Depth() > b.Depth()
 	})
 
@@ -115,7 +115,7 @@ func TestGotStateNodes_StopsOnFirstInvalid(t *testing.T) {
 
 	var d1 []shamap.WireNode
 	for _, w := range wireNodes {
-		nid, _ := shamap.UnmarshalBinary(w.NodeID)
+		nid, _ := shamap.ParseNodeID(w.NodeID)
 		if nid.Depth() == 1 {
 			d1 = append(d1, w)
 		}

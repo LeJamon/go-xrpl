@@ -31,30 +31,6 @@ func TestDepositPreauth_Enable(t *testing.T) {
 	alice := jtx.NewAccount("alice")
 	becky := jtx.NewAccount("becky")
 
-	// featureDepositPreauth disabled.
-	t.Run("Disabled", func(t *testing.T) {
-		env := jtx.NewTestEnv(t)
-		env.DisableFeature("DepositPreauth")
-
-		env.FundAmount(alice, uint64(jtx.XRP(10000)))
-		env.FundAmount(becky, uint64(jtx.XRP(10000)))
-		env.Close()
-
-		// Should not be able to add DepositPreauth.
-		result := env.Submit(dp.Auth(alice, becky).Build())
-		jtx.RequireTxFail(t, result, "temDISABLED")
-		env.Close()
-		jtx.RequireOwnerCount(t, env, alice, 0)
-		jtx.RequireOwnerCount(t, env, becky, 0)
-
-		// Should not be able to remove DepositPreauth.
-		result = env.Submit(dp.Unauth(alice, becky).Build())
-		jtx.RequireTxFail(t, result, "temDISABLED")
-		env.Close()
-		jtx.RequireOwnerCount(t, env, alice, 0)
-		jtx.RequireOwnerCount(t, env, becky, 0)
-	})
-
 	// featureDepositPreauth enabled.
 	t.Run("Enabled", func(t *testing.T) {
 		env := jtx.NewTestEnv(t)
@@ -297,25 +273,22 @@ func TestDepositPreauth_Invalid(t *testing.T) {
 func TestDepositPreauth_Payment(t *testing.T) {
 	type featureSet struct {
 		name                string
-		supportsPreauth     bool
 		supportsCredentials bool
 	}
 
 	featureSets := []featureSet{
-		{"NoPreauth_NoCredentials", false, false},
-		{"NoPreauth_WithCredentials", false, true},
-		{"WithPreauth_NoCredentials", true, false},
-		{"WithPreauth_WithCredentials", true, true},
+		{"NoCredentials", false},
+		{"WithCredentials", true},
 	}
 
 	for _, fs := range featureSets {
 		t.Run(fs.name, func(t *testing.T) {
-			testPayment(t, fs.supportsPreauth, fs.supportsCredentials)
+			testPayment(t, fs.supportsCredentials)
 		})
 	}
 }
 
-func testPayment(t *testing.T, supportsPreauth, supportsCredentials bool) {
+func testPayment(t *testing.T, supportsCredentials bool) {
 	t.Helper()
 
 	alice := jtx.NewAccount("alice")
@@ -325,9 +298,6 @@ func testPayment(t *testing.T, supportsPreauth, supportsCredentials bool) {
 	// Self-payment bug fix section
 	t.Run("SelfPayment", func(t *testing.T) {
 		env := jtx.NewTestEnv(t)
-		if !supportsPreauth {
-			env.DisableFeature("DepositPreauth")
-		}
 		if !supportsCredentials {
 			env.DisableFeature("Credentials")
 		}
@@ -375,30 +345,20 @@ func testPayment(t *testing.T, supportsPreauth, supportsCredentials bool) {
 		env.EnableDepositAuth(becky)
 		env.Close()
 
-		// becky pays herself again.
-		// With DepositPreauth: tesSUCCESS (self-payment allowed).
-		// Without DepositPreauth: tecNO_PERMISSION (old bug).
-		expectedCode := "tesSUCCESS"
-		if !supportsPreauth {
-			expectedCode = "tecNO_PERMISSION"
-		}
-
+		// becky pays herself again; DepositPreauth fixed the old self-payment bug.
 		result = env.Submit(
 			payment.PayIssued(becky, becky, usd10).
 				SendMax(xrp10).
 				Paths(usdPath).
 				Build(),
 		)
-		require.Equal(t, expectedCode, result.Code)
+		require.Equal(t, "tesSUCCESS", result.Code)
 		env.Close()
 	})
 
 	// Credential-based payment section
 	t.Run("CredentialPayment", func(t *testing.T) {
 		env := jtx.NewTestEnv(t)
-		if !supportsPreauth {
-			env.DisableFeature("DepositPreauth")
-		}
 		if !supportsCredentials {
 			env.DisableFeature("Credentials")
 		}
@@ -428,16 +388,12 @@ func testPayment(t *testing.T, supportsPreauth, supportsCredentials bool) {
 			expectCredentials = "temDISABLED"
 		}
 		expectDP := "tesSUCCESS"
-		if !supportsPreauth {
-			expectDP = "temDISABLED"
-		} else if !supportsCredentials {
+		if !supportsCredentials {
 			expectDP = "temDISABLED"
 		}
 		expectPayment := "tesSUCCESS"
 		if !supportsCredentials {
 			expectPayment = "temDISABLED"
-		} else if !supportsPreauth {
-			expectPayment = "tecNO_PERMISSION"
 		}
 
 		// becky sets up credential-based preauth.
@@ -475,123 +431,121 @@ func testPayment(t *testing.T, supportsPreauth, supportsCredentials bool) {
 		env.Close()
 	})
 
-	// Preauthorization payment section (only when supported)
-	if supportsPreauth {
-		t.Run("PreauthPayments", func(t *testing.T) {
-			carol := jtx.NewAccount("carol2")
+	// Preauthorization payment section.
+	t.Run("PreauthPayments", func(t *testing.T) {
+		carol := jtx.NewAccount("carol2")
 
-			env := jtx.NewTestEnv(t)
-			if !supportsCredentials {
-				env.DisableFeature("Credentials")
-			}
+		env := jtx.NewTestEnv(t)
+		if !supportsCredentials {
+			env.DisableFeature("Credentials")
+		}
 
-			env.FundAmount(alice, uint64(jtx.XRP(5000)))
-			env.FundAmount(becky, uint64(jtx.XRP(5000)))
-			env.FundAmount(carol, uint64(jtx.XRP(5000)))
-			env.FundAmount(gw, uint64(jtx.XRP(5000)))
-			env.Close()
+		env.FundAmount(alice, uint64(jtx.XRP(5000)))
+		env.FundAmount(becky, uint64(jtx.XRP(5000)))
+		env.FundAmount(carol, uint64(jtx.XRP(5000)))
+		env.FundAmount(gw, uint64(jtx.XRP(5000)))
+		env.Close()
 
-			result := env.Submit(trustset.TrustLine(alice, "USD", gw, "1000").Build())
-			jtx.RequireTxSuccess(t, result)
-			result = env.Submit(trustset.TrustLine(becky, "USD", gw, "1000").Build())
-			jtx.RequireTxSuccess(t, result)
-			result = env.Submit(trustset.TrustLine(carol, "USD", gw, "1000").Build())
-			jtx.RequireTxSuccess(t, result)
-			env.Close()
+		result := env.Submit(trustset.TrustLine(alice, "USD", gw, "1000").Build())
+		jtx.RequireTxSuccess(t, result)
+		result = env.Submit(trustset.TrustLine(becky, "USD", gw, "1000").Build())
+		jtx.RequireTxSuccess(t, result)
+		result = env.Submit(trustset.TrustLine(carol, "USD", gw, "1000").Build())
+		jtx.RequireTxSuccess(t, result)
+		env.Close()
 
-			usd1000 := tx.NewIssuedAmountFromFloat64(1000, "USD", gw.Address)
-			result = env.Submit(payment.PayIssued(gw, alice, usd1000).Build())
-			jtx.RequireTxSuccess(t, result)
-			env.Close()
+		usd1000 := tx.NewIssuedAmountFromFloat64(1000, "USD", gw.Address)
+		result = env.Submit(payment.PayIssued(gw, alice, usd1000).Build())
+		jtx.RequireTxSuccess(t, result)
+		env.Close()
 
-			// Make XRP and IOU payments from alice to becky. Should be fine.
-			xrp100 := uint64(jtx.XRP(100))
-			usd100 := tx.NewIssuedAmountFromFloat64(100, "USD", gw.Address)
+		// Make XRP and IOU payments from alice to becky. Should be fine.
+		xrp100 := uint64(jtx.XRP(100))
+		usd100 := tx.NewIssuedAmountFromFloat64(100, "USD", gw.Address)
 
-			result = env.Submit(payment.Pay(alice, becky, xrp100).Build())
-			jtx.RequireTxSuccess(t, result)
-			result = env.Submit(payment.PayIssued(alice, becky, usd100).Build())
-			jtx.RequireTxSuccess(t, result)
-			env.Close()
+		result = env.Submit(payment.Pay(alice, becky, xrp100).Build())
+		jtx.RequireTxSuccess(t, result)
+		result = env.Submit(payment.PayIssued(alice, becky, usd100).Build())
+		jtx.RequireTxSuccess(t, result)
+		env.Close()
 
-			// becky enables DepositAuth.
-			env.EnableDepositAuth(becky)
-			env.Close()
+		// becky enables DepositAuth.
+		env.EnableDepositAuth(becky)
+		env.Close()
 
-			// alice can no longer pay becky.
-			result = env.Submit(payment.Pay(alice, becky, xrp100).Build())
-			require.Equal(t, "tecNO_PERMISSION", result.Code)
-			result = env.Submit(payment.PayIssued(alice, becky, usd100).Build())
-			require.Equal(t, "tecNO_PERMISSION", result.Code)
-			env.Close()
+		// alice can no longer pay becky.
+		result = env.Submit(payment.Pay(alice, becky, xrp100).Build())
+		require.Equal(t, "tecNO_PERMISSION", result.Code)
+		result = env.Submit(payment.PayIssued(alice, becky, usd100).Build())
+		require.Equal(t, "tecNO_PERMISSION", result.Code)
+		env.Close()
 
-			// becky preauthorizes carol (not alice).
-			result = env.Submit(dp.Auth(becky, carol).Build())
-			jtx.RequireTxSuccess(t, result)
-			env.Close()
+		// becky preauthorizes carol (not alice).
+		result = env.Submit(dp.Auth(becky, carol).Build())
+		jtx.RequireTxSuccess(t, result)
+		env.Close()
 
-			// alice still can't pay becky.
-			result = env.Submit(payment.Pay(alice, becky, xrp100).Build())
-			require.Equal(t, "tecNO_PERMISSION", result.Code)
-			result = env.Submit(payment.PayIssued(alice, becky, usd100).Build())
-			require.Equal(t, "tecNO_PERMISSION", result.Code)
-			env.Close()
+		// alice still can't pay becky.
+		result = env.Submit(payment.Pay(alice, becky, xrp100).Build())
+		require.Equal(t, "tecNO_PERMISSION", result.Code)
+		result = env.Submit(payment.PayIssued(alice, becky, usd100).Build())
+		require.Equal(t, "tecNO_PERMISSION", result.Code)
+		env.Close()
 
-			// becky preauthorizes alice.
-			result = env.Submit(dp.Auth(becky, alice).Build())
-			jtx.RequireTxSuccess(t, result)
-			env.Close()
+		// becky preauthorizes alice.
+		result = env.Submit(dp.Auth(becky, alice).Build())
+		jtx.RequireTxSuccess(t, result)
+		env.Close()
 
-			// alice can now pay becky.
-			result = env.Submit(payment.Pay(alice, becky, xrp100).Build())
-			jtx.RequireTxSuccess(t, result)
-			result = env.Submit(payment.PayIssued(alice, becky, usd100).Build())
-			jtx.RequireTxSuccess(t, result)
-			env.Close()
+		// alice can now pay becky.
+		result = env.Submit(payment.Pay(alice, becky, xrp100).Build())
+		jtx.RequireTxSuccess(t, result)
+		result = env.Submit(payment.PayIssued(alice, becky, usd100).Build())
+		jtx.RequireTxSuccess(t, result)
+		env.Close()
 
-			// alice enables DepositAuth. becky is not authorized to pay alice.
-			env.EnableDepositAuth(alice)
-			env.Close()
+		// alice enables DepositAuth. becky is not authorized to pay alice.
+		env.EnableDepositAuth(alice)
+		env.Close()
 
-			result = env.Submit(payment.Pay(becky, alice, xrp100).Build())
-			require.Equal(t, "tecNO_PERMISSION", result.Code)
-			result = env.Submit(payment.PayIssued(becky, alice, usd100).Build())
-			require.Equal(t, "tecNO_PERMISSION", result.Code)
-			env.Close()
+		result = env.Submit(payment.Pay(becky, alice, xrp100).Build())
+		require.Equal(t, "tecNO_PERMISSION", result.Code)
+		result = env.Submit(payment.PayIssued(becky, alice, usd100).Build())
+		require.Equal(t, "tecNO_PERMISSION", result.Code)
+		env.Close()
 
-			// becky removes carol's preauth. Should have no impact on alice.
-			result = env.Submit(dp.Unauth(becky, carol).Build())
-			jtx.RequireTxSuccess(t, result)
-			env.Close()
+		// becky removes carol's preauth. Should have no impact on alice.
+		result = env.Submit(dp.Unauth(becky, carol).Build())
+		jtx.RequireTxSuccess(t, result)
+		env.Close()
 
-			result = env.Submit(payment.Pay(alice, becky, xrp100).Build())
-			jtx.RequireTxSuccess(t, result)
-			result = env.Submit(payment.PayIssued(alice, becky, usd100).Build())
-			jtx.RequireTxSuccess(t, result)
-			env.Close()
+		result = env.Submit(payment.Pay(alice, becky, xrp100).Build())
+		jtx.RequireTxSuccess(t, result)
+		result = env.Submit(payment.PayIssued(alice, becky, usd100).Build())
+		jtx.RequireTxSuccess(t, result)
+		env.Close()
 
-			// becky removes alice's preauth. alice now can't pay.
-			result = env.Submit(dp.Unauth(becky, alice).Build())
-			jtx.RequireTxSuccess(t, result)
-			env.Close()
+		// becky removes alice's preauth. alice now can't pay.
+		result = env.Submit(dp.Unauth(becky, alice).Build())
+		jtx.RequireTxSuccess(t, result)
+		env.Close()
 
-			result = env.Submit(payment.Pay(alice, becky, xrp100).Build())
-			require.Equal(t, "tecNO_PERMISSION", result.Code)
-			result = env.Submit(payment.PayIssued(alice, becky, usd100).Build())
-			require.Equal(t, "tecNO_PERMISSION", result.Code)
-			env.Close()
+		result = env.Submit(payment.Pay(alice, becky, xrp100).Build())
+		require.Equal(t, "tecNO_PERMISSION", result.Code)
+		result = env.Submit(payment.PayIssued(alice, becky, usd100).Build())
+		require.Equal(t, "tecNO_PERMISSION", result.Code)
+		env.Close()
 
-			// becky clears DepositAuth. alice can pay again.
-			env.DisableDepositAuth(becky)
-			env.Close()
+		// becky clears DepositAuth. alice can pay again.
+		env.DisableDepositAuth(becky)
+		env.Close()
 
-			result = env.Submit(payment.Pay(alice, becky, xrp100).Build())
-			jtx.RequireTxSuccess(t, result)
-			result = env.Submit(payment.PayIssued(alice, becky, usd100).Build())
-			jtx.RequireTxSuccess(t, result)
-			env.Close()
-		})
-	}
+		result = env.Submit(payment.Pay(alice, becky, xrp100).Build())
+		jtx.RequireTxSuccess(t, result)
+		result = env.Submit(payment.PayIssued(alice, becky, usd100).Build())
+		jtx.RequireTxSuccess(t, result)
+		env.Close()
+	})
 }
 
 // --------------------------------------------------------------------------

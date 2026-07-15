@@ -1,8 +1,11 @@
 package list
 
 import (
+	"log/slog"
 	"testing"
 	"time"
+
+	"github.com/LeJamon/go-xrpl/internal/consensus"
 )
 
 // TestAggregator_IsUNLBlocked drives the sticky UNL-blocked flag through the
@@ -20,6 +23,7 @@ func TestAggregator_IsUNLBlocked(t *testing.T) {
 			state:      map[PublisherKey]*PublisherState{},
 			threshold:  1,
 			clock:      func() time.Time { return *now },
+			logger:     slog.Default(),
 		}
 		for _, p := range pubs {
 			a.publishers[p] = struct{}{}
@@ -43,6 +47,45 @@ func TestAggregator_IsUNLBlocked(t *testing.T) {
 		a.Tick()
 		if !a.IsUNLBlocked() {
 			t.Fatal("rippled locks down when publishers are configured but the trusted union is empty (ValidatorList.cpp:2096-2101)")
+		}
+	})
+
+	t.Run("static validators keep unavailable publishers from blocking", func(t *testing.T) {
+		now := time.Unix(1000, 0)
+		a := newAgg(&now, pk1)
+		a.staticValidatorCount = 1
+		a.Tick()
+		if a.IsUNLBlocked() {
+			t.Fatal("a non-empty static UNL must prevent empty-union lockdown")
+		}
+	})
+
+	t.Run("already expired publisher does not block static validators", func(t *testing.T) {
+		now := time.Unix(1000, 0)
+		a := newAgg(&now, pk1)
+		a.staticValidatorCount = 1
+		a.state[pk1].Status = StatusExpired
+		a.Tick()
+		if a.IsUNLBlocked() {
+			t.Fatal("a list received after expiry must not block a non-empty static UNL")
+		}
+	})
+
+	t.Run("live publisher expiry blocks despite static validators", func(t *testing.T) {
+		now := time.Unix(1000, 0)
+		a := newAgg(&now, pk1)
+		a.staticValidatorCount = 1
+		a.state[pk1] = &PublisherState{
+			MasterKey:  pk1,
+			Status:     StatusAvailable,
+			Validators: val,
+			Expiration: now.Add(time.Hour),
+		}
+		a.Tick()
+		now = now.Add(2 * time.Hour)
+		a.Tick()
+		if !a.IsUNLBlocked() {
+			t.Fatal("an available list expiring must latch lockdown")
 		}
 	})
 
@@ -107,6 +150,76 @@ func TestAggregator_IsUNLBlocked(t *testing.T) {
 		}
 	})
 
+	t.Run("quorum availability transition emits when trusted union is unchanged", func(t *testing.T) {
+		now := time.Unix(1000, 0)
+		a := newAgg(&now, pk1, pk2)
+		for _, p := range []PublisherKey{pk1, pk2} {
+			s := a.state[p]
+			s.Status = StatusAvailable
+			s.Validators = val
+			s.Expiration = now.Add(2 * time.Hour)
+		}
+
+		changes := 0
+		a.OnChange(func([]consensus.NodeID, [][33]byte) { changes++ })
+		a.Tick()
+		if changes != 1 {
+			t.Fatalf("initial change callbacks = %d, want 1", changes)
+		}
+
+		a.state[pk2].Expiration = now.Add(time.Hour)
+		now = now.Add(90 * time.Minute)
+		a.Tick()
+		if changes != 2 {
+			t.Fatalf("unavailable transition callbacks = %d, want 2", changes)
+		}
+		if !a.IsQuorumUnavailable() {
+			t.Fatal("expired publisher did not disable quorum")
+		}
+
+		s := a.state[pk2]
+		s.Status = StatusAvailable
+		s.Validators = val
+		s.Expiration = now.Add(time.Hour)
+		a.Tick()
+		if changes != 3 {
+			t.Fatalf("recovery transition callbacks = %d, want 3", changes)
+		}
+		if a.IsQuorumUnavailable() {
+			t.Fatal("publisher recovery did not restore quorum")
+		}
+	})
+
+	t.Run("quorum cutoff follows publisher threshold", func(t *testing.T) {
+		now := time.Unix(1000, 0)
+		publishers := []PublisherKey{{1}, {2}, {3}, {4}, {5}}
+		a := newAgg(&now, publishers...)
+		a.threshold = 3
+		for _, p := range publishers {
+			s := a.state[p]
+			s.Status = StatusAvailable
+			s.Validators = val
+			s.Expiration = now.Add(time.Hour)
+		}
+		a.Tick()
+		if a.IsQuorumUnavailable() {
+			t.Fatal("healthy publisher set disabled quorum")
+		}
+
+		a.state[publishers[0]].Status = StatusUnavailable
+		a.Tick()
+		if a.IsQuorumUnavailable() {
+			t.Fatal("one unavailable publisher disabled a three-of-five quorum")
+		}
+
+		a.state[publishers[1]].Status = StatusUnavailable
+		a.state[publishers[2]].Status = StatusUnavailable
+		a.Tick()
+		if !a.IsQuorumUnavailable() {
+			t.Fatal("three unavailable publishers did not disable a three-of-five quorum")
+		}
+	})
+
 	t.Run("clears once every publisher available again", func(t *testing.T) {
 		now := time.Unix(1000, 0)
 		a := newAgg(&now, pk1)
@@ -163,4 +276,37 @@ func TestAggregator_IsUNLBlocked(t *testing.T) {
 			t.Fatal("a revoked-after-expiry publisher must keep the node blocked while another stays healthy (ValidatorList.cpp:2002-2006)")
 		}
 	})
+}
+
+func TestAggregator_UNLBlockChangeEmitsWithoutTrustChange(t *testing.T) {
+	now := time.Unix(1000, 0)
+	pk1 := PublisherKey{1}
+	pk2 := PublisherKey{2}
+	validator := [][33]byte{{9}}
+	a := &Aggregator{
+		publishers: map[PublisherKey]struct{}{pk1: {}, pk2: {}},
+		state: map[PublisherKey]*PublisherState{
+			pk1: {MasterKey: pk1, Status: StatusAvailable, Validators: validator, Expiration: now.Add(2 * time.Hour)},
+			pk2: {MasterKey: pk2, Status: StatusAvailable, Validators: validator, Expiration: now.Add(time.Hour)},
+		},
+		threshold: 1,
+		clock:     func() time.Time { return now },
+		logger:    slog.Default(),
+	}
+
+	changes := 0
+	a.OnChange(func(_ []consensus.NodeID, _ [][33]byte) { changes++ })
+	a.Tick()
+	if changes != 1 {
+		t.Fatalf("initial trust callback count: got %d want 1", changes)
+	}
+
+	now = now.Add(90 * time.Minute)
+	a.Tick()
+	if changes != 2 {
+		t.Fatalf("expiry must emit even when overlapping publisher preserves trust: got %d callbacks want 2", changes)
+	}
+	if !a.IsUNLBlocked() {
+		t.Fatal("expired overlapping publisher must block the UNL")
+	}
 }

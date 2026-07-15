@@ -3,14 +3,16 @@ package shamap
 import (
 	"fmt"
 
-	"github.com/LeJamon/go-xrpl/crypto/common"
+	"github.com/LeJamon/go-xrpl/crypto/sha512half"
 	"github.com/LeJamon/go-xrpl/protocol"
 )
 
 // FlushEntry holds a serialized node ready to be written to NodeStore.
 type FlushEntry struct {
-	Hash [32]byte // SHAMap node hash (used as key in NodeStore)
-	Data []byte   // SerializeWithPrefix() output
+	Hash      [32]byte // SHAMap node hash (used as key in NodeStore)
+	Data      []byte   // SerializeWithPrefix() output
+	LedgerSeq uint32
+	MapType   Type
 }
 
 // NodeBatch holds a batch of serialized nodes from FlushDirty().
@@ -18,11 +20,17 @@ type NodeBatch struct {
 	Entries []FlushEntry
 }
 
-// DeserializeFromPrefix creates a SHAMap node from prefix-format data.
+// DeserializeFromPrefix creates a SHAMap node from prefix-format data,
+// returning a read-only NodeReader.
+func DeserializeFromPrefix(data []byte) (NodeReader, error) {
+	return deserializeFromPrefix(data)
+}
+
+// deserializeFromPrefix creates a SHAMap node from prefix-format data.
 // The first 4 bytes are the hash prefix which identifies the node type.
 // Inner nodes are created with hashes set but children nil (lazy loading).
 // All deserialized nodes are marked as not dirty.
-func DeserializeFromPrefix(data []byte) (Node, error) {
+func deserializeFromPrefix(data []byte) (Node, error) {
 	if len(data) < 4 {
 		return nil, fmt.Errorf("data too short for prefix: %d bytes", len(data))
 	}
@@ -31,13 +39,13 @@ func DeserializeFromPrefix(data []byte) (Node, error) {
 	copy(prefix[:], data[:4])
 
 	switch prefix {
-	case protocol.HashPrefixInnerNode:
+	case protocol.HashPrefixInnerNode():
 		return parseInnerNodeFromPrefix(data)
-	case protocol.HashPrefixLeafNode:
+	case protocol.HashPrefixLeafNode():
 		return parseAccountStateLeafFromPrefix(data)
-	case protocol.HashPrefixTransactionID:
+	case protocol.HashPrefixTransactionID():
 		return parseTransactionLeafFromPrefix(data)
-	case protocol.HashPrefixTxNode:
+	case protocol.HashPrefixTxNode():
 		return parseTransactionWithMetaLeafFromPrefix(data)
 	default:
 		return nil, fmt.Errorf("unknown hash prefix: %x", prefix)
@@ -115,7 +123,7 @@ func parseTransactionLeafFromPrefix(data []byte) (*leafNode, error) {
 
 	txData := data[4:]
 
-	key := common.Sha512Half(protocol.HashPrefixTransactionID[:], txData)
+	key := sha512half.Sum(protocol.HashPrefixTransactionID().Bytes(), txData)
 	item := NewItem(key, txData)
 
 	node, err := newTransactionLeafNode(item)

@@ -24,6 +24,9 @@ func ammOne() tx.Amount {
 // Reference: rippled XRPAmount::operator Number() { return drops(); }
 // and Number::Number(rep mantissa) : Number{mantissa, 0} {}
 func toNumber(amt tx.Amount) tx.Amount {
+	if raw, ok := amt.MPTRaw(); ok {
+		return state.NewIssuedAmountFromValue(raw, 0, "", "")
+	}
 	if !amt.IsNative() {
 		// Drop the currency/issuer tag: swap math operates in rippled's
 		// unitless Number space, freely combining the two pool assets. The
@@ -44,6 +47,9 @@ func toNumber(amt tx.Amount) tx.Amount {
 // If the original was IOU, restores the currency/issuer.
 // Reference: rippled STAmount::operator=(Number const&) for Number->STAmount conversion
 func fromNumber(num tx.Amount, original tx.Amount) tx.Amount {
+	if original.IsMPT() {
+		return fromNumberWithGuard(num, original, state.RoundToNearest)
+	}
 	if original.IsNative() {
 		// Convert IOU-like number back to XRP drops.
 		// The Number has mantissa and exponent -- compute drops = mantissa * 10^exponent
@@ -90,6 +96,16 @@ func fromNumberRoundUp(num tx.Amount, original tx.Amount) tx.Amount {
 //
 //	and Number.cpp Number::operator rep() lines 480-512
 func fromNumberWithGuard(num tx.Amount, original tx.Amount, mode state.RoundingMode) tx.Amount {
+	if original.IsMPT() {
+		var value int64
+		if num.IsNative() {
+			value = num.Drops()
+		} else {
+			n := state.NewXRPLNumberRounded(num.Mantissa(), num.Exponent(), mode)
+			value = n.ToInt64WithMode(mode)
+		}
+		return state.NewMPTAmountWithIssuanceID(value, original.Issuer, original.MPTIssuanceID())
+	}
 	if original.IsNative() {
 		if num.IsNative() {
 			return num
@@ -644,6 +660,14 @@ func toEitherAmt(amt tx.Amount) EitherAmount {
 	if amt.IsNative() {
 		return NewXRPEitherAmount(amt.Drops())
 	}
+	if amt.IsMPT() {
+		id, ok := decodeMPTID(amt.MPTIssuanceID())
+		if !ok {
+			return EitherAmount{}
+		}
+		value, _ := amt.MPTRaw()
+		return NewMPTEitherAmount(value, id)
+	}
 	return NewIOUEitherAmount(amt)
 }
 
@@ -651,6 +675,9 @@ func toEitherAmt(amt tx.Amount) EitherAmount {
 func zeroLikeAmount(amt tx.Amount) tx.Amount {
 	if amt.IsNative() {
 		return state.NewXRPAmountFromInt(0)
+	}
+	if amt.IsMPT() {
+		return state.NewMPTAmountWithIssuanceID(0, amt.Issuer, amt.MPTIssuanceID())
 	}
 	return state.NewIssuedAmountFromValue(0, -100, amt.Currency, amt.Issuer)
 }
@@ -662,6 +689,9 @@ func zeroLikeAmount(amt tx.Amount) tx.Amount {
 func maxAmountLike(amt tx.Amount) tx.Amount {
 	if amt.IsNative() {
 		return state.NewXRPAmountFromInt(math.MaxInt64)
+	}
+	if amt.IsMPT() {
+		return state.NewMPTAmountWithIssuanceID(math.MaxInt64, amt.Issuer, amt.MPTIssuanceID())
 	}
 	// Max IOU: mantissa = cMaxValue/2 = 9999999999999999/2 = 4999999999999999
 	// exponent = cMaxOffset = 80
@@ -677,6 +707,9 @@ func maxAmountLike(amt tx.Amount) tx.Amount {
 func toMaxAmount(amt tx.Amount) tx.Amount {
 	if amt.IsNative() {
 		return state.NewXRPAmountFromInt(math.MaxInt64)
+	}
+	if amt.IsMPT() {
+		return state.NewMPTAmountWithIssuanceID(math.MaxInt64, amt.Issuer, amt.MPTIssuanceID())
 	}
 	// Full max IOU: mantissa = cMaxValue = 9999999999999999, exponent = cMaxOffset = 80
 	return state.NewIssuedAmountFromValue(9999999999999999, 80, amt.Currency, amt.Issuer)

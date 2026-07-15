@@ -107,6 +107,10 @@ type Ledger struct {
 
 	// Drops destroyed in this ledger (transaction fees)
 	dropsDestroyed drops.XRPAmount
+
+	// rules is fixed while an open ledger applies transactions and is replaced
+	// with the resulting amendment state when that ledger closes.
+	rules *amendment.Rules
 }
 
 var _ AtomicWriter = (*Ledger)(nil)
@@ -116,8 +120,12 @@ func NewOpen(parent *Ledger, closeTime time.Time) (*Ledger, error) {
 	if parent == nil {
 		return nil, errors.New("parent ledger cannot be nil")
 	}
+	parentRules, err := parent.loadRules()
+	if err != nil {
+		return nil, fmt.Errorf("failed to load parent amendment rules: %w", err)
+	}
 
-	stateMap, err := parent.stateMap.Snapshot(true)
+	stateMap, err := parent.stateMap.SnapshotMutable()
 	if err != nil {
 		return nil, fmt.Errorf("failed to snapshot state map: %w", err)
 	}
@@ -143,6 +151,8 @@ func NewOpen(parent *Ledger, closeTime time.Time) (*Ledger, error) {
 		Drops:               parent.header.Drops,
 		// Hash, TxHash, AccountHash will be set when closed
 	}
+	stateMap.SetLedgerSeq(newLedgerSeq)
+	txMap.SetLedgerSeq(newLedgerSeq)
 
 	return &Ledger{
 		stateMap:       stateMap,
@@ -151,6 +161,7 @@ func NewOpen(parent *Ledger, closeTime time.Time) (*Ledger, error) {
 		fees:           parent.fees,
 		state:          StateOpen,
 		dropsDestroyed: 0,
+		rules:          parentRules,
 	}, nil
 }
 
@@ -161,12 +172,16 @@ func FromGenesis(
 	txMap *shamap.SHAMap,
 	fees drops.Fees,
 ) *Ledger {
+	setMapLedgerSeq(stateMap, hdr.LedgerIndex)
+	setMapLedgerSeq(txMap, hdr.LedgerIndex)
+	rules, _ := loadAmendmentsFromSHAMap(stateMap)
 	return &Ledger{
 		stateMap: stateMap,
 		txMap:    txMap,
 		header:   hdr,
 		fees:     fees,
 		state:    StateValidated, // Genesis is immediately validated
+		rules:    rules,
 	}
 }
 
@@ -179,18 +194,85 @@ func NewFromHeader(
 	stateMap *shamap.SHAMap,
 	txMap *shamap.SHAMap,
 	fees drops.Fees,
-) *Ledger {
+) (*Ledger, error) {
+	return NewFromHeaderContext(context.Background(), hdr, stateMap, txMap, fees)
+}
+
+// NewFromHeaderContext reconstructs a closed or validated ledger, according to
+// the header's local validation flag, while forwarding ctx to amendment-state
+// reads from lazily backed maps.
+func NewFromHeaderContext(
+	ctx context.Context,
+	hdr header.LedgerHeader,
+	stateMap *shamap.SHAMap,
+	txMap *shamap.SHAMap,
+	fees drops.Fees,
+) (*Ledger, error) {
 	state := StateClosed
 	if hdr.Validated {
 		state = StateValidated
 	}
+	return newFromHeaderContext(ctx, hdr, stateMap, txMap, fees, state)
+}
+
+// NewClosedFromHeader reconstructs an immutable ledger without asserting validation.
+func NewClosedFromHeader(
+	hdr header.LedgerHeader,
+	stateMap *shamap.SHAMap,
+	txMap *shamap.SHAMap,
+	fees drops.Fees,
+) (*Ledger, error) {
+	return NewClosedFromHeaderContext(context.Background(), hdr, stateMap, txMap, fees)
+}
+
+// NewClosedFromHeaderContext reconstructs a closed ledger while forwarding ctx
+// to amendment-state reads from lazily backed maps.
+func NewClosedFromHeaderContext(
+	ctx context.Context,
+	hdr header.LedgerHeader,
+	stateMap *shamap.SHAMap,
+	txMap *shamap.SHAMap,
+	fees drops.Fees,
+) (*Ledger, error) {
+	return newFromHeaderContext(ctx, hdr, stateMap, txMap, fees, StateClosed)
+}
+
+func newFromHeaderContext(
+	ctx context.Context,
+	hdr header.LedgerHeader,
+	stateMap *shamap.SHAMap,
+	txMap *shamap.SHAMap,
+	fees drops.Fees,
+	state State,
+) (*Ledger, error) {
+	setMapLedgerSeq(stateMap, hdr.LedgerIndex)
+	setMapLedgerSeq(txMap, hdr.LedgerIndex)
+	if stateMap == nil {
+		return nil, errors.New("state map cannot be nil")
+	}
+	if txMap == nil {
+		return nil, errors.New("transaction map cannot be nil")
+	}
+	immutableState, err := stateMap.SnapshotImmutable()
+	if err != nil {
+		return nil, fmt.Errorf("failed to snapshot state map: %w", err)
+	}
+	immutableTx, err := txMap.SnapshotImmutable()
+	if err != nil {
+		return nil, fmt.Errorf("failed to snapshot transaction map: %w", err)
+	}
+	rules, err := LoadAmendmentsFromSHAMapContext(ctx, immutableState)
+	if err != nil {
+		return nil, fmt.Errorf("failed to load amendment rules: %w", err)
+	}
 	return &Ledger{
-		stateMap: stateMap,
-		txMap:    txMap,
+		stateMap: immutableState,
+		txMap:    immutableTx,
 		header:   hdr,
 		fees:     fees,
 		state:    state,
-	}
+		rules:    rules,
+	}, nil
 }
 
 // NewOpenWithHeader creates an open ledger with the exact header values provided
@@ -200,13 +282,29 @@ func NewOpenWithHeader(
 	stateMap *shamap.SHAMap,
 	txMap *shamap.SHAMap,
 	fees drops.Fees,
-) *Ledger {
+) (*Ledger, error) {
+	setMapLedgerSeq(stateMap, hdr.LedgerIndex)
+	setMapLedgerSeq(txMap, hdr.LedgerIndex)
+	if stateMap == nil {
+		return nil, errors.New("state map cannot be nil")
+	}
+	rules, err := loadAmendmentsFromSHAMap(stateMap)
+	if err != nil {
+		return nil, fmt.Errorf("failed to load amendment rules: %w", err)
+	}
 	return &Ledger{
 		stateMap: stateMap,
 		txMap:    txMap,
 		header:   hdr,
 		fees:     fees,
 		state:    StateOpen,
+		rules:    rules,
+	}, nil
+}
+
+func setMapLedgerSeq(sm *shamap.SHAMap, seq uint32) {
+	if sm != nil {
+		sm.SetLedgerSeq(seq)
 	}
 }
 
@@ -299,10 +397,14 @@ func (l *Ledger) IsValidated() bool {
 }
 
 func (l *Ledger) Read(k keylet.Keylet) ([]byte, error) {
+	return l.ReadContext(context.Background(), k)
+}
+
+func (l *Ledger) ReadContext(ctx context.Context, k keylet.Keylet) ([]byte, error) {
 	l.mu.RLock()
 	defer l.mu.RUnlock()
 
-	item, found, err := l.stateMap.Get(k.Key)
+	item, found, err := l.stateMap.GetContext(ctx, k.Key)
 	if err != nil {
 		return nil, err
 	}
@@ -326,6 +428,10 @@ func (l *Ledger) SkipListHashes() ([][32]byte, error) {
 // skip list, and 256-aligned ancestors in the historical skip list. A non-256-aligned
 // ancestor more than 256 behind is unresolvable from one ledger → (zero, false).
 func (l *Ledger) HashOfSeq(seq uint32) ([32]byte, bool, error) {
+	return l.HashOfSeqContext(context.Background(), seq)
+}
+
+func (l *Ledger) HashOfSeqContext(ctx context.Context, seq uint32) ([32]byte, bool, error) {
 	l.mu.RLock()
 	defer l.mu.RUnlock()
 
@@ -342,7 +448,7 @@ func (l *Ledger) HashOfSeq(seq uint32) ([32]byte, bool, error) {
 
 	// Rolling 256: this ledger's skip list holds hashes for seqs
 	// [lseq-len .. lseq-1], so hash(seq) sits at index len-diff.
-	_, hashes, _, err := skiplist.ReadLedgerHashesSLE(l.stateMap, keylet.LedgerHashes().Key)
+	_, hashes, _, err := skiplist.ReadLedgerHashesSLEContext(ctx, l.stateMap, keylet.LedgerHashes().Key)
 	if err != nil {
 		return [32]byte{}, false, err
 	}
@@ -356,7 +462,7 @@ func (l *Ledger) HashOfSeq(seq uint32) ([32]byte, bool, error) {
 	if seq&0xff != 0 {
 		return [32]byte{}, false, nil
 	}
-	_, histHashes, lastSeq, err := skiplist.ReadLedgerHashesSLE(l.stateMap, keylet.LedgerHashesForSeq(seq).Key)
+	_, histHashes, lastSeq, err := skiplist.ReadLedgerHashesSLEContext(ctx, l.stateMap, keylet.LedgerHashesForSeq(seq).Key)
 	if err != nil {
 		return [32]byte{}, false, err
 	}
@@ -369,10 +475,14 @@ func (l *Ledger) HashOfSeq(seq uint32) ([32]byte, bool, error) {
 }
 
 func (l *Ledger) Exists(k keylet.Keylet) (bool, error) {
+	return l.ExistsContext(context.Background(), k)
+}
+
+func (l *Ledger) ExistsContext(ctx context.Context, k keylet.Keylet) (bool, error) {
 	l.mu.RLock()
 	defer l.mu.RUnlock()
 
-	return l.stateMap.Has(k.Key)
+	return l.stateMap.HasContext(ctx, k.Key)
 }
 
 func (l *Ledger) Insert(k keylet.Keylet, data []byte) error {
@@ -483,10 +593,13 @@ func (l *Ledger) AdoptState(src *Ledger) error {
 	src.mu.RUnlock()
 
 	l.mu.Lock()
+	defer l.mu.Unlock()
+	if l.state != StateOpen {
+		return ErrLedgerImmutable
+	}
 	l.stateMap = stateMap
 	l.txMap = txMap
 	l.dropsDestroyed = dropsDestroyed
-	l.mu.Unlock()
 	return nil
 }
 
@@ -515,10 +628,14 @@ func (l *Ledger) AddTransactionWithMeta(txHash [32]byte, txWithMetaData []byte) 
 }
 
 func (l *Ledger) GetTransaction(txHash [32]byte) ([]byte, bool, error) {
+	return l.GetTransactionContext(context.Background(), txHash)
+}
+
+func (l *Ledger) GetTransactionContext(ctx context.Context, txHash [32]byte) ([]byte, bool, error) {
 	l.mu.RLock()
 	defer l.mu.RUnlock()
 
-	item, found, err := l.txMap.Get(txHash)
+	item, found, err := l.txMap.GetContext(ctx, txHash)
 	if err != nil {
 		return nil, false, err
 	}
@@ -545,9 +662,27 @@ func (l *Ledger) TxExists(txID [32]byte) bool {
 	return exists
 }
 
-// Rules returns nil — the base ledger doesn't carry amendment rules.
+// Rules returns the transaction rules fixed for this ledger. A malformed or
+// unavailable Amendments entry returns nil; ledger construction and close paths
+// surface the underlying error instead of silently disabling amendments.
 func (l *Ledger) Rules() *amendment.Rules {
-	return nil
+	rules, _ := l.loadRules()
+	return rules
+}
+
+func (l *Ledger) loadRules() (*amendment.Rules, error) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if l.rules != nil {
+		return l.rules, nil
+	}
+
+	rules, err := loadAmendmentsFromSHAMap(l.stateMap)
+	if err != nil {
+		return nil, err
+	}
+	l.rules = rules
+	return rules, nil
 }
 
 // LedgerSeq aliases Sequence for the ReadView interface.
@@ -571,6 +706,11 @@ func (l *Ledger) Close(closeTime time.Time, closeFlags uint8) error {
 	if l.dropsDestroyed < 0 || uint64(l.dropsDestroyed) > l.header.Drops {
 		return fmt.Errorf("ledger: drops underflow closing ledger %d: destroyed %d exceeds total %d",
 			l.header.LedgerIndex, int64(l.dropsDestroyed), l.header.Drops)
+	}
+
+	rules, err := loadAmendmentsFromSHAMap(l.stateMap)
+	if err != nil {
+		return fmt.Errorf("failed to load amendment rules: %w", err)
 	}
 
 	// Update LedgerHashes skiplist before making state immutable.
@@ -605,6 +745,7 @@ func (l *Ledger) Close(closeTime time.Time, closeFlags uint8) error {
 
 	l.header.Hash = calculateLedgerHash(l.header)
 
+	l.rules = rules
 	l.state = StateClosed
 
 	return nil
@@ -649,12 +790,12 @@ func (l *Ledger) Snapshot() (*Ledger, error) {
 	l.mu.RLock()
 	defer l.mu.RUnlock()
 
-	stateMapCopy, err := l.stateMap.Snapshot(false)
+	stateMapCopy, err := l.stateMap.SnapshotImmutable()
 	if err != nil {
 		return nil, err
 	}
 
-	txMapCopy, err := l.txMap.Snapshot(false)
+	txMapCopy, err := l.txMap.SnapshotImmutable()
 	if err != nil {
 		return nil, err
 	}
@@ -665,6 +806,7 @@ func (l *Ledger) Snapshot() (*Ledger, error) {
 		header:   l.header,
 		fees:     l.fees,
 		state:    l.state,
+		rules:    l.rules,
 	}, nil
 }
 
@@ -675,11 +817,11 @@ func (l *Ledger) MutableSnapshot() (*Ledger, error) {
 	l.mu.RLock()
 	defer l.mu.RUnlock()
 
-	stateMapCopy, err := l.stateMap.Snapshot(true)
+	stateMapCopy, err := l.stateMap.SnapshotMutable()
 	if err != nil {
 		return nil, err
 	}
-	txMapCopy, err := l.txMap.Snapshot(true)
+	txMapCopy, err := l.txMap.SnapshotMutable()
 	if err != nil {
 		return nil, err
 	}
@@ -690,6 +832,33 @@ func (l *Ledger) MutableSnapshot() (*Ledger, error) {
 		fees:           l.fees,
 		state:          l.state,
 		dropsDestroyed: l.dropsDestroyed,
+		rules:          l.rules,
+	}, nil
+}
+
+// MutableSnapshotUnflushed returns a mutable copy without persisting dirty
+// SHAMap nodes, for short-lived transactional staging that is then adopted or
+// discarded.
+func (l *Ledger) MutableSnapshotUnflushed() (*Ledger, error) {
+	l.mu.RLock()
+	defer l.mu.RUnlock()
+
+	stateMapCopy, err := l.stateMap.SnapshotMutableUnflushed()
+	if err != nil {
+		return nil, err
+	}
+	txMapCopy, err := l.txMap.SnapshotMutableUnflushed()
+	if err != nil {
+		return nil, err
+	}
+	return &Ledger{
+		stateMap:       stateMapCopy,
+		txMap:          txMapCopy,
+		header:         l.header,
+		fees:           l.fees,
+		state:          l.state,
+		dropsDestroyed: l.dropsDestroyed,
+		rules:          l.rules,
 	}, nil
 }
 
@@ -723,10 +892,14 @@ func (l *Ledger) ForEachCtx(ctx context.Context, fn func(key [32]byte, data []by
 
 // Succ returns the first state entry with key > the given key (O(log n) UpperBound).
 func (l *Ledger) Succ(key [32]byte) ([32]byte, []byte, bool, error) {
+	return l.SuccContext(context.Background(), key)
+}
+
+func (l *Ledger) SuccContext(ctx context.Context, key [32]byte) ([32]byte, []byte, bool, error) {
 	l.mu.RLock()
 	defer l.mu.RUnlock()
 
-	it := l.stateMap.UpperBound(key)
+	it := l.stateMap.UpperBoundContext(ctx, key)
 	if it.Valid() {
 		item := it.Item()
 		if item != nil {
@@ -747,7 +920,7 @@ func (l *Ledger) IterateStateFrom(ctx context.Context, after [32]byte, fn func(k
 	l.mu.RLock()
 	defer l.mu.RUnlock()
 
-	it := l.stateMap.UpperBound(after)
+	it := l.stateMap.UpperBoundContext(ctx, after)
 	for it.Valid() {
 		if err := ctx.Err(); err != nil {
 			return err
@@ -781,10 +954,14 @@ func DecrementKey(key [32]byte) [32]byte {
 
 // ForEachTransaction calls fn for each tx (hash, data); return false to stop early.
 func (l *Ledger) ForEachTransaction(fn func(txHash [32]byte, txData []byte) bool) error {
+	return l.ForEachTransactionContext(context.Background(), fn)
+}
+
+func (l *Ledger) ForEachTransactionContext(ctx context.Context, fn func(txHash [32]byte, txData []byte) bool) error {
 	l.mu.RLock()
 	defer l.mu.RUnlock()
 
-	return l.txMap.ForEach(func(item *shamap.Item) bool {
+	return l.txMap.ForEachCtx(ctx, func(item *shamap.Item) bool {
 		return fn(item.Key(), item.Data())
 	})
 }
@@ -801,7 +978,7 @@ func (l *Ledger) StateMapSnapshot() (*shamap.SHAMap, error) {
 	l.mu.RLock()
 	defer l.mu.RUnlock()
 
-	return l.stateMap.Snapshot(true)
+	return l.stateMap.SnapshotMutable()
 }
 
 // TxMapSnapshot returns a mutable snapshot of the transaction map.
@@ -809,15 +986,45 @@ func (l *Ledger) TxMapSnapshot() (*shamap.SHAMap, error) {
 	l.mu.RLock()
 	defer l.mu.RUnlock()
 
-	return l.txMap.Snapshot(true)
+	return l.txMap.SnapshotMutable()
 }
 
-// SetStateMapFamily sets the Family on the state map, enabling backed mode
-// with lazy loading and efficient snapshots.
+func (l *Ledger) StoreStateDirty(store func([]shamap.FlushEntry) error) error {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if l.stateMap == nil {
+		return nil
+	}
+	return l.stateMap.StoreDirty(store)
+}
+
+func (l *Ledger) StoreTransactionDirty(store func([]shamap.FlushEntry) error) error {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if l.txMap == nil {
+		return nil
+	}
+	return l.txMap.StoreDirty(store)
+}
+
+// SetSHAMapFamily backs both ledger maps with the same node family.
+func (l *Ledger) SetSHAMapFamily(family shamap.Family) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if l.stateMap != nil {
+		l.stateMap.SetFamily(family)
+	}
+	if l.txMap != nil {
+		l.txMap.SetFamily(family)
+	}
+}
+
 func (l *Ledger) SetStateMapFamily(family shamap.Family) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
-	l.stateMap.SetFamily(family)
+	if l.stateMap != nil {
+		l.stateMap.SetFamily(family)
+	}
 }
 
 func (l *Ledger) SerializeHeader() []byte {

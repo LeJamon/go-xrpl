@@ -13,36 +13,33 @@ import (
 type AccountOffersMethod struct{ BaseHandler }
 
 func (m *AccountOffersMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (any, *types.RpcError) {
-	var request struct {
-		types.AccountParam
-		types.LedgerSpecifier
-		types.PaginationParams
+	fields, account, parseErr := accountPageParams(params)
+	if parseErr != nil {
+		return nil, parseErr
 	}
-
-	if err := ParseParams(params, &request); err != nil {
-		return nil, err
-	}
-
-	if err := ValidateAccount(request.Account); err != nil {
-		return nil, err
-	}
-
 	if err := RequireLedgerService(ctx.Services); err != nil {
 		return nil, err
 	}
-
-	ledgerIndex, selErr := resolveLedgerSelector(request.LedgerSpecifier)
+	ledgerIndex, ledgerFields, selErr := preflightAccountPage(ctx, params, account, "Failed to get account information", true)
 	if selErr != nil {
 		return nil, selErr
 	}
 
-	markerStr, mErr := markerString(request.Marker)
+	limit, limitErr := ReadLimitField(params, LimitAccountOffers, ctx.Unlimited)
+	if limitErr != nil {
+		return nil, limitErr
+	}
+	marker, mErr := markerString(fields["marker"])
 	if mErr != nil {
 		return nil, mErr
 	}
+	if _, present := fields["marker"]; present {
+		if marker == "" {
+			return nil, types.RpcErrorInvalidField("marker")
+		}
+	}
 
-	limit := ClampLimit(request.Limit, LimitAccountOffers, ctx.Unlimited)
-	result, err := ctx.Services.Ledger.GetAccountOffers(ctx.Context, request.Account, ledgerIndex, limit, markerStr)
+	result, err := ctx.Services.Ledger.GetAccountOffers(ctx.Context, account, ledgerIndex, limit, marker)
 	if err != nil {
 		if rerr := mapLedgerLookupErr(err); rerr != nil {
 			return nil, rerr
@@ -53,6 +50,9 @@ func (m *AccountOffersMethod) Handle(ctx *types.RpcContext, params json.RawMessa
 		if errors.Is(err, svcerr.ErrInvalidMarker) {
 			return nil, types.RpcErrorInvalidField("marker")
 		}
+		if errors.Is(err, svcerr.ErrStaleMarker) {
+			return nil, types.RpcErrorInvalidParams("Invalid parameters.")
+		}
 		return nil, rpcInternalError("account_offers: ledger query failed", err)
 	}
 
@@ -61,7 +61,7 @@ func (m *AccountOffersMethod) Handle(ctx *types.RpcContext, params json.RawMessa
 		"account": result.Account,
 		"offers":  result.Offers,
 	}
-	fillLedgerFields(response, ledgerIndex, FormatLedgerHash(result.LedgerHash), result.LedgerIndex, result.Validated)
+	mergeLedgerFields(response, ledgerFields)
 
 	// rippled only includes limit when there is a marker (pagination continues)
 	if result.Marker != "" {

@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/LeJamon/go-xrpl/internal/ledger/service/svcerr"
 	"github.com/LeJamon/go-xrpl/internal/rpc/types"
 	xrpllog "github.com/LeJamon/go-xrpl/log"
 )
@@ -207,9 +208,12 @@ func resolveCanDeleteSeq(ctx *types.RpcContext, store types.AdvisoryDeleteStore,
 		if hb, err := hex.DecodeString(str); err == nil {
 			var h [32]byte
 			copy(h[:], hb)
-			lr, lerr := ctx.Services.Ledger.GetLedgerByHash(h)
-			if lerr != nil || lr == nil {
+			lr, lerr := getLedgerByHashContext(ctx.Context, ctx.Services.Ledger, h)
+			if errors.Is(lerr, svcerr.ErrLedgerNotFound) || (lerr == nil && lr == nil) {
 				return 0, types.RpcErrorLgrNotFound("ledgerNotFound")
+			}
+			if lerr != nil {
+				return 0, rpcInternalError("can_delete: ledger hash lookup failed", lerr)
 			}
 			return lr.Sequence(), nil
 		}
@@ -350,7 +354,7 @@ func (m *LogLevelMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (
 
 	// GET: return current levels snapshot
 	if request.Severity == "" {
-		global, partitions := xrpllog.GetCurrentLevels()
+		global, partitions := xrpllog.Levels()
 		levels := map[string]string{
 			"base": rippledSeverityName(global),
 		}

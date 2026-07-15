@@ -4,19 +4,19 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/LeJamon/go-xrpl/internal/testing"
+	jtx "github.com/LeJamon/go-xrpl/internal/testing"
 	"github.com/LeJamon/go-xrpl/internal/tx"
 	paychan "github.com/LeJamon/go-xrpl/internal/tx/paychan"
 	"github.com/LeJamon/go-xrpl/protocol"
 )
 
 func ToRippleTime(t time.Time) uint32 {
-	return uint32(t.Unix() - protocol.RippleEpochUnix)
+	return protocol.ToRippleTime(t)
 }
 
 type ChannelCreateBuilder struct {
-	from           *testing.Account
-	to             *testing.Account
+	from           *jtx.Account
+	to             *jtx.Account
 	amount         int64
 	settleDelay    uint32
 	publicKey      string
@@ -28,7 +28,7 @@ type ChannelCreateBuilder struct {
 	ticketSeq      *uint32
 }
 
-func ChannelCreate(from, to *testing.Account, amount int64, settleDelay uint32, publicKey string) *ChannelCreateBuilder {
+func ChannelCreate(from, to *jtx.Account, amount int64, settleDelay uint32, publicKey string) *ChannelCreateBuilder {
 	return &ChannelCreateBuilder{
 		from:        from,
 		to:          to,
@@ -100,7 +100,7 @@ func (b *ChannelCreateBuilder) Build() tx.Transaction {
 }
 
 type ChannelFundBuilder struct {
-	funder     *testing.Account
+	funder     *jtx.Account
 	channelID  string
 	amount     int64
 	expiration *uint32
@@ -109,7 +109,7 @@ type ChannelFundBuilder struct {
 	ticketSeq  *uint32
 }
 
-func ChannelFund(funder *testing.Account, channelID string, amount int64) *ChannelFundBuilder {
+func ChannelFund(funder *jtx.Account, channelID string, amount int64) *ChannelFundBuilder {
 	return &ChannelFundBuilder{
 		funder:    funder,
 		channelID: channelID,
@@ -163,7 +163,7 @@ func (b *ChannelFundBuilder) Build() tx.Transaction {
 }
 
 type ChannelClaimBuilder struct {
-	claimer       *testing.Account
+	claimer       *jtx.Account
 	channelID     string
 	balance       *int64
 	amount        *int64
@@ -177,7 +177,7 @@ type ChannelClaimBuilder struct {
 	credentialIDs []string
 }
 
-func ChannelClaim(claimer *testing.Account, channelID string) *ChannelClaimBuilder {
+func ChannelClaim(claimer *jtx.Account, channelID string) *ChannelClaimBuilder {
 	return &ChannelClaimBuilder{
 		claimer:   claimer,
 		channelID: channelID,

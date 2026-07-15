@@ -20,16 +20,18 @@ var (
 // loaded once at package init from the embedded RFC JSON document.
 //
 // All forward maps (name -> code) and reverse maps (code -> name) are built
-// eagerly so every lookup is O(1).
+// eagerly so every lookup is O(1). The maps are unexported so the shared
+// process-wide tables cannot be mutated; use the lookup methods, or the
+// copy-returning map accessors, to read them.
 type Definitions struct {
-	Types                  map[string]int32
-	LedgerEntryTypes       map[string]int32
-	Fields                 fieldInstanceMap
-	TransactionResults     map[string]int32
-	TransactionTypes       map[string]int32
-	FieldIDNameMap         map[FieldHeader]string
-	GranularPermissions    map[string]int32
-	DelegatablePermissions map[string]int32
+	types                  map[string]int32
+	ledgerEntryTypes       map[string]int32
+	fields                 fieldInstanceMap
+	transactionResults     map[string]int32
+	transactionTypes       map[string]int32
+	fieldIDNameMap         map[FieldHeader]string
+	granularPermissions    map[string]int32
+	delegatablePermissions map[string]int32
 
 	// Reverse lookup maps used by enumToStr-style decoders.
 	transactionTypeNames       map[int32]string
@@ -41,6 +43,39 @@ type Definitions struct {
 // Get returns the singleton instance of Definitions.
 func Get() *Definitions {
 	return definitions
+}
+
+// Types returns a copy of the type-name -> type-code map.
+func (d *Definitions) Types() map[string]int32 { return maps.Clone(d.types) }
+
+// LedgerEntryTypes returns a copy of the ledger-entry-type-name -> code map.
+func (d *Definitions) LedgerEntryTypes() map[string]int32 { return maps.Clone(d.ledgerEntryTypes) }
+
+// TransactionTypes returns a copy of the transaction-type-name -> code map.
+func (d *Definitions) TransactionTypes() map[string]int32 { return maps.Clone(d.transactionTypes) }
+
+// TransactionResults returns a copy of the transaction-result-name -> code map.
+func (d *Definitions) TransactionResults() map[string]int32 { return maps.Clone(d.transactionResults) }
+
+// Fields returns a copy of the field-name -> field-instance map. The
+// FieldInstance pointers are shared; callers must not mutate them.
+func (d *Definitions) Fields() map[string]*FieldInstance { return maps.Clone(d.fields) }
+
+// HasField reports whether name is a known serialized field.
+func (d *Definitions) HasField(name string) bool {
+	_, ok := d.fields[name]
+	return ok
+}
+
+// IsGranularPermission reports whether value is a registered granular
+// permission value.
+func (d *Definitions) IsGranularPermission(value int32) bool {
+	for _, v := range d.granularPermissions {
+		if v == value {
+			return true
+		}
+	}
+	return false
 }
 
 type definitionsDoc struct {
@@ -61,11 +96,11 @@ func loadDefinitions() {
 	}
 
 	definitions = &Definitions{
-		Types:              data.Types,
-		Fields:             data.Fields,
-		LedgerEntryTypes:   data.LedgerEntryTypes,
-		TransactionResults: data.TransactionResults,
-		TransactionTypes:   data.TransactionTypes,
+		types:              data.Types,
+		fields:             data.Fields,
+		ledgerEntryTypes:   data.LedgerEntryTypes,
+		transactionResults: data.TransactionResults,
+		transactionTypes:   data.TransactionTypes,
 	}
 
 	addFieldHeadersAndOrdinals()
@@ -75,31 +110,31 @@ func loadDefinitions() {
 }
 
 func addFieldHeadersAndOrdinals() {
-	for k := range definitions.Fields {
-		t, _ := definitions.GetTypeCodeByTypeName(definitions.Fields[k].Type)
+	for k := range definitions.fields {
+		t, _ := definitions.TypeCode(definitions.fields[k].Type)
 
-		if fi, ok := definitions.Fields[k]; ok {
+		if fi, ok := definitions.fields[k]; ok {
 			fi.FieldHeader = &FieldHeader{
 				TypeCode:  t,
-				FieldCode: definitions.Fields[k].Nth,
+				FieldCode: definitions.fields[k].Nth,
 			}
-			fi.Ordinal = (t<<16 | definitions.Fields[k].Nth)
+			fi.Ordinal = (t<<16 | definitions.fields[k].Nth)
 		}
 	}
 }
 
 func createFieldIDNameMap() {
-	definitions.FieldIDNameMap = make(map[FieldHeader]string, len(definitions.Fields))
-	for k := range definitions.Fields {
-		fh, _ := definitions.GetFieldHeaderByFieldName(k)
+	definitions.fieldIDNameMap = make(map[FieldHeader]string, len(definitions.fields))
+	for k := range definitions.fields {
+		fh, _ := definitions.FieldHeaderByName(k)
 
-		definitions.FieldIDNameMap[*fh] = k
+		definitions.fieldIDNameMap[*fh] = k
 	}
 }
 
 // Initializes granular permissions and delegatable permissions mappings for account permission delegation.
 func initializePermissions() {
-	definitions.GranularPermissions = map[string]int32{
+	definitions.granularPermissions = map[string]int32{
 		"TrustlineAuthorize":     65537,
 		"TrustlineFreeze":        65538,
 		"TrustlineUnfreeze":      65539,
@@ -114,32 +149,32 @@ func initializePermissions() {
 		"MPTokenIssuanceUnlock":  65548,
 	}
 
-	definitions.DelegatablePermissions = make(map[string]int32, len(definitions.GranularPermissions)+len(definitions.TransactionTypes))
+	definitions.delegatablePermissions = make(map[string]int32, len(definitions.granularPermissions)+len(definitions.transactionTypes))
 
-	maps.Copy(definitions.DelegatablePermissions, definitions.GranularPermissions)
+	maps.Copy(definitions.delegatablePermissions, definitions.granularPermissions)
 
-	for txType, value := range definitions.TransactionTypes {
-		definitions.DelegatablePermissions[txType] = value + 1
+	for txType, value := range definitions.transactionTypes {
+		definitions.delegatablePermissions[txType] = value + 1
 	}
 }
 
 // buildReverseMaps populates code->name lookup tables once so that the
 // public Get*Name helpers are O(1) instead of scanning the forward maps.
 func buildReverseMaps() {
-	definitions.transactionTypeNames = make(map[int32]string, len(definitions.TransactionTypes))
-	for name, code := range definitions.TransactionTypes {
+	definitions.transactionTypeNames = make(map[int32]string, len(definitions.transactionTypes))
+	for name, code := range definitions.transactionTypes {
 		definitions.transactionTypeNames[code] = name
 	}
-	definitions.transactionResultNames = make(map[int32]string, len(definitions.TransactionResults))
-	for name, code := range definitions.TransactionResults {
+	definitions.transactionResultNames = make(map[int32]string, len(definitions.transactionResults))
+	for name, code := range definitions.transactionResults {
 		definitions.transactionResultNames[code] = name
 	}
-	definitions.ledgerEntryTypeNames = make(map[int32]string, len(definitions.LedgerEntryTypes))
-	for name, code := range definitions.LedgerEntryTypes {
+	definitions.ledgerEntryTypeNames = make(map[int32]string, len(definitions.ledgerEntryTypes))
+	for name, code := range definitions.ledgerEntryTypes {
 		definitions.ledgerEntryTypeNames[code] = name
 	}
-	definitions.delegatablePermissionNames = make(map[int32]string, len(definitions.DelegatablePermissions))
-	for name, value := range definitions.DelegatablePermissions {
+	definitions.delegatablePermissionNames = make(map[int32]string, len(definitions.delegatablePermissions))
+	for name, value := range definitions.delegatablePermissions {
 		definitions.delegatablePermissionNames[value] = name
 	}
 }

@@ -4,14 +4,14 @@ import (
 	"encoding/hex"
 	"fmt"
 
-	"github.com/LeJamon/go-xrpl/internal/testing"
+	jtx "github.com/LeJamon/go-xrpl/internal/testing"
 	"github.com/LeJamon/go-xrpl/internal/tx"
 	"github.com/LeJamon/go-xrpl/internal/tx/did"
 )
 
 // DIDSetBuilder provides a fluent interface for building DIDSet transactions.
 type DIDSetBuilder struct {
-	account     *testing.Account
+	account     *jtx.Account
 	uri         *string
 	didDocument *string
 	data        *string
@@ -21,7 +21,7 @@ type DIDSetBuilder struct {
 }
 
 // DIDSet creates a new DIDSetBuilder.
-func DIDSet(account *testing.Account) *DIDSetBuilder {
+func DIDSet(account *jtx.Account) *DIDSetBuilder {
 	return &DIDSetBuilder{
 		account: account,
 		fee:     10, // Default fee: 10 drops
@@ -147,14 +147,14 @@ func (b *DIDSetBuilder) BuildDIDSet() *did.DIDSet {
 
 // DIDDeleteBuilder provides a fluent interface for building DIDDelete transactions.
 type DIDDeleteBuilder struct {
-	account  *testing.Account
+	account  *jtx.Account
 	fee      uint64
 	sequence *uint32
 	flags    uint32
 }
 
 // DIDDelete creates a new DIDDeleteBuilder.
-func DIDDelete(account *testing.Account) *DIDDeleteBuilder {
+func DIDDelete(account *jtx.Account) *DIDDeleteBuilder {
 	return &DIDDeleteBuilder{
 		account: account,
 		fee:     10, // Default fee: 10 drops

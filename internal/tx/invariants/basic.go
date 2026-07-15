@@ -177,34 +177,33 @@ func checkAccountRootsNotDeleted(txType string, result Result, entries []Invaria
 			deletedCount++
 		}
 	}
-	if deletedCount == 0 {
+
+	// A successful mustDeleteAcct transaction (AccountDelete/AMMDelete/
+	// VaultDelete/LoanBrokerDelete) MUST delete exactly one account root.
+	if hasPrivilegeName(txType, mustDeleteAcct) && result == TesSUCCESS {
+		if deletedCount == 1 {
+			return nil
+		}
+		if deletedCount == 0 {
+			return &InvariantViolation{
+				Name:    "AccountRootsNotDeleted",
+				Message: fmt.Sprintf("%s succeeded without deleting an account", txType),
+			}
+		}
+		return &InvariantViolation{
+			Name:    "AccountRootsNotDeleted",
+			Message: fmt.Sprintf("%s succeeded but deleted multiple accounts (count=%d)", txType, deletedCount),
+		}
+	}
+
+	// A successful mayDeleteAcct transaction (AMMWithdraw/AMMClawback) MAY delete
+	// one account root when the total AMM LP Tokens balance goes to 0.
+	if hasPrivilegeName(txType, mayDeleteAcct) && result == TesSUCCESS && deletedCount == 1 {
 		return nil
 	}
 
-	if result == TesSUCCESS {
-		// A successful AccountDelete/AMMDelete/VaultDelete MUST delete exactly
-		// one account root. VaultDelete removes the vault's pseudo-account.
-		// Reference: rippled InvariantCheck.cpp:382-385.
-		switch txType {
-		case "AccountDelete", "AMMDelete", "VaultDelete":
-			if deletedCount == 1 {
-				return nil
-			}
-			return &InvariantViolation{
-				Name:    "AccountRootsNotDeleted",
-				Message: fmt.Sprintf("%s must delete exactly 1 AccountRoot, got %d", txType, deletedCount),
-			}
-		// A successful AMMWithdraw/AMMClawback MAY delete one account root
-		// (when total AMM LP Tokens balance goes to 0).
-		case "AMMWithdraw", "AMMClawback":
-			if deletedCount <= 1 {
-				return nil
-			}
-			return &InvariantViolation{
-				Name:    "AccountRootsNotDeleted",
-				Message: fmt.Sprintf("%s may delete at most 1 AccountRoot, got %d", txType, deletedCount),
-			}
-		}
+	if deletedCount == 0 {
+		return nil
 	}
 
 	return &InvariantViolation{
@@ -302,14 +301,9 @@ func checkValidNewAccountRoot(txType string, result Result, entries []InvariantE
 		}
 	}
 
-	// Only a successful transaction of a permitted type may create an
+	// Only a successful createAcct/createPseudoAcct transaction may create an
 	// AccountRoot.
-	permitted := false
-	switch txType {
-	case "Payment", "AMMCreate", "VaultCreate", "XChainAddClaimAttestation", "XChainAddAccountCreateAttestation":
-		permitted = result == TesSUCCESS
-	}
-	if !permitted {
+	if !(hasPrivilegeName(txType, createAcct|createPseudoAcct) && result == TesSUCCESS) {
 		return &InvariantViolation{
 			Name:    "ValidNewAccountRoot",
 			Message: fmt.Sprintf("account root created illegally by %s", txType),
@@ -324,31 +318,25 @@ func checkValidNewAccountRoot(txType string, result Result, entries []InvariantE
 		}
 	}
 
-	// A pseudo-account (AMMID or VaultID set) may only be created by
-	// AMMCreate or VaultCreate. The flag is gated on featureSingleAssetVault:
-	// before that amendment, sfVaultID does not exist as a serialized field
-	// and pseudo-account semantics are not enforced.
-	if pseudo && rules != nil && rules.Enabled(amendment.FeatureSingleAssetVault) {
-		if txType != "AMMCreate" && txType != "VaultCreate" {
-			return &InvariantViolation{
-				Name:    "ValidNewAccountRoot",
-				Message: fmt.Sprintf("pseudo-account created by a wrong transaction type %s", txType),
-			}
+	// A pseudo-account may only be created by a createPseudoAcct transaction.
+	// The pseudo-account semantics are gated on featureSingleAssetVault or
+	// featureLendingProtocol: before either amendment, the pseudo-account
+	// designator fields never appear and the checks do not run.
+	pseudo = pseudo && rules != nil &&
+		(rules.Enabled(amendment.FeatureSingleAssetVault) ||
+			rules.Enabled(amendment.FeatureLendingProtocol))
+	if pseudo && !hasPrivilegeName(txType, createPseudoAcct) {
+		return &InvariantViolation{
+			Name:    "ValidNewAccountRoot",
+			Message: fmt.Sprintf("pseudo-account created by a wrong transaction type %s", txType),
 		}
-	} else {
-		pseudo = false
 	}
 
 	var startingSeq uint32
-	switch {
-	case pseudo:
+	if pseudo {
 		startingSeq = 0
-	case rules != nil && rules.Enabled(amendment.FeatureDeletableAccounts):
-		if view != nil {
-			startingSeq = view.LedgerSeq()
-		}
-	default:
-		startingSeq = 1
+	} else if view != nil {
+		startingSeq = view.LedgerSeq()
 	}
 	if seq != startingSeq {
 		return &InvariantViolation{
@@ -394,8 +382,8 @@ func extractNewAccountRootFields(data []byte) (seq, flags uint32, pseudo, ok boo
 				seq = value
 				seqSeen = true
 			}
-		case 5: // Hash256 — sfAMMID (14) or sfVaultID (35) marks a pseudo-account
-			if f.FieldCode == 14 || f.FieldCode == 35 {
+		case 5: // Hash256 — sfAMMID (14), sfVaultID (35) or sfLoanBrokerID (37) marks a pseudo-account
+			if f.FieldCode == 14 || f.FieldCode == 35 || f.FieldCode == 37 {
 				for _, b := range f.Value {
 					if b != 0 {
 						pseudo = true

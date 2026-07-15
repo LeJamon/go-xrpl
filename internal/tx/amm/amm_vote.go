@@ -36,13 +36,15 @@ func (a *AMMVote) TxType() tx.Type {
 }
 
 // Reference: rippled AMMVote.cpp preflight
+// GetFlagsMask adopts the engine FlagsMasker seam. AMMVote defines no
+// type-specific flags, so it uses the base universal mask, checked at preflight0.
+func (a *AMMVote) GetFlagsMask(rules *amendment.Rules) uint32 {
+	return tfAMMVoteMask
+}
+
 func (a *AMMVote) Validate() error {
 	if err := a.BaseTx.Validate(); err != nil {
 		return err
-	}
-
-	if a.GetFlags()&tfAMMVoteMask != 0 {
-		return ter.Errorf(ter.TemINVALID_FLAG, "invalid flags for AMMVote")
 	}
 
 	// Reference: rippled AMMVote.cpp preflight lines 39-44
@@ -63,6 +65,11 @@ func (a *AMMVote) Flatten() (map[string]any, error) {
 
 func (a *AMMVote) RequiredAmendments() [][32]byte {
 	return [][32]byte{amendment.FeatureAMM, amendment.FeatureFixUniversalNumber}
+}
+
+// CheckExtraFeatures gates MPT pool assets on the MPTokensV2 amendment.
+func (a *AMMVote) CheckExtraFeatures(rules *amendment.Rules) error {
+	return requireMPTokensV2(rules, a.Asset.IsMPT() || a.Asset2.IsMPT())
 }
 
 // Preclaim requires the AMM to exist, be non-empty, and the voter to hold LP

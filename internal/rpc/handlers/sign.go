@@ -3,26 +3,16 @@ package handlers
 import (
 	"encoding/json"
 	"fmt"
-	"strconv"
 
 	"github.com/LeJamon/go-xrpl/internal/rpc/types"
 )
 
 // SignMethod handles the sign RPC method
-type SignMethod struct{}
+type SignMethod struct{ BaseHandler }
 
 func (m *SignMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (any, *types.RpcError) {
 	setLoadHeavy(ctx)
-	var request struct {
-		TxJson     json.RawMessage `json:"tx_json"`
-		Secret     string          `json:"secret,omitempty"`
-		Seed       string          `json:"seed,omitempty"`
-		SeedHex    string          `json:"seed_hex,omitempty"`
-		Passphrase string          `json:"passphrase,omitempty"`
-		KeyType    string          `json:"key_type,omitempty"`
-		Offline    bool            `json:"offline,omitempty"`
-		BuildPath  bool            `json:"build_path,omitempty"`
-	}
+	var request signingRequest
 
 	if params != nil {
 		if err := json.Unmarshal(params, &request); err != nil {
@@ -35,50 +25,14 @@ func (m *SignMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (any,
 	}
 
 	// Sign the transaction using the shared helper
-	signed, rpcErr := signTransactionJSON(ctx.Context, ctx.Services, request.TxJson, signCredentials{
-		Secret:     request.Secret,
-		Seed:       request.Seed,
-		SeedHex:    request.SeedHex,
-		Passphrase: request.Passphrase,
-		KeyType:    request.KeyType,
-	}, request.Offline, ctx.Unlimited, ctx.ApiVersion, params)
+	signed, rpcErr := signTransactionJSON(ctx.Context, ctx.Services, request.TxJson, request.signCredentials, request.Offline, ctx.Unlimited, ctx.ApiVersion, params, request.SignatureTarget)
 	if rpcErr != nil {
 		return nil, rpcErr
 	}
 
-	// Inject DeliverMax for Payment transactions, matching rippled's
-	// RPC::insertDeliverMax in transactionFormatResultImpl.
-	injectDeliverMax(signed.TxMap, ctx.ApiVersion)
-
-	response := map[string]any{
-		"tx_blob": signed.TxBlob,
-		"tx_json": signed.TxMap,
-	}
-
-	// API v2+: add hash at root level of response, matching rippled's
-	// transactionFormatResultImpl in TransactionSign.cpp.
-	if ctx.ApiVersion > 1 {
-		if hash, ok := signed.TxMap["hash"].(string); ok {
-			response["hash"] = hash
-		}
-	}
-
-	return response, nil
-}
-
-// formatUint64AsString formats a uint64 as a decimal string
-func formatUint64AsString(v uint64) string {
-	return strconv.FormatUint(v, 10)
+	return formatSignResult(*signed, ctx.ApiVersion), nil
 }
 
 func (m *SignMethod) RequiredRole() types.Role {
 	return types.RoleUser // Signing requires user privileges
-}
-
-func (m *SignMethod) SupportedApiVersions() []int {
-	return []int{types.ApiVersion1, types.ApiVersion2, types.ApiVersion3}
-}
-
-func (m *SignMethod) RequiredCondition() types.Condition {
-	return types.NoCondition
 }

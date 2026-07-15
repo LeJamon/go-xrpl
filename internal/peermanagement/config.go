@@ -33,6 +33,7 @@ const (
 	// consulted at TMTransaction ingress before dispatching to the
 	// router. Matches rippled's [max_transactions] default.
 	DefaultMaxTransactions = 250
+	peerIPLimitStep        = 21
 
 	// DefaultTxReduceRelayMinPeers / DefaultTxRelayPercentage govern
 	// the reduce-relay tx peer-selection in Overlay.RelayTransaction.
@@ -54,6 +55,7 @@ type Config struct {
 	MaxPeers    int
 	MaxInbound  int
 	MaxOutbound int
+	IPLimit     int
 
 	// Bootstrap peers
 	BootstrapPeers []string
@@ -147,6 +149,14 @@ type Config struct {
 	// check; nil suppresses both.
 	PublicIP net.IP
 
+	// VerifyEndpoints validates addresses advertised in inbound
+	// TMEndpoints gossip: when true (the default), non-public / loopback
+	// / port-0 addresses are silently dropped before reaching Discovery,
+	// mirroring rippled PeerFinder is_valid_address. Setting it false
+	// (the [overlay] verify_endpoints = 0 knob) accepts them, for local
+	// dev networks — a security risk on a public network.
+	VerifyEndpoints bool
+
 	// Clock function for testing
 	Clock func() time.Time
 }
@@ -159,6 +169,7 @@ func DefaultConfig() Config {
 		MaxPeers:    DefaultMaxPeers,
 		MaxInbound:  DefaultMaxInbound,
 		MaxOutbound: DefaultMaxOutbound,
+		IPLimit:     0,
 
 		ConnectTimeout:   DefaultConnectTimeout,
 		HandshakeTimeout: DefaultHandshakeTimeout,
@@ -178,6 +189,10 @@ func DefaultConfig() Config {
 
 		TxReduceRelayMinPeers: DefaultTxReduceRelayMinPeers,
 		TxRelayPercentage:     DefaultTxRelayPercentage,
+
+		// Endpoint verification is on by default; only a local dev
+		// network (verify_endpoints = 0) turns it off.
+		VerifyEndpoints: true,
 
 		Clock: time.Now,
 	}
@@ -218,6 +233,12 @@ func WithMaxInbound(n int) Option {
 func WithMaxOutbound(n int) Option {
 	return func(c *Config) {
 		c.MaxOutbound = n
+	}
+}
+
+func WithIPLimit(n int) Option {
+	return func(c *Config) {
+		c.IPLimit = n
 	}
 }
 
@@ -342,6 +363,16 @@ func WithPublicIP(ip net.IP) Option {
 	}
 }
 
+// WithVerifyEndpoints toggles validation of addresses advertised in
+// inbound TMEndpoints gossip (the [overlay] verify_endpoints knob).
+// Defaults to true; passing false accepts non-public/loopback/port-0
+// addresses for local dev networks.
+func WithVerifyEndpoints(enabled bool) Option {
+	return func(c *Config) {
+		c.VerifyEndpoints = enabled
+	}
+}
+
 // WithEventBufferSize sets the internal event channel buffer size.
 func WithEventBufferSize(size int) Option {
 	return func(c *Config) {
@@ -376,9 +407,20 @@ func (c *Config) Validate() error {
 	if c.MaxOutbound < 0 {
 		return errors.New("MaxOutbound cannot be negative")
 	}
+	if c.IPLimit < 0 {
+		return errors.New("IPLimit cannot be negative")
+	}
 	if c.MaxInbound+c.MaxOutbound > c.MaxPeers {
 		return errors.New("MaxInbound + MaxOutbound cannot exceed MaxPeers")
 	}
+	limit := c.IPLimit
+	if limit == 0 {
+		limit = 2
+		if c.MaxInbound > peerIPLimitStep {
+			limit += min(5, c.MaxInbound/peerIPLimitStep)
+		}
+	}
+	c.IPLimit = max(1, min(limit, c.MaxInbound/2))
 	if c.ConnectTimeout <= 0 {
 		return errors.New("ConnectTimeout must be positive")
 	}

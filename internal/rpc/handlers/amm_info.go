@@ -13,6 +13,7 @@ import (
 	addresscodec "github.com/LeJamon/go-xrpl/codec/addresscodec"
 	binarycodec "github.com/LeJamon/go-xrpl/codec/binarycodec"
 	"github.com/LeJamon/go-xrpl/crypto/secp256k1"
+	ledgerselector "github.com/LeJamon/go-xrpl/internal/ledger/selector"
 	"github.com/LeJamon/go-xrpl/internal/ledger/service/svcerr"
 	"github.com/LeJamon/go-xrpl/internal/ledger/state"
 	"github.com/LeJamon/go-xrpl/internal/rpc/types"
@@ -25,7 +26,6 @@ type AMMInfoMethod struct{ BaseHandler }
 
 func (m *AMMInfoMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (any, *types.RpcError) {
 	var request struct {
-		types.LedgerSpecifier
 		Asset      json.RawMessage `json:"asset,omitempty"`
 		Asset2     json.RawMessage `json:"asset2,omitempty"`
 		AMMAccount json.RawMessage `json:"amm_account,omitempty"`
@@ -51,22 +51,15 @@ func (m *AMMInfoMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (a
 		return nil, err
 	}
 
-	ledgerIndex, selErr := resolveLedgerSelector(request.LedgerSpecifier)
+	selection, selErr := parseLedgerSelectorParams(params, ledgerselector.Current())
 	if selErr != nil {
 		return nil, selErr
 	}
-
-	// rippled resolves the ledger before validating any parameter
-	// (AMMInfo.cpp:81-84), so an explicitly named missing/malformed ledger
-	// outranks every param error; the validated/current/closed shortcuts are
-	// always available from the service.
-	switch ledgerIndex {
-	case "current", "closed", "validated":
-	default:
-		if _, _, lerr := LookupLedger(ctx, request.LedgerSpecifier); lerr != nil {
-			return nil, lerr
-		}
+	resolvedLedger, ledgerErr := resolveLedgerSelection(ctx, selection)
+	if ledgerErr != nil {
+		return nil, ledgerErr
 	}
+	ledgerIndex := strconv.FormatUint(uint64(resolvedLedger.Sequence), 10)
 
 	// For api_version < 3 the combination check runs before the per-field
 	// checks; for api_version >= 3 it runs after them, so a malformed
@@ -235,13 +228,8 @@ func (m *AMMInfoMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (a
 	// Resolve parentCloseTime from the ledger for auction slot time_interval computation.
 	// rippled: ammAuctionTimeSlot(ledger->info().parentCloseTime, auctionSlot)
 	var parentCloseTime uint64
-	if ammEntry.LedgerIndex > 0 {
-		if lr, lrErr := ctx.Services.Ledger.GetLedgerBySequence(ammEntry.LedgerIndex); lrErr == nil && lr != nil {
-			pct := lr.ParentCloseTime()
-			if pct > 0 {
-				parentCloseTime = uint64(pct)
-			}
-		}
+	if closeTime := resolvedLedger.Value.ParentCloseTime(); closeTime > 0 {
+		parentCloseTime = uint64(closeTime)
 	}
 
 	// Handle auction slot
@@ -254,14 +242,9 @@ func (m *AMMInfoMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (a
 
 	// Build final response
 	response := map[string]any{
-		"amm":          ammResult,
-		"ledger_index": ammEntry.LedgerIndex,
-		"validated":    ammEntry.Validated,
+		"amm": ammResult,
 	}
-
-	if ammEntry.LedgerHash != [32]byte{} {
-		response["ledger_hash"] = FormatLedgerHash(ammEntry.LedgerHash)
-	}
+	fillResolvedLedgerFields(response, resolvedLedger.Value, resolvedLedger.Validated)
 
 	return response, nil
 }
@@ -426,6 +409,12 @@ func parseIssue(raw json.RawMessage) ([20]byte, [20]byte, error) {
 	}
 	copy(issuer[:], issuerBytes)
 
+	// rippled issueFromJson (Issue.cpp) rejects the two reserved AccountIDs —
+	// xrpAccount() (ACCOUNT_ZERO) and noAccount() (ACCOUNT_ONE) — as an issuer.
+	if issuer == noAccountID || issuer == xrpAccountID {
+		return issuer, currency, errors.New("issuer must be a valid account")
+	}
+
 	return issuer, currency, nil
 }
 
@@ -502,7 +491,7 @@ func accountIdent(raw json.RawMessage) string {
 func accountFromString(ident string) ([20]byte, bool) {
 	var accountID [20]byte
 	if pubKey, err := addresscodec.DecodeAccountPublicKey(ident); err == nil {
-		copy(accountID[:], addresscodec.Sha256RipeMD160(pubKey))
+		copy(accountID[:], addresscodec.SHA256RIPEMD160(pubKey))
 		return accountID, true
 	}
 	if _, raw, err := addresscodec.DecodeClassicAddressToAccountID(ident); err == nil {
@@ -514,7 +503,7 @@ func accountFromString(ident string) ([20]byte, bool) {
 	if !ok {
 		return accountID, false
 	}
-	_, pubKeyHex, err := secp256k1.SECP256K1().DeriveKeypair(seed, false)
+	_, pubKeyHex, err := secp256k1.Algorithm{}.DeriveKeypair(seed, false)
 	if err != nil {
 		return accountID, false
 	}
@@ -522,7 +511,7 @@ func accountFromString(ident string) ([20]byte, bool) {
 	if err != nil {
 		return accountID, false
 	}
-	copy(accountID[:], addresscodec.Sha256RipeMD160(pubKey))
+	copy(accountID[:], addresscodec.SHA256RIPEMD160(pubKey))
 	return accountID, true
 }
 

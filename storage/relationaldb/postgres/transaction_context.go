@@ -7,28 +7,28 @@ import (
 	"github.com/LeJamon/go-xrpl/storage/relationaldb"
 )
 
-// TransactionContext implements the TransactionContext interface for PostgreSQL
-type TransactionContext struct {
+// transactionContext implements the transactionContext interface for PostgreSQL
+type transactionContext struct {
 	tx *sql.Tx
 
 	// Repository instances for this transaction
-	ledgerRepo             *LedgerRepository
-	transactionRepo        *TransactionRepository
-	accountTransactionRepo *AccountTransactionRepository
+	ledgerRepo             *ledgerRepository
+	transactionRepo        *transactionRepository
+	accountTransactionRepo *accountTransactionRepository
 }
 
-// NewTransactionContext creates a new PostgreSQL transaction context
-func NewTransactionContext(tx *sql.Tx) *TransactionContext {
-	return &TransactionContext{
+// newTransactionContext creates a new PostgreSQL transaction context
+func newTransactionContext(tx *sql.Tx) *transactionContext {
+	return &transactionContext{
 		tx:                     tx,
-		ledgerRepo:             NewLedgerRepositoryWithTx(tx),
-		transactionRepo:        NewTransactionRepositoryWithTx(tx),
-		accountTransactionRepo: NewAccountTransactionRepositoryWithTx(tx),
+		ledgerRepo:             newLedgerRepositoryWithTx(tx),
+		transactionRepo:        newTransactionRepositoryWithTx(tx),
+		accountTransactionRepo: newAccountTransactionRepositoryWithTx(tx),
 	}
 }
 
 // Commit commits the underlying database transaction.
-func (tc *TransactionContext) Commit(ctx context.Context) error {
+func (tc *transactionContext) Commit(ctx context.Context) error {
 	if tc.tx == nil {
 		return relationaldb.ErrTransactionClosed
 	}
@@ -45,7 +45,7 @@ func (tc *TransactionContext) Commit(ctx context.Context) error {
 
 // Rollback aborts the underlying database transaction; it is a no-op if already
 // committed or rolled back.
-func (tc *TransactionContext) Rollback(ctx context.Context) error {
+func (tc *transactionContext) Rollback(ctx context.Context) error {
 	if tc.tx == nil {
 		return nil // Already rolled back or committed
 	}
@@ -61,16 +61,16 @@ func (tc *TransactionContext) Rollback(ctx context.Context) error {
 }
 
 // Ledger returns the transaction-scoped ledger repository.
-func (tc *TransactionContext) Ledger() relationaldb.LedgerRepository {
+func (tc *transactionContext) Ledger() relationaldb.LedgerRepository {
 	return tc.ledgerRepo
 }
 
 // Transaction returns the transaction-scoped transaction repository.
-func (tc *TransactionContext) Transaction() relationaldb.TransactionRepository {
+func (tc *transactionContext) Transaction() relationaldb.TransactionRepository {
 	return tc.transactionRepo
 }
 
 // AccountTransaction returns the transaction-scoped account-transaction repository.
-func (tc *TransactionContext) AccountTransaction() relationaldb.AccountTransactionRepository {
+func (tc *transactionContext) AccountTransaction() relationaldb.AccountTransactionRepository {
 	return tc.accountTransactionRepo
 }

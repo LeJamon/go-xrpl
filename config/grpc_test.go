@@ -8,7 +8,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestGetGRPCPort_Present(t *testing.T) {
+func TestGRPCPort_Present(t *testing.T) {
 	cfg := strings.Replace(completeTestConfig(),
 		`[server]
 ports = ["port_test"]`,
@@ -25,24 +25,24 @@ secure_gateway = ["127.0.0.1"]`,
 	config, err := writeAndLoad(t, cfg)
 	require.NoError(t, err)
 
-	name, port, ok := config.GetGRPCPort()
-	require.True(t, ok, "expected GetGRPCPort to find the [port_grpc] section")
+	name, port, ok := config.GRPCPort()
+	require.True(t, ok, "expected GRPCPort to find the [port_grpc] section")
 	assert.Equal(t, "port_grpc", name)
 	assert.Equal(t, 50051, port.Port)
 	assert.Equal(t, "127.0.0.1", port.IP)
 	assert.True(t, port.HasGRPC())
-	assert.Equal(t, "127.0.0.1:50051", port.GetBindAddress())
+	assert.Equal(t, "127.0.0.1:50051", port.BindAddress())
 
 	gw, err := port.ParseSecureGatewayNets()
 	require.NoError(t, err)
 	assert.Len(t, gw, 1)
 }
 
-func TestGetGRPCPort_AbsentByDefault(t *testing.T) {
+func TestGRPCPort_AbsentByDefault(t *testing.T) {
 	config, err := writeAndLoad(t, completeTestConfig())
 	require.NoError(t, err)
 
-	_, _, ok := config.GetGRPCPort()
+	_, _, ok := config.GRPCPort()
 	assert.False(t, ok, "gRPC must be disabled when no [port_grpc] section is present")
 }
 

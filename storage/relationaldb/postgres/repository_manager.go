@@ -15,12 +15,12 @@ type RepositoryManager struct {
 	config *relationaldb.Config
 
 	// Repository instances
-	ledgerRepo             *LedgerRepository
-	transactionRepo        *TransactionRepository
-	accountTransactionRepo *AccountTransactionRepository
-	systemRepo             *SystemRepository
-	validationRepo         *ValidationRepository
-	amendmentVoteRepo      *AmendmentVoteRepository
+	ledgerRepo             *ledgerRepository
+	transactionRepo        *transactionRepository
+	accountTransactionRepo *accountTransactionRepository
+	systemRepo             *systemRepository
+	validationRepo         *validationRepository
+	amendmentVoteRepo      *amendmentVoteRepository
 }
 
 // NewRepositoryManager creates a new PostgreSQL repository manager
@@ -71,12 +71,12 @@ func (rm *RepositoryManager) Open(ctx context.Context) error {
 		return relationaldb.NewSchemaError("open", "failed to initialize schema", err)
 	}
 
-	rm.ledgerRepo = NewLedgerRepository(rm.db)
-	rm.transactionRepo = NewTransactionRepository(rm.db)
-	rm.accountTransactionRepo = NewAccountTransactionRepository(rm.db)
-	rm.systemRepo = NewSystemRepository(rm.db)
-	rm.validationRepo = NewValidationRepository(rm.db)
-	rm.amendmentVoteRepo = NewAmendmentVoteRepository(rm.db)
+	rm.ledgerRepo = newLedgerRepository(rm.db)
+	rm.transactionRepo = newTransactionRepository(rm.db)
+	rm.accountTransactionRepo = newAccountTransactionRepository(rm.db)
+	rm.systemRepo = newSystemRepository(rm.db)
+	rm.validationRepo = newValidationRepository(rm.db)
+	rm.amendmentVoteRepo = newAmendmentVoteRepository(rm.db)
 
 	return nil
 }

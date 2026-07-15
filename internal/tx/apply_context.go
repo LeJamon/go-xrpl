@@ -96,7 +96,7 @@ func (ctx *ApplyContext) CheckReserveIncrease(priorBalance uint64, currentOwnerC
 // EngineConfig.GetRules so there is a single Rules fallback policy (no silent
 // fallback — a nil Rules panics; see EngineConfig.GetRules).
 func (ctx *ApplyContext) Rules() *amendment.Rules {
-	return ctx.Config.GetRules()
+	return ctx.Config.RequireRules()
 }
 
 // LookupAccount loads and parses an AccountRoot by account address string.
@@ -157,6 +157,19 @@ func (ctx *ApplyContext) CheckReserveWithFee(ownerCountAfter uint32) ter.Result 
 		return ter.TecINSUFFICIENT_RESERVE
 	}
 	return ter.TesSUCCESS
+}
+
+// Internal logs the root cause of a can't-happen internal failure against the
+// transaction's logger and returns tefINTERNAL. tefINTERNAL is the "impossible
+// state" code; a bare `return ter.TefINTERNAL` discards the underlying error, so
+// a production or replay investigation gets the code with no clue which call site
+// produced it. op names the operation (e.g. "SerializeAccountRoot"). Use this at
+// sites that would otherwise drop a real error on the floor.
+func (ctx *ApplyContext) Internal(op string, err error) ter.Result {
+	if ctx.Log != nil {
+		ctx.Log.Error("tefINTERNAL", "op", op, "err", err)
+	}
+	return ter.TefINTERNAL
 }
 
 // UpdateAccountRoot serializes an AccountRoot and writes it back to the ledger view.

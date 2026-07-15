@@ -35,40 +35,22 @@ func (m *ChannelVerifyMethod) Handle(ctx *types.RpcContext, params json.RawMessa
 			return nil, types.RpcErrorInvalidParams(fmt.Sprintf("Invalid parameters: %v", err))
 		}
 	}
+	var fields map[string]json.RawMessage
+	_ = json.Unmarshal(params, &fields)
 
 	// Validate required fields
 	// rippled: for (auto const& p : {jss::public_key, jss::channel_id, jss::amount, jss::signature}) if (!params.isMember(p)) return RPC::missing_field_error(p);
-	if request.PublicKey == "" {
-		return nil, &types.RpcError{
-			Code:        types.RpcINVALID_PARAMS,
-			ErrorString: "invalidParams",
-			Type:        "invalidParams",
-			Message:     "Missing field 'public_key'.",
-		}
+	if _, ok := fields["public_key"]; !ok {
+		return nil, types.RpcErrorMissingField("public_key")
 	}
-	if request.ChannelID == "" {
-		return nil, &types.RpcError{
-			Code:        types.RpcINVALID_PARAMS,
-			ErrorString: "invalidParams",
-			Type:        "invalidParams",
-			Message:     "Missing field 'channel_id'.",
-		}
+	if _, ok := fields["channel_id"]; !ok {
+		return nil, types.RpcErrorMissingField("channel_id")
 	}
-	if request.Amount == "" {
-		return nil, &types.RpcError{
-			Code:        types.RpcINVALID_PARAMS,
-			ErrorString: "invalidParams",
-			Type:        "invalidParams",
-			Message:     "Missing field 'amount'.",
-		}
+	if _, ok := fields["amount"]; !ok {
+		return nil, types.RpcErrorMissingField("amount")
 	}
-	if request.Signature == "" {
-		return nil, &types.RpcError{
-			Code:        types.RpcINVALID_PARAMS,
-			ErrorString: "invalidParams",
-			Type:        "invalidParams",
-			Message:     "Missing field 'signature'.",
-		}
+	if _, ok := fields["signature"]; !ok {
+		return nil, types.RpcErrorMissingField("signature")
 	}
 
 	// Parse public key - can be base58 (AccountPublic) or hex
@@ -77,32 +59,17 @@ func (m *ChannelVerifyMethod) Handle(ctx *types.RpcContext, params json.RawMessa
 	// if (!pk) { pkHex = strUnHex(strPk); if (!pkHex) return rpcError(rpcPUBLIC_MALFORMED); ... }
 	pubKeyHex, err := parsePublicKey(request.PublicKey)
 	if err != nil {
-		return nil, &types.RpcError{
-			Code:        types.RpcPUBLIC_MALFORMED,
-			ErrorString: "publicMalformed",
-			Type:        "publicMalformed",
-			Message:     "Public key is malformed.",
-		}
+		return nil, types.RpcErrorPublicMalformed()
 	}
 
 	// Validate channel_id - must be valid 256-bit hex (64 characters)
 	// rippled: if (!channelId.parseHex(params[jss::channel_id].asString())) return rpcError(rpcCHANNEL_MALFORMED);
 	channelIDHex := strings.ToUpper(request.ChannelID)
 	if len(channelIDHex) != 64 {
-		return nil, &types.RpcError{
-			Code:        types.RpcCHANNEL_MALFORMED,
-			ErrorString: "channelMalformed",
-			Type:        "channelMalformed",
-			Message:     "Payment channel is malformed.",
-		}
+		return nil, types.RpcErrorChannelMalformed()
 	}
 	if _, err := hex.DecodeString(channelIDHex); err != nil {
-		return nil, &types.RpcError{
-			Code:        types.RpcCHANNEL_MALFORMED,
-			ErrorString: "channelMalformed",
-			Type:        "channelMalformed",
-			Message:     "Payment channel is malformed.",
-		}
+		return nil, types.RpcErrorChannelMalformed()
 	}
 
 	// Validate amount - must be a string that parses to uint64
@@ -110,12 +77,7 @@ func (m *ChannelVerifyMethod) Handle(ctx *types.RpcContext, params json.RawMessa
 	// rippled: if (!optDrops) return rpcError(rpcCHANNEL_AMT_MALFORMED);
 	drops, err := strconv.ParseUint(request.Amount, 10, 64)
 	if err != nil {
-		return nil, &types.RpcError{
-			Code:        types.RpcCHANNEL_AMT_MALFORMED,
-			ErrorString: "channelAmtMalformed",
-			Type:        "channelAmtMalformed",
-			Message:     "Payment channel amount is malformed.",
-		}
+		return nil, types.RpcErrorChannelAmountMalformed()
 	}
 
 	// Validate signature - must be valid hex and non-empty
@@ -123,12 +85,7 @@ func (m *ChannelVerifyMethod) Handle(ctx *types.RpcContext, params json.RawMessa
 	sigHex := strings.ToUpper(request.Signature)
 	sigBytes, err := hex.DecodeString(sigHex)
 	if err != nil || len(sigBytes) == 0 {
-		return nil, &types.RpcError{
-			Code:        types.RpcINVALID_PARAMS,
-			ErrorString: "invalidParams",
-			Type:        "invalidParams",
-			Message:     "Invalid field 'signature'.",
-		}
+		return nil, types.RpcErrorInvalidParams("Invalid parameters.")
 	}
 
 	// Serialize the payment channel claim message
@@ -202,11 +159,11 @@ func verifySignature(message []byte, pubKeyHex string, sigHex string) bool {
 
 	// ED25519 keys start with 0xED prefix
 	if pubKeyBytes[0] == 0xED {
-		algo := ed25519.ED25519()
+		algo := ed25519.Algorithm{}
 		return algo.Validate(msgStr, pubKeyHex, sigHex)
 	}
 
 	// Otherwise use secp256k1
-	algo := secp256k1.SECP256K1()
+	algo := secp256k1.Algorithm{}
 	return algo.Validate(msgStr, pubKeyHex, sigHex)
 }

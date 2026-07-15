@@ -41,16 +41,23 @@ func (c *CredentialCreate) TxType() tx.Type {
 	return tx.TypeCredentialCreate
 }
 
+// GetFlagsMask reports the invalid-flag mask. rippled's
+// CredentialCreate::getFlagsMask is `fixInvalidTxFlags ? tfUniversalMask : 0`,
+// so with the amendment active any flag is rejected temINVALID_FLAG at
+// preflight0 (before the field checks and signature verification); with it off
+// the mask is zero and all flags pass.
+func (c *CredentialCreate) GetFlagsMask(rules *amendment.Rules) uint32 {
+	if rules.Enabled(amendment.FeatureFixInvalidTxFlags) {
+		return tx.TfUniversalMask
+	}
+	return 0
+}
+
 // Reference: rippled Credentials.cpp CredentialCreate::preflight()
-// Note: The fixInvalidTxFlags-gated flag check is done in Apply() because
-// Validate() has no access to amendment rules.
 func (c *CredentialCreate) Validate() error {
 	if err := c.BaseTx.Validate(); err != nil {
 		return err
 	}
-
-	// Flag check is deferred to Apply() where amendment rules are available.
-	// Reference: rippled Credentials.cpp:66-71 — gated behind fixInvalidTxFlags.
 
 	// Subject is required and must not be the zero account
 	// Reference: rippled Credentials.cpp:73-77
@@ -108,15 +115,33 @@ func (c *CredentialCreate) RequiredAmendments() [][32]byte {
 }
 
 // Reference: rippled Credentials.cpp CredentialCreate::doApply()
-func (c *CredentialCreate) Apply(ctx *tx.ApplyContext) ter.Result {
-	// Check for invalid flags, gated behind fixInvalidTxFlags
-	// Reference: rippled Credentials.cpp:66-71
-	if ctx.Rules().Enabled(amendment.FeatureFixInvalidTxFlags) {
-		if c.GetFlags()&tx.TfUniversalMask != 0 {
-			return ter.TemINVALID_FLAG
-		}
+// Preclaim verifies the subject account exists (tecNO_TARGET) and no credential
+// of this (subject, issuer, type) already exists (tecDUPLICATE), matching rippled
+// CredentialCreate::preclaim. The Expiration-in-the-past check (tecEXPIRED) and
+// the reserve check stay in Apply, mirroring rippled CredentialCreate::doApply.
+func (c *CredentialCreate) Preclaim(view tx.LedgerView, config tx.EngineConfig) ter.Result {
+	subjectID, err := state.DecodeAccountID(c.Subject)
+	if err != nil {
+		return ter.TecNO_TARGET
 	}
+	issuerID, err := state.DecodeAccountID(c.Account)
+	if err != nil {
+		return ter.TemBAD_SRC_ACCOUNT
+	}
+	credTypeBytes, err := hex.DecodeString(c.CredentialType)
+	if err != nil {
+		return ter.TemINVALID
+	}
+	if exists, _ := view.Exists(keylet.Account(subjectID)); !exists {
+		return ter.TecNO_TARGET
+	}
+	if exists, _ := view.Exists(keylet.Credential(subjectID, issuerID, credTypeBytes)); exists {
+		return ter.TecDUPLICATE
+	}
+	return ter.TesSUCCESS
+}
 
+func (c *CredentialCreate) Apply(ctx *tx.ApplyContext) ter.Result {
 	ctx.Log.Trace("credential create apply",
 		"issuer", c.Account,
 		"subject", c.Subject,
@@ -141,22 +166,6 @@ func (c *CredentialCreate) Apply(ctx *tx.ApplyContext) ter.Result {
 	// Compute correct keylet: credential(subject, issuer, credType)
 	// where issuer = ctx.AccountID (the transaction sender)
 	credKeylet := keylet.Credential(subjectID, ctx.AccountID, credTypeBytes)
-
-	// Preclaim check: verify subject account exists
-	subjectAccountKeylet := keylet.Account(subjectID)
-	subjectExists, err := ctx.View.Exists(subjectAccountKeylet)
-	if err != nil || !subjectExists {
-		return ter.TecNO_TARGET
-	}
-
-	// Preclaim check: verify credential doesn't already exist
-	exists, err := ctx.View.Exists(credKeylet)
-	if err != nil {
-		return ter.TefINTERNAL
-	}
-	if exists {
-		return ter.TecDUPLICATE
-	}
 
 	// Check expiration (if set, must be in the future)
 	if c.Expiration != nil {
@@ -220,6 +229,7 @@ func (c *CredentialCreate) Apply(ctx *tx.ApplyContext) ter.Result {
 			return ter.TefINTERNAL
 		}
 		cred.SubjectNode = subjectDirResult.Page
+		cred.HasSubjectNode = true
 	}
 
 	// Serialize the credential entry

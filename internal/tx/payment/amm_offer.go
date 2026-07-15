@@ -11,6 +11,7 @@ import (
 
 	"github.com/LeJamon/go-xrpl/internal/ledger/state"
 	tx "github.com/LeJamon/go-xrpl/internal/tx"
+	"github.com/LeJamon/go-xrpl/internal/tx/mptutil"
 	"github.com/LeJamon/go-xrpl/keylet"
 )
 
@@ -104,12 +105,9 @@ func (o *AMMOffer) Consume() {
 // Multi-path: uses quality-based ceiling (proportional adjustment).
 // Single-path: uses swapAssetOut for exact pool conservation.
 // Reference: rippled AMMOffer.cpp limitOut()
-func (o *AMMOffer) LimitOut(ofrIn, ofrOut, limit EitherAmount, roundUp bool, fixReducedV1 bool) (EitherAmount, EitherAmount) {
+func (o *AMMOffer) LimitOut(ofrIn, ofrOut, limit EitherAmount, roundUp bool) (EitherAmount, EitherAmount) {
 	if o.ammLiquidity.ammContext.MultiPath() {
-		if fixReducedV1 {
-			return o.quality.CeilOutStrict(ofrIn, ofrOut, limit, roundUp)
-		}
-		return o.quality.CeilOut(ofrIn, ofrOut, limit)
+		return o.quality.CeilOutStrict(ofrIn, ofrOut, limit, roundUp)
 	}
 	// Single path: use swap function for exact conservation
 	limitAmt := eitherToAmount(limit)
@@ -188,6 +186,17 @@ func (o *AMMOffer) Send(sb *PaymentSandbox, from, to [20]byte, amount tx.Amount)
 	}
 	if amount.IsNative() {
 		return xrpTransferInSandbox(sb, from, to, amount.Drops())
+	}
+	if amount.IsMPT() {
+		id, err := mptutil.DecodeID(amount.MPTIssuanceID())
+		if err != nil {
+			return err
+		}
+		value, ok := amount.MPTRaw()
+		if !ok {
+			return errors.New("MPT amount has no integral value")
+		}
+		return mptTransferResult(mptutil.Credit(sb, id, from, to, value, true))
 	}
 	return iouTransferInSandbox(sb, from, to, amount)
 }
@@ -322,8 +331,5 @@ func adjustTrustLineBalance(sb *PaymentSandbox, account, issuer [20]byte, curren
 
 // eitherToAmount converts an EitherAmount back to a tx.Amount.
 func eitherToAmount(ea EitherAmount) tx.Amount {
-	if ea.IsNative {
-		return state.NewXRPAmountFromInt(ea.XRP)
-	}
-	return ea.IOU
+	return FromEitherAmount(ea)
 }

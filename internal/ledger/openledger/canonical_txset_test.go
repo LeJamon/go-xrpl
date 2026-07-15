@@ -4,7 +4,7 @@ import (
 	"bytes"
 	"testing"
 
-	"github.com/LeJamon/go-xrpl/crypto/common"
+	"github.com/LeJamon/go-xrpl/crypto/sha512half"
 )
 
 func TestCanonicalSortEmpty(t *testing.T) {
@@ -215,5 +215,5 @@ func TestComputeAccountKey(t *testing.T) {
 
 // makeHash creates a deterministic hash from a seed byte using SHA-512Half
 func makeHash(seed byte) [32]byte {
-	return common.Sha512Half([]byte{seed})
+	return sha512half.Sum([]byte{seed})
 }

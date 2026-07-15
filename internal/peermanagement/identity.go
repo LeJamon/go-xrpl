@@ -191,7 +191,31 @@ func (i *Identity) Save(dataDir string) error {
 	}
 
 	keyPath := filepath.Join(dataDir, "node_identity.key")
-	return os.WriteFile(keyPath, []byte(i.PrivateKeyHex()), 0600)
+	tmp, err := os.CreateTemp(dataDir, ".node-identity-*")
+	if err != nil {
+		return fmt.Errorf("create temporary identity: %w", err)
+	}
+	tmpPath := tmp.Name()
+	defer os.Remove(tmpPath)
+	if err := tmp.Chmod(0600); err != nil {
+		tmp.Close()
+		return fmt.Errorf("set identity permissions: %w", err)
+	}
+	if _, err := tmp.WriteString(i.PrivateKeyHex()); err != nil {
+		tmp.Close()
+		return fmt.Errorf("write identity: %w", err)
+	}
+	if err := tmp.Sync(); err != nil {
+		tmp.Close()
+		return fmt.Errorf("sync identity: %w", err)
+	}
+	if err := tmp.Close(); err != nil {
+		return fmt.Errorf("close identity: %w", err)
+	}
+	if err := os.Rename(tmpPath, keyPath); err != nil {
+		return fmt.Errorf("publish identity: %w", err)
+	}
+	return nil
 }
 
 // TLSCertificatePEM returns a self-signed RSA-2048 TLS keypair (cached

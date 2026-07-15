@@ -65,10 +65,10 @@ func (m *mockAccountChannelsLedgerService) GetGenesisAccount() (string, error) {
 	return "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh", nil
 }
 func (m *mockAccountChannelsLedgerService) GetLedgerBySequence(seq uint32) (types.LedgerReader, error) {
-	return nil, errors.New("not implemented")
+	return accountQueryLedgerBySequence(seq, m.currentLedgerIndex, m.validatedLedgerIndex)
 }
 func (m *mockAccountChannelsLedgerService) GetLedgerByHash(hash [32]byte) (types.LedgerReader, error) {
-	return nil, errors.New("not implemented")
+	return accountQueryLedgerByHash(hash, m.validatedLedgerIndex)
 }
 func (m *mockAccountChannelsLedgerService) SubmitTransaction(txJSON []byte, txBlobHex ...string) (*types.SubmitResult, error) {
 	return nil, errors.New("not implemented")
@@ -146,7 +146,7 @@ func (m *mockAccountChannelsLedgerService) GetAccountChannels(_ context.Context,
 func (m *mockAccountChannelsLedgerService) GetAccountCurrencies(_ context.Context, account string, ledgerIndex string) (*types.AccountCurrenciesResult, error) {
 	return nil, errors.New("not implemented")
 }
-func (m *mockAccountChannelsLedgerService) GetAccountNFTs(_ context.Context, account string, ledgerIndex string, limit uint32) (*types.AccountNFTsResult, error) {
+func (m *mockAccountChannelsLedgerService) GetAccountNFTs(_ context.Context, account string, ledgerIndex string, limit uint32, _ string) (*types.AccountNFTsResult, error) {
 	return nil, errors.New("not implemented")
 }
 func (m *mockAccountChannelsLedgerService) GetGatewayBalances(_ context.Context, account string, hotWallets []string, ledgerIndex string) (*types.GatewayBalancesResult, error) {
@@ -207,13 +207,13 @@ func TestAccountChannelsErrorValidation(t *testing.T) {
 		{
 			name:          "Missing account field - empty params",
 			params:        map[string]any{},
-			expectedError: "Missing required parameter: account",
+			expectedError: "Missing field 'account'.",
 			expectedCode:  types.RpcINVALID_PARAMS,
 		},
 		{
 			name:          "Missing account field - nil params",
 			params:        nil,
-			expectedError: "Missing required parameter: account",
+			expectedError: "Missing field 'account'.",
 			expectedCode:  types.RpcINVALID_PARAMS,
 		},
 		{
@@ -221,7 +221,7 @@ func TestAccountChannelsErrorValidation(t *testing.T) {
 			params: map[string]any{
 				"account": 12345,
 			},
-			expectedError: "Invalid parameters:",
+			expectedError: "Invalid field 'account'.",
 			expectedCode:  types.RpcINVALID_PARAMS,
 		},
 		{
@@ -229,7 +229,7 @@ func TestAccountChannelsErrorValidation(t *testing.T) {
 			params: map[string]any{
 				"account": true,
 			},
-			expectedError: "Invalid parameters:",
+			expectedError: "Invalid field 'account'.",
 			expectedCode:  types.RpcINVALID_PARAMS,
 		},
 		{

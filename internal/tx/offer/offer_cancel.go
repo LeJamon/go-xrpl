@@ -2,6 +2,7 @@
 package offer
 
 import (
+	"github.com/LeJamon/go-xrpl/amendment"
 	"github.com/LeJamon/go-xrpl/internal/ledger/state"
 	"github.com/LeJamon/go-xrpl/internal/tx"
 	"github.com/LeJamon/go-xrpl/internal/tx/ter"
@@ -29,14 +30,17 @@ func (o *OfferCancel) TxType() tx.Type {
 	return tx.TypeOfferCancel
 }
 
+// GetFlagsMask returns the invalid-flags mask enforced by the engine at the
+// preflight0 position. CancelOffer defines no type-specific flags, so it uses the
+// universal mask (rippled's base Transactor::getFlagsMask).
+func (o *OfferCancel) GetFlagsMask(*amendment.Rules) uint32 {
+	return tx.TfUniversalMask
+}
+
 // Reference: rippled CancelOffer.cpp preflight()
 func (o *OfferCancel) Validate() error {
 	if err := o.BaseTx.Validate(); err != nil {
 		return err
-	}
-
-	if err := tx.CheckFlags(o.GetFlags(), tx.TfUniversalMask); err != nil {
-		return ter.Errorf(ter.TemINVALID_FLAG, "invalid flags set")
 	}
 
 	if o.OfferSequence == 0 {
@@ -50,23 +54,33 @@ func (o *OfferCancel) Flatten() (map[string]any, error) {
 	return tx.ReflectFlatten(o)
 }
 
-// Reference: rippled CancelOffer.cpp preclaim() + doApply()
-func (o *OfferCancel) Apply(ctx *tx.ApplyContext) ter.Result {
-	// Preclaim: Account sequence must be strictly greater than OfferSequence
-	// Reference: rippled CancelOffer.cpp preclaim() lines 59-72
-	// Note: The engine has already incremented ctx.Account.Sequence by 1 for
-	// non-ticket transactions, so we compare against (Sequence - 1) to get
-	// the original stored sequence that rippled checks in preclaim.
-	// For ticket transactions, ctx.Account.Sequence is unchanged.
-	accountSeq := ctx.Account.Sequence
-	common := o.GetCommon()
-	if common.TicketSequence == nil {
-		accountSeq-- // undo engine's pre-increment
+// Preclaim validates OfferCancel against ledger state before application: the
+// account's stored sequence must be strictly greater than OfferSequence.
+// Extracting this from Apply makes it visible to the preclaim-only paths (TxQ
+// admission, simulate), matching rippled where it lives in OfferCancel::preclaim.
+// The view holds the pre-transaction sequence — doApply consumes it later — so the
+// comparison reads it directly, without the engine pre-increment undo it needed in
+// Apply. Reference: rippled OfferCancel.cpp preclaim().
+func (o *OfferCancel) Preclaim(view tx.LedgerView, config tx.EngineConfig) ter.Result {
+	accountID, err := state.DecodeAccountID(o.Account)
+	if err != nil {
+		return ter.TemBAD_SRC_ACCOUNT
 	}
-	if accountSeq <= o.OfferSequence {
+	account, readErr := tx.ReadAccountRoot(view, accountID)
+	if readErr != nil {
+		return ter.TefINTERNAL
+	}
+	if account == nil {
+		return ter.TerNO_ACCOUNT
+	}
+	if account.Sequence <= o.OfferSequence {
 		return ter.TemBAD_SEQUENCE
 	}
+	return ter.TesSUCCESS
+}
 
+// Reference: rippled OfferCancel.cpp doApply()
+func (o *OfferCancel) Apply(ctx *tx.ApplyContext) ter.Result {
 	// Find the offer
 	accountID, _ := state.DecodeAccountID(ctx.Account.Account)
 	offerKey := keylet.Offer(accountID, o.OfferSequence)

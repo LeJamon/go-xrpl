@@ -15,7 +15,7 @@ import (
 // account in both the closed ("accepted") and current ledgers, grouped into
 // offers and trust lines (ripple_lines), matching
 // NetworkOPsImp::getOwnerInfo.
-type OwnerInfoMethod struct{}
+type OwnerInfoMethod struct{ BaseHandler }
 
 func (m *OwnerInfoMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (any, *types.RpcError) {
 	var request struct {
@@ -118,14 +118,6 @@ func decodeOwnerObject(obj types.AccountObjectItem) map[string]any {
 	}
 	decoded["index"] = strings.ToUpper(obj.Index)
 	return decoded
-}
-
-func (m *OwnerInfoMethod) RequiredRole() types.Role {
-	return types.RoleGuest
-}
-
-func (m *OwnerInfoMethod) SupportedApiVersions() []int {
-	return []int{types.ApiVersion1, types.ApiVersion2, types.ApiVersion3}
 }
 
 func (m *OwnerInfoMethod) RequiredCondition() types.Condition {

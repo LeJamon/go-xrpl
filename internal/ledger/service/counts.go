@@ -23,10 +23,10 @@ type NodeStoreCounts struct {
 	WriteBytes uint64 // node_written_bytes (rippled storeSz_)
 }
 
-// GetCounts returns a snapshot of the node's runtime counters for the
+// Counts returns a snapshot of the node's runtime counters for the
 // get_counts RPC. Node-store statistics are present only when a persistent
 // node store is configured (nil in pure in-memory / standalone setups).
-func (s *Service) GetCounts() Counts {
+func (s *Service) Counts() Counts {
 	info := s.GetServerInfo()
 
 	// rippled's local_txs is the held-tx pool (LocalTxsImp), not the

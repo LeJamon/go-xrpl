@@ -58,7 +58,7 @@ func (f *memoryFamily) Len() int {
 
 // flushToFamily is a helper that flushes a SHAMap and stores entries in a Family.
 func flushToFamily(sm *SHAMap, family *memoryFamily) error {
-	batch, err := sm.FlushDirty(false)
+	batch, err := sm.FlushDirty()
 	if err != nil {
 		return fmt.Errorf("FlushDirty: %w", err)
 	}
@@ -243,7 +243,7 @@ func TestFlushDirty_BasicRoundTrip(t *testing.T) {
 	}
 
 	// Flush dirty nodes
-	batch, err := sMap.FlushDirty(false)
+	batch, err := sMap.FlushDirty()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -270,7 +270,7 @@ func TestFlushDirty_BasicRoundTrip(t *testing.T) {
 
 	// Verify all entries can be deserialized
 	for i, entry := range batch.Entries {
-		node, err := DeserializeFromPrefix(entry.Data)
+		node, err := deserializeFromPrefix(entry.Data)
 		if err != nil {
 			t.Errorf("Failed to deserialize entry %d: %v", i, err)
 			continue
@@ -298,7 +298,7 @@ func TestFlushDirty_Idempotent(t *testing.T) {
 	}
 
 	// First flush
-	batch1, err := sMap.FlushDirty(false)
+	batch1, err := sMap.FlushDirty()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -307,12 +307,60 @@ func TestFlushDirty_Idempotent(t *testing.T) {
 	}
 
 	// Second flush — nothing dirty
-	batch2, err := sMap.FlushDirty(false)
+	batch2, err := sMap.FlushDirty()
 	if err != nil {
 		t.Fatal(err)
 	}
 	if len(batch2.Entries) != 0 {
 		t.Errorf("Second flush should return 0 entries, got %d", len(batch2.Entries))
+	}
+}
+
+func TestStoreDirty_RetainsNodesAfterStoreFailure(t *testing.T) {
+	sMap := New(TypeState)
+	sMap.SetLedgerSeq(42)
+	key := hexToHash("092891fe4ef6cee585fdc6fda0e09eb4d386363158ec3321b8123e5a772c6ca7")
+	if err := sMap.Put(key, intToBytes(1)); err != nil {
+		t.Fatal(err)
+	}
+
+	wantErr := fmt.Errorf("store failed")
+	var failedEntries []FlushEntry
+	if err := sMap.StoreDirty(func(entries []FlushEntry) error {
+		failedEntries = append(failedEntries, entries...)
+		return wantErr
+	}); err != wantErr {
+		t.Fatalf("StoreDirty error = %v, want %v", err, wantErr)
+	}
+	if len(failedEntries) == 0 {
+		t.Fatal("failed store received no entries")
+	}
+	for _, entry := range failedEntries {
+		if entry.LedgerSeq != 42 || entry.MapType != TypeState {
+			t.Fatalf("entry metadata = (%d, %d), want (42, %d)", entry.LedgerSeq, entry.MapType, TypeState)
+		}
+	}
+
+	var retryEntries []FlushEntry
+	if err := sMap.StoreDirty(func(entries []FlushEntry) error {
+		retryEntries = append(retryEntries, entries...)
+		return nil
+	}); err != nil {
+		t.Fatalf("StoreDirty retry: %v", err)
+	}
+	if len(retryEntries) != len(failedEntries) {
+		t.Fatalf("retry entries = %d, want %d", len(retryEntries), len(failedEntries))
+	}
+
+	called := false
+	if err := sMap.StoreDirty(func([]FlushEntry) error {
+		called = true
+		return nil
+	}); err != nil {
+		t.Fatalf("StoreDirty after success: %v", err)
+	}
+	if called {
+		t.Fatal("StoreDirty called store after dirty nodes were persisted")
 	}
 }
 
@@ -331,7 +379,7 @@ func TestFlushDirty_AfterModification(t *testing.T) {
 	}
 
 	// First flush — all nodes
-	batch1, err := sMap.FlushDirty(false)
+	batch1, err := sMap.FlushDirty()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -344,7 +392,7 @@ func TestFlushDirty_AfterModification(t *testing.T) {
 	}
 
 	// Second flush — only modified path
-	batch2, err := sMap.FlushDirty(false)
+	batch2, err := sMap.FlushDirty()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -369,7 +417,7 @@ func TestFlushDirty_ReleaseChildren(t *testing.T) {
 	}
 
 	// Flush with releaseChildren=true
-	_, err := sMap.FlushDirty(true)
+	_, err := sMap.FlushDirtyAndRelease()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -421,7 +469,7 @@ func TestDeserializeFromPrefix_InnerNode(t *testing.T) {
 	}
 
 	// Deserialize
-	node, err := DeserializeFromPrefix(data)
+	node, err := deserializeFromPrefix(data)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -473,7 +521,7 @@ func TestDeserializeFromPrefix_AccountStateLeaf(t *testing.T) {
 	}
 
 	// Deserialize
-	node, err := DeserializeFromPrefix(data)
+	node, err := deserializeFromPrefix(data)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -964,7 +1012,7 @@ func TestBacked_Snapshot(t *testing.T) {
 	}
 
 	// Create a mutable snapshot (this flushes + creates from root hash)
-	snap, err := sMap.Snapshot(true)
+	snap, err := sMap.SnapshotMutable()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1008,6 +1056,62 @@ func TestBacked_Snapshot(t *testing.T) {
 	snapHash, _ := snap.Hash()
 	if origHash == snapHash {
 		t.Error("Hashes should differ after snapshot modification")
+	}
+}
+
+func TestBacked_SnapshotMutableUnflushedDefersStore(t *testing.T) {
+	family := newMemoryFamily()
+	source, err := NewBacked(TypeState, family)
+	if err != nil {
+		t.Fatal(err)
+	}
+	key1 := hexToHash("092891fe4ef6cee585fdc6fda0e09eb4d386363158ec3321b8123e5a772c6ca7")
+	key2 := hexToHash("b92891fe4ef6cee585fdc6fda1e09eb4d386363158ec3321b8123e5a772c6ca8")
+	if err := source.Put(key1, intToBytes(1)); err != nil {
+		t.Fatal(err)
+	}
+	sourceHash, err := source.Hash()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	snap, err := source.SnapshotMutableUnflushed()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := family.Len(); got != 0 {
+		t.Fatalf("stored nodes during unflushed snapshot = %d, want 0", got)
+	}
+	if err := snap.Put(key2, intToBytes(2)); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := source.Hash(); err != nil || got != sourceHash {
+		t.Fatalf("source hash after fork mutation = %x, %v; want %x, nil", got, err, sourceHash)
+	}
+	if _, found, err := source.Get(key2); err != nil || found {
+		t.Fatalf("source lookup after fork mutation = %v, %v; want false, nil", found, err)
+	}
+	if err := snap.StoreDirty(func(entries []FlushEntry) error {
+		return family.StoreBatch(context.Background(), entries)
+	}); err != nil {
+		t.Fatal(err)
+	}
+	rootHash, err := snap.Hash()
+	if err != nil {
+		t.Fatal(err)
+	}
+	reloaded, err := NewFromRootHash(TypeState, rootHash, family)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for key, want := range map[[32]byte][]byte{key1: intToBytes(1), key2: intToBytes(2)} {
+		item, found, err := reloaded.Get(key)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !found || !bytes.Equal(item.Data(), want) {
+			t.Fatalf("reloaded item %x = %v, %v; want %v, true", key, item, found, want)
+		}
 	}
 }
 
@@ -1079,7 +1183,7 @@ func TestBacked_SetFamily(t *testing.T) {
 
 	// Snapshot should use backed path
 	rootHash, _ := sMap.Hash()
-	snap, err := sMap.Snapshot(false)
+	snap, err := sMap.SnapshotImmutable()
 	if err != nil {
 		t.Fatal(err)
 	}

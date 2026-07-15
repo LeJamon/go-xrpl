@@ -272,11 +272,13 @@ func TestReadMessageCaps(t *testing.T) {
 		{"vlcollection_20mib_ok", TypeValidatorListCollection, 20 * mib, false},
 		{"manifests_20mib_ok", TypeManifests, 20 * mib, false},
 		{"validatorlist_20mib_ok", TypeValidatorList, 20 * mib, false},
+		{"unknown_20mib_ok", MessageType(9999), 20 * mib, false},
 		// Request-shaped types keep their stricter hardening caps.
 		{"ping_20mib_rejected", TypePing, 20 * mib, true},
 		{"getledger_20mib_rejected", TypeGetLedger, 20 * mib, true},
 		// The protocol ceiling is hard even for the most permissive type.
 		{"ledgerdata_over_ceiling_rejected", TypeLedgerData, MaxMessageSize + 1, true},
+		{"unknown_over_ceiling_rejected", MessageType(9999), MaxMessageSize + 1, true},
 	}
 
 	for _, tt := range tests {
@@ -339,5 +341,31 @@ func TestMessageTypeString(t *testing.T) {
 				t.Errorf("String() = %q, want %q", got, tt.want)
 			}
 		})
+	}
+}
+
+func TestEncodeFrame(t *testing.T) {
+	msg := &Ping{PType: PingTypePing, Seq: 42}
+	frame, err := EncodeFrame(msg)
+	if err != nil {
+		t.Fatalf("EncodeFrame: %v", err)
+	}
+	payload, err := Encode(msg)
+	if err != nil {
+		t.Fatalf("Encode: %v", err)
+	}
+	want, err := BuildWireMessage(msg.Type(), payload)
+	if err != nil {
+		t.Fatalf("BuildWireMessage: %v", err)
+	}
+	if !bytes.Equal(frame, want) {
+		t.Fatalf("EncodeFrame = %x, want %x", frame, want)
+	}
+	header, err := DecodeHeader(frame)
+	if err != nil {
+		t.Fatalf("DecodeHeader: %v", err)
+	}
+	if header.MessageType != TypePing {
+		t.Fatalf("message type = %v, want %v", header.MessageType, TypePing)
 	}
 }

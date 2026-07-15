@@ -4,8 +4,10 @@ import (
 	"github.com/LeJamon/go-xrpl/amendment"
 	"github.com/LeJamon/go-xrpl/internal/ledger/state"
 	"github.com/LeJamon/go-xrpl/internal/tx"
+	"github.com/LeJamon/go-xrpl/internal/tx/mptutil"
 	"github.com/LeJamon/go-xrpl/internal/tx/ter"
 	"github.com/LeJamon/go-xrpl/keylet"
+	"github.com/LeJamon/go-xrpl/ledger/entry"
 )
 
 // AMMClawback claws back tokens from an AMM.
@@ -52,13 +54,16 @@ func (a *AMMClawback) GetAMMAsset2() tx.Asset {
 }
 
 // Reference: rippled AMMClawback.cpp preflight
+// GetFlagsMask adopts the engine FlagsMasker seam with the AMMClawback-specific
+// invalid-flags mask (rippled AMMClawback::getFlagsMask = tfAMMClawbackMask),
+// checked at preflight0.
+func (a *AMMClawback) GetFlagsMask(rules *amendment.Rules) uint32 {
+	return tfAMMClawbackMask
+}
+
 func (a *AMMClawback) Validate() error {
 	if err := a.BaseTx.Validate(); err != nil {
 		return err
-	}
-
-	if a.GetFlags()&tfAMMClawbackMask != 0 {
-		return ter.Errorf(ter.TemINVALID_FLAG, "invalid flags for AMMClawback")
 	}
 
 	// Reference: rippled AMMClawback.cpp preflight lines 52-57
@@ -74,19 +79,26 @@ func (a *AMMClawback) Validate() error {
 	// If tfClawTwoAssets is set, both assets must be issued by the same issuer
 	// Reference: rippled AMMClawback.cpp preflight lines 66-72
 	if a.GetFlags()&tfClawTwoAssets != 0 {
-		if a.Asset.Issuer != a.Asset2.Issuer {
+		issuer1, result1 := assetIssuerID(a.Asset)
+		issuer2, result2 := assetIssuerID(a.Asset2)
+		if result1 != ter.TesSUCCESS || result2 != ter.TesSUCCESS || issuer1 != issuer2 {
 			return ter.Errorf(ter.TemINVALID_FLAG, "tfClawTwoAssets requires both assets to have the same issuer")
 		}
 	}
 
 	// Reference: rippled AMMClawback.cpp preflight lines 74-79
-	if a.Asset.Issuer != a.Common.Account {
+	accountID, err := state.DecodeAccountID(a.Common.Account)
+	if err != nil {
+		return ter.Errorf(ter.TemBAD_SRC_ACCOUNT, "invalid source account")
+	}
+	assetIssuer, result := assetIssuerID(a.Asset)
+	if result != ter.TesSUCCESS || assetIssuer != accountID {
 		return ter.Errorf(ter.TemMALFORMED, "Asset issuer must match Account")
 	}
 
 	// Reference: rippled AMMClawback.cpp preflight lines 81-89
 	if a.Amount != nil {
-		if a.Amount.Currency != a.Asset.Currency || a.Amount.Issuer != a.Asset.Issuer {
+		if !matchesAsset(a.Amount, a.Asset) {
 			return ter.Errorf(ter.TemBAD_AMOUNT, "Amount issue must match Asset")
 		}
 		if a.Amount.IsZero() || a.Amount.IsNegative() {
@@ -101,8 +113,19 @@ func (a *AMMClawback) Flatten() (map[string]any, error) {
 	return tx.ReflectFlatten(a)
 }
 
+// RequiredAmendments gates AMMClawback on featureAMMClawback alone. rippled
+// declares no checkExtraFeatures override for this transactor (only getFlagsMask),
+// so ammEnabled (featureAMM && fixUniversalNumber) is NOT a preflight requirement:
+// with AMMClawback enabled but AMM disabled the tx passes preflight and fails in
+// preclaim (terNO_AMM, since no AMM can exist).
+// Reference: rippled transactions.macro ttAMM_CLAWBACK + AMMClawback.h.
 func (a *AMMClawback) RequiredAmendments() [][32]byte {
-	return [][32]byte{amendment.FeatureAMM, amendment.FeatureFixUniversalNumber, amendment.FeatureAMMClawback}
+	return [][32]byte{amendment.FeatureAMMClawback}
+}
+
+// CheckExtraFeatures gates MPT pool assets/claw amount on the MPTokensV2 amendment.
+func (a *AMMClawback) CheckExtraFeatures(rules *amendment.Rules) error {
+	return requireMPTokensV2(rules, a.Asset.IsMPT() || a.Asset2.IsMPT() || amountIsMPT(a.Amount))
 }
 
 // Preclaim requires the holder and AMM to exist and the issuer to permit
@@ -130,8 +153,25 @@ func (a *AMMClawback) Preclaim(view tx.LedgerView, _ tx.EngineConfig) ter.Result
 		return result
 	}
 
-	if (issuer.Flags&state.LsfAllowTrustLineClawback) == 0 ||
-		(issuer.Flags&state.LsfNoFreeze) != 0 {
+	issuerID, err := state.DecodeAccountID(a.Common.Account)
+	if err != nil {
+		return ter.TemBAD_SRC_ACCOUNT
+	}
+	canClawback := func(asset tx.Asset) bool {
+		if !asset.IsMPT() {
+			return issuer.Flags&state.LsfAllowTrustLineClawback != 0 && issuer.Flags&state.LsfNoFreeze == 0
+		}
+		id, err := mptutil.DecodeID(asset.MPTIssuanceID)
+		if err != nil {
+			return false
+		}
+		issuance, _, result := mptutil.ReadIssuance(view, id)
+		return result == ter.TesSUCCESS && issuance.Issuer == issuerID && issuance.Flags&entry.LsfMPTCanClawback != 0
+	}
+	if !canClawback(a.Asset) {
+		return ter.TecNO_PERMISSION
+	}
+	if a.GetFlags()&tfClawTwoAssets != 0 && !canClawback(a.Asset2) {
 		return ter.TecNO_PERMISSION
 	}
 
@@ -265,7 +305,7 @@ func (a *AMMClawback) Apply(ctx *tx.ApplyContext) ter.Result {
 				withdrawAmount1 = amountRounded
 				withdrawAmount2 = amount2Rounded
 			} else {
-				amount2Withdraw := assetBalance2.Mul(frac, false)
+				amount2Withdraw := toSTAmountIssue(assetBalance2, toIOUForCalc(assetBalance2).Mul(frac, false))
 				lpTokensToWithdraw = lpTokensNeeded
 				withdrawAmount1 = clawAmount
 				withdrawAmount2 = amount2Withdraw
@@ -278,8 +318,8 @@ func (a *AMMClawback) Apply(ctx *tx.ApplyContext) ter.Result {
 	// clamping. The clawback math inherits these guards because rippled routes
 	// the clawback through equalWithdrawTokens / withdraw.
 	// Reference: rippled AMMWithdraw.cpp withdraw() lines 539-579
-	w1EqualsB1 := toIOUForCalc(withdrawAmount1).Compare(toIOUForCalc(assetBalance1)) == 0
-	w2EqualsB2 := toIOUForCalc(withdrawAmount2).Compare(toIOUForCalc(assetBalance2)) == 0
+	w1EqualsB1 := compareAmounts(withdrawAmount1, assetBalance1) == 0
+	w2EqualsB2 := compareAmounts(withdrawAmount2, assetBalance2) == 0
 	// Cannot withdraw one side of the pool while leaving the other.
 	if (w1EqualsB1 && !w2EqualsB2) || (w2EqualsB2 && !w1EqualsB1) {
 		return ter.TecAMM_BALANCE
@@ -290,8 +330,7 @@ func (a *AMMClawback) Apply(ctx *tx.ApplyContext) ter.Result {
 		return ter.TecAMM_BALANCE
 	}
 	// Cannot withdraw more than the pool holds.
-	if isGreater(toIOUForCalc(withdrawAmount1), toIOUForCalc(assetBalance1)) ||
-		isGreater(toIOUForCalc(withdrawAmount2), toIOUForCalc(assetBalance2)) {
+	if isGreater(withdrawAmount1, assetBalance1) || isGreater(withdrawAmount2, assetBalance2) {
 		return ter.TecAMM_BALANCE
 	}
 
@@ -312,7 +351,15 @@ func (a *AMMClawback) Apply(ctx *tx.ApplyContext) ter.Result {
 	// Net effect: debit AMM's trust line, tokens returned to issuer (destroyed).
 	// Asset1 cannot be XRP (enforced in preflight).
 	if !isXRP1 && !withdrawAmount1.IsZero() {
-		if err := createOrUpdateAMMTrustline(ammAccountID, a.Asset, withdrawAmount1.Negate(), ctx.View); err != nil {
+		if a.Asset.IsMPT() {
+			if result := withdrawAssetToAccount(ctx, holderID, ammAccountID, a.Asset, withdrawAmount1,
+				ctx.Rules().Enabled(amendment.FeatureFixAMMv1_2)); result != ter.TesSUCCESS {
+				return result
+			}
+			if result := sendMPT(ctx.View, holderID, issuerID, withdrawAmount1, true); result != ter.TesSUCCESS {
+				return result
+			}
+		} else if err := createOrUpdateAMMTrustline(ammAccountID, a.Asset, withdrawAmount1.Negate(), ctx.View); err != nil {
 			return ter.TefINTERNAL
 		}
 	}
@@ -321,7 +368,15 @@ func (a *AMMClawback) Apply(ctx *tx.ApplyContext) ter.Result {
 	if flags&tfClawTwoAssets != 0 {
 		// Clawback asset2 too. Same net effect as asset1.
 		if !isXRP2 && !withdrawAmount2.IsZero() {
-			if err := createOrUpdateAMMTrustline(ammAccountID, a.Asset2, withdrawAmount2.Negate(), ctx.View); err != nil {
+			if a.Asset2.IsMPT() {
+				if result := withdrawAssetToAccount(ctx, holderID, ammAccountID, a.Asset2, withdrawAmount2,
+					ctx.Rules().Enabled(amendment.FeatureFixAMMv1_2)); result != ter.TesSUCCESS {
+					return result
+				}
+				if result := sendMPT(ctx.View, holderID, issuerID, withdrawAmount2, true); result != ter.TesSUCCESS {
+					return result
+				}
+			} else if err := createOrUpdateAMMTrustline(ammAccountID, a.Asset2, withdrawAmount2.Negate(), ctx.View); err != nil {
 				return ter.TefINTERNAL
 			}
 		} else if isXRP2 && !withdrawAmount2.IsZero() {
@@ -334,17 +389,20 @@ func (a *AMMClawback) Apply(ctx *tx.ApplyContext) ter.Result {
 		// NOT clawing asset2 — holder receives it.
 		// Transfer from AMM to holder.
 		if !isXRP2 && !withdrawAmount2.IsZero() {
-			if err := createOrUpdateAMMTrustline(ammAccountID, a.Asset2, withdrawAmount2.Negate(), ctx.View); err != nil {
-				return ter.TefINTERNAL
-			}
-			// Credit holder's trust line with asset2 issuer — BUT skip if
-			// holder IS the issuer (the IOU is just returned/destroyed).
-			// Reference: rippled rippleSendIOU line 1807: direct path when
-			// sender or receiver is the issuer.
-			issuer2ID, _ := state.DecodeAccountID(a.Asset2.Issuer)
-			if holderID != issuer2ID {
-				if err := updateTrustlineBalanceInView(holderID, issuer2ID, a.Asset2.Currency, withdrawAmount2, ctx.View); err != nil {
+			if a.Asset2.IsMPT() {
+				if result := withdrawAssetToAccount(ctx, holderID, ammAccountID, a.Asset2, withdrawAmount2,
+					ctx.Rules().Enabled(amendment.FeatureFixAMMv1_2)); result != ter.TesSUCCESS {
+					return result
+				}
+			} else {
+				if err := createOrUpdateAMMTrustline(ammAccountID, a.Asset2, withdrawAmount2.Negate(), ctx.View); err != nil {
 					return ter.TefINTERNAL
+				}
+				issuer2ID, _ := state.DecodeAccountID(a.Asset2.Issuer)
+				if holderID != issuer2ID {
+					if err := updateTrustlineBalanceInView(holderID, issuer2ID, a.Asset2.Currency, withdrawAmount2, ctx.View); err != nil {
+						return ter.TefINTERNAL
+					}
 				}
 			}
 		} else if isXRP2 && !withdrawAmount2.IsZero() {
@@ -358,7 +416,7 @@ func (a *AMMClawback) Apply(ctx *tx.ApplyContext) ter.Result {
 	// Burn LP tokens: debit the holder's LP token trust line, may delete it.
 	// Reference: rippled AMMWithdraw::withdraw calls redeemIOU(holder, lpTokens, lpIssue)
 	if !lpTokensToWithdraw.IsZero() {
-		lptCurrency := GenerateAMMLPTCurrency(amm.Asset.Currency, amm.Asset2.Currency)
+		lptCurrency := GenerateAMMLPTCurrencyForAssets(amm.Asset, amm.Asset2)
 		ammAccountAddr, _ := state.EncodeAccountID(amm.Account)
 		redeemAmt := state.NewIssuedAmountFromValue(
 			lpTokensToWithdraw.Mantissa(), lpTokensToWithdraw.Exponent(), lptCurrency, ammAccountAddr)

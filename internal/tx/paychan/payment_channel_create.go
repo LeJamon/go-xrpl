@@ -109,18 +109,11 @@ func (p *PaymentChannelCreate) RequiredAmendments() [][32]byte {
 	return [][32]byte{amendment.FeaturePayChan}
 }
 
-// Preclaim performs the rules-aware fix1543 flag check.
-// Reference: rippled PayChan.cpp:177 — stray (non-universal) flags are rejected
-// only once fix1543 is active. rippled runs this check first in preflight; the
-// gate is rules-aware and go-xrpl exposes rules only at Preclaim, so it runs
-// after the common preflight/preclaim steps. For a tx malformed in two ways this
-// can surface a different tem code than rippled; the result is tem-only (never
-// enters a ledger) so there is no consensus divergence.
-func (p *PaymentChannelCreate) Preclaim(_ tx.LedgerView, config tx.EngineConfig) ter.Result {
-	if config.GetRules().Enabled(amendment.FeatureFix1543) && (p.GetFlags()&tx.TfUniversalMask) != 0 {
-		return ter.TemINVALID_FLAG
-	}
-	return ter.TesSUCCESS
+// GetFlagsMask returns the invalid-flags mask enforced at preflight0: any
+// non-universal flag is rejected.
+// Reference: rippled PayChan.cpp PayChanCreate::getFlagsMask.
+func (p *PaymentChannelCreate) GetFlagsMask(rules *amendment.Rules) uint32 {
+	return tx.TfUniversalMask
 }
 
 // Reference: rippled PayChan.cpp PayChanCreate::doApply()
@@ -167,14 +160,12 @@ func (p *PaymentChannelCreate) Apply(ctx *tx.ApplyContext) ter.Result {
 	}
 
 	// DisallowIncoming check
-	// Reference: rippled PayChan.cpp preclaim() featureDisallowIncoming
-	if ctx.Rules().Enabled(amendment.FeatureDisallowIncoming) {
-		if destAccount.Flags&state.LsfDisallowIncomingPayChan != 0 {
-			ctx.Log.Warn("payment channel create: destination disallows incoming pay channels",
-				"destination", p.Destination,
-			)
-			return ter.TecNO_PERMISSION
-		}
+	// Reference: rippled PayChan.cpp preclaim() lsfDisallowIncomingPayChan
+	if destAccount.Flags&state.LsfDisallowIncomingPayChan != 0 {
+		ctx.Log.Warn("payment channel create: destination disallows incoming pay channels",
+			"destination", p.Destination,
+		)
+		return ter.TecNO_PERMISSION
 	}
 
 	// RequireDestTag check
@@ -184,14 +175,6 @@ func (p *PaymentChannelCreate) Apply(ctx *tx.ApplyContext) ter.Result {
 			"destination", p.Destination,
 		)
 		return ter.TecDST_TAG_NEEDED
-	}
-
-	// DisallowXRP check (only when DepositAuth amendment is NOT enabled — bug compat)
-	// Reference: rippled PayChan.cpp preclaim() lsfDisallowXRP
-	if !ctx.Rules().Enabled(amendment.FeatureDepositAuth) {
-		if destAccount.Flags&state.LsfDisallowXRP != 0 {
-			return ter.TecNO_TARGET
-		}
 	}
 
 	// fixPayChanCancelAfter: CancelAfter must be in the future
@@ -209,17 +192,17 @@ func (p *PaymentChannelCreate) Apply(ctx *tx.ApplyContext) ter.Result {
 	sequence := p.GetCommon().SeqProxy()
 	channelKey := keylet.PayChannel(accountID, destID, sequence)
 
-	// Serialize pay channel SLE
-	channelData, err := serializePayChannel(p, accountID, destID, amount)
+	// Build the channel SLE and insert its initial (pre-directory) form; the
+	// directory page fields are filled in and the entry re-serialized below.
+	channelSLE := newPayChannelData(p, accountID, destID, amount)
+	channelData, err := state.SerializePayChannelFromData(channelSLE)
 	if err != nil {
-		ctx.Log.Error("payment channel create: failed to serialize channel", "error", err)
-		return ter.TefINTERNAL
+		return ctx.Internal("SerializePayChannelFromData", err)
 	}
 
 	// Insert channel
 	if err := ctx.View.Insert(channelKey, channelData); err != nil {
-		ctx.Log.Error("payment channel create: failed to insert channel", "error", err)
-		return ter.TefINTERNAL
+		return ctx.Internal("insert pay channel", err)
 	}
 
 	// DirInsert into owner directory
@@ -233,34 +216,34 @@ func (p *PaymentChannelCreate) Apply(ctx *tx.ApplyContext) ter.Result {
 		return ter.TecDIR_FULL
 	}
 
-	// Re-read and update channel with OwnerNode from DirInsert
-	channelSLE, err := state.ParsePayChannel(channelData)
-	if err != nil {
-		return ter.TefINTERNAL
-	}
 	channelSLE.OwnerNode = ownerResult.Page
 
-	// DirInsert into destination directory (if fixPayChanRecipientOwnerDir enabled)
-	// Reference: rippled PayChan.cpp doApply() fixPayChanRecipientOwnerDir
-	if ctx.Rules().Enabled(amendment.FeatureFixPayChanRecipientOwnerDir) {
-		destDirKey := keylet.OwnerDir(destID)
-		destResult, err := state.DirInsert(ctx.View, destDirKey, channelKey.Key, false, func(dir *state.DirectoryNode) {
-			dir.Owner = destID
-		})
-		if err != nil {
-			return ter.TecDIR_FULL
-		}
-		channelSLE.DestinationNode = destResult.Page
-		channelSLE.HasDestNode = true
+	// fixIncludeKeyletFields: store the creating sequence (tx or ticket) used
+	// to derive the channel keylet.
+	if ctx.Rules().Enabled(amendment.FeatureFixIncludeKeyletFields) {
+		channelSLE.Sequence = sequence
+		channelSLE.HasSequence = true
 	}
+
+	// DirInsert into the recipient's owner directory.
+	// Reference: rippled PayChan.cpp doApply() — recipient owner directory.
+	destDirKey := keylet.OwnerDir(destID)
+	destResult, err := state.DirInsert(ctx.View, destDirKey, channelKey.Key, false, func(dir *state.DirectoryNode) {
+		dir.Owner = destID
+	})
+	if err != nil {
+		return ter.TecDIR_FULL
+	}
+	channelSLE.DestinationNode = destResult.Page
+	channelSLE.HasDestNode = true
 
 	// Re-serialize with updated OwnerNode/DestinationNode
 	updatedData, err := state.SerializePayChannelFromData(channelSLE)
 	if err != nil {
-		return ter.TefINTERNAL
+		return ctx.Internal("SerializePayChannelFromData", err)
 	}
 	if err := ctx.View.Update(channelKey, updatedData); err != nil {
-		return ter.TefINTERNAL
+		return ctx.Internal("update pay channel", err)
 	}
 
 	// Deduct amount from account and increment OwnerCount

@@ -390,8 +390,8 @@ func (s *ValidatorSlot) deleteIdlePeers(validator []byte, now time.Time) {
 	}
 }
 
-// GetSelected returns the selected peer IDs.
-func (s *ValidatorSlot) GetSelected() []PeerID {
+// Selected returns the selected peer IDs.
+func (s *ValidatorSlot) Selected() []PeerID {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
@@ -537,8 +537,8 @@ func (r *Relay) deleteIdlePeers(now time.Time) {
 	}
 }
 
-// GetSelectedPeers returns selected peers for a validator.
-func (r *Relay) GetSelectedPeers(validatorKey []byte) []PeerID {
+// SelectedPeers returns selected peers for a validator.
+func (r *Relay) SelectedPeers(validatorKey []byte) []PeerID {
 	key := string(validatorKey)
 
 	r.mu.RLock()
@@ -548,5 +548,5 @@ func (r *Relay) GetSelectedPeers(validatorKey []byte) []PeerID {
 	if !exists {
 		return nil
 	}
-	return slot.GetSelected()
+	return slot.Selected()
 }

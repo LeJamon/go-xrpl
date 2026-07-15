@@ -5,10 +5,10 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"strconv"
 	"strings"
 
+	"github.com/LeJamon/go-xrpl/amendment"
 	addresscodec "github.com/LeJamon/go-xrpl/codec/addresscodec"
 	binarycodec "github.com/LeJamon/go-xrpl/codec/binarycodec"
 	"github.com/LeJamon/go-xrpl/internal/ledger/service/svcerr"
@@ -32,6 +32,7 @@ const (
 	lsfDisallowIncomingCheck    = entry.LsfDisallowIncomingCheck
 	lsfDisallowIncomingPayChan  = entry.LsfDisallowIncomingPayChan
 	lsfDisallowIncomingTrustln  = entry.LsfDisallowIncomingTrustline
+	lsfAllowTrustLineLocking    = entry.LsfAllowTrustLineLocking
 	lsfAllowTrustLineClawback   = entry.LsfAllowTrustLineClawback
 )
 
@@ -39,75 +40,58 @@ const (
 type AccountInfoMethod struct{ BaseHandler }
 
 func (m *AccountInfoMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (any, *types.RpcError) {
-	// Parse the raw JSON to inspect field types before struct unmarshaling.
-	// This allows us to check for the "ident" alias and validate signer_lists type.
-	var rawFields map[string]json.RawMessage
-	if params != nil {
-		if err := json.Unmarshal(params, &rawFields); err != nil {
-			return nil, types.RpcErrorInvalidParams(fmt.Sprintf("Invalid parameters: %v", err))
+	rawFields, fieldsErr := rawJSONFields(params)
+	if fieldsErr != nil {
+		return nil, fieldsErr
+	}
+
+	account := ""
+	if accountRaw, ok := rawFields["account"]; ok {
+		var valid bool
+		account, valid = rawJSONString(accountRaw)
+		if !valid {
+			return nil, types.RpcErrorInvalidField("account")
 		}
-	}
-
-	var request struct {
-		types.AccountParam
-		types.LedgerSpecifier
-		Queue       bool `json:"queue,omitempty"`
-		SignerLists bool `json:"signer_lists,omitempty"`
-	}
-	if err := ParseParams(params, &request); err != nil {
-		return nil, err
-	}
-
-	// Support "ident" as alias for "account" (matching rippled behavior)
-	if request.Account == "" {
-		if identRaw, ok := rawFields["ident"]; ok {
-			var ident string
-			if err := json.Unmarshal(identRaw, &ident); err != nil {
-				// ident is present but not a string
-				return nil, types.RpcErrorInvalidField("ident")
-			}
-			request.Account = ident
+	} else if identRaw, ok := rawFields["ident"]; ok {
+		var valid bool
+		account, valid = rawJSONString(identRaw)
+		if !valid {
+			return nil, types.RpcErrorInvalidField("ident")
 		}
-	}
-
-	if err := ValidateAccount(request.Account); err != nil {
-		return nil, err
+	} else {
+		return nil, types.RpcErrorMissingField("account")
 	}
 
 	if err := RequireLedgerService(ctx.Services); err != nil {
 		return nil, err
 	}
 
-	// Determine ledger index. ledger_hash takes precedence over ledger_index
-	// and is threaded through so the service resolves the specific named
-	// ledger, mirroring rippled's ledgerFromRequest.
-	ledgerIndex, selErr := resolveLedgerSelector(request.LedgerSpecifier)
-	if selErr != nil {
-		return nil, selErr
+	ledger, lookupValidated, lookupErr := LookupLedger(ctx, params)
+	if lookupErr != nil {
+		return nil, lookupErr
+	}
+	ledgerIndex := strconv.FormatUint(uint64(ledger.Sequence()), 10)
+	lookupFields := ledgerEntryResponseFields(ledger, lookupValidated)
+	_, accountID, decodeErr := addresscodec.DecodeClassicAddressToAccountID(account)
+	if decodeErr != nil {
+		rpcErr := types.RpcErrorActMalformed("Account malformed.")
+		rpcErr.Extra = lookupFields
+		return nil, rpcErr
+	}
+	canonicalAccount, encodeErr := addresscodec.EncodeAccountIDToClassicAddress(accountID)
+	if encodeErr != nil {
+		rpcErr := types.RpcErrorActMalformed("Account malformed.")
+		rpcErr.Extra = lookupFields
+		return nil, rpcErr
 	}
 
-	// Queue is only valid for the current (open) ledger.
-	// Matching rippled: if queue=true but ledger is not open, return rpcINVALID_PARAMS.
-	if request.Queue && ledgerIndex != "current" {
-		return nil, types.RpcErrorInvalidParams("Invalid parameters.")
-	}
-
-	// API v2: signer_lists must be a bool if present.
-	// Reject non-bool values (string, number, etc.) matching rippled behavior.
-	if ctx.ApiVersion > 1 {
-		if signerListsRaw, ok := rawFields["signer_lists"]; ok {
-			// Check if the raw JSON value is a boolean (true or false)
-			trimmed := strings.TrimSpace(string(signerListsRaw))
-			if trimmed != "true" && trimmed != "false" {
-				return nil, types.RpcErrorInvalidParams("Invalid parameters.")
-			}
-		}
-	}
-
-	info, err := ctx.Services.Ledger.GetAccountInfo(ctx.Context, request.Account, ledgerIndex)
+	info, err := ctx.Services.Ledger.GetAccountInfo(ctx.Context, canonicalAccount, ledgerIndex)
 	if err != nil {
 		if errors.Is(err, svcerr.ErrAccountNotFound) {
-			return nil, types.RpcErrorActNotFound("Account not found.")
+			lookupFields["account"] = canonicalAccount
+			rpcErr := types.RpcErrorActNotFound("Account not found.")
+			rpcErr.Extra = lookupFields
+			return nil, rpcErr
 		}
 		if errors.Is(err, svcerr.ErrLedgerNotFound) {
 			return nil, types.RpcErrorLgrNotFound("Ledger not found.")
@@ -115,9 +99,27 @@ func (m *AccountInfoMethod) Handle(ctx *types.RpcContext, params json.RawMessage
 		return nil, rpcInternalError("account_info: ledger query failed", err)
 	}
 
+	queue := false
+	if queueRaw, ok := rawFields["queue"]; ok {
+		queue = jsonCppBoolRaw(queueRaw)
+	}
+	if queue && ledger.IsClosed() {
+		rpcErr := types.RpcErrorInvalidParams("Invalid parameters.")
+		rpcErr.Extra = lookupFields
+		return nil, rpcErr
+	}
+
+	signerLists := false
+	if signerListsRaw, ok := rawFields["signer_lists"]; ok {
+		signerLists = jsonCppBoolRaw(signerListsRaw)
+	}
+
 	// Build account_data by decoding the full SLE binary via binarycodec,
 	// matching rippled's injectSLE which serializes all fields from the SLE.
 	accountData := m.buildAccountData(info)
+	if emailHash, ok := accountData["EmailHash"].(string); ok {
+		accountData["urlgravatar"] = "https://www.gravatar.com/avatar/" + strings.ToLower(emailHash)
+	}
 
 	// Build account_flags from Flags bitmask
 	flags := info.Flags
@@ -132,41 +134,79 @@ func (m *AccountInfoMethod) Handle(ctx *types.RpcContext, params json.RawMessage
 		"requireAuthorization":  flags&lsfRequireAuth != 0,
 		"requireDestinationTag": flags&lsfRequireDestTag != 0,
 	}
-	// Conditional flags (always include them — amendment gating is separate)
 	accountFlags["disallowIncomingNFTokenOffer"] = flags&lsfDisallowIncomingNFTOffer != 0
 	accountFlags["disallowIncomingCheck"] = flags&lsfDisallowIncomingCheck != 0
 	accountFlags["disallowIncomingPayChan"] = flags&lsfDisallowIncomingPayChan != 0
 	accountFlags["disallowIncomingTrustline"] = flags&lsfDisallowIncomingTrustln != 0
-	accountFlags["allowTrustLineClawback"] = flags&lsfAllowTrustLineClawback != 0
+
+	rules := amendment.EmptyRules()
+	if source, ok := ledger.(types.LedgerAmendmentRulesSource); ok {
+		if ledgerRules := source.LedgerAmendmentRules(); ledgerRules != nil {
+			rules = ledgerRules
+		}
+	}
+	if rules.Enabled(amendment.FeatureClawback) {
+		accountFlags["allowTrustLineClawback"] = flags&lsfAllowTrustLineClawback != 0
+	}
+	if rules.Enabled(amendment.FeatureTokenEscrow) {
+		accountFlags["allowTrustLineLocking"] = flags&lsfAllowTrustLineLocking != 0
+	}
+	if info.Index != "" {
+		accountData["index"] = strings.ToUpper(info.Index)
+	}
 
 	response := map[string]any{
 		"account_data":  accountData,
 		"account_flags": accountFlags,
 	}
-	fillLedgerFields(response, ledgerIndex, info.LedgerHash, info.LedgerIndex, info.Validated)
-
-	// Add queue data if requested (only for current/open ledger — validated above)
-	if request.Queue && ledgerIndex == "current" {
-		response["queue_data"] = buildAccountQueueData(ctx.Services, request.Account)
+	addPseudoAccount(response, accountData)
+	for key, value := range lookupFields {
+		response[key] = value
 	}
 
-	if info.Index != "" {
-		accountData["index"] = strings.ToUpper(info.Index)
+	if signerListsRaw, ok := rawFields["signer_lists"]; ctx.ApiVersion > 1 && ok {
+		if _, valid := rawJSONBool(signerListsRaw); !valid {
+			rpcErr := types.RpcErrorInvalidParams("Invalid parameters.")
+			rpcErr.Extra = response
+			return nil, rpcErr
+		}
+	}
+
+	if queue {
+		response["queue_data"] = buildAccountQueueData(ctx.Services, canonicalAccount)
 	}
 
 	// Load signer lists if requested
-	if request.SignerLists {
-		signerLists := m.loadSignerLists(ctx.Context, ctx.Services, request.Account, ledgerIndex)
+	if signerLists {
+		signerListEntries := m.loadSignerLists(ctx.Context, ctx.Services, canonicalAccount, ledgerIndex)
 		if ctx.ApiVersion > 1 {
 			// API v2: signer_lists at top level
-			response["signer_lists"] = signerLists
+			response["signer_lists"] = signerListEntries
 		} else {
 			// API v1: nested under account_data
-			accountData["signer_lists"] = signerLists
+			accountData["signer_lists"] = signerListEntries
 		}
 	}
 
 	return response, nil
+}
+
+// pseudoAccountFields are the AccountRoot designator fields, in the SOTemplate
+// order rippled iterates (getPseudoAccountFields). A pseudo-account carries
+// exactly one; the RPC reports its type by stripping the trailing "ID".
+var pseudoAccountFields = [...]string{"AMMID", "VaultID", "LoanBrokerID"}
+
+// addPseudoAccount sets response["pseudo_account"] = {"type": <name>} when the
+// account root carries a pseudo-account designator, matching rippled
+// doAccountInfo. The designator's own hash stays in account_data; only the
+// derived type name (field name minus "ID") is surfaced here.
+func addPseudoAccount(response, accountData map[string]any) {
+	for _, field := range pseudoAccountFields {
+		if _, present := accountData[field]; present {
+			response["pseudo_account"] = map[string]any{"type": strings.TrimSuffix(field, "ID")}
+			return
+		}
+	}
 }
 
 // buildAccountData constructs account_data from the full SLE binary.

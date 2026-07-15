@@ -1,6 +1,8 @@
 package payment
 
 import (
+	"math"
+
 	"github.com/LeJamon/go-xrpl/internal/ledger/state"
 	tx "github.com/LeJamon/go-xrpl/internal/tx"
 )
@@ -192,6 +194,11 @@ func withinRelativeDistanceAmounts(a, b EitherAmount, dist float64) bool {
 			return false
 		}
 		ratio = float64(diff.XRP) / float64(maxAmt.XRP)
+	} else if maxAmt.IsMPT {
+		if maxAmt.MPT == 0 {
+			return true
+		}
+		ratio = math.Abs(float64(diff.MPT) / float64(maxAmt.MPT))
 	} else {
 		maxF := maxAmt.IOU.Float64()
 		if maxF == 0 {

@@ -10,7 +10,7 @@
 //
 //	// In main / CLI init:
 //	cfg := &log.Config{Level: log.LevelInfo, Format: "text", Output: os.Stdout}
-//	log.SetRoot(log.New(log.NewHandler(cfg), cfg))
+//	rootLogger, _ := log.Init(cfg)
 //
 //	// In a subsystem:
 //	logger := log.Root().Named(log.PartitionTx)
@@ -106,11 +106,11 @@ func Fatal(msg string, args ...any) { Root().Fatal(msg, args...) }
 // Named returns a new Logger derived from root scoped to the given partition.
 func Named(partition string) Logger { return Root().Named(partition) }
 
-// parseLevel converts a level string to a Level constant. Matching is
+// ParseLevel converts a level string to a Level constant. Matching is
 // case-insensitive and accepts the same aliases as rippled's
 // Logs::fromString (information, warnings, errors, fatals).
-// Returns LevelInfo and false if the name is unrecognised.
-func parseLevel(s string) (Level, bool) {
+// Returns (LevelInfo, false) if the name is unrecognised.
+func ParseLevel(s string) (Level, bool) {
 	switch strings.ToLower(s) {
 	case "trace":
 		return LevelTrace, true
@@ -128,10 +128,6 @@ func parseLevel(s string) (Level, bool) {
 		return LevelInfo, false
 	}
 }
-
-// ParseLevel is the exported form of parseLevel for use by RPC handlers and
-// external callers. Returns (LevelInfo, false) for unrecognised strings.
-func ParseLevel(s string) (Level, bool) { return parseLevel(s) }
 
 // LevelName returns a canonical lowercase name for the given level.
 func LevelName(l Level) string {
@@ -161,6 +157,20 @@ var rootCfg atomic.Pointer[Config]
 // Call this once after SetRoot so that SetLevel / SetPartitionLevel work.
 func SetRootConfig(cfg *Config) { rootCfg.Store(cfg) }
 
+// Init wires the global logging in one step: it builds the root logger from cfg
+// and registers both the logger and cfg. Because the same cfg backs the root
+// handler and the runtime-level API, SetLevel / SetPartitionLevel always act on
+// the config that actually drives the handler. It returns the root logger and
+// its handler (the handler is handy for slog.SetDefault). Prefer Init over
+// calling SetRoot and SetRootConfig separately.
+func Init(cfg *Config) (Logger, slog.Handler) {
+	h := NewHandler(cfg)
+	l := New(h, cfg)
+	SetRoot(l)
+	SetRootConfig(cfg)
+	return l, h
+}
+
 // SetLevel changes the global log level at runtime.
 // No-op if SetRootConfig has not been called.
 func SetLevel(l Level) {
@@ -177,9 +187,9 @@ func SetPartitionLevel(partition string, l Level) {
 	}
 }
 
-// GetCurrentLevels returns a point-in-time snapshot of the global level and
+// Levels returns a point-in-time snapshot of the global level and
 // all per-partition overrides. Returns (LevelInfo, nil) if rootCfg is unset.
-func GetCurrentLevels() (global Level, partitions map[string]Level) {
+func Levels() (global Level, partitions map[string]Level) {
 	cfg := rootCfg.Load()
 	if cfg == nil {
 		return LevelInfo, nil

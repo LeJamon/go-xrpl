@@ -3,6 +3,8 @@ package offer
 import (
 	"testing"
 
+	"github.com/LeJamon/go-xrpl/amendment"
+	"github.com/LeJamon/go-xrpl/internal/ledger/state"
 	"github.com/LeJamon/go-xrpl/internal/tx"
 	"github.com/LeJamon/go-xrpl/internal/tx/ter"
 )
@@ -19,6 +21,56 @@ func xrpAmount(drops int64) tx.Amount {
 
 func iouAmount(value float64, currency, issuer string) tx.Amount {
 	return tx.NewIssuedAmountFromFloat64(value, currency, issuer)
+}
+
+func mptAmount(value int64, issuer, mptIssuanceID string) tx.Amount {
+	return state.NewMPTAmountWithIssuanceID(value, issuer, mptIssuanceID)
+}
+
+// TestOfferCreateMPTGate covers the MPTokensV2 checkExtraFeatures gate: an offer
+// with an MPT on either side is temDISABLED unless MPTokensV2 is enabled
+// (rippled OfferCreate::checkExtraFeatures).
+func TestOfferCreateMPTGate(t *testing.T) {
+	const mptID = "00000001ABCDEF0123456789ABCDEF0123456789ABCDEF12"
+	off := amendment.NewRules(nil)
+	on := amendment.NewRules([][32]byte{amendment.FeatureMPTokensV2})
+
+	cases := []struct {
+		name      string
+		takerPays tx.Amount
+		takerGets tx.Amount
+	}{
+		{"MPT pays", mptAmount(100, "rIssuer", mptID), xrpAmount(1000000)},
+		{"MPT gets", xrpAmount(1000000), mptAmount(100, "rIssuer", mptID)},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			o := &OfferCreate{
+				BaseTx:    *tx.NewBaseTx(tx.TypeOfferCreate, "rAlice"),
+				TakerPays: tc.takerPays,
+				TakerGets: tc.takerGets,
+			}
+			if err := o.CheckExtraFeatures(off); err == nil {
+				t.Fatal("MPT offer without MPTokensV2: expected temDISABLED, got nil")
+			} else if re, ok := ter.AsResultError(err); !ok || re.Code != ter.TemDISABLED {
+				t.Fatalf("MPT offer without MPTokensV2: want temDISABLED, got %v", err)
+			}
+			if err := o.CheckExtraFeatures(on); err != nil {
+				t.Fatalf("MPT offer with MPTokensV2: want nil, got %v", err)
+			}
+		})
+	}
+
+	// A non-MPT offer passes the gate regardless of the amendment.
+	iouOffer := &OfferCreate{
+		BaseTx:    *tx.NewBaseTx(tx.TypeOfferCreate, "rAlice"),
+		TakerPays: iouAmount(100, "USD", "rGateway"),
+		TakerGets: xrpAmount(1000000),
+	}
+	if err := iouOffer.CheckExtraFeatures(off); err != nil {
+		t.Fatalf("non-MPT offer without MPTokensV2: want nil, got %v", err)
+	}
 }
 
 // TestOfferCreateValidation tests OfferCreate transaction validation.
@@ -345,22 +397,23 @@ func TestOfferCancelValidation(t *testing.T) {
 	}
 }
 
-// TestOfferCancelFlagValidation verifies OfferCancel rejects any non-universal
-// flag, matching rippled CancelOffer::preflight (temINVALID_FLAG).
+// TestOfferCancelFlagValidation verifies OfferCancel's invalid-flags mask. The
+// mask itself is enforced by the engine at preflight0 (FlagsMasker); Validate no
+// longer checks flags. Matches rippled's base Transactor::getFlagsMask (universal).
 func TestOfferCancelFlagValidation(t *testing.T) {
-	t.Run("non-universal flag rejected", func(t *testing.T) {
-		o := NewOfferCancel("rAlice", 12345)
-		o.SetFlags(0x00000001)
-		err := o.Validate()
-		if err == nil || err.Error() != "temINVALID_FLAG: invalid flags set" {
-			t.Errorf("expected temINVALID_FLAG, got %v", err)
+	o := NewOfferCancel("rAlice", 12345)
+	mask := o.GetFlagsMask(nil)
+	if mask != tx.TfUniversalMask {
+		t.Fatalf("GetFlagsMask = %#x, want tfUniversalMask %#x", mask, tx.TfUniversalMask)
+	}
+	t.Run("non-universal flag intersects mask", func(t *testing.T) {
+		if uint32(0x00000001)&mask == 0 {
+			t.Errorf("non-universal flag 0x1 should intersect the invalid mask")
 		}
 	})
-	t.Run("universal flag accepted", func(t *testing.T) {
-		o := NewOfferCancel("rAlice", 12345)
-		o.SetFlags(tx.TfFullyCanonicalSig)
-		if err := o.Validate(); err != nil {
-			t.Errorf("expected no error for universal flag, got %v", err)
+	t.Run("universal flag outside mask", func(t *testing.T) {
+		if tx.TfFullyCanonicalSig&mask != 0 {
+			t.Errorf("tfFullyCanonicalSig should not intersect the invalid mask")
 		}
 	})
 }

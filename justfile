@@ -50,9 +50,9 @@ test-libs:
 test-pkg pkg:
     go test -v {{pkg}}
 
-# Live rippled handshake interop (Docker + xrpllabsofficial/xrpld:latest).
+# Production handshake interop against rippled 3.2.0 on network_id=1.
 test-docker:
-    PEERTLS_DOCKER_INTEROP=1 go test -tags docker -timeout 300s -v -run TestHandshake_Interop_RippledDocker ./internal/peermanagement/peertls/
+    PEERTLS_DOCKER_INTEROP=1 go test -tags docker -timeout 300s -v -run TestHandshake_Interop_RippledDocker ./internal/peermanagement/
 
 # PostgreSQL backend integration tests. Needs a reachable server; the DSN
 # points at a throwaway database (its tables are truncated between tests).

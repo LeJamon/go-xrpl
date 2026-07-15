@@ -10,39 +10,25 @@ import (
 	"github.com/LeJamon/go-xrpl/keylet"
 )
 
-// checkIOUDestPreamble runs the Apply-phase destination preamble for IOU and
+// checkFlowDestPreamble runs the Apply-phase destination preamble for IOU and
 // cross-currency (ripple) payments: deposit-authorization / deposit-preauth.
 // The destination-tag and credential-validity checks run earlier, in Preclaim.
 // Reference: rippled Payment.cpp:429-465 (ripple == true).
-func (p *Payment) checkIOUDestPreamble(ctx *tx.ApplyContext, senderID, destID [20]byte, destAccount *state.AccountRoot) ter.Result {
-	depositAuth := ctx.Rules().Enabled(amendment.FeatureDepositAuth)
-	depositPreauth := ctx.Rules().Enabled(amendment.FeatureDepositPreauth)
-	reqDepositAuth := (destAccount.Flags&state.LsfDepositAuth) != 0 && depositAuth
-
-	// Before DepositPreauth amendment: ALL ripple payments to accounts with
-	// DepositAuth are blocked (including self-payments). This was a bug that
-	// the DepositPreauth amendment fixed.
-	// Reference: rippled Payment.cpp:440-441
-	if !depositPreauth && reqDepositAuth {
-		return ter.TecNO_PERMISSION
+func (p *Payment) checkFlowDestPreamble(ctx *tx.ApplyContext, senderID, destID [20]byte, destAccount *state.AccountRoot) ter.Result {
+	// A flow payment must satisfy the destination's deposit authorization.
+	// The check runs regardless of the destination's flags so that expired
+	// credentials are removed (tecEXPIRED).
+	// Reference: rippled Payment.cpp ripple destination preamble (verifyDepositPreauth).
+	if result := credential.VerifyDepositPreauth(ctx, p.CredentialIDs, senderID, destID, destAccount); result != ter.TesSUCCESS {
+		return result
 	}
-
-	// With DepositPreauth amendment: self-payments and preauthorized accounts
-	// are allowed. The check runs regardless of the destination's flags so
-	// that expired credentials are removed (tecEXPIRED).
-	if depositPreauth && depositAuth {
-		if result := credential.VerifyDepositPreauth(ctx, p.CredentialIDs, senderID, destID, destAccount); result != ter.TesSUCCESS {
-			return result
-		}
-	}
-
 	return ter.TesSUCCESS
 }
 
-// applyIOUPayment applies an IOU (issued currency) or cross-currency payment.
-// This is called for any payment with paths, SendMax, or non-native Amount.
+// applyFlowPayment applies payments routed through Flow, including IOU,
+// cross-currency, and MPTokensV2 payments.
 // Reference: rippled/src/xrpld/app/tx/detail/Payment.cpp
-func (p *Payment) applyIOUPayment(ctx *tx.ApplyContext) ter.Result {
+func (p *Payment) applyFlowPayment(ctx *tx.ApplyContext) ter.Result {
 	// Validate the amount
 	if p.Amount.IsZero() {
 		return ter.TemBAD_AMOUNT
@@ -62,17 +48,14 @@ func (p *Payment) applyIOUPayment(ctx *tx.ApplyContext) ter.Result {
 		return ter.TemDST_NEEDED
 	}
 
-	// For cross-currency payments where Amount is XRP, we always need the flow engine
-	// (no issuer to decode, no direct IOU path possible)
 	if p.Amount.IsNative() {
-		// Cross-currency: Amount=XRP with SendMax=IOU or paths
-		// Always requires the flow engine
 		return p.applyRipplePayment(ctx, senderAccountID, destAccountID)
 	}
 
-	issuerAccountID, err := state.DecodeAccountID(p.Amount.Issuer)
-	if err != nil {
-		return ter.TemBAD_ISSUER
+	if !p.Amount.IsMPT() {
+		if _, err := state.DecodeAccountID(p.Amount.Issuer); err != nil {
+			return ter.TemBAD_ISSUER
+		}
 	}
 
 	// Check destination exists (needed for DepositAuth check and destination flags)
@@ -95,7 +78,7 @@ func (p *Payment) applyIOUPayment(ctx *tx.ApplyContext) ter.Result {
 		return ter.TefINTERNAL
 	}
 
-	if result := p.checkIOUDestPreamble(ctx, senderAccountID, destAccountID, destAccount); result != ter.TesSUCCESS {
+	if result := p.checkFlowDestPreamble(ctx, senderAccountID, destAccountID, destAccount); result != ter.TesSUCCESS {
 		return result
 	}
 
@@ -114,7 +97,7 @@ func (p *Payment) applyIOUPayment(ctx *tx.ApplyContext) ter.Result {
 		return ter.TefINTERNAL
 	}
 
-	return p.applyIOUPaymentWithPaths(ctx, senderAccountID, destAccountID, issuerAccountID)
+	return p.applyFlowPaymentWithPaths(ctx, senderAccountID, destAccountID)
 }
 
 // applyRipplePayment handles cross-currency payments where Amount is XRP but
@@ -153,19 +136,13 @@ func (p *Payment) applyRipplePayment(ctx *tx.ApplyContext, senderID, destID [20]
 		}
 
 		// Create the destination account before running the flow engine, which
-		// credits the delivered XRP to it. With featureDeletableAccounts the new
-		// account's sequence is the current ledger sequence, otherwise 1.
-		// Reference: rippled Payment.cpp:407-419
-		var accountSequence uint32
-		if ctx.Rules().DeletableAccountsEnabled() {
-			accountSequence = ctx.Config.LedgerSequence
-		} else {
-			accountSequence = 1
-		}
+		// credits the delivered XRP to it. The new account's sequence is the
+		// current ledger sequence.
+		// Reference: rippled Payment.cpp:433 (setFieldU32(sfSequence, view().seq())).
 		newAccount := &state.AccountRoot{
 			Account:           p.Destination,
 			Balance:           0,
-			Sequence:          accountSequence,
+			Sequence:          ctx.Config.LedgerSequence,
 			Flags:             0,
 			PreviousTxnID:     ctx.TxHash,
 			PreviousTxnLgrSeq: ctx.Config.LedgerSequence,
@@ -180,8 +157,7 @@ func (p *Payment) applyRipplePayment(ctx *tx.ApplyContext, senderID, destID [20]
 
 		// A freshly created account carries no flags, so destination-tag and
 		// deposit-authorization checks do not apply.
-		var zeroID [20]byte
-		return p.applyIOUPaymentWithPaths(ctx, senderID, destID, zeroID)
+		return p.applyFlowPaymentWithPaths(ctx, senderID, destID)
 	}
 
 	destData, err := ctx.View.Read(destKey)
@@ -193,7 +169,7 @@ func (p *Payment) applyRipplePayment(ctx *tx.ApplyContext, senderID, destID [20]
 		return ter.TefINTERNAL
 	}
 
-	if result := p.checkIOUDestPreamble(ctx, senderID, destID, destAccount); result != ter.TesSUCCESS {
+	if result := p.checkFlowDestPreamble(ctx, senderID, destID, destAccount); result != ter.TesSUCCESS {
 		return result
 	}
 
@@ -207,15 +183,12 @@ func (p *Payment) applyRipplePayment(ctx *tx.ApplyContext, senderID, destID [20]
 		return ter.TefINTERNAL
 	}
 
-	// Use the flow engine (issuerID is unused for XRP amount, pass zero)
-	var zeroID [20]byte
-	return p.applyIOUPaymentWithPaths(ctx, senderID, destID, zeroID)
+	return p.applyFlowPaymentWithPaths(ctx, senderID, destID)
 }
 
-// applyIOUPaymentWithPaths handles IOU payments that require path finding using the Flow Engine.
-// This is the main entry point for cross-currency payments and payments with explicit paths.
+// applyFlowPaymentWithPaths executes RippleCalculate and applies its sandbox.
 // Reference: rippled/src/xrpld/app/paths/RippleCalc.cpp
-func (p *Payment) applyIOUPaymentWithPaths(ctx *tx.ApplyContext, senderID, destID, issuerID [20]byte) ter.Result {
+func (p *Payment) applyFlowPaymentWithPaths(ctx *tx.ApplyContext, senderID, destID [20]byte) ter.Result {
 	// Determine payment flags
 	flags := p.GetFlags()
 	partialPayment := (flags & PaymentFlagPartialPayment) != 0
@@ -230,17 +203,13 @@ func (p *Payment) applyIOUPaymentWithPaths(ctx *tx.ApplyContext, senderID, destI
 	rcOpts := []RippleCalculateOption{
 		WithAmendments(
 			ctx.Config.ParentCloseTime,
-			rules.Enabled(amendment.FeatureFixReducedOffersV1),
 			rules.Enabled(amendment.FeatureFixReducedOffersV2),
-			rules.Enabled(amendment.FeatureFixRmSmallIncreasedQOffers),
-			rules.Enabled(amendment.FeatureFlowSortStrands),
 		),
 		WithAMMAmendments(
 			rules.Enabled(amendment.FeatureFixAMMv1_1),
 			rules.Enabled(amendment.FeatureFixAMMv1_2),
 			rules.Enabled(amendment.FeatureFixAMMOverflowOffer),
 		),
-		WithFix1781(rules.Enabled(amendment.FeatureFix1781)),
 		WithOpenLedger(ctx.Config.IsViewOpen()),
 	}
 	// Thread domain ID to the flow engine for permissioned domain payments.
@@ -391,5 +360,5 @@ func deliveredWithDstIssue(actualOut EitherAmount, dstAmount tx.Amount) tx.Amoun
 // credential expiration deletion against the engine's view so the side-effects persist.
 // Reference: rippled Transactor.cpp - tecEXPIRED re-applies removeExpiredCredentials
 func (p *Payment) ApplyOnTec(ctx *tx.ApplyContext) {
-	credential.RemoveExpiredCredentials(ctx, p.CredentialIDs)
+	credential.RemoveExpiredCredentialsOnTec(ctx, p.CredentialIDs)
 }

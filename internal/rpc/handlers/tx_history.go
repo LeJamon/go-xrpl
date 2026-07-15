@@ -6,13 +6,12 @@ import (
 	"errors"
 	"strings"
 
-	binarycodec "github.com/LeJamon/go-xrpl/codec/binarycodec"
 	"github.com/LeJamon/go-xrpl/internal/ledger/service/svcerr"
 	"github.com/LeJamon/go-xrpl/internal/rpc/types"
 )
 
 // TxHistoryMethod handles the tx_history RPC method
-type TxHistoryMethod struct{}
+type TxHistoryMethod struct{ BaseHandler }
 
 func (m *TxHistoryMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (any, *types.RpcError) {
 	var request struct {
@@ -42,16 +41,14 @@ func (m *TxHistoryMethod) Handle(ctx *types.RpcContext, params json.RawMessage) 
 	txs := make([]any, len(result.Transactions))
 	for i, tx := range result.Transactions {
 		hashStr := strings.ToUpper(hex.EncodeToString(tx.Hash[:]))
-		txHex := hex.EncodeToString(tx.TxBlob)
-
 		// Decode to full JSON
-		decoded, err := binarycodec.Decode(txHex)
+		decoded, err := decodeBinaryObject(tx.TxBlob)
 		if err != nil {
 			// Fallback to hex blob
 			txs[i] = map[string]any{
 				"hash":         hashStr,
 				"ledger_index": tx.LedgerIndex,
-				"tx_blob":      strings.ToUpper(txHex),
+				"tx_blob":      strings.ToUpper(hex.EncodeToString(tx.TxBlob)),
 			}
 			continue
 		}
@@ -83,8 +80,4 @@ func (m *TxHistoryMethod) RequiredRole() types.Role {
 
 func (m *TxHistoryMethod) SupportedApiVersions() []int {
 	return []int{types.ApiVersion1}
-}
-
-func (m *TxHistoryMethod) RequiredCondition() types.Condition {
-	return types.NoCondition
 }

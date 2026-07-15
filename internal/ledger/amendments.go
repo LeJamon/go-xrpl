@@ -5,6 +5,7 @@
 package ledger
 
 import (
+	"context"
 	"encoding/hex"
 	"fmt"
 
@@ -12,6 +13,7 @@ import (
 	"github.com/LeJamon/go-xrpl/codec/binarycodec/definitions"
 	"github.com/LeJamon/go-xrpl/codec/binarycodec/serdes"
 	"github.com/LeJamon/go-xrpl/keylet"
+	"github.com/LeJamon/go-xrpl/shamap"
 )
 
 // LoadAmendmentsFromLedger reads the Amendments ledger entry into a Rules set.
@@ -32,7 +34,25 @@ func LoadAmendmentsFromLedger(reader Reader) (*amendment.Rules, error) {
 	if err != nil {
 		return nil, fmt.Errorf("failed to read amendments entry: %w", err)
 	}
+	return loadAmendmentsFromData(data)
+}
 
+func loadAmendmentsFromSHAMap(stateMap *shamap.SHAMap) (*amendment.Rules, error) {
+	return LoadAmendmentsFromSHAMapContext(context.Background(), stateMap)
+}
+
+func LoadAmendmentsFromSHAMapContext(ctx context.Context, stateMap *shamap.SHAMap) (*amendment.Rules, error) {
+	item, found, err := stateMap.GetContext(ctx, keylet.Amendments().Key)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read amendments entry: %w", err)
+	}
+	if !found {
+		return amendment.NewRules(amendment.PermanentlyEnabledIDs()), nil
+	}
+	return loadAmendmentsFromData(item.Data())
+}
+
+func loadAmendmentsFromData(data []byte) (*amendment.Rules, error) {
 	enabledIDs, err := parseAmendmentsEntry(data)
 	if err != nil {
 		return nil, fmt.Errorf("failed to parse amendments entry: %w", err)

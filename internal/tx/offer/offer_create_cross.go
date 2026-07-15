@@ -4,6 +4,7 @@ import (
 	"github.com/LeJamon/go-xrpl/amendment"
 	"github.com/LeJamon/go-xrpl/internal/ledger/state"
 	"github.com/LeJamon/go-xrpl/internal/tx"
+	"github.com/LeJamon/go-xrpl/internal/tx/mptutil"
 	"github.com/LeJamon/go-xrpl/internal/tx/payment"
 	"github.com/LeJamon/go-xrpl/internal/tx/ter"
 	"github.com/LeJamon/go-xrpl/keylet"
@@ -66,22 +67,18 @@ func (o *OfferCreate) invokeFlowCross(
 		ctx.TxHash,
 		ctx.Config.LedgerSequence,
 		payment.FlowCrossParams{
-			Passive:                    bPassive,    // For passive offers, only cross against strictly better quality
-			Sell:                       bSell,       // For sell offers, deliver MAX (sell all input regardless of output)
-			FillOrKill:                 bFillOrKill, // FillOrKill runs the flow with partialPayment disabled (rippled CreateOffer.cpp:411)
-			ParentCloseTime:            ctx.Config.ParentCloseTime,
-			ReserveBase:                ctx.Config.ReserveBase,
-			ReserveIncrement:           ctx.Config.ReserveIncrement,
-			FixReducedOffersV1:         rules.Enabled(amendment.FeatureFixReducedOffersV1),
-			FixReducedOffersV2:         rules.Enabled(amendment.FeatureFixReducedOffersV2),
-			FixRmSmallIncreasedQOffers: rules.Enabled(amendment.FeatureFixRmSmallIncreasedQOffers),
-			FixFillOrKill:              rules.Enabled(amendment.FeatureFixFillOrKill),
-			FlowSortStrands:            rules.Enabled(amendment.FeatureFlowSortStrands),
-			FixAMMv1_1:                 rules.Enabled(amendment.FeatureFixAMMv1_1),
-			FixAMMv1_2:                 rules.Enabled(amendment.FeatureFixAMMv1_2),
-			FixAMMOverflowOffer:        rules.Enabled(amendment.FeatureFixAMMOverflowOffer),
-			Fix1781:                    rules.Enabled(amendment.FeatureFix1781),
-			DomainID:                   o.DomainID,
+			Passive:             bPassive,    // For passive offers, only cross against strictly better quality
+			Sell:                bSell,       // For sell offers, deliver MAX (sell all input regardless of output)
+			FillOrKill:          bFillOrKill, // FillOrKill runs the flow with partialPayment disabled (rippled CreateOffer.cpp:411)
+			ParentCloseTime:     ctx.Config.ParentCloseTime,
+			ReserveBase:         ctx.Config.ReserveBase,
+			ReserveIncrement:    ctx.Config.ReserveIncrement,
+			FixReducedOffersV2:  rules.Enabled(amendment.FeatureFixReducedOffersV2),
+			FixFillOrKill:       rules.Enabled(amendment.FeatureFixFillOrKill),
+			FixAMMv1_1:          rules.Enabled(amendment.FeatureFixAMMv1_1),
+			FixAMMv1_2:          rules.Enabled(amendment.FeatureFixAMMv1_2),
+			FixAMMOverflowOffer: rules.Enabled(amendment.FeatureFixAMMOverflowOffer),
+			DomainID:            o.DomainID,
 		},
 	)
 }
@@ -122,7 +119,12 @@ func (o *OfferCreate) takerCross(
 	// sandbox. rippled runs the same check (on the already tick-rounded
 	// saTakerGets) at the top of flowCross. Reference: rippled CreateOffer.cpp
 	// flowCross lines 329-335.
-	if isAmountZeroOrNegative(tx.AccountFunds(sb, ctx.AccountID, saTakerGets, true, ctx.Config.ReserveBase, ctx.Config.ReserveIncrement)) {
+	disallowUnfunded := offerDisallowUnfunded(saTakerGets, ctx.AccountID)
+	startingFunds, fundsResult := payment.AccountFundsInSandbox(sb, ctx.AccountID, saTakerGets, true, ctx.Config.ReserveBase, ctx.Config.ReserveIncrement)
+	if fundsResult != ter.TesSUCCESS {
+		return crossOutcome{terminated: true, result: fundsResult, applyMain: false}
+	}
+	if disallowUnfunded && isAmountZeroOrNegative(startingFunds) {
 		return crossOutcome{terminated: true, result: ter.TecUNFUNDED_OFFER, applyMain: false}
 	}
 
@@ -245,9 +247,12 @@ func (o *OfferCreate) takerCross(
 	// on-ledger balance is non-zero.
 	var takerInBalance tx.Amount
 	if crossResult.Sandbox != nil {
-		takerInBalance = payment.AccountFundsInSandbox(crossResult.Sandbox, ctx.AccountID, saTakerGets, true, ctx.Config.ReserveBase, ctx.Config.ReserveIncrement)
+		takerInBalance, fundsResult = payment.AccountFundsInSandbox(crossResult.Sandbox, ctx.AccountID, saTakerGets, true, ctx.Config.ReserveBase, ctx.Config.ReserveIncrement)
 	} else {
-		takerInBalance = tx.AccountFunds(sb, ctx.AccountID, saTakerGets, true, ctx.Config.ReserveBase, ctx.Config.ReserveIncrement)
+		takerInBalance, fundsResult = payment.AccountFundsInSandbox(sb, ctx.AccountID, saTakerGets, true, ctx.Config.ReserveBase, ctx.Config.ReserveIncrement)
+	}
+	if fundsResult != ter.TesSUCCESS {
+		return crossOutcome{terminated: true, result: fundsResult, applyMain: false}
 	}
 
 	// Apply FlowCross sandbox changes (crossing plus the removable-offer
@@ -267,7 +272,7 @@ func (o *OfferCreate) takerCross(
 	// view AFTER applying the sandbox (see ApplyCreate lines 421-424).
 	// Manually adjusting here would DOUBLE-COUNT the XRP changes.
 
-	if isAmountZeroOrNegative(takerInBalance) {
+	if disallowUnfunded && isAmountZeroOrNegative(takerInBalance) {
 		// Apply main sandbox with crossing results
 		return crossOutcome{terminated: true, result: ter.TesSUCCESS, applyMain: true}
 	}
@@ -281,7 +286,7 @@ func (o *OfferCreate) takerCross(
 	}
 
 	remainingGets, remainingPays := computePostCrossAmounts(
-		ctx, saTakerPays, saTakerGets, placeOffer.in, placeOffer.out, takerInBalance, bSell,
+		saTakerPays, saTakerGets, placeOffer.in, placeOffer.out, takerInBalance, bSell, disallowUnfunded,
 	)
 
 	if outcome, done := evaluatePostCrossTermination(rules, saTakerGets, grossPaid, remainingGets, remainingPays, bFillOrKill); done {
@@ -328,10 +333,7 @@ func evaluatePostCrossTermination(
 		remainingWithGross := subtractAmounts(saTakerGets, grossPaid)
 		if !isAmountZeroOrNegative(remainingWithGross) {
 			// FoK not satisfied: TakerGets not fully consumed by GROSS amount.
-			if rules.Enabled(amendment.FeatureFix1578) {
-				return crossOutcome{terminated: true, result: ter.TecKILLED, applyMain: false}, true
-			}
-			return crossOutcome{terminated: true, result: ter.TesSUCCESS, applyMain: false}, true
+			return crossOutcome{terminated: true, result: ter.TecKILLED, applyMain: false}, true
 		}
 	}
 
@@ -348,17 +350,14 @@ func evaluatePostCrossTermination(
 //
 // Reference: rippled CreateOffer.cpp lines 429-504
 func computePostCrossAmounts(
-	ctx *tx.ApplyContext,
 	saTakerPays, saTakerGets tx.Amount,
 	placeIn, placeOut tx.Amount,
 	takerInBalance tx.Amount,
-	bSell bool,
+	bSell, disallowUnfunded bool,
 ) (remainingGets, remainingPays tx.Amount) {
-	rules := ctx.Rules()
-
 	noCrossingHappened := isAmountZeroOrNegative(placeIn) && isAmountZeroOrNegative(placeOut)
 
-	if isAmountZeroOrNegative(takerInBalance) {
+	if disallowUnfunded && isAmountZeroOrNegative(takerInBalance) {
 		// Funds exhausted during crossing — no remaining offer
 		// Reference: rippled CreateOffer.cpp lines 435-441
 		return zeroAmount(saTakerGets), zeroAmount(saTakerPays)
@@ -382,14 +381,7 @@ func computePostCrossAmounts(
 			payment.ToEitherAmount(saTakerGets),
 			payment.ToEitherAmount(saTakerPays),
 		).Rate()
-		outNative := saTakerPays.IsNative()
-		outCurrency := saTakerPays.Currency
-		outIssuer := saTakerPays.Issuer
-		if rules.Enabled(amendment.FeatureFixReducedOffersV1) {
-			remainingPays = offerDivRoundStrict(remainingGets, rate, outNative, outCurrency, outIssuer, false)
-		} else {
-			remainingPays = offerDivRound(remainingGets, rate, outNative, outCurrency, outIssuer, true)
-		}
+		remainingPays = offerDivRoundStrictLike(remainingGets, rate, saTakerPays, false)
 		return remainingGets, remainingPays
 	}
 	// Non-sell offer: subtract output received from TakerPays, compute TakerGets by quality
@@ -404,11 +396,16 @@ func computePostCrossAmounts(
 		payment.ToEitherAmount(saTakerGets),
 		payment.ToEitherAmount(saTakerPays),
 	).Rate()
-	outNative := saTakerGets.IsNative()
-	outCurrency := saTakerGets.Currency
-	outIssuer := saTakerGets.Issuer
-	remainingGets = offerMulRound(remainingPays, rate, outNative, outCurrency, outIssuer, true)
+	remainingGets = offerMulRoundLike(remainingPays, rate, saTakerGets, true)
 	return remainingGets, remainingPays
+}
+
+func offerDisallowUnfunded(amount tx.Amount, account [20]byte) bool {
+	if !amount.IsMPT() {
+		return true
+	}
+	id, err := mptutil.DecodeID(amount.MPTIssuanceID())
+	return err != nil || account != mptutil.Issuer(id)
 }
 
 // removeRemovableOffers deletes the offers FlowCross groomed away. The full set

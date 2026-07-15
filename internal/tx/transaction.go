@@ -56,9 +56,60 @@ type Appliable interface {
 // body. The engine runs PreflightRules right after Validate(), so these checks
 // reject (with a tem* code and no fee) at the correct pipeline stage, before any
 // ledger-state preclaim runs — matching rippled where rules-gated tem* checks
-// are interleaved into the transactor's preflight().
+// are interleaved into the transactor's per-type preflight() body (T::preflight).
 type RulesPreflighter interface {
 	PreflightRules(rules *amendment.Rules) error
+}
+
+// RulesAwarePreflighter is implemented by transaction types whose complete
+// type-specific preflight body must interleave amendment-dependent checks.
+type RulesAwarePreflighter interface {
+	PreflightWithRules(rules *amendment.Rules) error
+}
+
+// ExtraFeaturesChecker is implemented by transaction types with an amendment
+// gate that rippled evaluates in T::checkExtraFeatures — which runs in
+// invokePreflight BEFORE preflight1's common checks (flags mask, NetworkID,
+// account, fee, signing key). The engine runs it first so an amendment-gated
+// rejection (e.g. CreateOffer carrying sfDomainID under a disabled
+// PermissionedDEX → temDISABLED) precedes any common-field TER. A non-nil error
+// should carry a temDISABLED-class code via ter.Errorf.
+//
+// A type opts in by implementing it and moving the corresponding amendment gate
+// out of its Validate()/PreflightRules body. Reference: rippled Transactor.h
+// invokePreflight.
+type ExtraFeaturesChecker interface {
+	CheckExtraFeatures(rules *amendment.Rules) error
+}
+
+// FlagsMasker is implemented by transaction types that declare the set of flag
+// bits that are invalid for the type. The engine rejects a transaction whose
+// flags intersect the mask with temINVALID_FLAG at the preflight0 position,
+// mirroring rippled preflight0's `tx.getFlags() & T::getFlagsMask(ctx)`. The
+// mask may depend on the active amendments (e.g. a flag valid only once an
+// amendment is enabled).
+//
+// A type that does not implement it gets no engine-level flag rejection, because
+// the universal mask would reject every valid type-specific flag
+// (tfPartialPayment, tfPassive, …). A type opts in by implementing GetFlagsMask
+// (typically `^(tfUniversal | typeSpecificBits)`, i.e. the base tfUniversalMask
+// for a type with no type-specific flags) and dropping the equivalent flag check
+// from Validate(). Nearly every transaction type adopts it; the pipeline stage
+// matters because the mask fires at preflight0, ahead of the fee/account/signing
+// checks, so a stray flag beats a bad fee — matching rippled.
+type FlagsMasker interface {
+	GetFlagsMask(rules *amendment.Rules) uint32
+}
+
+// SigValidatedPreflighter is implemented by transaction types with a preflight
+// check that rippled runs in T::preflightSigValidated — the invokePreflight stage
+// AFTER preflight2's cryptographic signature verification. The engine runs it
+// once signature verification succeeds, so a check placed here is trumped by a
+// bad-signature temINVALID, matching rippled. EscrowFinish adopts it for its
+// CredentialIDs shape check (credentials::checkFields), which rippled defers past
+// the signature. A non-nil error carries a tem* code via ter.Errorf.
+type SigValidatedPreflighter interface {
+	PreflightSigValidated() error
 }
 
 // Preclaimer is implemented by transaction types that need additional
@@ -176,6 +227,43 @@ type SignerWrapper struct {
 	Signer Signer `json:"Signer"`
 }
 
+// CounterpartySignature is the nested signature object (sfCounterpartySignature).
+// It lets a second party attach a signature to a transaction without being the
+// signing Account. It carries a single signature (SigningPubKey + TxnSignature)
+// or a multi-signature (empty SigningPubKey + Signers). The field is excluded
+// from the transaction's signing data (notSigning), so neither the top-level
+// signer nor the counterparty covers it.
+type CounterpartySignature struct {
+	SigningPubKey string          `json:"SigningPubKey,omitempty"`
+	TxnSignature  string          `json:"TxnSignature,omitempty"`
+	Signers       []SignerWrapper `json:"Signers,omitempty"`
+}
+
+// ToMap serializes the counterparty object for the binary codec. SigningPubKey
+// is always emitted — a single-signed object carries the signer's key and a
+// multi-signed object carries an empty key — so a decode/encode round-trip
+// reproduces the original wire bytes.
+func (cs *CounterpartySignature) ToMap() map[string]any {
+	m := map[string]any{"SigningPubKey": cs.SigningPubKey}
+	if cs.TxnSignature != "" {
+		m["TxnSignature"] = cs.TxnSignature
+	}
+	if len(cs.Signers) > 0 {
+		signers := make([]map[string]any, len(cs.Signers))
+		for i, sw := range cs.Signers {
+			signers[i] = map[string]any{
+				"Signer": map[string]any{
+					"Account":       sw.Signer.Account,
+					"SigningPubKey": sw.Signer.SigningPubKey,
+					"TxnSignature":  sw.Signer.TxnSignature,
+				},
+			}
+		}
+		m["Signers"] = signers
+	}
+	return m
+}
+
 // Common contains fields common to all transaction types
 type Common struct {
 	// Required fields
@@ -199,6 +287,11 @@ type Common struct {
 	SigningPubKey      string          `json:"SigningPubKey,omitempty"`
 	TicketSequence     *uint32         `json:"TicketSequence,omitempty"`
 	TxnSignature       string          `json:"TxnSignature,omitempty"`
+
+	// CounterpartySignature is a nested signature attached by a second party.
+	// It is excluded from the transaction's signing data and verified
+	// separately after the top-level signature.
+	CounterpartySignature *CounterpartySignature `json:"CounterpartySignature,omitempty"`
 
 	// Delegate is the account delegating permission to execute this transaction.
 	// When present, the fee is charged to the delegate and signature is verified
@@ -384,7 +477,7 @@ func (c *Common) ToMap() map[string]any {
 		m["LastLedgerSequence"] = *c.LastLedgerSequence
 	}
 	if len(c.Memos) > 0 {
-		m["Memos"] = c.Memos
+		m["Memos"] = flattenMemos(c.Memos)
 	}
 	if c.NetworkID != nil {
 		m["NetworkID"] = *c.NetworkID
@@ -413,6 +506,9 @@ func (c *Common) ToMap() map[string]any {
 	}
 	if c.TxnSignature != "" {
 		m["TxnSignature"] = c.TxnSignature
+	}
+	if c.CounterpartySignature != nil {
+		m["CounterpartySignature"] = c.CounterpartySignature.ToMap()
 	}
 	if c.Delegate != "" {
 		m["Delegate"] = c.Delegate

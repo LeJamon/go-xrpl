@@ -70,14 +70,24 @@ func (a *invariantsTxAdapter) GetDomainID() (*[32]byte, bool) {
 	return nil, false
 }
 
+// toInvariantsAsset converts a tx.Asset to an invariants.Asset, preserving all
+// three fields — Currency, Issuer, and MPTIssuanceID. Dropping MPTIssuanceID
+// would leave an MPT-asset AMM invariant unable to locate the pool holding.
+func toInvariantsAsset(asset txcore.Asset) invariants.Asset {
+	return invariants.Asset{
+		Currency:      asset.Currency,
+		Issuer:        asset.Issuer,
+		MPTIssuanceID: asset.MPTIssuanceID,
+	}
+}
+
 // GetAMMAsset implements invariants.AMMAssetProvider by converting tx.Asset to invariants.Asset.
 func (a *invariantsTxAdapter) GetAMMAsset() invariants.Asset {
 	type provider interface {
 		GetAMMAsset() txcore.Asset
 	}
 	if p, ok := a.tx.(provider); ok {
-		asset := p.GetAMMAsset()
-		return invariants.Asset{Currency: asset.Currency, Issuer: asset.Issuer}
+		return toInvariantsAsset(p.GetAMMAsset())
 	}
 	return invariants.Asset{}
 }
@@ -88,8 +98,7 @@ func (a *invariantsTxAdapter) GetAMMAsset2() invariants.Asset {
 		GetAMMAsset2() txcore.Asset
 	}
 	if p, ok := a.tx.(provider); ok {
-		asset := p.GetAMMAsset2()
-		return invariants.Asset{Currency: asset.Currency, Issuer: asset.Issuer}
+		return toInvariantsAsset(p.GetAMMAsset2())
 	}
 	return invariants.Asset{}
 }
@@ -100,8 +109,7 @@ func (a *invariantsTxAdapter) GetAmountAsset() invariants.Asset {
 		GetAmountAsset() txcore.Asset
 	}
 	if p, ok := a.tx.(provider); ok {
-		asset := p.GetAmountAsset()
-		return invariants.Asset{Currency: asset.Currency, Issuer: asset.Issuer}
+		return toInvariantsAsset(p.GetAmountAsset())
 	}
 	return invariants.Asset{}
 }
@@ -112,8 +120,7 @@ func (a *invariantsTxAdapter) GetAmount2Asset() invariants.Asset {
 		GetAmount2Asset() txcore.Asset
 	}
 	if p, ok := a.tx.(provider); ok {
-		asset := p.GetAmount2Asset()
-		return invariants.Asset{Currency: asset.Currency, Issuer: asset.Issuer}
+		return toInvariantsAsset(p.GetAmount2Asset())
 	}
 	return invariants.Asset{}
 }

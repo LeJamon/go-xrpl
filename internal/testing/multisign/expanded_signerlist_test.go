@@ -1,6 +1,5 @@
-// Tests for featureExpandedSignerList behavior in SignerListSet: the
-// signer-entry cap (8 without the amendment, 32 with) and WalletLocator
-// validation/persistence.
+// Tests for SignerListSet: the 32-entry signer cap and WalletLocator
+// persistence.
 //
 // Reference: rippled SetSignerList.cpp validateQuorumAndSignerEntries() and
 // writeSignersToSLE(), STTx::maxMultiSigners (STTx.h:53-63).
@@ -28,28 +27,6 @@ func signersOfWeightOne(n int) []jtx.TestSigner {
 		}
 	}
 	return signers
-}
-
-// TestSignerList_EntryCap_WithoutExpandedAmendment asserts the 8-entry cap is
-// enforced when featureExpandedSignerList is disabled.
-func TestSignerList_EntryCap_WithoutExpandedAmendment(t *testing.T) {
-	env := jtx.NewTestEnv(t)
-	env.DisableFeature("ExpandedSignerList")
-	env.Close()
-
-	alice := jtx.NewAccount("alice")
-	env.Fund(alice)
-	env.Close()
-
-	// Nine entries exceed the pre-amendment maximum of 8.
-	result := env.Submit(jtx.NewSignerListSetTx(alice, 1, signersOfWeightOne(9)))
-	jtx.RequireTxFail(t, result, "temMALFORMED")
-
-	// Eight entries are the pre-amendment maximum and must succeed.
-	result = env.Submit(jtx.NewSignerListSetTx(alice, 1, signersOfWeightOne(8)))
-	jtx.RequireTxSuccess(t, result)
-	env.Close()
-	jtx.RequireSignerListCount(t, env, alice, 1)
 }
 
 // TestSignerList_EntryCap_WithExpandedAmendment asserts that up to 32 entries
@@ -81,20 +58,17 @@ func TestSignerList_EntryCap_WithExpandedAmendment(t *testing.T) {
 }
 
 // TestSignerList_EntryCapPrecedesWeightCheck guards the rippled check order: a
-// transaction that both exceeds the entry cap and contains a zero-weight signer
-// must report temMALFORMED (the cap check), not temBAD_WEIGHT. rippled checks the
-// count before the per-signer loop (SetSignerList.cpp:271-303).
+// transaction that both exceeds the entry cap (33 > 32) and contains a
+// zero-weight signer must report temMALFORMED (the cap check), not temBAD_WEIGHT.
+// rippled checks the count before the per-signer loop (SetSignerList.cpp:271-303).
 func TestSignerList_EntryCapPrecedesWeightCheck(t *testing.T) {
 	env := jtx.NewTestEnv(t)
-	env.DisableFeature("ExpandedSignerList")
-	env.Close()
-
 	alice := jtx.NewAccount("alice")
-	env.Fund(alice)
+	env.FundAmount(alice, uint64(jtx.XRP(100000)))
 	env.Close()
 
-	// Nine entries (over the pre-amendment cap of 8) with one zero weight.
-	signers := signersOfWeightOne(9)
+	// 33 entries (over the cap of 32) with one zero weight.
+	signers := signersOfWeightOne(33)
 	signers[0].Weight = 0
 	result := env.Submit(jtx.NewSignerListSetTx(alice, 1, signers))
 	jtx.RequireTxFail(t, result, "temMALFORMED")
@@ -114,23 +88,6 @@ func signerListSetWithLocator(account, signer, locator string) *signerlist.Signe
 		}},
 	}
 	return sl
-}
-
-// TestSignerList_WalletLocator_RejectedWithoutAmendment asserts that a
-// WalletLocator tag is rejected with temMALFORMED when the amendment is off.
-// Reference: rippled SetSignerList.cpp:313-318.
-func TestSignerList_WalletLocator_RejectedWithoutAmendment(t *testing.T) {
-	env := jtx.NewTestEnv(t)
-	env.DisableFeature("ExpandedSignerList")
-	env.Close()
-
-	alice := jtx.NewAccount("alice")
-	bogie := jtx.NewAccount("bogie")
-	env.Fund(alice, bogie)
-	env.Close()
-
-	result := env.Submit(signerListSetWithLocator(alice.Address, bogie.Address, testWalletLocator))
-	jtx.RequireTxFail(t, result, "temMALFORMED")
 }
 
 // TestSignerList_WalletLocator_Persisted asserts that, with the amendment
@@ -170,8 +127,9 @@ func signerAccounts(env *jtx.TestEnv, n int) []*jtx.Account {
 
 // TestMultiSign_ArrayBound_WithExpandedAmendment asserts the rules-gated cap on
 // a transaction's Signers array: with featureExpandedSignerList enabled a 33-entry
-// array is rejected (cap is 32). The bound is checked in preflight, before the
-// SignerList lookup, so it surfaces as temBAD_SIGNATURE regardless of authorization.
+// array is rejected (cap is 32). The bound is a structural multi-sign check, so
+// it surfaces as temINVALID (rippled multiSignHelper's Unexpected → SigBad →
+// temINVALID in preflight2), regardless of the SignerList/authorization.
 // Reference: rippled STTx::checkMultiSign -> multiSignHelper size check.
 func TestMultiSign_ArrayBound_WithExpandedAmendment(t *testing.T) {
 	env := jtx.NewTestEnv(t)
@@ -188,43 +146,5 @@ func TestMultiSign_ArrayBound_WithExpandedAmendment(t *testing.T) {
 
 	payTx := payment.Pay(alice, becky, uint64(jtx.XRP(10))).Build()
 	result := env.SubmitMultiSigned(payTx, signers)
-	jtx.RequireTxFail(t, result, "temBAD_SIGNATURE")
-}
-
-// TestMultiSign_ArrayBound_WithoutExpandedAmendment asserts the cap drops to 8
-// without the amendment: a 9-entry Signers array is rejected, while 8 entries
-// authorized by a matching SignerList pass the full multi-sign pipeline.
-func TestMultiSign_ArrayBound_WithoutExpandedAmendment(t *testing.T) {
-	env := jtx.NewTestEnv(t)
-	env.DisableFeature("ExpandedSignerList")
-	env.Close()
-	require.False(t, env.FeatureEnabled("ExpandedSignerList"))
-
-	alice := jtx.NewAccount("alice")
-	becky := jtx.NewAccount("becky")
-	env.FundAmount(alice, uint64(jtx.XRP(10000)))
-	env.FundAmount(becky, uint64(jtx.XRP(10000)))
-	env.Close()
-
-	signers := signerAccounts(env, 9)
-	env.Close()
-
-	// Nine signers exceed the pre-amendment maximum of 8 — rejected in preflight.
-	payTx := payment.Pay(alice, becky, uint64(jtx.XRP(10))).Build()
-	result := env.SubmitMultiSigned(payTx, signers[:9])
-	jtx.RequireTxFail(t, result, "temBAD_SIGNATURE")
-
-	// Eight signers are the boundary; with a matching 8-entry signer list and a
-	// met quorum the multi-signed payment succeeds.
-	eight := signers[:8]
-	entries := make([]jtx.TestSigner, len(eight))
-	for i, s := range eight {
-		entries[i] = jtx.TestSigner{Account: s, Weight: 1}
-	}
-	env.SetSignerList(alice, uint32(len(eight)), entries)
-	env.Close()
-
-	payTx2 := payment.Pay(alice, becky, uint64(jtx.XRP(10))).Build()
-	result = env.SubmitMultiSigned(payTx2, eight)
-	jtx.RequireTxSuccess(t, result)
+	jtx.RequireTxFail(t, result, "temINVALID")
 }

@@ -2,13 +2,12 @@ package service
 
 import (
 	"context"
-	"encoding/hex"
 	"errors"
 	"fmt"
 	"runtime"
 	"strconv"
-	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/LeJamon/go-xrpl/amendment"
@@ -27,6 +26,7 @@ import (
 	"github.com/LeJamon/go-xrpl/keylet"
 	xrpllog "github.com/LeJamon/go-xrpl/log"
 	"github.com/LeJamon/go-xrpl/protocol"
+	"github.com/LeJamon/go-xrpl/shamap"
 	"github.com/LeJamon/go-xrpl/storage/nodestore"
 	"github.com/LeJamon/go-xrpl/storage/relationaldb"
 )
@@ -56,10 +56,16 @@ type Config struct {
 	NetworkID uint32
 
 	GenesisConfig genesis.Config
+	// ConfiguredFees seeds fields absent from a persisted FeeSettings entry.
+	ConfiguredFees *drops.Fees
 
 	// NodeStore is the persistent storage for ledger nodes (optional, nil for in-memory only)
 	NodeStore nodestore.Database
 
+	// SHAMapFamily loads and stores state and transaction tree nodes.
+	SHAMapFamily shamap.Family
+	// FastLoad restores the newest complete persisted ledger at startup.
+	FastLoad bool
 	// RelationalDB is the repository manager for transaction indexing (optional)
 	RelationalDB relationaldb.RepositoryManager
 
@@ -67,10 +73,10 @@ type Config struct {
 	// If nil, xrpllog.Discard() is used.
 	Logger xrpllog.Logger
 
-	// AmendmentTable, when supplied, is the live amendment table the service
+	// Table, when supplied, is the live amendment table the service
 	// folds each validated flag ledger into (enabled set + majority projection +
 	// blocked state). Optional — nil disables amendment-table resync.
-	AmendmentTable *amendment.AmendmentTable
+	Table *amendment.Table
 
 	// TxQ optionally overrides the transaction-queue configuration
 	// (built from the operator's [transaction_queue] stanza via
@@ -97,18 +103,20 @@ type Service struct {
 	// back into the Service, so this one rule keeps submit/close deadlock-free.
 	mu sync.RWMutex
 
-	config Config
-	logger xrpllog.Logger
+	config         Config
+	logger         xrpllog.Logger
+	configuredFees drops.Fees
 
 	// NodeStore for persistent storage (nil if in-memory only)
-	nodeStore nodestore.Database
+	nodeStore    nodestore.Database
+	shamapFamily shamap.Family
 
 	// RelationalDB for transaction indexing (nil if not configured)
 	relationalDB relationaldb.RepositoryManager
 
 	// amendmentTable is the live amendment table folded by each validated flag
 	// ledger (nil disables resync). Has its own internal mutex.
-	amendmentTable *amendment.AmendmentTable
+	amendmentTable *amendment.Table
 
 	// Current open ledger (accepting transactions)
 	openLedger *ledger.Ledger
@@ -117,7 +125,9 @@ type Service struct {
 	closedLedger *ledger.Ledger
 
 	// Validated ledger (highest validated)
-	validatedLedger *ledger.Ledger
+	validatedLedger   *ledger.Ledger
+	validatedSignTime time.Time
+	validatedAgeNow   func() time.Time
 
 	// Genesis ledger
 	genesisLedger *ledger.Ledger
@@ -129,10 +139,14 @@ type Service struct {
 	// sync exclusively by putHistoryLocked/deleteHistoryLocked.
 	ledgerByHash map[[32]byte]uint32
 
+	// Persisted ledgers loaded by hash are cached separately because the node
+	// store may contain non-canonical ledgers at a sequence already in history.
+	persistedLedgers    map[[32]byte]*ledger.Ledger
+	persistedLedgerFIFO [][32]byte
+
 	// Transaction index (hash -> ledger sequence) - in-memory cache
 	txIndex map[[32]byte]uint32
 
-	// Transaction position within its ledger (hash -> 0-based index)
 	txPositionIndex map[[32]byte]uint32
 
 	// Pending transactions accumulated during the open ledger phase;
@@ -164,6 +178,10 @@ type Service struct {
 	// Invoked off-thread when SetValidatedLedger stashes a validation for a seq
 	// beyond closed (arms the inbound-ledger acquisition).
 	onPendingValidationStashed func(seq uint32, hash [32]byte)
+
+	// Rechecks the current validation set before a stashed notification promotes
+	// a ledger that arrived later.
+	pendingValidationResolver PendingValidationResolver
 
 	// Invoked after the validated tip advances and after mu is released.
 	onValidatedLedger func(seq uint32, hash, parentHash [32]byte)
@@ -229,9 +247,24 @@ type Service struct {
 	// the TxQ's timeLeap flag by processClosedLedgerLocked. Zero in standalone.
 	lastConsensusRoundTime time.Duration
 
-	// persistCh feeds the single persistence worker (see enqueuePersist);
-	// nil until Start.
-	persistCh chan persistJob
+	persistMu       sync.Mutex
+	persistQueue    []persistJob
+	persistWake     chan struct{}
+	persistStarted  bool
+	persistStopping bool
+	persistWG       sync.WaitGroup
+	validatedTipMu  sync.Mutex
+
+	// ledgerEventCh feeds the single accepted-ledger event dispatcher (see
+	// dispatchLedgerEvent). A single consumer preserves FIFO delivery and runs
+	// eventCallback single-threaded, replacing per-event goroutines that ran the
+	// callback concurrently with itself — racing the subscriber's mutable state
+	// and reordering ledgerClosed stream events. Started by Start, joined by Stop.
+	ledgerEventCh       chan *LedgerAcceptedEvent
+	ledgerEventQuit     chan struct{}
+	ledgerEventStopped  bool
+	ledgerEventWG       sync.WaitGroup
+	droppedLedgerEvents atomic.Uint64
 
 	// configCacheMu guards the memoised open-ledger ApplyConfig below. The config
 	// is a pure function of closedLedger, rebuilt only when it advances, keeping
@@ -259,15 +292,27 @@ func New(cfg Config) (*Service, error) {
 	if cfg.TxQ != nil {
 		txqCfg = *cfg.TxQ
 	}
+	standardFees := genesis.StandardFees()
+	configuredFees := drops.Fees{
+		Base:      standardFees.BaseFee,
+		Reserve:   standardFees.ReserveBase,
+		Increment: standardFees.ReserveIncrement,
+	}
+	if cfg.ConfiguredFees != nil {
+		configuredFees = *cfg.ConfiguredFees
+	}
 
 	s := &Service{
 		config:                   cfg,
 		logger:                   logger.Named(xrpllog.PartitionLedger),
+		configuredFees:           configuredFees,
 		nodeStore:                cfg.NodeStore,
+		shamapFamily:             cfg.SHAMapFamily,
 		relationalDB:             cfg.RelationalDB,
-		amendmentTable:           cfg.AmendmentTable,
+		amendmentTable:           cfg.Table,
 		ledgerHistory:            make(map[uint32]*ledger.Ledger),
 		ledgerByHash:             make(map[[32]byte]uint32),
+		persistedLedgers:         make(map[[32]byte]*ledger.Ledger),
 		txIndex:                  make(map[[32]byte]uint32),
 		txPositionIndex:          make(map[[32]byte]uint32),
 		pendingValidation:        make(map[[32]byte]*LedgerAcceptedEvent),
@@ -276,15 +321,16 @@ func New(cfg Config) (*Service, error) {
 		txQueue:                  txq.New(txqCfg),
 		localTxs:                 localtxs.New(),
 		feeTrack:                 feetrack.New(),
+		validatedAgeNow:          time.Now,
+		persistWake:              make(chan struct{}, 1),
 	}
-
 	return s, nil
 }
 
-// syncAmendmentTable folds a newly-validated ledger into the live amendment
+// syncTable folds a newly-validated ledger into the live amendment
 // table (enabled set + majority projection + block detection). Gated to
 // flag-ledger windows by NeedValidatedLedger; no-op when no table is configured.
-func (s *Service) syncAmendmentTable(l *ledger.Ledger) {
+func (s *Service) syncTable(l *ledger.Ledger) {
 	if s.amendmentTable == nil || l == nil {
 		return
 	}
@@ -317,9 +363,9 @@ func (s *Service) syncAmendmentTable(l *ledger.Ledger) {
 	}
 }
 
-// AmendmentTable returns the live amendment table shared with the consensus
+// Table returns the live amendment table shared with the consensus
 // adaptor, or nil when none is configured.
-func (s *Service) AmendmentTable() *amendment.AmendmentTable {
+func (s *Service) Table() *amendment.Table {
 	return s.amendmentTable
 }
 
@@ -341,11 +387,11 @@ func (s *Service) SetAmendmentVote(ctx context.Context, id [32]byte, vetoed bool
 		return nil
 	}
 	name := ""
-	if f := amendment.GetFeature(id); f != nil {
+	if f := amendment.FeatureByID(id); f != nil {
 		name = f.Name
 	}
 	return s.relationalDB.Amendment().SaveAmendmentVote(ctx, &relationaldb.AmendmentVoteRecord{
-		Amendment: strings.ToUpper(hex.EncodeToString(id[:])),
+		Amendment: protocol.Hash256Hex(id),
 		Name:      name,
 		Vetoed:    vetoed,
 	})
@@ -376,9 +422,20 @@ func (s *Service) Start() error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	if s.persistCh == nil {
-		s.persistCh = make(chan persistJob, 32)
+	s.persistMu.Lock()
+	startWorkers := !s.persistStarted
+	if startWorkers {
+		s.persistStarted = true
+		s.persistWG.Add(1)
+	}
+	s.persistMu.Unlock()
+	if startWorkers {
 		go s.runPersistWorker()
+
+		s.ledgerEventCh = make(chan *LedgerAcceptedEvent, ledgerEventBufferDepth)
+		s.ledgerEventQuit = make(chan struct{})
+		s.ledgerEventWG.Add(1)
+		go s.runLedgerEventDispatcher()
 	}
 
 	genesisResult, err := genesis.Create(s.config.GenesisConfig)
@@ -393,6 +450,9 @@ func (s *Service) Start() error {
 		genesisResult.TxMap,
 		drops.Fees{},
 	)
+	if s.shamapFamily != nil {
+		genesisLedger.SetSHAMapFamily(s.shamapFamily)
+	}
 
 	s.genesisLedger = genesisLedger
 	s.putHistoryLocked(genesisLedger)
@@ -417,6 +477,7 @@ func (s *Service) Start() error {
 		}
 		s.closedLedger = nextLedger
 		s.validatedLedger = nextLedger
+		s.validatedSignTime = nextLedger.CloseTime()
 		s.putHistoryLocked(nextLedger)
 
 		openLedger, err := ledger.NewOpen(nextLedger, time.Now())
@@ -425,13 +486,31 @@ func (s *Service) Start() error {
 		}
 		s.openLedger = openLedger
 	} else {
-		// Consensus mode: stay at genesis (seq 1) and wait to adopt a peer's ledger.
-		s.closedLedger = genesisLedger
-		s.validatedLedger = genesisLedger
-		s.needsInitialSync = true
+		var latest *ledger.Ledger
+		if s.config.FastLoad {
+			latest, err = s.loadLatestLedger(context.Background())
+			if err != nil {
+				s.logger.Warn("fast load failed; starting from genesis", "err", err)
+			}
+		}
+		if latest == nil {
+			s.closedLedger = genesisLedger
+			s.validatedLedger = genesisLedger
+			s.needsInitialSync = true
+		} else {
+			s.closedLedger = latest
+			s.validatedLedger = latest
+			s.validatedSignTime = latest.CloseTime()
+			if latest.Sequence() != genesisLedger.Sequence() {
+				s.deleteHistoryLocked(genesisLedger.Sequence())
+			}
+			s.putHistoryLocked(latest)
+			s.collectTransactionResults(latest, latest.Sequence(), latest.Hash())
+			s.needsInitialSync = false
+			s.logger.Info("Loaded persisted validated ledger", "sequence", latest.Sequence())
+		}
 
-		// Create open ledger (seq 2) on top of genesis — will be replaced on adoption
-		openLedger, err := ledger.NewOpen(genesisLedger, time.Now())
+		openLedger, err := ledger.NewOpen(s.closedLedger, time.Now())
 		if err != nil {
 			return fmt.Errorf("failed to create open ledger: %w", err)
 		}
@@ -549,7 +628,7 @@ func (s *Service) tickLoadFeeLocked() {
 	if s.feeTrack == nil || s.txQueue == nil || s.openLedger == nil {
 		return
 	}
-	metrics := s.txQueue.GetMetrics(s.openLedger.TxCount())
+	metrics := s.txQueue.Metrics(s.openLedger.TxCount())
 	if metrics.OpenLedgerFeeLevel > metrics.ReferenceFeeLevel {
 		s.feeTrack.RaiseLocalFee()
 	} else {
@@ -671,6 +750,14 @@ func rulesFromLedger(parent *ledger.Ledger, logger xrpllog.Logger) *amendment.Ru
 	return rules
 }
 
+// TransactionRules returns the amendment rules used for transactions entering
+// the current open ledger.
+func (s *Service) TransactionRules() *amendment.Rules {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return rulesFromLedger(s.closedLedger, s.logger)
+}
+
 // SubmitOpenLedgerTx routes a tx blob through the persistent OpenLedger view and
 // returns the per-tx classification (ResultFailure before Start).
 //
@@ -700,7 +787,7 @@ func (s *Service) SubmitOpenLedgerTx(blob []byte, local bool) (openledger.Result
 	// per-tx cost runs concurrently across ingress workers instead of serialising
 	// under modifyMu; the in-strand check then reuses the cached verdict (#1105).
 	if !cfg.SkipSignatureVerification {
-		txengine.PrewarmSignature(ptx.Parsed, cfg.Rules)
+		txengine.PrewarmSignature(ptx.Parsed)
 	}
 	_, res := ov.Submit(ptx, cfg, queue)
 
@@ -737,7 +824,7 @@ func (s *Service) PrewarmSignatures(blobs [][]byte) {
 			defer wg.Done()
 			for blob := range work {
 				if ptx, err := openledger.ParsePendingTx(blob); err == nil {
-					txengine.PrewarmSignature(ptx.Parsed, cfg.Rules)
+					txengine.PrewarmSignature(ptx.Parsed)
 				}
 			}
 		}()
@@ -838,6 +925,37 @@ func (s *Service) GetValidatedLedger() *ledger.Ledger {
 	return s.validatedLedger
 }
 
+// GetValidatedLedgerAge returns the age of the trusted-validation signing-time
+// median for the current validated ledger.
+func (s *Service) GetValidatedLedgerAge() time.Duration {
+	s.mu.RLock()
+	signTime := s.validatedSignTime
+	now := s.validatedAgeNow
+	s.mu.RUnlock()
+	if signTime.IsZero() {
+		return 14 * 24 * time.Hour
+	}
+	if now == nil {
+		now = time.Now
+	}
+	current := now()
+	current = time.Unix(current.Unix(), 0).UTC()
+	signTime = time.Unix(signTime.Unix(), 0).UTC()
+	age := current.Sub(signTime)
+	if age < 0 {
+		return 0
+	}
+	return age
+}
+
+// SetValidatedLedgerAgeClock sets the adjusted close-time clock used for
+// validated-ledger freshness checks.
+func (s *Service) SetValidatedLedgerAgeClock(now func() time.Time) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.validatedAgeNow = now
+}
+
 // XRPFeesEnabled reports whether the XRPFees amendment is active on the
 // validated ledger. The subscribe ack uses it to gate the deprecated
 // fee_ref field, mirroring rippled's subLedger.
@@ -870,10 +988,10 @@ func (s *Service) GetLedgerBySequence(seq uint32) (*ledger.Ledger, error) {
 	return nil, ErrLedgerNotFound
 }
 
-// GetAdoptedLedgerBySequence returns a closed ledger from adopted history only,
+// AdoptedLedgerBySequence returns a closed ledger from adopted history only,
 // never the mutable open ledger — the consensus catch-up walk needs immutable,
 // parent-hash-chained ledgers.
-func (s *Service) GetAdoptedLedgerBySequence(seq uint32) (*ledger.Ledger, error) {
+func (s *Service) AdoptedLedgerBySequence(seq uint32) (*ledger.Ledger, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	if l, ok := s.ledgerHistory[seq]; ok {
@@ -882,17 +1000,140 @@ func (s *Service) GetAdoptedLedgerBySequence(seq uint32) (*ledger.Ledger, error)
 	return nil, ErrLedgerNotFound
 }
 
-// GetLedgerByHash returns a ledger by its hash
 func (s *Service) GetLedgerByHash(hash [32]byte) (*ledger.Ledger, error) {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
+	return s.getLedgerByHash(context.Background(), hash)
+}
 
+func (s *Service) GetLedgerByHashContext(ctx context.Context, hash [32]byte) (*ledger.Ledger, error) {
+	return s.getLedgerByHash(ctx, hash)
+}
+
+func (s *Service) getLedgerByHash(ctx context.Context, hash [32]byte) (*ledger.Ledger, error) {
+	s.mu.RLock()
 	if seq, ok := s.ledgerByHash[hash]; ok {
 		if l, ok := s.ledgerHistory[seq]; ok {
+			s.mu.RUnlock()
 			return l, nil
 		}
 	}
-	return nil, ErrLedgerNotFound
+	if l, ok := s.persistedLedgers[hash]; ok {
+		s.mu.RUnlock()
+		return s.validatedPersistedLedger(ctx, l)
+	}
+	canLoad := s.nodeStore != nil && s.shamapFamily != nil &&
+		s.relationalDB != nil && s.relationalDB.Ledger() != nil
+	s.mu.RUnlock()
+	if !canLoad {
+		return nil, ErrLedgerNotFound
+	}
+
+	loaded, err := s.loadPersistedLedgerByHash(ctx, hash)
+	if err != nil {
+		return nil, err
+	}
+
+	s.mu.Lock()
+	if seq, ok := s.ledgerByHash[hash]; ok {
+		if l, ok := s.ledgerHistory[seq]; ok {
+			s.mu.Unlock()
+			return l, nil
+		}
+	}
+	if l, ok := s.persistedLedgers[hash]; ok {
+		s.mu.Unlock()
+		return s.validatedPersistedLedger(ctx, l)
+	}
+	s.cachePersistedLedgerLocked(loaded)
+	s.mu.Unlock()
+	return s.validatedPersistedLedger(ctx, loaded)
+}
+
+func (s *Service) loadPersistedLedgerByHash(ctx context.Context, hash [32]byte) (*ledger.Ledger, error) {
+	info, err := s.relationalDB.Ledger().GetLedgerInfoByHash(ctx, relationaldb.Hash(hash))
+	if errors.Is(err, relationaldb.ErrLedgerNotFound) {
+		return nil, ErrLedgerNotFound
+	}
+	if err != nil {
+		return nil, fmt.Errorf("load ledger %x metadata: %w", hash[:8], err)
+	}
+	if info == nil {
+		return nil, ErrLedgerNotFound
+	}
+	loaded, err := s.loadStoredLedgerByHash(ctx, hash)
+	if err != nil {
+		if errors.Is(err, errStoredLedgerUnavailable) {
+			return nil, fmt.Errorf("%w: load ledger %x from nodestore: %v", ErrLedgerNotFound, hash[:8], err)
+		}
+		return nil, fmt.Errorf("load ledger %x from nodestore: %w", hash[:8], err)
+	}
+	if loaded == nil {
+		return nil, ErrLedgerNotFound
+	}
+	if !storedHeaderMatchesInfo(loaded.Header(), info) {
+		return nil, fmt.Errorf("%w: ledger %x header does not match persisted metadata", ErrLedgerNotFound, hash[:8])
+	}
+	return loaded, nil
+}
+
+func (s *Service) validatedPersistedLedger(ctx context.Context, l *ledger.Ledger) (*ledger.Ledger, error) {
+	validated, err := s.persistedLedgerIsValidated(ctx, l.Hash(), l.Sequence())
+	if err != nil || !validated {
+		return l, err
+	}
+	copy, err := l.Snapshot()
+	if err != nil {
+		return nil, err
+	}
+	if err := copy.SetValidated(); err != nil {
+		return nil, err
+	}
+	return copy, nil
+}
+
+func (s *Service) persistedLedgerIsValidated(ctx context.Context, hash [32]byte, seq uint32) (bool, error) {
+	s.mu.RLock()
+	tip := s.validatedLedger
+	s.mu.RUnlock()
+	if tip == nil || seq > tip.Sequence() {
+		return false, nil
+	}
+	canonical, ok, err := tip.HashOfSeqContext(ctx, seq)
+	if canonicalProofUnavailable(err) {
+		return false, nil
+	}
+	if err != nil || ok {
+		return ok && canonical == hash, err
+	}
+	if seq%256 == 0 {
+		return false, nil
+	}
+	anchor64 := uint64(seq) + uint64(256-seq%256)
+	if anchor64 > uint64(tip.Sequence()) {
+		return false, nil
+	}
+	anchorHash, ok, err := tip.HashOfSeqContext(ctx, uint32(anchor64))
+	if canonicalProofUnavailable(err) {
+		return false, nil
+	}
+	if err != nil || !ok {
+		return false, err
+	}
+	anchor, err := s.loadPersistedLedgerByHash(ctx, anchorHash)
+	if errors.Is(err, ErrLedgerNotFound) {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	canonical, ok, err = anchor.HashOfSeqContext(ctx, seq)
+	if canonicalProofUnavailable(err) {
+		return false, nil
+	}
+	return ok && canonical == hash, err
+}
+
+func canonicalProofUnavailable(err error) bool {
+	return errors.Is(err, shamap.ErrNodeNotInStore) || errors.Is(err, shamap.ErrInvalidNodeData)
 }
 
 // GetCurrentLedgerIndex returns the current open ledger index
@@ -1081,9 +1322,9 @@ func (s *Service) GetGenesisAccount() (string, error) {
 	return address, err
 }
 
-// GetTxQMetrics returns the current TxQ metrics, or the zero value when
+// TxQMetrics returns the current TxQ metrics, or the zero value when
 // the queue isn't initialised.
-func (s *Service) GetTxQMetrics() txq.Metrics {
+func (s *Service) TxQMetrics() txq.Metrics {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	if s.txQueue == nil {
@@ -1093,29 +1334,29 @@ func (s *Service) GetTxQMetrics() txq.Metrics {
 	if s.openLedger != nil {
 		txInLedger = s.openLedger.TxCount()
 	}
-	return s.txQueue.GetMetrics(txInLedger)
+	return s.txQueue.Metrics(txInLedger)
 }
 
-// GetQueueAccountTxs returns the TxQ candidates queued for one account, sorted by
+// QueueAccountTxs returns the TxQ candidates queued for one account, sorted by
 // SeqProxy. Backs account_info's queue_data. Empty when no TxQ is wired.
-func (s *Service) GetQueueAccountTxs(account [20]byte) []*txq.CandidateDetails {
+func (s *Service) QueueAccountTxs(account [20]byte) []*txq.CandidateDetails {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	if s.txQueue == nil {
 		return nil
 	}
-	return s.txQueue.GetAccountTxs(account)
+	return s.txQueue.AccountTxs(account)
 }
 
-// GetQueueAllTxs returns every TxQ candidate, ordered by fee level. Backs the
+// QueueAllTxs returns every TxQ candidate, ordered by fee level. Backs the
 // ledger method's queue_data dump. Empty when no TxQ is wired.
-func (s *Service) GetQueueAllTxs() []*txq.CandidateDetails {
+func (s *Service) QueueAllTxs() []*txq.CandidateDetails {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	if s.txQueue == nil {
 		return nil
 	}
-	return s.txQueue.GetAllTxs()
+	return s.txQueue.AllTxs()
 }
 
 // GetServerInfo returns basic server information
@@ -1135,14 +1376,14 @@ func (s *Service) GetServerInfo() ServerInfo {
 	if s.closedLedger != nil {
 		info.ClosedLedgerSeq = s.closedLedger.Sequence()
 		info.ClosedLedgerHash = s.closedLedger.Hash()
-		info.ClosedLedgerCloseTime = rippleEpochSeconds(s.closedLedger.CloseTime())
+		info.ClosedLedgerCloseTime = protocol.RippleSeconds(s.closedLedger.CloseTime())
 	}
 
 	if s.validatedLedger != nil {
 		info.HaveValidated = true
 		info.ValidatedLedgerSeq = s.validatedLedger.Sequence()
 		info.ValidatedLedgerHash = s.validatedLedger.Hash()
-		info.ValidatedLedgerCloseTime = rippleEpochSeconds(s.validatedLedger.CloseTime())
+		info.ValidatedLedgerCloseTime = protocol.RippleSeconds(s.validatedLedger.CloseTime())
 	}
 
 	minSeq, maxSeq, haveRange := s.ledgerHistoryRangeLocked()
@@ -1188,22 +1429,8 @@ type ServerInfo struct {
 	NetworkID                uint32
 }
 
-// rippleEpochSeconds converts a wall-clock close time to seconds since
-// the XRPL epoch (2000-01-01 UTC). Returns 0 for the zero time so a
-// genesis-only node reports close_time=0 instead of a negative value.
-func rippleEpochSeconds(t time.Time) int64 {
-	if t.IsZero() {
-		return 0
-	}
-	s := t.Unix() - protocol.RippleEpochUnix
-	if s < 0 {
-		return 0
-	}
-	return s
-}
-
-// GetLedgerInfo returns information about a specific ledger
-func (s *Service) GetLedgerInfo(seq uint32) (*LedgerInfo, error) {
+// LedgerInfo returns information about a specific ledger
+func (s *Service) LedgerInfo(seq uint32) (*LedgerInfo, error) {
 	l, err := s.GetLedgerBySequence(seq)
 	if err != nil {
 		return nil, err
@@ -1232,8 +1459,8 @@ type LedgerInfo struct {
 	Header     header.LedgerHeader
 }
 
-// GetPendingTxBlobs returns the raw transaction blobs for all pending transactions.
-func (s *Service) GetPendingTxBlobs() [][]byte {
+// PendingTxBlobs returns the raw transaction blobs for all pending transactions.
+func (s *Service) PendingTxBlobs() [][]byte {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 

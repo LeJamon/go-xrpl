@@ -3,10 +3,11 @@ package state
 import (
 	"encoding/hex"
 	"fmt"
+	"strconv"
 	"strings"
 
 	addresscodec "github.com/LeJamon/go-xrpl/codec/addresscodec"
-	binarycodec "github.com/LeJamon/go-xrpl/codec/binarycodec"
+	"github.com/LeJamon/go-xrpl/internal/tx/ledgerfields"
 )
 
 // Field type code for UInt8 (not defined in account_root.go)
@@ -28,7 +29,9 @@ type MPTokenIssuanceData struct {
 	LockedAmount      *uint64
 	MPTokenMetadata   string  // hex-encoded
 	DomainID          *string // hex-encoded 32-byte hash, nil if not set
+	ReferenceHolding  *string // hex-encoded 32-byte hash (vault share underlying), nil if not set
 	Flags             uint32
+	MutableFlags      uint32 // soeDEFAULT: CanMutate permission bits, 0 when absent
 
 	// Threading fields. MPTokenIssuance is a threaded type, so these must
 	// survive a parse→serialize round-trip — otherwise a re-serialize during
@@ -59,68 +62,63 @@ type MPTokenData struct {
 
 // ParseMPTokenIssuance parses an MPTokenIssuance ledger entry from binary data.
 func ParseMPTokenIssuance(data []byte) (*MPTokenIssuanceData, error) {
-	issuance := &MPTokenIssuanceData{}
+	decoded := ledgerfields.New("MPTokenIssuance")
+	if decoded == nil {
+		return nil, fmt.Errorf("ledgerfields: MPTokenIssuance decoder is not registered")
+	}
+	if err := decoded.Decode(data); err != nil {
+		return nil, err
+	}
+	wire, ok := decoded.(*ledgerfields.MPTokenIssuance)
+	if !ok {
+		return nil, fmt.Errorf("ledgerfields: MPTokenIssuance decoder has type %T", decoded)
+	}
 
-	err := WalkFields(data, func(f Field) error {
-		switch f.TypeCode {
-		case stUInt8:
-			if f.FieldCode == 5 { // AssetScale (nth=5)
-				issuance.AssetScale = f.UInt8()
-			}
-
-		case stUInt16:
-			if f.FieldCode == 4 { // TransferFee (nth=4)
-				issuance.TransferFee = f.UInt16()
-			}
-
-		case stUInt32:
-			switch f.FieldCode {
-			case 2: // Flags
-				issuance.Flags = f.UInt32()
-			case 4: // Sequence
-				issuance.Sequence = f.UInt32()
-			case 5: // PreviousTxnLgrSeq
-				issuance.PreviousTxnLgrSeq = f.UInt32()
-			}
-
-		case stUInt64:
-			switch f.FieldCode {
-			case 4: // OwnerNode (nth=4)
-				issuance.OwnerNode = f.UInt64()
-			case 24: // MaximumAmount (nth=24)
-				v := f.UInt64()
-				issuance.MaximumAmount = &v
-			case 25: // OutstandingAmount (nth=25)
-				issuance.OutstandingAmount = f.UInt64()
-			case 29: // LockedAmount (nth=29)
-				v := f.UInt64()
-				issuance.LockedAmount = &v
-			}
-
-		case stAccountID:
-			if f.FieldCode == 4 { // Issuer (nth=4)
-				if id, ok := f.AccountID(); ok {
-					issuance.Issuer = id
-				}
-			}
-
-		case stHash256:
-			switch f.FieldCode {
-			case 5: // PreviousTxnID
-				issuance.PreviousTxnID = f.Hash256()
-			case 34: // DomainID (nth=34)
-				domainHex := hex.EncodeToString(f.Value)
-				issuance.DomainID = &domainHex
-			}
-
-		case stBlob:
-			if f.FieldCode == 30 { // MPTokenMetadata (nth=30)
-				issuance.MPTokenMetadata = hex.EncodeToString(f.VLBytes())
-			}
+	issuance := &MPTokenIssuanceData{
+		Sequence:          wire.Sequence,
+		TransferFee:       uint16(wire.TransferFee),
+		AssetScale:        uint8(wire.AssetScale),
+		MPTokenMetadata:   strings.ToLower(wire.MPTokenMetadata),
+		Flags:             wire.Flags,
+		MutableFlags:      wire.MutableFlags,
+		PreviousTxnLgrSeq: wire.PreviousTxnLgrSeq,
+	}
+	var err error
+	if wire.Issuer != "" {
+		issuance.Issuer, err = DecodeAccountID(wire.Issuer)
+		if err != nil {
+			return nil, fmt.Errorf("failed to decode MPTokenIssuance Issuer: %w", err)
 		}
-		return nil
-	})
+	}
+	if wire.OwnerNode != "" {
+		issuance.OwnerNode, err = parseMPTUint64(wire.OwnerNode, 16, "OwnerNode")
+		if err != nil {
+			return nil, err
+		}
+	}
+	if wire.OutstandingAmount != "" {
+		issuance.OutstandingAmount, err = parseMPTUint64(wire.OutstandingAmount, 10, "OutstandingAmount")
+		if err != nil {
+			return nil, err
+		}
+	}
+	issuance.MaximumAmount, err = parseMPTOptionalUint64(wire.MaximumAmount, "MaximumAmount")
 	if err != nil {
+		return nil, err
+	}
+	issuance.LockedAmount, err = parseMPTOptionalUint64(wire.LockedAmount, "LockedAmount")
+	if err != nil {
+		return nil, err
+	}
+	if wire.DomainID != "" {
+		domainID := strings.ToLower(wire.DomainID)
+		issuance.DomainID = &domainID
+	}
+	if wire.ReferenceHolding != "" {
+		referenceHolding := strings.ToLower(wire.ReferenceHolding)
+		issuance.ReferenceHolding = &referenceHolding
+	}
+	if err := decodeMPTFixedHex(wire.PreviousTxnID, issuance.PreviousTxnID[:], "PreviousTxnID"); err != nil {
 		return nil, err
 	}
 
@@ -134,102 +132,130 @@ func SerializeMPTokenIssuance(issuance *MPTokenIssuanceData) ([]byte, error) {
 		return nil, fmt.Errorf("failed to encode issuer address: %w", err)
 	}
 
-	jsonObj := map[string]any{
-		"LedgerEntryType":   "MPTokenIssuance",
-		"Flags":             issuance.Flags,
-		"Issuer":            issuerAddress,
-		"Sequence":          issuance.Sequence,
-		"OwnerNode":         fmt.Sprintf("%X", issuance.OwnerNode),
-		"OutstandingAmount": fmt.Sprintf("%d", issuance.OutstandingAmount),
-	}
+	entry := &ledgerfields.MPTokenIssuance{}
+	entry.SetFlags(issuance.Flags)
+	entry.SetIssuer(issuerAddress)
+	entry.SetSequence(issuance.Sequence)
+	entry.SetOwnerNode(fmt.Sprintf("%x", issuance.OwnerNode))
+	entry.SetOutstandingAmount(fmt.Sprintf("%d", issuance.OutstandingAmount))
 
-	if issuance.TransferFee > 0 {
-		jsonObj["TransferFee"] = issuance.TransferFee
-	}
-
-	if issuance.AssetScale > 0 {
-		jsonObj["AssetScale"] = issuance.AssetScale
-	}
+	entry.SetTransferFee(issuance.TransferFee)
+	entry.SetAssetScale(issuance.AssetScale)
 
 	if issuance.MaximumAmount != nil {
-		jsonObj["MaximumAmount"] = fmt.Sprintf("%d", *issuance.MaximumAmount)
+		entry.SetMaximumAmount(fmt.Sprintf("%d", *issuance.MaximumAmount))
 	}
 
-	if issuance.LockedAmount != nil && *issuance.LockedAmount > 0 {
-		jsonObj["LockedAmount"] = fmt.Sprintf("%d", *issuance.LockedAmount)
+	if issuance.LockedAmount != nil {
+		entry.SetLockedAmount(fmt.Sprintf("%d", *issuance.LockedAmount))
 	}
 
 	if issuance.MPTokenMetadata != "" {
-		jsonObj["MPTokenMetadata"] = strings.ToUpper(issuance.MPTokenMetadata)
+		entry.SetMPTokenMetadata(strings.ToUpper(issuance.MPTokenMetadata))
 	}
 
 	if issuance.DomainID != nil && *issuance.DomainID != "" {
-		jsonObj["DomainID"] = strings.ToUpper(*issuance.DomainID)
+		entry.SetDomainID(strings.ToUpper(*issuance.DomainID))
 	}
+
+	if issuance.ReferenceHolding != nil && *issuance.ReferenceHolding != "" {
+		entry.SetReferenceHolding(strings.ToUpper(*issuance.ReferenceHolding))
+	}
+
+	entry.SetMutableFlags(issuance.MutableFlags)
 
 	var zeroHash [32]byte
 	if issuance.PreviousTxnID != zeroHash {
-		jsonObj["PreviousTxnID"] = strings.ToUpper(hex.EncodeToString(issuance.PreviousTxnID[:]))
-		jsonObj["PreviousTxnLgrSeq"] = issuance.PreviousTxnLgrSeq
+		entry.SetPreviousTxnID(strings.ToUpper(hex.EncodeToString(issuance.PreviousTxnID[:])))
+		entry.SetPreviousTxnLgrSeq(issuance.PreviousTxnLgrSeq)
 	}
 
-	hexStr, err := binarycodec.Encode(jsonObj)
-	if err != nil {
-		return nil, fmt.Errorf("failed to encode MPTokenIssuance: %w", err)
-	}
-
-	return hex.DecodeString(hexStr)
+	return entry.Encode()
 }
 
 // ParseMPToken parses an MPToken ledger entry from binary data.
 func ParseMPToken(data []byte) (*MPTokenData, error) {
-	token := &MPTokenData{}
+	decoded := ledgerfields.New("MPToken")
+	if decoded == nil {
+		return nil, fmt.Errorf("ledgerfields: MPToken decoder is not registered")
+	}
+	if err := decoded.Decode(data); err != nil {
+		return nil, err
+	}
+	wire, ok := decoded.(*ledgerfields.MPToken)
+	if !ok {
+		return nil, fmt.Errorf("ledgerfields: MPToken decoder has type %T", decoded)
+	}
 
-	err := WalkFields(data, func(f Field) error {
-		switch f.TypeCode {
-		case stUInt32:
-			switch f.FieldCode {
-			case 2: // Flags
-				token.Flags = f.UInt32()
-			case 5: // PreviousTxnLgrSeq
-				token.PreviousTxnLgrSeq = f.UInt32()
-			}
-
-		case stUInt64:
-			switch f.FieldCode {
-			case 4: // OwnerNode (nth=4)
-				token.OwnerNode = f.UInt64()
-			case 26: // MPTAmount (nth=26)
-				token.MPTAmount = f.UInt64()
-			case 29: // LockedAmount (nth=29)
-				v := f.UInt64()
-				token.LockedAmount = &v
-			}
-
-		case stAccountID:
-			if f.FieldCode == 1 { // Account (nth=1)
-				if id, ok := f.AccountID(); ok {
-					token.Account = id
-				}
-			}
-
-		case stHash192:
-			if f.FieldCode == 1 { // MPTokenIssuanceID (nth=1)
-				token.MPTokenIssuanceID = f.Hash192()
-			}
-
-		case stHash256:
-			if f.FieldCode == 5 { // PreviousTxnID
-				token.PreviousTxnID = f.Hash256()
-			}
+	token := &MPTokenData{
+		Flags:             wire.Flags,
+		PreviousTxnLgrSeq: wire.PreviousTxnLgrSeq,
+	}
+	var err error
+	if wire.Account != "" {
+		token.Account, err = DecodeAccountID(wire.Account)
+		if err != nil {
+			return nil, fmt.Errorf("failed to decode MPToken Account: %w", err)
 		}
-		return nil
-	})
+	}
+	if err := decodeMPTFixedHex(wire.MPTokenIssuanceID, token.MPTokenIssuanceID[:], "MPTokenIssuanceID"); err != nil {
+		return nil, err
+	}
+	if wire.OwnerNode != "" {
+		token.OwnerNode, err = parseMPTUint64(wire.OwnerNode, 16, "OwnerNode")
+		if err != nil {
+			return nil, err
+		}
+	}
+	if wire.MPTAmount != "" {
+		token.MPTAmount, err = parseMPTUint64(wire.MPTAmount, 10, "MPTAmount")
+		if err != nil {
+			return nil, err
+		}
+	}
+	token.LockedAmount, err = parseMPTOptionalUint64(wire.LockedAmount, "LockedAmount")
 	if err != nil {
+		return nil, err
+	}
+	if err := decodeMPTFixedHex(wire.PreviousTxnID, token.PreviousTxnID[:], "PreviousTxnID"); err != nil {
 		return nil, err
 	}
 
 	return token, nil
+}
+
+func parseMPTUint64(value string, base int, field string) (uint64, error) {
+	parsed, err := strconv.ParseUint(value, base, 64)
+	if err != nil {
+		return 0, fmt.Errorf("failed to decode %s: %w", field, err)
+	}
+	return parsed, nil
+}
+
+func parseMPTOptionalUint64(value, field string) (*uint64, error) {
+	if value == "" {
+		return nil, nil
+	}
+	parsed, err := parseMPTUint64(value, 10, field)
+	if err != nil {
+		return nil, err
+	}
+	return &parsed, nil
+}
+
+func decodeMPTFixedHex(value string, destination []byte, field string) error {
+	if value == "" {
+		return nil
+	}
+	decoded, err := hex.DecodeString(value)
+	if err != nil {
+		return fmt.Errorf("failed to decode %s: %w", field, err)
+	}
+	if len(decoded) != len(destination) {
+		return fmt.Errorf("failed to decode %s: got %d bytes, want %d", field, len(decoded), len(destination))
+	}
+	copy(destination, decoded)
+	return nil
 }
 
 // SerializeMPToken serializes an MPToken to binary format.
@@ -239,34 +265,22 @@ func SerializeMPToken(token *MPTokenData) ([]byte, error) {
 		return nil, fmt.Errorf("failed to encode account address: %w", err)
 	}
 
-	jsonObj := map[string]any{
-		"LedgerEntryType":   "MPToken",
-		"Flags":             token.Flags,
-		"Account":           accountAddress,
-		"MPTokenIssuanceID": strings.ToUpper(hex.EncodeToString(token.MPTokenIssuanceID[:])),
-		"OwnerNode":         fmt.Sprintf("%X", token.OwnerNode),
-	}
+	entry := &ledgerfields.MPToken{}
+	entry.SetFlags(token.Flags)
+	entry.SetAccount(accountAddress)
+	entry.SetMPTokenIssuanceID(strings.ToUpper(hex.EncodeToString(token.MPTokenIssuanceID[:])))
+	entry.SetOwnerNode(fmt.Sprintf("%x", token.OwnerNode))
+	entry.SetMPTAmount(fmt.Sprintf("%d", token.MPTAmount))
 
-	// sfMPTAmount is soeDEFAULT on ltMPTOKEN (ledger_entries.macro), so rippled
-	// omits it when zero; emitting MPTAmount:0 diverges the SLE state (account_hash).
-	if token.MPTAmount != 0 {
-		jsonObj["MPTAmount"] = fmt.Sprintf("%d", token.MPTAmount)
-	}
-
-	if token.LockedAmount != nil && *token.LockedAmount > 0 {
-		jsonObj["LockedAmount"] = fmt.Sprintf("%d", *token.LockedAmount)
+	if token.LockedAmount != nil {
+		entry.SetLockedAmount(fmt.Sprintf("%d", *token.LockedAmount))
 	}
 
 	var zeroHash [32]byte
 	if token.PreviousTxnID != zeroHash {
-		jsonObj["PreviousTxnID"] = strings.ToUpper(hex.EncodeToString(token.PreviousTxnID[:]))
-		jsonObj["PreviousTxnLgrSeq"] = token.PreviousTxnLgrSeq
+		entry.SetPreviousTxnID(strings.ToUpper(hex.EncodeToString(token.PreviousTxnID[:])))
+		entry.SetPreviousTxnLgrSeq(token.PreviousTxnLgrSeq)
 	}
 
-	hexStr, err := binarycodec.Encode(jsonObj)
-	if err != nil {
-		return nil, fmt.Errorf("failed to encode MPToken: %w", err)
-	}
-
-	return hex.DecodeString(hexStr)
+	return entry.Encode()
 }

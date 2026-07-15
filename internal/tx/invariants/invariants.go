@@ -74,30 +74,31 @@ type TxType = protocol.TxType
 // Transaction type constants used by invariant checks, aliased from the
 // protocol package.
 const (
-	TypePayment                = protocol.TxTypePayment
-	TypeEscrowFinish           = protocol.TxTypeEscrowFinish
-	TypeOfferCreate            = protocol.TxTypeOfferCreate
-	TypeCheckCash              = protocol.TxTypeCheckCash
-	TypeAccountDelete          = protocol.TxTypeAccountDelete
-	TypeNFTokenMint            = protocol.TxTypeNFTokenMint
-	TypeNFTokenBurn            = protocol.TxTypeNFTokenBurn
-	TypeClawback               = protocol.TxTypeClawback
-	TypeAMMClawback            = protocol.TxTypeAMMClawback
-	TypeAMMCreate              = protocol.TxTypeAMMCreate
-	TypeAMMDeposit             = protocol.TxTypeAMMDeposit
-	TypeAMMWithdraw            = protocol.TxTypeAMMWithdraw
-	TypeAMMVote                = protocol.TxTypeAMMVote
-	TypeAMMBid                 = protocol.TxTypeAMMBid
-	TypeAMMDelete              = protocol.TxTypeAMMDelete
-	TypeMPTokenIssuanceCreate  = protocol.TxTypeMPTokenIssuanceCreate
-	TypeMPTokenIssuanceDestroy = protocol.TxTypeMPTokenIssuanceDestroy
-	TypeMPTokenIssuanceSet     = protocol.TxTypeMPTokenIssuanceSet
-	TypeMPTokenAuthorize       = protocol.TxTypeMPTokenAuthorize
-	TypePermissionedDomainSet  = protocol.TxTypePermissionedDomainSet
-	TypeVaultCreate            = protocol.TxTypeVaultCreate
-	TypeVaultDelete            = protocol.TxTypeVaultDelete
-	TypeVaultDeposit           = protocol.TxTypeVaultDeposit
-	TypeBatch                  = protocol.TxTypeBatch
+	TypePayment                  = protocol.TxTypePayment
+	TypeEscrowFinish             = protocol.TxTypeEscrowFinish
+	TypeOfferCreate              = protocol.TxTypeOfferCreate
+	TypeCheckCash                = protocol.TxTypeCheckCash
+	TypeAccountDelete            = protocol.TxTypeAccountDelete
+	TypeNFTokenMint              = protocol.TxTypeNFTokenMint
+	TypeNFTokenBurn              = protocol.TxTypeNFTokenBurn
+	TypeClawback                 = protocol.TxTypeClawback
+	TypeAMMClawback              = protocol.TxTypeAMMClawback
+	TypeAMMCreate                = protocol.TxTypeAMMCreate
+	TypeAMMDeposit               = protocol.TxTypeAMMDeposit
+	TypeAMMWithdraw              = protocol.TxTypeAMMWithdraw
+	TypeAMMVote                  = protocol.TxTypeAMMVote
+	TypeAMMBid                   = protocol.TxTypeAMMBid
+	TypeAMMDelete                = protocol.TxTypeAMMDelete
+	TypeMPTokenIssuanceCreate    = protocol.TxTypeMPTokenIssuanceCreate
+	TypeMPTokenIssuanceDestroy   = protocol.TxTypeMPTokenIssuanceDestroy
+	TypeMPTokenIssuanceSet       = protocol.TxTypeMPTokenIssuanceSet
+	TypeMPTokenAuthorize         = protocol.TxTypeMPTokenAuthorize
+	TypePermissionedDomainSet    = protocol.TxTypePermissionedDomainSet
+	TypePermissionedDomainDelete = protocol.TxTypePermissionedDomainDelete
+	TypeVaultCreate              = protocol.TxTypeVaultCreate
+	TypeVaultDelete              = protocol.TxTypeVaultDelete
+	TypeVaultDeposit             = protocol.TxTypeVaultDeposit
+	TypeBatch                    = protocol.TxTypeBatch
 )
 
 // Result represents a transaction result code.
@@ -112,10 +113,22 @@ const (
 // Amount is the type used by invariant checks for XRPL amounts.
 type Amount = state.Amount
 
-// Asset represents an XRPL asset (currency + optional issuer).
+// Asset represents an XRPL asset: XRP, an issued currency (currency + issuer),
+// or a multi-purpose token (MPTIssuanceID). Field-identical to tx.Asset so the
+// engine adapter can convert without losing information (notably MPTIssuanceID,
+// which an MPT-asset AMM invariant needs to locate the pool holding).
 type Asset struct {
-	Currency string `json:"currency"`
-	Issuer   string `json:"issuer,omitempty"`
+	Currency      string `json:"currency"`
+	Issuer        string `json:"issuer,omitempty"`
+	MPTIssuanceID string `json:"mpt_issuance_id,omitempty"`
+}
+
+// IsMPT reports whether the asset is a multi-purpose token.
+func (a Asset) IsMPT() bool { return a.MPTIssuanceID != "" }
+
+// IsNative reports whether the asset is native XRP.
+func (a Asset) IsNative() bool {
+	return !a.IsMPT() && a.Issuer == "" && (a.Currency == "" || a.Currency == "XRP")
 }
 
 // validLedgerEntryTypes is the set of valid ledger entry type names that may be
@@ -150,6 +163,8 @@ var validLedgerEntryTypes = map[string]bool{
 	"Credential":                      true,
 	"PermissionedDomain":              true,
 	"Vault":                           true,
+	"LoanBroker":                      true,
+	"Loan":                            true,
 }
 
 // maxPermissionedDomainCredentials is the maximum number of credentials in a
@@ -198,7 +213,7 @@ func CheckInvariants(tx Transaction, result Result, fee uint64, txDeclaredFee ui
 			return checkValidMPTIssuance(tx, result, entries)
 		},
 		func() *InvariantViolation {
-			return checkValidPermissionedDomain(tx, result, entries)
+			return checkValidPermissionedDomain(tx, result, entries, rules)
 		},
 		func() *InvariantViolation {
 			return checkValidNFTokenPage(entries, view, rules)
@@ -207,10 +222,31 @@ func CheckInvariants(tx Transaction, result Result, fee uint64, txDeclaredFee ui
 			return checkAccountRootsDeletedClean(entries, view, rules)
 		},
 		func() *InvariantViolation {
-			return checkValidPermissionedDEX(tx, result, entries, view)
+			return checkValidPermissionedDEX(tx, result, entries, view, rules)
+		},
+		func() *InvariantViolation {
+			return checkValidBookDirectory(entries, view, rules)
 		},
 		func() *InvariantViolation {
 			return checkValidAMM(tx, result, entries, view, rules)
+		},
+		func() *InvariantViolation {
+			return checkValidPseudoAccounts(entries, rules)
+		},
+		func() *InvariantViolation {
+			return checkValidLoan(entries, rules)
+		},
+		func() *InvariantViolation {
+			return checkValidLoanBroker(entries, view, rules)
+		},
+		func() *InvariantViolation {
+			return checkValidVault(tx, result, fee, entries, view, rules)
+		},
+		func() *InvariantViolation {
+			return checkNoModifiedUnmodifiableFields(entries, rules)
+		},
+		func() *InvariantViolation {
+			return checkValidAmounts(entries, rules)
 		},
 	}
 	for _, check := range checks {

@@ -3,10 +3,11 @@ package service
 import (
 	"context"
 	"encoding/hex"
-	"strconv"
+	"errors"
 	"time"
 
 	"github.com/LeJamon/go-xrpl/internal/ledger"
+	ledgerselector "github.com/LeJamon/go-xrpl/internal/ledger/selector"
 	"github.com/LeJamon/go-xrpl/internal/ledger/service/svcerr"
 	"github.com/LeJamon/go-xrpl/keylet"
 	"github.com/LeJamon/go-xrpl/protocol"
@@ -68,21 +69,31 @@ type LedgerEntryResult struct {
 	Validated   bool     `json:"validated"`
 }
 
+type contextLedgerView struct {
+	*ledger.Ledger
+	ctx context.Context
+}
+
+func (v contextLedgerView) Read(k keylet.Keylet) ([]byte, error) {
+	return v.Ledger.ReadContext(v.ctx, k)
+}
+
+func (v contextLedgerView) Exists(k keylet.Keylet) (bool, error) {
+	return v.Ledger.ExistsContext(v.ctx, k)
+}
+
 // GetLedgerEntry retrieves a specific ledger entry by its index/key
 func (s *Service) GetLedgerEntry(ctx context.Context, entryKey [32]byte, ledgerIndex string) (*LedgerEntryResult, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-
-	targetLedger, validated, err := s.getLedgerForQuery(ledgerIndex)
+	targetLedger, validated, err := s.resolveLedgerForQuery(ctx, ledgerIndex)
 	if err != nil {
 		return nil, err
 	}
 
 	k := keylet.Keylet{Key: entryKey}
-	exists, err := targetLedger.Exists(k)
+	exists, err := targetLedger.ExistsContext(ctx, k)
 	if err != nil {
 		return nil, err
 	}
@@ -90,13 +101,13 @@ func (s *Service) GetLedgerEntry(ctx context.Context, entryKey [32]byte, ledgerI
 		return nil, svcerr.ErrLedgerEntryNotFound
 	}
 
-	data, err := targetLedger.Read(k)
+	data, err := targetLedger.ReadContext(ctx, k)
 	if err != nil {
 		return nil, err
 	}
 
 	return &LedgerEntryResult{
-		Index:       formatHashHex(entryKey),
+		Index:       protocol.Hash256Hex(entryKey),
 		LedgerIndex: targetLedger.Sequence(),
 		LedgerHash:  targetLedger.Hash(),
 		Node:        data,
@@ -138,11 +149,6 @@ type LedgerDataItem struct {
 	Data  []byte `json:"data"`
 }
 
-// toRippleTime converts a time.Time to seconds since Ripple epoch
-func toRippleTime(t time.Time) int64 {
-	return t.Unix() - protocol.RippleEpochUnix
-}
-
 // parentCloseTimeRippleEpoch returns the parent ledger's close time in
 // Ripple-epoch seconds. Returns 0 for a nil ledger or pre-epoch time
 // so EngineConfig.ParentCloseTime stays uint32-safe.
@@ -150,15 +156,7 @@ func parentCloseTimeRippleEpoch(parent *ledger.Ledger) uint32 {
 	if parent == nil {
 		return 0
 	}
-	t := parent.CloseTime()
-	if t.IsZero() {
-		return 0
-	}
-	secs := toRippleTime(t)
-	if secs < 0 {
-		return 0
-	}
-	return uint32(secs)
+	return protocol.ToRippleTime(parent.CloseTime())
 }
 
 // formatCloseTimeHuman formats close time in XRPL human-readable format
@@ -166,35 +164,20 @@ func formatCloseTimeHuman(t time.Time) string {
 	return t.UTC().Format("2006-Jan-02 15:04:05.000000000 UTC")
 }
 
-// formatCloseTimeISO formats close time in ISO 8601 format
-func formatCloseTimeISO(t time.Time) string {
-	return t.UTC().Format("2006-01-02T15:04:05Z")
-}
-
 // GetLedgerData retrieves all ledger state entries with optional pagination
 func (s *Service) GetLedgerData(ctx context.Context, ledgerIndex string, limit uint32, marker string) (*LedgerDataResult, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-
-	targetLedger, validated, err := s.getLedgerForQuery(ledgerIndex)
+	targetLedger, validated, err := s.resolveLedgerForQuery(ctx, ledgerIndex)
 	if err != nil {
 		return nil, err
-	}
-
-	// rippled clamps ledger_data's JSON page to jsonPageLength (256);
-	// over-limit requests are capped, not collapsed to a smaller default
-	// (LedgerData.cpp). GetLedgerData is JSON-only, so the cap is 256.
-	if limit == 0 || limit > 256 {
-		limit = 256
 	}
 
 	result := &LedgerDataResult{
 		LedgerIndex: targetLedger.Sequence(),
 		LedgerHash:  targetLedger.Hash(),
-		State:       make([]LedgerDataItem, 0, limit),
+		State:       make([]LedgerDataItem, 0),
 		Validated:   validated,
 	}
 
@@ -218,14 +201,14 @@ func (s *Service) GetLedgerData(ctx context.Context, ledgerIndex string, limit u
 		result.LedgerHeader = &LedgerHeaderInfo{
 			AccountHash:         hdr.AccountHash,
 			CloseFlags:          hdr.CloseFlags,
-			CloseTime:           toRippleTime(hdr.CloseTime),
+			CloseTime:           protocol.RippleSeconds(hdr.CloseTime),
 			CloseTimeHuman:      formatCloseTimeHuman(hdr.CloseTime),
-			CloseTimeISO:        formatCloseTimeISO(hdr.CloseTime),
+			CloseTimeISO:        protocol.FormatCloseTimeISO(hdr.CloseTime),
 			CloseTimeResolution: hdr.CloseTimeResolution,
 			Closed:              targetLedger.IsClosed() || targetLedger.IsValidated(),
 			LedgerHash:          hdr.Hash,
 			LedgerIndex:         hdr.LedgerIndex,
-			ParentCloseTime:     toRippleTime(hdr.ParentCloseTime),
+			ParentCloseTime:     protocol.RippleSeconds(hdr.ParentCloseTime),
 			ParentHash:          hdr.ParentHash,
 			TotalCoins:          hdr.Drops,
 			TransactionHash:     hdr.TxHash,
@@ -242,11 +225,11 @@ func (s *Service) GetLedgerData(ctx context.Context, ledgerIndex string, limit u
 			// One entry past the page → more remain. Resume is strictly-greater
 			// than the marker, so emit the first un-emitted key minus one; the
 			// next page then begins exactly at that entry, matching rippled.
-			result.Marker = formatHashHex(ledger.DecrementKey(key))
+			result.Marker = protocol.Hash256Hex(ledger.DecrementKey(key))
 			return false
 		}
 		result.State = append(result.State, LedgerDataItem{
-			Index: formatHashHex(key),
+			Index: protocol.Hash256Hex(key),
 			Data:  data,
 		})
 		count++
@@ -259,52 +242,76 @@ func (s *Service) GetLedgerData(ctx context.Context, ledgerIndex string, limit u
 	return result, nil
 }
 
-// getLedgerForQuery is a helper function to get ledger for query
 func (s *Service) getLedgerForQuery(ledgerIndex string) (*ledger.Ledger, bool, error) {
-	var targetLedger *ledger.Ledger
-	var validated bool
+	return s.resolveLedgerForQuery(context.Background(), ledgerIndex)
+}
 
-	switch ledgerIndex {
-	case "current", "":
-		targetLedger = s.openLedger
-		validated = false
-	case "closed":
-		targetLedger = s.closedLedger
-		validated = s.closedLedger == s.validatedLedger
-	case "validated":
-		targetLedger = s.validatedLedger
-		validated = true
-	default:
-		// A 64-character hex string is a ledger_hash, not a sequence.
-		if len(ledgerIndex) == 64 {
-			hashBytes, err := hex.DecodeString(ledgerIndex)
-			if err != nil {
-				return nil, false, ErrInvalidLedgerHash
-			}
-			var h [32]byte
-			copy(h[:], hashBytes)
-			if seq, ok := s.ledgerByHash[h]; ok {
-				if l, ok := s.ledgerHistory[seq]; ok {
-					return l, l.IsValidated(), nil
-				}
-			}
-			return nil, false, ErrLedgerNotFound
-		}
-		seq, err := strconv.ParseUint(ledgerIndex, 10, 32)
+func (s *Service) resolveLedgerForQuery(ctx context.Context, ledgerIndex string) (*ledger.Ledger, bool, error) {
+	selection, err := ledgerselector.Parse(ledgerIndex)
+	if err != nil {
+		return nil, false, serviceLedgerSelectorError(selection, err)
+	}
+	if hash, ok := selection.Hash(); ok {
+		l, err := s.getLedgerByHash(ctx, hash)
 		if err != nil {
-			return nil, false, ErrInvalidLedgerIndex
+			return nil, false, err
 		}
-		var ok bool
-		targetLedger, ok = s.ledgerHistory[uint32(seq)]
-		if !ok {
-			return nil, false, ErrLedgerNotFound
-		}
-		validated = targetLedger.IsValidated()
+		return l, l.IsValidated(), nil
 	}
 
-	if targetLedger == nil {
-		return nil, false, ErrNoOpenLedger
-	}
+	s.mu.RLock()
+	defer s.mu.RUnlock()
 
-	return targetLedger, validated, nil
+	current := func() (*ledger.Ledger, bool, error) {
+		l := s.openLedger
+		if l == nil {
+			return nil, false, nil
+		}
+		snapshot, err := l.Snapshot()
+		return snapshot, err == nil, err
+	}
+	result, err := ledgerselector.Resolve(selection, ledgerselector.Callbacks[*ledger.Ledger]{
+		Absent:  current,
+		Current: current,
+		Closed: func() (*ledger.Ledger, bool, error) {
+			l := s.closedLedger
+			return l, l != nil, nil
+		},
+		Validated: func() (*ledger.Ledger, bool, error) {
+			l := s.validatedLedger
+			return l, l != nil, nil
+		},
+		BySequence: func(sequence uint32) (*ledger.Ledger, bool, error) {
+			if l := s.ledgerHistory[sequence]; l != nil {
+				return l, true, nil
+			}
+			if s.openLedger != nil && s.openLedger.Sequence() == sequence {
+				snapshot, err := s.openLedger.Snapshot()
+				return snapshot, err == nil, err
+			}
+			return nil, false, nil
+		},
+	})
+	if err != nil {
+		return nil, false, serviceLedgerSelectorError(selection, err)
+	}
+	return result.Value, result.Validated, nil
+}
+
+func serviceLedgerSelectorError(selection ledgerselector.Selector, err error) error {
+	switch {
+	case errors.Is(err, ledgerselector.ErrInvalidHash):
+		return ErrInvalidLedgerHash
+	case errors.Is(err, ledgerselector.ErrInvalidIndex), errors.Is(err, ledgerselector.ErrInvalidSelector):
+		return ErrInvalidLedgerIndex
+	case errors.Is(err, ledgerselector.ErrLedgerNotFound):
+		switch selection.Kind() {
+		case ledgerselector.KindAbsent, ledgerselector.KindCurrent, ledgerselector.KindClosed, ledgerselector.KindValidated:
+			return ErrNoOpenLedger
+		default:
+			return ErrLedgerNotFound
+		}
+	default:
+		return err
+	}
 }

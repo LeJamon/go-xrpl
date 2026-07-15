@@ -34,16 +34,23 @@ func (c *CredentialAccept) TxType() tx.Type {
 	return tx.TypeCredentialAccept
 }
 
+// GetFlagsMask reports the invalid-flag mask. rippled's
+// CredentialAccept::getFlagsMask is `fixInvalidTxFlags ? tfUniversalMask : 0`,
+// so with the amendment active any flag is rejected temINVALID_FLAG at
+// preflight0 (before the field checks and signature verification); with it off
+// the mask is zero and all flags pass.
+func (c *CredentialAccept) GetFlagsMask(rules *amendment.Rules) uint32 {
+	if rules.Enabled(amendment.FeatureFixInvalidTxFlags) {
+		return tx.TfUniversalMask
+	}
+	return 0
+}
+
 // Reference: rippled Credentials.cpp CredentialAccept::preflight()
-// Note: The fixInvalidTxFlags-gated flag check is done in Apply() because
-// Validate() has no access to amendment rules.
 func (c *CredentialAccept) Validate() error {
 	if err := c.BaseTx.Validate(); err != nil {
 		return err
 	}
-
-	// Flag check is deferred to Apply() where amendment rules are available.
-	// Reference: rippled Credentials.cpp:304-308 — gated behind fixInvalidTxFlags.
 
 	// Issuer is required and must not be zero
 	// Reference: rippled Credentials.cpp:310-314
@@ -127,16 +134,44 @@ func (c *CredentialAccept) ApplyOnTec(ctx *tx.ApplyContext) {
 	}
 }
 
+// Preclaim verifies the issuer account exists (tecNO_ISSUER), the credential
+// exists (tecNO_ENTRY), and it is not already accepted (tecDUPLICATE), matching
+// rippled CredentialAccept::preclaim. The expiry check (tecEXPIRED, with the
+// expired-credential deletion) and the reserve check stay in Apply, mirroring
+// rippled CredentialAccept::doApply — the deletion needs an ApplyView, so a
+// tecEXPIRED never escapes preclaim.
+func (c *CredentialAccept) Preclaim(view tx.LedgerView, config tx.EngineConfig) ter.Result {
+	subjectID, err := state.DecodeAccountID(c.Account)
+	if err != nil {
+		return ter.TemBAD_SRC_ACCOUNT
+	}
+	issuerID, err := state.DecodeAccountID(c.Issuer)
+	if err != nil {
+		return ter.TecNO_TARGET
+	}
+	credTypeBytes, err := hex.DecodeString(c.CredentialType)
+	if err != nil {
+		return ter.TemINVALID
+	}
+	if exists, _ := view.Exists(keylet.Account(issuerID)); !exists {
+		return ter.TecNO_ISSUER
+	}
+	credData, rerr := view.Read(keylet.Credential(subjectID, issuerID, credTypeBytes))
+	if rerr != nil || credData == nil {
+		return ter.TecNO_ENTRY
+	}
+	cred, perr := ParseCredentialEntry(credData)
+	if perr != nil {
+		return ter.TefINTERNAL
+	}
+	if cred.IsAccepted() {
+		return ter.TecDUPLICATE
+	}
+	return ter.TesSUCCESS
+}
+
 // Reference: rippled Credentials.cpp CredentialAccept::doApply()
 func (c *CredentialAccept) Apply(ctx *tx.ApplyContext) ter.Result {
-	// Check for invalid flags, gated behind fixInvalidTxFlags
-	// Reference: rippled Credentials.cpp:304-308
-	if ctx.Rules().Enabled(amendment.FeatureFixInvalidTxFlags) {
-		if c.GetFlags()&tx.TfUniversalMask != 0 {
-			return ter.TemINVALID_FLAG
-		}
-	}
-
 	ctx.Log.Trace("credential accept apply",
 		"account", c.Account,
 		"issuer", c.Issuer,
@@ -158,23 +193,16 @@ func (c *CredentialAccept) Apply(ctx *tx.ApplyContext) ter.Result {
 		return ter.TemINVALID
 	}
 
-	// Preclaim check: verify issuer account exists
 	issuerAccountKeylet := keylet.Account(issuerID)
-	issuerExists, err := ctx.View.Exists(issuerAccountKeylet)
-	if err != nil || !issuerExists {
-		ctx.Log.Warn("credential accept: no issuer", "issuer", c.Issuer)
-		return ter.TecNO_ISSUER
-	}
 
 	// Compute correct keylet: credential(subject, issuer, credType)
 	// where subject = ctx.AccountID (the transaction sender)
 	credKeylet := keylet.Credential(ctx.AccountID, issuerID, credTypeBytes)
 
-	// Read the credential
+	// Read the credential (Preclaim guaranteed it exists and is unaccepted; the
+	// entry is needed here for the expiry check and the accept mutation).
 	credData, err := ctx.View.Read(credKeylet)
 	if err != nil || credData == nil {
-		ctx.Log.Warn("credential accept: no credential",
-			"subject", c.Account, "issuer", c.Issuer, "credentialType", c.CredentialType)
 		return ter.TecNO_ENTRY
 	}
 
@@ -182,12 +210,6 @@ func (c *CredentialAccept) Apply(ctx *tx.ApplyContext) ter.Result {
 	cred, err := ParseCredentialEntry(credData)
 	if err != nil {
 		return ter.TefINTERNAL
-	}
-
-	if cred.IsAccepted() {
-		ctx.Log.Warn("credential accept: credential already accepted",
-			"subject", c.Account, "issuer", c.Issuer, "credentialType", c.CredentialType)
-		return ter.TecDUPLICATE
 	}
 
 	closeTime := ctx.Config.ParentCloseTime

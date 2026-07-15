@@ -8,12 +8,19 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// InjectDeliveredAmount Tests
-// Based on rippled src/test/rpc/DeliveredAmount_test.cpp
+func modernDeliveredAmountContext() handlers.SyntheticMetadataContext {
+	return handlers.SyntheticMetadataContext{LedgerSequence: 4_594_095}
+}
 
-// TestDeliveredAmountNonPaymentSkipped verifies that non-Payment transactions
-// are skipped entirely (no DeliveredAmount is added to meta).
-func TestDeliveredAmountNonPaymentSkipped(t *testing.T) {
+// InjectDeliveredAmount Tests
+// Based on rippled src/test/rpc/DeliveredAmount_test.cpp and the
+// RPC::insertDeliveredAmount / getDeliveredAmount logic in DeliveredAmount.cpp.
+// The synthetic field is snake_case "delivered_amount"; the real serialized
+// metadata field is PascalCase "DeliveredAmount" and is never altered.
+
+// TestDeliveredAmountIneligibleTypeSkipped verifies that transaction types
+// outside {Payment, CheckCash, AccountDelete} get no delivered_amount.
+func TestDeliveredAmountIneligibleTypeSkipped(t *testing.T) {
 	tests := []struct {
 		name   string
 		txType string
@@ -30,290 +37,226 @@ func TestDeliveredAmountNonPaymentSkipped(t *testing.T) {
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			txJSON := map[string]any{
+			txJSON := map[string]interface{}{
 				"TransactionType": tc.txType,
 				"Amount":          "1000000",
 			}
-			meta := map[string]any{
+			meta := map[string]interface{}{
 				"TransactionResult": "tesSUCCESS",
 			}
 
-			handlers.InjectDeliveredAmount(txJSON, meta)
+			handlers.InjectDeliveredAmount(txJSON, meta, modernDeliveredAmountContext())
 
-			_, hasDeliveredAmount := meta["DeliveredAmount"]
-			assert.False(t, hasDeliveredAmount,
-				"Non-Payment tx type %q should not get DeliveredAmount", tc.txType)
+			_, has := meta["delivered_amount"]
+			assert.False(t, has,
+				"ineligible tx type %q should not get delivered_amount", tc.txType)
 		})
 	}
 }
 
-// TestDeliveredAmountExistingDeliveredAmountNotOverridden verifies that if
-// DeliveredAmount is already present in meta, it is not overridden.
-func TestDeliveredAmountExistingDeliveredAmountNotOverridden(t *testing.T) {
-	t.Run("XRP drops DeliveredAmount preserved", func(t *testing.T) {
-		txJSON := map[string]any{
-			"TransactionType": "Payment",
-			"Amount":          "5000000",
-		}
-		meta := map[string]any{
+// TestDeliveredAmountEligibleTypes verifies the three eligible types each get a
+// delivered_amount (here via the Amount fallback). AccountDelete carries no
+// Amount field, so it falls through to "unavailable".
+func TestDeliveredAmountEligibleTypes(t *testing.T) {
+	t.Run("Payment", func(t *testing.T) {
+		meta := map[string]interface{}{"TransactionResult": "tesSUCCESS"}
+		handlers.InjectDeliveredAmount(
+			map[string]interface{}{"TransactionType": "Payment", "Amount": "1000000"}, meta,
+			modernDeliveredAmountContext())
+		assert.Equal(t, "1000000", meta["delivered_amount"])
+	})
+
+	t.Run("CheckCash", func(t *testing.T) {
+		meta := map[string]interface{}{"TransactionResult": "tesSUCCESS"}
+		handlers.InjectDeliveredAmount(
+			map[string]interface{}{"TransactionType": "CheckCash", "Amount": "2000000"}, meta,
+			modernDeliveredAmountContext())
+		assert.Equal(t, "2000000", meta["delivered_amount"])
+	})
+
+	t.Run("AccountDelete with no Amount falls back to unavailable", func(t *testing.T) {
+		meta := map[string]interface{}{"TransactionResult": "tesSUCCESS"}
+		handlers.InjectDeliveredAmount(
+			map[string]interface{}{"TransactionType": "AccountDelete"}, meta,
+			modernDeliveredAmountContext())
+		assert.Equal(t, "unavailable", meta["delivered_amount"])
+	})
+}
+
+// TestDeliveredAmountFailedTxSkipped verifies that a non-tesSUCCESS result
+// produces no delivered_amount.
+func TestDeliveredAmountFailedTxSkipped(t *testing.T) {
+	for _, res := range []string{"tecUNFUNDED_PAYMENT", "tecPATH_PARTIAL", "tefPAST_SEQ"} {
+		t.Run(res, func(t *testing.T) {
+			meta := map[string]interface{}{"TransactionResult": res}
+			handlers.InjectDeliveredAmount(
+				map[string]interface{}{"TransactionType": "Payment", "Amount": "1000000"}, meta,
+				modernDeliveredAmountContext())
+			_, has := meta["delivered_amount"]
+			assert.False(t, has, "failed tx (%s) must not get delivered_amount", res)
+		})
+	}
+}
+
+// TestDeliveredAmountFromRealField verifies that the real (PascalCase)
+// DeliveredAmount metadata field is copied to the synthetic snake_case
+// delivered_amount and left in place (the partial-payment case).
+func TestDeliveredAmountFromRealField(t *testing.T) {
+	t.Run("XRP drops", func(t *testing.T) {
+		txJSON := map[string]interface{}{"TransactionType": "Payment", "Amount": "5000000"}
+		meta := map[string]interface{}{
 			"TransactionResult": "tesSUCCESS",
 			"DeliveredAmount":   "3000000",
 		}
 
-		handlers.InjectDeliveredAmount(txJSON, meta)
+		handlers.InjectDeliveredAmount(txJSON, meta, handlers.SyntheticMetadataContext{})
 
+		assert.Equal(t, "3000000", meta["delivered_amount"],
+			"delivered_amount should come from the real DeliveredAmount field, not Amount")
 		assert.Equal(t, "3000000", meta["DeliveredAmount"],
-			"Existing DeliveredAmount should not be overridden")
+			"the real DeliveredAmount field must be left untouched")
 	})
 
-	t.Run("IOU DeliveredAmount preserved", func(t *testing.T) {
-		iouAmount := map[string]any{
+	t.Run("IOU", func(t *testing.T) {
+		iou := map[string]interface{}{
 			"value":    "100",
 			"currency": "USD",
 			"issuer":   "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh",
 		}
-		txJSON := map[string]any{
+		txJSON := map[string]interface{}{
 			"TransactionType": "Payment",
-			"Amount": map[string]any{
+			"Amount": map[string]interface{}{
 				"value":    "500",
 				"currency": "USD",
 				"issuer":   "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh",
 			},
 		}
-		meta := map[string]any{
+		meta := map[string]interface{}{
 			"TransactionResult": "tesSUCCESS",
-			"DeliveredAmount":   iouAmount,
+			"DeliveredAmount":   iou,
 		}
 
-		handlers.InjectDeliveredAmount(txJSON, meta)
+		handlers.InjectDeliveredAmount(txJSON, meta, handlers.SyntheticMetadataContext{})
 
-		delivered := meta["DeliveredAmount"].(map[string]any)
-		assert.Equal(t, "100", delivered["value"],
-			"Existing IOU DeliveredAmount should not be overridden")
+		delivered := meta["delivered_amount"].(map[string]interface{})
+		assert.Equal(t, "100", delivered["value"])
 	})
 }
 
-// TestDeliveredAmountPromotedFromDeliveredAmountField verifies that
-// delivered_amount (lowercase, from meta) is promoted to DeliveredAmount.
-func TestDeliveredAmountPromotedFromDeliveredAmountField(t *testing.T) {
-	t.Run("XRP drops promoted", func(t *testing.T) {
-		txJSON := map[string]any{
-			"TransactionType": "Payment",
-			"Amount":          "5000000",
-		}
+func TestDeliveredAmountHistoricalCutoffs(t *testing.T) {
+	txJSON := map[string]any{"TransactionType": "Payment", "Amount": "100"}
+
+	t.Run("serialized value always wins", func(t *testing.T) {
 		meta := map[string]any{
 			"TransactionResult": "tesSUCCESS",
-			"delivered_amount":  "2000000",
+			"DeliveredAmount":   "25",
 		}
-
-		handlers.InjectDeliveredAmount(txJSON, meta)
-
-		assert.Equal(t, "2000000", meta["DeliveredAmount"],
-			"delivered_amount should be promoted to DeliveredAmount")
-		// delivered_amount should still be present (not removed)
-		assert.Equal(t, "2000000", meta["delivered_amount"],
-			"delivered_amount should remain in meta")
+		handlers.InjectDeliveredAmount(txJSON, meta, handlers.SyntheticMetadataContext{
+			LedgerSequence: 1,
+			CloseTime:      446_000_000,
+		})
+		assert.Equal(t, "25", meta["delivered_amount"])
 	})
 
-	t.Run("IOU promoted", func(t *testing.T) {
-		iouDA := map[string]any{
-			"value":    "75.5",
-			"currency": "EUR",
-			"issuer":   "rPyfep3gcLzkosKC9XiE77Y8LJUBS1test",
-		}
-		txJSON := map[string]any{
-			"TransactionType": "Payment",
-			"Amount": map[string]any{
-				"value":    "100",
-				"currency": "EUR",
-				"issuer":   "rPyfep3gcLzkosKC9XiE77Y8LJUBS1test",
-			},
-		}
-		meta := map[string]any{
-			"TransactionResult": "tesSUCCESS",
-			"delivered_amount":  iouDA,
-		}
-
-		handlers.InjectDeliveredAmount(txJSON, meta)
-
-		delivered := meta["DeliveredAmount"].(map[string]any)
-		assert.Equal(t, "75.5", delivered["value"],
-			"IOU delivered_amount should be promoted to DeliveredAmount")
-	})
-
-	t.Run("delivered_amount takes precedence over Amount fallback", func(t *testing.T) {
-		txJSON := map[string]any{
-			"TransactionType": "Payment",
-			"Amount":          "9999999",
-		}
-		meta := map[string]any{
-			"TransactionResult": "tesSUCCESS",
-			"delivered_amount":  "1234567",
-		}
-
-		handlers.InjectDeliveredAmount(txJSON, meta)
-
-		assert.Equal(t, "1234567", meta["DeliveredAmount"],
-			"delivered_amount should take precedence over Amount fallback")
-	})
-}
-
-// TestDeliveredAmountFallbackToAmountXRP verifies that when no DeliveredAmount
-// or delivered_amount exists in meta, the Amount field from the tx is used.
-func TestDeliveredAmountFallbackToAmountXRP(t *testing.T) {
-	txJSON := map[string]any{
-		"TransactionType": "Payment",
-		"Amount":          "50000000",
+	tests := []struct {
+		name string
+		ctx  handlers.SyntheticMetadataContext
+		want any
+	}{
+		{name: "ledger before cutoff", ctx: handlers.SyntheticMetadataContext{LedgerSequence: 4_594_094}, want: "unavailable"},
+		{name: "ledger at cutoff", ctx: handlers.SyntheticMetadataContext{LedgerSequence: 4_594_095}, want: "100"},
+		{name: "ledger after cutoff", ctx: handlers.SyntheticMetadataContext{LedgerSequence: 4_594_096}, want: "100"},
+		{name: "close time before cutoff", ctx: handlers.SyntheticMetadataContext{CloseTime: 445_999_999}, want: "unavailable"},
+		{name: "close time at cutoff", ctx: handlers.SyntheticMetadataContext{CloseTime: 446_000_000}, want: "unavailable"},
+		{name: "close time after cutoff", ctx: handlers.SyntheticMetadataContext{CloseTime: 446_000_001}, want: "100"},
 	}
-	meta := map[string]any{
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			meta := map[string]any{"TransactionResult": "tesSUCCESS"}
+			handlers.InjectDeliveredAmount(txJSON, meta, tc.ctx)
+			assert.Equal(t, tc.want, meta["delivered_amount"])
+		})
+	}
+}
+
+// TestDeliveredAmountFallbackToAmount verifies that with no real DeliveredAmount
+// field, the tx Amount is used for modern ledgers.
+func TestDeliveredAmountFallbackToAmount(t *testing.T) {
+	t.Run("XRP drops", func(t *testing.T) {
+		txJSON := map[string]interface{}{"TransactionType": "Payment", "Amount": "50000000"}
+		meta := map[string]interface{}{"TransactionResult": "tesSUCCESS"}
+
+		handlers.InjectDeliveredAmount(txJSON, meta, modernDeliveredAmountContext())
+
+		assert.Equal(t, "50000000", meta["delivered_amount"])
+		_, hasReal := meta["DeliveredAmount"]
+		assert.False(t, hasReal, "the synthetic fallback must not invent a PascalCase field")
+	})
+
+	t.Run("IOU", func(t *testing.T) {
+		iou := map[string]interface{}{
+			"value":    "250.75",
+			"currency": "USD",
+			"issuer":   "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh",
+		}
+		txJSON := map[string]interface{}{"TransactionType": "Payment", "Amount": iou}
+		meta := map[string]interface{}{"TransactionResult": "tesSUCCESS"}
+
+		handlers.InjectDeliveredAmount(txJSON, meta, modernDeliveredAmountContext())
+
+		delivered := meta["delivered_amount"].(map[string]interface{})
+		assert.Equal(t, "250.75", delivered["value"])
+		assert.Equal(t, "USD", delivered["currency"])
+		assert.Equal(t, "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh", delivered["issuer"])
+	})
+}
+
+// TestDeliveredAmountUnavailable verifies that an eligible, successful tx with
+// neither a real DeliveredAmount field nor an Amount field yields the literal
+// "unavailable".
+func TestDeliveredAmountUnavailable(t *testing.T) {
+	txJSON := map[string]interface{}{"TransactionType": "Payment"} // no Amount
+	meta := map[string]interface{}{"TransactionResult": "tesSUCCESS"}
+
+	handlers.InjectDeliveredAmount(txJSON, meta, modernDeliveredAmountContext())
+
+	assert.Equal(t, "unavailable", meta["delivered_amount"])
+}
+
+// TestDeliveredAmountIdempotent verifies that a pre-existing snake_case
+// delivered_amount (e.g. the engine's metadata carrying a real partial-payment
+// value) is preserved rather than clobbered by the Amount fallback.
+func TestDeliveredAmountIdempotent(t *testing.T) {
+	txJSON := map[string]interface{}{"TransactionType": "Payment", "Amount": "9999999"}
+	meta := map[string]interface{}{
 		"TransactionResult": "tesSUCCESS",
+		"delivered_amount":  "1234567",
 	}
 
-	handlers.InjectDeliveredAmount(txJSON, meta)
+	handlers.InjectDeliveredAmount(txJSON, meta, modernDeliveredAmountContext())
 
-	assert.Equal(t, "50000000", meta["DeliveredAmount"],
-		"Amount field (XRP drops string) should be used as fallback DeliveredAmount")
-}
-
-// TestDeliveredAmountFallbackToAmountIOU verifies fallback to Amount for IOU.
-func TestDeliveredAmountFallbackToAmountIOU(t *testing.T) {
-	iouAmount := map[string]any{
-		"value":    "250.75",
-		"currency": "USD",
-		"issuer":   "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh",
-	}
-	txJSON := map[string]any{
-		"TransactionType": "Payment",
-		"Amount":          iouAmount,
-	}
-	meta := map[string]any{
-		"TransactionResult": "tesSUCCESS",
-	}
-
-	handlers.InjectDeliveredAmount(txJSON, meta)
-
-	delivered := meta["DeliveredAmount"].(map[string]any)
-	assert.Equal(t, "250.75", delivered["value"],
-		"Amount IOU value should be used as fallback DeliveredAmount")
-	assert.Equal(t, "USD", delivered["currency"])
-	assert.Equal(t, "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh", delivered["issuer"])
+	assert.Equal(t, "1234567", meta["delivered_amount"],
+		"an existing delivered_amount must not be overwritten by the Amount fallback")
 }
 
 // TestDeliveredAmountNilMeta verifies that nil meta does not panic.
 func TestDeliveredAmountNilMeta(t *testing.T) {
-	txJSON := map[string]any{
-		"TransactionType": "Payment",
-		"Amount":          "1000000",
-	}
-
-	// Should not panic
+	txJSON := map[string]interface{}{"TransactionType": "Payment", "Amount": "1000000"}
 	require.NotPanics(t, func() {
-		handlers.InjectDeliveredAmount(txJSON, nil)
+		handlers.InjectDeliveredAmount(txJSON, nil, modernDeliveredAmountContext())
 	})
-}
-
-// TestDeliveredAmountEmptyMeta verifies that empty meta does not panic
-// and correctly adds DeliveredAmount from Amount fallback.
-func TestDeliveredAmountEmptyMeta(t *testing.T) {
-	txJSON := map[string]any{
-		"TransactionType": "Payment",
-		"Amount":          "1000000",
-	}
-	meta := map[string]any{}
-
-	require.NotPanics(t, func() {
-		handlers.InjectDeliveredAmount(txJSON, meta)
-	})
-
-	assert.Equal(t, "1000000", meta["DeliveredAmount"],
-		"Empty meta should get DeliveredAmount from Amount fallback")
-}
-
-// TestDeliveredAmountNoAmountField verifies behavior when Payment has no Amount.
-func TestDeliveredAmountNoAmountField(t *testing.T) {
-	txJSON := map[string]any{
-		"TransactionType": "Payment",
-		// No Amount field
-	}
-	meta := map[string]any{
-		"TransactionResult": "tesSUCCESS",
-	}
-
-	require.NotPanics(t, func() {
-		handlers.InjectDeliveredAmount(txJSON, meta)
-	})
-
-	_, hasDeliveredAmount := meta["DeliveredAmount"]
-	assert.False(t, hasDeliveredAmount,
-		"No DeliveredAmount should be set when Amount is missing from tx")
 }
 
 // TestDeliveredAmountMissingTransactionType verifies that a tx with no
-// TransactionType field is treated as non-Payment (skipped).
+// TransactionType is treated as ineligible.
 func TestDeliveredAmountMissingTransactionType(t *testing.T) {
-	txJSON := map[string]any{
-		"Amount": "1000000",
-		// No TransactionType field
-	}
-	meta := map[string]any{
-		"TransactionResult": "tesSUCCESS",
-	}
+	txJSON := map[string]interface{}{"Amount": "1000000"} // no TransactionType
+	meta := map[string]interface{}{"TransactionResult": "tesSUCCESS"}
 
-	handlers.InjectDeliveredAmount(txJSON, meta)
+	handlers.InjectDeliveredAmount(txJSON, meta, modernDeliveredAmountContext())
 
-	_, hasDeliveredAmount := meta["DeliveredAmount"]
-	assert.False(t, hasDeliveredAmount,
-		"Missing TransactionType should result in no DeliveredAmount")
-}
-
-// TestDeliveredAmountPriorityOrder verifies the full priority chain:
-// 1. Existing DeliveredAmount in meta -> keep it
-// 2. delivered_amount in meta -> promote to DeliveredAmount
-// 3. Amount in tx -> use as fallback
-func TestDeliveredAmountPriorityOrder(t *testing.T) {
-	t.Run("DeliveredAmount wins over delivered_amount and Amount", func(t *testing.T) {
-		txJSON := map[string]any{
-			"TransactionType": "Payment",
-			"Amount":          "9999",
-		}
-		meta := map[string]any{
-			"DeliveredAmount":  "1111",
-			"delivered_amount": "2222",
-		}
-
-		handlers.InjectDeliveredAmount(txJSON, meta)
-
-		assert.Equal(t, "1111", meta["DeliveredAmount"],
-			"Existing DeliveredAmount should win")
-	})
-
-	t.Run("delivered_amount wins over Amount", func(t *testing.T) {
-		txJSON := map[string]any{
-			"TransactionType": "Payment",
-			"Amount":          "9999",
-		}
-		meta := map[string]any{
-			"delivered_amount": "2222",
-		}
-
-		handlers.InjectDeliveredAmount(txJSON, meta)
-
-		assert.Equal(t, "2222", meta["DeliveredAmount"],
-			"delivered_amount should win over Amount fallback")
-	})
-
-	t.Run("Amount used as last resort", func(t *testing.T) {
-		txJSON := map[string]any{
-			"TransactionType": "Payment",
-			"Amount":          "9999",
-		}
-		meta := map[string]any{}
-
-		handlers.InjectDeliveredAmount(txJSON, meta)
-
-		assert.Equal(t, "9999", meta["DeliveredAmount"],
-			"Amount should be used as last resort")
-	})
+	_, has := meta["delivered_amount"]
+	assert.False(t, has, "missing TransactionType should yield no delivered_amount")
 }
 
 // FormatLedgerHash Tests

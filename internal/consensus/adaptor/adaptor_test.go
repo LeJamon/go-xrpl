@@ -195,6 +195,19 @@ func TestAdaptorQuorumCalculation(t *testing.T) {
 	}
 }
 
+func TestAdaptorQuorumUnavailableValidatorList(t *testing.T) {
+	a := New(Config{Validators: []consensus.NodeID{{1}, {2}, {3}}})
+	a.SetUNLBlockedFunc(func() bool { return true })
+	a.SetQuorumUnavailableFunc(func() bool { return false })
+	assert.Equal(t, 3, a.GetQuorum(), "UNL lock-down alone does not disable quorum")
+
+	a.SetQuorumUnavailableFunc(func() bool { return true })
+	assert.Equal(t, math.MaxInt, a.GetQuorum())
+
+	a.SetQuorumUnavailableFunc(func() bool { return false })
+	assert.Equal(t, 3, a.GetQuorum())
+}
+
 // TestSetTrustedValidators_AtomicSwap pins the runtime UNL-reload
 // primitive: every reader (GetTrustedValidators, IsTrusted, GetQuorum,
 // and the master-key snapshot consumed by NegativeUNL voting) must
@@ -217,23 +230,41 @@ func TestSetTrustedValidators_AtomicSwap(t *testing.T) {
 	}
 	a.SetTrustedValidators(next, masterKeys)
 
-	got := a.GetTrustedValidators()
+	got, quorum := a.GetTrustedValidatorsAndQuorum()
 	assert.ElementsMatch(t, next, got, "GetTrustedValidators reflects new set")
+	gotMasters := a.GetTrustedMasterKeys()
+	assert.Equal(t, masterKeys, gotMasters, "GetTrustedMasterKeys reflects new set")
+	gotMasters[0] = [33]byte{0xFF}
+	assert.Equal(t, masterKeys, a.GetTrustedMasterKeys(), "GetTrustedMasterKeys returns a copy")
 	assert.True(t, a.IsTrusted(consensus.NodeID{0x04}), "newly added is trusted")
 	assert.False(t, a.IsTrusted(consensus.NodeID{0x02}), "removed is no longer trusted")
-	assert.Equal(t, 4, a.GetQuorum(), "quorum recomputes: ceil(0.8*5) = 4")
+	assert.Equal(t, 4, quorum, "quorum recomputes in the same snapshot: ceil(0.8*5) = 4")
 
 	// Master keys must be visible to the NegativeUNL voting path. Read
 	// under the lock the same way GenerateNegativeUNLPseudoTx does.
+	a.trustUpdateMu.Lock()
 	a.mu.Lock()
 	mkLen := len(a.trustedMasterKeys)
 	a.mu.Unlock()
+	a.trustUpdateMu.Unlock()
 	assert.Equal(t, len(masterKeys), mkLen, "trustedMasterKeys swapped atomically")
 
 	// Empty swap clears the set (standalone-mode transition).
 	a.SetTrustedValidators(nil, nil)
-	assert.Empty(t, a.GetTrustedValidators())
-	assert.Equal(t, 0, a.GetQuorum(), "empty trusted set → quorum 0 (no gate)")
+	got, quorum = a.GetTrustedValidatorsAndQuorum()
+	assert.Empty(t, got)
+	assert.Equal(t, 0, quorum, "empty trusted set → quorum 0 (no gate)")
+}
+
+func TestNewRetainsTrustedMasterKeysWithoutLocalIdentity(t *testing.T) {
+	validators := []consensus.NodeID{{0x01}, {0x02}}
+	masterKeys := [][33]byte{{0x02, 0xAA}, {0x02, 0xBB}}
+	a := New(Config{
+		Validators:          validators,
+		ValidatorMasterKeys: masterKeys,
+	})
+
+	assert.Equal(t, masterKeys, a.GetTrustedMasterKeys())
 }
 
 func TestTxSetCreateAndLookup(t *testing.T) {
@@ -477,6 +508,78 @@ func TestAdaptor_OnLedgerFullyValidated_HashMismatchIsNoop(t *testing.T) {
 	require.NotNil(t, after)
 	assert.Equal(t, priorValidated.Hash(), after.Hash(),
 		"validated_ledger must not flip to a hash we don't hold")
+}
+
+func TestValidatedSignTimeUsesSampleMedian(t *testing.T) {
+	a := newTestAdaptor(t)
+	a.SetTrustedValidators(
+		[]consensus.NodeID{{0x01}, {0x02}},
+		[][33]byte{{0x01}, {0x02}},
+	)
+	ledgerID := consensus.LedgerID{0x42}
+	t0 := time.Unix(1_700_000_000, 0).UTC()
+	t1 := t0.Add(10 * time.Second)
+	a.SetValidationHistorian(&stubHistorian{byLedger: map[consensus.LedgerID][]*consensus.Validation{
+		ledgerID: {
+			{LedgerSeq: 7, Full: true, SignTime: t1.Add(900 * time.Millisecond)},
+			{LedgerSeq: 7, Full: true, SignTime: t0.Add(500 * time.Millisecond)},
+			{LedgerSeq: 7, SignTime: t0.Add(-time.Hour)},
+			{LedgerSeq: 8, Full: true, SignTime: t0.Add(time.Hour)},
+		},
+	}})
+
+	assert.Equal(t, t0.Add(5*time.Second), a.validatedSignTime(ledgerID, 7))
+
+	a.SetTrustedValidators(nil, nil)
+	a.SetValidationHistorian(&stubHistorian{})
+	assert.True(t, a.validatedSignTime(ledgerID, 7).IsZero())
+}
+
+type recheckingHistorian struct {
+	*stubHistorian
+	validations []*consensus.Validation
+	quorum      int
+	accepted    bool
+	calls       int
+	gotLedgerID consensus.LedgerID
+	gotSeq      uint32
+}
+
+func (h *recheckingHistorian) RecheckFullyValidated(
+	ledgerID consensus.LedgerID,
+	seq uint32,
+) ([]*consensus.Validation, int, bool) {
+	h.calls++
+	h.gotLedgerID = ledgerID
+	h.gotSeq = seq
+	return h.validations, h.quorum, h.accepted
+}
+
+func TestPendingValidationResolverUsesFreshValidationSnapshot(t *testing.T) {
+	t0 := time.Unix(1_700_000_000, 0).UTC()
+	historian := &recheckingHistorian{
+		stubHistorian: &stubHistorian{},
+		validations: []*consensus.Validation{
+			{LedgerSeq: 7, Full: true, SignTime: t0.Add(500 * time.Millisecond)},
+			{LedgerSeq: 7, Full: true, SignTime: t0.Add(10*time.Second + 900*time.Millisecond)},
+		},
+		quorum:   2,
+		accepted: true,
+	}
+
+	resolver := newPendingValidationResolver(historian)
+	signTime, accepted := resolver(7, [32]byte{0x42})
+	assert.True(t, accepted)
+	assert.Equal(t, t0.Add(5*time.Second), signTime)
+	assert.Equal(t, 1, historian.calls)
+	assert.Equal(t, consensus.LedgerID{0x42}, historian.gotLedgerID)
+	assert.Equal(t, uint32(7), historian.gotSeq)
+
+	historian.accepted = false
+	signTime, accepted = resolver(7, [32]byte{0x42})
+	assert.False(t, accepted)
+	assert.True(t, signTime.IsZero())
+	assert.Equal(t, 2, historian.calls)
 }
 
 // TestGetParentLedgerForReplay_RejectsOpenLedger guards against the
@@ -738,7 +841,7 @@ func TestNew_SeedsRestartValidationFloor(t *testing.T) {
 	for _, seq := range []relationaldb.LedgerIndex{740, 742, 741} {
 		info := &relationaldb.LedgerInfo{Sequence: seq}
 		info.Hash[0] = byte(seq)
-		require.NoError(t, rm.Ledger().SaveValidatedLedger(ctx, info, true))
+		require.NoError(t, rm.Ledger().SaveValidatedLedger(ctx, info))
 	}
 
 	cfg := service.DefaultConfig()

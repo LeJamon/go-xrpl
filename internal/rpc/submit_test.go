@@ -984,6 +984,7 @@ func TestSubmitMethodSigningCredentials(t *testing.T) {
 		name         string
 		signingParam string
 		signingValue string
+		keyType      string
 		description  string
 	}{
 		{
@@ -996,18 +997,21 @@ func TestSubmitMethodSigningCredentials(t *testing.T) {
 			name:         "seed parameter",
 			signingParam: "seed",
 			signingValue: "sn3nxiW7v8KXzPzAqzyHXbSSKNuN9",
+			keyType:      "secp256k1",
 			description:  "Seed format for signing",
 		},
 		{
 			name:         "seed_hex parameter",
 			signingParam: "seed_hex",
 			signingValue: "DEDCE9CE67B451D852FD4E846FCDE31C",
+			keyType:      "secp256k1",
 			description:  "Hex-encoded seed for signing",
 		},
 		{
 			name:         "passphrase parameter",
 			signingParam: "passphrase",
 			signingValue: "masterpassphrase",
+			keyType:      "secp256k1",
 			description:  "Passphrase-based key derivation",
 		},
 	}
@@ -1025,6 +1029,9 @@ func TestSubmitMethodSigningCredentials(t *testing.T) {
 					"Amount":          "1000000",
 				},
 				tc.signingParam: tc.signingValue,
+			}
+			if tc.keyType != "" {
+				params["key_type"] = tc.keyType
 			}
 
 			paramsJSON, err := json.Marshal(params)
@@ -1065,6 +1072,29 @@ func TestSubmitMethodSigningCredentials(t *testing.T) {
 			assert.Equal(t, true, resp["applied"])
 		})
 	}
+}
+
+func TestSubmitMethodEmptyCredentialIsPresent(t *testing.T) {
+	mock := newMockLedgerServiceSubmit()
+	params := json.RawMessage(`{
+		"tx_json": {
+			"TransactionType": "Payment",
+			"Destination": "rPMh7Pi9ct699iZUTWaytJUoHcJ7cgyziK",
+			"Amount": "1000000"
+		},
+		"secret": ""
+	}`)
+	ctx := &types.RpcContext{
+		Context:    context.Background(),
+		Role:       types.RoleUser,
+		ApiVersion: types.ApiVersion1,
+		Services:   newSubmitTestServices(mock),
+	}
+
+	_, rpcErr := (&handlers.SubmitMethod{}).Handle(ctx, params)
+	require.NotNil(t, rpcErr)
+	assert.Equal(t, types.RpcBAD_SEED, rpcErr.Code)
+	assert.Equal(t, "Invalid field 'secret'.", rpcErr.Message)
 }
 
 // TestSubmitMethodApiV2Response tests API v2 specific response formatting.

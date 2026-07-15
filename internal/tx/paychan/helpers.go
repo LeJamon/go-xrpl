@@ -2,11 +2,11 @@ package paychan
 
 import (
 	"encoding/hex"
-	"fmt"
+	"math"
 	"strconv"
 	"strings"
 
-	addresscodec "github.com/LeJamon/go-xrpl/codec/addresscodec"
+	"github.com/LeJamon/go-xrpl/amendment"
 	binarycodec "github.com/LeJamon/go-xrpl/codec/binarycodec"
 	"github.com/LeJamon/go-xrpl/crypto/ed25519"
 	"github.com/LeJamon/go-xrpl/crypto/secp256k1"
@@ -17,52 +17,70 @@ import (
 	"github.com/LeJamon/go-xrpl/keylet"
 )
 
-// serializePayChannel serializes a PayChannel ledger entry from a PaymentChannelCreate transaction.
-// This is called during Create and produces the initial SLE bytes.
-func serializePayChannel(pcTx *PaymentChannelCreate, ownerID, destID [20]byte, amount uint64) ([]byte, error) {
-	ownerAddress, err := addresscodec.EncodeAccountIDToClassicAddress(ownerID[:])
-	if err != nil {
-		return nil, fmt.Errorf("failed to encode owner address: %w", err)
+// isChannelExpired reports whether a channel time field (CancelAfter or
+// Expiration) has passed relative to the parent close time. A zero field is
+// treated as absent. fixCleanup3_2_0 makes the comparison strict, fixing an
+// off-by-one where an exact match at the close-time instant was treated as
+// already expired.
+func isChannelExpired(rules *amendment.Rules, closeTime, timeField uint32) bool {
+	if timeField == 0 {
+		return false
 	}
-
-	destAddress, err := addresscodec.EncodeAccountIDToClassicAddress(destID[:])
-	if err != nil {
-		return nil, fmt.Errorf("failed to encode destination address: %w", err)
+	if rules.FixCleanup3_2_0Enabled() {
+		return closeTime > timeField
 	}
+	return closeTime >= timeField
+}
 
-	jsonObj := map[string]any{
-		"LedgerEntryType": "PayChannel",
-		"Account":         ownerAddress,
-		"Destination":     destAddress,
-		"Amount":          fmt.Sprintf("%d", amount),
-		"Balance":         "0",
-		"SettleDelay":     pcTx.SettleDelay,
-		"OwnerNode":       "0",
-		"Flags":           uint32(0),
+// saturatingAdd adds two uint32 values, clamping at math.MaxUint32 when
+// fixCleanup3_2_0 is enabled instead of wrapping around on overflow.
+func saturatingAdd(rules *amendment.Rules, lhs, rhs uint32) uint32 {
+	if rules.FixCleanup3_2_0Enabled() {
+		sum := uint64(lhs) + uint64(rhs)
+		if sum > math.MaxUint32 {
+			return math.MaxUint32
+		}
+		return uint32(sum)
 	}
+	return lhs + rhs
+}
 
+// isZeroChannel reports whether a channel ID hex string decodes to the zero
+// hash. A zero hash cannot be a ledger key.
+func isZeroChannel(channelHex string) bool {
+	b, err := hex.DecodeString(channelHex)
+	if err != nil || len(b) != 32 {
+		return false
+	}
+	return [32]byte(b) == [32]byte{}
+}
+
+// newPayChannelData builds the state.PayChannelData for a PayChannel ledger
+// entry from a PaymentChannelCreate transaction. Directory pages
+// (OwnerNode/DestinationNode) and the keylet sequence are filled in by the
+// caller. The single serializer for a PayChannel entry — creation and
+// modification alike — is state.SerializePayChannelFromData.
+func newPayChannelData(pcTx *PaymentChannelCreate, ownerID, destID [20]byte, amount uint64) *state.PayChannelData {
+	cd := &state.PayChannelData{
+		Account:       ownerID,
+		DestinationID: destID,
+		Amount:        amount,
+		Balance:       0,
+		SettleDelay:   pcTx.SettleDelay,
+		PublicKey:     pcTx.PublicKey,
+	}
 	if pcTx.CancelAfter != nil {
-		jsonObj["CancelAfter"] = *pcTx.CancelAfter
+		cd.CancelAfter = *pcTx.CancelAfter
 	}
-
-	if pcTx.PublicKey != "" {
-		jsonObj["PublicKey"] = pcTx.PublicKey
-	}
-
 	if pcTx.SourceTag != nil {
-		jsonObj["SourceTag"] = *pcTx.SourceTag
+		cd.SourceTag = *pcTx.SourceTag
+		cd.HasSourceTag = true
 	}
-
 	if pcTx.DestinationTag != nil {
-		jsonObj["DestinationTag"] = *pcTx.DestinationTag
+		cd.DestinationTag = *pcTx.DestinationTag
+		cd.HasDestTag = true
 	}
-
-	hexStr, err := binarycodec.Encode(jsonObj)
-	if err != nil {
-		return nil, fmt.Errorf("failed to encode PayChannel: %w", err)
-	}
-
-	return hex.DecodeString(hexStr)
+	return cd
 }
 
 // closeChannel closes a payment channel: removes from directories, returns remaining funds
@@ -156,11 +174,11 @@ func verifyClaimSignature(channelIDHex string, amountDrops uint64, pubKeyHex, si
 
 	// ED25519 keys start with 0xED prefix
 	if pubKeyBytes[0] == 0xED {
-		algo := ed25519.ED25519()
+		algo := ed25519.Algorithm{}
 		return algo.Validate(msgStr, pubKeyHex, sigHex)
 	}
 
 	// Otherwise use secp256k1
-	algo := secp256k1.SECP256K1()
+	algo := secp256k1.Algorithm{}
 	return algo.Validate(msgStr, pubKeyHex, sigHex)
 }

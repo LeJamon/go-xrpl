@@ -88,7 +88,7 @@ func newNodestoreStateSource(client *statecompare.Client, dir string, baseCacheM
 }
 
 func (s *nodestoreStateSource) Load(ctx context.Context, ledgerIndex uint32) (*shamap.SHAMap, *statecompare.LedgerSnapshot, drops.Fees, error) {
-	snapshot, err := s.client.GetSnapshot(ctx, ledgerIndex)
+	snapshot, err := s.client.Snapshot(ctx, ledgerIndex)
 	if err != nil {
 		return nil, nil, drops.Fees{}, fmt.Errorf("getting snapshot: %w", err)
 	}
@@ -195,7 +195,7 @@ func buildOrOpenLazyState(
 // flushToFamily flushes the map's dirty nodes into fam, releasing child
 // pointers so the heap stays bounded during a cold build.
 func flushToFamily(ctx context.Context, m *shamap.SHAMap, fam shamap.Family) error {
-	batch, err := m.FlushDirty(true)
+	batch, err := m.FlushDirtyAndRelease()
 	if err != nil {
 		return fmt.Errorf("flushing nodes: %w", err)
 	}

@@ -53,77 +53,9 @@ func (r *Router) HasSeen(origin PeerID, seq uint64) bool {
 	return r.lastObservedSeq[origin] >= seq
 }
 
-// ValidationParms holds validation parameters.
-type ValidationParms struct {
-	// ValidationCurrentEarly is how early a validation is allowed
-	ValidationCurrentEarly time.Duration
-	// ValidationCurrentWall is the wall clock duration for current
-	ValidationCurrentWall time.Duration
-	// ValidationCurrentLocal is the local clock duration for current
-	ValidationCurrentLocal time.Duration
-	// ValidationSetExpires is when validation set expires
-	ValidationSetExpires time.Duration
-}
-
-// DefaultValidationParms returns default validation parameters.
-func DefaultValidationParms() ValidationParms {
-	return ValidationParms{
-		ValidationCurrentEarly: 3 * time.Minute,
-		ValidationCurrentWall:  5 * time.Minute,
-		ValidationCurrentLocal: 4 * time.Minute,
-		ValidationSetExpires:   10 * time.Minute,
-	}
-}
-
-// ConsensusParms holds consensus timing parameters matching rippled's.
-type ConsensusParms struct {
-	// ledgerIDLE_INTERVAL - How long to wait between rounds when idle
-	LedgerIdleInterval time.Duration
-
-	// ledgerGRANULARITY - How often to check for consensus/heartbeat
-	LedgerGranularity time.Duration
-
-	// ledgerMIN_CONSENSUS - Minimum time to remain in consensus
-	LedgerMinConsensus time.Duration
-
-	// ledgerMAX_CONSENSUS - Maximum time to remain in consensus
-	LedgerMaxConsensus time.Duration
-
-	// ledgerMIN_CLOSE - Minimum time before closing ledger
-	LedgerMinClose time.Duration
-
-	// ledgerMAX_CLOSE - Maximum time before closing ledger
-	LedgerMaxClose time.Duration
-
-	// proposeFRESHNESS - Max time a proposal is fresh
-	ProposeFreshness time.Duration
-
-	// proposeINTERVAL - How often to send proposals during establish
-	ProposeInterval time.Duration
-
-	// avMIN_CONSENSUS_TIME - Minimum time between validations
-	MinConsensusTime time.Duration
-}
-
-// DefaultConsensusParms returns default consensus parameters.
-func DefaultConsensusParms() ConsensusParms {
-	return ConsensusParms{
-		LedgerIdleInterval: 15 * time.Second,
-		LedgerGranularity:  10 * time.Millisecond,
-		LedgerMinConsensus: 1950 * time.Millisecond,
-		LedgerMaxConsensus: 10 * time.Second,
-		LedgerMinClose:     2 * time.Second,
-		LedgerMaxClose:     10 * time.Second,
-		ProposeFreshness:   20 * time.Second,
-		ProposeInterval:    250 * time.Millisecond,
-		MinConsensusTime:   5 * time.Second,
-	}
-}
-
 // Validations tracks validations received and manages validation state.
 type Validations struct {
 	mu                 sync.RWMutex
-	parms              ValidationParms
 	byLedger           map[consensus.LedgerID]map[PeerID]*Validation
 	byNode             map[PeerID]*Validation
 	lastValidatedSeq   map[PeerID]uint32
@@ -132,9 +64,8 @@ type Validations struct {
 }
 
 // NewValidations creates a new validation tracker.
-func NewValidations(parms ValidationParms) *Validations {
+func NewValidations() *Validations {
 	return &Validations{
-		parms:              parms,
 		byLedger:           make(map[consensus.LedgerID]map[PeerID]*Validation),
 		byNode:             make(map[PeerID]*Validation),
 		lastValidatedSeq:   make(map[PeerID]uint32),
@@ -180,8 +111,8 @@ func (v *Validations) NumTrustedForLedger(ledgerID consensus.LedgerID) int {
 	return v.trustedValidations[ledgerID]
 }
 
-// GetNodesAfter returns count of nodes that have validated a ledger after the given one.
-func (v *Validations) GetNodesAfter(prevLedger *Ledger, prevLedgerID consensus.LedgerID) int {
+// NodesAfter returns count of nodes that have validated a ledger after the given one.
+func (v *Validations) NodesAfter(prevLedger *Ledger, prevLedgerID consensus.LedgerID) int {
 	v.mu.RLock()
 	defer v.mu.RUnlock()
 
@@ -294,7 +225,7 @@ type Peer struct {
 	// Configuration
 	clockSkew      time.Duration
 	runAsValidator bool
-	consensusParms ConsensusParms
+	consensusParms consensus.Timing
 
 	// Message routing
 	router *Router
@@ -343,7 +274,7 @@ func NewPeer(
 		fullyValidatedLedger: genesis,
 		ledgers:              make(map[consensus.LedgerID]*Ledger),
 		openTxs:              NewTxSet(),
-		validations:          NewValidations(DefaultValidationParms()),
+		validations:          NewValidations(),
 		peerPositions:        make(map[consensus.LedgerID][]*Proposal),
 		txSets:               make(map[consensus.TxSetID]*TxSet),
 		acquiringLedgers:     make(map[consensus.LedgerID]SimTime),
@@ -351,7 +282,7 @@ func NewPeer(
 		completedLedgers:     0,
 		targetLedgers:        1<<31 - 1, // Max int
 		runAsValidator:       true,
-		consensusParms:       DefaultConsensusParms(),
+		consensusParms:       consensus.DefaultTiming(),
 		router:               NewRouter(),
 		phase:                consensus.PhaseAccepted,
 		mode:                 consensus.ModeObserving,
@@ -398,12 +329,12 @@ func (p *Peer) NowSim() SimTime {
 }
 
 // Parms returns the consensus parameters.
-func (p *Peer) Parms() ConsensusParms {
+func (p *Peer) Parms() consensus.Timing {
 	return p.consensusParms
 }
 
 // SetParms sets the consensus parameters.
-func (p *Peer) SetParms(parms ConsensusParms) {
+func (p *Peer) SetParms(parms consensus.Timing) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	p.consensusParms = parms
@@ -499,7 +430,7 @@ func (p *Peer) AcquireLedger(ledgerID consensus.LedgerID) *Ledger {
 	// Send request to all peers
 	minDelay := 10 * time.Second
 	for _, peerID := range peers {
-		if delay, ok := p.net.GetDelay(p.ID, peerID); ok {
+		if delay, ok := p.net.Delay(p.ID, peerID); ok {
 			if delay < minDelay {
 				minDelay = delay
 			}
@@ -541,7 +472,7 @@ func (p *Peer) AcquireTxSet(setID consensus.TxSetID) *TxSet {
 	// Send request to all peers
 	minDelay := 10 * time.Second
 	for _, peerID := range peers {
-		if delay, ok := p.net.GetDelay(p.ID, peerID); ok {
+		if delay, ok := p.net.Delay(p.ID, peerID); ok {
 			if delay < minDelay {
 				minDelay = delay
 			}
@@ -566,7 +497,7 @@ func (p *Peer) ProposersValidated(prevLedger consensus.LedgerID) int {
 
 // ProposersFinished returns count of proposers that have finished with the given ledger.
 func (p *Peer) ProposersFinished(prevLedger *Ledger, prevLedgerID consensus.LedgerID) int {
-	return p.validations.GetNodesAfter(prevLedger, prevLedgerID)
+	return p.validations.NodesAfter(prevLedger, prevLedgerID)
 }
 
 // OnClose is called when consensus closes the ledger.
@@ -602,8 +533,8 @@ func (p *Peer) EarliestAllowedSeq() uint32 {
 	return p.fullyValidatedLedger.Seq()
 }
 
-// GetPrevLedger determines the previous ledger to build on.
-func (p *Peer) GetPrevLedger(ledgerID consensus.LedgerID, ledger *Ledger, mode consensus.Mode) consensus.LedgerID {
+// PrevLedger determines the previous ledger to build on.
+func (p *Peer) PrevLedger(ledgerID consensus.LedgerID, ledger *Ledger, mode consensus.Mode) consensus.LedgerID {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 
@@ -639,7 +570,7 @@ func (p *Peer) share(msg any) {
 		if peerID != origin {
 			targetPeer := p.findPeer(peerID)
 			if targetPeer != nil {
-				delay, _ := p.net.GetDelay(p.ID, peerID)
+				delay, _ := p.net.Delay(p.ID, peerID)
 				// Copy message for closure based on type
 				switch m := msg.(type) {
 				case Tx:
@@ -807,7 +738,7 @@ func (p *Peer) broadcastProposal(prop *Proposal) {
 		if peerID != origin {
 			targetPeer := p.findPeer(peerID)
 			if targetPeer != nil {
-				delay, _ := p.net.GetDelay(p.ID, peerID)
+				delay, _ := p.net.Delay(p.ID, peerID)
 				propCopy := *prop
 				p.scheduler.In(delay, func() {
 					targetPeer.handleProposalFromPeer(&propCopy, seq, origin)
@@ -1036,7 +967,7 @@ func (p *Peer) broadcastValidation(val *Validation) {
 		if peerID != origin {
 			targetPeer := p.findPeer(peerID)
 			if targetPeer != nil {
-				delay, _ := p.net.GetDelay(p.ID, peerID)
+				delay, _ := p.net.Delay(p.ID, peerID)
 				valCopy := *val
 				p.scheduler.In(delay, func() {
 					targetPeer.handleValidationFromPeer(&valCopy, seq, origin)
@@ -1100,7 +1031,7 @@ func (p *Peer) relayTx(tx Tx, from PeerID) {
 		if peerID != from && peerID != origin {
 			targetPeer := p.findPeer(peerID)
 			if targetPeer != nil {
-				delay, _ := p.net.GetDelay(p.ID, peerID)
+				delay, _ := p.net.Delay(p.ID, peerID)
 				txCopy := tx
 				seqCopy := seq
 				originCopy := origin
@@ -1238,13 +1169,13 @@ func (p *Peer) HaveValidated() bool {
 	return p.fullyValidatedLedger.Seq() > 0
 }
 
-// GetValidLedgerIndex returns the earliest allowed sequence.
-func (p *Peer) GetValidLedgerIndex() uint32 {
+// ValidLedgerIndex returns the earliest allowed sequence.
+func (p *Peer) ValidLedgerIndex() uint32 {
 	return p.EarliestAllowedSeq()
 }
 
-// GetQuorumKeys returns the quorum and trusted keys.
-func (p *Peer) GetQuorumKeys() (int, []PeerID) {
+// QuorumKeys returns the quorum and trusted keys.
+func (p *Peer) QuorumKeys() (int, []PeerID) {
 	p.mu.RLock()
 	defer p.mu.RUnlock()
 	return p.quorum, p.trustGraph.TrustedPeers(p.ID)

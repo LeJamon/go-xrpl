@@ -4,10 +4,10 @@ import (
 	"context"
 	"encoding/hex"
 	"encoding/json"
-	"errors"
 	"strings"
 	"testing"
 
+	"github.com/LeJamon/go-xrpl/internal/ledger/service/svcerr"
 	"github.com/LeJamon/go-xrpl/internal/rpc/handlers"
 	"github.com/LeJamon/go-xrpl/internal/rpc/types"
 	"github.com/stretchr/testify/assert"
@@ -26,14 +26,14 @@ func (m *ledgerRequestMock) GetLedgerByHash(h [32]byte) (types.LedgerReader, err
 	if l, ok := m.byHash[h]; ok {
 		return l, nil
 	}
-	return nil, errors.New("not found")
+	return nil, svcerr.ErrLedgerNotFound
 }
 
 func (m *ledgerRequestMock) GetLedgerBySequence(seq uint32) (types.LedgerReader, error) {
 	if l, ok := m.bySeq[seq]; ok {
 		return l, nil
 	}
-	return nil, errors.New("not found")
+	return nil, svcerr.ErrLedgerNotFound
 }
 
 func TestLedgerRequest_ServesLocalLedgerByHash(t *testing.T) {

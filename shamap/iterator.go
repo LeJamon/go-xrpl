@@ -2,6 +2,7 @@ package shamap
 
 import (
 	"bytes"
+	"context"
 )
 
 // Iterator provides forward iteration over SHAMap items in key order.
@@ -28,6 +29,7 @@ type Iterator struct {
 	// (SHAMap.cpp:589-596): a saved stack cannot cover the leaves inside
 	// the subtree boundBelow descended into.
 	bound bool
+	ctx   context.Context
 }
 
 type iterStackEntry struct {
@@ -50,7 +52,7 @@ func (it *Iterator) Next() bool {
 		if it.current == nil {
 			return false
 		}
-		item, err := it.sm.upperBoundUnsafe(it.current.Key())
+		item, err := it.sm.upperBoundUnsafe(it.ctx, it.current.Key())
 		if err != nil {
 			it.err = err
 			it.current = nil
@@ -105,7 +107,7 @@ func (it *Iterator) advance() bool {
 		// Inner node - find next non-empty branch
 		found := false
 		for i := top.branch; i < BranchFactor; i++ {
-			child, err := it.sm.descend(inner, i)
+			child, err := it.sm.descendCtx(it.ctx, inner, i)
 			if err != nil {
 				it.err = err
 				return false
@@ -146,6 +148,7 @@ func (sm *SHAMap) begin() *Iterator {
 	it := &Iterator{
 		sm:    sm,
 		stack: make([]iterStackEntry, 0, MaxDepth),
+		ctx:   context.Background(),
 	}
 
 	sm.mu.RLock()
@@ -166,7 +169,7 @@ func (sm *SHAMap) begin() *Iterator {
 // stack ending at the node where the descent stopped (a leaf, an empty
 // branch, or an unloadable child). Shared prologue of upperBoundUnsafe and
 // lowerBoundUnsafe. Caller must hold the read lock.
-func (sm *SHAMap) walkBoundStack(id [32]byte) ([]iterStackEntry, error) {
+func (sm *SHAMap) walkBoundStack(ctx context.Context, id [32]byte) ([]iterStackEntry, error) {
 	stack := make([]iterStackEntry, 0, MaxDepth)
 	var node Node = sm.root
 	nodeID := NewRootNodeID()
@@ -188,7 +191,7 @@ func (sm *SHAMap) walkBoundStack(id [32]byte) ([]iterStackEntry, error) {
 			break
 		}
 
-		child, err := sm.descend(inner, int(branch))
+		child, err := sm.descendCtx(ctx, inner, int(branch))
 		if err != nil {
 			return nil, err
 		}
@@ -223,24 +226,30 @@ func (sm *SHAMap) walkBoundStack(id [32]byte) ([]iterStackEntry, error) {
 //
 // This matches rippled's SHAMap::upper_bound semantics.
 func (sm *SHAMap) UpperBound(id [32]byte) *Iterator {
-	it := &Iterator{sm: sm, started: true, bound: true}
+	return sm.UpperBoundContext(context.Background(), id)
+}
+
+// UpperBoundContext returns the first item above id while forwarding ctx to
+// lazy storage fetches performed by this iterator.
+func (sm *SHAMap) UpperBoundContext(ctx context.Context, id [32]byte) *Iterator {
+	it := &Iterator{sm: sm, started: true, bound: true, ctx: ctx}
 
 	sm.mu.RLock()
 	defer sm.mu.RUnlock()
 
-	it.current, it.err = sm.upperBoundUnsafe(id)
+	it.current, it.err = sm.upperBoundUnsafe(ctx, id)
 	return it
 }
 
 // upperBoundUnsafe returns the first item with key > id, or nil when none
 // exists (rippled SHAMap::upper_bound, SHAMap.cpp:639-668). Also the
 // successor step for bound iterators. Caller must hold the read lock.
-func (sm *SHAMap) upperBoundUnsafe(id [32]byte) (*Item, error) {
+func (sm *SHAMap) upperBoundUnsafe(ctx context.Context, id [32]byte) (*Item, error) {
 	if sm.root == nil {
 		return nil, nil
 	}
 
-	stack, err := sm.walkBoundStack(id)
+	stack, err := sm.walkBoundStack(ctx, id)
 	if err != nil {
 		return nil, err
 	}
@@ -263,14 +272,14 @@ func (sm *SHAMap) upperBoundUnsafe(id [32]byte) (*Item, error) {
 
 		// Search the branches after the one leading toward id.
 		for branch := int(selectBranch(entry.nodeID, id)) + 1; branch < BranchFactor; branch++ {
-			child, err := sm.descend(inner, branch)
+			child, err := sm.descendCtx(ctx, inner, branch)
 			if err != nil {
 				return nil, err
 			}
 			if child == nil {
 				continue
 			}
-			leaf, err := sm.boundBelow(child, true)
+			leaf, err := sm.boundBelowCtx(ctx, child, true)
 			if err != nil {
 				return nil, err
 			}
@@ -292,24 +301,30 @@ func (sm *SHAMap) upperBoundUnsafe(id [32]byte) (*Item, error) {
 // Note: This matches rippled's SHAMap::lower_bound semantics, which differs from
 // the standard C++ lower_bound (first element >= key).
 func (sm *SHAMap) LowerBound(id [32]byte) *Iterator {
-	it := &Iterator{sm: sm, started: true, bound: true}
+	return sm.LowerBoundContext(context.Background(), id)
+}
+
+// LowerBoundContext returns the first item below id while forwarding ctx to
+// lazy storage fetches performed by this iterator.
+func (sm *SHAMap) LowerBoundContext(ctx context.Context, id [32]byte) *Iterator {
+	it := &Iterator{sm: sm, started: true, bound: true, ctx: ctx}
 
 	sm.mu.RLock()
 	defer sm.mu.RUnlock()
 
-	it.current, it.err = sm.lowerBoundUnsafe(id)
+	it.current, it.err = sm.lowerBoundUnsafe(ctx, id)
 	return it
 }
 
 // lowerBoundUnsafe returns the greatest item with key < id, or nil when none
 // exists (rippled SHAMap::lower_bound, SHAMap.cpp:670-705). Caller must hold
 // the read lock.
-func (sm *SHAMap) lowerBoundUnsafe(id [32]byte) (*Item, error) {
+func (sm *SHAMap) lowerBoundUnsafe(ctx context.Context, id [32]byte) (*Item, error) {
 	if sm.root == nil {
 		return nil, nil
 	}
 
-	stack, err := sm.walkBoundStack(id)
+	stack, err := sm.walkBoundStack(ctx, id)
 	if err != nil {
 		return nil, err
 	}
@@ -332,14 +347,14 @@ func (sm *SHAMap) lowerBoundUnsafe(id [32]byte) (*Item, error) {
 
 		// Search the branches before the one leading toward id.
 		for branch := int(selectBranch(entry.nodeID, id)) - 1; branch >= 0; branch-- {
-			child, err := sm.descend(inner, branch)
+			child, err := sm.descendCtx(ctx, inner, branch)
 			if err != nil {
 				return nil, err
 			}
 			if child == nil {
 				continue
 			}
-			leaf, err := sm.boundBelow(child, false)
+			leaf, err := sm.boundBelowCtx(ctx, child, false)
 			if err != nil {
 				return nil, err
 			}

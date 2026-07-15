@@ -174,19 +174,20 @@ func (a *TxqAdapter) ApplyTransaction(txn tx.Transaction) (ter.Result, bool) {
 		EnforceLoadFee:            true,
 	}
 	engine := txengine.NewEngine(a.view, engineCfg)
+	engine.SetBaseTxCount(a.view.TxCount())
 	bp := txengine.NewBlockProcessor(engine)
 
 	result, err := bp.ApplyTransaction(txn, blob)
 	if err != nil {
+		if a.cfg.Logger != nil {
+			a.cfg.Logger.Error("txq apply: ApplyTransaction failed", "err", err)
+		}
 		return ter.TefINTERNAL, false
 	}
 	applyRes := result.ApplyResult
 	a.lastApply = &applyRes
 	engineResult := applyRes.Result
-	applied := engineResult.IsSuccess() || engineResult.IsTec()
-	if applied {
-		_ = a.view.AddTransactionWithMeta(result.Hash, result.TxWithMetaBlob)
-	}
+	applied := applyRes.Applied
 	return engineResult, applied
 }
 

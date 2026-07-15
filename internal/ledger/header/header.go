@@ -6,7 +6,7 @@ import (
 	"errors"
 	"time"
 
-	"github.com/LeJamon/go-xrpl/crypto/common"
+	"github.com/LeJamon/go-xrpl/crypto/sha512half"
 	"github.com/LeJamon/go-xrpl/protocol"
 )
 
@@ -68,43 +68,32 @@ func AddRaw(header LedgerHeader, includeHash bool) []byte {
 	if includeHash {
 		size = SizeWithHash
 	}
-	out := make([]byte, 0, size)
-
-	out = binary.BigEndian.AppendUint32(out, header.LedgerIndex)
-	out = binary.BigEndian.AppendUint64(out, header.Drops)
-	out = append(out, header.ParentHash[:]...)
-	out = append(out, header.TxHash[:]...)
-	out = append(out, header.AccountHash[:]...)
-	out = binary.BigEndian.AppendUint32(out, timeToXRPLEpoch(header.ParentCloseTime))
-	out = binary.BigEndian.AppendUint32(out, timeToXRPLEpoch(header.CloseTime))
-	out = append(out, uint8(header.CloseTimeResolution))
-	out = append(out, header.CloseFlags)
+	out := appendRawBody(make([]byte, 0, size), header)
 	if includeHash {
 		out = append(out, header.Hash[:]...)
 	}
 	return out
 }
 
-// CalculateHash computes a ledger's hash: SHA512-half of the ledger-master hash
-// prefix followed by the header preimage. It deliberately uses the raw XRPL
-// epoch conversion (uint32(t.Unix()-epoch), no zero/negative guard) because that
-// is the arithmetic rippled commits and that inbound replay reverses; AddRaw's
-// guarded timeToXRPLEpoch is for the serialized header body and must NOT be
-// substituted here. This is the single source of truth for the ledger hash; the
-// ledger and genesis packages both delegate to it.
+func appendRawBody(out []byte, h LedgerHeader) []byte {
+	out = binary.BigEndian.AppendUint32(out, h.LedgerIndex)
+	out = binary.BigEndian.AppendUint64(out, h.Drops)
+	out = append(out, h.ParentHash[:]...)
+	out = append(out, h.TxHash[:]...)
+	out = append(out, h.AccountHash[:]...)
+	out = binary.BigEndian.AppendUint32(out, protocol.ToRippleTime(h.ParentCloseTime))
+	out = binary.BigEndian.AppendUint32(out, protocol.ToRippleTime(h.CloseTime))
+	out = append(out, uint8(h.CloseTimeResolution))
+	return append(out, h.CloseFlags)
+}
+
+// CalculateHash computes SHA512-half over the ledger-master prefix and the
+// same 118-byte body emitted by AddRaw.
 func CalculateHash(h LedgerHeader) [32]byte {
-	data := make([]byte, 0, len(protocol.HashPrefixLedgerMaster.Bytes())+SizeBase)
-	data = append(data, protocol.HashPrefixLedgerMaster.Bytes()...)
-	data = binary.BigEndian.AppendUint32(data, h.LedgerIndex)
-	data = binary.BigEndian.AppendUint64(data, h.Drops)
-	data = append(data, h.ParentHash[:]...)
-	data = append(data, h.TxHash[:]...)
-	data = append(data, h.AccountHash[:]...)
-	data = binary.BigEndian.AppendUint32(data, uint32(h.ParentCloseTime.Unix()-protocol.RippleEpochUnix))
-	data = binary.BigEndian.AppendUint32(data, uint32(h.CloseTime.Unix()-protocol.RippleEpochUnix))
-	data = append(data, byte(h.CloseTimeResolution))
-	data = append(data, h.CloseFlags)
-	return common.Sha512Half(data)
+	data := make([]byte, 0, len(protocol.HashPrefixLedgerMaster().Bytes())+SizeBase)
+	data = append(data, protocol.HashPrefixLedgerMaster().Bytes()...)
+	data = appendRawBody(data, h)
+	return sha512half.Sum(data)
 }
 
 // GetCloseAgree returns true if there was consensus on the close time
@@ -153,14 +142,14 @@ func DeserializeHeader(data []byte, hasHash bool) (*LedgerHeader, error) {
 	if err := binary.Read(reader, binary.BigEndian, &parentCloseTime); err != nil {
 		return nil, err
 	}
-	header.ParentCloseTime = xrplEpochToTime(parentCloseTime)
+	header.ParentCloseTime = protocol.FromRippleTime(parentCloseTime)
 
 	// Read close time (uint32, XRPL epoch seconds)
 	var closeTime uint32
 	if err := binary.Read(reader, binary.BigEndian, &closeTime); err != nil {
 		return nil, err
 	}
-	header.CloseTime = xrplEpochToTime(closeTime)
+	header.CloseTime = protocol.FromRippleTime(closeTime)
 
 	// Read close time resolution (uint8)
 	var closeTimeResolution uint8
@@ -191,26 +180,4 @@ func DeserializePrefixedHeader(data []byte, hasHash bool) (*LedgerHeader, error)
 	}
 	// Skip the first 4 bytes (prefix) and deserialize the rest
 	return DeserializeHeader(data[4:], hasHash)
-}
-
-// timeToXRPLEpoch converts a time.Time to uint32 XRPL epoch seconds.
-// Returns 0 for the zero time.
-func timeToXRPLEpoch(t time.Time) uint32 {
-	if t.IsZero() {
-		return 0
-	}
-	secs := t.Unix() - protocol.RippleEpochUnix
-	if secs < 0 {
-		return 0
-	}
-	return uint32(secs)
-}
-
-// xrplEpochToTime converts uint32 XRPL epoch seconds to time.Time.
-// Returns the zero time for 0.
-func xrplEpochToTime(epoch uint32) time.Time {
-	if epoch == 0 {
-		return time.Time{}
-	}
-	return time.Unix(int64(epoch)+protocol.RippleEpochUnix, 0)
 }

@@ -29,7 +29,6 @@ func TestXRPEndpointStep_CheckGlobalFreeze(t *testing.T) {
 	require.Equal(t, ter.TesSUCCESS, NewXRPEndpointStep(acct, false).Check(sb))
 
 	ctx := NewStrandContext(sb, [20]byte{2}, acct)
-	ctx.Fix1781 = true
 	ctx.SeenDirectIssues[0][Issue{Currency: "XRP"}] = true
 	_, result := ctx.newXRPEndpointStep(acct, true, false)
 	require.Equal(t, ter.TerNO_LINE, result)

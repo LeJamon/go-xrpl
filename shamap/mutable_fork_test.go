@@ -49,7 +49,7 @@ func TestMutableForkDoesNotFlushBackedMap(t *testing.T) {
 	if !bytes.Equal(item.Data(), updated) {
 		t.Fatalf("fork update missing: data=%x", item.Data())
 	}
-	if _, err := fork.Snapshot(false); err != nil {
+	if _, err := fork.SnapshotImmutable(); err != nil {
 		t.Fatalf("Snapshot fork: %v", err)
 	}
 	if family.Len() == 0 {

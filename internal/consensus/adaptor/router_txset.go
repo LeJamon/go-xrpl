@@ -119,7 +119,7 @@ func (r *Router) SetTxSetRetryKnobsForTest(knobs txSetRetryKnobs) {
 // re-sources tx leaves from the open-ledger pool, so a cache has no role
 // here.
 func (r *Router) learnTxFromLeaf(originPeer uint64, wire []byte) {
-	if len(wire) < 2 || wire[len(wire)-1] != protocol.WireTypeTransaction {
+	if len(wire) < 2 || protocol.WireType(wire[len(wire)-1]) != protocol.WireTypeTransaction {
 		return
 	}
 	leaf, err := shamap.NewTransactionLeafFromWire(wire)
@@ -297,7 +297,7 @@ func (r *Router) handleTxSetData(ld *message.LedgerData, originPeer uint64) {
 		if len(node.NodeData) == 0 {
 			continue
 		}
-		parsedID, err := shamap.UnmarshalBinary(node.NodeID)
+		parsedID, err := shamap.ParseNodeID(node.NodeID)
 		if err != nil {
 			replyValid = false
 			r.logger.Debug("tx-set sync: malformed node ID",

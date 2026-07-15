@@ -59,14 +59,33 @@ const (
 	LsfMPTCanTransfer uint32 = 0x00000020
 	LsfMPTCanClawback uint32 = 0x00000040
 
+	// ltMPTOKEN_ISSUANCE sfMutableFlags — which capabilities the issuer may later
+	// mutate via MPTokenIssuanceSet. The six lock/auth/escrow/trade/transfer/
+	// clawback bits deliberately alias the matching Lsf* flag values above: an
+	// MPTokenIssuanceSet toggles the actual Lsf* flag by OR/AND-ing this same bit.
+	LsmfMPTCanMutateCanLock     uint32 = 0x00000002
+	LsmfMPTCanMutateRequireAuth uint32 = 0x00000004
+	LsmfMPTCanMutateCanEscrow   uint32 = 0x00000008
+	LsmfMPTCanMutateCanTrade    uint32 = 0x00000010
+	LsmfMPTCanMutateCanTransfer uint32 = 0x00000020
+	LsmfMPTCanMutateCanClawback uint32 = 0x00000040
+	LsmfMPTCanMutateMetadata    uint32 = 0x00010000
+	LsmfMPTCanMutateTransferFee uint32 = 0x00020000
+
 	// ltMPTOKEN
 	LsfMPTAuthorized uint32 = 0x00000002
+	LsfMPTAMM        uint32 = 0x00000004
 
 	// ltCREDENTIAL
 	LsfAccepted uint32 = 0x00010000
 
 	// ltVAULT
 	LsfVaultPrivate uint32 = 0x00010000
+
+	// ltLOAN
+	LsfLoanDefault     uint32 = 0x00010000
+	LsfLoanImpaired    uint32 = 0x00020000
+	LsfLoanOverpayment uint32 = 0x00040000
 )
 
 // MPToken constants

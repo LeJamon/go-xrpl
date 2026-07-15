@@ -4,6 +4,7 @@ import (
 	"errors"
 	"testing"
 
+	"github.com/LeJamon/go-xrpl/crypto"
 	"github.com/LeJamon/go-xrpl/crypto/ed25519"
 	"github.com/LeJamon/go-xrpl/crypto/secp256k1"
 	"github.com/stretchr/testify/require"
@@ -131,42 +132,42 @@ func TestEncodeSeed(t *testing.T) {
 	tt := []struct {
 		name              string
 		input             []byte
-		inputEncodingType CryptoImplementation
+		inputEncodingType crypto.Algorithm
 		expectedOutput    string
 		expectedErr       error
 	}{
 		{
 			name:              "pass - successful encode - ED25519",
 			input:             []byte("yurtyurtyurtyurt"),
-			inputEncodingType: ed25519.ED25519(),
+			inputEncodingType: ed25519.Algorithm{},
 			expectedOutput:    "sEdTzRkEgPoxDG1mJ6WkSucHWnMkm1H",
 			expectedErr:       nil,
 		},
 		{
 			name:              "pass - successful encode - SECP256K1",
 			input:             []byte("yurtyurtyurtyurt"),
-			inputEncodingType: secp256k1.SECP256K1(),
+			inputEncodingType: secp256k1.Algorithm{},
 			expectedOutput:    "shPSkLzQNWfyXjZ7bbwgCky6twagA",
 			expectedErr:       nil,
 		},
 		{
 			name:              "pass - successful encode - ED25519 additional",
 			input:             []byte("testingsomething"),
-			inputEncodingType: ed25519.ED25519(),
+			inputEncodingType: ed25519.Algorithm{},
 			expectedOutput:    "sEdTvLVDRVJsrUyBiCPTHDs46GUKQAr",
 			expectedErr:       nil,
 		},
 		{
 			name:              "pass - successful encode - SECP256K1 additional",
 			input:             []byte("testingsomething"),
-			inputEncodingType: secp256k1.SECP256K1(),
+			inputEncodingType: secp256k1.Algorithm{},
 			expectedOutput:    "shKMVJjV52uudwfS7HzzaiwmZqVeP",
 			expectedErr:       nil,
 		},
 		{
 			name:              "fail - unsuccessful encode - invalid entropy length",
 			input:             []byte{0x00},
-			inputEncodingType: ed25519.ED25519(),
+			inputEncodingType: ed25519.Algorithm{},
 			expectedOutput:    "",
 			expectedErr:       &EncodeLengthError{Instance: "Entropy", Input: len([]byte{0x00}), Expected: FamilySeedLength},
 		},
@@ -204,42 +205,42 @@ func TestDecodeSeed(t *testing.T) {
 		name              string
 		input             string
 		expectedOutput    []byte
-		expectedAlgorithm CryptoImplementation
+		expectedAlgorithm crypto.Algorithm
 		expectedErr       error
 	}{
 		{
 			name:              "pass - successful decode - ED25519",
 			input:             "sEdTzRkEgPoxDG1mJ6WkSucHWnMkm1H",
 			expectedOutput:    []byte("yurtyurtyurtyurt"),
-			expectedAlgorithm: ed25519.ED25519(),
+			expectedAlgorithm: ed25519.Algorithm{},
 			expectedErr:       nil,
 		},
 		{
 			name:              "pass - successful decode - SECP256K1",
 			input:             "shPSkLzQNWfyXjZ7bbwgCky6twagA",
 			expectedOutput:    []byte("yurtyurtyurtyurt"),
-			expectedAlgorithm: secp256k1.SECP256K1(),
+			expectedAlgorithm: secp256k1.Algorithm{},
 			expectedErr:       nil,
 		},
 		{
 			name:              "pass - successful decode - ED25519 additional",
 			input:             "sEdTvLVDRVJsrUyBiCPTHDs46GUKQAr",
 			expectedOutput:    []byte("testingsomething"),
-			expectedAlgorithm: ed25519.ED25519(),
+			expectedAlgorithm: ed25519.Algorithm{},
 			expectedErr:       nil,
 		},
 		{
 			name:              "pass - successful decode - SECP256K1 additional",
 			input:             "shKMVJjV52uudwfS7HzzaiwmZqVeP",
 			expectedOutput:    []byte("testingsomething"),
-			expectedAlgorithm: secp256k1.SECP256K1(),
+			expectedAlgorithm: secp256k1.Algorithm{},
 			expectedErr:       nil,
 		},
 		{
 			name:              "fail - unsuccessful decode - invalid seed",
 			input:             "yurt",
 			expectedOutput:    nil,
-			expectedAlgorithm: ed25519.ED25519(),
+			expectedAlgorithm: ed25519.Algorithm{},
 			expectedErr:       errors.New("invalid seed; could not determine encoding algorithm"),
 		},
 		{
@@ -442,7 +443,7 @@ func TestDecodeNodePublicKey(t *testing.T) {
 			name:           "fail - length error",
 			input:          "rfZG9pC1cKF7q96TNZR264H9ykzKCxMyk44ZK8hFL8cNv1G3c8J",
 			expectedOutput: nil,
-			expectedErr:    errors.New("b58string prefix and typeprefix not equal"),
+			expectedErr:    errors.New("decoded payload does not start with expected type prefix"),
 		},
 	}
 
@@ -512,7 +513,7 @@ func TestDecodeAccountPublicKey(t *testing.T) {
 			name:        "fail - length error",
 			input:       "nHU75pVH2Tak7adBWNP3H2CU3wcUtSgf45sKrd1uGyFyRcTozXNm",
 			output:      nil,
-			expectedErr: errors.New("b58string prefix and typeprefix not equal"),
+			expectedErr: errors.New("decoded payload does not start with expected type prefix"),
 		},
 	}
 

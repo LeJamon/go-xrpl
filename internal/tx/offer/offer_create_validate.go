@@ -4,38 +4,35 @@ import (
 	"github.com/LeJamon/go-xrpl/amendment"
 	"github.com/LeJamon/go-xrpl/internal/ledger/state"
 	"github.com/LeJamon/go-xrpl/internal/tx"
+	"github.com/LeJamon/go-xrpl/internal/tx/mptutil"
 	"github.com/LeJamon/go-xrpl/internal/tx/permissioneddomain"
 	"github.com/LeJamon/go-xrpl/internal/tx/ter"
 	"github.com/LeJamon/go-xrpl/keylet"
 )
 
-// Validate performs rules-independent validation on the OfferCreate transaction.
-// This is called by the engine's preflight step BEFORE hash computation and fee deduction.
-// All checks here must NOT depend on amendment rules (rules-dependent checks go in Preflight).
-// Reference: rippled CreateOffer.cpp preflight() - rules-independent subset
+// Validate runs the rules-free structural preflight checks of OfferCreate, in
+// rippled's preflight order. The flags mask (amendment-conditional, GetFlagsMask)
+// and the sfDomainID amendment gate (CheckExtraFeatures) are enforced by the
+// engine before this body, so no rules-dependent check remains here.
 func (o *OfferCreate) Validate() error {
 	if err := o.BaseTx.Validate(); err != nil {
 		return err
 	}
 
-	// Reference: rippled CreateOffer.cpp preflight() lines 61-65
+	// The invalid-flags mask (GetFlagsMask) is enforced by the engine at the
+	// preflight0 position, before this body — mirroring rippled preflight0.
 	flags := o.GetFlags()
-	if flags&tfOfferCreateMask != 0 {
-		return ter.Errorf(ter.TemINVALID_FLAG, "invalid flags set")
+
+	// tfHybrid requires DomainID (rules-independent; rippled's first body check).
+	if (flags&tfHybrid != 0) && o.DomainID == nil {
+		return ter.Errorf(ter.TemINVALID_FLAG, "tfHybrid requires DomainID")
 	}
 
-	// IoC and FoK are mutually exclusive
-	// Reference: lines 73-80
+	// IoC and FoK are mutually exclusive.
 	bImmediateOrCancel := (flags & OfferCreateFlagImmediateOrCancel) != 0
 	bFillOrKill := (flags & OfferCreateFlagFillOrKill) != 0
 	if bImmediateOrCancel && bFillOrKill {
 		return ter.Errorf(ter.TemINVALID_FLAG, "cannot set both ImmediateOrCancel and FillOrKill")
-	}
-
-	// tfHybrid requires DomainID (rules-independent check)
-	// Reference: lines 70-71
-	if (flags&tfHybrid != 0) && o.DomainID == nil {
-		return ter.Errorf(ter.TemINVALID_FLAG, "tfHybrid requires DomainID")
 	}
 
 	// Reference: lines 82-88
@@ -53,10 +50,10 @@ func (o *OfferCreate) Validate() error {
 	saTakerGets := o.TakerGets
 
 	// Check required amounts are present (unset Amount has no type info)
-	if !saTakerPays.IsNative() && saTakerPays.Currency == "" {
+	if !saTakerPays.IsNative() && !saTakerPays.IsMPT() && saTakerPays.Currency == "" {
 		return ter.Errorf(ter.TemBAD_OFFER, "TakerPays is required")
 	}
-	if !saTakerGets.IsNative() && saTakerGets.Currency == "" {
+	if !saTakerGets.IsNative() && !saTakerGets.IsMPT() && saTakerGets.Currency == "" {
 		return ter.Errorf(ter.TemBAD_OFFER, "TakerGets is required")
 	}
 
@@ -77,35 +74,51 @@ func (o *OfferCreate) Validate() error {
 		return ter.Errorf(ter.TemBAD_OFFER, "amounts must be positive")
 	}
 
-	uPaysCurrency := saTakerPays.Currency
-	uPaysIssuerID := saTakerPays.Issuer
-	uGetsCurrency := saTakerGets.Currency
-	uGetsIssuerID := saTakerGets.Issuer
-
 	// Check for redundant offer (same currency and issuer)
 	// Reference: lines 120-124
-	if uPaysCurrency == uGetsCurrency && uPaysIssuerID == uGetsIssuerID {
+	if sameOfferAsset(saTakerPays, saTakerGets) {
 		return ter.Errorf(ter.TemREDUNDANT, "cannot create offer with same currency and issuer on both sides")
+	}
+	if badOfferMPTAsset(saTakerPays) || badOfferMPTAsset(saTakerGets) {
+		return ter.Errorf(ter.TemBAD_CURRENCY, "MPT issuance ID has a zero issuer")
 	}
 
 	// Check for bad currency (XRP as non-native currency code)
 	// Reference: lines 126-130
-	if !saTakerPays.IsNative() && uPaysCurrency == badCurrency() {
+	if !saTakerPays.IsNative() && !saTakerPays.IsMPT() && saTakerPays.Currency == badCurrency() {
 		return ter.Errorf(ter.TemBAD_CURRENCY, "cannot use XRP as non-native currency code")
 	}
-	if !saTakerGets.IsNative() && uGetsCurrency == badCurrency() {
+	if !saTakerGets.IsNative() && !saTakerGets.IsMPT() && saTakerGets.Currency == badCurrency() {
 		return ter.Errorf(ter.TemBAD_CURRENCY, "cannot use XRP as non-native currency code")
 	}
 
 	// Reference: lines 132-137
-	if saTakerPays.IsNative() != (uPaysIssuerID == "") {
+	if !saTakerPays.IsMPT() && saTakerPays.IsNative() != (saTakerPays.Issuer == "") {
 		return ter.Errorf(ter.TemBAD_ISSUER, "issuer mismatch for TakerPays")
 	}
-	if saTakerGets.IsNative() != (uGetsIssuerID == "") {
+	if !saTakerGets.IsMPT() && saTakerGets.IsNative() != (saTakerGets.Issuer == "") {
 		return ter.Errorf(ter.TemBAD_ISSUER, "issuer mismatch for TakerGets")
 	}
 
 	return nil
+}
+
+func sameOfferAsset(a, b tx.Amount) bool {
+	if a.IsMPT() || b.IsMPT() {
+		return a.IsMPT() && b.IsMPT() && a.MPTIssuanceID() == b.MPTIssuanceID()
+	}
+	if a.IsNative() || b.IsNative() {
+		return a.IsNative() && b.IsNative()
+	}
+	return a.Currency == b.Currency && a.Issuer == b.Issuer
+}
+
+func badOfferMPTAsset(amount tx.Amount) bool {
+	if !amount.IsMPT() {
+		return false
+	}
+	id, err := mptutil.DecodeID(amount.MPTIssuanceID())
+	return err != nil || mptutil.Issuer(id) == ([20]byte{})
 }
 
 // badCurrency returns the "bad" currency code - using XRP as a non-native currency code
@@ -114,24 +127,40 @@ func badCurrency() string {
 	return "XRP"
 }
 
-// PreflightRules performs the amendment-rules-dependent preflight checks for
-// OfferCreate. The rules-independent structural validation lives in Validate().
-// The engine runs this right after Validate(), so these tem* rejections happen
-// before fee deduction, matching rippled's preflight().
-// Reference: rippled CreateOffer.cpp preflight() lines 49-51, 67-68
-func (o *OfferCreate) PreflightRules(rules *amendment.Rules) error {
-	// Check if DomainID field is present without PermissionedDEX amendment
-	// Reference: rippled CreateOffer.cpp preflight() lines 49-51
+// GetFlagsMask returns the invalid-flags mask enforced by the engine at the
+// preflight0 position. It is amendment-conditional, mirroring rippled
+// CreateOffer::getFlagsMask: tfHybrid is only a valid flag once PermissionedDEX
+// is enabled, so with the amendment off it is added to the invalid mask.
+func (o *OfferCreate) GetFlagsMask(rules *amendment.Rules) uint32 {
+	if rules.PermissionedDEXEnabled() {
+		return tfOfferCreateMask
+	}
+	return tfOfferCreateMask | tfHybrid
+}
+
+// CheckExtraFeatures runs the amendment gate rippled evaluates in
+// checkExtraFeatures — before preflight0's flags mask and the common checks — so
+// an sfDomainID under a disabled PermissionedDEX surfaces temDISABLED ahead of
+// every other tx-specific tem code.
+func (o *OfferCreate) CheckExtraFeatures(rules *amendment.Rules) error {
 	if o.DomainID != nil && !rules.PermissionedDEXEnabled() {
 		return ter.Errorf(ter.TemDISABLED, "DomainID requires PermissionedDEX amendment")
 	}
-
-	// Reference: lines 67-68
-	flags := o.GetFlags()
-	if !rules.PermissionedDEXEnabled() && (flags&tfHybrid != 0) {
-		return ter.Errorf(ter.TemINVALID_FLAG, "tfHybrid requires PermissionedDEX amendment")
+	// MPT-denominated offers require MPTokensV2 (rippled checkExtraFeatures).
+	if !rules.MPTokensV2Enabled() && (o.TakerPays.IsMPT() || o.TakerGets.IsMPT()) {
+		return ter.Errorf(ter.TemDISABLED, "MPT amounts require MPTokensV2 amendment")
 	}
+	return nil
+}
 
+// PreflightRules carries the amendment-gated tem* checks rippled evaluates in
+// OfferCreate::preflight after the flags mask.
+func (o *OfferCreate) PreflightRules(rules *amendment.Rules) error {
+	// A zero DomainID is invalid: keylet::permissionedDomain uses the DomainID
+	// as the ledger key, so a zero DomainID can never name a domain entry.
+	if o.DomainID != nil && rules.FixCleanup3_2_0Enabled() && *o.DomainID == ([32]byte{}) {
+		return ter.Errorf(ter.TemMALFORMED, "DomainID cannot be zero")
+	}
 	return nil
 }
 
@@ -139,8 +168,6 @@ func (o *OfferCreate) PreflightRules(rules *amendment.Rules) error {
 // Runs through the engine's Preclaimer dispatch, before fee deduction.
 // Reference: rippled CreateOffer.cpp preclaim() lines 142-225
 func (o *OfferCreate) Preclaim(view tx.LedgerView, config tx.EngineConfig) ter.Result {
-	rules := config.GetRules()
-
 	accountID, err := state.DecodeAccountID(o.Account)
 	if err != nil {
 		return ter.TemBAD_SRC_ACCOUNT
@@ -160,12 +187,28 @@ func (o *OfferCreate) Preclaim(view tx.LedgerView, config tx.EngineConfig) ter.R
 	uGetsIssuerID := saTakerGets.Issuer
 
 	// Reference: lines 165-170
-	if uPaysIssuerID != "" {
+	if saTakerPays.IsMPT() {
+		id, decodeErr := mptutil.DecodeID(saTakerPays.MPTIssuanceID())
+		if decodeErr != nil {
+			return ter.TefINTERNAL
+		}
+		if mptutil.IsGlobalFrozen(view, id) {
+			return ter.TecLOCKED
+		}
+	} else if uPaysIssuerID != "" {
 		if tx.IsGlobalFrozen(view, uPaysIssuerID) {
 			return ter.TecFROZEN
 		}
 	}
-	if uGetsIssuerID != "" {
+	if saTakerGets.IsMPT() {
+		id, decodeErr := mptutil.DecodeID(saTakerGets.MPTIssuanceID())
+		if decodeErr != nil {
+			return ter.TefINTERNAL
+		}
+		if mptutil.IsGlobalFrozen(view, id) {
+			return ter.TecLOCKED
+		}
+	} else if uGetsIssuerID != "" {
 		if tx.IsGlobalFrozen(view, uGetsIssuerID) {
 			return ter.TecFROZEN
 		}
@@ -175,9 +218,25 @@ func (o *OfferCreate) Preclaim(view tx.LedgerView, config tx.EngineConfig) ter.R
 	// Reference: rippled CreateOffer.cpp preclaim() lines 172-178
 	// rippled checks accountFunds <= 0, NOT funds < takerGets.
 	// Partially-funded offers are allowed; only completely unfunded offers are rejected.
-	funds := tx.AccountFunds(view, accountID, saTakerGets, true, config.ReserveBase, config.ReserveIncrement)
-	if funds.Signum() <= 0 {
-		return ter.TecUNFUNDED_OFFER
+	if saTakerGets.IsMPT() {
+		id, decodeErr := mptutil.DecodeID(saTakerGets.MPTIssuanceID())
+		if decodeErr != nil {
+			return ter.TefINTERNAL
+		}
+		if accountID != mptutil.Issuer(id) {
+			funds, result := mptutil.Funds(view, id, accountID, true)
+			if result == ter.TefINTERNAL {
+				return result
+			}
+			if funds <= 0 {
+				return ter.TecUNFUNDED_OFFER
+			}
+		}
+	} else {
+		funds := tx.AccountFunds(view, accountID, saTakerGets, true, config.ReserveBase, config.ReserveIncrement)
+		if funds.Signum() <= 0 {
+			return ter.TecUNFUNDED_OFFER
+		}
 	}
 
 	// Check cancel sequence is valid. rippled compares the *pre-transaction*
@@ -192,20 +251,22 @@ func (o *OfferCreate) Preclaim(view tx.LedgerView, config tx.EngineConfig) ter.R
 
 	// Reference: lines 189-200
 	if tx.HasExpired(o.Expiration, config.ParentCloseTime) {
-		if rules.DepositPreauthEnabled() {
-			return ter.TecEXPIRED
-		}
-		return ter.TesSUCCESS
+		return ter.TecEXPIRED
 	}
 
 	// Check we can accept what the taker will pay us (for non-native)
 	// Reference: lines 203-213
 	if !saTakerPays.IsNative() {
-		paysIssuerID, err := state.DecodeAccountID(uPaysIssuerID)
-		if err != nil {
-			return ter.TecNO_ISSUER
+		var result ter.Result
+		if saTakerPays.IsMPT() {
+			result = checkAcceptMPT(view, accountID, saTakerPays, config.ParentCloseTime)
+		} else {
+			paysIssuerID, err := state.DecodeAccountID(uPaysIssuerID)
+			if err != nil {
+				return ter.TecNO_ISSUER
+			}
+			result = checkAcceptAsset(view, accountID, paysIssuerID, saTakerPays.Currency)
 		}
-		result := checkAcceptAsset(view, accountID, paysIssuerID, saTakerPays.Currency, rules)
 		if result != ter.TesSUCCESS {
 			return result
 		}
@@ -219,21 +280,56 @@ func (o *OfferCreate) Preclaim(view tx.LedgerView, config tx.EngineConfig) ter.R
 		}
 	}
 
+	for _, amount := range []tx.Amount{saTakerPays, saTakerGets} {
+		if amount.IsMPT() {
+			id, decodeErr := mptutil.DecodeID(amount.MPTIssuanceID())
+			if decodeErr != nil {
+				return ter.TefINTERNAL
+			}
+			if result := mptutil.CanTrade(view, id); result != ter.TesSUCCESS {
+				return result
+			}
+		}
+	}
+
+	return ter.TesSUCCESS
+}
+
+func checkAcceptMPT(view tx.LedgerView, accountID [20]byte, amount tx.Amount, parentCloseTime uint32) ter.Result {
+	id, err := mptutil.DecodeID(amount.MPTIssuanceID())
+	if err != nil {
+		return ter.TefINTERNAL
+	}
+	issuer := mptutil.Issuer(id)
+	issuerAccount, readErr := tx.ReadAccountRoot(view, issuer)
+	if readErr != nil || issuerAccount == nil {
+		return ter.TecNO_ISSUER
+	}
+	if accountID == issuer {
+		return ter.TesSUCCESS
+	}
+	if result := mptutil.RequireAuthAt(view, id, accountID, false, parentCloseTime); result != ter.TesSUCCESS {
+		return result
+	}
+	if mptutil.IsFrozen(view, id, accountID) {
+		return ter.TecLOCKED
+	}
 	return ter.TesSUCCESS
 }
 
 // checkAcceptAsset validates that an account can receive an asset.
 // Reference: rippled CreateOffer.cpp checkAcceptAsset() lines 227-312
-func checkAcceptAsset(view tx.LedgerView, accountID, issuerID [20]byte, currency string, rules *amendment.Rules) ter.Result {
+func checkAcceptAsset(view tx.LedgerView, accountID, issuerID [20]byte, currency string) ter.Result {
 	// Read issuer account
 	issuerAccount, err := tx.ReadAccountRoot(view, issuerID)
 	if err != nil || issuerAccount == nil {
 		return ter.TecNO_ISSUER
 	}
 
-	// If account is the issuer, always allowed
+	// An issuer can always accept its own issuance, and no self-trustline exists
+	// to be frozen. This early return precedes the RequireAuth check.
 	// Reference: lines 254-256
-	if rules.DepositPreauthEnabled() && accountID == issuerID {
+	if accountID == issuerID {
 		return ter.TesSUCCESS
 	}
 
@@ -262,12 +358,6 @@ func checkAcceptAsset(view tx.LedgerView, accountID, issuerID [20]byte, currency
 		if !isAuthorized {
 			return ter.TecNO_AUTH
 		}
-	}
-
-	// If account is issuer, always allowed (redundant check but matches rippled)
-	// Reference: lines 288-291
-	if accountID == issuerID {
-		return ter.TesSUCCESS
 	}
 
 	// Reference: lines 293-309

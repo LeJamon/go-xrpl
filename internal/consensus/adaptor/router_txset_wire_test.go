@@ -187,7 +187,7 @@ func TestRouter_GetLedger_TsCandidate_ServesCachedTxSet(t *testing.T) {
 		reconstructed.AddRootNode([32]byte(wantID), resp.Nodes[0].NodeData),
 		"AddRootNode must accept the served root payload")
 	for i := 1; i < len(resp.Nodes); i++ {
-		nid, err := shamap.UnmarshalBinary(resp.Nodes[i].NodeID)
+		nid, err := shamap.ParseNodeID(resp.Nodes[i].NodeID)
 		require.NoError(t, err, "node[%d] NodeID must parse", i)
 		_, err = reconstructed.AddKnownNodeByID(nid, resp.Nodes[i].NodeData)
 		require.NoError(t, err, "AddKnownNodeByID must accept node[%d]", i)
@@ -341,7 +341,7 @@ func TestRequestTxSet_WireFormat(t *testing.T) {
 		QueryDepth: 3,
 		NodeIDs:    [][]byte{rootNodeID},
 	}
-	frame, err := encodeFrame(message.TypeGetLedger, msg)
+	frame, err := message.EncodeFrame(msg)
 	require.NoError(t, err)
 
 	msgType, decoded := decodeFrame(t, frame)
@@ -405,7 +405,7 @@ func TestGetLedger_IndirectQueryType_Wire(t *testing.T) {
 				QueryDepth: 2,
 				QueryType:  indirectQueryType(tc.indirect),
 			}
-			frame, err := encodeFrame(message.TypeGetLedger, msg)
+			frame, err := message.EncodeFrame(msg)
 			require.NoError(t, err)
 
 			_, decoded := decodeFrame(t, frame)

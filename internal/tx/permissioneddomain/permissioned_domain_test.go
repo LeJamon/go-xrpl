@@ -190,18 +190,9 @@ func TestPermissionedDomainSetValidation(t *testing.T) {
 			wantErr: true,
 			errMsg:  "exceeds",
 		},
-		{
-			name: "invalid - non-universal flags set",
-			tx: func() *PermissionedDomainSet {
-				tx := NewPermissionedDomainSet("rOwner")
-				tx.AddAcceptedCredential("rIssuer1", makeCredTypeHex(10))
-				flags := uint32(0x00010000) // Not a universal flag
-				tx.Common.Flags = &flags
-				return tx
-			}(),
-			wantErr: true,
-			errMsg:  "invalid flags",
-		},
+		// The non-universal-flags rejection moved from Validate() to the engine
+		// FlagsMasker seam (preflight0), so it is covered by the engine precedence
+		// pin-test rather than this Validate()-only table.
 	}
 
 	for _, tt := range tests {
@@ -264,17 +255,9 @@ func TestPermissionedDomainDeleteValidation(t *testing.T) {
 			wantErr: true,
 			errMsg:  "hash",
 		},
-		{
-			name: "invalid - non-universal flags set",
-			tx: func() *PermissionedDomainDelete {
-				tx := NewPermissionedDomainDelete("rOwner", makeValidDomainID())
-				flags := uint32(0x00010000) // Not a universal flag
-				tx.Common.Flags = &flags
-				return tx
-			}(),
-			wantErr: true,
-			errMsg:  "invalid flags",
-		},
+		// The non-universal-flags rejection moved from Validate() to the engine
+		// FlagsMasker seam (preflight0), so it is covered by the engine precedence
+		// pin-test rather than this Validate()-only table.
 	}
 
 	for _, tt := range tests {

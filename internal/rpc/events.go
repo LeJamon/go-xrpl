@@ -2,16 +2,9 @@ package rpc
 
 import (
 	"encoding/json"
-	"time"
 
 	"github.com/LeJamon/go-xrpl/internal/rpc/types"
-	"github.com/LeJamon/go-xrpl/protocol"
 )
-
-// ToRippleTime converts a time.Time to seconds since Ripple epoch
-func ToRippleTime(t time.Time) uint32 {
-	return uint32(t.Unix() - protocol.RippleEpochUnix)
-}
 
 // LedgerCloseEvent represents a ledger close notification sent to subscribers
 // This matches the rippled ledgerClosed stream message format
@@ -41,12 +34,14 @@ type TransactionEvent struct {
 	LedgerCurrentIndex  uint32          `json:"ledger_current_index,omitempty"` // Current ledger index (for proposed)
 	LedgerHash          string          `json:"ledger_hash,omitempty"`          // Hash of the ledger containing the tx
 	LedgerIndex         uint32          `json:"ledger_index,omitempty"`         // Sequence of the ledger containing the tx
-	Meta                json.RawMessage `json:"meta,omitempty"`                 // Transaction metadata (for validated)
-	Transaction         json.RawMessage `json:"transaction"`                    // The transaction object
-	TxJson              json.RawMessage `json:"tx_json,omitempty"`              // Transaction JSON (alternative format)
-	Hash                string          `json:"hash,omitempty"`                 // Transaction hash
-	Validated           bool            `json:"validated"`                      // Whether tx is in a validated ledger
-	Status              string          `json:"status,omitempty"`               // Status for proposed transactions
+	CloseTimeISO        string          `json:"close_time_iso,omitempty"`
+	CTID                string          `json:"ctid,omitempty"`
+	Meta                json.RawMessage `json:"meta,omitempty"`        // Transaction metadata (for validated)
+	Transaction         json.RawMessage `json:"transaction,omitempty"` // The transaction object
+	TxJson              json.RawMessage `json:"tx_json,omitempty"`     // Transaction JSON (alternative format)
+	Hash                string          `json:"hash,omitempty"`        // Transaction hash
+	Validated           bool            `json:"validated"`             // Whether tx is in a validated ledger
+	Status              string          `json:"status,omitempty"`      // Status for proposed transactions
 	// Account subscription specific fields
 	Account string `json:"account,omitempty"` // Account that was affected (for account subscriptions)
 }
@@ -207,26 +202,10 @@ const (
 	PeerStatusShutting   = "SHUTTING"
 )
 
-// OrderBookChangeEvent represents changes to an order book
-// This is sent to subscribers of specific order books
-type OrderBookChangeEvent struct {
-	Type        string          `json:"type"`   // Always "orderBookChange" or "transaction"
-	Status      string          `json:"status"` // "closed" for processed changes
-	LedgerIndex uint32          `json:"ledger_index,omitempty"`
-	LedgerHash  string          `json:"ledger_hash,omitempty"`
-	LedgerTime  uint32          `json:"ledger_time,omitempty"`
-	TakerGets   json.RawMessage `json:"taker_gets,omitempty"` // What the offer provides
-	TakerPays   json.RawMessage `json:"taker_pays,omitempty"` // What the offer requests
-	// The transaction that caused the change
-	Transaction json.RawMessage `json:"transaction,omitempty"`
-	Meta        json.RawMessage `json:"meta,omitempty"`
-	Validated   bool            `json:"validated,omitempty"`
-}
-
 // PathFindEvent represents path finding results
 // This is sent in response to path_find create requests
 type PathFindEvent struct {
-	Type               string            `json:"type"`                // "path_find"
+	Type               string            `json:"type,omitempty"`      // "path_find" on pushed updates
 	ID                 any               `json:"id,omitempty"`        // Request ID
 	SourceAccount      string            `json:"source_account"`      // Source account
 	DestinationAccount string            `json:"destination_account"` // Destination account
@@ -239,9 +218,10 @@ type PathFindEvent struct {
 
 // PathAlternative represents a single path alternative
 type PathAlternative struct {
-	PathsCanonical [][]types.PathStep `json:"paths_canonical,omitempty"` // Canonical path representation
-	PathsComputed  [][]types.PathStep `json:"paths_computed,omitempty"`  // Computed paths
-	SourceAmount   json.RawMessage    `json:"source_amount"`             // Amount to send
+	DestinationAmount json.RawMessage    `json:"destination_amount,omitempty"`
+	PathsCanonical    [][]types.PathStep `json:"paths_canonical,omitempty"` // Canonical path representation
+	PathsComputed     [][]types.PathStep `json:"paths_computed,omitempty"`  // Computed paths
+	SourceAmount      json.RawMessage    `json:"source_amount"`             // Amount to send
 }
 
 // ProposedTransactionEvent represents a proposed (unvalidated) transaction
@@ -252,10 +232,11 @@ type ProposedTransactionEvent struct {
 	EngineResultCode    int             `json:"engine_result_code"`    // Numeric code
 	EngineResultMessage string          `json:"engine_result_message"` // Human message
 	LedgerCurrentIndex  uint32          `json:"ledger_current_index"`  // Current open ledger
-	Transaction         json.RawMessage `json:"transaction"`           // Transaction object
+	Transaction         json.RawMessage `json:"transaction,omitempty"` // API v1 transaction object
+	TxJson              json.RawMessage `json:"tx_json,omitempty"`     // API v2 transaction object
+	Hash                string          `json:"hash,omitempty"`        // API v2 transaction hash
 	Validated           bool            `json:"validated"`             // Always false for proposed
 	Status              string          `json:"status,omitempty"`      // "proposed"
-	Account             string          `json:"account,omitempty"`     // Affected account
 }
 
 // NewProposedTransactionEvent creates a new proposed transaction event
@@ -265,7 +246,7 @@ func NewProposedTransactionEvent(
 	engineResultCode int,
 	engineResultMessage string,
 	ledgerCurrentIndex uint32,
-	account string,
+	hash string,
 ) *ProposedTransactionEvent {
 	return &ProposedTransactionEvent{
 		Type:                "transaction",
@@ -274,8 +255,8 @@ func NewProposedTransactionEvent(
 		EngineResultCode:    engineResultCode,
 		EngineResultMessage: engineResultMessage,
 		LedgerCurrentIndex:  ledgerCurrentIndex,
+		Hash:                hash,
 		Validated:           false,
 		Status:              "proposed",
-		Account:             account,
 	}
 }

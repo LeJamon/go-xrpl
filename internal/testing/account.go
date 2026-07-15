@@ -1,4 +1,4 @@
-package testing
+package jtx
 
 import (
 	"crypto/sha512"
@@ -75,9 +75,9 @@ func newAccountFromSeedBytes(name string, seed []byte, keyType string) *Account 
 	var err error
 	switch keyType {
 	case KeyTypeEd25519:
-		privKeyHex, pubKeyHex, err = ed25519.ED25519().DeriveKeypair(seed, false)
+		privKeyHex, pubKeyHex, err = ed25519.Algorithm{}.DeriveKeypair(seed, false)
 	case KeyTypeSecp256k1:
-		privKeyHex, pubKeyHex, err = secp256k1.SECP256K1().DeriveKeypair(seed, false)
+		privKeyHex, pubKeyHex, err = secp256k1.Algorithm{}.DeriveKeypair(seed, false)
 	default:
 		panic("unsupported key type: " + keyType + " (must be 'secp256k1' or 'ed25519')")
 	}

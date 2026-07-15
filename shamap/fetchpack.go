@@ -93,7 +93,7 @@ func VerifyFetchPackNode(expected [32]byte, data []byte) bool {
 	if len(data) == 0 {
 		return false
 	}
-	node, err := DeserializeFromPrefix(data)
+	node, err := deserializeFromPrefix(data)
 	if err != nil {
 		return false
 	}

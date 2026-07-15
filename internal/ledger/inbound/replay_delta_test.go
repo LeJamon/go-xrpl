@@ -6,7 +6,7 @@ import (
 	"time"
 
 	"github.com/LeJamon/go-xrpl/codec/binarycodec"
-	"github.com/LeJamon/go-xrpl/crypto/common"
+	"github.com/LeJamon/go-xrpl/crypto/sha512half"
 	"github.com/LeJamon/go-xrpl/drops"
 	"github.com/LeJamon/go-xrpl/internal/ledger"
 	"github.com/LeJamon/go-xrpl/internal/ledger/genesis"
@@ -66,7 +66,7 @@ func makeTxWithMetaBlob(t *testing.T, txBytes []byte, txIndex uint32) ([]byte, [
 	t.Helper()
 	metaBytes := makeMetadataBlob(t, txIndex)
 
-	txID := common.Sha512Half(protocol.HashPrefixTransactionID[:], txBytes)
+	txID := sha512half.Sum(protocol.HashPrefixTransactionID().Bytes(), txBytes)
 
 	blob := make([]byte, 0, len(txBytes)+len(metaBytes)+4)
 	blob = append(blob, encodeVL(len(txBytes))...)
@@ -98,10 +98,6 @@ func buildDeltaResponse(
 	require.NoError(t, err)
 
 	parentHash := parent.Hash()
-	// Use close times well past the XRPL epoch so AddRaw / DeserializeHeader
-	// round-trip cleanly (the xrplEpochToTime helper turns a zero
-	// uint32 into a Go zero time, which then breaks CalculateLedgerHash's
-	// .Unix() arithmetic — the test must avoid that boundary).
 	closeTime := time.Date(2025, 1, 2, 3, 4, 5, 0, time.UTC)
 	hdr := header.LedgerHeader{
 		LedgerIndex:         parent.Sequence() + 1,
@@ -394,7 +390,8 @@ func TestInboundReplayDelta_ParentHashMismatch(t *testing.T) {
 	txSnap, err := other.TxMapSnapshot()
 	require.NoError(t, err)
 	require.NoError(t, txSnap.SetImmutable())
-	wrong := ledger.NewFromHeader(hdr, stateSnap, txSnap, drops.Fees{})
+	wrong, err := ledger.NewFromHeader(hdr, stateSnap, txSnap, drops.Fees{})
+	require.NoError(t, err)
 
 	rd := NewReplayDelta(expectedHash, 42, wrong, nil)
 	err = rd.GotResponse(resp)

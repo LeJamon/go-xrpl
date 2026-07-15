@@ -5,7 +5,7 @@ import (
 	"fmt"
 
 	"github.com/LeJamon/go-xrpl/internal/ledger/state"
-	"github.com/LeJamon/go-xrpl/internal/testing"
+	jtx "github.com/LeJamon/go-xrpl/internal/testing"
 	"github.com/LeJamon/go-xrpl/internal/tx"
 	"github.com/LeJamon/go-xrpl/internal/tx/ledgerstatefix"
 	"github.com/LeJamon/go-xrpl/internal/tx/nftoken"
@@ -14,13 +14,13 @@ import (
 
 // NFTokenMintBuilder provides a fluent interface for building NFTokenMint transactions.
 type NFTokenMintBuilder struct {
-	account     *testing.Account
+	account     *jtx.Account
 	taxon       uint32
-	issuer      *testing.Account
+	issuer      *jtx.Account
 	transferFee *uint16
 	uri         string
 	amount      *tx.Amount
-	destination *testing.Account
+	destination *jtx.Account
 	expiration  *uint32
 	fee         uint64
 	sequence    *uint32
@@ -29,7 +29,7 @@ type NFTokenMintBuilder struct {
 
 // NFTokenMint creates a new NFTokenMintBuilder.
 // taxon is the taxon for categorizing the NFT.
-func NFTokenMint(account *testing.Account, taxon uint32) *NFTokenMintBuilder {
+func NFTokenMint(account *jtx.Account, taxon uint32) *NFTokenMintBuilder {
 	return &NFTokenMintBuilder{
 		account: account,
 		taxon:   taxon,
@@ -38,7 +38,7 @@ func NFTokenMint(account *testing.Account, taxon uint32) *NFTokenMintBuilder {
 }
 
 // Issuer sets the issuer of the token (for minting on behalf of another account).
-func (b *NFTokenMintBuilder) Issuer(issuer *testing.Account) *NFTokenMintBuilder {
+func (b *NFTokenMintBuilder) Issuer(issuer *jtx.Account) *NFTokenMintBuilder {
 	b.issuer = issuer
 	return b
 }
@@ -69,7 +69,7 @@ func (b *NFTokenMintBuilder) Amount(amount tx.Amount) *NFTokenMintBuilder {
 }
 
 // Destination sets the account to receive the minted token.
-func (b *NFTokenMintBuilder) Destination(dest *testing.Account) *NFTokenMintBuilder {
+func (b *NFTokenMintBuilder) Destination(dest *jtx.Account) *NFTokenMintBuilder {
 	b.destination = dest
 	return b
 }
@@ -169,16 +169,16 @@ func (b *NFTokenMintBuilder) BuildNFTokenMint() *nftoken.NFTokenMint {
 
 // NFTokenBurnBuilder provides a fluent interface for building NFTokenBurn transactions.
 type NFTokenBurnBuilder struct {
-	account   *testing.Account
+	account   *jtx.Account
 	nftokenID string
-	owner     *testing.Account
+	owner     *jtx.Account
 	fee       uint64
 	sequence  *uint32
 }
 
 // NFTokenBurn creates a new NFTokenBurnBuilder.
 // nftokenID is the ID of the token to burn.
-func NFTokenBurn(account *testing.Account, nftokenID string) *NFTokenBurnBuilder {
+func NFTokenBurn(account *jtx.Account, nftokenID string) *NFTokenBurnBuilder {
 	return &NFTokenBurnBuilder{
 		account:   account,
 		nftokenID: nftokenID,
@@ -187,7 +187,7 @@ func NFTokenBurn(account *testing.Account, nftokenID string) *NFTokenBurnBuilder
 }
 
 // Owner sets the owner of the token (for authorized burns by issuer).
-func (b *NFTokenBurnBuilder) Owner(owner *testing.Account) *NFTokenBurnBuilder {
+func (b *NFTokenBurnBuilder) Owner(owner *jtx.Account) *NFTokenBurnBuilder {
 	b.owner = owner
 	return b
 }
@@ -226,11 +226,11 @@ func (b *NFTokenBurnBuilder) BuildNFTokenBurn() *nftoken.NFTokenBurn {
 
 // NFTokenCreateOfferBuilder provides a fluent interface for building NFTokenCreateOffer transactions.
 type NFTokenCreateOfferBuilder struct {
-	account     *testing.Account
+	account     *jtx.Account
 	nftokenID   string
 	amount      tx.Amount
-	owner       *testing.Account
-	destination *testing.Account
+	owner       *jtx.Account
+	destination *jtx.Account
 	expiration  *uint32
 	fee         uint64
 	sequence    *uint32
@@ -239,7 +239,7 @@ type NFTokenCreateOfferBuilder struct {
 
 // NFTokenCreateSellOffer creates a new NFTokenCreateOfferBuilder for a sell offer.
 // The account is selling the NFT for the specified amount.
-func NFTokenCreateSellOffer(account *testing.Account, nftokenID string, amount tx.Amount) *NFTokenCreateOfferBuilder {
+func NFTokenCreateSellOffer(account *jtx.Account, nftokenID string, amount tx.Amount) *NFTokenCreateOfferBuilder {
 	return &NFTokenCreateOfferBuilder{
 		account:   account,
 		nftokenID: nftokenID,
@@ -251,7 +251,7 @@ func NFTokenCreateSellOffer(account *testing.Account, nftokenID string, amount t
 
 // NFTokenCreateBuyOffer creates a new NFTokenCreateOfferBuilder for a buy offer.
 // The account is offering to buy the NFT from owner for the specified amount.
-func NFTokenCreateBuyOffer(account *testing.Account, nftokenID string, amount tx.Amount, owner *testing.Account) *NFTokenCreateOfferBuilder {
+func NFTokenCreateBuyOffer(account *jtx.Account, nftokenID string, amount tx.Amount, owner *jtx.Account) *NFTokenCreateOfferBuilder {
 	return &NFTokenCreateOfferBuilder{
 		account:   account,
 		nftokenID: nftokenID,
@@ -262,7 +262,7 @@ func NFTokenCreateBuyOffer(account *testing.Account, nftokenID string, amount tx
 }
 
 // Destination sets who can accept this offer.
-func (b *NFTokenCreateOfferBuilder) Destination(dest *testing.Account) *NFTokenCreateOfferBuilder {
+func (b *NFTokenCreateOfferBuilder) Destination(dest *jtx.Account) *NFTokenCreateOfferBuilder {
 	b.destination = dest
 	return b
 }
@@ -316,7 +316,7 @@ func (b *NFTokenCreateOfferBuilder) BuildNFTokenCreateOffer() *nftoken.NFTokenCr
 
 // NFTokenCancelOfferBuilder provides a fluent interface for building NFTokenCancelOffer transactions.
 type NFTokenCancelOfferBuilder struct {
-	account  *testing.Account
+	account  *jtx.Account
 	offerIDs []string
 	fee      uint64
 	sequence *uint32
@@ -324,7 +324,7 @@ type NFTokenCancelOfferBuilder struct {
 
 // NFTokenCancelOffer creates a new NFTokenCancelOfferBuilder.
 // offerIDs is the list of offer IDs to cancel.
-func NFTokenCancelOffer(account *testing.Account, offerIDs ...string) *NFTokenCancelOfferBuilder {
+func NFTokenCancelOffer(account *jtx.Account, offerIDs ...string) *NFTokenCancelOfferBuilder {
 	return &NFTokenCancelOfferBuilder{
 		account:  account,
 		offerIDs: offerIDs,
@@ -369,7 +369,7 @@ func (b *NFTokenCancelOfferBuilder) BuildNFTokenCancelOffer() *nftoken.NFTokenCa
 
 // NFTokenAcceptOfferBuilder provides a fluent interface for building NFTokenAcceptOffer transactions.
 type NFTokenAcceptOfferBuilder struct {
-	account   *testing.Account
+	account   *jtx.Account
 	sellOffer string
 	buyOffer  string
 	brokerFee *tx.Amount
@@ -378,7 +378,7 @@ type NFTokenAcceptOfferBuilder struct {
 }
 
 // NFTokenAcceptOffer creates a new NFTokenAcceptOfferBuilder.
-func NFTokenAcceptOffer(account *testing.Account) *NFTokenAcceptOfferBuilder {
+func NFTokenAcceptOffer(account *jtx.Account) *NFTokenAcceptOfferBuilder {
 	return &NFTokenAcceptOfferBuilder{
 		account: account,
 		fee:     10, // Default fee: 10 drops
@@ -386,7 +386,7 @@ func NFTokenAcceptOffer(account *testing.Account) *NFTokenAcceptOfferBuilder {
 }
 
 // NFTokenAcceptSellOffer creates a builder to accept a sell offer.
-func NFTokenAcceptSellOffer(account *testing.Account, sellOfferID string) *NFTokenAcceptOfferBuilder {
+func NFTokenAcceptSellOffer(account *jtx.Account, sellOfferID string) *NFTokenAcceptOfferBuilder {
 	return &NFTokenAcceptOfferBuilder{
 		account:   account,
 		sellOffer: sellOfferID,
@@ -395,7 +395,7 @@ func NFTokenAcceptSellOffer(account *testing.Account, sellOfferID string) *NFTok
 }
 
 // NFTokenAcceptBuyOffer creates a builder to accept a buy offer.
-func NFTokenAcceptBuyOffer(account *testing.Account, buyOfferID string) *NFTokenAcceptOfferBuilder {
+func NFTokenAcceptBuyOffer(account *jtx.Account, buyOfferID string) *NFTokenAcceptOfferBuilder {
 	return &NFTokenAcceptOfferBuilder{
 		account:  account,
 		buyOffer: buyOfferID,
@@ -404,7 +404,7 @@ func NFTokenAcceptBuyOffer(account *testing.Account, buyOfferID string) *NFToken
 }
 
 // NFTokenBrokeredSale creates a builder for a brokered sale (matching buy and sell offers).
-func NFTokenBrokeredSale(broker *testing.Account, sellOfferID, buyOfferID string) *NFTokenAcceptOfferBuilder {
+func NFTokenBrokeredSale(broker *jtx.Account, sellOfferID, buyOfferID string) *NFTokenAcceptOfferBuilder {
 	return &NFTokenAcceptOfferBuilder{
 		account:   broker,
 		sellOffer: sellOfferID,
@@ -471,9 +471,9 @@ func (b *NFTokenAcceptOfferBuilder) BuildNFTokenAcceptOffer() *nftoken.NFTokenAc
 
 // NFTokenModifyBuilder provides a fluent interface for building NFTokenModify transactions.
 type NFTokenModifyBuilder struct {
-	account   *testing.Account
+	account   *jtx.Account
 	nftokenID string
-	owner     *testing.Account
+	owner     *jtx.Account
 	uri       string
 	fee       uint64
 	sequence  *uint32
@@ -481,7 +481,7 @@ type NFTokenModifyBuilder struct {
 
 // NFTokenModify creates a new NFTokenModifyBuilder.
 // nftokenID is the ID of the token to modify.
-func NFTokenModify(account *testing.Account, nftokenID string) *NFTokenModifyBuilder {
+func NFTokenModify(account *jtx.Account, nftokenID string) *NFTokenModifyBuilder {
 	return &NFTokenModifyBuilder{
 		account:   account,
 		nftokenID: nftokenID,
@@ -490,7 +490,7 @@ func NFTokenModify(account *testing.Account, nftokenID string) *NFTokenModifyBui
 }
 
 // Owner sets the owner of the token (for modifying on behalf of the owner).
-func (b *NFTokenModifyBuilder) Owner(owner *testing.Account) *NFTokenModifyBuilder {
+func (b *NFTokenModifyBuilder) Owner(owner *jtx.Account) *NFTokenModifyBuilder {
 	b.owner = owner
 	return b
 }
@@ -551,9 +551,9 @@ func (b *NFTokenModifyBuilder) BuildNFTokenModify() *nftoken.NFTokenModify {
 // LedgerStateFixBuilder provides a fluent interface for building LedgerStateFix transactions.
 // Reference: rippled ledgerStateFix::nftPageLinks()
 type LedgerStateFixBuilder struct {
-	account  *testing.Account
-	owner    *testing.Account
-	fixType  *uint8
+	account  *jtx.Account
+	owner    *jtx.Account
+	fixType  *uint16
 	fee      uint64
 	sequence *uint32
 	flags    uint32
@@ -561,8 +561,8 @@ type LedgerStateFixBuilder struct {
 
 // LedgerStateFixNFTPageLinks creates a new LedgerStateFixBuilder for NFToken page link repair.
 // account submits the fix; owner is the account whose pages are repaired.
-func LedgerStateFixNFTPageLinks(account, owner *testing.Account) *LedgerStateFixBuilder {
-	fixType := uint8(1) // LedgerFixTypeNFTokenPageLink
+func LedgerStateFixNFTPageLinks(account, owner *jtx.Account) *LedgerStateFixBuilder {
+	fixType := uint16(1) // LedgerFixTypeNFTokenPageLink
 	return &LedgerStateFixBuilder{
 		account: account,
 		owner:   owner,
@@ -590,7 +590,7 @@ func (b *LedgerStateFixBuilder) Flags(flags uint32) *LedgerStateFixBuilder {
 }
 
 // FixType overrides the LedgerFixType field.
-func (b *LedgerStateFixBuilder) FixType(ft uint8) *LedgerStateFixBuilder {
+func (b *LedgerStateFixBuilder) FixType(ft uint16) *LedgerStateFixBuilder {
 	b.fixType = &ft
 	return b
 }
@@ -641,7 +641,7 @@ func isHexEncoded(s string) bool {
 // Reference: rippled FixNFTokenPageLinks_test.cpp internalTaxon lambda and
 //
 //	rippled token.cpp getID() lines 90-97.
-func GetNFTokenSeq(env *testing.TestEnv, acct *testing.Account) uint32 {
+func GetNFTokenSeq(env *jtx.TestEnv, acct *jtx.Account) uint32 {
 	nftSeq := env.MintedCount(acct)
 
 	if env.FeatureEnabled("fixNFTokenRemint") {
@@ -666,7 +666,7 @@ func GetNFTokenSeq(env *testing.TestEnv, acct *testing.Account) uint32 {
 // Reference: rippled's token::getNextID(env, issuer, taxon, flags, xferFee) +
 //
 //	token::getID(env, issuer, taxon, nftSeq, flags, xferFee).
-func GetNextNFTokenID(env *testing.TestEnv, issuer *testing.Account, taxon uint32, flags uint16, transferFee uint16) string {
+func GetNextNFTokenID(env *jtx.TestEnv, issuer *jtx.Account, taxon uint32, flags uint16, transferFee uint16) string {
 	nftSeq := GetNFTokenSeq(env, issuer)
 	tokenID := nftoken.GenerateNFTokenID(issuer.ID, taxon, nftSeq, flags, transferFee)
 	return hex.EncodeToString(tokenID[:])
@@ -676,14 +676,14 @@ func GetNextNFTokenID(env *testing.TestEnv, issuer *testing.Account, taxon uint3
 // the next NFTokenMint, accounting for the fixNFTokenRemint offset.
 // This is needed when computing ciphered taxons in tests.
 // Reference: rippled NFTokenMint.cpp doApply — tokenSeq computation.
-func GetNextTokenSeq(env *testing.TestEnv, issuer *testing.Account) uint32 {
+func GetNextTokenSeq(env *jtx.TestEnv, issuer *jtx.Account) uint32 {
 	return GetNFTokenSeq(env, issuer)
 }
 
 // GetOfferIndex predicts the offer index (keylet) that will be created.
 // Must be called BEFORE submitting the NFTokenCreateOffer transaction.
 // Reference: rippled's keylet::nftoffer(account, env.seq(account)).key.
-func GetOfferIndex(env *testing.TestEnv, acc *testing.Account) string {
+func GetOfferIndex(env *jtx.TestEnv, acc *jtx.Account) string {
 	seq := env.Seq(acc)
 	k := keylet.NFTokenOffer(acc.ID, seq)
 	return hex.EncodeToString(k.Key[:])

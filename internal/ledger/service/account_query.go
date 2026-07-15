@@ -18,6 +18,7 @@ import (
 	"github.com/LeJamon/go-xrpl/internal/tx"
 	"github.com/LeJamon/go-xrpl/internal/tx/credential"
 	"github.com/LeJamon/go-xrpl/keylet"
+	"github.com/LeJamon/go-xrpl/protocol"
 )
 
 // AccountInfoResult contains account information from the ledger
@@ -67,12 +68,9 @@ func parseDirMarker(marker string) (afterKey [32]byte, page uint64, present bool
 }
 
 func formatDirMarker(key [32]byte, page uint64) string {
-	return formatHashHex(key) + "," + strconv.FormatUint(page, 10)
+	return protocol.Hash256Hex(key) + "," + strconv.FormatUint(page, 10)
 }
 
-// withAccountQuery runs the shared account_* preamble — context check, read lock,
-// ledger resolution, address decode — then invokes fn with the resolved ledger,
-// account ID and validated flag while the read lock is held.
 func withAccountQuery[T any](
 	s *Service,
 	ctx context.Context,
@@ -84,11 +82,7 @@ func withAccountQuery[T any](
 	if err := ctx.Err(); err != nil {
 		return zero, err
 	}
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-
-	// resolves shortcuts / numeric index / ledger_hash to the target ledger.
-	targetLedger, validated, err := s.getLedgerForQuery(ledgerIndex)
+	targetLedger, validated, err := s.resolveLedgerForQuery(ctx, ledgerIndex)
 	if err != nil {
 		return zero, err
 	}
@@ -108,7 +102,7 @@ func (s *Service) GetAccountInfo(ctx context.Context, account string, ledgerInde
 	return withAccountQuery(s, ctx, account, ledgerIndex, func(targetLedger *ledger.Ledger, accountID [20]byte, validated bool) (*AccountInfoResult, error) {
 		accountKey := keylet.Account(accountID)
 
-		exists, err := targetLedger.Exists(accountKey)
+		exists, err := targetLedger.ExistsContext(ctx, accountKey)
 		if err != nil {
 			return nil, fmt.Errorf("failed to check account existence: %w", err)
 		}
@@ -116,7 +110,7 @@ func (s *Service) GetAccountInfo(ctx context.Context, account string, ledgerInde
 			return nil, svcerr.ErrAccountNotFound
 		}
 
-		data, err := targetLedger.Read(accountKey)
+		data, err := targetLedger.ReadContext(ctx, accountKey)
 		if err != nil {
 			return nil, fmt.Errorf("failed to read account: %w", err)
 		}
@@ -163,6 +157,9 @@ type TrustLine struct {
 	PeerAuthorized bool   `json:"peer_authorized,omitempty"`
 	Freeze         bool   `json:"freeze,omitempty"`
 	FreezePeer     bool   `json:"freeze_peer,omitempty"`
+	DeepFreeze     bool   `json:"deep_freeze,omitempty"`
+	DeepFreezePeer bool   `json:"deep_freeze_peer,omitempty"`
+	HasReserve     bool   `json:"-"`
 }
 
 // AccountLinesResult contains the result of account_lines RPC
@@ -248,6 +245,9 @@ func (s *Service) GetAccountLines(ctx context.Context, account string, ledgerInd
 				line.PeerAuthorized = (rs.Flags & state.LsfHighAuth) != 0
 				line.Freeze = (rs.Flags & state.LsfLowFreeze) != 0
 				line.FreezePeer = (rs.Flags & state.LsfHighFreeze) != 0
+				line.DeepFreeze = (rs.Flags & state.LsfLowDeepFreeze) != 0
+				line.DeepFreezePeer = (rs.Flags & state.LsfHighDeepFreeze) != 0
+				line.HasReserve = (rs.Flags & state.LsfLowReserve) != 0
 				line.QualityIn = rs.LowQualityIn
 				line.QualityOut = rs.LowQualityOut
 			} else {
@@ -260,6 +260,9 @@ func (s *Service) GetAccountLines(ctx context.Context, account string, ledgerInd
 				line.PeerAuthorized = (rs.Flags & state.LsfLowAuth) != 0
 				line.Freeze = (rs.Flags & state.LsfHighFreeze) != 0
 				line.FreezePeer = (rs.Flags & state.LsfLowFreeze) != 0
+				line.DeepFreeze = (rs.Flags & state.LsfHighDeepFreeze) != 0
+				line.DeepFreezePeer = (rs.Flags & state.LsfLowDeepFreeze) != 0
+				line.HasReserve = (rs.Flags & state.LsfHighReserve) != 0
 				line.QualityIn = rs.HighQualityIn
 				line.QualityOut = rs.HighQualityOut
 			}
@@ -312,6 +315,15 @@ func (s *Service) GetAccountOffers(ctx context.Context, account string, ledgerIn
 		afterKey, hintPage, hasMarker, err := parseDirMarker(marker)
 		if err != nil {
 			return nil, err
+		}
+		if hasMarker {
+			data, readErr := targetLedger.ReadContext(ctx, keylet.Keylet{Key: afterKey})
+			if readErr != nil {
+				return nil, readErr
+			}
+			if data == nil {
+				return nil, svcerr.ErrStaleMarker
+			}
 		}
 
 		// Default an unset limit; the caller (handler ClampLimit) owns the upper bound.
@@ -368,7 +380,7 @@ func (s *Service) GetAccountOffers(ctx context.Context, account string, ledgerIn
 			return nil, err
 		}
 		if hasMarker && !found {
-			return nil, svcerr.ErrInvalidMarker
+			return nil, svcerr.ErrStaleMarker
 		}
 
 		return &AccountOffersResult{
@@ -408,7 +420,7 @@ func (s *Service) GetAccountObjects(ctx context.Context, account string, ledgerI
 	return withAccountQuery(s, ctx, account, ledgerIndex, func(targetLedger *ledger.Ledger, accountID [20]byte, validated bool) (*AccountObjectsResult, error) {
 		// account_objects returns actNotFound for a missing account, not empty.
 		accountKey := keylet.Account(accountID)
-		exists, err := targetLedger.Exists(accountKey)
+		exists, err := targetLedger.ExistsContext(ctx, accountKey)
 		if err != nil {
 			return nil, fmt.Errorf("failed to check account existence: %w", err)
 		}
@@ -488,7 +500,7 @@ func enumerateAccountObjects(ctx context.Context, l *ledger.Ledger, accountID [2
 	wantType := func(t string) bool { return objType == "" || t == objType }
 
 	if dirIndex != zero {
-		d, err := l.Read(keylet.Keylet{Key: dirIndex})
+		d, err := l.ReadContext(ctx, keylet.Keylet{Key: dirIndex})
 		if err != nil {
 			return err
 		}
@@ -515,7 +527,7 @@ func enumerateAccountObjects(ctx context.Context, l *ledger.Ledger, accountID [2
 			first = entryIndex
 		}
 		maxKey := keylet.NFTokenPageMax(accountID).Key
-		pageKey, pageData, ok, err := l.Succ(first)
+		pageKey, pageData, ok, err := l.SuccContext(ctx, first)
 		if err != nil {
 			return err
 		}
@@ -524,7 +536,7 @@ func enumerateAccountObjects(ctx context.Context, l *ledger.Ledger, accountID [2
 				return err
 			}
 			result.AccountObjects = append(result.AccountObjects, AccountObjectItem{
-				Index:           formatHashHex(pageKey),
+				Index:           protocol.Hash256Hex(pageKey),
 				LedgerEntryType: "NFTokenPage",
 				Data:            pageData,
 			})
@@ -536,7 +548,7 @@ func enumerateAccountObjects(ctx context.Context, l *ledger.Ledger, accountID [2
 			nextOK := false
 			if hasNext {
 				nextKey = page.NextPageMin
-				nextData, err = l.Read(keylet.Keylet{Key: nextKey})
+				nextData, err = l.ReadContext(ctx, keylet.Keylet{Key: nextKey})
 				if err != nil {
 					return err
 				}
@@ -545,7 +557,7 @@ func enumerateAccountObjects(ctx context.Context, l *ledger.Ledger, accountID [2
 
 			mlimit--
 			if mlimit == 0 && nextOK {
-				result.Marker = "0," + formatHashHex(pageKey)
+				result.Marker = "0," + protocol.Hash256Hex(pageKey)
 				return nil
 			}
 
@@ -564,7 +576,7 @@ func enumerateAccountObjects(ctx context.Context, l *ledger.Ledger, accountID [2
 		found = true
 	}
 
-	dirData, err := l.Read(keylet.Keylet{Key: dirIndex})
+	dirData, err := l.ReadContext(ctx, keylet.Keylet{Key: dirIndex})
 	if err != nil {
 		return err
 	}
@@ -593,20 +605,20 @@ func enumerateAccountObjects(ctx context.Context, l *ledger.Ledger, accountID [2
 
 		// NFTokenPages exactly filled the limit; resume at the first dir entry.
 		if i == mlimit && mlimit < limit {
-			result.Marker = formatHashHex(dirIndex) + "," + formatHashHex(entries[start])
+			result.Marker = protocol.Hash256Hex(dirIndex) + "," + protocol.Hash256Hex(entries[start])
 			return nil
 		}
 
 		for idx := start; idx < len(entries); idx++ {
 			itemKey := entries[idx]
-			data, rerr := l.Read(keylet.Keylet{Key: itemKey})
+			data, rerr := l.ReadContext(ctx, keylet.Keylet{Key: itemKey})
 			if rerr != nil {
 				return rerr
 			}
 			if data != nil {
 				if t := state.EntryType(data); wantType(t) {
 					result.AccountObjects = append(result.AccountObjects, AccountObjectItem{
-						Index:           formatHashHex(itemKey),
+						Index:           protocol.Hash256Hex(itemKey),
 						LedgerEntryType: t,
 						Data:            data,
 					})
@@ -615,7 +627,7 @@ func enumerateAccountObjects(ctx context.Context, l *ledger.Ledger, accountID [2
 			i++
 			if i == mlimit {
 				if idx+1 < len(entries) {
-					result.Marker = formatHashHex(dirIndex) + "," + formatHashHex(entries[idx+1])
+					result.Marker = protocol.Hash256Hex(dirIndex) + "," + protocol.Hash256Hex(entries[idx+1])
 					return nil
 				}
 				break
@@ -627,7 +639,7 @@ func enumerateAccountObjects(ctx context.Context, l *ledger.Ledger, accountID [2
 			return nil
 		}
 		dirIndex = keylet.DirPage(root, nodeIndex).Key
-		dirData, err = l.Read(keylet.Keylet{Key: dirIndex})
+		dirData, err = l.ReadContext(ctx, keylet.Keylet{Key: dirIndex})
 		if err != nil {
 			return err
 		}
@@ -640,7 +652,7 @@ func enumerateAccountObjects(ctx context.Context, l *ledger.Ledger, accountID [2
 		}
 		if i == mlimit {
 			if len(dir.Indexes) > 0 {
-				result.Marker = formatHashHex(dirIndex) + "," + formatHashHex(dir.Indexes[0])
+				result.Marker = protocol.Hash256Hex(dirIndex) + "," + protocol.Hash256Hex(dir.Indexes[0])
 			}
 			return nil
 		}
@@ -680,9 +692,12 @@ func ownerDirAfter(
 		if page != 0 {
 			key = keylet.DirPage(root, page).Key
 		}
-		data, rerr := l.Read(keylet.Keylet{Key: key})
-		if rerr != nil || data == nil {
+		data, rerr := l.ReadContext(ctx, keylet.Keylet{Key: key})
+		if rerr != nil {
 			return nil, rerr
+		}
+		if data == nil {
+			return nil, nil
 		}
 		return state.ParseDirectoryNode(data)
 	}
@@ -724,7 +739,7 @@ func ownerDirAfter(
 				}
 				continue
 			}
-			data, rerr := l.Read(keylet.Keylet{Key: key})
+			data, rerr := l.ReadContext(ctx, keylet.Keylet{Key: key})
 			if rerr != nil {
 				return "", found, rerr
 			}
@@ -783,25 +798,28 @@ func (s *Service) GetOwnerInfo(ctx context.Context, account string, ledgerIndex 
 		}
 
 		dirKey := keylet.OwnerDir(accountID)
-		walkErr := state.DirForEach(targetLedger, dirKey, func(itemKey [32]byte) error {
+		walkErr := state.DirForEach(contextLedgerView{Ledger: targetLedger, ctx: ctx}, dirKey, func(itemKey [32]byte) error {
 			if err := ctx.Err(); err != nil {
 				return err
 			}
-			data, err := targetLedger.Read(keylet.Keylet{Key: itemKey})
-			if err != nil || data == nil {
+			data, err := targetLedger.ReadContext(ctx, keylet.Keylet{Key: itemKey})
+			if err != nil {
+				return err
+			}
+			if data == nil {
 				return nil
 			}
 			entryType := state.EntryType(data)
 			switch entryType {
 			case "Offer":
 				result.Offers = append(result.Offers, AccountObjectItem{
-					Index:           formatHashHex(itemKey),
+					Index:           protocol.Hash256Hex(itemKey),
 					LedgerEntryType: entryType,
 					Data:            data,
 				})
 			case "RippleState":
 				result.RippleLines = append(result.RippleLines, AccountObjectItem{
-					Index:           formatHashHex(itemKey),
+					Index:           protocol.Hash256Hex(itemKey),
 					LedgerEntryType: entryType,
 					Data:            data,
 				})
@@ -854,7 +872,7 @@ func (s *Service) GetAccountChannels(ctx context.Context, account string, destin
 		}
 
 		accountKey := keylet.Account(accountID)
-		exists, err := targetLedger.Exists(accountKey)
+		exists, err := targetLedger.ExistsContext(ctx, accountKey)
 		if err != nil {
 			return nil, fmt.Errorf("failed to check account existence: %w", err)
 		}
@@ -901,7 +919,7 @@ func (s *Service) GetAccountChannels(ctx context.Context, account string, destin
 			destAddr, _ := addresscodec.EncodeAccountIDToClassicAddress(payChan.DestinationID[:])
 
 			channel := AccountChannel{
-				ChannelID:          formatHashHex(key),
+				ChannelID:          protocol.Hash256Hex(key),
 				Account:            srcAddr,
 				DestinationAccount: destAddr,
 				Amount:             strconv.FormatUint(payChan.Amount, 10),
@@ -913,7 +931,7 @@ func (s *Service) GetAccountChannels(ctx context.Context, account string, destin
 				channel.PublicKeyHex = payChan.PublicKey
 				pkBytes, derr := hex.DecodeString(payChan.PublicKey)
 				if derr == nil && len(pkBytes) > 0 {
-					if encoded, encErr := addresscodec.EncodeNodePublicKey(pkBytes); encErr == nil {
+					if encoded, encErr := addresscodec.EncodeAccountPublicKey(pkBytes); encErr == nil {
 						channel.PublicKey = encoded
 					}
 				}
@@ -969,7 +987,7 @@ type AccountCurrenciesResult struct {
 func (s *Service) GetAccountCurrencies(ctx context.Context, account string, ledgerIndex string) (*AccountCurrenciesResult, error) {
 	return withAccountQuery(s, ctx, account, ledgerIndex, func(targetLedger *ledger.Ledger, accountID [20]byte, validated bool) (*AccountCurrenciesResult, error) {
 		accountKey := keylet.Account(accountID)
-		exists, err := targetLedger.Exists(accountKey)
+		exists, err := targetLedger.ExistsContext(ctx, accountKey)
 		if err != nil {
 			return nil, fmt.Errorf("failed to check account existence: %w", err)
 		}
@@ -981,12 +999,15 @@ func (s *Service) GetAccountCurrencies(ctx context.Context, account string, ledg
 		sendCurrencies := make(map[string]bool)
 
 		dirKey := keylet.OwnerDir(accountID)
-		walkErr := state.DirForEach(targetLedger, dirKey, func(itemKey [32]byte) error {
+		walkErr := state.DirForEach(contextLedgerView{Ledger: targetLedger, ctx: ctx}, dirKey, func(itemKey [32]byte) error {
 			if err := ctx.Err(); err != nil {
 				return err
 			}
-			data, err := targetLedger.Read(keylet.Keylet{Key: itemKey})
-			if err != nil || data == nil {
+			data, err := targetLedger.ReadContext(ctx, keylet.Keylet{Key: itemKey})
+			if err != nil {
+				return err
+			}
+			if data == nil {
 				return nil
 			}
 			if state.EntryType(data) != "RippleState" {
@@ -1074,11 +1095,29 @@ type AccountNFTsResult struct {
 	Marker      string
 }
 
-// GetAccountNFTs retrieves NFTs owned by an account
-func (s *Service) GetAccountNFTs(ctx context.Context, account string, ledgerIndex string, limit uint32) (*AccountNFTsResult, error) {
+func parseAccountNFTMarker(marker string) ([32]byte, bool, error) {
+	var markerID [32]byte
+	if marker == "" {
+		return markerID, false, nil
+	}
+	if marker == "0" {
+		return markerID, true, nil
+	}
+	if len(marker) != 64 {
+		return markerID, true, svcerr.ErrInvalidMarker
+	}
+	decoded, err := hex.DecodeString(marker)
+	if err != nil {
+		return markerID, true, svcerr.ErrInvalidMarker
+	}
+	copy(markerID[:], decoded)
+	return markerID, true, nil
+}
+
+func (s *Service) GetAccountNFTs(ctx context.Context, account string, ledgerIndex string, limit uint32, marker string) (*AccountNFTsResult, error) {
 	return withAccountQuery(s, ctx, account, ledgerIndex, func(targetLedger *ledger.Ledger, accountID [20]byte, validated bool) (*AccountNFTsResult, error) {
 		accountKey := keylet.Account(accountID)
-		exists, err := targetLedger.Exists(accountKey)
+		exists, err := targetLedger.ExistsContext(ctx, accountKey)
 		if err != nil {
 			return nil, fmt.Errorf("failed to check account existence: %w", err)
 		}
@@ -1091,16 +1130,21 @@ func (s *Service) GetAccountNFTs(ctx context.Context, account string, ledgerInde
 			limit = 256
 		}
 
-		var nfts []NFTInfo
+		markerID, markerSet, markerErr := parseAccountNFTMarker(marker)
+		if markerErr != nil {
+			return nil, markerErr
+		}
 
-		targetLedger.ForEachCtx(ctx, func(key [32]byte, data []byte) bool {
+		type nftPage struct {
+			key  [32]byte
+			page *state.NFTokenPageData
+		}
+		pages := make(map[[32]byte]*state.NFTokenPageData)
+		pageKeys := make([][32]byte, 0)
+		if err := targetLedger.ForEachCtx(ctx, func(key [32]byte, data []byte) bool {
 			if ctx.Err() != nil {
 				return false
 			}
-			if uint32(len(nfts)) >= limit {
-				return false
-			}
-
 			if len(data) < 3 {
 				return true
 			}
@@ -1124,29 +1168,88 @@ func (s *Service) GetAccountNFTs(ctx context.Context, account string, ledgerInde
 			if err != nil {
 				return true
 			}
-
-			for _, token := range page.NFTokens {
-				if uint32(len(nfts)) >= limit {
-					break
-				}
-
-				nft := extractNFTInfo(token.NFTokenID, token.URI)
-				nfts = append(nfts, nft)
-			}
-
+			pages[key] = page
+			pageKeys = append(pageKeys, key)
 			return true
-		})
-		if err := ctx.Err(); err != nil {
+		}); err != nil {
 			return nil, err
 		}
 
-		return &AccountNFTsResult{
+		sort.Slice(pageKeys, func(i, j int) bool {
+			return bytes.Compare(pageKeys[i][:], pageKeys[j][:]) < 0
+		})
+
+		first := keylet.NFTokenPageMin(accountID)
+		if markerSet {
+			first = keylet.NFTokenPageForToken(first, markerID)
+		}
+		var current nftPage
+		for _, pageKey := range pageKeys {
+			if bytes.Compare(pageKey[:], first.Key[:]) > 0 {
+				current = nftPage{key: pageKey, page: pages[pageKey]}
+				break
+			}
+		}
+		if current.page == nil {
+			lastKey := keylet.NFTokenPageMax(accountID).Key
+			current = nftPage{key: lastKey, page: pages[lastKey]}
+		}
+
+		result := &AccountNFTsResult{
 			Account:     account,
-			AccountNFTs: nfts,
+			AccountNFTs: make([]NFTInfo, 0),
 			LedgerIndex: targetLedger.Sequence(),
 			LedgerHash:  targetLedger.Hash(),
 			Validated:   validated,
-		}, nil
+		}
+
+		pastMarker := markerID == ([32]byte{})
+		markerFound := false
+		visited := make(map[[32]byte]struct{})
+		for current.page != nil {
+			if _, duplicate := visited[current.key]; duplicate {
+				return nil, errors.New("NFTokenPage chain contains a cycle")
+			}
+			visited[current.key] = struct{}{}
+
+			for _, token := range current.page.NFTokens {
+				tokenID := token.NFTokenID
+				if !pastMarker {
+					maskedComparison := bytes.Compare(tokenID[20:], markerID[20:])
+					if maskedComparison < 0 {
+						continue
+					}
+					if maskedComparison == 0 && bytes.Compare(tokenID[:], markerID[:]) < 0 {
+						continue
+					}
+					if tokenID == markerID {
+						markerFound = true
+						continue
+					}
+				}
+				if markerSet && !markerFound {
+					return nil, svcerr.ErrInvalidMarker
+				}
+				pastMarker = true
+				result.AccountNFTs = append(result.AccountNFTs, extractNFTInfo(tokenID, token.URI))
+				if uint32(len(result.AccountNFTs)) == limit {
+					result.Marker = formatHashHex(tokenID)
+					return result, nil
+				}
+			}
+
+			nextKey := current.page.NextPageMin
+			if nextKey == ([32]byte{}) {
+				current = nftPage{}
+				continue
+			}
+			current = nftPage{key: nextKey, page: pages[nextKey]}
+		}
+
+		if markerSet && !markerFound {
+			return nil, svcerr.ErrInvalidMarker
+		}
+		return result, nil
 	})
 }
 
@@ -1198,12 +1301,10 @@ func addEscrowLocked(locked map[string]tx.Amount, data []byte) {
 		locked[currency] = amount
 		return
 	}
-	locked[currency] = addLockedSaturating(existing, amount)
+	locked[currency] = addIssuedSaturating(existing, amount)
 }
 
-// addLockedSaturating returns existing+add, clamping to the largest IOU amount on
-// overflow rather than panicking, matching rippled's saturating escrow sum.
-func addLockedSaturating(existing, add tx.Amount) (result tx.Amount) {
+func addIssuedSaturating(existing, add tx.Amount) (result tx.Amount) {
 	defer func() {
 		if recover() != nil {
 			result = state.NewIssuedAmountFromValue(state.MaxMantissa, state.MaxExponent, add.Currency, add.Issuer)
@@ -1219,15 +1320,6 @@ func addLockedSaturating(existing, add tx.Amount) (result tx.Amount) {
 // GetGatewayBalances retrieves obligations and balances for a gateway account
 func (s *Service) GetGatewayBalances(ctx context.Context, account string, hotWallets []string, ledgerIndex string) (*GatewayBalancesResult, error) {
 	return withAccountQuery(s, ctx, account, ledgerIndex, func(targetLedger *ledger.Ledger, accountID [20]byte, validated bool) (*GatewayBalancesResult, error) {
-		accountKey := keylet.Account(accountID)
-		exists, err := targetLedger.Exists(accountKey)
-		if err != nil {
-			return nil, fmt.Errorf("failed to check account existence: %w", err)
-		}
-		if !exists {
-			return nil, svcerr.ErrAccountNotFound
-		}
-
 		hotWalletIDs := make(map[[20]byte]bool)
 		for _, hw := range hotWallets {
 			_, hwIDBytes, err := addresscodec.DecodeClassicAddressToAccountID(hw)
@@ -1247,12 +1339,15 @@ func (s *Service) GetGatewayBalances(ctx context.Context, account string, hotWal
 
 		// Walk the gateway's owner directory: trust lines and escrows only.
 		dirKey := keylet.OwnerDir(accountID)
-		walkErr := state.DirForEach(targetLedger, dirKey, func(itemKey [32]byte) error {
+		walkErr := state.DirForEach(contextLedgerView{Ledger: targetLedger, ctx: ctx}, dirKey, func(itemKey [32]byte) error {
 			if err := ctx.Err(); err != nil {
 				return err
 			}
-			data, err := targetLedger.Read(keylet.Keylet{Key: itemKey})
-			if err != nil || data == nil {
+			data, err := targetLedger.ReadContext(ctx, keylet.Keylet{Key: itemKey})
+			if err != nil {
+				return err
+			}
+			if data == nil {
 				return nil
 			}
 
@@ -1312,14 +1407,11 @@ func (s *Service) GetGatewayBalances(ctx context.Context, account string, hotWal
 			}
 
 			if hotWalletIDs[peerID] {
-				// Hot wallet: report the balance they hold (negated from gateway side).
-				if gatewayBalance.Signum() < 0 {
-					balanceText := gatewayBalance.Negate().Value()
-					hotBalances[peerAddr] = append(hotBalances[peerAddr], CurrencyBalance{
-						Currency: currency,
-						Value:    balanceText,
-					})
-				}
+				balanceText := gatewayBalance.Negate().Value()
+				hotBalances[peerAddr] = append(hotBalances[peerAddr], CurrencyBalance{
+					Currency: currency,
+					Value:    balanceText,
+				})
 			} else if gatewayBalance.Signum() > 0 {
 				// Gateway holds currency from peer (unusual) — asset.
 				balanceText := gatewayBalance.Value()
@@ -1337,8 +1429,7 @@ func (s *Service) GetGatewayBalances(ctx context.Context, account string, hotWal
 				// Normal obligation: negate the negative balance to the amount owed.
 				owedAmount := gatewayBalance.Negate()
 				if existing, ok := obligations[currency]; ok {
-					sum, _ := existing.Add(owedAmount)
-					obligations[currency] = sum
+					obligations[currency] = addIssuedSaturating(existing, owedAmount)
 				} else {
 					obligations[currency] = owedAmount
 				}
@@ -1421,7 +1512,7 @@ var errNoRippleLimitReached = errors.New("noripple_check limit reached")
 func (s *Service) GetNoRippleCheck(ctx context.Context, account string, role string, ledgerIndex string, limit uint32, transactions bool) (*NoRippleCheckResult, error) {
 	return withAccountQuery(s, ctx, account, ledgerIndex, func(targetLedger *ledger.Ledger, accountID [20]byte, validated bool) (*NoRippleCheckResult, error) {
 		accountKey := keylet.Account(accountID)
-		exists, err := targetLedger.Exists(accountKey)
+		exists, err := targetLedger.ExistsContext(ctx, accountKey)
 		if err != nil {
 			return nil, fmt.Errorf("failed to check account existence: %w", err)
 		}
@@ -1429,7 +1520,7 @@ func (s *Service) GetNoRippleCheck(ctx context.Context, account string, role str
 			return nil, svcerr.ErrAccountNotFound
 		}
 
-		data, err := targetLedger.Read(accountKey)
+		data, err := targetLedger.ReadContext(ctx, accountKey)
 		if err != nil {
 			return nil, fmt.Errorf("failed to read account: %w", err)
 		}
@@ -1477,7 +1568,7 @@ func (s *Service) GetNoRippleCheck(ctx context.Context, account string, role str
 		// Walk owner directory checking NoRipple, capping reported problems at limit.
 		problemCount := uint32(0)
 		dirKey := keylet.OwnerDir(accountID)
-		walkErr := state.DirForEach(targetLedger, dirKey, func(itemKey [32]byte) error {
+		walkErr := state.DirForEach(contextLedgerView{Ledger: targetLedger, ctx: ctx}, dirKey, func(itemKey [32]byte) error {
 			if err := ctx.Err(); err != nil {
 				return err
 			}
@@ -1485,8 +1576,11 @@ func (s *Service) GetNoRippleCheck(ctx context.Context, account string, role str
 				return errNoRippleLimitReached
 			}
 
-			entryData, err := targetLedger.Read(keylet.Keylet{Key: itemKey})
-			if err != nil || entryData == nil {
+			entryData, err := targetLedger.ReadContext(ctx, keylet.Keylet{Key: itemKey})
+			if err != nil {
+				return err
+			}
+			if entryData == nil {
 				return nil
 			}
 			if state.EntryType(entryData) != "RippleState" {
@@ -1610,7 +1704,7 @@ func extractNFTInfo(tokenID [32]byte, uri string) NFTInfo {
 	return NFTInfo{
 		Flags:        flags,
 		Issuer:       issuer,
-		NFTokenID:    formatHashHex(tokenID),
+		NFTokenID:    protocol.Hash256Hex(tokenID),
 		NFTokenTaxon: taxon,
 		URI:          uri,
 		NFTSerial:    sequence,
@@ -1636,10 +1730,7 @@ func (s *Service) GetDepositAuthorized(ctx context.Context, sourceAccount string
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-
-	targetLedger, validated, err := s.getLedgerForQuery(ledgerIndex)
+	targetLedger, validated, err := s.resolveLedgerForQuery(ctx, ledgerIndex)
 	if err != nil {
 		return nil, err
 	}
@@ -1659,7 +1750,7 @@ func (s *Service) GetDepositAuthorized(ctx context.Context, sourceAccount string
 	copy(dstID[:], dstIDBytes)
 
 	srcKey := keylet.Account(srcID)
-	exists, err := targetLedger.Exists(srcKey)
+	exists, err := targetLedger.ExistsContext(ctx, srcKey)
 	if err != nil {
 		return nil, fmt.Errorf("failed to check source account existence: %w", err)
 	}
@@ -1668,7 +1759,7 @@ func (s *Service) GetDepositAuthorized(ctx context.Context, sourceAccount string
 	}
 
 	dstKey := keylet.Account(dstID)
-	exists, err = targetLedger.Exists(dstKey)
+	exists, err = targetLedger.ExistsContext(ctx, dstKey)
 	if err != nil {
 		return nil, fmt.Errorf("failed to check destination account existence: %w", err)
 	}
@@ -1676,7 +1767,7 @@ func (s *Service) GetDepositAuthorized(ctx context.Context, sourceAccount string
 		return nil, svcerr.ErrDstAccountNotFound
 	}
 
-	dstData, err := targetLedger.Read(dstKey)
+	dstData, err := targetLedger.ReadContext(ctx, dstKey)
 	if err != nil {
 		return nil, fmt.Errorf("failed to read destination account: %w", err)
 	}
@@ -1695,7 +1786,7 @@ func (s *Service) GetDepositAuthorized(ctx context.Context, sourceAccount string
 	var sortedCredPairs []keylet.CredentialPair
 	credentialsPresent := len(credentials) > 0
 	if credentialsPresent {
-		sortedCredPairs, err = validateCredentialsOnLedger(targetLedger, credentials, srcID)
+		sortedCredPairs, err = validateCredentialsOnLedger(ctx, targetLedger, credentials, srcID)
 		if err != nil {
 			return nil, err
 		}
@@ -1705,7 +1796,7 @@ func (s *Service) GetDepositAuthorized(ctx context.Context, sourceAccount string
 	if depositAuthRequired && !sameAccount {
 		// Direct account-to-account preauth.
 		depositPreauthKey := keylet.DepositPreauth(dstID, srcID)
-		exists, err := targetLedger.Exists(depositPreauthKey)
+		exists, err := targetLedger.ExistsContext(ctx, depositPreauthKey)
 		if err != nil {
 			return nil, fmt.Errorf("failed to check deposit preauthorization: %w", err)
 		}
@@ -1714,7 +1805,7 @@ func (s *Service) GetDepositAuthorized(ctx context.Context, sourceAccount string
 		// Fall back to credential-based preauth.
 		if !depositAuthorized && credentialsPresent {
 			credPreauthKey := keylet.DepositPreauthCredentials(dstID, sortedCredPairs)
-			exists, err := targetLedger.Exists(credPreauthKey)
+			exists, err := targetLedger.ExistsContext(ctx, credPreauthKey)
 			if err != nil {
 				return nil, fmt.Errorf("failed to check credential deposit preauthorization: %w", err)
 			}
@@ -1736,7 +1827,7 @@ func (s *Service) GetDepositAuthorized(ctx context.Context, sourceAccount string
 // (existence, acceptance, expiry, ownership subject==srcAcct, duplicate
 // issuer+type) and returns the sorted pairs for the preauth lookup. Errors wrap
 // svcerr.ErrBadCredentials so the handler maps them via errors.Is.
-func validateCredentialsOnLedger(targetLedger *ledger.Ledger, credentials []string, srcAcct [20]byte) ([]keylet.CredentialPair, error) {
+func validateCredentialsOnLedger(ctx context.Context, targetLedger *ledger.Ledger, credentials []string, srcAcct [20]byte) ([]keylet.CredentialPair, error) {
 	type credKey struct {
 		issuer         [20]byte
 		credentialType string
@@ -1748,7 +1839,7 @@ func validateCredentialsOnLedger(targetLedger *ledger.Ledger, credentials []stri
 	// Parent close time in Ripple-epoch seconds for the expiry check.
 	var parentCloseTimeSecs uint32
 	if t := targetLedger.ParentCloseTime(); !t.IsZero() {
-		switch secs := toRippleTime(t); {
+		switch secs := protocol.RippleSeconds(t); {
 		case secs > math.MaxUint32:
 			parentCloseTimeSecs = math.MaxUint32
 		case secs > 0:
@@ -1765,8 +1856,11 @@ func validateCredentialsOnLedger(targetLedger *ledger.Ledger, credentials []stri
 		copy(credHash[:], credHashBytes)
 
 		credKeylet := keylet.CredentialByID(credHash)
-		credData, err := targetLedger.Read(credKeylet)
-		if err != nil || credData == nil {
+		credData, err := targetLedger.ReadContext(ctx, credKeylet)
+		if err != nil {
+			return nil, err
+		}
+		if credData == nil {
 			return nil, fmt.Errorf("%w: credentials don't exist", svcerr.ErrBadCredentials)
 		}
 

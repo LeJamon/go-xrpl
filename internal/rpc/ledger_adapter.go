@@ -12,9 +12,11 @@ import (
 	binarycodec "github.com/LeJamon/go-xrpl/codec/binarycodec"
 	"github.com/LeJamon/go-xrpl/internal/ledger"
 	"github.com/LeJamon/go-xrpl/internal/ledger/service"
+	"github.com/LeJamon/go-xrpl/internal/ledger/state"
 	"github.com/LeJamon/go-xrpl/internal/rpc/handlers"
 	"github.com/LeJamon/go-xrpl/internal/rpc/types"
 	"github.com/LeJamon/go-xrpl/internal/tx"
+	"github.com/LeJamon/go-xrpl/internal/tx/mptutil"
 	"github.com/LeJamon/go-xrpl/internal/tx/ter"
 	"github.com/LeJamon/go-xrpl/protocol"
 	"github.com/LeJamon/go-xrpl/storage/relationaldb"
@@ -29,6 +31,8 @@ type LedgerServiceAdapter struct {
 var _ types.LedgerService = (*LedgerServiceAdapter)(nil)
 var _ types.OwnerDirectoryReader = (*LedgerServiceAdapter)(nil)
 var _ types.TxTablesProvider = (*LedgerServiceAdapter)(nil)
+var _ types.RangedTransactionLookup = (*LedgerServiceAdapter)(nil)
+var _ types.TransactionRulesSource = (*LedgerServiceAdapter)(nil)
 
 // NewLedgerServiceAdapter creates a new adapter
 func NewLedgerServiceAdapter(svc *service.Service) *LedgerServiceAdapter {
@@ -96,12 +100,26 @@ func (a *LedgerServiceAdapter) GetLedgerBySequence(seq uint32) (types.LedgerRead
 	if err != nil {
 		return nil, err
 	}
+	if l.IsOpen() {
+		l, err = l.Snapshot()
+		if err != nil {
+			return nil, err
+		}
+	}
 	return &ledgerReaderAdapter{l: l}, nil
 }
 
 // GetLedgerByHash returns a ledger by its hash
 func (a *LedgerServiceAdapter) GetLedgerByHash(hash [32]byte) (types.LedgerReader, error) {
 	l, err := a.svc.GetLedgerByHash(hash)
+	if err != nil {
+		return nil, err
+	}
+	return &ledgerReaderAdapter{l: l}, nil
+}
+
+func (a *LedgerServiceAdapter) GetLedgerByHashContext(ctx context.Context, hash [32]byte) (types.LedgerReader, error) {
+	l, err := a.svc.GetLedgerByHashContext(ctx, hash)
 	if err != nil {
 		return nil, err
 	}
@@ -143,11 +161,7 @@ func (a *ledgerReaderAdapter) TotalDrops() uint64 {
 }
 
 func (a *ledgerReaderAdapter) CloseTime() int64 {
-	t := a.l.CloseTime()
-	if t.IsZero() {
-		return 0
-	}
-	return t.Unix() - protocol.RippleEpochUnix
+	return protocol.RippleSeconds(a.l.CloseTime())
 }
 
 func (a *ledgerReaderAdapter) CloseTimeResolution() uint32 {
@@ -159,11 +173,7 @@ func (a *ledgerReaderAdapter) CloseFlags() uint8 {
 }
 
 func (a *ledgerReaderAdapter) ParentCloseTime() int64 {
-	t := a.l.ParentCloseTime()
-	if t.IsZero() {
-		return 0
-	}
-	return t.Unix() - protocol.RippleEpochUnix
+	return protocol.RippleSeconds(a.l.ParentCloseTime())
 }
 
 func (a *ledgerReaderAdapter) TxMapHash() [32]byte {
@@ -178,6 +188,30 @@ func (a *ledgerReaderAdapter) StateMapHash() [32]byte {
 
 func (a *ledgerReaderAdapter) ForEachTransaction(fn func(txHash [32]byte, txData []byte) bool) error {
 	return a.l.ForEachTransaction(fn)
+}
+
+func (a *ledgerReaderAdapter) ForEachTransactionContext(ctx context.Context, fn func(txHash [32]byte, txData []byte) bool) error {
+	return a.l.ForEachTransactionContext(ctx, fn)
+}
+
+func (a *ledgerReaderAdapter) GetLedgerTransaction(txHash [32]byte) ([]byte, bool, error) {
+	return a.l.GetTransaction(txHash)
+}
+
+func (a *ledgerReaderAdapter) GetLedgerTransactionContext(ctx context.Context, txHash [32]byte) ([]byte, bool, error) {
+	return a.l.GetTransactionContext(ctx, txHash)
+}
+
+func (a *ledgerReaderAdapter) ForEachLedgerStateContext(ctx context.Context, fn func(key [32]byte, data []byte) bool) error {
+	return a.l.ForEachCtx(ctx, fn)
+}
+
+func (a *ledgerReaderAdapter) LedgerAmendmentRules() *amendment.Rules {
+	rules, err := ledger.LoadAmendmentsFromLedger(a.l)
+	if err != nil || rules == nil {
+		return amendment.EmptyRules()
+	}
+	return rules
 }
 
 // SubmitTransaction submits a transaction to the open ledger.
@@ -287,16 +321,17 @@ func (a *LedgerServiceAdapter) submitTransaction(txJSON []byte, txBlobHex string
 		result.Result != ter.TefALREADY
 
 	return &types.SubmitResult{
-		EngineResult:        result.Result.String(),
-		EngineResultCode:    int(result.Result),
-		EngineResultMessage: result.Message,
-		Applied:             result.Applied,
-		Broadcast:           broadcast,
-		Queued:              queued,
-		Kept:                kept,
-		Fee:                 result.Fee,
-		CurrentLedger:       result.CurrentLedger,
-		ValidatedLedger:     result.ValidatedLedger,
+		EngineResult:           result.Result.String(),
+		EngineResultCode:       int(result.Result),
+		EngineResultMessage:    result.Message,
+		Applied:                result.Applied,
+		Broadcast:              broadcast,
+		Queued:                 queued,
+		Kept:                   kept,
+		Fee:                    result.Fee,
+		CurrentLedger:          result.CurrentLedger,
+		CurrentLedgerCloseTime: result.CurrentLedgerCloseTime,
+		ValidatedLedger:        result.ValidatedLedger,
 	}, nil
 }
 
@@ -345,14 +380,78 @@ func (a *LedgerServiceAdapter) GetTransaction(txHash [32]byte) (*types.Transacti
 	if err != nil {
 		return nil, err
 	}
+	return rpcTransactionInfo(result), nil
+}
 
+// GetTransactionWithRange performs the optional transaction-table lookup used
+// by the tx RPC without adding that method to the broad ledger service contract.
+func (a *LedgerServiceAdapter) GetTransactionWithRange(ctx context.Context, txHash [32]byte, minLedger, maxLedger uint32) (*types.TransactionInfo, types.TxSearchResult, error) {
+	result, searched, err := a.svc.GetTransactionWithRange(ctx, txHash, minLedger, maxLedger)
+	if result == nil {
+		return nil, rpcTxSearchResult(searched), err
+	}
+	return rpcTransactionInfo(result), rpcTxSearchResult(searched), err
+}
+
+func rpcTransactionInfo(result *service.TransactionResult) *types.TransactionInfo {
+	ledgerHash := ""
+	if result.LedgerHash != ([32]byte{}) {
+		ledgerHash = handlers.FormatLedgerHash(result.LedgerHash)
+	}
 	return &types.TransactionInfo{
 		TxData:      result.TxData,
 		LedgerIndex: result.LedgerIndex,
-		LedgerHash:  handlers.FormatLedgerHash(result.LedgerHash),
+		LedgerHash:  ledgerHash,
 		Validated:   result.Validated,
 		TxIndex:     result.TxIndex,
-	}, nil
+		CloseTime:   result.CloseTime,
+	}
+}
+
+func (a *LedgerServiceAdapter) SearchTransaction(ctx context.Context, txHash [32]byte, ledgerRange *types.TransactionSearchRange) (*types.TransactionSearchResult, error) {
+	var serviceRange *relationaldb.LedgerRange
+	if ledgerRange != nil {
+		serviceRange = &relationaldb.LedgerRange{
+			Min: relationaldb.LedgerIndex(ledgerRange.Min),
+			Max: relationaldb.LedgerIndex(ledgerRange.Max),
+		}
+	}
+	result, err := a.svc.SearchTransaction(ctx, txHash, serviceRange)
+	if err != nil {
+		return nil, err
+	}
+	response := &types.TransactionSearchResult{}
+	if result.Transaction != nil {
+		response.Transaction = rpcTransactionInfo(result.Transaction)
+	}
+	switch result.Searched {
+	case relationaldb.TxSearchAll:
+		searchedAll := true
+		response.SearchedAll = &searchedAll
+	case relationaldb.TxSearchSome:
+		searchedAll := false
+		response.SearchedAll = &searchedAll
+	}
+	return response, nil
+}
+
+func (a *LedgerServiceAdapter) GetLedgerContext(ctx context.Context, sequence uint32) (*types.LedgerContext, error) {
+	result, err := a.svc.GetLedgerContext(ctx, sequence)
+	if err != nil {
+		return nil, err
+	}
+	return &types.LedgerContext{Hash: result.Hash, CloseTime: result.CloseTime}, nil
+}
+
+func rpcTxSearchResult(result relationaldb.TxSearchResult) types.TxSearchResult {
+	switch result {
+	case relationaldb.TxSearchSome:
+		return types.TxSearchSome
+	case relationaldb.TxSearchAll:
+		return types.TxSearchAll
+	default:
+		return types.TxSearchUnknown
+	}
 }
 
 // StoreTransaction stores a transaction in the current ledger
@@ -384,6 +483,9 @@ func (a *LedgerServiceAdapter) GetAccountLines(ctx context.Context, account stri
 			PeerAuthorized: line.PeerAuthorized,
 			Freeze:         line.Freeze,
 			FreezePeer:     line.FreezePeer,
+			DeepFreeze:     line.DeepFreeze,
+			DeepFreezePeer: line.DeepFreezePeer,
+			HasReserve:     line.HasReserve,
 		}
 	}
 
@@ -429,17 +531,13 @@ func (a *LedgerServiceAdapter) GetAccountOffers(ctx context.Context, account str
 
 // GetBookOffers retrieves offers from an order book
 func (a *LedgerServiceAdapter) GetBookOffers(ctx context.Context, takerGets, takerPays types.Amount, taker, domain string, ledgerIndex string, limit uint32, marker string, withProofs bool) (*types.BookOffersResult, error) {
-	// Convert RPC types.Amount to tx.Amount
-	var txTakerGets, txTakerPays tx.Amount
-	if takerGets.Currency == "" || takerGets.Currency == "XRP" {
-		txTakerGets = tx.NewXRPAmount(0) // Placeholder - book offers query uses currency/issuer only
-	} else {
-		txTakerGets = tx.NewIssuedAmountFromFloat64(0, takerGets.Currency, takerGets.Issuer)
+	txTakerGets, err := rpcBookAmount(takerGets)
+	if err != nil {
+		return nil, err
 	}
-	if takerPays.Currency == "" || takerPays.Currency == "XRP" {
-		txTakerPays = tx.NewXRPAmount(0)
-	} else {
-		txTakerPays = tx.NewIssuedAmountFromFloat64(0, takerPays.Currency, takerPays.Issuer)
+	txTakerPays, err := rpcBookAmount(takerPays)
+	if err != nil {
+		return nil, err
 	}
 
 	result, err := a.svc.GetBookOffers(ctx, txTakerGets, txTakerPays, taker, domain, ledgerIndex, limit, marker, withProofs)
@@ -480,6 +578,21 @@ func (a *LedgerServiceAdapter) GetBookOffers(ctx context.Context, takerGets, tak
 		Validated:   result.Validated,
 		Marker:      result.Marker,
 	}, nil
+}
+
+func rpcBookAmount(amount types.Amount) (tx.Amount, error) {
+	if amount.IsMPT() {
+		id, err := mptutil.DecodeID(amount.MPTIssuanceID)
+		if err != nil {
+			return tx.Amount{}, fmt.Errorf("invalid mpt issuance id: %w", err)
+		}
+		issuer := state.EncodeAccountIDSafe(mptutil.Issuer(id))
+		return state.NewMPTAmountWithIssuanceID(0, issuer, mptutil.EncodeID(id)), nil
+	}
+	if amount.Currency == "" || amount.Currency == "XRP" {
+		return tx.NewXRPAmount(0), nil
+	}
+	return tx.NewIssuedAmountFromFloat64(0, amount.Currency, amount.Issuer), nil
 }
 
 // UseTxTables implements types.TxTablesProvider.
@@ -745,9 +858,8 @@ func (a *LedgerServiceAdapter) GetAccountCurrencies(ctx context.Context, account
 	}, nil
 }
 
-// GetAccountNFTs retrieves NFTs owned by an account
-func (a *LedgerServiceAdapter) GetAccountNFTs(ctx context.Context, account string, ledgerIndex string, limit uint32) (*types.AccountNFTsResult, error) {
-	result, err := a.svc.GetAccountNFTs(ctx, account, ledgerIndex, limit)
+func (a *LedgerServiceAdapter) GetAccountNFTs(ctx context.Context, account string, ledgerIndex string, limit uint32, marker string) (*types.AccountNFTsResult, error) {
+	result, err := a.svc.GetAccountNFTs(ctx, account, ledgerIndex, limit, marker)
 	if err != nil {
 		return nil, err
 	}
@@ -936,13 +1048,14 @@ func (a *LedgerServiceAdapter) SimulateTransaction(txJSON []byte) (*types.Submit
 	}
 
 	out := &types.SubmitResult{
-		EngineResult:        result.Result.String(),
-		EngineResultCode:    int(result.Result),
-		EngineResultMessage: result.Message,
-		Applied:             result.Applied,
-		Fee:                 result.Fee,
-		CurrentLedger:       result.CurrentLedger,
-		ValidatedLedger:     result.ValidatedLedger,
+		EngineResult:           result.Result.String(),
+		EngineResultCode:       int(result.Result),
+		EngineResultMessage:    result.Message,
+		Applied:                result.Applied,
+		Fee:                    result.Fee,
+		CurrentLedger:          result.CurrentLedger,
+		CurrentLedgerCloseTime: result.CurrentLedgerCloseTime,
+		ValidatedLedger:        result.ValidatedLedger,
 	}
 	if result.Metadata != nil {
 		blob, serErr := tx.SerializeMetadata(result.Metadata)
@@ -955,6 +1068,12 @@ func (a *LedgerServiceAdapter) SimulateTransaction(txJSON []byte) (*types.Submit
 		}
 	}
 	return out, nil
+}
+
+// TransactionRules returns the rules used by the ledger service for the
+// current open ledger.
+func (a *LedgerServiceAdapter) TransactionRules() *amendment.Rules {
+	return a.svc.TransactionRules()
 }
 
 func (a *LedgerServiceAdapter) GetAutofillFee(txJSON []byte, unlimited bool, mult, div int) (uint64, error) {
@@ -975,10 +1094,10 @@ func (a *LedgerServiceAdapter) IsAmendmentBlocked() bool {
 	return a.svc.IsAmendmentBlocked()
 }
 
-// AmendmentTable exposes the live amendment table for RPC introspection
+// Table exposes the live amendment table for RPC introspection
 // (feature command, server_info warnings). May be nil.
-func (a *LedgerServiceAdapter) AmendmentTable() *amendment.AmendmentTable {
-	return a.svc.AmendmentTable()
+func (a *LedgerServiceAdapter) Table() *amendment.Table {
+	return a.svc.Table()
 }
 
 // SetAmendmentVote records an operator veto/upvote and persists it.

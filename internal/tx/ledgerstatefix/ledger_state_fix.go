@@ -2,6 +2,9 @@ package ledgerstatefix
 
 import (
 	"bytes"
+	"encoding/binary"
+	"encoding/hex"
+	"errors"
 
 	"github.com/LeJamon/go-xrpl/amendment"
 	"github.com/LeJamon/go-xrpl/internal/ledger/state"
@@ -9,19 +12,27 @@ import (
 	"github.com/LeJamon/go-xrpl/internal/tx/nftoken"
 	"github.com/LeJamon/go-xrpl/internal/tx/ter"
 	"github.com/LeJamon/go-xrpl/keylet"
+	"github.com/LeJamon/go-xrpl/ledger/entry"
 )
 
 // LedgerStateFix fix types
-// Reference: rippled LedgerStateFix.h FixType enum
+// Reference: rippled LedgerStateFix.h FixType enum (std::uint16_t)
 const (
 	// LedgerFixTypeNFTokenPageLink repairs NFToken directory page links
-	LedgerFixTypeNFTokenPageLink uint8 = 1
+	LedgerFixTypeNFTokenPageLink uint16 = 1
+	// LedgerFixTypeBookExchangeRate repairs a book directory root whose
+	// sfExchangeRate does not match the quality encoded in its key. Requires
+	// fixCleanup3_2_0.
+	LedgerFixTypeBookExchangeRate uint16 = 2
 )
 
 // LedgerStateFix errors
 var (
-	ErrLedgerFixInvalidType   = ter.Errorf(ter.TefINVALID_LEDGER_FIX_TYPE, "invalid LedgerFixType")
-	ErrLedgerFixOwnerRequired = ter.Errorf(ter.TemINVALID, "Owner is required for nfTokenPageLink fix")
+	ErrLedgerFixInvalidType      = ter.Errorf(ter.TefINVALID_LEDGER_FIX_TYPE, "invalid LedgerFixType")
+	ErrLedgerFixOwnerRequired    = ter.Errorf(ter.TemINVALID, "Owner is required for nfTokenPageLink fix")
+	ErrLedgerFixUnexpectedField  = ter.Errorf(ter.TemINVALID, "unexpected field for LedgerFixType")
+	ErrLedgerFixBookDirRequired  = ter.Errorf(ter.TemINVALID, "BookDirectory is required for bookExchangeRate fix")
+	ErrLedgerFixBookExchDisabled = ter.Errorf(ter.TemDISABLED, "bookExchangeRate fix requires fixCleanup3_2_0")
 )
 
 // LedgerStateFix is a system transaction to fix ledger state issues.
@@ -29,14 +40,21 @@ var (
 type LedgerStateFix struct {
 	tx.BaseTx
 
-	// LedgerFixType identifies the type of fix (required)
-	LedgerFixType uint8 `json:"LedgerFixType" xrpl:"LedgerFixType"`
+	// LedgerFixType identifies the type of fix (required). sfLedgerFixType is a
+	// UINT16 on the wire, so wire values above 255 must still parse and reach the
+	// default preflight arm (tefINVALID_LEDGER_FIX_TYPE) rather than failing to
+	// decode.
+	LedgerFixType uint16 `json:"LedgerFixType" xrpl:"LedgerFixType"`
 
 	// Owner is the owner account (required for nfTokenPageLink fix)
 	Owner string `json:"Owner,omitempty" xrpl:"Owner,omitempty"`
+
+	// BookDirectory is the book directory root key to repair (required for the
+	// bookExchangeRate fix, and forbidden for any other fix type).
+	BookDirectory *string `json:"BookDirectory,omitempty" xrpl:"BookDirectory,omitempty"`
 }
 
-func NewLedgerStateFix(account string, fixType uint8) *LedgerStateFix {
+func NewLedgerStateFix(account string, fixType uint16) *LedgerStateFix {
 	return &LedgerStateFix{
 		BaseTx:        *tx.NewBaseTx(tx.TypeLedgerStateFix, account),
 		LedgerFixType: fixType,
@@ -51,8 +69,23 @@ func NewNFTokenPageLinkFix(account, owner string) *LedgerStateFix {
 	}
 }
 
+func NewBookExchangeRateFix(account, bookDirectory string) *LedgerStateFix {
+	return &LedgerStateFix{
+		BaseTx:        *tx.NewBaseTx(tx.TypeLedgerStateFix, account),
+		LedgerFixType: LedgerFixTypeBookExchangeRate,
+		BookDirectory: &bookDirectory,
+	}
+}
+
 func (l *LedgerStateFix) TxType() tx.Type {
 	return tx.TypeLedgerStateFix
+}
+
+// GetFlagsMask adopts the engine FlagsMasker seam. LedgerStateFix defines no
+// type-specific flags, so it uses the base universal mask, checked at preflight0
+// (rippled does not override getFlagsMask for LedgerStateFix).
+func (l *LedgerStateFix) GetFlagsMask(rules *amendment.Rules) uint32 {
+	return tx.TfUniversalMask
 }
 
 // Reference: rippled LedgerStateFix.cpp preflight()
@@ -61,24 +94,44 @@ func (l *LedgerStateFix) Validate() error {
 		return err
 	}
 
-	// Reference: rippled LedgerStateFix.cpp:36-37
-	if err := tx.CheckFlags(l.GetFlags(), tx.TfUniversalMask); err != nil {
-		return err
-	}
-
-	// Validate LedgerFixType and required fields based on type
-	// Reference: rippled LedgerStateFix.cpp:42-51
+	// Rules-free fix-type dispatch. Each fix type allows exactly one fix-specific
+	// field. The bookExchangeRate arm defers to PreflightRules, where the
+	// amendment gate (temDISABLED) must precede its field-shape check to match
+	// rippled's preflight order.
 	switch l.LedgerFixType {
 	case LedgerFixTypeNFTokenPageLink:
-		// Reference: rippled LedgerStateFix.cpp:45-46
 		if l.Owner == "" {
 			return ErrLedgerFixOwnerRequired
 		}
+		if l.BookDirectory != nil {
+			return ErrLedgerFixUnexpectedField
+		}
+	case LedgerFixTypeBookExchangeRate:
+		// Amendment-gated: validated in PreflightRules.
 	default:
-		// Reference: rippled LedgerStateFix.cpp:49-50
 		return ErrLedgerFixInvalidType
 	}
 
+	return nil
+}
+
+// PreflightRules carries the amendment-gated arm of rippled's LedgerStateFix
+// preflight. The bookExchangeRate fix is rejected temDISABLED before the amendment
+// activates — ahead of its field-shape checks, matching rippled's switch-then-
+// field ordering. Reference: rippled LedgerStateFix.cpp preflight().
+func (l *LedgerStateFix) PreflightRules(rules *amendment.Rules) error {
+	if l.LedgerFixType != LedgerFixTypeBookExchangeRate {
+		return nil
+	}
+	if !rules.Enabled(amendment.FeatureFixCleanup3_2_0) {
+		return ErrLedgerFixBookExchDisabled
+	}
+	if l.BookDirectory == nil {
+		return ErrLedgerFixBookDirRequired
+	}
+	if l.Owner != "" {
+		return ErrLedgerFixUnexpectedField
+	}
 	return nil
 }
 
@@ -87,11 +140,10 @@ func (l *LedgerStateFix) Flatten() (map[string]any, error) {
 	if err != nil {
 		return nil, err
 	}
-	// LedgerFixType is UInt16 in the binary codec but uint8 in Go.
 	// Convert to int so the codec's UInt16.FromJSON() can handle it.
 	if v, ok := m["LedgerFixType"]; ok {
 		switch val := v.(type) {
-		case uint8:
+		case uint16:
 			m["LedgerFixType"] = int(val)
 		}
 	}
@@ -102,7 +154,29 @@ func (l *LedgerStateFix) RequiredAmendments() [][32]byte {
 	return [][32]byte{amendment.FeatureFixNFTokenPageLinks}
 }
 
-// Reference: rippled LedgerStateFix.cpp preclaim() + doApply()
+// Preclaim runs LedgerStateFix's ledger-aware check for the nfTokenPageLink fix:
+// the owner account must exist (tecOBJECT_NOT_FOUND). Extracting it from Apply
+// makes it visible to the preclaim-only paths (TxQ admission, simulate), matching
+// rippled where it lives in LedgerStateFix::preclaim. The bookExchangeRate arm
+// keeps its checks in Apply, where they deliberately share the single directory
+// Read with the mutation so it sees exactly the bytes the checks validated.
+// Reference: rippled LedgerStateFix.cpp preclaim().
+func (l *LedgerStateFix) Preclaim(view tx.LedgerView, config tx.EngineConfig) ter.Result {
+	if l.LedgerFixType != LedgerFixTypeNFTokenPageLink {
+		return ter.TesSUCCESS
+	}
+	ownerID, err := state.DecodeAccountID(l.Owner)
+	if err != nil {
+		return ter.TecOBJECT_NOT_FOUND
+	}
+	exists, existsErr := view.Exists(keylet.Account(ownerID))
+	if existsErr != nil || !exists {
+		return ter.TecOBJECT_NOT_FOUND
+	}
+	return ter.TesSUCCESS
+}
+
+// Reference: rippled LedgerStateFix.cpp doApply()
 func (l *LedgerStateFix) Apply(ctx *tx.ApplyContext) ter.Result {
 	ctx.Log.Trace("ledger state fix apply",
 		"account", l.Account,
@@ -112,21 +186,8 @@ func (l *LedgerStateFix) Apply(ctx *tx.ApplyContext) ter.Result {
 
 	switch l.LedgerFixType {
 	case LedgerFixTypeNFTokenPageLink:
-		// Preclaim: verify owner account exists
-		// Reference: rippled LedgerStateFix.cpp preclaim() lines 65-80
 		ownerID, err := state.DecodeAccountID(l.Owner)
 		if err != nil {
-			ctx.Log.Warn("ledger state fix: owner account decode failed",
-				"owner", l.Owner,
-			)
-			return ter.TecOBJECT_NOT_FOUND
-		}
-		ownerAccountKey := keylet.Account(ownerID)
-		exists, existsErr := ctx.View.Exists(ownerAccountKey)
-		if existsErr != nil || !exists {
-			ctx.Log.Warn("ledger state fix: owner account does not exist",
-				"owner", l.Owner,
-			)
 			return ter.TecOBJECT_NOT_FOUND
 		}
 
@@ -143,12 +204,84 @@ func (l *LedgerStateFix) Apply(ctx *tx.ApplyContext) ter.Result {
 		)
 		return ter.TesSUCCESS
 
+	case LedgerFixTypeBookExchangeRate:
+		return l.applyBookExchangeRate(ctx)
+
 	default:
 		// preflight should have caught this
 		ctx.Log.Error("ledger state fix: unknown fix type", "fixType", l.LedgerFixType)
 		return ter.TecINTERNAL
 	}
 }
+
+// applyBookExchangeRate performs the bookExchangeRate fix: the book directory
+// root's sfExchangeRate is rewritten to the quality encoded in the low 64 bits
+// of its key. Preclaim and doApply share the single Read so the mutation sees
+// exactly the bytes the checks validated.
+// Reference: rippled LedgerStateFix.cpp preclaim() + doApply() BookExchangeRate.
+func (l *LedgerStateFix) applyBookExchangeRate(ctx *tx.ApplyContext) ter.Result {
+	if l.BookDirectory == nil {
+		return ter.TecINTERNAL
+	}
+	dirKeyBytes, err := hex.DecodeString(*l.BookDirectory)
+	if err != nil || len(dirKeyBytes) != 32 {
+		return ter.TecINTERNAL
+	}
+	var dirKey [32]byte
+	copy(dirKey[:], dirKeyBytes)
+
+	kl := keylet.Keylet{Type: entry.TypeDirectoryNode, Key: dirKey}
+	data, rerr := ctx.View.Read(kl)
+	if rerr != nil || data == nil {
+		return ter.TecOBJECT_NOT_FOUND
+	}
+
+	exchangeRate, hasER := directoryExchangeRate(data)
+	if !hasER {
+		// Not the first page of a book directory.
+		return ter.TecNO_PERMISSION
+	}
+
+	quality := binary.BigEndian.Uint64(dirKey[24:])
+	if quality == exchangeRate {
+		// Already correct, nothing to fix.
+		return ter.TecNO_PERMISSION
+	}
+
+	dir, perr := state.ParseDirectoryNode(data)
+	if perr != nil {
+		return ter.TecINTERNAL
+	}
+	dir.ExchangeRate = quality
+	serialized, serr := state.SerializeDirectoryNode(dir, true)
+	if serr != nil {
+		return ter.TecINTERNAL
+	}
+	if uerr := ctx.View.Update(kl, serialized); uerr != nil {
+		return ter.TecINTERNAL
+	}
+	return ter.TesSUCCESS
+}
+
+// directoryExchangeRate reads the sfExchangeRate (UInt64, field code 6) of a
+// serialized DirectoryNode, reporting whether the field is present. A book
+// directory root always carries it; owner directories and non-root pages do not.
+func directoryExchangeRate(data []byte) (uint64, bool) {
+	var value uint64
+	var present bool
+	_ = state.WalkFields(data, func(f state.Field) error {
+		if f.TypeCode == 3 && f.FieldCode == 6 && len(f.Value) == 8 { // UInt64 ExchangeRate
+			value = binary.BigEndian.Uint64(f.Value)
+			present = true
+			return errStopWalk
+		}
+		return nil
+	})
+	return value, present
+}
+
+// errStopWalk halts a WalkFields iteration once the target field is found.
+var errStopWalk = errors.New("stop walk")
 
 // repairNFTokenDirectoryLinks repairs the doubly-linked list of NFTokenPages
 // for an account. Returns true if any repairs were made, false if there was

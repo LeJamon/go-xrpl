@@ -33,14 +33,8 @@ const (
 	// maxDeletableTokenOfferEntries is the max offers to delete on burn
 	maxDeletableTokenOfferEntries = 500
 
-	// maxInt is used as unlimited limit for pre-amendment offer deletion
-	maxInt = int(^uint(0) >> 1)
-
 	// maxTokenOfferCancelCount is the max offers that can be cancelled in one tx
 	maxTokenOfferCancelCount = 500
-
-	// tfNFTokenCancelOfferMask is the mask for invalid flags (all flags are invalid)
-	tfNFTokenCancelOfferMask uint32 = 0xFFFFFFFF
 )
 
 // nftTransferFeeXRP computes the issuer transfer fee cut for an XRP amount

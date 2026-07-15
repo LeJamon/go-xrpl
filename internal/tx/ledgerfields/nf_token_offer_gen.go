@@ -6,8 +6,11 @@
 package ledgerfields
 
 import (
+	"errors"
+	"fmt"
+
 	"github.com/LeJamon/go-xrpl/codec/binarycodec"
-	"github.com/LeJamon/go-xrpl/crypto/common"
+	"github.com/LeJamon/go-xrpl/crypto/sha512half"
 	"github.com/LeJamon/go-xrpl/protocol"
 )
 
@@ -18,10 +21,12 @@ func init() {
 // NFTokenOffer is the typed representation of a NFTokenOffer ledger entry.
 // The present bitset tracks which fields appear on the decoded blob so the
 // emit methods only write entries that actually exist. The struct carries
-// every on-wire field — including those excluded from metadata
-// (sMD_Never) — so Decode → Encode is byte-identical.
+// every canonical field declared in the spec — including those excluded from
+// metadata (sMD_Never) — so decoding and re-encoding does not drop them.
 type NFTokenOffer struct {
 	present           uint64
+	decoded           bool
+	dirty             bool
 	Owner             string // AccountID (base58)
 	NFTokenID         string // Hash256 (uppercase hex)
 	Amount            any    // Amount (XRP string | IOU map)
@@ -47,15 +52,159 @@ const (
 	nftokenofferBitPreviousTxnLgrSeq
 )
 
+// SetOwner assigns Owner and updates its serialized presence.
+func (n *NFTokenOffer) SetOwner(value string) {
+	n.Owner = value
+	n.dirty = true
+	n.present |= nftokenofferBitOwner
+}
+
+// SetNFTokenID assigns NFTokenID and updates its serialized presence.
+func (n *NFTokenOffer) SetNFTokenID(value string) {
+	n.NFTokenID = value
+	n.dirty = true
+	n.present |= nftokenofferBitNFTokenID
+}
+
+// SetAmount assigns Amount and updates its serialized presence.
+func (n *NFTokenOffer) SetAmount(value any) {
+	n.Amount = value
+	n.dirty = true
+	n.present |= nftokenofferBitAmount
+}
+
+// SetOwnerNode assigns OwnerNode and updates its serialized presence.
+func (n *NFTokenOffer) SetOwnerNode(value string) {
+	n.OwnerNode = value
+	n.dirty = true
+	n.present |= nftokenofferBitOwnerNode
+}
+
+// SetNFTokenOfferNode assigns NFTokenOfferNode and updates its serialized presence.
+func (n *NFTokenOffer) SetNFTokenOfferNode(value string) {
+	n.NFTokenOfferNode = value
+	n.dirty = true
+	n.present |= nftokenofferBitNFTokenOfferNode
+}
+
+// SetDestination assigns Destination and updates its serialized presence.
+func (n *NFTokenOffer) SetDestination(value string) {
+	n.Destination = value
+	n.dirty = true
+	n.present |= nftokenofferBitDestination
+}
+
+// SetExpiration assigns Expiration and updates its serialized presence.
+func (n *NFTokenOffer) SetExpiration(value uint32) {
+	n.Expiration = value
+	n.dirty = true
+	n.present |= nftokenofferBitExpiration
+}
+
+// SetFlags assigns Flags and updates its serialized presence.
+func (n *NFTokenOffer) SetFlags(value uint32) {
+	n.Flags = value
+	n.dirty = true
+	n.present |= nftokenofferBitFlags
+}
+
+// SetPreviousTxnID assigns PreviousTxnID and updates its serialized presence.
+func (n *NFTokenOffer) SetPreviousTxnID(value string) {
+	n.PreviousTxnID = value
+	n.dirty = true
+	n.present |= nftokenofferBitPreviousTxnID
+}
+
+// SetPreviousTxnLgrSeq assigns PreviousTxnLgrSeq and updates its serialized presence.
+func (n *NFTokenOffer) SetPreviousTxnLgrSeq(value uint32) {
+	n.PreviousTxnLgrSeq = value
+	n.dirty = true
+	n.present |= nftokenofferBitPreviousTxnLgrSeq
+}
+
+func (n *NFTokenOffer) validateRequired() error {
+	if n.decoded && !n.dirty {
+		return nil
+	}
+	if n.present&nftokenofferBitOwner == 0 {
+		return errors.New("ledgerfields: NFTokenOffer: required field Owner is not set")
+	}
+	if n.present&nftokenofferBitNFTokenID == 0 {
+		return errors.New("ledgerfields: NFTokenOffer: required field NFTokenID is not set")
+	}
+	if n.present&nftokenofferBitAmount == 0 {
+		return errors.New("ledgerfields: NFTokenOffer: required field Amount is not set")
+	}
+	if n.present&nftokenofferBitOwnerNode == 0 {
+		return errors.New("ledgerfields: NFTokenOffer: required field OwnerNode is not set")
+	}
+	if n.present&nftokenofferBitNFTokenOfferNode == 0 {
+		return errors.New("ledgerfields: NFTokenOffer: required field NFTokenOfferNode is not set")
+	}
+	if n.present&nftokenofferBitFlags == 0 {
+		return errors.New("ledgerfields: NFTokenOffer: required field Flags is not set")
+	}
+	return nil
+}
+
+func (n *NFTokenOffer) validateDecoded() error {
+	if n.present&nftokenofferBitOwner == 0 {
+		return errors.New("ledgerfields: NFTokenOffer: required field Owner is missing")
+	}
+	if n.present&nftokenofferBitNFTokenID == 0 {
+		return errors.New("ledgerfields: NFTokenOffer: required field NFTokenID is missing")
+	}
+	if n.present&nftokenofferBitAmount == 0 {
+		return errors.New("ledgerfields: NFTokenOffer: required field Amount is missing")
+	}
+	if n.present&nftokenofferBitOwnerNode == 0 {
+		return errors.New("ledgerfields: NFTokenOffer: required field OwnerNode is missing")
+	}
+	if n.present&nftokenofferBitNFTokenOfferNode == 0 {
+		return errors.New("ledgerfields: NFTokenOffer: required field NFTokenOfferNode is missing")
+	}
+	if n.present&nftokenofferBitFlags == 0 {
+		return errors.New("ledgerfields: NFTokenOffer: required field Flags is missing")
+	}
+	if n.present&nftokenofferBitPreviousTxnID == 0 {
+		return errors.New("ledgerfields: NFTokenOffer: required field PreviousTxnID is missing")
+	}
+	if n.present&nftokenofferBitPreviousTxnLgrSeq == 0 {
+		return errors.New("ledgerfields: NFTokenOffer: required field PreviousTxnLgrSeq is missing")
+	}
+	return nil
+}
+
 // Decode populates the struct from binary ledger-entry data via a streaming
-// reader. Unknown / sMD_Never fields are skipped without allocation.
+// reader and enforces the current rippled ledger template.
 func (n *NFTokenOffer) Decode(data []byte) error {
+	return n.decode(data, false)
+}
+
+func (n *NFTokenOffer) decodeLegacy(data []byte) error {
+	return n.decode(data, true)
+}
+
+func (n *NFTokenOffer) decode(data []byte, legacy bool) error {
 	*n = NFTokenOffer{}
 	sr := newStreamReader(data)
+	seenFields := make(map[[2]int]struct{})
+	sawLedgerEntryType := false
 	for sr.hasMore() {
 		typeCode, fieldCode, err := sr.readFieldHeader()
 		if err != nil {
 			return err
+		}
+		fieldID := [2]int{typeCode, fieldCode}
+		if _, exists := seenFields[fieldID]; exists {
+			return fmt.Errorf("ledgerfields: NFTokenOffer: duplicate field type=%d field=%d", typeCode, fieldCode)
+		}
+		seenFields[fieldID] = struct{}{}
+		if !legacy {
+			switch {
+			case typeCode == 8 && fieldCode == 1:
+				return fmt.Errorf("ledgerfields: NFTokenOffer: field type=%d field=%d is not allowed", typeCode, fieldCode)
+			}
 		}
 		switch typeCode {
 		case 1: // UInt16
@@ -66,7 +215,10 @@ func (n *NFTokenOffer) Decode(data []byte) error {
 			val := int(u16Val)
 			switch fieldCode {
 			case 1:
-				_ = val // synthetic LedgerEntryType; discard
+				if val != 55 {
+					return fmt.Errorf("ledgerfields: NFTokenOffer: LedgerEntryType is %d, want 55", val)
+				}
+				sawLedgerEntryType = true
 			default:
 				return newErrUnknownField("NFTokenOffer", typeCode, fieldCode)
 			}
@@ -140,6 +292,9 @@ func (n *NFTokenOffer) Decode(data []byte) error {
 				return err
 			}
 			switch fieldCode {
+			case 1:
+				n.Owner = val
+				n.present |= nftokenofferBitOwner
 			case 2:
 				n.Owner = val
 				n.present |= nftokenofferBitOwner
@@ -152,6 +307,13 @@ func (n *NFTokenOffer) Decode(data []byte) error {
 		default:
 			return newErrUnknownField("NFTokenOffer", typeCode, fieldCode)
 		}
+	}
+	if !sawLedgerEntryType {
+		return errors.New("ledgerfields: NFTokenOffer: missing LedgerEntryType")
+	}
+	n.decoded = true
+	if !legacy {
+		return n.validateDecoded()
 	}
 	return nil
 }
@@ -319,11 +481,20 @@ func (n *NFTokenOffer) ToMap() map[string]any {
 	return out
 }
 
-// Encode serializes the receiver to canonical XRPL binary. Round-trip
-// invariant: Decode(data); Encode() == data for any byte sequence that
-// Decode accepts.
+// Encode serializes the receiver to canonical XRPL binary. Legacy decode
+// aliases and non-canonical input ordering are emitted in canonical form.
 func (n *NFTokenOffer) Encode() ([]byte, error) {
-	return binarycodec.EncodeBytes(n.ToMap())
+	if err := n.validateRequired(); err != nil {
+		return nil, err
+	}
+	out := n.ToMap()
+	if n.present&nftokenofferBitPreviousTxnID == 0 {
+		out["PreviousTxnID"] = "0000000000000000000000000000000000000000000000000000000000000000"
+	}
+	if n.present&nftokenofferBitPreviousTxnLgrSeq == 0 {
+		out["PreviousTxnLgrSeq"] = uint32(0)
+	}
+	return binarycodec.EncodeBytes(out)
 }
 
 // Hash returns the SHAMap account-state leaf hash for this entry,
@@ -334,6 +505,6 @@ func (n *NFTokenOffer) Hash(index [32]byte) ([32]byte, error) {
 	if err != nil {
 		return [32]byte{}, err
 	}
-	prefix := protocol.HashPrefixLeafNode
-	return common.Sha512Half(prefix[:], data, index[:]), nil
+	prefix := protocol.HashPrefixLeafNode()
+	return sha512half.Sum(prefix[:], data, index[:]), nil
 }

@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strings"
 	"sync/atomic"
 
 	addresscodec "github.com/LeJamon/go-xrpl/codec/addresscodec"
@@ -158,6 +159,10 @@ func (li *LedgerIndex) UnmarshalJSON(data []byte) error {
 		*li = ""
 		return nil
 	}
+	if string(data) == "-0" {
+		*li = "0"
+		return nil
+	}
 	// First try to unmarshal as a string (handles "validated", "current", "closed", "12345")
 	var strVal string
 	if err := json.Unmarshal(data, &strVal); err == nil {
@@ -186,17 +191,18 @@ type LedgerSpecifier struct {
 	LedgerHash  string      `json:"ledger_hash,omitempty"`
 	LedgerIndex LedgerIndex `json:"ledger_index,omitempty"` // can be number or "validated", "current", "closed"
 
-	// Ledger is rippled's legacy combined selector (RPCHelpers.cpp:367-374):
-	// a string longer than 12 chars is treated as a ledger_hash, anything
-	// else as a ledger_index. It is folded into LedgerHash/LedgerIndex during
-	// lookup and never read directly by handlers.
+	// Ledger is rippled's legacy combined selector. Exactly 64 characters are
+	// treated as a ledger hash; every other string is treated as an index.
 	Ledger LedgerIndex `json:"ledger,omitempty"`
 }
+
+func (*LedgerSpecifier) UsesLedgerSpecifier() {}
 
 // API Warning IDs as defined in XRPL documentation
 const (
 	WarningUnsupportedAmendmentsMajority = 1001 // Unsupported amendments have reached majority
 	WarningAmendmentBlocked              = 1002 // This server is amendment blocked
+	WarningExpiredValidatorList          = 1003 // This server has an expired validator list
 	WarningClioServer                    = 2001 // This is a clio server
 )
 
@@ -216,6 +222,22 @@ type WebSocketCommand struct {
 	ID      any
 	Params  json.RawMessage
 	Request map[string]any
+}
+
+// WebSocketResponse represents an XRPL WebSocket API response.
+type WebSocketResponse struct {
+	Status       string          `json:"status"`
+	Type         string          `json:"type"`
+	Result       any             `json:"result,omitempty"`
+	ID           any             `json:"id,omitempty"`
+	Warning      string          `json:"warning,omitempty"`
+	Warnings     []WarningObject `json:"warnings,omitempty"`
+	Forwarded    bool            `json:"forwarded,omitempty"`
+	ApiVersion   int             `json:"api_version,omitempty"`
+	Error        string          `json:"error,omitempty"`
+	ErrorCode    int             `json:"error_code,omitempty"`
+	ErrorMessage string          `json:"error_message,omitempty"`
+	Request      any             `json:"request,omitempty"`
 }
 
 // Subscription types for WebSocket streams. Rippled's per-book stream
@@ -258,6 +280,9 @@ type SubscriptionRequest struct {
 	// url subscription (doSubscribe's reuse branch only checks them).
 	Username string `json:"username,omitempty"`
 	Password string `json:"password,omitempty"`
+	// ApiVersion is resolved by the transport and is not part of the decoded
+	// subscription payload. A zero value uses DefaultApiVersion.
+	ApiVersion int `json:"-"`
 
 	// wire holds the as-received JSON of the array-valued fields, captured at
 	// decode time. The typed slices above collapse the four shapes rippled
@@ -417,8 +442,7 @@ type TransactionParam struct {
 
 // Pagination parameters
 type PaginationParams struct {
-	Limit  uint32 `json:"limit,omitempty"`
-	Marker any    `json:"marker,omitempty"`
+	Marker json.RawMessage `json:"marker,omitempty"`
 }
 
 // Currency specification
@@ -431,11 +455,12 @@ type Currency struct {
 type Path []PathStep
 
 type PathStep struct {
-	Account  string `json:"account,omitempty"`
-	Currency string `json:"currency,omitempty"`
-	Issuer   string `json:"issuer,omitempty"`
-	Type     uint8  `json:"type,omitempty"`
-	TypeHex  string `json:"type_hex,omitempty"`
+	Account       string `json:"account,omitempty"`
+	Currency      string `json:"currency"`
+	Issuer        string `json:"issuer,omitempty"`
+	MPTIssuanceID string `json:"mpt_issuance_id,omitempty"`
+	Type          uint8  `json:"type,omitempty"`
+	TypeHex       string `json:"type_hex,omitempty"`
 }
 
 // Quality specification
@@ -463,8 +488,15 @@ type Signer struct {
 
 // CurrencySpec represents a currency specification for order book subscriptions
 type CurrencySpec struct {
-	Currency string `json:"currency"`
-	Issuer   string `json:"issuer,omitempty"`
+	Currency      string `json:"currency,omitempty"`
+	Issuer        string `json:"issuer,omitempty"`
+	MPTIssuanceID string `json:"mpt_issuance_id,omitempty"`
+}
+
+type OrderBookSpec struct {
+	TakerGets CurrencySpec
+	TakerPays CurrencySpec
+	Domain    string
 }
 
 // SubscriptionConfig holds configuration for a specific subscription
@@ -517,6 +549,26 @@ type Connection struct {
 	// consecutiveDrops counts back-to-back send failures. Reset to 0
 	// on every successful TrySend.
 	consecutiveDrops atomic.Int32
+	apiVersion       atomic.Int32
+}
+
+// SetAPIVersion updates the representation used for subsequent subscription
+// events on this connection.
+func (c *Connection) SetAPIVersion(version int) {
+	if version == 0 {
+		version = DefaultApiVersion
+	}
+	c.apiVersion.Store(int32(version))
+}
+
+// APIVersion returns the representation selected by the latest subscribe
+// request on this connection.
+func (c *Connection) APIVersion() int {
+	version := int(c.apiVersion.Load())
+	if version == 0 {
+		return DefaultApiVersion
+	}
+	return version
 }
 
 // TrySend pushes data onto SendChannel without blocking. Returns true
@@ -576,12 +628,11 @@ func IsValidClassicAddress(address string) bool {
 	return addresscodec.IsValidClassicAddress(address)
 }
 
-// BookMatchesCurrency checks if a book request matches the given currency specs
-func BookMatchesCurrency(book BookRequest, specGets, specPays CurrencySpec) bool {
-	// Parse book's taker_gets and taker_pays
+func BookMatches(book BookRequest, spec OrderBookSpec) bool {
 	var bookGets, bookPays struct {
-		Currency string `json:"currency"`
-		Issuer   string `json:"issuer"`
+		Currency      string `json:"currency"`
+		Issuer        string `json:"issuer"`
+		MPTIssuanceID string `json:"mpt_issuance_id"`
 	}
 	if err := json.Unmarshal(book.TakerGets, &bookGets); err != nil {
 		return false
@@ -590,15 +641,32 @@ func BookMatchesCurrency(book BookRequest, specGets, specPays CurrencySpec) bool
 		return false
 	}
 
-	// Compare currencies and issuers
-	if bookGets.Currency != specGets.Currency || bookGets.Issuer != specGets.Issuer {
+	if bookGets.Currency != spec.TakerGets.Currency ||
+		bookGets.Issuer != spec.TakerGets.Issuer ||
+		!strings.EqualFold(bookGets.MPTIssuanceID, spec.TakerGets.MPTIssuanceID) {
 		return false
 	}
-	if bookPays.Currency != specPays.Currency || bookPays.Issuer != specPays.Issuer {
+	if bookPays.Currency != spec.TakerPays.Currency ||
+		bookPays.Issuer != spec.TakerPays.Issuer ||
+		!strings.EqualFold(bookPays.MPTIssuanceID, spec.TakerPays.MPTIssuanceID) {
 		return false
 	}
+	return canonicalBookDomain(book.Domain) == canonicalBookDomain(spec.Domain)
+}
 
-	return true
+// BookMatchesCurrency checks an unscoped IOU/XRP order book.
+func BookMatchesCurrency(book BookRequest, specGets, specPays CurrencySpec) bool {
+	return BookMatches(book, OrderBookSpec{TakerGets: specGets, TakerPays: specPays})
+}
+
+func canonicalBookDomain(domain string) string {
+	if domain == "" {
+		return ""
+	}
+	if strings.TrimLeft(domain, "0") == "" {
+		return "0"
+	}
+	return strings.ToUpper(domain)
 }
 
 // LedgerInfoProvider provides current ledger info for subscribe responses

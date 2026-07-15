@@ -2,8 +2,142 @@ package tx
 
 import (
 	"bytes"
+	"encoding/hex"
+	"encoding/json"
+	"fmt"
+	"math"
 	"testing"
+
+	"github.com/LeJamon/go-xrpl/codec/binarycodec"
+	"github.com/LeJamon/go-xrpl/internal/tx/ter"
 )
+
+func TestCreateTxWithMetaBlob_TrustedMetadataOverJSONLimit(t *testing.T) {
+	const (
+		inputOffers   = 500
+		deletedNodes  = 962
+		affectedNodes = 1027
+	)
+
+	offers := make([]any, inputOffers)
+	for i := range offers {
+		offers[i] = fmt.Sprintf("%064X", i+1)
+	}
+	txHex, err := binarycodec.Encode(map[string]any{
+		"TransactionType": "NFTokenCancelOffer",
+		"Account":         "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh",
+		"Fee":             "10",
+		"Sequence":        uint32(1),
+		"SigningPubKey":   "",
+		"NFTokenOffers":   offers,
+	})
+	if err != nil {
+		t.Fatalf("encode NFTokenCancelOffer at protocol limit: %v", err)
+	}
+	txBlob, err := hex.DecodeString(txHex)
+	if err != nil {
+		t.Fatalf("decode transaction blob: %v", err)
+	}
+
+	nodes := make([]AffectedNode, affectedNodes)
+	for i := range nodes {
+		nodes[i] = AffectedNode{
+			NodeType:        "DeletedNode",
+			LedgerEntryType: "NFTokenOffer",
+			LedgerIndex:     fmt.Sprintf("%064X", i+1),
+		}
+		if i >= deletedNodes {
+			nodes[i].NodeType = "ModifiedNode"
+			nodes[i].LedgerEntryType = "AccountRoot"
+		}
+	}
+
+	combined, err := CreateTxWithMetaBlob(txBlob, &Metadata{
+		AffectedNodes:     nodes,
+		TransactionResult: ter.TesSUCCESS,
+	})
+	if err != nil {
+		t.Fatalf("create tx+meta blob with %d affected nodes: %v", affectedNodes, err)
+	}
+
+	gotTx, metaBlob, err := SplitTxWithMetaBlob(combined)
+	if err != nil {
+		t.Fatalf("split tx+meta blob: %v", err)
+	}
+	if !bytes.Equal(gotTx, txBlob) {
+		t.Fatal("transaction blob changed during combination")
+	}
+	decoded, err := binarycodec.DecodeBytes(metaBlob)
+	if err != nil {
+		t.Fatalf("decode metadata: %v", err)
+	}
+	gotNodes, ok := decoded["AffectedNodes"].([]any)
+	if !ok {
+		t.Fatalf("AffectedNodes type = %T, want []any", decoded["AffectedNodes"])
+	}
+	if len(gotNodes) != affectedNodes {
+		t.Fatalf("AffectedNodes count = %d, want %d", len(gotNodes), affectedNodes)
+	}
+}
+
+func TestTransactionIndexFromMetadata(t *testing.T) {
+	metaData, err := SerializeMetadata(&Metadata{TransactionIndex: 37})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	got, ok := TransactionIndexFromMetadata(metaData)
+	if !ok {
+		t.Fatal("TransactionIndexFromMetadata rejected canonical metadata")
+	}
+	if got != 37 {
+		t.Fatalf("transaction index = %d, want 37", got)
+	}
+}
+
+func TestTransactionIndexFromTxWithMetaBlob_JSONFallback(t *testing.T) {
+	tests := []struct {
+		name         string
+		value        any
+		includeField bool
+		want         uint32
+		wantOK       bool
+	}{
+		{name: "zero", value: 0, includeField: true, wantOK: true},
+		{name: "integral", value: 19, includeField: true, want: 19, wantOK: true},
+		{name: "maximum", value: uint64(math.MaxUint32), includeField: true, want: math.MaxUint32, wantOK: true},
+		{name: "fractional", value: 1.5, includeField: true},
+		{name: "negative", value: -1, includeField: true},
+		{name: "overflow", value: uint64(math.MaxUint32) + 1, includeField: true},
+		{name: "string", value: "7", includeField: true},
+		{name: "null", value: nil, includeField: true},
+		{name: "missing"},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			meta := map[string]any{}
+			if tc.includeField {
+				meta["TransactionIndex"] = tc.value
+			}
+			blob, err := json.Marshal(map[string]any{
+				"tx_json": map[string]any{},
+				"meta":    meta,
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			got, ok := TransactionIndexFromTxWithMetaBlob(blob)
+			if ok != tc.wantOK {
+				t.Fatalf("ok = %v, want %v", ok, tc.wantOK)
+			}
+			if ok && got != tc.want {
+				t.Fatalf("transaction index = %d, want %d", got, tc.want)
+			}
+		})
+	}
+}
 
 func TestSplitTxWithMetaBlob_RoundTrip(t *testing.T) {
 	txData := []byte("transaction data here")

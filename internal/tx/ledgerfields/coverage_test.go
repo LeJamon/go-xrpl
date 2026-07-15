@@ -5,7 +5,7 @@ import (
 	"testing"
 
 	"github.com/LeJamon/go-xrpl/codec/binarycodec"
-	"github.com/LeJamon/go-xrpl/crypto/common"
+	"github.com/LeJamon/go-xrpl/crypto/sha512half"
 	"github.com/LeJamon/go-xrpl/internal/tx/ledgerfields/spec"
 	"github.com/LeJamon/go-xrpl/protocol"
 )
@@ -69,6 +69,7 @@ var coverageFixtures = map[string]map[string]any{
 		"TicketCount":          uint32(2),
 		"AMMID":                fxHash256,
 		"VaultID":              fxHashB,
+		"LoanBrokerID":         fxHash256,
 		"WalletSize":           uint32(4),
 		"PreviousTxnID":        fxHash256,
 		"PreviousTxnLgrSeq":    uint32(9),
@@ -97,8 +98,10 @@ var coverageFixtures = map[string]map[string]any{
 		"Owner":             fxAccount,
 		"TakerPaysCurrency": fxCurrUSD,
 		"TakerPaysIssuer":   fxCurrEUR,
+		"TakerPaysMPT":      fxHash192,
 		"TakerGetsCurrency": fxCurrUSD,
 		"TakerGetsIssuer":   fxCurrEUR,
+		"TakerGetsMPT":      fxHash192,
 		"ExchangeRate":      "5a",
 		"NFTokenID":         fxHashB,
 		"DomainID":          fxHash256,
@@ -173,6 +176,7 @@ var coverageFixtures = map[string]map[string]any{
 		"PreviousTxnLgrSeq": uint32(9),
 	},
 	"SignerList": {
+		"Owner":        fxAccount,
 		"OwnerNode":    "0",
 		"SignerQuorum": uint32(3),
 		"SignerEntries": []any{map[string]any{
@@ -247,6 +251,7 @@ var coverageFixtures = map[string]map[string]any{
 	},
 	"Escrow": {
 		"Account":           fxAccount,
+		"Sequence":          uint32(7),
 		"Destination":       fxIssuer,
 		"Amount":            fxXRP,
 		"Condition":         fxBlob,
@@ -265,6 +270,7 @@ var coverageFixtures = map[string]map[string]any{
 	"PayChannel": {
 		"Account":           fxAccount,
 		"Destination":       fxIssuer,
+		"Sequence":          uint32(7),
 		"Amount":            fxXRP,
 		"Balance":           fxXRP,
 		"PublicKey":         fxBlob,
@@ -311,6 +317,8 @@ var coverageFixtures = map[string]map[string]any{
 		"LockedAmount":      "0",
 		"MPTokenMetadata":   fxBlob,
 		"DomainID":          fxHash256,
+		"MutableFlags":      uint32(0x00030000),
+		"ReferenceHolding":  fxHash256,
 		"Flags":             uint32(0),
 		"PreviousTxnID":     fxHash256,
 		"PreviousTxnLgrSeq": uint32(9),
@@ -326,8 +334,9 @@ var coverageFixtures = map[string]map[string]any{
 		"PreviousTxnLgrSeq": uint32(9),
 	},
 	"Oracle": {
-		"Owner":    fxAccount,
-		"Provider": fxBlob,
+		"Owner":            fxAccount,
+		"OracleDocumentID": uint32(13),
+		"Provider":         fxBlob,
 		"PriceDataSeries": []any{map[string]any{
 			"PriceData": map[string]any{"BaseAsset": fxCurrUSD, "QuoteAsset": fxCurrEUR, "AssetPrice": "64", "Scale": uint32(2)},
 		}},
@@ -365,6 +374,7 @@ var coverageFixtures = map[string]map[string]any{
 		"Authorize":         fxIssuer,
 		"Permissions":       []any{map[string]any{"Permission": map[string]any{"PermissionValue": uint32(1)}}},
 		"OwnerNode":         "0",
+		"DestinationNode":   "0",
 		"Flags":             uint32(0),
 		"PreviousTxnID":     fxHash256,
 		"PreviousTxnLgrSeq": uint32(9),
@@ -379,12 +389,63 @@ var coverageFixtures = map[string]map[string]any{
 		"AssetsTotal":       "1000",
 		"AssetsAvailable":   "500",
 		"AssetsMaximum":     "10000",
-		"LossUnrealized":    "0",
+		"LossUnrealized":    "1",
 		"ShareMPTID":        fxHash192,
 		"WithdrawalPolicy":  uint32(1),
+		"Scale":             uint32(6),
 		"Flags":             uint32(0),
 		"PreviousTxnID":     fxHash256,
 		"PreviousTxnLgrSeq": uint32(9),
+	},
+	"LoanBroker": {
+		"Sequence":             uint32(1),
+		"OwnerNode":            "0",
+		"VaultNode":            "0",
+		"VaultID":              fxHash256,
+		"Account":              fxIssuer,
+		"Owner":                fxAccount,
+		"LoanSequence":         uint32(5),
+		"Data":                 fxBlob,
+		"ManagementFeeRate":    uint32(10),
+		"OwnerCount":           uint32(2),
+		"DebtTotal":            "1000",
+		"DebtMaximum":          "10000",
+		"CoverAvailable":       "500",
+		"CoverRateMinimum":     uint32(1000),
+		"CoverRateLiquidation": uint32(1100),
+		"Flags":                uint32(0),
+		"PreviousTxnID":        fxHash256,
+		"PreviousTxnLgrSeq":    uint32(9),
+	},
+	"Loan": {
+		"OwnerNode":                "0",
+		"LoanBrokerNode":           "0",
+		"LoanBrokerID":             fxHash256,
+		"LoanSequence":             uint32(5),
+		"Borrower":                 fxAccount,
+		"LoanOriginationFee":       "10",
+		"LoanServiceFee":           "5",
+		"LatePaymentFee":           "2",
+		"ClosePaymentFee":          "1",
+		"OverpaymentFee":           uint32(100),
+		"InterestRate":             uint32(500),
+		"LateInterestRate":         uint32(600),
+		"CloseInterestRate":        uint32(400),
+		"OverpaymentInterestRate":  uint32(300),
+		"StartDate":                uint32(700000000),
+		"PaymentInterval":          uint32(2592000),
+		"GracePeriod":              uint32(86400),
+		"PreviousPaymentDueDate":   uint32(700100000),
+		"NextPaymentDueDate":       uint32(702692000),
+		"PaymentRemaining":         uint32(11),
+		"PeriodicPayment":          "100",
+		"PrincipalOutstanding":     "1000",
+		"TotalValueOutstanding":    "1100",
+		"ManagementFeeOutstanding": "10",
+		"LoanScale":                int32(2),
+		"Flags":                    uint32(0),
+		"PreviousTxnID":            fxHash256,
+		"PreviousTxnLgrSeq":        uint32(9),
 	},
 }
 
@@ -471,7 +532,7 @@ func TestGeneratedSLE_RoundTripAndAccessors(t *testing.T) {
 			if err != nil {
 				t.Fatalf("Hash: %v", err)
 			}
-			want := common.Sha512Half(protocol.HashPrefixLeafNode[:], canonical, index[:])
+			want := sha512half.Sum(protocol.HashPrefixLeafNode().Bytes(), canonical, index[:])
 			if h != want {
 				t.Fatalf("hash mismatch:\n want %x\n got  %x", want, h)
 			}

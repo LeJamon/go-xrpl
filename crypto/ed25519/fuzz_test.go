@@ -5,7 +5,7 @@ import (
 )
 
 func FuzzEd25519Validate(f *testing.F) {
-	algo := ED25519()
+	algo := Algorithm{}
 
 	// Valid (msg, pubkey, sig) triplet from test suite
 	f.Add(

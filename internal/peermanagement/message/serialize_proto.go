@@ -396,7 +396,6 @@ var codecs = map[MessageType]msgCodec{
 			return &proto.TMGetObjectByHash{
 				Type:       &objType,
 				Query:      pb.Bool(m.Query),
-				Seq:        m.Seq,
 				LedgerHash: m.LedgerHash,
 				Fat:        m.Fat,
 				Objects:    objects,
@@ -417,7 +416,6 @@ var codecs = map[MessageType]msgCodec{
 			return &GetObjectByHash{
 				ObjType:    ObjectType(p.GetType()),
 				Query:      p.GetQuery(),
-				Seq:        p.GetSeq(),
 				LedgerHash: p.GetLedgerHash(),
 				Fat:        p.GetFat(),
 				Objects:    objects,

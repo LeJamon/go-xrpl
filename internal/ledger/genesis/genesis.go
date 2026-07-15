@@ -2,7 +2,6 @@ package genesis
 
 import (
 	"bytes"
-	"encoding/hex"
 	"errors"
 	"fmt"
 	"slices"
@@ -11,11 +10,11 @@ import (
 
 	"github.com/LeJamon/go-xrpl/amendment"
 	addresscodec "github.com/LeJamon/go-xrpl/codec/addresscodec"
-	binarycodec "github.com/LeJamon/go-xrpl/codec/binarycodec"
-	"github.com/LeJamon/go-xrpl/crypto/common"
 	secp256k1 "github.com/LeJamon/go-xrpl/crypto/secp256k1"
+	"github.com/LeJamon/go-xrpl/crypto/sha512half"
 	"github.com/LeJamon/go-xrpl/drops"
 	"github.com/LeJamon/go-xrpl/internal/ledger/header"
+	"github.com/LeJamon/go-xrpl/internal/tx/ledgerfields"
 	"github.com/LeJamon/go-xrpl/keylet"
 	"github.com/LeJamon/go-xrpl/shamap"
 )
@@ -128,10 +127,10 @@ func GenerateGenesisAccountID() ([20]byte, string, error) {
 
 // GenerateAccountIDFromPassphrase derives an account ID from a passphrase.
 func GenerateAccountIDFromPassphrase(passphrase string) ([20]byte, string, error) {
-	seedHash := common.Sha512Half([]byte(passphrase))
+	seedHash := sha512half.Sum([]byte(passphrase))
 	seed := seedHash[:16]
 
-	algo := secp256k1.SECP256K1()
+	algo := secp256k1.Algorithm{}
 	_, pubKeyHex, err := algo.DeriveKeypair(seed, false)
 	if err != nil {
 		return [20]byte{}, "", err
@@ -352,64 +351,63 @@ func CalculateLedgerHash(h header.LedgerHeader) [32]byte {
 }
 
 func serializeAccountRoot(a *accountRoot) ([]byte, error) {
+	if a == nil {
+		return nil, errors.New("failed to encode AccountRoot: nil entry")
+	}
+
 	address, err := addresscodec.EncodeAccountIDToClassicAddress(a.Account[:])
 	if err != nil {
 		return nil, fmt.Errorf("failed to encode account address: %w", err)
 	}
 
-	// All soeREQUIRED AccountRoot fields must be present (rippled auto-initialises them).
-	jsonObj := map[string]any{
-		"LedgerEntryType":   "AccountRoot",
-		"Flags":             a.Flags,
-		"Account":           address,
-		"Balance":           fmt.Sprintf("%d", a.Balance),
-		"Sequence":          a.Sequence,
-		"OwnerCount":        a.OwnerCount,
-		"PreviousTxnID":     "0000000000000000000000000000000000000000000000000000000000000000",
-		"PreviousTxnLgrSeq": uint32(0),
-	}
+	var sle ledgerfields.AccountRoot
+	sle.SetFlags(a.Flags)
+	sle.SetAccount(address)
+	sle.SetBalance(fmt.Sprintf("%d", a.Balance))
+	sle.SetSequence(a.Sequence)
+	sle.SetOwnerCount(a.OwnerCount)
+	sle.SetPreviousTxnID("0000000000000000000000000000000000000000000000000000000000000000")
+	sle.SetPreviousTxnLgrSeq(0)
 
-	hexStr, err := binarycodec.Encode(jsonObj)
+	data, err := sle.Encode()
 	if err != nil {
 		return nil, fmt.Errorf("failed to encode AccountRoot: %w", err)
 	}
-
-	return hex.DecodeString(hexStr)
+	return data, nil
 }
 
 func serializeFeeSettings(f *feeSettings) ([]byte, error) {
-	// Rippled auto-initialises Flags=0 as a required field.
-	jsonObj := map[string]any{
-		"LedgerEntryType": "FeeSettings",
-		"Flags":           uint32(0),
+	if f == nil {
+		return nil, errors.New("failed to encode FeeSettings: nil entry")
 	}
+
+	var sle ledgerfields.FeeSettings
+	sle.SetFlags(0)
 
 	if f.IsUsingModernFees() {
-		jsonObj["BaseFeeDrops"] = fmt.Sprintf("%d", f.BaseFeeDrops)
-		jsonObj["ReserveBaseDrops"] = fmt.Sprintf("%d", f.ReserveBaseDrops)
-		jsonObj["ReserveIncrementDrops"] = fmt.Sprintf("%d", f.ReserveIncrementDrops)
+		sle.SetBaseFeeDrops(fmt.Sprintf("%d", f.BaseFeeDrops))
+		sle.SetReserveBaseDrops(fmt.Sprintf("%d", f.ReserveBaseDrops))
+		sle.SetReserveIncrementDrops(fmt.Sprintf("%d", f.ReserveIncrementDrops))
 	} else {
-		// Legacy format. BaseFee is a UInt64 → hex string without leading zeros.
 		if f.BaseFee != nil {
-			jsonObj["BaseFee"] = fmt.Sprintf("%x", *f.BaseFee)
+			sle.SetBaseFee(fmt.Sprintf("%x", *f.BaseFee))
 		}
 		if f.ReferenceFeeUnits != nil {
-			jsonObj["ReferenceFeeUnits"] = *f.ReferenceFeeUnits
+			sle.SetReferenceFeeUnits(*f.ReferenceFeeUnits)
 		}
 		if f.ReserveBase != nil {
-			jsonObj["ReserveBase"] = *f.ReserveBase
+			sle.SetReserveBase(*f.ReserveBase)
 		}
 		if f.ReserveIncrement != nil {
-			jsonObj["ReserveIncrement"] = *f.ReserveIncrement
+			sle.SetReserveIncrement(*f.ReserveIncrement)
 		}
 	}
 
-	hexStr, err := binarycodec.Encode(jsonObj)
+	data, err := sle.Encode()
 	if err != nil {
 		return nil, fmt.Errorf("failed to encode FeeSettings: %w", err)
 	}
-
-	return hex.DecodeString(hexStr)
+	return data, nil
 }
 
 func serializeAmendments(amendments [][32]byte) ([]byte, error) {
@@ -419,17 +417,13 @@ func serializeAmendments(amendments [][32]byte) ([]byte, error) {
 		amendmentHexes[i] = fmt.Sprintf("%064X", amendment)
 	}
 
-	// Rippled auto-initialises Flags=0 as a required field.
-	jsonObj := map[string]any{
-		"LedgerEntryType": "Amendments",
-		"Flags":           uint32(0),
-		"Amendments":      amendmentHexes,
-	}
+	var sle ledgerfields.Amendments
+	sle.SetFlags(0)
+	sle.SetAmendments(amendmentHexes)
 
-	hexStr, err := binarycodec.Encode(jsonObj)
+	data, err := sle.Encode()
 	if err != nil {
 		return nil, fmt.Errorf("failed to encode Amendments: %w", err)
 	}
-
-	return hex.DecodeString(hexStr)
+	return data, nil
 }

@@ -1,8 +1,11 @@
 package payment
 
 import (
+	"math"
+
 	"github.com/LeJamon/go-xrpl/internal/ledger/state"
 	tx "github.com/LeJamon/go-xrpl/internal/tx"
+	"github.com/LeJamon/go-xrpl/internal/tx/mptutil"
 	"github.com/LeJamon/go-xrpl/internal/tx/ter"
 	"github.com/LeJamon/go-xrpl/keylet"
 )
@@ -29,16 +32,11 @@ type FlowCrossParams struct {
 	ReserveIncrement uint64
 
 	// Amendment flags governing offer-quality and AMM behavior.
-	FixReducedOffersV1         bool
-	FixReducedOffersV2         bool
-	FixRmSmallIncreasedQOffers bool
-	FixFillOrKill              bool
-	FlowSortStrands            bool
-	FixAMMv1_1                 bool
-	FixAMMv1_2                 bool
-	FixAMMOverflowOffer        bool
-	// Fix1781 gates XRP-endpoint loop detection in strand building.
-	Fix1781 bool
+	FixReducedOffersV2  bool
+	FixFillOrKill       bool
+	FixAMMv1_1          bool
+	FixAMMv1_2          bool
+	FixAMMOverflowOffer bool
 
 	// DomainID, when non-nil, restricts crossing to a permissioned-domain book.
 	DomainID *[32]byte
@@ -125,11 +123,22 @@ func FlowCross(
 	// 3. Limit to available balance
 	//
 	// sendMax = min(takerGets * transferRate, balance)
-	inStartBalance := tx.AccountFunds(view, takerAccount, takerGets, true, params.ReserveBase, params.ReserveIncrement)
+	inStartBalance, fundsResult := accountFundsForCross(view, takerAccount, takerGets, true, params.ReserveBase, params.ReserveIncrement)
+	if fundsResult != ter.TesSUCCESS {
+		return FlowCrossResult{Result: fundsResult, Sandbox: sandbox}
+	}
 
 	sendMax := ToEitherAmount(takerGets)
 
-	if !takerGets.IsNative() {
+	if takerGets.IsMPT() {
+		if id, ok := decodeMPTID(takerGets.MPTIssuanceID()); ok && takerAccount != mptutil.Issuer(id) {
+			transferRate := mptutil.TransferRate(view, id)
+			if transferRate != QualityOne {
+				rateAmt := rateAsAmount(transferRate)
+				sendMax = NewMPTEitherAmount(state.MulRoundMPT(takerGets, rateAmt, true), id)
+			}
+		}
+	} else if !takerGets.IsNative() {
 		issuerID, err := state.DecodeAccountID(takerGets.Issuer)
 		if err == nil && takerAccount != issuerID {
 			transferRate := GetTransferRate(view, issuerID)
@@ -176,10 +185,17 @@ func FlowCross(
 	// Note: In FlowCross, takerPays = the deliver currency (what gets delivered to the taker),
 	// so we check takerPays.IsNative() to determine the deliver type (XRP vs IOU).
 	if params.Sell {
-		if takerPays.IsNative() {
+		switch {
+		case takerPays.IsNative():
 			// Reference: rippled STAmount::cMaxNative = 9000000000000000000
 			deliver = NewXRPEitherAmount(9000000000000000000)
-		} else {
+		case takerPays.IsMPT():
+			id, ok := decodeMPTID(takerPays.MPTIssuanceID())
+			if !ok {
+				return FlowCrossResult{Result: ter.TefINTERNAL, Sandbox: sandbox}
+			}
+			deliver = NewMPTEitherAmount(math.MaxInt64/2, id)
+		default:
 			// Reference: rippled uses cMaxValue/2=4999999999999999, cMaxOffset=80
 			deliver = NewIOUEitherAmount(tx.NewIssuedAmount(
 				4999999999999999, 80,
@@ -204,14 +220,14 @@ func FlowCross(
 
 	strands, strandResult := ToStrands(
 		sandbox,
-		takerAccount,   // src (taker)
-		takerAccount,   // dst (taker - payment to self)
-		takerPays,      // dstAmt (what we want to receive / deliver to self)
-		&takerGets,     // srcAmt (what we're paying, for issue info)
-		paths,          // explicit paths (XRP bridge for IOU-IOU)
-		true,           // addDefaultPath
-		true,           // offerCrossing - skip trust line checks, create lines on demand
-		params.Fix1781, // fix1781 - gate XRP endpoint loop detection
+		takerAccount, // src (taker)
+		takerAccount, // dst (taker - payment to self)
+		takerPays,    // dstAmt (what we want to receive / deliver to self)
+		&takerGets,   // srcAmt (what we're paying, for issue info)
+		paths,        // explicit paths (XRP bridge for IOU-IOU)
+		true,         // addDefaultPath
+		true,         // offerCrossing - skip trust line checks, create lines on demand
+		params.ParentCloseTime,
 	)
 
 	if strandResult != ter.TesSUCCESS || len(strands) == 0 {
@@ -243,7 +259,7 @@ func FlowCross(
 	// 2. Enable offer crossing mode on DirectSteps (ignores trust line limits/quality,
 	//    allows trust line creation during crossing)
 	// Reference: rippled uses DirectIOfferCrossingStep instead of DirectIPaymentStep
-	configureStrandsForOfferCrossing(strands, &takerQuality, params.ParentCloseTime, params.FixReducedOffersV1, params.FixReducedOffersV2, params.FixRmSmallIncreasedQOffers)
+	configureStrandsForOfferCrossing(strands, &takerQuality, params.ParentCloseTime, params.FixReducedOffersV2)
 
 	// For domain offers, set the domain on book steps so crossing uses the domain book directory.
 	// Reference: rippled CreateOffer.cpp flowCross() passes domainID to flow()
@@ -258,7 +274,7 @@ func FlowCross(
 	// grooming is discarded (see the apply gate below), leaving removableOffers
 	// out of the applied sandbox on a kill.
 	partialPayment := !params.FillOrKill
-	result := Flow(sandbox, strands, deliver, partialPayment, &takerQuality, &sendMax, ammCtx, params.FlowSortStrands, true,
+	result := Flow(sandbox, strands, deliver, partialPayment, &takerQuality, &sendMax, ammCtx, true,
 		WithFillOrKill(params.FixFillOrKill, params.Sell))
 
 	// Apply the flow sandbox changes to our root sandbox only on success.
@@ -290,7 +306,15 @@ func FlowCross(
 	takerPaidGross := result.In
 	takerPaidNet := result.In
 
-	if !takerGets.IsNative() {
+	if takerGets.IsMPT() {
+		if id, ok := decodeMPTID(takerGets.MPTIssuanceID()); ok && takerAccount != mptutil.Issuer(id) {
+			transferRate := mptutil.TransferRate(view, id)
+			if transferRate != QualityOne && transferRate > 0 {
+				rateAmt := rateAsAmount(transferRate)
+				takerPaidNet = NewMPTEitherAmount(state.DivRoundMPT(FromEitherAmount(result.In), rateAmt, true), id)
+			}
+		}
+	} else if !takerGets.IsNative() {
 		issuerID, err := state.DecodeAccountID(takerGets.Issuer)
 		if err == nil && takerAccount != issuerID {
 			transferRate := GetTransferRate(view, issuerID)
@@ -334,7 +358,7 @@ func FlowCross(
 // of the bridge is what matters, not individual leg quality.
 //
 // Reference: rippled uses DirectIOfferCrossingStep + quality threshold on BookStep
-func configureStrandsForOfferCrossing(strands []Strand, qualityLimit *Quality, parentCloseTime uint32, fixReducedOffersV1 bool, fixReducedOffersV2 bool, fixRmSmallIncreasedQOffers bool) {
+func configureStrandsForOfferCrossing(strands []Strand, qualityLimit *Quality, parentCloseTime uint32, fixReducedOffersV2 bool) {
 	for _, strand := range strands {
 		// Count BookSteps in the strand
 		bookStepCount := 0
@@ -356,9 +380,7 @@ func configureStrandsForOfferCrossing(strands []Strand, qualityLimit *Quality, p
 				// selection in tipQualityThreshold.
 				bookStep.crossLimit = qualityLimit
 				bookStep.parentCloseTime = parentCloseTime
-				bookStep.fixReducedOffersV1 = fixReducedOffersV1
 				bookStep.fixReducedOffersV2 = fixReducedOffersV2
-				bookStep.fixRmSmallIncreasedQOffers = fixRmSmallIncreasedQOffers
 				// In offer crossing, the offer owner pays the transfer fee (not the path sender).
 				// This makes DebtDirection() return Issues instead of Redeems, preventing the
 				// following DirectStepI from incorrectly deducting the transfer rate from the
@@ -381,6 +403,11 @@ func configureStrandsForOfferCrossing(strands []Strand, qualityLimit *Quality, p
 func zeroCrossAmount(amt tx.Amount) EitherAmount {
 	if amt.IsNative() {
 		return ZeroXRPEitherAmount()
+	}
+	if amt.IsMPT() {
+		if id, ok := decodeMPTID(amt.MPTIssuanceID()); ok {
+			return ZeroMPTEitherAmount(id)
+		}
 	}
 	return ZeroIOUEitherAmount(amt.Currency, amt.Issuer)
 }
@@ -411,18 +438,39 @@ func GetTransferRate(view tx.LedgerView, issuer [20]byte) uint32 {
 // AccountFundsInSandbox returns account funds with BalanceHook applied.
 // Matches rippled's accountFunds(psb, ...) in CreateOffer.cpp line 432.
 // BalanceHook subtracts DeferredCredits so self-crossing round-trips report zero.
-func AccountFundsInSandbox(sb *PaymentSandbox, accountID [20]byte, amount tx.Amount, fhZeroIfFrozen bool, reserveBase, reserveIncrement uint64) tx.Amount {
+func AccountFundsInSandbox(sb *PaymentSandbox, accountID [20]byte, amount tx.Amount, fhZeroIfFrozen bool, reserveBase, reserveIncrement uint64) (tx.Amount, ter.Result) {
+	if amount.IsMPT() {
+		return accountFundsForCross(sb, accountID, amount, fhZeroIfFrozen, reserveBase, reserveIncrement)
+	}
 	rawBalance := tx.AccountFunds(sb, accountID, amount, fhZeroIfFrozen, reserveBase, reserveIncrement)
 
 	if amount.IsNative() {
-		return sb.BalanceHook(accountID, [20]byte{}, rawBalance)
+		return sb.BalanceHook(accountID, [20]byte{}, rawBalance), ter.TesSUCCESS
 	}
 
 	issuerID, err := state.DecodeAccountID(amount.Issuer)
 	if err != nil {
-		return rawBalance
+		return rawBalance, ter.TesSUCCESS
 	}
-	return sb.BalanceHook(accountID, issuerID, rawBalance)
+	return sb.BalanceHook(accountID, issuerID, rawBalance), ter.TesSUCCESS
+}
+
+func accountFundsForCross(view tx.LedgerView, accountID [20]byte, amount tx.Amount, zeroIfFrozen bool, reserveBase, reserveIncrement uint64) (tx.Amount, ter.Result) {
+	if !amount.IsMPT() {
+		return tx.AccountFunds(view, accountID, amount, zeroIfFrozen, reserveBase, reserveIncrement), ter.TesSUCCESS
+	}
+	id, ok := decodeMPTID(amount.MPTIssuanceID())
+	if !ok {
+		return state.NewMPTAmountWithIssuanceID(0, amount.Issuer, amount.MPTIssuanceID()), ter.TefINTERNAL
+	}
+	funds, result := mptutil.Funds(view, id, accountID, zeroIfFrozen)
+	if result == ter.TefINTERNAL {
+		return tx.Amount{}, result
+	}
+	if result != ter.TesSUCCESS {
+		funds = 0
+	}
+	return state.NewMPTAmountWithIssuanceID(funds, amount.Issuer, amount.MPTIssuanceID()), ter.TesSUCCESS
 }
 
 // rateAsAmount converts a uint32 transfer rate to an Amount, matching rippled's

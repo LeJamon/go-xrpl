@@ -6,7 +6,7 @@ import (
 	"encoding/hex"
 	"errors"
 
-	"github.com/LeJamon/go-xrpl/crypto/common"
+	"github.com/LeJamon/go-xrpl/crypto/sha512half"
 	"github.com/LeJamon/go-xrpl/ledger/entry"
 )
 
@@ -45,6 +45,8 @@ const (
 	spaceNegativeUNL    uint16 = 'N' // Negative UNL (singleton)
 	spaceVault          uint16 = 'V' // Vault
 	spaceDelegate       uint16 = 'E' // Delegate
+	spaceLoanBroker     uint16 = 'l' // Loan broker (lower-case L)
+	spaceLoan           uint16 = 'L' // Loan
 )
 
 // Keylet represents an addressable location in the ledger state.
@@ -63,7 +65,7 @@ func indexHash(space uint16, data ...[]byte) [32]byte {
 	inputs = append(inputs, spaceBytes[:])
 	inputs = append(inputs, data...)
 
-	return common.Sha512Half(inputs...)
+	return sha512half.Sum(inputs...)
 }
 
 // Account returns the keylet for an account root entry.
@@ -120,6 +122,62 @@ func LedgerHashesForSeq(ledgerSeq uint32) Keylet {
 	return Keylet{
 		Type: entry.TypeLedgerHashes,
 		Key:  indexHash(spaceSkip, seqBytes[:]),
+	}
+}
+
+// Bridge returns the keylet for a bridge entry.
+func Bridge(door [20]byte, currency [20]byte) Keylet {
+	return Keylet{
+		Type: entry.TypeBridge,
+		Key:  indexHash(spaceBridge, door[:], currency[:]),
+	}
+}
+
+// XChainBridge identifies the assets and door accounts on both sides of a bridge.
+type XChainBridge struct {
+	LockingDoor     [20]byte
+	LockingCurrency [20]byte
+	LockingIssuer   [20]byte
+	IssuingDoor     [20]byte
+	IssuingCurrency [20]byte
+	IssuingIssuer   [20]byte
+}
+
+// XChainClaimID returns the keylet for an owned cross-chain claim entry.
+func XChainClaimID(bridge XChainBridge, sequence uint64) Keylet {
+	var seqBytes [8]byte
+	binary.BigEndian.PutUint64(seqBytes[:], sequence)
+	return Keylet{
+		Type: entry.TypeXChainOwnedClaimID,
+		Key: indexHash(
+			spaceXCClaimID,
+			bridge.LockingDoor[:],
+			bridge.LockingCurrency[:],
+			bridge.LockingIssuer[:],
+			bridge.IssuingDoor[:],
+			bridge.IssuingCurrency[:],
+			bridge.IssuingIssuer[:],
+			seqBytes[:],
+		),
+	}
+}
+
+// XChainCreateAccountClaimID returns the keylet for an owned create-account claim entry.
+func XChainCreateAccountClaimID(bridge XChainBridge, sequence uint64) Keylet {
+	var seqBytes [8]byte
+	binary.BigEndian.PutUint64(seqBytes[:], sequence)
+	return Keylet{
+		Type: entry.TypeXChainOwnedCreateAccountClaimID,
+		Key: indexHash(
+			spaceXCCreateAc,
+			bridge.LockingDoor[:],
+			bridge.LockingCurrency[:],
+			bridge.LockingIssuer[:],
+			bridge.IssuingDoor[:],
+			bridge.IssuingCurrency[:],
+			bridge.IssuingIssuer[:],
+			seqBytes[:],
+		),
 	}
 }
 
@@ -207,7 +265,7 @@ type CredentialPair struct {
 func DepositPreauthCredentials(owner [20]byte, sortedCreds []CredentialPair) Keylet {
 	hashes := make([][32]byte, len(sortedCreds))
 	for i, c := range sortedCreds {
-		hashes[i] = common.Sha512Half(c.Issuer[:], c.CredentialType)
+		hashes[i] = sha512half.Sum(c.Issuer[:], c.CredentialType)
 	}
 	data := make([][]byte, 0, 1+len(sortedCreds))
 	data = append(data, owner[:])
@@ -271,7 +329,7 @@ func CurrencyBytes(currency string) [20]byte {
 	case 3:
 		for i := range 3 {
 			if !isISOCurrencyChar(currency[i]) {
-				return NoCurrency
+				return noCurrency
 			}
 		}
 		result[12] = currency[0]
@@ -279,10 +337,10 @@ func CurrencyBytes(currency string) [20]byte {
 		result[14] = currency[2]
 	case 40:
 		if _, err := hex.Decode(result[:], []byte(currency)); err != nil {
-			return NoCurrency
+			return noCurrency
 		}
 	default:
-		return NoCurrency
+		return noCurrency
 	}
 
 	return result
@@ -313,17 +371,27 @@ func IsValidCurrencyCode(code string) bool {
 	}
 }
 
+// Currency-parsing errors. Callers distinguishing a malformed code from a
+// reserved one can match these with errors.Is.
+var (
+	// ErrInvalidCurrency reports a code that is not well-formed per to_currency.
+	ErrInvalidCurrency = errors.New("invalid currency code")
+	// ErrReservedCurrency reports a well-formed code that resolves to one of the
+	// reserved sentinels (NoCurrency or BadCurrency).
+	ErrReservedCurrency = errors.New("reserved currency code")
+)
+
 // ParseCurrency validates code against rippled's to_currency rules and returns
 // the 20-byte currency. It errors on malformed codes and on the reserved
 // sentinels NoCurrency and BadCurrency, giving callers a single
 // validate-and-encode entry point that stays symmetric with CurrencyBytes.
 func ParseCurrency(code string) ([20]byte, error) {
 	if !IsValidCurrencyCode(code) {
-		return [20]byte{}, errors.New("invalid currency code")
+		return [20]byte{}, ErrInvalidCurrency
 	}
 	currency := CurrencyBytes(code)
-	if currency == NoCurrency || currency == BadCurrency {
-		return [20]byte{}, errors.New("reserved currency code")
+	if currency == noCurrency || currency == badCurrency {
+		return [20]byte{}, ErrReservedCurrency
 	}
 	return currency, nil
 }
@@ -346,15 +414,25 @@ func isISOCurrencyChar(c byte) bool {
 	return false
 }
 
-// NoCurrency mirrors rippled's noCurrency() sentinel (UintTypes.cpp:126-130) —
+// noCurrency mirrors rippled's noCurrency() sentinel (UintTypes.cpp:126-130) —
 // base_uint<160>{1} stored big-endian, distinct from xrpCurrency() = all-zeros.
 // to_currency yields it for any malformed code.
-var NoCurrency = [20]byte{19: 0x01}
+var noCurrency = [20]byte{19: 0x01}
 
-// BadCurrency mirrors rippled's badCurrency() sentinel (UintTypes.cpp:133-137) —
+// badCurrency mirrors rippled's badCurrency() sentinel (UintTypes.cpp:133-137) —
 // Currency(0x5852500000000000), the ISO-style spelling of the reserved system
 // code "XRP" packed at bytes 12-14.
-var BadCurrency = [20]byte{12: 'X', 13: 'R', 14: 'P'}
+var badCurrency = [20]byte{12: 'X', 13: 'R', 14: 'P'}
+
+// NoCurrency returns the reserved sentinel that to_currency yields for any
+// malformed code. It is returned by value so callers cannot mutate the shared
+// process-wide sentinel.
+func NoCurrency() [20]byte { return noCurrency }
+
+// BadCurrency returns the reserved sentinel for the ISO-style spelling of the
+// system code "XRP". It is returned by value so callers cannot mutate the
+// shared process-wide sentinel.
+func BadCurrency() [20]byte { return badCurrency }
 
 // BookDir returns the keylet for an order book directory (base, without quality).
 // The hash order follows rippled: paysCurrency, getsCurrency, paysIssuer, getsIssuer
@@ -373,6 +451,63 @@ func BookDirWithDomain(takerPaysCurrency, takerPaysIssuer, takerGetsCurrency, ta
 		Type: entry.TypeDirectoryNode,
 		Key:  indexHash(spaceBookDir, takerPaysCurrency[:], takerGetsCurrency[:], takerPaysIssuer[:], takerGetsIssuer[:], domainID[:]),
 	}
+}
+
+// BookSide identifies one side of an order book: either an Issue (a currency
+// with an issuer — XRP being the zero currency and zero issuer) or an MPT (its
+// 192-bit MPTokenIssuanceID). Mirrors rippled's Asset = std::variant<Issue,
+// MPTIssue>. Construct with IssueSide / MPTSide.
+type BookSide struct {
+	Currency [20]byte
+	Issuer   [20]byte
+	MPTID    [24]byte
+	IsMPT    bool
+}
+
+// IssueSide builds an Issue book side (currency + issuer).
+func IssueSide(currency, issuer [20]byte) BookSide {
+	return BookSide{Currency: currency, Issuer: issuer}
+}
+
+// MPTSide builds an MPT book side from a 192-bit MPTokenIssuanceID.
+func MPTSide(mptID [24]byte) BookSide {
+	return BookSide{MPTID: mptID, IsMPT: true}
+}
+
+// BookBase returns the base keylet (quality 0) for an order book whose pays and
+// gets sides may each be an Issue or an MPT, mirroring rippled getBookBase
+// (Indexes.cpp). The hashed field layout depends on each side's kind: the two
+// "asset" fields come first (a side's currency if it is an Issue, else its MPT
+// id, which already embeds the issuer), followed by the issuer of any Issue
+// side (MPT sides contribute no separate issuer). An optional domain id is
+// appended for permissioned-domain books. For two Issue sides the layout is
+// (paysCurrency, getsCurrency, paysIssuer, getsIssuer) — byte-identical to
+// BookDir, so existing books keep their keys.
+func BookBase(pays, gets BookSide, domainID *[32]byte) Keylet {
+	data := make([][]byte, 0, 5)
+	if pays.IsMPT {
+		data = append(data, pays.MPTID[:])
+	} else {
+		data = append(data, pays.Currency[:])
+	}
+	if gets.IsMPT {
+		data = append(data, gets.MPTID[:])
+	} else {
+		data = append(data, gets.Currency[:])
+	}
+	if !pays.IsMPT {
+		data = append(data, pays.Issuer[:])
+	}
+	if !gets.IsMPT {
+		data = append(data, gets.Issuer[:])
+	}
+	if domainID != nil {
+		data = append(data, domainID[:])
+	}
+	return Quality(Keylet{
+		Type: entry.TypeDirectoryNode,
+		Key:  indexHash(spaceBookDir, data...),
+	}, 0)
 }
 
 // Quality returns a keylet with the quality (exchange rate) encoded in the last 8 bytes.
@@ -481,20 +616,46 @@ func PayChannel(srcAccountID, dstAccountID [20]byte, sequence uint32) Keylet {
 // std::minmax feeding indexHash in
 // rippled/src/libxrpl/protocol/Indexes.cpp:446-456 amm().
 func AMM(issue1Issuer, issue1Currency, issue2Issuer, issue2Currency [20]byte) Keylet {
-	var minIssuer, minCurrency, maxIssuer, maxCurrency [20]byte
+	return AMMAsset(
+		IssueSide(issue1Currency, issue1Issuer),
+		IssueSide(issue2Currency, issue2Issuer),
+	)
+}
 
-	if issue1LessEqualIssue2(issue1Currency, issue1Issuer, issue2Currency, issue2Issuer) {
-		minIssuer, minCurrency = issue1Issuer, issue1Currency
-		maxIssuer, maxCurrency = issue2Issuer, issue2Currency
-	} else {
-		minIssuer, minCurrency = issue2Issuer, issue2Currency
-		maxIssuer, maxCurrency = issue1Issuer, issue1Currency
+// AMMAsset returns the AMM keylet for two Issue or MPT assets. Asset ordering
+// matches rippled's Asset comparison: MPT assets sort before Issue assets;
+// assets of the same kind retain their native Issue/MPT ordering.
+func AMMAsset(asset1, asset2 BookSide) Keylet {
+	minAsset, maxAsset := asset1, asset2
+	if !bookSideLessEqual(asset1, asset2) {
+		minAsset, maxAsset = asset2, asset1
 	}
 
-	return Keylet{
-		Type: entry.TypeAMM,
-		Key:  indexHash(spaceAMM, minIssuer[:], minCurrency[:], maxIssuer[:], maxCurrency[:]),
+	var key [32]byte
+	switch {
+	case minAsset.IsMPT && maxAsset.IsMPT:
+		key = indexHash(spaceAMM, minAsset.MPTID[:], maxAsset.MPTID[:])
+	case minAsset.IsMPT:
+		key = indexHash(spaceAMM, minAsset.MPTID[:], maxAsset.Issuer[:], maxAsset.Currency[:])
+	default:
+		key = indexHash(
+			spaceAMM,
+			minAsset.Issuer[:], minAsset.Currency[:],
+			maxAsset.Issuer[:], maxAsset.Currency[:],
+		)
 	}
+
+	return Keylet{Type: entry.TypeAMM, Key: key}
+}
+
+func bookSideLessEqual(lhs, rhs BookSide) bool {
+	if lhs.IsMPT != rhs.IsMPT {
+		return lhs.IsMPT
+	}
+	if lhs.IsMPT {
+		return bytes.Compare(lhs.MPTID[:], rhs.MPTID[:]) <= 0
+	}
+	return issue1LessEqualIssue2(lhs.Currency, lhs.Issuer, rhs.Currency, rhs.Issuer)
 }
 
 // IssueLessEqual reports whether issue1 sorts at-or-before issue2 under
@@ -530,6 +691,14 @@ func AMMByID(ammID [32]byte) Keylet {
 	}
 }
 
+// VaultByID returns a Vault keylet for a known Vault ID.
+func VaultByID(vaultID [32]byte) Keylet {
+	return Keylet{
+		Type: entry.TypeVault,
+		Key:  vaultID,
+	}
+}
+
 // Oracle returns the keylet for an Oracle entry.
 // Reference: rippled Indexes.cpp oracle(AccountID const& account, std::uint32_t const& documentID)
 func Oracle(accountID [20]byte, documentID uint32) Keylet {
@@ -549,6 +718,44 @@ func Vault(ownerID [20]byte, sequence uint32) Keylet {
 	return Keylet{
 		Type: entry.TypeVault,
 		Key:  indexHash(spaceVault, ownerID[:], seqBytes[:]),
+	}
+}
+
+// LoanBroker returns the keylet for a LoanBroker entry.
+// Reference: rippled Indexes.cpp loanbroker(AccountID const& owner, std::uint32_t seq)
+func LoanBroker(ownerID [20]byte, sequence uint32) Keylet {
+	var seqBytes [4]byte
+	binary.BigEndian.PutUint32(seqBytes[:], sequence)
+	return Keylet{
+		Type: entry.TypeLoanBroker,
+		Key:  indexHash(spaceLoanBroker, ownerID[:], seqBytes[:]),
+	}
+}
+
+// LoanBrokerByID returns a LoanBroker keylet for a known LoanBroker ID.
+func LoanBrokerByID(brokerID [32]byte) Keylet {
+	return Keylet{
+		Type: entry.TypeLoanBroker,
+		Key:  brokerID,
+	}
+}
+
+// LoanByID returns a Loan keylet for a known Loan ID.
+func LoanByID(loanID [32]byte) Keylet {
+	return Keylet{
+		Type: entry.TypeLoan,
+		Key:  loanID,
+	}
+}
+
+// Loan returns the keylet for a Loan entry.
+// Reference: rippled Indexes.cpp loan(uint256 const& loanBrokerID, std::uint32_t loanSeq)
+func Loan(loanBrokerID [32]byte, loanSeq uint32) Keylet {
+	var seqBytes [4]byte
+	binary.BigEndian.PutUint32(seqBytes[:], loanSeq)
+	return Keylet{
+		Type: entry.TypeLoan,
+		Key:  indexHash(spaceLoan, loanBrokerID[:], seqBytes[:]),
 	}
 }
 

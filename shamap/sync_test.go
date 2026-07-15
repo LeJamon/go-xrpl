@@ -343,7 +343,7 @@ func TestWalkMap_BackedLazyLoadAfterRelease(t *testing.T) {
 
 	// FlushDirty(true) writes every dirty node to family and then calls
 	// ReleaseChildren on each inner — children are nil, hashes remain.
-	batch, err := src.FlushDirty(true)
+	batch, err := src.FlushDirtyAndRelease()
 	if err != nil {
 		t.Fatalf("FlushDirty: %v", err)
 	}
@@ -473,7 +473,7 @@ func TestAddKnownNodeByID_RippledStyleReconstruct(t *testing.T) {
 	}
 
 	for i, w := range wireNodes {
-		nid, err := UnmarshalBinary(w.NodeID)
+		nid, err := ParseNodeID(w.NodeID)
 		if err != nil {
 			t.Fatalf("UnmarshalBinary[%d]: %v", i, err)
 		}
@@ -495,6 +495,84 @@ func TestAddKnownNodeByID_RippledStyleReconstruct(t *testing.T) {
 	}
 	if destHash != rootHash {
 		t.Errorf("reconstructed hash mismatch: want %x got %x", rootHash[:8], destHash[:8])
+	}
+
+	dest.SetLedgerSeq(123)
+	var stored []FlushEntry
+	if err := dest.StoreDirty(func(entries []FlushEntry) error {
+		stored = append(stored, entries...)
+		return nil
+	}); err != nil {
+		t.Fatalf("StoreDirty: %v", err)
+	}
+	if len(stored) != len(wireNodes) {
+		t.Fatalf("stored acquired nodes = %d, want %d", len(stored), len(wireNodes))
+	}
+	for _, entry := range stored {
+		if entry.LedgerSeq != 123 || entry.MapType != TypeTransaction {
+			t.Fatalf("stored metadata = (%d, %d), want (123, %d)", entry.LedgerSeq, entry.MapType, TypeTransaction)
+		}
+	}
+}
+
+func TestAddKnownNode_StoreDirtyPersistsAcquiredNodes(t *testing.T) {
+	source := New(TypeTransaction)
+	for branch := range byte(4) {
+		for sub := range byte(4) {
+			var key [32]byte
+			key[0] = (branch << 4) | sub
+			key[1] = 0x80
+			if err := source.Put(key, []byte{branch, sub, 0xAA, 0xBB, 0xCC, 0xDD, 0xEE, 0x11, 0x22, 0x33, 0x44, 0x55}); err != nil {
+				t.Fatalf("Put: %v", err)
+			}
+		}
+	}
+
+	rootHash, err := source.Hash()
+	if err != nil {
+		t.Fatalf("source hash: %v", err)
+	}
+	rootData, err := source.SerializeRoot()
+	if err != nil {
+		t.Fatalf("SerializeRoot: %v", err)
+	}
+	wireNodes, err := source.WalkWireNodes()
+	if err != nil {
+		t.Fatalf("WalkWireNodes: %v", err)
+	}
+
+	dest := New(TypeTransaction)
+	if err := dest.StartSync(); err != nil {
+		t.Fatalf("StartSync: %v", err)
+	}
+	if err := dest.AddRootNode(rootHash, rootData); err != nil {
+		t.Fatalf("AddRootNode: %v", err)
+	}
+	for _, wire := range wireNodes[1:] {
+		node, err := deserializeNodeFromWire(wire.Data)
+		if err != nil {
+			t.Fatalf("deserialize acquired node: %v", err)
+		}
+		if err := node.UpdateHash(); err != nil {
+			t.Fatalf("hash acquired node: %v", err)
+		}
+		if err := dest.AddKnownNode(node.Hash(), wire.Data); err != nil {
+			t.Fatalf("AddKnownNode: %v", err)
+		}
+	}
+	if err := dest.FinishSync(); err != nil {
+		t.Fatalf("FinishSync: %v", err)
+	}
+
+	var stored []FlushEntry
+	if err := dest.StoreDirty(func(entries []FlushEntry) error {
+		stored = append(stored, entries...)
+		return nil
+	}); err != nil {
+		t.Fatalf("StoreDirty: %v", err)
+	}
+	if len(stored) != len(wireNodes) {
+		t.Fatalf("stored acquired nodes = %d, want %d", len(stored), len(wireNodes))
 	}
 }
 
@@ -526,7 +604,7 @@ func TestAddKnownNodeByID_SentinelErrors(t *testing.T) {
 	// on the dest map after only AddRootNode.
 	var deep *WireNode
 	for i := range wireNodes {
-		nid, err := UnmarshalBinary(wireNodes[i].NodeID)
+		nid, err := ParseNodeID(wireNodes[i].NodeID)
 		if err != nil || nid.Depth() < 2 {
 			continue
 		}
@@ -548,7 +626,7 @@ func TestAddKnownNodeByID_SentinelErrors(t *testing.T) {
 		// The deep node's parent is still a hash-only stub. rippled
 		// re-requests rather than rejecting (descend()→nullptr, iNodeID !=
 		// node → useful()), so this must be NodeReRequest, not an error.
-		nid, _ := UnmarshalBinary(deep.NodeID)
+		nid, _ := ParseNodeID(deep.NodeID)
 		res, err := dest.AddKnownNodeByID(nid, deep.Data)
 		if err != nil {
 			t.Fatalf("ancestor gap: want nil error, got %v", err)
@@ -571,7 +649,7 @@ func TestAddKnownNodeByID_SentinelErrors(t *testing.T) {
 		// has stored for that branch.
 		var d1a, d1b *WireNode
 		for i := range wireNodes {
-			nid, _ := UnmarshalBinary(wireNodes[i].NodeID)
+			nid, _ := ParseNodeID(wireNodes[i].NodeID)
 			if nid.Depth() != 1 {
 				continue
 			}
@@ -585,7 +663,7 @@ func TestAddKnownNodeByID_SentinelErrors(t *testing.T) {
 		if d1a == nil || d1b == nil {
 			t.Skip("need at least two depth-1 wire nodes")
 		}
-		nid, _ := UnmarshalBinary(d1a.NodeID)
+		nid, _ := ParseNodeID(d1a.NodeID)
 		_, err = dest.AddKnownNodeByID(nid, d1b.Data)
 		if !errors.Is(err, ErrNodeHashMismatch) {
 			t.Fatalf("want ErrNodeHashMismatch, got %v", err)
@@ -610,7 +688,7 @@ func TestAddKnownNodeByID_SentinelErrors(t *testing.T) {
 		// is parsed.
 		var anyData []byte
 		for i := range wireNodes {
-			rid, _ := UnmarshalBinary(wireNodes[i].NodeID)
+			rid, _ := ParseNodeID(wireNodes[i].NodeID)
 			if !rid.IsRoot() {
 				anyData = wireNodes[i].Data
 				break
@@ -632,7 +710,7 @@ func TestAddKnownNodeByID_SentinelErrors(t *testing.T) {
 		}
 		var d1 *WireNode
 		for i := range wireNodes {
-			nid, _ := UnmarshalBinary(wireNodes[i].NodeID)
+			nid, _ := ParseNodeID(wireNodes[i].NodeID)
 			if nid.Depth() == 1 {
 				d1 = &wireNodes[i]
 				break
@@ -641,7 +719,7 @@ func TestAddKnownNodeByID_SentinelErrors(t *testing.T) {
 		if d1 == nil {
 			t.Skip("no depth-1 node available")
 		}
-		nid, _ := UnmarshalBinary(d1.NodeID)
+		nid, _ := ParseNodeID(d1.NodeID)
 		res, err := dest.AddKnownNodeByID(nid, d1.Data)
 		if err != nil {
 			t.Fatalf("first AddKnownNodeByID: %v", err)
@@ -694,7 +772,7 @@ func TestAddKnownNodeByID_LeafMidPathReturnsDuplicate(t *testing.T) {
 		t.Fatalf("AddRootNode: %v", err)
 	}
 	for _, w := range wireNodes {
-		nid, err := UnmarshalBinary(w.NodeID)
+		nid, err := ParseNodeID(w.NodeID)
 		if err != nil {
 			t.Fatalf("UnmarshalBinary: %v", err)
 		}

@@ -94,15 +94,19 @@ func TrustCreate(view LedgerView, p TrustCreateParams) ter.Result {
 	if p.QualityIn != 0 {
 		if bSetHigh {
 			rs.HighQualityIn = p.QualityIn
+			rs.HasHighQualityIn = true
 		} else {
 			rs.LowQualityIn = p.QualityIn
+			rs.HasLowQualityIn = true
 		}
 	}
 	if p.QualityOut != 0 {
 		if bSetHigh {
 			rs.HighQualityOut = p.QualityOut
+			rs.HasHighQualityOut = true
 		} else {
 			rs.LowQualityOut = p.QualityOut
+			rs.HasLowQualityOut = true
 		}
 	}
 
@@ -157,6 +161,7 @@ func TrustCreate(view LedgerView, p TrustCreateParams) ter.Result {
 		return ter.TecDIR_FULL
 	}
 	rs.LowNode = lowDir.Page
+	rs.HasLowNode = true
 
 	highDirKey := keylet.OwnerDir(highAccountID)
 	highDir, err := state.DirInsert(view, highDirKey, p.LineKey.Key, false, func(dir *state.DirectoryNode) {
@@ -166,6 +171,7 @@ func TrustCreate(view LedgerView, p TrustCreateParams) ter.Result {
 		return ter.TecDIR_FULL
 	}
 	rs.HighNode = highDir.Page
+	rs.HasHighNode = true
 
 	data, err := state.SerializeRippleState(rs)
 	if err != nil {

@@ -55,15 +55,11 @@ func (e *EscrowFinish) Validate() error {
 		return err
 	}
 
-	// The tfUniversalMask flag check is gated on fix1543 and runs in Preclaim,
-	// where the amendment rules are available.
-
 	if e.Owner == "" {
 		return ter.Errorf(ter.TemMALFORMED, "Owner is required")
 	}
 
-	// Both Condition and Fulfillment must be present or absent together
-	// Reference: rippled Escrow.cpp:644-646
+	// Both Condition and Fulfillment must be present or absent together.
 	// "Present" means the field exists in the transaction (even if empty value).
 	hasCondition := e.Condition != nil
 	hasFulfillment := e.Fulfillment != nil
@@ -71,20 +67,42 @@ func (e *EscrowFinish) Validate() error {
 		return ter.Errorf(ter.TemMALFORMED, "Condition and Fulfillment must be provided together")
 	}
 
-	// Validate CredentialIDs field
-	// Reference: rippled Escrow.cpp preflight() calls credentials::checkFields()
-	// Use HasField to detect empty arrays from binary parsing where omitempty
-	// causes the Go struct field to be nil even though the field was present.
-	present := e.CredentialIDs != nil || e.HasField("CredentialIDs")
-	if err := credential.CheckFields(e.CredentialIDs, present, "Duplicate credential ID"); err != nil {
-		return err
-	}
-
 	return nil
 }
 
 func (e *EscrowFinish) Flatten() (map[string]any, error) {
 	return tx.ReflectFlatten(e)
+}
+
+// GetFlagsMask returns the invalid-flags mask enforced at preflight0: any
+// non-universal flag is rejected.
+// Reference: rippled Escrow.cpp EscrowFinish::getFlagsMask.
+func (e *EscrowFinish) GetFlagsMask(rules *amendment.Rules) uint32 {
+	return tx.TfUniversalMask
+}
+
+// CheckExtraFeatures gates the CredentialIDs field on the Credentials amendment.
+// rippled evaluates this in checkExtraFeatures — before preflight1's common
+// checks and before the tx-type preflight body — so a CredentialIDs-bearing
+// EscrowFinish on a network without Credentials is temDISABLED ahead of every
+// other TER, keyed on field presence (not element count).
+// Reference: rippled Escrow.cpp EscrowFinish::checkExtraFeatures.
+func (e *EscrowFinish) CheckExtraFeatures(rules *amendment.Rules) error {
+	present := e.CredentialIDs != nil || e.HasField("CredentialIDs")
+	if present && !rules.Enabled(amendment.FeatureCredentials) {
+		return ter.Errorf(ter.TemDISABLED, "Credentials amendment not enabled")
+	}
+	return nil
+}
+
+// PreflightSigValidated runs the CredentialIDs shape check (empty / >8 /
+// duplicate → temMALFORMED). rippled runs credentials::checkFields in
+// preflightSigValidated, AFTER the signature is verified, so a mis-signed
+// EscrowFinish surfaces temINVALID rather than this temMALFORMED.
+// Reference: rippled Escrow.cpp EscrowFinish::preflightSigValidated.
+func (e *EscrowFinish) PreflightSigValidated() error {
+	present := e.CredentialIDs != nil || e.HasField("CredentialIDs")
+	return credential.CheckFields(e.CredentialIDs, present, "Duplicate credential ID")
 }
 
 // CalculateBaseFee mirrors rippled's EscrowFinish::calculateBaseFee: the
@@ -116,55 +134,74 @@ func (e *EscrowFinish) CalculateBaseFee(view tx.LedgerView, config tx.EngineConf
 	return fee
 }
 
-// Preclaim performs the rules-aware fix1543 flag check.
-// Reference: rippled Escrow.cpp:630 — stray (non-universal) flags are rejected
-// only once fix1543 is active. rippled runs this check first in preflight; the
-// gate is rules-aware and go-xrpl exposes rules only at Preclaim, so it runs
-// after the common preflight/preclaim steps. For a tx malformed in two ways this
-// can surface a different tem code than rippled; the result is tem-only (never
-// enters a ledger) so there is no consensus divergence.
-func (e *EscrowFinish) Preclaim(_ tx.LedgerView, config tx.EngineConfig) ter.Result {
-	if config.GetRules().Enabled(amendment.FeatureFix1543) && (e.GetFlags()&tx.TfUniversalMask) != 0 {
-		return ter.TemINVALID_FLAG
-	}
-	return ter.TesSUCCESS
-}
-
 // ApplyOnTec implements TecApplier. When tecEXPIRED is returned, this re-runs
 // credential expiration deletion against the engine's view so the side-effects
 // (credential deletion, owner count adjustment) persist even though the tx
 // sandbox is rolled back for tec results.
 // Reference: rippled Transactor.cpp - tecEXPIRED re-applies removeExpiredCredentials
 func (e *EscrowFinish) ApplyOnTec(ctx *tx.ApplyContext) {
-	credential.RemoveExpiredCredentials(ctx, e.CredentialIDs)
+	credential.RemoveExpiredCredentialsOnTec(ctx, e.CredentialIDs)
 }
 
 // Apply applies an EscrowFinish transaction
 // Reference: rippled Escrow.cpp EscrowFinish::preclaim() + doApply()
+// Preclaim runs EscrowFinish's ledger-aware checks in rippled's preclaim order:
+// first the CredentialIDs validity check (tecBAD_CREDENTIALS, gated on
+// featureCredentials), then — gated (like rippled) on featureTokenEscrow — the
+// escrow existence (tecNO_TARGET) and, for a token escrow, the destination's
+// auth/freeze state. Extracting these from Apply makes them visible to the
+// preclaim-only paths (TxQ admission, simulate). The FinishAfter/CancelAfter time
+// checks, the crypto-condition/fulfillment check, and the tecEXPIRED
+// expired-credential deletion (ApplyOnTec) stay in Apply, mirroring rippled which
+// keeps them in EscrowFinish::doApply. ValidCredentials never returns tecEXPIRED
+// (expiry is handled separately in Apply), so no tecEXPIRED escapes preclaim here.
+// Reference: rippled EscrowFinish.cpp preclaim().
+func (e *EscrowFinish) Preclaim(view tx.LedgerView, config tx.EngineConfig) ter.Result {
+	rules := view.Rules()
+	if rules != nil && rules.Enabled(amendment.FeatureCredentials) && len(e.CredentialIDs) > 0 {
+		accountID, acctErr := state.DecodeAccountID(e.Account)
+		if acctErr != nil {
+			return ter.TemBAD_SRC_ACCOUNT
+		}
+		if result := credential.ValidCredentials(view, accountID, e.CredentialIDs); result != ter.TesSUCCESS {
+			return result
+		}
+	}
+	if rules == nil || !rules.Enabled(amendment.FeatureTokenEscrow) {
+		return ter.TesSUCCESS
+	}
+	ownerID, err := state.DecodeAccountID(e.Owner)
+	if err != nil {
+		return ter.TemINVALID
+	}
+	escrowData, readErr := view.Read(keylet.Escrow(ownerID, e.OfferSequence))
+	if readErr != nil || escrowData == nil {
+		return ter.TecNO_TARGET
+	}
+	escrowEntry, parseErr := state.ParseEscrow(escrowData)
+	if parseErr != nil {
+		return ter.TefINTERNAL
+	}
+	if escrowEntry.IsXRP {
+		return ter.TesSUCCESS
+	}
+	escrowAmount := reconstructAmountFromEscrow(escrowEntry)
+	if escrowEntry.MPTIssuanceID != "" {
+		return escrowFinishPreclaimMPT(view, escrowEntry.DestinationID, escrowAmount)
+	}
+	if escrowAmount.Issuer != "" {
+		return escrowFinishPreclaimIOU(view, escrowEntry.DestinationID, escrowAmount)
+	}
+	return ter.TesSUCCESS
+}
+
+// Reference: rippled EscrowFinish.cpp doApply()
 func (e *EscrowFinish) Apply(ctx *tx.ApplyContext) ter.Result {
 	ctx.Log.Trace("escrow finish apply",
 		"account", e.Account,
 		"owner", e.Owner,
 		"offerSequence", e.OfferSequence,
 	)
-
-	rules := ctx.Rules()
-
-	// Amendment-gated check: CredentialIDs requires Credentials amendment
-	// Reference: rippled Escrow.cpp preflight() credential check
-	if len(e.CredentialIDs) > 0 && !rules.Enabled(amendment.FeatureCredentials) {
-		return ter.TemDISABLED
-	}
-
-	// --- Preclaim: credential validation (before time checks) ---
-	// Reference: rippled EscrowFinish::preclaim() calls credentials::valid()
-	// This must run before doApply's time checks because rippled's preclaim
-	// runs before doApply.
-	if len(e.CredentialIDs) > 0 && rules.Enabled(amendment.FeatureCredentials) {
-		if result := credential.ValidateCredentialIDs(ctx, e.CredentialIDs); result != ter.TesSUCCESS {
-			return result
-		}
-	}
 
 	ownerID, err := state.DecodeAccountID(e.Owner)
 	if err != nil {
@@ -189,44 +226,20 @@ func (e *EscrowFinish) Apply(ctx *tx.ApplyContext) ter.Result {
 		return ter.TefINTERNAL
 	}
 
+	rules := ctx.Rules()
 	isXRP := escrowEntry.IsXRP
-
-	// Token escrow preclaim
-	// Reference: rippled EscrowFinish::preclaim() lines 760-793
-	if !isXRP && rules.Enabled(amendment.FeatureTokenEscrow) {
-		escrowAmount := reconstructAmountFromEscrow(escrowEntry)
-		if escrowEntry.MPTIssuanceID != "" {
-			if result := escrowFinishPreclaimMPT(ctx.View, escrowEntry.DestinationID, escrowAmount); result != ter.TesSUCCESS {
-				return result
-			}
-		} else if escrowAmount.Issuer != "" {
-			if result := escrowFinishPreclaimIOU(ctx.View, escrowEntry.DestinationID, escrowAmount); result != ter.TesSUCCESS {
-				return result
-			}
-		}
-	}
 
 	closeTime := ctx.Config.ParentCloseTime
 
 	// --- doApply: Time validation ---
-	// Reference: rippled Escrow.cpp doApply() lines 1030-1055
-	if rules.Enabled(amendment.FeatureFix1571) {
-		// fix1571: FinishAfter check — close time must be strictly after finish time
-		if escrowEntry.FinishAfter > 0 && closeTime <= escrowEntry.FinishAfter {
-			return ter.TecNO_PERMISSION
-		}
-		// fix1571: CancelAfter check — if past cancel time, finish not allowed
-		if escrowEntry.CancelAfter > 0 && closeTime > escrowEntry.CancelAfter {
-			return ter.TecNO_PERMISSION
-		}
-	} else {
-		// Pre-fix1571: both use <= comparison (known bug in cancel check)
-		if escrowEntry.FinishAfter > 0 && closeTime <= escrowEntry.FinishAfter {
-			return ter.TecNO_PERMISSION
-		}
-		if escrowEntry.CancelAfter > 0 && closeTime <= escrowEntry.CancelAfter {
-			return ter.TecNO_PERMISSION
-		}
+	// after() means strictly greater than: finish requires the close time to be
+	// strictly after FinishAfter and not strictly after CancelAfter.
+	// Reference: rippled EscrowFinish.cpp doApply().
+	if escrowEntry.FinishAfter > 0 && closeTime <= escrowEntry.FinishAfter {
+		return ter.TecNO_PERMISSION
+	}
+	if escrowEntry.CancelAfter > 0 && closeTime > escrowEntry.CancelAfter {
+		return ter.TecNO_PERMISSION
 	}
 
 	// Crypto-condition verification
@@ -290,13 +303,10 @@ func (e *EscrowFinish) Apply(ctx *tx.ApplyContext) ter.Result {
 		}
 	}
 
-	// Deposit authorization check. Runs only under the DepositAuth amendment,
-	// matching rippled; expired-credential removal happens inside.
+	// Deposit authorization check; expired-credential removal happens inside.
 	// Reference: rippled Escrow.cpp doApply() — verifyDepositPreauth()
-	if rules.Enabled(amendment.FeatureDepositAuth) {
-		if result := credential.VerifyDepositPreauth(ctx, e.CredentialIDs, ctx.AccountID, escrowEntry.DestinationID, destAccount); result != ter.TesSUCCESS {
-			return result
-		}
+	if result := credential.VerifyDepositPreauth(ctx, e.CredentialIDs, ctx.AccountID, escrowEntry.DestinationID, destAccount); result != ter.TesSUCCESS {
+		return result
 	}
 
 	// Remove escrow from owner directory
@@ -373,11 +383,19 @@ func (e *EscrowFinish) Apply(ctx *tx.ApplyContext) ter.Result {
 				originalAmount,
 			)
 
+			// fixTokenEscrowV1 clears the gross (originally locked) amount and burns
+			// the fee from supply; before it, only the net amount was accounted.
+			grossAmount := finalAmount
+			if rules.Enabled(amendment.FeatureFixTokenEscrowV1) {
+				grossAmount = originalAmount
+			}
+
 			if result := escrowUnlockMPT(
 				ctx.View,
 				escrowEntry.Account,
 				escrowEntry.DestinationID,
 				finalAmount,
+				grossAmount,
 				mptHexID,
 				createAsset,
 				destReserveBalance,

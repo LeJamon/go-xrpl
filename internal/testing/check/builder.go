@@ -4,7 +4,7 @@ import (
 	"encoding/hex"
 	"fmt"
 
-	"github.com/LeJamon/go-xrpl/internal/testing"
+	jtx "github.com/LeJamon/go-xrpl/internal/testing"
 	"github.com/LeJamon/go-xrpl/internal/tx"
 	checktx "github.com/LeJamon/go-xrpl/internal/tx/check"
 	"github.com/LeJamon/go-xrpl/keylet"
@@ -12,7 +12,7 @@ import (
 
 // GetCheckID computes the check ledger entry ID from the creator account and sequence.
 // This matches rippled's getCheckIndex(account, sequence).
-func GetCheckID(acc *testing.Account, seq uint32) string {
+func GetCheckID(acc *jtx.Account, seq uint32) string {
 	k := keylet.Check(acc.ID, seq)
 	return hex.EncodeToString(k.Key[:])
 }
@@ -21,8 +21,8 @@ func GetCheckID(acc *testing.Account, seq uint32) string {
 
 // CheckCreateBuilder provides a fluent interface for building CheckCreate transactions.
 type CheckCreateBuilder struct {
-	from       *testing.Account
-	to         *testing.Account
+	from       *jtx.Account
+	to         *jtx.Account
 	sendMax    tx.Amount
 	destTag    *uint32
 	sourceTag  *uint32
@@ -34,7 +34,7 @@ type CheckCreateBuilder struct {
 }
 
 // CheckCreate creates a new CheckCreateBuilder.
-func CheckCreate(from, to *testing.Account, sendMax tx.Amount) *CheckCreateBuilder {
+func CheckCreate(from, to *jtx.Account, sendMax tx.Amount) *CheckCreateBuilder {
 	return &CheckCreateBuilder{
 		from:    from,
 		to:      to,
@@ -121,7 +121,7 @@ func (b *CheckCreateBuilder) BuildCheckCreate() *checktx.CheckCreate {
 
 // CheckCashBuilder provides a fluent interface for building CheckCash transactions.
 type CheckCashBuilder struct {
-	account    *testing.Account
+	account    *jtx.Account
 	checkID    string
 	amount     *tx.Amount
 	deliverMin *tx.Amount
@@ -132,7 +132,7 @@ type CheckCashBuilder struct {
 
 // CheckCashAmount creates a CheckCash builder with an exact Amount.
 // This matches rippled's check::cash(dest, checkId, amount).
-func CheckCashAmount(account *testing.Account, checkID string, amount tx.Amount) *CheckCashBuilder {
+func CheckCashAmount(account *jtx.Account, checkID string, amount tx.Amount) *CheckCashBuilder {
 	return &CheckCashBuilder{
 		account: account,
 		checkID: checkID,
@@ -143,7 +143,7 @@ func CheckCashAmount(account *testing.Account, checkID string, amount tx.Amount)
 
 // CheckCashDeliverMin creates a CheckCash builder with a DeliverMin.
 // This matches rippled's check::cash(dest, checkId, DeliverMin(amount)).
-func CheckCashDeliverMin(account *testing.Account, checkID string, deliverMin tx.Amount) *CheckCashBuilder {
+func CheckCashDeliverMin(account *jtx.Account, checkID string, deliverMin tx.Amount) *CheckCashBuilder {
 	return &CheckCashBuilder{
 		account:    account,
 		checkID:    checkID,
@@ -200,7 +200,7 @@ func (b *CheckCashBuilder) BuildCheckCash() *checktx.CheckCash {
 
 // CheckCancelBuilder provides a fluent interface for building CheckCancel transactions.
 type CheckCancelBuilder struct {
-	account  *testing.Account
+	account  *jtx.Account
 	checkID  string
 	fee      uint64
 	sequence *uint32
@@ -208,7 +208,7 @@ type CheckCancelBuilder struct {
 }
 
 // CheckCancel creates a new CheckCancelBuilder.
-func CheckCancel(account *testing.Account, checkID string) *CheckCancelBuilder {
+func CheckCancel(account *jtx.Account, checkID string) *CheckCancelBuilder {
 	return &CheckCancelBuilder{
 		account: account,
 		checkID: checkID,

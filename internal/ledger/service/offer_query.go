@@ -7,14 +7,18 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"math"
 	"strings"
+	"time"
 
-	"github.com/LeJamon/go-xrpl/internal/ledger"
 	"github.com/LeJamon/go-xrpl/internal/ledger/service/svcerr"
 	"github.com/LeJamon/go-xrpl/internal/ledger/state"
 	"github.com/LeJamon/go-xrpl/internal/tx"
+	"github.com/LeJamon/go-xrpl/internal/tx/mptutil"
+	"github.com/LeJamon/go-xrpl/internal/tx/ter"
 	"github.com/LeJamon/go-xrpl/keylet"
 	"github.com/LeJamon/go-xrpl/ledger/entry"
+	"github.com/LeJamon/go-xrpl/protocol"
 	"github.com/LeJamon/go-xrpl/shamap"
 )
 
@@ -100,13 +104,11 @@ func (s *Service) GetBookOffers(ctx context.Context, takerGets, takerPays tx.Amo
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-
-	targetLedger, validated, err := s.getLedgerForQuery(ledgerIndex)
+	targetLedger, validated, err := s.resolveLedgerForQuery(ctx, ledgerIndex)
 	if err != nil {
 		return nil, err
 	}
+	view := contextLedgerView{Ledger: targetLedger, ctx: ctx}
 
 	bookBase, err := computeBookBase(takerPays, takerGets, domainHex)
 	if err != nil {
@@ -130,8 +132,11 @@ func (s *Service) GetBookOffers(ctx context.Context, takerGets, takerPays tx.Amo
 		if err := decodeHex32Into(marker, &markerKey); err != nil {
 			return nil, fmt.Errorf("%w: %v", svcerr.ErrInvalidMarker, err)
 		}
-		offerData, rerr := targetLedger.Read(keylet.Keylet{Type: entry.TypeOffer, Key: markerKey})
-		if rerr != nil || offerData == nil {
+		offerData, rerr := targetLedger.ReadContext(ctx, keylet.Keylet{Type: entry.TypeOffer, Key: markerKey})
+		if rerr != nil {
+			return nil, rerr
+		}
+		if offerData == nil {
 			return nil, svcerr.ErrStaleMarker
 		}
 		markerOffer, perr := state.ParseLedgerOffer(offerData)
@@ -155,14 +160,15 @@ func (s *Service) GetBookOffers(ctx context.Context, takerGets, takerPays tx.Amo
 		}
 	}
 
-	getsIssuer := takerGets.Issuer
-	bGlobalFreeze := tx.IsGlobalFrozen(targetLedger, takerGets.Issuer) ||
-		tx.IsGlobalFrozen(targetLedger, takerPays.Issuer)
-	rate := tx.TransferRateParity
-	if !takerGets.IsNative() {
-		rate = tx.GetTransferRate(targetLedger, getsIssuer)
+	getsIssuer := amountIssuer(takerGets)
+	bGlobalFreeze := amountGlobalFrozen(view, takerGets) ||
+		amountGlobalFrozen(view, takerPays)
+	rate := amountTransferRate(view, takerGets)
+	_, reserveBase, reserveIncrement, err := readFeesFromLedgerContext(ctx, targetLedger)
+	if err != nil {
+		return nil, err
 	}
-	_, reserveBase, reserveIncrement := readFeesFromLedger(targetLedger)
+	parentCloseTime := targetLedger.ParentCloseTime()
 
 	// balances tracks each owner's remaining funds across the iteration.
 	// Presence in the map mirrors rippled's umBalanceEntry lookup at
@@ -205,7 +211,7 @@ func (s *Service) GetBookOffers(ctx context.Context, takerGets, takerPays tx.Amo
 			nextKey = resumeDir
 			resumePending = false
 		} else {
-			nk, _, ok, serr := targetLedger.Succ(uTipIndex)
+			nk, _, ok, serr := targetLedger.SuccContext(ctx, uTipIndex)
 			if serr != nil {
 				return nil, serr
 			}
@@ -231,7 +237,7 @@ func (s *Service) GetBookOffers(ctx context.Context, takerGets, takerPays tx.Amo
 		saDirRate := newDirRate(dirQuality, takerPays)
 
 		walkErr := state.DirForEach(
-			targetLedger,
+			view,
 			keylet.Keylet{Type: entry.TypeDirectoryNode, Key: nextKey},
 			func(offerKey [32]byte) error {
 				if skipping {
@@ -245,8 +251,11 @@ func (s *Service) GetBookOffers(ctx context.Context, takerGets, takerPays tx.Amo
 					return errStopBookWalk
 				}
 				remaining--
-				offerData, rerr := targetLedger.Read(keylet.Keylet{Type: entry.TypeOffer, Key: offerKey})
-				if rerr != nil || offerData == nil {
+				offerData, rerr := targetLedger.ReadContext(ctx, keylet.Keylet{Type: entry.TypeOffer, Key: offerKey})
+				if rerr != nil {
+					return rerr
+				}
+				if offerData == nil {
 					return nil
 				}
 				offer, perr := state.ParseLedgerOffer(offerData)
@@ -254,7 +263,7 @@ func (s *Service) GetBookOffers(ctx context.Context, takerGets, takerPays tx.Amo
 					return nil
 				}
 				bookOffer, berr := s.buildBookOffer(
-					targetLedger, offer, offerKey, dirQuality, saDirRate,
+					view, parentCloseTime, offer, offerKey, dirQuality, saDirRate,
 					takerGets, taker, getsIssuer, rate, bGlobalFreeze,
 					reserveBase, reserveIncrement, balances,
 				)
@@ -262,7 +271,7 @@ func (s *Service) GetBookOffers(ctx context.Context, takerGets, takerPays tx.Amo
 					return berr
 				}
 				if stateSnap != nil {
-					proofHex, perr := extractOfferProof(stateSnap, offerKey)
+					proofHex, perr := extractOfferProof(ctx, stateSnap, offerKey)
 					if perr != nil {
 						return perr
 					}
@@ -299,10 +308,10 @@ func (s *Service) GetBookOffers(ctx context.Context, takerGets, takerPays tx.Amo
 	}
 	// Emit the marker only when the limit was reached AND the page produced
 	// at least one offer. limit=0 hits errStopBookWalk before any offer is
-	// recorded; emitting formatHashHex(lastOfferKey) there would be 64 zeros,
+	// recorded; emitting protocol.Hash256Hex(lastOfferKey) there would be 64 zeros,
 	// which round-trips as a bad marker on the next call.
 	if hitLimit && len(offers) > 0 {
-		result.Marker = formatHashHex(lastOfferKey)
+		result.Marker = protocol.Hash256Hex(lastOfferKey)
 	}
 	return result, nil
 }
@@ -313,7 +322,8 @@ func (s *Service) GetBookOffers(ctx context.Context, takerGets, takerPays tx.Amo
 // unconditional `umBalance[uOfferOwnerID] = saOwnerFunds - saOwnerPays`
 // at NetworkOPs.cpp:4601.
 func (s *Service) buildBookOffer(
-	view *ledger.Ledger,
+	view tx.LedgerView,
+	parentCloseTime time.Time,
 	offer *state.LedgerOffer,
 	key [32]byte,
 	dirQuality uint64,
@@ -327,20 +337,20 @@ func (s *Service) buildBookOffer(
 ) (BookOffer, error) {
 	bookOffer := BookOffer{
 		Account:           offer.Account,
-		BookDirectory:     formatHashHex(offer.BookDirectory),
+		BookDirectory:     protocol.Hash256Hex(offer.BookDirectory),
 		BookNode:          fmt.Sprintf("%x", offer.BookNode),
 		Expiration:        offer.Expiration,
 		Flags:             offer.Flags,
 		LedgerEntryType:   "Offer",
 		OwnerNode:         fmt.Sprintf("%x", offer.OwnerNode),
-		PreviousTxnID:     formatHashHex(offer.PreviousTxnID),
+		PreviousTxnID:     protocol.Hash256Hex(offer.PreviousTxnID),
 		PreviousTxnLgrSeq: offer.PreviousTxnLgrSeq,
 		Sequence:          offer.Sequence,
-		Index:             formatHashHex(key),
+		Index:             protocol.Hash256Hex(key),
 		Quality:           qualityFromDirKey(dirQuality),
 	}
 	if offer.DomainID != ([32]byte{}) {
-		bookOffer.DomainID = formatHashHex(offer.DomainID)
+		bookOffer.DomainID = protocol.Hash256Hex(offer.DomainID)
 	}
 	// Hybrid permissioned offers carry an AdditionalBooks array pointing at
 	// the open book entry the offer is also placed in. Rippled emits this
@@ -351,7 +361,7 @@ func (s *Service) buildBookOffer(
 		bookOffer.AdditionalBooks = []map[string]any{
 			{
 				"Book": map[string]any{
-					"BookDirectory": formatHashHex(offer.AdditionalBookDirectory),
+					"BookDirectory": protocol.Hash256Hex(offer.AdditionalBookDirectory),
 					"BookNode":      fmt.Sprintf("%x", offer.AdditionalBookNode),
 				},
 			},
@@ -388,7 +398,11 @@ func (s *Service) buildBookOffer(
 			if decErr != nil {
 				return BookOffer{}, decErr
 			}
-			ownerFunds = tx.AccountFunds(view, accountID, takerGets, true, reserveBase, reserveIncrement)
+			funds, fundsErr := accountBookFunds(view, parentCloseTime, accountID, takerGets, reserveBase, reserveIncrement)
+			if fundsErr != nil {
+				return BookOffer{}, fundsErr
+			}
+			ownerFunds = funds
 		}
 	}
 
@@ -453,41 +467,102 @@ func (s *Service) buildBookOffer(
 
 // computeBookBase returns the book directory base for the given
 // taker_pays / taker_gets / optional domain, matching rippled's getBookBase
-// (Indexes.cpp:114-138). rippled normalizes the low 8 bytes to zero via
-// keylet::quality({ltDIR_NODE, index}, 0); keylet.BookDir returns the raw
-// hash including its natural low-8 bytes, so we must zero them here so the
-// returned key sorts strictly below every quality tier in the book.
+// (Indexes.cpp:114-138).
 func computeBookBase(takerPays, takerGets tx.Amount, domainHex string) ([32]byte, error) {
-	payCurr := keylet.CurrencyBytes(takerPays.Currency)
-	payIssuer := state.GetIssuerBytes(takerPays.Issuer)
-	getsCurr := keylet.CurrencyBytes(takerGets.Currency)
-	getsIssuer := state.GetIssuerBytes(takerGets.Issuer)
+	pays, err := bookSideFromAmount(takerPays)
+	if err != nil {
+		return [32]byte{}, err
+	}
+	gets, err := bookSideFromAmount(takerGets)
+	if err != nil {
+		return [32]byte{}, err
+	}
 
-	var key [32]byte
-	if domainHex == "" {
-		key = keylet.BookDir(payCurr, payIssuer, getsCurr, getsIssuer).Key
-	} else {
-		var domainID [32]byte
-		if err := decodeHex32Into(domainHex, &domainID); err != nil {
+	var domainID *[32]byte
+	if domainHex != "" {
+		domainID = new([32]byte)
+		if err := decodeHex32Into(domainHex, domainID); err != nil {
 			return [32]byte{}, err
 		}
-		key = keylet.BookDirWithDomain(payCurr, payIssuer, getsCurr, getsIssuer, domainID).Key
 	}
-	for i := 24; i < 32; i++ {
-		key[i] = 0
+	return keylet.BookBase(pays, gets, domainID).Key, nil
+}
+
+func bookSideFromAmount(amount tx.Amount) (keylet.BookSide, error) {
+	if amount.IsMPT() {
+		id, err := mptutil.DecodeID(amount.MPTIssuanceID())
+		if err != nil {
+			return keylet.BookSide{}, err
+		}
+		return keylet.MPTSide(id), nil
 	}
-	return key, nil
+	return keylet.IssueSide(
+		keylet.CurrencyBytes(amount.Currency),
+		state.GetIssuerBytes(amount.Issuer),
+	), nil
+}
+
+func amountMPTID(amount tx.Amount) ([24]byte, bool) {
+	if !amount.IsMPT() {
+		return [24]byte{}, false
+	}
+	id, err := mptutil.DecodeID(amount.MPTIssuanceID())
+	return id, err == nil
+}
+
+func amountIssuer(amount tx.Amount) string {
+	if id, ok := amountMPTID(amount); ok {
+		return state.EncodeAccountIDSafe(mptutil.Issuer(id))
+	}
+	return amount.Issuer
+}
+
+func amountGlobalFrozen(view tx.LedgerView, amount tx.Amount) bool {
+	issuer := amountIssuer(amount)
+	return issuer != "" && tx.IsGlobalFrozen(view, issuer)
+}
+
+func amountTransferRate(view tx.LedgerView, amount tx.Amount) uint32 {
+	issuer := amountIssuer(amount)
+	if issuer == "" {
+		return tx.TransferRateParity
+	}
+	return tx.GetTransferRate(view, issuer)
+}
+
+func accountBookFunds(view tx.LedgerView, closeTime time.Time, account [20]byte, amount tx.Amount, reserveBase, reserveIncrement uint64) (tx.Amount, error) {
+	id, ok := amountMPTID(amount)
+	if !ok {
+		return tx.AccountFunds(view, account, amount, true, reserveBase, reserveIncrement), nil
+	}
+	value, result := mptutil.Funds(view, id, account, true)
+	if result == ter.TefINTERNAL {
+		return tx.Amount{}, fmt.Errorf("book_offers MPT funds: %s", result)
+	}
+	if result != ter.TesSUCCESS {
+		value = 0
+	}
+	var parentCloseTime uint32
+	if !closeTime.IsZero() {
+		switch seconds := protocol.RippleSeconds(closeTime); {
+		case seconds > math.MaxUint32:
+			parentCloseTime = math.MaxUint32
+		case seconds > 0:
+			parentCloseTime = uint32(seconds)
+		}
+	}
+	if mptutil.RequireAuthAt(view, id, account, true, parentCloseTime) != ter.TesSUCCESS {
+		value = 0
+	}
+	return state.NewMPTAmountWithIssuanceID(value, amountIssuer(amount), mptutil.EncodeID(id)), nil
 }
 
 func decodeHex32Into(s string, out *[32]byte) error {
-	if len(s) != 64 {
-		return fmt.Errorf("expected 64 hex chars, got %d", len(s))
-	}
-	b, err := hex.DecodeString(s)
+	hash, err := protocol.Hash256FromHex(s)
 	if err != nil {
 		return err
 	}
-	copy(out[:], b)
+	*out = hash
 	return nil
 }
 
@@ -499,6 +574,12 @@ func amountToJSON(a tx.Amount) any {
 	if a.IsNative() {
 		return a.Value()
 	}
+	if a.IsMPT() {
+		return map[string]string{
+			"mpt_issuance_id": a.MPTIssuanceID(),
+			"value":           a.Value(),
+		}
+	}
 	return map[string]string{
 		"currency": a.Currency,
 		"issuer":   a.Issuer,
@@ -509,6 +590,9 @@ func amountToJSON(a tx.Amount) any {
 func zeroLike(model tx.Amount) tx.Amount {
 	if model.IsNative() {
 		return tx.NewXRPAmount(0)
+	}
+	if model.IsMPT() {
+		return state.NewMPTAmountWithIssuanceID(0, model.Issuer, model.MPTIssuanceID())
 	}
 	return tx.NewIssuedAmount(0, 0, model.Currency, model.Issuer)
 }
@@ -544,10 +628,14 @@ func dirRateMantissaExp(q uint64) (int64, int) {
 // to drops afterwards.
 func newDirRate(q uint64, takerPays tx.Amount) tx.Amount {
 	mantissa, exponent := dirRateMantissaExp(q)
+	value := newRPCNumber(mantissa, exponent)
+	iouMantissa, iouExponent := value.NormalizeToRange(
+		uint64(state.MinMantissa), uint64(state.MaxMantissa),
+	)
 	if takerPays.IsNative() {
-		return tx.NewIssuedAmount(mantissa, exponent, "", "")
+		return tx.NewIssuedAmount(iouMantissa, iouExponent, "", "")
 	}
-	return tx.NewIssuedAmount(mantissa, exponent, takerPays.Currency, takerPays.Issuer)
+	return tx.NewIssuedAmount(iouMantissa, iouExponent, takerPays.Currency, takerPays.Issuer)
 }
 
 // extractOfferProof returns the SHAMap proof for an offer key as a list of
@@ -559,10 +647,10 @@ func newDirRate(q uint64, takerPays tx.Amount) tx.Amount {
 // walk: that one offer surfaces in the walk but not in the snapshot, so
 // its proof is omitted (per `omitempty`) rather than mis-attributed to a
 // different account_hash.
-func extractOfferProof(snap *shamap.SHAMap, key [32]byte) ([]string, error) {
-	proof, err := snap.GetProofPath(key)
+func extractOfferProof(ctx context.Context, snap *shamap.SHAMap, key [32]byte) ([]string, error) {
+	proof, err := snap.GetProofPathContext(ctx, key)
 	if err != nil {
-		return nil, fmt.Errorf("offer proof %s: %w", formatHashHex(key), err)
+		return nil, fmt.Errorf("offer proof %s: %w", protocol.Hash256Hex(key), err)
 	}
 	if proof == nil || !proof.Found {
 		return nil, nil
@@ -575,24 +663,35 @@ func extractOfferProof(snap *shamap.SHAMap, key [32]byte) ([]string, error) {
 }
 
 // multiplyByDirRate computes `multiply(getsFunded, saDirRate, takerPays.issue())`.
-// `Amount.Mul` preserves the *left* operand's currency, so for IOU output we
-// place saDirRate on the left (it already carries takerPays' issue). For XRP
-// output the product is a unitless IOU which we collapse to drops — mirrors
-// rippled's STAmount(asset, mantissa, exp) cast at STAmount.cpp:1404.
+// RPC execution uses Number arithmetic unconditionally; unlike transaction
+// execution, it has no ledger-rules scope that can select legacy arithmetic.
 func multiplyByDirRate(getsFunded, saDirRate, takerPays tx.Amount) tx.Amount {
-	product := saDirRate.Mul(getsFunded, false)
-	if !takerPays.IsNative() {
-		return product
+	product := amountAsXRPLNumber(saDirRate).Mul(amountAsXRPLNumber(getsFunded))
+	if takerPays.IsMPT() {
+		value := product.ToInt64WithMode(state.RoundToNearest)
+		return state.NewMPTAmountWithIssuanceID(value, amountIssuer(takerPays), takerPays.MPTIssuanceID())
 	}
-	m := product.Mantissa()
-	e := product.Exponent()
-	for e > 0 {
-		m *= 10
-		e--
+	if takerPays.IsNative() {
+		return tx.NewXRPAmount(product.ToInt64WithMode(state.RoundToNearest))
 	}
-	for e < 0 {
-		m /= 10
-		e++
+	mantissa, exponent := product.NormalizeToRange(
+		uint64(state.MinMantissa), uint64(state.MaxMantissa),
+	)
+	return tx.NewIssuedAmount(mantissa, exponent, takerPays.Currency, takerPays.Issuer)
+}
+
+func amountAsXRPLNumber(amount tx.Amount) state.XRPLNumber {
+	if value, ok := amount.MPTRaw(); ok {
+		return newRPCNumber(value, 0)
 	}
-	return tx.NewXRPAmount(m)
+	if amount.IsNative() {
+		return newRPCNumber(amount.Drops(), 0)
+	}
+	return newRPCNumber(amount.Mantissa(), amount.Exponent())
+}
+
+func newRPCNumber(mantissa int64, exponent int) state.XRPLNumber {
+	return state.NewXRPLNumberScaled(
+		mantissa, exponent, state.MantissaScaleLarge, state.RoundToNearest,
+	)
 }

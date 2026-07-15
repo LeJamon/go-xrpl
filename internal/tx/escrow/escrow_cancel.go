@@ -37,9 +37,6 @@ func (e *EscrowCancel) Validate() error {
 		return err
 	}
 
-	// The tfUniversalMask flag check is gated on fix1543 and runs in Preclaim,
-	// where the amendment rules are available.
-
 	if e.Owner == "" {
 		return ter.Errorf(ter.TemMALFORMED, "Owner is required")
 	}
@@ -51,22 +48,52 @@ func (e *EscrowCancel) Flatten() (map[string]any, error) {
 	return tx.ReflectFlatten(e)
 }
 
-// Preclaim performs the rules-aware fix1543 flag check.
-// Reference: rippled Escrow.cpp:1203 — stray (non-universal) flags are rejected
-// only once fix1543 is active. rippled runs this check first in preflight; the
-// gate is rules-aware and go-xrpl exposes rules only at Preclaim, so it runs
-// after the common preflight/preclaim steps. For a tx malformed in two ways this
-// can surface a different tem code than rippled; the result is tem-only (never
-// enters a ledger) so there is no consensus divergence.
-func (e *EscrowCancel) Preclaim(_ tx.LedgerView, config tx.EngineConfig) ter.Result {
-	if config.GetRules().Enabled(amendment.FeatureFix1543) && (e.GetFlags()&tx.TfUniversalMask) != 0 {
-		return ter.TemINVALID_FLAG
+// GetFlagsMask returns the invalid-flags mask enforced at preflight0: any
+// non-universal flag is rejected.
+// Reference: rippled Escrow.cpp EscrowCancel::getFlagsMask.
+func (e *EscrowCancel) GetFlagsMask(rules *amendment.Rules) uint32 {
+	return tx.TfUniversalMask
+}
+
+// Preclaim runs EscrowCancel's token-escrow ledger checks, gated (like rippled)
+// on featureTokenEscrow: the escrow must exist (tecNO_TARGET) and, for a token
+// escrow, the issuer's auth/freeze state must permit the return. Extracting these
+// from Apply makes them visible to the preclaim-only paths (TxQ admission,
+// simulate). The CancelAfter time checks stay in Apply, mirroring rippled which
+// keeps them in EscrowCancel::doApply, not preclaim.
+// Reference: rippled EscrowCancel.cpp preclaim().
+func (e *EscrowCancel) Preclaim(view tx.LedgerView, config tx.EngineConfig) ter.Result {
+	rules := view.Rules()
+	if rules == nil || !rules.Enabled(amendment.FeatureTokenEscrow) {
+		return ter.TesSUCCESS
+	}
+	ownerID, err := state.DecodeAccountID(e.Owner)
+	if err != nil {
+		return ter.TemINVALID
+	}
+	escrowData, readErr := view.Read(keylet.Escrow(ownerID, e.OfferSequence))
+	if readErr != nil || escrowData == nil {
+		return ter.TecNO_TARGET
+	}
+	escrowEntry, parseErr := state.ParseEscrow(escrowData)
+	if parseErr != nil {
+		return ter.TefINTERNAL
+	}
+	if escrowEntry.IsXRP {
+		return ter.TesSUCCESS
+	}
+	escrowAmount := reconstructAmountFromEscrow(escrowEntry)
+	if escrowAmount.IsMPT() {
+		return escrowCancelPreclaimMPT(view, escrowEntry.Account, escrowAmount)
+	}
+	if escrowAmount.Issuer != "" {
+		return escrowCancelPreclaimIOU(view, escrowEntry.Account, escrowAmount)
 	}
 	return ter.TesSUCCESS
 }
 
 // Apply applies an EscrowCancel transaction
-// Reference: rippled Escrow.cpp EscrowCancel::preclaim() + doApply()
+// Reference: rippled Escrow.cpp EscrowCancel::doApply()
 func (e *EscrowCancel) Apply(ctx *tx.ApplyContext) ter.Result {
 	ctx.Log.Trace("escrow cancel apply",
 		"account", e.Account,
@@ -101,38 +128,16 @@ func (e *EscrowCancel) Apply(ctx *tx.ApplyContext) ter.Result {
 
 	isXRP := escrowEntry.IsXRP
 
-	// Token preclaim validation (IOU/MPT)
-	// Reference: rippled Escrow.cpp EscrowCancel::preclaim() lines 1269-1295
-	if !isXRP && rules.Enabled(amendment.FeatureTokenEscrow) {
-		escrowAmount := reconstructAmountFromEscrow(escrowEntry)
-		if escrowAmount.IsMPT() {
-			if result := escrowCancelPreclaimMPT(ctx.View, escrowEntry.Account, escrowAmount); result != ter.TesSUCCESS {
-				return result
-			}
-		} else if escrowAmount.Issuer != "" {
-			if result := escrowCancelPreclaimIOU(ctx.View, escrowEntry.Account, escrowAmount); result != ter.TesSUCCESS {
-				return result
-			}
-		}
-	}
-
 	closeTime := ctx.Config.ParentCloseTime
 
-	// Time validation — cancel is only allowed after CancelAfter time
-	// Reference: rippled Escrow.cpp doApply() lines 1310-1329
-	if rules.Enabled(amendment.FeatureFix1571) {
-		// fix1571: must have CancelAfter set, and close time must be past it
-		if escrowEntry.CancelAfter == 0 {
-			return ter.TecNO_PERMISSION
-		}
-		if closeTime <= escrowEntry.CancelAfter {
-			return ter.TecNO_PERMISSION
-		}
-	} else {
-		// Pre-fix1571: same logic
-		if escrowEntry.CancelAfter == 0 || closeTime <= escrowEntry.CancelAfter {
-			return ter.TecNO_PERMISSION
-		}
+	// Time validation — cancel is only allowed strictly after CancelAfter, which
+	// must be set.
+	// Reference: rippled EscrowCancel.cpp doApply().
+	if escrowEntry.CancelAfter == 0 {
+		return ter.TecNO_PERMISSION
+	}
+	if closeTime <= escrowEntry.CancelAfter {
+		return ter.TecNO_PERMISSION
 	}
 
 	// Remove escrow from owner directory
@@ -209,12 +214,16 @@ func (e *EscrowCancel) Apply(ctx *tx.ApplyContext) ter.Result {
 				ctx.View,
 				escrowEntry.Account, escrowEntry.Account, // sender == receiver (cancel returns to creator)
 				finalAmount,
+				finalAmount, // cancel applies parityRate: gross == net, no fee to burn
 				escrowAmount.MPTIssuanceID(),
 				createAsset,
 				ownerBalance,
 				ownerOwnerCount,
 				escrowEntry.Account,
-				false, // cancel scopes reserve+bump to the erased escrow SLE, not the creator
+				// Pre-fixCleanup3_2_0 the refund used the erased escrow SLE for the
+				// reserve/bump (owner count 0); the amendment uses the creator's
+				// account entry so the returned MPToken's reserve is charged to it.
+				rules.Enabled(amendment.FeatureFixCleanup3_2_0),
 				ctx.Config.ReserveBase, ctx.Config.ReserveIncrement,
 			); result != ter.TesSUCCESS {
 				return result
@@ -234,7 +243,11 @@ func (e *EscrowCancel) Apply(ctx *tx.ApplyContext) ter.Result {
 				escrowAmount,
 				escrowEntry.Account, escrowEntry.Account, // senderID == receiverID (cancel returns to creator)
 				createAsset,
-				false, // cancel scopes reserve+bump to the erased escrow SLE, not the creator
+				// Pre-fixCleanup3_2_0 the refund used the erased escrow SLE for the
+				// reserve/bump (owner count 0); the amendment uses the creator's
+				// account entry so a newly-created trust line's reserve is charged
+				// to it.
+				rules.Enabled(amendment.FeatureFixCleanup3_2_0),
 				ctx.Config.ReserveBase, ctx.Config.ReserveIncrement,
 			); result != ter.TesSUCCESS {
 				return result

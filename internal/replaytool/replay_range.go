@@ -16,11 +16,11 @@ import (
 
 	"github.com/spf13/cobra"
 
-	binarycodec "github.com/LeJamon/go-xrpl/codec/binarycodec"
 	"github.com/LeJamon/go-xrpl/drops"
 	"github.com/LeJamon/go-xrpl/internal/cmdexit"
 	"github.com/LeJamon/go-xrpl/internal/ledger"
 	"github.com/LeJamon/go-xrpl/internal/ledger/header"
+	ledgerstate "github.com/LeJamon/go-xrpl/internal/ledger/state"
 	"github.com/LeJamon/go-xrpl/internal/statecompare"
 	"github.com/LeJamon/go-xrpl/internal/tx"
 	"github.com/LeJamon/go-xrpl/keylet"
@@ -436,7 +436,7 @@ type BlockResult struct {
 
 func loadInitialState(ctx context.Context, client *statecompare.Client, ledgerIndex uint32) (*shamap.SHAMap, *statecompare.LedgerSnapshot, drops.Fees, error) {
 	// Get snapshot
-	snapshot, err := client.GetSnapshot(ctx, ledgerIndex)
+	snapshot, err := client.Snapshot(ctx, ledgerIndex)
 	if err != nil {
 		return nil, nil, drops.Fees{}, fmt.Errorf("getting snapshot: %w", err)
 	}
@@ -497,7 +497,7 @@ func resumeFromCheckpoint(ctx context.Context, client *statecompare.Client, dir 
 		return nil, nil, drops.Fees{}, fmt.Errorf("checkpoint %s holds ledger %d, expected %d", path, ckptSeq, seq)
 	}
 
-	snapshot, err := client.GetSnapshot(ctx, seq)
+	snapshot, err := client.Snapshot(ctx, seq)
 	if err != nil {
 		return nil, nil, drops.Fees{}, fmt.Errorf("getting snapshot: %w", err)
 	}
@@ -528,81 +528,20 @@ func loadRulesFromState(stateMap *shamap.SHAMap) (*amendment.Rules, error) {
 	return rules, nil
 }
 
-// defaultFees is the fallback fee schedule used when a ledger has no readable
-// FeeSettings entry.
-func defaultFees() drops.Fees {
-	return drops.Fees{
-		Base:      10,
-		Reserve:   10_000_000,
-		Increment: 2_000_000,
-	}
-}
-
-// feesFromDecoded reads a decoded FeeSettings entry into a drops.Fees, honoring
-// both the modern XRPFees fields (BaseFeeDrops/ReserveBaseDrops/...) and the
-// legacy fields, filling any unset value from the default schedule. Shared by
-// the fixture-entry and SHAMap fee extractors.
-func feesFromDecoded(decoded map[string]any) drops.Fees {
-	fees := drops.Fees{}
-
-	// Modern format (XRPFees amendment)
-	if v, ok := decoded["BaseFeeDrops"].(string); ok {
-		if n, err := parseHexOrDecimal(v); err == nil {
-			fees.Base = drops.XRPAmount(n)
-		}
-	}
-	if v, ok := decoded["ReserveBaseDrops"].(string); ok {
-		if n, err := parseHexOrDecimal(v); err == nil {
-			fees.Reserve = drops.XRPAmount(n)
-		}
-	}
-	if v, ok := decoded["ReserveIncrementDrops"].(string); ok {
-		if n, err := parseHexOrDecimal(v); err == nil {
-			fees.Increment = drops.XRPAmount(n)
-		}
-	}
-
-	// Legacy format (pre-XRPFees)
-	if v, ok := decoded["BaseFee"].(string); ok && fees.Base == 0 {
-		if n, err := parseHexOrDecimal(v); err == nil {
-			fees.Base = drops.XRPAmount(n)
-		}
-	}
-	if v, ok := decoded["ReserveBase"].(uint32); ok && fees.Reserve == 0 {
-		fees.Reserve = drops.XRPAmount(v)
-	}
-	if v, ok := decoded["ReserveIncrement"].(uint32); ok && fees.Increment == 0 {
-		fees.Increment = drops.XRPAmount(v)
-	}
-
-	// Use defaults for any unset values
-	d := defaultFees()
-	if fees.Base == 0 {
-		fees.Base = d.Base
-	}
-	if fees.Reserve == 0 {
-		fees.Reserve = d.Reserve
-	}
-	if fees.Increment == 0 {
-		fees.Increment = d.Increment
-	}
-	return fees
-}
-
 // extractFeesFromSHAMap extracts the fee schedule from the FeeSettings entry of
 // a state SHAMap, falling back to the default schedule when it is absent or
 // undecodable.
 func extractFeesFromSHAMap(stateMap *shamap.SHAMap) drops.Fees {
 	item, found, err := stateMap.Get(keylet.Fees().Key)
 	if err != nil || !found || item == nil {
-		return defaultFees()
+		return drops.DefaultFees()
 	}
 
-	decoded, err := binarycodec.Decode(hex.EncodeToString(item.Data()))
+	feeSettings, err := ledgerstate.ParseFeeSettings(item.Data())
 	if err != nil {
-		return defaultFees()
+		return drops.DefaultFees()
 	}
-	return feesFromDecoded(decoded)
+	return feeSettings.Fees()
 }
 
 func (r *replayRangeRunner) processBlock(
@@ -619,7 +558,7 @@ func (r *replayRangeRunner) processBlock(
 	}
 
 	// Get expected values for this ledger
-	postSnapshot, err := client.GetSnapshot(ctx, targetLedger)
+	postSnapshot, err := client.Snapshot(ctx, targetLedger)
 	if err != nil {
 		return nil, nil, fmt.Errorf("getting target snapshot: %w", err)
 	}
@@ -630,7 +569,7 @@ func (r *replayRangeRunner) processBlock(
 	result.ExpectedTotalCoins = postSnapshot.TotalCoins
 
 	// Get transactions for this ledger
-	txs, err := client.GetTransactions(ctx, targetLedger)
+	txs, err := client.Transactions(ctx, targetLedger)
 	if err != nil {
 		return nil, nil, fmt.Errorf("getting transactions: %w", err)
 	}
@@ -640,8 +579,14 @@ func (r *replayRangeRunner) processBlock(
 	txMap := shamap.New(shamap.TypeTransaction)
 
 	// Setup ledger header
-	closeTime := time.Unix(protocol.RippleEpochUnix+postSnapshot.CloseTime, 0).UTC()
-	parentCloseTime := time.Unix(protocol.RippleEpochUnix+preSnapshot.CloseTime, 0).UTC()
+	closeTime, err := replayCloseTime(postSnapshot.CloseTime)
+	if err != nil {
+		return nil, nil, fmt.Errorf("ledger %d close time: %w", targetLedger, err)
+	}
+	parentCloseTime, err := replayCloseTime(preSnapshot.CloseTime)
+	if err != nil {
+		return nil, nil, fmt.Errorf("ledger %d parent close time: %w", targetLedger, err)
+	}
 
 	ledgerHeader := header.LedgerHeader{
 		LedgerIndex:         targetLedger,
@@ -654,7 +599,10 @@ func (r *replayRangeRunner) processBlock(
 	}
 
 	// Create open ledger with current state
-	openLedger := ledger.NewOpenWithHeader(ledgerHeader, preStateMap, txMap, fees)
+	openLedger, err := ledger.NewOpenWithHeader(ledgerHeader, preStateMap, txMap, fees)
+	if err != nil {
+		return nil, nil, fmt.Errorf("creating replay ledger: %w", err)
+	}
 
 	// Derive the active amendment set from the parent (pre) state's Amendments
 	// entry, mirroring rippled, where a ledger's rules come from its parent.
@@ -666,16 +614,16 @@ func (r *replayRangeRunner) processBlock(
 		return nil, nil, fmt.Errorf("loading amendments: %w", err)
 	}
 
-	// Flag-ledger NegativeUNL transition: on a flag ledger with
-	// featureNegativeUNL enabled, apply the pending ValidatorToDisable /
-	// ValidatorToReEnable transitions to the NegativeUNL entry BEFORE creating the
-	// tx-apply engine and applying txs, mirroring rippled BuildLedger.cpp:48-53
-	// (updateNegativeUNL runs on the freshly-built ledger before the OpenView
-	// tx-apply accum) and the catchup path in inbound/replay_delta.go. A
-	// UNLModify pseudo-tx sets the pending transition at one flag ledger; the next
-	// flag ledger moves it into DisabledValidators. Without this the next flag
-	// ledger after a UNLModify forks account_hash even though every transaction matches.
-	if protocol.IsFlagLedger(targetLedger) && rules != nil && rules.Enabled(amendment.FeatureNegativeUNL) {
+	// Flag-ledger NegativeUNL transition: on a flag ledger, apply the pending
+	// ValidatorToDisable / ValidatorToReEnable transitions to the NegativeUNL
+	// entry BEFORE creating the tx-apply engine and applying txs, mirroring
+	// rippled BuildLedger.cpp:48-53 (updateNegativeUNL runs on the freshly-built
+	// ledger before the OpenView tx-apply accum) and the catchup path in
+	// inbound/replay_delta.go. A UNLModify pseudo-tx sets the pending transition
+	// at one flag ledger; the next flag ledger moves it into DisabledValidators.
+	// Without this the next flag ledger after a UNLModify forks account_hash even
+	// though every transaction matches.
+	if protocol.IsFlagLedger(targetLedger) {
 		if err := openLedger.UpdateNegativeUNL(); err != nil {
 			return nil, nil, fmt.Errorf("flag-ledger updateNegativeUNL: %w", err)
 		}
@@ -688,7 +636,7 @@ func (r *replayRangeRunner) processBlock(
 		ReserveIncrement:          uint64(fees.Increment),
 		LedgerSequence:            targetLedger,
 		ParentHash:                preSnapshot.LedgerHash,
-		ParentCloseTime:           uint32(preSnapshot.CloseTime),
+		ParentCloseTime:           protocol.ToRippleTime(parentCloseTime),
 		SkipSignatureVerification: true,
 		Standalone:                true,
 		Rules:                     rules,
@@ -735,11 +683,6 @@ func (r *replayRangeRunner) processBlock(
 		txInfo.Metadata = applyResult.Metadata
 
 		result.TxResults = append(result.TxResults, txInfo)
-
-		// Add to ledger
-		if err := openLedger.AddTransactionWithMeta(blockTxResult.Hash, blockTxResult.TxWithMetaBlob); err != nil {
-			result.Errors = append(result.Errors, fmt.Sprintf("tx %d: failed to add to ledger: %v", txEntry.TxIndex, err))
-		}
 
 		if r.verbose && r.decoded {
 			fmt.Fprintf(r.out, "        [%d] %-20s %-12s\n", txEntry.TxIndex, txInfo.TxType, txInfo.Result)

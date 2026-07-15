@@ -16,20 +16,20 @@ import (
 	"github.com/LeJamon/go-xrpl/keylet"
 )
 
-// offerSLE encodes an Offer ledger entry. takerPays and takerGets are either a
-// drops string (XRP) or a {currency,issuer,value} map (IOU).
 func offerSLE(t *testing.T, takerPays, takerGets any) []byte {
 	t.Helper()
 	hexStr, err := binarycodec.Encode(map[string]any{
-		"LedgerEntryType": "Offer",
-		"Account":         addrHolderA,
-		"Sequence":        uint32(1),
-		"TakerPays":       takerPays,
-		"TakerGets":       takerGets,
-		"BookDirectory":   "0000000000000000000000000000000000000000000000000000000000000000",
-		"BookNode":        "0",
-		"OwnerNode":       "0",
-		"Flags":           uint32(0),
+		"LedgerEntryType":   "Offer",
+		"Account":           addrHolderA,
+		"Sequence":          uint32(1),
+		"TakerPays":         takerPays,
+		"TakerGets":         takerGets,
+		"BookDirectory":     "0000000000000000000000000000000000000000000000000000000000000000",
+		"BookNode":          "0",
+		"OwnerNode":         "0",
+		"Flags":             uint32(0),
+		"PreviousTxnID":     "0000000000000000000000000000000000000000000000000000000000000000",
+		"PreviousTxnLgrSeq": uint32(0),
 	})
 	if err != nil {
 		t.Fatalf("binarycodec.Encode: %v", err)
@@ -43,6 +43,13 @@ func offerSLE(t *testing.T, takerPays, takerGets any) []byte {
 
 func usdAmount(value string) map[string]any {
 	return map[string]any{"currency": "USD", "issuer": addrIssuer, "value": value}
+}
+
+func mptOfferAmount(value string) map[string]any {
+	return map[string]any{
+		"mpt_issuance_id": "00000001B5F762798A53D543A014CAF8B297CFF8F2F937E8",
+		"value":           value,
+	}
 }
 
 // TestNoBadOffers_ZeroAmountsAccepted: rippled's isBad accepts zero amounts; an
@@ -109,6 +116,21 @@ func TestNoBadOffers_XRPForXRP(t *testing.T) {
 	}}
 	if v := checkNoBadOffers(entries); v == nil {
 		t.Fatal("expected NoBadOffers violation for XRP-for-XRP offer")
+	}
+}
+
+func TestNoBadOffers_MPTIsNotXRP(t *testing.T) {
+	entries := []InvariantEntry{{
+		EntryType: "Offer",
+		After:     offerSLE(t, "1000000", mptOfferAmount("5")),
+	}}
+	if v := checkNoBadOffers(entries); v != nil {
+		t.Fatalf("positive XRP/MPT offer must be accepted, got violation %v", v)
+	}
+
+	entries[0].After = offerSLE(t, "1000000", mptOfferAmount("-5"))
+	if v := checkNoBadOffers(entries); v == nil {
+		t.Fatal("expected NoBadOffers violation for negative MPT TakerGets")
 	}
 }
 
@@ -316,7 +338,7 @@ func TestParseError_HardFails(t *testing.T) {
 	t.Run("ValidPermissionedDomain", func(t *testing.T) {
 		pdBad := append(mustEncode(t, map[string]any{"LedgerEntryType": "PermissionedDomain"}), 0xFF)
 		entries := []InvariantEntry{{EntryType: "PermissionedDomain", After: pdBad}}
-		if v := checkValidPermissionedDomain(stubTx{txType: TypePermissionedDomainSet}, TesSUCCESS, entries); v == nil {
+		if v := checkValidPermissionedDomain(stubTx{txType: TypePermissionedDomainSet}, TesSUCCESS, entries, nil); v == nil {
 			t.Fatal("expected ValidPermissionedDomain violation for unparseable PermissionedDomain")
 		}
 	})
@@ -325,7 +347,7 @@ func TestParseError_HardFails(t *testing.T) {
 		offerBad := append(mustEncode(t, map[string]any{"LedgerEntryType": "Offer"}), 0xFF)
 		entries := []InvariantEntry{{EntryType: "Offer", After: offerBad}}
 		tx := domainTx{stubTx: stubTx{txType: TypeOfferCreate}}
-		if v := checkValidPermissionedDEX(tx, TesSUCCESS, entries, existsView{exists: true}); v == nil {
+		if v := checkValidPermissionedDEX(tx, TesSUCCESS, entries, existsView{exists: true}, nil); v == nil {
 			t.Fatal("expected ValidPermissionedDEX violation for unparseable Offer")
 		}
 	})

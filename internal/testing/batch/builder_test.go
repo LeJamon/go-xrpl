@@ -7,7 +7,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/LeJamon/go-xrpl/internal/ledger/state"
-	xtesting "github.com/LeJamon/go-xrpl/internal/testing"
+	jtx "github.com/LeJamon/go-xrpl/internal/testing"
 )
 
 // TestBuilderSortsNestedSignersByBinaryAccountID guards the builder against the
@@ -17,9 +17,9 @@ import (
 // base58 orders acct0 after acct2, binary orders it before — so a base58 sort
 // would emit them in the order the verifier rejects.
 func TestBuilderSortsNestedSignersByBinaryAccountID(t *testing.T) {
-	master := xtesting.NewAccount("master")
-	a := xtesting.NewAccount("acct0")
-	b := xtesting.NewAccount("acct2")
+	master := jtx.NewAccount("master")
+	a := jtx.NewAccount("acct0")
+	b := jtx.NewAccount("acct2")
 
 	// Confirm the fixture actually diverges, otherwise the test proves nothing.
 	addrLess := a.Address < b.Address
@@ -28,16 +28,16 @@ func TestBuilderSortsNestedSignersByBinaryAccountID(t *testing.T) {
 		"fixture accounts must have divergent base58/binary order")
 
 	// Pass them in base58-descending order so a string sort would be a no-op.
-	signers := []*xtesting.Account{a, b}
+	signers := []*jtx.Account{a, b}
 	if a.Address < b.Address {
-		signers = []*xtesting.Account{b, a}
+		signers = []*jtx.Account{b, a}
 	}
 
-	batch := NewBatchBuilder(master, 1, 100, 0x00000001).
-		AddInnerTx(MakeFakeInnerTx()).
-		AddInnerTx(MakeFakeInnerTx()).
-		AddMultiSignBatchSigner(master, signers).
-		Build()
+	batch := NewBatchBuilder(master, 1, 100, 0x00010000). // tfAllOrNothing
+								AddInnerTx(MakeFakeInnerTx()).
+								AddInnerTx(MakeFakeInnerTx()).
+								AddMultiSignBatchSigner(master, signers).
+								Build()
 
 	require.Len(t, batch.BatchSigners, 1)
 	nested := batch.BatchSigners[0].BatchSigner.Signers

@@ -301,65 +301,7 @@ func TestBurnSequential(t *testing.T) {
 func TestBurnTooManyOffers(t *testing.T) {
 	const maxTokenOfferCancelCount = 500
 
-	// Test 1: Before fixNonFungibleTokensV1_2 - burning NFT with > 500 offers
-	// should fail with tefTOO_BIG
-	t.Run("TooManyOffersBlocksBurn", func(t *testing.T) {
-		env := jtx.NewTestEnv(t)
-
-		alice := jtx.NewAccount("alice")
-		becky := jtx.NewAccount("becky")
-
-		env.Fund(alice, becky)
-		env.Close()
-
-		// Disable the amendment that allows burn with many offers
-		env.DisableFeature("fixNonFungibleTokensV1_2")
-
-		// Mint an NFT
-		nftID := nft.GetNextNFTokenID(env, alice, 0, nftoken.NFTokenFlagTransferable, 0)
-		result := env.Submit(nft.NFTokenMint(alice, 0).Transferable().URI("u").Build())
-		jtx.RequireTxSuccess(t, result)
-		env.Close()
-
-		// Create 500 buy offers from different accounts
-		offerIndexes := make([]string, 0, maxTokenOfferCancelCount)
-		for i := range uint32(maxTokenOfferCancelCount) {
-			acct := jtx.NewAccount("acct" + string(rune('A'+i%26)) + string(rune('0'+i/26)))
-			env.Fund(acct)
-			env.Close()
-
-			offerIdx := nft.GetOfferIndex(env, acct)
-			result := env.Submit(nft.NFTokenCreateBuyOffer(acct, nftID, tx.NewXRPAmount(1), alice).Build())
-			if result.Success {
-				offerIndexes = append(offerIndexes, offerIdx)
-			}
-			env.Close()
-		}
-
-		// Create one more buy offer from becky (total 501)
-		beckyOfferIdx := nft.GetOfferIndex(env, becky)
-		env.Submit(nft.NFTokenCreateBuyOffer(becky, nftID, tx.NewXRPAmount(1), alice).Build())
-		env.Close()
-
-		// Attempt to burn the NFT - should fail with tefTOO_BIG
-		result = env.Submit(nft.NFTokenBurn(alice, nftID).Build())
-		jtx.RequireTxFail(t, result, "tefTOO_BIG")
-
-		// Cancel becky's offer (back to 500)
-		env.Submit(nft.NFTokenCancelOffer(becky, beckyOfferIdx).Build())
-		env.Close()
-
-		// Now burn should succeed (exactly 500 buy offers)
-		result = env.Submit(nft.NFTokenBurn(alice, nftID).Build())
-		jtx.RequireTxSuccess(t, result)
-		env.Close()
-
-		// All should be cleaned up
-		jtx.RequireOwnerCount(t, env, alice, 0)
-		jtx.RequireOwnerCount(t, env, becky, 0)
-	})
-
-	// Test 2: With fixNonFungibleTokensV1_2 - burn removes up to 500 offers
+	// Test 1: Burn removes up to 500 offers
 	t.Run("BurnWithMaxOffers", func(t *testing.T) {
 		env := jtx.NewTestEnv(t)
 		env.EnableFeature("fixNonFungibleTokensV1_2")
@@ -395,7 +337,7 @@ func TestBurnTooManyOffers(t *testing.T) {
 		jtx.RequireOwnerCount(t, env, alice, 1)
 	})
 
-	// Test 3: With fixNonFungibleTokensV1_2 - mix of buy and sell offers
+	// Test 2: Mix of buy and sell offers
 	t.Run("BurnMixedOffers", func(t *testing.T) {
 		env := jtx.NewTestEnv(t)
 		env.EnableFeature("fixNonFungibleTokensV1_2")

@@ -1,9 +1,15 @@
 package peermanagement
 
 import (
+	"context"
+	"errors"
 	"fmt"
+	"net"
 	"testing"
 	"time"
+
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func TestNewDiscovery(t *testing.T) {
@@ -214,6 +220,63 @@ func TestDiscoveryBootstrapPeers(t *testing.T) {
 	d.Stop()
 }
 
+func TestDiscoveryStartResolvesConfiguredPeers(t *testing.T) {
+	d := NewDiscovery(&Config{
+		MaxOutbound: 25,
+		BootstrapPeers: []string{
+			"bootstrap-a.example:51235",
+			"bootstrap-b.example:51235",
+			"192.0.2.12:51235",
+		},
+		FixedPeers: []string{
+			"fixed-a.example:51235",
+			"fixed-b.example:51235",
+		},
+	}, make(chan Event, 1))
+	d.lookupIP = func(_ context.Context, host string) ([]net.IPAddr, error) {
+		switch host {
+		case "bootstrap-a.example":
+			return []net.IPAddr{{IP: net.ParseIP("192.0.2.10")}, {IP: net.ParseIP("192.0.2.11")}}, nil
+		case "bootstrap-b.example":
+			return []net.IPAddr{{IP: net.ParseIP("192.0.2.10")}}, nil
+		case "fixed-a.example":
+			return []net.IPAddr{{IP: net.ParseIP("192.0.2.20")}}, nil
+		case "fixed-b.example":
+			return []net.IPAddr{{IP: net.ParseIP("192.0.2.20")}, {IP: net.ParseIP("192.0.2.21")}}, nil
+		default:
+			return nil, errors.New("unexpected lookup")
+		}
+	}
+
+	require.NoError(t, d.Start(t.Context()))
+	t.Cleanup(d.Stop)
+	assert.ElementsMatch(t, []string{
+		"192.0.2.10:51235",
+		"192.0.2.11:51235",
+		"192.0.2.12:51235",
+	}, d.cfg.BootstrapPeers)
+	assert.ElementsMatch(t, []string{
+		"192.0.2.20:51235",
+		"192.0.2.21:51235",
+	}, d.cfg.FixedPeers)
+
+	d.SyncConnectedHosts(map[string]struct{}{"192.0.2.20": {}})
+	d.mu.RLock()
+	assert.True(t, d.peers["192.0.2.20:51235"].Connected)
+	d.mu.RUnlock()
+}
+
+func TestDiscoverySelectsFixedPeersBeyondOrdinaryCapacity(t *testing.T) {
+	d := NewDiscovery(&Config{
+		FixedPeers: []string{"192.0.2.40:51235"},
+	}, make(chan Event, 1))
+	require.NoError(t, d.Start(t.Context()))
+	t.Cleanup(d.Stop)
+	d.AddPeer("192.0.2.41:51235", 0, 0)
+
+	assert.Equal(t, []string{"192.0.2.40:51235"}, d.SelectPeersToConnect(0))
+}
+
 func TestBootCache(t *testing.T) {
 	// Use temp directory for test
 	bc := NewBootCache("")
@@ -222,7 +285,7 @@ func TestBootCache(t *testing.T) {
 	bc.Insert("192.168.1.1", 51235)
 	bc.Insert("192.168.1.2", 51235)
 
-	endpoints := bc.GetEndpoints(10)
+	endpoints := bc.Endpoints(10)
 	if len(endpoints) != 2 {
 		t.Errorf("Expected 2 endpoints, got %d", len(endpoints))
 	}
@@ -271,7 +334,7 @@ func TestBootCacheGetEndpointsSorted(t *testing.T) {
 		bc.MarkSuccess("192.168.1.3")
 	}
 
-	endpoints := bc.GetEndpoints(10)
+	endpoints := bc.Endpoints(10)
 
 	// Should be sorted by valence descending
 	if len(endpoints) < 2 {
@@ -342,7 +405,7 @@ func TestBackoffPeerPrioritization(t *testing.T) {
 	bc.MarkSuccess("192.168.1.2")
 	bc.MarkSuccess("192.168.1.2")
 
-	endpoints := bc.GetEndpoints(10)
+	endpoints := bc.Endpoints(10)
 
 	// Peer 2 should be prioritized (higher valence)
 	// Peer 1 should be last (lowest valence)
@@ -512,6 +575,214 @@ func TestDiscoveryPruneOldPeers(t *testing.T) {
 	}
 }
 
+func TestDiscoveryPrunePreservesConfiguredPeers(t *testing.T) {
+	now := time.Unix(10_000, 0)
+	cfg := &Config{
+		MaxPeers:       50,
+		MaxInbound:     25,
+		MaxOutbound:    25,
+		BootstrapPeers: []string{"bootstrap:51235"},
+		FixedPeers:     []string{"fixed:51235"},
+		Clock:          func() time.Time { return now },
+	}
+	d := NewDiscovery(cfg, make(chan Event, 1))
+	for _, address := range []string{"bootstrap:51235", "fixed:51235", "gossip:51235"} {
+		d.AddPeer(address, 0, 0)
+		d.peers[address].LastSeen = now.Add(-2 * time.Hour)
+	}
+
+	d.prune()
+
+	if _, ok := d.peers["bootstrap:51235"]; !ok {
+		t.Error("configured bootstrap peer must survive age pruning")
+	}
+	if _, ok := d.peers["fixed:51235"]; !ok {
+		t.Error("configured fixed peer must survive age pruning")
+	}
+	if _, ok := d.peers["gossip:51235"]; ok {
+		t.Error("stale gossip peer should be pruned")
+	}
+}
+
+func TestDiscoveryConnectAttemptReservationAndCooldown(t *testing.T) {
+	now := time.Unix(10_000, 0)
+	cfg := &Config{
+		MaxPeers:    50,
+		MaxInbound:  25,
+		MaxOutbound: 25,
+		Clock:       func() time.Time { return now },
+	}
+	d := NewDiscovery(cfg, make(chan Event, 1))
+	address := "gossip:51235"
+	d.AddPeer(address, 0, 0)
+
+	require.Equal(t, []string{address}, d.SelectPeersToConnect(1))
+	assert.Empty(t, d.SelectPeersToConnect(1), "an in-flight address must not be selected twice")
+
+	d.finishConnectAttempt(address, connectAttemptFailed)
+	assert.Empty(t, d.SelectPeersToConnect(1), "ordinary failed attempts are suppressed for one minute")
+
+	now = now.Add(recentConnectAttempt)
+	require.Equal(t, []string{address}, d.SelectPeersToConnect(1), "candidate becomes eligible at the deadline")
+	d.finishConnectAttempt(address, connectAttemptSucceeded)
+}
+
+func TestDiscoveryConnectAttemptSuppressionUsesHost(t *testing.T) {
+	now := time.Unix(10_000, 0)
+	addresses := []string{"192.0.2.10:51235", "192.0.2.10:51236"}
+	cfg := &Config{
+		MaxPeers:    50,
+		MaxInbound:  25,
+		MaxOutbound: 25,
+		FixedPeers:  addresses,
+		Clock:       func() time.Time { return now },
+	}
+	d := NewDiscovery(cfg, make(chan Event, 1))
+	for _, address := range addresses {
+		d.AddPeer(address, 0, 0)
+	}
+
+	selected := d.SelectPeersToConnect(2)
+	require.Len(t, selected, 1, "different ports on one host must not bypass suppression")
+	first := selected[0]
+	d.finishConnectAttempt(first, connectAttemptFailed)
+	assert.Empty(t, d.SelectPeersToConnect(2), "host suppression applies to every port")
+
+	d.mu.RLock()
+	attempt, ok := d.connectAttempts[first]
+	d.mu.RUnlock()
+	require.True(t, ok, "fixed retry state remains keyed by its full endpoint")
+	assert.Equal(t, 1, attempt.failures)
+
+	now = now.Add(recentConnectAttempt)
+	selected = d.SelectPeersToConnect(2)
+	require.Len(t, selected, 1)
+	assert.Equal(t, connectAttemptHost(addresses[0]), connectAttemptHost(selected[0]))
+	d.finishConnectAttempt(selected[0], connectAttemptReleased)
+}
+
+func TestDiscoveryOrdinaryAttemptRetainsHostCooldownWithoutEndpointState(t *testing.T) {
+	now := time.Unix(10_000, 0)
+	cfg := &Config{
+		MaxPeers:    50,
+		MaxInbound:  25,
+		MaxOutbound: 25,
+		Clock:       func() time.Time { return now },
+	}
+	d := NewDiscovery(cfg, make(chan Event, 1))
+	addresses := []string{"Peer.EXAMPLE:51235", "peer.example:51236"}
+	for _, address := range addresses {
+		d.AddPeer(address, 0, 0)
+	}
+
+	selected := d.SelectPeersToConnect(2)
+	require.Len(t, selected, 1)
+	d.finishConnectAttempt(selected[0], connectAttemptFailed)
+
+	d.mu.RLock()
+	_, retained := d.connectAttempts[selected[0]]
+	d.mu.RUnlock()
+	assert.False(t, retained, "non-fixed endpoint state is released when its attempt finishes")
+	assert.Empty(t, d.SelectPeersToConnect(2), "case-normalized host cooldown remains active")
+
+	now = now.Add(recentConnectAttempt)
+	assert.Len(t, d.SelectPeersToConnect(2), 1)
+}
+
+func TestDiscoveryConnectedHostSuppressesOtherPorts(t *testing.T) {
+	now := time.Unix(10_000, 0)
+	cfg := &Config{
+		MaxPeers:    50,
+		MaxInbound:  25,
+		MaxOutbound: 25,
+		Clock:       func() time.Time { return now },
+	}
+	d := NewDiscovery(cfg, make(chan Event, 1))
+	d.MarkConnected("192.0.2.20:51235", PeerID(1))
+	d.AddPeer("192.0.2.20:51236", 0, 0)
+
+	now = now.Add(2 * recentConnectAttempt)
+	assert.Empty(t, d.SelectPeersToConnect(2))
+}
+
+func TestDiscoveryInFlightHostSuppressionOutlivesCooldown(t *testing.T) {
+	now := time.Unix(10_000, 0)
+	d := NewDiscovery(&Config{MaxOutbound: 25, Clock: func() time.Time { return now }}, make(chan Event, 1))
+	d.AddPeer("192.0.2.30:51235", 0, 0)
+	d.AddPeer("192.0.2.30:51236", 0, 0)
+
+	selected := d.SelectPeersToConnect(2)
+	require.Len(t, selected, 1)
+	now = now.Add(2 * recentConnectAttempt)
+	assert.Empty(t, d.SelectPeersToConnect(2))
+	d.finishConnectAttempt(selected[0], connectAttemptReleased)
+}
+
+func TestDiscoveryFixedPeerBackoff(t *testing.T) {
+	now := time.Unix(10_000, 0)
+	address := "fixed:51235"
+	cfg := &Config{
+		MaxPeers:    50,
+		MaxInbound:  25,
+		MaxOutbound: 25,
+		FixedPeers:  []string{address},
+		Clock:       func() time.Time { return now },
+	}
+	d := NewDiscovery(cfg, make(chan Event, 1))
+	d.AddPeer(address, 0, 0)
+
+	require.Equal(t, []string{address}, d.SelectPeersToConnect(1))
+	d.finishConnectAttempt(address, connectAttemptFailed)
+	now = now.Add(time.Minute)
+	require.Equal(t, []string{address}, d.SelectPeersToConnect(1), "first failure waits one minute")
+
+	d.finishConnectAttempt(address, connectAttemptFailed)
+	now = now.Add(time.Minute)
+	assert.Empty(t, d.SelectPeersToConnect(1), "second failure advances to two minutes")
+	now = now.Add(time.Minute)
+	require.Equal(t, []string{address}, d.SelectPeersToConnect(1))
+	d.finishConnectAttempt(address, connectAttemptSucceeded)
+
+	now = now.Add(time.Minute)
+	require.Equal(t, []string{address}, d.SelectPeersToConnect(1))
+	d.finishConnectAttempt(address, connectAttemptFailed)
+	now = now.Add(time.Minute)
+	require.Equal(t, []string{address}, d.SelectPeersToConnect(1), "success resets fixed-peer backoff")
+}
+
+func TestDiscoveryEvictionAndPruneCleanNonFixedAttemptState(t *testing.T) {
+	now := time.Unix(10_000, 0)
+	cfg := &Config{
+		MaxPeers:    50,
+		MaxInbound:  25,
+		MaxOutbound: 25,
+		FixedPeers:  []string{"fixed:51235"},
+		Clock:       func() time.Time { return now },
+	}
+	d := NewDiscovery(cfg, make(chan Event, 1))
+	d.AddPeer("evicted:51235", 0, 0)
+	d.AddPeer("fixed:51235", 0, 0)
+	d.connectAttempts["evicted:51235"] = &connectAttempt{failures: 3}
+	d.connectAttempts["fixed:51235"] = &connectAttempt{failures: 3}
+
+	d.mu.Lock()
+	require.True(t, d.evictOldestLocked())
+	d.mu.Unlock()
+	assert.NotContains(t, d.connectAttempts, "evicted:51235")
+	assert.Contains(t, d.connectAttempts, "fixed:51235")
+
+	d.AddPeer("pruned:51235", 0, 0)
+	d.mu.Lock()
+	d.peers["pruned:51235"].LastSeen = now.Add(-2 * time.Hour)
+	d.peers["fixed:51235"].LastSeen = now.Add(-2 * time.Hour)
+	d.connectAttempts["pruned:51235"] = &connectAttempt{failures: 2}
+	d.mu.Unlock()
+
+	d.prune()
+	assert.NotContains(t, d.connectAttempts, "pruned:51235")
+	assert.Contains(t, d.connectAttempts, "fixed:51235")
+}
+
 // TestBootCacheFailedLastTime tests that LastFailed time is recorded
 func TestBootCacheFailedLastTime(t *testing.T) {
 	bc := NewBootCache("")
@@ -562,7 +833,7 @@ func TestSimulatedBackoffBehavior(t *testing.T) {
 	// Simulate connection attempts over 100 iterations
 	primaryAttempts := 0
 	for range 100 {
-		endpoints := bc.GetEndpoints(1)
+		endpoints := bc.Endpoints(1)
 		if len(endpoints) > 0 && endpoints[0].Address == "primary.peer" {
 			primaryAttempts++
 			bc.MarkFailed("primary.peer")
@@ -704,16 +975,17 @@ func TestDiscoverySyncConnectedHosts_SkipsMalformedAddress(t *testing.T) {
 
 // TestAddPeerCapEvictsOldest pins issue #1170: once d.peers reaches
 // MaxDiscoveredPeers, a new gossiped address evicts the least-recently-seen
-// non-connected, non-fixed entry instead of growing the map without bound.
-// The live connection and the fixed peer sit at the stale end of the
+// non-connected, non-configured entry instead of growing the map without bound.
+// The live connection and configured peers sit at the stale end of the
 // recency order and must survive the eviction; a re-announced gossip entry
 // is refreshed to the recent end and must survive too.
 func TestAddPeerCapEvictsOldest(t *testing.T) {
 	cfg := &Config{
-		MaxPeers:    50,
-		MaxInbound:  25,
-		MaxOutbound: 25,
-		FixedPeers:  []string{"fixed:51235"},
+		MaxPeers:       50,
+		MaxInbound:     25,
+		MaxOutbound:    25,
+		FixedPeers:     []string{"fixed:51235"},
+		BootstrapPeers: []string{"bootstrap:51235"},
 	}
 	d := NewDiscovery(cfg, make(chan Event, 1))
 
@@ -721,6 +993,7 @@ func TestAddPeerCapEvictsOldest(t *testing.T) {
 	// naive eviction would pick them.
 	d.MarkConnected("connected:51235", PeerID(1))
 	d.AddPeer("fixed:51235", 1, PeerID(2))
+	d.AddPeer("bootstrap:51235", 1, PeerID(2))
 
 	// Fill the map exactly to the ceiling with non-connected gossip entries.
 	for i := 0; len(d.peers) < MaxDiscoveredPeers; i++ {
@@ -760,5 +1033,50 @@ func TestAddPeerCapEvictsOldest(t *testing.T) {
 	}
 	if _, ok := d.peers["fixed:51235"]; !ok {
 		t.Error("fixed peer must never be evicted")
+	}
+	if _, ok := d.peers["bootstrap:51235"]; !ok {
+		t.Error("bootstrap peer must never be evicted")
+	}
+}
+
+// Start (async in Overlay.Run) can race a fast shutdown's Stop; cancel
+// hand-off must be synchronized and a Stop that already ran must win so
+// the maintenance loop never outlives it.
+func TestDiscoveryStartStopConcurrent(t *testing.T) {
+	for range 200 {
+		cfg := &Config{MaxPeers: 50, MaxInbound: 25, MaxOutbound: 25}
+		d := NewDiscovery(cfg, make(chan Event, 10))
+
+		started := make(chan struct{})
+		go func() {
+			_ = d.Start(t.Context())
+			close(started)
+		}()
+		d.Stop()
+		<-started
+
+		d.mu.Lock()
+		cancel := d.cancel
+		d.mu.Unlock()
+		if cancel != nil {
+			cancel()
+		}
+		d.wg.Wait()
+	}
+}
+
+func TestDiscoveryStartAfterStopIsNoop(t *testing.T) {
+	cfg := &Config{MaxPeers: 50, MaxInbound: 25, MaxOutbound: 25}
+	d := NewDiscovery(cfg, make(chan Event, 10))
+
+	d.Stop()
+	if err := d.Start(t.Context()); err != nil {
+		t.Fatalf("Start after Stop: %v", err)
+	}
+
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	if d.cancel != nil {
+		t.Fatal("Start after Stop must not arm the maintenance loop")
 	}
 }

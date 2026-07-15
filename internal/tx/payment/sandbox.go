@@ -72,6 +72,7 @@ var _ ledgercore.AtomicWriter = (*PaymentSandbox)(nil)
 type DeferredCredits struct {
 	// credits maps (lowAccount, highAccount, currency) -> adjustment
 	credits map[deferredKey]*deferredValue
+	mpt     map[[24]byte]*deferredMPTValue
 
 	// ownerCounts tracks maximum owner count seen for each account
 	ownerCounts map[[20]byte]uint32
@@ -90,6 +91,18 @@ type deferredValue struct {
 	lowAcctCredits     tx.Amount
 	highAcctCredits    tx.Amount
 	lowAcctOrigBalance tx.Amount
+}
+
+type deferredMPTHolderValue struct {
+	debit       uint64
+	origBalance uint64
+}
+
+type deferredMPTValue struct {
+	holders     map[[20]byte]*deferredMPTHolderValue
+	credit      uint64
+	origBalance int64
+	selfDebit   uint64
 }
 
 // Adjustment represents the deferred credit adjustments for a balance lookup
@@ -125,14 +138,14 @@ func (s *PaymentSandbox) SetTransactionContext(txHash [32]byte, ledgerSeq uint32
 	s.ledgerSeq = ledgerSeq
 }
 
-// GetTransactionContext returns the current transaction hash and ledger sequence
-func (s *PaymentSandbox) GetTransactionContext() ([32]byte, uint32) {
+// TransactionContext returns the current transaction hash and ledger sequence
+func (s *PaymentSandbox) TransactionContext() ([32]byte, uint32) {
 	// Walk up the chain to find the root sandbox with the context
 	if s.txHash != [32]byte{} || s.ledgerSeq != 0 {
 		return s.txHash, s.ledgerSeq
 	}
 	if s.parent != nil {
-		return s.parent.GetTransactionContext()
+		return s.parent.TransactionContext()
 	}
 	return s.txHash, s.ledgerSeq
 }
@@ -140,7 +153,7 @@ func (s *PaymentSandbox) GetTransactionContext() ([32]byte, uint32) {
 // NewChildSandbox creates a child PaymentSandbox on top of a parent.
 // Changes are pushed to the parent when Apply() is called.
 func NewChildSandbox(parent *PaymentSandbox) *PaymentSandbox {
-	txHash, ledgerSeq := parent.GetTransactionContext()
+	txHash, ledgerSeq := parent.TransactionContext()
 	return &PaymentSandbox{
 		parent:             parent,
 		txHash:             txHash,
@@ -200,6 +213,7 @@ func (s *PaymentSandbox) HasFundsFailure() bool {
 func newDeferredCredits() *DeferredCredits {
 	return &DeferredCredits{
 		credits:     make(map[deferredKey]*deferredValue),
+		mpt:         make(map[[24]byte]*deferredMPTValue),
 		ownerCounts: make(map[[20]byte]uint32),
 	}
 }
@@ -585,6 +599,30 @@ func (s *PaymentSandbox) CreditHook(sender, receiver [20]byte, amount tx.Amount,
 	s.tab.credit(sender, receiver, amount, preCreditSenderBalance)
 }
 
+func (s *PaymentSandbox) CreditHookMPT(
+	sender, receiver [20]byte,
+	id [24]byte,
+	amount, preCreditHolderBalance uint64,
+	preCreditIssuerBalance int64,
+) {
+	s.tab.creditMPT(sender, receiver, id, amount, preCreditHolderBalance, preCreditIssuerBalance)
+}
+
+func (s *PaymentSandbox) IssuerSelfDebitHookMPT(id [24]byte, amount uint64, origBalance int64) {
+	if amount == 0 {
+		return
+	}
+	v, exists := s.tab.mpt[id]
+	if !exists {
+		v = &deferredMPTValue{
+			holders:     make(map[[20]byte]*deferredMPTHolderValue),
+			origBalance: origBalance,
+		}
+		s.tab.mpt[id] = v
+	}
+	v.selfDebit += amount
+}
+
 // credit records a credit in the deferred credits table
 func (dc *DeferredCredits) credit(sender, receiver [20]byte, amount tx.Amount, preCreditSenderBalance tx.Amount) {
 	if sender == receiver {
@@ -633,6 +671,41 @@ func (dc *DeferredCredits) credit(sender, receiver [20]byte, amount tx.Amount, p
 			v.lowAcctCredits, _ = v.lowAcctCredits.Add(amount)
 		}
 	}
+}
+
+func (dc *DeferredCredits) creditMPT(
+	sender, receiver [20]byte,
+	id [24]byte,
+	amount, preCreditHolderBalance uint64,
+	preCreditIssuerBalance int64,
+) {
+	if sender == receiver || amount == 0 {
+		return
+	}
+	issuer := mptIssuer(id)
+	v, exists := dc.mpt[id]
+	if !exists {
+		v = &deferredMPTValue{
+			holders:     make(map[[20]byte]*deferredMPTHolderValue),
+			origBalance: preCreditIssuerBalance,
+		}
+		dc.mpt[id] = v
+	}
+
+	if sender == issuer {
+		v.credit += amount
+		if _, exists := v.holders[receiver]; !exists {
+			v.holders[receiver] = &deferredMPTHolderValue{origBalance: preCreditHolderBalance}
+		}
+		return
+	}
+
+	holder, exists := v.holders[sender]
+	if !exists {
+		holder = &deferredMPTHolderValue{origBalance: preCreditHolderBalance}
+		v.holders[sender] = holder
+	}
+	holder.debit += amount
 }
 
 // adjustments returns the deferred credit adjustments for a balance lookup
@@ -696,6 +769,36 @@ func (dc *DeferredCredits) apply(to *DeferredCredits) {
 		}
 	}
 
+	for id, fromVal := range dc.mpt {
+		toVal, exists := to.mpt[id]
+		if !exists {
+			toVal = &deferredMPTValue{
+				holders:     make(map[[20]byte]*deferredMPTHolderValue, len(fromVal.holders)),
+				credit:      fromVal.credit,
+				origBalance: fromVal.origBalance,
+				selfDebit:   fromVal.selfDebit,
+			}
+			for account, holder := range fromVal.holders {
+				copyHolder := *holder
+				toVal.holders[account] = &copyHolder
+			}
+			to.mpt[id] = toVal
+			continue
+		}
+
+		toVal.credit += fromVal.credit
+		toVal.selfDebit += fromVal.selfDebit
+		for account, fromHolder := range fromVal.holders {
+			toHolder, exists := toVal.holders[account]
+			if !exists {
+				copyHolder := *fromHolder
+				toVal.holders[account] = &copyHolder
+				continue
+			}
+			toHolder.debit += fromHolder.debit
+		}
+	}
+
 	for id, fromCount := range dc.ownerCounts {
 		toCount, exists := to.ownerCounts[id]
 		if !exists {
@@ -753,6 +856,63 @@ func (s *PaymentSandbox) BalanceHook(account, issuer [20]byte, amount tx.Amount)
 	}
 
 	return result
+}
+
+func (s *PaymentSandbox) BalanceHookMPT(account [20]byte, id [24]byte, amount int64) int64 {
+	issuer := mptIssuer(id)
+	accountIsHolder := account != issuer
+	var delta uint64
+	lastBalance := amount
+	minimumBalance := amount
+
+	for current := s; current != nil; current = current.parent {
+		adjustment, exists := current.tab.mpt[id]
+		if !exists {
+			continue
+		}
+		if accountIsHolder {
+			if holder, exists := adjustment.holders[account]; exists {
+				delta = addMPTDeferred(delta, holder.debit)
+				lastBalance = int64(holder.origBalance)
+			}
+		} else {
+			delta = addMPTDeferred(delta, adjustment.credit)
+			lastBalance = adjustment.origBalance
+		}
+		minimumBalance = min(minimumBalance, lastBalance)
+	}
+
+	adjusted := min(amount, minimumBalance)
+	if lastBalance <= 0 || delta >= uint64(lastBalance) {
+		return 0
+	}
+	adjusted = min(adjusted, lastBalance-int64(delta))
+	if adjusted <= 0 {
+		return 0
+	}
+	return adjusted
+}
+
+func (s *PaymentSandbox) BalanceHookSelfIssueMPT(id [24]byte, amount int64) int64 {
+	var selfDebited uint64
+	lastBalance := amount
+	for current := s; current != nil; current = current.parent {
+		if adjustment, exists := current.tab.mpt[id]; exists {
+			selfDebited = addMPTDeferred(selfDebited, adjustment.selfDebit)
+			lastBalance = adjustment.origBalance
+		}
+	}
+	if lastBalance <= 0 || selfDebited >= uint64(lastBalance) {
+		return 0
+	}
+	return lastBalance - int64(selfDebited)
+}
+
+func addMPTDeferred(current, amount uint64) uint64 {
+	if ^uint64(0)-current < amount {
+		return ^uint64(0)
+	}
+	return current + amount
 }
 
 // OwnerCountHook returns the maximum owner count seen for an account
@@ -938,29 +1098,29 @@ func (s *PaymentSandbox) Reset() {
 	s.dropsDestroyed = drops.XRPAmount(0)
 }
 
-// GetView returns the underlying LedgerView for this sandbox chain
-func (s *PaymentSandbox) GetView() tx.LedgerView {
+// View returns the underlying LedgerView for this sandbox chain
+func (s *PaymentSandbox) View() tx.LedgerView {
 	if s.view != nil {
 		return s.view
 	}
 	if s.parent != nil {
-		return s.parent.GetView()
+		return s.parent.View()
 	}
 	return nil
 }
 
-// GetModifications returns the modifications map for debugging
-func (s *PaymentSandbox) GetModifications() map[[32]byte][]byte {
+// Modifications returns the modifications map for debugging
+func (s *PaymentSandbox) Modifications() map[[32]byte][]byte {
 	return s.modifications
 }
 
-// GetInsertions returns the insertions map for debugging
-func (s *PaymentSandbox) GetInsertions() map[[32]byte][]byte {
+// Insertions returns the insertions map for debugging
+func (s *PaymentSandbox) Insertions() map[[32]byte][]byte {
 	return s.insertions
 }
 
-// GetDeletions returns the deletions map for debugging
-func (s *PaymentSandbox) GetDeletions() map[[32]byte]bool {
+// Deletions returns the deletions map for debugging
+func (s *PaymentSandbox) Deletions() map[[32]byte]bool {
 	return s.deletions
 }
 

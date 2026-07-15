@@ -236,6 +236,8 @@ type Aggregator struct {
 	// (ValidatorList.h:140-141 / ValidatorList.cpp:289).
 	threshold int
 
+	staticValidatorCount int
+
 	// onChange is invoked whenever the recomputed trusted set differs
 	// from the previously emitted one. Wired by Components.NewFromConfig
 	// to push into Adaptor.SetTrustedValidators.
@@ -273,6 +275,9 @@ type Aggregator struct {
 	// reason IsListed is lock-free). recomputeAndEmitLocked commits the flag in
 	// a single Store so readers never see a transient intermediate.
 	unlBlocked atomic.Bool
+	// quorumUnavailable tracks rippled's stricter calculateQuorum cutoff,
+	// which can differ from unlBlocked with multiple publishers.
+	quorumUnavailable atomic.Bool
 
 	// clock returns the wall-clock time the aggregator uses to gate
 	// effective / expiration comparisons. Overridable for tests.
@@ -332,12 +337,13 @@ type Aggregator struct {
 // optional; Defaults handle nil Logger / Clock / Manifests so the type
 // is usable in narrowly-scoped tests.
 type Config struct {
-	PublisherKeys []PublisherKey
-	SiteURIs      []string
-	Threshold     int
-	Manifests     *manifest.Cache
-	Clock         func() time.Time
-	Logger        *slog.Logger
+	PublisherKeys        []PublisherKey
+	SiteURIs             []string
+	Threshold            int
+	StaticValidatorCount int
+	Manifests            *manifest.Cache
+	Clock                func() time.Time
+	Logger               *slog.Logger
 }
 
 // New constructs an Aggregator from the operator-supplied config.
@@ -389,7 +395,7 @@ func New(cfg Config) (*Aggregator, error) {
 	threshold := cfg.Threshold
 	if threshold <= 0 && len(publishers) > 0 {
 		// Mirror rippled's default: ceil(N/2 + 1) for N >= 3, else 1.
-		// Matches config.ValidatorsConfig.GetValidatorListThreshold().
+		// Matches config.ValidatorsConfig.EffectiveListThreshold().
 		if len(publishers) < 3 {
 			threshold = 1
 		} else {
@@ -400,16 +406,17 @@ func New(cfg Config) (*Aggregator, error) {
 		return nil, fmt.Errorf("threshold %d exceeds publisher count %d", threshold, len(publishers))
 	}
 	return &Aggregator{
-		publishers:         publishers,
-		state:              state,
-		sites:              sites,
-		manifests:          cfg.Manifests,
-		threshold:          threshold,
-		clock:              clock,
-		logger:             logger,
-		peerSeq:            make(map[uint64]map[PublisherKey]uint32),
-		pendingCacheWrites: make(map[PublisherKey]pendingCacheWrite),
-		cacheWritten:       make(map[PublisherKey]uint64),
+		publishers:           publishers,
+		state:                state,
+		sites:                sites,
+		manifests:            cfg.Manifests,
+		threshold:            threshold,
+		staticValidatorCount: cfg.StaticValidatorCount,
+		clock:                clock,
+		logger:               logger,
+		peerSeq:              make(map[uint64]map[PublisherKey]uint32),
+		pendingCacheWrites:   make(map[PublisherKey]pendingCacheWrite),
+		cacheWritten:         make(map[PublisherKey]uint64),
 	}, nil
 }
 
@@ -430,6 +437,16 @@ func (a *Aggregator) OnChange(cb func(validators []consensus.NodeID, masterKeys 
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	a.onChange = cb
+}
+
+func (a *Aggregator) SetStaticValidatorCount(count int) {
+	if count < 0 {
+		count = 0
+	}
+	a.mu.Lock()
+	a.staticValidatorCount = count
+	a.recomputeAndEmitLocked()
+	a.mu.Unlock()
 }
 
 // PublisherCount returns the number of configured publishers in the
@@ -469,6 +486,12 @@ func (a *Aggregator) HasConfiguredPublishers() bool {
 // publisher stays healthy — a state a stateless snapshot cannot reproduce.
 func (a *Aggregator) IsUNLBlocked() bool {
 	return a.unlBlocked.Load()
+}
+
+// IsQuorumUnavailable reports whether too many configured publisher lists are
+// unavailable to calculate a safe validation quorum.
+func (a *Aggregator) IsQuorumUnavailable() bool {
+	return a.quorumUnavailable.Load()
 }
 
 // PublisherSnapshot returns a deep copy of the per-publisher state for
@@ -1155,9 +1178,8 @@ func (a *Aggregator) IsListed(node consensus.NodeID) bool {
 
 // recomputeAndEmitLocked walks the per-publisher state, computes the
 // union of validators present in at least `threshold` publishers' lists,
-// and — if the result differs from the last emitted set — invokes the
-// OnChange callback with sorted NodeID and master-key slices ready for
-// Adaptor.SetTrustedValidators.
+// and invokes OnChange when either the trusted set or UNL-blocked state
+// changes.
 //
 // Caller MUST hold a.mu. The OnChange callback runs under the lock; the
 // adaptor.SetTrustedValidators path takes a different mutex so the
@@ -1191,6 +1213,7 @@ func (a *Aggregator) recomputeAndEmitLocked() {
 	// Accumulate in the local and commit once below.
 	blocked := a.unlBlocked.Load()
 	good := true
+	unavailable := 0
 	for _, s := range a.state {
 		if s.Status == StatusAvailable && !s.Expiration.IsZero() && !s.Expiration.After(now) {
 			s.Status = StatusExpired
@@ -1199,6 +1222,7 @@ func (a *Aggregator) recomputeAndEmitLocked() {
 		}
 		if s.Status != StatusAvailable {
 			good = false
+			unavailable++
 		}
 	}
 	if good {
@@ -1223,12 +1247,17 @@ func (a *Aggregator) recomputeAndEmitLocked() {
 	// empty union always wins, matching rippled's ordering (clear at line 2006,
 	// then set at 2100). Single Store so lock-free IsUNLBlocked never sees a
 	// transient.
-	if len(trusted) == 0 {
+	if len(trusted) == 0 && a.staticValidatorCount == 0 {
 		blocked = true
 	}
-	a.unlBlocked.Store(blocked)
+	blockedChanged := a.unlBlocked.Swap(blocked) != blocked
 
-	if slices.Equal(trusted, a.lastEmitted) {
+	previousQuorumUnavailable := a.quorumUnavailable.Load()
+	errorThreshold := min(a.threshold, len(a.publishers)-a.threshold+1)
+	quorumUnavailable := unavailable >= errorThreshold
+	a.quorumUnavailable.Store(quorumUnavailable)
+
+	if slices.Equal(trusted, a.lastEmitted) && !blockedChanged && quorumUnavailable == previousQuorumUnavailable {
 		return
 	}
 	a.lastEmitted = trusted

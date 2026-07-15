@@ -64,16 +64,17 @@ type WebSocketServer struct {
 
 // WebSocketConnection represents a single WebSocket connection
 type WebSocketConnection struct {
-	ID              string
-	conn            *websocket.Conn
-	subscriptions   map[types.SubscriptionType]types.SubscriptionConfig
-	sendChannel     chan []byte
-	closeChannel    chan struct{}
-	mutex           sync.RWMutex
-	ctx             context.Context
-	cancel          context.CancelFunc
-	pathFindSession *PathFindSession // At most one active path_find session per connection
-	portCtx         *PortContext     // per-port config for role determination
+	ID                 string
+	conn               *websocket.Conn
+	subscriptions      map[types.SubscriptionType]types.SubscriptionConfig
+	sendChannel        chan []byte
+	closeChannel       chan struct{}
+	mutex              sync.RWMutex
+	ctx                context.Context
+	cancel             context.CancelFunc
+	pathFindSession    *PathFindSession // At most one active path_find session per connection
+	pathFindGeneration uint64
+	portCtx            *PortContext // per-port config for role determination
 	// user is the X-User header captured at upgrade time. Used by
 	// roleForRequest for RoleIdentified promotion when the connection
 	// came in through a secure_gateway peer.
@@ -352,7 +353,7 @@ func (ws *WebSocketServer) handleMessage(wsConn *WebSocketConnection, message []
 	// malformed request can be load-charged like rippled charges it.
 	peerIP := getWebSocketClientIP(wsConn.conn)
 	clientIP := resolveWSClientIP(peerIP, wsConn.forwardedFor, wsConn.portCtx)
-	role := roleForRequest(peerIP, wsConn.user, wsConn.portCtx)
+	role := roleForRequest(peerIP, wsConn.user, cmdMap, wsConn.portCtx)
 	loadCtx := newRpcContext(wsConn.ctx, role, types.DefaultApiVersion, clientIP, ws.loadPeerSource(), ws.services)
 	if rpcErr := gateLoad(ws.loadTracker, loadCtx, "", wsLog()); rpcErr != nil {
 		wsConn.closeWithPolicyViolation("threshold exceeded")
@@ -504,10 +505,12 @@ func (ws *WebSocketServer) executeSubscribe(wsConn *WebSocketConnection, ctx *ty
 	if err != nil {
 		return nil, types.RpcErrorInvalidParams("Invalid subscription parameters.")
 	}
+	prefix.ApiVersion = ctx.ApiVersion
 	if rpcErr := ws.subscriptionManager.HandleSubscribe(wsConn.legacy, prefix, ctx.IsAdmin); rpcErr != nil {
 		return nil, rpcErr
 	}
 	if rpcErr := applySubscriptionBooks(request.WireArrays().Books, func(bookRequest types.SubscriptionRequest) *types.RpcError {
+		bookRequest.ApiVersion = ctx.ApiVersion
 		if rpcErr := ws.subscriptionManager.HandleSubscribe(wsConn.legacy, bookRequest, ctx.IsAdmin); rpcErr != nil {
 			return rpcErr
 		}
@@ -631,16 +634,21 @@ func (ws *WebSocketServer) executeUnsubscribe(wsConn *WebSocketConnection, ctx *
 }
 
 func (ws *WebSocketServer) executePathFind(wsConn *WebSocketConnection, ctx *types.RpcContext, cmd types.WebSocketCommand) (any, *types.RpcError) {
-	var sub struct {
-		Subcommand string `json:"subcommand"`
+	var params map[string]json.RawMessage
+	if len(cmd.Params) == 0 || json.Unmarshal(cmd.Params, &params) != nil {
+		return nil, types.RpcErrorInvalidParams("Invalid parameters.")
 	}
-	if len(cmd.Params) > 0 {
-		if err := json.Unmarshal(cmd.Params, &sub); err != nil {
-			return nil, types.RpcErrorInvalidParams("Invalid parameters.")
-		}
+	rawSubcommand, exists := params["subcommand"]
+	if !exists {
+		return nil, types.RpcErrorInvalidParams("Invalid field 'subcommand'.")
 	}
+	var subcommand *string
+	if err := json.Unmarshal(rawSubcommand, &subcommand); err != nil || subcommand == nil {
+		return nil, types.RpcErrorInvalidParams("Invalid field 'subcommand'.")
+	}
+	wsConn.legacy.SetAPIVersion(ctx.ApiVersion)
 
-	switch sub.Subcommand {
+	switch *subcommand {
 	case "create":
 		ctx.LoadCost = uint32(loadtrack.LoadHeavy)
 		return ws.executePathFindCreate(wsConn, ctx, cmd)
@@ -656,9 +664,7 @@ func (ws *WebSocketServer) executePathFind(wsConn *WebSocketConnection, ctx *typ
 // executePathFindCreate creates a new persistent pathfinding session.
 // Any existing session on this connection is replaced (matching rippled).
 func (ws *WebSocketServer) executePathFindCreate(wsConn *WebSocketConnection, ctx *types.RpcContext, cmd types.WebSocketCommand) (any, *types.RpcError) {
-	wsConn.mutex.Lock()
-	wsConn.pathFindSession = nil
-	wsConn.mutex.Unlock()
+	wsConn.clearPathFindSession()
 
 	release, rpcErr := handlers.AcquirePathfind(ctx)
 	if rpcErr != nil {
@@ -681,30 +687,22 @@ func (ws *WebSocketServer) executePathFindCreate(wsConn *WebSocketConnection, ct
 			"No closed ledger available")
 	}
 
-	event := session.Execute(view)
+	event := session.Execute(view, false)
 
-	// Replace any existing session on this connection (matches rippled).
-	wsConn.mutex.Lock()
-	wsConn.pathFindSession = session
-	wsConn.mutex.Unlock()
+	wsConn.installPathFindSession(session)
 
 	return event, nil
 }
 
 // executePathFindClose closes the active pathfinding session on this connection.
 func (ws *WebSocketServer) executePathFindClose(wsConn *WebSocketConnection, _ *types.RpcContext, _ types.WebSocketCommand) (any, *types.RpcError) {
-	wsConn.mutex.Lock()
-	session := wsConn.pathFindSession
-	wsConn.pathFindSession = nil
-	wsConn.mutex.Unlock()
+	session := wsConn.clearPathFindSession()
 
 	if session == nil {
 		return nil, types.RpcErrorNoPathRequest()
 	}
 
-	event := *session.GetLastResult()
-	event.Closed = true
-	return &event, nil
+	return session.Close(), nil
 }
 
 // executePathFindStatus returns the current status of the active pathfinding session.
@@ -717,26 +715,22 @@ func (ws *WebSocketServer) executePathFindStatus(wsConn *WebSocketConnection, _ 
 		return nil, types.RpcErrorNoPathRequest()
 	}
 
-	event := *session.GetLastResult()
-	event.Status = "success"
-	return &event, nil
+	return session.Status(), nil
 }
 
 // UpdatePathFindSessions re-runs pathfinding for all active sessions on ledger close.
 // Called from the ledger close callback in server.go.
 func (ws *WebSocketServer) UpdatePathFindSessions(getView func() (types.LedgerStateView, error)) {
 	ws.connectionsMutex.RLock()
-	var activeSessions []*WebSocketConnection
+	var targets []pathFindUpdateTarget
 	for _, conn := range ws.connections {
-		conn.mutex.RLock()
-		if conn.pathFindSession != nil {
-			activeSessions = append(activeSessions, conn)
+		if target, ok := conn.snapshotPathFindUpdate(); ok {
+			targets = append(targets, target)
 		}
-		conn.mutex.RUnlock()
 	}
 	ws.connectionsMutex.RUnlock()
 
-	if len(activeSessions) == 0 {
+	if len(targets) == 0 {
 		return
 	}
 
@@ -746,27 +740,79 @@ func (ws *WebSocketServer) UpdatePathFindSessions(getView func() (types.LedgerSt
 		return
 	}
 
-	for _, conn := range activeSessions {
-		conn.mutex.RLock()
-		session := conn.pathFindSession
-		conn.mutex.RUnlock()
-
-		if session == nil {
+	for _, target := range targets {
+		if !target.current() {
 			continue
 		}
 
-		event := session.Execute(view)
+		event := target.session.Execute(view, true)
 
 		data, marshalErr := json.Marshal(event)
 		if marshalErr != nil {
 			continue
 		}
 
-		// Deliver through the shared TrySend so a persistently slow path-find
-		// subscriber accrues drops and is disconnected like any other outbound
-		// path, rather than silently skipping forever on a bare select/default.
-		conn.legacy.TrySend(data)
+		// The identity check and non-blocking enqueue share the connection lock.
+		// A close/replacement therefore either happens before this check and
+		// suppresses the stale event, or after the event is already ordered.
+		target.trySend(data)
 	}
+}
+
+type pathFindUpdateTarget struct {
+	connection *WebSocketConnection
+	session    *PathFindSession
+	generation uint64
+}
+
+func (c *WebSocketConnection) clearPathFindSession() *PathFindSession {
+	c.mutex.Lock()
+	defer c.mutex.Unlock()
+
+	session := c.pathFindSession
+	c.pathFindSession = nil
+	c.pathFindGeneration++
+	return session
+}
+
+func (c *WebSocketConnection) installPathFindSession(session *PathFindSession) {
+	c.mutex.Lock()
+	defer c.mutex.Unlock()
+
+	c.pathFindSession = session
+	c.pathFindGeneration++
+}
+
+func (c *WebSocketConnection) snapshotPathFindUpdate() (pathFindUpdateTarget, bool) {
+	c.mutex.RLock()
+	defer c.mutex.RUnlock()
+
+	if c.pathFindSession == nil {
+		return pathFindUpdateTarget{}, false
+	}
+	return pathFindUpdateTarget{
+		connection: c,
+		session:    c.pathFindSession,
+		generation: c.pathFindGeneration,
+	}, true
+}
+
+func (target pathFindUpdateTarget) current() bool {
+	target.connection.mutex.RLock()
+	defer target.connection.mutex.RUnlock()
+	return target.connection.pathFindSession == target.session &&
+		target.connection.pathFindGeneration == target.generation
+}
+
+func (target pathFindUpdateTarget) trySend(data []byte) bool {
+	target.connection.mutex.RLock()
+	defer target.connection.mutex.RUnlock()
+
+	if target.connection.pathFindSession != target.session ||
+		target.connection.pathFindGeneration != target.generation {
+		return false
+	}
+	return target.connection.legacy.TrySend(data)
 }
 
 func (ws *WebSocketServer) handleRPCMethod(wsConn *WebSocketConnection, ctx *types.RpcContext, cmd types.WebSocketCommand) {
@@ -892,7 +938,7 @@ func (ws *WebSocketServer) sendMissingCommand(wsConn *WebSocketConnection, reque
 	copyWSMetadata(resp, echo, id)
 	data, err := marshalWebSocketJSON(resp)
 	if err != nil {
-		wsLog().Error("Failed to marshal missingCommand response", "err", err)
+		wsLog().Error("Failed to marshal malformed WebSocket response", "err", err)
 		return
 	}
 	ws.deliver(wsConn, data)
@@ -1029,27 +1075,25 @@ func (ws *WebSocketServer) detachConnection(wsConn *WebSocketConnection) {
 // without waiting out the 90 s read deadline. Used by the slow-consumer
 // Disconnect callback and the send-error path; idempotent — closeConnection
 // closes again and gorilla tolerates the double close.
-func (wsConn *WebSocketConnection) closeSocket() {
-	wsConn.cancel()
-	wsConn.conn.Close()
+func (c *WebSocketConnection) closeSocket() {
+	c.cancel()
+	c.conn.Close()
 }
 
-func (wsConn *WebSocketConnection) closeWithPolicyViolation(reason string) {
-	wsConn.cancel()
-	_ = wsConn.conn.WriteControl(
+func (c *WebSocketConnection) closeWithPolicyViolation(reason string) {
+	c.cancel()
+	_ = c.conn.WriteControl(
 		websocket.CloseMessage,
 		websocket.FormatCloseMessage(websocket.ClosePolicyViolation, reason),
 		time.Now().Add(time.Second),
 	)
-	wsConn.conn.Close()
+	c.conn.Close()
 }
 
 func (ws *WebSocketServer) closeConnection(wsConn *WebSocketConnection) {
 	wsConn.cancel()
 
-	wsConn.mutex.Lock()
-	wsConn.pathFindSession = nil
-	wsConn.mutex.Unlock()
+	wsConn.clearPathFindSession()
 
 	ws.detachConnection(wsConn)
 
@@ -1227,8 +1271,8 @@ func (ws *WebSocketServer) RegisterAllMethods() {
 	handlers.RegisterAll(ws.methodRegistry)
 }
 
-// GetSubscriptionManager returns the subscription manager for event publishing
-func (ws *WebSocketServer) GetSubscriptionManager() *subscription.Manager {
+// SubscriptionManager returns the subscription manager for event publishing
+func (ws *WebSocketServer) SubscriptionManager() *subscription.Manager {
 	return ws.subscriptionManager
 }
 

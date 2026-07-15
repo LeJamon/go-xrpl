@@ -1,11 +1,12 @@
 package handlers
 
 import (
+	"bytes"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
-	"math"
+	"io"
 	"strconv"
 	"strings"
 
@@ -19,7 +20,7 @@ import (
 // SimulateMethod handles the simulate RPC method.
 // Runs a transaction against a snapshot of the open ledger without committing.
 // Reference: rippled Simulate.cpp
-type SimulateMethod struct{}
+type SimulateMethod struct{ BaseHandler }
 
 func (m *SimulateMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (any, *types.RpcError) {
 	setLoadMedium(ctx)
@@ -80,7 +81,13 @@ func (m *SimulateMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (
 		txJsonMap = decoded
 	} else {
 		var txObj map[string]any
-		if err := json.Unmarshal(rawParams["tx_json"], &txObj); err != nil {
+		decoder := json.NewDecoder(bytes.NewReader(rawParams["tx_json"]))
+		decoder.UseNumber()
+		if err := decoder.Decode(&txObj); err != nil {
+			return nil, types.RpcErrorExpectedField("tx_json", "object")
+		}
+		var trailing any
+		if err := decoder.Decode(&trailing); err != io.EOF {
 			return nil, types.RpcErrorExpectedField("tx_json", "object")
 		}
 		txJsonMap = txObj
@@ -93,6 +100,7 @@ func (m *SimulateMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (
 	if _, ok := txJsonMap["Account"]; !ok {
 		return nil, types.RpcErrorMissingField("tx.Account")
 	}
+	transactionType := txJsonMap["TransactionType"]
 
 	// rippled autofillTx() — Simulate.cpp:71-156. Steps run in the same
 	// order so rippled's error precedence is preserved:
@@ -138,8 +146,11 @@ func (m *SimulateMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (
 	// 4. TxnSignature — rippled Simulate.cpp:129-138.
 	if txnSig, ok := txJsonMap["TxnSignature"]; !ok {
 		txJsonMap["TxnSignature"] = ""
-	} else if sigStr, _ := txnSig.(string); sigStr != "" {
-		return nil, types.RpcErrorTxSigned()
+	} else {
+		sigStr, isString := txnSig.(string)
+		if !isString || sigStr != "" {
+			return nil, types.RpcErrorTxSigned()
+		}
 	}
 
 	// 5. Sequence — rippled Simulate.cpp:140-146. Account format is checked
@@ -174,13 +185,6 @@ func (m *SimulateMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (
 		}
 	}
 
-	// Normalize caller-supplied numeric Sequence / TicketSequence: JSON
-	// numbers unmarshal as float64 in map[string]interface{} but downstream
-	// consumers (binarycodec, simulate engine) expect an integer type.
-	if rpcErr := normalizeSequenceFields(txJsonMap); rpcErr != nil {
-		return nil, rpcErr
-	}
-
 	// Post-autofill Account format check — the Account-format slice of
 	// rippled's STParsedJSONObject (Simulate.cpp:328-330). Only catches
 	// the Account field; unknown-field / missing-required-field
@@ -190,7 +194,7 @@ func (m *SimulateMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (
 	// check and STParsedJSONObject surfaces invalid_field.
 	if accountStr, ok := txJsonMap["Account"].(string); !ok {
 		return nil, types.RpcErrorInvalidField("tx.Account")
-	} else if !types.IsValidXRPLAddress(accountStr) {
+	} else if !types.IsValidClassicAddress(accountStr) {
 		return nil, types.RpcErrorInvalidField("tx.Account")
 	}
 
@@ -206,10 +210,20 @@ func (m *SimulateMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (
 	// STParsedJSONObject. binarycodec.definitions.Get() carries the
 	// same registry rippled's STParsedJSONObject consults.
 	defs := binarycodecdefs.Get()
-	for k := range txJsonMap {
-		if _, ok := defs.Fields[k]; !ok {
-			return nil, types.RpcErrorInvalidParams(
-				fmt.Sprintf("Field 'tx_json.%s' is unknown.", k))
+	if parseMessage := serializedFieldParseMessage(txJsonMap, "tx_json", defs); parseMessage != "" {
+		return nil, types.RpcErrorInvalidParams(parseMessage)
+	}
+	// STParsedJSONObject stores TransactionType as its UInt16 code, while the
+	// Go transaction registry selects concrete types by their JSON name.
+	txJsonMap["TransactionType"] = transactionType
+
+	// STParsedJSONObject also caps each JSON array field at MaxJSONArrayElements
+	// (rippled maxSTParsedJSONArraySize); surface an overflow as invalidParams
+	// before the transaction is parsed and simulated. Other encode failures are
+	// left to the parse/validate path below.
+	if _, encErr := binarycodec.Encode(txJsonMap); encErr != nil {
+		if e := arraySizeRpcError(encErr); e != nil {
+			return nil, e
 		}
 	}
 
@@ -222,16 +236,15 @@ func (m *SimulateMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (
 	// STTx ctor parity — rippled Simulate.cpp:332-343. A parse failure or
 	// missing-required-field surface as
 	// `error: "invalidTransaction"` + `error_exception: <reason>`
-	// instead of flowing into the engine as a TER. The duplicate
-	// Validate() vs the engine's own Validate is intentional: it
-	// guarantees the error envelope shape matches rippled even when the
-	// underlying message text differs.
+	// instead of flowing into the engine as a TER. This early structural
+	// validation guarantees the error envelope shape matches rippled even
+	// when type-specific engine preflight is rules-aware.
 	parsedTx, parseErr := tx.ParseJSON(txJSON)
 	if parseErr != nil {
 		return nil, types.RpcErrorInvalidTransaction(parseErr.Error())
 	}
-	if validateErr := parsedTx.Validate(); validateErr != nil {
-		return nil, types.RpcErrorInvalidTransaction(validateErr.Error())
+	if templateErr := tx.ValidateTemplateFields(parsedTx.TxType(), txJsonMap); templateErr != nil {
+		return nil, types.RpcErrorInvalidTransaction(templateErr.Error())
 	}
 
 	result, err := ctx.Services.Ledger.SimulateTransaction(txJSON)
@@ -255,10 +268,19 @@ func (m *SimulateMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (
 
 	// rippled emits "meta" (JSON) when binary=false and "meta_blob" (hex)
 	// when binary=true. Always emit when Metadata is present, mirroring
-	// rippled's `if (result.metadata)` guard (Simulate.cpp:264-276).
+	// rippled's `if (result.metadata)` guard (Simulate.cpp:264-276). The
+	// synthetic fields (delivered_amount / nftoken_id / nftoken_ids / offer_id /
+	// mpt_issuance_id) are a JSON-meta-only enrichment; meta_blob carries only
+	// the raw serialized metadata (Simulate.cpp:277-288).
 	if result.Metadata != nil {
 		if binaryOutput {
 			response["meta_blob"] = strings.ToUpper(hex.EncodeToString(result.Metadata.Blob))
+		} else if metaMap := metadataToMap(result.Metadata.JSON); metaMap != nil {
+			enrichSimulateMeta(metaMap, txJsonMap, SyntheticMetadataContext{
+				LedgerSequence: result.CurrentLedger,
+				CloseTime:      result.CurrentLedgerCloseTime,
+			})
+			response["meta"] = metaMap
 		} else {
 			response["meta"] = result.Metadata.JSON
 		}
@@ -273,14 +295,6 @@ func (m *SimulateMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (
 	}
 
 	return response, nil
-}
-
-func (m *SimulateMethod) RequiredRole() types.Role {
-	return types.RoleGuest
-}
-
-func (m *SimulateMethod) SupportedApiVersions() []int {
-	return []int{types.ApiVersion1, types.ApiVersion2, types.ApiVersion3}
 }
 
 func (m *SimulateMethod) RequiredCondition() types.Condition {
@@ -320,54 +334,12 @@ func processSigners(txJsonMap map[string]any) *types.RpcError {
 		}
 		if txnSig, ok := signerObj["TxnSignature"]; !ok {
 			signerObj["TxnSignature"] = ""
-		} else if sigStr, _ := txnSig.(string); sigStr != "" {
-			return types.RpcErrorTxSigned()
-		}
-	}
-	return nil
-}
-
-// normalizeSequenceFields coerces caller-supplied Sequence and
-// TicketSequence values to uint32 (JSON numbers unmarshal as float64 in
-// map[string]interface{}, but downstream consumers expect an integer
-// type). Values outside [0, math.MaxUint32] are rejected to mirror
-// rippled's STParsedJSONObject behaviour on UInt32 fields.
-func normalizeSequenceFields(txJsonMap map[string]any) *types.RpcError {
-	for _, k := range [...]string{"Sequence", "TicketSequence"} {
-		v, ok := txJsonMap[k]
-		if !ok {
-			continue
-		}
-		var (
-			val   uint32
-			valid bool
-		)
-		switch n := v.(type) {
-		case uint32:
-			val, valid = n, true
-		case float64:
-			if n >= 0 && n <= math.MaxUint32 && n == math.Trunc(n) {
-				val, valid = uint32(n), true
+		} else {
+			sigStr, isString := txnSig.(string)
+			if !isString || sigStr != "" {
+				return types.RpcErrorTxSigned()
 			}
-		case int:
-			if n >= 0 && uint64(n) <= math.MaxUint32 {
-				val, valid = uint32(n), true
-			}
-		case int64:
-			if n >= 0 && uint64(n) <= math.MaxUint32 {
-				val, valid = uint32(n), true
-			}
-		case uint64:
-			if n <= math.MaxUint32 {
-				val, valid = uint32(n), true
-			}
-		default:
-			continue
 		}
-		if !valid {
-			return types.RpcErrorInvalidField("tx." + k)
-		}
-		txJsonMap[k] = val
 	}
 	return nil
 }

@@ -172,7 +172,7 @@ func orcMkNum(mantissa int64, exponent int) XRPLNumber {
 	return NewXRPLNumber(mantissa, exponent)
 }
 
-func orcStr(n XRPLNumber) string { return fmt.Sprintf("{%d,%d}", n.mantissa, n.exponent) }
+func orcStr(n XRPLNumber) string { return fmt.Sprintf("{%d,%d}", n.Mantissa(), n.Exponent()) }
 
 // orcRun reports whether fn panicked.
 func orcRun(fn func()) (panicked bool) {
@@ -191,8 +191,8 @@ func orcRun(fn func()) (panicked bool) {
 // decade).
 func orcWithin(t *testing.T, label string, got XRPLNumber, want *big.Rat, we, maxUlps int) {
 	t.Helper()
-	scale := max(got.exponent, we)
-	diff := new(big.Rat).Sub(orcValueRat(got.mantissa, got.exponent), want)
+	scale := max(got.Exponent(), we)
+	diff := new(big.Rat).Sub(orcValueRat(got.Mantissa(), got.Exponent()), want)
 	diff.Abs(diff)
 	ulp := new(big.Rat)
 	if scale >= 0 {
@@ -238,8 +238,8 @@ func FuzzXRPLNumberArithmetic(f *testing.F) {
 		b := orcMkNum(mB, orcExp(eB, -2048, 2048))
 		kind := op % 4
 
-		ra := orcValueRat(a.mantissa, a.exponent)
-		rb := orcValueRat(b.mantissa, b.exponent)
+		ra := orcValueRat(a.Mantissa(), a.Exponent())
+		rb := orcValueRat(b.Mantissa(), b.Exponent())
 		want := new(big.Rat)
 		switch kind {
 		case 0:
@@ -316,8 +316,8 @@ func FuzzXRPLNumberArithmetic(f *testing.F) {
 			}
 			orcWithin(t, label, got, want, we, maxUlps)
 		default:
-			if got.mantissa != wm || got.exponent != we {
-				t.Fatalf("%s = {%d,%d}, oracle {%d,%d}", label, got.mantissa, got.exponent, wm, we)
+			if got.Mantissa() != wm || got.Exponent() != we {
+				t.Fatalf("%s = {%d,%d}, oracle {%d,%d}", label, got.Mantissa(), got.Exponent(), wm, we)
 			}
 		}
 	})
@@ -356,7 +356,7 @@ func FuzzXRPLNumberProperties(f *testing.F) {
 		zero := xrplNumberZero()
 		one := NewXRPLNumberFromInt(1)
 
-		if !NewXRPLNumber(a.mantissa, a.exponent).Equal(a) {
+		if !NewXRPLNumber(a.Mantissa(), a.Exponent()).Equal(a) {
 			t.Fatalf("normalize not idempotent for %s", orcStr(a))
 		}
 		if !a.Negate().Negate().Equal(a) {
@@ -424,8 +424,8 @@ func orcCheckNormalize(t *testing.T, mantissa int64, exponent int) {
 			t.Fatalf("normalize(%d,%d): expected underflow to zero, got %s", mantissa, exponent, orcStr(n))
 		}
 	default:
-		if n.mantissa != wm || n.exponent != we {
-			t.Fatalf("normalize(%d,%d) = {%d,%d}, oracle {%d,%d}", mantissa, exponent, n.mantissa, n.exponent, wm, we)
+		if n.Mantissa() != wm || n.Exponent() != we {
+			t.Fatalf("normalize(%d,%d) = {%d,%d}, oracle {%d,%d}", mantissa, exponent, n.Mantissa(), n.Exponent(), wm, we)
 		}
 	}
 }
@@ -455,7 +455,7 @@ func FuzzXRPLNumberToInt64(f *testing.F) {
 
 	f.Fuzz(func(t *testing.T, mant int64, e int32) {
 		n := orcMkNum(mant, orcExp(e, -40, 2))
-		r := orcValueRat(n.mantissa, n.exponent)
+		r := orcValueRat(n.Mantissa(), n.Exponent())
 		for _, mode := range []RoundingMode{RoundToNearest, RoundTowardsZero, RoundDownward, RoundUpward} {
 			want := orcRoundRatToInt(r, mode)
 			if !want.IsInt64() {
@@ -518,8 +518,8 @@ func FuzzXRPLNumberRoot2(f *testing.F) {
 			return
 		}
 		sq := r.Mul(r)
-		ratN := orcValueRat(n.mantissa, n.exponent)
-		diff := new(big.Rat).Sub(orcValueRat(sq.mantissa, sq.exponent), ratN)
+		ratN := orcValueRat(n.Mantissa(), n.Exponent())
+		diff := new(big.Rat).Sub(orcValueRat(sq.Mantissa(), sq.Exponent()), ratN)
 		diff.Abs(diff)
 		tol := new(big.Rat).Mul(ratN, orcRelTol)
 		if diff.Cmp(tol) > 0 {
@@ -577,8 +577,8 @@ func FuzzIOUArithmetic(f *testing.F) {
 		a := NewIOUAmountValue(mA, expA)
 		b := NewIOUAmountValue(mB, expB)
 
-		ra := orcValueRat(a.mantissa, a.exponent)
-		rb := orcValueRat(b.mantissa, b.exponent)
+		ra := orcValueRat(a.Mantissa(), a.Exponent())
+		rb := orcValueRat(b.Mantissa(), b.Exponent())
 		want := new(big.Rat)
 		add := op%2 == 0
 		if add {
@@ -604,24 +604,24 @@ func FuzzIOUArithmetic(f *testing.F) {
 		switch {
 		case want.Sign() == 0: // exact cancellation -> canonical IOU zero
 			if !got.IsZero() {
-				t.Fatalf("IOU op add=%v: expected zero, got {%d,%d}", add, got.mantissa, got.exponent)
+				t.Fatalf("IOU op add=%v: expected zero, got {%d,%d}", add, got.Mantissa(), got.Exponent())
 			}
 		case overflow:
 			if !panicked {
 				t.Fatalf("IOU op add=%v on {%d,%d},{%d,%d}: expected overflow panic (oracle exp %d)",
-					add, a.mantissa, a.exponent, b.mantissa, b.exponent, we)
+					add, a.Mantissa(), a.Exponent(), b.Mantissa(), b.Exponent(), we)
 			}
 		case panicked:
 			t.Fatalf("IOU op add=%v on {%d,%d},{%d,%d}: unexpected panic (oracle {%d,%d})",
-				add, a.mantissa, a.exponent, b.mantissa, b.exponent, wm, we)
+				add, a.Mantissa(), a.Exponent(), b.Mantissa(), b.Exponent(), wm, we)
 		case underflow:
 			if !got.IsZero() {
-				t.Fatalf("IOU op add=%v: expected underflow to zero, got {%d,%d}", add, got.mantissa, got.exponent)
+				t.Fatalf("IOU op add=%v: expected underflow to zero, got {%d,%d}", add, got.Mantissa(), got.Exponent())
 			}
 		default:
-			if got.mantissa != wm || got.exponent != we {
+			if got.Mantissa() != wm || got.Exponent() != we {
 				t.Fatalf("IOU op add=%v on {%d,%d},{%d,%d} = {%d,%d}, oracle {%d,%d}",
-					add, a.mantissa, a.exponent, b.mantissa, b.exponent, got.mantissa, got.exponent, wm, we)
+					add, a.Mantissa(), a.Exponent(), b.Mantissa(), b.Exponent(), got.Mantissa(), got.Exponent(), wm, we)
 			}
 		}
 	})
@@ -668,6 +668,6 @@ func TestArithmeticBoundaries(t *testing.T) {
 		t.Fatal("IOU Mul overflow did not panic")
 	}
 	if got := lo.Mul(lo, false).IOU(); !got.IsZero() {
-		t.Fatalf("IOU Mul underflow = {%d,%d}, want zero", got.mantissa, got.exponent)
+		t.Fatalf("IOU Mul underflow = {%d,%d}, want zero", got.Mantissa(), got.Exponent())
 	}
 }

@@ -3,6 +3,7 @@ package adaptor
 import (
 	"context"
 	"log/slog"
+	"math"
 	"testing"
 	"time"
 
@@ -37,6 +38,31 @@ func TestStup_MergeValidators_OverlappingSets(t *testing.T) {
 	ids, masters := mergeValidators(aIDs, aMKs, bIDs, bMKs)
 	assert.Len(t, ids, 1, "duplicate master key must be deduplicated")
 	assert.Len(t, masters, 1)
+}
+
+func TestStartupIncludeLocalValidator(t *testing.T) {
+	master := [33]byte{0x02, 0xAA}
+	identity := &ValidatorIdentity{
+		MasterKey: master,
+		NodeID:    consensus.CalcNodeID(master),
+	}
+
+	ids, masters := includeLocalValidator(nil, nil, identity)
+	require.Equal(t, []consensus.NodeID{identity.NodeID}, ids)
+	require.Equal(t, [][33]byte{master}, masters)
+
+	ids, masters = includeLocalValidator(ids, masters, identity)
+	require.Len(t, ids, 1)
+	require.Len(t, masters, 1)
+	configuredIDs, configuredMasters := excludeLocalValidator(ids, masters, identity)
+	require.Empty(t, configuredIDs)
+	require.Empty(t, configuredMasters)
+
+	c := &Components{Adaptor: &Adaptor{identity: identity}}
+	effectiveIDs, effectiveMasters := c.snapshotEffectiveStatic()
+	require.Equal(t, []consensus.NodeID{identity.NodeID}, effectiveIDs)
+	require.Equal(t, [][33]byte{master}, effectiveMasters)
+	require.Empty(t, c.StaticTrustedMasterKeys())
 }
 
 func TestStup_MergeValidators_EmptyInputs(t *testing.T) {
@@ -231,9 +257,9 @@ func TestStup_SnapshotStatic_ReturnsCopy(t *testing.T) {
 
 	// Mutating the returned slice must not affect the stored slice.
 	ids[0] = consensus.NodeID{0xFF}
-	c.staticMu.RLock()
+	c.trustMergeMu.Lock()
 	stored := c.staticValidators[0]
-	c.staticMu.RUnlock()
+	c.trustMergeMu.Unlock()
 	assert.NotEqual(t, consensus.NodeID{0xFF}, stored)
 }
 
@@ -422,6 +448,25 @@ func TestStup_ReloadStaticValidators_WithNonNilValidatorList(t *testing.T) {
 	assert.ElementsMatch(t, newIDs, trusted)
 }
 
+func TestStup_WireValidatorListTrustInitializesUnavailableQuorum(t *testing.T) {
+	static := consensus.NodeID{0xBB}
+	master := [33]byte{0x02, 0xBB}
+	a := New(Config{Validators: []consensus.NodeID{static}})
+	agg := stup_newAggregator(t)
+	a.SetQuorumUnavailableFunc(agg.IsQuorumUnavailable)
+	c := &Components{
+		Adaptor:          a,
+		ValidatorList:    agg,
+		staticValidators: []consensus.NodeID{static},
+		staticMasterKeys: [][33]byte{master},
+	}
+
+	wireValidatorListTrust(c)
+
+	assert.Equal(t, math.MaxInt, a.GetQuorum())
+	assert.Equal(t, []consensus.NodeID{static}, a.GetTrustedValidators())
+}
+
 func TestStup_ComponentsStop_NilSafe(t *testing.T) {
 	c := &Components{}
 	assert.NotPanics(t, func() { c.Stop() })
@@ -472,7 +517,7 @@ func TestStup_ComponentsStart_AndStop(t *testing.T) {
 	ad := newTestAdaptor(t)
 	mm := NewModeManager(ad)
 
-	overlay, err := peermanagement.New()
+	overlay, err := peermanagement.New(peermanagement.WithListenAddr("127.0.0.1:0"))
 	require.NoError(t, err)
 
 	eng := &mockEngine{}
@@ -500,6 +545,29 @@ func TestStup_ComponentsStart_AndStop(t *testing.T) {
 	assert.Nil(t, c.vlTickCancel, "no ValidatorList configured")
 
 	assert.NotPanics(t, func() { c.Stop() })
+}
+
+func TestStup_ComponentsStart_ListenerBindFailure(t *testing.T) {
+	// A listener bind failure must fail boot loudly rather than leaving the
+	// node running deaf. A malformed listen address makes startListener return
+	// before signalling ListenerReady, so Start must surface the error.
+	overlay, err := peermanagement.New(peermanagement.WithListenAddr("not-a-valid-listen-address"))
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = overlay.Stop() })
+
+	c := &Components{
+		Overlay: overlay,
+		Engine:  &mockEngine{},
+	}
+
+	done := make(chan error, 1)
+	go func() { done <- c.Start() }()
+	select {
+	case startErr := <-done:
+		require.Error(t, startErr, "a listener bind failure must fail boot")
+	case <-time.After(5 * time.Second):
+		t.Fatal("Start hung on a listener bind failure instead of returning an error")
+	}
 }
 
 func TestStup_ComponentsStart_EngineStartError(t *testing.T) {
@@ -563,17 +631,54 @@ func TestStup_OverlayOptionsFromConfig_BootstrapAndFixed(t *testing.T) {
 	assert.Contains(t, pcfg.FixedPeers, "alt.ripple.com:51235")
 }
 
-func TestStup_OverlayOptionsFromConfig_PeersMaxAndPrivate(t *testing.T) {
-	cfg := &config.Config{
-		PeersMax:    50,
-		PeerPrivate: 1,
+func TestStup_OverlayOptionsFromConfig_PeerLimits(t *testing.T) {
+	peerPort := map[string]config.PortConfig{
+		"port_peer": {IP: "0.0.0.0", Port: 51235, Protocol: "peer"},
 	}
-	pcfg := peermanagement.DefaultConfig()
-	for _, opt := range OverlayOptionsFromConfig(cfg) {
-		opt(&pcfg)
+	tests := []struct {
+		name         string
+		peersMax     int
+		peerPrivate  int
+		ports        map[string]config.PortConfig
+		wantMax      int
+		wantInbound  int
+		wantOutbound int
+		wantIPLimit  int
+	}{
+		{name: "omitted limit uses default", ports: peerPort, wantMax: 21, wantInbound: 11, wantOutbound: 10, wantIPLimit: 2},
+		{name: "small limit is clamped", peersMax: 5, ports: peerPort, wantMax: 10, wantInbound: 0, wantOutbound: 10, wantIPLimit: 1},
+		{name: "twenty peers", peersMax: 20, ports: peerPort, wantMax: 20, wantInbound: 10, wantOutbound: 10, wantIPLimit: 2},
+		{name: "rippled default", peersMax: 21, ports: peerPort, wantMax: 21, wantInbound: 11, wantOutbound: 10, wantIPLimit: 2},
+		{name: "large limit", peersMax: 100, ports: peerPort, wantMax: 100, wantInbound: 85, wantOutbound: 15, wantIPLimit: 6},
+		{name: "private", peersMax: 20, peerPrivate: 1, ports: peerPort, wantMax: 20, wantInbound: 0, wantOutbound: 20, wantIPLimit: 1},
+		{name: "no peer listener", peersMax: 20, wantMax: 20, wantInbound: 0, wantOutbound: 20, wantIPLimit: 1},
 	}
-	assert.Equal(t, 50, pcfg.MaxPeers)
-	assert.True(t, pcfg.PrivateMode)
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := &config.Config{
+				PeersMax:    tt.peersMax,
+				PeerPrivate: tt.peerPrivate,
+				Ports:       tt.ports,
+			}
+			pcfg := peermanagement.DefaultConfig()
+			for _, opt := range OverlayOptionsFromConfig(cfg) {
+				opt(&pcfg)
+			}
+
+			assert.Equal(t, tt.wantMax, pcfg.MaxPeers)
+			assert.Equal(t, tt.wantInbound, pcfg.MaxInbound)
+			assert.Equal(t, tt.wantOutbound, pcfg.MaxOutbound)
+			assert.Equal(t, tt.peerPrivate != 0, pcfg.PrivateMode)
+			if tt.ports == nil {
+				assert.Empty(t, pcfg.ListenAddr)
+			} else {
+				assert.Equal(t, "0.0.0.0:51235", pcfg.ListenAddr)
+			}
+			require.NoError(t, pcfg.Validate())
+			assert.Equal(t, tt.wantIPLimit, pcfg.IPLimit)
+		})
+	}
 }
 
 func TestStup_OverlayOptionsFromConfig_LedgerReplayAndMaxTx(t *testing.T) {

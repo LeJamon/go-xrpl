@@ -1,4 +1,4 @@
-package testing
+package jtx
 
 import (
 	"github.com/LeJamon/go-xrpl/internal/tx"

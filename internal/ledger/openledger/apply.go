@@ -116,29 +116,13 @@ type ApplyConfig struct {
 // inline-queueing during a replay would re-enter the queue path we are
 // supposed to be draining.
 
-// applyAndClassify runs a single tx through bp against view and classifies
-// the engine result per the selected Mode.
-//
-// OpenLedgerMode: tec is always Success+commit, matching
-// OpenLedger::apply_one (OpenLedger.cpp:170-189) where
-// result.applied = isTesSuccess || isTecClaim (Transactor.cpp:1108-1218).
-//
-// BuildLedgerMode: tec is Retry on retriable passes (certainRetry=true)
-// and Success+commit on the final non-retry pass — mirrors
-// BuildLedger.cpp's apply loop.
-//
-// Shared by ApplyTxs's per-pass inner loop and OpenLedger.Submit so the
-// success/tec/retry classification lives in exactly one place.
-func applyAndClassify(view *ledger.Ledger, bp *txengine.BlockProcessor, transaction tx.Transaction, blob []byte, certainRetry bool, mode Mode, logger xrpllog.Logger) Result {
+// applyAndClassify runs a single transaction through bp. Applied results are
+// successful regardless of TER; tef/tem/tel results fail; all other non-applied
+// results retry. The engine's apply flags decide whether a tec result is applied.
+func applyAndClassify(bp *txengine.BlockProcessor, transaction tx.Transaction, blob []byte, mode Mode, logger xrpllog.Logger) Result {
 	result, applyErr := bp.ApplyTransaction(transaction, blob)
 	if applyErr != nil {
-		// Surface the error rather than swallowing it. A non-nil applyErr
-		// drops the tx (no commit, no retry) while the engine may already
-		// have mutated state — yielding a ledger with advanced state but the
-		// tx absent from the tx tree (an empty/short-tx-tree consensus fork,
-		// e.g. metadata that failed to binary-serialize). Logged loud so a
-		// divergence shows the underlying error + tx.
-		logger.Warn("apply error — tx dropped (state may be mutated)",
+		logger.Warn("apply error — staged transaction discarded",
 			"mode", mode,
 			"hash", fmt.Sprintf("%x", result.Hash[:8]),
 			"err", applyErr)
@@ -146,29 +130,12 @@ func applyAndClassify(view *ledger.Ledger, bp *txengine.BlockProcessor, transact
 	}
 	engineResult := result.ApplyResult.Result
 	switch {
-	case engineResult.IsSuccess():
-		if err := view.AddTransactionWithMeta(result.Hash, result.TxWithMetaBlob); err != nil {
-			logger.Warn("AddTransactionWithMeta failed for committed tx (tree out of sync with state)",
-				"hash", fmt.Sprintf("%x", result.Hash[:8]),
-				"ter", engineResult.String(),
-				"err", err)
-		}
+	case result.ApplyResult.Applied:
 		return ResultSuccess
-	case engineResult.IsTec():
-		if mode == BuildLedgerMode && certainRetry {
-			return ResultRetry
-		}
-		if err := view.AddTransactionWithMeta(result.Hash, result.TxWithMetaBlob); err != nil {
-			logger.Warn("AddTransactionWithMeta failed for committed tec tx (tree out of sync with state)",
-				"hash", fmt.Sprintf("%x", result.Hash[:8]),
-				"ter", engineResult.String(),
-				"err", err)
-		}
-		return ResultSuccess
-	case engineResult.ShouldRetry():
-		return ResultRetry
-	default:
+	case engineResult.IsTef(), engineResult.IsTem(), engineResult.IsTel():
 		return ResultFailure
+	default:
+		return ResultRetry
 	}
 }
 
@@ -209,7 +176,7 @@ func applyOneSingle(view *ledger.Ledger, transaction tx.Transaction, blob []byte
 	if logger == nil {
 		logger = xrpllog.Discard()
 	}
-	return applyAndClassify(view, bp, transaction, blob, retry, cfg.Mode, logger)
+	return applyAndClassify(bp, transaction, blob, cfg.Mode, logger)
 }
 
 func ApplyTxs(view *ledger.Ledger, txs []PendingTx, retries *[]PendingTx, cfg ApplyConfig) error {
@@ -283,7 +250,7 @@ func ApplyTxs(view *ledger.Ledger, txs []PendingTx, retries *[]PendingTx, cfg Ap
 		if view.TxExists(ptx.Hash) {
 			continue
 		}
-		switch applyAndClassify(view, bp, parsed[i], ptx.Blob, true, cfg.Mode, logger) {
+		switch applyAndClassify(bp, parsed[i], ptx.Blob, cfg.Mode, logger) {
 		case ResultRetry:
 			retrySet = append(retrySet, i)
 		}
@@ -307,7 +274,7 @@ func ApplyTxs(view *ledger.Ledger, txs []PendingTx, retries *[]PendingTx, cfg Ap
 			if parsed[idx] == nil {
 				continue
 			}
-			switch applyAndClassify(view, bp, parsed[idx], ptx.Blob, certainRetry, cfg.Mode, logger) {
+			switch applyAndClassify(bp, parsed[idx], ptx.Blob, cfg.Mode, logger) {
 			case ResultSuccess:
 				changes++
 			case ResultRetry:

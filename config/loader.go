@@ -13,7 +13,7 @@ import (
 // LoadConfig loads configuration from the config file.
 // No defaults are applied — every required value must be present in the config file.
 // Returns an error listing ALL missing/invalid fields at once.
-func LoadConfig(paths ConfigPaths) (*Config, error) {
+func LoadConfig(paths Paths) (*Config, error) {
 	v := viper.New()
 
 	// Load main configuration file (required)
@@ -34,13 +34,17 @@ func LoadConfig(paths ConfigPaths) (*Config, error) {
 	))); err != nil {
 		return nil, fmt.Errorf("failed to unmarshal config: %w", err)
 	}
+	config.Voting.ReferenceFeeSet = v.IsSet("voting.reference_fee")
+	config.Voting.AccountReserveSet = v.IsSet("voting.account_reserve")
+	config.Voting.OwnerReserveSet = v.IsSet("voting.owner_reserve")
 
-	// Load validators configuration
-	validators, err := loadValidatorsConfig(paths, config.ValidatorsFile)
-	if err != nil {
-		return nil, fmt.Errorf("failed to load validators config: %w", err)
+	if !paths.SkipValidators {
+		validators, err := loadValidatorsConfig(paths, config.ValidatorsFile)
+		if err != nil {
+			return nil, fmt.Errorf("failed to load validators config: %w", err)
+		}
+		config.Validators = *validators
 	}
-	config.Validators = *validators
 
 	// Process dynamic port configurations
 	if err := processPorts(&config, v); err != nil {
@@ -78,11 +82,12 @@ func loadMainConfig(v *viper.Viper, configPath string) error {
 //
 // The operator's validators_file key takes precedence over a
 // caller-supplied paths.Validators; a relative validators_file is
-// resolved against the main config file's directory, matching rippled's
-// handling of [validators_file]. Whichever path is selected MUST exist
-// — both sources are explicit requests for a validators file.
-func loadValidatorsConfig(paths ConfigPaths, validatorsFile string) (*ValidatorsConfig, error) {
+// resolved against the main config file's directory. With neither
+// explicit source, an adjacent validators.txt is loaded when present.
+// Explicitly selected files must exist.
+func loadValidatorsConfig(paths Paths, validatorsFile string) (*ValidatorsConfig, error) {
 	var filePath string
+	implicit := false
 	switch {
 	case validatorsFile != "":
 		filePath = validatorsFile
@@ -92,30 +97,34 @@ func loadValidatorsConfig(paths ConfigPaths, validatorsFile string) (*Validators
 	case paths.Validators != "":
 		filePath = paths.Validators
 	default:
-		// No validators file specified — return empty config
-		return &ValidatorsConfig{}, nil
+		if paths.Main == "" {
+			return &ValidatorsConfig{}, nil
+		}
+		filePath = filepath.Join(filepath.Dir(paths.Main), "validators.txt")
+		implicit = true
+		info, err := os.Lstat(filePath)
+		if err != nil {
+			if os.IsNotExist(err) {
+				return &ValidatorsConfig{}, nil
+			}
+			return nil, fmt.Errorf("stat default validators file %s: %w", filePath, err)
+		}
+		if !info.Mode().IsRegular() && info.Mode()&os.ModeSymlink == 0 {
+			return &ValidatorsConfig{}, nil
+		}
 	}
 
 	if _, err := os.Stat(filePath); os.IsNotExist(err) {
-		// Try alternative formats
-		if before, ok := strings.CutSuffix(filePath, ".toml"); ok {
-			txtPath := before + ".txt"
-			if _, err := os.Stat(txtPath); err == nil {
-				return loadValidatorsTxtFile(txtPath)
-			}
+		if implicit {
+			return &ValidatorsConfig{}, nil
 		}
 		return nil, fmt.Errorf("validators file not found: %s", filePath)
 	}
 
-	if strings.HasSuffix(filePath, ".toml") {
+	if strings.EqualFold(filepath.Ext(filePath), ".toml") {
 		return loadValidatorsTomlFile(filePath)
 	}
-
-	if strings.HasSuffix(filePath, ".txt") {
-		return loadValidatorsTxtFile(filePath)
-	}
-
-	return nil, fmt.Errorf("unsupported validators file format: %s (supported: .toml, .txt)", filePath)
+	return loadValidatorsTxtFile(filePath)
 }
 
 // loadValidatorsTomlFile loads validators from TOML format
@@ -130,6 +139,9 @@ func loadValidatorsTomlFile(filePath string) (*ValidatorsConfig, error) {
 	var validators ValidatorsConfig
 	if err := v.Unmarshal(&validators); err != nil {
 		return nil, fmt.Errorf("failed to unmarshal validators config: %w", err)
+	}
+	if err := validateValidatorsFile(&validators); err != nil {
+		return nil, err
 	}
 
 	return &validators, nil
@@ -146,8 +158,21 @@ func loadValidatorsTxtFile(filePath string) (*ValidatorsConfig, error) {
 	if err != nil {
 		return nil, fmt.Errorf("failed to parse validators file %s: %w", filePath, err)
 	}
+	if err := validateValidatorsFile(validators); err != nil {
+		return nil, fmt.Errorf("invalid validators file %s: %w", filePath, err)
+	}
 
 	return validators, nil
+}
+
+func validateValidatorsFile(validators *ValidatorsConfig) error {
+	if len(validators.ValidatorListSites) > 0 && len(validators.ValidatorListKeys) == 0 {
+		return fmt.Errorf("validator_list_sites requires at least one validator_list_keys entry")
+	}
+	if len(validators.Validators) == 0 && len(validators.ValidatorListKeys) == 0 {
+		return fmt.Errorf("validators file must configure validators or validator_list_keys")
+	}
+	return nil
 }
 
 // processPorts processes dynamic port configurations
@@ -205,6 +230,8 @@ func loadPortConfig(v *viper.Viper, portName string, serverDefaults ServerConfig
 	if err := portViper.Unmarshal(&portConfig); err != nil {
 		return PortConfig{}, fmt.Errorf("failed to unmarshal port config: %w", err)
 	}
+	portConfig.Admin = append(append([]string(nil), serverDefaults.Admin...), portConfig.Admin...)
+	portConfig.SecureGateway = append(append([]string(nil), serverDefaults.SecureGateway...), portConfig.SecureGateway...)
 
 	return portConfig, nil
 }
@@ -230,5 +257,11 @@ func applyServerDefaults(portViper *viper.Viper, serverDefaults ServerConfig) {
 	}
 	if serverDefaults.Password != "" {
 		portViper.SetDefault("password", serverDefaults.Password)
+	}
+	if serverDefaults.AdminUser != "" {
+		portViper.SetDefault("admin_user", serverDefaults.AdminUser)
+	}
+	if serverDefaults.AdminPassword != "" {
+		portViper.SetDefault("admin_password", serverDefaults.AdminPassword)
 	}
 }

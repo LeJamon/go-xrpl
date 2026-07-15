@@ -64,86 +64,39 @@ func (n *NFTokenCreateOffer) TxType() tx.Type {
 	return tx.TypeNFTokenCreateOffer
 }
 
-// Reference: rippled NFTokenCreateOffer.cpp preflight and tokenOfferCreatePreflight
-// IMPORTANT: validation order must match rippled exactly (amount → expiration → owner → destination)
+// GetFlagsMask matches rippled tfNFTokenCreateOfferMask = ~(tfUniversal |
+// tfSellNFToken). The engine enforces it at preflight0, ahead of the
+// account/fee/signing-key checks.
+func (n *NFTokenCreateOffer) GetFlagsMask(*amendment.Rules) uint32 {
+	return tfNFTokenCreateOfferMask
+}
+
+// Validate performs the rules-free structural checks. The flag mask is enforced
+// by the engine (GetFlagsMask), and the amount/expiration/owner/destination
+// checks live in PreflightRules because their order and gating depend on the
+// active amendments.
+// Reference: rippled NFTokenCreateOffer.cpp preflight.
 func (n *NFTokenCreateOffer) Validate() error {
 	if err := n.BaseTx.Validate(); err != nil {
 		return err
 	}
 
-	if n.GetFlags()&tfNFTokenCreateOfferMask != 0 {
-		return ter.Errorf(ter.TemINVALID_FLAG, "invalid NFTokenCreateOffer flags")
-	}
-
+	// sfNFTokenID is soeREQUIRED in rippled; enforce its presence here so
+	// PreflightRules can safely derive the token flags from it.
 	if n.NFTokenID == "" {
 		return ter.Errorf(ter.TemMALFORMED, "NFTokenID is required")
 	}
 
-	// Parse NFToken flags from token ID to validate
-	nftFlags := getNFTokenFlags(n.NFTokenID)
-
-	isSellOffer := n.GetFlags()&NFTokenCreateOfferFlagSellNFToken != 0
-
-	// --- tokenOfferCreatePreflight order (must match rippled exactly) ---
-
-	// 1. Negative amount check — gated on fixNFTokenNegOffer amendment.
-	// Since Validate() has no access to amendment rules, this check is
-	// performed in Apply(). When fixNFTokenNegOffer is disabled (pre-amendment),
-	// negative offers are allowed (bug-compatible with rippled).
-	// Reference: rippled tokenOfferCreatePreflight line 847
-
-	// 2. IOU-specific amount checks
-	// Reference: rippled tokenOfferCreatePreflight lines 851-858
-	if !n.Amount.IsNative() {
-		if nftFlags&NFTokenFlagOnlyXRP != 0 {
-			return ter.Errorf(ter.TemBAD_AMOUNT, "NFToken requires XRP only")
-		}
-		if n.Amount.IsZero() {
-			return ter.Errorf(ter.TemBAD_AMOUNT, "IOU amount cannot be zero")
-		}
-	}
-
-	// 3. Buy offer zero amount check
-	// Reference: rippled tokenOfferCreatePreflight lines 863-864
-	if !isSellOffer && n.Amount.IsZero() {
-		return ter.Errorf(ter.TemBAD_AMOUNT, "buy offer amount cannot be zero")
-	}
-
-	// 4. Expiration validation - expiration of 0 is invalid
-	// Reference: rippled tokenOfferCreatePreflight lines 866-867
-	if n.Expiration != nil && *n.Expiration == 0 {
-		return ter.Errorf(ter.TemBAD_EXPIRATION, "Expiration cannot be 0")
-	}
-
-	// 5. Owner field checks
-	// Reference: rippled tokenOfferCreatePreflight lines 871-875
-	// The 'Owner' field must be present when offering to buy, but can't
-	// be present when selling (it's implicit)
-	if (n.Owner != "") == isSellOffer {
-		if !isSellOffer && n.Owner == "" {
-			return ter.Errorf(ter.TemMALFORMED, "Owner is required for buy offers")
-		}
-		if isSellOffer && n.Owner != "" {
-			return ter.Errorf(ter.TemMALFORMED, "Owner not allowed for sell offers")
-		}
-	}
-
-	// Owner cannot be the same as Account
-	// Reference: rippled tokenOfferCreatePreflight lines 874-875
-	if n.Owner != "" && n.Owner == n.Account {
-		return ter.Errorf(ter.TemMALFORMED, "Owner cannot be the same as Account")
-	}
-
-	// 6. Destination checks
-	// Reference: rippled tokenOfferCreatePreflight lines 877-892
-	if n.Destination != "" {
-		// The destination can't be the account executing the transaction
-		if n.Destination == n.Account {
-			return ter.Errorf(ter.TemMALFORMED, "Destination cannot be the same as Account")
-		}
-	}
-
 	return nil
+}
+
+// PreflightRules runs the amendment-aware structural validation shared with
+// NFTokenMint, in rippled's exact order.
+// Reference: rippled NFTokenCreateOffer.cpp preflight → nft::tokenOfferCreatePreflight.
+func (n *NFTokenCreateOffer) PreflightRules(rules *amendment.Rules) error {
+	nftFlags := getNFTokenFlags(n.NFTokenID)
+	isSellOffer := n.GetFlags()&NFTokenCreateOfferFlagSellNFToken != 0
+	return tokenOfferCreatePreflight(rules, n.Account, n.Amount, n.Destination, n.Expiration, nftFlags, n.Owner, isSellOffer)
 }
 
 func (n *NFTokenCreateOffer) Flatten() (map[string]any, error) {
@@ -157,7 +110,7 @@ func (n *NFTokenCreateOffer) SetSellOffer() {
 }
 
 func (n *NFTokenCreateOffer) RequiredAmendments() [][32]byte {
-	return [][32]byte{amendment.FeatureNonFungibleTokensV1}
+	return nil
 }
 
 // Reference: rippled NFTokenCreateOffer.cpp doApply
@@ -180,19 +133,9 @@ func (n *NFTokenCreateOffer) Apply(ctx *tx.ApplyContext) ter.Result {
 	var tokenID [32]byte
 	copy(tokenID[:], tokenIDBytes)
 
-	// Negative amount check — gated on fixNFTokenNegOffer
-	// Reference: rippled tokenOfferCreatePreflight line 847
-	if n.Amount.IsNegative() && ctx.Rules().Enabled(amendment.FeatureFixNFTokenNegOffer) {
-		return ter.TemBAD_AMOUNT
-	}
-
-	// Destination on buy offers: pre-fixNFTokenNegOffer, any Destination on a
-	// buy offer is malformed. Post-amendment, it's allowed (for broker use).
-	// Reference: rippled tokenOfferCreatePreflight lines 877-892
+	// The negative-amount and destination-on-buy tem* checks run in preflight
+	// (PreflightRules → tokenOfferCreatePreflight), before this point.
 	isSellOffer := n.GetFlags()&NFTokenCreateOfferFlagSellNFToken != 0
-	if n.Destination != "" && !isSellOffer && !ctx.Rules().Enabled(amendment.FeatureFixNFTokenNegOffer) {
-		return ter.TemMALFORMED
-	}
 
 	if tx.HasExpired(n.Expiration, ctx.Config.ParentCloseTime) {
 		ctx.Log.Warn("nftoken create offer: offer expired")
@@ -302,12 +245,7 @@ func (n *NFTokenCreateOffer) Apply(ctx *tx.ApplyContext) ter.Result {
 				return ter.TecUNFUNDED_OFFER
 			}
 		} else {
-			var funds tx.Amount
-			if ctx.Rules().Enabled(amendment.FeatureFixNonFungibleTokensV1_2) {
-				funds = tx.AccountFunds(ctx.View, accountID, n.Amount, true, ctx.Config.ReserveBase, ctx.Config.ReserveIncrement)
-			} else {
-				funds = accountHoldsIOU(ctx.View, accountID, n.Amount)
-			}
+			funds := tx.AccountFunds(ctx.View, accountID, n.Amount, true, ctx.Config.ReserveBase, ctx.Config.ReserveIncrement)
 			if funds.Signum() <= 0 {
 				return ter.TecUNFUNDED_OFFER
 			}
@@ -321,24 +259,20 @@ func (n *NFTokenCreateOffer) Apply(ctx *tx.ApplyContext) ter.Result {
 		if result != ter.TesSUCCESS {
 			return result
 		}
-		if ctx.Rules().Enabled(amendment.FeatureDisallowIncoming) {
-			if destAccount.Flags&state.LsfDisallowIncomingNFTokenOffer != 0 {
-				return ter.TecNO_PERMISSION
-			}
+		if destAccount.Flags&state.LsfDisallowIncomingNFTokenOffer != 0 {
+			return ter.TecNO_PERMISSION
 		}
 	}
 
 	// 6. Owner disallow incoming check (for buy offers)
 	// Reference: rippled tokenOfferCreatePreclaim lines 990-1004
 	if n.Owner != "" {
-		if ctx.Rules().Enabled(amendment.FeatureDisallowIncoming) {
-			ownerAccount, _, result := ctx.LookupAccount(n.Owner)
-			if result != ter.TesSUCCESS {
-				return ter.TecNO_TARGET
-			}
-			if ownerAccount.Flags&state.LsfDisallowIncomingNFTokenOffer != 0 {
-				return ter.TecNO_PERMISSION
-			}
+		ownerAccount, _, result := ctx.LookupAccount(n.Owner)
+		if result != ter.TesSUCCESS {
+			return ter.TecNO_TARGET
+		}
+		if ownerAccount.Flags&state.LsfDisallowIncomingNFTokenOffer != 0 {
+			return ter.TecNO_PERMISSION
 		}
 	}
 
@@ -394,11 +328,11 @@ func (n *NFTokenCreateOffer) Apply(ctx *tx.ApplyContext) ter.Result {
 	// Serialize the offer with directory page numbers
 	offerData, err := serializeNFTokenOffer(n, accountID, tokenID, sequence, ownerNode, offerNode)
 	if err != nil {
-		return ter.TefINTERNAL
+		return ctx.Internal("serializeNFTokenOffer", err)
 	}
 
 	if err := ctx.View.Insert(offerKey, offerData); err != nil {
-		return ter.TefINTERNAL
+		return ctx.Internal("insert NFTokenOffer", err)
 	}
 
 	ctx.Account.OwnerCount++

@@ -26,37 +26,26 @@ func makeAmendment(tag byte) Amendment {
 // MajorityTimeout arithmetic stays in a well-defined range.
 var baseTime = time.Unix(1_700_000_000, 0).UTC()
 
-func TestThreshold_PreFix(t *testing.T) {
-	// 5 validators × 204/256 = 3.98… → integer division → 3.
-	assert.Equal(t, 3, Threshold(5, false))
-	// 100 validators × 204/256 = 79.6… → 79.
-	assert.Equal(t, 79, Threshold(100, false))
-	// 0 validators clamps to 1.
-	assert.Equal(t, 1, Threshold(0, false))
-}
-
-func TestThreshold_PostFix(t *testing.T) {
+func TestThreshold(t *testing.T) {
 	// 5 × 80/100 = 4 → 4.
-	assert.Equal(t, 4, Threshold(5, true))
+	assert.Equal(t, 4, Threshold(5))
 	// 100 × 80/100 = 80.
-	assert.Equal(t, 80, Threshold(100, true))
+	assert.Equal(t, 80, Threshold(100))
 	// Clamps to 1 on tiny sets.
-	assert.Equal(t, 1, Threshold(1, true))
+	assert.Equal(t, 1, Threshold(1))
 }
 
-func TestPasses_StrictVsLax(t *testing.T) {
-	// trustedValidations=10, strict (post-fix). threshold = 8.
-	// Lax: votes >= 8 passes. Strict: votes > 8 passes.
-	assert.True(t, passes(8, 8, 10, false), "lax: votes==threshold passes")
-	assert.False(t, passes(8, 8, 10, true), "strict: votes==threshold fails")
-	assert.True(t, passes(9, 8, 10, true), "strict: votes>threshold passes")
+func TestPasses_Strict(t *testing.T) {
+	// trustedValidations=10, threshold = 8: votes > 8 passes.
+	assert.False(t, passes(8, 8, 10), "votes==threshold fails")
+	assert.True(t, passes(9, 8, 10), "votes>threshold passes")
 }
 
 func TestPasses_SingleValidatorAlwaysLax(t *testing.T) {
-	// trustedValidations==1: even strict mode degrades to >=, else
-	// the gate is unreachable. AmendmentTable.cpp:372-374.
-	assert.True(t, passes(1, 1, 1, true),
-		"with 1 validator and strict mode, votes==threshold MUST pass")
+	// trustedValidations==1 degrades to >=, else the gate is
+	// unreachable. Table.cpp:372-374.
+	assert.True(t, passes(1, 1, 1),
+		"with 1 validator, votes==threshold MUST pass")
 }
 
 func TestDecide_GotMajority(t *testing.T) {
@@ -68,7 +57,6 @@ func TestDecide_GotMajority(t *testing.T) {
 		TrustedValidations: 10,
 		Votes:              map[Amendment]int{a: 9}, // > threshold 8 (strict)
 		Stances:            map[Amendment]Stance{a: VoteUp},
-		StrictMajority:     true,
 	}
 	got := Decide(in)
 	require.Len(t, got, 1)
@@ -86,7 +74,6 @@ func TestDecide_LostMajority(t *testing.T) {
 		Votes:              map[Amendment]int{a: 4},
 		Majority:           map[Amendment]time.Time{a: baseTime.Add(-time.Hour)},
 		Stances:            map[Amendment]Stance{a: VoteAbstain},
-		StrictMajority:     true,
 	}
 	got := Decide(in)
 	require.Len(t, got, 1)
@@ -106,7 +93,6 @@ func TestDecide_EnableWhenWindowHeld(t *testing.T) {
 		Votes:              map[Amendment]int{a: 9},
 		Majority:           map[Amendment]time.Time{a: baseTime.Add(-15 * 24 * time.Hour)},
 		Stances:            map[Amendment]Stance{a: VoteUp},
-		StrictMajority:     true,
 	}
 	got := Decide(in)
 	require.Len(t, got, 1)
@@ -124,7 +110,6 @@ func TestDecide_EnableSkippedWhenWindowNotHeldYet(t *testing.T) {
 		Votes:              map[Amendment]int{a: 9},
 		Majority:           map[Amendment]time.Time{a: baseTime.Add(-1 * 24 * time.Hour)},
 		Stances:            map[Amendment]Stance{a: VoteUp},
-		StrictMajority:     true,
 	}
 	got := Decide(in)
 	assert.Empty(t, got, "must wait until majority has held for MajorityTimeout")
@@ -141,7 +126,6 @@ func TestDecide_AlreadyEnabledSkipped(t *testing.T) {
 		Majority:           map[Amendment]time.Time{a: baseTime.Add(-30 * 24 * time.Hour)},
 		Stances:            map[Amendment]Stance{a: VoteUp},
 		Enabled:            map[Amendment]bool{a: true},
-		StrictMajority:     true,
 	}
 	got := Decide(in)
 	assert.Empty(t, got, "already-enabled amendments must be skipped")
@@ -156,7 +140,6 @@ func TestDecide_ObsoleteStanceNeverVotes(t *testing.T) {
 		TrustedValidations: 10,
 		Votes:              map[Amendment]int{a: 10},
 		Stances:            map[Amendment]Stance{a: VoteObsolete},
-		StrictMajority:     true,
 	}
 	got := Decide(in)
 	assert.Empty(t, got, "obsolete amendments must never produce gotMajority/enable")
@@ -174,7 +157,6 @@ func TestDecide_AbstainStanceNeverVotes(t *testing.T) {
 		TrustedValidations: 10,
 		Votes:              map[Amendment]int{a: 10},
 		Stances:            map[Amendment]Stance{a: VoteAbstain},
-		StrictMajority:     true,
 	}
 	got := Decide(in)
 	assert.Empty(t, got, "abstain stance does not propose gotMajority")
@@ -182,7 +164,7 @@ func TestDecide_AbstainStanceNeverVotes(t *testing.T) {
 
 func TestDecide_LostMajorityFiresEvenForAbstain(t *testing.T) {
 	// LostMajority does NOT gate on local stance — the ledger
-	// needs the timer cleared either way. AmendmentTable.cpp:910-915.
+	// needs the timer cleared either way. Table.cpp:910-915.
 	a := makeAmendment(0xF0)
 	in := Inputs{
 		UpcomingSeq:        1024,
@@ -192,7 +174,6 @@ func TestDecide_LostMajorityFiresEvenForAbstain(t *testing.T) {
 		Votes:              map[Amendment]int{a: 0},
 		Majority:           map[Amendment]time.Time{a: baseTime.Add(-time.Hour)},
 		Stances:            map[Amendment]Stance{a: VoteAbstain},
-		StrictMajority:     true,
 	}
 	got := Decide(in)
 	require.Len(t, got, 1)
@@ -204,7 +185,7 @@ func TestDecide_LostMajorityFiresEvenForAbstain(t *testing.T) {
 // (in.Majority) but absent from Known — one this server doesn't
 // recognize, e.g. a newer protocol amendment — must NEVER emit a
 // pseudo-tx, even with lost validator support. Rippled's doVoting walks
-// only amendmentMap_ (AmendmentTable.cpp:875), so it emits nothing for
+// only amendmentMap_ (Table.cpp:875), so it emits nothing for
 // such an amendment; emitting a spurious LostMajority would fork the
 // flag-ledger tx set from the rest of the network.
 func TestDecide_UnknownAmendmentInMajorityIgnored(t *testing.T) {
@@ -219,7 +200,6 @@ func TestDecide_UnknownAmendmentInMajorityIgnored(t *testing.T) {
 		Majority:           map[Amendment]time.Time{unknown: baseTime.Add(-time.Hour)},
 		Stances:            map[Amendment]Stance{},
 		Known:              map[Amendment]bool{known: true},
-		StrictMajority:     true,
 	}
 	got := Decide(in)
 	assert.Empty(t, got,
@@ -244,7 +224,6 @@ func TestDecide_KnownAbstainAmendmentLostMajorityFires(t *testing.T) {
 		Majority:           map[Amendment]time.Time{a: baseTime.Add(-time.Hour)},
 		Stances:            map[Amendment]Stance{}, // abstain
 		Known:              map[Amendment]bool{a: true},
-		StrictMajority:     true,
 	}
 	got := Decide(in)
 	require.Len(t, got, 1)
@@ -265,7 +244,6 @@ func TestDecide_DeterministicOrder(t *testing.T) {
 		TrustedValidations: 10,
 		Votes:              map[Amendment]int{hi: 9, mid: 9, lo: 9},
 		Stances:            map[Amendment]Stance{hi: VoteUp, mid: VoteUp, lo: VoteUp},
-		StrictMajority:     true,
 	}
 	got := Decide(in)
 	require.Len(t, got, 3)
@@ -283,7 +261,6 @@ func TestDoVoting_SerializesEnableAmendmentTx(t *testing.T) {
 		TrustedValidations: 10,
 		Votes:              map[Amendment]int{a: 9},
 		Stances:            map[Amendment]Stance{a: VoteUp},
-		StrictMajority:     true,
 	}
 	blobs, err := DoVoting(in)
 	require.NoError(t, err)
@@ -297,7 +274,7 @@ func TestDoVoting_SerializesEnableAmendmentTx(t *testing.T) {
 }
 
 func TestDoVoting_EnableTxOmitsFlags(t *testing.T) {
-	// AmendmentTable.h:172-174: rippled writes sfFlags only when
+	// Table.h:172-174: rippled writes sfFlags only when
 	// non-zero. Our serialized enable pseudo-tx must have no Flags
 	// field at all on the wire.
 	a := makeAmendment(0x43)
@@ -309,7 +286,6 @@ func TestDoVoting_EnableTxOmitsFlags(t *testing.T) {
 		Votes:              map[Amendment]int{a: 9},
 		Majority:           map[Amendment]time.Time{a: baseTime.Add(-15 * 24 * time.Hour)},
 		Stances:            map[Amendment]Stance{a: VoteUp},
-		StrictMajority:     true,
 	}
 	blobs, err := DoVoting(in)
 	require.NoError(t, err)
@@ -321,14 +297,14 @@ func TestDoVoting_EnableTxOmitsFlags(t *testing.T) {
 }
 
 // runRoundFor is a helper that mirrors rippled's
-// AmendmentTable_test.cpp doRound() at the algorithm level. It
+// Table_test.cpp doRound() at the algorithm level. It
 // runs Decide once, then mutates `enabled` and `majority` based on
 // the emitted Decisions: a GotMajority pseudo-tx records the
 // closeTime as the majoritySince timestamp; an Enable pseudo-tx
 // (Flags==0) marks the amendment enabled and clears its majority
 // entry; a LostMajority pseudo-tx clears the majority entry. This
 // matches rippled's `Change::applyEnableAmendment` side-effects on
-// the parent ledger between rounds (AmendmentTable.cpp:902-924
+// the parent ledger between rounds (Table.cpp:902-924
 // enumerated against ChangeImpl.cpp).
 func runRoundFor(
 	upcomingSeq uint32,
@@ -337,7 +313,6 @@ func runRoundFor(
 	trusted int,
 	votes map[Amendment]int,
 	stances map[Amendment]Stance,
-	strict bool,
 	enabled map[Amendment]bool,
 	majority map[Amendment]time.Time,
 ) []Decision {
@@ -350,7 +325,6 @@ func runRoundFor(
 		Enabled:            enabled,
 		Majority:           majority,
 		Stances:            stances,
-		StrictMajority:     strict,
 	})
 	for _, d := range decisions {
 		switch d.Flags {
@@ -367,7 +341,7 @@ func runRoundFor(
 }
 
 // TestDecide_DetectMajoritySweep is the algorithm-level analog of
-// rippled's testDetectMajority (AmendmentTable_test.cpp:837-902).
+// rippled's testDetectMajority (Table_test.cpp:837-902).
 // 16 validators, post-fix strict, 2-week MajorityTimeout, sweep
 // validator support i = 0..17 across consecutive weekly rounds.
 //
@@ -398,7 +372,7 @@ func TestDecide_DetectMajoritySweep(t *testing.T) {
 
 		runRoundFor(
 			uint32(1024+i), closeTime, majorityTimeout,
-			validators, votes, stances, true,
+			validators, votes, stances,
 			enabled, majority,
 		)
 
@@ -420,7 +394,7 @@ func TestDecide_DetectMajoritySweep(t *testing.T) {
 }
 
 // TestDecide_LostMajoritySweep is the algorithm-level analog of
-// rippled's testLostMajority (AmendmentTable_test.cpp:906-979).
+// rippled's testLostMajority (Table_test.cpp:906-979).
 // 16 validators, post-fix strict, 8-week MajorityTimeout (so the
 // enable doesn't fire and we observe lost-majority cleanly).
 //
@@ -443,7 +417,7 @@ func TestDecide_LostMajoritySweep(t *testing.T) {
 		majorityTimeout,
 		validators,
 		map[Amendment]int{a: validators},
-		stances, true,
+		stances,
 		enabled, majority,
 	)
 	require.False(t, enabled[a], "round 1: enable must not fire (8-week timeout)")
@@ -455,7 +429,7 @@ func TestDecide_LostMajoritySweep(t *testing.T) {
 			uint32(1024+i), closeTime, majorityTimeout,
 			validators,
 			map[Amendment]int{a: validators - i},
-			stances, true,
+			stances,
 			enabled, majority,
 		)
 
@@ -471,7 +445,7 @@ func TestDecide_LostMajoritySweep(t *testing.T) {
 }
 
 // TestDecide_VoteEnableMultiWeek mirrors rippled's testVoteEnable
-// (AmendmentTable_test.cpp:757-833) at the algorithm level. With
+// (Table_test.cpp:757-833) at the algorithm level. With
 // 10 validators, 2-week MajorityTimeout, post-fix strict, and a
 // single test amendment we vote VoteUp for:
 //
@@ -497,7 +471,7 @@ func TestDecide_VoteEnableMultiWeek(t *testing.T) {
 	d1 := runRoundFor(
 		1024, baseTime.Add(1*7*24*time.Hour), majorityTimeout,
 		validators, map[Amendment]int{},
-		stances, true, enabled, majority,
+		stances, enabled, majority,
 	)
 	assert.Empty(t, d1, "week 1: no votes yet → no decision")
 	assert.False(t, enabled[a])
@@ -507,7 +481,7 @@ func TestDecide_VoteEnableMultiWeek(t *testing.T) {
 	d2 := runRoundFor(
 		1025, baseTime.Add(2*7*24*time.Hour), majorityTimeout,
 		validators, map[Amendment]int{a: validators},
-		stances, true, enabled, majority,
+		stances, enabled, majority,
 	)
 	require.Len(t, d2, 1)
 	assert.Equal(t, TfGotMajority, d2[0].Flags,
@@ -519,7 +493,7 @@ func TestDecide_VoteEnableMultiWeek(t *testing.T) {
 	d5 := runRoundFor(
 		1028, baseTime.Add(5*7*24*time.Hour), majorityTimeout,
 		validators, map[Amendment]int{a: validators},
-		stances, true, enabled, majority,
+		stances, enabled, majority,
 	)
 	require.Len(t, d5, 1)
 	assert.EqualValues(t, 0, d5[0].Flags,
@@ -531,7 +505,7 @@ func TestDecide_VoteEnableMultiWeek(t *testing.T) {
 	d6 := runRoundFor(
 		1029, baseTime.Add(6*7*24*time.Hour), majorityTimeout,
 		validators, map[Amendment]int{a: validators},
-		stances, true, enabled, majority,
+		stances, enabled, majority,
 	)
 	assert.Empty(t, d6, "week 6: enabled amendment must produce no further pseudo-tx")
 }

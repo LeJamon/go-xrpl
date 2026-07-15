@@ -9,14 +9,14 @@ import (
 type Canonicality int
 
 const (
-	// CanonicityNone indicates the signature is not canonical (invalid format or out of range).
-	CanonicityNone Canonicality = iota
-	// CanonicityCanonical indicates the signature is canonical but not fully canonical.
+	// CanonicalityNone indicates the signature is not canonical (invalid format or out of range).
+	CanonicalityNone Canonicality = iota
+	// CanonicalityCanonical indicates the signature is canonical but not fully canonical.
 	// Both (R, S) and (R, G-S) are valid signatures for the same message.
-	CanonicityCanonical
-	// CanonicityFullyCanonical indicates the signature is fully canonical.
+	CanonicalityCanonical
+	// CanonicalityFullyCanonical indicates the signature is fully canonical.
 	// This means S <= G/2, which prevents signature malleability.
-	CanonicityFullyCanonical
+	CanonicalityFullyCanonical
 )
 
 var (
@@ -61,32 +61,32 @@ func ECDSACanonicality(sig []byte) Canonicality {
 	// Minimum: 8 bytes (0x30 len 0x02 1 R 0x02 1 S)
 	// Maximum: 72 bytes (0x30 len 0x02 33 R 0x02 33 S)
 	if len(sig) < 8 || len(sig) > 72 {
-		return CanonicityNone
+		return CanonicalityNone
 	}
 
 	// Check sequence tag and length
 	if sig[0] != 0x30 {
-		return CanonicityNone
+		return CanonicalityNone
 	}
 	if int(sig[1]) != len(sig)-2 {
-		return CanonicityNone
+		return CanonicalityNone
 	}
 
 	// Parse R
 	rSlice, remaining, ok := parseDERInteger(sig[2:])
 	if !ok {
-		return CanonicityNone
+		return CanonicalityNone
 	}
 
 	// Parse S
 	sSlice, remaining, ok := parseDERInteger(remaining)
 	if !ok {
-		return CanonicityNone
+		return CanonicalityNone
 	}
 
 	// No leftover bytes allowed
 	if len(remaining) != 0 {
-		return CanonicityNone
+		return CanonicalityNone
 	}
 
 	// Convert to big.Int
@@ -95,20 +95,20 @@ func ECDSACanonicality(sig []byte) Canonicality {
 
 	// R must be in range [1, n-1]
 	if r.Sign() <= 0 || r.Cmp(secp256k1Order) >= 0 {
-		return CanonicityNone
+		return CanonicalityNone
 	}
 
 	// S must be in range [1, n-1]
 	if s.Sign() <= 0 || s.Cmp(secp256k1Order) >= 0 {
-		return CanonicityNone
+		return CanonicalityNone
 	}
 
 	// Check if fully canonical: S <= n/2
 	if s.Cmp(secp256k1HalfOrder) <= 0 {
-		return CanonicityFullyCanonical
+		return CanonicalityFullyCanonical
 	}
 
-	return CanonicityCanonical
+	return CanonicalityCanonical
 }
 
 // parseDERInteger parses a DER-encoded integer from the data.

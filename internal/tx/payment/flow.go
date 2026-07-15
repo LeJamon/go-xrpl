@@ -36,17 +36,10 @@ func WithFillOrKill(fillOrKillEnabled, offerCrossingSell bool) FlowOption {
 // Flow executes payment across multiple strands, selecting the best quality paths.
 //
 // The algorithm matches rippled's StrandFlow.h flow() function:
-//
-// With FlowSortStrands enabled:
 //  1. Each iteration re-sorts active strands by quality upper bound (best first)
 //  2. Execute strands in order; take the FIRST successful strand (break inner loop)
 //  3. Track total offers considered across ALL strands and iterations
 //  4. Stop when total offers >= 1500 (maxOffersToConsider)
-//
-// Without FlowSortStrands:
-//  1. Execute ALL active strands each iteration
-//  2. Pick the strand with the best actual quality
-//  3. No total offer limit (per-BookStep limit of 1000 still applies)
 //
 // Parameters:
 //   - baseView: PaymentSandbox with ledger state
@@ -55,7 +48,6 @@ func WithFillOrKill(fillOrKillEnabled, offerCrossingSell bool) FlowOption {
 //   - partialPayment: Whether partial payments are allowed
 //   - limitQuality: Optional quality limit (nil means no limit)
 //   - sendMax: Optional maximum input amount
-//   - flowSortStrands: Whether the FlowSortStrands amendment is enabled
 //   - offerCrossing: Whether this is an offer-crossing flow (vs a payment)
 //
 // Returns: FlowResult with actual amounts and state changes
@@ -67,7 +59,6 @@ func Flow(
 	limitQuality *Quality,
 	sendMax *EitherAmount,
 	ammCtx *AMMContext,
-	flowSortStrands bool,
 	offerCrossing bool,
 	opts ...FlowOption,
 ) FlowResult {
@@ -75,7 +66,6 @@ func Flow(
 	for _, opt := range opts {
 		opt(&fo)
 	}
-	sortStrands := flowSortStrands
 	if len(strands) == 0 {
 		return FlowResult{
 			In:              ZeroXRPEitherAmount(),
@@ -93,15 +83,21 @@ func Flow(
 
 	// Initialize result accumulators
 	var totalIn, totalOut EitherAmount
-	if outReq.IsNative {
+	switch {
+	case outReq.IsNative:
 		totalOut = ZeroXRPEitherAmount()
-	} else {
+	case outReq.IsMPT:
+		totalOut = ZeroMPTEitherAmount(outReq.MPTID)
+	default:
 		totalOut = ZeroIOUEitherAmount(outReq.IOU.Currency, outReq.IOU.Issuer)
 	}
 	if sendMax != nil {
-		if sendMax.IsNative {
+		switch {
+		case sendMax.IsNative:
 			totalIn = ZeroXRPEitherAmount()
-		} else {
+		case sendMax.IsMPT:
+			totalIn = ZeroMPTEitherAmount(sendMax.MPTID)
+		default:
 			totalIn = ZeroIOUEitherAmount(sendMax.IOU.Currency, sendMax.IOU.Issuer)
 		}
 	} else {
@@ -167,7 +163,7 @@ func Flow(
 		// activateNext: move next -> cur, optionally re-sorting by quality
 		// Reference: rippled ActiveStrands::activateNext()
 		var cur []*Strand
-		if sortStrands && len(next) > 1 {
+		if len(next) > 1 {
 			// Re-sort strands by quality upper bound (higher quality = better = first)
 			type strandQ struct {
 				strand  *Strand
@@ -236,7 +232,6 @@ func Flow(
 			quality Quality
 		}
 		var best *bestStrand
-		var markInactiveOnUse int = -1
 
 		for strandIndex := 0; strandIndex < len(cur); strandIndex++ {
 			strand := cur[strandIndex]
@@ -257,9 +252,8 @@ func Flow(
 			// a book whose tip is beyond the limit, so a beyond-limit found-
 			// unfunded tip is only groomed away when the strand actually executes
 			// (its upper bound meets the limit). rippled applies this on EVERY
-			// offer-crossing strand regardless of FlowSortStrands; the
-			// activateNext sort-filter above only fires for >1 strand, so this is
-			// the catch-all for the single-strand case.
+			// offer-crossing strand; the activateNext sort-filter above only fires
+			// for >1 strand, so this is the catch-all for the single-strand case.
 			// Reference: rippled StrandFlow.h lines 688-692 (if (offerCrossing &&
 			// limitQuality) { qualityUpperBound < limitQuality -> continue }).
 			if offerCrossing && limitQuality != nil {
@@ -303,67 +297,27 @@ func Flow(
 				}
 			}
 
-			if sortStrands {
-				// FlowSortStrands: take the FIRST successful strand, then break
-				// Reference: rippled StrandFlow.h lines 733-741
-				if !result.Inactive {
-					next = append(next, strand)
-				}
-				best = &bestStrand{
-					in:      result.In,
-					out:     result.Out,
-					sandbox: result.Sandbox,
-					quality: q,
-				}
-				// Push remaining strands to next
-				for ri := strandIndex + 1; ri < len(cur); ri++ {
-					next = append(next, cur[ri])
-				}
-				break
+			// Take the FIRST successful strand, then break.
+			// Reference: rippled StrandFlow.h lines 733-741
+			if !result.Inactive {
+				next = append(next, strand)
 			}
-
-			// Without FlowSortStrands: evaluate all strands, keep best
-			// Reference: rippled StrandFlow.h lines 743-765
-			next = append(next, strand)
-
-			if best == nil || q.BetterThan(best.quality) ||
-				(q.Value == best.quality.Value && result.Out.Compare(best.out) > 0) {
-				if result.Inactive {
-					// Mark for removal if this ends up being best. rippled
-					// records activeStrands.size()-1 here — the size of the
-					// strands being iterated this pass (cur), not the partly
-					// built next list. The comment in rippled notes this
-					// "should be nextSize, not size" and that the issue is
-					// fixed under featureFlowSortStrands; this branch only runs
-					// with FlowSortStrands disabled, so reproduce the historical
-					// behaviour exactly for mainnet-replay fidelity.
-					// Reference: rippled StrandFlow.h:753-758
-					markInactiveOnUse = len(cur) - 1
-				} else {
-					markInactiveOnUse = -1
-				}
-				best = &bestStrand{
-					in:      result.In,
-					out:     result.Out,
-					sandbox: result.Sandbox,
-					quality: q,
-				}
+			best = &bestStrand{
+				in:      result.In,
+				out:     result.Out,
+				sandbox: result.Sandbox,
+				quality: q,
 			}
+			// Push remaining strands to next
+			for ri := strandIndex + 1; ri < len(cur); ri++ {
+				next = append(next, cur[ri])
+			}
+			break
 		}
 
 		// Determine if we should break after this iteration
-		shouldBreak := false
-		if sortStrands {
-			shouldBreak = best == nil || offersConsidered >= maxOffersToConsider
-		} else {
-			shouldBreak = best == nil
-		}
+		shouldBreak := best == nil || offersConsidered >= maxOffersToConsider
 		if best != nil {
-			// Remove inactive strand from next if it was the best
-			if markInactiveOnUse >= 0 && markInactiveOnUse < len(next) {
-				next = append(next[:markInactiveOnUse], next[markInactiveOnUse+1:]...)
-			}
-
 			savedIns = append(savedIns, best.in)
 			savedOuts = append(savedOuts, best.out)
 
@@ -543,6 +497,10 @@ func limitOut(v *PaymentSandbox, strand Strand, remainingOut EitherAmount, limit
 		// which calls Number::operator rep() (round to nearest, even on tie).
 		drops := canonicalizeDropsRound(outAmt.Mantissa(), outAmt.Exponent())
 		out = NewXRPEitherAmount(drops)
+	} else if remainingOut.IsMPT {
+		n := state.NewXRPLNumber(outAmt.Mantissa(), outAmt.Exponent())
+		value := n.ToInt64WithMode(state.RoundToNearest)
+		out = NewMPTEitherAmount(value, remainingOut.MPTID)
 	} else {
 		// Preserve currency/issuer from remainingOut (outAmt has empty currency/issuer
 		// because QualityFunction uses Number arithmetic with no issue info).
@@ -696,9 +654,8 @@ func RippleCalculate(
 	// telFAILED_PROCESSING (open) vs tecFAILED_PROCESSING (closed) variant.
 	sandbox.SetOpenLedger(rcOpts.openLedger)
 
-	// Convert paths to strands
-	// opts: [0]=offerCrossing (false for payments), [1]=fix1781
-	strands, strandResult := ToStrands(sandbox, srcAccount, dstAccount, dstAmount, srcAmount, paths, addDefaultPath, false, rcOpts.fix1781)
+	// Convert paths to strands (offerCrossing=false for payments).
+	strands, strandResult := ToStrands(sandbox, srcAccount, dstAccount, dstAmount, srcAmount, paths, addDefaultPath, false, rcOpts.parentCloseTime)
 	if strandResult != ter.TesSUCCESS || len(strands) == 0 {
 		if strandResult == ter.TesSUCCESS {
 			strandResult = ter.TecPATH_DRY
@@ -715,7 +672,7 @@ func RippleCalculate(
 	ammCtx := NewAMMContext(srcAccount, false)
 
 	// Configure BookSteps with amendment flags for payments.
-	configureBookStepsForPayments(strands, rcOpts.parentCloseTime, rcOpts.fixReducedOffersV1, rcOpts.fixReducedOffersV2, rcOpts.fixRmSmallIncreasedQOffers)
+	configureBookStepsForPayments(strands, rcOpts.parentCloseTime, rcOpts.fixReducedOffersV2)
 
 	// Initialize AMM liquidity on BookSteps.
 	// Reference: rippled BookStep constructor reads AMM SLE and creates AMMLiquidity.
@@ -747,9 +704,8 @@ func RippleCalculate(
 		qualityLimit = &q
 	}
 
-	// Execute flow with FlowSortStrands amendment flag. This is the payment
-	// (RippleCalculate) entry, never offer crossing.
-	result := Flow(sandbox, strands, outReq, partialPayment, qualityLimit, sendMax, ammCtx, rcOpts.flowSortStrands, false)
+	// Execute flow. This is the payment (RippleCalculate) entry, never offer crossing.
+	result := Flow(sandbox, strands, outReq, partialPayment, qualityLimit, sendMax, ammCtx, false)
 
 	// Apply flow sandbox changes back to the main sandbox only on success.
 	// rippled's finishFlow (Flow.cpp) applies the flow sandbox solely on
@@ -783,19 +739,13 @@ func RippleCalculate(
 type RippleCalculateOption func(*rippleCalculateOpts)
 
 type rippleCalculateOpts struct {
-	parentCloseTime            uint32
-	fixReducedOffersV1         bool
-	fixReducedOffersV2         bool
-	fixRmSmallIncreasedQOffers bool
-	flowSortStrands            bool
-	domainID                   *[32]byte
+	parentCloseTime    uint32
+	fixReducedOffersV2 bool
+	domainID           *[32]byte
 	// AMM amendment flags
 	fixAMMv1_1          bool
 	fixAMMv1_2          bool
 	fixAMMOverflowOffer bool
-	// fix1781 gates XRP endpoint loop detection in strand building.
-	// Reference: rippled XRPEndpointStep.cpp check(): ctx.view.rules().enabled(fix1781)
-	fix1781 bool
 
 	// openLedger mirrors rippled's view.open() (Payment.cpp: rcInput.isLedgerOpen
 	// = view().open()). It selects the FAILED_PROCESSING TER variant in the
@@ -805,13 +755,10 @@ type rippleCalculateOpts struct {
 
 // WithAmendments passes amendment flags and ledger timing to RippleCalculate,
 // which configures BookSteps with the appropriate behavior flags.
-func WithAmendments(parentCloseTime uint32, fixReducedOffersV1, fixReducedOffersV2, fixRmSmallIncreasedQOffers, flowSortStrands bool) RippleCalculateOption {
+func WithAmendments(parentCloseTime uint32, fixReducedOffersV2 bool) RippleCalculateOption {
 	return func(o *rippleCalculateOpts) {
 		o.parentCloseTime = parentCloseTime
-		o.fixReducedOffersV1 = fixReducedOffersV1
 		o.fixReducedOffersV2 = fixReducedOffersV2
-		o.fixRmSmallIncreasedQOffers = fixRmSmallIncreasedQOffers
-		o.flowSortStrands = flowSortStrands
 	}
 }
 
@@ -822,15 +769,6 @@ func WithAMMAmendments(fixAMMv1_1, fixAMMv1_2, fixAMMOverflowOffer bool) RippleC
 		o.fixAMMv1_1 = fixAMMv1_1
 		o.fixAMMv1_2 = fixAMMv1_2
 		o.fixAMMOverflowOffer = fixAMMOverflowOffer
-	}
-}
-
-// WithFix1781 enables the fix1781 amendment behavior in strand building.
-// When enabled, XRP endpoint steps are included in circular payment loop detection.
-// Reference: rippled XRPEndpointStep.cpp check(): ctx.view.rules().enabled(fix1781)
-func WithFix1781(enabled bool) RippleCalculateOption {
-	return func(o *rippleCalculateOpts) {
-		o.fix1781 = enabled
 	}
 }
 
@@ -857,14 +795,12 @@ func WithDomainID(domainID *[32]byte) RippleCalculateOption {
 // These flags control OfferStream-level behavior during offer iteration.
 // Reference: rippled OfferStream reads rules from view_ dynamically;
 // the Go code passes them as booleans on each BookStep.
-func configureBookStepsForPayments(strands []Strand, parentCloseTime uint32, fixReducedOffersV1, fixReducedOffersV2, fixRmSmallIncreasedQOffers bool) {
+func configureBookStepsForPayments(strands []Strand, parentCloseTime uint32, fixReducedOffersV2 bool) {
 	for _, strand := range strands {
 		for _, step := range strand {
 			if bookStep, ok := step.(*BookStep); ok {
 				bookStep.parentCloseTime = parentCloseTime
-				bookStep.fixReducedOffersV1 = fixReducedOffersV1
 				bookStep.fixReducedOffersV2 = fixReducedOffersV2
-				bookStep.fixRmSmallIncreasedQOffers = fixRmSmallIncreasedQOffers
 			}
 		}
 	}

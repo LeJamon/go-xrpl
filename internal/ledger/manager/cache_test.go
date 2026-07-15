@@ -7,12 +7,12 @@ import (
 	"github.com/LeJamon/go-xrpl/drops"
 	"github.com/LeJamon/go-xrpl/internal/ledger"
 	"github.com/LeJamon/go-xrpl/internal/ledger/header"
+	"github.com/LeJamon/go-xrpl/shamap"
 )
 
 // makeLedger builds a *ledger.Ledger whose Sequence() and Hash() are controllable.
 // NewFromHeader copies the header verbatim; Sequence() reads header.LedgerIndex
-// and Hash() reads header.Hash. The state/tx SHAMaps are unused by the cache, so
-// nil is fine.
+// and Hash() reads header.Hash.
 func makeLedger(seq uint32, hashByte byte) *ledger.Ledger {
 	var hash [32]byte
 	for i := range hash {
@@ -24,7 +24,11 @@ func makeLedger(seq uint32, hashByte byte) *ledger.Ledger {
 	hash[30] = byte(seq >> 8)
 	hash[31] = byte(seq)
 	hdr := header.LedgerHeader{LedgerIndex: seq, Hash: hash}
-	return ledger.NewFromHeader(hdr, nil, nil, drops.Fees{})
+	l, err := ledger.NewFromHeader(hdr, shamap.New(shamap.TypeState), shamap.New(shamap.TypeTransaction), drops.Fees{})
+	if err != nil {
+		panic(err)
+	}
+	return l
 }
 
 func newCache(t *testing.T, maxRecent int) *LedgerCache {

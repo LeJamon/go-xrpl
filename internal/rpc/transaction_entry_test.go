@@ -9,6 +9,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/LeJamon/go-xrpl/internal/ledger/service/svcerr"
 	"github.com/LeJamon/go-xrpl/internal/rpc/handlers"
 	"github.com/LeJamon/go-xrpl/internal/rpc/types"
 	"github.com/stretchr/testify/assert"
@@ -78,17 +79,27 @@ func (m *mockLedgerReaderTE) ForEachTransaction(fn func([32]byte, []byte) bool) 
 type mockLedgerServiceTE struct {
 	*mockLedgerService
 	transactions  map[string]*types.TransactionInfo
-	ledgers       map[uint32]*mockLedgerReaderTE
-	ledgersByHash map[[32]byte]*mockLedgerReaderTE
+	ledgers       map[uint32]types.LedgerReader
+	ledgersByHash map[[32]byte]types.LedgerReader
 }
 
 func newMockLedgerServiceTE() *mockLedgerServiceTE {
 	return &mockLedgerServiceTE{
 		mockLedgerService: newMockLedgerService(),
 		transactions:      make(map[string]*types.TransactionInfo),
-		ledgers:           make(map[uint32]*mockLedgerReaderTE),
-		ledgersByHash:     make(map[[32]byte]*mockLedgerReaderTE),
+		ledgers:           make(map[uint32]types.LedgerReader),
+		ledgersByHash:     make(map[[32]byte]types.LedgerReader),
 	}
+}
+
+type contextErrorLedgerReaderTE struct {
+	*mockLedgerReaderTE
+	called bool
+}
+
+func (m *contextErrorLedgerReaderTE) GetLedgerTransactionContext(ctx context.Context, _ [32]byte) ([]byte, bool, error) {
+	m.called = true
+	return nil, false, ctx.Err()
 }
 
 func (m *mockLedgerServiceTE) GetTransaction(txHash [32]byte) (*types.TransactionInfo, error) {
@@ -110,7 +121,7 @@ func (m *mockLedgerServiceTE) GetLedgerByHash(hash [32]byte) (types.LedgerReader
 	if l, ok := m.ledgersByHash[hash]; ok {
 		return l, nil
 	}
-	return nil, errors.New("ledger not found")
+	return nil, svcerr.ErrLedgerNotFound
 }
 
 func (m *mockLedgerServiceTE) addLedger(lr *mockLedgerReaderTE) {
@@ -130,6 +141,10 @@ func newTransactionEntryTestServices(mock *mockLedgerServiceTE) *types.ServiceCo
 // Based on rippled TransactionEntry_test.cpp testBadInput (no params case).
 func TestTransactionEntryMissingTxHash(t *testing.T) {
 	mock := newMockLedgerServiceTE()
+	current := newMockLedgerReaderTE(mock.currentLedgerIndex)
+	current.closed = false
+	current.validated = false
+	mock.addLedger(current)
 	services := newTransactionEntryTestServices(mock)
 
 	method := &handlers.TransactionEntryMethod{}
@@ -151,12 +166,6 @@ func TestTransactionEntryMissingTxHash(t *testing.T) {
 		{
 			name:   "nil params",
 			params: nil,
-		},
-		{
-			name: "tx_hash is empty string",
-			params: map[string]any{
-				"tx_hash": "",
-			},
 		},
 	}
 
@@ -188,6 +197,7 @@ func TestTransactionEntryMissingTxHash(t *testing.T) {
 // Based on rippled TransactionEntry_test.cpp (DEADBEEF case and too-short/too-long cases).
 func TestTransactionEntryInvalidTxHash(t *testing.T) {
 	mock := newMockLedgerServiceTE()
+	mock.addLedger(newMockLedgerReaderTE(mock.validatedLedgerIndex))
 	services := newTransactionEntryTestServices(mock)
 
 	method := &handlers.TransactionEntryMethod{}
@@ -202,6 +212,10 @@ func TestTransactionEntryInvalidTxHash(t *testing.T) {
 		name   string
 		txHash string
 	}{
+		{
+			name:   "empty string",
+			txHash: "",
+		},
 		{
 			name:   "too short - DEADBEEF",
 			txHash: "DEADBEEF",
@@ -237,6 +251,8 @@ func TestTransactionEntryInvalidTxHash(t *testing.T) {
 
 			assert.Nil(t, result, "Expected nil result for invalid tx_hash")
 			require.NotNil(t, rpcErr, "Expected RPC error for invalid tx_hash: %s", tc.txHash)
+			assert.Equal(t, "malformedRequest", rpcErr.ErrorString)
+			assert.Equal(t, types.RpcUNKNOWN, rpcErr.Code)
 		})
 	}
 }
@@ -270,6 +286,7 @@ func TestTransactionEntryLedgerResolution(t *testing.T) {
 		"meta":    validStoredMetadata(),
 	}
 	txData, _ := json.Marshal(storedTx)
+	ledger2.txs[txHash] = txData
 
 	mock.transactions[txHashStr] = &types.TransactionInfo{
 		TxData:      txData,
@@ -393,23 +410,57 @@ func TestTransactionEntryTxNotFound(t *testing.T) {
 		Services:   services,
 	}
 
-	txHashStr := "E2FE8D4AF3FCC3944DDF6CD8CDDC5E3F0AD50863EF8919AFEF10CB6408CD4D05"
-	params := map[string]any{
-		"tx_hash":      txHashStr,
-		"ledger_index": "validated",
+	for _, txHash := range []string{
+		"E2FE8D4AF3FCC3944DDF6CD8CDDC5E3F0AD50863EF8919AFEF10CB6408CD4D05",
+		"0",
+	} {
+		t.Run(txHash, func(t *testing.T) {
+			params := map[string]any{
+				"tx_hash":      txHash,
+				"ledger_index": "validated",
+			}
+			paramsJSON, _ := json.Marshal(params)
+
+			result, rpcErr := method.Handle(ctx, paramsJSON)
+
+			assert.Nil(t, result, "Expected nil result when tx is not found")
+			require.NotNil(t, rpcErr, "Expected RPC error when tx is not found")
+			assert.Contains(t, rpcErr.Message, "not found")
+			// rippled TransactionEntry.cpp:71 emits a bare "transactionNotFound" token
+			// (distinct from the `tx` command's "txnNotFound"=29) with no numeric code.
+			assert.Equal(t, "transactionNotFound", rpcErr.ErrorString)
+			assert.Equal(t, types.RpcUNKNOWN, rpcErr.Code)
+			assert.True(t, rpcErr.IsBareToken())
+		})
 	}
-	paramsJSON, _ := json.Marshal(params)
+}
 
-	result, rpcErr := method.Handle(ctx, paramsJSON)
+func TestTransactionEntryContextReadError(t *testing.T) {
+	mock := newMockLedgerServiceTE()
+	ledger := &contextErrorLedgerReaderTE{mockLedgerReaderTE: newMockLedgerReaderTE(2)}
+	mock.ledgers[ledger.Sequence()] = ledger
+	mock.ledgersByHash[ledger.Hash()] = ledger
 
-	assert.Nil(t, result, "Expected nil result when tx is not found")
-	require.NotNil(t, rpcErr, "Expected RPC error when tx is not found")
-	assert.Contains(t, rpcErr.Message, "not found")
-	// rippled TransactionEntry.cpp:71 emits a bare "transactionNotFound" token
-	// (distinct from the `tx` command's "txnNotFound"=29) with no numeric code.
-	assert.Equal(t, "transactionNotFound", rpcErr.ErrorString)
-	assert.Equal(t, types.RpcUNKNOWN, rpcErr.Code)
-	assert.True(t, rpcErr.IsBareToken())
+	requestContext, cancel := context.WithCancel(context.Background())
+	cancel()
+	ctx := &types.RpcContext{
+		Context:    requestContext,
+		Role:       types.RoleGuest,
+		ApiVersion: types.ApiVersion1,
+		Services:   newTransactionEntryTestServices(mock),
+	}
+	params, err := json.Marshal(map[string]any{
+		"tx_hash":      strings.Repeat("0", 64),
+		"ledger_index": 2,
+	})
+	require.NoError(t, err)
+
+	result, rpcErr := (&handlers.TransactionEntryMethod{}).Handle(ctx, params)
+
+	assert.Nil(t, result)
+	require.NotNil(t, rpcErr)
+	assert.Equal(t, types.RpcINTERNAL, rpcErr.Code)
+	assert.True(t, ledger.called)
 }
 
 // TestTransactionEntryTxNotInRequestedLedger tests that a transaction found in a different
@@ -482,6 +533,10 @@ func TestTransactionEntryResponseStructure(t *testing.T) {
 	txJSON["Sequence"] = 3
 	storedTx := map[string]any{"tx_json": txJSON, "meta": validStoredMetadata()}
 	txData, _ := json.Marshal(storedTx)
+	txHashBytes, _ := hex.DecodeString(txHashStr)
+	var txHash [32]byte
+	copy(txHash[:], txHashBytes)
+	ledger2.txs[txHash] = txData
 
 	mock.transactions[txHashStr] = &types.TransactionInfo{
 		TxData:      txData,
@@ -529,6 +584,9 @@ func TestTransactionEntryResponseStructure(t *testing.T) {
 	require.True(t, ok, "tx_json must be an object")
 	assert.Equal(t, "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh", txJSON["Account"])
 	assert.Equal(t, "Payment", txJSON["TransactionType"])
+	assert.Equal(t, txHashStr, txJSON["hash"])
+	assert.Equal(t, "1000000", txJSON["Amount"])
+	assert.Equal(t, "1000000", txJSON["DeliverMax"])
 
 	// Validate metadata content
 	meta, ok := resp["metadata"].(map[string]any)

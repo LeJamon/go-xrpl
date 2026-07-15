@@ -56,7 +56,7 @@ func TestTxQ_InitialMetrics(t *testing.T) {
 	cfg := makeConfig()
 	q := txq.New(cfg)
 
-	metrics := q.GetMetrics(0)
+	metrics := q.Metrics(0)
 	require.Equal(t, uint32(0), metrics.TxCount)
 	require.Equal(t, uint32(3), metrics.TxPerLedger) // minimumTxnInLedger
 }
@@ -68,7 +68,7 @@ func TestTxQ_GetRequiredFeeLevel(t *testing.T) {
 	q := txq.New(cfg)
 
 	// With 0 txns in ledger, required fee level should be base (256)
-	feeLevel := q.GetRequiredFeeLevel(0)
+	feeLevel := q.RequiredFeeLevel(0)
 	t.Logf("Fee level with 0 txns: %d", feeLevel)
 	require.True(t, feeLevel > 0, "Fee level should be positive")
 }
@@ -97,7 +97,7 @@ func TestTxQ_GetAccountTxs(t *testing.T) {
 
 	var account [20]byte
 	copy(account[:], []byte("alice"))
-	txs := q.GetAccountTxs(account)
+	txs := q.AccountTxs(account)
 	require.Empty(t, txs)
 }
 
@@ -106,7 +106,7 @@ func TestTxQ_AllTxs_EmptyQueue(t *testing.T) {
 	cfg := makeConfig()
 	q := txq.New(cfg)
 
-	txs := q.GetAllTxs()
+	txs := q.AllTxs()
 	require.Empty(t, txs)
 }
 
@@ -131,7 +131,7 @@ func TestTxQ_FeeAndSeq(t *testing.T) {
 	var account [20]byte
 	copy(account[:], []byte("alice"))
 
-	info := q.GetTxRequiredFeeAndSeq(account, 5, 10, 0)
+	info := q.TxRequiredFeeAndSeq(account, 5, 10, 0)
 	t.Logf("FeeAndSeq: RequiredFee=%d, AvailableSeq=%d", info.RequiredFee, info.AvailableSeq)
 	require.True(t, info.RequiredFee > 0, "Required fee should be positive")
 	require.Equal(t, uint32(5), info.AvailableSeq)
@@ -143,7 +143,7 @@ func TestTxQ_StandaloneConfig(t *testing.T) {
 	cfg.Standalone = true
 	q := txq.New(cfg)
 
-	metrics := q.GetMetrics(0)
+	metrics := q.Metrics(0)
 	// In standalone mode, txPerLedger should use StandaloneTxnInLedger
 	t.Logf("Standalone metrics: TxPerLedger=%d", metrics.TxPerLedger)
 	require.True(t, metrics.TxPerLedger > 0)
@@ -156,10 +156,10 @@ func TestTxQ_FeeEscalation(t *testing.T) {
 	cfg := makeConfig()
 	q := txq.New(cfg)
 
-	level0 := q.GetRequiredFeeLevel(0)
-	level3 := q.GetRequiredFeeLevel(3) // at minimumTxnInLedger
-	level5 := q.GetRequiredFeeLevel(5) // at targetTxnInLedger
-	level8 := q.GetRequiredFeeLevel(8) // above target
+	level0 := q.RequiredFeeLevel(0)
+	level3 := q.RequiredFeeLevel(3) // at minimumTxnInLedger
+	level5 := q.RequiredFeeLevel(5) // at targetTxnInLedger
+	level8 := q.RequiredFeeLevel(8) // above target
 
 	t.Logf("Fee levels: 0tx=%d, 3tx=%d, 5tx=%d, 8tx=%d", level0, level3, level5, level8)
 
@@ -191,7 +191,7 @@ func TestTxQ_ProcessClosedLedger(t *testing.T) {
 	result := q.ProcessClosedLedger(ctx, false)
 	t.Logf("ProcessClosedLedger returned %d", result)
 
-	metrics := q.GetMetrics(0)
+	metrics := q.Metrics(0)
 	t.Logf("After ProcessClosedLedger: TxPerLedger=%d, TxCount=%d", metrics.TxPerLedger, metrics.TxCount)
 }
 
@@ -223,7 +223,7 @@ func TestTxQ_TimeLeap_ResetsMetrics(t *testing.T) {
 	}
 	q.ProcessClosedLedger(ctx2, true)
 
-	metrics := q.GetMetrics(0)
+	metrics := q.Metrics(0)
 	t.Logf("After time leap: TxPerLedger=%d", metrics.TxPerLedger)
 	// After time leap, txPerLedger should reset toward minimum
 }

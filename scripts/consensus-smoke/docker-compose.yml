@@ -11,14 +11,14 @@ name: goxrpl-consensus-smoke
 
 services:
   rippled-0:
-    image: ${RIPPLED_IMAGE:-rippleci/rippled:2.6.2}
+    image: ${RIPPLED_IMAGE:-xrpllabsofficial/xrpld:3.2.0}
     hostname: rippled-0
     ports:
       - "5005"
       - "6006"
     volumes:
-      - ./configs:/etc/rippled:ro
-    command: ["--conf", "/etc/rippled/rippled-0.cfg"]
+      - ./configs/rippled-0.cfg:/config/xrpld.cfg:ro
+      - ./configs/validators.txt:/config/validators.txt:ro
     networks: [smoke]
     healthcheck:
       test: ["CMD-SHELL", "wget -qO- --post-data='{\"method\":\"server_info\"}' http://localhost:5005 || exit 1"]
@@ -28,14 +28,14 @@ services:
       start_period: 5s
 
   rippled-1:
-    image: ${RIPPLED_IMAGE:-rippleci/rippled:2.6.2}
+    image: ${RIPPLED_IMAGE:-xrpllabsofficial/xrpld:3.2.0}
     hostname: rippled-1
     ports:
       - "5005"
       - "6006"
     volumes:
-      - ./configs:/etc/rippled:ro
-    command: ["--conf", "/etc/rippled/rippled-1.cfg"]
+      - ./configs/rippled-1.cfg:/config/xrpld.cfg:ro
+      - ./configs/validators.txt:/config/validators.txt:ro
     networks: [smoke]
     healthcheck:
       test: ["CMD-SHELL", "wget -qO- --post-data='{\"method\":\"server_info\"}' http://localhost:5005 || exit 1"]
@@ -55,8 +55,10 @@ services:
     command: ["server", "--conf", "/etc/goxrpl/goxrpl-0.toml"]
     networks: [smoke]
     depends_on:
-      - rippled-0
-      - rippled-1
+      rippled-0:
+        condition: service_healthy
+      rippled-1:
+        condition: service_healthy
 
 networks:
   smoke:

@@ -8,7 +8,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/LeJamon/go-xrpl/internal/ledger/state"
 	"github.com/LeJamon/go-xrpl/internal/testing/accountset"
 	"github.com/LeJamon/go-xrpl/internal/testing/credential"
 	"github.com/LeJamon/go-xrpl/internal/testing/depositpreauth"
@@ -19,6 +18,96 @@ import (
 	jtx "github.com/LeJamon/go-xrpl/internal/testing"
 	"github.com/stretchr/testify/require"
 )
+
+// TestPayChan_FixCleanup3_2_0 exercises the fixCleanup3_2_0-gated PaymentChannel
+// changes in both amendment states: apply-time signature/expiration failures
+// become tecNO_PERMISSION, and a zero Channel is rejected at preflight.
+func TestPayChan_FixCleanup3_2_0(t *testing.T) {
+	setup := func(t *testing.T, fixOn bool) (*jtx.TestEnv, *jtx.Account, *jtx.Account, string) {
+		env := jtx.NewTestEnv(t)
+		if !fixOn {
+			env.DisableFeature("fixCleanup3_2_0")
+		}
+		alice := jtx.NewAccount("alice")
+		bob := jtx.NewAccount("bob")
+		env.FundAmount(alice, uint64(jtx.XRP(10000)))
+		env.FundAmount(bob, uint64(jtx.XRP(10000)))
+		env.Close()
+		pk := alice.PublicKeyHex()
+		chanK := chanKeylet(alice, bob, env.Seq(alice))
+		res := env.Submit(ChannelCreate(alice, bob, xrp(1000), 3600, pk).Build())
+		jtx.RequireTxSuccess(t, res)
+		env.Close()
+		return env, alice, bob, hex.EncodeToString(chanK.Key[:])
+	}
+
+	const zeroChannel = "0000000000000000000000000000000000000000000000000000000000000000"
+
+	t.Run("ZeroChannel", func(t *testing.T) {
+		for _, fixOn := range []bool{true, false} {
+			t.Run(fmt.Sprintf("fixOn=%v", fixOn), func(t *testing.T) {
+				env, _, bob, _ := setup(t, fixOn)
+				resClaim := env.Submit(ChannelClaim(bob, zeroChannel).Build())
+				resFund := env.Submit(ChannelFund(bob, zeroChannel, xrp(100)).Build())
+				if fixOn {
+					require.Equal(t, "temMALFORMED", resClaim.Code)
+					require.Equal(t, "temMALFORMED", resFund.Code)
+				} else {
+					require.NotEqual(t, "temMALFORMED", resClaim.Code)
+					require.NotEqual(t, "temMALFORMED", resFund.Code)
+				}
+			})
+		}
+	})
+
+	t.Run("DestClaimNoSignature", func(t *testing.T) {
+		for _, fixOn := range []bool{true, false} {
+			t.Run(fmt.Sprintf("fixOn=%v", fixOn), func(t *testing.T) {
+				env, _, bob, chanIDHex := setup(t, fixOn)
+				res := env.Submit(ChannelClaim(bob, chanIDHex).Balance(xrp(100)).Amount(xrp(100)).Build())
+				if fixOn {
+					require.Equal(t, "tecNO_PERMISSION", res.Code)
+				} else {
+					require.Equal(t, "temBAD_SIGNATURE", res.Code)
+				}
+			})
+		}
+	})
+
+	t.Run("BadSigner", func(t *testing.T) {
+		for _, fixOn := range []bool{true, false} {
+			t.Run(fmt.Sprintf("fixOn=%v", fixOn), func(t *testing.T) {
+				env, _, bob, chanIDHex := setup(t, fixOn)
+				sig := signClaimAuth(bob, chanIDHex, uint64(xrp(100)))
+				res := env.Submit(ChannelClaim(bob, chanIDHex).Balance(xrp(100)).Amount(xrp(100)).
+					Signature(sig).PublicKey(bob.PublicKeyHex()).Build())
+				if fixOn {
+					require.Equal(t, "tecNO_PERMISSION", res.Code)
+				} else {
+					require.Equal(t, "temBAD_SIGNER", res.Code)
+				}
+			})
+		}
+	})
+
+	t.Run("FundBadExpiration", func(t *testing.T) {
+		for _, fixOn := range []bool{true, false} {
+			t.Run(fmt.Sprintf("fixOn=%v", fixOn), func(t *testing.T) {
+				env, alice, _, chanIDHex := setup(t, fixOn)
+				closeTime := ToRippleTime(env.Now())
+				minExpiration := closeTime + 3600
+				jtx.RequireTxSuccess(t, env.Submit(ChannelClaim(alice, chanIDHex).Close().Build()))
+				res := env.Submit(ChannelFund(alice, chanIDHex, drops(1_000_000)).
+					ExpirationRipple(minExpiration - 50).Build())
+				if fixOn {
+					require.Equal(t, "tecNO_PERMISSION", res.Code)
+				} else {
+					require.Equal(t, "temBAD_EXPIRATION", res.Code)
+				}
+			})
+		}
+	})
+}
 
 // TestPayChan_Simple tests basic payment channel creation and operations.
 // From rippled: PayChan_test::testSimple
@@ -74,8 +163,10 @@ func TestPayChan_Simple(t *testing.T) {
 	// Can't create channel to same account
 	submitExpect(t, env, ChannelCreate(alice, alice, xrp(1000), settleDelay, pk).Build(), "temDST_IS_SRC")
 
-	// Invalid channel (fund non-existent channel)
-	submitExpect(t, env, ChannelFund(alice, "0000000000000000000000000000000000000000000000000000000000000000", xrp(1000)).Build(), "tecNO_ENTRY")
+	// Invalid channel (fund non-existent channel). Uses a non-zero absent
+	// channel ID: a zero channel is rejected earlier as temMALFORMED under
+	// fixCleanup3_2_0 (covered by TestPayChan_ZeroChannel).
+	submitExpect(t, env, ChannelFund(alice, "1111111111111111111111111111111111111111111111111111111111111111", xrp(1000)).Build(), "tecNO_ENTRY")
 
 	// Not enough funds
 	submitExpect(t, env, ChannelCreate(alice, bob, xrp(10000), settleDelay, pk).Build(), "tecUNFUNDED")
@@ -185,7 +276,7 @@ func TestPayChan_Simple(t *testing.T) {
 		result := env.Submit(ChannelClaim(bob, chanIDHex).
 			Balance(xrp(1500)).Amount(xrp(1500)).
 			Signature(sig).PublicKey(bob.PublicKeyHex()).Build())
-		require.Equal(t, "temBAD_SIGNER", result.Code)
+		require.Equal(t, "tecNO_PERMISSION", result.Code)
 
 		require.Equal(t, chanBal, chanBalance(env, chanK))
 		require.Equal(t, chanAmt, chanAmount(env, chanK))
@@ -222,25 +313,6 @@ func TestPayChan_Simple(t *testing.T) {
 // TestPayChan_DisallowIncoming tests the DisallowIncoming flag.
 // From rippled: PayChan_test::testDisallowIncoming
 func TestPayChan_DisallowIncoming(t *testing.T) {
-	// Test flag doesn't set without amendment
-	t.Run("FlagDoesntSetWithoutAmendment", func(t *testing.T) {
-		env := jtx.NewTestEnv(t)
-		env.DisableFeature("DisallowIncoming")
-
-		alice := jtx.NewAccount("alice")
-		env.FundAmount(alice, uint64(jtx.XRP(10000)))
-		env.Close()
-
-		env.EnableDisallowIncomingPayChan(alice)
-		env.Close()
-
-		// Flag should not be set since amendment is disabled
-		info := env.AccountInfo(alice)
-		require.NotNil(t, info)
-		require.Equal(t, uint32(0), info.Flags&state.LsfDisallowIncomingPayChan,
-			"DisallowIncomingPayChan flag should not be set without amendment")
-	})
-
 	t.Run("MainFlow", func(t *testing.T) {
 		env := jtx.NewTestEnv(t)
 
@@ -546,8 +618,10 @@ func TestPayChan_SettleDelay(t *testing.T) {
 		require.Equal(t, preBob+uint64(delta)-10, env.Balance(bob))
 	}
 
-	// Advance past settle time — channel will close
-	env.SetTime(settleTimepoint)
+	// Advance past settle time — channel will close. fixCleanup3_2_0 makes the
+	// expiry comparison strict (parentCloseTime > expiration), so advance a full
+	// settle delay beyond to land strictly past the channel's expiration.
+	env.SetTime(settleTimepoint.Add(time.Duration(settleDelay) * time.Second))
 	env.Close()
 	{
 		chanBal := chanBalance(env, chanK)
@@ -639,9 +713,9 @@ func TestPayChan_Expiration(t *testing.T) {
 	require.True(t, hasExp)
 	require.Equal(t, minExpiration+50, exp)
 
-	// Decrease expiration below minExpiration → temBAD_EXPIRATION
+	// Decrease expiration below minExpiration → tecNO_PERMISSION (fixCleanup3_2_0)
 	submitExpect(t, env, ChannelFund(alice, chanIDHex, drops(1_000_000)).
-		ExpirationRipple(minExpiration-50).Build(), "temBAD_EXPIRATION")
+		ExpirationRipple(minExpiration-50).Build(), "tecNO_PERMISSION")
 
 	exp, hasExp = chanExpiration(env, chanK)
 	require.True(t, hasExp)
@@ -661,9 +735,9 @@ func TestPayChan_Expiration(t *testing.T) {
 	_, hasExp = chanExpiration(env, chanK)
 	require.False(t, hasExp, "expiration should be cleared after renew")
 
-	// Decrease expiration below minExpiration after renew → temBAD_EXPIRATION
+	// Decrease expiration below minExpiration after renew → tecNO_PERMISSION (fixCleanup3_2_0)
 	submitExpect(t, env, ChannelFund(alice, chanIDHex, drops(1_000_000)).
-		ExpirationRipple(minExpiration-50).Build(), "temBAD_EXPIRATION")
+		ExpirationRipple(minExpiration-50).Build(), "tecNO_PERMISSION")
 
 	_, hasExp = chanExpiration(env, chanK)
 	require.False(t, hasExp)
@@ -816,27 +890,7 @@ func TestPayChan_DisallowXRP(t *testing.T) {
 	alice := jtx.NewAccount("alice")
 	bob := jtx.NewAccount("bob")
 
-	// Create channel where dst disallows XRP (without DepositAuth)
-	t.Run("CreateWithoutDepositAuth", func(t *testing.T) {
-		env := jtx.NewTestEnv(t)
-		env.DisableFeature("DepositAuth")
-
-		env.FundAmount(alice, uint64(jtx.XRP(10000)))
-		env.FundAmount(bob, uint64(jtx.XRP(10000)))
-		env.Close()
-
-		result := env.Submit(accountset.AccountSet(bob).DisallowXRP().Build())
-		jtx.RequireTxSuccess(t, result)
-		env.Close()
-
-		seq := env.Seq(alice)
-		chanK := chanKeylet(alice, bob, seq)
-
-		submitExpect(t, env, ChannelCreate(alice, bob, xrp(1000), 3600, alice.PublicKeyHex()).Build(), "tecNO_TARGET")
-		require.False(t, chanExists(env, chanK))
-	})
-
-	// Create channel where dst disallows XRP — with DepositAuth (advisory)
+	// Create channel where dst disallows XRP — the flag is advisory.
 	t.Run("CreateWithDepositAuth", func(t *testing.T) {
 		env := jtx.NewTestEnv(t)
 
@@ -857,34 +911,7 @@ func TestPayChan_DisallowXRP(t *testing.T) {
 		require.True(t, chanExists(env, chanK))
 	})
 
-	// Claim to a channel where dst disallows XRP (without DepositAuth)
-	t.Run("ClaimWithoutDepositAuth", func(t *testing.T) {
-		env := jtx.NewTestEnv(t)
-		env.DisableFeature("DepositAuth")
-
-		env.FundAmount(alice, uint64(jtx.XRP(10000)))
-		env.FundAmount(bob, uint64(jtx.XRP(10000)))
-		env.Close()
-
-		seq := env.Seq(alice)
-		chanK := chanKeylet(alice, bob, seq)
-		chanIDHex := hex.EncodeToString(chanK.Key[:])
-
-		result := env.Submit(ChannelCreate(alice, bob, xrp(1000), 3600, alice.PublicKeyHex()).Build())
-		jtx.RequireTxSuccess(t, result)
-		env.Close()
-		require.True(t, chanExists(env, chanK))
-
-		result = env.Submit(accountset.AccountSet(bob).DisallowXRP().Build())
-		jtx.RequireTxSuccess(t, result)
-		env.Close()
-
-		reqBal := xrp(500)
-		submitExpect(t, env, ChannelClaim(alice, chanIDHex).
-			Balance(reqBal).Amount(reqBal).Build(), "tecNO_TARGET")
-	})
-
-	// Claim to a channel where dst disallows XRP — with DepositAuth (advisory)
+	// Claim to a channel where dst disallows XRP — the flag is advisory.
 	t.Run("ClaimWithDepositAuth", func(t *testing.T) {
 		env := jtx.NewTestEnv(t)
 
@@ -1006,7 +1033,7 @@ func TestPayChan_DepositAuth(t *testing.T) {
 
 		// bob claims but omits the signature. Fails because only alice can claim without sig.
 		submitExpect(t, env, ChannelClaim(bob, chanIDHex).
-			Balance(delta).Amount(delta).Build(), "temBAD_SIGNATURE")
+			Balance(delta).Amount(delta).Build(), "tecNO_PERMISSION")
 		env.Close()
 
 		// bob claims with signature. Succeeds since bob submitted the transaction.
@@ -1015,7 +1042,9 @@ func TestPayChan_DepositAuth(t *testing.T) {
 			Signature(sig).PublicKey(pk).Build())
 		jtx.RequireTxSuccess(t, result)
 		env.Close()
-		require.Equal(t, preBob+uint64(delta)-baseFee, env.Balance(bob))
+		// Two baseFees: the no-signature claim now fails with tecNO_PERMISSION
+		// (fee charged) under fixCleanup3_2_0 rather than temBAD_SIGNATURE (no fee).
+		require.Equal(t, preBob+uint64(delta)-2*baseFee, env.Balance(bob))
 	}
 
 	{
@@ -1053,7 +1082,10 @@ func TestPayChan_DepositAuth(t *testing.T) {
 		jtx.RequireTxSuccess(t, result)
 		env.Close()
 
-		require.Equal(t, preBob+uint64(delta)-(3*baseFee), env.Balance(bob))
+		// Four baseFees: bob's two preauthorizations plus the two block-1 claims
+		// he submitted, one of which (no signature) now costs a fee under
+		// fixCleanup3_2_0 (tecNO_PERMISSION) instead of being rejected fee-free.
+		require.Equal(t, preBob+uint64(delta)-(4*baseFee), env.Balance(bob))
 	}
 
 	{
@@ -1077,7 +1109,9 @@ func TestPayChan_DepositAuth(t *testing.T) {
 			Balance(delta).Amount(delta).Build())
 		jtx.RequireTxSuccess(t, result)
 		env.Close()
-		require.Equal(t, preBob+uint64(xrp(800))-(5*baseFee), env.Balance(bob))
+		// One more baseFee than pre-fix: the block-1 no-signature claim now costs
+		// a fee (tecNO_PERMISSION) under fixCleanup3_2_0.
+		require.Equal(t, preBob+uint64(xrp(800))-(6*baseFee), env.Balance(bob))
 	}
 }
 
@@ -1432,44 +1466,8 @@ func TestPayChan_MetaAndOwnership(t *testing.T) {
 	pk := jtx.NewAccount("alice").PublicKeyHex()
 	settleDelay := uint32(100)
 
-	// Without fixPayChanRecipientOwnerDir: channel only in sender's dir
-	t.Run("WithoutFixRecipientOwnerDir", func(t *testing.T) {
-		env := jtx.NewTestEnv(t)
-		env.DisableFeature("fixPayChanRecipientOwnerDir")
-
-		alice := jtx.NewAccount("alice")
-		bob := jtx.NewAccount("bob")
-		env.FundAmount(alice, uint64(jtx.XRP(10000)))
-		env.FundAmount(bob, uint64(jtx.XRP(10000)))
-		env.Close()
-
-		seq := env.Seq(alice)
-		chanK := chanKeylet(alice, bob, seq)
-		chanIDHex := hex.EncodeToString(chanK.Key[:])
-
-		result := env.Submit(ChannelCreate(alice, bob, xrp(1000), settleDelay, pk).Build())
-		jtx.RequireTxSuccess(t, result)
-		env.Close()
-
-		require.True(t, inOwnerDir(env, alice, chanK.Key))
-		require.Equal(t, 1, ownerDirCount(env, alice))
-		require.False(t, inOwnerDir(env, bob, chanK.Key))
-		require.Equal(t, 0, ownerDirCount(env, bob))
-
-		// Close the channel
-		result = env.Submit(ChannelClaim(bob, chanIDHex).Close().Build())
-		jtx.RequireTxSuccess(t, result)
-		env.Close()
-
-		require.False(t, chanExists(env, chanK))
-		require.False(t, inOwnerDir(env, alice, chanK.Key))
-		require.Equal(t, 0, ownerDirCount(env, alice))
-		require.False(t, inOwnerDir(env, bob, chanK.Key))
-		require.Equal(t, 0, ownerDirCount(env, bob))
-	})
-
-	// With fixPayChanRecipientOwnerDir: channel in both dirs
-	t.Run("WithFixRecipientOwnerDir", func(t *testing.T) {
+	// The channel is added to the recipient's owner directory too.
+	t.Run("RecipientOwnerDir", func(t *testing.T) {
 		env := jtx.NewTestEnv(t)
 
 		alice := jtx.NewAccount("alice")
@@ -1502,51 +1500,6 @@ func TestPayChan_MetaAndOwnership(t *testing.T) {
 		require.False(t, inOwnerDir(env, bob, chanK.Key))
 		require.Equal(t, 0, ownerDirCount(env, bob))
 	})
-
-	// Migration: created before fix, closed after fix
-	t.Run("MigrationBeforeAfterFix", func(t *testing.T) {
-		env := jtx.NewTestEnv(t)
-		env.DisableFeature("fixPayChanRecipientOwnerDir")
-
-		alice := jtx.NewAccount("alice")
-		bob := jtx.NewAccount("bob")
-		env.FundAmount(alice, uint64(jtx.XRP(10000)))
-		env.FundAmount(bob, uint64(jtx.XRP(10000)))
-		env.Close()
-
-		// Create channel before amendment activates
-		seq := env.Seq(alice)
-		chanK := chanKeylet(alice, bob, seq)
-		chanIDHex := hex.EncodeToString(chanK.Key[:])
-
-		result := env.Submit(ChannelCreate(alice, bob, xrp(1000), settleDelay, pk).Build())
-		jtx.RequireTxSuccess(t, result)
-		env.Close()
-
-		require.True(t, inOwnerDir(env, alice, chanK.Key))
-		require.Equal(t, 1, ownerDirCount(env, alice))
-		require.False(t, inOwnerDir(env, bob, chanK.Key))
-		require.Equal(t, 0, ownerDirCount(env, bob))
-
-		// Enable the amendment
-		env.EnableFeature("fixPayChanRecipientOwnerDir")
-		env.Close()
-
-		require.True(t, inOwnerDir(env, alice, chanK.Key))
-		require.False(t, inOwnerDir(env, bob, chanK.Key))
-		require.Equal(t, 0, ownerDirCount(env, bob))
-
-		// Close the channel after the amendment activates
-		result = env.Submit(ChannelClaim(bob, chanIDHex).Close().Build())
-		jtx.RequireTxSuccess(t, result)
-		env.Close()
-
-		require.False(t, chanExists(env, chanK))
-		require.False(t, inOwnerDir(env, alice, chanK.Key))
-		require.Equal(t, 0, ownerDirCount(env, alice))
-		require.False(t, inOwnerDir(env, bob, chanK.Key))
-		require.Equal(t, 0, ownerDirCount(env, bob))
-	})
 }
 
 // TestPayChan_AccountDelete tests account delete with payment channels.
@@ -1556,248 +1509,79 @@ func TestPayChan_AccountDelete(t *testing.T) {
 	bob := jtx.NewAccount("bob")
 	carol := jtx.NewAccount("carol")
 
-	for _, withOwnerDirFix := range []bool{false, true} {
-		label := "WithoutOwnerDirFix"
-		if withOwnerDirFix {
-			label = "WithOwnerDirFix"
-		}
-		t.Run(label, func(t *testing.T) {
-			env := jtx.NewTestEnv(t)
-			if !withOwnerDirFix {
-				env.DisableFeature("fixPayChanRecipientOwnerDir")
-			}
+	env := jtx.NewTestEnv(t)
 
-			env.FundAmount(alice, uint64(jtx.XRP(10000)))
-			env.FundAmount(bob, uint64(jtx.XRP(10000)))
-			env.FundAmount(carol, uint64(jtx.XRP(10000)))
-			env.Close()
+	env.FundAmount(alice, uint64(jtx.XRP(10000)))
+	env.FundAmount(bob, uint64(jtx.XRP(10000)))
+	env.FundAmount(carol, uint64(jtx.XRP(10000)))
+	env.Close()
 
-			pk := alice.PublicKeyHex()
-			settleDelay := uint32(100)
+	pk := alice.PublicKeyHex()
+	settleDelay := uint32(100)
 
-			seq := env.Seq(alice)
-			chanK := chanKeylet(alice, bob, seq)
-			chanIDHex := hex.EncodeToString(chanK.Key[:])
+	seq := env.Seq(alice)
+	chanK := chanKeylet(alice, bob, seq)
+	chanIDHex := hex.EncodeToString(chanK.Key[:])
 
-			result := env.Submit(ChannelCreate(alice, bob, xrp(1000), settleDelay, pk).Build())
-			jtx.RequireTxSuccess(t, result)
-			env.Close()
+	result := env.Submit(ChannelCreate(alice, bob, xrp(1000), settleDelay, pk).Build())
+	jtx.RequireTxSuccess(t, result)
+	env.Close()
 
-			require.Equal(t, uint64(0), chanBalance(env, chanK))
-			require.Equal(t, uint64(xrp(1000)), chanAmount(env, chanK))
+	require.Equal(t, uint64(0), chanBalance(env, chanK))
+	require.Equal(t, uint64(xrp(1000)), chanAmount(env, chanK))
 
-			// Alice can't be deleted because she owns the channel
-			rmAccount(t, env, alice, carol, "tecHAS_OBLIGATIONS")
+	// Alice can't be deleted because she owns the channel.
+	rmAccount(t, env, alice, carol, "tecHAS_OBLIGATIONS")
 
-			// Bob can only be removed if the channel isn't in their owner directory
-			if withOwnerDirFix {
-				rmAccount(t, env, bob, carol, "tecHAS_OBLIGATIONS")
-			} else {
-				rmAccount(t, env, bob, carol, "tesSUCCESS")
-			}
+	// Bob can't be deleted either: the channel is in his owner directory.
+	rmAccount(t, env, bob, carol, "tecHAS_OBLIGATIONS")
 
-			chanBal := chanBalance(env, chanK)
-			chanAmt := chanAmount(env, chanK)
-			require.Equal(t, uint64(0), chanBal)
-			require.Equal(t, uint64(xrp(1000)), chanAmt)
+	chanBal := chanBalance(env, chanK)
+	chanAmt := chanAmount(env, chanK)
+	require.Equal(t, uint64(0), chanBal)
+	require.Equal(t, uint64(xrp(1000)), chanAmt)
 
-			preBob := env.Balance(bob)
-			delta := xrp(50)
-			reqBal := int64(chanBal) + delta
-			authAmt := reqBal + xrp(100)
-			baseFee := uint64(10)
+	preBob := env.Balance(bob)
+	delta := xrp(50)
+	reqBal := int64(chanBal) + delta
+	authAmt := reqBal + xrp(100)
+	baseFee := uint64(10)
 
-			// Claim should fail if the dst was removed
-			if withOwnerDirFix {
-				result = env.Submit(ChannelClaim(alice, chanIDHex).
-					Balance(reqBal).Amount(authAmt).Build())
-				jtx.RequireTxSuccess(t, result)
-				env.Close()
+	// Claim succeeds; bob still exists.
+	result = env.Submit(ChannelClaim(alice, chanIDHex).
+		Balance(reqBal).Amount(authAmt).Build())
+	jtx.RequireTxSuccess(t, result)
+	env.Close()
 
-				require.Equal(t, uint64(reqBal), chanBalance(env, chanK))
-				require.Equal(t, chanAmt, chanAmount(env, chanK))
-				require.Equal(t, preBob+uint64(delta), env.Balance(bob))
-			} else {
-				preAlice := env.Balance(alice)
-				submitExpect(t, env, ChannelClaim(alice, chanIDHex).
-					Balance(reqBal).Amount(authAmt).Build(), "tecNO_DST")
-				env.Close()
+	require.Equal(t, uint64(reqBal), chanBalance(env, chanK))
+	require.Equal(t, chanAmt, chanAmount(env, chanK))
+	require.Equal(t, preBob+uint64(delta), env.Balance(bob))
 
-				require.Equal(t, chanBal, chanBalance(env, chanK))
-				require.Equal(t, chanAmt, chanAmount(env, chanK))
-				require.Equal(t, preBob, env.Balance(bob))
-				require.Equal(t, preAlice-baseFee, env.Balance(alice))
-			}
+	// Fund succeeds.
+	preAlice := env.Balance(alice)
+	result = env.Submit(ChannelFund(alice, chanIDHex, xrp(1000)).Build())
+	jtx.RequireTxSuccess(t, result)
+	env.Close()
 
-			// Fund should fail if the dst was removed
-			if withOwnerDirFix {
-				preAlice := env.Balance(alice)
-				result = env.Submit(ChannelFund(alice, chanIDHex, xrp(1000)).Build())
-				jtx.RequireTxSuccess(t, result)
-				env.Close()
+	require.Equal(t, preAlice-uint64(xrp(1000))-baseFee, env.Balance(alice))
+	require.Equal(t, chanAmt+uint64(xrp(1000)), chanAmount(env, chanK))
 
-				require.Equal(t, preAlice-uint64(xrp(1000))-baseFee, env.Balance(alice))
-				require.Equal(t, chanAmt+uint64(xrp(1000)), chanAmount(env, chanK))
-			} else {
-				preAlice := env.Balance(alice)
-				submitExpect(t, env, ChannelFund(alice, chanIDHex, xrp(1000)).Build(), "tecNO_DST")
-				env.Close()
+	// Owner closes, will close after settleDelay.
+	result = env.Submit(ChannelClaim(alice, chanIDHex).Close().Build())
+	jtx.RequireTxSuccess(t, result)
+	env.Close()
 
-				require.Equal(t, preAlice-baseFee, env.Balance(alice))
-				require.Equal(t, chanAmt, chanAmount(env, chanK))
-			}
+	// Settle delay hasn't elapsed. Channel should exist.
+	require.True(t, chanExists(env, chanK))
 
-			// Owner closes, will close after settleDelay
-			{
-				result = env.Submit(ChannelClaim(alice, chanIDHex).Close().Build())
-				jtx.RequireTxSuccess(t, result)
-				env.Close()
+	// Advance past settle delay.
+	env.AdvanceTime(time.Duration(settleDelay+10) * time.Second)
+	env.Close()
 
-				// settle delay hasn't elapsed. Channel should exist.
-				require.True(t, chanExists(env, chanK))
-
-				// Advance past settle delay
-				env.AdvanceTime(time.Duration(settleDelay+10) * time.Second)
-				env.Close()
-
-				result = env.Submit(ChannelClaim(alice, chanIDHex).Close().Build())
-				jtx.RequireTxSuccess(t, result)
-				env.Close()
-				require.False(t, chanExists(env, chanK))
-			}
-		})
-	}
-
-	// Test resurrected account
-	t.Run("ResurrectedAccount", func(t *testing.T) {
-		env := jtx.NewTestEnv(t)
-		env.DisableFeature("fixPayChanRecipientOwnerDir")
-
-		env.FundAmount(alice, uint64(jtx.XRP(10000)))
-		env.FundAmount(bob, uint64(jtx.XRP(10000)))
-		env.FundAmount(carol, uint64(jtx.XRP(10000)))
-		env.Close()
-
-		pk := alice.PublicKeyHex()
-		settleDelay := uint32(100)
-
-		seq := env.Seq(alice)
-		chanK := chanKeylet(alice, bob, seq)
-		chanIDHex := hex.EncodeToString(chanK.Key[:])
-
-		result := env.Submit(ChannelCreate(alice, bob, xrp(1000), settleDelay, pk).Build())
-		jtx.RequireTxSuccess(t, result)
-		env.Close()
-
-		require.Equal(t, uint64(0), chanBalance(env, chanK))
-		require.Equal(t, uint64(xrp(1000)), chanAmount(env, chanK))
-
-		// Since fixPayChanRecipientOwnerDir is not active, can remove bob
-		rmAccount(t, env, bob, carol, "tesSUCCESS")
-		require.False(t, env.Exists(bob))
-
-		baseFee := uint64(10)
-		chanBal := chanBalance(env, chanK)
-		chanAmt := chanAmount(env, chanK)
-		require.Equal(t, uint64(0), chanBal)
-		require.Equal(t, uint64(xrp(1000)), chanAmt)
-		preBob := env.Balance(bob)
-		delta := xrp(50)
-		reqBal := int64(chanBal) + delta
-		authAmt := reqBal + xrp(100)
-
-		// Claim should fail since bob doesn't exist
-		{
-			preAlice := env.Balance(alice)
-			submitExpect(t, env, ChannelClaim(alice, chanIDHex).
-				Balance(reqBal).Amount(authAmt).Build(), "tecNO_DST")
-			env.Close()
-
-			require.Equal(t, chanBal, chanBalance(env, chanK))
-			require.Equal(t, chanAmt, chanAmount(env, chanK))
-			require.Equal(t, preBob, env.Balance(bob))
-			require.Equal(t, preAlice-baseFee, env.Balance(alice))
-		}
-
-		// Fund should fail since bob doesn't exist
-		{
-			preAlice := env.Balance(alice)
-			submitExpect(t, env, ChannelFund(alice, chanIDHex, xrp(1000)).Build(), "tecNO_DST")
-			env.Close()
-
-			require.Equal(t, preAlice-baseFee, env.Balance(alice))
-			require.Equal(t, chanAmt, chanAmount(env, chanK))
-		}
-
-		// Resurrect bob (needs at least reserve base = 200 XRP)
-		env.Pay(bob, uint64(jtx.XRP(250)))
-		env.Close()
-		require.True(t, env.Exists(bob))
-
-		// Alice should be able to claim
-		{
-			preBob = env.Balance(bob)
-			reqBal = int64(chanBal) + delta
-			authAmt = reqBal + xrp(100)
-
-			result = env.Submit(ChannelClaim(alice, chanIDHex).
-				Balance(reqBal).Amount(authAmt).Build())
-			jtx.RequireTxSuccess(t, result)
-			env.Close()
-
-			require.Equal(t, uint64(reqBal), chanBalance(env, chanK))
-			require.Equal(t, chanAmt, chanAmount(env, chanK))
-			require.Equal(t, preBob+uint64(delta), env.Balance(bob))
-			chanBal = uint64(reqBal)
-		}
-
-		// Bob should be able to claim with signature
-		{
-			preBob = env.Balance(bob)
-			reqBal2 := int64(chanBal) + delta
-			authAmt2 := reqBal2 + xrp(100)
-
-			sig := signClaimAuth(alice, chanIDHex, uint64(authAmt2))
-			result = env.Submit(ChannelClaim(bob, chanIDHex).
-				Balance(reqBal2).Amount(authAmt2).
-				Signature(sig).PublicKey(pk).Build())
-			jtx.RequireTxSuccess(t, result)
-			env.Close()
-
-			require.Equal(t, uint64(reqBal2), chanBalance(env, chanK))
-			require.Equal(t, chanAmt, chanAmount(env, chanK))
-			require.Equal(t, preBob+uint64(delta)-baseFee, env.Balance(bob))
-		}
-
-		// Alice should be able to fund
-		{
-			preAlice := env.Balance(alice)
-			result = env.Submit(ChannelFund(alice, chanIDHex, xrp(1000)).Build())
-			jtx.RequireTxSuccess(t, result)
-			env.Close()
-
-			require.Equal(t, preAlice-uint64(xrp(1000))-baseFee, env.Balance(alice))
-			require.Equal(t, chanAmt+uint64(xrp(1000)), chanAmount(env, chanK))
-		}
-
-		// Owner closes, will close after settleDelay
-		{
-			result = env.Submit(ChannelClaim(alice, chanIDHex).Close().Build())
-			jtx.RequireTxSuccess(t, result)
-			env.Close()
-
-			// settle delay hasn't elapsed
-			require.True(t, chanExists(env, chanK))
-
-			env.AdvanceTime(time.Duration(settleDelay+10) * time.Second)
-			env.Close()
-
-			result = env.Submit(ChannelClaim(alice, chanIDHex).Close().Build())
-			jtx.RequireTxSuccess(t, result)
-			env.Close()
-			require.False(t, chanExists(env, chanK))
-		}
-	})
+	result = env.Submit(ChannelClaim(alice, chanIDHex).Close().Build())
+	jtx.RequireTxSuccess(t, result)
+	env.Close()
+	require.False(t, chanExists(env, chanK))
 }
 
 // TestPayChan_UsingTickets tests using tickets with payment channels.

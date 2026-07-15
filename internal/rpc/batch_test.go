@@ -301,3 +301,29 @@ func TestBatch_CredentialsMaskedInErrorEcho(t *testing.T) {
 		t.Fatalf("secret not masked in echo: %v", echo["secret"])
 	}
 }
+
+func TestBatch_EarlyErrorsMaskNestedAdminCredentials(t *testing.T) {
+	builders := map[string]func(map[string]any) map[string]any{
+		"malformed": func(elem map[string]any) map[string]any {
+			return batchMalformedElement(elem, "Null method")
+		},
+		"forbidden":  batchForbiddenElement,
+		"overloaded": batchOverloadedElement,
+	}
+
+	for name, build := range builders {
+		t.Run(name, func(t *testing.T) {
+			reply := build(map[string]any{
+				"params": []any{map[string]any{
+					"admin_user":     "root",
+					"admin_password": "wrong",
+				}},
+			})
+			params := reply["params"].([]any)
+			credentials := params[0].(map[string]any)
+			if credentials["admin_user"] != maskedValue || credentials["admin_password"] != maskedValue {
+				t.Fatalf("admin credentials not masked: %v", credentials)
+			}
+		})
+	}
+}

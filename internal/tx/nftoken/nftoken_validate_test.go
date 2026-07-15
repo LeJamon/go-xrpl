@@ -9,25 +9,34 @@ import (
 // validNFTokenID is a well-formed 256-bit NFTokenID hex string.
 const validNFTokenID = "000B013AB5F762798A53D543A014CAF8B297CFF8F2F937E816E5DA9C00000001"
 
-// TestNFTokenBurnFlagValidation verifies NFTokenBurn validates flags against the
-// universal mask: arbitrary low flags are rejected while universal flags (e.g.
-// tfFullyCanonicalSig) are accepted. The previous invented tfBurnNFToken mask
-// did the opposite in both directions.
+// TestNFTokenBurnFlagValidation verifies NFTokenBurn's FlagsMasker adoption: the
+// invalid-flags mask (enforced by the engine at preflight0) rejects a
+// non-universal flag while permitting the universal flags (tfFullyCanonicalSig).
 func TestNFTokenBurnFlagValidation(t *testing.T) {
-	t.Run("non-universal flag rejected", func(t *testing.T) {
-		b := NewNFTokenBurn("rAlice", validNFTokenID)
-		b.SetFlags(0x00000001)
-		if err := b.Validate(); err == nil {
-			t.Fatal("expected temINVALID_FLAG, got nil")
+	mask := NewNFTokenBurn("rAlice", validNFTokenID).GetFlagsMask(mainnetRules())
+	t.Run("non-universal flag in mask", func(t *testing.T) {
+		if mask&0x00000001 == 0 {
+			t.Fatal("a non-universal flag must be in the NFTokenBurn invalid-flags mask")
 		}
 	})
-	t.Run("universal flag accepted", func(t *testing.T) {
-		b := NewNFTokenBurn("rAlice", validNFTokenID)
-		b.SetFlags(tx.TfFullyCanonicalSig)
-		if err := b.Validate(); err != nil {
-			t.Errorf("universal flag should be accepted, got %v", err)
+	t.Run("universal flag not in mask", func(t *testing.T) {
+		if mask&tx.TfFullyCanonicalSig != 0 {
+			t.Error("tfFullyCanonicalSig must not be in the invalid-flags mask")
 		}
 	})
+}
+
+// TestNFTokenModifyFlagValidation pins NFTokenModify's FlagsMasker adoption: the
+// invalid-flags mask (enforced by the engine at preflight0) rejects a
+// non-universal flag while permitting the universal flags.
+func TestNFTokenModifyFlagValidation(t *testing.T) {
+	mask := NewNFTokenModify("rAlice", validNFTokenID).GetFlagsMask(mainnetRules())
+	if mask&0x00000001 == 0 {
+		t.Fatal("a non-universal flag must be in the NFTokenModify invalid-flags mask")
+	}
+	if mask&tx.TfFullyCanonicalSig != 0 {
+		t.Error("tfFullyCanonicalSig must not be in the invalid-flags mask")
+	}
 }
 
 // TestNFTokenCancelOfferIDValidation verifies that malformed and duplicate offer

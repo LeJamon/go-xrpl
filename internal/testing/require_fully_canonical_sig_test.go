@@ -1,4 +1,4 @@
-package testing
+package jtx
 
 import (
 	"encoding/hex"
@@ -35,7 +35,7 @@ func (e *TestEnv) signHighS(txn tx.Transaction, signer *Account) {
 	e.signReal(txn, signer)
 	common := txn.GetCommon()
 	common.TxnSignature = flipSToHighS(e.t, common.TxnSignature)
-	require.Equal(e.t, rootcrypto.CanonicityCanonical,
+	require.Equal(e.t, rootcrypto.CanonicalityCanonical,
 		ecdsaCanonicalityOf(e.t, common.TxnSignature),
 		"prepared signature must be high-S (canonical but not fully canonical)")
 }
@@ -47,54 +47,20 @@ func ecdsaCanonicalityOf(t testing.TB, sigHex string) rootcrypto.Canonicality {
 	return rootcrypto.ECDSACanonicality(b)
 }
 
-// TestRequireFullyCanonicalSig_Gate exercises both branches of the
-// RequireFullyCanonicalSig amendment gate. When the amendment is enabled (or the
-// tx opts in via tfFullyCanonicalSig) a high-S signature is rejected; when it is
-// disabled and the flag is absent, the high-S signature is accepted.
-// Reference: rippled apply.cpp:78-84 + STTx::checkSingleSign.
+// TestRequireFullyCanonicalSig_Gate verifies that a high-S signature is
+// rejected. RequireFullyCanonicalSig is retired, so full canonicality is
+// required unconditionally.
+// Reference: rippled STTx::checkSingleSign (verify() defaults to fullyCanonical).
 func TestRequireFullyCanonicalSig_Gate(t *testing.T) {
-	t.Run("enabled rejects high-S", func(t *testing.T) {
-		env := NewTestEnv(t)
-		alice := NewAccount("alice")
-		bob := NewAccount("bob")
-		env.Fund(alice, bob)
-		env.Close()
+	env := NewTestEnv(t)
+	alice := NewAccount("alice")
+	bob := NewAccount("bob")
+	env.Fund(alice, bob)
+	env.Close()
 
-		p := payment.NewPayment(alice.Address, bob.Address, tx.NewXRPAmount(1_000_000))
-		env.signHighS(p, alice)
-		result := env.submitWithSigVerification(p)
-		require.Equal(t, "temINVALID", result.Code,
-			"high-S signature must be rejected while RequireFullyCanonicalSig is enabled")
-	})
-
-	t.Run("disabled accepts high-S", func(t *testing.T) {
-		env := NewTestEnv(t)
-		env.DisableFeature("RequireFullyCanonicalSig")
-		alice := NewAccount("alice")
-		bob := NewAccount("bob")
-		env.Fund(alice, bob)
-		env.Close()
-
-		p := payment.NewPayment(alice.Address, bob.Address, tx.NewXRPAmount(1_000_000))
-		env.signHighS(p, alice)
-		result := env.submitWithSigVerification(p)
-		require.Equal(t, "tesSUCCESS", result.Code,
-			"high-S signature must be accepted while RequireFullyCanonicalSig is disabled and tfFullyCanonicalSig is absent")
-	})
-
-	t.Run("disabled but tfFullyCanonicalSig rejects high-S", func(t *testing.T) {
-		env := NewTestEnv(t)
-		env.DisableFeature("RequireFullyCanonicalSig")
-		alice := NewAccount("alice")
-		bob := NewAccount("bob")
-		env.Fund(alice, bob)
-		env.Close()
-
-		p := payment.NewPayment(alice.Address, bob.Address, tx.NewXRPAmount(1_000_000))
-		p.SetFlags(p.GetFlags() | tx.TfFullyCanonicalSig)
-		env.signHighS(p, alice)
-		result := env.submitWithSigVerification(p)
-		require.Equal(t, "temINVALID", result.Code,
-			"a tx opting in via tfFullyCanonicalSig must reject a high-S signature even with the amendment disabled")
-	})
+	p := payment.NewPayment(alice.Address, bob.Address, tx.NewXRPAmount(1_000_000))
+	env.signHighS(p, alice)
+	result := env.submitWithSigVerification(p)
+	require.Equal(t, "temINVALID", result.Code,
+		"high-S signature must be rejected (fully-canonical required unconditionally)")
 }

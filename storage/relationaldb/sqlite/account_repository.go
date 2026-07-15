@@ -7,24 +7,24 @@ import (
 	"github.com/LeJamon/go-xrpl/storage/relationaldb"
 )
 
-// AccountTransactionRepository is the SQLite-backed account-transaction repository.
-type AccountTransactionRepository struct {
+// accountTransactionRepository is the SQLite-backed account-transaction repository.
+type accountTransactionRepository struct {
 	db *sql.DB
 	tx *sql.Tx
 }
 
-// NewAccountTransactionRepository creates a SQLite account-transaction repository.
-func NewAccountTransactionRepository(db *sql.DB) *AccountTransactionRepository {
-	return &AccountTransactionRepository{db: db}
+// newAccountTransactionRepository creates a SQLite account-transaction repository.
+func newAccountTransactionRepository(db *sql.DB) *accountTransactionRepository {
+	return &accountTransactionRepository{db: db}
 }
 
-// NewAccountTransactionRepositoryWithTx creates a SQLite account-transaction
+// newAccountTransactionRepositoryWithTx creates a SQLite account-transaction
 // repository bound to an existing transaction.
-func NewAccountTransactionRepositoryWithTx(tx *sql.Tx) *AccountTransactionRepository {
-	return &AccountTransactionRepository{tx: tx}
+func newAccountTransactionRepositoryWithTx(tx *sql.Tx) *accountTransactionRepository {
+	return &accountTransactionRepository{tx: tx}
 }
 
-func (r *AccountTransactionRepository) getExecutor() executor {
+func (r *accountTransactionRepository) getExecutor() executor {
 	if r.tx != nil {
 		return r.tx
 	}
@@ -33,7 +33,7 @@ func (r *AccountTransactionRepository) getExecutor() executor {
 
 // GetAccountTransactionsMinLedgerSeq returns the lowest ledger sequence present
 // in the account-transactions index, or nil if it is empty.
-func (r *AccountTransactionRepository) GetAccountTransactionsMinLedgerSeq(ctx context.Context) (*relationaldb.LedgerIndex, error) {
+func (r *accountTransactionRepository) GetAccountTransactionsMinLedgerSeq(ctx context.Context) (*relationaldb.LedgerIndex, error) {
 	var seq sql.NullInt64
 	err := r.getExecutor().QueryRowContext(ctx, "SELECT MIN(ledger_seq) FROM account_transactions").Scan(&seq)
 	if err != nil {
@@ -47,7 +47,7 @@ func (r *AccountTransactionRepository) GetAccountTransactionsMinLedgerSeq(ctx co
 }
 
 // GetAccountTransactionCount returns the number of rows in the account-transactions index.
-func (r *AccountTransactionRepository) GetAccountTransactionCount(ctx context.Context) (int64, error) {
+func (r *accountTransactionRepository) GetAccountTransactionCount(ctx context.Context) (int64, error) {
 	var count int64
 	err := r.getExecutor().QueryRowContext(ctx, "SELECT COUNT(*) FROM account_transactions").Scan(&count)
 	if err != nil {
@@ -56,7 +56,7 @@ func (r *AccountTransactionRepository) GetAccountTransactionCount(ctx context.Co
 	return count, nil
 }
 
-func (r *AccountTransactionRepository) queryAccountTxs(ctx context.Context, opName string, options relationaldb.AccountTxOptions, orderDir string) ([]relationaldb.TransactionInfo, error) {
+func (r *accountTransactionRepository) queryAccountTxs(ctx context.Context, opName string, options relationaldb.AccountTxOptions, orderDir string) ([]relationaldb.TransactionInfo, error) {
 	query := `SELECT t.trans_id, t.ledger_seq, t.status, t.raw_txn, t.txn_meta, at.txn_seq
 			  FROM account_transactions at
 			  INNER JOIN transactions t ON t.trans_id = at.trans_id
@@ -110,16 +110,16 @@ func (r *AccountTransactionRepository) queryAccountTxs(ctx context.Context, opNa
 }
 
 // GetOldestAccountTxs returns an account's transactions oldest-first, filtered by options.
-func (r *AccountTransactionRepository) GetOldestAccountTxs(ctx context.Context, options relationaldb.AccountTxOptions) ([]relationaldb.TransactionInfo, error) {
+func (r *accountTransactionRepository) GetOldestAccountTxs(ctx context.Context, options relationaldb.AccountTxOptions) ([]relationaldb.TransactionInfo, error) {
 	return r.queryAccountTxs(ctx, "get_oldest_account_txs", options, "ASC")
 }
 
 // GetNewestAccountTxs returns an account's transactions newest-first, filtered by options.
-func (r *AccountTransactionRepository) GetNewestAccountTxs(ctx context.Context, options relationaldb.AccountTxOptions) ([]relationaldb.TransactionInfo, error) {
+func (r *accountTransactionRepository) GetNewestAccountTxs(ctx context.Context, options relationaldb.AccountTxOptions) ([]relationaldb.TransactionInfo, error) {
 	return r.queryAccountTxs(ctx, "get_newest_account_txs", options, "DESC")
 }
 
-func (r *AccountTransactionRepository) queryAccountTxsPage(ctx context.Context, opName string, options relationaldb.AccountTxPageOptions, orderDir string, markerCmp string) (*relationaldb.AccountTxResult, error) {
+func (r *accountTransactionRepository) queryAccountTxsPage(ctx context.Context, opName string, options relationaldb.AccountTxPageOptions, orderDir string, markerCmp string) (*relationaldb.AccountTxResult, error) {
 	query := `SELECT t.trans_id, t.ledger_seq, t.status, t.raw_txn, t.txn_meta, at.txn_seq
 			  FROM account_transactions at
 			  INNER JOIN transactions t ON t.trans_id = at.trans_id
@@ -197,18 +197,18 @@ func (r *AccountTransactionRepository) queryAccountTxsPage(ctx context.Context, 
 
 // GetOldestAccountTxsPage returns a marker-paginated page of an account's
 // transactions, oldest-first.
-func (r *AccountTransactionRepository) GetOldestAccountTxsPage(ctx context.Context, options relationaldb.AccountTxPageOptions) (*relationaldb.AccountTxResult, error) {
+func (r *accountTransactionRepository) GetOldestAccountTxsPage(ctx context.Context, options relationaldb.AccountTxPageOptions) (*relationaldb.AccountTxResult, error) {
 	return r.queryAccountTxsPage(ctx, "get_oldest_account_txs_page", options, "ASC", ">")
 }
 
 // GetNewestAccountTxsPage returns a marker-paginated page of an account's
 // transactions, newest-first.
-func (r *AccountTransactionRepository) GetNewestAccountTxsPage(ctx context.Context, options relationaldb.AccountTxPageOptions) (*relationaldb.AccountTxResult, error) {
+func (r *accountTransactionRepository) GetNewestAccountTxsPage(ctx context.Context, options relationaldb.AccountTxPageOptions) (*relationaldb.AccountTxResult, error) {
 	return r.queryAccountTxsPage(ctx, "get_newest_account_txs_page", options, "DESC", "<")
 }
 
 // SaveAccountTransaction inserts or updates an account-transaction index entry.
-func (r *AccountTransactionRepository) SaveAccountTransaction(ctx context.Context, accountID relationaldb.AccountID, txInfo *relationaldb.TransactionInfo) error {
+func (r *accountTransactionRepository) SaveAccountTransaction(ctx context.Context, accountID relationaldb.AccountID, txInfo *relationaldb.TransactionInfo) error {
 	query := `INSERT INTO account_transactions (trans_id, account, ledger_seq, txn_seq)
 			  VALUES (?, ?, ?, ?)
 			  ON CONFLICT (trans_id, account) DO UPDATE SET
@@ -224,7 +224,7 @@ func (r *AccountTransactionRepository) SaveAccountTransaction(ctx context.Contex
 }
 
 // DeleteAccountTransactionsBeforeLedgerSeq deletes index entries in ledgers below ledgerSeq.
-func (r *AccountTransactionRepository) DeleteAccountTransactionsBeforeLedgerSeq(ctx context.Context, ledgerSeq relationaldb.LedgerIndex) error {
+func (r *accountTransactionRepository) DeleteAccountTransactionsBeforeLedgerSeq(ctx context.Context, ledgerSeq relationaldb.LedgerIndex) error {
 	_, err := r.getExecutor().ExecContext(ctx, "DELETE FROM account_transactions WHERE ledger_seq < ?", ledgerSeq)
 	if err != nil {
 		return relationaldb.NewQueryError("delete_account_transactions_before_ledger_seq", "failed to delete account transactions", err)

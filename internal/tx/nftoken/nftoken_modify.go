@@ -37,13 +37,14 @@ func (n *NFTokenModify) TxType() tx.Type {
 }
 
 // Reference: rippled NFTokenModify.cpp preflight
+// GetFlagsMask adopts the engine FlagsMasker seam. NFTokenModify defines no
+// type-specific flags, so it uses the base universal mask, checked at preflight0.
+func (n *NFTokenModify) GetFlagsMask(rules *amendment.Rules) uint32 {
+	return tx.TfUniversalMask
+}
+
 func (n *NFTokenModify) Validate() error {
 	if err := n.BaseTx.Validate(); err != nil {
-		return err
-	}
-
-	// Reference: rippled NFTokenModify.cpp:38 - if (ctx.tx.getFlags() & tfUniversalMask)
-	if err := tx.CheckFlags(n.GetFlags(), tx.TfUniversalMask); err != nil {
 		return err
 	}
 
@@ -77,9 +78,9 @@ func (n *NFTokenModify) Flatten() (map[string]any, error) {
 	return tx.ReflectFlatten(n)
 }
 
-// Reference: rippled NFTokenModify.cpp preflight — requires both NonFungibleTokensV1_1 and DynamicNFT.
+// Reference: rippled NFTokenModify.cpp — gated on DynamicNFT.
 func (n *NFTokenModify) RequiredAmendments() [][32]byte {
-	return [][32]byte{amendment.FeatureNonFungibleTokensV1_1, amendment.FeatureDynamicNFT}
+	return [][32]byte{amendment.FeatureDynamicNFT}
 }
 
 // Reference: rippled NFTokenModify.cpp preclaim + doApply

@@ -521,3 +521,25 @@ func TestAMMDepositWithFrozenAssets(t *testing.T) {
 		jtx.RequireTxSuccess(t, result)
 	})
 }
+
+// TestDepositTradingFeePresentZero pins that a present-but-zero sfTradingFee is
+// rejected in a deposit mode other than tfTwoAssetIfEmpty. rippled reads
+// sfTradingFee as a value-independent optional, so its mere presence is
+// temMALFORMED; before the fix a zero was indistinguishable from absent and the
+// deposit wrongly proceeded.
+// Reference: rippled AMMDeposit.cpp preflight lines 67-95.
+func TestDepositTradingFeePresentZero(t *testing.T) {
+	env := setupAMM(t)
+
+	depositTx := amm.AMMDeposit(env.Carol, amm.XRP(), env.USD).
+		Amount(amm.XRPAmount(1000)).
+		SingleAsset(). // tfSingleAsset rejects a present TradingFee
+		TradingFee(0). // present, value 0
+		Build()
+	result := env.Submit(depositTx)
+
+	if result.Success {
+		t.Fatal("tfSingleAsset deposit carrying TradingFee=0 must be rejected")
+	}
+	amm.ExpectTER(t, result, amm.TemMALFORMED)
+}

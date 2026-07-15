@@ -4,6 +4,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"math"
 	"sort"
 	"strings"
 
@@ -16,18 +17,13 @@ import (
 
 // SignForMethod handles the sign_for RPC method
 // This adds a signature to a transaction for multi-signing
-type SignForMethod struct{}
+type SignForMethod struct{ BaseHandler }
 
 func (m *SignForMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (any, *types.RpcError) {
 	setLoadHeavy(ctx)
 	var request struct {
-		Account    string          `json:"account"`
-		TxJson     json.RawMessage `json:"tx_json"`
-		Secret     string          `json:"secret,omitempty"`
-		Seed       string          `json:"seed,omitempty"`
-		SeedHex    string          `json:"seed_hex,omitempty"`
-		Passphrase string          `json:"passphrase,omitempty"`
-		KeyType    string          `json:"key_type,omitempty"`
+		signingRequest
+		Account string `json:"account"`
 	}
 
 	if params != nil {
@@ -50,23 +46,17 @@ func (m *SignForMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (a
 		return nil, types.RpcErrorMissingField("tx_json")
 	}
 
-	// Parse credentials and derive keypair using the shared helper
-	privateKey, publicKey, rpcErr := parseCredentialsAndDeriveKeypair(
-		request.Secret,
-		request.Seed,
-		request.SeedHex,
-		request.Passphrase,
-		request.KeyType,
-		ctx.ApiVersion,
-	)
-	if rpcErr != nil {
-		return nil, rpcErr
+	// signature_target directs the multi-signer into a nested inner object.
+	// Only CounterpartySignature is a valid target; any other name is rejected
+	// with the field name as the message, matching rippled TransactionSign.cpp.
+	if request.SignatureTarget != "" && request.SignatureTarget != counterpartySignatureField {
+		return nil, types.RpcErrorInvalidParams(request.SignatureTarget)
 	}
 
-	// Determine key type for signing (needed by signPayload)
-	keyType := strings.ToLower(request.KeyType)
-	if keyType == "" {
-		keyType = "secp256k1"
+	// Parse credentials and derive keypair using the shared helper
+	privateKey, publicKey, keyType, rpcErr := request.signCredentials.deriveKeypair(ctx.ApiVersion, params)
+	if rpcErr != nil {
+		return nil, rpcErr
 	}
 
 	// Parse the transaction JSON
@@ -80,12 +70,47 @@ func (m *SignForMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (a
 		return nil, types.RpcErrorMissingField("Account")
 	}
 
-	// For multi-signing, SigningPubKey must be empty string
-	txMap["SigningPubKey"] = ""
+	// On networks with ID > 1024, sign_for requires tx_json to carry a matching
+	// integral NetworkID, else invalidParams. Unlike sign/submit — which autofill
+	// a missing NetworkID — sign_for rejects, so a multisigner cannot sign for the
+	// wrong network. Mirrors rippled checkNetworkID in transactionSignFor.
+	if ctx.Services != nil && ctx.Services.Ledger != nil {
+		if networkID := ctx.Services.Ledger.GetServerInfo().NetworkID; networkID > 1024 {
+			v, ok := txMap["NetworkID"]
+			if !ok {
+				return nil, types.RpcErrorMissingField("tx_json.NetworkID")
+			}
+			n, ok := v.(float64)
+			if !ok || n != math.Trunc(n) || n < 0 || uint32(n) != networkID {
+				return nil, types.RpcErrorInvalidField("tx_json.NetworkID")
+			}
+		}
+	}
+
+	// For multi-signing, the top-level SigningPubKey must be empty. With a
+	// signature_target the signature goes into a nested object, so an existing
+	// top-level SigningPubKey (the primary signer's) is preserved.
+	if request.SignatureTarget == "" {
+		txMap["SigningPubKey"] = ""
+	} else if _, ok := txMap["SigningPubKey"]; !ok {
+		txMap["SigningPubKey"] = ""
+	}
+
+	// sigContainer holds the Signers array the new signature is appended to:
+	// the transaction itself, or the nested CounterpartySignature object.
+	sigContainer := txMap
+	if request.SignatureTarget != "" {
+		nested, _ := txMap[request.SignatureTarget].(map[string]any)
+		if nested == nil {
+			nested = map[string]any{"SigningPubKey": ""}
+		}
+		txMap[request.SignatureTarget] = nested
+		sigContainer = nested
+	}
 
 	// Get existing signers array or create new one
 	var signers []map[string]any
-	if existingSigners, ok := txMap["Signers"].([]any); ok {
+	if existingSigners, ok := sigContainer["Signers"].([]any); ok {
 		for _, s := range existingSigners {
 			if signer, ok := s.(map[string]any); ok {
 				signers = append(signers, signer)
@@ -143,7 +168,7 @@ func (m *SignForMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (a
 		return iAccount < jAccount
 	})
 
-	txMap["Signers"] = signers
+	sigContainer["Signers"] = signers
 
 	txBlob, err := binarycodec.Encode(txMap)
 	if err != nil {
@@ -153,22 +178,7 @@ func (m *SignForMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (a
 	txHash := CalculateTxHash(txBlob)
 	txMap["hash"] = txHash
 
-	// Inject DeliverMax for Payment transactions, matching rippled's
-	// RPC::insertDeliverMax in transactionFormatResultImpl.
-	injectDeliverMax(txMap, ctx.ApiVersion)
-
-	response := map[string]any{
-		"tx_blob": txBlob,
-		"tx_json": txMap,
-	}
-
-	// API v2+: add hash at root level of response, matching rippled's
-	// transactionFormatResultImpl in TransactionSign.cpp.
-	if ctx.ApiVersion > 1 {
-		response["hash"] = txHash
-	}
-
-	return response, nil
+	return formatSignResult(signResult{TxMap: txMap, TxBlob: txBlob}, ctx.ApiVersion), nil
 }
 
 // signPayload signs a hex-encoded payload with the given private key
@@ -185,10 +195,10 @@ func signPayload(payloadHex string, privateKeyHex string, keyType string) (strin
 	var signature string
 
 	if keyType == "ed25519" {
-		algo := ed25519.ED25519()
+		algo := ed25519.Algorithm{}
 		signature, err = algo.Sign(payloadStr, privateKeyHex)
 	} else {
-		algo := secp256k1.SECP256K1()
+		algo := secp256k1.Algorithm{}
 		signature, err = algo.Sign(payloadStr, privateKeyHex)
 	}
 
@@ -201,12 +211,4 @@ func signPayload(payloadHex string, privateKeyHex string, keyType string) (strin
 
 func (m *SignForMethod) RequiredRole() types.Role {
 	return types.RoleUser
-}
-
-func (m *SignForMethod) SupportedApiVersions() []int {
-	return []int{types.ApiVersion1, types.ApiVersion2, types.ApiVersion3}
-}
-
-func (m *SignForMethod) RequiredCondition() types.Condition {
-	return types.NoCondition
 }

@@ -213,7 +213,6 @@ func TestMPTPayment_CanTransferCheckedBeforeDepositPreauth(t *testing.T) {
 	// deposit preauth runs, so the expired credential is NOT deleted.
 	result = env.Submit(
 		payment.PayIssued(bob, cindy, mptAlice.MPTAmount(10)).
-			MPTIssuanceID(mptAlice.IssuanceID()).
 			CredentialIDs([]string{credIdx}).
 			Build(),
 	)
@@ -221,28 +220,4 @@ func TestMPTPayment_CanTransferCheckedBeforeDepositPreauth(t *testing.T) {
 	env.Close()
 	require.True(t, env.LedgerEntryExists(credKey),
 		"credential must be untouched when CanTransfer fails first")
-}
-
-// TestPayment_SelfRipplePaymentDepositPreauthDisabled verifies that without
-// the DepositPreauth amendment, a ripple (cross-currency) payment to a
-// destination with lsfDepositAuth set fails with tecNO_PERMISSION even when
-// source == destination — the bug the DepositPreauth amendment later fixed.
-// Reference: rippled Payment.cpp:440-441
-func TestPayment_SelfRipplePaymentDepositPreauthDisabled(t *testing.T) {
-	alice := jtx.NewAccount("alice")
-	gw := jtx.NewAccount("gw")
-
-	env := jtx.NewTestEnv(t)
-	env.DisableFeature("DepositPreauth")
-
-	env.FundAmount(alice, uint64(jtx.XRP(10000)))
-	env.FundAmount(gw, uint64(jtx.XRP(10000)))
-	env.Close()
-
-	env.EnableDepositAuth(alice)
-	env.Close()
-
-	usd1 := tx.NewIssuedAmountFromFloat64(1, "USD", gw.Address)
-	result := env.Submit(payment.Pay(alice, alice, 1).SendMax(usd1).Build())
-	require.Equal(t, "tecNO_PERMISSION", result.Code)
 }

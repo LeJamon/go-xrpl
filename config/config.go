@@ -2,6 +2,7 @@ package config
 
 import (
 	"fmt"
+	"path/filepath"
 	"strings"
 )
 
@@ -15,13 +16,15 @@ type Config struct {
 	Ports map[string]PortConfig `toml:"-" mapstructure:"-"`
 
 	// 2. Peer Protocol
-	Compression      bool                   `toml:"compression" mapstructure:"compression"`
-	IPs              []string               `toml:"ips" mapstructure:"ips"`
-	IPsFixed         []string               `toml:"ips_fixed" mapstructure:"ips_fixed"`
-	PeerPrivate      int                    `toml:"peer_private" mapstructure:"peer_private"`
-	PeersMax         int                    `toml:"peers_max" mapstructure:"peers_max"`
-	ClusterNodes     []string               `toml:"cluster_nodes" mapstructure:"cluster_nodes"`
-	MaxTransactions  int                    `toml:"max_transactions" mapstructure:"max_transactions"` // 0 = use default (250)
+	Compression     bool     `toml:"compression" mapstructure:"compression"`
+	IPs             []string `toml:"ips" mapstructure:"ips"`
+	IPsFixed        []string `toml:"ips_fixed" mapstructure:"ips_fixed"`
+	PeerPrivate     int      `toml:"peer_private" mapstructure:"peer_private"`
+	PeersMax        int      `toml:"peers_max" mapstructure:"peers_max"`
+	ClusterNodes    []string `toml:"cluster_nodes" mapstructure:"cluster_nodes"`
+	MaxTransactions int      `toml:"max_transactions" mapstructure:"max_transactions"` // 0 = use default (250)
+	// FeeDefault is the legacy reference-fee override applied after [voting].
+	FeeDefault       *int                   `toml:"fee_default" mapstructure:"fee_default"`
 	Overlay          OverlayConfig          `toml:"overlay" mapstructure:"overlay"`
 	TransactionQueue TransactionQueueConfig `toml:"transaction_queue" mapstructure:"transaction_queue"`
 
@@ -71,10 +74,24 @@ type Config struct {
 	Validators ValidatorsConfig `toml:"-" mapstructure:"-"`
 }
 
-// ConfigPaths holds the paths to configuration files
-type ConfigPaths struct {
-	Main       string // Path to main config file (xrpld.toml)
-	Validators string // Path to validators file (validators.toml)
+// Paths holds the paths to configuration files
+type Paths struct {
+	Main           string // Path to main config file (xrpld.toml)
+	Validators     string // Path to validators file (validators.toml)
+	SkipValidators bool   // Ignore trusted-validator configuration in standalone mode
+}
+
+// LocalStateDir returns a filesystem directory for node-local state.
+func (c *Config) LocalStateDir() string {
+	if c.DatabasePath != "" &&
+		!strings.HasPrefix(c.DatabasePath, "postgres://") &&
+		!strings.HasPrefix(c.DatabasePath, "postgresql://") {
+		return c.DatabasePath
+	}
+	if c.NodeDB.Path == "" {
+		return ""
+	}
+	return filepath.Dir(filepath.Clean(c.NodeDB.Path))
 }
 
 // networkIDByName maps rippled's named network aliases to their canonical
@@ -86,10 +103,10 @@ var networkIDByName = map[string]int{
 	"devnet":  2,
 }
 
-// GetNetworkID returns the network ID as an integer.
+// ResolvedNetworkID returns the network ID as an integer.
 // String network names ("main", "testnet", "devnet") are mapped to their
 // canonical IDs (0, 1, 2).
-func (c *Config) GetNetworkID() (int, error) {
+func (c *Config) ResolvedNetworkID() (int, error) {
 	if !c.NetworkID.Set {
 		return 0, fmt.Errorf("network_id is required but not set")
 	}
@@ -107,12 +124,12 @@ func (c *Config) GetNetworkID() (int, error) {
 // defaultLedgerHistory mirrors rippled's LEDGER_HISTORY default (Config.h).
 const defaultLedgerHistory = 256
 
-// GetLedgerHistory returns the configured ledger history as an integer.
+// ResolvedLedgerHistory returns the configured ledger history as an integer.
 // "full" maps to math.MaxInt32 (matching rippled's uint32 max sentinel)
 // so that downstream comparisons such as the online_delete cross-check
 // fire the same way they do in rippled. When the key is absent the
 // rippled default of 256 applies.
-func (c *Config) GetLedgerHistory() int {
+func (c *Config) ResolvedLedgerHistory() int {
 	if !c.LedgerHistory.Set {
 		return defaultLedgerHistory
 	}
@@ -125,11 +142,11 @@ func (c *Config) GetLedgerHistory() int {
 // protocol-width accessor preserves the distinction.
 const defaultFetchDepth = 1000000000
 
-// GetFetchDepth returns the configured fetch depth as an integer.
+// ResolvedFetchDepth returns the configured fetch depth as an integer.
 // "full" maps to math.MaxInt32, and any explicit count below 10 is
 // raised to 10 to mirror rippled's hard floor (Config.cpp:671-672).
 // When the key is absent the rippled default of 1e9 applies.
-func (c *Config) GetFetchDepth() int {
+func (c *Config) ResolvedFetchDepth() int {
 	if !c.FetchDepth.Set {
 		return defaultFetchDepth
 	}
@@ -153,8 +170,8 @@ func (c *Config) IsValidator() bool {
 	return c.ValidationSeed != "" || c.ValidatorToken != ""
 }
 
-// GetPeerPort returns the port configured for peer protocol
-func (c *Config) GetPeerPort() (string, PortConfig, bool) {
+// PeerPort returns the port configured for peer protocol
+func (c *Config) PeerPort() (string, PortConfig, bool) {
 	for name, port := range c.Ports {
 		if strings.Contains(port.Protocol, "peer") {
 			return name, port, true
@@ -163,11 +180,11 @@ func (c *Config) GetPeerPort() (string, PortConfig, bool) {
 	return "", PortConfig{}, false
 }
 
-// GetGRPCPort returns the port configured for the gRPC protocol, if any.
+// GRPCPort returns the port configured for the gRPC protocol, if any.
 // gRPC is disabled by default: absent a [port_grpc] section the third
 // return value is false and no listener is started, matching rippled
 // (GRPCServer.cpp only serves when [port_grpc] exists with ip + port).
-func (c *Config) GetGRPCPort() (string, PortConfig, bool) {
+func (c *Config) GRPCPort() (string, PortConfig, bool) {
 	for name, port := range c.Ports {
 		if port.HasGRPC() {
 			return name, port, true
@@ -176,8 +193,8 @@ func (c *Config) GetGRPCPort() (string, PortConfig, bool) {
 	return "", PortConfig{}, false
 }
 
-// GetHTTPPorts returns all ports that support HTTP/HTTPS protocols
-func (c *Config) GetHTTPPorts() map[string]PortConfig {
+// HTTPPorts returns all ports that support HTTP/HTTPS protocols
+func (c *Config) HTTPPorts() map[string]PortConfig {
 	httpPorts := make(map[string]PortConfig)
 	for name, port := range c.Ports {
 		if strings.Contains(port.Protocol, "http") {
@@ -187,8 +204,8 @@ func (c *Config) GetHTTPPorts() map[string]PortConfig {
 	return httpPorts
 }
 
-// GetWebSocketPorts returns all ports that support WebSocket protocols
-func (c *Config) GetWebSocketPorts() map[string]PortConfig {
+// WebSocketPorts returns all ports that support WebSocket protocols
+func (c *Config) WebSocketPorts() map[string]PortConfig {
 	wsPorts := make(map[string]PortConfig)
 	for name, port := range c.Ports {
 		if strings.Contains(port.Protocol, "ws") {

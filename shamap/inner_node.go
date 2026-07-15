@@ -9,7 +9,7 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/LeJamon/go-xrpl/crypto/common"
+	"github.com/LeJamon/go-xrpl/crypto/sha512half"
 	"github.com/LeJamon/go-xrpl/protocol"
 )
 
@@ -32,6 +32,13 @@ type innerNode struct {
 	children [BranchFactor]Node
 	hashes   [BranchFactor][32]byte
 	isBranch uint16
+	// fullBelowGen caches the FullBelowCache generation at which this node
+	// was last proven to have every descendant resident. It is meaningful
+	// only while it equals the cache's current generation (see
+	// isFullBelow); a fresh or wire/store-deserialized node carries 0,
+	// which never matches a live generation. Mirrors rippled's
+	// SHAMapInnerNode::fullBelowGen_. Guarded by mu.
+	fullBelowGen uint32
 }
 
 // newInnerNode creates a new empty inner node
@@ -144,6 +151,23 @@ func (n *innerNode) SetChildIfNil(index int, child Node) Node {
 	return child
 }
 
+// isFullBelow reports whether this node was proven full-below at the given
+// (current) cache generation. Mirrors rippled
+// SHAMapInnerNode::isFullBelow.
+func (n *innerNode) isFullBelow(generation uint32) bool {
+	n.mu.RLock()
+	defer n.mu.RUnlock()
+	return n.fullBelowGen == generation
+}
+
+// setFullBelowGen records that every descendant is resident as of
+// generation. Mirrors rippled SHAMapInnerNode::setFullBelowGen.
+func (n *innerNode) setFullBelowGen(generation uint32) {
+	n.mu.Lock()
+	n.fullBelowGen = generation
+	n.mu.Unlock()
+}
+
 // ChildHash returns the hash at a given branch index
 func (n *innerNode) ChildHash(index int) ([32]byte, error) {
 	if index < 0 || index >= BranchFactor {
@@ -169,9 +193,9 @@ func (n *innerNode) updateHashUnsafe() error {
 		return nil
 	}
 
-	h := common.AcquireSHA512()
-	defer common.ReleaseSHA512(h)
-	h.Write(protocol.HashPrefixInnerNode[:])
+	h := sha512half.Acquire()
+	defer sha512half.Release(h)
+	h.Write(protocol.HashPrefixInnerNode().Bytes())
 	for i := range BranchFactor {
 		if n.isBranch&(1<<i) != 0 {
 			ch := n.childPreimageHash(i)
@@ -269,7 +293,7 @@ func (n *innerNode) SerializeForWire() ([]byte, error) {
 				result = append(result, byte(i))
 			}
 		}
-		result = append(result, protocol.WireTypeCompressedInner)
+		result = append(result, byte(protocol.WireTypeCompressedInner))
 		return result, nil
 	}
 
@@ -282,7 +306,7 @@ func (n *innerNode) SerializeForWire() ([]byte, error) {
 			copy(result[off:off+32], ch[:])
 		}
 	}
-	result[BranchFactor*32] = protocol.WireTypeInner
+	result[BranchFactor*32] = byte(protocol.WireTypeInner)
 	return result, nil
 }
 
@@ -302,7 +326,7 @@ func (n *innerNode) SerializeWithPrefix() ([]byte, error) {
 	}
 
 	result := make([]byte, fullInnerSerializedSize)
-	copy(result[:4], protocol.HashPrefixInnerNode[:])
+	copy(result[:4], protocol.HashPrefixInnerNode().Bytes())
 	for i := range BranchFactor {
 		if n.isBranch&(1<<i) != 0 {
 			off := 4 + i*32
@@ -319,7 +343,7 @@ func newInnerNodeFromWire(data []byte) (*innerNode, error) {
 		return nil, fmt.Errorf("empty wire data")
 	}
 
-	wireType := data[len(data)-1]
+	wireType := protocol.WireType(data[len(data)-1])
 	nodeData := data[:len(data)-1]
 
 	switch wireType {
@@ -487,8 +511,9 @@ func (n *innerNode) Clone() (Node, error) {
 	defer n.mu.RUnlock()
 
 	clone := &innerNode{
-		isBranch: n.isBranch,
-		hashes:   n.hashes, // Copy the array
+		isBranch:     n.isBranch,
+		hashes:       n.hashes, // Copy the array
+		fullBelowGen: n.fullBelowGen,
 	}
 	clone.hash = n.hash
 	clone.SetDirty(true)
@@ -518,9 +543,10 @@ func (n *innerNode) shallowClone() *innerNode {
 	n.mu.RLock()
 	defer n.mu.RUnlock()
 	clone := &innerNode{
-		isBranch: n.isBranch,
-		hashes:   n.hashes,
-		children: n.children,
+		isBranch:     n.isBranch,
+		hashes:       n.hashes,
+		children:     n.children,
+		fullBelowGen: n.fullBelowGen,
 	}
 	clone.hash = n.hash
 	clone.SetDirty(true)

@@ -9,10 +9,10 @@ import (
 	"strings"
 
 	addresscodec "github.com/LeJamon/go-xrpl/codec/addresscodec"
-	"github.com/LeJamon/go-xrpl/crypto/common"
 	"github.com/LeJamon/go-xrpl/crypto/ed25519"
 	"github.com/LeJamon/go-xrpl/crypto/rfc1751"
 	"github.com/LeJamon/go-xrpl/crypto/secp256k1"
+	"github.com/LeJamon/go-xrpl/crypto/sha512half"
 	"github.com/LeJamon/go-xrpl/internal/rpc/types"
 )
 
@@ -45,12 +45,7 @@ func (m *WalletProposeMethod) Handle(ctx *types.RpcContext, params json.RawMessa
 
 	// Validate key type
 	if keyType != "secp256k1" && keyType != "ed25519" {
-		return nil, &types.RpcError{
-			Code:        types.RpcBAD_KEY_TYPE,
-			ErrorString: "badKeyType",
-			Type:        "badKeyType",
-			Message:     "Invalid field 'key_type'.",
-		}
+		return nil, types.RpcErrorBadKeyType("Invalid field 'key_type'.")
 	}
 
 	var entropy []byte
@@ -63,25 +58,15 @@ func (m *WalletProposeMethod) Handle(ctx *types.RpcContext, params json.RawMessa
 		// Decode the provided seed
 		decodedEntropy, algo, err := addresscodec.DecodeSeed(request.Seed)
 		if err != nil {
-			return nil, &types.RpcError{
-				Code:        types.RpcBAD_SEED,
-				ErrorString: "badSeed",
-				Type:        "badSeed",
-				Message:     "Disallowed seed.",
-			}
+			return nil, types.RpcErrorBadSeed()
 		}
 		entropy = decodedEntropy
 
 		// Check if the seed's algorithm matches the requested key type
 		// If a seed encodes ed25519 but user requests secp256k1, that's an error
-		if _, isEd25519 := algo.(ed25519.ED25519CryptoAlgorithm); isEd25519 {
+		if _, isEd25519 := algo.(ed25519.Algorithm); isEd25519 {
 			if keyType != "ed25519" {
-				return nil, &types.RpcError{
-					Code:        types.RpcBAD_SEED,
-					ErrorString: "badSeed",
-					Type:        "badSeed",
-					Message:     "Disallowed seed.",
-				}
+				return nil, types.RpcErrorBadSeed()
 			}
 		}
 	} else if request.SeedHex != "" {
@@ -89,16 +74,11 @@ func (m *WalletProposeMethod) Handle(ctx *types.RpcContext, params json.RawMessa
 		var err error
 		entropy, err = hex.DecodeString(request.SeedHex)
 		if err != nil || len(entropy) != 16 {
-			return nil, &types.RpcError{
-				Code:        types.RpcBAD_SEED,
-				ErrorString: "badSeed",
-				Type:        "badSeed",
-				Message:     "Disallowed seed.",
-			}
+			return nil, types.RpcErrorBadSeed()
 		}
 	} else if request.Passphrase != "" {
 		// Derive seed from passphrase using SHA-512 Half (first 16 bytes of SHA-512)
-		hash := common.Sha512Half([]byte(request.Passphrase))
+		hash := sha512half.Sum([]byte(request.Passphrase))
 		entropy = hash[:16]
 		passphraseUsed = true
 	} else {
@@ -115,7 +95,7 @@ func (m *WalletProposeMethod) Handle(ctx *types.RpcContext, params json.RawMessa
 	var err error
 
 	if keyType == "ed25519" {
-		algo := ed25519.ED25519()
+		algo := ed25519.Algorithm{}
 		privateKey, publicKey, err = algo.DeriveKeypair(entropy, false)
 		if err != nil {
 			return nil, rpcInternalError("wallet_propose: ed25519 keypair derivation failed", err)
@@ -125,7 +105,7 @@ func (m *WalletProposeMethod) Handle(ctx *types.RpcContext, params json.RawMessa
 			return nil, rpcInternalError("wallet_propose: ed25519 seed encoding failed", err)
 		}
 	} else {
-		algo := secp256k1.SECP256K1()
+		algo := secp256k1.Algorithm{}
 		privateKey, publicKey, err = algo.DeriveKeypair(entropy, false)
 		if err != nil {
 			return nil, rpcInternalError("wallet_propose: secp256k1 keypair derivation failed", err)

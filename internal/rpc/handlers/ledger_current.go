@@ -7,7 +7,7 @@ import (
 )
 
 // LedgerCurrentMethod handles the ledger_current RPC method
-type LedgerCurrentMethod struct{}
+type LedgerCurrentMethod struct{ BaseHandler }
 
 func (m *LedgerCurrentMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (any, *types.RpcError) {
 	if err := RequireLedgerService(ctx.Services); err != nil {
@@ -24,14 +24,6 @@ func (m *LedgerCurrentMethod) Handle(ctx *types.RpcContext, params json.RawMessa
 	}
 
 	return response, nil
-}
-
-func (m *LedgerCurrentMethod) RequiredRole() types.Role {
-	return types.RoleGuest
-}
-
-func (m *LedgerCurrentMethod) SupportedApiVersions() []int {
-	return []int{types.ApiVersion1, types.ApiVersion2, types.ApiVersion3}
 }
 
 func (m *LedgerCurrentMethod) RequiredCondition() types.Condition {

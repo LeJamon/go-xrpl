@@ -2,6 +2,7 @@ package tx
 
 import (
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"math"
@@ -79,7 +80,7 @@ func validateSerializedJSONNumbers(value any) error {
 		defs := definitions.Get()
 		for name, fieldValue := range value {
 			if number, ok := fieldValue.(float64); ok {
-				field, err := defs.GetFieldInstanceByFieldName(name)
+				field, err := defs.FieldInstanceByName(name)
 				if err == nil {
 					var max float64
 					switch field.Type {
@@ -203,10 +204,15 @@ func MetadataToMap(meta *Metadata) map[string]any {
 	// build while its state mutation persists, yielding a ledger with advanced
 	// state but an empty/short tx tree → transaction_hash fork.
 	if meta.DeliveredAmount != nil {
-		// Check if it's an XRP amount (no Currency field)
-		if meta.DeliveredAmount.Currency == "" {
+		switch {
+		case meta.DeliveredAmount.IsMPT():
+			result["DeliveredAmount"] = map[string]any{
+				"value":           meta.DeliveredAmount.Value(),
+				"mpt_issuance_id": meta.DeliveredAmount.MPTIssuanceID(),
+			}
+		case meta.DeliveredAmount.Currency == "":
 			result["DeliveredAmount"] = meta.DeliveredAmount.Value()
-		} else {
+		default:
 			result["DeliveredAmount"] = map[string]any{
 				"value":    meta.DeliveredAmount.Value(),
 				"currency": meta.DeliveredAmount.Currency,
@@ -229,12 +235,7 @@ func SerializeMetadata(meta *Metadata) ([]byte, error) {
 		return nil, nil
 	}
 
-	hexStr, err := binarycodec.Encode(metaMap)
-	if err != nil {
-		return nil, err
-	}
-
-	return hex.DecodeString(hexStr)
+	return binarycodec.EncodeBytesTrusted(metaMap)
 }
 
 // CreateTxWithMetaBlob creates the combined VL-encoded transaction + VL-encoded metadata blob
@@ -300,4 +301,56 @@ func SplitTxWithMetaBlob(blob []byte) (txData []byte, metaData []byte, err error
 		return nil, nil, err
 	}
 	return txData, metaData, nil
+}
+
+// TransactionIndexFromTxWithMetaBlob returns sfTransactionIndex from a
+// transaction-tree leaf. The JSON fallback is retained for transactions stored
+// by the submit RPC before the open ledger is rebuilt.
+func TransactionIndexFromTxWithMetaBlob(blob []byte) (uint32, bool) {
+	if json.Valid(blob) {
+		var stored struct {
+			Meta map[string]any `json:"meta"`
+		}
+		if err := json.Unmarshal(blob, &stored); err != nil {
+			return 0, false
+		}
+		return transactionIndexFromMap(stored.Meta)
+	}
+
+	_, metaData, err := SplitTxWithMetaBlob(blob)
+	if err != nil {
+		return 0, false
+	}
+	return TransactionIndexFromMetadata(metaData)
+}
+
+// TransactionIndexFromMetadata returns sfTransactionIndex from serialized
+// transaction metadata.
+func TransactionIndexFromMetadata(metaData []byte) (uint32, bool) {
+	if len(metaData) == 0 {
+		return 0, false
+	}
+	meta, err := binarycodec.Decode(hex.EncodeToString(metaData))
+	if err != nil {
+		return 0, false
+	}
+	return transactionIndexFromMap(meta)
+}
+
+func transactionIndexFromMap(meta map[string]any) (uint32, bool) {
+	raw, ok := meta["TransactionIndex"]
+	if !ok {
+		return 0, false
+	}
+	switch value := raw.(type) {
+	case uint32:
+		return value, true
+	case float64:
+		if value < 0 || value > math.MaxUint32 || value != math.Trunc(value) {
+			return 0, false
+		}
+		return uint32(value), true
+	default:
+		return 0, false
+	}
 }

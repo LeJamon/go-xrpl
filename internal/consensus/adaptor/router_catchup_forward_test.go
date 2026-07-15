@@ -3,7 +3,7 @@ package adaptor
 import (
 	"testing"
 
-	"github.com/LeJamon/go-xrpl/crypto/common"
+	"github.com/LeJamon/go-xrpl/crypto/sha512half"
 	"github.com/LeJamon/go-xrpl/internal/ledger/header"
 	"github.com/LeJamon/go-xrpl/internal/ledger/inbound"
 	"github.com/LeJamon/go-xrpl/internal/peermanagement/message"
@@ -155,7 +155,7 @@ func TestRouter_ForwardWalk_RearmsNextOnCompletion(t *testing.T) {
 		AccountHash: rootHash,
 	}
 	data := header.AddRaw(hdr, false)
-	childHash := common.Sha512Half(protocol.HashPrefixLedgerMaster.Bytes(), data)
+	childHash := sha512half.Sum(protocol.HashPrefixLedgerMaster().Bytes(), data)
 
 	il := inbound.New(childHash, c+1, 7, serveTestLogger())
 	require.NoError(t, il.GotBase([]message.LedgerNode{{NodeData: data}, {NodeData: rootData}}))

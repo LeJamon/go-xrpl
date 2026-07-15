@@ -12,14 +12,14 @@ func FuzzAddRootNode(f *testing.F) {
 	f.Add(makeHashSlice(0x00), []byte{})
 
 	// Single wire type byte
-	f.Add(makeHashSlice(0x01), []byte{protocol.WireTypeInner})
+	f.Add(makeHashSlice(0x01), []byte{byte(protocol.WireTypeInner)})
 
 	// Valid full inner node
 	validRoot := make([]byte, 513)
 	for i := range 32 {
 		validRoot[i] = 0xAA
 	}
-	validRoot[512] = protocol.WireTypeInner
+	validRoot[512] = byte(protocol.WireTypeInner)
 
 	// Compute expected hash: construct the node first to get its hash
 	node, err := newInnerNodeFromWire(validRoot)
@@ -39,7 +39,7 @@ func FuzzAddRootNode(f *testing.F) {
 	for i := 12; i < 44; i++ {
 		leafData[i] = 0x01
 	}
-	leafData[44] = protocol.WireTypeAccountState
+	leafData[44] = byte(protocol.WireTypeAccountState)
 	f.Add(makeHashSlice(0x00), leafData)
 
 	// Compressed inner node
@@ -48,7 +48,7 @@ func FuzzAddRootNode(f *testing.F) {
 		compressed[i] = 0xBB
 	}
 	compressed[32] = 0x00
-	compressed[33] = protocol.WireTypeCompressedInner
+	compressed[33] = byte(protocol.WireTypeCompressedInner)
 	f.Add(makeHashSlice(0x00), compressed)
 
 	f.Fuzz(func(t *testing.T, hashBytes []byte, data []byte) {
@@ -82,12 +82,12 @@ func FuzzAddKnownNode(f *testing.F) {
 	for i := 12; i < 44; i++ {
 		leafData[i] = 0x01
 	}
-	leafData[44] = protocol.WireTypeAccountState
+	leafData[44] = byte(protocol.WireTypeAccountState)
 	f.Add(makeHashSlice(0xAA), leafData)
 
 	// Valid inner node
 	innerData := make([]byte, 513)
-	innerData[512] = protocol.WireTypeInner
+	innerData[512] = byte(protocol.WireTypeInner)
 	f.Add(makeHashSlice(0xBB), innerData)
 
 	// Invalid wire type
@@ -136,7 +136,7 @@ func FuzzSyncSequence(f *testing.F) {
 	h := makeHash(0x01)
 	seed = append(seed, h[:]...)
 	innerData := make([]byte, 513)
-	innerData[512] = protocol.WireTypeInner
+	innerData[512] = byte(protocol.WireTypeInner)
 	seed = append(seed, byte(len(innerData)>>8), byte(len(innerData)&0xFF))
 	seed = append(seed, innerData...)
 	f.Add(seed)

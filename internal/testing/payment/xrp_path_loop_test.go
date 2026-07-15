@@ -8,15 +8,10 @@ import (
 	txpayment "github.com/LeJamon/go-xrpl/internal/tx/payment"
 )
 
-func newXRPPathLoopEnv(t *testing.T, fix1781 bool, currencies ...string) (*jtx.TestEnv, *jtx.Account, *jtx.Account, *jtx.Account) {
+func newXRPPathLoopEnv(t *testing.T, currencies ...string) (*jtx.TestEnv, *jtx.Account, *jtx.Account, *jtx.Account) {
 	t.Helper()
 
 	env := jtx.NewTestEnv(t)
-	if fix1781 {
-		env.EnableFeature("fix1781")
-	} else {
-		env.DisableFeature("fix1781")
-	}
 	alice := jtx.NewAccount("alice")
 	bob := jtx.NewAccount("bob")
 	gw := jtx.NewAccount("gw")
@@ -45,43 +40,29 @@ func newXRPPathLoopEnv(t *testing.T, fix1781 bool, currencies ...string) (*jtx.T
 }
 
 func TestXRPPathLoop_Start(t *testing.T) {
-	for _, test := range []struct {
-		name    string
-		fix1781 bool
-	}{
-		{name: "enabled", fix1781: true},
-		{name: "disabled"},
-	} {
-		t.Run(test.name, func(t *testing.T) {
-			env, alice, bob, gw := newXRPPathLoopEnv(t, test.fix1781, "USD", "EUR")
-			xrp100 := tx.NewXRPAmount(jtx.XRP(100))
-			usd100 := tx.NewIssuedAmountFromFloat64(100, "USD", gw.Address)
-			eur100 := tx.NewIssuedAmountFromFloat64(100, "EUR", gw.Address)
+	env, alice, bob, gw := newXRPPathLoopEnv(t, "USD", "EUR")
+	xrp100 := tx.NewXRPAmount(jtx.XRP(100))
+	usd100 := tx.NewIssuedAmountFromFloat64(100, "USD", gw.Address)
+	eur100 := tx.NewIssuedAmountFromFloat64(100, "EUR", gw.Address)
 
-			jtx.RequireTxSuccess(t, env.CreatePassiveOffer(alice, usd100, xrp100))
-			jtx.RequireTxSuccess(t, env.CreatePassiveOffer(alice, xrp100, usd100))
-			jtx.RequireTxSuccess(t, env.CreatePassiveOffer(alice, eur100, xrp100))
-			env.Close()
+	jtx.RequireTxSuccess(t, env.CreatePassiveOffer(alice, usd100, xrp100))
+	jtx.RequireTxSuccess(t, env.CreatePassiveOffer(alice, xrp100, usd100))
+	jtx.RequireTxSuccess(t, env.CreatePassiveOffer(alice, eur100, xrp100))
+	env.Close()
 
-			paths := [][]txpayment.PathStep{{
-				issuePath("USD", gw),
-				currencyPath("XRP"),
-				issuePath("EUR", gw),
-			}}
-			result := env.Submit(PayIssued(alice, bob,
-				tx.NewIssuedAmountFromFloat64(1, "EUR", gw.Address),
-			).SendMax(tx.NewXRPAmount(jtx.XRP(1))).Paths(paths).NoDirectRipple().Build())
-			if test.fix1781 {
-				jtx.RequireTxFail(t, result, jtx.TemBAD_PATH_LOOP)
-			} else {
-				jtx.RequireTxSuccess(t, result)
-			}
-		})
-	}
+	paths := [][]txpayment.PathStep{{
+		issuePath("USD", gw),
+		currencyPath("XRP"),
+		issuePath("EUR", gw),
+	}}
+	result := env.Submit(PayIssued(alice, bob,
+		tx.NewIssuedAmountFromFloat64(1, "EUR", gw.Address),
+	).SendMax(tx.NewXRPAmount(jtx.XRP(1))).Paths(paths).NoDirectRipple().Build())
+	jtx.RequireTxFail(t, result, jtx.TemBAD_PATH_LOOP)
 }
 
 func TestXRPPathLoop_End(t *testing.T) {
-	env, alice, bob, gw := newXRPPathLoopEnv(t, true, "USD", "EUR")
+	env, alice, bob, gw := newXRPPathLoopEnv(t, "USD", "EUR")
 	xrp100 := tx.NewXRPAmount(jtx.XRP(100))
 	usd100 := tx.NewIssuedAmountFromFloat64(100, "USD", gw.Address)
 	eur100 := tx.NewIssuedAmountFromFloat64(100, "EUR", gw.Address)
@@ -104,7 +85,7 @@ func TestXRPPathLoop_End(t *testing.T) {
 }
 
 func TestXRPPathLoop_Middle(t *testing.T) {
-	env, alice, bob, gw := newXRPPathLoopEnv(t, true, "USD", "EUR", "JPY")
+	env, alice, bob, gw := newXRPPathLoopEnv(t, "USD", "EUR", "JPY")
 	xrp100 := tx.NewXRPAmount(jtx.XRP(100))
 	usd100 := tx.NewIssuedAmountFromFloat64(100, "USD", gw.Address)
 	eur100 := tx.NewIssuedAmountFromFloat64(100, "EUR", gw.Address)
@@ -129,7 +110,7 @@ func TestXRPPathLoop_Middle(t *testing.T) {
 }
 
 func TestXRPAccountStepOnlyAllowedAtEndpoint(t *testing.T) {
-	env, alice, bob, gw := newXRPPathLoopEnv(t, true, "USD")
+	env, alice, bob, gw := newXRPPathLoopEnv(t, "USD")
 	carol := jtx.NewAccount("carol")
 	env.FundAmount(carol, uint64(jtx.XRP(10_000)))
 	env.Close()

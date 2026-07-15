@@ -126,8 +126,8 @@ type Snapshot struct {
 	EscalationMultiplier uint64
 }
 
-// GetSnapshot returns the current fee metrics snapshot.
-func (fm *FeeMetrics) GetSnapshot() Snapshot {
+// Snapshot returns the current fee metrics snapshot.
+func (fm *FeeMetrics) Snapshot() Snapshot {
 	return Snapshot{
 		TxnsExpected:         fm.txnsExpected,
 		EscalationMultiplier: fm.escalationMultiplier,

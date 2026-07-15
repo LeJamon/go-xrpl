@@ -464,15 +464,15 @@ func escrowUnlockIOU(
 	trustLineExists := err == nil && trustLineData != nil
 
 	if !trustLineExists && createAsset && !receiverIsIssuer {
-		// On finish, rippled scopes the reserve check and the owner-count bump to
-		// the destination account. On cancel, it scopes both to the soon-erased
-		// escrow SLE (its sfOwnerCount reads as 0 and the bump is discarded), so
-		// the caller passes bumpDestOwnerCount=false and the reserve uses 0.
-		reserveOwnerCount := destOwnerCount
+		// Post-fixCleanup3_2_0 the reserve check and owner-count bump are scoped to
+		// the destination account (bumpDestOwnerCount=true). Pre-amendment, cancel
+		// scoped them to the soon-erased escrow SLE, which has no sfOwnerCount:
+		// rippled throws reading it, yielding tefEXCEPTION whenever a new trust line
+		// must be created during a cancel refund.
 		if !bumpDestOwnerCount {
-			reserveOwnerCount = 0
+			return ter.TefEXCEPTION
 		}
-		reserve := reserveBase + uint64(reserveOwnerCount+1)*reserveIncrement
+		reserve := reserveBase + uint64(destOwnerCount+1)*reserveIncrement
 		if destBalance < reserve {
 			return ter.TecNO_LINE_INSUF_RESERVE
 		}
@@ -494,7 +494,7 @@ func escrowUnlockIOU(
 
 	// Compute transfer fee
 	// Get current rate from issuer, use min(lockedRate, currentRate)
-	currentRate := getTransferRateForIssuer(view, issuerID)
+	currentRate := tx.GetTransferRateByID(view, issuerID)
 	effectiveRate := lockedRate
 	if currentRate != 0 && currentRate < effectiveRate {
 		effectiveRate = currentRate
@@ -533,24 +533,23 @@ func escrowUnlockIOU(
 	return ter.TesSUCCESS
 }
 
-// escrowUnlockMPT unlocks MPT tokens during EscrowFinish or EscrowCancel.
-// The caller (escrowUnlockApplyHelper<MPTIssue>) handles MPToken creation
-// and transfer fee calculation, then calls rippleUnlockEscrowMPT with the
-// final amount. In rippled, the finalAmount is used for ALL operations
-// (LockedAmount decrement, receiver credit, OutstandingAmount decrement).
-// The difference between originalAmount and finalAmount (the fee) stays
-// permanently locked on the issuance and sender's token.
+// escrowUnlockMPT unlocks MPT tokens during EscrowFinish or EscrowCancel. The
+// caller handles MPToken creation and transfer-fee calculation, passing the net
+// amount delivered to the receiver (finalAmount) and the gross amount that was
+// originally locked (grossAmount).
 //
-// This function combines the MPToken creation logic from
-// escrowUnlockApplyHelper<MPTIssue> with the actual unlock from
-// rippleUnlockEscrowMPT for convenience.
+// LockedAmount (on both the issuance and the sender's MPToken) is cleared by the
+// gross amount, the receiver is credited the net amount, and the fee portion
+// (gross - net) is burned from the issuance OutstandingAmount so that supply
+// accounting stays consistent.
 //
-// Reference: rippled Escrow.cpp escrowUnlockApplyHelper<MPTIssue> lines 944-1012
-// Reference: rippled View.cpp rippleUnlockEscrowMPT() lines 2950-3094
+// Without fixTokenEscrowV1 the caller passes grossAmount == finalAmount, so the
+// fee stays permanently locked and no supply is burned (legacy behaviour).
 func escrowUnlockMPT(
 	view tx.LedgerView,
 	senderID, receiverID [20]byte,
 	finalAmount uint64,
+	grossAmount uint64,
 	mptHexID string,
 	createAsset bool,
 	destBalance uint64,
@@ -583,14 +582,15 @@ func escrowUnlockMPT(
 		receiverExists, _ := view.Exists(receiverTokenKey)
 
 		if !receiverExists && createAsset {
-			// On cancel rippled scopes the reserve check and owner-count bump to
-			// the soon-erased escrow SLE (sfOwnerCount reads 0, bump discarded);
-			// on finish both apply to the destination account.
-			reserveOwnerCount := destOwnerCount
+			// Post-fixCleanup3_2_0 the reserve check and owner-count bump are scoped
+			// to the destination account. Pre-amendment, cancel scoped them to the
+			// soon-erased escrow SLE, which has no sfOwnerCount: rippled throws
+			// reading it, yielding tefEXCEPTION whenever a new MPToken must be
+			// created during a cancel refund.
 			if !bumpDestOwnerCount {
-				reserveOwnerCount = 0
+				return ter.TefEXCEPTION
 			}
-			reserve := reserveBase + uint64(reserveOwnerCount+1)*reserveIncrement
+			reserve := reserveBase + uint64(destOwnerCount+1)*reserveIncrement
 			if destBalance < reserve {
 				return ter.TecINSUFFICIENT_RESERVE
 			}
@@ -608,36 +608,31 @@ func escrowUnlockMPT(
 	}
 
 	// --- rippleUnlockEscrowMPT logic below ---
-	// Re-read issuance (might have been modified by createMPTokenForEscrow if it
-	// is in the same view, but it shouldn't be — MPToken creation doesn't touch issuance)
 
-	// 1. Decrease the Issuance LockedAmount by finalAmount
-	// Reference: rippled lines 2968-2997
+	// 1. Decrease the Issuance LockedAmount by the gross (originally locked) amount.
 	if issuance.LockedAmount == nil {
 		return ter.TecINTERNAL
 	}
 	issuanceLocked := *issuance.LockedAmount
-	if issuanceLocked < finalAmount {
+	if issuanceLocked < grossAmount {
 		return ter.TecINTERNAL
 	}
-	newIssuanceLocked := issuanceLocked - finalAmount
+	newIssuanceLocked := issuanceLocked - grossAmount
 	if newIssuanceLocked == 0 {
 		issuance.LockedAmount = nil
 	} else {
 		issuance.LockedAmount = &newIssuanceLocked
 	}
 
-	// 2. Handle receiver
+	// 2. Handle receiver (credited the net amount, after transfer fee).
 	if receiverIsIssuer {
 		// Decrease OutstandingAmount by finalAmount (tokens are redeemed)
-		// Reference: rippled lines 3027-3044
 		if issuance.OutstandingAmount < finalAmount {
 			return ter.TecINTERNAL
 		}
 		issuance.OutstandingAmount -= finalAmount
 	} else {
-		// Increase receiver's MPTAmount by finalAmount
-		// Reference: rippled lines 2999-3025
+		// Increase receiver's MPTAmount by the net amount.
 		receiverTokenKey := keylet.MPToken(issuanceKey.Key, receiverID)
 		receiverTokenData, err := view.Read(receiverTokenKey)
 		if err != nil || receiverTokenData == nil {
@@ -664,6 +659,16 @@ func escrowUnlockMPT(
 		}
 	}
 
+	// 3. Burn the transfer fee (gross - net) from the issuance OutstandingAmount.
+	// The fee tokens were counted as outstanding while escrowed but are destroyed
+	// on delivery. Without fixTokenEscrowV1 gross == net, so this is a no-op.
+	if diff := grossAmount - finalAmount; diff != 0 {
+		if issuance.OutstandingAmount < diff {
+			return ter.TecINTERNAL
+		}
+		issuance.OutstandingAmount -= diff
+	}
+
 	// Write back issuance (with updated LockedAmount and possibly OutstandingAmount)
 	updatedIssuance, err := state.SerializeMPTokenIssuance(issuance)
 	if err != nil {
@@ -673,8 +678,7 @@ func escrowUnlockMPT(
 		return ter.TefINTERNAL
 	}
 
-	// 3. Decrease sender's MPToken LockedAmount by finalAmount
-	// Reference: rippled lines 3047-3092
+	// 4. Decrease sender's MPToken LockedAmount by the gross (originally locked) amount.
 	if issuerID == senderID {
 		return ter.TecINTERNAL
 	}
@@ -694,10 +698,10 @@ func escrowUnlockMPT(
 		return ter.TecINTERNAL
 	}
 	senderLocked := *senderToken.LockedAmount
-	if senderLocked < finalAmount {
+	if senderLocked < grossAmount {
 		return ter.TecINTERNAL
 	}
-	newSenderLocked := senderLocked - finalAmount
+	newSenderLocked := senderLocked - grossAmount
 	if newSenderLocked == 0 {
 		senderToken.LockedAmount = nil
 	} else {
@@ -850,20 +854,6 @@ func canTransferMPT(issuance *state.MPTokenIssuanceData, fromID, toID [20]byte) 
 	}
 
 	return ter.TesSUCCESS
-}
-
-// getTransferRateForIssuer reads the transfer rate from an issuer's AccountRoot.
-// Returns parityRate if not set.
-// Reference: rippled View.cpp transferRate(view, issuer)
-func getTransferRateForIssuer(view tx.LedgerView, issuerID [20]byte) uint32 {
-	account, err := tx.ReadAccountRoot(view, issuerID)
-	if err != nil || account == nil {
-		return parityRate
-	}
-	if account.TransferRate == 0 {
-		return parityRate
-	}
-	return account.TransferRate
 }
 
 // getMPTTransferRate computes the transfer rate from an MPT transfer fee.

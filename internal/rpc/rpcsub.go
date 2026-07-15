@@ -68,6 +68,7 @@ func newURLSubscriptionRegistry(ws *WebSocketServer) *URLSubscriptionRegistry {
 // deprecated username/password members. The caller has already verified the
 // admin role.
 func (r *URLSubscriptionRegistry) Subscribe(ctx *types.RpcContext, request types.SubscriptionRequest) (map[string]any, *types.RpcError) {
+	request.ApiVersion = ctx.ApiVersion
 	sub, rpcErr := r.findOrCreate(request)
 	if rpcErr != nil {
 		return nil, rpcErr
@@ -168,7 +169,7 @@ func (r *URLSubscriptionRegistry) findOrCreate(request types.SubscriptionRequest
 }
 
 // tryRemove drops the url's registry entry once it holds no stream
-// subscriptions, mirroring NetworkOPs::tryRemoveRpcSub. Account and book
+// subscriptions, mirroring NetworkOPs::tryRemoveRPCSub. Account and book
 // subscriptions don't keep the entry alive: in rippled the registry holds
 // the only strong reference, so removal destroys the subscriber and its
 // remaining subscriptions with it — here the manager connection and the

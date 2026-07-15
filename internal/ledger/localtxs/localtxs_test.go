@@ -11,13 +11,13 @@ import (
 	"github.com/LeJamon/go-xrpl/internal/ledger/localtxs"
 	"github.com/LeJamon/go-xrpl/internal/ledger/openledger"
 	"github.com/LeJamon/go-xrpl/internal/ledger/state"
-	testenv "github.com/LeJamon/go-xrpl/internal/testing"
+	jtx "github.com/LeJamon/go-xrpl/internal/testing"
 	"github.com/LeJamon/go-xrpl/internal/testing/payment"
 	"github.com/LeJamon/go-xrpl/internal/tx"
 	"github.com/LeJamon/go-xrpl/keylet"
 )
 
-func buildSignedBlob(t *testing.T, env *testenv.TestEnv, txn tx.Transaction, signer *testenv.Account) []byte {
+func buildSignedBlob(t *testing.T, env *jtx.TestEnv, txn tx.Transaction, signer *jtx.Account) []byte {
 	t.Helper()
 	env.SignWith(txn, signer)
 	txMap, err := txn.Flatten()
@@ -39,7 +39,7 @@ func buildSignedBlob(t *testing.T, env *testenv.TestEnv, txn tx.Transaction, sig
 // the given sequence, signs it, and returns the parsed PendingTx and an
 // open writable view on top of the LCL (so the test helper can mutate
 // AccountRoot / inject tx entries).
-func pendingFromPay(t *testing.T, env *testenv.TestEnv, alice, bob *testenv.Account, seq uint32) (openledger.PendingTx, *ledger.Ledger) {
+func pendingFromPay(t *testing.T, env *jtx.TestEnv, alice, bob *jtx.Account, seq uint32) (openledger.PendingTx, *ledger.Ledger) {
 	t.Helper()
 	pay := payment.Pay(alice, bob, 1_000_000).Sequence(seq).Build()
 	blob := buildSignedBlob(t, env, pay, alice)
@@ -62,9 +62,9 @@ func pendingFromPay(t *testing.T, env *testenv.TestEnv, alice, bob *testenv.Acco
 // TestLocalTxs_PushBack_Dedup verifies that pushing the same tx hash twice
 // only stores it once.
 func TestLocalTxs_PushBack_Dedup(t *testing.T) {
-	env := testenv.NewTestEnv(t)
-	alice := testenv.NewAccount("alice")
-	bob := testenv.NewAccount("bob")
+	env := jtx.NewTestEnv(t)
+	alice := jtx.NewAccount("alice")
+	bob := jtx.NewAccount("bob")
 	env.Fund(alice, bob)
 
 	ptx, _ := pendingFromPay(t, env, alice, bob, env.Seq(alice))
@@ -82,9 +82,9 @@ func TestLocalTxs_PushBack_Dedup(t *testing.T) {
 // TestLocalTxs_Sweep_ExpiresOldEntries verifies that an entry pushed at
 // ledger N is dropped when the sweep view's seq exceeds N + HoldLedgers.
 func TestLocalTxs_Sweep_ExpiresOldEntries(t *testing.T) {
-	env := testenv.NewTestEnv(t)
-	alice := testenv.NewAccount("alice")
-	bob := testenv.NewAccount("bob")
+	env := jtx.NewTestEnv(t)
+	alice := jtx.NewAccount("alice")
+	bob := jtx.NewAccount("bob")
 	env.Fund(alice, bob)
 
 	// Advance the LCL enough that we can anchor strictly before
@@ -111,9 +111,9 @@ func TestLocalTxs_Sweep_ExpiresOldEntries(t *testing.T) {
 // TestLocalTxs_Sweep_KeepsFreshEntries verifies that an entry pushed at
 // the current ledger survives a Sweep against that same ledger.
 func TestLocalTxs_Sweep_KeepsFreshEntries(t *testing.T) {
-	env := testenv.NewTestEnv(t)
-	alice := testenv.NewAccount("alice")
-	bob := testenv.NewAccount("bob")
+	env := jtx.NewTestEnv(t)
+	alice := jtx.NewAccount("alice")
+	bob := jtx.NewAccount("bob")
 	env.Fund(alice, bob)
 
 	// Build a payment with a *future* sequence so the seq-advance check
@@ -135,9 +135,9 @@ func TestLocalTxs_Sweep_KeepsFreshEntries(t *testing.T) {
 // AccountRoot.Sequence has advanced past the tx's sequence, the entry
 // is dropped (mirrors LocalTxs.cpp:163-164 tefPAST_SEQ branch).
 func TestLocalTxs_Sweep_DropsBySeqAdvance(t *testing.T) {
-	env := testenv.NewTestEnv(t)
-	alice := testenv.NewAccount("alice")
-	bob := testenv.NewAccount("bob")
+	env := jtx.NewTestEnv(t)
+	alice := jtx.NewAccount("alice")
+	bob := jtx.NewAccount("bob")
 	env.Fund(alice, bob)
 
 	txSeq := env.Seq(alice)
@@ -158,9 +158,9 @@ func TestLocalTxs_Sweep_DropsBySeqAdvance(t *testing.T) {
 // TestLocalTxs_Sweep_DropsAlreadyValidatedTx verifies that an entry
 // already present in the view's tx map is dropped (LocalTxs.cpp:150-151).
 func TestLocalTxs_Sweep_DropsAlreadyValidatedTx(t *testing.T) {
-	env := testenv.NewTestEnv(t)
-	alice := testenv.NewAccount("alice")
-	bob := testenv.NewAccount("bob")
+	env := jtx.NewTestEnv(t)
+	alice := jtx.NewAccount("alice")
+	bob := jtx.NewAccount("bob")
 	env.Fund(alice, bob)
 
 	// Use a future seq so the seq-advance check won't fire — we want to
@@ -184,10 +184,10 @@ func TestLocalTxs_Sweep_DropsAlreadyValidatedTx(t *testing.T) {
 // TestLocalTxs_GetTxSet_CanonicalOrder verifies the (account, sequence,
 // hash) ordering with zero salt (LocalTxs.cpp:126).
 func TestLocalTxs_GetTxSet_CanonicalOrder(t *testing.T) {
-	env := testenv.NewTestEnv(t)
-	alice := testenv.NewAccount("alice")
-	bob := testenv.NewAccount("bob")
-	carol := testenv.NewAccount("carol")
+	env := jtx.NewTestEnv(t)
+	alice := jtx.NewAccount("alice")
+	bob := jtx.NewAccount("bob")
+	carol := jtx.NewAccount("carol")
 	env.Fund(alice, bob, carol)
 
 	// Three pending txs from independent senders. We'll push them in a
@@ -225,9 +225,9 @@ func TestLocalTxs_GetTxSet_CanonicalOrder(t *testing.T) {
 // pending txs from the same account are returned in ascending sequence
 // order regardless of push order.
 func TestLocalTxs_GetTxSet_SortsBySequenceWithinAccount(t *testing.T) {
-	env := testenv.NewTestEnv(t)
-	alice := testenv.NewAccount("alice")
-	bob := testenv.NewAccount("bob")
+	env := jtx.NewTestEnv(t)
+	alice := jtx.NewAccount("alice")
+	bob := jtx.NewAccount("bob")
 	env.Fund(alice, bob)
 
 	seq := env.Seq(alice)
@@ -253,7 +253,7 @@ func TestLocalTxs_GetTxSet_SortsBySequenceWithinAccount(t *testing.T) {
 
 // buildPendingTx constructs a signed payment from `from` to `to` at the
 // given sequence and returns the parsed PendingTx.
-func buildPendingTx(t *testing.T, env *testenv.TestEnv, from, to *testenv.Account, seq uint32) openledger.PendingTx {
+func buildPendingTx(t *testing.T, env *jtx.TestEnv, from, to *jtx.Account, seq uint32) openledger.PendingTx {
 	t.Helper()
 	pay := payment.Pay(from, to, 1_000_000).Sequence(seq).Build()
 	blob := buildSignedBlob(t, env, pay, from)
@@ -267,7 +267,7 @@ func buildPendingTx(t *testing.T, env *testenv.TestEnv, from, to *testenv.Accoun
 // bumpAccountSequence reads alice's AccountRoot from view, sets its
 // Sequence to target, and writes it back. Used to simulate "the tx has
 // been replaced or already applied in a sibling round".
-func bumpAccountSequence(t *testing.T, view *ledger.Ledger, acc *testenv.Account, target uint32) {
+func bumpAccountSequence(t *testing.T, view *ledger.Ledger, acc *jtx.Account, target uint32) {
 	t.Helper()
 	accID := acc.AccountID()
 	k := keylet.Account(accID)

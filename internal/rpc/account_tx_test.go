@@ -5,9 +5,11 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"strconv"
 	"strings"
 	"testing"
 
+	"github.com/LeJamon/go-xrpl/codec/binarycodec"
 	"github.com/LeJamon/go-xrpl/internal/ledger/service/svcerr"
 	"github.com/LeJamon/go-xrpl/internal/rpc/handlers"
 	"github.com/LeJamon/go-xrpl/internal/rpc/types"
@@ -19,6 +21,8 @@ import (
 type accountTxMock struct {
 	*mockLedgerService
 	getAccountTransactionsFn func(ctx context.Context, account string, ledgerMin, ledgerMax int64, limit uint32, marker *types.AccountTxMarker, forward bool) (*types.AccountTxResult, error)
+	getLedgerBySequenceFn    func(uint32) (types.LedgerReader, error)
+	getLedgerByHashFn        func([32]byte) (types.LedgerReader, error)
 }
 
 func newAccountTxMock() *accountTxMock {
@@ -34,9 +38,127 @@ func (m *accountTxMock) GetAccountTransactions(ctx context.Context, account stri
 	return nil, errors.New("not implemented")
 }
 
+func (m *accountTxMock) GetLedgerBySequence(seq uint32) (types.LedgerReader, error) {
+	if m.getLedgerBySequenceFn != nil {
+		return m.getLedgerBySequenceFn(seq)
+	}
+	return m.mockLedgerService.GetLedgerBySequence(seq)
+}
+
+func (m *accountTxMock) GetLedgerByHash(hash [32]byte) (types.LedgerReader, error) {
+	if m.getLedgerByHashFn != nil {
+		return m.getLedgerByHashFn(hash)
+	}
+	return m.mockLedgerService.GetLedgerByHash(hash)
+}
+
 // newTestServicesAccountTx builds a *types.ServiceContainer wrapping the mock.
 func newTestServicesAccountTx(mock *accountTxMock) *types.ServiceContainer {
 	return &types.ServiceContainer{Ledger: mock}
+}
+
+func TestAccountTxDeliveredAmountHistoricalContext(t *testing.T) {
+	const account = "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh"
+	txBlob := encodeSyntheticRPCObject(t, map[string]any{
+		"Account":         account,
+		"Amount":          "100",
+		"Destination":     "rDsbeomae4FXwgQTJp9Rs64Qg9vDiTCdBv",
+		"Fee":             "10",
+		"Sequence":        uint32(1),
+		"SigningPubKey":   "",
+		"TransactionType": "Payment",
+	})
+	tests := []struct {
+		name              string
+		ledgerSequence    uint32
+		closeTime         int64
+		serializedAmount  string
+		expectedDelivered string
+	}{
+		{
+			name:              "pre-cutoff ledger and close time",
+			ledgerSequence:    4_594_094,
+			closeTime:         446_000_000,
+			expectedDelivered: "unavailable",
+		},
+		{
+			name:              "ledger sequence cutoff",
+			ledgerSequence:    4_594_095,
+			expectedDelivered: "100",
+		},
+		{
+			name:              "post-cutoff close time",
+			ledgerSequence:    4_594_094,
+			closeTime:         446_000_001,
+			expectedDelivered: "100",
+		},
+		{
+			name:              "serialized amount before cutoffs",
+			ledgerSequence:    4_594_094,
+			closeTime:         446_000_000,
+			serializedAmount:  "40",
+			expectedDelivered: "40",
+		},
+	}
+
+	for _, tc := range tests {
+		for _, apiVersion := range []int{types.ApiVersion1, types.ApiVersion2} {
+			apiName := "api_v1"
+			if apiVersion == types.ApiVersion2 {
+				apiName = "api_v2"
+			}
+			t.Run(tc.name+"/"+apiName, func(t *testing.T) {
+				meta := map[string]any{
+					"AffectedNodes":     []any{},
+					"TransactionIndex":  uint32(0),
+					"TransactionResult": "tesSUCCESS",
+				}
+				if tc.serializedAmount != "" {
+					meta["DeliveredAmount"] = tc.serializedAmount
+				}
+				metaBlob := encodeSyntheticRPCObject(t, meta)
+
+				mock := newAccountTxMock()
+				mock.getAccountTransactionsFn = func(context.Context, string, int64, int64, uint32, *types.AccountTxMarker, bool) (*types.AccountTxResult, error) {
+					return &types.AccountTxResult{
+						Account: account,
+						Transactions: []types.AccountTransaction{{
+							Hash:        [32]byte{1},
+							LedgerIndex: tc.ledgerSequence,
+							TxBlob:      txBlob,
+							Meta:        metaBlob,
+						}},
+						Validated: true,
+					}, nil
+				}
+				mock.getLedgerBySequenceFn = func(seq uint32) (types.LedgerReader, error) {
+					require.Equal(t, tc.ledgerSequence, seq)
+					return &mockLedgerReader{
+						seq:       seq,
+						closeTime: tc.closeTime,
+						closed:    true,
+						validated: true,
+					}, nil
+				}
+				ctx := &types.RpcContext{
+					Context:    context.Background(),
+					Role:       types.RoleGuest,
+					ApiVersion: apiVersion,
+					Services:   newTestServicesAccountTx(mock),
+				}
+
+				result, rpcErr := (&handlers.AccountTxMethod{}).Handle(
+					ctx,
+					json.RawMessage(`{"account":"`+account+`"}`),
+				)
+				require.Nil(t, rpcErr)
+				response := result.(map[string]any)
+				entry := response["transactions"].([]map[string]any)[0]
+				responseMeta := entry["meta"].(map[string]any)
+				require.Equal(t, tc.expectedDelivered, responseMeta["delivered_amount"])
+			})
+		}
+	}
 }
 
 // Error Validation Tests
@@ -65,13 +187,13 @@ func TestAccountTxErrorValidation(t *testing.T) {
 		{
 			name:          "Missing account field - empty params",
 			params:        map[string]any{},
-			expectedError: "Missing required parameter: account",
+			expectedError: "Missing field 'account'.",
 			expectedCode:  types.RpcINVALID_PARAMS,
 		},
 		{
 			name:          "Missing account field - nil params",
 			params:        nil,
-			expectedError: "Missing required parameter: account",
+			expectedError: "Missing field 'account'.",
 			expectedCode:  types.RpcINVALID_PARAMS,
 		},
 		{
@@ -108,7 +230,7 @@ func TestAccountTxErrorValidation(t *testing.T) {
 			params: map[string]any{
 				"account": 12345,
 			},
-			expectedError: "Invalid parameters:",
+			expectedError: "Invalid field 'account'.",
 			expectedCode:  types.RpcINVALID_PARAMS,
 		},
 		{
@@ -116,7 +238,7 @@ func TestAccountTxErrorValidation(t *testing.T) {
 			params: map[string]any{
 				"account": true,
 			},
-			expectedError: "Invalid parameters:",
+			expectedError: "Invalid field 'account'.",
 			expectedCode:  types.RpcINVALID_PARAMS,
 		},
 		{
@@ -124,7 +246,7 @@ func TestAccountTxErrorValidation(t *testing.T) {
 			params: map[string]any{
 				"account": nil,
 			},
-			expectedError: "Missing required parameter: account",
+			expectedError: "Invalid field 'account'.",
 			expectedCode:  types.RpcINVALID_PARAMS,
 		},
 		{
@@ -132,7 +254,7 @@ func TestAccountTxErrorValidation(t *testing.T) {
 			params: map[string]any{
 				"account": map[string]any{"nested": "value"},
 			},
-			expectedError: "Invalid parameters:",
+			expectedError: "Invalid field 'account'.",
 			expectedCode:  types.RpcINVALID_PARAMS,
 		},
 		{
@@ -140,7 +262,7 @@ func TestAccountTxErrorValidation(t *testing.T) {
 			params: map[string]any{
 				"account": []string{"value1", "value2"},
 			},
-			expectedError: "Invalid parameters:",
+			expectedError: "Invalid field 'account'.",
 			expectedCode:  types.RpcINVALID_PARAMS,
 		},
 		{
@@ -148,7 +270,7 @@ func TestAccountTxErrorValidation(t *testing.T) {
 			params: map[string]any{
 				"account": 1.1,
 			},
-			expectedError: "Invalid parameters:",
+			expectedError: "Invalid field 'account'.",
 			expectedCode:  types.RpcINVALID_PARAMS,
 		},
 	}
@@ -177,6 +299,175 @@ func TestAccountTxErrorValidation(t *testing.T) {
 				"Error message should contain expected text")
 			assert.Equal(t, tc.expectedCode, rpcErr.Code,
 				"Error code should match expected")
+		})
+	}
+}
+
+func TestAccountTxValidationOrder(t *testing.T) {
+	const account = "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh"
+	tests := []struct {
+		name    string
+		params  string
+		message string
+		code    int
+	}{
+		{
+			name:    "binary type precedes forward limit and account",
+			params:  `{"binary":"true","forward":"true","limit":0}`,
+			message: "Invalid field 'binary'.",
+			code:    types.RpcINVALID_PARAMS,
+		},
+		{
+			name:    "forward type precedes limit and account",
+			params:  `{"binary":false,"forward":"true","limit":0}`,
+			message: "Invalid field 'forward'.",
+			code:    types.RpcINVALID_PARAMS,
+		},
+		{
+			name:    "limit precedes account",
+			params:  `{"binary":false,"forward":false,"limit":0}`,
+			message: "Invalid field 'limit'.",
+			code:    types.RpcINVALID_PARAMS,
+		},
+		{
+			name:    "account presence precedes ledger and marker",
+			params:  `{"ledger_index":"2","marker":{}}`,
+			message: "Missing field 'account'.",
+			code:    types.RpcINVALID_PARAMS,
+		},
+		{
+			name:    "account type precedes ledger and marker",
+			params:  `{"account":null,"ledger_index":"2","marker":{}}`,
+			message: "Invalid field 'account'.",
+			code:    types.RpcINVALID_PARAMS,
+		},
+		{
+			name:    "account base58 precedes ledger and marker",
+			params:  `{"account":"bad","ledger_index":"2","marker":{}}`,
+			message: "Account malformed.",
+			code:    types.RpcACT_MALFORMED,
+		},
+		{
+			name:    "ledger arguments precede marker",
+			params:  `{"account":"` + account + `","ledger_index":"2","marker":{}}`,
+			message: "ledger_index string malformed",
+			code:    types.RpcINVALID_PARAMS,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx := &types.RpcContext{
+				Context:    context.Background(),
+				Role:       types.RoleGuest,
+				ApiVersion: types.ApiVersion2,
+				Services:   newTestServicesAccountTx(newAccountTxMock()),
+			}
+			result, rpcErr := (&handlers.AccountTxMethod{}).Handle(ctx, json.RawMessage(tc.params))
+			assert.Nil(t, result)
+			require.NotNil(t, rpcErr)
+			assert.Equal(t, tc.code, rpcErr.Code)
+			assert.Equal(t, tc.message, rpcErr.Message)
+		})
+	}
+}
+
+func TestAccountTxLedgerArguments(t *testing.T) {
+	const account = "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh"
+	const ledgerHash = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+
+	t.Run("numeric JSON ledger_index selects one validated ledger", func(t *testing.T) {
+		mock := newAccountTxMock()
+		mock.getLedgerBySequenceFn = func(seq uint32) (types.LedgerReader, error) {
+			require.Equal(t, uint32(2), seq)
+			return &mockLedgerReader{seq: seq, closed: true, validated: true}, nil
+		}
+		mock.getAccountTransactionsFn = func(_ context.Context, gotAccount string, min, max int64, _ uint32, _ *types.AccountTxMarker, _ bool) (*types.AccountTxResult, error) {
+			assert.Equal(t, account, gotAccount)
+			assert.Equal(t, int64(2), min)
+			assert.Equal(t, int64(2), max)
+			return &types.AccountTxResult{Account: gotAccount, Transactions: []types.AccountTransaction{}, Validated: true}, nil
+		}
+		ctx := &types.RpcContext{Context: context.Background(), ApiVersion: types.ApiVersion2, Services: newTestServicesAccountTx(mock)}
+
+		result, rpcErr := (&handlers.AccountTxMethod{}).Handle(ctx, json.RawMessage(`{"account":"`+account+`","ledger_index":2}`))
+		require.Nil(t, rpcErr)
+		require.NotNil(t, result)
+	})
+
+	t.Run("numeric string ledger_index is malformed", func(t *testing.T) {
+		ctx := &types.RpcContext{Context: context.Background(), ApiVersion: types.ApiVersion2, Services: newTestServicesAccountTx(newAccountTxMock())}
+		result, rpcErr := (&handlers.AccountTxMethod{}).Handle(ctx, json.RawMessage(`{"account":"`+account+`","ledger_index":"2"}`))
+		assert.Nil(t, result)
+		require.NotNil(t, rpcErr)
+		assert.Equal(t, types.RpcINVALID_PARAMS, rpcErr.Code)
+		assert.Equal(t, "ledger_index string malformed", rpcErr.Message)
+	})
+
+	for _, tc := range []struct {
+		name   string
+		params string
+	}{
+		{
+			name:   "null range member conflicts by presence",
+			params: `{"account":"` + account + `","ledger_index_min":null,"ledger_index":"validated"}`,
+		},
+		{
+			name:   "empty range member conflicts by presence",
+			params: `{"account":"` + account + `","ledger_index_max":"","ledger_hash":"` + ledgerHash + `"}`,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx := &types.RpcContext{Context: context.Background(), ApiVersion: types.ApiVersion2, Services: newTestServicesAccountTx(newAccountTxMock())}
+			result, rpcErr := (&handlers.AccountTxMethod{}).Handle(ctx, json.RawMessage(tc.params))
+			assert.Nil(t, result)
+			require.NotNil(t, rpcErr)
+			assert.Equal(t, types.RpcINVALID_PARAMS, rpcErr.Code)
+			assert.Equal(t, "invalidParams", rpcErr.Message)
+		})
+	}
+
+	t.Run("ledger_hash wins over ledger_index", func(t *testing.T) {
+		mock := newAccountTxMock()
+		mock.getLedgerByHashFn = func(hash [32]byte) (types.LedgerReader, error) {
+			assert.Equal(t, strings.Repeat("AA", 32), strings.ToUpper(hex.EncodeToString(hash[:])))
+			return &mockLedgerReader{seq: 2, closed: true, validated: true}, nil
+		}
+		mock.getAccountTransactionsFn = func(_ context.Context, gotAccount string, min, max int64, _ uint32, _ *types.AccountTxMarker, _ bool) (*types.AccountTxResult, error) {
+			assert.Equal(t, int64(2), min)
+			assert.Equal(t, int64(2), max)
+			return &types.AccountTxResult{Account: gotAccount, Transactions: []types.AccountTransaction{}, Validated: true}, nil
+		}
+		ctx := &types.RpcContext{Context: context.Background(), ApiVersion: types.ApiVersion2, Services: newTestServicesAccountTx(mock)}
+
+		result, rpcErr := (&handlers.AccountTxMethod{}).Handle(ctx, json.RawMessage(`{"account":"`+account+`","ledger_hash":"`+ledgerHash+`","ledger_index":"2"}`))
+		require.Nil(t, rpcErr)
+		require.NotNil(t, result)
+	})
+
+	for _, tc := range []struct {
+		name           string
+		sequence       uint32
+		validated      bool
+		validatedIndex uint32
+	}{
+		{name: "ledger is not validated", sequence: 2, validated: false, validatedIndex: 2},
+		{name: "ledger is outside validated range", sequence: 3, validated: true, validatedIndex: 2},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			mock := newAccountTxMock()
+			mock.validatedLedgerIndex = tc.validatedIndex
+			mock.getLedgerBySequenceFn = func(uint32) (types.LedgerReader, error) {
+				return &mockLedgerReader{seq: tc.sequence, closed: true, validated: tc.validated}, nil
+			}
+			ctx := &types.RpcContext{Context: context.Background(), ApiVersion: types.ApiVersion2, Services: newTestServicesAccountTx(mock)}
+
+			result, rpcErr := (&handlers.AccountTxMethod{}).Handle(ctx, json.RawMessage(`{"account":"`+account+`","ledger_index":`+strconv.FormatUint(uint64(tc.sequence), 10)+`}`))
+			assert.Nil(t, result)
+			require.NotNil(t, rpcErr)
+			assert.Equal(t, types.RpcLGR_NOT_VALIDATED, rpcErr.Code)
+			assert.Equal(t, "lgrNotValidated", rpcErr.ErrorString)
+			assert.Equal(t, "Ledger not validated.", rpcErr.Message)
 		})
 	}
 }
@@ -266,11 +557,11 @@ func TestAccountTxLedgerIndexMinMax(t *testing.T) {
 
 		mock.getAccountTransactionsFn = func(ctx context.Context, account string, ledgerMin, ledgerMax int64, limit uint32, marker *types.AccountTxMarker, forward bool) (*types.AccountTxResult, error) {
 			assert.Equal(t, int64(1), ledgerMin)
-			assert.Equal(t, int64(3), ledgerMax)
+			assert.Equal(t, int64(2), ledgerMax)
 			return &types.AccountTxResult{
 				Account:      account,
 				LedgerMin:    1,
-				LedgerMax:    3,
+				LedgerMax:    2,
 				Limit:        200,
 				Transactions: []types.AccountTransaction{},
 				Validated:    true,
@@ -296,7 +587,7 @@ func TestAccountTxLedgerIndexMinMax(t *testing.T) {
 		require.NoError(t, err)
 
 		assert.Equal(t, float64(1), resp["ledger_index_min"])
-		assert.Equal(t, float64(3), resp["ledger_index_max"])
+		assert.Equal(t, float64(2), resp["ledger_index_max"])
 	})
 }
 
@@ -316,10 +607,18 @@ func TestAccountTxBinaryMode(t *testing.T) {
 		txHash[i] = byte(i + 1)
 	}
 
-	// A minimal valid serialized tx blob and meta for testing binary mode.
-	// These are hex-encoded placeholders that represent raw binary data.
-	txBlobBytes, _ := hex.DecodeString("1200002200000000240000000361D4838D7EA4C680000000000000000000000000005553440000000000E6C92BF47A692162751F6017CF3E40B4AE15285568400000000000000A7321ED5F5AC43F527AE97194A1B29F2E8831A2AEE056431FC596590B5F3F5769AF70774473045022100")
-	metaBytes, _ := hex.DecodeString("201C00000001")
+	txBlobBytes := encodeSyntheticRPCObject(t, map[string]any{
+		"Account":         validAccount,
+		"Fee":             "10",
+		"Sequence":        uint32(3),
+		"SigningPubKey":   "",
+		"TransactionType": "AccountSet",
+	})
+	metaBytes := encodeSyntheticRPCObject(t, map[string]any{
+		"AffectedNodes":     []any{},
+		"TransactionIndex":  uint32(1),
+		"TransactionResult": "tesSUCCESS",
+	})
 
 	t.Run("Binary mode returns tx_blob and meta_blob as hex (API v2)", func(t *testing.T) {
 		ctx := &types.RpcContext{
@@ -432,11 +731,199 @@ func TestAccountTxBinaryMode(t *testing.T) {
 		require.Len(t, txs, 1)
 
 		tx0 := txs[0].(map[string]any)
-		// In JSON mode, should have "tx" or "tx_blob" (if decode fails, falls back to hex)
-		// Either way, hash and validated should be present
-		assert.Contains(t, tx0, "hash", "JSON mode should return hash")
+		txJSON, ok := tx0["tx"].(map[string]any)
+		require.True(t, ok)
+		assert.Equal(t, strings.ToUpper(hex.EncodeToString(txHash[:])), txJSON["hash"])
+		assert.Contains(t, tx0, "meta")
+		assert.NotContains(t, tx0, "hash")
 		assert.Equal(t, true, tx0["validated"])
 	})
+
+	t.Run("JSON mode skips corrupt transaction rows", func(t *testing.T) {
+		ctx := &types.RpcContext{
+			Context:    context.Background(),
+			Role:       types.RoleGuest,
+			ApiVersion: types.ApiVersion1,
+			Services:   services,
+		}
+		mock.getAccountTransactionsFn = func(_ context.Context, account string, _, _ int64, _ uint32, _ *types.AccountTxMarker, _ bool) (*types.AccountTxResult, error) {
+			return &types.AccountTxResult{
+				Account: account,
+				Transactions: []types.AccountTransaction{{
+					TxBlob: []byte{0xff},
+				}},
+				Validated: true,
+			}, nil
+		}
+		result, rpcErr := method.Handle(ctx, json.RawMessage(`{"account":"`+validAccount+`"}`))
+		require.Nil(t, rpcErr)
+		response := resultToMap(t, result)
+		assert.Empty(t, response["transactions"])
+	})
+}
+
+func TestAccountTxJSONProjectionByAPIVersion(t *testing.T) {
+	const (
+		account        = "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh"
+		ledgerSequence = uint32(1)
+		transactionSeq = uint32(7)
+		transactionNet = uint32(2_048)
+		closeTime      = int64(123)
+	)
+	txBlob := encodeSyntheticRPCObject(t, map[string]any{
+		"Account":         account,
+		"Fee":             "10",
+		"NetworkID":       transactionNet,
+		"Sequence":        uint32(1),
+		"SigningPubKey":   "",
+		"TransactionType": "AccountSet",
+	})
+	metaBlob := encodeSyntheticRPCObject(t, map[string]any{
+		"AffectedNodes":     []any{},
+		"TransactionIndex":  transactionSeq,
+		"TransactionResult": "tesSUCCESS",
+	})
+	txHash := [32]byte{0xAB}
+	ledgerHash := [32]byte{0xCD}
+	wantHash := strings.ToUpper(hex.EncodeToString(txHash[:]))
+	wantLedgerHash := strings.ToUpper(hex.EncodeToString(ledgerHash[:]))
+	const wantCTID = "C000000100070800"
+
+	for _, apiVersion := range []int{types.ApiVersion1, types.ApiVersion2} {
+		t.Run("api_v"+strconv.Itoa(apiVersion), func(t *testing.T) {
+			mock := newAccountTxMock()
+			mock.serverInfo.NetworkID = 9
+			mock.getAccountTransactionsFn = func(context.Context, string, int64, int64, uint32, *types.AccountTxMarker, bool) (*types.AccountTxResult, error) {
+				return &types.AccountTxResult{
+					Account: account,
+					Transactions: []types.AccountTransaction{{
+						Hash:        txHash,
+						LedgerIndex: ledgerSequence,
+						TxnSeq:      transactionSeq,
+						TxBlob:      txBlob,
+						Meta:        metaBlob,
+					}},
+					Validated: true,
+				}, nil
+			}
+			mock.getLedgerBySequenceFn = func(seq uint32) (types.LedgerReader, error) {
+				require.Equal(t, ledgerSequence, seq)
+				return &mockLedgerReader{
+					seq:       ledgerSequence,
+					hash:      ledgerHash,
+					closeTime: closeTime,
+					closed:    true,
+					validated: true,
+				}, nil
+			}
+
+			result, rpcErr := (&handlers.AccountTxMethod{}).Handle(&types.RpcContext{
+				Context:    context.Background(),
+				Role:       types.RoleGuest,
+				ApiVersion: apiVersion,
+				Services:   newTestServicesAccountTx(mock),
+			}, json.RawMessage(`{"account":"`+account+`"}`))
+			require.Nil(t, rpcErr)
+			entry := result.(map[string]any)["transactions"].([]map[string]any)[0]
+
+			if apiVersion == types.ApiVersion1 {
+				txJSON := entry["tx"].(map[string]any)
+				assert.Equal(t, wantHash, txJSON["hash"])
+				assert.EqualValues(t, ledgerSequence, txJSON["inLedger"])
+				assert.EqualValues(t, ledgerSequence, txJSON["ledger_index"])
+				assert.EqualValues(t, closeTime, txJSON["date"])
+				assert.Equal(t, wantCTID, txJSON["ctid"])
+				assert.NotContains(t, entry, "hash")
+				assert.NotContains(t, entry, "ledger_index")
+				assert.NotContains(t, entry, "ledger_hash")
+				assert.NotContains(t, entry, "close_time_iso")
+				return
+			}
+
+			txJSON := entry["tx_json"].(map[string]any)
+			assert.NotContains(t, txJSON, "hash")
+			assert.NotContains(t, txJSON, "inLedger")
+			assert.EqualValues(t, ledgerSequence, txJSON["ledger_index"])
+			assert.EqualValues(t, closeTime, txJSON["date"])
+			assert.Equal(t, wantCTID, txJSON["ctid"])
+			assert.Equal(t, wantHash, entry["hash"])
+			assert.EqualValues(t, ledgerSequence, entry["ledger_index"])
+			assert.Equal(t, wantLedgerHash, entry["ledger_hash"])
+			assert.Equal(t, "2000-01-01T00:02:03Z", entry["close_time_iso"])
+		})
+	}
+}
+
+func TestAccountTxJSONProjectionCTIDBounds(t *testing.T) {
+	const account = "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh"
+	metaBlob := encodeSyntheticRPCObject(t, map[string]any{
+		"AffectedNodes":     []any{},
+		"TransactionIndex":  uint32(0),
+		"TransactionResult": "tesSUCCESS",
+	})
+	tests := []struct {
+		name           string
+		ledgerSequence uint32
+		transactionSeq uint32
+		networkID      uint32
+		wantCTID       string
+	}{
+		{
+			name:           "maximum components",
+			ledgerSequence: 0x0FFFFFFF,
+			transactionSeq: 0xFFFF,
+			networkID:      0xFFFF,
+			wantCTID:       "CFFFFFFFFFFFFFFF",
+		},
+		{name: "ledger overflow", ledgerSequence: 0x10000000, transactionSeq: 1, networkID: 1},
+		{name: "transaction overflow", ledgerSequence: 1, transactionSeq: 0x10000, networkID: 1},
+		{name: "network overflow", ledgerSequence: 1, transactionSeq: 1, networkID: 0x10000},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			txBlob := encodeSyntheticRPCObject(t, map[string]any{
+				"Account":         account,
+				"Fee":             "10",
+				"NetworkID":       tc.networkID,
+				"Sequence":        uint32(1),
+				"SigningPubKey":   "",
+				"TransactionType": "AccountSet",
+			})
+			mock := newAccountTxMock()
+			mock.serverInfo.NetworkID = 9
+			mock.getAccountTransactionsFn = func(context.Context, string, int64, int64, uint32, *types.AccountTxMarker, bool) (*types.AccountTxResult, error) {
+				return &types.AccountTxResult{
+					Account: account,
+					Transactions: []types.AccountTransaction{{
+						LedgerIndex: tc.ledgerSequence,
+						TxnSeq:      tc.transactionSeq,
+						TxBlob:      txBlob,
+						Meta:        metaBlob,
+					}},
+					Validated: true,
+				}, nil
+			}
+			mock.getLedgerBySequenceFn = func(uint32) (types.LedgerReader, error) {
+				return &mockLedgerReader{seq: tc.ledgerSequence, closed: true, validated: true}, nil
+			}
+
+			result, rpcErr := (&handlers.AccountTxMethod{}).Handle(&types.RpcContext{
+				Context:    context.Background(),
+				Role:       types.RoleGuest,
+				ApiVersion: types.ApiVersion2,
+				Services:   newTestServicesAccountTx(mock),
+			}, json.RawMessage(`{"account":"`+account+`"}`))
+			require.Nil(t, rpcErr)
+			entry := result.(map[string]any)["transactions"].([]map[string]any)[0]
+			txJSON := entry["tx_json"].(map[string]any)
+			if tc.wantCTID == "" {
+				assert.NotContains(t, txJSON, "ctid")
+			} else {
+				assert.Equal(t, tc.wantCTID, txJSON["ctid"])
+			}
+		})
+	}
 }
 
 // Forward / Reverse Ordering Tests
@@ -624,6 +1111,19 @@ func TestAccountTxMarkerPagination(t *testing.T) {
 		// No marker means last page
 		_, hasMarker := resp["marker"]
 		assert.False(t, hasMarker, "Last page should not have marker")
+	})
+
+	t.Run("JsonCpp-compatible UInt marker coercion", func(t *testing.T) {
+		mock.getAccountTransactionsFn = func(_ context.Context, account string, _, _ int64, _ uint32, marker *types.AccountTxMarker, _ bool) (*types.AccountTxResult, error) {
+			require.NotNil(t, marker)
+			assert.Equal(t, uint32(0), marker.LedgerSeq)
+			assert.Equal(t, uint32(1), marker.TxnSeq)
+			return &types.AccountTxResult{Account: account, LedgerMin: 1, LedgerMax: 2, Limit: 2, Validated: true}, nil
+		}
+		paramsJSON := json.RawMessage(`{"account":"` + validAccount + `","marker":{"ledger":null,"seq":true}}`)
+		result, rpcErr := method.Handle(ctx, paramsJSON)
+		require.Nil(t, rpcErr)
+		require.NotNil(t, result)
 	})
 }
 
@@ -1090,9 +1590,9 @@ func TestAccountTxLimitParameter(t *testing.T) {
 		assert.Equal(t, float64(10), resp["limit"])
 	})
 
-	t.Run("Default limit (0) when not specified", func(t *testing.T) {
+	t.Run("Absent limit defaults to accountTx rdefault (200)", func(t *testing.T) {
 		mock.getAccountTransactionsFn = func(ctx context.Context, account string, ledgerMin, ledgerMax int64, limit uint32, marker *types.AccountTxMarker, forward bool) (*types.AccountTxResult, error) {
-			assert.Equal(t, uint32(0), limit, "Limit should default to 0 when not specified")
+			assert.Equal(t, uint32(200), limit, "absent limit routes through readLimitField -> accountTx default 200")
 			return &types.AccountTxResult{
 				Account:      account,
 				LedgerMin:    1,
@@ -1113,6 +1613,107 @@ func TestAccountTxLimitParameter(t *testing.T) {
 		require.Nil(t, rpcErr)
 		require.NotNil(t, result)
 	})
+
+	t.Run("explicit limit 0 is rejected (3.1.3 readLimitField)", func(t *testing.T) {
+		paramsJSON := []byte(`{"account":"` + validAccount + `","limit":0}`)
+		_, rpcErr := method.Handle(ctx, paramsJSON)
+		require.NotNil(t, rpcErr)
+		assert.Equal(t, types.RpcINVALID_PARAMS, rpcErr.Code)
+		assert.Equal(t, "Invalid field 'limit'.", rpcErr.Message)
+	})
+
+	t.Run("malformed limit is expected_field_error", func(t *testing.T) {
+		paramsJSON := []byte(`{"account":"` + validAccount + `","limit":"abc"}`)
+		_, rpcErr := method.Handle(ctx, paramsJSON)
+		require.NotNil(t, rpcErr)
+		assert.Equal(t, types.RpcINVALID_PARAMS, rpcErr.Code)
+		assert.Equal(t, "Invalid field 'limit', not unsigned integer.", rpcErr.Message)
+	})
+
+	t.Run("below-min limit clamps to 10 for non-admin", func(t *testing.T) {
+		var captured uint32
+		mock.getAccountTransactionsFn = func(_ context.Context, account string, _, _ int64, limit uint32, _ *types.AccountTxMarker, _ bool) (*types.AccountTxResult, error) {
+			captured = limit
+			return &types.AccountTxResult{Account: account, Limit: limit, Transactions: []types.AccountTransaction{}, Validated: true}, nil
+		}
+		paramsJSON := []byte(`{"account":"` + validAccount + `","limit":5}`)
+		_, rpcErr := method.Handle(ctx, paramsJSON)
+		require.Nil(t, rpcErr)
+		assert.Equal(t, uint32(10), captured, "non-admin limit below rmin clamps to 10")
+	})
+}
+
+func TestAccountTxValidationPrecedence(t *testing.T) {
+	mock := newAccountTxMock()
+	method := &handlers.AccountTxMethod{}
+	validAccount := "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh"
+
+	tests := []struct {
+		name       string
+		apiVersion int
+		params     string
+		code       int
+		message    string
+	}{
+		{
+			name:       "limit before account",
+			apiVersion: types.ApiVersion1,
+			params:     `{"account":"not-an-account","limit":0}`,
+			code:       types.RpcINVALID_PARAMS,
+			message:    "Invalid field 'limit'.",
+		},
+		{
+			name:       "binary type before limit",
+			apiVersion: types.ApiVersion2,
+			params:     `{"binary":"true","limit":0}`,
+			code:       types.RpcINVALID_PARAMS,
+			message:    "Invalid field 'binary'.",
+		},
+		{
+			name:       "forward type before limit",
+			apiVersion: types.ApiVersion2,
+			params:     `{"forward":"true","limit":0}`,
+			code:       types.RpcINVALID_PARAMS,
+			message:    "Invalid field 'forward'.",
+		},
+		{
+			name:       "legacy boolean coercion after limit",
+			apiVersion: types.ApiVersion1,
+			params:     `{"binary":{},"limit":0}`,
+			code:       types.RpcINVALID_PARAMS,
+			message:    "Invalid field 'limit'.",
+		},
+		{
+			name:       "account before ledger arguments",
+			apiVersion: types.ApiVersion2,
+			params:     `{"account":"not-an-account","ledger_hash":"bad"}`,
+			code:       types.RpcACT_MALFORMED,
+			message:    "Account malformed.",
+		},
+		{
+			name:       "ledger arguments before marker",
+			apiVersion: types.ApiVersion2,
+			params:     `{"account":"` + validAccount + `","ledger_hash":"bad","marker":{}}`,
+			code:       types.RpcINVALID_PARAMS,
+			message:    "ledgerHashMalformed",
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			ctx := &types.RpcContext{
+				Context:    context.Background(),
+				Role:       types.RoleGuest,
+				ApiVersion: test.apiVersion,
+				Services:   newTestServicesAccountTx(mock),
+			}
+
+			_, rpcErr := method.Handle(ctx, json.RawMessage(test.params))
+			require.NotNil(t, rpcErr)
+			assert.Equal(t, test.code, rpcErr.Code)
+			assert.Equal(t, test.message, rpcErr.Message)
+		})
+	}
 }
 
 // InjectDeliveredAmount Tests
@@ -1186,10 +1787,14 @@ func TestAccountTxInjectDeliveredAmount(t *testing.T) {
 	require.Len(t, txs, 1)
 
 	tx0 := txs[0].(map[string]any)
-	// Hash should always be present regardless of decode success
-	assert.Contains(t, tx0, "hash")
+	txJSON, ok := tx0["tx"].(map[string]any)
+	require.True(t, ok)
 	expectedHash := strings.ToUpper(hex.EncodeToString(txHash[:]))
-	assert.Equal(t, expectedHash, tx0["hash"])
+	assert.Equal(t, expectedHash, txJSON["hash"])
+	assert.Equal(t, float64(3), txJSON["inLedger"])
+	assert.Equal(t, float64(3), txJSON["ledger_index"])
+	assert.NotContains(t, tx0, "hash")
+	assert.NotContains(t, tx0, "ledger_index")
 }
 
 // Service Error Propagation Tests
@@ -1324,6 +1929,72 @@ func TestAccountTxValidatedField(t *testing.T) {
 	tx0 := txs[0].(map[string]any)
 	assert.Equal(t, true, tx0["validated"],
 		"Each transaction entry should have validated=true")
+}
+
+func TestAccountTxCTIDUsesTransactionNetworkID(t *testing.T) {
+	const (
+		validAccount     = "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh"
+		ledgerIndex      = uint32(3)
+		transactionIndex = uint32(4)
+		serverNetworkID  = uint32(7)
+		transactionNetID = uint32(9)
+		expectedCTID     = "C000000300040009"
+	)
+
+	txHex, err := binarycodec.Encode(map[string]any{
+		"TransactionType": "Payment",
+		"Sequence":        uint32(1),
+		"NetworkID":       transactionNetID,
+	})
+	require.NoError(t, err)
+	txBlob, err := hex.DecodeString(txHex)
+	require.NoError(t, err)
+
+	mock := newAccountTxMock()
+	mock.serverInfo.NetworkID = serverNetworkID
+	mock.getAccountTransactionsFn = func(_ context.Context, account string, _, _ int64, _ uint32, _ *types.AccountTxMarker, _ bool) (*types.AccountTxResult, error) {
+		return &types.AccountTxResult{
+			Account:   account,
+			LedgerMin: ledgerIndex,
+			LedgerMax: ledgerIndex,
+			Limit:     200,
+			Transactions: []types.AccountTransaction{{
+				LedgerIndex: ledgerIndex,
+				TxnSeq:      transactionIndex,
+				TxBlob:      txBlob,
+			}},
+			Validated: true,
+		}, nil
+	}
+
+	for _, test := range []struct {
+		name       string
+		apiVersion int
+		txKey      string
+	}{
+		{name: "API v1 tx", apiVersion: types.ApiVersion1, txKey: "tx"},
+		{name: "API v2 tx_json", apiVersion: types.ApiVersion2, txKey: "tx_json"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			params, err := json.Marshal(map[string]any{"account": validAccount})
+			require.NoError(t, err)
+			result, rpcErr := (&handlers.AccountTxMethod{}).Handle(&types.RpcContext{
+				Context:    context.Background(),
+				Role:       types.RoleUser,
+				ApiVersion: test.apiVersion,
+				Services:   newTestServicesAccountTx(mock),
+			}, params)
+			require.Nil(t, rpcErr)
+			response, ok := result.(map[string]any)
+			require.True(t, ok)
+			transactions, ok := response["transactions"].([]map[string]any)
+			require.True(t, ok)
+			require.Len(t, transactions, 1)
+			tx, ok := transactions[0][test.txKey].(map[string]any)
+			require.True(t, ok)
+			assert.Equal(t, expectedCTID, tx["ctid"])
+		})
+	}
 }
 
 // Account parameter passed to service correctly

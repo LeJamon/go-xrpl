@@ -12,6 +12,8 @@ import (
 )
 
 func (r *Router) handleGetLedger(msg *peermanagement.InboundMessage) {
+	defer r.recoverFrame(msg, "get_ledger")
+
 	decoded, err := message.Decode(message.TypeGetLedger, msg.Payload)
 	if err != nil {
 		r.logger.Warn("failed to decode get_ledger", "error", err, "peer", msg.PeerID)
@@ -155,7 +157,7 @@ func (r *Router) handleGetLedger(msg *peermanagement.InboundMessage) {
 		RequestCookieSet: req.HasRequestCookie(),
 	}
 
-	frame, err := encodeFrame(message.TypeLedgerData, resp)
+	frame, err := message.EncodeFrame(resp)
 	if err != nil {
 		r.logger.Warn("failed to encode ledger_data response", "error", err)
 		return
@@ -275,7 +277,7 @@ func (r *Router) serveTxSet(peerID peermanagement.PeerID, req *message.GetLedger
 		RequestCookieSet: req.HasRequestCookie(),
 	}
 
-	frame, err := encodeFrame(message.TypeLedgerData, resp)
+	frame, err := message.EncodeFrame(resp)
 	if err != nil {
 		r.logger.Warn("failed to encode tx-set response", "error", err)
 		return

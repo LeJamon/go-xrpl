@@ -4,14 +4,14 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/LeJamon/go-xrpl/internal/testing"
+	jtx "github.com/LeJamon/go-xrpl/internal/testing"
 	"github.com/LeJamon/go-xrpl/internal/tx"
 	"github.com/LeJamon/go-xrpl/internal/tx/oracle"
 )
 
 // OracleSetBuilder provides a fluent interface for building OracleSet transactions.
 type OracleSetBuilder struct {
-	account           *testing.Account
+	account           *jtx.Account
 	oracleDocumentID  uint32
 	provider          string
 	providerPresent   bool
@@ -29,7 +29,7 @@ type OracleSetBuilder struct {
 // OracleSet creates a new OracleSetBuilder.
 // oracleDocumentID identifies this oracle.
 // lastUpdateTime is the timestamp of the last update (Unix epoch, must be >= 946684800).
-func OracleSet(account *testing.Account, oracleDocumentID uint32, lastUpdateTime uint32) *OracleSetBuilder {
+func OracleSet(account *jtx.Account, oracleDocumentID uint32, lastUpdateTime uint32) *OracleSetBuilder {
 	return &OracleSetBuilder{
 		account:          account,
 		oracleDocumentID: oracleDocumentID,
@@ -178,7 +178,7 @@ func (b *OracleSetBuilder) BuildOracleSet() *oracle.OracleSet {
 
 // OracleDeleteBuilder provides a fluent interface for building OracleDelete transactions.
 type OracleDeleteBuilder struct {
-	account          *testing.Account
+	account          *jtx.Account
 	oracleDocumentID uint32
 	fee              uint64
 	sequence         *uint32
@@ -187,7 +187,7 @@ type OracleDeleteBuilder struct {
 
 // OracleDelete creates a new OracleDeleteBuilder.
 // oracleDocumentID identifies the oracle to delete.
-func OracleDelete(account *testing.Account, oracleDocumentID uint32) *OracleDeleteBuilder {
+func OracleDelete(account *jtx.Account, oracleDocumentID uint32) *OracleDeleteBuilder {
 	return &OracleDeleteBuilder{
 		account:          account,
 		oracleDocumentID: oracleDocumentID,
@@ -236,6 +236,6 @@ func (b *OracleDeleteBuilder) BuildOracleDelete() *oracle.OracleDelete {
 // DefaultLastUpdateTime returns a valid LastUpdateTime for the given test env.
 // It uses the current env clock time as a Unix timestamp.
 // Reference: rippled Oracle.h testStartTime = epoch_offset + 10000s
-func DefaultLastUpdateTime(env *testing.TestEnv) uint32 {
+func DefaultLastUpdateTime(env *jtx.TestEnv) uint32 {
 	return uint32(env.Now().Unix())
 }

@@ -5,7 +5,7 @@ package payment
 import (
 	"testing"
 
-	xrplgoTesting "github.com/LeJamon/go-xrpl/internal/testing"
+	jtx "github.com/LeJamon/go-xrpl/internal/testing"
 	"github.com/LeJamon/go-xrpl/internal/testing/trustset"
 	"github.com/LeJamon/go-xrpl/internal/tx"
 	"github.com/stretchr/testify/require"
@@ -16,23 +16,23 @@ import (
 // Note: Cross-issuer payments (alice sends bob/USD to bob) require Flow and are tested separately.
 // From rippled: testDirectRipple (partial)
 func TestDirectRipple(t *testing.T) {
-	env := xrplgoTesting.NewTestEnv(t)
+	env := jtx.NewTestEnv(t)
 
-	alice := xrplgoTesting.NewAccount("alice")
-	bob := xrplgoTesting.NewAccount("bob")
+	alice := jtx.NewAccount("alice")
+	bob := jtx.NewAccount("bob")
 
-	env.FundAmount(alice, uint64(xrplgoTesting.XRP(10000)))
-	env.FundAmount(bob, uint64(xrplgoTesting.XRP(10000)))
+	env.FundAmount(alice, uint64(jtx.XRP(10000)))
+	env.FundAmount(bob, uint64(jtx.XRP(10000)))
 	env.Close()
 
 	// Set up mutual trust lines
 	// alice trusts bob for 600 USD
 	result := env.Submit(trustset.TrustLine(alice, "USD", bob, "600").Build())
-	xrplgoTesting.RequireTxSuccess(t, result)
+	jtx.RequireTxSuccess(t, result)
 
 	// bob trusts alice for 700 USD
 	result = env.Submit(trustset.TrustLine(bob, "USD", alice, "700").Build())
-	xrplgoTesting.RequireTxSuccess(t, result)
+	jtx.RequireTxSuccess(t, result)
 	env.Close()
 
 	// Verify trust lines exist
@@ -42,7 +42,7 @@ func TestDirectRipple(t *testing.T) {
 	// alice issues alice/USD to bob
 	usd24 := tx.NewIssuedAmountFromFloat64(24, "USD", alice.Address)
 	result = env.Submit(PayIssued(alice, bob, usd24).Build())
-	xrplgoTesting.RequireTxSuccess(t, result)
+	jtx.RequireTxSuccess(t, result)
 	env.Close()
 
 	// Check bob's balance: bob should have 24 alice/USD
@@ -59,7 +59,7 @@ func TestDirectRipple(t *testing.T) {
 	// alice sends bob more alice/USD (alice as issuer)
 	usd33 := tx.NewIssuedAmountFromFloat64(33, "USD", alice.Address)
 	result = env.Submit(PayIssued(alice, bob, usd33).Build())
-	xrplgoTesting.RequireTxSuccess(t, result)
+	jtx.RequireTxSuccess(t, result)
 	env.Close()
 
 	// Check bob's balance: should now be 24 + 33 = 57 alice/USD
@@ -75,7 +75,7 @@ func TestDirectRipple(t *testing.T) {
 	// bob sends back alice/USD to alice (bob redeems alice's IOUs)
 	usd40 := tx.NewIssuedAmountFromFloat64(40, "USD", alice.Address)
 	result = env.Submit(PayIssued(bob, alice, usd40).Build())
-	xrplgoTesting.RequireTxSuccess(t, result)
+	jtx.RequireTxSuccess(t, result)
 	env.Close()
 
 	// bob's balance should be 57 - 40 = 17 alice/USD
@@ -92,7 +92,7 @@ func TestDirectRipple(t *testing.T) {
 	// Need to issue 700 - 17 = 683 more
 	usd683 := tx.NewIssuedAmountFromFloat64(683, "USD", alice.Address)
 	result = env.Submit(PayIssued(alice, bob, usd683).Build())
-	xrplgoTesting.RequireTxSuccess(t, result)
+	jtx.RequireTxSuccess(t, result)
 	env.Close()
 
 	// bob's balance should be 700 (at bob's trust limit)
@@ -123,28 +123,28 @@ func TestDirectRipple(t *testing.T) {
 // Gateway issues tokens to alice, alice sends to bob, bob sends back.
 // From rippled: testWithTransferFee (without transfer fee case)
 func TestGatewayPayment(t *testing.T) {
-	env := xrplgoTesting.NewTestEnv(t)
+	env := jtx.NewTestEnv(t)
 
-	gw := xrplgoTesting.NewAccount("gateway")
-	alice := xrplgoTesting.NewAccount("alice")
-	bob := xrplgoTesting.NewAccount("bob")
+	gw := jtx.NewAccount("gateway")
+	alice := jtx.NewAccount("alice")
+	bob := jtx.NewAccount("bob")
 
-	env.FundAmount(gw, uint64(xrplgoTesting.XRP(10000)))
-	env.FundAmount(alice, uint64(xrplgoTesting.XRP(10000)))
-	env.FundAmount(bob, uint64(xrplgoTesting.XRP(10000)))
+	env.FundAmount(gw, uint64(jtx.XRP(10000)))
+	env.FundAmount(alice, uint64(jtx.XRP(10000)))
+	env.FundAmount(bob, uint64(jtx.XRP(10000)))
 	env.Close()
 
 	// Set up trust lines: both alice and bob trust gateway
 	result := env.Submit(trustset.TrustLine(alice, "AUD", gw, "100").Build())
-	xrplgoTesting.RequireTxSuccess(t, result)
+	jtx.RequireTxSuccess(t, result)
 	result = env.Submit(trustset.TrustLine(bob, "AUD", gw, "100").Build())
-	xrplgoTesting.RequireTxSuccess(t, result)
+	jtx.RequireTxSuccess(t, result)
 	env.Close()
 
 	// Gateway issues 1 AUD to alice
 	aud1 := tx.NewIssuedAmountFromFloat64(1, "AUD", gw.Address)
 	result = env.Submit(PayIssued(gw, alice, aud1).Build())
-	xrplgoTesting.RequireTxSuccess(t, result)
+	jtx.RequireTxSuccess(t, result)
 	env.Close()
 
 	// Verify alice has 1 gw/AUD
@@ -156,7 +156,7 @@ func TestGatewayPayment(t *testing.T) {
 
 	// alice sends bob 1 gw/AUD
 	result = env.Submit(PayIssued(alice, bob, aud1).Build())
-	xrplgoTesting.RequireTxSuccess(t, result)
+	jtx.RequireTxSuccess(t, result)
 	env.Close()
 
 	// Verify balances
@@ -173,7 +173,7 @@ func TestGatewayPayment(t *testing.T) {
 	// bob sends alice 0.5 gw/AUD
 	audHalf := tx.NewIssuedAmountFromFloat64(0.5, "AUD", gw.Address)
 	result = env.Submit(PayIssued(bob, alice, audHalf).Build())
-	xrplgoTesting.RequireTxSuccess(t, result)
+	jtx.RequireTxSuccess(t, result)
 	env.Close()
 
 	// Verify final balances
@@ -191,15 +191,15 @@ func TestGatewayPayment(t *testing.T) {
 // TestCreditLimit tests trust line creation and credit limit behavior.
 // From rippled: testCreditLimit
 func TestCreditLimit(t *testing.T) {
-	env := xrplgoTesting.NewTestEnv(t)
+	env := jtx.NewTestEnv(t)
 
-	gw := xrplgoTesting.NewAccount("gateway")
-	alice := xrplgoTesting.NewAccount("alice")
-	bob := xrplgoTesting.NewAccount("bob")
+	gw := jtx.NewAccount("gateway")
+	alice := jtx.NewAccount("alice")
+	bob := jtx.NewAccount("bob")
 
-	env.FundAmount(gw, uint64(xrplgoTesting.XRP(10000)))
-	env.FundAmount(alice, uint64(xrplgoTesting.XRP(10000)))
-	env.FundAmount(bob, uint64(xrplgoTesting.XRP(10000)))
+	env.FundAmount(gw, uint64(jtx.XRP(10000)))
+	env.FundAmount(alice, uint64(jtx.XRP(10000)))
+	env.FundAmount(bob, uint64(jtx.XRP(10000)))
 	env.Close()
 
 	// Verify trust line doesn't exist yet
@@ -208,7 +208,7 @@ func TestCreditLimit(t *testing.T) {
 
 	// Create a trust line: alice trusts gw for 800 USD
 	result := env.Submit(trustset.TrustLine(alice, "USD", gw, "800").Build())
-	xrplgoTesting.RequireTxSuccess(t, result)
+	jtx.RequireTxSuccess(t, result)
 	env.Close()
 
 	// Verify trust line exists
@@ -217,7 +217,7 @@ func TestCreditLimit(t *testing.T) {
 
 	// Modify the trust line: alice changes limit to 700 USD
 	result = env.Submit(trustset.TrustLine(alice, "USD", gw, "700").Build())
-	xrplgoTesting.RequireTxSuccess(t, result)
+	jtx.RequireTxSuccess(t, result)
 	env.Close()
 
 	// Set negative limit - should fail
@@ -230,7 +230,7 @@ func TestCreditLimit(t *testing.T) {
 	// (matching rippled's behavior), which allows the trust line to be deleted
 	// when both limits are 0 and balance is 0.
 	result = env.Submit(trustset.TrustLine(alice, "USD", gw, "0").Build())
-	xrplgoTesting.RequireTxSuccess(t, result)
+	jtx.RequireTxSuccess(t, result)
 	env.Close()
 
 	// Verify trust line was deleted
@@ -239,9 +239,9 @@ func TestCreditLimit(t *testing.T) {
 
 	// Set up bidirectional trust between alice and bob
 	result = env.Submit(trustset.TrustLine(alice, "USD", bob, "600").Build())
-	xrplgoTesting.RequireTxSuccess(t, result)
+	jtx.RequireTxSuccess(t, result)
 	result = env.Submit(trustset.TrustLine(bob, "USD", alice, "500").Build())
-	xrplgoTesting.RequireTxSuccess(t, result)
+	jtx.RequireTxSuccess(t, result)
 	env.Close()
 
 	// Verify both trust lines are represented by a single RippleState entry
@@ -253,32 +253,32 @@ func TestCreditLimit(t *testing.T) {
 // Alice and bob both trust gateway, alice pays bob via gateway.
 // From rippled: testIndirect
 func TestIndirectPayment(t *testing.T) {
-	env := xrplgoTesting.NewTestEnv(t)
+	env := jtx.NewTestEnv(t)
 
-	gw := xrplgoTesting.NewAccount("gateway")
-	alice := xrplgoTesting.NewAccount("alice")
-	bob := xrplgoTesting.NewAccount("bob")
+	gw := jtx.NewAccount("gateway")
+	alice := jtx.NewAccount("alice")
+	bob := jtx.NewAccount("bob")
 
-	env.FundAmount(gw, uint64(xrplgoTesting.XRP(10000)))
-	env.FundAmount(alice, uint64(xrplgoTesting.XRP(10000)))
-	env.FundAmount(bob, uint64(xrplgoTesting.XRP(10000)))
+	env.FundAmount(gw, uint64(jtx.XRP(10000)))
+	env.FundAmount(alice, uint64(jtx.XRP(10000)))
+	env.FundAmount(bob, uint64(jtx.XRP(10000)))
 	env.Close()
 
 	// Set up trust lines
 	result := env.Submit(trustset.TrustLine(alice, "USD", gw, "600").Build())
-	xrplgoTesting.RequireTxSuccess(t, result)
+	jtx.RequireTxSuccess(t, result)
 	result = env.Submit(trustset.TrustLine(bob, "USD", gw, "700").Build())
-	xrplgoTesting.RequireTxSuccess(t, result)
+	jtx.RequireTxSuccess(t, result)
 	env.Close()
 
 	// Gateway issues USD to both alice and bob
 	usd70 := tx.NewIssuedAmountFromFloat64(70, "USD", gw.Address)
 	result = env.Submit(PayIssued(gw, alice, usd70).Build())
-	xrplgoTesting.RequireTxSuccess(t, result)
+	jtx.RequireTxSuccess(t, result)
 
 	usd50 := tx.NewIssuedAmountFromFloat64(50, "USD", gw.Address)
 	result = env.Submit(PayIssued(gw, bob, usd50).Build())
-	xrplgoTesting.RequireTxSuccess(t, result)
+	jtx.RequireTxSuccess(t, result)
 	env.Close()
 
 	// Verify initial balances
@@ -312,7 +312,7 @@ func TestIndirectPayment(t *testing.T) {
 	// alice sends bob 5 gw/USD (indirect payment through gateway)
 	usd5 := tx.NewIssuedAmountFromFloat64(5, "USD", gw.Address)
 	result = env.Submit(PayIssued(alice, bob, usd5).Build())
-	xrplgoTesting.RequireTxSuccess(t, result)
+	jtx.RequireTxSuccess(t, result)
 	env.Close()
 
 	// Verify final balances
@@ -330,24 +330,24 @@ func TestIndirectPayment(t *testing.T) {
 // TestIssuerRedemption tests that an account can send tokens back to the issuer.
 // This is the basic "redeem" scenario where tokens are returned to the issuer.
 func TestIssuerRedemption(t *testing.T) {
-	env := xrplgoTesting.NewTestEnv(t)
+	env := jtx.NewTestEnv(t)
 
-	gw := xrplgoTesting.NewAccount("gateway")
-	alice := xrplgoTesting.NewAccount("alice")
+	gw := jtx.NewAccount("gateway")
+	alice := jtx.NewAccount("alice")
 
-	env.FundAmount(gw, uint64(xrplgoTesting.XRP(10000)))
-	env.FundAmount(alice, uint64(xrplgoTesting.XRP(10000)))
+	env.FundAmount(gw, uint64(jtx.XRP(10000)))
+	env.FundAmount(alice, uint64(jtx.XRP(10000)))
 	env.Close()
 
 	// alice trusts gateway
 	result := env.Submit(trustset.TrustLine(alice, "USD", gw, "1000").Build())
-	xrplgoTesting.RequireTxSuccess(t, result)
+	jtx.RequireTxSuccess(t, result)
 	env.Close()
 
 	// Gateway issues 100 USD to alice
 	usd100 := tx.NewIssuedAmountFromFloat64(100, "USD", gw.Address)
 	result = env.Submit(PayIssued(gw, alice, usd100).Build())
-	xrplgoTesting.RequireTxSuccess(t, result)
+	jtx.RequireTxSuccess(t, result)
 	env.Close()
 
 	// Verify alice has 100 gw/USD
@@ -358,7 +358,7 @@ func TestIssuerRedemption(t *testing.T) {
 	// alice redeems 50 USD by sending back to gateway
 	usd50 := tx.NewIssuedAmountFromFloat64(50, "USD", gw.Address)
 	result = env.Submit(PayIssued(alice, gw, usd50).Build())
-	xrplgoTesting.RequireTxSuccess(t, result)
+	jtx.RequireTxSuccess(t, result)
 	env.Close()
 
 	// Verify alice has 50 gw/USD remaining
@@ -369,7 +369,7 @@ func TestIssuerRedemption(t *testing.T) {
 
 	// alice redeems remaining 50 USD
 	result = env.Submit(PayIssued(alice, gw, usd50).Build())
-	xrplgoTesting.RequireTxSuccess(t, result)
+	jtx.RequireTxSuccess(t, result)
 	env.Close()
 
 	// Verify alice has 0 gw/USD
@@ -382,24 +382,24 @@ func TestIssuerRedemption(t *testing.T) {
 // TestSelfIssuance tests that an account can issue its own currency.
 // The issuer can send their own IOUs to anyone who trusts them.
 func TestSelfIssuance(t *testing.T) {
-	env := xrplgoTesting.NewTestEnv(t)
+	env := jtx.NewTestEnv(t)
 
-	issuer := xrplgoTesting.NewAccount("issuer")
-	holder := xrplgoTesting.NewAccount("holder")
+	issuer := jtx.NewAccount("issuer")
+	holder := jtx.NewAccount("holder")
 
-	env.FundAmount(issuer, uint64(xrplgoTesting.XRP(10000)))
-	env.FundAmount(holder, uint64(xrplgoTesting.XRP(10000)))
+	env.FundAmount(issuer, uint64(jtx.XRP(10000)))
+	env.FundAmount(holder, uint64(jtx.XRP(10000)))
 	env.Close()
 
 	// holder trusts issuer for 1000 USD
 	result := env.Submit(trustset.TrustLine(holder, "USD", issuer, "1000").Build())
-	xrplgoTesting.RequireTxSuccess(t, result)
+	jtx.RequireTxSuccess(t, result)
 	env.Close()
 
 	// issuer can create tokens by sending to holder
 	usd500 := tx.NewIssuedAmountFromFloat64(500, "USD", issuer.Address)
 	result = env.Submit(PayIssued(issuer, holder, usd500).Build())
-	xrplgoTesting.RequireTxSuccess(t, result)
+	jtx.RequireTxSuccess(t, result)
 	env.Close()
 
 	// Verify holder has 500 issuer/USD
@@ -411,7 +411,7 @@ func TestSelfIssuance(t *testing.T) {
 	// issuer can issue more up to the trust limit
 	usd500more := tx.NewIssuedAmountFromFloat64(500, "USD", issuer.Address)
 	result = env.Submit(PayIssued(issuer, holder, usd500more).Build())
-	xrplgoTesting.RequireTxSuccess(t, result)
+	jtx.RequireTxSuccess(t, result)
 	env.Close()
 
 	// Verify holder is at limit

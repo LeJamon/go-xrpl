@@ -13,8 +13,6 @@ import (
 
 // Clawback errors
 var (
-	ErrClawbackAmountRequired  = ter.Errorf(ter.TemBAD_AMOUNT, "Amount is required")
-	ErrClawbackAmountNotToken  = ter.Errorf(ter.TemBAD_AMOUNT, "cannot claw back XRP")
 	ErrClawbackAmountNotPos    = ter.Errorf(ter.TemBAD_AMOUNT, "Amount must be positive")
 	ErrClawbackHolderWithToken = ter.Errorf(ter.TemMALFORMED, "Holder field cannot be present for token clawback")
 	ErrClawbackHolderRequired  = ter.Errorf(ter.TemMALFORMED, "Holder is required for MPToken clawback")
@@ -59,64 +57,57 @@ func (c *Clawback) TxType() tx.Type {
 	return tx.TypeClawback
 }
 
-// Reference: rippled Clawback.cpp preflight()
+// GetFlagsMask adopts the engine FlagsMasker seam. Clawback defines no
+// type-specific flags, so it uses the base universal mask, checked at preflight0.
+func (c *Clawback) GetFlagsMask(rules *amendment.Rules) uint32 {
+	return tx.TfUniversalMask
+}
+
+// Validate holds Clawback's rules-independent preflight: the base fields only.
+// The flags mask is enforced by the engine at preflight0 (GetFlagsMask). The
+// amount/holder body is amendment-dependent (the MPT arm gates on
+// featureMPTokensV1) and lives in PreflightRules so its per-arm order matches
+// rippled.
+// Reference: rippled Clawback.cpp getFlagsMask + preflight().
 func (c *Clawback) Validate() error {
-	if err := c.BaseTx.Validate(); err != nil {
-		return err
-	}
+	return c.BaseTx.Validate()
+}
 
-	// Check for invalid flags
-	// Reference: rippled Clawback.cpp:87-88
-	if err := tx.CheckFlags(c.GetFlags(), tx.TfUniversalMask); err != nil {
-		return err
-	}
-
-	// Amount is required and must be positive
-	if c.Amount.IsZero() {
-		return ErrClawbackAmountRequired
-	}
-
-	// Amount must be positive (not negative or zero)
-	if c.Amount.Signum() <= 0 {
-		return ErrClawbackAmountNotPos
-	}
-
-	// Cannot claw back XRP
-	if c.Amount.IsNative() {
-		return ErrClawbackAmountNotToken
-	}
-
-	// Determine if this is IOU or MPToken clawback based on Amount type.
-	// Reference: rippled Clawback.cpp:90-94 dispatches via std::visit on Amount's asset type.
+// PreflightRules is Clawback's preflight body, which rippled dispatches by the
+// Amount's asset type (std::visit). A native-XRP Amount dispatches to the Issue
+// arm, so — matching rippled — the holder-shape check is evaluated before the
+// amount's XRP/zero/negative rejection. The MPT arm leads with the
+// featureMPTokensV1 temDISABLED gate (rippled makes it the first line of
+// preflightHelper<MPTIssue>, i.e. a per-type preflight check, not a macro gate),
+// then the holder-shape temMALFORMED checks, then the amount temBAD_AMOUNT check.
+// Reference: rippled Clawback.cpp preflightHelper<Issue>/<MPTIssue>.
+func (c *Clawback) PreflightRules(rules *amendment.Rules) error {
 	if c.Amount.IsMPT() {
-		// MPToken clawback (preflightHelper<MPTIssue>)
-		// Reference: rippled Clawback.cpp:54-76
-		// Holder is required for MPT clawback
+		if !rules.Enabled(amendment.FeatureMPTokensV1) {
+			return ter.Errorf(ter.TemDISABLED, "MPToken clawback requires MPTokensV1")
+		}
 		if c.Holder == "" {
 			return ErrClawbackHolderRequired
 		}
-		// Holder cannot be same as issuer
-		if c.Holder == c.Account {
+		if c.Account == c.Holder {
 			return ErrClawbackHolderIsSelf
 		}
-	} else {
-		// IOU clawback (preflightHelper<Issue>)
-		// Reference: rippled Clawback.cpp:37-51
-		// Holder must not be present for IOU clawback
-		if c.Holder != "" {
-			return ErrClawbackHolderWithToken
+		// maxMPTokenAmount is int64 max, unreachable via a parseable Amount, so
+		// only the non-positive bound is observable here.
+		if c.Amount.Signum() <= 0 {
+			return ErrClawbackAmountNotPos
 		}
-
-		// For IOU, the issuer field in Amount specifies the holder
-		// The transaction account must be the issuer of the currency
-		holder := c.Amount.Issuer
-
-		// Issuer cannot claw back from themselves
-		if holder == c.Account {
-			return ErrClawbackAmountNotPos // temBAD_AMOUNT per rippled
-		}
+		return nil
 	}
-
+	// Issue arm — IOU, and native XRP, which std::visit routes here too.
+	if c.Holder != "" {
+		return ErrClawbackHolderWithToken
+	}
+	// rippled: issuer == holder || isXRP(amount) || amount <= 0 -> temBAD_AMOUNT.
+	// The holder is the Amount's issuer field; the issuer is the tx Account.
+	if c.Amount.Issuer == c.Account || c.Amount.IsNative() || c.Amount.Signum() <= 0 {
+		return ErrClawbackAmountNotPos
+	}
 	return nil
 }
 
@@ -488,13 +479,11 @@ func (c *Clawback) Flatten() (map[string]any, error) {
 	return tx.ReflectFlatten(c)
 }
 
-// Only require FeatureMPTokensV1 when the Amount actually holds an MPT issue,
-// matching rippled's dispatch which checks the Amount type, not the Holder field.
-// Reference: rippled Clawback.cpp:90-94 dispatches preflightHelper<MPTIssue>
-// which contains the featureMPTokensV1 check.
+// RequiredAmendments gates Clawback on featureClawback alone (the only
+// transactions.macro gate). featureMPTokensV1 is NOT a macro gate: rippled places
+// it as the first line of the MPT preflight arm, so it runs after preflight0's
+// flags mask and preflight1's fee/sequence checks — see PreflightRules.
+// Reference: rippled transactions.macro ttCLAWBACK + Clawback.cpp preflight arm.
 func (c *Clawback) RequiredAmendments() [][32]byte {
-	if c.Amount.IsMPT() {
-		return [][32]byte{amendment.FeatureClawback, amendment.FeatureMPTokensV1}
-	}
 	return [][32]byte{amendment.FeatureClawback}
 }

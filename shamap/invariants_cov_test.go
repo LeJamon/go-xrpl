@@ -296,7 +296,7 @@ func TestInv_CheckInnerNode_HasChildNilUnbacked(t *testing.T) {
 	// Flush with releaseChildren=true so inner children get their children
 	// released (hash-only branches). Root's direct children are also released,
 	// but root.isBranch bits and root.hashes[] stay set.
-	if _, err := sm.FlushDirty(true); err != nil {
+	if _, err := sm.FlushDirtyAndRelease(); err != nil {
 		t.Fatal(err)
 	}
 
@@ -452,7 +452,7 @@ func TestInv_InvariantsDetailed_HasChildNilUnbacked(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if _, err := sm.FlushDirty(true); err != nil {
+	if _, err := sm.FlushDirtyAndRelease(); err != nil {
 		t.Fatal(err)
 	}
 	sm.backed = false

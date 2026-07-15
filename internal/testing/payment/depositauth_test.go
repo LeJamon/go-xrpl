@@ -5,7 +5,7 @@ package payment
 import (
 	"testing"
 
-	xrplgoTesting "github.com/LeJamon/go-xrpl/internal/testing"
+	jtx "github.com/LeJamon/go-xrpl/internal/testing"
 	"github.com/LeJamon/go-xrpl/internal/testing/credential"
 	dp "github.com/LeJamon/go-xrpl/internal/testing/depositpreauth"
 	"github.com/LeJamon/go-xrpl/internal/testing/trustset"
@@ -18,11 +18,11 @@ import (
 // TestDepositAuth_Enable tests enabling and disabling DepositAuth flag.
 // From rippled: testEnable
 func TestDepositAuth_Enable(t *testing.T) {
-	env := xrplgoTesting.NewTestEnv(t)
+	env := jtx.NewTestEnv(t)
 
-	alice := xrplgoTesting.NewAccount("alice")
+	alice := jtx.NewAccount("alice")
 
-	env.FundAmount(alice, uint64(xrplgoTesting.XRP(10000)))
+	env.FundAmount(alice, uint64(jtx.XRP(10000)))
 	env.Close()
 
 	// Get initial account flags
@@ -52,34 +52,34 @@ func TestDepositAuth_Enable(t *testing.T) {
 // TestDepositAuth_PayIOU tests IOU payments with DepositAuth.
 // From rippled: testPayIOU
 func TestDepositAuth_PayIOU(t *testing.T) {
-	env := xrplgoTesting.NewTestEnv(t)
+	env := jtx.NewTestEnv(t)
 
-	alice := xrplgoTesting.NewAccount("alice")
-	bob := xrplgoTesting.NewAccount("bob")
-	gw := xrplgoTesting.NewAccount("gateway")
+	alice := jtx.NewAccount("alice")
+	bob := jtx.NewAccount("bob")
+	gw := jtx.NewAccount("gateway")
 
-	env.FundAmount(alice, uint64(xrplgoTesting.XRP(10000)))
-	env.FundAmount(bob, uint64(xrplgoTesting.XRP(10000)))
-	env.FundAmount(gw, uint64(xrplgoTesting.XRP(10000)))
+	env.FundAmount(alice, uint64(jtx.XRP(10000)))
+	env.FundAmount(bob, uint64(jtx.XRP(10000)))
+	env.FundAmount(gw, uint64(jtx.XRP(10000)))
 	env.Close()
 
 	// Set up trust lines
 	result := env.Submit(trustset.TrustLine(alice, "USD", gw, "1000").Build())
-	xrplgoTesting.RequireTxSuccess(t, result)
+	jtx.RequireTxSuccess(t, result)
 	result = env.Submit(trustset.TrustLine(bob, "USD", gw, "1000").Build())
-	xrplgoTesting.RequireTxSuccess(t, result)
+	jtx.RequireTxSuccess(t, result)
 	env.Close()
 
 	// Fund alice with USD
 	usd150 := tx.NewIssuedAmountFromFloat64(150, "USD", gw.Address)
 	result = env.Submit(PayIssued(gw, alice, usd150).Build())
-	xrplgoTesting.RequireTxSuccess(t, result)
+	jtx.RequireTxSuccess(t, result)
 	env.Close()
 
 	// alice pays bob some USD to set up initial balance
 	usd50 := tx.NewIssuedAmountFromFloat64(50, "USD", gw.Address)
 	result = env.Submit(PayIssued(alice, bob, usd50).Build())
-	xrplgoTesting.RequireTxSuccess(t, result)
+	jtx.RequireTxSuccess(t, result)
 	env.Close()
 
 	// bob enables DepositAuth
@@ -94,7 +94,7 @@ func TestDepositAuth_PayIOU(t *testing.T) {
 	// bob can still make payments to others while DepositAuth is set
 	usd25 := tx.NewIssuedAmountFromFloat64(25, "USD", gw.Address)
 	result = env.Submit(PayIssued(bob, alice, usd25).Build())
-	xrplgoTesting.RequireTxSuccess(t, result)
+	jtx.RequireTxSuccess(t, result)
 	env.Close()
 
 	// bob clears DepositAuth
@@ -103,7 +103,7 @@ func TestDepositAuth_PayIOU(t *testing.T) {
 
 	// alice can now pay bob
 	result = env.Submit(PayIssued(alice, bob, usd50).Build())
-	xrplgoTesting.RequireTxSuccess(t, result)
+	jtx.RequireTxSuccess(t, result)
 
 	t.Log("DepositAuth IOU test passed")
 }
@@ -111,13 +111,13 @@ func TestDepositAuth_PayIOU(t *testing.T) {
 // TestDepositAuth_PayXRP tests XRP payments with DepositAuth.
 // From rippled: testPayXRP
 func TestDepositAuth_PayXRP(t *testing.T) {
-	env := xrplgoTesting.NewTestEnv(t)
+	env := jtx.NewTestEnv(t)
 
-	alice := xrplgoTesting.NewAccount("alice")
-	bob := xrplgoTesting.NewAccount("bob")
+	alice := jtx.NewAccount("alice")
+	bob := jtx.NewAccount("bob")
 
-	env.FundAmount(alice, uint64(xrplgoTesting.XRP(10000)))
-	env.FundAmount(bob, uint64(xrplgoTesting.XRP(10000)))
+	env.FundAmount(alice, uint64(jtx.XRP(10000)))
+	env.FundAmount(bob, uint64(jtx.XRP(10000)))
 	env.Close()
 
 	// bob enables DepositAuth
@@ -135,7 +135,7 @@ func TestDepositAuth_PayXRP(t *testing.T) {
 
 	// alice can now pay bob
 	result = env.Submit(Pay(alice, bob, 1_000_000).Build())
-	xrplgoTesting.RequireTxSuccess(t, result)
+	jtx.RequireTxSuccess(t, result)
 
 	t.Log("DepositAuth XRP test passed")
 }
@@ -145,15 +145,15 @@ func TestDepositAuth_PayXRP(t *testing.T) {
 // When an account with DepositAuth is at or below the base reserve, small payments are allowed
 // to prevent the account from becoming permanently locked.
 func TestDepositAuth_PayXRP_AtReserve(t *testing.T) {
-	env := xrplgoTesting.NewTestEnv(t)
+	env := jtx.NewTestEnv(t)
 
-	alice := xrplgoTesting.NewAccount("alice")
-	bob := xrplgoTesting.NewAccount("bob")
+	alice := jtx.NewAccount("alice")
+	bob := jtx.NewAccount("bob")
 
 	// Fund alice with plenty of XRP
-	env.FundAmount(alice, uint64(xrplgoTesting.XRP(10000)))
+	env.FundAmount(alice, uint64(jtx.XRP(10000)))
 	// Fund bob with just the minimum reserve (200 XRP base reserve)
-	env.FundAmount(bob, uint64(xrplgoTesting.XRP(200)))
+	env.FundAmount(bob, uint64(jtx.XRP(200)))
 	env.Close()
 
 	// bob enables DepositAuth
@@ -167,7 +167,7 @@ func TestDepositAuth_PayXRP_AtReserve(t *testing.T) {
 	// Small XRP payments should succeed because bob is at/below reserve
 	// This is the special exception in rippled to prevent account wedging
 	result := env.Submit(Pay(alice, bob, 1_000_000).Build())
-	xrplgoTesting.RequireTxSuccess(t, result)
+	jtx.RequireTxSuccess(t, result)
 
 	t.Log("DepositAuth XRP at reserve test passed - small payment succeeded")
 }
@@ -185,15 +185,15 @@ func TestDepositAuth_NoRipple(t *testing.T) {
 	//   alice holds 10 USD/gw1, pays bob 10 USD/gw1 via path(gw1)
 	testIssuer := func(t *testing.T, noRipplePrev, noRippleNext, withDepositAuth bool) {
 		t.Helper()
-		env := xrplgoTesting.NewTestEnv(t)
+		env := jtx.NewTestEnv(t)
 
-		gw1 := xrplgoTesting.NewAccount("gw1")
-		alice := xrplgoTesting.NewAccount("alice")
-		bob := xrplgoTesting.NewAccount("bob")
+		gw1 := jtx.NewAccount("gw1")
+		alice := jtx.NewAccount("alice")
+		bob := jtx.NewAccount("bob")
 
-		env.FundAmount(gw1, uint64(xrplgoTesting.XRP(10000)))
-		env.FundAmount(alice, uint64(xrplgoTesting.XRP(10000)))
-		env.FundAmount(bob, uint64(xrplgoTesting.XRP(10000)))
+		env.FundAmount(gw1, uint64(jtx.XRP(10000)))
+		env.FundAmount(alice, uint64(jtx.XRP(10000)))
+		env.FundAmount(bob, uint64(jtx.XRP(10000)))
 		env.Close()
 
 		// gw1 sets NoRipple on alice trust line (gw1's side)
@@ -202,7 +202,7 @@ func TestDepositAuth_NoRipple(t *testing.T) {
 			gwAliceTrust = gwAliceTrust.NoRipple()
 		}
 		result := env.Submit(gwAliceTrust.Build())
-		xrplgoTesting.RequireTxSuccess(t, result)
+		jtx.RequireTxSuccess(t, result)
 
 		// gw1 sets NoRipple on bob trust line (gw1's side)
 		gwBobTrust := trustset.TrustLine(gw1, "USD", bob, "10")
@@ -210,19 +210,19 @@ func TestDepositAuth_NoRipple(t *testing.T) {
 			gwBobTrust = gwBobTrust.NoRipple()
 		}
 		result = env.Submit(gwBobTrust.Build())
-		xrplgoTesting.RequireTxSuccess(t, result)
+		jtx.RequireTxSuccess(t, result)
 
 		// alice and bob trust gw1
 		result = env.Submit(trustset.TrustLine(alice, "USD", gw1, "10").Build())
-		xrplgoTesting.RequireTxSuccess(t, result)
+		jtx.RequireTxSuccess(t, result)
 		result = env.Submit(trustset.TrustLine(bob, "USD", gw1, "10").Build())
-		xrplgoTesting.RequireTxSuccess(t, result)
+		jtx.RequireTxSuccess(t, result)
 		env.Close()
 
 		// Fund alice with 10 USD from gw1
 		usd10 := tx.NewIssuedAmountFromFloat64(10, "USD", gw1.Address)
 		result = env.Submit(PayIssued(gw1, alice, usd10).Build())
-		xrplgoTesting.RequireTxSuccess(t, result)
+		jtx.RequireTxSuccess(t, result)
 		env.Close()
 
 		// Optionally set DepositAuth on gw1
@@ -239,7 +239,7 @@ func TestDepositAuth_NoRipple(t *testing.T) {
 			require.Equal(t, "tecPATH_DRY", result.Code,
 				"Should fail when gw1 has NoRipple on both trust lines")
 		} else {
-			xrplgoTesting.RequireTxSuccess(t, result)
+			jtx.RequireTxSuccess(t, result)
 		}
 	}
 
@@ -249,15 +249,15 @@ func TestDepositAuth_NoRipple(t *testing.T) {
 	//   via path(alice), sendmax(USD1(10)).
 	testNonIssuer := func(t *testing.T, noRipplePrev, noRippleNext, withDepositAuth bool) {
 		t.Helper()
-		env := xrplgoTesting.NewTestEnv(t)
+		env := jtx.NewTestEnv(t)
 
-		gw1 := xrplgoTesting.NewAccount("gw1")
-		gw2 := xrplgoTesting.NewAccount("gw2")
-		alice := xrplgoTesting.NewAccount("alice")
+		gw1 := jtx.NewAccount("gw1")
+		gw2 := jtx.NewAccount("gw2")
+		alice := jtx.NewAccount("alice")
 
-		env.FundAmount(gw1, uint64(xrplgoTesting.XRP(10000)))
-		env.FundAmount(gw2, uint64(xrplgoTesting.XRP(10000)))
-		env.FundAmount(alice, uint64(xrplgoTesting.XRP(10000)))
+		env.FundAmount(gw1, uint64(jtx.XRP(10000)))
+		env.FundAmount(gw2, uint64(jtx.XRP(10000)))
+		env.FundAmount(alice, uint64(jtx.XRP(10000)))
 		env.Close()
 
 		// alice trusts gw1 with NoRipple flag
@@ -266,7 +266,7 @@ func TestDepositAuth_NoRipple(t *testing.T) {
 			aliceGw1Trust = aliceGw1Trust.NoRipple()
 		}
 		result := env.Submit(aliceGw1Trust.Build())
-		xrplgoTesting.RequireTxSuccess(t, result)
+		jtx.RequireTxSuccess(t, result)
 
 		// alice trusts gw2 with NoRipple flag
 		aliceGw2Trust := trustset.TrustLine(alice, "USD", gw2, "10")
@@ -274,13 +274,13 @@ func TestDepositAuth_NoRipple(t *testing.T) {
 			aliceGw2Trust = aliceGw2Trust.NoRipple()
 		}
 		result = env.Submit(aliceGw2Trust.Build())
-		xrplgoTesting.RequireTxSuccess(t, result)
+		jtx.RequireTxSuccess(t, result)
 		env.Close()
 
 		// Fund alice with 10 USD from gw2
 		usd2_10 := tx.NewIssuedAmountFromFloat64(10, "USD", gw2.Address)
 		result = env.Submit(PayIssued(gw2, alice, usd2_10).Build())
-		xrplgoTesting.RequireTxSuccess(t, result)
+		jtx.RequireTxSuccess(t, result)
 		env.Close()
 
 		// Optionally set DepositAuth on alice
@@ -302,7 +302,7 @@ func TestDepositAuth_NoRipple(t *testing.T) {
 			require.Equal(t, "tecPATH_DRY", result.Code,
 				"Should fail when alice has NoRipple on both trust lines")
 		} else {
-			xrplgoTesting.RequireTxSuccess(t, result)
+			jtx.RequireTxSuccess(t, result)
 		}
 	}
 
@@ -355,13 +355,13 @@ func TestDepositAuth_NoRipple(t *testing.T) {
 // TestDepositPreauth_Enable tests DepositPreauth creation and deletion.
 // From rippled: DepositPreauth_test::testEnable
 func TestDepositPreauth_Enable(t *testing.T) {
-	env := xrplgoTesting.NewTestEnv(t)
+	env := jtx.NewTestEnv(t)
 
-	alice := xrplgoTesting.NewAccount("alice")
-	becky := xrplgoTesting.NewAccount("becky")
+	alice := jtx.NewAccount("alice")
+	becky := jtx.NewAccount("becky")
 
-	env.FundAmount(alice, uint64(xrplgoTesting.XRP(10000)))
-	env.FundAmount(becky, uint64(xrplgoTesting.XRP(10000)))
+	env.FundAmount(alice, uint64(jtx.XRP(10000)))
+	env.FundAmount(becky, uint64(jtx.XRP(10000)))
 	env.Close()
 
 	// alice authorizes becky via DepositPreauth transaction
@@ -381,14 +381,14 @@ func TestDepositPreauth_Enable(t *testing.T) {
 // TestDepositPreauth_Invalid tests invalid DepositPreauth operations.
 // From rippled: DepositPreauth_test::testInvalid
 func TestDepositPreauth_Invalid(t *testing.T) {
-	env := xrplgoTesting.NewTestEnv(t)
+	env := jtx.NewTestEnv(t)
 
-	alice := xrplgoTesting.NewAccount("alice")
-	becky := xrplgoTesting.NewAccount("becky")
-	carol := xrplgoTesting.NewAccount("carol") // unfunded
+	alice := jtx.NewAccount("alice")
+	becky := jtx.NewAccount("becky")
+	carol := jtx.NewAccount("carol") // unfunded
 
-	env.FundAmount(alice, uint64(xrplgoTesting.XRP(10000)))
-	env.FundAmount(becky, uint64(xrplgoTesting.XRP(10000)))
+	env.FundAmount(alice, uint64(jtx.XRP(10000)))
+	env.FundAmount(becky, uint64(jtx.XRP(10000)))
 	env.Close()
 
 	// Cannot preauthorize unfunded account
@@ -434,40 +434,40 @@ func TestDepositPreauth_Invalid(t *testing.T) {
 // TestDepositPreauth_Payment tests payments with DepositPreauth.
 // From rippled: DepositPreauth_test::testPayment
 func TestDepositPreauth_Payment(t *testing.T) {
-	env := xrplgoTesting.NewTestEnv(t)
+	env := jtx.NewTestEnv(t)
 
-	alice := xrplgoTesting.NewAccount("alice")
-	becky := xrplgoTesting.NewAccount("becky")
-	carol := xrplgoTesting.NewAccount("carol")
-	gw := xrplgoTesting.NewAccount("gateway")
+	alice := jtx.NewAccount("alice")
+	becky := jtx.NewAccount("becky")
+	carol := jtx.NewAccount("carol")
+	gw := jtx.NewAccount("gateway")
 
-	env.FundAmount(alice, uint64(xrplgoTesting.XRP(5000)))
-	env.FundAmount(becky, uint64(xrplgoTesting.XRP(5000)))
-	env.FundAmount(carol, uint64(xrplgoTesting.XRP(5000)))
-	env.FundAmount(gw, uint64(xrplgoTesting.XRP(5000)))
+	env.FundAmount(alice, uint64(jtx.XRP(5000)))
+	env.FundAmount(becky, uint64(jtx.XRP(5000)))
+	env.FundAmount(carol, uint64(jtx.XRP(5000)))
+	env.FundAmount(gw, uint64(jtx.XRP(5000)))
 	env.Close()
 
 	// Set up trust lines
 	result := env.Submit(trustset.TrustLine(alice, "USD", gw, "1000").Build())
-	xrplgoTesting.RequireTxSuccess(t, result)
+	jtx.RequireTxSuccess(t, result)
 	result = env.Submit(trustset.TrustLine(becky, "USD", gw, "1000").Build())
-	xrplgoTesting.RequireTxSuccess(t, result)
+	jtx.RequireTxSuccess(t, result)
 	result = env.Submit(trustset.TrustLine(carol, "USD", gw, "1000").Build())
-	xrplgoTesting.RequireTxSuccess(t, result)
+	jtx.RequireTxSuccess(t, result)
 	env.Close()
 
 	// Fund alice
 	usd1000 := tx.NewIssuedAmountFromFloat64(1000, "USD", gw.Address)
 	result = env.Submit(PayIssued(gw, alice, usd1000).Build())
-	xrplgoTesting.RequireTxSuccess(t, result)
+	jtx.RequireTxSuccess(t, result)
 	env.Close()
 
 	// alice can pay becky (no restrictions yet)
 	usd100 := tx.NewIssuedAmountFromFloat64(100, "USD", gw.Address)
 	result = env.Submit(PayIssued(alice, becky, usd100).Build())
-	xrplgoTesting.RequireTxSuccess(t, result)
+	jtx.RequireTxSuccess(t, result)
 	result = env.Submit(Pay(alice, becky, 100_000000).Build())
-	xrplgoTesting.RequireTxSuccess(t, result)
+	jtx.RequireTxSuccess(t, result)
 	env.Close()
 
 	// becky enables DepositAuth
@@ -498,9 +498,9 @@ func TestDepositPreauth_Payment(t *testing.T) {
 
 	// now alice can pay becky
 	result = env.Submit(Pay(alice, becky, 100_000000).Build())
-	xrplgoTesting.RequireTxSuccess(t, result)
+	jtx.RequireTxSuccess(t, result)
 	result = env.Submit(PayIssued(alice, becky, usd100).Build())
-	xrplgoTesting.RequireTxSuccess(t, result)
+	jtx.RequireTxSuccess(t, result)
 	env.Close()
 
 	// becky removes carol's preauth (shouldn't affect alice)
@@ -509,7 +509,7 @@ func TestDepositPreauth_Payment(t *testing.T) {
 
 	// alice can still pay becky
 	result = env.Submit(Pay(alice, becky, 100_000000).Build())
-	xrplgoTesting.RequireTxSuccess(t, result)
+	jtx.RequireTxSuccess(t, result)
 
 	// becky removes alice's preauth
 	env.Unauthorize(becky, alice)
@@ -526,7 +526,7 @@ func TestDepositPreauth_Payment(t *testing.T) {
 
 	// alice can pay becky again
 	result = env.Submit(Pay(alice, becky, 100_000000).Build())
-	xrplgoTesting.RequireTxSuccess(t, result)
+	jtx.RequireTxSuccess(t, result)
 
 	t.Log("DepositPreauth payment test: verified")
 }
@@ -537,34 +537,34 @@ func TestDepositPreauth_Payment(t *testing.T) {
 // the DepositAuth flag set could not make a payment to itself. That bug was
 // fixed in the DepositPreauth amendment.
 func TestDepositPreauth_SelfPayment(t *testing.T) {
-	env := xrplgoTesting.NewTestEnv(t)
+	env := jtx.NewTestEnv(t)
 
-	alice := xrplgoTesting.NewAccount("alice")
-	becky := xrplgoTesting.NewAccount("becky")
-	gw := xrplgoTesting.NewAccount("gateway")
+	alice := jtx.NewAccount("alice")
+	becky := jtx.NewAccount("becky")
+	gw := jtx.NewAccount("gateway")
 
-	env.FundAmount(alice, uint64(xrplgoTesting.XRP(5000)))
-	env.FundAmount(becky, uint64(xrplgoTesting.XRP(5000)))
-	env.FundAmount(gw, uint64(xrplgoTesting.XRP(5000)))
+	env.FundAmount(alice, uint64(jtx.XRP(5000)))
+	env.FundAmount(becky, uint64(jtx.XRP(5000)))
+	env.FundAmount(gw, uint64(jtx.XRP(5000)))
 	env.Close()
 
 	// Set up trust lines for USD.
 	result := env.Submit(trustset.TrustLine(alice, "USD", gw, "1000").Build())
-	xrplgoTesting.RequireTxSuccess(t, result)
+	jtx.RequireTxSuccess(t, result)
 	result = env.Submit(trustset.TrustLine(becky, "USD", gw, "1000").Build())
-	xrplgoTesting.RequireTxSuccess(t, result)
+	jtx.RequireTxSuccess(t, result)
 	env.Close()
 
 	// Fund alice with USD.
 	usd500 := tx.NewIssuedAmountFromFloat64(500, "USD", gw.Address)
 	result = env.Submit(PayIssued(gw, alice, usd500).Build())
-	xrplgoTesting.RequireTxSuccess(t, result)
+	jtx.RequireTxSuccess(t, result)
 	env.Close()
 
 	// alice creates a passive offer: TakerPays=XRP(100), TakerGets=USD(100).
 	// In rippled: offer(alice, XRP(100), USD(100), tfPassive)
 	usd100 := tx.NewIssuedAmountFromFloat64(100, "USD", gw.Address)
-	xrp100 := tx.NewXRPAmount(xrplgoTesting.XRP(100))
+	xrp100 := tx.NewXRPAmount(jtx.XRP(100))
 	env.CreatePassiveOffer(alice, usd100, xrp100)
 	env.Close()
 
@@ -572,7 +572,7 @@ func TestDepositPreauth_SelfPayment(t *testing.T) {
 	// This is a cross-currency self-payment: becky sends XRP and receives USD
 	// through alice's offer. path(~USD) = {currency=USD, issuer=gw}.
 	usd10 := tx.NewIssuedAmountFromFloat64(10, "USD", gw.Address)
-	xrp10 := tx.NewXRPAmount(xrplgoTesting.XRP(10))
+	xrp10 := tx.NewXRPAmount(jtx.XRP(10))
 	usdPath := [][]paymentPkg.PathStep{{{Currency: "USD", Issuer: gw.Address}}}
 	result = env.Submit(
 		PayIssued(becky, becky, usd10).
@@ -580,7 +580,7 @@ func TestDepositPreauth_SelfPayment(t *testing.T) {
 			Paths(usdPath).
 			Build(),
 	)
-	xrplgoTesting.RequireTxSuccess(t, result)
+	jtx.RequireTxSuccess(t, result)
 	env.Close()
 
 	// becky enables DepositAuth.
@@ -596,7 +596,7 @@ func TestDepositPreauth_SelfPayment(t *testing.T) {
 			Paths(usdPath).
 			Build(),
 	)
-	xrplgoTesting.RequireTxSuccess(t, result)
+	jtx.RequireTxSuccess(t, result)
 	env.Close()
 
 	t.Log("DepositPreauth self-payment test passed")
@@ -610,22 +610,22 @@ func TestDepositPreauth_SelfPayment(t *testing.T) {
 func TestDepositPreauth_Credentials(t *testing.T) {
 	credType := "abcde"
 
-	issuer := xrplgoTesting.NewAccount("issuer")
-	alice := xrplgoTesting.NewAccount("alice")
-	bob := xrplgoTesting.NewAccount("bob")
-	john := xrplgoTesting.NewAccount("john")
+	issuer := jtx.NewAccount("issuer")
+	alice := jtx.NewAccount("alice")
+	bob := jtx.NewAccount("bob")
+	john := jtx.NewAccount("john")
 
-	env := xrplgoTesting.NewTestEnv(t)
+	env := jtx.NewTestEnv(t)
 
-	env.FundAmount(issuer, uint64(xrplgoTesting.XRP(5000)))
-	env.FundAmount(alice, uint64(xrplgoTesting.XRP(5000)))
-	env.FundAmount(bob, uint64(xrplgoTesting.XRP(5000)))
-	env.FundAmount(john, uint64(xrplgoTesting.XRP(5000)))
+	env.FundAmount(issuer, uint64(jtx.XRP(5000)))
+	env.FundAmount(alice, uint64(jtx.XRP(5000)))
+	env.FundAmount(bob, uint64(jtx.XRP(5000)))
+	env.FundAmount(john, uint64(jtx.XRP(5000)))
 	env.Close()
 
 	// issuer creates credential for alice, alice hasn't accepted yet.
 	result := env.Submit(credential.CredentialCreate(issuer, alice, credType).Build())
-	xrplgoTesting.RequireTxSuccess(t, result)
+	jtx.RequireTxSuccess(t, result)
 	env.Close()
 
 	// Get the credential index.
@@ -639,12 +639,12 @@ func TestDepositPreauth_Credentials(t *testing.T) {
 	result = env.Submit(dp.AuthCredentials(bob, []dp.AuthorizeCredentials{
 		{Issuer: issuer, CredType: credType},
 	}).Build())
-	xrplgoTesting.RequireTxSuccess(t, result)
+	jtx.RequireTxSuccess(t, result)
 	env.Close()
 
 	// alice can't pay with empty credentials array.
 	result = env.Submit(
-		Pay(alice, bob, uint64(xrplgoTesting.XRP(100))).
+		Pay(alice, bob, uint64(jtx.XRP(100))).
 			CredentialIDs([]string{}).
 			Build(),
 	)
@@ -654,7 +654,7 @@ func TestDepositPreauth_Credentials(t *testing.T) {
 
 	// alice can't pay with unaccepted credentials.
 	result = env.Submit(
-		Pay(alice, bob, uint64(xrplgoTesting.XRP(100))).
+		Pay(alice, bob, uint64(jtx.XRP(100))).
 			CredentialIDs([]string{credIdx}).
 			Build(),
 	)
@@ -664,65 +664,65 @@ func TestDepositPreauth_Credentials(t *testing.T) {
 
 	// alice accepts the credentials.
 	result = env.Submit(credential.CredentialAccept(alice, issuer, credType).Build())
-	xrplgoTesting.RequireTxSuccess(t, result)
+	jtx.RequireTxSuccess(t, result)
 	env.Close()
 
 	// Now alice can pay bob with valid credentials.
 	result = env.Submit(
-		Pay(alice, bob, uint64(xrplgoTesting.XRP(100))).
+		Pay(alice, bob, uint64(jtx.XRP(100))).
 			CredentialIDs([]string{credIdx}).
 			Build(),
 	)
-	xrplgoTesting.RequireTxSuccess(t, result)
+	jtx.RequireTxSuccess(t, result)
 	env.Close()
 
 	// alice can pay maria (unfunded, will be created) without depositPreauth
 	// because maria has no deposit restrictions. Valid credentials on a
 	// non-restricted destination are simply ignored.
-	maria := xrplgoTesting.NewAccount("maria")
+	maria := jtx.NewAccount("maria")
 	result = env.Submit(
-		Pay(alice, maria, uint64(xrplgoTesting.XRP(250))).
+		Pay(alice, maria, uint64(jtx.XRP(250))).
 			CredentialIDs([]string{credIdx}).
 			Build(),
 	)
-	xrplgoTesting.RequireTxSuccess(t, result)
+	jtx.RequireTxSuccess(t, result)
 	env.Close()
 
 	// john can accept payment with old (account-based) DepositPreauth and
 	// valid credentials at the same time.
 	env.EnableDepositAuth(john)
 	result = env.Submit(dp.Auth(john, alice).Build())
-	xrplgoTesting.RequireTxSuccess(t, result)
+	jtx.RequireTxSuccess(t, result)
 	result = env.Submit(
-		Pay(alice, john, uint64(xrplgoTesting.XRP(100))).
+		Pay(alice, john, uint64(jtx.XRP(100))).
 			CredentialIDs([]string{credIdx}).
 			Build(),
 	)
-	xrplgoTesting.RequireTxSuccess(t, result)
+	jtx.RequireTxSuccess(t, result)
 	env.Close()
 
 	// --- Invalid credentials section ---
 
 	t.Run("InvalidCredentials", func(t *testing.T) {
-		env2 := xrplgoTesting.NewTestEnv(t)
+		env2 := jtx.NewTestEnv(t)
 
-		issuer2 := xrplgoTesting.NewAccount("issuer2")
-		alice2 := xrplgoTesting.NewAccount("alice2")
-		bob2 := xrplgoTesting.NewAccount("bob2")
-		maria2 := xrplgoTesting.NewAccount("maria2")
+		issuer2 := jtx.NewAccount("issuer2")
+		alice2 := jtx.NewAccount("alice2")
+		bob2 := jtx.NewAccount("bob2")
+		maria2 := jtx.NewAccount("maria2")
 
-		env2.FundAmount(issuer2, uint64(xrplgoTesting.XRP(10000)))
-		env2.FundAmount(alice2, uint64(xrplgoTesting.XRP(10000)))
-		env2.FundAmount(bob2, uint64(xrplgoTesting.XRP(10000)))
-		env2.FundAmount(maria2, uint64(xrplgoTesting.XRP(10000)))
+		env2.FundAmount(issuer2, uint64(jtx.XRP(10000)))
+		env2.FundAmount(alice2, uint64(jtx.XRP(10000)))
+		env2.FundAmount(bob2, uint64(jtx.XRP(10000)))
+		env2.FundAmount(maria2, uint64(jtx.XRP(10000)))
 		env2.Close()
 
 		// issuer creates credential for alice, alice accepts.
 		result := env2.Submit(credential.CredentialCreate(issuer2, alice2, credType).Build())
-		xrplgoTesting.RequireTxSuccess(t, result)
+		jtx.RequireTxSuccess(t, result)
 		env2.Close()
 		result = env2.Submit(credential.CredentialAccept(alice2, issuer2, credType).Build())
-		xrplgoTesting.RequireTxSuccess(t, result)
+		jtx.RequireTxSuccess(t, result)
 		env2.Close()
 
 		credIdx := dp.CredentialIndex(alice2, issuer2, credType)
@@ -730,11 +730,11 @@ func TestDepositPreauth_Credentials(t *testing.T) {
 		// Success: destination didn't enable preauthorization, so valid
 		// credentials won't fail.
 		result = env2.Submit(
-			Pay(alice2, bob2, uint64(xrplgoTesting.XRP(100))).
+			Pay(alice2, bob2, uint64(jtx.XRP(100))).
 				CredentialIDs([]string{credIdx}).
 				Build(),
 		)
-		xrplgoTesting.RequireTxSuccess(t, result)
+		jtx.RequireTxSuccess(t, result)
 
 		// bob requires preauthorization.
 		env2.EnableDepositAuth(bob2)
@@ -742,7 +742,7 @@ func TestDepositPreauth_Credentials(t *testing.T) {
 
 		// Fail: destination didn't set up DepositPreauth object for these credentials.
 		result = env2.Submit(
-			Pay(alice2, bob2, uint64(xrplgoTesting.XRP(100))).
+			Pay(alice2, bob2, uint64(jtx.XRP(100))).
 				CredentialIDs([]string{credIdx}).
 				Build(),
 		)
@@ -759,13 +759,13 @@ func TestDepositPreauth_Credentials(t *testing.T) {
 		result = env2.Submit(dp.AuthCredentials(bob2, []dp.AuthorizeCredentials{
 			{Issuer: issuer2, CredType: credType},
 		}).Build())
-		xrplgoTesting.RequireTxSuccess(t, result)
+		jtx.RequireTxSuccess(t, result)
 		env2.Close()
 
 		// alice can't pay with non-existing credentials.
 		invalidIdx := "0E0B04ED60588A758B67E21FBBE95AC5A63598BA951761DC0EC9C08D7E01E034"
 		result = env2.Submit(
-			Pay(alice2, bob2, uint64(xrplgoTesting.XRP(100))).
+			Pay(alice2, bob2, uint64(jtx.XRP(100))).
 				CredentialIDs([]string{invalidIdx}).
 				Build(),
 		)
@@ -773,7 +773,7 @@ func TestDepositPreauth_Credentials(t *testing.T) {
 
 		// maria can't pay using alice's credentials.
 		result = env2.Submit(
-			Pay(maria2, bob2, uint64(xrplgoTesting.XRP(100))).
+			Pay(maria2, bob2, uint64(jtx.XRP(100))).
 				CredentialIDs([]string{credIdx}).
 				Build(),
 		)
@@ -782,17 +782,17 @@ func TestDepositPreauth_Credentials(t *testing.T) {
 		// Create another valid credential for alice with different type.
 		credType2 := "fghij"
 		result = env2.Submit(credential.CredentialCreate(issuer2, alice2, credType2).Build())
-		xrplgoTesting.RequireTxSuccess(t, result)
+		jtx.RequireTxSuccess(t, result)
 		env2.Close()
 		result = env2.Submit(credential.CredentialAccept(alice2, issuer2, credType2).Build())
-		xrplgoTesting.RequireTxSuccess(t, result)
+		jtx.RequireTxSuccess(t, result)
 		env2.Close()
 
 		credIdx2 := dp.CredentialIndex(alice2, issuer2, credType2)
 
 		// alice can't pay with invalid set of valid credentials (wrong combination).
 		result = env2.Submit(
-			Pay(alice2, bob2, uint64(xrplgoTesting.XRP(100))).
+			Pay(alice2, bob2, uint64(jtx.XRP(100))).
 				CredentialIDs([]string{credIdx, credIdx2}).
 				Build(),
 		)
@@ -800,7 +800,7 @@ func TestDepositPreauth_Credentials(t *testing.T) {
 
 		// Error: duplicate credentials.
 		result = env2.Submit(
-			Pay(alice2, bob2, uint64(xrplgoTesting.XRP(100))).
+			Pay(alice2, bob2, uint64(jtx.XRP(100))).
 				CredentialIDs([]string{credIdx, credIdx}).
 				Build(),
 		)
@@ -808,11 +808,11 @@ func TestDepositPreauth_Credentials(t *testing.T) {
 
 		// alice can pay with the correct single credential.
 		result = env2.Submit(
-			Pay(alice2, bob2, uint64(xrplgoTesting.XRP(100))).
+			Pay(alice2, bob2, uint64(jtx.XRP(100))).
 				CredentialIDs([]string{credIdx}).
 				Build(),
 		)
-		xrplgoTesting.RequireTxSuccess(t, result)
+		jtx.RequireTxSuccess(t, result)
 		env2.Close()
 	})
 
@@ -828,15 +828,15 @@ func TestDepositPreauth_ExpiredCredentials(t *testing.T) {
 	credType := "abcde"
 	credType2 := "fghijkl"
 
-	issuer := xrplgoTesting.NewAccount("issuer")
-	alice := xrplgoTesting.NewAccount("alice")
-	bob := xrplgoTesting.NewAccount("bob")
+	issuer := jtx.NewAccount("issuer")
+	alice := jtx.NewAccount("alice")
+	bob := jtx.NewAccount("bob")
 
-	env := xrplgoTesting.NewTestEnv(t)
+	env := jtx.NewTestEnv(t)
 
-	env.FundAmount(issuer, uint64(xrplgoTesting.XRP(10000)))
-	env.FundAmount(alice, uint64(xrplgoTesting.XRP(10000)))
-	env.FundAmount(bob, uint64(xrplgoTesting.XRP(10000)))
+	env.FundAmount(issuer, uint64(jtx.XRP(10000)))
+	env.FundAmount(alice, uint64(jtx.XRP(10000)))
+	env.FundAmount(bob, uint64(jtx.XRP(10000)))
 	env.Close()
 
 	// issuer creates credential for alice with short expiration (current time + 60s).
@@ -847,12 +847,12 @@ func TestDepositPreauth_ExpiredCredentials(t *testing.T) {
 			Expiration(expiration).
 			Build(),
 	)
-	xrplgoTesting.RequireTxSuccess(t, result)
+	jtx.RequireTxSuccess(t, result)
 	env.Close()
 
 	// alice accepts the credential.
 	result = env.Submit(credential.CredentialAccept(alice, issuer, credType).Build())
-	xrplgoTesting.RequireTxSuccess(t, result)
+	jtx.RequireTxSuccess(t, result)
 	env.Close()
 
 	// issuer creates a second credential for alice with long expiration.
@@ -862,14 +862,14 @@ func TestDepositPreauth_ExpiredCredentials(t *testing.T) {
 			Expiration(now + 1000).
 			Build(),
 	)
-	xrplgoTesting.RequireTxSuccess(t, result)
+	jtx.RequireTxSuccess(t, result)
 	env.Close()
 	result = env.Submit(credential.CredentialAccept(alice, issuer, credType2).Build())
-	xrplgoTesting.RequireTxSuccess(t, result)
+	jtx.RequireTxSuccess(t, result)
 	env.Close()
 
-	xrplgoTesting.RequireOwnerCount(t, env, issuer, 0)
-	xrplgoTesting.RequireOwnerCount(t, env, alice, 2)
+	jtx.RequireOwnerCount(t, env, issuer, 0)
+	jtx.RequireOwnerCount(t, env, alice, 2)
 
 	credIdx := dp.CredentialIndex(alice, issuer, credType)
 	credIdx2 := dp.CredentialIndex(alice, issuer, credType2)
@@ -883,23 +883,23 @@ func TestDepositPreauth_ExpiredCredentials(t *testing.T) {
 		{Issuer: issuer, CredType: credType},
 		{Issuer: issuer, CredType: credType2},
 	}).Build())
-	xrplgoTesting.RequireTxSuccess(t, result)
+	jtx.RequireTxSuccess(t, result)
 	env.Close()
 
 	// alice can pay (credentials not yet expired).
 	result = env.Submit(
-		Pay(alice, bob, uint64(xrplgoTesting.XRP(100))).
+		Pay(alice, bob, uint64(jtx.XRP(100))).
 			CredentialIDs([]string{credIdx, credIdx2}).
 			Build(),
 	)
-	xrplgoTesting.RequireTxSuccess(t, result)
+	jtx.RequireTxSuccess(t, result)
 	env.Close()
 	env.Close() // Extra close to advance time past expiration
 
 	// Credentials have now expired (60s expiration, each Close advances 10s).
 	// alice can't pay anymore.
 	result = env.Submit(
-		Pay(alice, bob, uint64(xrplgoTesting.XRP(100))).
+		Pay(alice, bob, uint64(jtx.XRP(100))).
 			CredentialIDs([]string{credIdx, credIdx2}).
 			Build(),
 	)
@@ -908,17 +908,17 @@ func TestDepositPreauth_ExpiredCredentials(t *testing.T) {
 	env.Close()
 
 	// Expired credential (credType) should be deleted from the ledger.
-	credKey := xrplgoTesting.CredentialKeylet(alice, issuer, credType)
+	credKey := jtx.CredentialKeylet(alice, issuer, credType)
 	require.False(t, env.LedgerEntryExists(credKey),
 		"expired credential should be deleted from ledger")
 
 	// Non-expired credential (credType2) should still be present.
-	credKey2 := xrplgoTesting.CredentialKeylet(alice, issuer, credType2)
+	credKey2 := jtx.CredentialKeylet(alice, issuer, credType2)
 	require.True(t, env.LedgerEntryExists(credKey2),
 		"non-expired credential should still exist")
 
-	xrplgoTesting.RequireOwnerCount(t, env, issuer, 0)
-	xrplgoTesting.RequireOwnerCount(t, env, alice, 1) // only credType2 remains
+	jtx.RequireOwnerCount(t, env, issuer, 0)
+	jtx.RequireOwnerCount(t, env, alice, 1) // only credType2 remains
 
 	t.Log("DepositPreauth expired credentials test passed")
 }

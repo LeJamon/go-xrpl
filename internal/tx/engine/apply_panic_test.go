@@ -136,7 +136,7 @@ func TestApplyNilPanicReturnsTefExceptionWithoutMutatingState(t *testing.T) {
 }
 
 func TestApplyPseudoPanicReturnsTefExceptionWithoutMutatingState(t *testing.T) {
-	view := newApplyPanicLedger()
+	view := newApplyPanicLedger(t)
 	writeKey := keylet.Keylet{Key: [32]byte{2}}
 	ledgerSequence := uint32(100)
 	txn := &panicApplyTx{
@@ -176,7 +176,7 @@ func TestApplyMissingAppliableReturnsTefInternal(t *testing.T) {
 
 func TestApplyPseudoMissingAppliableReturnsTefInternal(t *testing.T) {
 	ledgerSequence := uint32(100)
-	view := newApplyPanicLedger()
+	view := newApplyPanicLedger(t)
 	engine := pseudoRecoveryEngine(view, ledgerSequence)
 	txn := nonAppliableTx{Transaction: newApplyPanicAmendment(ledgerSequence)}
 
@@ -190,7 +190,7 @@ func TestApplyPseudoMissingAppliableReturnsTefInternal(t *testing.T) {
 
 func TestApplyPseudoPreflightPanicReturnsTefException(t *testing.T) {
 	ledgerSequence := uint32(100)
-	view := newApplyPanicLedger()
+	view := newApplyPanicLedger(t)
 	engine := pseudoRecoveryEngine(view, ledgerSequence)
 	txn := &panicGetCommonTx{Transaction: newApplyPanicAmendment(ledgerSequence)}
 
@@ -205,7 +205,7 @@ func TestApplyPseudoPreflightPanicReturnsTefException(t *testing.T) {
 func TestApplyPseudoNilPreflightPanicReturnsTefException(t *testing.T) {
 	enableNilPanic(t)
 	ledgerSequence := uint32(100)
-	view := newApplyPanicLedger()
+	view := newApplyPanicLedger(t)
 	engine := pseudoRecoveryEngine(view, ledgerSequence)
 	txn := &panicGetCommonTx{
 		Transaction: newApplyPanicAmendment(ledgerSequence),
@@ -222,7 +222,7 @@ func TestApplyPseudoNilPreflightPanicReturnsTefException(t *testing.T) {
 
 func TestApplyPseudoPreclaimPanicReturnsTefException(t *testing.T) {
 	ledgerSequence := uint32(100)
-	view := newApplyPanicLedger()
+	view := newApplyPanicLedger(t)
 	engine := pseudoRecoveryEngine(view, ledgerSequence)
 	txn := &panicPseudoPreclaimTx{Transaction: newApplyPanicAmendment(ledgerSequence)}
 
@@ -236,7 +236,7 @@ func TestApplyPseudoPreclaimPanicReturnsTefException(t *testing.T) {
 
 func TestApplyPseudoStateCommitErrorDoesNotMutateLedger(t *testing.T) {
 	ledgerSequence := uint32(100)
-	view := newApplyPanicLedger()
+	view := newApplyPanicLedger(t)
 	atomicView := &failingAtomicPseudoView{Ledger: view}
 	engine := pseudoRecoveryEngine(atomicView, ledgerSequence)
 	accountID, err := state.DecodeAccountID(recoveryTestAccount)
@@ -353,13 +353,18 @@ func newApplyPanicAmendment(ledgerSequence uint32) *pseudo.EnableAmendment {
 	}
 }
 
-func newApplyPanicLedger() *ledger.Ledger {
-	return ledger.NewOpenWithHeader(
+func newApplyPanicLedger(t *testing.T) *ledger.Ledger {
+	t.Helper()
+	view, err := ledger.NewOpenWithHeader(
 		header.LedgerHeader{LedgerIndex: 100},
 		shamap.New(shamap.TypeState),
 		shamap.New(shamap.TypeTransaction),
 		drops.Fees{},
 	)
+	if err != nil {
+		t.Fatalf("NewOpenWithHeader: %v", err)
+	}
+	return view
 }
 
 func pseudoRecoveryEngine(view applystate.AtomicLedgerView, ledgerSequence uint32) *Engine {

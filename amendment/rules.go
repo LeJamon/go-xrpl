@@ -48,8 +48,8 @@ func (r *Rules) EnabledCount() int {
 	return len(r.enabled)
 }
 
-// GetEnabled returns a slice of all enabled amendment IDs.
-func (r *Rules) GetEnabled() [][32]byte {
+// EnabledIDs returns a slice of all enabled amendment IDs.
+func (r *Rules) EnabledIDs() [][32]byte {
 	result := make([][32]byte, 0, len(r.enabled))
 	for id := range r.enabled {
 		result = append(result, id)
@@ -147,7 +147,7 @@ func (b *RulesBuilder) Enable(featureID [32]byte) *RulesBuilder {
 
 // EnableByName adds an amendment by name to the enabled set.
 func (b *RulesBuilder) EnableByName(name string) *RulesBuilder {
-	f := GetFeatureByName(name)
+	f := FeatureByName(name)
 	if f != nil {
 		b.enabled[f.ID] = true
 	}
@@ -162,7 +162,7 @@ func (b *RulesBuilder) Disable(featureID [32]byte) *RulesBuilder {
 
 // DisableByName removes an amendment by name from the enabled set.
 func (b *RulesBuilder) DisableByName(name string) *RulesBuilder {
-	f := GetFeatureByName(name)
+	f := FeatureByName(name)
 	if f != nil {
 		delete(b.enabled, f.ID)
 	}
@@ -187,44 +187,9 @@ func (b *RulesBuilder) Build() *Rules {
 	return NewRules(enabledIDs)
 }
 
-// DepositPreauthEnabled returns true if the DepositPreauth amendment is enabled.
-func (r *Rules) DepositPreauthEnabled() bool {
-	return r.Enabled(FeatureDepositPreauth)
-}
-
-// NFTsEnabled returns true if the NonFungibleTokensV1_1 amendment is enabled.
-func (r *Rules) NFTsEnabled() bool {
-	return r.Enabled(FeatureNonFungibleTokensV1_1)
-}
-
-// ExpandedSignerListEnabled returns true if the ExpandedSignerList amendment is enabled.
-func (r *Rules) ExpandedSignerListEnabled() bool {
-	return r.Enabled(FeatureExpandedSignerList)
-}
-
-// DeletableAccountsEnabled returns true if the DeletableAccounts amendment is enabled.
-func (r *Rules) DeletableAccountsEnabled() bool {
-	return r.Enabled(FeatureDeletableAccounts)
-}
-
 // XRPFeesEnabled returns true if the XRPFees amendment is enabled.
 func (r *Rules) XRPFeesEnabled() bool {
 	return r.Enabled(FeatureXRPFees)
-}
-
-// NegativeUNLEnabled returns true if the NegativeUNL amendment is enabled.
-func (r *Rules) NegativeUNLEnabled() bool {
-	return r.Enabled(FeatureNegativeUNL)
-}
-
-// DisallowIncomingEnabled returns true if the DisallowIncoming amendment is enabled.
-func (r *Rules) DisallowIncomingEnabled() bool {
-	return r.Enabled(FeatureDisallowIncoming)
-}
-
-// RequireFullyCanonicalSigEnabled returns true if the RequireFullyCanonicalSig amendment is enabled.
-func (r *Rules) RequireFullyCanonicalSigEnabled() bool {
-	return r.Enabled(FeatureRequireFullyCanonicalSig)
 }
 
 // DeepFreezeEnabled returns true if the DeepFreeze amendment is enabled.
@@ -235,4 +200,15 @@ func (r *Rules) DeepFreezeEnabled() bool {
 // PermissionedDEXEnabled returns true if the PermissionedDEX amendment is enabled.
 func (r *Rules) PermissionedDEXEnabled() bool {
 	return r.Enabled(FeaturePermissionedDEX)
+}
+
+// FixCleanup3_2_0Enabled returns true if the fixCleanup3_2_0 amendment is enabled.
+func (r *Rules) FixCleanup3_2_0Enabled() bool {
+	return r.Enabled(FeatureFixCleanup3_2_0)
+}
+
+// MPTokensV2Enabled returns true if the MPTokensV2 amendment is enabled — MPT
+// support in the DEX, AMM and Checks.
+func (r *Rules) MPTokensV2Enabled() bool {
+	return r.Enabled(FeatureMPTokensV2)
 }

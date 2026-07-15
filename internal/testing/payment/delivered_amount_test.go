@@ -3,7 +3,7 @@ package payment
 import (
 	"testing"
 
-	testing_ "github.com/LeJamon/go-xrpl/internal/testing"
+	jtx "github.com/LeJamon/go-xrpl/internal/testing"
 	"github.com/LeJamon/go-xrpl/internal/testing/trustset"
 	tx "github.com/LeJamon/go-xrpl/internal/tx"
 )
@@ -15,10 +15,10 @@ import (
 // (non-partial) IOU payments (identical account_hash, different
 // transaction_hash) — the mixed-network seq-~13 divergence.
 func TestPayment_DeliveredAmount_OnlyWhenPartial(t *testing.T) {
-	env := testing_.NewTestEnv(t)
-	gw := testing_.NewAccount("gw")
-	alice := testing_.NewAccount("alice")
-	bob := testing_.NewAccount("bob")
+	env := jtx.NewTestEnv(t)
+	gw := jtx.NewAccount("gw")
+	alice := jtx.NewAccount("alice")
+	bob := jtx.NewAccount("bob")
 	env.Fund(gw, alice, bob)
 
 	if r := env.Submit(trustset.TrustLine(alice, "USD", gw, "1000").Build()); !r.Success {

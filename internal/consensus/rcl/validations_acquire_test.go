@@ -8,6 +8,21 @@ import (
 	"github.com/LeJamon/go-xrpl/internal/consensus/ledgertrie"
 )
 
+type lockProbeAncestryProvider struct {
+	ledger ledgertrie.Ledger
+	probe  func()
+}
+
+func (p *lockProbeAncestryProvider) LedgerByID(id consensus.LedgerID) (ledgertrie.Ledger, bool) {
+	if p.ledger == nil || p.ledger.ID() != id {
+		return nil, false
+	}
+	if p.probe != nil {
+		p.probe()
+	}
+	return p.ledger, true
+}
+
 // A trusted validation for an unresolvable ledger parks instead of
 // dropping: the node's previous tip keeps steering the trie, and once
 // the ledger is acquired the next GetPreferred poll replays the parked
@@ -60,6 +75,44 @@ func TestValidationTracker_UnresolvableValidationParksThenReplays(t *testing.T) 
 	}
 	if id != abcd.ID() || seq != abcd.Seq() {
 		t.Fatalf("GetPreferred after acquisition: got seq %d, want replayed abcd@%d", seq, abcd.Seq())
+	}
+}
+
+func TestValidationTracker_AncestryLookupDoesNotHoldTrackerLock(t *testing.T) {
+	vt := NewValidationTracker(1, 5*time.Minute)
+	now := time.Now()
+	vt.SetNow(func() time.Time { return now })
+
+	ledger := ledgertrie.NewTestLedgerBuilder().Build("abc")
+	node := consensus.NodeID{1}
+	provider := &lockProbeAncestryProvider{}
+	vt.SetTrusted([]consensus.NodeID{node})
+	vt.SetLedgerAncestryProvider(provider)
+	if !vt.Add(makeTrustedValidation(node, ledger.ID(), ledger.Seq(), now)) {
+		t.Fatal("Add should accept the validation")
+	}
+
+	lookupHeldTrackerLock := false
+	provider.ledger = ledger
+	provider.probe = func() {
+		done := make(chan struct{})
+		go func() {
+			vt.RecheckFullyValidated(ledger.ID(), ledger.Seq())
+			close(done)
+		}()
+		select {
+		case <-done:
+		case <-time.After(time.Second):
+			lookupHeldTrackerLock = true
+		}
+	}
+
+	id, seq, ok := vt.GetPreferred(0)
+	if lookupHeldTrackerLock {
+		t.Fatal("ancestry lookup ran while the validation tracker lock was held")
+	}
+	if !ok || id != ledger.ID() || seq != ledger.Seq() {
+		t.Fatalf("GetPreferred got (%x, %d, %t), want (%x, %d, true)", id, seq, ok, ledger.ID(), ledger.Seq())
 	}
 }
 
@@ -164,7 +217,7 @@ func TestValidationTracker_GetTrustedSupportPollReplaysParked(t *testing.T) {
 	vt.Add(makeTrustedValidation(n1, abcd.ID(), abcd.Seq(), now))
 
 	provider.add(abcd)
-	if got := vt.GetTrustedSupport(abcd.ID()); got != 1 {
+	if got := vt.TrustedSupport(abcd.ID()); got != 1 {
 		t.Fatalf("GetTrustedSupport must replay parked validations: got %d, want 1", got)
 	}
 }
@@ -307,7 +360,7 @@ func TestValidationTracker_FlushStaleUnparks(t *testing.T) {
 	if _, _, ok := vt.GetPreferred(0); ok {
 		t.Fatal("flushed-stale parked validation must not replay into the trie")
 	}
-	if got := vt.GetTrustedSupport(abcd.ID()); got != 0 {
+	if got := vt.TrustedSupport(abcd.ID()); got != 0 {
 		t.Fatalf("phantom trie tip after flush+acquire: support %d, want 0", got)
 	}
 }
@@ -340,7 +393,7 @@ func TestValidationTracker_DetrustedParkedValidationNotReplayed(t *testing.T) {
 	if _, _, ok := vt.GetPreferred(0); ok {
 		t.Fatal("de-trusted parked validation must not replay after acquisition")
 	}
-	if got := vt.GetTrustedSupport(abcd.ID()); got != 0 {
+	if got := vt.TrustedSupport(abcd.ID()); got != 0 {
 		t.Fatalf("de-trusted parked validation counted as support: got %d, want 0", got)
 	}
 }

@@ -119,6 +119,12 @@ func BuildHandshakeRequest(id *Identity, sharedValue []byte, cfg HandshakeConfig
 	req.Header.Set(HeaderCrawl, crawlValue(cfg.CrawlPublic))
 
 	addHandshakeHeaders(req.Header, id, sharedValue, cfg)
+	req.Header.Set(HeaderProtocolCtl, MakeFeaturesRequestHeader(
+		cfg.EnableCompression,
+		cfg.EnableLedgerReplay,
+		cfg.EnableTxReduceRelay,
+		cfg.EnableVPReduceRelay,
+	))
 
 	return req, nil
 }
@@ -156,10 +162,11 @@ func WriteRawHandshakeRequest(w io.Writer, req *http.Request) error {
 }
 
 // BuildHandshakeResponse builds the 101 Switching Protocols response
-// for an inbound handshake. `negotiated` is the version returned by
-// NegotiateProtocolVersion against the inbound request; an empty value
-// falls back to the highest supported version (test convenience).
-func BuildHandshakeResponse(id *Identity, sharedValue []byte, cfg HandshakeConfig, negotiated string) *http.Response {
+// for an inbound handshake. request is the request being accepted; its
+// X-Protocol-Ctl offer determines which locally-enabled features the response
+// confirms. `negotiated` is the version returned by NegotiateProtocolVersion;
+// an empty value falls back to the highest supported version (test convenience).
+func BuildHandshakeResponse(request *http.Request, id *Identity, sharedValue []byte, cfg HandshakeConfig, negotiated string) *http.Response {
 	if negotiated == "" {
 		negotiated = supportedProtocols[len(supportedProtocols)-1].String()
 	}
@@ -182,6 +189,13 @@ func BuildHandshakeResponse(id *Identity, sharedValue []byte, cfg HandshakeConfi
 	}
 
 	addHandshakeHeaders(resp.Header, id, sharedValue, cfg)
+	resp.Header.Set(HeaderProtocolCtl, MakeFeaturesResponseHeader(
+		request.Header,
+		cfg.EnableCompression,
+		cfg.EnableLedgerReplay,
+		cfg.EnableTxReduceRelay,
+		cfg.EnableVPReduceRelay,
+	))
 
 	return resp
 }
@@ -251,7 +265,7 @@ func addHandshakeHeaders(h http.Header, id *Identity, sharedValue []byte, cfg Ha
 		h.Set(HeaderNetworkID, strconv.FormatUint(uint64(cfg.NetworkID), 10))
 	}
 
-	networkTime := uint64(time.Now().Unix() - protocol.RippleEpochUnix)
+	networkTime := uint64(protocol.RippleSeconds(time.Now()))
 	h.Set(HeaderNetworkTime, strconv.FormatUint(networkTime, 10))
 	h.Set(HeaderPublicKey, id.EncodedPublicKey())
 
@@ -264,15 +278,6 @@ func addHandshakeHeaders(h http.Header, id *Identity, sharedValue []byte, cfg Ha
 			"t", "Handshake", "err", err)
 	} else {
 		h.Set(HeaderSessionSignature, base64.StdEncoding.EncodeToString(sig))
-	}
-
-	if ctl := MakeFeaturesRequestHeader(
-		cfg.EnableCompression,
-		cfg.EnableLedgerReplay,
-		cfg.EnableTxReduceRelay,
-		cfg.EnableVPReduceRelay,
-	); ctl != "" {
-		h.Set(HeaderProtocolCtl, ctl)
 	}
 
 	h.Set(HeaderInstanceCookie, strconv.FormatUint(cfg.InstanceCookie, 10))
@@ -328,16 +333,68 @@ func configIPIsV6(ip net.IP) bool {
 	return ip.To4() == nil
 }
 
-// isPublicIP mirrors beast::IP::is_public. v6 link-local is private
-// (fe80::/10) — Go's IsPrivate doesn't cover that, so we add it.
+// isPublicIP mirrors beast::IP::is_public (rippled 3.1.3's rewrite in
+// IPAddressV4.cpp / IPAddressV6.cpp). "Public" means globally routable:
+// beyond RFC1918 / loopback / multicast it rejects the reserved IPv4
+// special-purpose ranges (0/8, CGNAT, link-local, IETF-protocol,
+// TEST-NETs, 6to4 relay, benchmarking, 240/4) and the reserved IPv6
+// ranges (ULA, link-local, discard, documentation, Teredo, ORCHIDv2,
+// 6to4). Global IPv6 unicast is public — the pre-3.1.3 beast dropped
+// essentially all IPv6 gossip.
 func isPublicIP(ip net.IP) bool {
 	if ip == nil || ip.IsUnspecified() {
 		return false
 	}
-	if ip.IsLoopback() || ip.IsPrivate() || ip.IsMulticast() {
+	if v4 := ip.To4(); v4 != nil {
+		return isPublicIPv4(v4)
+	}
+	return isPublicIPv6(ip)
+}
+
+// isPublicIPv4 ports beast::IP::is_public(AddressV4): reject private
+// (10/8, 172.16/12, 192.168/16, loopback), multicast, and every
+// reserved special-purpose range. v4 must be a 4-byte slice.
+func isPublicIPv4(v4 net.IP) bool {
+	ip := uint32(v4[0])<<24 | uint32(v4[1])<<16 | uint32(v4[2])<<8 | uint32(v4[3])
+	switch {
+	case ip&0xff000000 == 0x0a000000, // 10.0.0.0/8
+		ip&0xfff00000 == 0xac100000, // 172.16.0.0/12
+		ip&0xffff0000 == 0xc0a80000, // 192.168.0.0/16
+		ip&0xff000000 == 0x7f000000, // 127.0.0.0/8 loopback
+		ip&0xf0000000 == 0xe0000000, // 224.0.0.0/4 multicast
+		ip&0xff000000 == 0x00000000, // 0.0.0.0/8 "this network"
+		ip&0xffc00000 == 0x64400000, // 100.64.0.0/10 CGNAT
+		ip&0xffff0000 == 0xa9fe0000, // 169.254.0.0/16 link-local
+		ip&0xffffff00 == 0xc0000000, // 192.0.0.0/24 IETF protocol
+		ip&0xffffff00 == 0xc0000200, // 192.0.2.0/24 TEST-NET-1
+		ip&0xffffff00 == 0xc0586300, // 192.88.99.0/24 6to4 relay
+		ip&0xfffe0000 == 0xc6120000, // 198.18.0.0/15 benchmarking
+		ip&0xffffff00 == 0xc6336400, // 198.51.100.0/24 TEST-NET-2
+		ip&0xffffff00 == 0xcb007100, // 203.0.113.0/24 TEST-NET-3
+		ip&0xf0000000 == 0xf0000000: // 240.0.0.0/4 reserved
 		return false
 	}
-	if ip.To4() == nil && ip.IsLinkLocalUnicast() {
+	return true
+}
+
+// isPublicIPv6 ports beast::IP::is_public(AddressV6). The caller routes
+// v4-mapped addresses to isPublicIPv4 via To4, so ip here is pure IPv6.
+func isPublicIPv6(ip net.IP) bool {
+	b := ip.To16()
+	if b == nil {
+		return false
+	}
+	switch {
+	case ip.IsLoopback(), // ::1
+		b[0]&0xfe == 0xfc,                 // fc00::/7 ULA (private)
+		b[0] == 0xff,                      // ff00::/8 multicast
+		b[0] == 0xfe && b[1]&0xc0 == 0x80, // fe80::/10 link-local
+		b[0] == 0x01 && b[1] == 0 && b[2] == 0 && b[3] == 0 &&
+			b[4] == 0 && b[5] == 0 && b[6] == 0 && b[7] == 0, // 100::/64 discard
+		b[0] == 0x20 && b[1] == 0x01 && b[2] == 0x0d && b[3] == 0xb8,      // 2001:db8::/32 documentation
+		b[0] == 0x20 && b[1] == 0x01 && b[2] == 0x00 && b[3] == 0x00,      // 2001::/32 Teredo
+		b[0] == 0x20 && b[1] == 0x01 && b[2] == 0x00 && b[3]&0xf0 == 0x20, // 2001:20::/28 ORCHIDv2
+		b[0] == 0x20 && b[1] == 0x02:                                      // 2002::/16 6to4
 		return false
 	}
 	return true
@@ -423,7 +480,7 @@ func VerifyPeerHandshake(headers http.Header, sharedValue []byte, localPubKey st
 }
 
 func verifySessionSignature(pubKey *PublicKeyToken, sharedValue, signature []byte) error {
-	if rootcrypto.ECDSACanonicality(signature) == rootcrypto.CanonicityNone {
+	if rootcrypto.ECDSACanonicality(signature) == rootcrypto.CanonicalityNone {
 		return fmt.Errorf("%w: malformed DER signature", ErrInvalidSignature)
 	}
 	if !secp256k1.VerifyDigestBytes(sharedValue, pubKey.Bytes(), signature) {
@@ -694,23 +751,26 @@ const (
 
 func GetFeatureValue(headers http.Header, feature string) (string, bool) {
 	headerValue := headers.Get(HeaderProtocolCtl)
-	if headerValue == "" {
-		return "", false
-	}
-	for f := range strings.SplitSeq(headerValue, FeatureDelimiter) {
-		f = strings.TrimSpace(f)
-		if f == "" {
-			continue
+	needle := feature + "="
+	// The wire protocol uses a case-sensitive substring search and stops the
+	// value at the first semicolon or whitespace byte.
+	for offset := 0; offset < len(headerValue); {
+		match := strings.Index(headerValue[offset:], needle)
+		if match < 0 {
+			return "", false
 		}
-		parts := strings.SplitN(f, "=", 2)
-		if len(parts) != 2 {
-			continue
+		start := offset + match + len(needle)
+		end := start
+		for end < len(headerValue) {
+			if headerValue[end] == ';' || isProtocolCtlWhitespace(headerValue[end]) {
+				break
+			}
+			end++
 		}
-		name := strings.TrimSpace(parts[0])
-		value := strings.TrimSpace(parts[1])
-		if strings.EqualFold(name, feature) {
-			return value, true
+		if end > start {
+			return headerValue[start:end], true
 		}
+		offset = start
 	}
 	return "", false
 }
@@ -722,12 +782,47 @@ func IsFeatureValue(headers http.Header, feature, value string) bool {
 	if !found {
 		return false
 	}
-	for v := range strings.SplitSeq(featureValue, ValueDelimiter) {
-		if strings.EqualFold(strings.TrimSpace(v), value) {
+	for len(featureValue) > 0 {
+		for len(featureValue) > 0 && (featureValue[0] == ',' || isProtocolCtlWhitespace(featureValue[0])) {
+			featureValue = featureValue[1:]
+		}
+		if featureValue == "" {
+			break
+		}
+
+		var token string
+		if featureValue[0] == '"' {
+			featureValue = featureValue[1:]
+			end := strings.IndexByte(featureValue, '"')
+			if end < 0 {
+				token = featureValue
+				featureValue = ""
+			} else {
+				token = featureValue[:end]
+				featureValue = featureValue[end+1:]
+			}
+		} else {
+			end := 0
+			for end < len(featureValue) && featureValue[end] != ',' && !isProtocolCtlWhitespace(featureValue[end]) {
+				end++
+			}
+			token = featureValue[:end]
+			featureValue = featureValue[end:]
+		}
+		if strings.EqualFold(token, value) {
 			return true
 		}
 	}
 	return false
+}
+
+func isProtocolCtlWhitespace(c byte) bool {
+	switch c {
+	case ' ', '\t', '\n', '\r', '\v', '\f':
+		return true
+	default:
+		return false
+	}
 }
 
 func FeatureEnabled(headers http.Header, feature string) bool {
@@ -851,43 +946,43 @@ func ParseHandshakeExtras(
 
 // MakeFeaturesRequestHeader builds the X-Protocol-Ctl value for a request.
 func MakeFeaturesRequestHeader(comprEnabled, ledgerReplayEnabled, txReduceRelayEnabled, vpReduceRelayEnabled bool) string {
-	var parts []string
+	var header strings.Builder
 
 	if comprEnabled {
-		parts = append(parts, FeatureNameCompr+"=lz4")
+		header.WriteString(FeatureNameCompr + "=lz4" + FeatureDelimiter)
 	}
 	if ledgerReplayEnabled {
-		parts = append(parts, FeatureNameLedgerReplay+"=1")
+		header.WriteString(FeatureNameLedgerReplay + "=1" + FeatureDelimiter)
 	}
 	if txReduceRelayEnabled {
-		parts = append(parts, FeatureNameTXRR+"=1")
+		header.WriteString(FeatureNameTXRR + "=1" + FeatureDelimiter)
 	}
 	if vpReduceRelayEnabled {
-		parts = append(parts, FeatureNameVPRR+"=1")
+		header.WriteString(FeatureNameVPRR + "=1" + FeatureDelimiter)
 	}
 
-	return strings.Join(parts, FeatureDelimiter)
+	return header.String()
 }
 
 // MakeFeaturesResponseHeader echoes back only features that are both
 // locally enabled AND requested by the peer.
 func MakeFeaturesResponseHeader(requestHeaders http.Header, comprEnabled, ledgerReplayEnabled, txReduceRelayEnabled, vpReduceRelayEnabled bool) string {
-	var parts []string
+	var header strings.Builder
 
 	if comprEnabled && IsFeatureValue(requestHeaders, FeatureNameCompr, "lz4") {
-		parts = append(parts, FeatureNameCompr+"=lz4")
+		header.WriteString(FeatureNameCompr + "=lz4" + FeatureDelimiter)
 	}
 	if ledgerReplayEnabled && FeatureEnabled(requestHeaders, FeatureNameLedgerReplay) {
-		parts = append(parts, FeatureNameLedgerReplay+"=1")
+		header.WriteString(FeatureNameLedgerReplay + "=1" + FeatureDelimiter)
 	}
 	if txReduceRelayEnabled && FeatureEnabled(requestHeaders, FeatureNameTXRR) {
-		parts = append(parts, FeatureNameTXRR+"=1")
+		header.WriteString(FeatureNameTXRR + "=1" + FeatureDelimiter)
 	}
 	if vpReduceRelayEnabled && FeatureEnabled(requestHeaders, FeatureNameVPRR) {
-		parts = append(parts, FeatureNameVPRR+"=1")
+		header.WriteString(FeatureNameVPRR + "=1" + FeatureDelimiter)
 	}
 
-	return strings.Join(parts, FeatureDelimiter)
+	return header.String()
 }
 
 // ParseProtocolCtlFeatures decodes the negotiated capabilities. txrr

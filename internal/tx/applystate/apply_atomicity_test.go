@@ -107,14 +107,22 @@ func encodeApplyTestEntry(t *testing.T, fields map[string]any) []byte {
 	return data
 }
 
+func applyTestAccountRootFields() map[string]any {
+	return map[string]any{
+		"LedgerEntryType": "AccountRoot",
+		"Account":         "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh",
+		"Balance":         "1000000",
+		"Sequence":        uint32(1),
+		"OwnerCount":      uint32(0),
+		"Flags":           uint32(0),
+	}
+}
+
 func TestApplyMetadataBuildErrorDoesNotMutateBase(t *testing.T) {
-	valid := encodeApplyTestEntry(t, map[string]any{
-		"LedgerEntryType": "AccountRoot",
-	})
-	invalid := encodeApplyTestEntry(t, map[string]any{
-		"LedgerEntryType": "AccountRoot",
-		"DestinationTag":  uint32(1),
-	})
+	valid := encodeApplyTestEntry(t, applyTestAccountRootFields())
+	invalidFields := applyTestAccountRootFields()
+	invalidFields["DestinationTag"] = uint32(1)
+	invalid := encodeApplyTestEntry(t, invalidFields)
 
 	base := newRecordingBaseView()
 	table := NewApplyStateTable(base, [32]byte{1}, 2, amendment.AllSupportedRules())
@@ -160,9 +168,7 @@ func TestApplyMetadataBuildErrorDoesNotMutateBase(t *testing.T) {
 }
 
 func TestApplyBaseWriteErrorRollsBackAndCanRetry(t *testing.T) {
-	entry := encodeApplyTestEntry(t, map[string]any{
-		"LedgerEntryType": "AccountRoot",
-	})
+	entry := encodeApplyTestEntry(t, applyTestAccountRootFields())
 	base := newRecordingBaseView()
 	base.failAt = 2
 	table := NewApplyStateTable(base, [32]byte{1}, 2, amendment.AllSupportedRules())
@@ -280,9 +286,7 @@ func TestApplyStateTableAtomicSuccessCopiesCallbackData(t *testing.T) {
 }
 
 func TestApplyFlushesTrackedItemsInKeyOrder(t *testing.T) {
-	entry := encodeApplyTestEntry(t, map[string]any{
-		"LedgerEntryType": "AccountRoot",
-	})
+	entry := encodeApplyTestEntry(t, applyTestAccountRootFields())
 	base := newRecordingBaseView()
 	table := NewApplyStateTable(base, [32]byte{1}, 2, amendment.AllSupportedRules())
 
@@ -329,6 +333,13 @@ func TestApplyThreadsTrackedItemsInKeyOrder(t *testing.T) {
 		entry := encodeApplyTestEntry(t, map[string]any{
 			"LedgerEntryType": "Offer",
 			"Account":         account,
+			"Sequence":        uint32(i),
+			"TakerPays":       "1",
+			"TakerGets":       "1",
+			"BookDirectory":   "0000000000000000000000000000000000000000000000000000000000000000",
+			"BookNode":        "0",
+			"OwnerNode":       "0",
+			"Flags":           uint32(0),
 		})
 		if err := table.Insert(kl(byte(i)), entry); err != nil {
 			t.Fatalf("insert entry %d: %v", i, err)

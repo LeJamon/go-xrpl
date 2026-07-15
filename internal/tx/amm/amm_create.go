@@ -1,6 +1,8 @@
 package amm
 
 import (
+	"bytes"
+
 	"github.com/LeJamon/go-xrpl/amendment"
 	"github.com/LeJamon/go-xrpl/internal/ledger/state"
 	"github.com/LeJamon/go-xrpl/internal/tx"
@@ -39,27 +41,29 @@ func (a *AMMCreate) TxType() tx.Type {
 // GetAmountAsset returns the issue (currency + issuer) of the first asset (Amount field).
 // Implements ammCreateIssueProvider for the ValidAMM invariant checker.
 func (a *AMMCreate) GetAmountAsset() tx.Asset {
-	return tx.Asset{Currency: a.Amount.Currency, Issuer: a.Amount.Issuer}
+	return amountAsset(a.Amount)
 }
 
 // GetAmount2Asset returns the issue (currency + issuer) of the second asset (Amount2 field).
 // Implements ammCreateIssueProvider for the ValidAMM invariant checker.
 func (a *AMMCreate) GetAmount2Asset() tx.Asset {
-	return tx.Asset{Currency: a.Amount2.Currency, Issuer: a.Amount2.Issuer}
+	return amountAsset(a.Amount2)
 }
 
 // Reference: rippled AMMCreate.cpp preflight
+// GetFlagsMask adopts the engine FlagsMasker seam. AMMCreate defines no
+// type-specific flags, so it uses the base universal mask, checked at preflight0.
+func (a *AMMCreate) GetFlagsMask(rules *amendment.Rules) uint32 {
+	return tfAMMCreateMask
+}
+
 func (a *AMMCreate) Validate() error {
 	if err := a.BaseTx.Validate(); err != nil {
 		return err
 	}
 
-	if a.GetFlags()&tfAMMCreateMask != 0 {
-		return ter.Errorf(ter.TemINVALID_FLAG, "invalid flags for AMMCreate")
-	}
-
 	// Reference: rippled AMMCreate.cpp line 52-57
-	if a.Amount.Currency == a.Amount2.Currency && a.Amount.Issuer == a.Amount2.Issuer {
+	if matchesAssetByIssue(amountAsset(a.Amount), amountAsset(a.Amount2)) {
 		return ter.Errorf(ter.TemBAD_AMM_TOKENS, "tokens can not have the same currency/issuer")
 	}
 
@@ -96,6 +100,11 @@ func (a *AMMCreate) RequiredAmendments() [][32]byte {
 	return [][32]byte{amendment.FeatureAMM, amendment.FeatureFixUniversalNumber}
 }
 
+// CheckExtraFeatures gates MPT pool assets on the MPTokensV2 amendment.
+func (a *AMMCreate) CheckExtraFeatures(rules *amendment.Rules) error {
+	return requireMPTokensV2(rules, a.Amount.IsMPT() || a.Amount2.IsMPT())
+}
+
 // Preclaim validates AMM uniqueness, authorization, freeze, DefaultRipple, the
 // LP-token-trustline reserve, funding, that neither asset is an LP token, the
 // pseudo-account collision (featureSingleAssetVault), and the clawback gate.
@@ -111,8 +120,8 @@ func (a *AMMCreate) Preclaim(view tx.LedgerView, config tx.EngineConfig) ter.Res
 		return result
 	}
 
-	asset1 := tx.Asset{Currency: a.Amount.Currency, Issuer: a.Amount.Issuer}
-	asset2 := tx.Asset{Currency: a.Amount2.Currency, Issuer: a.Amount2.Issuer}
+	asset1 := amountAsset(a.Amount)
+	asset2 := amountAsset(a.Amount2)
 
 	// Reference: rippled AMMCreate.cpp line 95-100
 	ammKey := computeAMMKeylet(asset1, asset2)
@@ -121,16 +130,19 @@ func (a *AMMCreate) Preclaim(view tx.LedgerView, config tx.EngineConfig) ter.Res
 	}
 
 	// Reference: rippled AMMCreate.cpp line 102-116
-	if result := tx.RequireAuth(view, asset1, accountID); result != ter.TesSUCCESS {
+	if result := requireAssetAuth(view, asset1, accountID, true, config.ParentCloseTime); result != ter.TesSUCCESS {
 		return result
 	}
-	if result := tx.RequireAuth(view, asset2, accountID); result != ter.TesSUCCESS {
+	if result := requireAssetAuth(view, asset2, accountID, true, config.ParentCloseTime); result != ter.TesSUCCESS {
 		return result
 	}
 
 	// Reference: rippled AMMCreate.cpp line 119-124
-	if tx.IsFrozen(view, accountID, asset1) || tx.IsFrozen(view, accountID, asset2) {
-		return ter.TecFROZEN
+	if assetFrozen(view, accountID, asset1) {
+		return frozenAssetResult(asset1)
+	}
+	if assetFrozen(view, accountID, asset2) {
+		return frozenAssetResult(asset2)
 	}
 
 	// Reference: rippled AMMCreate.cpp line 126-142
@@ -146,8 +158,18 @@ func (a *AMMCreate) Preclaim(view tx.LedgerView, config tx.EngineConfig) ter.Res
 	}
 	reserveNeeded := accountReserve(config, account.OwnerCount+1)
 	xrpLiquid := int64(account.Balance) - int64(reserveNeeded)
-	if insufficientBalance(view, accountID, a.Amount, xrpLiquid) ||
-		insufficientBalance(view, accountID, a.Amount2, xrpLiquid) {
+	insufficient, result := insufficientBalance(view, accountID, a.Amount, xrpLiquid)
+	if result != ter.TesSUCCESS {
+		return result
+	}
+	if insufficient {
+		return TecUNFUNDED_AMM
+	}
+	insufficient, result = insufficientBalance(view, accountID, a.Amount2, xrpLiquid)
+	if result != ter.TesSUCCESS {
+		return result
+	}
+	if insufficient {
 		return TecUNFUNDED_AMM
 	}
 
@@ -161,15 +183,22 @@ func (a *AMMCreate) Preclaim(view tx.LedgerView, config tx.EngineConfig) ter.Res
 	// collision returns terADDRESS_COLLISION (retried, no fee) rather than the
 	// clawback tecNO_PERMISSION (claimed, fee consumed).
 	// Reference: rippled AMMCreate.cpp preclaim lines 186-192
-	if config.GetRules().Enabled(amendment.FeatureSingleAssetVault) {
-		if pseudoAccountAddress(view, config.ParentHash, ammKey.Key) == ([20]byte{}) {
+	if config.RequireRules().Enabled(amendment.FeatureSingleAssetVault) {
+		if tx.PseudoAccountAddress(view, config.ParentHash, ammKey.Key) == ([20]byte{}) {
 			return ter.TerADDRESS_COLLISION
 		}
 	}
 
+	if result := canMPTTradeAndTransfer(view, asset1, accountID, accountID); result != ter.TesSUCCESS {
+		return result
+	}
+	if result := canMPTTradeAndTransfer(view, asset2, accountID, accountID); result != ter.TesSUCCESS {
+		return result
+	}
+
 	// Check clawback - if featureAMMClawback is not enabled, reject clawback-enabled issuers.
 	// Reference: rippled AMMCreate.cpp preclaim lines 194-214
-	if !config.GetRules().Enabled(amendment.FeatureAMMClawback) {
+	if !config.RequireRules().Enabled(amendment.FeatureAMMClawback) {
 		if result := clawbackDisabled(view, asset1); result != ter.TesSUCCESS {
 			return result
 		}
@@ -192,30 +221,25 @@ func (a *AMMCreate) Apply(ctx *tx.ApplyContext) ter.Result {
 
 	accountID := ctx.AccountID
 
-	asset1 := tx.Asset{Currency: a.Amount.Currency, Issuer: a.Amount.Issuer}
-	asset2 := tx.Asset{Currency: a.Amount2.Currency, Issuer: a.Amount2.Issuer}
+	asset1 := amountAsset(a.Amount)
+	asset2 := amountAsset(a.Amount2)
 
 	ammKey := computeAMMKeylet(asset1, asset2)
 
-	// Compute the AMM pseudo-account ID using SHA256-RIPEMD160 derivation.
-	// Reference: rippled View.cpp createPseudoAccount → pseudoAccountAddress
-	ammAccountID := pseudoAccountAddress(ctx.View, ctx.Config.ParentHash, ammKey.Key)
-	if ammAccountID == ([20]byte{}) {
-		return ter.TecDUPLICATE
+	// Create the AMM pseudo-account. This derives an unoccupied address, sets the
+	// pseudo-account flags/sequence, marks it with sfAMMID, and inserts it; the
+	// per-asset owner count and balances are layered on below.
+	ammAccountID, ammAccount, res := tx.CreatePseudoAccount(ctx, ammKey.Key, tx.PseudoAMMID)
+	if res != ter.TesSUCCESS {
+		return res
 	}
-	ammAccountAddr, _ := encodeAccountID(ammAccountID)
-
-	// Reference: rippled AMMCreate.cpp line 230-236
+	ammAccountAddr := ammAccount.Account
 	ammAccountKey := keylet.Account(ammAccountID)
-	acctExists, _ := ctx.View.Exists(ammAccountKey)
-	if acctExists {
-		return ter.TecDUPLICATE
-	}
 
 	// Reference: rippled AMMCreate.cpp line 262-264
 	sortedAsset1, sortedAsset2, sortedAmount1, sortedAmount2 := sortAssets(asset1, asset2, a.Amount, a.Amount2)
 
-	lptCurrency := GenerateAMMLPTCurrency(sortedAsset1.Currency, sortedAsset2.Currency)
+	lptCurrency := GenerateAMMLPTCurrencyForAssets(sortedAsset1, sortedAsset2)
 
 	// Reference: rippled AMMCreate.cpp line 241-247
 	lptIssuerID := ammAccountID
@@ -239,35 +263,17 @@ func (a *AMMCreate) Apply(ctx *tx.ApplyContext) ter.Result {
 		lpTokenBalanceRaw.Mantissa(), lpTokenBalanceRaw.Exponent(),
 		lptCurrency, ammAccountAddr)
 
-	// Create the AMM pseudo-account.
-	// Reference: rippled View.cpp createPseudoAccount (line 1112-1133).
-	// Sequence: 0 when featureSingleAssetVault is enabled, else the current
-	// ledger sequence — mirrors the seqno selection at View.cpp:1120-1123.
-	// Flags: exactly the three bits rippled sets at View.cpp:1128-1129.
-	// Pseudo-account identification is by AMMID presence (state.AccountRoot.IsPseudoAccount),
-	// matching rippled's isPseudoAccount (View.cpp:1138-1150).
-	var pseudoSeq uint32
-	if !ctx.Rules().Enabled(amendment.FeatureSingleAssetVault) {
-		pseudoSeq = ctx.Config.LedgerSequence
-	}
 	// The AMM account's OwnerCount is the number of IOU pool trust lines it
 	// holds (one per non-XRP asset): each is created with the reserve charged
 	// to the AMM side. The AMM ledger object and any XRP side are not counted.
 	ammOwnerCount := uint32(0)
-	if !isXRPAsset(sortedAsset1) {
+	if !isXRPAsset(sortedAsset1) && !sortedAsset1.IsMPT() {
 		ammOwnerCount++
 	}
-	if !isXRPAsset(sortedAsset2) {
+	if !isXRPAsset(sortedAsset2) && !sortedAsset2.IsMPT() {
 		ammOwnerCount++
 	}
-	ammAccount := &state.AccountRoot{
-		Account:    ammAccountAddr,
-		Balance:    0,
-		Sequence:   pseudoSeq,
-		OwnerCount: ammOwnerCount,
-		Flags:      state.LsfDisableMaster | state.LsfDefaultRipple | state.LsfDepositAuth,
-		AMMID:      ammKey.Key, // Links pseudo-account to AMM entry (rippled View.cpp:1131)
-	}
+	ammAccount.OwnerCount = ammOwnerCount
 
 	// Create the AMM entry with sorted assets
 	// Reference: rippled AMMCreate.cpp line 259-267
@@ -303,16 +309,6 @@ func (a *AMMCreate) Apply(ctx *tx.ApplyContext) ter.Result {
 		Price:         zeroAmount(tx.Asset{Currency: lptCurrency, Issuer: ammAccountAddr}),
 		DiscountedFee: discountedFee,
 		AuthAccounts:  make([][20]byte, 0),
-	}
-
-	ammAccountBytes, err := state.SerializeAccountRoot(ammAccount)
-	if err != nil {
-		ctx.Log.Error("amm create: failed to create pseudo account")
-		return ter.TefINTERNAL
-	}
-	if err := ctx.View.Insert(ammAccountKey, ammAccountBytes); err != nil {
-		ctx.Log.Error("amm create: failed to insert pseudo account")
-		return ter.TefINTERNAL
 	}
 
 	// Link the AMM entry into the AMM pseudo-account's owner directory and
@@ -359,6 +355,16 @@ func (a *AMMCreate) Apply(ctx *tx.ApplyContext) ter.Result {
 		drops := uint64(sortedAmount1.Drops())
 		ctx.Account.Balance -= drops
 		ammAccount.Balance += drops
+	} else if sortedAsset1.IsMPT() {
+		if result := requireAssetAuth(ctx.View, sortedAsset1, ammAccountID, false, ctx.Config.ParentCloseTime); result != ter.TesSUCCESS {
+			return result
+		}
+		if result := ensureAMMMPTHolding(ctx.View, sortedAsset1, ammAccountID); result != ter.TesSUCCESS {
+			return result
+		}
+		if result := sendMPT(ctx.View, accountID, ammAccountID, sortedAmount1, true); result != ter.TesSUCCESS {
+			return result
+		}
 	} else {
 		if err := createOrUpdateAMMTrustline(ammAccountID, sortedAsset1, sortedAmount1, ctx.View); err != nil {
 			return TecNO_LINE
@@ -387,6 +393,16 @@ func (a *AMMCreate) Apply(ctx *tx.ApplyContext) ter.Result {
 		drops := uint64(sortedAmount2.Drops())
 		ctx.Account.Balance -= drops
 		ammAccount.Balance += drops
+	} else if sortedAsset2.IsMPT() {
+		if result := requireAssetAuth(ctx.View, sortedAsset2, ammAccountID, false, ctx.Config.ParentCloseTime); result != ter.TesSUCCESS {
+			return result
+		}
+		if result := ensureAMMMPTHolding(ctx.View, sortedAsset2, ammAccountID); result != ter.TesSUCCESS {
+			return result
+		}
+		if result := sendMPT(ctx.View, accountID, ammAccountID, sortedAmount2, true); result != ter.TesSUCCESS {
+			return result
+		}
 	} else {
 		if err := createOrUpdateAMMTrustline(ammAccountID, sortedAsset2, sortedAmount2, ctx.View); err != nil {
 			return TecNO_LINE
@@ -425,7 +441,7 @@ func (a *AMMCreate) Apply(ctx *tx.ApplyContext) ter.Result {
 		return ter.TefINTERNAL
 	}
 
-	ammAccountBytes, err = state.SerializeAccountRoot(ammAccount)
+	ammAccountBytes, err := state.SerializeAccountRoot(ammAccount)
 	if err != nil {
 		return ter.TefINTERNAL
 	}
@@ -459,6 +475,14 @@ func sortAssets(asset1, asset2 tx.Asset, amount1, amount2 tx.Amount) (tx.Asset, 
 // than their string representations (base58 r-addresses and ISO-vs-hex currency
 // codes do not sort the same as their decoded bytes).
 func assetLessEqual(a, b tx.Asset) bool {
+	if a.IsMPT() != b.IsMPT() {
+		return a.IsMPT()
+	}
+	if a.IsMPT() {
+		aID, _ := decodeMPTAsset(a)
+		bID, _ := decodeMPTAsset(b)
+		return bytes.Compare(aID[:], bID[:]) <= 0
+	}
 	return keylet.IssueLessEqual(
 		keylet.CurrencyBytes(a.Currency), getIssuerBytes(a.Issuer),
 		keylet.CurrencyBytes(b.Currency), getIssuerBytes(b.Issuer),

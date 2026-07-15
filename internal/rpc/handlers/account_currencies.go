@@ -3,6 +3,7 @@ package handlers
 import (
 	"encoding/json"
 	"errors"
+	"strconv"
 
 	"github.com/LeJamon/go-xrpl/internal/ledger/service/svcerr"
 	"github.com/LeJamon/go-xrpl/internal/rpc/types"
@@ -13,32 +14,45 @@ import (
 type AccountCurrenciesMethod struct{ BaseHandler }
 
 func (m *AccountCurrenciesMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (any, *types.RpcError) {
-	var request struct {
-		types.AccountParam
-		types.LedgerSpecifier
+	rawFields, fieldsErr := rawJSONFields(params)
+	if fieldsErr != nil {
+		return nil, fieldsErr
 	}
 
-	if err := ParseParams(params, &request); err != nil {
-		return nil, err
-	}
-
-	if err := ValidateAccount(request.Account); err != nil {
-		return nil, err
+	account := ""
+	if accountRaw, ok := rawFields["account"]; ok {
+		var valid bool
+		account, valid = rawJSONString(accountRaw)
+		if !valid {
+			return nil, types.RpcErrorInvalidField("account")
+		}
+	} else if identRaw, ok := rawFields["ident"]; ok {
+		var valid bool
+		account, valid = rawJSONString(identRaw)
+		if !valid {
+			return nil, types.RpcErrorInvalidField("ident")
+		}
+	} else {
+		return nil, types.RpcErrorMissingField("account")
 	}
 
 	if err := RequireLedgerService(ctx.Services); err != nil {
 		return nil, err
 	}
-
-	ledgerIndex, selErr := resolveLedgerSelector(request.LedgerSpecifier)
-	if selErr != nil {
-		return nil, selErr
+	ledger, validated, lookupErr := LookupLedger(ctx, params)
+	if lookupErr != nil {
+		return nil, lookupErr
+	}
+	ledgerIndex := strconv.FormatUint(uint64(ledger.Sequence()), 10)
+	ledgerFields := ledgerEntryResponseFields(ledger, validated)
+	if !types.IsValidClassicAddress(account) {
+		return nil, types.RpcErrorActMalformed("Account malformed.").WithExtra(ledgerFields)
 	}
 
 	// Get account currencies from the ledger service
 	result, err := ctx.Services.Ledger.GetAccountCurrencies(
 		ctx.Context,
-		request.Account,
+		account,
 		ledgerIndex,
 	)
 	if err != nil {
@@ -46,7 +60,7 @@ func (m *AccountCurrenciesMethod) Handle(ctx *types.RpcContext, params json.RawM
 			return nil, rerr
 		}
 		if errors.Is(err, svcerr.ErrAccountNotFound) {
-			return nil, types.RpcErrorActNotFound("Account not found.")
+			return nil, types.RpcErrorActNotFound("Account not found.").WithExtra(ledgerFields)
 		}
 		if errors.Is(err, svcerr.ErrAccountMalformed) {
 			return nil, types.RpcErrorActMalformed("Account malformed.")
@@ -55,13 +69,9 @@ func (m *AccountCurrenciesMethod) Handle(ctx *types.RpcContext, params json.RawM
 	}
 
 	// Build response
-	response := map[string]any{
-		"ledger_hash":        FormatLedgerHash(result.LedgerHash),
-		"ledger_index":       result.LedgerIndex,
-		"receive_currencies": result.ReceiveCurrencies,
-		"send_currencies":    result.SendCurrencies,
-		"validated":          result.Validated,
-	}
+	response := ledgerFields
+	response["receive_currencies"] = result.ReceiveCurrencies
+	response["send_currencies"] = result.SendCurrencies
 
 	return response, nil
 }

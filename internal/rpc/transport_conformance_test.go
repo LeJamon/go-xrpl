@@ -227,7 +227,7 @@ func TestHTTPRipplerpcV2SparseErrorFields(t *testing.T) {
 		},
 		{
 			name:   "bare token",
-			rpcErr: types.RpcErrorEntryNotFound("Entry not found."),
+			rpcErr: types.RpcErrorEntryNotFoundBare("Entry not found."),
 			want:   "{\"error\":{\"code\":null,\"error\":\"entryNotFound\",\"error_code\":null,\"message\":null,\"status\":\"error\"},\"id\":9,\"ripplerpc\":\"2.0\"}\n\r\n",
 		},
 	}

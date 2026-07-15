@@ -4,7 +4,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/LeJamon/go-xrpl/crypto/common"
+	"github.com/LeJamon/go-xrpl/crypto/sha512half"
 	"github.com/LeJamon/go-xrpl/internal/ledger"
 	"github.com/LeJamon/go-xrpl/internal/ledger/header"
 	"github.com/LeJamon/go-xrpl/internal/peermanagement/message"
@@ -102,7 +102,12 @@ func TestReplayDelta_Apply_OrderedByIndex(t *testing.T) {
 	rd := NewReplayDelta([32]byte{}, 7, parent, nil)
 	rd.mu.Lock()
 	rd.state = StateComplete
-	rd.result = ledger.NewFromHeader(resHdr, nil, nil, parent.GetFees())
+	stateMap, err := parent.StateMapSnapshot()
+	require.NoError(t, err)
+	txMap, err := parent.TxMapSnapshot()
+	require.NoError(t, err)
+	rd.result, err = ledger.NewFromHeader(resHdr, stateMap, txMap, parent.GetFees())
+	require.NoError(t, err)
 	// Purposely-malformed TxBytes — distinguishable per index so the
 	// returned error tells us which tx Apply tried first.
 	rd.txs = []DecodedTx{
@@ -112,7 +117,7 @@ func TestReplayDelta_Apply_OrderedByIndex(t *testing.T) {
 	}
 	rd.mu.Unlock()
 
-	_, err := rd.Apply(tx.EngineConfig{})
+	_, err = rd.Apply(tx.EngineConfig{})
 	require.Error(t, err)
 	// Apply should have hit the index=0 (Hash 0xA0...) tx first; its
 	// 8-byte hash prefix is a0000000_00000000.
@@ -180,5 +185,5 @@ func TestReplayDelta_Apply_BeforeComplete(t *testing.T) {
 // SHA-512/256). The test uses this to forge a self-consistent
 // header after tampering with one of the fields.
 func computeWireHeaderHash(headerBytes []byte) [32]byte {
-	return common.Sha512Half(protocol.HashPrefixLedgerMaster.Bytes(), headerBytes)
+	return sha512half.Sum(protocol.HashPrefixLedgerMaster().Bytes(), headerBytes)
 }

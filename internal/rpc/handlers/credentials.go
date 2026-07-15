@@ -2,186 +2,164 @@ package handlers
 
 import (
 	"encoding/hex"
-	"strings"
+	"encoding/json"
 
 	addresscodec "github.com/LeJamon/go-xrpl/codec/addresscodec"
-	"github.com/LeJamon/go-xrpl/crypto/common"
 	"github.com/LeJamon/go-xrpl/crypto/ed25519"
+	"github.com/LeJamon/go-xrpl/crypto/rfc1751"
 	"github.com/LeJamon/go-xrpl/crypto/secp256k1"
+	"github.com/LeJamon/go-xrpl/crypto/sha512half"
 	"github.com/LeJamon/go-xrpl/internal/rpc/types"
 )
 
-// parseCredentialsAndDeriveKeypair parses credential parameters and derives a keypair.
-// This matches rippled's keypairForSignature function exactly.
-//
-// It validates that exactly one credential source is provided (secret, seed, seed_hex,
-// or passphrase), enforces that "secret" cannot be combined with key_type, and derives
-// the keypair using the appropriate algorithm.
-func parseCredentialsAndDeriveKeypair(secret, seed, seedHex, passphrase, keyType string, apiVersion int) (privateKeyHex string, publicKeyHex string, rpcErr *types.RpcError) {
-	hasKeyType := keyType != ""
+func parseCredentialsAndDeriveKeypair(apiVersion int, params json.RawMessage) (privateKeyHex, publicKeyHex, keyType string, rpcErr *types.RpcError) {
+	var fields map[string]json.RawMessage
+	_ = json.Unmarshal(params, &fields)
 
-	// Count how many secret types are provided
-	// rippled: static char const* const secretTypes[]{ jss::passphrase.c_str(), jss::secret.c_str(), jss::seed.c_str(), jss::seed_hex.c_str() };
-	secretCount := 0
-	var secretType string
-	var secretValue string
-
-	if passphrase != "" {
-		secretCount++
-		secretType = "passphrase"
-		secretValue = passphrase
-	}
-	if secret != "" {
-		secretCount++
-		secretType = "secret"
-		secretValue = secret
-	}
-	if seed != "" {
-		secretCount++
-		secretType = "seed"
-		secretValue = seed
-	}
-	if seedHex != "" {
-		secretCount++
-		secretType = "seed_hex"
-		secretValue = seedHex
-	}
-
-	// rippled: if (count == 0 || secretType == nullptr) { error = RPC::missing_field_error(jss::secret); return {}; }
-	if secretCount == 0 {
-		return "", "", &types.RpcError{
-			Code:        types.RpcINVALID_PARAMS,
-			ErrorString: "invalidParams",
-			Type:        "invalidParams",
-			Message:     "Missing field 'secret'.",
+	secretType := ""
+	count := 0
+	for _, name := range []string{"passphrase", "secret", "seed", "seed_hex"} {
+		if _, ok := fields[name]; ok {
+			count++
+			secretType = name
 		}
 	}
-
-	// rippled: if (count > 1) { error = RPC::make_param_error("Exactly one of the following must be specified: ..."); return {}; }
-	if secretCount > 1 {
-		return "", "", &types.RpcError{
-			Code:        types.RpcINVALID_PARAMS,
-			ErrorString: "invalidParams",
-			Type:        "invalidParams",
-			Message:     "Exactly one of the following must be specified: passphrase, secret, seed or seed_hex",
-		}
+	if count == 0 {
+		return "", "", "", types.RpcErrorMissingField("secret")
+	}
+	if count > 1 {
+		return "", "", "", types.RpcErrorInvalidParams("Exactly one of the following must be specified: passphrase, secret, seed or seed_hex")
 	}
 
-	// Determine key type
-	// rippled: if (has_key_type) { ... if (!keyType) { error = RPC::make_error(rpcBAD_KEY_TYPE); ... } }
-	var useEd25519 bool
+	keyTypeRaw, hasKeyType := fields["key_type"]
 	if hasKeyType {
-		switch strings.ToLower(keyType) {
-		case "secp256k1":
-			useEd25519 = false
-		case "ed25519":
-			useEd25519 = true
+		var value string
+		if err := json.Unmarshal(keyTypeRaw, &value); err != nil || isJSONNull(keyTypeRaw) {
+			return "", "", "", types.RpcErrorExpectedField("key_type", "string")
+		}
+		switch value {
+		case "secp256k1", "ed25519":
+			keyType = value
 		default:
 			if apiVersion > 1 {
-				return "", "", &types.RpcError{
-					Code:        types.RpcBAD_KEY_TYPE,
-					ErrorString: "badKeyType",
-					Type:        "badKeyType",
-					Message:     "Bad key type.",
+				return "", "", "", types.RpcErrorBadKeyType("Bad key type.")
+			}
+			return "", "", "", types.RpcErrorInvalidField("key_type")
+		}
+		if secretType == "secret" {
+			return "", "", "", types.RpcErrorInvalidParams("The secret field is not allowed if key_type is used.")
+		}
+	}
+
+	var seedBytes []byte
+	if secretType != "seed_hex" {
+		if value, ok := rawString(fields[secretType]); ok {
+			if decoded, algorithm, err := addresscodec.DecodeSeed(value); err == nil {
+				if _, isEd := algorithm.(ed25519.Algorithm); isEd {
+					if hasKeyType && keyType != "ed25519" {
+						return "", "", "", types.NewRpcError(types.RpcBAD_SEED, "badSeed", "badSeed", "Specified seed is for an Ed25519 wallet.")
+					}
+					seedBytes = decoded
+					keyType = "ed25519"
 				}
 			}
-			return "", "", &types.RpcError{
-				Code:        types.RpcINVALID_PARAMS,
-				ErrorString: "invalidParams",
-				Type:        "invalidParams",
-				Message:     "Invalid field 'key_type'.",
-			}
-		}
-
-		// rippled: if (strcmp(secretType, jss::secret.c_str()) == 0) { error = RPC::make_param_error("The secret field is not allowed if key_type is used."); return {}; }
-		if secretType == "secret" {
-			return "", "", &types.RpcError{
-				Code:        types.RpcINVALID_PARAMS,
-				ErrorString: "invalidParams",
-				Type:        "invalidParams",
-				Message:     "The secret field is not allowed if key_type is used.",
-			}
 		}
 	}
+	if keyType == "" {
+		keyType = "secp256k1"
+	}
 
-	// Parse the seed value
-	var seedBytes []byte
-	var err error
-
-	switch secretType {
-	case "seed":
-		// Base58 encoded seed (starts with 's')
-		// Use DecodeSeed which returns the seed bytes and algorithm
-		var algo any
-		seedBytes, algo, err = addresscodec.DecodeSeed(secretValue)
-		if err != nil {
-			return "", "", &types.RpcError{
-				Code:        types.RpcBAD_SEED,
-				ErrorString: "badSeed",
-				Type:        "badSeed",
-				Message:     "Disallowed seed.",
+	if seedBytes == nil {
+		if hasKeyType {
+			value, ok := rawString(fields[secretType])
+			if !ok {
+				return "", "", "", types.RpcErrorExpectedField(secretType, "string")
 			}
-		}
-		// If key_type not specified, use the algorithm from the seed
-		if !hasKeyType {
-			_, isEd := algo.(ed25519.ED25519CryptoAlgorithm)
-			useEd25519 = isEd
-		}
-
-	case "seed_hex":
-		// Hex-encoded 16-byte seed
-		seedBytes, err = hex.DecodeString(secretValue)
-		if err != nil || len(seedBytes) != 16 {
-			return "", "", &types.RpcError{
-				Code:        types.RpcBAD_SEED,
-				ErrorString: "badSeed",
-				Type:        "badSeed",
-				Message:     "Disallowed seed.",
+			var err error
+			switch secretType {
+			case "passphrase":
+				seedBytes = parseSigningGenericSeed(value)
+			case "seed":
+				seedBytes, _, err = addresscodec.DecodeSeed(value)
+				if err != nil {
+					seedBytes = nil
+				}
+			case "seed_hex":
+				seedBytes, err = hex.DecodeString(value)
+				if err != nil || len(seedBytes) != 16 {
+					seedBytes = nil
+				}
 			}
-		}
-
-	case "passphrase":
-		// SHA512-Half of the passphrase, take first 16 bytes
-		hash := common.Sha512Half([]byte(secretValue))
-		seedBytes = hash[:16]
-
-	case "secret":
-		// "secret" is the legacy field - can be a seed (base58), hex, or passphrase
-		// Try to parse as base58 seed first
-		var algo any
-		seedBytes, algo, err = addresscodec.DecodeSeed(secretValue)
-		if err == nil {
-			// Successfully parsed as base58 seed
-			_, isEd := algo.(ed25519.ED25519CryptoAlgorithm)
-			useEd25519 = isEd
+			if seedBytes == nil {
+				return "", "", "", types.RpcErrorBadSeed()
+			}
 		} else {
-			// Try as hex
-			seedBytes, err = hex.DecodeString(secretValue)
-			if err != nil || len(seedBytes) != 16 {
-				// Treat as passphrase
-				hash := common.Sha512Half([]byte(secretValue))
-				seedBytes = hash[:16]
+			value, ok := rawString(fields["secret"])
+			if !ok {
+				return "", "", "", types.RpcErrorExpectedField("secret", "string")
+			}
+			seedBytes = parseSigningGenericSeed(value)
+			if seedBytes == nil {
+				return "", "", "", invalidSeedField(secretType)
 			}
 		}
 	}
 
-	// Derive keypair using the appropriate algorithm
-	if useEd25519 {
-		algo := ed25519.ED25519()
-		privateKeyHex, publicKeyHex, err = algo.DeriveKeypair(seedBytes, false)
+	var err error
+	if keyType == "ed25519" {
+		privateKeyHex, publicKeyHex, err = (ed25519.Algorithm{}).DeriveKeypair(seedBytes, false)
 	} else {
-		algo := secp256k1.SECP256K1()
-		privateKeyHex, publicKeyHex, err = algo.DeriveKeypair(seedBytes, false)
+		privateKeyHex, publicKeyHex, err = (secp256k1.Algorithm{}).DeriveKeypair(seedBytes, false)
 	}
-
 	if err != nil {
-		return "", "", &types.RpcError{
-			Code:        types.RpcBAD_SEED,
-			ErrorString: "badSeed",
-			Type:        "badSeed",
-			Message:     "Disallowed seed.",
+		return "", "", "", types.RpcErrorBadSeed()
+	}
+	return privateKeyHex, publicKeyHex, keyType, nil
+}
+
+func rawString(raw json.RawMessage) (string, bool) {
+	var value string
+	if err := json.Unmarshal(raw, &value); err != nil || isJSONNull(raw) {
+		return "", false
+	}
+	return value, true
+}
+
+func parseSigningGenericSeed(value string) []byte {
+	if value == "" || isSeedToken(value) {
+		return nil
+	}
+	if seed, err := hex.DecodeString(value); err == nil && len(seed) == 16 {
+		return seed
+	}
+	if seed, _, err := addresscodec.DecodeSeed(value); err == nil {
+		return seed
+	}
+	if seed, err := rfc1751.EnglishToSeed(value); err == nil {
+		return seed
+	}
+	hash := sha512half.Sum([]byte(value))
+	return hash[:16]
+}
+
+func isSeedToken(value string) bool {
+	if addresscodec.IsValidClassicAddress(value) {
+		return true
+	}
+	if key, err := addresscodec.DecodeNodePublicKey(value); err == nil && len(key) == addresscodec.NodePublicKeyLength {
+		return true
+	}
+	if key, err := addresscodec.DecodeAccountPublicKey(value); err == nil && len(key) == addresscodec.AccountPublicKeyLength {
+		return true
+	}
+	for _, prefix := range []byte{addresscodec.NodePrivateKeyPrefix, addresscodec.AccountSecretKeyPrefix} {
+		if key, err := addresscodec.Decode(value, []byte{prefix}); err == nil && len(key) == 32 {
+			return true
 		}
 	}
+	return false
+}
 
-	return privateKeyHex, publicKeyHex, nil
+func invalidSeedField(field string) *types.RpcError {
+	return types.NewRpcError(types.RpcBAD_SEED, "badSeed", "badSeed", "Invalid field '"+field+"'.")
 }

@@ -653,6 +653,111 @@ func TestHandleEndpoints_Hops0RewrittenToSocketIP(t *testing.T) {
 	assert.Equal(t, uint32(0), o.discovery.peers["203.0.113.7:51235"].Hops)
 }
 
+// TestHandleEndpoints_VerifyOn_DropsNonPublic pins the rippled PeerFinder
+// is_valid_address filter (Logic.h) once verify_endpoints is on: only
+// publicly-routable, non-loopback, non-zero-port addresses reach
+// Discovery. The drop is silent (parsed fine, just not gossip-worthy).
+func TestHandleEndpoints_VerifyOn_DropsNonPublic(t *testing.T) {
+	o, peer := newEndpointsTestOverlay(t, PeerID(20))
+	o.cfg.VerifyEndpoints = true
+
+	payload := encodeEndpoints(t, 2, []message.Endpointv2{
+		{Endpoint: "10.0.0.1:51235", Hops: 1},    // RFC1918 → drop
+		{Endpoint: "127.0.0.1:51235", Hops: 1},   // loopback → drop
+		{Endpoint: "169.254.1.1:51235", Hops: 1}, // link-local → drop (3.1.3)
+		{Endpoint: "203.0.113.9:51235", Hops: 1}, // TEST-NET-3 → drop (3.1.3)
+		{Endpoint: "1.2.3.4:0", Hops: 1},         // port 0 → drop
+		{Endpoint: "8.8.8.8:51235", Hops: 1},     // public → keep
+	})
+	o.onMessageReceived(Event{
+		PeerID:      peer.ID(),
+		MessageType: uint16(message.TypeEndpoints),
+		Payload:     payload,
+	})
+
+	o.discovery.mu.RLock()
+	defer o.discovery.mu.RUnlock()
+	require.Len(t, o.discovery.peers, 1, "only the public address survives verification")
+	assert.Contains(t, o.discovery.peers, "8.8.8.8:51235")
+	assert.Zero(t, peer.BadDataCount(), "a non-public but well-formed address is a silent drop, not bad data")
+}
+
+// TestHandleEndpoints_VerifyOff_AcceptsNonPublic documents the
+// verify_endpoints = 0 escape hatch: on a local dev network, non-public
+// addresses are ingested unchanged.
+func TestHandleEndpoints_VerifyOff_AcceptsNonPublic(t *testing.T) {
+	o, peer := newEndpointsTestOverlay(t, PeerID(21))
+	o.cfg.VerifyEndpoints = false
+
+	payload := encodeEndpoints(t, 2, []message.Endpointv2{
+		{Endpoint: "10.0.0.1:51235", Hops: 1},
+		{Endpoint: "192.168.5.5:51235", Hops: 2},
+	})
+	o.onMessageReceived(Event{
+		PeerID:      peer.ID(),
+		MessageType: uint16(message.TypeEndpoints),
+		Payload:     payload,
+	})
+
+	o.discovery.mu.RLock()
+	defer o.discovery.mu.RUnlock()
+	require.Len(t, o.discovery.peers, 2, "verification off accepts private addresses")
+	assert.Contains(t, o.discovery.peers, "10.0.0.1:51235")
+	assert.Contains(t, o.discovery.peers, "192.168.5.5:51235")
+}
+
+// TestHandleEndpoints_VerifyOn_Hops0Validated verifies that the
+// is_valid_address check runs on the post-rewrite socket IP for a hops==0
+// entry: a peer behind a public socket is kept, one behind a private
+// socket is dropped (rippled validates ep.address after the rewrite).
+func TestHandleEndpoints_VerifyOn_Hops0Validated(t *testing.T) {
+	t.Run("public_socket_kept", func(t *testing.T) {
+		o, peer := newEndpointsTestOverlay(t, PeerID(22))
+		o.cfg.VerifyEndpoints = true
+		peer.conn = fakeAddrConn{remote: &net.TCPAddr{IP: net.ParseIP("5.6.7.8"), Port: 40000}}
+
+		payload := encodeEndpoints(t, 2, []message.Endpointv2{
+			{Endpoint: "192.168.1.1:51235", Hops: 0},
+		})
+		o.onMessageReceived(Event{
+			PeerID:      peer.ID(),
+			MessageType: uint16(message.TypeEndpoints),
+			Payload:     payload,
+		})
+
+		o.discovery.mu.RLock()
+		defer o.discovery.mu.RUnlock()
+		require.Len(t, o.discovery.peers, 1)
+		assert.Contains(t, o.discovery.peers, "5.6.7.8:51235")
+	})
+
+	t.Run("private_socket_dropped", func(t *testing.T) {
+		o, peer := newEndpointsTestOverlay(t, PeerID(23))
+		o.cfg.VerifyEndpoints = true
+		peer.conn = fakeAddrConn{remote: &net.TCPAddr{IP: net.ParseIP("10.0.0.5"), Port: 40000}}
+
+		payload := encodeEndpoints(t, 2, []message.Endpointv2{
+			{Endpoint: "1.2.3.4:51235", Hops: 0},
+		})
+		o.onMessageReceived(Event{
+			PeerID:      peer.ID(),
+			MessageType: uint16(message.TypeEndpoints),
+			Payload:     payload,
+		})
+
+		o.discovery.mu.RLock()
+		defer o.discovery.mu.RUnlock()
+		assert.Empty(t, o.discovery.peers, "hops==0 behind a private socket is dropped")
+	})
+}
+
+// TestDefaultConfig_VerifyEndpointsOn pins the rippled default: endpoint
+// verification is on unless explicitly disabled.
+func TestDefaultConfig_VerifyEndpointsOn(t *testing.T) {
+	assert.True(t, DefaultConfig().VerifyEndpoints,
+		"endpoint verification must default on")
+}
+
 // TestHandleEndpoints_DropsNonConvergedPeer pins PeerImp.cpp:1201: a peer
 // that has not reached tracking-converged must not be allowed to seed
 // Discovery, and is not charged for it.

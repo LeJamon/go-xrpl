@@ -107,13 +107,26 @@ func TestTrustSetValidation(t *testing.T) {
 		},
 
 		{
-			name: "trust line to self - should fail",
+			// Self-issuer (temDST_IS_SRC) is a ledger-stage preclaim check in
+			// rippled, not a preflight one, so Validate() must accept it here; the
+			// rejection is exercised at the integration layer.
+			name: "trust line to self - passes preflight",
 			trustSet: &TrustSet{
 				BaseTx:      *tx.NewBaseTx(tx.TypeTrustSet, "rAlice"),
 				LimitAmount: tx.NewIssuedAmountFromFloat64(100, "USD", "rAlice"),
 			},
+			expectError: false,
+		},
+		{
+			// isLegalNet: a native limit above the total XRP supply is temBAD_AMOUNT,
+			// ahead of the native -> temBAD_LIMIT rejection.
+			name: "native limit above max drops - temBAD_AMOUNT",
+			trustSet: &TrustSet{
+				BaseTx:      *tx.NewBaseTx(tx.TypeTrustSet, "rAlice"),
+				LimitAmount: tx.NewXRPAmount(200_000_000_000_000_000),
+			},
 			expectError: true,
-			errorMsg:    "temDST_IS_SRC: cannot create trust line to self",
+			errorMsg:    "temBAD_AMOUNT: limit amount exceeds maximum",
 		},
 
 		{
@@ -650,11 +663,12 @@ func TestTrustSetIssuerValidation(t *testing.T) {
 			expectError: false,
 		},
 		{
-			name:        "same account and issuer - should fail",
+			// Self-issuer is a ledger-stage preclaim check (temDST_IS_SRC), not a
+			// preflight one, so Validate() accepts it.
+			name:        "same account and issuer - passes preflight",
 			account:     "rAlice",
 			issuer:      "rAlice",
-			expectError: true,
-			errorMsg:    "temDST_IS_SRC: cannot create trust line to self",
+			expectError: false,
 		},
 		{
 			name:        "empty issuer - should fail",

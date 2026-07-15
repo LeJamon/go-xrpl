@@ -130,7 +130,6 @@ const (
 	TecLIMIT_EXCEEDED                     Result = 195
 	TecPSEUDO_ACCOUNT                     Result = 196
 	TecPRECISION_LOSS                     Result = 197
-	TecNO_DELEGATE_PERMISSION             Result = 198
 
 	// tefFAILURE and related codes (-199 to -100)
 	// Transaction failed, fee claimed but tx not applied
@@ -229,23 +228,26 @@ const (
 	TemARRAY_TOO_LARGE                             Result = -252
 	TemBAD_TRANSFER_FEE                            Result = -251
 	TemINVALID_INNER_BATCH                         Result = -250
+	TemBAD_MPT                                     Result = -249
 
 	// terRETRY and related codes (-99 to -1)
 	// Retry later
-	TerRETRY             Result = -99
-	TerFUNDS_SPENT       Result = -98
-	TerINSUF_FEE_B       Result = -97
-	TerNO_ACCOUNT        Result = -96
-	TerNO_AUTH           Result = -95
-	TerNO_LINE           Result = -94
-	TerOWNERS            Result = -93
-	TerPRE_SEQ           Result = -92
-	TerLAST              Result = -91
-	TerNO_RIPPLE         Result = -90
-	TerQUEUED            Result = -89
-	TerPRE_TICKET        Result = -88
-	TerNO_AMM            Result = -87
-	TerADDRESS_COLLISION Result = -86
+	TerRETRY                  Result = -99
+	TerFUNDS_SPENT            Result = -98
+	TerINSUF_FEE_B            Result = -97
+	TerNO_ACCOUNT             Result = -96
+	TerNO_AUTH                Result = -95
+	TerNO_LINE                Result = -94
+	TerOWNERS                 Result = -93
+	TerPRE_SEQ                Result = -92
+	TerLAST                   Result = -91
+	TerNO_RIPPLE              Result = -90
+	TerQUEUED                 Result = -89
+	TerPRE_TICKET             Result = -88
+	TerNO_AMM                 Result = -87
+	TerADDRESS_COLLISION      Result = -86
+	TerNO_DELEGATE_PERMISSION Result = -85
+	TerLOCKED                 Result = -84
 )
 
 // resultNames maps every Result code to its canonical rippled string.
@@ -339,7 +341,6 @@ var resultNames = map[Result]string{ //nolint:gosec // G101: TER result-code nam
 	TecLIMIT_EXCEEDED:                     "tecLIMIT_EXCEEDED",
 	TecPSEUDO_ACCOUNT:                     "tecPSEUDO_ACCOUNT",
 	TecPRECISION_LOSS:                     "tecPRECISION_LOSS",
-	TecNO_DELEGATE_PERMISSION:             "tecNO_DELEGATE_PERMISSION",
 	TefFAILURE:                            "tefFAILURE",
 	TefALREADY:                            "tefALREADY",
 	TefBAD_ADD_AUTH:                       "tefBAD_ADD_AUTH",
@@ -429,6 +430,7 @@ var resultNames = map[Result]string{ //nolint:gosec // G101: TER result-code nam
 	TemARRAY_TOO_LARGE:                             "temARRAY_TOO_LARGE",
 	TemBAD_TRANSFER_FEE:                            "temBAD_TRANSFER_FEE",
 	TemINVALID_INNER_BATCH:                         "temINVALID_INNER_BATCH",
+	TemBAD_MPT:                                     "temBAD_MPT",
 	TerRETRY:                                       "terRETRY",
 	TerFUNDS_SPENT:                                 "terFUNDS_SPENT",
 	TerINSUF_FEE_B:                                 "terINSUF_FEE_B",
@@ -443,6 +445,8 @@ var resultNames = map[Result]string{ //nolint:gosec // G101: TER result-code nam
 	TerPRE_TICKET:                                  "terPRE_TICKET",
 	TerNO_AMM:                                      "terNO_AMM",
 	TerADDRESS_COLLISION:                           "terADDRESS_COLLISION",
+	TerNO_DELEGATE_PERMISSION:                      "terNO_DELEGATE_PERMISSION",
+	TerLOCKED:                                      "terLOCKED",
 }
 
 // String returns the canonical rippled name for this result code, or "-" for
@@ -597,7 +601,6 @@ var resultMessages = map[Result]string{ //nolint:gosec // G101: TER result-code 
 	TecLIMIT_EXCEEDED:                     "Limit exceeded.",
 	TecPSEUDO_ACCOUNT:                     "This operation is not allowed against a pseudo-account.",
 	TecPRECISION_LOSS:                     "The amounts used by the transaction cannot interact.",
-	TecNO_DELEGATE_PERMISSION:             "Delegated account lacks permission to perform this transaction.",
 	TefALREADY:                            "The exact transaction was already in this ledger.",
 	TefBAD_ADD_AUTH:                       "Not authorized to add account.",
 	TefBAD_AUTH:                           "Transaction's public key is not authorized.",
@@ -687,6 +690,7 @@ var resultMessages = map[Result]string{ //nolint:gosec // G101: TER result-code 
 	TemARRAY_TOO_LARGE:                             "Malformed: Array is too large.",
 	TemBAD_TRANSFER_FEE:                            "Malformed: Transfer fee is outside valid range.",
 	TemINVALID_INNER_BATCH:                         "Malformed: Invalid inner batch transaction.",
+	TemBAD_MPT:                                     "Malformed: Bad MPT.",
 	TerRETRY:                                       "Retry transaction.",
 	TerFUNDS_SPENT:                                 "DEPRECATED.",
 	TerINSUF_FEE_B:                                 "Account balance can't pay fee.",
@@ -701,5 +705,7 @@ var resultMessages = map[Result]string{ //nolint:gosec // G101: TER result-code 
 	TerPRE_TICKET:                                  "Ticket is not yet in ledger.",
 	TerNO_AMM:                                      "AMM doesn't exist for the asset pair.",
 	TerADDRESS_COLLISION:                           "Failed to allocate an unique account address.",
+	TerNO_DELEGATE_PERMISSION:                      "Delegated account lacks permission to perform this transaction.",
+	TerLOCKED:                                      "Fund is locked.",
 	TesSUCCESS:                                     "The transaction was applied. Only final in a validated ledger.",
 }

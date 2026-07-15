@@ -47,7 +47,8 @@ func TestHTTPAdminDenialReturns403(t *testing.T) {
 
 	t.Run("admin caller is allowed", func(t *testing.T) {
 		req := httptest.NewRequest("POST", "/", strings.NewReader(`{"method":"stop","params":[{}]}`))
-		req.RemoteAddr = "127.0.0.1:1234" // localhost fallback → RoleAdmin
+		req.RemoteAddr = "127.0.0.1:1234"
+		req = withLoopbackAdmin(req)
 		rr := httptest.NewRecorder()
 		srv.ServeHTTP(rr, req)
 
@@ -56,6 +57,18 @@ func TestHTTPAdminDenialReturns403(t *testing.T) {
 		}
 		if result := decodeEnvelope(t, rr.Body.Bytes()); result["status"] != "success" {
 			t.Fatalf("admin caller: status = %v, want success", result["status"])
+		}
+	})
+
+	t.Run("localhost on public port is forbidden", func(t *testing.T) {
+		req := httptest.NewRequest("POST", "/", strings.NewReader(`{"method":"stop","params":[{}]}`))
+		req.RemoteAddr = "127.0.0.1:1234"
+		req = req.WithContext(WithPortContext(req.Context(), &PortContext{}))
+		rr := httptest.NewRecorder()
+		srv.ServeHTTP(rr, req)
+
+		if rr.Code != http.StatusForbidden {
+			t.Fatalf("expected 403 for a loopback proxy on a public port, got %d\nbody: %s", rr.Code, rr.Body.String())
 		}
 	})
 }
@@ -81,6 +94,7 @@ func TestHTTPAdminDenialChargesFeeMalformed(t *testing.T) {
 	// An admin caller is unlimited and accrues nothing.
 	req = httptest.NewRequest("POST", "/", strings.NewReader(`{"method":"stop","params":[{}]}`))
 	req.RemoteAddr = "127.0.0.1:5555"
+	req = withLoopbackAdmin(req)
 	srv.ServeHTTP(httptest.NewRecorder(), req)
 	if got := srv.loadTracker.Balance("127.0.0.1"); got != 0 {
 		t.Fatalf("admin caller charged %v, want 0 (unlimited)", got)
@@ -152,8 +166,7 @@ func TestHTTPBatchAdminDenialForbidden(t *testing.T) {
 // TestWSAdminDenialForbidden confirms the WebSocket admin-denial against rippled:
 // requestRole → Role::FORBID → rpcError(rpcFORBIDDEN) (ServerHandler.cpp:482-486),
 // i.e. the "forbidden" token with code 3. A non-admin role is forced by
-// configuring AdminNets that exclude the loopback test peer, disabling the
-// localhost-admin fallback.
+// configuring AdminNets that exclude the loopback test peer.
 func TestWSAdminDenialForbidden(t *testing.T) {
 	ws := NewWebSocketServer(2*time.Second, nil)
 	ws.methodRegistry.Register("stop", &stubHandler{role: types.RoleAdmin})

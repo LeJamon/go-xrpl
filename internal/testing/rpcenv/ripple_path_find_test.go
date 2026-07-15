@@ -270,6 +270,15 @@ func TestRipplePathFind_ParseErrors(t *testing.T) {
 	})
 	require.Nil(t, rpcErr)
 	require.NotNil(t, result)
+
+	result, rpcErr = env.RPC("ripple_path_find", map[string]any{
+		"source_account":      alice.Address,
+		"destination_account": bob.Address,
+		"destination_amount":  usd5,
+		"domain":              "0",
+	})
+	require.Nil(t, rpcErr)
+	require.NotNil(t, result)
 }
 
 // TestRipplePathFind_LedgerChecks covers PathRequest::isValid: source must
@@ -522,16 +531,20 @@ func TestRipplePathFind_NonCanonicalAmountForms(t *testing.T) {
 		require.Equal(t, "dstAmtMalformed", rpcErr.ErrorString)
 	})
 
-	t.Run("MPT destination_amount rejected", func(t *testing.T) {
-		_, rpcErr := env.RPC("ripple_path_find", map[string]any{
+	t.Run("MPT destination_amount accepted", func(t *testing.T) {
+		const issuanceID = "00000001B5F762798A53D543A014CAF8B297CFF8F2F937E8"
+		result, rpcErr := env.RPC("ripple_path_find", map[string]any{
 			"source_account":      alice.Address,
 			"destination_account": bob.Address,
 			"destination_amount": map[string]any{
-				"mpt_issuance_id": "00000001B5F762798A53D543A014CAF8B297CFF8F2F937E8",
+				"mpt_issuance_id": issuanceID,
 				"value":           "5",
 			},
 		})
-		require.NotNil(t, rpcErr)
-		require.Equal(t, "dstAmtMalformed", rpcErr.ErrorString)
+		require.Nil(t, rpcErr)
+		resp := asJSONMap(t, result)
+		amount := resp["destination_amount"].(map[string]any)
+		require.Equal(t, issuanceID, amount["mpt_issuance_id"])
+		require.Equal(t, "5", amount["value"])
 	})
 }

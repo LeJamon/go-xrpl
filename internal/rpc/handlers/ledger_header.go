@@ -1,15 +1,14 @@
 package handlers
 
 import (
-	"encoding/binary"
 	"encoding/hex"
 	"encoding/json"
-	"fmt"
 	"strconv"
 	"strings"
-	"time"
 
+	ledgerheader "github.com/LeJamon/go-xrpl/internal/ledger/header"
 	"github.com/LeJamon/go-xrpl/internal/rpc/types"
+	"github.com/LeJamon/go-xrpl/protocol"
 )
 
 // LedgerHeaderMethod handles the ledger_header RPC method.
@@ -19,23 +18,20 @@ import (
 // Reference: rippled/src/xrpld/rpc/handlers/LedgerHeader.cpp
 // doLedgerHeader calls lookupLedger, serializes the header via addRaw,
 // and returns both ledger_data (binary hex) and a ledger JSON object.
-type LedgerHeaderMethod struct{}
+type LedgerHeaderMethod struct{ BaseHandler }
 
 func (m *LedgerHeaderMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (any, *types.RpcError) {
 	var request struct {
-		types.LedgerSpecifier
 	}
 
-	if params != nil {
-		if err := json.Unmarshal(params, &request); err != nil {
-			return nil, types.RpcErrorInvalidParams(fmt.Sprintf("Invalid parameters: %v", err))
-		}
+	if err := ParseParams(params, &request); err != nil {
+		return nil, err
 	}
 
 	// Resolve the target ledger through the shared lookup (rippled
 	// RPC::lookupLedger): defaults to current, threads ledger_hash, and emits
 	// rippled's ledgerHashMalformed / ledgerIndexMalformed / ledgerNotFound.
-	targetLedger, validated, lerr := LookupLedger(ctx, request.LedgerSpecifier)
+	targetLedger, validated, lerr := LookupLedger(ctx, params)
 	if lerr != nil {
 		return nil, lerr
 	}
@@ -60,7 +56,17 @@ func (m *LedgerHeaderMethod) Handle(ctx *types.RpcContext, params json.RawMessag
 	//   uint32 seq, uint64 drops, hash256 parentHash, hash256 txHash,
 	//   hash256 accountHash, uint32 parentCloseTime, uint32 closeTime,
 	//   uint8 closeTimeResolution, uint8 closeFlags
-	ledgerData := serializeLedgerHeader(targetLedger)
+	ledgerData := ledgerheader.AddRaw(ledgerheader.LedgerHeader{
+		LedgerIndex:         targetLedger.Sequence(),
+		ParentCloseTime:     protocol.FromRippleTime(uint32(max(targetLedger.ParentCloseTime(), 0))),
+		ParentHash:          targetLedger.ParentHash(),
+		TxHash:              targetLedger.TxMapHash(),
+		AccountHash:         targetLedger.StateMapHash(),
+		Drops:               targetLedger.TotalDrops(),
+		CloseFlags:          targetLedger.CloseFlags(),
+		CloseTimeResolution: targetLedger.CloseTimeResolution(),
+		CloseTime:           protocol.FromRippleTime(uint32(max(targetLedger.CloseTime(), 0))),
+	}, false)
 	response["ledger_data"] = strings.ToUpper(hex.EncodeToString(ledgerData))
 
 	// Build the nested "ledger" JSON object (equivalent to addJson with options=0).
@@ -69,65 +75,6 @@ func (m *LedgerHeaderMethod) Handle(ctx *types.RpcContext, params json.RawMessag
 	response["ledger"] = ledgerObj
 
 	return response, nil
-}
-
-// serializeLedgerHeader serializes a ledger header to binary in rippled's addRaw format.
-// This matches rippled/src/libxrpl/protocol/LedgerHeader.cpp addRaw(info, s, false).
-// Field layout (big-endian):
-//
-//	 4B  seq (uint32)
-//	 8B  drops (uint64)
-//	32B  parentHash
-//	32B  txHash
-//	32B  accountHash
-//	 4B  parentCloseTime (uint32, ripple epoch seconds)
-//	 4B  closeTime (uint32, ripple epoch seconds)
-//	 1B  closeTimeResolution (uint8)
-//	 1B  closeFlags (uint8)
-//
-// Total: 118 bytes
-func serializeLedgerHeader(lr types.LedgerReader) []byte {
-	buf := make([]byte, 0, 118)
-
-	// seq
-	var tmp4 [4]byte
-	binary.BigEndian.PutUint32(tmp4[:], lr.Sequence())
-	buf = append(buf, tmp4[:]...)
-
-	// drops
-	var tmp8 [8]byte
-	binary.BigEndian.PutUint64(tmp8[:], lr.TotalDrops())
-	buf = append(buf, tmp8[:]...)
-
-	// parentHash
-	parentHash := lr.ParentHash()
-	buf = append(buf, parentHash[:]...)
-
-	// txHash
-	txHash := lr.TxMapHash()
-	buf = append(buf, txHash[:]...)
-
-	// accountHash
-	stateHash := lr.StateMapHash()
-	buf = append(buf, stateHash[:]...)
-
-	// parentCloseTime (uint32, ripple epoch seconds)
-	pct := max(lr.ParentCloseTime(), 0)
-	binary.BigEndian.PutUint32(tmp4[:], uint32(pct))
-	buf = append(buf, tmp4[:]...)
-
-	// closeTime (uint32, ripple epoch seconds)
-	ct := max(lr.CloseTime(), 0)
-	binary.BigEndian.PutUint32(tmp4[:], uint32(ct))
-	buf = append(buf, tmp4[:]...)
-
-	// closeTimeResolution (uint8) - rippled stores this as 1 byte
-	buf = append(buf, uint8(lr.CloseTimeResolution()))
-
-	// closeFlags (uint8)
-	buf = append(buf, lr.CloseFlags())
-
-	return buf
 }
 
 // buildLedgerHeaderJSON builds the "ledger" JSON object matching rippled's
@@ -178,9 +125,9 @@ func buildLedgerSummaryJSON(lr types.LedgerReader, closed bool, apiVersion int) 
 
 	// close_time_human and close_time_iso only when closeTime > 0
 	if ct > 0 {
-		closeTimeUTC := rippleEpochTime.Add(time.Duration(ct) * time.Second)
-		ledgerObj["close_time_human"] = closeTimeUTC.UTC().Format("2006-Jan-02 15:04:05.000000000 UTC")
-		ledgerObj["close_time_iso"] = closeTimeUTC.UTC().Format(time.RFC3339)
+		closeTimeUTC := protocol.FromRippleTime(uint32(ct))
+		ledgerObj["close_time_human"] = closeTimeUTC.Format("2006-Jan-02 15:04:05.000000000 UTC")
+		ledgerObj["close_time_iso"] = protocol.FormatCloseTimeISO(closeTimeUTC)
 
 		// close_time_estimated only when there was no consensus on close time
 		if (lr.CloseFlags() & 0x01) != 0 {
@@ -191,14 +138,6 @@ func buildLedgerSummaryJSON(lr types.LedgerReader, closed bool, apiVersion int) 
 	return ledgerObj
 }
 
-func (m *LedgerHeaderMethod) RequiredRole() types.Role {
-	return types.RoleGuest
-}
-
 func (m *LedgerHeaderMethod) SupportedApiVersions() []int {
 	return []int{types.ApiVersion1}
-}
-
-func (m *LedgerHeaderMethod) RequiredCondition() types.Condition {
-	return types.NoCondition
 }

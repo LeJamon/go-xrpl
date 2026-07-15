@@ -58,7 +58,7 @@ func RegisterAll(registry *types.MethodRegistry) {
 	registry.Register("channel_authorize", &ChannelAuthorizeMethod{})
 	registry.Register("channel_verify", &ChannelVerifyMethod{})
 
-	registry.Register("json", &JsonMethod{})
+	registry.Register("json", &JSONMethod{})
 
 	registry.Register("wallet_propose", &WalletProposeMethod{})
 	registry.Register("deposit_authorized", &DepositAuthorizedMethod{})

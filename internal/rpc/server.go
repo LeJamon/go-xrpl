@@ -32,6 +32,9 @@ import (
 // goxrpl and rippled reject the same oversized payloads on the wire.
 const MaxRequestBytes = 1_000_000
 
+// MaxBatchElements caps one batch envelope to prevent request amplification.
+const MaxBatchElements = 256
+
 const jsonContentType = "application/json; charset=UTF-8"
 
 // The size-only rippled rejection has no parser detail. Use that same fixed
@@ -226,7 +229,7 @@ func (s *Server) handleGetRequest(w http.ResponseWriter, r *http.Request) {
 	peerIP := remoteAddrIP(r.RemoteAddr)
 	clientIP := resolveClientIP(r, portCtx)
 	user := userHeader(r)
-	role := roleForRequest(peerIP, user, portCtx)
+	role := roleForRequest(peerIP, user, nil, portCtx)
 	dispatchCtx, cancel := s.withTimeout(r.Context())
 	defer cancel()
 	ctx := newRpcContext(dispatchCtx, role, types.DefaultApiVersion, clientIP, s.loadPeerSource(), s.services)
@@ -282,11 +285,10 @@ func (s *Server) handlePostRequest(w http.ResponseWriter, r *http.Request) {
 	user := userHeader(r)
 	// Role is derived from the socket-level peer, not header-supplied IPs,
 	// so an X-Real-IP / X-Forwarded-For header from an untrusted client
-	// can't elevate to admin via the localhost fallback. Matches rippled's
+	// can't elevate the caller to admin. Matches rippled's
 	// requestRole, which uses the connection's remote endpoint. The role and
-	// client IP come from the connection, not request content, so they are
-	// shared across every element of a batch.
-	role := roleForRequest(peerIP, user, portCtx)
+	// client IP are anchored to the connection; each batch element still
+	// supplies its own configured admin credentials.
 	dispatchCtx, cancel := s.withTimeout(r.Context())
 	defer cancel()
 
@@ -305,8 +307,15 @@ func (s *Server) handlePostRequest(w http.ResponseWriter, r *http.Request) {
 			writePlainHTTPError(w, http.StatusBadRequest, "Malformed batch request")
 			return
 		}
+		// Defensive cap (go-xrpl superset of rippled): reject an oversized batch
+		// whole rather than amplifying one request into hundreds of ledger reads.
+		if len(elements) > MaxBatchElements {
+			http.Error(w, "Malformed batch request", http.StatusBadRequest)
+			return
+		}
 		replies := make([]map[string]any, len(elements))
 		for i, el := range elements {
+			role := roleForRequest(peerIP, user, roleParamsFromBatchElement(el), portCtx)
 			replies[i] = s.dispatchBatchElement(el, dispatchCtx, role, clientIP)
 		}
 		w.Header().Set("Content-Type", jsonContentType)
@@ -317,6 +326,7 @@ func (s *Server) handlePostRequest(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	role := roleForRequest(peerIP, user, roleParamsFromRawParams(request.Params), portCtx)
 	apiVersion := types.DefaultApiVersion
 	if version, present := apiVersionFromSingleParams(request.Params); present {
 		apiVersion = version
@@ -785,6 +795,8 @@ var credentialKeys = []string{
 	"password",
 	"url_password",
 	"urlpassword",
+	"admin_user",
+	"adminuser",
 	"admin_password",
 	"adminpassword",
 }
@@ -1262,6 +1274,7 @@ func buildXrplResponseBody(request any, result any, rpcErr *types.RpcError, opts
 			"status": "error",
 			"error":  rpcErr.ErrorString,
 		}
+		maps.Copy(resultObj, rpcErr.Extra)
 		if rpcErr.ErrorException != "" {
 			resultObj["error_exception"] = rpcErr.ErrorException
 		} else if !rpcErr.IsBareToken() {
@@ -1405,37 +1418,24 @@ func (s *Server) ExecuteMethod(ctx *types.RpcContext, method string, params []by
 	return dispatchNestedMethod(s.registry, ctx, method, json.RawMessage(params), rpcLog())
 }
 
-// isLocalhost returns true if the IP address is a loopback address.
-// In standalone mode, connections from localhost are treated as Admin.
-// This is a simplified version of rippled's admin detection (see Role.cpp:isAdmin).
-func isLocalhost(ip string) bool {
-	return ip == "127.0.0.1" || ip == "::1"
-}
-
 // roleForRequest mirrors rippled's requestRole (Role.cpp:94-119):
-//   - peer ∈ AdminNets → RoleAdmin
+//   - peer ∈ AdminNets + valid configured credentials → RoleAdmin
 //   - peer ∈ SecureGatewayNets + non-empty user → RoleIdentified
 //   - peer ∈ SecureGatewayNets + empty user      → RoleProxy
 //   - else                                       → RoleGuest
 //
 // peerIP must be the actual TCP peer (from RemoteAddr), never a header-
-// supplied IP. user is the X-User header value if present.
-//
-// Fallback: when no AdminNets are configured (typically in unit tests or
-// standalone mode), localhost is treated as Admin so the legacy
-// single-process flows keep working.
-func roleForRequest(peerIP string, user string, portCtx *PortContext) types.Role {
-	if portCtx == nil || (len(portCtx.AdminNets) == 0 && len(portCtx.SecureGatewayNets) == 0) {
-		if isLocalhost(peerIP) {
-			return types.RoleAdmin
-		}
+// supplied IP. user is the X-User header value if present. params is the
+// request parameter object containing optional admin_user/admin_password fields.
+func roleForRequest(peerIP string, user string, params map[string]any, portCtx *PortContext) types.Role {
+	if portCtx == nil {
 		return types.RoleGuest
 	}
 	ip := net.ParseIP(peerIP)
 	if ip == nil {
 		return types.RoleGuest
 	}
-	if len(portCtx.AdminNets) > 0 && config.IPInNets(ip, portCtx.AdminNets) {
+	if len(portCtx.AdminNets) > 0 && config.IPInNets(ip, portCtx.AdminNets) && adminCredentialsMatch(params, portCtx) {
 		return types.RoleAdmin
 	}
 	if len(portCtx.SecureGatewayNets) > 0 && config.IPInNets(ip, portCtx.SecureGatewayNets) {
@@ -1445,6 +1445,37 @@ func roleForRequest(peerIP string, user string, portCtx *PortContext) types.Role
 		return types.RoleProxy
 	}
 	return types.RoleGuest
+}
+
+func adminCredentialsMatch(params map[string]any, portCtx *PortContext) bool {
+	if portCtx.AdminUser == "" && portCtx.AdminPassword == "" {
+		return true
+	}
+	user, userOK := params["admin_user"].(string)
+	password, passwordOK := params["admin_password"].(string)
+	return userOK && passwordOK && user == portCtx.AdminUser && password == portCtx.AdminPassword
+}
+
+func roleParamsFromRawParams(raw json.RawMessage) map[string]any {
+	var entries []json.RawMessage
+	if len(raw) == 0 || json.Unmarshal(raw, &entries) != nil || len(entries) == 0 {
+		return nil
+	}
+	var params map[string]any
+	if json.Unmarshal(entries[0], &params) != nil {
+		return nil
+	}
+	return params
+}
+
+func roleParamsFromBatchElement(raw json.RawMessage) map[string]any {
+	var request struct {
+		Params json.RawMessage `json:"params"`
+	}
+	if json.Unmarshal(raw, &request) != nil {
+		return nil
+	}
+	return roleParamsFromRawParams(request.Params)
 }
 
 // resolveClientIP extracts the client IP for logging and identification.

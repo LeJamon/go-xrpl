@@ -4,6 +4,7 @@ import (
 	"encoding/hex"
 	"math/big"
 
+	"github.com/LeJamon/go-xrpl/amendment"
 	"github.com/LeJamon/go-xrpl/internal/ledger/state"
 	tx "github.com/LeJamon/go-xrpl/internal/tx"
 	"github.com/LeJamon/go-xrpl/internal/tx/credential"
@@ -15,13 +16,7 @@ import (
 // applyMPTPayment applies an MPT direct payment.
 // Reference: rippled Payment.cpp doApply() mptDirect path + View.cpp rippleSendMPT/rippleCreditMPT
 func (p *Payment) applyMPTPayment(ctx *tx.ApplyContext) ter.Result {
-	// Get the MPT issuance ID: prefer the legacy field, fall back to Amount's embedded ID
-	mptIDHex := p.MPTokenIssuanceID
-	if mptIDHex == "" {
-		mptIDHex = p.Amount.MPTIssuanceID()
-	}
-
-	// Parse MPTokenIssuanceID
+	mptIDHex := p.Amount.MPTIssuanceID()
 	issuanceIDBytes, err := hex.DecodeString(mptIDHex)
 	if err != nil || len(issuanceIDBytes) != 24 {
 		return ter.TecOBJECT_NOT_FOUND
@@ -176,8 +171,16 @@ func (p *Payment) applyMPTPayment(ctx *tx.ApplyContext) ter.Result {
 		res = p.mptTransitTransfer(ctx, issuance, issuanceKey, amountDeliver, rate, destAccountID)
 	}
 
-	// Map error codes per rippled Payment.cpp:593-594
-	if res == ter.TecINSUFFICIENT_FUNDS || res == ter.TecPATH_DRY {
+	if res == ter.TesSUCCESS {
+		// Record the actual delivered amount when it differs from the requested
+		// Amount (partial payment or transfer fee), gated on fixMPTDeliveredAmount.
+		// Reference: rippled Payment.cpp:616-621
+		if ctx.Rules().Enabled(amendment.FeatureFixMPTDeliveredAmount) && amountDeliver != dstAmount {
+			deliveredAmt := state.NewMPTAmountWithIssuanceID(int64(amountDeliver), p.Amount.Issuer, mptIDHex)
+			ctx.Metadata.DeliveredAmount = &deliveredAmt
+		}
+	} else if res == ter.TecINSUFFICIENT_FUNDS || res == ter.TecPATH_DRY {
+		// Map error codes per rippled Payment.cpp:623-624
 		res = ter.TecPATH_PARTIAL
 	}
 

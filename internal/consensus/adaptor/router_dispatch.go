@@ -17,6 +17,8 @@ import (
 )
 
 func (r *Router) handleMessage(msg *peermanagement.InboundMessage) {
+	defer r.recoverFrame(msg, "dispatch")
+
 	msgType := message.MessageType(msg.Type)
 
 	switch msgType {
@@ -389,6 +391,8 @@ func validateValidationBounds(v *consensus.Validation) (string, bool) {
 }
 
 func (r *Router) handleTransaction(msg *peermanagement.InboundMessage) {
+	defer r.recoverFrame(msg, "transaction")
+
 	// Frames fanned out from a TMTransactions batch arrive already
 	// decoded in Tx; only wire-sourced frames need decoding from Payload.
 	txMsg := msg.Tx
@@ -465,9 +469,9 @@ func (r *Router) relayTransaction(except peermanagement.PeerID, blob []byte) {
 	out := &message.Transaction{
 		RawTransaction:   blob,
 		Status:           message.TxStatusCurrent,
-		ReceiveTimestamp: uint64(time.Now().Unix() - protocol.RippleEpochUnix),
+		ReceiveTimestamp: uint64(protocol.RippleSeconds(time.Now())),
 	}
-	frame, err := encodeFrame(message.TypeTransaction, out)
+	frame, err := message.EncodeFrame(out)
 	if err != nil {
 		r.logger.Warn("relay transaction encode failed", "error", err)
 		return

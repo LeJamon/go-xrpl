@@ -6,8 +6,11 @@
 package ledgerfields
 
 import (
+	"errors"
+	"fmt"
+
 	"github.com/LeJamon/go-xrpl/codec/binarycodec"
-	"github.com/LeJamon/go-xrpl/crypto/common"
+	"github.com/LeJamon/go-xrpl/crypto/sha512half"
 	"github.com/LeJamon/go-xrpl/protocol"
 )
 
@@ -18,14 +21,17 @@ func init() {
 // Delegate is the typed representation of a Delegate ledger entry.
 // The present bitset tracks which fields appear on the decoded blob so the
 // emit methods only write entries that actually exist. The struct carries
-// every on-wire field — including those excluded from metadata
-// (sMD_Never) — so Decode → Encode is byte-identical.
+// every canonical field declared in the spec — including those excluded from
+// metadata (sMD_Never) — so decoding and re-encoding does not drop them.
 type Delegate struct {
 	present           uint64
+	decoded           bool
+	dirty             bool
 	Account           string // AccountID (base58)
 	Authorize         string // AccountID (base58)
 	Permissions       []any
 	OwnerNode         string // UInt64 (lowercase hex, no leading zeros)
+	DestinationNode   string // UInt64 (lowercase hex, no leading zeros)
 	Flags             uint32
 	PreviousTxnID     string // Hash256 (uppercase hex)
 	PreviousTxnLgrSeq uint32
@@ -36,21 +42,140 @@ const (
 	delegateBitAuthorize
 	delegateBitPermissions
 	delegateBitOwnerNode
+	delegateBitDestinationNode
 	delegateBitFlags
 	delegateBitPreviousTxnID
 	delegateBitPreviousTxnLgrSeq
 )
 
+// SetAccount assigns Account and updates its serialized presence.
+func (d *Delegate) SetAccount(value string) {
+	d.Account = value
+	d.dirty = true
+	d.present |= delegateBitAccount
+}
+
+// SetAuthorize assigns Authorize and updates its serialized presence.
+func (d *Delegate) SetAuthorize(value string) {
+	d.Authorize = value
+	d.dirty = true
+	d.present |= delegateBitAuthorize
+}
+
+// SetPermissions assigns Permissions and updates its serialized presence.
+func (d *Delegate) SetPermissions(value []any) {
+	d.Permissions = value
+	d.dirty = true
+	d.present |= delegateBitPermissions
+}
+
+// SetOwnerNode assigns OwnerNode and updates its serialized presence.
+func (d *Delegate) SetOwnerNode(value string) {
+	d.OwnerNode = value
+	d.dirty = true
+	d.present |= delegateBitOwnerNode
+}
+
+// SetDestinationNode assigns DestinationNode and updates its serialized presence.
+func (d *Delegate) SetDestinationNode(value string) {
+	d.DestinationNode = value
+	d.dirty = true
+	d.present |= delegateBitDestinationNode
+}
+
+// SetFlags assigns Flags and updates its serialized presence.
+func (d *Delegate) SetFlags(value uint32) {
+	d.Flags = value
+	d.dirty = true
+	d.present |= delegateBitFlags
+}
+
+// SetPreviousTxnID assigns PreviousTxnID and updates its serialized presence.
+func (d *Delegate) SetPreviousTxnID(value string) {
+	d.PreviousTxnID = value
+	d.dirty = true
+	d.present |= delegateBitPreviousTxnID
+}
+
+// SetPreviousTxnLgrSeq assigns PreviousTxnLgrSeq and updates its serialized presence.
+func (d *Delegate) SetPreviousTxnLgrSeq(value uint32) {
+	d.PreviousTxnLgrSeq = value
+	d.dirty = true
+	d.present |= delegateBitPreviousTxnLgrSeq
+}
+
+func (d *Delegate) validateRequired() error {
+	if d.decoded && !d.dirty {
+		return nil
+	}
+	if d.present&delegateBitAccount == 0 {
+		return errors.New("ledgerfields: Delegate: required field Account is not set")
+	}
+	if d.present&delegateBitAuthorize == 0 {
+		return errors.New("ledgerfields: Delegate: required field Authorize is not set")
+	}
+	if d.present&delegateBitPermissions == 0 {
+		return errors.New("ledgerfields: Delegate: required field Permissions is not set")
+	}
+	if d.present&delegateBitOwnerNode == 0 {
+		return errors.New("ledgerfields: Delegate: required field OwnerNode is not set")
+	}
+	if d.present&delegateBitFlags == 0 {
+		return errors.New("ledgerfields: Delegate: required field Flags is not set")
+	}
+	return nil
+}
+
+func (d *Delegate) validateDecoded() error {
+	if d.present&delegateBitAccount == 0 {
+		return errors.New("ledgerfields: Delegate: required field Account is missing")
+	}
+	if d.present&delegateBitAuthorize == 0 {
+		return errors.New("ledgerfields: Delegate: required field Authorize is missing")
+	}
+	if d.present&delegateBitPermissions == 0 {
+		return errors.New("ledgerfields: Delegate: required field Permissions is missing")
+	}
+	if d.present&delegateBitOwnerNode == 0 {
+		return errors.New("ledgerfields: Delegate: required field OwnerNode is missing")
+	}
+	if d.present&delegateBitFlags == 0 {
+		return errors.New("ledgerfields: Delegate: required field Flags is missing")
+	}
+	if d.present&delegateBitPreviousTxnID == 0 {
+		return errors.New("ledgerfields: Delegate: required field PreviousTxnID is missing")
+	}
+	if d.present&delegateBitPreviousTxnLgrSeq == 0 {
+		return errors.New("ledgerfields: Delegate: required field PreviousTxnLgrSeq is missing")
+	}
+	return nil
+}
+
 // Decode populates the struct from binary ledger-entry data via a streaming
-// reader. Unknown / sMD_Never fields are skipped without allocation.
+// reader and enforces the current rippled ledger template.
 func (d *Delegate) Decode(data []byte) error {
+	return d.decode(data, false)
+}
+
+func (d *Delegate) decodeLegacy(data []byte) error {
+	return d.decode(data, true)
+}
+
+func (d *Delegate) decode(data []byte, legacy bool) error {
 	*d = Delegate{}
 	sr := newStreamReader(data)
+	seenFields := make(map[[2]int]struct{})
+	sawLedgerEntryType := false
 	for sr.hasMore() {
 		typeCode, fieldCode, err := sr.readFieldHeader()
 		if err != nil {
 			return err
 		}
+		fieldID := [2]int{typeCode, fieldCode}
+		if _, exists := seenFields[fieldID]; exists {
+			return fmt.Errorf("ledgerfields: Delegate: duplicate field type=%d field=%d", typeCode, fieldCode)
+		}
+		seenFields[fieldID] = struct{}{}
 		switch typeCode {
 		case 1: // UInt16
 			u16Val, err := sr.readUint16()
@@ -60,7 +185,10 @@ func (d *Delegate) Decode(data []byte) error {
 			val := int(u16Val)
 			switch fieldCode {
 			case 1:
-				_ = val // synthetic LedgerEntryType; discard
+				if val != 131 {
+					return fmt.Errorf("ledgerfields: Delegate: LedgerEntryType is %d, want 131", val)
+				}
+				sawLedgerEntryType = true
 			default:
 				return newErrUnknownField("Delegate", typeCode, fieldCode)
 			}
@@ -88,6 +216,13 @@ func (d *Delegate) Decode(data []byte) error {
 				}
 				d.OwnerNode = val
 				d.present |= delegateBitOwnerNode
+			case 9:
+				val, err := sr.readUint64Hex()
+				if err != nil {
+					return err
+				}
+				d.DestinationNode = val
+				d.present |= delegateBitDestinationNode
 			default:
 				return newErrUnknownField("Delegate", typeCode, fieldCode)
 			}
@@ -134,6 +269,13 @@ func (d *Delegate) Decode(data []byte) error {
 			return newErrUnknownField("Delegate", typeCode, fieldCode)
 		}
 	}
+	if !sawLedgerEntryType {
+		return errors.New("ledgerfields: Delegate: missing LedgerEntryType")
+	}
+	d.decoded = true
+	if !legacy {
+		return d.validateDecoded()
+	}
 	return nil
 }
 
@@ -152,6 +294,9 @@ func (d *Delegate) emitAll(out map[string]any, skipDefault bool) {
 	}
 	if d.present&delegateBitOwnerNode != 0 && !(skipDefault && isZeroHexString(d.OwnerNode)) {
 		out["OwnerNode"] = d.OwnerNode
+	}
+	if d.present&delegateBitDestinationNode != 0 && !(skipDefault && isZeroHexString(d.DestinationNode)) {
+		out["DestinationNode"] = d.DestinationNode
 	}
 	if d.present&delegateBitFlags != 0 && !(skipDefault && d.Flags == 0) {
 		out["Flags"] = d.Flags
@@ -181,6 +326,7 @@ func (d *Delegate) EmitPreviousFields(prev Entry, out map[string]any) {
 	emitIfChangedString(out, "Authorize", prv.Authorize, d.Authorize, prv.present&delegateBitAuthorize, d.present&delegateBitAuthorize)
 	emitIfChangedDeep(out, "Permissions", prv.Permissions, d.Permissions, prv.present&delegateBitPermissions, d.present&delegateBitPermissions)
 	emitIfChangedString(out, "OwnerNode", prv.OwnerNode, d.OwnerNode, prv.present&delegateBitOwnerNode, d.present&delegateBitOwnerNode)
+	emitIfChangedString(out, "DestinationNode", prv.DestinationNode, d.DestinationNode, prv.present&delegateBitDestinationNode, d.present&delegateBitDestinationNode)
 	emitIfChangedUint32(out, "Flags", prv.Flags, d.Flags, prv.present&delegateBitFlags, d.present&delegateBitFlags)
 }
 
@@ -201,6 +347,9 @@ func (d *Delegate) EmitChangeOrigFields(out map[string]any) {
 	}
 	if d.present&delegateBitOwnerNode != 0 {
 		out["OwnerNode"] = d.OwnerNode
+	}
+	if d.present&delegateBitDestinationNode != 0 {
+		out["DestinationNode"] = d.DestinationNode
 	}
 	if d.present&delegateBitFlags != 0 {
 		out["Flags"] = d.Flags
@@ -258,6 +407,9 @@ func (d *Delegate) ToMap() map[string]any {
 	if d.present&delegateBitOwnerNode != 0 {
 		out["OwnerNode"] = d.OwnerNode
 	}
+	if d.present&delegateBitDestinationNode != 0 {
+		out["DestinationNode"] = d.DestinationNode
+	}
 	if d.present&delegateBitFlags != 0 {
 		out["Flags"] = d.Flags
 	}
@@ -270,11 +422,20 @@ func (d *Delegate) ToMap() map[string]any {
 	return out
 }
 
-// Encode serializes the receiver to canonical XRPL binary. Round-trip
-// invariant: Decode(data); Encode() == data for any byte sequence that
-// Decode accepts.
+// Encode serializes the receiver to canonical XRPL binary. Legacy decode
+// aliases and non-canonical input ordering are emitted in canonical form.
 func (d *Delegate) Encode() ([]byte, error) {
-	return binarycodec.EncodeBytes(d.ToMap())
+	if err := d.validateRequired(); err != nil {
+		return nil, err
+	}
+	out := d.ToMap()
+	if d.present&delegateBitPreviousTxnID == 0 {
+		out["PreviousTxnID"] = "0000000000000000000000000000000000000000000000000000000000000000"
+	}
+	if d.present&delegateBitPreviousTxnLgrSeq == 0 {
+		out["PreviousTxnLgrSeq"] = uint32(0)
+	}
+	return binarycodec.EncodeBytes(out)
 }
 
 // Hash returns the SHAMap account-state leaf hash for this entry,
@@ -285,6 +446,6 @@ func (d *Delegate) Hash(index [32]byte) ([32]byte, error) {
 	if err != nil {
 		return [32]byte{}, err
 	}
-	prefix := protocol.HashPrefixLeafNode
-	return common.Sha512Half(prefix[:], data, index[:]), nil
+	prefix := protocol.HashPrefixLeafNode()
+	return sha512half.Sum(prefix[:], data, index[:]), nil
 }

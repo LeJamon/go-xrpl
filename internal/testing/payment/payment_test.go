@@ -3,7 +3,7 @@ package payment
 import (
 	"testing"
 
-	xrplgoTesting "github.com/LeJamon/go-xrpl/internal/testing"
+	jtx "github.com/LeJamon/go-xrpl/internal/testing"
 )
 
 // Payment tests ported from rippled's TrustAndBalance_test.cpp and Flow_test.cpp
@@ -13,26 +13,26 @@ import (
 // TestPaymentXRPTransfer tests basic XRP transfer between accounts.
 // Reference: Flow_test.cpp - testDirectStep - XRP transfer
 func TestPaymentXRPTransfer(t *testing.T) {
-	env := xrplgoTesting.NewTestEnv(t)
+	env := jtx.NewTestEnv(t)
 
-	alice := xrplgoTesting.NewAccount("alice")
-	bob := xrplgoTesting.NewAccount("bob")
+	alice := jtx.NewAccount("alice")
+	bob := jtx.NewAccount("bob")
 
 	// Fund accounts with 10000 XRP each
-	env.FundAmount(alice, uint64(xrplgoTesting.XRP(10000)))
-	env.FundAmount(bob, uint64(xrplgoTesting.XRP(10000)))
+	env.FundAmount(alice, uint64(jtx.XRP(10000)))
+	env.FundAmount(bob, uint64(jtx.XRP(10000)))
 	env.Close()
 
 	// Alice sends Bob 100 XRP
-	payment := Pay(alice, bob, uint64(xrplgoTesting.XRP(100))).Build()
+	payment := Pay(alice, bob, uint64(jtx.XRP(100))).Build()
 	result := env.Submit(payment)
-	xrplgoTesting.RequireTxSuccess(t, result)
+	jtx.RequireTxSuccess(t, result)
 	env.Close()
 
 	// Bob should have 10000 + 100 = 10100 XRP
-	xrplgoTesting.RequireBalance(t, env, bob, uint64(xrplgoTesting.XRP(10100)))
+	jtx.RequireBalance(t, env, bob, uint64(jtx.XRP(10100)))
 	// Alice should have 10000 - 100 - fee
-	xrplgoTesting.RequireBalance(t, env, alice, xrplgoTesting.XRPMinusFees(env, 10000-100, 1))
+	jtx.RequireBalance(t, env, alice, jtx.XRPMinusFees(env, 10000-100, 1))
 }
 
 // TestPaymentToDisallowXRP verifies that an XRP payment to a destination with the
@@ -43,13 +43,13 @@ func TestPaymentXRPTransfer(t *testing.T) {
 // mixed-network ledger fork where goXRPL wrongly returned tecNO_TARGET for such a
 // payment, diverging account_hash and wedging consensus.
 func TestPaymentToDisallowXRP(t *testing.T) {
-	env := xrplgoTesting.NewTestEnv(t)
+	env := jtx.NewTestEnv(t)
 
-	alice := xrplgoTesting.NewAccount("alice")
-	bob := xrplgoTesting.NewAccount("bob")
+	alice := jtx.NewAccount("alice")
+	bob := jtx.NewAccount("bob")
 
-	env.FundAmount(alice, uint64(xrplgoTesting.XRP(10000)))
-	env.FundAmount(bob, uint64(xrplgoTesting.XRP(10000)))
+	env.FundAmount(alice, uint64(jtx.XRP(10000)))
+	env.FundAmount(bob, uint64(jtx.XRP(10000)))
 	env.Close()
 
 	// Bob sets DisallowXRP (advisory only — must not block incoming XRP).
@@ -57,111 +57,111 @@ func TestPaymentToDisallowXRP(t *testing.T) {
 	env.Close()
 
 	// Alice sends Bob 100 XRP. Must succeed despite Bob's DisallowXRP flag.
-	payment := Pay(alice, bob, uint64(xrplgoTesting.XRP(100))).Build()
+	payment := Pay(alice, bob, uint64(jtx.XRP(100))).Build()
 	result := env.Submit(payment)
-	xrplgoTesting.RequireTxSuccess(t, result)
+	jtx.RequireTxSuccess(t, result)
 	env.Close()
 
 	// Bob received the XRP (10000 + 100, minus the 1 fee from his AccountSet).
-	xrplgoTesting.RequireBalance(t, env, bob, xrplgoTesting.XRPMinusFees(env, 10000+100, 1))
+	jtx.RequireBalance(t, env, bob, jtx.XRPMinusFees(env, 10000+100, 1))
 	// Alice sent 100 and paid 1 fee.
-	xrplgoTesting.RequireBalance(t, env, alice, xrplgoTesting.XRPMinusFees(env, 10000-100, 1))
+	jtx.RequireBalance(t, env, alice, jtx.XRPMinusFees(env, 10000-100, 1))
 }
 
 // TestPaymentToNonexistent tests payment to a nonexistent account.
 // Reference: TrustAndBalance_test.cpp - testPayNonexistent
 func TestPaymentToNonexistent(t *testing.T) {
-	env := xrplgoTesting.NewTestEnv(t)
+	env := jtx.NewTestEnv(t)
 
-	alice := xrplgoTesting.NewAccount("alice")
-	bob := xrplgoTesting.NewAccount("bob") // Not funded - doesn't exist
+	alice := jtx.NewAccount("alice")
+	bob := jtx.NewAccount("bob") // Not funded - doesn't exist
 
 	// Fund alice
-	env.FundAmount(alice, uint64(xrplgoTesting.XRP(10000)))
+	env.FundAmount(alice, uint64(jtx.XRP(10000)))
 	env.Close()
 
 	// Alice tries to send Bob 1 XRP - should fail with tecNO_DST_INSUF_XRP
 	// because the amount is too small to create the account (below reserve)
-	payment := Pay(alice, bob, uint64(xrplgoTesting.XRP(1))).Build()
+	payment := Pay(alice, bob, uint64(jtx.XRP(1))).Build()
 	result := env.Submit(payment)
-	xrplgoTesting.RequireTxFail(t, result, xrplgoTesting.TecNO_DST_INSUF_XRP)
+	jtx.RequireTxFail(t, result, jtx.TecNO_DST_INSUF_XRP)
 }
 
 // TestPaymentCreatesAccount tests that payment creates destination account when sufficient.
 func TestPaymentCreatesAccount(t *testing.T) {
-	env := xrplgoTesting.NewTestEnv(t)
+	env := jtx.NewTestEnv(t)
 
-	alice := xrplgoTesting.NewAccount("alice")
-	bob := xrplgoTesting.NewAccount("bob") // Will be created by payment
+	alice := jtx.NewAccount("alice")
+	bob := jtx.NewAccount("bob") // Will be created by payment
 
 	// Fund alice
-	env.FundAmount(alice, uint64(xrplgoTesting.XRP(10000)))
+	env.FundAmount(alice, uint64(jtx.XRP(10000)))
 	env.Close()
 
 	// Verify bob doesn't exist yet
-	xrplgoTesting.RequireAccountNotExists(t, env, bob)
+	jtx.RequireAccountNotExists(t, env, bob)
 
 	// Alice sends Bob enough to create account (reserve + some)
 	// Reserve is 200 XRP by default
-	payment := Pay(alice, bob, uint64(xrplgoTesting.XRP(250))).Build()
+	payment := Pay(alice, bob, uint64(jtx.XRP(250))).Build()
 	result := env.Submit(payment)
-	xrplgoTesting.RequireTxSuccess(t, result)
+	jtx.RequireTxSuccess(t, result)
 	env.Close()
 
 	// Bob should now exist with 250 XRP
-	xrplgoTesting.RequireAccountExists(t, env, bob)
-	xrplgoTesting.RequireBalance(t, env, bob, uint64(xrplgoTesting.XRP(250)))
+	jtx.RequireAccountExists(t, env, bob)
+	jtx.RequireBalance(t, env, bob, uint64(jtx.XRP(250)))
 }
 
 // TestPaymentInsufficientFunds tests payment with insufficient balance.
 func TestPaymentInsufficientFunds(t *testing.T) {
-	env := xrplgoTesting.NewTestEnv(t)
+	env := jtx.NewTestEnv(t)
 
-	alice := xrplgoTesting.NewAccount("alice")
-	bob := xrplgoTesting.NewAccount("bob")
+	alice := jtx.NewAccount("alice")
+	bob := jtx.NewAccount("bob")
 
 	// Fund accounts - alice with minimal amount
-	env.FundAmount(alice, uint64(xrplgoTesting.XRP(250))) // Just enough to exist
-	env.FundAmount(bob, uint64(xrplgoTesting.XRP(1000)))
+	env.FundAmount(alice, uint64(jtx.XRP(250))) // Just enough to exist
+	env.FundAmount(bob, uint64(jtx.XRP(1000)))
 	env.Close()
 
 	// Alice tries to send more XRP than she has
 	// She has 250 XRP but needs to keep reserve (200 XRP), so spendable is ~50 XRP
-	payment := Pay(alice, bob, uint64(xrplgoTesting.XRP(100))).Build()
+	payment := Pay(alice, bob, uint64(jtx.XRP(100))).Build()
 	result := env.Submit(payment)
-	xrplgoTesting.RequireTxFail(t, result, xrplgoTesting.TecUNFUNDED_PAYMENT)
+	jtx.RequireTxFail(t, result, jtx.TecUNFUNDED_PAYMENT)
 
 	// Bob's balance should be unchanged
-	xrplgoTesting.RequireBalance(t, env, bob, uint64(xrplgoTesting.XRP(1000)))
+	jtx.RequireBalance(t, env, bob, uint64(jtx.XRP(1000)))
 }
 
 // TestPaymentSelfPayment tests that self-payment is not allowed.
 // Reference: rippled Payment.cpp:159-166 - returns temREDUNDANT for self-payment
 func TestPaymentSelfPayment(t *testing.T) {
-	env := xrplgoTesting.NewTestEnv(t)
+	env := jtx.NewTestEnv(t)
 
-	alice := xrplgoTesting.NewAccount("alice")
+	alice := jtx.NewAccount("alice")
 
-	env.FundAmount(alice, uint64(xrplgoTesting.XRP(10000)))
+	env.FundAmount(alice, uint64(jtx.XRP(10000)))
 	env.Close()
 
 	// Alice tries to pay herself
-	payment := Pay(alice, alice, uint64(xrplgoTesting.XRP(100))).Build()
+	payment := Pay(alice, alice, uint64(jtx.XRP(100))).Build()
 	result := env.Submit(payment)
 	// Self-payment should fail with temREDUNDANT (not temDST_IS_SRC)
 	// This matches rippled's behavior in Payment.cpp:159-166
-	xrplgoTesting.RequireTxFail(t, result, xrplgoTesting.TemREDUNDANT)
+	jtx.RequireTxFail(t, result, jtx.TemREDUNDANT)
 }
 
 // TestPaymentZeroAmount tests that zero amount payment is rejected.
 func TestPaymentZeroAmount(t *testing.T) {
-	env := xrplgoTesting.NewTestEnv(t)
+	env := jtx.NewTestEnv(t)
 
-	alice := xrplgoTesting.NewAccount("alice")
-	bob := xrplgoTesting.NewAccount("bob")
+	alice := jtx.NewAccount("alice")
+	bob := jtx.NewAccount("bob")
 
-	env.FundAmount(alice, uint64(xrplgoTesting.XRP(10000)))
-	env.FundAmount(bob, uint64(xrplgoTesting.XRP(10000)))
+	env.FundAmount(alice, uint64(jtx.XRP(10000)))
+	env.FundAmount(bob, uint64(jtx.XRP(10000)))
 	env.Close()
 
 	// Try to send 0 XRP
@@ -169,162 +169,162 @@ func TestPaymentZeroAmount(t *testing.T) {
 	result := env.Submit(payment)
 	// Zero amount should fail with temBAD_AMOUNT
 	// Reference: rippled Payment.cpp preflight() lines 148-152
-	xrplgoTesting.RequireTxFail(t, result, xrplgoTesting.TemBAD_AMOUNT)
+	jtx.RequireTxFail(t, result, jtx.TemBAD_AMOUNT)
 }
 
 // TestPaymentMultiplePayments tests multiple sequential payments.
 func TestPaymentMultiplePayments(t *testing.T) {
-	env := xrplgoTesting.NewTestEnv(t)
+	env := jtx.NewTestEnv(t)
 
-	alice := xrplgoTesting.NewAccount("alice")
-	bob := xrplgoTesting.NewAccount("bob")
-	carol := xrplgoTesting.NewAccount("carol")
+	alice := jtx.NewAccount("alice")
+	bob := jtx.NewAccount("bob")
+	carol := jtx.NewAccount("carol")
 
-	env.FundAmount(alice, uint64(xrplgoTesting.XRP(10000)))
-	env.FundAmount(bob, uint64(xrplgoTesting.XRP(10000)))
-	env.FundAmount(carol, uint64(xrplgoTesting.XRP(10000)))
+	env.FundAmount(alice, uint64(jtx.XRP(10000)))
+	env.FundAmount(bob, uint64(jtx.XRP(10000)))
+	env.FundAmount(carol, uint64(jtx.XRP(10000)))
 	env.Close()
 
 	// Alice sends Bob 100 XRP
-	payment1 := Pay(alice, bob, uint64(xrplgoTesting.XRP(100))).Build()
+	payment1 := Pay(alice, bob, uint64(jtx.XRP(100))).Build()
 	result1 := env.Submit(payment1)
-	xrplgoTesting.RequireTxSuccess(t, result1)
+	jtx.RequireTxSuccess(t, result1)
 
 	// Bob sends Carol 50 XRP
-	payment2 := Pay(bob, carol, uint64(xrplgoTesting.XRP(50))).Build()
+	payment2 := Pay(bob, carol, uint64(jtx.XRP(50))).Build()
 	result2 := env.Submit(payment2)
-	xrplgoTesting.RequireTxSuccess(t, result2)
+	jtx.RequireTxSuccess(t, result2)
 
 	// Carol sends Alice 25 XRP
-	payment3 := Pay(carol, alice, uint64(xrplgoTesting.XRP(25))).Build()
+	payment3 := Pay(carol, alice, uint64(jtx.XRP(25))).Build()
 	result3 := env.Submit(payment3)
-	xrplgoTesting.RequireTxSuccess(t, result3)
+	jtx.RequireTxSuccess(t, result3)
 
 	env.Close()
 
 	// Verify final balances (accounting for fees)
 	// Alice: 10000 - 100 - fee + 25 = 9925 - fee
-	xrplgoTesting.RequireBalance(t, env, alice, uint64(xrplgoTesting.XRP(10000)-xrplgoTesting.XRP(100)+xrplgoTesting.XRP(25))-env.BaseFee())
+	jtx.RequireBalance(t, env, alice, uint64(jtx.XRP(10000)-jtx.XRP(100)+jtx.XRP(25))-env.BaseFee())
 	// Bob: 10000 + 100 - 50 - fee = 10050 - fee
-	xrplgoTesting.RequireBalance(t, env, bob, uint64(xrplgoTesting.XRP(10000)+xrplgoTesting.XRP(100)-xrplgoTesting.XRP(50))-env.BaseFee())
+	jtx.RequireBalance(t, env, bob, uint64(jtx.XRP(10000)+jtx.XRP(100)-jtx.XRP(50))-env.BaseFee())
 	// Carol: 10000 + 50 - 25 - fee = 10025 - fee
-	xrplgoTesting.RequireBalance(t, env, carol, uint64(xrplgoTesting.XRP(10000)+xrplgoTesting.XRP(50)-xrplgoTesting.XRP(25))-env.BaseFee())
+	jtx.RequireBalance(t, env, carol, uint64(jtx.XRP(10000)+jtx.XRP(50)-jtx.XRP(25))-env.BaseFee())
 }
 
 // TestPaymentWithSequenceNumber tests explicit sequence number handling.
 func TestPaymentWithSequenceNumber(t *testing.T) {
-	env := xrplgoTesting.NewTestEnv(t)
+	env := jtx.NewTestEnv(t)
 
-	alice := xrplgoTesting.NewAccount("alice")
-	bob := xrplgoTesting.NewAccount("bob")
+	alice := jtx.NewAccount("alice")
+	bob := jtx.NewAccount("bob")
 
-	env.FundAmount(alice, uint64(xrplgoTesting.XRP(10000)))
-	env.FundAmount(bob, uint64(xrplgoTesting.XRP(10000)))
+	env.FundAmount(alice, uint64(jtx.XRP(10000)))
+	env.FundAmount(bob, uint64(jtx.XRP(10000)))
 	env.Close()
 
 	// Get Alice's current sequence
 	seq := env.Seq(alice)
 
 	// Submit payment with explicit sequence
-	payment := Pay(alice, bob, uint64(xrplgoTesting.XRP(100))).Sequence(seq).Build()
+	payment := Pay(alice, bob, uint64(jtx.XRP(100))).Sequence(seq).Build()
 	result := env.Submit(payment)
-	xrplgoTesting.RequireTxSuccess(t, result)
+	jtx.RequireTxSuccess(t, result)
 
 	// Verify sequence incremented
-	xrplgoTesting.RequireSequence(t, env, alice, seq+1)
+	jtx.RequireSequence(t, env, alice, seq+1)
 }
 
 // TestPaymentWrongSequence tests that wrong sequence number fails.
 func TestPaymentWrongSequence(t *testing.T) {
-	env := xrplgoTesting.NewTestEnv(t)
+	env := jtx.NewTestEnv(t)
 
-	alice := xrplgoTesting.NewAccount("alice")
-	bob := xrplgoTesting.NewAccount("bob")
+	alice := jtx.NewAccount("alice")
+	bob := jtx.NewAccount("bob")
 
-	env.FundAmount(alice, uint64(xrplgoTesting.XRP(10000)))
-	env.FundAmount(bob, uint64(xrplgoTesting.XRP(10000)))
+	env.FundAmount(alice, uint64(jtx.XRP(10000)))
+	env.FundAmount(bob, uint64(jtx.XRP(10000)))
 	env.Close()
 
 	// Get Alice's current sequence
 	seq := env.Seq(alice)
 
 	// Submit payment with wrong sequence (past)
-	payment := Pay(alice, bob, uint64(xrplgoTesting.XRP(100))).Sequence(seq - 1).Build()
+	payment := Pay(alice, bob, uint64(jtx.XRP(100))).Sequence(seq - 1).Build()
 	result := env.Submit(payment)
 	// Should fail with tefPAST_SEQ
-	xrplgoTesting.RequireTxFail(t, result, xrplgoTesting.TefPAST_SEQ)
+	jtx.RequireTxFail(t, result, jtx.TefPAST_SEQ)
 }
 
 // TestPaymentFutureSequence tests payment with future sequence number.
 func TestPaymentFutureSequence(t *testing.T) {
-	env := xrplgoTesting.NewTestEnv(t)
+	env := jtx.NewTestEnv(t)
 
-	alice := xrplgoTesting.NewAccount("alice")
-	bob := xrplgoTesting.NewAccount("bob")
+	alice := jtx.NewAccount("alice")
+	bob := jtx.NewAccount("bob")
 
-	env.FundAmount(alice, uint64(xrplgoTesting.XRP(10000)))
-	env.FundAmount(bob, uint64(xrplgoTesting.XRP(10000)))
+	env.FundAmount(alice, uint64(jtx.XRP(10000)))
+	env.FundAmount(bob, uint64(jtx.XRP(10000)))
 	env.Close()
 
 	// Get Alice's current sequence
 	seq := env.Seq(alice)
 
 	// Submit payment with future sequence
-	payment := Pay(alice, bob, uint64(xrplgoTesting.XRP(100))).Sequence(seq + 10).Build()
+	payment := Pay(alice, bob, uint64(jtx.XRP(100))).Sequence(seq + 10).Build()
 	result := env.Submit(payment)
 	// Should fail with terPRE_SEQ (needs to wait for earlier sequences)
-	xrplgoTesting.RequireTxFail(t, result, xrplgoTesting.TerPRE_SEQ)
+	jtx.RequireTxFail(t, result, jtx.TerPRE_SEQ)
 }
 
 // TestPaymentWithDestinationTag tests payment with destination tag.
 func TestPaymentWithDestinationTag(t *testing.T) {
-	env := xrplgoTesting.NewTestEnv(t)
+	env := jtx.NewTestEnv(t)
 
-	alice := xrplgoTesting.NewAccount("alice")
-	bob := xrplgoTesting.NewAccount("bob")
+	alice := jtx.NewAccount("alice")
+	bob := jtx.NewAccount("bob")
 
-	env.FundAmount(alice, uint64(xrplgoTesting.XRP(10000)))
-	env.FundAmount(bob, uint64(xrplgoTesting.XRP(10000)))
+	env.FundAmount(alice, uint64(jtx.XRP(10000)))
+	env.FundAmount(bob, uint64(jtx.XRP(10000)))
 	env.Close()
 
 	// Send with destination tag
-	payment := Pay(alice, bob, uint64(xrplgoTesting.XRP(100))).DestTag(12345).Build()
+	payment := Pay(alice, bob, uint64(jtx.XRP(100))).DestTag(12345).Build()
 	result := env.Submit(payment)
-	xrplgoTesting.RequireTxSuccess(t, result)
+	jtx.RequireTxSuccess(t, result)
 	env.Close()
 
-	xrplgoTesting.RequireBalance(t, env, bob, uint64(xrplgoTesting.XRP(10100)))
+	jtx.RequireBalance(t, env, bob, uint64(jtx.XRP(10100)))
 }
 
 // TestPaymentWithSourceTag tests payment with source tag.
 func TestPaymentWithSourceTag(t *testing.T) {
-	env := xrplgoTesting.NewTestEnv(t)
+	env := jtx.NewTestEnv(t)
 
-	alice := xrplgoTesting.NewAccount("alice")
-	bob := xrplgoTesting.NewAccount("bob")
+	alice := jtx.NewAccount("alice")
+	bob := jtx.NewAccount("bob")
 
-	env.FundAmount(alice, uint64(xrplgoTesting.XRP(10000)))
-	env.FundAmount(bob, uint64(xrplgoTesting.XRP(10000)))
+	env.FundAmount(alice, uint64(jtx.XRP(10000)))
+	env.FundAmount(bob, uint64(jtx.XRP(10000)))
 	env.Close()
 
 	// Send with source tag
-	payment := Pay(alice, bob, uint64(xrplgoTesting.XRP(100))).SourceTag(54321).Build()
+	payment := Pay(alice, bob, uint64(jtx.XRP(100))).SourceTag(54321).Build()
 	result := env.Submit(payment)
-	xrplgoTesting.RequireTxSuccess(t, result)
+	jtx.RequireTxSuccess(t, result)
 	env.Close()
 
-	xrplgoTesting.RequireBalance(t, env, bob, uint64(xrplgoTesting.XRP(10100)))
+	jtx.RequireBalance(t, env, bob, uint64(jtx.XRP(10100)))
 }
 
 // TestPaymentDrainsAccount tests sending maximum possible amount.
 func TestPaymentDrainsAccount(t *testing.T) {
-	env := xrplgoTesting.NewTestEnv(t)
+	env := jtx.NewTestEnv(t)
 
-	alice := xrplgoTesting.NewAccount("alice")
-	bob := xrplgoTesting.NewAccount("bob")
+	alice := jtx.NewAccount("alice")
+	bob := jtx.NewAccount("bob")
 
-	env.FundAmount(alice, uint64(xrplgoTesting.XRP(1000)))
-	env.FundAmount(bob, uint64(xrplgoTesting.XRP(1000)))
+	env.FundAmount(alice, uint64(jtx.XRP(1000)))
+	env.FundAmount(bob, uint64(jtx.XRP(1000)))
 	env.Close()
 
 	// Alice tries to send everything except reserve and fee
@@ -338,13 +338,13 @@ func TestPaymentDrainsAccount(t *testing.T) {
 	// Spendable: 800 XRP minus fee
 
 	// Send 789 XRP (leaving some buffer for fee)
-	payment := Pay(alice, bob, uint64(xrplgoTesting.XRP(789))).Build()
+	payment := Pay(alice, bob, uint64(jtx.XRP(789))).Build()
 	result := env.Submit(payment)
-	xrplgoTesting.RequireTxSuccess(t, result)
+	jtx.RequireTxSuccess(t, result)
 	env.Close()
 
 	// Alice should have 1000 - 789 - fee = ~211 XRP - fee
-	xrplgoTesting.RequireBalance(t, env, alice, uint64(xrplgoTesting.XRP(1000)-xrplgoTesting.XRP(789))-env.BaseFee())
+	jtx.RequireBalance(t, env, alice, uint64(jtx.XRP(1000)-jtx.XRP(789))-env.BaseFee())
 	// Bob should have 1000 + 789 = 1789 XRP
-	xrplgoTesting.RequireBalance(t, env, bob, uint64(xrplgoTesting.XRP(1789)))
+	jtx.RequireBalance(t, env, bob, uint64(jtx.XRP(1789)))
 }

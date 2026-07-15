@@ -9,7 +9,7 @@ import (
 
 	"github.com/LeJamon/go-xrpl/protocol"
 
-	"github.com/LeJamon/go-xrpl/crypto/common"
+	"github.com/LeJamon/go-xrpl/crypto/sha512half"
 )
 
 // NodeType defines the type of SHAMap node
@@ -37,6 +37,22 @@ func (nt NodeType) String() string {
 	default:
 		return fmt.Sprintf("unknown(%d)", int(nt))
 	}
+}
+
+// NodeReader is the read-only view of a SHAMap node returned to callers
+// outside the package. It deliberately excludes the dirty-flag, hashing and
+// serialization mutators of Node so external consumers cannot corrupt
+// tree/hash state.
+type NodeReader interface {
+	Hash() [32]byte
+	Type() NodeType
+}
+
+// InnerNodeReader exposes the child hashes of a serialized inner node.
+type InnerNodeReader interface {
+	NodeReader
+	ChildHash(index int) ([32]byte, error)
+	IsEmptyBranch(index int) bool
 }
 
 // Node defines the interface all tree nodes must implement.
@@ -83,7 +99,7 @@ func (b *baseNode) setHash(data ...[]byte) error {
 		return fmt.Errorf("no data provided for hash calculation")
 	}
 
-	hash := common.Sha512Half(data...)
+	hash := sha512half.Sum(data...)
 	b.hash = hash
 	return nil
 }
@@ -101,14 +117,20 @@ func (b *baseNode) IsZeroHash() bool {
 	return b.hash == [32]byte{}
 }
 
-// DeserializeNodeFromWire reconstructs a Node from its wire-format encoding,
+// DeserializeNodeFromWire reconstructs a node from its wire-format encoding,
+// returning a read-only NodeReader.
+func DeserializeNodeFromWire(data []byte) (NodeReader, error) {
+	return deserializeNodeFromWire(data)
+}
+
+// deserializeNodeFromWire reconstructs a Node from its wire-format encoding,
 // dispatching on the trailing wire-type byte.
-func DeserializeNodeFromWire(data []byte) (Node, error) {
+func deserializeNodeFromWire(data []byte) (Node, error) {
 	if len(data) == 0 {
 		return nil, errors.New("empty wire data")
 	}
 
-	wireType := data[len(data)-1]
+	wireType := protocol.WireType(data[len(data)-1])
 
 	switch wireType {
 	case protocol.WireTypeInner:
@@ -118,7 +140,7 @@ func DeserializeNodeFromWire(data []byte) (Node, error) {
 	case protocol.WireTypeAccountState:
 		return newAccountStateLeafFromWire(data)
 	case protocol.WireTypeTransaction:
-		return NewTransactionLeafFromWire(data)
+		return newTransactionLeafFromWire(data)
 	case protocol.WireTypeTransactionWithMeta:
 		return newTransactionWithMetaLeafFromWire(data)
 	default:

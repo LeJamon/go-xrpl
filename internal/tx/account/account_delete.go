@@ -25,14 +25,30 @@ func NewAccountDelete(account, destination string) *AccountDelete {
 func (a *AccountDelete) TxType() tx.Type { return tx.TypeAccountDelete }
 
 func (a *AccountDelete) RequiredAmendments() [][32]byte {
-	return [][32]byte{amendment.FeatureDeletableAccounts}
+	return nil
+}
+
+// GetFlagsMask adopts the engine FlagsMasker seam. AccountDelete defines no
+// type-specific flags, so it uses the base universal mask.
+// Reference: rippled Transactor.cpp getFlagsMask() = tfUniversalMask.
+func (a *AccountDelete) GetFlagsMask(rules *amendment.Rules) uint32 {
+	return tx.TfUniversalMask
+}
+
+// CheckExtraFeatures gates CredentialIDs behind featureCredentials. rippled runs
+// this in checkExtraFeatures — before preflight1 and DeleteAccount::preflight —
+// so the temDISABLED wins over temDST_IS_SRC, the credential shape check, and
+// every ledger-state TER.
+// Reference: rippled DeleteAccount.cpp checkExtraFeatures().
+func (a *AccountDelete) CheckExtraFeatures(rules *amendment.Rules) error {
+	if len(a.CredentialIDs) > 0 && !rules.Enabled(amendment.FeatureCredentials) {
+		return ter.Errorf(ter.TemDISABLED, "CredentialIDs requires the Credentials amendment")
+	}
+	return nil
 }
 
 func (a *AccountDelete) Validate() error {
 	if err := a.BaseTx.Validate(); err != nil {
-		return err
-	}
-	if err := tx.CheckFlags(a.GetFlags(), tx.TfUniversalMask); err != nil {
 		return err
 	}
 	if a.Destination == "" {
@@ -68,7 +84,7 @@ func (a *AccountDelete) Flatten() (map[string]any, error) { return tx.ReflectFla
 // sandbox is rolled back for tec results.
 // Reference: rippled Transactor.cpp - tecEXPIRED re-applies removeExpiredCredentials
 func (a *AccountDelete) ApplyOnTec(ctx *tx.ApplyContext) {
-	credential.RemoveExpiredCredentials(ctx, a.CredentialIDs)
+	credential.RemoveExpiredCredentialsOnTec(ctx, a.CredentialIDs)
 }
 
 func (a *AccountDelete) Apply(ctx *tx.ApplyContext) ter.Result {
@@ -78,9 +94,6 @@ func (a *AccountDelete) Apply(ctx *tx.ApplyContext) ter.Result {
 	)
 
 	rules := ctx.Rules()
-	if len(a.CredentialIDs) > 0 && !rules.Enabled(amendment.FeatureCredentials) {
-		return ter.TemDISABLED
-	}
 	destAccount, destID, result := ctx.LookupAccount(a.Destination)
 	if result != ter.TesSUCCESS {
 		return result
@@ -95,7 +108,7 @@ func (a *AccountDelete) Apply(ctx *tx.ApplyContext) ter.Result {
 		}
 	}
 	if len(a.CredentialIDs) == 0 {
-		if rules.Enabled(amendment.FeatureDepositAuth) && (destAccount.Flags&state.LsfDepositAuth) != 0 {
+		if (destAccount.Flags & state.LsfDepositAuth) != 0 {
 			preauthKey := keylet.DepositPreauth(destID, ctx.AccountID)
 			if exists, _ := ctx.View.Exists(preauthKey); !exists {
 				return ter.TecNO_PERMISSION
@@ -134,21 +147,19 @@ func (a *AccountDelete) Apply(ctx *tx.ApplyContext) ter.Result {
 	if acctSeq+seqDelta > ctx.Config.LedgerSequence {
 		return ter.TecTOO_SOON
 	}
-	if rules.Enabled(amendment.FeatureFixNFTokenRemint) {
-		firstNFTSeq := uint32(0)
-		if ctx.Account.HasFirstNFTSeq {
-			firstNFTSeq = ctx.Account.FirstNFTokenSequence
-		}
-		if uint64(firstNFTSeq)+uint64(ctx.Account.MintedNFTokens)+uint64(seqDelta) > uint64(ctx.Config.LedgerSequence) {
-			return ter.TecTOO_SOON
-		}
+	firstNFTSeq := uint32(0)
+	if ctx.Account.HasFirstNFTSeq {
+		firstNFTSeq = ctx.Account.FirstNFTokenSequence
+	}
+	if uint64(firstNFTSeq)+uint64(ctx.Account.MintedNFTokens)+uint64(seqDelta) > uint64(ctx.Config.LedgerSequence) {
+		return ter.TecTOO_SOON
 	}
 	// Verify deposit preauth with credentials BEFORE cleaning up owned objects.
 	// Credentials in the owner directory will be deleted during cleanup, so this
 	// check must happen first.
 	// Reference: rippled DeleteAccount.cpp doApply() — verifyDepositPreauth
 	// is called before cleanupOnAccountDelete.
-	if rules.Enabled(amendment.FeatureDepositAuth) && len(a.CredentialIDs) > 0 {
+	if len(a.CredentialIDs) > 0 {
 		if r := credential.VerifyDepositPreauth(ctx, a.CredentialIDs, ctx.AccountID, destID, destAccount); r != ter.TesSUCCESS {
 			return r
 		}

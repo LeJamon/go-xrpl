@@ -3,12 +3,14 @@ package handlers
 import (
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"math"
 	"strconv"
 	"strings"
-	"time"
 
+	"github.com/LeJamon/go-xrpl/internal/ledger/service/svcerr"
 	"github.com/LeJamon/go-xrpl/internal/rpc/types"
+	"github.com/LeJamon/go-xrpl/protocol"
 )
 
 // ledgerInfoJSON renders the closed-ledger header fields shared by the `ledger`
@@ -20,7 +22,7 @@ func ledgerInfoJSON(l types.LedgerReader) map[string]any {
 	txHash := l.TxMapHash()
 	stateHash := l.StateMapHash()
 	closeTimeSec := l.CloseTime()
-	closeTime := rippleEpochTime.Add(time.Duration(closeTimeSec) * time.Second)
+	closeTime := protocol.FromRippleTime(uint32(max(closeTimeSec, 0)))
 	seqStr := strconv.FormatUint(uint64(l.Sequence()), 10)
 
 	return map[string]any{
@@ -29,7 +31,7 @@ func ledgerInfoJSON(l types.LedgerReader) map[string]any {
 		"close_flags":           l.CloseFlags(),
 		"close_time":            closeTimeSec,
 		"close_time_human":      closeTime.UTC().Format("2006-Jan-02 15:04:05.000000000 UTC"),
-		"close_time_iso":        closeTime.UTC().Format(time.RFC3339),
+		"close_time_iso":        protocol.FormatCloseTimeISO(closeTime),
 		"close_time_resolution": l.CloseTimeResolution(),
 		"closed":                l.IsClosed(),
 		"ledger_hash":           strings.ToUpper(hex.EncodeToString(hash[:])),
@@ -86,8 +88,12 @@ func (m *LedgerRequestMethod) Handle(ctx *types.RpcContext, params json.RawMessa
 		}
 		copy(targetHash[:], hb)
 
-		if l, err := ctx.Services.Ledger.GetLedgerByHash(targetHash); err == nil && l != nil {
+		l, err := getLedgerByHashContext(ctx.Context, ctx.Services.Ledger, targetHash)
+		if err == nil && l != nil {
 			return ledgerRequestSuccess(l), nil
+		}
+		if err != nil && !errors.Is(err, svcerr.ErrLedgerNotFound) {
+			return nil, rpcInternalError("ledger_request: hash lookup failed", err)
 		}
 	} else {
 		var idx int64

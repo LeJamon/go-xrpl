@@ -20,7 +20,7 @@ func TestVector256_FromJson(t *testing.T) {
 			name:   "fail - invalid input type",
 			input:  "invalid input",
 			output: nil,
-			err:    &ErrInvalidVector256Type{fmt.Sprintf("%T", "invalid input")},
+			err:    &InvalidVector256TypeError{fmt.Sprintf("%T", "invalid input")},
 		},
 		{
 			name:   "pass - valid vector256",

@@ -9,8 +9,9 @@ import (
 	"sync"
 
 	definitions "github.com/LeJamon/go-xrpl/codec/binarycodec/definitions"
-	"github.com/LeJamon/go-xrpl/crypto/common"
+	"github.com/LeJamon/go-xrpl/crypto/sha512half"
 	"github.com/LeJamon/go-xrpl/internal/rpc/types"
+	"github.com/LeJamon/go-xrpl/internal/tx"
 )
 
 // ServerDefinitionsMethod handles the server_definitions RPC method.
@@ -30,19 +31,20 @@ var (
 
 func buildServerDefinitions() {
 	defs := definitions.Get()
+	defsFields := defs.Fields()
 
 	// Collect field names for deterministic ordering.
-	fieldNames := make([]string, 0, len(defs.Fields))
-	for name := range defs.Fields {
+	fieldNames := make([]string, 0, len(defsFields))
+	for name := range defsFields {
 		fieldNames = append(fieldNames, name)
 	}
 	sort.Strings(fieldNames)
 
 	// Build FIELDS array matching rippled format:
 	// Each entry is [fieldName, {nth, isVLEncoded, isSerialized, isSigningField, type}]
-	fields := make([]any, 0, len(defs.Fields))
+	fields := make([]any, 0, len(defsFields))
 	for _, name := range fieldNames {
-		fi := defs.Fields[name]
+		fi := defsFields[name]
 		fields = append(fields, []any{
 			name,
 			map[string]any{
@@ -56,12 +58,20 @@ func buildServerDefinitions() {
 	}
 
 	serverDefsBase = map[string]any{
-		"TYPES":               defs.Types,
+		"TYPES":               defs.Types(),
 		"FIELDS":              fields,
-		"LEDGER_ENTRY_TYPES":  defs.LedgerEntryTypes,
-		"TRANSACTION_TYPES":   defs.TransactionTypes,
-		"TRANSACTION_RESULTS": defs.TransactionResults,
+		"LEDGER_ENTRY_TYPES":  defs.LedgerEntryTypes(),
+		"TRANSACTION_TYPES":   defs.TransactionTypes(),
+		"TRANSACTION_RESULTS": defs.TransactionResults(),
 	}
+
+	// 3.2.0 (#6321): per-type field templates (with optionality) and flag maps.
+	// Added before the hash so the cache token covers them.
+	serverDefsBase["TRANSACTION_FORMATS"] = buildFormatsSection(tx.FormatCommonFields(), tx.FormatTemplates())
+	serverDefsBase["LEDGER_ENTRY_FORMATS"] = buildLedgerFormatsSection()
+	serverDefsBase["TRANSACTION_FLAGS"] = txFlagsTable
+	serverDefsBase["LEDGER_ENTRY_FLAGS"] = ledgerFlagsTable
+	serverDefsBase["ACCOUNT_SET_FLAGS"] = accountSetFlagsTable
 
 	// Hash follows rippled's approach (ServerInfo.cpp:288-293) — sha512Half over
 	// the serialized definitions document, emitted as the response `hash` field
@@ -71,7 +81,7 @@ func buildServerDefinitions() {
 	// server gave it), not a cross-implementation constant: it intentionally
 	// need not equal rippled's, whose Json::FastWriter serializes differently.
 	encoded, _ := json.Marshal(serverDefsBase)
-	sum := common.Sha512Half(encoded)
+	sum := sha512half.Sum(encoded)
 	serverDefsHash = strings.ToUpper(hex.EncodeToString(sum[:]))
 }
 
@@ -99,6 +109,46 @@ func (m *ServerDefinitionsMethod) Handle(ctx *types.RpcContext, params json.RawM
 	maps.Copy(response, serverDefsBase)
 	response["hash"] = serverDefsHash
 	return response, nil
+}
+
+// buildFormatsSection renders a FORMATS section: a "common" array plus one
+// array per type, each element {name, optionality}. Mirrors rippled's
+// TRANSACTION_FORMATS / LEDGER_ENTRY_FORMATS shape (ServerDefinitions.cpp).
+func buildFormatsSection(common []tx.FormatField, perType map[string][]tx.FormatField) map[string]any {
+	out := make(map[string]any, len(perType)+1)
+	out["common"] = txFormatFieldsToJSON(common)
+	for name, fields := range perType {
+		out[name] = txFormatFieldsToJSON(fields)
+	}
+	return out
+}
+
+func txFormatFieldsToJSON(fields []tx.FormatField) []any {
+	arr := make([]any, 0, len(fields))
+	for _, f := range fields {
+		arr = append(arr, map[string]any{"name": f.Name, "optionality": f.Style})
+	}
+	return arr
+}
+
+// buildLedgerFormatsSection renders LEDGER_ENTRY_FORMATS from the transcribed
+// ledger-entry SOTemplate tables (rippled has ledger optionality in
+// LedgerFormats; go-xrpl carries it in ledger_formats_data.go).
+func buildLedgerFormatsSection() map[string]any {
+	out := make(map[string]any, len(ledgerFormatTemplates)+1)
+	out["common"] = ledgerFormatFieldsToJSON(ledgerCommonFields)
+	for name, fields := range ledgerFormatTemplates {
+		out[name] = ledgerFormatFieldsToJSON(fields)
+	}
+	return out
+}
+
+func ledgerFormatFieldsToJSON(fields []ledgerFormatField) []any {
+	arr := make([]any, 0, len(fields))
+	for _, f := range fields {
+		arr = append(arr, map[string]any{"name": f.Name, "optionality": f.Style})
+	}
+	return arr
 }
 
 // isValidDefinitionsHash reports whether s is a 256-bit hash in hex form,

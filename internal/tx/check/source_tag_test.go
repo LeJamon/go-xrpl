@@ -29,33 +29,20 @@ func TestSerializeCheck_SourceTag(t *testing.T) {
 	}
 	checkTx.SourceTag = &srcTag
 
-	data, err := serializeCheck(checkTx, owner, dest, 5, checkTx.SendMax)
+	sle := newCheckData(checkTx, owner, dest, 5, checkTx.SendMax)
+	if !sle.HasSourceTag || sle.SourceTag != srcTag {
+		t.Fatalf("newCheckData lost SourceTag: has=%v val=%#x", sle.HasSourceTag, sle.SourceTag)
+	}
+
+	data, err := state.SerializeCheckFromData(sle)
 	if err != nil {
-		t.Fatalf("serializeCheck: %v", err)
+		t.Fatalf("SerializeCheckFromData: %v", err)
 	}
 
 	// sfSourceTag is UInt32 nth=3 → field header 0x23, then the big-endian value.
 	hexUpper := strings.ToUpper(toHexCheck(data))
 	if !strings.Contains(hexUpper, "23DEADBEEF") {
 		t.Fatalf("Check SLE blob missing sfSourceTag (23DEADBEEF): %s", hexUpper)
-	}
-
-	// The create flow re-parses then re-serializes to thread directory pages;
-	// the tag must survive that round-trip (HasSourceTag must be set).
-	parsed, err := state.ParseCheck(data)
-	if err != nil {
-		t.Fatalf("ParseCheck: %v", err)
-	}
-	if !parsed.HasSourceTag || parsed.SourceTag != srcTag {
-		t.Fatalf("round-trip lost SourceTag: has=%v val=%#x", parsed.HasSourceTag, parsed.SourceTag)
-	}
-
-	reser, err := state.SerializeCheckFromData(parsed)
-	if err != nil {
-		t.Fatalf("SerializeCheckFromData: %v", err)
-	}
-	if !strings.Contains(strings.ToUpper(toHexCheck(reser)), "23DEADBEEF") {
-		t.Fatalf("re-serialized Check SLE dropped sfSourceTag: %s", strings.ToUpper(toHexCheck(reser)))
 	}
 }
 
@@ -68,16 +55,20 @@ func TestSerializeCheck_NoSourceTag(t *testing.T) {
 		SendMax:     tx.NewXRPAmount(10_000_000),
 	}
 
-	data, err := serializeCheck(checkTx, owner, dest, 5, checkTx.SendMax)
+	sle := newCheckData(checkTx, owner, dest, 5, checkTx.SendMax)
+	if sle.HasSourceTag {
+		t.Fatalf("SourceTag should be absent, got %#x", sle.SourceTag)
+	}
+	data, err := state.SerializeCheckFromData(sle)
 	if err != nil {
-		t.Fatalf("serializeCheck: %v", err)
+		t.Fatalf("SerializeCheckFromData: %v", err)
 	}
 	parsed, err := state.ParseCheck(data)
 	if err != nil {
 		t.Fatalf("ParseCheck: %v", err)
 	}
 	if parsed.HasSourceTag {
-		t.Fatalf("SourceTag should be absent, got %#x", parsed.SourceTag)
+		t.Fatalf("SourceTag should be absent after round-trip, got %#x", parsed.SourceTag)
 	}
 }
 

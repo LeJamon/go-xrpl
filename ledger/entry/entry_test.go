@@ -43,10 +43,12 @@ var ledgerTypes = []struct {
 	{TypePermissionedDomain, 0x0082, "PermissionedDomain"},
 	{TypeDelegate, 0x0083, "Delegate"},
 	{TypeVault, 0x0084, "Vault"},
+	{TypeLoanBroker, 0x0088, "LoanBroker"},
+	{TypeLoan, 0x0089, "Loan"},
 }
 
 func TestTypeCodes(t *testing.T) {
-	if got, want := len(ledgerTypes), 28; got != want {
+	if got, want := len(ledgerTypes), 30; got != want {
 		t.Fatalf("ledgerTypes covers %d types, want %d — update the golden table when ledger_entries.macro changes", got, want)
 	}
 
@@ -72,7 +74,7 @@ func TestTypeString(t *testing.T) {
 
 func TestTypeStringUnknown(t *testing.T) {
 	for _, code := range []uint16{0x0000, 0x0001, 0x00ff, 0xffff} {
-		want := fmt.Sprintf("Unknown(%#x)", code)
+		want := fmt.Sprintf("Unknown(0x%04x)", code)
 		if got := Type(code).String(); got != want {
 			t.Errorf("Type(0x%04X).String() = %q, want %q", code, got, want)
 		}

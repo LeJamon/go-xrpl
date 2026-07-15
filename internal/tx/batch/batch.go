@@ -52,19 +52,24 @@ type BatchSignerData struct {
 	Signers           []tx.SignerWrapper `json:"Signers,omitempty"`
 }
 
-// Batch flags
+// Batch flags. The mode-flag bit positions match rippled TxFlags.h exactly so
+// that cross-implementation batches share one canonical flag word (and one
+// signing digest); the low-nibble values previously used here were wire- and
+// signature-incompatible with rippled.
 const (
 	// tfAllOrNothing fails the batch if any transaction fails
-	BatchFlagAllOrNothing uint32 = 0x00000001
+	BatchFlagAllOrNothing uint32 = 0x00010000
 	// tfOnlyOne succeeds if exactly one transaction succeeds
-	BatchFlagOnlyOne uint32 = 0x00000002
+	BatchFlagOnlyOne uint32 = 0x00020000
 	// tfUntilFailure processes until the first failure
-	BatchFlagUntilFailure uint32 = 0x00000004
+	BatchFlagUntilFailure uint32 = 0x00040000
 	// tfIndependent processes all transactions independently
-	BatchFlagIndependent uint32 = 0x00000008
+	BatchFlagIndependent uint32 = 0x00080000
 
-	// tfBatchMask is the mask for invalid batch flags
-	tfBatchMask uint32 = ^(BatchFlagAllOrNothing | BatchFlagOnlyOne | BatchFlagUntilFailure | BatchFlagIndependent)
+	// tfBatchMask is the mask of invalid outer Batch flags. It permits the four
+	// mode bits plus tfFullyCanonicalSig, and rejects tfInnerBatchTxn on the
+	// outer (nested batches are not supported), matching rippled TxFlags.h.
+	tfBatchMask uint32 = ^(tx.TfUniversal | BatchFlagAllOrNothing | BatchFlagOnlyOne | BatchFlagUntilFailure | BatchFlagIndependent) | tx.TfInnerBatchTxn
 
 	// MaxBatchTransactions is the maximum number of inner transactions
 	MaxBatchTransactions = 8
@@ -75,7 +80,6 @@ const (
 var (
 	ErrBatchTooFewTxns            = ter.Errorf(ter.TemARRAY_EMPTY, "batch must have at least 2 transactions")
 	ErrBatchTooManyTxns           = ter.Errorf(ter.TemARRAY_TOO_LARGE, "batch exceeds 8 transactions")
-	ErrBatchInvalidFlags          = ter.Errorf(ter.TemINVALID_FLAG, "invalid batch flags")
 	ErrBatchMustHaveOneFlag       = ter.Errorf(ter.TemINVALID_FLAG, "exactly one batch mode flag required")
 	ErrBatchTooManySigners        = ter.Errorf(ter.TemARRAY_TOO_LARGE, "batch signers exceeds 8 entries")
 	ErrBatchDuplicateSigner       = ter.Errorf(ter.TemREDUNDANT, "duplicate batch signer")
@@ -86,15 +90,40 @@ var (
 	ErrBatchNilInnerTx            = ter.Errorf(ter.TemMALFORMED, "inner transaction cannot be nil")
 	ErrBatchDuplicateInnerTx      = ter.Errorf(ter.TemREDUNDANT, "duplicate inner transaction")
 	ErrBatchInnerIsBatch          = ter.Errorf(ter.TemINVALID, "inner transaction cannot itself be a Batch")
+	ErrBatchInnerDisabledType     = ter.Errorf(ter.TemINVALID_INNER_BATCH, "inner transaction type is not allowed in a batch")
 	ErrBatchInnerMissingFlag      = ter.Errorf(ter.TemINVALID_FLAG, "inner transaction missing tfInnerBatchTxn flag")
 	ErrBatchInnerHasTxnSignature  = ter.Errorf(ter.TemBAD_SIGNATURE, "inner transaction cannot include TxnSignature")
 	ErrBatchInnerHasSigners       = ter.Errorf(ter.TemBAD_SIGNER, "inner transaction cannot include Signers")
 	ErrBatchInnerHasSigningPubKey = ter.Errorf(ter.TemBAD_REGKEY, "inner transaction SigningPubKey must be empty")
 	ErrBatchInnerBadFee           = ter.Errorf(ter.TemBAD_FEE, "inner transaction must have a fee of 0")
 	ErrBatchInnerSeqAndTicket     = ter.Errorf(ter.TemSEQ_AND_TICKET, "inner transaction must have exactly one of Sequence and TicketSequence")
+	ErrBatchInnerTicketAndTxnID   = ter.Errorf(ter.TemINVALID_INNER_BATCH, "inner transaction must not carry AccountTxnID when using a ticket")
 	ErrBatchInnerDupSeqOrTicket   = ter.Errorf(ter.TemREDUNDANT, "duplicate inner Sequence or TicketSequence for account")
 	ErrBatchInnerHashUncomputable = ter.Errorf(ter.TemINVALID, "failed to compute inner transaction hash")
 )
+
+// disabledInnerTxTypes are transaction types that may not appear as inner
+// transactions of a Batch. The check is unconditional — it is not gated on any
+// amendment — so a batch wrapping one of these is rejected at preflight
+// regardless of whether the wrapped feature is enabled.
+// Reference: rippled Batch::disabledTxTypes (Batch.h) / Batch::preflight.
+var disabledInnerTxTypes = map[tx.Type]struct{}{
+	tx.TypeVaultCreate:             {},
+	tx.TypeVaultSet:                {},
+	tx.TypeVaultDelete:             {},
+	tx.TypeVaultDeposit:            {},
+	tx.TypeVaultWithdraw:           {},
+	tx.TypeVaultClawback:           {},
+	tx.TypeLoanBrokerSet:           {},
+	tx.TypeLoanBrokerDelete:        {},
+	tx.TypeLoanBrokerCoverDeposit:  {},
+	tx.TypeLoanBrokerCoverWithdraw: {},
+	tx.TypeLoanBrokerCoverClawback: {},
+	tx.TypeLoanSet:                 {},
+	tx.TypeLoanDelete:              {},
+	tx.TypeLoanManage:              {},
+	tx.TypeLoanPay:                 {},
+}
 
 // NewBatch creates a new Batch transaction
 func NewBatch(account string) *Batch {
@@ -105,6 +134,13 @@ func NewBatch(account string) *Batch {
 
 func (b *Batch) TxType() tx.Type {
 	return tx.TypeBatch
+}
+
+// GetFlagsMask adopts the engine FlagsMasker seam, checking tfBatchMask at
+// preflight0 — before the popcount mode check in Validate — mirroring rippled
+// Batch::getFlagsMask.
+func (b *Batch) GetFlagsMask(rules *amendment.Rules) uint32 {
+	return tfBatchMask
 }
 
 // InnerTxCount returns the number of inner transactions in the batch.
@@ -122,6 +158,24 @@ func (b *Batch) InnerTransactions() []tx.Transaction {
 		txns[i] = rt.RawTransaction.InnerTx
 	}
 	return txns
+}
+
+// checkInnerSignatureFields rejects signature material on an inner batch object,
+// mirroring the checkSignatureFields lambda in rippled Batch::preflight: a
+// TxnSignature yields temBAD_SIGNATURE, a Signers array temBAD_SIGNER, and a
+// non-empty SigningPubKey temBAD_REGKEY. It is applied to every inner
+// transaction and to its nested CounterpartySignature.
+func checkInnerSignatureFields(signingPubKey, txnSignature string, hasSigners bool) error {
+	if txnSignature != "" {
+		return ErrBatchInnerHasTxnSignature
+	}
+	if hasSigners {
+		return ErrBatchInnerHasSigners
+	}
+	if signingPubKey != "" {
+		return ErrBatchInnerHasSigningPubKey
+	}
+	return nil
 }
 
 // validateInnerTransactions runs the per-inner checks and, as a side effect,
@@ -155,22 +209,38 @@ func (b *Batch) validateInnerTransactions() (map[string]struct{}, error) {
 			return nil, ErrBatchInnerIsBatch
 		}
 
+		if _, disabled := disabledInnerTxTypes[inner.TxType()]; disabled {
+			return nil, ErrBatchInnerDisabledType
+		}
+
 		innerCommon := inner.GetCommon()
 
 		if innerCommon.GetFlags()&tx.TfInnerBatchTxn == 0 {
 			return nil, ErrBatchInnerMissingFlag
 		}
-		if innerCommon.TxnSignature != "" {
-			return nil, ErrBatchInnerHasTxnSignature
+		if err := checkInnerSignatureFields(innerCommon.SigningPubKey, innerCommon.TxnSignature, len(innerCommon.Signers) > 0); err != nil {
+			return nil, err
 		}
-		if len(innerCommon.Signers) > 0 {
-			return nil, ErrBatchInnerHasSigners
-		}
-		if innerCommon.SigningPubKey != "" {
-			return nil, ErrBatchInnerHasSigningPubKey
+		// A CounterpartySignature is optional on an inner transaction and should
+		// not be present, but if it is it must not carry any signature material.
+		if cp := innerCommon.CounterpartySignature; cp != nil {
+			if err := checkInnerSignatureFields(cp.SigningPubKey, cp.TxnSignature, len(cp.Signers) > 0); err != nil {
+				return nil, err
+			}
 		}
 		if err := validateInnerFee(innerCommon.Fee); err != nil {
 			return nil, err
+		}
+
+		// The inner's own preflight1 rejects a ticket combined with AccountTxnID
+		// (getSeqProxy().isTicket() && sfAccountTxnID present -> temINVALID, surfaced
+		// on the outer as temINVALID_INNER_BATCH). rippled runs the full inner
+		// preflight here, after the fee check; go-xrpl folds this specific rule into
+		// the inner loop since it never reaches the deferred engine inner-preflight
+		// otherwise. Reference: rippled Batch.cpp inner preflight -> Transactor.cpp preflight1.
+		usesTicket := innerCommon.TicketSequence != nil && (innerCommon.Sequence == nil || *innerCommon.Sequence == 0)
+		if usesTicket && innerCommon.AccountTxnID != "" {
+			return nil, ErrBatchInnerTicketAndTxnID
 		}
 
 		// rippled treats sfSequence absent and sfSequence==0 identically via
@@ -236,11 +306,8 @@ func (b *Batch) Validate() error {
 		return err
 	}
 
-	// Check for invalid flags
-	// Reference: rippled Batch.cpp:213-217
-	if b.Common.Flags != nil && *b.Common.Flags&tfBatchMask != 0 {
-		return ErrBatchInvalidFlags
-	}
+	// The tfBatchMask flag check runs at preflight0 via GetFlagsMask (before this
+	// body), matching rippled where getFlagsMask precedes Batch::preflight.
 
 	// Must have exactly one of the mutually exclusive flags
 	// Reference: rippled Batch.cpp:220-227
@@ -776,21 +843,21 @@ func checkDelegatePermission(ctx *tx.ApplyContext, accountID [20]byte, innerTx t
 	common := innerTx.GetCommon()
 	delegateID, delegateErr := state.DecodeAccountID(common.Delegate)
 	if delegateErr != nil {
-		return ter.TecNO_DELEGATE_PERMISSION
+		return ter.TerNO_DELEGATE_PERMISSION
 	}
 	delegateKeylet := keylet.Delegate(accountID, delegateID)
 	delegateData, readErr := ctx.View.Read(delegateKeylet)
 	if readErr != nil || delegateData == nil {
-		return ter.TecNO_DELEGATE_PERMISSION
+		return ter.TerNO_DELEGATE_PERMISSION
 	}
 	delegateEntry, parseErr := state.ParseDelegate(delegateData)
 	if parseErr != nil {
-		return ter.TecNO_DELEGATE_PERMISSION
+		return ter.TerNO_DELEGATE_PERMISSION
 	}
 	// Check if the delegate SLE grants permission for this tx type.
 	txTypeValue := uint32(innerTx.TxType())
 	if !delegateEntry.HasTxPermission(txTypeValue) {
-		return ter.TecNO_DELEGATE_PERMISSION
+		return ter.TerNO_DELEGATE_PERMISSION
 	}
 	return ter.TesSUCCESS
 }

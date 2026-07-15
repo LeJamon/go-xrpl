@@ -83,18 +83,20 @@ func (p *PaymentChannelFund) RequiredAmendments() [][32]byte {
 	return [][32]byte{amendment.FeaturePayChan}
 }
 
-// Preclaim performs the rules-aware fix1543 flag check.
-// Reference: rippled PayChan.cpp:332 — stray (non-universal) flags are rejected
-// only once fix1543 is active. rippled runs this check first in preflight; the
-// gate is rules-aware and go-xrpl exposes rules only at Preclaim, so it runs
-// after the common preflight/preclaim steps. For a tx malformed in two ways this
-// can surface a different tem code than rippled; the result is tem-only (never
-// enters a ledger) so there is no consensus divergence.
-func (p *PaymentChannelFund) Preclaim(_ tx.LedgerView, config tx.EngineConfig) ter.Result {
-	if config.GetRules().Enabled(amendment.FeatureFix1543) && (p.GetFlags()&tx.TfUniversalMask) != 0 {
-		return ter.TemINVALID_FLAG
+// GetFlagsMask returns the invalid-flags mask enforced at preflight0: any
+// non-universal flag is rejected.
+// Reference: rippled PayChan.cpp PayChanFund::getFlagsMask.
+func (p *PaymentChannelFund) GetFlagsMask(rules *amendment.Rules) uint32 {
+	return tx.TfUniversalMask
+}
+
+// PreflightRules rejects a zero Channel once fixCleanup3_2_0 is enabled: a zero
+// hash cannot be a ledger key.
+func (p *PaymentChannelFund) PreflightRules(rules *amendment.Rules) error {
+	if rules.FixCleanup3_2_0Enabled() && isZeroChannel(p.Channel) {
+		return ter.Errorf(ter.TemMALFORMED, "Channel must not be zero")
 	}
-	return ter.TesSUCCESS
+	return nil
 }
 
 // Reference: rippled PayChan.cpp PayChanFund::doApply()
@@ -133,9 +135,10 @@ func (p *PaymentChannelFund) Apply(ctx *tx.ApplyContext) ter.Result {
 
 	// Auto-close check: if CancelAfter or Expiration has passed
 	// Reference: rippled PayChan.cpp doApply() lines 345-360
+	rules := ctx.Rules()
 	closeTime := ctx.Config.ParentCloseTime
-	if (channel.CancelAfter > 0 && closeTime >= channel.CancelAfter) ||
-		(channel.Expiration > 0 && closeTime >= channel.Expiration) {
+	if isChannelExpired(rules, closeTime, channel.CancelAfter) ||
+		isChannelExpired(rules, closeTime, channel.Expiration) {
 		return closeChannel(ctx, channelKey, channel)
 	}
 
@@ -150,7 +153,7 @@ func (p *PaymentChannelFund) Apply(ctx *tx.ApplyContext) ter.Result {
 	// Reference: rippled PayChan.cpp doApply() lines 370-381
 	if p.Expiration != nil {
 		// minExpiration = closeTime + settleDelay
-		minExpiration := closeTime + channel.SettleDelay
+		minExpiration := saturatingAdd(rules, closeTime, channel.SettleDelay)
 
 		// If channel already has expiration and it's less than minExpiration, use it
 		if channel.Expiration > 0 && channel.Expiration < minExpiration {
@@ -159,6 +162,9 @@ func (p *PaymentChannelFund) Apply(ctx *tx.ApplyContext) ter.Result {
 
 		// New expiration must be >= minExpiration
 		if *p.Expiration < minExpiration {
+			if rules.FixCleanup3_2_0Enabled() {
+				return ter.TecNO_PERMISSION
+			}
 			return ter.TemBAD_EXPIRATION
 		}
 

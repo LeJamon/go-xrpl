@@ -34,13 +34,15 @@ func (n *NFTokenBurn) TxType() tx.Type {
 }
 
 // Reference: rippled NFTokenBurn.cpp preflight
+// GetFlagsMask adopts the engine FlagsMasker seam. NFTokenBurn defines no
+// type-specific flags, so it uses the base universal mask, checked at preflight0.
+func (n *NFTokenBurn) GetFlagsMask(rules *amendment.Rules) uint32 {
+	return tx.TfUniversalMask
+}
+
 func (n *NFTokenBurn) Validate() error {
 	if err := n.BaseTx.Validate(); err != nil {
 		return err
-	}
-
-	if err := tx.CheckFlags(n.GetFlags(), tx.TfUniversalMask); err != nil {
-		return ter.Errorf(ter.TemINVALID_FLAG, "invalid NFTokenBurn flags")
 	}
 
 	if n.NFTokenID == "" {
@@ -55,7 +57,7 @@ func (n *NFTokenBurn) Flatten() (map[string]any, error) {
 }
 
 func (n *NFTokenBurn) RequiredAmendments() [][32]byte {
-	return [][32]byte{amendment.FeatureNonFungibleTokensV1}
+	return nil
 }
 
 // Reference: rippled NFTokenBurn.cpp doApply
@@ -127,16 +129,6 @@ func (n *NFTokenBurn) Apply(ctx *tx.ApplyContext) ter.Result {
 		}
 	}
 
-	// Reject burning a token carrying too many offers (it would produce too much
-	// metadata). Only enforced before fixNonFungibleTokensV1_2.
-	// Reference: rippled NFTokenBurn.cpp preclaim — notTooManyOffers.
-	fixV1_2 := ctx.Rules().Enabled(amendment.FeatureFixNonFungibleTokensV1_2)
-	if !fixV1_2 {
-		if r := notTooManyOffers(ctx.View, tokenID); r != ter.TesSUCCESS {
-			return r
-		}
-	}
-
 	// Remove the token using proper page management (handles merging)
 	fixPageLinks := ctx.Rules().Enabled(amendment.FeatureFixNFTokenPageLinks)
 	result, pagesRemoved := removeToken(ctx.View, ownerID, tokenID, fixPageLinks)
@@ -183,34 +175,19 @@ func (n *NFTokenBurn) Apply(ctx *tx.ApplyContext) ter.Result {
 		}
 	}
 
-	// Reference: rippled NFTokenBurn.cpp:108-139
-	selfDeleted := 0
-	if !fixV1_2 {
-		// Without fixNonFungibleTokensV1_2: delete ALL offers (no limit)
-		// notTooManyOffers was already checked above
-		r1, res := deleteNFTokenOffers(tokenID, true, maxInt, ctx.View, ctx.AccountID)
-		if res != ter.TesSUCCESS {
-			return res
-		}
-		r2, res := deleteNFTokenOffers(tokenID, false, maxInt, ctx.View, ctx.AccountID)
-		if res != ter.TesSUCCESS {
-			return res
-		}
-		selfDeleted = r1.SelfDeleted + r2.SelfDeleted
-	} else {
-		// With fixNonFungibleTokensV1_2: delete up to 500 offers
-		// Prioritize sell offers (they're typically fewer)
-		r1, res := deleteNFTokenOffers(tokenID, true, maxDeletableTokenOfferEntries, ctx.View, ctx.AccountID)
-		if res != ter.TesSUCCESS {
-			return res
-		}
-		remaining := maxDeletableTokenOfferEntries - r1.TotalDeleted
-		r2, res := deleteNFTokenOffers(tokenID, false, remaining, ctx.View, ctx.AccountID)
-		if res != ter.TesSUCCESS {
-			return res
-		}
-		selfDeleted = r1.SelfDeleted + r2.SelfDeleted
+	// Delete up to 500 offers in total, prioritizing sell offers (typically
+	// fewer) so the sell directory is cleaned up first.
+	// Reference: rippled NFTokenBurn.cpp doApply.
+	r1, res := deleteNFTokenOffers(tokenID, true, maxDeletableTokenOfferEntries, ctx.View, ctx.AccountID)
+	if res != ter.TesSUCCESS {
+		return res
 	}
+	remaining := maxDeletableTokenOfferEntries - r1.TotalDeleted
+	r2, res := deleteNFTokenOffers(tokenID, false, remaining, ctx.View, ctx.AccountID)
+	if res != ter.TesSUCCESS {
+		return res
+	}
+	selfDeleted := r1.SelfDeleted + r2.SelfDeleted
 
 	// Adjust ctx.Account for offers owned by the burner
 	// (view changes to ctx.Account are overwritten by the engine)

@@ -4,9 +4,10 @@ import (
 	"fmt"
 	"math/big"
 
-	"github.com/LeJamon/go-xrpl/crypto/common"
+	"github.com/LeJamon/go-xrpl/crypto/sha512half"
 	"github.com/LeJamon/go-xrpl/internal/ledger/state"
 	"github.com/LeJamon/go-xrpl/internal/tx"
+	"github.com/LeJamon/go-xrpl/internal/tx/mptutil"
 	"github.com/LeJamon/go-xrpl/keylet"
 )
 
@@ -43,22 +44,20 @@ func calculateLPTokens(amount1, amount2 tx.Amount, fixV1_3 bool) tx.Amount {
 // The LP token currency is 0x03 prefix + first 19 bytes of sha512Half(min(c1,c2), max(c1,c2)).
 // Reference: rippled AMMCore.cpp ammLPTCurrency()
 func GenerateAMMLPTCurrency(currency1, currency2 string) string {
-	c1 := keylet.CurrencyBytes(currency1)
-	c2 := keylet.CurrencyBytes(currency2)
+	return GenerateAMMLPTCurrencyForAssets(
+		tx.Asset{Currency: currency1},
+		tx.Asset{Currency: currency2},
+	)
+}
 
-	// Sort currencies lexicographically (std::minmax in rippled)
-	minC, maxC := c1, c2
-	for i := range 20 {
-		if c1[i] < c2[i] {
-			break
-		} else if c1[i] > c2[i] {
-			minC, maxC = c2, c1
-			break
-		}
+func GenerateAMMLPTCurrencyForAssets(asset1, asset2 tx.Asset) string {
+	minAsset, maxAsset := asset1, asset2
+	if !assetLessEqual(asset1, asset2) {
+		minAsset, maxAsset = asset2, asset1
 	}
-
-	// sha512Half(minC, maxC)
-	hash := common.Sha512Half(minC[:], maxC[:])
+	minSeed := ammLPTSeed(minAsset)
+	maxSeed := ammLPTSeed(maxAsset)
+	hash := sha512half.Sum(minSeed, maxSeed)
 
 	// AMM LPToken currency: 0x03 + first 19 bytes of hash
 	var lptCurrency [20]byte
@@ -66,6 +65,15 @@ func GenerateAMMLPTCurrency(currency1, currency2 string) string {
 	copy(lptCurrency[1:], hash[:19])
 
 	return fmt.Sprintf("%X", lptCurrency)
+}
+
+func ammLPTSeed(asset tx.Asset) []byte {
+	if asset.IsMPT() {
+		id, _ := mptutil.DecodeID(asset.MPTIssuanceID)
+		return id[:]
+	}
+	currency := keylet.CurrencyBytes(asset.Currency)
+	return currency[:]
 }
 
 // numberPower returns f^n using exponentiation by squaring.
@@ -212,6 +220,9 @@ func toSTAmount(original, result tx.Amount) tx.Amount {
 		drops := iouToDrops(result)
 		return state.NewXRPAmountFromInt(drops)
 	}
+	if original.IsMPT() {
+		return mptFromNumber(original, result, state.RoundToNearest)
+	}
 	return state.NewIssuedAmountFromValue(result.Mantissa(), result.Exponent(),
 		original.Currency, original.Issuer)
 }
@@ -224,6 +235,9 @@ func toSTAmountIssue(amt tx.Amount, result tx.Amount) tx.Amount {
 		drops := iouToDropsRounded(result, state.RoundToNearest)
 		return state.NewXRPAmountFromInt(drops)
 	}
+	if amt.IsMPT() {
+		return mptFromNumber(amt, result, state.RoundToNearest)
+	}
 	return state.NewIssuedAmountFromValue(result.Mantissa(), result.Exponent(),
 		amt.Currency, amt.Issuer)
 }
@@ -234,6 +248,9 @@ func toSTAmountIssue(amt tx.Amount, result tx.Amount) tx.Amount {
 func toSTAmountIssueRounded(amt tx.Amount, result tx.Amount, mode state.RoundingMode) tx.Amount {
 	if amt.IsNative() {
 		return state.NewXRPAmountFromInt(iouToDropsRounded(result, mode))
+	}
+	if amt.IsMPT() {
+		return mptFromNumber(amt, result, mode)
 	}
 	return state.NewIssuedAmountFromValue(result.Mantissa(), result.Exponent(),
 		amt.Currency, amt.Issuer)
@@ -253,8 +270,17 @@ func mulRoundForAsset(amount, frac tx.Amount, rm state.RoundingMode, asset tx.Am
 	}
 	// For IOU: rounding mode active during multiplication normalization
 	result := amount.MulRounded(frac, rm == state.RoundUpward, rm)
+	if asset.IsMPT() {
+		return mptFromNumber(asset, result, rm)
+	}
 	return state.NewIssuedAmountFromValue(result.Mantissa(), result.Exponent(),
 		asset.Currency, asset.Issuer)
+}
+
+func mptFromNumber(original, number tx.Amount, mode state.RoundingMode) tx.Amount {
+	value := state.NewXRPLNumberRounded(number.Mantissa(), number.Exponent(), mode).
+		ToInt64WithMode(mode)
+	return mptAmount(amountAsset(original), value)
 }
 
 // multiplyRawToDrops multiplies two IOU-format amounts and converts the
@@ -379,6 +405,9 @@ func applyGuardRound(mantissa, guardDigit int64, hasRemainder, neg bool, rm stat
 // This is necessary because XRP/XRP division uses integer arithmetic and loses precision.
 // For example, 1000 XRP / 10000 XRP = 0 with integer division, but should be 0.1 as a fraction.
 func toIOUForCalc(amt tx.Amount) tx.Amount {
+	if value, ok := amt.MPTRaw(); ok {
+		return state.NewIssuedAmountFromValue(value, 0, "", "")
+	}
 	if !amt.IsNative() {
 		// Drop the currency/issuer tag: AMM math operates in rippled's
 		// unitless Number space, where amounts of any asset are freely

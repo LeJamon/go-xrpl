@@ -10,12 +10,7 @@ import (
 // that intentionally have no Go Result constant. These are decode-only codes
 // inherited from upstream ripple-binary-codec definitions: they may appear in
 // historical metadata and must decode by name, but go-xrpl never produces them.
-//
-//   - terNO_DELEGATE_PERMISSION (-85): superseded by tecNO_DELEGATE_PERMISSION
-//     (198); the negative-range form is retained only for backward decode.
-var decodeOnlyResultExtras = map[string]int32{
-	"terNO_DELEGATE_PERMISSION": -85,
-}
+var decodeOnlyResultExtras = map[string]int32{}
 
 // TestResultDefinitionsLockstep enforces the invariant that every Result
 // constant in result.go has a matching definitions.json TRANSACTION_RESULTS
@@ -28,7 +23,7 @@ var decodeOnlyResultExtras = map[string]int32{
 // serialization with ledger state already mutated, producing a divergent
 // ledger (the PR #726 hazard class).
 func TestResultDefinitionsLockstep(t *testing.T) {
-	defs := definitions.Get().TransactionResults
+	defs := definitions.Get().TransactionResults()
 
 	// Every result.go constant must appear in definitions.json with the same value.
 	for code, name := range resultNames {

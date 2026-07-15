@@ -9,6 +9,7 @@ import (
 
 	binarycodec "github.com/LeJamon/go-xrpl/codec/binarycodec"
 	"github.com/LeJamon/go-xrpl/internal/statecompare"
+	"github.com/LeJamon/go-xrpl/protocol"
 	"github.com/LeJamon/go-xrpl/shamap"
 )
 
@@ -30,7 +31,7 @@ func reconstructMainnetState(
 	ledgerIndex uint32,
 	expectedAccountHash [32]byte,
 ) (*shamap.SHAMap, bool, error) {
-	txs, err := client.GetTransactions(ctx, ledgerIndex)
+	txs, err := client.Transactions(ctx, ledgerIndex)
 	if err != nil {
 		return nil, false, fmt.Errorf("getting transactions: %w", err)
 	}
@@ -64,7 +65,7 @@ type metaTx struct {
 // (tx_index) order. A second pass rebuilds directory page contents (sfIndexes),
 // which metadata never carries.
 func reconstructFromMeta(preState *shamap.SHAMap, metas []metaTx, ledgerIndex uint32) (*shamap.SHAMap, error) {
-	corrected, err := preState.Snapshot(true)
+	corrected, err := preState.SnapshotMutable()
 	if err != nil {
 		return nil, fmt.Errorf("snapshotting pre-state: %w", err)
 	}
@@ -123,7 +124,7 @@ func applyAffectedNode(
 			continue
 		}
 		idxHex, _ := fields["LedgerIndex"].(string)
-		idx, err := decodeIndex(idxHex)
+		idx, err := protocol.Hash256FromHex(idxHex)
 		if err != nil {
 			return fmt.Errorf("bad LedgerIndex %q: %w", idxHex, err)
 		}
@@ -144,7 +145,7 @@ func applyAffectedNode(
 			if let, ok := fields["LedgerEntryType"]; ok {
 				obj["LedgerEntryType"] = let
 			}
-			fillRequiredDefaults(obj, entryType)
+			fillCreatedDefaults(obj, entryType)
 			fillBookDirectoryDefaults(obj, entryType)
 			threadPreviousTxn(obj, entryType, txHash, ledgerSeq)
 			recordMembership(deltas, idx, entryType, obj, true)
@@ -232,20 +233,6 @@ func divergingObjects(goxrpl, mainnet *shamap.SHAMap) ([]divergingObject, error)
 		out = append(out, obj)
 	}
 	return out, nil
-}
-
-// decodeIndex parses a 32-byte hex ledger index.
-func decodeIndex(s string) ([32]byte, error) {
-	var idx [32]byte
-	b, err := hex.DecodeString(s)
-	if err != nil {
-		return idx, err
-	}
-	if len(b) != 32 {
-		return idx, fmt.Errorf("expected 32 bytes, got %d", len(b))
-	}
-	copy(idx[:], b)
-	return idx, nil
 }
 
 // asMap returns v as a map[string]any, or an empty map when v is absent.

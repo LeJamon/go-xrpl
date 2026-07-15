@@ -3,12 +3,11 @@ package depositpreauth
 import (
 	"bytes"
 	"encoding/hex"
-	"fmt"
 	"sort"
 
 	"github.com/LeJamon/go-xrpl/amendment"
 	addresscodec "github.com/LeJamon/go-xrpl/codec/addresscodec"
-	"github.com/LeJamon/go-xrpl/crypto/common"
+	"github.com/LeJamon/go-xrpl/crypto/sha512half"
 	"github.com/LeJamon/go-xrpl/keylet"
 
 	"github.com/LeJamon/go-xrpl/internal/ledger/state"
@@ -72,24 +71,36 @@ func (d *DepositPreauth) TxType() tx.Type {
 	return tx.TypeDepositPreauth
 }
 
-// Reference: rippled DepositPreauth::preflight() amendment checks
 func (d *DepositPreauth) RequiredAmendments() [][32]byte {
-	amendments := [][32]byte{amendment.FeatureDepositPreauth}
-	if len(d.AuthorizeCredentials) > 0 || len(d.UnauthorizeCredentials) > 0 {
-		amendments = append(amendments, amendment.FeatureCredentials)
+	return nil
+}
+
+// CheckExtraFeatures gates the credential-based forms on the Credentials
+// amendment. Presence is keyed on the field, not its length, so a present but
+// empty AuthorizeCredentials/UnauthorizeCredentials array with the amendment
+// disabled is temDISABLED — the same NotTEC rippled returns from
+// checkExtraFeatures, before preflight1's common checks and before the
+// temARRAY_EMPTY body check.
+func (d *DepositPreauth) CheckExtraFeatures(rules *amendment.Rules) error {
+	if (d.AuthorizeCredentials != nil || d.UnauthorizeCredentials != nil) &&
+		!rules.Enabled(amendment.FeatureCredentials) {
+		return ter.Errorf(ter.TemDISABLED, "credentials require the Credentials amendment")
 	}
-	return amendments
+	return nil
+}
+
+// GetFlagsMask reports the invalid-flag mask. DepositPreauth defines no
+// type-specific flags, so only the universal bits (tfFullyCanonicalSig,
+// tfInnerBatchTxn) are permitted — matching rippled, which leaves getFlagsMask
+// at its tfUniversalMask default. The engine rejects flags intersecting the
+// mask at preflight0.
+func (d *DepositPreauth) GetFlagsMask(rules *amendment.Rules) uint32 {
+	return tx.TfUniversalMask
 }
 
 // Reference: rippled DepositPreauth::preflight()
 func (d *DepositPreauth) Validate() error {
 	if err := d.BaseTx.Validate(); err != nil {
-		return err
-	}
-
-	// No flags allowed
-	// Reference: rippled preflight() - tx.getFlags() & tfUniversalMask
-	if err := tx.CheckNoFlags(d.GetFlags()); err != nil {
 		return err
 	}
 
@@ -176,7 +187,7 @@ func checkCredentialArray(creds []CredentialWrapper) error {
 		}
 
 		// Check for duplicates using sha512Half(issuer, credType)
-		hash := common.Sha512Half(issuerID[:], credTypeBytes)
+		hash := sha512half.Sum(issuerID[:], credTypeBytes)
 		if duplicates[hash] {
 			return ter.Errorf(ter.TemMALFORMED, "duplicates in credentials")
 		}
@@ -258,8 +269,67 @@ func toKeyletPairs(pairs []sortedCredPair) []keylet.CredentialPair {
 	return result
 }
 
-// Combines preclaim checks and doApply logic.
-// Reference: rippled DepositPreauth::preclaim() + DepositPreauth::doApply()
+// Preclaim runs the ledger-aware existence checks for the four mutually
+// exclusive forms, matching rippled DepositPreauth::preclaim's order: the
+// Authorize target must exist (tecNO_TARGET) and its preauth entry must not
+// (tecDUPLICATE); an Unauthorize target's preauth entry must exist (tecNO_ENTRY);
+// every AuthorizeCredentials issuer must exist (tecNO_ISSUER) and the entry must
+// not (tecDUPLICATE); an UnauthorizeCredentials entry must exist (tecNO_ENTRY).
+// The reserve check and mutation stay in Apply (rippled doApply).
+// Reference: rippled DepositPreauth::preclaim.
+func (d *DepositPreauth) Preclaim(view tx.LedgerView, config tx.EngineConfig) ter.Result {
+	accountID, err := state.DecodeAccountID(d.Account)
+	if err != nil {
+		return ter.TemBAD_SRC_ACCOUNT
+	}
+
+	switch {
+	case d.Authorize != "":
+		authorizedID, derr := state.DecodeAccountID(d.Authorize)
+		if derr != nil {
+			return ter.TemINVALID
+		}
+		if exists, _ := view.Exists(keylet.Account(authorizedID)); !exists {
+			return ter.TecNO_TARGET
+		}
+		if exists, _ := view.Exists(keylet.DepositPreauth(accountID, authorizedID)); exists {
+			return ter.TecDUPLICATE
+		}
+	case d.Unauthorize != "":
+		unauthorizedID, derr := state.DecodeAccountID(d.Unauthorize)
+		if derr != nil {
+			return ter.TemINVALID
+		}
+		if exists, _ := view.Exists(keylet.DepositPreauth(accountID, unauthorizedID)); !exists {
+			return ter.TecNO_ENTRY
+		}
+	case len(d.AuthorizeCredentials) > 0:
+		sorted := makeSorted(d.AuthorizeCredentials)
+		if sorted == nil {
+			return ter.TefINTERNAL
+		}
+		for _, p := range sorted {
+			if exists, _ := view.Exists(keylet.Account(p.issuer)); !exists {
+				return ter.TecNO_ISSUER
+			}
+		}
+		if exists, _ := view.Exists(keylet.DepositPreauthCredentials(accountID, toKeyletPairs(sorted))); exists {
+			return ter.TecDUPLICATE
+		}
+	case len(d.UnauthorizeCredentials) > 0:
+		sorted := makeSorted(d.UnauthorizeCredentials)
+		if sorted == nil {
+			return ter.TefINTERNAL
+		}
+		if exists, _ := view.Exists(keylet.DepositPreauthCredentials(accountID, toKeyletPairs(sorted))); !exists {
+			return ter.TecNO_ENTRY
+		}
+	}
+	return ter.TesSUCCESS
+}
+
+// Apply performs the ledger mutation (rippled DepositPreauth::doApply). The
+// existence checks live in Preclaim.
 func (d *DepositPreauth) Apply(ctx *tx.ApplyContext) ter.Result {
 	ctx.Log.Trace("deposit preauth apply",
 		"account", d.Account,
@@ -289,22 +359,7 @@ func (d *DepositPreauth) applyAuthorize(ctx *tx.ApplyContext) ter.Result {
 		return ter.TemINVALID
 	}
 
-	// --- Preclaim: verify target account exists ---
-	if exists, _ := ctx.View.Exists(keylet.Account(authorizedID)); !exists {
-		ctx.Log.Warn("deposit preauth authorize: target account does not exist",
-			"authorize", d.Authorize,
-		)
-		return ter.TecNO_TARGET
-	}
-
-	// --- Preclaim: verify preauth entry doesn't already exist ---
 	preauthKey := keylet.DepositPreauth(ctx.AccountID, authorizedID)
-	if exists, _ := ctx.View.Exists(preauthKey); exists {
-		ctx.Log.Warn("deposit preauth authorize: preauth already exists",
-			"authorize", d.Authorize,
-		)
-		return ter.TecDUPLICATE
-	}
 
 	// Check reserve using the prior balance (before the actual fee was
 	// deducted), matching rippled's mPriorBalance comparison.
@@ -349,43 +404,17 @@ func (d *DepositPreauth) applyUnauthorize(ctx *tx.ApplyContext) ter.Result {
 	}
 
 	preauthKey := keylet.DepositPreauth(ctx.AccountID, unauthorizedID)
-
-	// --- Preclaim: verify preauth entry exists ---
-	if exists, _ := ctx.View.Exists(preauthKey); !exists {
-		ctx.Log.Warn("deposit preauth unauthorize: preauth entry does not exist",
-			"unauthorize", d.Unauthorize,
-		)
-		return ter.TecNO_ENTRY
-	}
-
 	return removeFromLedger(ctx, preauthKey)
 }
 
 // applyAuthorizeCredentials handles the AuthorizeCredentials case.
 // Reference: rippled DepositPreauth preclaim(sfAuthorizeCredentials) + doApply(sfAuthorizeCredentials)
 func (d *DepositPreauth) applyAuthorizeCredentials(ctx *tx.ApplyContext) ter.Result {
-	// --- Preclaim: sort and validate credentials ---
 	sorted := makeSorted(d.AuthorizeCredentials)
 	if sorted == nil {
 		return ter.TefINTERNAL
 	}
-
-	// Verify each issuer account exists
-	for _, p := range sorted {
-		if exists, _ := ctx.View.Exists(keylet.Account(p.issuer)); !exists {
-			ctx.Log.Warn("deposit preauth authorize credentials: issuer does not exist",
-				"issuer", fmt.Sprintf("%x", p.issuer),
-			)
-			return ter.TecNO_ISSUER
-		}
-	}
-
-	// Verify preauth entry doesn't already exist
 	preauthKey := keylet.DepositPreauthCredentials(ctx.AccountID, toKeyletPairs(sorted))
-	if exists, _ := ctx.View.Exists(preauthKey); exists {
-		ctx.Log.Warn("deposit preauth authorize credentials: preauth already exists")
-		return ter.TecDUPLICATE
-	}
 
 	// Check reserve using the prior balance (before the actual fee was
 	// deducted), matching rippled's mPriorBalance comparison.
@@ -441,15 +470,7 @@ func (d *DepositPreauth) applyUnauthorizeCredentials(ctx *tx.ApplyContext) ter.R
 	if sorted == nil {
 		return ter.TefINTERNAL
 	}
-
 	preauthKey := keylet.DepositPreauthCredentials(ctx.AccountID, toKeyletPairs(sorted))
-
-	// --- Preclaim: verify preauth entry exists ---
-	if exists, _ := ctx.View.Exists(preauthKey); !exists {
-		ctx.Log.Warn("deposit preauth unauthorize credentials: preauth entry does not exist")
-		return ter.TecNO_ENTRY
-	}
-
 	return removeFromLedger(ctx, preauthKey)
 }
 

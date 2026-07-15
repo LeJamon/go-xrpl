@@ -66,13 +66,13 @@ func TestAccountObjectsErrorValidation(t *testing.T) {
 		{
 			name:          "Missing account field - empty params",
 			params:        map[string]any{},
-			expectedError: "Missing required parameter: account",
+			expectedError: "Missing field 'account'.",
 			expectedCode:  types.RpcINVALID_PARAMS,
 		},
 		{
 			name:          "Missing account field - nil params",
 			params:        nil,
-			expectedError: "Missing required parameter: account",
+			expectedError: "Missing field 'account'.",
 			expectedCode:  types.RpcINVALID_PARAMS,
 		},
 		{
@@ -80,7 +80,7 @@ func TestAccountObjectsErrorValidation(t *testing.T) {
 			params: map[string]any{
 				"account": 12345,
 			},
-			expectedError: "Invalid parameters:",
+			expectedError: "Invalid field 'account'.",
 			expectedCode:  types.RpcINVALID_PARAMS,
 		},
 		{
@@ -88,7 +88,7 @@ func TestAccountObjectsErrorValidation(t *testing.T) {
 			params: map[string]any{
 				"account": 1.1,
 			},
-			expectedError: "Invalid parameters:",
+			expectedError: "Invalid field 'account'.",
 			expectedCode:  types.RpcINVALID_PARAMS,
 		},
 		{
@@ -96,7 +96,7 @@ func TestAccountObjectsErrorValidation(t *testing.T) {
 			params: map[string]any{
 				"account": true,
 			},
-			expectedError: "Invalid parameters:",
+			expectedError: "Invalid field 'account'.",
 			expectedCode:  types.RpcINVALID_PARAMS,
 		},
 		{
@@ -104,7 +104,7 @@ func TestAccountObjectsErrorValidation(t *testing.T) {
 			params: map[string]any{
 				"account": nil,
 			},
-			expectedError: "Missing required parameter: account",
+			expectedError: "Invalid field 'account'.",
 			expectedCode:  types.RpcINVALID_PARAMS,
 		},
 		{
@@ -112,7 +112,7 @@ func TestAccountObjectsErrorValidation(t *testing.T) {
 			params: map[string]any{
 				"account": map[string]any{"nested": "value"},
 			},
-			expectedError: "Invalid parameters:",
+			expectedError: "Invalid field 'account'.",
 			expectedCode:  types.RpcINVALID_PARAMS,
 		},
 		{
@@ -120,7 +120,7 @@ func TestAccountObjectsErrorValidation(t *testing.T) {
 			params: map[string]any{
 				"account": []string{"val1", "val2"},
 			},
-			expectedError: "Invalid parameters:",
+			expectedError: "Invalid field 'account'.",
 			expectedCode:  types.RpcINVALID_PARAMS,
 		},
 		{
@@ -240,7 +240,7 @@ func TestAccountObjectsResponseStructure(t *testing.T) {
 		assert.Contains(t, resp, "validated")
 
 		assert.Equal(t, validAccount, resp["account"])
-		assert.Equal(t, true, resp["validated"])
+		assert.Equal(t, false, resp["validated"])
 
 		// account_objects should be an array
 		objs, ok := resp["account_objects"].([]any)
@@ -278,6 +278,7 @@ func TestAccountObjectsResponseStructure(t *testing.T) {
 		// Marker should not be present when there are no more pages
 		_, hasMarker := resp["marker"]
 		assert.False(t, hasMarker, "marker should be absent when no more pages")
+		assert.NotContains(t, resp, "limit")
 	})
 
 	t.Run("Marker present when more pages exist", func(t *testing.T) {
@@ -309,6 +310,7 @@ func TestAccountObjectsResponseStructure(t *testing.T) {
 		require.NoError(t, err)
 
 		assert.Equal(t, expectedMarker, resp["marker"])
+		assert.Equal(t, float64(200), resp["limit"])
 	})
 }
 
@@ -447,6 +449,69 @@ func TestAccountObjectsTypeFiltering(t *testing.T) {
 	})
 }
 
+func TestAccountObjectsTypeSelectionConformance(t *testing.T) {
+	const account = "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh"
+
+	tests := []struct {
+		name        string
+		typeValue   any
+		wantType    string
+		wantMessage string
+	}{
+		{name: "canonical name is case insensitive", typeValue: "rIpPlEsTaTe", wantType: "state"},
+		{name: "lowercase canonical name is normalized", typeValue: "paychannel", wantType: "payment_channel"},
+		{name: "RPC name is accepted exactly", typeValue: "payment_channel", wantType: "payment_channel"},
+		{name: "loan broker canonical name is normalized", typeValue: "LoanBroker", wantType: "loan_broker"},
+		{name: "RPC name is case sensitive", typeValue: "Payment_Channel", wantMessage: "Invalid field 'type'."},
+		{name: "known non-account type is rejected", typeValue: "AMENDMENTS", wantMessage: "Invalid field 'type'."},
+		{name: "unknown type is rejected", typeValue: "unknown", wantMessage: "Invalid field 'type'."},
+		{name: "non-string type is rejected", typeValue: 1, wantMessage: "Invalid field 'type', not string."},
+		{name: "null type is rejected", typeValue: nil, wantMessage: "Invalid field 'type', not string."},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			mock := newAccountObjectsMock()
+			serviceCalled := false
+			capturedType := ""
+			mock.getAccountObjectsFn = func(account string, _ string, objectType string, _ uint32, _ string) (*types.AccountObjectsResult, error) {
+				serviceCalled = true
+				capturedType = objectType
+				return &types.AccountObjectsResult{
+					Account:     account,
+					LedgerIndex: 2,
+					Validated:   true,
+				}, nil
+			}
+			ctx := &types.RpcContext{
+				Context:    context.Background(),
+				Role:       types.RoleGuest,
+				ApiVersion: types.ApiVersion1,
+				Services:   newAccountObjectsTestServices(mock),
+			}
+
+			params, err := json.Marshal(map[string]any{
+				"account": account,
+				"type":    test.typeValue,
+			})
+			require.NoError(t, err)
+
+			_, rpcErr := (&handlers.AccountObjectsMethod{}).Handle(ctx, params)
+			if test.wantMessage != "" {
+				require.NotNil(t, rpcErr)
+				assert.Equal(t, types.RpcINVALID_PARAMS, rpcErr.Code)
+				assert.Equal(t, test.wantMessage, rpcErr.Message)
+				assert.False(t, serviceCalled)
+				return
+			}
+
+			require.Nil(t, rpcErr)
+			assert.True(t, serviceCalled)
+			assert.Equal(t, test.wantType, capturedType)
+		})
+	}
+}
+
 // Test: deletion_blockers_only flag
 // Based on rippled AccountObjects_test.cpp testObjectTypes() – deletion_blockers_only
 
@@ -515,6 +580,112 @@ func TestAccountObjectsDeletionBlockersOnly(t *testing.T) {
 		require.Nil(t, rpcErr, "Expected no RPC error")
 		require.NotNil(t, result)
 	})
+}
+
+func TestAccountObjectsDeletionBlockerTypeIntersection(t *testing.T) {
+	const account = "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh"
+
+	tests := []struct {
+		name            string
+		typePresent     bool
+		typeValue       any
+		wantServiceType string
+		wantObjectTypes []string
+	}{
+		{
+			name:            "no type returns the 3.2.0 blocker set",
+			wantObjectTypes: []string{"Check", "Vault"},
+		},
+		{
+			name:            "exact RPC name intersects blocker set",
+			typePresent:     true,
+			typeValue:       "check",
+			wantServiceType: "check",
+			wantObjectTypes: []string{"Check"},
+		},
+		{
+			name:            "canonical name bypasses validation but intersects to empty",
+			typePresent:     true,
+			typeValue:       "Check",
+			wantObjectTypes: []string{},
+		},
+		{
+			name:            "non-blocker RPC name intersects to empty",
+			typePresent:     true,
+			typeValue:       "offer",
+			wantObjectTypes: []string{},
+		},
+		{
+			name:            "unknown type bypasses validation and intersects to empty",
+			typePresent:     true,
+			typeValue:       "unknown",
+			wantObjectTypes: []string{},
+		},
+		{
+			name:            "non-string type bypasses validation and intersects to empty",
+			typePresent:     true,
+			typeValue:       1,
+			wantObjectTypes: []string{},
+		},
+		{
+			name:            "null type bypasses validation and intersects to empty",
+			typePresent:     true,
+			typeValue:       nil,
+			wantObjectTypes: []string{},
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			mock := newAccountObjectsMock()
+			capturedType := ""
+			mock.getAccountObjectsFn = func(account string, _ string, objectType string, _ uint32, _ string) (*types.AccountObjectsResult, error) {
+				capturedType = objectType
+				return &types.AccountObjectsResult{
+					Account: account,
+					AccountObjects: []types.AccountObjectItem{
+						{Index: "01", LedgerEntryType: "Check", Data: []byte{0xff}},
+						{Index: "02", LedgerEntryType: "Vault", Data: []byte{0xff}},
+						{Index: "03", LedgerEntryType: "Offer", Data: []byte{0xff}},
+						{Index: "04", LedgerEntryType: "Loan", Data: []byte{0xff}},
+						{Index: "05", LedgerEntryType: "LoanBroker", Data: []byte{0xff}},
+					},
+					LedgerIndex: 2,
+					Validated:   true,
+					Marker:      "next",
+				}, nil
+			}
+			ctx := &types.RpcContext{
+				Context:    context.Background(),
+				Role:       types.RoleGuest,
+				ApiVersion: types.ApiVersion1,
+				Services:   newAccountObjectsTestServices(mock),
+			}
+
+			request := map[string]any{
+				"account":                account,
+				"deletion_blockers_only": true,
+			}
+			if test.typePresent {
+				request["type"] = test.typeValue
+			}
+			params, err := json.Marshal(request)
+			require.NoError(t, err)
+
+			result, rpcErr := (&handlers.AccountObjectsMethod{}).Handle(ctx, params)
+			require.Nil(t, rpcErr)
+			assert.Equal(t, test.wantServiceType, capturedType)
+
+			response := result.(map[string]any)
+			objects := response["account_objects"].([]map[string]any)
+			objectTypes := make([]string, 0, len(objects))
+			for _, object := range objects {
+				objectTypes = append(objectTypes, object["LedgerEntryType"].(string))
+			}
+			assert.Equal(t, test.wantObjectTypes, objectTypes)
+			assert.Equal(t, "next", response["marker"])
+		})
+	}
 }
 
 // Test: Pagination with limit and marker
@@ -683,9 +854,9 @@ func TestAccountObjectsLedgerSpecification(t *testing.T) {
 		ledgerIndex       any
 		expectLedgerIndex string
 	}{
-		{"validated", "validated", "validated"},
-		{"current", "current", "current"},
-		{"closed", "closed", "closed"},
+		{"validated", "validated", "2"},
+		{"current", "current", "3"},
+		{"closed", "closed", "2"},
 		{"integer", 2, "2"},
 	}
 
@@ -736,11 +907,11 @@ func TestAccountObjectsLedgerSpecification(t *testing.T) {
 
 		_, rpcErr := method.Handle(ctx, paramsJSON)
 		require.Nil(t, rpcErr)
-		assert.Equal(t, "current", capturedLedgerIndex,
-			"Default ledger_index should be 'current'")
+		assert.Equal(t, "3", capturedLedgerIndex,
+			"Default ledger_index should pin the current ledger sequence")
 	})
 
-	t.Run("ledger not found returns internal error", func(t *testing.T) {
+	t.Run("ledger not found returns ledger not found error", func(t *testing.T) {
 		mock.getAccountObjectsFn = func(string, string, string, uint32, string) (*types.AccountObjectsResult, error) {
 			return nil, errors.New("ledger not found")
 		}
@@ -755,7 +926,7 @@ func TestAccountObjectsLedgerSpecification(t *testing.T) {
 		result, rpcErr := method.Handle(ctx, paramsJSON)
 		assert.Nil(t, result)
 		require.NotNil(t, rpcErr)
-		assert.Equal(t, types.RpcINTERNAL, rpcErr.Code)
+		assert.Equal(t, types.RpcLGR_NOT_FOUND, rpcErr.Code)
 	})
 }
 
@@ -919,7 +1090,7 @@ func TestAccountObjectsMalformedAddresses(t *testing.T) {
 		})
 	}
 
-	t.Run("empty string triggers missing parameter error", func(t *testing.T) {
+	t.Run("empty string is malformed", func(t *testing.T) {
 		params := map[string]any{
 			"account": "",
 		}
@@ -930,7 +1101,7 @@ func TestAccountObjectsMalformedAddresses(t *testing.T) {
 
 		assert.Nil(t, result)
 		require.NotNil(t, rpcErr)
-		assert.Equal(t, types.RpcINVALID_PARAMS, rpcErr.Code)
+		assert.Equal(t, types.RpcACT_MALFORMED, rpcErr.Code)
 	})
 }
 

@@ -29,6 +29,29 @@ type mockDepositAuthorizedLedgerService struct {
 	serverInfo              types.LedgerServerInfo
 }
 
+type depositAuthorizedLedgerReader struct {
+	seq       uint32
+	hash      [32]byte
+	closed    bool
+	validated bool
+}
+
+func (r *depositAuthorizedLedgerReader) Sequence() uint32            { return r.seq }
+func (r *depositAuthorizedLedgerReader) Hash() [32]byte              { return r.hash }
+func (r *depositAuthorizedLedgerReader) ParentHash() [32]byte        { return [32]byte{} }
+func (r *depositAuthorizedLedgerReader) IsClosed() bool              { return r.closed }
+func (r *depositAuthorizedLedgerReader) IsValidated() bool           { return r.validated }
+func (r *depositAuthorizedLedgerReader) TotalDrops() uint64          { return 0 }
+func (r *depositAuthorizedLedgerReader) CloseTime() int64            { return 0 }
+func (r *depositAuthorizedLedgerReader) CloseTimeResolution() uint32 { return 0 }
+func (r *depositAuthorizedLedgerReader) CloseFlags() uint8           { return 0 }
+func (r *depositAuthorizedLedgerReader) ParentCloseTime() int64      { return 0 }
+func (r *depositAuthorizedLedgerReader) TxMapHash() [32]byte         { return [32]byte{} }
+func (r *depositAuthorizedLedgerReader) StateMapHash() [32]byte      { return [32]byte{} }
+func (r *depositAuthorizedLedgerReader) ForEachTransaction(func([32]byte, []byte) bool) error {
+	return nil
+}
+
 func newMockDepositAuthorizedLedgerService() *mockDepositAuthorizedLedgerService {
 	return &mockDepositAuthorizedLedgerService{
 		currentLedgerIndex:   3,
@@ -68,10 +91,25 @@ func (m *mockDepositAuthorizedLedgerService) GetGenesisAccount() (string, error)
 	return "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh", nil
 }
 func (m *mockDepositAuthorizedLedgerService) GetLedgerBySequence(seq uint32) (types.LedgerReader, error) {
-	return nil, errors.New("not implemented")
+	if seq == m.currentLedgerIndex {
+		return &depositAuthorizedLedgerReader{seq: seq}, nil
+	}
+	if seq == m.closedLedgerIndex || seq == m.validatedLedgerIndex {
+		return &depositAuthorizedLedgerReader{
+			seq:       seq,
+			hash:      [32]byte{0x4B, 0xC5, 0x0C, 0x9B},
+			closed:    true,
+			validated: seq == m.validatedLedgerIndex,
+		}, nil
+	}
+	return nil, errors.New("ledger not found")
 }
 func (m *mockDepositAuthorizedLedgerService) GetLedgerByHash(hash [32]byte) (types.LedgerReader, error) {
-	return nil, errors.New("not implemented")
+	ledger, err := m.GetLedgerBySequence(m.validatedLedgerIndex)
+	if err != nil || ledger.Hash() != hash {
+		return nil, errors.New("ledger not found")
+	}
+	return ledger, nil
 }
 func (m *mockDepositAuthorizedLedgerService) SubmitTransaction(txJSON []byte, txBlobHex ...string) (*types.SubmitResult, error) {
 	return nil, errors.New("not implemented")
@@ -136,7 +174,7 @@ func (m *mockDepositAuthorizedLedgerService) GetAccountChannels(_ context.Contex
 func (m *mockDepositAuthorizedLedgerService) GetAccountCurrencies(_ context.Context, account string, ledgerIndex string) (*types.AccountCurrenciesResult, error) {
 	return nil, errors.New("not implemented")
 }
-func (m *mockDepositAuthorizedLedgerService) GetAccountNFTs(_ context.Context, account string, ledgerIndex string, limit uint32) (*types.AccountNFTsResult, error) {
+func (m *mockDepositAuthorizedLedgerService) GetAccountNFTs(_ context.Context, account string, ledgerIndex string, limit uint32, _ string) (*types.AccountNFTsResult, error) {
 	return nil, errors.New("not implemented")
 }
 func (m *mockDepositAuthorizedLedgerService) GetGatewayBalances(_ context.Context, account string, hotWallets []string, ledgerIndex string) (*types.GatewayBalancesResult, error) {
@@ -392,7 +430,7 @@ func TestDepositAuthorizedLedgerShape(t *testing.T) {
 		require.Nil(t, err)
 		respMap := resp.(map[string]any)
 
-		assert.Equal(t, uint32(7), respMap["ledger_current_index"])
+		assert.Equal(t, mock.currentLedgerIndex, respMap["ledger_current_index"])
 		assert.NotContains(t, respMap, "ledger_hash")
 		assert.NotContains(t, respMap, "ledger_index")
 		assert.Equal(t, false, respMap["validated"])
@@ -419,7 +457,7 @@ func TestDepositAuthorizedLedgerShape(t *testing.T) {
 		respMap := resp.(map[string]any)
 
 		assert.Contains(t, respMap, "ledger_hash")
-		assert.Equal(t, uint32(6), respMap["ledger_index"])
+		assert.Equal(t, mock.validatedLedgerIndex, respMap["ledger_index"])
 		assert.NotContains(t, respMap, "ledger_current_index")
 		assert.Equal(t, true, respMap["validated"])
 	})

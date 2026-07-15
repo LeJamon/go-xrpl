@@ -2,14 +2,15 @@ package service
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"math/bits"
 
-	"github.com/LeJamon/go-xrpl/amendment"
 	txengine "github.com/LeJamon/go-xrpl/internal/tx/engine"
 	"github.com/LeJamon/go-xrpl/internal/tx/sign"
 
 	addresscodec "github.com/LeJamon/go-xrpl/codec/addresscodec"
+	"github.com/LeJamon/go-xrpl/drops"
 	"github.com/LeJamon/go-xrpl/internal/feetrack"
 	"github.com/LeJamon/go-xrpl/internal/ledger"
 	"github.com/LeJamon/go-xrpl/internal/ledger/openledger"
@@ -19,6 +20,7 @@ import (
 	"github.com/LeJamon/go-xrpl/internal/tx/ter"
 	"github.com/LeJamon/go-xrpl/internal/txq"
 	"github.com/LeJamon/go-xrpl/keylet"
+	"github.com/LeJamon/go-xrpl/protocol"
 	"github.com/LeJamon/go-xrpl/storage/relationaldb"
 )
 
@@ -41,6 +43,8 @@ type SubmitResult struct {
 
 	// CurrentLedger is the current open ledger sequence
 	CurrentLedger uint32
+	// CurrentLedgerCloseTime is the open-ledger close time in Ripple-epoch seconds.
+	CurrentLedgerCloseTime int64
 
 	// ValidatedLedger is the highest validated ledger sequence
 	ValidatedLedger uint32
@@ -104,11 +108,23 @@ func (s *Service) SubmitTransaction(transaction tx.Transaction, rawBlob []byte, 
 			CurrentLedger: s.openLedgerView.Current().Sequence(),
 		}, nil
 	}
+	// Local submission checks (rippled STTx::passesLocalChecks via NetworkOPs):
+	// memo size/charset limits are enforced only here, on the local ingress, not
+	// in the consensus-critical engine preflight. A relayed or consensus-applied
+	// transaction carrying an oversized/invalid memo still applies, so this
+	// refusal cannot fork the ledger.
+	if localResult := tx.PassesLocalChecks(ptx.Parsed.GetCommon()); localResult != ter.TesSUCCESS {
+		return &SubmitResult{
+			Result:        localResult,
+			Message:       localResult.Message(),
+			CurrentLedger: s.openLedgerView.Current().Sequence(),
+		}, nil
+	}
 	// Verify the signature before SubmitDetailed acquires the apply mutex so the
 	// in-strand check reuses the cached verdict (#1105). Skipped in standalone
 	// mode, matching cfg.SkipSignatureVerification above.
 	if !cfg.SkipSignatureVerification {
-		txengine.PrewarmSignature(ptx.Parsed, cfg.Rules)
+		txengine.PrewarmSignature(ptx.Parsed)
 	}
 
 	outcome := s.openLedgerView.SubmitDetailed(ptx, cfg, s.txQueue)
@@ -161,20 +177,15 @@ func (s *Service) SubmitTransaction(transaction tx.Transaction, rawBlob []byte, 
 		s.pendingTxs = append(s.pendingTxs, ptx)
 	}
 
-	// Fan out to the WebSocket transactions_proposed / accounts_proposed
-	// publisher. Mirrors rippled NetworkOPs::processTransaction
-	// (NetworkOPs.cpp:1535-1544) which calls pubProposedTransaction only
-	// when the tx applied — tem/ter/tel failures that never touched the
-	// open ledger are not announced. Mentioned accounts come from the
-	// decoded blob so accounts_proposed fans to source, destination,
-	// regular key, signers (mirrors STTx::getMentionedAccounts via the
-	// existing extractor used on the validated transactions stream).
-	if cb := s.submittedTxCallback; cb != nil && rawBlob != nil && outcome.Applied {
+	if cb := s.submittedTxCallback; cb != nil && rawBlob != nil && outcome.Applied &&
+		mayPublishProposedTransaction(ptx.Parsed.GetCommon().GetFlags()) {
+		current := s.openLedgerView.Current()
 		ev := SubmittedTxEvent{
 			RawBlob:          append([]byte(nil), rawBlob...),
 			TxHash:           ptx.Hash,
-			AffectedAccounts: extractAffectedAccounts(rawBlob),
+			AffectedAccounts: extractMentionedAccounts(rawBlob),
 			CurrentLedger:    currentSeq,
+			OwnerFunds:       proposedOwnerFunds(rawBlob, current),
 			Result: Result{
 				Code:    int(outcome.Result),
 				Name:    outcome.Result.String(),
@@ -191,34 +202,54 @@ func (s *Service) SubmitTransaction(transaction tx.Transaction, rawBlob []byte, 
 	return result, nil
 }
 
+func mayPublishProposedTransaction(flags uint32) bool {
+	return flags&tx.TfInnerBatchTxn == 0
+}
+
 // readFeesFromLedger reads fee settings from the FeeSettings SLE in the given
 // ledger. It supports both the modern XRPFees format (BaseFeeDrops /
 // ReserveBaseDrops / ReserveIncrementDrops) and the legacy format (BaseFee /
-// ReserveBase / ReserveIncrement). Falls back to hardcoded defaults if the SLE
+// ReserveBase / ReserveIncrement). Falls back to network defaults if the SLE
 // cannot be found or parsed.
 func readFeesFromLedger(l *ledger.Ledger) (baseFee, reserveBase, reserveIncrement uint64) {
-	// Hardcoded defaults (same as rippled)
-	const (
-		defaultBaseFee          = 10
-		defaultReserveBase      = 10_000_000
-		defaultReserveIncrement = 2_000_000
-	)
-
-	if l == nil {
-		return defaultBaseFee, defaultReserveBase, defaultReserveIncrement
+	baseFee, reserveBase, reserveIncrement, err := readFeesFromLedgerContext(context.Background(), l)
+	if err == nil {
+		return baseFee, reserveBase, reserveIncrement
 	}
+	fees := drops.DefaultFees()
+	if l != nil {
+		fees = l.GetFees()
+	}
+	return uint64(fees.Base), uint64(fees.Reserve), uint64(fees.Increment)
+}
 
-	data, err := l.Read(keylet.Fees())
-	if err != nil || data == nil {
-		return defaultBaseFee, defaultReserveBase, defaultReserveIncrement
+func readFeesFromLedgerContext(ctx context.Context, l *ledger.Ledger) (baseFee, reserveBase, reserveIncrement uint64, err error) {
+	fees := drops.DefaultFees()
+	if l == nil {
+		return uint64(fees.Base), uint64(fees.Reserve), uint64(fees.Increment), nil
+	}
+	fees = l.GetFees()
+
+	data, err := l.ReadContext(ctx, keylet.Fees())
+	if err != nil {
+		return 0, 0, 0, err
+	}
+	if data == nil {
+		return uint64(fees.Base), uint64(fees.Reserve), uint64(fees.Increment), nil
 	}
 
 	feeSettings, err := state.ParseFeeSettings(data)
 	if err != nil {
-		return defaultBaseFee, defaultReserveBase, defaultReserveIncrement
+		return uint64(fees.Base), uint64(fees.Reserve), uint64(fees.Increment), nil
 	}
+	fees = mergeFeeSettings(fees, feeSettings)
+	return uint64(fees.Base), uint64(fees.Reserve), uint64(fees.Increment), nil
+}
 
-	return feeSettings.GetBaseFee(), feeSettings.GetReserveBase(), feeSettings.GetReserveIncrement()
+// FeesFromLedger returns the fee and reserve settings carried by a specific
+// ledger, falling back to the protocol defaults when its FeeSettings entry is unavailable.
+func FeesFromLedger(l *ledger.Ledger) (baseFee, reserveBase, reserveIncrement uint64) {
+	return readFeesFromLedger(l)
 }
 
 // GetCurrentFees returns the current fee settings read from the FeeSettings
@@ -284,7 +315,7 @@ func (s *Service) GetAutofillFee(parsedTx tx.Transaction, unlimited bool, mult, 
 	}
 	fee := loadFee
 	if s.txQueue != nil {
-		feeLevel := s.txQueue.GetRequiredFeeLevel(s.openLedger.TxCount())
+		feeLevel := s.txQueue.RequiredFeeLevel(s.openLedger.TxCount())
 		if uint64(feeLevel) > txq.BaseLevel {
 			escalated := txq.FeeLevel(uint64(feeLevel)-1).ToDrops(baseFee) + 1
 			if escalated > fee {
@@ -395,23 +426,10 @@ func computeBaseFeeForTx(view tx.LedgerView, parsedTx tx.Transaction, cfg tx.Eng
 	if signerCount == 0 {
 		return cfg.BaseFee
 	}
-	if signerCount > maxMultiSigners(cfg.Rules) {
+	if signerCount > sign.MaxMultiSigners {
 		return cfg.BaseFee
 	}
 	return sign.CalculateMultiSigFee(cfg.BaseFee, signerCount)
-}
-
-// maxMultiSigners mirrors rippled STTx::maxMultiSigners (STTx.h:55-63).
-// rippled's contract is: "if rules are not supplied then the largest
-// possible value is returned" — i.e. be permissive on nil so callers
-// can't accidentally reject otherwise-valid signer arrays. Only when
-// rules are supplied AND ExpandedSignerList is disabled does the cap
-// fall to 8.
-func maxMultiSigners(rules *amendment.Rules) int {
-	if rules != nil && !rules.ExpandedSignerListEnabled() {
-		return 8
-	}
-	return 32
 }
 
 // mulDivU64 returns (a * b) / c; ok=false on uint64 overflow or c == 0.
@@ -459,6 +477,17 @@ type TransactionResult struct {
 	LedgerHash  [32]byte
 	Validated   bool
 	TxIndex     uint32
+	CloseTime   int64
+}
+
+type TransactionSearchResult struct {
+	Transaction *TransactionResult
+	Searched    relationaldb.TxSearchResult
+}
+
+type LedgerContext struct {
+	Hash      [32]byte
+	CloseTime int64
 }
 
 // GetTransaction retrieves a transaction by its hash
@@ -486,14 +515,167 @@ func (s *Service) GetTransaction(txHash [32]byte) (*TransactionResult, error) {
 	if !found {
 		return nil, fmt.Errorf("%w: not found in ledger", svcerr.ErrTxnNotFound)
 	}
+	txIndex, ok := tx.TransactionIndexFromTxWithMetaBlob(txData)
+	if !ok {
+		txIndex = invalidTransactionIndex
+	}
 
 	return &TransactionResult{
 		TxData:      txData,
 		LedgerIndex: ledgerSeq,
 		LedgerHash:  l.Hash(),
 		Validated:   l.IsValidated(),
-		TxIndex:     s.txPositionIndex[txHash],
+		TxIndex:     txIndex,
+		CloseTime:   protocol.RippleSeconds(l.CloseTime()),
 	}, nil
+}
+
+func (s *Service) SearchTransaction(ctx context.Context, txHash [32]byte, ledgerRange *relationaldb.LedgerRange) (*TransactionSearchResult, error) {
+	s.mu.RLock()
+	db := s.relationalDB
+	s.mu.RUnlock()
+
+	if db == nil {
+		result, err := s.GetTransaction(txHash)
+		if err != nil {
+			return nil, err
+		}
+		return &TransactionSearchResult{Transaction: result, Searched: relationaldb.TxSearchUnknown}, nil
+	}
+
+	info, searched, err := db.Transaction().GetTransaction(ctx, relationaldb.Hash(txHash), ledgerRange)
+	if err != nil {
+		return nil, err
+	}
+	if info == nil {
+		return &TransactionSearchResult{Searched: searched}, nil
+	}
+
+	vlTx, err := tx.EncodeWithVL(info.RawTxn)
+	if err != nil {
+		return nil, err
+	}
+	vlMeta, err := tx.EncodeWithVL(info.TxnMeta)
+	if err != nil {
+		return nil, err
+	}
+	txData := make([]byte, 0, len(vlTx)+len(vlMeta))
+	txData = append(txData, vlTx...)
+	txData = append(txData, vlMeta...)
+
+	contextInfo, err := s.GetLedgerContext(ctx, uint32(info.LedgerSeq))
+	if err != nil {
+		return nil, err
+	}
+	txIndex, ok := tx.TransactionIndexFromMetadata(info.TxnMeta)
+	if !ok {
+		txIndex = invalidTransactionIndex
+	}
+	return &TransactionSearchResult{
+		Transaction: &TransactionResult{
+			TxData:      txData,
+			LedgerIndex: uint32(info.LedgerSeq),
+			LedgerHash:  contextInfo.Hash,
+			Validated:   true,
+			TxIndex:     txIndex,
+			CloseTime:   contextInfo.CloseTime,
+		},
+		Searched: searched,
+	}, nil
+}
+
+func (s *Service) GetLedgerContext(ctx context.Context, sequence uint32) (*LedgerContext, error) {
+	if l, err := s.GetLedgerBySequence(sequence); err == nil && l != nil {
+		return &LedgerContext{Hash: l.Hash(), CloseTime: protocol.RippleSeconds(l.CloseTime())}, nil
+	}
+
+	s.mu.RLock()
+	db := s.relationalDB
+	s.mu.RUnlock()
+	if db == nil {
+		return nil, svcerr.ErrLedgerNotFound
+	}
+	info, err := db.Ledger().GetLedgerInfoBySeq(ctx, relationaldb.LedgerIndex(sequence))
+	if err != nil {
+		return nil, err
+	}
+	if info == nil {
+		return nil, svcerr.ErrLedgerNotFound
+	}
+	return &LedgerContext{
+		Hash:      [32]byte(info.Hash),
+		CloseTime: protocol.RippleSeconds(info.CloseTime),
+	}, nil
+}
+
+// GetTransactionWithRange preserves the in-memory lookup fast path, then uses
+// the relational transaction table to report rippled-compatible searched-all
+// semantics when the hash is absent. The hash lookup itself is deliberately
+// unrestricted by the supplied range.
+func (s *Service) GetTransactionWithRange(ctx context.Context, txHash [32]byte, minLedger, maxLedger uint32) (*TransactionResult, relationaldb.TxSearchResult, error) {
+	result, cacheErr := s.GetTransaction(txHash)
+	if cacheErr == nil {
+		return result, relationaldb.TxSearchAll, nil
+	}
+	if !errors.Is(cacheErr, svcerr.ErrTxnNotFound) {
+		return nil, relationaldb.TxSearchUnknown, cacheErr
+	}
+	if s.relationalDB == nil || s.relationalDB.Transaction() == nil {
+		return nil, relationaldb.TxSearchUnknown, cacheErr
+	}
+
+	dbResult, searched, err := s.relationalDB.Transaction().GetTransaction(ctx, relationaldb.Hash(txHash), &relationaldb.LedgerRange{
+		Min: relationaldb.LedgerIndex(minLedger),
+		Max: relationaldb.LedgerIndex(maxLedger),
+	})
+	if err != nil {
+		return nil, searched, err
+	}
+	if dbResult == nil {
+		return nil, searched, svcerr.ErrTxnNotFound
+	}
+
+	vlTx, err := tx.EncodeWithVL(dbResult.RawTxn)
+	if err != nil {
+		return nil, searched, fmt.Errorf("encode transaction length: %w", err)
+	}
+	vlMeta, err := tx.EncodeWithVL(dbResult.TxnMeta)
+	if err != nil {
+		return nil, searched, fmt.Errorf("encode transaction metadata length: %w", err)
+	}
+	txData := make([]byte, 0, len(vlTx)+len(vlMeta))
+	txData = append(txData, vlTx...)
+	txData = append(txData, vlMeta...)
+
+	txIndex, ok := tx.TransactionIndexFromMetadata(dbResult.TxnMeta)
+	if !ok {
+		txIndex = invalidTransactionIndex
+	}
+
+	var ledgerHash [32]byte
+	var closeTime int64
+	validated := false
+	if ledgerRepo := s.relationalDB.Ledger(); ledgerRepo != nil && dbResult.LedgerSeq != 0 {
+		ledgerInfo, ledgerErr := ledgerRepo.GetLedgerInfoBySeq(ctx, dbResult.LedgerSeq)
+		if ledgerErr != nil {
+			return nil, searched, fmt.Errorf("get transaction ledger: %w", ledgerErr)
+		}
+		if ledgerInfo == nil {
+			return nil, searched, errors.New("get transaction ledger: missing ledger header")
+		}
+		ledgerHash = [32]byte(ledgerInfo.Hash)
+		closeTime = protocol.RippleSeconds(ledgerInfo.CloseTime)
+		validated = dbResult.Status == "validated"
+	}
+
+	return &TransactionResult{
+		TxData:      txData,
+		LedgerIndex: uint32(dbResult.LedgerSeq),
+		LedgerHash:  ledgerHash,
+		Validated:   validated,
+		TxIndex:     txIndex,
+		CloseTime:   closeTime,
+	}, searched, nil
 }
 
 // StoreTransaction stores a transaction in the current open ledger
@@ -560,13 +742,14 @@ func (s *Service) SimulateTransaction(transaction tx.Transaction) (*SubmitResult
 	applyResult := engine.Apply(transaction)
 
 	result := &SubmitResult{
-		Result:          applyResult.Result,
-		Applied:         applyResult.Applied,
-		Fee:             applyResult.Fee,
-		Metadata:        applyResult.Metadata,
-		Message:         applyResult.Message,
-		CurrentLedger:   s.openLedger.Sequence(),
-		ValidatedLedger: 0,
+		Result:                 applyResult.Result,
+		Applied:                applyResult.Applied,
+		Fee:                    applyResult.Fee,
+		Metadata:               applyResult.Metadata,
+		Message:                applyResult.Message,
+		CurrentLedger:          s.openLedger.Sequence(),
+		CurrentLedgerCloseTime: protocol.RippleSeconds(s.openLedger.CloseTime()),
+		ValidatedLedger:        0,
 	}
 
 	if s.validatedLedger != nil {
@@ -632,7 +815,7 @@ func (s *Service) GetAccountTransactions(ctx context.Context, account string, le
 	copy(accountID[:], accountIDBytes)
 
 	// Set defaults
-	if limit == 0 || limit > 400 {
+	if limit == 0 {
 		limit = 200
 	}
 

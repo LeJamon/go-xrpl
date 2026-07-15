@@ -72,12 +72,14 @@ func (o *OracleSet) TxType() tx.Type {
 }
 
 // Validate matches rippled's SetOracle::preflight()
+// GetFlagsMask adopts the engine FlagsMasker seam. OracleSet defines no
+// type-specific flags, so it uses the base universal mask, checked at preflight0.
+func (o *OracleSet) GetFlagsMask(rules *amendment.Rules) uint32 {
+	return tx.TfUniversalMask
+}
+
 func (o *OracleSet) Validate() error {
 	if err := o.BaseTx.Validate(); err != nil {
-		return err
-	}
-
-	if err := tx.CheckFlags(o.GetFlags(), tx.TfUniversalMask); err != nil {
 		return err
 	}
 
@@ -109,29 +111,11 @@ func (o *OracleSet) Validate() error {
 		}
 	}
 
-	// Validate each price data entry and check for duplicates
-	// Reference: rippled SetOracle.cpp checkArray()
-	seenPairs := make(map[string]bool)
-	for _, pd := range o.PriceDataSeries {
-		entry := pd.PriceData
-
-		// BaseAsset and QuoteAsset must be different
-		if entry.BaseAsset == entry.QuoteAsset {
-			return ter.Errorf(ter.TemMALFORMED, "BaseAsset and QuoteAsset must be different")
-		}
-
-		// Scale cannot exceed MaxPriceScale
-		if entry.Scale != nil && *entry.Scale > MaxPriceScale {
-			return ter.Errorf(ter.TemMALFORMED, "Scale cannot exceed %d", MaxPriceScale)
-		}
-
-		pairKey := entry.TokenPairKey()
-		if seenPairs[pairKey] {
-			return ter.Errorf(ter.TemMALFORMED, "duplicate token pair in PriceDataSeries")
-		}
-		seenPairs[pairKey] = true
-	}
-
+	// The per-entry base==quote, scale, and duplicate-pair checks are stateful
+	// preclaim checks in rippled (SetOracle::preclaim), ordered AFTER the
+	// tecINVALID_UPDATE_TIME time-window check. Keeping them here in preflight
+	// would surface a tem* code before the tec* time check ever runs, forking
+	// ledger inclusion in a mixed network — so they live only in Apply().
 	return nil
 }
 
@@ -438,6 +422,13 @@ func (o *OracleSet) doApplyUpdate(ctx *tx.ApplyContext, oracleKey keylet.Keylet,
 		existingOracle.URI = o.URI
 	}
 
+	// fixIncludeKeyletFields: backfill sfOracleDocumentID on an entry created
+	// before the amendment; leave an already-present value untouched.
+	if ctx.Rules().Enabled(amendment.FeatureFixIncludeKeyletFields) && !existingOracle.HasOracleDocumentID {
+		existingOracle.OracleDocumentID = o.OracleDocumentID
+		existingOracle.HasOracleDocumentID = true
+	}
+
 	// Adjust OwnerCount
 	newCount := 1
 	if len(updatedSeries) > 5 {
@@ -533,6 +524,12 @@ func (o *OracleSet) doApplyCreate(ctx *tx.ApplyContext, oracleKey keylet.Keylet,
 	}
 	if o.isFieldPresent("URI") || o.URI != "" {
 		oracleData.URI = o.URI
+	}
+
+	// fixIncludeKeyletFields: store sfOracleDocumentID (a keylet input).
+	if rules.Enabled(amendment.FeatureFixIncludeKeyletFields) {
+		oracleData.OracleDocumentID = o.OracleDocumentID
+		oracleData.HasOracleDocumentID = true
 	}
 
 	// DirInsert into owner directory

@@ -125,6 +125,9 @@ type ValidatorListReader interface {
 	// number of publishers whose lists must agree on a validator
 	// before it enters the effective UNL).
 	Threshold() int
+	// IsUNLBlocked reports whether publisher-list expiry or an empty trusted
+	// union has locked the node out of consensus participation.
+	IsUNLBlocked() bool
 	// Publishers returns a snapshot of per-publisher state for the
 	// `validators` RPC.
 	Publishers() []ValidatorListPublisherInfo
@@ -223,6 +226,11 @@ type ServiceContainer struct {
 	// (rippled getJson at ValidatorList.cpp:1657-1661). Nil-safe — a nil
 	// func means "no static keys".
 	LocalStaticTrustedKeysBase58 func() []string
+
+	// TrustedValidatorKeysBase58 returns the current effective trusted UNL,
+	// including configured static validators, the local identity, and validators
+	// selected from publisher lists. Surfaced as `trusted_validator_keys`.
+	TrustedValidatorKeysBase58 func() []string
 
 	// SigningKeysBase58 returns the master→signing key map projected as
 	// base58 strings. Surfaced by the `validators` RPC as `signing_keys`
@@ -428,7 +436,7 @@ type ServiceContainer struct {
 }
 
 // URLSubscriptionService is the url-keyed subscription registry mirroring
-// rippled's RPCSub/mRpcSubMap: each url maps to one long-lived subscriber
+// rippled's RPCSub/mRPCSubMap: each url maps to one long-lived subscriber
 // whose events are delivered as outbound JSON-RPC "event" calls with per-url
 // sequence numbers and basic auth. Callers gate on role before invoking —
 // both methods are admin-only in rippled's handlers.
@@ -707,6 +715,23 @@ type TxTablesProvider interface {
 	UseTxTables() bool
 }
 
+// TxSearchResult reports how completely a requested ledger range was searched
+// when a transaction hash is absent.
+type TxSearchResult int
+
+const (
+	TxSearchUnknown TxSearchResult = iota
+	TxSearchSome
+	TxSearchAll
+)
+
+// RangedTransactionLookup is the optional transaction-table lookup used by the
+// tx RPC when both ledger range bounds are present. Keeping it separate from
+// TransactionSubmitter lets lightweight ledger mocks omit relational search.
+type RangedTransactionLookup interface {
+	GetTransactionWithRange(ctx context.Context, txHash [32]byte, minLedger, maxLedger uint32) (*TransactionInfo, TxSearchResult, error)
+}
+
 // TransactionSubmitter handles transaction submission and retrieval.
 // FailHardSubmitter is the optional rippled-faithful surface for
 // submitting a transaction with tapFAIL_HARD semantics (TxQ.cpp:393-399,
@@ -751,6 +776,47 @@ type TransactionSubmitter interface {
 	GetAutofillSequence(account string, hasTicketSequence bool) (sequence uint32, err error)
 }
 
+// TransactionSearchRange is the inclusive ledger interval used by tx.
+type TransactionSearchRange struct {
+	Min uint32
+	Max uint32
+}
+
+// TransactionSearchResult preserves rippled's searched_all distinction when a
+// ranged transaction lookup does not find a transaction. SearchedAll is nil
+// when the backend cannot determine whether the complete range was searched.
+type TransactionSearchResult struct {
+	Transaction *TransactionInfo
+	SearchedAll *bool
+}
+
+// TransactionSearcher is implemented by services backed by durable
+// transaction tables. Keeping it separate from LedgerService lets lightweight
+// RPC mocks continue to provide the legacy in-memory lookup.
+type TransactionSearcher interface {
+	SearchTransaction(ctx context.Context, txHash [32]byte, ledgerRange *TransactionSearchRange) (*TransactionSearchResult, error)
+}
+
+// LedgerContext contains the durable ledger fields needed to decorate
+// historical transaction rows.
+type LedgerContext struct {
+	Hash      [32]byte
+	CloseTime int64
+}
+
+// LedgerContextReader resolves ledger header fields without requiring the full
+// ledger to remain in the in-memory history window.
+type LedgerContextReader interface {
+	GetLedgerContext(ctx context.Context, sequence uint32) (*LedgerContext, error)
+}
+
+// TransactionRulesSource provides the amendment rules used to admit a
+// transaction to the current open ledger. Handlers that validate before
+// submission or simulation use this optional facet to match the engine.
+type TransactionRulesSource interface {
+	TransactionRules() *amendment.Rules
+}
+
 // AccountQuerier provides account-related read operations.
 type AccountQuerier interface {
 	GetAccountInfo(ctx context.Context, account string, ledgerIndex string) (*AccountInfo, error)
@@ -760,7 +826,7 @@ type AccountQuerier interface {
 	GetAccountChannels(ctx context.Context, account string, destinationAccount string, ledgerIndex string, limit uint32, marker string) (*AccountChannelsResult, error)
 	GetAccountCurrencies(ctx context.Context, account string, ledgerIndex string) (*AccountCurrenciesResult, error)
 	GetAccountObjects(ctx context.Context, account string, ledgerIndex string, objType string, limit uint32, marker string) (*AccountObjectsResult, error)
-	GetAccountNFTs(ctx context.Context, account string, ledgerIndex string, limit uint32) (*AccountNFTsResult, error)
+	GetAccountNFTs(ctx context.Context, account string, ledgerIndex string, limit uint32, marker string) (*AccountNFTsResult, error)
 }
 
 // LedgerService is the full interface for ledger operations.
@@ -858,6 +924,24 @@ type LedgerReader interface {
 	TxMapHash() [32]byte    // Transaction tree root hash
 	StateMapHash() [32]byte // Account state tree root hash
 	ForEachTransaction(fn func(txHash [32]byte, txData []byte) bool) error
+}
+
+// LedgerTransactionSource is implemented by ledger readers that can query the
+// transaction tree of that exact ledger.
+type LedgerTransactionSource interface {
+	GetLedgerTransaction(txHash [32]byte) ([]byte, bool, error)
+}
+
+type ContextLedgerTransactionSource interface {
+	GetLedgerTransactionContext(ctx context.Context, txHash [32]byte) ([]byte, bool, error)
+}
+
+type ContextLedgerStateSource interface {
+	ForEachLedgerStateContext(ctx context.Context, fn func(key [32]byte, data []byte) bool) error
+}
+
+type LedgerAmendmentRulesSource interface {
+	LedgerAmendmentRules() *amendment.Rules
 }
 
 // LedgerServerInfo contains server status information from the ledger service
@@ -972,6 +1056,8 @@ type SubmitResult struct {
 
 	// CurrentLedger is the current open ledger sequence
 	CurrentLedger uint32
+	// CurrentLedgerCloseTime is the open-ledger close time in Ripple-epoch seconds.
+	CurrentLedgerCloseTime int64
 
 	// ValidatedLedger is the highest validated ledger sequence
 	ValidatedLedger uint32
@@ -1009,19 +1095,24 @@ type TransactionInfo struct {
 
 	// TxIndex is the transaction's index within the ledger
 	TxIndex uint32
+
+	// CloseTime is the containing ledger's close time in Ripple epoch seconds.
+	CloseTime int64
 }
 
-// Amount represents a currency amount (XRP or IOU)
+// Amount identifies an XRP, issued-currency, or MPT amount.
 type Amount struct {
-	Value    string `json:"value,omitempty"`
-	Currency string `json:"currency,omitempty"`
-	Issuer   string `json:"issuer,omitempty"`
+	Value         string `json:"value,omitempty"`
+	Currency      string `json:"currency,omitempty"`
+	Issuer        string `json:"issuer,omitempty"`
+	MPTIssuanceID string `json:"mpt_issuance_id,omitempty"`
 }
 
-// IsNative returns true if this is an XRP amount (not an IOU)
 func (a Amount) IsNative() bool {
-	return a.Currency == "" && a.Issuer == ""
+	return a.MPTIssuanceID == "" && a.Currency == "" && a.Issuer == ""
 }
+
+func (a Amount) IsMPT() bool { return a.MPTIssuanceID != "" }
 
 // TrustLine represents a trust line from account_lines RPC
 type TrustLine struct {
@@ -1038,6 +1129,9 @@ type TrustLine struct {
 	PeerAuthorized bool   `json:"peer_authorized,omitempty"`
 	Freeze         bool   `json:"freeze,omitempty"`
 	FreezePeer     bool   `json:"freeze_peer,omitempty"`
+	DeepFreeze     bool   `json:"deep_freeze,omitempty"`
+	DeepFreezePeer bool   `json:"deep_freeze_peer,omitempty"`
+	HasReserve     bool   `json:"-"`
 }
 
 // AccountLinesResult contains the result of account_lines RPC

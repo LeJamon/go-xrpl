@@ -29,16 +29,14 @@ func (o *OracleDelete) TxType() tx.Type {
 }
 
 // Validate matches rippled's DeleteOracle::preflight()
+// GetFlagsMask adopts the engine FlagsMasker seam. OracleDelete defines no
+// type-specific flags, so it uses the base universal mask, checked at preflight0.
+func (o *OracleDelete) GetFlagsMask(rules *amendment.Rules) uint32 {
+	return tx.TfUniversalMask
+}
+
 func (o *OracleDelete) Validate() error {
-	if err := o.BaseTx.Validate(); err != nil {
-		return err
-	}
-
-	if err := tx.CheckFlags(o.GetFlags(), tx.TfUniversalMask); err != nil {
-		return err
-	}
-
-	return nil
+	return o.BaseTx.Validate()
 }
 
 func (o *OracleDelete) Flatten() (map[string]any, error) {
@@ -49,9 +47,29 @@ func (o *OracleDelete) RequiredAmendments() [][32]byte {
 	return [][32]byte{amendment.FeaturePriceOracle}
 }
 
+// Preclaim runs OracleDelete's ledger-aware check: the oracle must exist
+// (tecNO_ENTRY). Extracting it from Apply makes it visible to the preclaim-only
+// paths (TxQ admission, simulate), matching rippled where it lives in
+// DeleteOracle::preclaim. Ownership is implicit in the oracle keylet (owner ==
+// Account), so no separate owner check is needed.
+// Reference: rippled DeleteOracle.cpp preclaim().
+func (o *OracleDelete) Preclaim(view tx.LedgerView, config tx.EngineConfig) ter.Result {
+	accountID, err := state.DecodeAccountID(o.Account)
+	if err != nil {
+		return ter.TemBAD_SRC_ACCOUNT
+	}
+	exists, existsErr := view.Exists(keylet.Oracle(accountID, o.OracleDocumentID))
+	if existsErr != nil {
+		return ter.TefINTERNAL
+	}
+	if !exists {
+		return ter.TecNO_ENTRY
+	}
+	return ter.TesSUCCESS
+}
+
 // Apply applies an OracleDelete transaction to the ledger state.
-// Combines rippled's DeleteOracle::preclaim() and DeleteOracle::doApply().
-// Reference: rippled DeleteOracle.cpp
+// Reference: rippled DeleteOracle.cpp doApply().
 func (o *OracleDelete) Apply(ctx *tx.ApplyContext) ter.Result {
 	ctx.Log.Trace("oracle delete apply",
 		"account", o.Account,
@@ -84,7 +102,7 @@ func (o *OracleDelete) Apply(ctx *tx.ApplyContext) ter.Result {
 // This is a shared helper used by both OracleDelete.Apply() and AccountDelete cascade.
 // If ownerCount is nil, the OwnerCount adjustment is skipped (account deletion case).
 // Reference: rippled DeleteOracle.cpp deleteOracle()
-func DeleteOracleFromView(view state.LedgerView, oracleKey keylet.Keylet, oracle *state.OracleData, accountID [20]byte, ownerCount *uint32) ter.Result {
+func DeleteOracleFromView(view tx.LedgerView, oracleKey keylet.Keylet, oracle *state.OracleData, accountID [20]byte, ownerCount *uint32) ter.Result {
 	// DirRemove from owner directory
 	ownerDirKey := keylet.OwnerDir(accountID)
 	_, err := state.DirRemove(view, ownerDirKey, oracle.OwnerNode, oracleKey.Key, true)

@@ -22,13 +22,13 @@ import (
 // Compile-time interface checks.
 var (
 	_ relationaldb.RepositoryManager            = (*RepositoryManager)(nil)
-	_ relationaldb.LedgerRepository             = (*LedgerRepository)(nil)
-	_ relationaldb.TransactionRepository        = (*TransactionRepository)(nil)
-	_ relationaldb.AccountTransactionRepository = (*AccountTransactionRepository)(nil)
-	_ relationaldb.SystemRepository             = (*SystemRepository)(nil)
-	_ relationaldb.ValidationRepository         = (*ValidationRepository)(nil)
-	_ relationaldb.AmendmentVoteRepository      = (*AmendmentVoteRepository)(nil)
-	_ relationaldb.TransactionContext           = (*TransactionContext)(nil)
+	_ relationaldb.LedgerRepository             = (*ledgerRepository)(nil)
+	_ relationaldb.TransactionRepository        = (*transactionRepository)(nil)
+	_ relationaldb.AccountTransactionRepository = (*accountTransactionRepository)(nil)
+	_ relationaldb.SystemRepository             = (*systemRepository)(nil)
+	_ relationaldb.ValidationRepository         = (*validationRepository)(nil)
+	_ relationaldb.AmendmentVoteRepository      = (*amendmentVoteRepository)(nil)
+	_ relationaldb.TransactionContext           = (*transactionContext)(nil)
 )
 
 const postgresDSNEnv = "XRPLD_TEST_POSTGRES_DSN"
@@ -109,7 +109,7 @@ func TestPostgresLedgerCRUD(t *testing.T) {
 	}
 
 	info := makeLedgerInfo(10)
-	if err := rm.Ledger().SaveValidatedLedger(ctx, info, true); err != nil {
+	if err := rm.Ledger().SaveValidatedLedger(ctx, info); err != nil {
 		t.Fatal(err)
 	}
 
@@ -153,7 +153,7 @@ func TestPostgresLedgerCRUD(t *testing.T) {
 
 	// Upsert.
 	info.TotalCoins = 200000000000
-	if err := rm.Ledger().SaveValidatedLedger(ctx, info, true); err != nil {
+	if err := rm.Ledger().SaveValidatedLedger(ctx, info); err != nil {
 		t.Fatal(err)
 	}
 	got3, err := rm.Ledger().GetLedgerInfoBySeq(ctx, 10)
@@ -170,7 +170,7 @@ func TestPostgresLedgerHashQueries(t *testing.T) {
 	ctx := context.Background()
 
 	for i := uint32(1); i <= 5; i++ {
-		if err := rm.Ledger().SaveValidatedLedger(ctx, makeLedgerInfo(i), false); err != nil {
+		if err := rm.Ledger().SaveValidatedLedger(ctx, makeLedgerInfo(i)); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -205,7 +205,7 @@ func TestPostgresLedgerDelete(t *testing.T) {
 	ctx := context.Background()
 
 	for i := uint32(1); i <= 5; i++ {
-		if err := rm.Ledger().SaveValidatedLedger(ctx, makeLedgerInfo(i), false); err != nil {
+		if err := rm.Ledger().SaveValidatedLedger(ctx, makeLedgerInfo(i)); err != nil {
 			t.Fatal(err)
 		}
 	}

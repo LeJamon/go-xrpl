@@ -80,8 +80,8 @@ func (n NodeID) MarshalBinary() ([]byte, error) {
 	return data, nil
 }
 
-// UnmarshalBinary parses a NodeID from binary data and returns a new NodeID
-func UnmarshalBinary(data []byte) (NodeID, error) {
+// ParseNodeID parses a NodeID from its NodeIDSize-byte binary encoding.
+func ParseNodeID(data []byte) (NodeID, error) {
 	if len(data) != NodeIDSize {
 		return NodeID{}, fmt.Errorf("%w: got %d, want %d", ErrInvalidNodeIDLength, len(data), NodeIDSize)
 	}
@@ -95,6 +95,17 @@ func UnmarshalBinary(data []byte) (NodeID, error) {
 	copy(id[:], data[:32])
 
 	return NodeID{depth: depth, id: id}, nil
+}
+
+// UnmarshalBinary implements encoding.BinaryUnmarshaler, making NodeID
+// round-trippable through the encoding interfaces its MarshalBinary advertises.
+func (n *NodeID) UnmarshalBinary(data []byte) error {
+	parsed, err := ParseNodeID(data)
+	if err != nil {
+		return err
+	}
+	*n = parsed
+	return nil
 }
 
 // Bytes returns the wire format: 32-byte ID + 1-byte depth

@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 
@@ -13,35 +14,46 @@ import (
 type AccountNftsMethod struct{ BaseHandler }
 
 func (m *AccountNftsMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (any, *types.RpcError) {
-	var request struct {
-		types.AccountParam
-		types.LedgerSpecifier
-		types.PaginationParams
+	fields, account, parseErr := accountPageParams(params)
+	if parseErr != nil {
+		return nil, parseErr
 	}
-
-	if err := ParseParams(params, &request); err != nil {
-		return nil, err
+	if !types.IsValidClassicAddress(account) {
+		return nil, types.RpcErrorActMalformed("Account malformed.")
 	}
-
-	if err := ValidateAccount(request.Account); err != nil {
-		return nil, err
-	}
-
 	if err := RequireLedgerService(ctx.Services); err != nil {
 		return nil, err
 	}
 
-	ledgerIndex, selErr := resolveLedgerSelector(request.LedgerSpecifier)
+	ledgerIndex, ledgerFields, selErr := preflightAccountPage(ctx, params, account, "Failed to get account information", false)
 	if selErr != nil {
 		return nil, selErr
 	}
 
-	limit := ClampLimit(request.Limit, LimitAccountNFTokens, ctx.Unlimited)
+	limit, limitErr := ReadLimitField(params, LimitAccountNFTokens, ctx.Unlimited)
+	if limitErr != nil {
+		return nil, limitErr
+	}
+	marker, markerErr := markerString(fields["marker"])
+	if markerErr != nil {
+		return nil, markerErr
+	}
+	if _, present := fields["marker"]; present {
+		if marker != "0" && len(marker) != 64 {
+			return nil, types.RpcErrorInvalidField("marker")
+		}
+		if marker != "0" {
+			if _, err := hex.DecodeString(marker); err != nil {
+				return nil, types.RpcErrorInvalidField("marker")
+			}
+		}
+	}
 	result, err := ctx.Services.Ledger.GetAccountNFTs(
 		ctx.Context,
-		request.Account,
+		account,
 		ledgerIndex,
 		limit,
+		marker,
 	)
 	if err != nil {
 		if rerr := mapLedgerLookupErr(err); rerr != nil {
@@ -52,6 +64,9 @@ func (m *AccountNftsMethod) Handle(ctx *types.RpcContext, params json.RawMessage
 		}
 		if errors.Is(err, svcerr.ErrAccountMalformed) {
 			return nil, types.RpcErrorActMalformed("Account malformed.")
+		}
+		if errors.Is(err, svcerr.ErrInvalidMarker) || errors.Is(err, svcerr.ErrStaleMarker) {
+			return nil, types.RpcErrorInvalidField("marker")
 		}
 		return nil, rpcInternalError("account_nfts: ledger query failed", err)
 	}
@@ -78,18 +93,16 @@ func (m *AccountNftsMethod) Handle(ctx *types.RpcContext, params json.RawMessage
 		nfts[i] = nftObj
 	}
 
-	// Build response
 	response := map[string]any{
-		"account":      result.Account,
 		"account_nfts": nfts,
-		"ledger_hash":  FormatLedgerHash(result.LedgerHash),
-		"ledger_index": result.LedgerIndex,
-		"validated":    result.Validated,
-		"limit":        limit,
 	}
+	mergeLedgerFields(response, ledgerFields)
 
 	if result.Marker != "" {
 		response["marker"] = result.Marker
+		response["limit"] = limit
+	} else {
+		response["account"] = result.Account
 	}
 
 	setLoadMedium(ctx)

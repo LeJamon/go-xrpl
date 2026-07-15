@@ -90,7 +90,7 @@ func initConfig() {
 	if configFile == "" {
 		return
 	}
-	cfg, err := config.LoadConfig(config.ConfigPaths{Main: configFile})
+	cfg, err := config.LoadConfig(config.Paths{Main: configFile, SkipValidators: standalone})
 	if err != nil {
 		globalConfigErr = fmt.Errorf("configuration error: %w", err)
 		return

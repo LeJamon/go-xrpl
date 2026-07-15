@@ -5,7 +5,7 @@ import (
 
 	"github.com/LeJamon/go-xrpl/amendment"
 	binarycodec "github.com/LeJamon/go-xrpl/codec/binarycodec"
-	"github.com/LeJamon/go-xrpl/crypto/common"
+	"github.com/LeJamon/go-xrpl/crypto/sha512half"
 	"github.com/LeJamon/go-xrpl/drops"
 	"github.com/LeJamon/go-xrpl/internal/feetrack"
 	"github.com/LeJamon/go-xrpl/keylet"
@@ -15,15 +15,6 @@ import (
 
 // Validation constants matching rippled
 const (
-	// MaxMemoSize is the maximum total serialized size of memos (in bytes)
-	MaxMemoSize = 1024
-
-	// MaxMemoTypeSize is the maximum size of MemoType field (in bytes)
-	MaxMemoTypeSize = 256
-
-	// MaxMemoDataSize is the maximum size of MemoData field (in bytes)
-	MaxMemoDataSize = 1024
-
 	// LegacyNetworkIDThreshold is the threshold for legacy network IDs
 	// Networks with ID <= this value are legacy networks
 	LegacyNetworkIDThreshold = 1024
@@ -145,7 +136,7 @@ type EngineConfig struct {
 	EnforceLoadFee bool
 }
 
-// GetRules returns the amendment rules for this apply. Rules must be plumbed
+// RequireRules returns the amendment rules for this apply. Rules must be plumbed
 // from the parent ledger's Amendments SLE; a nil Rules panics for the same
 // reason Engine.rules() does — a silent AllSupportedRules fallback treats every
 // amendment as enabled regardless of on-chain state, desyncing the engine from
@@ -153,7 +144,7 @@ type EngineConfig struct {
 // Engine.rules() and ApplyContext.Rules() route through the same no-fallback
 // rule. Tests must set Rules explicitly (amendment.AllSupportedRules() or
 // EmptyRules()).
-func (c EngineConfig) GetRules() *amendment.Rules {
+func (c EngineConfig) RequireRules() *amendment.Rules {
 	if c.Rules == nil {
 		panic("tx.EngineConfig: Rules is nil — every apply path must plumb " +
 			"amendment.Rules from the parent ledger's Amendments SLE. Tests " +
@@ -261,5 +252,5 @@ func computeTransactionHash(tx Transaction) ([32]byte, error) {
 // hashWithTxnPrefix returns SHA512Half of the "TXN\x00" prefix + txBytes.
 func hashWithTxnPrefix(txBytes []byte) [32]byte {
 	prefix := []byte{0x54, 0x58, 0x4E, 0x00} //nolint:prealloc // static 4-byte composite literal followed by a single append
-	return common.Sha512Half(append(prefix, txBytes...))
+	return sha512half.Sum(append(prefix, txBytes...))
 }

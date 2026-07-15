@@ -1,6 +1,7 @@
 package config
 
 import (
+	"errors"
 	"fmt"
 	"strconv"
 	"strings"
@@ -43,35 +44,45 @@ func (v *ValidatorsConfig) Validate() error {
 	// XRPL_ASSERT(listThreshold_ > 0 && listThreshold_ <= publisherLists_.size())
 	// at ValidatorList.cpp:201-203 — catch it here so the operator gets
 	// a clean message at startup instead of a runtime divergence.
-	if v.ValidatorListThreshold > 0 && len(v.ValidatorListKeys) == 0 {
+	uniquePublisherCount := uniqueValidatorListKeyCount(v.ValidatorListKeys)
+	if v.ValidatorListThreshold > 0 && uniquePublisherCount == 0 {
 		return fmt.Errorf("validator_list_threshold (%d) requires at least one validator_list_keys entry",
 			v.ValidatorListThreshold)
 	}
 
-	if len(v.ValidatorListKeys) > 0 && v.ValidatorListThreshold > len(v.ValidatorListKeys) {
-		return fmt.Errorf("validator_list_threshold (%d) cannot be greater than number of validator_list_keys (%d)",
-			v.ValidatorListThreshold, len(v.ValidatorListKeys))
+	if uniquePublisherCount > 0 && v.ValidatorListThreshold > uniquePublisherCount {
+		return fmt.Errorf("validator_list_threshold (%d) cannot be greater than number of unique validator_list_keys (%d)",
+			v.ValidatorListThreshold, uniquePublisherCount)
 	}
 
 	return nil
 }
 
-// GetValidatorListThreshold returns the effective threshold value
-func (v *ValidatorsConfig) GetValidatorListThreshold() int {
-	if v.ValidatorListThreshold == 0 && len(v.ValidatorListKeys) > 0 {
+// EffectiveListThreshold returns the effective threshold value
+func (v *ValidatorsConfig) EffectiveListThreshold() int {
+	publisherCount := uniqueValidatorListKeyCount(v.ValidatorListKeys)
+	if v.ValidatorListThreshold == 0 && publisherCount > 0 {
 		// Calculate threshold as per rippled logic
-		if len(v.ValidatorListKeys) < 3 {
+		if publisherCount < 3 {
 			return 1
 		}
-		return (len(v.ValidatorListKeys) / 2) + 1
+		return (publisherCount / 2) + 1
 	}
 	return v.ValidatorListThreshold
+}
+
+func uniqueValidatorListKeyCount(keys []string) int {
+	unique := make(map[string]struct{}, len(keys))
+	for _, key := range keys {
+		unique[strings.ToUpper(key)] = struct{}{}
+	}
+	return len(unique)
 }
 
 // validateValidatorKey validates a single validator public key
 func validateValidatorKey(key string) error {
 	if key == "" {
-		return fmt.Errorf("validator key cannot be empty")
+		return errors.New("validator key cannot be empty")
 	}
 
 	// Basic validation - should start with 'n' and be the right length
@@ -86,7 +97,7 @@ func validateValidatorKey(key string) error {
 
 	// Character set validation (base58)
 	if !isValidBase58(key) {
-		return fmt.Errorf("validator key contains invalid characters")
+		return errors.New("validator key contains invalid characters")
 	}
 
 	return nil
@@ -95,14 +106,14 @@ func validateValidatorKey(key string) error {
 // validateValidatorListSite validates a validator list site URL
 func validateValidatorListSite(site string) error {
 	if site == "" {
-		return fmt.Errorf("validator list site cannot be empty")
+		return errors.New("validator list site cannot be empty")
 	}
 
 	// Basic URL validation
 	if !strings.HasPrefix(site, "http://") &&
 		!strings.HasPrefix(site, "https://") &&
 		!strings.HasPrefix(site, "file://") {
-		return fmt.Errorf("validator list site must use http://, https://, or file:// scheme")
+		return errors.New("validator list site must use http://, https://, or file:// scheme")
 	}
 
 	return nil
@@ -115,7 +126,7 @@ func validateValidatorListSite(site string) error {
 // ed25519 — or 0x02/0x03 for secp256k1.
 func validateValidatorListKey(key string) error {
 	if key == "" {
-		return fmt.Errorf("validator list key cannot be empty")
+		return errors.New("validator list key cannot be empty")
 	}
 
 	if len(key) != 66 {
@@ -123,7 +134,7 @@ func validateValidatorListKey(key string) error {
 	}
 
 	if !isValidHex(key) {
-		return fmt.Errorf("validator list key contains invalid hex characters")
+		return errors.New("validator list key contains invalid hex characters")
 	}
 
 	// Sanity-check the key-type prefix byte.
@@ -162,13 +173,18 @@ func isValidHex(s string) bool {
 // ParseValidatorsTxt parses a traditional rippled validators.txt file and
 // converts it to a ValidatorsConfig.
 //
-// [validators] lines are `<key> [optional comment/nickname]` — rippled
-// matches "node identity" followed by an optional comment
-// (ValidatorList.cpp:145-155) — so only the first whitespace-separated
-// token is taken as the key. The same applies to the other key/site
-// sections for symmetry with rippled's tokenization.
+// [validators] and legacy [validator_keys] lines are
+// `<key> [optional comment/nickname]` — rippled matches "node identity"
+// followed by an optional comment (ValidatorList.cpp:145-155) — so only
+// the first whitespace-separated token is taken as the key. The same
+// applies to the other key/site sections for symmetry with rippled's
+// tokenization.
 func ParseValidatorsTxt(content string) (*ValidatorsConfig, error) {
 	config := &ValidatorsConfig{}
+	var legacyValidatorKeys []string
+	thresholdSet := false
+	content = strings.ReplaceAll(content, "\r\n", "\n")
+	content = strings.ReplaceAll(content, "\r", "\n")
 
 	currentSection := ""
 	for _, line := range strings.Split(content, "\n") {
@@ -179,7 +195,7 @@ func ParseValidatorsTxt(content string) (*ValidatorsConfig, error) {
 		}
 
 		if strings.HasPrefix(line, "[") && strings.HasSuffix(line, "]") {
-			currentSection = strings.Trim(line, "[]")
+			currentSection = line[1 : len(line)-1]
 			continue
 		}
 
@@ -188,18 +204,29 @@ func ParseValidatorsTxt(content string) (*ValidatorsConfig, error) {
 		switch currentSection {
 		case "validators":
 			config.Validators = append(config.Validators, token)
+		case "validator_keys":
+			legacyValidatorKeys = append(legacyValidatorKeys, token)
 		case "validator_list_sites":
 			config.ValidatorListSites = append(config.ValidatorListSites, token)
 		case "validator_list_keys":
 			config.ValidatorListKeys = append(config.ValidatorListKeys, token)
 		case "validator_list_threshold":
-			threshold, err := strconv.Atoi(token)
+			if thresholdSet {
+				return nil, fmt.Errorf("validator_list_threshold must contain exactly one value")
+			}
+			thresholdSet = true
+			value := line
+			if before, _, found := strings.Cut(value, "#"); found {
+				value = strings.TrimSpace(before)
+			}
+			threshold, err := strconv.Atoi(value)
 			if err != nil {
-				return nil, fmt.Errorf("invalid validator_list_threshold value %q: %w", token, err)
+				return nil, fmt.Errorf("invalid validator_list_threshold value %q: %w", value, err)
 			}
 			config.ValidatorListThreshold = threshold
 		}
 	}
+	config.Validators = append(config.Validators, legacyValidatorKeys...)
 
 	return config, nil
 }

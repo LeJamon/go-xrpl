@@ -7,28 +7,21 @@ import (
 	"strings"
 
 	binarycodec "github.com/LeJamon/go-xrpl/codec/binarycodec"
-	"github.com/LeJamon/go-xrpl/crypto/common"
+	"github.com/LeJamon/go-xrpl/crypto/sha512half"
 	"github.com/LeJamon/go-xrpl/internal/rpc/types"
 	xrpllog "github.com/LeJamon/go-xrpl/log"
 )
 
 // SubmitMethod handles the submit RPC method.
 // Supports both tx_blob (pre-signed hex) and tx_json submissions.
-type SubmitMethod struct{}
+type SubmitMethod struct{ BaseHandler }
 
 func (m *SubmitMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (any, *types.RpcError) {
 	setLoadMedium(ctx)
 	var request struct {
-		TxBlob     string          `json:"tx_blob,omitempty"`
-		TxJson     json.RawMessage `json:"tx_json,omitempty"`
-		Secret     string          `json:"secret,omitempty"`
-		Seed       string          `json:"seed,omitempty"`
-		SeedHex    string          `json:"seed_hex,omitempty"`
-		Passphrase string          `json:"passphrase,omitempty"`
-		KeyType    string          `json:"key_type,omitempty"`
-		FailHard   bool            `json:"fail_hard,omitempty"`
-		Offline    bool            `json:"offline,omitempty"`
-		BuildPath  bool            `json:"build_path,omitempty"`
+		signingRequest
+		TxBlob   string `json:"tx_blob,omitempty"`
+		FailHard bool   `json:"fail_hard,omitempty"`
 	}
 
 	if err := ParseParams(params, &request); err != nil {
@@ -48,7 +41,7 @@ func (m *SubmitMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (an
 	var txBlobHex string
 
 	// Determine if this is a sign-and-submit request (tx_json + credentials)
-	hasSigningCreds := request.Secret != "" || request.Seed != "" || request.SeedHex != "" || request.Passphrase != ""
+	hasSigningCreds := request.signCredentials.any(params)
 
 	if request.TxBlob != "" {
 		// Decode tx_blob to get tx_json
@@ -67,13 +60,7 @@ func (m *SubmitMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (an
 	} else if hasSigningCreds {
 		// Sign-and-submit path: sign the transaction first, then submit the blob.
 		// This matches rippled's behavior in doSubmit() when tx_blob is absent.
-		signed, rpcErr := signTransactionJSON(ctx.Context, ctx.Services, request.TxJson, signCredentials{
-			Secret:     request.Secret,
-			Seed:       request.Seed,
-			SeedHex:    request.SeedHex,
-			Passphrase: request.Passphrase,
-			KeyType:    request.KeyType,
-		}, request.Offline, ctx.Unlimited, ctx.ApiVersion, params)
+		signed, rpcErr := signTransactionJSON(ctx.Context, ctx.Services, request.TxJson, request.signCredentials, request.Offline, ctx.Unlimited, ctx.ApiVersion, params, request.SignatureTarget)
 		if rpcErr != nil {
 			return nil, rpcErr
 		}
@@ -110,19 +97,7 @@ func (m *SubmitMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (an
 	// When the client passed fail_hard:true and the ledger service
 	// implements the FailHardSubmitter surface, route through it so
 	// non-applying submissions are not held or relayed.
-	var (
-		result    *types.SubmitResult
-		submitErr error
-	)
-	if request.FailHard {
-		if fh, ok := ctx.Services.Ledger.(types.FailHardSubmitter); ok {
-			result, submitErr = fh.SubmitTransactionFailHard(txJSON, txBlobHex)
-		} else {
-			result, submitErr = ctx.Services.Ledger.SubmitTransaction(txJSON, txBlobHex)
-		}
-	} else {
-		result, submitErr = ctx.Services.Ledger.SubmitTransaction(txJSON, txBlobHex)
-	}
+	result, submitErr := submitWithFailHard(ctx.Services.Ledger, txJSON, txBlobHex, request.FailHard)
 	if submitErr != nil {
 		return nil, rpcTransactionSubmissionError("submit: transaction submission failed", submitErr)
 	}
@@ -201,7 +176,7 @@ func (m *SubmitMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (an
 	}
 
 	// Add deprecated warning when sign-and-submit credentials are used
-	if request.Secret != "" || request.Seed != "" || request.SeedHex != "" || request.Passphrase != "" {
+	if hasSigningCreds {
 		response["deprecated"] = "Signing support in the 'submit' command has been deprecated and will be removed in a future version of the server. Please migrate to a standalone signing tool."
 	}
 
@@ -220,16 +195,12 @@ func CalculateTxHash(txBlobHex string) string {
 	}
 
 	data := append(prefix, txBytes...)
-	hash := common.Sha512Half(data)
+	hash := sha512half.Sum(data)
 	return strings.ToUpper(hex.EncodeToString(hash[:]))
 }
 
 func (m *SubmitMethod) RequiredRole() types.Role {
 	return types.RoleUser // Transaction submission requires user privileges
-}
-
-func (m *SubmitMethod) SupportedApiVersions() []int {
-	return []int{types.ApiVersion1, types.ApiVersion2, types.ApiVersion3}
 }
 
 func (m *SubmitMethod) RequiredCondition() types.Condition {

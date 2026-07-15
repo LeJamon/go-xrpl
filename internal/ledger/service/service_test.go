@@ -3,9 +3,40 @@ package service
 import (
 	"context"
 	"testing"
+	"time"
 
 	"github.com/LeJamon/go-xrpl/internal/ledger/genesis"
 )
+
+func TestGetValidatedLedgerAge(t *testing.T) {
+	svc, err := New(DefaultConfig())
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	if got := svc.GetValidatedLedgerAge(); got != 14*24*time.Hour {
+		t.Fatalf("missing validation age = %v, want two weeks", got)
+	}
+
+	base := time.Unix(1_700_000_000, 0).UTC()
+	svc.validatedSignTime = base
+	svc.SetValidatedLedgerAgeClock(func() time.Time { return base.Add(2 * time.Minute) })
+	if got := svc.GetValidatedLedgerAge(); got != 2*time.Minute {
+		t.Fatalf("validated age = %v, want two minutes", got)
+	}
+	svc.SetValidatedLedgerAgeClock(func() time.Time { return base.Add(2*time.Minute + 500*time.Millisecond) })
+	if got := svc.GetValidatedLedgerAge(); got != 2*time.Minute {
+		t.Fatalf("fractional validated age = %v, want whole-second two minutes", got)
+	}
+	svc.SetValidatedLedgerAgeClock(func() time.Time { return base.Add(2*time.Minute + time.Second) })
+	if got := svc.GetValidatedLedgerAge(); got != 2*time.Minute+time.Second {
+		t.Fatalf("validated age after boundary = %v, want two minutes and one second", got)
+	}
+
+	svc.SetValidatedLedgerAgeClock(func() time.Time { return base.Add(-time.Minute) })
+	if got := svc.GetValidatedLedgerAge(); got != 0 {
+		t.Fatalf("future validation age = %v, want zero", got)
+	}
+}
 
 func TestNewService(t *testing.T) {
 	cfg := DefaultConfig()
@@ -208,7 +239,7 @@ func TestGetAdoptedLedgerBySequence(t *testing.T) {
 	}
 
 	// A closed ledger in adopted history resolves like GetLedgerBySequence.
-	closed, err := svc.GetAdoptedLedgerBySequence(2)
+	closed, err := svc.AdoptedLedgerBySequence(2)
 	if err != nil {
 		t.Fatalf("adopted-history seq 2 should resolve: %v", err)
 	}
@@ -226,7 +257,7 @@ func TestGetAdoptedLedgerBySequence(t *testing.T) {
 	if l, err := svc.GetLedgerBySequence(openSeq); err != nil || l == nil {
 		t.Fatalf("GetLedgerBySequence must fall back to the open ledger at seq %d (err=%v)", openSeq, err)
 	}
-	if _, err := svc.GetAdoptedLedgerBySequence(openSeq); err != ErrLedgerNotFound {
+	if _, err := svc.AdoptedLedgerBySequence(openSeq); err != ErrLedgerNotFound {
 		t.Errorf("GetAdoptedLedgerBySequence(%d) must NOT return the open ledger; got %v", openSeq, err)
 	}
 }

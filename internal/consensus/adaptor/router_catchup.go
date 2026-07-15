@@ -1146,36 +1146,6 @@ func (r *Router) handleLedgerData(msg *peermanagement.InboundMessage) {
 		if r.handleInboundLedgerData(il, ld, uint64(msg.PeerID)) {
 			return
 		}
-		// If handleInboundLedgerData returned false (e.g. GotBase failed),
-		// fall through to the legacy header-only adoption path
-	}
-
-	// During initial sync, try to adopt the ledger header from peers
-	if ld.InfoType == message.LedgerInfoBase && len(ld.Nodes) > 0 && r.adaptor.NeedsInitialSync() {
-		headerData := ld.Nodes[0].NodeData
-		if err := r.adaptor.AdoptLedgerFromHeader(headerData); err != nil {
-			r.logger.Debug("failed to adopt ledger header", "error", err, "peer", msg.PeerID)
-		} else {
-			r.logger.Info("adopted ledger from peer",
-				"seq", ld.LedgerSeq,
-				"peer", msg.PeerID,
-			)
-			return
-		}
-	}
-
-	if len(ld.LedgerHash) == 32 {
-		var ledgerID consensus.LedgerID
-		copy(ledgerID[:], ld.LedgerHash)
-
-		var payload []byte
-		for _, node := range ld.Nodes {
-			payload = append(payload, node.NodeData...)
-		}
-
-		if err := r.engine.OnLedger(ledgerID, payload); err != nil {
-			r.logger.Debug("engine rejected ledger data", "error", err, "peer", msg.PeerID)
-		}
 	}
 }
 
@@ -1190,17 +1160,15 @@ func (r *Router) handleInboundLedgerData(il *inbound.Ledger, ld *message.LedgerD
 	switch ld.InfoType {
 	case message.LedgerInfoBase:
 		if len(ld.Nodes) < 2 {
-			// Response doesn't include root nodes — can't do full acquisition.
-			// Drop the acquisition and fall through to legacy adoption.
-			r.logger.Debug("inbound ledger: response has < 2 nodes, falling back", "nodes", len(ld.Nodes))
+			r.logger.Debug("inbound ledger: response has < 2 nodes", "nodes", len(ld.Nodes))
 			r.fetchTracker.Remove(il.Hash(), false)
-			return false
+			return true
 		}
 		if err := il.GotBase(ld.Nodes); err != nil {
-			r.logger.Warn("inbound ledger: GotBase failed, falling back", "error", err)
+			r.logger.Warn("inbound ledger: GotBase failed", "error", err)
 			r.adaptor.IncPeerBadData(peerID, "ledger-data-base")
 			r.fetchTracker.Remove(il.Hash(), false)
-			return false
+			return true
 		}
 
 		if il.IsComplete() {
@@ -1379,11 +1347,10 @@ func (r *Router) sendNodesByHash(peers []uint64, ledgerHash [32]byte, seq uint32
 	req := &message.GetObjectByHash{
 		ObjType:    objType,
 		Query:      true,
-		Seq:        seq,
 		LedgerHash: ledgerHash[:],
 		Objects:    objs,
 	}
-	frame, err := encodeFrame(message.TypeGetObjects, req)
+	frame, err := message.EncodeFrame(req)
 	if err != nil {
 		r.logger.Debug("inbound ledger: encode by-hash request failed", "error", err)
 		return

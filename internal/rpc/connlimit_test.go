@@ -55,6 +55,57 @@ func TestConnLimiter_ReleaseNoUnderflow(t *testing.T) {
 	}
 }
 
+// TestConnLimiter_GlobalCeiling verifies the process-wide ceiling bounds total
+// connections across ports even when every per-port limit is unset (0), which
+// is the memory-DoS surface the ceiling closes.
+func TestConnLimiter_GlobalCeiling(t *testing.T) {
+	cl := NewConnLimiter()
+	cl.SetGlobalLimit(3)
+
+	// Spread unlimited-per-port acquisitions across distinct ports.
+	if !cl.TryAcquire("ws1", 0) || !cl.TryAcquire("ws2", 0) || !cl.TryAcquire("ws3", 0) {
+		t.Fatal("first three acquisitions should succeed under the global ceiling")
+	}
+	if cl.TryAcquire("ws4", 0) {
+		t.Fatal("acquisition past the global ceiling must fail despite per-port limit=0")
+	}
+	if cl.Total() != 3 {
+		t.Fatalf("total = %d, want 3", cl.Total())
+	}
+	// A release frees a global slot.
+	cl.Release("ws1")
+	if !cl.TryAcquire("ws5", 0) {
+		t.Fatal("acquisition should succeed after a release frees a global slot")
+	}
+}
+
+// TestConnLimiter_DefaultBounded pins that a fresh limiter is bounded by default
+// rather than unlimited, so an operator who never sets a limit is still
+// protected.
+func TestConnLimiter_DefaultBounded(t *testing.T) {
+	cl := NewConnLimiter()
+	for i := range DefaultMaxTotalConnections {
+		if !cl.TryAcquire("ws", 0) {
+			t.Fatalf("acquire failed early at i=%d, want up to the default ceiling", i)
+		}
+	}
+	if cl.TryAcquire("ws", 0) {
+		t.Fatal("acquisition past the default ceiling must fail")
+	}
+}
+
+// TestConnLimiter_GlobalDisabled confirms a negative override restores the
+// unlimited-global behaviour (per-port limits still apply).
+func TestConnLimiter_GlobalDisabled(t *testing.T) {
+	cl := NewConnLimiter()
+	cl.SetGlobalLimit(-1)
+	for i := range DefaultMaxTotalConnections + 100 {
+		if !cl.TryAcquire("ws", 0) {
+			t.Fatalf("acquire failed at i=%d with the global cap disabled", i)
+		}
+	}
+}
+
 func TestConnLimiter_Count(t *testing.T) {
 	cl := NewConnLimiter()
 	cl.TryAcquire("port1", 0)

@@ -10,10 +10,9 @@ import (
 	"sync"
 	"time"
 
-	"github.com/LeJamon/go-xrpl/amendment"
 	"github.com/LeJamon/go-xrpl/codec/binarycodec"
 	"github.com/LeJamon/go-xrpl/codec/binarycodec/serdes"
-	"github.com/LeJamon/go-xrpl/crypto/common"
+	"github.com/LeJamon/go-xrpl/crypto/sha512half"
 	"github.com/LeJamon/go-xrpl/drops"
 	"github.com/LeJamon/go-xrpl/internal/ledger"
 	"github.com/LeJamon/go-xrpl/internal/ledger/header"
@@ -395,19 +394,12 @@ func (r *ReplayDelta) verifyAndBuild(resp *message.ReplayDeltaResponse) error {
 		return fmt.Errorf("bad hash length: %d", len(resp.LedgerHash))
 	}
 
-	// Mirror rippled :228 — check the header hash before any tx work.
-	// Hash the on-the-wire header bytes directly with the LWR prefix
-	// rather than going through the parsed struct: the parse-then-hash
-	// path passes through xrplEpochToTime which collapses an epoch of 0
-	// (the XRPL ripple epoch) into a Go zero time, defeating the
-	// reverse arithmetic CalculateLedgerHash relies on. The byte-level
-	// hash is what rippled computes on the sender side and is the only
-	// invariant guaranteed to round-trip.
+	// Check the exact on-the-wire header body before doing transaction work.
 	advertised, ok := ToHash32(resp.LedgerHash)
 	if !ok {
 		return fmt.Errorf("bad hash length: %d", len(resp.LedgerHash))
 	}
-	computed := common.Sha512Half(protocol.HashPrefixLedgerMaster.Bytes(), resp.LedgerHeader)
+	computed := sha512half.Sum(protocol.HashPrefixLedgerMaster().Bytes(), resp.LedgerHeader)
 	if computed != advertised {
 		return fmt.Errorf("header hash mismatch: computed %x advertised %x",
 			computed[:8], advertised[:8])
@@ -447,7 +439,7 @@ func (r *ReplayDelta) verifyAndBuild(resp *message.ReplayDeltaResponse) error {
 		if err != nil {
 			return fmt.Errorf("tx %d: split blob: %w", i, err)
 		}
-		txID := common.Sha512Half(protocol.HashPrefixTransactionID[:], txBytes)
+		txID := sha512half.Sum(protocol.HashPrefixTransactionID().Bytes(), txBytes)
 		txIndex, err := extractTransactionIndex(metaBytes)
 		if err != nil {
 			return fmt.Errorf("tx %d: extract index: %w", i, err)
@@ -494,7 +486,10 @@ func (r *ReplayDelta) verifyAndBuild(resp *message.ReplayDeltaResponse) error {
 		return fmt.Errorf("snapshot parent state: %w", err)
 	}
 
-	r.result = ledger.NewFromHeader(*hdr, stateMap, txMap, drops.Fees{})
+	r.result, err = ledger.NewFromHeader(*hdr, stateMap, txMap, drops.Fees{})
+	if err != nil {
+		return fmt.Errorf("construct replay ledger: %w", err)
+	}
 	r.txs = decoded
 
 	r.logger.Info("replay delta verified",
@@ -559,11 +554,7 @@ func (r *ReplayDelta) Apply(engineCfg tx.EngineConfig) (*ledger.Ledger, error) {
 	// Build a mutable child ledger anchored on the parent. Mirror
 	// rippled's Ledger(parent, closeTime) constructor: child inherits
 	// the parent's totalCoins and chains its parent linkage from the
-	// PARENT (not the deserialized response header) — the
-	// xrplEpochToTime round-trip in DeserializeHeader collapses an
-	// XRPL epoch of 0 to a Go zero time, which would then produce a
-	// nonsense uint32 in calculateLedgerHash. The parent's in-memory
-	// time.Time round-trips faithfully through Close().
+	// parent rather than the deserialized response header.
 	stateMap, err := r.parent.StateMapSnapshot()
 	if err != nil {
 		return nil, fmt.Errorf("snapshot parent state: %w", err)
@@ -580,7 +571,10 @@ func (r *ReplayDelta) Apply(engineCfg tx.EngineConfig) (*ledger.Ledger, error) {
 		// subtracts dropsDestroyed accumulated during apply.
 		Drops: r.parent.TotalDrops(),
 	}
-	child := ledger.NewOpenWithHeader(openHdr, stateMap, txMap, r.parent.GetFees())
+	child, err := ledger.NewOpenWithHeader(openHdr, stateMap, txMap, r.parent.GetFees())
+	if err != nil {
+		return nil, fmt.Errorf("construct replay ledger: %w", err)
+	}
 
 	// Override per-ledger config fields from the verified header /
 	// parent. The caller's EngineConfig keeps fees, network ID, logger,
@@ -606,12 +600,11 @@ func (r *ReplayDelta) Apply(engineCfg tx.EngineConfig) (*ledger.Ledger, error) {
 
 	engine := txengine.NewEngine(child, engineCfg)
 
-	// R6b.1: on a flag ledger with featureNegativeUNL, apply pending
-	// ValidatorToDisable / ValidatorToReEnable transitions BEFORE
-	// applying any txs. Without this, every flag ledger's replay-delta
-	// produces a wrong AccountHash on networks with featureNegativeUNL
-	// and falls back to legacy catchup.
-	if protocol.IsFlagLedger(child.Sequence()) && engineCfg.Rules != nil && engineCfg.Rules.Enabled(amendment.FeatureNegativeUNL) {
+	// R6b.1: on a flag ledger, apply pending ValidatorToDisable /
+	// ValidatorToReEnable transitions BEFORE applying any txs. Without this,
+	// every flag ledger's replay-delta produces a wrong AccountHash and falls
+	// back to legacy catchup.
+	if protocol.IsFlagLedger(child.Sequence()) {
 		if err := child.UpdateNegativeUNL(); err != nil {
 			return nil, fmt.Errorf("flag-ledger updateNegativeUNL: %w", err)
 		}
@@ -756,15 +749,7 @@ func (r *ReplayDelta) Apply(engineCfg tx.EngineConfig) (*ledger.Ledger, error) {
 // the tx.EngineConfig.ParentCloseTime contract used elsewhere in the
 // engine. The Ripple epoch is 2000-01-01 UTC.
 func parentCloseTimeRippleEpoch(parent *ledger.Ledger) uint32 {
-	t := parent.CloseTime()
-	if t.IsZero() {
-		return 0
-	}
-	secs := t.Unix() - protocol.RippleEpochUnix
-	if secs < 0 {
-		return 0
-	}
-	return uint32(secs)
+	return protocol.ToRippleTime(parent.CloseTime())
 }
 
 // parentStateSnapshot returns an immutable snapshot of the parent state
