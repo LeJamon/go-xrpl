@@ -25,7 +25,6 @@ type StateModification struct {
 	ChangedKeys []string
 }
 
-// StateComparison is the typed result of comparing two ledger-state snapshots.
 type StateComparison struct {
 	Added     []ComparableStateEntry
 	Removed   []ComparableStateEntry

@@ -16,7 +16,6 @@ import (
 	"github.com/LeJamon/go-xrpl/keylet"
 )
 
-// GetAggregatePriceMethod handles the get_aggregate_price RPC method
 type GetAggregatePriceMethod struct{ BaseHandler }
 
 type aggregatePriceAmount struct {
