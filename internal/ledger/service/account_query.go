@@ -84,6 +84,9 @@ func withAccountQuery[T any](
 	if err := ctx.Err(); err != nil {
 		return zero, err
 	}
+	if err := s.preloadLedgerByHash(ctx, ledgerIndex); err != nil {
+		return zero, err
+	}
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
@@ -1719,6 +1722,9 @@ type DepositAuthorizedResult struct {
 // preauth check.
 func (s *Service) GetDepositAuthorized(ctx context.Context, sourceAccount string, destinationAccount string, ledgerIndex string, credentials []string) (*DepositAuthorizedResult, error) {
 	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	if err := s.preloadLedgerByHash(ctx, ledgerIndex); err != nil {
 		return nil, err
 	}
 	s.mu.RLock()

@@ -13,6 +13,8 @@ import (
 // ledgers; older seqs fall through to the relational DB
 const historyWindow = 256
 
+const persistedLedgerCacheSize = historyWindow
+
 // evictOldHistoryLocked drops ledgerHistory + tx-index entries older than the
 // historyWindow. Caller must hold s.mu.
 func (s *Service) evictOldHistoryLocked(latestValidatedSeq uint32) {
@@ -51,6 +53,21 @@ func (s *Service) deleteHistoryLocked(seq uint32) {
 		delete(s.ledgerByHash, old.Hash())
 		delete(s.ledgerHistory, seq)
 	}
+}
+
+func (s *Service) cachePersistedLedgerLocked(l *ledger.Ledger) {
+	hash := l.Hash()
+	if _, ok := s.persistedLedgers[hash]; ok {
+		return
+	}
+	s.persistedLedgers[hash] = l
+	s.persistedLedgerFIFO = append(s.persistedLedgerFIFO, hash)
+	if len(s.persistedLedgerFIFO) <= persistedLedgerCacheSize {
+		return
+	}
+	oldest := s.persistedLedgerFIFO[0]
+	s.persistedLedgerFIFO = s.persistedLedgerFIFO[1:]
+	delete(s.persistedLedgers, oldest)
 }
 
 // caps the pending-validation stash so a node that never reaches quorum can't

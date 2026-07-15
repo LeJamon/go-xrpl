@@ -31,23 +31,20 @@ func (s *Service) loadLatestLedger(ctx context.Context) (*ledger.Ledger, error) 
 		len(tip.Data) != 32 || !bytes.Equal(tip.Data, info.Hash[:]) {
 		return nil, fmt.Errorf("newest relational ledger %d is not the persisted validated tip", info.Sequence)
 	}
-	stored, err := s.nodeStore.Fetch(ctx, nodestore.Hash256(info.Hash))
+	loaded, err := s.loadStoredLedgerByHash(ctx, [32]byte(info.Hash), true)
 	if err != nil {
 		return nil, err
 	}
-	if stored == nil || stored.Type != nodestore.NodeLedger {
+	if loaded == nil {
 		return nil, fmt.Errorf("ledger %d header is missing", info.Sequence)
 	}
-	h, err := header.DeserializeHeader(stored.Data, true)
-	if err != nil {
-		return nil, err
-	}
+	h := loaded.Header()
 	if h.Hash != [32]byte(info.Hash) || h.LedgerIndex != uint32(info.Sequence) ||
 		h.AccountHash != [32]byte(info.AccountHash) || h.TxHash != [32]byte(info.TransactionHash) ||
 		h.ParentHash != [32]byte(info.ParentHash) || h.Drops != uint64(info.TotalCoins) ||
 		!h.CloseTime.Equal(info.CloseTime) || !h.ParentCloseTime.Equal(info.ParentCloseTime) ||
 		h.CloseTimeResolution != uint32(info.CloseTimeRes) || h.CloseFlags != uint8(info.CloseFlags) ||
-		header.CalculateHash(*h) != h.Hash {
+		header.CalculateHash(h) != h.Hash {
 		return nil, fmt.Errorf("ledger %d header does not match persisted metadata", info.Sequence)
 	}
 	if err := s.verifyStoredSHAMap(ctx, h.AccountHash, shamap.TypeState); err != nil {
@@ -58,10 +55,44 @@ func (s *Service) loadLatestLedger(ctx context.Context) (*ledger.Ledger, error) 
 			return nil, fmt.Errorf("ledger %d transaction tree: %w", info.Sequence, err)
 		}
 	}
+	return loaded, nil
+}
+
+func (s *Service) loadStoredLedgerByHash(ctx context.Context, hash [32]byte, validated bool) (*ledger.Ledger, error) {
+	if s.nodeStore == nil || s.shamapFamily == nil {
+		return nil, nil
+	}
+	stored, err := s.nodeStore.Fetch(ctx, nodestore.Hash256(hash))
+	if err != nil {
+		return nil, err
+	}
+	if stored == nil {
+		return nil, nil
+	}
+	if stored.Type != nodestore.NodeLedger {
+		return nil, fmt.Errorf("stored object is %s, not a ledger header", stored.Type)
+	}
+	h, err := header.DeserializeHeader(stored.Data, true)
+	if err != nil {
+		return nil, err
+	}
+	if h.Hash != hash || header.CalculateHash(*h) != hash {
+		return nil, fmt.Errorf("stored ledger header does not match requested hash")
+	}
+	if stored.LedgerSeq != 0 && stored.LedgerSeq != h.LedgerIndex {
+		return nil, fmt.Errorf("stored ledger sequence %d does not match header %d", stored.LedgerSeq, h.LedgerIndex)
+	}
 
 	stateMap, err := shamap.NewFromRootHash(shamap.TypeState, h.AccountHash, s.shamapFamily)
 	if err != nil {
 		return nil, err
+	}
+	stateRoot, err := stateMap.Hash()
+	if err != nil {
+		return nil, err
+	}
+	if stateRoot != h.AccountHash {
+		return nil, fmt.Errorf("stored state root does not match ledger header")
 	}
 	var txMap *shamap.SHAMap
 	if h.TxHash == ([32]byte{}) {
@@ -72,6 +103,13 @@ func (s *Service) loadLatestLedger(ctx context.Context) (*ledger.Ledger, error) 
 	if err != nil {
 		return nil, err
 	}
+	txRoot, err := txMap.Hash()
+	if err != nil {
+		return nil, err
+	}
+	if txRoot != h.TxHash {
+		return nil, fmt.Errorf("stored transaction root does not match ledger header")
+	}
 	stateMap.SetLedgerSeq(h.LedgerIndex)
 	txMap.SetLedgerSeq(h.LedgerIndex)
 	if err := stateMap.SetImmutable(); err != nil {
@@ -80,9 +118,12 @@ func (s *Service) loadLatestLedger(ctx context.Context) (*ledger.Ledger, error) 
 	if err := txMap.SetImmutable(); err != nil {
 		return nil, err
 	}
-	h.Validated = true
+	h.Validated = validated
 	h.Accepted = true
-	return ledger.NewFromHeader(*h, stateMap, txMap, drops.Fees{})
+	if validated {
+		return ledger.NewFromHeader(*h, stateMap, txMap, drops.Fees{})
+	}
+	return ledger.NewClosedFromHeader(*h, stateMap, txMap, drops.Fees{})
 }
 
 func (s *Service) verifyStoredSHAMap(ctx context.Context, root [32]byte, mapType shamap.Type) error {

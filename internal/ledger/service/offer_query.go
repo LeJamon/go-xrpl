@@ -103,6 +103,9 @@ func (s *Service) GetBookOffers(ctx context.Context, takerGets, takerPays tx.Amo
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
+	if err := s.preloadLedgerByHash(ctx, ledgerIndex); err != nil {
+		return nil, err
+	}
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 

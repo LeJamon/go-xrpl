@@ -184,6 +184,26 @@ func NewFromHeader(
 	txMap *shamap.SHAMap,
 	fees drops.Fees,
 ) (*Ledger, error) {
+	return newFromHeader(hdr, stateMap, txMap, fees, StateValidated)
+}
+
+// NewClosedFromHeader reconstructs an immutable ledger without asserting validation.
+func NewClosedFromHeader(
+	hdr header.LedgerHeader,
+	stateMap *shamap.SHAMap,
+	txMap *shamap.SHAMap,
+	fees drops.Fees,
+) (*Ledger, error) {
+	return newFromHeader(hdr, stateMap, txMap, fees, StateClosed)
+}
+
+func newFromHeader(
+	hdr header.LedgerHeader,
+	stateMap *shamap.SHAMap,
+	txMap *shamap.SHAMap,
+	fees drops.Fees,
+	state State,
+) (*Ledger, error) {
 	setMapLedgerSeq(stateMap, hdr.LedgerIndex)
 	setMapLedgerSeq(txMap, hdr.LedgerIndex)
 	if stateMap == nil {
@@ -209,7 +229,7 @@ func NewFromHeader(
 		txMap:    immutableTx,
 		header:   hdr,
 		fees:     fees,
-		state:    StateValidated,
+		state:    state,
 		rules:    rules,
 	}, nil
 }

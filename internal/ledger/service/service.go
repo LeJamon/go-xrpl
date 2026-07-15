@@ -133,6 +133,11 @@ type Service struct {
 	// sync exclusively by putHistoryLocked/deleteHistoryLocked.
 	ledgerByHash map[[32]byte]uint32
 
+	// Persisted ledgers loaded by hash are cached separately because the node
+	// store may contain non-canonical ledgers at a sequence already in history.
+	persistedLedgers    map[[32]byte]*ledger.Ledger
+	persistedLedgerFIFO [][32]byte
+
 	// Transaction index (hash -> ledger sequence) - in-memory cache
 	txIndex map[[32]byte]uint32
 
@@ -284,6 +289,7 @@ func New(cfg Config) (*Service, error) {
 		amendmentTable:           cfg.Table,
 		ledgerHistory:            make(map[uint32]*ledger.Ledger),
 		ledgerByHash:             make(map[[32]byte]uint32),
+		persistedLedgers:         make(map[[32]byte]*ledger.Ledger),
 		txIndex:                  make(map[[32]byte]uint32),
 		txPositionIndex:          make(map[[32]byte]uint32),
 		pendingValidation:        make(map[[32]byte]*LedgerAcceptedEvent),
@@ -937,17 +943,88 @@ func (s *Service) AdoptedLedgerBySequence(seq uint32) (*ledger.Ledger, error) {
 	return nil, ErrLedgerNotFound
 }
 
-// GetLedgerByHash returns a ledger by its hash
+// GetLedgerByHash returns a ledger by its hash.
 func (s *Service) GetLedgerByHash(hash [32]byte) (*ledger.Ledger, error) {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
+	return s.getLedgerByHash(context.Background(), hash)
+}
 
+func (s *Service) getLedgerByHash(ctx context.Context, hash [32]byte) (*ledger.Ledger, error) {
+	s.mu.RLock()
+	if seq, ok := s.ledgerByHash[hash]; ok {
+		if l, ok := s.ledgerHistory[seq]; ok {
+			s.mu.RUnlock()
+			return l, nil
+		}
+	}
+	if l, ok := s.persistedLedgers[hash]; ok {
+		s.mu.RUnlock()
+		if err := s.promotePersistedLedger(ctx, hash, l); err != nil {
+			return nil, err
+		}
+		return l, nil
+	}
+	canLoad := s.nodeStore != nil && s.shamapFamily != nil
+	s.mu.RUnlock()
+	if !canLoad {
+		return nil, ErrLedgerNotFound
+	}
+
+	loaded, err := s.loadStoredLedgerByHash(ctx, hash, false)
+	if err != nil {
+		return nil, fmt.Errorf("load ledger %x from nodestore: %w", hash[:8], err)
+	}
+	if loaded == nil {
+		return nil, ErrLedgerNotFound
+	}
+	if err := s.promotePersistedLedger(ctx, hash, loaded); err != nil {
+		return nil, err
+	}
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	if seq, ok := s.ledgerByHash[hash]; ok {
 		if l, ok := s.ledgerHistory[seq]; ok {
 			return l, nil
 		}
 	}
-	return nil, ErrLedgerNotFound
+	if l, ok := s.persistedLedgers[hash]; ok {
+		if loaded.IsValidated() && !l.IsValidated() {
+			if err := markLedgerValidated(l); err != nil {
+				return nil, fmt.Errorf("mark cached ledger %x validated: %w", hash[:8], err)
+			}
+		}
+		return l, nil
+	}
+	s.cachePersistedLedgerLocked(loaded)
+	return loaded, nil
+}
+
+func (s *Service) persistedLedgerIsValidated(ctx context.Context, hash [32]byte, seq uint32) bool {
+	if s.relationalDB == nil || s.relationalDB.Ledger() == nil {
+		return false
+	}
+	info, err := s.relationalDB.Ledger().GetLedgerInfoByHash(ctx, relationaldb.Hash(hash))
+	return err == nil && info != nil && uint32(info.Sequence) == seq
+}
+
+func (s *Service) promotePersistedLedger(ctx context.Context, hash [32]byte, l *ledger.Ledger) error {
+	if l.IsValidated() || !s.persistedLedgerIsValidated(ctx, hash, l.Sequence()) {
+		return nil
+	}
+	if err := markLedgerValidated(l); err != nil {
+		return fmt.Errorf("mark persisted ledger %x validated: %w", hash[:8], err)
+	}
+	return nil
+}
+
+func markLedgerValidated(l *ledger.Ledger) error {
+	if l.IsValidated() {
+		return nil
+	}
+	if err := l.SetValidated(); err != nil && !l.IsValidated() {
+		return err
+	}
+	return nil
 }
 
 // GetCurrentLedgerIndex returns the current open ledger index

@@ -1,3 +1,34 @@
+# Issue #1322 — nodestore fallback for ledger hash lookup
+
+## Goal
+
+Make `Service.GetLedgerByHash` recover persisted ledgers after in-memory history
+eviction while preserving fast cache hits, no-nodestore behavior, and true
+not-found semantics.
+
+## Plan
+
+- [x] Validate issue state, linked work, intended `v3.0.0` base, and clean worktree.
+- [x] Trace the persisted header/SHAMap format and define failure/cache semantics.
+- [x] Add focused failing tests for persisted eviction, cache restoration, absent data, and no nodestore.
+- [x] Implement the minimal production-quality load and reconstruction path.
+- [x] Run formatting, focused/race tests, build, vet, strict lint, and final diff review.
+- [x] Commit intentional files, push the branch, open the PR, and verify its remote head.
+
+## Review
+
+- Restored ledgers are reconstructed from verified nodestore headers and SHAMap
+  roots, cached by hash without changing canonical sequence history, and only
+  promoted to validated when the relational index proves the exact hash/sequence.
+- Focused tests cover validated and unvalidated restoration, late validation
+  promotion, missing/corrupt storage, query funnels, cache isolation, and bounds.
+- `go test -race ./internal/ledger/service`, `just test-core`, `just build`,
+  `just vet`, and `golangci-lint run` pass.
+- Conformance matches clean `origin/v3.0.0` exactly: 940 pass, 118 declared
+  out-of-scope failures, 879/879 in-scope pass.
+- Final independent review found no correctness, race, locking, validation,
+  cache-invariant, or query-error-mapping issues.
+
 # Issue #1161 — full-rippled realignment of the keep-up/self-heal bundle
 
 User decisions (2026-07-01): full rippled on the peer-LCL gate, the watchdog,

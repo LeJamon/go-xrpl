@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"encoding/hex"
+	"errors"
 	"strconv"
 	"time"
 
@@ -71,6 +72,9 @@ type LedgerEntryResult struct {
 // GetLedgerEntry retrieves a specific ledger entry by its index/key
 func (s *Service) GetLedgerEntry(ctx context.Context, entryKey [32]byte, ledgerIndex string) (*LedgerEntryResult, error) {
 	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	if err := s.preloadLedgerByHash(ctx, ledgerIndex); err != nil {
 		return nil, err
 	}
 	s.mu.RLock()
@@ -174,6 +178,9 @@ func formatCloseTimeISO(t time.Time) string {
 // GetLedgerData retrieves all ledger state entries with optional pagination
 func (s *Service) GetLedgerData(ctx context.Context, ledgerIndex string, limit uint32, marker string) (*LedgerDataResult, error) {
 	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	if err := s.preloadLedgerByHash(ctx, ledgerIndex); err != nil {
 		return nil, err
 	}
 	s.mu.RLock()
@@ -281,6 +288,9 @@ func (s *Service) getLedgerForQuery(ledgerIndex string) (*ledger.Ledger, bool, e
 					return l, l.IsValidated(), nil
 				}
 			}
+			if l, ok := s.persistedLedgers[h]; ok {
+				return l, l.IsValidated(), nil
+			}
 			return nil, false, ErrLedgerNotFound
 		}
 		seq, err := strconv.ParseUint(ledgerIndex, 10, 32)
@@ -300,4 +310,21 @@ func (s *Service) getLedgerForQuery(ledgerIndex string) (*ledger.Ledger, bool, e
 	}
 
 	return targetLedger, validated, nil
+}
+
+func (s *Service) preloadLedgerByHash(ctx context.Context, ledgerIndex string) error {
+	if len(ledgerIndex) != 64 {
+		return nil
+	}
+	hashBytes, err := hex.DecodeString(ledgerIndex)
+	if err != nil {
+		return ErrInvalidLedgerHash
+	}
+	var hash [32]byte
+	copy(hash[:], hashBytes)
+	_, err = s.getLedgerByHash(ctx, hash)
+	if errors.Is(err, ErrLedgerNotFound) {
+		return nil
+	}
+	return err
 }
