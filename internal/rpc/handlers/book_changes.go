@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"context"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
@@ -53,14 +54,22 @@ type LedgerWithTransactions interface {
 // The shape of the returned map matches the JSON the RPC handler
 // emits, so subscribers can marshal it verbatim into the stream event.
 func ComputeBookChanges(l LedgerWithTransactions) map[string]any {
+	result, _ := ComputeBookChangesContext(context.Background(), l)
+	return result
+}
+
+func ComputeBookChangesContext(ctx context.Context, l LedgerWithTransactions) (map[string]any, error) {
 	if l == nil {
 		return map[string]any{
 			"type":         "bookChanges",
 			"ledger_index": uint32(0),
 			"changes":      []any{},
-		}
+		}, nil
 	}
-	changes := collectBookChanges(l)
+	changes, err := collectBookChanges(ctx, l)
+	if err != nil {
+		return nil, err
+	}
 	changesArr := make([]map[string]any, 0, len(changes))
 	keys := make([]string, 0, len(changes))
 	for key := range changes {
@@ -100,7 +109,7 @@ func ComputeBookChanges(l LedgerWithTransactions) map[string]any {
 		"ledger_time":  l.CloseTime(),
 		"validated":    l.IsValidated(),
 		"changes":      changesArr,
-	}
+	}, nil
 }
 
 func (m *BookChangesMethod) Handle(ctx *types.RPCContext, params json.RawMessage) (any, *types.RPCError) {
@@ -122,17 +131,21 @@ func (m *BookChangesMethod) Handle(ctx *types.RPCContext, params json.RawMessage
 		return nil, lerr
 	}
 
-	return ComputeBookChanges(targetLedger), nil
+	result, err := ComputeBookChangesContext(ctx.Context, targetLedger)
+	if err != nil {
+		return nil, types.RPCErrorInternal(fmt.Sprintf("iterate ledger transactions: %v", err))
+	}
+	return result, nil
 }
 
 // collectBookChanges scans the ledger and returns the per-pair OHLCV
 // accumulator map keyed by canonical pair string. Pulled out of the
 // RPC handler so both the handler and the book_changes WebSocket
 // publisher can call it without duplicating the metadata walk.
-func collectBookChanges(targetLedger LedgerWithTransactions) map[string]*bookChange {
+func collectBookChanges(ctx context.Context, targetLedger LedgerWithTransactions) (map[string]*bookChange, error) {
 	changes := make(map[string]*bookChange)
 
-	_ = targetLedger.ForEachTransaction(func(txHash [32]byte, txData []byte) bool {
+	visit := func(txHash [32]byte, txData []byte) bool {
 		// Decode VL-encoded binary blob (or JSON fallback)
 		storedTx, err := decodeTxBlob(txData)
 		if err != nil {
@@ -320,9 +333,17 @@ func collectBookChanges(targetLedger LedgerWithTransactions) map[string]*bookCha
 		}
 
 		return true
-	})
+	}
 
-	return changes
+	var err error
+	if contextual, ok := targetLedger.(interface {
+		ForEachTransactionContext(context.Context, func([32]byte, []byte) bool) error
+	}); ok {
+		err = contextual.ForEachTransactionContext(ctx, visit)
+	} else {
+		err = targetLedger.ForEachTransaction(visit)
+	}
+	return changes, err
 }
 
 // parsedAmount holds a parsed amount with its currency info

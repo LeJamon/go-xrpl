@@ -16,6 +16,7 @@ import (
 	"github.com/LeJamon/go-xrpl/amendment"
 	"github.com/LeJamon/go-xrpl/codec/addresscodec"
 	"github.com/LeJamon/go-xrpl/config"
+	"github.com/LeJamon/go-xrpl/drops"
 	"github.com/LeJamon/go-xrpl/internal/consensus"
 	"github.com/LeJamon/go-xrpl/internal/consensus/adaptor"
 	"github.com/LeJamon/go-xrpl/internal/ledger/cleaner"
@@ -153,6 +154,8 @@ func Run(appConfig *config.Config, configPath string, standalone bool, rootLogge
 		TxQ:          &txqCfg,
 	}
 	cfg.GenesisConfig = genesisConfig
+	configuredFees := configuredLedgerLoadFees(appConfig)
+	cfg.ConfiguredFees = &configuredFees
 
 	ledgerService, err = service.New(cfg)
 	if err != nil {
@@ -1001,6 +1004,28 @@ func Run(appConfig *config.Config, configPath string, standalone bool, rootLogge
 	})
 
 	return waitForShutdown(serverLog, sigCh, reloadCh, shutdownCh, listenerErrCh, consensusComponents, configPath)
+}
+
+func configuredLedgerLoadFees(appConfig *config.Config) drops.Fees {
+	standard := genesis.StandardFees()
+	fees := drops.Fees{
+		Base:      standard.BaseFee,
+		Reserve:   standard.ReserveBase,
+		Increment: standard.ReserveIncrement,
+	}
+	if appConfig.Voting.ReferenceFeeSet || appConfig.Voting.ReferenceFee > 0 {
+		fees.Base = drops.XRPAmount(appConfig.Voting.ReferenceFee)
+	}
+	if appConfig.Voting.AccountReserveSet || appConfig.Voting.AccountReserve > 0 {
+		fees.Reserve = drops.XRPAmount(appConfig.Voting.AccountReserve)
+	}
+	if appConfig.Voting.OwnerReserveSet || appConfig.Voting.OwnerReserve > 0 {
+		fees.Increment = drops.XRPAmount(appConfig.Voting.OwnerReserve)
+	}
+	if appConfig.FeeDefault != nil {
+		fees.Base = drops.XRPAmount(*appConfig.FeeDefault)
+	}
+	return fees
 }
 
 // waitForShutdown blocks until a terminating event arrives: an OS signal, an

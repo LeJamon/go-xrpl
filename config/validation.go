@@ -215,6 +215,11 @@ func validateMiscSettings(config *Config) []error {
 	if err := ValidateWebsocketPingFrequency(config.WebsocketPingFrequency); err != nil {
 		errs = append(errs, err)
 	}
+	if config.FeeDefault != nil {
+		if err := validateNonNegative("fee_default", *config.FeeDefault); err != nil {
+			errs = append(errs, err)
+		}
+	}
 
 	return errs
 }

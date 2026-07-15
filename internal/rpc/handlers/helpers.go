@@ -2,6 +2,7 @@ package handlers
 
 import (
 	"bytes"
+	"context"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -344,9 +345,12 @@ func LookupLedger(ctx *types.RPCContext, spec types.LedgerSpecifier) (types.Ledg
 		}
 		var hash [32]byte
 		copy(hash[:], hashBytes)
-		l, err := svc.GetLedgerByHash(hash)
-		if err != nil || l == nil {
+		l, err := getLedgerByHashContext(ctx.Context, svc, hash)
+		if errors.Is(err, svcerr.ErrLedgerNotFound) || (l == nil && err == nil) {
 			return nil, false, types.RPCErrorLgrNotFound("ledgerNotFound")
+		}
+		if err != nil {
+			return nil, false, types.RPCErrorInternal(fmt.Sprintf("ledger hash lookup: %v", err))
 		}
 		return l, l.IsValidated(), nil
 	}
@@ -385,6 +389,15 @@ func LookupLedger(ctx *types.RPCContext, spec types.LedgerSpecifier) (types.Ledg
 		}
 		return l, l.IsValidated(), nil
 	}
+}
+
+func getLedgerByHashContext(ctx context.Context, svc types.LedgerService, hash [32]byte) (types.LedgerReader, error) {
+	if contextual, ok := svc.(interface {
+		GetLedgerByHashContext(context.Context, [32]byte) (types.LedgerReader, error)
+	}); ok {
+		return contextual.GetLedgerByHashContext(ctx, hash)
+	}
+	return svc.GetLedgerByHash(hash)
 }
 
 // mapLedgerLookupErr maps the ledger-resolution errors a ledger-backed account

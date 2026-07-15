@@ -3,7 +3,6 @@ package service
 import (
 	"context"
 	"encoding/hex"
-	"errors"
 	"strconv"
 	"time"
 
@@ -69,24 +68,31 @@ type LedgerEntryResult struct {
 	Validated   bool     `json:"validated"`
 }
 
+type contextLedgerView struct {
+	*ledger.Ledger
+	ctx context.Context
+}
+
+func (v contextLedgerView) Read(k keylet.Keylet) ([]byte, error) {
+	return v.Ledger.ReadContext(v.ctx, k)
+}
+
+func (v contextLedgerView) Exists(k keylet.Keylet) (bool, error) {
+	return v.Ledger.ExistsContext(v.ctx, k)
+}
+
 // GetLedgerEntry retrieves a specific ledger entry by its index/key
 func (s *Service) GetLedgerEntry(ctx context.Context, entryKey [32]byte, ledgerIndex string) (*LedgerEntryResult, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
-	if err := s.preloadLedgerByHash(ctx, ledgerIndex); err != nil {
-		return nil, err
-	}
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-
-	targetLedger, validated, err := s.getLedgerForQuery(ledgerIndex)
+	targetLedger, validated, err := s.resolveLedgerForQuery(ctx, ledgerIndex)
 	if err != nil {
 		return nil, err
 	}
 
 	k := keylet.Keylet{Key: entryKey}
-	exists, err := targetLedger.Exists(k)
+	exists, err := targetLedger.ExistsContext(ctx, k)
 	if err != nil {
 		return nil, err
 	}
@@ -94,7 +100,7 @@ func (s *Service) GetLedgerEntry(ctx context.Context, entryKey [32]byte, ledgerI
 		return nil, svcerr.ErrLedgerEntryNotFound
 	}
 
-	data, err := targetLedger.Read(k)
+	data, err := targetLedger.ReadContext(ctx, k)
 	if err != nil {
 		return nil, err
 	}
@@ -180,13 +186,7 @@ func (s *Service) GetLedgerData(ctx context.Context, ledgerIndex string, limit u
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
-	if err := s.preloadLedgerByHash(ctx, ledgerIndex); err != nil {
-		return nil, err
-	}
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-
-	targetLedger, validated, err := s.getLedgerForQuery(ledgerIndex)
+	targetLedger, validated, err := s.resolveLedgerForQuery(ctx, ledgerIndex)
 	if err != nil {
 		return nil, err
 	}
@@ -259,8 +259,28 @@ func (s *Service) GetLedgerData(ctx context.Context, ledgerIndex string, limit u
 	return result, nil
 }
 
-// getLedgerForQuery is a helper function to get ledger for query
 func (s *Service) getLedgerForQuery(ledgerIndex string) (*ledger.Ledger, bool, error) {
+	return s.resolveLedgerForQuery(context.Background(), ledgerIndex)
+}
+
+func (s *Service) resolveLedgerForQuery(ctx context.Context, ledgerIndex string) (*ledger.Ledger, bool, error) {
+	if len(ledgerIndex) == 64 {
+		hashBytes, err := hex.DecodeString(ledgerIndex)
+		if err != nil {
+			return nil, false, ErrInvalidLedgerHash
+		}
+		var hash [32]byte
+		copy(hash[:], hashBytes)
+		l, err := s.getLedgerByHash(ctx, hash)
+		if err != nil {
+			return nil, false, err
+		}
+		return l, l.IsValidated(), nil
+	}
+
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
 	var targetLedger *ledger.Ledger
 	var validated bool
 
@@ -268,6 +288,13 @@ func (s *Service) getLedgerForQuery(ledgerIndex string) (*ledger.Ledger, bool, e
 	case "current", "":
 		targetLedger = s.openLedger
 		validated = false
+		if targetLedger != nil {
+			snapshot, err := targetLedger.Snapshot()
+			if err != nil {
+				return nil, false, err
+			}
+			targetLedger = snapshot
+		}
 	case "closed":
 		targetLedger = s.closedLedger
 		validated = s.closedLedger == s.validatedLedger
@@ -275,24 +302,6 @@ func (s *Service) getLedgerForQuery(ledgerIndex string) (*ledger.Ledger, bool, e
 		targetLedger = s.validatedLedger
 		validated = true
 	default:
-		// A 64-character hex string is a ledger_hash, not a sequence.
-		if len(ledgerIndex) == 64 {
-			hashBytes, err := hex.DecodeString(ledgerIndex)
-			if err != nil {
-				return nil, false, ErrInvalidLedgerHash
-			}
-			var h [32]byte
-			copy(h[:], hashBytes)
-			if seq, ok := s.ledgerByHash[h]; ok {
-				if l, ok := s.ledgerHistory[seq]; ok {
-					return l, l.IsValidated(), nil
-				}
-			}
-			if l, ok := s.persistedLedgers[h]; ok {
-				return l, l.IsValidated(), nil
-			}
-			return nil, false, ErrLedgerNotFound
-		}
 		seq, err := strconv.ParseUint(ledgerIndex, 10, 32)
 		if err != nil {
 			return nil, false, ErrInvalidLedgerIndex
@@ -310,21 +319,4 @@ func (s *Service) getLedgerForQuery(ledgerIndex string) (*ledger.Ledger, bool, e
 	}
 
 	return targetLedger, validated, nil
-}
-
-func (s *Service) preloadLedgerByHash(ctx context.Context, ledgerIndex string) error {
-	if len(ledgerIndex) != 64 {
-		return nil
-	}
-	hashBytes, err := hex.DecodeString(ledgerIndex)
-	if err != nil {
-		return ErrInvalidLedgerHash
-	}
-	var hash [32]byte
-	copy(hash[:], hashBytes)
-	_, err = s.getLedgerByHash(ctx, hash)
-	if errors.Is(err, ErrLedgerNotFound) {
-		return nil
-	}
-	return err
 }

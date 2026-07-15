@@ -2,6 +2,7 @@ package shamap
 
 import (
 	"bytes"
+	"context"
 	"fmt"
 )
 
@@ -15,6 +16,12 @@ type stackEntry struct {
 // maxCount limits the number of differences to find (0 = no limit)
 // Returns complete=true if all differences found, false if truncated
 func (sm *SHAMap) Compare(other *SHAMap, maxCount int) (*DifferenceSet, error) {
+	return sm.CompareContext(context.Background(), other, maxCount)
+}
+
+// CompareContext compares this SHAMap with another while forwarding ctx to
+// lazy storage fetches.
+func (sm *SHAMap) CompareContext(ctx context.Context, other *SHAMap, maxCount int) (*DifferenceSet, error) {
 	sm.mu.RLock()
 	defer sm.mu.RUnlock()
 
@@ -29,7 +36,7 @@ func (sm *SHAMap) Compare(other *SHAMap, maxCount int) (*DifferenceSet, error) {
 		Differences: make([]DifferenceItem, 0),
 		Complete:    true,
 	}
-	complete, err := sm.diffUnsafe(other, func(diff DifferenceItem) bool {
+	complete, err := sm.diffUnsafe(ctx, other, func(diff DifferenceItem) bool {
 		result.addDifference(diff.Key, diff.Type, diff.FirstItem, diff.SecondItem)
 		return maxCount <= 0 || result.Len() < maxCount
 	})
@@ -60,7 +67,7 @@ func (sm *SHAMap) FindDifference(other *SHAMap) ([][32]byte, error) {
 	}
 
 	var keys [][32]byte
-	if _, err := sm.diffUnsafe(other, func(diff DifferenceItem) bool {
+	if _, err := sm.diffUnsafe(context.Background(), other, func(diff DifferenceItem) bool {
 		keys = append(keys, diff.Key)
 		return true
 	}); err != nil {
@@ -74,7 +81,7 @@ func (sm *SHAMap) FindDifference(other *SHAMap) ([][32]byte, error) {
 // false stops the walk early (complete=false). Both maps descend with lazy
 // loading, so backed maps with released children diff correctly.
 // Caller must hold both maps' read locks.
-func (sm *SHAMap) diffUnsafe(other *SHAMap, emit func(DifferenceItem) bool) (complete bool, err error) {
+func (sm *SHAMap) diffUnsafe(ctx context.Context, other *SHAMap, emit func(DifferenceItem) bool) (complete bool, err error) {
 	// Direct root hash comparison for early exit: identical hashes mean
 	// identical maps.
 	if sm.root.Hash() == other.root.Hash() {
@@ -85,6 +92,9 @@ func (sm *SHAMap) diffUnsafe(other *SHAMap, emit func(DifferenceItem) bool) (com
 	stack := []stackEntry{{ourNode: sm.root, otherNode: other.root}}
 
 	for len(stack) > 0 {
+		if err := ctx.Err(); err != nil {
+			return false, err
+		}
 		// Pop from stack
 		entry := stack[len(stack)-1]
 		stack = stack[:len(stack)-1]
@@ -111,7 +121,7 @@ func (sm *SHAMap) diffUnsafe(other *SHAMap, emit func(DifferenceItem) bool) (com
 			if !ok {
 				return false, fmt.Errorf("expected LeafNode, got %T", otherNode)
 			}
-			cont, err := sm.walkBranch(ourInner, otherLeaf.Item(), true, emit)
+			cont, err := sm.walkBranch(ctx, ourInner, otherLeaf.Item(), true, emit)
 			if err != nil || !cont {
 				return false, err
 			}
@@ -120,13 +130,13 @@ func (sm *SHAMap) diffUnsafe(other *SHAMap, emit func(DifferenceItem) bool) (com
 			if !ok {
 				return false, fmt.Errorf("expected LeafNode, got %T", ourNode)
 			}
-			cont, err := other.walkBranch(otherInner, ourLeaf.Item(), false, emit)
+			cont, err := other.walkBranch(ctx, otherInner, ourLeaf.Item(), false, emit)
 			if err != nil || !cont {
 				return false, err
 			}
 		default:
 			// Both are inner nodes - compare children
-			newEntries, cont, err := sm.diffInner(ourInner, otherInner, other, emit)
+			newEntries, cont, err := sm.diffInner(ctx, ourInner, otherInner, other, emit)
 			if err != nil || !cont {
 				return false, err
 			}
@@ -173,8 +183,11 @@ func (sm *SHAMap) emitLeafDiff(ourNode, otherNode Node, emit func(DifferenceItem
 // diffInner compares the children of two inner nodes, emitting differences
 // for branches present on only one side and returning the branch pairs that
 // need deeper comparison. cont is false once emit has asked to stop.
-func (sm *SHAMap) diffInner(ourInner, otherInner *innerNode, other *SHAMap, emit func(DifferenceItem) bool) (newEntries []stackEntry, cont bool, err error) {
+func (sm *SHAMap) diffInner(ctx context.Context, ourInner, otherInner *innerNode, other *SHAMap, emit func(DifferenceItem) bool) (newEntries []stackEntry, cont bool, err error) {
 	for i := range BranchFactor {
+		if err := ctx.Err(); err != nil {
+			return nil, false, err
+		}
 		ourChild, ourHash, ourSet := ourInner.LoadChild(i)
 		otherChild, otherHash, otherSet := otherInner.LoadChild(i)
 		if !ourSet && !otherSet {
@@ -196,13 +209,13 @@ func (sm *SHAMap) diffInner(ourInner, otherInner *innerNode, other *SHAMap, emit
 		}
 
 		if ourSet && ourChild == nil {
-			ourChild, err = sm.descend(ourInner, i)
+			ourChild, err = sm.descendCtx(ctx, ourInner, i)
 			if err != nil {
 				return nil, false, fmt.Errorf("failed to get our child %d: %w", i, err)
 			}
 		}
 		if otherSet && otherChild == nil {
-			otherChild, err = other.descend(otherInner, i)
+			otherChild, err = other.descendCtx(ctx, otherInner, i)
 			if err != nil {
 				return nil, false, fmt.Errorf("failed to get other child %d: %w", i, err)
 			}
@@ -217,12 +230,12 @@ func (sm *SHAMap) diffInner(ourInner, otherInner *innerNode, other *SHAMap, emit
 				})
 			}
 		case ourChild == nil && otherChild != nil:
-			cont, err := other.walkBranch(otherChild, nil, false, emit)
+			cont, err := other.walkBranch(ctx, otherChild, nil, false, emit)
 			if err != nil || !cont {
 				return nil, false, err
 			}
 		case ourChild != nil:
-			cont, err := sm.walkBranch(ourChild, nil, true, emit)
+			cont, err := sm.walkBranch(ctx, ourChild, nil, true, emit)
 			if err != nil || !cont {
 				return nil, false, err
 			}
@@ -235,18 +248,21 @@ func (sm *SHAMap) diffInner(ourInner, otherInner *innerNode, other *SHAMap, emit
 // walkBranch walks a branch of a SHAMap that's matched by an empty branch
 // or single item in the other map. emit is called for each difference;
 // if it returns false the walk stops early (cont=false).
-func (sm *SHAMap) walkBranch(node Node, otherMapItem *Item, isFirstMap bool, emit func(DifferenceItem) bool) (bool, error) {
+func (sm *SHAMap) walkBranch(ctx context.Context, node Node, otherMapItem *Item, isFirstMap bool, emit func(DifferenceItem) bool) (bool, error) {
 	nodeStack := []Node{node}
 
 	emptyBranch := otherMapItem == nil
 
 	for len(nodeStack) > 0 {
+		if err := ctx.Err(); err != nil {
+			return false, err
+		}
 		current := nodeStack[len(nodeStack)-1]
 		nodeStack = nodeStack[:len(nodeStack)-1]
 
 		if inner, ok := current.(*innerNode); ok {
 			for i := range BranchFactor {
-				child, err := sm.descend(inner, i)
+				child, err := sm.descendCtx(ctx, inner, i)
 				if err != nil {
 					return false, fmt.Errorf("failed to get child %d: %w", i, err)
 				}

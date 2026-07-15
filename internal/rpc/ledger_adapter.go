@@ -100,12 +100,26 @@ func (a *LedgerServiceAdapter) GetLedgerBySequence(seq uint32) (types.LedgerRead
 	if err != nil {
 		return nil, err
 	}
+	if l.IsOpen() {
+		l, err = l.Snapshot()
+		if err != nil {
+			return nil, err
+		}
+	}
 	return &ledgerReaderAdapter{l: l}, nil
 }
 
 // GetLedgerByHash returns a ledger by its hash
 func (a *LedgerServiceAdapter) GetLedgerByHash(hash [32]byte) (types.LedgerReader, error) {
 	l, err := a.svc.GetLedgerByHash(hash)
+	if err != nil {
+		return nil, err
+	}
+	return &ledgerReaderAdapter{l: l}, nil
+}
+
+func (a *LedgerServiceAdapter) GetLedgerByHashContext(ctx context.Context, hash [32]byte) (types.LedgerReader, error) {
+	l, err := a.svc.GetLedgerByHashContext(ctx, hash)
 	if err != nil {
 		return nil, err
 	}
@@ -184,8 +198,20 @@ func (a *ledgerReaderAdapter) ForEachTransaction(fn func(txHash [32]byte, txData
 	return a.l.ForEachTransaction(fn)
 }
 
+func (a *ledgerReaderAdapter) ForEachTransactionContext(ctx context.Context, fn func(txHash [32]byte, txData []byte) bool) error {
+	return a.l.ForEachTransactionContext(ctx, fn)
+}
+
 func (a *ledgerReaderAdapter) GetLedgerTransaction(txHash [32]byte) ([]byte, bool, error) {
 	return a.l.GetTransaction(txHash)
+}
+
+func (a *ledgerReaderAdapter) GetLedgerTransactionContext(ctx context.Context, txHash [32]byte) ([]byte, bool, error) {
+	return a.l.GetTransactionContext(ctx, txHash)
+}
+
+func (a *ledgerReaderAdapter) ForEachLedgerStateContext(ctx context.Context, fn func(key [32]byte, data []byte) bool) error {
+	return a.l.IterateStateFrom(ctx, [32]byte{}, fn)
 }
 
 func (a *ledgerReaderAdapter) LedgerAmendmentRules() *amendment.Rules {

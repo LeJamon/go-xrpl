@@ -77,17 +77,27 @@ func (m *mockLedgerReaderTE) ForEachTransaction(fn func([32]byte, []byte) bool) 
 type mockLedgerServiceTE struct {
 	*mockLedgerService
 	transactions  map[string]*types.TransactionInfo
-	ledgers       map[uint32]*mockLedgerReaderTE
-	ledgersByHash map[[32]byte]*mockLedgerReaderTE
+	ledgers       map[uint32]types.LedgerReader
+	ledgersByHash map[[32]byte]types.LedgerReader
 }
 
 func newMockLedgerServiceTE() *mockLedgerServiceTE {
 	return &mockLedgerServiceTE{
 		mockLedgerService: newMockLedgerService(),
 		transactions:      make(map[string]*types.TransactionInfo),
-		ledgers:           make(map[uint32]*mockLedgerReaderTE),
-		ledgersByHash:     make(map[[32]byte]*mockLedgerReaderTE),
+		ledgers:           make(map[uint32]types.LedgerReader),
+		ledgersByHash:     make(map[[32]byte]types.LedgerReader),
 	}
+}
+
+type contextErrorLedgerReaderTE struct {
+	*mockLedgerReaderTE
+	called bool
+}
+
+func (m *contextErrorLedgerReaderTE) GetLedgerTransactionContext(ctx context.Context, _ [32]byte) ([]byte, bool, error) {
+	m.called = true
+	return nil, false, ctx.Err()
 }
 
 func (m *mockLedgerServiceTE) GetTransaction(txHash [32]byte) (*types.TransactionInfo, error) {
@@ -425,6 +435,34 @@ func TestTransactionEntryTxNotFound(t *testing.T) {
 			assert.True(t, rpcErr.IsBareToken())
 		})
 	}
+}
+
+func TestTransactionEntryContextReadError(t *testing.T) {
+	mock := newMockLedgerServiceTE()
+	ledger := &contextErrorLedgerReaderTE{mockLedgerReaderTE: newMockLedgerReaderTE(2)}
+	mock.ledgers[ledger.Sequence()] = ledger
+	mock.ledgersByHash[ledger.Hash()] = ledger
+
+	requestContext, cancel := context.WithCancel(context.Background())
+	cancel()
+	ctx := &types.RPCContext{
+		Context:    requestContext,
+		Role:       types.RoleGuest,
+		ApiVersion: types.ApiVersion1,
+		Services:   newTransactionEntryTestServices(mock),
+	}
+	params, err := json.Marshal(map[string]any{
+		"tx_hash":      strings.Repeat("0", 64),
+		"ledger_index": 2,
+	})
+	require.NoError(t, err)
+
+	result, rpcErr := (&handlers.TransactionEntryMethod{}).Handle(ctx, params)
+
+	assert.Nil(t, result)
+	require.NotNil(t, rpcErr)
+	assert.Equal(t, types.RpcINTERNAL, rpcErr.Code)
+	assert.True(t, ledger.called)
 }
 
 // TestTransactionEntryTxNotInRequestedLedger tests that a transaction found in a different

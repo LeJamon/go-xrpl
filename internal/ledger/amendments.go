@@ -5,6 +5,7 @@
 package ledger
 
 import (
+	"context"
 	"encoding/hex"
 	"fmt"
 
@@ -37,7 +38,13 @@ func LoadAmendmentsFromLedger(reader Reader) (*amendment.Rules, error) {
 }
 
 func loadAmendmentsFromSHAMap(stateMap *shamap.SHAMap) (*amendment.Rules, error) {
-	item, found, err := stateMap.Get(keylet.Amendments().Key)
+	return LoadAmendmentsFromSHAMapContext(context.Background(), stateMap)
+}
+
+// LoadAmendmentsFromSHAMapContext reads amendment rules from a state map while
+// forwarding ctx to lazy storage fetches.
+func LoadAmendmentsFromSHAMapContext(ctx context.Context, stateMap *shamap.SHAMap) (*amendment.Rules, error) {
+	item, found, err := stateMap.GetContext(ctx, keylet.Amendments().Key)
 	if err != nil {
 		return nil, fmt.Errorf("failed to read amendments entry: %w", err)
 	}

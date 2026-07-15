@@ -17,17 +17,36 @@ not-found semantics.
 
 ## Review
 
-- Restored ledgers are reconstructed from verified nodestore headers and SHAMap
-  roots, cached by hash without changing canonical sequence history, and only
-  promoted to validated when the relational index proves the exact hash/sequence.
-- Focused tests cover validated and unvalidated restoration, late validation
-  promotion, missing/corrupt storage, query funnels, cache isolation, and bounds.
-- `go test -race ./internal/ledger/service`, `just test-core`, `just build`,
-  `just vet`, and `golangci-lint run` pass.
-- Conformance matches clean `origin/v3.0.0` exactly: 940 pass, 118 declared
-  out-of-scope failures, 879/879 in-scope pass.
-- Final independent review found no correctness, race, locking, validation,
-  cache-invariant, or query-error-mapping issues.
+- Durable recovery requires the exact validated relational record before loading
+  the matching nodestore header and SHAMap roots, matching rippled v3.2.0.
+- The restored ledger stays request-local while queries run, retains its exact
+  hash selector across JSON-RPC and gRPC, and does not replace canonical
+  sequence history.
+- Focused coverage includes validated restoration, rejection of nodestore-only
+  closed forks, reconstructed fees, missing/corrupt storage, query funnels,
+  exact-hash routing, cache isolation, and cache bounds.
+- Finalization gates `just build`, `just vet`, and `just lint` pass; test and race
+  coverage is delegated to the exact-head GitHub Actions workflow.
+- The final conformance review uses clean local rippled tag `3.2.0` at peeled
+  commit `3c43f4614f87965298773279ff5b85d4c56c637b` as the behavioral oracle.
+
+## PR #1328 finalization
+
+- [x] Pin the PR head, merge base, clean worktree, and exact local oracle.
+- [x] Review the complete diff for Go correctness and rippled v3.2.0 parity.
+- [x] Correct relational gating, closed-ledger reconstruction, canonical-chain
+      validation, configured fee fallback, exact-hash routing, and storage errors.
+- [x] Propagate request contexts through lazy state and transaction SHAMap reads.
+- [x] Add historical-chain, cancellation, current-snapshot, fee, and error coverage.
+- [x] Pass `just build`, `just vet`, `just lint`, and `git diff --check`.
+- [ ] Reconcile the advanced `v3.0.0` base and reverify the combined behavior tree.
+- [ ] Commit and push the behavior remediation; require exact-head green CI.
+- [ ] Run the separate AI-comment cleanup phase and verify the final CI head.
+
+The finalization review uses only the clean local rippled `3.2.0` checkout at
+`3c43f4614f87965298773279ff5b85d4c56c637b`. Local tests are intentionally
+deferred to GitHub Actions by the finalization workflow; build, vet, strict lint,
+formatting, and whitespace gates pass on the reviewed behavior tree.
 
 # Issue #1161 — full-rippled realignment of the keep-up/self-heal bundle
 

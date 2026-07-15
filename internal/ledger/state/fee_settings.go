@@ -9,6 +9,8 @@ import (
 	"github.com/LeJamon/go-xrpl/ledger/entry"
 )
 
+var ErrInvalidFeeSettings = errors.New("invalid FeeSettings field combination")
+
 // FeeSettings represents the singleton fee settings ledger entry.
 // This entry stores the current network fee configuration.
 // Reference: rippled LedgerFormats.h and Fees.h
@@ -28,7 +30,13 @@ type FeeSettings struct {
 	// field set. SerializeFeeSettings emits the matching triple/quad even when
 	// values are zero, mirroring rippled Change.cpp:362-379 which uses
 	// STObject::operator= (assignment) rather than a value-is-nonzero gate.
-	XRPFeesMode bool
+	XRPFeesMode              bool
+	HasBaseFeeDrops          bool
+	HasReserveBaseDrops      bool
+	HasReserveIncrementDrops bool
+	HasBaseFee               bool
+	HasReserveBase           bool
+	HasReserveIncrement      bool
 
 	// Tracking fields (not always present)
 	PreviousTxnID     [32]byte
@@ -69,7 +77,7 @@ func ParseFeeSettings(data []byte) (*FeeSettings, error) {
 		case stUInt16:
 			if f.FieldCode == fieldCodeLedgerEntryType {
 				if f.UInt16() != ledgerEntryTypeFeeSettings {
-					return errors.New("not a FeeSettings entry")
+					return fmt.Errorf("%w: not a FeeSettings entry", ErrInvalidFeeSettings)
 				}
 			}
 
@@ -81,30 +89,35 @@ func ParseFeeSettings(data []byte) (*FeeSettings, error) {
 				fee.ReferenceFeeUnits = f.UInt32()
 			case int(fieldCodeReserveBase):
 				fee.ReserveBase = f.UInt32()
+				fee.HasReserveBase = true
 			case int(fieldCodeReserveIncrement):
 				fee.ReserveIncrement = f.UInt32()
+				fee.HasReserveIncrement = true
 			}
 
 		case stUInt64:
 			if f.FieldCode == int(fieldCodeBaseFee) {
 				fee.BaseFee = f.UInt64()
+				fee.HasBaseFee = true
 			}
 
 		case stAmount:
-			// FeeSettings' fee amounts are native XRP (8 bytes); an IOU value
-			// (48 bytes) is foreign here and is skipped.
-			if len(f.Value) == 8 {
+			switch f.FieldCode {
+			case int(fieldCodeBaseFeeDrops), int(fieldCodeReserveBaseDrops), int(fieldCodeReserveIncrementDrops):
+				if len(f.Value) != 8 {
+					return fmt.Errorf("%w: FeeSettings contains a non-native XRP fee", ErrInvalidFeeSettings)
+				}
 				drops := xrpDrops(f.Value)
 				switch f.FieldCode {
 				case int(fieldCodeBaseFeeDrops):
 					fee.BaseFeeDrops = drops
-					fee.XRPFeesMode = true
+					fee.HasBaseFeeDrops = true
 				case int(fieldCodeReserveBaseDrops):
 					fee.ReserveBaseDrops = drops
-					fee.XRPFeesMode = true
+					fee.HasReserveBaseDrops = true
 				case int(fieldCodeReserveIncrementDrops):
 					fee.ReserveIncrementDrops = drops
-					fee.XRPFeesMode = true
+					fee.HasReserveIncrementDrops = true
 				}
 			}
 
@@ -118,6 +131,12 @@ func ParseFeeSettings(data []byte) (*FeeSettings, error) {
 	if err != nil {
 		return nil, err
 	}
+	modern := fee.HasBaseFeeDrops || fee.HasReserveBaseDrops || fee.HasReserveIncrementDrops
+	legacy := fee.HasBaseFee || fee.HasReserveBase || fee.HasReserveIncrement
+	if modern && legacy {
+		return nil, fmt.Errorf("%w: FeeSettings mixes legacy and XRPFees fields", ErrInvalidFeeSettings)
+	}
+	fee.XRPFeesMode = modern
 
 	return fee, nil
 }

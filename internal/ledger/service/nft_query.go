@@ -50,14 +50,7 @@ func (s *Service) getNFTOffers(ctx context.Context, nftID [32]byte, ledgerIndex 
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
-	if err := s.preloadLedgerByHash(ctx, ledgerIndex); err != nil {
-		return nil, err
-	}
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-
-	// Get the target ledger
-	targetLedger, validated, err := s.getLedgerForQuery(ledgerIndex)
+	targetLedger, validated, err := s.resolveLedgerForQuery(ctx, ledgerIndex)
 	if err != nil {
 		if err == ErrLedgerNotFound {
 			return nil, svcerr.ErrLedgerNotFound
@@ -74,7 +67,7 @@ func (s *Service) getNFTOffers(ctx context.Context, nftID [32]byte, ledgerIndex 
 	}
 
 	// Check if the directory exists
-	exists, err := targetLedger.Exists(dirKey)
+	exists, err := targetLedger.ExistsContext(ctx, dirKey)
 	if err != nil {
 		return nil, err
 	}
@@ -94,7 +87,7 @@ func (s *Service) getNFTOffers(ctx context.Context, nftID [32]byte, ledgerIndex 
 	// indexes; rippled's enumerateNFTOffers pages through cdirNext, so a single
 	// root-page read truncates books with more than one page of offers.
 	var offerIndexes [][32]byte
-	if walkErr := state.DirForEach(targetLedger, dirKey, func(itemKey [32]byte) error {
+	if walkErr := state.DirForEach(contextLedgerView{Ledger: targetLedger, ctx: ctx}, dirKey, func(itemKey [32]byte) error {
 		offerIndexes = append(offerIndexes, itemKey)
 		return nil
 	}); walkErr != nil {
@@ -121,9 +114,9 @@ func (s *Service) getNFTOffers(ctx context.Context, nftID [32]byte, ledgerIndex 
 
 		// Verify the marker offer exists and belongs to this NFT
 		markerKeylet := keylet.Keylet{Key: markerKey}
-		offerData, err := targetLedger.Read(markerKeylet)
+		offerData, err := targetLedger.ReadContext(ctx, markerKeylet)
 		if err != nil {
-			return nil, svcerr.ErrInvalidMarker
+			return nil, err
 		}
 
 		// Parse the offer to verify NFTokenID matches
@@ -166,9 +159,9 @@ func (s *Service) getNFTOffers(ctx context.Context, nftID [32]byte, ledgerIndex 
 		offerKey := offerIndexes[i]
 		offerKeylet := keylet.Keylet{Key: offerKey}
 
-		offerData, err := targetLedger.Read(offerKeylet)
+		offerData, err := targetLedger.ReadContext(ctx, offerKeylet)
 		if err != nil {
-			continue
+			return nil, err
 		}
 
 		offer, err := state.ParseNFTokenOffer(offerData)

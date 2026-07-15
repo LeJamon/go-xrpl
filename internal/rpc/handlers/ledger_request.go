@@ -3,11 +3,14 @@ package handlers
 import (
 	"encoding/hex"
 	"encoding/json"
+	"errors"
+	"fmt"
 	"math"
 	"strconv"
 	"strings"
 	"time"
 
+	"github.com/LeJamon/go-xrpl/internal/ledger/service/svcerr"
 	"github.com/LeJamon/go-xrpl/internal/rpc/types"
 )
 
@@ -87,8 +90,12 @@ func (m *LedgerRequestMethod) Handle(ctx *types.RPCContext, params json.RawMessa
 		}
 		copy(targetHash[:], hb)
 
-		if l, err := ctx.Services.Ledger.GetLedgerByHash(targetHash); err == nil && l != nil {
+		l, err := getLedgerByHashContext(ctx.Context, ctx.Services.Ledger, targetHash)
+		if err == nil && l != nil {
 			return ledgerRequestSuccess(l), nil
+		}
+		if err != nil && !errors.Is(err, svcerr.ErrLedgerNotFound) {
+			return nil, types.RPCErrorInternal(fmt.Sprintf("ledger_request hash lookup: %v", err))
 		}
 	} else {
 		var idx int64

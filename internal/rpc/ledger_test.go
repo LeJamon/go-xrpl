@@ -7,6 +7,7 @@ import (
 	"errors"
 	"testing"
 
+	"github.com/LeJamon/go-xrpl/internal/ledger/service/svcerr"
 	"github.com/LeJamon/go-xrpl/internal/rpc/handlers"
 	"github.com/LeJamon/go-xrpl/internal/rpc/types"
 	"github.com/stretchr/testify/assert"
@@ -31,6 +32,25 @@ type mockLedgerReader struct {
 		hash [32]byte
 		data []byte
 	}
+}
+
+type snapshotStateLedgerReader struct {
+	*mockLedgerReader
+	entries map[[32]byte][]byte
+	calls   int
+}
+
+func (l *snapshotStateLedgerReader) ForEachLedgerStateContext(ctx context.Context, fn func([32]byte, []byte) bool) error {
+	l.calls++
+	for key, data := range l.entries {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		if !fn(key, data) {
+			break
+		}
+	}
+	return nil
 }
 
 func (m *mockLedgerReader) Sequence() uint32            { return m.seq }
@@ -83,6 +103,13 @@ func (m *ledgerMock) GetLedgerByHash(hash [32]byte) (types.LedgerReader, error) 
 	return m.mockLedgerService.GetLedgerByHash(hash)
 }
 
+func (m *ledgerMock) GetLedgerByHashContext(ctx context.Context, hash [32]byte) (types.LedgerReader, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	return m.GetLedgerByHash(hash)
+}
+
 // newDefaultLedgerReader creates a default mockLedgerReader with typical values
 func newDefaultLedgerReader(seq uint32, validated bool) *mockLedgerReader {
 	var hash [32]byte
@@ -124,7 +151,7 @@ func TestLedgerBasicRequest(t *testing.T) {
 		case 3:
 			return currentReader, nil
 		}
-		return nil, errors.New("ledger not found")
+		return nil, svcerr.ErrLedgerNotFound
 	}
 	services := &types.ServiceContainer{Ledger: mock}
 
@@ -460,7 +487,9 @@ func TestLedgerAccountsOption(t *testing.T) {
 	accountRootBlob, decErr := hex.DecodeString(
 		"1100612200000000240000000125000000016240000000000F424081140000000000000000000000000000000000000001")
 	require.NoError(t, decErr)
+	var dataSelector string
 	mock.getLedgerDataFn = func(ledgerIndex string, marker string) (*types.LedgerDataResult, error) {
+		dataSelector = ledgerIndex
 		return &types.LedgerDataResult{
 			LedgerIndex: 2,
 			State: []types.LedgerDataItem{
@@ -515,6 +544,44 @@ func TestLedgerAccountsOption(t *testing.T) {
 	entry := state[0].(map[string]any)
 	assert.Equal(t, stateIndex, entry["index"])
 	assert.Equal(t, "AccountRoot", entry["LedgerEntryType"])
+	wantSelector := hex.EncodeToString(reader.hash[:])
+	assert.Equal(t, wantSelector, dataSelector)
+
+	openBase := newDefaultLedgerReader(3, false)
+	openBase.closed = false
+	openReader := &snapshotStateLedgerReader{
+		mockLedgerReader: openBase,
+		entries: map[[32]byte][]byte{
+			{0x42}: accountRootBlob,
+		},
+	}
+	mock.getLedgerBySequenceFn = func(seq uint32) (types.LedgerReader, error) {
+		switch seq {
+		case 2:
+			return reader, nil
+		case 3:
+			return openReader, nil
+		default:
+			return nil, svcerr.ErrLedgerNotFound
+		}
+	}
+	dataSelector = ""
+	currentParams, err := json.Marshal(map[string]any{
+		"ledger_index": "current",
+		"accounts":     true,
+	})
+	require.NoError(t, err)
+	result, rpcErr = method.Handle(adminCtx, currentParams)
+	require.Nil(t, rpcErr)
+	require.NotNil(t, result)
+	assert.Empty(t, dataSelector)
+	assert.Equal(t, 1, openReader.calls)
+
+	openReader.entries = map[[32]byte][]byte{{0x43}: {1, 2, 3}}
+	result, rpcErr = method.Handle(adminCtx, currentParams)
+	assert.Nil(t, result)
+	require.NotNil(t, rpcErr)
+	assert.Equal(t, types.RpcINTERNAL, rpcErr.Code)
 }
 
 // TestLedgerLookupByHash tests ledger lookup by hash
@@ -598,6 +665,18 @@ func TestLedgerLookupByHash(t *testing.T) {
 		assert.Nil(t, result)
 		require.NotNil(t, rpcErr)
 		assert.Equal(t, types.RpcLGR_NOT_FOUND, rpcErr.Code)
+	})
+
+	t.Run("Storage failure", func(t *testing.T) {
+		mock.getLedgerByHashFn = func([32]byte) (types.LedgerReader, error) {
+			return nil, errors.New("storage unavailable")
+		}
+		paramsJSON, err := json.Marshal(map[string]any{"ledger_hash": hashStr})
+		require.NoError(t, err)
+		result, rpcErr := method.Handle(ctx, paramsJSON)
+		assert.Nil(t, result)
+		require.NotNil(t, rpcErr)
+		assert.Equal(t, types.RpcINTERNAL, rpcErr.Code)
 	})
 }
 

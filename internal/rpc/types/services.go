@@ -898,6 +898,14 @@ type LedgerTransactionSource interface {
 	GetLedgerTransaction(txHash [32]byte) ([]byte, bool, error)
 }
 
+type ContextLedgerTransactionSource interface {
+	GetLedgerTransactionContext(ctx context.Context, txHash [32]byte) ([]byte, bool, error)
+}
+
+type ContextLedgerStateSource interface {
+	ForEachLedgerStateContext(ctx context.Context, fn func(key [32]byte, data []byte) bool) error
+}
+
 type LedgerAmendmentRulesSource interface {
 	LedgerAmendmentRules() *amendment.Rules
 }

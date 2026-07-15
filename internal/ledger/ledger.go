@@ -184,7 +184,19 @@ func NewFromHeader(
 	txMap *shamap.SHAMap,
 	fees drops.Fees,
 ) (*Ledger, error) {
-	return newFromHeader(hdr, stateMap, txMap, fees, StateValidated)
+	return newFromHeaderContext(context.Background(), hdr, stateMap, txMap, fees, StateValidated)
+}
+
+// NewFromHeaderContext reconstructs a validated ledger while forwarding ctx to
+// amendment-state reads from lazily backed maps.
+func NewFromHeaderContext(
+	ctx context.Context,
+	hdr header.LedgerHeader,
+	stateMap *shamap.SHAMap,
+	txMap *shamap.SHAMap,
+	fees drops.Fees,
+) (*Ledger, error) {
+	return newFromHeaderContext(ctx, hdr, stateMap, txMap, fees, StateValidated)
 }
 
 // NewClosedFromHeader reconstructs an immutable ledger without asserting validation.
@@ -194,10 +206,23 @@ func NewClosedFromHeader(
 	txMap *shamap.SHAMap,
 	fees drops.Fees,
 ) (*Ledger, error) {
-	return newFromHeader(hdr, stateMap, txMap, fees, StateClosed)
+	return NewClosedFromHeaderContext(context.Background(), hdr, stateMap, txMap, fees)
 }
 
-func newFromHeader(
+// NewClosedFromHeaderContext reconstructs a closed ledger while forwarding ctx
+// to amendment-state reads from lazily backed maps.
+func NewClosedFromHeaderContext(
+	ctx context.Context,
+	hdr header.LedgerHeader,
+	stateMap *shamap.SHAMap,
+	txMap *shamap.SHAMap,
+	fees drops.Fees,
+) (*Ledger, error) {
+	return newFromHeaderContext(ctx, hdr, stateMap, txMap, fees, StateClosed)
+}
+
+func newFromHeaderContext(
+	ctx context.Context,
 	hdr header.LedgerHeader,
 	stateMap *shamap.SHAMap,
 	txMap *shamap.SHAMap,
@@ -220,7 +245,7 @@ func newFromHeader(
 	if err != nil {
 		return nil, fmt.Errorf("failed to snapshot transaction map: %w", err)
 	}
-	rules, err := loadAmendmentsFromSHAMap(immutableState)
+	rules, err := LoadAmendmentsFromSHAMapContext(ctx, immutableState)
 	if err != nil {
 		return nil, fmt.Errorf("failed to load amendment rules: %w", err)
 	}
@@ -356,10 +381,15 @@ func (l *Ledger) IsValidated() bool {
 }
 
 func (l *Ledger) Read(k keylet.Keylet) ([]byte, error) {
+	return l.ReadContext(context.Background(), k)
+}
+
+// ReadContext reads a ledger entry while forwarding ctx to lazy state fetches.
+func (l *Ledger) ReadContext(ctx context.Context, k keylet.Keylet) ([]byte, error) {
 	l.mu.RLock()
 	defer l.mu.RUnlock()
 
-	item, found, err := l.stateMap.Get(k.Key)
+	item, found, err := l.stateMap.GetContext(ctx, k.Key)
 	if err != nil {
 		return nil, err
 	}
@@ -383,6 +413,12 @@ func (l *Ledger) SkipListHashes() ([][32]byte, error) {
 // skip list, and 256-aligned ancestors in the historical skip list. A non-256-aligned
 // ancestor more than 256 behind is unresolvable from one ledger → (zero, false).
 func (l *Ledger) HashOfSeq(seq uint32) ([32]byte, bool, error) {
+	return l.HashOfSeqContext(context.Background(), seq)
+}
+
+// HashOfSeqContext resolves an ancestor hash while forwarding ctx to lazy
+// skip-list reads.
+func (l *Ledger) HashOfSeqContext(ctx context.Context, seq uint32) ([32]byte, bool, error) {
 	l.mu.RLock()
 	defer l.mu.RUnlock()
 
@@ -399,7 +435,7 @@ func (l *Ledger) HashOfSeq(seq uint32) ([32]byte, bool, error) {
 
 	// Rolling 256: this ledger's skip list holds hashes for seqs
 	// [lseq-len .. lseq-1], so hash(seq) sits at index len-diff.
-	_, hashes, _, err := skiplist.ReadLedgerHashesSLE(l.stateMap, keylet.LedgerHashes().Key)
+	_, hashes, _, err := skiplist.ReadLedgerHashesSLEContext(ctx, l.stateMap, keylet.LedgerHashes().Key)
 	if err != nil {
 		return [32]byte{}, false, err
 	}
@@ -413,7 +449,7 @@ func (l *Ledger) HashOfSeq(seq uint32) ([32]byte, bool, error) {
 	if seq&0xff != 0 {
 		return [32]byte{}, false, nil
 	}
-	_, histHashes, lastSeq, err := skiplist.ReadLedgerHashesSLE(l.stateMap, keylet.LedgerHashesForSeq(seq).Key)
+	_, histHashes, lastSeq, err := skiplist.ReadLedgerHashesSLEContext(ctx, l.stateMap, keylet.LedgerHashesForSeq(seq).Key)
 	if err != nil {
 		return [32]byte{}, false, err
 	}
@@ -426,10 +462,15 @@ func (l *Ledger) HashOfSeq(seq uint32) ([32]byte, bool, error) {
 }
 
 func (l *Ledger) Exists(k keylet.Keylet) (bool, error) {
+	return l.ExistsContext(context.Background(), k)
+}
+
+// ExistsContext checks a ledger entry while forwarding ctx to lazy state fetches.
+func (l *Ledger) ExistsContext(ctx context.Context, k keylet.Keylet) (bool, error) {
 	l.mu.RLock()
 	defer l.mu.RUnlock()
 
-	return l.stateMap.Has(k.Key)
+	return l.stateMap.HasContext(ctx, k.Key)
 }
 
 func (l *Ledger) Insert(k keylet.Keylet, data []byte) error {
@@ -546,10 +587,16 @@ func (l *Ledger) AddTransactionWithMeta(txHash [32]byte, txWithMetaData []byte) 
 }
 
 func (l *Ledger) GetTransaction(txHash [32]byte) ([]byte, bool, error) {
+	return l.GetTransactionContext(context.Background(), txHash)
+}
+
+// GetTransactionContext reads a transaction while forwarding ctx to lazy
+// transaction-tree storage fetches.
+func (l *Ledger) GetTransactionContext(ctx context.Context, txHash [32]byte) ([]byte, bool, error) {
 	l.mu.RLock()
 	defer l.mu.RUnlock()
 
-	item, found, err := l.txMap.Get(txHash)
+	item, found, err := l.txMap.GetContext(ctx, txHash)
 	if err != nil {
 		return nil, false, err
 	}
@@ -780,10 +827,16 @@ func (l *Ledger) ForEachCtx(ctx context.Context, fn func(key [32]byte, data []by
 
 // Succ returns the first state entry with key > the given key (O(log n) UpperBound).
 func (l *Ledger) Succ(key [32]byte) ([32]byte, []byte, bool, error) {
+	return l.SuccContext(context.Background(), key)
+}
+
+// SuccContext returns the first state entry above key while forwarding ctx to
+// lazy storage fetches.
+func (l *Ledger) SuccContext(ctx context.Context, key [32]byte) ([32]byte, []byte, bool, error) {
 	l.mu.RLock()
 	defer l.mu.RUnlock()
 
-	it := l.stateMap.UpperBound(key)
+	it := l.stateMap.UpperBoundContext(ctx, key)
 	if it.Valid() {
 		item := it.Item()
 		if item != nil {
@@ -804,7 +857,7 @@ func (l *Ledger) IterateStateFrom(ctx context.Context, after [32]byte, fn func(k
 	l.mu.RLock()
 	defer l.mu.RUnlock()
 
-	it := l.stateMap.UpperBound(after)
+	it := l.stateMap.UpperBoundContext(ctx, after)
 	for it.Valid() {
 		if err := ctx.Err(); err != nil {
 			return err
@@ -838,10 +891,16 @@ func DecrementKey(key [32]byte) [32]byte {
 
 // ForEachTransaction calls fn for each tx (hash, data); return false to stop early.
 func (l *Ledger) ForEachTransaction(fn func(txHash [32]byte, txData []byte) bool) error {
+	return l.ForEachTransactionContext(context.Background(), fn)
+}
+
+// ForEachTransactionContext walks transactions while forwarding ctx to lazy
+// storage fetches.
+func (l *Ledger) ForEachTransactionContext(ctx context.Context, fn func(txHash [32]byte, txData []byte) bool) error {
 	l.mu.RLock()
 	defer l.mu.RUnlock()
 
-	return l.txMap.ForEach(func(item *shamap.Item) bool {
+	return l.txMap.ForEachCtx(ctx, func(item *shamap.Item) bool {
 		return fn(item.Key(), item.Data())
 	})
 }

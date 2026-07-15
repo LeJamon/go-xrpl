@@ -64,11 +64,21 @@ func (m *TransactionEntryMethod) Handle(ctx *types.RPCContext, params json.RawMe
 
 	var txInfo *types.TransactionInfo
 	var lookupErr error
-	if source, ok := targetLedger.(types.LedgerTransactionSource); ok {
-		txData, found, readErr := source.GetLedgerTransaction(txHash)
-		if readErr != nil {
-			return nil, types.RPCErrorInternal("Failed to read transaction data")
-		}
+	var txData []byte
+	var found bool
+	var readErr error
+	hasSource := false
+	if source, ok := targetLedger.(types.ContextLedgerTransactionSource); ok {
+		hasSource = true
+		txData, found, readErr = source.GetLedgerTransactionContext(ctx.Context, txHash)
+	} else if source, ok := targetLedger.(types.LedgerTransactionSource); ok {
+		hasSource = true
+		txData, found, readErr = source.GetLedgerTransaction(txHash)
+	}
+	if readErr != nil {
+		return nil, types.RPCErrorInternal("Failed to read transaction data")
+	}
+	if hasSource {
 		if found {
 			txIndex, hasIndex := txcore.TransactionIndexFromTxWithMetaBlob(txData)
 			if !hasIndex {

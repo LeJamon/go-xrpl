@@ -8,17 +8,29 @@ import (
 	"time"
 
 	"github.com/LeJamon/go-xrpl/crypto/sha512half"
+	"github.com/LeJamon/go-xrpl/drops"
 	"github.com/LeJamon/go-xrpl/internal/ledger"
 	"github.com/LeJamon/go-xrpl/internal/ledger/genesis"
 	"github.com/LeJamon/go-xrpl/internal/ledger/service/svcerr"
+	"github.com/LeJamon/go-xrpl/internal/ledger/state"
 	"github.com/LeJamon/go-xrpl/keylet"
 	"github.com/LeJamon/go-xrpl/protocol"
 	"github.com/LeJamon/go-xrpl/shamap"
 	"github.com/LeJamon/go-xrpl/storage/kvstore/memorydb"
 	"github.com/LeJamon/go-xrpl/storage/nodestore"
+	"github.com/LeJamon/go-xrpl/storage/relationaldb"
 	sqlitedb "github.com/LeJamon/go-xrpl/storage/relationaldb/sqlite"
 	"github.com/stretchr/testify/require"
 )
+
+type fetchErrorDatabase struct {
+	nodestore.Database
+	err error
+}
+
+func (d *fetchErrorDatabase) Fetch(context.Context, nodestore.Hash256) (*nodestore.Node, error) {
+	return nil, d.err
+}
 
 func TestService_GetLedgerByHashLoadsEvictedLedgerFromNodeStore(t *testing.T) {
 	ctx := context.Background()
@@ -46,6 +58,14 @@ func TestService_GetLedgerByHashLoadsEvictedLedgerFromNodeStore(t *testing.T) {
 	entryKey := [32]byte{0xAA, 0xBB, 0xCC}
 	entryData := []byte("persisted-state")
 	require.NoError(t, svc.openLedger.Insert(keylet.Keylet{Key: entryKey}, entryData))
+	feeData, err := state.SerializeFeeSettings(&state.FeeSettings{
+		XRPFeesMode:           true,
+		BaseFeeDrops:          17,
+		ReserveBaseDrops:      23_000_000,
+		ReserveIncrementDrops: 4_000_000,
+	})
+	require.NoError(t, err)
+	require.NoError(t, svc.openLedger.Update(keylet.Fees(), feeData))
 	_, err = svc.AcceptLedger(ctx)
 	require.NoError(t, err)
 	svc.FlushPersists()
@@ -81,6 +101,12 @@ func TestService_GetLedgerByHashLoadsEvictedLedgerFromNodeStore(t *testing.T) {
 	require.NotSame(t, want, got)
 	require.Equal(t, ledger.StateValidated, got.State())
 	require.Equal(t, wantHash, got.Hash())
+	baseFee, reserveBase, reserveIncrement := readFeesFromLedger(want)
+	require.Equal(t, drops.Fees{
+		Base:      drops.XRPAmount(baseFee),
+		Reserve:   drops.XRPAmount(reserveBase),
+		Increment: drops.XRPAmount(reserveIncrement),
+	}, got.GetFees())
 
 	gotStateHash, err := got.StateMapHash()
 	require.NoError(t, err)
@@ -97,12 +123,15 @@ func TestService_GetLedgerByHashLoadsEvictedLedgerFromNodeStore(t *testing.T) {
 	require.Same(t, conflicting, svc.ledgerHistory[got.Sequence()])
 	_, indexPresent = svc.ledgerByHash[wantHash]
 	require.False(t, indexPresent)
-	require.Same(t, got, svc.persistedLedgers[wantHash])
+	persisted := svc.persistedLedgers[wantHash]
+	require.NotNil(t, persisted)
+	require.Equal(t, ledger.StateClosed, persisted.State())
 	svc.mu.RUnlock()
 
 	cached, err := svc.GetLedgerByHash(wantHash)
 	require.NoError(t, err)
-	require.Same(t, got, cached)
+	require.NotSame(t, got, cached)
+	require.Equal(t, ledger.StateValidated, cached.State())
 
 	clearPersistedCache := func() {
 		svc.mu.Lock()
@@ -121,7 +150,7 @@ func TestService_GetLedgerByHashLoadsEvictedLedgerFromNodeStore(t *testing.T) {
 	require.Equal(t, wantHash, ledgerData.LedgerHash)
 }
 
-func TestService_GetLedgerByHashDoesNotValidateUnprovenNodeStoreLedger(t *testing.T) {
+func TestService_GetLedgerByHashRejectsNodeStoreOnlyLedger(t *testing.T) {
 	ctx := context.Background()
 	db := nodestore.NewKVDatabase(memorydb.New(), "ledger-by-hash-unvalidated", 10_000, time.Hour)
 	t.Cleanup(func() { require.NoError(t, db.Close()) })
@@ -156,20 +185,126 @@ func TestService_GetLedgerByHashDoesNotValidateUnprovenNodeStoreLedger(t *testin
 
 	closedHash := closed.Hash()
 	loaded, err := svc.GetLedgerByHash(closedHash)
-	require.NoError(t, err)
-	require.Equal(t, ledger.StateClosed, loaded.State())
-	require.False(t, loaded.IsValidated())
+	require.Nil(t, loaded)
+	require.ErrorIs(t, err, ErrLedgerNotFound)
 
-	result, err := svc.GetLedgerEntry(ctx, entryKey, hex.EncodeToString(closedHash[:]))
-	require.NoError(t, err)
-	require.False(t, result.Validated)
+	_, err = svc.GetLedgerEntry(ctx, entryKey, hex.EncodeToString(closedHash[:]))
+	require.ErrorIs(t, err, ErrLedgerNotFound)
 
 	require.NoError(t, closed.SetValidated())
 	require.NoError(t, svc.persistValidatedLedger(ctx, closed, false))
-	promoted, err := svc.GetLedgerByHash(closedHash)
+	persisted, err := svc.GetLedgerByHash(closedHash)
 	require.NoError(t, err)
-	require.Same(t, loaded, promoted)
-	require.True(t, promoted.IsValidated())
+	require.NotSame(t, closed, persisted)
+	require.True(t, persisted.IsValidated())
+	result, err := svc.GetLedgerEntry(ctx, entryKey, hex.EncodeToString(closedHash[:]))
+	require.NoError(t, err)
+	require.True(t, result.Validated)
+}
+
+func TestService_GetLedgerByHashDoesNotValidateStaleRelationalFork(t *testing.T) {
+	ctx := context.Background()
+	db := nodestore.NewKVDatabase(memorydb.New(), "ledger-by-hash-stale-fork", 10_000, time.Hour)
+	t.Cleanup(func() { require.NoError(t, db.Close()) })
+	rm, err := sqlitedb.NewRepositoryManager(t.TempDir())
+	require.NoError(t, err)
+	require.NoError(t, rm.Open(ctx))
+	t.Cleanup(func() { require.NoError(t, rm.Close(ctx)) })
+	svc, err := New(Config{
+		Standalone:    true,
+		GenesisConfig: genesis.DefaultConfig(),
+		NodeStore:     db,
+		SHAMapFamily:  shamap.NewNodeStoreFamily(db),
+		RelationalDB:  rm,
+	})
+	require.NoError(t, err)
+	require.NoError(t, svc.Start())
+	t.Cleanup(svc.Stop)
+
+	_, err = svc.AcceptLedger(ctx)
+	require.NoError(t, err)
+	svc.FlushPersists()
+	canonical := svc.GetValidatedLedger()
+	require.NotNil(t, canonical)
+
+	fork, err := ledger.NewOpen(svc.genesisLedger, canonical.CloseTime().Add(time.Second))
+	require.NoError(t, err)
+	require.NoError(t, fork.Insert(keylet.Keylet{Key: [32]byte{0xFA}}, []byte("fork-state-payload")))
+	require.NoError(t, fork.Close(canonical.CloseTime().Add(time.Second), 0))
+	require.NoError(t, fork.SetValidated())
+	require.NotEqual(t, canonical.Hash(), fork.Hash())
+	require.NoError(t, svc.persistValidatedLedger(ctx, fork, false))
+
+	loaded, err := svc.GetLedgerByHash(fork.Hash())
+	require.NoError(t, err)
+	require.Equal(t, ledger.StateClosed, loaded.State())
+	require.False(t, loaded.IsValidated())
+}
+
+func TestService_GetLedgerByHashValidatesHistoricalCanonicalChain(t *testing.T) {
+	ctx := context.Background()
+	db := nodestore.NewKVDatabase(memorydb.New(), "ledger-by-hash-historical", 100_000, time.Hour)
+	t.Cleanup(func() { require.NoError(t, db.Close()) })
+	rm, err := sqlitedb.NewRepositoryManager(t.TempDir())
+	require.NoError(t, err)
+	require.NoError(t, rm.Open(ctx))
+	t.Cleanup(func() { require.NoError(t, rm.Close(ctx)) })
+	svc, err := New(Config{
+		GenesisConfig: genesis.DefaultConfig(),
+		NodeStore:     db,
+		SHAMapFamily:  shamap.NewNodeStoreFamily(db),
+		RelationalDB:  rm,
+	})
+	require.NoError(t, err)
+	require.NoError(t, svc.Start())
+	t.Cleanup(svc.Stop)
+
+	parent := svc.genesisLedger
+	var ledger256, ledger257, ledger512 *ledger.Ledger
+	for seq := uint32(2); seq <= 513; seq++ {
+		closeTime := time.Unix(int64(seq), 0).UTC()
+		next, err := ledger.NewOpen(parent, closeTime)
+		require.NoError(t, err)
+		require.NoError(t, next.Close(closeTime, 0))
+		switch seq {
+		case 256:
+			ledger256 = next
+		case 257:
+			ledger257 = next
+		case 512:
+			ledger512 = next
+		}
+		parent = next
+	}
+	tip := parent
+	for _, l := range []*ledger.Ledger{ledger256, ledger257, ledger512, tip} {
+		require.NotNil(t, l)
+		require.NoError(t, l.SetValidated())
+		require.NoError(t, svc.persistValidatedLedger(ctx, l, l == tip))
+	}
+	svc.mu.Lock()
+	svc.validatedLedger = tip
+	svc.persistedLedgers = make(map[[32]byte]*ledger.Ledger)
+	svc.persistedLedgerFIFO = nil
+	svc.mu.Unlock()
+
+	aligned, err := svc.GetLedgerByHash(ledger256.Hash())
+	require.NoError(t, err)
+	require.True(t, aligned.IsValidated())
+	nonAligned, err := svc.GetLedgerByHash(ledger257.Hash())
+	require.NoError(t, err)
+	require.True(t, nonAligned.IsValidated())
+
+	fork, err := ledger.NewOpen(ledger256, ledger257.CloseTime().Add(time.Second))
+	require.NoError(t, err)
+	require.NoError(t, fork.Insert(keylet.Keylet{Key: [32]byte{0xFB}}, []byte("historical-fork-state")))
+	require.NoError(t, fork.Close(ledger257.CloseTime().Add(time.Second), 0))
+	require.NoError(t, fork.SetValidated())
+	require.NoError(t, svc.persistValidatedLedger(ctx, fork, false))
+	loadedFork, err := svc.GetLedgerByHash(fork.Hash())
+	require.NoError(t, err)
+	require.False(t, loadedFork.IsValidated())
+	require.Equal(t, ledger.StateClosed, loadedFork.State())
 }
 
 func TestService_GetLedgerByHashReturnsNotFoundWithoutPersistedLedger(t *testing.T) {
@@ -182,27 +317,120 @@ func TestService_GetLedgerByHashReturnsNotFoundWithoutPersistedLedger(t *testing
 	})
 
 	t.Run("missing nodestore header", func(t *testing.T) {
+		ctx := context.Background()
 		db := nodestore.NewKVDatabase(memorydb.New(), "ledger-by-hash-missing", 100, time.Hour)
 		t.Cleanup(func() { require.NoError(t, db.Close()) })
+		rm, err := sqlitedb.NewRepositoryManager(t.TempDir())
+		require.NoError(t, err)
+		require.NoError(t, rm.Open(ctx))
+		t.Cleanup(func() { require.NoError(t, rm.Close(ctx)) })
+		missingHash := [32]byte{0x02}
+		require.NoError(t, rm.Ledger().SaveValidatedLedger(ctx, &relationaldb.LedgerInfo{
+			Hash:     relationaldb.Hash(missingHash),
+			Sequence: 2,
+		}))
 		svc, err := New(Config{
 			NodeStore:    db,
 			SHAMapFamily: shamap.NewNodeStoreFamily(db),
+			RelationalDB: rm,
 		})
 		require.NoError(t, err)
 
-		missingHash := [32]byte{0x02}
 		_, err = svc.GetLedgerByHash(missingHash)
 		require.ErrorIs(t, err, ErrLedgerNotFound)
-		_, err = svc.GetNFTBuyOffers(context.Background(), [32]byte{}, hex.EncodeToString(missingHash[:]), 1, "")
+		_, err = svc.GetNFTBuyOffers(ctx, [32]byte{}, hex.EncodeToString(missingHash[:]), 1, "")
 		require.ErrorIs(t, err, svcerr.ErrLedgerNotFound)
+	})
+
+	t.Run("canceled relational lookup", func(t *testing.T) {
+		ctx := context.Background()
+		db := nodestore.NewKVDatabase(memorydb.New(), "ledger-by-hash-canceled", 100, time.Hour)
+		t.Cleanup(func() { require.NoError(t, db.Close()) })
+		rm, err := sqlitedb.NewRepositoryManager(t.TempDir())
+		require.NoError(t, err)
+		require.NoError(t, rm.Open(ctx))
+		t.Cleanup(func() { require.NoError(t, rm.Close(ctx)) })
+		svc, err := New(Config{
+			NodeStore:    db,
+			SHAMapFamily: shamap.NewNodeStoreFamily(db),
+			RelationalDB: rm,
+		})
+		require.NoError(t, err)
+		canceled, cancel := context.WithCancel(ctx)
+		cancel()
+		_, err = svc.GetLedgerByHashContext(canceled, [32]byte{0x04})
+		require.ErrorIs(t, err, context.Canceled)
+		require.False(t, errors.Is(err, ErrLedgerNotFound))
+	})
+
+	t.Run("nodestore failure remains operational", func(t *testing.T) {
+		ctx := context.Background()
+		backend := nodestore.NewKVDatabase(memorydb.New(), "ledger-by-hash-fetch-error", 100, time.Hour)
+		t.Cleanup(func() { require.NoError(t, backend.Close()) })
+		fetchErr := errors.New("nodestore unavailable")
+		db := &fetchErrorDatabase{Database: backend, err: fetchErr}
+		rm, err := sqlitedb.NewRepositoryManager(t.TempDir())
+		require.NoError(t, err)
+		require.NoError(t, rm.Open(ctx))
+		t.Cleanup(func() { require.NoError(t, rm.Close(ctx)) })
+		wantHash := [32]byte{0x05}
+		require.NoError(t, rm.Ledger().SaveValidatedLedger(ctx, &relationaldb.LedgerInfo{
+			Hash:     relationaldb.Hash(wantHash),
+			Sequence: 2,
+		}))
+		svc, err := New(Config{
+			NodeStore:    db,
+			SHAMapFamily: shamap.NewNodeStoreFamily(db),
+			RelationalDB: rm,
+		})
+		require.NoError(t, err)
+
+		_, err = svc.GetLedgerByHashContext(ctx, wantHash)
+		require.ErrorIs(t, err, fetchErr)
+		require.False(t, errors.Is(err, ErrLedgerNotFound))
+	})
+
+	t.Run("nodestore cancellation remains cancellation", func(t *testing.T) {
+		ctx := context.Background()
+		backend := nodestore.NewKVDatabase(memorydb.New(), "ledger-by-hash-fetch-canceled", 100, time.Hour)
+		t.Cleanup(func() { require.NoError(t, backend.Close()) })
+		db := &fetchErrorDatabase{Database: backend, err: context.Canceled}
+		rm, err := sqlitedb.NewRepositoryManager(t.TempDir())
+		require.NoError(t, err)
+		require.NoError(t, rm.Open(ctx))
+		t.Cleanup(func() { require.NoError(t, rm.Close(ctx)) })
+		wantHash := [32]byte{0x06}
+		require.NoError(t, rm.Ledger().SaveValidatedLedger(ctx, &relationaldb.LedgerInfo{
+			Hash:     relationaldb.Hash(wantHash),
+			Sequence: 2,
+		}))
+		svc, err := New(Config{
+			NodeStore:    db,
+			SHAMapFamily: shamap.NewNodeStoreFamily(db),
+			RelationalDB: rm,
+		})
+		require.NoError(t, err)
+
+		_, err = svc.GetLedgerByHashContext(ctx, wantHash)
+		require.ErrorIs(t, err, context.Canceled)
+		require.False(t, errors.Is(err, ErrLedgerNotFound))
 	})
 }
 
-func TestService_GetLedgerByHashReportsCorruptPersistedHeader(t *testing.T) {
+func TestService_GetLedgerByHashTreatsCorruptPersistedHeaderAsNotFound(t *testing.T) {
+	ctx := context.Background()
 	db := nodestore.NewKVDatabase(memorydb.New(), "ledger-by-hash-corrupt", 100, time.Hour)
 	t.Cleanup(func() { require.NoError(t, db.Close()) })
+	rm, err := sqlitedb.NewRepositoryManager(t.TempDir())
+	require.NoError(t, err)
+	require.NoError(t, rm.Open(ctx))
+	t.Cleanup(func() { require.NoError(t, rm.Close(ctx)) })
 	wantHash := [32]byte{0x03}
-	require.NoError(t, db.Store(context.Background(), &nodestore.Node{
+	require.NoError(t, rm.Ledger().SaveValidatedLedger(ctx, &relationaldb.LedgerInfo{
+		Hash:     relationaldb.Hash(wantHash),
+		Sequence: 1,
+	}))
+	require.NoError(t, db.Store(ctx, &nodestore.Node{
 		Type: nodestore.NodeLedger,
 		Hash: nodestore.Hash256(wantHash),
 		Data: []byte("corrupt"),
@@ -210,12 +438,12 @@ func TestService_GetLedgerByHashReportsCorruptPersistedHeader(t *testing.T) {
 	svc, err := New(Config{
 		NodeStore:    db,
 		SHAMapFamily: shamap.NewNodeStoreFamily(db),
+		RelationalDB: rm,
 	})
 	require.NoError(t, err)
 
 	_, err = svc.GetLedgerByHash(wantHash)
-	require.Error(t, err)
-	require.False(t, errors.Is(err, ErrLedgerNotFound))
+	require.ErrorIs(t, err, ErrLedgerNotFound)
 }
 
 func TestService_PersistedLedgerHashCacheIsBounded(t *testing.T) {

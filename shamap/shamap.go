@@ -136,28 +136,34 @@ func (sm *SHAMap) SetFamily(family Family) {
 // The root inner node is fetched from the store with child pointers nil (hash-only).
 // Children are loaded lazily on demand via descend().
 func NewFromRootHash(mapType Type, rootHash [32]byte, family Family) (*SHAMap, error) {
+	return NewFromRootHashContext(context.Background(), mapType, rootHash, family)
+}
+
+// NewFromRootHashContext creates a backed SHAMap while forwarding ctx to the
+// root-node fetch. Descendants remain lazily loaded.
+func NewFromRootHashContext(ctx context.Context, mapType Type, rootHash [32]byte, family Family) (*SHAMap, error) {
 	if family == nil {
 		return nil, ErrNilFamily
 	}
 
 	// Fetch root node from store
-	data, err := family.Fetch(context.Background(), rootHash)
+	data, err := family.Fetch(ctx, rootHash)
 	if err != nil {
 		return nil, fmt.Errorf("failed to fetch root node: %w", err)
 	}
 	if data == nil {
-		return nil, fmt.Errorf("root node %x not found in store", rootHash[:8])
+		return nil, fmt.Errorf("root node %x: %w", rootHash[:8], ErrNodeNotInStore)
 	}
 
 	// Deserialize — creates innerNode with hashes set, children nil
 	node, err := deserializeFromPrefix(data)
 	if err != nil {
-		return nil, fmt.Errorf("failed to deserialize root node: %w", err)
+		return nil, fmt.Errorf("%w: failed to deserialize root node: %v", ErrInvalidNodeData, err)
 	}
 
 	root, ok := node.(*innerNode)
 	if !ok {
-		return nil, fmt.Errorf("root node is not an inner node, got %T", node)
+		return nil, fmt.Errorf("%w: root node is not an inner node, got %T", ErrInvalidNodeData, node)
 	}
 
 	sm := &SHAMap{
@@ -210,7 +216,10 @@ func (sm *SHAMap) descendCtx(ctx context.Context, inner *innerNode, branch int) 
 	// Fresh deserialised copy — not shared across SHAMap instances.
 	node, err := deserializeFromPrefix(data)
 	if err != nil {
-		return nil, fmt.Errorf("failed to deserialize child node: %w", err)
+		return nil, fmt.Errorf("%w: failed to deserialize child node: %v", ErrInvalidNodeData, err)
+	}
+	if actual := node.Hash(); actual != hash {
+		return nil, fmt.Errorf("%w: child node hash mismatch: expected %x, got %x", ErrInvalidNodeData, hash[:8], actual[:8])
 	}
 
 	// If another reader installed a child while we were fetching, return
@@ -272,8 +281,8 @@ func (sm *SHAMap) Hash() ([32]byte, error) {
 }
 
 // findItem returns the item with the specified key, or nil if not found.
-func (sm *SHAMap) findItem(key [32]byte) (*Item, error) {
-	node, err := sm.walkToKey(context.Background(), key, nil, false)
+func (sm *SHAMap) findItem(ctx context.Context, key [32]byte) (*Item, error) {
+	node, err := sm.walkToKey(ctx, key, nil, false)
 	if err != nil {
 		return nil, err
 	}
@@ -297,10 +306,15 @@ func (sm *SHAMap) findItem(key [32]byte) (*Item, error) {
 
 // Has checks if an item with the given key exists
 func (sm *SHAMap) Has(key [32]byte) (bool, error) {
+	return sm.HasContext(context.Background(), key)
+}
+
+// HasContext checks whether key exists while forwarding ctx to lazy fetches.
+func (sm *SHAMap) HasContext(ctx context.Context, key [32]byte) (bool, error) {
 	sm.mu.RLock()
 	defer sm.mu.RUnlock()
 
-	item, err := sm.findItem(key)
+	item, err := sm.findItem(ctx, key)
 	if err != nil {
 		return false, err
 	}
@@ -309,10 +323,15 @@ func (sm *SHAMap) Has(key [32]byte) (bool, error) {
 
 // Get returns the item associated with the key
 func (sm *SHAMap) Get(key [32]byte) (*Item, bool, error) {
+	return sm.GetContext(context.Background(), key)
+}
+
+// GetContext returns key's item while forwarding ctx to lazy fetches.
+func (sm *SHAMap) GetContext(ctx context.Context, key [32]byte) (*Item, bool, error) {
 	sm.mu.RLock()
 	defer sm.mu.RUnlock()
 
-	item, err := sm.findItem(key)
+	item, err := sm.findItem(ctx, key)
 	if err != nil {
 		return nil, false, err
 	}

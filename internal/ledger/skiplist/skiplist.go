@@ -5,6 +5,7 @@
 package skiplist
 
 import (
+	"context"
 	"encoding/hex"
 	"fmt"
 
@@ -110,7 +111,13 @@ func assertHistoricalSkipListConsistent(hashes [][32]byte, lastSeq, prevIndex ui
 // for the LedgerHashes SLE at key, or (nil, nil, 0, nil) when absent. The field map
 // lets callers preserve every present field (notably optional FirstLedgerSequence).
 func ReadLedgerHashesSLE(stateMap *shamap.SHAMap, key [32]byte) (map[string]any, [][32]byte, uint32, error) {
-	item, found, err := stateMap.Get(key)
+	return ReadLedgerHashesSLEContext(context.Background(), stateMap, key)
+}
+
+// ReadLedgerHashesSLEContext reads a LedgerHashes SLE while forwarding ctx to
+// lazy storage fetches.
+func ReadLedgerHashesSLEContext(ctx context.Context, stateMap *shamap.SHAMap, key [32]byte) (map[string]any, [][32]byte, uint32, error) {
+	item, found, err := stateMap.GetContext(ctx, key)
 	if err != nil {
 		return nil, nil, 0, err
 	}
