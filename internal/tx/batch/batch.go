@@ -1,11 +1,14 @@
 package batch
 
 import (
+	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"math/bits"
 	"strconv"
 
 	"github.com/LeJamon/go-xrpl/amendment"
+	"github.com/LeJamon/go-xrpl/codec/binarycodec"
 	"github.com/LeJamon/go-xrpl/internal/tx"
 	"github.com/LeJamon/go-xrpl/internal/tx/applystate"
 	"github.com/LeJamon/go-xrpl/internal/tx/sign"
@@ -33,6 +36,27 @@ type RawTransaction struct {
 // Reference: rippled stores inner transactions as nested STObjects, not hex blobs.
 type RawTransactionData struct {
 	InnerTx tx.Transaction
+}
+
+func (r *RawTransactionData) UnmarshalJSON(data []byte) error {
+	var innerMap map[string]any
+	if err := json.Unmarshal(data, &innerMap); err != nil {
+		return err
+	}
+	encoded, err := binarycodec.Encode(innerMap)
+	if err != nil {
+		return fmt.Errorf("encode inner transaction: %w", err)
+	}
+	raw, err := hex.DecodeString(encoded)
+	if err != nil {
+		return fmt.Errorf("decode inner transaction: %w", err)
+	}
+	inner, err := tx.ParseFromBinary(raw)
+	if err != nil {
+		return fmt.Errorf("parse inner transaction: %w", err)
+	}
+	r.InnerTx = inner
+	return nil
 }
 
 // BatchSigner is a signer for batch transactions
@@ -350,6 +374,7 @@ func (b *Batch) Validate() error {
 // Reference: rippled stores inner transactions as full STObjects in RawTransactions.
 func (b *Batch) Flatten() (map[string]any, error) {
 	m := b.BaseTx.GetCommon().ToMap()
+	tx.PopulateRequiredWireFields(m, b.GetCommon())
 
 	// Build RawTransactions array with inner tx objects flattened to maps
 	rawTxns := make([]map[string]any, len(b.RawTransactions))
@@ -361,6 +386,7 @@ func (b *Batch) Flatten() (map[string]any, error) {
 		if err != nil {
 			return nil, fmt.Errorf("failed to flatten inner tx %d: %w", i, err)
 		}
+		tx.PopulateRequiredWireFields(innerMap, rt.RawTransaction.InnerTx.GetCommon())
 		rawTxns[i] = map[string]any{
 			"RawTransaction": innerMap,
 		}

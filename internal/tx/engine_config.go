@@ -248,11 +248,25 @@ func SerializeTransaction(tx Transaction) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
+	PopulateRequiredWireFields(txMap, tx.GetCommon())
 	hexStr, err := binarycodec.Encode(txMap)
 	if err != nil {
 		return nil, err
 	}
 	return hex.DecodeString(hexStr)
+}
+
+// PopulateRequiredWireFields supplies required fields whose valid zero values
+// are otherwise indistinguishable from absence in programmatic transactions.
+func PopulateRequiredWireFields(txMap map[string]any, common *Common) {
+	if _, ok := txMap["SigningPubKey"]; !ok {
+		txMap["SigningPubKey"] = ""
+	}
+	if common.TicketSequence != nil {
+		if _, ok := txMap["Sequence"]; !ok {
+			txMap["Sequence"] = uint32(0)
+		}
+	}
 }
 
 // computeTransactionHash computes the hash of a transaction

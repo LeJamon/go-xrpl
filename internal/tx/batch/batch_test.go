@@ -1,6 +1,7 @@
 package batch
 
 import (
+	"encoding/hex"
 	"strings"
 	"testing"
 
@@ -8,10 +9,122 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/LeJamon/go-xrpl/amendment"
+	"github.com/LeJamon/go-xrpl/codec/binarycodec"
 	"github.com/LeJamon/go-xrpl/internal/tx"
 	"github.com/LeJamon/go-xrpl/internal/tx/lending"
 	"github.com/LeJamon/go-xrpl/internal/tx/payment"
 )
+
+func TestBatchBinaryRoundTripPreservesInnerTransactions(t *testing.T) {
+	outer := NewBatch(testOuter)
+	outer.Fee = "40"
+	outerSequence := uint32(1)
+	outer.Sequence = &outerSequence
+	flags := BatchFlagAllOrNothing
+	outer.Flags = &flags
+	outer.AddInnerTransaction(makeTestPayment())
+	outer.AddInnerTransaction(makeTestPayment())
+
+	flat, err := outer.Flatten()
+	require.NoError(t, err)
+	require.Equal(t, "", flat["SigningPubKey"])
+	encoded, err := binarycodec.Encode(flat)
+	require.NoError(t, err)
+	blob, err := hex.DecodeString(encoded)
+	require.NoError(t, err)
+
+	parsed, err := tx.ParseFromBinary(blob)
+	require.NoError(t, err)
+	parsedBatch, ok := parsed.(*Batch)
+	require.True(t, ok)
+	require.Len(t, parsedBatch.RawTransactions, 2)
+
+	for i, rawTransaction := range parsedBatch.RawTransactions {
+		inner := rawTransaction.RawTransaction.InnerTx
+		require.NotNil(t, inner)
+		require.NotEmpty(t, inner.GetRawBytes())
+		decoded, err := binarycodec.DecodeBytes(inner.GetRawBytes())
+		require.NoError(t, err)
+		value, present := decoded["SigningPubKey"]
+		require.True(t, present)
+		require.Equal(t, "", value)
+
+		original := outer.RawTransactions[i].RawTransaction.InnerTx
+		originalHash, err := tx.ComputeTransactionHash(original)
+		require.NoError(t, err)
+		parsedHash, err := tx.ComputeTransactionHash(inner)
+		require.NoError(t, err)
+		require.Equal(t, originalHash, parsedHash)
+	}
+}
+
+func TestBatchBinaryRoundTripPreservesTicketedInnerSequence(t *testing.T) {
+	outer := NewBatch(testOuter)
+	outer.Fee = "40"
+	outerSequence := uint32(1)
+	outer.Sequence = &outerSequence
+	flags := BatchFlagAllOrNothing
+	outer.Flags = &flags
+
+	ticketed := makeTestPayment()
+	ticketSequence := uint32(7)
+	ticketed.GetCommon().Sequence = nil
+	ticketed.GetCommon().TicketSequence = &ticketSequence
+	outer.AddInnerTransaction(ticketed)
+	outer.AddInnerTransaction(makeTestPayment())
+
+	flat, err := outer.Flatten()
+	require.NoError(t, err)
+	rawTransactions := flat["RawTransactions"].([]map[string]any)
+	ticketedMap := rawTransactions[0]["RawTransaction"].(map[string]any)
+	require.Equal(t, uint32(0), ticketedMap["Sequence"])
+
+	encoded, err := binarycodec.Encode(flat)
+	require.NoError(t, err)
+	blob, err := hex.DecodeString(encoded)
+	require.NoError(t, err)
+	parsed, err := tx.ParseFromBinary(blob)
+	require.NoError(t, err)
+	parsedBatch, ok := parsed.(*Batch)
+	require.True(t, ok)
+	parsedInner := parsedBatch.RawTransactions[0].RawTransaction.InnerTx
+	require.NotNil(t, parsedInner)
+	require.NotNil(t, parsedInner.GetCommon().Sequence)
+	require.Zero(t, *parsedInner.GetCommon().Sequence)
+	require.NotNil(t, parsedInner.GetCommon().TicketSequence)
+	require.Equal(t, ticketSequence, *parsedInner.GetCommon().TicketSequence)
+
+	originalHash, err := tx.ComputeTransactionHash(ticketed)
+	require.NoError(t, err)
+	parsedHash, err := tx.ComputeTransactionHash(parsedInner)
+	require.NoError(t, err)
+	require.Equal(t, originalHash, parsedHash)
+}
+
+func TestBatchBinaryParseRejectsInnerWithoutSigningPubKey(t *testing.T) {
+	outer := NewBatch(testOuter)
+	outer.Fee = "40"
+	outer.SigningPubKey = "ED0000000000000000000000000000000000000000000000000000000000000000"
+	outerSequence := uint32(1)
+	outer.Sequence = &outerSequence
+	flags := BatchFlagAllOrNothing
+	outer.Flags = &flags
+	outer.AddInnerTransaction(makeTestPayment())
+	outer.AddInnerTransaction(makeTestPayment())
+
+	flat, err := outer.Flatten()
+	require.NoError(t, err)
+	rawTransactions := flat["RawTransactions"].([]map[string]any)
+	delete(rawTransactions[0]["RawTransaction"].(map[string]any), "SigningPubKey")
+	encoded, err := binarycodec.Encode(flat)
+	require.NoError(t, err)
+	blob, err := hex.DecodeString(encoded)
+	require.NoError(t, err)
+
+	_, err = tx.ParseFromBinary(blob)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "SigningPubKey")
+}
 
 // Valid base58 r-addresses for white-box validation tests. Account fields must
 // be decodable because Validate computes inner transaction hashes, which

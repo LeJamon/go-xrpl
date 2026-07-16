@@ -115,6 +115,11 @@ Behavioral oracle: clean local rippled v3.2.0 worktree at
       LendingProtocol pseudo-account authorization guard used by rippled 3.2.0.
 - [x] Prove Batch build failure is atomic after outer staging and before an
       inner leaf is published.
+- [x] Preserve parsed Batch inner transactions and their canonical wire bytes,
+      including required empty `SigningPubKey` and ticket `Sequence: 0` fields,
+      through hashing and leaves.
+- [x] Apply the same required zero-valued fields to single-, multi-, and
+      counterparty-signing preimages.
 - [x] Re-audit the complete behavior diff against the exact rippled v3.2.0 oracle,
       then run only the finalization skill's build, vet, and lint gates.
 
@@ -165,6 +170,12 @@ Behavioral oracle: clean local rippled v3.2.0 worktree at
   rebuilds the ledger before fee metrics, so committed inners affect state and
   the closed count while the next open ledger starts with the correct outer-only
   queue count. Snapshot staging covers inner-leaf serialization failures.
+- Binary Batch ingress now reconstructs each nested transaction through the
+  normal template-aware parser and retains its canonical bytes. Programmatic
+  transactions also serialize required empty `SigningPubKey` and ticket
+  `Sequence: 0` fields, so transaction IDs and leaves match rippled rather than
+  a self-consistent reduced blob. Every signing and verification path uses the
+  same populated map, so ticket signatures cover the canonical zero Sequence.
 - Passed `just fmt`, `go test ./internal/tx/lending/... -count=1`,
   `go test ./internal/testing/lending -count=1`, `just test-tx`, `just vet`,
   CI-pinned strict and advisory lint, the tag-gated PostgreSQL vet check,
