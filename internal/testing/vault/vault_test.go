@@ -266,6 +266,43 @@ func TestVault_CreateScaleForbiddenForXRP(t *testing.T) {
 	jtx.RequireTxFail(t, env.Submit(create), jtx.TemMALFORMED)
 }
 
+func TestVault_CreateIOUScale(t *testing.T) {
+	zero := uint8(0)
+	maximum := uint8(18)
+	tests := []struct {
+		name  string
+		scale *uint8
+		want  uint8
+	}{
+		{name: "omitted defaults to six", want: 6},
+		{name: "explicit zero", scale: &zero},
+		{name: "explicit maximum", scale: &maximum, want: 18},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			env := newVaultEnv(t)
+			issuer := jtx.NewAccount("issuer")
+			owner := jtx.NewAccount("owner")
+			env.Fund(issuer, owner)
+
+			sequence := env.Seq(owner)
+			create := vault.NewVaultCreate(owner.Address, tx.Asset{Currency: "USD", Issuer: issuer.Address})
+			create.Scale = test.scale
+			create.Common.Fee = createFee
+			jtx.RequireTxSuccess(t, env.Submit(create))
+
+			info, err := vault.ReadVaultLending(env.Ledger(), keylet.Vault(owner.AccountID(), sequence))
+			if err != nil || info == nil {
+				t.Fatalf("ReadVaultLending: %v", err)
+			}
+			if info.Scale != test.want {
+				t.Fatalf("Scale = %d, want %d", info.Scale, test.want)
+			}
+		})
+	}
+}
+
 // TestVault_DepositNoEntry asserts a deposit to a missing vault is rejected.
 func TestVault_DepositNoEntry(t *testing.T) {
 	env := newVaultEnv(t)

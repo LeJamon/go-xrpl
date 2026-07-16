@@ -161,8 +161,8 @@ func TestParseFromBinary_AllowedFields(t *testing.T) {
 // in a type's template that would spuriously reject otherwise-valid traffic.
 func TestCheckTemplate_CommonFieldsAllowedForEveryType(t *testing.T) {
 	present := make(map[string]bool, len(commonFields))
-	for name := range commonFields {
-		present[name] = true
+	for _, field := range commonFields {
+		present[field.name] = true
 	}
 	for txType := range txTemplates {
 		if err := checkTemplate(txType, present); err != nil {
