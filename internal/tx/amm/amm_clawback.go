@@ -437,17 +437,6 @@ func (a *AMMClawback) Apply(ctx *tx.ApplyContext) ter.Result {
 		return deleteResult
 	}
 
-	// Persist updated AMM account XRP balance if AMM still exists
-	if !newLPBalance.IsZero() || deleteResult == ter.TecINCOMPLETE {
-		ammAccountBytes, err := state.SerializeAccountRoot(ammAccount)
-		if err != nil {
-			return ter.TefINTERNAL
-		}
-		if err := ctx.View.Update(ammAccountKey, ammAccountBytes); err != nil {
-			return ter.TefINTERNAL
-		}
-	}
-
 	accountKey := keylet.Account(issuerID)
 	accountBytes, err := state.SerializeAccountRoot(ctx.Account)
 	if err != nil {
