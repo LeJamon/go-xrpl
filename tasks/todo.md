@@ -12,7 +12,7 @@ v3.2.0 worktree at `3c43f4614f87965298773279ff5b85d4c56c637b`.
 - [x] Implement the smallest idiomatic Go fix matching rippled v3.2.0 metadata.
 - [x] Run formatting, focused and affected tests, race coverage where useful,
       build, vet, lint, and final diff/conformance review.
-- [ ] Record exact review results, commit only intentional files, push, and open
+- [x] Record exact review results, commit only intentional files, push, and open
       a pull request against `main`.
 
 ## Review
@@ -35,6 +35,9 @@ v3.2.0 worktree at `3c43f4614f87965298773279ff5b85d4c56c637b`.
 - The historical devnet checkpoint/debug artifacts referenced by the issue are
   not present in this worktree, so the full ledger replay was not rerun; the
   exact divergent field value and metadata boundary are covered directly.
+- Behavior commit `ed568282` is published on
+  `fix/issue-1349-loanset-asset-rounding`; PR #1352 targets `main` at
+  https://github.com/LeJamon/go-xrpl/pull/1352.
 
 # Issue #1338 — PermissionedDomainDelete owner-directory retention
 
