@@ -449,7 +449,7 @@ func (r *replayRunner) executeReplayVerbose(state *StateFixture, env *EnvFixture
 
 		// Apply the transaction using the BlockProcessor
 		// This handles: applying, setting transaction index, creating tx+meta blob
-		blockTxResult, err := blockProcessor.ApplyTransaction(parsedTx.Transaction, parsedTx.RawBlob)
+		blockTxResult, err := blockProcessor.ApplyLedgerTransaction(parsedTx.Transaction, parsedTx.RawBlob)
 		if err != nil {
 			txInfo.Error = fmt.Sprintf("failed to apply: %v", err)
 			txInfo.Applied = false

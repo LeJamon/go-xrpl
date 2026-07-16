@@ -124,7 +124,13 @@ type ApplyConfig struct {
 // successful regardless of TER; tef/tem/tel results fail; all other non-applied
 // results retry. The engine's apply flags decide whether a tec result is applied.
 func applyAndClassify(bp *txengine.BlockProcessor, transaction tx.Transaction, blob []byte, mode Mode, logger xrpllog.Logger) Result {
-	result, applyErr := bp.ApplyTransaction(transaction, blob)
+	var result txengine.BlockTxResult
+	var applyErr error
+	if mode == BuildLedgerMode {
+		result, applyErr = bp.ApplyLedgerTransaction(transaction, blob)
+	} else {
+		result, applyErr = bp.ApplyTransaction(transaction, blob)
+	}
 	if applyErr != nil {
 		logger.Warn("apply error — staged transaction discarded",
 			"mode", mode,

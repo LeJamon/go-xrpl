@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"math"
 	"sort"
+	"strings"
 
 	binarycodec "github.com/LeJamon/go-xrpl/codec/binarycodec"
 	"github.com/LeJamon/go-xrpl/codec/binarycodec/definitions"
@@ -219,6 +220,9 @@ func MetadataToMap(meta *Metadata) map[string]any {
 				"issuer":   meta.DeliveredAmount.Issuer,
 			}
 		}
+	}
+	if meta.ParentBatchID != nil {
+		result["ParentBatchID"] = strings.ToUpper(hex.EncodeToString(meta.ParentBatchID[:]))
 	}
 
 	return result

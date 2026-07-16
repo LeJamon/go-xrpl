@@ -7,6 +7,7 @@ import (
 	"github.com/LeJamon/go-xrpl/internal/ledger/state"
 	"github.com/LeJamon/go-xrpl/internal/tx"
 	txengine "github.com/LeJamon/go-xrpl/internal/tx/engine"
+	"github.com/LeJamon/go-xrpl/internal/tx/sign"
 	"github.com/LeJamon/go-xrpl/internal/tx/ter"
 	"github.com/LeJamon/go-xrpl/internal/txq"
 	"github.com/LeJamon/go-xrpl/keylet"
@@ -130,11 +131,48 @@ func (a *TxqAdapter) GetAccountReserve(ownerCount uint32) uint64 {
 	return a.cfg.ReserveBase + uint64(ownerCount)*a.cfg.ReserveIncrement
 }
 
-// GetBaseFee returns the base fee in drops for txn. Per-tx-type
-// adjustments (e.g. multisign multipliers) are folded into
-// txq.ToFeeLevel by the caller, so returning cfg.BaseFee here is correct.
-func (a *TxqAdapter) GetBaseFee(_ tx.Transaction) uint64 {
+func (a *TxqAdapter) GetReferenceFee() uint64 {
 	return a.cfg.BaseFee
+}
+
+// GetBaseFees returns the dispatched minimum fee and the ordinary fee used to
+// normalize contextually free transactions.
+func (a *TxqAdapter) GetBaseFees(transaction tx.Transaction) (fee, defaultFee uint64) {
+	defaultFee = a.cfg.BaseFee
+	fee = defaultFee
+	defer func() {
+		if recover() != nil {
+			fee = defaultFee
+		}
+	}()
+	config := a.baseFeeConfig()
+	defaultFee = sign.CalculateDefaultBaseFee(transaction, config)
+	fee = sign.CalculateBaseFee(transaction, a.view, config)
+	return fee, defaultFee
+}
+
+func (a *TxqAdapter) GetBaseFee(transaction tx.Transaction) uint64 {
+	fee, _ := a.GetBaseFees(transaction)
+	return fee
+}
+
+func (a *TxqAdapter) baseFeeConfig() tx.EngineConfig {
+	config := tx.EngineConfig{
+		BaseFee:                   a.cfg.BaseFee,
+		ReserveBase:               a.cfg.ReserveBase,
+		ReserveIncrement:          a.cfg.ReserveIncrement,
+		NetworkID:                 a.cfg.NetworkID,
+		ParentCloseTime:           a.cfg.ParentCloseTime,
+		Logger:                    a.cfg.Logger,
+		Rules:                     a.cfg.Rules,
+		FeeTrack:                  a.cfg.FeeTrack,
+		SkipSignatureVerification: a.cfg.SkipSignatureVerification,
+	}
+	if a.view != nil {
+		config.LedgerSequence = a.view.Sequence()
+		config.ParentHash = a.view.ParentHash()
+	}
+	return config
 }
 
 // ApplyTransaction is the engine call used by TxQ.Apply / TxQ.Accept.

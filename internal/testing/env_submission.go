@@ -2,6 +2,7 @@ package jtx
 
 import (
 	"bytes"
+	"context"
 	"crypto/sha512"
 	"sort"
 	"strconv"
@@ -14,11 +15,17 @@ import (
 	"github.com/LeJamon/go-xrpl/internal/ledger"
 	"github.com/LeJamon/go-xrpl/internal/ledger/state"
 	"github.com/LeJamon/go-xrpl/internal/tx"
+	"github.com/LeJamon/go-xrpl/internal/tx/sign"
 	"github.com/LeJamon/go-xrpl/internal/tx/ter"
 	"github.com/LeJamon/go-xrpl/internal/txq"
 	"github.com/LeJamon/go-xrpl/keylet"
 	"github.com/LeJamon/go-xrpl/protocol"
 )
+
+type pendingBatchApply struct {
+	transaction tx.Transaction
+	outer       tx.ApplyResult
+}
 
 // Close closes the current ledger and advances to a new one.
 // This is equivalent to "ledger_accept" in rippled.
@@ -47,17 +54,14 @@ func (e *TestEnv) close(timeLeap bool) {
 	// enable to take place."
 	e.applyPendingAmendments()
 
-	// Replay-on-close consensus simulation only applies to plain Close(); the
-	// time-leap path never rebuilds the ledger from its parent.
-	if !timeLeap && e.replayOnClose {
-		e.closeWithReplay()
+	// A TxQ-admitted Batch must be rebuilt so its inners enter the closed ledger.
+	if (!timeLeap && e.replayOnClose) || len(e.pendingBatchApplies) != 0 {
+		if e.lastClosedLedger == nil {
+			e.lastClosedLedger = e.genesisLedger
+		}
+		e.closeWithReplay(timeLeap)
 		return
 	}
-
-	// Record the total number of transactions in the closing ledger for TxQ
-	// metrics. closingTxTotal includes inner batch txns as separate entries,
-	// matching rippled's closed ledger tx map behavior.
-	closingTxCount := e.closingTxTotal
 
 	// Round closeTime up to next resolution boundary, matching rippled.
 	// Reference: rippled Env.cpp:126 — closeTime += resolution - 1s
@@ -66,6 +70,11 @@ func (e *TestEnv) close(timeLeap bool) {
 		resolution = 10 * time.Second // fallback for genesis
 	}
 	e.clock.Advance(resolution)
+
+	// Record the total number of transactions in the closing ledger for TxQ
+	// metrics. closingTxTotal includes inner batch txns as separate entries,
+	// matching rippled's closed ledger tx map behavior.
+	closingTxCount := e.closingTxTotal
 
 	// Close current ledger
 	if err := e.ledger.Close(e.clock.Now(), 0); err != nil {
@@ -94,11 +103,11 @@ func (e *TestEnv) close(timeLeap bool) {
 	// Update TxQ metrics based on the closed ledger.
 	// Reference: rippled TxQ::processClosedLedger called after ledger close.
 	if e.txQueue != nil {
-		// Use the actual fee levels recorded during this ledger.
-		// If we have tracked fee levels, use those. Otherwise fall back to
+		// Recompute fee levels against the final closed view. If no transactions
+		// were retained, fall back to
 		// generating BaseLevel entries for each transaction (for backward
 		// compatibility with tests that don't track fee levels).
-		feeLevels := e.closingFeeLevels
+		feeLevels := e.closingLedgerFeeLevels()
 		if len(feeLevels) == 0 && closingTxCount > 0 {
 			feeLevels = make([]txq.FeeLevel, closingTxCount)
 			for i := range feeLevels {
@@ -130,7 +139,8 @@ func (e *TestEnv) close(timeLeap bool) {
 	e.openLedgerUserTxns = nil
 	e.txInLedger = 0
 	e.closingTxTotal = 0
-	e.closingFeeLevels = nil
+	e.closingFeeTransactions = nil
+	e.pendingBatchApplies = nil
 
 	// Accept queued transactions into the new open ledger.
 	// Reference: rippled TxQ::accept called when new open ledger is created.
@@ -182,7 +192,7 @@ func (e *TestEnv) CloseToParentCloseTime(target uint32) {
 // 4. applyTransactions() -- multiple retry passes for failed txns
 //
 // Reference: rippled BuildLedger.cpp, RCLConsensus.cpp
-func (e *TestEnv) closeWithReplay() {
+func (e *TestEnv) closeWithReplay(timeLeap bool) {
 	e.t.Helper()
 
 	// Advance time (matching Close() behavior)
@@ -261,7 +271,8 @@ func (e *TestEnv) closeWithReplay() {
 	// Reset counters for the fresh replay
 	e.txInLedger = 0
 	e.closingTxTotal = 0
-	e.closingFeeLevels = nil
+	e.closingFeeTransactions = nil
+	e.pendingBatchApplies = nil
 
 	const maxRetryPasses = 1 // LEDGER_RETRY_PASSES in rippled (OpenLedger.h line 44)
 	const maxTotalPasses = 3 // LEDGER_TOTAL_PASSES in rippled (OpenLedger.h line 40)
@@ -283,6 +294,20 @@ func (e *TestEnv) closeWithReplay() {
 	}
 	if err := e.ledger.SetValidated(); err != nil {
 		e.t.Fatalf("closeWithReplay: failed to validate ledger: %v", err)
+	}
+
+	if e.txQueue != nil {
+		feeLevels := e.closingLedgerFeeLevels()
+		if len(feeLevels) == 0 && e.closingTxTotal > 0 {
+			feeLevels = make([]txq.FeeLevel, e.closingTxTotal)
+			for i := range feeLevels {
+				feeLevels[i] = txq.FeeLevel(txq.BaseLevel)
+			}
+		}
+		e.txQueue.ProcessClosedLedger(&testClosedLedgerContext{
+			ledgerSeq: e.ledger.Sequence(),
+			feeLevels: feeLevels,
+		}, timeLeap)
 	}
 
 	// Re-sync clock to the actual close time from the closed ledger.
@@ -315,11 +340,12 @@ func (e *TestEnv) closeWithReplay() {
 	e.openLedgerUserTxns = nil
 	e.txInLedger = 0
 	e.closingTxTotal = 0
-	e.closingFeeLevels = nil
+	e.closingFeeTransactions = nil
 
 	// Update TxQ metrics if applicable
 	if e.txQueue != nil {
 		e.drainQueue()
+		e.retryAllHeldViaTxQ()
 	}
 }
 
@@ -433,7 +459,8 @@ func (e *TestEnv) Submit(transaction any) TxResult {
 	// populates it. Mirror that here so the engine never has to invent a fee.
 	common := txn.GetCommon()
 	if common.Fee == "" {
-		common.Fee = formatUint64(e.baseFee)
+		config := e.engineConfig(e.ledger, engineConfigOpts{})
+		common.Fee = formatUint64(sign.CalculateBaseFee(txn, e.ledger, config))
 	}
 
 	// Auto-fill sequence if not set (skip when using tickets)
@@ -535,6 +562,44 @@ func (e *TestEnv) engineConfig(view *ledger.Ledger, opts engineConfigOpts) tx.En
 	return cfg
 }
 
+func (e *TestEnv) applyStaged(
+	txn tx.Transaction,
+	config tx.EngineConfig,
+	transactionCount uint32,
+	applyBatchInners bool,
+) tx.ApplyResult {
+	staged, err := e.ledger.MutableSnapshotUnflushed()
+	if err != nil {
+		e.t.Fatalf("snapshot ledger for transaction apply: %v", err)
+	}
+	engine := txengine.NewEngine(staged, config)
+	engine.SetBaseTxCount(transactionCount)
+	if e.invariantViolationHook != nil {
+		engine.SetInvariantViolationHookForTest(e.invariantViolationHook)
+	}
+	result := engine.Apply(txn)
+	if applyBatchInners {
+		result = engine.ApplyBatchInnerTransactions(context.Background(), txn, result)
+	}
+	if result.Applied {
+		if err := e.ledger.AdoptState(staged); err != nil {
+			e.t.Fatalf("commit staged transaction apply: %v", err)
+		}
+	}
+	return result
+}
+
+func (e *TestEnv) trackTxQAppliedTransaction(txn tx.Transaction, result tx.ApplyResult) {
+	if _, ok := txn.(tx.BatchInnerApplier); ok && result.Applied && result.Result.IsSuccess() {
+		e.pendingBatchApplies = append(e.pendingBatchApplies, pendingBatchApply{transaction: txn, outer: result})
+	}
+	if e.inSetupMode {
+		e.openLedgerSetupTxns = append(e.openLedgerSetupTxns, txn)
+	} else {
+		e.openLedgerUserTxns = append(e.openLedgerUserTxns, txn)
+	}
+}
+
 // applyDirect applies a transaction directly without TxQ routing.
 // This is the original Submit path.
 func (e *TestEnv) applyDirect(txn tx.Transaction) TxResult {
@@ -547,7 +612,6 @@ func (e *TestEnv) applyDirect(txn tx.Transaction) TxResult {
 		feeTrack:   true,
 	})
 
-	engine := txengine.NewEngine(e.ledger, engineConfig)
 	// Seed the engine's txCount from the env's tx-in-ledger counter so
 	// metadata.TransactionIndex matches what rippled assigns. e.ledger
 	// is the open ledger and env.Submit does NOT call AddTransactionWithMeta,
@@ -556,22 +620,11 @@ func (e *TestEnv) applyDirect(txn tx.Transaction) TxResult {
 	// Without this seeding the 3rd of 3 sequential TrustSets from the
 	// same account differed by 100 bytes vs rippled v2.6.2 — see
 	// TestReproByteDiff_MultiTrustSetThreading.
-	engine.SetBaseTxCount(e.txInLedger)
-	if e.invariantViolationHook != nil {
-		engine.SetInvariantViolationHookForTest(e.invariantViolationHook)
-	}
-	applyResult := engine.Apply(txn)
+	applyResult := e.applyStaged(txn, engineConfig, e.txInLedger, true)
 
 	if applyResult.Result.IsApplied() {
-		e.txInLedger++
-		e.closingTxTotal++
-		e.recordTxFeeLevel(txn)
-		// For batch transactions, also count inner txns for fee metrics.
-		// Reference: rippled counts inner batch txns as separate entries in
-		// the closed ledger's tx map, which affects ProcessClosedLedger.
-		if counter, ok := txn.(innerTxCounter); ok {
-			e.closingTxTotal += uint32(counter.InnerTxCount())
-		}
+		e.txInLedger += 1 + uint32(len(applyResult.AppliedInnerTransactions))
+		e.closingTxTotal += e.recordFeeMetricTransactions(txn, applyResult.AppliedInnerTransactions)
 	}
 
 	// Track transaction for replay-on-close.
@@ -579,44 +632,28 @@ func (e *TestEnv) applyDirect(txn tx.Transaction) TxResult {
 	// included in the replay set. Permanent failures (tem*, tef*, tel*) are
 	// dropped — they never appear in rippled's canonical TX set.
 	// Reference: rippled's open ledger tx map only contains applied txns.
-	if e.replayOnClose {
-		if applyResult.Result.IsApplied() || isRetryable(applyResult.Result) {
-			if e.inSetupMode {
-				e.openLedgerSetupTxns = append(e.openLedgerSetupTxns, txn)
-			} else {
-				e.openLedgerUserTxns = append(e.openLedgerUserTxns, txn)
-			}
-		}
-
-		// For retryable results (terPRE_SEQ etc), also hold the transaction
-		// so it can be retried in subsequent ledgers if the replay doesn't
-		// resolve it.
-		if isRetryable(applyResult.Result) {
-			accountAddr := txn.GetCommon().Account
-			e.addHeldTransaction(accountAddr, txn)
-		}
-	}
+	e.trackDirectTransaction(txn, applyResult)
 
 	return TxResult{
-		Code:     applyResult.Result.String(),
-		Success:  applyResult.Result.IsSuccess(),
-		Message:  applyResult.Message,
-		Metadata: applyResult.Metadata,
+		Code:                     applyResult.Result.String(),
+		Success:                  applyResult.Result.IsSuccess(),
+		Message:                  applyResult.Message,
+		Metadata:                 applyResult.Metadata,
+		AppliedInnerTransactions: applyResult.AppliedInnerTransactions,
 	}
 }
 
-// innerTxCounter is an optional interface implemented by transaction types that
-// contain inner transactions (e.g., Batch). It returns the number of inner
-// transactions, which affects fee metrics computation in ProcessClosedLedger.
-type innerTxCounter interface {
-	InnerTxCount() int
-}
-
-// baseFeeCalculator is an optional interface for transaction types that have
-// a custom base fee calculation (e.g., Batch, which includes extra signers and
-// inner transactions in its base fee).
-type baseFeeCalculator interface {
-	CalculateMinimumFee(baseFee uint64) uint64
+func (e *TestEnv) trackDirectTransaction(txn tx.Transaction, result tx.ApplyResult) {
+	if result.Result.IsApplied() || isRetryable(result.Result) {
+		if e.inSetupMode {
+			e.openLedgerSetupTxns = append(e.openLedgerSetupTxns, txn)
+		} else {
+			e.openLedgerUserTxns = append(e.openLedgerUserTxns, txn)
+		}
+	}
+	if e.replayOnClose && isRetryable(result.Result) {
+		e.addHeldTransaction(txn.GetCommon().Account, txn)
+	}
 }
 
 // submitViaTxQ routes a transaction through the TxQ for fee escalation
@@ -845,24 +882,17 @@ func (e *TestEnv) retryHeldReplacementsIntoQueue() {
 	}
 }
 
-// txFeeLevel returns the TxQ fee level a transaction pays: ToFeeLevel(feePaid,
-// baseFee) using the transaction-type base fee (batch txns and the free
-// SetRegularKey password change adjust it), matching the fee level the TxQ
-// records for the corresponding queued candidate.
+// txFeeLevel returns the TxQ fee level a transaction pays.
 func (e *TestEnv) txFeeLevel(txn tx.Transaction) txq.FeeLevel {
 	common := txn.GetCommon()
 	if common == nil {
 		return 0
 	}
 	feePaid, _ := strconv.ParseUint(common.Fee, 10, 64)
-	baseFee := e.baseFee
-	if calc, ok := txn.(baseFeeCalculator); ok {
-		baseFee = calc.CalculateMinimumFee(e.baseFee)
-	}
-	if e.isFreeRegularKeySet(txn) {
-		baseFee = 0
-	}
-	return txq.ToFeeLevel(feePaid, baseFee)
+	config := e.engineConfig(e.ledger, engineConfigOpts{})
+	baseFee := sign.CalculateBaseFee(txn, e.ledger, config)
+	defaultBaseFee := sign.CalculateDefaultBaseFee(txn, config)
+	return txq.ToFeeLevelWithDefaultBaseFee(feePaid, baseFee, defaultBaseFee)
 }
 
 // heldSeqProxy returns the SeqProxy a transaction would occupy in the TxQ.
@@ -951,7 +981,6 @@ func (e *TestEnv) applyForReplay(txn tx.Transaction, certainRetry, held bool) (t
 	}
 	engineConfig := e.engineConfig(e.ledger, opts)
 
-	engine := txengine.NewEngine(e.ledger, engineConfig)
 	// Seed the engine's txCount from the env's tx-in-ledger counter so
 	// metadata.TransactionIndex matches what rippled assigns. e.ledger
 	// is the open ledger and env.Submit does NOT call AddTransactionWithMeta,
@@ -960,15 +989,11 @@ func (e *TestEnv) applyForReplay(txn tx.Transaction, certainRetry, held bool) (t
 	// Without this seeding the 3rd of 3 sequential TrustSets from the
 	// same account differed by 100 bytes vs rippled v2.6.2 — see
 	// TestReproByteDiff_MultiTrustSetThreading.
-	engine.SetBaseTxCount(e.txInLedger)
-	applyResult := engine.Apply(txn)
+	applyResult := e.applyStaged(txn, engineConfig, e.txInLedger, true)
 
 	if applyResult.Applied {
-		e.txInLedger++
-		e.closingTxTotal++
-		if counter, ok := txn.(innerTxCounter); ok {
-			e.closingTxTotal += uint32(counter.InnerTxCount())
-		}
+		e.txInLedger += 1 + uint32(len(applyResult.AppliedInnerTransactions))
+		e.closingTxTotal += e.recordFeeMetricTransactions(txn, applyResult.AppliedInnerTransactions)
 	}
 
 	return applyResult.Result, applyResult.Applied
@@ -1282,9 +1307,10 @@ type testTxQApplyContext struct {
 // txqSandboxAccum buffers the env-counter side effects produced while applying
 // a batch into a sandbox, so they take effect only on Commit.
 type txqSandboxAccum struct {
-	txInLedger     uint32
-	closingTxTotal uint32
-	feeLevelTxns   []tx.Transaction
+	txInLedger          uint32
+	closingTxTotal      uint32
+	feeLevelTxns        []tx.Transaction
+	appliedTransactions []pendingBatchApply
 }
 
 // applyView returns the ledger this context applies transactions to: the
@@ -1338,47 +1364,13 @@ func (c *testTxQApplyContext) GetAccountReserve(ownerCount uint32) uint64 {
 	return c.env.reserveBase + uint64(ownerCount)*c.env.reserveIncrement
 }
 
-// isFreeRegularKeySet reports whether txn is a SetRegularKey that qualifies for
-// the free password change: signed with the account's master key while
-// lsfPasswordSpent is clear. rippled charges a zero base fee in that case.
-// Reference: rippled SetRegularKey.cpp calculateBaseFee.
-func (e *TestEnv) isFreeRegularKeySet(txn tx.Transaction) bool {
-	if txn.TxType() != tx.TypeRegularKeySet {
-		return false
-	}
-	common := txn.GetCommon()
-	if common == nil || common.SigningPubKey == "" {
-		return false
-	}
-	sigAddr, err := addresscodec.EncodeClassicAddressFromPublicKeyHex(common.SigningPubKey)
-	if err != nil || sigAddr != common.Account {
-		return false // not signed with the master key
-	}
-	acctID, err := state.DecodeAccountID(common.Account)
-	if err != nil {
-		return false
-	}
-	data, err := e.ledger.Read(keylet.Account(acctID))
-	if err != nil || data == nil {
-		return false
-	}
-	accountRoot, err := state.ParseAccountRoot(data)
-	if err != nil {
-		return false
-	}
-	return accountRoot.Flags&state.LsfPasswordSpent == 0
+func (c *testTxQApplyContext) GetReferenceFee() uint64 {
+	return c.env.baseFee
 }
 
-func (c *testTxQApplyContext) GetBaseFee(txn tx.Transaction) uint64 {
-	// For batch transactions, the base fee includes extra signers and inner
-	// txns. Reference: rippled calculateBaseFee() in Transactor.cpp.
-	if calc, ok := txn.(baseFeeCalculator); ok {
-		return calc.CalculateMinimumFee(c.env.baseFee)
-	}
-	if c.env.isFreeRegularKeySet(txn) {
-		return 0
-	}
-	return c.env.baseFee
+func (c *testTxQApplyContext) GetBaseFees(txn tx.Transaction) (uint64, uint64) {
+	config := c.env.engineConfig(c.env.ledger, engineConfigOpts{})
+	return sign.CalculateBaseFee(txn, c.env.ledger, config), sign.CalculateDefaultBaseFee(txn, config)
 }
 
 func (c *testTxQApplyContext) GetTxInLedger() uint32 {
@@ -1410,19 +1402,21 @@ func (c *testTxQApplyContext) ApplyTransaction(txn tx.Transaction) (ter.Result, 
 
 	applied := applyResult.Result.IsApplied()
 	if applied {
-		innerCount := uint32(0)
-		if counter, ok := txn.(innerTxCounter); ok {
-			innerCount = uint32(counter.InnerTxCount())
-		}
+		feeMetricTxns := feeMetricTransactions(txn, nil)
+		const appliedCount = uint32(1)
 		if c.accum != nil {
 			// Sandbox child: defer the env-counter side effects until Commit.
-			c.accum.txInLedger++
-			c.accum.closingTxTotal += 1 + innerCount
-			c.accum.feeLevelTxns = append(c.accum.feeLevelTxns, txn)
+			c.accum.txInLedger += appliedCount
+			c.accum.closingTxTotal += uint32(len(feeMetricTxns))
+			c.accum.feeLevelTxns = append(c.accum.feeLevelTxns, feeMetricTxns...)
+			c.accum.appliedTransactions = append(c.accum.appliedTransactions, pendingBatchApply{
+				transaction: txn,
+				outer:       applyResult,
+			})
 		} else {
-			c.env.txInLedger++
-			c.env.closingTxTotal += 1 + innerCount
-			c.env.recordTxFeeLevel(txn)
+			c.env.txInLedger += appliedCount
+			c.env.closingTxTotal += c.env.recordFeeMetricTransactions(txn, nil)
+			c.env.trackTxQAppliedTransaction(txn, applyResult)
 		}
 	}
 	return applyResult.Result, applied
@@ -1461,8 +1455,9 @@ func (s *testTxQSandbox) Commit() error {
 	}
 	s.parent.env.txInLedger += s.accum.txInLedger
 	s.parent.env.closingTxTotal += s.accum.closingTxTotal
-	for _, txn := range s.accum.feeLevelTxns {
-		s.parent.env.recordTxFeeLevel(txn)
+	s.parent.env.closingFeeTransactions = append(s.parent.env.closingFeeTransactions, s.accum.feeLevelTxns...)
+	for _, applied := range s.accum.appliedTransactions {
+		s.parent.env.trackTxQAppliedTransaction(applied.transaction, applied.outer)
 	}
 	return nil
 }
@@ -1550,41 +1545,43 @@ func (c *testTxQAcceptContext) ApplyTransaction(txn tx.Transaction) (ter.Result,
 	applied := applyResult.Result.IsApplied()
 	if applied {
 		c.env.txInLedger++
-		c.env.closingTxTotal++
-		c.env.recordTxFeeLevel(txn)
-		if counter, ok := txn.(innerTxCounter); ok {
-			c.env.closingTxTotal += uint32(counter.InnerTxCount())
-		}
+		c.env.closingTxTotal += c.env.recordFeeMetricTransactions(txn, nil)
+		c.env.trackTxQAppliedTransaction(txn, applyResult)
 	}
 	return applyResult.Result, applied
 }
 
-// recordTxFeeLevel computes and records the fee level of an applied transaction.
-// This is used to compute the median fee level for ProcessClosedLedger, which
-// determines the escalation multiplier. Without tracking actual fee levels,
-// the escalation multiplier would always be the minimum (128000), causing
-// fee escalation to be less aggressive than rippled when high-fee transactions
-// are in the ledger.
-// Reference: rippled getFeeLevelPaid in TxQ.cpp:38-64
-func (e *TestEnv) recordTxFeeLevel(txn tx.Transaction) {
-	common := txn.GetCommon()
-	if common == nil {
-		return
+func feeMetricTransactions(
+	txn tx.Transaction,
+	inners []tx.AppliedInnerTransaction,
+) []tx.Transaction {
+	transactions := make([]tx.Transaction, 0, 1+len(inners))
+	if txn != nil && txn.GetCommon() != nil {
+		transactions = append(transactions, txn)
 	}
-
-	feeLevel := e.txFeeLevel(txn)
-	e.closingFeeLevels = append(e.closingFeeLevels, feeLevel)
-
-	// Inner batch txns are counted as separate entries in the closed ledger's
-	// tx map (matching rippled), so they each contribute a fee level entry to
-	// keep closingFeeLevels aligned with closingTxTotal. Inner txns inherit
-	// the outer batch's effective fee level — the outer batch fee covers all
-	// inner txns per Batch.cpp::CalculateBaseFee.
-	if counter, ok := txn.(innerTxCounter); ok {
-		for i := uint32(0); i < uint32(counter.InnerTxCount()); i++ {
-			e.closingFeeLevels = append(e.closingFeeLevels, feeLevel)
+	for _, inner := range inners {
+		if inner.Transaction != nil {
+			transactions = append(transactions, inner.Transaction)
 		}
 	}
+	return transactions
+}
+
+func (e *TestEnv) recordFeeMetricTransactions(
+	txn tx.Transaction,
+	inners []tx.AppliedInnerTransaction,
+) uint32 {
+	transactions := feeMetricTransactions(txn, inners)
+	e.closingFeeTransactions = append(e.closingFeeTransactions, transactions...)
+	return uint32(len(transactions))
+}
+
+func (e *TestEnv) closingLedgerFeeLevels() []txq.FeeLevel {
+	feeLevels := make([]txq.FeeLevel, 0, len(e.closingFeeTransactions))
+	for _, txn := range e.closingFeeTransactions {
+		feeLevels = append(feeLevels, e.txFeeLevel(txn))
+	}
+	return feeLevels
 }
 
 func (c *testTxQAcceptContext) GetParentHash() [32]byte {

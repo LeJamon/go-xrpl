@@ -703,19 +703,6 @@ func (e *Engine) payDelegatedFeeOnTable(st *applyState, table *applystate.ApplyS
 // tecINVARIANT_FAILED on the first pass (charges fee, retries on fee-only
 // state) and tefINVARIANT_FAILED on the second pass (no-op, no fee).
 func (e *Engine) runInvariants(st *applyState, result ter.Result) (r ter.Result, handled bool) {
-	// Batch is checked per inner transaction, not on the combined outer delta.
-	// rippled runs each inner tx through its own apply() + checkInvariants on its
-	// own perTxBatchView (apply.cpp:189-207); the outer ttBATCH transactor's
-	// invariant pass only ever sees the batch fee/sequence delta, which never
-	// violates these checkers. goXRPL collapses the inner deltas into the outer
-	// table for combined metadata, so running the shared invariant set here would
-	// mis-count creations/deletions across inner txs (e.g. a Batch funding two
-	// accounts) — exactly the false positive issue #846 addresses. The
-	// authoritative defense is CheckInnerInvariants, run per inner tx in the
-	// batch path.
-	if st.tx.TxType() == txcore.TypeBatch {
-		return ter.Result(0), false
-	}
 	return e.runInvariantsOnTable(st, result, st.table)
 }
 

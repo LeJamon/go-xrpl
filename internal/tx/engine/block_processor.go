@@ -1,6 +1,7 @@
 package engine
 
 import (
+	"context"
 	"fmt"
 
 	"github.com/LeJamon/go-xrpl/internal/ledger"
@@ -18,9 +19,6 @@ import (
 type BlockProcessor struct {
 	// engine is the transaction engine
 	engine *Engine
-
-	// txIndex tracks the current transaction index (0-based)
-	txIndex uint32
 
 	createTxWithMetaBlob func([]byte, *txcore.Metadata) ([]byte, error)
 }
@@ -48,7 +46,6 @@ type BlockTxResult struct {
 func NewBlockProcessor(engine *Engine) *BlockProcessor {
 	return &BlockProcessor{
 		engine:               engine,
-		txIndex:              0,
 		createTxWithMetaBlob: txcore.CreateTxWithMetaBlob,
 	}
 }
@@ -60,6 +57,21 @@ func NewBlockProcessor(engine *Engine) *BlockProcessor {
 // - Publishing applied state and the transaction leaf atomically
 // The engine assigns TransactionIndex in metadata for applied transactions.
 func (bp *BlockProcessor) ApplyTransaction(transaction txcore.Transaction, txBlob []byte) (result BlockTxResult, err error) {
+	return bp.applyTransaction(transaction, txBlob, false)
+}
+
+// ApplyLedgerTransaction applies a transaction while constructing a closed
+// ledger, including any committed Batch inner transactions.
+func (bp *BlockProcessor) ApplyLedgerTransaction(transaction txcore.Transaction, txBlob []byte) (result BlockTxResult, err error) {
+	return bp.applyTransaction(transaction, txBlob, true)
+}
+
+func (bp *BlockProcessor) applyTransaction(
+	transaction txcore.Transaction,
+	txBlob []byte,
+	applyBatchInners bool,
+) (result BlockTxResult, err error) {
+	transactionIndex := bp.engine.TxCount()
 	// Backstop for the consensus build loop: any panic escaping the engine's
 	// Apply-scoped recover — engine bookkeeping outside invokeApply, or the
 	// pseudo-tx apply path which runs outside it — is converted to an error so
@@ -72,13 +84,13 @@ func (bp *BlockProcessor) ApplyTransaction(transaction txcore.Transaction, txBlo
 		if r := recover(); r != nil {
 			bp.engine.logger.Error("transaction apply panic recovered, dropping tx",
 				"panic", r)
-			result = BlockTxResult{Index: bp.txIndex, RawTxBlob: txBlob}
+			result = BlockTxResult{Index: transactionIndex, RawTxBlob: txBlob}
 			err = fmt.Errorf("apply panic: %v", r)
 		}
 	}()
 
 	result = BlockTxResult{
-		Index:     bp.txIndex,
+		Index:     transactionIndex,
 		RawTxBlob: txBlob,
 	}
 
@@ -109,6 +121,9 @@ func (bp *BlockProcessor) ApplyTransaction(transaction txcore.Transaction, txBlo
 		applyResult = stagedEngine.ApplyPseudo(transaction)
 	} else {
 		applyResult = stagedEngine.Apply(transaction)
+		if applyBatchInners {
+			applyResult = stagedEngine.ApplyBatchInnerTransactions(context.Background(), transaction, applyResult)
+		}
 	}
 	result.ApplyResult = applyResult
 
@@ -123,14 +138,31 @@ func (bp *BlockProcessor) ApplyTransaction(transaction txcore.Transaction, txBlo
 		if err := staged.AddTransactionWithMeta(hash, txWithMetaBlob); err != nil {
 			return result, fmt.Errorf("stage transaction metadata: %w", err)
 		}
+		for _, inner := range applyResult.AppliedInnerTransactions {
+			if inner.Transaction == nil || inner.Metadata == nil {
+				return result, fmt.Errorf("stage batch inner transaction: missing transaction or metadata")
+			}
+			innerBlob, err := txcore.SerializeTransaction(inner.Transaction)
+			if err != nil {
+				return result, fmt.Errorf("serialize batch inner transaction: %w", err)
+			}
+			innerHash, err := txcore.ComputeTransactionHash(inner.Transaction)
+			if err != nil {
+				return result, fmt.Errorf("hash batch inner transaction: %w", err)
+			}
+			innerWithMeta, err := bp.createTxWithMetaBlob(innerBlob, inner.Metadata)
+			if err != nil {
+				return result, fmt.Errorf("serialize batch inner metadata: %w", err)
+			}
+			if err := staged.AddTransactionWithMeta(innerHash, innerWithMeta); err != nil {
+				return result, fmt.Errorf("stage batch inner metadata: %w", err)
+			}
+		}
 		if err := base.AdoptState(staged); err != nil {
 			return result, fmt.Errorf("commit transaction state and metadata: %w", err)
 		}
 		bp.engine.SetBaseTxCount(stagedEngine.TxCount())
 	}
-
-	// Increment the processing order counter for the next transaction
-	bp.txIndex++
 
 	return result, nil
 }

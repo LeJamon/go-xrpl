@@ -395,7 +395,7 @@ func (s *Service) GetAutofillSequence(account string, hasTicketSequence bool) (u
 }
 
 // computeBaseFeeForTx mirrors rippled getTxFee → calculateBaseFee dispatch:
-// CustomBaseFeeCalculator wins (AccountDelete, AMMCreate, LedgerStateFix);
+// transaction-specific calculators and SetRegularKey's contextual waiver win;
 // otherwise the default Transactor::calculateBaseFee applies, which charges
 // one extra baseFee per entry in sfSigners regardless of SigningPubKey
 // (rippled Transactor.cpp:229-245).
@@ -406,7 +406,7 @@ func (s *Service) GetAutofillSequence(account string, hasTicketSequence bool) (u
 // cfg.Rules is supplied AND ExpandedSignerList is disabled — see
 // maxMultiSigners and rippled STTx.h:55-63.
 //
-// CustomBaseFeeCalculator dispatch is wrapped in a recover so a panic
+// Transaction-specific dispatch is wrapped in a recover so a panic
 // reading inconsistent view state cannot escape the autofill path. This
 // mirrors the reference_fee fallback rippled's getTxFee performs on any
 // exception (TransactionSign.cpp:832-835).
@@ -414,13 +414,15 @@ func computeBaseFeeForTx(view tx.LedgerView, parsedTx tx.Transaction, cfg tx.Eng
 	if parsedTx == nil {
 		return cfg.BaseFee
 	}
-	if feeCalc, ok := parsedTx.(tx.CustomBaseFeeCalculator); ok {
+	_, batchFee := parsedTx.(tx.BatchFeeCalculator)
+	_, customFee := parsedTx.(tx.CustomBaseFeeCalculator)
+	if batchFee || customFee || parsedTx.TxType() == tx.TypeRegularKeySet {
 		defer func() {
 			if r := recover(); r != nil {
 				fee = cfg.BaseFee
 			}
 		}()
-		return feeCalc.CalculateBaseFee(view, cfg)
+		return sign.CalculateBaseFee(parsedTx, view, cfg)
 	}
 	signerCount := len(parsedTx.GetCommon().Signers)
 	if signerCount == 0 {

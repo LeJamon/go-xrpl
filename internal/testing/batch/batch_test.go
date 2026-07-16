@@ -9,6 +9,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 
+	"github.com/LeJamon/go-xrpl/internal/ledger/state"
 	jtx "github.com/LeJamon/go-xrpl/internal/testing"
 	"github.com/LeJamon/go-xrpl/internal/tx"
 	accounttx "github.com/LeJamon/go-xrpl/internal/tx/account"
@@ -16,6 +17,7 @@ import (
 	"github.com/LeJamon/go-xrpl/internal/tx/check"
 	"github.com/LeJamon/go-xrpl/internal/tx/payment"
 	"github.com/LeJamon/go-xrpl/internal/txq"
+	"github.com/LeJamon/go-xrpl/keylet"
 )
 
 // newBatchEnv builds a test environment with the Batch amendment active.
@@ -28,6 +30,34 @@ func newBatchEnv(t *testing.T) *jtx.TestEnv {
 	env := jtx.NewTestEnv(t)
 	env.EnableFeatureNow("Batch")
 	return env
+}
+
+func TestInnerSetRegularKeyDoesNotReceiveFreePasswordChange(t *testing.T) {
+	env := newBatchEnv(t)
+	alice := jtx.NewAccount("alice")
+	bob := jtx.NewAccount("bob")
+	regularKey := jtx.NewAccount("regular-key")
+	env.Fund(alice, bob)
+
+	seq := env.Seq(alice)
+	setRegularKey := jtx.NewSetRegularKeyTx(alice, regularKey)
+	setRegularKey.GetCommon().Fee = "0"
+	setRegularKey.GetCommon().SigningPubKey = ""
+	setRegularKey.GetCommon().SetSequence(seq + 1)
+	setRegularKey.GetCommon().SetFlags(tx.TfInnerBatchTxn)
+
+	batch := NewBatchBuilder(alice, seq, CalcBatchFeeFromEnv(env, 0, 2), batchtx.BatchFlagAllOrNothing).
+		AddInnerTx(setRegularKey).
+		AddInnerTx(MakeInnerPaymentXRP(alice, bob, 1, seq+2)).
+		Build()
+	jtx.RequireTxSuccess(t, env.Submit(batch))
+
+	data, err := env.Ledger().Read(keylet.Account(alice.ID))
+	require.NoError(t, err)
+	account, err := state.ParseAccountRoot(data)
+	require.NoError(t, err)
+	require.Equal(t, regularKey.Address, account.RegularKey)
+	require.Zero(t, account.Flags&state.LsfPasswordSpent)
 }
 
 // =============================================================================

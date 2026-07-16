@@ -121,20 +121,17 @@ type TestEnv struct {
 	// for every normal submission.
 	invariantViolationHook txengine.InvariantViolationHook
 
-	// closingTxTotal tracks the total transaction count including inner batch
-	// transactions. In rippled, the closed ledger's tx map includes inner
-	// batch txns as separate entries. This counter matches that behavior for
-	// ProcessClosedLedger fee metrics computation.
-	// Reset on Close(). Incremented by 1 for regular txns and by 1+N for
-	// batch txns with N inner transactions.
+	// closingTxTotal tracks outer transactions and committed Batch inners, matching
+	// the entries rippled inserts into the closed transaction map.
 	closingTxTotal uint32
 
-	// closingFeeLevels tracks the actual fee levels of transactions in the
-	// current open ledger. Used by ProcessClosedLedger to compute the median
-	// fee level (escalation multiplier). Without this, the median would always
-	// be BaseLevel, causing fee escalation to be less aggressive than rippled.
-	// Reset on Close().
-	closingFeeLevels []txq.FeeLevel
+	// closingFeeTransactions retains the exact outer and committed inner entries
+	// whose fee levels are recomputed against the final closed view.
+	closingFeeTransactions []tx.Transaction
+
+	// pendingBatchApplies contains successful outer Batch transactions admitted
+	// through TxQ. Their inners run only when the ledger is built on Close.
+	pendingBatchApplies []pendingBatchApply
 
 	// heldTxns stores transactions that hit a retryable (ter*) result because of a
 	// sequence gap. They are retried mid-window once a transaction for the same

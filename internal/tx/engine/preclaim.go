@@ -103,6 +103,39 @@ func (e *Engine) preclaim(tx txcore.Transaction, txHash [32]byte) (result ter.Re
 	return ter.TesSUCCESS
 }
 
+func (e *Engine) preclaimInner(tx txcore.Transaction, txHash [32]byte) (result ter.Result) {
+	defer func() {
+		if r := recover(); r != nil {
+			e.logger.Error("batch inner preclaim panic recovered, returning tefEXCEPTION",
+				"txHash", hex.EncodeToString(txHash[:]), "panic", r)
+			result = ter.TefEXCEPTION
+		}
+	}()
+
+	common := tx.GetCommon()
+	accountID, account, result := e.preclaimLoadAccount(common)
+	if result != ter.TesSUCCESS {
+		return result
+	}
+	if result := e.checkSeqProxy(common, accountID, account); result != ter.TesSUCCESS {
+		return result
+	}
+	if result := e.checkPriorTxAndLastLedger(common, account, txHash); result != ter.TesSUCCESS {
+		return result
+	}
+	if result := e.checkPseudoAccountSign(common); result != ter.TesSUCCESS {
+		return result
+	}
+	if result := e.checkPermission(tx, common, accountID); result != ter.TesSUCCESS {
+		return result
+	}
+	if preclaimer, ok := tx.(txcore.Preclaimer); ok {
+		preclaimView := rulesView{LedgerView: e.view, rules: e.config.RequireRules()}
+		return preclaimer.Preclaim(preclaimView, e.config)
+	}
+	return ter.TesSUCCESS
+}
+
 // preclaimLoadAccount decodes the source account and reads + parses its SLE.
 // Returns the decoded accountID, the parsed AccountRoot, and a TER result.
 func (e *Engine) preclaimLoadAccount(common *txcore.Common) ([20]byte, *state.AccountRoot, ter.Result) {
@@ -192,7 +225,7 @@ func (e *Engine) checkPriorTxAndLastLedger(common *txcore.Common, account *state
 func (e *Engine) checkFee(tx txcore.Transaction, common *txcore.Common, account *state.AccountRoot) ter.Result {
 	// When a delegate is present, the fee is checked against the delegate's balance.
 	fee := e.calculateFee(tx)
-	baseFeeForTx := e.preclaimBaseFee(tx, common, account)
+	baseFeeForTx := e.preclaimBaseFee(tx)
 
 	// Fee adequacy floor. rippled enforces feePaid >= minimumFee whenever the
 	// apply view is open (Transactor::checkFee, Transactor.cpp:278-290), with
@@ -215,18 +248,11 @@ func (e *Engine) checkFee(tx txcore.Transaction, common *txcore.Common, account 
 		}
 	}
 
-	// When fee is zero, skip batch fee check and balance checks.
+	// When fee is zero, skip balance checks.
 	// Reference: rippled Transactor::checkFee line 292-293:
 	//   if (feePaid == beast::zero) return tesSUCCESS;
 	if fee == 0 {
 		return ter.TesSUCCESS
-	}
-
-	if feeCalc, ok := tx.(txcore.BatchFeeCalculator); ok {
-		batchMinFee := feeCalc.CalculateMinimumFee(e.config.BaseFee)
-		if fee < batchMinFee {
-			return ter.TelINSUF_FEE_P
-		}
 	}
 
 	// Determine who pays the fee: delegate (if present) or the source account.
@@ -269,28 +295,9 @@ func (e *Engine) enforceFeeFloor(fee, baseFeeForTx uint64) ter.Result {
 	return ter.TesSUCCESS
 }
 
-// preclaimBaseFee computes the minimum base fee for this transaction type,
-// applying multi-sign multipliers, custom calculators, and the SetRegularKey
-// free-password-change special case.
-// Reference: rippled applySteps.cpp calculateBaseFee() + SetRegularKey.cpp.
-func (e *Engine) preclaimBaseFee(tx txcore.Transaction, common *txcore.Common, account *state.AccountRoot) uint64 {
-	var baseFeeForTx uint64
-	if feeCalc, ok := tx.(txcore.CustomBaseFeeCalculator); ok {
-		baseFeeForTx = feeCalc.CalculateBaseFee(e.view, e.config)
-	} else {
-		baseFeeForTx = e.config.BaseFee
-		if sign.IsMultiSigned(tx) {
-			baseFeeForTx = sign.CalculateMultiSigFee(e.config.BaseFee, len(common.Signers))
-		}
-	}
-	// SetRegularKey free password change: the base fee is waived when signed
-	// with the master key while lsfPasswordSpent is clear. The same predicate
-	// gates the lsfPasswordSpent flag in doApply, so the fee and the flag can
-	// never disagree. Reference: rippled SetRegularKey.cpp calculateBaseFee.
-	if tx.TxType() == txcore.TypeRegularKeySet && txcore.SetRegularKeyFeeWaived(e.config.SkipSignatureVerification, common, account) {
-		baseFeeForTx = 0
-	}
-	return baseFeeForTx
+// preclaimBaseFee computes the dispatched minimum fee for this transaction.
+func (e *Engine) preclaimBaseFee(tx txcore.Transaction) uint64 {
+	return sign.CalculateBaseFee(tx, e.view, e.config)
 }
 
 // feePayerBalance returns the balance of the account that will be charged the fee
@@ -358,6 +365,19 @@ func (e *Engine) checkPermission(tx txcore.Transaction, common *txcore.Common, a
 //
 //	auto const idAccount = ctx.tx[~sfDelegate].value_or(ctx.tx[sfAccount]);
 func (e *Engine) checkSign(tx txcore.Transaction, common *txcore.Common) ter.Result {
+	if result := e.checkPseudoAccountSign(common); result != ter.TesSUCCESS {
+		return result
+	}
+	if sign.IsMultiSigned(tx) {
+		return e.checkMultiSign(common)
+	}
+	if common.SigningPubKey != "" {
+		return e.checkSingleSign(common)
+	}
+	return ter.TesSUCCESS
+}
+
+func (e *Engine) checkPseudoAccountSign(common *txcore.Common) ter.Result {
 	// Under LendingProtocol a pseudo-account (AMM / Vault / LoanBroker) can never
 	// authorize a transaction: rippled Transactor::checkSign returns tefBAD_AUTH
 	// for any tx signed by a pseudo-account, at the top of the signature stage.
@@ -373,12 +393,6 @@ func (e *Engine) checkSign(tx txcore.Transaction, common *txcore.Common) ter.Res
 				}
 			}
 		}
-	}
-	if sign.IsMultiSigned(tx) {
-		return e.checkMultiSign(common)
-	}
-	if common.SigningPubKey != "" {
-		return e.checkSingleSign(common)
 	}
 	return ter.TesSUCCESS
 }

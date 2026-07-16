@@ -255,6 +255,10 @@ func (o *OpenLedger) snapshotCurrentTxs() [][]byte {
 		if err != nil {
 			return true
 		}
+		parsed, err := tx.ParseFromBinary(raw)
+		if err != nil || parsed.GetCommon().GetFlags()&tx.TfInnerBatchTxn != 0 {
+			return true
+		}
 		built = append(built, raw)
 		return true
 	})
@@ -298,6 +302,9 @@ func collectTxs(v *ledger.Ledger, logger xrpllog.Logger) []PendingTx {
 		if err != nil {
 			logger.Warn("openledger: skipping unparseable tx in replay",
 				"item", itemKey, "err", err)
+			return true
+		}
+		if ptx.Parsed.GetCommon().GetFlags()&tx.TfInnerBatchTxn != 0 {
 			return true
 		}
 		out = append(out, ptx)

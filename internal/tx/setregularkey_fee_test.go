@@ -30,6 +30,7 @@ func TestSetRegularKeyFeeWaived(t *testing.T) {
 
 	unflagged := &state.AccountRoot{}
 	spent := &state.AccountRoot{Flags: state.LsfPasswordSpent}
+	innerFlags := TfInnerBatchTxn
 
 	tests := []struct {
 		name                string
@@ -80,6 +81,13 @@ func TestSetRegularKeyFeeWaived(t *testing.T) {
 			common:              &Common{Account: masterAddr},
 			account:             unflagged,
 			want:                true,
+		},
+		{
+			name:                "inner batch transaction is not waived under skip-verify",
+			skipSigVerification: true,
+			common:              &Common{Account: masterAddr, Flags: &innerFlags},
+			account:             unflagged,
+			want:                false,
 		},
 		{
 			name:                "no SigningPubKey, skip-verify, multi-signed is not waived",

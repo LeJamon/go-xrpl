@@ -1,6 +1,7 @@
 package batch
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -8,6 +9,7 @@ import (
 
 	"github.com/LeJamon/go-xrpl/amendment"
 	"github.com/LeJamon/go-xrpl/internal/tx"
+	"github.com/LeJamon/go-xrpl/internal/tx/lending"
 	"github.com/LeJamon/go-xrpl/internal/tx/payment"
 )
 
@@ -410,13 +412,33 @@ func TestCalculateMinimumFee_SingleSignBaseline(t *testing.T) {
 	b := NewBatch(testOuter)
 	b.AddInnerTransaction(makeTestPayment())
 	b.AddInnerTransaction(makeTestPayment())
-	require.Equal(t, uint64(40), b.CalculateMinimumFee(10), "2 inners + no signers")
+	require.Equal(t, uint64(40), b.CalculateMinimumFee(nil, tx.EngineConfig{BaseFee: 10}), "2 inners + no signers")
 
 	b3 := NewBatch(testOuter)
 	b3.AddInnerTransaction(makeTestPayment())
 	b3.AddInnerTransaction(makeTestPayment())
 	b3.AddInnerTransaction(makeTestPayment())
-	require.Equal(t, uint64(50), b3.CalculateMinimumFee(10), "3 inners + no signers")
+	require.Equal(t, uint64(50), b3.CalculateMinimumFee(nil, tx.EngineConfig{BaseFee: 10}), "3 inners + no signers")
+}
+
+func TestCalculateMinimumFee_DispatchesInnerCustomFee(t *testing.T) {
+	for _, tc := range []struct {
+		name         string
+		counterparty *tx.CounterpartySignature
+		expected     uint64
+	}{
+		{"absent", nil, 30},
+		{"single", &tx.CounterpartySignature{TxnSignature: "AA"}, 40},
+		{"multisigned", &tx.CounterpartySignature{Signers: make([]tx.SignerWrapper, 2)}, 50},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			b := NewBatch(testOuter)
+			loanSet := lending.NewLoanSet(testOuter, strings.Repeat("1", 64), "1")
+			loanSet.GetCommon().CounterpartySignature = tc.counterparty
+			b.AddInnerTransaction(loanSet)
+			require.Equal(t, tc.expected, b.CalculateMinimumFee(nil, tx.EngineConfig{BaseFee: 10}))
+		})
+	}
 }
 
 // TestCalculateMinimumFee_DirectSignedBatchSigners pins
@@ -431,7 +453,7 @@ func TestCalculateMinimumFee_DirectSignedBatchSigners(t *testing.T) {
 		{BatchSigner: BatchSignerData{Account: "rSignerB", BatchTxnSignature: "CD"}},
 	}
 	// batchBase=20 + txnFees=20 + signerFees=2*10 = 60
-	require.Equal(t, uint64(60), b.CalculateMinimumFee(10))
+	require.Equal(t, uint64(60), b.CalculateMinimumFee(nil, tx.EngineConfig{BaseFee: 10}))
 }
 
 // TestCalculateMinimumFee_MultiSignBatchSigner pins
@@ -453,7 +475,7 @@ func TestCalculateMinimumFee_MultiSignBatchSigner(t *testing.T) {
 		},
 	}}
 	// batchBase=20 + txnFees=20 + signerFees=3*10 = 70
-	require.Equal(t, uint64(70), b.CalculateMinimumFee(10))
+	require.Equal(t, uint64(70), b.CalculateMinimumFee(nil, tx.EngineConfig{BaseFee: 10}))
 }
 
 // TestCalculateMinimumFee_MultiSignedInner pins
@@ -470,7 +492,7 @@ func TestCalculateMinimumFee_MultiSignedInner(t *testing.T) {
 	}
 	b.AddInnerTransaction(multiInner)
 	// batchBase=20 + txnFees=(10 + 30) + signerFees=0 = 60
-	require.Equal(t, uint64(60), b.CalculateMinimumFee(10))
+	require.Equal(t, uint64(60), b.CalculateMinimumFee(nil, tx.EngineConfig{BaseFee: 10}))
 }
 
 // TestCalculateMinimumFee_OuterMultiSign pins
@@ -485,7 +507,7 @@ func TestCalculateMinimumFee_OuterMultiSign(t *testing.T) {
 		{Signer: tx.Signer{Account: "rOuter2", SigningPubKey: "02", TxnSignature: "BB"}},
 	}
 	// batchBase = 10 + (1 + 2)*10 = 40; txnFees = 10; signerFees = 0 → 50
-	require.Equal(t, uint64(50), b.CalculateMinimumFee(10))
+	require.Equal(t, uint64(50), b.CalculateMinimumFee(nil, tx.EngineConfig{BaseFee: 10}))
 }
 
 // TestCalculateMinimumFee_InnerBatchSentinel pins
@@ -496,7 +518,7 @@ func TestCalculateMinimumFee_InnerBatchSentinel(t *testing.T) {
 	outer := NewBatch(testOuter)
 	innerBatch := NewBatch("rInner")
 	outer.AddInnerTransaction(innerBatch)
-	fee := outer.CalculateMinimumFee(10)
+	fee := outer.CalculateMinimumFee(nil, tx.EngineConfig{BaseFee: 10})
 	// Sentinel is ≥ 100B XRP in drops; any realistic caller will reject.
 	require.Greater(t, fee, uint64(100_000_000_000), "inner ttBATCH must surface as overflow sentinel")
 }

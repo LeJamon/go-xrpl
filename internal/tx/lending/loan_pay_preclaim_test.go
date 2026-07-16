@@ -148,24 +148,54 @@ func TestLoanPay_CalculateBaseFeeCap(t *testing.T) {
 	// payments → 40 fee increments; capped it is 20.
 	pay := NewLoanPay(ownerAddr, loanIDHex, tx.NewXRPAmount(2000))
 
-	cfg := func(fix bool) tx.EngineConfig {
-		ids := [][32]byte{}
-		if fix {
+	cfg := func(fix313, fix320 bool) tx.EngineConfig {
+		ids := [][32]byte{
+			amendment.FeatureLendingProtocol,
+			amendment.FeatureSingleAssetVault,
+			amendment.FeatureMPTokensV1,
+		}
+		if fix313 {
 			ids = append(ids, amendment.FeatureFixCleanup3_1_3)
+		}
+		if fix320 {
+			ids = append(ids, amendment.FeatureFixCleanup3_2_0)
 		}
 		return tx.EngineConfig{BaseFee: 10, Rules: amendment.NewRules(ids)}
 	}
 
-	if got := pay.CalculateBaseFee(view, cfg(true)); got != 20*10 {
+	if got := pay.CalculateBaseFee(view, cfg(true, true)); got != 20*10 {
 		t.Errorf("fixCleanup3_1_3 ON: got %d, want %d (capped at 20 increments)", got, 20*10)
 	}
-	if got := pay.CalculateBaseFee(view, cfg(false)); got != 40*10 {
+	if got := pay.CalculateBaseFee(view, cfg(false, true)); got != 40*10 {
 		t.Errorf("fixCleanup3_1_3 OFF: got %d, want %d (40 increments, uncapped)", got, 40*10)
+	}
+	multisignedPay := NewLoanPay(ownerAddr, loanIDHex, tx.NewXRPAmount(2000))
+	multisignedPay.Common.Signers = make([]tx.SignerWrapper, 2)
+	if got := multisignedPay.CalculateBaseFee(view, cfg(true, true)); got != 20*30 {
+		t.Errorf("multisigned capped payment: got %d, want %d", got, 20*30)
+	}
+	if got := multisignedPay.CalculateBaseFee(view, cfg(false, true)); got != 40*30 {
+		t.Errorf("multisigned uncapped payment: got %d, want %d", got, 40*30)
+	}
+	multisignedPay.Common.SetFlags(TfLoanFullPayment)
+	if got := multisignedPay.CalculateBaseFee(view, cfg(true, true)); got != 30 {
+		t.Errorf("multisigned full payment: got %d, want 30", got)
 	}
 
 	overpayment := NewLoanPay(ownerAddr, loanIDHex, tx.NewXRPAmount(51))
 	overpayment.Common.SetFlags(TfLoanOverpayment)
-	if got := overpayment.CalculateBaseFee(view, cfg(true)); got != 2*10 {
-		t.Errorf("overpayment: got %d, want %d (2 upward-rounded increments)", got, 2*10)
+	for _, fix313 := range []bool{false, true} {
+		for _, fix320 := range []bool{false, true} {
+			if got := overpayment.CalculateBaseFee(view, cfg(fix313, fix320)); got != 2*10 {
+				t.Errorf("fixCleanup3_1_3=%t fixCleanup3_2_0=%t: got %d, want %d (2 upward-rounded increments)", fix313, fix320, got, 2*10)
+			}
+		}
+	}
+
+	multisignedOverpayment := NewLoanPay(ownerAddr, loanIDHex, tx.NewXRPAmount(51))
+	multisignedOverpayment.Common.SetFlags(TfLoanOverpayment)
+	multisignedOverpayment.Common.Signers = make([]tx.SignerWrapper, 2)
+	if got := multisignedOverpayment.CalculateBaseFee(view, cfg(true, true)); got != 6*10 {
+		t.Errorf("multisigned overpayment: got %d, want %d", got, 6*10)
 	}
 }

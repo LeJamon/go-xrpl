@@ -35,6 +35,10 @@ type ApplyContext struct {
 	// TxHash is the hash of the current transaction
 	TxHash [32]byte
 
+	// TransactionIndex is the outer transaction's index in the building ledger.
+	// Batch inner transactions start at the following index.
+	TransactionIndex uint32
+
 	// Metadata allows transactions to set DeliveredAmount (used by Payment)
 	Metadata *Metadata
 
@@ -42,6 +46,8 @@ type ApplyContext struct {
 	// needs for each isolated inner delta. It is a narrow interface — satisfied
 	// by the engine — so the contract layer never holds the concrete orchestrator.
 	InnerInvariants InnerInvariantChecker
+
+	InnerTransactionEngine InnerTransactionEngine
 
 	// SignedWithMaster is true when the transaction was signed with the account's master key.
 	// Reference: rippled SetAccount.cpp sigWithMaster — derived from SigningPubKey.
@@ -67,6 +73,16 @@ type ApplyContext struct {
 // stays free of the apply-state package.
 type InnerInvariantChecker interface {
 	CheckInnerInvariants(innerTx Transaction, result ter.Result, innerTable LedgerView) ter.Result
+}
+
+type InnerTransactionEngine interface {
+	ApplyInnerTransaction(
+		ctx context.Context,
+		view LedgerView,
+		innerTx Transaction,
+		parentBatchID [32]byte,
+		transactionIndex uint32,
+	) ApplyResult
 }
 
 // AccountReserve calculates the total reserve required for an account with the given owner count.

@@ -588,6 +588,36 @@ func CalculateMultiSigFee(baseFee uint64, numSigners int) uint64 {
 	return baseFee * (1 + uint64(numSigners))
 }
 
+// CalculateDefaultBaseFee returns the ordinary transaction fee without any
+// transaction-specific override.
+func CalculateDefaultBaseFee(transaction txcore.Transaction, config txcore.EngineConfig) uint64 {
+	if IsMultiSigned(transaction) {
+		return CalculateMultiSigFee(config.BaseFee, len(transaction.GetCommon().Signers))
+	}
+	return config.BaseFee
+}
+
+// CalculateBaseFee dispatches transaction-specific fees before falling back to
+// the standard single-sign or multisign fee.
+func CalculateBaseFee(transaction txcore.Transaction, view txcore.LedgerView, config txcore.EngineConfig) uint64 {
+	if transaction.TxType() == txcore.TypeRegularKeySet && view != nil {
+		accountID, err := state.DecodeAccountID(transaction.GetCommon().Account)
+		if err == nil {
+			account, readErr := txcore.ReadAccountRoot(view, accountID)
+			if readErr == nil && txcore.SetRegularKeyFeeWaived(config.SkipSignatureVerification, transaction.GetCommon(), account) {
+				return 0
+			}
+		}
+	}
+	if calculator, ok := transaction.(txcore.BatchFeeCalculator); ok {
+		return calculator.CalculateMinimumFee(view, config)
+	}
+	if calculator, ok := transaction.(txcore.CustomBaseFeeCalculator); ok {
+		return calculator.CalculateBaseFee(view, config)
+	}
+	return CalculateDefaultBaseFee(transaction, config)
+}
+
 // SignTransactionForMultiSign signs a transaction for multi-signing
 // Each signer signs a message that includes their account ID as a suffix
 // Returns the signature as a hex string

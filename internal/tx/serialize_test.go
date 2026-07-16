@@ -95,6 +95,27 @@ func TestTransactionIndexFromMetadata(t *testing.T) {
 	}
 }
 
+func TestSerializeMetadataIncludesParentBatchID(t *testing.T) {
+	parent := [32]byte{1, 2, 3, 4}
+	encoded, err := SerializeMetadata(&Metadata{
+		TransactionResult: ter.TesSUCCESS,
+		TransactionIndex:  7,
+		AffectedNodes:     []AffectedNode{},
+		ParentBatchID:     &parent,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	decoded, err := binarycodec.Decode(hex.EncodeToString(encoded))
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := "01020304" + string(bytes.Repeat([]byte{'0'}, 56))
+	if got := decoded["ParentBatchID"]; got != want {
+		t.Fatalf("ParentBatchID = %v, want %s", got, want)
+	}
+}
+
 func TestTransactionIndexFromTxWithMetaBlob_JSONFallback(t *testing.T) {
 	tests := []struct {
 		name         string

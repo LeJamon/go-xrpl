@@ -51,6 +51,19 @@ type Appliable interface {
 	Apply(ctx *ApplyContext) ter.Result
 }
 
+// AppliedInnerTransaction is a Batch inner transaction whose state changes and
+// transaction metadata were committed with its outer transaction.
+type AppliedInnerTransaction struct {
+	Transaction Transaction
+	Metadata    *Metadata
+}
+
+// BatchInnerApplier applies a Batch transaction's inner transactions after the
+// outer transaction has committed. This keeps outer and inner metadata isolated.
+type BatchInnerApplier interface {
+	ApplyInnerTransactions(ctx *ApplyContext) (ter.Result, []AppliedInnerTransaction)
+}
+
 // RulesPreflighter is implemented by transaction types whose preflight has
 // amendment-rules-dependent checks that cannot live in the rules-free Validate()
 // body. The engine runs PreflightRules right after Validate(), so these checks
@@ -141,7 +154,7 @@ type TecApplier interface {
 // BatchFeeCalculator is implemented by transaction types that need custom minimum fee calculation.
 // Used by Batch transactions which require a higher fee based on inner tx count and signers.
 type BatchFeeCalculator interface {
-	CalculateMinimumFee(baseFee uint64) uint64
+	CalculateMinimumFee(view LedgerView, config EngineConfig) uint64
 }
 
 // CustomBaseFeeCalculator is implemented by transaction types that override calculateBaseFee()

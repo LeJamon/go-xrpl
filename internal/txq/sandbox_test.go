@@ -54,9 +54,12 @@ func (c *mockClearCtx) AccountExists([20]byte) bool        { return true }
 func (c *mockClearCtx) TicketExists([20]byte, uint32) bool { return true }
 func (c *mockClearCtx) GetAccountBalance([20]byte) uint64  { return 0 }
 func (c *mockClearCtx) GetAccountReserve(uint32) uint64    { return 0 }
-func (c *mockClearCtx) GetBaseFee(tx.Transaction) uint64   { return 10 }
-func (c *mockClearCtx) GetTxInLedger() uint32              { return 0 }
-func (c *mockClearCtx) GetLedgerSequence() uint32          { return 0 }
+func (c *mockClearCtx) GetBaseFees(tx.Transaction) (uint64, uint64) {
+	return 10, 10
+}
+func (c *mockClearCtx) GetReferenceFee() uint64   { return 10 }
+func (c *mockClearCtx) GetTxInLedger() uint32     { return 0 }
+func (c *mockClearCtx) GetLedgerSequence() uint32 { return 0 }
 func (c *mockClearCtx) ApplyTransaction(tx.Transaction) (ter.Result, bool) {
 	return ter.TefINTERNAL, false
 }

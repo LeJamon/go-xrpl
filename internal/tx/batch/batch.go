@@ -6,11 +6,10 @@ import (
 	"strconv"
 
 	"github.com/LeJamon/go-xrpl/amendment"
-	"github.com/LeJamon/go-xrpl/internal/ledger/state"
 	"github.com/LeJamon/go-xrpl/internal/tx"
 	"github.com/LeJamon/go-xrpl/internal/tx/applystate"
+	"github.com/LeJamon/go-xrpl/internal/tx/sign"
 	"github.com/LeJamon/go-xrpl/internal/tx/ter"
-	"github.com/LeJamon/go-xrpl/keylet"
 )
 
 // Batch is a transaction that contains multiple inner transactions.
@@ -410,19 +409,16 @@ func (b *Batch) Flatten() (map[string]any, error) {
 // (Batch.cpp:53-150). The total fee a batch must pay is the sum of:
 //   - batchBase   = view.fees().base + Transactor::calculateBaseFee(view, tx)
 //     = baseFee + (1 + len(outer.Signers)) * baseFee
-//   - txnFees     = Σ inner-tx base fees (each multi-sign-aware)
+//   - txnFees     = Σ inner-tx dispatched base fees
 //   - signerFees  = effectiveSignerCount * baseFee
 //
 // effectiveSignerCount counts each BatchSigner once when it carries a
 // direct BatchTxnSignature and as len(Signers) when the entry is a
-// multi-signed batch signer (Batch.cpp:128-134). Inner transactions
-// pay (1 + signers) * baseFee per the standard multi-sign multiplier
-// (Transactor::calculateBaseFee). Inner-Batch txns are rejected by
-// preflight elsewhere; innerBaseFee mirrors rippled's defense-in-depth
-// bail-out (Batch.cpp:92-97) by returning a sentinel large fee when an
-// inner is itself ttBATCH so the outer is undercosted into rejection
-// rather than silently undercharged.
-func (b *Batch) CalculateMinimumFee(baseFee uint64) uint64 {
+// multi-signed batch signer (Batch.cpp:128-134). Inner transactions use the
+// same per-type fee dispatch as standalone transactions. Inner Batch
+// transactions return the overflow sentinel as a defense-in-depth fallback.
+func (b *Batch) CalculateMinimumFee(view tx.LedgerView, config tx.EngineConfig) uint64 {
+	baseFee := config.BaseFee
 	outerSigners := uint64(len(b.Common.Signers))
 	batchBase := baseFee + (1+outerSigners)*baseFee
 
@@ -432,7 +428,7 @@ func (b *Batch) CalculateMinimumFee(baseFee uint64) uint64 {
 		if inner == nil {
 			continue
 		}
-		txnFees += innerBaseFee(inner, baseFee)
+		txnFees += innerBaseFee(inner, view, config)
 	}
 
 	var signerCount uint64
@@ -447,22 +443,13 @@ func (b *Batch) CalculateMinimumFee(baseFee uint64) uint64 {
 	return batchBase + txnFees + signerCount*baseFee
 }
 
-// innerBaseFee mirrors rippled Transactor::calculateBaseFee for one
-// inner tx: (1 + signers) * baseFee. Inner ttBATCH is forbidden in
-// preflight; mirror rippled Batch.cpp:92-97 by surfacing the impossible
-// nesting as overflowFee — the outer batch's minimum-fee check will
-// reject before the inner-batch makes it through. The per-tx-type
-// overrides (AccountDelete reserve increment, AMMCreate pool increment,
-// LedgerStateFix repair increment) are intentionally not dispatched
-// here: those cases are forbidden or exceedingly rare inside a Batch,
-// and accessing the view from this interface would require a deeper
-// refactor of BatchFeeCalculator.
-func innerBaseFee(inner tx.Transaction, baseFee uint64) uint64 {
+// innerBaseFee dispatches the same per-transaction fee override used for a
+// standalone transaction. Inner Batch transactions return the overflow sentinel.
+func innerBaseFee(inner tx.Transaction, view tx.LedgerView, config tx.EngineConfig) uint64 {
 	if inner.TxType() == tx.TypeBatch {
 		return overflowFee
 	}
-	signers := inner.GetCommon().Signers
-	return (1 + uint64(len(signers))) * baseFee
+	return sign.CalculateBaseFee(inner, view, config)
 }
 
 // overflowFee is the sentinel fee returned when fee calculation hits an
@@ -510,9 +497,13 @@ func (b *Batch) GetBatchSigners() []tx.BatchSignerInfo {
 	return result
 }
 
-// It decodes and processes each inner transaction according to the batch mode flag.
-// Reference: rippled apply.cpp applyBatchTransactions()
 func (b *Batch) Apply(ctx *tx.ApplyContext) ter.Result {
+	return ter.TesSUCCESS
+}
+
+// ApplyInnerTransactions processes the inner transactions after the outer Batch
+// transaction has committed.
+func (b *Batch) ApplyInnerTransactions(ctx *tx.ApplyContext) (ter.Result, []tx.AppliedInnerTransaction) {
 	ctx.Log.Trace("batch apply",
 		"account", b.Account,
 		"txCount", len(b.RawTransactions),
@@ -520,18 +511,7 @@ func (b *Batch) Apply(ctx *tx.ApplyContext) ter.Result {
 	)
 
 	if len(b.RawTransactions) == 0 {
-		return ter.TemINVALID
-	}
-
-	// Write the outer account state (with fee deducted and sequence incremented
-	// by the engine) to the view so inner transactions see the correct state.
-	accountKey := keylet.Account(ctx.AccountID)
-	outerAccountData, err := state.SerializeAccountRoot(ctx.Account)
-	if err != nil {
-		return ter.TefINTERNAL
-	}
-	if err := ctx.View.Update(accountKey, outerAccountData); err != nil {
-		return ter.TefINTERNAL
+		return ter.TemINVALID, nil
 	}
 
 	flags := b.GetFlags()
@@ -554,7 +534,7 @@ func (b *Batch) Apply(ctx *tx.ApplyContext) ter.Result {
 
 	// For OnlyOne, UntilFailure, Independent modes:
 	// Process inner transactions directly against ctx.View.
-	// Sequences always advance for attempted inner txns.
+	var appliedInners []tx.AppliedInnerTransaction
 	for _, innerTx := range innerTxns {
 		if innerTx == nil {
 			// Nil inner tx - treat as failure
@@ -564,7 +544,17 @@ func (b *Batch) Apply(ctx *tx.ApplyContext) ter.Result {
 			continue
 		}
 
-		result := applyInnerTransaction(ctx, innerTx)
+		result, metadata := applyInnerWithEngine(
+			ctx,
+			innerTx,
+			ctx.TransactionIndex+1+uint32(len(appliedInners)),
+		)
+		if metadata != nil {
+			appliedInners = append(appliedInners, tx.AppliedInnerTransaction{
+				Transaction: innerTx,
+				Metadata:    metadata,
+			})
+		}
 
 		if result.IsSuccess() {
 			if isOnlyOne {
@@ -578,286 +568,83 @@ func (b *Batch) Apply(ctx *tx.ApplyContext) ter.Result {
 		}
 	}
 
-	// Sync ctx.Account with the final state in the view so the engine
-	// writes back the correct balance/sequence after Apply() returns.
-	syncAccountFromView(ctx)
-
-	return ter.TesSUCCESS
+	return ter.TesSUCCESS, appliedInners
 }
 
 // applyAllOrNothing processes inner transactions with AllOrNothing semantics.
 // All inner txns must succeed, or all changes are rolled back.
 // Reference: rippled Batch.cpp applyBatchTransactions() with tfAllOrNothing
-func (b *Batch) applyAllOrNothing(ctx *tx.ApplyContext, innerTxns []tx.Transaction) ter.Result {
+func (b *Batch) applyAllOrNothing(
+	ctx *tx.ApplyContext,
+	innerTxns []tx.Transaction,
+) (ter.Result, []tx.AppliedInnerTransaction) {
 	// Create a batch-level state table wrapping ctx.View
 	base, ok := ctx.View.(applystate.AtomicLedgerView)
 	if !ok {
-		return ter.TefINTERNAL
+		return ter.TefINTERNAL, nil
 	}
 	batchTable := applystate.NewApplyStateTable(base, ctx.TxHash, ctx.Config.LedgerSequence, ctx.Config.Rules)
 
 	batchCtx := &tx.ApplyContext{
-		View:            batchTable,
-		Account:         ctx.Account,
-		AccountID:       ctx.AccountID,
-		Config:          ctx.Config,
-		TxHash:          ctx.TxHash,
-		Metadata:        ctx.Metadata,
-		InnerInvariants: ctx.InnerInvariants,
-		Log:             ctx.Log,
-		Ctx:             ctx.Ctx,
+		View:                   batchTable,
+		Account:                ctx.Account,
+		AccountID:              ctx.AccountID,
+		Config:                 ctx.Config,
+		TxHash:                 ctx.TxHash,
+		TransactionIndex:       ctx.TransactionIndex,
+		Metadata:               ctx.Metadata,
+		InnerInvariants:        ctx.InnerInvariants,
+		InnerTransactionEngine: ctx.InnerTransactionEngine,
+		Log:                    ctx.Log,
+		Ctx:                    ctx.Ctx,
 	}
 
+	appliedInners := make([]tx.AppliedInnerTransaction, 0, len(innerTxns))
 	for _, innerTx := range innerTxns {
 		if innerTx == nil {
 			// Nil inner tx in AllOrNothing → rollback
-			return ter.TesSUCCESS
+			return ter.TesSUCCESS, nil
 		}
 
-		result := applyInnerTransaction(batchCtx, innerTx)
+		result, metadata := applyInnerWithEngine(
+			batchCtx,
+			innerTx,
+			ctx.TransactionIndex+1+uint32(len(appliedInners)),
+		)
 		if !result.IsSuccess() {
 			// Any failure in AllOrNothing → discard batch table (rollback)
-			return ter.TesSUCCESS
+			return ter.TesSUCCESS, nil
 		}
+		appliedInners = append(appliedInners, tx.AppliedInnerTransaction{
+			Transaction: innerTx,
+			Metadata:    metadata,
+		})
 	}
 
-	// All succeeded — commit batch-level changes to ctx.View
-	_, err := batchTable.Apply()
-	if err != nil {
-		return ter.TefINTERNAL
+	if err := batchTable.ApplyUnthreaded(); err != nil {
+		return ter.TefINTERNAL, nil
 	}
 
-	// Sync ctx.Account with the final state in the view
-	syncAccountFromView(ctx)
-
-	return ter.TesSUCCESS
+	return ter.TesSUCCESS, appliedInners
 }
 
-// applyInnerTransaction processes a single inner transaction against the given view.
-// It validates the sequence, increments it, and applies the transaction.
-// Failed transactions still increment the sequence.
-// Reference: rippled apply.cpp applyTransaction() with tapBATCH
-func applyInnerTransaction(ctx *tx.ApplyContext, innerTx tx.Transaction) ter.Result {
-	common := innerTx.GetCommon()
-
-	// Decode the inner transaction's account
-	accountID, err := state.DecodeAccountID(common.Account)
-	if err != nil {
-		return ter.TefINTERNAL
+func applyInnerWithEngine(
+	ctx *tx.ApplyContext,
+	innerTx tx.Transaction,
+	transactionIndex uint32,
+) (ter.Result, *tx.Metadata) {
+	if ctx.InnerTransactionEngine == nil {
+		return ter.TefINTERNAL, nil
 	}
-
-	accountKey := keylet.Account(accountID)
-
-	// Read account from the view
-	exists, err := ctx.View.Exists(accountKey)
-	if err != nil {
-		return ter.TefINTERNAL
+	result := ctx.InnerTransactionEngine.ApplyInnerTransaction(
+		ctx.Ctx,
+		ctx.View,
+		innerTx,
+		ctx.TxHash,
+		transactionIndex,
+	)
+	if !result.Applied {
+		return result.Result, nil
 	}
-
-	if !exists {
-		return ter.TerNO_ACCOUNT
-	}
-
-	accountData, err := ctx.View.Read(accountKey)
-	if err != nil {
-		return ter.TefINTERNAL
-	}
-
-	account, err := state.ParseAccountRoot(accountData)
-	if err != nil {
-		return ter.TefINTERNAL
-	}
-
-	// Determine whether this inner tx uses a ticket or a regular sequence.
-	// Reference: rippled Transactor::checkSeqProxy + consumeSeqProxy
-	isTicket := common.TicketSequence != nil && (common.Sequence == nil || *common.Sequence == 0)
-
-	if isTicket {
-		// Ticket-based inner transaction
-		ticketSeq := *common.TicketSequence
-
-		// Ticket must have been created already (ticketSeq < account.Sequence)
-		if account.Sequence <= ticketSeq {
-			return ter.TerPRE_SEQ // terPRE_TICKET equivalent
-		}
-
-		// Check ticket exists in the view
-		ticketKey := keylet.Ticket(accountID, ticketSeq)
-		ticketExists, tickErr := ctx.View.Exists(ticketKey)
-		if tickErr != nil || !ticketExists {
-			return ter.TefPAST_SEQ // tefNO_TICKET equivalent
-		}
-	} else {
-		// Regular sequence-based inner transaction
-		if common.Sequence != nil {
-			if *common.Sequence < account.Sequence {
-				return ter.TefPAST_SEQ
-			}
-			if *common.Sequence > account.Sequence {
-				return ter.TerPRE_SEQ
-			}
-		}
-	}
-
-	// Create per-tx state table for isolation
-	base, ok := ctx.View.(applystate.AtomicLedgerView)
-	if !ok {
-		return ter.TefINTERNAL
-	}
-	perTxTable := applystate.NewApplyStateTable(base, ctx.TxHash, ctx.Config.LedgerSequence, ctx.Config.Rules)
-
-	if isTicket {
-		// Ticket-based: consume the ticket (delete it, adjust owner/ticket counts).
-		// Sequence does NOT increment for ticket transactions.
-		// Reference: rippled Transactor::consumeSeqProxy + ticketDelete
-		ticketKey := keylet.Ticket(accountID, *common.TicketSequence)
-		ownerDirKey := keylet.OwnerDir(accountID)
-
-		// Remove the ticket from its owner directory page. The page is recorded in
-		// the ticket's sfOwnerNode; a TicketCreate can paginate the directory, so a
-		// hardcoded page-0 hint would fail to locate later tickets.
-		ticketPage := uint64(0)
-		if ticketData, readErr := perTxTable.Read(ticketKey); readErr == nil && ticketData != nil {
-			ticketPage = state.GetOwnerNode(ticketData)
-		}
-		if res, err := state.DirRemove(perTxTable, ownerDirKey, ticketPage, ticketKey.Key, true); err != nil || !res.Success {
-			return ter.TefBAD_LEDGER
-		}
-		if err := perTxTable.Erase(ticketKey); err != nil {
-			return ter.TefINTERNAL
-		}
-
-		if account.OwnerCount > 0 {
-			account.OwnerCount--
-		}
-		if account.TicketCount > 0 {
-			account.TicketCount--
-		}
-	} else {
-		// Increment sequence for regular sequence transactions
-		account.Sequence++
-	}
-
-	// Check delegate permission if Delegate field is present on the inner tx.
-	// This must happen after sequence increment because tec results still advance the sequence.
-	// Reference: rippled Transactor::checkPermission — verifies that the delegate
-	// account has a Delegate SLE granting permission for this tx type.
-	var delegateResult ter.Result
-	if common.Delegate != "" {
-		delegateResult = checkDelegatePermission(ctx, accountID, innerTx)
-	}
-
-	// Create inner apply context
-	innerCtx := &tx.ApplyContext{
-		View:            perTxTable,
-		Account:         account,
-		AccountID:       accountID,
-		Config:          ctx.Config,
-		TxHash:          ctx.TxHash,
-		Metadata:        ctx.Metadata,
-		InnerInvariants: ctx.InnerInvariants,
-		Log:             ctx.Log,
-		Ctx:             ctx.Ctx,
-	}
-
-	// Apply the inner transaction (skip if delegate check failed)
-	var result ter.Result
-	if delegateResult != ter.TesSUCCESS {
-		result = delegateResult
-	} else if appliable, ok := innerTx.(tx.Appliable); ok {
-		result = appliable.Apply(innerCtx)
-	} else {
-		result = ter.TesSUCCESS
-	}
-
-	// On success, write the sender account (with its fee/sequence/balance
-	// mutations) into the per-tx table so the inner delta is complete before the
-	// invariant pass runs. If the inner transaction deleted its own account
-	// (e.g. AccountDelete), the SLE was already erased, so leave it erased.
-	// rippled's apply preamble likewise writes the sender SLE into the
-	// perTxBatchView before doApply/checkInvariants.
-	if result.IsSuccess() {
-		if accountExists, _ := perTxTable.Exists(accountKey); accountExists {
-			updatedData, err := state.SerializeAccountRoot(account)
-			if err != nil {
-				return ter.TefINTERNAL
-			}
-			if err := perTxTable.Update(accountKey, updatedData); err != nil {
-				return ter.TefINTERNAL
-			}
-		}
-	}
-
-	// Run the inner transaction's own invariant pass against its complete,
-	// isolated delta, under the inner tx's type and result, before committing it
-	// to the batch view. Mirrors rippled, where each inner tx flows through full
-	// apply() with its own checkInvariants on its perTxBatchView (apply.cpp:
-	// 189-207). An inner invariant violation downgrades the inner result to the
-	// invariant-failed code so the inner delta is discarded below, exactly as a
-	// tec result is.
-	if result.IsSuccess() {
-		result = ctx.InnerInvariants.CheckInnerInvariants(innerTx, result, perTxTable)
-	}
-
-	if result.IsSuccess() {
-		if _, err := perTxTable.Apply(); err != nil {
-			return ter.TefINTERNAL
-		}
-	} else {
-		// TEC/TEF/TER: sequence increments but transaction effects are discarded.
-		// Update account state (sequence) directly in the parent view.
-		updatedData, err := state.SerializeAccountRoot(account)
-		if err != nil {
-			return ter.TefINTERNAL
-		}
-		if err := ctx.View.Update(accountKey, updatedData); err != nil {
-			return ter.TefINTERNAL
-		}
-	}
-
-	return result
-}
-
-// syncAccountFromView reads the outer account from the view and updates ctx.Account
-// so that the engine writes back the correct final state (with inner tx sequence/balance changes).
-func syncAccountFromView(ctx *tx.ApplyContext) {
-	accountKey := keylet.Account(ctx.AccountID)
-	data, err := ctx.View.Read(accountKey)
-	if err != nil {
-		return
-	}
-	account, err := state.ParseAccountRoot(data)
-	if err != nil {
-		return
-	}
-	ctx.Account.Balance = account.Balance
-	ctx.Account.Sequence = account.Sequence
-	ctx.Account.OwnerCount = account.OwnerCount
-	ctx.Account.TicketCount = account.TicketCount
-}
-
-// checkDelegatePermission checks whether the Delegate on an inner tx has permission
-// to execute the transaction on behalf of the account.
-// Reference: rippled Transactor::checkPermission in Transactor.cpp
-func checkDelegatePermission(ctx *tx.ApplyContext, accountID [20]byte, innerTx tx.Transaction) ter.Result {
-	common := innerTx.GetCommon()
-	delegateID, delegateErr := state.DecodeAccountID(common.Delegate)
-	if delegateErr != nil {
-		return ter.TerNO_DELEGATE_PERMISSION
-	}
-	delegateKeylet := keylet.Delegate(accountID, delegateID)
-	delegateData, readErr := ctx.View.Read(delegateKeylet)
-	if readErr != nil || delegateData == nil {
-		return ter.TerNO_DELEGATE_PERMISSION
-	}
-	delegateEntry, parseErr := state.ParseDelegate(delegateData)
-	if parseErr != nil {
-		return ter.TerNO_DELEGATE_PERMISSION
-	}
-	// Check if the delegate SLE grants permission for this tx type.
-	txTypeValue := uint32(innerTx.TxType())
-	if !delegateEntry.HasTxPermission(txTypeValue) {
-		return ter.TerNO_DELEGATE_PERMISSION
-	}
-	return ter.TesSUCCESS
+	return result.Result, result.Metadata
 }

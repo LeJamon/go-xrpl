@@ -237,35 +237,55 @@ func TestCheckLoanGuardsUpwardPaymentCount(t *testing.T) {
 		return n
 	}
 
-	for _, tc := range []struct {
+	vectors := []struct {
+		name                string
+		asset               Asset
+		principal           string
+		periodicPayment     string
+		valueOutstanding    string
+		paymentTotal        uint32
+		towardsZeroPayments int64
+		loanScale           int
+	}{
+		{"IOU twelve payments", Asset{}, "1000", "83.33364250408379297", "1000.003710049006", 12, 11, -12},
+		{"XRP twelve payments", Asset{Integral: true}, "1000000", "83333.33848930448955", "1000001", 12, 11, 0},
+		{"IOU three payments", Asset{}, "20", "6.721536094178039612", "20.164608282535", 3, 2, -12},
+	}
+	scales := []struct {
 		name  string
 		scale state.MantissaScale
 	}{
 		{"small", state.MantissaScaleSmall},
 		{"large legacy", state.MantissaScaleLargeLegacy},
 		{"large", state.MantissaScaleLarge},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			principal := parse(t, tc.scale, "1000")
-			properties := LoanProperties{
-				PeriodicPayment: parse(t, tc.scale, "83.33364250408379297"),
-				LoanState: LoanState{
-					ValueOutstanding: parse(t, tc.scale, "1000.003710049006"),
-				},
-				LoanScale:             -12,
-				FirstPaymentPrincipal: parse(t, tc.scale, "1"),
-			}
-			roundedPayment := roundPeriodicPayment(Asset{}, properties.PeriodicPayment, properties.LoanScale)
-			quotient := properties.LoanState.ValueOutstanding.DivRounded(roundedPayment, state.RoundUpward)
+	}
 
-			if got := quotient.ToInt64WithMode(state.RoundTowardsZero); got != 11 {
-				t.Fatalf("toward-zero payment count = %d, want 11", got)
-			}
-			if got := quotient.ToInt64WithMode(state.RoundUpward); got != 12 {
-				t.Fatalf("upward payment count = %d, want 12", got)
-			}
-			if got := CheckLoanGuards(Asset{}, principal, true, 12, properties); got != ter.TesSUCCESS {
-				t.Fatalf("CheckLoanGuards = %v, want tesSUCCESS", got)
+	for _, vector := range vectors {
+		t.Run(vector.name, func(t *testing.T) {
+			for _, scale := range scales {
+				t.Run(scale.name, func(t *testing.T) {
+					principal := parse(t, scale.scale, vector.principal)
+					properties := LoanProperties{
+						PeriodicPayment: parse(t, scale.scale, vector.periodicPayment),
+						LoanState: LoanState{
+							ValueOutstanding: parse(t, scale.scale, vector.valueOutstanding),
+						},
+						LoanScale:             vector.loanScale,
+						FirstPaymentPrincipal: parse(t, scale.scale, "1"),
+					}
+					roundedPayment := roundPeriodicPayment(vector.asset, properties.PeriodicPayment, properties.LoanScale)
+					quotient := properties.LoanState.ValueOutstanding.DivRounded(roundedPayment, state.RoundUpward)
+
+					if got := quotient.ToInt64WithMode(state.RoundTowardsZero); got != vector.towardsZeroPayments {
+						t.Fatalf("toward-zero payment count = %d, want %d", got, vector.towardsZeroPayments)
+					}
+					if got := quotient.ToInt64WithMode(state.RoundUpward); got != int64(vector.paymentTotal) {
+						t.Fatalf("upward payment count = %d, want %d", got, vector.paymentTotal)
+					}
+					if got := CheckLoanGuards(vector.asset, principal, true, vector.paymentTotal, properties); got != ter.TesSUCCESS {
+						t.Fatalf("CheckLoanGuards = %v, want tesSUCCESS", got)
+					}
+				})
 			}
 		})
 	}

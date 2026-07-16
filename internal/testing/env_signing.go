@@ -4,7 +4,6 @@ import (
 	"encoding/hex"
 	"strconv"
 
-	txengine "github.com/LeJamon/go-xrpl/internal/tx/engine"
 	"github.com/LeJamon/go-xrpl/internal/tx/sign"
 
 	addresscodec "github.com/LeJamon/go-xrpl/codec/addresscodec"
@@ -219,25 +218,21 @@ func (e *TestEnv) submitWithSigVerification(txn tx.Transaction) TxResult {
 		verifySignatures: true,
 	})
 
-	engine := txengine.NewEngine(e.ledger, engineConfig)
 	// Seed txCount so metadata.TransactionIndex matches rippled — see applyDirect.
-	engine.SetBaseTxCount(e.txInLedger)
-	applyResult := engine.Apply(txn)
+	applyResult := e.applyStaged(txn, engineConfig, e.txInLedger, true)
 
 	if applyResult.Result.IsApplied() {
-		e.txInLedger++
-		e.closingTxTotal++
-		e.recordTxFeeLevel(txn)
-		if counter, ok := txn.(innerTxCounter); ok {
-			e.closingTxTotal += uint32(counter.InnerTxCount())
-		}
+		e.txInLedger += 1 + uint32(len(applyResult.AppliedInnerTransactions))
+		e.closingTxTotal += e.recordFeeMetricTransactions(txn, applyResult.AppliedInnerTransactions)
 	}
+	e.trackDirectTransaction(txn, applyResult)
 
 	return TxResult{
-		Code:     applyResult.Result.String(),
-		Success:  applyResult.Result.IsSuccess(),
-		Message:  applyResult.Message,
-		Metadata: applyResult.Metadata,
+		Code:                     applyResult.Result.String(),
+		Success:                  applyResult.Result.IsSuccess(),
+		Message:                  applyResult.Message,
+		Metadata:                 applyResult.Metadata,
+		AppliedInnerTransactions: applyResult.AppliedInnerTransactions,
 	}
 }
 

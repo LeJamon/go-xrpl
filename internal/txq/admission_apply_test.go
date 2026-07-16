@@ -53,7 +53,8 @@ func (c *stubApplyCtx) AccountExists([20]byte) bool                    { return 
 func (c *stubApplyCtx) TicketExists(_ [20]byte, t uint32) bool         { return c.tickets[t] }
 func (c *stubApplyCtx) GetAccountBalance([20]byte) uint64              { return c.balance }
 func (c *stubApplyCtx) GetAccountReserve(uint32) uint64                { return c.reserve }
-func (c *stubApplyCtx) GetBaseFee(tx.Transaction) uint64               { return c.baseFee }
+func (c *stubApplyCtx) GetBaseFees(tx.Transaction) (uint64, uint64)    { return c.baseFee, c.baseFee }
+func (c *stubApplyCtx) GetReferenceFee() uint64                        { return c.baseFee }
 func (c *stubApplyCtx) GetTxInLedger() uint32                          { return c.txInLedger }
 func (c *stubApplyCtx) GetLedgerSequence() uint32                      { return c.ledgerSeq }
 func (c *stubApplyCtx) GetApplyFlags() tx.ApplyFlags                   { return c.flags }

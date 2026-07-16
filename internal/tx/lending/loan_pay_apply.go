@@ -5,6 +5,7 @@ import (
 	"github.com/LeJamon/go-xrpl/internal/ledger/state"
 	"github.com/LeJamon/go-xrpl/internal/tx"
 	"github.com/LeJamon/go-xrpl/internal/tx/lending/lmath"
+	"github.com/LeJamon/go-xrpl/internal/tx/sign"
 	"github.com/LeJamon/go-xrpl/internal/tx/ter"
 	"github.com/LeJamon/go-xrpl/internal/tx/vault"
 	"github.com/LeJamon/go-xrpl/keylet"
@@ -70,6 +71,9 @@ func accountToLoan(loan *loanData, acc *lmath.LoanAccount) {
 func (l *LoanPay) CalculateBaseFee(view tx.LedgerView, config tx.EngineConfig) uint64 {
 	number := func(value string) lmath.N { return lendNumForRules(value, config.RequireRules()) }
 	normal := config.BaseFee
+	if sign.IsMultiSigned(l) {
+		normal = sign.CalculateMultiSigFee(config.BaseFee, len(l.GetCommon().Signers))
+	}
 	if l.GetFlags()&(TfLoanFullPayment|TfLoanLatePayment) != 0 {
 		return normal
 	}

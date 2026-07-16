@@ -84,6 +84,92 @@ Behavioral oracle: clean local rippled v3.2.0 worktree at
 - `just build-all`, `just vet`, CI-pinned golangci-lint v2.11.3 with both strict
   and advisory configs, formatting, and `git diff --check` pass.
 
+# Issue #1337 — LoanSet payment-count rounding
+
+## Goal
+
+- Accept valid LoanSet schedules whose upward-rounded payment quotient remains
+  fractionally below the integer payment count.
+- Match rippled v3.2.0's ambient upward rounding through the final integer
+  conversion.
+- Cover the replay values from issue #1337 and audit equivalent guarded
+  conversions for the same error pattern.
+
+## Plan
+
+- [x] Validate the issue, linked work, clean worktree, exact base, and local oracle.
+- [x] Trace LoanSet payment guards and rippled v3.2.0 Number rounding semantics.
+- [x] Add a focused failing regression and implement the minimal parity fix.
+- [x] Audit other ports of NumberRoundModeGuard expressions with final conversions.
+- [x] Run formatting, focused and broader tests, vet, lint, build, and diff review.
+- [x] Record review results, commit intentional files, push, and open the PR.
+- [x] Separate outer Batch application from committed inner application so each
+      transaction has rippled-compatible state metadata.
+- [x] Persist exactly the committed inner transaction leaves atomically with the
+      outer transaction and advance transaction indexes for every leaf.
+- [x] Make replay consume Batch inner leaves without applying their state twice.
+- [x] Split outer-only open-ledger/TxQ application from closed-ledger Batch
+      construction, preserving one open transaction and committed inner leaves
+      only during ledger build/replay.
+- [x] Recover inner preclaim failures per transaction and retain the
+      LendingProtocol pseudo-account authorization guard used by rippled 3.2.0.
+- [x] Prove Batch build failure is atomic after outer staging and before an
+      inner leaf is published.
+- [x] Re-audit the complete behavior diff against the exact rippled v3.2.0 oracle,
+      then run only the finalization skill's build, vet, and lint gates.
+
+## Review
+
+- Rippled v3.2.0 keeps `Number::RoundingMode::Upward` active through both
+  Guard 4's division and its `std::int64_t` conversion. Go now applies upward
+  rounding to both operations, so the recorded 11.999... quotient computes 12
+  payments and returns `tesSUCCESS` across all Number mantissa scales.
+- The ambient-rounding audit found and fixed the same mismatch in LoanPay fee
+  estimation: overpayments now retain upward rounding through the payment-count
+  conversion. LoanPay fee increments now also preserve the normal multisign fee
+  multiplier used by rippled.
+- Production-path review found and fixed two existing LoanSet divergences: the
+  minimum fee now includes counterparty signers, and new Loans are linked to the
+  LoanBroker pseudo-account directory used by the deletion path.
+- Counterparty signatures now have one typed JSON/wire representation, so fee
+  calculation and signature verification use the same parsed object. Direct
+  apply, Batch inner transactions, fee autofill, and TxQ all share the same
+  per-transaction fee dispatch.
+- TxQ now keeps contextual, ordinary, and ledger-reference fees distinct. This
+  preserves SetRegularKey's zero-fee waiver and nonzero-paid priority, custom
+  transaction normalization, reserve checks, and closed-ledger fee metrics.
+  Closed-ledger dispatch carries the full fee schedule and parent close time.
+- Inner Batch SetRegularKey transactions cannot receive the top-level password
+  change waiver. Batch resynchronization now preserves the complete outer
+  AccountRoot after inner mutations while still allowing an inner AccountDelete
+  to erase it.
+- All three recorded devnet recurrences exercise the payment-count guard across
+  every Number mantissa scale. The XRP recurrence also submits a real LoanSet
+  and verifies the resulting Loan, Vault, LoanBroker, and borrower state. The
+  primary IOU vector reproduces its exact periodic payment, total value, and loan
+  scale from the LoanSet inputs. The cited replay artifacts and parent ledger
+  state are not present locally, so the ledger/account/transaction roots could
+  not be rerun.
+- Finalization now separates rippled's low-level outer-only open/TxQ apply from
+  its closed-ledger `applyTransaction` Batch wrapper. Committed inners re-enter
+  the full engine, receive consecutive indexes and `ParentBatchID` metadata,
+  and are staged with the outer state and transaction leaves atomically.
+- All-or-nothing Batch state commits without rethreading already-threaded inner
+  changes. Per-inner preclaim panics become `tefEXCEPTION`, and inner pseudo-
+  account authorization retains the LendingProtocol `tefBAD_AUTH` guard.
+- Inbound replay validates the expected inner hash, index, parent Batch ID, and
+  result before installing the peer leaf without applying state twice. Open-
+  ledger replay/relay enumeration filters inner leaves; closed fee metrics keep
+  all committed leaves.
+- TestEnv TxQ admission counts only the outer Batch. A close containing a Batch
+  rebuilds the ledger before fee metrics, so committed inners affect state and
+  the closed count while the next open ledger starts with the correct outer-only
+  queue count. Snapshot staging covers inner-leaf serialization failures.
+- Passed `just fmt`, `go test ./internal/tx/lending/... -count=1`,
+  `go test ./internal/testing/lending -count=1`, `just test-tx`, `just vet`,
+  CI-pinned strict and advisory lint, the tag-gated PostgreSQL vet check,
+  `just build-all`, and `git diff --check`.
+
 # Issue #1336 — Escrow replay directory defaults
 
 Target: `origin/main` at `f0db8a22e1386116d08eb7efb21889997bd97af4`.
@@ -125,44 +211,6 @@ Behavioral oracle: clean local rippled `3.2.0` worktree at
 - Passed `go test ./internal/replaytool -count=1`, focused race tests, `just vet`,
   CI-pinned strict and advisory lint with zero issues, `just build`, formatting,
   and `git diff --check`.
-# Issue #1337 — LoanSet payment-count rounding
-
-## Goal
-
-- Accept valid LoanSet schedules whose upward-rounded payment quotient remains
-  fractionally below the integer payment count.
-- Match rippled v3.2.0's ambient upward rounding through the final integer
-  conversion.
-- Cover the replay values from issue #1337 and audit equivalent guarded
-  conversions for the same error pattern.
-
-## Plan
-
-- [x] Validate the issue, linked work, clean worktree, exact base, and local oracle.
-- [x] Trace LoanSet payment guards and rippled v3.2.0 Number rounding semantics.
-- [x] Add a focused failing regression and implement the minimal parity fix.
-- [x] Audit other ports of NumberRoundModeGuard expressions with final conversions.
-- [x] Run formatting, focused and broader tests, vet, lint, build, and diff review.
-- [x] Record review results, commit intentional files, push, and open the PR.
-
-## Review
-
-- Rippled v3.2.0 keeps `Number::RoundingMode::Upward` active through both
-  Guard 4's division and its `std::int64_t` conversion. Go now applies upward
-  rounding to both operations, so the recorded 11.999... quotient computes 12
-  payments and returns `tesSUCCESS` across all Number mantissa scales.
-- The ambient-rounding audit found and fixed the same mismatch in LoanPay fee
-  estimation: overpayments now retain upward rounding through the payment-count
-  conversion. Other rounded-arithmetic integer conversions are mode-consistent.
-- The primary devnet vector reproduces its exact periodic payment, total value,
-  and loan scale from the LoanSet inputs. The cited replay artifacts and parent
-  ledger state are not present locally, so the ledger/account/transaction roots
-  could not be rerun.
-- Passed `just fmt`, `go test ./internal/tx/lending/... -count=1`,
-  `go test ./internal/testing/lending -count=1`, `just test-tx`, `just vet`,
-  CI-pinned strict and advisory lint, the tag-gated PostgreSQL vet check,
-  `just build-all`, and `git diff --check`.
-
 # Issue #1331 — VaultCreate Scale template allowlist
 
 ## Goal
