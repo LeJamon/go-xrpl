@@ -131,9 +131,9 @@ func (p *PermissionedDomainDelete) Apply(ctx *tx.ApplyContext) ter.Result {
 	// Remove from owner directory
 	// Reference: rippled PermissionedDomainDelete.cpp doApply()
 	ownerDirKey := keylet.OwnerDir(ctx.AccountID)
-	if _, err := state.DirRemove(ctx.View, ownerDirKey, existing.OwnerNode, domainKeylet.Key, false); err != nil {
-		ctx.Log.Error("permissioned domain delete: failed to remove from directory", "error", err)
-		return ter.TefBAD_LEDGER
+	if result := tx.DirRemoveOrBadLedger(ctx.View, ownerDirKey, existing.OwnerNode, domainKeylet.Key); result != ter.TesSUCCESS {
+		ctx.Log.Error("permissioned domain delete: failed to remove from directory")
+		return result
 	}
 
 	if err := ctx.View.Erase(domainKeylet); err != nil {
