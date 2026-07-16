@@ -99,8 +99,6 @@ func checkValidLoan(entries []InvariantEntry, rules *amendment.Rules) *Invariant
 	return nil
 }
 
-// checkValidLoanBroker enforces the numeric and structural ValidLoanBroker
-// checks on every directly or indirectly affected LoanBroker.
 func checkValidLoanBroker(entries []InvariantEntry, view ReadView, rules *amendment.Rules) *InvariantViolation {
 	if rules == nil || !rules.Enabled(amendment.FeatureLendingProtocol) {
 		return nil
