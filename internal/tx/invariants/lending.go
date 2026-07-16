@@ -100,16 +100,102 @@ func checkValidLoan(entries []InvariantEntry, rules *amendment.Rules) *Invariant
 }
 
 // checkValidLoanBroker enforces the numeric and structural ValidLoanBroker
-// checks on every modified/created LoanBroker.
+// checks on every directly or indirectly affected LoanBroker.
 func checkValidLoanBroker(entries []InvariantEntry, view ReadView, rules *amendment.Rules) *InvariantViolation {
 	if rules == nil || !rules.Enabled(amendment.FeatureLendingProtocol) {
 		return nil
 	}
+
+	type brokerState struct {
+		before []byte
+		after  []byte
+	}
+
+	brokers := make(map[[32]byte]brokerState)
+	var unkeyedBrokers []brokerState
+	var lines, mpts [][]byte
+	addBroker := func(id [32]byte) {
+		if id == ([32]byte{}) {
+			return
+		}
+		if _, ok := brokers[id]; !ok {
+			brokers[id] = brokerState{}
+		}
+	}
+
 	for _, e := range entries {
-		if e.EntryType != "LoanBroker" || e.After == nil {
+		if e.After == nil {
 			continue
 		}
-		after, err := decodeEntry(e.After)
+		switch e.EntryType {
+		case "LoanBroker":
+			broker := brokerState{before: e.Before, after: e.After}
+			if e.Key == ([32]byte{}) {
+				unkeyedBrokers = append(unkeyedBrokers, broker)
+			} else {
+				brokers[e.Key] = broker
+			}
+		case "AccountRoot":
+			account, err := state.ParseAccountRoot(e.After)
+			if err != nil {
+				return lendingViolation("ValidLoanBroker", fmt.Sprintf("could not decode AccountRoot: %v", err))
+			}
+			if account.HasLoanBrokerID() {
+				addBroker(account.LoanBrokerID)
+			}
+		case "RippleState":
+			lines = append(lines, e.After)
+		case "MPToken":
+			mpts = append(mpts, e.After)
+		}
+	}
+
+	addBrokerForAccount := func(accountID [20]byte) *InvariantViolation {
+		data, err := view.Read(keylet.Account(accountID))
+		if err != nil {
+			return lendingViolation("ValidLoanBroker", fmt.Sprintf("could not read account: %v", err))
+		}
+		if data == nil {
+			return nil
+		}
+		account, err := state.ParseAccountRoot(data)
+		if err != nil {
+			return lendingViolation("ValidLoanBroker", fmt.Sprintf("could not decode AccountRoot: %v", err))
+		}
+		if account.HasLoanBrokerID() {
+			addBroker(account.LoanBrokerID)
+		}
+		return nil
+	}
+
+	for _, data := range lines {
+		line, err := state.ParseRippleState(data)
+		if err != nil {
+			return lendingViolation("ValidLoanBroker", fmt.Sprintf("could not decode RippleState: %v", err))
+		}
+		for _, address := range []string{line.LowLimit.Issuer, line.HighLimit.Issuer} {
+			accountID, err := state.DecodeAccountID(address)
+			if err != nil {
+				return lendingViolation("ValidLoanBroker", fmt.Sprintf("could not decode trust line account: %v", err))
+			}
+			if violation := addBrokerForAccount(accountID); violation != nil {
+				return violation
+			}
+		}
+	}
+
+	for _, data := range mpts {
+		token, err := state.ParseMPToken(data)
+		if err != nil {
+			return lendingViolation("ValidLoanBroker", fmt.Sprintf("could not decode MPToken: %v", err))
+		}
+		if violation := addBrokerForAccount(token.Account); violation != nil {
+			return violation
+		}
+	}
+
+	checkBroker := func(beforeData, afterData []byte) *InvariantViolation {
+		after, err := decodeEntry(afterData)
 		if err != nil {
 			return lendingViolation("ValidLoanBroker", fmt.Sprintf("could not decode LoanBroker: %v", err))
 		}
@@ -119,8 +205,8 @@ func checkValidLoanBroker(entries []InvariantEntry, view ReadView, rules *amendm
 		if numFieldIsNegative(after, "CoverAvailable") {
 			return lendingViolation("ValidLoanBroker", "cover available is negative")
 		}
-		if e.Before != nil {
-			if before, berr := decodeEntry(e.Before); berr == nil {
+		if beforeData != nil {
+			if before, berr := decodeEntry(beforeData); berr == nil {
 				if u32Field(before, "LoanSequence") > u32Field(after, "LoanSequence") {
 					return lendingViolation("ValidLoanBroker", "loan sequence number decreased")
 				}
@@ -161,6 +247,29 @@ func checkValidLoanBroker(entries []InvariantEntry, view ReadView, rules *amendm
 		}
 		if rules.Enabled(amendment.FeatureFixCleanup3_1_3) && coverAvailable.Cmp(pseudoBalance) > 0 {
 			return lendingViolation("ValidLoanBroker", "cover available is greater than pseudo-account asset balance")
+		}
+		return nil
+	}
+
+	for _, broker := range unkeyedBrokers {
+		if violation := checkBroker(broker.before, broker.after); violation != nil {
+			return violation
+		}
+	}
+	for brokerID, broker := range brokers {
+		after := broker.after
+		if after == nil {
+			var err error
+			after, err = view.Read(keylet.LoanBrokerByID(brokerID))
+			if err != nil {
+				return lendingViolation("ValidLoanBroker", fmt.Sprintf("could not read LoanBroker: %v", err))
+			}
+			if after == nil {
+				return lendingViolation("ValidLoanBroker", "loan broker is missing")
+			}
+		}
+		if violation := checkBroker(broker.before, after); violation != nil {
+			return violation
 		}
 	}
 	return nil
