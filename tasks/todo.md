@@ -21,7 +21,7 @@ transaction metadata without changing removal behavior when other entries remain
       `DirRemove` call sites for accidental behavior expansion.
 - [x] Run formatting, focused and affected-package tests, build, vet, strict CI
       lint, diff checks, and a final Go-quality/rippled-conformance review.
-- [ ] Stage intentional files only, commit, push, open the PR against `main`, and
+- [x] Stage intentional files only, commit, push, open the PR against `main`, and
       verify the published branch, PR head, mergeability, and CI state.
 
 ## Review
@@ -42,6 +42,9 @@ transaction metadata without changing removal behavior when other entries remain
   issue are not present in the workspace, so the exact full-ledger root replay
   was not rerun locally; the focused regression directly pins the divergent SLE
   bytes' semantic fields and metadata classification.
+- Behavior commit `3821b3ef` is pushed on
+  `fix/issue-1338-keep-owner-directory`; PR #1346 targets `main` at
+  https://github.com/LeJamon/go-xrpl/pull/1346.
 
 # Issue #1331 — VaultCreate Scale template allowlist
 
