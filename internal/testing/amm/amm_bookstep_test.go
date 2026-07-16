@@ -1258,6 +1258,8 @@ func TestAMMBookStep_FixOverflowOffer(t *testing.T) {
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			env := amm.NewAMMTestEnv(t)
+			env.DisableFeature("SingleAssetVault")
+			env.DisableFeature("LendingProtocol")
 			gatehub := jtx.NewAccount("gatehub")
 			bitstamp := jtx.NewAccount("bitstamp")
 			trader := jtx.NewAccount("trader")

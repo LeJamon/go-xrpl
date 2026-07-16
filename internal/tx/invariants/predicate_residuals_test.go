@@ -222,11 +222,7 @@ func (t ammCreateTx) GetAmount2Asset() Asset {
 	return Asset{Currency: "USD", Issuer: addrIssuer}
 }
 
-// TestValidAMM_CreateToleranceAbsorbsULP: the create-time LP-token reconstruction
-// (sqrt(amount*amount2)) can land one unit off the recorded LPTokenBalance in the
-// 16th significant digit. That ULP-scale drift must NOT trip ValidAMM, while a
-// gross mismatch still does. See issue #857 (c).
-func TestValidAMM_CreateToleranceAbsorbsULP(t *testing.T) {
+func TestValidAMM_CreateRequiresExactLPTokenBalance(t *testing.T) {
 	rules := amendment.AllSupportedRules()
 	tx := ammCreateTx{stubTx: stubTx{txType: TypeAMMCreate}}
 
@@ -239,10 +235,6 @@ func TestValidAMM_CreateToleranceAbsorbsULP(t *testing.T) {
 		t.Fatalf("DecodeAccountID: %v", err)
 	}
 
-	// Pool: 25_000_000 (XRP side, in drops) and 250000000 USD → the invariant
-	// reconstructs sqrt(product) = 79056941.50420945. A recorded LPTokenBalance
-	// one unit off in the 16th significant digit (…46) is ULP-scale drift the
-	// tolerance must absorb.
 	acctBlob := mustSerializeAccount(t, &state.AccountRoot{
 		Account: addrHolderA, Balance: 25_000_000, Sequence: 1,
 	})
@@ -273,12 +265,16 @@ func TestValidAMM_CreateToleranceAbsorbsULP(t *testing.T) {
 		keylet.Line(ammID, issuerID, "USD").Key: rsBlob,
 	}}
 
-	within := []InvariantEntry{{EntryType: "AMM", After: ammSLE(t, addrHolderA, "79056941.50420946")}}
-	if v := checkValidAMM(tx, TesSUCCESS, within, view, rules); v != nil {
-		t.Fatalf("ULP-scale LP token drift must be tolerated, got violation %v", v)
+	exact := []InvariantEntry{{EntryType: "AMM", After: ammSLE(t, addrHolderA, "79056941.50420948")}}
+	if v := checkValidAMM(tx, TesSUCCESS, exact, view, rules); v != nil {
+		t.Fatalf("exact LP token balance rejected: %v", v)
 	}
 
-	// A 1% mismatch is well outside the 1e-11 tolerance and must trip.
+	ulpDrift := []InvariantEntry{{EntryType: "AMM", After: ammSLE(t, addrHolderA, "79056941.50420947")}}
+	if v := checkValidAMM(tx, TesSUCCESS, ulpDrift, view, rules); v == nil {
+		t.Fatal("expected ValidAMM violation for one-ULP LP-token mismatch")
+	}
+
 	gross := []InvariantEntry{{EntryType: "AMM", After: ammSLE(t, addrHolderA, "80000000")}}
 	if v := checkValidAMM(tx, TesSUCCESS, gross, view, rules); v == nil {
 		t.Fatal("expected ValidAMM violation for a gross LP-token mismatch")

@@ -294,6 +294,8 @@ func TestAMM(t *testing.T, pool *[2]tx.Amount, tradingFee uint16, callback TestA
 	}
 
 	env := NewAMMTestEnv(t)
+	env.DisableFeature("SingleAssetVault")
+	env.DisableFeature("LendingProtocol")
 
 	// Determine funding amounts — at least 30,000 of each
 	xrpFund := int64(30000)

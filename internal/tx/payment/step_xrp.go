@@ -194,7 +194,7 @@ func (s *XRPEndpointStep) GetQualityFunc(v *PaymentSandbox, prevStepDir DebtDire
 	if q == nil {
 		return nil, dir
 	}
-	return NewCLOBLikeQualityFunction(*q), dir
+	return newCLOBLikeQualityFunction(numberMath{ctx: v.NumberContext()}, *q), dir
 }
 
 // IsZero returns true if the amount is zero

@@ -738,6 +738,7 @@ func (c *CheckCash) applyCashIOUAmount(ctx *tx.ApplyContext, check *state.CheckD
 		false,        // no limit quality
 		ctx.TxHash,
 		ctx.Config.LedgerSequence,
+		payment.WithNumberContext(ctx.NumberContext()),
 	)
 	actualOut, sandbox, flowResult := rc.ActualOut, rc.Sandbox, rc.Result
 

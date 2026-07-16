@@ -37,6 +37,7 @@ type FlowCrossParams struct {
 	FixAMMv1_1          bool
 	FixAMMv1_2          bool
 	FixAMMOverflowOffer bool
+	NumberContext       *state.NumberContext
 
 	// DomainID, when non-nil, restricts crossing to a permissioned-domain book.
 	DomainID *[32]byte
@@ -110,6 +111,9 @@ func FlowCross(
 	// Create sandbox for tracking changes
 	sandbox := NewPaymentSandbox(view)
 	sandbox.SetTransactionContext(txHash, ledgerSeq)
+	if params.NumberContext != nil {
+		sandbox.SetNumberContext(*params.NumberContext)
+	}
 
 	// Convert deliver amount (what taker wants to receive)
 	// Reference: rippled CreateOffer.cpp - deliver = takerAmount.out = takerPays
@@ -244,7 +248,7 @@ func FlowCross(
 
 	// Create AMMContext for offer crossing.
 	// Reference: rippled Flow.cpp line 85: AMMContext ammContext(src, false);
-	ammCtx := NewAMMContext(takerAccount, false)
+	ammCtx := NewAMMContext(takerAccount, false, sandbox.NumberContext())
 
 	// Initialize AMM liquidity on BookSteps.
 	// Reference: rippled BookStep constructor reads AMM SLE and creates AMMLiquidity.

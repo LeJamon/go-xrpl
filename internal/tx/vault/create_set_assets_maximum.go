@@ -70,16 +70,7 @@ func parseCreateSetNumber(s string) (state.XRPLNumber, error) {
 }
 
 func parseCreateSetNumberForRules(s string, rules *amendment.Rules) (state.XRPLNumber, error) {
-	scale := state.MantissaScaleLarge
-	if rules != nil {
-		scale = state.MantissaScaleForRulesWithFix(
-			true,
-			rules.Enabled(amendment.FeatureSingleAssetVault),
-			rules.Enabled(amendment.FeatureLendingProtocol),
-			rules.FixCleanup3_2_0Enabled(),
-		)
-	}
-	return state.ParseXRPLNumber(s, scale, state.RoundToNearest)
+	return state.ParseXRPLNumber(s, tx.NumberContextForRules(rules).Scale(), state.RoundToNearest)
 }
 
 func canonicalCreateSetAssetsMaximum(asset tx.Asset, value state.XRPLNumber) string {

@@ -30,39 +30,34 @@ const AuctionSlotFeeScaleFactor = 100000
 //
 // Reference: rippled QualityFunction.h and QualityFunction.cpp
 type QualityFunction struct {
+	math numberMath
 	// m is the slope (zero for CLOB-like constant quality)
-	m tx.Amount
+	m state.XRPLNumber
 	// b is the intercept
-	b tx.Amount
+	b state.XRPLNumber
 	// quality is set when the function is constant (CLOB-like).
 	// nil means the function has a non-zero slope (AMM).
 	quality *Quality
-}
-
-// numberOne returns 1.0 as an IOU Amount for arithmetic.
-func numberOne() tx.Amount {
-	return state.NewIssuedAmountFromValue(1e15, -15, "", "")
-}
-
-// numberZero returns 0 as an IOU Amount.
-func numberZero() tx.Amount {
-	return state.NewIssuedAmountFromValue(0, -100, "", "")
 }
 
 // NewCLOBLikeQualityFunction creates a QualityFunction for CLOB-like offers
 // (constant quality). m = 0, b = 1/quality.rate().
 // Reference: rippled QualityFunction.cpp QualityFunction(Quality, CLOBLikeTag)
 func NewCLOBLikeQualityFunction(q Quality) *QualityFunction {
+	return newCLOBLikeQualityFunction(legacyNumberMath(), q)
+}
+
+func newCLOBLikeQualityFunction(m numberMath, q Quality) *QualityFunction {
 	rate := q.Rate()
 	if rate.Signum() <= 0 {
 		return nil
 	}
 	// b = 1 / quality.rate()
-	one := numberOne()
-	b := numberDiv(one, rate)
+	b := m.one().Div(m.fromAmount(rate, state.RoundToNearest))
 
 	return &QualityFunction{
-		m:       numberZero(),
+		math:    m,
+		m:       m.zero(),
 		b:       b,
 		quality: &q,
 	}
@@ -80,36 +75,38 @@ func NewCLOBLikeQualityFunction(q Quality) *QualityFunction {
 //
 // Reference: rippled QualityFunction.h AMMTag constructor
 func NewAMMQualityFunction(poolGets, poolPays tx.Amount, tradingFee uint16) *QualityFunction {
+	return newAMMQualityFunction(legacyNumberMath(), poolGets, poolPays, tradingFee)
+}
+
+func newAMMQualityFunction(m numberMath, poolGets, poolPays tx.Amount, tradingFee uint16) *QualityFunction {
 	if poolGets.Signum() <= 0 || poolPays.Signum() <= 0 {
 		return nil
 	}
 
 	// Convert amounts to Number-like (IOU) for uniform arithmetic
-	nPoolGets := toNumber(poolGets)
-	nPoolPays := toNumber(poolPays)
+	nPoolGets := m.fromAmount(poolGets, state.RoundToNearest)
+	nPoolPays := m.fromAmount(poolPays, state.RoundToNearest)
 
 	// cfee = 1 - tradingFee / 100000
 	// Compute as an IOU Amount: (100000 - tradingFee) / 100000
-	one := numberOne()
-	var cfee tx.Amount
+	var cfee state.XRPLNumber
 	if tradingFee == 0 {
-		cfee = one
+		cfee = m.one()
 	} else {
-		feeNum := state.NewIssuedAmountFromValue(int64(tradingFee), 0, "", "")
-		scaleFactor := state.NewIssuedAmountFromValue(AuctionSlotFeeScaleFactor, 0, "", "")
-		feeFrac := numberDiv(feeNum, scaleFactor) // tradingFee / 100000
-		cfee = ammSub(one, feeFrac)               // 1 - tradingFee/100000
+		feeFrac := m.int(int64(tradingFee)).Div(m.int(AuctionSlotFeeScaleFactor))
+		cfee = m.sub(m.one(), feeFrac)
 	}
 
 	// m = -cfee / poolGets
 	cfeeNeg := cfee.Negate()
-	m := numberDiv(cfeeNeg, nPoolGets)
+	slope := cfeeNeg.Div(nPoolGets)
 
 	// b = poolPays * cfee / poolGets
-	b := numberDiv(numberMul(nPoolPays, cfee), nPoolGets)
+	b := nPoolPays.Mul(cfee).Div(nPoolGets)
 
 	return &QualityFunction{
-		m:       m,
+		math:    m,
+		m:       slope,
 		b:       b,
 		quality: nil,
 	}
@@ -125,11 +122,11 @@ func NewAMMQualityFunction(poolGets, poolPays tx.Amount, tradingFee uint16) *Qua
 // Reference: rippled QualityFunction.cpp combine()
 func (qf *QualityFunction) Combine(other QualityFunction) {
 	// m += b * other.m
-	bTimesOtherM := numberMul(qf.b, other.m)
-	qf.m = ammAdd(qf.m, bTimesOtherM)
+	bTimesOtherM := qf.b.Mul(other.m)
+	qf.m = qf.m.Add(bTimesOtherM)
 
 	// b *= other.b
-	qf.b = numberMul(qf.b, other.b)
+	qf.b = qf.b.Mul(other.b)
 
 	// If m != 0, this is no longer a constant quality function
 	if qf.m.Signum() != 0 {
@@ -149,7 +146,7 @@ func (qf *QualityFunction) IsConst() bool {
 //
 // Returns nil if the function is constant (m == 0) or if the result is non-positive.
 // Reference: rippled QualityFunction.cpp outFromAvgQ()
-func (qf *QualityFunction) OutFromAvgQ(q Quality) *tx.Amount {
+func (qf *QualityFunction) OutFromAvgQ(q Quality) *state.XRPLNumber {
 	if qf.m.Signum() == 0 || q.Rate().Signum() == 0 {
 		return nil
 	}
@@ -158,11 +155,10 @@ func (qf *QualityFunction) OutFromAvgQ(q Quality) *tx.Amount {
 	// Number::rounding_mode::upward, so every op — the reciprocal, the
 	// subtraction (a catastrophic cancellation) and the final divide — rounds
 	// upward in the unified Number space.
-	one := numberOne()
-	rate := q.Rate()
-	invRate := numberDivRounded(one, rate, state.RoundUpward)
-	numerator := ammSubRounded(invRate, qf.b, state.RoundUpward)
-	out := numberDivRounded(numerator, qf.m, state.RoundUpward)
+	rate := qf.math.fromAmount(q.Rate(), state.RoundUpward)
+	invRate := qf.math.one().DivRounded(rate, state.RoundUpward)
+	numerator := qf.math.subRounded(invRate, qf.b, state.RoundUpward)
+	out := numerator.DivRounded(qf.m, state.RoundUpward)
 
 	if out.Signum() <= 0 {
 		return nil

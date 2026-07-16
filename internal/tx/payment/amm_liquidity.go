@@ -39,10 +39,6 @@ var ammFibSequence = [AMMMaxIterations]uint32{
 	196418, 317811, 514229, 832040, 1346269,
 }
 
-// InitialFibSeqPct = 5 / 20000 = 0.00025
-// Reference: rippled AMMLiquidity.h: Number(5) / 20000
-var ammInitialFibSeqPct = state.NewIssuedAmountFromValue(25e13, -18, "", "") // 0.00025
-
 // NewAMMLiquidity creates a new AMMLiquidity for an AMM pool.
 func NewAMMLiquidity(
 	view *PaymentSandbox,
@@ -165,7 +161,8 @@ func (l *AMMLiquidity) generateOffer(view *PaymentSandbox, poolIn, poolOut tx.Am
 	}
 
 	// Single-path with CLOB quality: match spot price to CLOB quality
-	offerIn, offerOut, ok, blocked := ChangeSpotPriceQuality(
+	offerIn, offerOut, ok, blocked := changeSpotPriceQuality(
+		l.ammContext.numberMath(),
 		poolIn, poolOut, *clobQuality, l.tradingFee,
 		l.fixAMMv1_1, l.issueOut.IsXRP() || l.issueOut.IsMPT,
 	)
@@ -221,6 +218,7 @@ func (l *AMMLiquidity) safeMaxOffer(poolIn, poolOut tx.Amount) (result *AMMOffer
 // generateFibSeqOffer generates an offer sized by Fibonacci sequence.
 // Reference: rippled AMMLiquidity.cpp generateFibSeqOffer()
 func (l *AMMLiquidity) generateFibSeqOffer(poolIn, poolOut tx.Amount) (tx.Amount, tx.Amount, bool) {
+	m := l.ammContext.numberMath()
 	// Initial offer: InitialFibSeqPct * initialPoolIn.
 	// rippled computes the product under the ambient (round-to-nearest) mode and
 	// then converts to the input asset with Number::upward. For an XRP input that
@@ -230,9 +228,14 @@ func (l *AMMLiquidity) generateFibSeqOffer(poolIn, poolOut tx.Amount) (tx.Amount
 	// the offer quality.
 	// Reference: rippled AMMLiquidity.cpp generateFibSeqOffer() lines 64-67
 	//   toAmount<TIn>(getIssue(balances.in), InitialFibSeqPct * initialBalances_.in, Number::upward)
-	nInitPoolIn := toNumber(l.initialPoolIn)
-	curIn := fromNumberRoundUp(nInitPoolIn.Mul(ammInitialFibSeqPct, false), l.initialPoolIn)
-	curOut := SwapAssetIn(l.initialPoolIn, l.initialPoolOut, curIn, l.tradingFee, l.fixAMMv1_1)
+	nInitPoolIn := m.fromAmount(l.initialPoolIn, state.RoundToNearest)
+	curIn := m.toAmountWithNativeRounding(
+		nInitPoolIn.Mul(m.number(25, -5, state.RoundToNearest)),
+		l.initialPoolIn,
+		state.RoundUpward,
+		state.RoundToNearest,
+	)
+	curOut := swapAssetIn(m, l.initialPoolIn, l.initialPoolOut, curIn, l.tradingFee, l.fixAMMv1_1)
 
 	if l.ammContext.CurIters() == 0 {
 		return curIn, curOut, true
@@ -243,44 +246,55 @@ func (l *AMMLiquidity) generateFibSeqOffer(poolIn, poolOut tx.Amount) (tx.Amount
 	if int(idx) >= len(ammFibSequence) {
 		return tx.Amount{}, tx.Amount{}, false
 	}
-	fibNum := state.NewIssuedAmountFromValue(int64(ammFibSequence[idx]), 0, "", "")
+	fibNum := m.int(int64(ammFibSequence[idx]))
 	// curOut may be IOU or XRP — use toNumber for multiplication, convert back
-	nCurOut := toNumber(curOut)
-	curOut = fromNumber(nCurOut.Mul(fibNum, false), poolOut) // round down
+	nCurOut := m.fromAmount(curOut, state.RoundToNearest)
+	curOut = m.toAmountWithNativeRounding(
+		nCurOut.Mul(fibNum),
+		poolOut,
+		state.RoundDownward,
+		state.RoundToNearest,
+	)
 
 	// Check overflow: if curOut >= poolOut, can't generate offer
 	if curOut.Compare(poolOut) >= 0 {
 		return tx.Amount{}, tx.Amount{}, false
 	}
 
-	curIn = SwapAssetOut(poolIn, poolOut, curOut, l.tradingFee, l.fixAMMv1_1)
+	curIn = swapAssetOut(m, poolIn, poolOut, curOut, l.tradingFee, l.fixAMMv1_1)
 	return curIn, curOut, true
 }
 
 // maxOffer generates the maximum possible AMM offer.
 // Reference: rippled AMMLiquidity.cpp maxOffer()
 func (l *AMMLiquidity) maxOffer(poolIn, poolOut tx.Amount) *AMMOffer {
+	m := l.ammContext.numberMath()
 	if !l.fixAMMOverflowOffer {
 		// Pre-fix: takerPays = max, takerGets = swapIn(max)
 		// Quality uses pool balances (spot price), NOT the max amounts.
 		// Reference: rippled AMMLiquidity.cpp maxOffer() line 128-133
 		maxIn := maxAmountLike(poolIn)
-		maxOut := SwapAssetIn(poolIn, poolOut, maxIn, l.tradingFee, l.fixAMMv1_1)
+		maxOut := swapAssetIn(m, poolIn, poolOut, maxIn, l.tradingFee, l.fixAMMv1_1)
 		return NewAMMOfferWithBalanceQuality(l, maxIn, maxOut, poolIn, poolOut)
 	}
 
 	// Post-fix: takerGets = 99% * poolOut, takerPays = swapOut(takerGets)
 	// Quality uses pool balances (spot price).
 	// Reference: rippled AMMLiquidity.cpp maxOffer() line 140-144
-	pct := state.NewIssuedAmountFromValue(99e13, -15, "", "") // 0.99
-	nPoolOut := toNumber(poolOut)
-	maxOut := fromNumber(nPoolOut.Mul(pct, false), poolOut) // round down
+	pct := m.number(99, -2, state.RoundToNearest)
+	nPoolOut := m.fromAmount(poolOut, state.RoundToNearest)
+	maxOut := m.toAmountWithNativeRounding(
+		nPoolOut.Mul(pct),
+		poolOut,
+		state.RoundDownward,
+		state.RoundToNearest,
+	)
 
 	if maxOut.IsZero() || maxOut.Compare(poolOut) >= 0 {
 		return nil
 	}
 
-	maxIn := SwapAssetOut(poolIn, poolOut, maxOut, l.tradingFee, l.fixAMMv1_1)
+	maxIn := swapAssetOut(m, poolIn, poolOut, maxOut, l.tradingFee, l.fixAMMv1_1)
 	return NewAMMOfferWithBalanceQuality(l, maxIn, maxOut, poolIn, poolOut)
 }
 

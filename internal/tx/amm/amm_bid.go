@@ -187,6 +187,7 @@ func (a *AMMBid) Apply(ctx *tx.ApplyContext) ter.Result {
 	)
 
 	accountID := ctx.AccountID
+	math := newNumberMath(ctx)
 
 	amm, ammKey, result := readAMM(ctx.View, a.Asset, a.Asset2)
 	if result != ter.TesSUCCESS {
@@ -220,12 +221,16 @@ func (a *AMMBid) Apply(ctx *tx.ApplyContext) ter.Result {
 		bidMax = *a.BidMax
 	}
 
-	tradingFee := getFee(amm.TradingFee)
+	tradingFee := getFee(math, amm.TradingFee)
 
 	// Minimum slot price, evaluated left-to-right in Number space:
 	// lptAMMBalance * tradingFee / auctionSlotMinFeeFraction.
-	minFeeFraction := state.NewIssuedAmountFromValue(int64(auctionSlotMinFeeFraction)*1e15, -15, "", "")
-	minSlotPrice := numberDiv(lptAMMBalance.Mul(tradingFee, false), minFeeFraction)
+	minSlotPriceNumber := math.div(
+		math.fromAmount(lptAMMBalance).MulRounded(tradingFee, state.RoundToNearest),
+		math.int(auctionSlotMinFeeFraction),
+		state.RoundToNearest,
+	)
+	minSlotPrice := math.toAmount(minSlotPriceNumber, lptAMMBalance, state.RoundToNearest)
 
 	discountedFee := amm.TradingFee / uint16(auctionSlotDiscountedFeeFraction)
 
@@ -268,35 +273,33 @@ func (a *AMMBid) Apply(ctx *tx.ApplyContext) ter.Result {
 	}
 
 	var computedPrice tx.Amount
-	var fractionRemaining tx.Amount
+	fractionRemaining := math.zero()
 	pricePurchased := amm.AuctionSlot.Price
 
 	if !validOwner || timeSlot == nil {
 		// Slot is unowned or expired - pay minimum price
 		computedPrice = minSlotPrice
-		fractionRemaining = zeroAmount(tx.Asset{})
 	} else {
 		// Slot is owned - calculate price based on time interval
 		// fractionUsed = (timeSlot + 1) / auctionSlotTimeIntervals
 		slotNum := *timeSlot + 1
-		fractionUsed := numberDiv(state.NewIssuedAmountFromValue(int64(slotNum)*1e15, -15, "", ""),
-			state.NewIssuedAmountFromValue(int64(auctionSlotTimeIntervals)*1e15, -15, "", ""))
-		fractionRemaining, _ = oneAmount().Sub(fractionUsed)
+		fractionUsed := math.div(math.int(int64(slotNum)), math.int(auctionSlotTimeIntervals), state.RoundToNearest)
+		fractionRemaining = math.subFromOne(fractionUsed, state.RoundToNearest)
 
 		// price1p05 = pricePurchased * 1.05
-		multiplier := state.NewIssuedAmountFromValue(105*1e13, -15, "", "") // 1.05
-		price1p05 := pricePurchased.Mul(multiplier, false)
+		multiplier := math.number(105, -2, state.RoundToNearest)
+		price1p05 := math.fromAmount(pricePurchased).MulRounded(multiplier, state.RoundToNearest)
 
 		if *timeSlot == 0 {
 			// First interval: price = pricePurchased * 1.05 + minSlotPrice
-			computedPrice, _ = price1p05.Add(minSlotPrice)
+			computedPrice = math.toAmount(price1p05.AddRounded(minSlotPriceNumber, state.RoundToNearest), lptAMMBalance, state.RoundToNearest)
 		} else {
 			// Other intervals: price = pricePurchased * 1.05 * (1 - power(fractionUsed, 60)) + minSlotPrice
 			// Reference: rippled AMMBid.cpp line 336
-			fractionUsedPow60 := numberPower(fractionUsed, 60)
-			decayFactor, _ := oneAmount().Sub(fractionUsedPow60)
-			decayedPrice := price1p05.Mul(decayFactor, false)
-			computedPrice, _ = decayedPrice.Add(minSlotPrice)
+			fractionUsedPow60 := math.power(fractionUsed, 60, state.RoundToNearest)
+			decayFactor := math.subFromOne(fractionUsedPow60, state.RoundToNearest)
+			decayedPrice := price1p05.MulRounded(decayFactor, state.RoundToNearest)
+			computedPrice = math.toAmount(decayedPrice.AddRounded(minSlotPriceNumber, state.RoundToNearest), lptAMMBalance, state.RoundToNearest)
 		}
 	}
 
@@ -334,7 +337,7 @@ func (a *AMMBid) Apply(ctx *tx.ApplyContext) ter.Result {
 
 	if validOwner && timeSlot != nil {
 		// Refund previous owner: refund = fractionRemaining * pricePurchased
-		refund = fractionRemaining.Mul(pricePurchased, false)
+		refund = math.multiplyToAmount(math.fromAmount(pricePurchased), fractionRemaining, lptAMMBalance, state.RoundToNearest)
 		if isGreater(refund, payPrice) {
 			ctx.Log.Error("amm bid: refund exceeds payPrice", "refund", refund, "payPrice", payPrice)
 			return ter.TefINTERNAL

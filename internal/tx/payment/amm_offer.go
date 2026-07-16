@@ -111,7 +111,8 @@ func (o *AMMOffer) LimitOut(ofrIn, ofrOut, limit EitherAmount, roundUp bool) (Ei
 	}
 	// Single path: use swap function for exact conservation
 	limitAmt := eitherToAmount(limit)
-	newIn := SwapAssetOut(
+	newIn := swapAssetOut(
+		o.ammLiquidity.ammContext.numberMath(),
 		o.balanceIn, o.balanceOut, limitAmt,
 		o.ammLiquidity.tradingFee, o.ammLiquidity.fixAMMv1_1,
 	)
@@ -131,7 +132,8 @@ func (o *AMMOffer) LimitIn(ofrIn, ofrOut, limit EitherAmount, roundUp bool, fixR
 	}
 	// Single path: use swap function
 	limitAmt := eitherToAmount(limit)
-	newOut := SwapAssetIn(
+	newOut := swapAssetIn(
+		o.ammLiquidity.ammContext.numberMath(),
 		o.balanceIn, o.balanceOut, limitAmt,
 		o.ammLiquidity.tradingFee, o.ammLiquidity.fixAMMv1_1,
 	)
@@ -156,26 +158,28 @@ func (o *AMMOffer) CheckInvariant(consumedIn, consumedOut tx.Amount) bool {
 	}
 
 	// Convert to Number for uniform arithmetic (XRP and IOU can be mixed)
-	nBalIn := toNumber(o.balanceIn)
-	nBalOut := toNumber(o.balanceOut)
-	nConIn := toNumber(consumedIn)
-	nConOut := toNumber(consumedOut)
+	m := o.ammLiquidity.ammContext.numberMath()
+	nBalIn := m.fromAmount(o.balanceIn, state.RoundToNearest)
+	nBalOut := m.fromAmount(o.balanceOut, state.RoundToNearest)
+	product := nBalIn.Mul(nBalOut)
 
-	product := nBalIn.Mul(nBalOut, false)
+	newBalanceIn, err := o.balanceIn.Add(consumedIn)
+	if err != nil {
+		return false
+	}
+	newBalanceOut, err := o.balanceOut.Sub(consumedOut)
+	if err != nil {
+		return false
+	}
+	newProduct := m.fromAmount(newBalanceIn, state.RoundToNearest).
+		Mul(m.fromAmount(newBalanceOut, state.RoundToNearest))
 
-	newBalIn := ammAdd(nBalIn, nConIn)
-	newBalOut := ammSub(nBalOut, nConOut)
-	newProduct := newBalIn.Mul(newBalOut, false)
-
-	if newProduct.Compare(product) >= 0 {
+	if newProduct.Cmp(product) >= 0 {
 		return true
 	}
 
-	// Check within relative distance (1e-7 tolerance)
-	oneAmt := ammOne()
-	productQ := QualityFromAmounts(NewIOUEitherAmount(product), NewIOUEitherAmount(oneAmt))
-	newProductQ := QualityFromAmounts(NewIOUEitherAmount(newProduct), NewIOUEitherAmount(oneAmt))
-	return WithinRelativeDistance(productQ, newProductQ, 1e-7)
+	distance := m.sub(product, newProduct).Div(product)
+	return distance.Cmp(m.number(1, -7, state.RoundToNearest)) < 0
 }
 
 // Send transfers amounts through the AMM using accountSend, waiving transfer fees.

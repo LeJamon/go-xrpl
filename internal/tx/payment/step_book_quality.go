@@ -56,7 +56,7 @@ func (s *BookStep) GetQualityFunc(v *PaymentSandbox, prevStepDir DebtDirection) 
 			return res, dir
 		}
 		// Compose fee QF with AMM QF
-		feeQF := NewCLOBLikeQualityFunction(q)
+		feeQF := newCLOBLikeQualityFunction(numberMath{ctx: v.NumberContext()}, q)
 		if feeQF == nil {
 			return res, dir
 		}
@@ -67,7 +67,7 @@ func (s *BookStep) GetQualityFunc(v *PaymentSandbox, prevStepDir DebtDirection) 
 	// CLOB (constant quality function)
 	// Reference: rippled BookStep.cpp lines 639-647
 	q := s.adjustQualityWithFees(v, *res.quality, prevStepDir, false, false)
-	return NewCLOBLikeQualityFunction(q), dir
+	return newCLOBLikeQualityFunction(numberMath{ctx: v.NumberContext()}, q), dir
 }
 
 // tip selects the best offer between the CLOB tip and the AMM synthetic offer,
@@ -138,7 +138,7 @@ func (s *BookStep) tipOfferQualityF(sb *PaymentSandbox) *QualityFunction {
 	if lobQuality == nil {
 		return nil
 	}
-	return NewCLOBLikeQualityFunction(*lobQuality)
+	return newCLOBLikeQualityFunction(numberMath{ctx: sb.NumberContext()}, *lobQuality)
 }
 
 // tipQualityThreshold returns the quality threshold to use for AMM offer
@@ -170,9 +170,9 @@ func (s *BookStep) tipQualityThreshold(lobQuality Quality) *Quality {
 // Reference: rippled AMMOffer.cpp getQualityFunc() lines 130-137
 func (s *BookStep) ammOfferGetQualityFunc(offer *AMMOffer) *QualityFunction {
 	if offer.ammLiquidity.ammContext.MultiPath() {
-		return NewCLOBLikeQualityFunction(offer.Quality())
+		return newCLOBLikeQualityFunction(offer.ammLiquidity.ammContext.numberMath(), offer.Quality())
 	}
-	return NewAMMQualityFunction(offer.balanceIn, offer.balanceOut, offer.ammLiquidity.tradingFee)
+	return newAMMQualityFunction(offer.ammLiquidity.ammContext.numberMath(), offer.balanceIn, offer.balanceOut, offer.ammLiquidity.tradingFee)
 }
 
 // adjustQualityWithFees adjusts a quality with transfer fees. It mirrors

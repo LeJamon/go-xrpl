@@ -3,6 +3,7 @@ package offer
 import (
 	"testing"
 
+	"github.com/LeJamon/go-xrpl/amendment"
 	"github.com/LeJamon/go-xrpl/internal/ledger/state"
 	"github.com/LeJamon/go-xrpl/internal/tx"
 )
@@ -23,7 +24,7 @@ func TestTickSize1224(t *testing.T) {
 	rounded := roundToTickSize(quality, 15)
 	t.Logf("rounded  mantissa=%d exp=%d", rounded&0x00ffffffffffffff, int(rounded>>56)-100)
 
-	res := multiplyByQuality(takerGets, rounded, hada, issuer)
+	res := multiplyByQuality(takerGets, rounded, hada, issuer, amendment.EmptyRules())
 	t.Logf("result   mantissa=%d exp=%d", res.Mantissa(), res.Exponent())
 
 	if res.Mantissa() != 5000000000000004 || res.Exponent() != -9 {

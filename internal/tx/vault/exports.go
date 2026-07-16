@@ -3,6 +3,7 @@ package vault
 import (
 	"bytes"
 
+	"github.com/LeJamon/go-xrpl/amendment"
 	"github.com/LeJamon/go-xrpl/internal/ledger/state"
 	"github.com/LeJamon/go-xrpl/internal/tx"
 	"github.com/LeJamon/go-xrpl/internal/tx/ter"
@@ -20,54 +21,60 @@ type AssetReadView interface {
 // path returns the full balance (rippled xrpLiquid + isPseudoAccount). A missing
 // trust line / MPToken means zero holdings; ok is false only on a read/parse
 // error. Used by the ValidLoanBroker invariant.
-func PseudoAssetHolds(view AssetReadView, account [20]byte, vaultData []byte) (state.XRPLNumber, bool) {
+func PseudoAssetHolds(view AssetReadView, account [20]byte, vaultData []byte, rules *amendment.Rules) (state.XRPLNumber, bool) {
+	return PseudoAssetHoldsWithNumberContext(view, account, vaultData, tx.NumberContextForRules(rules))
+}
+
+// PseudoAssetHoldsWithNumberContext uses the transaction's selected Number context.
+func PseudoAssetHoldsWithNumberContext(view AssetReadView, account [20]byte, vaultData []byte, numberContext state.NumberContext) (state.XRPLNumber, bool) {
+	zero := func() state.XRPLNumber { return numberContext.Int(0) }
 	vd, err := parseVault(vaultData)
 	if err != nil {
-		return state.NewXRPLNumber(0, 0), false
+		return zero(), false
 	}
 	if vd.AssetIsMPT {
 		data, rerr := view.Read(keylet.MPTokenByID(vd.AssetMPTID, account))
 		if rerr != nil {
-			return state.NewXRPLNumber(0, 0), false
+			return zero(), false
 		}
 		if data == nil {
-			return state.NewXRPLNumber(0, 0), true
+			return zero(), true
 		}
 		token, perr := state.ParseMPToken(data)
 		if perr != nil {
-			return state.NewXRPLNumber(0, 0), false
+			return zero(), false
 		}
-		return state.NewXRPLNumber(int64(token.MPTAmount), 0), true
+		return numberContext.Int(int64(token.MPTAmount)), true
 	}
 	if isNativeAsset(vd.Asset) {
 		data, rerr := view.Read(keylet.Account(account))
 		if rerr != nil || data == nil {
-			return state.NewXRPLNumber(0, 0), false
+			return zero(), false
 		}
 		ar, perr := state.ParseAccountRoot(data)
 		if perr != nil {
-			return state.NewXRPLNumber(0, 0), false
+			return zero(), false
 		}
-		return state.NewXRPLNumber(int64(ar.Balance), 0), true
+		return numberContext.Int(int64(ar.Balance)), true
 	}
 	issuerID, derr := state.DecodeAccountID(vd.Asset.Issuer)
 	if derr != nil {
-		return state.NewXRPLNumber(0, 0), false
+		return zero(), false
 	}
 	data, rerr := view.Read(keylet.Line(account, issuerID, vd.Asset.Currency))
 	if rerr != nil {
-		return state.NewXRPLNumber(0, 0), false
+		return zero(), false
 	}
 	if data == nil {
-		return state.NewXRPLNumber(0, 0), true
+		return zero(), true
 	}
 	rs, perr := state.ParseRippleState(data)
 	if perr != nil {
-		return state.NewXRPLNumber(0, 0), false
+		return zero(), false
 	}
-	bal, berr := vaultNumber(rs.Balance.Value())
+	bal, berr := vaultNumberScaled(rs.Balance.Value(), numberContext.Scale())
 	if berr != nil {
-		return state.NewXRPLNumber(0, 0), false
+		return zero(), false
 	}
 	// Balance is stored in the low account's terms; negate for the high account.
 	if bytes.Compare(account[:], issuerID[:]) > 0 {
@@ -78,10 +85,15 @@ func PseudoAssetHolds(view AssetReadView, account [20]byte, vaultData []byte) (s
 
 // ParseLedgerNumber parses a serialized NUMBER field's string form into an
 // XRPLNumber; "" and "0" are zero. ok is false on a malformed value.
-func ParseLedgerNumber(s string) (state.XRPLNumber, bool) {
-	n, err := vaultNumber(s)
+func ParseLedgerNumber(s string, rules *amendment.Rules) (state.XRPLNumber, bool) {
+	return ParseLedgerNumberWithNumberContext(s, tx.NumberContextForRules(rules))
+}
+
+// ParseLedgerNumberWithNumberContext parses a NUMBER under the selected transaction context.
+func ParseLedgerNumberWithNumberContext(s string, numberContext state.NumberContext) (state.XRPLNumber, bool) {
+	n, err := vaultNumberScaled(s, numberContext.Scale())
 	if err != nil {
-		return state.NewXRPLNumber(0, 0), false
+		return numberContext.Int(0), false
 	}
 	return n, true
 }

@@ -5,6 +5,7 @@ import (
 
 	"github.com/LeJamon/go-xrpl/amendment"
 	"github.com/LeJamon/go-xrpl/internal/ledger/state"
+	"github.com/LeJamon/go-xrpl/internal/tx"
 )
 
 // vaultNumber parses a NUMBER field string ("" meaning zero) using the legacy
@@ -29,15 +30,7 @@ func vaultNumberScaled(s string, scale state.MantissaScale) (state.XRPLNumber, e
 }
 
 func vaultNumberScale(rules *amendment.Rules) state.MantissaScale {
-	if rules == nil {
-		return state.MantissaScaleForRulesWithFix(false, false, false, false)
-	}
-	return state.MantissaScaleForRulesWithFix(
-		true,
-		rules.Enabled(amendment.FeatureSingleAssetVault),
-		rules.Enabled(amendment.FeatureLendingProtocol),
-		rules.FixCleanup3_2_0Enabled(),
-	)
+	return tx.NumberContextForRules(rules).Scale()
 }
 
 // numberToString renders an XRPLNumber into the vault NUMBER-field convention:

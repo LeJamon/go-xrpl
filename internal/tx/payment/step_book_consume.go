@@ -211,7 +211,7 @@ func (s *BookStep) eitherAmountToTxAmount(ea EitherAmount, issue Issue) tx.Amoun
 // Issue explicitly, but the AMM send routes by amount.Issuer, so AMM transfers
 // must be re-tagged to the book's own issue before sending. XRP is returned
 // unchanged.
-func retagToIssue(amt tx.Amount, issue Issue) tx.Amount {
+func retagToIssue(m numberMath, amt tx.Amount, issue Issue) tx.Amount {
 	if amt.IsNative() || issue.IsXRP() {
 		return amt
 	}
@@ -219,8 +219,7 @@ func retagToIssue(amt tx.Amount, issue Issue) tx.Amount {
 		if raw, ok := amt.MPTRaw(); ok {
 			return newMPTAmount(raw, issue.MPTID)
 		}
-		value := state.NewXRPLNumber(amt.Mantissa(), amt.Exponent()).ToInt64WithMode(state.RoundToNearest)
-		return newMPTAmount(value, issue.MPTID)
+		return m.toAmount(m.fromAmount(amt, state.RoundToNearest), newMPTAmount(0, issue.MPTID), state.RoundToNearest)
 	}
 	return tx.NewIssuedAmount(amt.Mantissa(), amt.Exponent(), issue.Currency, state.EncodeAccountIDSafe(issue.Issuer))
 }

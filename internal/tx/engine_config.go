@@ -8,6 +8,7 @@ import (
 	"github.com/LeJamon/go-xrpl/crypto/sha512half"
 	"github.com/LeJamon/go-xrpl/drops"
 	"github.com/LeJamon/go-xrpl/internal/feetrack"
+	"github.com/LeJamon/go-xrpl/internal/ledger/state"
 	"github.com/LeJamon/go-xrpl/keylet"
 	xrpllog "github.com/LeJamon/go-xrpl/log"
 	"github.com/LeJamon/go-xrpl/protocol"
@@ -95,6 +96,10 @@ type EngineConfig struct {
 	// If nil, defaults to all amendments enabled (for backwards compatibility).
 	Rules *amendment.Rules
 
+	// NumberContextOverride reproduces test and historical contexts that selected
+	// a Number scale independently of ledger amendment rules.
+	NumberContextOverride *state.NumberContext
+
 	// OpenLedger controls whether fee adequacy is checked.
 	// When true, the engine verifies that the transaction fee meets the
 	// minimum required fee (including tx-type-specific overrides like
@@ -175,6 +180,29 @@ func (c EngineConfig) RequireRules() *amendment.Rules {
 			"explicitly.")
 	}
 	return c.Rules
+}
+
+// NumberContextForRules selects the Number scale rippled installs for rules.
+// A nil Rules pointer represents work outside a ledger transaction and uses the
+// corrected large scale.
+func NumberContextForRules(rules *amendment.Rules) state.NumberContext {
+	if rules == nil {
+		return state.NewNumberContext(state.MantissaScaleForRulesWithFix(false, false, false, false))
+	}
+	return state.NewNumberContext(state.MantissaScaleForRulesWithFix(
+		true,
+		rules.Enabled(amendment.FeatureSingleAssetVault),
+		rules.Enabled(amendment.FeatureLendingProtocol),
+		rules.FixCleanup3_2_0Enabled(),
+	))
+}
+
+// NumberContext returns the immutable Number context for this transaction.
+func (c EngineConfig) NumberContext() state.NumberContext {
+	if c.NumberContextOverride != nil {
+		return *c.NumberContextOverride
+	}
+	return NumberContextForRules(c.RequireRules())
 }
 
 // IsViewOpen reports whether this apply targets the open ledger, mirroring

@@ -120,7 +120,7 @@ func offerDivRoundStrictLike(num, den, resultAsset tx.Amount, roundUp bool) tx.A
 
 // applyTickSize applies tick size rounding to offer amounts.
 // Reference: rippled CreateOffer.cpp lines 643-685
-func applyTickSize(view tx.LedgerView, takerPays, takerGets tx.Amount, bSell bool, rules *amendment.Rules) (tx.Amount, tx.Amount) {
+func applyTickSize(view tx.LedgerView, takerPays, takerGets tx.Amount, bSell bool, rules *amendment.Rules, numberContexts ...state.NumberContext) (tx.Amount, tx.Amount) {
 	tickSize := maxTickSize
 
 	if !takerPays.IsNative() && !takerPays.IsMPT() {
@@ -150,7 +150,7 @@ func applyTickSize(view tx.LedgerView, takerPays, takerGets tx.Amount, bSell boo
 	if bSell {
 		// Round TakerPays
 		if !takerPays.IsMPT() {
-			takerPays = multiplyByQuality(takerGets, roundedQuality, takerPays.Currency, takerPays.Issuer)
+			takerPays = multiplyByQuality(takerGets, roundedQuality, takerPays.Currency, takerPays.Issuer, rules, numberContexts...)
 		}
 	} else if !takerGets.IsMPT() {
 		// Round TakerGets
@@ -272,7 +272,7 @@ func rateAmountFromQuality(quality uint64) tx.Amount {
 // multiplyByQuality multiplies an amount by a quality rate, reproducing rippled's
 // multiply(amount, rate, asset). The result type is determined by currency/issuer
 // parameters.
-func multiplyByQuality(amount tx.Amount, quality uint64, currency, issuer string) tx.Amount {
+func multiplyByQuality(amount tx.Amount, quality uint64, currency, issuer string, rules *amendment.Rules, numberContexts ...state.NumberContext) tx.Amount {
 	native := currency == "" || currency == "XRP"
 	if quality == 0 || amount.IsZero() {
 		if native {
@@ -289,9 +289,13 @@ func multiplyByQuality(amount tx.Amount, quality uint64, currency, issuer string
 		// digit the opposite way (the placed offer's XRP leg ends up one drop
 		// high). Compute it as Number{amount} * Number{rate} → drops.
 		rate := rateAmountFromQuality(quality)
-		prod := state.NewXRPLNumber(amount.Mantissa(), amount.Exponent()).
-			Mul(state.NewXRPLNumber(rate.Mantissa(), rate.Exponent()))
-		return tx.NewXRPAmount(prod.ToInt64WithMode(state.RoundToNearest))
+		numberContext := tx.NumberContextForRules(rules)
+		if len(numberContexts) > 0 {
+			numberContext = numberContexts[0]
+		}
+		prod := numberContext.FromAmount(amount, state.RoundToNearest).
+			Mul(numberContext.FromAmount(rate, state.RoundToNearest))
+		return numberContext.ToAmount(prod, tx.NewXRPAmount(0), state.RoundToNearest)
 	}
 
 	// Convert amount to big.Rat

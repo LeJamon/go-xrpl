@@ -194,6 +194,7 @@ func (a *AMMClawback) Apply(ctx *tx.ApplyContext) ter.Result {
 	)
 
 	issuerID := ctx.AccountID
+	math := newNumberMath(ctx)
 
 	holderID, err := state.DecodeAccountID(a.Holder)
 	if err != nil {
@@ -229,7 +230,7 @@ func (a *AMMClawback) Apply(ctx *tx.ApplyContext) ter.Result {
 		if lpTokenBalance.IsZero() {
 			return ter.TecAMM_BALANCE
 		}
-		if result := verifyAndAdjustLPTokenBalance(ctx.View, ammKey, lpTokenBalance, amm, holderID); result != ter.TesSUCCESS {
+		if result := verifyAndAdjustLPTokenBalance(math, ctx.View, ammKey, lpTokenBalance, amm, holderID); result != ter.TesSUCCESS {
 			return result
 		}
 	}
@@ -257,15 +258,15 @@ func (a *AMMClawback) Apply(ctx *tx.ApplyContext) ter.Result {
 		// Reference: rippled calls equalWithdrawTokens with WithdrawAll::Yes
 		lpTokensToWithdraw = holdLPTokens
 
-		if toIOUForCalc(holdLPTokens).Compare(toIOUForCalc(lptAMMBalance)) == 0 {
+		if math.fromAmount(holdLPTokens).Equal(math.fromAmount(lptAMMBalance)) {
 			// Holder has ALL LP tokens — withdraw everything
 			withdrawAmount1 = assetBalance1
 			withdrawAmount2 = assetBalance2
 		} else {
 			// Proportional withdrawal
-			frac := numberDiv(toIOUForCalc(holdLPTokens), toIOUForCalc(lptAMMBalance))
-			withdrawAmount1 = getRoundedAsset(fixV1_3, assetBalance1, frac, false)
-			withdrawAmount2 = getRoundedAsset(fixV1_3, assetBalance2, frac, false)
+			frac := math.div(math.fromAmount(holdLPTokens), math.fromAmount(lptAMMBalance), state.RoundToNearest)
+			withdrawAmount1 = getRoundedAsset(math, fixV1_3, assetBalance1, frac, false)
+			withdrawAmount2 = getRoundedAsset(math, fixV1_3, assetBalance2, frac, false)
 		}
 	} else {
 		// Amount specified - calculate proportional withdrawal.
@@ -275,37 +276,37 @@ func (a *AMMClawback) Apply(ctx *tx.ApplyContext) ter.Result {
 		if assetBalance1.IsZero() {
 			return ter.TecAMM_BALANCE
 		}
-		frac := numberDiv(toIOUForCalc(clawAmount), toIOUForCalc(assetBalance1))
+		frac := math.div(math.fromAmount(clawAmount), math.fromAmount(assetBalance1), state.RoundToNearest)
 
 		// Calculate LP tokens needed
-		lpTokensNeeded := lptAMMBalance.Mul(frac, false)
+		lpTokensNeeded := math.multiplyToAmount(math.fromAmount(lptAMMBalance), frac, lptAMMBalance, state.RoundToNearest)
 
 		if isGreater(lpTokensNeeded, holdLPTokens) {
 			// Holder doesn't have enough LP tokens — clawback all they have.
 			lpTokensToWithdraw = holdLPTokens
-			if toIOUForCalc(holdLPTokens).Compare(toIOUForCalc(lptAMMBalance)) == 0 {
+			if math.fromAmount(holdLPTokens).Equal(math.fromAmount(lptAMMBalance)) {
 				withdrawAmount1 = assetBalance1
 				withdrawAmount2 = assetBalance2
 			} else {
-				fallbackFrac := numberDiv(toIOUForCalc(holdLPTokens), toIOUForCalc(lptAMMBalance))
-				withdrawAmount1 = getRoundedAsset(fixV1_3, assetBalance1, fallbackFrac, false)
-				withdrawAmount2 = getRoundedAsset(fixV1_3, assetBalance2, fallbackFrac, false)
+				fallbackFrac := math.div(math.fromAmount(holdLPTokens), math.fromAmount(lptAMMBalance), state.RoundToNearest)
+				withdrawAmount1 = getRoundedAsset(math, fixV1_3, assetBalance1, fallbackFrac, false)
+				withdrawAmount2 = getRoundedAsset(math, fixV1_3, assetBalance2, fallbackFrac, false)
 			}
 		} else {
 			// fixAMMClawbackRounding: use rounded tokens and adjusted fractions
 			if ctx.Rules().Enabled(amendment.FeatureFixAMMClawbackRounding) {
-				tokensAdj := getRoundedLPTokens(fixV1_3, lptAMMBalance, frac, false)
+				tokensAdj := getRoundedLPTokens(math, fixV1_3, lptAMMBalance, frac, false)
 				if tokensAdj.IsZero() {
 					return ter.TecAMM_INVALID_TOKENS
 				}
-				frac = adjustFracByTokens(fixV1_3, lptAMMBalance, tokensAdj, frac)
-				amountRounded := getRoundedAsset(fixV1_3, assetBalance1, frac, false)
-				amount2Rounded := getRoundedAsset(fixV1_3, assetBalance2, frac, false)
+				frac = adjustFracByTokens(math, fixV1_3, lptAMMBalance, tokensAdj, frac)
+				amountRounded := getRoundedAsset(math, fixV1_3, assetBalance1, frac, false)
+				amount2Rounded := getRoundedAsset(math, fixV1_3, assetBalance2, frac, false)
 				lpTokensToWithdraw = tokensAdj
 				withdrawAmount1 = amountRounded
 				withdrawAmount2 = amount2Rounded
 			} else {
-				amount2Withdraw := toSTAmountIssue(assetBalance2, toIOUForCalc(assetBalance2).Mul(frac, false))
+				amount2Withdraw := math.multiplyToAmount(math.fromAmount(assetBalance2), frac, assetBalance2, state.RoundToNearest)
 				lpTokensToWithdraw = lpTokensNeeded
 				withdrawAmount1 = clawAmount
 				withdrawAmount2 = amount2Withdraw
@@ -325,7 +326,7 @@ func (a *AMMClawback) Apply(ctx *tx.ApplyContext) ter.Result {
 		return ter.TecAMM_BALANCE
 	}
 	// Withdrawing all LP tokens must drain both sides exactly.
-	if toIOUForCalc(lpTokensToWithdraw).Compare(toIOUForCalc(lptAMMBalance)) == 0 &&
+	if math.fromAmount(lpTokensToWithdraw).Equal(math.fromAmount(lptAMMBalance)) &&
 		(!w1EqualsB1 || !w2EqualsB2) {
 		return ter.TecAMM_BALANCE
 	}
@@ -381,7 +382,7 @@ func (a *AMMClawback) Apply(ctx *tx.ApplyContext) ter.Result {
 			}
 		} else if isXRP2 && !withdrawAmount2.IsZero() {
 			// XRP clawback: AMM loses XRP, issuer gains
-			drops := uint64(iouToDrops(withdrawAmount2))
+			drops := uint64(withdrawAmount2.Drops())
 			ammAccount.Balance -= drops
 			ctx.Account.Balance += drops
 		}
@@ -407,7 +408,7 @@ func (a *AMMClawback) Apply(ctx *tx.ApplyContext) ter.Result {
 			}
 		} else if isXRP2 && !withdrawAmount2.IsZero() {
 			// XRP: AMM sends to holder
-			drops := uint64(iouToDrops(withdrawAmount2))
+			drops := uint64(withdrawAmount2.Drops())
 			ammAccount.Balance -= drops
 			holderAccount.Balance += drops
 		}

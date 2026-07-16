@@ -7,6 +7,7 @@ import (
 	"github.com/LeJamon/go-xrpl/amendment"
 	"github.com/LeJamon/go-xrpl/drops"
 	ledgercore "github.com/LeJamon/go-xrpl/internal/ledger"
+	"github.com/LeJamon/go-xrpl/internal/ledger/state"
 	tx "github.com/LeJamon/go-xrpl/internal/tx"
 	"github.com/LeJamon/go-xrpl/keylet"
 )
@@ -23,6 +24,8 @@ type PaymentSandbox struct {
 
 	// view is the underlying ledger view (used only for root sandbox)
 	view tx.LedgerView
+
+	numberContext state.NumberContext
 
 	// modifications holds modified ledger entries (key -> new data)
 	modifications map[[32]byte][]byte
@@ -117,6 +120,7 @@ func NewPaymentSandbox(view tx.LedgerView) *PaymentSandbox {
 	return &PaymentSandbox{
 		parent:             nil,
 		view:               view,
+		numberContext:      tx.NumberContextForRules(view.Rules()),
 		modifications:      make(map[[32]byte][]byte),
 		preImages:          make(map[[32]byte][]byte),
 		insertions:         make(map[[32]byte][]byte),
@@ -159,6 +163,7 @@ func NewChildSandbox(parent *PaymentSandbox) *PaymentSandbox {
 		txHash:             txHash,
 		ledgerSeq:          ledgerSeq,
 		openLedger:         parent.openLedger,
+		numberContext:      parent.NumberContext(),
 		view:               nil, // Use parent's view
 		modifications:      make(map[[32]byte][]byte),
 		preImages:          make(map[[32]byte][]byte),
@@ -174,6 +179,19 @@ func NewChildSandbox(parent *PaymentSandbox) *PaymentSandbox {
 // and propagated to child sandboxes. Mirrors rippled's view.open().
 func (s *PaymentSandbox) SetOpenLedger(open bool) {
 	s.openLedger = open
+}
+
+// SetNumberContext installs the immutable Number context for this flow.
+func (s *PaymentSandbox) SetNumberContext(numberContext state.NumberContext) {
+	s.numberContext = numberContext
+}
+
+// NumberContext returns the Number context shared by every step in this flow.
+func (s *PaymentSandbox) NumberContext() state.NumberContext {
+	if s.parent != nil {
+		return s.parent.NumberContext()
+	}
+	return s.numberContext
 }
 
 // IsOpenLedger reports whether this sandbox chain is applying against the open

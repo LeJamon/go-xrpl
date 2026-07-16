@@ -211,6 +211,7 @@ func (p *Payment) applyFlowPaymentWithPaths(ctx *tx.ApplyContext, senderID, dest
 			rules.Enabled(amendment.FeatureFixAMMOverflowOffer),
 		),
 		WithOpenLedger(ctx.Config.IsViewOpen()),
+		WithNumberContext(ctx.NumberContext()),
 	}
 	// Thread domain ID to the flow engine for permissioned domain payments.
 	if p.DomainID != nil {

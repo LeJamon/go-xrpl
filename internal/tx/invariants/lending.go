@@ -8,6 +8,7 @@ import (
 	"github.com/LeJamon/go-xrpl/amendment"
 	"github.com/LeJamon/go-xrpl/codec/binarycodec"
 	"github.com/LeJamon/go-xrpl/internal/ledger/state"
+	"github.com/LeJamon/go-xrpl/internal/tx"
 	"github.com/LeJamon/go-xrpl/internal/tx/vault"
 	"github.com/LeJamon/go-xrpl/keylet"
 )
@@ -99,9 +100,13 @@ func checkValidLoan(entries []InvariantEntry, rules *amendment.Rules) *Invariant
 	return nil
 }
 
-func checkValidLoanBroker(entries []InvariantEntry, view ReadView, rules *amendment.Rules) *InvariantViolation {
+func checkValidLoanBroker(entries []InvariantEntry, view ReadView, rules *amendment.Rules, numberContexts ...state.NumberContext) *InvariantViolation {
 	if rules == nil || !rules.Enabled(amendment.FeatureLendingProtocol) {
 		return nil
+	}
+	numberContext := tx.NumberContextForRules(rules)
+	if len(numberContexts) > 0 {
+		numberContext = numberContexts[0]
 	}
 
 	type brokerState struct {
@@ -235,11 +240,11 @@ func checkValidLoanBroker(entries []InvariantEntry, view ReadView, rules *amendm
 		if aerr != nil {
 			return lendingViolation("ValidLoanBroker", "loan broker account is malformed")
 		}
-		pseudoBalance, phOK := vault.PseudoAssetHolds(view, pseudoID, vaultData)
+		pseudoBalance, phOK := vault.PseudoAssetHoldsWithNumberContext(view, pseudoID, vaultData, numberContext)
 		if !phOK {
 			return lendingViolation("ValidLoanBroker", "could not read pseudo-account asset balance")
 		}
-		coverAvailable := coverAvailableNumber(after)
+		coverAvailable := coverAvailableNumber(after, numberContext)
 		if coverAvailable.Cmp(pseudoBalance) < 0 {
 			return lendingViolation("ValidLoanBroker", "cover available is less than pseudo-account asset balance")
 		}
@@ -275,12 +280,12 @@ func checkValidLoanBroker(entries []InvariantEntry, view ReadView, rules *amendm
 
 // coverAvailableNumber parses the LoanBroker's CoverAvailable NUMBER field; an
 // absent or malformed value is treated as zero.
-func coverAvailableNumber(fields map[string]any) state.XRPLNumber {
+func coverAvailableNumber(fields map[string]any, numberContext state.NumberContext) state.XRPLNumber {
 	s, ok := fields["CoverAvailable"].(string)
 	if !ok {
-		return state.NewXRPLNumber(0, 0)
+		return numberContext.Int(0)
 	}
-	n, _ := vault.ParseLedgerNumber(s)
+	n, _ := vault.ParseLedgerNumberWithNumberContext(s, numberContext)
 	return n
 }
 

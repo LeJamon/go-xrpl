@@ -7,6 +7,7 @@ import (
 	"github.com/LeJamon/go-xrpl/amendment"
 	binarycodec "github.com/LeJamon/go-xrpl/codec/binarycodec"
 	"github.com/LeJamon/go-xrpl/internal/ledger/state"
+	txcore "github.com/LeJamon/go-xrpl/internal/tx"
 	"github.com/LeJamon/go-xrpl/keylet"
 )
 
@@ -144,50 +145,16 @@ func ammAccountHoldsForInvariant(view ReadView, ammAccountID [20]byte, asset Ass
 	return state.NewIssuedAmountFromValue(balance.Mantissa(), balance.Exponent(), asset.Currency, asset.Issuer)
 }
 
-// toIOUForInvariant converts an Amount to IOU representation for precise calculations.
-// Matches the AMM helper's toIOUForCalc function.
-func toIOUForInvariant(amt Amount) Amount {
-	if !amt.IsNative() {
-		// Drop the currency/issuer tag: the relative-distance check is a
-		// unitless Number comparison (rippled's withinRelativeDistance),
-		// freely combining the pool assets and LP tokens.
-		amt.Currency = ""
-		amt.Issuer = ""
-		return amt
-	}
-	drops := amt.Drops()
-	if drops == 0 {
-		return state.NewIssuedAmountFromValue(0, -100, "", "")
-	}
-	mantissa := drops
-	exp := 0
-	for mantissa >= 1e16 {
-		mantissa /= 10
-		exp++
-	}
-	for mantissa > 0 && mantissa < 1e15 {
-		mantissa *= 10
-		exp--
-	}
-	return state.NewIssuedAmountFromValue(mantissa, exp, "", "")
-}
-
-// calculateLPTokensForInvariant computes the geometric mean: sqrt(amount1 * amount2).
-// This matches rippled's ammLPTokens function.
-// Reference: rippled AMMHelpers.cpp ammLPTokens / InvariantCheck.cpp root2(amount * amount2)
-func calculateLPTokensForInvariant(amount1, amount2 Amount) Amount {
+func calculateLPTokenNumberForInvariant(
+	amount1, amount2 Amount,
+	ctx state.NumberContext,
+	mode state.RoundingMode,
+) state.XRPLNumber {
 	if amount1.IsZero() || amount2.IsZero() {
-		return state.NewIssuedAmountFromValue(0, -100, "", "")
+		return ctx.Int(0)
 	}
-
-	// Convert both to IOU for consistent calculation
-	iou1 := toIOUForInvariant(amount1)
-	iou2 := toIOUForInvariant(amount2)
-
-	// product = iou1 * iou2
-	product := iou1.Mul(iou2, false)
-	// result = sqrt(product)
-	return product.Sqrt()
+	product := ctx.FromAmount(amount1, mode).MulRounded(ctx.FromAmount(amount2, mode), mode)
+	return product.Root2Rounded(mode)
 }
 
 // validAMMBalances checks that balances are valid for the AMM invariant.
@@ -202,53 +169,29 @@ func validAMMBalances(amount, amount2, lptBalance Amount, zeroAllowed bool) bool
 	return positive
 }
 
-// withinRelativeDistanceForInvariant checks if two IOU amounts are within
-// relative distance dist: (max - min) / max < dist.
-// Uses math/big.Int for precise integer arithmetic on mantissa/exponent pairs.
+// withinRelativeDistanceForInvariant checks whether two Numbers differ by less
+// than 1e-11 relative to the larger value.
 // Reference: rippled AMMHelpers.h withinRelativeDistance (lines 156-162)
-func withinRelativeDistanceForInvariant(calc, req Amount) bool {
-	calcIOU := toIOUForInvariant(calc)
-	reqIOU := toIOUForInvariant(req)
-
-	if calcIOU.Compare(reqIOU) == 0 {
+func withinRelativeDistanceForInvariant(
+	ctx state.NumberContext,
+	calcNumber, reqNumber state.XRPLNumber,
+) bool {
+	if calcNumber.Equal(reqNumber) {
 		return true
 	}
 
-	var minAmt, maxAmt Amount
-	if calcIOU.Compare(reqIOU) < 0 {
-		minAmt = calcIOU
-		maxAmt = reqIOU
+	var minNumber, maxNumber state.XRPLNumber
+	if calcNumber.Cmp(reqNumber) < 0 {
+		minNumber = calcNumber
+		maxNumber = reqNumber
 	} else {
-		minAmt = reqIOU
-		maxAmt = calcIOU
+		minNumber = reqNumber
+		maxNumber = calcNumber
 	}
 
-	// Compute (max - min) / max using Number-based division for precision.
-	// We need the result compared against 1e-11.
-	// Use big.Int arithmetic: diff_mantissa * 10^diff_exp / max_mantissa * 10^max_exp < 1e-11
-	// Equivalently: diff_mantissa * 10^(diff_exp - max_exp) * 10^11 < max_mantissa
-
-	diff, _ := maxAmt.Sub(minAmt)
-	if diff.IsZero() {
-		return true
-	}
-
-	// Use XRPLNumber for precise division matching rippled's Number arithmetic
-	diffNum := state.NewXRPLNumber(diff.Mantissa(), diff.Exponent())
-	maxNum := state.NewXRPLNumber(maxAmt.Mantissa(), maxAmt.Exponent())
-	ratio := diffNum.Div(maxNum)
-
-	// Compare ratio < 1e-11
-	// 1e-11 as XRPLNumber: mantissa=1e15, exponent=-26 (normalized)
-	threshold := state.NewXRPLNumber(1e15, -26)
-
-	// ratio < threshold ?
-	ratioAmt := ratio.ToIOUAmountValue()
-	thresholdAmt := threshold.ToIOUAmountValue()
-	rIOU := state.NewIssuedAmountFromValue(ratioAmt.Mantissa(), ratioAmt.Exponent(), "", "")
-	tIOU := state.NewIssuedAmountFromValue(thresholdAmt.Mantissa(), thresholdAmt.Exponent(), "", "")
-
-	return rIOU.Compare(tIOU) < 0
+	diff := maxNumber.AddRounded(minNumber.Negate(), state.RoundToNearest)
+	ratio := diff.DivRounded(maxNumber, state.RoundToNearest)
+	return ratio.Cmp(ctx.Number(1, -11, state.RoundToNearest)) < 0
 }
 
 // ammParseViolation reports a failure to decode an entry already identified as
@@ -263,7 +206,7 @@ func ammParseViolation(err error) *InvariantViolation {
 
 // checkValidAMM implements the ValidAMM invariant checker.
 // Reference: rippled InvariantCheck.cpp ValidAMM::visitEntry + ValidAMM::finalize (lines 1720-2023)
-func checkValidAMM(tx Transaction, result Result, entries []InvariantEntry, view ReadView, rules *amendment.Rules) *InvariantViolation {
+func checkValidAMM(tx Transaction, result Result, entries []InvariantEntry, view ReadView, rules *amendment.Rules, numberContexts ...state.NumberContext) *InvariantViolation {
 	// Delete may return tecINCOMPLETE if there are too many trustlines to delete.
 	// Reference: rippled lines 1994-1995
 	if result != TesSUCCESS && result != TecINCOMPLETE {
@@ -332,15 +275,19 @@ func checkValidAMM(tx Transaction, result Result, entries []InvariantEntry, view
 
 	// --- finalize phase ---
 	enforce := rules != nil && rules.Enabled(amendment.FeatureFixAMMv1_3)
+	numberContext := txcore.NumberContextForRules(rules)
+	if len(numberContexts) > 0 {
+		numberContext = numberContexts[0]
+	}
 
 	txType := tx.TxType()
 	switch txType {
 	case TypeAMMCreate:
-		return finalizeAMMCreate(tx, view, ammAccount, lptAfter, enforce)
+		return finalizeAMMCreate(tx, view, ammAccount, lptAfter, enforce, numberContext)
 	case TypeAMMDeposit:
-		return finalizeAMMDeposit(tx, view, ammAccount, lptAfter, enforce)
+		return finalizeAMMDeposit(tx, view, ammAccount, lptAfter, enforce, numberContext)
 	case TypeAMMClawback, TypeAMMWithdraw:
-		return finalizeAMMWithdraw(tx, view, ammAccount, lptAfter, enforce)
+		return finalizeAMMWithdraw(tx, view, ammAccount, lptAfter, enforce, numberContext)
 	case TypeAMMBid:
 		return finalizeAMMBid(ammPoolChanged, lptBefore, lptAfter, enforce)
 	case TypeAMMVote:
@@ -416,7 +363,7 @@ func finalizeAMMBid(ammPoolChanged bool, lptBefore, lptAfter *Amount, enforce bo
 
 // finalizeAMMCreate checks that AMM was created with correct initial LP tokens.
 // Reference: rippled InvariantCheck.cpp finalizeCreate (lines 1822-1862)
-func finalizeAMMCreate(tx Transaction, view ReadView, ammAccount *[20]byte, lptAfter *Amount, enforce bool) *InvariantViolation {
+func finalizeAMMCreate(tx Transaction, view ReadView, ammAccount *[20]byte, lptAfter *Amount, enforce bool, ctx state.NumberContext) *InvariantViolation {
 	if ammAccount == nil {
 		// AMM object was not created
 		if enforce {
@@ -464,28 +411,20 @@ func finalizeAMMCreate(tx Transaction, view ReadView, ammAccount *[20]byte, lptA
 		return nil
 	}
 
-	// Check sqrt(amount * amount2) == LPTokens. rippled's CREATE check compares
-	// exactly (ammLPTokens(...) != *lptAMMBalanceAfter_); the 1e-11 tolerance
-	// exists only in the deposit/withdraw generalInvariant. go-xrpl's create-time
-	// LP-token arithmetic (Amount/Number based) and this invariant's
-	// reconstruction (sqrt(amount*amount2)) can disagree by one unit in the 16th
-	// significant digit, so an exact comparison trips tecINVARIANT_FAILED on
-	// otherwise-valid AMMCreates (every AMM-using integration test in
-	// internal/testing/amm fails the create step under exact compare). Until the
-	// create-time LP-token path is made bit-equal to rippled's Number path, fall
-	// back to a 1e-11 relative tolerance, which absorbs the ULP-scale drift while
-	// still catching any material divergence. See issue #857.
-	expectedLPT := calculateLPTokensForInvariant(amount, amount2)
-	expectedIOU := toIOUForInvariant(expectedLPT)
-	actualIOU := toIOUForInvariant(*lptAfter)
-	if expectedIOU.Compare(actualIOU) != 0 {
-		if !withinRelativeDistanceForInvariant(expectedLPT, *lptAfter) {
-			if enforce {
-				return &InvariantViolation{
-					Name:    "ValidAMM",
-					Message: fmt.Sprintf("AMMCreate invariant failed: LP tokens mismatch (expected=%v, got=%v)", expectedLPT, *lptAfter),
-				}
-			}
+	mode := state.RoundToNearest
+	if enforce {
+		mode = state.RoundDownward
+	}
+	expectedNumber := calculateLPTokenNumberForInvariant(amount, amount2, ctx, mode)
+	expectedLPT := ctx.ToAmount(
+		expectedNumber,
+		state.NewIssuedAmountFromValue(0, -100, lptAfter.Currency, lptAfter.Issuer),
+		mode,
+	)
+	if expectedLPT.Compare(*lptAfter) != 0 && enforce {
+		return &InvariantViolation{
+			Name:    "ValidAMM",
+			Message: fmt.Sprintf("AMMCreate invariant failed: LP tokens mismatch (expected=%v, got=%v)", expectedLPT, *lptAfter),
 		}
 	}
 
@@ -513,7 +452,7 @@ func finalizeAMMDelete(ammAccount *[20]byte, result Result, enforce bool) *Invar
 
 // finalizeAMMDeposit checks the general AMM invariant on deposit.
 // Reference: rippled InvariantCheck.cpp finalizeDeposit (lines 1944-1962)
-func finalizeAMMDeposit(tx Transaction, view ReadView, ammAccount *[20]byte, lptAfter *Amount, enforce bool) *InvariantViolation {
+func finalizeAMMDeposit(tx Transaction, view ReadView, ammAccount *[20]byte, lptAfter *Amount, enforce bool, ctx state.NumberContext) *InvariantViolation {
 	if ammAccount == nil {
 		// AMM object was deleted — not allowed on deposit
 		if enforce {
@@ -525,7 +464,7 @@ func finalizeAMMDeposit(tx Transaction, view ReadView, ammAccount *[20]byte, lpt
 		return nil
 	}
 
-	if v := generalAMMInvariant(tx, view, ammAccount, lptAfter, false); v != nil {
+	if v := generalAMMInvariant(tx, view, ammAccount, lptAfter, false, ctx); v != nil {
 		if enforce {
 			return v
 		}
@@ -537,13 +476,13 @@ func finalizeAMMDeposit(tx Transaction, view ReadView, ammAccount *[20]byte, lpt
 // finalizeAMMWithdraw checks the general AMM invariant on withdraw/clawback.
 // AMM may be deleted (last withdraw), so ammAccount == nil is allowed.
 // Reference: rippled InvariantCheck.cpp finalizeWithdraw (lines 1964-1982)
-func finalizeAMMWithdraw(tx Transaction, view ReadView, ammAccount *[20]byte, lptAfter *Amount, enforce bool) *InvariantViolation {
+func finalizeAMMWithdraw(tx Transaction, view ReadView, ammAccount *[20]byte, lptAfter *Amount, enforce bool, ctx state.NumberContext) *InvariantViolation {
 	if ammAccount == nil {
 		// Last Withdraw or Clawback deleted AMM — allowed
 		return nil
 	}
 
-	if v := generalAMMInvariant(tx, view, ammAccount, lptAfter, true); v != nil {
+	if v := generalAMMInvariant(tx, view, ammAccount, lptAfter, true, ctx); v != nil {
 		if enforce {
 			return v
 		}
@@ -569,7 +508,7 @@ func finalizeAMMDEX(ammAccount *[20]byte, enforce bool) *InvariantViolation {
 // generalAMMInvariant checks that sqrt(amount * amount2) >= LPTokens.
 // zeroAllowed controls whether all-zero balances are acceptable (for withdrawals).
 // Reference: rippled InvariantCheck.cpp generalInvariant (lines 1897-1941)
-func generalAMMInvariant(tx Transaction, view ReadView, ammAccount *[20]byte, lptAfter *Amount, zeroAllowed bool) *InvariantViolation {
+func generalAMMInvariant(tx Transaction, view ReadView, ammAccount *[20]byte, lptAfter *Amount, zeroAllowed bool, ctx state.NumberContext) *InvariantViolation {
 	if ammAccount == nil || lptAfter == nil || view == nil {
 		return nil
 	}
@@ -586,22 +525,20 @@ func generalAMMInvariant(tx Transaction, view ReadView, ammAccount *[20]byte, lp
 	// Read pool balances from the view
 	amount, amount2 := ammPoolHoldsForInvariant(view, *ammAccount, asset1, asset2)
 
-	// Compute sqrt(amount * amount2)
-	poolProductMean := calculateLPTokensForInvariant(amount, amount2)
+	poolProductMean := calculateLPTokenNumberForInvariant(amount, amount2, ctx, state.RoundToNearest)
+	lptAfterNumber := ctx.FromAmount(*lptAfter, state.RoundToNearest)
 
 	// Check valid balances
 	nonNegativeBalances := validAMMBalances(amount, amount2, *lptAfter, zeroAllowed)
 
 	// Strong check: poolProductMean >= lptAfter
-	poolMeanIOU := toIOUForInvariant(poolProductMean)
-	lptAfterIOU := toIOUForInvariant(*lptAfter)
-	strongInvariantCheck := poolMeanIOU.Compare(lptAfterIOU) >= 0
+	strongInvariantCheck := poolProductMean.Cmp(lptAfterNumber) >= 0
 
 	// Weak check: if lptAfter != 0, check relative distance < 1e-11
 	weakInvariantCheck := false
 	if !strongInvariantCheck {
 		if !lptAfter.IsZero() {
-			weakInvariantCheck = withinRelativeDistanceForInvariant(poolProductMean, *lptAfter)
+			weakInvariantCheck = withinRelativeDistanceForInvariant(ctx, poolProductMean, lptAfterNumber)
 		}
 	}
 

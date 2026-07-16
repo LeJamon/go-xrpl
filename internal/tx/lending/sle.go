@@ -8,6 +8,7 @@ import (
 
 	"github.com/LeJamon/go-xrpl/amendment"
 	"github.com/LeJamon/go-xrpl/internal/ledger/state"
+	"github.com/LeJamon/go-xrpl/internal/tx"
 	"github.com/LeJamon/go-xrpl/internal/tx/ledgerfields"
 	"github.com/LeJamon/go-xrpl/internal/tx/lending/lmath"
 )
@@ -36,15 +37,7 @@ func lendNumForRules(s string, rules *amendment.Rules) lmath.N {
 }
 
 func lendingNumberScale(rules *amendment.Rules) state.MantissaScale {
-	if rules == nil {
-		return state.MantissaScaleForRulesWithFix(false, false, false, false)
-	}
-	return state.MantissaScaleForRulesWithFix(
-		true,
-		rules.Enabled(amendment.FeatureSingleAssetVault),
-		rules.Enabled(amendment.FeatureLendingProtocol),
-		rules.FixCleanup3_2_0Enabled(),
-	)
+	return tx.NumberContextForRules(rules).Scale()
 }
 
 // numStr renders a large-scale XRPLNumber into the NUMBER-field convention: "" for

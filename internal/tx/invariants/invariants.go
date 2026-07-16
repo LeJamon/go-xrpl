@@ -183,7 +183,7 @@ const maxPermissionedDomainCredentials = 10
 //
 // Returns non-nil if any invariant is violated.
 // Reference: rippled InvariantCheck.h — finalize(STTx const&, TER, XRPAmount, ReadView const&, ...)
-func CheckInvariants(tx Transaction, result Result, fee uint64, txDeclaredFee uint64, entries []InvariantEntry, view ReadView, rules *amendment.Rules) *InvariantViolation {
+func CheckInvariants(tx Transaction, result Result, fee uint64, txDeclaredFee uint64, entries []InvariantEntry, view ReadView, rules *amendment.Rules, numberContext ...state.NumberContext) *InvariantViolation {
 	txType := tx.TxType().String()
 	checks := []func() *InvariantViolation{
 		func() *InvariantViolation { return checkTransactionFee(fee, txDeclaredFee) },
@@ -228,7 +228,7 @@ func CheckInvariants(tx Transaction, result Result, fee uint64, txDeclaredFee ui
 			return checkValidBookDirectory(entries, view, rules)
 		},
 		func() *InvariantViolation {
-			return checkValidAMM(tx, result, entries, view, rules)
+			return checkValidAMM(tx, result, entries, view, rules, numberContext...)
 		},
 		func() *InvariantViolation {
 			return checkValidPseudoAccounts(entries, rules)
@@ -237,10 +237,10 @@ func CheckInvariants(tx Transaction, result Result, fee uint64, txDeclaredFee ui
 			return checkValidLoan(entries, rules)
 		},
 		func() *InvariantViolation {
-			return checkValidLoanBroker(entries, view, rules)
+			return checkValidLoanBroker(entries, view, rules, numberContext...)
 		},
 		func() *InvariantViolation {
-			return checkValidVault(tx, result, fee, entries, view, rules)
+			return checkValidVault(tx, result, fee, entries, view, rules, numberContext...)
 		},
 		func() *InvariantViolation {
 			return checkNoModifiedUnmodifiableFields(entries, rules)
