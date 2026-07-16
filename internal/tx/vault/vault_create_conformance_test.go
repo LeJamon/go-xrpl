@@ -96,6 +96,41 @@ func TestVaultCreateAcceptsNegativeZeroAssetsMaximum(t *testing.T) {
 	}
 }
 
+func TestVaultCreateScaleValidation(t *testing.T) {
+	zero := uint8(0)
+	one := uint8(1)
+	maximum := uint8(18)
+	overMaximum := uint8(19)
+	maximumUint8 := uint8(255)
+
+	tests := []struct {
+		name  string
+		asset tx.Asset
+		scale *uint8
+		want  error
+	}{
+		{name: "IOU omitted", asset: tx.Asset{Currency: "USD", Issuer: "rIssuer"}},
+		{name: "IOU zero", asset: tx.Asset{Currency: "USD", Issuer: "rIssuer"}, scale: &zero},
+		{name: "IOU maximum", asset: tx.Asset{Currency: "USD", Issuer: "rIssuer"}, scale: &maximum},
+		{name: "IOU over maximum", asset: tx.Asset{Currency: "USD", Issuer: "rIssuer"}, scale: &overMaximum, want: ErrVaultScaleTooLarge},
+		{name: "IOU uint8 maximum", asset: tx.Asset{Currency: "USD", Issuer: "rIssuer"}, scale: &maximumUint8, want: ErrVaultScaleTooLarge},
+		{name: "XRP zero", asset: tx.Asset{Currency: "XRP"}, scale: &zero, want: ErrVaultScaleForbidden},
+		{name: "XRP one", asset: tx.Asset{Currency: "XRP"}, scale: &one, want: ErrVaultScaleForbidden},
+		{name: "MPT zero", asset: tx.Asset{MPTIssuanceID: "00000001ABCDEF0123456789ABCDEF0123456789ABCDEF12"}, scale: &zero, want: ErrVaultScaleForbidden},
+		{name: "MPT one", asset: tx.Asset{MPTIssuanceID: "00000001ABCDEF0123456789ABCDEF0123456789ABCDEF12"}, scale: &one, want: ErrVaultScaleForbidden},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			create := NewVaultCreate("rOwner", test.asset)
+			create.Scale = test.scale
+			if got := create.Validate(); got != test.want {
+				t.Fatalf("Validate() = %v, want %v", got, test.want)
+			}
+		})
+	}
+}
+
 func TestVaultCreatePresentEmptyDomainIsGatedAndMalformed(t *testing.T) {
 	create := NewVaultCreate("rOwner", tx.Asset{Currency: "XRP"})
 	create.Common.SetPresentFields(map[string]bool{"DomainID": true})

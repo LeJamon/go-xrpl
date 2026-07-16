@@ -16,27 +16,32 @@ const (
 	soeDEFAULT
 )
 
+type templateField struct {
+	name  string
+	style fieldStyle
+}
+
 // commonFields are the fields permitted on every transaction type, regardless
 // of the per-type template. They correspond to rippled's TxFormats commonFields
 // set that is merged into every transaction format.
-var commonFields = map[string]fieldStyle{
-	"TransactionType":    soeREQUIRED,
-	"Flags":              soeOPTIONAL,
-	"SourceTag":          soeOPTIONAL,
-	"Account":            soeREQUIRED,
-	"Sequence":           soeREQUIRED,
-	"PreviousTxnID":      soeOPTIONAL,
-	"LastLedgerSequence": soeOPTIONAL,
-	"AccountTxnID":       soeOPTIONAL,
-	"Fee":                soeREQUIRED,
-	"OperationLimit":     soeOPTIONAL,
-	"Memos":              soeOPTIONAL,
-	"SigningPubKey":      soeREQUIRED,
-	"TicketSequence":     soeOPTIONAL,
-	"TxnSignature":       soeOPTIONAL,
-	"Signers":            soeOPTIONAL,
-	"NetworkID":          soeOPTIONAL,
-	"Delegate":           soeOPTIONAL,
+var commonFields = []templateField{
+	{name: "TransactionType", style: soeREQUIRED},
+	{name: "Flags", style: soeOPTIONAL},
+	{name: "SourceTag", style: soeOPTIONAL},
+	{name: "Account", style: soeREQUIRED},
+	{name: "Sequence", style: soeREQUIRED},
+	{name: "PreviousTxnID", style: soeOPTIONAL},
+	{name: "LastLedgerSequence", style: soeOPTIONAL},
+	{name: "AccountTxnID", style: soeOPTIONAL},
+	{name: "Fee", style: soeREQUIRED},
+	{name: "OperationLimit", style: soeOPTIONAL},
+	{name: "Memos", style: soeOPTIONAL},
+	{name: "SigningPubKey", style: soeREQUIRED},
+	{name: "TicketSequence", style: soeOPTIONAL},
+	{name: "TxnSignature", style: soeOPTIONAL},
+	{name: "Signers", style: soeOPTIONAL},
+	{name: "NetworkID", style: soeOPTIONAL},
+	{name: "Delegate", style: soeOPTIONAL},
 }
 
 // txTemplates holds the per-transaction-type field allowlist (the unique fields
@@ -44,441 +49,447 @@ var commonFields = map[string]fieldStyle{
 // commonFields or in this type's template; any other codec-known field is
 // rejected at parse time, matching rippled's applyTemplate which throws for a
 // field "found in disallowed location".
-var txTemplates = map[Type]map[string]fieldStyle{
+var txTemplates = map[Type][]templateField{
 	TypePayment: {
-		"Destination":    soeREQUIRED,
-		"Amount":         soeREQUIRED,
-		"SendMax":        soeOPTIONAL,
-		"Paths":          soeDEFAULT,
-		"InvoiceID":      soeOPTIONAL,
-		"DestinationTag": soeOPTIONAL,
-		"DeliverMin":     soeOPTIONAL,
-		"CredentialIDs":  soeOPTIONAL,
-		"DomainID":       soeOPTIONAL,
+		{name: "Destination", style: soeREQUIRED},
+		{name: "Amount", style: soeREQUIRED},
+		{name: "SendMax", style: soeOPTIONAL},
+		{name: "Paths", style: soeDEFAULT},
+		{name: "InvoiceID", style: soeOPTIONAL},
+		{name: "DestinationTag", style: soeOPTIONAL},
+		{name: "DeliverMin", style: soeOPTIONAL},
+		{name: "CredentialIDs", style: soeOPTIONAL},
+		{name: "DomainID", style: soeOPTIONAL},
 	},
 	TypeEscrowCreate: {
-		"Destination":    soeREQUIRED,
-		"Amount":         soeREQUIRED,
-		"Condition":      soeOPTIONAL,
-		"CancelAfter":    soeOPTIONAL,
-		"FinishAfter":    soeOPTIONAL,
-		"DestinationTag": soeOPTIONAL,
+		{name: "Destination", style: soeREQUIRED},
+		{name: "Amount", style: soeREQUIRED},
+		{name: "Condition", style: soeOPTIONAL},
+		{name: "CancelAfter", style: soeOPTIONAL},
+		{name: "FinishAfter", style: soeOPTIONAL},
+		{name: "DestinationTag", style: soeOPTIONAL},
 	},
 	TypeEscrowFinish: {
-		"Owner":         soeREQUIRED,
-		"OfferSequence": soeREQUIRED,
-		"Fulfillment":   soeOPTIONAL,
-		"Condition":     soeOPTIONAL,
-		"CredentialIDs": soeOPTIONAL,
+		{name: "Owner", style: soeREQUIRED},
+		{name: "OfferSequence", style: soeREQUIRED},
+		{name: "Fulfillment", style: soeOPTIONAL},
+		{name: "Condition", style: soeOPTIONAL},
+		{name: "CredentialIDs", style: soeOPTIONAL},
 	},
 	TypeAccountSet: {
-		"EmailHash":     soeOPTIONAL,
-		"WalletLocator": soeOPTIONAL,
-		"WalletSize":    soeOPTIONAL,
-		"MessageKey":    soeOPTIONAL,
-		"Domain":        soeOPTIONAL,
-		"TransferRate":  soeOPTIONAL,
-		"SetFlag":       soeOPTIONAL,
-		"ClearFlag":     soeOPTIONAL,
-		"TickSize":      soeOPTIONAL,
-		"NFTokenMinter": soeOPTIONAL,
+		{name: "EmailHash", style: soeOPTIONAL},
+		{name: "WalletLocator", style: soeOPTIONAL},
+		{name: "WalletSize", style: soeOPTIONAL},
+		{name: "MessageKey", style: soeOPTIONAL},
+		{name: "Domain", style: soeOPTIONAL},
+		{name: "TransferRate", style: soeOPTIONAL},
+		{name: "SetFlag", style: soeOPTIONAL},
+		{name: "ClearFlag", style: soeOPTIONAL},
+		{name: "TickSize", style: soeOPTIONAL},
+		{name: "NFTokenMinter", style: soeOPTIONAL},
 	},
 	TypeEscrowCancel: {
-		"Owner":         soeREQUIRED,
-		"OfferSequence": soeREQUIRED,
+		{name: "Owner", style: soeREQUIRED},
+		{name: "OfferSequence", style: soeREQUIRED},
 	},
 	TypeRegularKeySet: {
-		"RegularKey": soeOPTIONAL,
+		{name: "RegularKey", style: soeOPTIONAL},
 	},
 	TypeOfferCreate: {
-		"TakerPays":     soeREQUIRED,
-		"TakerGets":     soeREQUIRED,
-		"Expiration":    soeOPTIONAL,
-		"OfferSequence": soeOPTIONAL,
-		"DomainID":      soeOPTIONAL,
+		{name: "TakerPays", style: soeREQUIRED},
+		{name: "TakerGets", style: soeREQUIRED},
+		{name: "Expiration", style: soeOPTIONAL},
+		{name: "OfferSequence", style: soeOPTIONAL},
+		{name: "DomainID", style: soeOPTIONAL},
 	},
 	TypeOfferCancel: {
-		"OfferSequence": soeREQUIRED,
+		{name: "OfferSequence", style: soeREQUIRED},
 	},
 	TypeTicketCreate: {
-		"TicketCount": soeREQUIRED,
+		{name: "TicketCount", style: soeREQUIRED},
 	},
 	TypeSignerListSet: {
-		"SignerQuorum":  soeREQUIRED,
-		"SignerEntries": soeOPTIONAL,
+		{name: "SignerQuorum", style: soeREQUIRED},
+		{name: "SignerEntries", style: soeOPTIONAL},
 	},
 	TypePaymentChannelCreate: {
-		"Destination":    soeREQUIRED,
-		"Amount":         soeREQUIRED,
-		"SettleDelay":    soeREQUIRED,
-		"PublicKey":      soeREQUIRED,
-		"CancelAfter":    soeOPTIONAL,
-		"DestinationTag": soeOPTIONAL,
+		{name: "Destination", style: soeREQUIRED},
+		{name: "Amount", style: soeREQUIRED},
+		{name: "SettleDelay", style: soeREQUIRED},
+		{name: "PublicKey", style: soeREQUIRED},
+		{name: "CancelAfter", style: soeOPTIONAL},
+		{name: "DestinationTag", style: soeOPTIONAL},
 	},
 	TypePaymentChannelFund: {
-		"Channel":    soeREQUIRED,
-		"Amount":     soeREQUIRED,
-		"Expiration": soeOPTIONAL,
+		{name: "Channel", style: soeREQUIRED},
+		{name: "Amount", style: soeREQUIRED},
+		{name: "Expiration", style: soeOPTIONAL},
 	},
 	TypePaymentChannelClaim: {
-		"Channel":       soeREQUIRED,
-		"Amount":        soeOPTIONAL,
-		"Balance":       soeOPTIONAL,
-		"Signature":     soeOPTIONAL,
-		"PublicKey":     soeOPTIONAL,
-		"CredentialIDs": soeOPTIONAL,
+		{name: "Channel", style: soeREQUIRED},
+		{name: "Amount", style: soeOPTIONAL},
+		{name: "Balance", style: soeOPTIONAL},
+		{name: "Signature", style: soeOPTIONAL},
+		{name: "PublicKey", style: soeOPTIONAL},
+		{name: "CredentialIDs", style: soeOPTIONAL},
 	},
 	TypeCheckCreate: {
-		"Destination":    soeREQUIRED,
-		"SendMax":        soeREQUIRED,
-		"Expiration":     soeOPTIONAL,
-		"DestinationTag": soeOPTIONAL,
-		"InvoiceID":      soeOPTIONAL,
+		{name: "Destination", style: soeREQUIRED},
+		{name: "SendMax", style: soeREQUIRED},
+		{name: "Expiration", style: soeOPTIONAL},
+		{name: "DestinationTag", style: soeOPTIONAL},
+		{name: "InvoiceID", style: soeOPTIONAL},
 	},
 	TypeCheckCash: {
-		"CheckID":    soeREQUIRED,
-		"Amount":     soeOPTIONAL,
-		"DeliverMin": soeOPTIONAL,
+		{name: "CheckID", style: soeREQUIRED},
+		{name: "Amount", style: soeOPTIONAL},
+		{name: "DeliverMin", style: soeOPTIONAL},
 	},
 	TypeCheckCancel: {
-		"CheckID": soeREQUIRED,
+		{name: "CheckID", style: soeREQUIRED},
 	},
 	TypeDepositPreauth: {
-		"Authorize":              soeOPTIONAL,
-		"Unauthorize":            soeOPTIONAL,
-		"AuthorizeCredentials":   soeOPTIONAL,
-		"UnauthorizeCredentials": soeOPTIONAL,
+		{name: "Authorize", style: soeOPTIONAL},
+		{name: "Unauthorize", style: soeOPTIONAL},
+		{name: "AuthorizeCredentials", style: soeOPTIONAL},
+		{name: "UnauthorizeCredentials", style: soeOPTIONAL},
 	},
 	TypeTrustSet: {
-		"LimitAmount": soeOPTIONAL,
-		"QualityIn":   soeOPTIONAL,
-		"QualityOut":  soeOPTIONAL,
+		{name: "LimitAmount", style: soeOPTIONAL},
+		{name: "QualityIn", style: soeOPTIONAL},
+		{name: "QualityOut", style: soeOPTIONAL},
 	},
 	TypeAccountDelete: {
-		"Destination":    soeREQUIRED,
-		"DestinationTag": soeOPTIONAL,
-		"CredentialIDs":  soeOPTIONAL,
+		{name: "Destination", style: soeREQUIRED},
+		{name: "DestinationTag", style: soeOPTIONAL},
+		{name: "CredentialIDs", style: soeOPTIONAL},
 	},
 	TypeNFTokenMint: {
-		"NFTokenTaxon": soeREQUIRED,
-		"TransferFee":  soeOPTIONAL,
-		"Issuer":       soeOPTIONAL,
-		"URI":          soeOPTIONAL,
-		"Amount":       soeOPTIONAL,
-		"Destination":  soeOPTIONAL,
-		"Expiration":   soeOPTIONAL,
+		{name: "NFTokenTaxon", style: soeREQUIRED},
+		{name: "TransferFee", style: soeOPTIONAL},
+		{name: "Issuer", style: soeOPTIONAL},
+		{name: "URI", style: soeOPTIONAL},
+		{name: "Amount", style: soeOPTIONAL},
+		{name: "Destination", style: soeOPTIONAL},
+		{name: "Expiration", style: soeOPTIONAL},
 	},
 	TypeNFTokenBurn: {
-		"NFTokenID": soeREQUIRED,
-		"Owner":     soeOPTIONAL,
+		{name: "NFTokenID", style: soeREQUIRED},
+		{name: "Owner", style: soeOPTIONAL},
 	},
 	TypeNFTokenCreateOffer: {
-		"NFTokenID":   soeREQUIRED,
-		"Amount":      soeREQUIRED,
-		"Destination": soeOPTIONAL,
-		"Owner":       soeOPTIONAL,
-		"Expiration":  soeOPTIONAL,
+		{name: "NFTokenID", style: soeREQUIRED},
+		{name: "Amount", style: soeREQUIRED},
+		{name: "Destination", style: soeOPTIONAL},
+		{name: "Owner", style: soeOPTIONAL},
+		{name: "Expiration", style: soeOPTIONAL},
 	},
 	TypeNFTokenCancelOffer: {
-		"NFTokenOffers": soeREQUIRED,
+		{name: "NFTokenOffers", style: soeREQUIRED},
 	},
 	TypeNFTokenAcceptOffer: {
-		"NFTokenBuyOffer":  soeOPTIONAL,
-		"NFTokenSellOffer": soeOPTIONAL,
-		"NFTokenBrokerFee": soeOPTIONAL,
+		{name: "NFTokenBuyOffer", style: soeOPTIONAL},
+		{name: "NFTokenSellOffer", style: soeOPTIONAL},
+		{name: "NFTokenBrokerFee", style: soeOPTIONAL},
 	},
 	TypeClawback: {
-		"Amount": soeREQUIRED,
-		"Holder": soeOPTIONAL,
+		{name: "Amount", style: soeREQUIRED},
+		{name: "Holder", style: soeOPTIONAL},
 	},
 	TypeAMMClawback: {
-		"Holder": soeREQUIRED,
-		"Asset":  soeREQUIRED,
-		"Asset2": soeREQUIRED,
-		"Amount": soeOPTIONAL,
+		{name: "Holder", style: soeREQUIRED},
+		{name: "Asset", style: soeREQUIRED},
+		{name: "Asset2", style: soeREQUIRED},
+		{name: "Amount", style: soeOPTIONAL},
 	},
 	TypeAMMCreate: {
-		"Amount":     soeREQUIRED,
-		"Amount2":    soeREQUIRED,
-		"TradingFee": soeREQUIRED,
+		{name: "Amount", style: soeREQUIRED},
+		{name: "Amount2", style: soeREQUIRED},
+		{name: "TradingFee", style: soeREQUIRED},
 	},
 	TypeAMMDeposit: {
-		"Asset":      soeREQUIRED,
-		"Asset2":     soeREQUIRED,
-		"Amount":     soeOPTIONAL,
-		"Amount2":    soeOPTIONAL,
-		"EPrice":     soeOPTIONAL,
-		"LPTokenOut": soeOPTIONAL,
-		"TradingFee": soeOPTIONAL,
+		{name: "Asset", style: soeREQUIRED},
+		{name: "Asset2", style: soeREQUIRED},
+		{name: "Amount", style: soeOPTIONAL},
+		{name: "Amount2", style: soeOPTIONAL},
+		{name: "EPrice", style: soeOPTIONAL},
+		{name: "LPTokenOut", style: soeOPTIONAL},
+		{name: "TradingFee", style: soeOPTIONAL},
 	},
 	TypeAMMWithdraw: {
-		"Asset":     soeREQUIRED,
-		"Asset2":    soeREQUIRED,
-		"Amount":    soeOPTIONAL,
-		"Amount2":   soeOPTIONAL,
-		"EPrice":    soeOPTIONAL,
-		"LPTokenIn": soeOPTIONAL,
+		{name: "Asset", style: soeREQUIRED},
+		{name: "Asset2", style: soeREQUIRED},
+		{name: "Amount", style: soeOPTIONAL},
+		{name: "Amount2", style: soeOPTIONAL},
+		{name: "EPrice", style: soeOPTIONAL},
+		{name: "LPTokenIn", style: soeOPTIONAL},
 	},
 	TypeAMMVote: {
-		"Asset":      soeREQUIRED,
-		"Asset2":     soeREQUIRED,
-		"TradingFee": soeREQUIRED,
+		{name: "Asset", style: soeREQUIRED},
+		{name: "Asset2", style: soeREQUIRED},
+		{name: "TradingFee", style: soeREQUIRED},
 	},
 	TypeAMMBid: {
-		"Asset":        soeREQUIRED,
-		"Asset2":       soeREQUIRED,
-		"BidMin":       soeOPTIONAL,
-		"BidMax":       soeOPTIONAL,
-		"AuthAccounts": soeOPTIONAL,
+		{name: "Asset", style: soeREQUIRED},
+		{name: "Asset2", style: soeREQUIRED},
+		{name: "BidMin", style: soeOPTIONAL},
+		{name: "BidMax", style: soeOPTIONAL},
+		{name: "AuthAccounts", style: soeOPTIONAL},
 	},
 	TypeAMMDelete: {
-		"Asset":  soeREQUIRED,
-		"Asset2": soeREQUIRED,
+		{name: "Asset", style: soeREQUIRED},
+		{name: "Asset2", style: soeREQUIRED},
 	},
 	TypeXChainCreateClaimID: {
-		"XChainBridge":     soeREQUIRED,
-		"SignatureReward":  soeREQUIRED,
-		"OtherChainSource": soeREQUIRED,
+		{name: "XChainBridge", style: soeREQUIRED},
+		{name: "SignatureReward", style: soeREQUIRED},
+		{name: "OtherChainSource", style: soeREQUIRED},
 	},
 	TypeXChainCommit: {
-		"XChainBridge":          soeREQUIRED,
-		"XChainClaimID":         soeREQUIRED,
-		"Amount":                soeREQUIRED,
-		"OtherChainDestination": soeOPTIONAL,
+		{name: "XChainBridge", style: soeREQUIRED},
+		{name: "XChainClaimID", style: soeREQUIRED},
+		{name: "Amount", style: soeREQUIRED},
+		{name: "OtherChainDestination", style: soeOPTIONAL},
 	},
 	TypeXChainClaim: {
-		"XChainBridge":   soeREQUIRED,
-		"XChainClaimID":  soeREQUIRED,
-		"Destination":    soeREQUIRED,
-		"DestinationTag": soeOPTIONAL,
-		"Amount":         soeREQUIRED,
+		{name: "XChainBridge", style: soeREQUIRED},
+		{name: "XChainClaimID", style: soeREQUIRED},
+		{name: "Destination", style: soeREQUIRED},
+		{name: "DestinationTag", style: soeOPTIONAL},
+		{name: "Amount", style: soeREQUIRED},
 	},
 	TypeXChainAccountCreateCommit: {
-		"XChainBridge":    soeREQUIRED,
-		"Destination":     soeREQUIRED,
-		"Amount":          soeREQUIRED,
-		"SignatureReward": soeREQUIRED,
+		{name: "XChainBridge", style: soeREQUIRED},
+		{name: "Destination", style: soeREQUIRED},
+		{name: "Amount", style: soeREQUIRED},
+		{name: "SignatureReward", style: soeREQUIRED},
 	},
 	TypeXChainAddClaimAttestation: {
-		"XChainBridge":             soeREQUIRED,
-		"AttestationSignerAccount": soeREQUIRED,
-		"PublicKey":                soeREQUIRED,
-		"Signature":                soeREQUIRED,
-		"OtherChainSource":         soeREQUIRED,
-		"Amount":                   soeREQUIRED,
-		"AttestationRewardAccount": soeREQUIRED,
-		"WasLockingChainSend":      soeREQUIRED,
-		"XChainClaimID":            soeREQUIRED,
-		"Destination":              soeOPTIONAL,
+		{name: "XChainBridge", style: soeREQUIRED},
+		{name: "AttestationSignerAccount", style: soeREQUIRED},
+		{name: "PublicKey", style: soeREQUIRED},
+		{name: "Signature", style: soeREQUIRED},
+		{name: "OtherChainSource", style: soeREQUIRED},
+		{name: "Amount", style: soeREQUIRED},
+		{name: "AttestationRewardAccount", style: soeREQUIRED},
+		{name: "WasLockingChainSend", style: soeREQUIRED},
+		{name: "XChainClaimID", style: soeREQUIRED},
+		{name: "Destination", style: soeOPTIONAL},
 	},
 	TypeXChainAddAccountCreateAttest: {
-		"XChainBridge":             soeREQUIRED,
-		"AttestationSignerAccount": soeREQUIRED,
-		"PublicKey":                soeREQUIRED,
-		"Signature":                soeREQUIRED,
-		"OtherChainSource":         soeREQUIRED,
-		"Amount":                   soeREQUIRED,
-		"AttestationRewardAccount": soeREQUIRED,
-		"WasLockingChainSend":      soeREQUIRED,
-		"XChainAccountCreateCount": soeREQUIRED,
-		"Destination":              soeREQUIRED,
-		"SignatureReward":          soeREQUIRED,
+		{name: "XChainBridge", style: soeREQUIRED},
+		{name: "AttestationSignerAccount", style: soeREQUIRED},
+		{name: "PublicKey", style: soeREQUIRED},
+		{name: "Signature", style: soeREQUIRED},
+		{name: "OtherChainSource", style: soeREQUIRED},
+		{name: "Amount", style: soeREQUIRED},
+		{name: "AttestationRewardAccount", style: soeREQUIRED},
+		{name: "WasLockingChainSend", style: soeREQUIRED},
+		{name: "XChainAccountCreateCount", style: soeREQUIRED},
+		{name: "Destination", style: soeREQUIRED},
+		{name: "SignatureReward", style: soeREQUIRED},
 	},
 	TypeXChainModifyBridge: {
-		"XChainBridge":           soeREQUIRED,
-		"SignatureReward":        soeOPTIONAL,
-		"MinAccountCreateAmount": soeOPTIONAL,
+		{name: "XChainBridge", style: soeREQUIRED},
+		{name: "SignatureReward", style: soeOPTIONAL},
+		{name: "MinAccountCreateAmount", style: soeOPTIONAL},
 	},
 	TypeXChainCreateBridge: {
-		"XChainBridge":           soeREQUIRED,
-		"SignatureReward":        soeREQUIRED,
-		"MinAccountCreateAmount": soeOPTIONAL,
+		{name: "XChainBridge", style: soeREQUIRED},
+		{name: "SignatureReward", style: soeREQUIRED},
+		{name: "MinAccountCreateAmount", style: soeOPTIONAL},
 	},
 	TypeDIDSet: {
-		"DIDDocument": soeOPTIONAL,
-		"URI":         soeOPTIONAL,
-		"Data":        soeOPTIONAL,
+		{name: "DIDDocument", style: soeOPTIONAL},
+		{name: "URI", style: soeOPTIONAL},
+		{name: "Data", style: soeOPTIONAL},
 	},
 	TypeDIDDelete: {},
 	TypeOracleSet: {
-		"OracleDocumentID": soeREQUIRED,
-		"Provider":         soeOPTIONAL,
-		"URI":              soeOPTIONAL,
-		"AssetClass":       soeOPTIONAL,
-		"LastUpdateTime":   soeREQUIRED,
-		"PriceDataSeries":  soeREQUIRED,
+		{name: "OracleDocumentID", style: soeREQUIRED},
+		{name: "Provider", style: soeOPTIONAL},
+		{name: "URI", style: soeOPTIONAL},
+		{name: "AssetClass", style: soeOPTIONAL},
+		{name: "LastUpdateTime", style: soeREQUIRED},
+		{name: "PriceDataSeries", style: soeREQUIRED},
 	},
 	TypeOracleDelete: {
-		"OracleDocumentID": soeREQUIRED,
+		{name: "OracleDocumentID", style: soeREQUIRED},
 	},
 	TypeLedgerStateFix: {
-		"LedgerFixType": soeREQUIRED,
-		"Owner":         soeOPTIONAL,
-		"BookDirectory": soeOPTIONAL,
+		{name: "LedgerFixType", style: soeREQUIRED},
+		{name: "Owner", style: soeOPTIONAL},
+		{name: "BookDirectory", style: soeOPTIONAL},
 	},
 	TypeMPTokenIssuanceCreate: {
-		"AssetScale":      soeOPTIONAL,
-		"TransferFee":     soeOPTIONAL,
-		"MaximumAmount":   soeOPTIONAL,
-		"MPTokenMetadata": soeOPTIONAL,
-		"DomainID":        soeOPTIONAL,
+		{name: "AssetScale", style: soeOPTIONAL},
+		{name: "TransferFee", style: soeOPTIONAL},
+		{name: "MaximumAmount", style: soeOPTIONAL},
+		{name: "MPTokenMetadata", style: soeOPTIONAL},
+		{name: "DomainID", style: soeOPTIONAL},
+		{name: "MutableFlags", style: soeOPTIONAL},
 	},
 	TypeMPTokenIssuanceDestroy: {
-		"MPTokenIssuanceID": soeREQUIRED,
+		{name: "MPTokenIssuanceID", style: soeREQUIRED},
 	},
 	TypeMPTokenIssuanceSet: {
-		"MPTokenIssuanceID": soeREQUIRED,
-		"Holder":            soeOPTIONAL,
-		"DomainID":          soeOPTIONAL,
+		{name: "MPTokenIssuanceID", style: soeREQUIRED},
+		{name: "Holder", style: soeOPTIONAL},
+		{name: "DomainID", style: soeOPTIONAL},
+		{name: "MPTokenMetadata", style: soeOPTIONAL},
+		{name: "TransferFee", style: soeOPTIONAL},
+		{name: "MutableFlags", style: soeOPTIONAL},
 	},
 	TypeMPTokenAuthorize: {
-		"MPTokenIssuanceID": soeREQUIRED,
-		"Holder":            soeOPTIONAL,
+		{name: "MPTokenIssuanceID", style: soeREQUIRED},
+		{name: "Holder", style: soeOPTIONAL},
 	},
 	TypeCredentialCreate: {
-		"Subject":        soeREQUIRED,
-		"CredentialType": soeREQUIRED,
-		"Expiration":     soeOPTIONAL,
-		"URI":            soeOPTIONAL,
+		{name: "Subject", style: soeREQUIRED},
+		{name: "CredentialType", style: soeREQUIRED},
+		{name: "Expiration", style: soeOPTIONAL},
+		{name: "URI", style: soeOPTIONAL},
 	},
 	TypeCredentialAccept: {
-		"Issuer":         soeREQUIRED,
-		"CredentialType": soeREQUIRED,
+		{name: "Issuer", style: soeREQUIRED},
+		{name: "CredentialType", style: soeREQUIRED},
 	},
 	TypeCredentialDelete: {
-		"Subject":        soeOPTIONAL,
-		"Issuer":         soeOPTIONAL,
-		"CredentialType": soeREQUIRED,
+		{name: "Subject", style: soeOPTIONAL},
+		{name: "Issuer", style: soeOPTIONAL},
+		{name: "CredentialType", style: soeREQUIRED},
 	},
 	TypeNFTokenModify: {
-		"NFTokenID": soeREQUIRED,
-		"Owner":     soeOPTIONAL,
-		"URI":       soeOPTIONAL,
+		{name: "NFTokenID", style: soeREQUIRED},
+		{name: "Owner", style: soeOPTIONAL},
+		{name: "URI", style: soeOPTIONAL},
 	},
 	TypePermissionedDomainSet: {
-		"DomainID":            soeOPTIONAL,
-		"AcceptedCredentials": soeREQUIRED,
+		{name: "DomainID", style: soeOPTIONAL},
+		{name: "AcceptedCredentials", style: soeREQUIRED},
 	},
 	TypePermissionedDomainDelete: {
-		"DomainID": soeREQUIRED,
+		{name: "DomainID", style: soeREQUIRED},
 	},
 	TypeDelegateSet: {
-		"Authorize":   soeREQUIRED,
-		"Permissions": soeREQUIRED,
+		{name: "Authorize", style: soeREQUIRED},
+		{name: "Permissions", style: soeREQUIRED},
 	},
 	TypeVaultCreate: {
-		"Asset":            soeREQUIRED,
-		"AssetsMaximum":    soeOPTIONAL,
-		"MPTokenMetadata":  soeOPTIONAL,
-		"DomainID":         soeOPTIONAL,
-		"WithdrawalPolicy": soeOPTIONAL,
-		"Data":             soeOPTIONAL,
-		"Scale":            soeOPTIONAL,
+		{name: "Asset", style: soeREQUIRED},
+		{name: "AssetsMaximum", style: soeOPTIONAL},
+		{name: "MPTokenMetadata", style: soeOPTIONAL},
+		{name: "DomainID", style: soeOPTIONAL},
+		{name: "WithdrawalPolicy", style: soeOPTIONAL},
+		{name: "Data", style: soeOPTIONAL},
+		{name: "Scale", style: soeOPTIONAL},
 	},
 	TypeVaultSet: {
-		"VaultID":       soeREQUIRED,
-		"AssetsMaximum": soeOPTIONAL,
-		"DomainID":      soeOPTIONAL,
-		"Data":          soeOPTIONAL,
+		{name: "VaultID", style: soeREQUIRED},
+		{name: "AssetsMaximum", style: soeOPTIONAL},
+		{name: "DomainID", style: soeOPTIONAL},
+		{name: "Data", style: soeOPTIONAL},
 	},
 	TypeVaultDelete: {
-		"VaultID": soeREQUIRED,
+		{name: "VaultID", style: soeREQUIRED},
 	},
 	TypeVaultDeposit: {
-		"VaultID": soeREQUIRED,
-		"Amount":  soeREQUIRED,
+		{name: "VaultID", style: soeREQUIRED},
+		{name: "Amount", style: soeREQUIRED},
 	},
 	TypeVaultWithdraw: {
-		"VaultID":        soeREQUIRED,
-		"Amount":         soeREQUIRED,
-		"Destination":    soeOPTIONAL,
-		"DestinationTag": soeOPTIONAL,
+		{name: "VaultID", style: soeREQUIRED},
+		{name: "Amount", style: soeREQUIRED},
+		{name: "Destination", style: soeOPTIONAL},
+		{name: "DestinationTag", style: soeOPTIONAL},
 	},
 	TypeVaultClawback: {
-		"VaultID": soeREQUIRED,
-		"Holder":  soeREQUIRED,
-		"Amount":  soeOPTIONAL,
+		{name: "VaultID", style: soeREQUIRED},
+		{name: "Holder", style: soeREQUIRED},
+		{name: "Amount", style: soeOPTIONAL},
 	},
 	TypeBatch: {
-		"RawTransactions": soeREQUIRED,
-		"BatchSigners":    soeOPTIONAL,
+		{name: "RawTransactions", style: soeREQUIRED},
+		{name: "BatchSigners", style: soeOPTIONAL},
 	},
 	TypeLoanBrokerSet: {
-		"VaultID":              soeREQUIRED,
-		"LoanBrokerID":         soeOPTIONAL,
-		"Data":                 soeOPTIONAL,
-		"ManagementFeeRate":    soeOPTIONAL,
-		"DebtMaximum":          soeOPTIONAL,
-		"CoverRateMinimum":     soeOPTIONAL,
-		"CoverRateLiquidation": soeOPTIONAL,
+		{name: "VaultID", style: soeREQUIRED},
+		{name: "LoanBrokerID", style: soeOPTIONAL},
+		{name: "Data", style: soeOPTIONAL},
+		{name: "ManagementFeeRate", style: soeOPTIONAL},
+		{name: "DebtMaximum", style: soeOPTIONAL},
+		{name: "CoverRateMinimum", style: soeOPTIONAL},
+		{name: "CoverRateLiquidation", style: soeOPTIONAL},
 	},
 	TypeLoanBrokerDelete: {
-		"LoanBrokerID": soeREQUIRED,
+		{name: "LoanBrokerID", style: soeREQUIRED},
 	},
 	TypeLoanBrokerCoverDeposit: {
-		"LoanBrokerID": soeREQUIRED,
-		"Amount":       soeREQUIRED,
+		{name: "LoanBrokerID", style: soeREQUIRED},
+		{name: "Amount", style: soeREQUIRED},
 	},
 	TypeLoanBrokerCoverWithdraw: {
-		"LoanBrokerID":   soeREQUIRED,
-		"Amount":         soeREQUIRED,
-		"Destination":    soeOPTIONAL,
-		"DestinationTag": soeOPTIONAL,
+		{name: "LoanBrokerID", style: soeREQUIRED},
+		{name: "Amount", style: soeREQUIRED},
+		{name: "Destination", style: soeOPTIONAL},
+		{name: "DestinationTag", style: soeOPTIONAL},
 	},
 	TypeLoanBrokerCoverClawback: {
-		"LoanBrokerID": soeOPTIONAL,
-		"Amount":       soeOPTIONAL,
+		{name: "LoanBrokerID", style: soeOPTIONAL},
+		{name: "Amount", style: soeOPTIONAL},
 	},
 	TypeLoanSet: {
-		"LoanBrokerID":            soeREQUIRED,
-		"Data":                    soeOPTIONAL,
-		"Counterparty":            soeOPTIONAL,
-		"CounterpartySignature":   soeOPTIONAL,
-		"LoanOriginationFee":      soeOPTIONAL,
-		"LoanServiceFee":          soeOPTIONAL,
-		"LatePaymentFee":          soeOPTIONAL,
-		"ClosePaymentFee":         soeOPTIONAL,
-		"OverpaymentFee":          soeOPTIONAL,
-		"InterestRate":            soeOPTIONAL,
-		"LateInterestRate":        soeOPTIONAL,
-		"CloseInterestRate":       soeOPTIONAL,
-		"OverpaymentInterestRate": soeOPTIONAL,
-		"PrincipalRequested":      soeREQUIRED,
-		"PaymentTotal":            soeOPTIONAL,
-		"PaymentInterval":         soeOPTIONAL,
-		"GracePeriod":             soeOPTIONAL,
+		{name: "LoanBrokerID", style: soeREQUIRED},
+		{name: "Data", style: soeOPTIONAL},
+		{name: "Counterparty", style: soeOPTIONAL},
+		{name: "CounterpartySignature", style: soeOPTIONAL},
+		{name: "LoanOriginationFee", style: soeOPTIONAL},
+		{name: "LoanServiceFee", style: soeOPTIONAL},
+		{name: "LatePaymentFee", style: soeOPTIONAL},
+		{name: "ClosePaymentFee", style: soeOPTIONAL},
+		{name: "OverpaymentFee", style: soeOPTIONAL},
+		{name: "InterestRate", style: soeOPTIONAL},
+		{name: "LateInterestRate", style: soeOPTIONAL},
+		{name: "CloseInterestRate", style: soeOPTIONAL},
+		{name: "OverpaymentInterestRate", style: soeOPTIONAL},
+		{name: "PrincipalRequested", style: soeREQUIRED},
+		{name: "PaymentTotal", style: soeOPTIONAL},
+		{name: "PaymentInterval", style: soeOPTIONAL},
+		{name: "GracePeriod", style: soeOPTIONAL},
 	},
 	TypeLoanDelete: {
-		"LoanID": soeREQUIRED,
+		{name: "LoanID", style: soeREQUIRED},
 	},
 	TypeLoanManage: {
-		"LoanID": soeREQUIRED,
+		{name: "LoanID", style: soeREQUIRED},
 	},
 	TypeLoanPay: {
-		"LoanID": soeREQUIRED,
-		"Amount": soeREQUIRED,
+		{name: "LoanID", style: soeREQUIRED},
+		{name: "Amount", style: soeREQUIRED},
 	},
 	TypeAmendment: {
-		"LedgerSequence": soeREQUIRED,
-		"Amendment":      soeREQUIRED,
+		{name: "LedgerSequence", style: soeREQUIRED},
+		{name: "Amendment", style: soeREQUIRED},
 	},
 	TypeFee: {
-		"LedgerSequence":        soeOPTIONAL,
-		"BaseFee":               soeOPTIONAL,
-		"ReferenceFeeUnits":     soeOPTIONAL,
-		"ReserveBase":           soeOPTIONAL,
-		"ReserveIncrement":      soeOPTIONAL,
-		"BaseFeeDrops":          soeOPTIONAL,
-		"ReserveBaseDrops":      soeOPTIONAL,
-		"ReserveIncrementDrops": soeOPTIONAL,
+		{name: "LedgerSequence", style: soeOPTIONAL},
+		{name: "BaseFee", style: soeOPTIONAL},
+		{name: "ReferenceFeeUnits", style: soeOPTIONAL},
+		{name: "ReserveBase", style: soeOPTIONAL},
+		{name: "ReserveIncrement", style: soeOPTIONAL},
+		{name: "BaseFeeDrops", style: soeOPTIONAL},
+		{name: "ReserveBaseDrops", style: soeOPTIONAL},
+		{name: "ReserveIncrementDrops", style: soeOPTIONAL},
 	},
 	TypeUNLModify: {
-		"UNLModifyDisabling": soeREQUIRED,
-		"LedgerSequence":     soeREQUIRED,
-		"UNLModifyValidator": soeREQUIRED,
+		{name: "UNLModifyDisabling", style: soeREQUIRED},
+		{name: "LedgerSequence", style: soeREQUIRED},
+		{name: "UNLModifyValidator", style: soeREQUIRED},
 	},
 }
 
+var commonFieldStyles = indexTemplate(commonFields)
+var txTemplateStyles = indexTemplates(txTemplates)
 var commonRequiredFields = []string{
 	"TransactionType",
 	"Account",
@@ -563,11 +574,10 @@ type FormatField struct {
 	Style int
 }
 
-// FormatCommonFields returns the fields common to every transaction type
-// (rippled TxFormats::getCommonFields()), sorted by name for deterministic
-// output.
+// FormatCommonFields returns the fields common to every transaction type in
+// rippled's canonical declaration order.
 func FormatCommonFields() []FormatField {
-	return sortedFormatFields(commonFields)
+	return formatFields(commonFields)
 }
 
 // FormatTemplates returns each transaction type's unique fields (common fields
@@ -575,18 +585,36 @@ func FormatCommonFields() []FormatField {
 func FormatTemplates() map[string][]FormatField {
 	out := make(map[string][]FormatField, len(txTemplates))
 	for t, tmpl := range txTemplates {
-		out[t.String()] = sortedFormatFields(tmpl)
+		out[t.String()] = formatFields(tmpl)
 	}
 	return out
 }
 
-func sortedFormatFields(m map[string]fieldStyle) []FormatField {
-	out := make([]FormatField, 0, len(m))
-	for name, style := range m {
-		out = append(out, FormatField{Name: name, Style: int(style)})
+func formatFields(fields []templateField) []FormatField {
+	out := make([]FormatField, len(fields))
+	for i, field := range fields {
+		out[i] = FormatField{Name: field.name, Style: int(field.style)}
 	}
-	sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })
 	return out
+}
+
+func indexTemplate(fields []templateField) map[string]fieldStyle {
+	index := make(map[string]fieldStyle, len(fields))
+	for _, field := range fields {
+		if _, exists := index[field.name]; exists {
+			panic("duplicate transaction template field: " + field.name)
+		}
+		index[field.name] = field.style
+	}
+	return index
+}
+
+func indexTemplates(templates map[Type][]templateField) map[Type]map[string]fieldStyle {
+	indexes := make(map[Type]map[string]fieldStyle, len(templates))
+	for txType, fields := range templates {
+		indexes[txType] = indexTemplate(fields)
+	}
+	return indexes
 }
 
 // ValidateTemplateFields applies the structural portion of rippled's STTx
@@ -610,9 +638,9 @@ func ValidateTemplateFields(txType Type, values map[string]any) error {
 			return errors.New("Field '" + name + "' is required but missing.")
 		}
 	}
-	for name, style := range txTemplates[txType] {
-		if style == soeDEFAULT && fields[name] && isExplicitDefault(values[name]) {
-			return errors.New("Field '" + name + "' may not be explicitly set to default.")
+	for _, field := range txTemplates[txType] {
+		if field.style == soeDEFAULT && fields[field.name] && isExplicitDefault(values[field.name]) {
+			return errors.New("Field '" + field.name + "' may not be explicitly set to default.")
 		}
 	}
 
@@ -633,7 +661,7 @@ func isExplicitDefault(value any) bool {
 }
 
 func validateTemplateAllowlist(txType Type, fields map[string]bool) error {
-	template, ok := txTemplates[txType]
+	template, ok := txTemplateStyles[txType]
 	if !ok {
 		return nil
 	}
@@ -643,7 +671,7 @@ func validateTemplateAllowlist(txType Type, fields map[string]bool) error {
 	}
 	sort.Strings(names)
 	for _, name := range names {
-		if _, ok := commonFields[name]; ok {
+		if _, ok := commonFieldStyles[name]; ok {
 			continue
 		}
 		if _, ok := template[name]; ok {
