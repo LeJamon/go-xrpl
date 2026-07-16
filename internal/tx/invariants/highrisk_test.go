@@ -15,6 +15,7 @@ import (
 	binarycodec "github.com/LeJamon/go-xrpl/codec/binarycodec"
 	"github.com/LeJamon/go-xrpl/internal/ledger/state"
 	"github.com/LeJamon/go-xrpl/keylet"
+	"github.com/LeJamon/go-xrpl/protocol"
 )
 
 // Distinct, round-trippable test addresses (re-used across the file).
@@ -373,20 +374,20 @@ func TestValidMPTIssuance_CreateAndDestroy(t *testing.T) {
 	deleted := InvariantEntry{EntryType: "MPTokenIssuance", Before: nonNil, IsDelete: true}
 
 	create := stubTx{txType: TypeMPTokenIssuanceCreate}
-	if v := checkValidMPTIssuance(create, TesSUCCESS, []InvariantEntry{created}); v != nil {
+	if v := checkValidMPTIssuance(create, TesSUCCESS, []InvariantEntry{created}, amendment.AllSupportedRules()); v != nil {
 		t.Fatalf("create exactly one issuance: unexpected violation %v", v)
 	}
-	if v := checkValidMPTIssuance(create, TesSUCCESS, []InvariantEntry{created, created}); v == nil {
+	if v := checkValidMPTIssuance(create, TesSUCCESS, []InvariantEntry{created, created}, amendment.AllSupportedRules()); v == nil {
 		t.Fatal("expected ValidMPTIssuance violation: created two issuances")
 	} else if v.Name != "ValidMPTIssuance" {
 		t.Fatalf("unexpected violation name %q", v.Name)
 	}
 
 	destroy := stubTx{txType: TypeMPTokenIssuanceDestroy}
-	if v := checkValidMPTIssuance(destroy, TesSUCCESS, []InvariantEntry{deleted}); v != nil {
+	if v := checkValidMPTIssuance(destroy, TesSUCCESS, []InvariantEntry{deleted}, amendment.AllSupportedRules()); v != nil {
 		t.Fatalf("destroy exactly one issuance: unexpected violation %v", v)
 	}
-	if v := checkValidMPTIssuance(destroy, TesSUCCESS, nil); v == nil {
+	if v := checkValidMPTIssuance(destroy, TesSUCCESS, nil, amendment.AllSupportedRules()); v == nil {
 		t.Fatal("expected ValidMPTIssuance violation: destroy deleted no issuance")
 	}
 }
@@ -400,15 +401,60 @@ func TestValidMPTIssuance_AuthorizeByActor(t *testing.T) {
 	mptoken := []InvariantEntry{{EntryType: "MPToken", After: nonNil}}
 
 	byHolder := holderTx{stubTx: stubTx{txType: TypeMPTokenAuthorize}, hasHolder: false}
-	if v := checkValidMPTIssuance(byHolder, TesSUCCESS, mptoken); v != nil {
+	if v := checkValidMPTIssuance(byHolder, TesSUCCESS, mptoken, amendment.AllSupportedRules()); v != nil {
 		t.Fatalf("holder authorize creating one mptoken: unexpected violation %v", v)
 	}
 
 	byIssuer := holderTx{stubTx: stubTx{txType: TypeMPTokenAuthorize}, hasHolder: true}
-	if v := checkValidMPTIssuance(byIssuer, TesSUCCESS, mptoken); v == nil {
+	if v := checkValidMPTIssuance(byIssuer, TesSUCCESS, mptoken, amendment.AllSupportedRules()); v == nil {
 		t.Fatal("expected ValidMPTIssuance violation: issuer authorize created an mptoken")
 	} else if v.Name != "ValidMPTIssuance" {
 		t.Fatalf("unexpected violation name %q", v.Name)
+	}
+}
+
+func TestValidMPTIssuance_MayAuthorizePrivilege(t *testing.T) {
+	nonNil := []byte{0x01}
+	created := InvariantEntry{EntryType: "MPToken", After: nonNil}
+	deleted := InvariantEntry{EntryType: "MPToken", Before: nonNil, IsDelete: true}
+	loanBrokerSet := stubTx{txType: protocol.TxTypeLoanBrokerSet}
+	lendingRules := amendment.NewRulesBuilder().Enable(amendment.FeatureLendingProtocol).Build()
+
+	for name, entries := range map[string][]InvariantEntry{
+		"no MPT change": nil,
+		"create one":    {created},
+		"delete one":    {deleted},
+	} {
+		t.Run(name, func(t *testing.T) {
+			if v := checkValidMPTIssuance(loanBrokerSet, TesSUCCESS, entries, lendingRules); v != nil {
+				t.Fatalf("unexpected violation: %v", v)
+			}
+		})
+	}
+
+	if v := checkValidMPTIssuance(
+		loanBrokerSet,
+		TesSUCCESS,
+		[]InvariantEntry{created, deleted},
+		lendingRules,
+	); v == nil {
+		t.Fatal("expected ValidMPTIssuance violation for two MPToken changes")
+	}
+
+	issuance := []InvariantEntry{{EntryType: "MPTokenIssuance", After: nonNil}}
+	if v := checkValidMPTIssuance(loanBrokerSet, TesSUCCESS, issuance, lendingRules); v == nil {
+		t.Fatal("expected ValidMPTIssuance violation for issuance creation")
+	}
+
+	withoutLending := amendment.NewRulesBuilder().Enable(amendment.FeatureSingleAssetVault).Build()
+	vaultDeposit := stubTx{txType: TypeVaultDeposit}
+	if v := checkValidMPTIssuance(
+		vaultDeposit,
+		TesSUCCESS,
+		[]InvariantEntry{created, deleted},
+		withoutLending,
+	); v != nil {
+		t.Fatalf("lending-disabled MayAuthorizeMPT count was capped: %v", v)
 	}
 }
 
@@ -420,10 +466,10 @@ func TestValidMPTIssuance_UnexpectedChanges(t *testing.T) {
 	tx := stubTx{txType: TypePayment}
 
 	created := []InvariantEntry{{EntryType: "MPTokenIssuance", After: nonNil}}
-	if v := checkValidMPTIssuance(tx, TesSUCCESS, created); v == nil {
+	if v := checkValidMPTIssuance(tx, TesSUCCESS, created, amendment.AllSupportedRules()); v == nil {
 		t.Fatal("expected ValidMPTIssuance violation: Payment created an MPTokenIssuance")
 	}
-	if v := checkValidMPTIssuance(tx, TesSUCCESS, nil); v != nil {
+	if v := checkValidMPTIssuance(tx, TesSUCCESS, nil, amendment.AllSupportedRules()); v != nil {
 		t.Fatalf("Payment with no MPT changes: unexpected violation %v", v)
 	}
 }

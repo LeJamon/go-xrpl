@@ -210,7 +210,7 @@ func CheckInvariants(tx Transaction, result Result, fee uint64, txDeclaredFee ui
 			return checkValidClawback(tx, result, entries, view)
 		},
 		func() *InvariantViolation {
-			return checkValidMPTIssuance(tx, result, entries)
+			return checkValidMPTIssuance(tx, result, entries, rules)
 		},
 		func() *InvariantViolation {
 			return checkValidPermissionedDomain(tx, result, entries, rules)

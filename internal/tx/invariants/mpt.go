@@ -1,5 +1,7 @@
 package invariants
 
+import "github.com/LeJamon/go-xrpl/amendment"
+
 // ---------------------------------------------------------------------------
 // ValidMPTIssuance
 // ---------------------------------------------------------------------------
@@ -9,7 +11,7 @@ package invariants
 // visitEntry: counts created and deleted MPTokenIssuance and MPToken entries.
 // finalize: switch on transaction type with specific count requirements.
 
-func checkValidMPTIssuance(tx Transaction, result Result, entries []InvariantEntry) *InvariantViolation {
+func checkValidMPTIssuance(tx Transaction, result Result, entries []InvariantEntry, rules *amendment.Rules) *InvariantViolation {
 	// visitEntry phase: count created/deleted MPTokenIssuance and MPToken entries.
 	// In rippled, visitEntry receives (isDelete, before, after) where `after` is
 	// always the SLE data (even for deletions). In Go's CollectEntries, deleted
@@ -65,8 +67,7 @@ func checkValidMPTIssuance(tx Transaction, result Result, entries []InvariantEnt
 			return nil
 		}
 
-		switch txType {
-		case TypeMPTokenAuthorize, TypeVaultDeposit:
+		if hasPrivilege(txType, mustAuthorizeMPT|mayAuthorizeMPT) {
 			// No issuance changes allowed.
 			if mptIssuancesCreated > 0 {
 				return &InvariantViolation{
@@ -78,6 +79,13 @@ func checkValidMPTIssuance(tx Transaction, result Result, entries []InvariantEnt
 				return &InvariantViolation{
 					Name:    "ValidMPTIssuance",
 					Message: "MPT authorize succeeded but deleted issuances",
+				}
+			}
+			if rules != nil && rules.Enabled(amendment.FeatureLendingProtocol) &&
+				mptokensCreated+mptokensDeleted > 1 {
+				return &InvariantViolation{
+					Name:    "ValidMPTIssuance",
+					Message: "MPT authorize succeeded but created/deleted bad number of mptokens",
 				}
 			}
 
@@ -97,8 +105,8 @@ func checkValidMPTIssuance(tx Transaction, result Result, entries []InvariantEnt
 					Message: "MPT authorize submitted by issuer succeeded but created/deleted mptokens",
 				}
 			}
-			// If holder submitted (not VaultDeposit), exactly 1 MPToken must be created or deleted.
-			if !submittedByIssuer && txType != TypeVaultDeposit &&
+			// A holder-submitted must-authorize transaction must create or delete one MPToken.
+			if !submittedByIssuer && hasPrivilege(txType, mustAuthorizeMPT) &&
 				(mptokensCreated+mptokensDeleted != 1) {
 				return &InvariantViolation{
 					Name:    "ValidMPTIssuance",
@@ -106,7 +114,9 @@ func checkValidMPTIssuance(tx Transaction, result Result, entries []InvariantEnt
 				}
 			}
 			return nil
+		}
 
+		switch txType {
 		case TypeMPTokenIssuanceSet:
 			// Must not create/delete any.
 			if mptIssuancesCreated != 0 || mptIssuancesDeleted != 0 ||
