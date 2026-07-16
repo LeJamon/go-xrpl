@@ -163,7 +163,6 @@ func checkValidMPTIssuance(tx Transaction, result Result, entries []InvariantEnt
 		enforceEscrowFinish := txType == TypeEscrowFinish && rules != nil &&
 			(rules.Enabled(amendment.FeatureSingleAssetVault) || lendingEnabled)
 		if hasPrivilege(txType, mustAuthorizeMPT|mayAuthorizeMPT) || enforceEscrowFinish {
-			// No issuance changes allowed.
 			if mptIssuancesCreated > 0 {
 				return &InvariantViolation{
 					Name:    "ValidMPTIssuance",
@@ -200,7 +199,6 @@ func checkValidMPTIssuance(tx Transaction, result Result, entries []InvariantEnt
 					Message: "MPT authorize submitted by issuer succeeded but created/deleted mptokens",
 				}
 			}
-			// A holder-submitted must-authorize transaction must create or delete one MPToken.
 			if !submittedByIssuer && hasPrivilege(txType, mustAuthorizeMPT) &&
 				(mptokensCreated+mptokensDeleted != 1) {
 				return &InvariantViolation{
@@ -229,8 +227,6 @@ func checkValidMPTIssuance(tx Transaction, result Result, entries []InvariantEnt
 		}
 	}
 
-	// A transaction with the mayDeleteMPT privilege may delete exactly one
-	// MPToken with no other MPT changes.
 	if result == TesSUCCESS && hasPrivilege(txType, mayDeleteMPT) &&
 		mptokensDeleted == 1 && mptokensCreated == 0 &&
 		mptIssuancesCreated == 0 && mptIssuancesDeleted == 0 {
