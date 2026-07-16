@@ -221,6 +221,127 @@ func TestLoanBroker_CoverDepositInsufficientFunds(t *testing.T) {
 	jtx.RequireTxClaimed(t, env.Submit(dep), jtx.TecINSUFFICIENT_FUNDS)
 }
 
+func TestLoanSet_UpwardPaymentCountXRP(t *testing.T) {
+	env := newLendingEnv(t)
+	owner := jtx.NewAccount("owner")
+	borrower := jtx.NewAccount("borrower")
+	env.FundAmount(owner, 10_000_000_000)
+	env.FundAmount(borrower, 10_000_000_000)
+
+	vaultSeq := env.Seq(owner)
+	vid := setupXRPVault(t, env, owner, 10_000_000)
+	vaultKey := keylet.Vault(owner.AccountID(), vaultSeq)
+
+	brokerSeq := env.Seq(owner)
+	jtx.RequireTxSuccess(t, env.Submit(lending.NewLoanBrokerSet(owner.Address, vid)))
+	bid := brokerID(owner, brokerSeq)
+	brokerKey := keylet.LoanBroker(owner.AccountID(), brokerSeq)
+
+	interestRate := uint32(500)
+	paymentInterval := uint32(60)
+	paymentTotal := uint32(12)
+	loanSet := lending.NewLoanSet(borrower.Address, bid, "1000000")
+	loanSet.InterestRate = &interestRate
+	loanSet.PaymentInterval = &paymentInterval
+	loanSet.PaymentTotal = &paymentTotal
+	loanSet.Counterparty = owner.Address
+	loanSet.GetCommon().Fee = "20"
+	loanSet.GetCommon().SigningPubKey = strings.ToUpper(borrower.PublicKeyHex())
+	counterpartySignature, err := txsign.SignCounterparty(
+		loanSet,
+		strings.ToUpper(owner.PublicKeyHex()),
+		"00"+strings.ToUpper(owner.PrivateKeyHex()),
+	)
+	if err != nil {
+		t.Fatalf("sign counterparty: %v", err)
+	}
+	loanSet.GetCommon().CounterpartySignature = counterpartySignature
+
+	borrowerBalance := env.Balance(borrower)
+	jtx.RequireTxSuccess(t, env.Submit(loanSet))
+
+	decode := func(name string, k keylet.Keylet) map[string]any {
+		t.Helper()
+		data, err := env.LedgerEntry(k)
+		if err != nil {
+			t.Fatalf("read %s: %v", name, err)
+		}
+		fields, err := binarycodec.DecodeBytes(data)
+		if err != nil {
+			t.Fatalf("decode %s: %v", name, err)
+		}
+		return fields
+	}
+	assertField := func(name string, fields map[string]any, field string, want any) {
+		t.Helper()
+		if got := fields[field]; got != want {
+			t.Errorf("%s %s = %v, want %v", name, field, got, want)
+		}
+	}
+
+	loanKey := keylet.Loan(brokerKey.Key, 1)
+	loan := decode("Loan", loanKey)
+	assertField("Loan", loan, "PeriodicPayment", "83333.33848930448955")
+	assertField("Loan", loan, "PrincipalOutstanding", "1000000")
+	assertField("Loan", loan, "TotalValueOutstanding", "1000001")
+	if _, ok := loan["LoanScale"]; ok {
+		t.Errorf("Loan LoanScale = %v, want omitted", loan["LoanScale"])
+	}
+	assertField("Loan", loan, "PaymentRemaining", uint32(12))
+
+	vaultFields := decode("Vault", vaultKey)
+	assertField("Vault", vaultFields, "AssetsAvailable", "9000000")
+	assertField("Vault", vaultFields, "AssetsTotal", "10000001")
+
+	broker := decode("LoanBroker", brokerKey)
+	assertField("LoanBroker", broker, "DebtTotal", "1000001")
+	assertField("LoanBroker", broker, "LoanSequence", uint32(2))
+	assertField("LoanBroker", broker, "OwnerCount", uint32(1))
+
+	accountID := func(name string, fields map[string]any) [20]byte {
+		t.Helper()
+		address, ok := fields["Account"].(string)
+		if !ok {
+			t.Fatalf("%s Account = %v, want address", name, fields["Account"])
+		}
+		id, err := state.DecodeAccountID(address)
+		if err != nil {
+			t.Fatalf("decode %s Account: %v", name, err)
+		}
+		return id
+	}
+	inOwnerDir := func(name string, owner [20]byte) bool {
+		t.Helper()
+		found := false
+		if err := state.DirForEach(env.Ledger(), keylet.OwnerDir(owner), func(item [32]byte) error {
+			if item == loanKey.Key {
+				found = true
+			}
+			return nil
+		}); err != nil {
+			t.Fatalf("read %s owner directory: %v", name, err)
+		}
+		return found
+	}
+	if !inOwnerDir("LoanBroker", accountID("LoanBroker", broker)) {
+		t.Error("Loan missing from LoanBroker pseudo-account owner directory")
+	}
+	if !inOwnerDir("borrower", borrower.AccountID()) {
+		t.Error("Loan missing from borrower owner directory")
+	}
+	if inOwnerDir("Vault", accountID("Vault", vaultFields)) {
+		t.Error("Loan present in Vault pseudo-account owner directory")
+	}
+
+	if got := env.OwnerCount(borrower); got != 1 {
+		t.Errorf("borrower OwnerCount = %d, want 1", got)
+	}
+	wantBorrowerBalance := borrowerBalance + 1_000_000 - 2*env.BaseFee()
+	if got := env.Balance(borrower); got != wantBorrowerBalance {
+		t.Errorf("borrower balance = %d, want %d", got, wantBorrowerBalance)
+	}
+}
+
 func TestLoanSet_ReplayUsesApplicationViewCloseTime(t *testing.T) {
 	env := newLendingEnv(t)
 	owner := jtx.NewAccount("owner")
@@ -246,6 +367,7 @@ func TestLoanSet_ReplayUsesApplicationViewCloseTime(t *testing.T) {
 	loanSet := lending.NewLoanSet(borrower.Address, bid, "1000000")
 	loanSet.PaymentInterval = &interval
 	loanSet.Counterparty = owner.Address
+	loanSet.GetCommon().Fee = "20"
 	loanSet.GetCommon().SigningPubKey = strings.ToUpper(borrower.PublicKeyHex())
 	counterpartySignature, err := txsign.SignCounterparty(
 		loanSet,
@@ -317,6 +439,7 @@ func TestLoanSet_ReplayRechecksScheduleAgainstApplicationViewCloseTime(t *testin
 	loanSet.PaymentInterval = &interval
 	loanSet.GracePeriod = &grace
 	loanSet.Counterparty = owner.Address
+	loanSet.GetCommon().Fee = "20"
 	loanSet.GetCommon().SigningPubKey = strings.ToUpper(borrower.PublicKeyHex())
 	counterpartySignature, err := txsign.SignCounterparty(
 		loanSet,
@@ -352,6 +475,7 @@ func TestLoanSet_ReplayRechecksScheduleAgainstApplicationViewCloseTime(t *testin
 	loanSet.PaymentInterval = &interval
 	loanSet.GracePeriod = &grace
 	loanSet.Counterparty = owner.Address
+	loanSet.GetCommon().Fee = "20"
 	loanSet.GetCommon().SigningPubKey = strings.ToUpper(borrower.PublicKeyHex())
 	counterpartySignature, err = txsign.SignCounterparty(
 		loanSet,
