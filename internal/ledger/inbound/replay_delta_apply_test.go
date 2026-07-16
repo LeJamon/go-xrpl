@@ -75,6 +75,25 @@ func TestReplayDelta_Apply_EmptyTxSet(t *testing.T) {
 	assert.Equal(t, hdr.TxHash, gotTx, "derived TxHash must match header")
 }
 
+func TestReplayDelta_Apply_RejectsResolutionNotDerivedFromParent(t *testing.T) {
+	t.Parallel()
+	parent := makeGenesisLedger(t)
+	_, hdr := buildEmptyClosedSuccessorResponse(t, parent)
+	hdr.CloseTimeResolution = 120
+	hdrBytes := header.AddRaw(hdr, false)
+	hdr.Hash = computeWireHeaderHash(hdrBytes)
+
+	resp := &message.ReplayDeltaResponse{
+		LedgerHash:   hdr.Hash[:],
+		LedgerHeader: hdrBytes,
+	}
+	rd := armReplayDeltaWith(t, parent, resp, hdr)
+
+	_, err := rd.Apply(tx.EngineConfig{})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "derived")
+}
+
 // TestReplayDelta_Apply_OrderedByIndex verifies that Apply walks
 // r.txs in TransactionIndex order, not wire order. We poke ReplayDelta
 // into StateComplete with synthetic DecodedTx records carrying

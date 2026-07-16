@@ -18,6 +18,7 @@ import (
 
 	"github.com/LeJamon/go-xrpl/drops"
 	"github.com/LeJamon/go-xrpl/internal/cmdexit"
+	"github.com/LeJamon/go-xrpl/internal/consensus"
 	"github.com/LeJamon/go-xrpl/internal/ledger"
 	"github.com/LeJamon/go-xrpl/internal/ledger/header"
 	ledgerstate "github.com/LeJamon/go-xrpl/internal/ledger/state"
@@ -587,12 +588,24 @@ func (r *replayRangeRunner) processBlock(
 	if err != nil {
 		return nil, nil, fmt.Errorf("ledger %d parent close time: %w", targetLedger, err)
 	}
+	applicationResolution := consensus.GetNextLedgerTimeResolution(
+		preSnapshot.CloseTimeResolution,
+		preSnapshot.CloseFlags&header.LCFNoConsensusTime == 0,
+		targetLedger,
+	)
+	if applicationResolution != postSnapshot.CloseTimeResolution {
+		return nil, nil, fmt.Errorf(
+			"ledger %d close time resolution: got %d, derived %d from parent",
+			targetLedger, postSnapshot.CloseTimeResolution, applicationResolution,
+		)
+	}
+	applicationCloseTime := ledger.ApplicationViewCloseTime(parentCloseTime, closeTime, applicationResolution)
 
 	ledgerHeader := header.LedgerHeader{
 		LedgerIndex:         targetLedger,
 		ParentHash:          preSnapshot.LedgerHash,
 		ParentCloseTime:     parentCloseTime,
-		CloseTime:           closeTime,
+		CloseTime:           applicationCloseTime,
 		CloseTimeResolution: postSnapshot.CloseTimeResolution,
 		CloseFlags:          postSnapshot.CloseFlags,
 		Drops:               preSnapshot.TotalCoins, // Start with parent's total coins
@@ -637,6 +650,8 @@ func (r *replayRangeRunner) processBlock(
 		LedgerSequence:            targetLedger,
 		ParentHash:                preSnapshot.LedgerHash,
 		ParentCloseTime:           protocol.ToRippleTime(parentCloseTime),
+		ApplicationCloseTime:      protocol.ToRippleTime(applicationCloseTime),
+		ApplicationCloseTimeSet:   true,
 		SkipSignatureVerification: true,
 		Standalone:                true,
 		Rules:                     rules,
