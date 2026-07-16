@@ -882,7 +882,6 @@ func (e *TestEnv) retryHeldReplacementsIntoQueue() {
 	}
 }
 
-// txFeeLevel returns the TxQ fee level a transaction pays.
 func (e *TestEnv) txFeeLevel(txn tx.Transaction) txq.FeeLevel {
 	common := txn.GetCommon()
 	if common == nil {

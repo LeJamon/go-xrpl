@@ -248,7 +248,6 @@ func (e *Engine) checkFee(tx txcore.Transaction, common *txcore.Common, account 
 		}
 	}
 
-	// When fee is zero, skip balance checks.
 	// Reference: rippled Transactor::checkFee line 292-293:
 	//   if (feePaid == beast::zero) return tesSUCCESS;
 	if fee == 0 {
@@ -295,7 +294,6 @@ func (e *Engine) enforceFeeFloor(fee, baseFeeForTx uint64) ter.Result {
 	return ter.TesSUCCESS
 }
 
-// preclaimBaseFee computes the dispatched minimum fee for this transaction.
 func (e *Engine) preclaimBaseFee(tx txcore.Transaction) uint64 {
 	return sign.CalculateBaseFee(tx, e.view, e.config)
 }

@@ -135,8 +135,6 @@ func (a *TxqAdapter) GetReferenceFee() uint64 {
 	return a.cfg.BaseFee
 }
 
-// GetBaseFees returns the dispatched minimum fee and the ordinary fee used to
-// normalize contextually free transactions.
 func (a *TxqAdapter) GetBaseFees(transaction tx.Transaction) (fee, defaultFee uint64) {
 	defaultFee = a.cfg.BaseFee
 	fee = defaultFee

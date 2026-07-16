@@ -24,7 +24,7 @@ type ApplyResult struct {
 	// Metadata contains the changes made by the transaction
 	Metadata *Metadata
 
-	// AppliedInnerTransactions contains the immutable committed Batch inner
+	// AppliedInnerTransactions contains committed Batch inner
 	// transaction results, in execution order.
 	AppliedInnerTransactions []AppliedInnerTransaction
 
