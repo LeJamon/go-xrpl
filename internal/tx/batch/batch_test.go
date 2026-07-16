@@ -2,6 +2,7 @@ package batch
 
 import (
 	"encoding/hex"
+	"os"
 	"strings"
 	"testing"
 
@@ -14,6 +15,12 @@ import (
 	"github.com/LeJamon/go-xrpl/internal/tx/lending"
 	"github.com/LeJamon/go-xrpl/internal/tx/payment"
 )
+
+func TestMain(m *testing.M) {
+	Register()
+	payment.Register()
+	os.Exit(m.Run())
+}
 
 func TestBatchBinaryRoundTripPreservesInnerTransactions(t *testing.T) {
 	outer := NewBatch(testOuter)
