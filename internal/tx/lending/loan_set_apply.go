@@ -50,7 +50,7 @@ func (l *LoanSet) Preclaim(view tx.LedgerView, config tx.EngineConfig) ter.Resul
 	}
 
 	// Schedule must fit in the 32-bit time field.
-	now := config.ParentCloseTime
+	now := config.CurrentCloseTime()
 	timeAvailable := ^uint32(0) - now
 	interval := valOr(l.PaymentInterval, minPaymentInterval)
 	total := valOr(l.PaymentTotal, 1)
@@ -215,7 +215,7 @@ func (l *LoanSet) Apply(ctx *tx.ApplyContext) ter.Result {
 		}
 	}
 
-	startDate := ctx.Config.ParentCloseTime
+	startDate := ctx.Config.CurrentCloseTime()
 	loanSeq := b.LoanSequence
 	loanKey := keylet.Loan(brokerID, loanSeq)
 

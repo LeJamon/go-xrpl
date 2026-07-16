@@ -158,6 +158,23 @@ type pairEntry struct {
 	scale      *uint8
 }
 
+func validateOracleUpdateTime(config tx.EngineConfig, lastUpdateTime uint32) ter.Result {
+	closeTime := uint64(config.CurrentCloseTime())
+	updateTime := uint64(lastUpdateTime)
+	if updateTime < uint64(protocol.RippleEpochUnix) {
+		return ter.TecINVALID_UPDATE_TIME
+	}
+	updateTime -= uint64(protocol.RippleEpochUnix)
+	if closeTime < MaxLastUpdateTimeDelta {
+		return ter.TecINTERNAL
+	}
+	if updateTime < closeTime-MaxLastUpdateTimeDelta ||
+		updateTime > closeTime+MaxLastUpdateTimeDelta {
+		return ter.TecINVALID_UPDATE_TIME
+	}
+	return ter.TesSUCCESS
+}
+
 // Apply applies an OracleSet transaction to the ledger state.
 // Combines rippled's SetOracle::preclaim() and SetOracle::doApply().
 // Reference: rippled SetOracle.cpp
@@ -169,26 +186,8 @@ func (o *OracleSet) Apply(ctx *tx.ApplyContext) ter.Result {
 		"priceDataCount", len(o.PriceDataSeries),
 	)
 
-	// --- Preclaim: Time validation ---
-	// Reference: rippled SetOracle.cpp preclaim lines 80-93
-	closeTime := uint64(ctx.Config.ParentCloseTime)
-	lastUpdateTime := uint64(o.LastUpdateTime)
-
-	if lastUpdateTime < uint64(protocol.RippleEpochUnix) {
-		return ter.TecINVALID_UPDATE_TIME
-	}
-	lastUpdateTimeEpoch := lastUpdateTime - uint64(protocol.RippleEpochUnix)
-
-	// Validate that lastUpdateTimeEpoch is within maxLastUpdateTimeDelta of closeTime.
-	// The lower-bound subtraction (closeTime - delta) is guarded to prevent underflow.
-	// In rippled this guard returns tecINTERNAL (LCOV_EXCL_LINE — effectively dead code
-	// since close time is always well past 300s in practice). We skip the range check
-	// entirely when closeTime is too small, matching the intent of the unreachable guard.
-	if closeTime >= MaxLastUpdateTimeDelta {
-		if lastUpdateTimeEpoch < (closeTime-MaxLastUpdateTimeDelta) ||
-			lastUpdateTimeEpoch > (closeTime+MaxLastUpdateTimeDelta) {
-			return ter.TecINVALID_UPDATE_TIME
-		}
+	if result := validateOracleUpdateTime(ctx.Config, o.LastUpdateTime); result != ter.TesSUCCESS {
+		return result
 	}
 
 	// --- Read oracle SLE to determine create vs update ---

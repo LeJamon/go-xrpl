@@ -145,7 +145,7 @@ func (s *Service) buildClosedLedgerLocked(pending []pendingTx, closeTime time.Ti
 	// Salt = SHAMap root of the tx set (rippled consensus-build convention).
 	canonicalSort(pending, computeSalt(pending))
 
-	freshLedger, err := ledger.NewOpen(s.closedLedger, closeTime)
+	freshLedger, err := ledger.NewOpenForBuild(s.closedLedger, closeTime)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create fresh ledger for close: %w", err)
 	}
@@ -163,6 +163,8 @@ func (s *Service) buildClosedLedgerLocked(pending []pendingTx, closeTime time.Ti
 		LedgerSequence:            freshLedger.Sequence(),
 		NetworkID:                 s.config.NetworkID,
 		ParentCloseTime:           parentCloseTimeRippleEpoch(s.closedLedger),
+		ApplicationCloseTime:      protocol.ToRippleTime(freshLedger.CloseTime()),
+		ApplicationCloseTimeSet:   true,
 		Logger:                    s.config.Logger,
 		SkipSignatureVerification: skipSigVerify,
 		// tec under certainRetry holds for retry, commits on the final pass.
