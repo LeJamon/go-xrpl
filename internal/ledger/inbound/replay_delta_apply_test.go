@@ -12,6 +12,7 @@ import (
 	"github.com/LeJamon/go-xrpl/internal/peermanagement/message"
 	"github.com/LeJamon/go-xrpl/internal/tx"
 	accounttx "github.com/LeJamon/go-xrpl/internal/tx/account"
+	"github.com/LeJamon/go-xrpl/internal/tx/all"
 	batchtx "github.com/LeJamon/go-xrpl/internal/tx/batch"
 	"github.com/LeJamon/go-xrpl/internal/tx/ter"
 	"github.com/LeJamon/go-xrpl/protocol"
@@ -172,6 +173,8 @@ func TestReplayDelta_Apply_OrderedByIndex(t *testing.T) {
 }
 
 func TestReplayDelta_Apply_RequiresExpectedBatchInnerLeaves(t *testing.T) {
+	all.RegisterAll()
+
 	parent := makeGenesisLedger(t)
 	_, account, err := genesis.GenerateGenesisAccountID()
 	require.NoError(t, err)

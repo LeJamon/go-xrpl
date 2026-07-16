@@ -1,13 +1,11 @@
 package service
 
 import (
-	"encoding/hex"
 	"strconv"
 	"testing"
 
-	"github.com/LeJamon/go-xrpl/codec/binarycodec"
 	"github.com/LeJamon/go-xrpl/internal/tx"
-	_ "github.com/LeJamon/go-xrpl/internal/tx/all"
+	"github.com/LeJamon/go-xrpl/internal/tx/all"
 	"github.com/LeJamon/go-xrpl/internal/tx/amm"
 	"github.com/LeJamon/go-xrpl/internal/tx/ter"
 	"github.com/LeJamon/go-xrpl/internal/txq"
@@ -15,6 +13,8 @@ import (
 )
 
 func TestClosedLedgerFeeMetricsDispatchCustomFee(t *testing.T) {
+	all.RegisterAll()
+
 	service, err := New(DefaultConfig())
 	if err != nil {
 		t.Fatalf("New: %v", err)
@@ -34,17 +34,9 @@ func TestClosedLedgerFeeMetricsDispatchCustomFee(t *testing.T) {
 	create.GetCommon().Fee = strconv.FormatUint(reserveIncrement, 10)
 	create.GetCommon().SetSequence(1)
 
-	flattened, err := create.Flatten()
+	raw, err := tx.SerializeTransaction(create)
 	if err != nil {
-		t.Fatalf("Flatten: %v", err)
-	}
-	encoded, err := binarycodec.Encode(flattened)
-	if err != nil {
-		t.Fatalf("Encode: %v", err)
-	}
-	raw, err := hex.DecodeString(encoded)
-	if err != nil {
-		t.Fatalf("DecodeString: %v", err)
+		t.Fatalf("SerializeTransaction: %v", err)
 	}
 	blob, err := tx.CreateTxWithMetaBlob(raw, &tx.Metadata{TransactionResult: ter.TesSUCCESS})
 	if err != nil {
