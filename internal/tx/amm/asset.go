@@ -147,15 +147,6 @@ func minAmountIOU(a, b tx.Amount) tx.Amount {
 	return b
 }
 
-// maxAmount returns the larger of two amounts.
-// Assumes both amounts are of the same type (both XRP or same IOU).
-func maxAmount(a, b tx.Amount) tx.Amount {
-	if compareAmounts(a, b) > 0 {
-		return a
-	}
-	return b
-}
-
 // isGreater returns true if a > b
 func isGreater(a, b tx.Amount) bool {
 	return compareAmounts(a, b) > 0
@@ -164,11 +155,6 @@ func isGreater(a, b tx.Amount) bool {
 // isGreaterOrEqual returns true if a >= b
 func isGreaterOrEqual(a, b tx.Amount) bool {
 	return compareAmounts(a, b) >= 0
-}
-
-// isLessOrEqual returns true if a <= b
-func isLessOrEqual(a, b tx.Amount) bool {
-	return compareAmounts(a, b) <= 0
 }
 
 // withinRelativeDistance checks if two amounts are within relative distance dist.
