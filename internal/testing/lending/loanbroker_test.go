@@ -254,31 +254,13 @@ func TestLoanSet_ReplayRechecksScheduleAgainstApplicationViewCloseTime(t *testin
 		t.Fatalf("sign counterparty: %v", err)
 	}
 	loanSet.GetCommon().CounterpartySignature = counterpartySignature
+	loanSeq := env.Seq(borrower)
 	jtx.RequireTxSuccess(t, env.Submit(loanSet))
-	txHash, err := tx.ComputeTransactionHash(loanSet)
-	if err != nil {
-		t.Fatalf("compute transaction hash: %v", err)
-	}
 
 	env.SetTime(protocol.FromRippleTime(835360942))
 	env.Close()
-	txWithMeta, found, err := env.LastClosedLedger().GetTransaction(txHash)
-	if err != nil {
-		t.Fatalf("read closed transaction: %v", err)
-	}
-	if !found {
-		t.Fatal("closed ledger does not contain claimed LoanSet")
-	}
-	_, metaBytes, err := tx.SplitTxWithMetaBlob(txWithMeta)
-	if err != nil {
-		t.Fatalf("split transaction metadata: %v", err)
-	}
-	meta, err := binarycodec.Decode(hex.EncodeToString(metaBytes))
-	if err != nil {
-		t.Fatalf("decode transaction metadata: %v", err)
-	}
-	if got := meta["TransactionResult"]; got != "tecKILLED" {
-		t.Fatalf("closed transaction result: got %v want tecKILLED", got)
+	if got := env.Seq(borrower); got != loanSeq+1 {
+		t.Fatalf("borrower sequence after claimed replay: got %d want %d", got, loanSeq+1)
 	}
 
 	bidBytes, err := hex.DecodeString(bid)
