@@ -40,8 +40,12 @@ type ApplyContext interface {
 	// GetAccountReserve returns the reserve requirement for an account.
 	GetAccountReserve(ownerCount uint32) uint64
 
-	// GetBaseFee returns the base fee for a transaction.
-	GetBaseFee(txn tx.Transaction) uint64
+	// GetBaseFees returns the contextual minimum fee and the ordinary fee used
+	// to normalize a contextually free transaction's fee level.
+	GetBaseFees(txn tx.Transaction) (baseFee, defaultBaseFee uint64)
+
+	// GetReferenceFee returns the ledger's base reference fee.
+	GetReferenceFee() uint64
 
 	// GetTxInLedger returns the number of transactions in the open ledger.
 	GetTxInLedger() uint32
@@ -121,12 +125,12 @@ func (q *TxQ) Apply(ctx ApplyContext, txn tx.Transaction, txID [32]byte, account
 		return ApplyResult{Result: result, Applied: false}
 	}
 
-	baseFee := ctx.GetBaseFee(txn)
+	baseFee, defaultBaseFee := ctx.GetBaseFees(txn)
 	feePaid, err := strconv.ParseUint(common.Fee, 10, 64)
 	if err != nil {
 		return ApplyResult{Result: ter.TemBAD_FEE, Applied: false}
 	}
-	feeLevel := ToFeeLevel(feePaid, baseFee)
+	feeLevel := ToFeeLevelWithDefaultBaseFee(feePaid, baseFee, defaultBaseFee)
 
 	acctSeq := ctx.GetAccountSequence(account)
 	txInLedger := ctx.GetTxInLedger()
@@ -368,8 +372,7 @@ func (q *TxQ) Apply(ctx ApplyContext, txn tx.Transaction, txID [32]byte, account
 			// preclaim against the adjusted view, not the balance gate below.
 
 			reserve := ctx.GetAccountReserve(0)
-			baseFeeVal := ctx.GetBaseFee(txn)
-			if totalFee >= balance || (reserve > 10*baseFeeVal && totalFee >= reserve) {
+			if totalFee >= balance || (reserve > 10*ctx.GetReferenceFee() && totalFee >= reserve) {
 				return ApplyResult{Result: ter.TelCAN_NOT_QUEUE_BALANCE, Applied: false}
 			}
 

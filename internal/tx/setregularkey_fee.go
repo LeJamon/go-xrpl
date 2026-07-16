@@ -8,9 +8,9 @@ import (
 // password-change discount: it is signed with the account's master key while
 // lsfPasswordSpent is clear.
 //
-// This is the single source of truth shared by the preclaim fee floor
-// (preclaimBaseFee) and the doApply lsfPasswordSpent flag, so the fee charged
-// and the flag can never drift. It mirrors rippled, where both read the one
+// This is the single source of truth shared by fee dispatch and the doApply
+// lsfPasswordSpent flag, so the fee charged and the flag can never drift. It
+// mirrors rippled, where both read the one
 // computed ctx_.baseFee: the flag is set iff !minimumFee(ctx_.baseFee), and
 // ctx_.baseFee is 0 iff this discount applies.
 //
@@ -18,6 +18,9 @@ import (
 // doApply (lines 83-84).
 func SetRegularKeyFeeWaived(skipSigVerification bool, common *Common, account *state.AccountRoot) bool {
 	if common == nil || account == nil {
+		return false
+	}
+	if common.GetFlags()&TfInnerBatchTxn != 0 {
 		return false
 	}
 	// One-shot discount: once lsfPasswordSpent is set the master key must pay

@@ -419,6 +419,22 @@ func (t *ApplyStateTable) Apply() (*tx.Metadata, error) {
 	return metadata, nil
 }
 
+// ApplyUnthreaded commits changes that were already threaded by child
+// transaction state tables.
+func (t *ApplyStateTable) ApplyUnthreaded() error {
+	staged := t.clone()
+	_, err := staged.applyOrdered(
+		staged.base,
+		sortedLedgerKeys(staged.items),
+		sortedLedgerKeys(staged.threadOnlyOwners),
+	)
+	if err != nil {
+		return err
+	}
+	t.adopt(staged)
+	return nil
+}
+
 func (t *ApplyStateTable) applyOrdered(
 	atomicBase ledgercore.AtomicWriter,
 	itemKeys, ownerKeys [][32]byte,

@@ -238,6 +238,37 @@ func ComputeTransactionHash(tx Transaction) ([32]byte, error) {
 	return computeTransactionHash(tx)
 }
 
+// SerializeTransaction returns the canonical binary serialization used for a
+// transaction ID and transaction-map leaf.
+func SerializeTransaction(tx Transaction) ([]byte, error) {
+	if rawBytes := tx.GetRawBytes(); len(rawBytes) > 0 {
+		return append([]byte(nil), rawBytes...), nil
+	}
+	txMap, err := tx.Flatten()
+	if err != nil {
+		return nil, err
+	}
+	PopulateRequiredWireFields(txMap, tx.GetCommon())
+	hexStr, err := binarycodec.Encode(txMap)
+	if err != nil {
+		return nil, err
+	}
+	return hex.DecodeString(hexStr)
+}
+
+// PopulateRequiredWireFields supplies required fields whose valid zero values
+// are otherwise indistinguishable from absence in programmatic transactions.
+func PopulateRequiredWireFields(txMap map[string]any, common *Common) {
+	if _, ok := txMap["SigningPubKey"]; !ok {
+		txMap["SigningPubKey"] = ""
+	}
+	if common.TicketSequence != nil {
+		if _, ok := txMap["Sequence"]; !ok {
+			txMap["Sequence"] = uint32(0)
+		}
+	}
+}
+
 // computeTransactionHash computes the hash of a transaction
 // The hash is SHA512Half of the "TXN\x00" prefix + serialized transaction
 func computeTransactionHash(tx Transaction) ([32]byte, error) {
@@ -257,15 +288,7 @@ func computeTransactionHash(tx Transaction) ([32]byte, error) {
 	}
 
 	// No raw bytes: rebuilt from current field state each call, so not memoised.
-	txMap, err := tx.Flatten()
-	if err != nil {
-		return [32]byte{}, err
-	}
-	hexStr, err := binarycodec.Encode(txMap)
-	if err != nil {
-		return [32]byte{}, err
-	}
-	txBytes, err := hex.DecodeString(hexStr)
+	txBytes, err := SerializeTransaction(tx)
 	if err != nil {
 		return [32]byte{}, err
 	}

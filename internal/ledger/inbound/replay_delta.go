@@ -2,11 +2,13 @@ package inbound
 
 import (
 	"bytes"
+	"context"
 	"encoding/hex"
 	"errors"
 	"fmt"
 	"log/slog"
 	"sort"
+	"strings"
 	"sync"
 	"time"
 
@@ -644,18 +646,51 @@ func (r *ReplayDelta) Apply(engineCfg tx.EngineConfig) (*ledger.Ledger, error) {
 	// metadata.TransactionIndex internally from its txCount counter,
 	// matching rippled's OpenView::txCount() behavior — so we don't
 	// need to feed an index per tx.
+	var expectedBatchInners []tx.AppliedInnerTransaction
 	for _, dtx := range r.txs {
 		txn, parseErr := tx.ParseFromBinary(dtx.TxBytes)
 		if parseErr != nil {
 			return nil, fmt.Errorf("%w: tx %x: %w", ErrReplayTxParse, dtx.Hash[:8], parseErr)
 		}
 		txn.SetRawBytes(dtx.TxBytes)
+		isBatchInner := txn.GetCommon().GetFlags()&tx.TfInnerBatchTxn != 0
+		if isBatchInner {
+			if len(expectedBatchInners) == 0 {
+				return nil, fmt.Errorf("%w: unexpected batch inner tx %x", ErrReplayTxDiverged, dtx.Hash[:8])
+			}
+			expected := expectedBatchInners[0]
+			expectedHash, hashErr := tx.ComputeTransactionHash(expected.Transaction)
+			if hashErr != nil || expectedHash != dtx.Hash || expected.Metadata == nil ||
+				expected.Metadata.TransactionIndex != dtx.Index {
+				return nil, fmt.Errorf("%w: batch inner tx %x does not match outer execution", ErrReplayTxDiverged, dtx.Hash[:8])
+			}
+			peerMeta, metaErr := binarycodec.Decode(hex.EncodeToString(dtx.MetaBytes))
+			if metaErr != nil {
+				return nil, fmt.Errorf("%w: decode batch inner metadata %x: %v", ErrReplayTxDiverged, dtx.Hash[:8], metaErr)
+			}
+			parentBatchID, _ := peerMeta["ParentBatchID"].(string)
+			transactionResult, _ := peerMeta["TransactionResult"].(string)
+			if expected.Metadata.ParentBatchID == nil ||
+				!strings.EqualFold(parentBatchID, hex.EncodeToString(expected.Metadata.ParentBatchID[:])) ||
+				transactionResult != expected.Metadata.TransactionResult.String() {
+				return nil, fmt.Errorf("%w: batch inner metadata %x does not match outer execution", ErrReplayTxDiverged, dtx.Hash[:8])
+			}
+			if err := child.AddTransactionWithMeta(dtx.Hash, dtx.LeafBlob); err != nil {
+				return nil, fmt.Errorf("%w: tx %x: %w", ErrReplayLeafInstall, dtx.Hash[:8], err)
+			}
+			expectedBatchInners = expectedBatchInners[1:]
+			continue
+		}
+		if len(expectedBatchInners) != 0 {
+			return nil, fmt.Errorf("%w: batch inner transactions missing before tx %x", ErrReplayTxDiverged, dtx.Hash[:8])
+		}
 
 		var result tx.ApplyResult
 		if txn.TxType().IsPseudoTransaction() {
 			result = engine.ApplyPseudo(txn)
 		} else {
 			result = engine.Apply(txn)
+			result = engine.ApplyBatchInnerTransactions(context.Background(), txn, result)
 		}
 
 		// R6b.2a: compare engine-generated meta against the peer-supplied
@@ -707,6 +742,7 @@ func (r *ReplayDelta) Apply(engineCfg tx.EngineConfig) (*ledger.Ledger, error) {
 			return nil, fmt.Errorf("%w: tx %x returned %s; rippled only embeds tes/tec txs",
 				ErrReplayTxDiverged, dtx.Hash[:8], result.Result.String())
 		}
+		expectedBatchInners = append(expectedBatchInners, result.AppliedInnerTransactions...)
 		// Applied path (tes / tec): anchor the verified peer leaf so the
 		// rebuilt TxHash matches header.TxHash byte-for-byte. Using our
 		// locally-generated metadata would diverge even when the
@@ -714,6 +750,9 @@ func (r *ReplayDelta) Apply(engineCfg tx.EngineConfig) (*ledger.Ledger, error) {
 		if err := child.AddTransactionWithMeta(dtx.Hash, dtx.LeafBlob); err != nil {
 			return nil, fmt.Errorf("%w: tx %x: %w", ErrReplayLeafInstall, dtx.Hash[:8], err)
 		}
+	}
+	if len(expectedBatchInners) != 0 {
+		return nil, fmt.Errorf("%w: replay ended before all batch inner transactions", ErrReplayTxDiverged)
 	}
 
 	// Close the ledger. This freezes both maps, computes AccountHash and

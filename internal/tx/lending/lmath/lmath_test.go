@@ -4,6 +4,7 @@ import (
 	"testing"
 
 	"github.com/LeJamon/go-xrpl/internal/ledger/state"
+	"github.com/LeJamon/go-xrpl/internal/tx/ter"
 )
 
 func init() { state.SetNumberSwitchover(true) }
@@ -224,4 +225,81 @@ func TestComputePowerMinusOne(t *testing.T) {
 	if !computePowerMinusOne(num(5, -2), 0).IsZero() || !computePowerMinusOne(num(0, 0), 5).IsZero() {
 		t.Fatalf("degenerate powerMinusOne must be zero")
 	}
+}
+
+func TestCheckLoanGuardsUpwardPaymentCount(t *testing.T) {
+	parse := func(t *testing.T, scale state.MantissaScale, value string) N {
+		t.Helper()
+		n, err := state.ParseXRPLNumber(value, scale, state.RoundToNearest)
+		if err != nil {
+			t.Fatalf("ParseXRPLNumber(%q): %v", value, err)
+		}
+		return n
+	}
+
+	vectors := []struct {
+		name                string
+		asset               Asset
+		principal           string
+		periodicPayment     string
+		valueOutstanding    string
+		paymentTotal        uint32
+		towardsZeroPayments int64
+		loanScale           int
+	}{
+		{"IOU twelve payments", Asset{}, "1000", "83.33364250408379297", "1000.003710049006", 12, 11, -12},
+		{"XRP twelve payments", Asset{Integral: true}, "1000000", "83333.33848930448955", "1000001", 12, 11, 0},
+		{"IOU three payments", Asset{}, "20", "6.721536094178039612", "20.164608282535", 3, 2, -12},
+	}
+	scales := []struct {
+		name  string
+		scale state.MantissaScale
+	}{
+		{"small", state.MantissaScaleSmall},
+		{"large legacy", state.MantissaScaleLargeLegacy},
+		{"large", state.MantissaScaleLarge},
+	}
+
+	for _, vector := range vectors {
+		t.Run(vector.name, func(t *testing.T) {
+			for _, scale := range scales {
+				t.Run(scale.name, func(t *testing.T) {
+					principal := parse(t, scale.scale, vector.principal)
+					properties := LoanProperties{
+						PeriodicPayment: parse(t, scale.scale, vector.periodicPayment),
+						LoanState: LoanState{
+							ValueOutstanding: parse(t, scale.scale, vector.valueOutstanding),
+						},
+						LoanScale:             vector.loanScale,
+						FirstPaymentPrincipal: parse(t, scale.scale, "1"),
+					}
+					roundedPayment := roundPeriodicPayment(vector.asset, properties.PeriodicPayment, properties.LoanScale)
+					quotient := properties.LoanState.ValueOutstanding.DivRounded(roundedPayment, state.RoundUpward)
+
+					if got := quotient.ToInt64WithMode(state.RoundTowardsZero); got != vector.towardsZeroPayments {
+						t.Fatalf("toward-zero payment count = %d, want %d", got, vector.towardsZeroPayments)
+					}
+					if got := quotient.ToInt64WithMode(state.RoundUpward); got != int64(vector.paymentTotal) {
+						t.Fatalf("upward payment count = %d, want %d", got, vector.paymentTotal)
+					}
+					if got := CheckLoanGuards(vector.asset, principal, true, vector.paymentTotal, properties); got != ter.TesSUCCESS {
+						t.Fatalf("CheckLoanGuards = %v, want tesSUCCESS", got)
+					}
+				})
+			}
+		})
+	}
+
+	t.Run("loan set inputs", func(t *testing.T) {
+		principal := parse(t, state.MantissaScaleLarge, "1000")
+		properties := ComputeLoanProperties(true, Asset{}, principal, 500, 3600, 12, 0, -12)
+		eq(t, "periodic payment", properties.PeriodicPayment, parse(t, state.MantissaScaleLarge, "83.33364250408379297"))
+		eq(t, "value outstanding", properties.LoanState.ValueOutstanding, parse(t, state.MantissaScaleLarge, "1000.003710049006"))
+		if properties.LoanScale != -12 {
+			t.Fatalf("loan scale = %d, want -12", properties.LoanScale)
+		}
+		if got := CheckLoanGuards(Asset{}, principal, true, 12, properties); got != ter.TesSUCCESS {
+			t.Fatalf("CheckLoanGuards = %v, want tesSUCCESS", got)
+		}
+	})
 }

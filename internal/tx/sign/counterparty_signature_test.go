@@ -52,6 +52,41 @@ func primarySignedTx(t *testing.T) txcore.Transaction {
 	return transaction
 }
 
+func TestTicketedTransactionSigningIncludesZeroSequence(t *testing.T) {
+	priv, pub, addr := cpKeypair(t, 0x77)
+	transaction := txcore.NewBaseTx(txcore.TypeAccountSet, addr)
+	ticketSequence := uint32(7)
+	transaction.Common.TicketSequence = &ticketSequence
+	transaction.Common.Fee = "10"
+	transaction.Common.SigningPubKey = pub
+
+	payload, err := getSigningPayload(transaction)
+	if err != nil {
+		t.Fatalf("get signing payload: %v", err)
+	}
+	expectedMap, err := transaction.Flatten()
+	if err != nil {
+		t.Fatalf("flatten expected transaction: %v", err)
+	}
+	expectedMap["Sequence"] = uint32(0)
+	expected, err := binarycodec.EncodeForSigning(expectedMap)
+	if err != nil {
+		t.Fatalf("encode expected signing payload: %v", err)
+	}
+	if payload != expected {
+		t.Fatal("ticketed signing payload omitted required Sequence: 0")
+	}
+
+	signature, err := SignTransaction(transaction, priv)
+	if err != nil {
+		t.Fatalf("sign ticketed transaction: %v", err)
+	}
+	transaction.Common.TxnSignature = signature
+	if err := VerifySignature(transaction, false); err != nil {
+		t.Fatalf("verify ticketed transaction: %v", err)
+	}
+}
+
 // sortSigners orders signers by binary AccountID, as a well-formed multi-sign
 // array must be.
 func sortSigners(signers []txcore.SignerWrapper) {

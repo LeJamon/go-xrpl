@@ -17,6 +17,8 @@ type TxResult struct {
 
 	// Metadata contains the transaction metadata (AffectedNodes, etc.).
 	Metadata *tx.Metadata
+
+	AppliedInnerTransactions []tx.AppliedInnerTransaction
 }
 
 // tesSUCCESS is the result code for a successful transaction.

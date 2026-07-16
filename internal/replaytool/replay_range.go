@@ -723,7 +723,7 @@ func (r *replayRangeRunner) processBlock(
 		fillTxDisplay(&txInfo, txEntry.TxBlob, parsedTx.Transaction, wantTxDetail)
 
 		// Apply transaction
-		blockTxResult, err := blockProcessor.ApplyTransaction(parsedTx.Transaction, parsedTx.RawBlob)
+		blockTxResult, err := blockProcessor.ApplyLedgerTransaction(parsedTx.Transaction, parsedTx.RawBlob)
 		if err != nil {
 			txInfo.Error = fmt.Sprintf("failed to apply: %v", err)
 			result.TxResults = append(result.TxResults, txInfo)

@@ -200,7 +200,7 @@ func VerifyMultiSignature(tx txcore.Transaction, lookup SignerListLookup, mustBe
 
 	// Get the multi-signing payload for this transaction
 	// Each signer signs a different message (transaction + their account ID suffix)
-	txMap, err := tx.Flatten()
+	txMap, err := flattenForSigning(tx)
 	if err != nil {
 		return fmt.Errorf("failed to flatten transaction: %w", err)
 	}
@@ -336,7 +336,7 @@ func VerifyMultiSignatureCrypto(tx txcore.Transaction, mustBeFullyCanonical bool
 		return ErrNoSigners
 	}
 
-	txMap, err := tx.Flatten()
+	txMap, err := flattenForSigning(tx)
 	if err != nil {
 		return fmt.Errorf("failed to flatten transaction: %w", err)
 	}
@@ -422,7 +422,7 @@ func verifyCounterpartyMultiSign(tx txcore.Transaction, cp *txcore.CounterpartyS
 		return errors.New(counterpartyPrefix + "Invalid Signers array size.")
 	}
 
-	txMap, err := tx.Flatten()
+	txMap, err := flattenForSigning(tx)
 	if err != nil {
 		return errors.New(counterpartyPrefix + "Invalid signature.")
 	}
@@ -474,10 +474,19 @@ func copyMap(m map[string]any) map[string]any {
 	return result
 }
 
+func flattenForSigning(tx txcore.Transaction) (map[string]any, error) {
+	txMap, err := tx.Flatten()
+	if err != nil {
+		return nil, err
+	}
+	txcore.PopulateRequiredWireFields(txMap, tx.GetCommon())
+	return txMap, nil
+}
+
 // getSigningPayload returns the binary data that should be signed
 func getSigningPayload(tx txcore.Transaction) (string, error) {
 	// Flatten the transaction to a map
-	txMap, err := tx.Flatten()
+	txMap, err := flattenForSigning(tx)
 	if err != nil {
 		return "", err
 	}
@@ -588,12 +597,42 @@ func CalculateMultiSigFee(baseFee uint64, numSigners int) uint64 {
 	return baseFee * (1 + uint64(numSigners))
 }
 
+// CalculateDefaultBaseFee returns the ordinary transaction fee without any
+// transaction-specific override.
+func CalculateDefaultBaseFee(transaction txcore.Transaction, config txcore.EngineConfig) uint64 {
+	if IsMultiSigned(transaction) {
+		return CalculateMultiSigFee(config.BaseFee, len(transaction.GetCommon().Signers))
+	}
+	return config.BaseFee
+}
+
+// CalculateBaseFee dispatches transaction-specific fees before falling back to
+// the standard single-sign or multisign fee.
+func CalculateBaseFee(transaction txcore.Transaction, view txcore.LedgerView, config txcore.EngineConfig) uint64 {
+	if transaction.TxType() == txcore.TypeRegularKeySet && view != nil {
+		accountID, err := state.DecodeAccountID(transaction.GetCommon().Account)
+		if err == nil {
+			account, readErr := txcore.ReadAccountRoot(view, accountID)
+			if readErr == nil && txcore.SetRegularKeyFeeWaived(config.SkipSignatureVerification, transaction.GetCommon(), account) {
+				return 0
+			}
+		}
+	}
+	if calculator, ok := transaction.(txcore.BatchFeeCalculator); ok {
+		return calculator.CalculateMinimumFee(view, config)
+	}
+	if calculator, ok := transaction.(txcore.CustomBaseFeeCalculator); ok {
+		return calculator.CalculateBaseFee(view, config)
+	}
+	return CalculateDefaultBaseFee(transaction, config)
+}
+
 // SignTransactionForMultiSign signs a transaction for multi-signing
 // Each signer signs a message that includes their account ID as a suffix
 // Returns the signature as a hex string
 func SignTransactionForMultiSign(tx txcore.Transaction, signerAccount string, privateKeyHex string) (string, error) {
 	// Flatten the transaction to a map
-	txMap, err := tx.Flatten()
+	txMap, err := flattenForSigning(tx)
 	if err != nil {
 		return "", fmt.Errorf("failed to flatten transaction: %w", err)
 	}
