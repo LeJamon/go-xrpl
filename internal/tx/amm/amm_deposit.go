@@ -380,6 +380,7 @@ func (a *AMMDeposit) Apply(ctx *tx.ApplyContext) ter.Result {
 	)
 
 	accountID := ctx.AccountID
+	math := newNumberMath(ctx)
 
 	// Re-derive the AMM, its pseudo-account, and the pool balances against the
 	// (now fee-deducted) view. Preclaim has already validated state.
@@ -446,7 +447,6 @@ func (a *AMMDeposit) Apply(ctx *tx.ApplyContext) ter.Result {
 		}
 	}
 
-	// Result amounts - use tx.Amount for precision
 	var lpTokensToIssue tx.Amount
 	var depositAmount1, depositAmount2 tx.Amount
 
@@ -478,7 +478,7 @@ func (a *AMMDeposit) Apply(ctx *tx.ApplyContext) ter.Result {
 		// adjustLPTokensOut
 		tokensAdj := lpTokensRequested
 		if fixV1_3 {
-			tokensAdj = adjustLPTokens(lptBalance, lpTokensRequested, true)
+			tokensAdj = adjustLPTokens(math, lptBalance, lpTokensRequested, true)
 			if tokensAdj.IsZero() {
 				return ter.TecAMM_INVALID_TOKENS
 			}
@@ -488,10 +488,10 @@ func (a *AMMDeposit) Apply(ctx *tx.ApplyContext) ter.Result {
 		// Use stAmountDiv to match rippled's divide(STAmount, STAmount, Issue)
 		// which adds +5 rounding, unlike Number division.
 		// Reference: rippled AMMDeposit.cpp equalDepositTokens line 661
-		frac := stAmountDiv(toIOUForCalc(tokensAdj), toIOUForCalc(lptBalance))
+		frac := math.stAmountDiv(tokensAdj, lptBalance)
 		// amounts factor in the adjusted tokens
-		depositAmount1 = getRoundedAsset(fixV1_3, assetBalance1, frac, true)
-		depositAmount2 = getRoundedAsset(fixV1_3, assetBalance2, frac, true)
+		depositAmount1 = getRoundedAsset(math, fixV1_3, assetBalance1, frac, true)
+		depositAmount2 = getRoundedAsset(math, fixV1_3, assetBalance2, frac, true)
 		lpTokensToIssue = tokensAdj
 
 		// When Amount/Amount2 are specified with tfLPToken they are deposit
@@ -518,15 +518,15 @@ func (a *AMMDeposit) Apply(ctx *tx.ApplyContext) ter.Result {
 		}
 
 		// adjustLPTokensOut
-		tokens := lpTokensOut(assetBalance, depositAmt, lptBalance, tfee, fixV1_3)
+		tokens := lpTokensOut(math, assetBalance, depositAmt, lptBalance, tfee, fixV1_3)
 		if fixV1_3 {
-			tokens = adjustLPTokens(lptBalance, tokens, true)
+			tokens = adjustLPTokens(math, lptBalance, tokens, true)
 		}
 		if tokens.IsZero() {
 			return ter.TecAMM_INVALID_TOKENS
 		}
 		// factor in the adjusted tokens
-		tokensAdj, amountDepositAdj := adjustAssetInByTokens(fixV1_3, assetBalance, depositAmt, lptBalance, tokens, tfee)
+		tokensAdj, amountDepositAdj := adjustAssetInByTokens(math, fixV1_3, assetBalance, depositAmt, lptBalance, tokens, tfee)
 		if fixV1_3 && tokensAdj.IsZero() {
 			return ter.TecAMM_INVALID_TOKENS
 		}
@@ -547,8 +547,8 @@ func (a *AMMDeposit) Apply(ctx *tx.ApplyContext) ter.Result {
 		// Reference: rippled AMMDeposit.cpp equalDepositLimit()
 		lpTokensDepositMin := a.LPTokenOut // optional minimum
 
-		frac := numberDiv(toIOUForCalc(amount1), toIOUForCalc(assetBalance1))
-		tokensAdj := getRoundedLPTokens(fixV1_3, lptBalance, frac, true)
+		frac := math.div(math.fromAmount(amount1), math.fromAmount(assetBalance1), state.RoundToNearest)
+		tokensAdj := getRoundedLPTokens(math, fixV1_3, lptBalance, frac, true)
 
 		if tokensAdj.IsZero() {
 			if fixV1_3 {
@@ -557,21 +557,21 @@ func (a *AMMDeposit) Apply(ctx *tx.ApplyContext) ter.Result {
 			return ter.TecAMM_FAILED
 		}
 		// factor in the adjusted tokens
-		frac = adjustFracByTokens(fixV1_3, lptBalance, tokensAdj, frac)
-		amount2Deposit := getRoundedAsset(fixV1_3, assetBalance2, frac, true)
+		frac = adjustFracByTokens(math, fixV1_3, lptBalance, tokensAdj, frac)
+		amount2Deposit := getRoundedAsset(math, fixV1_3, assetBalance2, frac, true)
 
-		if toIOUForCalc(amount2Deposit).Compare(toIOUForCalc(amount2)) <= 0 {
+		if math.fromAmount(amount2Deposit).Cmp(math.fromAmount(amount2)) <= 0 {
 			depositAmount1 = amount1
 			depositAmount2 = amount2Deposit
 			lpTokensToIssue = tokensAdj
 			// Check lpTokensDepositMin
-			if lpTokensDepositMin != nil && toIOUForCalc(lpTokensToIssue).Compare(toIOUForCalc(*lpTokensDepositMin)) < 0 {
+			if lpTokensDepositMin != nil && math.fromAmount(lpTokensToIssue).Cmp(math.fromAmount(*lpTokensDepositMin)) < 0 {
 				return ter.TecAMM_FAILED
 			}
 		} else {
 			// Try the other way
-			frac = numberDiv(toIOUForCalc(amount2), toIOUForCalc(assetBalance2))
-			tokensAdj = getRoundedLPTokens(fixV1_3, lptBalance, frac, true)
+			frac = math.div(math.fromAmount(amount2), math.fromAmount(assetBalance2), state.RoundToNearest)
+			tokensAdj = getRoundedLPTokens(math, fixV1_3, lptBalance, frac, true)
 
 			if tokensAdj.IsZero() {
 				if fixV1_3 {
@@ -579,14 +579,14 @@ func (a *AMMDeposit) Apply(ctx *tx.ApplyContext) ter.Result {
 				}
 				return ter.TecAMM_FAILED
 			}
-			frac = adjustFracByTokens(fixV1_3, lptBalance, tokensAdj, frac)
-			amountDeposit := getRoundedAsset(fixV1_3, assetBalance1, frac, true)
+			frac = adjustFracByTokens(math, fixV1_3, lptBalance, tokensAdj, frac)
+			amountDeposit := getRoundedAsset(math, fixV1_3, assetBalance1, frac, true)
 
-			if toIOUForCalc(amountDeposit).Compare(toIOUForCalc(amount1)) <= 0 {
+			if math.fromAmount(amountDeposit).Cmp(math.fromAmount(amount1)) <= 0 {
 				depositAmount1 = amountDeposit
 				depositAmount2 = amount2
 				lpTokensToIssue = tokensAdj
-				if lpTokensDepositMin != nil && toIOUForCalc(lpTokensToIssue).Compare(toIOUForCalc(*lpTokensDepositMin)) < 0 {
+				if lpTokensDepositMin != nil && math.fromAmount(lpTokensToIssue).Cmp(math.fromAmount(*lpTokensDepositMin)) < 0 {
 					return ter.TecAMM_FAILED
 				}
 			} else {
@@ -612,15 +612,15 @@ func (a *AMMDeposit) Apply(ctx *tx.ApplyContext) ter.Result {
 		// adjustLPTokensOut
 		tokensAdj := lpTokensRequested
 		if fixV1_3 {
-			tokensAdj = adjustLPTokens(lptBalance, lpTokensRequested, true)
+			tokensAdj = adjustLPTokens(math, lptBalance, lpTokensRequested, true)
 			if tokensAdj.IsZero() {
 				return ter.TecAMM_INVALID_TOKENS
 			}
 		}
 
 		// the adjusted tokens are factored in
-		amountDeposit := ammAssetIn(assetBalance, lptBalance, tokensAdj, tfee, fixV1_3)
-		if isGreater(toIOUForCalc(amountDeposit), toIOUForCalc(amount1)) {
+		amountDeposit := ammAssetIn(math, assetBalance, lptBalance, tokensAdj, tfee, fixV1_3)
+		if math.fromAmount(amountDeposit).Cmp(math.fromAmount(amount1)) > 0 {
 			return ter.TecAMM_FAILED
 		}
 
@@ -655,9 +655,9 @@ func (a *AMMDeposit) Apply(ctx *tx.ApplyContext) ter.Result {
 
 		// If amount != 0, try direct deposit first
 		if !amount1.IsZero() {
-			tokens := lpTokensOut(assetBalance, amount1, lptBalance, tfee, fixV1_3)
+			tokens := lpTokensOut(math, assetBalance, amount1, lptBalance, tfee, fixV1_3)
 			if fixV1_3 {
-				tokens = adjustLPTokens(lptBalance, tokens, true)
+				tokens = adjustLPTokens(math, lptBalance, tokens, true)
 			}
 			if tokens.IsZero() || tokens.IsNegative() {
 				// rippled returns here for both amendment states — it does NOT
@@ -670,13 +670,13 @@ func (a *AMMDeposit) Apply(ctx *tx.ApplyContext) ter.Result {
 				return ter.TecAMM_FAILED
 			} else {
 				// factor in the adjusted tokens
-				tokensAdj, amountDepositAdj := adjustAssetInByTokens(fixV1_3, assetBalance, amount1, lptBalance, tokens, tfee)
+				tokensAdj, amountDepositAdj := adjustAssetInByTokens(math, fixV1_3, assetBalance, amount1, lptBalance, tokens, tfee)
 				if fixV1_3 && tokensAdj.IsZero() {
 					return ter.TecAMM_INVALID_TOKENS
 				}
 				// Check effective price: ep = amountDeposit / tokens
-				ep := numberDiv(toIOUForCalc(amountDepositAdj), toIOUForCalc(tokensAdj))
-				if ep.Compare(toIOUForCalc(ePrice)) <= 0 {
+				ep := math.div(math.fromAmount(amountDepositAdj), math.fromAmount(tokensAdj), state.RoundToNearest)
+				if ep.Cmp(math.fromAmount(ePrice)) <= 0 {
 					lpTokensToIssue = tokensAdj
 					isSingleAssetDeposit = true
 					depositAssetBalance = assetBalance
@@ -695,53 +695,66 @@ func (a *AMMDeposit) Apply(ctx *tx.ApplyContext) ter.Result {
 
 		// EPrice-based calculation
 		// Reference: rippled AMMDeposit.cpp singleDepositEPrice() lines 961-1003
-		assetBalIOU := toIOUForCalc(assetBalance)
-		lptBalIOU := toIOUForCalc(lptBalance)
-		ePriceIOU := toIOUForCalc(ePrice)
+		assetBalanceNumber := math.fromAmount(assetBalance)
+		lptBalanceNumber := math.fromAmount(lptBalance)
+		ePriceNumber := math.fromAmount(ePrice)
 
-		f1 := feeMult(tfee)
-		f2 := numberDiv(feeMultHalf(tfee), f1)
+		f1 := feeMult(math, tfee)
+		f2 := math.div(feeMultHalf(math, tfee), f1, state.RoundToNearest)
 		// c = f1 * assetBalance / (ePrice * lptBalance)
-		c := numberDiv(f1.Mul(assetBalIOU, false), ePriceIOU.Mul(lptBalIOU, false))
+		c := math.div(
+			f1.MulRounded(assetBalanceNumber, state.RoundToNearest),
+			ePriceNumber.MulRounded(lptBalanceNumber, state.RoundToNearest),
+			state.RoundToNearest,
+		)
 		// d = f1 + c * f2 - c
-		d, _ := f1.Add(c.Mul(f2, false))
-		dVal, _ := d.Sub(c)
-		d = dVal
+		d := f1.AddRounded(c.MulRounded(f2, state.RoundToNearest), state.RoundToNearest).
+			AddRounded(c.Negate(), state.RoundToNearest)
 		// a1 = c*c
-		a1 := c.Mul(c, false)
+		a1 := c.MulRounded(c, state.RoundToNearest)
 		// b1 = c*c*f2*f2 + 2*c - d*d
-		ccf2f2 := c.Mul(c, false).Mul(f2, false).Mul(f2, false)
-		twoC := numAmount(2).Mul(c, false)
-		dd := d.Mul(d, false)
-		b1Sum, _ := ccf2f2.Add(twoC)
-		b1, _ := b1Sum.Sub(dd)
+		ccf2f2 := c.MulRounded(c, state.RoundToNearest).
+			MulRounded(f2, state.RoundToNearest).
+			MulRounded(f2, state.RoundToNearest)
+		twoC := math.int(2).MulRounded(c, state.RoundToNearest)
+		dd := d.MulRounded(d, state.RoundToNearest)
+		b1 := ccf2f2.AddRounded(twoC, state.RoundToNearest).
+			AddRounded(dd.Negate(), state.RoundToNearest)
 		// c1 = 2*c*f2*f2 + 1 - 2*d*f2
-		twoCf2f2 := numAmount(2).Mul(c, false).Mul(f2, false).Mul(f2, false)
-		twoDf2 := numAmount(2).Mul(d, false).Mul(f2, false)
-		c1Sum, _ := twoCf2f2.Add(oneAmount())
-		c1, _ := c1Sum.Sub(twoDf2)
+		twoCf2f2 := math.int(2).MulRounded(c, state.RoundToNearest).
+			MulRounded(f2, state.RoundToNearest).
+			MulRounded(f2, state.RoundToNearest)
+		twoDf2 := math.int(2).MulRounded(d, state.RoundToNearest).
+			MulRounded(f2, state.RoundToNearest)
+		c1 := twoCf2f2.AddRounded(math.one(), state.RoundToNearest).
+			AddRounded(twoDf2.Negate(), state.RoundToNearest)
 
-		amountDeposit := getRoundedAssetCb(fixV1_3,
-			func() tx.Amount { return f1.Mul(assetBalIOU, false).Mul(solveQuadraticEq(a1, b1, c1), false) },
+		amountDeposit := getRoundedAssetCb(math, fixV1_3,
+			func() state.XRPLNumber {
+				return f1.MulRounded(assetBalanceNumber, state.RoundToNearest).
+					MulRounded(math.solveQuadraticEq(a1, b1, c1, state.RoundToNearest), state.RoundToNearest)
+			},
 			assetBalance,
-			func(mode state.RoundingMode) tx.Amount {
-				return f1.MulRounded(solveQuadraticEqRounded(a1, b1, c1, mode), false, mode)
+			func(mode state.RoundingMode) state.XRPLNumber {
+				return f1.MulRounded(math.solveQuadraticEq(a1, b1, c1, mode), mode)
 			},
 			true)
 		if amountDeposit.IsZero() || amountDeposit.IsNegative() {
 			return ter.TecAMM_FAILED
 		}
 
-		tokens := getRoundedLPTokensCb(fixV1_3,
-			func() tx.Amount { return numberDiv(toIOUForCalc(amountDeposit), ePriceIOU) },
+		tokens := getRoundedLPTokensCb(math, fixV1_3,
+			func() state.XRPLNumber {
+				return math.div(math.fromAmount(amountDeposit), ePriceNumber, state.RoundToNearest)
+			},
 			lptBalance,
-			func(mode state.RoundingMode) tx.Amount {
-				return numberDivRounded(toIOUForCalc(amountDeposit), ePriceIOU, mode)
+			func(mode state.RoundingMode) state.XRPLNumber {
+				return math.div(math.fromAmountRounded(amountDeposit, mode), ePriceNumber, mode)
 			},
 			true)
 
 		// factor in the adjusted tokens
-		tokensAdj, amountDepositAdj := adjustAssetInByTokens(fixV1_3, assetBalance, amountDeposit, lptBalance, tokens, tfee)
+		tokensAdj, amountDepositAdj := adjustAssetInByTokens(math, fixV1_3, assetBalance, amountDeposit, lptBalance, tokens, tfee)
 		if fixV1_3 && tokensAdj.IsZero() {
 			return ter.TecAMM_INVALID_TOKENS
 		}
@@ -763,7 +776,15 @@ func (a *AMMDeposit) Apply(ctx *tx.ApplyContext) ter.Result {
 		if !lptBalance.IsZero() {
 			return ter.TecAMM_NOT_EMPTY
 		}
-		lpTokensToIssue = calculateLPTokens(amount1, amount2, fixV1_3)
+		lpRounding := state.RoundToNearest
+		if fixV1_3 {
+			lpRounding = state.RoundDownward
+		}
+		lpTokensToIssue = math.toAmount(
+			math.calculateLPTokens(amount1, amount2, fixV1_3),
+			lptBalance,
+			lpRounding,
+		)
 		depositAmount1 = amount1
 		depositAmount2 = amount2
 		// Set trading fee if provided
@@ -791,7 +812,7 @@ func (a *AMMDeposit) Apply(ctx *tx.ApplyContext) ter.Result {
 			} else {
 				depositAmt = depositAmount1
 			}
-			adjAmt, _, adjTokens := adjustAmountsByLPTokens(
+			adjAmt, _, adjTokens := adjustAmountsByLPTokens(math,
 				depositAssetBalance, depositAmt, nil, lptBalance, lpTokensToIssue, tfee, true, fixV1_3, fixV1_1)
 			lpTokensToIssue = adjTokens
 			if singleDepositIsAsset2 {
@@ -805,7 +826,7 @@ func (a *AMMDeposit) Apply(ctx *tx.ApplyContext) ter.Result {
 			if !depositAmount2.IsZero() {
 				amount2Ptr = &depositAmount2
 			}
-			depositAmount1, amount2Ptr, lpTokensToIssue = adjustAmountsByLPTokens(
+			depositAmount1, amount2Ptr, lpTokensToIssue = adjustAmountsByLPTokens(math,
 				assetBalance1, depositAmount1, amount2Ptr, lptBalance, lpTokensToIssue, tfee, true, fixV1_3, fixV1_1)
 			if amount2Ptr != nil {
 				depositAmount2 = *amount2Ptr
@@ -821,10 +842,10 @@ func (a *AMMDeposit) Apply(ctx *tx.ApplyContext) ter.Result {
 	// against the optional Amount/Amount2 minimums. rippled checks these after
 	// adjustAmountsByLPTokens (and after the zero-tokens guard above).
 	// Reference: rippled AMMDeposit.cpp deposit() lines 553-565
-	if depositMin1 != nil && isGreater(toIOUForCalc(*depositMin1), toIOUForCalc(depositAmount1)) {
+	if depositMin1 != nil && math.fromAmount(*depositMin1).Cmp(math.fromAmount(depositAmount1)) > 0 {
 		return ter.TecAMM_FAILED
 	}
-	if depositMin2 != nil && isGreater(toIOUForCalc(*depositMin2), toIOUForCalc(depositAmount2)) {
+	if depositMin2 != nil && math.fromAmount(*depositMin2).Cmp(math.fromAmount(depositAmount2)) > 0 {
 		return ter.TecAMM_FAILED
 	}
 
@@ -834,7 +855,7 @@ func (a *AMMDeposit) Apply(ctx *tx.ApplyContext) ter.Result {
 	// tfOneAssetLPToken/tfLimitLPToken (which derive amount from LPTokenOut).
 	// Reference: rippled AMMDeposit.cpp deposit() lines 553-563
 	if a.LPTokenOut != nil && (flags&(tfSingleAsset|tfTwoAsset) != 0) {
-		if toIOUForCalc(lpTokensToIssue).Compare(toIOUForCalc(*a.LPTokenOut)) < 0 {
+		if math.fromAmount(lpTokensToIssue).Cmp(math.fromAmount(*a.LPTokenOut)) < 0 {
 			return ter.TecAMM_FAILED
 		}
 	}
@@ -854,7 +875,7 @@ func (a *AMMDeposit) Apply(ctx *tx.ApplyContext) ter.Result {
 		}
 		// For XRP, the IOU representation may be non-zero but convert to 0 drops.
 		// rippled's checkBalance uses beast::zero comparison after Number → STAmount conversion.
-		if isXRP && iouToDrops(amt) <= 0 {
+		if isXRP && amt.Drops() <= 0 {
 			return ter.TemBAD_AMOUNT
 		}
 		return ter.TesSUCCESS
@@ -985,11 +1006,11 @@ func (a *AMMDeposit) Apply(ctx *tx.ApplyContext) ter.Result {
 			// Skip the depositor's debit if it IS the issuer — issuers issue from
 			// thin air. Reference: rippled accountSend() handles this internally.
 			if accountID != issuerID {
-				if err := updateTrustlineBalanceInView(accountID, issuerID, a.Asset.Currency, depositAmount1.Negate(), ctx.View); err != nil {
+				if err := updateTrustlineBalanceInView(accountID, issuerID, a.Asset.Currency, depositAmount1.Negate(), ctx.View, ctx.NumberContext()); err != nil {
 					return TecUNFUNDED_AMM
 				}
 			}
-			if err := createOrUpdateAMMTrustline(ammAccountID, a.Asset, depositAmount1, ctx.View); err != nil {
+			if err := createOrUpdateAMMTrustline(ammAccountID, a.Asset, depositAmount1, ctx.View, ctx.NumberContext()); err != nil {
 				return TecNO_LINE
 			}
 		}
@@ -1005,17 +1026,17 @@ func (a *AMMDeposit) Apply(ctx *tx.ApplyContext) ter.Result {
 				return ter.TefINTERNAL
 			}
 			if accountID != issuerID {
-				if err := updateTrustlineBalanceInView(accountID, issuerID, a.Asset2.Currency, depositAmount2.Negate(), ctx.View); err != nil {
+				if err := updateTrustlineBalanceInView(accountID, issuerID, a.Asset2.Currency, depositAmount2.Negate(), ctx.View, ctx.NumberContext()); err != nil {
 					return TecUNFUNDED_AMM
 				}
 			}
-			if err := createOrUpdateAMMTrustline(ammAccountID, a.Asset2, depositAmount2, ctx.View); err != nil {
+			if err := createOrUpdateAMMTrustline(ammAccountID, a.Asset2, depositAmount2, ctx.View, ctx.NumberContext()); err != nil {
 				return TecNO_LINE
 			}
 		}
 	}
 
-	newLPBalance, err := amm.LPTokenBalance.Add(lpTokensToIssue)
+	newLPBalance, err := amm.LPTokenBalance.AddWithNumberContext(lpTokensToIssue, math.ctx, state.RoundToNearest)
 	if err != nil {
 		return ter.TefINTERNAL
 	}
@@ -1027,7 +1048,7 @@ func (a *AMMDeposit) Apply(ctx *tx.ApplyContext) ter.Result {
 	// - IOU: via trustline updates (createOrUpdateAMMTrustline)
 
 	lptAsset := tx.Asset{Currency: lptCurrency, Issuer: ammAccountAddr}
-	if err := createLPTokenTrustline(accountID, lptAsset, lpTokensToIssue, ctx.View); err != nil {
+	if err := createLPTokenTrustline(accountID, lptAsset, lpTokensToIssue, ctx.View, ctx.NumberContext()); err != nil {
 		return TecINSUF_RESERVE_LINE
 	}
 

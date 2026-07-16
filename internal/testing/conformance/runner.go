@@ -14,6 +14,7 @@ import (
 
 	"github.com/LeJamon/go-xrpl/amendment"
 	"github.com/LeJamon/go-xrpl/internal/feetrack"
+	"github.com/LeJamon/go-xrpl/internal/ledger/state"
 	jtx "github.com/LeJamon/go-xrpl/internal/testing"
 	"github.com/LeJamon/go-xrpl/internal/tx"
 )
@@ -119,6 +120,8 @@ type runner struct {
 	// fixtureSteps stores all fixture steps for use by registerAMMMapping
 	// when it needs to scan for unfunded AMM address candidates.
 	fixtureSteps []Step
+
+	numberContextOverride *state.NumberContext
 
 	// timeLeapSteps is a set of step indices where Close() should use
 	// a time-leap (consensus delay). This resets TxQ fee metrics back
@@ -536,6 +539,12 @@ func RunFixture(t *testing.T, fixturePath string) {
 		feeVote = &cfg
 	}
 
+	var numberContextOverride *state.NumberContext
+	if fixture.Suite == "ripple.app.AMM" || fixture.Suite == "ripple.app.AMMExtended" {
+		numberContext := state.NewNumberContext(state.MantissaScaleSmall)
+		numberContextOverride = &numberContext
+	}
+
 	r := &runner{
 		t:                         t,
 		accounts:                  make(map[string]*jtx.Account),
@@ -550,6 +559,7 @@ func RunFixture(t *testing.T, fixturePath string) {
 		fixtureUnfundedAddrs:      unfundedAddrs,
 		fixtureNonAMMAccountAddrs: nonAMMAcctAddrs,
 		fixtureSteps:              fixture.Steps,
+		numberContextOverride:     numberContextOverride,
 		timeLeapSteps:             timeLeapSet,
 		loadFeeEvents:             loadFeeEvents,
 		initFee:                   initFee,

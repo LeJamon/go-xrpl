@@ -115,6 +115,11 @@ func (ctx *ApplyContext) Rules() *amendment.Rules {
 	return ctx.Config.RequireRules()
 }
 
+// NumberContext returns the immutable Number context for this apply.
+func (ctx *ApplyContext) NumberContext() state.NumberContext {
+	return ctx.Config.NumberContext()
+}
+
 // LookupAccount loads and parses an AccountRoot by account address string.
 // Returns the parsed AccountRoot, decoded account ID, and TesSUCCESS on success.
 // On failure returns nil, zero ID, and the appropriate TER code:

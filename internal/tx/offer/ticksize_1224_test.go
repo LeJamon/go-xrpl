@@ -3,6 +3,7 @@ package offer
 import (
 	"testing"
 
+	"github.com/LeJamon/go-xrpl/amendment"
 	"github.com/LeJamon/go-xrpl/internal/ledger/state"
 	"github.com/LeJamon/go-xrpl/internal/tx"
 )
@@ -23,11 +24,35 @@ func TestTickSize1224(t *testing.T) {
 	rounded := roundToTickSize(quality, 15)
 	t.Logf("rounded  mantissa=%d exp=%d", rounded&0x00ffffffffffffff, int(rounded>>56)-100)
 
-	res := multiplyByQuality(takerGets, rounded, hada, issuer)
+	res := multiplyByQuality(takerGets, rounded, hada, issuer, amendment.EmptyRules())
 	t.Logf("result   mantissa=%d exp=%d", res.Mantissa(), res.Exponent())
 
 	if res.Mantissa() != 5000000000000004 || res.Exponent() != -9 {
 		t.Errorf("TakerPays got mantissa=%d exp=%d, want 5000000000000004 exp=-9 (5000000.000000004)",
 			res.Mantissa(), res.Exponent())
+	}
+}
+
+func TestMultiplyByQualityRetainsTransactionNumberScaleUntilIOUBoundary(t *testing.T) {
+	const (
+		currency = "USD"
+		issuer   = "rIssuer"
+	)
+	quality := uint64(85)<<56 | 8_548_903_771_245_460
+	amount := tx.NewIssuedAmount(9_711_095_847_925_376, -15, "EUR", "rOtherIssuer")
+	rules := amendment.NewRules([][32]byte{amendment.FeatureFixUniversalNumber})
+
+	for _, scale := range []state.MantissaScale{state.MantissaScaleLargeLegacy, state.MantissaScaleLarge} {
+		result := multiplyByQuality(
+			amount,
+			quality,
+			currency,
+			issuer,
+			rules,
+			state.NewNumberContext(scale),
+		)
+		if result.Mantissa() != 8_301_922_391_725_538 || result.Exponent() != -14 {
+			t.Fatalf("scale %d: got %de%d, want 8301922391725538e-14", scale, result.Mantissa(), result.Exponent())
+		}
 	}
 }

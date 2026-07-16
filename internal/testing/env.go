@@ -57,6 +57,8 @@ type TestEnv struct {
 	// Reference: rippled's FeatureBitset in test/jtx/Env.h
 	rulesBuilder *amendment.RulesBuilder
 
+	numberContextOverride *state.NumberContext
+
 	// pendingAmendments / pendingEnable / pendingDisable stage amendment changes
 	// that take effect on the next Close(), matching rippled where
 	// enableFeature/disableFeature require close() for changes to take effect.
@@ -353,6 +355,12 @@ func (e *TestEnv) SetOpenLedger(open bool) {
 // (see the viewOpen field).
 func (e *TestEnv) SetViewOpen(open bool) {
 	e.viewOpen = open
+}
+
+// SetNumberContextOverride selects a Number context independently of the
+// environment's amendment rules, matching rippled's test scale guard.
+func (e *TestEnv) SetNumberContextOverride(numberContext state.NumberContext) {
+	e.numberContextOverride = &numberContext
 }
 
 // SetBypassTxQ temporarily bypasses TxQ routing. When true, Submit() goes

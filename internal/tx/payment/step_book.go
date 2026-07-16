@@ -1270,13 +1270,14 @@ func (s *BookStep) consumeAMMOffer(
 	// book's own issue. The AMM send routes by amount.Issuer (unlike the CLOB path,
 	// which threads s.book.In explicitly), so a mis-tagged amount would hit the
 	// wrong trust line. Mirror the CLOB consumeOffer, which passes s.book.In/Out.
-	inAmount := retagToIssue(eitherToAmount(consumedInNet), s.book.In)
+	m := ammOffer.ammLiquidity.ammContext.numberMath()
+	inAmount := retagToIssue(m, eitherToAmount(consumedInNet), s.book.In)
 	if err := ammOffer.Send(sb, s.book.In.Issuer, ammOffer.Owner(), inAmount); err != nil {
 		return err
 	}
 
 	// Transfer output: AMM account → book.out.account (re-tagged with book.Out).
-	outAmount := retagToIssue(eitherToAmount(ownerGives), s.book.Out)
+	outAmount := retagToIssue(m, eitherToAmount(ownerGives), s.book.Out)
 	if err := ammOffer.Send(sb, ammOffer.Owner(), s.book.Out.Issuer, outAmount); err != nil {
 		return err
 	}

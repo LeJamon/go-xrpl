@@ -147,15 +147,6 @@ func minAmountIOU(a, b tx.Amount) tx.Amount {
 	return b
 }
 
-// maxAmount returns the larger of two amounts.
-// Assumes both amounts are of the same type (both XRP or same IOU).
-func maxAmount(a, b tx.Amount) tx.Amount {
-	if compareAmounts(a, b) > 0 {
-		return a
-	}
-	return b
-}
-
 // isGreater returns true if a > b
 func isGreater(a, b tx.Amount) bool {
 	return compareAmounts(a, b) > 0
@@ -166,34 +157,26 @@ func isGreaterOrEqual(a, b tx.Amount) bool {
 	return compareAmounts(a, b) >= 0
 }
 
-// isLessOrEqual returns true if a <= b
-func isLessOrEqual(a, b tx.Amount) bool {
-	return compareAmounts(a, b) <= 0
-}
-
 // withinRelativeDistance checks if two amounts are within relative distance dist.
 // Returns true if calc == req, or (max - min) / max < dist.
 // Reference: rippled AMMHelpers.h withinRelativeDistance
-func withinRelativeDistance(calc, req, dist tx.Amount) bool {
-	calcIOU := toIOUForCalc(calc)
-	reqIOU := toIOUForCalc(req)
-
-	if calcIOU.Compare(reqIOU) == 0 {
+func withinRelativeDistance(math numberMath, calc, req tx.Amount, dist state.XRPLNumber) bool {
+	if calc.Compare(req) == 0 {
 		return true
 	}
 
-	var minAmt, maxAmt tx.Amount
-	if calcIOU.Compare(reqIOU) < 0 {
-		minAmt = calcIOU
-		maxAmt = reqIOU
+	var minAmount, maxAmount tx.Amount
+	if calc.Compare(req) < 0 {
+		minAmount = calc
+		maxAmount = req
 	} else {
-		minAmt = reqIOU
-		maxAmt = calcIOU
+		minAmount = req
+		maxAmount = calc
 	}
 
-	diff, _ := maxAmt.Sub(minAmt)
-	ratio := numberDiv(diff, maxAmt)
-	return ratio.Compare(dist) < 0
+	diff := math.subAmounts(maxAmount, minAmount, state.RoundToNearest)
+	ratio := math.div(math.fromAmount(diff), math.fromAmount(maxAmount), state.RoundToNearest)
+	return ratio.Cmp(dist) < 0
 }
 
 // isOnlyLiquidityProvider reports whether lpAccount is the sole liquidity

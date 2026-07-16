@@ -220,6 +220,7 @@ func (a *AMMCreate) Apply(ctx *tx.ApplyContext) ter.Result {
 	)
 
 	accountID := ctx.AccountID
+	math := newNumberMath(ctx)
 
 	asset1 := amountAsset(a.Amount)
 	asset2 := amountAsset(a.Amount2)
@@ -252,16 +253,22 @@ func (a *AMMCreate) Apply(ctx *tx.ApplyContext) ter.Result {
 	// Initial LP token balance: sqrt(amount1 * amount2).
 	// Reference: rippled AMMCreate.cpp line 256
 	fixV1_3 := ctx.Rules().Enabled(amendment.FeatureFixAMMv1_3)
-	lpTokenBalanceRaw := calculateLPTokens(sortedAmount1, sortedAmount2, fixV1_3)
+	lpTokenBalanceRaw := math.calculateLPTokens(sortedAmount1, sortedAmount2, fixV1_3)
 	if lpTokenBalanceRaw.IsZero() {
 		return ter.TecAMM_BALANCE
 	}
 	// Set the correct issue (currency + issuer) on the LP token balance.
 	// The LP token currency is derived from the asset pair and the issuer
 	// is the AMM pseudo-account.
-	lpTokenBalance := state.NewIssuedAmountFromValue(
-		lpTokenBalanceRaw.Mantissa(), lpTokenBalanceRaw.Exponent(),
-		lptCurrency, ammAccountAddr)
+	lpRounding := state.RoundToNearest
+	if fixV1_3 {
+		lpRounding = state.RoundDownward
+	}
+	lpTokenBalance := math.toAmount(
+		lpTokenBalanceRaw,
+		zeroAmount(tx.Asset{Currency: lptCurrency, Issuer: ammAccountAddr}),
+		lpRounding,
+	)
 
 	// The AMM account's OwnerCount is the number of IOU pool trust lines it
 	// holds (one per non-XRP asset): each is created with the reserve charged
@@ -338,7 +345,7 @@ func (a *AMMCreate) Apply(ctx *tx.ApplyContext) ter.Result {
 		Currency: lptCurrency,
 		Issuer:   ammAccountAddr,
 	}
-	if err := createLPTokenTrustline(accountID, lptAsset, lpTokenBalance, ctx.View); err != nil {
+	if err := createLPTokenTrustline(accountID, lptAsset, lpTokenBalance, ctx.View, ctx.NumberContext()); err != nil {
 		return TecINSUF_RESERVE_LINE
 	}
 
@@ -366,7 +373,7 @@ func (a *AMMCreate) Apply(ctx *tx.ApplyContext) ter.Result {
 			return result
 		}
 	} else {
-		if err := createOrUpdateAMMTrustline(ammAccountID, sortedAsset1, sortedAmount1, ctx.View); err != nil {
+		if err := createOrUpdateAMMTrustline(ammAccountID, sortedAsset1, sortedAmount1, ctx.View, ctx.NumberContext()); err != nil {
 			return TecNO_LINE
 		}
 		if err := setAMMNodeFlag(ammAccountID, sortedAsset1, ctx.View); err != nil {
@@ -376,7 +383,7 @@ func (a *AMMCreate) Apply(ctx *tx.ApplyContext) ter.Result {
 		// issuers have unlimited supply and no self-trust-line).
 		issuerID1, _ := state.DecodeAccountID(sortedAsset1.Issuer)
 		if accountID != issuerID1 {
-			tlResult, tlErr := updateTrustlineBalanceInViewEx(accountID, issuerID1, sortedAsset1.Currency, sortedAmount1.Negate(), ctx.View)
+			tlResult, tlErr := updateTrustlineBalanceInViewEx(accountID, issuerID1, sortedAsset1.Currency, sortedAmount1.Negate(), ctx.View, ctx.NumberContext())
 			if tlErr != nil {
 				return TecUNFUNDED_AMM
 			}
@@ -404,7 +411,7 @@ func (a *AMMCreate) Apply(ctx *tx.ApplyContext) ter.Result {
 			return result
 		}
 	} else {
-		if err := createOrUpdateAMMTrustline(ammAccountID, sortedAsset2, sortedAmount2, ctx.View); err != nil {
+		if err := createOrUpdateAMMTrustline(ammAccountID, sortedAsset2, sortedAmount2, ctx.View, ctx.NumberContext()); err != nil {
 			return TecNO_LINE
 		}
 		if err := setAMMNodeFlag(ammAccountID, sortedAsset2, ctx.View); err != nil {
@@ -412,7 +419,7 @@ func (a *AMMCreate) Apply(ctx *tx.ApplyContext) ter.Result {
 		}
 		issuerID2, _ := state.DecodeAccountID(sortedAsset2.Issuer)
 		if accountID != issuerID2 {
-			tlResult, tlErr := updateTrustlineBalanceInViewEx(accountID, issuerID2, sortedAsset2.Currency, sortedAmount2.Negate(), ctx.View)
+			tlResult, tlErr := updateTrustlineBalanceInViewEx(accountID, issuerID2, sortedAsset2.Currency, sortedAmount2.Negate(), ctx.View, ctx.NumberContext())
 			if tlErr != nil {
 				return TecUNFUNDED_AMM
 			}

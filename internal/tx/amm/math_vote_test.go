@@ -12,6 +12,7 @@ import (
 // here forks consensus because the result is serialized into the AMM ledger object.
 // Reference: rippled AMMVote.cpp:137-139,164-168,209.
 func TestNumberDivToInt64_RoundHalfToEven(t *testing.T) {
+	math := numberMath{ctx: state.NewNumberContext(state.MantissaScaleLarge)}
 	amt := func(v float64) state.Amount {
 		return state.NewIssuedAmountFromFloat64(v, "", "")
 	}
@@ -34,7 +35,7 @@ func TestNumberDivToInt64_RoundHalfToEven(t *testing.T) {
 	}
 
 	for _, c := range cases {
-		got := numberDivToInt64(amt(c.n), amt(c.d))
+		got := math.divToInt64(math.fromAmount(amt(c.n)), math.fromAmount(amt(c.d)))
 		if got != c.want {
 			t.Errorf("numberDivToInt64(%v, %v) = %d, want %d", c.n, c.d, got, c.want)
 		}

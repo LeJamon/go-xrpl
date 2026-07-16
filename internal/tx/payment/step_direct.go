@@ -362,7 +362,7 @@ func (s *DirectStepI) GetQualityFunc(v *PaymentSandbox, prevStepDir DebtDirectio
 	if q == nil {
 		return nil, dir
 	}
-	return NewCLOBLikeQualityFunction(*q), dir
+	return newCLOBLikeQualityFunction(numberMath{ctx: v.NumberContext()}, *q), dir
 }
 
 // IsZero returns true if the amount is zero

@@ -12,8 +12,8 @@
 // which must hold after every operation to prevent value leakage.
 //
 // The tests use GBP/EUR IOU pairs with precise mantissa/exponent values.
-// rippled runs each test with both all-amendments-enabled and
-// all-minus-fixAMMv1_3 configurations. The fixAMMv1_3 amendment fixes
+// rippled runs each test with AMM test amendments, which exclude
+// SingleAssetVault and LendingProtocol, and with fixAMMv1_3 toggled. The amendment fixes
 // several rounding issues that caused invariant violations.
 package amm_test
 
@@ -36,6 +36,8 @@ func setupGBPEURPoolWithBob(t *testing.T, gbpPool, eurPool float64,
 	t.Helper()
 
 	env := amm.NewAMMTestEnv(t)
+	env.DisableFeature("SingleAssetVault")
+	env.DisableFeature("LendingProtocol")
 
 	// Toggle fixAMMv1_3 amendment
 	if !fixV1_3 {
@@ -100,6 +102,8 @@ func setupGBPEURPoolAliceOnly(t *testing.T, gbpPool, eurPool float64, tradingFee
 	t.Helper()
 
 	env := amm.NewAMMTestEnv(t)
+	env.DisableFeature("SingleAssetVault")
+	env.DisableFeature("LendingProtocol")
 
 	if !fixV1_3 {
 		env.DisableFeature("fixAMMv1_3")
@@ -169,6 +173,8 @@ func TestDepositAndWithdrawRounding(t *testing.T) {
 			t.Helper()
 
 			env := amm.NewAMMTestEnv(t)
+			env.DisableFeature("SingleAssetVault")
+			env.DisableFeature("LendingProtocol")
 			if !fixV1_3 {
 				env.TestEnv.DisableFeature("fixAMMv1_3")
 			}
@@ -305,7 +311,8 @@ func TestDepositAndWithdrawRounding(t *testing.T) {
 //
 //	sqrt(amount1 * amount2) >= lptBalance
 //
-// rippled runs each test with both `all` and `all - fixAMMv1_3`.
+// rippled's `all` here excludes SingleAssetVault and LendingProtocol; it runs
+// each test with fixAMMv1_3 both enabled and disabled.
 // The fixAMMv1_3 amendment uses Number::upward rounding mode in the
 // invariant check, which fixes rounding violations for certain exponents.
 func TestDepositRounding(t *testing.T) {

@@ -9,6 +9,7 @@ import (
 
 	"github.com/LeJamon/go-xrpl/amendment"
 	"github.com/LeJamon/go-xrpl/internal/ledger/state"
+	txcore "github.com/LeJamon/go-xrpl/internal/tx"
 	"github.com/LeJamon/go-xrpl/keylet"
 	"github.com/LeJamon/go-xrpl/protocol"
 )
@@ -139,18 +140,22 @@ type vvDelta struct {
 }
 
 // checkValidVault is the ValidVault entry point.
-func checkValidVault(tx Transaction, result Result, fee uint64, entries []InvariantEntry, view ReadView, rules *amendment.Rules) *InvariantViolation {
+func checkValidVault(tx Transaction, result Result, fee uint64, entries []InvariantEntry, view ReadView, rules *amendment.Rules, numberContexts ...state.NumberContext) *InvariantViolation {
 	if result != TesSUCCESS {
 		return nil
 	}
 
+	numberContext := txcore.NumberContextForRules(rules)
+	if len(numberContexts) > 0 {
+		numberContext = numberContexts[0]
+	}
 	c := &vvChecker{
 		deltas:      map[[32]byte]vvDelta{},
 		view:        view,
 		fee:         fee,
 		txType:      tx.TxType(),
 		rules:       rules,
-		numberScale: vvNumberScale(rules),
+		numberScale: numberContext.Scale(),
 	}
 	if flat, err := tx.Flatten(); err == nil {
 		c.flat = flat
@@ -790,18 +795,6 @@ func (c *vvChecker) findShares(list []vvShares, shareMPTID [24]byte) (vvShares, 
 
 func vvZero(scale state.MantissaScale) state.XRPLNumber {
 	return state.NewXRPLNumberScaled(0, 0, scale, state.RoundToNearest)
-}
-
-func vvNumberScale(rules *amendment.Rules) state.MantissaScale {
-	if rules == nil {
-		return state.MantissaScaleForRulesWithFix(false, false, false, false)
-	}
-	return state.MantissaScaleForRulesWithFix(
-		true,
-		rules.Enabled(amendment.FeatureSingleAssetVault),
-		rules.Enabled(amendment.FeatureLendingProtocol),
-		rules.FixCleanup3_2_0Enabled(),
-	)
 }
 
 func vvNumFromI64(v int64, scale state.MantissaScale) state.XRPLNumber {

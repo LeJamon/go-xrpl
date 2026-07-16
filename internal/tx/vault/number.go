@@ -5,6 +5,7 @@ import (
 
 	"github.com/LeJamon/go-xrpl/amendment"
 	"github.com/LeJamon/go-xrpl/internal/ledger/state"
+	"github.com/LeJamon/go-xrpl/internal/tx"
 )
 
 // vaultNumber parses a NUMBER field string ("" meaning zero) using the legacy
@@ -29,15 +30,7 @@ func vaultNumberScaled(s string, scale state.MantissaScale) (state.XRPLNumber, e
 }
 
 func vaultNumberScale(rules *amendment.Rules) state.MantissaScale {
-	if rules == nil {
-		return state.MantissaScaleForRulesWithFix(false, false, false, false)
-	}
-	return state.MantissaScaleForRulesWithFix(
-		true,
-		rules.Enabled(amendment.FeatureSingleAssetVault),
-		rules.Enabled(amendment.FeatureLendingProtocol),
-		rules.FixCleanup3_2_0Enabled(),
-	)
+	return tx.NumberContextForRules(rules).Scale()
 }
 
 // numberToString renders an XRPLNumber into the vault NUMBER-field convention:
@@ -48,18 +41,6 @@ func numberToString(n state.XRPLNumber) string {
 		return ""
 	}
 	return fmt.Sprintf("%de%d", n.Mantissa(), n.Exponent())
-}
-
-// amountToNumber converts an asset amount into an XRPLNumber. XRP is measured in
-// drops and MPT in its integer units; an IOU carries a decimal value.
-func amountToNumber(a state.Amount) (state.XRPLNumber, error) {
-	if a.IsNative() {
-		return state.NewXRPLNumber(a.Drops(), 0), nil
-	}
-	if a.IsMPT() {
-		return vaultNumber(a.Value())
-	}
-	return vaultNumber(a.Value())
 }
 
 func amountToNumberForRules(a state.Amount, rules *amendment.Rules) (state.XRPLNumber, error) {

@@ -1,6 +1,7 @@
 package amm
 
 import (
+	"github.com/LeJamon/go-xrpl/internal/ledger/state"
 	"github.com/LeJamon/go-xrpl/internal/tx"
 	"github.com/LeJamon/go-xrpl/internal/tx/ter"
 )
@@ -10,15 +11,18 @@ import (
 // reach it) can assert against the exact math the transactors run. These shims
 // are test-only; production code calls the unexported originals directly.
 
-// ToIOUForCalcExported wraps toIOUForCalc.
+// ToIOUForCalcExported preserves the legacy test helper API while using the
+// default large Number context.
 func ToIOUForCalcExported(amt tx.Amount) tx.Amount {
-	return toIOUForCalc(amt)
+	math := numberMath{ctx: state.NewNumberContext(state.MantissaScaleLarge)}
+	return math.toAmount(math.fromAmount(amt), zeroIOU(), state.RoundToNearest)
 }
 
 // AMMAssetOutExported wraps ammAssetOut without fixAMMv1_3, computing the asset
 // amount received for burning lpTokens.
 func AMMAssetOutExported(assetBalance, lptBalance, lpTokens tx.Amount, tfee uint16) tx.Amount {
-	return ammAssetOut(assetBalance, lptBalance, lpTokens, tfee, false)
+	math := numberMath{ctx: state.NewNumberContext(state.MantissaScaleLarge)}
+	return ammAssetOut(math, assetBalance, lptBalance, lpTokens, tfee, false)
 }
 
 // IsOnlyLiquidityProviderExported wraps isOnlyLiquidityProvider.

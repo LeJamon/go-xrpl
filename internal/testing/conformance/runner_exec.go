@@ -76,6 +76,9 @@ func (r *runner) setupEnv(cfg EnvConfig) {
 		r.env = jtx.NewTestEnvWithConfig(r.t, genCfg)
 	}
 	r.env.SetAmendments(knownAmendments(cfg.AmendmentsEnabled))
+	if r.numberContextOverride != nil {
+		r.env.SetNumberContextOverride(*r.numberContextOverride)
+	}
 	if cfg.NetworkID != nil {
 		r.env.SetNetworkID(*cfg.NetworkID)
 	}

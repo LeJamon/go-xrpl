@@ -104,7 +104,7 @@ type updateTrustlineBalanceResult struct {
 // This creates the trustline between the AMM account and the asset issuer,
 // following rippled's trustCreate logic.
 // Reference: rippled View.cpp trustCreate lines 1329-1445
-func createOrUpdateAMMTrustline(ammAccountID [20]byte, asset tx.Asset, amount tx.Amount, view tx.LedgerView) error {
+func createOrUpdateAMMTrustline(ammAccountID [20]byte, asset tx.Asset, amount tx.Amount, view tx.LedgerView, numberContext state.NumberContext) error {
 	// XRP doesn't need a trustline
 	if isXRPAsset(asset) {
 		return nil
@@ -146,13 +146,13 @@ func createOrUpdateAMMTrustline(ammAccountID [20]byte, asset tx.Asset, amount tx
 		delta := alignToBalance(currentBalance, amount)
 		if ammIsLow {
 			// AMM is low - positive balance means AMM holds tokens
-			newBalance, err = currentBalance.Add(delta)
+			newBalance, err = currentBalance.AddWithNumberContext(delta, numberContext, state.RoundToNearest)
 			if err != nil {
 				return err
 			}
 		} else {
 			// AMM is high - negative balance means AMM holds tokens
-			newBalance, err = currentBalance.Sub(delta)
+			newBalance, err = currentBalance.SubWithNumberContext(delta, numberContext, state.RoundToNearest)
 			if err != nil {
 				return err
 			}
@@ -186,8 +186,8 @@ func createOrUpdateAMMTrustline(ammAccountID [20]byte, asset tx.Asset, amount tx
 // updateTrustlineBalanceInView updates the balance of a trust line for IOU transfers.
 // This reads the trust line, modifies the balance, and writes it back.
 // delta is the amount to add (positive) or subtract (negative) from the account's perspective.
-func updateTrustlineBalanceInView(accountID [20]byte, issuerID [20]byte, currency string, delta tx.Amount, view tx.LedgerView) error {
-	result, err := updateTrustlineBalanceInViewEx(accountID, issuerID, currency, delta, view)
+func updateTrustlineBalanceInView(accountID [20]byte, issuerID [20]byte, currency string, delta tx.Amount, view tx.LedgerView, numberContext state.NumberContext) error {
+	result, err := updateTrustlineBalanceInViewEx(accountID, issuerID, currency, delta, view, numberContext)
 	_ = result
 	return err
 }
@@ -197,7 +197,7 @@ func updateTrustlineBalanceInView(accountID [20]byte, issuerID [20]byte, currenc
 // It does NOT modify AccountRoots — the caller must apply the returned owner
 // count deltas to the appropriate accounts.
 // Reference: rippled View.cpp updateTrustLine + redeemIOU/issueIOU
-func updateTrustlineBalanceInViewEx(accountID [20]byte, issuerID [20]byte, currency string, delta tx.Amount, view tx.LedgerView) (updateTrustlineBalanceResult, error) {
+func updateTrustlineBalanceInViewEx(accountID [20]byte, issuerID [20]byte, currency string, delta tx.Amount, view tx.LedgerView, numberContext state.NumberContext) (updateTrustlineBalanceResult, error) {
 	var result updateTrustlineBalanceResult
 
 	lineKey := keylet.Line(accountID, issuerID, currency)
@@ -229,7 +229,11 @@ func updateTrustlineBalanceInViewEx(accountID [20]byte, issuerID [20]byte, curre
 		beforeBalance = beforeBalance.Negate()
 	}
 
-	afterBalance, err := beforeBalance.Add(alignToBalance(beforeBalance, delta))
+	afterBalance, err := beforeBalance.AddWithNumberContext(
+		alignToBalance(beforeBalance, delta),
+		numberContext,
+		state.RoundToNearest,
+	)
 	if err != nil {
 		return result, err
 	}
@@ -337,7 +341,7 @@ func updateTrustlineBalanceInViewEx(accountID [20]byte, issuerID [20]byte, curre
 // createLPTokenTrustline creates or updates a trust line for LP tokens.
 // This creates the trustline between the depositor and the AMM account (LP token issuer).
 // Reference: rippled View.cpp trustCreate
-func createLPTokenTrustline(accountID [20]byte, lptAsset tx.Asset, amount tx.Amount, view tx.LedgerView) error {
+func createLPTokenTrustline(accountID [20]byte, lptAsset tx.Asset, amount tx.Amount, view tx.LedgerView, numberContext state.NumberContext) error {
 	// LP token issuer is the AMM account
 	ammAccountID, err := state.DecodeAccountID(lptAsset.Issuer)
 	if err != nil {
@@ -370,13 +374,13 @@ func createLPTokenTrustline(accountID [20]byte, lptAsset tx.Asset, amount tx.Amo
 		delta := alignToBalance(currentBalance, amount)
 		if holderIsLow {
 			// Holder is low - positive balance means holder holds tokens
-			newBalance, err = currentBalance.Add(delta)
+			newBalance, err = currentBalance.AddWithNumberContext(delta, numberContext, state.RoundToNearest)
 			if err != nil {
 				return err
 			}
 		} else {
 			// Holder is high - negative balance means holder holds tokens
-			newBalance, err = currentBalance.Sub(delta)
+			newBalance, err = currentBalance.SubWithNumberContext(delta, numberContext, state.RoundToNearest)
 			if err != nil {
 				return err
 			}
@@ -409,7 +413,7 @@ func createLPTokenTrustline(accountID [20]byte, lptAsset tx.Asset, amount tx.Amo
 // the line when its balance reaches zero (matching rippled's redeemIOU +
 // updateTrustLine + trustDelete flow).
 // Reference: rippled View.cpp redeemIOU (line 2288)
-func redeemIOUWithCleanup(view tx.LedgerView, holderID, ammAccountID [20]byte, amount tx.Amount) ter.Result {
+func redeemIOUWithCleanup(view tx.LedgerView, holderID, ammAccountID [20]byte, amount tx.Amount, numberContext state.NumberContext) ter.Result {
 	if amount.IsZero() {
 		return ter.TesSUCCESS
 	}
@@ -435,7 +439,7 @@ func redeemIOUWithCleanup(view tx.LedgerView, holderID, ammAccountID [20]byte, a
 
 	saBefore := saBalance
 	// Holder is redeeming (sending back to AMM/issuer), so balance decreases
-	saBalance, err = saBalance.Sub(amount)
+	saBalance, err = saBalance.SubWithNumberContext(amount, numberContext, state.RoundToNearest)
 	if err != nil {
 		return ter.TefINTERNAL
 	}

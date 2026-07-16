@@ -416,7 +416,7 @@ func vaultAssetOf(vd *vaultData) tx.Asset {
 // `to`: the destination must exist, satisfy any RequireDestTag / DepositAuth
 // requirement, and (for an IOU delivered to a third party) not exceed its trust
 // limit. Reference: rippled View.cpp canWithdraw.
-func canWithdraw(view tx.LedgerView, from, to [20]byte, amount tx.Amount, hasDestTag bool) ter.Result {
+func canWithdraw(view tx.LedgerView, from, to [20]byte, amount tx.Amount, hasDestTag bool, numberContext state.NumberContext) ter.Result {
 	toAcct, err := tx.ReadAccountRoot(view, to)
 	if err != nil {
 		return ter.TefINTERNAL
@@ -435,12 +435,12 @@ func canWithdraw(view tx.LedgerView, from, to [20]byte, amount tx.Amount, hasDes
 			return ter.TecNO_PERMISSION
 		}
 	}
-	return withdrawToDestExceedsLimit(view, from, to, amount)
+	return withdrawToDestExceedsLimit(view, from, to, amount, numberContext)
 }
 
 // withdrawToDestExceedsLimit rejects an IOU withdrawal that would push the
 // third-party destination past its trust limit. XRP and MPT are exempt.
-func withdrawToDestExceedsLimit(view tx.LedgerView, from, to [20]byte, amount tx.Amount) ter.Result {
+func withdrawToDestExceedsLimit(view tx.LedgerView, from, to [20]byte, amount tx.Amount, numberContext state.NumberContext) ter.Result {
 	if amount.IsNative() || amount.IsMPT() {
 		return ter.TesSUCCESS
 	}
@@ -451,15 +451,17 @@ func withdrawToDestExceedsLimit(view tx.LedgerView, from, to [20]byte, amount tx
 	if from == to || to == issuerID {
 		return ter.TesSUCCESS
 	}
-	owed := lineBalanceInTerms(view, to, issuerID, amount.Currency)
+	owed := lineBalanceInTerms(view, to, issuerID, amount.Currency, numberContext)
 	if owed.Signum() <= 0 {
-		limit := lineLimit(view, to, issuerID, amount.Currency)
-		amountN, aerr := amountToNumber(amount)
-		if aerr != nil {
-			return ter.TefINTERNAL
-		}
+		limit := lineLimit(view, to, issuerID, amount.Currency, numberContext)
+		amountN := numberContext.FromAmount(amount, state.RoundToNearest)
 		negOwed := owed.Negate()
-		if negOwed.Cmp(limit) >= 0 || amountN.Cmp(limit.Add(owed)) > 0 {
+		available := limit.AddRounded(owed, state.RoundToNearest)
+		available = numberContext.FromAmount(
+			numberContext.ToAmount(available, amount, state.RoundToNearest),
+			state.RoundToNearest,
+		)
+		if negOwed.Cmp(limit) >= 0 || amountN.Cmp(available) > 0 {
 			return ter.TecNO_LINE
 		}
 	}
@@ -468,19 +470,16 @@ func withdrawToDestExceedsLimit(view tx.LedgerView, from, to [20]byte, amount tx
 
 // lineBalanceInTerms returns the trust-line balance between account and issuer
 // expressed in account's terms (positive means the account holds the asset).
-func lineBalanceInTerms(view tx.LedgerView, account, issuer [20]byte, currency string) state.XRPLNumber {
+func lineBalanceInTerms(view tx.LedgerView, account, issuer [20]byte, currency string, numberContext state.NumberContext) state.XRPLNumber {
 	data, err := view.Read(keylet.Line(account, issuer, currency))
 	if err != nil || len(data) == 0 {
-		return state.NewXRPLNumber(0, 0)
+		return numberContext.Int(0)
 	}
 	rs, perr := state.ParseRippleState(data)
 	if perr != nil {
-		return state.NewXRPLNumber(0, 0)
+		return numberContext.Int(0)
 	}
-	bal, berr := vaultNumber(rs.Balance.Value())
-	if berr != nil {
-		return state.NewXRPLNumber(0, 0)
-	}
+	bal := numberContext.FromAmount(rs.Balance, state.RoundToNearest)
 	if bytes.Compare(account[:], issuer[:]) > 0 {
 		bal = bal.Negate()
 	}
@@ -488,14 +487,14 @@ func lineBalanceInTerms(view tx.LedgerView, account, issuer [20]byte, currency s
 }
 
 // lineLimit returns account's own trust limit toward issuer for currency.
-func lineLimit(view tx.LedgerView, account, issuer [20]byte, currency string) state.XRPLNumber {
+func lineLimit(view tx.LedgerView, account, issuer [20]byte, currency string, numberContext state.NumberContext) state.XRPLNumber {
 	data, err := view.Read(keylet.Line(account, issuer, currency))
 	if err != nil || len(data) == 0 {
-		return state.NewXRPLNumber(0, 0)
+		return numberContext.Int(0)
 	}
 	rs, perr := state.ParseRippleState(data)
 	if perr != nil {
-		return state.NewXRPLNumber(0, 0)
+		return numberContext.Int(0)
 	}
 	var lim state.Amount
 	if bytes.Compare(account[:], issuer[:]) < 0 {
@@ -503,11 +502,7 @@ func lineLimit(view tx.LedgerView, account, issuer [20]byte, currency string) st
 	} else {
 		lim = rs.HighLimit
 	}
-	n, nerr := vaultNumber(lim.Value())
-	if nerr != nil {
-		return state.NewXRPLNumber(0, 0)
-	}
-	return n
+	return numberContext.FromAmount(lim, state.RoundToNearest)
 }
 
 // assetMatches reports whether amount denominates the vault's asset.

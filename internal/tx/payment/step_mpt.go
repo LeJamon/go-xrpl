@@ -246,7 +246,7 @@ func (s *MPTEndpointStep) GetQualityFunc(v *PaymentSandbox, prevStepDir DebtDire
 	if quality == nil {
 		return nil, dir
 	}
-	return NewCLOBLikeQualityFunction(*quality), dir
+	return newCLOBLikeQualityFunction(numberMath{ctx: v.NumberContext()}, *quality), dir
 }
 
 func (s *MPTEndpointStep) IsZero(amount EitherAmount) bool {

@@ -427,7 +427,7 @@ func (l *LoanBrokerCoverWithdraw) Preclaim(view tx.LedgerView, config tx.EngineC
 		return res
 	}
 	if accountID != dstID {
-		if res := vault.CanWithdraw(view, accountID, dstID, l.Amount, l.DestinationTag != nil); res != ter.TesSUCCESS {
+		if res := vault.CanWithdraw(view, accountID, dstID, l.Amount, l.DestinationTag != nil, config.NumberContext()); res != ter.TesSUCCESS {
 			return res
 		}
 	}

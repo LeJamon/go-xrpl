@@ -103,6 +103,91 @@ func MantissaScaleForRulesWithFix(hasRules, singleAssetVault, lendingProtocol, f
 	return MantissaScaleLargeLegacy
 }
 
+// NumberContext creates XRPLNumber values in one immutable mantissa scale.
+// Transaction code derives one context from the ledger rules and passes its
+// values explicitly, so concurrent ledgers cannot affect each other's math.
+type NumberContext struct {
+	scale MantissaScale
+}
+
+// NewNumberContext returns a Number context fixed to scale.
+func NewNumberContext(scale MantissaScale) NumberContext {
+	return NumberContext{scale: scale}
+}
+
+// Scale returns the context's mantissa scale.
+func (c NumberContext) Scale() MantissaScale {
+	return c.scale
+}
+
+// Number creates a Number in the context's scale under mode.
+func (c NumberContext) Number(mantissa int64, exponent int, mode RoundingMode) XRPLNumber {
+	return newNumber(mantissa, exponent, c.scale, mode)
+}
+
+// New is an alias for Number.
+func (c NumberContext) New(mantissa int64, exponent int, mode RoundingMode) XRPLNumber {
+	return c.Number(mantissa, exponent, mode)
+}
+
+// Int creates an integral Number in the context's scale.
+func (c NumberContext) Int(value int64) XRPLNumber {
+	return c.Number(value, 0, RoundToNearest)
+}
+
+// FromInt creates an integral Number in the context's scale under mode.
+func (c NumberContext) FromInt(value int64, mode RoundingMode) XRPLNumber {
+	return c.Number(value, 0, mode)
+}
+
+// FromAmount converts an asset amount into a Number. XRP is measured in drops,
+// MPTs in their integral units, and IOUs retain their decimal representation.
+func (c NumberContext) FromAmount(amount Amount, mode RoundingMode) XRPLNumber {
+	if amount.IsNative() {
+		return c.FromInt(amount.Drops(), mode)
+	}
+	if raw, ok := amount.MPTRaw(); ok {
+		return c.FromInt(raw, mode)
+	}
+	return c.Number(amount.Mantissa(), amount.Exponent(), mode)
+}
+
+// ToAmount converts number to the asset kind and issue carried by prototype.
+// Integral assets use mode at their integer boundary; IOUs use it while
+// normalizing to the STAmount mantissa range.
+func (c NumberContext) ToAmount(number XRPLNumber, prototype Amount, mode RoundingMode) Amount {
+	if prototype.IsNative() {
+		return NewXRPAmountFromInt(number.ToInt64WithMode(mode))
+	}
+	if _, ok := prototype.MPTRaw(); ok {
+		value := number.ToInt64WithMode(mode)
+		if prototype.IsMPT() {
+			return NewMPTAmountWithIssuanceID(value, prototype.Issuer, prototype.MPTIssuanceID())
+		}
+		return NewMPTAmountDirect(value, prototype.Currency, prototype.Issuer)
+	}
+	iou := number.ToIOUAmountValueRounded(mode)
+	return Amount{
+		iou:      iou,
+		Currency: prototype.Currency,
+		Issuer:   prototype.Issuer,
+	}
+}
+
+// ToAmountWithNativeRounding mirrors rippled's toAmount(asset, number, mode):
+// the explicit mode applies only to XRP, while IOU and MPT conversion uses the
+// rounding mode already active for the surrounding Number expression.
+func (c NumberContext) ToAmountWithNativeRounding(
+	number XRPLNumber,
+	prototype Amount,
+	nativeMode, ambientMode RoundingMode,
+) Amount {
+	if prototype.IsNative() {
+		return c.ToAmount(number, prototype, nativeMode)
+	}
+	return c.ToAmount(number, prototype, ambientMode)
+}
+
 func (s MantissaScale) cuspRoundingFixEnabled() bool {
 	return s == MantissaScaleLarge
 }
@@ -754,11 +839,19 @@ func normalizeInRange(negative *bool, m *uint64, e *int, minM, maxM uint64) {
 	g.doRoundUp(negative, m, e, minM, maxM, false, RoundToNearest, "XRPLNumber::normalize overflow")
 }
 
-// ToIOUAmountValue converts to IOUAmountValue, clamping the wider exponent range
-// to IOUAmount's [-96, 80].
+// ToIOUAmountValue converts to IOUAmountValue using banker's rounding.
 func (n XRPLNumber) ToIOUAmountValue() IOUAmountValue {
+	return n.ToIOUAmountValueRounded(RoundToNearest)
+}
+
+// ToIOUAmountValueRounded converts to the IOU mantissa range under mode, then
+// clamps the wider Number exponent range to IOUAmount's [-96, 80].
+func (n XRPLNumber) ToIOUAmountValueRounded(mode RoundingMode) IOUAmountValue {
 	if n.IsZero() {
 		return ZeroIOUValue()
+	}
+	if n.scale != MantissaScaleSmall {
+		n = newNumber(n.Mantissa(), n.Exponent(), MantissaScaleSmall, mode)
 	}
 	e := n.Exponent()
 	if e > MaxExponent {
@@ -823,9 +916,18 @@ func (n XRPLNumber) shiftExponent(delta int) XRPLNumber {
 // root2 computes the square root using banker's rounding.
 func (n XRPLNumber) root2() XRPLNumber { return n.root2Rounded(RoundToNearest) }
 
+// Root2 computes the square root using banker's rounding.
+func (n XRPLNumber) Root2() XRPLNumber { return n.Root2Rounded(RoundToNearest) }
+
 // root2Rounded computes the square root via Newton-Raphson iteration, rounding
 // every intermediate under mode (rippled root2).
 func (n XRPLNumber) root2Rounded(mode RoundingMode) XRPLNumber {
+	return n.Root2Rounded(mode)
+}
+
+// Root2Rounded computes the square root via Newton-Raphson iteration, rounding
+// every intermediate under mode.
+func (n XRPLNumber) Root2Rounded(mode RoundingMode) XRPLNumber {
 	one := n.oneVal()
 	if n.Equal(one) {
 		return n

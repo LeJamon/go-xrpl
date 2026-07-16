@@ -780,6 +780,8 @@ func TestAMMExtended_PayStrand(t *testing.T) {
 // Reference: rippled AMMExtended_test.cpp testRmFundedOffer (line 50)
 func TestAMMExtended_RmFundedOffer(t *testing.T) {
 	env := amm.NewAMMTestEnv(t)
+	env.DisableFeature("SingleAssetVault")
+	env.DisableFeature("LendingProtocol")
 
 	// Fund accounts with XRP(10000), USD(200000), BTC(2000)
 	for _, acc := range []*jtx.Account{env.GW, env.Alice, env.Bob, env.Carol} {

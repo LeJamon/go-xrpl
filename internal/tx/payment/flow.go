@@ -492,21 +492,13 @@ func limitOut(v *PaymentSandbox, strand Strand, remainingOut EitherAmount, limit
 	// Convert the Number result to an EitherAmount matching remainingOut's type
 	var out EitherAmount
 	if remainingOut.IsNative {
-		// Convert IOU-style number to XRP drops using round-to-nearest (banker's rounding).
-		// Reference: rippled StrandFlow.h limitOut() line 402: XRPAmount{*out}
-		// which calls Number::operator rep() (round to nearest, even on tie).
-		drops := canonicalizeDropsRound(outAmt.Mantissa(), outAmt.Exponent())
-		out = NewXRPEitherAmount(drops)
+		prototype := state.NewXRPAmountFromInt(0)
+		out = ToEitherAmount(qf.math.toAmount(*outAmt, prototype, state.RoundToNearest))
 	} else if remainingOut.IsMPT {
-		n := state.NewXRPLNumber(outAmt.Mantissa(), outAmt.Exponent())
-		value := n.ToInt64WithMode(state.RoundToNearest)
-		out = NewMPTEitherAmount(value, remainingOut.MPTID)
+		prototype := newMPTAmount(0, remainingOut.MPTID)
+		out = ToEitherAmount(qf.math.toAmount(*outAmt, prototype, state.RoundToNearest))
 	} else {
-		// Preserve currency/issuer from remainingOut (outAmt has empty currency/issuer
-		// because QualityFunction uses Number arithmetic with no issue info).
-		out = NewIOUEitherAmount(tx.NewIssuedAmount(
-			outAmt.Mantissa(), outAmt.Exponent(),
-			remainingOut.IOU.Currency, remainingOut.IOU.Issuer))
+		out = ToEitherAmount(qf.math.toAmount(*outAmt, remainingOut.IOU, state.RoundToNearest))
 	}
 
 	// A tiny difference could be due to round off
@@ -650,6 +642,9 @@ func RippleCalculate(
 	// Create PaymentSandbox from view
 	sandbox := NewPaymentSandbox(view)
 	sandbox.SetTransactionContext(txHash, ledgerSeq)
+	if rcOpts.numberContext != nil {
+		sandbox.SetNumberContext(*rcOpts.numberContext)
+	}
 	// Mirror rippled view.open(): the XRP-movement balance guards select the
 	// telFAILED_PROCESSING (open) vs tecFAILED_PROCESSING (closed) variant.
 	sandbox.SetOpenLedger(rcOpts.openLedger)
@@ -669,7 +664,7 @@ func RippleCalculate(
 
 	// Create AMMContext for this payment
 	// Reference: rippled Flow.cpp line 85: AMMContext ammContext(src, false);
-	ammCtx := NewAMMContext(srcAccount, false)
+	ammCtx := NewAMMContext(srcAccount, false, sandbox.NumberContext())
 
 	// Configure BookSteps with amendment flags for payments.
 	configureBookStepsForPayments(strands, rcOpts.parentCloseTime, rcOpts.fixReducedOffersV2)
@@ -746,6 +741,7 @@ type rippleCalculateOpts struct {
 	fixAMMv1_1          bool
 	fixAMMv1_2          bool
 	fixAMMOverflowOffer bool
+	numberContext       *state.NumberContext
 
 	// openLedger mirrors rippled's view.open() (Payment.cpp: rcInput.isLedgerOpen
 	// = view().open()). It selects the FAILED_PROCESSING TER variant in the
@@ -769,6 +765,14 @@ func WithAMMAmendments(fixAMMv1_1, fixAMMv1_2, fixAMMOverflowOffer bool) RippleC
 		o.fixAMMv1_1 = fixAMMv1_1
 		o.fixAMMv1_2 = fixAMMv1_2
 		o.fixAMMOverflowOffer = fixAMMOverflowOffer
+	}
+}
+
+// WithNumberContext passes the transaction's immutable Number context through
+// payment and AMM offer arithmetic.
+func WithNumberContext(numberContext state.NumberContext) RippleCalculateOption {
+	return func(o *rippleCalculateOpts) {
+		o.numberContext = &numberContext
 	}
 }
 

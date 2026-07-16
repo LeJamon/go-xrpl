@@ -7,6 +7,7 @@ import (
 	"github.com/LeJamon/go-xrpl/amendment"
 	"github.com/LeJamon/go-xrpl/drops"
 	ledgercore "github.com/LeJamon/go-xrpl/internal/ledger"
+	"github.com/LeJamon/go-xrpl/internal/ledger/state"
 	tx "github.com/LeJamon/go-xrpl/internal/tx"
 	"github.com/LeJamon/go-xrpl/keylet"
 )
@@ -23,6 +24,8 @@ type PaymentSandbox struct {
 
 	// view is the underlying ledger view (used only for root sandbox)
 	view tx.LedgerView
+
+	numberContext state.NumberContext
 
 	// modifications holds modified ledger entries (key -> new data)
 	modifications map[[32]byte][]byte
@@ -117,6 +120,7 @@ func NewPaymentSandbox(view tx.LedgerView) *PaymentSandbox {
 	return &PaymentSandbox{
 		parent:             nil,
 		view:               view,
+		numberContext:      tx.NumberContextForRules(view.Rules()),
 		modifications:      make(map[[32]byte][]byte),
 		preImages:          make(map[[32]byte][]byte),
 		insertions:         make(map[[32]byte][]byte),
@@ -159,6 +163,7 @@ func NewChildSandbox(parent *PaymentSandbox) *PaymentSandbox {
 		txHash:             txHash,
 		ledgerSeq:          ledgerSeq,
 		openLedger:         parent.openLedger,
+		numberContext:      parent.NumberContext(),
 		view:               nil, // Use parent's view
 		modifications:      make(map[[32]byte][]byte),
 		preImages:          make(map[[32]byte][]byte),
@@ -174,6 +179,19 @@ func NewChildSandbox(parent *PaymentSandbox) *PaymentSandbox {
 // and propagated to child sandboxes. Mirrors rippled's view.open().
 func (s *PaymentSandbox) SetOpenLedger(open bool) {
 	s.openLedger = open
+}
+
+// SetNumberContext installs the immutable Number context for this flow.
+func (s *PaymentSandbox) SetNumberContext(numberContext state.NumberContext) {
+	s.numberContext = numberContext
+}
+
+// NumberContext returns the Number context shared by every step in this flow.
+func (s *PaymentSandbox) NumberContext() state.NumberContext {
+	if s.parent != nil {
+		return s.parent.NumberContext()
+	}
+	return s.numberContext
 }
 
 // IsOpenLedger reports whether this sandbox chain is applying against the open
@@ -589,14 +607,14 @@ func (s *PaymentSandbox) Succ(key [32]byte) ([32]byte, []byte, bool, error) {
 // Credit records a credit from sender to receiver.
 // This is called when currency moves between accounts during payment execution.
 func (s *PaymentSandbox) Credit(sender, receiver [20]byte, amount tx.Amount, preCreditSenderBalance tx.Amount) {
-	s.tab.credit(sender, receiver, amount, preCreditSenderBalance)
+	s.tab.credit(sender, receiver, amount, preCreditSenderBalance, s.NumberContext())
 }
 
 // CreditHook records a credit from sender to receiver.
 // This is the hook interface used by View implementations to track credits.
 // Reference: rippled PaymentSandbox::creditHook in PaymentSandbox.cpp
 func (s *PaymentSandbox) CreditHook(sender, receiver [20]byte, amount tx.Amount, preCreditSenderBalance tx.Amount) {
-	s.tab.credit(sender, receiver, amount, preCreditSenderBalance)
+	s.tab.credit(sender, receiver, amount, preCreditSenderBalance, s.NumberContext())
 }
 
 func (s *PaymentSandbox) CreditHookMPT(
@@ -624,7 +642,7 @@ func (s *PaymentSandbox) IssuerSelfDebitHookMPT(id [24]byte, amount uint64, orig
 }
 
 // credit records a credit in the deferred credits table
-func (dc *DeferredCredits) credit(sender, receiver [20]byte, amount tx.Amount, preCreditSenderBalance tx.Amount) {
+func (dc *DeferredCredits) credit(sender, receiver [20]byte, amount tx.Amount, preCreditSenderBalance tx.Amount, numberContext state.NumberContext) {
 	if sender == receiver {
 		return // No self-credits
 	}
@@ -666,9 +684,9 @@ func (dc *DeferredCredits) credit(sender, receiver [20]byte, amount tx.Amount, p
 	} else {
 		// Only record the balance the first time
 		if bytes.Compare(sender[:], receiver[:]) < 0 {
-			v.highAcctCredits, _ = v.highAcctCredits.Add(amount)
+			v.highAcctCredits, _ = v.highAcctCredits.AddWithNumberContext(amount, numberContext, state.RoundToNearest)
 		} else {
-			v.lowAcctCredits, _ = v.lowAcctCredits.Add(amount)
+			v.lowAcctCredits, _ = v.lowAcctCredits.AddWithNumberContext(amount, numberContext, state.RoundToNearest)
 		}
 	}
 }
@@ -752,7 +770,7 @@ func (dc *DeferredCredits) getOwnerCount(id [20]byte) (uint32, bool) {
 }
 
 // apply merges deferred credits into another DeferredCredits
-func (dc *DeferredCredits) apply(to *DeferredCredits) {
+func (dc *DeferredCredits) apply(to *DeferredCredits, numberContext state.NumberContext) {
 	for key, fromVal := range dc.credits {
 		toVal, exists := to.credits[key]
 		if !exists {
@@ -764,8 +782,8 @@ func (dc *DeferredCredits) apply(to *DeferredCredits) {
 			}
 		} else {
 			// Accumulate credits, don't update origBalance
-			toVal.lowAcctCredits, _ = toVal.lowAcctCredits.Add(fromVal.lowAcctCredits)
-			toVal.highAcctCredits, _ = toVal.highAcctCredits.Add(fromVal.highAcctCredits)
+			toVal.lowAcctCredits, _ = toVal.lowAcctCredits.AddWithNumberContext(fromVal.lowAcctCredits, numberContext, state.RoundToNearest)
+			toVal.highAcctCredits, _ = toVal.highAcctCredits.AddWithNumberContext(fromVal.highAcctCredits, numberContext, state.RoundToNearest)
 		}
 	}
 
@@ -831,7 +849,7 @@ func (s *PaymentSandbox) BalanceHook(account, issuer [20]byte, amount tx.Amount)
 	// Walk up the sandbox chain
 	for curSB := s; curSB != nil; curSB = curSB.parent {
 		if adj := curSB.tab.adjustments(account, issuer, currency); adj != nil {
-			delta, _ = delta.Add(adj.Debits)
+			delta, _ = delta.AddWithNumberContext(adj.Debits, s.NumberContext(), state.RoundToNearest)
 			lastBal = adj.OrigBalance
 			if lastBal.Compare(minBal) < 0 {
 				minBal = lastBal
@@ -840,7 +858,7 @@ func (s *PaymentSandbox) BalanceHook(account, issuer [20]byte, amount tx.Amount)
 	}
 
 	// Compute adjusted amount: min(amount, lastBal - delta, minBal)
-	adjustedFromOrig, _ := lastBal.Sub(delta)
+	adjustedFromOrig, _ := lastBal.SubWithNumberContext(delta, s.NumberContext(), state.RoundToNearest)
 
 	result := amount
 	if adjustedFromOrig.Compare(result) < 0 {
@@ -1039,7 +1057,7 @@ func (s *PaymentSandbox) Apply(to *PaymentSandbox) error {
 	}
 
 	// Apply deferred credits
-	s.tab.apply(to.tab)
+	s.tab.apply(to.tab, s.NumberContext())
 
 	// Apply drops destroyed
 	to.dropsDestroyed = to.dropsDestroyed.Add(s.dropsDestroyed)

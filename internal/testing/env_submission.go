@@ -544,6 +544,7 @@ func (e *TestEnv) engineConfig(view *ledger.Ledger, opts engineConfigOpts) tx.En
 		LedgerSequence:            view.Sequence(),
 		SkipSignatureVerification: !(e.VerifySignatures || opts.verifySignatures),
 		Rules:                     e.rulesBuilder.Build(),
+		NumberContextOverride:     e.numberContextOverride,
 		ParentCloseTime:           parentCloseTime,
 		NetworkID:                 e.networkID,
 		ParentHash:                view.ParentHash(),

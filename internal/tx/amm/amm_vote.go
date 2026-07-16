@@ -102,6 +102,7 @@ func (a *AMMVote) Apply(ctx *tx.ApplyContext) ter.Result {
 	)
 
 	accountID := ctx.AccountID
+	math := newNumberMath(ctx)
 
 	amm, ammKey, result := readAMM(ctx.View, a.Asset, a.Asset2)
 	if result != ter.TesSUCCESS {
@@ -136,15 +137,9 @@ func (a *AMMVote) Apply(ctx *tx.ApplyContext) ter.Result {
 	updatedVoteSlots := make([]VoteSlotData, 0, voteMaxSlots)
 	foundAccount := false
 
-	// Scale factor as Amount for calculations
-	// voteWeightScaleFactor = 100000 = 1e5, represented as mantissa 1e15 with exponent -10
-	scaleFactorAmount := state.NewIssuedAmountFromValue(1e15, -10, "", "")
-
-	// Running totals for weighted fee calculation.
-	// Use tx.Amount (IOU-style) to avoid int64 overflow on feeVal * lpTokens.
-	// Reference: rippled uses Number (arbitrary precision) for num/den.
-	var num tx.Amount = state.NewIssuedAmountFromFloat64(0, "", "")
-	var den tx.Amount = state.NewIssuedAmountFromFloat64(0, "", "")
+	scaleFactor := math.int(voteWeightScaleFactor)
+	num := math.zero()
+	den := math.zero()
 
 	// Reference: rippled AMMVote.cpp:111-154 — reads actual LP balance via ammLPHolds
 	for _, slot := range amm.VoteSlots {
@@ -166,12 +161,15 @@ func (a *AMMVote) Apply(ctx *tx.ApplyContext) ter.Result {
 
 		// Calculate new vote weight: voteWeight = lpTokens * scaleFactor / lptAMMBalance.
 		// A dust LP holding less than 1/voteWeightScaleFactor of the pool gets 0.
-		voteWeight := uint32(numberDivToInt64(lpTokens.Mul(scaleFactorAmount, false), lptAMMBalance))
+		voteWeight := uint32(math.divToInt64(
+			math.fromAmount(lpTokens).MulRounded(scaleFactor, state.RoundToNearest),
+			math.fromAmount(lptAMMBalance),
+		))
 
 		// Update running totals for weighted fee: num += feeVal * lpTokens, den += lpTokens
-		feeAmount := state.NewIssuedAmountFromFloat64(float64(feeVal), "", "")
-		num, _ = num.Add(feeAmount.Mul(lpTokens, false))
-		den, _ = den.Add(lpTokens)
+		lpTokensNumber := math.fromAmount(lpTokens)
+		num = num.AddRounded(math.int(int64(feeVal)).MulRounded(lpTokensNumber, state.RoundToNearest), state.RoundToNearest)
+		den = den.AddRounded(lpTokensNumber, state.RoundToNearest)
 
 		if lpTokens.Compare(minTokens) < 0 ||
 			(lpTokens.Compare(minTokens) == 0 && feeVal < minFee) ||
@@ -193,7 +191,11 @@ func (a *AMMVote) Apply(ctx *tx.ApplyContext) ter.Result {
 	}
 
 	if !foundAccount {
-		voteWeight := uint32(numberDivToInt64(lpTokensNew.Mul(scaleFactorAmount, false), lptAMMBalance))
+		lpTokensNewNumber := math.fromAmount(lpTokensNew)
+		voteWeight := uint32(math.divToInt64(
+			lpTokensNewNumber.MulRounded(scaleFactor, state.RoundToNearest),
+			math.fromAmount(lptAMMBalance),
+		))
 
 		if len(updatedVoteSlots) < voteMaxSlots {
 			updatedVoteSlots = append(updatedVoteSlots, VoteSlotData{
@@ -201,16 +203,18 @@ func (a *AMMVote) Apply(ctx *tx.ApplyContext) ter.Result {
 				TradingFee: feeNew,
 				VoteWeight: voteWeight,
 			})
-			feeAmount := state.NewIssuedAmountFromFloat64(float64(feeNew), "", "")
-			num, _ = num.Add(feeAmount.Mul(lpTokensNew, false))
-			den, _ = den.Add(lpTokensNew)
+			num = num.AddRounded(math.int(int64(feeNew)).MulRounded(lpTokensNewNumber, state.RoundToNearest), state.RoundToNearest)
+			den = den.AddRounded(lpTokensNewNumber, state.RoundToNearest)
 		} else if isGreater(lpTokensNew, minTokens) || (lpTokensNew.Compare(minTokens) == 0 && feeNew > minFee) {
 			// Replace minimum token holder if new account has more tokens
 			if minPos >= 0 && minPos < len(updatedVoteSlots) {
 				// Remove min holder's contribution from totals
-				minFeeAmt := state.NewIssuedAmountFromFloat64(float64(minFee), "", "")
-				num, _ = num.Sub(minFeeAmt.Mul(minTokens, false))
-				den, _ = den.Sub(minTokens)
+				minTokensNumber := math.fromAmount(minTokens)
+				num = num.AddRounded(
+					math.int(int64(minFee)).MulRounded(minTokensNumber, state.RoundToNearest).Negate(),
+					state.RoundToNearest,
+				)
+				den = den.AddRounded(minTokensNumber.Negate(), state.RoundToNearest)
 
 				updatedVoteSlots[minPos] = VoteSlotData{
 					Account:    accountID,
@@ -218,9 +222,8 @@ func (a *AMMVote) Apply(ctx *tx.ApplyContext) ter.Result {
 					VoteWeight: voteWeight,
 				}
 
-				feeAmount := state.NewIssuedAmountFromFloat64(float64(feeNew), "", "")
-				num, _ = num.Add(feeAmount.Mul(lpTokensNew, false))
-				den, _ = den.Add(lpTokensNew)
+				num = num.AddRounded(math.int(int64(feeNew)).MulRounded(lpTokensNewNumber, state.RoundToNearest), state.RoundToNearest)
+				den = den.AddRounded(lpTokensNewNumber, state.RoundToNearest)
 			}
 		}
 	}
@@ -229,7 +232,7 @@ func (a *AMMVote) Apply(ctx *tx.ApplyContext) ter.Result {
 	// Reference: rippled AMMVote.cpp:209 — static_cast<int64_t>(num / den)
 	var newTradingFee uint16 = 0
 	if !den.IsZero() {
-		newTradingFee = uint16(numberDivToInt64(num, den))
+		newTradingFee = uint16(math.divToInt64(num, den))
 	}
 
 	amm.VoteSlots = updatedVoteSlots

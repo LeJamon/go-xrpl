@@ -31,55 +31,40 @@ func getAccountTradingFee(amm *AMMData, accountID [20]byte, parentCloseTime uint
 
 // getFee converts a trading fee in basis points to a fractional IOU Amount:
 // fee / voteWeightScaleFactor (e.g. 1000 basis points = 1% = 0.01).
-func getFee(fee uint16) tx.Amount {
-	if fee == 0 {
-		return zeroIOU()
-	}
-	// fee / 100000 = fee * 10^-5
-	// For normalized form: mantissa in [10^15, 10^16), so fee * 10^10 with exp -15
-	mantissa := int64(fee) * 1e10
-	return state.NewIssuedAmountFromValue(mantissa, -15, "", "")
+func getFee(math numberMath, fee uint16) state.XRPLNumber {
+	return math.number(int64(fee), -5, state.RoundToNearest)
 }
 
 // feeMult returns (1 - getFee(tfee)), i.e., (1 - fee).
 // Reference: rippled AMMCore.h feeMult(): 1 - getFee(tfee)
-func feeMult(tfee uint16) tx.Amount {
-	return subFromOne(getFee(tfee))
+func feeMult(math numberMath, tfee uint16) state.XRPLNumber {
+	return math.subFromOne(getFee(math, tfee), state.RoundToNearest)
 }
 
 // feeMultHalf returns (1 - getFee(tfee)/2), i.e., (1 - fee/2).
 // Reference: rippled AMMCore.h feeMultHalf(): 1 - getFee(tfee) / 2
-func feeMultHalf(tfee uint16) tx.Amount {
-	fee := getFee(tfee)
-	halfFee := numberDiv(fee, numAmount(2))
-	return subFromOne(halfFee)
+func feeMultHalf(math numberMath, tfee uint16) state.XRPLNumber {
+	halfFee := math.div(getFee(math, tfee), math.int(2), state.RoundToNearest)
+	return math.subFromOne(halfFee, state.RoundToNearest)
 }
 
 // adjustLPTokens adjusts LP tokens for precision loss when adding/subtracting
 // from the AMM balance.
 // Reference: rippled AMMHelpers.cpp adjustLPTokens()
-func adjustLPTokens(lptAMMBalance, lpTokens tx.Amount, isDeposit bool) tx.Amount {
+func adjustLPTokens(math numberMath, lptAMMBalance, lpTokens tx.Amount, isDeposit bool) tx.Amount {
 	const mode = state.RoundDownward
 
-	lptBalIOU := toIOUForCalc(lptAMMBalance)
-	lpTokIOU := toIOUForCalc(lpTokens)
-
 	if isDeposit {
-		// (lptAMMBalance + lpTokens) - lptAMMBalance
-		sum, _ := lptBalIOU.AddRounded(lpTokIOU, mode)
-		result, _ := sum.SubRounded(lptBalIOU, mode)
-		return toSTAmountIssue(lptAMMBalance, result)
+		return math.subAmounts(math.addAmounts(lptAMMBalance, lpTokens, mode), lptAMMBalance, mode)
 	}
-	// (lpTokens - lptAMMBalance) + lptAMMBalance
-	diff, _ := lpTokIOU.SubRounded(lptBalIOU, mode)
-	result, _ := diff.AddRounded(lptBalIOU, mode)
-	return toSTAmountIssue(lptAMMBalance, result)
+	return math.addAmounts(math.subAmounts(lpTokens, lptAMMBalance, mode), lptAMMBalance, mode)
 }
 
 // adjustAmountsByLPTokens is the post-computation adjustment pipeline.
 // Reference: rippled AMMHelpers.cpp adjustAmountsByLPTokens()
 // IMPORTANT: when fixAMMv1_3 is enabled, this returns the amounts unchanged.
 func adjustAmountsByLPTokens(
+	math numberMath,
 	amountBalance, amount tx.Amount,
 	amount2 *tx.Amount,
 	lptAMMBalance, lpTokens tx.Amount,
@@ -93,7 +78,7 @@ func adjustAmountsByLPTokens(
 		return amount, amount2, lpTokens
 	}
 
-	lpTokensActual := adjustLPTokens(lptAMMBalance, lpTokens, isDeposit)
+	lpTokensActual := adjustLPTokens(math, lptAMMBalance, lpTokens, isDeposit)
 
 	if lpTokensActual.IsZero() {
 		var amount2Opt *tx.Amount
@@ -105,19 +90,19 @@ func adjustAmountsByLPTokens(
 		return zero, amount2Opt, lpTokensActual
 	}
 
-	if toIOUForCalc(lpTokensActual).Compare(toIOUForCalc(lpTokens)) < 0 {
+	if math.fromAmount(lpTokensActual).Cmp(math.fromAmount(lpTokens)) < 0 {
 		// Equal trade
 		if amount2 != nil {
-			fr := numberDiv(toIOUForCalc(lpTokensActual), toIOUForCalc(lpTokens))
-			amountActual := toSTAmountIssue(amount, toIOUForCalc(amount).Mul(fr, false))
-			amount2Actual := toSTAmountIssue(*amount2, toIOUForCalc(*amount2).Mul(fr, false))
+			fr := math.div(math.fromAmount(lpTokensActual), math.fromAmount(lpTokens), state.RoundToNearest)
+			amountActual := math.multiplyToAmount(math.fromAmount(amount), fr, amount, state.RoundToNearest)
+			amount2Actual := math.multiplyToAmount(math.fromAmount(*amount2), fr, *amount2, state.RoundToNearest)
 			if !fixAMMv1_1 {
-				if toIOUForCalc(amountActual).Compare(toIOUForCalc(amount)) < 0 {
+				if math.fromAmount(amountActual).Cmp(math.fromAmount(amount)) < 0 {
 					// keep amountActual
 				} else {
 					amountActual = amount
 				}
-				if toIOUForCalc(amount2Actual).Compare(toIOUForCalc(*amount2)) < 0 {
+				if math.fromAmount(amount2Actual).Cmp(math.fromAmount(*amount2)) < 0 {
 					// keep amount2Actual
 				} else {
 					amount2Actual = *amount2
@@ -129,14 +114,14 @@ func adjustAmountsByLPTokens(
 		// Single trade
 		var amountActual tx.Amount
 		if isDeposit {
-			amountActual = ammAssetIn(amountBalance, lptAMMBalance, lpTokensActual, tfee, false)
+			amountActual = ammAssetIn(math, amountBalance, lptAMMBalance, lpTokensActual, tfee, false)
 		} else if !fixAMMv1_1 {
-			amountActual = ammAssetOut(amountBalance, lptAMMBalance, lpTokens, tfee, false)
+			amountActual = ammAssetOut(math, amountBalance, lptAMMBalance, lpTokens, tfee, false)
 		} else {
-			amountActual = ammAssetOut(amountBalance, lptAMMBalance, lpTokensActual, tfee, false)
+			amountActual = ammAssetOut(math, amountBalance, lptAMMBalance, lpTokensActual, tfee, false)
 		}
 		if !fixAMMv1_1 {
-			if toIOUForCalc(amountActual).Compare(toIOUForCalc(amount)) < 0 {
+			if math.fromAmount(amountActual).Cmp(math.fromAmount(amount)) < 0 {
 				return amountActual, nil, lpTokensActual
 			}
 			return amount, nil, lpTokensActual
@@ -150,120 +135,103 @@ func adjustAmountsByLPTokens(
 // getRoundedAsset rounds an AMM equal deposit/withdrawal amount.
 // For simple signature: balance * frac
 // Reference: rippled AMMHelpers.h getRoundedAsset() (template version)
-func getRoundedAsset(fixAMMv1_3 bool, balance, frac tx.Amount, isDeposit bool) tx.Amount {
-	balIOU := toIOUForCalc(balance)
-	fracIOU := toIOUForCalc(frac)
+func getRoundedAsset(math numberMath, fixAMMv1_3 bool, balance tx.Amount, frac state.XRPLNumber, isDeposit bool) tx.Amount {
 	if !fixAMMv1_3 {
-		result := balIOU.Mul(fracIOU, false)
-		return toSTAmountIssue(balance, result)
+		return math.multiplyToAmount(math.fromAmount(balance), frac, balance, state.RoundToNearest)
 	}
 	rm := getAssetRounding(isDeposit)
-	return mulRoundForAsset(balIOU, fracIOU, rm, balance)
+	return math.multiplyToAmount(math.fromAmountRounded(balance, rm), frac, balance, rm)
 }
 
 // getRoundedAssetCb rounds an AMM single deposit/withdrawal amount using callbacks.
 // productCb receives the rounding mode under which it must evaluate its
 // Number expression (rippled runs the callback inside a NumberRoundModeGuard).
 // Reference: rippled AMMHelpers.cpp getRoundedAsset() (callback version)
-func getRoundedAssetCb(fixAMMv1_3 bool, noRoundCb func() tx.Amount, balance tx.Amount, productCb func(state.RoundingMode) tx.Amount, isDeposit bool) tx.Amount {
+func getRoundedAssetCb(math numberMath, fixAMMv1_3 bool, noRoundCb func() state.XRPLNumber, balance tx.Amount, productCb func(state.RoundingMode) state.XRPLNumber, isDeposit bool) tx.Amount {
 	if !fixAMMv1_3 {
-		result := noRoundCb()
-		return toSTAmountIssue(balance, result)
+		return math.toAmount(noRoundCb(), balance, state.RoundToNearest)
 	}
 	rm := getAssetRounding(isDeposit)
 	if isDeposit {
-		// rippled multiplies under rm but evaluates the product callback in
-		// the ambient (to_nearest) mode.
-		return mulRoundForAsset(toIOUForCalc(balance), productCb(state.RoundToNearest), rm, balance)
+		return math.multiplyToAmount(math.fromAmountRounded(balance, rm), productCb(state.RoundToNearest), balance, rm)
 	}
-	result := productCb(rm)
-	return toSTAmountIssueRounded(balance, result, rm)
+	return math.toAmount(productCb(rm), balance, rm)
 }
 
 // getRoundedLPTokens rounds LPTokens for equal deposit/withdrawal.
 // Reference: rippled AMMHelpers.cpp getRoundedLPTokens() (simple version)
-func getRoundedLPTokens(fixAMMv1_3 bool, balance, frac tx.Amount, isDeposit bool) tx.Amount {
-	balIOU := toIOUForCalc(balance)
-	fracIOU := toIOUForCalc(frac)
+func getRoundedLPTokens(math numberMath, fixAMMv1_3 bool, balance tx.Amount, frac state.XRPLNumber, isDeposit bool) tx.Amount {
 	if !fixAMMv1_3 {
-		result := balIOU.Mul(fracIOU, false)
-		return toSTAmountIssue(balance, result)
+		return math.multiplyToAmount(math.fromAmount(balance), frac, balance, state.RoundToNearest)
 	}
 	rm := getLPTokenRounding(isDeposit)
-	tokens := multiplyWithRounding(balIOU, fracIOU, rm)
-	return adjustLPTokens(balance, tokens, isDeposit)
+	tokens := math.multiplyToAmount(math.fromAmountRounded(balance, rm), frac, balance, rm)
+	return adjustLPTokens(math, balance, tokens, isDeposit)
 }
 
 // getRoundedLPTokensCb rounds LPTokens for single deposit/withdrawal using callbacks.
 // productCb receives the rounding mode under which it must evaluate its
 // Number expression (rippled runs the callback inside a NumberRoundModeGuard).
 // Reference: rippled AMMHelpers.cpp getRoundedLPTokens() (callback version)
-func getRoundedLPTokensCb(fixAMMv1_3 bool, noRoundCb func() tx.Amount, lptAMMBalance tx.Amount, productCb func(state.RoundingMode) tx.Amount, isDeposit bool) tx.Amount {
-	lptBalIOU := toIOUForCalc(lptAMMBalance)
+func getRoundedLPTokensCb(math numberMath, fixAMMv1_3 bool, noRoundCb func() state.XRPLNumber, lptAMMBalance tx.Amount, productCb func(state.RoundingMode) state.XRPLNumber, isDeposit bool) tx.Amount {
 	if !fixAMMv1_3 {
-		result := noRoundCb()
-		return toSTAmountIssue(lptAMMBalance, result)
+		return math.toAmount(noRoundCb(), lptAMMBalance, state.RoundToNearest)
 	}
 	rm := getLPTokenRounding(isDeposit)
 	var tokens tx.Amount
 	if isDeposit {
-		result := productCb(rm)
-		tokens = toSTAmountIssue(lptAMMBalance, result)
+		tokens = math.toAmount(productCb(rm), lptAMMBalance, rm)
 	} else {
-		// rippled multiplies under rm but evaluates the product callback in
-		// the ambient (to_nearest) mode.
-		tokens = multiplyWithRounding(lptBalIOU, productCb(state.RoundToNearest), rm)
+		tokens = math.multiplyToAmount(math.fromAmountRounded(lptAMMBalance, rm), productCb(state.RoundToNearest), lptAMMBalance, rm)
 	}
-	return adjustLPTokens(lptAMMBalance, tokens, isDeposit)
+	return adjustLPTokens(math, lptAMMBalance, tokens, isDeposit)
 }
 
 // adjustAssetInByTokens adjusts deposit asset amount to factor in adjusted tokens.
 // Reference: rippled AMMHelpers.cpp adjustAssetInByTokens()
-func adjustAssetInByTokens(fixAMMv1_3 bool, balance, amount, lptAMMBalance, tokens tx.Amount, tfee uint16) (tx.Amount, tx.Amount) {
+func adjustAssetInByTokens(math numberMath, fixAMMv1_3 bool, balance, amount, lptAMMBalance, tokens tx.Amount, tfee uint16) (tx.Amount, tx.Amount) {
 	if !fixAMMv1_3 {
 		return tokens, amount
 	}
-	assetAdj := ammAssetIn(balance, lptAMMBalance, tokens, tfee, true)
+	assetAdj := ammAssetIn(math, balance, lptAMMBalance, tokens, tfee, true)
 	tokensAdj := tokens
 	// Rounding didn't work the right way.
-	if toIOUForCalc(assetAdj).Compare(toIOUForCalc(amount)) > 0 {
-		diff, _ := toIOUForCalc(assetAdj).Sub(toIOUForCalc(amount))
-		adjAmount, _ := toIOUForCalc(amount).Sub(diff)
-		adjAmountFull := toSTAmountIssue(amount, adjAmount)
-		t := lpTokensOut(balance, adjAmountFull, lptAMMBalance, tfee, true)
-		tokensAdj = adjustLPTokens(lptAMMBalance, t, true)
-		assetAdj = ammAssetIn(balance, lptAMMBalance, tokensAdj, tfee, true)
+	if math.fromAmount(assetAdj).Cmp(math.fromAmount(amount)) > 0 {
+		diff := math.subAmounts(assetAdj, amount, state.RoundToNearest)
+		adjAmountFull := math.subAmounts(amount, diff, state.RoundToNearest)
+		t := lpTokensOut(math, balance, adjAmountFull, lptAMMBalance, tfee, true)
+		tokensAdj = adjustLPTokens(math, lptAMMBalance, t, true)
+		assetAdj = ammAssetIn(math, balance, lptAMMBalance, tokensAdj, tfee, true)
 	}
 	return tokensAdj, minAmountIOU(amount, assetAdj)
 }
 
 // adjustAssetOutByTokens adjusts withdrawal asset amount to factor in adjusted tokens.
 // Reference: rippled AMMHelpers.cpp adjustAssetOutByTokens()
-func adjustAssetOutByTokens(fixAMMv1_3 bool, balance, amount, lptAMMBalance, tokens tx.Amount, tfee uint16) (tx.Amount, tx.Amount) {
+func adjustAssetOutByTokens(math numberMath, fixAMMv1_3 bool, balance, amount, lptAMMBalance, tokens tx.Amount, tfee uint16) (tx.Amount, tx.Amount) {
 	if !fixAMMv1_3 {
 		return tokens, amount
 	}
-	assetAdj := ammAssetOut(balance, lptAMMBalance, tokens, tfee, true)
+	assetAdj := ammAssetOut(math, balance, lptAMMBalance, tokens, tfee, true)
 	tokensAdj := tokens
 	// Rounding didn't work the right way.
-	if toIOUForCalc(assetAdj).Compare(toIOUForCalc(amount)) > 0 {
-		diff, _ := toIOUForCalc(assetAdj).Sub(toIOUForCalc(amount))
-		adjAmount, _ := toIOUForCalc(amount).Sub(diff)
-		adjAmountFull := toSTAmountIssue(amount, adjAmount)
-		t := calcLPTokensIn(balance, adjAmountFull, lptAMMBalance, tfee, true)
-		tokensAdj = adjustLPTokens(lptAMMBalance, t, false)
-		assetAdj = ammAssetOut(balance, lptAMMBalance, tokensAdj, tfee, true)
+	if math.fromAmount(assetAdj).Cmp(math.fromAmount(amount)) > 0 {
+		diff := math.subAmounts(assetAdj, amount, state.RoundToNearest)
+		adjAmountFull := math.subAmounts(amount, diff, state.RoundToNearest)
+		t := calcLPTokensIn(math, balance, adjAmountFull, lptAMMBalance, tfee, true)
+		tokensAdj = adjustLPTokens(math, lptAMMBalance, t, false)
+		assetAdj = ammAssetOut(math, balance, lptAMMBalance, tokensAdj, tfee, true)
 	}
 	return tokensAdj, minAmountIOU(amount, assetAdj)
 }
 
 // adjustFracByTokens recalculates the fraction after token adjustment.
 // Reference: rippled AMMHelpers.cpp adjustFracByTokens()
-func adjustFracByTokens(fixAMMv1_3 bool, lptAMMBalance, tokens, frac tx.Amount) tx.Amount {
+func adjustFracByTokens(math numberMath, fixAMMv1_3 bool, lptAMMBalance, tokens tx.Amount, frac state.XRPLNumber) state.XRPLNumber {
 	if !fixAMMv1_3 {
 		return frac
 	}
-	return numberDiv(toIOUForCalc(tokens), toIOUForCalc(lptAMMBalance))
+	return math.div(math.fromAmount(tokens), math.fromAmount(lptAMMBalance), state.RoundToNearest)
 }
 
 // getAssetRounding returns the rounding mode for asset amounts.
@@ -295,44 +263,35 @@ func getLPTokenRounding(isDeposit bool) state.RoundingMode {
 //	c = root2(f2*f2 + r/f1) - f2
 //	if !fixAMMv1_3: t = lptAMMBalance * (r - c) / (1 + c)
 //	else:           frac = (r-c)/(1+c); multiply(lptAMMBalance, frac, downward)
-func lpTokensOut(assetBalance, amountIn, lptBalance tx.Amount, tfee uint16, fixAMMv1_3 bool) tx.Amount {
+func lpTokensOut(math numberMath, assetBalance, amountIn, lptBalance tx.Amount, tfee uint16, fixAMMv1_3 bool) tx.Amount {
 	if assetBalance.IsZero() || lptBalance.IsZero() {
 		return zeroIOU()
 	}
-
-	assetBalanceIOU := toIOUForCalc(assetBalance)
-	amountInIOU := toIOUForCalc(amountIn)
-	lptBalanceIOU := toIOUForCalc(lptBalance)
-
-	f1 := feeMult(tfee)                    // 1 - fee
-	f2 := numberDiv(feeMultHalf(tfee), f1) // (1 - fee/2) / (1 - fee)
-
-	// r = asset1Deposit / asset1Balance
-	r := numberDiv(amountInIOU, assetBalanceIOU)
-
-	// c = root2(f2*f2 + r/f1) - f2
-	f2f2 := f2.Mul(f2, false)
-	rDivF1 := numberDiv(r, f1)
-	inner, _ := f2f2.Add(rDivF1)
-	if inner.IsNegative() {
+	const mode = state.RoundToNearest
+	assetBalanceNumber := math.fromAmount(assetBalance)
+	lptBalanceNumber := math.fromAmount(lptBalance)
+	f1 := feeMult(math, tfee)
+	f2 := math.div(feeMultHalf(math, tfee), f1, mode)
+	r := math.div(math.fromAmount(amountIn), assetBalanceNumber, mode)
+	inner := f2.MulRounded(f2, mode).AddRounded(math.div(r, f1, mode), mode)
+	if inner.Signum() < 0 {
 		return zeroIOU()
 	}
-	sqrtInner := inner.Sqrt()
-	c, _ := sqrtInner.Sub(f2)
+	c := inner.Root2Rounded(mode).AddRounded(f2.Negate(), mode)
+	rMinusC := r.AddRounded(c.Negate(), mode)
+	onePlusC := math.addToOne(c, mode)
 
 	if !fixAMMv1_3 {
-		// t = lptAMMBalance * (r - c) / (1 + c)
-		rMinusC, _ := r.Sub(c)
-		onePlusC := addToOne(c)
-		t := numberDiv(lptBalanceIOU.Mul(rMinusC, false), onePlusC)
-		return toSTAmountIssue(lptBalance, t)
+		t := math.div(lptBalanceNumber.MulRounded(rMinusC, mode), onePlusC, mode)
+		return math.toAmount(t, lptBalance, mode)
 	}
-
-	// minimize tokens out
-	rMinusC, _ := r.Sub(c)
-	onePlusC := addToOne(c)
-	frac := numberDiv(rMinusC, onePlusC)
-	return mulRoundForAsset(lptBalanceIOU, frac, state.RoundDownward, lptBalance)
+	frac := math.div(rMinusC, onePlusC, mode)
+	return math.multiplyToAmount(
+		math.fromAmountRounded(lptBalance, state.RoundDownward),
+		frac,
+		lptBalance,
+		state.RoundDownward,
+	)
 }
 
 // ammAssetIn calculates the asset amount needed for a specified LP token output (Equation 4).
@@ -344,51 +303,30 @@ func lpTokensOut(assetBalance, amountIn, lptBalance tx.Amount, tfee uint16, fixA
 //	a = 1/(t2*t2); b = 2*d/t2 - 1/f1; c = d*d - f2*f2
 //	if !fixAMMv1_3: toSTAmount(asset1Balance * solveQuadraticEq(a, b, c))
 //	else:           frac = solveQuadraticEq(a,b,c); multiply(asset1Balance, frac, upward)
-func ammAssetIn(assetBalance, lptBalance, lpTokensOutAmt tx.Amount, tfee uint16, fixAMMv1_3 bool) tx.Amount {
+func ammAssetIn(math numberMath, assetBalance, lptBalance, lpTokensOutAmt tx.Amount, tfee uint16, fixAMMv1_3 bool) tx.Amount {
 	if lptBalance.IsZero() {
 		return zeroIOU()
 	}
-
-	assetBalanceIOU := toIOUForCalc(assetBalance)
-	lptBalanceIOU := toIOUForCalc(lptBalance)
-	lpTokensOutIOU := toIOUForCalc(lpTokensOutAmt)
-
-	f1 := feeMult(tfee)
-	f2 := numberDiv(feeMultHalf(tfee), f1)
-
-	one := oneAmount()
-	two := numAmount(2)
-
-	// t1 = lpTokens / lptAMMBalance
-	t1 := numberDiv(lpTokensOutIOU, lptBalanceIOU)
-	// t2 = 1 + t1
-	t2, _ := one.Add(t1)
-	// d = f2 - t1/t2
-	t1DivT2 := numberDiv(t1, t2)
-	d, _ := f2.Sub(t1DivT2)
-
-	// a = 1 / (t2 * t2)
-	t2t2 := t2.Mul(t2, false)
-	qa := numberDiv(one, t2t2)
-	// b = 2*d/t2 - 1/f1
-	twoD := two.Mul(d, false)
-	twoDDivT2 := numberDiv(twoD, t2)
-	oneOverF1 := numberDiv(one, f1)
-	qb, _ := twoDDivT2.Sub(oneOverF1)
-	// c = d*d - f2*f2
-	dd := d.Mul(d, false)
-	f2f2 := f2.Mul(f2, false)
-	qc, _ := dd.Sub(f2f2)
-
+	const mode = state.RoundToNearest
+	f1 := feeMult(math, tfee)
+	f2 := math.div(feeMultHalf(math, tfee), f1, mode)
+	t1 := math.div(math.fromAmountRounded(lpTokensOutAmt, mode), math.fromAmountRounded(lptBalance, mode), mode)
+	t2 := math.addToOne(t1, mode)
+	d := f2.AddRounded(math.div(t1, t2, mode).Negate(), mode)
+	qa := math.div(math.one(), t2.MulRounded(t2, mode), mode)
+	qb := math.div(math.int(2).MulRounded(d, mode), t2, mode).
+		AddRounded(math.div(math.one(), f1, mode).Negate(), mode)
+	qc := d.MulRounded(d, mode).AddRounded(f2.MulRounded(f2, mode).Negate(), mode)
+	frac := math.solveQuadraticEq(qa, qb, qc, mode)
 	if !fixAMMv1_3 {
-		frac := solveQuadraticEq(qa, qb, qc)
-		result := assetBalanceIOU.Mul(frac, false)
-		return toSTAmountIssue(assetBalance, result)
+		return math.multiplyToAmount(math.fromAmount(assetBalance), frac, assetBalance, mode)
 	}
-
-	// maximize deposit
-	frac := solveQuadraticEq(qa, qb, qc)
-	return mulRoundForAsset(assetBalanceIOU, frac, state.RoundUpward, assetBalance)
+	return math.multiplyToAmount(
+		math.fromAmountRounded(assetBalance, state.RoundUpward),
+		frac,
+		assetBalance,
+		state.RoundUpward,
+	)
 }
 
 // ammAssetOut calculates the asset amount received for burning LP tokens (Equation 8).
@@ -398,43 +336,27 @@ func ammAssetIn(assetBalance, lptBalance, lpTokensOutAmt tx.Amount, tfee uint16,
 //	t1 = lpTokens / lptAMMBalance
 //	if !fixAMMv1_3: b = assetBalance * (t1*t1 - t1*(2-f)) / (t1*f - 1)
 //	else:           frac = (t1*t1 - t1*(2-f)) / (t1*f - 1); multiply(assetBalance, frac, downward)
-func ammAssetOut(assetBalance, lptBalance, lpTokensIn tx.Amount, tfee uint16, fixAMMv1_3 bool) tx.Amount {
+func ammAssetOut(math numberMath, assetBalance, lptBalance, lpTokensIn tx.Amount, tfee uint16, fixAMMv1_3 bool) tx.Amount {
 	if lptBalance.IsZero() {
 		return zeroIOU()
 	}
-
-	assetBalanceIOU := toIOUForCalc(assetBalance)
-	lptBalanceIOU := toIOUForCalc(lptBalance)
-	lpTokensInIOU := toIOUForCalc(lpTokensIn)
-
-	f := getFee(tfee)
-	one := oneAmount()
-	two := numAmount(2)
-
-	// t1 = lpTokens / lptAMMBalance
-	t1 := numberDiv(lpTokensInIOU, lptBalanceIOU)
-
-	// t1*t1
-	t1t1 := t1.Mul(t1, false)
-	// (2 - f)
-	twoMinusF, _ := two.Sub(f)
-	// t1 * (2 - f)
-	t1TimesTwo := t1.Mul(twoMinusF, false)
-	// numerator = t1*t1 - t1*(2-f)
-	numerator, _ := t1t1.Sub(t1TimesTwo)
-	// t1*f
-	t1f := t1.Mul(f, false)
-	// denominator = t1*f - 1
-	denominator, _ := t1f.Sub(one)
-
+	const mode = state.RoundToNearest
+	f := getFee(math, tfee)
+	t1 := math.div(math.fromAmountRounded(lpTokensIn, mode), math.fromAmountRounded(lptBalance, mode), mode)
+	twoMinusF := math.int(2).AddRounded(f.Negate(), mode)
+	numerator := t1.MulRounded(t1, mode).
+		AddRounded(t1.MulRounded(twoMinusF, mode).Negate(), mode)
+	denominator := t1.MulRounded(f, mode).AddRounded(math.one().Negate(), mode)
+	frac := math.div(numerator, denominator, mode)
 	if !fixAMMv1_3 {
-		result := numberDiv(assetBalanceIOU.Mul(numerator, false), denominator)
-		return toSTAmountIssue(assetBalance, result)
+		return math.multiplyToAmount(math.fromAmount(assetBalance), frac, assetBalance, mode)
 	}
-
-	// minimize withdraw
-	frac := numberDiv(numerator, denominator)
-	return mulRoundForAsset(assetBalanceIOU, frac, state.RoundDownward, assetBalance)
+	return math.multiplyToAmount(
+		math.fromAmountRounded(assetBalance, state.RoundDownward),
+		frac,
+		assetBalance,
+		state.RoundDownward,
+	)
 }
 
 // calcLPTokensIn calculates LP tokens needed for a single-asset withdrawal amount (Equation 7).
@@ -445,51 +367,30 @@ func ammAssetOut(assetBalance, lptBalance, lpTokensIn tx.Amount, tfee uint16, fi
 //	c = fr * f1 + 2 - f1
 //	if !fixAMMv1_3: t = lptAMMBalance * (c - root2(c*c - 4*fr)) / 2
 //	else:           frac = (c - root2(c*c - 4*fr)) / 2; multiply(lptAMMBalance, frac, upward)
-func calcLPTokensIn(assetBalance, amountOut, lptBalance tx.Amount, tfee uint16, fixAMMv1_3 bool) tx.Amount {
+func calcLPTokensIn(math numberMath, assetBalance, amountOut, lptBalance tx.Amount, tfee uint16, fixAMMv1_3 bool) tx.Amount {
 	if assetBalance.IsZero() || lptBalance.IsZero() {
 		return zeroIOU()
 	}
-
-	assetBalanceIOU := toIOUForCalc(assetBalance)
-	amountOutIOU := toIOUForCalc(amountOut)
-	lptBalanceIOU := toIOUForCalc(lptBalance)
-
-	two := numAmount(2)
-	four := numAmount(4)
-
-	// fr = asset1Withdraw / asset1Balance
-	fr := numberDiv(amountOutIOU, assetBalanceIOU)
-	// f1 = getFee(tfee) -- this is the fee, NOT feeMult
-	f1 := getFee(tfee)
-	// c = fr * f1 + 2 - f1
-	frTimesF1 := fr.Mul(f1, false)
-	twoMinusF1, _ := two.Sub(f1)
-	c, _ := frTimesF1.Add(twoMinusF1)
-
-	// discriminant = c*c - 4*fr
-	cc := c.Mul(c, false)
-	fourFr := four.Mul(fr, false)
-	disc, _ := cc.Sub(fourFr)
-	// If discriminant is negative (withdrawal > pool balance), return zero.
-	// In rippled, root2() throws std::overflow_error which propagates to
-	// the engine catch handler. Here we return zero so the caller can
-	// produce the appropriate TER code.
-	if disc.IsNegative() {
+	const mode = state.RoundToNearest
+	two := math.int(2)
+	fr := math.div(math.fromAmountRounded(amountOut, mode), math.fromAmountRounded(assetBalance, mode), mode)
+	f1 := getFee(math, tfee)
+	c := fr.MulRounded(f1, mode).AddRounded(two.AddRounded(f1.Negate(), mode), mode)
+	disc := c.MulRounded(c, mode).
+		AddRounded(math.int(4).MulRounded(fr, mode).Negate(), mode)
+	if disc.Signum() < 0 {
 		return zeroIOU()
 	}
-	sqrtDisc := disc.Sqrt()
-
-	// (c - sqrt(c*c - 4*fr)) / 2
-	cMinusSqrt, _ := c.Sub(sqrtDisc)
-	halfResult := numberDiv(cMinusSqrt, two)
-
+	halfResult := math.div(c.AddRounded(disc.Root2Rounded(mode).Negate(), mode), two, mode)
 	if !fixAMMv1_3 {
-		result := lptBalanceIOU.Mul(halfResult, false)
-		return toSTAmountIssue(lptBalance, result)
+		return math.multiplyToAmount(math.fromAmount(lptBalance), halfResult, lptBalance, mode)
 	}
-
-	// maximize tokens in
-	return mulRoundForAsset(lptBalanceIOU, halfResult, state.RoundUpward, lptBalance)
+	return math.multiplyToAmount(
+		math.fromAmountRounded(lptBalance, state.RoundUpward),
+		halfResult,
+		lptBalance,
+		state.RoundUpward,
+	)
 }
 
 // initializeFeeAuctionVote initializes the vote slots and auction slot for an AMM.
@@ -541,16 +442,15 @@ func initializeFeeAuctionVote(amm *AMMData, accountID [20]byte, lptCurrency stri
 // verifyAndAdjustLPTokenBalance adjusts the AMM SLE's LPTokenBalance when
 // the last LP's trust line balance differs from it due to rounding.
 // Reference: rippled AMMUtils.cpp verifyAndAdjustLPTokenBalance (lines 468-494)
-func verifyAndAdjustLPTokenBalance(view tx.LedgerView, ammKey keylet.Keylet, lpTokens tx.Amount, amm *AMMData, lpAccountID [20]byte) ter.Result {
+func verifyAndAdjustLPTokenBalance(math numberMath, view tx.LedgerView, ammKey keylet.Keylet, lpTokens tx.Amount, amm *AMMData, lpAccountID [20]byte) ter.Result {
 	lptCurrency := GenerateAMMLPTCurrencyForAssets(amm.Asset, amm.Asset2)
 	onlyLP, res := isOnlyLiquidityProvider(view, lptCurrency, amm.Account, lpAccountID)
 	if res != ter.TesSUCCESS {
 		return res
 	}
 	if onlyLP {
-		// Number{1, -3} = 0.001 tolerance
-		tolerance := state.NewIssuedAmountFromValue(1, -3, "", "")
-		if withinRelativeDistance(lpTokens, amm.LPTokenBalance, tolerance) {
+		tolerance := math.number(1, -3, state.RoundToNearest)
+		if withinRelativeDistance(math, lpTokens, amm.LPTokenBalance, tolerance) {
 			amm.LPTokenBalance = lpTokens
 			// Persist so a deletion's DeletedNode records the reconciled
 			// LPTokenBalance, not the stale one (1 ULP ledger fork otherwise).

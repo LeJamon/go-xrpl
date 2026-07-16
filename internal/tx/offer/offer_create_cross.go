@@ -59,6 +59,7 @@ func (o *OfferCreate) invokeFlowCross(
 	bPassive, bSell, bFillOrKill bool,
 ) payment.FlowCrossResult {
 	rules := ctx.Rules()
+	numberContext := ctx.NumberContext()
 	return payment.FlowCross(
 		sb, // Use main sandbox for crossing
 		ctx.AccountID,
@@ -78,6 +79,7 @@ func (o *OfferCreate) invokeFlowCross(
 			FixAMMv1_1:          rules.Enabled(amendment.FeatureFixAMMv1_1),
 			FixAMMv1_2:          rules.Enabled(amendment.FeatureFixAMMv1_2),
 			FixAMMOverflowOffer: rules.Enabled(amendment.FeatureFixAMMOverflowOffer),
+			NumberContext:       &numberContext,
 			DomainID:            o.DomainID,
 		},
 	)
@@ -103,7 +105,7 @@ func (o *OfferCreate) takerCross(
 
 	// Apply tick size rounding if applicable
 	// Reference: lines 643-685
-	saTakerPays, saTakerGets = applyTickSize(ctx.View, saTakerPays, saTakerGets, bSell, rules)
+	saTakerPays, saTakerGets = applyTickSize(ctx.View, saTakerPays, saTakerGets, bSell, rules, ctx.NumberContext())
 	if isAmountZeroOrNegative(saTakerPays) || isAmountZeroOrNegative(saTakerGets) {
 		// Offer rounded to zero
 		return crossOutcome{terminated: true, result: ter.TesSUCCESS, applyMain: true}

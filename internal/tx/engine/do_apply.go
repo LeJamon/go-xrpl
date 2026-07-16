@@ -730,7 +730,7 @@ func (e *Engine) runInvariantsOnTable(st *applyState, result ter.Result, table *
 	// (st.chargedFee). rippled passes the clamped fee from reset() into
 	// checkInvariants (Transactor.cpp:1195, 1222); passing the unclamped declared
 	// fee would make XRPNotCreated see a phantom imbalance when a fee was clamped.
-	violation := invariants.CheckInvariants(wrapTxForInvariants(st.tx), invariants.Result(result), st.chargedFee, txDeclaredFee, invEntries, table, e.rules())
+	violation := invariants.CheckInvariants(wrapTxForInvariants(st.tx), invariants.Result(result), st.chargedFee, txDeclaredFee, invEntries, table, e.rules(), e.config.NumberContext())
 	if violation == nil && e.invariantViolationHook != nil {
 		violation = e.invariantViolationHook(result, table)
 	}
@@ -789,7 +789,7 @@ func (e *Engine) CheckInnerInvariants(innerTx txcore.Transaction, result ter.Res
 	wrapped := wrapTxForInvariants(innerTx)
 	rules := e.rules()
 
-	if invariants.CheckInvariants(wrapped, invariants.Result(result), innerFeeNone, declaredFee, table.CollectEntries(), table, rules) == nil {
+	if invariants.CheckInvariants(wrapped, invariants.Result(result), innerFeeNone, declaredFee, table.CollectEntries(), table, rules, e.config.NumberContext()) == nil {
 		return result
 	}
 
@@ -797,7 +797,7 @@ func (e *Engine) CheckInnerInvariants(innerTx txcore.Transaction, result ter.Res
 	// The inner tx carries no fee, so the reset state has an empty delta; a
 	// second violation there escalates to tefINVARIANT_FAILED.
 	feeOnly := applystate.NewApplyStateTable(e.view, [32]byte{}, e.config.LedgerSequence, rules)
-	if invariants.CheckInvariants(wrapped, invariants.Result(ter.TecINVARIANT_FAILED), innerFeeNone, declaredFee, feeOnly.CollectEntries(), feeOnly, rules) != nil {
+	if invariants.CheckInvariants(wrapped, invariants.Result(ter.TecINVARIANT_FAILED), innerFeeNone, declaredFee, feeOnly.CollectEntries(), feeOnly, rules, e.config.NumberContext()) != nil {
 		return ter.TefINVARIANT_FAILED
 	}
 	return ter.TecINVARIANT_FAILED
@@ -861,7 +861,7 @@ func (e *Engine) applyInvariantViolation(st *applyState, txDeclaredFee uint64) (
 	invEntries2 := invTecTable.CollectEntries()
 	// Use the clamped charged fee here too — writeRecoveryAccount above may have
 	// reduced st.chargedFee to the payer's balance.
-	violation2 := invariants.CheckInvariants(wrapTxForInvariants(st.tx), invariants.Result(ter.TecINVARIANT_FAILED), st.chargedFee, txDeclaredFee, invEntries2, invTecTable, e.rules())
+	violation2 := invariants.CheckInvariants(wrapTxForInvariants(st.tx), invariants.Result(ter.TecINVARIANT_FAILED), st.chargedFee, txDeclaredFee, invEntries2, invTecTable, e.rules(), e.config.NumberContext())
 	if violation2 == nil && e.invariantViolationHook != nil {
 		violation2 = e.invariantViolationHook(ter.TecINVARIANT_FAILED, invTecTable)
 	}
