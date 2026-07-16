@@ -1,15 +1,137 @@
 package batch
 
 import (
+	"encoding/hex"
+	"os"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
 	"github.com/LeJamon/go-xrpl/amendment"
+	"github.com/LeJamon/go-xrpl/codec/binarycodec"
 	"github.com/LeJamon/go-xrpl/internal/tx"
+	"github.com/LeJamon/go-xrpl/internal/tx/lending"
 	"github.com/LeJamon/go-xrpl/internal/tx/payment"
 )
+
+func TestMain(m *testing.M) {
+	Register()
+	payment.Register()
+	os.Exit(m.Run())
+}
+
+func TestBatchBinaryRoundTripPreservesInnerTransactions(t *testing.T) {
+	outer := NewBatch(testOuter)
+	outer.Fee = "40"
+	outerSequence := uint32(1)
+	outer.Sequence = &outerSequence
+	flags := BatchFlagAllOrNothing
+	outer.Flags = &flags
+	outer.AddInnerTransaction(makeTestPayment())
+	outer.AddInnerTransaction(makeTestPayment())
+
+	flat, err := outer.Flatten()
+	require.NoError(t, err)
+	require.Equal(t, "", flat["SigningPubKey"])
+	encoded, err := binarycodec.Encode(flat)
+	require.NoError(t, err)
+	blob, err := hex.DecodeString(encoded)
+	require.NoError(t, err)
+
+	parsed, err := tx.ParseFromBinary(blob)
+	require.NoError(t, err)
+	parsedBatch, ok := parsed.(*Batch)
+	require.True(t, ok)
+	require.Len(t, parsedBatch.RawTransactions, 2)
+
+	for i, rawTransaction := range parsedBatch.RawTransactions {
+		inner := rawTransaction.RawTransaction.InnerTx
+		require.NotNil(t, inner)
+		require.NotEmpty(t, inner.GetRawBytes())
+		decoded, err := binarycodec.DecodeBytes(inner.GetRawBytes())
+		require.NoError(t, err)
+		value, present := decoded["SigningPubKey"]
+		require.True(t, present)
+		require.Equal(t, "", value)
+
+		original := outer.RawTransactions[i].RawTransaction.InnerTx
+		originalHash, err := tx.ComputeTransactionHash(original)
+		require.NoError(t, err)
+		parsedHash, err := tx.ComputeTransactionHash(inner)
+		require.NoError(t, err)
+		require.Equal(t, originalHash, parsedHash)
+	}
+}
+
+func TestBatchBinaryRoundTripPreservesTicketedInnerSequence(t *testing.T) {
+	outer := NewBatch(testOuter)
+	outer.Fee = "40"
+	outerSequence := uint32(1)
+	outer.Sequence = &outerSequence
+	flags := BatchFlagAllOrNothing
+	outer.Flags = &flags
+
+	ticketed := makeTestPayment()
+	ticketSequence := uint32(7)
+	ticketed.GetCommon().Sequence = nil
+	ticketed.GetCommon().TicketSequence = &ticketSequence
+	outer.AddInnerTransaction(ticketed)
+	outer.AddInnerTransaction(makeTestPayment())
+
+	flat, err := outer.Flatten()
+	require.NoError(t, err)
+	rawTransactions := flat["RawTransactions"].([]map[string]any)
+	ticketedMap := rawTransactions[0]["RawTransaction"].(map[string]any)
+	require.Equal(t, uint32(0), ticketedMap["Sequence"])
+
+	encoded, err := binarycodec.Encode(flat)
+	require.NoError(t, err)
+	blob, err := hex.DecodeString(encoded)
+	require.NoError(t, err)
+	parsed, err := tx.ParseFromBinary(blob)
+	require.NoError(t, err)
+	parsedBatch, ok := parsed.(*Batch)
+	require.True(t, ok)
+	parsedInner := parsedBatch.RawTransactions[0].RawTransaction.InnerTx
+	require.NotNil(t, parsedInner)
+	require.NotNil(t, parsedInner.GetCommon().Sequence)
+	require.Zero(t, *parsedInner.GetCommon().Sequence)
+	require.NotNil(t, parsedInner.GetCommon().TicketSequence)
+	require.Equal(t, ticketSequence, *parsedInner.GetCommon().TicketSequence)
+
+	originalHash, err := tx.ComputeTransactionHash(ticketed)
+	require.NoError(t, err)
+	parsedHash, err := tx.ComputeTransactionHash(parsedInner)
+	require.NoError(t, err)
+	require.Equal(t, originalHash, parsedHash)
+}
+
+func TestBatchBinaryParseRejectsInnerWithoutSigningPubKey(t *testing.T) {
+	outer := NewBatch(testOuter)
+	outer.Fee = "40"
+	outer.SigningPubKey = "ED0000000000000000000000000000000000000000000000000000000000000000"
+	outerSequence := uint32(1)
+	outer.Sequence = &outerSequence
+	flags := BatchFlagAllOrNothing
+	outer.Flags = &flags
+	outer.AddInnerTransaction(makeTestPayment())
+	outer.AddInnerTransaction(makeTestPayment())
+
+	flat, err := outer.Flatten()
+	require.NoError(t, err)
+	rawTransactions := flat["RawTransactions"].([]map[string]any)
+	delete(rawTransactions[0]["RawTransaction"].(map[string]any), "SigningPubKey")
+	encoded, err := binarycodec.Encode(flat)
+	require.NoError(t, err)
+	blob, err := hex.DecodeString(encoded)
+	require.NoError(t, err)
+
+	_, err = tx.ParseFromBinary(blob)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "SigningPubKey")
+}
 
 // Valid base58 r-addresses for white-box validation tests. Account fields must
 // be decodable because Validate computes inner transaction hashes, which
@@ -410,13 +532,33 @@ func TestCalculateMinimumFee_SingleSignBaseline(t *testing.T) {
 	b := NewBatch(testOuter)
 	b.AddInnerTransaction(makeTestPayment())
 	b.AddInnerTransaction(makeTestPayment())
-	require.Equal(t, uint64(40), b.CalculateMinimumFee(10), "2 inners + no signers")
+	require.Equal(t, uint64(40), b.CalculateMinimumFee(nil, tx.EngineConfig{BaseFee: 10}), "2 inners + no signers")
 
 	b3 := NewBatch(testOuter)
 	b3.AddInnerTransaction(makeTestPayment())
 	b3.AddInnerTransaction(makeTestPayment())
 	b3.AddInnerTransaction(makeTestPayment())
-	require.Equal(t, uint64(50), b3.CalculateMinimumFee(10), "3 inners + no signers")
+	require.Equal(t, uint64(50), b3.CalculateMinimumFee(nil, tx.EngineConfig{BaseFee: 10}), "3 inners + no signers")
+}
+
+func TestCalculateMinimumFee_DispatchesInnerCustomFee(t *testing.T) {
+	for _, tc := range []struct {
+		name         string
+		counterparty *tx.CounterpartySignature
+		expected     uint64
+	}{
+		{"absent", nil, 30},
+		{"single", &tx.CounterpartySignature{TxnSignature: "AA"}, 40},
+		{"multisigned", &tx.CounterpartySignature{Signers: make([]tx.SignerWrapper, 2)}, 50},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			b := NewBatch(testOuter)
+			loanSet := lending.NewLoanSet(testOuter, strings.Repeat("1", 64), "1")
+			loanSet.GetCommon().CounterpartySignature = tc.counterparty
+			b.AddInnerTransaction(loanSet)
+			require.Equal(t, tc.expected, b.CalculateMinimumFee(nil, tx.EngineConfig{BaseFee: 10}))
+		})
+	}
 }
 
 // TestCalculateMinimumFee_DirectSignedBatchSigners pins
@@ -431,7 +573,7 @@ func TestCalculateMinimumFee_DirectSignedBatchSigners(t *testing.T) {
 		{BatchSigner: BatchSignerData{Account: "rSignerB", BatchTxnSignature: "CD"}},
 	}
 	// batchBase=20 + txnFees=20 + signerFees=2*10 = 60
-	require.Equal(t, uint64(60), b.CalculateMinimumFee(10))
+	require.Equal(t, uint64(60), b.CalculateMinimumFee(nil, tx.EngineConfig{BaseFee: 10}))
 }
 
 // TestCalculateMinimumFee_MultiSignBatchSigner pins
@@ -453,7 +595,7 @@ func TestCalculateMinimumFee_MultiSignBatchSigner(t *testing.T) {
 		},
 	}}
 	// batchBase=20 + txnFees=20 + signerFees=3*10 = 70
-	require.Equal(t, uint64(70), b.CalculateMinimumFee(10))
+	require.Equal(t, uint64(70), b.CalculateMinimumFee(nil, tx.EngineConfig{BaseFee: 10}))
 }
 
 // TestCalculateMinimumFee_MultiSignedInner pins
@@ -470,7 +612,7 @@ func TestCalculateMinimumFee_MultiSignedInner(t *testing.T) {
 	}
 	b.AddInnerTransaction(multiInner)
 	// batchBase=20 + txnFees=(10 + 30) + signerFees=0 = 60
-	require.Equal(t, uint64(60), b.CalculateMinimumFee(10))
+	require.Equal(t, uint64(60), b.CalculateMinimumFee(nil, tx.EngineConfig{BaseFee: 10}))
 }
 
 // TestCalculateMinimumFee_OuterMultiSign pins
@@ -485,7 +627,7 @@ func TestCalculateMinimumFee_OuterMultiSign(t *testing.T) {
 		{Signer: tx.Signer{Account: "rOuter2", SigningPubKey: "02", TxnSignature: "BB"}},
 	}
 	// batchBase = 10 + (1 + 2)*10 = 40; txnFees = 10; signerFees = 0 → 50
-	require.Equal(t, uint64(50), b.CalculateMinimumFee(10))
+	require.Equal(t, uint64(50), b.CalculateMinimumFee(nil, tx.EngineConfig{BaseFee: 10}))
 }
 
 // TestCalculateMinimumFee_InnerBatchSentinel pins
@@ -496,7 +638,7 @@ func TestCalculateMinimumFee_InnerBatchSentinel(t *testing.T) {
 	outer := NewBatch(testOuter)
 	innerBatch := NewBatch("rInner")
 	outer.AddInnerTransaction(innerBatch)
-	fee := outer.CalculateMinimumFee(10)
+	fee := outer.CalculateMinimumFee(nil, tx.EngineConfig{BaseFee: 10})
 	// Sentinel is ≥ 100B XRP in drops; any realistic caller will reject.
 	require.Greater(t, fee, uint64(100_000_000_000), "inner ttBATCH must surface as overflow sentinel")
 }

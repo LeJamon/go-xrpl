@@ -17,15 +17,19 @@ type FeeLevel uint64
 // ToFeeLevel converts drops and base fee to a fee level.
 // Returns the fee level: (drops * BaseLevel) / baseFee
 func ToFeeLevel(drops, baseFee uint64) FeeLevel {
+	return ToFeeLevelWithDefaultBaseFee(drops, baseFee, 0)
+}
+
+// ToFeeLevelWithDefaultBaseFee converts drops to a fee level while preserving
+// the ordinary transaction fee used to rank a contextually free transaction.
+func ToFeeLevelWithDefaultBaseFee(drops, baseFee, defaultBaseFee uint64) FeeLevel {
 	if baseFee == 0 {
-		// rippled's getFeeLevelPaid adds a modifier to both the fee paid and
-		// the base fee so a free transaction still has a non-zero fee level
-		// (TxQ.cpp:38-64). That modifier is calculateDefaultBaseFee, which is
-		// itself 0 exactly when the contextual base fee is 0 (the per-tx base
-		// fee is never below the reference fee), so it collapses to 1 — which
-		// is what we add to both here. fee=0 → level 256; fee=N → level (N+1)*256.
-		drops += 1
-		baseFee = 1
+		modifier := defaultBaseFee
+		if modifier == 0 {
+			modifier = 1
+		}
+		drops += modifier
+		baseFee = modifier
 	}
 	// Use 128-bit arithmetic to avoid overflow
 	// fee level = drops * 256 / baseFee

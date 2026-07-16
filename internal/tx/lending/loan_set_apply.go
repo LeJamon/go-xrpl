@@ -4,6 +4,7 @@ import (
 	"github.com/LeJamon/go-xrpl/internal/ledger/state"
 	"github.com/LeJamon/go-xrpl/internal/tx"
 	"github.com/LeJamon/go-xrpl/internal/tx/lending/lmath"
+	"github.com/LeJamon/go-xrpl/internal/tx/sign"
 	"github.com/LeJamon/go-xrpl/internal/tx/ter"
 	"github.com/LeJamon/go-xrpl/internal/tx/vault"
 	"github.com/LeJamon/go-xrpl/keylet"
@@ -40,6 +41,24 @@ func (l *LoanSet) loanSetValueFields() []string {
 		}
 	}
 	return fields
+}
+
+// CalculateBaseFee includes both the transaction signers and the nested
+// counterparty signers in the minimum fee.
+func (l *LoanSet) CalculateBaseFee(_ tx.LedgerView, config tx.EngineConfig) uint64 {
+	normal := config.BaseFee
+	if sign.IsMultiSigned(l) {
+		normal = sign.CalculateMultiSigFee(config.BaseFee, len(l.GetCommon().Signers))
+	}
+	cp := l.GetCommon().CounterpartySignature
+	if cp == nil {
+		return normal
+	}
+	signerCount := len(cp.Signers)
+	if signerCount == 0 && cp.TxnSignature != "" {
+		signerCount = 1
+	}
+	return normal + uint64(signerCount)*config.BaseFee
 }
 
 func (l *LoanSet) Preclaim(view tx.LedgerView, config tx.EngineConfig) ter.Result {
@@ -219,8 +238,8 @@ func (l *LoanSet) Apply(ctx *tx.ApplyContext) ter.Result {
 	loanSeq := b.LoanSequence
 	loanKey := keylet.Loan(brokerID, loanSeq)
 
-	brokerDir, err := state.DirInsert(ctx.View, keylet.OwnerDir(vinfo.Account), loanKey.Key, false, func(d *state.DirectoryNode) {
-		d.Owner = vinfo.Account
+	brokerDir, err := state.DirInsert(ctx.View, keylet.OwnerDir(b.Account), loanKey.Key, false, func(d *state.DirectoryNode) {
+		d.Owner = b.Account
 	})
 	if err != nil {
 		return ter.TecDIR_FULL

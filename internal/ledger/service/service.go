@@ -22,6 +22,7 @@ import (
 	"github.com/LeJamon/go-xrpl/internal/tx"
 	txengine "github.com/LeJamon/go-xrpl/internal/tx/engine"
 	"github.com/LeJamon/go-xrpl/internal/tx/pseudo"
+	"github.com/LeJamon/go-xrpl/internal/tx/sign"
 	"github.com/LeJamon/go-xrpl/internal/txq"
 	"github.com/LeJamon/go-xrpl/keylet"
 	xrpllog "github.com/LeJamon/go-xrpl/log"
@@ -555,8 +556,10 @@ func (s *Service) rebuildOpenLedgerViewLocked() error {
 // closedLedgerCtx implements txq.ClosedLedgerContext over a closed ledger.
 // baseFee converts per-tx fees into fee levels for the FeeMetrics update.
 type closedLedgerCtx struct {
-	ledger  *ledger.Ledger
-	baseFee uint64
+	ledger           *ledger.Ledger
+	baseFee          uint64
+	reserveBase      uint64
+	reserveIncrement uint64
 }
 
 func (c *closedLedgerCtx) GetLedgerSequence() uint32 {
@@ -566,11 +569,24 @@ func (c *closedLedgerCtx) GetLedgerSequence() uint32 {
 	return c.ledger.Sequence()
 }
 
+func (c *closedLedgerCtx) feeConfig() tx.EngineConfig {
+	return tx.EngineConfig{
+		BaseFee:          c.baseFee,
+		ReserveBase:      c.reserveBase,
+		ReserveIncrement: c.reserveIncrement,
+		LedgerSequence:   c.ledger.Sequence(),
+		ParentCloseTime:  protocol.ToRippleTime(c.ledger.ParentCloseTime()),
+		ParentHash:       c.ledger.ParentHash(),
+		Rules:            c.ledger.Rules(),
+	}
+}
+
 func (c *closedLedgerCtx) GetTransactionFeeLevels() []txq.FeeLevel {
 	if c.ledger == nil {
 		return nil
 	}
 	var levels []txq.FeeLevel
+	config := c.feeConfig()
 	_ = c.ledger.ForEachTransaction(func(_ [32]byte, data []byte) bool {
 		raw, _, err := tx.SplitTxWithMetaBlob(data)
 		if err != nil {
@@ -588,7 +604,9 @@ func (c *closedLedgerCtx) GetTransactionFeeLevels() []txq.FeeLevel {
 		if err != nil {
 			return true
 		}
-		levels = append(levels, txq.ToFeeLevel(fee, c.baseFee))
+		baseFee := sign.CalculateBaseFee(parsed, c.ledger, config)
+		defaultBaseFee := sign.CalculateDefaultBaseFee(parsed, config)
+		levels = append(levels, txq.ToFeeLevelWithDefaultBaseFee(fee, baseFee, defaultBaseFee))
 		return true
 	})
 	return levels
@@ -601,8 +619,13 @@ func (s *Service) processClosedLedgerLocked() {
 	if s.txQueue == nil || s.closedLedger == nil {
 		return
 	}
-	baseFee, _, _ := readFeesFromLedger(s.closedLedger)
-	ctx := &closedLedgerCtx{ledger: s.closedLedger, baseFee: baseFee}
+	baseFee, reserveBase, reserveIncrement := readFeesFromLedger(s.closedLedger)
+	ctx := &closedLedgerCtx{
+		ledger:           s.closedLedger,
+		baseFee:          baseFee,
+		reserveBase:      reserveBase,
+		reserveIncrement: reserveIncrement,
+	}
 	s.txQueue.ProcessClosedLedger(ctx, s.lastConsensusRoundTime > slowConsensusThreshold)
 	s.tickLoadFeeLocked()
 }
@@ -864,7 +887,15 @@ func (s *Service) OpenLedgerTxHashes() [][32]byte {
 		return nil
 	}
 	var hashes [][32]byte
-	_ = view.ForEachTransaction(func(hash [32]byte, _ []byte) bool {
+	_ = view.ForEachTransaction(func(hash [32]byte, data []byte) bool {
+		raw, _, err := tx.SplitTxWithMetaBlob(data)
+		if err != nil {
+			return true
+		}
+		parsed, err := tx.ParseFromBinary(raw)
+		if err != nil || parsed.GetCommon().GetFlags()&tx.TfInnerBatchTxn != 0 {
+			return true
+		}
 		hashes = append(hashes, hash)
 		return true
 	})

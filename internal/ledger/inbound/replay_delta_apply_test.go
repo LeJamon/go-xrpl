@@ -4,11 +4,17 @@ import (
 	"testing"
 	"time"
 
+	"github.com/LeJamon/go-xrpl/amendment"
 	"github.com/LeJamon/go-xrpl/crypto/sha512half"
 	"github.com/LeJamon/go-xrpl/internal/ledger"
+	"github.com/LeJamon/go-xrpl/internal/ledger/genesis"
 	"github.com/LeJamon/go-xrpl/internal/ledger/header"
 	"github.com/LeJamon/go-xrpl/internal/peermanagement/message"
 	"github.com/LeJamon/go-xrpl/internal/tx"
+	accounttx "github.com/LeJamon/go-xrpl/internal/tx/account"
+	"github.com/LeJamon/go-xrpl/internal/tx/all"
+	batchtx "github.com/LeJamon/go-xrpl/internal/tx/batch"
+	"github.com/LeJamon/go-xrpl/internal/tx/ter"
 	"github.com/LeJamon/go-xrpl/protocol"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -164,6 +170,86 @@ func TestReplayDelta_Apply_OrderedByIndex(t *testing.T) {
 	// 8-byte hash prefix is a0000000_00000000.
 	assert.Contains(t, err.Error(), "a000000000000000",
 		"first tx attempted must be the one with the smallest TransactionIndex")
+}
+
+func TestReplayDelta_Apply_RequiresExpectedBatchInnerLeaves(t *testing.T) {
+	all.RegisterAll()
+
+	parent := makeGenesisLedger(t)
+	_, account, err := genesis.GenerateGenesisAccountID()
+	require.NoError(t, err)
+
+	inner1 := accounttx.NewAccountSet(account)
+	inner1.GetCommon().Fee = "0"
+	inner1.GetCommon().SigningPubKey = ""
+	inner1.GetCommon().SetSequence(2)
+	inner1.GetCommon().SetFlags(tx.TfInnerBatchTxn)
+	inner2 := accounttx.NewAccountSet(account)
+	inner2.GetCommon().Fee = "0"
+	inner2.GetCommon().SigningPubKey = ""
+	inner2.GetCommon().SetSequence(3)
+	inner2.GetCommon().SetFlags(tx.TfInnerBatchTxn)
+
+	outer := batchtx.NewBatch(account)
+	outer.GetCommon().Fee = "40"
+	outer.GetCommon().SigningPubKey = ""
+	outer.GetCommon().SetSequence(1)
+	outer.GetCommon().SetFlags(batchtx.BatchFlagAllOrNothing)
+	outer.AddInnerTransaction(inner1)
+	outer.AddInnerTransaction(inner2)
+	outerBlob, err := tx.SerializeTransaction(outer)
+	require.NoError(t, err)
+	outer.SetRawBytes(outerBlob)
+	outerHash, err := tx.ComputeTransactionHash(outer)
+	require.NoError(t, err)
+	outerMeta := &tx.Metadata{
+		AffectedNodes:     []tx.AffectedNode{},
+		TransactionIndex:  0,
+		TransactionResult: ter.TesSUCCESS,
+	}
+	outerMetaBytes, err := tx.SerializeMetadata(outerMeta)
+	require.NoError(t, err)
+	outerLeaf, err := tx.CreateTxWithMetaBlob(outerBlob, outerMeta)
+	require.NoError(t, err)
+
+	resHdr := parent.Header()
+	resHdr.LedgerIndex = parent.Sequence() + 1
+	resHdr.ParentHash = parent.Hash()
+	resHdr.ParentCloseTime = parent.CloseTime()
+	resHdr.CloseTime = parent.CloseTime().Add(10 * time.Second)
+	stateMap, err := parent.StateMapSnapshot()
+	require.NoError(t, err)
+	txMap, err := parent.TxMapSnapshot()
+	require.NoError(t, err)
+
+	rd := NewReplayDelta([32]byte{}, 7, parent, nil)
+	rd.mu.Lock()
+	rd.state = StateComplete
+	rd.result, err = ledger.NewFromHeader(resHdr, stateMap, txMap, parent.GetFees())
+	require.NoError(t, err)
+	rd.txs = []DecodedTx{{
+		Index:     0,
+		Hash:      outerHash,
+		TxBytes:   outerBlob,
+		MetaBytes: outerMetaBytes,
+		LeafBlob:  outerLeaf,
+	}}
+	rd.mu.Unlock()
+
+	rules := amendment.NewRulesBuilder().
+		FromPreset(amendment.PresetAllSupported).
+		Enable(amendment.FeatureBatch).
+		Build()
+	_, err = rd.Apply(tx.EngineConfig{
+		BaseFee:                   10,
+		ReserveBase:               200_000_000,
+		ReserveIncrement:          50_000_000,
+		SkipSignatureVerification: true,
+		Rules:                     rules,
+	})
+	require.Error(t, err)
+	assert.ErrorIs(t, err, ErrReplayTxDiverged)
+	assert.Contains(t, err.Error(), "replay ended before all batch inner transactions")
 }
 
 // TestReplayDelta_Apply_StateRootMismatch verifies the engine

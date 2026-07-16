@@ -277,23 +277,22 @@ func (l *LoanBrokerCoverClawback) RequiredAmendments() [][32]byte   { return req
 type LoanSet struct {
 	tx.BaseTx
 
-	LoanBrokerID            string         `json:"LoanBrokerID" xrpl:"LoanBrokerID"`
-	Data                    *string        `json:"Data,omitempty" xrpl:"Data,omitempty"`
-	Counterparty            string         `json:"Counterparty,omitempty" xrpl:"Counterparty,omitempty"`
-	CounterpartySignature   map[string]any `json:"CounterpartySignature,omitempty" xrpl:"CounterpartySignature,omitempty"`
-	LoanOriginationFee      *string        `json:"LoanOriginationFee,omitempty" xrpl:"LoanOriginationFee,omitempty"`
-	LoanServiceFee          *string        `json:"LoanServiceFee,omitempty" xrpl:"LoanServiceFee,omitempty"`
-	LatePaymentFee          *string        `json:"LatePaymentFee,omitempty" xrpl:"LatePaymentFee,omitempty"`
-	ClosePaymentFee         *string        `json:"ClosePaymentFee,omitempty" xrpl:"ClosePaymentFee,omitempty"`
-	OverpaymentFee          *uint32        `json:"OverpaymentFee,omitempty" xrpl:"OverpaymentFee,omitempty"`
-	InterestRate            *uint32        `json:"InterestRate,omitempty" xrpl:"InterestRate,omitempty"`
-	LateInterestRate        *uint32        `json:"LateInterestRate,omitempty" xrpl:"LateInterestRate,omitempty"`
-	CloseInterestRate       *uint32        `json:"CloseInterestRate,omitempty" xrpl:"CloseInterestRate,omitempty"`
-	OverpaymentInterestRate *uint32        `json:"OverpaymentInterestRate,omitempty" xrpl:"OverpaymentInterestRate,omitempty"`
-	PrincipalRequested      string         `json:"PrincipalRequested" xrpl:"PrincipalRequested"`
-	PaymentTotal            *uint32        `json:"PaymentTotal,omitempty" xrpl:"PaymentTotal,omitempty"`
-	PaymentInterval         *uint32        `json:"PaymentInterval,omitempty" xrpl:"PaymentInterval,omitempty"`
-	GracePeriod             *uint32        `json:"GracePeriod,omitempty" xrpl:"GracePeriod,omitempty"`
+	LoanBrokerID            string  `json:"LoanBrokerID" xrpl:"LoanBrokerID"`
+	Data                    *string `json:"Data,omitempty" xrpl:"Data,omitempty"`
+	Counterparty            string  `json:"Counterparty,omitempty" xrpl:"Counterparty,omitempty"`
+	LoanOriginationFee      *string `json:"LoanOriginationFee,omitempty" xrpl:"LoanOriginationFee,omitempty"`
+	LoanServiceFee          *string `json:"LoanServiceFee,omitempty" xrpl:"LoanServiceFee,omitempty"`
+	LatePaymentFee          *string `json:"LatePaymentFee,omitempty" xrpl:"LatePaymentFee,omitempty"`
+	ClosePaymentFee         *string `json:"ClosePaymentFee,omitempty" xrpl:"ClosePaymentFee,omitempty"`
+	OverpaymentFee          *uint32 `json:"OverpaymentFee,omitempty" xrpl:"OverpaymentFee,omitempty"`
+	InterestRate            *uint32 `json:"InterestRate,omitempty" xrpl:"InterestRate,omitempty"`
+	LateInterestRate        *uint32 `json:"LateInterestRate,omitempty" xrpl:"LateInterestRate,omitempty"`
+	CloseInterestRate       *uint32 `json:"CloseInterestRate,omitempty" xrpl:"CloseInterestRate,omitempty"`
+	OverpaymentInterestRate *uint32 `json:"OverpaymentInterestRate,omitempty" xrpl:"OverpaymentInterestRate,omitempty"`
+	PrincipalRequested      string  `json:"PrincipalRequested" xrpl:"PrincipalRequested"`
+	PaymentTotal            *uint32 `json:"PaymentTotal,omitempty" xrpl:"PaymentTotal,omitempty"`
+	PaymentInterval         *uint32 `json:"PaymentInterval,omitempty" xrpl:"PaymentInterval,omitempty"`
+	GracePeriod             *uint32 `json:"GracePeriod,omitempty" xrpl:"GracePeriod,omitempty"`
 }
 
 // NewLoanSet creates a LoanSet transaction.
@@ -324,9 +323,7 @@ func (l *LoanSet) Validate() error {
 		return ter.Errorf(ter.TemMALFORMED, "PrincipalRequested is required")
 	}
 	// A LoanSet must carry a CounterpartySignature, except as a batch inner tx.
-	// The signature may be attached via the struct field (JSON) or the parsed
-	// Common.CounterpartySignature (wire / programmatic).
-	hasCounterSig := len(l.CounterpartySignature) != 0 || l.GetCommon().CounterpartySignature != nil
+	hasCounterSig := l.GetCommon().CounterpartySignature != nil
 	if l.GetFlags()&tx.TfInnerBatchTxn == 0 && !hasCounterSig {
 		return ter.Errorf(ter.TemBAD_SIGNER, "LoanSet requires a CounterpartySignature")
 	}

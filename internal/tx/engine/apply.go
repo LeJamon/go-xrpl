@@ -25,6 +25,14 @@ func (e *Engine) Apply(tx txcore.Transaction) txcore.ApplyResult {
 }
 
 func (e *Engine) ApplyWithContext(ctx context.Context, tx txcore.Transaction) txcore.ApplyResult {
+	return e.applyWithContext(ctx, tx, nil)
+}
+
+func (e *Engine) applyWithContext(
+	ctx context.Context,
+	tx txcore.Transaction,
+	parentBatchID *[32]byte,
+) txcore.ApplyResult {
 	// Reject pseudo-transactions — they cannot be submitted by users.
 	// Reference: rippled passesLocalChecks() in NetworkOPs.cpp
 	txType := tx.TxType()
@@ -44,7 +52,12 @@ func (e *Engine) ApplyWithContext(ctx context.Context, tx txcore.Transaction) tx
 	)
 
 	// Step 1: Preflight checks (syntax validation)
-	result := e.preflight(tx)
+	var result ter.Result
+	if parentBatchID != nil {
+		result = e.preflightInner(tx)
+	} else {
+		result = e.preflight(tx)
+	}
 	if !result.IsSuccess() {
 		e.logger.Debug("preflight failed",
 			"txType", txType.String(),
@@ -80,7 +93,11 @@ func (e *Engine) ApplyWithContext(ctx context.Context, tx txcore.Transaction) tx
 	}
 
 	// Step 3: Preclaim checks (validate against ledger state)
-	result = e.preclaim(tx, txHash)
+	if parentBatchID != nil {
+		result = e.preclaimInner(tx, txHash)
+	} else {
+		result = e.preclaim(tx, txHash)
+	}
 	if !result.IsSuccess() && !result.IsTec() {
 		e.logger.Debug("preclaim failed",
 			"txType", txType.String(),
@@ -118,6 +135,7 @@ func (e *Engine) ApplyWithContext(ctx context.Context, tx txcore.Transaction) tx
 	metadata := &txcore.Metadata{
 		AffectedNodes:     make([]txcore.AffectedNode, 0),
 		TransactionResult: ter.TesSUCCESS,
+		ParentBatchID:     parentBatchID,
 	}
 
 	if result.IsSuccess() {
@@ -207,6 +225,88 @@ func (e *Engine) ApplyWithContext(ctx context.Context, tx txcore.Transaction) tx
 		Metadata: metadata,
 		Message:  result.Message(),
 	}
+}
+
+// ApplyBatchInnerTransactions is the closed-ledger counterpart to Apply. Open
+// ledger and TxQ admission call Apply alone and commit only the outer Batch.
+func (e *Engine) ApplyBatchInnerTransactions(
+	ctx context.Context,
+	transaction txcore.Transaction,
+	outer txcore.ApplyResult,
+) txcore.ApplyResult {
+	batch, ok := transaction.(txcore.BatchInnerApplier)
+	if !ok || !outer.Applied || !outer.Result.IsSuccess() {
+		return outer
+	}
+	if outer.Metadata == nil {
+		return txcore.ApplyResult{Result: ter.TefINTERNAL, Message: ter.TefINTERNAL.Message()}
+	}
+
+	txHash, err := txcore.ComputeTransactionHash(transaction)
+	if err != nil {
+		return txcore.ApplyResult{Result: ter.TefINTERNAL, Message: err.Error()}
+	}
+	accountID, err := state.DecodeAccountID(transaction.GetCommon().Account)
+	if err != nil {
+		return txcore.ApplyResult{Result: ter.TefINTERNAL, Message: err.Error()}
+	}
+	innerCtx := &txcore.ApplyContext{
+		View:                   e.view,
+		AccountID:              accountID,
+		Config:                 e.config,
+		TxHash:                 txHash,
+		TransactionIndex:       outer.Metadata.TransactionIndex,
+		InnerInvariants:        e,
+		InnerTransactionEngine: e,
+		Log:                    e.logger,
+		Ctx:                    ctx,
+	}
+
+	var records []txcore.AppliedInnerTransaction
+	innerResult := e.invokeApplySafely(txHash, func() ter.Result {
+		var result ter.Result
+		result, records = batch.ApplyInnerTransactions(innerCtx)
+		return result
+	})
+	if !innerResult.IsSuccess() {
+		e.logger.Warn("batch inner application failed",
+			"txHash", hex.EncodeToString(txHash[:]),
+			"ter", innerResult.String())
+		return txcore.ApplyResult{
+			Result:  innerResult,
+			Applied: false,
+			Message: innerResult.Message(),
+		}
+	}
+
+	outer.AppliedInnerTransactions = append([]txcore.AppliedInnerTransaction(nil), records...)
+	e.txCount.Add(uint32(len(records)))
+	return outer
+}
+
+func (e *Engine) ApplyInnerTransaction(
+	ctx context.Context,
+	view txcore.LedgerView,
+	innerTx txcore.Transaction,
+	parentBatchID [32]byte,
+	transactionIndex uint32,
+) txcore.ApplyResult {
+	atomicView, ok := view.(applystate.AtomicLedgerView)
+	if !ok {
+		return txcore.ApplyResult{
+			Result:  ter.TefINTERNAL,
+			Applied: false,
+			Message: ter.TefINTERNAL.Message(),
+		}
+	}
+	innerConfig := e.config
+	innerConfig.ApplyFlags = txcore.TapNONE
+	innerConfig.OpenLedger = false
+	innerConfig.EnforceLoadFee = false
+	innerEngine := NewEngine(atomicView, innerConfig)
+	innerEngine.invariantViolationHook = e.invariantViolationHook
+	innerEngine.SetBaseTxCount(transactionIndex)
+	return innerEngine.applyWithContext(ctx, innerTx, &parentBatchID)
 }
 
 // ApplyPseudo applies a pseudo-transaction (Amendment, SetFee, UNLModify) to the ledger.

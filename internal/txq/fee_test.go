@@ -55,6 +55,15 @@ func TestToFeeLevel(t *testing.T) {
 	}
 }
 
+func TestToFeeLevelWithDefaultBaseFee(t *testing.T) {
+	if got := ToFeeLevelWithDefaultBaseFee(10, 0, 10); got != 512 {
+		t.Fatalf("fee level = %d, want 512", got)
+	}
+	if got := ToFeeLevelWithDefaultBaseFee(0, 0, 10); got != FeeLevel(BaseLevel) {
+		t.Fatalf("zero-paid fee level = %d, want %d", got, BaseLevel)
+	}
+}
+
 // TestFeeLevel_ToDrops tests converting fee level back to drops
 func TestFeeLevel_ToDrops(t *testing.T) {
 	tests := []struct {

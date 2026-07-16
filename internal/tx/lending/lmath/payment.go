@@ -253,9 +253,8 @@ func CheckLoanGuards(asset Asset, principalRequested N, expectInterest bool, pay
 	if roundedPayment.IsZero() {
 		return ter.TecPRECISION_LOSS
 	}
-	// Guard 4: the loan must amortize in exactly paymentTotal payments. rippled
-	// divides under Number::upward and truncates toward zero to an int64.
-	computedPayments := properties.LoanState.ValueOutstanding.DivRounded(roundedPayment, state.RoundUpward).ToInt64WithMode(state.RoundTowardsZero)
+	// Guard 4: the loan must amortize in exactly paymentTotal payments.
+	computedPayments := properties.LoanState.ValueOutstanding.DivRounded(roundedPayment, state.RoundUpward).ToInt64WithMode(state.RoundUpward)
 	if computedPayments != int64(paymentTotal) {
 		return ter.TecPRECISION_LOSS
 	}
