@@ -64,15 +64,7 @@ func associateVaultAsset(v *vault.VaultLending, integral bool, rules *amendment.
 	v.LossUnrealized = associateNum(v.LossUnrealized, integral, true, rules)
 }
 
-// associateLoanAsset rounds the Loan's NUMBER fields to the vault asset's
-// precision at the end of doApply. PeriodicPayment is soeREQUIRED; the rest are
-// soeDEFAULT.
 func associateLoanAsset(l *loanData, integral bool, rules *amendment.Rules) {
-	l.LoanOriginationFee = associateNum(l.LoanOriginationFee, integral, true, rules)
-	l.LoanServiceFee = associateNum(l.LoanServiceFee, integral, true, rules)
-	l.LatePaymentFee = associateNum(l.LatePaymentFee, integral, true, rules)
-	l.ClosePaymentFee = associateNum(l.ClosePaymentFee, integral, true, rules)
-	l.PeriodicPayment = associateNum(l.PeriodicPayment, integral, false, rules)
 	l.PrincipalOutstanding = associateNum(l.PrincipalOutstanding, integral, true, rules)
 	l.TotalValueOutstanding = associateNum(l.TotalValueOutstanding, integral, true, rules)
 	l.ManagementFeeOutstanding = associateNum(l.ManagementFeeOutstanding, integral, true, rules)
