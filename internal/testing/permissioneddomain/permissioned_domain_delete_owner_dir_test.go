@@ -114,7 +114,8 @@ func TestPermissionedDomainDeleteUsesRecordedOwnerDirectoryPage(t *testing.T) {
 	env := jtx.NewTestEnv(t)
 	alice := jtx.NewAccount("alice")
 	issuer := jtx.NewAccount("issuer")
-	env.Fund(alice, issuer)
+	env.FundAmount(alice, uint64(jtx.XRP(100_000)))
+	env.Fund(issuer)
 	env.Close()
 
 	var pageOneDomain keylet.Keylet
