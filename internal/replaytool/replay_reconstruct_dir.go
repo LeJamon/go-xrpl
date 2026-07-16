@@ -269,10 +269,9 @@ func encodeIndexes(members [][32]byte) []string {
 }
 
 // metaUint64 reads a UInt64 (hex string) or UInt32 (numeric) metadata field as a
-// uint64, returning 0 when the field is absent or unparseable. Node-pointer
-// fields are sMD_Default (always present on created/deleted nodes), so an absent
-// field attributing to page 0 only arises on malformed input, which the final
-// account_hash check catches.
+// uint64, returning 0 when the field is absent or unparseable. Callers establish
+// whether an optional node-pointer applies before interpreting an absent value
+// as page zero.
 func metaUint64(v any) uint64 {
 	switch t := v.(type) {
 	case string:

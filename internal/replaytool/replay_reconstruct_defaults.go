@@ -225,6 +225,29 @@ func fillCreatedDefaults(obj map[string]any, entryType string) {
 			obj[f.Name] = f.Value
 		}
 	}
+	if entryType == "Escrow" {
+		fillEscrowDirectoryDefaults(obj)
+	}
+}
+
+func fillEscrowDirectoryDefaults(obj map[string]any) {
+	account, hasAccount := metaAccountID(obj, "Account")
+	destination, hasDestination := metaAccountID(obj, "Destination")
+	if !hasAccount || !hasDestination {
+		return
+	}
+	if account != destination {
+		if _, present := obj["DestinationNode"]; !present {
+			obj["DestinationNode"] = "0"
+		}
+	}
+
+	issuer, hasIssuer := metaIssuer(obj, "Amount")
+	if hasIssuer && issuer != account && issuer != destination {
+		if _, present := obj["IssuerNode"]; !present {
+			obj["IssuerNode"] = "0"
+		}
+	}
 }
 
 // zeroHash160 is the JSON form binarycodec produces for an all-zero Hash160: the
