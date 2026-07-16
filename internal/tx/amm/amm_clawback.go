@@ -360,7 +360,7 @@ func (a *AMMClawback) Apply(ctx *tx.ApplyContext) ter.Result {
 			if result := sendMPT(ctx.View, holderID, issuerID, withdrawAmount1, true); result != ter.TesSUCCESS {
 				return result
 			}
-		} else if err := createOrUpdateAMMTrustline(ammAccountID, a.Asset, withdrawAmount1.Negate(), ctx.View); err != nil {
+		} else if err := createOrUpdateAMMTrustline(ammAccountID, a.Asset, withdrawAmount1.Negate(), ctx.View, ctx.NumberContext()); err != nil {
 			return ter.TefINTERNAL
 		}
 	}
@@ -377,7 +377,7 @@ func (a *AMMClawback) Apply(ctx *tx.ApplyContext) ter.Result {
 				if result := sendMPT(ctx.View, holderID, issuerID, withdrawAmount2, true); result != ter.TesSUCCESS {
 					return result
 				}
-			} else if err := createOrUpdateAMMTrustline(ammAccountID, a.Asset2, withdrawAmount2.Negate(), ctx.View); err != nil {
+			} else if err := createOrUpdateAMMTrustline(ammAccountID, a.Asset2, withdrawAmount2.Negate(), ctx.View, ctx.NumberContext()); err != nil {
 				return ter.TefINTERNAL
 			}
 		} else if isXRP2 && !withdrawAmount2.IsZero() {
@@ -396,12 +396,12 @@ func (a *AMMClawback) Apply(ctx *tx.ApplyContext) ter.Result {
 					return result
 				}
 			} else {
-				if err := createOrUpdateAMMTrustline(ammAccountID, a.Asset2, withdrawAmount2.Negate(), ctx.View); err != nil {
+				if err := createOrUpdateAMMTrustline(ammAccountID, a.Asset2, withdrawAmount2.Negate(), ctx.View, ctx.NumberContext()); err != nil {
 					return ter.TefINTERNAL
 				}
 				issuer2ID, _ := state.DecodeAccountID(a.Asset2.Issuer)
 				if holderID != issuer2ID {
-					if err := updateTrustlineBalanceInView(holderID, issuer2ID, a.Asset2.Currency, withdrawAmount2, ctx.View); err != nil {
+					if err := updateTrustlineBalanceInView(holderID, issuer2ID, a.Asset2.Currency, withdrawAmount2, ctx.View, ctx.NumberContext()); err != nil {
 						return ter.TefINTERNAL
 					}
 				}
@@ -421,12 +421,12 @@ func (a *AMMClawback) Apply(ctx *tx.ApplyContext) ter.Result {
 		ammAccountAddr, _ := state.EncodeAccountID(amm.Account)
 		redeemAmt := state.NewIssuedAmountFromValue(
 			lpTokensToWithdraw.Mantissa(), lpTokensToWithdraw.Exponent(), lptCurrency, ammAccountAddr)
-		if r := redeemIOUWithCleanup(ctx.View, holderID, amm.Account, redeemAmt); r != ter.TesSUCCESS {
+		if r := redeemIOUWithCleanup(ctx.View, holderID, amm.Account, redeemAmt, ctx.NumberContext()); r != ter.TesSUCCESS {
 			return r
 		}
 	}
 
-	newLPBalance, err := lptAMMBalance.Sub(lpTokensToWithdraw)
+	newLPBalance, err := lptAMMBalance.SubWithNumberContext(lpTokensToWithdraw, math.ctx, state.RoundToNearest)
 	if err != nil {
 		return ter.TefINTERNAL
 	}

@@ -43,18 +43,6 @@ func numberToString(n state.XRPLNumber) string {
 	return fmt.Sprintf("%de%d", n.Mantissa(), n.Exponent())
 }
 
-// amountToNumber converts an asset amount into an XRPLNumber. XRP is measured in
-// drops and MPT in its integer units; an IOU carries a decimal value.
-func amountToNumber(a state.Amount) (state.XRPLNumber, error) {
-	if a.IsNative() {
-		return state.NewXRPLNumber(a.Drops(), 0), nil
-	}
-	if a.IsMPT() {
-		return vaultNumber(a.Value())
-	}
-	return vaultNumber(a.Value())
-}
-
 func amountToNumberForRules(a state.Amount, rules *amendment.Rules) (state.XRPLNumber, error) {
 	scale := vaultNumberScale(rules)
 	if a.IsNative() {

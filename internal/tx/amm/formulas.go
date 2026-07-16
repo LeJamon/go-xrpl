@@ -51,17 +51,13 @@ func feeMultHalf(math numberMath, tfee uint16) state.XRPLNumber {
 // adjustLPTokens adjusts LP tokens for precision loss when adding/subtracting
 // from the AMM balance.
 // Reference: rippled AMMHelpers.cpp adjustLPTokens()
-func adjustLPTokens(lptAMMBalance, lpTokens tx.Amount, isDeposit bool) tx.Amount {
+func adjustLPTokens(math numberMath, lptAMMBalance, lpTokens tx.Amount, isDeposit bool) tx.Amount {
 	const mode = state.RoundDownward
 
 	if isDeposit {
-		sum, _ := lptAMMBalance.AddRounded(lpTokens, mode)
-		result, _ := sum.SubRounded(lptAMMBalance, mode)
-		return result
+		return math.subAmounts(math.addAmounts(lptAMMBalance, lpTokens, mode), lptAMMBalance, mode)
 	}
-	diff, _ := lpTokens.SubRounded(lptAMMBalance, mode)
-	result, _ := diff.AddRounded(lptAMMBalance, mode)
-	return result
+	return math.addAmounts(math.subAmounts(lpTokens, lptAMMBalance, mode), lptAMMBalance, mode)
 }
 
 // adjustAmountsByLPTokens is the post-computation adjustment pipeline.
@@ -82,7 +78,7 @@ func adjustAmountsByLPTokens(
 		return amount, amount2, lpTokens
 	}
 
-	lpTokensActual := adjustLPTokens(lptAMMBalance, lpTokens, isDeposit)
+	lpTokensActual := adjustLPTokens(math, lptAMMBalance, lpTokens, isDeposit)
 
 	if lpTokensActual.IsZero() {
 		var amount2Opt *tx.Amount
@@ -170,7 +166,7 @@ func getRoundedLPTokens(math numberMath, fixAMMv1_3 bool, balance tx.Amount, fra
 	}
 	rm := getLPTokenRounding(isDeposit)
 	tokens := math.multiplyToAmount(math.fromAmountRounded(balance, rm), frac, balance, rm)
-	return adjustLPTokens(balance, tokens, isDeposit)
+	return adjustLPTokens(math, balance, tokens, isDeposit)
 }
 
 // getRoundedLPTokensCb rounds LPTokens for single deposit/withdrawal using callbacks.
@@ -188,7 +184,7 @@ func getRoundedLPTokensCb(math numberMath, fixAMMv1_3 bool, noRoundCb func() sta
 	} else {
 		tokens = math.multiplyToAmount(math.fromAmountRounded(lptAMMBalance, rm), productCb(state.RoundToNearest), lptAMMBalance, rm)
 	}
-	return adjustLPTokens(lptAMMBalance, tokens, isDeposit)
+	return adjustLPTokens(math, lptAMMBalance, tokens, isDeposit)
 }
 
 // adjustAssetInByTokens adjusts deposit asset amount to factor in adjusted tokens.
@@ -201,10 +197,10 @@ func adjustAssetInByTokens(math numberMath, fixAMMv1_3 bool, balance, amount, lp
 	tokensAdj := tokens
 	// Rounding didn't work the right way.
 	if math.fromAmount(assetAdj).Cmp(math.fromAmount(amount)) > 0 {
-		diff, _ := assetAdj.SubRounded(amount, state.RoundToNearest)
-		adjAmountFull, _ := amount.SubRounded(diff, state.RoundToNearest)
+		diff := math.subAmounts(assetAdj, amount, state.RoundToNearest)
+		adjAmountFull := math.subAmounts(amount, diff, state.RoundToNearest)
 		t := lpTokensOut(math, balance, adjAmountFull, lptAMMBalance, tfee, true)
-		tokensAdj = adjustLPTokens(lptAMMBalance, t, true)
+		tokensAdj = adjustLPTokens(math, lptAMMBalance, t, true)
 		assetAdj = ammAssetIn(math, balance, lptAMMBalance, tokensAdj, tfee, true)
 	}
 	return tokensAdj, minAmountIOU(amount, assetAdj)
@@ -220,10 +216,10 @@ func adjustAssetOutByTokens(math numberMath, fixAMMv1_3 bool, balance, amount, l
 	tokensAdj := tokens
 	// Rounding didn't work the right way.
 	if math.fromAmount(assetAdj).Cmp(math.fromAmount(amount)) > 0 {
-		diff, _ := assetAdj.SubRounded(amount, state.RoundToNearest)
-		adjAmountFull, _ := amount.SubRounded(diff, state.RoundToNearest)
+		diff := math.subAmounts(assetAdj, amount, state.RoundToNearest)
+		adjAmountFull := math.subAmounts(amount, diff, state.RoundToNearest)
 		t := calcLPTokensIn(math, balance, adjAmountFull, lptAMMBalance, tfee, true)
-		tokensAdj = adjustLPTokens(lptAMMBalance, t, false)
+		tokensAdj = adjustLPTokens(math, lptAMMBalance, t, false)
 		assetAdj = ammAssetOut(math, balance, lptAMMBalance, tokensAdj, tfee, true)
 	}
 	return tokensAdj, minAmountIOU(amount, assetAdj)

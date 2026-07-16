@@ -188,7 +188,7 @@ func withinRelativeDistance(math numberMath, calc, req tx.Amount, dist state.XRP
 		maxAmount = calc
 	}
 
-	diff, _ := maxAmount.Sub(minAmount)
+	diff := math.subAmounts(maxAmount, minAmount, state.RoundToNearest)
 	ratio := math.div(math.fromAmount(diff), math.fromAmount(maxAmount), state.RoundToNearest)
 	return ratio.Cmp(dist) < 0
 }

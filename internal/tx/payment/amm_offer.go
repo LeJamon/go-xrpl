@@ -163,11 +163,11 @@ func (o *AMMOffer) CheckInvariant(consumedIn, consumedOut tx.Amount) bool {
 	nBalOut := m.fromAmount(o.balanceOut, state.RoundToNearest)
 	product := nBalIn.Mul(nBalOut)
 
-	newBalanceIn, err := o.balanceIn.Add(consumedIn)
+	newBalanceIn, err := o.balanceIn.AddWithNumberContext(consumedIn, m.ctx, state.RoundToNearest)
 	if err != nil {
 		return false
 	}
-	newBalanceOut, err := o.balanceOut.Sub(consumedOut)
+	newBalanceOut, err := o.balanceOut.SubWithNumberContext(consumedOut, m.ctx, state.RoundToNearest)
 	if err != nil {
 		return false
 	}
@@ -306,16 +306,16 @@ func adjustTrustLineBalance(sb *PaymentSandbox, account, issuer [20]byte, curren
 
 	if isLow {
 		if credit {
-			tl.Balance, err = tl.Balance.Add(amount)
+			tl.Balance, err = tl.Balance.AddWithNumberContext(amount, sb.NumberContext(), state.RoundToNearest)
 		} else {
-			tl.Balance, err = tl.Balance.Sub(amount)
+			tl.Balance, err = tl.Balance.SubWithNumberContext(amount, sb.NumberContext(), state.RoundToNearest)
 		}
 	} else {
 		// High account: balance is inverted
 		if credit {
-			tl.Balance, err = tl.Balance.Sub(amount)
+			tl.Balance, err = tl.Balance.SubWithNumberContext(amount, sb.NumberContext(), state.RoundToNearest)
 		} else {
-			tl.Balance, err = tl.Balance.Add(amount)
+			tl.Balance, err = tl.Balance.AddWithNumberContext(amount, sb.NumberContext(), state.RoundToNearest)
 		}
 	}
 	if err != nil {

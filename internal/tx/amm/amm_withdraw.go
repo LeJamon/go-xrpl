@@ -383,7 +383,7 @@ func (a *AMMWithdraw) Apply(ctx *tx.ApplyContext) ter.Result {
 			// adjustLPTokensIn
 			tokensAdj := lpTokensWithdraw
 			if fixV1_3 && !isWithdrawAll {
-				tokensAdj = adjustLPTokens(lptBalance, lpTokensWithdraw, false)
+				tokensAdj = adjustLPTokens(math, lptBalance, lpTokensWithdraw, false)
 				if tokensAdj.IsZero() {
 					return ter.TecAMM_INVALID_TOKENS
 				}
@@ -467,7 +467,7 @@ func (a *AMMWithdraw) Apply(ctx *tx.ApplyContext) ter.Result {
 		// adjustLPTokensIn
 		tokens := calcLPTokensIn(math, assetBalance, withdrawAmt, lptBalance, tfee, fixV1_3)
 		if fixV1_3 {
-			tokens = adjustLPTokens(lptBalance, tokens, false)
+			tokens = adjustLPTokens(math, lptBalance, tokens, false)
 		}
 		if tokens.IsZero() {
 			return ter.TecAMM_INVALID_TOKENS
@@ -551,7 +551,7 @@ func (a *AMMWithdraw) Apply(ctx *tx.ApplyContext) ter.Result {
 		// adjustLPTokensIn
 		tokensAdj := lpTokensRequested
 		if fixV1_3 {
-			tokensAdj = adjustLPTokens(lptBalance, lpTokensRequested, false)
+			tokensAdj = adjustLPTokens(math, lptBalance, lpTokensRequested, false)
 			if tokensAdj.IsZero() {
 				return ter.TecAMM_INVALID_TOKENS
 			}
@@ -719,15 +719,15 @@ func (a *AMMWithdraw) Apply(ctx *tx.ApplyContext) ter.Result {
 	}
 
 	if ctx.Rules().Enabled(amendment.FeatureMPTokensV2) {
-		remainingLP, err := lptBalance.Sub(lpTokensToRedeem)
+		remainingLP, err := lptBalance.SubWithNumberContext(lpTokensToRedeem, math.ctx, state.RoundToNearest)
 		if err != nil {
 			return ter.TefINTERNAL
 		}
-		remaining1, err := assetBalance1.Sub(withdrawAmount1)
+		remaining1, err := assetBalance1.SubWithNumberContext(withdrawAmount1, math.ctx, state.RoundToNearest)
 		if err != nil {
 			return ter.TefINTERNAL
 		}
-		remaining2, err := assetBalance2.Sub(withdrawAmount2)
+		remaining2, err := assetBalance2.SubWithNumberContext(withdrawAmount2, math.ctx, state.RoundToNearest)
 		if err != nil {
 			return ter.TefINTERNAL
 		}
@@ -784,11 +784,11 @@ func (a *AMMWithdraw) Apply(ctx *tx.ApplyContext) ter.Result {
 		ammAccountAddr, _ := state.EncodeAccountID(amm.Account)
 		redeemAmt := state.NewIssuedAmountFromValue(
 			lpTokensToRedeem.Mantissa(), lpTokensToRedeem.Exponent(), lptCurrency, ammAccountAddr)
-		if r := redeemIOUWithCleanup(ctx.View, accountID, amm.Account, redeemAmt); r != ter.TesSUCCESS {
+		if r := redeemIOUWithCleanup(ctx.View, accountID, amm.Account, redeemAmt, ctx.NumberContext()); r != ter.TesSUCCESS {
 			return r
 		}
 	}
-	newLPBalance, err := amm.LPTokenBalance.Sub(lpTokensToRedeem)
+	newLPBalance, err := amm.LPTokenBalance.SubWithNumberContext(lpTokensToRedeem, math.ctx, state.RoundToNearest)
 	if err != nil {
 		return ter.TefINTERNAL
 	}
@@ -888,7 +888,7 @@ func withdrawIOUToAccount(
 	// Reference: rippled accountSend → rippleCredit handles issuer case by only
 	// adjusting the single AMM-issuer trust line.
 	if accountID == issuerID {
-		if err := createOrUpdateAMMTrustline(ammAccountID, asset, amount.Negate(), ctx.View); err != nil {
+		if err := createOrUpdateAMMTrustline(ammAccountID, asset, amount.Negate(), ctx.View, ctx.NumberContext()); err != nil {
 			return ter.TefINTERNAL
 		}
 		return ter.TesSUCCESS
@@ -926,13 +926,13 @@ func withdrawIOUToAccount(
 		}
 	} else {
 		// Trust line exists — just credit the withdrawer's balance.
-		if err := updateTrustlineBalanceInView(accountID, issuerID, asset.Currency, amount, ctx.View); err != nil {
+		if err := updateTrustlineBalanceInView(accountID, issuerID, asset.Currency, amount, ctx.View, ctx.NumberContext()); err != nil {
 			return ter.TefINTERNAL
 		}
 	}
 
 	// Debit AMM's trust line (negative delta)
-	if err := createOrUpdateAMMTrustline(ammAccountID, asset, amount.Negate(), ctx.View); err != nil {
+	if err := createOrUpdateAMMTrustline(ammAccountID, asset, amount.Negate(), ctx.View, ctx.NumberContext()); err != nil {
 		return ter.TefINTERNAL
 	}
 

@@ -479,7 +479,7 @@ func (a *AMMDeposit) Apply(ctx *tx.ApplyContext) ter.Result {
 		// adjustLPTokensOut
 		tokensAdj := lpTokensRequested
 		if fixV1_3 {
-			tokensAdj = adjustLPTokens(lptBalance, lpTokensRequested, true)
+			tokensAdj = adjustLPTokens(math, lptBalance, lpTokensRequested, true)
 			if tokensAdj.IsZero() {
 				return ter.TecAMM_INVALID_TOKENS
 			}
@@ -521,7 +521,7 @@ func (a *AMMDeposit) Apply(ctx *tx.ApplyContext) ter.Result {
 		// adjustLPTokensOut
 		tokens := lpTokensOut(math, assetBalance, depositAmt, lptBalance, tfee, fixV1_3)
 		if fixV1_3 {
-			tokens = adjustLPTokens(lptBalance, tokens, true)
+			tokens = adjustLPTokens(math, lptBalance, tokens, true)
 		}
 		if tokens.IsZero() {
 			return ter.TecAMM_INVALID_TOKENS
@@ -613,7 +613,7 @@ func (a *AMMDeposit) Apply(ctx *tx.ApplyContext) ter.Result {
 		// adjustLPTokensOut
 		tokensAdj := lpTokensRequested
 		if fixV1_3 {
-			tokensAdj = adjustLPTokens(lptBalance, lpTokensRequested, true)
+			tokensAdj = adjustLPTokens(math, lptBalance, lpTokensRequested, true)
 			if tokensAdj.IsZero() {
 				return ter.TecAMM_INVALID_TOKENS
 			}
@@ -658,7 +658,7 @@ func (a *AMMDeposit) Apply(ctx *tx.ApplyContext) ter.Result {
 		if !amount1.IsZero() {
 			tokens := lpTokensOut(math, assetBalance, amount1, lptBalance, tfee, fixV1_3)
 			if fixV1_3 {
-				tokens = adjustLPTokens(lptBalance, tokens, true)
+				tokens = adjustLPTokens(math, lptBalance, tokens, true)
 			}
 			if tokens.IsZero() || tokens.IsNegative() {
 				// rippled returns here for both amendment states — it does NOT
@@ -1007,11 +1007,11 @@ func (a *AMMDeposit) Apply(ctx *tx.ApplyContext) ter.Result {
 			// Skip the depositor's debit if it IS the issuer — issuers issue from
 			// thin air. Reference: rippled accountSend() handles this internally.
 			if accountID != issuerID {
-				if err := updateTrustlineBalanceInView(accountID, issuerID, a.Asset.Currency, depositAmount1.Negate(), ctx.View); err != nil {
+				if err := updateTrustlineBalanceInView(accountID, issuerID, a.Asset.Currency, depositAmount1.Negate(), ctx.View, ctx.NumberContext()); err != nil {
 					return TecUNFUNDED_AMM
 				}
 			}
-			if err := createOrUpdateAMMTrustline(ammAccountID, a.Asset, depositAmount1, ctx.View); err != nil {
+			if err := createOrUpdateAMMTrustline(ammAccountID, a.Asset, depositAmount1, ctx.View, ctx.NumberContext()); err != nil {
 				return TecNO_LINE
 			}
 		}
@@ -1027,17 +1027,17 @@ func (a *AMMDeposit) Apply(ctx *tx.ApplyContext) ter.Result {
 				return ter.TefINTERNAL
 			}
 			if accountID != issuerID {
-				if err := updateTrustlineBalanceInView(accountID, issuerID, a.Asset2.Currency, depositAmount2.Negate(), ctx.View); err != nil {
+				if err := updateTrustlineBalanceInView(accountID, issuerID, a.Asset2.Currency, depositAmount2.Negate(), ctx.View, ctx.NumberContext()); err != nil {
 					return TecUNFUNDED_AMM
 				}
 			}
-			if err := createOrUpdateAMMTrustline(ammAccountID, a.Asset2, depositAmount2, ctx.View); err != nil {
+			if err := createOrUpdateAMMTrustline(ammAccountID, a.Asset2, depositAmount2, ctx.View, ctx.NumberContext()); err != nil {
 				return TecNO_LINE
 			}
 		}
 	}
 
-	newLPBalance, err := amm.LPTokenBalance.Add(lpTokensToIssue)
+	newLPBalance, err := amm.LPTokenBalance.AddWithNumberContext(lpTokensToIssue, math.ctx, state.RoundToNearest)
 	if err != nil {
 		return ter.TefINTERNAL
 	}
@@ -1049,7 +1049,7 @@ func (a *AMMDeposit) Apply(ctx *tx.ApplyContext) ter.Result {
 	// - IOU: via trustline updates (createOrUpdateAMMTrustline)
 
 	lptAsset := tx.Asset{Currency: lptCurrency, Issuer: ammAccountAddr}
-	if err := createLPTokenTrustline(accountID, lptAsset, lpTokensToIssue, ctx.View); err != nil {
+	if err := createLPTokenTrustline(accountID, lptAsset, lpTokensToIssue, ctx.View, ctx.NumberContext()); err != nil {
 		return TecINSUF_RESERVE_LINE
 	}
 

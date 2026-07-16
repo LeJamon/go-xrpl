@@ -345,7 +345,7 @@ func (a *AMMCreate) Apply(ctx *tx.ApplyContext) ter.Result {
 		Currency: lptCurrency,
 		Issuer:   ammAccountAddr,
 	}
-	if err := createLPTokenTrustline(accountID, lptAsset, lpTokenBalance, ctx.View); err != nil {
+	if err := createLPTokenTrustline(accountID, lptAsset, lpTokenBalance, ctx.View, ctx.NumberContext()); err != nil {
 		return TecINSUF_RESERVE_LINE
 	}
 
@@ -373,7 +373,7 @@ func (a *AMMCreate) Apply(ctx *tx.ApplyContext) ter.Result {
 			return result
 		}
 	} else {
-		if err := createOrUpdateAMMTrustline(ammAccountID, sortedAsset1, sortedAmount1, ctx.View); err != nil {
+		if err := createOrUpdateAMMTrustline(ammAccountID, sortedAsset1, sortedAmount1, ctx.View, ctx.NumberContext()); err != nil {
 			return TecNO_LINE
 		}
 		if err := setAMMNodeFlag(ammAccountID, sortedAsset1, ctx.View); err != nil {
@@ -383,7 +383,7 @@ func (a *AMMCreate) Apply(ctx *tx.ApplyContext) ter.Result {
 		// issuers have unlimited supply and no self-trust-line).
 		issuerID1, _ := state.DecodeAccountID(sortedAsset1.Issuer)
 		if accountID != issuerID1 {
-			tlResult, tlErr := updateTrustlineBalanceInViewEx(accountID, issuerID1, sortedAsset1.Currency, sortedAmount1.Negate(), ctx.View)
+			tlResult, tlErr := updateTrustlineBalanceInViewEx(accountID, issuerID1, sortedAsset1.Currency, sortedAmount1.Negate(), ctx.View, ctx.NumberContext())
 			if tlErr != nil {
 				return TecUNFUNDED_AMM
 			}
@@ -411,7 +411,7 @@ func (a *AMMCreate) Apply(ctx *tx.ApplyContext) ter.Result {
 			return result
 		}
 	} else {
-		if err := createOrUpdateAMMTrustline(ammAccountID, sortedAsset2, sortedAmount2, ctx.View); err != nil {
+		if err := createOrUpdateAMMTrustline(ammAccountID, sortedAsset2, sortedAmount2, ctx.View, ctx.NumberContext()); err != nil {
 			return TecNO_LINE
 		}
 		if err := setAMMNodeFlag(ammAccountID, sortedAsset2, ctx.View); err != nil {
@@ -419,7 +419,7 @@ func (a *AMMCreate) Apply(ctx *tx.ApplyContext) ter.Result {
 		}
 		issuerID2, _ := state.DecodeAccountID(sortedAsset2.Issuer)
 		if accountID != issuerID2 {
-			tlResult, tlErr := updateTrustlineBalanceInViewEx(accountID, issuerID2, sortedAsset2.Currency, sortedAmount2.Negate(), ctx.View)
+			tlResult, tlErr := updateTrustlineBalanceInViewEx(accountID, issuerID2, sortedAsset2.Currency, sortedAmount2.Negate(), ctx.View, ctx.NumberContext())
 			if tlErr != nil {
 				return TecUNFUNDED_AMM
 			}

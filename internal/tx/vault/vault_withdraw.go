@@ -179,7 +179,7 @@ func (v *VaultWithdraw) Preclaim(view tx.LedgerView, config tx.EngineConfig) ter
 		}
 		limitAmount = assets
 	}
-	if res := canWithdraw(view, accountID, dstID, limitAmount, v.DestinationTag != nil); res != ter.TesSUCCESS {
+	if res := canWithdraw(view, accountID, dstID, limitAmount, v.DestinationTag != nil, config.NumberContext()); res != ter.TesSUCCESS {
 		return res
 	}
 

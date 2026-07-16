@@ -117,18 +117,25 @@ func TestNumberContextsAreIndependentUnderConcurrency(t *testing.T) {
 	}
 
 	var wg sync.WaitGroup
+	mismatches := make(chan MantissaScale, len(contexts))
 	for _, ctx := range contexts {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
 			for range 1_000 {
 				n := ctx.New(9_223_372_036_854_775_807, 0, RoundToNearest)
-				require.Equal(t, ctx.Scale(), n.MantissaScale())
-				require.Equal(t, ctx.Scale(), n.Root2().MantissaScale())
+				if n.MantissaScale() != ctx.Scale() || n.Root2().MantissaScale() != ctx.Scale() {
+					mismatches <- ctx.Scale()
+					return
+				}
 			}
 		}()
 	}
 	wg.Wait()
+	close(mismatches)
+	for scale := range mismatches {
+		t.Errorf("Number operations did not retain mantissa scale %d", scale)
+	}
 }
 
 func contextMPTRaw(t *testing.T, amount Amount) int64 {

@@ -230,7 +230,6 @@ func (a *AMMBid) Apply(ctx *tx.ApplyContext) ter.Result {
 		math.int(auctionSlotMinFeeFraction),
 		state.RoundToNearest,
 	)
-	minSlotPrice := math.toAmount(minSlotPriceNumber, lptAMMBalance, state.RoundToNearest)
 
 	discountedFee := amm.TradingFee / uint16(auctionSlotDiscountedFeeFraction)
 
@@ -272,14 +271,11 @@ func (a *AMMBid) Apply(ctx *tx.ApplyContext) ter.Result {
 		}
 	}
 
-	var computedPrice tx.Amount
+	computedPrice := minSlotPriceNumber
 	fractionRemaining := math.zero()
 	pricePurchased := amm.AuctionSlot.Price
 
-	if !validOwner || timeSlot == nil {
-		// Slot is unowned or expired - pay minimum price
-		computedPrice = minSlotPrice
-	} else {
+	if validOwner && timeSlot != nil {
 		// Slot is owned - calculate price based on time interval
 		// fractionUsed = (timeSlot + 1) / auctionSlotTimeIntervals
 		slotNum := *timeSlot + 1
@@ -292,64 +288,65 @@ func (a *AMMBid) Apply(ctx *tx.ApplyContext) ter.Result {
 
 		if *timeSlot == 0 {
 			// First interval: price = pricePurchased * 1.05 + minSlotPrice
-			computedPrice = math.toAmount(price1p05.AddRounded(minSlotPriceNumber, state.RoundToNearest), lptAMMBalance, state.RoundToNearest)
+			computedPrice = price1p05.AddRounded(minSlotPriceNumber, state.RoundToNearest)
 		} else {
 			// Other intervals: price = pricePurchased * 1.05 * (1 - power(fractionUsed, 60)) + minSlotPrice
 			// Reference: rippled AMMBid.cpp line 336
 			fractionUsedPow60 := math.power(fractionUsed, 60, state.RoundToNearest)
 			decayFactor := math.subFromOne(fractionUsedPow60, state.RoundToNearest)
 			decayedPrice := price1p05.MulRounded(decayFactor, state.RoundToNearest)
-			computedPrice = math.toAmount(decayedPrice.AddRounded(minSlotPriceNumber, state.RoundToNearest), lptAMMBalance, state.RoundToNearest)
+			computedPrice = decayedPrice.AddRounded(minSlotPriceNumber, state.RoundToNearest)
 		}
 	}
 
-	var payPrice tx.Amount
+	payPrice := computedPrice
 	hasBidMin := !bidMin.IsZero()
 	hasBidMax := !bidMax.IsZero()
+	bidMinNumber := math.fromAmount(bidMin)
+	bidMaxNumber := math.fromAmount(bidMax)
 
 	if hasBidMin && hasBidMax {
-		if isLessOrEqual(computedPrice, bidMax) {
-			payPrice = maxAmount(computedPrice, bidMin)
+		if computedPrice.Cmp(bidMaxNumber) <= 0 {
+			if computedPrice.Cmp(bidMinNumber) < 0 {
+				payPrice = bidMinNumber
+			}
 		} else {
 			ctx.Log.Debug("amm bid: not in range", "computedPrice", computedPrice, "bidMin", bidMin, "bidMax", bidMax)
 			return ter.TecAMM_FAILED
 		}
 	} else if hasBidMin {
-		payPrice = maxAmount(computedPrice, bidMin)
+		if computedPrice.Cmp(bidMinNumber) < 0 {
+			payPrice = bidMinNumber
+		}
 	} else if hasBidMax {
-		if isLessOrEqual(computedPrice, bidMax) {
-			payPrice = computedPrice
-		} else {
+		if computedPrice.Cmp(bidMaxNumber) > 0 {
 			ctx.Log.Debug("amm bid: not in range", "computedPrice", computedPrice, "bidMax", bidMax)
 			return ter.TecAMM_FAILED
 		}
-	} else {
-		payPrice = computedPrice
 	}
 
-	if isGreater(payPrice, lpTokens) {
+	if payPrice.Cmp(math.fromAmount(lpTokens)) > 0 {
 		return ter.TecAMM_INVALID_TOKENS
 	}
 
 	// Reference: rippled AMMBid.cpp:345-367
-	var refund tx.Amount = zeroAmount(tx.Asset{})
-	var burn tx.Amount = payPrice
+	refund := math.zero()
+	burn := payPrice
 
 	if validOwner && timeSlot != nil {
 		// Refund previous owner: refund = fractionRemaining * pricePurchased
-		refund = math.multiplyToAmount(math.fromAmount(pricePurchased), fractionRemaining, lptAMMBalance, state.RoundToNearest)
-		if isGreater(refund, payPrice) {
+		refund = fractionRemaining.MulRounded(math.fromAmount(pricePurchased), state.RoundToNearest)
+		if refund.Cmp(payPrice) > 0 {
 			ctx.Log.Error("amm bid: refund exceeds payPrice", "refund", refund, "payPrice", payPrice)
 			return ter.TefINTERNAL
 		}
-		burn, _ = payPrice.Sub(refund)
+		burn = payPrice.AddRounded(refund.Negate(), state.RoundToNearest)
 
 		// Transfer refund from bidder to previous owner via LP token trust lines.
 		// Reference: rippled AMMBid.cpp:355-360 — accountSend(account_, previousOwner, refund)
 		if !refund.IsZero() {
-			refundWithIssue := state.NewIssuedAmountFromValue(
-				refund.Mantissa(), refund.Exponent(), lptCurrency, lptIssuer)
-			if r := transferLPTokens(ctx.View, accountID, amm.AuctionSlot.Account, amm.Account, refundWithIssue); r != ter.TesSUCCESS {
+			refundWithIssue := math.toAmount(refund, lptAMMBalance, state.RoundToNearest)
+			if r := transferLPTokens(ctx.View, accountID, amm.AuctionSlot.Account, amm.Account, refundWithIssue, math.ctx); r != ter.TesSUCCESS {
 				return r
 			}
 		}
@@ -357,7 +354,7 @@ func (a *AMMBid) Apply(ctx *tx.ApplyContext) ter.Result {
 
 	// Burn LP tokens: adjust, debit bidder's trust line, then reduce AMM LPTokenBalance.
 	// Reference: rippled AMMBid.cpp updateSlot() lines 249-268
-	saBurn := adjustLPTokens(lptAMMBalance, burn, false)
+	saBurn := adjustLPTokens(math, lptAMMBalance, math.toAmount(burn, lptAMMBalance, state.RoundToNearest), false)
 	if isGreaterOrEqual(saBurn, lptAMMBalance) {
 		ctx.Log.Error("amm bid: LP token burn exceeds AMM balance", "burn", saBurn, "lptAMMBalance", lptAMMBalance)
 		return ter.TecINTERNAL
@@ -365,11 +362,11 @@ func (a *AMMBid) Apply(ctx *tx.ApplyContext) ter.Result {
 	if !saBurn.IsZero() {
 		burnWithIssue := state.NewIssuedAmountFromValue(
 			saBurn.Mantissa(), saBurn.Exponent(), lptCurrency, lptIssuer)
-		if r := redeemLPTokens(ctx.View, accountID, amm.Account, burnWithIssue); r != ter.TesSUCCESS {
+		if r := redeemLPTokens(ctx.View, accountID, amm.Account, burnWithIssue, math.ctx); r != ter.TesSUCCESS {
 			return r
 		}
 	}
-	newLPBalance, err := amm.LPTokenBalance.Sub(saBurn)
+	newLPBalance, err := amm.LPTokenBalance.SubWithNumberContext(saBurn, math.ctx, state.RoundToNearest)
 	if err != nil {
 		return ter.TecINTERNAL
 	}
@@ -377,7 +374,7 @@ func (a *AMMBid) Apply(ctx *tx.ApplyContext) ter.Result {
 
 	amm.AuctionSlot.Account = accountID
 	amm.AuctionSlot.Expiration = currentTime + auctionSlotTotalTimeSecs
-	amm.AuctionSlot.Price = payPrice
+	amm.AuctionSlot.Price = math.toAmount(payPrice, lptAMMBalance, state.RoundToNearest)
 	amm.AuctionSlot.DiscountedFee = discountedFee
 
 	if a.AuthAccounts != nil {
@@ -408,32 +405,32 @@ func (a *AMMBid) Apply(ctx *tx.ApplyContext) ter.Result {
 // redeemLPTokens debits an account's LP token trust line, sending tokens back to the AMM (issuer).
 // This is the LP token equivalent of rippled's redeemIOU().
 // Reference: rippled Ledger/View.cpp redeemIOU()
-func redeemLPTokens(view tx.LedgerView, accountID, ammAccountID [20]byte, amount tx.Amount) ter.Result {
+func redeemLPTokens(view tx.LedgerView, accountID, ammAccountID [20]byte, amount tx.Amount, numberContext state.NumberContext) ter.Result {
 	if amount.IsZero() {
 		return ter.TesSUCCESS
 	}
-	return adjustLPTrustLine(view, accountID, ammAccountID, amount, false)
+	return adjustLPTrustLine(view, accountID, ammAccountID, amount, false, numberContext)
 }
 
 // transferLPTokens transfers LP tokens from one account to another via the AMM (issuer).
 // This debits the sender's trust line and credits the receiver's trust line.
 // Reference: rippled Ledger/View.cpp accountSend() → rippleCredit()
-func transferLPTokens(view tx.LedgerView, from, to, ammAccountID [20]byte, amount tx.Amount) ter.Result {
+func transferLPTokens(view tx.LedgerView, from, to, ammAccountID [20]byte, amount tx.Amount, numberContext state.NumberContext) ter.Result {
 	if amount.IsZero() || from == to {
 		return ter.TesSUCCESS
 	}
 	// Debit sender → AMM (issuer)
-	if r := adjustLPTrustLine(view, from, ammAccountID, amount, false); r != ter.TesSUCCESS {
+	if r := adjustLPTrustLine(view, from, ammAccountID, amount, false, numberContext); r != ter.TesSUCCESS {
 		return r
 	}
 	// Credit AMM (issuer) → receiver
-	return adjustLPTrustLine(view, to, ammAccountID, amount, true)
+	return adjustLPTrustLine(view, to, ammAccountID, amount, true, numberContext)
 }
 
 // adjustLPTrustLine modifies the LP token trust line balance between an account and the AMM.
 // If isCredit is true, the account's balance increases; if false, it decreases.
 // Reference: rippled Ledger/View.cpp rippleCredit()
-func adjustLPTrustLine(view tx.LedgerView, accountID, ammAccountID [20]byte, amount tx.Amount, isCredit bool) ter.Result {
+func adjustLPTrustLine(view tx.LedgerView, accountID, ammAccountID [20]byte, amount tx.Amount, isCredit bool, numberContext state.NumberContext) ter.Result {
 	trustLineKey := keylet.Line(accountID, ammAccountID, amount.Currency)
 	data, err := view.Read(trustLineKey)
 	if err != nil || data == nil {
@@ -457,16 +454,16 @@ func adjustLPTrustLine(view tx.LedgerView, accountID, ammAccountID [20]byte, amo
 	if lpIsLow {
 		// LP is low: positive = LP holds tokens
 		if isCredit {
-			newBalance, err = currentBalance.Add(amount)
+			newBalance, err = currentBalance.AddWithNumberContext(amount, numberContext, state.RoundToNearest)
 		} else {
-			newBalance, err = currentBalance.Sub(amount)
+			newBalance, err = currentBalance.SubWithNumberContext(amount, numberContext, state.RoundToNearest)
 		}
 	} else {
 		// LP is high: negative = LP holds tokens (from low perspective)
 		if isCredit {
-			newBalance, err = currentBalance.Sub(amount)
+			newBalance, err = currentBalance.SubWithNumberContext(amount, numberContext, state.RoundToNearest)
 		} else {
-			newBalance, err = currentBalance.Add(amount)
+			newBalance, err = currentBalance.AddWithNumberContext(amount, numberContext, state.RoundToNearest)
 		}
 	}
 	if err != nil {

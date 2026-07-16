@@ -40,6 +40,16 @@ func (m numberMath) toAmount(number state.XRPLNumber, prototype tx.Amount, mode 
 	return m.ctx.ToAmount(number, prototype, mode)
 }
 
+func (m numberMath) addAmounts(a, b tx.Amount, mode state.RoundingMode) tx.Amount {
+	result, _ := a.AddWithNumberContext(b, m.ctx, mode)
+	return result
+}
+
+func (m numberMath) subAmounts(a, b tx.Amount, mode state.RoundingMode) tx.Amount {
+	result, _ := a.SubWithNumberContext(b, m.ctx, mode)
+	return result
+}
+
 func (m numberMath) zero() state.XRPLNumber { return m.int(0) }
 func (m numberMath) one() state.XRPLNumber  { return m.int(1) }
 
