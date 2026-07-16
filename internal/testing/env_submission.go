@@ -252,7 +252,7 @@ func (e *TestEnv) closeWithReplay() {
 
 	// Create a fresh open ledger from the last closed ledger (parent).
 	// This discards all state changes from the immediate applies.
-	freshLedger, err := ledger.NewOpen(e.lastClosedLedger, e.clock.Now())
+	freshLedger, err := ledger.NewOpenForBuild(e.lastClosedLedger, e.clock.Now())
 	if err != nil {
 		e.t.Fatalf("closeWithReplay: failed to create fresh ledger: %v", err)
 	}
@@ -490,11 +490,12 @@ type engineConfigOpts struct {
 	// than the ledger header. The direct-apply and replay paths use the header
 	// so the initial apply and replay-on-close agree; the TxQ/preflight/pseudo/
 	// signed paths use the clock.
-	parentCloseFromClock bool
-	openLedger           bool
-	feeTrack             bool
-	enforceLoadFee       bool
-	applyFlags           tx.ApplyFlags
+	parentCloseFromClock     bool
+	applicationCloseFromView bool
+	openLedger               bool
+	feeTrack                 bool
+	enforceLoadFee           bool
+	applyFlags               tx.ApplyFlags
 	// verifySignatures forces signature verification even when the env runs in
 	// the default no-verify mode (used by the SubmitSigned/MultiSigned paths).
 	verifySignatures bool
@@ -523,6 +524,10 @@ func (e *TestEnv) engineConfig(view *ledger.Ledger, opts engineConfigOpts) tx.En
 		ViewOpen:                  e.viewOpen,
 		EnforceLoadFee:            opts.enforceLoadFee,
 		ApplyFlags:                opts.applyFlags,
+	}
+	if opts.applicationCloseFromView {
+		cfg.ApplicationCloseTime = toRippleTime(view.CloseTime())
+		cfg.ApplicationCloseTimeSet = true
 	}
 	if opts.feeTrack {
 		cfg.FeeTrack = e.feeTrack
@@ -937,7 +942,10 @@ func (e *TestEnv) drainQueue() {
 func (e *TestEnv) applyForReplay(txn tx.Transaction, certainRetry, held bool) (ter.Result, bool) {
 	// Header-based ParentCloseTime matches applyDirect so time-dependent checks
 	// produce the same result during initial apply and during replay.
-	opts := engineConfigOpts{openLedger: e.openLedger || held}
+	opts := engineConfigOpts{
+		applicationCloseFromView: true,
+		openLedger:               e.openLedger || held,
+	}
 	if certainRetry {
 		opts.applyFlags = tx.TapRETRY
 	}

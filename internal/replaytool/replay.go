@@ -367,12 +367,13 @@ func (r *replayRunner) executeReplayVerbose(state *StateFixture, env *EnvFixture
 	if err != nil {
 		return nil, nil, fmt.Errorf("parsing parent_close_time: %w", err)
 	}
+	applicationCloseTime := ledger.ApplicationViewCloseTime(parentCloseTime, closeTime, env.CloseTimeResolution)
 
 	ledgerHeader := header.LedgerHeader{
 		LedgerIndex:         env.LedgerIndex,
 		ParentHash:          parentHash,
 		ParentCloseTime:     parentCloseTime,
-		CloseTime:           closeTime,
+		CloseTime:           applicationCloseTime,
 		CloseTimeResolution: env.CloseTimeResolution,
 		CloseFlags:          env.CloseFlags,
 		Drops:               totalCoins,
@@ -403,6 +404,8 @@ func (r *replayRunner) executeReplayVerbose(state *StateFixture, env *EnvFixture
 		ReserveIncrement:          uint64(fees.Increment),
 		LedgerSequence:            env.LedgerIndex,
 		ParentCloseTime:           protocol.ToRippleTime(parentCloseTime),
+		ApplicationCloseTime:      protocol.ToRippleTime(applicationCloseTime),
+		ApplicationCloseTimeSet:   true,
 		SkipSignatureVerification: true,
 		Standalone:                true,
 		Rules:                     rules,

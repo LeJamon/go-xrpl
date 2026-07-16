@@ -35,6 +35,49 @@ Behavioral oracle: clean local rippled v3.2.0 worktree at
   suites pass, as do the full transaction tree and focused race suites.
 - `just build-all`, `just vet`, CI-pinned golangci-lint v2.11.3 with both strict
   and advisory configs, formatting, and `git diff --check` pass.
+
+# Issue #1336 — Escrow replay directory defaults
+
+Target: `origin/main` at `f0db8a22e1386116d08eb7efb21889997bd97af4`.
+Behavioral oracle: clean local rippled `3.2.0` worktree at
+`3c43f4614f87965298773279ff5b85d4c56c637b`.
+
+## Plan
+
+- [x] Validate GitHub state, duplicate PRs, the post-v3.0.0 `main` base, and a
+      clean dedicated worktree.
+- [x] Trace created-Escrow default restoration and directory placement in Go,
+      then verify `DestinationNode` and `IssuerNode` semantics against rippled
+      v3.2.0.
+- [x] Add focused regressions for cross-account page zero, self-escrow, and an
+      explicit nonzero destination page, plus any oracle-confirmed IOU issuer
+      default case.
+- [x] Implement the minimal deterministic default inference before directory
+      placement without extending the inference to PayChannels.
+- [x] Run formatting, focused and race tests, vet, strict lint, build, and a
+      final correctness/conformance diff review.
+- [x] Record review results, commit intentional files, push the branch, open the
+      PR, and verify its exact remote head and checks.
+
+## Review
+
+- Created Escrows now recover a missing zero `DestinationNode` only when sender
+  and destination differ, and a missing zero `IssuerNode` only for a classic
+  IOU whose issuer differs from both. Explicit nonzero pages are preserved;
+  XRP, MPT, self, and issuer-equals-destination cases retain rippled's field
+  presence semantics. PayChannel inference remains unchanged.
+- The restored fields feed the existing directory-placement pass, rebuilding
+  page-zero destination and issuer membership as well as the canonical Escrow
+  bytes omitted by CreatedNode metadata.
+- Regression coverage includes cross-account XRP page zero, XRP and IOU self
+  escrow, explicit nonzero destination/issuer pages, third-party IOU issuer page
+  zero, issuer-as-destination, and MPT exclusion.
+- Independent Go and conformance reviews are clean against local rippled 3.2.0
+  at `3c43f4614f87965298773279ff5b85d4c56c637b`.
+- Passed `go test ./internal/replaytool -count=1`, focused race tests, `just vet`,
+  CI-pinned strict and advisory lint with zero issues, `just build`, formatting,
+  and `git diff --check`.
+
 # Issue #1331 — VaultCreate Scale template allowlist
 
 ## Goal

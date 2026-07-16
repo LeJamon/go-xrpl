@@ -3,6 +3,7 @@ package replaytool
 import (
 	"context"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -18,6 +19,7 @@ import (
 
 	"github.com/LeJamon/go-xrpl/drops"
 	"github.com/LeJamon/go-xrpl/internal/cmdexit"
+	"github.com/LeJamon/go-xrpl/internal/consensus"
 	"github.com/LeJamon/go-xrpl/internal/ledger"
 	"github.com/LeJamon/go-xrpl/internal/ledger/header"
 	ledgerstate "github.com/LeJamon/go-xrpl/internal/ledger/state"
@@ -594,6 +596,9 @@ func (r *replayRangeRunner) processBlock(
 	if err != nil {
 		return nil, nil, fmt.Errorf("getting target snapshot: %w", err)
 	}
+	if err := validateReplaySnapshotLink(preSnapshot, postSnapshot, targetLedger); err != nil {
+		return nil, nil, err
+	}
 	result.PostSnapshot = postSnapshot
 	result.ExpectedLedgerHash = postSnapshot.LedgerHash
 	result.ExpectedAccountHash = postSnapshot.AccountHash
@@ -619,12 +624,24 @@ func (r *replayRangeRunner) processBlock(
 	if err != nil {
 		return nil, nil, fmt.Errorf("ledger %d parent close time: %w", targetLedger, err)
 	}
+	applicationResolution := consensus.GetNextLedgerTimeResolution(
+		preSnapshot.CloseTimeResolution,
+		preSnapshot.CloseFlags&header.LCFNoConsensusTime == 0,
+		targetLedger,
+	)
+	if applicationResolution != postSnapshot.CloseTimeResolution {
+		return nil, nil, fmt.Errorf(
+			"ledger %d close time resolution: got %d, derived %d from parent",
+			targetLedger, postSnapshot.CloseTimeResolution, applicationResolution,
+		)
+	}
+	applicationCloseTime := ledger.ApplicationViewCloseTime(parentCloseTime, closeTime, applicationResolution)
 
 	ledgerHeader := header.LedgerHeader{
 		LedgerIndex:         targetLedger,
 		ParentHash:          preSnapshot.LedgerHash,
 		ParentCloseTime:     parentCloseTime,
-		CloseTime:           closeTime,
+		CloseTime:           applicationCloseTime,
 		CloseTimeResolution: postSnapshot.CloseTimeResolution,
 		CloseFlags:          postSnapshot.CloseFlags,
 		Drops:               preSnapshot.TotalCoins, // Start with parent's total coins
@@ -673,6 +690,8 @@ func (r *replayRangeRunner) processBlock(
 		LedgerSequence:                       targetLedger,
 		ParentHash:                           preSnapshot.LedgerHash,
 		ParentCloseTime:                      protocol.ToRippleTime(parentCloseTime),
+		ApplicationCloseTime:                 protocol.ToRippleTime(applicationCloseTime),
+		ApplicationCloseTimeSet:              true,
 		SkipSignatureVerification:            true,
 		Standalone:                           true,
 		ReplayPreFixPayChanRecipientOwnerDir: replayPreFix,
@@ -753,6 +772,25 @@ func (r *replayRangeRunner) processBlock(
 	}
 
 	return result, newStateMap, nil
+}
+
+func validateReplaySnapshotLink(preSnapshot, postSnapshot *statecompare.LedgerSnapshot, targetLedger uint32) error {
+	if preSnapshot == nil || postSnapshot == nil {
+		return errors.New("replay snapshot cannot be nil")
+	}
+	if postSnapshot.LedgerIndex != targetLedger {
+		return fmt.Errorf("target snapshot ledger index: got %d, expected %d", postSnapshot.LedgerIndex, targetLedger)
+	}
+	if targetLedger == 0 {
+		return errors.New("target ledger cannot be zero")
+	}
+	if preSnapshot.LedgerIndex != targetLedger-1 {
+		return fmt.Errorf("parent snapshot ledger index: got %d, expected %d", preSnapshot.LedgerIndex, targetLedger-1)
+	}
+	if postSnapshot.ParentHash != preSnapshot.LedgerHash {
+		return fmt.Errorf("ledger %d parent hash does not match ledger %d hash", targetLedger, preSnapshot.LedgerIndex)
+	}
+	return nil
 }
 
 func (r *replayRangeRunner) dumpRangeDebugInfo(ledgerIndex uint32, result *BlockResult, preStateMap, postStateMap *shamap.SHAMap) {

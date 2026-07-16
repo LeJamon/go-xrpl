@@ -6,10 +6,35 @@ import (
 	"testing"
 
 	"github.com/LeJamon/go-xrpl/amendment"
+	"github.com/LeJamon/go-xrpl/internal/statecompare"
 	"github.com/LeJamon/go-xrpl/internal/tx/pseudo"
 	"github.com/LeJamon/go-xrpl/keylet"
 	"github.com/LeJamon/go-xrpl/shamap"
 )
+
+func TestValidateReplaySnapshotLink(t *testing.T) {
+	parentHash := [32]byte{1}
+	pre := &statecompare.LedgerSnapshot{LedgerIndex: 41, LedgerHash: parentHash}
+	post := &statecompare.LedgerSnapshot{LedgerIndex: 42, ParentHash: parentHash}
+	if err := validateReplaySnapshotLink(pre, post, 42); err != nil {
+		t.Fatalf("valid snapshot link: %v", err)
+	}
+
+	for name, mutate := range map[string]func(*statecompare.LedgerSnapshot, *statecompare.LedgerSnapshot){
+		"parent sequence": func(pre, _ *statecompare.LedgerSnapshot) { pre.LedgerIndex = 40 },
+		"target sequence": func(_, post *statecompare.LedgerSnapshot) { post.LedgerIndex = 43 },
+		"parent hash":     func(_, post *statecompare.LedgerSnapshot) { post.ParentHash = [32]byte{2} },
+	} {
+		t.Run(name, func(t *testing.T) {
+			badPre := *pre
+			badPost := *post
+			mutate(&badPre, &badPost)
+			if err := validateReplaySnapshotLink(&badPre, &badPost, 42); err == nil {
+				t.Fatal("expected malformed snapshot link to fail")
+			}
+		})
+	}
+}
 
 // buildReplayStateMap creates a state SHAMap seeded with the given entries.
 func buildReplayStateMap(t *testing.T, entries map[[32]byte][]byte) *shamap.SHAMap {
