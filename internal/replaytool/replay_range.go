@@ -113,6 +113,7 @@ Example:
     xrpld replay-range --from 32750 --to 32800
     xrpld replay-range --from 32750 --to 32800 -v
     xrpld replay-range --from 32750 --to 32800 --dump-dir ./debug
+    xrpld replay-range --from 3100000 --to 3278999 --legacy-paychan-owner-dir-gate
     xrpld replay-range --from 99226370 --to 99236370 --checkpoint-dir ./ckpt
     xrpld replay-range --from 99226370 --to 99236370 --checkpoint-dir ./ckpt --resume-from 99230000`,
 		RunE: func(cmd *cobra.Command, args []string) error {
