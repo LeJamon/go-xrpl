@@ -425,6 +425,18 @@ func (r *ReplayDelta) verifyAndBuild(resp *message.ReplayDeltaResponse) error {
 			return fmt.Errorf("ledger seq mismatch: header %d, expected %d",
 				hdr.LedgerIndex, r.parent.Sequence()+1)
 		}
+		parentHeader := r.parent.Header()
+		applicationResolution := consensus.GetNextLedgerTimeResolution(
+			parentHeader.CloseTimeResolution,
+			parentHeader.GetCloseAgree(),
+			hdr.LedgerIndex,
+		)
+		if hdr.CloseTimeResolution != applicationResolution {
+			return fmt.Errorf(
+				"target close time resolution: got %d, derived %d from parent",
+				hdr.CloseTimeResolution, applicationResolution,
+			)
+		}
 	}
 
 	// Reconstruct the tx SHAMap by inserting every leaf blob keyed by
@@ -567,7 +579,7 @@ func (r *ReplayDelta) Apply(engineCfg tx.EngineConfig) (*ledger.Ledger, error) {
 		parentHeader.GetCloseAgree(),
 		hdr.LedgerIndex,
 	)
-	if applicationResolution != hdr.CloseTimeResolution {
+	if hdr.CloseTimeResolution != applicationResolution {
 		return nil, fmt.Errorf(
 			"target close time resolution: got %d, derived %d from parent",
 			hdr.CloseTimeResolution, applicationResolution,

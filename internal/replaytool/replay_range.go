@@ -3,6 +3,7 @@ package replaytool
 import (
 	"context"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -563,6 +564,9 @@ func (r *replayRangeRunner) processBlock(
 	if err != nil {
 		return nil, nil, fmt.Errorf("getting target snapshot: %w", err)
 	}
+	if err := validateReplaySnapshotLink(preSnapshot, postSnapshot, targetLedger); err != nil {
+		return nil, nil, err
+	}
 	result.PostSnapshot = postSnapshot
 	result.ExpectedLedgerHash = postSnapshot.LedgerHash
 	result.ExpectedAccountHash = postSnapshot.AccountHash
@@ -731,6 +735,25 @@ func (r *replayRangeRunner) processBlock(
 	}
 
 	return result, newStateMap, nil
+}
+
+func validateReplaySnapshotLink(preSnapshot, postSnapshot *statecompare.LedgerSnapshot, targetLedger uint32) error {
+	if preSnapshot == nil || postSnapshot == nil {
+		return errors.New("replay snapshot cannot be nil")
+	}
+	if postSnapshot.LedgerIndex != targetLedger {
+		return fmt.Errorf("target snapshot ledger index: got %d, expected %d", postSnapshot.LedgerIndex, targetLedger)
+	}
+	if targetLedger == 0 {
+		return errors.New("target ledger cannot be zero")
+	}
+	if preSnapshot.LedgerIndex != targetLedger-1 {
+		return fmt.Errorf("parent snapshot ledger index: got %d, expected %d", preSnapshot.LedgerIndex, targetLedger-1)
+	}
+	if postSnapshot.ParentHash != preSnapshot.LedgerHash {
+		return fmt.Errorf("ledger %d parent hash does not match ledger %d hash", targetLedger, preSnapshot.LedgerIndex)
+	}
+	return nil
 }
 
 func (r *replayRangeRunner) dumpRangeDebugInfo(ledgerIndex uint32, result *BlockResult, preStateMap, postStateMap *shamap.SHAMap) {
