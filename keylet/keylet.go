@@ -272,6 +272,9 @@ func DepositPreauthCredentials(owner [20]byte, sortedCreds []CredentialPair) Key
 	for i := range hashes {
 		data = append(data, hashes[i][:])
 	}
+	var sizeBytes [8]byte
+	binary.BigEndian.PutUint64(sizeBytes[:], uint64(len(hashes)))
+	data = append(data, sizeBytes[:])
 
 	return Keylet{
 		Type: entry.TypeDepositPreauth,

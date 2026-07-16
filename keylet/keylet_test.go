@@ -156,3 +156,39 @@ func TestXChainClaimKeyletsHashRawBridgeFields(t *testing.T) {
 		})
 	}
 }
+
+func TestDepositPreauthKeylets(t *testing.T) {
+	decodeAccount := func(encoded string) [20]byte {
+		t.Helper()
+		decoded, err := hex.DecodeString(encoded)
+		if err != nil {
+			t.Fatalf("decode account ID %s: %v", encoded, err)
+		}
+		if len(decoded) != 20 {
+			t.Fatalf("account ID %s decoded to %d bytes, want 20", encoded, len(decoded))
+		}
+		var account [20]byte
+		copy(account[:], decoded)
+		return account
+	}
+
+	owner := decodeAccount("09127e0295e2e0fcb76f70d816fed9029a771f30")
+	issuer := decodeAccount("0811f666a9c82537a71592b583c4b78e4b7dcc2c")
+	credentials := []CredentialPair{{Issuer: issuer, CredentialType: []byte("Administration")}}
+
+	tests := []struct {
+		name     string
+		key      Keylet
+		expected string
+	}{
+		{"account", DepositPreauth(owner, issuer), "06d8409e9a8d44925723cddb021e1260dc294098da1d7b0eda2245557c622ca0"},
+		{"credentials", DepositPreauthCredentials(owner, credentials), "95a4bc7f742e6191c206128c655c59fdfd1344e5421b258536c4d00314e577a2"},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			if actual := hex.EncodeToString(tc.key.Key[:]); actual != tc.expected {
+				t.Fatalf("DepositPreauth key = %s, want %s", actual, tc.expected)
+			}
+		})
+	}
+}
