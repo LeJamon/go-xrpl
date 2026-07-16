@@ -281,10 +281,12 @@ func TestLoanSet_UpwardPaymentCountXRP(t *testing.T) {
 
 	loanKey := keylet.Loan(brokerKey.Key, 1)
 	loan := decode("Loan", loanKey)
-	assertField("Loan", loan, "PeriodicPayment", "83333.33848930448955")
+	assertField("Loan", loan, "PeriodicPayment", "83333")
 	assertField("Loan", loan, "PrincipalOutstanding", "1000000")
 	assertField("Loan", loan, "TotalValueOutstanding", "1000001")
-	assertField("Loan", loan, "LoanScale", 0)
+	if _, ok := loan["LoanScale"]; ok {
+		t.Errorf("Loan LoanScale = %v, want omitted", loan["LoanScale"])
+	}
 	assertField("Loan", loan, "PaymentRemaining", uint32(12))
 
 	vaultFields := decode("Vault", vaultKey)
