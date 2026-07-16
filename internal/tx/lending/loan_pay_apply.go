@@ -117,7 +117,7 @@ func (l *LoanPay) CalculateBaseFee(view tx.LedgerView, config tx.EngineConfig) u
 	if l.GetFlags()&TfLoanOverpayment != 0 {
 		mode = state.RoundUpward
 	}
-	est := amountToLendNumForRules(l.Amount, config.RequireRules()).DivRounded(regular, mode).ToInt64WithMode(state.RoundTowardsZero)
+	est := amountToLendNumForRules(l.Amount, config.RequireRules()).DivRounded(regular, mode).ToInt64WithMode(mode)
 	if est < 0 {
 		est = 0
 	}

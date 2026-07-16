@@ -125,6 +125,43 @@ Behavioral oracle: clean local rippled `3.2.0` worktree at
 - Passed `go test ./internal/replaytool -count=1`, focused race tests, `just vet`,
   CI-pinned strict and advisory lint with zero issues, `just build`, formatting,
   and `git diff --check`.
+# Issue #1337 — LoanSet payment-count rounding
+
+## Goal
+
+- Accept valid LoanSet schedules whose upward-rounded payment quotient remains
+  fractionally below the integer payment count.
+- Match rippled v3.2.0's ambient upward rounding through the final integer
+  conversion.
+- Cover the replay values from issue #1337 and audit equivalent guarded
+  conversions for the same error pattern.
+
+## Plan
+
+- [x] Validate the issue, linked work, clean worktree, exact base, and local oracle.
+- [x] Trace LoanSet payment guards and rippled v3.2.0 Number rounding semantics.
+- [x] Add a focused failing regression and implement the minimal parity fix.
+- [x] Audit other ports of NumberRoundModeGuard expressions with final conversions.
+- [x] Run formatting, focused and broader tests, vet, lint, build, and diff review.
+- [x] Record review results, commit intentional files, push, and open the PR.
+
+## Review
+
+- Rippled v3.2.0 keeps `Number::RoundingMode::Upward` active through both
+  Guard 4's division and its `std::int64_t` conversion. Go now applies upward
+  rounding to both operations, so the recorded 11.999... quotient computes 12
+  payments and returns `tesSUCCESS` across all Number mantissa scales.
+- The ambient-rounding audit found and fixed the same mismatch in LoanPay fee
+  estimation: overpayments now retain upward rounding through the payment-count
+  conversion. Other rounded-arithmetic integer conversions are mode-consistent.
+- The primary devnet vector reproduces its exact periodic payment, total value,
+  and loan scale from the LoanSet inputs. The cited replay artifacts and parent
+  ledger state are not present locally, so the ledger/account/transaction roots
+  could not be rerun.
+- Passed `just fmt`, `go test ./internal/tx/lending/... -count=1`,
+  `go test ./internal/testing/lending -count=1`, `just test-tx`, `just vet`,
+  CI-pinned strict and advisory lint, the tag-gated PostgreSQL vet check,
+  `just build-all`, and `git diff --check`.
 
 # Issue #1331 — VaultCreate Scale template allowlist
 

@@ -162,4 +162,10 @@ func TestLoanPay_CalculateBaseFeeCap(t *testing.T) {
 	if got := pay.CalculateBaseFee(view, cfg(false)); got != 40*10 {
 		t.Errorf("fixCleanup3_1_3 OFF: got %d, want %d (40 increments, uncapped)", got, 40*10)
 	}
+
+	overpayment := NewLoanPay(ownerAddr, loanIDHex, tx.NewXRPAmount(51))
+	overpayment.Common.SetFlags(TfLoanOverpayment)
+	if got := overpayment.CalculateBaseFee(view, cfg(true)); got != 2*10 {
+		t.Errorf("overpayment: got %d, want %d (2 upward-rounded increments)", got, 2*10)
+	}
 }

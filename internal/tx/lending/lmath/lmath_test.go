@@ -4,6 +4,7 @@ import (
 	"testing"
 
 	"github.com/LeJamon/go-xrpl/internal/ledger/state"
+	"github.com/LeJamon/go-xrpl/internal/tx/ter"
 )
 
 func init() { state.SetNumberSwitchover(true) }
@@ -224,4 +225,61 @@ func TestComputePowerMinusOne(t *testing.T) {
 	if !computePowerMinusOne(num(5, -2), 0).IsZero() || !computePowerMinusOne(num(0, 0), 5).IsZero() {
 		t.Fatalf("degenerate powerMinusOne must be zero")
 	}
+}
+
+func TestCheckLoanGuardsUpwardPaymentCount(t *testing.T) {
+	parse := func(t *testing.T, scale state.MantissaScale, value string) N {
+		t.Helper()
+		n, err := state.ParseXRPLNumber(value, scale, state.RoundToNearest)
+		if err != nil {
+			t.Fatalf("ParseXRPLNumber(%q): %v", value, err)
+		}
+		return n
+	}
+
+	for _, tc := range []struct {
+		name  string
+		scale state.MantissaScale
+	}{
+		{"small", state.MantissaScaleSmall},
+		{"large legacy", state.MantissaScaleLargeLegacy},
+		{"large", state.MantissaScaleLarge},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			principal := parse(t, tc.scale, "1000")
+			properties := LoanProperties{
+				PeriodicPayment: parse(t, tc.scale, "83.33364250408379297"),
+				LoanState: LoanState{
+					ValueOutstanding: parse(t, tc.scale, "1000.003710049006"),
+				},
+				LoanScale:             -12,
+				FirstPaymentPrincipal: parse(t, tc.scale, "1"),
+			}
+			roundedPayment := roundPeriodicPayment(Asset{}, properties.PeriodicPayment, properties.LoanScale)
+			quotient := properties.LoanState.ValueOutstanding.DivRounded(roundedPayment, state.RoundUpward)
+
+			if got := quotient.ToInt64WithMode(state.RoundTowardsZero); got != 11 {
+				t.Fatalf("toward-zero payment count = %d, want 11", got)
+			}
+			if got := quotient.ToInt64WithMode(state.RoundUpward); got != 12 {
+				t.Fatalf("upward payment count = %d, want 12", got)
+			}
+			if got := CheckLoanGuards(Asset{}, principal, true, 12, properties); got != ter.TesSUCCESS {
+				t.Fatalf("CheckLoanGuards = %v, want tesSUCCESS", got)
+			}
+		})
+	}
+
+	t.Run("loan set inputs", func(t *testing.T) {
+		principal := parse(t, state.MantissaScaleLarge, "1000")
+		properties := ComputeLoanProperties(true, Asset{}, principal, 500, 3600, 12, 0, -12)
+		eq(t, "periodic payment", properties.PeriodicPayment, parse(t, state.MantissaScaleLarge, "83.33364250408379297"))
+		eq(t, "value outstanding", properties.LoanState.ValueOutstanding, parse(t, state.MantissaScaleLarge, "1000.003710049006"))
+		if properties.LoanScale != -12 {
+			t.Fatalf("loan scale = %d, want -12", properties.LoanScale)
+		}
+		if got := CheckLoanGuards(Asset{}, principal, true, 12, properties); got != ter.TesSUCCESS {
+			t.Fatalf("CheckLoanGuards = %v, want tesSUCCESS", got)
+		}
+	})
 }
