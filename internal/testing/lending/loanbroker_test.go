@@ -323,7 +323,8 @@ func TestLoanSet_UpwardPaymentCountXRP(t *testing.T) {
 		}
 		return found
 	}
-	if !inOwnerDir("LoanBroker", accountID("LoanBroker", broker)) {
+	brokerAccount := accountID("LoanBroker", broker)
+	if !inOwnerDir("LoanBroker", brokerAccount) {
 		t.Error("Loan missing from LoanBroker pseudo-account owner directory")
 	}
 	if !inOwnerDir("borrower", borrower.AccountID()) {
@@ -331,6 +332,17 @@ func TestLoanSet_UpwardPaymentCountXRP(t *testing.T) {
 	}
 	if inOwnerDir("Vault", accountID("Vault", vaultFields)) {
 		t.Error("Loan present in Vault pseudo-account owner directory")
+	}
+	dirData, err := env.LedgerEntry(keylet.OwnerDir(brokerAccount))
+	if err != nil {
+		t.Fatalf("read LoanBroker owner directory: %v", err)
+	}
+	dir, err := state.ParseDirectoryNode(dirData)
+	if err != nil {
+		t.Fatalf("decode LoanBroker owner directory: %v", err)
+	}
+	if dir.Owner != brokerAccount {
+		t.Fatalf("LoanBroker directory owner = %x, want %x", dir.Owner, brokerAccount)
 	}
 
 	if got := env.OwnerCount(borrower); got != 1 {
