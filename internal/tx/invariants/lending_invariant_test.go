@@ -121,6 +121,90 @@ func TestValidLoanBroker_CoverAvailableBounds(t *testing.T) {
 	}
 }
 
+func TestValidLoanBroker_MPTCoverMatchesPseudoHolding(t *testing.T) {
+	var ownerID, pseudoID [20]byte
+	for i := range ownerID {
+		ownerID[i] = 0x11
+		pseudoID[i] = 0x22
+	}
+	ownerAddr, err := state.EncodeAccountID(ownerID)
+	if err != nil {
+		t.Fatalf("encode owner: %v", err)
+	}
+	pseudoAddr, err := state.EncodeAccountID(pseudoID)
+	if err != nil {
+		t.Fatalf("encode pseudo: %v", err)
+	}
+
+	var vaultID [32]byte
+	for i := range vaultID {
+		vaultID[i] = 0x33
+	}
+	mptID := keylet.MakeMPTID(50, ownerID)
+	mptIDHex := strings.ToUpper(hex.EncodeToString(mptID[:]))
+	vaultIDHex := strings.ToUpper(hex.EncodeToString(vaultID[:]))
+
+	vaultBytes := mustEncode(t, map[string]any{
+		"LedgerEntryType":   "Vault",
+		"Flags":             0,
+		"Sequence":          1,
+		"OwnerNode":         "0",
+		"Owner":             ownerAddr,
+		"Account":           pseudoAddr,
+		"Asset":             map[string]any{"mpt_issuance_id": mptIDHex},
+		"ShareMPTID":        strings.Repeat("0", 48),
+		"WithdrawalPolicy":  1,
+		"PreviousTxnID":     strings.Repeat("0", 64),
+		"PreviousTxnLgrSeq": uint32(0),
+	})
+	accountBytes := mustEncode(t, map[string]any{
+		"LedgerEntryType":   "AccountRoot",
+		"Account":           pseudoAddr,
+		"Balance":           "0",
+		"Flags":             0,
+		"OwnerCount":        0,
+		"Sequence":          0,
+		"PreviousTxnID":     strings.Repeat("0", 64),
+		"PreviousTxnLgrSeq": uint32(0),
+	})
+	tokenBytes, err := state.SerializeMPToken(&state.MPTokenData{
+		Account:           pseudoID,
+		MPTokenIssuanceID: mptID,
+		MPTAmount:         110,
+	})
+	if err != nil {
+		t.Fatalf("serialize MPToken: %v", err)
+	}
+	brokerBytes := mustEncode(t, map[string]any{
+		"LedgerEntryType":   "LoanBroker",
+		"Flags":             0,
+		"Owner":             ownerAddr,
+		"Account":           pseudoAddr,
+		"VaultID":           vaultIDHex,
+		"CoverAvailable":    "110",
+		"Sequence":          1,
+		"OwnerNode":         "0",
+		"VaultNode":         "0",
+		"LoanSequence":      uint32(0),
+		"PreviousTxnID":     strings.Repeat("0", 64),
+		"PreviousTxnLgrSeq": uint32(0),
+	})
+	view := mapView{data: map[[32]byte][]byte{
+		keylet.VaultByID(vaultID).Key:           vaultBytes,
+		keylet.Account(pseudoID).Key:            accountBytes,
+		keylet.MPTokenByID(mptID, pseudoID).Key: tokenBytes,
+	}}
+	rules := amendment.NewRules([][32]byte{
+		amendment.FeatureLendingProtocol,
+		amendment.FeatureFixCleanup3_1_3,
+	})
+	entries := []InvariantEntry{{EntryType: "LoanBroker", After: brokerBytes}}
+
+	if violation := checkValidLoanBroker(entries, view, rules); violation != nil {
+		t.Fatalf("matching MPT cover rejected: %v", violation)
+	}
+}
+
 // TestValidLoanBroker_InertWhenLendingDisabled asserts the invariant does not run
 // (and cannot false-positive) while LendingProtocol is off.
 func TestValidLoanBroker_InertWhenLendingDisabled(t *testing.T) {

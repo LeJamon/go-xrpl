@@ -25,17 +25,6 @@ func PseudoAssetHolds(view AssetReadView, account [20]byte, vaultData []byte) (s
 	if err != nil {
 		return state.NewXRPLNumber(0, 0), false
 	}
-	if isNativeAsset(vd.Asset) {
-		data, rerr := view.Read(keylet.Account(account))
-		if rerr != nil || data == nil {
-			return state.NewXRPLNumber(0, 0), false
-		}
-		ar, perr := state.ParseAccountRoot(data)
-		if perr != nil {
-			return state.NewXRPLNumber(0, 0), false
-		}
-		return state.NewXRPLNumber(int64(ar.Balance), 0), true
-	}
 	if vd.AssetIsMPT {
 		data, rerr := view.Read(keylet.MPTokenByID(vd.AssetMPTID, account))
 		if rerr != nil {
@@ -49,6 +38,17 @@ func PseudoAssetHolds(view AssetReadView, account [20]byte, vaultData []byte) (s
 			return state.NewXRPLNumber(0, 0), false
 		}
 		return state.NewXRPLNumber(int64(token.MPTAmount), 0), true
+	}
+	if isNativeAsset(vd.Asset) {
+		data, rerr := view.Read(keylet.Account(account))
+		if rerr != nil || data == nil {
+			return state.NewXRPLNumber(0, 0), false
+		}
+		ar, perr := state.ParseAccountRoot(data)
+		if perr != nil {
+			return state.NewXRPLNumber(0, 0), false
+		}
+		return state.NewXRPLNumber(int64(ar.Balance), 0), true
 	}
 	issuerID, derr := state.DecodeAccountID(vd.Asset.Issuer)
 	if derr != nil {
