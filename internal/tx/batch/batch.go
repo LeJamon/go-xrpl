@@ -43,6 +43,13 @@ func (r *RawTransactionData) UnmarshalJSON(data []byte) error {
 	if err := json.Unmarshal(data, &innerMap); err != nil {
 		return err
 	}
+	typeName, _ := innerMap["TransactionType"].(string)
+	txType, knownType := tx.TypeFromName(typeName)
+	if knownType {
+		if err := tx.ValidateTemplateFields(txType, innerMap); err != nil {
+			return fmt.Errorf("validate inner transaction: %w", err)
+		}
+	}
 	encoded, err := binarycodec.Encode(innerMap)
 	if err != nil {
 		return fmt.Errorf("encode inner transaction: %w", err)
