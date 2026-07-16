@@ -210,10 +210,6 @@ var explicitlyCreatedDefaults = map[string][]createdField{
 	},
 }
 
-// fillCreatedDefaults restores both required default-zero fields and optional
-// defaults that the entry's constructor always writes. An absent field in
-// CreatedNode.NewFields is therefore known to carry the listed default in the
-// canonical SLE.
 func fillCreatedDefaults(obj map[string]any, entryType string) {
 	for _, f := range requiredDefaults[entryType] {
 		if _, present := obj[f.Name]; !present {
@@ -223,6 +219,29 @@ func fillCreatedDefaults(obj map[string]any, entryType string) {
 	for _, f := range explicitlyCreatedDefaults[entryType] {
 		if _, present := obj[f.Name]; !present {
 			obj[f.Name] = f.Value
+		}
+	}
+	if entryType == "Escrow" {
+		fillEscrowDirectoryDefaults(obj)
+	}
+}
+
+func fillEscrowDirectoryDefaults(obj map[string]any) {
+	account, hasAccount := metaAccountID(obj, "Account")
+	destination, hasDestination := metaAccountID(obj, "Destination")
+	if !hasAccount || !hasDestination {
+		return
+	}
+	if account != destination {
+		if _, present := obj["DestinationNode"]; !present {
+			obj["DestinationNode"] = "0"
+		}
+	}
+
+	issuer, hasIssuer := metaIssuer(obj, "Amount")
+	if hasIssuer && issuer != account && issuer != destination {
+		if _, present := obj["IssuerNode"]; !present {
+			obj["IssuerNode"] = "0"
 		}
 	}
 }

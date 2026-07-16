@@ -550,6 +550,257 @@ func TestReconstructFromMeta_DirectoryIndexes(t *testing.T) {
 	assertEntryBytes(t, corrected, bookRoot, wantBook, "order book directory")
 }
 
+func TestFillCreatedDefaults_EscrowDirectoryNodes(t *testing.T) {
+	const destination = "rrrrrrrrrrrrrrrrrrrrBZbvji"
+	const issuer = "rrrrrrrrrrrrrrrrrrrrrhoLvTp"
+
+	tests := []struct {
+		name       string
+		fields     map[string]any
+		wantDest   any
+		wantIssuer any
+	}{
+		{
+			name: "cross-account page zero",
+			fields: map[string]any{
+				"Account": testAccount, "Destination": destination, "Amount": "10000",
+			},
+			wantDest: "0",
+		},
+		{
+			name: "self escrow",
+			fields: map[string]any{
+				"Account": testAccount, "Destination": testAccount, "Amount": "10000",
+			},
+		},
+		{
+			name: "self IOU escrow with third-party issuer",
+			fields: map[string]any{
+				"Account": testAccount, "Destination": testAccount,
+				"Amount": map[string]any{"value": "10", "currency": "USD", "issuer": issuer},
+			},
+			wantIssuer: "0",
+		},
+		{
+			name: "explicit nonzero directory pages",
+			fields: map[string]any{
+				"Account": testAccount, "Destination": destination,
+				"Amount":          map[string]any{"value": "10", "currency": "USD", "issuer": issuer},
+				"DestinationNode": "2", "IssuerNode": "3",
+			},
+			wantDest: "2", wantIssuer: "3",
+		},
+		{
+			name: "third-party IOU issuer page zero",
+			fields: map[string]any{
+				"Account": testAccount, "Destination": destination,
+				"Amount": map[string]any{"value": "10", "currency": "USD", "issuer": issuer},
+			},
+			wantDest: "0", wantIssuer: "0",
+		},
+		{
+			name: "destination is IOU issuer",
+			fields: map[string]any{
+				"Account": testAccount, "Destination": destination,
+				"Amount": map[string]any{"value": "10", "currency": "USD", "issuer": destination},
+			},
+			wantDest: "0",
+		},
+		{
+			name: "MPT has no issuer directory",
+			fields: map[string]any{
+				"Account": testAccount, "Destination": destination,
+				"Amount": map[string]any{"value": "10", "mpt_issuance_id": "000000000000000000000000000000000000000000000001"},
+			},
+			wantDest: "0",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			fillCreatedDefaults(tt.fields, "Escrow")
+			if got := tt.fields["DestinationNode"]; got != tt.wantDest {
+				t.Fatalf("DestinationNode = %v, want %v", got, tt.wantDest)
+			}
+			if got := tt.fields["IssuerNode"]; got != tt.wantIssuer {
+				t.Fatalf("IssuerNode = %v, want %v", got, tt.wantIssuer)
+			}
+		})
+	}
+}
+
+func TestReconstructFromMeta_EscrowDestinationDirPageZero(t *testing.T) {
+	const destination = "rrrrrrrrrrrrrrrrrrrrBZbvji"
+	const escrowKeyHex = "07D546EC9389810CEEC2D5C843171BE9F07EAEA05039E5466BF4AC5B19AEAE7C"
+
+	destinationID, err := state.DecodeAccountID(destination)
+	if err != nil {
+		t.Fatalf("DecodeAccountID: %v", err)
+	}
+	destinationPage := keylet.OwnerDirPage(destinationID, 0).Key
+	destinationPageHex := strings.ToUpper(hex.EncodeToString(destinationPage[:]))
+	escrowKey := mustIndex(t, escrowKeyHex)
+
+	meta := encodeMeta(t,
+		map[string]any{"CreatedNode": map[string]any{
+			"LedgerEntryType": "DirectoryNode",
+			"LedgerIndex":     destinationPageHex,
+			"NewFields":       map[string]any{"Owner": destination, "RootIndex": destinationPageHex},
+		}},
+		map[string]any{"CreatedNode": map[string]any{
+			"LedgerEntryType": "Escrow",
+			"LedgerIndex":     escrowKeyHex,
+			"NewFields": map[string]any{
+				"Account": testAccount, "Destination": destination, "Amount": "10000",
+			},
+		}},
+	)
+
+	corrected, err := reconstructFromMeta(putAll(t, nil), []metaTx{{Blob: meta, TxHash: mustIndex(t, testTxHashHex)}}, testLedgerSeq)
+	if err != nil {
+		t.Fatalf("reconstructFromMeta: %v", err)
+	}
+
+	wantEscrow := encodeSLE(t, map[string]any{
+		"LedgerEntryType": "Escrow", "Flags": 0, "OwnerNode": "0", "DestinationNode": "0",
+		"Account": testAccount, "Destination": destination, "Amount": "10000",
+		"PreviousTxnID": testTxHashHex, "PreviousTxnLgrSeq": testLedgerSeq,
+	})
+	wantDestinationDir := encodeSLE(t, map[string]any{
+		"LedgerEntryType": "DirectoryNode", "Flags": 0, "Owner": destination,
+		"RootIndex": destinationPageHex, "Indexes": []string{escrowKeyHex},
+		"PreviousTxnID": testTxHashHex, "PreviousTxnLgrSeq": testLedgerSeq,
+	})
+	assertEntryBytes(t, corrected, escrowKey, wantEscrow, "escrow")
+	assertEntryBytes(t, corrected, destinationPage, wantDestinationDir, "destination directory")
+}
+
+func TestReconstructFromMeta_DirectoryDeletedThenRecreated(t *testing.T) {
+	const destination = "rrrrrrrrrrrrrrrrrrrrBZbvji"
+	const escrowKeyHex = "07D546EC9389810CEEC2D5C843171BE9F07EAEA05039E5466BF4AC5B19AEAE7C"
+	const deletedTxHashHex = "1111111111111111111111111111111111111111111111111111111111111111"
+	const priorTxHashHex = "2222222222222222222222222222222222222222222222222222222222222222"
+
+	destinationID, err := state.DecodeAccountID(destination)
+	if err != nil {
+		t.Fatalf("DecodeAccountID: %v", err)
+	}
+	authorizedID, err := state.DecodeAccountID(testAccount)
+	if err != nil {
+		t.Fatalf("DecodeAccountID: %v", err)
+	}
+	destinationPage := keylet.OwnerDirPage(destinationID, 0).Key
+	destinationPageHex := strings.ToUpper(hex.EncodeToString(destinationPage[:]))
+	oldKey := keylet.DepositPreauth(destinationID, authorizedID).Key
+	oldKeyHex := strings.ToUpper(hex.EncodeToString(oldKey[:]))
+	escrowKey := mustIndex(t, escrowKeyHex)
+
+	preState := putAll(t, map[[32]byte][]byte{
+		destinationPage: encodeSLE(t, map[string]any{
+			"LedgerEntryType": "DirectoryNode", "Flags": 0, "Owner": destination,
+			"RootIndex": destinationPageHex, "Indexes": []string{oldKeyHex},
+		}),
+		oldKey: encodeSLE(t, map[string]any{
+			"LedgerEntryType": "DepositPreauth", "Flags": 0,
+			"Account": destination, "Authorize": testAccount, "OwnerNode": "0",
+			"PreviousTxnID": priorTxHashHex, "PreviousTxnLgrSeq": testLedgerSeq - 1,
+		}),
+	})
+	deleteMeta := encodeMeta(t,
+		map[string]any{"DeletedNode": map[string]any{
+			"LedgerEntryType": "DepositPreauth",
+			"LedgerIndex":     oldKeyHex,
+			"FinalFields":     map[string]any{"Account": destination, "Authorize": testAccount, "Flags": 0, "OwnerNode": "0"},
+		}},
+		map[string]any{"DeletedNode": map[string]any{
+			"LedgerEntryType": "DirectoryNode",
+			"LedgerIndex":     destinationPageHex,
+			"FinalFields":     map[string]any{"Flags": 0, "Owner": destination, "RootIndex": destinationPageHex},
+		}},
+	)
+	createMeta := encodeMeta(t,
+		map[string]any{"CreatedNode": map[string]any{
+			"LedgerEntryType": "DirectoryNode",
+			"LedgerIndex":     destinationPageHex,
+			"NewFields":       map[string]any{"Owner": destination, "RootIndex": destinationPageHex},
+		}},
+		map[string]any{"CreatedNode": map[string]any{
+			"LedgerEntryType": "Escrow",
+			"LedgerIndex":     escrowKeyHex,
+			"NewFields": map[string]any{
+				"Account": testAccount, "Destination": destination, "Amount": "10000",
+			},
+		}},
+	)
+
+	corrected, err := reconstructFromMeta(preState, []metaTx{
+		{Blob: deleteMeta, TxHash: mustIndex(t, deletedTxHashHex)},
+		{Blob: createMeta, TxHash: mustIndex(t, testTxHashHex)},
+	}, testLedgerSeq)
+	if err != nil {
+		t.Fatalf("reconstructFromMeta: %v", err)
+	}
+
+	wantDestinationDir := encodeSLE(t, map[string]any{
+		"LedgerEntryType": "DirectoryNode", "Flags": 0, "Owner": destination,
+		"RootIndex": destinationPageHex, "Indexes": []string{escrowKeyHex},
+		"PreviousTxnID": testTxHashHex, "PreviousTxnLgrSeq": testLedgerSeq,
+	})
+	assertEntryBytes(t, corrected, destinationPage, wantDestinationDir, "recreated destination directory")
+	if _, found, err := corrected.Get(escrowKey); err != nil || !found {
+		t.Fatalf("recreated escrow missing (found=%v err=%v)", found, err)
+	}
+	if _, found, err := corrected.Get(oldKey); err != nil || found {
+		t.Fatalf("deleted deposit preauth present (found=%v err=%v)", found, err)
+	}
+}
+
+func TestRecordMembership_LastOperationWins(t *testing.T) {
+	const account = "rrrrrrrrrrrrrrrrrrrrBZbvji"
+	objectKey := mustIndex(t, "00000000000000000000000000000000000000000000000000000000000000D1")
+	otherKey := mustIndex(t, "00000000000000000000000000000000000000000000000000000000000000D2")
+	accountID, err := state.DecodeAccountID(account)
+	if err != nil {
+		t.Fatalf("DecodeAccountID: %v", err)
+	}
+	pageKey := keylet.OwnerDirPage(accountID, 0).Key
+	fields := map[string]any{"Account": account, "OwnerNode": "0"}
+
+	t.Run("remove then add", func(t *testing.T) {
+		deltas := map[[32]byte]*dirDelta{}
+		recordMembership(deltas, objectKey, "DID", fields, false)
+		recordMembership(deltas, objectKey, "DID", fields, true)
+		members := applyDirDelta([][32]byte{objectKey}, deltas[pageKey])
+		if len(members) != 1 || members[0] != objectKey {
+			t.Fatalf("members = %x, want recreated key", members)
+		}
+	})
+
+	t.Run("add then remove", func(t *testing.T) {
+		deltas := map[[32]byte]*dirDelta{}
+		recordMembership(deltas, objectKey, "DID", fields, true)
+		recordMembership(deltas, objectKey, "DID", fields, false)
+		members := applyDirDelta(nil, deltas[pageKey])
+		if len(members) != 0 {
+			t.Fatalf("members = %x, want empty", members)
+		}
+	})
+
+	t.Run("append remove then add", func(t *testing.T) {
+		delta := &dirDelta{
+			strategy: dirAppend,
+			operations: []dirOperation{
+				{key: objectKey, add: false},
+				{key: objectKey, add: true},
+			},
+		}
+		members := applyDirDelta([][32]byte{objectKey, otherKey}, delta)
+		if len(members) != 2 || members[0] != otherKey || members[1] != objectKey {
+			t.Fatalf("members = %x, want existing key then re-added key", members)
+		}
+	})
+}
+
 // TestReconstructFromMeta_EscrowIssuerDir covers the issuer owner-directory an
 // IOU escrow is listed in (beyond the owner's and destination's): rippled adds a
 // cross-issuer IOU escrow to the issuer's directory to track the locked balance,
@@ -590,12 +841,9 @@ func TestReconstructFromMeta_EscrowIssuerDir(t *testing.T) {
 			"LedgerEntryType": "Escrow",
 			"LedgerIndex":     escrowKey,
 			"NewFields": map[string]any{
-				"Account":         testAccount,
-				"Destination":     destination,
-				"Amount":          map[string]any{"value": "10", "currency": "USD", "issuer": issuer},
-				"OwnerNode":       "0",
-				"DestinationNode": "0",
-				"IssuerNode":      "0",
+				"Account":     testAccount,
+				"Destination": destination,
+				"Amount":      map[string]any{"value": "10", "currency": "USD", "issuer": issuer},
 			},
 		}},
 	)
@@ -615,7 +863,15 @@ func TestReconstructFromMeta_EscrowIssuerDir(t *testing.T) {
 		"PreviousTxnID":     testTxHashHex,
 		"PreviousTxnLgrSeq": testLedgerSeq,
 	})
+	wantEscrow := encodeSLE(t, map[string]any{
+		"LedgerEntryType": "Escrow", "Flags": 0, "OwnerNode": "0",
+		"DestinationNode": "0", "IssuerNode": "0", "Account": testAccount,
+		"Destination":   destination,
+		"Amount":        map[string]any{"value": "10", "currency": "USD", "issuer": issuer},
+		"PreviousTxnID": testTxHashHex, "PreviousTxnLgrSeq": testLedgerSeq,
+	})
 	assertEntryBytes(t, corrected, issuerPage, wantIssuerDir, "issuer directory")
+	assertEntryBytes(t, corrected, mustIndex(t, escrowKey), wantEscrow, "escrow")
 }
 
 // TestReconstructFromMeta_CreatedBookDirectoryXRPSide is the issue's exact
