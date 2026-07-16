@@ -9,9 +9,9 @@ import (
 
 func TestLoanSetCalculateBaseFee(t *testing.T) {
 	for _, tc := range []struct {
-		name                string
-		outerSigners        int
-		counterparty        *tx.CounterpartySignature
+		name               string
+		outerSigners       int
+		counterparty       *tx.CounterpartySignature
 		expectedFeeInDrops uint64
 	}{
 		{"no counterparty signature", 0, nil, 10},
