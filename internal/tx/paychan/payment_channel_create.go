@@ -225,17 +225,19 @@ func (p *PaymentChannelCreate) Apply(ctx *tx.ApplyContext) ter.Result {
 		channelSLE.HasSequence = true
 	}
 
-	// DirInsert into the recipient's owner directory.
-	// Reference: rippled PayChan.cpp doApply() — recipient owner directory.
-	destDirKey := keylet.OwnerDir(destID)
-	destResult, err := state.DirInsert(ctx.View, destDirKey, channelKey.Key, false, func(dir *state.DirectoryNode) {
-		dir.Owner = destID
-	})
-	if err != nil {
-		return ter.TecDIR_FULL
+	if !ctx.Config.ReplayPreFixPayChanRecipientOwnerDir {
+		// DirInsert into the recipient's owner directory.
+		// Reference: rippled PayChan.cpp doApply() — recipient owner directory.
+		destDirKey := keylet.OwnerDir(destID)
+		destResult, err := state.DirInsert(ctx.View, destDirKey, channelKey.Key, false, func(dir *state.DirectoryNode) {
+			dir.Owner = destID
+		})
+		if err != nil {
+			return ter.TecDIR_FULL
+		}
+		channelSLE.DestinationNode = destResult.Page
+		channelSLE.HasDestNode = true
 	}
-	channelSLE.DestinationNode = destResult.Page
-	channelSLE.HasDestNode = true
 
 	// Re-serialize with updated OwnerNode/DestinationNode
 	updatedData, err := state.SerializePayChannelFromData(channelSLE)

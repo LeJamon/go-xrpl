@@ -8,7 +8,9 @@ import (
 	"testing"
 
 	"github.com/LeJamon/go-xrpl/codec/binarycodec"
+	"github.com/LeJamon/go-xrpl/internal/ledger/state"
 	jtx "github.com/LeJamon/go-xrpl/internal/testing"
+	mpttest "github.com/LeJamon/go-xrpl/internal/testing/mpt"
 	"github.com/LeJamon/go-xrpl/internal/tx"
 	"github.com/LeJamon/go-xrpl/internal/tx/lending"
 	txsign "github.com/LeJamon/go-xrpl/internal/tx/sign"
@@ -91,6 +93,77 @@ func TestLoanBroker_Lifecycle(t *testing.T) {
 	jtx.RequireTxSuccess(t, env.Submit(del))
 	if env.LedgerEntryExists(keylet.LoanBrokerByID(bk)) {
 		t.Fatalf("LoanBroker entry still exists after delete")
+	}
+}
+
+func TestLoanBrokerSet_MPTVaultCreatesEmptyHolding(t *testing.T) {
+	env := newLendingEnv(t)
+	issuer := jtx.NewAccount("issuer")
+	owner := jtx.NewAccount("owner")
+	token := mpttest.NewMPTTester(t, env, issuer, mpttest.MPTInit{
+		Holders: []*jtx.Account{owner},
+	})
+	token.Create(mpttest.CreateOpts{Flags: mpttest.TfMPTCanTransfer})
+
+	vaultSeq := env.Seq(owner)
+	create := vault.NewVaultCreate(owner.Address, tx.Asset{MPTIssuanceID: token.IssuanceID()})
+	create.Common.Fee = reserveIncrement
+	jtx.RequireTxSuccess(t, env.Submit(create))
+
+	brokerSeq := env.Seq(owner)
+	result := env.Submit(lending.NewLoanBrokerSet(owner.Address, vaultID(owner, vaultSeq)))
+	jtx.RequireTxSuccess(t, result)
+	createdMPTokens := 0
+	for _, node := range result.Metadata.AffectedNodes {
+		if node.NodeType == "CreatedNode" && node.LedgerEntryType == "MPToken" {
+			createdMPTokens++
+		}
+	}
+	if createdMPTokens != 1 {
+		t.Fatalf("created MPToken count = %d, want 1", createdMPTokens)
+	}
+
+	brokerKey := keylet.LoanBroker(owner.AccountID(), brokerSeq)
+	brokerData, err := env.LedgerEntry(brokerKey)
+	if err != nil {
+		t.Fatalf("read LoanBroker: %v", err)
+	}
+	brokerFields, err := binarycodec.DecodeBytes(brokerData)
+	if err != nil {
+		t.Fatalf("decode LoanBroker: %v", err)
+	}
+	pseudoAddress, ok := brokerFields["Account"].(string)
+	if !ok {
+		t.Fatalf("LoanBroker Account = %#v, want address", brokerFields["Account"])
+	}
+	pseudoID, err := state.DecodeAccountID(pseudoAddress)
+	if err != nil {
+		t.Fatalf("decode broker pseudo-account: %v", err)
+	}
+
+	issuanceBytes, err := hex.DecodeString(token.IssuanceID())
+	if err != nil {
+		t.Fatalf("decode MPTokenIssuanceID: %v", err)
+	}
+	var issuanceID [24]byte
+	copy(issuanceID[:], issuanceBytes)
+	holdingData, err := env.LedgerEntry(keylet.MPTokenByID(issuanceID, pseudoID))
+	if err != nil {
+		t.Fatalf("read broker MPToken: %v", err)
+	}
+	holdingFields, err := binarycodec.DecodeBytes(holdingData)
+	if err != nil {
+		t.Fatalf("decode broker MPToken: %v", err)
+	}
+	if got := holdingFields["Account"]; got != pseudoAddress {
+		t.Fatalf("MPToken Account = %v, want %s", got, pseudoAddress)
+	}
+	gotIssuanceID, ok := holdingFields["MPTokenIssuanceID"].(string)
+	if !ok || !strings.EqualFold(gotIssuanceID, token.IssuanceID()) {
+		t.Fatalf("MPTokenIssuanceID = %v, want %s", holdingFields["MPTokenIssuanceID"], token.IssuanceID())
+	}
+	if _, present := holdingFields["MPTAmount"]; present {
+		t.Fatalf("empty broker MPToken unexpectedly contains MPTAmount")
 	}
 }
 

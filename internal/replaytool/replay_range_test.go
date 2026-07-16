@@ -124,6 +124,62 @@ func TestLoadRulesFromState_Populated(t *testing.T) {
 	if rules.Enabled(disabledID) {
 		t.Error("expected AMM to be disabled")
 	}
+	if !rules.Enabled(amendment.FeatureFixPayChanRecipientOwnerDir) {
+		t.Error("expected the current retired-amendment baseline to enable fixPayChanRecipientOwnerDir")
+	}
+}
+
+func TestReplayPreFixPayChanRecipientOwnerDir(t *testing.T) {
+	withoutFix, err := pseudo.SerializeAmendmentsSLE(&pseudo.AmendmentsSLE{
+		Amendments: [][32]byte{amendment.FeatureFlow},
+	})
+	if err != nil {
+		t.Fatalf("serializing amendments SLE without fix: %v", err)
+	}
+	withFix, err := pseudo.SerializeAmendmentsSLE(&pseudo.AmendmentsSLE{
+		Amendments: [][32]byte{amendment.FeatureFlow, amendment.FeatureFixPayChanRecipientOwnerDir},
+	})
+	if err != nil {
+		t.Fatalf("serializing amendments SLE with fix: %v", err)
+	}
+
+	for _, tc := range []struct {
+		name           string
+		historicalGate bool
+		entry          []byte
+		wantPreFix     bool
+	}{
+		{name: "default ignores absent retired ID", entry: withoutFix},
+		{name: "historical gate before activation", historicalGate: true, entry: withoutFix, wantPreFix: true},
+		{name: "historical gate after activation", historicalGate: true, entry: withFix},
+		{name: "historical gate without Amendments entry", historicalGate: true, wantPreFix: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			entries := map[[32]byte][]byte{{0x01}: entry(0xaa)}
+			if tc.entry != nil {
+				entries[keylet.Amendments().Key] = tc.entry
+			}
+			stateMap := buildReplayStateMap(t, entries)
+			got, err := replayPreFixPayChanRecipientOwnerDir(stateMap, tc.historicalGate)
+			if err != nil {
+				t.Fatalf("replayPreFixPayChanRecipientOwnerDir: %v", err)
+			}
+			if got != tc.wantPreFix {
+				t.Fatalf("replayPreFixPayChanRecipientOwnerDir = %t, want %t", got, tc.wantPreFix)
+			}
+		})
+	}
+}
+
+func TestReplayRangeLegacyPayChanOwnerDirFlag(t *testing.T) {
+	cmd := newReplayRangeCmd()
+	flag := cmd.Flags().Lookup("legacy-paychan-owner-dir-gate")
+	if flag == nil {
+		t.Fatal("legacy-paychan-owner-dir-gate flag is not registered")
+	}
+	if flag.DefValue != "false" {
+		t.Fatalf("legacy-paychan-owner-dir-gate default = %q, want false", flag.DefValue)
+	}
 }
 
 func TestCheckpointRoundTrip(t *testing.T) {

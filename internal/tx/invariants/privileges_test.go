@@ -31,8 +31,12 @@ func TestPrivilegeTable(t *testing.T) {
 		{protocol.TxTypeVaultDelete, mustDeleteAcct | destroyMPTIssuance | mustModifyVault},
 		{protocol.TxTypeVaultDeposit, mayAuthorizeMPT | mustModifyVault},
 		{protocol.TxTypeVaultWithdraw, mayDeleteMPT | mayAuthorizeMPT | mustModifyVault},
-		{TxType(74), createPseudoAcct | mayAuthorizeMPT}, // ttLOAN_BROKER_SET
-		{TxType(75), mustDeleteAcct | mayAuthorizeMPT},   // ttLOAN_BROKER_DELETE
+		{protocol.TxTypeLoanBrokerSet, createPseudoAcct | mayAuthorizeMPT},
+		{protocol.TxTypeLoanBrokerDelete, mustDeleteAcct | mayAuthorizeMPT},
+		{protocol.TxTypeLoanBrokerCoverWithdraw, mayAuthorizeMPT},
+		{protocol.TxTypeLoanSet, mayAuthorizeMPT | mustModifyVault},
+		{protocol.TxTypeLoanManage, mayModifyVault},
+		{protocol.TxTypeLoanPay, mayAuthorizeMPT | mustModifyVault},
 	}
 	for _, c := range cases {
 		if got := txPrivileges[c.txType]; got != c.priv {

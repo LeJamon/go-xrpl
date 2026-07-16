@@ -25,8 +25,7 @@ func LoadAmendmentsFromLedger(reader Reader) (*amendment.Rules, error) {
 		return nil, fmt.Errorf("failed to check amendments existence: %w", err)
 	}
 	if !exists {
-		// No SLE: only the permanently-enabled retired amendments are active
-		// (never stored, but their code runs unconditionally in rippled).
+		// No SLE: only the permanently-enabled retired baseline is active.
 		return amendment.NewRules(amendment.PermanentlyEnabledIDs()), nil
 	}
 
@@ -58,7 +57,7 @@ func loadAmendmentsFromData(data []byte) (*amendment.Rules, error) {
 		return nil, fmt.Errorf("failed to parse amendments entry: %w", err)
 	}
 
-	// Retired amendments are permanently enabled but never stored in the SLE.
+	// Retired amendments are enabled independently of their serialized presence.
 	enabledIDs = append(enabledIDs, amendment.PermanentlyEnabledIDs()...)
 	return amendment.NewRules(enabledIDs), nil
 }
@@ -248,9 +247,24 @@ func LoadAmendmentsFromLedgerEntry(data []byte) (*amendment.Rules, error) {
 	if err != nil {
 		return nil, err
 	}
-	// Retired amendments are permanently enabled but never stored (see LoadAmendmentsFromLedger).
+	// Retired amendments are enabled independently of their serialized presence.
 	enabledIDs = append(enabledIDs, amendment.PermanentlyEnabledIDs()...)
 	return amendment.NewRules(enabledIDs), nil
+}
+
+// IsAmendmentStoredInLedgerEntry reports whether featureID is serialized in the
+// entry, without applying rule aliases or the current retired-amendment baseline.
+func IsAmendmentStoredInLedgerEntry(data []byte, featureID [32]byte) (bool, error) {
+	enabledIDs, err := parseAmendmentsEntry(data)
+	if err != nil {
+		return false, err
+	}
+	for _, id := range enabledIDs {
+		if id == featureID {
+			return true, nil
+		}
+	}
+	return false, nil
 }
 
 // LoadAmendmentsFromHex parses a hex-encoded Amendments ledger entry.

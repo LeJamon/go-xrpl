@@ -58,6 +58,11 @@ type EngineConfig struct {
 	// Standalone indicates if running in standalone mode (relaxes some validation)
 	Standalone bool
 
+	// ReplayPreFixPayChanRecipientOwnerDir reproduces PaymentChannelCreate before
+	// fixPayChanRecipientOwnerDir was enabled. Only historical replay tools should
+	// set it; the zero value preserves rippled v3.2.0 behavior.
+	ReplayPreFixPayChanRecipientOwnerDir bool
+
 	// NetworkID is the network identifier for this node
 	// Networks with ID > 1024 require NetworkID in transactions
 	// Networks with ID <= 1024 are legacy networks and cannot have NetworkID in transactions

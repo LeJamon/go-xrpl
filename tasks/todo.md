@@ -46,6 +46,44 @@ transaction metadata without changing removal behavior when other entries remain
   `fix/issue-1338-keep-owner-directory`; PR #1346 targets `main` at
   https://github.com/LeJamon/go-xrpl/pull/1346.
 
+# Issue #1334 — historical retired-amendment replay compatibility
+
+Target: `origin/main` at `f0db8a22e1386116d08eb7efb21889997bd97af4`.
+Behavioral oracle: clean local rippled v3.2.0 worktree at
+`3c43f4614f87965298773279ff5b85d4c56c637b`.
+
+## Plan
+
+- [x] Validate the open issue, absence of linked PRs, repository authentication,
+      active release branches, clean issue worktree, and exact merge base.
+- [x] Confirm rippled v3.2.0 unconditionally inserts PaymentChannelCreate into
+      the recipient owner directory and serializes `DestinationNode`.
+- [x] Add an explicit replay-only historical gate for
+      `fixPayChanRecipientOwnerDir`, with current v3.2.0 behavior as the default.
+- [x] Thread the compatibility choice only through `replay-range`; leave every
+      live, consensus, standalone, and default replay apply on v3.2.0 semantics.
+- [x] Add focused command/config and PaymentChannelCreate regressions covering
+      default v3.2.0 behavior and the opted-in historical behavior.
+- [x] Run formatting, focused and affected tests, race coverage where useful,
+      build, vet, strict lint, and final diff/merge-base review.
+- [x] Record review results and prepare only the intentional files for commit
+      and a pull request against `main`.
+
+## Review
+
+- `replay-range --legacy-paychan-owner-dir-gate` derives the historical
+  `fixPayChanRecipientOwnerDir` state from each parent ledger's raw Amendments
+  SLE, so a replay crossing activation switches behavior at the correct ledger.
+- The default path remains rippled v3.2.0: PaymentChannelCreate always inserts
+  the recipient owner-directory backlink and serializes `DestinationNode`.
+- The replay-only engine compatibility bit omits that backlink only while the
+  opted-in historical gate is disabled; production Rules and ledger loaders are
+  unchanged.
+- Focused replay, ledger, PayChannel transaction, and PayChannel integration
+  suites pass, as do the full transaction tree and focused race suites.
+- `just build-all`, `just vet`, CI-pinned golangci-lint v2.11.3 with both strict
+  and advisory configs, formatting, and `git diff --check` pass.
+
 # Issue #1336 — Escrow replay directory defaults
 
 Target: `origin/main` at `f0db8a22e1386116d08eb7efb21889997bd97af4`.
