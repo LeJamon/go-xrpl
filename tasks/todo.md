@@ -40,6 +40,55 @@ Behavioral oracle: clean local rippled `3.2.0` worktree at
   CI-pinned strict and advisory lint with zero issues, `just build`, formatting,
   and `git diff --check`.
 
+# Issue #1331 — VaultCreate Scale template allowlist
+
+## Goal
+
+- Accept codec-valid `VaultCreate` transactions that carry the optional `Scale`
+  field, matching rippled v3.2.0.
+- Preserve the existing IOU-only and maximum-scale validation in the VaultCreate
+  transactor.
+- Cover the binary parse/prepare path that rejected the devnet replay transaction
+  before application.
+
+## Plan
+
+- [x] Validate the issue, linked work, clean worktree, exact base, and local oracle.
+- [x] Trace the template allowlist, binary parser, and existing VaultCreate validation.
+- [x] Add `Scale` as an optional VaultCreate template field and a focused binary regression.
+- [x] Run formatting, focused tests, broader transaction tests, vet, lint, build, and diff checks.
+- [x] Review the completed change against rippled v3.2.0 and record the results below.
+
+## Review
+
+- Rippled v3.2.0 declares `VaultCreate.sfScale` as `SoeOptional`; its separate
+  preflight permits values 0 through 18 only for IOU assets. The existing Go
+  transactor already matches those validation and application semantics.
+- The missing optional template entry fixes replay parsing. Finalization also
+  changed the template registry to retain rippled's declaration order for
+  `server_definitions` while deriving lookup maps for admission checks, and
+  closed the same stale-template gap for the already-implemented DynamicMPT
+  mutation fields.
+- Regressions cover binary `ParseAndPrepare`, the ordered VaultCreate format,
+  the complete Scale validation matrix, stored values, and byte-exact blob
+  preservation.
+- Focused and full transaction/Vault tests pass, including the focused race
+  test. `just fmt`, `just build-all`, `just vet`, required CI lint, advisory
+  lint, and `git diff --check` pass.
+- The original devnet replay database is not available in this workspace, so
+  the ledger-range replay was not rerun; the reported parse failure is covered
+  directly by the serialized transaction regression.
+
+## PR #1335 finalization
+
+- [x] Pin the PR head, merge base, clean worktree, and exact local oracle.
+- [x] Review the complete diff for Go correctness and rippled v3.2.0 parity.
+- [x] Preserve canonical transaction-format order and close adjacent registry gaps.
+- [x] Add exact format, Scale branch, persistence, and serialized admission coverage.
+- [x] Pass `just build`, `just vet`, `just lint`, and `git diff --check`.
+- [ ] Commit and push the behavior remediation; require exact-head green CI.
+- [ ] Run the separate comment-cleanup phase and verify the final CI head.
+
 # Issue #1322 — nodestore fallback for ledger hash lookup
 
 ## Goal
