@@ -5,6 +5,7 @@ import (
 	"encoding/binary"
 	"encoding/hex"
 	"errors"
+	"sort"
 
 	"github.com/LeJamon/go-xrpl/crypto/sha512half"
 	"github.com/LeJamon/go-xrpl/ledger/entry"
@@ -253,21 +254,32 @@ func DepositPreauth(owner, authorized [20]byte) Keylet {
 }
 
 // CredentialPair represents an (issuer, credentialType) pair for credential-based
-// deposit preauth keylet computation. Pairs must be sorted before use.
+// deposit preauth keylet computation.
 type CredentialPair struct {
 	Issuer         [20]byte
 	CredentialType []byte
 }
 
 // DepositPreauthCredentials returns the keylet for a credential-based deposit
-// preauthorization entry. The credentials must already be sorted.
+// preauthorization entry. Credentials are sorted and deduplicated before hashing.
 // Reference: rippled Indexes.cpp depositPreauth(owner, authCreds)
-func DepositPreauthCredentials(owner [20]byte, sortedCreds []CredentialPair) Keylet {
-	hashes := make([][32]byte, len(sortedCreds))
-	for i, c := range sortedCreds {
-		hashes[i] = sha512half.Sum(c.Issuer[:], c.CredentialType)
+func DepositPreauthCredentials(owner [20]byte, credentials []CredentialPair) Keylet {
+	sorted := append([]CredentialPair(nil), credentials...)
+	sort.Slice(sorted, func(i, j int) bool {
+		if cmp := bytes.Compare(sorted[i].Issuer[:], sorted[j].Issuer[:]); cmp != 0 {
+			return cmp < 0
+		}
+		return bytes.Compare(sorted[i].CredentialType, sorted[j].CredentialType) < 0
+	})
+
+	hashes := make([][32]byte, 0, len(sorted))
+	for i, c := range sorted {
+		if i > 0 && c.Issuer == sorted[i-1].Issuer && bytes.Equal(c.CredentialType, sorted[i-1].CredentialType) {
+			continue
+		}
+		hashes = append(hashes, sha512half.Sum(c.Issuer[:], c.CredentialType))
 	}
-	data := make([][]byte, 0, 1+len(sortedCreds))
+	data := make([][]byte, 0, 2+len(hashes))
 	data = append(data, owner[:])
 	for i := range hashes {
 		data = append(data, hashes[i][:])
