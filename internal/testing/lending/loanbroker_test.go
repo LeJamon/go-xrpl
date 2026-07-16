@@ -13,8 +13,10 @@ import (
 	mpttest "github.com/LeJamon/go-xrpl/internal/testing/mpt"
 	"github.com/LeJamon/go-xrpl/internal/tx"
 	"github.com/LeJamon/go-xrpl/internal/tx/lending"
+	txsign "github.com/LeJamon/go-xrpl/internal/tx/sign"
 	"github.com/LeJamon/go-xrpl/internal/tx/vault"
 	"github.com/LeJamon/go-xrpl/keylet"
+	"github.com/LeJamon/go-xrpl/protocol"
 )
 
 const reserveIncrement = "50000000" // one owner reserve increment in drops
@@ -217,4 +219,165 @@ func TestLoanBroker_CoverDepositInsufficientFunds(t *testing.T) {
 	// Deposit more than the owner can spend.
 	dep := lending.NewLoanBrokerCoverDeposit(owner.Address, bid, tx.NewXRPAmount(1_000_000_000_000))
 	jtx.RequireTxClaimed(t, env.Submit(dep), jtx.TecINSUFFICIENT_FUNDS)
+}
+
+func TestLoanSet_ReplayUsesApplicationViewCloseTime(t *testing.T) {
+	env := newLendingEnv(t)
+	owner := jtx.NewAccount("owner")
+	borrower := jtx.NewAccount("borrower")
+	env.FundAmount(owner, 10_000_000_000)
+	env.FundAmount(borrower, 10_000_000_000)
+
+	vid := setupXRPVault(t, env, owner, 2_000_000_000)
+	brokerSeq := env.Seq(owner)
+	jtx.RequireTxSuccess(t, env.Submit(lending.NewLoanBrokerSet(owner.Address, vid)))
+	bid := brokerID(owner, brokerSeq)
+
+	for env.Ledger().CloseTimeResolution() != 10 {
+		env.Close()
+	}
+	env.CloseToParentCloseTime(835360951)
+	if got := env.Ledger().CloseTimeResolution(); got != 10 {
+		t.Fatalf("close-time resolution: got %d want 10", got)
+	}
+
+	env.EnableOpenLedgerReplay()
+	interval := uint32(400)
+	loanSet := lending.NewLoanSet(borrower.Address, bid, "1000000")
+	loanSet.PaymentInterval = &interval
+	loanSet.Counterparty = owner.Address
+	loanSet.GetCommon().SigningPubKey = strings.ToUpper(borrower.PublicKeyHex())
+	counterpartySignature, err := txsign.SignCounterparty(
+		loanSet,
+		strings.ToUpper(owner.PublicKeyHex()),
+		"00"+strings.ToUpper(owner.PrivateKeyHex()),
+	)
+	if err != nil {
+		t.Fatalf("sign counterparty: %v", err)
+	}
+	loanSet.GetCommon().CounterpartySignature = counterpartySignature
+	jtx.RequireTxSuccess(t, env.Submit(loanSet))
+
+	// Close() advances by one resolution, so seed it to store 835360952 while
+	// the build view remains at parent plus resolution (835360961).
+	env.SetTime(protocol.FromRippleTime(835360942))
+	env.Close()
+	closed := env.LastClosedLedger()
+	if got := protocol.ToRippleTime(closed.ParentCloseTime()); got != 835360951 {
+		t.Fatalf("stored parent close time: got %d want 835360951", got)
+	}
+	if got := protocol.ToRippleTime(closed.CloseTime()); got != 835360952 {
+		t.Fatalf("stored close time: got %d want 835360952", got)
+	}
+
+	bidBytes, err := hex.DecodeString(bid)
+	if err != nil {
+		t.Fatalf("decode broker ID: %v", err)
+	}
+	var brokerKey [32]byte
+	copy(brokerKey[:], bidBytes)
+	data, err := env.LedgerEntry(keylet.Loan(brokerKey, 1))
+	if err != nil {
+		t.Fatalf("read Loan: %v", err)
+	}
+	loan, err := binarycodec.Decode(hex.EncodeToString(data))
+	if err != nil {
+		t.Fatalf("decode Loan: %v", err)
+	}
+	if got := loan["StartDate"]; got != uint32(835360961) {
+		t.Fatalf("StartDate: got %v want 835360961", got)
+	}
+	if got := loan["NextPaymentDueDate"]; got != uint32(835361361) {
+		t.Fatalf("NextPaymentDueDate: got %v want 835361361", got)
+	}
+}
+
+func TestLoanSet_ReplayRechecksScheduleAgainstApplicationViewCloseTime(t *testing.T) {
+	env := newLendingEnv(t)
+	owner := jtx.NewAccount("owner")
+	borrower := jtx.NewAccount("borrower")
+	env.FundAmount(owner, 10_000_000_000)
+	env.FundAmount(borrower, 10_000_000_000)
+
+	vid := setupXRPVault(t, env, owner, 2_000_000_000)
+	brokerSeq := env.Seq(owner)
+	jtx.RequireTxSuccess(t, env.Submit(lending.NewLoanBrokerSet(owner.Address, vid)))
+	bid := brokerID(owner, brokerSeq)
+
+	for env.Ledger().CloseTimeResolution() != 10 {
+		env.Close()
+	}
+	const parentCloseTime = uint32(835360951)
+	env.CloseToParentCloseTime(parentCloseTime)
+	env.EnableOpenLedgerReplay()
+
+	grace := uint32(5000)
+	interval := ^uint32(0) - parentCloseTime - grace
+	loanSet := lending.NewLoanSet(borrower.Address, bid, "1000000")
+	loanSet.PaymentInterval = &interval
+	loanSet.GracePeriod = &grace
+	loanSet.Counterparty = owner.Address
+	loanSet.GetCommon().SigningPubKey = strings.ToUpper(borrower.PublicKeyHex())
+	counterpartySignature, err := txsign.SignCounterparty(
+		loanSet,
+		strings.ToUpper(owner.PublicKeyHex()),
+		"00"+strings.ToUpper(owner.PrivateKeyHex()),
+	)
+	if err != nil {
+		t.Fatalf("sign counterparty: %v", err)
+	}
+	loanSet.GetCommon().CounterpartySignature = counterpartySignature
+	loanSeq := env.Seq(borrower)
+	jtx.RequireTxSuccess(t, env.Submit(loanSet))
+
+	env.SetTime(protocol.FromRippleTime(835360942))
+	env.Close()
+	if got := env.Seq(borrower); got != loanSeq+1 {
+		t.Fatalf("borrower sequence after claimed replay: got %d want %d", got, loanSeq+1)
+	}
+
+	bidBytes, err := hex.DecodeString(bid)
+	if err != nil {
+		t.Fatalf("decode broker ID: %v", err)
+	}
+	var brokerKey [32]byte
+	copy(brokerKey[:], bidBytes)
+	if env.LedgerEntryExists(keylet.Loan(brokerKey, 1)) {
+		t.Fatal("LoanSet accepted a schedule that overflows from application view close time")
+	}
+
+	const applicationCloseTime = uint32(835360962)
+	interval = ^uint32(0) - applicationCloseTime - grace
+	loanSet = lending.NewLoanSet(borrower.Address, bid, "1000000")
+	loanSet.PaymentInterval = &interval
+	loanSet.GracePeriod = &grace
+	loanSet.Counterparty = owner.Address
+	loanSet.GetCommon().SigningPubKey = strings.ToUpper(borrower.PublicKeyHex())
+	counterpartySignature, err = txsign.SignCounterparty(
+		loanSet,
+		strings.ToUpper(owner.PublicKeyHex()),
+		"00"+strings.ToUpper(owner.PrivateKeyHex()),
+	)
+	if err != nil {
+		t.Fatalf("sign boundary counterparty: %v", err)
+	}
+	loanSet.GetCommon().CounterpartySignature = counterpartySignature
+	jtx.RequireTxSuccess(t, env.Submit(loanSet))
+
+	env.SetTime(protocol.FromRippleTime(835360943))
+	env.Close()
+	data, err := env.LedgerEntry(keylet.Loan(brokerKey, 1))
+	if err != nil {
+		t.Fatalf("read boundary Loan: %v", err)
+	}
+	loan, err := binarycodec.Decode(hex.EncodeToString(data))
+	if err != nil {
+		t.Fatalf("decode boundary Loan: %v", err)
+	}
+	if got := loan["StartDate"]; got != applicationCloseTime {
+		t.Fatalf("boundary StartDate: got %v want %d", got, applicationCloseTime)
+	}
+	if got := loan["NextPaymentDueDate"]; got != ^uint32(0)-grace {
+		t.Fatalf("boundary NextPaymentDueDate: got %v want %d", got, ^uint32(0)-grace)
+	}
 }

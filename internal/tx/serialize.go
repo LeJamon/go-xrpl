@@ -116,10 +116,10 @@ func validateSerializedJSONNumbers(value any) error {
 	return nil
 }
 
-func checkRequiredFields(template map[string]fieldStyle, present map[string]bool) error {
-	for name, style := range template {
-		if style == soeREQUIRED && !present[name] {
-			return fmt.Errorf("transaction is missing required field %q", name)
+func checkRequiredFields(template []templateField, present map[string]bool) error {
+	for _, field := range template {
+		if field.style == soeREQUIRED && !present[field.name] {
+			return fmt.Errorf("transaction is missing required field %q", field.name)
 		}
 	}
 	return nil

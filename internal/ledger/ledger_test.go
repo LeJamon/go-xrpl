@@ -7,6 +7,7 @@ import (
 	"github.com/LeJamon/go-xrpl/drops"
 	"github.com/LeJamon/go-xrpl/internal/ledger/genesis"
 	"github.com/LeJamon/go-xrpl/internal/ledger/header"
+	"github.com/LeJamon/go-xrpl/protocol"
 	"github.com/LeJamon/go-xrpl/shamap"
 )
 
@@ -125,6 +126,45 @@ func TestLedger_Close_UsesDynamicResolution(t *testing.T) {
 	}
 	if got, want := child.CloseTimeResolution(), uint32(20); got != want {
 		t.Errorf("child CloseTimeResolution: got %d want %d (expected step 30→20 at seq=8 agree=true)", got, want)
+	}
+}
+
+func TestNewOpenForBuildUsesProvisionalApplicationTime(t *testing.T) {
+	parent := newParentAt(t, 17, 10, true)
+	parent.header.CloseTime = protocol.FromRippleTime(835360951)
+	acceptedCloseTime := protocol.FromRippleTime(835360952)
+
+	openView, err := NewOpen(parent, acceptedCloseTime)
+	if err != nil {
+		t.Fatalf("NewOpen: %v", err)
+	}
+	if got := protocol.ToRippleTime(openView.CloseTime()); got != 835360952 {
+		t.Fatalf("open-view close time: got %d want 835360952", got)
+	}
+
+	buildView, err := NewOpenForBuild(parent, acceptedCloseTime)
+	if err != nil {
+		t.Fatalf("NewOpenForBuild: %v", err)
+	}
+	if got := protocol.ToRippleTime(buildView.CloseTime()); got != 835360961 {
+		t.Fatalf("build-view close time: got %d want 835360961", got)
+	}
+	if err := buildView.Close(acceptedCloseTime, 0); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+	if got := protocol.ToRippleTime(buildView.CloseTime()); got != 835360952 {
+		t.Fatalf("accepted close time: got %d want 835360952", got)
+	}
+
+	zeroParent := protocol.FromRippleTime(0)
+	if got := protocol.ToRippleTime(ApplicationViewCloseTime(zeroParent, acceptedCloseTime, 10)); got != 835360950 {
+		t.Fatalf("zero-parent application time: got %d want 835360950", got)
+	}
+	if got := protocol.ToRippleTime(ApplicationViewCloseTime(protocol.FromRippleTime(^uint32(0)-9), time.Time{}, 10)); got != 0 {
+		t.Fatalf("wrapped application time: got %d want 0", got)
+	}
+	if got := protocol.ToRippleTime(ApplicationViewCloseTime(zeroParent, protocol.FromRippleTime(^uint32(0)), 10)); got != 0 {
+		t.Fatalf("wrapped zero-parent rounding: got %d want 0", got)
 	}
 }
 

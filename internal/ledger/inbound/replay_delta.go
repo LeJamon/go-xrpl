@@ -14,6 +14,7 @@ import (
 	"github.com/LeJamon/go-xrpl/codec/binarycodec/serdes"
 	"github.com/LeJamon/go-xrpl/crypto/sha512half"
 	"github.com/LeJamon/go-xrpl/drops"
+	"github.com/LeJamon/go-xrpl/internal/consensus"
 	"github.com/LeJamon/go-xrpl/internal/ledger"
 	"github.com/LeJamon/go-xrpl/internal/ledger/header"
 	"github.com/LeJamon/go-xrpl/internal/peermanagement/message"
@@ -424,6 +425,18 @@ func (r *ReplayDelta) verifyAndBuild(resp *message.ReplayDeltaResponse) error {
 			return fmt.Errorf("ledger seq mismatch: header %d, expected %d",
 				hdr.LedgerIndex, r.parent.Sequence()+1)
 		}
+		parentHeader := r.parent.Header()
+		applicationResolution := consensus.GetNextLedgerTimeResolution(
+			parentHeader.CloseTimeResolution,
+			parentHeader.GetCloseAgree(),
+			hdr.LedgerIndex,
+		)
+		if hdr.CloseTimeResolution != applicationResolution {
+			return fmt.Errorf(
+				"target close time resolution: got %d, derived %d from parent",
+				hdr.CloseTimeResolution, applicationResolution,
+			)
+		}
 	}
 
 	// Reconstruct the tx SHAMap by inserting every leaf blob keyed by
@@ -560,11 +573,24 @@ func (r *ReplayDelta) Apply(engineCfg tx.EngineConfig) (*ledger.Ledger, error) {
 		return nil, fmt.Errorf("snapshot parent state: %w", err)
 	}
 	txMap := shamap.New(shamap.TypeTransaction)
+	parentHeader := r.parent.Header()
+	applicationResolution := consensus.GetNextLedgerTimeResolution(
+		parentHeader.CloseTimeResolution,
+		parentHeader.GetCloseAgree(),
+		hdr.LedgerIndex,
+	)
+	if hdr.CloseTimeResolution != applicationResolution {
+		return nil, fmt.Errorf(
+			"target close time resolution: got %d, derived %d from parent",
+			hdr.CloseTimeResolution, applicationResolution,
+		)
+	}
+	applicationCloseTime := ledger.ApplicationViewCloseTime(r.parent.CloseTime(), hdr.CloseTime, applicationResolution)
 	openHdr := header.LedgerHeader{
 		LedgerIndex:         hdr.LedgerIndex,
 		ParentHash:          r.parent.Hash(),
 		ParentCloseTime:     r.parent.CloseTime(),
-		CloseTime:           hdr.CloseTime,
+		CloseTime:           applicationCloseTime,
 		CloseTimeResolution: hdr.CloseTimeResolution,
 		// Drops baseline matches rippled's Ledger(parent, closeTime)
 		// constructor: child inherits parent's totalCoins; Close()
@@ -584,9 +610,13 @@ func (r *ReplayDelta) Apply(engineCfg tx.EngineConfig) (*ledger.Ledger, error) {
 	// any terRETRY indicates divergence.
 	engineCfg.LedgerSequence = hdr.LedgerIndex
 	engineCfg.ParentCloseTime = parentCloseTimeRippleEpoch(r.parent)
+	engineCfg.ApplicationCloseTime = protocol.ToRippleTime(applicationCloseTime)
+	engineCfg.ApplicationCloseTimeSet = true
 	engineCfg.ParentHash = r.parent.Hash()
 	engineCfg.ApplyFlags = tx.TapNONE
 	engineCfg.OpenLedger = false
+	engineCfg.ViewOpen = false
+	engineCfg.EnforceLoadFee = false
 	if engineCfg.Rules == nil {
 		// Caller didn't supply rules: derive from the parent's
 		// Amendments SLE so the engine sees the same amendment set

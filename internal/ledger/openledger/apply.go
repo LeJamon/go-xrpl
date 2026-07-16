@@ -57,7 +57,11 @@ type ApplyConfig struct {
 	// equivalent EngineConfig field; this struct lets the
 	// consensus-build path do the same.
 	ParentCloseTime uint32
-	Logger          xrpllog.Logger
+	// ApplicationCloseTime is the provisional successor time exposed while a
+	// closed ledger is built. Open-ledger callers leave it unset.
+	ApplicationCloseTime    uint32
+	ApplicationCloseTimeSet bool
+	Logger                  xrpllog.Logger
 	// SkipSignatureVerification forces signature checks off on every
 	// pass (mirrors AcceptLedger's standalone path where
 	// SkipSignatureVerification = s.config.Standalone). When false,
@@ -146,12 +150,14 @@ func applyAndClassify(bp *txengine.BlockProcessor, transaction tx.Transaction, b
 // committing).
 func applyOneSingle(view *ledger.Ledger, transaction tx.Transaction, blob []byte, retry bool, cfg ApplyConfig) Result {
 	engineConfig := tx.EngineConfig{
-		BaseFee:          cfg.BaseFee,
-		ReserveBase:      cfg.ReserveBase,
-		ReserveIncrement: cfg.ReserveIncrement,
-		LedgerSequence:   cfg.LedgerSequence,
-		NetworkID:        cfg.NetworkID,
-		ParentCloseTime:  cfg.ParentCloseTime,
+		BaseFee:                 cfg.BaseFee,
+		ReserveBase:             cfg.ReserveBase,
+		ReserveIncrement:        cfg.ReserveIncrement,
+		LedgerSequence:          cfg.LedgerSequence,
+		NetworkID:               cfg.NetworkID,
+		ParentCloseTime:         cfg.ParentCloseTime,
+		ApplicationCloseTime:    cfg.ApplicationCloseTime,
+		ApplicationCloseTimeSet: cfg.ApplicationCloseTimeSet,
 		// Real parent hash drives pseudo-account derivation (AMMCreate);
 		// the zero value forks the derived account ID from the network.
 		ParentHash:                view.ParentHash(),
@@ -208,12 +214,14 @@ func ApplyTxs(view *ledger.Ledger, txs []PendingTx, retries *[]PendingTx, cfg Ap
 
 	buildEngine := func(certainRetry, skipSig bool) *txengine.BlockProcessor {
 		engineConfig := tx.EngineConfig{
-			BaseFee:          cfg.BaseFee,
-			ReserveBase:      cfg.ReserveBase,
-			ReserveIncrement: cfg.ReserveIncrement,
-			LedgerSequence:   cfg.LedgerSequence,
-			NetworkID:        cfg.NetworkID,
-			ParentCloseTime:  cfg.ParentCloseTime,
+			BaseFee:                 cfg.BaseFee,
+			ReserveBase:             cfg.ReserveBase,
+			ReserveIncrement:        cfg.ReserveIncrement,
+			LedgerSequence:          cfg.LedgerSequence,
+			NetworkID:               cfg.NetworkID,
+			ParentCloseTime:         cfg.ParentCloseTime,
+			ApplicationCloseTime:    cfg.ApplicationCloseTime,
+			ApplicationCloseTimeSet: cfg.ApplicationCloseTimeSet,
 			// Real parent hash drives pseudo-account derivation (AMMCreate);
 			// the zero value forks the derived account ID from the network.
 			ParentHash:                view.ParentHash(),
