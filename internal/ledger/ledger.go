@@ -14,6 +14,7 @@ import (
 	"github.com/LeJamon/go-xrpl/internal/ledger/negativeunl"
 	"github.com/LeJamon/go-xrpl/internal/ledger/skiplist"
 	"github.com/LeJamon/go-xrpl/keylet"
+	"github.com/LeJamon/go-xrpl/protocol"
 	"github.com/LeJamon/go-xrpl/shamap"
 )
 
@@ -117,6 +118,33 @@ var _ AtomicWriter = (*Ledger)(nil)
 
 // NewOpen creates a new open ledger based on a parent ledger
 func NewOpen(parent *Ledger, closeTime time.Time) (*Ledger, error) {
+	return newOpen(parent, closeTime, false)
+}
+
+// NewOpenForBuild creates the mutable successor used to build a closed ledger.
+// Its provisional close time is visible to transactions until Close installs
+// the accepted close time.
+func NewOpenForBuild(parent *Ledger, closeTime time.Time) (*Ledger, error) {
+	return newOpen(parent, closeTime, true)
+}
+
+// ApplicationViewCloseTime returns the provisional successor time visible to
+// transactions before the accepted close time is installed.
+func ApplicationViewCloseTime(parentCloseTime, proposedCloseTime time.Time, resolution uint32) time.Time {
+	if resolution == 0 {
+		return proposedCloseTime
+	}
+	if parent := protocol.ToRippleTime(parentCloseTime); parent != 0 {
+		return protocol.FromRippleTime(parent + resolution)
+	}
+
+	seconds := protocol.ToRippleTime(proposedCloseTime)
+	seconds += resolution / 2
+	seconds -= seconds % resolution
+	return protocol.FromRippleTime(seconds)
+}
+
+func newOpen(parent *Ledger, closeTime time.Time, building bool) (*Ledger, error) {
 	if parent == nil {
 		return nil, errors.New("parent ledger cannot be nil")
 	}
@@ -141,6 +169,9 @@ func NewOpen(parent *Ledger, closeTime time.Time) (*Ledger, error) {
 		parent.header.GetCloseAgree(),
 		newLedgerSeq,
 	)
+	if building {
+		closeTime = ApplicationViewCloseTime(parent.header.CloseTime, closeTime, newResolution)
+	}
 
 	newHeader := header.LedgerHeader{
 		LedgerIndex:         newLedgerSeq,

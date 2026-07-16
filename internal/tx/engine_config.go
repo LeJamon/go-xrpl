@@ -73,6 +73,14 @@ type EngineConfig struct {
 	// This is used for checking offer/escrow expiration
 	ParentCloseTime uint32
 
+	// ApplicationCloseTime is the successor header close time visible while
+	// transactions are applied. It differs from ParentCloseTime during a closed
+	// ledger build and from the accepted close time until the build is finalized.
+	ApplicationCloseTime uint32
+	// ApplicationCloseTimeSet distinguishes an explicitly supplied zero after
+	// NetClock wraparound from an unset application close time.
+	ApplicationCloseTimeSet bool
+
 	// ParentHash is the hash of the parent ledger.
 	// Used by pseudoAccountAddress for deterministic AMM account derivation.
 	// Reference: rippled View.cpp pseudoAccountAddress uses view.info().parentHash
@@ -134,6 +142,16 @@ type EngineConfig struct {
 	// flag controls (so fee=0 / already-validated txns are unaffected at normal
 	// load). Genuinely closed-ledger applies leave this false and never scale.
 	EnforceLoadFee bool
+}
+
+// CurrentCloseTime returns the application-view close time. The parent-time
+// fallback preserves open-view behavior for callers that do not build a closed
+// successor.
+func (c EngineConfig) CurrentCloseTime() uint32 {
+	if c.ApplicationCloseTimeSet {
+		return c.ApplicationCloseTime
+	}
+	return c.ParentCloseTime
 }
 
 // RequireRules returns the amendment rules for this apply. Rules must be plumbed
