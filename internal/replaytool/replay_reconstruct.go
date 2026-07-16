@@ -145,6 +145,9 @@ func applyAffectedNode(
 			if let, ok := fields["LedgerEntryType"]; ok {
 				obj["LedgerEntryType"] = let
 			}
+			if entryType == "DirectoryNode" {
+				delete(deletedDirs, idx)
+			}
 			fillCreatedDefaults(obj, entryType)
 			fillBookDirectoryDefaults(obj, entryType)
 			threadPreviousTxn(obj, entryType, txHash, ledgerSeq)

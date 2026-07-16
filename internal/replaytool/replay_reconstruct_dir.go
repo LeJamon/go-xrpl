@@ -45,13 +45,16 @@ type dirPlacement struct {
 	Strategy dirStrategy
 }
 
-// dirDelta accumulates the membership changes a ledger makes to one directory
-// page. adds is in operation order (needed for append-ordered offer books);
-// removes is a set.
+type dirOperation struct {
+	key [32]byte
+	add bool
+}
+
+// dirDelta accumulates the ordered membership changes a ledger makes to one
+// directory page.
 type dirDelta struct {
-	strategy dirStrategy
-	adds     [][32]byte
-	removes  map[[32]byte]bool
+	strategy   dirStrategy
+	operations []dirOperation
 }
 
 // recordMembership attributes an object's creation (isAdd) or deletion to every
@@ -60,14 +63,10 @@ func recordMembership(deltas map[[32]byte]*dirDelta, objKey [32]byte, entryType 
 	for _, p := range directoryPlacements(entryType, fields) {
 		d := deltas[p.Key]
 		if d == nil {
-			d = &dirDelta{strategy: p.Strategy, removes: map[[32]byte]bool{}}
+			d = &dirDelta{strategy: p.Strategy}
 			deltas[p.Key] = d
 		}
-		if isAdd {
-			d.adds = append(d.adds, objKey)
-		} else {
-			d.removes[objKey] = true
-		}
+		d.operations = append(d.operations, dirOperation{key: objKey, add: isAdd})
 	}
 }
 
@@ -199,32 +198,33 @@ func reconstructDirIndexes(state *shamap.SHAMap, deltas map[[32]byte]*dirDelta, 
 	return nil
 }
 
-// applyDirDelta applies one page's membership delta to its prior members,
-// reproducing rippled's ordering: removals preserve relative order; additions
-// append in operation order, then the whole page is sorted when the directory is
-// sorted (dirInsert) rather than append-ordered (dirAppend). A key both added
-// and removed in the same ledger ends up absent.
+// applyDirDelta applies one page's membership operations in transaction order.
+// Removals preserve relative order and additions append, then the whole page is
+// sorted when the directory is sorted (dirInsert) rather than append-ordered
+// (dirAppend).
 func applyDirDelta(members [][32]byte, d *dirDelta) [][32]byte {
-	if len(d.removes) > 0 {
-		kept := make([][32]byte, 0, len(members))
-		for _, k := range members {
-			if !d.removes[k] {
-				kept = append(kept, k)
-			}
-		}
-		members = kept
-	}
-
 	present := make(map[[32]byte]bool, len(members))
 	for _, k := range members {
 		present[k] = true
 	}
-	for _, k := range d.adds {
-		if present[k] || d.removes[k] {
+	for _, op := range d.operations {
+		if op.add {
+			if !present[op.key] {
+				members = append(members, op.key)
+				present[op.key] = true
+			}
 			continue
 		}
-		members = append(members, k)
-		present[k] = true
+		if !present[op.key] {
+			continue
+		}
+		for i, key := range members {
+			if key == op.key {
+				members = append(members[:i], members[i+1:]...)
+				break
+			}
+		}
+		delete(present, op.key)
 	}
 
 	if d.strategy == dirSorted {
