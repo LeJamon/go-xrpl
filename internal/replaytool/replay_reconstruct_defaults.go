@@ -210,10 +210,6 @@ var explicitlyCreatedDefaults = map[string][]createdField{
 	},
 }
 
-// fillCreatedDefaults restores both required default-zero fields and optional
-// defaults that the entry's constructor always writes. An absent field in
-// CreatedNode.NewFields is therefore known to carry the listed default in the
-// canonical SLE.
 func fillCreatedDefaults(obj map[string]any, entryType string) {
 	for _, f := range requiredDefaults[entryType] {
 		if _, present := obj[f.Name]; !present {

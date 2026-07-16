@@ -50,8 +50,6 @@ type dirOperation struct {
 	add bool
 }
 
-// dirDelta accumulates the ordered membership changes a ledger makes to one
-// directory page.
 type dirDelta struct {
 	strategy   dirStrategy
 	operations []dirOperation
