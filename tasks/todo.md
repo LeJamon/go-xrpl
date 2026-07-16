@@ -1,3 +1,41 @@
+# Issue #1349 — LoanSet NUMBER asset association
+
+Target: `origin/main` at `ce13cadd`. Behavioral oracle: clean local rippled
+v3.2.0 worktree at `3c43f4614f87965298773279ff5b85d4c56c637b`.
+
+## Plan
+
+- [x] Confirm the Loan NUMBER fields carrying `kSmdNeedsAsset` and trace the Go
+      association path and all callers.
+- [x] Add a focused regression that preserves fractional fee/payment values while
+      continuing to associate the three outstanding-value fields.
+- [x] Implement the smallest idiomatic Go fix matching rippled v3.2.0 metadata.
+- [x] Run formatting, focused and affected tests, race coverage where useful,
+      build, vet, lint, and final diff/conformance review.
+- [ ] Record exact review results, commit only intentional files, push, and open
+      a pull request against `main`.
+
+## Review
+
+- `associateLoanAsset` now applies asset precision only to
+  `PrincipalOutstanding`, `TotalValueOutstanding`, and
+  `ManagementFeeOutstanding`, matching the complete `kSmdNeedsAsset` set for
+  Loan entries in rippled v3.2.0. The four fee fields and `PeriodicPayment`
+  retain their full NUMBER precision across LoanSet, LoanPay, and LoanManage.
+- The focused regression pins the replay's `10.00000001505552512` periodic
+  payment, covers all five unassociated Loan fields, and proves the three
+  associated fields still round or disappear at their default. It failed on
+  the original helper and passes with the fix.
+- Passed focused lending transaction and integration tests, focused race tests,
+  the full `internal/tx/...` suite, `just fmt`, `just vet`, `just build-all`,
+  `just lint` with zero issues, and `git diff --check`.
+- Independent final Go-quality and rippled-conformance reviews found no
+  Blocking, Minor, or Nit issues. The oracle is the clean local tag `3.2.0` at
+  `3c43f4614f87965298773279ff5b85d4c56c637b`.
+- The historical devnet checkpoint/debug artifacts referenced by the issue are
+  not present in this worktree, so the full ledger replay was not rerun; the
+  exact divergent field value and metadata boundary are covered directly.
+
 # Issue #1338 — PermissionedDomainDelete owner-directory retention
 
 ## Goal
