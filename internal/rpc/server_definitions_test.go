@@ -286,12 +286,48 @@ func TestServerDefinitions_3_2_0_Sections(t *testing.T) {
 	t.Run("TRANSACTION_FORMATS", func(t *testing.T) {
 		formats, ok := resp["TRANSACTION_FORMATS"].(map[string]any)
 		require.True(t, ok, "TRANSACTION_FORMATS should be a map")
-		common, ok := formats["common"].([]any)
-		require.True(t, ok, "should carry a 'common' array")
-		require.NotEmpty(t, common)
-		el0 := common[0].(map[string]any)
-		assert.Contains(t, el0, "name")
-		assert.Contains(t, el0, "optionality")
+
+		for _, test := range []struct {
+			name   string
+			fields []string
+			styles []int
+		}{
+			{
+				name: "common",
+				fields: []string{
+					"TransactionType", "Flags", "SourceTag", "Account", "Sequence",
+					"PreviousTxnID", "LastLedgerSequence", "AccountTxnID", "Fee",
+					"OperationLimit", "Memos", "SigningPubKey", "TicketSequence",
+					"TxnSignature", "Signers", "NetworkID", "Delegate",
+				},
+				styles: []int{0, 1, 1, 0, 0, 1, 1, 1, 0, 1, 1, 0, 1, 1, 1, 1, 1},
+			},
+			{
+				name:   "VaultCreate",
+				fields: []string{"Asset", "AssetsMaximum", "MPTokenMetadata", "DomainID", "WithdrawalPolicy", "Data", "Scale"},
+				styles: []int{0, 1, 1, 1, 1, 1, 1},
+			},
+			{
+				name:   "MPTokenIssuanceCreate",
+				fields: []string{"AssetScale", "TransferFee", "MaximumAmount", "MPTokenMetadata", "DomainID", "MutableFlags"},
+				styles: []int{1, 1, 1, 1, 1, 1},
+			},
+			{
+				name:   "MPTokenIssuanceSet",
+				fields: []string{"MPTokenIssuanceID", "Holder", "DomainID", "MPTokenMetadata", "TransferFee", "MutableFlags"},
+				styles: []int{0, 1, 1, 1, 1, 1},
+			},
+		} {
+			section, ok := formats[test.name].([]any)
+			require.True(t, ok, "should carry a %s format", test.name)
+			require.Len(t, section, len(test.fields))
+			for i, field := range section {
+				entry, ok := field.(map[string]any)
+				require.True(t, ok, "%s[%d] should be an object", test.name, i)
+				assert.Equal(t, test.fields[i], entry["name"])
+				assert.EqualValues(t, test.styles[i], num(entry["optionality"]))
+			}
+		}
 
 		payment, ok := formats["Payment"].([]any)
 		require.True(t, ok, "should carry a Payment format")
