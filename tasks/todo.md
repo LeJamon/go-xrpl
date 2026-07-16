@@ -1,3 +1,51 @@
+# Issue #1338 — PermissionedDomainDelete owner-directory retention
+
+## Goal
+
+Make `PermissionedDomainDelete` retain an empty page-zero owner-directory root
+after deleting its final domain, matching rippled v3.2.0 ledger state and
+transaction metadata without changing removal behavior when other entries remain.
+
+## Plan
+
+- [x] Validate GitHub auth, issue state and discussion, linked PRs, current remote
+      refs, exact base branch, clean worktree, and local rippled v3.2.0 provenance.
+- [x] Read the complete Go delete path, directory-removal implementation, metadata
+      stamping path, callers, and existing permissioned-domain tests.
+- [x] Read the complete rippled v3.2.0 delete implementation, directory-removal
+      semantics, and every relevant PermissionedDomain test case.
+- [x] Add focused regressions proving final-entry deletion retains an empty root
+      with matching previous-transaction fields and non-final deletion removes
+      only the target index.
+- [x] Implement the smallest production-quality parity fix and inspect all
+      `DirRemove` call sites for accidental behavior expansion.
+- [x] Run formatting, focused and affected-package tests, build, vet, strict CI
+      lint, diff checks, and a final Go-quality/rippled-conformance review.
+- [x] Stage intentional files only, commit, push, open the PR against `main`, and
+      verify the published branch, PR head, mergeability, and CI state.
+
+## Review
+
+- `PermissionedDomainDelete.Apply` now uses `tx.DirRemoveOrBadLedger`, matching
+  rippled v3.2.0's `keepRoot=true` and `tefBAD_LEDGER` behavior when the recorded
+  directory page or item is missing.
+- Focused regressions prove the sole-domain root remains a threaded
+  `ModifiedNode` with empty on-ledger `Indexes`, deleting one of two domains
+  preserves the sibling, and a corrupt missing directory rolls back the delete.
+- Oracle coverage maps the Go apply call and shared helper to rippled
+  `PermissionedDomainDelete.cpp:55-63` and `ApplyView.cpp:255-392`; the clean
+  oracle is tag `3.2.0` at `3c43f4614f87965298773279ff5b85d4c56c637b`.
+- Affected packages, race tests, `just test-tx`, PermissionedDomains conformance
+  (6/6), build, vet, tagged PostgreSQL vet, strict CI lint v2.11.3, advisory
+  lint, formatting, and diff checks pass.
+- The historical ledger 3,300,730 checkpoint/debug artifacts referenced by the
+  issue are not present in the workspace, so the exact full-ledger root replay
+  was not rerun locally; the focused regression directly pins the divergent SLE
+  bytes' semantic fields and metadata classification.
+- Behavior commit `3821b3ef` is pushed on
+  `fix/issue-1338-keep-owner-directory`; PR #1346 targets `main` at
+  https://github.com/LeJamon/go-xrpl/pull/1346.
+
 # Issue #1334 — historical retired-amendment replay compatibility
 
 Target: `origin/main` at `f0db8a22e1386116d08eb7efb21889997bd97af4`.
