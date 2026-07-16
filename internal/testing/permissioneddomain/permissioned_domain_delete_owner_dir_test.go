@@ -110,22 +110,122 @@ func TestPermissionedDomainDeleteKeepsRemainingOwnerDirectoryEntries(t *testing.
 	require.Nil(t, metadata.FindNode(result.Metadata, "DeletedNode", "DirectoryNode"))
 }
 
-func TestPermissionedDomainDeleteRejectsMissingOwnerDirectoryEntry(t *testing.T) {
+func TestPermissionedDomainDeleteUsesRecordedOwnerDirectoryPage(t *testing.T) {
 	env := jtx.NewTestEnv(t)
 	alice := jtx.NewAccount("alice")
 	issuer := jtx.NewAccount("issuer")
 	env.Fund(alice, issuer)
 	env.Close()
 
-	domainSeq := env.Seq(alice)
-	jtx.RequireTxSuccess(t, env.Submit(pd.DomainSet(alice).Credential(issuer, credTypeHex(10)).Build()))
+	var pageOneDomain keylet.Keylet
+	for i := range 33 {
+		seq := env.Seq(alice)
+		domainKey := domainKeylet(alice, seq)
+		jtx.RequireTxSuccess(t, env.Submit(pd.DomainSet(alice).Credential(issuer, credTypeHex(i+1)).Build()))
+		if i == 32 {
+			pageOneDomain = domainKey
+		}
+	}
 	env.Close()
 
-	domainKey := domainKeylet(alice, domainSeq)
-	require.NoError(t, env.Ledger().Erase(keylet.OwnerDir(alice.ID)))
+	domainData, err := env.LedgerEntry(pageOneDomain)
+	require.NoError(t, err)
+	domain, err := state.ParsePermissionedDomain(domainData)
+	require.NoError(t, err)
+	require.Equal(t, uint64(1), domain.OwnerNode)
 
-	result := env.Submit(pd.DomainDelete(alice, domainIDHex(domainKey)).Build())
-	jtx.RequireTxFail(t, result, jtx.TefBAD_LEDGER)
-	require.Equal(t, uint32(1), env.OwnerCount(alice))
-	require.NotNil(t, getDomainEntry(t, env, domainKey))
+	ownerDirKey := keylet.OwnerDir(alice.ID)
+	root := readOwnerDirectory(t, env, alice)
+	require.Len(t, root.Indexes, 32)
+	require.Equal(t, uint64(1), root.IndexNext)
+	require.Equal(t, uint64(1), root.IndexPrevious)
+
+	pageOneKey := keylet.DirPage(ownerDirKey.Key, 1)
+	pageOneData, err := env.LedgerEntry(pageOneKey)
+	require.NoError(t, err)
+	pageOne, err := state.ParseDirectoryNode(pageOneData)
+	require.NoError(t, err)
+	require.Equal(t, [][32]byte{pageOneDomain.Key}, pageOne.Indexes)
+
+	result := env.Submit(pd.DomainDelete(alice, domainIDHex(pageOneDomain)).Build())
+	jtx.RequireTxSuccess(t, result)
+	env.Close()
+
+	root = readOwnerDirectory(t, env, alice)
+	require.Len(t, root.Indexes, 32)
+	require.Zero(t, root.IndexNext)
+	require.Zero(t, root.IndexPrevious)
+	pageOneData, err = env.LedgerEntry(pageOneKey)
+	require.NoError(t, err)
+	require.Nil(t, pageOneData)
+	require.Nil(t, getDomainEntry(t, env, pageOneDomain))
+	require.Equal(t, uint32(32), env.OwnerCount(alice))
+}
+
+func TestPermissionedDomainDeleteRejectsCorruptOwnerDirectory(t *testing.T) {
+	tests := []struct {
+		name    string
+		corrupt func(*testing.T, *jtx.TestEnv, keylet.Keylet)
+	}{
+		{
+			name: "missing page",
+			corrupt: func(t *testing.T, env *jtx.TestEnv, ownerDirKey keylet.Keylet) {
+				t.Helper()
+				require.NoError(t, env.Ledger().Erase(ownerDirKey))
+			},
+		},
+		{
+			name: "missing item",
+			corrupt: func(t *testing.T, env *jtx.TestEnv, ownerDirKey keylet.Keylet) {
+				t.Helper()
+				data, err := env.LedgerEntry(ownerDirKey)
+				require.NoError(t, err)
+				dir, err := state.ParseDirectoryNode(data)
+				require.NoError(t, err)
+				dir.Indexes = nil
+				data, err = state.SerializeDirectoryNode(dir, false)
+				require.NoError(t, err)
+				require.NoError(t, env.Ledger().Update(ownerDirKey, data))
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			env := jtx.NewTestEnv(t)
+			alice := jtx.NewAccount("alice")
+			issuer := jtx.NewAccount("issuer")
+			env.Fund(alice, issuer)
+			env.Close()
+
+			domainSeq := env.Seq(alice)
+			jtx.RequireTxSuccess(t, env.Submit(pd.DomainSet(alice).Credential(issuer, credTypeHex(10)).Build()))
+			env.Close()
+
+			domainKey := domainKeylet(alice, domainSeq)
+			ownerDirKey := keylet.OwnerDir(alice.ID)
+			domainBefore, err := env.LedgerEntry(domainKey)
+			require.NoError(t, err)
+			tt.corrupt(t, env, ownerDirKey)
+			dirBefore, err := env.LedgerEntry(ownerDirKey)
+			require.NoError(t, err)
+			balanceBefore := env.Balance(alice)
+			sequenceBefore := env.Seq(alice)
+			ownerCountBefore := env.OwnerCount(alice)
+
+			result := env.Submit(pd.DomainDelete(alice, domainIDHex(domainKey)).Build())
+			jtx.RequireTxFail(t, result, jtx.TefBAD_LEDGER)
+			require.Nil(t, result.Metadata)
+			require.Equal(t, balanceBefore, env.Balance(alice))
+			require.Equal(t, sequenceBefore, env.Seq(alice))
+			require.Equal(t, ownerCountBefore, env.OwnerCount(alice))
+
+			domainAfter, err := env.LedgerEntry(domainKey)
+			require.NoError(t, err)
+			require.Equal(t, domainBefore, domainAfter)
+			dirAfter, err := env.LedgerEntry(ownerDirKey)
+			require.NoError(t, err)
+			require.Equal(t, dirBefore, dirAfter)
+		})
+	}
 }
