@@ -447,7 +447,6 @@ func (a *AMMDeposit) Apply(ctx *tx.ApplyContext) ter.Result {
 		}
 	}
 
-	// Result amounts are ledger-boundary values.
 	var lpTokensToIssue tx.Amount
 	var depositAmount1, depositAmount2 tx.Amount
 

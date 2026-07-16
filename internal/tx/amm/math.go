@@ -53,7 +53,6 @@ func (m numberMath) subAmounts(a, b tx.Amount, mode state.RoundingMode) tx.Amoun
 func (m numberMath) zero() state.XRPLNumber { return m.int(0) }
 func (m numberMath) one() state.XRPLNumber  { return m.int(1) }
 
-// calculateLPTokens calculates the initial LP token balance in Number space.
 func (m numberMath) calculateLPTokens(amount1, amount2 tx.Amount, fixV1_3 bool) state.XRPLNumber {
 	if amount1.IsZero() || amount2.IsZero() {
 		return m.zero()
