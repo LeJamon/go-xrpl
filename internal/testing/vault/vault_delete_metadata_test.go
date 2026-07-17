@@ -14,9 +14,6 @@ import (
 	"github.com/LeJamon/go-xrpl/keylet"
 )
 
-// The metadata golden covers the complete serialized blob after applying
-// RippleStateHelpers::removeEmptyHolding's v3.2.0 update-before-delete order.
-// The state root was captured from this fixture before the metadata-only fix.
 const (
 	vaultDeleteIOUMetadataSHA256 = "1BACA50A02B428E51CEE967477384BF6124C28214966C950A9CAF26224908E0C"
 	vaultDeleteIOUStateRoot      = "ABA2266EB9DC0FF1ED790C5A81CB5C21DDA3317EAA1C2E47AE57FE6A27DF1089"

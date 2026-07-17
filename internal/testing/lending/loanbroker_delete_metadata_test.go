@@ -17,9 +17,6 @@ import (
 	"github.com/LeJamon/go-xrpl/keylet"
 )
 
-// The metadata golden covers the complete serialized blob after applying
-// RippleStateHelpers::removeEmptyHolding's v3.2.0 update-before-delete order.
-// The state root was captured from this fixture before the metadata-only fix.
 const (
 	loanBrokerDeleteIOUMetadataSHA256 = "52AEA2C45DFCB21A917B6A8EE7F75B803DC34F98961AFFE1DABE7343CC789F7D"
 	loanBrokerDeleteIOUStateRoot      = "B042E3865CD1895BBCD90C63D30B258D28AE13C0DCC2B8D7119B605325A3B802"
