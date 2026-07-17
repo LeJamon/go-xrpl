@@ -258,6 +258,17 @@ func DecodeHeader(buf []byte) (*Header, error) {
 // ReadMessage reads a complete message from the reader.
 // Returns the header and the payload.
 func ReadMessage(r io.Reader) (*Header, []byte, error) {
+	return readMessage(r, nil)
+}
+
+// ReadMessageWithHeader reads a complete message and calls onHeader after the
+// header and size claims have been validated but before the payload is
+// allocated.
+func ReadMessageWithHeader(r io.Reader, onHeader func(Header) error) (*Header, []byte, error) {
+	return readMessage(r, onHeader)
+}
+
+func readMessage(r io.Reader, onHeader func(Header) error) (*Header, []byte, error) {
 	// Read header (start with minimum size)
 	headerBuf := make([]byte, HeaderSizeCompressed)
 	if _, err := io.ReadFull(r, headerBuf[:HeaderSizeUncompressed]); err != nil {
@@ -297,6 +308,11 @@ func ReadMessage(r io.Reader) (*Header, []byte, error) {
 	if header.Compressed && header.UncompressedSize > maxSize {
 		return nil, nil, fmt.Errorf("%w: uncompressed %d > %d for %s",
 			ErrMessageTooLarge, header.UncompressedSize, maxSize, header.MessageType)
+	}
+	if onHeader != nil {
+		if err := onHeader(*header); err != nil {
+			return nil, nil, err
+		}
 	}
 
 	// Read payload

@@ -19,6 +19,7 @@ var (
 	ErrPingTimeout        = errors.New("peer ping timeout")
 	ErrLargeSendQueue     = errors.New("peer send queue saturated; closing")
 	ErrReadIdle           = errors.New("peer read idle deadline exceeded")
+	ErrFrameReadTooSlow   = errors.New("peer frame exceeded its read progress budget")
 	ErrWriteIdle          = errors.New("peer write idle deadline exceeded")
 
 	// Handshake errors
