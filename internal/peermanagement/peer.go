@@ -1092,10 +1092,20 @@ func (p *Peer) writeLoop(ctx context.Context) error {
 				return ErrConnectionClosed
 			}
 
+			wire := data
+			compressionEnabled := p.compressionNegotiated()
+			if header, err := message.DecodeHeader(data); err == nil && header.Compressed {
+				if !compressionEnabled {
+					return errCompressionUnnegotiated
+				}
+			} else if compressionEnabled {
+				wire, _ = message.CompressFrameIfWorthwhile(data)
+			}
+
 			// Cap each Write so a half-open TCP peer with a
 			// never-draining kernel send buffer cannot pin the writer.
 			_ = conn.SetWriteDeadline(time.Now().Add(writeIdleDeadline))
-			n, err := conn.Write(data)
+			n, err := conn.Write(wire)
 			if err != nil {
 				if ne, ok := err.(net.Error); ok && ne.Timeout() {
 					return ErrWriteIdle
@@ -1111,7 +1121,7 @@ func (p *Peer) writeLoop(ctx context.Context) error {
 			// reflect outbound traffic (the symmetric counterpart of the
 			// inbound AddCount in readLoop). The frame carries its own
 			// header; decode it to recover the message type.
-			if hdr, derr := message.DecodeHeader(data); derr == nil {
+			if hdr, derr := message.DecodeHeader(wire); derr == nil {
 				p.traffic.AddCount(CategorizeMessage(uint16(hdr.MessageType)), false, n)
 			}
 		}

@@ -48,6 +48,8 @@ var (
 	ErrShutdown   = errors.New("overlay is shutting down")
 )
 
+var errCompressionUnnegotiated = errors.New("outbound compressed frame without negotiated compression")
+
 // PeerError wraps an error with peer context.
 type PeerError struct {
 	PeerID   PeerID
