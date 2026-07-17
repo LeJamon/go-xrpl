@@ -365,8 +365,9 @@ func TestDiscoveryPrivateModeFixedPeerReconnectsAfterRestartDNSResolution(t *tes
 	second := newDiscovery("192.0.2.11", "192.0.2.21")
 	require.NoError(t, second.Start(t.Context()))
 	t.Cleanup(second.Stop)
-	var restored []string
-	for _, entry := range second.bootCache.Endpoints(50) {
+	entries := second.bootCache.Endpoints(50)
+	restored := make([]string, 0, len(entries))
+	for _, entry := range entries {
 		restored = append(restored, entry.Address)
 	}
 	assert.Contains(t, restored, "192.0.2.10:51235")

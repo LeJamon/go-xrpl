@@ -1,6 +1,6 @@
 # Issue #1357 — AMMClawback pseudo-account metadata
 
-Target: `origin/main` at `7aab186ddb36317bdb63c831e6ffb9c5dd25b364`.
+Target: `origin/main` at `25a82672eb73ec5f76d95e00b8ef54d27cab21b2`.
 Behavioral oracle: clean local rippled `3.2.0` worktree at
 `3c43f4614f87965298773279ff5b85d4c56c637b`.
 
