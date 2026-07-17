@@ -32,6 +32,7 @@ type recordingSender struct {
 	mu               sync.Mutex
 	replayDeltaCalls []replayDeltaCall
 	legacyBaseCalls  []legacyBaseCall
+	legacyBaseErr    error
 	// peerSupportsReplay controls the handshake-feature answer. Defaults
 	// to true so existing tests continue to exercise the "peer advertises
 	// ledger-replay" path without extra setup; tests that want to cover
@@ -67,7 +68,7 @@ func (s *recordingSender) RequestLedgerBaseFromPeer(peerID uint64, hash [32]byte
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.legacyBaseCalls = append(s.legacyBaseCalls, legacyBaseCall{peerID: peerID, hash: hash, seq: seq})
-	return nil
+	return s.legacyBaseErr
 }
 
 func (s *recordingSender) replayCalls() []replayDeltaCall {

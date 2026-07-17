@@ -181,12 +181,12 @@ type Router struct {
 	// startup, before Run.
 	acquisitionFamily shamap.Family
 
-	// catchupMu guards catchup, the single consensus catch-up target: the highest
-	// trusted (seq,hash) seen, toward which at most maxConcurrentCatchup
-	// acquisitions are armed — rippled's LedgerMaster::doAdvance drives one needed
-	// target, not one InboundLedger per gossiped event.
-	catchupMu sync.Mutex
-	catchup   catchupTarget
+	// catchupMu guards the single consensus catch-up target and recent failures.
+	// The router drives at most maxConcurrentCatchup acquisitions toward the
+	// highest trusted (seq,hash), matching rippled's single needed ledger.
+	catchupMu       sync.Mutex
+	catchup         catchupTarget
+	catchupFailures map[[32]byte]time.Time
 
 	// historyMu guards history, the single backward history-backfill target: the
 	// next ledger a jump-adopt skipped (rippled Reason::HISTORY). The walk is
@@ -404,6 +404,7 @@ func (r *Router) HandlePeerDisconnect(peerID peermanagement.PeerID) {
 	r.peersMu.Lock()
 	delete(r.peerStates, peerID)
 	r.peersMu.Unlock()
+	r.invalidateCatchupPeer(uint64(peerID))
 
 	// Clear the peer's LCL vote so getNetworkLedger stops counting its
 	// stale hash. The adaptor uses the zero LedgerID as a delete key.

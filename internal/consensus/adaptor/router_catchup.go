@@ -221,15 +221,52 @@ func (r *Router) catchupInFlight() int {
 	return r.fetchTracker.CountReason(inbound.ReasonConsensus) + r.replayer.Count()
 }
 
-// recordCatchupTarget raises the single consensus catch-up target only for a
-// strictly higher seq, so the router always drives toward the highest trusted
-// tip seen — the analogue of rippled's single preferred/needed ledger.
+// recordCatchupTarget raises the single consensus catch-up target or refreshes
+// its preferred peer when another peer advertises the same ledger.
 func (r *Router) recordCatchupTarget(seq uint32, hash [32]byte, peerID uint64) {
 	r.catchupMu.Lock()
 	defer r.catchupMu.Unlock()
 	if seq > r.catchup.seq {
 		r.catchup = catchupTarget{seq: seq, hash: hash, peerID: peerID}
+	} else if seq == r.catchup.seq && hash == r.catchup.hash {
+		r.catchup.peerID = peerID
 	}
+}
+
+func (r *Router) invalidateCatchupPeer(peerID uint64) {
+	r.catchupMu.Lock()
+	defer r.catchupMu.Unlock()
+	if r.catchup.peerID == peerID {
+		r.catchup.peerID = 0
+	}
+}
+
+const catchupFailureCooldown = 5 * time.Minute
+
+func (r *Router) markFailedCatchupAcquisition(hash [32]byte) {
+	r.catchupMu.Lock()
+	defer r.catchupMu.Unlock()
+	if r.catchupFailures == nil {
+		r.catchupFailures = make(map[[32]byte]time.Time)
+	}
+	now := time.Now()
+	for failedHash, retryAfter := range r.catchupFailures {
+		if !now.Before(retryAfter) {
+			delete(r.catchupFailures, failedHash)
+		}
+	}
+	r.catchupFailures[hash] = now.Add(catchupFailureCooldown)
+}
+
+func (r *Router) catchupRetryBlocked(hash [32]byte, now time.Time) bool {
+	r.catchupMu.Lock()
+	defer r.catchupMu.Unlock()
+	retryAfter, ok := r.catchupFailures[hash]
+	if ok && !now.Before(retryAfter) {
+		delete(r.catchupFailures, hash)
+		return false
+	}
+	return ok
 }
 
 // bestCatchupTarget returns the current highest recorded catch-up target.
@@ -251,6 +288,10 @@ func (r *Router) bestCatchupTarget() (seq uint32, hash [32]byte, peerID uint64) 
 //     directly; the legacy full-state path plus completeInboundLedger's gap>1
 //     branch jumps the working ledger forward.
 func (r *Router) armCatchupTowardTarget() {
+	r.armCatchupTowardTargetWithPeer(0)
+}
+
+func (r *Router) armCatchupTowardTargetWithPeer(peerHint uint64) {
 	svc := r.adaptor.LedgerService()
 	if svc == nil {
 		return
@@ -258,7 +299,7 @@ func (r *Router) armCatchupTowardTarget() {
 	if r.catchupInFlight() >= maxConcurrentCatchup {
 		return
 	}
-	tSeq, tHash, tPeer := r.bestCatchupTarget()
+	tSeq, tHash, _ := r.bestCatchupTarget()
 	if tSeq == 0 {
 		return
 	}
@@ -267,14 +308,30 @@ func (r *Router) armCatchupTowardTarget() {
 		return
 	}
 
-	if seq, hash, peer, ok := r.forwardDeltaStep(svc, closed, tSeq); ok {
+	if seq, hash, ok := r.forwardDeltaStep(svc, closed, tSeq); ok {
+		peer := peerHint
+		if peer == 0 {
+			var found bool
+			peer, found = r.selectAcquisitionPeer(seq)
+			if !found {
+				return
+			}
+		}
 		r.startLedgerAcquisition(seq, hash, peer)
 		return
 	}
-	r.startLedgerAcquisition(tSeq, tHash, tPeer)
+	peer := peerHint
+	if peer == 0 {
+		var found bool
+		peer, found = r.selectAcquisitionPeer(tSeq)
+		if !found {
+			return
+		}
+	}
+	r.startLedgerAcquisition(tSeq, tHash, peer)
 }
 
-// forwardDeltaStep returns the (seq, hash, peer) for a forward one-ledger step
+// forwardDeltaStep returns the (seq, hash) for a forward one-ledger step
 // against our held closed ledger when all hold, else ok=false (deferring to
 // jump-adopt):
 //
@@ -284,18 +341,18 @@ func (r *Router) armCatchupTowardTarget() {
 //     recorded parentHash equals our closed hash, or, when only a validation
 //     populated closed+1, the recorded hash for our closed seq equals it. The
 //     parent of closed+1 IS the ledger at our closed seq, so these are equivalent.
-func (r *Router) forwardDeltaStep(svc *service.Service, closed, tipSeq uint32) (seq uint32, hash [32]byte, peer uint64, ok bool) {
+func (r *Router) forwardDeltaStep(svc *service.Service, closed, tipSeq uint32) (seq uint32, hash [32]byte, ok bool) {
 	if tipSeq-closed > maxForwardDeltaGap {
-		return 0, [32]byte{}, 0, false
+		return 0, [32]byte{}, false
 	}
 	next := closed + 1
 	entry, known := r.lookupSeqHash(next)
 	if !known || entry.hash == ([32]byte{}) {
-		return 0, [32]byte{}, 0, false
+		return 0, [32]byte{}, false
 	}
 	closedLedger := svc.GetClosedLedger()
 	if closedLedger == nil {
-		return 0, [32]byte{}, 0, false
+		return 0, [32]byte{}, false
 	}
 	closedHash := closedLedger.Hash()
 
@@ -306,19 +363,9 @@ func (r *Router) forwardDeltaStep(svc *service.Service, closed, tipSeq uint32) (
 		sameBranch = cEntry.hash == closedHash
 	}
 	if !sameBranch {
-		return 0, [32]byte{}, 0, false
+		return 0, [32]byte{}, false
 	}
-	return next, entry.hash, r.forwardStepPeer(next), true
-}
-
-// forwardStepPeer picks a peer for a forward-delta step: one reporting at or
-// beyond the target seq, else the peer that advertised the best tip.
-func (r *Router) forwardStepPeer(seq uint32) uint64 {
-	if p, ok := r.selectAcquisitionPeer(seq); ok {
-		return p
-	}
-	_, _, peer := r.bestCatchupTarget()
-	return peer
+	return next, entry.hash, true
 }
 
 // ensureCatchupAcquisition is the single funnel for gossip-driven consensus
@@ -336,7 +383,21 @@ func (r *Router) ensureCatchupAcquisition(seq uint32, hash [32]byte, peerID uint
 		return
 	}
 	r.recordCatchupTarget(seq, hash, peerID)
-	r.armCatchupTowardTarget()
+	if il := r.fetchTracker.Find(hash); il != nil && il.Reason() == inbound.ReasonConsensus {
+		r.refreshCatchupAcquisitionPeer(il, peerID)
+		return
+	}
+	r.armCatchupTowardTargetWithPeer(peerID)
+}
+
+func (r *Router) refreshCatchupAcquisitionPeer(il *inbound.Ledger, peerID uint64) {
+	if peerID == 0 || il.State() != inbound.StateWantBase || slices.Contains(il.Peers(), peerID) {
+		return
+	}
+	il.AddPeer(peerID)
+	if err := r.adaptor.RequestLedgerBaseFromPeer(peerID, il.Hash(), il.Seq()); err != nil {
+		r.logger.Warn("failed to request ledger base from replacement peer", "error", err)
+	}
 }
 
 // startLedgerAcquisition picks the best available ledger-acquisition
@@ -352,6 +413,10 @@ func (r *Router) ensureCatchupAcquisition(seq uint32, hash [32]byte, peerID uint
 // layer that walks a range (e.g., backward from a peer's tip via
 // ParentHash) is a follow-up item.
 func (r *Router) startLedgerAcquisition(seq uint32, hash [32]byte, peerID uint64) {
+	if r.catchupRetryBlocked(hash, time.Now()) {
+		return
+	}
+
 	// Unified dedup across BOTH acquisition paths. A prior fix only
 	// checked r.replayer.Has(hash); that still allowed the cross-path
 	// race where two status changes at the same seq with different
@@ -457,7 +522,6 @@ func (r *Router) startLedgerAcquisitionLegacy(seq uint32, hash [32]byte, peerID 
 
 	if err := r.adaptor.RequestLedgerBaseFromPeer(peerID, hash, seq); err != nil {
 		r.logger.Warn("failed to request ledger base from peer", "error", err)
-		r.fetchTracker.Remove(hash, false)
 	}
 }
 
@@ -1268,9 +1332,24 @@ func (r *Router) escalateAcquisition(il *inbound.Ledger, now time.Time) {
 		return
 	}
 	r.broadenAcquisitionPeers(il)
+	if il.State() == inbound.StateWantBase {
+		r.requestAcquisitionBase(il)
+		return
+	}
 	r.requestMissingAcquisitionNodes(il, 0)
 	r.tryFetchPackEscalation(il)
 	r.requestAcquisitionNodesByHash(il)
+}
+
+func (r *Router) requestAcquisitionBase(il *inbound.Ledger) {
+	peerID, ok := r.selectAcquisitionPeer(il.Seq())
+	if !ok {
+		return
+	}
+	il.AddPeer(peerID)
+	if err := r.adaptor.RequestLedgerBaseFromPeer(peerID, il.Hash(), il.Seq()); err != nil {
+		r.logger.Warn("failed to retry ledger base request", "error", err)
+	}
 }
 
 // acquisitionPeerBroaden bounds how many fresh peers a single no-progress
@@ -1303,6 +1382,9 @@ func (r *Router) failInboundAcquisition(il *inbound.Ledger) {
 		"timeouts", il.Timeouts(),
 	)
 	r.fetchTracker.Remove(hash, false)
+	if reason == inbound.ReasonConsensus {
+		r.markFailedCatchupAcquisition(hash)
+	}
 	if reason == inbound.ReasonConsensus && r.engine != nil {
 		r.engine.OnLedgerAcquireFailed(consensus.LedgerID(hash))
 	}

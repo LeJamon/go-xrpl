@@ -207,8 +207,7 @@ func TestRouter_ValidationForHeldLedger_NoAcquire(t *testing.T) {
 	assert.Zero(t, acquireCount(rs), "a ledger already in history must not be re-acquired")
 }
 
-// Repeated trusted validations for the same unknown hash arm at most one fetch
-// (the isAcquiring dedup).
+// Repeated trusted validations for the same unknown hash share one acquisition.
 func TestRouter_RepeatedTrustedValidations_SingleAcquire(t *testing.T) {
 	r, a, rs, _ := makeRouter(t)
 	trusted, _ := a.GetValidatorKey()
@@ -219,5 +218,6 @@ func TestRouter_RepeatedTrustedValidations_SingleAcquire(t *testing.T) {
 	}
 	r.maybeAcquireFromValidation(v, 7)
 	r.maybeAcquireFromValidation(v, 8)
-	assert.Equal(t, 1, acquireCount(rs), "isAcquiring dedup → at most one fetch per hash")
+	assert.Equal(t, 1, r.catchupInFlight())
+	assert.Equal(t, 2, acquireCount(rs), "the replacement peer joins the existing acquisition")
 }

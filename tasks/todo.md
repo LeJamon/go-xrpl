@@ -1218,3 +1218,47 @@ Behavioral oracle: clean local rippled `3.2.0` worktree at
 - Behavior commit `d1fc5be2` and test-hardening commit `5f0890f8` are published
   on `fix/issue-1360-peer-private-fixed-peers`; PR #1364 targets `main` at
   https://github.com/LeJamon/go-xrpl/pull/1364.
+
+# Issue #1391 — stale initial-sync catch-up peer
+
+Target: `origin/main` at `456073c17acc79b2022c010f2173ab3e71e92580`.
+Behavioral oracle: clean local rippled `3.2.0` worktree at
+`3c43f4614f87965298773279ff5b85d4c56c637b`.
+
+## Plan
+
+- [x] Validate GitHub access, issue state and discussion, linked PRs, active
+      release branches, exact base, and clean dedicated worktree.
+- [x] Trace the complete catch-up target, peer lifecycle, acquisition dispatch,
+      immediate-failure, and maintenance retry paths with their current tests.
+- [x] Verify rippled v3.2.0 peer selection, disconnect, and acquisition retry
+      behavior in the pinned local oracle.
+- [x] Add focused regressions for same-sequence replacement, no eligible peers,
+      disconnect invalidation, and bounded retries after immediate dispatch failure.
+- [x] Implement the smallest production-quality fix preserving existing sync
+      behavior while eliminating stale-peer dispatch and the 100 ms hot loop.
+- [x] Run formatting, focused and race tests, affected core tests, build, vet,
+      strict CI lint, advisory lint, and diff checks.
+- [x] Review the complete diff for concurrency, failure paths, oracle parity, and
+      test coverage; record exact results below.
+- [x] Stage only intentional files, commit, push, open the PR against `main`, and
+      verify the published head and initial CI state.
+
+## Review
+
+- Catch-up dispatch now uses a fresh gossip origin or selects from currently
+  connected peer state at timer-driven dispatch; disconnects invalidate cached
+  target provenance and same-ledger replacements join the retained acquisition.
+- Immediate base-request failures remain in one acquisition governed by the
+  existing three-second timer and seven-attempt no-progress budget. Exhausted
+  acquisition hashes enter a five-minute recent-failure cache, including forward
+  child ledgers and direct validation/status acquisition paths.
+- The behavior matches rippled v3.2.0's live peer resolution, fixed timeout
+  progression, bounded retry count, and five-minute recent-failure suppression.
+- Verification passed: `go test ./internal/consensus/adaptor/... -count=1`, the
+  focused race suite, `just test-core`, `just build-all`, `just vet`, tagged
+  PostgreSQL vet, strict golangci-lint v2.11.3, advisory lint, gofmt, and
+  `git diff --check`.
+- Final adversarial review found no unresolved lock-order, data-race, retry-bound,
+  peer-replacement, or rippled-conformance blocker after centralizing the failed
+  hash gate in the shared consensus acquisition entry point.
