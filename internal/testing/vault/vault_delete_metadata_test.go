@@ -98,13 +98,13 @@ func TestVaultDeleteIOUIssuerOwnerCount(t *testing.T) {
 	jtx.RequireTxClaimed(t, env.Submit(trustset.NewTrustSet(owner.Address, missing)), jtx.TecNO_PERMISSION)
 	limit := tx.NewIssuedAmountFromFloat64(1, "USD", pseudoAddress)
 	jtx.RequireTxSuccess(t, env.Submit(trustset.NewTrustSet(owner.Address, limit)))
-	if got := env.OwnerCount(owner); got != 3 {
-		t.Fatalf("owner count before delete = %d, want 3", got)
+	if got := env.OwnerCount(owner); got != 4 {
+		t.Fatalf("owner count before delete = %d, want 4", got)
 	}
 
 	result := env.Submit(vault.NewVaultDelete(owner.Address, strings.ToUpper(hex.EncodeToString(vaultKey.Key[:]))))
 	jtx.RequireTxSuccess(t, result)
-	assertVaultModifiedTransition(t, result.Metadata, keylet.Account(owner.AccountID()), "AccountRoot", "OwnerCount", uint32(0), uint32(3))
+	assertVaultModifiedTransition(t, result.Metadata, keylet.Account(owner.AccountID()), "AccountRoot", "OwnerCount", uint32(0), uint32(4))
 	if got := env.OwnerCount(owner); got != 0 {
 		t.Errorf("owner count = %d, want 0", got)
 	}

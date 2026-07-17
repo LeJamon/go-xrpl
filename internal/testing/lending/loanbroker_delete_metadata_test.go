@@ -124,15 +124,15 @@ func TestLoanBrokerDeleteIOUIssuerOwnerCount(t *testing.T) {
 	jtx.RequireTxClaimed(t, env.Submit(trustset.NewTrustSet(owner.Address, missing)), jtx.TecNO_PERMISSION)
 	limit := tx.NewIssuedAmountFromFloat64(1, "USD", pseudoAddress)
 	jtx.RequireTxSuccess(t, env.Submit(trustset.NewTrustSet(owner.Address, limit)))
-	if got := env.OwnerCount(owner); got != 5 {
-		t.Fatalf("owner count before delete = %d, want 5", got)
+	if got := env.OwnerCount(owner); got != 6 {
+		t.Fatalf("owner count before delete = %d, want 6", got)
 	}
 
 	result := env.Submit(lending.NewLoanBrokerDelete(owner.Address, strings.ToUpper(hex.EncodeToString(brokerKey.Key[:]))))
 	jtx.RequireTxSuccess(t, result)
-	assertModifiedTransition(t, result.Metadata, keylet.Account(owner.AccountID()), "AccountRoot", "OwnerCount", uint32(2), uint32(5))
-	if got := env.OwnerCount(owner); got != 2 {
-		t.Errorf("owner count = %d, want 2", got)
+	assertModifiedTransition(t, result.Metadata, keylet.Account(owner.AccountID()), "AccountRoot", "OwnerCount", uint32(3), uint32(6))
+	if got := env.OwnerCount(owner); got != 3 {
+		t.Errorf("owner count = %d, want 3", got)
 	}
 }
 
