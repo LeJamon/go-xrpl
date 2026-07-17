@@ -7,13 +7,13 @@ import (
 )
 
 // DeleteOffer removes an Offer from every directory that indexes it, then
-// erases the Offer. A nil Offer is a successful no-op. Directory removals are
-// applied in ledger order and are not rolled back if a later removal fails;
-// callers that require atomicity must provide a sandboxed view. OwnerCount
-// adjustment remains the caller's responsibility.
+// erases the Offer. A nil Offer is a successful no-op and reports removed=false.
+// Directory removals are applied in ledger order and are not rolled back if a
+// later removal fails; callers that require atomicity must provide a sandboxed
+// view. OwnerCount adjustment remains the caller's responsibility.
 func DeleteOffer(view LedgerView, offerKey keylet.Keylet, offer *LedgerOffer) (bool, error) {
 	if offer == nil {
-		return true, nil
+		return false, nil
 	}
 
 	owner, err := DecodeAccountID(offer.Account)

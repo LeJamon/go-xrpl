@@ -9,6 +9,14 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func TestDeleteOfferNilIsNoop(t *testing.T) {
+	t.Parallel()
+
+	removed, err := DeleteOffer(newStubView(), keylet.Keylet{}, nil)
+	require.NoError(t, err)
+	require.False(t, removed)
+}
+
 func TestDeleteOfferRemovesEveryBookDirectory(t *testing.T) {
 	t.Parallel()
 
