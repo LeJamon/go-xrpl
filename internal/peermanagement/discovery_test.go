@@ -26,6 +26,28 @@ func TestNewDiscovery(t *testing.T) {
 	}
 }
 
+func TestDiscoveryConfigPeerSlicesAreIsolated(t *testing.T) {
+	bootstrap := []string{"bootstrap.example:51235"}
+	fixed := []string{"fixed.example:51235"}
+	cfg := DefaultConfig()
+	WithBootstrapPeers(bootstrap...)(&cfg)
+	WithFixedPeers(fixed...)(&cfg)
+
+	bootstrap[0] = "mutated-bootstrap.example:51235"
+	fixed[0] = "mutated-fixed.example:51235"
+	require.Equal(t, []string{"bootstrap.example:51235"}, cfg.BootstrapPeers)
+	require.Equal(t, []string{"fixed.example:51235"}, cfg.FixedPeers)
+
+	d := NewDiscovery(&cfg, make(chan Event, 1))
+	cfg.BootstrapPeers[0] = "replaced-bootstrap.example:51235"
+	cfg.FixedPeers[0] = "replaced-fixed.example:51235"
+
+	assert.Equal(t, []string{"bootstrap.example:51235"}, d.cfg.BootstrapPeers)
+	assert.Equal(t, []string{"fixed.example:51235"}, d.cfg.FixedPeers)
+	assert.True(t, d.fixedPeers["fixed.example:51235"])
+	assert.False(t, d.fixedPeers["replaced-fixed.example:51235"])
+}
+
 func TestDiscoveryAddPeer(t *testing.T) {
 	cfg := &Config{
 		MaxPeers:    50,
@@ -275,6 +297,103 @@ func TestDiscoverySelectsFixedPeersBeyondOrdinaryCapacity(t *testing.T) {
 	d.AddPeer("192.0.2.41:51235", 0, 0)
 
 	assert.Equal(t, []string{"192.0.2.40:51235"}, d.SelectPeersToConnect(0))
+}
+
+func TestDiscoveryPrivateModeSelectsOnlyFixedPeers(t *testing.T) {
+	dataDir := t.TempDir()
+	cache := NewBootCache(dataDir)
+	cache.Insert("198.51.100.10:51235", 51235)
+	require.NoError(t, cache.Save())
+
+	d := NewDiscovery(&Config{
+		MaxPeers:       50,
+		MaxOutbound:    25,
+		BootstrapPeers: []string{"198.51.100.20:51235"},
+		FixedPeers:     []string{"198.51.100.30:51235"},
+		PrivateMode:    true,
+		DataDir:        dataDir,
+	}, make(chan Event, 1))
+	require.NoError(t, d.Start(t.Context()))
+	t.Cleanup(d.Stop)
+	d.AddPeer("198.51.100.40:51235", 1, PeerID(1))
+	d.AddRedirectCandidate("198.51.100.50:51235", PeerID(2))
+
+	assert.Equal(t, []string{"198.51.100.30:51235"}, d.SelectPeersToConnect(25))
+}
+
+func TestDiscoveryPublicModeSelectsAllCandidateSources(t *testing.T) {
+	dataDir := t.TempDir()
+	cache := NewBootCache(dataDir)
+	cache.Insert("198.51.100.10:51235", 51235)
+	require.NoError(t, cache.Save())
+
+	d := NewDiscovery(&Config{
+		MaxPeers:       50,
+		MaxOutbound:    25,
+		BootstrapPeers: []string{"198.51.100.20:51235"},
+		FixedPeers:     []string{"198.51.100.30:51235"},
+		DataDir:        dataDir,
+	}, make(chan Event, 1))
+	require.NoError(t, d.Start(t.Context()))
+	t.Cleanup(d.Stop)
+	d.AddPeer("198.51.100.40:51235", 1, PeerID(1))
+	d.AddRedirectCandidate("198.51.100.50:51235", PeerID(2))
+
+	assert.ElementsMatch(t, []string{
+		"198.51.100.10:51235",
+		"198.51.100.20:51235",
+		"198.51.100.30:51235",
+		"198.51.100.40:51235",
+		"198.51.100.50:51235",
+	}, d.SelectPeersToConnect(25))
+}
+
+func TestDiscoveryPrivateModeFixedPeerReconnectsAfterRestartDNSResolution(t *testing.T) {
+	now := time.Unix(10_000, 0)
+	dataDir := t.TempDir()
+	newDiscovery := func(fixedIP, bootstrapIP string) *Discovery {
+		d := NewDiscovery(&Config{
+			MaxPeers:       50,
+			MaxOutbound:    25,
+			BootstrapPeers: []string{"bootstrap.example:51235"},
+			FixedPeers:     []string{"fixed.example:51235"},
+			PrivateMode:    true,
+			DataDir:        dataDir,
+			Clock:          func() time.Time { return now },
+		}, make(chan Event, 1))
+		d.lookupIP = func(_ context.Context, host string) ([]net.IPAddr, error) {
+			switch host {
+			case "fixed.example":
+				return []net.IPAddr{{IP: net.ParseIP(fixedIP)}}, nil
+			case "bootstrap.example":
+				return []net.IPAddr{{IP: net.ParseIP(bootstrapIP)}}, nil
+			default:
+				return nil, fmt.Errorf("unexpected host %q", host)
+			}
+		}
+		return d
+	}
+
+	first := newDiscovery("192.0.2.10", "192.0.2.20")
+	require.NoError(t, first.Start(t.Context()))
+	t.Cleanup(first.Stop)
+	require.Equal(t, []string{"192.0.2.10:51235"}, first.SelectPeersToConnect(25))
+	first.MarkConnected("192.0.2.10:51235", PeerID(1))
+	first.MarkDisconnected(PeerID(1))
+	now = now.Add(recentConnectAttempt)
+	assert.Equal(t, []string{"192.0.2.10:51235"}, first.SelectPeersToConnect(25))
+	first.Stop()
+
+	second := newDiscovery("192.0.2.11", "192.0.2.21")
+	require.NoError(t, second.Start(t.Context()))
+	t.Cleanup(second.Stop)
+	entries := second.bootCache.Endpoints(50)
+	restored := make([]string, 0, len(entries))
+	for _, entry := range entries {
+		restored = append(restored, entry.Address)
+	}
+	assert.Contains(t, restored, "192.0.2.10:51235")
+	assert.Equal(t, []string{"192.0.2.11:51235"}, second.SelectPeersToConnect(25))
 }
 
 func TestBootCache(t *testing.T) {

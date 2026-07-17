@@ -1,6 +1,6 @@
 # Issue #1357 — AMMClawback pseudo-account metadata
 
-Target: `origin/main` at `7aab186ddb36317bdb63c831e6ffb9c5dd25b364`.
+Target: `origin/main` at `25a82672eb73ec5f76d95e00b8ef54d27cab21b2`.
 Behavioral oracle: clean local rippled `3.2.0` worktree at
 `3c43f4614f87965298773279ff5b85d4c56c637b`.
 
@@ -1170,3 +1170,51 @@ sequence in `Payment::doApply`. The Go implementation matches v3.2.0, so the old
 image created deterministic account-state and transaction-metadata divergence
 before exercising PR #1329. The smoke topology and both CI callers now use the
 project's mandated rippled 3.2.0 image and its `/config` entrypoint contract.
+# Issue #1360 — peer_private fixed-peer-only policy
+
+Target: `origin/main` at `7aab186ddb36317bdb63c831e6ffb9c5dd25b364`.
+Behavioral oracle: clean local rippled `3.2.0` worktree at
+`3c43f4614f87965298773279ff5b85d4c56c637b`.
+
+## Plan
+
+- [x] Trace every outbound candidate source and private-mode configuration path
+      in go-xrpl, including bootstrap, fixed, gossip, redirect, boot cache,
+      restart, and DNS re-resolution behavior.
+- [x] Confirm rippled v3.2.0 private-mode configuration and PeerFinder selection
+      semantics in the pinned local oracle.
+- [x] Add focused regressions proving private mode dials only fixed peers while
+      public mode retains all existing discovery behavior.
+- [x] Implement the smallest layered policy enforcement that prevents current
+      and future dynamic candidate sources from bypassing private mode.
+- [x] Run formatting, focused and race tests, affected package/core tests, build,
+      vet, strict CI lint, advisory lint, and diff checks.
+- [x] Review the complete diff for concurrency, reconnect/DNS behavior, startup
+      wiring, and rippled v3.2.0 conformance; record exact results below.
+- [x] Stage intentional files only, commit, push, open the PR against `main`, and
+      verify the published head and initial CI state.
+
+## Review
+
+- `Discovery.SelectPeersToConnect` now selects and reserves configured fixed
+  peers before applying the private-mode gate, then skips every ordinary live
+  and boot-cache candidate. This matches rippled v3.2.0's fixed handout before
+  its `autoConnect` check; learned data remains stored but cannot be auto-dialed.
+- Public-mode discovery is unchanged. The paired regression proves bootstrap,
+  fixed, gossip, redirect, and boot-cache candidates all remain eligible when
+  privacy is off and only the fixed candidate remains eligible when it is on.
+- Restart coverage proves a persisted stale fixed endpoint is loaded but not
+  selected after the configured hostname resolves to a new address. Fixed
+  disconnect/reconnect cooldown remains intact. Rippled v3.2.0 likewise
+  re-resolves configured names on process restart rather than periodically.
+- Existing zero ordinary inbound capacity and hops-0 self-gossip suppression
+  remain covered and unchanged. Manual administrative `Overlay.Connect` remains
+  available, matching rippled's `peer_connect` override.
+- Passed repeated focused tests, the full peer-management package, focused race
+  coverage, `just test-core`, `just fmt`, `just build-all`, `just vet`, tagged
+  PostgreSQL vet, CI-pinned strict lint, advisory lint, and `git diff --check`.
+- Independent final Go-quality, adversarial-test, and rippled-conformance
+  reviews found no Blocking, Major, Minor, or Nit issues.
+- Behavior commit `d1fc5be2` and test-hardening commit `5f0890f8` are published
+  on `fix/issue-1360-peer-private-fixed-peers`; PR #1364 targets `main` at
+  https://github.com/LeJamon/go-xrpl/pull/1364.

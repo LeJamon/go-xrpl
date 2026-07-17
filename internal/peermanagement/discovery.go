@@ -396,8 +396,11 @@ type Discovery struct {
 
 // NewDiscovery creates a new Discovery instance.
 func NewDiscovery(cfg *Config, events chan<- Event) *Discovery {
+	discoveryCfg := *cfg
+	discoveryCfg.BootstrapPeers = append([]string(nil), cfg.BootstrapPeers...)
+	discoveryCfg.FixedPeers = append([]string(nil), cfg.FixedPeers...)
 	d := &Discovery{
-		cfg:             *cfg,
+		cfg:             discoveryCfg,
 		peers:           make(map[string]*DiscoveredPeer),
 		connected:       make(map[PeerID]*DiscoveredPeer),
 		fixedPeers:      make(map[string]bool),
@@ -411,11 +414,11 @@ func NewDiscovery(cfg *Config, events chan<- Event) *Discovery {
 		d.cfg.Clock = time.Now
 	}
 
-	for _, addr := range cfg.FixedPeers {
+	for _, addr := range discoveryCfg.FixedPeers {
 		d.fixedPeers[addr] = true
 		d.persistentPeers[addr] = true
 	}
-	for _, addr := range cfg.BootstrapPeers {
+	for _, addr := range discoveryCfg.BootstrapPeers {
 		d.persistentPeers[addr] = true
 	}
 
@@ -832,7 +835,6 @@ func (d *Discovery) SelectPeersToConnect(count int) []string {
 	}
 	var fixedCandidates []string
 	var candidates []string
-	seen := make(map[string]struct{})
 	seenHosts := make(map[string]struct{})
 	for _, peer := range d.peers {
 		if peer.Connected {
@@ -865,33 +867,36 @@ func (d *Discovery) SelectPeersToConnect(count int) []string {
 			fixedCandidates = append(fixedCandidates, address)
 		}
 	}
-	for _, peer := range d.peers {
-		seen[peer.Address] = struct{}{}
-		if d.fixedPeers[peer.Address] {
-			continue
-		}
-		if !peer.Connected && peer.Hops <= MaxHops && eligible(peer.Address) {
-			candidates = append(candidates, peer.Address)
-		}
-	}
-
-	if d.bootCache != nil {
-		for _, entry := range d.bootCache.Endpoints(50) {
-			if _, exists := seen[entry.Address]; !exists && eligible(entry.Address) {
-				candidates = append(candidates, entry.Address)
-				seen[entry.Address] = struct{}{}
+	if !d.cfg.PrivateMode {
+		seen := make(map[string]struct{})
+		for _, peer := range d.peers {
+			seen[peer.Address] = struct{}{}
+			if d.fixedPeers[peer.Address] {
+				continue
+			}
+			if !peer.Connected && peer.Hops <= MaxHops && eligible(peer.Address) {
+				candidates = append(candidates, peer.Address)
 			}
 		}
-	}
 
-	rand.Shuffle(len(candidates), func(i, j int) {
-		candidates[i], candidates[j] = candidates[j], candidates[i]
-	})
+		if d.bootCache != nil {
+			for _, entry := range d.bootCache.Endpoints(50) {
+				if _, exists := seen[entry.Address]; !exists && eligible(entry.Address) {
+					candidates = append(candidates, entry.Address)
+					seen[entry.Address] = struct{}{}
+				}
+			}
+		}
 
-	if count > 0 && count < len(candidates) {
-		candidates = candidates[:count]
-	} else if count <= 0 {
-		candidates = nil
+		rand.Shuffle(len(candidates), func(i, j int) {
+			candidates[i], candidates[j] = candidates[j], candidates[i]
+		})
+
+		if count > 0 && count < len(candidates) {
+			candidates = candidates[:count]
+		} else if count <= 0 {
+			candidates = nil
+		}
 	}
 	candidates = append(fixedCandidates, candidates...)
 	for _, address := range candidates {
