@@ -446,6 +446,7 @@ func removeOfferFromView(view *payment.PaymentSandbox, offerKeylet keylet.Keylet
 	if err != nil {
 		return
 	}
-	_ = offerDeleteInView(view, offer)
-	adjustOwnerCountInView(view, ownerID, -1)
+	if offerDeleteInView(view, offer) == ter.TesSUCCESS {
+		adjustOwnerCountInView(view, ownerID, -1)
+	}
 }

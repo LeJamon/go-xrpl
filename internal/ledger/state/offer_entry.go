@@ -32,6 +32,11 @@ type LedgerOffer struct {
 	decodedOptionals        map[string]any
 }
 
+type offerBookLink struct {
+	directory [32]byte
+	node      uint64
+}
+
 // OfferCreate flags (kept here for backwards compatibility and external references)
 const (
 	OfferCreateFlagPassive           uint32 = 0x00010000
@@ -168,35 +173,55 @@ func parseLedgerOffer(data []byte) (*LedgerOffer, error) {
 }
 
 func decodeAdditionalBook(books []any, offer *LedgerOffer) error {
-	if len(books) == 0 {
-		return nil
+	links, err := decodeAdditionalBooks(books)
+	if err != nil || len(links) == 0 {
+		return err
 	}
-	element, ok := books[0].(map[string]any)
+	offer.AdditionalBookDirectory = links[0].directory
+	offer.AdditionalBookNode = links[0].node
+	return nil
+}
+
+func decodeAdditionalBooks(books []any) ([]offerBookLink, error) {
+	links := make([]offerBookLink, 0, len(books))
+	for i, value := range books {
+		link, err := decodeAdditionalBookEntry(value, i)
+		if err != nil {
+			return nil, err
+		}
+		links = append(links, link)
+	}
+	return links, nil
+}
+
+func decodeAdditionalBookEntry(value any, index int) (offerBookLink, error) {
+	var link offerBookLink
+	element, ok := value.(map[string]any)
 	if !ok {
-		return fmt.Errorf("Offer.AdditionalBooks[0]: decoded element has type %T", books[0])
+		return link, fmt.Errorf("Offer.AdditionalBooks[%d]: decoded element has type %T", index, value)
 	}
 	bookValue, ok := element["Book"]
 	if !ok {
-		return fmt.Errorf("Offer.AdditionalBooks[0]: missing Book")
+		return link, fmt.Errorf("Offer.AdditionalBooks[%d]: missing Book", index)
 	}
 	book, ok := bookValue.(map[string]any)
 	if !ok {
-		return fmt.Errorf("Offer.AdditionalBooks[0].Book: decoded value has type %T", bookValue)
+		return link, fmt.Errorf("Offer.AdditionalBooks[%d].Book: decoded value has type %T", index, bookValue)
 	}
 	directory, ok := book["BookDirectory"].(string)
 	if !ok {
-		return fmt.Errorf("Offer.AdditionalBooks[0].BookDirectory: decoded value has type %T", book["BookDirectory"])
+		return link, fmt.Errorf("Offer.AdditionalBooks[%d].BookDirectory: decoded value has type %T", index, book["BookDirectory"])
 	}
-	if err := decodeLedgerHex("Offer.AdditionalBooks[0].BookDirectory", directory, offer.AdditionalBookDirectory[:]); err != nil {
-		return err
+	if err := decodeLedgerHex(fmt.Sprintf("Offer.AdditionalBooks[%d].BookDirectory", index), directory, link.directory[:]); err != nil {
+		return link, err
 	}
 	node, ok := book["BookNode"].(string)
 	if !ok {
-		return fmt.Errorf("Offer.AdditionalBooks[0].BookNode: decoded value has type %T", book["BookNode"])
+		return link, fmt.Errorf("Offer.AdditionalBooks[%d].BookNode: decoded value has type %T", index, book["BookNode"])
 	}
 	var err error
-	offer.AdditionalBookNode, err = parseLedgerUint64("Offer.AdditionalBooks[0].BookNode", node)
-	return err
+	link.node, err = parseLedgerUint64(fmt.Sprintf("Offer.AdditionalBooks[%d].BookNode", index), node)
+	return link, err
 }
 
 // ParseLedgerOffer parses a LedgerOffer from binary data.

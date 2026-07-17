@@ -219,23 +219,13 @@ func offerDeleteInView(view tx.LedgerView, offer *state.LedgerOffer) ter.Result 
 		return ter.TefINTERNAL
 	}
 	offerKey := keylet.Offer(accountID, offer.Sequence)
-
-	ownerDirKey := keylet.OwnerDir(accountID)
-	_, err = state.DirRemove(view, ownerDirKey, offer.OwnerNode, offerKey.Key, false)
+	removed, err := state.DeleteOffer(view, offerKey, offer)
 	if err != nil {
 		return ter.TefINTERNAL
 	}
-
-	bookDirKey := keylet.Keylet{Type: entry.TypeDirectoryNode, Key: offer.BookDirectory}
-	_, err = state.DirRemove(view, bookDirKey, offer.BookNode, offerKey.Key, false)
-	if err != nil {
-		return ter.TefINTERNAL
+	if !removed {
+		return ter.TefBAD_LEDGER
 	}
-
-	if err := view.Erase(offerKey); err != nil {
-		return ter.TefINTERNAL
-	}
-
 	return ter.TesSUCCESS
 }
 

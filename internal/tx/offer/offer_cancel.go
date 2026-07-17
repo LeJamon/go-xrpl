@@ -7,7 +7,6 @@ import (
 	"github.com/LeJamon/go-xrpl/internal/tx"
 	"github.com/LeJamon/go-xrpl/internal/tx/ter"
 	"github.com/LeJamon/go-xrpl/keylet"
-	"github.com/LeJamon/go-xrpl/ledger/entry"
 )
 
 // OfferCancel cancels an existing offer on the decentralized exchange.
@@ -106,28 +105,12 @@ func (o *OfferCancel) Apply(ctx *tx.ApplyContext) ter.Result {
 		return ter.TefINTERNAL
 	}
 
-	// Remove from owner directory (keepRoot = false since owner dir should persist)
-	ownerDirKey := keylet.OwnerDir(accountID)
-	ownerDirResult, err := state.DirRemove(ctx.View, ownerDirKey, ledgerOffer.OwnerNode, offerKey.Key, false)
+	removed, err := state.DeleteOffer(ctx.View, offerKey, ledgerOffer)
 	if err != nil {
 		return ter.TefINTERNAL
 	}
-	if !ownerDirResult.Success {
+	if !removed {
 		return ter.TefBAD_LEDGER
-	}
-
-	// Remove from book directory (keepRoot = false - delete directory if empty)
-	bookDirKey := keylet.Keylet{Type: entry.TypeDirectoryNode, Key: ledgerOffer.BookDirectory}
-	bookDirResult, err := state.DirRemove(ctx.View, bookDirKey, ledgerOffer.BookNode, offerKey.Key, false)
-	if err != nil {
-		return ter.TefINTERNAL
-	}
-	if !bookDirResult.Success {
-		return ter.TefBAD_LEDGER
-	}
-
-	if err := ctx.View.Erase(offerKey); err != nil {
-		return ter.TefINTERNAL
 	}
 
 	if ctx.Account.OwnerCount > 0 {
