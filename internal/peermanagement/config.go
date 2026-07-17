@@ -244,19 +244,22 @@ func WithIPLimit(n int) Option {
 
 // WithBootstrapPeers sets the initial peers to connect to.
 func WithBootstrapPeers(peers ...string) Option {
+	peers = append([]string(nil), peers...)
 	return func(c *Config) {
-		c.BootstrapPeers = peers
+		c.BootstrapPeers = append([]string(nil), peers...)
 	}
 }
 
 // WithFixedPeers sets peers that should always be connected.
 func WithFixedPeers(peers ...string) Option {
+	peers = append([]string(nil), peers...)
 	return func(c *Config) {
-		c.FixedPeers = peers
+		c.FixedPeers = append([]string(nil), peers...)
 	}
 }
 
-// WithPrivateMode enables private mode (don't share our address).
+// WithPrivateMode limits automatic connections to fixed peers and suppresses
+// sharing our address.
 func WithPrivateMode(enabled bool) Option {
 	return func(c *Config) {
 		c.PrivateMode = enabled

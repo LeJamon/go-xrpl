@@ -396,8 +396,11 @@ type Discovery struct {
 
 // NewDiscovery creates a new Discovery instance.
 func NewDiscovery(cfg *Config, events chan<- Event) *Discovery {
+	discoveryCfg := *cfg
+	discoveryCfg.BootstrapPeers = append([]string(nil), cfg.BootstrapPeers...)
+	discoveryCfg.FixedPeers = append([]string(nil), cfg.FixedPeers...)
 	d := &Discovery{
-		cfg:             *cfg,
+		cfg:             discoveryCfg,
 		peers:           make(map[string]*DiscoveredPeer),
 		connected:       make(map[PeerID]*DiscoveredPeer),
 		fixedPeers:      make(map[string]bool),
@@ -411,11 +414,11 @@ func NewDiscovery(cfg *Config, events chan<- Event) *Discovery {
 		d.cfg.Clock = time.Now
 	}
 
-	for _, addr := range cfg.FixedPeers {
+	for _, addr := range discoveryCfg.FixedPeers {
 		d.fixedPeers[addr] = true
 		d.persistentPeers[addr] = true
 	}
-	for _, addr := range cfg.BootstrapPeers {
+	for _, addr := range discoveryCfg.BootstrapPeers {
 		d.persistentPeers[addr] = true
 	}
 

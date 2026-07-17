@@ -26,6 +26,28 @@ func TestNewDiscovery(t *testing.T) {
 	}
 }
 
+func TestDiscoveryConfigPeerSlicesAreIsolated(t *testing.T) {
+	bootstrap := []string{"bootstrap.example:51235"}
+	fixed := []string{"fixed.example:51235"}
+	cfg := DefaultConfig()
+	WithBootstrapPeers(bootstrap...)(&cfg)
+	WithFixedPeers(fixed...)(&cfg)
+
+	bootstrap[0] = "mutated-bootstrap.example:51235"
+	fixed[0] = "mutated-fixed.example:51235"
+	require.Equal(t, []string{"bootstrap.example:51235"}, cfg.BootstrapPeers)
+	require.Equal(t, []string{"fixed.example:51235"}, cfg.FixedPeers)
+
+	d := NewDiscovery(&cfg, make(chan Event, 1))
+	cfg.BootstrapPeers[0] = "replaced-bootstrap.example:51235"
+	cfg.FixedPeers[0] = "replaced-fixed.example:51235"
+
+	assert.Equal(t, []string{"bootstrap.example:51235"}, d.cfg.BootstrapPeers)
+	assert.Equal(t, []string{"fixed.example:51235"}, d.cfg.FixedPeers)
+	assert.True(t, d.fixedPeers["fixed.example:51235"])
+	assert.False(t, d.fixedPeers["replaced-fixed.example:51235"])
+}
+
 func TestDiscoveryAddPeer(t *testing.T) {
 	cfg := &Config{
 		MaxPeers:    50,
