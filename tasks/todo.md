@@ -1285,7 +1285,7 @@ Behavioral oracle: clean local rippled `3.2.0` worktree at
       strict CI lint, advisory lint, and diff checks.
 - [x] Review the complete diff for concurrency, failure paths, oracle parity, and
       test coverage; record exact results below.
-- [ ] Stage only intentional files, commit, push, open the PR against `main`, and
+- [x] Stage only intentional files, commit, push, open the PR against `main`, and
       verify the published head and initial CI state.
 
 ## Review
