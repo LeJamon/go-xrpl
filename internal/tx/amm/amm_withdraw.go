@@ -888,7 +888,7 @@ func withdrawIOUToAccount(
 	// Reference: rippled accountSend → rippleCredit handles issuer case by only
 	// adjusting the single AMM-issuer trust line.
 	if accountID == issuerID {
-		if err := createOrUpdateAMMTrustline(ammAccountID, asset, amount.Negate(), ctx.View, ctx.NumberContext()); err != nil {
+		if err := debitAMMTrustline(ammAccountID, asset, amount, ctx.View, ctx.NumberContext()); err != nil {
 			return ter.TefINTERNAL
 		}
 		return ter.TesSUCCESS
@@ -932,7 +932,7 @@ func withdrawIOUToAccount(
 	}
 
 	// Debit AMM's trust line (negative delta)
-	if err := createOrUpdateAMMTrustline(ammAccountID, asset, amount.Negate(), ctx.View, ctx.NumberContext()); err != nil {
+	if err := debitAMMTrustline(ammAccountID, asset, amount, ctx.View, ctx.NumberContext()); err != nil {
 		return ter.TefINTERNAL
 	}
 
