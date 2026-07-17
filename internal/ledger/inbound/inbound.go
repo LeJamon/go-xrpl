@@ -202,6 +202,9 @@ func New(hash [32]byte, seq uint32, peerID uint64, logger *slog.Logger, opts ...
 // the ledger is persisted for querying but not adopted into the active chain.
 func NewGeneric(hash [32]byte, seq uint32, peerID uint64, logger *slog.Logger, opts ...Option) *Ledger {
 	l := New(hash, seq, peerID, logger, opts...)
+	if peerID == 0 {
+		l.peers = nil
+	}
 	l.reason = ReasonGeneric
 	return l
 }
@@ -264,6 +267,19 @@ func (l *Ledger) AddPeer(peerID uint64) bool {
 	}
 	l.peers = append(l.peers, peerID)
 	return true
+}
+
+// RemovePeer removes peerID from the acquisition's source set.
+func (l *Ledger) RemovePeer(peerID uint64) bool {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	for i, id := range l.peers {
+		if id == peerID {
+			l.peers = slices.Delete(l.peers, i, i+1)
+			return true
+		}
+	}
+	return false
 }
 
 // Timeouts returns the number of no-progress timer intervals counted so far,

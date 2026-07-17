@@ -32,6 +32,10 @@ type peerLedgerState struct {
 	LedgerHash [32]byte
 }
 
+type peerSessionView interface {
+	IsPeerConnected(peermanagement.PeerID) bool
+}
+
 // Router reads inbound messages from the P2P overlay and dispatches
 // them to the consensus engine and adaptor.
 type Router struct {
@@ -56,8 +60,14 @@ type Router struct {
 	logger   *slog.Logger
 
 	// Peer ledger tracking for catch-up detection
-	peersMu    sync.RWMutex
-	peerStates map[peermanagement.PeerID]*peerLedgerState
+	peerSessions peerSessionView
+	peersMu      sync.RWMutex
+	peerStates   map[peermanagement.PeerID]*peerLedgerState
+
+	// The overlay callback only records disconnects; a router-owned worker performs
+	// cleanup so acquisition scans never block the overlay event loop.
+	pendingPeerDisconnects sync.Map
+	peerDisconnectWake     chan struct{}
 
 	// replayer coordinates concurrent mtREPLAY_DELTA_REQUEST acquisitions
 	// keyed by target ledger hash, under a configurable concurrency cap, so a
@@ -277,18 +287,19 @@ const messageDedupMaxEntries = 4096
 func NewRouter(engine consensus.Engine, adaptor *Adaptor, inbox <-chan *peermanagement.InboundMessage) *Router {
 	logger := slog.Default().With("component", "consensus-router")
 	r := &Router{
-		engine:          engine,
-		adaptor:         adaptor,
-		inbox:           inbox,
-		logger:          logger,
-		peerStates:      make(map[peermanagement.PeerID]*peerLedgerState),
-		replayer:        inbound.NewReplayer(logger, inbound.SystemClock, inbound.DefaultMaxInFlightReplays),
-		fetchTracker:    inbound.NewTracker(),
-		fetchPacks:      newFetchPackCache(),
-		messageSeen:     newMessageSuppression(messageDedupTTL, messageDedupMaxEntries),
-		txSetAcquire:    make(map[consensus.TxSetID]*txSetAcquireState),
-		txSetRetryKnobs: defaultTxSetRetryKnobs(),
-		seqHash:         make(map[uint32]ledgerHashEntry),
+		engine:             engine,
+		adaptor:            adaptor,
+		inbox:              inbox,
+		logger:             logger,
+		peerStates:         make(map[peermanagement.PeerID]*peerLedgerState),
+		peerDisconnectWake: make(chan struct{}, 1),
+		replayer:           inbound.NewReplayer(logger, inbound.SystemClock, inbound.DefaultMaxInFlightReplays),
+		fetchTracker:       inbound.NewTracker(),
+		fetchPacks:         newFetchPackCache(),
+		messageSeen:        newMessageSuppression(messageDedupTTL, messageDedupMaxEntries),
+		txSetAcquire:       make(map[consensus.TxSetID]*txSetAcquireState),
+		txSetRetryKnobs:    defaultTxSetRetryKnobs(),
+		seqHash:            make(map[uint32]ledgerHashEntry),
 	}
 	// Wire the stash → acquisition hook so quorum decisions on unknown
 	// ledgers don't sit silently in pendingLedgerValidations.
@@ -367,6 +378,10 @@ func (r *Router) SetManifestCache(cache *manifest.Cache, overlay *peermanagement
 	r.overlay = overlay
 }
 
+func (r *Router) setPeerSessionView(view peerSessionView) {
+	r.peerSessions = view
+}
+
 // SetValidatorListAggregator installs the publisher-trust subsystem.
 // Calling with a nil aggregator disables the TMValidatorList /
 // TMValidatorListCollection paths — the dispatch switch silently
@@ -405,6 +420,8 @@ func (r *Router) HandlePeerDisconnect(peerID peermanagement.PeerID) {
 	delete(r.peerStates, peerID)
 	r.peersMu.Unlock()
 	r.invalidateCatchupPeer(uint64(peerID))
+	r.invalidateHistoryPeer(uint64(peerID))
+	r.removePeerFromAcquisitions(uint64(peerID))
 
 	// Clear the peer's LCL vote so getNetworkLedger stops counting its
 	// stale hash. The adaptor uses the zero LedgerID as a delete key.
@@ -418,11 +435,60 @@ func (r *Router) HandlePeerDisconnect(peerID peermanagement.PeerID) {
 	}
 }
 
+func (r *Router) queuePeerDisconnect(peerID peermanagement.PeerID) {
+	r.pendingPeerDisconnects.Store(peerID, struct{}{})
+	select {
+	case r.peerDisconnectWake <- struct{}{}:
+	default:
+	}
+}
+
+func (r *Router) drainPeerDisconnects() {
+	r.pendingPeerDisconnects.Range(func(key, _ any) bool {
+		peerID := key.(peermanagement.PeerID)
+		if _, loaded := r.pendingPeerDisconnects.LoadAndDelete(peerID); loaded {
+			r.HandlePeerDisconnect(peerID)
+		}
+		return true
+	})
+}
+
+func (r *Router) runPeerDisconnectCleanup(ctx context.Context) {
+	r.drainPeerDisconnects()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-r.peerDisconnectWake:
+			r.drainPeerDisconnects()
+		}
+	}
+}
+
+func (r *Router) removePeerFromAcquisitions(peerID uint64) {
+	if r.fetchTracker != nil {
+		for _, il := range r.fetchTracker.Active() {
+			il.RemovePeer(peerID)
+		}
+	}
+}
+
 // Run reads messages from the overlay and dispatches them.
 // It blocks until the context is cancelled. A periodic maintenance tick
 // also runs in this loop to time out stuck inbound replay-delta
 // acquisitions and fall back to the legacy mtGET_LEDGER path.
 func (r *Router) Run(ctx context.Context) {
+	disconnectCtx, stopDisconnectCleanup := context.WithCancel(ctx)
+	disconnectCleanupDone := make(chan struct{})
+	go func() {
+		defer close(disconnectCleanupDone)
+		r.runPeerDisconnectCleanup(disconnectCtx)
+	}()
+	defer func() {
+		stopDisconnectCleanup()
+		<-disconnectCleanupDone
+	}()
+
 	r.startTxWorkers(ctx)
 	r.startServeWorkers(ctx)
 	ticker := time.NewTicker(inboundReplayDeltaTickInterval)

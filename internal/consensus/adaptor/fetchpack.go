@@ -253,6 +253,10 @@ func (r *Router) tryFetchPackEscalation(il *inbound.Ledger) bool {
 	if r.fetchPacks == nil || il.FetchPackRequested() {
 		return false
 	}
+	peerID := il.PeerID()
+	if peerID == 0 {
+		return false
+	}
 	svc := r.adaptor.LedgerService()
 	if svc == nil {
 		return false
@@ -275,7 +279,7 @@ func (r *Router) tryFetchPackEscalation(il *inbound.Ledger) bool {
 	if err != nil {
 		return false
 	}
-	if err := r.adaptor.SendToPeer(il.PeerID(), frame); err != nil {
+	if err := r.adaptor.SendToPeer(peerID, frame); err != nil {
 		r.logger.Debug("fetch-pack request send failed",
 			"seq", il.Seq(), "err", err)
 		return false
@@ -286,7 +290,7 @@ func (r *Router) tryFetchPackEscalation(il *inbound.Ledger) bool {
 		"seq", il.Seq(),
 		"hash", fmt.Sprintf("%x", wantHash[:4]),
 		"child", fmt.Sprintf("%x", childHash[:4]),
-		"peer", il.PeerID(),
+		"peer", peerID,
 	)
 	return true
 }

@@ -1262,3 +1262,75 @@ Behavioral oracle: clean local rippled `3.2.0` worktree at
 - Final adversarial review found no unresolved lock-order, data-race, retry-bound,
   peer-replacement, or rippled-conformance blocker after centralizing the failed
   hash gate in the shared consensus acquisition entry point.
+
+# Issue #1396 — queued status from a disconnected peer
+
+Target: `origin/main` at `e171f7c3dbf7741cbcd89ca7c5b1bad270aefe19`.
+Behavioral oracle: clean local rippled `3.2.0` worktree at
+`3c43f4614f87965298773279ff5b85d4c56c637b`.
+
+## Problem
+
+- The overlay can enqueue a peer's status frame before removing that peer, while
+  the router consumes the frame only after `HandlePeerDisconnect` has cleared
+  the peer's state.
+- Router dispatch carries only the process-unique peer ID, so the delayed status
+  currently recreates `peerStates` and the peer LCL vote for a dead session.
+- Catch-up treats the status origin as a valid send destination. An immediate
+  `ErrPeerNotFound` then remains in the legacy acquisition for its full retry
+  budget instead of selecting a connected replacement.
+- Rippled v3.2.0 serializes status dispatch with the owning connection lifetime
+  and resolves retained acquisition peer IDs through the live overlay at each
+  send boundary.
+
+## Plan
+
+- [x] Validate GitHub access, issue state and comments, linked PRs, active release
+      branches, exact base, clean dedicated worktree, and oracle provenance.
+- [x] Trace router dispatch, peer lifecycle callbacks, status-derived state,
+      acquisition hinting, immediate send failures, timer retries, and existing
+      issue #1391 regressions.
+- [x] Verify the corresponding session-ordering, unique peer identity, live-peer
+      resolution, and replacement behavior against local rippled v3.2.0.
+- [x] Add live-session dispatch checks and a lossless router-owned disconnect
+      cleanup worker so queued messages from ended sessions cannot restore state
+      and the overlay callback never performs acquisition scans.
+- [x] Re-resolve ledger-base destinations after disconnect-class send failures;
+      immediately use a live eligible replacement, retain peerless generic
+      acquisitions, or remove consensus/history acquisitions until re-armed.
+- [x] Add focused regressions for the exact enqueue/disconnect/replacement/status
+      ordering, no-replacement behavior, immediate reselection, and non-disconnect
+      send errors retaining the existing bounded retry semantics.
+- [x] Run formatting, focused and race tests, affected core tests, build, vet,
+      strict CI lint, advisory lint, and diff checks.
+- [x] Review the complete diff for lock ordering, callback races, acquisition
+      ownership, oracle parity, and test coverage; record exact results below.
+- [x] Stage only intentional files, commit, push, open the PR against `main`, and
+      verify the published head and CI state.
+
+## Review
+
+- Dispatch rejects messages whose originating peer session is no longer live and
+  repeats idempotent disconnect cleanup after handling to close the admitted-
+  message/disconnect race. Process-unique, monotonic peer IDs keep that cleanup
+  scoped to the ended connection.
+- The overlay callback publishes disconnect IDs through a coalescing mailbox and
+  nonblocking wake. One router-owned worker performs peer-state, LCL, validator-
+  list, catch-up/history hint, and active-acquisition cleanup and is joined when
+  `Router.Run` exits.
+- Consensus, history, validation-stash, and RPC generic base requests all resolve
+  their peer at the final send boundary. `ErrPeerNotFound` and
+  `ErrConnectionClosed` remove the dead source and immediately try another live
+  peer. Generic acquisitions remain registered with an empty peer set when no
+  peer is available, matching rippled's later timer-driven peer attachment;
+  fetch-pack escalation snapshots one nonzero peer at its own send boundary.
+- Compared with the clean local rippled v3.2.0 oracle at
+  `3c43f4614f87965298773279ff5b85d4c56c637b`: per-session dispatch/close ordering,
+  live peer lookup at send time, `PeerSet` dead-session skipping, generic
+  acquisition retention, and timer-driven replacement behavior match.
+- Verification passed: `just fmt`; relevant package tests and their race build;
+  focused ordering/generic regressions at `-count=100`; `just test-core`;
+  `just build-all`; `just build-nocgo`; `just vet`; strict and advisory
+  `golangci-lint`; PostgreSQL-tagged vet; and `git diff --check`.
+- Two independent final reviews found no remaining correctness, race, deadlock,
+  callback-lifecycle, test-coverage, or rippled-conformance blockers.

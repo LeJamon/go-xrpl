@@ -19,6 +19,15 @@ import (
 func (r *Router) handleMessage(msg *peermanagement.InboundMessage) {
 	defer r.recoverFrame(msg, "dispatch")
 
+	if r.peerSessions != nil && !r.peerSessions.IsPeerConnected(msg.PeerID) {
+		return
+	}
+	defer func() {
+		if r.peerSessions != nil && !r.peerSessions.IsPeerConnected(msg.PeerID) {
+			r.HandlePeerDisconnect(msg.PeerID)
+		}
+	}()
+
 	msgType := message.MessageType(msg.Type)
 
 	switch msgType {
