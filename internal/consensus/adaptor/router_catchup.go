@@ -309,24 +309,16 @@ func (r *Router) armCatchupTowardTargetWithPeer(peerHint uint64) {
 	}
 
 	if seq, hash, ok := r.forwardDeltaStep(svc, closed, tSeq); ok {
-		peer := peerHint
-		if peer == 0 {
-			var found bool
-			peer, found = r.selectAcquisitionPeer(seq)
-			if !found {
-				return
-			}
+		peer, found := r.resolveAcquisitionPeer(seq, peerHint)
+		if !found {
+			return
 		}
 		r.startLedgerAcquisition(seq, hash, peer)
 		return
 	}
-	peer := peerHint
-	if peer == 0 {
-		var found bool
-		peer, found = r.selectAcquisitionPeer(tSeq)
-		if !found {
-			return
-		}
+	peer, found := r.resolveAcquisitionPeer(tSeq, peerHint)
+	if !found {
+		return
 	}
 	r.startLedgerAcquisition(tSeq, tHash, peer)
 }
@@ -382,6 +374,7 @@ func (r *Router) ensureCatchupAcquisition(seq uint32, hash [32]byte, peerID uint
 	if seq == 0 || seq <= svc.GetClosedLedgerIndex() {
 		return
 	}
+	peerID, _ = r.resolveAcquisitionPeer(seq, peerID)
 	r.recordCatchupTarget(seq, hash, peerID)
 	if il := r.fetchTracker.Find(hash); il != nil && il.Reason() == inbound.ReasonConsensus {
 		r.refreshCatchupAcquisitionPeer(il, peerID)
@@ -394,9 +387,8 @@ func (r *Router) refreshCatchupAcquisitionPeer(il *inbound.Ledger, peerID uint64
 	if peerID == 0 || il.State() != inbound.StateWantBase || slices.Contains(il.Peers(), peerID) {
 		return
 	}
-	il.AddPeer(peerID)
-	if err := r.adaptor.RequestLedgerBaseFromPeer(peerID, il.Hash(), il.Seq()); err != nil {
-		r.logger.Warn("failed to request ledger base from replacement peer", "error", err)
+	if !r.requestLedgerBase(il, peerID, "failed to request ledger base from replacement peer") {
+		r.fetchTracker.Remove(il.Hash(), false)
 	}
 }
 
@@ -506,7 +498,7 @@ func (r *Router) startLedgerAcquisitionLegacy(seq uint32, hash [32]byte, peerID 
 		return
 	}
 
-	_, created := r.fetchTracker.GetOrCreate(hash, func() *inbound.Ledger {
+	il, created := r.fetchTracker.GetOrCreate(hash, func() *inbound.Ledger {
 		return inbound.New(hash, seq, peerID, r.logger, r.acquisitionOpts()...)
 	})
 	if !created {
@@ -520,8 +512,45 @@ func (r *Router) startLedgerAcquisitionLegacy(seq uint32, hash [32]byte, peerID 
 		"peer", peerID,
 	)
 
-	if err := r.adaptor.RequestLedgerBaseFromPeer(peerID, hash, seq); err != nil {
-		r.logger.Warn("failed to request ledger base from peer", "error", err)
+	if !r.requestLedgerBase(il, peerID, "failed to request ledger base from peer") {
+		r.fetchTracker.Remove(hash, false)
+	}
+}
+
+func (r *Router) requestLedgerBase(il *inbound.Ledger, peerID uint64, logMessage string) bool {
+	excluded := make(map[uint64]struct{})
+	for {
+		if peerID == 0 {
+			var ok bool
+			peerID, ok = r.selectAcquisitionPeerExcluding(il.Seq(), excluded)
+			if !ok {
+				return false
+			}
+		}
+
+		il.AddPeer(peerID)
+		err := r.adaptor.RequestLedgerBaseFromPeer(peerID, il.Hash(), il.Seq())
+		if err == nil {
+			return true
+		}
+		r.logger.Warn(logMessage, "error", err, "peer", peerID)
+		if !errors.Is(err, peermanagement.ErrPeerNotFound) &&
+			!errors.Is(err, peermanagement.ErrConnectionClosed) {
+			return true
+		}
+
+		il.RemovePeer(peerID)
+		r.HandlePeerDisconnect(peermanagement.PeerID(peerID))
+		excluded[peerID] = struct{}{}
+		peerID = 0
+	}
+}
+
+func (r *Router) invalidateHistoryPeer(peerID uint64) {
+	r.historyMu.Lock()
+	defer r.historyMu.Unlock()
+	if r.history.peerID == peerID {
+		r.history.peerID = 0
 	}
 }
 
@@ -583,11 +612,8 @@ func (r *Router) armHistoryBackfill() {
 	if r.fetchTracker.CountReason(inbound.ReasonHistory) >= 1 || r.isAcquiring(target.hash) {
 		return
 	}
-	peer := target.peerID
-	if p, ok := r.selectAcquisitionPeer(target.seq); ok {
-		peer = p
-	}
-	if peer == 0 {
+	peer, ok := r.resolveAcquisitionPeer(target.seq, target.peerID)
+	if !ok {
 		return
 	}
 	r.startHistoryAcquisition(target.seq, target.hash, peer)
@@ -600,7 +626,7 @@ func (r *Router) startHistoryAcquisition(seq uint32, hash [32]byte, peerID uint6
 	if r.replayer.Has(hash) {
 		return
 	}
-	_, created := r.fetchTracker.GetOrCreate(hash, func() *inbound.Ledger {
+	il, created := r.fetchTracker.GetOrCreate(hash, func() *inbound.Ledger {
 		return inbound.NewHistory(hash, seq, peerID, r.logger, r.acquisitionOpts()...)
 	})
 	if !created {
@@ -611,8 +637,7 @@ func (r *Router) startHistoryAcquisition(seq uint32, hash [32]byte, peerID uint6
 		"hash", fmt.Sprintf("%x", hash[:8]),
 		"peer", peerID,
 	)
-	if err := r.adaptor.RequestLedgerBaseFromPeer(peerID, hash, seq); err != nil {
-		r.logger.Warn("failed to request ledger base from peer", "error", err)
+	if !r.requestLedgerBase(il, peerID, "failed to request history ledger base from peer") {
 		r.fetchTracker.Remove(hash, false)
 	}
 }
@@ -713,10 +738,7 @@ func (r *Router) startGenericAcquisition(hash [32]byte, seq uint32) (map[string]
 		return inbound.AcquisitionJSON(il.Snapshot()), true
 	}
 
-	peerID, ok := r.selectAcquisitionPeer(seq)
-	if !ok {
-		return nil, false
-	}
+	peerID, _ := r.selectAcquisitionPeer(seq)
 
 	il, created := r.fetchTracker.GetOrCreate(hash, func() *inbound.Ledger {
 		return inbound.NewGeneric(hash, seq, peerID, r.logger, r.acquisitionOpts()...)
@@ -727,10 +749,8 @@ func (r *Router) startGenericAcquisition(hash [32]byte, seq uint32) (map[string]
 			"hash", fmt.Sprintf("%x", hash[:8]),
 			"peer", peerID,
 		)
-		if err := r.adaptor.RequestLedgerBaseFromPeer(peerID, hash, seq); err != nil {
-			r.logger.Warn("ledger_request: failed to request ledger base", "error", err)
-			r.fetchTracker.Remove(hash, false)
-			return nil, false
+		if peerID != 0 {
+			r.requestLedgerBase(il, peerID, "ledger_request: failed to request ledger base")
 		}
 	}
 	return inbound.AcquisitionJSON(il.Snapshot()), true
@@ -749,18 +769,43 @@ func getCandidateLedger(seq uint32) uint32 {
 // (and therefore likely to hold it). When seq is unknown (0) or no peer is far
 // enough along, it falls back to any connected peer. Returns (0,false) when no
 // peer has reported a ledger state.
+func (r *Router) resolveAcquisitionPeer(seq uint32, preferred uint64) (uint64, bool) {
+	if preferred != 0 && (r.peerSessions == nil || r.peerSessions.IsPeerConnected(peermanagement.PeerID(preferred))) {
+		return preferred, true
+	}
+	return r.selectAcquisitionPeer(seq)
+}
+
 func (r *Router) selectAcquisitionPeer(seq uint32) (uint64, bool) {
+	return r.selectAcquisitionPeerExcluding(seq, nil)
+}
+
+func (r *Router) selectAcquisitionPeerExcluding(seq uint32, excluded map[uint64]struct{}) (uint64, bool) {
 	r.peersMu.RLock()
-	defer r.peersMu.RUnlock()
+	type candidate struct {
+		id  uint64
+		seq uint32
+	}
+	candidates := make([]candidate, 0, len(r.peerStates))
+	for pid, st := range r.peerStates {
+		candidates = append(candidates, candidate{id: uint64(pid), seq: st.LedgerSeq})
+	}
+	r.peersMu.RUnlock()
 
 	var fallback uint64
 	var haveFallback bool
-	for pid, st := range r.peerStates {
-		if !haveFallback {
-			fallback, haveFallback = uint64(pid), true
+	for _, peer := range candidates {
+		if _, skip := excluded[peer.id]; skip {
+			continue
 		}
-		if seq == 0 || st.LedgerSeq >= seq {
-			return uint64(pid), true
+		if r.peerSessions != nil && !r.peerSessions.IsPeerConnected(peermanagement.PeerID(peer.id)) {
+			continue
+		}
+		if !haveFallback {
+			fallback, haveFallback = peer.id, true
+		}
+		if seq == 0 || peer.seq >= seq {
+			return peer.id, true
 		}
 	}
 	return fallback, haveFallback
@@ -1346,9 +1391,8 @@ func (r *Router) requestAcquisitionBase(il *inbound.Ledger) {
 	if !ok {
 		return
 	}
-	il.AddPeer(peerID)
-	if err := r.adaptor.RequestLedgerBaseFromPeer(peerID, il.Hash(), il.Seq()); err != nil {
-		r.logger.Warn("failed to retry ledger base request", "error", err)
+	if !r.requestLedgerBase(il, peerID, "failed to retry ledger base request") && il.Reason() != inbound.ReasonGeneric {
+		r.fetchTracker.Remove(il.Hash(), false)
 	}
 }
 

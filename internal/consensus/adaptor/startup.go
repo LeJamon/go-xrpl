@@ -391,6 +391,7 @@ func NewFromConfig(
 	router.SetTxInbox(overlay.TxMessages())
 	router.SetAcqInbox(overlay.LedgerDataMessages())
 	router.SetManifestCache(manifestCache, overlay)
+	router.setPeerSessionView(overlay)
 	router.SetMinimumOnlineFloor(floor)
 
 	// Build the publisher-list aggregator when validator_list_keys are
@@ -464,12 +465,12 @@ func NewFromConfig(
 		}
 	}
 
-	// Plumb peer disconnect notifications back through the router so
+	// Queue peer disconnect notifications for router-owned cleanup so
 	// per-peer state (peerStates for catch-up, peerLCLs for the
-	// getNetworkLedger vote) is cleaned the instant a peer goes away.
+	// getNetworkLedger vote) is cleaned without blocking the overlay event loop.
 	// Without this a disconnected peer's stale LCL keeps influencing
 	// consensus convergence.
-	overlay.SetPeerDisconnectCallback(router.HandlePeerDisconnect)
+	overlay.SetPeerDisconnectCallback(router.queuePeerDisconnect)
 
 	// Emit cached validator manifests (local + aggregated remote) the
 	// moment a peer's handshake completes, so the new peer can resolve

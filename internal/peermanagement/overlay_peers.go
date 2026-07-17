@@ -134,6 +134,12 @@ func (o *Overlay) getPeer(peerID PeerID) (*Peer, bool) {
 	return peer, ok
 }
 
+// IsPeerConnected reports whether peerID still identifies a live session.
+func (o *Overlay) IsPeerConnected(peerID PeerID) bool {
+	peer, ok := o.getPeer(peerID)
+	return ok && peer.State() == PeerStateConnected
+}
+
 // Send sends a message to a specific peer.
 func (o *Overlay) Send(peerID PeerID, msg []byte) error {
 	peer, ok := o.getPeer(peerID)
