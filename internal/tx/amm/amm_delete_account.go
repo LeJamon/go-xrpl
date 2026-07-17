@@ -1,8 +1,6 @@
 package amm
 
 import (
-	"bytes"
-
 	"github.com/LeJamon/go-xrpl/internal/ledger/state"
 	"github.com/LeJamon/go-xrpl/internal/tx"
 	"github.com/LeJamon/go-xrpl/internal/tx/mptutil"
@@ -11,21 +9,26 @@ import (
 	"github.com/LeJamon/go-xrpl/ledger/entry"
 )
 
-// updateAMMAccountIfChanged persists the AMM account only when its serialized
-// bytes actually differ from what the view already holds. An all-IOU withdraw
-// leaves the AMM account's own fields untouched (only its trust lines change);
-// rewriting it would promote it to a modified node, whereas rippled leaves it
-// as a bare threaded owner of the changed trust lines (no FinalFields). An
-// XRP-side withdraw does change its Balance, so it is still written.
-func updateAMMAccountIfChanged(view tx.LedgerView, ammAccountKey keylet.Keylet, ammAccount *state.AccountRoot) ter.Result {
-	ammAccountBytes, err := state.SerializeAccountRoot(ammAccount)
+// updateAMMAccountBalanceIfChanged merges the locally calculated XRP balance
+// into the latest AccountRoot so trust-line owner-count changes are preserved.
+func updateAMMAccountBalanceIfChanged(view tx.LedgerView, ammAccountKey keylet.Keylet, ammAccount *state.AccountRoot) ter.Result {
+	currentBytes, err := view.Read(ammAccountKey)
+	if err != nil || currentBytes == nil {
+		return ter.TefINTERNAL
+	}
+	current, err := state.ParseAccountRoot(currentBytes)
 	if err != nil {
 		return ter.TefINTERNAL
 	}
-	if cur, _ := view.Read(ammAccountKey); bytes.Equal(cur, ammAccountBytes) {
+	if current.Balance == ammAccount.Balance {
 		return ter.TesSUCCESS
 	}
-	if err := view.Update(ammAccountKey, ammAccountBytes); err != nil {
+	current.Balance = ammAccount.Balance
+	updatedBytes, err := state.SerializeAccountRoot(current)
+	if err != nil {
+		return ter.TefINTERNAL
+	}
+	if err := view.Update(ammAccountKey, updatedBytes); err != nil {
 		return ter.TefINTERNAL
 	}
 	return ter.TesSUCCESS
@@ -84,70 +87,24 @@ func deleteAMMTrustLine(view tx.LedgerView, lineKey keylet.Keylet, rs *state.Rip
 		return ter.TerNO_AMM
 	}
 
-	// The reserve-holding side's flag must be present before the line is erased;
-	// an AMM pool line always carries at least the AMM side's reserve flag, so its
-	// total absence is an internal inconsistency. Mirrors rippled's tecINTERNAL
-	// guard. Reference: rippled View.cpp:2759-2761.
-	if rs.Flags&(state.LsfLowReserve|state.LsfHighReserve) == 0 {
-		return ter.TecINTERNAL
-	}
-
-	// Clear the reserve flag only on the AMM side, reproducing rippled: it
-	// releases the AMM side's reserve during the payout credit and leaves the
-	// non-AMM (holder) side's flag set (e.g. on the LP-token line).
-	if rs.Flags&state.LsfLowReserve != 0 {
-		if ammLow {
-			rs.Flags &^= state.LsfLowReserve
-		}
-		if err := decrementLineOwner(view, lowAccountID, lowAccount, ammLow); err != nil {
-			return ter.TecINTERNAL
-		}
-	}
-	if rs.Flags&state.LsfHighReserve != 0 {
-		if ammHigh {
-			rs.Flags &^= state.LsfHighReserve
-		}
-		if err := decrementLineOwner(view, highAccountID, highAccount, ammHigh); err != nil {
-			return ter.TecINTERNAL
-		}
-	}
-
-	// Persist the cleared reserve flag before erasing so the DeletedNode records
-	// the flag change as PreviousFields.
-	rsBytes, err := state.SerializeRippleState(rs)
-	if err != nil {
-		return ter.TecINTERNAL
-	}
-	if err := view.Update(lineKey, rsBytes); err != nil {
-		return ter.TecINTERNAL
-	}
-
 	if trustDelete(view, lineKey, lowAccountID, highAccountID, rs.LowNode, rs.HighNode) != nil {
 		return ter.TefBAD_LEDGER
 	}
 
-	return ter.TesSUCCESS
-}
+	nonAMMAccountID := lowAccountID
+	nonAMMReserveFlag := uint32(state.LsfLowReserve)
+	if ammLow {
+		nonAMMAccountID = highAccountID
+		nonAMMReserveFlag = state.LsfHighReserve
+	}
+	if rs.Flags&nonAMMReserveFlag == 0 {
+		return ter.TecINTERNAL
+	}
+	if err := tx.AdjustOwnerCount(view, nonAMMAccountID, -1); err != nil {
+		return ter.TecINTERNAL
+	}
 
-// decrementLineOwner decrements the OwnerCount of a trust line's reserve-holding
-// side through the view, so the change is recorded as an in-place modification
-// before the line (and, for the AMM side, the AMM AccountRoot) is erased. For
-// the AMM side it routes through tx.AdjustOwnerCount, which re-reads the account
-// from the view each call so repeated decrements (one per pool line) compose to
-// the correct final OwnerCount and the AMM AccountRoot's later erase becomes a
-// DeletedNode carrying PreviousFields.OwnerCount.
-func decrementLineOwner(view tx.LedgerView, accountID [20]byte, account *state.AccountRoot, isAMM bool) error {
-	if isAMM {
-		return tx.AdjustOwnerCount(view, accountID, -1)
-	}
-	if account.OwnerCount > 0 {
-		account.OwnerCount--
-	}
-	bytes, err := state.SerializeAccountRoot(account)
-	if err != nil {
-		return err
-	}
-	return view.Update(keylet.Account(accountID), bytes)
+	return ter.TesSUCCESS
 }
 
 // deleteAMMTrustLines iterates the AMM account's owner directory and deletes
@@ -358,7 +315,7 @@ func deleteAMMAccountIfEmpty(view tx.LedgerView, ammKey keylet.Keylet, ammAccoun
 		if err := view.Update(ammKey, ammBytes); err != nil {
 			return ter.TefINTERNAL
 		}
-		if r := updateAMMAccountIfChanged(view, ammAccountKey, ammAccount); r != ter.TesSUCCESS {
+		if r := updateAMMAccountBalanceIfChanged(view, ammAccountKey, ammAccount); r != ter.TesSUCCESS {
 			return r
 		}
 		return ter.TesSUCCESS
@@ -371,7 +328,7 @@ func deleteAMMAccountIfEmpty(view tx.LedgerView, ammKey keylet.Keylet, ammAccoun
 	// DeletedNode metadata records the pre-withdrawal balance instead of the
 	// drained balance, mirroring rippled which transfers the XRP out (draining the
 	// account) before deleting it.
-	if r := updateAMMAccountIfChanged(view, ammAccountKey, ammAccount); r != ter.TesSUCCESS {
+	if r := updateAMMAccountBalanceIfChanged(view, ammAccountKey, ammAccount); r != ter.TesSUCCESS {
 		return r
 	}
 	result := DeleteAMMAccount(view, asset, asset2)
@@ -389,9 +346,6 @@ func deleteAMMAccountIfEmpty(view tx.LedgerView, ammKey keylet.Keylet, ammAccoun
 		}
 		if err := view.Update(ammKey, ammBytes); err != nil {
 			return ter.TefINTERNAL
-		}
-		if r := updateAMMAccountIfChanged(view, ammAccountKey, ammAccount); r != ter.TesSUCCESS {
-			return r
 		}
 	}
 

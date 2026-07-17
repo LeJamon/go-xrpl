@@ -43,6 +43,37 @@ Behavioral oracle: clean local rippled `3.2.0` worktree at
   rerun. The regression directly pins the exact divergent 2,248-byte metadata
   boundary and its canonical transaction leaf/tree hash.
 
+## PR #1358 finalization
+
+- [x] Pin the exact PR head, base, clean worktree, and clean local rippled 3.2.0
+      oracle at `3c43f4614f87965298773279ff5b85d4c56c637b`.
+- [x] Review the complete diff and adjacent AMM withdrawal, trust-line cleanup,
+      bounded deletion, AccountRoot persistence, and metadata paths.
+- [x] Resolve the final-LP `tecINCOMPLETE` divergence found during review by
+      deleting drained pool lines before bounded cleanup and preserving the
+      latest pseudo-account `OwnerCount` while merging XRP balance changes.
+- [x] Add a final-share AMMClawback regression with 513 excess LP trust lines.
+- [x] Restore pseudo-account `OwnerCount` when an empty AMM recreates a drained
+      IOU pool line, and extend the regression through re-seeding and deletion.
+- [ ] Repeat independent correctness and rippled-conformance review; pass build,
+      vet, lint, whitespace, and exact-head CI gates.
+- [ ] Run the required separate comment-cleanup phase, verify final CI, and
+      record the local-only conformance audit.
+
+### Finalization review
+
+- Rippled v3.2.0 drains and deletes a zero AMM pool RippleState, including its
+  reserve and pseudo-account `OwnerCount`, before applying the 512-entry AMM
+  cleanup bound. On `tecINCOMPLETE` it updates only the AMM ledger entry.
+- The shared Go debit path now applies the same balance, reserve, owner-count,
+  and deletion transition for AMMClawback and AMMWithdraw. AccountRoot balance
+  persistence merges into the latest view, and interrupted cleanup no longer
+  rewrites an earlier AccountRoot snapshot.
+- Re-seeding an interrupted empty AMM now increments `OwnerCount` for each
+  recreated IOU pool line, matching rippled's `trustCreate` transition.
+- Bounded cleanup now erases the zero line and decrements only the non-AMM
+  reserve owner, matching `deleteAMMTrustLine` in the pinned oracle.
+
 # Issue #1349 — LoanSet NUMBER asset association
 
 Target: `origin/main` at `ce13cadd`. Behavioral oracle: clean local rippled

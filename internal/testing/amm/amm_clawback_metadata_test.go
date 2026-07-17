@@ -2,6 +2,7 @@ package amm_test
 
 import (
 	"encoding/hex"
+	"fmt"
 	"strings"
 	"testing"
 
@@ -9,6 +10,7 @@ import (
 	jtx "github.com/LeJamon/go-xrpl/internal/testing"
 	"github.com/LeJamon/go-xrpl/internal/testing/accountset"
 	"github.com/LeJamon/go-xrpl/internal/testing/amm"
+	"github.com/LeJamon/go-xrpl/internal/testing/trustset"
 	"github.com/LeJamon/go-xrpl/internal/tx"
 	"github.com/LeJamon/go-xrpl/keylet"
 	"github.com/LeJamon/go-xrpl/shamap"
@@ -123,4 +125,62 @@ func TestAMMClawbackXRPPoolPersistsAMMAccountBalance(t *testing.T) {
 	require.NotNil(t, node)
 	require.NotEmpty(t, node.FinalFields)
 	require.Contains(t, node.PreviousFields, "Balance")
+}
+
+func TestAMMClawbackIncompleteCleanupPreservesAMMAccountState(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping: creates 513 accounts")
+	}
+
+	const extraTrustLines = 513
+
+	env := setupClawbackEnvWithUSD(t, 1_000_000, 1_000_000, 3_000)
+	jtx.RequireTxSuccess(t, env.Submit(amm.AMMCreate(
+		env.Alice,
+		amm.XRPAmount(1_000),
+		amm.IOUAmount(env.GW, "USD", 2_000),
+	).Build()))
+	env.Close()
+
+	ammAccount := amm.AMMAccount(t, env, env.USD, amm.XRP())
+	lptAmount := amm.LPTokenAmount(env, env.USD, amm.XRP(), 10_000)
+	for i := range extraTrustLines {
+		account := jtx.NewAccount(fmt.Sprintf("clawback-lp-%d", i))
+		env.FundAmount(account, uint64(jtx.XRP(1_000)))
+		env.Close()
+		jtx.RequireTxSuccess(t, env.Submit(trustset.TrustSet(account, lptAmount).Build()))
+		env.Close()
+	}
+
+	balanceBefore := env.Balance(ammAccount)
+	result := env.Submit(amm.AMMClawback(env.GW, env.Alice.Address, env.USD, amm.XRP()).Build())
+	jtx.RequireTxSuccess(t, result)
+
+	ammData := env.ReadAMMData(env.USD, amm.XRP())
+	require.NotNil(t, ammData)
+	require.True(t, ammData.LPTokenBalance.IsZero())
+	require.False(t, env.LedgerEntryExists(keylet.Line(ammAccount.ID, env.GW.ID, "USD")))
+	require.Equal(t, uint32(0), env.OwnerCount(ammAccount))
+	require.Equal(t, uint64(0), env.Balance(ammAccount))
+
+	node := accountRootMetadataNode(result.Metadata, ammAccount.ID)
+	require.NotNil(t, node)
+	require.Equal(t, "ModifiedNode", node.NodeType)
+	require.Equal(t, "0", node.FinalFields["Balance"])
+	require.Equal(t, uint32(0), node.FinalFields["OwnerCount"])
+	require.Equal(t, fmt.Sprint(balanceBefore), node.PreviousFields["Balance"])
+	require.Equal(t, uint32(1), node.PreviousFields["OwnerCount"])
+
+	jtx.RequireTxSuccess(t, env.Submit(amm.AMMDeposit(env.Alice, env.USD, amm.XRP()).
+		Amount(amm.IOUAmount(env.GW, "USD", 500)).
+		Amount2(amm.XRPAmount(500)).
+		TwoAssetIfEmpty().
+		Build()))
+	require.True(t, env.LedgerEntryExists(keylet.Line(ammAccount.ID, env.GW.ID, "USD")))
+	require.Equal(t, uint32(1), env.OwnerCount(ammAccount))
+
+	jtx.RequireTxSuccess(t, env.Submit(amm.AMMWithdraw(env.Alice, env.USD, amm.XRP()).
+		WithdrawAll().
+		Build()))
+	require.Nil(t, env.ReadAMMData(env.USD, amm.XRP()))
 }

@@ -360,7 +360,7 @@ func (a *AMMClawback) Apply(ctx *tx.ApplyContext) ter.Result {
 			if result := sendMPT(ctx.View, holderID, issuerID, withdrawAmount1, true); result != ter.TesSUCCESS {
 				return result
 			}
-		} else if err := createOrUpdateAMMTrustline(ammAccountID, a.Asset, withdrawAmount1.Negate(), ctx.View, ctx.NumberContext()); err != nil {
+		} else if err := debitAMMTrustline(ammAccountID, a.Asset, withdrawAmount1, ctx.View, ctx.NumberContext()); err != nil {
 			return ter.TefINTERNAL
 		}
 	}
@@ -377,7 +377,7 @@ func (a *AMMClawback) Apply(ctx *tx.ApplyContext) ter.Result {
 				if result := sendMPT(ctx.View, holderID, issuerID, withdrawAmount2, true); result != ter.TesSUCCESS {
 					return result
 				}
-			} else if err := createOrUpdateAMMTrustline(ammAccountID, a.Asset2, withdrawAmount2.Negate(), ctx.View, ctx.NumberContext()); err != nil {
+			} else if err := debitAMMTrustline(ammAccountID, a.Asset2, withdrawAmount2, ctx.View, ctx.NumberContext()); err != nil {
 				return ter.TefINTERNAL
 			}
 		} else if isXRP2 && !withdrawAmount2.IsZero() {
@@ -396,7 +396,7 @@ func (a *AMMClawback) Apply(ctx *tx.ApplyContext) ter.Result {
 					return result
 				}
 			} else {
-				if err := createOrUpdateAMMTrustline(ammAccountID, a.Asset2, withdrawAmount2.Negate(), ctx.View, ctx.NumberContext()); err != nil {
+				if err := debitAMMTrustline(ammAccountID, a.Asset2, withdrawAmount2, ctx.View, ctx.NumberContext()); err != nil {
 					return ter.TefINTERNAL
 				}
 				issuer2ID, _ := state.DecodeAccountID(a.Asset2.Issuer)
