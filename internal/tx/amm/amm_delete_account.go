@@ -92,7 +92,7 @@ func deleteAMMTrustLine(view tx.LedgerView, lineKey keylet.Keylet, rs *state.Rip
 	}
 
 	nonAMMAccountID := lowAccountID
-	nonAMMReserveFlag := uint32(state.LsfLowReserve)
+	nonAMMReserveFlag := state.LsfLowReserve
 	if ammLow {
 		nonAMMAccountID = highAccountID
 		nonAMMReserveFlag = state.LsfHighReserve
