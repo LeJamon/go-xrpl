@@ -4,6 +4,7 @@ import (
 	"github.com/LeJamon/go-xrpl/amendment"
 	"github.com/LeJamon/go-xrpl/drops"
 	"github.com/LeJamon/go-xrpl/internal/ledger"
+	"github.com/LeJamon/go-xrpl/internal/ledger/state"
 	"github.com/LeJamon/go-xrpl/keylet"
 	"github.com/LeJamon/go-xrpl/shamap"
 )
@@ -34,7 +35,11 @@ func (v *snapshotView) Read(k keylet.Keylet) ([]byte, error) {
 	if !found {
 		return nil, nil
 	}
-	return item.Data(), nil
+	data := item.Data()
+	if !state.MatchesKeyletType(k, data) {
+		return nil, nil
+	}
+	return data, nil
 }
 
 func (v *snapshotView) Exists(k keylet.Keylet) (bool, error) {

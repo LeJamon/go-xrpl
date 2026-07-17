@@ -669,6 +669,36 @@ func TestDelete(t *testing.T) {
 	})
 }
 
+func TestPermissionedDomainDeleteWrongTypeCollision(t *testing.T) {
+	env := jtx.NewTestEnv(t)
+	alice := jtx.NewAccount("alice")
+	env.Fund(alice)
+	env.Close()
+	env.SetBaseFee(1)
+
+	before := env.AccountInfo(alice)
+	if before == nil {
+		t.Fatal("alice account is missing before delete")
+	}
+	accountKey := keylet.Account(alice.ID)
+	result := env.Submit(pd.DomainDelete(alice, domainIDHex(accountKey)).Fee(1).Build())
+	jtx.RequireTxClaimed(t, result, jtx.TecNO_ENTRY)
+
+	after := env.AccountInfo(alice)
+	if after == nil {
+		t.Fatal("alice account is missing after delete")
+	}
+	if after.Balance != before.Balance-1 {
+		t.Fatalf("balance = %d, want %d", after.Balance, before.Balance-1)
+	}
+	if after.Sequence != before.Sequence+1 {
+		t.Fatalf("sequence = %d, want %d", after.Sequence, before.Sequence+1)
+	}
+	if data, err := env.LedgerEntry(accountKey); err != nil || data == nil {
+		t.Fatalf("account root after collision = %x, %v", data, err)
+	}
+}
+
 // TestAccountReserve verifies reserve requirement for domain creation.
 // Reference: rippled PermissionedDomains_test.cpp testAccountReserve()
 func TestAccountReserve(t *testing.T) {

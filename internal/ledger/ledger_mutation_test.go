@@ -2,12 +2,14 @@ package ledger
 
 import (
 	"bytes"
+	"encoding/binary"
 	"errors"
 	"strings"
 	"testing"
 
 	"github.com/LeJamon/go-xrpl/drops"
 	"github.com/LeJamon/go-xrpl/keylet"
+	"github.com/LeJamon/go-xrpl/ledger/entry"
 )
 
 // mutAcct builds a deterministic account keylet from a single seed byte by
@@ -29,7 +31,50 @@ func mutData(tag byte) []byte {
 	for i := range d {
 		d[i] = tag
 	}
+	d[0] = 0x11
+	binary.BigEndian.PutUint16(d[1:3], uint16(entry.TypeAccountRoot))
 	return d
+}
+
+func TestLedger_ReadChecksKeyletType(t *testing.T) {
+	l := newOpenChild(t)
+	accountKey := mutAcct(0x01)
+	data := mutData(0x11)
+	if err := l.Insert(accountKey, data); err != nil {
+		t.Fatalf("Insert: %v", err)
+	}
+
+	wrongType := keylet.Keylet{Type: entry.TypePermissionedDomain, Key: accountKey.Key}
+	got, err := l.Read(wrongType)
+	if err != nil {
+		t.Fatalf("Read wrong type: %v", err)
+	}
+	if got != nil {
+		t.Fatalf("Read wrong type returned %x", got)
+	}
+	exists, err := l.Exists(wrongType)
+	if err != nil {
+		t.Fatalf("Exists wrong type: %v", err)
+	}
+	if !exists {
+		t.Fatal("Exists did not report the occupied base key")
+	}
+
+	anyType := keylet.Keylet{Key: accountKey.Key}
+	got, err = l.Read(anyType)
+	if err != nil {
+		t.Fatalf("Read any type: %v", err)
+	}
+	if !bytes.Equal(got, data) {
+		t.Fatalf("Read any type: got %x want %x", got, data)
+	}
+	exists, err = l.Exists(anyType)
+	if err != nil {
+		t.Fatalf("Exists any type: %v", err)
+	}
+	if !exists {
+		t.Fatal("Exists did not report an ltANY entry")
+	}
 }
 
 // TestLedger_MutateHappyAndErrorPaths exercises Insert/Update/Erase on an

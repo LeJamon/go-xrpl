@@ -3,6 +3,9 @@ package state
 import (
 	"encoding/binary"
 	"errors"
+
+	"github.com/LeJamon/go-xrpl/keylet"
+	"github.com/LeJamon/go-xrpl/ledger/entry"
 )
 
 // IsDefaultValue reports whether a decoded field value should be omitted
@@ -90,4 +93,18 @@ func GetLedgerEntryType(data []byte) (uint16, error) {
 		return 0, errors.New("unexpected header byte, expected 0x11 for LedgerEntryType")
 	}
 	return EntryTypeCode(data), nil
+}
+
+// MatchesKeyletType reports whether data satisfies a keylet's type constraint.
+// TypeAny imposes no serialization constraint.
+func MatchesKeyletType(k keylet.Keylet, data []byte) bool {
+	entryType := entry.Type(EntryTypeCode(data))
+	switch k.Type {
+	case entry.TypeAny:
+		return true
+	case entry.TypeChild:
+		return entryType != entry.TypeAny && entryType != entry.TypeChild && entryType != entry.TypeDirectoryNode
+	default:
+		return entryType == k.Type
+	}
 }

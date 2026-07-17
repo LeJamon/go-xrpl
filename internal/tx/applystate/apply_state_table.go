@@ -151,6 +151,9 @@ func (t *ApplyStateTable) Read(k keylet.Keylet) ([]byte, error) {
 		if entry.Action == ActionErase {
 			return nil, nil
 		}
+		if !state.MatchesKeyletType(k, entry.Current) {
+			return nil, nil
+		}
 		return entry.Current, nil
 	}
 
@@ -158,6 +161,9 @@ func (t *ApplyStateTable) Read(k keylet.Keylet) ([]byte, error) {
 	data, err := t.base.Read(k)
 	if err != nil {
 		return nil, err
+	}
+	if data != nil && !state.MatchesKeyletType(k, data) {
+		return nil, nil
 	}
 
 	// Only track entries that exist in the base
@@ -174,12 +180,9 @@ func (t *ApplyStateTable) Read(k keylet.Keylet) ([]byte, error) {
 
 // Exists checks if an entry exists
 func (t *ApplyStateTable) Exists(k keylet.Keylet) (bool, error) {
-	// Check if tracked
 	if entry, exists := t.items[k.Key]; exists {
-		return entry.Action != ActionErase, nil
+		return entry.Action != ActionErase && state.MatchesKeyletType(k, entry.Current), nil
 	}
-
-	// Check base
 	return t.base.Exists(k)
 }
 
