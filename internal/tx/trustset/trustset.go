@@ -336,6 +336,10 @@ func (t *TrustSet) Apply(ctx *tx.ApplyContext) ter.Result {
 				}
 				// LP token trust line to non-empty AMM — allow creation
 			}
+		} else if issuerAccount.VaultID != [32]byte{} || issuerAccount.LoanBrokerID != [32]byte{} {
+			if !trustLineExists {
+				return ter.TecNO_PERMISSION
+			}
 		} else {
 			return ter.TecPSEUDO_ACCOUNT
 		}

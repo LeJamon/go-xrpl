@@ -137,19 +137,9 @@ func (v *VaultDelete) Apply(ctx *tx.ApplyContext) ter.Result {
 		return res
 	}
 
-	pseudo, perr := tx.ReadAccountRoot(ctx.View, vd.Account)
-	if perr != nil || pseudo == nil {
-		return ter.TefBAD_LEDGER
-	}
-	if assetDelta < 0 {
-		decrement := uint32(-assetDelta)
-		if pseudo.OwnerCount >= decrement {
-			pseudo.OwnerCount -= decrement
-		} else {
-			pseudo.OwnerCount = 0
-		}
-	} else {
-		pseudo.OwnerCount += uint32(assetDelta)
+	pseudo, res := applyAssetHoldingOwnerCount(ctx.View, vd.Account, assetDelta)
+	if res != ter.TesSUCCESS {
+		return res
 	}
 
 	ownerShareKey := keylet.MPTokenByID(vd.ShareMPTID, ctx.AccountID)
@@ -194,7 +184,7 @@ func (v *VaultDelete) Apply(ctx *tx.ApplyContext) ter.Result {
 		return ter.TecHAS_OBLIGATIONS
 	}
 
-	pseudo, perr = tx.ReadAccountRoot(ctx.View, vd.Account)
+	pseudo, perr := tx.ReadAccountRoot(ctx.View, vd.Account)
 	if perr != nil || pseudo == nil || pseudo.VaultID != vaultKey.Key {
 		return ter.TefBAD_LEDGER
 	}

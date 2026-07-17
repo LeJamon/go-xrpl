@@ -9,6 +9,7 @@ import (
 	"github.com/LeJamon/go-xrpl/internal/ledger/state"
 	jtx "github.com/LeJamon/go-xrpl/internal/testing"
 	"github.com/LeJamon/go-xrpl/internal/tx"
+	"github.com/LeJamon/go-xrpl/internal/tx/trustset"
 	"github.com/LeJamon/go-xrpl/internal/tx/vault"
 	"github.com/LeJamon/go-xrpl/keylet"
 )
@@ -73,6 +74,64 @@ func TestVaultDeleteIOUMetadataTransitions(t *testing.T) {
 	if got := strings.ToUpper(hex.EncodeToString(root[:])); got != vaultDeleteIOUStateRoot {
 		t.Errorf("state root = %s, want %s", got, vaultDeleteIOUStateRoot)
 	}
+}
+
+func TestVaultDeleteIOUIssuerOwnerCount(t *testing.T) {
+	env := newVaultEnv(t)
+	owner := jtx.NewAccount("owner")
+	env.Fund(owner)
+
+	vaultSeq := env.Seq(owner)
+	create := vault.NewVaultCreate(owner.Address, tx.Asset{Currency: "USD", Issuer: owner.Address})
+	create.Common.Fee = createFee
+	jtx.RequireTxSuccess(t, env.Submit(create))
+	vaultKey := keylet.Vault(owner.AccountID(), vaultSeq)
+	info, err := vault.ReadVaultInfo(env.Ledger(), vaultKey)
+	if err != nil || info == nil {
+		t.Fatalf("read Vault: %v", err)
+	}
+	pseudoAddress, err := state.EncodeAccountID(info.Account)
+	if err != nil {
+		t.Fatalf("encode vault pseudo-account: %v", err)
+	}
+	missing := tx.NewIssuedAmountFromFloat64(1, "EUR", pseudoAddress)
+	jtx.RequireTxClaimed(t, env.Submit(trustset.NewTrustSet(owner.Address, missing)), jtx.TecNO_PERMISSION)
+	limit := tx.NewIssuedAmountFromFloat64(1, "USD", pseudoAddress)
+	jtx.RequireTxSuccess(t, env.Submit(trustset.NewTrustSet(owner.Address, limit)))
+	if got := env.OwnerCount(owner); got != 3 {
+		t.Fatalf("owner count before delete = %d, want 3", got)
+	}
+
+	result := env.Submit(vault.NewVaultDelete(owner.Address, strings.ToUpper(hex.EncodeToString(vaultKey.Key[:]))))
+	jtx.RequireTxSuccess(t, result)
+	assertVaultModifiedTransition(t, result.Metadata, keylet.Account(owner.AccountID()), "AccountRoot", "OwnerCount", uint32(0), uint32(3))
+	if got := env.OwnerCount(owner); got != 0 {
+		t.Errorf("owner count = %d, want 0", got)
+	}
+}
+
+func assertVaultModifiedTransition(
+	t *testing.T,
+	meta *tx.Metadata,
+	key keylet.Keylet,
+	entryType, field string,
+	wantFinal, wantPrevious uint32,
+) {
+	t.Helper()
+	wantIndex := strings.ToUpper(hex.EncodeToString(key.Key[:]))
+	for _, node := range meta.AffectedNodes {
+		if node.NodeType != "ModifiedNode" || node.LedgerEntryType != entryType || node.LedgerIndex != wantIndex {
+			continue
+		}
+		if got, ok := node.FinalFields[field].(uint32); !ok || got != wantFinal {
+			t.Errorf("%s FinalFields.%s = %#v, want %d", entryType, field, node.FinalFields[field], wantFinal)
+		}
+		if got, ok := node.PreviousFields[field].(uint32); !ok || got != wantPrevious {
+			t.Errorf("%s PreviousFields.%s = %#v, want %d", entryType, field, node.PreviousFields[field], wantPrevious)
+		}
+		return
+	}
+	t.Errorf("modified %s %s not found in metadata", entryType, wantIndex)
 }
 
 func assertVaultDeletedTransition(

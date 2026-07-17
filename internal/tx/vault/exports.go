@@ -121,6 +121,12 @@ func RemoveAssetHolding(ctx *tx.ApplyContext, accountID [20]byte, asset tx.Asset
 	return removeVaultAssetHolding(ctx, accountID, asset)
 }
 
+// ApplyAssetHoldingOwnerCount loads accountID and applies the owner-count delta
+// returned by RemoveAssetHolding.
+func ApplyAssetHoldingOwnerCount(view tx.LedgerView, accountID [20]byte, delta int32) (*state.AccountRoot, ter.Result) {
+	return applyAssetHoldingOwnerCount(view, accountID, delta)
+}
+
 // CanWithdraw validates delivery of amount from → to (destination exists,
 // dest-tag / deposit-auth, IOU trust-limit).
 func CanWithdraw(view tx.LedgerView, from, to [20]byte, amount tx.Amount, hasDestTag bool, numberContext state.NumberContext) ter.Result {

@@ -12,6 +12,7 @@ import (
 	mpttest "github.com/LeJamon/go-xrpl/internal/testing/mpt"
 	"github.com/LeJamon/go-xrpl/internal/tx"
 	"github.com/LeJamon/go-xrpl/internal/tx/lending"
+	"github.com/LeJamon/go-xrpl/internal/tx/trustset"
 	"github.com/LeJamon/go-xrpl/internal/tx/vault"
 	"github.com/LeJamon/go-xrpl/keylet"
 )
@@ -99,6 +100,64 @@ func TestLoanBrokerDeleteMPTMetadataOwnerCount(t *testing.T) {
 	result := env.Submit(lending.NewLoanBrokerDelete(owner.Address, strings.ToUpper(hex.EncodeToString(brokerKey.Key[:]))))
 	jtx.RequireTxSuccess(t, result)
 	assertDeletedTransition(t, result.Metadata, keylet.Account(pseudoID), "AccountRoot", "OwnerCount", uint32(0), uint32(1))
+}
+
+func TestLoanBrokerDeleteIOUIssuerOwnerCount(t *testing.T) {
+	env := newLendingEnv(t)
+	owner := jtx.NewAccount("owner")
+	env.Fund(owner)
+
+	vaultSeq := env.Seq(owner)
+	create := vault.NewVaultCreate(owner.Address, tx.Asset{Currency: "USD", Issuer: owner.Address})
+	create.Common.Fee = reserveIncrement
+	jtx.RequireTxSuccess(t, env.Submit(create))
+
+	brokerSeq := env.Seq(owner)
+	jtx.RequireTxSuccess(t, env.Submit(lending.NewLoanBrokerSet(owner.Address, vaultID(owner, vaultSeq))))
+	brokerKey := keylet.LoanBroker(owner.AccountID(), brokerSeq)
+	pseudoID := loanBrokerPseudoID(t, env, brokerKey)
+	pseudoAddress, err := state.EncodeAccountID(pseudoID)
+	if err != nil {
+		t.Fatalf("encode broker pseudo-account: %v", err)
+	}
+	missing := tx.NewIssuedAmountFromFloat64(1, "EUR", pseudoAddress)
+	jtx.RequireTxClaimed(t, env.Submit(trustset.NewTrustSet(owner.Address, missing)), jtx.TecNO_PERMISSION)
+	limit := tx.NewIssuedAmountFromFloat64(1, "USD", pseudoAddress)
+	jtx.RequireTxSuccess(t, env.Submit(trustset.NewTrustSet(owner.Address, limit)))
+	if got := env.OwnerCount(owner); got != 5 {
+		t.Fatalf("owner count before delete = %d, want 5", got)
+	}
+
+	result := env.Submit(lending.NewLoanBrokerDelete(owner.Address, strings.ToUpper(hex.EncodeToString(brokerKey.Key[:]))))
+	jtx.RequireTxSuccess(t, result)
+	assertModifiedTransition(t, result.Metadata, keylet.Account(owner.AccountID()), "AccountRoot", "OwnerCount", uint32(2), uint32(5))
+	if got := env.OwnerCount(owner); got != 2 {
+		t.Errorf("owner count = %d, want 2", got)
+	}
+}
+
+func assertModifiedTransition(
+	t *testing.T,
+	meta *tx.Metadata,
+	key keylet.Keylet,
+	entryType, field string,
+	wantFinal, wantPrevious uint32,
+) {
+	t.Helper()
+	wantIndex := strings.ToUpper(hex.EncodeToString(key.Key[:]))
+	for _, node := range meta.AffectedNodes {
+		if node.NodeType != "ModifiedNode" || node.LedgerEntryType != entryType || node.LedgerIndex != wantIndex {
+			continue
+		}
+		if got, ok := node.FinalFields[field].(uint32); !ok || got != wantFinal {
+			t.Errorf("%s FinalFields.%s = %#v, want %d", entryType, field, node.FinalFields[field], wantFinal)
+		}
+		if got, ok := node.PreviousFields[field].(uint32); !ok || got != wantPrevious {
+			t.Errorf("%s PreviousFields.%s = %#v, want %d", entryType, field, node.PreviousFields[field], wantPrevious)
+		}
+		return
+	}
+	t.Errorf("modified %s %s not found in metadata", entryType, wantIndex)
 }
 
 func loanBrokerPseudoID(t *testing.T, env *jtx.TestEnv, brokerKey keylet.Keylet) [20]byte {

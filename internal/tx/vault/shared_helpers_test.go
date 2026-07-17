@@ -257,3 +257,81 @@ func TestRemoveVaultAssetMPTHoldingHonorsLockedAmountAmendment(t *testing.T) {
 		require.True(t, exists)
 	})
 }
+
+func TestRemoveVaultAssetHoldingDeletesLegacyIssuerLine(t *testing.T) {
+	rules := amendment.NewRulesBuilder().Enable(amendment.FeatureSingleAssetVault).Build()
+	view := newSharedHelperView(rules)
+	var low, high, source [20]byte
+	low[19] = 0x10
+	high[19] = 0x20
+	source[19] = 0x30
+	ctx := buildArmsCtx(t, view.mptArmsView, source, rules)
+	ctx.View = view
+
+	insertAccount := func(account [20]byte) {
+		raw, err := state.SerializeAccountRoot(&state.AccountRoot{
+			Account:    state.EncodeAccountIDSafe(account),
+			Balance:    100_000_000,
+			OwnerCount: 1,
+		})
+		require.NoError(t, err)
+		require.NoError(t, view.Insert(keylet.Account(account), raw))
+	}
+	insertAccount(low)
+	insertAccount(high)
+
+	lineKey := keylet.Line(low, low, "USD")
+	lowDir, err := state.DirInsert(view, keylet.OwnerDir(low), lineKey.Key, false, nil)
+	require.NoError(t, err)
+	highDir, err := state.DirInsert(view, keylet.OwnerDir(high), lineKey.Key, false, nil)
+	require.NoError(t, err)
+	lineRaw, err := state.SerializeRippleState(&state.RippleState{
+		Balance:   state.NewIssuedAmountFromValue(1, 0, "USD", state.AccountOneAddress),
+		LowLimit:  state.NewIssuedAmountFromValue(0, state.MinExponent, "USD", state.EncodeAccountIDSafe(low)),
+		HighLimit: state.NewIssuedAmountFromValue(0, state.MinExponent, "USD", state.EncodeAccountIDSafe(high)),
+		Flags:     state.LsfLowReserve | state.LsfHighReserve,
+		LowNode:   lowDir.Page,
+		HighNode:  highDir.Page,
+	})
+	require.NoError(t, err)
+	require.NoError(t, view.Insert(lineKey, lineRaw))
+
+	delta, result := removeVaultAssetHolding(ctx, low, tx.Asset{Currency: "USD", Issuer: state.EncodeAccountIDSafe(low)})
+	require.Equal(t, ter.TesSUCCESS, result)
+	require.Equal(t, int32(-1), delta)
+	exists, err := view.Exists(lineKey)
+	require.NoError(t, err)
+	require.False(t, exists)
+	highRaw, err := view.Read(keylet.Account(high))
+	require.NoError(t, err)
+	highAccount, err := state.ParseAccountRoot(highRaw)
+	require.NoError(t, err)
+	require.Zero(t, highAccount.OwnerCount)
+}
+
+func TestApplyAssetHoldingOwnerCountResultClassification(t *testing.T) {
+	view := newMPTArmsView()
+	var accountID [20]byte
+	accountID[19] = 1
+
+	account, result := applyAssetHoldingOwnerCount(view, accountID, -1)
+	require.Nil(t, account)
+	require.Equal(t, ter.TecINTERNAL, result)
+	account, result = applyAssetHoldingOwnerCount(view, accountID, 0)
+	require.Nil(t, account)
+	require.Equal(t, ter.TefBAD_LEDGER, result)
+
+	require.NoError(t, view.Insert(keylet.Account(accountID), []byte{1}))
+	account, result = applyAssetHoldingOwnerCount(view, accountID, -1)
+	require.Nil(t, account)
+	require.Equal(t, ter.TefINTERNAL, result)
+
+	raw, err := state.SerializeAccountRoot(&state.AccountRoot{
+		Account: state.EncodeAccountIDSafe(accountID),
+	})
+	require.NoError(t, err)
+	require.NoError(t, view.Update(keylet.Account(accountID), raw))
+	account, result = applyAssetHoldingOwnerCount(view, accountID, -1)
+	require.Equal(t, ter.TesSUCCESS, result)
+	require.Zero(t, account.OwnerCount)
+}

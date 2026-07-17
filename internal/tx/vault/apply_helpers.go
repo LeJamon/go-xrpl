@@ -843,33 +843,42 @@ func removeVaultAssetHolding(ctx *tx.ApplyContext, accountID [20]byte, asset tx.
 	if err != nil {
 		return 0, ter.TefINTERNAL
 	}
-	if accountID == issuerID {
-		return 0, ter.TesSUCCESS
-	}
+	accountIsIssuer := accountID == issuerID
 	lineKey := keylet.Line(accountID, issuerID, asset.Currency)
 	data, rerr := ctx.View.Read(lineKey)
 	if rerr != nil {
 		return 0, ter.TefINTERNAL
 	}
 	if data == nil {
+		if accountIsIssuer {
+			return 0, ter.TesSUCCESS
+		}
 		return 0, ter.TecOBJECT_NOT_FOUND
 	}
 	rs, perr := state.ParseRippleState(data)
 	if perr != nil {
 		return 0, ter.TefINTERNAL
 	}
-	if rs.Balance.Signum() != 0 {
+	if !accountIsIssuer && rs.Balance.Signum() != 0 {
 		return 0, ter.TecHAS_OBLIGATIONS
 	}
 
-	lowID, highID := accountID, issuerID
-	if bytes.Compare(accountID[:], issuerID[:]) > 0 {
-		lowID, highID = issuerID, accountID
+	lowID, err := state.DecodeAccountID(rs.LowLimit.Issuer)
+	if err != nil {
+		return 0, ter.TefINTERNAL
+	}
+	highID, err := state.DecodeAccountID(rs.HighLimit.Issuer)
+	if err != nil {
+		return 0, ter.TefINTERNAL
 	}
 	delta := int32(0)
 	adjust := func(owner [20]byte) ter.Result {
 		if owner == accountID {
 			delta--
+			return ter.TesSUCCESS
+		}
+		if owner == ctx.AccountID {
+			ctx.Account.OwnerCount = tx.ConfineOwnerCount(ctx.Account.OwnerCount, -1)
 			return ter.TesSUCCESS
 		}
 		exists, err := ctx.View.Exists(keylet.Account(owner))
@@ -907,6 +916,21 @@ func removeVaultAssetHolding(ctx *tx.ApplyContext, accountID [20]byte, asset tx.
 		return 0, result
 	}
 	return delta, ter.TesSUCCESS
+}
+
+func applyAssetHoldingOwnerCount(view tx.LedgerView, accountID [20]byte, delta int32) (*state.AccountRoot, ter.Result) {
+	account, err := tx.ReadAccountRoot(view, accountID)
+	if err != nil {
+		return nil, ter.TefINTERNAL
+	}
+	if account == nil {
+		if delta != 0 {
+			return nil, ter.TecINTERNAL
+		}
+		return nil, ter.TefBAD_LEDGER
+	}
+	account.OwnerCount = tx.ConfineOwnerCount(account.OwnerCount, int(delta))
+	return account, ter.TesSUCCESS
 }
 
 // removeEmptyShareMPToken deletes a holder's share MPToken when its balance is
