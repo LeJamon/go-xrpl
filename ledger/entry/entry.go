@@ -9,6 +9,12 @@ import (
 // Type represents a ledger entry type.
 type Type uint16
 
+// Pseudo-types used only as keylet constraints.
+const (
+	TypeAny   Type = 0
+	TypeChild Type = 0x1CD2
+)
+
 // All known ledger entry types
 // Reference: rippled/include/xrpl/protocol/detail/ledger_entries.macro
 const (
@@ -76,7 +82,7 @@ const (
 	TypeLoan       Type = 0x0089 // Loans
 )
 
-// String returns the string representation of the Type.
+// String returns the concrete ledger entry type name. Pseudo-types are unknown.
 func (t Type) String() string {
 	switch t {
 	case TypeContract:

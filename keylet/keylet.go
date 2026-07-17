@@ -57,6 +57,11 @@ type Keylet struct {
 	Key  [32]byte
 }
 
+// Child returns a keylet that accepts any non-directory ledger entry.
+func Child(key [32]byte) Keylet {
+	return Keylet{Type: entry.TypeChild, Key: key}
+}
+
 // indexHash computes a keylet key by hashing the space and provided data.
 func indexHash(space uint16, data ...[]byte) [32]byte {
 	var spaceBytes [2]byte

@@ -5,6 +5,7 @@ import (
 	"errors"
 
 	"github.com/LeJamon/go-xrpl/keylet"
+	"github.com/LeJamon/go-xrpl/ledger/entry"
 )
 
 // IsDefaultValue reports whether a decoded field value should be omitted
@@ -95,6 +96,15 @@ func GetLedgerEntryType(data []byte) (uint16, error) {
 }
 
 // MatchesKeyletType reports whether data satisfies a keylet's type constraint.
+// TypeAny imposes no serialization constraint.
 func MatchesKeyletType(k keylet.Keylet, data []byte) bool {
-	return k.Type == 0 || EntryTypeCode(data) == uint16(k.Type)
+	entryType := entry.Type(EntryTypeCode(data))
+	switch k.Type {
+	case entry.TypeAny:
+		return true
+	case entry.TypeChild:
+		return entryType != entry.TypeAny && entryType != entry.TypeChild && entryType != entry.TypeDirectoryNode
+	default:
+		return entryType == k.Type
+	}
 }
