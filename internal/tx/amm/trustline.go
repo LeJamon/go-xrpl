@@ -180,7 +180,7 @@ func createOrUpdateAMMTrustline(ammAccountID [20]byte, asset tx.Asset, amount tx
 	if result := trustCreate(view, ammAccountID, issuerID, asset.Currency, amount, trustCreateOpts{setAMMNode: true}); result != ter.TesSUCCESS {
 		return errors.New("trust create failed")
 	}
-	return nil
+	return tx.AdjustOwnerCount(view, ammAccountID, 1)
 }
 
 // updateTrustlineBalanceInView updates the balance of a trust line for IOU transfers.
@@ -190,6 +190,36 @@ func updateTrustlineBalanceInView(accountID [20]byte, issuerID [20]byte, currenc
 	result, err := updateTrustlineBalanceInViewEx(accountID, issuerID, currency, delta, view, numberContext)
 	_ = result
 	return err
+}
+
+func debitAMMTrustline(ammAccountID [20]byte, asset tx.Asset, amount tx.Amount, view tx.LedgerView, numberContext state.NumberContext) error {
+	issuerID, err := state.DecodeAccountID(asset.Issuer)
+	if err != nil {
+		return err
+	}
+
+	result, err := updateTrustlineBalanceInViewEx(
+		ammAccountID,
+		issuerID,
+		asset.Currency,
+		amount.Negate(),
+		view,
+		numberContext,
+	)
+	if err != nil {
+		return err
+	}
+	if result.SenderOwnerCountDelta != 0 {
+		if err := tx.AdjustOwnerCount(view, ammAccountID, result.SenderOwnerCountDelta); err != nil {
+			return err
+		}
+	}
+	if result.IssuerOwnerCountDelta != 0 {
+		if err := tx.AdjustOwnerCount(view, issuerID, result.IssuerOwnerCountDelta); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // updateTrustlineBalanceInViewEx updates a trust line balance and handles reserve
@@ -308,6 +338,14 @@ func updateTrustlineBalanceInViewEx(accountID [20]byte, issuerID [20]byte, curre
 		}
 	}
 
+	serialized, err := state.SerializeRippleState(rs)
+	if err != nil {
+		return result, err
+	}
+	if err := view.Update(lineKey, serialized); err != nil {
+		return result, err
+	}
+
 	if bDelete {
 		lowAccountID, highAccountID := issuerID, accountID
 		if senderIsLow {
@@ -330,12 +368,7 @@ func updateTrustlineBalanceInViewEx(accountID [20]byte, issuerID [20]byte, curre
 		return result, err
 	}
 
-	serialized, err := state.SerializeRippleState(rs)
-	if err != nil {
-		return result, err
-	}
-
-	return result, view.Update(lineKey, serialized)
+	return result, nil
 }
 
 // createLPTokenTrustline creates or updates a trust line for LP tokens.

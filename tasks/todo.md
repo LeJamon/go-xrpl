@@ -1,3 +1,79 @@
+# Issue #1357 — AMMClawback pseudo-account metadata
+
+Target: `origin/main` at `7aab186ddb36317bdb63c831e6ffb9c5dd25b364`.
+Behavioral oracle: clean local rippled `3.2.0` worktree at
+`3c43f4614f87965298773279ff5b85d4c56c637b`.
+
+## Plan
+
+- [x] Validate GitHub access, issue state and discussion, linked PRs, active
+      release branches, exact base, and clean dedicated worktree.
+- [x] Trace AMMClawback pseudo-account persistence and metadata action tracking
+      in Go, including genuine XRP-side balance changes.
+- [x] Verify the complete corresponding apply path and regression expectations
+      against local rippled v3.2.0.
+- [x] Add focused regressions for bare threaded IOU/IOU metadata, byte/root
+      parity where fixtures permit, and persisted XRP-side balance changes.
+- [x] Implement the smallest production-quality parity fix.
+- [x] Run formatting, focused and affected tests, race coverage where useful,
+      build, vet, strict CI lint, conformance/diff review, and exact-head checks.
+- [x] Record the review results, stage intentional files only, commit, push, and
+      open the PR against `main`.
+
+## Review
+
+- Removed the redundant unconditional pseudo AccountRoot write after
+  `deleteAMMAccountIfEmpty`; that helper already persists serialized-byte changes,
+  including real XRP balance changes and the `tecINCOMPLETE` survivor path.
+- Rippled v3.2.0 reads the pseudo AccountRoot but changes it economically only for
+  native XRP sends. Deleting a holder's LP RippleState threads the unchanged IOU/
+  IOU pseudo-account as a bare `ModifiedNode`, while an XRP payout updates its
+  `Balance` and emits normal `FinalFields`.
+- The IOU/IOU regression reproduces the whole-holder LP-line deletion with a
+  surviving AMM, asserts node-level threading without `FinalFields`, pins the
+  complete 2,248-byte metadata blob by SHA-512Half, and pins the resulting
+  single-transaction SHAMap root. The XRP contrast proves a 500 XRP pseudo-root
+  balance reduction remains persisted and represented in metadata.
+- Passed focused pre-fix/fixed regression runs, affected AMM transaction and
+  integration packages, focused race coverage, `just test-tx`, `just fmt`,
+  `just build-all`, `just vet`, tagged PostgreSQL vet, CI-pinned strict lint,
+  advisory lint, `git diff --check`, and AMMClawback conformance (12/12).
+- The original Devnet checkpoint and the other 12 transaction leaves from ledger
+  3,325,984 are not present locally, so its complete 13-transaction root was not
+  rerun. The regression directly pins the exact divergent 2,248-byte metadata
+  boundary and its canonical transaction leaf/tree hash.
+
+## PR #1358 finalization
+
+- [x] Pin the exact PR head, base, clean worktree, and clean local rippled 3.2.0
+      oracle at `3c43f4614f87965298773279ff5b85d4c56c637b`.
+- [x] Review the complete diff and adjacent AMM withdrawal, trust-line cleanup,
+      bounded deletion, AccountRoot persistence, and metadata paths.
+- [x] Resolve the final-LP `tecINCOMPLETE` divergence found during review by
+      deleting drained pool lines before bounded cleanup and preserving the
+      latest pseudo-account `OwnerCount` while merging XRP balance changes.
+- [x] Add a final-share AMMClawback regression with 513 excess LP trust lines.
+- [x] Restore pseudo-account `OwnerCount` when an empty AMM recreates a drained
+      IOU pool line, and extend the regression through re-seeding and deletion.
+- [ ] Repeat independent correctness and rippled-conformance review; pass build,
+      vet, lint, whitespace, and exact-head CI gates.
+- [ ] Run the required separate comment-cleanup phase, verify final CI, and
+      record the local-only conformance audit.
+
+### Finalization review
+
+- Rippled v3.2.0 drains and deletes a zero AMM pool RippleState, including its
+  reserve and pseudo-account `OwnerCount`, before applying the 512-entry AMM
+  cleanup bound. On `tecINCOMPLETE` it updates only the AMM ledger entry.
+- The shared Go debit path now applies the same balance, reserve, owner-count,
+  and deletion transition for AMMClawback and AMMWithdraw. AccountRoot balance
+  persistence merges into the latest view, and interrupted cleanup no longer
+  rewrites an earlier AccountRoot snapshot.
+- Re-seeding an interrupted empty AMM now increments `OwnerCount` for each
+  recreated IOU pool line, matching rippled's `trustCreate` transition.
+- Bounded cleanup now erases the zero line and decrements only the non-AMM
+  reserve owner, matching `deleteAMMTrustLine` in the pinned oracle.
+
 # Issue #1349 — LoanSet NUMBER asset association
 
 Target: `origin/main` at `ce13cadd`. Behavioral oracle: clean local rippled

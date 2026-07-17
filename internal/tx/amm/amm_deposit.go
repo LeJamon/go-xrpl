@@ -1082,7 +1082,7 @@ func (a *AMMDeposit) Apply(ctx *tx.ApplyContext) ter.Result {
 	// adjusts its Balance). For an all-IOU deposit the AMM account's own fields
 	// are untouched; rewriting it would promote it to a modified node, whereas
 	// rippled leaves it a bare threaded owner of the changed trust lines (#1038).
-	if r := updateAMMAccountIfChanged(ctx.View, ammAccountKey, ammAccount); r != ter.TesSUCCESS {
+	if r := updateAMMAccountBalanceIfChanged(ctx.View, ammAccountKey, ammAccount); r != ter.TesSUCCESS {
 		return r
 	}
 
