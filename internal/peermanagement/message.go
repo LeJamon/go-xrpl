@@ -88,6 +88,10 @@ func ReadMessage(r io.Reader) (*MessageHeader, []byte, error) {
 	return message.ReadMessage(r)
 }
 
+func readMessageWithHeader(r io.Reader, onHeader func(MessageHeader) error) (*MessageHeader, []byte, error) {
+	return message.ReadMessageWithHeader(r, onHeader)
+}
+
 // WriteMessage writes a message with header to the writer.
 func WriteMessage(w io.Writer, msgType MessageType, payload []byte) error {
 	return message.WriteMessage(w, msgType, payload)

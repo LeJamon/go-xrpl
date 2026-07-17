@@ -298,6 +298,42 @@ func TestReadMessageCaps(t *testing.T) {
 	}
 }
 
+func TestReadMessageWithHeaderRunsCallbackAfterSizeValidation(t *testing.T) {
+	frame := compressedFrame(t, TypeManifests, []byte{1}, MaxMessageSize+1)
+	called := false
+
+	_, _, err := ReadMessageWithHeader(bytes.NewReader(frame), func(Header) error {
+		called = true
+		return nil
+	})
+
+	if !errors.Is(err, ErrMessageTooLarge) {
+		t.Fatalf("ReadMessageWithHeader err = %v, want ErrMessageTooLarge", err)
+	}
+	if called {
+		t.Fatal("header callback ran before rejecting an oversized payload claim")
+	}
+}
+
+func TestReadMessageWithHeaderRunsCallbackBeforePayloadRead(t *testing.T) {
+	header := make([]byte, HeaderSizeUncompressed)
+	if err := EncodeHeader(header, 10, TypeManifests, AlgorithmNone, 0); err != nil {
+		t.Fatalf("EncodeHeader: %v", err)
+	}
+	want := errors.New("stop before payload")
+
+	_, _, err := ReadMessageWithHeader(bytes.NewReader(header), func(got Header) error {
+		if got.PayloadSize != 10 || got.MessageType != TypeManifests {
+			t.Fatalf("callback header = %+v", got)
+		}
+		return want
+	})
+
+	if !errors.Is(err, want) {
+		t.Fatalf("ReadMessageWithHeader err = %v, want callback error", err)
+	}
+}
+
 func TestHeaderSize(t *testing.T) {
 	uncompressed := &Header{Compressed: false}
 	if uncompressed.HeaderSize() != HeaderSizeUncompressed {

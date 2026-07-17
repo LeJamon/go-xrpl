@@ -146,6 +146,10 @@ type Peer struct {
 	// peerTimerInterval; only the pingLoop goroutine touches it.
 	lastPingProbe time.Time
 
+	readProgressMu sync.RWMutex
+	readProgress   inboundFrameProgress
+	readPolicy     peerReadPolicy
+
 	// sendDrops counts frames dropped because the bounded send queue was
 	// full. go-xrpl drops the frame and returns ErrSendBufferFull rather
 	// than queueing unboundedly like rippled; this per-peer counter is
@@ -198,9 +202,30 @@ type Peer struct {
 	lastStatus message.NodeStatus
 
 	latencyMu     sync.RWMutex
-	pingsInFlight map[uint32]time.Time
+	pingsInFlight map[uint32]pingInFlight
 	latency       time.Duration
 	hasLatency    bool
+}
+
+type peerReadPolicy struct {
+	now               func() time.Time
+	idleTimeout       time.Duration
+	minimumFrameRate  int64
+	pingDispatchGrace time.Duration
+}
+
+type inboundFrameProgress struct {
+	id           uint64
+	active       bool
+	deadline     time.Time
+	lastProgress time.Time
+}
+
+type pingInFlight struct {
+	sentAt time.Time
+	// Fixed at send time so ordered frames cannot renew the deferral forever.
+	progressDeadline time.Time
+	deferUntil       time.Time
 }
 
 type PeerConfig struct {
@@ -225,9 +250,15 @@ func NewPeer(id PeerID, endpoint Endpoint, inbound bool, identity *Identity, eve
 		traffic:       NewTrafficCounter(),
 		metrics:       newPeerMetrics(nil),
 		squelchMap:    make(map[string]time.Time),
-		pingsInFlight: make(map[uint32]time.Time),
-		createdAt:     time.Now(),
-		closeCh:       make(chan struct{}),
+		pingsInFlight: make(map[uint32]pingInFlight),
+		readPolicy: peerReadPolicy{
+			now:               time.Now,
+			idleTimeout:       readIdleDeadline,
+			minimumFrameRate:  minimumFrameReadRate,
+			pingDispatchGrace: pingProbeInterval,
+		},
+		createdAt: time.Now(),
+		closeCh:   make(chan struct{}),
 	}
 }
 
@@ -832,6 +863,116 @@ func (p *Peer) Run(ctx context.Context) error {
 	return runErr
 }
 
+type frameProgressReader struct {
+	peer                *Peer
+	reader              io.Reader
+	conn                net.Conn
+	frameID             uint64
+	startedAt           time.Time
+	deadline            time.Time
+	budgetDeadlineArmed bool
+}
+
+func (p *Peer) newFrameProgressReader(reader io.Reader, conn net.Conn) *frameProgressReader {
+	now := p.readPolicy.now()
+	p.readProgressMu.Lock()
+	p.readProgress.id++
+	p.readProgress.active = true
+	p.readProgress.deadline = time.Time{}
+	p.readProgress.lastProgress = time.Time{}
+	id := p.readProgress.id
+	p.readProgressMu.Unlock()
+	return &frameProgressReader{
+		peer:      p,
+		reader:    reader,
+		conn:      conn,
+		frameID:   id,
+		startedAt: now,
+	}
+}
+
+func (r *frameProgressReader) setHeader(header MessageHeader) error {
+	r.deadline = r.startedAt.Add(r.peer.frameReadBudget(header.PayloadSize))
+
+	r.peer.readProgressMu.Lock()
+	if r.peer.readProgress.id == r.frameID && r.peer.readProgress.active {
+		r.peer.readProgress.deadline = r.deadline
+	}
+	r.peer.readProgressMu.Unlock()
+	return nil
+}
+
+func (p *Peer) frameReadBudget(payloadSize uint32) time.Duration {
+	return p.readPolicy.idleTimeout + time.Duration(
+		(int64(payloadSize)*int64(time.Second)+p.readPolicy.minimumFrameRate-1)/
+			p.readPolicy.minimumFrameRate,
+	)
+}
+
+func (r *frameProgressReader) Read(dst []byte) (int, error) {
+	now := r.peer.readPolicy.now()
+	if !r.deadline.IsZero() && !now.Before(r.deadline) {
+		return 0, ErrFrameReadTooSlow
+	}
+	if r.conn != nil {
+		deadline := now.Add(r.peer.readPolicy.idleTimeout)
+		r.budgetDeadlineArmed = false
+		if !r.deadline.IsZero() && !deadline.Before(r.deadline) {
+			deadline = r.deadline
+			r.budgetDeadlineArmed = true
+		}
+		if err := r.conn.SetReadDeadline(deadline); err != nil {
+			return 0, err
+		}
+	}
+
+	n, err := r.reader.Read(dst)
+	if n > 0 {
+		now = r.peer.readPolicy.now()
+		r.peer.readProgressMu.Lock()
+		if r.peer.readProgress.id == r.frameID && r.peer.readProgress.active {
+			r.peer.readProgress.lastProgress = now
+		}
+		r.peer.readProgressMu.Unlock()
+		if !r.deadline.IsZero() && !now.Before(r.deadline) {
+			return n, ErrFrameReadTooSlow
+		}
+	}
+	return n, err
+}
+
+func (r *frameProgressReader) finish(success bool, now time.Time) {
+	r.peer.readProgressMu.Lock()
+	if r.peer.readProgress.id != r.frameID {
+		r.peer.readProgressMu.Unlock()
+		return
+	}
+	lastProgress := r.peer.readProgress.lastProgress
+	r.peer.readProgress.active = false
+	if success {
+		r.peer.latencyMu.Lock()
+		for seq, ping := range r.peer.pingsInFlight {
+			if lastProgress.After(ping.sentAt) && now.Before(ping.progressDeadline) {
+				ping.deferUntil = now.Add(r.peer.readPolicy.pingDispatchGrace)
+				if ping.progressDeadline.Before(ping.deferUntil) {
+					ping.deferUntil = ping.progressDeadline
+				}
+				r.peer.pingsInFlight[seq] = ping
+			}
+		}
+		r.peer.latencyMu.Unlock()
+	}
+	r.peer.readProgressMu.Unlock()
+}
+
+func (p *Peer) frameProgressBlocksPing(progress inboundFrameProgress, ping pingInFlight, now time.Time) bool {
+	return progress.active &&
+		now.Before(ping.progressDeadline) &&
+		!progress.deadline.IsZero() && now.Before(progress.deadline) &&
+		progress.lastProgress.After(ping.sentAt) &&
+		now.Sub(progress.lastProgress) < p.readPolicy.idleTimeout
+}
+
 func (p *Peer) readLoop(ctx context.Context) error {
 	for {
 		select {
@@ -851,18 +992,25 @@ func (p *Peer) readLoop(ctx context.Context) error {
 			return ErrConnectionClosed
 		}
 
-		// Refresh the read deadline each iteration so a peer that goes
-		// silent post-handshake cannot park us in io.ReadFull forever.
-		if conn != nil {
-			_ = conn.SetReadDeadline(time.Now().Add(readIdleDeadline))
+		frameReader := p.newFrameProgressReader(reader, conn)
+		header, payload, err := readMessageWithHeader(frameReader, frameReader.setHeader)
+		now := p.readPolicy.now()
+		if err == nil && !frameReader.deadline.IsZero() && !now.Before(frameReader.deadline) {
+			err = ErrFrameReadTooSlow
 		}
-
-		header, payload, err := ReadMessage(reader)
+		frameReader.finish(err == nil, now)
 		if err != nil {
 			if p.closed.Load() {
 				return nil
 			}
-			if ne, ok := err.(net.Error); ok && ne.Timeout() {
+			if errors.Is(err, ErrFrameReadTooSlow) {
+				return ErrFrameReadTooSlow
+			}
+			var ne net.Error
+			if errors.As(err, &ne) && ne.Timeout() {
+				if frameReader.budgetDeadlineArmed {
+					return ErrFrameReadTooSlow
+				}
 				return ErrReadIdle
 			}
 			// Over-budget size claim is protocol abuse — charge so the
@@ -1004,11 +1152,12 @@ func (p *Peer) pingLoop(ctx context.Context) error {
 }
 
 func (p *Peer) runPingTick(now time.Time) error {
-	if seq, age, ok := p.staleInFlightPing(now, pingTimeout); ok {
+	timeoutSeq, age, stale, deferred := p.pingTimeoutStatus(now, pingTimeout)
+	if stale {
 		slog.Warn("peer ping timeout",
 			"t", "Peer", "peer", p.id,
 			"endpoint", p.endpoint.String(),
-			"seq", seq, "age", age,
+			"seq", timeoutSeq, "age", age,
 		)
 		return ErrPingTimeout
 	}
@@ -1020,6 +1169,9 @@ func (p *Peer) runPingTick(now time.Time) error {
 			"intervals", p.largeSendQ.Load(),
 		)
 		return ErrLargeSendQueue
+	}
+	if deferred {
+		return nil
 	}
 	// Probe at rippled's 60s peerTimerInterval cadence; the finer 15s tick
 	// serves only the stale-ping and send-queue checks above. Peers charge
@@ -1083,43 +1235,63 @@ const (
 	// a peer that completes the handshake then goes silent. Set above
 	// pingTimeout so the existing disconnect path stays primary.
 	readIdleDeadline = pingTimeout + 5*time.Second
+	// minimumFrameReadRate bounds how long a claimed payload allocation
+	// may remain pinned while still allowing bulk frames to take several
+	// minutes. The idle allowance is added once as burst tolerance.
+	minimumFrameReadRate int64 = 256 * 1024
 	// writeIdleDeadline bounds a single conn.Write so a half-open TCP
 	// peer with a never-draining kernel send buffer cannot pin
 	// writeLoop forever.
 	writeIdleDeadline = 10 * time.Second
 )
 
-func (p *Peer) staleInFlightPing(now time.Time, threshold time.Duration) (seq uint32, age time.Duration, ok bool) {
+func (p *Peer) pingTimeoutStatus(now time.Time, threshold time.Duration) (seq uint32, age time.Duration, stale, deferred bool) {
+	p.readProgressMu.RLock()
 	p.latencyMu.RLock()
-	defer p.latencyMu.RUnlock()
 	var (
 		oldestSeq  uint32
-		oldestSent time.Time
+		oldestPing pingInFlight
 		have       bool
 	)
-	for s, t := range p.pingsInFlight {
-		if !have || t.Before(oldestSent) {
+	for s, ping := range p.pingsInFlight {
+		if !have || ping.sentAt.Before(oldestPing.sentAt) {
 			oldestSeq = s
-			oldestSent = t
+			oldestPing = ping
 			have = true
 		}
 	}
+	progress := p.readProgress
+	p.latencyMu.RUnlock()
+	p.readProgressMu.RUnlock()
 	if !have {
-		return 0, 0, false
+		return 0, 0, false, false
 	}
-	age = now.Sub(oldestSent)
+	age = now.Sub(oldestPing.sentAt)
 	if age < threshold {
-		return 0, 0, false
+		return 0, 0, false, false
 	}
-	return oldestSeq, age, true
+	if now.Before(oldestPing.deferUntil) ||
+		p.frameProgressBlocksPing(progress, oldestPing, now) {
+		return oldestSeq, age, false, true
+	}
+	return oldestSeq, age, true, false
+}
+
+func (p *Peer) staleInFlightPing(now time.Time, threshold time.Duration) (seq uint32, age time.Duration, ok bool) {
+	seq, age, ok, _ = p.pingTimeoutStatus(now, threshold)
+	return
 }
 
 func (p *Peer) recordPingSent(seq uint32, sentAt time.Time) {
+	p.readProgressMu.RLock()
 	p.latencyMu.Lock()
-	defer p.latencyMu.Unlock()
+	defer func() {
+		p.latencyMu.Unlock()
+		p.readProgressMu.RUnlock()
+	}()
 	cutoff := sentAt.Add(-pingInFlightTTL)
-	for k, t := range p.pingsInFlight {
-		if t.Before(cutoff) {
+	for k, ping := range p.pingsInFlight {
+		if ping.sentAt.Before(cutoff) {
 			delete(p.pingsInFlight, k)
 		}
 	}
@@ -1129,10 +1301,10 @@ func (p *Peer) recordPingSent(seq uint32, sentAt time.Time) {
 			oldestTime time.Time
 			haveOldest bool
 		)
-		for k, t := range p.pingsInFlight {
-			if !haveOldest || t.Before(oldestTime) {
+		for k, ping := range p.pingsInFlight {
+			if !haveOldest || ping.sentAt.Before(oldestTime) {
 				oldestKey = k
-				oldestTime = t
+				oldestTime = ping.sentAt
 				haveOldest = true
 			}
 		}
@@ -1140,7 +1312,10 @@ func (p *Peer) recordPingSent(seq uint32, sentAt time.Time) {
 			delete(p.pingsInFlight, oldestKey)
 		}
 	}
-	p.pingsInFlight[seq] = sentAt
+	p.pingsInFlight[seq] = pingInFlight{
+		sentAt:           sentAt,
+		progressDeadline: sentAt.Add(p.frameReadBudget(MaxMessageSize)),
+	}
 }
 
 // roundMillisHalfEven rounds d to the nearest millisecond, breaking
@@ -1177,17 +1352,17 @@ func roundMillisHalfEven(d time.Duration) time.Duration {
 func (p *Peer) OnPong(seq uint32, receivedAt time.Time) {
 	p.latencyMu.Lock()
 	defer p.latencyMu.Unlock()
-	sentAt, ok := p.pingsInFlight[seq]
+	ping, ok := p.pingsInFlight[seq]
 	if !ok {
 		return
 	}
 	delete(p.pingsInFlight, seq)
-	for s, t := range p.pingsInFlight {
-		if !t.After(sentAt) {
+	for s, pending := range p.pingsInFlight {
+		if !pending.sentAt.After(ping.sentAt) {
 			delete(p.pingsInFlight, s)
 		}
 	}
-	rtt := roundMillisHalfEven(receivedAt.Sub(sentAt))
+	rtt := roundMillisHalfEven(receivedAt.Sub(ping.sentAt))
 	if !p.hasLatency {
 		p.latency = rtt
 		p.hasLatency = true
