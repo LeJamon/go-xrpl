@@ -80,7 +80,11 @@ type Overlay struct {
 
 	// outboundSem caps concurrent autoconnect Connect goroutines so
 	// a slow discovery tick cannot stack one goroutine per candidate.
-	outboundSem chan struct{}
+	outboundSem      chan struct{}
+	peerStartMu      sync.Mutex
+	peerStartWG      sync.WaitGroup
+	peerStartsClosed bool
+	bootstrap        bootstrapGovernor
 
 	// relayedIndex maps suppression-hash → set of peers known to have
 	// that message. Populated as we forward a validator message (each
@@ -631,6 +635,41 @@ func (o *Overlay) PeerSupports(peerID PeerID, f Feature) bool {
 	return caps.HasFeature(f)
 }
 
+// PeerClosedLedger returns the closed-ledger hash advertised during the
+// handshake or in the peer's latest status message.
+func (o *Overlay) PeerClosedLedger(peerID PeerID) ([32]byte, bool) {
+	peer, ok := o.getPeer(peerID)
+	if !ok {
+		return [32]byte{}, false
+	}
+	return peer.ClosedLedger()
+}
+
+// AcknowledgePeerBootstrap releases cold-start admission after a peer's
+// startup traffic has been parsed and accepted by its protocol handler.
+func (o *Overlay) AcknowledgePeerBootstrap(peerID PeerID) {
+	peer, ok := o.getPeer(peerID)
+	if ok {
+		peer.acknowledgeBootstrap()
+	}
+}
+
+// RejectPeerBootstrap closes a cold-start peer whose startup traffic could
+// not be processed, allowing the automatic dialer to retry another endpoint.
+func (o *Overlay) RejectPeerBootstrap(peerID PeerID) {
+	peer, ok := o.getPeer(peerID)
+	if ok && peer.onBootstrapReady != nil && !o.bootstrap.isReady() {
+		peer.Close()
+	}
+}
+
+func (o *Overlay) acknowledgePeerBootstrapPing(peerID PeerID) {
+	peer, ok := o.getPeer(peerID)
+	if ok && !peer.bootstrapManifest.Load() {
+		peer.acknowledgeBootstrap()
+	}
+}
+
 // PeerRemoteAddr returns the peer's remote endpoint as "host:port", or
 // "" if the peer is unknown. Used to populate the `uri` field on
 // per-publisher state for peer-sourced lists.
@@ -932,6 +971,10 @@ func (o *Overlay) Run(ctx context.Context) error {
 // calls (defensive cleanup, error-path + deferred stop) are no-ops.
 func (o *Overlay) Stop() error {
 	o.stopOnce.Do(func() {
+		o.peerStartMu.Lock()
+		o.peerStartsClosed = true
+		o.peerStartMu.Unlock()
+
 		// Release any lifecycle send blocked on an event loop that is
 		// about to exit, so run-watcher goroutines drain cleanly under
 		// peerWG.Wait below. Guarded for overlays built outside New (some
@@ -965,6 +1008,7 @@ func (o *Overlay) Stop() error {
 		}
 		o.peersMu.Unlock()
 
+		o.peerStartWG.Wait()
 		o.peerWG.Wait()
 
 		if o.resourceManager != nil {

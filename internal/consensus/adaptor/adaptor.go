@@ -103,8 +103,8 @@ type Adaptor struct {
 	txSetCache *TxSetCache
 
 	// Peer-reported last-closed ledger hashes, keyed by overlay peer ID.
-	// Populated by the router on every inbound statusChange so getNetworkLedger
-	// can use peer LCLs even without a fresh proposal from that peer.
+	// Populated from the handshake and subsequent status changes so
+	// getNetworkLedger can use peer LCLs before a proposal arrives.
 	peerLCLsMu sync.RWMutex
 	peerLCLs   map[uint64]consensus.LedgerID
 
@@ -450,9 +450,9 @@ func newPendingValidationResolver(rechecker consensus.ValidationQuorumRechecker)
 	}
 }
 
-// UpdatePeerLCL records the last-closed-ledger hash a peer reported via
-// statusChange, so getNetworkLedger can fall back to peer LCLs when proposal
-// votes are absent or stale. The zero hash removes any existing entry.
+// UpdatePeerLCL records a peer's last-closed-ledger hash so getNetworkLedger
+// can fall back to peer LCLs when proposal votes are absent or stale. The zero
+// hash removes any existing entry.
 func (a *Adaptor) UpdatePeerLCL(peerID uint64, ledger consensus.LedgerID) {
 	a.peerLCLsMu.Lock()
 	defer a.peerLCLsMu.Unlock()

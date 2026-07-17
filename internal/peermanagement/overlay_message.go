@@ -30,14 +30,6 @@ func (o *Overlay) handleEvent(evt Event) {
 }
 
 func (o *Overlay) onPeerConnected(evt Event) {
-	// Only track outbound connections in discovery — inbound endpoints
-	// use ephemeral source ports that aren't connectable.
-	if !evt.Inbound {
-		o.discovery.MarkConnected(evt.Endpoint.String(), evt.PeerID)
-	}
-	// Notify higher layers AFTER discovery state is updated so any work
-	// they do (e.g. sending us-originated frames to the peer) sees a
-	// fully-bookkept overlay. Mirrors the disconnect callback ordering.
 	if cb := o.onPeerConnectSnapshot(); cb != nil {
 		cb(evt.PeerID)
 	}
@@ -45,7 +37,6 @@ func (o *Overlay) onPeerConnected(evt Event) {
 
 func (o *Overlay) onPeerDisconnected(evt Event) {
 	o.peerDisconnects.Add(1)
-	o.discovery.MarkDisconnected(evt.PeerID)
 	o.relay.RemovePeer(evt.PeerID)
 	// Fire the higher-layer disconnect callback so per-peer state in
 	// consumers (router peerStates, adaptor peerLCLs) gets cleaned.
@@ -118,7 +109,9 @@ func (o *Overlay) onMessageReceived(evt Event) {
 
 	// Handle PING at transport level — respond with PONG immediately
 	if msgType == message.TypePing {
-		o.handlePing(evt)
+		if o.handlePing(evt) {
+			o.acknowledgePeerBootstrapPing(evt.PeerID)
+		}
 		return
 	}
 
@@ -275,6 +268,9 @@ func (o *Overlay) onMessageReceived(evt Event) {
 	default:
 		o.droppedMessages.Add(1)
 		slog.Warn("Message dropped: channel full", "t", "Overlay", "type", msgType.String())
+		if msgType == message.TypeManifests {
+			o.RejectPeerBootstrap(evt.PeerID)
+		}
 	}
 }
 
@@ -593,14 +589,14 @@ func (o *Overlay) handleSquelchMessage(evt Event) {
 	}
 }
 
-func (o *Overlay) handlePing(evt Event) {
+func (o *Overlay) handlePing(evt Event) bool {
 	decoded, err := message.Decode(message.TypePing, evt.Payload)
 	if err != nil {
-		return
+		return false
 	}
 	ping, ok := decoded.(*message.Ping)
 	if !ok {
-		return
+		return false
 	}
 
 	switch ping.PType {
@@ -612,14 +608,17 @@ func (o *Overlay) handlePing(evt Event) {
 		}
 		wireMsg, err := message.EncodeFrame(pong)
 		if err != nil {
-			return
+			return false
 		}
 		o.Send(evt.PeerID, wireMsg)
 	case message.PingTypePong:
 		if peer, exists := o.getPeer(evt.PeerID); exists {
 			peer.OnPong(ping.Seq, time.Now())
 		}
+	default:
+		return false
 	}
+	return true
 }
 
 // onLedgerResponse ships an already-wire-framed ledger-sync response

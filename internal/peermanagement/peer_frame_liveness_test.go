@@ -169,6 +169,54 @@ func TestPeerReadLoopClassifiesWrappedMidFrameTimeoutAsReadIdle(t *testing.T) {
 	require.ErrorIs(t, err, ErrReadIdle)
 }
 
+func TestPeerReadLoopReportsPartialFrameProgress(t *testing.T) {
+	clock := &livenessClock{now: time.Unix(2_500, 0)}
+	payload := []byte("manifest")
+	frame := manifestFrame(t, payload)
+	conn := &chunkedLivenessConn{
+		clock: clock,
+		steps: []connReadStep{
+			{data: frame[:HeaderSizeUncompressed]},
+			{after: 2 * time.Second, data: frame[HeaderSizeUncompressed : HeaderSizeUncompressed+3], err: io.ErrUnexpectedEOF},
+		},
+	}
+	peer, _ := newFrameLivenessPeer(t, clock, conn)
+	peer.readPolicy.minimumFrameRate = 1
+	bootstrapReady := false
+	peer.onBootstrapReady = func() { bootstrapReady = true }
+
+	err := peer.readLoop(context.Background())
+	var frameErr *FrameReadError
+	require.ErrorAs(t, err, &frameErr)
+	require.ErrorIs(t, err, io.ErrUnexpectedEOF)
+	assert.Equal(t, TypeManifests, frameErr.MessageType)
+	assert.Equal(t, uint32(len(payload)), frameErr.WireSize)
+	assert.False(t, frameErr.Compressed)
+	assert.Equal(t, uint64(3), frameErr.BytesRead)
+	assert.Equal(t, 2*time.Second, frameErr.Elapsed)
+	assert.Contains(t, frameErr.Error(), "rate=1B/s")
+	assert.False(t, bootstrapReady)
+}
+
+func TestPeerReadLoopRejectsDroppedBootstrapManifest(t *testing.T) {
+	clock := &livenessClock{now: time.Unix(2_750, 0)}
+	frame := manifestFrame(t, []byte("manifest"))
+	conn := &chunkedLivenessConn{
+		clock: clock,
+		steps: []connReadStep{{data: frame}},
+	}
+	peer, events := newFrameLivenessPeer(t, clock, conn)
+	for range cap(events) {
+		events <- Event{}
+	}
+	bootstrapReady := false
+	peer.onBootstrapReady = func() { bootstrapReady = true }
+
+	err := peer.readLoop(context.Background())
+	require.ErrorIs(t, err, errBootstrapManifestDropped)
+	assert.False(t, bootstrapReady)
+}
+
 func TestPeerReadLoopRejectsTricklePastFrameBudget(t *testing.T) {
 	clock := &livenessClock{now: time.Unix(3_000, 0)}
 	frame := manifestFrame(t, []byte("slow"))

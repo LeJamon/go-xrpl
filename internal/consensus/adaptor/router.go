@@ -36,6 +36,15 @@ type peerSessionView interface {
 	IsPeerConnected(peermanagement.PeerID) bool
 }
 
+type peerLedgerHintView interface {
+	PeerClosedLedger(peermanagement.PeerID) ([32]byte, bool)
+}
+
+type peerBootstrapAcknowledger interface {
+	AcknowledgePeerBootstrap(peermanagement.PeerID)
+	RejectPeerBootstrap(peermanagement.PeerID)
+}
+
 // Router reads inbound messages from the P2P overlay and dispatches
 // them to the consensus engine and adaptor.
 type Router struct {
@@ -653,8 +662,21 @@ func (r *Router) stopManifestWorker() {
 }
 
 func (r *Router) processManifestJob(msg *peermanagement.InboundMessage) {
+	processed := false
+	defer func() {
+		if !processed {
+			if acknowledger, ok := r.peerSessions.(peerBootstrapAcknowledger); ok {
+				acknowledger.RejectPeerBootstrap(msg.PeerID)
+			}
+		}
+	}()
 	defer r.recoverFrame(msg, "manifest")
-	r.handleManifests(msg)
+	processed = r.handleManifests(msg)
+	if processed {
+		if acknowledger, ok := r.peerSessions.(peerBootstrapAcknowledger); ok {
+			acknowledger.AcknowledgePeerBootstrap(msg.PeerID)
+		}
+	}
 }
 
 func (r *Router) submitManifestJob(msg *peermanagement.InboundMessage) {
@@ -666,6 +688,9 @@ func (r *Router) submitManifestJob(msg *peermanagement.InboundMessage) {
 	case r.manifestJobs <- msg:
 	default:
 		r.droppedManifestJobs.Add(1)
+		if acknowledger, ok := r.peerSessions.(peerBootstrapAcknowledger); ok {
+			acknowledger.RejectPeerBootstrap(msg.PeerID)
+		}
 		r.logger.Debug("inbound manifests dropped: worker queue saturated",
 			"t", "consensus", "event", "manifest-shed", "peer", msg.PeerID)
 	}

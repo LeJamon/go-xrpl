@@ -3,6 +3,7 @@ package peermanagement
 import (
 	"errors"
 	"fmt"
+	"time"
 )
 
 // Sentinel errors for peer management operations.
@@ -49,6 +50,30 @@ var (
 )
 
 var errCompressionUnnegotiated = errors.New("outbound compressed frame without negotiated compression")
+var errBootstrapManifestDropped = errors.New("bootstrap manifests could not be delivered")
+
+// FrameReadError describes a failed payload transfer after its header was read.
+type FrameReadError struct {
+	MessageType MessageType
+	WireSize    uint32
+	Compressed  bool
+	BytesRead   uint64
+	Elapsed     time.Duration
+	Err         error
+}
+
+func (e *FrameReadError) Error() string {
+	var rate uint64
+	if e.Elapsed > 0 {
+		rate = e.BytesRead * uint64(time.Second) / uint64(e.Elapsed)
+	}
+	return fmt.Sprintf("failed to read %s payload: wire_size=%d compressed=%t bytes_read=%d elapsed=%s rate=%dB/s: %v",
+		e.MessageType, e.WireSize, e.Compressed, e.BytesRead, e.Elapsed, rate, e.Err)
+}
+
+func (e *FrameReadError) Unwrap() error {
+	return e.Err
+}
 
 // PeerError wraps an error with peer context.
 type PeerError struct {

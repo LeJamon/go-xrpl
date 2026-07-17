@@ -95,14 +95,13 @@ func (r *Router) manifestEmitter() manifestSender {
 }
 
 // HandlePeerConnect is the callback wired into Overlay.SetPeerConnectCallback.
-// Fires once a peer has finished its handshake and joined the overlay;
-// emits the cached validator manifests so the peer can resolve every
-// known ephemeral signing key back to its trusted master before any
-// validation arrives.
-//
-// Skip cases (cache empty, no overlay) are handled inside
-// SendLocalManifestTo so this stays a thin event-loop trampoline.
+// It records the handshake ledger hint and emits cached validator manifests.
 func (r *Router) HandlePeerConnect(peerID peermanagement.PeerID) {
+	if hints, ok := r.peerSessions.(peerLedgerHintView); ok && r.adaptor != nil {
+		if closed, exists := hints.PeerClosedLedger(peerID); exists {
+			r.adaptor.UpdatePeerLCL(uint64(peerID), closed)
+		}
+	}
 	r.SendLocalManifestTo(peerID)
 }
 

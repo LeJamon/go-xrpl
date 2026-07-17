@@ -86,6 +86,13 @@ type Peer struct {
 	// no lock. nil for inbound peers and in tests.
 	onRedirect func([]string)
 
+	// onBootstrapReady is installed before Run for the one outbound peer
+	// admitted during cold start. A protocol handler fires it after accepting
+	// manifests, or a valid PING when the remote had no manifests to send.
+	onBootstrapReady   func()
+	bootstrapReadyOnce sync.Once
+	bootstrapManifest  atomic.Bool
+
 	send   chan []byte
 	events chan<- Event
 
@@ -271,16 +278,18 @@ func (p *Peer) SetDroppedEventsCounter(c *atomic.Uint64) {
 // dispatchEvent attempts a non-blocking send to the events channel.
 // The read hot path and Close path must never block on the event
 // loop, which itself takes overlay-level locks.
-func (p *Peer) dispatchEvent(evt Event) {
+func (p *Peer) dispatchEvent(evt Event) bool {
 	if p.events == nil {
-		return
+		return false
 	}
 	select {
 	case p.events <- evt:
+		return true
 	default:
 		if p.droppedEvents != nil {
 			p.droppedEvents.Add(1)
 		}
+		return false
 	}
 }
 
@@ -871,6 +880,11 @@ type frameProgressReader struct {
 	startedAt           time.Time
 	deadline            time.Time
 	budgetDeadlineArmed bool
+	header              MessageHeader
+	headerSet           bool
+	bytesRead           uint64
+	payloadStart        uint64
+	payloadStartedAt    time.Time
 }
 
 func (p *Peer) newFrameProgressReader(reader io.Reader, conn net.Conn) *frameProgressReader {
@@ -892,6 +906,10 @@ func (p *Peer) newFrameProgressReader(reader io.Reader, conn net.Conn) *framePro
 }
 
 func (r *frameProgressReader) setHeader(header MessageHeader) error {
+	r.header = header
+	r.headerSet = true
+	r.payloadStart = r.bytesRead
+	r.payloadStartedAt = r.peer.readPolicy.now()
 	r.deadline = r.startedAt.Add(r.peer.frameReadBudget(header.PayloadSize))
 
 	r.peer.readProgressMu.Lock()
@@ -928,6 +946,7 @@ func (r *frameProgressReader) Read(dst []byte) (int, error) {
 
 	n, err := r.reader.Read(dst)
 	if n > 0 {
+		r.bytesRead += uint64(n)
 		now = r.peer.readPolicy.now()
 		r.peer.readProgressMu.Lock()
 		if r.peer.readProgress.id == r.frameID && r.peer.readProgress.active {
@@ -939,6 +958,25 @@ func (r *frameProgressReader) Read(dst []byte) (int, error) {
 		}
 	}
 	return n, err
+}
+
+func (r *frameProgressReader) failure(err error, now time.Time) error {
+	if !r.headerSet {
+		return err
+	}
+	bytesRead := r.bytesRead - r.payloadStart
+	elapsed := now.Sub(r.payloadStartedAt)
+	if elapsed < 0 {
+		elapsed = 0
+	}
+	return &FrameReadError{
+		MessageType: r.header.MessageType,
+		WireSize:    r.header.PayloadSize,
+		Compressed:  r.header.Compressed,
+		BytesRead:   bytesRead,
+		Elapsed:     elapsed,
+		Err:         err,
+	}
 }
 
 func (r *frameProgressReader) finish(success bool, now time.Time) {
@@ -1004,14 +1042,14 @@ func (p *Peer) readLoop(ctx context.Context) error {
 				return nil
 			}
 			if errors.Is(err, ErrFrameReadTooSlow) {
-				return ErrFrameReadTooSlow
+				return frameReader.failure(ErrFrameReadTooSlow, now)
 			}
 			var ne net.Error
 			if errors.As(err, &ne) && ne.Timeout() {
 				if frameReader.budgetDeadlineArmed {
-					return ErrFrameReadTooSlow
+					return frameReader.failure(ErrFrameReadTooSlow, now)
 				}
-				return ErrReadIdle
+				return frameReader.failure(ErrReadIdle, now)
 			}
 			// Over-budget size claim is protocol abuse — charge so the
 			// reputation system evicts. Other framing errors are
@@ -1019,7 +1057,7 @@ func (p *Peer) readLoop(ctx context.Context) error {
 			if errors.Is(err, message.ErrMessageTooLarge) {
 				p.IncBadData("message-too-large")
 			}
-			return err
+			return frameReader.failure(err, now)
 		}
 
 		// Account wire bytes (header + on-the-wire payload, before
@@ -1050,11 +1088,17 @@ func (p *Peer) readLoop(ctx context.Context) error {
 		if !message.IsKnownMessageType(header.MessageType) {
 			continue
 		}
+		if header.MessageType == TypeManifests {
+			p.bootstrapManifest.Store(true)
+		}
 
 		if header.Compressed {
 			payload, err = DecompressLZ4(payload, int(header.UncompressedSize))
 			if err != nil {
 				p.IncBadData("decompress-lz4-failed")
+				if header.MessageType == TypeManifests && p.onBootstrapReady != nil {
+					return fmt.Errorf("bootstrap manifests decompression failed: %w", err)
+				}
 				if p.consecutiveDecompressFailures.Add(1) >= maxConsecutiveDecompressFailures {
 					return fmt.Errorf("decompress-lz4 failed %d times in a row: %w",
 						maxConsecutiveDecompressFailures, err)
@@ -1063,17 +1107,26 @@ func (p *Peer) readLoop(ctx context.Context) error {
 			}
 			p.consecutiveDecompressFailures.Store(0)
 		}
-
 		p.traffic.AddCount(CategorizeMessage(uint16(header.MessageType)), true, len(payload))
 
-		p.dispatchEvent(Event{
+		delivered := p.dispatchEvent(Event{
 			Type:        EventMessageReceived,
 			PeerID:      p.id,
 			MessageType: uint16(header.MessageType),
 			Payload:     payload,
 			WireSize:    payloadWireSize,
 		})
+		if !delivered && header.MessageType == TypeManifests && p.onBootstrapReady != nil {
+			return errBootstrapManifestDropped
+		}
 	}
+}
+
+func (p *Peer) acknowledgeBootstrap() {
+	if p.onBootstrapReady == nil {
+		return
+	}
+	p.bootstrapReadyOnce.Do(p.onBootstrapReady)
 }
 
 func (p *Peer) writeLoop(ctx context.Context) error {
