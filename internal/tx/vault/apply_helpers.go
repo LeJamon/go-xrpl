@@ -872,6 +872,13 @@ func removeVaultAssetHolding(ctx *tx.ApplyContext, accountID [20]byte, asset tx.
 			delta--
 			return ter.TesSUCCESS
 		}
+		exists, err := ctx.View.Exists(keylet.Account(owner))
+		if err != nil {
+			return ter.TefINTERNAL
+		}
+		if !exists {
+			return ter.TecINTERNAL
+		}
 		if err := tx.AdjustOwnerCount(ctx.View, owner, -1); err != nil {
 			return ter.TefINTERNAL
 		}
@@ -881,11 +888,20 @@ func removeVaultAssetHolding(ctx *tx.ApplyContext, accountID [20]byte, asset tx.
 		if result := adjust(lowID); result != ter.TesSUCCESS {
 			return 0, result
 		}
+		rs.Flags &^= state.LsfLowReserve
 	}
 	if rs.Flags&state.LsfHighReserve != 0 {
 		if result := adjust(highID); result != ter.TesSUCCESS {
 			return 0, result
 		}
+		rs.Flags &^= state.LsfHighReserve
+	}
+	updated, serr := state.SerializeRippleState(rs)
+	if serr != nil {
+		return 0, ter.TefINTERNAL
+	}
+	if uerr := ctx.View.Update(lineKey, updated); uerr != nil {
+		return 0, ter.TefINTERNAL
 	}
 	if result := tx.TrustDelete(ctx.View, lineKey, lowID, highID, rs.LowNode, rs.HighNode); result != ter.TesSUCCESS {
 		return 0, result
