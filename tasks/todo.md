@@ -1191,7 +1191,7 @@ Behavioral oracle: clean local rippled `3.2.0` worktree at
       vet, strict CI lint, advisory lint, and diff checks.
 - [x] Review the complete diff for concurrency, reconnect/DNS behavior, startup
       wiring, and rippled v3.2.0 conformance; record exact results below.
-- [ ] Stage intentional files only, commit, push, open the PR against `main`, and
+- [x] Stage intentional files only, commit, push, open the PR against `main`, and
       verify the published head and initial CI state.
 
 ## Review
@@ -1215,3 +1215,6 @@ Behavioral oracle: clean local rippled `3.2.0` worktree at
   PostgreSQL vet, CI-pinned strict lint, advisory lint, and `git diff --check`.
 - Independent final Go-quality, adversarial-test, and rippled-conformance
   reviews found no Blocking, Major, Minor, or Nit issues.
+- Behavior commit `d1fc5be2` and test-hardening commit `5f0890f8` are published
+  on `fix/issue-1360-peer-private-fixed-peers`; PR #1364 targets `main` at
+  https://github.com/LeJamon/go-xrpl/pull/1364.
