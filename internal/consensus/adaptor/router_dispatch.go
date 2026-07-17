@@ -54,7 +54,7 @@ func (r *Router) handleMessage(msg *peermanagement.InboundMessage) {
 	case message.TypeReplayDeltaResponse:
 		r.handleReplayDeltaResponse(msg)
 	case message.TypeManifests:
-		r.handleManifests(msg)
+		r.submitManifestJob(msg)
 	case message.TypeValidatorList:
 		r.handleValidatorList(msg)
 	case message.TypeValidatorListCollection:
@@ -63,10 +63,8 @@ func (r *Router) handleMessage(msg *peermanagement.InboundMessage) {
 	}
 }
 
-// handleManifests ingests a TMManifests frame. For each serialized
-// manifest in the list: deserialize, apply to the cache, and — on
-// Accepted — relay the single-manifest frame to every peer except the
-// origin.
+// handleManifests ingests a TMManifests frame, applies every entry, and
+// relays the accepted subset as one aggregate frame.
 //
 // Decode failures attribute "manifest-decode" badData to the sender. A
 // mix of valid and invalid entries in the same frame results in the
@@ -88,6 +86,7 @@ func (r *Router) handleManifests(msg *peermanagement.InboundMessage) {
 		return
 	}
 
+	accepted := make([][]byte, 0, len(mfs.List))
 	for _, wire := range mfs.List {
 		parsed, err := manifest.Deserialize(wire.STObject)
 		if err != nil {
@@ -98,7 +97,7 @@ func (r *Router) handleManifests(msg *peermanagement.InboundMessage) {
 		}
 		switch d := r.manifests.ApplyManifest(parsed); d {
 		case manifest.Accepted:
-			r.relayManifest(msg.PeerID, wire.STObject)
+			accepted = append(accepted, wire.STObject)
 		case manifest.Invalid, manifest.BadMasterKey, manifest.BadEphemeralKey:
 			// Charge the sender — they gave us a manifest that
 			// passed structural parse but failed the cache's
@@ -109,22 +108,25 @@ func (r *Router) handleManifests(msg *peermanagement.InboundMessage) {
 			// already have at equal or higher seq. No action.
 		}
 	}
+	r.relayManifests(accepted)
 }
 
-// relayManifest rebroadcasts a single accepted manifest to every peer
-// except the origin. Wraps the serialized STObject in a TMManifests
-// frame (a list of one). Shares its framing with the local-manifest
-// emission paths in manifest_emit.go.
-func (r *Router) relayManifest(exceptPeer peermanagement.PeerID, serialized []byte) {
-	if r.overlay == nil {
+func (r *Router) relayManifests(serialized [][]byte) {
+	if len(serialized) == 0 {
 		return
 	}
-	frame, err := encodeManifestsFrame(serialized)
+	frame, err := encodeManifestsFrame(serialized...)
 	if err != nil {
 		r.logger.Warn("failed to encode manifest relay frame", "error", err)
 		return
 	}
-	_ = r.overlay.BroadcastExcept(exceptPeer, frame)
+	sender := r.manifestEmitter()
+	if sender == nil {
+		return
+	}
+	if err := sender.Broadcast(frame); err != nil {
+		r.logger.Warn("failed to broadcast manifest relay frame", "error", err)
+	}
 }
 
 func (r *Router) handleProposal(msg *peermanagement.InboundMessage) {

@@ -19,8 +19,8 @@ type manifestSender interface {
 // encodeManifestsFrame wraps one or more wire-format manifest STObjects
 // in a TMManifests frame ready for Overlay.Broadcast / Overlay.Send.
 //
-// Shared by relayManifest (single-manifest gossip from a peer) and the
-// local-manifest emission paths so both produce byte-identical frames;
+// Shared by inbound manifest relay and the local-manifest emission paths
+// so both produce byte-identical frames;
 // peers don't distinguish between the two on the wire.
 func encodeManifestsFrame(serialized ...[]byte) ([]byte, error) {
 	list := make([]message.Manifest, 0, len(serialized))
