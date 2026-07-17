@@ -3,6 +3,8 @@ package state
 import (
 	"encoding/binary"
 	"errors"
+
+	"github.com/LeJamon/go-xrpl/keylet"
 )
 
 // IsDefaultValue reports whether a decoded field value should be omitted
@@ -90,4 +92,9 @@ func GetLedgerEntryType(data []byte) (uint16, error) {
 		return 0, errors.New("unexpected header byte, expected 0x11 for LedgerEntryType")
 	}
 	return EntryTypeCode(data), nil
+}
+
+// MatchesKeyletType reports whether data satisfies a keylet's type constraint.
+func MatchesKeyletType(k keylet.Keylet, data []byte) bool {
+	return k.Type == 0 || EntryTypeCode(data) == uint16(k.Type)
 }

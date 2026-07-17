@@ -13,6 +13,7 @@ import (
 	"github.com/LeJamon/go-xrpl/internal/ledger/header"
 	"github.com/LeJamon/go-xrpl/internal/ledger/negativeunl"
 	"github.com/LeJamon/go-xrpl/internal/ledger/skiplist"
+	"github.com/LeJamon/go-xrpl/internal/ledger/state"
 	"github.com/LeJamon/go-xrpl/keylet"
 	"github.com/LeJamon/go-xrpl/protocol"
 	"github.com/LeJamon/go-xrpl/shamap"
@@ -442,8 +443,11 @@ func (l *Ledger) ReadContext(ctx context.Context, k keylet.Keylet) ([]byte, erro
 	if !found {
 		return nil, nil
 	}
-
-	return item.Data(), nil
+	data := item.Data()
+	if !state.MatchesKeyletType(k, data) {
+		return nil, nil
+	}
+	return data, nil
 }
 
 // SkipListHashes returns the decoded rolling 256-entry LedgerHashes skip-list,

@@ -7,8 +7,33 @@ import (
 
 	ledgercore "github.com/LeJamon/go-xrpl/internal/ledger"
 	"github.com/LeJamon/go-xrpl/keylet"
+	"github.com/LeJamon/go-xrpl/ledger/entry"
 	"github.com/LeJamon/go-xrpl/shamap"
 )
+
+func TestSnapshotViewChecksKeyletType(t *testing.T) {
+	stateMap := shamap.New(shamap.TypeState)
+	key := [32]byte{1}
+	data := bytes.Repeat([]byte{1}, 12)
+	data[0] = 0x11
+	data[1] = byte(entry.TypeAccountRoot >> 8)
+	data[2] = byte(entry.TypeAccountRoot)
+	if err := stateMap.Put(key, data); err != nil {
+		t.Fatalf("seed state map: %v", err)
+	}
+	view := newSnapshotView(stateMap, nil)
+	wrongType := keylet.Keylet{Type: entry.TypePermissionedDomain, Key: key}
+
+	if got, err := view.Read(wrongType); err != nil || got != nil {
+		t.Fatalf("Read wrong-type entry = %x, %v", got, err)
+	}
+	if exists, err := view.Exists(wrongType); err != nil || !exists {
+		t.Fatalf("Exists wrong-type entry = %v, %v", exists, err)
+	}
+	if got, err := view.Read(keylet.Keylet{Key: key}); err != nil || !bytes.Equal(got, data) {
+		t.Fatalf("Read ltANY entry = %x, %v", got, err)
+	}
+}
 
 func TestSnapshotViewApplyAtomically(t *testing.T) {
 	stateMap := shamap.New(shamap.TypeState)

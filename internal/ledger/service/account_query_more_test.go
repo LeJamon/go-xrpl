@@ -341,7 +341,11 @@ func TestGetDepositAuthorized_DepositAuthFlag(t *testing.T) {
 
 	t.Run("direct preauth → authorized", func(t *testing.T) {
 		preauthKey := keylet.DepositPreauth(dstID, srcID)
-		if err := svc.openLedger.Insert(preauthKey, make([]byte, 16)); err != nil {
+		preauthData, err := state.SerializeDepositPreauth(dstID, srcID, 0)
+		if err != nil {
+			t.Fatalf("serialize deposit preauth: %v", err)
+		}
+		if err := svc.openLedger.Insert(preauthKey, preauthData); err != nil {
 			t.Fatalf("insert deposit preauth: %v", err)
 		}
 		res, err := svc.GetDepositAuthorized(context.Background(), srcAddr, dstAddr, "current", nil)
@@ -358,7 +362,7 @@ func TestGetDepositAuthorized_Credentials(t *testing.T) {
 	svc := newOfferTestService(t)
 	srcAddr, srcID := addressFromBytes(t, 0x10)
 	dstAddr, dstID := addressFromBytes(t, 0x20)
-	_, issuerID := addressFromBytes(t, 0x40)
+	issuerAddr, issuerID := addressFromBytes(t, 0x40)
 	insertAccountRoot(t, svc, srcAddr, 1_000_000_000, 0)
 	insertAccountRootWithFlags(t, svc, dstAddr, 1_000_000_000, 0, state.LsfDepositAuth)
 
@@ -460,7 +464,13 @@ func TestGetDepositAuthorized_Credentials(t *testing.T) {
 		key := insertCredentialEntry(t, svc, srcID, issuerID, credType, true, nil)
 		pairs := []keylet.CredentialPair{{Issuer: issuerID, CredentialType: credType}}
 		credPreauthKey := keylet.DepositPreauthCredentials(dstID, pairs)
-		if err := svc.openLedger.Insert(credPreauthKey, make([]byte, 16)); err != nil {
+		credPreauthData, err := state.SerializeDepositPreauthCredentials(dstID, []state.DepositPreauthCredential{
+			{Issuer: issuerAddr, CredentialType: hex.EncodeToString(credType)},
+		}, 0)
+		if err != nil {
+			t.Fatalf("serialize credential preauth: %v", err)
+		}
+		if err := svc.openLedger.Insert(credPreauthKey, credPreauthData); err != nil {
 			t.Fatalf("insert credential preauth: %v", err)
 		}
 		res, err := svc.GetDepositAuthorized(context.Background(), srcAddr, dstAddr, "current",

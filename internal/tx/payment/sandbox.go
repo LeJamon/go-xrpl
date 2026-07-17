@@ -256,22 +256,36 @@ func (s *PaymentSandbox) Read(k keylet.Keylet) ([]byte, error) {
 
 	// Check local modifications
 	if data, ok := s.modifications[key]; ok {
+		if !state.MatchesKeyletType(k, data) {
+			return nil, nil
+		}
 		return data, nil
 	}
 
 	// Check local insertions
 	if data, ok := s.insertions[key]; ok {
+		if !state.MatchesKeyletType(k, data) {
+			return nil, nil
+		}
 		return data, nil
 	}
 
 	// Check parent sandbox
 	if s.parent != nil {
-		return s.parent.Read(k)
+		data, err := s.parent.Read(k)
+		if err != nil || data == nil || state.MatchesKeyletType(k, data) {
+			return data, err
+		}
+		return nil, nil
 	}
 
 	// Read from underlying view
 	if s.view != nil {
-		return s.view.Read(k)
+		data, err := s.view.Read(k)
+		if err != nil || data == nil || state.MatchesKeyletType(k, data) {
+			return data, err
+		}
+		return nil, nil
 	}
 
 	return nil, nil
@@ -280,30 +294,21 @@ func (s *PaymentSandbox) Read(k keylet.Keylet) ([]byte, error) {
 // Exists checks if a ledger entry exists in the sandbox or underlying view
 func (s *PaymentSandbox) Exists(k keylet.Keylet) (bool, error) {
 	key := k.Key
-
-	// Check deletions first
 	if s.deletions[key] {
 		return false, nil
 	}
-
-	// Check local modifications or insertions
-	if _, ok := s.modifications[key]; ok {
-		return true, nil
+	if data, ok := s.modifications[key]; ok {
+		return state.MatchesKeyletType(k, data), nil
 	}
-	if _, ok := s.insertions[key]; ok {
-		return true, nil
+	if data, ok := s.insertions[key]; ok {
+		return state.MatchesKeyletType(k, data), nil
 	}
-
-	// Check parent sandbox
 	if s.parent != nil {
 		return s.parent.Exists(k)
 	}
-
-	// Check underlying view
 	if s.view != nil {
 		return s.view.Exists(k)
 	}
-
 	return false, nil
 }
 

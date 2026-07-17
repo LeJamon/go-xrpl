@@ -9,6 +9,7 @@ import (
 	"github.com/LeJamon/go-xrpl/drops"
 	ledgercore "github.com/LeJamon/go-xrpl/internal/ledger"
 	"github.com/LeJamon/go-xrpl/keylet"
+	"github.com/LeJamon/go-xrpl/ledger/entry"
 )
 
 // mockBaseView implements LedgerView for ApplyStateTable tests.
@@ -100,6 +101,51 @@ func key(b byte) [32]byte {
 
 func kl(b byte) keylet.Keylet {
 	return keylet.Keylet{Key: key(b)}
+}
+
+func typedEntryData(typ entry.Type, tag byte) []byte {
+	return []byte{0x11, byte(typ >> 8), byte(typ), tag}
+}
+
+func TestReadChecksKeyletTypeForBaseAndTrackedEntries(t *testing.T) {
+	base := newMockBaseView()
+	baseKey := key(1)
+	baseData := typedEntryData(entry.TypeAccountRoot, 1)
+	base.data[baseKey] = baseData
+	table := NewApplyStateTable(base, [32]byte{}, 0, nil)
+	wrongBase := keylet.Keylet{Type: entry.TypePermissionedDomain, Key: baseKey}
+
+	if got, err := table.Read(wrongBase); err != nil || got != nil {
+		t.Fatalf("Read wrong-type base entry = %x, %v", got, err)
+	}
+	if exists, err := table.Exists(wrongBase); err != nil || !exists {
+		t.Fatalf("Exists wrong-type base entry = %v, %v", exists, err)
+	}
+	if got, err := table.Read(keylet.Keylet{Key: baseKey}); err != nil || !bytes.Equal(got, baseData) {
+		t.Fatalf("Read ltANY base entry = %x, %v", got, err)
+	}
+	if got, err := table.Read(wrongBase); err != nil || got != nil {
+		t.Fatalf("Read wrong-type cached entry = %x, %v", got, err)
+	}
+	if exists, err := table.Exists(wrongBase); err != nil || exists {
+		t.Fatalf("Exists wrong-type cached entry = %v, %v", exists, err)
+	}
+
+	insertedKey := key(2)
+	insertedData := typedEntryData(entry.TypeAccountRoot, 2)
+	if err := table.Insert(keylet.Keylet{Type: entry.TypeAccountRoot, Key: insertedKey}, insertedData); err != nil {
+		t.Fatalf("Insert: %v", err)
+	}
+	wrongInserted := keylet.Keylet{Type: entry.TypePermissionedDomain, Key: insertedKey}
+	if got, err := table.Read(wrongInserted); err != nil || got != nil {
+		t.Fatalf("Read wrong-type inserted entry = %x, %v", got, err)
+	}
+	if exists, err := table.Exists(wrongInserted); err != nil || exists {
+		t.Fatalf("Exists wrong-type inserted entry = %v, %v", exists, err)
+	}
+	if got, err := table.Read(keylet.Keylet{Key: insertedKey}); err != nil || !bytes.Equal(got, insertedData) {
+		t.Fatalf("Read ltANY inserted entry = %x, %v", got, err)
+	}
 }
 
 // collectForEach runs ForEach and returns all yielded key-data pairs sorted by key.
