@@ -78,21 +78,24 @@ func (r *Router) handleMessage(msg *peermanagement.InboundMessage) {
 // Decode failures attribute "manifest-decode" badData to the sender. A
 // mix of valid and invalid entries in the same frame results in the
 // valid ones being applied; the frame isn't rejected wholesale.
-func (r *Router) handleManifests(msg *peermanagement.InboundMessage) {
+func (r *Router) handleManifests(msg *peermanagement.InboundMessage) bool {
 	if r.manifests == nil {
 		// Cache not wired (tests or minimal configs) — silently drop.
-		return
+		return false
 	}
 
 	decoded, err := message.Decode(message.TypeManifests, msg.Payload)
 	if err != nil {
 		r.logger.Warn("failed to decode manifests frame", "error", err, "peer", msg.PeerID)
 		r.adaptor.IncPeerBadData(uint64(msg.PeerID), "manifests-decode")
-		return
+		return false
 	}
 	mfs, ok := decoded.(*message.Manifests)
-	if !ok || len(mfs.List) == 0 {
-		return
+	if !ok {
+		return false
+	}
+	if len(mfs.List) == 0 {
+		return true
 	}
 
 	accepted := make([][]byte, 0, len(mfs.List))
@@ -118,6 +121,7 @@ func (r *Router) handleManifests(msg *peermanagement.InboundMessage) {
 		}
 	}
 	r.relayManifests(accepted)
+	return true
 }
 
 func (r *Router) relayManifests(serialized [][]byte) {

@@ -24,6 +24,25 @@ import (
 // this matters only for direct external callers driving many parallel
 // Connects.
 func (o *Overlay) Connect(addr string) error {
+	done, ok := o.beginPeerStart()
+	if !ok {
+		return ErrConnectionClosed
+	}
+	defer done()
+	return o.connectReserved(addr, nil)
+}
+
+func (o *Overlay) beginPeerStart() (func(), bool) {
+	o.peerStartMu.Lock()
+	defer o.peerStartMu.Unlock()
+	if o.peerStartsClosed {
+		return nil, false
+	}
+	o.peerStartWG.Add(1)
+	return o.peerStartWG.Done, true
+}
+
+func (o *Overlay) connectReserved(addr string, bootstrapLease *bootstrapLease) error {
 	endpoint, err := ParseEndpoint(addr)
 	if err != nil {
 		return err
@@ -78,6 +97,13 @@ func (o *Overlay) Connect(addr string) error {
 		})
 		return err
 	}
+	compression := peer.compressionNegotiated()
+	o.discovery.markNegotiatedCompression(addr, compression)
+	slog.Info("Peer handshake complete", "t", "Overlay", "addr", addr,
+		"protocol", peer.ProtocolVersion(), "compression", compression)
+	if bootstrapLease != nil {
+		peer.onBootstrapReady = bootstrapLease.markReady
+	}
 
 	// Re-check after handshake: another goroutine may have connected
 	// to the resolved endpoint while we were handshaking.
@@ -95,6 +121,10 @@ func (o *Overlay) Connect(addr string) error {
 	go func() {
 		defer o.peerWG.Done()
 		err := peer.Run(baseCtx)
+		if bootstrapLease != nil && !o.bootstrap.isReady() && baseCtx.Err() == nil {
+			o.discovery.delayBootstrapRetry(addr)
+		}
+		bootstrapLease.release()
 		if err != nil {
 			slog.Info("Peer run ended", "t", "Overlay", "addr", addr, "err", err)
 			o.notePeerRunEnded(err)
@@ -374,6 +404,9 @@ func (o *Overlay) addPeer(peer *Peer) error {
 		}
 		peer.attachUsage(c, o.bumpPeerDisconnectCharges)
 	}
+	if !peer.Inbound() {
+		o.discovery.MarkConnected(peer.Endpoint().String(), peer.ID())
+	}
 
 	o.dispatchLifecycle(Event{
 		Type:     EventPeerConnected,
@@ -407,6 +440,8 @@ func (o *Overlay) removePeer(peerID PeerID) {
 	if exists {
 		if peer.inbound {
 			o.releaseInboundIP(peer.Endpoint().Host)
+		} else {
+			o.discovery.MarkDisconnected(peerID)
 		}
 		peer.releaseUsage()
 		o.dispatchLifecycle(Event{

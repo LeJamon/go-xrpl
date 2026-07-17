@@ -29,34 +29,56 @@ func (o *Overlay) discoveryLoop(ctx context.Context) error {
 
 // autoconnect attempts to connect to peers if we need more.
 func (o *Overlay) autoconnect(ctx context.Context) {
-	// Reconcile discovery's Connected view with the live overlay peer
-	// set first. Without this, an event-bus race on disconnect can
-	// leave fixed peers marked Connected=true in d.peers even after
-	// their TCP connection ended — and SelectPeersToConnect filters
-	// them out forever. Observed in iter23/24 soak: a single dropped
-	// rippled connection on goxrpl-1 stranded the network sub-quorum
-	// because Autoconnect reported `candidates=0 needed=N` indefinitely.
 	o.reconcileDiscoveryConnected()
 
 	count := o.cfg.MaxOutbound - o.ordinaryOutboundCount()
 	count = max(count, 0)
 
-	addrs := o.discovery.SelectPeersToConnect(count)
+	cold := !o.bootstrap.isReady()
+	var lease *bootstrapLease
+	if cold {
+		var ok bool
+		lease, ok = o.bootstrap.tryReserve()
+		if !ok {
+			slog.Info("Autoconnect", "t", "Overlay", "candidates", 0, "needed", 0, "bootstrap", "waiting")
+			return
+		}
+		count = min(count, 1)
+	}
+
+	addrs := o.discovery.selectPeersToConnect(count, cold)
+	if len(addrs) == 0 {
+		lease.release()
+	}
 	slog.Info("Autoconnect", "t", "Overlay", "candidates", len(addrs), "needed", count)
 	for i, addr := range addrs {
 		select {
 		case <-ctx.Done():
+			lease.release()
 			for _, pending := range addrs[i:] {
 				o.discovery.finishConnectAttempt(pending, connectAttemptReleased)
 			}
 			return
 		case o.outboundSem <- struct{}{}:
 		}
-		go func(a string) {
+		dialDone, ok := o.beginPeerStart()
+		if !ok {
+			<-o.outboundSem
+			lease.release()
+			for _, pending := range addrs[i:] {
+				o.discovery.finishConnectAttempt(pending, connectAttemptReleased)
+			}
+			return
+		}
+		peerLease := lease
+		lease = nil
+		go func(a string, bootstrapLease *bootstrapLease, dialDone func()) {
+			defer dialDone()
 			defer func() { <-o.outboundSem }()
-			err := o.Connect(a)
+			err := o.connectReserved(a, bootstrapLease)
 			result := connectAttemptSucceeded
 			if err != nil {
+				bootstrapLease.release()
 				result = connectAttemptReleased
 				if ctx.Err() == nil &&
 					!errors.Is(err, ErrAlreadyConnected) &&
@@ -70,7 +92,7 @@ func (o *Overlay) autoconnect(ctx context.Context) {
 			} else {
 				slog.Info("Peer connected", "t", "Overlay", "addr", a)
 			}
-		}(addr)
+		}(addr, peerLease, dialDone)
 	}
 }
 

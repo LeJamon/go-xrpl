@@ -31,6 +31,35 @@ type sendCall struct {
 	frame  []byte
 }
 
+type peerLedgerHints struct {
+	closed [32]byte
+}
+
+func (p peerLedgerHints) IsPeerConnected(peermanagement.PeerID) bool {
+	return true
+}
+
+func (p peerLedgerHints) PeerClosedLedger(peermanagement.PeerID) ([32]byte, bool) {
+	return p.closed, true
+}
+
+type peerBootstrapSessions struct {
+	acknowledged peermanagement.PeerID
+	rejected     peermanagement.PeerID
+}
+
+func (*peerBootstrapSessions) IsPeerConnected(peermanagement.PeerID) bool {
+	return true
+}
+
+func (p *peerBootstrapSessions) AcknowledgePeerBootstrap(peerID peermanagement.PeerID) {
+	p.acknowledged = peerID
+}
+
+func (p *peerBootstrapSessions) RejectPeerBootstrap(peerID peermanagement.PeerID) {
+	p.rejected = peerID
+}
+
 func (f *fakeManifestSender) Send(peerID peermanagement.PeerID, frame []byte) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -273,6 +302,72 @@ func TestRouter_HandlePeerConnect_DelegatesToSendLocalManifest(t *testing.T) {
 	}
 	if sender.sends[0].peerID != 42 {
 		t.Errorf("HandlePeerConnect routed to wrong peer: got %v want 42", sender.sends[0].peerID)
+	}
+}
+
+func TestRouterHandlePeerConnectSeedsHandshakeLedgerHint(t *testing.T) {
+	ad := newTestAdaptor(t)
+	router := NewRouter(&mockEngine{}, ad, nil)
+	closed := [32]byte{0xAA, 0xBB}
+	router.setPeerSessionView(peerLedgerHints{closed: closed})
+
+	router.HandlePeerConnect(peermanagement.PeerID(42))
+
+	ledgers := ad.PeerReportedLedgers()
+	if len(ledgers) != 1 {
+		t.Fatalf("peer ledger hints: got %d entries, want 1", len(ledgers))
+	}
+	if got := [32]byte(ledgers[0]); got != closed {
+		t.Fatalf("peer ledger hint: got %x, want %x", got, closed)
+	}
+}
+
+func TestRouterAcknowledgesBootstrapOnlyAfterManifestDecode(t *testing.T) {
+	router, _, _ := routerWithCache(t, nil, 0, 0)
+	sessions := &peerBootstrapSessions{}
+	router.setPeerSessionView(sessions)
+
+	router.processManifestJob(&peermanagement.InboundMessage{
+		PeerID:  7,
+		Type:    uint16(message.TypeManifests),
+		Payload: []byte("malformed"),
+	})
+	if sessions.acknowledged != 0 {
+		t.Fatalf("malformed manifests acknowledged peer %d", sessions.acknowledged)
+	}
+	if sessions.rejected != 7 {
+		t.Fatalf("malformed manifests rejected peer %d, want 7", sessions.rejected)
+	}
+
+	sessions.rejected = 0
+	payload, err := message.Encode(&message.Manifests{})
+	if err != nil {
+		t.Fatalf("encode manifests: %v", err)
+	}
+	router.processManifestJob(&peermanagement.InboundMessage{
+		PeerID:  7,
+		Type:    uint16(message.TypeManifests),
+		Payload: payload,
+	})
+	if sessions.acknowledged != 7 {
+		t.Fatalf("decoded manifests acknowledged peer %d, want 7", sessions.acknowledged)
+	}
+	if sessions.rejected != 0 {
+		t.Fatalf("decoded empty manifests rejected peer %d", sessions.rejected)
+	}
+}
+
+func TestRouterRejectsBootstrapWhenManifestWorkerIsFull(t *testing.T) {
+	router, _, _ := routerWithCache(t, nil, 0, 0)
+	sessions := &peerBootstrapSessions{}
+	router.setPeerSessionView(sessions)
+	router.manifestJobs = make(chan *peermanagement.InboundMessage, 1)
+	router.manifestJobs <- &peermanagement.InboundMessage{}
+
+	router.submitManifestJob(&peermanagement.InboundMessage{PeerID: 9})
+
+	if sessions.rejected != 9 {
+		t.Fatalf("saturated manifest worker rejected peer %d, want 9", sessions.rejected)
 	}
 }
 

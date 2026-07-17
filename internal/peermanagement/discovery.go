@@ -347,6 +347,9 @@ type DiscoveredPeer struct {
 	PeerID    PeerID
 	Source    PeerID
 
+	compressionKnown    bool
+	supportsCompression bool
+
 	// Position in Discovery.lru; guarded by Discovery.mu.
 	lruEntry *list.Element
 }
@@ -824,6 +827,10 @@ func (d *Discovery) NeedsMorePeers() bool {
 
 // SelectPeersToConnect returns candidate addresses to connect to.
 func (d *Discovery) SelectPeersToConnect(count int) []string {
+	return d.selectPeersToConnect(count, false)
+}
+
+func (d *Discovery) selectPeersToConnect(count int, bootstrap bool) []string {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 
@@ -891,14 +898,28 @@ func (d *Discovery) SelectPeersToConnect(count int) []string {
 		rand.Shuffle(len(candidates), func(i, j int) {
 			candidates[i], candidates[j] = candidates[j], candidates[i]
 		})
-
-		if count > 0 && count < len(candidates) {
+		if !bootstrap && count > 0 && count < len(candidates) {
 			candidates = candidates[:count]
 		} else if count <= 0 {
 			candidates = nil
 		}
 	}
 	candidates = append(fixedCandidates, candidates...)
+	if bootstrap {
+		d.rankCompressionCandidatesLocked(candidates)
+		if count <= 0 && len(fixedCandidates) > 0 {
+			for _, address := range candidates {
+				if d.fixedPeers[address] {
+					candidates = []string{address}
+					break
+				}
+			}
+		} else if count <= 0 {
+			candidates = nil
+		} else if len(candidates) > count {
+			candidates = candidates[:count]
+		}
+	}
 	for _, address := range candidates {
 		attempt := d.connectAttempts[address]
 		if attempt == nil {
@@ -915,6 +936,52 @@ func (d *Discovery) SelectPeersToConnect(count int) []string {
 		d.recentAttempts[connectAttemptHost(address)] = now.Add(recentConnectAttempt)
 	}
 	return candidates
+}
+
+func (d *Discovery) rankCompressionCandidatesLocked(candidates []string) {
+	rand.Shuffle(len(candidates), func(i, j int) {
+		candidates[i], candidates[j] = candidates[j], candidates[i]
+	})
+	rank := func(address string) int {
+		peer := d.peers[address]
+		if peer != nil && peer.compressionKnown && peer.supportsCompression {
+			if d.fixedPeers[address] {
+				return 0
+			}
+			return 1
+		}
+		if (peer == nil || !peer.compressionKnown) && d.fixedPeers[address] {
+			return 2
+		}
+		if peer == nil || !peer.compressionKnown {
+			return 3
+		}
+		if d.fixedPeers[address] {
+			return 4
+		}
+		return 5
+	}
+	sort.SliceStable(candidates, func(i, j int) bool {
+		return rank(candidates[i]) < rank(candidates[j])
+	})
+}
+
+func (d *Discovery) markNegotiatedCompression(address string, enabled bool) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	peer := d.peers[address]
+	if peer == nil {
+		peer = &DiscoveredPeer{Address: address, LastSeen: d.now()}
+		d.insertPeerLocked(peer)
+	}
+	peer.compressionKnown = true
+	peer.supportsCompression = enabled
+}
+
+func (d *Discovery) delayBootstrapRetry(address string) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	d.recentAttempts[connectAttemptHost(address)] = d.now().Add(recentConnectAttempt)
 }
 
 // finishConnectAttempt releases an autoconnect reservation. Network failures

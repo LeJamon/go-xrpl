@@ -102,12 +102,17 @@ func (o *Overlay) acceptLoop(ctx context.Context) error {
 			return ctx.Err()
 		}
 
-		o.peerWG.Add(1)
-		go func(c net.Conn) {
-			defer o.peerWG.Done()
+		startDone, ok := o.beginPeerStart()
+		if !ok {
+			<-o.inboundSem
+			conn.Close()
+			return ErrConnectionClosed
+		}
+		go func(c net.Conn, startDone func()) {
+			defer startDone()
 			defer func() { <-o.inboundSem }()
 			o.handleInbound(ctx, c)
-		}(conn)
+		}(conn, startDone)
 	}
 }
 
