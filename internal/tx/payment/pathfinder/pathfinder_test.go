@@ -127,13 +127,18 @@ func testAccountAddress(id [20]byte) string {
 
 // addAccount stores a serialized AccountRoot at the proper keylet.
 func addAccount(t *testing.T, ledger *mockLedgerView, accountID [20]byte, balance uint64, flags uint32) {
+	addAccountWithOwnerCount(t, ledger, accountID, balance, flags, 0)
+}
+
+func addAccountWithOwnerCount(t *testing.T, ledger *mockLedgerView, accountID [20]byte, balance uint64, flags, ownerCount uint32) {
 	t.Helper()
 	addr := testAccountAddress(accountID)
 	acct := &state.AccountRoot{
-		Account:  addr,
-		Balance:  balance,
-		Sequence: 1,
-		Flags:    flags,
+		Account:    addr,
+		Balance:    balance,
+		Sequence:   1,
+		OwnerCount: ownerCount,
+		Flags:      flags,
 	}
 	data, err := state.SerializeAccountRoot(acct)
 	require.NoError(t, err, "serialize AccountRoot for %x", accountID[:4])
@@ -1327,7 +1332,11 @@ func TestGetPathLiquidityDoesNotReuseConsumedOffer(t *testing.T) {
 	gwAddr := testAccountAddress(gw)
 
 	for _, account := range [][20]byte{alice, bob, gw, owner} {
-		addAccount(t, ledger, account, 10_000_000_000, 0)
+		ownerCount := uint32(0)
+		if account == owner {
+			ownerCount = 1
+		}
+		addAccountWithOwnerCount(t, ledger, account, 10_000_000_000, 0, ownerCount)
 	}
 
 	low, high := bob, gw
@@ -1369,6 +1378,14 @@ func TestGetPathLiquidityDoesNotReuseConsumedOffer(t *testing.T) {
 	}, true)
 	require.NoError(t, err)
 	ledger.entries[dirKey.Key] = dirData
+	ownerDirKey := keylet.OwnerDir(owner)
+	ownerDirData, err := state.SerializeDirectoryNode(&state.DirectoryNode{
+		RootIndex: ownerDirKey.Key,
+		Indexes:   [][32]byte{offerKey},
+		Owner:     owner,
+	}, false)
+	require.NoError(t, err)
+	ledger.entries[ownerDirKey.Key] = ownerDirData
 
 	dstAmount := state.NewIssuedAmountFromFloat64(100, "USD", gwAddr)
 	pf := NewPathfinder(

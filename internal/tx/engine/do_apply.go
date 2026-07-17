@@ -588,12 +588,9 @@ func (e *Engine) removeUnfundedOffers(tecTable *applystate.ApplyStateTable, keys
 		if decodeErr != nil {
 			continue
 		}
-		ownerDirKey := keylet.OwnerDir(ownerID)
-		state.DirRemove(tecTable, ownerDirKey, offerObj.OwnerNode, offerKey, false)
-		bookDirKey := keylet.Keylet{Type: 100, Key: offerObj.BookDirectory}
-		state.DirRemove(tecTable, bookDirKey, offerObj.BookNode, offerKey, false)
-		_ = tecTable.Erase(offerKL)
-		adjustOwnerCountOnView(tecTable, ownerID, -1)
+		if removed, deleteErr := state.DeleteOffer(tecTable, offerKL, offerObj); deleteErr == nil && removed {
+			adjustOwnerCountOnView(tecTable, ownerID, -1)
+		}
 	}
 }
 

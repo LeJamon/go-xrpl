@@ -563,19 +563,9 @@ func offerDeleteInSandbox(sb *PaymentSandbox, offerKey [32]byte) {
 		return
 	}
 
-	// Remove from owner directory
-	ownerDirKey := keylet.OwnerDir(ownerID)
-	state.DirRemove(sb, ownerDirKey, offer.OwnerNode, offerKey, false)
-
-	// Remove from book directory
-	bookDirKey := keylet.Keylet{Type: 100, Key: offer.BookDirectory}
-	state.DirRemove(sb, bookDirKey, offer.BookNode, offerKey, false)
-
-	// Erase the offer
-	sb.Erase(offerKL)
-
-	// Decrement owner count
-	adjustOwnerCountInSandbox(sb, ownerID, -1)
+	if removed, deleteErr := state.DeleteOffer(sb, offerKL, offer); deleteErr == nil && removed {
+		adjustOwnerCountInSandbox(sb, ownerID, -1)
+	}
 }
 
 // adjustOwnerCountInSandbox modifies an account's OwnerCount by delta in a PaymentSandbox.

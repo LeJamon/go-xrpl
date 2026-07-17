@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/LeJamon/go-xrpl/internal/ledger/state"
 	jtx "github.com/LeJamon/go-xrpl/internal/testing"
 	ammBuilder "github.com/LeJamon/go-xrpl/internal/testing/amm"
 	cred "github.com/LeJamon/go-xrpl/internal/testing/credential"
@@ -41,6 +42,23 @@ func parseDomainID(hexStr string) [32]byte {
 	var id [32]byte
 	copy(id[:], b)
 	return id
+}
+
+func requireDirectoryMembership(t *testing.T, env *jtx.TestEnv, dir keylet.Keylet, item [32]byte, want bool) {
+	t.Helper()
+	found := false
+	err := state.DirForEach(env.Ledger(), dir, func(key [32]byte) error {
+		if key == item {
+			found = true
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("iterate directory %x: %v", dir.Key, err)
+	}
+	if found != want {
+		t.Fatalf("directory %x membership for %x: got %t, want %t", dir.Key, item, found, want)
+	}
 }
 
 // TestPermissionedDEX_ZeroDomainID verifies that a zero DomainID is rejected as
@@ -1332,6 +1350,18 @@ func TestPermissionedDEX_HybridOfferCreate(t *testing.T) {
 		jtx.RequireTxSuccess(t, result)
 		env.Close()
 		offerBuilder.RequireOfferInLedger(t, env, dex.Bob, bobSeq)
+		hybridOffer := offerBuilder.GetOffer(env, dex.Bob, bobSeq)
+		if hybridOffer == nil {
+			t.Fatal("hybrid offer missing after creation")
+		}
+		offerKey := keylet.Offer(dex.Bob.ID, bobSeq).Key
+		ownerDir := keylet.OwnerDir(dex.Bob.ID)
+		primaryDir := keylet.Keylet{Key: hybridOffer.BookDirectory}
+		additionalDir := keylet.Keylet{Key: hybridOffer.AdditionalBookDirectory}
+		for _, dir := range []keylet.Keylet{ownerDir, primaryDir, additionalDir} {
+			requireDirectoryMembership(t, env, dir, offerKey, true)
+		}
+		ownerCount := env.OwnerCount(dex.Bob)
 
 		// alice creates regular (non-domain) offer - should cross bob's hybrid (in open book)
 		aliceSeq := env.Seq(dex.Alice)
@@ -1343,6 +1373,10 @@ func TestPermissionedDEX_HybridOfferCreate(t *testing.T) {
 
 		offerBuilder.RequireNoOfferInLedger(t, env, dex.Alice, aliceSeq)
 		offerBuilder.RequireNoOfferInLedger(t, env, dex.Bob, bobSeq)
+		for _, dir := range []keylet.Keylet{ownerDir, primaryDir, additionalDir} {
+			requireDirectoryMembership(t, env, dir, offerKey, false)
+		}
+		jtx.RequireOwnerCount(t, env, dex.Bob, ownerCount-1)
 	})
 
 	// Hybrid offer crosses with domain offer by default (looks at domain book)
@@ -1696,6 +1730,7 @@ func TestPermissionedDEX_HybridOfferDirectories(t *testing.T) {
 
 	const dirCount = 100
 	offerSeqs := make([]uint32, 0, dirCount)
+	offerDirs := make(map[uint32][]keylet.Keylet, dirCount)
 
 	for range dirCount {
 		bobSeq := env.Seq(dex.Bob)
@@ -1708,13 +1743,32 @@ func TestPermissionedDEX_HybridOfferDirectories(t *testing.T) {
 		jtx.RequireTxSuccess(t, result)
 		env.Close()
 		offerBuilder.RequireOfferInLedger(t, env, dex.Bob, bobSeq)
+		offer := offerBuilder.GetOffer(env, dex.Bob, bobSeq)
+		if offer == nil {
+			t.Fatalf("hybrid offer %d missing after creation", bobSeq)
+		}
+		offerKey := keylet.Offer(dex.Bob.ID, bobSeq).Key
+		offerDirs[bobSeq] = []keylet.Keylet{
+			keylet.OwnerDir(dex.Bob.ID),
+			{Key: offer.BookDirectory},
+			{Key: offer.AdditionalBookDirectory},
+		}
+		for _, dir := range offerDirs[bobSeq] {
+			requireDirectoryMembership(t, env, dir, offerKey, true)
+		}
 	}
 
 	// Cancel all hybrid offers - they should be removed from both directories
 	for _, seq := range offerSeqs {
+		ownerCount := env.OwnerCount(dex.Bob)
 		result := env.Submit(offerBuilder.OfferCancel(dex.Bob, seq).Build())
 		jtx.RequireTxSuccess(t, result)
 		env.Close()
 		offerBuilder.RequireNoOfferInLedger(t, env, dex.Bob, seq)
+		offerKey := keylet.Offer(dex.Bob.ID, seq).Key
+		for _, dir := range offerDirs[seq] {
+			requireDirectoryMembership(t, env, dir, offerKey, false)
+		}
+		jtx.RequireOwnerCount(t, env, dex.Bob, ownerCount-1)
 	}
 }

@@ -491,19 +491,9 @@ func (s *BookStep) removeExpiredOffer(sb *PaymentSandbox, offer *state.LedgerOff
 		return
 	}
 
-	// Remove from owner directory
-	ownerDirKey := keylet.OwnerDir(ownerID)
-	state.DirRemove(sb, ownerDirKey, offer.OwnerNode, offerKey, false)
-
-	// Remove from book directory
-	bookDirKey := keylet.Keylet{Type: 100, Key: offer.BookDirectory}
-	state.DirRemove(sb, bookDirKey, offer.BookNode, offerKey, false)
-
-	// Erase the offer
-	sb.Erase(keylet.Keylet{Key: offerKey})
-
-	// Decrement owner count
-	s.adjustOwnerCount(sb, ownerID, -1)
+	if removed, deleteErr := state.DeleteOffer(sb, keylet.Keylet{Key: offerKey}, offer); deleteErr == nil && removed {
+		_ = s.adjustOwnerCount(sb, ownerID, -1)
+	}
 }
 
 // isOfferOwnerAuthorized checks if the offer owner is authorized to hold currency

@@ -142,51 +142,18 @@ func (s *BookStep) zeroIn() EitherAmount {
 // deleteOffer properly deletes an offer from the ledger.
 func (s *BookStep) deleteOffer(sb *PaymentSandbox, offer *state.LedgerOffer, owner [20]byte) error {
 	offerKey := keylet.Offer(owner, offer.Sequence)
-
-	ownerDirKey := keylet.OwnerDir(owner)
-	ownerResult, err := state.DirRemove(sb, ownerDirKey, offer.OwnerNode, offerKey.Key, false)
+	removed, err := state.DeleteOffer(sb, offerKey, offer)
 	if err != nil {
+		return err
 	}
-	if ownerResult != nil {
-		s.applyDirRemoveResult(sb, ownerResult)
-	}
-
-	bookDirKey := keylet.Keylet{Key: offer.BookDirectory}
-	bookResult, err := state.DirRemove(sb, bookDirKey, offer.BookNode, offerKey.Key, false)
-	if err != nil {
-	}
-	if bookResult != nil {
-		s.applyDirRemoveResult(sb, bookResult)
+	if !removed {
+		return nil
 	}
 
 	if err := s.adjustOwnerCount(sb, owner, -1); err != nil {
 		return err
 	}
-
-	if err := sb.Erase(offerKey); err != nil {
-		return err
-	}
-
 	return nil
-}
-
-// applyDirRemoveResult applies directory removal changes to the sandbox
-func (s *BookStep) applyDirRemoveResult(sb *PaymentSandbox, result *state.DirRemoveResult) {
-	for _, mod := range result.ModifiedNodes {
-		isBookDir := mod.NewState.TakerPaysCurrency != [20]byte{} || mod.NewState.TakerGetsCurrency != [20]byte{} ||
-			mod.NewState.TakerPaysMPT != nil || mod.NewState.TakerGetsMPT != nil
-		data, err := state.SerializeDirectoryNode(mod.NewState, isBookDir)
-		if err != nil {
-			continue
-		}
-		if err := sb.Update(keylet.Keylet{Key: mod.Key}, data); err != nil {
-		}
-	}
-
-	for _, del := range result.DeletedNodes {
-		if err := sb.Erase(keylet.Keylet{Key: del.Key}); err != nil {
-		}
-	}
 }
 
 func (s *BookStep) subtractFromAmount(original, consumed EitherAmount) EitherAmount {
