@@ -62,7 +62,7 @@ type Config struct {
 	FixedPeers     []string
 
 	// Privacy
-	PrivateMode bool // Don't share our address with peers
+	PrivateMode bool // Only auto-connect to fixed peers and don't share our address
 
 	// Storage
 	DataDir string // For boot cache persistence
