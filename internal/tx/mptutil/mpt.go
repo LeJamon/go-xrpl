@@ -812,8 +812,11 @@ func RemoveHolding(view state.LedgerView, id [24]byte, holder [20]byte, adjustOw
 		return ter.TecHAS_OBLIGATIONS
 	}
 	removed, err := state.DirRemove(view, keylet.OwnerDir(holder), token.OwnerNode, tokenKey.Key, false)
-	if err != nil || !removed.Success {
+	if err != nil {
 		return ter.TefINTERNAL
+	}
+	if !removed.Success {
+		return ter.TecINTERNAL
 	}
 	if err := view.Erase(tokenKey); err != nil {
 		return ter.TefINTERNAL

@@ -244,6 +244,20 @@ func TestEnsureAndRemoveHolding(t *testing.T) {
 	require.Equal(t, [][3]uint32{{2, 3}, {3, 2}}, view.adjustments)
 }
 
+func TestRemoveHoldingOwnerDirectoryFailureTER(t *testing.T) {
+	view := newMPTTestView()
+	var issuer, holder [20]byte
+	issuer[19] = 1
+	holder[19] = 2
+	id := keylet.MakeMPTID(1, issuer)
+	putTestAccount(t, view, holder, 0, [32]byte{})
+	putTestHolding(t, view, id, holder, 0)
+
+	require.Equal(t, ter.TecINTERNAL, RemoveHolding(view, id, holder, false))
+	view.readErrors[keylet.OwnerDir(holder).Key] = errors.New("storage read failed")
+	require.Equal(t, ter.TefINTERNAL, RemoveHolding(view, id, holder, false))
+}
+
 func TestCreditOverflowStillCapsSingleIssueAtMaximum(t *testing.T) {
 	view := newMPTTestView()
 	var id [24]byte

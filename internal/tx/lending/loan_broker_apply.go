@@ -267,11 +267,17 @@ func (l *LoanBrokerDelete) Apply(ctx *tx.ApplyContext) ter.Result {
 	if res != ter.TesSUCCESS {
 		return res
 	}
-	pseudo, perr := tx.ReadAccountRoot(ctx.View, b.Account)
-	if perr != nil || pseudo == nil {
-		return ter.TefBAD_LEDGER
+	pseudo, res := vault.ApplyAssetHoldingOwnerCount(ctx.View, b.Account, assetDelta)
+	if res != ter.TesSUCCESS {
+		return res
 	}
-	pseudo.OwnerCount = uint32(int32(pseudo.OwnerCount) + assetDelta)
+	pseudoData, serr := state.SerializeAccountRoot(pseudo)
+	if serr != nil {
+		return ter.TefINTERNAL
+	}
+	if uerr := ctx.View.Update(keylet.Account(b.Account), pseudoData); uerr != nil {
+		return ter.TefINTERNAL
+	}
 	if pseudo.Balance != 0 || pseudo.OwnerCount != 0 {
 		return ter.TecHAS_OBLIGATIONS
 	}
