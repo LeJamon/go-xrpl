@@ -18,6 +18,7 @@ func TestRouter_MaintenanceTickReArmsCatchupTarget(t *testing.T) {
 	targetSeq := closedSeq + 40
 	var targetHash [32]byte
 	targetHash[0] = 0xD9
+	trackCatchupPeer(r, 7, targetSeq)
 	r.recordCatchupTarget(targetSeq, targetHash, 7)
 	require.Zero(t, r.catchupInFlight(), "setup: nothing in flight")
 

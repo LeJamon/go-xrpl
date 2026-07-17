@@ -2,6 +2,7 @@ package adaptor
 
 import (
 	"testing"
+	"time"
 
 	"github.com/LeJamon/go-xrpl/crypto/sha512half"
 	"github.com/LeJamon/go-xrpl/internal/ledger/header"
@@ -31,6 +32,7 @@ func TestRouter_ForwardDeltaStep_SameBranch(t *testing.T) {
 	// A far tip is the recorded catch-up target (the jump-adopt fallback).
 	var tipHash [32]byte
 	tipHash[0] = 0xF0
+	trackCatchupPeer(r, 7, closed+5)
 	r.recordCatchupTarget(closed+5, tipHash, 7)
 
 	r.armCatchupTowardTarget()
@@ -59,6 +61,7 @@ func TestRouter_ForwardDeltaStep_SameBranchViaClosedSeqProxy(t *testing.T) {
 
 	var tipHash [32]byte
 	tipHash[0] = 0xF0
+	trackCatchupPeer(r, 7, closed+3)
 	r.recordCatchupTarget(closed+3, tipHash, 7)
 
 	r.armCatchupTowardTarget()
@@ -83,6 +86,7 @@ func TestRouter_ForwardDeltaStep_ForkFallsBackToJumpAdopt(t *testing.T) {
 
 	var tipHash [32]byte
 	tipHash[0] = 0xF0
+	trackCatchupPeer(r, 7, closed+5)
 	r.recordCatchupTarget(closed+5, tipHash, 7)
 
 	r.armCatchupTowardTarget()
@@ -102,6 +106,7 @@ func TestRouter_ForwardDeltaStep_UnknownNextFallsBackToJumpAdopt(t *testing.T) {
 
 	var tipHash [32]byte
 	tipHash[0] = 0xF0
+	trackCatchupPeer(r, 7, closed+5)
 	r.recordCatchupTarget(closed+5, tipHash, 7)
 	// No seqHash entry for closed+1.
 
@@ -128,6 +133,7 @@ func TestRouter_ForwardDeltaStep_FarGapJumpAdopts(t *testing.T) {
 	var tipHash [32]byte
 	tipHash[0] = 0xF0
 	tipSeq := closed + maxForwardDeltaGap + 10
+	trackCatchupPeer(r, 7, tipSeq)
 	r.recordCatchupTarget(tipSeq, tipHash, 7)
 
 	r.armCatchupTowardTarget()
@@ -170,6 +176,7 @@ func TestRouter_ForwardWalk_RearmsNextOnCompletion(t *testing.T) {
 	r.recordSeqHash(c+2, next2, childHash, true)
 	var tipHash [32]byte
 	tipHash[0] = 0xF0
+	trackCatchupPeer(r, 7, c+10)
 	r.recordCatchupTarget(c+10, tipHash, 7)
 
 	r.completeInboundLedger(il)
@@ -193,6 +200,7 @@ func TestRouter_ForwardWalk_SerialUnderCap(t *testing.T) {
 	var nextHash [32]byte
 	nextHash[0] = 0xB1
 	r.recordSeqHash(closed+1, nextHash, closedHash, true)
+	trackCatchupPeer(r, 7, closed+5)
 	r.recordCatchupTarget(closed+5, [32]byte{0xF0}, 7)
 
 	r.armCatchupTowardTarget()
@@ -203,6 +211,27 @@ func TestRouter_ForwardWalk_SerialUnderCap(t *testing.T) {
 	assert.Equal(t, maxConcurrentCatchup, r.catchupInFlight(),
 		"the forward walk stays serial under the concurrency cap")
 	assert.Len(t, rs.replayCalls(), 1, "no second acquisition while one is in flight")
+}
+
+func TestRouter_ForwardDeltaFailureCooldownUsesChildHash(t *testing.T) {
+	r, _, rs, svc := makeRouter(t)
+	closed := svc.GetClosedLedgerIndex()
+	closedHash := svc.GetClosedLedger().Hash()
+	nextHash := [32]byte{0xB1}
+	tipHash := [32]byte{0xF0}
+	r.recordSeqHash(closed+1, nextHash, closedHash, true)
+	trackCatchupPeer(r, 7, closed+5)
+	r.recordCatchupTarget(closed+5, tipHash, 7)
+
+	il := inbound.New(nextHash, closed+1, 7, serveTestLogger())
+	r.fetchTracker.Track(il)
+	r.failInboundAcquisition(il)
+	r.armCatchupTowardTarget()
+
+	assert.Empty(t, rs.replayCalls())
+	assert.Empty(t, rs.legacyCalls())
+	assert.True(t, r.catchupRetryBlocked(nextHash, time.Now()))
+	assert.False(t, r.catchupRetryBlocked(tipHash, time.Now()))
 }
 
 // The seqHash table is bounded: once it exceeds the trailing seqHashRetain
