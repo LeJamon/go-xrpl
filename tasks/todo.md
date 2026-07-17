@@ -1262,3 +1262,49 @@ Behavioral oracle: clean local rippled `3.2.0` worktree at
 - Final adversarial review found no unresolved lock-order, data-race, retry-bound,
   peer-replacement, or rippled-conformance blocker after centralizing the failed
   hash gate in the shared consensus acquisition entry point.
+
+# Issue #1395 — bootstrap manifest relay amplification
+
+Target: `origin/main` at `e171f7c3dbf7741cbcd89ca7c5b1bad270aefe19`.
+Behavioral oracle: clean local rippled `3.2.0` worktree at
+`3c43f4614f87965298773279ff5b85d4c56c637b`.
+
+## Plan
+
+- [x] Validate GitHub access, issue state and discussion, linked PRs, active
+      release branches, exact base, and clean dedicated worktree.
+- [x] Trace manifest acceptance, relay, recipient selection, send-queue
+      backpressure, router dispatch, counters, logging, and existing tests.
+- [x] Verify the complete corresponding behavior and tests against local
+      rippled v3.2.0, including batching and execution context.
+- [x] Add deterministic regressions for bounded relay frames, one post-processing
+      recipient snapshot, one backpressure attempt, and router progress.
+- [x] Implement the smallest production-quality fix that preserves accepted
+      manifest semantics while bounding fan-out and dispatch latency.
+- [x] Run formatting, focused and race tests, affected core tests, build, vet,
+      strict CI lint, advisory lint, and diff checks.
+- [x] Review the complete diff for concurrency, failure paths, oracle parity, and
+      test coverage; record exact results below.
+- [ ] Stage only intentional files, commit, push, open the PR against `main`, and
+      verify the published head and initial CI state.
+
+## Review
+
+- Moved inbound manifest verification off the consensus router onto a single
+  four-entry FIFO worker lane. Saturation is non-blocking and counted; admitted
+  work drains completely before router shutdown.
+- Matched rippled v3.2.0 for admitted frames: apply the full list, preserve the
+  accepted bytes and order, then broadcast one aggregate frame to one
+  post-processing peer snapshot, including the source peer.
+- Added deterministic coverage for 100-entry aggregation, bounded saturation
+  and status-message progress, shutdown drain/join behavior, and a real overlay
+  with one full and one healthy peer send queue.
+- Passed `go test -race ./internal/consensus/adaptor`,
+  `go test -race ./internal/peermanagement`, `just build-all`, `just test-core`,
+  `just vet`, postgres-tagged `go vet`, strict and advisory golangci-lint 2.11.3,
+  and `git diff --check`. The core suite was rerun successfully with an isolated
+  Go build cache after the shared cache reported a missing entry.
+- Three final focused reviews found no unresolved concurrency, lifecycle,
+  test-design, or rippled-conformance defect. Rippled does not shed its manifest
+  job queue; the bounded saturation policy is an intentional Go overload
+  safeguard required to keep this repository's single router responsive.

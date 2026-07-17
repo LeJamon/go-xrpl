@@ -95,10 +95,15 @@ type Router struct {
 	// frames and — on Accepted — relay them to other peers.
 	// May be nil in tests that don't exercise the manifest path.
 	manifests *manifest.Cache
+	// manifestJobs moves manifest deserialization, signature verification,
+	// and relay construction off the router loop. A single worker preserves
+	// frame order; Cache.ApplyManifest already serializes concurrent writers.
+	manifestJobs        chan *peermanagement.InboundMessage
+	manifestWorkerDone  chan struct{}
+	droppedManifestJobs atomic.Uint64
 
-	// overlay is held so the router can relay accepted manifests
-	// directly via Overlay.BroadcastExcept. Nil in tests that
-	// construct a router without manifest support.
+	// overlay is held so the router can relay accepted manifests and emit
+	// the local cache to peers. Nil in tests without manifest support.
 	overlay *peermanagement.Overlay
 
 	// validatorList is the publisher-trust subsystem. Wired by the
@@ -112,9 +117,7 @@ type Router struct {
 	// local-manifest emission paths (SendLocalManifestTo /
 	// BroadcastLocalManifest). Tests install a fake here to observe
 	// the emitted frame without standing up real listeners; production
-	// leaves it nil so the real overlay is used. The relayManifest
-	// path still needs r.overlay directly because BroadcastExcept has
-	// no equivalent on the sender interface.
+	// leaves it nil so the real overlay is used.
 	overrideManifestSender manifestSender
 
 	// manifestFrameMu guards the cached TMManifests emission frame and
@@ -260,6 +263,10 @@ const txQueueDepth = 1024
 var serveWorkerCount = max(2, runtime.GOMAXPROCS(0)/2)
 
 const serveQueueDepth = 256
+
+// manifestQueueDepth bounds pending verification work without blocking the
+// consensus router. Each wire frame is already bounded by MaxMessageSize.
+const manifestQueueDepth = 4
 
 // messageDedupTTL is how long a proposal/validation hash is
 // remembered for duplicate-detection purposes. 30s comfortably covers a
@@ -425,6 +432,8 @@ func (r *Router) HandlePeerDisconnect(peerID peermanagement.PeerID) {
 func (r *Router) Run(ctx context.Context) {
 	r.startTxWorkers(ctx)
 	r.startServeWorkers(ctx)
+	r.startManifestWorker()
+	defer r.stopManifestWorker()
 	ticker := time.NewTicker(inboundReplayDeltaTickInterval)
 	defer ticker.Stop()
 	for {
@@ -555,6 +564,51 @@ func (r *Router) submitServeJob(msg *peermanagement.InboundMessage) {
 // requests shed because the serve pool was saturated.
 func (r *Router) DroppedServeJobs() uint64 {
 	return r.droppedServeJobs.Load()
+}
+
+func (r *Router) startManifestWorker() {
+	r.manifestJobs = make(chan *peermanagement.InboundMessage, manifestQueueDepth)
+	r.manifestWorkerDone = make(chan struct{})
+	jobs := r.manifestJobs
+	done := r.manifestWorkerDone
+
+	go func() {
+		defer close(done)
+		for msg := range jobs {
+			r.processManifestJob(msg)
+		}
+	}()
+}
+
+func (r *Router) stopManifestWorker() {
+	close(r.manifestJobs)
+	<-r.manifestWorkerDone
+	r.manifestJobs = nil
+}
+
+func (r *Router) processManifestJob(msg *peermanagement.InboundMessage) {
+	defer r.recoverFrame(msg, "manifest")
+	r.handleManifests(msg)
+}
+
+func (r *Router) submitManifestJob(msg *peermanagement.InboundMessage) {
+	if r.manifestJobs == nil {
+		r.processManifestJob(msg)
+		return
+	}
+	select {
+	case r.manifestJobs <- msg:
+	default:
+		r.droppedManifestJobs.Add(1)
+		r.logger.Debug("inbound manifests dropped: worker queue saturated",
+			"t", "consensus", "event", "manifest-shed", "peer", msg.PeerID)
+	}
+}
+
+// DroppedManifestJobs returns the cumulative count of inbound manifest frames
+// shed because the worker queue was saturated.
+func (r *Router) DroppedManifestJobs() uint64 {
+	return r.droppedManifestJobs.Load()
 }
 
 // maintenanceTick runs out-of-band housekeeping: detect replay-delta

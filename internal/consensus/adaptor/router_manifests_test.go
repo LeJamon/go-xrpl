@@ -2,8 +2,10 @@ package adaptor
 
 import (
 	"bytes"
+	"context"
 	"crypto/ed25519"
 	"encoding/hex"
+	"sync"
 	"testing"
 	"time"
 
@@ -148,4 +150,202 @@ func TestRouter_HandleManifests_InvalidDoesNotStore(t *testing.T) {
 	if _, ok := cache.GetSigningKey(parsed.MasterKey); ok {
 		t.Fatal("cache stored a manifest whose master signature was corrupted")
 	}
+}
+
+func TestRouter_HandleManifests_AggregatesAcceptedEntries(t *testing.T) {
+	sender := &fakeManifestSender{broadcastErr: peermanagement.ErrSendBufferFull}
+	router, _, _ := routerWithCache(t, sender, 0, 0)
+
+	const acceptedCount = 100
+	wires := make([][]byte, 0, acceptedCount)
+	list := make([]message.Manifest, 0, acceptedCount+2)
+	for i := range acceptedCount {
+		wire := buildWireManifest(t, 1, byte(i), byte(i+acceptedCount))
+		wires = append(wires, wire)
+		list = append(list, message.Manifest{STObject: wire})
+	}
+	list = append(list,
+		message.Manifest{STObject: wires[0]},
+		message.Manifest{STObject: []byte{0x01}},
+	)
+
+	router.handleMessage(&peermanagement.InboundMessage{
+		PeerID:  7,
+		Type:    uint16(message.TypeManifests),
+		Payload: encodePayload(t, &message.Manifests{List: list}),
+	})
+
+	sender.mu.Lock()
+	broadcasts := append([][]byte(nil), sender.bcasts...)
+	sender.mu.Unlock()
+	require.Len(t, broadcasts, 1, "one inbound collection must produce one broadcast attempt")
+
+	got := frameToManifestBytes(t, broadcasts[0])
+	require.Len(t, got, acceptedCount)
+	for i := range wires {
+		require.Equal(t, wires[i], got[i], "accepted manifests must retain input order and bytes")
+	}
+}
+
+func TestRouter_ManifestWorkerDoesNotBlockDispatch(t *testing.T) {
+	adaptor := newTestAdaptor(t)
+	inbox := make(chan *peermanagement.InboundMessage, 10)
+	router := NewRouter(&mockEngine{}, adaptor, inbox)
+	cache := manifest.NewCache()
+	router.SetManifestCache(cache, nil)
+
+	entered := make(chan struct{})
+	release := make(chan struct{})
+	var releaseOnce sync.Once
+	var blockOnce sync.Once
+	releaseWorker := func() { releaseOnce.Do(func() { close(release) }) }
+	defer releaseWorker()
+	cache.SetOnAccepted(func(*manifest.Manifest) {
+		blockOnce.Do(func() {
+			close(entered)
+			<-release
+		})
+	})
+
+	go router.Run(t.Context())
+	inbox <- &peermanagement.InboundMessage{
+		PeerID: 7,
+		Type:   uint16(message.TypeManifests),
+		Payload: encodePayload(t, &message.Manifests{List: []message.Manifest{{
+			STObject: buildWireManifest(t, 1, 220, 221),
+		}}}),
+	}
+
+	select {
+	case <-entered:
+	case <-time.After(time.Second):
+		t.Fatal("manifest worker did not begin processing")
+	}
+
+	queued := make([]*manifest.Manifest, 0, manifestQueueDepth)
+	for i := range manifestQueueDepth {
+		wire := buildWireManifest(t, 1, byte(222+i), byte(232+i))
+		parsed, err := manifest.Deserialize(wire)
+		require.NoError(t, err)
+		queued = append(queued, parsed)
+		inbox <- &peermanagement.InboundMessage{
+			PeerID:  peermanagement.PeerID(10 + i),
+			Type:    uint16(message.TypeManifests),
+			Payload: encodePayload(t, &message.Manifests{List: []message.Manifest{{STObject: wire}}}),
+		}
+	}
+	for i := range 2 {
+		wire := buildWireManifest(t, 1, byte(240+i), byte(242+i))
+		inbox <- &peermanagement.InboundMessage{
+			PeerID:  8,
+			Type:    uint16(message.TypeManifests),
+			Payload: encodePayload(t, &message.Manifests{List: []message.Manifest{{STObject: wire}}}),
+		}
+	}
+	require.Eventually(t, func() bool {
+		return router.DroppedManifestJobs() == 2
+	}, time.Second, 5*time.Millisecond)
+
+	var ledgerHash [32]byte
+	ledgerHash[0] = 0xAB
+	inbox <- statusChangeMessage(t, 9, 1, ledgerHash)
+	require.Eventually(t, func() bool {
+		router.peersMu.RLock()
+		state := router.peerStates[9]
+		router.peersMu.RUnlock()
+		return state != nil && state.LedgerSeq == 1 && state.LedgerHash == ledgerHash
+	}, time.Second, 5*time.Millisecond)
+
+	releaseWorker()
+	require.Eventually(t, func() bool {
+		for _, parsed := range queued {
+			if _, ok := cache.GetSigningKey(parsed.MasterKey); !ok {
+				return false
+			}
+		}
+		return true
+	}, time.Second, 5*time.Millisecond)
+	require.Equal(t, uint64(2), router.DroppedManifestJobs())
+}
+
+func TestRouter_ManifestWorkerJoinsOnShutdown(t *testing.T) {
+	inbox := make(chan *peermanagement.InboundMessage, 3)
+	router := NewRouter(&mockEngine{}, newTestAdaptor(t), inbox)
+	cache := manifest.NewCache()
+	sender := &fakeManifestSender{}
+	router.SetManifestCache(cache, nil)
+	router.overrideManifestSender = sender
+
+	entered := make(chan struct{})
+	release := make(chan struct{})
+	var releaseOnce sync.Once
+	var blockOnce sync.Once
+	releaseWorker := func() { releaseOnce.Do(func() { close(release) }) }
+	defer releaseWorker()
+	cache.SetOnAccepted(func(*manifest.Manifest) {
+		blockOnce.Do(func() {
+			close(entered)
+			<-release
+		})
+	})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	done := make(chan struct{})
+	go func() {
+		router.Run(ctx)
+		close(done)
+	}()
+	inbox <- &peermanagement.InboundMessage{
+		PeerID: 1,
+		Type:   uint16(message.TypeManifests),
+		Payload: encodePayload(t, &message.Manifests{List: []message.Manifest{{
+			STObject: buildWireManifest(t, 1, 240, 241),
+		}}}),
+	}
+
+	select {
+	case <-entered:
+	case <-time.After(time.Second):
+		t.Fatal("manifest worker did not begin processing")
+	}
+
+	queuedWire := buildWireManifest(t, 1, 242, 243)
+	queuedManifest, err := manifest.Deserialize(queuedWire)
+	require.NoError(t, err)
+	inbox <- &peermanagement.InboundMessage{
+		PeerID: 2,
+		Type:   uint16(message.TypeManifests),
+		Payload: encodePayload(t, &message.Manifests{List: []message.Manifest{{
+			STObject: queuedWire,
+		}}}),
+	}
+	var ledgerHash [32]byte
+	ledgerHash[0] = 0xCD
+	inbox <- statusChangeMessage(t, 3, 1, ledgerHash)
+	require.Eventually(t, func() bool {
+		router.peersMu.RLock()
+		state := router.peerStates[3]
+		router.peersMu.RUnlock()
+		return state != nil && state.LedgerHash == ledgerHash
+	}, time.Second, 5*time.Millisecond)
+
+	cancel()
+	select {
+	case <-done:
+		t.Fatal("router returned before its manifest worker stopped")
+	case <-time.After(25 * time.Millisecond):
+	}
+	releaseWorker()
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("router did not join its manifest worker")
+	}
+	_, ok := cache.GetSigningKey(queuedManifest.MasterKey)
+	require.True(t, ok, "shutdown must drain queued manifest jobs")
+	sender.mu.Lock()
+	broadcasts := len(sender.bcasts)
+	sender.mu.Unlock()
+	require.Equal(t, 2, broadcasts, "shutdown must relay active and queued accepted manifests")
 }
