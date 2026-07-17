@@ -63,7 +63,16 @@ func DecompressLZ4(compressed []byte, uncompressedSize int) ([]byte, error) {
 // matching the set rippled compresses.
 func ShouldCompress(msgType uint16) bool {
 	switch msgType {
-	case 2, 15, 30, 31, 32, 42, 54, 56, 60, 64:
+	case uint16(TypeManifests),
+		uint16(TypeEndpoints),
+		uint16(TypeTransaction),
+		uint16(TypeGetLedger),
+		uint16(TypeLedgerData),
+		uint16(TypeGetObjects),
+		uint16(TypeValidatorList),
+		uint16(TypeValidatorListCollection),
+		uint16(TypeReplayDeltaResponse),
+		uint16(TypeTransactions):
 		return true
 	default:
 		return false
@@ -82,6 +91,45 @@ func CompressIfWorthwhile(msgType uint16, data []byte) ([]byte, bool) {
 	if err != nil || compressed == nil {
 		return data, false
 	}
+	if len(compressed)+HeaderSizeCompressed >= len(data)+HeaderSizeUncompressed {
+		return data, false
+	}
 
 	return compressed, true
+}
+
+// CompressFrameIfWorthwhile returns an LZ4 wire representation when frame is
+// one complete uncompressed message and compression reduces its total size.
+// The input is never modified.
+func CompressFrameIfWorthwhile(frame []byte) ([]byte, bool) {
+	header, err := DecodeHeader(frame)
+	if err != nil || header.Compressed {
+		return frame, false
+	}
+
+	payloadSize := int(header.PayloadSize)
+	if payloadSize != len(frame)-HeaderSizeUncompressed {
+		return frame, false
+	}
+
+	payload, compressed := CompressIfWorthwhile(
+		uint16(header.MessageType),
+		frame[HeaderSizeUncompressed:],
+	)
+	if !compressed {
+		return frame, false
+	}
+
+	wire := make([]byte, HeaderSizeCompressed+len(payload))
+	if err := EncodeHeader(
+		wire,
+		uint32(len(payload)),
+		header.MessageType,
+		AlgorithmLZ4,
+		header.PayloadSize,
+	); err != nil {
+		return frame, false
+	}
+	copy(wire[HeaderSizeCompressed:], payload)
+	return wire, true
 }
