@@ -10,6 +10,8 @@ import (
 	jtx "github.com/LeJamon/go-xrpl/internal/testing"
 	"github.com/LeJamon/go-xrpl/internal/testing/escrow"
 	"github.com/LeJamon/go-xrpl/internal/testing/mpt"
+	"github.com/LeJamon/go-xrpl/internal/tx/mptutil"
+	"github.com/LeJamon/go-xrpl/keylet"
 	"github.com/stretchr/testify/require"
 )
 
@@ -1063,6 +1065,85 @@ func TestMPTEscrow_CancelPreclaim(t *testing.T) {
 		jtx.RequireTxFail(t, result, jtx.TecNO_AUTH)
 		env.Close()
 	})
+}
+
+// --------------------------------------------------------------------------
+// TestMPTEscrow_TransferFeeRounding
+//
+// Regression for #1402: MPT escrow transfer fees use rippled's canonical MPT
+// divideRound path, whose decimal canonicalization is not a rational ceiling.
+// --------------------------------------------------------------------------
+
+func TestMPTEscrow_TransferFeeRounding(t *testing.T) {
+	env := jtx.NewTestEnv(t)
+	env.EnableFeature("TokenEscrow")
+
+	alice := jtx.NewAccount("alice")
+	bob := jtx.NewAccount("bob")
+	gw := jtx.NewAccount("gw")
+	mptGw := mpt.NewMPTTester(t, env, gw, mpt.MPTInit{
+		Holders: []*jtx.Account{alice, bob},
+	})
+	mptGw.Create(mpt.CreateOpts{
+		TransferFee: mpt.PtrUint16(100),
+		OwnerCount:  mpt.PtrUint32(1),
+		Flags:       mpt.TfMPTCanEscrow | mpt.TfMPTCanTransfer,
+	})
+	mptGw.Authorize(mpt.AuthorizeOpts{Account: alice})
+	mptGw.Authorize(mpt.AuthorizeOpts{Account: bob})
+	mptGw.Pay(gw, alice, 100_000)
+	env.Close()
+
+	mptGw.RequireMPTokenAmount(alice, 100_000)
+	mptGw.RequireMPTokenAmount(bob, 0)
+	require.Equal(t, uint64(100_000), mptGw.IssuanceOutstandingAmount())
+
+	amt := mptAmount(10_000, gw.Address, mptGw.IssuanceID())
+	seq := env.Seq(alice)
+	result := env.Submit(
+		escrow.EscrowCreate(alice, bob, 0).
+			MPTAmount(amt).
+			Condition(escrow.TestCondition1).
+			FinishTime(env.Now().Add(1 * time.Second)).
+			Fee(env.BaseFee() * 150).
+			Build())
+	jtx.RequireTxSuccess(t, result)
+	env.Close()
+
+	mptGw.RequireMPTokenAmount(alice, 90_000)
+	mptGw.RequireMPTokenAmount(bob, 0)
+	require.Equal(t, uint64(10_000), mptGw.HolderLockedAmount(alice))
+	require.Equal(t, uint64(10_000), mptGw.IssuanceLockedAmount())
+	require.Equal(t, uint64(100_000), mptGw.IssuanceOutstandingAmount())
+
+	result = env.Submit(
+		escrow.EscrowFinish(bob, alice, seq).
+			Condition(escrow.TestCondition1).
+			Fulfillment(escrow.TestFulfillment1).
+			Fee(env.BaseFee() * 150).
+			Build())
+	jtx.RequireTxSuccess(t, result)
+	env.Close()
+
+	mptGw.RequireMPTokenAmount(alice, 90_000)
+	mptGw.RequireMPTokenAmount(bob, 9_990)
+	finalOutstanding := mptGw.IssuanceOutstandingAmount()
+	require.Equal(t, uint64(99_990), finalOutstanding)
+	require.Equal(t, uint64(10), uint64(100_000)-finalOutstanding, "transfer fee burn")
+
+	mptID, err := mptutil.DecodeID(mptGw.IssuanceID())
+	require.NoError(t, err)
+	issuanceData, err := env.Ledger().Read(keylet.MPTIssuance(mptID))
+	require.NoError(t, err)
+	issuance, err := state.ParseMPTokenIssuance(issuanceData)
+	require.NoError(t, err)
+	require.Nil(t, issuance.LockedAmount, "issuance LockedAmount must be removed")
+
+	tokenData, err := env.Ledger().Read(keylet.MPTokenByID(mptID, alice.ID))
+	require.NoError(t, err)
+	token, err := state.ParseMPToken(tokenData)
+	require.NoError(t, err)
+	require.Nil(t, token.LockedAmount, "holder LockedAmount must be removed")
 }
 
 // --------------------------------------------------------------------------
