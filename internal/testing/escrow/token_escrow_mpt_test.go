@@ -1067,13 +1067,6 @@ func TestMPTEscrow_CancelPreclaim(t *testing.T) {
 	})
 }
 
-// --------------------------------------------------------------------------
-// TestMPTEscrow_TransferFeeRounding
-//
-// Regression for #1402: MPT escrow transfer fees use rippled's canonical MPT
-// divideRound path, whose decimal canonicalization is not a rational ceiling.
-// --------------------------------------------------------------------------
-
 func TestMPTEscrow_TransferFeeRounding(t *testing.T) {
 	env := jtx.NewTestEnv(t)
 	env.EnableFeature("TokenEscrow")
