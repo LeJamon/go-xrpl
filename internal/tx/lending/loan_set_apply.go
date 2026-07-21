@@ -209,14 +209,22 @@ func (l *LoanSet) Apply(ctx *tx.ApplyContext) ter.Result {
 	if !borrowerReserveOK {
 		return ter.TecINSUFFICIENT_RESERVE
 	}
-	if _, r := vault.AddEmptyHolding(ctx, borrower, asset); r != ter.TesSUCCESS && r != ter.TecDUPLICATE {
+	borrowerHoldingDelta, r := vault.AddEmptyHolding(ctx, borrower, asset)
+	if r != ter.TesSUCCESS && r != ter.TecDUPLICATE {
+		return r
+	}
+	if r := applyLoanSetHoldingOwnerCount(ctx, borrower, borrowerHoldingDelta); r != ter.TesSUCCESS {
 		return r
 	}
 	if r := tx.RequireAuth(ctx.View, asset, borrower); r != ter.TesSUCCESS {
 		return r
 	}
 	if originationFee.Signum() != 0 {
-		if _, r := vault.AddEmptyHolding(ctx, b.Owner, asset); r != ter.TesSUCCESS && r != ter.TecDUPLICATE {
+		ownerHoldingDelta, r := vault.AddEmptyHolding(ctx, b.Owner, asset)
+		if r != ter.TesSUCCESS && r != ter.TecDUPLICATE {
+			return r
+		}
+		if r := applyLoanSetHoldingOwnerCount(ctx, b.Owner, ownerHoldingDelta); r != ter.TesSUCCESS {
 			return r
 		}
 		if r := tx.RequireAuth(ctx.View, asset, b.Owner); r != ter.TesSUCCESS {
@@ -341,6 +349,20 @@ func (l *LoanSet) chargeBorrower(ctx *tx.ApplyContext, borrower [20]byte) (bool,
 		return false, ter.TefINTERNAL
 	}
 	return true, ter.TesSUCCESS
+}
+
+func applyLoanSetHoldingOwnerCount(ctx *tx.ApplyContext, accountID [20]byte, delta int32) ter.Result {
+	if delta == 0 {
+		return ter.TesSUCCESS
+	}
+	if accountID == ctx.AccountID {
+		ctx.Account.OwnerCount = tx.ConfineOwnerCount(ctx.Account.OwnerCount, int(delta))
+		return ter.TesSUCCESS
+	}
+	if err := tx.AdjustOwnerCount(ctx.View, accountID, int(delta)); err != nil {
+		return ter.TefINTERNAL
+	}
+	return ter.TesSUCCESS
 }
 
 // valOr returns *p or def when p is nil.
