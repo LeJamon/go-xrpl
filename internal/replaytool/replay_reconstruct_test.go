@@ -3,6 +3,9 @@ package replaytool
 import (
 	"bytes"
 	"encoding/hex"
+	"maps"
+	"slices"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -768,8 +771,12 @@ func TestRecordMembership_LastOperationWins(t *testing.T) {
 
 	t.Run("remove then add", func(t *testing.T) {
 		deltas := map[[32]byte]*dirDelta{}
-		recordMembership(deltas, objectKey, "DID", fields, false)
-		recordMembership(deltas, objectKey, "DID", fields, true)
+		if err := recordMembership(nil, deltas, objectKey, "DID", fields, false); err != nil {
+			t.Fatalf("record remove: %v", err)
+		}
+		if err := recordMembership(nil, deltas, objectKey, "DID", fields, true); err != nil {
+			t.Fatalf("record add: %v", err)
+		}
 		members := applyDirDelta([][32]byte{objectKey}, deltas[pageKey])
 		if len(members) != 1 || members[0] != objectKey {
 			t.Fatalf("members = %x, want recreated key", members)
@@ -778,8 +785,12 @@ func TestRecordMembership_LastOperationWins(t *testing.T) {
 
 	t.Run("add then remove", func(t *testing.T) {
 		deltas := map[[32]byte]*dirDelta{}
-		recordMembership(deltas, objectKey, "DID", fields, true)
-		recordMembership(deltas, objectKey, "DID", fields, false)
+		if err := recordMembership(nil, deltas, objectKey, "DID", fields, true); err != nil {
+			t.Fatalf("record add: %v", err)
+		}
+		if err := recordMembership(nil, deltas, objectKey, "DID", fields, false); err != nil {
+			t.Fatalf("record remove: %v", err)
+		}
 		members := applyDirDelta(nil, deltas[pageKey])
 		if len(members) != 0 {
 			t.Fatalf("members = %x, want empty", members)
@@ -1046,6 +1057,205 @@ func TestReconstructFromMeta_VaultCreateDefaultsAndDirectories(t *testing.T) {
 	assertEntryBytes(t, corrected, vaultKey, wantVault, "vault")
 	assertEntryBytes(t, corrected, mustIndex(t, "9EDC99BAA48E5FC2A28C355D8CA9A723CD52CC36DC76E946D118D3DB679B8DB5"), wantPseudo, "pseudo account")
 	assertEntryBytes(t, corrected, issuanceKey, wantIssuance, "share issuance")
+}
+
+func TestReconstructFromMeta_LoanCreateDirectories(t *testing.T) {
+	const borrower = "rEaWzpDUL2cBckwDJhRENZiKCbNKwG2cAZ"
+	const brokerAccount = "rpRrVjCLggyjBaAYreukcyuWuzb23wuWrn"
+	const brokerOwner = "rrrrrrrrrrrrrrrrrrrrBZbvji"
+	const brokerIDHex = "33353F075781FD714AE43F61FC6B4A88BCB5CE3C348FE0FF40B1F6F803C7D86A"
+	const loanKeyHex = "6BABEC1111496AD23DDFCD51DAF11AF98DC018F297A2EE82509D7881A2F50F9C"
+
+	borrowerID, err := state.DecodeAccountID(borrower)
+	if err != nil {
+		t.Fatalf("decode borrower: %v", err)
+	}
+	brokerAccountID, err := state.DecodeAccountID(brokerAccount)
+	if err != nil {
+		t.Fatalf("decode broker account: %v", err)
+	}
+	brokerID := mustIndex(t, brokerIDHex)
+	brokerKey := keylet.LoanBrokerByID(brokerID).Key
+	loanKey := mustIndex(t, loanKeyHex)
+
+	for _, tt := range []struct {
+		name string
+		page uint64
+	}{
+		{name: "page zero", page: 0},
+		{name: "nonzero page", page: 7},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			borrowerDir := keylet.OwnerDirPage(borrowerID, tt.page).Key
+			brokerDir := keylet.OwnerDirPage(brokerAccountID, tt.page).Key
+			borrowerDirHex := protocol.Hash256Hex(borrowerDir)
+			brokerDirHex := protocol.Hash256Hex(brokerDir)
+			page := strconv.FormatUint(tt.page, 16)
+
+			preState := putAll(t, map[[32]byte][]byte{
+				brokerKey: loanBrokerSLE(t, brokerAccount, brokerOwner),
+				borrowerDir: encodeSLE(t, map[string]any{
+					"LedgerEntryType": "DirectoryNode", "Flags": 0,
+					"RootIndex": protocol.Hash256Hex(keylet.OwnerDir(borrowerID).Key),
+					"Owner":     borrower,
+				}),
+				brokerDir: encodeSLE(t, map[string]any{
+					"LedgerEntryType": "DirectoryNode", "Flags": 0,
+					"RootIndex": protocol.Hash256Hex(keylet.OwnerDir(brokerAccountID).Key),
+					"Owner":     brokerAccount,
+				}),
+			})
+			loanNewFields := map[string]any{
+				"Borrower": borrower, "LoanBrokerID": brokerIDHex, "LoanSequence": uint32(1),
+				"StartDate": uint32(836247371), "PaymentInterval": uint32(400),
+				"PeriodicPayment": "10000", "PrincipalOutstanding": "10000",
+				"TotalValueOutstanding": "10000",
+			}
+			if tt.page != 0 {
+				loanNewFields["OwnerNode"] = page
+				loanNewFields["LoanBrokerNode"] = page
+			}
+			meta := encodeMeta(t,
+				map[string]any{"ModifiedNode": map[string]any{
+					"LedgerEntryType": "DirectoryNode", "LedgerIndex": borrowerDirHex,
+					"FinalFields": map[string]any{"Flags": 0, "Owner": borrower,
+						"RootIndex": protocol.Hash256Hex(keylet.OwnerDir(borrowerID).Key)},
+				}},
+				map[string]any{"ModifiedNode": map[string]any{
+					"LedgerEntryType": "DirectoryNode", "LedgerIndex": brokerDirHex,
+					"FinalFields": map[string]any{"Flags": 0, "Owner": brokerAccount,
+						"RootIndex": protocol.Hash256Hex(keylet.OwnerDir(brokerAccountID).Key)},
+				}},
+				map[string]any{"CreatedNode": map[string]any{
+					"LedgerEntryType": "Loan", "LedgerIndex": loanKeyHex,
+					"NewFields": loanNewFields,
+				}},
+			)
+
+			corrected, err := reconstructFromMeta(preState, []metaTx{{Blob: meta, TxHash: mustIndex(t, testTxHashHex)}}, testLedgerSeq)
+			if err != nil {
+				t.Fatalf("reconstructFromMeta: %v", err)
+			}
+			wantLoan := encodeSLE(t, map[string]any{
+				"LedgerEntryType": "Loan", "Flags": 0, "OwnerNode": page, "LoanBrokerNode": page,
+				"Borrower": borrower, "LoanBrokerID": brokerIDHex, "LoanSequence": uint32(1),
+				"StartDate": uint32(836247371), "PaymentInterval": uint32(400),
+				"PeriodicPayment": "10000", "PrincipalOutstanding": "10000",
+				"TotalValueOutstanding": "10000", "PreviousTxnID": testTxHashHex,
+				"PreviousTxnLgrSeq": testLedgerSeq,
+			})
+			assertEntryBytes(t, corrected, loanKey, wantLoan, "loan")
+			assertDirectoryMembers(t, corrected, borrowerDir, loanKey)
+			assertDirectoryMembers(t, corrected, brokerDir, loanKey)
+		})
+	}
+}
+
+func TestReconstructFromMeta_LoanDeleteDirectories(t *testing.T) {
+	const borrower = "rEaWzpDUL2cBckwDJhRENZiKCbNKwG2cAZ"
+	const brokerAccount = "rpRrVjCLggyjBaAYreukcyuWuzb23wuWrn"
+	const brokerOwner = "rrrrrrrrrrrrrrrrrrrrBZbvji"
+	const brokerIDHex = "33353F075781FD714AE43F61FC6B4A88BCB5CE3C348FE0FF40B1F6F803C7D86A"
+	const loanKeyHex = "6BABEC1111496AD23DDFCD51DAF11AF98DC018F297A2EE82509D7881A2F50F9C"
+
+	borrowerID, _ := state.DecodeAccountID(borrower)
+	brokerAccountID, _ := state.DecodeAccountID(brokerAccount)
+	brokerID := mustIndex(t, brokerIDHex)
+	brokerKey := keylet.LoanBrokerByID(brokerID).Key
+	loanKey := mustIndex(t, loanKeyHex)
+	borrowerDir := keylet.OwnerDirPage(borrowerID, 0).Key
+	brokerDir := keylet.OwnerDirPage(brokerAccountID, 0).Key
+	loanFields := map[string]any{
+		"LedgerEntryType": "Loan", "Flags": 0, "OwnerNode": "0", "LoanBrokerNode": "0",
+		"Borrower": borrower, "LoanBrokerID": brokerIDHex, "LoanSequence": uint32(1),
+		"StartDate": uint32(836247371), "PaymentInterval": uint32(400), "PeriodicPayment": "10000",
+		"PreviousTxnID": testTxHashHex, "PreviousTxnLgrSeq": testLedgerSeq - 1,
+	}
+	preState := putAll(t, map[[32]byte][]byte{
+		brokerKey: loanBrokerSLE(t, brokerAccount, brokerOwner),
+		loanKey:   encodeSLE(t, loanFields),
+		borrowerDir: encodeSLE(t, map[string]any{
+			"LedgerEntryType": "DirectoryNode", "Flags": 0, "Owner": borrower,
+			"RootIndex": protocol.Hash256Hex(borrowerDir), "Indexes": []string{loanKeyHex},
+		}),
+		brokerDir: encodeSLE(t, map[string]any{
+			"LedgerEntryType": "DirectoryNode", "Flags": 0, "Owner": brokerAccount,
+			"RootIndex": protocol.Hash256Hex(brokerDir), "Indexes": []string{loanKeyHex},
+		}),
+	})
+	finalFields := maps.Clone(loanFields)
+	delete(finalFields, "LedgerEntryType")
+	delete(finalFields, "PreviousTxnID")
+	delete(finalFields, "PreviousTxnLgrSeq")
+	meta := encodeMeta(t, map[string]any{"DeletedNode": map[string]any{
+		"LedgerEntryType": "Loan", "LedgerIndex": loanKeyHex, "FinalFields": finalFields,
+	}})
+
+	corrected, err := reconstructFromMeta(preState, []metaTx{{Blob: meta, TxHash: mustIndex(t, testTxHashHex)}}, testLedgerSeq)
+	if err != nil {
+		t.Fatalf("reconstructFromMeta: %v", err)
+	}
+	if _, found, err := corrected.Get(loanKey); err != nil || found {
+		t.Fatalf("deleted loan present (found=%v err=%v)", found, err)
+	}
+	assertDirectoryMembers(t, corrected, borrowerDir)
+	assertDirectoryMembers(t, corrected, brokerDir)
+}
+
+func TestReconstructFromMeta_LoanBrokerResolutionErrors(t *testing.T) {
+	const brokerIDHex = "33353F075781FD714AE43F61FC6B4A88BCB5CE3C348FE0FF40B1F6F803C7D86A"
+	brokerID := mustIndex(t, brokerIDHex)
+	brokerKey := keylet.LoanBrokerByID(brokerID).Key
+	meta := encodeMeta(t, map[string]any{"CreatedNode": map[string]any{
+		"LedgerEntryType": "Loan",
+		"LedgerIndex":     "6BABEC1111496AD23DDFCD51DAF11AF98DC018F297A2EE82509D7881A2F50F9C",
+		"NewFields": map[string]any{
+			"Borrower": "rEaWzpDUL2cBckwDJhRENZiKCbNKwG2cAZ", "LoanBrokerID": brokerIDHex,
+			"LoanSequence": uint32(1), "StartDate": uint32(1), "PaymentInterval": uint32(1),
+			"PeriodicPayment": "1",
+		},
+	}})
+
+	for _, tt := range []struct {
+		name    string
+		entries map[[32]byte][]byte
+		want    string
+	}{
+		{name: "missing broker", want: "not found"},
+		{name: "corrupt broker", entries: map[[32]byte][]byte{brokerKey: bytes.Repeat([]byte{0xff}, 12)}, want: "decoding LoanBroker"},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			_, err := reconstructFromMeta(putAll(t, tt.entries), []metaTx{{Blob: meta}}, testLedgerSeq)
+			if err == nil || !strings.Contains(err.Error(), tt.want) {
+				t.Fatalf("error = %v, want substring %q", err, tt.want)
+			}
+		})
+	}
+}
+
+func loanBrokerSLE(t *testing.T, account, owner string) []byte {
+	t.Helper()
+	return encodeSLE(t, map[string]any{
+		"LedgerEntryType": "LoanBroker", "Flags": 0, "Sequence": uint32(0),
+		"OwnerNode": "0", "VaultNode": "0", "VaultID": strings.Repeat("0", 64),
+		"Account": account, "Owner": owner, "LoanSequence": uint32(0),
+		"PreviousTxnID": strings.Repeat("0", 64), "PreviousTxnLgrSeq": uint32(0),
+	})
+}
+
+func assertDirectoryMembers(t *testing.T, m *shamap.SHAMap, key [32]byte, want ...[32]byte) {
+	t.Helper()
+	item, found, err := m.Get(key)
+	if err != nil || !found || item == nil {
+		t.Fatalf("directory missing (found=%v err=%v)", found, err)
+	}
+	obj, err := binarycodec.Decode(hex.EncodeToString(item.Data()))
+	if err != nil {
+		t.Fatalf("decode directory: %v", err)
+	}
+	if got := decodeIndexes(obj["Indexes"]); !slices.Equal(got, want) {
+		t.Fatalf("directory members = %X, want %X", got, want)
+	}
 }
 
 func assertEntryBytes(t *testing.T, m *shamap.SHAMap, key [32]byte, want []byte, label string) {

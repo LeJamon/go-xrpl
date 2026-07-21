@@ -132,7 +132,9 @@ func applyAffectedNode(
 
 		switch kind {
 		case "DeletedNode":
-			recordMembership(deltas, idx, entryType, asMap(fields["FinalFields"]), false)
+			if err := recordMembership(state, deltas, idx, entryType, asMap(fields["FinalFields"]), false); err != nil {
+				return fmt.Errorf("recording deleted %s membership: %w", idxHex, err)
+			}
 			if entryType == "DirectoryNode" {
 				deletedDirs[idx] = true
 			}
@@ -151,7 +153,9 @@ func applyAffectedNode(
 			fillCreatedDefaults(obj, entryType)
 			fillBookDirectoryDefaults(obj, entryType)
 			threadPreviousTxn(obj, entryType, txHash, ledgerSeq)
-			recordMembership(deltas, idx, entryType, obj, true)
+			if err := recordMembership(state, deltas, idx, entryType, obj, true); err != nil {
+				return fmt.Errorf("recording created %s membership: %w", idxHex, err)
+			}
 			if err := putEncoded(state, idx, obj); err != nil {
 				return fmt.Errorf("creating %s: %w", idxHex, err)
 			}
