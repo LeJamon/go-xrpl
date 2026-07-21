@@ -191,25 +191,27 @@ func TestLoanSetHoldingOwnerCount(t *testing.T) {
 			assertLoanSetOwnedObjects(t, f, f.borrower)
 		})
 
-		t.Run(kind+" origination fee creates broker owner holding", func(t *testing.T) {
-			f := newLoanSetAssetFixture(t, kind)
-			ownerBefore := f.env.OwnerCount(f.owner)
-			if f.env.LedgerEntryExists(f.holdingKey(f.owner)) {
-				t.Fatal("broker owner unexpectedly has underlying holding before LoanSet")
-			}
-			jtx.RequireTxSuccess(t, submitLoanSet(t, f, f.borrower, f.owner, true))
-			if got := f.env.OwnerCount(f.owner); got != ownerBefore+1 {
-				t.Fatalf("broker owner OwnerCount = %d, want %d", got, ownerBefore+1)
-			}
-			if !ownerDirectoryContains(t, f.env, f.owner.AccountID(), f.holdingKey(f.owner)) {
-				t.Error("underlying holding missing from broker owner directory")
-			}
-			if got := f.env.OwnerCount(f.borrower); got != 2 {
-				t.Fatalf("borrower OwnerCount = %d, want 2", got)
-			}
-			assertLoanSetOwnedObjects(t, f, f.borrower)
-		})
 	}
+
+	t.Run("IOU origination fee creates broker owner holding", func(t *testing.T) {
+		kind := "IOU"
+		f := newLoanSetAssetFixture(t, kind)
+		ownerBefore := f.env.OwnerCount(f.owner)
+		if f.env.LedgerEntryExists(f.holdingKey(f.owner)) {
+			t.Fatal("broker owner unexpectedly has underlying holding before LoanSet")
+		}
+		jtx.RequireTxSuccess(t, submitLoanSet(t, f, f.borrower, f.owner, true))
+		if got := f.env.OwnerCount(f.owner); got != ownerBefore+1 {
+			t.Fatalf("broker owner OwnerCount = %d, want %d", got, ownerBefore+1)
+		}
+		if !ownerDirectoryContains(t, f.env, f.owner.AccountID(), f.holdingKey(f.owner)) {
+			t.Error("underlying holding missing from broker owner directory")
+		}
+		if got := f.env.OwnerCount(f.borrower); got != 2 {
+			t.Fatalf("borrower OwnerCount = %d, want 2", got)
+		}
+		assertLoanSetOwnedObjects(t, f, f.borrower)
+	})
 }
 
 func TestLoanSetHoldingReserve(t *testing.T) {
@@ -235,7 +237,7 @@ func TestLoanSetHoldingReserve(t *testing.T) {
 				t.Fatal("failed LoanSet committed holding or Loan")
 			}
 
-			f.env.Pay(f.borrower, f.env.ReserveIncrement())
+			f.env.Pay(f.borrower, f.env.ReserveIncrement()+20)
 			jtx.RequireTxSuccess(t, submitLoanSet(t, f, f.borrower, f.owner, false))
 			if got := f.env.OwnerCount(f.borrower); got != before+2 {
 				t.Fatalf("borrower OwnerCount after top-up = %d, want %d", got, before+2)

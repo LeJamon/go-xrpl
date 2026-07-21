@@ -119,7 +119,7 @@ func addEmptyMPTHolding(ctx *tx.ApplyContext, accountID [20]byte, asset tx.Asset
 			return 0, ter.TefINTERNAL
 		}
 	}
-	if priorBalance < ctx.ReserveForNewObject(holder.OwnerCount) {
+	if priorBalance < ctx.AccountReserve(tx.ConfineOwnerCount(holder.OwnerCount, 1)) {
 		return 0, ter.TecINSUFFICIENT_RESERVE
 	}
 	token := &state.MPTokenData{Account: accountID, MPTokenIssuanceID: id}
