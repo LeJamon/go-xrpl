@@ -227,7 +227,7 @@ func TestLoanSetHoldingReserve(t *testing.T) {
 			balance := f.env.Balance(f.borrower)
 			jtx.RequireTxSuccess(t, f.env.Submit(paytest.Pay(f.borrower, f.issuer, balance-target-f.env.BaseFee()).Build()))
 
-			jtx.RequireTxClaimed(t, submitLoanSet(t, f, f.borrower, f.owner, false), string(tc.want))
+			jtx.RequireTxClaimed(t, submitLoanSet(t, f, f.borrower, f.owner, false), tc.want)
 			if got := f.env.OwnerCount(f.borrower); got != before {
 				t.Fatalf("borrower OwnerCount after failed LoanSet = %d, want %d", got, before)
 			}

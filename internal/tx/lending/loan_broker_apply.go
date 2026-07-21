@@ -150,7 +150,7 @@ func (l *LoanBrokerSet) Apply(ctx *tx.ApplyContext) ter.Result {
 	if res != ter.TesSUCCESS {
 		return res
 	}
-	lineDelta, res := vault.AddEmptyHolding(ctx, pseudoID, asset)
+	lineDelta, res := vault.AddEmptyHolding(ctx, pseudoID, asset, ctx.PriorBalance())
 	if res != ter.TesSUCCESS {
 		return res
 	}
@@ -500,7 +500,7 @@ func (l *LoanBrokerCoverWithdraw) Apply(ctx *tx.ApplyContext) ter.Result {
 
 	// Ensure the destination can hold the asset when it is the submitter.
 	if dstID == accountID {
-		if _, res := vault.AddEmptyHolding(ctx, dstID, asset); res != ter.TesSUCCESS && res != ter.TecDUPLICATE {
+		if _, res := vault.AddEmptyHolding(ctx, dstID, asset, ctx.PriorBalance()); res != ter.TesSUCCESS && res != ter.TecDUPLICATE {
 			return res
 		}
 	}

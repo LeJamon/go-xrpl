@@ -111,8 +111,8 @@ func CanAddHolding(view tx.LedgerView, asset tx.Asset) ter.Result {
 
 // AddEmptyHolding gives accountID a zero-balance holding for asset, returning the
 // owner-count delta to apply.
-func AddEmptyHolding(ctx *tx.ApplyContext, accountID [20]byte, asset tx.Asset) (int32, ter.Result) {
-	return addEmptyHolding(ctx, accountID, asset)
+func AddEmptyHolding(ctx *tx.ApplyContext, accountID [20]byte, asset tx.Asset, priorBalance uint64) (int32, ter.Result) {
+	return addEmptyHolding(ctx, accountID, asset, priorBalance)
 }
 
 // RemoveAssetHolding deletes accountID's IOU trust line for asset (XRP/MPT no-op),

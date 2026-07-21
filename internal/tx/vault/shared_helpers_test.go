@@ -175,7 +175,7 @@ func TestWithdrawSelfIOUReserveUsesUpdatedOwnerCount(t *testing.T) {
 	})
 	require.NoError(t, err)
 	require.NoError(t, view.Insert(keylet.Account(issuer), issuerData))
-	delta, result := addEmptyHolding(ctx, holder, tx.Asset{Currency: "USD", Issuer: issuerAddress})
+	delta, result := addEmptyHolding(ctx, holder, tx.Asset{Currency: "USD", Issuer: issuerAddress}, ctx.PriorBalance())
 	require.Equal(t, ter.TesSUCCESS, result)
 	require.Equal(t, int32(1), delta)
 }
@@ -214,7 +214,7 @@ func TestAddEmptyHoldingUsesNonSubmitterReserve(t *testing.T) {
 	t.Run("IOU checks the holding account balance", func(t *testing.T) {
 		ctx, view := build(t, 49)
 		asset := tx.Asset{Currency: "USD", Issuer: state.EncodeAccountIDSafe(issuer)}
-		delta, result := addEmptyHolding(ctx, holder, asset)
+		delta, result := addEmptyHolding(ctx, holder, asset, 49)
 		require.Equal(t, ter.TecNO_LINE_INSUF_RESERVE, result)
 		require.Zero(t, delta)
 		exists, err := view.Exists(keylet.Line(holder, issuer, "USD"))
@@ -231,7 +231,7 @@ func TestAddEmptyHoldingUsesNonSubmitterReserve(t *testing.T) {
 		})
 		require.NoError(t, err)
 		require.NoError(t, view.Insert(keylet.MPTIssuance(id), raw))
-		delta, result := addEmptyHolding(ctx, holder, tx.Asset{MPTIssuanceID: hex.EncodeToString(id[:])})
+		delta, result := addEmptyHolding(ctx, holder, tx.Asset{MPTIssuanceID: hex.EncodeToString(id[:])}, 49)
 		require.Equal(t, ter.TecINSUFFICIENT_RESERVE, result)
 		require.Zero(t, delta)
 		exists, err := view.Exists(keylet.MPTokenByID(id, holder))
