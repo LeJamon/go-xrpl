@@ -1430,7 +1430,7 @@ Behavioral oracle: clean local rippled `3.2.0` worktree at
       and checkpoint inputs when it cannot run.
 - [x] Review the final diff for arithmetic parity, failure paths, adjacent rate
       behavior, and test coverage; record exact results below.
-- [ ] Stage only intentional files, commit, push, open the PR against `main`, and
+- [x] Stage only intentional files, commit, push, open the PR against `main`, and
       verify the published head and initial CI state.
 
 ## Review
@@ -1455,3 +1455,4 @@ Behavioral oracle: clean local rippled `3.2.0` worktree at
   be replay-verified locally.
 - Three independent final reviews found no Go-correctness, test-quality,
   verification, or rippled v3.2.0 conformance findings.
+- Published as PR #1411: https://github.com/LeJamon/go-xrpl/pull/1411.
