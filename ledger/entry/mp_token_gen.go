@@ -31,6 +31,7 @@ type MPToken struct {
 	Flags             uint32
 	PreviousTxnID     string // Hash256 (uppercase hex)
 	PreviousTxnLgrSeq uint32
+	Sponsor           string // AccountID (base58)
 }
 
 // Type returns the concrete ledger-entry type.
@@ -47,6 +48,7 @@ const (
 	mptokenBitFlags
 	mptokenBitPreviousTxnID
 	mptokenBitPreviousTxnLgrSeq
+	mptokenBitSponsor
 )
 
 // SetAccount assigns Account and updates its serialized presence.
@@ -107,6 +109,13 @@ func (m *MPToken) SetPreviousTxnLgrSeq(value uint32) {
 	m.PreviousTxnLgrSeq = value
 	m.dirty = true
 	m.present |= mptokenBitPreviousTxnLgrSeq
+}
+
+// SetSponsor assigns Sponsor and updates its serialized presence.
+func (m *MPToken) SetSponsor(value string) {
+	m.Sponsor = value
+	m.dirty = true
+	m.present |= mptokenBitSponsor
 }
 
 func (m *MPToken) validateRequired() error {
@@ -256,6 +265,9 @@ func (m *MPToken) decode(data []byte, legacy bool) error {
 			case 1:
 				m.Account = val
 				m.present |= mptokenBitAccount
+			case 27:
+				m.Sponsor = val
+				m.present |= mptokenBitSponsor
 			default:
 				return newErrUnknownField("MPToken", typeCode, fieldCode)
 			}
@@ -307,6 +319,9 @@ func (m *MPToken) emitAll(out map[string]any, skipDefault bool) {
 	if m.present&mptokenBitFlags != 0 && !(skipDefault && m.Flags == 0) {
 		out["Flags"] = m.Flags
 	}
+	if m.present&mptokenBitSponsor != 0 && !(skipDefault && m.Sponsor == "") {
+		out["Sponsor"] = m.Sponsor
+	}
 }
 
 // EmitNewFields emits fields for a CreatedNode (sMD_Create | sMD_Always),
@@ -334,6 +349,7 @@ func (m *MPToken) EmitPreviousFields(prev Entry, out map[string]any) {
 	emitIfChangedString(out, "LockedAmount", prv.LockedAmount, m.LockedAmount, prv.present&mptokenBitLockedAmount, m.present&mptokenBitLockedAmount)
 	emitIfChangedString(out, "OwnerNode", prv.OwnerNode, m.OwnerNode, prv.present&mptokenBitOwnerNode, m.present&mptokenBitOwnerNode)
 	emitIfChangedUint32(out, "Flags", prv.Flags, m.Flags, prv.present&mptokenBitFlags, m.present&mptokenBitFlags)
+	emitIfChangedString(out, "Sponsor", prv.Sponsor, m.Sponsor, prv.present&mptokenBitSponsor, m.present&mptokenBitSponsor)
 }
 
 // EmitChangeOrigFields writes the names of every present field carrying
@@ -359,6 +375,9 @@ func (m *MPToken) EmitChangeOrigFields(out map[string]any) {
 	}
 	if m.present&mptokenBitFlags != 0 {
 		out["Flags"] = m.Flags
+	}
+	if m.present&mptokenBitSponsor != 0 {
+		out["Sponsor"] = m.Sponsor
 	}
 }
 
@@ -424,6 +443,9 @@ func (m *MPToken) ToMap() map[string]any {
 	}
 	if m.present&mptokenBitPreviousTxnLgrSeq != 0 {
 		out["PreviousTxnLgrSeq"] = m.PreviousTxnLgrSeq
+	}
+	if m.present&mptokenBitSponsor != 0 {
+		out["Sponsor"] = m.Sponsor
 	}
 	return out
 }

@@ -335,7 +335,7 @@ func TestAccountObjectsEmptyAccount(t *testing.T) {
 	objectTypes := []string{
 		"offer", "state", "ticket", "check", "escrow",
 		"payment_channel", "nft_page", "signer_list",
-		"deposit_preauth", "did", "amm",
+		"deposit_preauth", "did", "amm", "sponsorship",
 	}
 
 	for _, objType := range objectTypes {
@@ -394,7 +394,7 @@ func TestAccountObjectsTypeFiltering(t *testing.T) {
 	validTypes := []string{
 		"offer", "state", "ticket", "check", "escrow",
 		"payment_channel", "nft_page", "signer_list",
-		"deposit_preauth", "did", "amm",
+		"deposit_preauth", "did", "amm", "sponsorship",
 	}
 
 	for _, objType := range validTypes {
@@ -462,6 +462,7 @@ func TestAccountObjectsTypeSelectionConformance(t *testing.T) {
 		{name: "lowercase canonical name is normalized", typeValue: "paychannel", wantType: "payment_channel"},
 		{name: "RPC name is accepted exactly", typeValue: "payment_channel", wantType: "payment_channel"},
 		{name: "loan broker canonical name is normalized", typeValue: "LoanBroker", wantType: "loan_broker"},
+		{name: "sponsorship canonical name is normalized", typeValue: "Sponsorship", wantType: "sponsorship"},
 		{name: "RPC name is case sensitive", typeValue: "Payment_Channel", wantMessage: "Invalid field 'type'."},
 		{name: "known non-account type is rejected", typeValue: "AMENDMENTS", wantMessage: "Invalid field 'type'."},
 		{name: "unknown type is rejected", typeValue: "unknown", wantMessage: "Invalid field 'type'."},
@@ -593,8 +594,8 @@ func TestAccountObjectsDeletionBlockerTypeIntersection(t *testing.T) {
 		wantObjectTypes []string
 	}{
 		{
-			name:            "no type returns the 3.2.0 blocker set",
-			wantObjectTypes: []string{"Check", "Vault"},
+			name:            "no type returns the blocker set including Sponsorship",
+			wantObjectTypes: []string{"Check", "Vault", "Sponsorship"},
 		},
 		{
 			name:            "exact RPC name intersects blocker set",
@@ -649,6 +650,7 @@ func TestAccountObjectsDeletionBlockerTypeIntersection(t *testing.T) {
 						{Index: "03", LedgerEntryType: "Offer", Data: []byte{0xff}},
 						{Index: "04", LedgerEntryType: "Loan", Data: []byte{0xff}},
 						{Index: "05", LedgerEntryType: "LoanBroker", Data: []byte{0xff}},
+						{Index: "06", LedgerEntryType: "Sponsorship", Data: []byte{0xff}},
 					},
 					LedgerIndex: 2,
 					Validated:   true,

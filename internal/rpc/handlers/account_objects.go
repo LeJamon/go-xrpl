@@ -32,6 +32,7 @@ var deletionBlockerTypes = map[string]bool{
 	"mptoken":                              true,
 	"permissioned_domain":                  true,
 	"vault":                                true,
+	"sponsorship":                          true,
 }
 
 var nonAccountObjectTypes = map[string]bool{

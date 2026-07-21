@@ -79,4 +79,7 @@ const (
 	// Lending protocol
 	TypeLoanBroker = protocol.LedgerEntryTypeLoanBroker
 	TypeLoan       = protocol.LedgerEntryTypeLoan
+
+	// Sponsorship
+	TypeSponsorship = protocol.LedgerEntryTypeSponsorship
 )

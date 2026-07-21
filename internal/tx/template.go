@@ -42,6 +42,9 @@ var commonFields = []templateField{
 	{name: "Signers", style: soeOPTIONAL},
 	{name: "NetworkID", style: soeOPTIONAL},
 	{name: "Delegate", style: soeOPTIONAL},
+	{name: "Sponsor", style: soeOPTIONAL},
+	{name: "SponsorFlags", style: soeOPTIONAL},
+	{name: "SponsorSignature", style: soeOPTIONAL},
 }
 
 // txTemplates holds the per-transaction-type field allowlist (the unique fields
@@ -466,6 +469,17 @@ var txTemplates = map[Type][]templateField{
 	TypeLoanPay: {
 		{name: "LoanID", style: soeREQUIRED},
 		{name: "Amount", style: soeREQUIRED},
+	},
+	TypeSponsorshipTransfer: {
+		{name: "ObjectID", style: soeOPTIONAL},
+		{name: "Sponsee", style: soeOPTIONAL},
+	},
+	TypeSponsorshipSet: {
+		{name: "CounterpartySponsor", style: soeOPTIONAL},
+		{name: "Sponsee", style: soeOPTIONAL},
+		{name: "FeeAmount", style: soeOPTIONAL},
+		{name: "MaxFee", style: soeOPTIONAL},
+		{name: "RemainingOwnerCount", style: soeOPTIONAL},
 	},
 	TypeAmendment: {
 		{name: "LedgerSequence", style: soeREQUIRED},

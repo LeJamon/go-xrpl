@@ -10,15 +10,44 @@ import (
 	"testing"
 )
 
+var sponsorStyleAdditions = map[string]map[string]Style{
+	"AccountRoot": {
+		"SponsoredOwnerCount":    StyleDefault,
+		"SponsoringOwnerCount":   StyleDefault,
+		"SponsoringAccountCount": StyleDefault,
+	},
+	"RippleState": {
+		"HighSponsor": StyleOptional,
+		"LowSponsor":  StyleOptional,
+	},
+}
 var taggedStyleField = regexp.MustCompile(`^\s*\{\s*sf(\w+)\s*,\s*(?:soe|Soe)(REQUIRED|OPTIONAL|DEFAULT|Required|Optional|Default)\s*\}`)
+
+func TestSponsorCommonFieldAppliedToEveryEntry(t *testing.T) {
+	for _, entry := range Specs {
+		count := 0
+		for _, field := range entry.AllFields() {
+			if field.Name != "Sponsor" {
+				continue
+			}
+			count++
+			if field.Style != StyleOptional {
+				t.Errorf("%s.Sponsor style = %d, want optional", entry.Name, field.Style)
+			}
+		}
+		if count != 1 {
+			t.Errorf("%s has %d Sponsor fields, want 1", entry.Name, count)
+		}
+	}
+}
 
 func TestSerializationStylesMatchRippledTag(t *testing.T) {
 	macroPath := requireRippledMacro(t)
 	rippledDir := filepath.Clean(filepath.Join(filepath.Dir(macroPath), "..", "..", "..", ".."))
 	macro := readRippledFile(t, rippledDir, "include/xrpl/protocol/detail/ledger_entries.macro")
 	tagged := parseTaggedStyles(t, macro)
-	if len(tagged) != len(Specs) {
-		t.Fatalf("rippled v3.2.0 has %d ledger templates, schema has %d", len(tagged), len(Specs))
+	if len(tagged)+1 != len(Specs) {
+		t.Fatalf("rippled v3.2.0 has %d ledger templates, schema has %d (want the Sponsorship delta only)", len(tagged), len(Specs))
 	}
 
 	byEntry := make(map[string]Entry, len(Specs))
@@ -52,6 +81,11 @@ func TestSerializationStylesMatchRippledTag(t *testing.T) {
 		for _, field := range entry.Fields {
 			if field.Name == "Flags" || field.DecodeOnly {
 				continue
+			}
+			if additions := sponsorStyleAdditions[entryName]; additions != nil {
+				if _, ok := additions[field.Name]; ok {
+					continue
+				}
 			}
 			if _, ok := fields[field.Name]; !ok {
 				t.Errorf("schema field %s.%s is absent from rippled v3.2.0", entryName, field.Name)

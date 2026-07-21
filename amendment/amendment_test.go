@@ -5,6 +5,7 @@
 package amendment
 
 import (
+	"bytes"
 	"encoding/hex"
 	"slices"
 	"testing"
@@ -92,6 +93,25 @@ func TestFeatureIDMatches(t *testing.T) {
 	}
 	if amm.ID != FeatureAMM {
 		t.Error("FeatureAMM ID mismatch")
+	}
+
+	sponsor := FeatureByName("Sponsor")
+	if sponsor == nil {
+		t.Fatal("Sponsor feature not found")
+	}
+	const sponsorID = "BE1F90581635DBCEBFC4678C4B54FEDDC1A17B50FD02CFE765A4132A342126AC"
+	want, err := hex.DecodeString(sponsorID)
+	if err != nil {
+		t.Fatalf("decode Sponsor amendment ID: %v", err)
+	}
+	if got := sponsor.ID[:]; !bytes.Equal(got, want) {
+		t.Errorf("Sponsor ID = %X, want %s", got, sponsorID)
+	}
+	if sponsor.Supported != SupportedNo || sponsor.Vote != VoteDefaultNo {
+		t.Errorf("Sponsor support/vote = (%v, %v), want (SupportedNo, VoteDefaultNo)", sponsor.Supported, sponsor.Vote)
+	}
+	if AllSupportedRules().Enabled(FeatureSponsor) {
+		t.Error("unsupported Sponsor amendment must not be enabled by the all-supported preset")
 	}
 }
 
@@ -425,6 +445,7 @@ func TestAllExpectedFeaturesExist(t *testing.T) {
 		"AMMClawback",
 		"MPTokensV1",
 		"MPTokensV2",
+		"Sponsor",
 		"DeepFreeze",
 		"DynamicNFT",
 		"PermissionedDomains",

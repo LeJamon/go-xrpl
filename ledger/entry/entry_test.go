@@ -80,3 +80,12 @@ func TestTypeStringUnknown(t *testing.T) {
 		}
 	}
 }
+
+func TestSponsorshipLedgerFlags(t *testing.T) {
+	if LsfSponsorshipRequireSignForFee != 0x00010000 {
+		t.Errorf("LsfSponsorshipRequireSignForFee = 0x%08X", LsfSponsorshipRequireSignForFee)
+	}
+	if LsfSponsorshipRequireSignForReserve != 0x00020000 {
+		t.Errorf("LsfSponsorshipRequireSignForReserve = 0x%08X", LsfSponsorshipRequireSignForReserve)
+	}
+}

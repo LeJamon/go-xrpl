@@ -38,6 +38,7 @@ type MPTokenIssuance struct {
 	Flags             uint32
 	PreviousTxnID     string // Hash256 (uppercase hex)
 	PreviousTxnLgrSeq uint32
+	Sponsor           string // AccountID (base58)
 }
 
 // Type returns the concrete ledger-entry type.
@@ -61,6 +62,7 @@ const (
 	mptokenissuanceBitFlags
 	mptokenissuanceBitPreviousTxnID
 	mptokenissuanceBitPreviousTxnLgrSeq
+	mptokenissuanceBitSponsor
 )
 
 // SetIssuer assigns Issuer and updates its serialized presence.
@@ -178,6 +180,13 @@ func (m *MPTokenIssuance) SetPreviousTxnLgrSeq(value uint32) {
 	m.PreviousTxnLgrSeq = value
 	m.dirty = true
 	m.present |= mptokenissuanceBitPreviousTxnLgrSeq
+}
+
+// SetSponsor assigns Sponsor and updates its serialized presence.
+func (m *MPTokenIssuance) SetSponsor(value string) {
+	m.Sponsor = value
+	m.dirty = true
+	m.present |= mptokenissuanceBitSponsor
 }
 
 func (m *MPTokenIssuance) validateRequired() error {
@@ -373,6 +382,9 @@ func (m *MPTokenIssuance) decode(data []byte, legacy bool) error {
 			case 4:
 				m.Issuer = val
 				m.present |= mptokenissuanceBitIssuer
+			case 27:
+				m.Sponsor = val
+				m.present |= mptokenissuanceBitSponsor
 			default:
 				return newErrUnknownField("MPTokenIssuance", typeCode, fieldCode)
 			}
@@ -446,6 +458,9 @@ func (m *MPTokenIssuance) emitAll(out map[string]any, skipDefault bool) {
 	if m.present&mptokenissuanceBitFlags != 0 && !(skipDefault && m.Flags == 0) {
 		out["Flags"] = m.Flags
 	}
+	if m.present&mptokenissuanceBitSponsor != 0 && !(skipDefault && m.Sponsor == "") {
+		out["Sponsor"] = m.Sponsor
+	}
 }
 
 // EmitNewFields emits fields for a CreatedNode (sMD_Create | sMD_Always),
@@ -480,6 +495,7 @@ func (m *MPTokenIssuance) EmitPreviousFields(prev Entry, out map[string]any) {
 	emitIfChangedUint32(out, "MutableFlags", prv.MutableFlags, m.MutableFlags, prv.present&mptokenissuanceBitMutableFlags, m.present&mptokenissuanceBitMutableFlags)
 	emitIfChangedString(out, "ReferenceHolding", prv.ReferenceHolding, m.ReferenceHolding, prv.present&mptokenissuanceBitReferenceHolding, m.present&mptokenissuanceBitReferenceHolding)
 	emitIfChangedUint32(out, "Flags", prv.Flags, m.Flags, prv.present&mptokenissuanceBitFlags, m.present&mptokenissuanceBitFlags)
+	emitIfChangedString(out, "Sponsor", prv.Sponsor, m.Sponsor, prv.present&mptokenissuanceBitSponsor, m.present&mptokenissuanceBitSponsor)
 }
 
 // EmitChangeOrigFields writes the names of every present field carrying
@@ -526,6 +542,9 @@ func (m *MPTokenIssuance) EmitChangeOrigFields(out map[string]any) {
 	}
 	if m.present&mptokenissuanceBitFlags != 0 {
 		out["Flags"] = m.Flags
+	}
+	if m.present&mptokenissuanceBitSponsor != 0 {
+		out["Sponsor"] = m.Sponsor
 	}
 }
 
@@ -612,6 +631,9 @@ func (m *MPTokenIssuance) ToMap() map[string]any {
 	}
 	if m.present&mptokenissuanceBitPreviousTxnLgrSeq != 0 {
 		out["PreviousTxnLgrSeq"] = m.PreviousTxnLgrSeq
+	}
+	if m.present&mptokenissuanceBitSponsor != 0 {
+		out["Sponsor"] = m.Sponsor
 	}
 	return out
 }

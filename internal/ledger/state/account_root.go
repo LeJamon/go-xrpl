@@ -32,34 +32,37 @@ func ReadAccountRoot(view accountRootReader, accountID [20]byte) (*AccountRoot, 
 
 // AccountRoot represents an account in the ledger
 type AccountRoot struct {
-	Account              string
-	Balance              uint64
-	Sequence             uint32
-	OwnerCount           uint32
-	Flags                uint32
-	RegularKey           string
-	Domain               string
-	EmailHash            string
-	MessageKey           string
-	TransferRate         uint32
-	TickSize             uint8
-	NFTokenMinter        string   // Account allowed to mint NFTokens on behalf of this account
-	MintedNFTokens       uint32   // Number of NFTokens minted by this account (issuer tracking)
-	BurnedNFTokens       uint32   // Number of NFTokens burned for this issuer
-	FirstNFTokenSequence uint32   // First NFToken sequence (set by fixNFTokenRemint)
-	HasFirstNFTSeq       bool     // Whether FirstNFTokenSequence is set (zero is a valid value)
-	AccountTxnID         [32]byte // Hash of the last transaction this account submitted (when enabled)
-	HasAccountTxnID      bool     // Whether sfAccountTxnID is present (zero is a valid value after asfAccountTxnID is enabled)
-	WalletLocator        string   // Arbitrary hex data (deprecated)
-	WalletSize           uint32   // Arbitrary data (deprecated)
-	HasWalletSize        bool     // Whether sfWalletSize is present (zero is a valid value)
-	TicketCount          uint32   // Number of outstanding tickets owned by this account
-	AMMID                [32]byte // Links AMM pseudo-account to its AMM ledger entry (sfAMMID, fieldCode 14)
-	VaultID              [32]byte // Links Vault pseudo-account to its Vault ledger entry (sfVaultID, fieldCode 35)
-	LoanBrokerID         [32]byte // Links LoanBroker pseudo-account to its LoanBroker ledger entry (sfLoanBrokerID, fieldCode 37)
-	PreviousTxnID        [32]byte
-	PreviousTxnLgrSeq    uint32
-	decodedOptionals     map[string]any
+	Account                string
+	Balance                uint64
+	Sequence               uint32
+	OwnerCount             uint32
+	SponsoredOwnerCount    uint32 // Owner-count units paid by this account's sponsors
+	SponsoringOwnerCount   uint32 // Owner-count units this account sponsors
+	SponsoringAccountCount uint32 // Distinct accounts sponsored by this account
+	Flags                  uint32
+	RegularKey             string
+	Domain                 string
+	EmailHash              string
+	MessageKey             string
+	TransferRate           uint32
+	TickSize               uint8
+	NFTokenMinter          string   // Account allowed to mint NFTokens on behalf of this account
+	MintedNFTokens         uint32   // Number of NFTokens minted by this account (issuer tracking)
+	BurnedNFTokens         uint32   // Number of NFTokens burned for this issuer
+	FirstNFTokenSequence   uint32   // First NFToken sequence (set by fixNFTokenRemint)
+	HasFirstNFTSeq         bool     // Whether FirstNFTokenSequence is set (zero is a valid value)
+	AccountTxnID           [32]byte // Hash of the last transaction this account submitted (when enabled)
+	HasAccountTxnID        bool     // Whether sfAccountTxnID is present (zero is a valid value after asfAccountTxnID is enabled)
+	WalletLocator          string   // Arbitrary hex data (deprecated)
+	WalletSize             uint32   // Arbitrary data (deprecated)
+	HasWalletSize          bool     // Whether sfWalletSize is present (zero is a valid value)
+	TicketCount            uint32   // Number of outstanding tickets owned by this account
+	AMMID                  [32]byte // Links AMM pseudo-account to its AMM ledger entry (sfAMMID, fieldCode 14)
+	VaultID                [32]byte // Links Vault pseudo-account to its Vault ledger entry (sfVaultID, fieldCode 35)
+	LoanBrokerID           [32]byte // Links LoanBroker pseudo-account to its LoanBroker ledger entry (sfLoanBrokerID, fieldCode 37)
+	PreviousTxnID          [32]byte
+	PreviousTxnLgrSeq      uint32
+	decodedOptionals       map[string]any
 }
 
 // HasAMMID reports whether the sfAMMID field is present, the faithful equivalent
@@ -173,28 +176,31 @@ func ParseAccountRoot(data []byte) (*AccountRoot, error) {
 	}
 
 	account := &AccountRoot{
-		Account:              decoded.Account,
-		Balance:              balance,
-		Sequence:             decoded.Sequence,
-		OwnerCount:           decoded.OwnerCount,
-		Flags:                decoded.Flags,
-		RegularKey:           decoded.RegularKey,
-		Domain:               string(domain),
-		EmailHash:            strings.ToLower(decoded.EmailHash),
-		MessageKey:           strings.ToLower(decoded.MessageKey),
-		TransferRate:         decoded.TransferRate,
-		TickSize:             uint8(decoded.TickSize),
-		NFTokenMinter:        decoded.NFTokenMinter,
-		MintedNFTokens:       decoded.MintedNFTokens,
-		BurnedNFTokens:       decoded.BurnedNFTokens,
-		FirstNFTokenSequence: decoded.FirstNFTokenSequence,
-		HasFirstNFTSeq:       fields["FirstNFTokenSequence"] != nil,
-		HasAccountTxnID:      fields["AccountTxnID"] != nil,
-		WalletLocator:        strings.ToLower(decoded.WalletLocator),
-		WalletSize:           decoded.WalletSize,
-		HasWalletSize:        fields["WalletSize"] != nil,
-		TicketCount:          decoded.TicketCount,
-		PreviousTxnLgrSeq:    decoded.PreviousTxnLgrSeq,
+		Account:                decoded.Account,
+		Balance:                balance,
+		Sequence:               decoded.Sequence,
+		OwnerCount:             decoded.OwnerCount,
+		SponsoredOwnerCount:    decoded.SponsoredOwnerCount,
+		SponsoringOwnerCount:   decoded.SponsoringOwnerCount,
+		SponsoringAccountCount: decoded.SponsoringAccountCount,
+		Flags:                  decoded.Flags,
+		RegularKey:             decoded.RegularKey,
+		Domain:                 string(domain),
+		EmailHash:              strings.ToLower(decoded.EmailHash),
+		MessageKey:             strings.ToLower(decoded.MessageKey),
+		TransferRate:           decoded.TransferRate,
+		TickSize:               uint8(decoded.TickSize),
+		NFTokenMinter:          decoded.NFTokenMinter,
+		MintedNFTokens:         decoded.MintedNFTokens,
+		BurnedNFTokens:         decoded.BurnedNFTokens,
+		FirstNFTokenSequence:   decoded.FirstNFTokenSequence,
+		HasFirstNFTSeq:         fields["FirstNFTokenSequence"] != nil,
+		HasAccountTxnID:        fields["AccountTxnID"] != nil,
+		WalletLocator:          strings.ToLower(decoded.WalletLocator),
+		WalletSize:             decoded.WalletSize,
+		HasWalletSize:          fields["WalletSize"] != nil,
+		TicketCount:            decoded.TicketCount,
+		PreviousTxnLgrSeq:      decoded.PreviousTxnLgrSeq,
 		decodedOptionals: map[string]any{
 			"Domain":       string(domain),
 			"MessageKey":   strings.ToLower(decoded.MessageKey),
@@ -251,6 +257,15 @@ func SerializeAccountRoot(account *AccountRoot) ([]byte, error) {
 	sle.SetBalance(fmt.Sprintf("%d", account.Balance))
 	sle.SetSequence(account.Sequence)
 	sle.SetOwnerCount(account.OwnerCount)
+	if account.SponsoredOwnerCount > 0 {
+		sle.SetSponsoredOwnerCount(account.SponsoredOwnerCount)
+	}
+	if account.SponsoringOwnerCount > 0 {
+		sle.SetSponsoringOwnerCount(account.SponsoringOwnerCount)
+	}
+	if account.SponsoringAccountCount > 0 {
+		sle.SetSponsoringAccountCount(account.SponsoringAccountCount)
+	}
 	sle.SetFlags(account.Flags)
 
 	if account.Account != "" {

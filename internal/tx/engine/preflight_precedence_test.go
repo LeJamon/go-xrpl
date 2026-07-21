@@ -29,6 +29,39 @@ func rulesWithout(name string) *amendment.Rules {
 	return amendment.NewRulesBuilder().FromPreset(amendment.PresetAllSupported).DisableByName(name).Build()
 }
 
+func TestSponsorFieldsAmendmentGate(t *testing.T) {
+	sponsorRules := amendment.NewRulesBuilder().FromPreset(amendment.PresetAllSupported).Enable(amendment.FeatureSponsor).Build()
+	tests := []struct {
+		name   string
+		mutate func(*txcore.Common)
+	}{
+		{"Sponsor", func(common *txcore.Common) { common.Sponsor = precedenceGenesisAddr }},
+		{"SponsorFlags", func(common *txcore.Common) { flags := txcore.SpfSponsorFee; common.SponsorFlags = &flags }},
+		{"SponsorSignature", func(common *txcore.Common) { common.SponsorSignature = &txcore.SponsorSignature{} }},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			disabled := newAccountSet(precedenceSourceAddr)
+			test.mutate(disabled.GetCommon())
+			if got := preflightEngine(allRules()).preflight(disabled); got != ter.TemDISABLED {
+				t.Fatalf("preflight with Sponsor disabled = %v, want temDISABLED", got)
+			}
+
+			enabled := newAccountSet(precedenceSourceAddr)
+			test.mutate(enabled.GetCommon())
+			if got := preflightEngine(sponsorRules).preflight(enabled); got != ter.TesSUCCESS {
+				t.Fatalf("preflight with Sponsor enabled = %v, want tesSUCCESS", got)
+			}
+		})
+	}
+
+	inner := newAccountSet(precedenceSourceAddr)
+	inner.Sponsor = precedenceGenesisAddr
+	if got := preflightEngine(allRules()).preflightInner(inner); got != ter.TemDISABLED {
+		t.Fatalf("inner preflight with Sponsor disabled = %v, want temDISABLED", got)
+	}
+}
+
 // --- test transaction types exercising the engine preflight seams ---
 
 // flagMaskTx adopts FlagsMasker with a fixed invalid-flags mask.
