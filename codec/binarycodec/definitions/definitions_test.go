@@ -30,6 +30,53 @@ func TestLoadDefinitions(t *testing.T) {
 	require.Equal(t, int32(1), definitions.delegatablePermissions["Payment"])
 }
 
+func TestSponsorDefinitions(t *testing.T) {
+	loadDefinitions()
+	require.Equal(t, int32(90), definitions.transactionTypes["SponsorshipTransfer"])
+	require.Equal(t, int32(91), definitions.transactionTypes["SponsorshipSet"])
+	require.Equal(t, int32(144), definitions.ledgerEntryTypes["Sponsorship"])
+
+	tests := []struct {
+		name      string
+		typeName  string
+		typeCode  int32
+		fieldCode int32
+		variable  bool
+		signing   bool
+	}{
+		{"SponsoredOwnerCount", "UInt32", 2, 70, false, true},
+		{"SponsoringOwnerCount", "UInt32", 2, 71, false, true},
+		{"SponsoringAccountCount", "UInt32", 2, 72, false, true},
+		{"RemainingOwnerCount", "UInt32", 2, 73, false, true},
+		{"SponsorFlags", "UInt32", 2, 74, false, true},
+		{"SponseeNode", "UInt64", 3, 33, false, true},
+		{"ObjectID", "Hash256", 5, 41, false, true},
+		{"FeeAmount", "Amount", 6, 32, false, true},
+		{"MaxFee", "Amount", 6, 33, false, true},
+		{"Sponsor", "AccountID", 8, 27, true, true},
+		{"HighSponsor", "AccountID", 8, 28, true, true},
+		{"LowSponsor", "AccountID", 8, 29, true, true},
+		{"CounterpartySponsor", "AccountID", 8, 30, true, true},
+		{"Sponsee", "AccountID", 8, 31, true, true},
+		{"SponsorSignature", "STObject", 14, 38, false, false},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			field, ok := definitions.fields[test.name]
+			require.True(t, ok)
+			require.Equal(t, &FieldInfo{
+				Nth:            test.fieldCode,
+				IsVLEncoded:    test.variable,
+				IsSerialized:   true,
+				IsSigningField: test.signing,
+				Type:           test.typeName,
+			}, field.FieldInfo)
+			require.Equal(t, &FieldHeader{TypeCode: test.typeCode, FieldCode: test.fieldCode}, field.FieldHeader)
+			require.Equal(t, test.name, definitions.fieldIDNameMap[*field.FieldHeader])
+		})
+	}
+}
+
 // Helper functions to create and test ordinals.
 // func CreateOrdinal(fh FieldHeader) int32 {
 // 	return fh.TypeCode<<16 | fh.FieldCode

@@ -35,6 +35,7 @@ type XChainOwnedCreateAccountClaimID struct {
 	Flags                           uint32
 	PreviousTxnID                   string // Hash256 (uppercase hex)
 	PreviousTxnLgrSeq               uint32
+	Sponsor                         string // AccountID (base58)
 }
 
 const (
@@ -46,6 +47,7 @@ const (
 	xchainownedcreateaccountclaimidBitFlags
 	xchainownedcreateaccountclaimidBitPreviousTxnID
 	xchainownedcreateaccountclaimidBitPreviousTxnLgrSeq
+	xchainownedcreateaccountclaimidBitSponsor
 )
 
 // SetAccount assigns Account and updates its serialized presence.
@@ -102,6 +104,13 @@ func (x *XChainOwnedCreateAccountClaimID) SetPreviousTxnLgrSeq(value uint32) {
 	x.PreviousTxnLgrSeq = value
 	x.dirty = true
 	x.present |= xchainownedcreateaccountclaimidBitPreviousTxnLgrSeq
+}
+
+// SetSponsor assigns Sponsor and updates its serialized presence.
+func (x *XChainOwnedCreateAccountClaimID) SetSponsor(value string) {
+	x.Sponsor = value
+	x.dirty = true
+	x.present |= xchainownedcreateaccountclaimidBitSponsor
 }
 
 func (x *XChainOwnedCreateAccountClaimID) validateRequired() error {
@@ -253,6 +262,9 @@ func (x *XChainOwnedCreateAccountClaimID) decode(data []byte, legacy bool) error
 			case 1:
 				x.Account = val
 				x.present |= xchainownedcreateaccountclaimidBitAccount
+			case 27:
+				x.Sponsor = val
+				x.present |= xchainownedcreateaccountclaimidBitSponsor
 			default:
 				return newErrUnknownField("XChainOwnedCreateAccountClaimID", typeCode, fieldCode)
 			}
@@ -316,6 +328,9 @@ func (x *XChainOwnedCreateAccountClaimID) emitAll(out map[string]any, skipDefaul
 	if x.present&xchainownedcreateaccountclaimidBitFlags != 0 && !(skipDefault && x.Flags == 0) {
 		out["Flags"] = x.Flags
 	}
+	if x.present&xchainownedcreateaccountclaimidBitSponsor != 0 && !(skipDefault && x.Sponsor == "") {
+		out["Sponsor"] = x.Sponsor
+	}
 }
 
 // EmitNewFields emits fields for a CreatedNode (sMD_Create | sMD_Always),
@@ -343,6 +358,7 @@ func (x *XChainOwnedCreateAccountClaimID) EmitPreviousFields(prev Entry, out map
 	emitIfChangedDeep(out, "XChainCreateAccountAttestations", prv.XChainCreateAccountAttestations, x.XChainCreateAccountAttestations, prv.present&xchainownedcreateaccountclaimidBitXChainCreateAccountAttestations, x.present&xchainownedcreateaccountclaimidBitXChainCreateAccountAttestations)
 	emitIfChangedString(out, "OwnerNode", prv.OwnerNode, x.OwnerNode, prv.present&xchainownedcreateaccountclaimidBitOwnerNode, x.present&xchainownedcreateaccountclaimidBitOwnerNode)
 	emitIfChangedUint32(out, "Flags", prv.Flags, x.Flags, prv.present&xchainownedcreateaccountclaimidBitFlags, x.present&xchainownedcreateaccountclaimidBitFlags)
+	emitIfChangedString(out, "Sponsor", prv.Sponsor, x.Sponsor, prv.present&xchainownedcreateaccountclaimidBitSponsor, x.present&xchainownedcreateaccountclaimidBitSponsor)
 }
 
 // EmitChangeOrigFields writes the names of every present field carrying
@@ -368,6 +384,9 @@ func (x *XChainOwnedCreateAccountClaimID) EmitChangeOrigFields(out map[string]an
 	}
 	if x.present&xchainownedcreateaccountclaimidBitFlags != 0 {
 		out["Flags"] = x.Flags
+	}
+	if x.present&xchainownedcreateaccountclaimidBitSponsor != 0 {
+		out["Sponsor"] = x.Sponsor
 	}
 }
 
@@ -433,6 +452,9 @@ func (x *XChainOwnedCreateAccountClaimID) ToMap() map[string]any {
 	}
 	if x.present&xchainownedcreateaccountclaimidBitPreviousTxnLgrSeq != 0 {
 		out["PreviousTxnLgrSeq"] = x.PreviousTxnLgrSeq
+	}
+	if x.present&xchainownedcreateaccountclaimidBitSponsor != 0 {
+		out["Sponsor"] = x.Sponsor
 	}
 	return out
 }

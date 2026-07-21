@@ -38,6 +38,7 @@ type Oracle struct {
 	Flags             uint32
 	PreviousTxnID     string // Hash256 (uppercase hex)
 	PreviousTxnLgrSeq uint32
+	Sponsor           string // AccountID (base58)
 }
 
 const (
@@ -52,6 +53,7 @@ const (
 	oracleBitFlags
 	oracleBitPreviousTxnID
 	oracleBitPreviousTxnLgrSeq
+	oracleBitSponsor
 )
 
 // SetOwner assigns Owner and updates its serialized presence.
@@ -129,6 +131,13 @@ func (o *Oracle) SetPreviousTxnLgrSeq(value uint32) {
 	o.PreviousTxnLgrSeq = value
 	o.dirty = true
 	o.present |= oracleBitPreviousTxnLgrSeq
+}
+
+// SetSponsor assigns Sponsor and updates its serialized presence.
+func (o *Oracle) SetSponsor(value string) {
+	o.Sponsor = value
+	o.dirty = true
+	o.present |= oracleBitSponsor
 }
 
 func (o *Oracle) validateRequired() error {
@@ -303,6 +312,9 @@ func (o *Oracle) decode(data []byte, legacy bool) error {
 			case 2:
 				o.Owner = val
 				o.present |= oracleBitOwner
+			case 27:
+				o.Sponsor = val
+				o.present |= oracleBitSponsor
 			default:
 				return newErrUnknownField("Oracle", typeCode, fieldCode)
 			}
@@ -363,6 +375,9 @@ func (o *Oracle) emitAll(out map[string]any, skipDefault bool) {
 	if o.present&oracleBitFlags != 0 && !(skipDefault && o.Flags == 0) {
 		out["Flags"] = o.Flags
 	}
+	if o.present&oracleBitSponsor != 0 && !(skipDefault && o.Sponsor == "") {
+		out["Sponsor"] = o.Sponsor
+	}
 }
 
 // EmitNewFields emits fields for a CreatedNode (sMD_Create | sMD_Always),
@@ -393,6 +408,7 @@ func (o *Oracle) EmitPreviousFields(prev Entry, out map[string]any) {
 	emitIfChangedString(out, "URI", prv.URI, o.URI, prv.present&oracleBitURI, o.present&oracleBitURI)
 	emitIfChangedString(out, "OwnerNode", prv.OwnerNode, o.OwnerNode, prv.present&oracleBitOwnerNode, o.present&oracleBitOwnerNode)
 	emitIfChangedUint32(out, "Flags", prv.Flags, o.Flags, prv.present&oracleBitFlags, o.present&oracleBitFlags)
+	emitIfChangedString(out, "Sponsor", prv.Sponsor, o.Sponsor, prv.present&oracleBitSponsor, o.present&oracleBitSponsor)
 }
 
 // EmitChangeOrigFields writes the names of every present field carrying
@@ -427,6 +443,9 @@ func (o *Oracle) EmitChangeOrigFields(out map[string]any) {
 	}
 	if o.present&oracleBitFlags != 0 {
 		out["Flags"] = o.Flags
+	}
+	if o.present&oracleBitSponsor != 0 {
+		out["Sponsor"] = o.Sponsor
 	}
 }
 
@@ -501,6 +520,9 @@ func (o *Oracle) ToMap() map[string]any {
 	}
 	if o.present&oracleBitPreviousTxnLgrSeq != 0 {
 		out["PreviousTxnLgrSeq"] = o.PreviousTxnLgrSeq
+	}
+	if o.present&oracleBitSponsor != 0 {
+		out["Sponsor"] = o.Sponsor
 	}
 	return out
 }

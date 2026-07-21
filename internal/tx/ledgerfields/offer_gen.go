@@ -40,6 +40,7 @@ type Offer struct {
 	AdditionalBooks   []any
 	PreviousTxnID     string // Hash256 (uppercase hex)
 	PreviousTxnLgrSeq uint32
+	Sponsor           string // AccountID (base58)
 }
 
 const (
@@ -56,6 +57,7 @@ const (
 	offerBitAdditionalBooks
 	offerBitPreviousTxnID
 	offerBitPreviousTxnLgrSeq
+	offerBitSponsor
 )
 
 // SetAccount assigns Account and updates its serialized presence.
@@ -147,6 +149,13 @@ func (o *Offer) SetPreviousTxnLgrSeq(value uint32) {
 	o.PreviousTxnLgrSeq = value
 	o.dirty = true
 	o.present |= offerBitPreviousTxnLgrSeq
+}
+
+// SetSponsor assigns Sponsor and updates its serialized presence.
+func (o *Offer) SetSponsor(value string) {
+	o.Sponsor = value
+	o.dirty = true
+	o.present |= offerBitSponsor
 }
 
 func (o *Offer) validateRequired() error {
@@ -337,6 +346,9 @@ func (o *Offer) decode(data []byte, legacy bool) error {
 			case 1:
 				o.Account = val
 				o.present |= offerBitAccount
+			case 27:
+				o.Sponsor = val
+				o.present |= offerBitSponsor
 			default:
 				return newErrUnknownField("Offer", typeCode, fieldCode)
 			}
@@ -403,6 +415,9 @@ func (o *Offer) emitAll(out map[string]any, skipDefault bool) {
 	if o.present&offerBitAdditionalBooks != 0 && !(skipDefault && len(o.AdditionalBooks) == 0) {
 		out["AdditionalBooks"] = o.AdditionalBooks
 	}
+	if o.present&offerBitSponsor != 0 && !(skipDefault && o.Sponsor == "") {
+		out["Sponsor"] = o.Sponsor
+	}
 }
 
 // EmitNewFields emits fields for a CreatedNode (sMD_Create | sMD_Always),
@@ -435,6 +450,7 @@ func (o *Offer) EmitPreviousFields(prev Entry, out map[string]any) {
 	emitIfChangedUint32(out, "Flags", prv.Flags, o.Flags, prv.present&offerBitFlags, o.present&offerBitFlags)
 	emitIfChangedString(out, "DomainID", prv.DomainID, o.DomainID, prv.present&offerBitDomainID, o.present&offerBitDomainID)
 	emitIfChangedDeep(out, "AdditionalBooks", prv.AdditionalBooks, o.AdditionalBooks, prv.present&offerBitAdditionalBooks, o.present&offerBitAdditionalBooks)
+	emitIfChangedString(out, "Sponsor", prv.Sponsor, o.Sponsor, prv.present&offerBitSponsor, o.present&offerBitSponsor)
 }
 
 // EmitChangeOrigFields writes the names of every present field carrying
@@ -475,6 +491,9 @@ func (o *Offer) EmitChangeOrigFields(out map[string]any) {
 	}
 	if o.present&offerBitAdditionalBooks != 0 {
 		out["AdditionalBooks"] = o.AdditionalBooks
+	}
+	if o.present&offerBitSponsor != 0 {
+		out["Sponsor"] = o.Sponsor
 	}
 }
 
@@ -555,6 +574,9 @@ func (o *Offer) ToMap() map[string]any {
 	}
 	if o.present&offerBitPreviousTxnLgrSeq != 0 {
 		out["PreviousTxnLgrSeq"] = o.PreviousTxnLgrSeq
+	}
+	if o.present&offerBitSponsor != 0 {
+		out["Sponsor"] = o.Sponsor
 	}
 	return out
 }

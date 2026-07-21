@@ -176,6 +176,9 @@ func (e *Engine) preflight1(tx txcore.Transaction, common *txcore.Common, rules 
 	if result := preflightInnerBatchFlag(common, rules); result != ter.TesSUCCESS {
 		return result
 	}
+	if result := checkSponsorFields(common, rules); result != ter.TesSUCCESS {
+		return result
+	}
 	return ter.TesSUCCESS
 }
 
@@ -292,6 +295,9 @@ func (e *Engine) preflightInner(innerTx txcore.Transaction) ter.Result {
 	if result := checkDelegate(common, rules); result != ter.TesSUCCESS {
 		return result
 	}
+	if result := checkSponsorFields(common, rules); result != ter.TesSUCCESS {
+		return result
+	}
 	return runTypePreflight(innerTx, rules)
 }
 
@@ -336,6 +342,21 @@ func checkDelegate(common *txcore.Common, rules *amendment.Rules) ter.Result {
 	}
 	if common.Delegate == common.Account {
 		return ter.TemBAD_SIGNER
+	}
+	return ter.TesSUCCESS
+}
+
+// checkSponsorFields keeps the newly defined common Sponsor wire fields
+// unreachable while go-xrpl advertises the amendment as unsupported. The
+// complete Sponsor preflight and apply semantics are added with the lifecycle
+// implementation; until then, any transaction carrying one of these fields
+// follows rippled's amendment-off result.
+func checkSponsorFields(common *txcore.Common, rules *amendment.Rules) ter.Result {
+	if common.Sponsor == "" && common.SponsorFlags == nil && common.SponsorSignature == nil {
+		return ter.TesSUCCESS
+	}
+	if !rules.Enabled(amendment.FeatureSponsor) {
+		return ter.TemDISABLED
 	}
 	return ter.TesSUCCESS
 }

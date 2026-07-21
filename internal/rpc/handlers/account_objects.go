@@ -31,6 +31,7 @@ var deletionBlockerTypes = map[string]bool{
 	"mptoken":                              true,
 	"permissioned_domain":                  true,
 	"vault":                                true,
+	"sponsorship":                          true,
 }
 
 type accountObjectLedgerType struct {
@@ -70,6 +71,7 @@ var accountObjectLedgerTypes = []accountObjectLedgerType{
 	{"Vault", "vault", true},
 	{"LoanBroker", "loan_broker", true},
 	{"Loan", "loan", true},
+	{"Sponsorship", "sponsorship", true},
 }
 
 func chooseAccountObjectType(raw json.RawMessage, present bool) (string, *types.RpcError) {

@@ -35,6 +35,7 @@ type Delegate struct {
 	Flags             uint32
 	PreviousTxnID     string // Hash256 (uppercase hex)
 	PreviousTxnLgrSeq uint32
+	Sponsor           string // AccountID (base58)
 }
 
 const (
@@ -46,6 +47,7 @@ const (
 	delegateBitFlags
 	delegateBitPreviousTxnID
 	delegateBitPreviousTxnLgrSeq
+	delegateBitSponsor
 )
 
 // SetAccount assigns Account and updates its serialized presence.
@@ -102,6 +104,13 @@ func (d *Delegate) SetPreviousTxnLgrSeq(value uint32) {
 	d.PreviousTxnLgrSeq = value
 	d.dirty = true
 	d.present |= delegateBitPreviousTxnLgrSeq
+}
+
+// SetSponsor assigns Sponsor and updates its serialized presence.
+func (d *Delegate) SetSponsor(value string) {
+	d.Sponsor = value
+	d.dirty = true
+	d.present |= delegateBitSponsor
 }
 
 func (d *Delegate) validateRequired() error {
@@ -250,6 +259,9 @@ func (d *Delegate) decode(data []byte, legacy bool) error {
 			case 5:
 				d.Authorize = val
 				d.present |= delegateBitAuthorize
+			case 27:
+				d.Sponsor = val
+				d.present |= delegateBitSponsor
 			default:
 				return newErrUnknownField("Delegate", typeCode, fieldCode)
 			}
@@ -301,6 +313,9 @@ func (d *Delegate) emitAll(out map[string]any, skipDefault bool) {
 	if d.present&delegateBitFlags != 0 && !(skipDefault && d.Flags == 0) {
 		out["Flags"] = d.Flags
 	}
+	if d.present&delegateBitSponsor != 0 && !(skipDefault && d.Sponsor == "") {
+		out["Sponsor"] = d.Sponsor
+	}
 }
 
 // EmitNewFields emits fields for a CreatedNode (sMD_Create | sMD_Always),
@@ -328,6 +343,7 @@ func (d *Delegate) EmitPreviousFields(prev Entry, out map[string]any) {
 	emitIfChangedString(out, "OwnerNode", prv.OwnerNode, d.OwnerNode, prv.present&delegateBitOwnerNode, d.present&delegateBitOwnerNode)
 	emitIfChangedString(out, "DestinationNode", prv.DestinationNode, d.DestinationNode, prv.present&delegateBitDestinationNode, d.present&delegateBitDestinationNode)
 	emitIfChangedUint32(out, "Flags", prv.Flags, d.Flags, prv.present&delegateBitFlags, d.present&delegateBitFlags)
+	emitIfChangedString(out, "Sponsor", prv.Sponsor, d.Sponsor, prv.present&delegateBitSponsor, d.present&delegateBitSponsor)
 }
 
 // EmitChangeOrigFields writes the names of every present field carrying
@@ -353,6 +369,9 @@ func (d *Delegate) EmitChangeOrigFields(out map[string]any) {
 	}
 	if d.present&delegateBitFlags != 0 {
 		out["Flags"] = d.Flags
+	}
+	if d.present&delegateBitSponsor != 0 {
+		out["Sponsor"] = d.Sponsor
 	}
 }
 
@@ -418,6 +437,9 @@ func (d *Delegate) ToMap() map[string]any {
 	}
 	if d.present&delegateBitPreviousTxnLgrSeq != 0 {
 		out["PreviousTxnLgrSeq"] = d.PreviousTxnLgrSeq
+	}
+	if d.present&delegateBitSponsor != 0 {
+		out["Sponsor"] = d.Sponsor
 	}
 	return out
 }

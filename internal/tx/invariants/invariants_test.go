@@ -70,6 +70,27 @@ func TestXRPNotCreated_StrictEquality(t *testing.T) {
 	}
 }
 
+// TestLedgerEntryTypesMatchAcceptsSponsorship keeps the generic ledger-entry
+// type invariant in lockstep with the protocol ledger-entry registry. The
+// Sponsor-specific linkage and reserve invariants remain part of the later
+// lifecycle work; this check only proves that a well-formed Sponsorship SLE is
+// recognized as a valid ledger type.
+func TestLedgerEntryTypesMatchAcceptsSponsorship(t *testing.T) {
+	entry := mustEncode(t, map[string]any{
+		"LedgerEntryType":   "Sponsorship",
+		"PreviousTxnID":     strings.Repeat("0", 64),
+		"PreviousTxnLgrSeq": uint32(0),
+		"Owner":             "rrrrrrrrrrrrrrrrrrrrrhoLvTp",
+		"Sponsee":           "rrrrrrrrrrrrrrrrrrrrBZbvji",
+		"OwnerNode":         "0",
+		"SponseeNode":       "0",
+		"Flags":             uint32(0),
+	})
+	if violation := checkLedgerEntryTypesMatch([]InvariantEntry{{EntryType: "Sponsorship", After: entry}}); violation != nil {
+		t.Fatalf("well-formed Sponsorship rejected by ledger type invariant: %v", violation)
+	}
+}
+
 // TestValidNewAccountRoot_PermittedTypes ensures the allow-list covers
 // Payment / AMMCreate / VaultCreate and the XChain attestation tx types.
 // Batch is NOT in the list: rippled has no ttBATCH arm (InvariantCheck.cpp:

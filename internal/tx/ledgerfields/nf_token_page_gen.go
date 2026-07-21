@@ -33,6 +33,7 @@ type NFTokenPage struct {
 	Flags             uint32
 	PreviousTxnID     string // Hash256 (uppercase hex)
 	PreviousTxnLgrSeq uint32
+	Sponsor           string // AccountID (base58)
 }
 
 const (
@@ -42,6 +43,7 @@ const (
 	nftokenpageBitFlags
 	nftokenpageBitPreviousTxnID
 	nftokenpageBitPreviousTxnLgrSeq
+	nftokenpageBitSponsor
 )
 
 // SetPreviousPageMin assigns PreviousPageMin and updates its serialized presence.
@@ -84,6 +86,13 @@ func (n *NFTokenPage) SetPreviousTxnLgrSeq(value uint32) {
 	n.PreviousTxnLgrSeq = value
 	n.dirty = true
 	n.present |= nftokenpageBitPreviousTxnLgrSeq
+}
+
+// SetSponsor assigns Sponsor and updates its serialized presence.
+func (n *NFTokenPage) SetSponsor(value string) {
+	n.Sponsor = value
+	n.dirty = true
+	n.present |= nftokenpageBitSponsor
 }
 
 func (n *NFTokenPage) validateRequired() error {
@@ -189,6 +198,18 @@ func (n *NFTokenPage) decode(data []byte, legacy bool) error {
 			default:
 				return newErrUnknownField("NFTokenPage", typeCode, fieldCode)
 			}
+		case 8: // AccountID
+			val, err := sr.readAccountID()
+			if err != nil {
+				return err
+			}
+			switch fieldCode {
+			case 27:
+				n.Sponsor = val
+				n.present |= nftokenpageBitSponsor
+			default:
+				return newErrUnknownField("NFTokenPage", typeCode, fieldCode)
+			}
 		case 15: // STArray
 			val, err := sr.readSTArray()
 			if err != nil {
@@ -231,6 +252,9 @@ func (n *NFTokenPage) emitAll(out map[string]any, skipDefault bool) {
 	if n.present&nftokenpageBitFlags != 0 && !(skipDefault && n.Flags == 0) {
 		out["Flags"] = n.Flags
 	}
+	if n.present&nftokenpageBitSponsor != 0 && !(skipDefault && n.Sponsor == "") {
+		out["Sponsor"] = n.Sponsor
+	}
 }
 
 // EmitNewFields emits fields for a CreatedNode (sMD_Create | sMD_Always),
@@ -256,6 +280,7 @@ func (n *NFTokenPage) EmitPreviousFields(prev Entry, out map[string]any) {
 	emitIfChangedString(out, "NextPageMin", prv.NextPageMin, n.NextPageMin, prv.present&nftokenpageBitNextPageMin, n.present&nftokenpageBitNextPageMin)
 	emitIfChangedDeep(out, "NFTokens", prv.NFTokens, n.NFTokens, prv.present&nftokenpageBitNFTokens, n.present&nftokenpageBitNFTokens)
 	emitIfChangedUint32(out, "Flags", prv.Flags, n.Flags, prv.present&nftokenpageBitFlags, n.present&nftokenpageBitFlags)
+	emitIfChangedString(out, "Sponsor", prv.Sponsor, n.Sponsor, prv.present&nftokenpageBitSponsor, n.present&nftokenpageBitSponsor)
 }
 
 // EmitChangeOrigFields writes the names of every present field carrying
@@ -275,6 +300,9 @@ func (n *NFTokenPage) EmitChangeOrigFields(out map[string]any) {
 	}
 	if n.present&nftokenpageBitFlags != 0 {
 		out["Flags"] = n.Flags
+	}
+	if n.present&nftokenpageBitSponsor != 0 {
+		out["Sponsor"] = n.Sponsor
 	}
 }
 
@@ -334,6 +362,9 @@ func (n *NFTokenPage) ToMap() map[string]any {
 	}
 	if n.present&nftokenpageBitPreviousTxnLgrSeq != 0 {
 		out["PreviousTxnLgrSeq"] = n.PreviousTxnLgrSeq
+	}
+	if n.present&nftokenpageBitSponsor != 0 {
+		out["Sponsor"] = n.Sponsor
 	}
 	return out
 }

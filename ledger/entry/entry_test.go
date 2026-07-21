@@ -45,10 +45,11 @@ var ledgerTypes = []struct {
 	{TypeVault, 0x0084, "Vault"},
 	{TypeLoanBroker, 0x0088, "LoanBroker"},
 	{TypeLoan, 0x0089, "Loan"},
+	{TypeSponsorship, 0x0090, "Sponsorship"},
 }
 
 func TestTypeCodes(t *testing.T) {
-	if got, want := len(ledgerTypes), 30; got != want {
+	if got, want := len(ledgerTypes), 31; got != want {
 		t.Fatalf("ledgerTypes covers %d types, want %d — update the golden table when ledger_entries.macro changes", got, want)
 	}
 
@@ -78,5 +79,14 @@ func TestTypeStringUnknown(t *testing.T) {
 		if got := Type(code).String(); got != want {
 			t.Errorf("Type(0x%04X).String() = %q, want %q", code, got, want)
 		}
+	}
+}
+
+func TestSponsorshipLedgerFlags(t *testing.T) {
+	if LsfSponsorshipRequireSignForFee != 0x00010000 {
+		t.Errorf("LsfSponsorshipRequireSignForFee = 0x%08X", LsfSponsorshipRequireSignForFee)
+	}
+	if LsfSponsorshipRequireSignForReserve != 0x00020000 {
+		t.Errorf("LsfSponsorshipRequireSignForReserve = 0x%08X", LsfSponsorshipRequireSignForReserve)
 	}
 }

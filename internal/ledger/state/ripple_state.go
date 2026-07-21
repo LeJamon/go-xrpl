@@ -46,6 +46,10 @@ type RippleState struct {
 	HighQualityOut    uint32
 	HasHighQualityOut bool
 
+	// Reserve sponsors for the high and low trust-line owners.
+	HighSponsor string
+	LowSponsor  string
+
 	// PreviousTxnID is the hash of the previous transaction that modified this entry
 	PreviousTxnID [32]byte
 
@@ -127,6 +131,8 @@ func ParseRippleState(data []byte) (*RippleState, error) {
 		LowQualityOut:     decoded.LowQualityOut,
 		HighQualityIn:     decoded.HighQualityIn,
 		HighQualityOut:    decoded.HighQualityOut,
+		HighSponsor:       decoded.HighSponsor,
+		LowSponsor:        decoded.LowSponsor,
 		PreviousTxnLgrSeq: decoded.PreviousTxnLgrSeq,
 		decodedOptionals:  make(map[string]any),
 		binaryBadCurrency: badCurrencyAmounts == 3,
@@ -264,6 +270,12 @@ func SerializeRippleState(rs *RippleState) ([]byte, error) {
 	}
 	if rs.HasHighQualityOut || rs.HighQualityOut != 0 {
 		entry.SetHighQualityOut(rs.HighQualityOut)
+	}
+	if rs.HighSponsor != "" {
+		entry.SetHighSponsor(rs.HighSponsor)
+	}
+	if rs.LowSponsor != "" {
+		entry.SetLowSponsor(rs.LowSponsor)
 	}
 
 	if rs.PreviousTxnID != [32]byte{} || decodedFieldUnchanged(rs.decodedOptionals, "PreviousTxnID", rs.PreviousTxnID) {

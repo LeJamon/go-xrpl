@@ -32,6 +32,7 @@ type Amendments struct {
 	Majorities        []any
 	PreviousTxnID     string // Hash256 (uppercase hex)
 	PreviousTxnLgrSeq uint32
+	Sponsor           string // AccountID (base58)
 }
 
 const (
@@ -40,6 +41,7 @@ const (
 	amendmentsBitMajorities
 	amendmentsBitPreviousTxnID
 	amendmentsBitPreviousTxnLgrSeq
+	amendmentsBitSponsor
 )
 
 // SetFlags assigns Flags and updates its serialized presence.
@@ -75,6 +77,13 @@ func (a *Amendments) SetPreviousTxnLgrSeq(value uint32) {
 	a.PreviousTxnLgrSeq = value
 	a.dirty = true
 	a.present |= amendmentsBitPreviousTxnLgrSeq
+}
+
+// SetSponsor assigns Sponsor and updates its serialized presence.
+func (a *Amendments) SetSponsor(value string) {
+	a.Sponsor = value
+	a.dirty = true
+	a.present |= amendmentsBitSponsor
 }
 
 func (a *Amendments) validateRequired() error {
@@ -162,6 +171,18 @@ func (a *Amendments) decode(data []byte, legacy bool) error {
 			default:
 				return newErrUnknownField("Amendments", typeCode, fieldCode)
 			}
+		case 8: // AccountID
+			val, err := sr.readAccountID()
+			if err != nil {
+				return err
+			}
+			switch fieldCode {
+			case 27:
+				a.Sponsor = val
+				a.present |= amendmentsBitSponsor
+			default:
+				return newErrUnknownField("Amendments", typeCode, fieldCode)
+			}
 		case 15: // STArray
 			val, err := sr.readSTArray()
 			if err != nil {
@@ -213,6 +234,9 @@ func (a *Amendments) emitAll(out map[string]any, skipDefault bool) {
 	if a.present&amendmentsBitMajorities != 0 && !(skipDefault && len(a.Majorities) == 0) {
 		out["Majorities"] = a.Majorities
 	}
+	if a.present&amendmentsBitSponsor != 0 && !(skipDefault && a.Sponsor == "") {
+		out["Sponsor"] = a.Sponsor
+	}
 }
 
 // EmitNewFields emits fields for a CreatedNode (sMD_Create | sMD_Always),
@@ -237,6 +261,7 @@ func (a *Amendments) EmitPreviousFields(prev Entry, out map[string]any) {
 	emitIfChangedUint32(out, "Flags", prv.Flags, a.Flags, prv.present&amendmentsBitFlags, a.present&amendmentsBitFlags)
 	emitIfChangedStringSlice(out, "Amendments", prv.Amendments, a.Amendments, prv.present&amendmentsBitAmendments, a.present&amendmentsBitAmendments)
 	emitIfChangedDeep(out, "Majorities", prv.Majorities, a.Majorities, prv.present&amendmentsBitMajorities, a.present&amendmentsBitMajorities)
+	emitIfChangedString(out, "Sponsor", prv.Sponsor, a.Sponsor, prv.present&amendmentsBitSponsor, a.present&amendmentsBitSponsor)
 }
 
 // EmitChangeOrigFields writes the names of every present field carrying
@@ -253,6 +278,9 @@ func (a *Amendments) EmitChangeOrigFields(out map[string]any) {
 	}
 	if a.present&amendmentsBitMajorities != 0 {
 		out["Majorities"] = a.Majorities
+	}
+	if a.present&amendmentsBitSponsor != 0 {
+		out["Sponsor"] = a.Sponsor
 	}
 }
 
@@ -309,6 +337,9 @@ func (a *Amendments) ToMap() map[string]any {
 	}
 	if a.present&amendmentsBitPreviousTxnLgrSeq != 0 {
 		out["PreviousTxnLgrSeq"] = a.PreviousTxnLgrSeq
+	}
+	if a.present&amendmentsBitSponsor != 0 {
+		out["Sponsor"] = a.Sponsor
 	}
 	return out
 }

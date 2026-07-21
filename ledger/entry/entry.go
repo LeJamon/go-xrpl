@@ -80,6 +80,9 @@ const (
 	// Lending protocol
 	TypeLoanBroker Type = 0x0088 // Loan brokers
 	TypeLoan       Type = 0x0089 // Loans
+
+	// Sponsorship
+	TypeSponsorship Type = 0x0090 // Sponsor/sponsee relationship
 )
 
 // String returns the concrete ledger entry type name. Pseudo-types are unknown.
