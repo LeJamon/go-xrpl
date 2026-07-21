@@ -310,7 +310,7 @@ func (v *VaultCreate) Apply(ctx *tx.ApplyContext) ter.Result {
 
 	// Give the pseudo-account an empty holding for the vault asset (a trust line
 	// for an IOU asset; nothing for XRP).
-	lineDelta, res := addEmptyHolding(ctx, pseudoID, asset)
+	lineDelta, res := addEmptyHolding(ctx, pseudoID, asset, ctx.PriorBalance())
 	if res != ter.TesSUCCESS {
 		return res
 	}

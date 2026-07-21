@@ -89,7 +89,7 @@ func checkFrozen(view tx.LedgerView, asset tx.Asset, account [20]byte) ter.Resul
 
 // addEmptyMPTHolding creates a zero-balance MPToken for accountID under the MPT
 // asset (nothing when the account is the issuer). Returns the owner-count delta.
-func addEmptyMPTHolding(ctx *tx.ApplyContext, accountID [20]byte, asset tx.Asset) (int32, ter.Result) {
+func addEmptyMPTHolding(ctx *tx.ApplyContext, accountID [20]byte, asset tx.Asset, priorBalance uint64) (int32, ter.Result) {
 	id, ok := assetMPTID(asset)
 	if !ok {
 		return 0, ter.TefINTERNAL
@@ -111,6 +111,16 @@ func addEmptyMPTHolding(ctx *tx.ApplyContext, accountID [20]byte, asset tx.Asset
 	}
 	if issuance.Issuer == accountID {
 		return 0, ter.TesSUCCESS
+	}
+	holder := ctx.Account
+	if accountID != ctx.AccountID {
+		holder, err = tx.ReadAccountRoot(ctx.View, accountID)
+		if err != nil || holder == nil {
+			return 0, ter.TefINTERNAL
+		}
+	}
+	if priorBalance < ctx.AccountReserve(tx.ConfineOwnerCount(holder.OwnerCount, 1)) {
+		return 0, ter.TecINSUFFICIENT_RESERVE
 	}
 	token := &state.MPTokenData{Account: accountID, MPTokenIssuanceID: id}
 	dir, err := state.DirInsert(ctx.View, keylet.OwnerDir(accountID), tokenKey.Key, false, func(d *state.DirectoryNode) {
@@ -239,12 +249,12 @@ func canAddHoldingIssue(view tx.LedgerView, asset tx.Asset) ter.Result {
 // The account SLE must already exist in the view. Returns the owner-count delta
 // the caller should apply to the holding account (1 when a line was created).
 // Reference: rippled View.cpp addEmptyHolding (Issue overload).
-func addEmptyHolding(ctx *tx.ApplyContext, accountID [20]byte, asset tx.Asset) (int32, ter.Result) {
+func addEmptyHolding(ctx *tx.ApplyContext, accountID [20]byte, asset tx.Asset, priorBalance uint64) (int32, ter.Result) {
 	if isNativeAsset(asset) {
 		return 0, ter.TesSUCCESS
 	}
 	if asset.IsMPT() {
-		return addEmptyMPTHolding(ctx, accountID, asset)
+		return addEmptyMPTHolding(ctx, accountID, asset, priorBalance)
 	}
 	issuerID, err := state.DecodeAccountID(asset.Issuer)
 	if err != nil {
@@ -273,7 +283,7 @@ func addEmptyHolding(ctx *tx.ApplyContext, accountID [20]byte, asset tx.Asset) (
 			return 0, ter.TefINTERNAL
 		}
 	}
-	if ctx.PriorBalance() < ctx.AccountReserve(tx.ConfineOwnerCount(holder.OwnerCount, 1)) {
+	if priorBalance < ctx.AccountReserve(tx.ConfineOwnerCount(holder.OwnerCount, 1)) {
 		return 0, ter.TecNO_LINE_INSUF_RESERVE
 	}
 

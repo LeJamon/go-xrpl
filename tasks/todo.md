@@ -1380,3 +1380,30 @@ Behavioral oracle: clean local rippled `3.2.0` worktree at
   test-design, or rippled-conformance defect. Rippled does not shed its manifest
   job queue; the bounded saturation policy is an intentional Go overload
   safeguard required to keep this repository's single router responsive.
+
+# Issue #1404 — LoanSet holding owner count
+
+- [x] Validate issue state, repository, base branch, and rippled 3.2.0 behavior.
+- [x] Create `fix/issue-1404-loanset-owner-count` from `origin/main`.
+- [x] Apply borrower and broker-owner holding deltas without clobbering the submitter.
+- [x] Add focused regression coverage for new/existing holdings and account roles.
+- [x] Format, test, build, vet, lint, and review the final diff.
+- [x] Commit, push, and open the pull request.
+- [x] Finalize PR #1406 against rippled v3.2.0, including reserve checks and
+      end-to-end LoanSet coverage.
+
+## Review
+
+- LoanSet now applies the owner-count delta returned by borrower and origination-
+  fee holding creation. Submitter deltas update `ctx.Account`; counterparty deltas
+  use the canonical view-backed AccountRoot writer.
+- Zero deltas from XRP, issuer accounts, and existing IOU/MPT holdings remain
+  no-ops. Focused coverage exercises new IOU and MPT holdings, existing holdings,
+  submitter and counterparty borrowers, and the fee-recipient role.
+- Rippled v3.2.0 performs the same count transition inside `addEmptyHolding`.
+- Holding creation now receives the caller's explicit pre-fee or ledger balance,
+  matching rippled's reserve checks for both IOU trust lines and MPT holdings.
+- End-to-end LoanSet coverage verifies successful and failed reserve boundaries,
+  rollback, top-up recovery, signer roles, owner directories, and existing holdings.
+- Passed lending transaction and integration tests, `just build-all`, `just vet`,
+  `just lint`, and `git diff --check`.
