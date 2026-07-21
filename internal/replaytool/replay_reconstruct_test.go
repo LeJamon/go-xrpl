@@ -373,7 +373,7 @@ func TestApplyAffectedNode_AMMCreateDefaults(t *testing.T) {
 	}}
 
 	for _, node := range []map[string]any{ammNode, line1Node, line2Node} {
-		if err := applyAffectedNode(stateMap, node, txHash, testLedgerSeq, deltas, deletedDirs); err != nil {
+		if err := applyAffectedNode(stateMap, node, txHash, testLedgerSeq, deltas, deletedDirs, nil); err != nil {
 			t.Fatalf("applyAffectedNode: %v", err)
 		}
 	}
@@ -436,6 +436,7 @@ func TestApplyAffectedNode_AMMAsset2Default(t *testing.T) {
 		testLedgerSeq,
 		map[[32]byte]*dirDelta{},
 		map[[32]byte]bool{},
+		nil,
 	)
 	if err != nil {
 		t.Fatalf("applyAffectedNode: %v", err)
@@ -771,10 +772,10 @@ func TestRecordMembership_LastOperationWins(t *testing.T) {
 
 	t.Run("remove then add", func(t *testing.T) {
 		deltas := map[[32]byte]*dirDelta{}
-		if err := recordMembership(nil, deltas, objectKey, "DID", fields, false); err != nil {
+		if err := recordMembership(nil, deltas, objectKey, "DID", fields, false, nil); err != nil {
 			t.Fatalf("record remove: %v", err)
 		}
-		if err := recordMembership(nil, deltas, objectKey, "DID", fields, true); err != nil {
+		if err := recordMembership(nil, deltas, objectKey, "DID", fields, true, nil); err != nil {
 			t.Fatalf("record add: %v", err)
 		}
 		members := applyDirDelta([][32]byte{objectKey}, deltas[pageKey])
@@ -785,10 +786,10 @@ func TestRecordMembership_LastOperationWins(t *testing.T) {
 
 	t.Run("add then remove", func(t *testing.T) {
 		deltas := map[[32]byte]*dirDelta{}
-		if err := recordMembership(nil, deltas, objectKey, "DID", fields, true); err != nil {
+		if err := recordMembership(nil, deltas, objectKey, "DID", fields, true, nil); err != nil {
 			t.Fatalf("record add: %v", err)
 		}
-		if err := recordMembership(nil, deltas, objectKey, "DID", fields, false); err != nil {
+		if err := recordMembership(nil, deltas, objectKey, "DID", fields, false, nil); err != nil {
 			t.Fatalf("record remove: %v", err)
 		}
 		members := applyDirDelta(nil, deltas[pageKey])
@@ -1197,6 +1198,63 @@ func TestReconstructFromMeta_LoanDeleteDirectories(t *testing.T) {
 	}
 	if _, found, err := corrected.Get(loanKey); err != nil || found {
 		t.Fatalf("deleted loan present (found=%v err=%v)", found, err)
+	}
+	assertDirectoryMembers(t, corrected, borrowerDir)
+	assertDirectoryMembers(t, corrected, brokerDir)
+}
+
+func TestReconstructFromMeta_LoanDeleteAfterLoanBrokerDelete(t *testing.T) {
+	const borrower = "rEaWzpDUL2cBckwDJhRENZiKCbNKwG2cAZ"
+	const brokerAccount = "rpRrVjCLggyjBaAYreukcyuWuzb23wuWrn"
+	const brokerOwner = "rrrrrrrrrrrrrrrrrrrrBZbvji"
+	const brokerIDHex = "33353F075781FD714AE43F61FC6B4A88BCB5CE3C348FE0FF40B1F6F803C7D86A"
+	const loanKeyHex = "6BABEC1111496AD23DDFCD51DAF11AF98DC018F297A2EE82509D7881A2F50F9C"
+
+	borrowerID, _ := state.DecodeAccountID(borrower)
+	brokerAccountID, _ := state.DecodeAccountID(brokerAccount)
+	brokerID := mustIndex(t, brokerIDHex)
+	brokerKey := keylet.LoanBrokerByID(brokerID).Key
+	loanKey := mustIndex(t, loanKeyHex)
+	borrowerDir := keylet.OwnerDirPage(borrowerID, 0).Key
+	brokerDir := keylet.OwnerDirPage(brokerAccountID, 0).Key
+	loanFields := map[string]any{
+		"LedgerEntryType": "Loan", "Flags": 0, "OwnerNode": "0", "LoanBrokerNode": "0",
+		"Borrower": borrower, "LoanBrokerID": brokerIDHex, "LoanSequence": uint32(1),
+		"StartDate": uint32(836247371), "PaymentInterval": uint32(400), "PeriodicPayment": "10000",
+	}
+	preState := putAll(t, map[[32]byte][]byte{
+		brokerKey: loanBrokerSLE(t, brokerAccount, brokerOwner),
+		loanKey:   encodeSLE(t, loanFields),
+		borrowerDir: encodeSLE(t, map[string]any{
+			"LedgerEntryType": "DirectoryNode", "Flags": 0, "Owner": borrower,
+			"RootIndex": protocol.Hash256Hex(borrowerDir), "Indexes": []string{loanKeyHex},
+		}),
+		brokerDir: encodeSLE(t, map[string]any{
+			"LedgerEntryType": "DirectoryNode", "Flags": 0, "Owner": brokerAccount,
+			"RootIndex": protocol.Hash256Hex(brokerDir), "Indexes": []string{loanKeyHex},
+		}),
+	})
+	finalFields := maps.Clone(loanFields)
+	delete(finalFields, "LedgerEntryType")
+	meta := encodeMeta(t,
+		map[string]any{"DeletedNode": map[string]any{
+			"LedgerEntryType": "LoanBroker", "LedgerIndex": brokerIDHex,
+			"FinalFields": map[string]any{"Account": brokerAccount, "OwnerNode": "0"},
+		}},
+		map[string]any{"DeletedNode": map[string]any{
+			"LedgerEntryType": "Loan", "LedgerIndex": loanKeyHex,
+			"FinalFields": finalFields,
+		}},
+	)
+
+	corrected, err := reconstructFromMeta(preState, []metaTx{{Blob: meta}}, testLedgerSeq)
+	if err != nil {
+		t.Fatalf("reconstructFromMeta: %v", err)
+	}
+	for name, key := range map[string][32]byte{"loan": loanKey, "broker": brokerKey} {
+		if _, found, err := corrected.Get(key); err != nil || found {
+			t.Fatalf("deleted %s present (found=%v err=%v)", name, found, err)
+		}
 	}
 	assertDirectoryMembers(t, corrected, borrowerDir)
 	assertDirectoryMembers(t, corrected, brokerDir)
