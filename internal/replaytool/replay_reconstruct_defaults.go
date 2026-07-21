@@ -161,6 +161,11 @@ var requiredDefaults = map[string][]createdField{
 		{Name: "OwnerNode", Value: "0"},
 		{Name: "Balance", Value: "0"},
 	},
+	"Loan": {
+		{Name: "Flags", Value: 0},
+		{Name: "OwnerNode", Value: "0"},
+		{Name: "LoanBrokerNode", Value: "0"},
+	},
 	"AMM": {
 		{Name: "Flags", Value: 0},
 		{Name: "OwnerNode", Value: "0"},
