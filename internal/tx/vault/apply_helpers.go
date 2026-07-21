@@ -112,6 +112,18 @@ func addEmptyMPTHolding(ctx *tx.ApplyContext, accountID [20]byte, asset tx.Asset
 	if issuance.Issuer == accountID {
 		return 0, ter.TesSUCCESS
 	}
+	holder := ctx.Account
+	priorBalance := ctx.PriorBalance()
+	if accountID != ctx.AccountID {
+		holder, err = tx.ReadAccountRoot(ctx.View, accountID)
+		if err != nil || holder == nil {
+			return 0, ter.TefINTERNAL
+		}
+		priorBalance = holder.Balance
+	}
+	if priorBalance < ctx.ReserveForNewObject(holder.OwnerCount) {
+		return 0, ter.TecINSUFFICIENT_RESERVE
+	}
 	token := &state.MPTokenData{Account: accountID, MPTokenIssuanceID: id}
 	dir, err := state.DirInsert(ctx.View, keylet.OwnerDir(accountID), tokenKey.Key, false, func(d *state.DirectoryNode) {
 		d.Owner = accountID
@@ -267,13 +279,15 @@ func addEmptyHolding(ctx *tx.ApplyContext, accountID [20]byte, asset tx.Asset) (
 	}
 
 	holder := ctx.Account
+	priorBalance := ctx.PriorBalance()
 	if accountID != ctx.AccountID {
 		holder, err = tx.ReadAccountRoot(ctx.View, accountID)
 		if err != nil || holder == nil {
 			return 0, ter.TefINTERNAL
 		}
+		priorBalance = holder.Balance
 	}
-	if ctx.PriorBalance() < ctx.AccountReserve(tx.ConfineOwnerCount(holder.OwnerCount, 1)) {
+	if priorBalance < ctx.AccountReserve(tx.ConfineOwnerCount(holder.OwnerCount, 1)) {
 		return 0, ter.TecNO_LINE_INSUF_RESERVE
 	}
 
