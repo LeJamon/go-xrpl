@@ -499,7 +499,6 @@ func escrowUnlockIOU(
 	if currentRate != 0 && currentRate < effectiveRate {
 		effectiveRate = currentRate
 	}
-	// If no rate was locked (0 or parityRate), use currentRate
 	if effectiveRate == 0 {
 		effectiveRate = currentRate
 	}
@@ -1099,9 +1098,8 @@ func divideAmountByRate(amount tx.Amount, rate uint32) tx.Amount {
 		return amount
 	}
 
-	// For IOU: result = amount * 1_000_000_000 / rate
-	// Use MulRatio which does amount * num / den
-	return amount.MulRatio(parityRate, rate, true)
+	rateAmount := state.NewIssuedAmountFromValue(int64(rate), -9, "", "")
+	return state.DivRound(amount, rateAmount, amount.Currency, amount.Issuer, true)
 }
 
 // createMPTokenForEscrow creates a new MPToken SLE for holderID during escrow unlock.
