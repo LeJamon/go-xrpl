@@ -1407,3 +1407,51 @@ Behavioral oracle: clean local rippled `3.2.0` worktree at
   rollback, top-up recovery, signer roles, owner directories, and existing holdings.
 - Passed lending transaction and integration tests, `just build-all`, `just vet`,
   `just lint`, and `git diff --check`.
+
+# Issue #1408 — IOU EscrowFinish divideRound parity
+
+Target: `origin/main` at `a7caa2fb4e2efed48288c42294ede0783d92fd40`.
+Behavioral oracle: clean local rippled `3.2.0` worktree at
+`3c43f4614f87965298773279ff5b85d4c56c637b`.
+
+## Plan
+
+- [x] Validate GitHub access, issue state and discussion, linked PRs, active
+      release branches, exact base, clean dedicated worktree, and oracle provenance.
+- [x] Trace IOU escrow transfer-fee calculation and rate selection in go-xrpl and
+      rippled v3.2.0, including parity and issuer-involved behavior.
+- [x] Add focused regressions for the ledger 3,275,748 rounding value and
+      `min(lockedRate, currentRate)` selection.
+- [x] Replace the escrow-only `MulRatio` shortcut with rippled's non-strict
+      `divideRound` operation while preserving the escrow amount's issue.
+- [x] Run formatting, focused escrow and state tests, affected transaction and
+      integration suites, build, vet, strict/advisory lint, and diff checks.
+- [x] Attempt the ledger 3,275,748 replay and record the unavailable local database
+      and checkpoint inputs when it cannot run.
+- [x] Review the final diff for arithmetic parity, failure paths, adjacent rate
+      behavior, and test coverage; record exact results below.
+- [ ] Stage only intentional files, commit, push, open the PR against `main`, and
+      verify the published head and initial CI state.
+
+## Review
+
+- Replaced the escrow-only `MulRatio` shortcut with non-strict `state.DivRound`,
+  representing the transfer rate as mantissa `rate` at exponent `-9` and retaining
+  the escrow amount's currency and issuer. This matches rippled v3.2.0
+  `Rate2.cpp` and `EscrowHelpers.h` behavior without changing global `MulRatio`.
+- Added an exact regression for `100 / 1.01 = 99.00990099009901` and end-to-end
+  coverage proving the lower of the locked and current issuer rates is used.
+  Existing parity and issuer guards remain unchanged.
+- Passed focused transaction, integration, and state tests; the complete
+  `internal/tx/...` shard; focused race tests; repeated rounding/rate-selection
+  regressions; `just build-all`; `just vet`; strict CI and advisory golangci-lint
+  v2.11.3; gofmt; and `git diff --check`.
+- The full integration shard passed the changed escrow package and reproduced only
+  the repository's existing out-of-scope Vault, XChain, Batch, and NFT conformance
+  corpus failures.
+- The one-ledger replay started with rippled v3.2.0 compatibility semantics but
+  could not connect to PostgreSQL at `localhost:5432`. No ledger 3,275,748 fixture
+  or checkpoint exists in the workspace, so account/transaction roots could not
+  be replay-verified locally.
+- Three independent final reviews found no Go-correctness, test-quality,
+  verification, or rippled v3.2.0 conformance findings.

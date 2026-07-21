@@ -11,6 +11,15 @@ import (
 	"github.com/LeJamon/go-xrpl/keylet"
 )
 
+func TestDivideAmountByRateUsesCanonicalIOURounding(t *testing.T) {
+	const issuer = "rDC7wGzpzUjS2qTASSzGWkUytS7FD9xyVK"
+	amount := state.NewIssuedAmountFromValue(1_000_000_000_000_000, -13, "USD", issuer)
+
+	want := state.NewIssuedAmountFromValue(9_900_990_099_009_901, -14, "USD", issuer)
+	require.Equal(t, want, divideAmountByRate(amount, 1_010_000_000))
+	require.Equal(t, amount, divideAmountByRate(amount, parityRate))
+}
+
 func TestComputeMPTTransferFeeUsesCanonicalRounding(t *testing.T) {
 	const originalAmount = uint64(10_000)
 
