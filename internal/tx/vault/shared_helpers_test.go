@@ -118,8 +118,8 @@ func TestWithdrawSelfMPTReserveAndOwnerCount(t *testing.T) {
 		require.Equal(t, uint32(2), ctx.Account.OwnerCount)
 	})
 
-	t.Run("second object is reserve free and increments owner count", func(t *testing.T) {
-		ctx, view := build(t, 1, 0)
+	t.Run("second object requires full reserve and increments owner count", func(t *testing.T) {
+		ctx, view := build(t, 1, 40)
 		require.Equal(t, ter.TesSUCCESS, addWithdrawDestinationHolding(ctx, asset))
 		exists, err := view.Exists(keylet.MPTokenByID(id, holder))
 		require.NoError(t, err)

@@ -190,7 +190,6 @@ func TestLoanSetHoldingOwnerCount(t *testing.T) {
 			}
 			assertLoanSetOwnedObjects(t, f, f.borrower)
 		})
-
 	}
 
 	t.Run("IOU origination fee creates broker owner holding", func(t *testing.T) {
