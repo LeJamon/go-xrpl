@@ -38,6 +38,7 @@ func completedCatchUpAcquisition(t *testing.T, seq uint32) *inbound.Ledger {
 		{NodeData: rootData},
 	}))
 	require.NoError(t, il.GotStateNodes(wire))
+	il.CollectMissingRequest(false)
 	require.True(t, il.IsComplete(),
 		"state + empty tx acquisition must be complete after its nodes arrive")
 	return il
@@ -121,6 +122,7 @@ func TestCompleteInboundLedger_SingleLedgerCatchUpUsesHeldSeam(t *testing.T) {
 		{NodeData: rootData},
 	}))
 	require.NoError(t, il.GotStateNodes(wire))
+	il.CollectMissingRequest(false)
 	require.True(t, il.IsComplete())
 	r.fetchTracker.Track(il)
 

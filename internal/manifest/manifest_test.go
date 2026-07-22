@@ -28,7 +28,7 @@ var secp256k1CurveOrderN, _ = new(big.Int).SetString(
 // selectively corrupt fields. Returns the serialized manifest bytes and
 // the two public keys (master, ephemeral) so callers can check the
 // stored state after apply.
-func buildManifest(t *testing.T, seq uint32, revoked bool, masterSeed, ephemeralSeed byte) (serialized []byte, masterPub [33]byte, ephemeralPub [33]byte) {
+func buildManifest(t testing.TB, seq uint32, revoked bool, masterSeed, ephemeralSeed byte) (serialized []byte, masterPub [33]byte, ephemeralPub [33]byte) {
 	t.Helper()
 
 	masterPubBytes, masterPriv := deterministicEd25519Keypair(masterSeed)
@@ -73,7 +73,7 @@ func buildManifest(t *testing.T, seq uint32, revoked bool, masterSeed, ephemeral
 // signing fields). Kept in the test to catch preimage drift — if the
 // package changes the preimage, this helper stays the old one and the
 // test fails loudly.
-func signingPreimageFromJSON(t *testing.T, src map[string]any) []byte {
+func signingPreimageFromJSON(t testing.TB, src map[string]any) []byte {
 	t.Helper()
 	filtered := make(map[string]any, len(src))
 	for k, v := range src {
@@ -95,6 +95,30 @@ func signingPreimageFromJSON(t *testing.T, src map[string]any) []byte {
 	out = append(out, prefix[:]...)
 	out = append(out, body...)
 	return out
+}
+
+func BenchmarkDeserializeManifest(b *testing.B) {
+	serialized, _, _ := buildManifest(b, 1, false, 0x01, 0x02)
+	b.ReportAllocs()
+	for b.Loop() {
+		if _, err := manifest.Deserialize(serialized); err != nil {
+			b.Fatal(err)
+		}
+	}
+}
+
+func BenchmarkVerifyManifest(b *testing.B) {
+	serialized, _, _ := buildManifest(b, 1, false, 0x01, 0x02)
+	m, err := manifest.Deserialize(serialized)
+	if err != nil {
+		b.Fatal(err)
+	}
+	b.ReportAllocs()
+	for b.Loop() {
+		if err := m.Verify(); err != nil {
+			b.Fatal(err)
+		}
+	}
 }
 
 // deterministicEd25519Keypair returns a 33-byte xrpl-style public key

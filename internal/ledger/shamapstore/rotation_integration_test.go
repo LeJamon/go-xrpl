@@ -2,11 +2,13 @@ package shamapstore_test
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"testing"
 	"time"
 
 	"github.com/LeJamon/go-xrpl/internal/ledger/shamapstore"
+	"github.com/LeJamon/go-xrpl/shamap"
 	"github.com/LeJamon/go-xrpl/storage/kvstore/memorydb"
 	"github.com/LeJamon/go-xrpl/storage/nodestore"
 )
@@ -111,5 +113,48 @@ func TestRotation_ReclaimsNodeStoreSpace(t *testing.T) {
 	// The live state leaf, re-written at seq 25, must survive every rotation.
 	if !exists(liveKey) {
 		t.Fatal("live account state must survive rotation")
+	}
+}
+
+func TestRotation_AdvancesAcquisitionFloorBeforeLiveStateRefresh(t *testing.T) {
+	ctx := context.Background()
+	db := nodestore.NewKVDatabase(memorydb.New(), "mem", 100, time.Hour)
+	defer db.Close()
+	family := shamap.NewNodeStoreFamily(db)
+	data := []byte("shared-live-node")
+	hash := [32]byte(nodestore.ComputeHash256(data))
+	if err := family.StoreBatch(ctx, []shamap.FlushEntry{{
+		Hash: hash, Data: data, LedgerSeq: 100, MapType: shamap.TypeState,
+	}}); err != nil {
+		t.Fatal(err)
+	}
+
+	store, err := shamapstore.New(false, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	rot := shamapstore.NewRotator(store, db, nil,
+		shamapstore.RotationConfig{DeleteInterval: 256}, nil)
+	rot.SetStateRefresh(func(_ context.Context, seq uint32) error {
+		err := family.StoreBatch(ctx, []shamap.FlushEntry{{
+			Hash: hash, Data: data, LedgerSeq: 150, MapType: shamap.TypeState,
+		}})
+		if !errors.Is(err, shamap.ErrStoreBelowMinimum) {
+			t.Fatalf("historical write during refresh = %v, want %v", err, shamap.ErrStoreBelowMinimum)
+		}
+		return family.StoreBatch(ctx, []shamap.FlushEntry{{
+			Hash: hash, Data: data, LedgerSeq: seq, MapType: shamap.TypeState,
+		}})
+	}, family.SetMinimumLedgerSeq, family.BeginPrune)
+
+	rot.NotifyForTest(200)
+	rot.NotifyForTest(456)
+
+	stored, err := db.Fetch(ctx, nodestore.Hash256(hash))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stored == nil || stored.LedgerSeq != 456 {
+		t.Fatalf("live shared node after rotation = %+v, want sequence 456", stored)
 	}
 }

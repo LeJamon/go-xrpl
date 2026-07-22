@@ -1,8 +1,11 @@
 package inbound
 
 import (
+	"context"
+	"errors"
 	"io"
 	"log/slog"
+	"sync"
 	"testing"
 	"time"
 
@@ -13,6 +16,31 @@ import (
 	"github.com/LeJamon/go-xrpl/shamap"
 )
 
+type trackerBlockingFamily struct {
+	base    shamap.Family
+	entered chan struct{}
+	release chan struct{}
+	once    sync.Once
+	block   bool
+}
+
+func (f *trackerBlockingFamily) Fetch(ctx context.Context, hash [32]byte) ([]byte, error) {
+	if !f.block {
+		return f.base.Fetch(ctx, hash)
+	}
+	f.once.Do(func() { close(f.entered) })
+	select {
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	case <-f.release:
+		return f.base.Fetch(ctx, hash)
+	}
+}
+
+func (f *trackerBlockingFamily) StoreBatch(ctx context.Context, entries []shamap.FlushEntry) error {
+	return f.base.StoreBatch(ctx, entries)
+}
+
 func discardLogger() *slog.Logger {
 	return slog.New(slog.NewTextHandler(io.Discard, nil))
 }
@@ -22,7 +50,7 @@ func discardLogger() *slog.Logger {
 func driveToFailure(il *Ledger) {
 	base := time.Unix(1_700_000_000, 0)
 	il.lastTimer = base
-	for i := 1; i <= ledgerTimeoutRetriesMax+1; i++ {
+	for i := 1; i <= ledgerTimeoutRetriesMax+2; i++ {
 		il.OnTimer(base.Add(time.Duration(i) * acquireTimerInterval))
 	}
 }
@@ -94,6 +122,7 @@ func newAcquiring(t *testing.T, seq uint32) *Ledger {
 	if il.State() != StateWantState {
 		t.Fatalf("state = %d, want StateWantState", il.State())
 	}
+	il.CollectMissingRequest(false)
 	return il
 }
 
@@ -142,10 +171,10 @@ func TestTracker_CompletedReportedThenSwept(t *testing.T) {
 	if err := il.GotStateNodes(wire); err != nil {
 		t.Fatalf("GotStateNodes: %v", err)
 	}
+	il.CollectMissingRequest(false)
 	if !il.IsComplete() {
 		t.Fatalf("acquisition not complete")
 	}
-
 	// rippled keeps a completed acquisition in mLedgers until sweep, so
 	// fetch_info reports complete:true for a short window.
 	entry, ok := tr.Info()["300"].(map[string]any)
@@ -161,6 +190,10 @@ func TestTracker_CompletedReportedThenSwept(t *testing.T) {
 	if _, hasPeers := entry["peers"]; hasPeers {
 		t.Errorf("completed entry must not report peers, got %#v", entry)
 	}
+	if got := tr.Find(hash); got != il {
+		t.Fatal("fetch_info retired a completed acquisition before its owner")
+	}
+	tr.RemoveExpectedWithSnapshot(il, il.Snapshot(), true)
 
 	// Once the retention window elapses it is dropped.
 	tr.mu.Lock()
@@ -188,6 +221,7 @@ func TestTracker_LiveAcquisitionOverwritesSameSeqFailure(t *testing.T) {
 
 	tr := NewTracker()
 	tr.Track(failed)
+	tr.RemoveExpectedWithSnapshot(failed, failed.Snapshot(), false)
 	tr.Track(live)
 
 	entry, ok := tr.Info()["600"].(map[string]any)
@@ -207,16 +241,19 @@ func TestTracker_FailedReportedThenCleared(t *testing.T) {
 	var hash [32]byte
 	hash[0] = 0xEF
 	il := New(hash, 400, 3, discardLogger())
-	// Too few nodes drives the acquisition to StateFailed.
+	// Peer-originated base errors are recoverable; model the owner's terminal
+	// timeout verdict directly for this tracker-lifecycle test.
 	if err := il.GotBase([]message.LedgerNode{{NodeData: []byte{0x00}}}); err == nil {
 		t.Fatal("expected GotBase to fail with a single node")
 	}
-	if il.State() != StateFailed {
-		t.Fatalf("state = %d, want StateFailed", il.State())
-	}
+	il.mu.Lock()
+	il.state = StateFailed
+	il.err = errors.New("retry budget exhausted")
+	il.mu.Unlock()
 
 	tr := NewTracker()
 	tr.Track(il)
+	tr.RemoveExpectedWithSnapshot(il, il.Snapshot(), false)
 
 	entry, ok := tr.Info()["400"].(map[string]any)
 	if !ok || entry["failed"] != true {
@@ -238,12 +275,13 @@ func TestTracker_TimedOutDemotedToFailure(t *testing.T) {
 
 	tr := NewTracker()
 	tr.Track(il)
+	tr.RemoveExpectedWithSnapshot(il, il.Snapshot(), false)
 
 	entry, ok := tr.Info()["500"].(map[string]any)
 	if !ok || entry["failed"] != true {
 		t.Fatalf("timed-out acquisition should report {failed:true}, got %#v", tr.Info())
 	}
-	// It must have moved out of the active set into the failure history.
+	// The owner moved it out of the active set into the failure history.
 	tr.mu.Lock()
 	_, stillActive := tr.active[hash]
 	tr.mu.Unlock()
@@ -280,6 +318,170 @@ func TestTracker_NilSafe(t *testing.T) {
 	}
 }
 
+func TestTracker_DiscardExpectedLeavesNoTerminalRecord(t *testing.T) {
+	tracker := NewTracker()
+	ledger := New([32]byte{0xD1}, 700, 9, discardLogger())
+	tracker.Track(ledger)
+	if !tracker.DiscardExpected(ledger) {
+		t.Fatal("DiscardExpected did not remove the active acquisition")
+	}
+	if tracker.Find(ledger.Hash()) != nil {
+		t.Fatal("discarded acquisition remained active")
+	}
+	if info := tracker.Info(); len(info) != 0 {
+		t.Fatalf("discard recorded a terminal network result: %v", info)
+	}
+	if tracker.DiscardExpected(ledger) {
+		t.Fatal("discard was not idempotent")
+	}
+}
+
+func TestTracker_InfoUsesCachedFrontierWithoutStoreReads(t *testing.T) {
+	_, rootHash, rootData := buildBackedTestState(t, 32)
+	hdr, hash := encodeHeader(header.LedgerHeader{LedgerIndex: 501, AccountHash: rootHash})
+	family := &trackerBlockingFamily{
+		base:    shamap.NewMemoryNodeStoreFamily(),
+		entered: make(chan struct{}),
+		release: make(chan struct{}),
+	}
+	il := New(hash, 501, 7, discardLogger(), WithFamily(family))
+	requireNoError(t, il.GotBase([]message.LedgerNode{{NodeData: hdr}, {NodeData: rootData}}))
+	stateIDs, _ := il.CollectMissingRequest(false)
+	if len(stateIDs) == 0 {
+		t.Fatal("missing-node worker did not cache a state frontier")
+	}
+	family.block = true
+	defer close(family.release)
+	tr := NewTracker()
+	tr.Track(il)
+
+	infoDone := make(chan map[string]any, 1)
+	go func() {
+		infoDone <- tr.Info()
+	}()
+	select {
+	case info := <-infoDone:
+		entry, ok := info["501"].(map[string]any)
+		if !ok {
+			t.Fatalf("missing active acquisition: %#v", info)
+		}
+		needed, ok := entry["needed_state_hashes"].([]any)
+		if !ok || len(needed) == 0 {
+			t.Fatalf("cached state frontier missing: %#v", entry)
+		}
+	case <-time.After(100 * time.Millisecond):
+		t.Fatal("fetch_info blocked on a backing-store traversal")
+	}
+	select {
+	case <-family.entered:
+		t.Fatal("fetch_info read the backing store")
+	default:
+	}
+}
+
+func TestTracker_InfoDistinguishesUnscannedAndEmptyFrontiers(t *testing.T) {
+	il := newAcquiring(t, 503)
+	il.mu.Lock()
+	il.cacheMissingLocked(false, []shamap.MissingNode{})
+	il.mu.Unlock()
+
+	snap := il.Snapshot()
+	if snap.NeededState == nil || len(snap.NeededState) != 0 {
+		t.Fatalf("scanned empty frontier = %#v, want non-nil empty", snap.NeededState)
+	}
+	entry := AcquisitionJSON(snap)
+	needed, ok := entry["needed_state_hashes"].([]any)
+	if !ok || len(needed) != 0 {
+		t.Fatalf("needed_state_hashes = %#v, want present empty array", entry["needed_state_hashes"])
+	}
+
+	unscanned := New([32]byte{0x50}, 504, 7, discardLogger()).Snapshot()
+	if _, ok := AcquisitionJSON(unscanned)["needed_state_hashes"]; ok {
+		t.Fatal("unscanned frontier was emitted")
+	}
+}
+
+func TestTracker_InfoDoesNotWaitForWorkerStoreRead(t *testing.T) {
+	rootHash, rootData, wire := buildSourceMap(t, shamap.TypeState)
+	hdr, hash := encodeHeader(header.LedgerHeader{LedgerIndex: 502, AccountHash: rootHash})
+	family := &trackerBlockingFamily{
+		base:    shamap.NewMemoryNodeStoreFamily(),
+		entered: make(chan struct{}),
+		release: make(chan struct{}),
+	}
+	il := New(hash, 502, 7, discardLogger(), WithFamily(family))
+	requireNoError(t, il.GotBase([]message.LedgerNode{{NodeData: hdr}, {NodeData: rootData}}))
+	il.CollectMissingRequest(false)
+	tr := NewTracker()
+	tr.Track(il)
+
+	var depthOne message.LedgerNode
+	for _, node := range wire {
+		id, err := shamap.ParseNodeID(node.NodeID)
+		if err == nil && id.Depth() == 1 {
+			depthOne = node
+			break
+		}
+	}
+	if len(depthOne.NodeData) == 0 {
+		t.Fatal("source map had no depth-one node")
+	}
+
+	family.block = true
+	var releaseOnce sync.Once
+	release := func() { releaseOnce.Do(func() { close(family.release) }) }
+	defer release()
+	workerDone := make(chan error, 1)
+	applied := make(chan struct{})
+	go func() {
+		_, err := il.GotStateNodesUseful([]message.LedgerNode{depthOne})
+		close(applied)
+		if err == nil {
+			_, _, _, err = il.CollectMissingRequestContext(context.Background(), false)
+		}
+		workerDone <- err
+	}()
+	select {
+	case <-applied:
+	case <-time.After(time.Second):
+		t.Fatal("state reply application performed a backing-store completeness walk")
+	}
+	select {
+	case <-family.entered:
+	case <-time.After(time.Second):
+		t.Fatal("state worker did not block in the backing store")
+	}
+
+	infoDone := make(chan map[string]any, 1)
+	go func() { infoDone <- tr.Info() }()
+	select {
+	case info := <-infoDone:
+		entry, ok := info["502"].(map[string]any)
+		if !ok || entry["have_header"] != true {
+			t.Fatalf("cached acquisition snapshot missing: %#v", info)
+		}
+	case <-time.After(100 * time.Millisecond):
+		t.Fatal("fetch_info waited for the worker's backing-store read")
+	}
+
+	release()
+	select {
+	case err := <-workerDone:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("state worker did not resume")
+	}
+}
+
+func requireNoError(t *testing.T, err error) {
+	t.Helper()
+	if err != nil {
+		t.Fatal(err)
+	}
+}
+
 // TestInbound_FullAcquisitionWithTransactions drives a ledger with both a
 // non-empty state tree and a non-empty transaction tree through the full
 // acquisition. fetch_info reports have_transactions + needed_transaction_hashes
@@ -298,8 +500,9 @@ func TestInbound_FullAcquisitionWithTransactions(t *testing.T) {
 	if il.State() != StateWantState {
 		t.Fatalf("state = %d, want StateWantState", il.State())
 	}
-	if il.NeedsMissingTxNodeIDs() == nil {
-		t.Fatal("expected outstanding tx nodes to request")
+	requests, complete, err := il.CollectMissingAddedRequestsContext(context.Background(), []uint64{7})
+	if err != nil || complete || len(requests) == 0 || requests[0].Transaction {
+		t.Fatalf("initial state request = %#v, complete=%t, err=%v", requests, complete, err)
 	}
 
 	tr := NewTracker()
@@ -309,8 +512,8 @@ func TestInbound_FullAcquisitionWithTransactions(t *testing.T) {
 	if entry["have_transactions"] != false {
 		t.Errorf("have_transactions = %v, want false", entry["have_transactions"])
 	}
-	if needed, ok := entry["needed_transaction_hashes"].([]any); !ok || len(needed) == 0 {
-		t.Errorf("needed_transaction_hashes = %#v, want non-empty", entry["needed_transaction_hashes"])
+	if _, ok := entry["needed_transaction_hashes"]; ok {
+		t.Errorf("unscanned transaction frontier should be omitted, got %#v", entry["needed_transaction_hashes"])
 	}
 
 	// State completes first; the acquisition must still wait for the tx tree.
@@ -320,11 +523,20 @@ func TestInbound_FullAcquisitionWithTransactions(t *testing.T) {
 	if il.IsComplete() {
 		t.Fatal("acquisition complete before tx tree fetched")
 	}
+	requests, complete, err = il.CollectMissingReplyRequestsContext(context.Background(), []uint64{7})
+	if err != nil || complete || len(requests) == 0 || !requests[0].Transaction {
+		t.Fatalf("transaction request = %#v, complete=%t, err=%v", requests, complete, err)
+	}
+	entry = tr.Info()["700"].(map[string]any)
+	if needed, ok := entry["needed_transaction_hashes"].([]any); !ok || len(needed) == 0 {
+		t.Errorf("worker-cached transaction frontier = %#v, want non-empty", entry["needed_transaction_hashes"])
+	}
 
 	// Tx completes; the acquisition is now complete.
 	if err := il.GotTransactionNodes(txWire); err != nil {
 		t.Fatalf("GotTransactionNodes: %v", err)
 	}
+	il.CollectMissingRequest(false)
 	if !il.IsComplete() {
 		t.Fatal("acquisition not complete after both trees fetched")
 	}
@@ -373,6 +585,7 @@ func TestInbound_EmptyTxTreeImmediatelyComplete(t *testing.T) {
 	if err := il.GotStateNodes(stateWire); err != nil {
 		t.Fatalf("GotStateNodes: %v", err)
 	}
+	il.CollectMissingRequest(false)
 	if !il.IsComplete() {
 		t.Fatal("acquisition with empty tx tree should complete on state")
 	}

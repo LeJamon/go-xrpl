@@ -20,10 +20,7 @@ var nid_gradientKey = func() [32]byte {
 
 // nodeID is a test-only replacement for the removed NewNodeID.
 func nodeID(depth uint8, id [32]byte) (NodeID, error) {
-	if depth > MaxDepth {
-		return NodeID{}, ErrMaxDepthExceeded
-	}
-	return NodeID{depth: depth, id: id}, nil
+	return createNodeID(depth, id)
 }
 
 func TestNid_NewNodeID_ValidDepths(t *testing.T) {
@@ -251,6 +248,16 @@ func TestNid_UnmarshalBinary_ExceedsMaxDepth(t *testing.T) {
 	_, err := ParseNodeID(data)
 	if !errors.Is(err, ErrMaxDepthExceeded) {
 		t.Fatalf("expected ErrMaxDepthExceeded, got %v", err)
+	}
+}
+
+func TestNid_ParseNodeID_RejectsNonCanonicalPath(t *testing.T) {
+	data := make([]byte, NodeIDSize)
+	data[0] = 0x1F
+	data[32] = 1
+	_, err := ParseNodeID(data)
+	if !errors.Is(err, ErrNonCanonicalNodeID) {
+		t.Fatalf("expected ErrNonCanonicalNodeID, got %v", err)
 	}
 }
 

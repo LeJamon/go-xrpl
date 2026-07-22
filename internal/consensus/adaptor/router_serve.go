@@ -2,6 +2,7 @@ package adaptor
 
 import (
 	"fmt"
+	"time"
 
 	"github.com/LeJamon/go-xrpl/internal/consensus"
 	"github.com/LeJamon/go-xrpl/internal/ledger"
@@ -10,6 +11,15 @@ import (
 	"github.com/LeJamon/go-xrpl/internal/peermanagement/message"
 	"github.com/LeJamon/go-xrpl/shamap"
 )
+
+func (r *Router) invalidFutureLedgerSequence(seq uint32) bool {
+	svc := r.adaptor.LedgerService()
+	if svc == nil || svc.GetValidatedLedgerAge() > 10*time.Second {
+		return false
+	}
+	validated := svc.GetValidatedLedgerIndex()
+	return seq > validated && seq-validated > 10
+}
 
 func (r *Router) handleGetLedger(msg *peermanagement.InboundMessage) {
 	defer r.recoverFrame(msg, "get_ledger")
@@ -23,6 +33,43 @@ func (r *Router) handleGetLedger(msg *peermanagement.InboundMessage) {
 	if !ok {
 		return
 	}
+	if req.InfoType < message.LedgerInfoBase || req.InfoType > message.LedgerInfoTsCandidate {
+		r.adaptor.IncPeerBadData(uint64(msg.PeerID), "get-ledger-invalid-itype")
+		return
+	}
+	if req.InfoType == message.LedgerInfoTsCandidate && len(req.LedgerHash) == 0 {
+		r.adaptor.IncPeerBadData(uint64(msg.PeerID), "get-ledger-missing-txset-hash")
+		return
+	}
+	if req.InfoType != message.LedgerInfoTsCandidate &&
+		len(req.LedgerHash) == 0 && !req.HasLedgerSeq() && req.LType != message.LedgerTypeClosed {
+		r.adaptor.IncPeerBadData(uint64(msg.PeerID), "get-ledger-invalid-request")
+		return
+	}
+	if req.LType < message.LedgerTypeAccepted || req.LType > message.LedgerTypeClosed {
+		r.adaptor.IncPeerBadData(uint64(msg.PeerID), "get-ledger-invalid-ltype")
+		return
+	}
+	if len(req.LedgerHash) != 0 && len(req.LedgerHash) != 32 {
+		r.adaptor.IncPeerBadData(uint64(msg.PeerID), "get-ledger-invalid-hash")
+		return
+	}
+	if req.HasLedgerSeq() && r.invalidFutureLedgerSequence(req.LedgerSeq) {
+		r.adaptor.IncPeerBadData(uint64(msg.PeerID), "get-ledger-invalid-sequence")
+		return
+	}
+	if req.InfoType != message.LedgerInfoBase {
+		if len(req.NodeIDs) == 0 {
+			r.adaptor.IncPeerBadData(uint64(msg.PeerID), "get-ledger-invalid-nodeids")
+			return
+		}
+		for _, rawID := range req.NodeIDs {
+			if _, _, valid := parseSHAMapNodeID(rawID); !valid {
+				r.adaptor.IncPeerBadData(uint64(msg.PeerID), "get-ledger-invalid-nodeid")
+				return
+			}
+		}
+	}
 
 	// qtINDIRECT is the only valid query_type. A present-but-different
 	// value is invalid data: charge the peer and drop the request without
@@ -32,6 +79,12 @@ func (r *Router) handleGetLedger(msg *peermanagement.InboundMessage) {
 		r.logger.Debug("get_ledger rejected: invalid query_type",
 			"peer", msg.PeerID, "query_type", int32(*req.QueryType))
 		r.adaptor.IncPeerBadData(uint64(msg.PeerID), "get-ledger-bad-querytype")
+		return
+	}
+	if req.HasQueryDepth() && (req.InfoType == message.LedgerInfoBase || req.QueryDepth > maxQueryDepth) {
+		r.logger.Debug("get_ledger rejected: invalid query_depth",
+			"peer", msg.PeerID, "itype", req.InfoType, "query_depth", req.QueryDepth)
+		r.adaptor.IncPeerBadData(uint64(msg.PeerID), "get-ledger-bad-querydepth")
 		return
 	}
 
@@ -46,29 +99,6 @@ func (r *Router) handleGetLedger(msg *peermanagement.InboundMessage) {
 	// the response is TMLedgerData{type=liTS_CANDIDATE, ...}.
 	if req.InfoType == message.LedgerInfoTsCandidate {
 		r.serveTxSet(msg.PeerID, req)
-		return
-	}
-
-	// liBASE / liAS_NODE / liTX_NODE all operate on a stored ledger; only
-	// these three plus liTS_CANDIDATE are served, so anything else is
-	// dropped.
-	switch req.InfoType {
-	case message.LedgerInfoBase, message.LedgerInfoAsNode, message.LedgerInfoTxNode:
-	default:
-		return
-	}
-
-	// Reject a malformed lookup before touching the ledger service, the way
-	// rippled's onMessage(TMGetLedger) does: a non-candidate request that names
-	// neither a hash, a sequence, nor ltCLOSED has nothing to resolve, and an
-	// ltype outside [ltACCEPTED, ltCLOSED] is invalid. Both are bad data —
-	// charge the peer and drop without disconnecting.
-	if len(req.LedgerHash) != 32 && !req.HasLedgerSeq() && req.LType != message.LedgerTypeClosed {
-		r.adaptor.IncPeerBadData(uint64(msg.PeerID), "get-ledger-invalid-request")
-		return
-	}
-	if req.LType < message.LedgerTypeAccepted || req.LType > message.LedgerTypeClosed {
-		r.adaptor.IncPeerBadData(uint64(msg.PeerID), "get-ledger-invalid-ltype")
 		return
 	}
 
@@ -221,10 +251,7 @@ func (r *Router) serveLedgerMapNodes(snapshot func() (*shamap.SHAMap, error), re
 		r.logger.Debug("ledger node serve: map snapshot unavailable", "error", err, "peer", peerID)
 		return nil
 	}
-	queryDepth := int(req.QueryDepth)
-	if queryDepth == 0 {
-		queryDepth = defaultQueryDepth
-	}
+	queryDepth := r.ledgerQueryDepth(peerID, req)
 	return buildShaMapReplyNodes(m, req.NodeIDs, queryDepth, true, r.logger, peerID,
 		fmt.Sprintf("ledger %d %s", req.LedgerSeq, label))
 }
@@ -258,10 +285,7 @@ func (r *Router) serveTxSet(peerID peermanagement.PeerID, req *message.GetLedger
 	// NewTxSet returns an error before stashing on shamap.New failure.
 	txMap := ts.shamap()
 
-	queryDepth := int(req.QueryDepth)
-	if queryDepth == 0 {
-		queryDepth = defaultQueryDepth
-	}
+	queryDepth := r.ledgerQueryDepth(peerID, req)
 	// fatLeaves is always false for liTS_CANDIDATE.
 	const fatLeaves = false
 
@@ -296,6 +320,16 @@ func (r *Router) serveTxSet(peerID peermanagement.PeerID, req *message.GetLedger
 		"requested_nodes", len(req.NodeIDs))
 }
 
+func (r *Router) ledgerQueryDepth(peerID peermanagement.PeerID, req *message.GetLedger) int {
+	if req != nil && req.HasQueryDepth() {
+		return int(req.QueryDepth)
+	}
+	if latency, ok := r.adaptor.PeerLatency(uint64(peerID)); ok && latency >= 300*time.Millisecond {
+		return 2
+	}
+	return 1
+}
+
 // buildShaMapReplyNodes builds the LedgerNode payload of a TMLedgerData reply
 // (liTS_CANDIDATE / liAS_NODE / liTX_NODE), honouring requested
 // NodeIDs/QueryDepth and soft/hard reply caps. label identifies the source map
@@ -309,23 +343,6 @@ func buildShaMapReplyNodes(
 	peerID peermanagement.PeerID,
 	label string,
 ) []message.LedgerNode {
-	if len(requestedNodeIDs) == 0 {
-		wireNodes, err := m.WalkWireNodes()
-		if err != nil {
-			logger.Warn("failed to walk SHAMap for serve",
-				"error", err, "peer", peerID, "map", label)
-			return nil
-		}
-		nodes := make([]message.LedgerNode, 0, len(wireNodes))
-		for _, n := range wireNodes {
-			if len(nodes) >= txSetHardMaxReplyNodes {
-				break
-			}
-			nodes = append(nodes, message.LedgerNode{NodeID: n.NodeID, NodeData: n.Data})
-		}
-		return nodes
-	}
-
 	nodes := make([]message.LedgerNode, 0)
 	for i, rawID := range requestedNodeIDs {
 		// Soft cap: stop starting new subtrees.
@@ -366,13 +383,9 @@ func buildShaMapReplyNodes(
 // parseSHAMapNodeID decodes the 33-byte wire representation into (path,
 // depth).
 func parseSHAMapNodeID(raw []byte) (path [32]byte, depth int, ok bool) {
-	if len(raw) != shamapNodeIDLen {
+	nodeID, err := shamap.ParseNodeID(raw)
+	if err != nil {
 		return path, 0, false
 	}
-	copy(path[:], raw[:32])
-	depth = int(raw[32])
-	if depth < 0 || depth > 64 {
-		return path, 0, false
-	}
-	return path, depth, true
+	return nodeID.ID(), int(nodeID.Depth()), true
 }

@@ -13,6 +13,7 @@ import (
 	"github.com/LeJamon/go-xrpl/internal/consensus"
 	"github.com/LeJamon/go-xrpl/internal/ledger/cleaner"
 	"github.com/LeJamon/go-xrpl/internal/ledger/service"
+	"github.com/LeJamon/go-xrpl/internal/manifest"
 	"github.com/LeJamon/go-xrpl/internal/rpc"
 	"github.com/LeJamon/go-xrpl/internal/rpc/types"
 	"github.com/LeJamon/go-xrpl/protocol"
@@ -252,6 +253,52 @@ func TestBuildProposedTxEventCarriesHashAndOwnerFunds(t *testing.T) {
 func TestBuildManifestEvent_Nil(t *testing.T) {
 	if ev := buildManifestEvent(nil); ev != nil {
 		t.Errorf("nil manifest should yield nil event, got %+v", ev)
+	}
+}
+
+type manifestPublisherSpy struct {
+	subscribers int
+	stream      types.SubscriptionType
+	events      []*rpc.ManifestEvent
+}
+
+func (p *manifestPublisherSpy) PublishManifest(event *rpc.ManifestEvent) {
+	p.events = append(p.events, event)
+}
+
+func (p *manifestPublisherSpy) GetSubscriberCount(stream types.SubscriptionType) int {
+	p.stream = stream
+	return p.subscribers
+}
+
+func TestPublishManifestIfSubscribed(t *testing.T) {
+	m := &manifest.Manifest{Sequence: 7}
+
+	withoutSubscribers := &manifestPublisherSpy{}
+	publishManifestIfSubscribed(withoutSubscribers, m)
+	if withoutSubscribers.stream != types.SubManifests {
+		t.Fatalf("subscriber stream = %q, want %q", withoutSubscribers.stream, types.SubManifests)
+	}
+	if len(withoutSubscribers.events) != 0 {
+		t.Fatalf("published %d events without subscribers", len(withoutSubscribers.events))
+	}
+
+	withSubscriber := &manifestPublisherSpy{subscribers: 1}
+	publishManifestIfSubscribed(withSubscriber, m)
+	if len(withSubscriber.events) != 1 {
+		t.Fatalf("published %d events, want 1", len(withSubscriber.events))
+	}
+	if withSubscriber.events[0] == nil || withSubscriber.events[0].Sequence != m.Sequence {
+		t.Fatalf("published event = %+v", withSubscriber.events[0])
+	}
+}
+
+func BenchmarkPublishManifestWithoutSubscribers(b *testing.B) {
+	publisher := &manifestPublisherSpy{}
+	m := &manifest.Manifest{Sequence: 7}
+	b.ReportAllocs()
+	for b.Loop() {
+		publishManifestIfSubscribed(publisher, m)
 	}
 }
 

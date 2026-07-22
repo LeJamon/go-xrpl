@@ -9,6 +9,7 @@ import (
 	"github.com/LeJamon/go-xrpl/internal/manifest"
 	"github.com/LeJamon/go-xrpl/internal/peermanagement"
 	"github.com/LeJamon/go-xrpl/internal/peermanagement/message"
+	"github.com/stretchr/testify/require"
 )
 
 // fakeManifestSender records every Send / Broadcast invocation so a
@@ -16,14 +17,20 @@ import (
 // frame. Peers() lets BroadcastLocalManifest see a non-zero peer count
 // without standing up real connections.
 type fakeManifestSender struct {
-	mu     sync.Mutex
-	sends  []sendCall
-	bcasts [][]byte
-	peers  []peermanagement.PeerInfo
+	mu           sync.Mutex
+	sends        []sendCall
+	bcasts       [][]byte
+	bcastsExcept []broadcastExceptCall
+	peers        []peermanagement.PeerInfo
 	// sendErr / broadcastErr let individual tests force the error
 	// branches in the emitter.
 	sendErr      error
 	broadcastErr error
+}
+
+type broadcastExceptCall struct {
+	peerID peermanagement.PeerID
+	frame  []byte
 }
 
 type sendCall struct {
@@ -67,10 +74,38 @@ func (f *fakeManifestSender) Send(peerID peermanagement.PeerID, frame []byte) er
 	return f.sendErr
 }
 
+func (f *fakeManifestSender) SendManifestFrames(peerID peermanagement.PeerID, frames [][]byte) error {
+	for _, frame := range frames {
+		if err := f.Send(peerID, frame); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 func (f *fakeManifestSender) Broadcast(frame []byte) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.bcasts = append(f.bcasts, append([]byte(nil), frame...))
+	return f.broadcastErr
+}
+
+func (f *fakeManifestSender) BroadcastManifestFrames(frames [][]byte) error {
+	for _, frame := range frames {
+		if err := f.Broadcast(frame); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (f *fakeManifestSender) BroadcastExcept(peerID peermanagement.PeerID, frame []byte) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.bcastsExcept = append(f.bcastsExcept, broadcastExceptCall{
+		peerID: peerID,
+		frame:  append([]byte(nil), frame...),
+	})
 	return f.broadcastErr
 }
 
@@ -140,6 +175,59 @@ func routerWithCache(t *testing.T, sender manifestSender, seedKey byte, seq uint
 	router.manifests = cache
 	router.overrideManifestSender = sender
 	return router, cache, id
+}
+
+func TestEncodeManifestFramesBoundsFramesAndPreservesOrder(t *testing.T) {
+	wires := make([][]byte, 96)
+	for i := range wires {
+		wires[i] = bytes.Repeat([]byte{byte(i)}, 16<<10)
+	}
+
+	frames, err := encodeManifestFrames(wires...)
+	if err != nil {
+		t.Fatalf("encodeManifestFrames: %v", err)
+	}
+	if len(frames) < 2 {
+		t.Fatalf("frames: got %d want at least 2", len(frames))
+	}
+
+	got := make([][]byte, 0, len(wires))
+	for i, frame := range frames {
+		if len(frame) > manifestFrameTargetSize {
+			t.Errorf("frame %d size: got %d want <= %d", i, len(frame), manifestFrameTargetSize)
+		}
+		got = append(got, frameToManifestBytes(t, frame)...)
+	}
+	if len(got) != len(wires) {
+		t.Fatalf("decoded manifests: got %d want %d", len(got), len(wires))
+	}
+	for i := range wires {
+		if !bytes.Equal(got[i], wires[i]) {
+			t.Fatalf("manifest %d changed or reordered", i)
+		}
+	}
+
+	if _, err := encodeManifestFrames(make([]byte, manifestFrameTargetSize)); err == nil {
+		t.Fatal("oversized individual manifest was accepted")
+	}
+}
+
+func TestEncodeManifestFramesCapsEntryCount(t *testing.T) {
+	wires := make([][]byte, 205)
+	for i := range wires {
+		wires[i] = []byte{byte(i)}
+	}
+	frames, err := encodeManifestFrames(wires...)
+	require.NoError(t, err)
+	require.Len(t, frames, 3)
+
+	got := make([][]byte, 0, len(wires))
+	for _, frame := range frames {
+		entries := frameToManifestBytes(t, frame)
+		require.LessOrEqual(t, len(entries), manifestFrameMaxEntries)
+		got = append(got, entries...)
+	}
+	require.Equal(t, wires, got)
 }
 
 func TestRouter_SendLocalManifestTo_EmitsExpectedFrame(t *testing.T) {
@@ -293,15 +381,42 @@ func TestRouter_LocalManifestEmission_AggregatesCache(t *testing.T) {
 
 func TestRouter_HandlePeerConnect_DelegatesToSendLocalManifest(t *testing.T) {
 	sender := &fakeManifestSender{}
-	router, _, _ := routerWithCache(t, sender, 0x77, 9)
+	router, cache, id := routerWithCache(t, sender, 0x77, 9)
 
-	router.HandlePeerConnect(peermanagement.PeerID(42))
+	otherFix := newTokenFixture(t, 0x76, 3)
+	other, err := NewValidatorIdentityFromToken(otherFix.tokenBlock)
+	if err != nil {
+		t.Fatalf("NewValidatorIdentityFromToken: %v", err)
+	}
+	if d := cache.ApplyManifest(other.Manifest); d != manifest.Accepted {
+		t.Fatalf("apply learned manifest: %s", d)
+	}
+
+	router.handlePeerConnect(peermanagement.PeerID(42))
 
 	if len(sender.sends) != 1 {
 		t.Fatalf("expected 1 Send from HandlePeerConnect, got %d", len(sender.sends))
 	}
 	if sender.sends[0].peerID != 42 {
 		t.Errorf("HandlePeerConnect routed to wrong peer: got %v want 42", sender.sends[0].peerID)
+	}
+	got := frameToManifestBytes(t, sender.sends[0].frame)
+	if len(got) != 2 {
+		t.Fatalf("warm connect emitted %d manifests, want local + learned", len(got))
+	}
+	want := map[string]bool{
+		string(id.SerializedMfst):    false,
+		string(other.SerializedMfst): false,
+	}
+	for _, wire := range got {
+		if _, ok := want[string(wire)]; ok {
+			want[string(wire)] = true
+		}
+	}
+	for wire, seen := range want {
+		if !seen {
+			t.Fatalf("warm connect omitted cached manifest %x...", []byte(wire)[:8])
+		}
 	}
 }
 
@@ -311,7 +426,7 @@ func TestRouterHandlePeerConnectSeedsHandshakeLedgerHint(t *testing.T) {
 	closed := [32]byte{0xAA, 0xBB}
 	router.setPeerSessionView(peerLedgerHints{closed: closed})
 
-	router.HandlePeerConnect(peermanagement.PeerID(42))
+	router.handlePeerConnect(peermanagement.PeerID(42))
 
 	ledgers := ad.PeerReportedLedgers()
 	if len(ledgers) != 1 {
@@ -322,7 +437,39 @@ func TestRouterHandlePeerConnectSeedsHandshakeLedgerHint(t *testing.T) {
 	}
 }
 
-func TestRouterAcknowledgesBootstrapOnlyAfterManifestDecode(t *testing.T) {
+func TestRouterQueuedPeerConnectCannotResurrectDisconnectedPeer(t *testing.T) {
+	sender := &fakeManifestSender{}
+	router, _, _ := routerWithCache(t, sender, 0x75, 2)
+	ledger, _ := newWideWorkLedger(t)
+	router.fetchTracker.Track(ledger)
+	sessions := &testPeerSessions{connected: map[peermanagement.PeerID]bool{22: true}}
+	router.setPeerSessionView(sessions)
+
+	router.HandlePeerConnect(22)
+	if _, pending := router.pendingPeerConnects.Load(peermanagement.PeerID(22)); !pending {
+		t.Fatal("peer connect was not queued")
+	}
+	sessions.set(22, false)
+	router.queuePeerDisconnect(22)
+	if _, pending := router.pendingPeerConnects.Load(peermanagement.PeerID(22)); pending {
+		t.Fatal("disconnect did not discard queued peer connect")
+	}
+
+	// Model a connect drain that already obtained the key while the disconnect
+	// callback was running. The live-session check is the final race barrier.
+	router.pendingPeerConnects.Store(peermanagement.PeerID(22), struct{}{})
+	router.drainPeerConnects()
+	if len(sender.sends) != 0 {
+		t.Fatalf("disconnected peer received %d manifest frames", len(sender.sends))
+	}
+	for _, peerID := range ledger.Peers() {
+		if peerID == 22 {
+			t.Fatal("disconnected peer was re-added to active acquisition")
+		}
+	}
+}
+
+func TestRouterAcknowledgesBootstrapOnlyAfterValidManifest(t *testing.T) {
 	router, _, _ := routerWithCache(t, nil, 0, 0)
 	sessions := &peerBootstrapSessions{}
 	router.setPeerSessionView(sessions)
@@ -339,35 +486,75 @@ func TestRouterAcknowledgesBootstrapOnlyAfterManifestDecode(t *testing.T) {
 		t.Fatalf("malformed manifests rejected peer %d, want 7", sessions.rejected)
 	}
 
-	sessions.rejected = 0
+	validWire := buildWireManifest(t, 1, 0xA1, 0xA2)
+	invalidWire := append([]byte(nil), validWire...)
+	invalidWire[len(invalidWire)-1] ^= 1
+	if _, err := manifest.Deserialize(invalidWire); err != nil {
+		t.Fatalf("signature-invalid manifest must remain structurally valid: %v", err)
+	}
+
+	tests := []struct {
+		name string
+		list []message.Manifest
+	}{
+		{name: "parse invalid", list: []message.Manifest{{STObject: []byte{1}}}},
+		{name: "cache invalid", list: []message.Manifest{{STObject: invalidWire}}},
+	}
+
 	payload, err := message.Encode(&message.Manifests{})
 	if err != nil {
-		t.Fatalf("encode manifests: %v", err)
+		t.Fatalf("encode empty manifests: %v", err)
 	}
-	router.processManifestJob(&peermanagement.InboundMessage{
-		PeerID:  7,
-		Type:    uint16(message.TypeManifests),
-		Payload: payload,
-	})
-	if sessions.acknowledged != 7 {
-		t.Fatalf("decoded manifests acknowledged peer %d, want 7", sessions.acknowledged)
+	sessions.acknowledged = 0
+	sessions.rejected = 0
+	router.processManifestJob(&peermanagement.InboundMessage{PeerID: 7, Type: uint16(message.TypeManifests), Payload: payload})
+	if sessions.acknowledged != 7 || sessions.rejected != 0 {
+		t.Fatalf("empty manifests ack=%d reject=%d, want ack=7 reject=0", sessions.acknowledged, sessions.rejected)
 	}
-	if sessions.rejected != 0 {
-		t.Fatalf("decoded empty manifests rejected peer %d", sessions.rejected)
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			sessions.acknowledged = 0
+			sessions.rejected = 0
+			payload, err := message.Encode(&message.Manifests{List: tt.list})
+			if err != nil {
+				t.Fatalf("encode manifests: %v", err)
+			}
+			router.processManifestJob(&peermanagement.InboundMessage{
+				PeerID:  7,
+				Type:    uint16(message.TypeManifests),
+				Payload: payload,
+			})
+			if sessions.acknowledged != 0 {
+				t.Fatalf("invalid manifests acknowledged peer %d", sessions.acknowledged)
+			}
+			if sessions.rejected != 7 {
+				t.Fatalf("invalid manifests rejected peer %d, want 7", sessions.rejected)
+			}
+		})
 	}
-}
 
-func TestRouterRejectsBootstrapWhenManifestWorkerIsFull(t *testing.T) {
-	router, _, _ := routerWithCache(t, nil, 0, 0)
-	sessions := &peerBootstrapSessions{}
-	router.setPeerSessionView(sessions)
-	router.manifestJobs = make(chan *peermanagement.InboundMessage, 1)
-	router.manifestJobs <- &peermanagement.InboundMessage{}
-
-	router.submitManifestJob(&peermanagement.InboundMessage{PeerID: 9})
-
-	if sessions.rejected != 9 {
-		t.Fatalf("saturated manifest worker rejected peer %d, want 9", sessions.rejected)
+	for _, name := range []string{"accepted", "stale"} {
+		t.Run(name, func(t *testing.T) {
+			sessions.acknowledged = 0
+			sessions.rejected = 0
+			payload, err := message.Encode(&message.Manifests{
+				List: []message.Manifest{{STObject: validWire}},
+			})
+			if err != nil {
+				t.Fatalf("encode manifests: %v", err)
+			}
+			router.processManifestJob(&peermanagement.InboundMessage{
+				PeerID:  7,
+				Type:    uint16(message.TypeManifests),
+				Payload: payload,
+			})
+			if sessions.acknowledged != 7 {
+				t.Fatalf("valid manifests acknowledged peer %d, want 7", sessions.acknowledged)
+			}
+			if sessions.rejected != 0 {
+				t.Fatalf("valid manifests rejected peer %d", sessions.rejected)
+			}
+		})
 	}
 }
 
@@ -396,7 +583,10 @@ func TestRouter_CachedManifestFrame_ReusedAcrossEmissions(t *testing.T) {
 		t.Fatalf("expected 2 Sends, got %d", len(sender.sends))
 	}
 
-	first := router.manifestFrame
+	if len(router.manifestFrames) != 1 {
+		t.Fatalf("cached frames: got %d want 1", len(router.manifestFrames))
+	}
+	first := router.manifestFrames[0]
 	if first == nil {
 		t.Fatalf("frame cache empty after first Send")
 	}
@@ -407,7 +597,7 @@ func TestRouter_CachedManifestFrame_ReusedAcrossEmissions(t *testing.T) {
 	}
 
 	router.SendLocalManifestTo(peermanagement.PeerID(3))
-	if got := router.manifestFrame; &got[0] != &first[0] {
+	if got := router.manifestFrames[0]; &got[0] != &first[0] {
 		t.Errorf("frame re-encoded despite unchanged cache (backing arrays differ)")
 	}
 }
@@ -419,7 +609,7 @@ func TestRouter_CachedManifestFrame_RebuiltOnSequenceAdvance(t *testing.T) {
 	router, cache, _ := routerWithCache(t, sender, 0xC2, 1)
 
 	router.SendLocalManifestTo(peermanagement.PeerID(1))
-	first := router.manifestFrame
+	first := router.manifestFrames[0]
 
 	// Mint a higher-sequence manifest under the SAME master+ephemeral
 	// keypair (newTokenFixture is seed-deterministic — same seed byte
@@ -440,10 +630,10 @@ func TestRouter_CachedManifestFrame_RebuiltOnSequenceAdvance(t *testing.T) {
 	}
 
 	router.SendLocalManifestTo(peermanagement.PeerID(2))
-	if router.manifestFrame == nil {
+	if len(router.manifestFrames) == 0 {
 		t.Fatalf("frame cache empty after rotation")
 	}
-	if &router.manifestFrame[0] == &first[0] {
+	if &router.manifestFrames[0][0] == &first[0] {
 		t.Errorf("frame NOT re-encoded after Sequence advance — cache cursor stuck")
 	}
 	if router.manifestFrameSeq != 2 {
@@ -463,7 +653,7 @@ func TestRouter_CachedManifestFrame_EmptyCacheCachesNegative(t *testing.T) {
 	if !router.manifestFrameBuilt {
 		t.Errorf("empty-cache path did not record the negative result")
 	}
-	if router.manifestFrame != nil {
-		t.Errorf("empty cache should cache nil frame, got %d bytes", len(router.manifestFrame))
+	if router.manifestFrames != nil {
+		t.Errorf("empty cache should cache nil frames, got %d", len(router.manifestFrames))
 	}
 }

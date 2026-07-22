@@ -40,16 +40,18 @@ type NetworkSender interface {
 	RequestTxSetMissingNodesFromPeer(id consensus.TxSetID, nodeIDs [][]byte, peerID uint64, indirect bool) error
 	RequestLedger(id consensus.LedgerID) error
 	RequestLedgerByHashAndSeq(hash [32]byte, seq uint32) error
-	RequestLedgerBaseFromPeer(peerID uint64, hash [32]byte, seq uint32) error
+	RequestLedgerBaseFromPeer(peerID uint64, hash [32]byte, seq uint32, indirect bool) error
 	RequestReplayDelta(peerID uint64, hash [32]byte) error
 	// RequestStateNodes / RequestTransactionNodes fetch outstanding
 	// account-state / transaction SHAMap nodes of an in-flight acquisition.
+	// queryDepth is 1 for reply-driven requests and 0 for timeout fanout;
 	// indirect (query_type=qtINDIRECT) must be false on the first attempt and
 	// true once the acquisition has timed out at least once
 	// (rippled InboundLedger::trigger timeouts_ != 0).
-	RequestStateNodes(peerID uint64, ledgerHash [32]byte, nodeIDs [][]byte, indirect bool) error
-	RequestTransactionNodes(peerID uint64, ledgerHash [32]byte, nodeIDs [][]byte, indirect bool) error
+	RequestStateNodes(peerID uint64, ledgerHash [32]byte, nodeIDs [][]byte, queryDepth uint32, indirect bool) error
+	RequestTransactionNodes(peerID uint64, ledgerHash [32]byte, nodeIDs [][]byte, queryDepth uint32, indirect bool) error
 	SendToPeer(peerID uint64, frame []byte) error
+	SendPriorityToPeer(peerID uint64, frame []byte) error
 	// PeerSupportsReplay reports whether the peer advertised the ledger-replay
 	// feature during handshake (false for unknown/incomplete handshakes), so
 	// the catchup policy can skip peers that would silently drop the request.
@@ -76,10 +78,9 @@ type NetworkSender interface {
 	// serve ledger (target, seq), to relay an unsatisfiable GetLedger.
 	// ok is false when none qualifies.
 	PeerWithLedger(target [32]byte, seq uint32, exclude uint64) (uint64, bool)
-	// PeersWithLedger returns up to max connected peers (other than excluded)
-	// that can serve ledger (target, seq), best-first, to broaden a stalled
-	// acquisition's source set per no-progress timeout.
-	PeersWithLedger(target [32]byte, seq uint32, excluded []uint64, max int) []uint64
+	// SelectLedgerPeers returns up to max connected peers (other than excluded)
+	// for an inbound-ledger peer set, ranking known holders ahead of fallbacks.
+	SelectLedgerPeers(target [32]byte, seq uint32, excluded []uint64, max int) []uint64
 	// PeerWithTxSet returns a connected peer (other than exclude) that
 	// advertised tx-set root target, to relay an unsatisfiable
 	// liTS_CANDIDATE GetLedger.
@@ -108,17 +109,22 @@ func (n *noopSender) RequestTxSetMissingNodesFromPeer(consensus.TxSetID, [][]byt
 }
 func (n *noopSender) RequestLedger(consensus.LedgerID) error                         { return nil }
 func (n *noopSender) RequestLedgerByHashAndSeq([32]byte, uint32) error               { return nil }
-func (n *noopSender) RequestLedgerBaseFromPeer(uint64, [32]byte, uint32) error       { return nil }
+func (n *noopSender) RequestLedgerBaseFromPeer(uint64, [32]byte, uint32, bool) error { return nil }
 func (n *noopSender) RequestReplayDelta(uint64, [32]byte) error                      { return nil }
-func (n *noopSender) RequestStateNodes(uint64, [32]byte, [][]byte, bool) error       { return nil }
-func (n *noopSender) RequestTransactionNodes(uint64, [32]byte, [][]byte, bool) error { return nil }
-func (n *noopSender) SendToPeer(uint64, []byte) error                                { return nil }
-func (n *noopSender) PeerSupportsReplay(uint64) bool                                 { return false }
-func (n *noopSender) ReplayCapablePeersExcluding([]uint64, int) []uint64             { return nil }
-func (n *noopSender) IncPeerBadData(uint64, string)                                  {}
-func (n *noopSender) PeersThatHave([32]byte) []uint64                                { return nil }
-func (n *noopSender) ShouldShedLedgerRequest(uint64, bool) bool                      { return false }
-func (n *noopSender) PeerWithLedger([32]byte, uint32, uint64) (uint64, bool)         { return 0, false }
-func (n *noopSender) PeersWithLedger([32]byte, uint32, []uint64, int) []uint64       { return nil }
-func (n *noopSender) PeerWithTxSet([32]byte, uint64) (uint64, bool)                  { return 0, false }
-func (n *noopSender) NotePeerHasTxSet(uint64, [32]byte)                              {}
+func (n *noopSender) RequestStateNodes(uint64, [32]byte, [][]byte, uint32, bool) error {
+	return nil
+}
+func (n *noopSender) RequestTransactionNodes(uint64, [32]byte, [][]byte, uint32, bool) error {
+	return nil
+}
+func (n *noopSender) SendToPeer(uint64, []byte) error                            { return nil }
+func (n *noopSender) SendPriorityToPeer(uint64, []byte) error                    { return nil }
+func (n *noopSender) PeerSupportsReplay(uint64) bool                             { return false }
+func (n *noopSender) ReplayCapablePeersExcluding([]uint64, int) []uint64         { return nil }
+func (n *noopSender) IncPeerBadData(uint64, string)                              {}
+func (n *noopSender) PeersThatHave([32]byte) []uint64                            { return nil }
+func (n *noopSender) ShouldShedLedgerRequest(uint64, bool) bool                  { return false }
+func (n *noopSender) PeerWithLedger([32]byte, uint32, uint64) (uint64, bool)     { return 0, false }
+func (n *noopSender) SelectLedgerPeers([32]byte, uint32, []uint64, int) []uint64 { return nil }
+func (n *noopSender) PeerWithTxSet([32]byte, uint64) (uint64, bool)              { return 0, false }
+func (n *noopSender) NotePeerHasTxSet(uint64, [32]byte)                          {}

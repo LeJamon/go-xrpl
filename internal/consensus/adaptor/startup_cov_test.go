@@ -473,7 +473,7 @@ func TestStup_ComponentsStop_NilSafe(t *testing.T) {
 }
 
 func TestStup_ComponentsStop_CancelsAllFunctions(t *testing.T) {
-	var called [5]bool
+	var called [4]bool
 	c := &Components{
 		vlTickCancel: func() {
 			called[0] = true
@@ -481,14 +481,11 @@ func TestStup_ComponentsStop_CancelsAllFunctions(t *testing.T) {
 		sitePollerCancel: func() {
 			called[1] = true
 		},
-		manifestPeriodicCancel: func() {
+		routerCancel: func() {
 			called[2] = true
 		},
-		routerCancel: func() {
-			called[3] = true
-		},
 		overlayCancel: func() {
-			called[4] = true
+			called[3] = true
 		},
 	}
 	c.Stop()
@@ -540,7 +537,6 @@ func TestStup_ComponentsStart_AndStop(t *testing.T) {
 
 	assert.NotNil(t, c.overlayCancel)
 	assert.NotNil(t, c.routerCancel)
-	assert.NotNil(t, c.manifestPeriodicCancel)
 	assert.Nil(t, c.sitePollerCancel, "no poller configured")
 	assert.Nil(t, c.vlTickCancel, "no ValidatorList configured")
 

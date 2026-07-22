@@ -195,7 +195,6 @@ var codecs = map[MessageType]msgCodec{
 				Ltype:      &ltype,
 				LedgerHash: m.LedgerHash,
 				NodeIds:    m.NodeIDs,
-				QueryDepth: m.QueryDepth,
 			}
 			if m.HasLedgerSeq() {
 				out.LedgerSeq = pb.Uint32(m.LedgerSeq)
@@ -206,6 +205,9 @@ var codecs = map[MessageType]msgCodec{
 			if m.QueryType != nil {
 				qt := proto.TMQueryType(*m.QueryType)
 				out.QueryType = &qt
+			}
+			if m.HasQueryDepth() {
+				out.QueryDepth = pb.Uint32(m.QueryDepth)
 			}
 			return out, nil
 		},
@@ -221,6 +223,7 @@ var codecs = map[MessageType]msgCodec{
 				RequestCookie:    p.GetRequestCookie(),
 				RequestCookieSet: p.RequestCookie != nil,
 				QueryDepth:       p.GetQueryDepth(),
+				QueryDepthSet:    p.QueryDepth != nil,
 			}
 			if p.QueryType != nil {
 				qt := LedgerQueryType(*p.QueryType)

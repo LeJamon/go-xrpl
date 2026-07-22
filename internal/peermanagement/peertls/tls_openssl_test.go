@@ -11,6 +11,7 @@ import (
 	"crypto/x509"
 	"crypto/x509/pkix"
 	"encoding/pem"
+	"errors"
 	"io"
 	"math/big"
 	"net"
@@ -19,7 +20,7 @@ import (
 	"time"
 )
 
-func generateTestCert(t *testing.T) (certPEM, keyPEM []byte) {
+func generateTestCert(t testing.TB) (certPEM, keyPEM []byte) {
 	t.Helper()
 	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	if err != nil {
@@ -46,6 +47,44 @@ func generateTestCert(t *testing.T) (certPEM, keyPEM []byte) {
 	}
 	keyPEM = pem.EncodeToMemory(&pem.Block{Type: "EC PRIVATE KEY", Bytes: kder})
 	return
+}
+
+func newTestConnPair(t testing.TB) (PeerConn, PeerConn) {
+	t.Helper()
+	clientCert, clientKey := generateTestCert(t)
+	serverCert, serverKey := generateTestCert(t)
+	clientWire, serverWire := net.Pipe()
+
+	clientConn, err := Client(clientWire, &Config{CertPEM: clientCert, KeyPEM: clientKey})
+	if err != nil {
+		_ = clientWire.Close()
+		_ = serverWire.Close()
+		t.Fatalf("Client: %v", err)
+	}
+	serverConn, err := newConn(serverWire, &Config{CertPEM: serverCert, KeyPEM: serverKey}, true)
+	if err != nil {
+		_ = clientConn.Close()
+		_ = serverWire.Close()
+		t.Fatalf("server conn: %v", err)
+	}
+	t.Cleanup(func() {
+		_ = clientConn.Close()
+		_ = serverConn.Close()
+	})
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	serverErr := make(chan error, 1)
+	go func() {
+		serverErr <- serverConn.HandshakeContext(ctx)
+	}()
+	if err := clientConn.HandshakeContext(ctx); err != nil {
+		t.Fatalf("client HandshakeContext: %v", err)
+	}
+	if err := <-serverErr; err != nil {
+		t.Fatalf("server HandshakeContext: %v", err)
+	}
+	return clientConn, serverConn
 }
 
 // TestHandshake_SessionSigRoundTrip drives a client and server peertls
@@ -284,4 +323,116 @@ func TestHandshake_ConcurrentReadWrite(t *testing.T) {
 	}
 	_ = serverConn.Close()
 	wg.Wait()
+}
+
+func TestHandshake_LargeConcurrentRoundTrip(t *testing.T) {
+	clientConn, serverConn := newTestConnPair(t)
+	deadline := time.Now().Add(10 * time.Second)
+	if err := clientConn.SetDeadline(deadline); err != nil {
+		t.Fatalf("client SetDeadline: %v", err)
+	}
+	if err := serverConn.SetDeadline(deadline); err != nil {
+		t.Fatalf("server SetDeadline: %v", err)
+	}
+
+	clientPayload := make([]byte, 1<<20+137)
+	serverPayload := make([]byte, 1<<20+311)
+	for i := range clientPayload {
+		clientPayload[i] = byte(i*31 + 7)
+	}
+	for i := range serverPayload {
+		serverPayload[i] = byte(i*17 + 11)
+	}
+
+	errCh := make(chan error, 4)
+	go func() {
+		n, err := clientConn.Write(clientPayload)
+		if err == nil && n != len(clientPayload) {
+			err = io.ErrShortWrite
+		}
+		errCh <- err
+	}()
+	go func() {
+		n, err := serverConn.Write(serverPayload)
+		if err == nil && n != len(serverPayload) {
+			err = io.ErrShortWrite
+		}
+		errCh <- err
+	}()
+	go func() {
+		got := make([]byte, len(serverPayload))
+		_, err := io.ReadFull(clientConn, got)
+		if err == nil && !bytes.Equal(got, serverPayload) {
+			err = errors.New("client received corrupted payload")
+		}
+		errCh <- err
+	}()
+	go func() {
+		got := make([]byte, len(clientPayload))
+		_, err := io.ReadFull(serverConn, got)
+		if err == nil && !bytes.Equal(got, clientPayload) {
+			err = errors.New("server received corrupted payload")
+		}
+		errCh <- err
+	}()
+
+	for range 4 {
+		if err := <-errCh; err != nil {
+			t.Fatal(err)
+		}
+	}
+}
+
+func BenchmarkPeerConnWrite(b *testing.B) {
+	cases := []struct {
+		name string
+		size int
+	}{
+		{name: "16KiB", size: 16 << 10},
+		{name: "64KiB", size: 64 << 10},
+	}
+	for _, tc := range cases {
+		b.Run(tc.name, func(b *testing.B) {
+			clientConn, serverConn := newTestConnPair(b)
+			payload := bytes.Repeat([]byte{0x5a}, tc.size)
+			readBuf := make([]byte, 64<<10)
+			start := make(chan struct{})
+			readDone := make(chan error, 1)
+			go func() {
+				<-start
+				remaining := int64(b.N) * int64(tc.size)
+				for remaining > 0 {
+					buf := readBuf
+					if remaining < int64(len(buf)) {
+						buf = buf[:remaining]
+					}
+					n, err := serverConn.Read(buf)
+					remaining -= int64(n)
+					if err != nil {
+						readDone <- err
+						return
+					}
+				}
+				readDone <- nil
+			}()
+
+			b.SetBytes(int64(tc.size))
+			b.ReportAllocs()
+			close(start)
+			b.ResetTimer()
+			for range b.N {
+				n, err := clientConn.Write(payload)
+				if err != nil {
+					b.Fatal(err)
+				}
+				if n != len(payload) {
+					b.Fatal(io.ErrShortWrite)
+				}
+			}
+			if err := <-readDone; err != nil {
+				b.Fatal(err)
+			}
+			b.StopTimer()
+		})
+	}
 }

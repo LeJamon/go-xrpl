@@ -3,62 +3,103 @@ package shamap
 import (
 	"sync"
 	"sync/atomic"
+	"time"
 )
 
-// fullBelowPartitionMax bounds each of the FullBelowCache's two hash
-// partitions. When the live partition fills, it is demoted to the stale
-// slot and a fresh one takes its place, capping resident memory at roughly
-// 2*fullBelowPartitionMax [32]byte keys without per-entry timestamps. This
-// is the idiomatic-Go stand-in for rippled's time-partitioned KeyCache
-// (FullBelowCache backed by KeyCache), which sweeps on a wall clock.
-const fullBelowPartitionMax = 1 << 18
+const (
+	fullBelowCacheTarget        = 1 << 19
+	fullBelowCacheExpiration    = 10 * time.Minute
+	fullBelowCacheSweepInterval = 30 * time.Second
+	fullBelowMinimumAge         = time.Second
+	fullBelowCacheMaxDepth      = 4
+)
 
-// FullBelowCache remembers which SHAMap inner nodes have all of their
-// descendants resident, so a missing-node walk can prune whole subtrees
-// instead of re-descending them on every peer reply. It is the go-xrpl
-// analogue of rippled's FullBelowCache (xrpld/shamap/FullBelowCache.h):
-//
-//   - A monotonically increasing generation tags the marks. Every inner
-//     node caches the generation it was last proven full-below at
-//     (innerNode.fullBelowGen); a mark counts only while it equals the
-//     cache's current generation, so Bump invalidates every outstanding
-//     mark in O(1). Fresh and wire/store-deserialized nodes carry
-//     generation 0, which never equals a live generation (>= 1), so an
-//     unproven node is never mistaken for full-below.
-//
-//   - A bounded hash set records the node hashes proven full-below. The
-//     per-node generation is the in-memory fast path (nodes stay resident
-//     across the replies of one acquisition, so it carries the walk); the
-//     hash set covers the backed case where a proven subtree's child
-//     pointers were released after a flush — a hash-only child whose hash
-//     is in the set is skipped without re-fetching and re-materializing its
-//     entire subtree from the store.
-//
-// A node hash is inserted only after its subtree has been stored successfully.
-// This makes a shared family mark a guarantee that a hash-only child is
-// recoverable, not merely resident in another SHAMap instance.
+type fullBelowEntry struct {
+	lastAccess time.Time
+}
+
+// FullBelowStats is a point-in-time cache snapshot.
+type FullBelowStats struct {
+	Size       int
+	TargetSize int
+	Hits       uint64
+	Misses     uint64
+	Inserts    uint64
+	Evictions  uint64
+	Sweeps     uint64
+}
+
+// FullBelowCache remembers durable SHAMap inner nodes whose descendants have
+// all been proven present. The target is deliberately soft: entries age out
+// during periodic sweeps instead of being evicted synchronously at insertion,
+// so one large acquisition can retain the subtrees it has already completed.
 type FullBelowCache struct {
 	gen atomic.Uint32
 
 	// walks prevents a generation reset from overtaking an in-flight walk.
-	// Entries use a separate lock so a walk can populate the cache while it
-	// holds the generation read lock.
 	walks sync.RWMutex
 	mu    sync.Mutex
-	live  map[[32]byte]struct{}
-	old   map[[32]byte]struct{}
+
+	targetSize int
+	targetAge  time.Duration
+	now        func() time.Time
+	entries    map[[32]byte]fullBelowEntry
+	hits       uint64
+	misses     uint64
+	inserts    uint64
+	evictions  uint64
+	sweeps     uint64
 }
 
-// NewFullBelowCache returns a cache at generation 1 (the first live
-// generation; 0 is reserved for "never proven").
+// NewFullBelowCache returns a cache at generation 1. Generation 0 is reserved
+// for nodes that have never been proven full-below.
 func NewFullBelowCache() *FullBelowCache {
-	c := &FullBelowCache{live: make(map[[32]byte]struct{})}
+	return newFullBelowCacheWithClock(
+		fullBelowCacheTarget,
+		fullBelowCacheExpiration,
+		fullBelowCacheSweepInterval,
+		time.Now,
+	)
+}
+
+func newFullBelowCache(targetSize int) *FullBelowCache {
+	return newFullBelowCacheWithClock(
+		targetSize,
+		fullBelowCacheExpiration,
+		fullBelowCacheSweepInterval,
+		time.Now,
+	)
+}
+
+func newFullBelowCacheWithClock(
+	targetSize int,
+	targetAge time.Duration,
+	sweepEvery time.Duration,
+	now func() time.Time,
+) *FullBelowCache {
+	if targetSize <= 0 {
+		panic("shamap: FullBelowCache target size must be positive")
+	}
+	if targetAge <= 0 {
+		panic("shamap: FullBelowCache target age must be positive")
+	}
+	if sweepEvery <= 0 {
+		panic("shamap: FullBelowCache sweep interval must be positive")
+	}
+	if now == nil {
+		panic("shamap: FullBelowCache clock must not be nil")
+	}
+	c := &FullBelowCache{
+		targetSize: targetSize,
+		targetAge:  targetAge,
+		now:        now,
+		entries:    make(map[[32]byte]fullBelowEntry),
+	}
 	c.gen.Store(1)
 	return c
 }
 
-// Generation returns the current generation. A missing-node walk reads it
-// once and compares it against each inner node's cached generation.
+// Generation returns the current generation.
 func (c *FullBelowCache) Generation() uint32 {
 	return c.gen.Load()
 }
@@ -70,9 +111,7 @@ func (c *FullBelowCache) Begin() (uint32, func()) {
 	return c.gen.Load(), c.walks.RUnlock
 }
 
-// Bump invalidates every outstanding full-below mark. It waits for active
-// missing-node walks so no mark from the old backing store enters the new
-// generation.
+// Bump invalidates every outstanding mark after a backing-store replacement.
 func (c *FullBelowCache) Bump() {
 	unlock := c.invalidateAndLock()
 	unlock()
@@ -82,8 +121,7 @@ func (c *FullBelowCache) invalidateAndLock() func() {
 	c.walks.Lock()
 
 	c.mu.Lock()
-	c.live = make(map[[32]byte]struct{})
-	c.old = nil
+	c.entries = make(map[[32]byte]fullBelowEntry)
 	if c.gen.Add(1) == 0 {
 		c.gen.Store(1)
 	}
@@ -91,39 +129,91 @@ func (c *FullBelowCache) invalidateAndLock() func() {
 	return c.walks.Unlock
 }
 
-// Has reports whether hash was proven full-below in the current generation.
+// Has reports whether hash is proven full-below and refreshes its age.
 func (c *FullBelowCache) Has(generation uint32, hash [32]byte) bool {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if c.gen.Load() != generation {
 		return false
 	}
-	if _, ok := c.live[hash]; ok {
-		return true
+	entry, ok := c.entries[hash]
+	if !ok {
+		c.misses++
+		return false
 	}
-	_, ok := c.old[hash]
-	return ok
+	entry.lastAccess = c.now()
+	c.entries[hash] = entry
+	c.hits++
+	return true
 }
 
-// Insert records hash as full-below. When the live partition fills it is
-// demoted so recently-inserted hashes survive one more rotation, bounding
-// memory without per-entry expiry.
+// Insert records hash as full-below. Existing marks are refreshed. The cache
+// may grow beyond its target between sweeps.
 func (c *FullBelowCache) Insert(generation uint32, hash [32]byte) {
+	now := c.now()
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if c.gen.Load() != generation {
 		return
 	}
-	if len(c.live) >= fullBelowPartitionMax {
-		c.old = c.live
-		c.live = make(map[[32]byte]struct{})
+	if _, exists := c.entries[hash]; !exists {
+		c.inserts++
 	}
-	c.live[hash] = struct{}{}
+	c.entries[hash] = fullBelowEntry{lastAccess: now}
 }
 
-// Size reports the number of recorded hashes across both partitions.
+func cacheFullBelow(c *FullBelowCache, generation uint32, hash [32]byte, depth int) {
+	if c != nil && depth <= fullBelowCacheMaxDepth {
+		c.Insert(generation, hash)
+	}
+}
+
+// Sweep expires old entries. At or below target size, entries retain the full
+// target age. Above target, the age is reduced proportionally but never below
+// one second.
+func (c *FullBelowCache) Sweep() {
+	now := c.now()
+	c.mu.Lock()
+	c.sweepLocked(now)
+	c.mu.Unlock()
+}
+
+func (c *FullBelowCache) sweepLocked(now time.Time) {
+	age := c.targetAge
+	if size := len(c.entries); size > c.targetSize {
+		age = time.Duration(int64(c.targetAge) * int64(c.targetSize) / int64(size))
+		if age < fullBelowMinimumAge {
+			age = fullBelowMinimumAge
+		}
+	}
+	cutoff := now.Add(-age)
+	for hash, entry := range c.entries {
+		if !entry.lastAccess.After(cutoff) {
+			delete(c.entries, hash)
+			c.evictions++
+		}
+	}
+	c.sweeps++
+}
+
+// Size reports the number of recorded hashes.
 func (c *FullBelowCache) Size() int {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	return len(c.live) + len(c.old)
+	return len(c.entries)
+}
+
+// Stats returns cache size, target and cumulative activity counters.
+func (c *FullBelowCache) Stats() FullBelowStats {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return FullBelowStats{
+		Size:       len(c.entries),
+		TargetSize: c.targetSize,
+		Hits:       c.hits,
+		Misses:     c.misses,
+		Inserts:    c.inserts,
+		Evictions:  c.evictions,
+		Sweeps:     c.sweeps,
+	}
 }

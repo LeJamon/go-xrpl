@@ -137,11 +137,7 @@ func TestOverlay_PeerWithLedger(t *testing.T) {
 	assert.False(t, ok, "no peer advertises this ledger")
 }
 
-// TestOverlay_PeersWithLedger pins the multi-peer broaden selector
-// (InboundLedger::addPeers): up to max advertisers are returned, the excluded
-// set is skipped, non-advertisers are never chosen, and max<=0 / no-advertiser
-// both yield nil.
-func TestOverlay_PeersWithLedger(t *testing.T) {
+func TestOverlay_SelectLedgerPeers(t *testing.T) {
 	target := hash32(0xAA)
 	o := &Overlay{peers: make(map[PeerID]*Peer)}
 
@@ -157,20 +153,22 @@ func TestOverlay_PeersWithLedger(t *testing.T) {
 		o.peers[p.id] = p
 	}
 
-	got := o.PeersWithLedger(target, 0, nil, 2)
+	got := o.SelectLedgerPeers(target, 0, nil, 2)
 	require.Len(t, got, 2, "capped at max")
 	for _, id := range got {
-		assert.Contains(t, []PeerID{3, 4, 5}, id, "only advertisers, never p9")
+		assert.Contains(t, []PeerID{3, 4, 5}, id, "known holders rank ahead of fallback peers")
 	}
 
-	got = o.PeersWithLedger(target, 0, nil, 10)
-	assert.ElementsMatch(t, []PeerID{3, 4, 5}, got, "all advertisers when max exceeds the pool")
+	got = o.SelectLedgerPeers(target, 0, nil, 10)
+	assert.ElementsMatch(t, []PeerID{3, 4, 5, 9}, got, "connected fallback peers remain eligible")
 
-	got = o.PeersWithLedger(target, 0, []PeerID{3, 4}, 10)
-	assert.Equal(t, []PeerID{5}, got, "excluded set skipped")
+	got = o.SelectLedgerPeers(target, 0, []PeerID{3, 4}, 10)
+	assert.ElementsMatch(t, []PeerID{5, 9}, got, "excluded set skipped")
+	assert.Equal(t, PeerID(5), got[0], "known holder ranks ahead of fallback peer")
 
-	assert.Nil(t, o.PeersWithLedger(target, 0, nil, 0), "max<=0 yields nil")
-	assert.Nil(t, o.PeersWithLedger(hash32(0xCC), 0, nil, 5), "no advertiser yields nil")
+	assert.Nil(t, o.SelectLedgerPeers(target, 0, nil, 0), "max<=0 yields nil")
+	got = o.SelectLedgerPeers(hash32(0xCC), 0, nil, 5)
+	assert.ElementsMatch(t, []PeerID{3, 4, 5, 9}, got, "no advertisement still falls back to connected peers")
 }
 
 // TestOverlay_PeerWithLedger_PrefersLowerLatency pins the rippled getScore

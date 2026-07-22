@@ -84,7 +84,7 @@ func newLeafNode(kind leafKind, item *Item) (*leafNode, error) {
 	if item == nil {
 		return nil, ErrNilItem
 	}
-	if len(item.Data()) < 12 {
+	if item.Size() < 12 {
 		return nil, ErrItemTooSmall
 	}
 	n := &leafNode{
@@ -157,9 +157,9 @@ func (n *leafNode) updateHashUnsafe() error {
 	}
 	if n.keyOnWire() {
 		key := n.item.Key()
-		return n.setHash(n.hashPrefix(), n.item.Data(), key[:])
+		return n.setHash(n.hashPrefix(), n.item.DataUnsafe(), key[:])
 	}
-	return n.setHash(n.hashPrefix(), n.item.Data())
+	return n.setHash(n.hashPrefix(), n.item.DataUnsafe())
 }
 
 // Type returns the SHAMap node type.
@@ -189,7 +189,7 @@ func (n *leafNode) SerializeForWire() ([]byte, error) {
 	if n.item == nil {
 		return nil, ErrNilItem
 	}
-	data := n.item.Data()
+	data := n.item.DataUnsafe()
 	if n.keyOnWire() {
 		key := n.item.Key()
 		result := make([]byte, 0, len(data)+33)
@@ -212,7 +212,7 @@ func (n *leafNode) SerializeWithPrefix() ([]byte, error) {
 	if n.item == nil {
 		return nil, ErrNilItem
 	}
-	data := n.item.Data()
+	data := n.item.DataUnsafe()
 	if n.keyOnWire() {
 		key := n.item.Key()
 		result := make([]byte, 0, 4+len(data)+32)
@@ -332,7 +332,7 @@ func (n *leafNode) String(id NodeID) string {
 	if n.item != nil {
 		key := n.item.Key()
 		sb.WriteString(fmt.Sprintf("Key: %s\n", hex.EncodeToString(key[:])))
-		sb.WriteString(fmt.Sprintf("Data Size: %d bytes\n", len(n.item.Data())))
+		sb.WriteString(fmt.Sprintf("Data Size: %d bytes\n", n.item.Size()))
 	}
 	return sb.String()
 }

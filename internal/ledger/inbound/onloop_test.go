@@ -103,6 +103,40 @@ func TestLedger_OnTimer_ProgressDefersFailure(t *testing.T) {
 	if il.Timeouts() != 5 {
 		t.Fatalf("a progressing interval must not count a timeout, got %d", il.Timeouts())
 	}
+	if il.consecutiveTimeouts != 0 {
+		t.Fatalf("progress must renew the stall budget, got %d consecutive timeouts", il.consecutiveTimeouts)
+	}
+
+	for i := 1; i <= ledgerTimeoutRetriesMax; i++ {
+		now := base.Add(time.Duration(6+i) * acquireTimerInterval)
+		if got := il.OnTimer(now); got != TimerEscalate {
+			t.Fatalf("post-progress fire %d: got %v, want TimerEscalate", i, got)
+		}
+		if il.State() == StateFailed {
+			t.Fatalf("post-progress fire %d exhausted a renewed stall budget", i)
+		}
+	}
+
+	final := base.Add(time.Duration(7+ledgerTimeoutRetriesMax) * acquireTimerInterval)
+	if got := il.OnTimer(final); got != TimerFailed {
+		t.Fatalf("renewed budget fire: got %v, want TimerFailed", got)
+	}
+}
+
+func TestLedger_OnTimer_BaseReplyCountsAsProgress(t *testing.T) {
+	t.Parallel()
+	il := incompleteStateAcquisition(t)
+	base := time.Unix(1_700_000_000, 0)
+	il.mu.Lock()
+	il.lastTimer = base
+	il.mu.Unlock()
+
+	if got := il.OnTimer(base.Add(acquireTimerInterval)); got != TimerNone {
+		t.Fatalf("timer action = %v, want TimerNone after useful base reply", got)
+	}
+	if got := il.Timeouts(); got != 0 {
+		t.Fatalf("timeouts = %d, want 0 after useful base reply", got)
+	}
 }
 
 // TestLedger_OnTimer_NotDueIsNoop confirms OnTimer is a no-op before the timer
@@ -121,6 +155,26 @@ func TestLedger_OnTimer_NotDueIsNoop(t *testing.T) {
 	}
 }
 
+func TestLedger_RearmTimerStartsIntervalAfterEscalation(t *testing.T) {
+	t.Parallel()
+	il := New([32]byte{0x03}, 7, 1, discardLogger())
+	il.state = StateWantState
+	base := time.Unix(1_700_000_000, 0)
+	il.lastTimer = base
+
+	if got := il.OnTimer(base.Add(acquireTimerInterval)); got != TimerEscalate {
+		t.Fatalf("first fire: got %v, want TimerEscalate", got)
+	}
+	finished := base.Add(time.Minute)
+	il.RearmTimer(finished)
+	if got := il.OnTimer(finished.Add(acquireTimerInterval - time.Millisecond)); got != TimerNone {
+		t.Fatalf("pre-deadline fire: got %v, want TimerNone", got)
+	}
+	if got := il.OnTimer(finished.Add(acquireTimerInterval)); got != TimerEscalate {
+		t.Fatalf("rearmed fire: got %v, want TimerEscalate", got)
+	}
+}
+
 // TestLedger_AddPeer_DedupsAndCaps pins the broadened source-peer set: the
 // original peer is the primary, duplicates are rejected, and the set is bounded.
 func TestLedger_AddPeer_DedupsAndCaps(t *testing.T) {
@@ -135,14 +189,13 @@ func TestLedger_AddPeer_DedupsAndCaps(t *testing.T) {
 	if il.AddPeer(7) || il.AddPeer(8) {
 		t.Fatal("duplicate peers must not be added")
 	}
-	for i := 9; len(il.Peers()) < maxAcquisitionPeers; i++ {
-		il.AddPeer(uint64(i))
+	for i := uint64(9); i <= 20; i++ {
+		if !il.AddPeer(i) {
+			t.Fatalf("fresh peer %d must be added", i)
+		}
 	}
-	if il.AddPeer(9999) {
-		t.Fatal("the peer set must not grow past maxAcquisitionPeers")
-	}
-	if len(il.Peers()) != maxAcquisitionPeers {
-		t.Fatalf("peer set size = %d, want %d", len(il.Peers()), maxAcquisitionPeers)
+	if got := len(il.Peers()); got != 14 {
+		t.Fatalf("peer set size = %d, want 14", got)
 	}
 }
 

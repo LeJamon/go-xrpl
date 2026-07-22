@@ -364,6 +364,92 @@ func TestStoreDirty_RetainsNodesAfterStoreFailure(t *testing.T) {
 	}
 }
 
+func TestAcknowledgePersistedContextSkipsDuplicateStore(t *testing.T) {
+	sMap := New(TypeState)
+	for i := byte(0); i < 16; i++ {
+		var key [32]byte
+		key[0] = i
+		if err := sMap.Put(key, []byte{i, 0xA5, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0}); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	if err := sMap.AcknowledgePersistedContext(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	called := false
+	if err := sMap.StoreDirty(func([]FlushEntry) error {
+		called = true
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if called {
+		t.Fatal("StoreDirty rewrote nodes after their durability was acknowledged")
+	}
+}
+
+func TestAcknowledgePersistedContextCancellationLeavesRetryableRoot(t *testing.T) {
+	sMap := New(TypeState)
+	if err := sMap.Put([32]byte{0xA1}, []byte{0xB2, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0}); err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+	if err := sMap.AcknowledgePersistedContext(ctx); err != context.Canceled {
+		t.Fatalf("AcknowledgePersistedContext error = %v, want context.Canceled", err)
+	}
+	if !sMap.root.IsDirty() {
+		t.Fatal("canceled acknowledgement cleared the root and made a retry skip dirty nodes")
+	}
+}
+
+func TestAcknowledgePersistedContextFutureMutationStoresOnlyChangedPath(t *testing.T) {
+	sMap := New(TypeState)
+	for i := byte(0); i < 32; i++ {
+		var key [32]byte
+		key[0] = i
+		if err := sMap.Put(key, []byte{i, 0xA5, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	originalHash, err := sMap.Hash()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := sMap.AcknowledgePersistedContext(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	immutable, err := sMap.SnapshotImmutable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	mutable, err := immutable.SnapshotMutable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := mutable.Put([32]byte{0xF1}, []byte{0xF2, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0}); err != nil {
+		t.Fatal(err)
+	}
+	var stored []FlushEntry
+	if err := mutable.StoreDirty(func(entries []FlushEntry) error {
+		stored = append(stored, entries...)
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if len(stored) == 0 || len(stored) > MaxDepth+2 {
+		t.Fatalf("changed-path entries = %d, want 1..%d", len(stored), MaxDepth+2)
+	}
+	gotOriginal, err := immutable.Hash()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if gotOriginal != originalHash {
+		t.Fatal("future mutation changed the immutable acquired ledger")
+	}
+}
+
 // TestFlushDirty_AfterModification verifies only modified nodes are re-flushed.
 func TestFlushDirty_AfterModification(t *testing.T) {
 	sMap := New(TypeState)

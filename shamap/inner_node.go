@@ -9,7 +9,6 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/LeJamon/go-xrpl/crypto/sha512half"
 	"github.com/LeJamon/go-xrpl/protocol"
 )
 
@@ -151,6 +150,19 @@ func (n *innerNode) SetChildIfNil(index int, child Node) Node {
 	return child
 }
 
+func (n *innerNode) ReleaseChild(index int, child Node) bool {
+	if child == nil {
+		return false
+	}
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	if n.children[index] != child {
+		return false
+	}
+	n.children[index] = nil
+	return true
+}
+
 // isFullBelow reports whether this node was proven full-below at the given
 // (current) cache generation. Mirrors rippled
 // SHAMapInnerNode::isFullBelow.
@@ -193,20 +205,15 @@ func (n *innerNode) updateHashUnsafe() error {
 		return nil
 	}
 
-	h := sha512half.Acquire()
-	defer sha512half.Release(h)
-	h.Write(protocol.HashPrefixInnerNode().Bytes())
+	var preimage [fullInnerSerializedSize]byte
+	copy(preimage[:4], protocol.HashPrefixInnerNode().Bytes())
 	for i := range BranchFactor {
 		if n.isBranch&(1<<i) != 0 {
 			ch := n.childPreimageHash(i)
-			h.Write(ch[:])
-		} else {
-			var zero [32]byte
-			h.Write(zero[:])
+			copy(preimage[4+i*32:], ch[:])
 		}
 	}
-	var buf [sha512.Size]byte
-	sum := h.Sum(buf[:0])
+	sum := sha512.Sum512(preimage[:])
 	copy(n.hash[:], sum[:32])
 	return nil
 }

@@ -1,6 +1,7 @@
 package shamap
 
 import (
+	"context"
 	"fmt"
 )
 
@@ -25,27 +26,47 @@ func (sm *SHAMap) StoreDirty(store func([]FlushEntry) error) error {
 	if len(batch.Entries) == 0 {
 		return nil
 	}
-	var (
-		gen  uint32
-		done = func() {}
-	)
-	if sm.backed && sm.fullBelow != nil {
-		gen, done = sm.fullBelow.Begin()
-	}
-	defer done()
 	if err := store(batch.Entries); err != nil {
 		return err
 	}
-	if sm.backed && sm.fullBelow != nil {
-		for _, node := range nodes {
-			if _, ok := node.(*innerNode); ok {
-				sm.fullBelow.Insert(gen, node.Hash())
-			}
-		}
-	}
+	// A stored inner node can still reference descendants absent from a
+	// partially synced map. Only a complete traversal may publish its hash as
+	// full-below.
 	for _, node := range nodes {
 		node.SetDirty(false)
 	}
+	return nil
+}
+
+// AcknowledgePersistedContext marks the currently loaded tree clean after an
+// external ordering barrier has confirmed that every node StoreBatch completed.
+// Nodes are cleared post-order so cancellation always leaves a dirty ancestor
+// and a later StoreDirty cannot skip an unacknowledged descendant.
+func (sm *SHAMap) AcknowledgePersistedContext(ctx context.Context) error {
+	sm.mu.Lock()
+	defer sm.mu.Unlock()
+	return acknowledgePersistedNode(ctx, sm.root)
+}
+
+func acknowledgePersistedNode(ctx context.Context, node Node) error {
+	if node == nil || !node.IsDirty() {
+		return nil
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if inner, ok := node.(*innerNode); ok {
+		for branch := range BranchFactor {
+			child, _, _ := inner.LoadChild(branch)
+			if err := acknowledgePersistedNode(ctx, child); err != nil {
+				return err
+			}
+		}
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	node.SetDirty(false)
 	return nil
 }
 

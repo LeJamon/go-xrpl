@@ -135,6 +135,11 @@ type Adaptor struct {
 	// can re-arm its in-flight tx-set acquisition state. nil-safe.
 	onTxSetRequested func(consensus.TxSetID)
 
+	// onLedgerRequested turns the engine's exact wrong-LCL choice into a
+	// tracked consensus acquisition. nil keeps the direct-sender fallback used
+	// by standalone adaptors and focused tests.
+	onLedgerRequested func(consensus.LedgerID) error
+
 	// onTxSetBuilt fires when BuildTxSet caches a new tx set, so the overlay
 	// can broadcast mtHAVE_SET{tsHAVE} for it. nil-safe.
 	onTxSetBuilt func(consensus.TxSetID)
@@ -525,6 +530,10 @@ func (a *Adaptor) SetOnTxSetRequested(cb func(consensus.TxSetID)) {
 	a.onTxSetRequested = cb
 }
 
+func (a *Adaptor) SetOnLedgerRequested(cb func(consensus.LedgerID) error) {
+	a.onLedgerRequested = cb
+}
+
 func (a *Adaptor) RequestTxSet(id consensus.TxSetID) error {
 	if a.onTxSetRequested != nil {
 		a.onTxSetRequested(id)
@@ -541,6 +550,10 @@ func (a *Adaptor) RequestTxSetMissingNodesFromPeer(id consensus.TxSetID, nodeIDs
 }
 
 func (a *Adaptor) RequestLedger(id consensus.LedgerID) error {
+	if a.onLedgerRequested != nil {
+		return a.onLedgerRequested(id)
+	}
+
 	// Each call is a BROADCAST TMGetLedger charged at every peer, and checkLedger
 	// retries every heartbeat; rippled paces retries on the InboundLedger timer
 	// (~3s), so rate-limit per hash to match.
@@ -562,8 +575,8 @@ func (a *Adaptor) RequestLedgerByHashAndSeq(hash [32]byte, seq uint32) error {
 	return a.sender.RequestLedgerByHashAndSeq(hash, seq)
 }
 
-func (a *Adaptor) RequestLedgerBaseFromPeer(peerID uint64, hash [32]byte, seq uint32) error {
-	return a.sender.RequestLedgerBaseFromPeer(peerID, hash, seq)
+func (a *Adaptor) RequestLedgerBaseFromPeer(peerID uint64, hash [32]byte, seq uint32, indirect bool) error {
+	return a.sender.RequestLedgerBaseFromPeer(peerID, hash, seq, indirect)
 }
 
 // RequestReplayDelta delegates to the network sender, sending a single
@@ -572,12 +585,22 @@ func (a *Adaptor) RequestReplayDelta(peerID uint64, hash [32]byte) error {
 	return a.sender.RequestReplayDelta(peerID, hash)
 }
 
-func (a *Adaptor) RequestStateNodes(peerID uint64, ledgerHash [32]byte, nodeIDs [][]byte, indirect bool) error {
-	return a.sender.RequestStateNodes(peerID, ledgerHash, nodeIDs, indirect)
+func (a *Adaptor) RequestStateNodes(peerID uint64, ledgerHash [32]byte, nodeIDs [][]byte, queryDepth uint32, indirect bool) error {
+	return a.sender.RequestStateNodes(peerID, ledgerHash, nodeIDs, queryDepth, indirect)
 }
 
-func (a *Adaptor) RequestTransactionNodes(peerID uint64, ledgerHash [32]byte, nodeIDs [][]byte, indirect bool) error {
-	return a.sender.RequestTransactionNodes(peerID, ledgerHash, nodeIDs, indirect)
+func (a *Adaptor) RequestTransactionNodes(peerID uint64, ledgerHash [32]byte, nodeIDs [][]byte, queryDepth uint32, indirect bool) error {
+	return a.sender.RequestTransactionNodes(peerID, ledgerHash, nodeIDs, queryDepth, indirect)
+}
+
+func (a *Adaptor) PeerLatency(peerID uint64) (time.Duration, bool) {
+	sender, ok := a.sender.(interface {
+		PeerLatency(uint64) (time.Duration, bool)
+	})
+	if !ok {
+		return 0, false
+	}
+	return sender.PeerLatency(peerID)
 }
 
 // EngineConfigForReplay returns the shared (non-per-ledger) tx.EngineConfig
@@ -630,6 +653,10 @@ func (a *Adaptor) SendToPeer(peerID uint64, frame []byte) error {
 	return a.sender.SendToPeer(peerID, frame)
 }
 
+func (a *Adaptor) SendPriorityToPeer(peerID uint64, frame []byte) error {
+	return a.sender.SendPriorityToPeer(peerID, frame)
+}
+
 // ShouldShedLedgerRequest delegates to NetworkSender so Router can gate
 // ledger-body serving through the adaptor.
 func (a *Adaptor) ShouldShedLedgerRequest(peerID uint64, loadedLocal bool) bool {
@@ -642,10 +669,8 @@ func (a *Adaptor) PeerWithLedger(target [32]byte, seq uint32, exclude uint64) (u
 	return a.sender.PeerWithLedger(target, seq, exclude)
 }
 
-// PeersWithLedger delegates to NetworkSender; the Router uses it to broaden a
-// stalled acquisition's source-peer set. See Overlay.PeersWithLedger.
-func (a *Adaptor) PeersWithLedger(target [32]byte, seq uint32, excluded []uint64, max int) []uint64 {
-	return a.sender.PeersWithLedger(target, seq, excluded, max)
+func (a *Adaptor) SelectLedgerPeers(target [32]byte, seq uint32, excluded []uint64, max int) []uint64 {
+	return a.sender.SelectLedgerPeers(target, seq, excluded, max)
 }
 
 // PeerWithTxSet delegates to NetworkSender; the Router uses it to relay an

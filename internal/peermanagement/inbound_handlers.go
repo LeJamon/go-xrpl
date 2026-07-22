@@ -244,17 +244,11 @@ func (o *Overlay) handleGetObjectsMessage(evt Event) {
 	// are dropped.
 	switch gob.ObjType {
 	case message.ObjectTypeFetchPack, message.ObjectTypeStateNode, message.ObjectTypeTransactionNode:
-		select {
-		case o.messages <- &InboundMessage{
+		o.forwardLedgerData(&InboundMessage{
 			PeerID:  evt.PeerID,
 			Type:    evt.MessageType,
 			Payload: evt.Payload,
-		}:
-		default:
-			o.droppedMessages.Add(1)
-			slog.Warn("TMGetObjects node reply dropped: channel full",
-				"t", "Overlay", "peer", evt.PeerID)
-		}
+		})
 		return
 	}
 	slog.Debug("TMGetObjects reply received without outstanding request; dropping",

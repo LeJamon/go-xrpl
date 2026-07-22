@@ -1,7 +1,6 @@
 package message
 
 import (
-	"bytes"
 	"encoding/binary"
 	"errors"
 	"fmt"
@@ -352,11 +351,15 @@ func WriteMessageCompressed(w io.Writer, msgType MessageType, payload []byte, al
 
 // BuildWireMessage creates a complete wire-protocol message (header + payload) as bytes.
 func BuildWireMessage(msgType MessageType, payload []byte) ([]byte, error) {
-	var buf bytes.Buffer
-	if err := WriteMessage(&buf, msgType, payload); err != nil {
+	if len(payload) > MaxPayloadSize {
+		return nil, ErrMessageTooLarge
+	}
+	buf := make([]byte, HeaderSizeUncompressed+len(payload))
+	if err := EncodeHeader(buf, uint32(len(payload)), msgType, AlgorithmNone, 0); err != nil {
 		return nil, err
 	}
-	return buf.Bytes(), nil
+	copy(buf[HeaderSizeUncompressed:], payload)
+	return buf, nil
 }
 
 // EncodeFrame serializes a message and wraps it in its wire-protocol header.

@@ -70,21 +70,26 @@ func (t Type) String() string {
 
 // SHAMap is the main structure representing the tree
 type SHAMap struct {
-	mu        sync.RWMutex
-	root      *innerNode
-	mapType   Type
-	state     State
-	ledgerSeq uint32
-	full      bool
-	backed    bool
-	family    Family // nil for unbacked maps
+	mu           sync.RWMutex
+	familyMu     sync.RWMutex
+	attachmentMu sync.Mutex
+	walkMu       sync.Mutex
+	backedWalk   *backedWalkCursor
+	root         *innerNode
+	mapType      Type
+	state        State
+	ledgerSeq    uint32
+	full         bool
+	backed       bool
+	family       Family // nil for unbacked maps
 	// fullBelow prunes completed subtrees from missing-node walks. Backed maps
 	// share their family's cache; snapshots share the source map's cache.
 	fullBelow *FullBelowCache
 	// cachedSize memoises Size(); -1 = uncached. Only written once the
 	// map is immutable, so concurrent first-readers race benignly on a
 	// frozen tree.
-	cachedSize atomic.Int64
+	cachedSize  atomic.Int64
+	familyLoads atomic.Uint64
 }
 
 // New creates a new empty SHAMap with the specified type
@@ -125,8 +130,11 @@ func NewBacked(mapType Type, family Family) (*SHAMap, error) {
 func (sm *SHAMap) SetFamily(family Family) {
 	sm.mu.Lock()
 	defer sm.mu.Unlock()
+	sm.familyMu.Lock()
+	defer sm.familyMu.Unlock()
 	sm.family = family
 	sm.backed = family != nil
+	sm.backedWalk = nil
 	if family != nil {
 		sm.fullBelow = familyFullBelowCache(family)
 	}
@@ -224,7 +232,18 @@ func (sm *SHAMap) descendCtx(ctx context.Context, inner *innerNode, branch int) 
 
 	// If another reader installed a child while we were fetching, return
 	// theirs and let ours be GC'd.
-	return inner.SetChildIfNil(branch, node), nil
+	installed := inner.SetChildIfNil(branch, node)
+	if installed == node {
+		sm.familyLoads.Add(1)
+	}
+	return installed, nil
+}
+
+// FamilyLoadCount returns how many nodes this map has loaded and verified from
+// its backing Family. The count includes temporary traversal nodes released
+// after their subtrees are proven complete.
+func (sm *SHAMap) FamilyLoadCount() uint64 {
+	return sm.familyLoads.Load()
 }
 
 // Type returns the map type
@@ -834,6 +853,8 @@ func (sm *SHAMap) createTypedLeaf(nodeType NodeType, item *Item) (LeafNode, erro
 
 // IsBacked returns true if this SHAMap is backed by a NodeStore.
 func (sm *SHAMap) IsBacked() bool {
+	sm.mu.RLock()
+	defer sm.mu.RUnlock()
 	return sm.backed
 }
 
@@ -841,5 +862,7 @@ func (sm *SHAMap) IsBacked() bool {
 // source's cache, so a snapshot and its source agree on which subtrees are
 // proven complete.
 func (sm *SHAMap) FullBelowCache() *FullBelowCache {
+	sm.mu.RLock()
+	defer sm.mu.RUnlock()
 	return sm.fullBelow
 }

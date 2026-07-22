@@ -81,10 +81,14 @@ type Overlay struct {
 	// outboundSem caps concurrent autoconnect Connect goroutines so
 	// a slow discovery tick cannot stack one goroutine per candidate.
 	outboundSem      chan struct{}
+	autoconnectWake  chan struct{}
 	peerStartMu      sync.Mutex
 	peerStartWG      sync.WaitGroup
 	peerStartsClosed bool
 	bootstrap        bootstrapGovernor
+	bootstrapLeaseMu sync.Mutex
+	bootstrapLeases  map[PeerID]*bootstrapLease
+	bootstrapDiag    atomic.Uint64
 
 	// relayedIndex maps suppression-hash → set of peers known to have
 	// that message. Populated as we forward a validator message (each
@@ -97,10 +101,10 @@ type Overlay struct {
 
 	// Coordination channels
 	//
-	// events is the LOSSY hot path: EventMessageReceived (from peers) and
-	// EventLedgerResponse (server-side ledger-sync replies). A non-blocking
-	// send drops to droppedEvents under back-pressure so the read hot path
-	// can never deadlock against an event loop holding peersMu.
+	// events is the best-effort hot path for ordinary EventMessageReceived
+	// traffic and EventLedgerResponse. Acquisition traffic uses the separate
+	// bounded acquisitionEvents path so requested replies apply transport
+	// backpressure instead of being discarded.
 	//
 	// lifecycle is the dedicated NON-LOSSY path for peer lifecycle events
 	// (Connecting/Connected/Disconnected/Failed). Sends BLOCK until the
@@ -109,12 +113,12 @@ type Overlay struct {
 	// would leak router/relay per-peer state until the idle sweep. Keeping
 	// it off the message channel means a message burst can no longer crowd
 	// out a disconnect. Both are drained by the single eventLoop goroutine.
-	events    chan Event
-	lifecycle chan Event
+	events            chan Event
+	acquisitionEvents chan Event
+	lifecycle         chan Event
 
-	// messages carries consensus- and ledger-acquisition-relevant peer
-	// frames (proposals, validations, ledger data, status changes,
-	// manifests, validator lists, replay/proof-path replies) to the
+	// messages carries ordinary consensus peer frames (proposals,
+	// validations, status changes, and validator lists) to the
 	// router. txMessages carries inbound TMTransaction frames on a
 	// separate lane. Splitting the two means a transaction flood that
 	// saturates txMessages can no longer crowd consensus/acquisition
@@ -123,14 +127,14 @@ type Overlay struct {
 	// mtVALIDATION (issue #1103).
 	messages   chan *InboundMessage
 	txMessages chan *InboundMessage
+	// manifestMessages is fed directly by peer read loops with bounded
+	// backpressure. Signature verification is intentionally isolated from both
+	// the overlay event loop and the consensus router.
+	manifestMessages chan *InboundMessage
 
-	// ledgerData carries acquisition replies (mtLEDGER_DATA and the
-	// replay-delta / proof-path responses) on their own lane so a
-	// serve/propose/validation flood on the shared messages channel can't
-	// shed a reply THIS node explicitly requested and wedge an inbound-ledger
-	// acquisition. Generously sized (DefaultLedgerDataBufferSize); on overflow
-	// the frame is still shed, but droppedLedgerData counts it so residual
-	// loss stays visible.
+	// ledgerData carries acquisition replies (mtLEDGER_DATA, by-hash objects,
+	// and replay/proof-path responses) on a bounded backpressure path. This
+	// prevents unrelated traffic from discarding replies required for catch-up.
 	ledgerData chan *InboundMessage
 
 	// serveJobs carries heavy inbound serve work (fetch-pack, generic
@@ -218,11 +222,6 @@ type Overlay struct {
 	// TMTransactions batch. Surfaced via server_info as jq_trans_overflow.
 	droppedTransactions atomic.Uint64
 
-	// droppedLedgerData counts acquisition replies shed because the
-	// ledgerData lane was full — evidence of residual loss on the dedicated
-	// lane under extreme outstanding-request volume.
-	droppedLedgerData atomic.Uint64
-
 	// Transaction reduce-relay rolling-average metrics surfaced by the
 	// tx_reduce_relay RPC. Inbound tx-relay-related messages are
 	// counted by type at the ingress chokepoint (onMessageReceived),
@@ -292,7 +291,8 @@ type Overlay struct {
 
 	// stopCh is closed by Stop to release any lifecycle send blocked on an
 	// event loop that has already exited during shutdown.
-	stopCh chan struct{}
+	stopCh  chan struct{}
+	runDone <-chan struct{}
 }
 
 // LedgerSync returns the overlay's ledger-sync handler so callers in a
@@ -341,13 +341,10 @@ func (o *Overlay) PeerWithLedger(target [32]byte, seq uint32, exclude PeerID) (P
 	})
 }
 
-// PeersWithLedger returns up to max connected peers that can serve ledger
-// (target, seq), excluding any id in excluded, ordered best-first by
-// peerRelayScore. Mirrors rippled InboundLedger::addPeers / PeerSet::addPeers,
-// which scores the overlay and accepts the top peers — broadening a stalled
-// acquisition's source set across several peers per timeout instead of one.
-// Returns nil when none qualifies.
-func (o *Overlay) PeersWithLedger(target [32]byte, seq uint32, excluded []PeerID, max int) []PeerID {
+// SelectLedgerPeers returns up to max connected peers for an inbound-ledger
+// peer set. Peers known to have the ledger receive a scoring bonus, but peers
+// without an advertisement remain eligible.
+func (o *Overlay) SelectLedgerPeers(target [32]byte, seq uint32, excluded []PeerID, max int) []PeerID {
 	if max <= 0 {
 		return nil
 	}
@@ -368,10 +365,10 @@ func (o *Overlay) PeersWithLedger(target [32]byte, seq uint32, excluded []PeerID
 		if _, ok := skip[id]; ok || peer.State() != PeerStateConnected {
 			continue
 		}
-		if !peer.HasLedger(target, seq) {
-			continue
-		}
-		cands = append(cands, scoredPeer{id: id, score: peerRelayScore(peer)})
+		cands = append(cands, scoredPeer{
+			id:    id,
+			score: peerSetScore(peer, peer.HasLedger(target, seq)),
+		})
 	}
 	if len(cands) == 0 {
 		return nil
@@ -429,13 +426,20 @@ func (o *Overlay) bestPeer(exclude PeerID, want func(*Peer) bool) (PeerID, bool)
 // the data, so the have-item term is constant across candidates and does not
 // affect the argmax — it is kept for a faithful port of the constants.
 func peerRelayScore(p *Peer) int {
+	return peerSetScore(p, true)
+}
+
+func peerSetScore(p *Peer, haveItem bool) int {
 	const (
 		spRandomMax = 9999
 		spHaveItem  = 10000
 		spLatency   = 30
 		spNoLatency = 8000
 	)
-	score := mrand.IntN(spRandomMax+1) + spHaveItem //nolint:gosec // G404: non-security peer timing/selection jitter
+	score := mrand.IntN(spRandomMax + 1) //nolint:gosec // G404: non-security peer timing/selection jitter
+	if haveItem {
+		score += spHaveItem
+	}
 	if lat, ok := p.Latency(); ok {
 		score -= int(lat.Milliseconds()) * spLatency
 	} else {
@@ -648,18 +652,19 @@ func (o *Overlay) PeerClosedLedger(peerID PeerID) ([32]byte, bool) {
 // AcknowledgePeerBootstrap releases cold-start admission after a peer's
 // startup traffic has been parsed and accepted by its protocol handler.
 func (o *Overlay) AcknowledgePeerBootstrap(peerID PeerID) {
-	peer, ok := o.getPeer(peerID)
-	if ok {
-		peer.acknowledgeBootstrap()
-	}
+	o.completePeerBootstrap(peerID)
 }
 
 // RejectPeerBootstrap closes a cold-start peer whose startup traffic could
 // not be processed, allowing the automatic dialer to retry another endpoint.
 func (o *Overlay) RejectPeerBootstrap(peerID PeerID) {
+	released := o.releasePeerBootstrap(peerID)
 	peer, ok := o.getPeer(peerID)
-	if ok && peer.onBootstrapReady != nil && !o.bootstrap.isReady() {
+	if released && ok && peer.onBootstrapReady != nil {
 		peer.Close()
+	}
+	if released {
+		o.wakeAutoconnect()
 	}
 }
 
@@ -822,29 +827,32 @@ func New(opts ...Option) (*Overlay, error) {
 	}
 
 	o := &Overlay{
-		cfg:             cfg,
-		identity:        identity,
-		cluster:         clusterReg,
-		instanceCookie:  cookie,
-		discovery:       NewDiscovery(&cfg, events),
-		ledgerSync:      NewLedgerSyncHandler(events),
-		peers:           make(map[PeerID]*Peer),
-		peerKeys:        make(map[string]PeerID),
-		peerEndpoints:   make(map[string]PeerID),
-		inboundIPs:      make(map[string]int),
-		pendingInbound:  make(map[PeerID]struct{}),
-		events:          events,
-		messages:        make(chan *InboundMessage, messageBufferSize(cfg.MessageBufferSize)),
-		txMessages:      make(chan *InboundMessage, txLaneBufferSize(cfg.MaxTransactions)),
-		ledgerData:      make(chan *InboundMessage, DefaultLedgerDataBufferSize),
-		lifecycle:       make(chan Event, lifecycleBufferSize(&cfg)),
-		stopCh:          make(chan struct{}),
-		listenerReady:   make(chan struct{}),
-		relayedIndex:    make(map[[32]byte]*relayedEntry),
-		clockForIndex:   time.Now,
-		inboundSem:      make(chan struct{}, inboundCap),
-		outboundSem:     make(chan struct{}, outboundCap),
-		resourceManager: resource.NewManager(nil, nil),
+		cfg:               cfg,
+		identity:          identity,
+		cluster:           clusterReg,
+		instanceCookie:    cookie,
+		discovery:         NewDiscovery(&cfg, events),
+		autoconnectWake:   make(chan struct{}, 1),
+		ledgerSync:        NewLedgerSyncHandler(events),
+		peers:             make(map[PeerID]*Peer),
+		peerKeys:          make(map[string]PeerID),
+		peerEndpoints:     make(map[string]PeerID),
+		inboundIPs:        make(map[string]int),
+		pendingInbound:    make(map[PeerID]struct{}),
+		events:            events,
+		acquisitionEvents: make(chan Event, acquisitionEventBufferSize),
+		messages:          make(chan *InboundMessage, messageBufferSize(cfg.MessageBufferSize)),
+		txMessages:        make(chan *InboundMessage, txLaneBufferSize(cfg.MaxTransactions)),
+		manifestMessages:  make(chan *InboundMessage, manifestMessageBufferSize),
+		ledgerData:        make(chan *InboundMessage, DefaultLedgerDataBufferSize),
+		lifecycle:         make(chan Event, lifecycleBufferSize(&cfg)),
+		stopCh:            make(chan struct{}),
+		listenerReady:     make(chan struct{}),
+		relayedIndex:      make(map[[32]byte]*relayedEntry),
+		clockForIndex:     time.Now,
+		inboundSem:        make(chan struct{}, inboundCap),
+		outboundSem:       make(chan struct{}, outboundCap),
+		resourceManager:   resource.NewManager(nil, nil),
 	}
 	if identity != nil {
 		o.localNodeIdentity = identity.PublicKey()
@@ -938,6 +946,7 @@ func (o *Overlay) Run(ctx context.Context) error {
 	}
 
 	g, gCtx := errgroup.WithContext(o.ctx)
+	o.runDone = gCtx.Done()
 
 	// Start the bounded serve-worker pool before the event loop so heavy
 	// inbound serve work (handleGetObjectsMessage) runs off the loop. The
@@ -953,8 +962,9 @@ func (o *Overlay) Run(ctx context.Context) error {
 		g.Go(func() error { return o.acceptLoop(gCtx) })
 	}
 
-	// Event processing loop
+	// Event processing loops
 	g.Go(func() error { return o.eventLoop(gCtx) })
+	g.Go(func() error { return o.acquisitionEventLoop(gCtx) })
 
 	// Discovery/autoconnect loop
 	g.Go(func() error { return o.discoveryLoop(gCtx) })
@@ -1020,7 +1030,7 @@ func (o *Overlay) Stop() error {
 }
 
 // eventLoop processes internal events. It drains both the dedicated
-// lifecycle channel and the lossy message channel; the single goroutine
+// lifecycle channel and the best-effort message channel; the single goroutine
 // keeps handleEvent's per-peer state mutations serialized.
 func (o *Overlay) eventLoop(ctx context.Context) error {
 	for {
@@ -1031,6 +1041,17 @@ func (o *Overlay) eventLoop(ctx context.Context) error {
 			o.handleEvent(evt)
 		case evt := <-o.events:
 			o.handleEvent(evt)
+		}
+	}
+}
+
+func (o *Overlay) acquisitionEventLoop(ctx context.Context) error {
+	for {
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case evt := <-o.acquisitionEvents:
+			o.onMessageReceived(evt)
 		}
 	}
 }

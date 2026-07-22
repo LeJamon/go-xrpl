@@ -2,6 +2,7 @@ package shamap
 
 import (
 	"bytes"
+	"context"
 	"errors"
 	"fmt"
 	"sync"
@@ -17,6 +18,7 @@ var (
 	ErrUnexpectedNode    = errors.New("unexpected node received")
 	ErrEmptyBranchOnPath = errors.New("path descends into an empty branch")
 	ErrParentNotInTree   = errors.New("parent node not yet loaded for path")
+	ErrNodeSerialization = errors.New("verified node serialization failed")
 	// ErrNodeNotInStore marks a backed-map descend whose child is genuinely
 	// absent from the family store, distinguishing a true miss from a
 	// transient fetch failure (I/O error, cancellation).
@@ -106,13 +108,10 @@ func (sm *SHAMap) WalkMap(maxMissing int, filter SyncFilter) []MissingNode {
 	return sm.getMissingNodesUnsafe(maxMissing, filter)
 }
 
-// WalkMapParallel is the parallel variant of WalkMap. It fans out one
-// goroutine per non-empty root branch and lets each worker walk its
-// subtree independently; results share a single slice guarded by a
-// mutex. An in-mutex stop flag prevents over-appending once maxMissing
-// entries have been collected — workers that walk missing-node-free
-// subtrees still run their stacks to completion, since the flag is
-// checked only inside the report callback.
+// WalkMapParallel is the parallel variant of WalkMap. It fans out across the
+// root branches and lets each bounded worker walk its subtree independently.
+// Results share a single slice guarded by a mutex, and exhausting maxMissing
+// cancels sibling walks before they continue loading unrelated subtrees.
 //
 // Modeled on rippled's SHAMap::walkMapParallel (SHAMapDelta.cpp:282).
 // One intentional divergence: hash-only branches at root depth 1 that
@@ -125,50 +124,72 @@ func (sm *SHAMap) WalkMap(maxMissing int, filter SyncFilter) []MissingNode {
 // maps lazy-load hash-only branches from the family before declaring
 // them missing.
 //
-// On a 16-way branched tree the speedup approaches a factor of 16 for
-// cold in-memory scans; for small trees the goroutine startup overhead
-// is negligible since at most 16 workers ever run.
+// A SHAMap therefore runs at most 16 workers. Store-loaded nodes are retained
+// only along incomplete paths needed to attach later peer responses.
 func (sm *SHAMap) WalkMapParallel(maxMissing int, filter SyncFilter) []MissingNode {
+	missing, _ := sm.WalkMapParallelContext(context.Background(), maxMissing, filter)
+	return missing
+}
+
+// WalkMapParallelContext is WalkMapParallel with cancellation propagated to
+// each backing-store fetch and subtree worker.
+func (sm *SHAMap) WalkMapParallelContext(ctx context.Context, maxMissing int, filter SyncFilter) ([]MissingNode, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	if filter == nil {
 		filter = &DefaultSyncFilter{}
 	}
+	sm.walkMu.Lock()
+	defer sm.walkMu.Unlock()
 
 	type subtreeStart struct {
 		node     *innerNode
 		nodeID   NodeID
 		nodeHash [32]byte
-		branch   int
 	}
-
-	gen, cache, done := fullBelowContext(sm)
-	defer done()
-	backed := sm != nil && sm.backed && cache != nil
 
 	sm.mu.RLock()
+	sm.familyMu.RLock()
 	if sm.root == nil || sm.state == StateInvalid {
+		sm.familyMu.RUnlock()
 		sm.mu.RUnlock()
-		return nil
+		return nil, nil
 	}
 	root := sm.root
+	family := sm.family
+	cache := sm.fullBelow
+	sm.mu.RUnlock()
+	defer sm.familyMu.RUnlock()
+
+	gen := uint32(0)
+	done := func() {}
+	if cache != nil {
+		gen, done = cache.Begin()
+	}
+	defer done()
+	backed := family != nil && cache != nil
 	rootID := NewRootNodeID()
 	rootHash := root.Hash()
-
-	// The whole tree was already proven complete — prune it.
-	if root.isFullBelow(gen) {
-		sm.mu.RUnlock()
-		return nil
+	if backed {
+		return sm.walkBackedContext(ctx, root, family, cache, gen, maxMissing, filter)
 	}
 
-	// Capture every non-empty root branch under the source-map lock.
-	// Hash-only branches at depth 1 are reported synchronously here
-	// because they have no subtree to walk.
+	if root.isFullBelow(gen) {
+		return nil, nil
+	}
+
 	var (
 		mu           sync.Mutex
 		missing      []MissingNode
 		stopped      bool
-		rootComplete = true // every depth-1 branch resident and full-below
+		stopWalk     atomic.Bool
+		rootComplete = true
 		subtrees     = make([]subtreeStart, 0, BranchFactor)
 	)
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 
 	reportLocked := func(m MissingNode) bool {
 		mu.Lock()
@@ -179,12 +200,20 @@ func (sm *SHAMap) WalkMapParallel(maxMissing int, filter SyncFilter) []MissingNo
 		missing = append(missing, m)
 		if maxMissing > 0 && len(missing) >= maxMissing {
 			stopped = true
+			stopWalk.Store(true)
 			return true
 		}
 		return false
 	}
 
 	for branch := range BranchFactor {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+		if stopWalk.Load() {
+			rootComplete = false
+			break
+		}
 		child, childHash, isSet := root.LoadChild(branch)
 		if !isSet {
 			continue
@@ -192,18 +221,6 @@ func (sm *SHAMap) WalkMapParallel(maxMissing int, filter SyncFilter) []MissingNo
 		childNodeID, err := rootID.ChildNodeID(uint8(branch))
 		if err != nil {
 			continue
-		}
-		// Backed short-circuit: a released depth-1 child proven full-below
-		// needs no fetch or descent.
-		if child == nil && backed && cache.Has(gen, childHash) {
-			continue
-		}
-		if child == nil {
-			// Lenient request path: a transient fetch failure reports the
-			// branch missing (self-corrects via the wire).
-			if loaded, _ := loadFromStore(sm, root, branch); loaded != nil {
-				child = loaded
-			}
 		}
 		if child == nil {
 			rootComplete = false
@@ -228,10 +245,8 @@ func (sm *SHAMap) WalkMapParallel(maxMissing int, filter SyncFilter) []MissingNo
 			node:     inner,
 			nodeID:   childNodeID,
 			nodeHash: childHash,
-			branch:   branch,
 		})
 	}
-	sm.mu.RUnlock()
 
 	if len(subtrees) == 0 {
 		// No inner subtrees to fan out. Mark the root complete when every
@@ -242,26 +257,43 @@ func (sm *SHAMap) WalkMapParallel(maxMissing int, filter SyncFilter) []MissingNo
 		if markRoot {
 			markRootFullBelow(root, gen)
 		}
-		return missing
+		return missing, ctx.Err()
 	}
 
 	subFull := make([]bool, len(subtrees))
-	var anyStopped atomic.Bool
+	var firstErr error
+	var errMu sync.Mutex
 	var wg sync.WaitGroup
 	wg.Add(len(subtrees))
 	for i, s := range subtrees {
 		go func() {
 			defer wg.Done()
-			full, stop, _ := walkFullBelow(
-				sm, s.node, s.nodeID, s.nodeHash, 1, gen, filter, false, cache, reportLocked,
+			result, walkErr := walkFullBelowState(
+				ctx, sm, nil, s.node, s.nodeID, s.nodeHash, 1, gen, filter, false, cache, false, false, reportLocked,
+				func() bool { return stopWalk.Load() || ctx.Err() != nil },
 			)
-			subFull[i] = full
-			if stop {
-				anyStopped.Store(true)
+			subFull[i] = result.full
+			if result.stopped {
+				stopWalk.Store(true)
+			}
+			if walkErr != nil {
+				errMu.Lock()
+				if firstErr == nil {
+					firstErr = walkErr
+				}
+				errMu.Unlock()
 			}
 		}()
 	}
 	wg.Wait()
+	if firstErr != nil {
+		return nil, firstErr
+	}
+	for i := range subtrees {
+		if !subFull[i] {
+			rootComplete = false
+		}
+	}
 
 	// Mark the root full-below only when every branch — those handled
 	// inline and every fanned-out subtree — came back complete and no
@@ -274,13 +306,13 @@ func (sm *SHAMap) WalkMapParallel(maxMissing int, filter SyncFilter) []MissingNo
 		}
 	}
 	mu.Lock()
-	markRoot := rootComplete && allSub && !stopped && !anyStopped.Load()
+	markRoot := rootComplete && allSub && !stopped && !stopWalk.Load()
 	mu.Unlock()
 	if markRoot {
 		markRootFullBelow(root, gen)
 	}
 
-	return missing
+	return missing, nil
 }
 
 // markRootFullBelow records the root as full-below at gen.
@@ -296,13 +328,20 @@ func markRootFullBelow(root *innerNode, gen uint32) {
 // fan-out is shared with the lower-level WalkMap API. maxNodes == 0 is
 // unbounded; a nil filter behaves like DefaultSyncFilter.
 func (sm *SHAMap) GetMissingNodes(maxNodes int, filter SyncFilter) []MissingNode {
+	missing, _ := sm.GetMissingNodesContext(context.Background(), maxNodes, filter)
+	return missing
+}
+
+// GetMissingNodesContext is GetMissingNodes with cancellation propagated to
+// the parallel traversal and backing Family.
+func (sm *SHAMap) GetMissingNodesContext(ctx context.Context, maxNodes int, filter SyncFilter) ([]MissingNode, error) {
 	sm.mu.RLock()
 	state := sm.state
 	sm.mu.RUnlock()
 	if state != StateSyncing {
-		return nil
+		return nil, nil
 	}
-	return sm.WalkMapParallel(maxNodes, filter)
+	return sm.WalkMapParallelContext(ctx, maxNodes, filter)
 }
 
 // getMissingNodesUnsafe collects up to maxNodes missing-node references
@@ -329,7 +368,7 @@ func (sm *SHAMap) missingNodesLocked(maxNodes int, filter SyncFilter, strict boo
 
 	var missing []MissingNode
 	_, err := walkSubtreeForMissing(
-		sm,
+		context.Background(), sm,
 		sm.root,
 		NewRootNodeID(),
 		sm.root.Hash(),
@@ -358,6 +397,8 @@ func (sm *SHAMap) missingNodesLocked(maxNodes int, filter SyncFilter, strict boo
 func (sm *SHAMap) AddKnownNode(nodeHash [32]byte, data []byte) error {
 	sm.mu.Lock()
 	defer sm.mu.Unlock()
+	sm.attachmentMu.Lock()
+	defer sm.attachmentMu.Unlock()
 
 	if sm.state != StateSyncing {
 		return ErrSyncNotInProgress
@@ -396,22 +437,46 @@ func (sm *SHAMap) AddKnownNode(nodeHash [32]byte, data []byte) error {
 //
 // Returns the same results as AddKnownNodeByID.
 func (sm *SHAMap) AddKnownNodeFromPrefix(nodeID NodeID, data []byte) (AddNodeResult, error) {
+	result, _, err := sm.addKnownNodeFromPrefix(nodeID, data, false)
+	return result, err
+}
+
+// AddKnownNodeFromPrefixWithEntry inserts and verifies a prefix-format node,
+// returning the clean node's NodeStore entry for the caller to persist.
+func (sm *SHAMap) AddKnownNodeFromPrefixWithEntry(nodeID NodeID, data []byte) (AddNodeResult, FlushEntry, error) {
+	return sm.addKnownNodeFromPrefix(nodeID, data, true)
+}
+
+func (sm *SHAMap) addKnownNodeFromPrefix(nodeID NodeID, data []byte, withEntry bool) (AddNodeResult, FlushEntry, error) {
 	sm.mu.Lock()
 	defer sm.mu.Unlock()
+	sm.attachmentMu.Lock()
+	defer sm.attachmentMu.Unlock()
 
 	if sm.state != StateSyncing {
-		return NodeInvalid, ErrSyncNotInProgress
+		return NodeInvalid, FlushEntry{}, ErrSyncNotInProgress
 	}
 	if nodeID.IsRoot() {
-		return NodeInvalid, ErrUnexpectedNode
+		return NodeInvalid, FlushEntry{}, ErrUnexpectedNode
 	}
 	if len(data) == 0 {
-		return NodeInvalid, ErrInvalidNodeData
+		return NodeInvalid, FlushEntry{}, ErrInvalidNodeData
 	}
 
-	return sm.attachKnownNodeAt(nodeID, func() (Node, error) {
-		return deserializeFromPrefix(data)
+	var verified Node
+	result, err := sm.attachKnownNodeAt(nodeID, !withEntry, func() (Node, error) {
+		var derr error
+		verified, derr = deserializeFromPrefix(data)
+		return verified, derr
 	})
+	if err != nil || result != NodeUseful || !withEntry {
+		return result, FlushEntry{}, err
+	}
+	entry, err := flushEntryForNode(verified, sm.ledgerSeq, sm.mapType)
+	if err != nil {
+		return result, FlushEntry{}, fmt.Errorf("%w: %v", ErrNodeSerialization, err)
+	}
+	return result, entry, err
 }
 
 // AddKnownNodeByID inserts a node from wire data at the position specified
@@ -431,22 +496,46 @@ func (sm *SHAMap) AddKnownNodeFromPrefix(nodeID NodeID, data []byte) (AddNodeRes
 //     not reference), ErrNodeHashMismatch, ErrUnexpectedNode (inner where only
 //     a leaf may live), or ErrSyncNotInProgress / ErrInvalidNodeData on misuse
 func (sm *SHAMap) AddKnownNodeByID(nodeID NodeID, data []byte) (AddNodeResult, error) {
+	result, _, err := sm.addKnownNodeByID(nodeID, data, false)
+	return result, err
+}
+
+// AddKnownNodeByIDWithEntry inserts and verifies a wire node, returning the
+// clean node's NodeStore entry for the caller to persist.
+func (sm *SHAMap) AddKnownNodeByIDWithEntry(nodeID NodeID, data []byte) (AddNodeResult, FlushEntry, error) {
+	return sm.addKnownNodeByID(nodeID, data, true)
+}
+
+func (sm *SHAMap) addKnownNodeByID(nodeID NodeID, data []byte, withEntry bool) (AddNodeResult, FlushEntry, error) {
 	sm.mu.Lock()
 	defer sm.mu.Unlock()
+	sm.attachmentMu.Lock()
+	defer sm.attachmentMu.Unlock()
 
 	if sm.state != StateSyncing {
-		return NodeInvalid, ErrSyncNotInProgress
+		return NodeInvalid, FlushEntry{}, ErrSyncNotInProgress
 	}
 	if nodeID.IsRoot() {
-		return NodeInvalid, ErrUnexpectedNode
+		return NodeInvalid, FlushEntry{}, ErrUnexpectedNode
 	}
 	if len(data) == 0 {
-		return NodeInvalid, ErrInvalidNodeData
+		return NodeInvalid, FlushEntry{}, ErrInvalidNodeData
 	}
 
-	return sm.attachKnownNodeAt(nodeID, func() (Node, error) {
-		return deserializeNodeFromWire(data)
+	var verified Node
+	result, err := sm.attachKnownNodeAt(nodeID, !withEntry, func() (Node, error) {
+		var derr error
+		verified, derr = deserializeNodeFromWire(data)
+		return verified, derr
 	})
+	if err != nil || result != NodeUseful || !withEntry {
+		return result, FlushEntry{}, err
+	}
+	entry, err := flushEntryForNode(verified, sm.ledgerSeq, sm.mapType)
+	if err != nil {
+		return result, FlushEntry{}, fmt.Errorf("%w: %v", ErrNodeSerialization, err)
+	}
+	return result, entry, err
 }
 
 // attachKnownNodeAt descends along nodeID's path and attaches the node
@@ -458,8 +547,9 @@ func (sm *SHAMap) AddKnownNodeByID(nodeID NodeID, data []byte) (AddNodeResult, e
 // not an error, so off-frontier fat-reply nodes converge over re-requests
 // instead of flooding the reject log. Shared by AddKnownNodeByID and
 // AddKnownNodeFromPrefix. Caller must hold the write lock and have validated
-// state and nodeID.
-func (sm *SHAMap) attachKnownNodeAt(nodeID NodeID, deserialize func() (Node, error)) (AddNodeResult, error) {
+// state and nodeID. markDirty is false when the caller receives and persists a
+// FlushEntry; attaching verified immutable data does not modify the tree hash.
+func (sm *SHAMap) attachKnownNodeAt(nodeID NodeID, markDirty bool, deserialize func() (Node, error)) (AddNodeResult, error) {
 	if sm.root == nil {
 		return NodeInvalid, ErrParentNotInTree
 	}
@@ -504,18 +594,21 @@ func (sm *SHAMap) attachKnownNodeAt(nodeID NodeID, deserialize func() (Node, err
 			if parent.SetChildIfNil(branch, newNode) != newNode {
 				return NodeDuplicate, nil
 			}
-			newNode.SetDirty(true)
-			for _, ancestor := range ancestors {
-				ancestor.SetDirty(true)
+			if markDirty {
+				newNode.SetDirty(true)
+				for _, ancestor := range ancestors {
+					ancestor.SetDirty(true)
+				}
 			}
 			return NodeUseful, nil
 		}
 
 		if child == nil {
-			// Ancestor still a hash-only stub: cannot hook the node yet. The
-			// next getMissingNodes walk re-requests the correct frontier and
-			// it returns on a later reply.
-			return NodeReRequest, nil
+			loaded, _, loadErr := fetchFromStoreContext(context.Background(), sm, sm.family, parent, branch)
+			if loadErr != nil || loaded == nil {
+				return NodeReRequest, nil
+			}
+			child = parent.SetChildIfNil(branch, loaded)
 		}
 		nextInner, ok := child.(*innerNode)
 		if !ok {
@@ -592,46 +685,66 @@ func (sm *SHAMap) insertNodeRecursive(current Node, targetHash [32]byte, newNode
 // Returns an error if the root is already set, the data is invalid,
 // or the hash doesn't match.
 func (sm *SHAMap) AddRootNode(hash [32]byte, data []byte) error {
+	_, err := sm.addRootNode(hash, data, false)
+	return err
+}
+
+// AddRootNodeWithEntry sets and verifies a clean root and returns its NodeStore
+// entry for the caller to persist without deserializing it a second time.
+func (sm *SHAMap) AddRootNodeWithEntry(hash [32]byte, data []byte) (FlushEntry, error) {
+	return sm.addRootNode(hash, data, true)
+}
+
+func (sm *SHAMap) addRootNode(hash [32]byte, data []byte, withEntry bool) (FlushEntry, error) {
 	sm.mu.Lock()
 	defer sm.mu.Unlock()
+	sm.attachmentMu.Lock()
+	defer sm.attachmentMu.Unlock()
 
 	if sm.root != nil && sm.root.HasChildren() {
-		return ErrRootAlreadySet
+		return FlushEntry{}, ErrRootAlreadySet
 	}
 
 	if len(data) == 0 {
-		return ErrInvalidNodeData
+		return FlushEntry{}, ErrInvalidNodeData
 	}
 
 	// Deserialize the node from wire format
 	node, err := deserializeNodeFromWire(data)
 	if err != nil {
-		return fmt.Errorf("%w: %w", ErrInvalidNodeData, err)
+		return FlushEntry{}, fmt.Errorf("%w: %w", ErrInvalidNodeData, err)
 	}
 
 	// Must be an inner node for root
 	root, ok := node.(*innerNode)
 	if !ok {
-		return fmt.Errorf("root must be an inner node, got %T", node)
+		return FlushEntry{}, fmt.Errorf("root must be an inner node, got %T", node)
 	}
 
 	if err := root.UpdateHash(); err != nil {
-		return fmt.Errorf("failed to compute node hash: %w", err)
+		return FlushEntry{}, fmt.Errorf("failed to compute node hash: %w", err)
 	}
 
 	computedHash := root.Hash()
 	if !bytes.Equal(computedHash[:], hash[:]) {
-		return ErrNodeHashMismatch
+		return FlushEntry{}, ErrNodeHashMismatch
 	}
 
 	sm.root = root
-	root.SetDirty(true)
+	root.SetDirty(!withEntry)
 	sm.state = StateSyncing
 	// Clear full as StartSync does: a stale full lets IsComplete report
 	// complete while the FinishSync walk still finds missing nodes.
 	sm.full = false
 
-	return nil
+	if !withEntry {
+		return FlushEntry{}, nil
+	}
+	entry, err := flushEntryForNode(root, sm.ledgerSeq, sm.mapType)
+	if err != nil {
+		return FlushEntry{}, fmt.Errorf("%w: %v", ErrNodeSerialization, err)
+	}
+	return entry, nil
 }
 
 // StartSync prepares the SHAMap for synchronization.
@@ -653,16 +766,29 @@ func (sm *SHAMap) StartSync() error {
 // FinishSync completes synchronization and validates the tree.
 // This should be called after all missing nodes have been added.
 func (sm *SHAMap) FinishSync() error {
-	sm.mu.Lock()
-	defer sm.mu.Unlock()
+	return sm.FinishSyncContext(context.Background())
+}
 
+// FinishSyncContext completes synchronization while allowing a backed-tree
+// completeness walk to be canceled by its owner.
+func (sm *SHAMap) FinishSyncContext(ctx context.Context) error {
+	sm.mu.RLock()
 	if sm.state != StateSyncing {
+		sm.mu.RUnlock()
 		return ErrSyncNotInProgress
 	}
+	backed := sm.backed && sm.family != nil
+	sm.mu.RUnlock()
 
-	// Strict walk: surface a transient store error as itself, never as a
-	// phantom missing node the caller would re-request over the wire.
-	missingNodes, err := sm.missingNodesLocked(1, nil, true)
+	var missingNodes []MissingNode
+	var err error
+	if backed {
+		missingNodes, err = sm.WalkMapParallelContext(ctx, 1, nil)
+	} else {
+		sm.mu.RLock()
+		missingNodes, err = sm.missingNodesLocked(1, nil, true)
+		sm.mu.RUnlock()
+	}
 	if err != nil {
 		return fmt.Errorf("sync completeness walk: %w", err)
 	}
@@ -670,6 +796,11 @@ func (sm *SHAMap) FinishSync() error {
 		return fmt.Errorf("sync incomplete: still have %d missing nodes", len(missingNodes))
 	}
 
+	sm.mu.Lock()
+	defer sm.mu.Unlock()
+	if sm.state != StateSyncing {
+		return ErrSyncNotInProgress
+	}
 	sm.state = StateModifying
 	sm.full = true
 
@@ -686,16 +817,24 @@ func (sm *SHAMap) IsSyncing() bool {
 // IsComplete returns true if the map has all nodes (no missing references).
 func (sm *SHAMap) IsComplete() bool {
 	sm.mu.RLock()
-	defer sm.mu.RUnlock()
-
+	state := sm.state
+	full := sm.full
+	backed := sm.backed && sm.family != nil
+	sm.mu.RUnlock()
 	// A partially-built acquisition map can carry a stale full, so while
 	// syncing defer to the missing-node walk rather than trust full.
-	if sm.full && sm.state != StateSyncing {
+	if full && state != StateSyncing {
 		return true
+	}
+	if backed && state == StateSyncing {
+		missing, err := sm.WalkMapParallelContext(context.Background(), 1, nil)
+		return err == nil && len(missing) == 0
 	}
 
 	// Strict walk: a transient store error means completeness is unknown —
 	// conservatively incomplete.
+	sm.mu.RLock()
+	defer sm.mu.RUnlock()
 	missing, err := sm.missingNodesLocked(1, nil, true)
 	return err == nil && len(missing) == 0
 }

@@ -77,6 +77,33 @@ func cancelAfterFetchStarts(t *testing.T, started <-chan struct{}, cancel contex
 }
 
 func TestLazyTraversalContextCancellation(t *testing.T) {
+	t.Run("missing nodes", func(t *testing.T) {
+		lazy, family, _ := newCancelFetchMap(t, 1)
+		if err := lazy.StartSync(); err != nil {
+			t.Fatal(err)
+		}
+		ctx, cancel := context.WithCancel(context.Background())
+		result := make(chan error, 1)
+		go func() {
+			_, err := lazy.GetMissingNodesContext(ctx, 256, nil)
+			result <- err
+		}()
+		cancelAfterFetchStarts(t, family.started, cancel, result)
+	})
+
+	t.Run("finish sync", func(t *testing.T) {
+		lazy, family, _ := newCancelFetchMap(t, 1)
+		if err := lazy.StartSync(); err != nil {
+			t.Fatal(err)
+		}
+		ctx, cancel := context.WithCancel(context.Background())
+		result := make(chan error, 1)
+		go func() {
+			result <- lazy.FinishSyncContext(ctx)
+		}()
+		cancelAfterFetchStarts(t, family.started, cancel, result)
+	})
+
 	t.Run("upper bound", func(t *testing.T) {
 		lazy, family, _ := newCancelFetchMap(t, 1)
 		ctx, cancel := context.WithCancel(context.Background())

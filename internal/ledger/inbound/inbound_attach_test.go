@@ -91,6 +91,7 @@ func TestGotStateNodes_OutOfOrderNotRejected(t *testing.T) {
 		if err := il.GotStateNodes(nodes); err != nil {
 			t.Fatalf("GotStateNodes pass %d: %v", round, err)
 		}
+		il.CollectMissingRequest(false)
 		if il.rejectCount != 0 {
 			t.Fatalf("pass %d: ancestor-gap nodes counted as rejects: rejectCount=%d (%q)",
 				round, il.rejectCount, il.lastRejectErr)

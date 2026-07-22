@@ -90,6 +90,18 @@ func (f *NodeStoreFamily) Fetch(ctx context.Context, hash [32]byte) ([]byte, err
 	return node.Data, nil
 }
 
+// FetchDurable reads directly from the backing store without populating the
+// decoded-node cache. Missing-node verification has a multi-million-node
+// one-shot working set, for which LRU insertion only displaces useful entries.
+func (f *NodeStoreFamily) FetchDurable(ctx context.Context, hash [32]byte) ([]byte, error) {
+	if raw, ok := f.db.(interface {
+		FetchDataUncached(context.Context, nodestore.Hash256) ([]byte, error)
+	}); ok {
+		return raw.FetchDataUncached(ctx, nodestore.Hash256(hash))
+	}
+	return f.Fetch(ctx, hash)
+}
+
 // StoreBatch persists a batch of serialized nodes to the nodestore.
 // Each FlushEntry's Data contains prefix-format bytes which are stored directly
 // as Node.Data (opaque to the nodestore). The Hash is set from FlushEntry.Hash
@@ -135,6 +147,7 @@ func (f *NodeStoreFamily) SetMinimumLedgerSeq(seq uint32) {
 // Should be called periodically (e.g., on each ledger close) to bound memory usage.
 // This matches rippled's pattern of calling sweep() on NodeFamily.
 func (f *NodeStoreFamily) Sweep() error {
+	f.fullBelow.Sweep()
 	return f.db.Sweep()
 }
 

@@ -3,6 +3,8 @@ package kvstore
 // KeyValueReader wraps the Has and Get methods of a key-value store.
 type KeyValueReader interface {
 	Has(key []byte) (bool, error)
+	// Get returns a caller-owned value. Mutating the returned slice must not
+	// alter the stored value or any slice returned by a later Get.
 	Get(key []byte) ([]byte, error)
 }
 

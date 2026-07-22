@@ -33,8 +33,14 @@ type relayedEntry struct {
 // ErrSendBufferFull at Warn (silent drops masked TMTransaction relay loss
 // in #401), other failures at Info. Shared by the broadcast / relay
 // fan-out loops below.
-func (o *Overlay) sendAndLog(peer *Peer, msg []byte, opName string) {
-	if err := peer.Send(msg); err != nil {
+func (o *Overlay) sendAndLog(peer *Peer, msg []byte, opName string, priority bool) {
+	var err error
+	if priority {
+		err = peer.SendPriority(msg)
+	} else {
+		err = peer.Send(msg)
+	}
+	if err != nil {
 		level := slog.LevelInfo
 		if errors.Is(err, ErrSendBufferFull) {
 			level = slog.LevelWarn
@@ -55,7 +61,7 @@ func (o *Overlay) sendAndLog(peer *Peer, msg []byte, opName string) {
 // errored, matching the reverse-index contract). Extracts the
 // send-and-log fan-out shared by Broadcast / BroadcastExcept /
 // BroadcastExceptSet / RelayFromValidator.
-func (o *Overlay) forEachConnected(msg []byte, opName string, skip func(PeerID, *Peer) bool) []PeerID {
+func (o *Overlay) forEachConnected(msg []byte, opName string, priority bool, skip func(PeerID, *Peer) bool) []PeerID {
 	o.peersMu.RLock()
 	defer o.peersMu.RUnlock()
 
@@ -67,7 +73,7 @@ func (o *Overlay) forEachConnected(msg []byte, opName string, skip func(PeerID, 
 		if skip != nil && skip(id, peer) {
 			continue
 		}
-		o.sendAndLog(peer, msg, opName)
+		o.sendAndLog(peer, msg, opName, priority)
 		sent = append(sent, id)
 	}
 	return sent
@@ -84,17 +90,45 @@ func (o *Overlay) forEachConnected(msg []byte, opName string, skip func(PeerID, 
 // forwarded, use RelayFromValidator which applies the squelch filter
 // and excludes the originating peer.
 func (o *Overlay) Broadcast(msg []byte) error {
-	o.forEachConnected(msg, "broadcast", nil)
+	o.forEachConnected(msg, "broadcast", false, nil)
+	return nil
+}
+
+// BroadcastManifestFrames schedules one paced manifest sequence for every
+// connected peer. Each peer owns its sequence lifecycle, so a slow peer cannot
+// consume the ordinary queue one chunk at a time during this fan-out.
+func (o *Overlay) BroadcastManifestFrames(frames [][]byte) error {
+	o.peersMu.RLock()
+	defer o.peersMu.RUnlock()
+	for _, peer := range o.peers {
+		if peer.State() != PeerStateConnected {
+			continue
+		}
+		if err := peer.SendManifestFrames(frames); err != nil {
+			level := slog.LevelInfo
+			if errors.Is(err, ErrSendBufferFull) {
+				level = slog.LevelWarn
+			}
+			slog.Log(context.Background(), level, "broadcast-manifests send failed",
+				"t", "Overlay", "peer", peer.ID(), "frames", len(frames), "err", err.Error())
+		}
+	}
+	return nil
+}
+
+// BroadcastPriority sends acquisition and control traffic to all connected
+// peers using each peer's independent priority queue.
+func (o *Overlay) BroadcastPriority(msg []byte) error {
+	o.forEachConnected(msg, "broadcast-priority", true, nil)
 	return nil
 }
 
 // BroadcastExcept sends a message to every connected peer except the
-// one identified by exceptPeer. Used for gossip of peer-originated
-// messages that are NOT per-validator (manifests) — the per-validator
-// squelch filter in RelayFromValidator doesn't apply. Pass 0 for
-// exceptPeer to fall through to a plain Broadcast.
+// one identified by exceptPeer. The per-validator squelch filter in
+// RelayFromValidator doesn't apply. Pass 0 for exceptPeer to fall through
+// to a plain Broadcast.
 func (o *Overlay) BroadcastExcept(exceptPeer PeerID, msg []byte) error {
-	o.forEachConnected(msg, "broadcast-except", func(id PeerID, _ *Peer) bool {
+	o.forEachConnected(msg, "broadcast-except", false, func(id PeerID, _ *Peer) bool {
 		return id == exceptPeer
 	})
 	return nil
@@ -118,7 +152,20 @@ func (o *Overlay) BroadcastExcept(exceptPeer PeerID, msg []byte) error {
 // rippled's "peer stays eligible for the next request" semantics rather
 // than dropping the request on the floor.
 func (o *Overlay) BroadcastExceptSet(excluded map[PeerID]bool, msg []byte) error {
+	return o.broadcastExceptSet(excluded, msg, false)
+}
+
+// BroadcastPriorityExceptSet is BroadcastExceptSet using the independent
+// acquisition and control queue.
+func (o *Overlay) BroadcastPriorityExceptSet(excluded map[PeerID]bool, msg []byte) error {
+	return o.broadcastExceptSet(excluded, msg, true)
+}
+
+func (o *Overlay) broadcastExceptSet(excluded map[PeerID]bool, msg []byte, priority bool) error {
 	if len(excluded) == 0 {
+		if priority {
+			return o.BroadcastPriority(msg)
+		}
 		return o.Broadcast(msg)
 	}
 	// Hold peersMu for the whole pass so the #724 starvation decision and
@@ -151,7 +198,7 @@ func (o *Overlay) BroadcastExceptSet(excluded map[PeerID]bool, msg []byte) error
 		if !ignoreExclusion && excluded[id] {
 			continue
 		}
-		o.sendAndLog(peer, msg, "broadcast-except-set")
+		o.sendAndLog(peer, msg, "broadcast-except-set", priority)
 	}
 	return nil
 }
@@ -178,7 +225,7 @@ func (o *Overlay) RelayFromValidator(validator []byte, suppressionHash [32]byte,
 	// including any whose Send errored). Record into the reverse index
 	// AFTER it releases peersMu so we never nest index-mutex inside
 	// peers-mutex.
-	forwarded := o.forEachConnected(msg, "relay-from-validator", func(id PeerID, peer *Peer) bool {
+	forwarded := o.forEachConnected(msg, "relay-from-validator", false, func(id PeerID, peer *Peer) bool {
 		return id == exceptPeer || !peer.ExpireSquelch(validator)
 	})
 

@@ -3,6 +3,8 @@ package shamap
 import (
 	"context"
 	"crypto/rand"
+	"crypto/sha256"
+	"encoding/binary"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -14,6 +16,46 @@ import (
 type countingFamily struct {
 	inner   Family
 	fetches atomic.Int64
+}
+
+type concurrentFetchFamily struct {
+	Family
+	active atomic.Int64
+	peak   atomic.Int64
+}
+
+type pendingDurableFamily struct {
+	base    Family
+	pending map[[32]byte][]byte
+	cache   *FullBelowCache
+}
+
+func (f *pendingDurableFamily) Fetch(ctx context.Context, hash [32]byte) ([]byte, error) {
+	if data, ok := f.pending[hash]; ok {
+		return append([]byte(nil), data...), nil
+	}
+	return f.base.Fetch(ctx, hash)
+}
+
+func (f *pendingDurableFamily) FetchDurable(ctx context.Context, hash [32]byte) ([]byte, error) {
+	return f.base.Fetch(ctx, hash)
+}
+
+func (f *pendingDurableFamily) StoreBatch(ctx context.Context, entries []FlushEntry) error {
+	return f.base.StoreBatch(ctx, entries)
+}
+
+func (f *pendingDurableFamily) FullBelowCache() *FullBelowCache {
+	return f.cache
+}
+
+func (f *concurrentFetchFamily) Fetch(ctx context.Context, hash [32]byte) ([]byte, error) {
+	active := f.active.Add(1)
+	defer f.active.Add(-1)
+	for peak := f.peak.Load(); active > peak && !f.peak.CompareAndSwap(peak, active); peak = f.peak.Load() {
+	}
+	time.Sleep(time.Millisecond)
+	return f.Family.Fetch(ctx, hash)
 }
 
 func newCountingFamily() *countingFamily {
@@ -35,6 +77,274 @@ func (c *countingFamily) FullBelowCache() *FullBelowCache {
 
 func (c *countingFamily) count() int64 { return c.fetches.Load() }
 func (c *countingFamily) reset()       { c.fetches.Store(0) }
+
+func TestWalkFullBelow_HonorsSharedStopBeforeStoreRead(t *testing.T) {
+	source := buildRandomState(t, 128)
+	rootHash, err := source.Hash()
+	if err != nil {
+		t.Fatalf("Hash: %v", err)
+	}
+	rootData, err := source.SerializeRoot()
+	if err != nil {
+		t.Fatalf("SerializeRoot: %v", err)
+	}
+
+	family := newCountingFamily()
+	dest, err := NewBacked(TypeState, family)
+	if err != nil {
+		t.Fatalf("NewBacked: %v", err)
+	}
+	if err := dest.StartSync(); err != nil {
+		t.Fatalf("StartSync: %v", err)
+	}
+	if err := dest.AddRootNode(rootHash, rootData); err != nil {
+		t.Fatalf("AddRootNode: %v", err)
+	}
+	family.reset()
+
+	gen, cache, done := fullBelowContext(dest)
+	defer done()
+	full, stopped, err := walkFullBelow(
+		context.Background(), dest,
+		dest.root,
+		NewRootNodeID(),
+		rootHash,
+		0,
+		gen,
+		&DefaultSyncFilter{},
+		false,
+		cache,
+		func(MissingNode) bool { return false },
+		func() bool { return true },
+	)
+	if err != nil {
+		t.Fatalf("walkFullBelow: %v", err)
+	}
+	if full || !stopped {
+		t.Fatalf("walk result = (full=%t, stopped=%t), want (false, true)", full, stopped)
+	}
+	if got := family.count(); got != 0 {
+		t.Fatalf("cancelled walk performed %d store reads, want 0", got)
+	}
+}
+
+func TestWalkMapParallel_BoundsFanoutAtRootBranches(t *testing.T) {
+	source := buildRandomState(t, 4096)
+	rootHash, err := source.Hash()
+	if err != nil {
+		t.Fatalf("Hash: %v", err)
+	}
+	rootData, err := source.SerializeRoot()
+	if err != nil {
+		t.Fatalf("SerializeRoot: %v", err)
+	}
+	batch, err := source.FlushDirty()
+	if err != nil {
+		t.Fatalf("FlushDirty: %v", err)
+	}
+
+	base := NewMemoryNodeStoreFamily()
+	if err := base.StoreBatch(context.Background(), batch.Entries); err != nil {
+		t.Fatalf("StoreBatch: %v", err)
+	}
+	family := &concurrentFetchFamily{Family: base}
+	dest, err := NewBacked(TypeState, family)
+	if err != nil {
+		t.Fatalf("NewBacked: %v", err)
+	}
+	if err := dest.StartSync(); err != nil {
+		t.Fatalf("StartSync: %v", err)
+	}
+	if err := dest.AddRootNode(rootHash, rootData); err != nil {
+		t.Fatalf("AddRootNode: %v", err)
+	}
+
+	if missing := dest.GetMissingNodes(1, nil); len(missing) != 0 {
+		t.Fatalf("complete backed map reported %d missing nodes", len(missing))
+	}
+	if peak := family.peak.Load(); peak <= 1 {
+		t.Fatalf("peak concurrent store reads = %d, want parallel root branches", peak)
+	} else if peak > BranchFactor {
+		t.Fatalf("peak concurrent store reads = %d, exceeds root fan-out (%d)", peak, BranchFactor)
+	}
+}
+
+func TestWalkMapParallel_ReleasesCompleteStoredSubtrees(t *testing.T) {
+	source := buildRandomState(t, 4096)
+	rootHash, err := source.Hash()
+	if err != nil {
+		t.Fatalf("Hash: %v", err)
+	}
+	rootData, err := source.SerializeRoot()
+	if err != nil {
+		t.Fatalf("SerializeRoot: %v", err)
+	}
+	batch, err := source.FlushDirty()
+	if err != nil {
+		t.Fatalf("FlushDirty: %v", err)
+	}
+
+	family := newCountingFamily()
+	entries := make([]FlushEntry, 0, len(batch.Entries)-1)
+	for _, entry := range batch.Entries {
+		if entry.Hash != rootHash {
+			entries = append(entries, entry)
+		}
+	}
+	if err := family.StoreBatch(context.Background(), entries); err != nil {
+		t.Fatalf("StoreBatch: %v", err)
+	}
+	dest, err := NewBacked(TypeState, family)
+	if err != nil {
+		t.Fatalf("NewBacked: %v", err)
+	}
+	if err := dest.StartSync(); err != nil {
+		t.Fatalf("StartSync: %v", err)
+	}
+	if err := dest.AddRootNode(rootHash, rootData); err != nil {
+		t.Fatalf("AddRootNode: %v", err)
+	}
+
+	if missing := dest.GetMissingNodes(1, nil); len(missing) != 0 {
+		t.Fatalf("complete backed map reported %d missing nodes", len(missing))
+	}
+	for branch := range BranchFactor {
+		child, _, isSet := dest.root.LoadChild(branch)
+		if isSet && child != nil {
+			t.Fatalf("stored root branch %d remained materialized", branch)
+		}
+	}
+
+	family.reset()
+	if missing := dest.GetMissingNodes(1, nil); len(missing) != 0 {
+		t.Fatalf("cached backed map reported %d missing nodes", len(missing))
+	}
+	if got := family.count(); got != 1 {
+		t.Fatalf("second walk performed %d store reads, want only the unstored root proof", got)
+	}
+}
+
+func TestFinishSync_ReleasesColdDurableTree(t *testing.T) {
+	source := New(TypeState)
+	for i := range 2048 {
+		var seed [8]byte
+		binary.BigEndian.PutUint64(seed[:], uint64(i))
+		key := sha256.Sum256(seed[:])
+		if err := source.Put(key, make([]byte, 12)); err != nil {
+			t.Fatalf("Put %d: %v", i, err)
+		}
+	}
+	rootHash, err := source.Hash()
+	if err != nil {
+		t.Fatalf("Hash: %v", err)
+	}
+	rootData, err := source.SerializeRoot()
+	if err != nil {
+		t.Fatalf("SerializeRoot: %v", err)
+	}
+	batch, err := source.FlushDirty()
+	if err != nil {
+		t.Fatalf("FlushDirty: %v", err)
+	}
+
+	family := newCountingFamily()
+	if err := family.StoreBatch(context.Background(), batch.Entries); err != nil {
+		t.Fatalf("StoreBatch: %v", err)
+	}
+	dest, err := NewBacked(TypeState, family)
+	if err != nil {
+		t.Fatalf("NewBacked: %v", err)
+	}
+	if err := dest.AddRootNode(rootHash, rootData); err != nil {
+		t.Fatalf("AddRootNode: %v", err)
+	}
+
+	if err := dest.FinishSync(); err != nil {
+		t.Fatalf("FinishSync: %v", err)
+	}
+	if got := family.count(); got <= BranchFactor {
+		t.Fatalf("cold completeness walk fetched %d nodes, want more than one root fan-out", got)
+	}
+	for branch := range BranchFactor {
+		child, _, isSet := dest.root.LoadChild(branch)
+		if isSet && child != nil {
+			t.Fatalf("durable root branch %d remained materialized after FinishSync", branch)
+		}
+	}
+}
+
+func TestWalkMapParallel_RetainsIncompleteFrontier(t *testing.T) {
+	source := buildRandomState(t, 512)
+	rootHash, err := source.Hash()
+	if err != nil {
+		t.Fatalf("Hash: %v", err)
+	}
+	rootData, err := source.SerializeRoot()
+	if err != nil {
+		t.Fatalf("SerializeRoot: %v", err)
+	}
+	wire, err := source.WalkWireNodes()
+	if err != nil {
+		t.Fatalf("WalkWireNodes: %v", err)
+	}
+	var withheld WireNode
+	var withheldID NodeID
+	for _, candidate := range wire {
+		nodeID, err := ParseNodeID(candidate.NodeID)
+		if err != nil {
+			t.Fatalf("ParseNodeID: %v", err)
+		}
+		if !nodeID.IsRoot() && nodeID.Depth() > withheldID.Depth() {
+			withheld = candidate
+			withheldID = nodeID
+		}
+	}
+	withheldNode, err := deserializeNodeFromWire(withheld.Data)
+	if err != nil {
+		t.Fatalf("deserialize withheld node: %v", err)
+	}
+	withheldHash := withheldNode.Hash()
+
+	batch, err := source.FlushDirty()
+	if err != nil {
+		t.Fatalf("FlushDirty: %v", err)
+	}
+	entries := make([]FlushEntry, 0, len(batch.Entries)-1)
+	for _, entry := range batch.Entries {
+		if entry.Hash != withheldHash {
+			entries = append(entries, entry)
+		}
+	}
+	family := NewMemoryNodeStoreFamily()
+	if err := family.StoreBatch(context.Background(), entries); err != nil {
+		t.Fatalf("StoreBatch: %v", err)
+	}
+	dest, err := NewBacked(TypeState, family)
+	if err != nil {
+		t.Fatalf("NewBacked: %v", err)
+	}
+	if err := dest.StartSync(); err != nil {
+		t.Fatalf("StartSync: %v", err)
+	}
+	if err := dest.AddRootNode(rootHash, rootData); err != nil {
+		t.Fatalf("AddRootNode: %v", err)
+	}
+
+	missing := dest.GetMissingNodes(1, nil)
+	if len(missing) != 1 || missing[0].Hash != withheldHash {
+		t.Fatalf("missing = %v, want withheld node %x", missing, withheldHash[:8])
+	}
+	result, err := dest.AddKnownNodeByID(withheldID, withheld.Data)
+	if err != nil {
+		t.Fatalf("AddKnownNodeByID: %v", err)
+	}
+	if result != NodeUseful {
+		t.Fatalf("AddKnownNodeByID result = %v, want NodeUseful", result)
+	}
+	if err := dest.FinishSync(); err != nil {
+		t.Fatalf("FinishSync: %v", err)
+	}
+}
 
 // buildRandomState builds a state SHAMap of n random-keyed leaves and
 // returns it. Random keys spread the tree across every branch and drive it
@@ -403,7 +713,164 @@ func TestFullBelow_SharedCacheDoesNotPublishUnstoredSubtree(t *testing.T) {
 	}
 }
 
-func TestStoreDirty_PinsFullBelowGenerationThroughStore(t *testing.T) {
+func TestWalkMapParallel_DoesNotReleaseUnstoredResidentSubtrees(t *testing.T) {
+	family := NewMemoryNodeStoreFamily()
+	source := buildRandomState(t, 256)
+	rootHash, err := source.Hash()
+	if err != nil {
+		t.Fatal(err)
+	}
+	rootWire, err := source.SerializeRoot()
+	if err != nil {
+		t.Fatal(err)
+	}
+	dest, err := NewBacked(TypeState, family)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := dest.AddRootNode(rootHash, rootWire); err != nil {
+		t.Fatal(err)
+	}
+	syncInto(t, dest, source, nil)
+
+	if missing := dest.GetMissingNodes(1, nil); len(missing) != 0 {
+		t.Fatalf("resident complete map reported %d missing nodes", len(missing))
+	}
+	resident := 0
+	for branch := range BranchFactor {
+		child, _, isSet := dest.root.LoadChild(branch)
+		if isSet && child != nil {
+			resident++
+		}
+	}
+	if resident == 0 {
+		t.Fatal("unstored resident root subtrees were released")
+	}
+	if family.FullBelowCache().Has(family.FullBelowCache().Generation(), rootHash) {
+		t.Fatal("unstored resident root was published as recoverable")
+	}
+}
+
+func TestWalkMapParallel_DoesNotReleasePendingNodesBeforeDurability(t *testing.T) {
+	source := buildRandomState(t, 256)
+	rootHash, err := source.Hash()
+	if err != nil {
+		t.Fatal(err)
+	}
+	rootWire, err := source.SerializeRoot()
+	if err != nil {
+		t.Fatal(err)
+	}
+	batch, err := source.FlushDirty()
+	if err != nil {
+		t.Fatal(err)
+	}
+	base := NewMemoryNodeStoreFamily()
+	family := &pendingDurableFamily{
+		base:    base,
+		pending: make(map[[32]byte][]byte, len(batch.Entries)),
+		cache:   base.FullBelowCache(),
+	}
+	for _, entry := range batch.Entries {
+		family.pending[entry.Hash] = entry.Data
+	}
+	dest, err := NewBacked(TypeState, family)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := dest.AddRootNode(rootHash, rootWire); err != nil {
+		t.Fatal(err)
+	}
+	if missing := dest.GetMissingNodes(1, nil); len(missing) != 0 {
+		t.Fatalf("pending complete map reported %d missing nodes", len(missing))
+	}
+	resident := 0
+	for branch := range BranchFactor {
+		child, _, isSet := dest.root.LoadChild(branch)
+		if isSet && child != nil {
+			resident++
+		}
+	}
+	if resident != 0 {
+		t.Fatalf("structural traversal materialized %d pending root subtrees", resident)
+	}
+	if family.cache.Has(family.cache.Generation(), rootHash) {
+		t.Fatal("pending root was published as durable")
+	}
+
+	if err := base.StoreBatch(context.Background(), batch.Entries); err != nil {
+		t.Fatal(err)
+	}
+	if missing := dest.GetMissingNodes(1, nil); len(missing) != 0 {
+		t.Fatalf("durable complete map reported %d missing nodes", len(missing))
+	}
+	if !family.cache.Has(family.cache.Generation(), rootHash) {
+		t.Fatal("durable complete root was not published")
+	}
+}
+
+func TestStoreDirty_DoesNotPublishPartialSubtree(t *testing.T) {
+	family := NewMemoryNodeStoreFamily()
+	source := buildRandomState(t, 256)
+	rootHash, err := source.Hash()
+	if err != nil {
+		t.Fatal(err)
+	}
+	rootWire, err := source.SerializeRoot()
+	if err != nil {
+		t.Fatal(err)
+	}
+	wire, err := source.WalkWireNodes()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	partial, err := NewBacked(TypeState, family)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := partial.AddRootNode(rootHash, rootWire); err != nil {
+		t.Fatal(err)
+	}
+	for _, candidate := range wire {
+		nodeID, err := ParseNodeID(candidate.NodeID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if nodeID.IsRoot() {
+			continue
+		}
+		result, err := partial.AddKnownNodeByID(nodeID, candidate.Data)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if result == NodeUseful {
+			break
+		}
+	}
+	if err := partial.StoreDirty(func(entries []FlushEntry) error {
+		return family.StoreBatch(context.Background(), entries)
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	gen := family.FullBelowCache().Generation()
+	if family.FullBelowCache().Has(gen, rootHash) {
+		t.Fatal("StoreDirty published a partial root as full-below")
+	}
+	probe, err := NewBacked(TypeState, family)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := probe.AddRootNode(rootHash, rootWire); err != nil {
+		t.Fatal(err)
+	}
+	if missing := probe.GetMissingNodes(1, nil); len(missing) == 0 {
+		t.Fatal("partial StoreDirty cache state hid missing descendants")
+	}
+}
+
+func TestStoreDirty_DoesNotHoldFullBelowLease(t *testing.T) {
 	family := NewMemoryNodeStoreFamily()
 	sm, err := NewBacked(TypeState, family)
 	if err != nil {
@@ -432,14 +899,13 @@ func TestStoreDirty_PinsFullBelowGenerationThroughStore(t *testing.T) {
 	}()
 	select {
 	case <-pruned:
-		t.Fatal("prune invalidated the cache while dirty storage was in flight")
-	case <-time.After(50 * time.Millisecond):
+	case <-time.After(time.Second):
+		t.Fatal("prune waited for StoreDirty even though it publishes no cache entries")
 	}
 	close(release)
 	if err := <-stored; err != nil {
 		t.Fatal(err)
 	}
-	<-pruned
 	if size := family.FullBelowCache().Size(); size != 0 {
 		t.Fatalf("cache size after prune = %d, want 0", size)
 	}
@@ -547,13 +1013,12 @@ func TestFullBelowCache_ZeroGenNeverMatches(t *testing.T) {
 	}
 }
 
-// TestFullBelowCache_Bounded verifies the two-partition set stays bounded:
-// inserting well past a partition's capacity keeps resident size under the
-// 2x cap while the most recent inserts remain queryable.
-func TestFullBelowCache_Bounded(t *testing.T) {
-	c := NewFullBelowCache()
+func TestFullBelowCache_SoftTargetAllowsAcquisitionBurst(t *testing.T) {
+	const target = 64
+	now := time.Unix(1_000, 0)
+	c := newFullBelowCacheWithClock(target, 10*time.Minute, 30*time.Second, func() time.Time { return now })
 	gen := c.Generation()
-	n := fullBelowPartitionMax + fullBelowPartitionMax/2
+	n := target + target/2
 	var last [32]byte
 	for i := range n {
 		var h [32]byte
@@ -563,11 +1028,73 @@ func TestFullBelowCache_Bounded(t *testing.T) {
 		c.Insert(gen, h)
 		last = h
 	}
-	if sz := c.Size(); sz > 2*fullBelowPartitionMax {
-		t.Errorf("Size = %d exceeds 2x partition cap %d", sz, 2*fullBelowPartitionMax)
+	if sz := c.Size(); sz != n {
+		t.Fatalf("Size = %d, want burst size %d", sz, n)
 	}
+
+	now = now.Add(7 * time.Minute)
 	if !c.Has(gen, last) {
-		t.Error("most-recently inserted hash should still be present")
+		t.Fatal("entry missing before sweep")
+	}
+	c.Sweep()
+	if sz := c.Size(); sz != 1 {
+		t.Fatalf("Size after pressure-adjusted sweep = %d, want refreshed entry only", sz)
+	}
+}
+
+func TestFullBelowCache_HitRefreshesAge(t *testing.T) {
+	const target = 8
+	now := time.Unix(2_000, 0)
+	c := newFullBelowCacheWithClock(target, 10*time.Minute, time.Hour, func() time.Time { return now })
+	gen := c.Generation()
+	hash := func(n byte) [32]byte { return [32]byte{n} }
+
+	for i := byte(1); i <= target; i++ {
+		c.Insert(gen, hash(i))
+	}
+	hot := hash(1)
+	cold := hash(2)
+	now = now.Add(6 * time.Minute)
+	if !c.Has(gen, hot) {
+		t.Fatal("hot entry missing before sweep")
+	}
+	for i := byte(target + 1); i <= 2*target; i++ {
+		c.Insert(gen, hash(i))
+	}
+	c.Sweep()
+	if c.Has(gen, cold) {
+		t.Fatal("old untouched entry survived pressure-adjusted sweep")
+	}
+	if !c.Has(gen, hot) {
+		t.Fatal("recently touched entry did not survive sweep")
+	}
+}
+
+func TestFullBelowCache_InsertRefreshesAge(t *testing.T) {
+	now := time.Unix(3_000, 0)
+	c := newFullBelowCacheWithClock(3, 10*time.Minute, time.Hour, func() time.Time { return now })
+	gen := c.Generation()
+	first := [32]byte{1}
+	second := [32]byte{2}
+	c.Insert(gen, first)
+	c.Insert(gen, second)
+	c.Insert(gen, [32]byte{3})
+	now = now.Add(8 * time.Minute)
+	c.Insert(gen, first)
+	for i := byte(4); i <= 6; i++ {
+		c.Insert(gen, [32]byte{i})
+	}
+	c.Sweep()
+
+	if !c.Has(gen, first) {
+		t.Fatal("reinserted entry was not refreshed")
+	}
+	if c.Has(gen, second) {
+		t.Fatal("older entry survived pressure-adjusted sweep")
+	}
+	stats := c.Stats()
+	if stats.TargetSize != 3 || stats.Evictions == 0 || stats.Sweeps != 1 {
+		t.Fatalf("unexpected stats: %+v", stats)
 	}
 }
 

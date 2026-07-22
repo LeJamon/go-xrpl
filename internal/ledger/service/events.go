@@ -284,17 +284,23 @@ func (s *Service) fireLedgerClosedHooksLocked(
 	}
 }
 
+type transactionResultSource interface {
+	IsValidated() bool
+	ForEachTransaction(func(txHash [32]byte, txData []byte) bool) error
+}
+
 // collectTransactionResults gathers per-tx results from the closed ledger and
 // populates s.txIndex/s.txPositionIndex (hash -> seq, metadata index). Idempotent with
 // the Apply-time write; the sole index site for the Apply-less peer-adopt path.
-func (s *Service) collectTransactionResults(l *ledger.Ledger, ledgerSeq uint32, ledgerHash [32]byte) []TransactionResultEvent {
+func (s *Service) collectTransactionResults(l transactionResultSource, ledgerSeq uint32, ledgerHash [32]byte) []TransactionResultEvent {
 	var results []TransactionResultEvent
+	validated := l.IsValidated()
 
 	l.ForEachTransaction(func(txHash [32]byte, txData []byte) bool {
 		result := TransactionResultEvent{
 			TxHash:      txHash,
 			TxData:      txData,
-			Validated:   l.IsValidated(),
+			Validated:   validated,
 			LedgerIndex: ledgerSeq,
 			LedgerHash:  ledgerHash,
 		}

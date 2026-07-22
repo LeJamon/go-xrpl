@@ -231,8 +231,15 @@ func (r *Router) tryCompleteFromFetchPack(active []*inbound.Ledger, now time.Tim
 	if r.fetchPacks == nil {
 		return
 	}
-	fetch := func(hash [32]byte) ([]byte, bool) { return r.fetchPacks.get(hash, now) }
+	fetch := func(hash [32]byte) ([]byte, bool) { return r.fetchPacks.get(hash, time.Now()) }
+	workLane := r.currentAcquisitionWork()
 	for _, il := range active {
+		if workLane != nil {
+			if !r.submitAcquisitionWork(il, acquisitionWorkEvent{kind: acquisitionWorkLocal, fetch: fetch}) {
+				r.logger.Warn("fetch-pack completion deferred: acquisition worker saturated", "seq", il.Seq())
+			}
+			continue
+		}
 		if il.CheckLocal(fetch) && il.IsComplete() {
 			r.completeInboundLedger(il)
 		}

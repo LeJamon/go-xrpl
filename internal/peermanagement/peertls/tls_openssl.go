@@ -18,11 +18,10 @@ import (
 const (
 	finishedBufSize = 1024
 	pumpBufSize     = 16 * 1024 // max TLS record size
+	bioOutBufSize   = 32 * 1024
 )
 
-// pumpBufPool recycles 16 KiB scratch buffers for pumpInboundLocked
-// and drainBIOLocked — avoids a 16 KiB allocation per record pumped
-// under sustained traffic.
+// pumpBufPool recycles 16 KiB scratch buffers for pumpInboundLocked.
 var pumpBufPool = sync.Pool{
 	New: func() any {
 		buf := make([]byte, pumpBufSize)
@@ -43,6 +42,25 @@ func putPumpBuf(buf []byte) {
 	}
 	buf = buf[:pumpBufSize]
 	pumpBufPool.Put(&buf)
+}
+
+var bioOutBufPool = sync.Pool{
+	New: func() any {
+		buf := make([]byte, bioOutBufSize)
+		return &buf
+	},
+}
+
+func getBIOOutBuf() []byte {
+	return *(bioOutBufPool.Get().(*[]byte))
+}
+
+func putBIOOutBuf(buf []byte) {
+	if cap(buf) != bioOutBufSize {
+		return
+	}
+	buf = buf[:bioOutBufSize]
+	bioOutBufPool.Put(&buf)
 }
 
 func Client(inner net.Conn, cfg *Config) (PeerConn, error) {
@@ -164,7 +182,9 @@ func (c *conn) HandshakeContext(ctx context.Context) error {
 
 		out, done, err := c.handshakeStep()
 		if len(out) > 0 {
-			if _, werr := c.inner.Write(out); werr != nil {
+			_, werr := c.inner.Write(out)
+			putBIOOutBuf(out)
+			if werr != nil {
 				return werr
 			}
 		}
@@ -258,19 +278,24 @@ func (c *conn) bioWriteAllLocked() error {
 	return nil
 }
 
-// drainBIOLocked drains pending BIO output. Caller holds sslMu.
-// The returned slice is freshly allocated; the per-read scratch
-// buffer comes from pumpBufPool.
+// drainBIOLocked drains pending BIO output. Caller holds sslMu. A non-empty
+// result must be returned with putBIOOutBuf after the wire write completes.
 func (c *conn) drainBIOLocked() []byte {
-	out := make([]byte, 0, pumpBufSize)
-	buf := getPumpBuf()
-	defer putPumpBuf(buf)
+	buf := getBIOOutBuf()
+	used := 0
 	for {
-		n, err := c.ssl.BIORead(buf)
-		if err != nil || n == 0 {
-			return out
+		if used == len(buf) {
+			buf = append(buf, make([]byte, bioOutBufSize)...)
 		}
-		out = append(out, buf[:n]...)
+		n, err := c.ssl.BIORead(buf[used:])
+		used += n
+		if err != nil || n == 0 {
+			if used == 0 {
+				putBIOOutBuf(buf)
+				return nil
+			}
+			return buf[:used]
+		}
 	}
 }
 
@@ -287,7 +312,9 @@ func (c *conn) Read(b []byte) (int, error) {
 	for {
 		n, out, err := c.sslReadStep(b)
 		if len(out) > 0 {
-			if werr := c.writeToInner(out); werr != nil {
+			werr := c.writeToInner(out)
+			putBIOOutBuf(out)
+			if werr != nil {
 				return 0, werr
 			}
 		}
@@ -334,7 +361,9 @@ func (c *conn) Write(b []byte) (int, error) {
 	for written < len(b) {
 		n, out, err := c.sslWriteStep(b[written:])
 		if len(out) > 0 {
-			if _, werr := c.inner.Write(out); werr != nil {
+			_, werr := c.inner.Write(out)
+			putBIOOutBuf(out)
+			if werr != nil {
 				return written, werr
 			}
 		}

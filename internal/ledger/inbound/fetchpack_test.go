@@ -1,6 +1,7 @@
 package inbound
 
 import (
+	"context"
 	"testing"
 
 	"github.com/LeJamon/go-xrpl/internal/ledger/header"
@@ -76,6 +77,54 @@ func TestCheckLocal_CompletesStateFromCache(t *testing.T) {
 	}
 	if gotHash != rootHash {
 		t.Errorf("reconstructed state hash mismatch: want %x got %x", rootHash[:8], gotHash[:8])
+	}
+}
+
+func TestCheckLocal_PersistsRecoveredNodesWithoutDirtyingTree(t *testing.T) {
+	source, rootHash, rootData := buildSourceStateMap(t)
+	packNodes, err := source.WalkFetchPackNodes(1 << 20)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cache := make(map[[32]byte][]byte, len(packNodes))
+	for _, node := range packNodes {
+		cache[node.Hash] = node.Data
+	}
+
+	family := shamap.NewMemoryNodeStoreFamily()
+	hdr := header.LedgerHeader{LedgerIndex: 323, AccountHash: rootHash}
+	hdrBytes, ledgerHash := encodeHeader(hdr)
+	il := New(ledgerHash, 323, 7, discardLogger(), WithFamily(family))
+	if err := il.GotBase([]message.LedgerNode{{NodeData: hdrBytes}, {NodeData: rootData}}); err != nil {
+		t.Fatal(err)
+	}
+	if !il.CheckLocal(func(hash [32]byte) ([]byte, bool) {
+		data, ok := cache[hash]
+		return data, ok
+	}) {
+		t.Fatal("CheckLocal reported no progress")
+	}
+	if !il.IsComplete() {
+		t.Fatal("CheckLocal did not complete the acquisition")
+	}
+	for _, node := range packNodes {
+		stored, fetchErr := family.Fetch(context.Background(), node.Hash)
+		if fetchErr != nil {
+			t.Fatal(fetchErr)
+		}
+		if stored == nil {
+			t.Fatalf("locally recovered node %x was not persisted", node.Hash[:8])
+		}
+	}
+	called := false
+	if err := il.stateMap.StoreDirty(func([]shamap.FlushEntry) error {
+		called = true
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if called {
+		t.Fatal("verified sync nodes were left dirty after incremental persistence")
 	}
 }
 

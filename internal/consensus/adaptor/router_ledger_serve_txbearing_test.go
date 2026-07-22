@@ -102,14 +102,24 @@ func TestServeLedger_TxBearing_FullRoundTrip(t *testing.T) {
 	}
 	for i := 0; i < 500 && !il.IsComplete(); i++ {
 		progressed := false
-		if ids := il.NeedsMissingNodeIDs(); len(ids) > 0 {
-			nodes := router.serveLedgerMapNodes(l.StateMapSnapshot, asReq(ids), 7, "state")
+		stateIDs, txIDs := il.CollectMissingRequest(false)
+		if il.IsComplete() {
+			break
+		}
+		if len(stateIDs) == 0 && len(txIDs) == 0 {
+			stateIDs, txIDs = il.CollectMissingRequest(false)
+			if il.IsComplete() {
+				break
+			}
+		}
+		if len(stateIDs) > 0 {
+			nodes := router.serveLedgerMapNodes(l.StateMapSnapshot, asReq(stateIDs), 7, "state")
 			require.NotEmpty(t, nodes, "serve must answer requested state nodes")
 			require.NoError(t, il.GotStateNodes(nodes))
 			progressed = true
 		}
-		if ids := il.NeedsMissingTxNodeIDs(); len(ids) > 0 {
-			nodes := router.serveLedgerMapNodes(l.TxMapSnapshot, asReq(ids), 7, "tx")
+		if len(txIDs) > 0 {
+			nodes := router.serveLedgerMapNodes(l.TxMapSnapshot, asReq(txIDs), 7, "tx")
 			require.NotEmpty(t, nodes, "serve must answer requested tx nodes")
 			require.NoError(t, il.GotTransactionNodes(nodes))
 			progressed = true

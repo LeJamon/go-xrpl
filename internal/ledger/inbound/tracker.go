@@ -54,8 +54,7 @@ func NewTracker() *Tracker {
 	}
 }
 
-// Track registers an acquisition. Completed/failed/timed-out acquisitions are
-// swept out lazily on the next Info call, so callers never need to untrack.
+// Track registers an acquisition. The owner must finalize it with Remove.
 func (t *Tracker) Track(l *Ledger) {
 	if t == nil || l == nil {
 		return
@@ -108,14 +107,61 @@ func (t *Tracker) Remove(hash [32]byte, complete bool) {
 	if t == nil {
 		return
 	}
-	t.mu.Lock()
-	defer t.mu.Unlock()
-	l := t.active[hash]
+	l := t.Find(hash)
 	if l == nil {
 		return
 	}
-	snap := l.Snapshot()
-	now := time.Now()
+	t.RemoveExpectedWithSnapshot(l, l.Snapshot(), complete)
+}
+
+// RemoveWithSnapshot finalizes an acquisition with a snapshot prepared by the
+// acquisition worker, avoiding a missing-node diagnostic walk on the Router.
+func (t *Tracker) RemoveWithSnapshot(hash [32]byte, snap Snapshot, complete bool) {
+	if t == nil {
+		return
+	}
+	l := t.Find(hash)
+	if l == nil {
+		return
+	}
+	t.RemoveExpectedWithSnapshot(l, snap, complete)
+}
+
+// RemoveExpectedWithSnapshot finalizes ledger only if it is still the active
+// acquisition for its hash. This makes worker-result retirement atomic with
+// the identity check.
+func (t *Tracker) RemoveExpectedWithSnapshot(l *Ledger, snap Snapshot, complete bool) bool {
+	if t == nil || l == nil {
+		return false
+	}
+	hash := l.Hash()
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if t.active[hash] != l {
+		return false
+	}
+	t.removeLocked(hash, snap, complete, time.Now())
+	return true
+}
+
+// DiscardExpected removes a locally-aborted acquisition without recording a
+// network failure or completion. Successfully persisted partial nodes remain
+// reusable by the next acquisition.
+func (t *Tracker) DiscardExpected(l *Ledger) bool {
+	if t == nil || l == nil {
+		return false
+	}
+	hash := l.Hash()
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if t.active[hash] != l {
+		return false
+	}
+	delete(t.active, hash)
+	return true
+}
+
+func (t *Tracker) removeLocked(hash [32]byte, snap Snapshot, complete bool, now time.Time) {
 	if complete {
 		// The caller's verdict is authoritative — stamp the terminal flag so
 		// the retained snapshot renders complete:true regardless of any race
@@ -168,65 +214,44 @@ func (t *Tracker) Active() []*Ledger {
 	return out
 }
 
-// Clear resets both the in-flight set and the recent-failure history,
-// backing fetch_info's `clear` param (rippled InboundLedgers::clearFailures,
-// which clears mRecentFailures and mLedgers).
-func (t *Tracker) Clear() {
+// Clear resets both the in-flight set and the recent-failure history and
+// returns the removed acquisitions for owner-side resource retirement.
+func (t *Tracker) Clear() []*Ledger {
 	if t == nil {
-		return
+		return nil
 	}
 	t.mu.Lock()
+	active := make([]*Ledger, 0, len(t.active))
+	for _, l := range t.active {
+		active = append(active, l)
+	}
 	t.active = make(map[[32]byte]*Ledger)
 	t.completed = make(map[[32]byte]completedRecord)
 	t.failures = make(map[[32]byte]failureRecord)
 	t.mu.Unlock()
+	return active
 }
 
 // Info returns the fetch_info snapshot keyed by ledger sequence (decimal, when
 // seq > 1) or hash, mirroring rippled InboundLedgers::getInfo. In-flight entries
-// report have_header/have_state/have_transactions/peers and the needed_*_hashes
-// for whichever tree is outstanding; completed entries report complete:true
-// until their retention window elapses; recent failures report failed:true with
-// the same per-tree fields (mirroring rippled's still-in-mLedgers getJson).
-// Reconciling the active set (move completed to the retained set, demote
-// failed/timed-out to failures) and expiring stale entries happens here.
+// report have_header/have_state/have_transactions/peers and the latest cached
+// needed_*_hashes after an outstanding tree has been scanned; completed entries
+// report complete:true until their retention window elapses; recent failures
+// report failed:true with the same per-tree fields.
+// Terminal lifecycle belongs to the acquisition owner; Info only reads each
+// acquisition's cached worker frontier and expires retained terminal records.
 func (t *Tracker) Info() map[string]any {
 	if t == nil {
 		return map[string]any{}
 	}
 
-	t.mu.Lock()
-	defer t.mu.Unlock()
-
 	now := time.Now()
-
-	// Reconcile the active set first, then assemble the result. Live entries
-	// are written last so they take precedence over a same-key completed or
-	// failure entry, matching rippled's getInfo which writes failures before
-	// the mLedgers acquisitions that can overwrite them.
-	live := make(map[string]map[string]any)
+	t.mu.Lock()
+	active := make(map[[32]byte]*Ledger, len(t.active))
 	for hash, l := range t.active {
-		snap := l.Snapshot()
-		switch {
-		case snap.Complete:
-			t.completed[hash] = completedRecord{snap: snap, at: now}
-			delete(t.active, hash)
-		case snap.Failed:
-			// Demote on the authoritative terminal state set by the router's
-			// OnTimer reaper, not a racing wall-clock: a read-only fetch_info
-			// must never reap an acquisition the router is still driving toward
-			// completion. Mark it before retaining the snapshot so the failure
-			// entry mirrors rippled's still-in-mLedgers getJson.
-			snap.Failed = true
-			t.failures[hash] = failureRecord{snap: snap, at: now}
-			delete(t.active, hash)
-		default:
-			live[acquisitionKey(snap.Seq, hash)] = AcquisitionJSON(snap)
-		}
+		active[hash] = l
 	}
-
 	ret := make(map[string]any)
-
 	for hash, rec := range t.failures {
 		if now.Sub(rec.at) > reacquireInterval {
 			delete(t.failures, hash)
@@ -242,9 +267,11 @@ func (t *Tracker) Info() map[string]any {
 		}
 		ret[acquisitionKey(rec.snap.Seq, hash)] = AcquisitionJSON(rec.snap)
 	}
+	t.mu.Unlock()
 
-	for key, entry := range live {
-		ret[key] = entry
+	for hash, l := range active {
+		snap := l.Snapshot()
+		ret[acquisitionKey(snap.Seq, hash)] = AcquisitionJSON(snap)
 	}
 
 	return ret
@@ -262,7 +289,8 @@ func acquisitionKey(seq uint32, hash [32]byte) string {
 // AcquisitionJSON mirrors rippled's InboundLedger::getJson
 // (InboundLedger.cpp:1302-1349): hash and timeouts always; complete/failed/peers
 // gated by state; and, once the header is in hand, have_state/have_transactions
-// plus the needed_*_hashes arrays for whichever tree is still outstanding.
+// plus the needed_*_hashes arrays for outstanding trees whose frontier has been
+// scanned at least once.
 func AcquisitionJSON(snap Snapshot) map[string]any {
 	entry := map[string]any{
 		"hash":        fmt.Sprintf("%X", snap.Hash),
@@ -284,10 +312,10 @@ func AcquisitionJSON(snap Snapshot) map[string]any {
 	if snap.HaveHeader {
 		entry["have_state"] = snap.HaveState
 		entry["have_transactions"] = snap.HaveTransactions
-		if !snap.HaveState {
+		if !snap.HaveState && snap.NeededState != nil {
 			entry["needed_state_hashes"] = hashList(snap.NeededState)
 		}
-		if !snap.HaveTransactions {
+		if !snap.HaveTransactions && snap.NeededTx != nil {
 			entry["needed_transaction_hashes"] = hashList(snap.NeededTx)
 		}
 	}

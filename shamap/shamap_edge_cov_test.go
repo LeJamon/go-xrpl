@@ -722,7 +722,7 @@ func TestSme_WalkSubtreeStopsOnReport(t *testing.T) {
 
 	count := 0
 	stop, err := walkSubtreeForMissing(
-		dest,
+		context.Background(), dest,
 		dest.root,
 		NewRootNodeID(),
 		dest.root.Hash(),

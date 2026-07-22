@@ -307,6 +307,15 @@ func (m *GetCountsMethod) Handle(ctx *types.RpcContext, params json.RawMessage) 
 		result["node_written_bytes"] = strconv.FormatUint(ns.WriteBytes, 10)
 		result["node_read_bytes"] = strconv.FormatUint(ns.ReadBytes, 10)
 	}
+	if fb := c.FullBelow; fb != nil {
+		result["fullbelow_size"] = fb.Size
+		result["fullbelow_target_size"] = fb.TargetSize
+		result["fullbelow_hits"] = strconv.FormatUint(fb.Hits, 10)
+		result["fullbelow_misses"] = strconv.FormatUint(fb.Misses, 10)
+		result["fullbelow_inserts"] = strconv.FormatUint(fb.Inserts, 10)
+		result["fullbelow_evictions"] = strconv.FormatUint(fb.Evictions, 10)
+		result["fullbelow_sweeps"] = strconv.FormatUint(fb.Sweeps, 10)
+	}
 
 	return result, nil
 }

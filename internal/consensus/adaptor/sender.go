@@ -2,6 +2,7 @@ package adaptor
 
 import (
 	"fmt"
+	"time"
 
 	"github.com/LeJamon/go-xrpl/internal/consensus"
 	"github.com/LeJamon/go-xrpl/internal/peermanagement"
@@ -11,6 +12,10 @@ import (
 // OverlaySender implements NetworkSender using the P2P overlay.
 type OverlaySender struct {
 	overlay *peermanagement.Overlay
+}
+
+func (s *OverlaySender) PeerLatency(peerID uint64) (time.Duration, bool) {
+	return s.overlay.PeerLatency(peermanagement.PeerID(peerID))
 }
 
 // NewOverlaySender creates a new OverlaySender.
@@ -114,7 +119,7 @@ func (s *OverlaySender) RequestTxSet(id consensus.TxSetID) error {
 	if err != nil {
 		return fmt.Errorf("encode txset request: %w", err)
 	}
-	return s.overlay.Broadcast(frame)
+	return s.overlay.BroadcastPriority(frame)
 }
 
 // RequestTxSetMissingNodes requests specific SHAMap nodes after a partial
@@ -140,13 +145,13 @@ func (s *OverlaySender) RequestTxSetMissingNodes(id consensus.TxSetID, nodeIDs [
 		return fmt.Errorf("encode txset missing-nodes request: %w", err)
 	}
 	if len(excluded) == 0 {
-		return s.overlay.Broadcast(frame)
+		return s.overlay.BroadcastPriority(frame)
 	}
 	skip := make(map[peermanagement.PeerID]bool, len(excluded))
 	for id := range excluded {
 		skip[peermanagement.PeerID(id)] = true
 	}
-	return s.overlay.BroadcastExceptSet(skip, frame)
+	return s.overlay.BroadcastPriorityExceptSet(skip, frame)
 }
 
 // RequestTxSetMissingNodesFromPeer unicasts the missing-nodes request to the
@@ -167,7 +172,7 @@ func (s *OverlaySender) RequestTxSetMissingNodesFromPeer(id consensus.TxSetID, n
 	if err != nil {
 		return fmt.Errorf("encode txset missing-nodes (unicast) request: %w", err)
 	}
-	return s.overlay.Send(peermanagement.PeerID(peerID), frame)
+	return s.overlay.SendPriority(peermanagement.PeerID(peerID), frame)
 }
 
 func (s *OverlaySender) BroadcastStatusChange(sc *message.StatusChange) error {
@@ -187,7 +192,7 @@ func (s *OverlaySender) RequestLedger(id consensus.LedgerID) error {
 	if err != nil {
 		return fmt.Errorf("encode get_ledger: %w", err)
 	}
-	return s.overlay.Broadcast(frame)
+	return s.overlay.BroadcastPriority(frame)
 }
 
 func (s *OverlaySender) RequestLedgerByHashAndSeq(hash [32]byte, seq uint32) error {
@@ -201,11 +206,15 @@ func (s *OverlaySender) RequestLedgerByHashAndSeq(hash [32]byte, seq uint32) err
 	if err != nil {
 		return fmt.Errorf("encode get_ledger: %w", err)
 	}
-	return s.overlay.Broadcast(frame)
+	return s.overlay.BroadcastPriority(frame)
 }
 
 func (s *OverlaySender) SendToPeer(peerID uint64, frame []byte) error {
 	return s.overlay.Send(peermanagement.PeerID(peerID), frame)
+}
+
+func (s *OverlaySender) SendPriorityToPeer(peerID uint64, frame []byte) error {
+	return s.overlay.SendPriority(peermanagement.PeerID(peerID), frame)
 }
 
 // ShouldShedLedgerRequest forwards to the overlay's load gate. See
@@ -215,18 +224,30 @@ func (s *OverlaySender) ShouldShedLedgerRequest(peerID uint64, loadedLocal bool)
 }
 
 // RequestLedgerBaseFromPeer sends a GetLedger(LedgerInfoBase) to a specific peer.
-func (s *OverlaySender) RequestLedgerBaseFromPeer(peerID uint64, hash [32]byte, seq uint32) error {
+func (s *OverlaySender) RequestLedgerBaseFromPeer(peerID uint64, hash [32]byte, seq uint32, indirect bool) error {
+	frame, err := encodeLedgerBaseRequest(hash, seq, indirect)
+	if err != nil {
+		return err
+	}
+	return s.overlay.SendPriority(peermanagement.PeerID(peerID), frame)
+}
+
+func encodeLedgerBaseRequest(hash [32]byte, seq uint32, indirect bool) ([]byte, error) {
 	msg := &message.GetLedger{
 		InfoType:   message.LedgerInfoBase,
 		LType:      message.LedgerTypeClosed,
 		LedgerHash: hash[:],
 		LedgerSeq:  seq,
 	}
+	if indirect {
+		qt := message.QueryTypeIndirect
+		msg.QueryType = &qt
+	}
 	frame, err := message.EncodeFrame(msg)
 	if err != nil {
-		return fmt.Errorf("encode get_ledger (base): %w", err)
+		return nil, fmt.Errorf("encode get_ledger (base): %w", err)
 	}
-	return s.overlay.Send(peermanagement.PeerID(peerID), frame)
+	return frame, nil
 }
 
 // PeerSupportsReplay reports whether the peer advertised the ledger-replay
@@ -275,15 +296,12 @@ func (s *OverlaySender) PeerWithLedger(target [32]byte, seq uint32, exclude uint
 	return uint64(id), ok
 }
 
-// PeersWithLedger forwards to Overlay.PeersWithLedger: selects up to max
-// peers that can serve ledger (target, seq), excluding `excluded`, to
-// broaden a stalled acquisition's source set.
-func (s *OverlaySender) PeersWithLedger(target [32]byte, seq uint32, excluded []uint64, max int) []uint64 {
+func (s *OverlaySender) SelectLedgerPeers(target [32]byte, seq uint32, excluded []uint64, max int) []uint64 {
 	ex := make([]peermanagement.PeerID, len(excluded))
 	for i, id := range excluded {
 		ex[i] = peermanagement.PeerID(id)
 	}
-	ids := s.overlay.PeersWithLedger(target, seq, ex, max)
+	ids := s.overlay.SelectLedgerPeers(target, seq, ex, max)
 	out := make([]uint64, len(ids))
 	for i, id := range ids {
 		out[i] = uint64(id)
@@ -340,41 +358,43 @@ func (s *OverlaySender) RequestReplayDelta(peerID uint64, hash [32]byte) error {
 	if err != nil {
 		return fmt.Errorf("encode replay delta request: %w", err)
 	}
-	return s.overlay.Send(peermanagement.PeerID(peerID), frame)
+	return s.overlay.SendPriority(peermanagement.PeerID(peerID), frame)
 }
 
 // RequestStateNodes sends a GetLedger request for account state SHAMap nodes.
 // indirect sets query_type=qtINDIRECT (see indirectQueryType).
-func (s *OverlaySender) RequestStateNodes(peerID uint64, ledgerHash [32]byte, nodeIDs [][]byte, indirect bool) error {
+func (s *OverlaySender) RequestStateNodes(peerID uint64, ledgerHash [32]byte, nodeIDs [][]byte, queryDepth uint32, indirect bool) error {
 	msg := &message.GetLedger{
-		InfoType:   message.LedgerInfoAsNode,
-		LedgerHash: ledgerHash[:],
-		NodeIDs:    nodeIDs,
-		QueryDepth: 2, // Return fat nodes (node + 2 levels of descendants)
-		QueryType:  indirectQueryType(indirect),
+		InfoType:      message.LedgerInfoAsNode,
+		LedgerHash:    ledgerHash[:],
+		NodeIDs:       nodeIDs,
+		QueryDepth:    queryDepth,
+		QueryDepthSet: true,
+		QueryType:     indirectQueryType(indirect),
 	}
 	frame, err := message.EncodeFrame(msg)
 	if err != nil {
 		return fmt.Errorf("encode get_ledger (state nodes): %w", err)
 	}
-	return s.overlay.Send(peermanagement.PeerID(peerID), frame)
+	return s.overlay.SendPriority(peermanagement.PeerID(peerID), frame)
 }
 
 // RequestTransactionNodes sends a GetLedger request for transaction SHAMap
 // nodes. indirect sets query_type=qtINDIRECT (see indirectQueryType).
-func (s *OverlaySender) RequestTransactionNodes(peerID uint64, ledgerHash [32]byte, nodeIDs [][]byte, indirect bool) error {
+func (s *OverlaySender) RequestTransactionNodes(peerID uint64, ledgerHash [32]byte, nodeIDs [][]byte, queryDepth uint32, indirect bool) error {
 	msg := &message.GetLedger{
-		InfoType:   message.LedgerInfoTxNode,
-		LedgerHash: ledgerHash[:],
-		NodeIDs:    nodeIDs,
-		QueryDepth: 2, // Return fat nodes (node + 2 levels of descendants)
-		QueryType:  indirectQueryType(indirect),
+		InfoType:      message.LedgerInfoTxNode,
+		LedgerHash:    ledgerHash[:],
+		NodeIDs:       nodeIDs,
+		QueryDepth:    queryDepth,
+		QueryDepthSet: true,
+		QueryType:     indirectQueryType(indirect),
 	}
 	frame, err := message.EncodeFrame(msg)
 	if err != nil {
 		return fmt.Errorf("encode get_ledger (tx nodes): %w", err)
 	}
-	return s.overlay.Send(peermanagement.PeerID(peerID), frame)
+	return s.overlay.SendPriority(peermanagement.PeerID(peerID), frame)
 }
 
 // indirectQueryType returns the GetLedger query_type for an acquisition

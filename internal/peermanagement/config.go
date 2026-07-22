@@ -17,17 +17,19 @@ const (
 	DefaultConnectTimeout   = 10 * time.Second
 	DefaultHandshakeTimeout = 5 * time.Second
 
-	DefaultEventBufferSize   = 256
-	DefaultMessageBufferSize = 256
-	DefaultSendBufferSize    = 64
+	DefaultEventBufferSize     = 256
+	DefaultMessageBufferSize   = 256
+	DefaultSendBufferSize      = 64
+	acquisitionEventBufferSize = 16
+	manifestMessageBufferSize  = 4
+	acquisitionSendBufferSize  = 192
+	manifestSendBufferSize     = DefaultSendBufferSize
 
 	// DefaultLedgerDataBufferSize sizes the dedicated acquisition-reply
-	// lane (mtLEDGER_DATA and the replay-delta / proof-path responses). It
-	// is generous on purpose: its own lane keeps a reply this node explicitly
-	// requested from being shed behind a serve/propose flood on the shared
-	// messages channel. Overflow still sheds, but bumps droppedLedgerData so
-	// any residual loss is visible.
-	DefaultLedgerDataBufferSize = 1024
+	// lane (mtLEDGER_DATA and the replay-delta / proof-path responses).
+	// Its bounded backpressure keeps requested replies from being discarded
+	// behind unrelated gossip while limiting retained wire data.
+	DefaultLedgerDataBufferSize = 64
 
 	// DefaultMaxTransactions is the per-type in-flight ceiling
 	// consulted at TMTransaction ingress before dispatching to the

@@ -519,6 +519,7 @@ type CountsResult struct {
 	Standalone bool
 	LocalTxs   int
 	NodeStore  *NodeStoreCounts
+	FullBelow  *FullBelowCounts
 }
 
 // NodeStoreCounts holds node-store I/O counters for get_counts. Fields map 1:1
@@ -529,6 +530,17 @@ type NodeStoreCounts struct {
 	Writes     uint64 // node_writes
 	ReadBytes  uint64 // node_read_bytes
 	WriteBytes uint64 // node_written_bytes
+}
+
+// FullBelowCounts holds the shared SHAMap completeness-cache metrics.
+type FullBelowCounts struct {
+	Size       int
+	TargetSize int
+	Hits       uint64
+	Misses     uint64
+	Inserts    uint64
+	Evictions  uint64
+	Sweeps     uint64
 }
 
 // TxReduceRelayMetrics holds the transaction reduce-relay rolling averages for

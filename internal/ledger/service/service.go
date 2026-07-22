@@ -47,6 +47,9 @@ var (
 // Config holds configuration for the LedgerService
 type Config struct {
 	Standalone bool
+	// NodeSize selects rippled's cache sweep cadence. Empty uses the medium
+	// profile, matching the top-level configuration default.
+	NodeSize string
 	// FetchDepth limits historical ledger serving relative to the closed ledger.
 	// Zero leaves serving unrestricted.
 	FetchDepth uint32
@@ -255,6 +258,10 @@ type Service struct {
 	persistStopping bool
 	persistWG       sync.WaitGroup
 	validatedTipMu  sync.Mutex
+	sweepMu         sync.Mutex
+	sweepCancel     context.CancelFunc
+	sweepDone       chan struct{}
+	sweepInterval   time.Duration
 
 	// ledgerEventCh feeds the single accepted-ledger event dispatcher (see
 	// dispatchLedgerEvent). A single consumer preserves FIFO delivery and runs
@@ -324,6 +331,7 @@ func New(cfg Config) (*Service, error) {
 		feeTrack:                 feetrack.New(),
 		validatedAgeNow:          time.Now,
 		persistWake:              make(chan struct{}, 1),
+		sweepInterval:            nodeStoreSweepIntervalForSize(cfg.NodeSize),
 	}
 	return s, nil
 }
@@ -530,6 +538,7 @@ func (s *Service) Start() error {
 		"openLedger", s.openLedger.Sequence(),
 		"needsInitialSync", s.needsInitialSync,
 	)
+	s.startNodeStoreSweeper()
 
 	return nil
 }

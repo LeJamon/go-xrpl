@@ -5,12 +5,13 @@ import (
 	"testing"
 	"time"
 
+	"github.com/LeJamon/go-xrpl/internal/peermanagement/message"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
-// dispatchEvent must never block — read hot path and Close path
-// would otherwise deadlock against an event loop holding peersMu.
+// Ordinary dispatch must never block; only acquisition traffic intentionally
+// propagates bounded backpressure to the peer read loop.
 func TestPeer_DispatchEvent_NonBlocking(t *testing.T) {
 	id, err := NewIdentity()
 	require.NoError(t, err)
@@ -66,6 +67,33 @@ func TestPeer_DispatchEvent_NilChannel(t *testing.T) {
 
 	peer := NewPeer(PeerID(1), Endpoint{Host: "127.0.0.1", Port: 1}, false, id, nil)
 	peer.dispatchEvent(Event{Type: EventMessageReceived, PeerID: 1})
+}
+
+func TestPeer_DispatchEvent_BackpressuresAcquisitionSeparately(t *testing.T) {
+	id, err := NewIdentity()
+	require.NoError(t, err)
+	events := make(chan Event, 1)
+	events <- Event{Type: EventMessageReceived, MessageType: uint16(message.TypeValidation)}
+	acquisition := make(chan Event, 1)
+	peer := NewPeer(PeerID(1), Endpoint{Host: "127.0.0.1", Port: 1}, false, id, events)
+	peer.SetAcquisitionEvents(acquisition)
+
+	first := Event{Type: EventMessageReceived, MessageType: uint16(message.TypeLedgerData)}
+	require.True(t, peer.dispatchEvent(first))
+	done := make(chan bool, 1)
+	go func() { done <- peer.dispatchEvent(first) }()
+	select {
+	case <-done:
+		t.Fatal("full acquisition lane did not apply backpressure")
+	case <-time.After(20 * time.Millisecond):
+	}
+	<-acquisition
+	select {
+	case delivered := <-done:
+		require.True(t, delivered)
+	case <-time.After(time.Second):
+		t.Fatal("acquisition dispatch did not resume")
+	}
 }
 
 // Overlay-side dispatchLifecycle delivers lifecycle events on a dedicated

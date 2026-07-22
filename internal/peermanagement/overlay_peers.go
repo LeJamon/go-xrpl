@@ -68,6 +68,8 @@ func (o *Overlay) connectReserved(addr string, bootstrapLease *bootstrapLease) e
 	peerID := PeerID(o.nextID.Add(1))
 	peer := NewPeer(peerID, endpoint, false, o.identity, o.events)
 	peer.SetDroppedEventsCounter(&o.droppedEvents)
+	peer.SetAcquisitionEvents(o.acquisitionEvents)
+	peer.SetManifestMessages(o.manifestMessages)
 	peer.handshakeCfg = o.handshakeConfigFor()
 	peer.onRedirect = func(peerIPs []string) {
 		o.ingestRedirectEndpoints(peerIPs, peerID)
@@ -102,7 +104,22 @@ func (o *Overlay) connectReserved(addr string, bootstrapLease *bootstrapLease) e
 	slog.Info("Peer handshake complete", "t", "Overlay", "addr", addr,
 		"protocol", peer.ProtocolVersion(), "compression", compression)
 	if bootstrapLease != nil {
-		peer.onBootstrapReady = bootstrapLease.markReady
+		peer.onBootstrapReady = func() { o.completePeerBootstrap(peerID) }
+		peer.onBootstrapProgress = func(progress bootstrapFrameProgress) {
+			observation := bootstrapLease.observeProgress(progress)
+			if observation.sampled {
+				o.discovery.observeBootstrapSource(addr, observation.projected)
+			}
+			if !observation.hedge {
+				return
+			}
+			slog.Info("Bootstrap hedge enabled", "t", "Overlay", "addr", addr,
+				"wire_size", progress.wireSize, "compressed", progress.compressed,
+				"bytes_read", progress.bytesRead, "elapsed", progress.elapsed,
+				"rate", frameReadRate(progress.bytesRead, progress.elapsed),
+				"projected", observation.projected)
+			o.wakeAutoconnect()
+		}
 	}
 
 	// Re-check after handshake: another goroutine may have connected
@@ -116,15 +133,28 @@ func (o *Overlay) connectReserved(addr string, bootstrapLease *bootstrapLease) e
 		peer.Close()
 		return err
 	}
+	if bootstrapLease != nil {
+		o.trackPeerBootstrap(peerID, bootstrapLease)
+	}
 
 	o.peerWG.Add(1)
 	go func() {
 		defer o.peerWG.Done()
 		err := peer.Run(baseCtx)
-		if bootstrapLease != nil && !o.bootstrap.isReady() && baseCtx.Err() == nil {
-			o.discovery.delayBootstrapRetry(addr)
+		if bootstrapLease != nil && baseCtx.Err() == nil {
+			retry := recentConnectAttempt
+			var frameErr *FrameReadError
+			if errors.As(err, &frameErr) && frameErr.MessageType == TypeManifests && frameErr.BytesRead > 0 {
+				retry = bootstrapPartialRetry
+				slog.Info("Bootstrap source quarantined", "t", "Overlay", "addr", addr,
+					"retry_after", retry, "wire_size", frameErr.WireSize,
+					"compressed", frameErr.Compressed, "bytes_read", frameErr.BytesRead,
+					"elapsed", frameErr.Elapsed, "rate", frameReadRate(frameErr.BytesRead, frameErr.Elapsed),
+					"projected", projectedFrameDuration(frameErr.WireSize, frameErr.BytesRead, frameErr.Elapsed))
+			}
+			o.discovery.delayBootstrapRetry(addr, retry)
 		}
-		bootstrapLease.release()
+		o.onBootstrapTransportEnd(peerID, bootstrapLease != nil && peer.bootstrapManifestPending.Load(), baseCtx.Err() != nil)
 		if err != nil {
 			slog.Info("Peer run ended", "t", "Overlay", "addr", addr, "err", err)
 			o.notePeerRunEnded(err)
@@ -133,6 +163,54 @@ func (o *Overlay) connectReserved(addr string, bootstrapLease *bootstrapLease) e
 	}()
 
 	return nil
+}
+
+func (o *Overlay) trackPeerBootstrap(peerID PeerID, lease *bootstrapLease) {
+	if lease == nil {
+		return
+	}
+	o.bootstrapLeaseMu.Lock()
+	if o.bootstrapLeases == nil {
+		o.bootstrapLeases = make(map[PeerID]*bootstrapLease)
+	}
+	o.bootstrapLeases[peerID] = lease
+	o.bootstrapLeaseMu.Unlock()
+}
+
+func (o *Overlay) takePeerBootstrap(peerID PeerID) *bootstrapLease {
+	o.bootstrapLeaseMu.Lock()
+	lease := o.bootstrapLeases[peerID]
+	delete(o.bootstrapLeases, peerID)
+	o.bootstrapLeaseMu.Unlock()
+	return lease
+}
+
+func (o *Overlay) completePeerBootstrap(peerID PeerID) bool {
+	lease := o.takePeerBootstrap(peerID)
+	if lease == nil {
+		return false
+	}
+	lease.markReady()
+	o.wakeAutoconnect()
+	return true
+}
+
+func (o *Overlay) releasePeerBootstrap(peerID PeerID) bool {
+	lease := o.takePeerBootstrap(peerID)
+	if lease == nil {
+		return false
+	}
+	lease.release()
+	return true
+}
+
+func (o *Overlay) onBootstrapTransportEnd(peerID PeerID, manifestPending, stopping bool) {
+	if manifestPending && !stopping {
+		return
+	}
+	if o.releasePeerBootstrap(peerID) && !stopping {
+		o.wakeAutoconnect()
+	}
 }
 
 func postHandshakeEndpoint(peer *Peer, configured Endpoint) Endpoint {
@@ -170,6 +248,15 @@ func (o *Overlay) IsPeerConnected(peerID PeerID) bool {
 	return ok && peer.State() == PeerStateConnected
 }
 
+// PeerLatency returns the overlay's smoothed round-trip estimate for peerID.
+func (o *Overlay) PeerLatency(peerID PeerID) (time.Duration, bool) {
+	peer, ok := o.getPeer(peerID)
+	if !ok {
+		return 0, false
+	}
+	return peer.Latency()
+}
+
 // Send sends a message to a specific peer.
 func (o *Overlay) Send(peerID PeerID, msg []byte) error {
 	peer, ok := o.getPeer(peerID)
@@ -177,6 +264,26 @@ func (o *Overlay) Send(peerID PeerID, msg []byte) error {
 		return ErrPeerNotFound
 	}
 	return peer.Send(msg)
+}
+
+// SendManifestFrames schedules a complete, chunked manifest snapshot for a
+// peer without consuming one ordinary send-queue slot per chunk.
+func (o *Overlay) SendManifestFrames(peerID PeerID, frames [][]byte) error {
+	peer, ok := o.getPeer(peerID)
+	if !ok {
+		return ErrPeerNotFound
+	}
+	return peer.SendManifestFrames(frames)
+}
+
+// SendPriority admits acquisition and control traffic to the peer's independent
+// priority queue.
+func (o *Overlay) SendPriority(peerID PeerID, msg []byte) error {
+	peer, ok := o.getPeer(peerID)
+	if !ok {
+		return ErrPeerNotFound
+	}
+	return peer.SendPriority(msg)
 }
 
 // Peers returns information about all connected peers.
@@ -323,6 +430,11 @@ func (o *Overlay) Messages() <-chan *InboundMessage {
 // consensus/acquisition traffic (issue #1103).
 func (o *Overlay) TxMessages() <-chan *InboundMessage {
 	return o.txMessages
+}
+
+// ManifestMessages returns the lossless, bounded manifest-verification lane.
+func (o *Overlay) ManifestMessages() <-chan *InboundMessage {
+	return o.manifestMessages
 }
 
 // LedgerDataMessages returns the dedicated acquisition-reply lane

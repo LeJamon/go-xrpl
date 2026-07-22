@@ -87,7 +87,7 @@ func (m *Manifest) Signatures() (masterSigHex, signatureHex string) {
 	if m == nil || len(m.Serialized) == 0 {
 		return "", ""
 	}
-	decoded, err := binarycodec.Decode(hex.EncodeToString(m.Serialized))
+	decoded, err := binarycodec.DecodeBytes(m.Serialized)
 	if err != nil {
 		return "", ""
 	}
@@ -114,7 +114,7 @@ func Deserialize(data []byte) (*Manifest, error) {
 		return nil, errors.New("manifest: empty payload")
 	}
 
-	decoded, err := binarycodec.Decode(hex.EncodeToString(data))
+	decoded, err := binarycodec.DecodeBytes(data)
 	if err != nil {
 		return nil, fmt.Errorf("manifest: decode STObject: %w", err)
 	}
@@ -205,7 +205,7 @@ func Deserialize(data []byte) (*Manifest, error) {
 // preimage: HashPrefix("MAN\0") || STObject(manifest without Signature
 // and MasterSignature). Mirrors Manifest::verify at Manifest.cpp:195-214.
 func (m *Manifest) Verify() error {
-	decoded, err := binarycodec.Decode(hex.EncodeToString(m.Serialized))
+	decoded, err := binarycodec.DecodeBytes(m.Serialized)
 	if err != nil {
 		return fmt.Errorf("manifest: decode for verify: %w", err)
 	}
@@ -248,11 +248,7 @@ func signingPreimageFromDecoded(decoded map[string]any) ([]byte, error) {
 			delete(decoded, k)
 		}
 	}
-	encoded, err := binarycodec.Encode(decoded)
-	if err != nil {
-		return nil, err
-	}
-	body, err := hex.DecodeString(encoded)
+	body, err := binarycodec.EncodeBytes(decoded)
 	if err != nil {
 		return nil, err
 	}
