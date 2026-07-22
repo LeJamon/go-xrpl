@@ -544,6 +544,51 @@ func TestIOUEscrow_FinishBasic(t *testing.T) {
 		"bob balance should increase by 1000 after escrow finish")
 }
 
+func TestIOUEscrow_LockedRate(t *testing.T) {
+	tests := []struct {
+		name        string
+		currentRate uint32
+		wantCredit  float64
+	}{
+		{name: "higher current rate uses locked rate", currentRate: 1_260_000_000, wantCredit: 100},
+		{name: "lower current rate uses current rate", currentRate: 0, wantCredit: 125},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			env, gw, alice, bob := setupIOUEscrowEnv(t)
+			env.SetTransferRate(gw, 1_250_000_000)
+			env.Close()
+
+			preBobUSD := env.BalanceIOU(bob, "USD", gw)
+			seq := env.Seq(alice)
+			result := env.Submit(
+				escrow.EscrowCreate(alice, bob, 0).
+					IOUAmount(usd(125, gw)).
+					Condition(escrow.TestCondition1).
+					FinishTime(env.Now().Add(time.Second)).
+					Fee(env.BaseFee() * 150).
+					Build())
+			jtx.RequireTxSuccess(t, result)
+			env.Close()
+
+			env.SetTransferRate(gw, tt.currentRate)
+			env.Close()
+
+			result = env.Submit(
+				escrow.EscrowFinish(bob, alice, seq).
+					Condition(escrow.TestCondition1).
+					Fulfillment(escrow.TestFulfillment1).
+					Fee(env.BaseFee() * 150).
+					Build())
+			jtx.RequireTxSuccess(t, result)
+			env.Close()
+
+			require.InDelta(t, preBobUSD+tt.wantCredit, env.BalanceIOU(bob, "USD", gw), 1e-12)
+		})
+	}
+}
+
 // --------------------------------------------------------------------------
 // TestIOUEscrow_CancelBasic
 // Reference: rippled EscrowToken_test.cpp testIOUBalances (cancel part)

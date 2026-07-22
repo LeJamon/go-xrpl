@@ -350,7 +350,7 @@ func addWithdrawDestinationHolding(ctx *tx.ApplyContext, asset tx.Asset) ter.Res
 			return ter.TecINSUFFICIENT_RESERVE
 		}
 	}
-	delta, result := addEmptyHolding(ctx, ctx.AccountID, asset)
+	delta, result := addEmptyHolding(ctx, ctx.AccountID, asset, ctx.PriorBalance())
 	if result == ter.TecDUPLICATE {
 		return ter.TesSUCCESS
 	}

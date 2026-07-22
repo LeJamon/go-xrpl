@@ -7,9 +7,11 @@ import (
 	"github.com/LeJamon/go-xrpl/internal/ledger/state"
 	"github.com/LeJamon/go-xrpl/internal/tx"
 	"github.com/LeJamon/go-xrpl/internal/tx/lending/lmath"
+	"github.com/LeJamon/go-xrpl/internal/tx/mptutil"
 	"github.com/LeJamon/go-xrpl/internal/tx/ter"
 	"github.com/LeJamon/go-xrpl/internal/tx/vault"
 	"github.com/LeJamon/go-xrpl/keylet"
+	"github.com/LeJamon/go-xrpl/ledger/entry"
 )
 
 func toLargeForRules(n state.XRPLNumber, rules *amendment.Rules) lmath.N {
@@ -150,7 +152,7 @@ func (l *LoanBrokerSet) Apply(ctx *tx.ApplyContext) ter.Result {
 	if res != ter.TesSUCCESS {
 		return res
 	}
-	lineDelta, res := vault.AddEmptyHolding(ctx, pseudoID, asset)
+	lineDelta, res := vault.AddEmptyHolding(ctx, pseudoID, asset, ctx.PriorBalance())
 	if res != ter.TesSUCCESS {
 		return res
 	}
@@ -500,7 +502,7 @@ func (l *LoanBrokerCoverWithdraw) Apply(ctx *tx.ApplyContext) ter.Result {
 
 	// Ensure the destination can hold the asset when it is the submitter.
 	if dstID == accountID {
-		if _, res := vault.AddEmptyHolding(ctx, dstID, asset); res != ter.TesSUCCESS && res != ter.TecDUPLICATE {
+		if _, res := vault.AddEmptyHolding(ctx, dstID, asset, ctx.PriorBalance()); res != ter.TesSUCCESS && res != ter.TecDUPLICATE {
 			return res
 		}
 	}
@@ -590,7 +592,16 @@ func (l *LoanBrokerCoverClawback) Preclaim(view tx.LedgerView, config tx.EngineC
 	if asset.IsNative() {
 		return ter.TecNO_PERMISSION
 	}
-	if asset.Issuer != l.Account {
+	var mptIssuanceID [24]byte
+	if asset.IsMPT() {
+		mptIssuanceID, err = mptutil.DecodeID(asset.MPTIssuanceID)
+		if err != nil {
+			return ter.TefINTERNAL
+		}
+		if mptutil.Issuer(mptIssuanceID) != accountID {
+			return ter.TecNO_PERMISSION
+		}
+	} else if asset.Issuer != l.Account {
 		return ter.TecNO_PERMISSION
 	}
 	if l.Amount != nil {
@@ -616,7 +627,26 @@ func (l *LoanBrokerCoverClawback) Preclaim(view tx.LedgerView, config tx.EngineC
 	if res := canApplyToBrokerCover(fix320, lendNumForRules(b.CoverAvailable, config.RequireRules()), claw, assetIntegral(asset)); res != ter.TesSUCCESS {
 		return res
 	}
-	// Only IOU issuers with clawback enabled and no global freeze may claw.
+	holds, herr := vault.AccountHoldsFull(view, config, b.Account, asset)
+	if herr != nil {
+		return ter.TefINTERNAL
+	}
+	if toLargeForRules(holds, config.RequireRules()).Cmp(claw) < 0 {
+		return ter.TecINTERNAL
+	}
+	if asset.IsMPT() {
+		issuance, _, result := mptutil.ReadIssuance(view, mptIssuanceID)
+		if result != ter.TesSUCCESS {
+			return result
+		}
+		if issuance.Flags&entry.LsfMPTCanClawback == 0 {
+			return ter.TecNO_PERMISSION
+		}
+		if issuance.Issuer != accountID {
+			return ter.TecINTERNAL
+		}
+		return ter.TesSUCCESS
+	}
 	issuerID, _ := state.DecodeAccountID(asset.Issuer)
 	iar, ierr := tx.ReadAccountRoot(view, issuerID)
 	if ierr != nil || iar == nil {
@@ -625,7 +655,6 @@ func (l *LoanBrokerCoverClawback) Preclaim(view tx.LedgerView, config tx.EngineC
 	if iar.Flags&state.LsfAllowTrustLineClawback == 0 || iar.Flags&state.LsfNoFreeze != 0 {
 		return ter.TecNO_PERMISSION
 	}
-	_ = accountID
 	return ter.TesSUCCESS
 }
 

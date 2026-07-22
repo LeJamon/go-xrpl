@@ -499,7 +499,6 @@ func escrowUnlockIOU(
 	if currentRate != 0 && currentRate < effectiveRate {
 		effectiveRate = currentRate
 	}
-	// If no rate was locked (0 or parityRate), use currentRate
 	if effectiveRate == 0 {
 		effectiveRate = currentRate
 	}
@@ -1099,9 +1098,8 @@ func divideAmountByRate(amount tx.Amount, rate uint32) tx.Amount {
 		return amount
 	}
 
-	// For IOU: result = amount * 1_000_000_000 / rate
-	// Use MulRatio which does amount * num / den
-	return amount.MulRatio(parityRate, rate, true)
+	rateAmount := state.NewIssuedAmountFromValue(int64(rate), -9, "", "")
+	return state.DivRound(amount, rateAmount, amount.Currency, amount.Issuer, true)
 }
 
 // createMPTokenForEscrow creates a new MPToken SLE for holderID during escrow unlock.
@@ -1269,24 +1267,27 @@ func computeMPTTransferFee(
 	// Transfer fee only applies when neither party is issuer
 	if (!senderIsIssuer && !receiverIsIssuer) && effectiveRate != parityRate {
 		// fee = amount - divideRound(amount, rate, asset, true)
-		// For MPT amounts (uint64), use big.Int:
-		// divideRound = amount * 1_000_000_000 / rate (rounded up)
-		bigAmount := new(big.Int).SetUint64(originalAmount)
-		bigParity := new(big.Int).SetUint64(uint64(parityRate))
-		bigRate := new(big.Int).SetUint64(uint64(effectiveRate))
+		amount := state.NewMPTAmountWithIssuanceID(
+			int64(originalAmount),
+			state.EncodeAccountIDSafe(issuerID),
+			mptHexID,
+		)
+		rate := state.NewIssuedAmountFromValue(int64(effectiveRate), -9, "", "")
 
-		// amount * parityRate / rate, rounded up
-		numerator := new(big.Int).Mul(bigAmount, bigParity)
-		divided := new(big.Int).Div(numerator, bigRate)
-		// Round up: if numerator % rate != 0, add 1
-		remainder := new(big.Int).Mod(numerator, bigRate)
-		if remainder.Sign() > 0 {
-			divided.Add(divided, big.NewInt(1))
+		// rippled's muldivRound throws if the pre-canonicalization quotient does
+		// not fit in uint64. Guard this path before DivRoundMPT's Uint64 conversion
+		// so an oversized MPT finish becomes tefEXCEPTION instead of truncating.
+		numVal, _ := state.PrepareMulDivOperand(amount)
+		denVal, _ := state.PrepareMulDivOperand(rate)
+		rounded := new(big.Int).Mul(big.NewInt(numVal), big.NewInt(100_000_000_000_000_000))
+		rounded.Add(rounded, big.NewInt(denVal-1))
+		rounded.Quo(rounded, big.NewInt(denVal))
+		if !rounded.IsUint64() {
+			panic("MPT divRound overflow")
 		}
 
-		dividedResult := divided.Uint64()
-		fee := originalAmount - dividedResult
-		return originalAmount, originalAmount - fee
+		finalAmount := uint64(state.DivRoundMPT(amount, rate, true))
+		return originalAmount, finalAmount
 	}
 
 	return originalAmount, originalAmount

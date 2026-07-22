@@ -118,8 +118,8 @@ func TestWithdrawSelfMPTReserveAndOwnerCount(t *testing.T) {
 		require.Equal(t, uint32(2), ctx.Account.OwnerCount)
 	})
 
-	t.Run("second object is reserve free and increments owner count", func(t *testing.T) {
-		ctx, view := build(t, 1, 0)
+	t.Run("second object requires full reserve and increments owner count", func(t *testing.T) {
+		ctx, view := build(t, 1, 40)
 		require.Equal(t, ter.TesSUCCESS, addWithdrawDestinationHolding(ctx, asset))
 		exists, err := view.Exists(keylet.MPTokenByID(id, holder))
 		require.NoError(t, err)
@@ -175,9 +175,69 @@ func TestWithdrawSelfIOUReserveUsesUpdatedOwnerCount(t *testing.T) {
 	})
 	require.NoError(t, err)
 	require.NoError(t, view.Insert(keylet.Account(issuer), issuerData))
-	delta, result := addEmptyHolding(ctx, holder, tx.Asset{Currency: "USD", Issuer: issuerAddress})
+	delta, result := addEmptyHolding(ctx, holder, tx.Asset{Currency: "USD", Issuer: issuerAddress}, ctx.PriorBalance())
 	require.Equal(t, ter.TesSUCCESS, result)
 	require.Equal(t, int32(1), delta)
+}
+
+func TestAddEmptyHoldingUsesNonSubmitterReserve(t *testing.T) {
+	var issuer, submitter, holder [20]byte
+	issuer[19] = 1
+	submitter[19] = 2
+	holder[19] = 3
+
+	build := func(t *testing.T, holderBalance uint64) (*tx.ApplyContext, *mptArmsView) {
+		t.Helper()
+		view := newMPTArmsView()
+		ctx := buildArmsCtx(t, view, submitter, rulesWithFix(true))
+		ctx.Account.Balance = 1_000
+		ctx.Config.ReserveBase = 20
+		ctx.Config.ReserveIncrement = 10
+		for accountID, account := range map[[20]byte]*state.AccountRoot{
+			issuer: {
+				Account: state.EncodeAccountIDSafe(issuer),
+				Flags:   state.LsfDefaultRipple,
+			},
+			holder: {
+				Account:    state.EncodeAccountIDSafe(holder),
+				Balance:    holderBalance,
+				OwnerCount: 2,
+			},
+		} {
+			raw, err := state.SerializeAccountRoot(account)
+			require.NoError(t, err)
+			require.NoError(t, view.Insert(keylet.Account(accountID), raw))
+		}
+		return ctx, view
+	}
+
+	t.Run("IOU checks the holding account balance", func(t *testing.T) {
+		ctx, view := build(t, 49)
+		asset := tx.Asset{Currency: "USD", Issuer: state.EncodeAccountIDSafe(issuer)}
+		delta, result := addEmptyHolding(ctx, holder, asset, 49)
+		require.Equal(t, ter.TecNO_LINE_INSUF_RESERVE, result)
+		require.Zero(t, delta)
+		exists, err := view.Exists(keylet.Line(holder, issuer, "USD"))
+		require.NoError(t, err)
+		require.False(t, exists)
+	})
+
+	t.Run("MPT enforces the third-object reserve", func(t *testing.T) {
+		ctx, view := build(t, 49)
+		id := keylet.MakeMPTID(7, issuer)
+		raw, err := state.SerializeMPTokenIssuance(&state.MPTokenIssuanceData{
+			Issuer: issuer,
+			Flags:  entry.LsfMPTCanTransfer,
+		})
+		require.NoError(t, err)
+		require.NoError(t, view.Insert(keylet.MPTIssuance(id), raw))
+		delta, result := addEmptyHolding(ctx, holder, tx.Asset{MPTIssuanceID: hex.EncodeToString(id[:])}, 49)
+		require.Equal(t, ter.TecINSUFFICIENT_RESERVE, result)
+		require.Zero(t, delta)
+		exists, err := view.Exists(keylet.MPTokenByID(id, holder))
+		require.NoError(t, err)
+		require.False(t, exists)
+	})
 }
 
 func TestAssetDispatchPreservesMPTPrecedenceAndFreezeTER(t *testing.T) {
