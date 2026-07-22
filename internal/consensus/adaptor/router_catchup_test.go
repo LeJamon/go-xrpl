@@ -100,6 +100,34 @@ func TestRouter_SameHashAtSameSeq_NoAcquisition(t *testing.T) {
 	assert.Nil(t, r.fetchTracker.Find(closed.Hash()))
 }
 
+func TestRouter_StatusWithoutLedgerHashCannotSteerCatchup(t *testing.T) {
+	r, _, sender, svc := makeRouter(t)
+	peerID := peermanagement.PeerID(7)
+	r.peersMu.Lock()
+	r.peerStates[peerID] = &peerLedgerState{LedgerSeq: svc.GetClosedLedgerIndex() + 1, LedgerHash: [32]byte{0xA1}}
+	r.peersMu.Unlock()
+
+	sc := &message.StatusChange{
+		NewStatus: message.NodeStatus(0),
+		NewEvent:  message.NodeEventClosingLedger,
+		LedgerSeq: svc.GetClosedLedgerIndex() + 100,
+	}
+	encoded, err := message.Encode(sc)
+	require.NoError(t, err)
+	r.handleMessage(&peermanagement.InboundMessage{
+		PeerID:  peerID,
+		Type:    uint16(message.TypeStatusChange),
+		Payload: encoded,
+	})
+
+	assert.Empty(t, sender.replayCalls())
+	assert.Empty(t, sender.legacyCalls())
+	r.peersMu.RLock()
+	_, tracked := r.peerStates[peerID]
+	r.peersMu.RUnlock()
+	assert.False(t, tracked)
+}
+
 // TestRouter_CheckBehindArmsAcquisition verifies the checkBehind fix:
 // when a peer is far ahead, the router must arm a real acquisition
 // (via startLedgerAcquisition), not just broadcast an unresponded

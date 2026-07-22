@@ -2,6 +2,7 @@ package adaptor
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"runtime"
@@ -66,7 +67,10 @@ type Router struct {
 	// proposal/validation. nil when unset — a nil channel is never selected.
 	// Wired via SetAcqInbox before Run.
 	acqInbox <-chan *peermanagement.InboundMessage
-	logger   *slog.Logger
+	// manifestInbox is a dedicated, backpressured overlay lane drained by the
+	// manifest worker without passing through the consensus router loop.
+	manifestInbox <-chan *peermanagement.InboundMessage
+	logger        *slog.Logger
 
 	// Peer ledger tracking for catch-up detection
 	peerSessions peerSessionView
@@ -77,6 +81,8 @@ type Router struct {
 	// cleanup so acquisition scans never block the overlay event loop.
 	pendingPeerDisconnects sync.Map
 	peerDisconnectWake     chan struct{}
+	pendingPeerConnects    sync.Map
+	peerConnectWake        chan struct{}
 
 	// replayer coordinates concurrent mtREPLAY_DELTA_REQUEST acquisitions
 	// keyed by target ledger hash, under a configurable concurrency cap, so a
@@ -95,6 +101,9 @@ type Router struct {
 	// concurrent access is safe. Orthogonal to replayer — legacy and
 	// replay-delta acquisitions can coexist.
 	fetchTracker *inbound.Tracker
+	// acquisitionWorkMu guards the lane pointer across Run startup/shutdown and
+	// RPC calls such as fetch_info clear.
+	acquisitionWorkMu sync.RWMutex
 
 	// fetchPacks caches inbound fetch-pack SHAMap nodes keyed by node hash so
 	// a stalled acquisition can complete locally (inbound.Ledger.CheckLocal)
@@ -113,13 +122,9 @@ type Router struct {
 	// Components bootstrap so the router can apply inbound TMManifests
 	// frames and — on Accepted — relay them to other peers.
 	// May be nil in tests that don't exercise the manifest path.
-	manifests *manifest.Cache
-	// manifestJobs moves manifest deserialization, signature verification,
-	// and relay construction off the router loop. A single worker preserves
-	// frame order; Cache.ApplyManifest already serializes concurrent writers.
-	manifestJobs        chan *peermanagement.InboundMessage
-	manifestWorkerDone  chan struct{}
-	droppedManifestJobs atomic.Uint64
+	manifests            *manifest.Cache
+	manifestWorkerCancel context.CancelFunc
+	manifestWorkerDone   chan struct{}
 
 	// overlay is held so the router can relay accepted manifests and emit
 	// the local cache to peers. Nil in tests without manifest support.
@@ -139,7 +144,7 @@ type Router struct {
 	// leaves it nil so the real overlay is used.
 	overrideManifestSender manifestSender
 
-	// manifestFrameMu guards the cached TMManifests emission frame and
+	// manifestFrameMu guards the cached TMManifests emission frames and
 	// its companion sequence cursor: re-encode only when manifests.Sequence
 	// has advanced past the value seen at last build, so back-to-back
 	// peer connects reuse the same encoded bytes without re-walking the
@@ -148,7 +153,7 @@ type Router struct {
 	// so we need an explicit "have we ever built?" flag rather than
 	// using the zero value as the sentinel.
 	manifestFrameMu    sync.Mutex
-	manifestFrame      []byte
+	manifestFrames     [][]byte
 	manifestFrameSeq   uint64
 	manifestFrameBuilt bool
 
@@ -202,13 +207,18 @@ type Router struct {
 	// store (see SetAcquisitionFamily); nil leaves them unbacked. Set once at
 	// startup, before Run.
 	acquisitionFamily shamap.Family
+	acquisitionStore  *acquisitionStoreLane
+	acquisitionWork   *acquisitionWorkLane
 
 	// catchupMu guards the single consensus catch-up target and recent failures.
 	// The router drives at most maxConcurrentCatchup acquisitions toward the
 	// highest trusted (seq,hash), matching rippled's single needed ledger.
-	catchupMu       sync.Mutex
-	catchup         catchupTarget
-	catchupFailures map[[32]byte]time.Time
+	catchupMu              sync.Mutex
+	catchup                catchupTarget
+	catchupFailures        map[[32]byte]time.Time
+	acquisitionMu          sync.Mutex
+	activeConsensusLedger  [32]byte
+	pendingConsensusLedger [32]byte
 
 	// historyMu guards history, the single backward history-backfill target: the
 	// next ledger a jump-adopt skipped (rippled Reason::HISTORY). The walk is
@@ -283,10 +293,6 @@ var serveWorkerCount = max(2, runtime.GOMAXPROCS(0)/2)
 
 const serveQueueDepth = 256
 
-// manifestQueueDepth bounds pending verification work without blocking the
-// consensus router. Each wire frame is already bounded by MaxMessageSize.
-const manifestQueueDepth = 4
-
 // messageDedupTTL is how long a proposal/validation hash is
 // remembered for duplicate-detection purposes. 30s comfortably covers a
 // consensus round while aging out cross-round stragglers so the dedup
@@ -309,6 +315,7 @@ func NewRouter(engine consensus.Engine, adaptor *Adaptor, inbox <-chan *peermana
 		logger:             logger,
 		peerStates:         make(map[peermanagement.PeerID]*peerLedgerState),
 		peerDisconnectWake: make(chan struct{}, 1),
+		peerConnectWake:    make(chan struct{}, 1),
 		replayer:           inbound.NewReplayer(logger, inbound.SystemClock, inbound.DefaultMaxInFlightReplays),
 		fetchTracker:       inbound.NewTracker(),
 		fetchPacks:         newFetchPackCache(),
@@ -327,6 +334,7 @@ func NewRouter(engine consensus.Engine, adaptor *Adaptor, inbox <-chan *peermana
 		// in-flight tx-set clears the per-acquisition throttle and
 		// attempt-cap state.
 		adaptor.SetOnTxSetRequested(r.MarkTxSetStillNeeded)
+		adaptor.SetOnLedgerRequested(r.requestConsensusLedger)
 	}
 	return r
 }
@@ -347,6 +355,13 @@ func (r *Router) SetAcqInbox(acqInbox <-chan *peermanagement.InboundMessage) {
 	r.acqInbox = acqInbox
 }
 
+// SetManifestInbox installs the overlay's dedicated manifest lane. The peer
+// read path applies bounded backpressure, while a separate worker keeps
+// signature verification off the consensus router.
+func (r *Router) SetManifestInbox(manifestInbox <-chan *peermanagement.InboundMessage) {
+	r.manifestInbox = manifestInbox
+}
+
 // SetAcquisitionFamily installs the node-store family that backs new inbound
 // ledger acquisitions, so a forked or catching-up node satisfies the shared
 // majority of a state/tx tree from its local store and only fetches the
@@ -354,16 +369,45 @@ func (r *Router) SetAcqInbox(acqInbox <-chan *peermanagement.InboundMessage) {
 // acquisitions unbacked, preserving the fetch-everything path for storeless
 // deployments. Call before Run.
 func (r *Router) SetAcquisitionFamily(family shamap.Family) {
-	r.acquisitionFamily = family
+	if family == nil {
+		r.acquisitionFamily = nil
+		r.acquisitionStore = nil
+		return
+	}
+	r.acquisitionStore = newAcquisitionStoreLane(family, r.logger, acquisitionStoreQueueDepth)
+	r.acquisitionFamily = r.acquisitionStore
+}
+
+func (r *Router) flushAcquisitionStore(ctx context.Context, ledger *inbound.Ledger) error {
+	if r.acquisitionStore == nil || ledger == nil {
+		return nil
+	}
+	return ledger.FlushPersistence(ctx)
+}
+
+func (r *Router) retireAcquisitionStore(ctx context.Context, ledger *inbound.Ledger) {
+	if ledger == nil {
+		return
+	}
+	if err := ledger.RetirePersistence(ctx); err != nil && !errors.Is(err, context.Canceled) {
+		r.logger.Warn("inbound ledger: failed to retire persistence scope", "error", err, "seq", ledger.Seq())
+	}
+}
+
+func (r *Router) promoteAcquisitionStore(ctx context.Context, ledger *inbound.Ledger) error {
+	if ledger == nil {
+		return nil
+	}
+	return ledger.PromotePersistence(ctx)
 }
 
 // acquisitionOpts returns the inbound.Option set applied to every new
-// acquisition — currently just the node-store backing when one is wired.
+// acquisition.
 func (r *Router) acquisitionOpts() []inbound.Option {
-	if r.acquisitionFamily == nil {
+	if r.acquisitionStore == nil {
 		return nil
 	}
-	return []inbound.Option{inbound.WithFamily(r.acquisitionFamily)}
+	return []inbound.Option{inbound.WithFamily(r.acquisitionStore.scope())}
 }
 
 // SetMinimumOnlineFloor installs the online-delete retention floor. Once set,
@@ -432,6 +476,7 @@ func (r *Router) StopReplayer() int {
 // instead of lingering until the next ledger adoption happens to
 // overwrite it.
 func (r *Router) HandlePeerDisconnect(peerID peermanagement.PeerID) {
+	r.pendingPeerConnects.Delete(peerID)
 	r.peersMu.Lock()
 	delete(r.peerStates, peerID)
 	r.peersMu.Unlock()
@@ -452,6 +497,7 @@ func (r *Router) HandlePeerDisconnect(peerID peermanagement.PeerID) {
 }
 
 func (r *Router) queuePeerDisconnect(peerID peermanagement.PeerID) {
+	r.pendingPeerConnects.Delete(peerID)
 	r.pendingPeerDisconnects.Store(peerID, struct{}{})
 	select {
 	case r.peerDisconnectWake <- struct{}{}:
@@ -494,6 +540,28 @@ func (r *Router) removePeerFromAcquisitions(peerID uint64) {
 // also runs in this loop to time out stuck inbound replay-delta
 // acquisitions and fall back to the legacy mtGET_LEDGER path.
 func (r *Router) Run(ctx context.Context) {
+	if r.acquisitionStore != nil {
+		r.acquisitionStore.start(ctx)
+		defer r.acquisitionStore.stopDrain()
+	}
+	r.acquisitionWorkMu.Lock()
+	workLane := r.acquisitionWork
+	if workLane == nil {
+		workLane = newAcquisitionWorkLane(acquisitionWorkQueueDepth)
+		r.acquisitionWork = workLane
+	}
+	r.acquisitionWorkMu.Unlock()
+	workLane.flush = r.flushAcquisitionStore
+	workLane.start(ctx)
+	defer func() {
+		workLane.stop()
+		r.acquisitionWorkMu.Lock()
+		if r.acquisitionWork == workLane {
+			r.acquisitionWork = nil
+		}
+		r.acquisitionWorkMu.Unlock()
+	}()
+
 	disconnectCtx, stopDisconnectCleanup := context.WithCancel(ctx)
 	disconnectCleanupDone := make(chan struct{})
 	go func() {
@@ -507,11 +575,16 @@ func (r *Router) Run(ctx context.Context) {
 
 	r.startTxWorkers(ctx)
 	r.startServeWorkers(ctx)
-	r.startManifestWorker()
+	r.startManifestWorker(ctx)
 	defer r.stopManifestWorker()
 	ticker := time.NewTicker(inboundReplayDeltaTickInterval)
 	defer ticker.Stop()
+	r.drainPeerConnects()
 	for {
+		acqInbox := r.acqInbox
+		if !workLane.canAcceptData() {
+			acqInbox = nil
+		}
 		select {
 		case <-ctx.Done():
 			return
@@ -520,7 +593,7 @@ func (r *Router) Run(ctx context.Context) {
 				return
 			}
 			r.handleMessage(msg)
-		case msg, ok := <-r.acqInbox:
+		case msg, ok := <-acqInbox:
 			// Dedicated acquisition-reply lane (liBASE and the replay-delta /
 			// proof-path responses). Its own buffered lane keeps a flood on
 			// inbox from shedding it; drained as a CO-EQUAL select case so it
@@ -542,10 +615,33 @@ func (r *Router) Run(ctx context.Context) {
 				continue
 			}
 			r.submitTxJob(msg)
+		case result := <-workLane.results():
+			r.handleAcquisitionWorkResult(result)
+		case <-r.peerConnectWake:
+			r.drainPeerConnects()
 		case <-ticker.C:
+			r.drainAcquisitionInboxBeforeMaintenance(workLane)
 			r.maintenanceTick()
 		}
 	}
+}
+
+func (r *Router) drainAcquisitionInboxBeforeMaintenance(workLane *acquisitionWorkLane) int {
+	drained := 0
+	for drained < acquisitionWorkBatchLimit && workLane.canAcceptData() {
+		select {
+		case msg, ok := <-r.acqInbox:
+			if !ok {
+				r.acqInbox = nil
+				return drained
+			}
+			r.handleMessage(msg)
+			drained++
+		default:
+			return drained
+		}
+	}
+	return drained
 }
 
 // startTxWorkers builds the bounded inbound-transaction queue and launches its
@@ -641,24 +737,41 @@ func (r *Router) DroppedServeJobs() uint64 {
 	return r.droppedServeJobs.Load()
 }
 
-func (r *Router) startManifestWorker() {
-	r.manifestJobs = make(chan *peermanagement.InboundMessage, manifestQueueDepth)
+func (r *Router) startManifestWorker(ctx context.Context) {
+	workerCtx, cancel := context.WithCancel(ctx)
+	r.manifestWorkerCancel = cancel
 	r.manifestWorkerDone = make(chan struct{})
-	jobs := r.manifestJobs
+	inbox := r.manifestInbox
 	done := r.manifestWorkerDone
 
 	go func() {
 		defer close(done)
-		for msg := range jobs {
-			r.processManifestJob(msg)
+		for {
+			select {
+			case <-workerCtx.Done():
+				for {
+					select {
+					case msg := <-inbox:
+						r.processManifestJob(msg)
+					default:
+						return
+					}
+				}
+			case msg, ok := <-inbox:
+				if !ok {
+					return
+				}
+				r.processManifestJob(msg)
+			}
 		}
 	}()
 }
 
 func (r *Router) stopManifestWorker() {
-	close(r.manifestJobs)
+	r.manifestWorkerCancel()
 	<-r.manifestWorkerDone
-	r.manifestJobs = nil
+	r.manifestWorkerCancel = nil
+	r.manifestWorkerDone = nil
 }
 
 func (r *Router) processManifestJob(msg *peermanagement.InboundMessage) {
@@ -680,26 +793,7 @@ func (r *Router) processManifestJob(msg *peermanagement.InboundMessage) {
 }
 
 func (r *Router) submitManifestJob(msg *peermanagement.InboundMessage) {
-	if r.manifestJobs == nil {
-		r.processManifestJob(msg)
-		return
-	}
-	select {
-	case r.manifestJobs <- msg:
-	default:
-		r.droppedManifestJobs.Add(1)
-		if acknowledger, ok := r.peerSessions.(peerBootstrapAcknowledger); ok {
-			acknowledger.RejectPeerBootstrap(msg.PeerID)
-		}
-		r.logger.Debug("inbound manifests dropped: worker queue saturated",
-			"t", "consensus", "event", "manifest-shed", "peer", msg.PeerID)
-	}
-}
-
-// DroppedManifestJobs returns the cumulative count of inbound manifest frames
-// shed because the worker queue was saturated.
-func (r *Router) DroppedManifestJobs() uint64 {
-	return r.droppedManifestJobs.Load()
+	r.processManifestJob(msg)
 }
 
 // maintenanceTick runs out-of-band housekeeping: detect replay-delta
@@ -777,20 +871,13 @@ func (r *Router) maintenanceTick() {
 	// replay-delta path, both of which refuse to arm while the hash is in flight.
 	now := time.Now()
 
-	for _, il := range r.fetchTracker.Active() {
-		switch il.OnTimer(now) {
-		case inbound.TimerFailed:
-			r.failInboundAcquisition(il)
-		case inbound.TimerEscalate:
-			r.escalateAcquisition(il, now)
-		}
-	}
+	r.retryInboundLedgerAcquisitions(now)
 
 	// Timer-driven catch-up re-arm (rippled LedgerMaster::doAdvance cadence): a
 	// reaped/failed sole acquisition (cap=1) can't park catch-up until the next
 	// gossip event. No-ops while an acquisition is in flight or the target is
 	// reached; startLedgerAcquisition dedups the in-flight hash.
-	r.armCatchupTowardTarget()
+	r.armConsensusCatchup()
 
 	// Backward history backfill of jump-adopt gaps (rippled fetchForHistory
 	// from doAdvance), off the consensus catch-up slot.
@@ -805,6 +892,32 @@ func (r *Router) maintenanceTick() {
 	// falls silent mid-acquire nothing re-requests the remaining nodes and
 	// the node stalls into wrongLedger.
 	r.retryStalledTxSetAcquires()
+}
+
+func (r *Router) retryInboundLedgerAcquisitions(now time.Time) {
+	workLane := r.currentAcquisitionWork()
+	for _, il := range r.fetchTracker.Active() {
+		if workLane != nil && workLane.has(il) {
+			continue
+		}
+		if workLane != nil && !workLane.has(il) && !workLane.canAcceptNew() {
+			il.RearmTimer(now)
+			continue
+		}
+		if il.State() == inbound.StateFailed {
+			if !r.submitAcquisitionWork(il, acquisitionWorkEvent{kind: acquisitionWorkFailure}) {
+				r.logger.Warn("inbound ledger: failure snapshot deferred; acquisition worker saturated", "seq", il.Seq())
+			}
+			continue
+		}
+		if !il.TimerDue(now) {
+			continue
+		}
+		if !r.submitAcquisitionWork(il, acquisitionWorkEvent{kind: acquisitionWorkTimerCheck, at: now}) {
+			il.RearmTimer(now)
+			r.logger.Warn("inbound ledger: timer check deferred; acquisition worker saturated", "seq", il.Seq())
+		}
+	}
 }
 
 // Bounds used to reject malformed TMProposeSet / TMValidation frames
@@ -829,12 +942,7 @@ var (
 	txSetHardMaxReplyNodes = 12288
 )
 
-// SHAMapNodeID wire length: 32-byte path + 1-byte depth.
-const shamapNodeIDLen = 33
-
-// Without a latency signal we overspec the query depth at 2 — an extra
-// level is harmless, too few stalls the requestor.
-const defaultQueryDepth = 2
+const maxQueryDepth = 3
 
 type logger interface {
 	Debug(msg string, args ...any)

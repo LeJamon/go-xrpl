@@ -450,6 +450,18 @@ func buildManifestEvent(m *manifest.Manifest) *rpc.ManifestEvent {
 	)
 }
 
+type manifestEventPublisher interface {
+	PublishManifest(*rpc.ManifestEvent)
+	GetSubscriberCount(types.SubscriptionType) int
+}
+
+func publishManifestIfSubscribed(publisher manifestEventPublisher, m *manifest.Manifest) {
+	if publisher == nil || publisher.GetSubscriberCount(types.SubManifests) == 0 {
+		return
+	}
+	publisher.PublishManifest(buildManifestEvent(m))
+}
+
 // serverStatusSnapshot is the diff key for the pubServer emit gate.
 // Two snapshots being equal means none of the fields rippled keys on
 // (NetworkOPs.cpp:2278-2295 ServerFeeSummary::operator==) have moved,

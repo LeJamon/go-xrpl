@@ -16,6 +16,7 @@ const (
 var (
 	ErrInvalidNodeIDLength = errors.New("invalid NodeID length")
 	ErrMaxDepthExceeded    = errors.New("maximum depth exceeded")
+	ErrNonCanonicalNodeID  = errors.New("non-canonical NodeID")
 )
 
 // NodeID represents a node's position in the SHAMap tree
@@ -93,8 +94,15 @@ func ParseNodeID(data []byte) (NodeID, error) {
 
 	var id [32]byte
 	copy(id[:], data[:32])
+	canonical, err := createNodeID(depth, id)
+	if err != nil {
+		return NodeID{}, err
+	}
+	if canonical.id != id {
+		return NodeID{}, ErrNonCanonicalNodeID
+	}
 
-	return NodeID{depth: depth, id: id}, nil
+	return canonical, nil
 }
 
 // UnmarshalBinary implements encoding.BinaryUnmarshaler, making NodeID

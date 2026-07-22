@@ -86,15 +86,21 @@ type Peer struct {
 	// no lock. nil for inbound peers and in tests.
 	onRedirect func([]string)
 
-	// onBootstrapReady is installed before Run for the one outbound peer
-	// admitted during cold start. A protocol handler fires it after accepting
-	// manifests, or a valid PING when the remote had no manifests to send.
-	onBootstrapReady   func()
-	bootstrapReadyOnce sync.Once
-	bootstrapManifest  atomic.Bool
+	// Bootstrap callbacks are installed before Run and read only by the peer's
+	// receive goroutine.
+	onBootstrapReady         func()
+	onBootstrapProgress      func(bootstrapFrameProgress)
+	bootstrapReadyOnce       sync.Once
+	bootstrapManifest        atomic.Bool
+	bootstrapManifestPending atomic.Bool
 
-	send   chan []byte
-	events chan<- Event
+	sendMu            sync.Mutex
+	send              chan []byte
+	prioritySend      chan []byte
+	manifestSend      chan [][]byte
+	events            chan<- Event
+	acquisitionEvents chan<- Event
+	manifestMessages  chan<- *InboundMessage
 
 	// droppedEvents counts non-blocking event sends that fell through
 	// because the overlay event loop was wedged. nil until wired by
@@ -145,8 +151,7 @@ type Peer struct {
 	acceptEndpointsMu   sync.Mutex
 	whenAcceptEndpoints time.Time
 
-	// Consecutive ErrSendBufferFull count; close at sendqIntervals.
-	// PeerImp.cpp:705-708 "Large send queue".
+	// Consecutive timer intervals with a large send queue.
 	largeSendQ atomic.Uint32
 
 	// lastPingProbe paces outbound ping probes to rippled's 60s
@@ -253,6 +258,8 @@ func NewPeer(id PeerID, endpoint Endpoint, inbound bool, identity *Identity, eve
 		identity:      identity,
 		state:         PeerStateDisconnected,
 		send:          make(chan []byte, DefaultSendBufferSize),
+		prioritySend:  make(chan []byte, acquisitionSendBufferSize),
+		manifestSend:  make(chan [][]byte, manifestSendBufferSize),
 		events:        events,
 		traffic:       NewTrafficCounter(),
 		metrics:       newPeerMetrics(nil),
@@ -275,10 +282,34 @@ func (p *Peer) SetDroppedEventsCounter(c *atomic.Uint64) {
 	p.droppedEvents = c
 }
 
-// dispatchEvent attempts a non-blocking send to the events channel.
-// The read hot path and Close path must never block on the event
-// loop, which itself takes overlay-level locks.
+func (p *Peer) SetAcquisitionEvents(events chan<- Event) {
+	p.acquisitionEvents = events
+}
+
+func (p *Peer) SetManifestMessages(messages chan<- *InboundMessage) {
+	p.manifestMessages = messages
+}
+
+// dispatchEvent applies bounded backpressure to acquisition traffic and uses
+// the best-effort event lane for other traffic. Closing the peer releases a
+// read loop waiting for acquisition capacity.
 func (p *Peer) dispatchEvent(evt Event) bool {
+	if evt.Type == EventMessageReceived && message.MessageType(evt.MessageType) == message.TypeManifests && p.manifestMessages != nil {
+		select {
+		case p.manifestMessages <- &InboundMessage{PeerID: evt.PeerID, Type: evt.MessageType, Payload: evt.Payload}:
+			return true
+		case <-p.closeCh:
+			return false
+		}
+	}
+	if evt.Type == EventMessageReceived && isAcquisitionMessageType(message.MessageType(evt.MessageType)) && p.acquisitionEvents != nil {
+		select {
+		case p.acquisitionEvents <- evt:
+			return true
+		case <-p.closeCh:
+			return false
+		}
+	}
 	if p.events == nil {
 		return false
 	}
@@ -289,6 +320,18 @@ func (p *Peer) dispatchEvent(evt Event) bool {
 		if p.droppedEvents != nil {
 			p.droppedEvents.Add(1)
 		}
+		return false
+	}
+}
+
+func isAcquisitionMessageType(msgType message.MessageType) bool {
+	switch msgType {
+	case message.TypeLedgerData,
+		message.TypeReplayDeltaResponse,
+		message.TypeProofPathResponse,
+		message.TypeGetObjects:
+		return true
+	default:
 		return false
 	}
 }
@@ -953,6 +996,15 @@ func (r *frameProgressReader) Read(dst []byte) (int, error) {
 			r.peer.readProgress.lastProgress = now
 		}
 		r.peer.readProgressMu.Unlock()
+		if r.headerSet && r.peer.onBootstrapProgress != nil {
+			r.peer.onBootstrapProgress(bootstrapFrameProgress{
+				messageType: r.header.MessageType,
+				wireSize:    r.header.PayloadSize,
+				compressed:  r.header.Compressed,
+				bytesRead:   r.bytesRead - r.payloadStart,
+				elapsed:     now.Sub(r.payloadStartedAt),
+			})
+		}
 		if !r.deadline.IsZero() && !now.Before(r.deadline) {
 			return n, ErrFrameReadTooSlow
 		}
@@ -1119,6 +1171,9 @@ func (p *Peer) readLoop(ctx context.Context) error {
 		if !delivered && header.MessageType == TypeManifests && p.onBootstrapReady != nil {
 			return errBootstrapManifestDropped
 		}
+		if delivered && header.MessageType == TypeManifests && p.onBootstrapReady != nil {
+			p.bootstrapManifestPending.Store(true)
+		}
 	}
 }
 
@@ -1130,54 +1185,99 @@ func (p *Peer) acknowledgeBootstrap() {
 }
 
 func (p *Peer) writeLoop(ctx context.Context) error {
+	schedule := outboundSchedule{}
 	for {
-		select {
-		case <-ctx.Done():
-			return ctx.Err()
-		case <-p.closeCh:
-			return nil
-		case data := <-p.send:
-			p.mu.RLock()
-			conn := p.conn
-			p.mu.RUnlock()
-
-			if conn == nil {
-				return ErrConnectionClosed
-			}
-
-			wire := data
-			compressionEnabled := p.compressionNegotiated()
-			if header, err := message.DecodeHeader(data); err == nil && header.Compressed {
-				if !compressionEnabled {
-					return errCompressionUnnegotiated
-				}
-			} else if compressionEnabled {
-				wire, _ = message.CompressFrameIfWorthwhile(data)
-			}
-
-			// Cap each Write so a half-open TCP peer with a
-			// never-draining kernel send buffer cannot pin the writer.
-			_ = conn.SetWriteDeadline(time.Now().Add(writeIdleDeadline))
-			n, err := conn.Write(wire)
-			if err != nil {
-				if ne, ok := err.(net.Error); ok && ne.Timeout() {
-					return ErrWriteIdle
-				}
-				return err
-			}
-			// Mirrors rippled metrics_.sent.add_message at
-			// PeerImp.cpp:970 — account whatever the socket reports as
-			// transferred.
-			p.metrics.sent.addMessage(uint64(n))
-
-			// Count egress by category so PeerInfo.MessagesOut/BytesOut
-			// reflect outbound traffic (the symmetric counterpart of the
-			// inbound AddCount in readLoop). The frame carries its own
-			// header; decode it to recover the message type.
-			if hdr, derr := message.DecodeHeader(wire); derr == nil {
-				p.traffic.AddCount(CategorizeMessage(uint16(hdr.MessageType)), false, n)
-			}
+		data, err := p.nextOutbound(ctx, &schedule)
+		if err != nil {
+			return err
 		}
+		if data == nil {
+			return nil
+		}
+		p.mu.RLock()
+		conn := p.conn
+		p.mu.RUnlock()
+
+		if conn == nil {
+			return ErrConnectionClosed
+		}
+
+		wire := data
+		compressionEnabled := p.compressionNegotiated()
+		if header, err := message.DecodeHeader(data); err == nil && header.Compressed {
+			if !compressionEnabled {
+				return errCompressionUnnegotiated
+			}
+		} else if compressionEnabled {
+			wire, _ = message.CompressFrameIfWorthwhile(data)
+		}
+
+		if err := conn.SetWriteDeadline(time.Now().Add(p.frameReadBudget(uint32(len(wire))))); err != nil {
+			return err
+		}
+		n, err := conn.Write(wire)
+		if err != nil {
+			if netErr, ok := err.(net.Error); ok && netErr.Timeout() {
+				return ErrWriteIdle
+			}
+			return err
+		}
+		p.metrics.sent.addMessage(uint64(n))
+		if hdr, derr := message.DecodeHeader(wire); derr == nil {
+			p.traffic.AddCount(CategorizeMessage(uint16(hdr.MessageType)), false, n)
+		}
+	}
+}
+
+const ordinaryFramesPerManifestChunk = 16
+
+type outboundSchedule struct {
+	manifests         [][]byte
+	ordinaryRemaining int
+}
+
+func (p *Peer) nextOutbound(ctx context.Context, schedule *outboundSchedule) ([]byte, error) {
+	select {
+	case data := <-p.prioritySend:
+		return data, nil
+	default:
+	}
+	if schedule.ordinaryRemaining > 0 {
+		select {
+		case data := <-p.send:
+			schedule.ordinaryRemaining--
+			return data, nil
+		default:
+		}
+	}
+	if len(schedule.manifests) > 0 {
+		data := schedule.manifests[0]
+		schedule.manifests = schedule.manifests[1:]
+		schedule.ordinaryRemaining = ordinaryFramesPerManifestChunk
+		return data, nil
+	}
+	select {
+	case batch := <-p.manifestSend:
+		data := batch[0]
+		schedule.manifests = batch[1:]
+		schedule.ordinaryRemaining = ordinaryFramesPerManifestChunk
+		return data, nil
+	default:
+	}
+	select {
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	case <-p.closeCh:
+		return nil, nil
+	case data := <-p.prioritySend:
+		return data, nil
+	case batch := <-p.manifestSend:
+		data := batch[0]
+		schedule.manifests = batch[1:]
+		schedule.ordinaryRemaining = ordinaryFramesPerManifestChunk
+		return data, nil
+	case data := <-p.send:
+		return data, nil
 	}
 }
 
@@ -1224,25 +1324,26 @@ func (p *Peer) runPingTick(now time.Time) error {
 		)
 		return ErrPingTimeout
 	}
-	// PeerImp.cpp:705-708 "Large send queue" disconnect.
-	if p.largeSendQ.Load() >= sendqIntervals {
+	// Probe at rippled's 60s peerTimerInterval cadence; the finer 15s tick
+	// serves only the stale-ping check above. Peers charge
+	// every ping, so probing faster inflates our resource cost at each peer.
+	if !p.lastPingProbe.IsZero() && now.Sub(p.lastPingProbe) < pingTimeout {
+		return nil
+	}
+	p.lastPingProbe = now
+	if p.SendQueueLen() < targetSendQueue {
+		p.largeSendQ.Store(0)
+	} else if intervals := p.largeSendQ.Add(1); intervals > sendqIntervals {
 		slog.Warn("peer large send queue",
 			"t", "Peer", "peer", p.id,
 			"endpoint", p.endpoint.String(),
-			"intervals", p.largeSendQ.Load(),
+			"intervals", intervals,
 		)
 		return ErrLargeSendQueue
 	}
 	if deferred {
 		return nil
 	}
-	// Probe at rippled's 60s peerTimerInterval cadence; the finer 15s tick
-	// serves only the stale-ping and send-queue checks above. Peers charge
-	// every ping, so probing faster inflates our resource cost at each peer.
-	if !p.lastPingProbe.IsZero() && now.Sub(p.lastPingProbe) < pingTimeout {
-		return nil
-	}
-	p.lastPingProbe = now
 	seq := uint32(now.UnixMilli())
 	ping := &message.Ping{
 		PType: message.PingTypePing,
@@ -1252,10 +1353,13 @@ func (p *Peer) runPingTick(now time.Time) error {
 	if err != nil {
 		return nil
 	}
-	p.recordPingSent(seq, now)
 	if err := p.Send(wireMsg); err != nil {
+		if errors.Is(err, ErrSendBufferFull) {
+			return nil
+		}
 		return err
 	}
+	p.recordPingSent(seq, now)
 	return nil
 }
 
@@ -1302,10 +1406,6 @@ const (
 	// may remain pinned while still allowing bulk frames to take several
 	// minutes. The idle allowance is added once as burst tolerance.
 	minimumFrameReadRate int64 = 256 * 1024
-	// writeIdleDeadline bounds a single conn.Write so a half-open TCP
-	// peer with a never-draining kernel send buffer cannot pin
-	// writeLoop forever.
-	writeIdleDeadline = 10 * time.Second
 )
 
 func (p *Peer) pingTimeoutStatus(now time.Time, threshold time.Duration) (seq uint32, age time.Duration, stale, deferred bool) {
@@ -1571,6 +1671,8 @@ func chargeForReason(reason string) resource.Charge {
 		return resource.FeeInvalidData
 	case "endpoints-too-large":
 		return resource.FeeUselessData
+	case "manifests-oversize":
+		return resource.FeeModerateBurdenPeer
 	case "proposal-malformed-prev-ledger-size",
 		"proposal-malformed-txset-size",
 		"validation-malformed-ledger-hash-zero",
@@ -1700,23 +1802,61 @@ func (p *Peer) Send(data []byte) error {
 	if p.closed.Load() {
 		return ErrConnectionClosed
 	}
+	if p.SendQueueLen() < targetSendQueue {
+		p.largeSendQ.Store(0)
+	}
 
-	select {
-	case p.send <- data:
-		// Clear the large-send-queue strike count only once the queue has
-		// actually drained back below the target depth — mirrors rippled's
-		// "queue back below targetSendQueue" reset (PeerImp.cpp:270-276).
-		// Resetting on ANY successful enqueue let a queue oscillating at
-		// capacity (alternating success/failure) never trip the disconnect
-		// threshold.
-		if len(p.send) < targetSendQueue {
-			p.largeSendQ.Store(0)
+	p.sendMu.Lock()
+	defer p.sendMu.Unlock()
+	if len(p.send) >= DefaultSendBufferSize {
+		p.sendDrops.Add(1)
+		return ErrSendBufferFull
+	}
+	p.send <- data
+	return nil
+}
+
+// SendPriority admits acquisition and control traffic independently from
+// best-effort gossip. The writer drains this lane first between wire frames.
+func (p *Peer) SendPriority(data []byte) error {
+	if p.closed.Load() {
+		return ErrConnectionClosed
+	}
+	if p.SendQueueLen() < targetSendQueue {
+		p.largeSendQ.Store(0)
+	}
+	p.sendMu.Lock()
+	defer p.sendMu.Unlock()
+	if len(p.prioritySend) >= cap(p.prioritySend) {
+		p.sendDrops.Add(1)
+		return ErrSendBufferFull
+	}
+	p.prioritySend <- data
+	return nil
+}
+
+// SendManifestFrames schedules a complete manifest snapshot as one bounded
+// writer item. The writer pulls one frame at a time and checks the priority
+// lane between frames, so large snapshots neither fill the ordinary send
+// queue nor block acquisition traffic behind the whole snapshot.
+func (p *Peer) SendManifestFrames(frames [][]byte) error {
+	if p.closed.Load() {
+		return ErrConnectionClosed
+	}
+	batch := make([][]byte, 0, len(frames))
+	for _, frame := range frames {
+		if len(frame) != 0 {
+			batch = append(batch, frame)
 		}
+	}
+	if len(batch) == 0 {
+		return nil
+	}
+	select {
+	case p.manifestSend <- batch:
 		return nil
 	default:
-		// Sustained backpressure → close via runPingTick.
 		p.sendDrops.Add(1)
-		p.largeSendQ.Add(1)
 		return ErrSendBufferFull
 	}
 }
@@ -1733,7 +1873,7 @@ func (p *Peer) SendDrops() uint64 {
 // rippled gate at PeerImp.cpp:2452 (`send_queue_.size() >=
 // Tuning::dropSendQueue`).
 func (p *Peer) SendQueueLen() int {
-	return len(p.send)
+	return len(p.send) + len(p.prioritySend)
 }
 
 func (p *Peer) Close() error {

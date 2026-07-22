@@ -1162,6 +1162,10 @@ func TestGetCountsMethod(t *testing.T) {
 					ReadBytes:  2048,
 					WriteBytes: 1024,
 				},
+				FullBelow: &types.FullBelowCounts{
+					Size: 123, TargetSize: 524288, Hits: 10, Misses: 20,
+					Inserts: 30, Evictions: 4, Sweeps: 5,
+				},
 			}
 		}
 		ctx := &types.RpcContext{
@@ -1186,6 +1190,13 @@ func TestGetCountsMethod(t *testing.T) {
 		assert.Equal(t, "40", m["node_writes"])
 		assert.Equal(t, "1024", m["node_written_bytes"])
 		assert.Equal(t, "2048", m["node_read_bytes"])
+		assert.Equal(t, 123, m["fullbelow_size"])
+		assert.Equal(t, 524288, m["fullbelow_target_size"])
+		assert.Equal(t, "10", m["fullbelow_hits"])
+		assert.Equal(t, "20", m["fullbelow_misses"])
+		assert.Equal(t, "30", m["fullbelow_inserts"])
+		assert.Equal(t, "4", m["fullbelow_evictions"])
+		assert.Equal(t, "5", m["fullbelow_sweeps"])
 		// Fields rippled never emits must be absent.
 		assert.NotContains(t, m, "node_reads_duration_us")
 		assert.NotContains(t, m, "nodestore_backend")

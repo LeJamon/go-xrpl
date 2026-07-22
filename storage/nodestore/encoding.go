@@ -74,15 +74,16 @@ func encodeNodeData(n *Node) []byte {
 	return buf
 }
 
-// decodeNodeData deserializes a node from kvstore data.
+// decodeNodeData deserializes a node and takes ownership of data. Key-value
+// stores return caller-owned values, so the payload can back the immutable
+// node directly instead of being copied again.
 func decodeNodeData(hash Hash256, data []byte) (*Node, error) {
 	if len(data) < nodeEncodingHeaderSize {
 		return nil, fmt.Errorf("%w: data too short (%d bytes)", ErrDataCorrupt, len(data))
 	}
 	nodeType := NodeType(data[0])
 	ledgerSeq := binary.BigEndian.Uint32(data[1:5])
-	nodeData := make([]byte, len(data)-nodeEncodingHeaderSize)
-	copy(nodeData, data[nodeEncodingHeaderSize:])
+	nodeData := data[nodeEncodingHeaderSize:len(data):len(data)]
 	return &Node{
 		Type:      nodeType,
 		Hash:      hash,

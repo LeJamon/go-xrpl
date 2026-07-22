@@ -18,6 +18,17 @@ type fullBelowCacheProvider interface {
 	FullBelowCache() *FullBelowCache
 }
 
+type durableFamily interface {
+	FetchDurable(ctx context.Context, hash [32]byte) ([]byte, error)
+}
+
+func fetchDurable(ctx context.Context, family Family, hash [32]byte) ([]byte, error) {
+	if durable, ok := family.(durableFamily); ok {
+		return durable.FetchDurable(ctx, hash)
+	}
+	return family.Fetch(ctx, hash)
+}
+
 func familyFullBelowCache(family Family) *FullBelowCache {
 	if provider, ok := family.(fullBelowCacheProvider); ok {
 		if cache := provider.FullBelowCache(); cache != nil {

@@ -1968,7 +1968,7 @@ type TMGetLedger struct {
 	NodeIds       [][]byte               `protobuf:"bytes,5,rep,name=node_ids,json=nodeIds,proto3" json:"node_ids,omitempty"`
 	RequestCookie *uint64                `protobuf:"varint,6,opt,name=request_cookie,json=requestCookie,proto3,oneof" json:"request_cookie,omitempty"`
 	QueryType     *TMQueryType           `protobuf:"varint,7,opt,name=query_type,json=queryType,proto3,enum=protocol.TMQueryType,oneof" json:"query_type,omitempty"`
-	QueryDepth    uint32                 `protobuf:"varint,8,opt,name=query_depth,json=queryDepth,proto3" json:"query_depth,omitempty"`
+	QueryDepth    *uint32                `protobuf:"varint,8,opt,name=query_depth,json=queryDepth,proto3,oneof" json:"query_depth,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -2053,8 +2053,8 @@ func (x *TMGetLedger) GetQueryType() TMQueryType {
 }
 
 func (x *TMGetLedger) GetQueryDepth() uint32 {
-	if x != nil {
-		return x.QueryDepth
+	if x != nil && x.QueryDepth != nil {
+		return *x.QueryDepth
 	}
 	return 0
 }
@@ -2777,7 +2777,7 @@ const file_internal_peermanagement_proto_xrpl_proto_rawDesc = "" +
 	"\fTMLedgerNode\x12\x1f\n" +
 	"\bnodedata\x18\x01 \x01(\fH\x00R\bnodedata\x88\x01\x01\x12\x16\n" +
 	"\x06nodeid\x18\x02 \x01(\fR\x06nodeidB\v\n" +
-	"\t_nodedata\"\xa4\x03\n" +
+	"\t_nodedata\"\xb9\x03\n" +
 	"\vTMGetLedger\x125\n" +
 	"\x05itype\x18\x01 \x01(\x0e2\x1a.protocol.TMLedgerInfoTypeH\x00R\x05itype\x88\x01\x01\x121\n" +
 	"\x05ltype\x18\x02 \x01(\x0e2\x16.protocol.TMLedgerTypeH\x01R\x05ltype\x88\x01\x01\x12\x1f\n" +
@@ -2788,14 +2788,15 @@ const file_internal_peermanagement_proto_xrpl_proto_rawDesc = "" +
 	"\bnode_ids\x18\x05 \x03(\fR\anodeIds\x12*\n" +
 	"\x0erequest_cookie\x18\x06 \x01(\x04H\x03R\rrequestCookie\x88\x01\x01\x129\n" +
 	"\n" +
-	"query_type\x18\a \x01(\x0e2\x15.protocol.TMQueryTypeH\x04R\tqueryType\x88\x01\x01\x12\x1f\n" +
-	"\vquery_depth\x18\b \x01(\rR\n" +
-	"queryDepthB\b\n" +
+	"query_type\x18\a \x01(\x0e2\x15.protocol.TMQueryTypeH\x04R\tqueryType\x88\x01\x01\x12$\n" +
+	"\vquery_depth\x18\b \x01(\rH\x05R\n" +
+	"queryDepth\x88\x01\x01B\b\n" +
 	"\x06_itypeB\b\n" +
 	"\x06_ltypeB\r\n" +
 	"\v_ledger_seqB\x11\n" +
 	"\x0f_request_cookieB\r\n" +
-	"\v_query_type\"\xd0\x02\n" +
+	"\v_query_typeB\x0e\n" +
+	"\f_query_depth\"\xd0\x02\n" +
 	"\fTMLedgerData\x12$\n" +
 	"\vledger_hash\x18\x01 \x01(\fH\x00R\n" +
 	"ledgerHash\x88\x01\x01\x12\"\n" +

@@ -129,6 +129,7 @@ func TestGotStateNodes_DeepNodesUnderStubs(t *testing.T) {
 	if err := il.GotStateNodes(nodes); err != nil {
 		t.Fatalf("GotStateNodes: %v", err)
 	}
+	il.CollectMissingRequest(false)
 
 	if il.state != StateComplete {
 		t.Fatalf("state = %d, want StateComplete", il.state)
@@ -209,8 +210,8 @@ func TestGotBase_RejectOverHardMaxReplyNodes(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), "hardMaxReplyNodes") {
 		t.Fatalf("GotBase(over cap): got %v, want hardMaxReplyNodes rejection", err)
 	}
-	if il.state != StateFailed {
-		t.Errorf("GotBase(over cap): state = %d, want StateFailed", il.state)
+	if il.state != StateWantBase {
+		t.Errorf("GotBase(over cap): state = %d, want StateWantBase", il.state)
 	}
 }
 
@@ -250,8 +251,8 @@ func TestGotBase_RejectsHeaderHashMismatch(t *testing.T) {
 	if err == nil {
 		t.Fatal("GotBase accepted a header whose hash does not match the requested hash")
 	}
-	if il.state != StateFailed {
-		t.Fatalf("state = %d, want StateFailed", il.state)
+	if il.state != StateWantBase {
+		t.Fatalf("state = %d, want StateWantBase", il.state)
 	}
 }
 
@@ -287,8 +288,8 @@ func TestGotBase_RejectsSeqMismatch(t *testing.T) {
 	if err == nil {
 		t.Fatal("GotBase accepted a header whose seq does not match the requested seq")
 	}
-	if il.state != StateFailed {
-		t.Fatalf("state = %d, want StateFailed", il.state)
+	if il.state != StateWantBase {
+		t.Fatalf("state = %d, want StateWantBase", il.state)
 	}
 }
 

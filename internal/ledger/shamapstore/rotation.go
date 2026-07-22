@@ -288,6 +288,14 @@ func (r *Rotator) rotate(ctx context.Context, validatedSeq, lastRotated uint32) 
 		r.logger.Warn("online delete: live-state refresh is not configured")
 		return
 	}
+	minimumOnline := lastRotated + 1
+	if err := r.SetMinimumOnlineFloor(minimumOnline); err != nil {
+		r.logger.Warn("online delete: failed to persist minimum online ledger", "seq", minimumOnline, "err", err)
+		return
+	}
+	if r.advance != nil {
+		r.advance(minimumOnline)
+	}
 	if err := r.refresh(ctx, validatedSeq); err != nil {
 		if ctx.Err() == nil {
 			r.logger.Warn("online delete: live-state refresh failed", "seq", validatedSeq, "err", err)
@@ -296,14 +304,6 @@ func (r *Rotator) rotate(ctx context.Context, validatedSeq, lastRotated uint32) 
 	}
 	if !r.waitHealthy(ctx) {
 		return
-	}
-	minimumOnline := lastRotated + 1
-	if err := r.SetMinimumOnlineFloor(minimumOnline); err != nil {
-		r.logger.Warn("online delete: failed to persist minimum online ledger", "seq", minimumOnline, "err", err)
-		return
-	}
-	if r.advance != nil {
-		r.advance(minimumOnline)
 	}
 
 	if r.rel != nil {

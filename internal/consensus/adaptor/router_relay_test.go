@@ -19,6 +19,7 @@ type relayRecorder struct {
 	mu          sync.Mutex
 	sent        []sentFrame
 	noted       []notedTxSet
+	badData     []badDataCall
 	lastExclude uint64
 
 	ledgerPeer uint64
@@ -59,6 +60,12 @@ func (s *relayRecorder) NotePeerHasTxSet(peerID uint64, hash [32]byte) {
 	s.noted = append(s.noted, notedTxSet{peerID: peerID, hash: hash})
 }
 
+func (s *relayRecorder) IncPeerBadData(peerID uint64, reason string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.badData = append(s.badData, badDataCall{peerID: peerID, reason: reason})
+}
+
 func (s *relayRecorder) sentFrames() []sentFrame {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -69,6 +76,12 @@ func (s *relayRecorder) notedTxSets() []notedTxSet {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return append([]notedTxSet(nil), s.noted...)
+}
+
+func (s *relayRecorder) badDataCalls() []badDataCall {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return append([]badDataCall(nil), s.badData...)
 }
 
 func (s *relayRecorder) excludeArg() uint64 {
@@ -164,6 +177,7 @@ func TestRouter_GetLedger_RelayOnMiss_TxSet(t *testing.T) {
 	req := &message.GetLedger{
 		InfoType:   message.LedgerInfoTsCandidate,
 		LedgerHash: hash,
+		NodeIDs:    [][]byte{rootNodeID()},
 		QueryType:  &qt,
 	}
 	r.handleMessage(&peermanagement.InboundMessage{
@@ -195,6 +209,7 @@ func TestRouter_GetLedger_NoRelayWhenCookieSet(t *testing.T) {
 	req := &message.GetLedger{
 		InfoType:      message.LedgerInfoTsCandidate,
 		LedgerHash:    hash,
+		NodeIDs:       [][]byte{rootNodeID()},
 		QueryType:     &qt,
 		RequestCookie: 555, // already relayed by an upstream peer
 	}
@@ -216,6 +231,7 @@ func TestRouter_GetLedger_NoRelayWhenZeroCookiePresent(t *testing.T) {
 	req := &message.GetLedger{
 		InfoType:         message.LedgerInfoTsCandidate,
 		LedgerHash:       hash,
+		NodeIDs:          [][]byte{rootNodeID()},
 		QueryType:        &qt,
 		RequestCookieSet: true,
 	}
@@ -238,6 +254,7 @@ func TestRouter_GetLedger_NoRelayWhenQueryTypeAbsent(t *testing.T) {
 	req := &message.GetLedger{
 		InfoType:   message.LedgerInfoTsCandidate,
 		LedgerHash: hash,
+		NodeIDs:    [][]byte{rootNodeID()},
 	}
 	r.handleMessage(&peermanagement.InboundMessage{
 		PeerID:  21,
@@ -259,6 +276,7 @@ func TestRouter_GetLedger_NoRelayWhenNoCandidate(t *testing.T) {
 	req := &message.GetLedger{
 		InfoType:   message.LedgerInfoTsCandidate,
 		LedgerHash: hash,
+		NodeIDs:    [][]byte{rootNodeID()},
 		QueryType:  &qt,
 	}
 	r.handleMessage(&peermanagement.InboundMessage{
@@ -280,7 +298,6 @@ func TestRouter_LedgerData_RoutedBackByCookie(t *testing.T) {
 	hash := bytes.Repeat([]byte{0xEE}, 32)
 	ld := &message.LedgerData{
 		LedgerHash:    hash,
-		LedgerSeq:     12345,
 		InfoType:      message.LedgerInfoBase,
 		Nodes:         []message.LedgerNode{{NodeData: []byte{0x01, 0x02, 0x03}}},
 		RequestCookie: 77, // our local id for the original requester
@@ -301,6 +318,104 @@ func TestRouter_LedgerData_RoutedBackByCookie(t *testing.T) {
 	assert.Equal(t, uint32(0), out.RequestCookie, "cookie cleared before forwarding")
 	assert.Equal(t, hash, out.LedgerHash)
 	require.Len(t, out.Nodes, 1)
+}
+
+func TestRouter_LedgerData_ValidatesBeforeCookieRelay(t *testing.T) {
+	validHash := bytes.Repeat([]byte{0xEE}, 32)
+	validNodeID := make([]byte, 33)
+	tests := []struct {
+		name   string
+		data   *message.LedgerData
+		reason string
+	}{
+		{
+			name: "ledger hash",
+			data: &message.LedgerData{
+				LedgerHash: bytes.Repeat([]byte{0xEE}, 31), InfoType: message.LedgerInfoBase,
+				Nodes: []message.LedgerNode{{NodeData: []byte{1}}},
+			},
+			reason: "ledger-data-hash",
+		},
+		{
+			name: "info type",
+			data: &message.LedgerData{
+				LedgerHash: validHash, InfoType: message.LedgerInfoType(99),
+				Nodes: []message.LedgerNode{{NodeData: []byte{1}}},
+			},
+			reason: "ledger-data-type",
+		},
+		{
+			name: "candidate sequence",
+			data: &message.LedgerData{
+				LedgerHash: validHash, LedgerSeq: 1, InfoType: message.LedgerInfoTsCandidate,
+				Nodes: []message.LedgerNode{{NodeData: []byte{1}}},
+			},
+			reason: "ledger-data-sequence",
+		},
+		{
+			name: "reply error",
+			data: &message.LedgerData{
+				LedgerHash: validHash, InfoType: message.LedgerInfoBase, Error: message.ReplyError(99),
+				Nodes: []message.LedgerNode{{NodeData: []byte{1}}},
+			},
+			reason: "ledger-data-error",
+		},
+		{
+			name: "node count",
+			data: &message.LedgerData{
+				LedgerHash: validHash, InfoType: message.LedgerInfoBase,
+			},
+			reason: "ledger-data-count",
+		},
+		{
+			name: "state node data",
+			data: &message.LedgerData{
+				LedgerHash: validHash, InfoType: message.LedgerInfoAsNode,
+				Nodes: []message.LedgerNode{{NodeID: validNodeID}},
+			},
+			reason: "ledger-data-node",
+		},
+		{
+			name: "state node id",
+			data: &message.LedgerData{
+				LedgerHash: validHash, InfoType: message.LedgerInfoAsNode,
+				Nodes: []message.LedgerNode{{NodeData: []byte{1}}},
+			},
+			reason: "ledger-data-node",
+		},
+		{
+			name: "transaction node data",
+			data: &message.LedgerData{
+				LedgerHash: validHash, InfoType: message.LedgerInfoTxNode,
+				Nodes: []message.LedgerNode{{NodeID: validNodeID}},
+			},
+			reason: "ledger-data-node",
+		},
+		{
+			name: "transaction node id",
+			data: &message.LedgerData{
+				LedgerHash: validHash, InfoType: message.LedgerInfoTxNode,
+				Nodes: []message.LedgerNode{{NodeData: []byte{1}}},
+			},
+			reason: "ledger-data-node",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			r, rs := makeRouterWithRelayRecorder(t)
+			tt.data.RequestCookie = 77
+			tt.data.RequestCookieSet = true
+			r.handleMessage(&peermanagement.InboundMessage{
+				PeerID:  5,
+				Type:    uint16(message.TypeLedgerData),
+				Payload: encodePayload(t, tt.data),
+			})
+
+			assert.Empty(t, rs.sentFrames(), "invalid reply must not reach the cookie target")
+			assert.Equal(t, []badDataCall{{peerID: 5, reason: tt.reason}}, rs.badDataCalls())
+		})
+	}
 }
 
 // TestRouter_HaveSet_RecordsTxSetAdvertisement pins that an inbound

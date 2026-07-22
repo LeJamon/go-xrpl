@@ -45,6 +45,7 @@ type recordingSender struct {
 	// the R4.8 peer-swap retry loop populate this to drive the
 	// rotation path.
 	availableReplayPeers []uint64
+	acquisitionPeers     []uint64
 }
 
 type replayDeltaCall struct {
@@ -65,7 +66,7 @@ func (s *recordingSender) RequestReplayDelta(peerID uint64, hash [32]byte) error
 	return nil
 }
 
-func (s *recordingSender) RequestLedgerBaseFromPeer(peerID uint64, hash [32]byte, seq uint32) error {
+func (s *recordingSender) RequestLedgerBaseFromPeer(peerID uint64, hash [32]byte, seq uint32, indirect bool) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.legacyBaseCalls = append(s.legacyBaseCalls, legacyBaseCall{peerID: peerID, hash: hash, seq: seq})
@@ -117,6 +118,26 @@ func (s *recordingSender) ReplayCapablePeersExcluding(excluded []uint64, max int
 	}
 	out := make([]uint64, 0, max)
 	for _, id := range s.availableReplayPeers {
+		if _, skip := excludedSet[id]; skip {
+			continue
+		}
+		out = append(out, id)
+		if len(out) >= max {
+			break
+		}
+	}
+	return out
+}
+
+func (s *recordingSender) SelectLedgerPeers(_ [32]byte, _ uint32, excluded []uint64, max int) []uint64 {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	excludedSet := make(map[uint64]struct{}, len(excluded))
+	for _, id := range excluded {
+		excludedSet[id] = struct{}{}
+	}
+	out := make([]uint64, 0, max)
+	for _, id := range s.acquisitionPeers {
 		if _, skip := excludedSet[id]; skip {
 			continue
 		}

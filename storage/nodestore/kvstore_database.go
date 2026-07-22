@@ -151,27 +151,9 @@ func (d *KVDatabaseImpl) Fetch(ctx context.Context, hash Hash256) (*Node, error)
 		atomic.AddUint64(&d.stats.cacheMisses, 1)
 	}
 
-	var storeGeneration uint64
-	if d.negativeCache != nil {
-		if d.negativeCache.IsMissing(hash) {
-			atomic.AddUint64(&d.stats.negativeCacheHits, 1)
-			return nil, nil
-		}
-		storeGeneration = d.storeGeneration.Load()
-	}
-
-	data, err := d.store.Get(hash[:])
-	if err != nil {
-		if errors.Is(err, kvstore.ErrNotFound) {
-			if d.negativeCache != nil {
-				d.negativeCache.MarkMissing(hash)
-				if d.storeGeneration.Load() != storeGeneration {
-					d.negativeCache.Remove(hash)
-				}
-			}
-			return nil, nil
-		}
-		return nil, fmt.Errorf("fetch failed: %w", err)
+	data, err := d.fetchBackend(hash)
+	if err != nil || data == nil {
+		return nil, err
 	}
 
 	node, err := decodeNodeData(hash, data)
@@ -182,10 +164,60 @@ func (d *KVDatabaseImpl) Fetch(ctx context.Context, hash Hash256) (*Node, error)
 	atomic.AddUint64(&d.stats.fetchHits, 1)
 	atomic.AddUint64(&d.stats.readBytes, uint64(len(node.Data)))
 	if d.cache != nil {
-		d.cache.Put(node)
+		d.cache.putOwned(node)
 	}
 
 	return node, nil
+}
+
+// FetchDataUncached retrieves a node's opaque payload without populating the
+// decoded-node LRU. It is used by one-shot content-addressed traversals whose
+// working set is much larger than that cache.
+func (d *KVDatabaseImpl) FetchDataUncached(ctx context.Context, hash Hash256) ([]byte, error) {
+	select {
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	default:
+	}
+
+	atomic.AddUint64(&d.stats.reads, 1)
+	data, err := d.fetchBackend(hash)
+	if err != nil || data == nil {
+		return nil, err
+	}
+	if len(data) < nodeEncodingHeaderSize {
+		return nil, fmt.Errorf("%w: data too short (%d bytes)", ErrDataCorrupt, len(data))
+	}
+	payload := data[nodeEncodingHeaderSize:len(data):len(data)]
+	atomic.AddUint64(&d.stats.fetchHits, 1)
+	atomic.AddUint64(&d.stats.readBytes, uint64(len(payload)))
+	return payload, nil
+}
+
+func (d *KVDatabaseImpl) fetchBackend(hash Hash256) ([]byte, error) {
+	var storeGeneration uint64
+	if d.negativeCache != nil {
+		if d.negativeCache.IsMissing(hash) {
+			atomic.AddUint64(&d.stats.negativeCacheHits, 1)
+			return nil, nil
+		}
+		storeGeneration = d.storeGeneration.Load()
+	}
+
+	data, err := d.store.Get(hash[:])
+	if err == nil {
+		return data, nil
+	}
+	if !errors.Is(err, kvstore.ErrNotFound) {
+		return nil, fmt.Errorf("fetch failed: %w", err)
+	}
+	if d.negativeCache != nil {
+		d.negativeCache.MarkMissing(hash)
+		if d.storeGeneration.Load() != storeGeneration {
+			d.negativeCache.Remove(hash)
+		}
+	}
+	return nil, nil
 }
 
 // StoreBatch stores multiple nodes efficiently using a batch.

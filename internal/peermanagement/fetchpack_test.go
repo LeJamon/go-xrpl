@@ -51,6 +51,7 @@ func newFetchPackTestOverlay(t *testing.T, prov LedgerProvider) (*Overlay, *Peer
 		peers:      make(map[PeerID]*Peer),
 		events:     events,
 		messages:   make(chan *InboundMessage, 8),
+		ledgerData: make(chan *InboundMessage, 8),
 		cluster:    cluster.New(),
 		ledgerSync: NewLedgerSyncHandler(events),
 	}
@@ -203,7 +204,7 @@ func TestHandleGetObjects_FetchPackReplyForwardedToRouter(t *testing.T) {
 	})
 
 	select {
-	case got := <-o.messages:
+	case got := <-o.ledgerData:
 		assert.Equal(t, uint16(message.TypeGetObjects), got.Type)
 		assert.Equal(t, peer.ID(), got.PeerID)
 	default:

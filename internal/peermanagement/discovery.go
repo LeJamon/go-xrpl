@@ -354,6 +354,29 @@ type DiscoveredPeer struct {
 	lruEntry *list.Element
 }
 
+type bootstrapSourceObservation struct {
+	projected     time.Duration
+	cooldownUntil time.Time
+}
+
+func (o bootstrapSourceObservation) coolingDown(now time.Time) bool {
+	return now.Before(o.cooldownUntil)
+}
+
+func (o bootstrapSourceObservation) viable() bool {
+	return o.projected > 0 && o.projected <= bootstrapTargetDuration
+}
+
+type bootstrapSourceStatus struct {
+	known    int
+	unviable int
+	episode  uint64
+}
+
+func (s bootstrapSourceStatus) allUnviable() bool {
+	return s.known > 0 && s.known == s.unviable
+}
+
 type connectAttempt struct {
 	inFlight    bool
 	failures    int
@@ -384,11 +407,13 @@ type Discovery struct {
 	persistentPeers map[string]bool
 	// Fixed-peer backoff is endpoint keyed; recent-attempt suppression is
 	// host keyed so changing the port cannot bypass it.
-	connectAttempts map[string]*connectAttempt
-	recentAttempts  map[string]time.Time
-	bootCache       *BootCache
-	reservation     *ReservationTable
-	lookupIP        func(context.Context, string) ([]net.IPAddr, error)
+	connectAttempts  map[string]*connectAttempt
+	recentAttempts   map[string]time.Time
+	bootstrapSources map[string]bootstrapSourceObservation
+	bootstrapEpisode uint64
+	bootCache        *BootCache
+	reservation      *ReservationTable
+	lookupIP         func(context.Context, string) ([]net.IPAddr, error)
 
 	events   chan<- Event
 	cancel   context.CancelFunc
@@ -403,15 +428,16 @@ func NewDiscovery(cfg *Config, events chan<- Event) *Discovery {
 	discoveryCfg.BootstrapPeers = append([]string(nil), cfg.BootstrapPeers...)
 	discoveryCfg.FixedPeers = append([]string(nil), cfg.FixedPeers...)
 	d := &Discovery{
-		cfg:             discoveryCfg,
-		peers:           make(map[string]*DiscoveredPeer),
-		connected:       make(map[PeerID]*DiscoveredPeer),
-		fixedPeers:      make(map[string]bool),
-		persistentPeers: make(map[string]bool),
-		connectAttempts: make(map[string]*connectAttempt),
-		recentAttempts:  make(map[string]time.Time),
-		events:          events,
-		lookupIP:        net.DefaultResolver.LookupIPAddr,
+		cfg:              discoveryCfg,
+		peers:            make(map[string]*DiscoveredPeer),
+		connected:        make(map[PeerID]*DiscoveredPeer),
+		fixedPeers:       make(map[string]bool),
+		persistentPeers:  make(map[string]bool),
+		connectAttempts:  make(map[string]*connectAttempt),
+		recentAttempts:   make(map[string]time.Time),
+		bootstrapSources: make(map[string]bootstrapSourceObservation),
+		events:           events,
+		lookupIP:         net.DefaultResolver.LookupIPAddr,
 	}
 	if d.cfg.Clock == nil {
 		d.cfg.Clock = time.Now
@@ -850,6 +876,9 @@ func (d *Discovery) selectPeersToConnect(count int, bootstrap bool) []string {
 	}
 	eligible := func(address string) bool {
 		host := connectAttemptHost(address)
+		if bootstrap && d.bootstrapSources[host].coolingDown(now) {
+			return false
+		}
 		if _, duplicate := seenHosts[host]; duplicate {
 			return false
 		}
@@ -942,28 +971,105 @@ func (d *Discovery) rankCompressionCandidatesLocked(candidates []string) {
 	rand.Shuffle(len(candidates), func(i, j int) {
 		candidates[i], candidates[j] = candidates[j], candidates[i]
 	})
-	rank := func(address string) int {
+	compressionRank := func(address string) int {
 		peer := d.peers[address]
 		if peer != nil && peer.compressionKnown && peer.supportsCompression {
-			if d.fixedPeers[address] {
-				return 0
-			}
-			return 1
-		}
-		if (peer == nil || !peer.compressionKnown) && d.fixedPeers[address] {
-			return 2
+			return 0
 		}
 		if peer == nil || !peer.compressionKnown {
-			return 3
+			return 1
 		}
-		if d.fixedPeers[address] {
-			return 4
-		}
-		return 5
+		return 2
 	}
 	sort.SliceStable(candidates, func(i, j int) bool {
-		return rank(candidates[i]) < rank(candidates[j])
+		left, right := candidates[i], candidates[j]
+		leftCompression, rightCompression := compressionRank(left), compressionRank(right)
+		if leftCompression != rightCompression {
+			return leftCompression < rightCompression
+		}
+
+		leftObservation := d.bootstrapSources[connectAttemptHost(left)]
+		rightObservation := d.bootstrapSources[connectAttemptHost(right)]
+		leftViable := leftObservation.viable()
+		rightViable := rightObservation.viable()
+		if leftViable != rightViable {
+			return leftViable
+		}
+		if leftViable && leftObservation.projected != rightObservation.projected {
+			return leftObservation.projected < rightObservation.projected
+		}
+		if d.fixedPeers[left] != d.fixedPeers[right] {
+			return d.fixedPeers[left]
+		}
+		return false
 	})
+}
+
+func (d *Discovery) observeBootstrapSource(address string, projected time.Duration) {
+	if projected <= 0 {
+		return
+	}
+
+	host := connectAttemptHost(address)
+	d.mu.Lock()
+	defer d.mu.Unlock()
+
+	if d.bootstrapSources == nil {
+		d.bootstrapSources = make(map[string]bootstrapSourceObservation)
+	}
+	now := d.now()
+	current := d.bootstrapSources[host]
+	wasCooling := current.coolingDown(now)
+	current.projected = projected
+	if projected > bootstrapTargetDuration {
+		cooldownUntil := now.Add(bootstrapPartialRetry)
+		if current.cooldownUntil.Before(cooldownUntil) {
+			current.cooldownUntil = cooldownUntil
+		}
+	} else {
+		current.cooldownUntil = time.Time{}
+	}
+	if wasCooling != current.coolingDown(now) {
+		d.bootstrapEpisode++
+	}
+	d.bootstrapSources[host] = current
+}
+
+func (d *Discovery) bootstrapSourceSummary() bootstrapSourceStatus {
+	d.mu.RLock()
+	defer d.mu.RUnlock()
+
+	hosts := make(map[string]struct{})
+	for address := range d.fixedPeers {
+		if d.peers[address] != nil {
+			hosts[connectAttemptHost(address)] = struct{}{}
+		}
+	}
+	if !d.cfg.PrivateMode {
+		seen := make(map[string]struct{})
+		for _, peer := range d.peers {
+			seen[peer.Address] = struct{}{}
+			if !d.fixedPeers[peer.Address] && peer.Hops <= MaxHops {
+				hosts[connectAttemptHost(peer.Address)] = struct{}{}
+			}
+		}
+		if d.bootCache != nil {
+			for _, entry := range d.bootCache.Endpoints(50) {
+				if _, exists := seen[entry.Address]; !exists {
+					hosts[connectAttemptHost(entry.Address)] = struct{}{}
+				}
+			}
+		}
+	}
+
+	now := d.now()
+	status := bootstrapSourceStatus{known: len(hosts), episode: d.bootstrapEpisode}
+	for host := range hosts {
+		if d.bootstrapSources[host].coolingDown(now) {
+			status.unviable++
+		}
+	}
+	return status
 }
 
 func (d *Discovery) markNegotiatedCompression(address string, enabled bool) {
@@ -978,10 +1084,27 @@ func (d *Discovery) markNegotiatedCompression(address string, enabled bool) {
 	peer.supportsCompression = enabled
 }
 
-func (d *Discovery) delayBootstrapRetry(address string) {
+func (d *Discovery) delayBootstrapRetry(address string, delay time.Duration) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
-	d.recentAttempts[connectAttemptHost(address)] = d.now().Add(recentConnectAttempt)
+	host := connectAttemptHost(address)
+	now := d.now()
+	retryAt := now.Add(delay)
+	if current := d.recentAttempts[host]; current.Before(retryAt) {
+		d.recentAttempts[host] = retryAt
+	}
+	if d.bootstrapSources == nil {
+		d.bootstrapSources = make(map[string]bootstrapSourceObservation)
+	}
+	observation := d.bootstrapSources[host]
+	wasCooling := observation.coolingDown(now)
+	if observation.cooldownUntil.Before(retryAt) {
+		observation.cooldownUntil = retryAt
+		d.bootstrapSources[host] = observation
+	}
+	if !wasCooling && observation.coolingDown(now) {
+		d.bootstrapEpisode++
+	}
 }
 
 // finishConnectAttempt releases an autoconnect reservation. Network failures

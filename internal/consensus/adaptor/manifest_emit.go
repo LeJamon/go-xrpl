@@ -1,8 +1,12 @@
 package adaptor
 
 import (
+	"fmt"
+
+	"github.com/LeJamon/go-xrpl/internal/ledger/inbound"
 	"github.com/LeJamon/go-xrpl/internal/peermanagement"
 	"github.com/LeJamon/go-xrpl/internal/peermanagement/message"
+	"google.golang.org/protobuf/encoding/protowire"
 )
 
 // manifestSender is the slice of *peermanagement.Overlay the manifest
@@ -11,10 +15,15 @@ import (
 // a fake without standing up real listeners. *peermanagement.Overlay
 // satisfies this interface by virtue of its existing public methods.
 type manifestSender interface {
-	Send(peerID peermanagement.PeerID, frame []byte) error
-	Broadcast(frame []byte) error
+	SendManifestFrames(peerID peermanagement.PeerID, frames [][]byte) error
+	BroadcastManifestFrames(frames [][]byte) error
 	Peers() []peermanagement.PeerInfo
 }
+
+const (
+	manifestFrameTargetSize = 1 << 20
+	manifestFrameMaxEntries = 100
+)
 
 // encodeManifestsFrame wraps one or more wire-format manifest STObjects
 // in a TMManifests frame ready for Overlay.Broadcast / Overlay.Send.
@@ -33,21 +42,63 @@ func encodeManifestsFrame(serialized ...[]byte) ([]byte, error) {
 	return message.EncodeFrame(&message.Manifests{List: list})
 }
 
-// SendLocalManifestTo sends the aggregated TMManifests frame (every
+func encodeManifestFrames(serialized ...[]byte) ([][]byte, error) {
+	frames := make([][]byte, 0, 1)
+	chunk := make([][]byte, 0)
+	chunkSize := message.HeaderSizeUncompressed
+
+	flush := func() error {
+		if len(chunk) == 0 {
+			return nil
+		}
+		frame, err := encodeManifestsFrame(chunk...)
+		if err != nil {
+			return err
+		}
+		frames = append(frames, frame)
+		chunk = chunk[:0]
+		chunkSize = message.HeaderSizeUncompressed
+		return nil
+	}
+
+	for _, wire := range serialized {
+		if len(wire) == 0 {
+			continue
+		}
+		innerSize := 1 + protowire.SizeBytes(len(wire))
+		entrySize := 1 + protowire.SizeBytes(innerSize)
+		if message.HeaderSizeUncompressed+entrySize > manifestFrameTargetSize {
+			return nil, fmt.Errorf("manifest size %d exceeds frame target %d", len(wire), manifestFrameTargetSize)
+		}
+		if len(chunk) != 0 && (len(chunk) >= manifestFrameMaxEntries || chunkSize+entrySize > manifestFrameTargetSize) {
+			if err := flush(); err != nil {
+				return nil, err
+			}
+		}
+		chunk = append(chunk, wire)
+		chunkSize += entrySize
+	}
+	if err := flush(); err != nil {
+		return nil, err
+	}
+	return frames, nil
+}
+
+// SendLocalManifestTo sends the aggregated TMManifests frames (every
 // cached validator manifest) to a single peer. Returns nil and emits
 // nothing when the cache is empty or no sender is wired (test-only
 // construction). Any encode error is logged and swallowed: emission is
 // best-effort, the next reconnect will retry on its own.
 func (r *Router) SendLocalManifestTo(peerID peermanagement.PeerID) {
-	frame := r.cachedManifestFrame()
-	if len(frame) == 0 {
+	frames := r.cachedManifestFrames()
+	if len(frames) == 0 {
 		return
 	}
 	sender := r.manifestEmitter()
 	if sender == nil {
 		return
 	}
-	if err := sender.Send(peerID, frame); err != nil {
+	if err := sender.SendManifestFrames(peerID, frames); err != nil {
 		// Peer may have raced a disconnect between addPeer and the
 		// callback. ErrPeerNotFound / ErrConnectionClosed are benign;
 		// surface at debug to aid diagnosis without spamming logs on a
@@ -56,13 +107,13 @@ func (r *Router) SendLocalManifestTo(peerID peermanagement.PeerID) {
 	}
 }
 
-// BroadcastLocalManifest gossips the aggregated TMManifests frame to
-// every currently-connected peer. Returns the number of peers the frame
-// was queued for (0 when there's nothing to broadcast or no peers are
+// BroadcastLocalManifest gossips the aggregated TMManifests frames to
+// every currently-connected peer. Returns the number of peers the frames
+// were queued for (0 when there's nothing to broadcast or no peers are
 // connected) so callers can decide whether to log the emission.
 func (r *Router) BroadcastLocalManifest() int {
-	frame := r.cachedManifestFrame()
-	if len(frame) == 0 {
+	frames := r.cachedManifestFrames()
+	if len(frames) == 0 {
 		return 0
 	}
 	sender := r.manifestEmitter()
@@ -73,7 +124,7 @@ func (r *Router) BroadcastLocalManifest() int {
 	if len(peers) == 0 {
 		return 0
 	}
-	if err := sender.Broadcast(frame); err != nil {
+	if err := sender.BroadcastManifestFrames(frames); err != nil {
 		r.logger.Warn("broadcast local manifest failed", "error", err)
 		return 0
 	}
@@ -94,18 +145,58 @@ func (r *Router) manifestEmitter() manifestSender {
 	return r.overlay
 }
 
-// HandlePeerConnect is the callback wired into Overlay.SetPeerConnectCallback.
-// It records the handshake ledger hint and emits cached validator manifests.
+// HandlePeerConnect queues peer admission onto the Router goroutine.
 func (r *Router) HandlePeerConnect(peerID peermanagement.PeerID) {
+	r.pendingPeerConnects.Store(peerID, struct{}{})
+	select {
+	case r.peerConnectWake <- struct{}{}:
+	default:
+	}
+}
+
+func (r *Router) drainPeerConnects() {
+	r.pendingPeerConnects.Range(func(key, _ any) bool {
+		peerID := key.(peermanagement.PeerID)
+		if _, loaded := r.pendingPeerConnects.LoadAndDelete(peerID); loaded {
+			r.handlePeerConnect(peerID)
+		}
+		return true
+	})
+}
+
+func (r *Router) handlePeerConnect(peerID peermanagement.PeerID) {
+	if r.peerSessions != nil && !r.peerSessions.IsPeerConnected(peerID) {
+		return
+	}
 	if hints, ok := r.peerSessions.(peerLedgerHintView); ok && r.adaptor != nil {
 		if closed, exists := hints.PeerClosedLedger(peerID); exists {
 			r.adaptor.UpdatePeerLCL(uint64(peerID), closed)
 		}
 	}
 	r.SendLocalManifestTo(peerID)
+	r.addPeerToActiveAcquisitions(uint64(peerID))
 }
 
-// cachedManifestFrame returns the encoded TMManifests frame for the
+func (r *Router) addPeerToActiveAcquisitions(peerID uint64) {
+	if r.fetchTracker == nil || peerID == 0 {
+		return
+	}
+	for _, ledger := range r.fetchTracker.Active() {
+		if !ledger.AddPeerBounded(peerID, acquisitionPeerStart) {
+			continue
+		}
+		if ledger.State() == inbound.StateWantBase {
+			r.requestLedgerBaseFromPeer(ledger, peerID, "failed to request ledger base from added peer")
+			continue
+		}
+		if r.submitAcquisitionWork(ledger, acquisitionWorkEvent{kind: acquisitionWorkAdded, peerID: peerID}) {
+			continue
+		}
+		ledger.RemovePeer(peerID)
+	}
+}
+
+// cachedManifestFrames returns the encoded TMManifests frames for the
 // current state of the manifest cache, building it on demand and
 // reusing it across calls until the cache's Sequence advances — so a
 // burst of post-handshake emissions reuses the same encoded bytes
@@ -114,7 +205,7 @@ func (r *Router) HandlePeerConnect(peerID peermanagement.PeerID) {
 // Returns nil when the cache is unwired, empty, or fails to encode.
 // Encode failures are NOT cached so a transient error doesn't pin a
 // stale frame; the next caller re-attempts.
-func (r *Router) cachedManifestFrame() []byte {
+func (r *Router) cachedManifestFrames() [][]byte {
 	if r.manifests == nil {
 		return nil
 	}
@@ -129,27 +220,27 @@ func (r *Router) cachedManifestFrame() []byte {
 	defer r.manifestFrameMu.Unlock()
 
 	if r.manifestFrameBuilt && r.manifestFrameSeq == seq {
-		return r.manifestFrame
+		return r.manifestFrames
 	}
 
 	wires := r.manifests.SerializedAll()
 	if len(wires) == 0 {
 		// Empty cache — cache that fact too so the next call doesn't
 		// re-walk byMaster only to find it still empty.
-		r.manifestFrame = nil
+		r.manifestFrames = nil
 		r.manifestFrameSeq = seq
 		r.manifestFrameBuilt = true
 		return nil
 	}
 
-	frame, err := encodeManifestsFrame(wires...)
+	frames, err := encodeManifestFrames(wires...)
 	if err != nil {
 		r.logger.Warn("failed to encode local manifest frame", "error", err)
 		return nil
 	}
 
-	r.manifestFrame = frame
+	r.manifestFrames = frames
 	r.manifestFrameSeq = seq
 	r.manifestFrameBuilt = true
-	return frame
+	return frames
 }

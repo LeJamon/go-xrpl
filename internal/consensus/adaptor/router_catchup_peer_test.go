@@ -193,6 +193,93 @@ func TestRouter_CatchupDisconnectErrorRetargetsImmediately(t *testing.T) {
 	}
 }
 
+func TestRouter_LegacyAcquisitionSeedsFivePeers(t *testing.T) {
+	r, _, sender, svc := makeRouter(t)
+	targetSeq := svc.GetClosedLedgerIndex() + 40
+	targetHash := [32]byte{0xE1}
+	sender.mu.Lock()
+	sender.acquisitionPeers = []uint64{8, 9, 10, 11, 12}
+	sender.mu.Unlock()
+
+	r.startLedgerAcquisitionLegacy(targetSeq, targetHash, 7)
+
+	calls := sender.legacyCalls()
+	require.Len(t, calls, acquisitionPeerStart)
+	assert.ElementsMatch(t, []uint64{7, 8, 9, 10, 11}, []uint64{
+		calls[0].peerID, calls[1].peerID, calls[2].peerID, calls[3].peerID, calls[4].peerID,
+	})
+	il := r.fetchTracker.Find(targetHash)
+	require.NotNil(t, il)
+	assert.ElementsMatch(t, []uint64{7, 8, 9, 10, 11}, il.Peers())
+}
+
+func TestRouter_LegacyAcquisitionBroadensOnEachNoProgressInterval(t *testing.T) {
+	r, _, sender, svc := makeRouter(t)
+	targetSeq := svc.GetClosedLedgerIndex() + 40
+	targetHash := [32]byte{0xE4}
+	sender.mu.Lock()
+	sender.acquisitionPeers = []uint64{8, 9, 10, 11}
+	sender.mu.Unlock()
+	r.startLedgerAcquisitionLegacy(targetSeq, targetHash, 7)
+	il := r.fetchTracker.Find(targetHash)
+	require.NotNil(t, il)
+	require.Len(t, il.Peers(), acquisitionPeerStart)
+
+	sender.mu.Lock()
+	sender.acquisitionPeers = []uint64{12, 13, 14, 15}
+	sender.mu.Unlock()
+	r.broadenAcquisitionPeers(il)
+	sender.mu.Lock()
+	sender.acquisitionPeers = []uint64{15, 16, 17}
+	sender.mu.Unlock()
+	r.broadenAcquisitionPeers(il)
+
+	assert.ElementsMatch(t, []uint64{7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17}, il.Peers())
+}
+
+func TestRouter_LegacyAcquisitionKeepsSuccessfulPeers(t *testing.T) {
+	r, _, sender, svc := makeRouter(t)
+	targetSeq := svc.GetClosedLedgerIndex() + 40
+	targetHash := [32]byte{0xE2}
+	sender.mu.Lock()
+	sender.acquisitionPeers = []uint64{8, 9, 10, 11}
+	sender.legacyBaseErrs = map[uint64]error{
+		8:  peermanagement.ErrPeerNotFound,
+		10: peermanagement.ErrConnectionClosed,
+	}
+	sender.mu.Unlock()
+
+	r.startLedgerAcquisitionLegacy(targetSeq, targetHash, 7)
+
+	require.Len(t, sender.legacyCalls(), acquisitionPeerStart)
+	il := r.fetchTracker.Find(targetHash)
+	require.NotNil(t, il)
+	assert.ElementsMatch(t, []uint64{7, 9, 11}, il.Peers())
+}
+
+func TestRouter_LegacyAcquisitionWaitsWhenEveryPeerDisconnects(t *testing.T) {
+	r, _, sender, svc := makeRouter(t)
+	targetSeq := svc.GetClosedLedgerIndex() + 40
+	targetHash := [32]byte{0xE3}
+	sender.mu.Lock()
+	sender.acquisitionPeers = []uint64{8, 9, 10, 11}
+	sender.legacyBaseErrs = map[uint64]error{
+		7:  peermanagement.ErrPeerNotFound,
+		8:  peermanagement.ErrPeerNotFound,
+		9:  peermanagement.ErrPeerNotFound,
+		10: peermanagement.ErrPeerNotFound,
+		11: peermanagement.ErrPeerNotFound,
+	}
+	sender.mu.Unlock()
+
+	r.startLedgerAcquisitionLegacy(targetSeq, targetHash, 7)
+
+	require.Len(t, sender.legacyCalls(), acquisitionPeerStart)
+	il := r.fetchTracker.Find(targetHash)
+	require.NotNil(t, il)
+	assert.Empty(t, il.Peers())
+}
+
 func TestRouter_CatchupWaitsWithoutConnectedPeers(t *testing.T) {
 	r, _, sender, svc := makeRouter(t)
 	targetSeq := svc.GetClosedLedgerIndex() + 40
@@ -220,7 +307,9 @@ func TestRouter_CatchupPeerNotFoundWaitsWithoutReplacement(t *testing.T) {
 	sender.mu.Unlock()
 
 	r.ensureCatchupAcquisition(targetSeq, targetHash, 1)
-	assert.Nil(t, r.fetchTracker.Find(targetHash))
+	il := r.fetchTracker.Find(targetHash)
+	require.NotNil(t, il)
+	assert.Empty(t, il.Peers())
 	for range 20 {
 		r.maintenanceTick()
 	}
@@ -260,7 +349,9 @@ func TestRouter_HistoryPeerNotFoundDoesNotHotLoop(t *testing.T) {
 	}
 
 	require.Len(t, sender.legacyCalls(), 1)
-	assert.Nil(t, r.fetchTracker.Find(targetHash))
+	il := r.fetchTracker.Find(targetHash)
+	require.NotNil(t, il)
+	assert.Empty(t, il.Peers())
 	r.historyMu.Lock()
 	preferred := r.history.peerID
 	r.historyMu.Unlock()

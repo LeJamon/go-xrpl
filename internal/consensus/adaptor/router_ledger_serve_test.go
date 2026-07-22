@@ -45,7 +45,10 @@ func TestServeLedger_BaseAndStateRoundTripToAcquisition(t *testing.T) {
 
 	// Drive the state fetch: request the outstanding nodes, serve them, repeat.
 	for i := 0; i < 200 && !il.IsComplete(); i++ {
-		ids := il.NeedsMissingNodeIDs()
+		ids, _ := il.CollectMissingRequest(false)
+		if il.IsComplete() {
+			break
+		}
 		require.NotEmpty(t, ids, "incomplete acquisition must list outstanding state nodes")
 		req := &message.GetLedger{
 			InfoType:   message.LedgerInfoAsNode,

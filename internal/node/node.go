@@ -156,6 +156,7 @@ func Run(appConfig *config.Config, configPath string, standalone bool, rootLogge
 	// Initialize ledger service
 	cfg := service.Config{
 		Standalone:   standalone,
+		NodeSize:     appConfig.NodeSize,
 		FetchDepth:   effectivePeerFetchDepth(appConfig.GetFetchDepthUint32(), appConfig.NodeDB.OnlineDelete),
 		NetworkID:    uint32(networkID),
 		NodeStore:    db,
@@ -320,6 +321,14 @@ func Run(appConfig *config.Config, configPath string, standalone bool, rootLogge
 				Writes:     c.NodeStore.Writes,
 				ReadBytes:  c.NodeStore.ReadBytes,
 				WriteBytes: c.NodeStore.WriteBytes,
+			}
+		}
+		if c.FullBelow != nil {
+			res.FullBelow = &types.FullBelowCounts{
+				Size: c.FullBelow.Size, TargetSize: c.FullBelow.TargetSize,
+				Hits: c.FullBelow.Hits, Misses: c.FullBelow.Misses,
+				Inserts: c.FullBelow.Inserts, Evictions: c.FullBelow.Evictions,
+				Sweeps: c.FullBelow.Sweeps,
 			}
 		}
 		return res
@@ -794,7 +803,7 @@ func Run(appConfig *config.Config, configPath string, standalone bool, rootLogge
 		// aggregator, local-manifest emit).
 		if consensusComponents.Manifests != nil {
 			consensusComponents.Manifests.SetOnAccepted(func(m *manifest.Manifest) {
-				publisher.PublishManifest(buildManifestEvent(m))
+				publishManifestIfSubscribed(publisher, m)
 			})
 		}
 

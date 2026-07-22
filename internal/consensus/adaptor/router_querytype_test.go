@@ -2,6 +2,7 @@ package adaptor
 
 import (
 	"bytes"
+	"fmt"
 	"sync"
 	"testing"
 
@@ -80,6 +81,7 @@ func TestRouter_GetLedger_QueryTypeValidation(t *testing.T) {
 		req := &message.GetLedger{
 			InfoType:   message.LedgerInfoTsCandidate,
 			LedgerHash: id[:],
+			NodeIDs:    [][]byte{rootNodeID()},
 			QueryType:  &invalid,
 		}
 		r.handleMessage(&peermanagement.InboundMessage{
@@ -105,6 +107,7 @@ func TestRouter_GetLedger_QueryTypeValidation(t *testing.T) {
 		req := &message.GetLedger{
 			InfoType:   message.LedgerInfoTsCandidate,
 			LedgerHash: id[:],
+			NodeIDs:    [][]byte{rootNodeID()},
 			QueryType:  &valid,
 		}
 		r.handleMessage(&peermanagement.InboundMessage{
@@ -128,6 +131,7 @@ func TestRouter_GetLedger_QueryTypeValidation(t *testing.T) {
 		req := &message.GetLedger{
 			InfoType:   message.LedgerInfoTsCandidate,
 			LedgerHash: id[:],
+			NodeIDs:    [][]byte{rootNodeID()},
 		}
 		r.handleMessage(&peermanagement.InboundMessage{
 			PeerID:  9,
@@ -140,4 +144,68 @@ func TestRouter_GetLedger_QueryTypeValidation(t *testing.T) {
 		require.Len(t, sent, 1, "absent query_type must serve the cached tx-set")
 		assert.Equal(t, uint64(9), sent[0].peerID)
 	})
+}
+
+func TestRouter_GetLedger_QueryDepthValidation(t *testing.T) {
+	serve := func(t *testing.T, req *message.GetLedger) ([]badDataCall, []sentFrame) {
+		t.Helper()
+		r, recorder := makeRouterWithQueryTypeRecorder(t)
+		if req.InfoType == message.LedgerInfoTsCandidate {
+			txSet, err := r.adaptor.BuildTxSet([][]byte{bytes.Repeat([]byte{0x33}, 16)})
+			require.NoError(t, err)
+			id := txSet.ID()
+			req.LedgerHash = id[:]
+			if len(req.NodeIDs) == 0 {
+				req.NodeIDs = [][]byte{rootNodeID()}
+			}
+		}
+		r.handleMessage(&peermanagement.InboundMessage{
+			PeerID:  42,
+			Type:    uint16(message.TypeGetLedger),
+			Payload: encodePayload(t, req),
+		})
+		return recorder.snapshot()
+	}
+
+	t.Run("base rejects explicit zero", func(t *testing.T) {
+		badData, sent := serve(t, &message.GetLedger{
+			InfoType:      message.LedgerInfoBase,
+			LType:         message.LedgerTypeClosed,
+			QueryDepthSet: true,
+		})
+		require.Len(t, badData, 1)
+		assert.Equal(t, "get-ledger-bad-querydepth", badData[0].reason)
+		assert.Empty(t, sent)
+	})
+
+	t.Run("base accepts absent depth", func(t *testing.T) {
+		badData, sent := serve(t, &message.GetLedger{
+			InfoType: message.LedgerInfoBase,
+			LType:    message.LedgerTypeClosed,
+		})
+		assert.Empty(t, badData)
+		assert.NotEmpty(t, sent)
+	})
+
+	t.Run("map depth above maximum is rejected", func(t *testing.T) {
+		badData, sent := serve(t, &message.GetLedger{
+			InfoType:   message.LedgerInfoTsCandidate,
+			QueryDepth: maxQueryDepth + 1,
+		})
+		require.Len(t, badData, 1)
+		assert.Equal(t, "get-ledger-bad-querydepth", badData[0].reason)
+		assert.Empty(t, sent)
+	})
+
+	for depth := uint32(0); depth <= maxQueryDepth; depth++ {
+		t.Run(fmt.Sprintf("candidate accepts depth %d", depth), func(t *testing.T) {
+			badData, sent := serve(t, &message.GetLedger{
+				InfoType:      message.LedgerInfoTsCandidate,
+				QueryDepth:    depth,
+				QueryDepthSet: true,
+			})
+			assert.Empty(t, badData)
+			assert.NotEmpty(t, sent)
+		})
+	}
 }

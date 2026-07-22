@@ -138,30 +138,20 @@ func TestServeTxSet_RootRequest_FatLeaves_FullCoverage(t *testing.T) {
 	}
 }
 
-// TestServeTxSet_NoNodeIDs_FallsBackToFullWalk pins the legacy
-// behaviour: when a request omits NodeIDs entirely (some test
-// fixtures and out-of-spec callers do this), we walk the entire
-// SHAMap pre-order. Without the fallback, those callers get an
-// empty response and the engine never sees the tx-set.
-func TestServeTxSet_NoNodeIDs_FallsBackToFullWalk(t *testing.T) {
-	txMap, _, wireNodes := buildTxSetForTest(t, 3)
+func TestBuildShaMapReplyNodes_NoNodeIDsReturnsNothing(t *testing.T) {
+	txMap, _, _ := buildTxSetForTest(t, 3)
 
 	got := buildShaMapReplyNodes(
 		txMap,
 		nil, // explicit empty
-		1,   // ignored on the fallback path
+		1,
 		false,
 		silentLogger{},
 		7,
 		"txset",
 	)
 
-	require.Len(t, got, len(wireNodes), "fallback walks the full tree")
-	for i, n := range got {
-		assert.Equal(t, wireNodes[i].NodeID, n.NodeID,
-			"fallback emits pre-order — same order as WalkWireNodes")
-		assert.Equal(t, wireNodes[i].Data, n.NodeData)
-	}
+	assert.Empty(t, got)
 }
 
 // TestServeTxSet_BadNodeID_Skipped pins that a malformed

@@ -1381,6 +1381,352 @@ Behavioral oracle: clean local rippled `3.2.0` worktree at
   job queue; the bounded saturation policy is an intentional Go overload
   safeguard required to keep this repository's single router responsive.
 
+# Issue #1401 — retained-store no-progress audit
+
+## Plan
+
+- [x] Trace retained-store `CheckLocalContext`, progress accounting, timer rearm,
+      and worker result/callback sequencing from startup through target acquire.
+- [x] Reproduce useful local batches followed by seven no-progress strikes.
+- [x] Compare the lifecycle and progress invariants with rippled v3.2.0.
+- [x] Implement the smallest production-quality correction with focused tests.
+- [x] Run narrow and race-enabled tests and record the audit result.
+
+## Review
+
+- Backed SHAMap missing-node walks materialized retained nodes without exposing
+  that progress to the acquisition, and `CheckLocalContext` only called
+  `FinishSync` after an explicit fetch-pack insertion. A tree completed entirely
+  by newly available retained nodes therefore stayed in `StateWantState` and
+  exhausted the no-progress budget.
+- SHAMap now exposes a cheap monotonic count of freshly installed Family nodes.
+  `CheckLocalContext` samples it around each scan, counts local hydration as
+  progress, and always runs the authoritative `FinishSync` check.
+- Rippled v3.2.0 likewise rechecks local storage and recognizes an empty missing
+  set as completion in `InboundLedger::tryDB`; network usefulness remains
+  separately accounted from local hydration.
+- Focused retained-store tests, their race build, the full `shamap` and inbound
+  packages, focused acquisition worker lifecycle tests, and `git diff --check`
+  pass.
+
+## Live bootstrap hardening
+
+- [x] Separate acquisition sends from best-effort gossip and bound manifest wire
+      frames so a peer write cannot block state requests behind a 60 MB frame.
+- [x] Prove live state responses continue while the normal gossip queue is full.
+- [x] Stop the retained-store run after heap profiling showed 19.6 GB allocated
+      during a backed missing-node traversal; preserve the 4.4 GB database.
+- [x] Release store-proven subtrees as the missing-node walk unwinds while
+      retaining incomplete frontier paths needed to attach peer responses.
+- [x] Add bounded-retention, persistence-provenance, lock-order, frontier, and
+      cache-correctness regressions; pass focused and race-enabled package tests.
+- [x] Make `fetch_info` consume the acquisition worker's cached frontier instead
+      of launching a competing full backing-store traversal.
+- [x] Run build, vet, lint, and final diff verification.
+- [ ] Relaunch the retained database and prove bounded heap, continued frontier
+      acquisition, first validated ledger adoption, and consensus participation.
+
+- Pending acquisition entries remain readable for traversal but are not treated
+  as durable for subtree release or shared full-below publication.
+- Parallel traversal now pins its Family/cache pair and uses independent walk and
+  attachment locks, avoiding map/cache lock inversion during prune and FinishSync.
+- Live profiling exposed `fetch_info` waiting behind and then overtaking the
+  acquisition walk. Progress snapshots now reuse the last worker scan, keeping
+  RPC inspection constant-time and free of backing-store reads.
+- The durability and lock-order regressions pass ten repeated runs; full SHAMap,
+  SHAMap race, inbound, adaptor, and peer-management tests pass, as do build,
+  vet, lint, and `git diff --check`.
+
+## Private-network bootstrap acceptance
+
+- [x] Preserve the retained 4.4 GB Testnet database and stop the live process
+      after terminal verification grew to 10.3 GB live heap.
+- [x] Adapt xrpl-confluence's delayed-sync scenario to seed a representative
+      state tree before launching a fresh goXRPL node.
+- [x] Assert non-genesis validated-ledger adoption, exact ledger/account/
+      transaction-hash agreement with rippled, seeded-state availability, and
+      continued validation after adoption.
+- [x] Prove bounded terminal-verification retention with the deterministic
+      large-tree SHAMap regression.
+- [x] Make `FinishSync` verify a backed tree without retaining every durable node
+      it materializes, with deterministic retention regressions.
+- [x] Run the private-network loop through adoption before repeating Testnet.
+
+- The Testnet acquisition reached a single missing-state frontier, then entered
+  `FinishSync`. Profiling showed the strict walk continuously fetching changing
+  durable hashes, while `walkFullBelow` attached every fetched child with
+  `canRelease=false`. Live heap rose from about 1 GB to 10.3 GB and `fetch_info`
+  remained on its pre-walk snapshot until the synchronous walk returned.
+- xrpl-confluence already has `sync` and `delayed_sync` suites that launch a
+  fresh goXRPL node after rippled advances; the acceptance loop should extend
+  that existing path rather than introduce a separate harness.
+- The focused private run passed in 76 seconds against rippled 3.2.0 in enclave
+  `goxrpl-issue1401-private-fast`. Rippled validated a 250-ticket state at ledger
+  7; the fresh node acquired ledger 10 in about two seconds, matched its ledger,
+  account, and transaction hashes exactly, served `TicketCount=250`, then matched
+  validated ledger 11 and entered `server_state=validating`. With the enclave
+  left running, it continued emitting validations and fully validated ledgers
+  20 through 22. The complete xrpl-confluence sidecar Go suite and Starlark
+  package execution pass.
+- `TestFinishSync_ReleasesColdDurableTree` forces a cold store traversal across
+  2,048 deterministically distributed leaves, proves the walk performed durable
+  family reads, and verifies every complete root subtree is released. The full
+  SHAMap package and the focused race suite pass.
+- The retained Testnet database was relaunched after the private acceptance. Its
+  frontier continues changing while live heap is reclaimed between roughly
+  0.7 and 1.5 GB instead of growing monotonically past the prior 10.3 GB peak.
+
+## Live whole-node performance profile
+
+- [x] Capture CPU, live heap, cumulative allocation, goroutine, mutex, and block
+      profiles from the corrected node under Testnet bootstrap load.
+- [x] Separate acquisition/SHAMap/storage work from overlay, consensus, RPC, and
+      runtime overhead.
+- [x] Rank evidence-backed optimization opportunities without changing the live
+      node during measurement.
+
+## Review
+
+- The 30-second CPU profile consumed 157.33 CPU-seconds. SHAMap completeness
+  traversal accounted for 92.25%, NodeStore fetches for 89.23%, and kernel
+  point reads for 59.44%. The node is I/O-bound on repeated cold Pebble reads,
+  not blocked on the router, consensus, or traversal locks.
+- Node reads increased by 1.2 million in 14 seconds without any new writes.
+  Useful replies currently trigger `FinishSync` before the acquisition worker
+  performs another missing-frontier traversal, and the FullBelow cache does not
+  refresh useful entries on hits as rippled's bounded key cache does.
+- Post-GC live heap was 605.56 MB. NodeStore cache insertion retained 352.02 MB,
+  including 192.07 MB of defensive node clones. The bootstrap path allocated
+  36.6 MB/s and 389,000 objects/s, 98.52% below store fetches.
+- Manifest objects, cache maps, and 56 cached wire frames retained about
+  174.91 MB. This was stable accepted-cache state rather than a stuck inbound
+  frame; changing its retention needs a separate parity and security review.
+- Goroutine and lock profiles found no leak or deadlock. Existing 16 walkers
+  average about five cores; additional parallelism would amplify point reads and
+  cache contention before it solves the read amplification.
+- The current acquisition workload masks steady-state costs. After adoption,
+  repeat profiles under idle consensus, transaction-heavy, and RPC-heavy loads.
+
+## Bootstrap profile optimizations
+
+- [x] Stop the live Testnet node and monitor cleanly while retaining the database.
+- [x] Remove per-reply `FinishSync`; keep completion authoritative when the
+      missing-frontier traversal reaches zero.
+- [x] Replace FIFO-like FullBelow retention with bounded touch-on-hit recency
+      matching rippled's observable cache behavior.
+- [x] Remove safe NodeStore fetch/cache copies without exposing mutable shared
+      node data.
+- [x] Run focused, race, SHAMap, storage, ledger-inbound, and broader tests.
+- [x] Relaunch from the retained database and compare bootstrap/adoption pprof
+      and metrics with the baseline profiles.
+
+## Review
+
+- Reply application no longer calls `FinishSync`; completion remains
+  authoritative in zero-frontier collection. A backing-store blocking
+  regression proves applying a reply returns before traversal begins.
+- FullBelow now uses rippled-like touch recency with a 524,288-entry soft target,
+  proportional age expiration under pressure, and lazy periodic sweeping.
+- Fresh caller-owned KV results now back decoded immutable nodes directly and
+  transfer into the NodeStore cache without a clone. Public cache insertion
+  remains defensive. The ownership-transfer benchmark is allocation-free
+  versus 608 B and two allocations for defensive insertion.
+- Focused packages, full SHAMap and storage suites, focused race coverage,
+  full core suites, library suites, and a full-module build pass.
+- The six-part binary relaunched from the retained Testnet database with RPC,
+  pprof, and metrics available, selected ledger 19,260,521, and resumed state
+  acquisition. A comparable 30-second profile consumed 83.89 CPU-seconds versus
+  177.14 before this pass; completeness traversal cumulative CPU fell from
+  164.20 seconds in `walkFullBelowState` to 63.86 seconds in the structural
+  resumable traversal. Pebble reads remain the dominant cost.
+
+## Six-part performance pass
+
+- [x] Replace the hard-cap FullBelow LRU with rippled-like touch recency, a soft
+      target, age expiration, periodic sweeping, and observable cache metrics.
+- [x] Remove measured SHAMap item-data and hash-buffer copies without weakening
+      immutable ownership or hash verification.
+- [x] Add a traversal-specific durable read path that avoids polluting the
+      general NodeStore cache, with hit/miss evidence and regressions.
+- [x] Decode only the structural SHAMap data needed by completeness traversal,
+      preserving canonical node/hash validation.
+- [x] Retain and safely resume completeness traversal work across acquisition
+      replies instead of restarting from the root.
+- [x] Reduce steady peer-path allocations in TLS BIO draining and manifest
+      verification/caching while preserving rippled v3.2.0 behavior.
+- [x] Run focused benchmarks, race tests, affected suites, build/vet/lint, the
+      seeded private-network bootstrap/adoption test, and comparative profiles.
+- [x] Run FullBelow/NodeStore sweeping from the ledger-service lifecycle after
+      insertions stop, and stop the sweep worker before NodeStore shutdown.
+- [x] Prove periodic idle sweeps and clean, idempotent worker shutdown with
+      focused race coverage.
+
+### Acceptance evidence
+
+- The pre-optimization Testnet run adopted ledger 19,259,518 and continued fully
+  validating through ledger 19,259,691 before the clean shutdown.
+- The six-part image passed `xrpl-confluence` delayed sync against four rippled
+  3.2.0 validators. From an empty database it acquired the 250-Ticket state in
+  about five seconds, matched ledger, account, and transaction hashes at ledgers
+  10 and 11, reported `complete_ledgers = 1-12`, and entered `validating`.
+- Focused and race suites, `test-libs`, isolated-cache `test-core`, full-module
+  builds with and without CGO, vet, lint, and `git diff --check` pass. Structural
+  traversal reduces decoded bytes from 896 B to 64 B per benchmark operation;
+  peer-wire construction is one allocation, and the no-manifest-subscriber path
+  is allocation-free.
+- The ledger service now owns a 30-second NodeStore-family sweep timer and joins
+  it before draining persistence and closing the database. A focused lifecycle
+  regression proves FullBelow sweeps continue with no further insertions, cease
+  before `Stop` returns, and remain idempotently stopped; focused package, race,
+  vet, and whitespace checks pass.
+
+## Post-adoption consensus validation
+
+- [x] Preserve the Testnet goroutine profile and forcibly terminate the wedged
+      process after graceful shutdown exhausted its budget.
+- [x] Remove the ledger/service lock cycle exposed by asynchronous persistence
+      during transaction-result collection and add a deterministic regression.
+- [x] Audit the live manifest queue saturation warning and cross-network
+      validation ingress; fix any release-blocking behavior in scope.
+- [x] Route the consensus engine's exact wrong-LCL request through a tracked
+      sequence-zero inbound acquisition and defer history backfill until the
+      validated and closed ledgers are aligned.
+- [x] Let an exact wrong-LCL acquisition finish while the network tip moves,
+      without allowing stale speculative work or low-sequence peers to replace
+      or misdirect it; add deterministic scheduling regressions.
+- [ ] Relaunch the retained database and prove the network-tip gap converges
+      after jump adoption rather than growing on a stale local branch.
+- [x] Make the backed traversal cursor resume at its exact DFS position when a
+      reply batch cap is reached, so reserved late frontiers cannot force
+      repeated multi-million-node durable scans.
+- [x] Re-run focused race coverage, core/libs, vet, lint, and both build modes.
+- [x] Repeat private-network adoption, then relaunch the retained Testnet
+      database through catch-up and consensus participation.
+- [x] Record final evidence, review the complete diff, commit, push, and open the
+      pull request for issue #1401.
+
+- The retained Testnet run acquired and adopted ledger 19,262,412 with bounded
+  live heap, advanced `complete_ledgers` through 19,262,413, and began catch-up.
+  Its first local consensus close then wedged the service. The captured stacks
+  show transaction iteration holding `Ledger.mu.RLock`, its callback attempting
+  a nested `IsValidated` read after the persistence worker queued
+  `StoreStateDirty` for the write lock, and `AcceptConsensusResult` retaining the
+  service write lock around the cycle. This is a concrete Go `RWMutex` recursive
+  read deadlock, not a network or bootstrap stall.
+- Transaction result collection now snapshots the immutable ledger validation
+  state before entering the transaction walk and queues persistence only after
+  collection. A deterministic call-order regression rejects any validation read
+  from inside the walk callback; focused service and race tests pass.
+- The live manifest warning was a real bounded-queue rejection during the burst
+  of cache exchange and accepted relays from several newly connected peers. The
+  dedicated queue now uses the existing 64-item peer send bound; broadcasts share
+  the encoded frame storage, so this retains only batch references while keeping
+  16-frame ordinary traffic fairness and a hard flood ceiling. Cross-network
+  validations cannot affect consensus or trigger acquisition; their rippled-like
+  untrusted relay remains unchanged, but the misleading per-message success log
+  is now debug-level and says `processed`.
+- The final bounded-queue Testnet run adopted ledger 19,263,263 in 4m55s and
+  executed the formerly deadlocking consensus acceptance path for 19,263,264;
+  RPC remained responsive afterward. It then exposed a separate scheduling
+  defect: a history acquisition for 19,263,262 occupied the traversal worker
+  while the consensus target remained headerless at 19,263,384. Network-ledger
+  replies for later hashes had no matching inbound acquisition and the gap grew
+  from 120 to 138 ledgers, so the run was stopped for correction.
+- The tracked-request run adopted ledger 19,263,641 and immediately entered
+  wrong-ledger recovery. Exact sequence-zero requests received matching replies
+  with `has_inbound=true`, proving that the former discard path is closed, and
+  the state-promotion guard kept the node out of `full` while genesis was still
+  validated. The run then exposed two adjacent scheduler defects: each new
+  network close retired the still-progressing exact acquisition before it could
+  finish, and low-sequence peer status messages logged a wrapped unsigned gap.
+  The node was stopped cleanly with its database preserved before correcting
+  both behaviors.
+- Exact acquisitions are now sticky, moving tips coalesce into one latest
+  pending hash, low-sequence peers cannot promote or redirect catch-up, and a
+  superseded speculative traversal is canceled so the exact target starts
+  immediately. Focused and repeated race regressions pass.
+- The resumed run adopted ledger 19,264,359, then began exact acquisition of
+  ledger 19,264,510 with a verified header and a live state/transaction frontier.
+  A goroutine profile exposed one remaining read-amplification defect: once all
+  missing hashes were reserved to peers, the reply path performed a filtered
+  durable-tree scan and then repeated the full traversal unfiltered with
+  `maxMissing=1`. Stop the node, remove that duplicate scan with a read-count
+  regression, rebuild, and resume from the preserved database before accepting
+  convergence.
+- The next retained-database run confirmed the duplicate scan was gone and
+  reduced the target from 16 missing state frontiers to 3. It also exposed the
+  remaining cursor defect: a capped recursive walk re-queues the lane root, so
+  the next reply revisits already explored durable nodes. At 9m22s the node had
+  issued 28.6 million reads (7.0 GB) and the single `maxMissing=256` traversal
+  had run for more than a minute. The node was stopped cleanly; preserve the
+  recursive post-order FullBelow semantics while retaining the exact traversal
+  stack across reply batches, then relaunch the same database.
+- The backed walk now retains an explicit per-lane DFS frame stack, including
+  the next branch and post-order full/durable accumulators. Capped passes resume
+  without rereading prior durable nodes even after FullBelow eviction. Recent
+  reservations are filtered after one fixed 256-node discovery pass, matching
+  rippled's ordering, and that bounded frontier is balanced across all useful
+  peers. FullBelow insertion no longer duplicates the ledger service's periodic
+  sweep. Focused package tests and repeated race regressions pass; relaunch the
+  retained database for the final read/adoption proof.
+- The exact-cursor relaunch cold-adopted Testnet ledger 19,265,221 in 5m29s and
+  immediately completed 19,265,222, proving bootstrap and cursor progress. The
+  subsequent exact jump to 19,265,320 did not converge on the moving tip: after
+  roughly 27 million additional durable reads the FullBelow hit count flattened
+  while sweeps discarded millions of deep marks. A live 20-second CPU profile
+  attributed 96.5% of samples to the traversal's uncached Pebble reads and 90.5%
+  to raw syscalls; logic and allocation work are no longer material.
+- [x] Retain bounded shallow subtree proofs instead of letting low-value deep
+      marks crowd them out; prove the policy skips shared durable subtrees while
+      preserving missing-node and durability semantics.
+- [x] Relaunch the retained database and require successive exact acquisitions
+      to become cheaper until the validated-ledger gap shrinks to zero.
+
+- The shallow-proof relaunch adopted exact ledger 19,265,532, advanced a
+  contiguous complete range through 19,265,617, entered `full`, and reduced the
+  live gap from eight ledgers to one while participating in six-proposer rounds.
+  FullBelow remained below its soft target with zero evictions; hits rose from
+  4,862 before adoption to 55,202 while reads increased by only about 1.7
+  million across the catch-up. The last observed consensus close was 2.046s.
+- Final review moved manifest snapshots onto a dedicated bounded peer-to-worker
+  lane, capped outbound frames at 100 entries and about 1 MiB, propagated
+  cancellation through `FinishSync`, cancelled cleared DFS work, and fixed
+  bootstrap rejection, shutdown-drain, and invalid-depth retry edge cases.
+- The broad core gate exposed a capped-frontier starvation edge: the first 256
+  missing nodes could all be reserved while additional disjoint work existed.
+  The scheduler now preserves the unfiltered completion pass, then continues
+  past reserved hashes only while useful peers remain. Deterministic unbacked
+  and backed-cursor regressions, repeated focused tests, and race coverage pass.
+- Final verification passes `just test-core`, `just test-libs`, `just vet`,
+  `just lint`, `just build-all`, `just build-nocgo`, focused race coverage, and
+  `git diff --check` with isolated writable caches.
+- Image `goxrpl:issue-1401-six-final3`
+  (`sha256:468398da3c49e4847e4fa9f9aa09f545c028fd48ba486be81448196e28049666`)
+  passed the fresh `delayed_sync` Kurtosis acceptance against four rippled
+  v3.2.0 validators. From an empty database it matched exact ledger, account,
+  and transaction hashes at ledgers 10 and 11, served all 250 Ticket SLEs, and
+  advanced a contiguous `complete_ledgers = 1-11` range. The temporary enclave
+  was destroyed after the pass.
+- Published as PR #1415: https://github.com/LeJamon/go-xrpl/pull/1415. Current
+  `origin/main` was merged after publication; the sole conflict was the appended
+  task log, and the merged tree passed the changed replay/escrow/lending/vault
+  packages plus core, libraries, vet, lint, and both build modes.
+
+## Strict CI lint follow-up
+
+- [x] Inspect the failing GitHub Actions job and confirm all other required jobs
+      pass.
+- [x] Remove the five unreachable helpers reported by the strict unused check.
+- [x] Run the exact strict CI linter, affected tests, build, vet, and diff check.
+- [x] Commit, push, and verify the required PR checks are green.
+
+- The required Lint job was the only failing check; every build, test, docs,
+  fuzz, and consensus-smoke job passed. Removing the five zero-call-site helpers
+  makes the exact default `golangci-lint run` report `0 issues`. Focused inbound
+  and SHAMap tests, vet, both build modes, and `git diff --check` also pass.
+- Commit `4d03f9e9` passed every required PR check, including strict lint, all
+  build and test shards, consensus smoke, docs, and corpus replay.
+
 # Issue #1404 — LoanSet holding owner count
 
 - [x] Validate issue state, repository, base branch, and rippled 3.2.0 behavior.

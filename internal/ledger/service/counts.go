@@ -1,5 +1,7 @@
 package service
 
+import "github.com/LeJamon/go-xrpl/shamap"
+
 // Counts is a snapshot of the runtime counters surfaced by the get_counts RPC.
 // It deliberately includes only counters go-xrpl actually tracks — a strict
 // subset of rippled's GetCounts.cpp: node-store I/O counters and locally-held
@@ -10,6 +12,7 @@ type Counts struct {
 	Standalone bool
 	LocalTxs   int
 	NodeStore  *NodeStoreCounts
+	FullBelow  *FullBelowCounts
 }
 
 // NodeStoreCounts holds the node store's I/O counters. Fields map 1:1 onto the
@@ -21,6 +24,17 @@ type NodeStoreCounts struct {
 	Writes     uint64 // node_writes       (rippled storeCount_)
 	ReadBytes  uint64 // node_read_bytes   (rippled fetchSz_)
 	WriteBytes uint64 // node_written_bytes (rippled storeSz_)
+}
+
+// FullBelowCounts holds the shared SHAMap completeness-cache metrics.
+type FullBelowCounts struct {
+	Size       int
+	TargetSize int
+	Hits       uint64
+	Misses     uint64
+	Inserts    uint64
+	Evictions  uint64
+	Sweeps     uint64
 }
 
 // Counts returns a snapshot of the node's runtime counters for the
@@ -52,6 +66,18 @@ func (s *Service) Counts() Counts {
 			Writes:     st.Writes,
 			ReadBytes:  st.ReadBytes,
 			WriteBytes: st.WriteBytes,
+		}
+	}
+	if provider, ok := s.shamapFamily.(interface {
+		FullBelowCache() *shamap.FullBelowCache
+	}); ok {
+		if cache := provider.FullBelowCache(); cache != nil {
+			stats := cache.Stats()
+			c.FullBelow = &FullBelowCounts{
+				Size: stats.Size, TargetSize: stats.TargetSize, Hits: stats.Hits,
+				Misses: stats.Misses, Inserts: stats.Inserts,
+				Evictions: stats.Evictions, Sweeps: stats.Sweeps,
+			}
 		}
 	}
 	return c

@@ -166,6 +166,7 @@ func TestRouter_ForwardWalk_RearmsNextOnCompletion(t *testing.T) {
 	il := inbound.New(childHash, c+1, 7, serveTestLogger())
 	require.NoError(t, il.GotBase([]message.LedgerNode{{NodeData: data}, {NodeData: rootData}}))
 	require.NoError(t, il.GotStateNodes(wire))
+	il.CollectMissingRequest(false)
 	require.True(t, il.IsComplete())
 	r.fetchTracker.Track(il)
 

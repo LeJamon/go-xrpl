@@ -405,3 +405,44 @@ func TestEncodeFrame(t *testing.T) {
 		t.Fatalf("message type = %v, want %v", header.MessageType, TypePing)
 	}
 }
+
+func TestBuildWireMessage(t *testing.T) {
+	payload := []byte{0xde, 0xad, 0xbe, 0xef}
+	frame, err := BuildWireMessage(TypeManifests, payload)
+	if err != nil {
+		t.Fatalf("BuildWireMessage: %v", err)
+	}
+	header, err := DecodeHeader(frame)
+	if err != nil {
+		t.Fatalf("DecodeHeader: %v", err)
+	}
+	if header.MessageType != TypeManifests || header.PayloadSize != uint32(len(payload)) || header.Compressed {
+		t.Fatalf("unexpected header: %+v", header)
+	}
+	if !bytes.Equal(frame[HeaderSizeUncompressed:], payload) {
+		t.Fatalf("payload = %x, want %x", frame[HeaderSizeUncompressed:], payload)
+	}
+	var viaWriter bytes.Buffer
+	if err := WriteMessage(&viaWriter, TypeManifests, payload); err != nil {
+		t.Fatalf("WriteMessage: %v", err)
+	}
+	if !bytes.Equal(frame, viaWriter.Bytes()) {
+		t.Fatalf("frame = %x, WriteMessage = %x", frame, viaWriter.Bytes())
+	}
+
+	payload[0] = 0
+	if frame[HeaderSizeUncompressed] != 0xde {
+		t.Fatal("wire message aliases input payload")
+	}
+}
+
+func BenchmarkBuildWireMessage(b *testing.B) {
+	payload := make([]byte, 1<<20)
+	b.ReportAllocs()
+	b.SetBytes(int64(len(payload)))
+	for b.Loop() {
+		if _, err := BuildWireMessage(TypeLedgerData, payload); err != nil {
+			b.Fatal(err)
+		}
+	}
+}

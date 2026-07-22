@@ -137,8 +137,11 @@ func TestRouter_GetLedger_TsCandidate_ServesCachedTxSet(t *testing.T) {
 
 	// Inbound: peer 7 asks for the tx set.
 	req := &message.GetLedger{
-		InfoType:   message.LedgerInfoTsCandidate,
-		LedgerHash: wantID[:],
+		InfoType:      message.LedgerInfoTsCandidate,
+		LedgerHash:    wantID[:],
+		NodeIDs:       [][]byte{rootNodeID()},
+		QueryDepth:    3,
+		QueryDepthSet: true,
 	}
 	inbox <- &peermanagement.InboundMessage{
 		PeerID:  7,
@@ -178,24 +181,56 @@ func TestRouter_GetLedger_TsCandidate_ServesCachedTxSet(t *testing.T) {
 	}
 
 	// Round-trip: feed the response back through SHAMap sync
-	// reconstruction (the same path handleTxSetData uses on inbound).
-	// If the wire bytes carry the canonical tx-set, FinishSync
-	// closes cleanly and the resulting root hash matches wantID.
+	// reconstruction (the same path handleTxSetData uses on inbound),
+	// following any missing-node paths exposed by the first reply.
 	reconstructed := shamap.New(shamap.TypeTransaction)
 	require.NoError(t, reconstructed.StartSync())
-	require.NoError(t,
-		reconstructed.AddRootNode([32]byte(wantID), resp.Nodes[0].NodeData),
-		"AddRootNode must accept the served root payload")
-	for i := 1; i < len(resp.Nodes); i++ {
-		nid, err := shamap.ParseNodeID(resp.Nodes[i].NodeID)
-		require.NoError(t, err, "node[%d] NodeID must parse", i)
-		_, err = reconstructed.AddKnownNodeByID(nid, resp.Nodes[i].NodeData)
-		require.NoError(t, err, "AddKnownNodeByID must accept node[%d]", i)
+	addReply := func(reply *message.LedgerData, root bool) {
+		for i, n := range reply.Nodes {
+			if root && i == 0 {
+				require.NoError(t,
+					reconstructed.AddRootNode([32]byte(wantID), n.NodeData),
+					"AddRootNode must accept the served root payload")
+				continue
+			}
+			nid, err := shamap.ParseNodeID(n.NodeID)
+			require.NoError(t, err, "node[%d] NodeID must parse", i)
+			_, err = reconstructed.AddKnownNodeByID(nid, n.NodeData)
+			require.NoError(t, err, "AddKnownNodeByID must accept node[%d]", i)
+		}
+	}
+	addReply(resp, true)
+
+	frameCount := len(frames)
+	for missing := reconstructed.GetMissingNodes(256, nil); len(missing) > 0; missing = reconstructed.GetMissingNodes(256, nil) {
+		nodeIDs := make([][]byte, 0, len(missing))
+		for _, node := range missing {
+			nodeIDs = append(nodeIDs, node.NodeID.Bytes())
+		}
+		inbox <- &peermanagement.InboundMessage{
+			PeerID: 7,
+			Type:   uint16(message.TypeGetLedger),
+			Payload: encodePayload(t, &message.GetLedger{
+				InfoType:      message.LedgerInfoTsCandidate,
+				LedgerHash:    wantID[:],
+				NodeIDs:       nodeIDs,
+				QueryDepth:    3,
+				QueryDepthSet: true,
+			}),
+		}
+		require.Eventually(t, func() bool {
+			return len(rs.sentTo(7)) > frameCount
+		}, time.Second, 10*time.Millisecond, "router did not answer missing-node follow-up")
+		followupFrames := rs.sentTo(7)
+		_, decoded = decodeFrame(t, followupFrames[frameCount].frame)
+		followup, ok := decoded.(*message.LedgerData)
+		require.True(t, ok, "follow-up must be LedgerData")
+		require.NotEmpty(t, followup.Nodes, "follow-up must make progress")
+		addReply(followup, false)
+		frameCount++
 	}
 	require.NoError(t, reconstructed.FinishSync(),
-		"FinishSync must succeed — if this fails, the served wire bytes "+
-			"don't form a complete SHAMap and the consumer would stall on "+
-			"GetMissingNodes follow-ups")
+		"FinishSync must succeed after missing-node follow-ups")
 	gotHash, err := reconstructed.Hash()
 	require.NoError(t, err)
 	assert.Equal(t, wantID[:], gotHash[:],

@@ -19,7 +19,9 @@ import (
 func (r *Router) handleMessage(msg *peermanagement.InboundMessage) {
 	defer r.recoverFrame(msg, "dispatch")
 
-	if r.peerSessions != nil && !r.peerSessions.IsPeerConnected(msg.PeerID) {
+	msgType := message.MessageType(msg.Type)
+	if r.peerSessions != nil && !r.peerSessions.IsPeerConnected(msg.PeerID) &&
+		msgType != message.TypeManifests {
 		return
 	}
 	defer func() {
@@ -27,8 +29,6 @@ func (r *Router) handleMessage(msg *peermanagement.InboundMessage) {
 			r.HandlePeerDisconnect(msg.PeerID)
 		}
 	}()
-
-	msgType := message.MessageType(msg.Type)
 
 	switch msgType {
 	case message.TypeProposeLedger:
@@ -73,7 +73,7 @@ func (r *Router) handleMessage(msg *peermanagement.InboundMessage) {
 }
 
 // handleManifests ingests a TMManifests frame, applies every entry, and
-// relays the accepted subset as one aggregate frame.
+// relays the accepted subset as aggregate frames to every active peer.
 //
 // Decode failures attribute "manifest-decode" badData to the sender. A
 // mix of valid and invalid entries in the same frame results in the
@@ -97,8 +97,11 @@ func (r *Router) handleManifests(msg *peermanagement.InboundMessage) bool {
 	if len(mfs.List) == 0 {
 		return true
 	}
-
+	if len(mfs.List) > manifestFrameMaxEntries {
+		r.adaptor.IncPeerBadData(uint64(msg.PeerID), "manifests-oversize")
+	}
 	accepted := make([][]byte, 0, len(mfs.List))
+	valid := false
 	for _, wire := range mfs.List {
 		parsed, err := manifest.Deserialize(wire.STObject)
 		if err != nil {
@@ -109,6 +112,7 @@ func (r *Router) handleManifests(msg *peermanagement.InboundMessage) bool {
 		}
 		switch d := r.manifests.ApplyManifest(parsed); d {
 		case manifest.Accepted:
+			valid = true
 			accepted = append(accepted, wire.STObject)
 		case manifest.Invalid, manifest.BadMasterKey, manifest.BadEphemeralKey:
 			// Charge the sender — they gave us a manifest that
@@ -116,19 +120,20 @@ func (r *Router) handleManifests(msg *peermanagement.InboundMessage) bool {
 			// invariants (signature, key reuse, etc.).
 			r.adaptor.IncPeerBadData(uint64(msg.PeerID), "manifest-"+d.String())
 		case manifest.Stale:
+			valid = true
 			// Expected and harmless: a peer gossiped a manifest we
 			// already have at equal or higher seq. No action.
 		}
 	}
 	r.relayManifests(accepted)
-	return true
+	return valid
 }
 
 func (r *Router) relayManifests(serialized [][]byte) {
 	if len(serialized) == 0 {
 		return
 	}
-	frame, err := encodeManifestsFrame(serialized...)
+	frames, err := encodeManifestFrames(serialized...)
 	if err != nil {
 		r.logger.Warn("failed to encode manifest relay frame", "error", err)
 		return
@@ -137,7 +142,7 @@ func (r *Router) relayManifests(serialized [][]byte) {
 	if sender == nil {
 		return
 	}
-	if err := sender.Broadcast(frame); err != nil {
+	if err := sender.BroadcastManifestFrames(frames); err != nil {
 		r.logger.Warn("failed to broadcast manifest relay frame", "error", err)
 	}
 }
@@ -313,7 +318,7 @@ func (r *Router) handleValidation(msg *peermanagement.InboundMessage) {
 			"peer", msg.PeerID)
 		return
 	}
-	r.logger.Info("inbound validation accepted",
+	r.logger.Debug("inbound validation processed",
 		"t", "consensus",
 		"event", "validation-recv",
 		"peer", msg.PeerID,

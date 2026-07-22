@@ -20,8 +20,8 @@ type cacheEntry struct {
 }
 
 // isExpired checks if the cache entry has expired.
-func (e *cacheEntry) isExpired() bool {
-	return time.Now().After(e.expiresAt)
+func (e *cacheEntry) isExpired(now time.Time) bool {
+	return now.After(e.expiresAt)
 }
 
 // cacheShard is one stripe of the sharded cache. Each shard owns its own
@@ -100,7 +100,7 @@ func (c *Cache) Get(hash Hash256) (*Node, bool) {
 	}
 
 	entry := element.Value.(*cacheEntry)
-	if entry.isExpired() {
+	if entry.isExpired(time.Now()) {
 		s.removeElementLocked(element)
 		s.mu.Unlock()
 		c.expirations.Add(1)
@@ -121,34 +121,44 @@ func (c *Cache) Put(node *Node) {
 	if node == nil {
 		return
 	}
+	c.putOwned(node.Clone())
+}
 
-	owned := node.Clone()
+// putOwned transfers node to the cache without copying it. The caller must not
+// mutate node after the call; readers receive the same immutable pointer.
+func (c *Cache) putOwned(node *Node) {
+	if node == nil {
+		return
+	}
 	c.configMu.RLock()
 	ttl := c.ttl
 	c.configMu.RUnlock()
 
-	s := c.shardFor(owned.Hash)
+	s := c.shardFor(node.Hash)
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	if element, found := s.items[owned.Hash]; found {
+	if element, found := s.items[node.Hash]; found {
 		entry := element.Value.(*cacheEntry)
-		s.currentBytes = s.currentBytes - entry.size + owned.Size()
-		entry.node = owned
+		s.currentBytes = s.currentBytes - entry.size + node.Size()
+		entry.node = node
 		entry.expiresAt = time.Now().Add(ttl)
-		entry.size = owned.Size()
+		entry.size = node.Size()
 		s.lru.MoveToFront(element)
 		return
 	}
+	if s.currentSize >= s.maxItems {
+		c.expirations.Add(uint64(s.sweepExpiredLocked(time.Now())))
+	}
 
 	entry := &cacheEntry{
-		key:       owned.Hash,
-		node:      owned,
+		key:       node.Hash,
+		node:      node,
 		expiresAt: time.Now().Add(ttl),
-		size:      owned.Size(),
+		size:      node.Size(),
 	}
 	element := s.lru.PushFront(entry)
-	s.items[owned.Hash] = element
+	s.items[node.Hash] = element
 	s.currentSize++
 	s.currentBytes += entry.size
 
@@ -189,20 +199,10 @@ func (c *Cache) Sweep() int {
 	now := time.Now()
 	for _, s := range c.shards {
 		s.mu.Lock()
-		for element := s.lru.Back(); element != nil; {
-			entry := element.Value.(*cacheEntry)
-			if now.After(entry.expiresAt) {
-				next := element.Prev()
-				s.removeElementLocked(element)
-				c.expirations.Add(1)
-				removed++
-				element = next
-			} else {
-				// LRU is insertion-ordered: a fresh tail implies a fresher head.
-				break
-			}
-		}
+		n := s.sweepExpiredLocked(now)
 		s.mu.Unlock()
+		c.expirations.Add(uint64(n))
+		removed += n
 	}
 	return removed
 }
@@ -277,6 +277,7 @@ func (c *Cache) SetMaxSize(maxSize int) {
 	for _, s := range c.shards {
 		s.mu.Lock()
 		s.maxItems = perShard
+		c.expirations.Add(uint64(s.sweepExpiredLocked(time.Now())))
 		for s.currentSize > s.maxItems {
 			if !s.evictOldestLocked() {
 				break
@@ -285,6 +286,22 @@ func (c *Cache) SetMaxSize(maxSize int) {
 		}
 		s.mu.Unlock()
 	}
+}
+
+// sweepExpiredLocked removes every expired entry. Accesses reorder the LRU
+// without extending TTL, so expiration order cannot be inferred from list
+// position. Caller must hold s.mu.
+func (s *cacheShard) sweepExpiredLocked(now time.Time) int {
+	removed := 0
+	for element := s.lru.Back(); element != nil; {
+		next := element.Prev()
+		if element.Value.(*cacheEntry).isExpired(now) {
+			s.removeElementLocked(element)
+			removed++
+		}
+		element = next
+	}
+	return removed
 }
 
 // removeElementLocked removes element. Caller must hold s.mu.

@@ -51,7 +51,32 @@ func startBootstrapTestOverlay(t *testing.T, opts ...Option) *Overlay {
 	return overlay
 }
 
-func TestBootstrapGovernorSerializesColdConnections(t *testing.T) {
+func TestOverlayPrepareAutoconnectCapsOnlyColdBootstrap(t *testing.T) {
+	overlay := &Overlay{}
+
+	count, cold, lease, ok := overlay.prepareAutoconnect(5)
+	require.True(t, ok)
+	assert.True(t, cold)
+	assert.Equal(t, 1, count)
+	require.NotNil(t, lease)
+	assert.Equal(t, 1, overlay.bootstrap.activeCount())
+
+	blockedCount, blockedCold, blockedLease, blocked := overlay.prepareAutoconnect(5)
+	assert.False(t, blocked)
+	assert.True(t, blockedCold)
+	assert.Zero(t, blockedCount)
+	assert.Nil(t, blockedLease)
+
+	lease.markReady()
+	count, cold, lease, ok = overlay.prepareAutoconnect(5)
+	require.True(t, ok)
+	assert.False(t, cold)
+	assert.Equal(t, 5, count)
+	assert.Nil(t, lease)
+	assert.Zero(t, overlay.bootstrap.activeCount())
+}
+
+func TestBootstrapGovernorAllowsOneBoundedHedge(t *testing.T) {
 	var governor bootstrapGovernor
 	first, ok := governor.tryReserve()
 	require.True(t, ok)
@@ -60,16 +85,218 @@ func TestBootstrapGovernorSerializesColdConnections(t *testing.T) {
 	_, ok = governor.tryReserve()
 	assert.False(t, ok)
 
-	first.release()
+	assert.True(t, first.observeProgress(bootstrapFrameProgress{
+		messageType: TypeManifests,
+		wireSize:    60_431_740,
+		bytesRead:   1 << 20,
+		elapsed:     19 * time.Second,
+	}).hedge)
+
 	second, ok := governor.tryReserve()
 	require.True(t, ok)
 	require.NotNil(t, second)
-	second.markReady()
+	_, ok = governor.tryReserve()
+	assert.False(t, ok)
+	assert.Equal(t, 2, governor.activeCount())
+
+	second.release()
+	replacement, ok := governor.tryReserve()
+	require.True(t, ok)
+	require.NotNil(t, replacement)
+	replacement.release()
+	first.markReady()
 
 	assert.True(t, governor.isReady())
 	lease, ok := governor.tryReserve()
 	assert.True(t, ok)
-	assert.Nil(t, lease)
+	assert.NotNil(t, lease)
+	lease.release()
+}
+
+func TestBootstrapGovernorStagesOneWarmupAfterReady(t *testing.T) {
+	var governor bootstrapGovernor
+	lease, ok := governor.tryReserve()
+	require.True(t, ok)
+	lease.markReady()
+
+	next, reserved := governor.tryReserve()
+	require.True(t, reserved)
+	require.NotNil(t, next)
+	_, reserved = governor.tryReserve()
+	assert.False(t, reserved)
+	assert.Equal(t, 1, governor.activeCount())
+
+	next.markReady()
+	assert.Equal(t, 0, governor.activeCount())
+	replacement, reserved := governor.tryReserve()
+	require.True(t, reserved)
+	require.NotNil(t, replacement)
+	replacement.release()
+}
+
+func TestBootstrapGovernorHedgesOnlySlowManifestTransfers(t *testing.T) {
+	tests := []struct {
+		name string
+		rate uint64
+		want bool
+	}{
+		{name: "issue first source", rate: 444_146, want: true},
+		{name: "issue second source", rate: 360_735, want: true},
+		{name: "live pathological source", rate: 15_704, want: true},
+		{name: "finishes within target", rate: 650_000, want: false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var governor bootstrapGovernor
+			lease, ok := governor.tryReserve()
+			require.True(t, ok)
+			elapsed := bootstrapSampleAge
+			bytesRead := tt.rate * uint64(elapsed) / uint64(time.Second)
+
+			observation := lease.observeProgress(bootstrapFrameProgress{
+				messageType: TypeManifests,
+				wireSize:    60_431_740,
+				bytesRead:   bytesRead,
+				elapsed:     elapsed,
+			})
+			assert.True(t, observation.sampled)
+			assert.Equal(t, tt.want, observation.hedge)
+		})
+	}
+}
+
+func TestBootstrapReleasedLeaseCannotEnableHedge(t *testing.T) {
+	var governor bootstrapGovernor
+	lease, ok := governor.tryReserve()
+	require.True(t, ok)
+	lease.release()
+
+	assert.False(t, lease.observeProgress(bootstrapFrameProgress{
+		messageType: TypeManifests,
+		wireSize:    60_431_740,
+		bytesRead:   1 << 20,
+		elapsed:     30 * time.Second,
+	}).hedge)
+	assert.Equal(t, 0, governor.activeCount())
+}
+
+func TestBootstrapFlowRotatesTwoCutoffSourcesAndCompletesFromThird(t *testing.T) {
+	now := time.Unix(5_000, 0)
+	discovery := NewDiscovery(&Config{
+		MaxOutbound: 3,
+		Clock:       func() time.Time { return now },
+	}, nil)
+	for _, address := range []string{
+		"192.0.2.1:51235",
+		"192.0.2.2:51235",
+		"192.0.2.3:51235",
+	} {
+		discovery.AddPeer(address, 0, 0)
+		discovery.markNegotiatedCompression(address, false)
+	}
+
+	var governor bootstrapGovernor
+	first, ok := governor.tryReserve()
+	require.True(t, ok)
+	firstCandidates := discovery.selectPeersToConnect(1, true)
+	require.Len(t, firstCandidates, 1)
+	firstAddress := firstCandidates[0]
+	firstProgress := bootstrapFrameProgress{
+		messageType: TypeManifests,
+		wireSize:    60_431_740,
+		bytesRead:   444_146 * 19,
+		elapsed:     19 * time.Second,
+	}
+	firstObservation := first.observeProgress(firstProgress)
+	require.True(t, firstObservation.hedge)
+	discovery.observeBootstrapSource(firstAddress, firstObservation.projected)
+	assert.LessOrEqual(t, governor.activeCount(), 2)
+
+	second, ok := governor.tryReserve()
+	require.True(t, ok)
+	secondCandidates := discovery.selectPeersToConnect(1, true)
+	require.Len(t, secondCandidates, 1)
+	secondAddress := secondCandidates[0]
+	require.NotEqual(t, firstAddress, secondAddress)
+	secondProgress := bootstrapFrameProgress{
+		messageType: TypeManifests,
+		wireSize:    60_431_740,
+		bytesRead:   360_735 * 24,
+		elapsed:     24 * time.Second,
+	}
+	secondObservation := second.observeProgress(secondProgress)
+	require.True(t, secondObservation.sampled)
+	assert.False(t, secondObservation.hedge)
+	discovery.observeBootstrapSource(secondAddress, secondObservation.projected)
+	assert.Equal(t, 2, governor.activeCount())
+	_, ok = governor.tryReserve()
+	assert.False(t, ok)
+
+	for _, failed := range []struct {
+		address string
+		lease   *bootstrapLease
+	}{
+		{address: firstAddress, lease: first},
+		{address: secondAddress, lease: second},
+	} {
+		failed.lease.release()
+		discovery.delayBootstrapRetry(failed.address, bootstrapPartialRetry)
+		discovery.finishConnectAttempt(failed.address, connectAttemptReleased)
+		assert.LessOrEqual(t, governor.activeCount(), 2)
+	}
+
+	third, ok := governor.tryReserve()
+	require.True(t, ok)
+	thirdCandidates := discovery.selectPeersToConnect(1, true)
+	require.Len(t, thirdCandidates, 1)
+	thirdAddress := thirdCandidates[0]
+	assert.NotEqual(t, firstAddress, thirdAddress)
+	assert.NotEqual(t, secondAddress, thirdAddress)
+	thirdObservation := third.observeProgress(bootstrapFrameProgress{
+		messageType: TypeManifests,
+		wireSize:    60_431_740,
+		bytesRead:   650_000 * 15,
+		elapsed:     15 * time.Second,
+	})
+	require.True(t, thirdObservation.sampled)
+	assert.LessOrEqual(t, thirdObservation.projected, bootstrapTargetDuration)
+	discovery.observeBootstrapSource(thirdAddress, thirdObservation.projected)
+	third.markReady()
+
+	assert.True(t, governor.isReady())
+	assert.Zero(t, governor.activeCount())
+	lease, ok := governor.tryReserve()
+	assert.True(t, ok)
+	assert.NotNil(t, lease)
+	lease.release()
+}
+
+func TestBootstrapFlowDoesNotDialWhileEverySourceIsCoolingDown(t *testing.T) {
+	now := time.Unix(6_000, 0)
+	discovery := NewDiscovery(&Config{
+		MaxOutbound: 2,
+		Clock:       func() time.Time { return now },
+	}, nil)
+	for _, address := range []string{"192.0.2.1:51235", "192.0.2.2:51235"} {
+		discovery.AddPeer(address, 0, 0)
+		discovery.observeBootstrapSource(address, bootstrapTargetDuration+time.Second)
+	}
+
+	var governor bootstrapGovernor
+	for range 100 {
+		lease, ok := governor.tryReserve()
+		require.True(t, ok)
+		assert.Empty(t, discovery.selectPeersToConnect(1, true))
+		lease.release()
+		assert.Zero(t, governor.activeCount())
+	}
+	status := discovery.bootstrapSourceSummary()
+	assert.True(t, status.allUnviable())
+	assert.Equal(t, status.known, status.unviable)
+
+	now = now.Add(bootstrapPartialRetry)
+	assert.NotEmpty(t, discovery.selectPeersToConnect(1, true))
 }
 
 func TestDiscoveryBootstrapSelectionLimitsFixedPeers(t *testing.T) {
@@ -157,11 +384,27 @@ func TestDiscoveryBootstrapRetryDelayStartsAtDisconnect(t *testing.T) {
 	}, nil)
 	d.AddPeer(address, 0, 0)
 	d.MarkConnected(address, 1)
-	d.delayBootstrapRetry(address)
+	d.delayBootstrapRetry(address, recentConnectAttempt)
 	d.MarkDisconnected(1)
 
 	assert.Empty(t, d.selectPeersToConnect(1, true))
 	now = now.Add(recentConnectAttempt)
+	assert.Equal(t, []string{address}, d.selectPeersToConnect(1, true))
+}
+
+func TestDiscoveryPartialBootstrapFailureIsQuarantined(t *testing.T) {
+	now := time.Unix(4_000, 0)
+	address := "192.0.2.1:51235"
+	d := NewDiscovery(&Config{
+		MaxOutbound: 1,
+		Clock:       func() time.Time { return now },
+	}, nil)
+	d.AddPeer(address, 0, 0)
+	d.delayBootstrapRetry(address, bootstrapPartialRetry)
+
+	now = now.Add(recentConnectAttempt)
+	assert.Empty(t, d.selectPeersToConnect(1, true))
+	now = now.Add(bootstrapPartialRetry - recentConnectAttempt)
 	assert.Equal(t, []string{address}, d.selectPeersToConnect(1, true))
 }
 
@@ -172,6 +415,24 @@ func TestPeerBootstrapAcknowledgementFiresOnce(t *testing.T) {
 	peer.acknowledgeBootstrap()
 	peer.acknowledgeBootstrap()
 	assert.Equal(t, 1, called)
+}
+
+func TestOverlayRejectAfterBootstrapAcknowledgementKeepsPeer(t *testing.T) {
+	var governor bootstrapGovernor
+	lease, ok := governor.tryReserve()
+	require.True(t, ok)
+	peer := &Peer{id: 1, onBootstrapReady: lease.markReady, closeCh: make(chan struct{})}
+	overlay := &Overlay{peers: map[PeerID]*Peer{1: peer}}
+	overlay.trackPeerBootstrap(1, lease)
+
+	overlay.AcknowledgePeerBootstrap(1)
+	overlay.RejectPeerBootstrap(1)
+
+	select {
+	case <-peer.closeCh:
+		t.Fatal("rejection after bootstrap acknowledgement closed the peer")
+	default:
+	}
 }
 
 func TestOverlayMalformedPingDoesNotAcknowledgeBootstrap(t *testing.T) {
@@ -222,6 +483,7 @@ func TestOverlayDroppedManifestDoesNotAcknowledgeBootstrap(t *testing.T) {
 		peers:    map[PeerID]*Peer{1: peer},
 		messages: messages,
 	}
+	overlay.trackPeerBootstrap(1, lease)
 	payload, err := message.Encode(&message.Manifests{
 		List: []message.Manifest{{STObject: []byte{1}}},
 	})
@@ -241,7 +503,7 @@ func TestOverlayDroppedManifestDoesNotAcknowledgeBootstrap(t *testing.T) {
 	}
 }
 
-func TestOverlayColdBootstrapAdmitsOnePeerUntilStartupFrameCompletes(t *testing.T) {
+func TestOverlayStagesNextOutboundPeerUntilStartupFrameCompletes(t *testing.T) {
 	connections := make(chan bootstrapConnection, 2)
 	first := startBootstrapTestOverlay(t)
 	second := startBootstrapTestOverlay(t, WithListenAddr("[::1]:0"))
@@ -256,6 +518,24 @@ func TestOverlayColdBootstrapAdmitsOnePeerUntilStartupFrameCompletes(t *testing.
 		WithMaxOutbound(2),
 		WithFixedPeers(first.ListenAddr(), second.ListenAddr()),
 	)
+	acknowledge := func(connected bootstrapConnection) {
+		t.Helper()
+		payload, err := message.Encode(&message.Manifests{
+			List: []message.Manifest{{STObject: []byte{1}}},
+		})
+		require.NoError(t, err)
+		var frame bytes.Buffer
+		require.NoError(t, message.WriteMessage(&frame, message.TypeManifests, payload))
+		require.NoError(t, connected.overlay.Send(connected.peerID, frame.Bytes()))
+		select {
+		case inbound := <-client.ManifestMessages():
+			_, err := message.Decode(message.TypeManifests, inbound.Payload)
+			require.NoError(t, err)
+			client.AcknowledgePeerBootstrap(inbound.PeerID)
+		case <-time.After(5 * time.Second):
+			t.Fatal("startup manifests did not reach the protocol consumer")
+		}
+	}
 
 	var connected bootstrapConnection
 	select {
@@ -271,21 +551,7 @@ func TestOverlayColdBootstrapAdmitsOnePeerUntilStartupFrameCompletes(t *testing.
 	case <-time.After(250 * time.Millisecond):
 	}
 
-	payload, err := message.Encode(&message.Manifests{
-		List: []message.Manifest{{STObject: []byte{1}}},
-	})
-	require.NoError(t, err)
-	var frame bytes.Buffer
-	require.NoError(t, message.WriteMessage(&frame, message.TypeManifests, payload))
-	require.NoError(t, connected.overlay.Send(connected.peerID, frame.Bytes()))
-	select {
-	case inbound := <-client.Messages():
-		_, err := message.Decode(message.TypeManifests, inbound.Payload)
-		require.NoError(t, err)
-		client.AcknowledgePeerBootstrap(inbound.PeerID)
-	case <-time.After(5 * time.Second):
-		t.Fatal("startup manifests did not reach the protocol consumer")
-	}
+	acknowledge(connected)
 	require.Eventually(t, client.bootstrap.isReady, 5*time.Second, 10*time.Millisecond)
 
 	client.autoconnect(context.Background())

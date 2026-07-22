@@ -69,11 +69,10 @@ type Components struct {
 	Archive *archive.Archive
 
 	// cancel functions for background goroutines
-	overlayCancel          context.CancelFunc
-	routerCancel           context.CancelFunc
-	manifestPeriodicCancel context.CancelFunc
-	sitePollerCancel       context.CancelFunc
-	vlTickCancel           context.CancelFunc
+	overlayCancel    context.CancelFunc
+	routerCancel     context.CancelFunc
+	sitePollerCancel context.CancelFunc
+	vlTickCancel     context.CancelFunc
 
 	// routerDone is closed when the Router.Run loop returns, so Stop can join it
 	// rather than fire-and-forgetting: an in-process restart cycle would
@@ -88,14 +87,6 @@ type Components struct {
 // between a rotation's effective time and trusted-set update to half a
 // minute in the worst case.
 const validatorListTickInterval = 30 * time.Second
-
-// periodicManifestBroadcastInterval is how often Components.Start
-// re-emits the cached aggregate TMManifests frame. Manifests are
-// otherwise only sent on-connect, which leaves peers who join after
-// our boot burst depending on an indirect relay; this loop closes the
-// gap. Duplicate frames are harmless — peers treat an already-seen
-// manifest as stale and drop it.
-const periodicManifestBroadcastInterval = 5 * time.Minute
 
 // Start launches all background goroutines (overlay, engine, router).
 func (c *Components) Start() error {
@@ -143,12 +134,6 @@ func (c *Components) Start() error {
 		c.Router.Run(routerCtx)
 	}()
 
-	// Periodic re-emission. Cheap when there's nothing to broadcast:
-	// the emission path short-circuits on an empty / unwired cache.
-	periodicCtx, periodicCancel := context.WithCancel(context.Background())
-	c.manifestPeriodicCancel = periodicCancel
-	go c.runPeriodicManifestBroadcast(periodicCtx, periodicManifestBroadcastInterval)
-
 	// Start the publisher-list HTTP poller. Cancellation propagates to
 	// per-URL goroutines via the poller's own stop channel.
 	if c.ValidatorListPoller != nil {
@@ -187,25 +172,6 @@ func (c *Components) runValidatorListTick(ctx context.Context, interval time.Dur
 	}
 }
 
-func (c *Components) runPeriodicManifestBroadcast(ctx context.Context, interval time.Duration) {
-	if c.Router == nil || interval <= 0 {
-		return
-	}
-	ticker := time.NewTicker(interval)
-	defer ticker.Stop()
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		case <-ticker.C:
-			if n := c.Router.BroadcastLocalManifest(); n > 0 {
-				slog.Info("periodic local manifest broadcast",
-					"t", "Components.runPeriodicManifestBroadcast", "peers", n)
-			}
-		}
-	}
-}
-
 // Stop gracefully shuts down all components.
 func (c *Components) Stop() {
 	if c.vlTickCancel != nil {
@@ -216,9 +182,6 @@ func (c *Components) Stop() {
 	}
 	if c.ValidatorListPoller != nil {
 		c.ValidatorListPoller.Stop()
-	}
-	if c.manifestPeriodicCancel != nil {
-		c.manifestPeriodicCancel()
 	}
 	if c.routerCancel != nil {
 		c.routerCancel()
@@ -383,13 +346,13 @@ func NewFromConfig(
 	// proposing, so wrongLedger needs to demote opMode.
 	engine.Subscribe(modeManager)
 
-	// Consensus frames arrive on overlay.Messages(); transactions arrive on
-	// the separate overlay.TxMessages() lane and acquisition replies on
-	// overlay.LedgerDataMessages(), so neither a tx flood nor a serve flood
-	// can starve a reply this node explicitly requested.
+	// Consensus, transaction, acquisition-reply, and manifest traffic arrive
+	// on independent overlay lanes, so expensive verification or a flood on
+	// one lane cannot starve the others.
 	router := NewRouter(engine, adaptor, overlay.Messages())
 	router.SetTxInbox(overlay.TxMessages())
 	router.SetAcqInbox(overlay.LedgerDataMessages())
+	router.SetManifestInbox(overlay.ManifestMessages())
 	router.SetManifestCache(manifestCache, overlay)
 	router.setPeerSessionView(overlay)
 	router.SetMinimumOnlineFloor(floor)

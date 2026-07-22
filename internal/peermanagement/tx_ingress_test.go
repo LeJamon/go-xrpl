@@ -4,6 +4,7 @@ import (
 	"runtime"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -20,6 +21,7 @@ func newLaneTestOverlay(consensusCap, txCap, ledgerDataCap int) *Overlay {
 		messages:   make(chan *InboundMessage, consensusCap),
 		txMessages: make(chan *InboundMessage, txCap),
 		ledgerData: make(chan *InboundMessage, ledgerDataCap),
+		stopCh:     make(chan struct{}),
 	}
 }
 
@@ -103,16 +105,13 @@ func TestOverlay_TxFlood_DoesNotStarveConsensusLane(t *testing.T) {
 		"acquisition replies must reach the dedicated lane despite the tx flood")
 	assert.Equal(t, uint64(0), o.DroppedMessages(),
 		"no consensus frame may be dropped while only the tx lane is saturated")
-	assert.Equal(t, uint64(0), o.DroppedLedgerData(),
-		"no acquisition reply may be dropped while only the tx lane is saturated")
 }
 
 // TestOverlay_NonTxUsesConsensusLane confirms the counters stay
 // class-specific: a consensus frame (mtPROPOSE) that overflows the
 // consensus lane bumps droppedMessages and never touches
-// droppedTransactions or droppedLedgerData, so the jq_trans_overflow signal
-// isn't polluted by unrelated traffic. The tx and acquisition lanes stay
-// empty.
+// droppedTransactions, so the jq_trans_overflow signal isn't polluted by
+// unrelated traffic. The tx and acquisition lanes stay empty.
 func TestOverlay_NonTxUsesConsensusLane(t *testing.T) {
 	o := newLaneTestOverlay(1, 8, 8)
 
@@ -129,35 +128,47 @@ func TestOverlay_NonTxUsesConsensusLane(t *testing.T) {
 		"DroppedMessages must record consensus-lane overflow")
 	assert.Equal(t, uint64(0), o.DroppedTransactions(),
 		"DroppedTransactions must not move when only consensus frames overflow")
-	assert.Equal(t, uint64(0), o.DroppedLedgerData(),
-		"DroppedLedgerData must not move when only consensus frames overflow")
 	assert.Equal(t, 0, len(o.txMessages),
 		"consensus traffic must never reach the tx lane")
 	assert.Equal(t, 0, len(o.ledgerData),
 		"consensus traffic must never reach the acquisition lane")
 }
 
-// TestOverlay_AcquisitionRepliesUseDedicatedLane pins the fix: mtLEDGER_DATA
-// (a reply this node explicitly requested) rides its own lane, never the
-// shared consensus lane, and overflow there bumps only droppedLedgerData. A
-// serve/propose flood on the consensus lane therefore can't shed a requested
-// acquisition reply and wedge catch-up.
+// TestOverlay_AcquisitionRepliesUseDedicatedLane pins bounded backpressure:
+// a requested reply waits for capacity instead of being discarded.
 func TestOverlay_AcquisitionRepliesUseDedicatedLane(t *testing.T) {
 	o := newLaneTestOverlay(8, 8, 1)
+	o.onMessageReceived(Event{
+		Type:        EventMessageReceived,
+		PeerID:      PeerID(1),
+		MessageType: uint16(message.TypeLedgerData),
+		Payload:     []byte{0x00},
+	})
 
-	for range 4 {
+	done := make(chan struct{})
+	go func() {
 		o.onMessageReceived(Event{
 			Type:        EventMessageReceived,
 			PeerID:      PeerID(1),
 			MessageType: uint16(message.TypeLedgerData),
 			Payload:     []byte{0x00},
 		})
+		close(done)
+	}()
+	select {
+	case <-done:
+		t.Fatal("acquisition reply was not backpressured")
+	case <-time.After(20 * time.Millisecond):
+	}
+	<-o.ledgerData
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("acquisition reply did not resume after capacity became available")
 	}
 
 	assert.Equal(t, 1, len(o.ledgerData),
-		"acquisition replies must ride the dedicated lane up to its capacity")
-	assert.Greater(t, o.DroppedLedgerData(), uint64(0),
-		"DroppedLedgerData must record dedicated-lane overflow")
+		"the resumed acquisition reply must occupy the released slot")
 	assert.Equal(t, uint64(0), o.DroppedMessages(),
 		"acquisition-lane overflow must not touch the consensus-lane counter")
 	assert.Equal(t, uint64(0), o.DroppedTransactions(),
@@ -166,6 +177,38 @@ func TestOverlay_AcquisitionRepliesUseDedicatedLane(t *testing.T) {
 		"acquisition replies must never reach the consensus lane")
 	assert.Equal(t, 0, len(o.txMessages),
 		"acquisition replies must never reach the tx lane")
+}
+
+func TestOverlay_AcquisitionBackpressureReleasesOnRunShutdown(t *testing.T) {
+	o := newLaneTestOverlay(8, 8, 1)
+	runDone := make(chan struct{})
+	o.runDone = runDone
+	o.ledgerData <- &InboundMessage{}
+
+	done := make(chan struct{})
+	go func() {
+		o.onMessageReceived(Event{
+			Type:        EventMessageReceived,
+			PeerID:      PeerID(1),
+			MessageType: uint16(message.TypeLedgerData),
+			Payload:     []byte{0x00},
+		})
+		close(done)
+	}()
+
+	select {
+	case <-done:
+		t.Fatal("acquisition reply was not backpressured")
+	case <-time.After(20 * time.Millisecond):
+	}
+	close(runDone)
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("acquisition backpressure did not release when the run stopped")
+	}
+	assert.Equal(t, 1, len(o.ledgerData),
+		"shutdown must not enqueue the blocked acquisition reply")
 }
 
 // TestOverlay_TxLane_BoundedGoroutines is the bounded-backpressure soak:

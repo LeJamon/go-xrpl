@@ -128,6 +128,8 @@ func (s *Service) flushPersists(ctx context.Context) error {
 // closes the underlying node/relational stores. Idempotent and safe on a
 // never-started Service. Must be called before those stores are closed.
 func (s *Service) Stop() {
+	s.stopNodeStoreSweeper()
+
 	s.persistMu.Lock()
 	persistWasStarted := s.persistStarted
 	waitPersist := s.persistStarted && !s.persistStopping

@@ -186,6 +186,7 @@ type GetLedger struct {
 	RequestCookieSet bool             `json:"-"`
 	QueryType        *LedgerQueryType `json:"query_type,omitempty"`
 	QueryDepth       uint32           `json:"query_depth,omitempty"`
+	QueryDepthSet    bool             `json:"-"`
 }
 
 func (g *GetLedger) Type() MessageType { return TypeGetLedger }
@@ -198,6 +199,11 @@ func (g *GetLedger) HasLedgerSeq() bool {
 // HasRequestCookie reports protobuf field presence, including an explicit zero.
 func (g *GetLedger) HasRequestCookie() bool {
 	return g != nil && (g.RequestCookieSet || g.RequestCookie != 0)
+}
+
+// HasQueryDepth reports protobuf field presence, including an explicit zero.
+func (g *GetLedger) HasQueryDepth() bool {
+	return g != nil && (g.QueryDepthSet || g.QueryDepth != 0)
 }
 
 // LedgerData contains ledger data response.

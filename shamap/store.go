@@ -26,6 +26,32 @@ func DeserializeFromPrefix(data []byte) (NodeReader, error) {
 	return deserializeFromPrefix(data)
 }
 
+// FlushEntryFromWire verifies a wire-format node and converts it to the
+// prefix-format representation used by Family implementations.
+func FlushEntryFromWire(data []byte, ledgerSeq uint32, mapType Type) (FlushEntry, error) {
+	node, err := deserializeNodeFromWire(data)
+	if err != nil {
+		return FlushEntry{}, err
+	}
+	if err := node.UpdateHash(); err != nil {
+		return FlushEntry{}, err
+	}
+	return flushEntryForNode(node, ledgerSeq, mapType)
+}
+
+func flushEntryForNode(node Node, ledgerSeq uint32, mapType Type) (FlushEntry, error) {
+	prefixed, err := node.SerializeWithPrefix()
+	if err != nil {
+		return FlushEntry{}, err
+	}
+	return FlushEntry{
+		Hash:      node.Hash(),
+		Data:      prefixed,
+		LedgerSeq: ledgerSeq,
+		MapType:   mapType,
+	}, nil
+}
+
 // deserializeFromPrefix creates a SHAMap node from prefix-format data.
 // The first 4 bytes are the hash prefix which identifies the node type.
 // Inner nodes are created with hashes set but children nil (lazy loading).

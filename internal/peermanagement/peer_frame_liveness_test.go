@@ -47,7 +47,66 @@ type chunkedLivenessConn struct {
 	mu           sync.Mutex
 	readDeadline time.Time
 	deadlines    []time.Time
+	writeCalls   int
+	writeLimits  int
+	writeErr     error
+	writes       [][]byte
 }
+
+type pacedManifestConn struct {
+	permit   chan struct{}
+	observed chan []byte
+	resume   chan struct{}
+}
+
+func newPacedManifestConn() *pacedManifestConn {
+	return &pacedManifestConn{
+		permit:   make(chan struct{}),
+		observed: make(chan []byte),
+		resume:   make(chan struct{}),
+	}
+}
+
+func (*pacedManifestConn) Read([]byte) (int, error) { return 0, io.EOF }
+
+func (c *pacedManifestConn) Write(src []byte) (int, error) {
+	<-c.permit
+	c.observed <- append([]byte(nil), src...)
+	<-c.resume
+	return len(src), nil
+}
+
+func (c *pacedManifestConn) nextWrite(t *testing.T) []byte {
+	t.Helper()
+	select {
+	case c.permit <- struct{}{}:
+	case <-time.After(time.Second):
+		t.Fatal("writer did not request the next frame")
+	}
+	select {
+	case data := <-c.observed:
+		return data
+	case <-time.After(time.Second):
+		t.Fatal("writer did not emit the permitted frame")
+		return nil
+	}
+}
+
+func (c *pacedManifestConn) resumeWrite(t *testing.T) {
+	t.Helper()
+	select {
+	case c.resume <- struct{}{}:
+	case <-time.After(time.Second):
+		t.Fatal("writer did not finish the current frame")
+	}
+}
+
+func (*pacedManifestConn) Close() error                     { return nil }
+func (*pacedManifestConn) LocalAddr() net.Addr              { return livenessAddr("local") }
+func (*pacedManifestConn) RemoteAddr() net.Addr             { return livenessAddr("remote") }
+func (*pacedManifestConn) SetDeadline(time.Time) error      { return nil }
+func (*pacedManifestConn) SetReadDeadline(time.Time) error  { return nil }
+func (*pacedManifestConn) SetWriteDeadline(time.Time) error { return nil }
 
 func (c *chunkedLivenessConn) Read(dst []byte) (int, error) {
 	c.mu.Lock()
@@ -73,12 +132,179 @@ func (c *chunkedLivenessConn) Read(dst []byte) (int, error) {
 	return n, err
 }
 
-func (c *chunkedLivenessConn) Write(src []byte) (int, error) { return len(src), nil }
-func (c *chunkedLivenessConn) Close() error                  { return nil }
-func (c *chunkedLivenessConn) LocalAddr() net.Addr           { return livenessAddr("local") }
-func (c *chunkedLivenessConn) RemoteAddr() net.Addr          { return livenessAddr("remote") }
-func (c *chunkedLivenessConn) SetDeadline(time.Time) error   { return nil }
+func (c *chunkedLivenessConn) Write(src []byte) (int, error) {
+	c.mu.Lock()
+	c.writeCalls++
+	c.writes = append(c.writes, append([]byte(nil), src...))
+	err := c.writeErr
+	c.mu.Unlock()
+	if err != nil {
+		return 0, err
+	}
+	return len(src), nil
+}
+
+func TestPeerWriteLoopPrioritizesAcquisitionTraffic(t *testing.T) {
+	clock := &livenessClock{now: time.Unix(5_900, 0)}
+	conn := &chunkedLivenessConn{clock: clock}
+	peer, _ := newFrameLivenessPeer(t, clock, conn)
+	require.NoError(t, peer.Send([]byte("gossip")))
+	require.NoError(t, peer.SendPriority([]byte("acquisition")))
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- peer.writeLoop(ctx) }()
+	require.Eventually(t, func() bool {
+		conn.mu.Lock()
+		defer conn.mu.Unlock()
+		return len(conn.writes) == 2
+	}, time.Second, time.Millisecond)
+	cancel()
+	require.ErrorIs(t, <-done, context.Canceled)
+	conn.mu.Lock()
+	defer conn.mu.Unlock()
+	require.Equal(t, []byte("acquisition"), conn.writes[0])
+	require.Equal(t, []byte("gossip"), conn.writes[1])
+}
+
+func TestPeerWriteLoopPacesManifestSequenceBeyondOrdinaryQueueCapacity(t *testing.T) {
+	clock := &livenessClock{now: time.Unix(5_950, 0)}
+	conn := newPacedManifestConn()
+	peer, _ := newFrameLivenessPeer(t, clock, conn)
+	frames := make([][]byte, DefaultSendBufferSize+17)
+	for i := range frames {
+		frames[i] = []byte{0x4d, byte(i)}
+	}
+	require.NoError(t, peer.SendManifestFrames(frames))
+	require.NoError(t, peer.Send([]byte{0x4f, 0}))
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- peer.writeLoop(ctx) }()
+
+	require.Equal(t, frames[0], conn.nextWrite(t), "a queued manifest batch must start despite ordinary traffic")
+	require.NoError(t, peer.SendPriority([]byte{0x50}))
+	conn.resumeWrite(t)
+	require.Equal(t, []byte{0x50}, conn.nextWrite(t), "priority traffic must preempt an active manifest batch")
+	conn.resumeWrite(t)
+
+	manifestIndex := 1
+	ordinaryObserved := 0
+	maxOrdinaryQueue := len(peer.send)
+	for manifestIndex < len(frames) {
+		ordinarySinceManifest := 0
+	manifestBurst:
+		for {
+			data := conn.nextWrite(t)
+			require.NotEmpty(t, data)
+			switch data[0] {
+			case 0x4f:
+				require.Equal(t, byte(ordinaryObserved), data[1])
+				ordinaryObserved++
+				ordinarySinceManifest++
+				require.NoError(t, peer.Send([]byte{0x4f, byte(ordinaryObserved)}))
+				if queued := len(peer.send); queued > maxOrdinaryQueue {
+					maxOrdinaryQueue = queued
+				}
+				conn.resumeWrite(t)
+			case 0x4d:
+				require.Equal(t, frames[manifestIndex], data)
+				require.Equal(t, ordinaryFramesPerManifestChunk, ordinarySinceManifest)
+				manifestIndex++
+				conn.resumeWrite(t)
+				break manifestBurst
+			default:
+				t.Fatalf("unexpected outbound frame: %x", data)
+			}
+		}
+	}
+
+	require.Equal(t, DefaultSendBufferSize+17, manifestIndex)
+	require.Equal(t, (len(frames)-1)*ordinaryFramesPerManifestChunk, ordinaryObserved)
+	require.Less(t, maxOrdinaryQueue, DefaultSendBufferSize)
+	require.Equal(t, []byte{0x4f, byte(ordinaryObserved)}, conn.nextWrite(t))
+	conn.resumeWrite(t)
+	require.Empty(t, peer.send)
+	cancel()
+	require.ErrorIs(t, <-done, context.Canceled)
+}
+
+func TestPeerWriteLoopPacesBackToBackSingleFrameManifestBatches(t *testing.T) {
+	clock := &livenessClock{now: time.Unix(5_975, 0)}
+	conn := newPacedManifestConn()
+	peer, _ := newFrameLivenessPeer(t, clock, conn)
+	firstManifest := []byte{0x4d, 0x01}
+	secondManifest := []byte{0x4d, 0x02}
+	require.NoError(t, peer.SendManifestFrames([][]byte{firstManifest}))
+	require.NoError(t, peer.SendManifestFrames([][]byte{secondManifest}))
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- peer.writeLoop(ctx) }()
+
+	require.Equal(t, firstManifest, conn.nextWrite(t))
+	require.NoError(t, peer.Send([]byte{0x4f, 0}))
+	conn.resumeWrite(t)
+
+	for i := 0; i < ordinaryFramesPerManifestChunk; i++ {
+		require.Equal(t, []byte{0x4f, byte(i)}, conn.nextWrite(t))
+		require.NoError(t, peer.Send([]byte{0x4f, byte(i + 1)}))
+		require.Len(t, peer.send, 1)
+		conn.resumeWrite(t)
+	}
+
+	require.Equal(t, secondManifest, conn.nextWrite(t))
+	conn.resumeWrite(t)
+	require.Equal(t, []byte{0x4f, ordinaryFramesPerManifestChunk}, conn.nextWrite(t))
+	conn.resumeWrite(t)
+	require.Empty(t, peer.send)
+	cancel()
+	require.ErrorIs(t, <-done, context.Canceled)
+}
+
+func TestPeerManifestQueueIsBounded(t *testing.T) {
+	peer := newLatencyTestPeer(t)
+	for i := range manifestSendBufferSize {
+		require.NoError(t, peer.SendManifestFrames([][]byte{{0x4d, byte(i)}}))
+	}
+	require.Len(t, peer.manifestSend, manifestSendBufferSize)
+	require.ErrorIs(t, peer.SendManifestFrames([][]byte{{0x4d, 0xff}}), ErrSendBufferFull)
+	require.Equal(t, uint64(1), peer.SendDrops())
+}
+
+func TestPeerManifestDispatchBackpressuresUntilCapacity(t *testing.T) {
+	peer := newLatencyTestPeer(t)
+	manifestMessages := make(chan *InboundMessage, 1)
+	peer.SetManifestMessages(manifestMessages)
+	manifestMessages <- &InboundMessage{}
+
+	delivered := make(chan bool, 1)
+	go func() {
+		delivered <- peer.dispatchEvent(Event{
+			Type: EventMessageReceived, PeerID: peer.ID(), MessageType: uint16(message.TypeManifests), Payload: []byte("manifest"),
+		})
+	}()
+	select {
+	case <-delivered:
+		t.Fatal("manifest dispatch did not apply backpressure")
+	case <-time.After(25 * time.Millisecond):
+	}
+
+	<-manifestMessages
+	require.True(t, <-delivered)
+	inbound := <-manifestMessages
+	assert.Equal(t, peer.ID(), inbound.PeerID)
+	assert.Equal(t, uint16(message.TypeManifests), inbound.Type)
+	assert.Equal(t, []byte("manifest"), inbound.Payload)
+}
+
+func (c *chunkedLivenessConn) Close() error                { return nil }
+func (c *chunkedLivenessConn) LocalAddr() net.Addr         { return livenessAddr("local") }
+func (c *chunkedLivenessConn) RemoteAddr() net.Addr        { return livenessAddr("remote") }
+func (c *chunkedLivenessConn) SetDeadline(time.Time) error { return nil }
 func (c *chunkedLivenessConn) SetWriteDeadline(time.Time) error {
+	c.mu.Lock()
+	c.writeLimits++
+	c.mu.Unlock()
 	return nil
 }
 func (c *chunkedLivenessConn) SetReadDeadline(deadline time.Time) error {
@@ -419,4 +645,38 @@ func TestPeerConsecutiveFramesCannotExtendPingPastProgressBudget(t *testing.T) {
 	require.True(t, stale)
 	assert.False(t, deferred)
 	assert.Equal(t, uint32(10), seq)
+}
+
+func TestPeerWriteLoopUsesSizeAwarePerFrameDeadline(t *testing.T) {
+	clock := &livenessClock{now: time.Unix(6_000, 0)}
+	conn := &chunkedLivenessConn{clock: clock}
+	peer, _ := newFrameLivenessPeer(t, clock, conn)
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- peer.writeLoop(ctx) }()
+
+	require.NoError(t, peer.Send([]byte("large ordered frame")))
+	require.Eventually(t, func() bool {
+		conn.mu.Lock()
+		defer conn.mu.Unlock()
+		return conn.writeCalls == 1
+	}, time.Second, time.Millisecond)
+	cancel()
+	require.ErrorIs(t, <-done, context.Canceled)
+
+	conn.mu.Lock()
+	defer conn.mu.Unlock()
+	assert.Equal(t, 1, conn.writeLimits)
+}
+
+func TestPeerWriteLoopMapsWriteTimeout(t *testing.T) {
+	clock := &livenessClock{now: time.Unix(6_100, 0)}
+	conn := &chunkedLivenessConn{clock: clock, writeErr: livenessTimeoutError{}}
+	peer, _ := newFrameLivenessPeer(t, clock, conn)
+	require.NoError(t, peer.Send([]byte("stalled frame")))
+	err := peer.writeLoop(t.Context())
+	require.ErrorIs(t, err, ErrWriteIdle)
+	conn.mu.Lock()
+	defer conn.mu.Unlock()
+	assert.Equal(t, 1, conn.writeLimits)
 }

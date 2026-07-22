@@ -17,6 +17,47 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+type runningManifestOverlay struct {
+	overlay  *peermanagement.Overlay
+	done     chan error
+	stopOnce sync.Once
+}
+
+func startRunningManifestOverlay(t *testing.T, opts ...peermanagement.Option) *runningManifestOverlay {
+	t.Helper()
+	allOpts := append([]peermanagement.Option{peermanagement.WithListenAddr("127.0.0.1:0")}, opts...)
+	overlay, err := peermanagement.New(allOpts...)
+	require.NoError(t, err)
+	running := &runningManifestOverlay{overlay: overlay, done: make(chan error, 1)}
+	go func() { running.done <- overlay.Run(context.Background()) }()
+	select {
+	case <-overlay.ListenerReady():
+	case err := <-running.done:
+		t.Fatalf("overlay stopped before listener became ready: %v", err)
+	case <-time.After(5 * time.Second):
+		t.Fatal("overlay listener did not become ready")
+	}
+	t.Cleanup(func() { running.stop(t) })
+	return running
+}
+
+func (r *runningManifestOverlay) stop(t *testing.T) {
+	t.Helper()
+	r.stopOnce.Do(func() {
+		require.NoError(t, r.overlay.Stop())
+		select {
+		case <-r.done:
+		case <-time.After(5 * time.Second):
+			t.Fatal("overlay did not stop")
+		}
+	})
+}
+
+type manifestOverlayConnection struct {
+	overlay *runningManifestOverlay
+	peerID  peermanagement.PeerID
+}
+
 // buildWireManifest produces a valid serialized manifest that the
 // router's handleManifests can apply end-to-end.
 func buildWireManifest(t *testing.T, seq uint32, masterSeed, ephSeed byte) []byte {
@@ -152,7 +193,71 @@ func TestRouter_HandleManifests_InvalidDoesNotStore(t *testing.T) {
 	}
 }
 
-func TestRouter_HandleManifests_AggregatesAcceptedEntries(t *testing.T) {
+func TestRouter_ManifestAcceptedAfterPeerRemovalCompletesBootstrap(t *testing.T) {
+	connections := make(chan manifestOverlayConnection, 2)
+	first := startRunningManifestOverlay(t)
+	second := startRunningManifestOverlay(t, peermanagement.WithListenAddr("[::1]:0"))
+	first.overlay.SetPeerConnectCallback(func(peerID peermanagement.PeerID) {
+		connections <- manifestOverlayConnection{overlay: first, peerID: peerID}
+	})
+	second.overlay.SetPeerConnectCallback(func(peerID peermanagement.PeerID) {
+		connections <- manifestOverlayConnection{overlay: second, peerID: peerID}
+	})
+
+	client := startRunningManifestOverlay(t,
+		peermanagement.WithMaxOutbound(1),
+		peermanagement.WithFixedPeers(first.overlay.ListenAddr(), second.overlay.ListenAddr()),
+	)
+
+	var source manifestOverlayConnection
+	select {
+	case source = <-connections:
+	case <-time.After(5 * time.Second):
+		t.Fatal("bootstrap source did not connect")
+	}
+
+	wire := buildWireManifest(t, 1, 0xB1, 0xB2)
+	frame, err := message.EncodeFrame(&message.Manifests{
+		List: []message.Manifest{{STObject: wire}},
+	})
+	require.NoError(t, err)
+	require.NoError(t, source.overlay.overlay.Send(source.peerID, frame))
+
+	var inbound *peermanagement.InboundMessage
+	select {
+	case inbound = <-client.overlay.ManifestMessages():
+	case <-time.After(5 * time.Second):
+		t.Fatal("manifest frame did not reach client overlay")
+	}
+	require.Equal(t, uint16(message.TypeManifests), inbound.Type)
+
+	source.overlay.stop(t)
+	require.Eventually(t, func() bool {
+		return !client.overlay.IsPeerConnected(inbound.PeerID)
+	}, 5*time.Second, 10*time.Millisecond)
+	select {
+	case <-connections:
+		t.Fatal("replacement connected before manifest handler decision")
+	case <-time.After(100 * time.Millisecond):
+	}
+
+	router, cache, _ := routerWithCache(t, nil, 0, 0)
+	router.setPeerSessionView(client.overlay)
+	router.handleMessage(inbound)
+
+	parsed, err := manifest.Deserialize(wire)
+	require.NoError(t, err)
+	stored, ok := cache.GetManifest(parsed.MasterKey)
+	require.True(t, ok)
+	require.Equal(t, wire, stored)
+	select {
+	case <-connections:
+	case <-time.After(5 * time.Second):
+		t.Fatal("bootstrap did not continue after disconnected manifest was accepted")
+	}
+}
+
+func TestRouter_HandleManifests_BroadcastsAcceptedEntriesToSource(t *testing.T) {
 	sender := &fakeManifestSender{broadcastErr: peermanagement.ErrSendBufferFull}
 	router, _, _ := routerWithCache(t, sender, 0, 0)
 
@@ -179,6 +284,7 @@ func TestRouter_HandleManifests_AggregatesAcceptedEntries(t *testing.T) {
 	broadcasts := append([][]byte(nil), sender.bcasts...)
 	sender.mu.Unlock()
 	require.Len(t, broadcasts, 1, "one inbound collection must produce one broadcast attempt")
+	require.Empty(t, sender.bcastsExcept, "rippled relays accepted manifests back to the source too")
 
 	got := frameToManifestBytes(t, broadcasts[0])
 	require.Len(t, got, acceptedCount)
@@ -190,7 +296,9 @@ func TestRouter_HandleManifests_AggregatesAcceptedEntries(t *testing.T) {
 func TestRouter_ManifestWorkerDoesNotBlockDispatch(t *testing.T) {
 	adaptor := newTestAdaptor(t)
 	inbox := make(chan *peermanagement.InboundMessage, 10)
+	manifestInbox := make(chan *peermanagement.InboundMessage, 4)
 	router := NewRouter(&mockEngine{}, adaptor, inbox)
+	router.SetManifestInbox(manifestInbox)
 	cache := manifest.NewCache()
 	router.SetManifestCache(cache, nil)
 
@@ -208,7 +316,7 @@ func TestRouter_ManifestWorkerDoesNotBlockDispatch(t *testing.T) {
 	})
 
 	go router.Run(t.Context())
-	inbox <- &peermanagement.InboundMessage{
+	manifestInbox <- &peermanagement.InboundMessage{
 		PeerID: 7,
 		Type:   uint16(message.TypeManifests),
 		Payload: encodePayload(t, &message.Manifests{List: []message.Manifest{{
@@ -222,30 +330,18 @@ func TestRouter_ManifestWorkerDoesNotBlockDispatch(t *testing.T) {
 		t.Fatal("manifest worker did not begin processing")
 	}
 
-	queued := make([]*manifest.Manifest, 0, manifestQueueDepth)
-	for i := range manifestQueueDepth {
+	queued := make([]*manifest.Manifest, 0, cap(manifestInbox))
+	for i := range cap(manifestInbox) {
 		wire := buildWireManifest(t, 1, byte(222+i), byte(232+i))
 		parsed, err := manifest.Deserialize(wire)
 		require.NoError(t, err)
 		queued = append(queued, parsed)
-		inbox <- &peermanagement.InboundMessage{
+		manifestInbox <- &peermanagement.InboundMessage{
 			PeerID:  peermanagement.PeerID(10 + i),
 			Type:    uint16(message.TypeManifests),
 			Payload: encodePayload(t, &message.Manifests{List: []message.Manifest{{STObject: wire}}}),
 		}
 	}
-	for i := range 2 {
-		wire := buildWireManifest(t, 1, byte(240+i), byte(242+i))
-		inbox <- &peermanagement.InboundMessage{
-			PeerID:  8,
-			Type:    uint16(message.TypeManifests),
-			Payload: encodePayload(t, &message.Manifests{List: []message.Manifest{{STObject: wire}}}),
-		}
-	}
-	require.Eventually(t, func() bool {
-		return router.DroppedManifestJobs() == 2
-	}, time.Second, 5*time.Millisecond)
-
 	var ledgerHash [32]byte
 	ledgerHash[0] = 0xAB
 	inbox <- statusChangeMessage(t, 9, 1, ledgerHash)
@@ -265,12 +361,13 @@ func TestRouter_ManifestWorkerDoesNotBlockDispatch(t *testing.T) {
 		}
 		return true
 	}, time.Second, 5*time.Millisecond)
-	require.Equal(t, uint64(2), router.DroppedManifestJobs())
 }
 
 func TestRouter_ManifestWorkerJoinsOnShutdown(t *testing.T) {
 	inbox := make(chan *peermanagement.InboundMessage, 3)
+	manifestInbox := make(chan *peermanagement.InboundMessage, 3)
 	router := NewRouter(&mockEngine{}, newTestAdaptor(t), inbox)
+	router.SetManifestInbox(manifestInbox)
 	cache := manifest.NewCache()
 	sender := &fakeManifestSender{}
 	router.SetManifestCache(cache, nil)
@@ -296,7 +393,7 @@ func TestRouter_ManifestWorkerJoinsOnShutdown(t *testing.T) {
 		router.Run(ctx)
 		close(done)
 	}()
-	inbox <- &peermanagement.InboundMessage{
+	manifestInbox <- &peermanagement.InboundMessage{
 		PeerID: 1,
 		Type:   uint16(message.TypeManifests),
 		Payload: encodePayload(t, &message.Manifests{List: []message.Manifest{{
@@ -313,7 +410,7 @@ func TestRouter_ManifestWorkerJoinsOnShutdown(t *testing.T) {
 	queuedWire := buildWireManifest(t, 1, 242, 243)
 	queuedManifest, err := manifest.Deserialize(queuedWire)
 	require.NoError(t, err)
-	inbox <- &peermanagement.InboundMessage{
+	manifestInbox <- &peermanagement.InboundMessage{
 		PeerID: 2,
 		Type:   uint16(message.TypeManifests),
 		Payload: encodePayload(t, &message.Manifests{List: []message.Manifest{{

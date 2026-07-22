@@ -93,7 +93,7 @@ func (f *snd_fakeOverlay) RequestLedgerByHashAndSeq(hash [32]byte, seq uint32) e
 	return nil
 }
 
-func (f *snd_fakeOverlay) RequestLedgerBaseFromPeer(peerID uint64, hash [32]byte, seq uint32) error {
+func (f *snd_fakeOverlay) RequestLedgerBaseFromPeer(peerID uint64, hash [32]byte, seq uint32, indirect bool) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	if f.sends == nil {
@@ -113,7 +113,7 @@ func (f *snd_fakeOverlay) RequestReplayDelta(peerID uint64, hash [32]byte) error
 	return nil
 }
 
-func (f *snd_fakeOverlay) RequestStateNodes(peerID uint64, ledgerHash [32]byte, nodeIDs [][]byte, indirect bool) error {
+func (f *snd_fakeOverlay) RequestStateNodes(peerID uint64, ledgerHash [32]byte, nodeIDs [][]byte, queryDepth uint32, indirect bool) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	if f.sends == nil {
@@ -123,7 +123,7 @@ func (f *snd_fakeOverlay) RequestStateNodes(peerID uint64, ledgerHash [32]byte, 
 	return nil
 }
 
-func (f *snd_fakeOverlay) RequestTransactionNodes(peerID uint64, ledgerHash [32]byte, nodeIDs [][]byte, indirect bool) error {
+func (f *snd_fakeOverlay) RequestTransactionNodes(peerID uint64, ledgerHash [32]byte, nodeIDs [][]byte, queryDepth uint32, indirect bool) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	if f.sends == nil {
@@ -141,6 +141,10 @@ func (f *snd_fakeOverlay) SendToPeer(peerID uint64, frame []byte) error {
 	}
 	f.sends[peerID] = append(f.sends[peerID], frame)
 	return nil
+}
+
+func (f *snd_fakeOverlay) SendPriorityToPeer(peerID uint64, frame []byte) error {
+	return f.SendToPeer(peerID, frame)
 }
 
 func (f *snd_fakeOverlay) PeerSupportsReplay(peerID uint64) bool {
@@ -194,7 +198,7 @@ func (f *snd_fakeOverlay) ShouldShedLedgerRequest(peerID uint64, loadedLocal boo
 }
 
 func (f *snd_fakeOverlay) PeerWithLedger([32]byte, uint32, uint64) (uint64, bool) { return 0, false }
-func (f *snd_fakeOverlay) PeersWithLedger([32]byte, uint32, []uint64, int) []uint64 {
+func (f *snd_fakeOverlay) SelectLedgerPeers([32]byte, uint32, []uint64, int) []uint64 {
 	return nil
 }
 func (f *snd_fakeOverlay) PeerWithTxSet([32]byte, uint64) (uint64, bool) { return 0, false }
@@ -267,7 +271,7 @@ func TestSndAdaptor_RequestStateNodes(t *testing.T) {
 	fake := &snd_fakeOverlay{}
 	a := snd_newAdaptorWithFake(t, fake)
 	var hash [32]byte
-	err := a.RequestStateNodes(99, hash, [][]byte{make([]byte, 33)}, false)
+	err := a.RequestStateNodes(99, hash, [][]byte{make([]byte, 33)}, 1, false)
 	assert.NoError(t, err)
 	require.Len(t, fake.sends[99], 1)
 }
@@ -276,7 +280,7 @@ func TestSndAdaptor_RequestTransactionNodes(t *testing.T) {
 	fake := &snd_fakeOverlay{}
 	a := snd_newAdaptorWithFake(t, fake)
 	var hash [32]byte
-	err := a.RequestTransactionNodes(77, hash, [][]byte{make([]byte, 33)}, false)
+	err := a.RequestTransactionNodes(77, hash, [][]byte{make([]byte, 33)}, 1, false)
 	assert.NoError(t, err)
 	require.Len(t, fake.sends[77], 1)
 }
@@ -453,7 +457,7 @@ func TestSndOverlaySender_ShouldShedLedgerRequest_UnknownPeer(t *testing.T) {
 func TestSndOverlaySender_RequestLedgerBaseFromPeer_UnknownPeer(t *testing.T) {
 	s := snd_newOverlaySender(t)
 	var hash [32]byte
-	err := s.RequestLedgerBaseFromPeer(999, hash, 3)
+	err := s.RequestLedgerBaseFromPeer(999, hash, 3, false)
 	assert.ErrorIs(t, err, peermanagement.ErrPeerNotFound)
 }
 
@@ -494,13 +498,13 @@ func TestSndOverlaySender_RequestReplayDelta_UnknownPeer(t *testing.T) {
 func TestSndOverlaySender_RequestStateNodes_UnknownPeer(t *testing.T) {
 	s := snd_newOverlaySender(t)
 	var hash [32]byte
-	err := s.RequestStateNodes(999, hash, [][]byte{make([]byte, 33)}, false)
+	err := s.RequestStateNodes(999, hash, [][]byte{make([]byte, 33)}, 1, false)
 	assert.ErrorIs(t, err, peermanagement.ErrPeerNotFound)
 }
 
 func TestSndOverlaySender_RequestTransactionNodes_UnknownPeer(t *testing.T) {
 	s := snd_newOverlaySender(t)
 	var hash [32]byte
-	err := s.RequestTransactionNodes(999, hash, [][]byte{make([]byte, 33)}, false)
+	err := s.RequestTransactionNodes(999, hash, [][]byte{make([]byte, 33)}, 1, false)
 	assert.ErrorIs(t, err, peermanagement.ErrPeerNotFound)
 }

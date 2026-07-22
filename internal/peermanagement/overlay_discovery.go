@@ -23,8 +23,37 @@ func (o *Overlay) discoveryLoop(ctx context.Context) error {
 			return ctx.Err()
 		case <-ticker.C:
 			o.autoconnect(ctx)
+		case <-o.autoconnectWake:
+			o.autoconnect(ctx)
 		}
 	}
+}
+
+func (o *Overlay) shouldLogAllBootstrapSourcesUnviable(status bootstrapSourceStatus) bool {
+	if !status.allUnviable() {
+		o.bootstrapDiag.Store(0)
+		return false
+	}
+	return o.bootstrapDiag.Swap(status.episode) != status.episode
+}
+
+func (o *Overlay) wakeAutoconnect() {
+	select {
+	case o.autoconnectWake <- struct{}{}:
+	default:
+	}
+}
+
+func (o *Overlay) prepareAutoconnect(count int) (int, bool, *bootstrapLease, bool) {
+	cold := !o.bootstrap.isReady()
+	if !cold {
+		return count, false, nil, true
+	}
+	lease, ok := o.bootstrap.tryReserve()
+	if !ok {
+		return 0, true, nil, false
+	}
+	return min(count, 1), true, lease, true
 }
 
 // autoconnect attempts to connect to peers if we need more.
@@ -33,22 +62,37 @@ func (o *Overlay) autoconnect(ctx context.Context) {
 
 	count := o.cfg.MaxOutbound - o.ordinaryOutboundCount()
 	count = max(count, 0)
+	if count == 0 {
+		return
+	}
 
-	cold := !o.bootstrap.isReady()
-	var lease *bootstrapLease
-	if cold {
-		var ok bool
-		lease, ok = o.bootstrap.tryReserve()
-		if !ok {
-			slog.Info("Autoconnect", "t", "Overlay", "candidates", 0, "needed", 0, "bootstrap", "waiting")
-			return
-		}
-		count = min(count, 1)
+	count, cold, lease, ok := o.prepareAutoconnect(count)
+	if !ok {
+		slog.Info("Autoconnect", "t", "Overlay", "candidates", 0, "needed", 0, "bootstrap", "waiting")
+		return
 	}
 
 	addrs := o.discovery.selectPeersToConnect(count, cold)
 	if len(addrs) == 0 {
 		lease.release()
+		if cold {
+			status := o.discovery.bootstrapSourceSummary()
+			state := "no-viable-source"
+			if status.allUnviable() {
+				state = "all-known-sources-unviable"
+				if !o.shouldLogAllBootstrapSourcesUnviable(status) {
+					return
+				}
+			} else {
+				o.shouldLogAllBootstrapSourcesUnviable(status)
+			}
+			slog.Info("Autoconnect", "t", "Overlay", "candidates", 0, "needed", count,
+				"bootstrap", state, "known_sources", status.known, "unviable_sources", status.unviable)
+			return
+		}
+	}
+	if cold {
+		o.bootstrapDiag.Store(0)
 	}
 	slog.Info("Autoconnect", "t", "Overlay", "candidates", len(addrs), "needed", count)
 	for i, addr := range addrs {
@@ -79,6 +123,9 @@ func (o *Overlay) autoconnect(ctx context.Context) {
 			result := connectAttemptSucceeded
 			if err != nil {
 				bootstrapLease.release()
+				if bootstrapLease != nil && ctx.Err() == nil {
+					o.wakeAutoconnect()
+				}
 				result = connectAttemptReleased
 				if ctx.Err() == nil &&
 					!errors.Is(err, ErrAlreadyConnected) &&

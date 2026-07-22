@@ -62,7 +62,7 @@ func (o *Overlay) RelayTransaction(except PeerID, frame []byte) {
 	}
 
 	sendFull := func(p *Peer) {
-		o.sendAndLog(p, frame, "relay-transaction")
+		o.sendAndLog(p, frame, "relay-transaction", false)
 	}
 
 	const suppressed = 1 // go-xrpl's toSkip is the single originating peer

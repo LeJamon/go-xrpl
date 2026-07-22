@@ -310,6 +310,37 @@ func TestGetLedgerRoundtrip(t *testing.T) {
 	}
 }
 
+func TestGetLedgerQueryDepthPresence(t *testing.T) {
+	tests := []struct {
+		name    string
+		request *GetLedger
+		present bool
+	}{
+		{name: "absent", request: &GetLedger{InfoType: LedgerInfoBase}},
+		{name: "explicit zero", request: &GetLedger{InfoType: LedgerInfoAsNode, QueryDepthSet: true}, present: true},
+		{name: "nonzero", request: &GetLedger{InfoType: LedgerInfoAsNode, QueryDepth: 1}, present: true},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			encoded, err := Encode(test.request)
+			if err != nil {
+				t.Fatalf("Encode: %v", err)
+			}
+			decodedMessage, err := Decode(TypeGetLedger, encoded)
+			if err != nil {
+				t.Fatalf("Decode: %v", err)
+			}
+			decoded := decodedMessage.(*GetLedger)
+			if decoded.HasQueryDepth() != test.present {
+				t.Fatalf("HasQueryDepth=%t, want %t", decoded.HasQueryDepth(), test.present)
+			}
+			if decoded.QueryDepth != test.request.QueryDepth {
+				t.Fatalf("QueryDepth=%d, want %d", decoded.QueryDepth, test.request.QueryDepth)
+			}
+		})
+	}
+}
+
 // TestGetLedgerQueryTypePresence pins that query_type presence survives the
 // wire round-trip: an absent field decodes to nil (so the serve path treats
 // it as "accept"), while a present non-qtINDIRECT value is preserved as a

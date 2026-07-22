@@ -12,33 +12,41 @@ import (
 )
 
 // peerTargetSender records the peer id of each legacy node-fetch and serves a
-// configurable PeersWithLedger answer, so the broaden (issue #985 M2) and
+// configurable SelectLedgerPeers answer, so the broaden (issue #985 M2) and
 // reply-targeting (M3) paths can be pinned. Other NetworkSender methods inherit
 // from noopSender.
 type peerTargetSender struct {
 	noopSender
 	mu         sync.Mutex
 	statePeers []uint64 // peer of each RequestStateNodes call, in order
-	broadenRet []uint64 // what PeersWithLedger returns
-	broadenEx  []uint64 // excluded set captured from the last PeersWithLedger call
+	broadenRet []uint64 // what SelectLedgerPeers returns
+	broadenEx  []uint64 // excluded set captured from the last SelectLedgerPeers call
+	broadenMax int
 }
 
-func (s *peerTargetSender) RequestStateNodes(peerID uint64, _ [32]byte, _ [][]byte, _ bool) error {
+func (s *peerTargetSender) RequestStateNodes(peerID uint64, _ [32]byte, _ [][]byte, _ uint32, _ bool) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.statePeers = append(s.statePeers, peerID)
 	return nil
 }
 
-func (s *peerTargetSender) RequestTransactionNodes(uint64, [32]byte, [][]byte, bool) error {
+func (s *peerTargetSender) RequestTransactionNodes(uint64, [32]byte, [][]byte, uint32, bool) error {
 	return nil
 }
 
-func (s *peerTargetSender) PeersWithLedger(_ [32]byte, _ uint32, excluded []uint64, _ int) []uint64 {
+func (s *peerTargetSender) SelectLedgerPeers(_ [32]byte, _ uint32, excluded []uint64, max int) []uint64 {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.broadenEx = append([]uint64(nil), excluded...)
+	s.broadenMax = max
 	return append([]uint64(nil), s.broadenRet...)
+}
+
+func (s *peerTargetSender) broadenLimit() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.broadenMax
 }
 
 func (s *peerTargetSender) statePeerList() []uint64 {
@@ -68,7 +76,7 @@ func newPeerTargetRouter(t *testing.T, rs *peerTargetSender) (*Router, *service.
 }
 
 // TestBroadenAcquisitionPeers_AddsMultiple pins issue #985 M2: a no-progress
-// broaden adds every fresh peer PeersWithLedger returns (mirroring rippled's
+// broaden adds every fresh peer SelectLedgerPeers returns (mirroring rippled's
 // peerCountAdd), excluding the acquisition's current set, instead of one.
 func TestBroadenAcquisitionPeers_AddsMultiple(t *testing.T) {
 	rs := &peerTargetSender{broadenRet: []uint64{8, 9, 10}}
@@ -78,9 +86,22 @@ func TestBroadenAcquisitionPeers_AddsMultiple(t *testing.T) {
 	router.broadenAcquisitionPeers(il)
 
 	assert.ElementsMatch(t, []uint64{7, 8, 9, 10}, il.Peers(),
-		"broaden must add all peers PeersWithLedger returned")
+		"broaden must add all peers SelectLedgerPeers returned")
 	assert.Equal(t, []uint64{7}, rs.excludedSet(),
 		"the current source set must be excluded from selection")
+	assert.Equal(t, acquisitionPeerBroaden, rs.broadenLimit())
+}
+
+func TestBroadenAcquisitionPeers_SeedsFiveWhenPeerless(t *testing.T) {
+	rs := &peerTargetSender{broadenRet: []uint64{8, 9, 10, 11, 12}}
+	router, _ := newPeerTargetRouter(t, rs)
+	il := inbound.New([32]byte{0xAC}, 42, 0, serveTestLogger())
+
+	router.broadenAcquisitionPeers(il)
+
+	assert.ElementsMatch(t, []uint64{8, 9, 10, 11, 12}, il.Peers())
+	assert.Empty(t, rs.excludedSet())
+	assert.Equal(t, acquisitionPeerStart, rs.broadenLimit())
 }
 
 // TestRequestMissingAcquisitionNodes_ReplyTargetsReplier pins issue #985 M3: on

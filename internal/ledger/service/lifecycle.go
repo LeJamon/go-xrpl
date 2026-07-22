@@ -537,15 +537,14 @@ func (s *Service) AcceptConsensusResult(ctx context.Context, parent *ledger.Ledg
 	// inline, so the eventCallback must fire inline below (no later
 	// SetValidatedLedger will arrive to drain a hash-keyed stash).
 	promotedByDrain := s.drainPendingLedgerValidationLocked(closedSeq, s.closedLedger)
+	var txResults []TransactionResultEvent
+	if s.eventCallback != nil || (s.hooks != nil && (s.hooks.OnLedgerClosed != nil || s.hooks.OnTransaction != nil)) {
+		txResults = s.collectTransactionResults(s.closedLedger, closedSeq, closedLedgerHash)
+	}
 	if promotedByDrain {
 		s.enqueuePersist(s.closedLedger)
 	} else {
 		s.enqueueNodePersist(s.closedLedger)
-	}
-
-	var txResults []TransactionResultEvent
-	if s.eventCallback != nil || (s.hooks != nil && (s.hooks.OnLedgerClosed != nil || s.hooks.OnTransaction != nil)) {
-		txResults = s.collectTransactionResults(s.closedLedger, closedSeq, closedLedgerHash)
 	}
 
 	ledgerInfo, validatedLedgers, err := s.advanceToNewOpenLedgerLocked(closedSeq, closedLedgerHash, retriableTxs)
@@ -885,15 +884,14 @@ func (s *Service) adoptLedgerWithStateLocked(
 	// inline below instead of stashing (see the callback block).
 	promotedByDrain := s.drainPendingLedgerValidationLocked(h.LedgerIndex, adopted)
 
+	// Populate the tx-index and capture per-tx event records (side effect +
+	// return) so hooks and stream subscribers see every adopted tx.
+	txResults := s.collectTransactionResults(adopted, h.LedgerIndex, h.Hash)
 	if promotedByDrain {
 		s.enqueuePersist(adopted)
 	} else {
 		s.enqueueNodePersist(adopted)
 	}
-
-	// Populate the tx-index and capture per-tx event records (side effect +
-	// return) so hooks and stream subscribers see every adopted tx.
-	txResults := s.collectTransactionResults(adopted, h.LedgerIndex, h.Hash)
 
 	// Rebuild openLedger only on forward adoption (backward-fills must not
 	// regress the open view).
