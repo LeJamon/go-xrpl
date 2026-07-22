@@ -1718,12 +1718,14 @@ Behavioral oracle: clean local rippled `3.2.0` worktree at
       pass.
 - [x] Remove the five unreachable helpers reported by the strict unused check.
 - [x] Run the exact strict CI linter, affected tests, build, vet, and diff check.
-- [ ] Commit, push, and verify the required PR checks are green.
+- [x] Commit, push, and verify the required PR checks are green.
 
 - The required Lint job was the only failing check; every build, test, docs,
   fuzz, and consensus-smoke job passed. Removing the five zero-call-site helpers
   makes the exact default `golangci-lint run` report `0 issues`. Focused inbound
   and SHAMap tests, vet, both build modes, and `git diff --check` also pass.
+- Commit `4d03f9e9` passed every required PR check, including strict lint, all
+  build and test shards, consensus smoke, docs, and corpus replay.
 
 # Issue #1404 — LoanSet holding owner count
 
