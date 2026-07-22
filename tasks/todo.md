@@ -1602,7 +1602,7 @@ Behavioral oracle: clean local rippled `3.2.0` worktree at
 - [x] Re-run focused race coverage, core/libs, vet, lint, and both build modes.
 - [x] Repeat private-network adoption, then relaunch the retained Testnet
       database through catch-up and consensus participation.
-- [ ] Record final evidence, review the complete diff, commit, push, and open the
+- [x] Record final evidence, review the complete diff, commit, push, and open the
       pull request for issue #1401.
 
 - The retained Testnet run acquired and adopted ledger 19,262,412 with bounded
@@ -1707,6 +1707,10 @@ Behavioral oracle: clean local rippled `3.2.0` worktree at
   and transaction hashes at ledgers 10 and 11, served all 250 Ticket SLEs, and
   advanced a contiguous `complete_ledgers = 1-11` range. The temporary enclave
   was destroyed after the pass.
+- Published as PR #1415: https://github.com/LeJamon/go-xrpl/pull/1415. Current
+  `origin/main` was merged after publication; the sole conflict was the appended
+  task log, and the merged tree passed the changed replay/escrow/lending/vault
+  packages plus core, libraries, vet, lint, and both build modes.
 # Issue #1404 — LoanSet holding owner count
 
 - [x] Validate issue state, repository, base branch, and rippled 3.2.0 behavior.
