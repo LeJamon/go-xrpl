@@ -62,15 +62,6 @@ func NewFullBelowCache() *FullBelowCache {
 	)
 }
 
-func newFullBelowCache(targetSize int) *FullBelowCache {
-	return newFullBelowCacheWithClock(
-		targetSize,
-		fullBelowCacheExpiration,
-		fullBelowCacheSweepInterval,
-		time.Now,
-	)
-}
-
 func newFullBelowCacheWithClock(
 	targetSize int,
 	targetAge time.Duration,

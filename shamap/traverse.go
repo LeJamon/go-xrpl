@@ -2,7 +2,6 @@ package shamap
 
 import (
 	"context"
-	"errors"
 	"fmt"
 )
 
@@ -473,29 +472,6 @@ func fullBelowContext(sm *SHAMap) (uint32, *FullBelowCache, func()) {
 	}
 	gen, done := sm.fullBelow.Begin()
 	return gen, sm.fullBelow, done
-}
-
-// loadFromStore lazy-fetches a hash-only branch from the backing store and
-// installs it on the parent via SetChildIfNil. Returns (nil, nil) for
-// unbacked maps and true store misses; a non-nil error marks a TRANSIENT
-// fetch failure — the node may well exist, so callers deciding completeness
-// must not treat it as missing.
-func loadFromStore(sm *SHAMap, parent *innerNode, branch int) (Node, error) {
-	return loadFromStoreContext(context.Background(), sm, parent, branch)
-}
-
-func loadFromStoreContext(ctx context.Context, sm *SHAMap, parent *innerNode, branch int) (Node, error) {
-	if sm == nil || !sm.backed || sm.family == nil {
-		return nil, nil
-	}
-	loaded, err := sm.descendCtx(ctx, parent, branch)
-	if err != nil {
-		if errors.Is(err, ErrNodeNotInStore) {
-			return nil, nil
-		}
-		return nil, err
-	}
-	return loaded, nil
 }
 
 func fetchFromStoreContext(ctx context.Context, sm *SHAMap, family Family, parent *innerNode, branch int) (Node, bool, error) {

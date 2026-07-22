@@ -1711,6 +1711,20 @@ Behavioral oracle: clean local rippled `3.2.0` worktree at
   `origin/main` was merged after publication; the sole conflict was the appended
   task log, and the merged tree passed the changed replay/escrow/lending/vault
   packages plus core, libraries, vet, lint, and both build modes.
+
+## Strict CI lint follow-up
+
+- [x] Inspect the failing GitHub Actions job and confirm all other required jobs
+      pass.
+- [x] Remove the five unreachable helpers reported by the strict unused check.
+- [x] Run the exact strict CI linter, affected tests, build, vet, and diff check.
+- [ ] Commit, push, and verify the required PR checks are green.
+
+- The required Lint job was the only failing check; every build, test, docs,
+  fuzz, and consensus-smoke job passed. Removing the five zero-call-site helpers
+  makes the exact default `golangci-lint run` report `0 issues`. Focused inbound
+  and SHAMap tests, vet, both build modes, and `git diff --check` also pass.
+
 # Issue #1404 — LoanSet holding owner count
 
 - [x] Validate issue state, repository, base branch, and rippled 3.2.0 behavior.

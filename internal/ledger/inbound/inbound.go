@@ -461,12 +461,6 @@ func (l *Ledger) TakeByHashRequestContext(ctx context.Context, max int) (state, 
 	return state, tx, nil
 }
 
-// neededHashes collects the content hashes of up to max missing nodes in m.
-func neededHashes(m *shamap.SHAMap, max int) [][32]byte {
-	hashes, _ := neededHashesContext(context.Background(), m, max)
-	return hashes
-}
-
 func neededHashesContext(ctx context.Context, m *shamap.SHAMap, max int) ([][32]byte, error) {
 	missing, err := m.GetMissingNodesContext(ctx, max, nil)
 	if err != nil {
@@ -1467,16 +1461,6 @@ func (l *Ledger) CheckLocalContext(ctx context.Context, fetch func(hash [32]byte
 	}
 	l.recomputeComplete()
 	return progressed, l.state == StateComplete, nil
-}
-
-// fillFromLocal repeatedly pulls a map's missing node hashes from fetch and
-// attaches any that resolve, until a pass attaches nothing. Returns whether it
-// attached at least one node. Each pass widens the resolved frontier — an
-// attached inner node exposes its children as the next batch's missing set —
-// so a connected subtree present in the source drains fully.
-func fillFromLocal(m *shamap.SHAMap, fetch func(hash [32]byte) ([]byte, bool)) bool {
-	added, _, _ := fillFromLocalContext(context.Background(), m, fetch)
-	return added
 }
 
 func fillFromLocalContext(ctx context.Context, m *shamap.SHAMap, fetch func(hash [32]byte) ([]byte, bool)) (bool, []shamap.FlushEntry, error) {
