@@ -30,6 +30,7 @@ func rulesWithout(name string) *amendment.Rules {
 }
 
 func TestSponsorFieldsAmendmentGate(t *testing.T) {
+	sponsorRules := amendment.NewRulesBuilder().FromPreset(amendment.PresetAllSupported).Enable(amendment.FeatureSponsor).Build()
 	disabledTests := []struct {
 		name   string
 		mutate func(*txcore.Common)
@@ -47,6 +48,14 @@ func TestSponsorFieldsAmendmentGate(t *testing.T) {
 				t.Fatalf("preflight with Sponsor disabled = %v, want temDISABLED", got)
 			}
 		})
+	}
+
+	valid := newAccountSet(precedenceSourceAddr)
+	valid.Sponsor = precedenceGenesisAddr
+	flags := txcore.SpfSponsorFee
+	valid.SponsorFlags = &flags
+	if got := preflightEngine(sponsorRules).preflight(valid); got != ter.TesSUCCESS {
+		t.Fatalf("preflight with complete Sponsor definition = %v, want tesSUCCESS", got)
 	}
 
 	inner := newAccountSet(precedenceSourceAddr)
