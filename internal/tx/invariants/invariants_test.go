@@ -363,7 +363,7 @@ func TestXRPBalanceChecks_ParseFailure(t *testing.T) {
 // XRP-creation bug). Reference: issue #597.
 func TestXRPNotCreated_ParseFailure(t *testing.T) {
 	garbage := []byte{0xde, 0xad, 0xbe, 0xef}
-	for _, entryType := range []string{"AccountRoot", "Escrow", "PayChannel"} {
+	for _, entryType := range []string{"AccountRoot", "Escrow", "PayChannel", "Sponsorship"} {
 		entries := []InvariantEntry{{EntryType: entryType, After: garbage}}
 		if v := checkXRPNotCreated(TesSUCCESS, 10, entries); v == nil {
 			t.Fatalf("%s: expected XRPNotCreated violation for unparseable SLE", entryType)

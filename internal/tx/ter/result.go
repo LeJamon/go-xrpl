@@ -130,6 +130,10 @@ const (
 	TecLIMIT_EXCEEDED                     Result = 195
 	TecPSEUDO_ACCOUNT                     Result = 196
 	TecPRECISION_LOSS                     Result = 197
+	// Reserved for historical non-production ledgers; kept for wire parity.
+	TecNO_DELEGATE_PERMISSION Result = 198
+	TecBAD_PROOF              Result = 199
+	TecNO_SPONSOR_PERMISSION  Result = 200
 
 	// tefFAILURE and related codes (-199 to -100)
 	// Transaction failed, fee claimed but tx not applied
@@ -248,6 +252,7 @@ const (
 	TerADDRESS_COLLISION      Result = -86
 	TerNO_DELEGATE_PERMISSION Result = -85
 	TerLOCKED                 Result = -84
+	TerNO_PERMISSION          Result = -83
 )
 
 // resultNames maps every Result code to its canonical rippled string.
@@ -341,6 +346,9 @@ var resultNames = map[Result]string{ //nolint:gosec // G101: TER result-code nam
 	TecLIMIT_EXCEEDED:                     "tecLIMIT_EXCEEDED",
 	TecPSEUDO_ACCOUNT:                     "tecPSEUDO_ACCOUNT",
 	TecPRECISION_LOSS:                     "tecPRECISION_LOSS",
+	TecNO_DELEGATE_PERMISSION:             "tecNO_DELEGATE_PERMISSION",
+	TecBAD_PROOF:                          "tecBAD_PROOF",
+	TecNO_SPONSOR_PERMISSION:              "tecNO_SPONSOR_PERMISSION",
 	TefFAILURE:                            "tefFAILURE",
 	TefALREADY:                            "tefALREADY",
 	TefBAD_ADD_AUTH:                       "tefBAD_ADD_AUTH",
@@ -447,6 +455,7 @@ var resultNames = map[Result]string{ //nolint:gosec // G101: TER result-code nam
 	TerADDRESS_COLLISION:                           "terADDRESS_COLLISION",
 	TerNO_DELEGATE_PERMISSION:                      "terNO_DELEGATE_PERMISSION",
 	TerLOCKED:                                      "terLOCKED",
+	TerNO_PERMISSION:                               "terNO_PERMISSION",
 }
 
 // String returns the canonical rippled name for this result code, or "-" for
@@ -466,12 +475,12 @@ func (r Result) IsSuccess() bool {
 // IsClaimed returns true if the result indicates the fee was claimed
 // This includes tec codes where the transaction "succeeded" with a caveat
 func (r Result) IsClaimed() bool {
-	return r >= TecCLAIM && r < 200
+	return r >= TecCLAIM && r <= 255
 }
 
 // IsTec returns true if this is a tec (claimed cost) code
 func (r Result) IsTec() bool {
-	return r >= 100 && r < 200
+	return r >= 100 && r <= 255
 }
 
 // IsTef returns true if this is a tef (failure) code
@@ -601,6 +610,8 @@ var resultMessages = map[Result]string{ //nolint:gosec // G101: TER result-code 
 	TecLIMIT_EXCEEDED:                     "Limit exceeded.",
 	TecPSEUDO_ACCOUNT:                     "This operation is not allowed against a pseudo-account.",
 	TecPRECISION_LOSS:                     "The amounts used by the transaction cannot interact.",
+	TecBAD_PROOF:                          "Proof cannot be verified",
+	TecNO_SPONSOR_PERMISSION:              "Sponsor has not authorized this transaction.",
 	TefALREADY:                            "The exact transaction was already in this ledger.",
 	TefBAD_ADD_AUTH:                       "Not authorized to add account.",
 	TefBAD_AUTH:                           "Transaction's public key is not authorized.",
@@ -707,5 +718,6 @@ var resultMessages = map[Result]string{ //nolint:gosec // G101: TER result-code 
 	TerADDRESS_COLLISION:                           "Failed to allocate an unique account address.",
 	TerNO_DELEGATE_PERMISSION:                      "Delegated account lacks permission to perform this transaction.",
 	TerLOCKED:                                      "Fund is locked.",
+	TerNO_PERMISSION:                               "No permission to perform requested operation.",
 	TesSUCCESS:                                     "The transaction was applied. Only final in a validated ledger.",
 }
