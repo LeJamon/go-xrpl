@@ -252,7 +252,12 @@ func (e *Engine) canBeCurrentLocked(candidate consensus.Ledger) bool {
 	}
 	if validated != nil {
 		maxSeq := validated.Seq() + 10
-		if elapsed := now.Sub(validated.CloseTime()); elapsed > 0 {
+		validatedCloseTime := validated.CloseTime()
+		if reporter, ok := validated.(parentCloseTimeReporter); ok &&
+			!reporter.ParentCloseTime().IsZero() {
+			validatedCloseTime = reporter.ParentCloseTime()
+		}
+		if elapsed := now.Sub(validatedCloseTime); elapsed > 0 {
 			maxSeq += uint32(elapsed / (2 * time.Second))
 		}
 		if candidate.Seq() > maxSeq {

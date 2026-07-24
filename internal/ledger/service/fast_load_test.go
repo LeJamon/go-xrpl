@@ -231,7 +231,8 @@ func TestService_FastLoadFallsBackWhenStorageIsEmpty(t *testing.T) {
 	require.NoError(t, svc.Start())
 	t.Cleanup(svc.Stop)
 	require.True(t, svc.NeedsInitialSync())
-	require.Equal(t, uint32(1), svc.GetValidatedLedgerIndex())
+	require.Nil(t, svc.GetValidatedLedger())
+	require.Zero(t, svc.GetValidatedLedgerIndex())
 }
 
 func TestService_FastLoadRejectsRelationalLedgerWithoutValidatedTip(t *testing.T) {
@@ -266,7 +267,8 @@ func TestService_FastLoadRejectsRelationalLedgerWithoutValidatedTip(t *testing.T
 	require.NoError(t, reader.Start())
 	t.Cleanup(reader.Stop)
 	require.True(t, reader.NeedsInitialSync())
-	require.Equal(t, uint32(1), reader.GetValidatedLedgerIndex())
+	require.Nil(t, reader.GetValidatedLedger())
+	require.Zero(t, reader.GetValidatedLedgerIndex())
 }
 
 func TestService_FastLoadFallsBackWhenTreeIsCorrupt(t *testing.T) {
@@ -315,7 +317,8 @@ func TestService_FastLoadFallsBackWhenTreeIsCorrupt(t *testing.T) {
 	require.NoError(t, second.Start())
 	t.Cleanup(second.Stop)
 	require.True(t, second.NeedsInitialSync())
-	require.Equal(t, uint32(1), second.GetValidatedLedgerIndex())
+	require.Nil(t, second.GetValidatedLedger())
+	require.Zero(t, second.GetValidatedLedgerIndex())
 }
 
 func TestService_GetLedgerByHashTreatsCorruptDescendantAsNotFound(t *testing.T) {

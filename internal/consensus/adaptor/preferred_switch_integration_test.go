@@ -6,9 +6,53 @@ import (
 
 	"github.com/LeJamon/go-xrpl/internal/consensus"
 	"github.com/LeJamon/go-xrpl/internal/consensus/rcl"
+	"github.com/LeJamon/go-xrpl/internal/ledger/header"
 	"github.com/LeJamon/go-xrpl/internal/peermanagement"
 	"github.com/stretchr/testify/require"
 )
+
+func TestFreshNodeSwitchesToNetworkLedgerTwoBeforeFirstValidation(t *testing.T) {
+	svc := adg_newNonStandaloneService(t)
+	t.Cleanup(svc.Stop)
+	a := New(Config{LedgerService: svc})
+	a.SetOperatingMode(consensus.OpModeConnected)
+
+	local := svc.GetClosedLedger()
+	require.NotNil(t, local)
+	require.Equal(t, uint32(2), local.Sequence())
+
+	cfg := rcl.DefaultConfig()
+	cfg.ManualTick = true
+	engine := rcl.NewEngine(a, cfg)
+	require.NoError(t, engine.Start(t.Context()))
+	t.Cleanup(func() { require.NoError(t, engine.Stop()) })
+	require.NoError(t, engine.StartRound(consensus.RoundID{
+		Seq:        local.Sequence() + 1,
+		ParentHash: consensus.LedgerID(local.Hash()),
+	}, false))
+
+	stateMap, err := local.StateMapSnapshot()
+	require.NoError(t, err)
+	txMap, err := local.TxMapSnapshot()
+	require.NoError(t, err)
+	networkHeader := local.Header()
+	networkHeader.CloseTime = networkHeader.CloseTime.Add(time.Second)
+	networkHeader.Hash = header.CalculateHash(networkHeader)
+	require.NotEqual(t, local.Hash(), networkHeader.Hash)
+
+	bootstrapped, err := svc.BootstrapLedgerWithState(t.Context(), &networkHeader, stateMap, txMap)
+	require.NoError(t, err)
+	require.True(t, bootstrapped)
+	require.Equal(t, consensus.LedgerID{}, a.GetValidatedLedgerHash())
+
+	engine.TimerEntry()
+
+	require.Equal(t, consensus.ModeSwitchedLedger, engine.Mode())
+	state := engine.State()
+	require.NotNil(t, state)
+	require.Equal(t, uint32(3), state.Round.Seq)
+	require.Equal(t, networkHeader.Hash, state.Round.ParentHash)
+}
 
 func TestAcquiredValidatedTipSurvivesRecoveryTimerTick(t *testing.T) {
 	a := newTestAdaptor(t)

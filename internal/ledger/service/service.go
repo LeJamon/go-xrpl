@@ -477,59 +477,52 @@ func (s *Service) Start() error {
 		"hash", strconv.FormatUint(uint64(hash[0])<<24|uint64(hash[1])<<16|uint64(hash[2])<<8|uint64(hash[3]), 16)+"...",
 	)
 
-	if s.config.Standalone {
-		// Standalone: create ledger 2 locally and start from there.
-		nextLedger, err := ledger.NewOpen(genesisLedger, time.Now())
+	var latest *ledger.Ledger
+	if !s.config.Standalone && s.config.FastLoad {
+		latest, err = s.loadLatestLedger(context.Background())
 		if err != nil {
-			return fmt.Errorf("failed to create next ledger: %w", err)
+			s.logger.Warn("fast load failed; starting from genesis", "err", err)
 		}
-		if err := nextLedger.Close(time.Now(), 0); err != nil {
+	}
+
+	if latest == nil {
+		initialClosed, err := ledger.NewOpen(genesisLedger, time.Now())
+		if err != nil {
+			return fmt.Errorf("failed to create initial closed ledger: %w", err)
+		}
+		if err := initialClosed.Close(time.Now(), 0); err != nil {
 			return fmt.Errorf("failed to close initial ledger: %w", err)
 		}
-		if err := nextLedger.SetValidated(); err != nil {
-			return fmt.Errorf("failed to validate initial ledger: %w", err)
-		}
-		s.closedLedger = nextLedger
-		s.validatedLedger = nextLedger
-		s.validatedSignTime = nextLedger.CloseTime()
-		s.putHistoryLocked(nextLedger)
+		s.closedLedger = initialClosed
+		s.putHistoryLocked(initialClosed)
 
-		openLedger, err := ledger.NewOpen(nextLedger, time.Now())
-		if err != nil {
-			return fmt.Errorf("failed to create open ledger: %w", err)
-		}
-		s.openLedger = openLedger
-	} else {
-		var latest *ledger.Ledger
-		if s.config.FastLoad {
-			latest, err = s.loadLatestLedger(context.Background())
-			if err != nil {
-				s.logger.Warn("fast load failed; starting from genesis", "err", err)
+		if s.config.Standalone {
+			if err := initialClosed.SetValidated(); err != nil {
+				return fmt.Errorf("failed to validate initial ledger: %w", err)
 			}
-		}
-		if latest == nil {
-			s.closedLedger = genesisLedger
-			s.validatedLedger = genesisLedger
-			s.needsInitialSync = true
+			s.validatedLedger = initialClosed
+			s.validatedSignTime = initialClosed.CloseTime()
 		} else {
-			s.closedLedger = latest
-			s.validatedLedger = latest
-			s.validatedSignTime = latest.CloseTime()
-			if latest.Sequence() != genesisLedger.Sequence() {
-				s.deleteHistoryLocked(genesisLedger.Sequence())
-			}
-			s.putHistoryLocked(latest)
-			s.collectTransactionResults(latest, latest.Sequence(), latest.Hash())
-			s.needsInitialSync = false
-			s.logger.Info("Loaded persisted validated ledger", "sequence", latest.Sequence())
+			s.needsInitialSync = true
 		}
-
-		openLedger, err := ledger.NewOpen(s.closedLedger, time.Now())
-		if err != nil {
-			return fmt.Errorf("failed to create open ledger: %w", err)
+	} else {
+		s.closedLedger = latest
+		s.validatedLedger = latest
+		s.validatedSignTime = latest.CloseTime()
+		if latest.Sequence() != genesisLedger.Sequence() {
+			s.deleteHistoryLocked(genesisLedger.Sequence())
 		}
-		s.openLedger = openLedger
+		s.putHistoryLocked(latest)
+		s.collectTransactionResults(latest, latest.Sequence(), latest.Hash())
+		s.needsInitialSync = false
+		s.logger.Info("Loaded persisted validated ledger", "sequence", latest.Sequence())
 	}
+
+	openLedger, err := ledger.NewOpen(s.closedLedger, time.Now())
+	if err != nil {
+		return fmt.Errorf("failed to create open ledger: %w", err)
+	}
+	s.openLedger = openLedger
 
 	s.pendingTxs = nil
 
