@@ -83,6 +83,7 @@ func TestAdoptLedgerWithState_FixMismatchInvalidatesDivergedTail(t *testing.T) {
 	// slot.
 	svc.closedLedger = ledC
 	svc.mu.Unlock()
+	seedCompleteLedgers(t, svc, baseSeq, baseSeq+2)
 
 	// Build the divergent D at seq S+1. Its parentHash is NOT hashA,
 	// so it does NOT chain to our stored A — this must trip fixMismatch.
@@ -129,6 +130,8 @@ func TestAdoptLedgerWithState_FixMismatchInvalidatesDivergedTail(t *testing.T) {
 	require.NotNil(t, svc.closedLedger)
 	assert.Equal(t, hashD, svc.closedLedger.Hash(),
 		"closedLedger must track the adopted ledger after a fork-switch adopt")
+	assert.Equal(t, "empty", svc.completeLedgersString(),
+		"fork invalidation must remove every purged ledger from complete_ledgers")
 }
 
 // TestAdoptLedgerWithState_NoMismatchNoOp pins the happy path:

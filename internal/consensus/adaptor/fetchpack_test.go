@@ -59,7 +59,7 @@ func TestFetchPackCache_Sweep(t *testing.T) {
 	c.add([32]byte{1}, []byte{1}, t0)
 	c.add([32]byte{2}, []byte{2}, t0.Add(40*time.Second))
 	c.sweep(t0.Add(fetchPackCacheTTL + time.Second))
-	require.Equal(t, 1, c.size(), "sweep should drop only the expired entry")
+	require.Equal(t, 1, c.Size(), "sweep should drop only the expired entry")
 	if _, ok := c.get([32]byte{2}, t0.Add(40*time.Second)); !ok {
 		t.Error("sweep dropped a still-fresh entry")
 	}
@@ -73,7 +73,7 @@ func TestFetchPackCache_AcceptsNewcomersOverTarget(t *testing.T) {
 	c.add([32]byte{1}, []byte{1}, t0)
 	c.add([32]byte{2}, []byte{2}, t0)
 	c.add([32]byte{3}, []byte{3}, t0)
-	require.Equal(t, 3, c.size(), "newcomer over the target was refused")
+	require.Equal(t, 3, c.Size(), "newcomer over the target was refused")
 	got, ok := c.get([32]byte{3}, t0)
 	require.True(t, ok, "a fresh, useful node over the target must remain available")
 	require.Equal(t, byte(3), got[0])
@@ -93,7 +93,7 @@ func TestFetchPackCache_SweepShrinksProportionallyOverTarget(t *testing.T) {
 	c.add([32]byte{3}, []byte{3}, t0.Add(20*time.Second))
 	c.add([32]byte{4}, []byte{4}, t0.Add(20*time.Second))
 	c.sweep(t0.Add(30 * time.Second))
-	require.Equal(t, 2, c.size(), "oversized cache should age out the older half")
+	require.Equal(t, 2, c.Size(), "oversized cache should age out the older half")
 	for _, h := range [][32]byte{{1}, {2}} {
 		if _, ok := c.get(h, t0.Add(30*time.Second)); ok {
 			t.Errorf("entry %v older than the shrunk window survived sweep", h[0])
@@ -129,7 +129,8 @@ func TestFetchPackCache_NilReceiver(t *testing.T) {
 		t.Error("nil cache returned a hit")
 	}
 	c.sweep(time.Unix(1, 0))
-	require.Equal(t, 0, c.size())
+	require.Equal(t, 0, c.Size())
+	require.Equal(t, uint32(0), (*Router)(nil).FetchPackCacheSize())
 }
 
 // TestMakeFetchPack_PacksParentTree verifies the serve side packs the parent
@@ -261,7 +262,8 @@ func TestHandleFetchPackReply_VerifiesAndCaches(t *testing.T) {
 		Payload: payload,
 	})
 
-	assert.Equal(t, len(valid), r.fetchPacks.size(), "only verifiable SHAMap nodes should be cached")
+	assert.Equal(t, len(valid), r.fetchPacks.Size(), "only verifiable SHAMap nodes should be cached")
+	assert.Equal(t, uint32(len(valid)), r.FetchPackCacheSize())
 	for _, n := range valid {
 		if _, ok := r.fetchPacks.get(n.Hash, time.Now()); !ok {
 			t.Errorf("valid node %x not cached", n.Hash[:8])
@@ -378,7 +380,7 @@ func TestHandleFetchPackReply_NoActiveAcquisitionDropped(t *testing.T) {
 		Payload: payload,
 	})
 
-	assert.Equal(t, 0, r.fetchPacks.size(), "unsolicited pack must not be cached")
+	assert.Equal(t, 0, r.fetchPacks.Size(), "unsolicited pack must not be cached")
 	assert.Empty(t, rs.getBadDataCalls(), "an unsolicited pack is benign, not a charge")
 }
 
@@ -400,7 +402,7 @@ func TestHandleFetchPackReply_OversizedTruncatedNotCharged(t *testing.T) {
 		Payload: payload,
 	})
 
-	assert.Equal(t, fetchPackMaxObjects, r.fetchPacks.size(),
+	assert.Equal(t, fetchPackMaxObjects, r.fetchPacks.Size(),
 		"processing is bounded to the serve cap; surplus objects are ignored")
 	assert.Empty(t, rs.getBadDataCalls(),
 		"an over-cap reply from an honest peer must not be charged")
@@ -430,7 +432,7 @@ func TestHandleFetchPackReply_PoisonCharged(t *testing.T) {
 		Payload: payload,
 	})
 
-	assert.Equal(t, len(nodes), r.fetchPacks.size(), "verifiable nodes must still be cached")
+	assert.Equal(t, len(nodes), r.fetchPacks.Size(), "verifiable nodes must still be cached")
 	calls := rs.getBadDataCalls()
 	require.Len(t, calls, 1)
 	assert.Equal(t, uint64(11), calls[0].peerID)
@@ -458,7 +460,7 @@ func TestHandleFetchPackReply_HeaderObjectNotCharged(t *testing.T) {
 		Payload: payload,
 	})
 
-	assert.Equal(t, len(nodes), r.fetchPacks.size(), "valid nodes cached; header dropped")
+	assert.Equal(t, len(nodes), r.fetchPacks.Size(), "valid nodes cached; header dropped")
 	var headerHash [32]byte
 	copy(headerHash[:], bytes.Repeat([]byte{0xEE}, 32))
 	if _, ok := r.fetchPacks.get(headerHash, time.Now()); ok {

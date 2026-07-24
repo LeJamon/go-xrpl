@@ -57,6 +57,33 @@ func (c *CompleteLedgerSet) AddRange(start, end uint32) {
 	c.ranges = c.mergeRange(c.ranges, newRange)
 }
 
+// Remove marks a single ledger sequence as incomplete.
+func (c *CompleteLedgerSet) Remove(seq uint32) {
+	c.RemoveRange(seq, seq)
+}
+
+// RemoveRange marks a range of ledger sequences as incomplete.
+func (c *CompleteLedgerSet) RemoveRange(start, end uint32) {
+	if start > end {
+		return
+	}
+
+	result := make([]LedgerRange, 0, len(c.ranges)+1)
+	for _, existing := range c.ranges {
+		if existing.End < start || existing.Start > end {
+			result = append(result, existing)
+			continue
+		}
+		if existing.Start < start {
+			result = append(result, LedgerRange{Start: existing.Start, End: start - 1})
+		}
+		if existing.End > end {
+			result = append(result, LedgerRange{Start: end + 1, End: existing.End})
+		}
+	}
+	c.ranges = result
+}
+
 // Contains checks if a ledger sequence is marked as complete
 func (c *CompleteLedgerSet) Contains(seq uint32) bool {
 	// Binary search for efficiency
@@ -170,7 +197,7 @@ func (c *CompleteLedgerSet) mergeRange(ranges []LedgerRange, newRange LedgerRang
 
 	for i, existing := range ranges {
 		// If new range comes before this range and doesn't overlap
-		if !merged && newRange.End+1 < existing.Start {
+		if !merged && newRange.End < existing.Start && existing.Start-newRange.End > 1 {
 			result = append(result, newRange)
 			result = append(result, ranges[i:]...)
 			merged = true
@@ -209,6 +236,9 @@ func (c *CompleteLedgerSet) mergeRange(ranges []LedgerRange, newRange LedgerRang
 
 // rangesOverlapOrAdjacent checks if two ranges overlap or are adjacent
 func (c *CompleteLedgerSet) rangesOverlapOrAdjacent(a, b LedgerRange) bool {
-	// Ranges overlap if one starts before the other ends (with 1-sequence adjacency)
-	return a.Start <= b.End+1 && b.Start <= a.End+1
+	if a.Start <= b.End && b.Start <= a.End {
+		return true
+	}
+	return a.End < b.Start && b.Start-a.End == 1 ||
+		b.End < a.Start && a.Start-b.End == 1
 }

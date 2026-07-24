@@ -64,6 +64,14 @@ func TestPreferredChainSwitchMovesFrontierBeforeConsensusBuild(t *testing.T) {
 		closeTime = closeTime.Add(2 * time.Second)
 		closeConsensusParentGuardLedger(t, svc, closeTime)
 	}
+	staleSeq := preferredParent.Sequence() + historyWindow + 10
+	staleToken := svc.beginValidatedPersistence(staleSeq, [32]byte{0xEE})
+	svc.completeMu.Lock()
+	svc.completedLedgers.AddRange(
+		preferredParent.Sequence()+1,
+		staleSeq,
+	)
+	svc.completeMu.Unlock()
 
 	if err := svc.SwitchToPreferredLedger(preferredParent); err != nil {
 		t.Fatalf("SwitchToPreferredLedger: %v", err)
@@ -76,6 +84,13 @@ func TestPreferredChainSwitchMovesFrontierBeforeConsensusBuild(t *testing.T) {
 	}
 	if _, err := svc.AdoptedLedgerBySequence(preferredParent.Sequence() + 2); !errors.Is(err, ErrLedgerNotFound) {
 		t.Fatalf("abandoned history tail remains after switch: %v", err)
+	}
+	if got := svc.GetServerInfo().CompleteLedgers; got != "empty" {
+		t.Fatalf("abandoned complete-ledger tail remains after switch: %q", got)
+	}
+	svc.recordValidatedPersistence(staleSeq, staleToken, true)
+	if got := svc.GetServerInfo().CompleteLedgers; got != "empty" {
+		t.Fatalf("stale deep-tail persistence restored complete-ledger state: %q", got)
 	}
 
 	seq, err := svc.AcceptConsensusResult(

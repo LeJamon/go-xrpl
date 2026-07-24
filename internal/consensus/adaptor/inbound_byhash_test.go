@@ -54,7 +54,7 @@ func TestHandleNodeReply_AcceptsByHashStateNodes(t *testing.T) {
 		Payload: payload,
 	})
 
-	assert.Equal(t, len(valid), r.fetchPacks.size(), "by-hash state-node reply nodes must be cached")
+	assert.Equal(t, len(valid), r.fetchPacks.Size(), "by-hash state-node reply nodes must be cached")
 	for _, n := range valid {
 		if _, ok := r.fetchPacks.get(n.Hash, time.Now()); !ok {
 			t.Errorf("by-hash node %x not cached", n.Hash[:8])

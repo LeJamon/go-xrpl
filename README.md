@@ -13,12 +13,13 @@ go-xrpl is not a line-by-line port of [rippled](https://github.com/XRPLF/rippled
 ### Prerequisites
 
 - Go 1.24+
+- `just`
 - PostgreSQL (optional, for relational storage)
 
 ### Build
 
 ```bash
-go build -o ./tmp/main ./cmd/xrpld
+just build
 ```
 
 ### Run
@@ -68,7 +69,7 @@ brew install openssl@3 secp256k1 pkg-config
 export PKG_CONFIG_PATH="$(brew --prefix openssl@3)/lib/pkgconfig:$(brew --prefix secp256k1)/lib/pkgconfig"
 # Debian/Ubuntu: sudo apt install -y libssl-dev libsecp256k1-dev pkg-config
 
-go build ./cmd/xrpld        # or: just build
+just build
 ```
 
 See **[docs/operating.md](docs/operating.md)** for static/Alpine builds, the

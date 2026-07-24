@@ -64,11 +64,6 @@ type Result struct {
 
 type SubmittedTxCallback func(SubmittedTxEvent)
 
-// ledgerEventBufferDepth bounds the accepted-ledger event dispatch queue. Deep
-// enough to absorb a catch-up adoption burst (many ledgers per second) without
-// dropping stream events; a wedged subscriber past this is shed and counted.
-const ledgerEventBufferDepth = 256
-
 func (s *Service) SetEventCallback(callback EventCallback) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -80,13 +75,15 @@ func (s *Service) SetEventCallback(callback EventCallback) {
 // per-event goroutines that ran it concurrently with itself — a data race on
 // the subscriber's state and out-of-order ledgerClosed delivery. rippled
 // serializes the equivalent through NetworkOPs' single job-queue strand.
-// Enqueue is non-blocking: a lagging subscriber drops the event with a counted
-// warn rather than stalling ledger close.
+// Enqueue is non-blocking and lossless: a lagging subscriber grows the queue
+// without stalling ledger close or dropping publication state.
 func (s *Service) dispatchLedgerEvent(event *LedgerAcceptedEvent) {
 	if event == nil {
 		return
 	}
-	if s.ledgerEventCh == nil {
+	s.ledgerEventMu.Lock()
+	if !s.ledgerEventStarted {
+		s.ledgerEventMu.Unlock()
 		// Dispatcher not started (paths that emit without Start). Deliver on a
 		// fresh goroutine to preserve the "callback fires, never under s.mu"
 		// contract; ordering isn't guaranteed here, but Start-anchored callers
@@ -94,12 +91,16 @@ func (s *Service) dispatchLedgerEvent(event *LedgerAcceptedEvent) {
 		go s.deliverLedgerEvent(event)
 		return
 	}
-	select {
-	case s.ledgerEventCh <- event:
-	default:
-		n := s.droppedLedgerEvents.Add(1)
-		s.logger.Warn("ledger event subscriber lagging; dropping event", "droppedTotal", n)
+	if s.ledgerEventStopping {
+		s.ledgerEventMu.Unlock()
+		return
 	}
+	s.ledgerEventQueue = append(s.ledgerEventQueue, event)
+	select {
+	case s.ledgerEventWake <- struct{}{}:
+	default:
+	}
+	s.ledgerEventMu.Unlock()
 }
 
 // runLedgerEventDispatcher is the single consumer that delivers accepted-ledger
@@ -108,37 +109,44 @@ func (s *Service) dispatchLedgerEvent(event *LedgerAcceptedEvent) {
 func (s *Service) runLedgerEventDispatcher() {
 	defer s.ledgerEventWG.Done()
 	for {
-		select {
-		case ev := <-s.ledgerEventCh:
-			s.deliverLedgerEvent(ev)
-		case <-s.ledgerEventQuit:
-			for {
-				select {
-				case ev := <-s.ledgerEventCh:
-					s.deliverLedgerEvent(ev)
-				default:
-					return
-				}
+		<-s.ledgerEventWake
+		for {
+			s.ledgerEventMu.Lock()
+			if len(s.ledgerEventQueue) != 0 {
+				ev := s.ledgerEventQueue[0]
+				s.ledgerEventQueue[0] = nil
+				s.ledgerEventQueue = s.ledgerEventQueue[1:]
+				s.ledgerEventMu.Unlock()
+				s.deliverLedgerEvent(ev)
+				continue
 			}
+			stopping := s.ledgerEventStopping
+			s.ledgerEventMu.Unlock()
+			if stopping {
+				return
+			}
+			break
 		}
 	}
 }
 
-// deliverLedgerEvent reads the current callback under a read lock (so a
-// late-wired or unwired callback is respected) and invokes it outside the lock,
-// preserving the contract that subscriber callbacks never run under s.mu.
+// deliverLedgerEvent advances the published frontier at the ordered delivery
+// boundary, then invokes the current callback outside the lock.
 func (s *Service) deliverLedgerEvent(event *LedgerAcceptedEvent) {
-	s.mu.RLock()
+	s.mu.Lock()
+	if event.Ledger != nil && event.Ledger.IsValidated() {
+		seq := event.Ledger.Sequence()
+		if !s.havePublished || seq > s.publishedLedgerSeq {
+			s.publishedLedgerSeq = seq
+			s.havePublished = true
+		}
+	}
 	cb := s.eventCallback
-	s.mu.RUnlock()
+	s.mu.Unlock()
 	if cb != nil {
 		cb(event)
 	}
 }
-
-// DroppedLedgerEvents returns the cumulative count of accepted-ledger events
-// shed because the subscriber lagged.
-func (s *Service) DroppedLedgerEvents() uint64 { return s.droppedLedgerEvents.Load() }
 
 // SetSubmittedTxCallback registers a sink fired from SubmitTransaction after
 // every apply attempt. Pass nil to unwire.

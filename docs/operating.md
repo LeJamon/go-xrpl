@@ -28,9 +28,10 @@ Then build:
 
 ```bash
 just build                 # → ../tmp/main (CGO + OpenSSL)
-# or
-go build -o ./tmp/main ./cmd/xrpld
 ```
+
+The recipe embeds `git describe --tags --always --dirty` in the binary. Set
+`VERSION` explicitly to override it for a packaged build.
 
 A `CGO_ENABLED=0 go build ./cmd/xrpld` also works: the resulting binary cannot
 connect to or accept peers (`peertls` returns `ErrSessionSigUnsupported`) and uses
@@ -86,6 +87,11 @@ supported). When neither `admin` nor `secure_gateway` is configured, direct
 loopback requests also receive admin role; other clients receive **guest** role.
 Always set `secure_gateway` on a same-host public proxy backend so loopback does
 not trigger that admin fallback.
+
+`server_info` and `server_state` omit rippled's optional job-queue `load`,
+requested `counters`, and `current_activities` fields. go-xrpl does not yet have
+equivalent job/performance instrumentation, so these fields remain unsupported
+rather than reporting placeholder data.
 
 ### TLS and reverse proxies
 

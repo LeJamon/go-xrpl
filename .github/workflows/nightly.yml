@@ -64,7 +64,13 @@ jobs:
       - uses: actions/checkout@v5
 
       - name: Build goxrpl docker image
-        run: docker build -t goxrpl:latest .
+        run: docker build --build-arg "VERSION=${{ github.sha }}" -t goxrpl:latest .
+
+      - name: Verify goxrpl image version
+        run: |
+          set -o pipefail
+          docker run --rm goxrpl:latest version |
+            grep --fixed-strings --line-regexp "go-xrpl version ${{ github.sha }}"
 
       - name: Run extended consensus soak
         run: bash scripts/consensus-smoke/smoke.sh

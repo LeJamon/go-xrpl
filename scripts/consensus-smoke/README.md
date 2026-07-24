@@ -32,7 +32,7 @@ smoke.
 
 ```
 # Build a goxrpl image from your branch first:
-docker build -t goxrpl:latest .
+docker build --build-arg "VERSION=$(git rev-parse HEAD)" -t goxrpl:latest .
 
 # Then run the smoke:
 bash scripts/consensus-smoke/smoke.sh

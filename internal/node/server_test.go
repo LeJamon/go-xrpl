@@ -4,10 +4,13 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"runtime/debug"
 	"sync"
 	"testing"
 
+	"github.com/LeJamon/go-xrpl/config"
 	"github.com/LeJamon/go-xrpl/internal/consensus"
+	"github.com/LeJamon/go-xrpl/internal/rpc/types"
 	xrpllog "github.com/LeJamon/go-xrpl/log"
 	"github.com/stretchr/testify/assert"
 )
@@ -48,6 +51,50 @@ func TestEffectivePeerFetchDepth(t *testing.T) {
 			assert.Equal(t, tc.want, effectivePeerFetchDepth(tc.fetchDepth, tc.onlineDelete))
 		})
 	}
+}
+
+func TestServerInfoConfigSnapshot(t *testing.T) {
+	cfg := &config.Config{
+		Server:       config.ServerConfig{Ports: []string{"public", "blank-admin", "admin-user"}},
+		ServerDomain: "example.test",
+		Ports: map[string]config.PortConfig{
+			"public": {
+				Port:     5005,
+				Protocol: "http",
+			},
+			"blank-admin": {
+				Port:     6005,
+				Protocol: "ws",
+				Admin:    []string{"", "  "},
+			},
+			"admin-user": {
+				Port:      6006,
+				Protocol:  "ws",
+				AdminUser: "operator",
+			},
+		},
+	}
+
+	snapshot := serverInfoConfigSnapshot(cfg)
+	assert.Equal(t, "example.test", snapshot.ServerDomain)
+	assert.Equal(t, "medium", snapshot.NodeSize)
+	assert.Equal(t, []types.ServerInfoPortSnapshot{
+		{Port: 5005, Protocol: "http"},
+		{Port: 6005, Protocol: "ws"},
+		{Port: 6006, Protocol: "ws", Admin: true},
+	}, snapshot.Ports)
+}
+
+func TestIsFullGitHash(t *testing.T) {
+	assert.True(t, isFullGitHash("81f392511234abcd81f392511234abcd81f39251"))
+	assert.False(t, isFullGitHash("81f3925"))
+	assert.False(t, isFullGitHash("81f392511234abcd81f392511234abcd81f3925z"))
+}
+
+func TestResolveBuildRevisionFallsBackToInjectedFullHash(t *testing.T) {
+	const injected = "81f392511234abcd81f392511234abcd81f39251"
+	assert.Equal(t, injected, resolveBuildRevision(&debug.BuildInfo{}, true, injected))
+	assert.Empty(t, resolveBuildRevision(&debug.BuildInfo{}, true, "v3.2.0"))
 }
 
 func (s *recordingSink) ReloadStaticValidators(validators []consensus.NodeID, masterKeys [][33]byte) {
