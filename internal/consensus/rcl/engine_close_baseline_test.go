@@ -63,6 +63,33 @@ func TestEngine_LastCloseBaseline(t *testing.T) {
 	}
 }
 
+func TestEngine_CanBeCurrentUsesParentCloseTime(t *testing.T) {
+	a := newMockAdaptor()
+	e := NewEngine(a, DefaultConfig())
+
+	tests := []struct {
+		name        string
+		closeTime   time.Time
+		parentClose time.Time
+		want        bool
+	}{
+		{"stale parent is rejected", a.Now(), a.Now().Add(-6 * time.Minute), false},
+		{"current parent is accepted", a.Now().Add(-6 * time.Minute), a.Now(), true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			candidate := &reporterLedger{
+				mockLedger:      &mockLedger{seq: 101, closeTime: tt.closeTime},
+				closeAgree:      true,
+				parentCloseTime: tt.parentClose,
+			}
+			if got := e.canBeCurrentLocked(candidate); got != tt.want {
+				t.Fatalf("canBeCurrentLocked() = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
 // TestEngine_PrevCloseTime_SeededAcrossRounds checks the cross-round carry of
 // our own observed close time (rippled prevCloseTime_): seeded from the seed
 // ledger on the first round, then from the self close time of the round that

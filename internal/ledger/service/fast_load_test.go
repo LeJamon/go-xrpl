@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"errors"
+	"sync"
 	"testing"
 	"time"
 
@@ -22,6 +23,51 @@ import (
 type corruptDescendantFamily struct {
 	inner shamap.Family
 	roots map[[32]byte]struct{}
+}
+
+type parallelFetchDatabase struct {
+	nodestore.Database
+	root    nodestore.Hash256
+	started chan struct{}
+	once    sync.Once
+	mu      sync.Mutex
+	active  int
+	peak    int
+}
+
+func (d *parallelFetchDatabase) Fetch(ctx context.Context, hash nodestore.Hash256) (*nodestore.Node, error) {
+	if hash == d.root {
+		return d.Database.Fetch(ctx, hash)
+	}
+	d.mu.Lock()
+	d.active++
+	if d.active > d.peak {
+		d.peak = d.active
+	}
+	if d.active >= 2 {
+		d.once.Do(func() { close(d.started) })
+	}
+	d.mu.Unlock()
+
+	select {
+	case <-d.started:
+	case <-ctx.Done():
+		d.mu.Lock()
+		d.active--
+		d.mu.Unlock()
+		return nil, ctx.Err()
+	}
+	node, err := d.Database.Fetch(ctx, hash)
+	d.mu.Lock()
+	d.active--
+	d.mu.Unlock()
+	return node, err
+}
+
+func (d *parallelFetchDatabase) peakFetches() int {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	return d.peak
 }
 
 func (f *corruptDescendantFamily) Fetch(ctx context.Context, hash [32]byte) ([]byte, error) {
@@ -121,6 +167,47 @@ func TestService_FastLoadRestoresPersistedValidatedLedger(t *testing.T) {
 	require.True(t, ok)
 	require.Equal(t, seq, firstSeq)
 	require.Equal(t, seq, lastSeq)
+}
+
+func TestService_VerifyStoredSHAMapWalksRootBranchesInParallel(t *testing.T) {
+	ctx := context.Background()
+	db := nodestore.NewKVDatabase(memorydb.New(), "parallel-fast-load", 10_000, time.Hour)
+	t.Cleanup(func() { require.NoError(t, db.Close()) })
+	svc, err := New(Config{
+		Standalone:    true,
+		GenesisConfig: genesis.DefaultConfig(),
+		NodeStore:     db,
+		SHAMapFamily:  shamap.NewNodeStoreFamily(db),
+	})
+	require.NoError(t, err)
+	require.NoError(t, svc.Start())
+	t.Cleanup(svc.Stop)
+
+	for branch := range shamap.BranchFactor {
+		var key [32]byte
+		key[0] = byte(branch << 4)
+		key[31] = byte(branch + 1)
+		data := make([]byte, 12)
+		data[11] = byte(branch + 1)
+		require.NoError(t, svc.openLedger.Insert(keylet.Keylet{Key: key}, data))
+	}
+	_, err = svc.AcceptLedger(ctx)
+	require.NoError(t, err)
+	svc.FlushPersists()
+	root, err := svc.GetValidatedLedger().StateMapHash()
+	require.NoError(t, err)
+
+	tracked := &parallelFetchDatabase{
+		Database: db,
+		root:     nodestore.Hash256(root),
+		started:  make(chan struct{}),
+	}
+	svc.nodeStore = tracked
+	walkCtx, cancel := context.WithTimeout(ctx, time.Second)
+	defer cancel()
+	require.NoError(t, svc.verifyStoredSHAMap(walkCtx, root, shamap.TypeState))
+	require.Greater(t, tracked.peakFetches(), 1)
+	require.LessOrEqual(t, tracked.peakFetches(), shamap.BranchFactor)
 }
 
 func TestService_FastLoadFallsBackWhenStorageIsEmpty(t *testing.T) {

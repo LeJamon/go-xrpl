@@ -260,6 +260,43 @@ func ReadMessage(r io.Reader) (*Header, []byte, error) {
 	return readMessage(r, nil)
 }
 
+// ReadHeader reads and validates exactly one message header.
+func ReadHeader(r io.Reader) (*Header, error) {
+	headerBuf := make([]byte, HeaderSizeCompressed)
+	if _, err := io.ReadFull(r, headerBuf[:HeaderSizeUncompressed]); err != nil {
+		return nil, fmt.Errorf("failed to read header: %w", err)
+	}
+
+	if headerBuf[0]&0x80 != 0 {
+		if _, err := io.ReadFull(r, headerBuf[HeaderSizeUncompressed:HeaderSizeCompressed]); err != nil {
+			return nil, fmt.Errorf("failed to read compressed header: %w", err)
+		}
+	}
+
+	header, err := DecodeHeader(headerBuf)
+	if err != nil {
+		return nil, err
+	}
+	if err := validateHeaderClaims(*header); err != nil {
+		return nil, err
+	}
+	return header, nil
+}
+
+// ReadPayload reads exactly the payload declared by a validated header.
+func ReadPayload(r io.Reader, header Header) ([]byte, error) {
+	if err := validateHeaderClaims(header); err != nil {
+		return nil, err
+	}
+	payload := make([]byte, header.PayloadSize)
+	if header.PayloadSize > 0 {
+		if _, err := io.ReadFull(r, payload); err != nil {
+			return nil, fmt.Errorf("failed to read payload: %w", err)
+		}
+	}
+	return payload, nil
+}
+
 // ReadMessageWithHeader reads a complete message and calls onHeader after the
 // header and size claims have been validated but before the payload is
 // allocated.
@@ -268,31 +305,31 @@ func ReadMessageWithHeader(r io.Reader, onHeader func(Header) error) (*Header, [
 }
 
 func readMessage(r io.Reader, onHeader func(Header) error) (*Header, []byte, error) {
-	// Read header (start with minimum size)
-	headerBuf := make([]byte, HeaderSizeCompressed)
-	if _, err := io.ReadFull(r, headerBuf[:HeaderSizeUncompressed]); err != nil {
-		return nil, nil, fmt.Errorf("failed to read header: %w", err)
-	}
-
-	// Check if compressed
-	if headerBuf[0]&0x80 != 0 {
-		// Read additional 4 bytes for compressed header
-		if _, err := io.ReadFull(r, headerBuf[HeaderSizeUncompressed:HeaderSizeCompressed]); err != nil {
-			return nil, nil, fmt.Errorf("failed to read compressed header: %w", err)
-		}
-	}
-
-	header, err := DecodeHeader(headerBuf)
+	header, err := ReadHeader(r)
 	if err != nil {
 		return nil, nil, err
 	}
 
+	if onHeader != nil {
+		if err := onHeader(*header); err != nil {
+			return nil, nil, err
+		}
+	}
+
+	payload, err := ReadPayload(r, *header)
+	if err != nil {
+		return nil, nil, err
+	}
+	return header, payload, nil
+}
+
+func validateHeaderClaims(header Header) error {
 	// Hard protocol ceiling: rippled drops any message whose on-wire or
 	// uncompressed claim exceeds a single 64 MB cap, on both fields
 	// (ProtocolMessage.h:362-367). This is the absolute upper bound; the
 	// per-type caps below add stricter, type-aware hardening.
 	if header.PayloadSize > MaxMessageSize || header.UncompressedSize > MaxMessageSize {
-		return nil, nil, fmt.Errorf("%w: exceeds protocol max %d bytes",
+		return fmt.Errorf("%w: exceeds protocol max %d bytes",
 			ErrMessageTooLarge, MaxMessageSize)
 	}
 
@@ -301,28 +338,14 @@ func readMessage(r io.Reader, onHeader func(Header) error) (*Header, []byte, err
 	// giant slice.
 	maxSize := MaxPayloadSizeForType(header.MessageType)
 	if header.PayloadSize > maxSize {
-		return nil, nil, fmt.Errorf("%w: %d > %d for %s",
+		return fmt.Errorf("%w: %d > %d for %s",
 			ErrMessageTooLarge, header.PayloadSize, maxSize, header.MessageType)
 	}
 	if header.Compressed && header.UncompressedSize > maxSize {
-		return nil, nil, fmt.Errorf("%w: uncompressed %d > %d for %s",
+		return fmt.Errorf("%w: uncompressed %d > %d for %s",
 			ErrMessageTooLarge, header.UncompressedSize, maxSize, header.MessageType)
 	}
-	if onHeader != nil {
-		if err := onHeader(*header); err != nil {
-			return nil, nil, err
-		}
-	}
-
-	// Read payload
-	payload := make([]byte, header.PayloadSize)
-	if header.PayloadSize > 0 {
-		if _, err := io.ReadFull(r, payload); err != nil {
-			return nil, nil, fmt.Errorf("failed to read payload: %w", err)
-		}
-	}
-
-	return header, payload, nil
+	return nil
 }
 
 // WriteMessage writes a message with header to the writer.

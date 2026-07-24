@@ -387,12 +387,86 @@ func (s *Service) fixMismatchLocked(adopted *ledger.Ledger) {
 // AcceptConsensusResult closes the open ledger from a consensus-agreed tx set and
 // close time. Unlike AcceptLedger it takes the agreed set/time as parameters,
 // doesn't require standalone, and does NOT auto-validate (the validation tracker
-// does). parent is the ledger to build on; when consensus switches chains it may
-// differ from s.closedLedger, and the service resets state accordingly.
+// does). An ordinary result must build on the current closed ledger.
 // disputedBlobs are the round's disputed txs we voted NO on (peer-proposed,
 // excluded from the agreed set); they get first crack at the new open ledger,
 // ahead of the TxQ.
 func (s *Service) AcceptConsensusResult(ctx context.Context, parent *ledger.Ledger, txBlobs, disputedBlobs [][]byte, closeTime time.Time, closeTimeCorrect bool) (uint32, error) {
+	return s.acceptConsensusResult(ctx, parent, txBlobs, disputedBlobs, closeTime, closeTimeCorrect)
+}
+
+// SwitchToPreferredLedger installs the complete ledger selected by consensus as
+// the canonical closed-ledger frontier before the recovery round starts.
+func (s *Service) SwitchToPreferredLedger(parent *ledger.Ledger) error {
+	s.mu.Lock()
+	previousValidatedSeq := s.validatedLedgerSeqLocked()
+	defer s.unlockAndNotifyValidatedLedger(previousValidatedSeq)
+
+	if s.closedLedger == nil {
+		return ErrNoClosedLedger
+	}
+	if parent == nil || !parent.IsClosed() {
+		return ErrPreferredChainSwitch
+	}
+
+	parentHash := parent.Hash()
+	if parent.Sequence() == s.closedLedger.Sequence() && parentHash == s.closedLedger.Hash() {
+		return nil
+	}
+
+	newOpen, err := ledger.NewOpen(parent, time.Now())
+	if err != nil {
+		return fmt.Errorf("failed to create open ledger after preferred chain switch: %w", err)
+	}
+
+	s.fixMismatchLocked(parent)
+	s.purgeHistoryAfterPreferredSwitchLocked(parent)
+	s.putHistoryLocked(parent)
+	s.cachePersistedLedgerLocked(parent)
+	s.closedLedger = parent
+	s.openLedger = newOpen
+	s.needsInitialSync = false
+	s.collectTransactionResults(parent, parent.Sequence(), parentHash)
+	if parent.IsValidated() {
+		s.evictOldHistoryLocked(parent.Sequence())
+	}
+
+	s.processClosedLedgerLocked()
+	s.acceptOpenLedgerViewLocked(parent.Sequence(), nil, false)
+
+	s.logger.Warn("Switched canonical closed ledger",
+		"seq", parent.Sequence(),
+		"hash", fmt.Sprintf("%x", parentHash[:8]),
+	)
+	return nil
+}
+
+func (s *Service) purgeHistoryAfterPreferredSwitchLocked(parent *ledger.Ledger) {
+	parentSeq := parent.Sequence()
+	parentHash := parent.Hash()
+	removed := make(map[uint32]struct{})
+	for seq, existing := range s.ledgerHistory {
+		if seq < parentSeq || (seq == parentSeq && existing.Hash() == parentHash) {
+			continue
+		}
+		removed[seq] = struct{}{}
+		s.deleteHistoryLocked(seq)
+	}
+	for txHash, txSeq := range s.txIndex {
+		if _, ok := removed[txSeq]; ok {
+			delete(s.txIndex, txHash)
+			delete(s.txPositionIndex, txHash)
+		}
+	}
+}
+
+func (s *Service) acceptConsensusResult(
+	ctx context.Context,
+	parent *ledger.Ledger,
+	txBlobs, disputedBlobs [][]byte,
+	closeTime time.Time,
+	closeTimeCorrect bool,
+) (uint32, error) {
 	s.mu.Lock()
 	previousValidatedSeq := s.validatedLedgerSeqLocked()
 	defer s.unlockAndNotifyValidatedLedger(previousValidatedSeq)
@@ -401,22 +475,13 @@ func (s *Service) AcceptConsensusResult(ctx context.Context, parent *ledger.Ledg
 		return 0, ErrNoClosedLedger
 	}
 
-	// Parent differs from our closed ledger → chain switch; reset state.
-	// A same-seq parent with a different hash is also a switch (issue #470):
-	// otherwise s.openLedger stays pinned to the local alt's state map and
-	// keeps stamping the divergent chain into later ledgers.
-	if parent != nil && (parent.Sequence() != s.closedLedger.Sequence() || parent.Hash() != s.closedLedger.Hash()) {
-		s.closedLedger = parent
-		s.putHistoryLocked(parent)
-		newOpen, err := ledger.NewOpen(parent, closeTime)
-		if err != nil {
-			return 0, fmt.Errorf("failed to create open ledger from parent: %w", err)
-		}
-		s.openLedger = newOpen
-		// Chain switch is a clean reset: rebuild via New, not Accept.
-		if err := s.rebuildOpenLedgerViewLocked(); err != nil {
-			return 0, err
-		}
+	parentDiffers := parent != nil && (parent.Sequence() != s.closedLedger.Sequence() || parent.Hash() != s.closedLedger.Hash())
+	if parentDiffers {
+		return 0, fmt.Errorf("%w: closed=%d/%x parent=%d/%x",
+			ErrConsensusParentMismatch,
+			s.closedLedger.Sequence(), s.closedLedger.Hash(),
+			parent.Sequence(), parent.Hash(),
+		)
 	}
 
 	if s.openLedger == nil {
@@ -597,6 +662,11 @@ func (s *Service) SetValidatedLedgerAt(seq uint32, expectedHash [32]byte, signTi
 	s.mu.Lock()
 	previousValidatedSeq := s.validatedLedgerSeqLocked()
 	l, ok := s.ledgerHistory[seq]
+	if !ok || l.Hash() != expectedHash {
+		if acquired, found := s.persistedLedgers[expectedHash]; found && acquired.Sequence() == seq {
+			l, ok = acquired, true
+		}
+	}
 	// rippled checkAccept is hash-keyed; our seq-keyed map splits into "no entry"
 	// or "different-hash" (same-height fork) — both stash and arm acquisition.
 	if !ok || l.Hash() != expectedHash {
@@ -798,6 +868,29 @@ func (s *Service) NeedsInitialSync() bool {
 	return s.needsInitialSync
 }
 
+// StoreLedgerWithState makes a fully-fetched ledger available by hash without
+// changing the node's closed/open ledger frontier. Consensus may later select
+// the stored ledger as its preferred parent.
+func (s *Service) StoreLedgerWithState(ctx context.Context, h *header.LedgerHeader, stateMap *shamap.SHAMap, txMap *shamap.SHAMap) error {
+	s.mu.Lock()
+	previousValidatedSeq := s.validatedLedgerSeqLocked()
+	defer s.unlockAndNotifyValidatedLedger(previousValidatedSeq)
+	return s.storeLedgerWithStateLocked(ctx, h, stateMap, txMap)
+}
+
+// BootstrapLedgerWithState adopts the first peer ledger. Once bootstrap has
+// completed, later calls only store the acquired ledger for explicit consensus
+// selection.
+func (s *Service) BootstrapLedgerWithState(ctx context.Context, h *header.LedgerHeader, stateMap *shamap.SHAMap, txMap *shamap.SHAMap) (bool, error) {
+	s.mu.Lock()
+	previousValidatedSeq := s.validatedLedgerSeqLocked()
+	defer s.unlockAndNotifyValidatedLedger(previousValidatedSeq)
+	if !s.needsInitialSync {
+		return false, s.storeLedgerWithStateLocked(ctx, h, stateMap, txMap)
+	}
+	return true, s.adoptLedgerWithStateLocked(ctx, h, stateMap, txMap, 0)
+}
+
 // AdoptLedgerWithState adopts a ledger using a fully-fetched state map from a
 // peer. txMap is the verified tx SHAMap on the replay-delta path; pass nil for
 // state-only catchup of a ledger whose transaction root is empty.
@@ -806,6 +899,56 @@ func (s *Service) AdoptLedgerWithState(ctx context.Context, h *header.LedgerHead
 	previousValidatedSeq := s.validatedLedgerSeqLocked()
 	defer s.unlockAndNotifyValidatedLedger(previousValidatedSeq)
 	return s.adoptLedgerWithStateLocked(ctx, h, stateMap, txMap, 0)
+}
+
+func (s *Service) ledgerWithStateLocked(h *header.LedgerHeader, stateMap *shamap.SHAMap, txMap *shamap.SHAMap) (*ledger.Ledger, error) {
+	if s.genesisLedger == nil {
+		return nil, errors.New("no genesis ledger available")
+	}
+	if h == nil {
+		return nil, errors.New("nil ledger header")
+	}
+	if stateMap == nil {
+		return nil, errors.New("nil ledger state map")
+	}
+	if txMap == nil {
+		empty, err := s.genesisLedger.TxMapSnapshot()
+		if err != nil {
+			return nil, fmt.Errorf("failed to snapshot empty tx map: %w", err)
+		}
+		txMap = empty
+	}
+
+	acquired, err := ledger.NewFromHeader(*h, stateMap, txMap, drops.Fees{})
+	if err != nil {
+		return nil, fmt.Errorf("failed to construct acquired ledger: %w", err)
+	}
+	return acquired, nil
+}
+
+func (s *Service) storeLedgerWithStateLocked(ctx context.Context, h *header.LedgerHeader, stateMap *shamap.SHAMap, txMap *shamap.SHAMap) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	stored, err := s.ledgerWithStateLocked(h, stateMap, txMap)
+	if err != nil {
+		return err
+	}
+
+	s.cachePersistedLedgerLocked(stored)
+	promotedByDrain := s.drainPendingLedgerValidationLocked(stored.Sequence(), stored)
+	if promotedByDrain {
+		s.enqueuePersist(stored)
+	} else {
+		s.enqueueNodePersist(stored)
+	}
+
+	storedHash := stored.Hash()
+	s.logger.Info("Stored acquired ledger",
+		"seq", stored.Sequence(),
+		"hash", fmt.Sprintf("%x", storedHash[:8]),
+	)
+	return nil
 }
 
 // adoptLedgerWithStateLocked is the lock-held core of AdoptLedgerWithState.
@@ -818,23 +961,9 @@ func (s *Service) adoptLedgerWithStateLocked(
 	txMap *shamap.SHAMap,
 	cascadeDepth int,
 ) error {
-	if s.genesisLedger == nil {
-		return errors.New("no genesis ledger available")
-	}
-
-	// Caller-supplied tx map (replay-delta) or an empty genesis-shaped one
-	// (header-only catchup).
-	if txMap == nil {
-		empty, err := s.genesisLedger.TxMapSnapshot()
-		if err != nil {
-			return fmt.Errorf("failed to snapshot empty tx map: %w", err)
-		}
-		txMap = empty
-	}
-
-	adopted, err := ledger.NewFromHeader(*h, stateMap, txMap, drops.Fees{})
+	adopted, err := s.ledgerWithStateLocked(h, stateMap, txMap)
 	if err != nil {
-		return fmt.Errorf("failed to construct adopted ledger: %w", err)
+		return err
 	}
 
 	// Invalidate the history tail if adopted doesn't chain to our seq-1 entry

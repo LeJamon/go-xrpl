@@ -17,6 +17,7 @@ import (
 type manifestSender interface {
 	SendManifestFrames(peerID peermanagement.PeerID, frames [][]byte) error
 	BroadcastManifestFrames(frames [][]byte) error
+	BroadcastManifestFramesExcept(peerID peermanagement.PeerID, frames [][]byte) error
 	Peers() []peermanagement.PeerInfo
 }
 
@@ -168,13 +169,14 @@ func (r *Router) handlePeerConnect(peerID peermanagement.PeerID) {
 	if r.peerSessions != nil && !r.peerSessions.IsPeerConnected(peerID) {
 		return
 	}
+	r.reconcilePeerAvailability()
 	if hints, ok := r.peerSessions.(peerLedgerHintView); ok && r.adaptor != nil {
 		if closed, exists := hints.PeerClosedLedger(peerID); exists {
 			r.adaptor.UpdatePeerLCL(uint64(peerID), closed)
 		}
 	}
-	r.SendLocalManifestTo(peerID)
 	r.addPeerToActiveAcquisitions(uint64(peerID))
+	r.SendLocalManifestTo(peerID)
 }
 
 func (r *Router) addPeerToActiveAcquisitions(peerID uint64) {

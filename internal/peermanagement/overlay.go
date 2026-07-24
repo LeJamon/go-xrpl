@@ -27,8 +27,9 @@ import (
 // load. Mirrors rippled bounding these behind its job queue rather than
 // the read strand.
 const (
-	serveWorkerCount = 4
-	serveQueueDepth  = 64
+	serveWorkerCount        = 4
+	serveQueueDepth         = 64
+	manifestReadBudgetBytes = int64(2 * message.MaxMessageSize)
 )
 
 // Overlay is the central orchestrator for XRPL peer-to-peer networking.
@@ -130,7 +131,9 @@ type Overlay struct {
 	// manifestMessages is fed directly by peer read loops with bounded
 	// backpressure. Signature verification is intentionally isolated from both
 	// the overlay event loop and the consensus router.
-	manifestMessages chan *InboundMessage
+	manifestMessages   chan *InboundMessage
+	manifestReadBudget *readBudget
+	manifestSpoolDir   string
 
 	// ledgerData carries acquisition replies (mtLEDGER_DATA, by-hash objects,
 	// and replay/proof-path responses) on a bounded backpressure path. This
@@ -814,6 +817,10 @@ func New(opts ...Option) (*Overlay, error) {
 	if err := clusterReg.Load(cfg.ClusterNodes); err != nil {
 		return nil, fmt.Errorf("invalid cluster_nodes: %w", err)
 	}
+	manifestSpoolDir, err := prepareManifestSpoolDir(cfg.DataDir)
+	if err != nil {
+		return nil, err
+	}
 
 	events := make(chan Event, eventBufferSize(cfg.EventBufferSize))
 
@@ -827,32 +834,34 @@ func New(opts ...Option) (*Overlay, error) {
 	}
 
 	o := &Overlay{
-		cfg:               cfg,
-		identity:          identity,
-		cluster:           clusterReg,
-		instanceCookie:    cookie,
-		discovery:         NewDiscovery(&cfg, events),
-		autoconnectWake:   make(chan struct{}, 1),
-		ledgerSync:        NewLedgerSyncHandler(events),
-		peers:             make(map[PeerID]*Peer),
-		peerKeys:          make(map[string]PeerID),
-		peerEndpoints:     make(map[string]PeerID),
-		inboundIPs:        make(map[string]int),
-		pendingInbound:    make(map[PeerID]struct{}),
-		events:            events,
-		acquisitionEvents: make(chan Event, acquisitionEventBufferSize),
-		messages:          make(chan *InboundMessage, messageBufferSize(cfg.MessageBufferSize)),
-		txMessages:        make(chan *InboundMessage, txLaneBufferSize(cfg.MaxTransactions)),
-		manifestMessages:  make(chan *InboundMessage, manifestMessageBufferSize),
-		ledgerData:        make(chan *InboundMessage, DefaultLedgerDataBufferSize),
-		lifecycle:         make(chan Event, lifecycleBufferSize(&cfg)),
-		stopCh:            make(chan struct{}),
-		listenerReady:     make(chan struct{}),
-		relayedIndex:      make(map[[32]byte]*relayedEntry),
-		clockForIndex:     time.Now,
-		inboundSem:        make(chan struct{}, inboundCap),
-		outboundSem:       make(chan struct{}, outboundCap),
-		resourceManager:   resource.NewManager(nil, nil),
+		cfg:                cfg,
+		identity:           identity,
+		cluster:            clusterReg,
+		instanceCookie:     cookie,
+		discovery:          NewDiscovery(&cfg, events),
+		autoconnectWake:    make(chan struct{}, 1),
+		ledgerSync:         NewLedgerSyncHandler(events),
+		peers:              make(map[PeerID]*Peer),
+		peerKeys:           make(map[string]PeerID),
+		peerEndpoints:      make(map[string]PeerID),
+		inboundIPs:         make(map[string]int),
+		pendingInbound:     make(map[PeerID]struct{}),
+		events:             events,
+		acquisitionEvents:  make(chan Event, acquisitionEventBufferSize),
+		messages:           make(chan *InboundMessage, messageBufferSize(cfg.MessageBufferSize)),
+		txMessages:         make(chan *InboundMessage, txLaneBufferSize(cfg.MaxTransactions)),
+		manifestMessages:   make(chan *InboundMessage, manifestMessageBufferSize(cfg.MaxPeers)),
+		manifestReadBudget: newReadBudget(manifestReadBudgetBytes),
+		manifestSpoolDir:   manifestSpoolDir,
+		ledgerData:         make(chan *InboundMessage, DefaultLedgerDataBufferSize),
+		lifecycle:          make(chan Event, lifecycleBufferSize(&cfg)),
+		stopCh:             make(chan struct{}),
+		listenerReady:      make(chan struct{}),
+		relayedIndex:       make(map[[32]byte]*relayedEntry),
+		clockForIndex:      time.Now,
+		inboundSem:         make(chan struct{}, inboundCap),
+		outboundSem:        make(chan struct{}, outboundCap),
+		resourceManager:    resource.NewManager(nil, nil),
 	}
 	if identity != nil {
 		o.localNodeIdentity = identity.PublicKey()

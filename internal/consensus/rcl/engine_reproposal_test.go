@@ -144,3 +144,37 @@ func TestEngine_LeaveConsensus_BroadcastsBowOut(t *testing.T) {
 		t.Fatalf("leaveConsensus must drop to Observing, got %v", modeAfter)
 	}
 }
+
+func TestEngine_TimerEntry_BowsOutWhenOperatingModeLosesFull(t *testing.T) {
+	adaptor := newMockAdaptor()
+	engine := NewEngine(adaptor, DefaultConfig())
+	round := consensus.RoundID{Seq: 101, ParentHash: consensus.LedgerID{1}}
+	engine.StartRound(round, true)
+
+	engine.mu.Lock()
+	engine.prevLedger = adaptor.lastLCL
+	engine.setMode(consensus.ModeProposing)
+	set := buildMockTxSet(consensus.TxSetID{0x5E})
+	engine.state.OurPosition = &consensus.Proposal{
+		Round: round, Position: 3, TxSet: set.ID(), Timestamp: engine.adaptor.Now(),
+	}
+	engine.mu.Unlock()
+	adaptor.mu.Lock()
+	adaptor.proposalsBroadcast = nil
+	adaptor.opMode = consensus.OpModeConnected
+	adaptor.mu.Unlock()
+
+	engine.timerEntry()
+
+	if got := engine.Mode(); got != consensus.ModeObserving {
+		t.Fatalf("operating-mode demotion must bow out, got %v", got)
+	}
+	adaptor.mu.RLock()
+	defer adaptor.mu.RUnlock()
+	if len(adaptor.proposalsBroadcast) != 1 {
+		t.Fatalf("operating-mode demotion must broadcast one bow-out, got %d", len(adaptor.proposalsBroadcast))
+	}
+	if got := adaptor.proposalsBroadcast[0].Position; got != 0xFFFFFFFF {
+		t.Fatalf("demotion proposal must carry seqLeave, got %d", got)
+	}
+}

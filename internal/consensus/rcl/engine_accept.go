@@ -111,6 +111,7 @@ func (e *Engine) acceptLedger(result consensus.Result) {
 		// Build/validate/store failed off-lock; unwind to Establish so the next
 		// heartbeat retries (matches the pre-offload early-return).
 		e.setPhase(consensus.PhaseEstablish)
+		e.processPendingRecoveryLedgerLocked()
 		return
 	}
 
@@ -173,6 +174,25 @@ func (e *Engine) acceptLedger(result consensus.Result) {
 		Timestamp: e.adaptor.Now(),
 	})
 
+	trustedProposers := e.proposalTracker.CountTrusted(e.adaptor.IsTrusted)
+	preferredLCL := e.isCurrentPreferredLCLLocked(newLedger)
+	isolated := trustedProposers == 0 && !e.adaptor.IsStandalone()
+	if isolated || !preferredLCL {
+		if e.adaptor.GetOperatingMode() == consensus.OpModeFull {
+			e.adaptor.SetOperatingMode(consensus.OpModeConnected)
+		}
+		if e.mode == consensus.ModeProposing {
+			e.setMode(consensus.ModeObserving)
+		}
+		slog.Info("leaving Full consensus participation",
+			"t", "consensus",
+			"event", "consensus-recovery",
+			"seq", newLedger.Seq(),
+			"trusted_proposers", trustedProposers,
+			"preferred_lcl", preferredLCL,
+		)
+	}
+
 	// Emission gate (rippled RCLConsensus.cpp:591-594):
 	// validating && !consensusFail && canValidateSeq.
 	//   consensusFail = MovedOn ONLY — Expired (hard timeout) still emits, and
@@ -190,14 +210,18 @@ func (e *Engine) acceptLedger(result consensus.Result) {
 	// blocked kills emission entirely: an amendment-blocked node builds
 	// un-amended ledgers, and even a partial from it would misdirect peers.
 	blocked := e.adaptor.IsAmendmentBlocked()
-	// rippled's validating_ carries the bow-out into this gate the same way.
-	isValidator := e.adaptor.IsValidator() && !e.bowedOut.Load()
+	// The round-scoped eligibility snapshot is independent of sync state, so
+	// observing validators can emit partial validations.
+	isValidator := e.validating.Load()
 	canValidate := e.peekCanValidateSeqLocked(newLedger.Seq())
 	// isCompatible suppresses emission when the build is on a side chain (not
 	// just ahead of validated on the same chain). Replaces the coarse
 	// wrongLedger-mode gate that blocked the ahead-but-compatible case (#451)
 	// while still preventing side-chain emits (#401).
 	compatible := e.isBuildCompatibleWithValidatedLocked(newLedger)
+	if isValidator && !compatible {
+		e.validating.Store(false)
+	}
 	willEmit := isValidator && !blocked && !consensusFail && canValidate && compatible
 
 	newLedgerID := newLedger.ID()
@@ -268,7 +292,7 @@ func (e *Engine) acceptLedger(result consensus.Result) {
 	e.prevRoundTime = roundTime
 
 	// Track trusted proposer count for peer pressure in next round
-	e.prevProposers = e.proposalTracker.CountTrusted(e.adaptor.IsTrusted)
+	e.prevProposers = trustedProposers
 	// Publish to the lock-free mirror for GetLastCloseInfo.
 	e.storeLastCloseLocked()
 
@@ -276,6 +300,9 @@ func (e *Engine) acceptLedger(result consensus.Result) {
 	e.prevLedger = newLedger
 	e.proposalTracker.ResetValidations()
 	e.consensusCount++
+	if e.processPendingRecoveryLedgerLocked() {
+		return
+	}
 
 	// Phase is already PhaseAccepted (set before the off-lock apply).
 
@@ -287,12 +314,9 @@ func (e *Engine) acceptLedger(result consensus.Result) {
 		// handleWrongLedger when not cached.
 		nextPrev := newLedger
 		if e.validationTracker != nil {
-			candidateID, candidateSeq, ok := e.validationTracker.GetPreferred(newLedger.Seq())
-			if !ok {
-				candidateID, candidateSeq, ok = e.validationTracker.PreferredFromValidations(newLedger.Seq())
-			}
 			localID := newLedger.ID()
-			if ok && candidateID != localID && candidateSeq >= newLedger.Seq() {
+			candidateID, ok := e.validationPreferredForLedgerLocked(newLedger)
+			if ok && candidateID != localID {
 				if cached, err := e.adaptor.GetLedger(candidateID); err == nil && cached != nil {
 					localBytes := localID
 					slog.Info("preferred LCL differs; jumping prev to cached ledger",
@@ -300,7 +324,7 @@ func (e *Engine) acceptLedger(result consensus.Result) {
 						"event", "preferred-lcl-jump-cached",
 						"local_seq", newLedger.Seq(),
 						"local_hash", fmt.Sprintf("%x", localBytes[:8]),
-						"preferred_seq", candidateSeq,
+						"preferred_seq", cached.Seq(),
 						"preferred_hash", fmt.Sprintf("%x", candidateID[:8]),
 					)
 					nextPrev = cached
@@ -312,7 +336,6 @@ func (e *Engine) acceptLedger(result consensus.Result) {
 						"event", "preferred-lcl-jump-acquire",
 						"local_seq", newLedger.Seq(),
 						"local_hash", fmt.Sprintf("%x", localBytes[:8]),
-						"preferred_seq", candidateSeq,
 						"preferred_hash", fmt.Sprintf("%x", candidateID[:8]),
 					)
 					e.handleWrongLedger(candidateID, nil)
@@ -503,7 +526,9 @@ func (e *Engine) sendValidation(ledger consensus.Ledger) {
 		return
 	}
 
-	full := e.mode == consensus.ModeProposing
+	full := e.mode == consensus.ModeProposing &&
+		e.adaptor.GetOperatingMode() == consensus.OpModeFull &&
+		e.isCurrentPreferredLCLLocked(ledger)
 
 	// SignTime under a monotonic floor: a regressing adaptor clock would emit
 	// a stale SignTime peers reject, so bump to lastSignTime+1s. SeenTime

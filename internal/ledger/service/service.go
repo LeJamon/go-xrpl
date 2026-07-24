@@ -44,6 +44,11 @@ var (
 	ErrTxnNotFound        = svcerr.ErrTxnNotFound
 )
 
+var (
+	ErrConsensusParentMismatch = errors.New("consensus parent does not match the closed ledger")
+	ErrPreferredChainSwitch    = errors.New("invalid preferred chain switch")
+)
+
 // Config holds configuration for the LedgerService
 type Config struct {
 	Standalone bool
@@ -1120,6 +1125,9 @@ func (s *Service) validatedPersistedLedger(ctx context.Context, l *ledger.Ledger
 	if err != nil || !validated {
 		return l, err
 	}
+	if l.IsValidated() {
+		return l, nil
+	}
 	copy, err := l.Snapshot()
 	if err != nil {
 		return nil, err
@@ -1403,10 +1411,11 @@ func (s *Service) QueueAllTxs() []*txq.CandidateDetails {
 func (s *Service) GetServerInfo() ServerInfo {
 	s.mu.RLock()
 	info := ServerInfo{
-		Standalone:      s.config.Standalone,
-		ServerState:     "full",
-		CompleteLedgers: "",
-		NetworkID:       s.config.NetworkID,
+		Standalone:         s.config.Standalone,
+		ServerState:        "full",
+		NeedsNetworkLedger: s.needsInitialSync,
+		CompleteLedgers:    "",
+		NetworkID:          s.config.NetworkID,
 	}
 
 	if s.openLedger != nil {
@@ -1457,6 +1466,7 @@ func (s *Service) GetServerInfo() ServerInfo {
 type ServerInfo struct {
 	Standalone               bool
 	ServerState              string // "disconnected", "connected", "syncing", "tracking", "full"
+	NeedsNetworkLedger       bool
 	OpenLedgerSeq            uint32
 	ClosedLedgerSeq          uint32
 	ClosedLedgerHash         [32]byte

@@ -1,6 +1,7 @@
 package nodestore
 
 import (
+	"container/heap"
 	"container/list"
 	"fmt"
 	"sync"
@@ -17,6 +18,7 @@ type cacheEntry struct {
 	node      *Node     // The cached node
 	expiresAt time.Time // When this entry expires
 	size      int       // Size of the node data in bytes
+	expiryPos int
 }
 
 // isExpired checks if the cache entry has expired.
@@ -24,13 +26,44 @@ func (e *cacheEntry) isExpired(now time.Time) bool {
 	return now.After(e.expiresAt)
 }
 
+type expiryHeap []*cacheEntry
+
+func (h expiryHeap) Len() int { return len(h) }
+
+func (h expiryHeap) Less(i, j int) bool {
+	return h[i].expiresAt.Before(h[j].expiresAt)
+}
+
+func (h expiryHeap) Swap(i, j int) {
+	h[i], h[j] = h[j], h[i]
+	h[i].expiryPos = i
+	h[j].expiryPos = j
+}
+
+func (h *expiryHeap) Push(value any) {
+	entry := value.(*cacheEntry)
+	entry.expiryPos = len(*h)
+	*h = append(*h, entry)
+}
+
+func (h *expiryHeap) Pop() any {
+	old := *h
+	last := len(old) - 1
+	entry := old[last]
+	old[last] = nil
+	entry.expiryPos = -1
+	*h = old[:last]
+	return entry
+}
+
 // cacheShard is one stripe of the sharded cache. Each shard owns its own
 // LRU and mutex so Get/Put on disjoint hashes do not contend.
 type cacheShard struct {
 	mu sync.Mutex
 
-	items map[Hash256]*list.Element
-	lru   *list.List
+	items  map[Hash256]*list.Element
+	lru    *list.List
+	expiry expiryHeap
 
 	// maxItems is the whole cache's maxSize divided by cacheShardCount
 	// (rounded up); no global cap is enforced.
@@ -137,28 +170,32 @@ func (c *Cache) putOwned(node *Node) {
 	s := c.shardFor(node.Hash)
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	now := time.Now()
+	size := node.Size()
 
 	if element, found := s.items[node.Hash]; found {
 		entry := element.Value.(*cacheEntry)
-		s.currentBytes = s.currentBytes - entry.size + node.Size()
+		s.currentBytes = s.currentBytes - entry.size + size
 		entry.node = node
-		entry.expiresAt = time.Now().Add(ttl)
-		entry.size = node.Size()
+		entry.expiresAt = now.Add(ttl)
+		entry.size = size
+		heap.Fix(&s.expiry, entry.expiryPos)
 		s.lru.MoveToFront(element)
 		return
 	}
 	if s.currentSize >= s.maxItems {
-		c.expirations.Add(uint64(s.sweepExpiredLocked(time.Now())))
+		c.expirations.Add(uint64(s.sweepExpiredLocked(now)))
 	}
 
 	entry := &cacheEntry{
 		key:       node.Hash,
 		node:      node,
-		expiresAt: time.Now().Add(ttl),
-		size:      node.Size(),
+		expiresAt: now.Add(ttl),
+		size:      size,
 	}
 	element := s.lru.PushFront(entry)
 	s.items[node.Hash] = element
+	heap.Push(&s.expiry, entry)
 	s.currentSize++
 	s.currentBytes += entry.size
 
@@ -187,6 +224,7 @@ func (c *Cache) Clear() {
 		s.mu.Lock()
 		s.items = make(map[Hash256]*list.Element)
 		s.lru.Init()
+		s.expiry = nil
 		s.currentSize = 0
 		s.currentBytes = 0
 		s.mu.Unlock()
@@ -288,24 +326,26 @@ func (c *Cache) SetMaxSize(maxSize int) {
 	}
 }
 
-// sweepExpiredLocked removes every expired entry. Accesses reorder the LRU
-// without extending TTL, so expiration order cannot be inferred from list
-// position. Caller must hold s.mu.
+// sweepExpiredLocked removes every expired entry from the expiration heap.
+// Caller must hold s.mu.
 func (s *cacheShard) sweepExpiredLocked(now time.Time) int {
 	removed := 0
-	for element := s.lru.Back(); element != nil; {
-		next := element.Prev()
-		if element.Value.(*cacheEntry).isExpired(now) {
-			s.removeElementLocked(element)
-			removed++
-		}
-		element = next
+	for len(s.expiry) > 0 && s.expiry[0].isExpired(now) {
+		entry := heap.Pop(&s.expiry).(*cacheEntry)
+		s.removeElementWithoutExpiryLocked(s.items[entry.key])
+		removed++
 	}
 	return removed
 }
 
 // removeElementLocked removes element. Caller must hold s.mu.
 func (s *cacheShard) removeElementLocked(element *list.Element) {
+	entry := element.Value.(*cacheEntry)
+	heap.Remove(&s.expiry, entry.expiryPos)
+	s.removeElementWithoutExpiryLocked(element)
+}
+
+func (s *cacheShard) removeElementWithoutExpiryLocked(element *list.Element) {
 	entry := element.Value.(*cacheEntry)
 	delete(s.items, entry.key)
 	s.lru.Remove(element)

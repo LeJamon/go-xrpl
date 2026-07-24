@@ -668,6 +668,24 @@ func TestOnConsensusReached_AutoPromote(t *testing.T) {
 		assert.Equal(t, consensus.OpModeFull, a.GetOperatingMode())
 	})
 
+	t.Run("validated_network_ahead_promotes_only_to_tracking", func(t *testing.T) {
+		a := newTestAdaptor(t)
+		a.SetOperatingMode(consensus.OpModeConnected)
+		a.networkValidatedSeq.Store(103)
+		l := stubLedger{seq: 3, closeTime: a.Now()}
+		a.OnConsensusReached(l, nil, 0)
+		assert.Equal(t, consensus.OpModeTracking, a.GetOperatingMode())
+	})
+
+	t.Run("validated_network_one_ahead_allows_full", func(t *testing.T) {
+		a := newTestAdaptor(t)
+		a.SetOperatingMode(consensus.OpModeConnected)
+		a.networkValidatedSeq.Store(4)
+		l := stubLedger{seq: 3, closeTime: a.Now()}
+		a.OnConsensusReached(l, nil, 0)
+		assert.Equal(t, consensus.OpModeFull, a.GetOperatingMode())
+	})
+
 	t.Run("disconnected_does_not_promote", func(t *testing.T) {
 		a := newTestAdaptor(t)
 		a.SetOperatingMode(consensus.OpModeDisconnected)
@@ -821,6 +839,19 @@ func TestOnConsensusReached_AutoPromote(t *testing.T) {
 		assert.Equal(t, consensus.OpModeConnected, a.GetOperatingMode(),
 			"a lower-seq preferred tip on a different chain is a switch — promotion must defer")
 	})
+}
+
+func TestOnLedgerFullyValidated_DemotesFullWhenNetworkAhead(t *testing.T) {
+	a := newTestAdaptor(t)
+	a.SetOperatingMode(consensus.OpModeFull)
+	closed := a.ledgerService.GetClosedLedger()
+	require.NotNil(t, closed)
+
+	seq := closed.Sequence() + 100
+	a.OnLedgerFullyValidated(consensus.LedgerID{0xAB}, seq)
+
+	assert.Equal(t, seq, a.networkValidatedSeq.Load())
+	assert.Equal(t, consensus.OpModeConnected, a.GetOperatingMode())
 }
 
 // TestNew_SeedsRestartValidationFloor pins the boot-time seeding of the

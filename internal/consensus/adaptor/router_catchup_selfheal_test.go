@@ -73,11 +73,9 @@ func buildSelfHealSourceState(t *testing.T) (rootHash [32]byte, rootData []byte,
 	return rootHash, rootData, wire
 }
 
-// Issue #1161 self-heal: a catch-up completing two or more ledgers ahead (parent
-// chain absent) adopts the acquired tip directly — jumping closed forward so
-// consensus rejoins — instead of stashing it and arming a backward parent chase
-// a busy network outruns.
-func TestCompleteInboundLedger_CatchUpJumpAdoptsTip(t *testing.T) {
+// A deep-gap acquisition is stored by hash for consensus selection without
+// changing the service's current closed ledger.
+func TestCompleteInboundLedger_CatchUpStoresTipWithoutSwitching(t *testing.T) {
 	r, _, rs, svc := makeRouter(t)
 	closedSeq := svc.GetClosedLedgerIndex()
 
@@ -87,22 +85,18 @@ func TestCompleteInboundLedger_CatchUpJumpAdoptsTip(t *testing.T) {
 
 	r.completeInboundLedger(il)
 
-	assert.Equal(t, tipSeq, svc.GetClosedLedgerIndex(),
-		"closed ledger must jump straight to the acquired tip, not stay pinned behind the gap")
+	assert.Equal(t, closedSeq, svc.GetClosedLedgerIndex())
 	require.NotNil(t, svc.GetClosedLedger())
-	assert.Equal(t, il.Hash(), svc.GetClosedLedger().Hash(),
-		"the adopted working ledger must be the acquired tip")
+	stored, err := svc.GetLedgerByHash(il.Hash())
+	require.NoError(t, err)
+	assert.Equal(t, tipSeq, stored.Sequence())
 
-	assert.Empty(t, rs.legacyCalls(),
-		"catch-up jump must not arm a backward parent chase")
-	assert.Empty(t, rs.replayCalls(),
-		"catch-up jump must not arm a backward parent chase")
+	assert.Empty(t, rs.legacyCalls())
+	assert.Empty(t, rs.replayCalls())
 }
 
-// The jump is scoped: a completion only one ledger ahead (gap == 1, parent is
-// our closed ledger) is NOT a jump. It routes through the held-adoption seam so
-// the out-of-order cascade machinery is preserved.
-func TestCompleteInboundLedger_SingleLedgerCatchUpUsesHeldSeam(t *testing.T) {
+// The same store-only rule applies to a direct child of the closed ledger.
+func TestCompleteInboundLedger_SingleLedgerCatchUpWaitsForConsensus(t *testing.T) {
 	r, _, rs, svc := makeRouter(t)
 	parent := svc.GetClosedLedger()
 	require.NotNil(t, parent)
@@ -128,8 +122,10 @@ func TestCompleteInboundLedger_SingleLedgerCatchUpUsesHeldSeam(t *testing.T) {
 
 	r.completeInboundLedger(il)
 
-	assert.Equal(t, parent.Sequence()+1, svc.GetClosedLedgerIndex(),
-		"a single-ledger catch-up must still advance the working ledger via the held seam")
-	assert.Empty(t, rs.legacyCalls(), "an in-order single-ledger adopt must not chase a parent")
-	assert.Empty(t, rs.replayCalls(), "an in-order single-ledger adopt must not chase a parent")
+	assert.Equal(t, parent.Sequence(), svc.GetClosedLedgerIndex())
+	stored, err := svc.GetLedgerByHash(ledgerHash)
+	require.NoError(t, err)
+	assert.Equal(t, parent.Sequence()+1, stored.Sequence())
+	assert.Empty(t, rs.legacyCalls())
+	assert.Empty(t, rs.replayCalls())
 }

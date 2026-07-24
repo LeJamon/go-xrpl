@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"time"
 
+	"github.com/LeJamon/go-xrpl/crypto/sha512half"
 	"github.com/LeJamon/go-xrpl/internal/consensus"
 	"github.com/LeJamon/go-xrpl/internal/consensus/rcl"
 	"github.com/LeJamon/go-xrpl/internal/ledger/openledger"
@@ -72,8 +73,8 @@ func (r *Router) handleMessage(msg *peermanagement.InboundMessage) {
 	}
 }
 
-// handleManifests ingests a TMManifests frame, applies every entry, and
-// relays the accepted subset as aggregate frames to every active peer.
+// handleManifests ingests a TMManifests frame, applies admitted entries, and
+// relays the accepted subset as aggregate frames to peers other than the source.
 //
 // Decode failures attribute "manifest-decode" badData to the sender. A
 // mix of valid and invalid entries in the same frame results in the
@@ -84,52 +85,65 @@ func (r *Router) handleManifests(msg *peermanagement.InboundMessage) bool {
 		return false
 	}
 
-	decoded, err := message.Decode(message.TypeManifests, msg.Payload)
+	count, err := message.WalkManifests(msg.Payload, nil)
 	if err != nil {
 		r.logger.Warn("failed to decode manifests frame", "error", err, "peer", msg.PeerID)
 		r.adaptor.IncPeerBadData(uint64(msg.PeerID), "manifests-decode")
 		return false
 	}
-	mfs, ok := decoded.(*message.Manifests)
-	if !ok {
-		return false
-	}
-	if len(mfs.List) == 0 {
+	if count == 0 {
 		return true
 	}
-	if len(mfs.List) > manifestFrameMaxEntries {
+	if count > manifestFrameMaxEntries {
 		r.adaptor.IncPeerBadData(uint64(msg.PeerID), "manifests-oversize")
 	}
-	accepted := make([][]byte, 0, len(mfs.List))
+	accepted := make([][]byte, 0, min(count, manifestFrameMaxEntries))
 	valid := false
-	for _, wire := range mfs.List {
-		parsed, err := manifest.Deserialize(wire.STObject)
+	badManifest := false
+	charged := count > manifestFrameMaxEntries
+	_, _ = message.WalkManifests(msg.Payload, func(wire []byte) {
+		hash := sha512half.Sum(wire)
+		if r.messageSeen != nil && r.messageSeen.seenRecently(hash) {
+			valid = true
+			return
+		}
+		parsed, err := manifest.Deserialize(wire)
 		if err != nil {
 			r.logger.Debug("manifest parse failed",
 				"error", err, "peer", msg.PeerID)
-			r.adaptor.IncPeerBadData(uint64(msg.PeerID), "manifest-parse")
-			continue
+			badManifest = true
+			return
+		}
+		if r.manifestAdmission != nil && !r.manifestAdmission(parsed.MasterKey) {
+			valid = true
+			return
 		}
 		switch d := r.manifests.ApplyManifest(parsed); d {
 		case manifest.Accepted:
 			valid = true
-			accepted = append(accepted, wire.STObject)
+			accepted = append(accepted, wire)
+			if r.messageSeen != nil {
+				r.messageSeen.observe(hash)
+			}
 		case manifest.Invalid, manifest.BadMasterKey, manifest.BadEphemeralKey:
-			// Charge the sender — they gave us a manifest that
-			// passed structural parse but failed the cache's
-			// invariants (signature, key reuse, etc.).
-			r.adaptor.IncPeerBadData(uint64(msg.PeerID), "manifest-"+d.String())
+			badManifest = true
 		case manifest.Stale:
 			valid = true
+			if r.messageSeen != nil {
+				r.messageSeen.observe(hash)
+			}
 			// Expected and harmless: a peer gossiped a manifest we
 			// already have at equal or higher seq. No action.
 		}
+	})
+	if badManifest && !charged {
+		r.adaptor.IncPeerBadData(uint64(msg.PeerID), "manifest-invalid")
 	}
-	r.relayManifests(accepted)
+	r.relayManifests(msg.PeerID, accepted)
 	return valid
 }
 
-func (r *Router) relayManifests(serialized [][]byte) {
+func (r *Router) relayManifests(source peermanagement.PeerID, serialized [][]byte) {
 	if len(serialized) == 0 {
 		return
 	}
@@ -142,7 +156,7 @@ func (r *Router) relayManifests(serialized [][]byte) {
 	if sender == nil {
 		return
 	}
-	if err := sender.BroadcastManifestFrames(frames); err != nil {
+	if err := sender.BroadcastManifestFramesExcept(source, frames); err != nil {
 		r.logger.Warn("failed to broadcast manifest relay frame", "error", err)
 	}
 }

@@ -960,6 +960,7 @@ type LedgerAmendmentRulesSource interface {
 type LedgerServerInfo struct {
 	Standalone            bool
 	ServerState           string
+	NeedsNetworkLedger    bool
 	OpenLedgerSeq         uint32
 	ClosedLedgerSeq       uint32
 	ClosedLedgerHash      [32]byte

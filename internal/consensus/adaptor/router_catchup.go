@@ -35,6 +35,14 @@ func (r *Router) handleStatusChange(msg *peermanagement.InboundMessage) {
 		"needs_sync", r.adaptor.NeedsInitialSync(),
 	)
 
+	if sc.NewEvent == message.NodeEventLostSync {
+		r.peersMu.Lock()
+		delete(r.peerStates, msg.PeerID)
+		r.peersMu.Unlock()
+		r.adaptor.UpdatePeerLCL(uint64(msg.PeerID), consensus.LedgerID{})
+		return
+	}
+
 	if sc.LedgerSeq > 0 {
 		var peerHash [32]byte
 		if len(sc.LedgerHash) == 32 {
@@ -78,18 +86,25 @@ func (r *Router) handleStatusChange(msg *peermanagement.InboundMessage) {
 			return
 		}
 
-		// When in Full mode and significantly behind (gap > 2), catch up toward
-		// the network tip but stay in Full mode so we keep participating in
-		// consensus.
+		// A node materially behind the peer-preferred network tip must stop
+		// advertising Full before it starts catch-up. Remaining Full would let a
+		// validator keep proposing and issuing full validations on its stale LCL.
 		if r.adaptor.GetOperatingMode() == consensus.OpModeFull && sc.LedgerSeq > 1 {
 			svc := r.adaptor.LedgerService()
 			if svc != nil {
 				ourSeq := svc.GetClosedLedgerIndex()
 				if aheadByMoreThan(sc.LedgerSeq, ourSeq, 2) {
-					r.logger.Warn("behind network while in Full mode, catching up",
+					leftFull := false
+					if lcl, err := r.adaptor.GetLastClosedLedger(); err == nil && lcl != nil &&
+						r.adaptor.networkLedgerDiffers(lcl, consensus.OpModeFull) {
+						r.adaptor.SetOperatingMode(consensus.OpModeConnected)
+						leftFull = true
+					}
+					r.logger.Warn("behind network; catching up",
 						"our_seq", ourSeq,
 						"peer_seq", sc.LedgerSeq,
 						"gap", sc.LedgerSeq-ourSeq,
+						"left_full", leftFull,
 					)
 					r.ensureCatchupAcquisition(sc.LedgerSeq, peerHash, uint64(msg.PeerID))
 					return
@@ -126,9 +141,6 @@ func (r *Router) handleStatusChange(msg *peermanagement.InboundMessage) {
 				ourSeq := closed.Sequence()
 				ourHash := closed.Hash()
 				if ourSeq == sc.LedgerSeq && ourHash != peerHash {
-					if r.catchupInFlight() >= maxConcurrentCatchup {
-						return
-					}
 					r.logger.Warn("ledger hash divergence at same seq, acquiring peer's ledger",
 						"seq", sc.LedgerSeq,
 						"our_hash", fmt.Sprintf("%x", ourHash[:8]),
@@ -145,11 +157,14 @@ func (r *Router) handleStatusChange(msg *peermanagement.InboundMessage) {
 	}
 }
 
-// maxConcurrentCatchup caps concurrent consensus-reason ledger acquisitions.
-// rippled's LedgerMaster::doAdvance drives a SINGLE needed target rather than
-// one InboundLedger per gossiped status/validation; the arming sites retarget
-// (never add) once the cap is hit.
-const maxConcurrentCatchup = 1
+// maxConcurrentCatchup bounds the hash-keyed current-ledger acquisition set.
+// Separate target hashes share the NodeStore and remain independently useful
+// when the preferred ledger moves during a long state walk.
+const maxConcurrentCatchup = 3
+
+// Gossip-driven acquisition leaves one slot available for the exact ledger
+// requested by consensus wrong-ledger recovery.
+const maxConcurrentSpeculativeCatchup = maxConcurrentCatchup - 1
 
 // maxForwardDeltaGap bounds how far behind the tip the router walks forward one
 // ledger at a time (replay-delta against the held parent) before it prefers a
@@ -161,7 +176,7 @@ const maxForwardDeltaGap = 128
 
 // seqHashRetain bounds the seqHash table to a trailing window of sequences so a
 // long-running node never grows it unbounded.
-const seqHashRetain = 256
+const seqHashRetain = 2048
 
 // recordSeqHash records the network's hash — and, from a status_change, the
 // parent hash — for a ledger sequence, backing the forward-delta catch-up. A
@@ -175,6 +190,9 @@ func (r *Router) recordSeqHash(seq uint32, hash, parentHash [32]byte, haveParent
 	defer r.seqHashMu.Unlock()
 
 	e := r.seqHash[seq]
+	if e.hash != ([32]byte{}) && e.hash != hash {
+		e = ledgerHashEntry{}
+	}
 	e.hash = hash
 	if haveParent {
 		e.parentHash = parentHash
@@ -220,6 +238,35 @@ func (r *Router) lookupSeqHash(seq uint32) (ledgerHashEntry, bool) {
 	defer r.seqHashMu.Unlock()
 	e, ok := r.seqHash[seq]
 	return e, ok
+}
+
+func (r *Router) lookupSeqForHash(hash [32]byte) (uint32, bool) {
+	r.seqHashMu.Lock()
+	defer r.seqHashMu.Unlock()
+	for seq, entry := range r.seqHash {
+		if entry.hash == hash {
+			return seq, true
+		}
+	}
+	return 0, false
+}
+
+// recoveryAnchorReachesTarget proves that anchor is on the recorded parent
+// chain of target. Missing linkage is treated as unknown rather than ancestry.
+func (r *Router) recoveryAnchorReachesTarget(anchorSeq uint32, anchorHash, targetHash [32]byte) bool {
+	targetSeq, ok := r.lookupSeqForHash(targetHash)
+	if !ok || anchorSeq > targetSeq {
+		return false
+	}
+	current := targetHash
+	for seq := targetSeq; seq > anchorSeq; seq-- {
+		entry, found := r.lookupSeqHash(seq)
+		if !found || entry.hash != current || !entry.haveParent {
+			return false
+		}
+		current = entry.parentHash
+	}
+	return current == anchorHash
 }
 
 // catchupInFlight counts active consensus-reason acquisitions across both the
@@ -307,41 +354,185 @@ func (r *Router) armConsensusCatchup() {
 }
 
 func (r *Router) armPendingConsensusLedger() bool {
-	r.acquisitionMu.Lock()
-	defer r.acquisitionMu.Unlock()
-
-	if r.activeConsensusLedger != ([32]byte{}) {
-		if r.isAcquiring(r.activeConsensusLedger) {
+	for {
+		r.acquisitionMu.Lock()
+		recovery := r.consensusRecovery
+		if recovery.stepHash != ([32]byte{}) && r.isAcquiring(recovery.stepHash) {
+			r.acquisitionMu.Unlock()
 			return true
 		}
-		r.activeConsensusLedger = [32]byte{}
-	}
-	hash := r.pendingConsensusLedger
-	if hash == ([32]byte{}) {
-		return false
-	}
-	if r.isAcquiring(hash) {
-		r.pendingConsensusLedger = [32]byte{}
-		return true
-	}
-	if r.catchupInFlight() >= maxConcurrentCatchup {
-		return true
-	}
-	if svc := r.adaptor.LedgerService(); svc != nil {
-		if held, err := svc.GetLedgerByHash(hash); err == nil && held != nil {
-			r.pendingConsensusLedger = [32]byte{}
+		if recovery.targetHash != ([32]byte{}) && r.isAcquiring(recovery.targetHash) {
+			r.consensusRecovery.stepHash = recovery.targetHash
+			r.acquisitionMu.Unlock()
+			return true
+		}
+		if recovery.stepHash != recovery.targetHash {
+			r.consensusRecovery.stepHash = [32]byte{}
+			recovery.stepHash = [32]byte{}
+		}
+		r.acquisitionMu.Unlock()
+
+		hash := recovery.targetHash
+		if hash == ([32]byte{}) {
 			return false
 		}
-	}
+		svc := r.adaptor.LedgerService()
+		if svc != nil {
+			if held, err := svc.GetLedgerByHash(hash); err == nil && held != nil {
+				r.acquisitionMu.Lock()
+				if r.consensusRecovery.targetHash != hash {
+					r.acquisitionMu.Unlock()
+					continue
+				}
+				r.consensusRecovery.anchorHash = held.Hash()
+				r.consensusRecovery.anchorSeq = held.Sequence()
+				r.consensusRecovery.targetHash = [32]byte{}
+				r.consensusRecovery.stepHash = [32]byte{}
+				r.acquisitionMu.Unlock()
+				return true
+			}
+		}
+		seq, known := r.lookupSeqForHash(hash)
+		var nextSeq uint32
+		var nextHash [32]byte
+		var parent *ledger.Ledger
+		var replay bool
+		var discardAnchor bool
+		if known {
+			nextSeq, nextHash, parent, replay, discardAnchor = r.recoveryForwardStep(svc, seq, hash, recovery)
+		}
+		if discardAnchor {
+			r.acquisitionMu.Lock()
+			if r.consensusRecovery.targetHash == hash &&
+				r.consensusRecovery.anchorHash == recovery.anchorHash &&
+				r.consensusRecovery.anchorSeq == recovery.anchorSeq {
+				r.consensusRecovery.anchorHash = [32]byte{}
+				r.consensusRecovery.anchorSeq = 0
+				recovery.anchorHash = [32]byte{}
+				recovery.anchorSeq = 0
+			}
+			r.acquisitionMu.Unlock()
+		}
 
-	peerID, _ := r.selectAcquisitionPeer(0)
-	r.startLedgerAcquisitionLegacyLocked(0, hash, peerID)
-	if r.fetchTracker.Find(hash) == nil {
+		r.acquisitionMu.Lock()
+		if r.consensusRecovery.targetHash != hash {
+			r.acquisitionMu.Unlock()
+			continue
+		}
+		if r.consensusRecovery.stepHash != ([32]byte{}) && r.isAcquiring(r.consensusRecovery.stepHash) {
+			r.acquisitionMu.Unlock()
+			return true
+		}
+		if r.isAcquiring(hash) {
+			r.consensusRecovery.stepHash = hash
+			r.acquisitionMu.Unlock()
+			return true
+		}
+		acquisitionHash := hash
+		if replay {
+			acquisitionHash = nextHash
+		}
+		if r.isAcquiring(acquisitionHash) {
+			r.consensusRecovery.stepHash = acquisitionHash
+			r.acquisitionMu.Unlock()
+			return true
+		}
+		if !r.canAdmitCatchupLocked(acquisitionHash, maxConcurrentCatchup) {
+			r.acquisitionMu.Unlock()
+			return true
+		}
+		if replay {
+			peer, found := r.resolveReplayPeer(nextSeq, 0)
+			if found && r.startReplayDeltaAcquisition(nextSeq, nextHash, peer, parent) == nil {
+				r.consensusRecovery.stepHash = nextHash
+				r.acquisitionMu.Unlock()
+				return true
+			}
+		}
+
+		peerID, _ := r.selectAcquisitionPeer(seq)
+		r.startLedgerAcquisitionLegacyLocked(seq, hash, peerID)
+		if r.fetchTracker.Find(hash) != nil {
+			r.consensusRecovery.stepHash = hash
+		}
+		r.acquisitionMu.Unlock()
 		return true
 	}
-	r.activeConsensusLedger = hash
-	r.pendingConsensusLedger = [32]byte{}
-	return true
+}
+
+func (r *Router) resolveReplayPeer(seq uint32, preferred uint64) (uint64, bool) {
+	if peer, ok := r.resolveAcquisitionPeer(seq, preferred); ok && r.adaptor.PeerSupportsReplay(peer) {
+		return peer, true
+	}
+	peers := r.adaptor.ReplayCapablePeersExcluding(nil, 1)
+	if len(peers) == 0 {
+		return 0, false
+	}
+	return peers[0], true
+}
+
+func (r *Router) recoveryForwardStep(
+	svc *service.Service,
+	targetSeq uint32,
+	targetHash [32]byte,
+	recovery consensusRecovery,
+) (uint32, [32]byte, *ledger.Ledger, bool, bool) {
+	if svc == nil {
+		return 0, [32]byte{}, nil, false, recovery.anchorHash != ([32]byte{})
+	}
+	parent := svc.GetClosedLedger()
+	if parent == nil || targetSeq <= parent.Sequence() {
+		return 0, [32]byte{}, nil, false, recovery.anchorHash != ([32]byte{})
+	}
+
+	maxGap := uint32(maxForwardDeltaGap)
+	discardAnchor := false
+	if recovery.anchorHash != ([32]byte{}) {
+		anchor, err := svc.GetLedgerByHash(recovery.anchorHash)
+		anchorUsable := recovery.anchorSeq > parent.Sequence() && recovery.anchorSeq < targetSeq &&
+			targetSeq-recovery.anchorSeq <= seqHashRetain &&
+			r.recoveryAnchorReachesTarget(recovery.anchorSeq, recovery.anchorHash, targetHash) &&
+			err == nil && anchor != nil && anchor.Sequence() == recovery.anchorSeq &&
+			anchor.Hash() == recovery.anchorHash
+		if anchorUsable {
+			parent = anchor
+			maxGap = seqHashRetain
+		} else {
+			discardAnchor = true
+		}
+	}
+	if targetSeq-parent.Sequence() > maxGap {
+		return 0, [32]byte{}, nil, false, discardAnchor
+	}
+
+	for parent.Sequence() < targetSeq {
+		nextSeq := parent.Sequence() + 1
+		entry, known := r.lookupSeqHash(nextSeq)
+		if !known || entry.hash == ([32]byte{}) {
+			return 0, [32]byte{}, nil, false, discardAnchor
+		}
+		if nextSeq == targetSeq && entry.hash != targetHash {
+			return 0, [32]byte{}, nil, false, discardAnchor
+		}
+		parentHash := parent.Hash()
+		if entry.haveParent {
+			if entry.parentHash != parentHash {
+				return 0, [32]byte{}, nil, false, discardAnchor
+			}
+		} else if current, ok := r.lookupSeqHash(parent.Sequence()); !ok || current.hash != parentHash {
+			return 0, [32]byte{}, nil, false, discardAnchor
+		}
+
+		next, err := svc.GetLedgerByHash(entry.hash)
+		if err != nil || next == nil {
+			return nextSeq, entry.hash, parent, true, discardAnchor
+		}
+		if next.Sequence() != nextSeq || next.ParentHash() != parentHash {
+			return 0, [32]byte{}, nil, false, discardAnchor
+		}
+		parent = next
+	}
+	return 0, [32]byte{}, nil, false, discardAnchor
 }
 
 func (r *Router) armCatchupTowardTargetWithPeer(peerHint uint64) {
@@ -352,7 +543,7 @@ func (r *Router) armCatchupTowardTargetWithPeer(peerHint uint64) {
 	if svc == nil {
 		return
 	}
-	if r.catchupInFlight() >= maxConcurrentCatchup {
+	if r.catchupInFlight() >= maxConcurrentSpeculativeCatchup {
 		return
 	}
 	tSeq, tHash, _ := r.bestCatchupTarget()
@@ -361,6 +552,9 @@ func (r *Router) armCatchupTowardTargetWithPeer(peerHint uint64) {
 	}
 	closed := svc.GetClosedLedgerIndex()
 	if tSeq <= closed {
+		return
+	}
+	if !svc.NeedsInitialSync() && !aheadByMoreThan(tSeq, closed, 1) {
 		return
 	}
 
@@ -458,17 +652,36 @@ func (r *Router) refreshCatchupAcquisitionPeer(il *inbound.Ledger, peerID uint64
 // supports concurrent acquisitions across many hashes, but the policy
 // layer that walks a range (e.g., backward from a peer's tip via
 // ParentHash) is a follow-up item.
-func (r *Router) startLedgerAcquisition(seq uint32, hash [32]byte, peerID uint64) {
+func (r *Router) startLedgerAcquisition(seq uint32, hash [32]byte, peerID uint64) bool {
+	if seq != 0 && r.belowFloor(seq) {
+		return false
+	}
 	r.acquisitionMu.Lock()
 	defer r.acquisitionMu.Unlock()
+	if step := r.consensusRecovery.stepHash; step != ([32]byte{}) && step != hash && r.isAcquiring(step) {
+		return false
+	}
+	if !r.canAdmitCatchupLocked(hash, maxConcurrentSpeculativeCatchup) {
+		return false
+	}
 	r.startLedgerAcquisitionLocked(seq, hash, peerID)
+	return r.isAcquiring(hash)
+}
+
+// canAdmitCatchupLocked atomically combines hash deduplication with capacity
+// admission. Gossip and validation paths use the speculative limit so the exact
+// WrongLedger target can always claim the final slot.
+func (r *Router) canAdmitCatchupLocked(hash [32]byte, limit int) bool {
+	if r.isAcquiring(hash) {
+		return true
+	}
+	return r.catchupInFlight() < limit
 }
 
 func (r *Router) startLedgerAcquisitionLocked(seq uint32, hash [32]byte, peerID uint64) {
 	if r.catchupRetryBlocked(hash, time.Now()) {
 		return
 	}
-
 	// Unified dedup across BOTH acquisition paths. A prior fix only
 	// checked r.replayer.Has(hash); that still allowed the cross-path
 	// race where two status changes at the same seq with different
@@ -557,6 +770,9 @@ func (r *Router) startLedgerAcquisitionLegacy(seq uint32, hash [32]byte, peerID 
 }
 
 func (r *Router) startLedgerAcquisitionLegacyLocked(seq uint32, hash [32]byte, peerID uint64) {
+	if seq != 0 && r.belowFloor(seq) {
+		return
+	}
 	// Safety net: if a replay-delta for the same hash is still
 	// registered, don't start a legacy on top of it — one path is
 	// always enough.
@@ -590,10 +806,28 @@ func (r *Router) startLedgerAcquisitionLegacyLocked(seq uint32, hash [32]byte, p
 	}
 }
 
-// requestConsensusLedger gives the consensus engine's exact wrong-LCL priority
-// over speculative catch-up work, then coalesces later preference changes behind
-// that exact acquisition. Hash-only sequence zero is resolved from the verified
-// header in GotBase.
+func (r *Router) fallbackReplayAcquisition(seq uint32, hash [32]byte, peerID uint64) {
+	r.acquisitionMu.Lock()
+	defer r.acquisitionMu.Unlock()
+
+	target := r.consensusRecovery.targetHash
+	if target != ([32]byte{}) && r.consensusRecovery.stepHash != hash && target != hash {
+		return
+	}
+	if target != ([32]byte{}) && r.consensusRecovery.stepHash == hash {
+		seq, _ = r.lookupSeqForHash(target)
+		hash = target
+		r.consensusRecovery.stepHash = [32]byte{}
+	}
+	if !r.canAdmitCatchupLocked(hash, maxConcurrentCatchup) {
+		return
+	}
+	r.startLedgerAcquisitionLegacyLocked(seq, hash, peerID)
+	if target != ([32]byte{}) && r.fetchTracker.Find(hash) != nil {
+		r.consensusRecovery.stepHash = hash
+	}
+}
+
 func (r *Router) requestConsensusLedger(id consensus.LedgerID) error {
 	hash := [32]byte(id)
 	if hash == ([32]byte{}) {
@@ -601,49 +835,19 @@ func (r *Router) requestConsensusLedger(id consensus.LedgerID) error {
 	}
 
 	r.acquisitionMu.Lock()
-	defer r.acquisitionMu.Unlock()
-
-	if r.activeConsensusLedger != ([32]byte{}) {
-		if r.isAcquiring(r.activeConsensusLedger) {
-			if r.activeConsensusLedger != hash {
-				r.pendingConsensusLedger = hash
-			}
-			return nil
-		}
-		r.activeConsensusLedger = [32]byte{}
-	}
-	if r.fetchTracker.Find(hash) != nil || r.replayer.Has(hash) {
-		r.activeConsensusLedger = hash
-		if r.pendingConsensusLedger == hash {
-			r.pendingConsensusLedger = [32]byte{}
-		}
+	r.consensusRecovery.targetHash = hash
+	if step := r.consensusRecovery.stepHash; step != ([32]byte{}) && r.isAcquiring(step) {
+		r.acquisitionMu.Unlock()
 		return nil
 	}
-	for _, active := range r.fetchTracker.Active() {
-		if active.Reason() != inbound.ReasonConsensus {
-			continue
-		}
-		if r.fetchTracker.DiscardExpected(active) {
-			if lane := r.currentAcquisitionWork(); lane != nil {
-				lane.cancelLedger(active)
-			}
-			r.retireAcquisitionStore(context.TODO(), active)
-		}
+	if r.isAcquiring(hash) {
+		r.consensusRecovery.stepHash = hash
+		r.acquisitionMu.Unlock()
+		return nil
 	}
-	for _, activeHash := range r.replayer.InFlight() {
-		r.replayer.Abandon(activeHash)
-	}
-
-	peerID, _ := r.selectAcquisitionPeer(0)
-	r.startLedgerAcquisitionLegacyLocked(0, hash, peerID)
-	if r.fetchTracker.Find(hash) == nil {
-		r.pendingConsensusLedger = hash
-	} else {
-		r.activeConsensusLedger = hash
-		if r.pendingConsensusLedger == hash {
-			r.pendingConsensusLedger = [32]byte{}
-		}
-	}
+	r.consensusRecovery.stepHash = [32]byte{}
+	r.acquisitionMu.Unlock()
+	r.armConsensusCatchup()
 	return nil
 }
 
@@ -804,7 +1008,11 @@ func (r *Router) FetchInfo() map[string]any {
 // ClearFetchInfo resets the acquisition counters and recent-failure history,
 // backing fetch_info's `clear` param.
 func (r *Router) ClearFetchInfo() {
-	for _, ledger := range r.fetchTracker.Clear() {
+	r.retireLegacyAcquisitions(r.fetchTracker.Clear())
+}
+
+func (r *Router) retireLegacyAcquisitions(ledgers []*inbound.Ledger) {
+	for _, ledger := range ledgers {
 		if lane := r.currentAcquisitionWork(); lane != nil {
 			lane.cancelLedger(ledger)
 		}
@@ -1011,8 +1219,12 @@ func (r *Router) handleReplayDeltaResponse(msg *peermanagement.InboundMessage) {
 			"peer", peerID,
 			"error", err,
 		)
-		r.adaptor.IncPeerBadData(peerID, "replay-delta-verify")
-		r.startLedgerAcquisitionLegacy(seq, hash, peerID)
+		routeMismatch := errors.Is(err, inbound.ErrReplayParentMismatch) ||
+			errors.Is(err, inbound.ErrReplaySequenceMismatch)
+		if !routeMismatch {
+			r.adaptor.IncPeerBadData(peerID, "replay-delta-verify")
+		}
+		r.fallbackReplayAcquisition(seq, hash, peerID)
 		return
 	}
 
@@ -1042,22 +1254,19 @@ func (r *Router) handleReplayDeltaResponse(msg *peermanagement.InboundMessage) {
 			"peer", peerID,
 			"error", err,
 		)
-		r.startLedgerAcquisitionLegacy(seq, hash, peerID)
+		r.fallbackReplayAcquisition(seq, hash, peerID)
 		return
 	}
-	peerID := rd.PeerID()
 	r.replayer.Complete(rd.Hash())
-	if err := r.adoptVerifiedLedger(derived, peerID); err != nil {
+	if err := r.adoptVerifiedLedger(derived); err != nil {
 		r.logger.Warn("failed to adopt replay-delta ledger", "error", err)
 	}
 }
 
-// adoptVerifiedLedger commits a ledger reconstructed from a verified replay
-// delta, installing the peer-provided tx-blob tree alongside the state map.
-// Routes through SubmitHeldAdoption so out-of-order arrivals are stashed by
-// awaited parent seq; on stash we arm a backward-chain acquisition for the
-// parent.
-func (r *Router) adoptVerifiedLedger(l *ledger.Ledger, peerID uint64) error {
+// adoptVerifiedLedger stores a ledger reconstructed from a verified replay
+// delta. Only the first peer ledger establishes the service's initial frontier;
+// later ledgers remain hash-addressable until consensus selects them.
+func (r *Router) adoptVerifiedLedger(l *ledger.Ledger) error {
 	svc := r.adaptor.LedgerService()
 	if svc == nil {
 		return errors.New("no ledger service")
@@ -1079,35 +1288,135 @@ func (r *Router) adoptVerifiedLedger(l *ledger.Ledger, peerID uint64) error {
 	// handler stack that does not currently carry a context. Threading
 	// one through the message-dispatch chain is tracked separately from
 	// this issue (#185).
-	res, err := svc.SubmitHeldAdoption(context.TODO(), &hdr, stateMap, txMap)
+	bootstrapped, err := svc.BootstrapLedgerWithState(context.TODO(), &hdr, stateMap, txMap)
 	if err != nil {
-		return fmt.Errorf("adopt with state: %w", err)
+		return fmt.Errorf("store replay-delta ledger: %w", err)
 	}
-	if r.adaptor.GetOperatingMode() < consensus.OpModeTracking {
-		r.adaptor.SetOperatingMode(consensus.OpModeTracking)
-	}
-	r.logger.Info("adopted ledger via replay delta",
+	r.logger.Info("acquired ledger via replay delta",
 		"seq", hdr.LedgerIndex,
 		"hash", fmt.Sprintf("%x", hdr.Hash[:8]),
+		"bootstrapped", bootstrapped,
 	)
-	// Notify the consensus engine so it can flip out of
-	// ModeWrongLedger via Engine.OnLedger. Without this, the engine
-	// remains stuck in wrongLedger indefinitely after a successful
-	// inbound acquisition.
-	if r.engine != nil {
-		if err := r.engine.OnLedger(consensus.LedgerID(hdr.Hash), nil); err != nil {
-			r.logger.Debug("engine rejected adopted ledger", "error", err, "seq", hdr.LedgerIndex)
+	r.completeStoredConsensusRecovery(hdr.LedgerIndex, hdr.Hash, hdr.ParentHash, bootstrapped)
+	return nil
+}
+
+func (r *Router) completeStoredConsensusRecovery(seq uint32, hash, parentHash [32]byte, bootstrapped bool) {
+	r.recordSeqHash(seq, hash, parentHash, true)
+	notify, rearm := r.finishConsensusRecoveryStepWithBootstrap(seq, hash, bootstrapped)
+	if notify && r.adaptor.GetOperatingMode() < consensus.OpModeTracking {
+		r.adaptor.SetOperatingMode(consensus.OpModeTracking)
+	}
+	if notify && r.engine != nil {
+		if err := r.engine.OnLedger(consensus.LedgerID(hash), nil); err != nil {
+			r.logger.Debug("engine rejected adopted ledger", "error", err, "seq", seq)
 		}
 	}
-	if res.Stashed {
-		r.armParentAcquisition(svc, res.ParentSeq, res.ParentHash, peerID)
-	} else {
-		// Closed advanced: continue the serial forward walk toward the new
-		// closed+1 (or jump-adopt if still far). On a stash closed didn't move,
-		// so the parent chase above drives progress instead.
+	if rearm {
 		r.armConsensusCatchup()
 	}
-	return nil
+}
+
+func (r *Router) finishConsensusRecoveryStep(seq uint32, hash [32]byte) (notify, rearm bool) {
+	return r.finishConsensusRecoveryStepWithBootstrap(seq, hash, false)
+}
+
+func (r *Router) finishConsensusRecoveryStepWithBootstrap(
+	seq uint32,
+	hash [32]byte,
+	bootstrapped bool,
+) (notify, rearm bool) {
+	frontierSeq, _, _ := r.bestCatchupTarget()
+	validatedRecovery := r.isCurrentValidatedLedger(seq, hash)
+
+	r.acquisitionMu.Lock()
+	defer r.acquisitionMu.Unlock()
+
+	target := r.consensusRecovery.targetHash
+	if target != ([32]byte{}) {
+		if r.consensusRecovery.stepHash == hash {
+			r.consensusRecovery.stepHash = [32]byte{}
+		}
+		if target != hash {
+			currentAnchorUsable := r.consensusRecovery.anchorHash != ([32]byte{}) &&
+				r.recoveryAnchorReachesTarget(
+					r.consensusRecovery.anchorSeq,
+					r.consensusRecovery.anchorHash,
+					target,
+				)
+			if r.recoveryAnchorReachesTarget(seq, hash, target) &&
+				(!currentAnchorUsable || seq > r.consensusRecovery.anchorSeq) {
+				r.consensusRecovery.anchorSeq = seq
+				r.consensusRecovery.anchorHash = hash
+			}
+			if bootstrapped {
+				r.recordConsensusHandoffLocked(seq)
+				return true, true
+			}
+			if validatedRecovery && seq > r.lastHandoffSeq {
+				r.recordConsensusHandoffLocked(seq)
+				return true, true
+			}
+			return false, true
+		}
+		r.consensusRecovery.anchorSeq = seq
+		r.consensusRecovery.anchorHash = hash
+		r.consensusRecovery.targetHash = [32]byte{}
+		r.consensusRecovery.stepHash = [32]byte{}
+		r.recordConsensusHandoffLocked(seq)
+		return true, false
+	}
+
+	if bootstrapped {
+		r.recordConsensusHandoffLocked(seq)
+		return true, aheadByMoreThan(frontierSeq, seq, 0)
+	}
+	if validatedRecovery && seq > r.lastHandoffSeq {
+		r.recordConsensusHandoffLocked(seq)
+		return true, aheadByMoreThan(frontierSeq, seq, 0)
+	}
+	if aheadByMoreThan(frontierSeq, seq, 1) {
+		return false, true
+	}
+	if seq <= r.lastHandoffSeq {
+		return false, aheadByMoreThan(frontierSeq, seq, 0)
+	}
+	r.lastHandoffSeq = seq
+	return true, false
+}
+
+func (r *Router) isCurrentValidatedLedger(seq uint32, hash [32]byte) bool {
+	if r.adaptor == nil {
+		return false
+	}
+	svc := r.adaptor.LedgerService()
+	if svc == nil {
+		return false
+	}
+	validated := svc.GetValidatedLedger()
+	return validated != nil && validated.Sequence() == seq && validated.Hash() == hash
+}
+
+func (r *Router) recordConsensusHandoffLocked(seq uint32) {
+	if seq > r.lastHandoffSeq {
+		r.lastHandoffSeq = seq
+	}
+}
+
+func (r *Router) failConsensusRecoveryStep(hash [32]byte) {
+	r.acquisitionMu.Lock()
+	defer r.acquisitionMu.Unlock()
+	if r.consensusRecovery.stepHash != hash {
+		return
+	}
+	if r.consensusRecovery.targetHash == hash {
+		r.consensusRecovery = consensusRecovery{
+			anchorHash: r.consensusRecovery.anchorHash,
+			anchorSeq:  r.consensusRecovery.anchorSeq,
+		}
+		return
+	}
+	r.consensusRecovery.stepHash = [32]byte{}
 }
 
 // maybeAcquireFromValidation arms inbound acquisition for a ledger attested
@@ -1140,6 +1449,14 @@ func (r *Router) maybeAcquireFromValidation(v *consensus.Validation, originPeer 
 	if svc == nil {
 		return
 	}
+	ourSeq := svc.GetClosedLedgerIndex()
+	if r.adaptor.GetOperatingMode() == consensus.OpModeFull && aheadByMoreThan(v.LedgerSeq, ourSeq, 2) {
+		r.adaptor.SetOperatingMode(consensus.OpModeConnected)
+		r.logger.Warn("trusted validation is ahead; leaving Full mode",
+			"our_seq", ourSeq,
+			"validated_seq", v.LedgerSeq,
+		)
+	}
 	// Gate on the VALIDATED tip, never the closed/built tip — same rationale
 	// as armValidationStashAcquisition: a node that ran its closed chain
 	// ahead would otherwise skip the acquire and stay stuck on the wrong
@@ -1158,9 +1475,6 @@ func (r *Router) maybeAcquireFromValidation(v *consensus.Validation, originPeer 
 	// closed, so acquire it directly — without it the validation trie can never
 	// place the majority branch (rippled RCLValidationsAdaptor::acquire).
 	if v.LedgerSeq <= svc.GetClosedLedgerIndex() {
-		if r.catchupInFlight() >= maxConcurrentCatchup {
-			return
-		}
 		r.startLedgerAcquisition(v.LedgerSeq, hash, originPeer)
 		return
 	}
@@ -1228,41 +1542,15 @@ func (r *Router) armValidationStashAcquisition(seq uint32, hash [32]byte) {
 		return
 	}
 
-	// At the cap, record the target; the maintenance-tick re-arm drives it once
-	// the slot frees.
-	if r.catchupInFlight() >= maxConcurrentCatchup {
-		r.recordCatchupTarget(seq, hash, preferredPeerID)
-		return
-	}
+	// Keep the newest target even when the speculative slots are full; completion
+	// or maintenance will re-arm it when capacity becomes available.
+	r.recordCatchupTarget(seq, hash, preferredPeerID)
 	r.logger.Info("arming acquisition for stashed validation",
 		"seq", seq,
 		"hash", fmt.Sprintf("%x", hash[:8]),
 		"preferred_peer", preferredPeerID,
 	)
 	r.startLedgerAcquisition(seq, hash, preferredPeerID)
-}
-
-// armParentAcquisition fires a backward-chain acquisition for the parent of
-// a stashed held-adoption candidate. Skips at-or-below closed (already
-// adopted or fork-dropped).
-func (r *Router) armParentAcquisition(svc *service.Service, parentSeq uint32, parentHash [32]byte, preferredPeerID uint64) {
-	if parentSeq == 0 {
-		return
-	}
-	if parentSeq <= svc.GetClosedLedgerIndex() {
-		return
-	}
-	// At the cap, skip: the maintenance-tick re-arm toward the recorded tip
-	// jump-adopts past the stash at gap > 1.
-	if r.catchupInFlight() >= maxConcurrentCatchup {
-		return
-	}
-	r.logger.Info("arming backward-chain acquisition for stashed held-adoption parent",
-		"parent_seq", parentSeq,
-		"parent_hash", fmt.Sprintf("%x", parentHash[:8]),
-		"preferred_peer", preferredPeerID,
-	)
-	r.startLedgerAcquisition(parentSeq, parentHash, preferredPeerID)
 }
 
 // checkBehind decides what to do based on how far behind a peer
@@ -1453,7 +1741,7 @@ func (r *Router) handleLedgerData(msg *peermanagement.InboundMessage) {
 		il = r.fetchTracker.Find(h)
 	}
 
-	r.logger.Info("received ledger data",
+	r.logger.Debug("received ledger data",
 		"peer", msg.PeerID,
 		"seq", ld.LedgerSeq,
 		"nodes", len(ld.Nodes),
@@ -1524,9 +1812,13 @@ func (r *Router) handleInboundLedgerData(il *inbound.Ledger, ld *message.LedgerD
 		}
 		if err := il.GotBase(ld.Nodes); err != nil {
 			r.logger.Warn("inbound ledger: GotBase failed", "error", err)
-			r.adaptor.IncPeerBadData(peerID, "ledger-data-base")
-			if r.fetchTracker.RemoveExpectedWithSnapshot(il, il.Snapshot(), false) {
-				r.retireAcquisitionStore(context.TODO(), il)
+			if errors.Is(err, inbound.ErrHeaderRejected) {
+				r.failInboundAcquisition(il)
+			} else {
+				r.adaptor.IncPeerBadData(peerID, "ledger-data-base")
+				if r.fetchTracker.RemoveExpectedWithSnapshot(il, il.Snapshot(), false) {
+					r.retireAcquisitionStore(context.TODO(), il)
+				}
 			}
 			return true
 		}
@@ -1542,6 +1834,7 @@ func (r *Router) handleInboundLedgerData(il *inbound.Ledger, ld *message.LedgerD
 		return true
 
 	case message.LedgerInfoAsNode:
+		il.ReleaseMissingPeer(peerID)
 		useful, err := il.GotStateNodesUseful(ld.Nodes)
 		if err != nil {
 			r.logger.Warn("inbound ledger: GotStateNodes failed", "error", err)
@@ -1560,6 +1853,7 @@ func (r *Router) handleInboundLedgerData(il *inbound.Ledger, ld *message.LedgerD
 		return true
 
 	case message.LedgerInfoTxNode:
+		il.ReleaseMissingPeer(peerID)
 		useful, err := il.GotTransactionNodesUseful(ld.Nodes)
 		if err != nil {
 			r.logger.Warn("inbound ledger: GotTransactionNodes failed", "error", err)
@@ -1635,21 +1929,17 @@ func (r *Router) requestMissingAcquisitionNodes(il *inbound.Ledger, target uint6
 }
 
 func (r *Router) requestMissingAcquisitionNodesFromAddedPeer(il *inbound.Ledger, peerID uint64) {
-	stateIDs, txIDs := il.CollectMissingRequest(true)
-	if len(stateIDs) == 0 && len(txIDs) == 0 {
+	requests, complete, err := il.CollectMissingAddedRequestsContext(context.Background(), []uint64{peerID})
+	if err != nil {
+		r.logger.Warn("inbound ledger: failed to collect missing nodes for added peer", "error", err)
 		return
 	}
-	hash := il.Hash()
-	indirect := il.Timeouts() > 0
-	if len(stateIDs) > 0 {
-		if err := r.adaptor.RequestStateNodes(peerID, hash, stateIDs, 0, indirect); err != nil {
-			r.logger.Warn("inbound ledger: failed to request state nodes from added peer", "error", err)
-		}
+	if complete {
+		r.completeInboundLedger(il)
+		return
 	}
-	if len(txIDs) > 0 {
-		if err := r.adaptor.RequestTransactionNodes(peerID, hash, txIDs, 0, indirect); err != nil {
-			r.logger.Warn("inbound ledger: failed to request tx nodes from added peer", "error", err)
-		}
+	for _, request := range requests {
+		r.sendMissingReplyRequest(il, request)
 	}
 }
 
@@ -1749,6 +2039,7 @@ func (r *Router) failInboundAcquisitionWithSnapshot(il *inbound.Ledger, snapshot
 	)
 	if reason == inbound.ReasonConsensus {
 		r.markFailedCatchupAcquisition(hash)
+		r.failConsensusRecoveryStep(hash)
 	}
 	if reason == inbound.ReasonConsensus && r.engine != nil {
 		r.engine.OnLedgerAcquireFailed(consensus.LedgerID(hash))
@@ -1868,6 +2159,9 @@ func (r *Router) completeInboundLedgerReady(il *inbound.Ledger) {
 		return
 	}
 	peerID := il.PeerID()
+	r.acquisitionMu.Lock()
+	recoveryTarget := r.consensusRecovery.targetHash == h.Hash
+	r.acquisitionMu.Unlock()
 
 	// A history backfill is a store-only ingest below the closed tip: persist,
 	// then advance the backward walk to its parent. Never touches operating mode
@@ -1878,7 +2172,11 @@ func (r *Router) completeInboundLedgerReady(il *inbound.Ledger) {
 				"error", err, "seq", h.LedgerIndex)
 			return
 		}
-		r.startHistoryBackfill(h.LedgerIndex-1, h.ParentHash, peerID, r.currentHistoryFloor())
+		if recoveryTarget {
+			r.completeStoredConsensusRecovery(h.LedgerIndex, h.Hash, h.ParentHash, false)
+		} else {
+			r.startHistoryBackfill(h.LedgerIndex-1, h.ParentHash, peerID, r.currentHistoryFloor())
+		}
 		return
 	}
 
@@ -1889,64 +2187,38 @@ func (r *Router) completeInboundLedgerReady(il *inbound.Ledger) {
 	// context.TODO: same as adoptVerifiedLedger — reached from a peer-message
 	// handler stack with no plumbed context. See note there.
 	//
-	// A consensus acquisition two or more ledgers ahead is a catch-up jump: its
-	// parent chain is absent and fresh ledgers close faster than a backward
-	// parent chase converges, so adopt the tip directly, jumping the working
-	// ledger forward onto the trusted-validation-preferred branch; skipped
-	// ledgers backfill off the critical path via the ReasonHistory walk. Mirrors
-	// rippled setFullLedger/checkAccept plus fetchForHistory. The published
-	// validated pointer still only advances at quorum. Gap ≤ 1 and generic RPC
-	// acquisitions keep the held-adoption seam so out-of-order arrivals cascade.
-	var res service.SubmitHeldAdoptionResult
-	if preJumpClosed := svc.GetClosedLedgerIndex(); il.Reason() == inbound.ReasonConsensus && h.LedgerIndex > preJumpClosed+1 {
-		if err = svc.AdoptLedgerWithState(context.TODO(), h, stateMap, txMap); err != nil {
-			r.logger.Warn("inbound ledger: catch-up jump adopt failed",
-				"error", err, "seq", h.LedgerIndex)
+	// Generic acquisitions are queryable by hash but never mutate the service's
+	// canonical frontier or feed consensus.
+	if il.Reason() == inbound.ReasonGeneric {
+		if err = svc.StoreLedgerWithState(context.TODO(), h, stateMap, txMap); err != nil {
+			r.logger.Warn("inbound ledger: generic store failed", "error", err, "seq", h.LedgerIndex)
 			return
 		}
-		r.startHistoryBackfill(h.LedgerIndex-1, h.ParentHash, peerID, preJumpClosed)
-	} else if res, err = svc.SubmitHeldAdoption(context.TODO(), h, stateMap, txMap); err != nil {
-		r.logger.Warn("inbound ledger: failed to adopt with state", "error", err)
-		return
-	}
-
-	// A generic (RPC-driven) acquisition is now persisted and queryable; it
-	// must not advance operating mode or feed consensus.
-	if il.Reason() == inbound.ReasonGeneric {
 		r.logger.Info("acquired ledger (generic) with full state from peer",
 			"seq", h.LedgerIndex,
 			"hash", fmt.Sprintf("%x", h.Hash[:8]),
 		)
-		if res.Stashed {
-			r.armParentAcquisition(svc, res.ParentSeq, res.ParentHash, peerID)
+		if recoveryTarget {
+			r.completeStoredConsensusRecovery(h.LedgerIndex, h.Hash, h.ParentHash, false)
 		}
 		return
 	}
 
-	// Only upgrade to Tracking if still in a lower mode.
-	// Never demote from Full — that would break consensus participation.
-	if r.adaptor.GetOperatingMode() < consensus.OpModeTracking {
-		r.adaptor.SetOperatingMode(consensus.OpModeTracking)
+	preBootstrapClosed := svc.GetClosedLedgerIndex()
+	bootstrapped, err := svc.BootstrapLedgerWithState(context.TODO(), h, stateMap, txMap)
+	if err != nil {
+		r.logger.Warn("inbound ledger: failed to store consensus ledger", "error", err, "seq", h.LedgerIndex)
+		return
 	}
-	r.logger.Info("adopted ledger with full state from peer",
+	if bootstrapped && h.LedgerIndex > preBootstrapClosed+1 {
+		r.startHistoryBackfill(h.LedgerIndex-1, h.ParentHash, peerID, preBootstrapClosed)
+	}
+
+	r.logger.Info("acquired ledger with full state from peer",
 		"seq", h.LedgerIndex,
 		"hash", fmt.Sprintf("%x", h.Hash[:8]),
 		"account_hash", fmt.Sprintf("%x", h.AccountHash[:8]),
+		"bootstrapped", bootstrapped,
 	)
-	// Notify the consensus engine so it can flip out of
-	// ModeWrongLedger via Engine.OnLedger, mirroring the replay-delta
-	// path in adoptVerifiedLedger.
-	if r.engine != nil {
-		if err := r.engine.OnLedger(consensus.LedgerID(h.Hash), nil); err != nil {
-			r.logger.Debug("engine rejected adopted ledger", "error", err, "seq", h.LedgerIndex)
-		}
-	}
-	// Closed advanced (gap-1 step or jump-adopt): re-arm the next single
-	// acquisition toward the best target. On a stash closed didn't move, so the
-	// parent chase makes progress and re-arming would only re-request the stash.
-	if res.Stashed {
-		r.armParentAcquisition(svc, res.ParentSeq, res.ParentHash, peerID)
-	} else {
-		r.armConsensusCatchup()
-	}
+	r.completeStoredConsensusRecovery(h.LedgerIndex, h.Hash, h.ParentHash, bootstrapped)
 }

@@ -61,7 +61,7 @@ func TestBroadcastPriorityExceptSetUsesIndependentQueue(t *testing.T) {
 	require.Zero(t, eligible.SendDrops())
 }
 
-func TestBroadcastManifestFramesIncludesSourcePeer(t *testing.T) {
+func TestBroadcastManifestFramesExceptSkipsSourcePeer(t *testing.T) {
 	source := newTestPeer(t, 1)
 	other := newTestPeer(t, 2)
 	source.setState(PeerStateConnected)
@@ -69,8 +69,8 @@ func TestBroadcastManifestFramesIncludesSourcePeer(t *testing.T) {
 	overlay := newTestOverlayWithPeers(map[PeerID]*Peer{1: source, 2: other})
 	frames := [][]byte{{0xAA}, {0xBB}}
 
-	require.NoError(t, overlay.BroadcastManifestFrames(frames))
-	require.Equal(t, frames, <-source.manifestSend)
+	require.NoError(t, overlay.BroadcastManifestFramesExcept(source.ID(), frames))
+	require.Empty(t, source.manifestSend)
 	require.Equal(t, frames, <-other.manifestSend)
 }
 

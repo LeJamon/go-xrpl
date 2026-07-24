@@ -94,8 +94,8 @@ func TestReplayer_Acquire_CapacityFull(t *testing.T) {
 
 // TestReplayer_Stop_Drains pins R5.15: Stop() clears all in-flight
 // acquisitions and returns the prior count. Protects against leaking
-// map entries across a shutdown→restart cycle and gives operators a
-// single "pending at shutdown" number for diagnostics.
+// map entries during shutdown and gives operators a single "pending at
+// shutdown" number for diagnostics.
 func TestReplayer_Stop_Drains(t *testing.T) {
 	t.Parallel()
 	parent := makeGenesisLedger(t)
@@ -113,7 +113,10 @@ func TestReplayer_Stop_Drains(t *testing.T) {
 	assert.Equal(t, 3, remaining,
 		"Stop must return the pre-drain in-flight count")
 	assert.Equal(t, 0, rep.Count(),
-		"Stop must leave the replayer empty so subsequent reuse starts clean")
+		"Stop must leave the replayer empty")
+	rd, err := rep.Acquire(hashN(4), 10, parent)
+	assert.Nil(t, rd)
+	assert.ErrorIs(t, err, ErrAcquisitionStopped)
 
 	// Idempotent: Stop on an empty replayer returns 0, doesn't panic.
 	assert.Equal(t, 0, rep.Stop())

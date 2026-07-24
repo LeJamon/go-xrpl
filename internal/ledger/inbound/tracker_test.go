@@ -266,6 +266,34 @@ func TestTracker_FailedReportedThenCleared(t *testing.T) {
 	}
 }
 
+func TestTracker_StopDrainsAndRejectsLaterAdmissions(t *testing.T) {
+	t.Parallel()
+	tr := NewTracker()
+	first := New([32]byte{0xA1}, 401, 3, discardLogger())
+	tr.Track(first)
+
+	drained := tr.Stop()
+	if len(drained) != 1 || drained[0] != first {
+		t.Fatalf("Stop drained %#v, want the active acquisition", drained)
+	}
+	if got := tr.Find(first.Hash()); got != nil {
+		t.Fatalf("stopped tracker retained active acquisition %p", got)
+	}
+
+	second := New([32]byte{0xA2}, 402, 4, discardLogger())
+	tr.Track(second)
+	if got := tr.Find(second.Hash()); got != nil {
+		t.Fatalf("Track repopulated stopped tracker with %p", got)
+	}
+	created, ok := tr.GetOrCreate([32]byte{0xA3}, func() *Ledger { return second })
+	if ok || created != nil {
+		t.Fatalf("GetOrCreate on stopped tracker = (%p,%v), want (nil,false)", created, ok)
+	}
+	if again := tr.Stop(); len(again) != 0 {
+		t.Fatalf("second Stop drained %#v, want empty", again)
+	}
+}
+
 func TestTracker_TimedOutDemotedToFailure(t *testing.T) {
 	t.Parallel()
 	var hash [32]byte
@@ -523,6 +551,7 @@ func TestInbound_FullAcquisitionWithTransactions(t *testing.T) {
 	if il.IsComplete() {
 		t.Fatal("acquisition complete before tx tree fetched")
 	}
+	il.ReleaseMissingPeer(7)
 	requests, complete, err = il.CollectMissingReplyRequestsContext(context.Background(), []uint64{7})
 	if err != nil || complete || len(requests) == 0 || !requests[0].Transaction {
 		t.Fatalf("transaction request = %#v, complete=%t, err=%v", requests, complete, err)

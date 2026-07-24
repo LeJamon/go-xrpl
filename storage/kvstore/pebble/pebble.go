@@ -32,18 +32,21 @@ type Store struct {
 // handles is the number of open file handles allowed (0 for default).
 // readonly opens the database in read-only mode if true.
 func New(path string, cache int, handles int, readonly bool) (*Store, error) {
-	if err := os.MkdirAll(path, 0755); err != nil {
-		return nil, fmt.Errorf("kvstore/pebble: failed to create directory %s: %w", path, err)
-	}
-
 	if cache <= 0 {
 		cache = 256 << 20 // 256MB default
+	}
+	pebbleCache := pebble.NewCache(int64(cache))
+	defer pebbleCache.Unref()
+	return newWithCache(path, pebbleCache, handles, readonly)
+}
+
+func newWithCache(path string, pebbleCache *pebble.Cache, handles int, readonly bool) (*Store, error) {
+	if err := os.MkdirAll(path, 0755); err != nil {
+		return nil, fmt.Errorf("kvstore/pebble: failed to create directory %s: %w", path, err)
 	}
 	if handles <= 0 {
 		handles = 500
 	}
-
-	pebbleCache := pebble.NewCache(int64(cache))
 
 	opts := &pebble.Options{
 		Cache:                       pebbleCache,

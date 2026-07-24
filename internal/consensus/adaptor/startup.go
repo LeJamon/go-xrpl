@@ -187,8 +187,8 @@ func (c *Components) Stop() {
 		c.routerCancel()
 	}
 	// Join the router loop before tearing down the engine, so it can't be
-	// mid-handleMessage touching an already-stopped engine, and so a subsequent
-	// Start can't double-run it. Bounded so a wedged handler can't hang shutdown.
+	// mid-handleMessage touching an already-stopped engine. Bounded so a wedged
+	// handler can't hang shutdown.
 	if c.routerDone != nil {
 		select {
 		case <-c.routerDone:
@@ -202,14 +202,15 @@ func (c *Components) Stop() {
 	if c.Engine != nil {
 		_ = c.Engine.Stop()
 	}
-	// Drain any in-flight replay-delta acquisitions. Router is
-	// already cancelled above so no new acquisitions can arrive; we
-	// just need to clear the map so we don't leak state into a
-	// subsequent Start. Log the count for observability.
+	// Drain both acquisition paths after the router loop has stopped. Components
+	// are one-shot; a process restart constructs a fresh Router.
 	if c.Router != nil {
-		if remaining := c.Router.StopReplayer(); remaining > 0 {
-			slog.Info("replay-delta acquisitions drained at shutdown",
-				"t", "Components.Stop", "in_flight_at_stop", remaining)
+		legacy, replay := c.Router.StopAcquisitions()
+		if legacy > 0 || replay > 0 {
+			slog.Info("ledger acquisitions drained at shutdown",
+				"t", "Components.Stop",
+				"legacy_in_flight_at_stop", legacy,
+				"replay_in_flight_at_stop", replay)
 		}
 	}
 	if c.overlayCancel != nil {
@@ -354,6 +355,10 @@ func NewFromConfig(
 	router.SetAcqInbox(overlay.LedgerDataMessages())
 	router.SetManifestInbox(overlay.ManifestMessages())
 	router.SetManifestCache(manifestCache, overlay)
+	router.SetManifestAdmission(func(master [33]byte) bool {
+		nodeID := consensus.CalcNodeID(master)
+		return adaptor.IsTrusted(nodeID) || adaptor.IsListed(nodeID)
+	})
 	router.setPeerSessionView(overlay)
 	router.SetMinimumOnlineFloor(floor)
 
@@ -444,8 +449,8 @@ func NewFromConfig(
 
 	// Surface the consensus role in server_info's server_state so an external
 	// observer can tell a participating validator from a passive full node.
-	// rippled restricts the "proposing"/"validating" aliases to admin callers;
-	// goXRPL exposes them to every caller by design.
+	// The RPC presentation layer restricts the "proposing"/"validating"
+	// aliases to admin callers, matching rippled.
 	ledgerSvc.SetServerStateFunc(func() string {
 		return consensusServerState(adaptor.GetOperatingMode(), engine.Mode(), engine.IsValidating())
 	})

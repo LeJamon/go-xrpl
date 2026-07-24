@@ -353,18 +353,14 @@ func signTransactionJSON(ctx context.Context, services *types.ServiceContainer, 
 		txMap["SigningPubKey"] = publicKey
 	}
 
-	txBytes, err := json.Marshal(txMap)
-	if err != nil {
-		return nil, rpcInternalError("sign: transaction marshaling failed", err)
-	}
-
-	transaction, err := tx.ParseJSON(txBytes)
+	unsignedBlob, err := binarycodec.EncodeBytes(txMap)
 	if err != nil {
 		return nil, types.RpcErrorInvalidParams(fmt.Sprintf("Failed to parse transaction: %v", err))
 	}
 
-	if signatureTarget == "" {
-		transaction.GetCommon().SigningPubKey = publicKey
+	transaction, err := tx.ParseFromBinary(unsignedBlob)
+	if err != nil {
+		return nil, types.RpcErrorInvalidParams(fmt.Sprintf("Failed to parse transaction: %v", err))
 	}
 
 	signature, err := sign.SignTransaction(transaction, privateKey)

@@ -2,13 +2,13 @@ package rpc
 
 import (
 	"context"
+	"encoding/hex"
 	"encoding/json"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	binarycodec "github.com/LeJamon/go-xrpl/codec/binarycodec"
 	"github.com/LeJamon/go-xrpl/internal/rpc/handlers"
 	"github.com/LeJamon/go-xrpl/internal/rpc/types"
 	txcore "github.com/LeJamon/go-xrpl/internal/tx"
@@ -34,12 +34,13 @@ func TestSign_SignatureTarget_HappyPath(t *testing.T) {
 	// Primary signs (masterpassphrase → rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh).
 	primary := signOffline(t, json.RawMessage(`{
 		"tx_json": {
-			"TransactionType": "Payment",
+			"TransactionType": "LoanSet",
 			"Account": "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh",
-			"Destination": "rPMh7Pi9ct699iZUTWaytJUoHcJ7cgyziK",
-			"Amount": "1000000",
+			"LoanBrokerID": "0000000000000000000000000000000000000000000000000000000000000000",
+			"PrincipalRequested": "1",
 			"Fee": "10",
-			"Sequence": 1
+			"Sequence": 1,
+			"Memos": []
 		},
 		"passphrase": "masterpassphrase",
 		"key_type": "secp256k1",
@@ -78,12 +79,12 @@ func TestSign_SignatureTarget_HappyPath(t *testing.T) {
 
 	// Reconstruct the transaction and verify both signatures.
 	blob := res["tx_blob"].(string)
-	decoded, err := binarycodec.Decode(blob)
+	txBytes, err := hex.DecodeString(blob)
 	require.NoError(t, err)
-	txBytes, err := json.Marshal(decoded)
+	parsed, err := txcore.ParseFromBinary(txBytes)
 	require.NoError(t, err)
-	parsed, err := txcore.ParseJSON(txBytes)
-	require.NoError(t, err)
+	require.True(t, parsed.GetCommon().HasField("Memos"))
+	require.Empty(t, parsed.GetCommon().Memos)
 
 	require.NoError(t, sign.VerifySignature(parsed, false), "top-level signature must verify")
 	cp := parsed.GetCommon().CounterpartySignature

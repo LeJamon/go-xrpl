@@ -33,6 +33,7 @@ type Tracker struct {
 	active    map[[32]byte]*Ledger
 	completed map[[32]byte]completedRecord
 	failures  map[[32]byte]failureRecord
+	stopped   bool
 }
 
 type failureRecord struct {
@@ -60,6 +61,10 @@ func (t *Tracker) Track(l *Ledger) {
 		return
 	}
 	t.mu.Lock()
+	if t.stopped {
+		t.mu.Unlock()
+		return
+	}
 	t.active[l.Hash()] = l
 	t.mu.Unlock()
 }
@@ -88,6 +93,9 @@ func (t *Tracker) GetOrCreate(hash [32]byte, factory func() *Ledger) (l *Ledger,
 	}
 	t.mu.Lock()
 	defer t.mu.Unlock()
+	if t.stopped {
+		return nil, false
+	}
 	if existing := t.active[hash]; existing != nil {
 		return existing, false
 	}
@@ -221,6 +229,25 @@ func (t *Tracker) Clear() []*Ledger {
 		return nil
 	}
 	t.mu.Lock()
+	active := t.clearLocked()
+	t.mu.Unlock()
+	return active
+}
+
+// Stop terminally drains the tracker and rejects later admissions. A stopped
+// tracker belongs to a stopped Router and is not reusable.
+func (t *Tracker) Stop() []*Ledger {
+	if t == nil {
+		return nil
+	}
+	t.mu.Lock()
+	t.stopped = true
+	active := t.clearLocked()
+	t.mu.Unlock()
+	return active
+}
+
+func (t *Tracker) clearLocked() []*Ledger {
 	active := make([]*Ledger, 0, len(t.active))
 	for _, l := range t.active {
 		active = append(active, l)
@@ -228,7 +255,6 @@ func (t *Tracker) Clear() []*Ledger {
 	t.active = make(map[[32]byte]*Ledger)
 	t.completed = make(map[[32]byte]completedRecord)
 	t.failures = make(map[[32]byte]failureRecord)
-	t.mu.Unlock()
 	return active
 }
 
@@ -293,8 +319,13 @@ func acquisitionKey(seq uint32, hash [32]byte) string {
 // scanned at least once.
 func AcquisitionJSON(snap Snapshot) map[string]any {
 	entry := map[string]any{
-		"hash":        fmt.Sprintf("%X", snap.Hash),
-		"have_header": snap.HaveHeader,
+		"hash":                 fmt.Sprintf("%X", snap.Hash),
+		"have_header":          snap.HaveHeader,
+		"request_peers":        snap.RequestPeers,
+		"state_received_total": snap.StateReceived,
+		"state_useful_total":   snap.StateUseful,
+		"tx_received_total":    snap.TxReceived,
+		"tx_useful_total":      snap.TxUseful,
 		// Live no-progress retry count, mirroring InboundLedger::getJson's
 		// timeouts_ now that the acquisition runs a timer-driven retry loop.
 		"timeouts": snap.Timeouts,

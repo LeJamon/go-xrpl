@@ -8,6 +8,7 @@ import (
 	"crypto/rand"
 	"encoding/binary"
 	"errors"
+	"fmt"
 	"log/slog"
 	"strings"
 	"sync"
@@ -188,6 +189,10 @@ type Adaptor struct {
 	// process started; the engine never proposes or validates at or below
 	// it (anti-double-sign across restarts). Immutable after New.
 	maxDisallowedSeq uint32
+
+	// networkValidatedSeq is the highest sequence observed at trusted full-
+	// validation quorum, including ledgers not yet available locally.
+	networkValidatedSeq atomic.Uint32
 
 	// reqLedgerLast rate-limits per-hash broadcast TMGetLedger retries from
 	// the engine's checkLedger heartbeat (see RequestLedger).
@@ -418,11 +423,17 @@ func New(cfg Config) *Adaptor {
 	}
 	if cfg.LedgerService != nil {
 		cfg.LedgerService.SetValidatedLedgerAgeClock(a.Now)
-		cfg.LedgerService.SetOnValidatedLedger(func(seq uint32, hash, parentHash [32]byte) {
-			a.refreshRemoteFee(seq, consensus.LedgerID(hash), consensus.LedgerID(parentHash))
-		})
+		cfg.LedgerService.SetOnValidatedLedger(a.onValidatedLedger)
 	}
 	return a
+}
+
+func (a *Adaptor) onValidatedLedger(seq uint32, hash, parentHash [32]byte) {
+	a.refreshRemoteFee(seq, consensus.LedgerID(hash), consensus.LedgerID(parentHash))
+	a.logger.Info("Ledger fully validated",
+		"seq", seq,
+		"hash", fmt.Sprintf("%x", hash[:8]),
+	)
 }
 
 // SetValidationHistorian wires per-ledger trusted-validation lookups into the
@@ -735,8 +746,6 @@ func (a *Adaptor) GetMaxDisallowedLedgerSeq() uint32 {
 }
 
 func (a *Adaptor) BuildLedger(parent consensus.Ledger, txSet consensus.TxSet, closeTime time.Time, closeTimeCorrect bool, disputedTxs [][]byte) (consensus.Ledger, error) {
-	// Unwrap the parent for the service. Critical for chain switching: the
-	// parent may differ from the service's closedLedger after wrong-ledger detection.
 	var parentLedger *ledger.Ledger
 	if w, ok := parent.(*LedgerWrapper); ok {
 		parentLedger = w.Unwrap()

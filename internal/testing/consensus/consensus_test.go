@@ -166,12 +166,12 @@ func TestModeManagerIntegration(t *testing.T) {
 	assert.Equal(t, consensus.OpModeFull, mm.Mode())
 	assert.Equal(t, consensus.OpModeFull, cluster.Nodes[0].Adaptor.GetOperatingMode())
 
-	// A wrongLedger ModeChangedEvent steers Full → Syncing (the live
+	// A wrongLedger ModeChangedEvent demotes Full → Connected (the live
 	// OnEvent wiring), and the adaptor reflects it.
 	mm.OnEvent(&consensus.ModeChangedEvent{
 		OldMode: consensus.ModeProposing,
 		NewMode: consensus.ModeWrongLedger,
 	})
-	assert.Equal(t, consensus.OpModeSyncing, mm.Mode())
-	assert.Equal(t, consensus.OpModeSyncing, cluster.Nodes[0].Adaptor.GetOperatingMode())
+	assert.Equal(t, consensus.OpModeConnected, mm.Mode())
+	assert.Equal(t, consensus.OpModeConnected, cluster.Nodes[0].Adaptor.GetOperatingMode())
 }

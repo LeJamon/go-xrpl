@@ -125,6 +125,28 @@ func TestRouter_HandleReplayDeltaResponse_VerifyFailure_ChargesPeer(t *testing.T
 	assert.Equal(t, "replay-delta-verify", calls[0].reason)
 }
 
+func TestRouter_HandleReplayDeltaResponse_RouteMismatchDoesNotChargePeer(t *testing.T) {
+	r, rs := makeRouterWithBadDataRecorder(t)
+	svc := r.adaptor.LedgerService()
+	parent := svc.GetClosedLedger()
+	require.NotNil(t, parent)
+	wrongParent, err := svc.GetLedgerBySequence(parent.Sequence() - 1)
+	require.NoError(t, err)
+
+	resp, _, target, seq := buildSuccessorAgainstParent(t, parent)
+	require.NoError(t, r.startReplayDeltaAcquisition(seq, target, 7, wrongParent))
+	payload, err := message.Encode(resp)
+	require.NoError(t, err)
+	r.handleMessage(&peermanagement.InboundMessage{
+		PeerID: 7, Type: uint16(message.TypeReplayDeltaResponse), Payload: payload,
+	})
+
+	assert.Empty(t, rs.getBadDataCalls())
+	legacy := rs.legacyCalls()
+	require.Len(t, legacy, 1)
+	assert.Equal(t, target, legacy[0].hash)
+}
+
 // TestRouter_HandleLedgerData_DecodeFailure_ChargesPeer verifies the
 // same pattern for mtLEDGER_DATA — a peer that ships malformed
 // ledger-data accrues bad-data credit.

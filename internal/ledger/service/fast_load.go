@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"sync"
 
 	"github.com/LeJamon/go-xrpl/drops"
 	"github.com/LeJamon/go-xrpl/internal/ledger"
@@ -206,8 +207,53 @@ func mergeFeeSettings(fees drops.Fees, settings *state.FeeSettings) drops.Fees {
 }
 
 func (s *Service) verifyStoredSHAMap(ctx context.Context, root [32]byte, mapType shamap.Type) error {
-	return s.walkStoredSHAMap(ctx, root, mapType, nil)
+	if root == ([32]byte{}) {
+		return fmt.Errorf("zero root")
+	}
+
+	rootNode, _, err := s.loadStoredSHAMapNode(ctx, storedSHAMapNode{hash: root}, mapType)
+	if err != nil {
+		return err
+	}
+	inner, ok := rootNode.(shamap.InnerNodeReader)
+	if !ok {
+		return fmt.Errorf("root node %x is not an inner node", root[:8])
+	}
+
+	walkCtx, cancel := context.WithCancelCause(ctx)
+	defer cancel(nil)
+	var wg sync.WaitGroup
+	for branch := range shamap.BranchFactor {
+		if inner.IsEmptyBranch(branch) {
+			continue
+		}
+		child, err := inner.ChildHash(branch)
+		if err != nil {
+			return err
+		}
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			if err := s.walkStoredSHAMapNodes(
+				walkCtx,
+				[]storedSHAMapNode{{hash: child, depth: 1}},
+				mapType,
+				nil,
+			); err != nil {
+				cancel(err)
+			}
+		}()
+	}
+	wg.Wait()
+	return context.Cause(walkCtx)
 }
+
+type storedSHAMapNode struct {
+	hash  [32]byte
+	depth int
+}
+
+type storedSHAMapFetch func(context.Context, nodestore.Hash256) (*nodestore.Node, error)
 
 func (s *Service) walkStoredSHAMap(
 	ctx context.Context,
@@ -215,33 +261,53 @@ func (s *Service) walkStoredSHAMap(
 	mapType shamap.Type,
 	visit func([32]byte, *nodestore.Node) error,
 ) error {
+	return s.walkStoredSHAMapWithFetch(ctx, root, mapType, s.nodeStore.Fetch, visit)
+}
+
+func (s *Service) walkStoredSHAMapWithFetch(
+	ctx context.Context,
+	root [32]byte,
+	mapType shamap.Type,
+	fetch storedSHAMapFetch,
+	visit func([32]byte, *nodestore.Node) error,
+) error {
 	if root == ([32]byte{}) {
 		return fmt.Errorf("zero root")
 	}
-	type pendingNode struct {
-		hash  [32]byte
-		depth int
-	}
-	stack := []pendingNode{{hash: root}}
+	return s.walkStoredSHAMapNodesWithFetch(
+		ctx,
+		[]storedSHAMapNode{{hash: root}},
+		mapType,
+		fetch,
+		visit,
+	)
+}
+
+func (s *Service) walkStoredSHAMapNodes(
+	ctx context.Context,
+	stack []storedSHAMapNode,
+	mapType shamap.Type,
+	visit func([32]byte, *nodestore.Node) error,
+) error {
+	return s.walkStoredSHAMapNodesWithFetch(ctx, stack, mapType, s.nodeStore.Fetch, visit)
+}
+
+func (s *Service) walkStoredSHAMapNodesWithFetch(
+	ctx context.Context,
+	stack []storedSHAMapNode,
+	mapType shamap.Type,
+	fetch storedSHAMapFetch,
+	visit func([32]byte, *nodestore.Node) error,
+) error {
 	for len(stack) > 0 {
 		if err := ctx.Err(); err != nil {
 			return err
 		}
 		pending := stack[len(stack)-1]
 		stack = stack[:len(stack)-1]
-		stored, err := s.nodeStore.Fetch(ctx, nodestore.Hash256(pending.hash))
+		node, stored, err := s.loadStoredSHAMapNodeWithFetch(ctx, pending, mapType, fetch)
 		if err != nil {
 			return err
-		}
-		if stored == nil {
-			return fmt.Errorf("node %x is missing", pending.hash[:8])
-		}
-		node, err := shamap.DeserializeFromPrefix(stored.Data)
-		if err != nil {
-			return err
-		}
-		if node.Hash() != pending.hash {
-			return fmt.Errorf("node %x has invalid content hash", pending.hash[:8])
 		}
 		if inner, ok := node.(shamap.InnerNodeReader); ok {
 			if pending.depth >= 64 {
@@ -255,16 +321,8 @@ func (s *Service) walkStoredSHAMap(
 				if err != nil {
 					return err
 				}
-				stack = append(stack, pendingNode{hash: child, depth: pending.depth + 1})
+				stack = append(stack, storedSHAMapNode{hash: child, depth: pending.depth + 1})
 			}
-		} else if pending.depth == 0 {
-			return fmt.Errorf("root node %x is not an inner node", pending.hash[:8])
-		} else if mapType == shamap.TypeState && node.Type() != shamap.NodeTypeAccountState {
-			return fmt.Errorf("state tree contains %s leaf", node.Type())
-		} else if mapType == shamap.TypeTransaction &&
-			node.Type() != shamap.NodeTypeTransactionNoMeta &&
-			node.Type() != shamap.NodeTypeTransactionWithMeta {
-			return fmt.Errorf("transaction tree contains %s leaf", node.Type())
 		}
 		if visit != nil {
 			if err := visit(pending.hash, stored); err != nil {
@@ -273,4 +331,49 @@ func (s *Service) walkStoredSHAMap(
 		}
 	}
 	return nil
+}
+
+func (s *Service) loadStoredSHAMapNode(
+	ctx context.Context,
+	pending storedSHAMapNode,
+	mapType shamap.Type,
+) (shamap.NodeReader, *nodestore.Node, error) {
+	return s.loadStoredSHAMapNodeWithFetch(ctx, pending, mapType, s.nodeStore.Fetch)
+}
+
+func (s *Service) loadStoredSHAMapNodeWithFetch(
+	ctx context.Context,
+	pending storedSHAMapNode,
+	mapType shamap.Type,
+	fetch storedSHAMapFetch,
+) (shamap.NodeReader, *nodestore.Node, error) {
+	stored, err := fetch(ctx, nodestore.Hash256(pending.hash))
+	if err != nil {
+		return nil, nil, err
+	}
+	if stored == nil {
+		return nil, nil, fmt.Errorf("node %x is missing", pending.hash[:8])
+	}
+	node, err := shamap.DeserializeFromPrefix(stored.Data)
+	if err != nil {
+		return nil, nil, err
+	}
+	if node.Hash() != pending.hash {
+		return nil, nil, fmt.Errorf("node %x has invalid content hash", pending.hash[:8])
+	}
+	if _, inner := node.(shamap.InnerNodeReader); inner {
+		return node, stored, nil
+	}
+	if pending.depth == 0 {
+		return nil, nil, fmt.Errorf("root node %x is not an inner node", pending.hash[:8])
+	}
+	if mapType == shamap.TypeState && node.Type() != shamap.NodeTypeAccountState {
+		return nil, nil, fmt.Errorf("state tree contains %s leaf", node.Type())
+	}
+	if mapType == shamap.TypeTransaction &&
+		node.Type() != shamap.NodeTypeTransactionNoMeta &&
+		node.Type() != shamap.NodeTypeTransactionWithMeta {
+		return nil, nil, fmt.Errorf("transaction tree contains %s leaf", node.Type())
+	}
+	return node, stored, nil
 }

@@ -30,6 +30,11 @@ import (
 // callers use errors.Is for matching so the wording can evolve
 // without breaking test assertions on string contents.
 var (
+	// ErrReplayParentMismatch means the requested ledger is not a child of the selected replay parent.
+	ErrReplayParentMismatch = errors.New("replay delta: parent hash mismatch")
+	// ErrReplaySequenceMismatch means the response is not the selected parent's direct successor.
+	ErrReplaySequenceMismatch = errors.New("replay delta: ledger seq mismatch")
+
 	// ErrReplayTxParse wraps parse failures on peer-supplied tx blobs.
 	// Either a peer fork or wire corruption that escaped GotResponse.
 	ErrReplayTxParse = errors.New("replay delta: parse tx failed")
@@ -420,11 +425,11 @@ func (r *ReplayDelta) verifyAndBuild(resp *message.ReplayDeltaResponse) error {
 	if r.parent != nil {
 		parentHash := r.parent.Hash()
 		if hdr.ParentHash != parentHash {
-			return fmt.Errorf("parent hash mismatch: header parent %x, expected %x",
+			return fmt.Errorf("%w: header parent %x, expected %x", ErrReplayParentMismatch,
 				hdr.ParentHash[:8], parentHash[:8])
 		}
 		if hdr.LedgerIndex != r.parent.Sequence()+1 {
-			return fmt.Errorf("ledger seq mismatch: header %d, expected %d",
+			return fmt.Errorf("%w: header %d, expected %d", ErrReplaySequenceMismatch,
 				hdr.LedgerIndex, r.parent.Sequence()+1)
 		}
 		parentHeader := r.parent.Header()

@@ -22,11 +22,22 @@ type durableFamily interface {
 	FetchDurable(ctx context.Context, hash [32]byte) ([]byte, error)
 }
 
+type nodePlacementFamily interface {
+	FetchForNodePlacement(ctx context.Context, hash [32]byte) ([]byte, error)
+}
+
 func fetchDurable(ctx context.Context, family Family, hash [32]byte) ([]byte, error) {
 	if durable, ok := family.(durableFamily); ok {
 		return durable.FetchDurable(ctx, hash)
 	}
 	return family.Fetch(ctx, hash)
+}
+
+func fetchForNodePlacement(ctx context.Context, family Family, hash [32]byte) ([]byte, error) {
+	if placement, ok := family.(nodePlacementFamily); ok {
+		return placement.FetchForNodePlacement(ctx, hash)
+	}
+	return fetchDurable(ctx, family, hash)
 }
 
 func familyFullBelowCache(family Family) *FullBelowCache {

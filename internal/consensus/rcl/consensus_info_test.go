@@ -30,9 +30,9 @@ func TestEngine_GetJSON_Defaults(t *testing.T) {
 	if got := j["phase"].(string); got != "accepted" {
 		t.Fatalf("phase = %q, want accepted", got)
 	}
-	// mockAdaptor.validator defaults to true.
-	if v, _ := j["validating"].(bool); !v {
-		t.Fatal("validating should be true")
+	// validating_ is false until preStartRound snapshots eligibility.
+	if v, _ := j["validating"].(bool); v {
+		t.Fatal("validating should be false before the first round")
 	}
 
 	// full=true fields.

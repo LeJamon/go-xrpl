@@ -174,6 +174,18 @@ func (s *messageSuppression) observe(hash [32]byte) (firstSeen bool, lastSeenAt 
 	return true, time.Time{}
 }
 
+func (s *messageSuppression) seenRecently(hash [32]byte) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	now := s.now()
+	seenAt, ok := s.seen[hash]
+	if !ok || now.Sub(seenAt) >= s.ttl {
+		return false
+	}
+	s.seen[hash] = now
+	return true
+}
+
 // recordPeer marks peerID as a peer known to already have the message
 // identified by hash. Returns true if the peer was newly added to the
 // per-hash set. Always refreshes the hash's last-seen time so a steady

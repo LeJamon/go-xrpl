@@ -28,6 +28,7 @@ var ErrStoreBelowMinimum = errors.New("shamap: ledger is below the minimum onlin
 type NodeStoreFamily struct {
 	db        nodestore.Database
 	fullBelow *FullBelowCache
+	durable   durableReadCoalescer
 	storeMu   sync.RWMutex
 	minimum   atomic.Uint32
 }
@@ -90,10 +91,30 @@ func (f *NodeStoreFamily) Fetch(ctx context.Context, hash [32]byte) ([]byte, err
 	return node.Data, nil
 }
 
+// FetchCached returns serialized node data only when the decoded node is
+// already resident in the NodeStore cache.
+func (f *NodeStoreFamily) FetchCached(ctx context.Context, hash [32]byte) ([]byte, error) {
+	cached, ok := f.db.(interface {
+		FetchCached(context.Context, nodestore.Hash256) (*nodestore.Node, error)
+	})
+	if !ok {
+		return nil, nil
+	}
+	node, err := cached.FetchCached(ctx, nodestore.Hash256(hash))
+	if err != nil || node == nil {
+		return nil, err
+	}
+	return node.Data, nil
+}
+
 // FetchDurable reads directly from the backing store without populating the
 // decoded-node cache. Missing-node verification has a multi-million-node
 // one-shot working set, for which LRU insertion only displaces useful entries.
 func (f *NodeStoreFamily) FetchDurable(ctx context.Context, hash [32]byte) ([]byte, error) {
+	return f.durable.fetch(ctx, hash, f.fetchDurable)
+}
+
+func (f *NodeStoreFamily) fetchDurable(ctx context.Context, hash [32]byte) ([]byte, error) {
 	if raw, ok := f.db.(interface {
 		FetchDataUncached(context.Context, nodestore.Hash256) ([]byte, error)
 	}); ok {

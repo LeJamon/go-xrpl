@@ -37,6 +37,12 @@ type peerSessionView interface {
 	IsPeerConnected(peermanagement.PeerID) bool
 }
 
+type peerCountView interface {
+	PeerCount() int
+}
+
+const networkPeerQuorum = 1
+
 type peerLedgerHintView interface {
 	PeerClosedLedger(peermanagement.PeerID) ([32]byte, bool)
 }
@@ -123,6 +129,7 @@ type Router struct {
 	// frames and — on Accepted — relay them to other peers.
 	// May be nil in tests that don't exercise the manifest path.
 	manifests            *manifest.Cache
+	manifestAdmission    func([33]byte) bool
 	manifestWorkerCancel context.CancelFunc
 	manifestWorkerDone   chan struct{}
 
@@ -213,12 +220,13 @@ type Router struct {
 	// catchupMu guards the single consensus catch-up target and recent failures.
 	// The router drives at most maxConcurrentCatchup acquisitions toward the
 	// highest trusted (seq,hash), matching rippled's single needed ledger.
-	catchupMu              sync.Mutex
-	catchup                catchupTarget
-	catchupFailures        map[[32]byte]time.Time
-	acquisitionMu          sync.Mutex
-	activeConsensusLedger  [32]byte
-	pendingConsensusLedger [32]byte
+	catchupMu       sync.Mutex
+	catchup         catchupTarget
+	catchupFailures map[[32]byte]time.Time
+
+	acquisitionMu     sync.Mutex
+	consensusRecovery consensusRecovery
+	lastHandoffSeq    uint32
 
 	// historyMu guards history, the single backward history-backfill target: the
 	// next ledger a jump-adopt skipped (rippled Reason::HISTORY). The walk is
@@ -245,6 +253,13 @@ type catchupTarget struct {
 	seq    uint32
 	hash   [32]byte
 	peerID uint64
+}
+
+type consensusRecovery struct {
+	targetHash [32]byte
+	stepHash   [32]byte
+	anchorHash [32]byte
+	anchorSeq  uint32
 }
 
 // ledgerHashEntry is the network's view of one ledger sequence: its hash and,
@@ -404,10 +419,18 @@ func (r *Router) promoteAcquisitionStore(ctx context.Context, ledger *inbound.Le
 // acquisitionOpts returns the inbound.Option set applied to every new
 // acquisition.
 func (r *Router) acquisitionOpts() []inbound.Option {
-	if r.acquisitionStore == nil {
+	opts := []inbound.Option{inbound.WithHeaderAdmission(r.admitInboundHeader)}
+	if r.acquisitionStore != nil {
+		opts = append(opts, inbound.WithFamily(r.acquisitionStore.scope()))
+	}
+	return opts
+}
+
+func (r *Router) admitInboundHeader(seq uint32) error {
+	if !r.belowFloor(seq) {
 		return nil
 	}
-	return []inbound.Option{inbound.WithFamily(r.acquisitionStore.scope())}
+	return fmt.Errorf("ledger %d is below the minimum online floor", seq)
 }
 
 // SetMinimumOnlineFloor installs the online-delete retention floor. Once set,
@@ -438,6 +461,10 @@ func (r *Router) SetManifestCache(cache *manifest.Cache, overlay *peermanagement
 	r.overlay = overlay
 }
 
+func (r *Router) SetManifestAdmission(admit func([33]byte) bool) {
+	r.manifestAdmission = admit
+}
+
 func (r *Router) setPeerSessionView(view peerSessionView) {
 	r.peerSessions = view
 }
@@ -457,15 +484,28 @@ func (r *Router) SetInboundClock(c inbound.Clock) {
 	r.replayer.SetClock(c)
 }
 
-// StopReplayer drains the replayer's in-flight map and returns the
-// number of acquisitions that were still pending at stop time. Called
-// from Components.Stop() during graceful shutdown. Exposes only the
-// count so callers don't reach into the replayer's internals.
-func (r *Router) StopReplayer() int {
-	if r.replayer == nil {
-		return 0
+// StopAcquisitions terminally drains both inbound-ledger acquisition paths.
+// A stopped Router is not reusable; a process restart constructs new components.
+func (r *Router) StopAcquisitions() (legacy, replay int) {
+	if r == nil {
+		return 0, 0
 	}
-	return r.replayer.Stop()
+	r.acquisitionMu.Lock()
+	legacyLedgers := r.fetchTracker.Stop()
+	legacy = len(legacyLedgers)
+	if r.replayer != nil {
+		replay = r.replayer.Stop()
+	}
+	r.consensusRecovery = consensusRecovery{}
+	r.lastHandoffSeq = 0
+	r.acquisitionMu.Unlock()
+
+	r.catchupMu.Lock()
+	r.catchup = catchupTarget{}
+	r.catchupFailures = nil
+	r.catchupMu.Unlock()
+	r.retireLegacyAcquisitions(legacyLedgers)
+	return legacy, replay
 }
 
 // HandlePeerDisconnect drops all per-peer state the router holds for
@@ -493,6 +533,28 @@ func (r *Router) HandlePeerDisconnect(peerID peermanagement.PeerID) {
 	// lifetime of the process.
 	if r.validatorList != nil {
 		r.validatorList.ForgetPeer(uint64(peerID))
+	}
+	r.reconcilePeerAvailability()
+}
+
+func (r *Router) reconcilePeerAvailability() {
+	if r.adaptor == nil {
+		return
+	}
+	peers, ok := r.peerSessions.(peerCountView)
+	if !ok {
+		return
+	}
+
+	mode := r.adaptor.GetOperatingMode()
+	if peers.PeerCount() < networkPeerQuorum {
+		if mode != consensus.OpModeDisconnected {
+			r.adaptor.SetOperatingMode(consensus.OpModeDisconnected)
+		}
+		return
+	}
+	if mode == consensus.OpModeDisconnected {
+		r.adaptor.SetOperatingMode(consensus.OpModeConnected)
 	}
 }
 
@@ -751,8 +813,11 @@ func (r *Router) startManifestWorker(ctx context.Context) {
 			case <-workerCtx.Done():
 				for {
 					select {
-					case msg := <-inbox:
-						r.processManifestJob(msg)
+					case msg, ok := <-inbox:
+						if !ok {
+							return
+						}
+						r.processManifestJobContext(workerCtx, msg)
 					default:
 						return
 					}
@@ -761,7 +826,7 @@ func (r *Router) startManifestWorker(ctx context.Context) {
 				if !ok {
 					return
 				}
-				r.processManifestJob(msg)
+				r.processManifestJobContext(workerCtx, msg)
 			}
 		}
 	}()
@@ -775,6 +840,10 @@ func (r *Router) stopManifestWorker() {
 }
 
 func (r *Router) processManifestJob(msg *peermanagement.InboundMessage) {
+	r.processManifestJobContext(context.Background(), msg)
+}
+
+func (r *Router) processManifestJobContext(ctx context.Context, msg *peermanagement.InboundMessage) {
 	processed := false
 	defer func() {
 		if !processed {
@@ -784,6 +853,19 @@ func (r *Router) processManifestJob(msg *peermanagement.InboundMessage) {
 		}
 	}()
 	defer r.recoverFrame(msg, "manifest")
+	if msg.ManifestFrame != nil {
+		defer func() {
+			if err := msg.ManifestFrame.Close(); err != nil {
+				r.logger.Warn("failed to close manifest spool", "error", err, "peer", msg.PeerID)
+			}
+		}()
+		payload, err := msg.ManifestFrame.Materialize(ctx)
+		if err != nil {
+			r.logger.Warn("failed to materialize manifest spool", "error", err, "peer", msg.PeerID)
+			return
+		}
+		msg.Payload = payload
+	}
 	processed = r.handleManifests(msg)
 	if processed {
 		if acknowledger, ok := r.peerSessions.(peerBootstrapAcknowledger); ok {
@@ -805,6 +887,8 @@ func (r *Router) submitManifestJob(msg *peermanagement.InboundMessage) {
 // means we don't have to reason about a peer response racing the
 // timeout fallback for the same hash).
 func (r *Router) maintenanceTick() {
+	r.reconcilePeerAvailability()
+
 	// Sub-task retry loop: rotate peers on silent-peer timeouts BEFORE
 	// the outer budget kicks in (250ms × 10 rotations inside a larger
 	// outer budget). Without rotation, a single silent peer burns the
@@ -859,7 +943,7 @@ func (r *Router) maintenanceTick() {
 			"peer", entry.PeerID,
 		)
 		r.replayer.Abandon(entry.Hash)
-		r.startLedgerAcquisitionLegacy(entry.Seq, entry.Hash, entry.PeerID)
+		r.fallbackReplayAcquisition(entry.Seq, entry.Hash, entry.PeerID)
 	}
 
 	// Drive the timer-based retry loop over every in-flight legacy acquisition,
@@ -897,9 +981,6 @@ func (r *Router) maintenanceTick() {
 func (r *Router) retryInboundLedgerAcquisitions(now time.Time) {
 	workLane := r.currentAcquisitionWork()
 	for _, il := range r.fetchTracker.Active() {
-		if workLane != nil && workLane.has(il) {
-			continue
-		}
 		if workLane != nil && !workLane.has(il) && !workLane.canAcceptNew() {
 			il.RearmTimer(now)
 			continue

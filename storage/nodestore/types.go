@@ -149,9 +149,10 @@ type Database interface {
 	// Store persists a node to the store.
 	Store(ctx context.Context, node *Node) error
 
-	// Fetch retrieves a node by its hash synchronously. A node that is not
-	// present is reported in-band as (nil, nil): a nil node with a nil error.
-	// A non-nil error signals an actual I/O or decode failure, not absence.
+	// Fetch retrieves a node by its hash synchronously and may be called
+	// concurrently. A node that is not present is reported in-band as (nil, nil):
+	// a nil node with a nil error. A non-nil error signals an actual I/O or decode
+	// failure, not absence.
 	Fetch(ctx context.Context, hash Hash256) (*Node, error)
 
 	// StoreBatch stores multiple nodes efficiently in a single operation.
@@ -179,6 +180,17 @@ type Database interface {
 	// in-tree caller (Service.persistLedger) is serialised by the
 	// Service mutex.
 	Sync(ctx context.Context) error
+}
+
+// GenerationDatabase is a Database backed by two rotating generations.
+// FetchForPromotion bypasses the decoded-node cache so an archive hit is
+// durably copied into the writable generation without populating that cache.
+type GenerationDatabase interface {
+	Database
+	CanRotateWithoutRefresh(ctx context.Context) (bool, error)
+	FetchForPromotion(ctx context.Context, hash Hash256) (*Node, error)
+	RotateGeneration(ctx context.Context, lastRotated, minimumOnline uint32) (committed bool, err error)
+	GenerationState() (lastRotated, minimumOnline uint32)
 }
 
 // Statistics holds performance metrics for the NodeStore.

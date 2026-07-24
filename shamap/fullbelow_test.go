@@ -5,6 +5,7 @@ import (
 	"crypto/rand"
 	"crypto/sha256"
 	"encoding/binary"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -25,9 +26,10 @@ type concurrentFetchFamily struct {
 }
 
 type pendingDurableFamily struct {
-	base    Family
-	pending map[[32]byte][]byte
-	cache   *FullBelowCache
+	base           Family
+	pending        map[[32]byte][]byte
+	cache          *FullBelowCache
+	durableFetches atomic.Int64
 }
 
 func (f *pendingDurableFamily) Fetch(ctx context.Context, hash [32]byte) ([]byte, error) {
@@ -38,6 +40,7 @@ func (f *pendingDurableFamily) Fetch(ctx context.Context, hash [32]byte) ([]byte
 }
 
 func (f *pendingDurableFamily) FetchDurable(ctx context.Context, hash [32]byte) ([]byte, error) {
+	f.durableFetches.Add(1)
 	return f.base.Fetch(ctx, hash)
 }
 
@@ -801,11 +804,21 @@ func TestWalkMapParallel_DoesNotReleasePendingNodesBeforeDurability(t *testing.T
 	if err := base.StoreBatch(context.Background(), batch.Entries); err != nil {
 		t.Fatal(err)
 	}
+	family.durableFetches.Store(0)
 	if missing := dest.GetMissingNodes(1, nil); len(missing) != 0 {
 		t.Fatalf("durable complete map reported %d missing nodes", len(missing))
 	}
+	if reads := family.durableFetches.Load(); reads != 0 {
+		t.Fatalf("logically complete frontier poll performed %d durable reads", reads)
+	}
+	if family.cache.Has(family.cache.Generation(), rootHash) {
+		t.Fatal("frontier poll published the root before persistence acknowledgement")
+	}
+	if err := dest.AcknowledgePersistedContext(t.Context()); err != nil {
+		t.Fatal(err)
+	}
 	if !family.cache.Has(family.cache.Generation(), rootHash) {
-		t.Fatal("durable complete root was not published")
+		t.Fatal("persistence acknowledgement did not publish the complete root")
 	}
 }
 
@@ -1013,12 +1026,43 @@ func TestFullBelowCache_ZeroGenNeverMatches(t *testing.T) {
 	}
 }
 
-func TestFullBelowCache_SoftTargetAllowsAcquisitionBurst(t *testing.T) {
+func TestFullBelowCache_DeepProofStreamDoesNotEvictShallowProof(t *testing.T) {
+	const target = 64
+	c := newFullBelowCacheWithClock(target, time.Hour, time.Now)
+	gen := c.Generation()
+	shallow := [32]byte{0, 0xff}
+	cacheFullBelow(c, gen, shallow, fullBelowCacheMaxDepth)
+
+	var lastDeep [32]byte
+	for i := range 10_000 {
+		var hash [32]byte
+		binary.BigEndian.PutUint64(hash[8:], uint64(i+1))
+		cacheFullBelow(c, gen, hash, fullBelowCacheMaxDepth+1)
+		lastDeep = hash
+	}
+
+	if got := c.Size(); got != 1 {
+		t.Fatalf("cache size = %d, want only the shallow proof", got)
+	}
+	if !c.Has(gen, shallow) {
+		t.Fatal("deep proof stream evicted the shallow reusable proof")
+	}
+	if c.Has(gen, lastDeep) {
+		t.Fatal("deep proof was admitted to the reusable cache")
+	}
+	stats := c.Stats()
+	if stats.Inserts != 1 || stats.Evictions != 0 {
+		t.Fatalf("unexpected admission stats: %+v", stats)
+	}
+}
+
+func TestFullBelowCache_StrictTargetBoundsAcquisitionBurst(t *testing.T) {
 	const target = 64
 	now := time.Unix(1_000, 0)
-	c := newFullBelowCacheWithClock(target, 10*time.Minute, 30*time.Second, func() time.Time { return now })
+	c := newFullBelowCacheWithClock(target, 10*time.Minute, func() time.Time { return now })
 	gen := c.Generation()
 	n := target + target/2
+	var first [32]byte
 	var last [32]byte
 	for i := range n {
 		var h [32]byte
@@ -1026,44 +1070,102 @@ func TestFullBelowCache_SoftTargetAllowsAcquisitionBurst(t *testing.T) {
 		h[1] = byte(i >> 8)
 		h[2] = byte(i >> 16)
 		c.Insert(gen, h)
+		if i == 0 {
+			first = h
+		}
 		last = h
 	}
-	if sz := c.Size(); sz != n {
-		t.Fatalf("Size = %d, want burst size %d", sz, n)
+	if sz := c.Size(); sz != target {
+		t.Fatalf("Size = %d, want hard target %d", sz, target)
+	}
+	if c.Has(gen, first) {
+		t.Fatal("least-recently-used entry survived capacity pressure")
 	}
 
-	now = now.Add(7 * time.Minute)
+	now = now.Add(6 * time.Minute)
 	if !c.Has(gen, last) {
 		t.Fatal("entry missing before sweep")
 	}
+	now = now.Add(5 * time.Minute)
 	c.Sweep()
 	if sz := c.Size(); sz != 1 {
-		t.Fatalf("Size after pressure-adjusted sweep = %d, want refreshed entry only", sz)
+		t.Fatalf("Size after age sweep = %d, want refreshed entry only", sz)
+	}
+	stats := c.Stats()
+	if stats.Evictions != uint64(n-target)+uint64(target-1) {
+		t.Fatalf("Evictions = %d, want %d", stats.Evictions, n-target+target-1)
+	}
+}
+
+func TestFullBelowCache_ConcurrentPressureStaysBounded(t *testing.T) {
+	const target = 512
+	c := newFullBelowCacheWithClock(target, time.Hour, time.Now)
+	gen := c.Generation()
+	var exceeded atomic.Bool
+	var wg sync.WaitGroup
+	for worker := range 3 {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			var key [8]byte
+			for i := range 20_000 {
+				binary.BigEndian.PutUint32(key[:4], uint32(worker))
+				binary.BigEndian.PutUint32(key[4:], uint32(i))
+				hash := sha256.Sum256(key[:])
+				c.Insert(gen, hash)
+				if i%257 == 0 {
+					c.Has(gen, hash)
+					if c.Size() > target {
+						exceeded.Store(true)
+					}
+				}
+			}
+		}()
+	}
+	for range 8 {
+		c.Sweep()
+	}
+	wg.Wait()
+	if exceeded.Load() || c.Size() > target {
+		t.Fatalf("cache exceeded hard target: size=%d target=%d", c.Size(), target)
+	}
+}
+
+func TestFullBelowCache_SkewedShardRemainsBounded(t *testing.T) {
+	const target = 64
+	c := newFullBelowCacheWithClock(target, time.Hour, time.Now)
+	gen := c.Generation()
+	for i := range 10_000 {
+		var hash [32]byte
+		binary.BigEndian.PutUint64(hash[8:], uint64(i))
+		c.Insert(gen, hash)
+	}
+	if got := c.Size(); got > target/fullBelowCacheShards {
+		t.Fatalf("skewed shard size = %d, want at most %d", got, target/fullBelowCacheShards)
 	}
 }
 
 func TestFullBelowCache_HitRefreshesAge(t *testing.T) {
-	const target = 8
+	const target = 64
 	now := time.Unix(2_000, 0)
-	c := newFullBelowCacheWithClock(target, 10*time.Minute, time.Hour, func() time.Time { return now })
+	c := newFullBelowCacheWithClock(target, 10*time.Minute, func() time.Time { return now })
 	gen := c.Generation()
-	hash := func(n byte) [32]byte { return [32]byte{n} }
+	hash := func(n byte) [32]byte { return [32]byte{0, n} }
 
-	for i := byte(1); i <= target; i++ {
+	for i := byte(1); i <= 3; i++ {
 		c.Insert(gen, hash(i))
 	}
 	hot := hash(1)
 	cold := hash(2)
-	now = now.Add(6 * time.Minute)
 	if !c.Has(gen, hot) {
-		t.Fatal("hot entry missing before sweep")
+		t.Fatal("hot entry missing before capacity rotation")
 	}
-	for i := byte(target + 1); i <= 2*target; i++ {
+	for i := byte(4); i <= 5; i++ {
 		c.Insert(gen, hash(i))
 	}
 	c.Sweep()
 	if c.Has(gen, cold) {
-		t.Fatal("old untouched entry survived pressure-adjusted sweep")
+		t.Fatal("old untouched entry survived capacity pressure")
 	}
 	if !c.Has(gen, hot) {
 		t.Fatal("recently touched entry did not survive sweep")
@@ -1072,17 +1174,17 @@ func TestFullBelowCache_HitRefreshesAge(t *testing.T) {
 
 func TestFullBelowCache_InsertRefreshesAge(t *testing.T) {
 	now := time.Unix(3_000, 0)
-	c := newFullBelowCacheWithClock(3, 10*time.Minute, time.Hour, func() time.Time { return now })
+	c := newFullBelowCacheWithClock(64, 10*time.Minute, func() time.Time { return now })
 	gen := c.Generation()
-	first := [32]byte{1}
-	second := [32]byte{2}
+	first := [32]byte{0, 1}
+	second := [32]byte{0, 2}
 	c.Insert(gen, first)
 	c.Insert(gen, second)
-	c.Insert(gen, [32]byte{3})
+	c.Insert(gen, [32]byte{0, 3})
 	now = now.Add(8 * time.Minute)
 	c.Insert(gen, first)
-	for i := byte(4); i <= 6; i++ {
-		c.Insert(gen, [32]byte{i})
+	for i := byte(4); i <= 5; i++ {
+		c.Insert(gen, [32]byte{0, i})
 	}
 	c.Sweep()
 
@@ -1090,10 +1192,10 @@ func TestFullBelowCache_InsertRefreshesAge(t *testing.T) {
 		t.Fatal("reinserted entry was not refreshed")
 	}
 	if c.Has(gen, second) {
-		t.Fatal("older entry survived pressure-adjusted sweep")
+		t.Fatal("older entry survived capacity pressure")
 	}
 	stats := c.Stats()
-	if stats.TargetSize != 3 || stats.Evictions == 0 || stats.Sweeps != 1 {
+	if stats.TargetSize != 64 || stats.Evictions == 0 || stats.Sweeps != 1 {
 		t.Fatalf("unexpected stats: %+v", stats)
 	}
 }

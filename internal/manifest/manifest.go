@@ -46,6 +46,8 @@ import (
 // Rippled: Manifest::revoked returns sequence == numeric_limits::max.
 const RevokedSequence uint32 = math.MaxUint32
 
+const maxSerializedSize = 1024
+
 // Manifest is a parsed, syntactically-valid validator manifest.
 // Signature verification is separate — callers invoke Verify before
 // trusting the struct's key bindings.
@@ -113,10 +115,20 @@ func Deserialize(data []byte) (*Manifest, error) {
 	if len(data) == 0 {
 		return nil, errors.New("manifest: empty payload")
 	}
+	if len(data) > maxSerializedSize {
+		return nil, fmt.Errorf("manifest: payload exceeds %d bytes", maxSerializedSize)
+	}
 
 	decoded, err := binarycodec.DecodeBytes(data)
 	if err != nil {
 		return nil, fmt.Errorf("manifest: decode STObject: %w", err)
+	}
+	for field := range decoded {
+		switch field {
+		case "PublicKey", "MasterSignature", "Sequence", "Version", "Domain", "SigningPubKey", "Signature":
+		default:
+			return nil, fmt.Errorf("manifest: unexpected field %s", field)
+		}
 	}
 
 	// Version default is 0; anything else is an unsupported manifest
@@ -160,17 +172,19 @@ func Deserialize(data []byte) (*Manifest, error) {
 	}
 
 	if dom, ok := decoded["Domain"]; ok {
-		if s, ok := dom.(string); ok {
-			// Domain is VL-encoded as bytes; the codec returns a hex
-			// string. Decode it back to the raw UTF-8 text.
-			b, err := hex.DecodeString(s)
-			if err != nil {
-				return nil, fmt.Errorf("manifest: Domain not hex: %w", err)
-			}
-			m.Domain = string(b)
-			if !stringutil.IsProperlyFormedTomlDomain(m.Domain) {
-				return nil, errors.New("manifest: Domain is not a properly formed TOML domain")
-			}
+		s, ok := dom.(string)
+		if !ok {
+			return nil, errors.New("manifest: Domain is not a variable-length field")
+		}
+		// Domain is VL-encoded as bytes; the codec returns a hex
+		// string. Decode it back to the raw UTF-8 text.
+		b, err := hex.DecodeString(s)
+		if err != nil {
+			return nil, fmt.Errorf("manifest: Domain not hex: %w", err)
+		}
+		m.Domain = string(b)
+		if !stringutil.IsProperlyFormedTomlDomain(m.Domain) {
+			return nil, errors.New("manifest: Domain is not a properly formed TOML domain")
 		}
 	}
 

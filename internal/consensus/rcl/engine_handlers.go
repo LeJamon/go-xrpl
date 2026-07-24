@@ -341,64 +341,118 @@ func (e *Engine) OnLedger(id consensus.LedgerID, ledger []byte) error {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 
-	// Don't move prevLedger / start a round while an off-lock LCL build is in
-	// flight; the commit tail owns round state until it completes.
-	if e.buildInProgress {
+	recovering := e.mode == consensus.ModeWrongLedger
+	validatedTip := e.adaptor.GetValidatedLedgerHash() == id
+	exactRecoveryTarget := recovering && id == e.wrongLedgerID
+	if recovering && !exactRecoveryTarget && !validatedTip {
+		return nil
+	}
+	if !recovering && !validatedTip {
+		return nil
+	}
+	slog.Info("Recovery ledger completion received",
+		"t", "consensus",
+		"event", "recovery-ledger-complete",
+		"hash", fmt.Sprintf("%x", id[:8]),
+		"build_in_progress", e.buildInProgress,
+	)
+
+	l, err := e.adaptor.GetLedger(id)
+	if err != nil || l == nil {
+		slog.Info("Completed recovery ledger is not locally available",
+			"t", "consensus",
+			"event", "recovery-ledger-unavailable",
+			"hash", fmt.Sprintf("%x", id[:8]),
+			"error", err,
+		)
 		return nil
 	}
 
-	// If we were on wrong ledger, check if this helps
-	if e.mode == consensus.ModeWrongLedger {
-		l, err := e.adaptor.GetLedger(id)
-		if err == nil && l != nil {
-			// Never regress on out-of-order acquisition arrivals — EXCEPT for
-			// the hash checkLedger explicitly pinned: the network-preferred
-			// ledger may sit at a lower seq on a different chain than a
-			// self-built run-ahead (Validations.h:892-895), and rippled's
-			// switchLastClosedLedger takes that rewind.
-			if e.prevLedger != nil && l.Seq() <= e.prevLedger.Seq() && id != e.wrongLedgerID {
-				return nil
-			}
-			// Advance prevLedger to the FURTHEST locally-available closed
-			// ledger that chains forward from l by parent hash, not one per
-			// acquisition: under load a one-at-a-time catch-up stays
-			// perpetually behind (#724). Only the build-on LCL moves (the
-			// validated tip still moves solely via quorum); the ParentID chain
-			// check prevents adopting a sibling fork, and an overshoot
-			// self-corrects next round via checkLedger.
-			for {
-				next, nerr := e.adaptor.GetLedgerBySeq(l.Seq() + 1)
-				if nerr != nil || next == nil || next.ParentID() != l.ID() {
-					break
-				}
-				l = next
-			}
-			if !e.canSwitchToLedgerLocked(l) {
-				return nil
-			}
-			lID := l.ID()
-			slog.Info("Acquired missing ledger, restarting round",
-				"seq", l.Seq(), "hash", fmt.Sprintf("%x", lID[:8]))
-			e.prevLedger = l
-			e.wrongLedgerID = consensus.LedgerID{}
-			e.wrongLedgerAcquireFailures = 0
-			if e.state != nil {
-				e.state.HaveCorrectLCL = true
-			}
-			nextRound := consensus.RoundID{
-				Seq:        l.Seq() + 1,
-				ParentHash: l.ID(),
-			}
-			// recovering=true drops a would-be proposer to switchedLedger for
-			// one round, suppressing emission; the next round promotes back
-			// normally.
-			proposing := e.adaptor.IsValidator() &&
-				e.adaptor.GetOperatingMode() == consensus.OpModeFull
-			e.startRoundLocked(nextRound, proposing, true)
+	// acceptLedger applies off-lock like rippled's serialized jtACCEPT job.
+	// Retain the newest completed recovery acquisition until its commit tail
+	// regains the engine lock instead of losing the callback.
+	if e.buildInProgress {
+		if exactRecoveryTarget || e.pendingRecoveryLedger == nil || l.Seq() > e.pendingRecoveryLedger.Seq() {
+			e.pendingRecoveryLedger = l
 		}
+		return nil
 	}
 
+	e.switchToAcquiredLedgerLocked(id, l)
 	return nil
+}
+
+func (e *Engine) switchToAcquiredLedgerLocked(id consensus.LedgerID, l consensus.Ledger) bool {
+	exactRecoveryTarget := e.mode == consensus.ModeWrongLedger && id == e.wrongLedgerID
+	validatedTip := e.adaptor.GetValidatedLedgerHash() == id
+	if e.mode == consensus.ModeWrongLedger && !exactRecoveryTarget && !validatedTip {
+		return false
+	}
+	// Never regress on out-of-order acquisition arrivals — EXCEPT for the hash
+	// checkLedger explicitly pinned: the preferred ledger may be on a lower
+	// sequence of another chain.
+	if e.prevLedger != nil && l.Seq() <= e.prevLedger.Seq() && !exactRecoveryTarget && !validatedTip {
+		return false
+	}
+	if e.mode != consensus.ModeWrongLedger {
+		for {
+			next, err := e.adaptor.GetLedgerBySeq(l.Seq() + 1)
+			if err != nil || next == nil || next.ParentID() != l.ID() {
+				break
+			}
+			l = next
+		}
+	}
+	if !e.canSwitchToLedgerLocked(l) {
+		if e.lastRefusedSwitch != id {
+			e.lastRefusedSwitch = id
+			validatedID := e.adaptor.GetValidatedLedgerHash()
+			slog.Info("Refusing acquired recovery ledger",
+				"t", "consensus",
+				"event", "switch-refused",
+				"seq", l.Seq(),
+				"hash", fmt.Sprintf("%x", id[:8]),
+				"validated_hash", fmt.Sprintf("%x", validatedID[:8]),
+				"close_time", l.CloseTime(),
+			)
+		}
+		return false
+	}
+
+	lID := l.ID()
+	slog.Info("Acquired missing ledger, restarting round",
+		"seq", l.Seq(), "hash", fmt.Sprintf("%x", lID[:8]))
+	previousLedger := e.prevLedger
+	previousWrongLedgerID := e.wrongLedgerID
+	e.prevLedger = l
+	nextRound := consensus.RoundID{Seq: l.Seq() + 1, ParentHash: l.ID()}
+	proposing := e.adaptor.IsValidator() &&
+		e.adaptor.GetOperatingMode() == consensus.OpModeFull
+	if err := e.startRoundLocked(nextRound, proposing, true); err != nil {
+		e.prevLedger = previousLedger
+		e.wrongLedgerID = previousWrongLedgerID
+		slog.Error("Failed to switch to acquired ledger",
+			"seq", l.Seq(),
+			"hash", fmt.Sprintf("%x", lID[:8]),
+			"err", err,
+		)
+		return false
+	}
+	e.wrongLedgerID = consensus.LedgerID{}
+	e.pendingRecoveryLedger = nil
+	if e.state != nil {
+		e.state.HaveCorrectLCL = true
+	}
+	return true
+}
+
+func (e *Engine) processPendingRecoveryLedgerLocked() bool {
+	l := e.pendingRecoveryLedger
+	if l == nil {
+		return false
+	}
+	e.pendingRecoveryLedger = nil
+	return e.switchToAcquiredLedgerLocked(l.ID(), l)
 }
 
 // parentValidations returns the trusted validations recorded for id, fed

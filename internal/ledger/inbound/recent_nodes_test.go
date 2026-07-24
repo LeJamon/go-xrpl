@@ -163,9 +163,13 @@ func TestCollectMissingReplyRequests_SixDisjointFrontiers(t *testing.T) {
 				t.Fatalf("assigned nodes=%d, want bounded frontier %d", len(seen), missingNodesFind)
 			}
 
+			if next, _ := il.CollectMissingReplyRequests([]uint64{17}); len(next) != 0 {
+				t.Fatalf("seventh request escaped the six-peer window: %#v", next)
+			}
+			il.ReleaseMissingPeer(requests[0].PeerID)
 			next, _ := il.CollectMissingReplyRequests([]uint64{17})
 			if len(next) != 1 || len(next[0].NodeIDs) == 0 {
-				t.Fatalf("next frontier=%v, want further disjoint work", next)
+				t.Fatalf("replacement frontier=%v, want further disjoint work", next)
 			}
 			for _, nodeID := range next[0].NodeIDs {
 				if slices.ContainsFunc(requests, func(request MissingRequest) bool {
@@ -175,6 +179,30 @@ func TestCollectMissingReplyRequests_SixDisjointFrontiers(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+func TestCollectMissingReplyRequests_OneLeasePerPeer(t *testing.T) {
+	il := newWideAcquisition(t)
+	first, _ := il.CollectMissingReplyRequests([]uint64{21})
+	if len(first) != 1 {
+		t.Fatalf("first requests=%d, want 1", len(first))
+	}
+	if duplicate, _ := il.CollectMissingReplyRequests([]uint64{21}); len(duplicate) != 0 {
+		t.Fatalf("busy peer received a second request: %#v", duplicate)
+	}
+
+	il.ReleaseMissingPeer(21)
+	next, _ := il.CollectMissingReplyRequests([]uint64{21})
+	if len(next) != 1 || len(next[0].NodeIDs) == 0 {
+		t.Fatalf("released peer did not receive a replacement frontier: %#v", next)
+	}
+	for _, nodeID := range next[0].NodeIDs {
+		if slices.ContainsFunc(first[0].NodeIDs, func(prior []byte) bool {
+			return string(prior) == string(nodeID)
+		}) {
+			t.Fatal("replacement request repeated an in-flight node")
+		}
 	}
 }
 

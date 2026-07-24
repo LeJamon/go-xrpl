@@ -4,12 +4,14 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"path/filepath"
 	"testing"
 	"time"
 
 	"github.com/LeJamon/go-xrpl/internal/ledger/shamapstore"
 	"github.com/LeJamon/go-xrpl/shamap"
 	"github.com/LeJamon/go-xrpl/storage/kvstore/memorydb"
+	kvpebble "github.com/LeJamon/go-xrpl/storage/kvstore/pebble"
 	"github.com/LeJamon/go-xrpl/storage/nodestore"
 )
 
@@ -67,7 +69,7 @@ func TestRotation_ReclaimsNodeStoreSpace(t *testing.T) {
 	if rot == nil {
 		t.Fatal("NewRotator returned nil")
 	}
-	rot.SetStateRefresh(func(context.Context, uint32) error { return nil }, nil, nil)
+	rot.SetStateRefresh(func(_ context.Context, seq uint32, _ func(time.Duration) error) (uint32, error) { return seq, nil }, nil, nil)
 
 	// Build 25 ledgers, notifying the rotator synchronously per ledger via the
 	// internal predicate path so the assertions are deterministic.
@@ -116,6 +118,110 @@ func TestRotation_ReclaimsNodeStoreSpace(t *testing.T) {
 	}
 }
 
+func TestRotation_RotatingPebblePromotesLiveStateAndRetiresHistory(t *testing.T) {
+	ctx := context.Background()
+	path := filepath.Join(t.TempDir(), "nodes")
+	backend, err := kvpebble.NewRotating(path, 16<<20, 128)
+	if err != nil {
+		t.Fatal(err)
+	}
+	db := nodestore.NewRotatingKVDatabase(backend, "rotating", &nodestore.DatabaseConfig{
+		CacheSize: 32,
+		CacheTTL:  time.Hour,
+	})
+
+	live := &nodestore.Node{
+		Type: nodestore.NodeAccount, Hash: nodestore.ComputeHash256([]byte("live")),
+		Data: []byte("live"), LedgerSeq: 1,
+	}
+	historical := &nodestore.Node{
+		Type: nodestore.NodeAccount, Hash: nodestore.ComputeHash256([]byte("historical")),
+		Data: []byte("historical"), LedgerSeq: 1,
+	}
+	for _, node := range []*nodestore.Node{live, historical} {
+		if err := db.Store(ctx, node); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	state, err := shamapstore.New(false, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	rot := shamapstore.NewRotator(
+		state,
+		db,
+		nil,
+		shamapstore.RotationConfig{DeleteInterval: 10},
+		nil,
+	)
+	liveHashes := make([]nodestore.Hash256, 0, 2)
+	liveHashes = append(liveHashes, live.Hash)
+	rot.SetStateRefresh(func(ctx context.Context, seq uint32, _ func(time.Duration) error) (uint32, error) {
+		for _, hash := range liveHashes {
+			node, err := db.FetchForPromotion(ctx, hash)
+			if err != nil {
+				return 0, err
+			}
+			if node == nil {
+				return 0, fmt.Errorf("live node %x is missing", hash[:8])
+			}
+		}
+		return seq, db.Sync(ctx)
+	}, nil, nil)
+
+	rot.NotifyForTest(1)
+	rot.NotifyForTest(11)
+
+	newLive := &nodestore.Node{
+		Type: nodestore.NodeAccount, Hash: nodestore.ComputeHash256([]byte("new-live")),
+		Data: []byte("new-live"), LedgerSeq: 12,
+	}
+	if err := db.Store(ctx, newLive); err != nil {
+		t.Fatal(err)
+	}
+	liveHashes = append(liveHashes, newLive.Hash)
+	rot.NotifyForTest(21)
+
+	if node, err := db.Fetch(ctx, historical.Hash); err != nil {
+		t.Fatal(err)
+	} else if node != nil {
+		t.Fatal("unpromoted historical node survived retirement of its generation")
+	}
+	for _, want := range []*nodestore.Node{live, newLive} {
+		node, err := db.Fetch(ctx, want.Hash)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if node == nil || string(node.Data) != string(want.Data) {
+			t.Fatalf("live node after rotation = %+v, want %q", node, want.Data)
+		}
+	}
+	if writes := db.Stats().Writes; writes != 3 {
+		t.Fatalf("logical writes = %d, want 3; promotions must not count as stores", writes)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	reopenedBackend, err := kvpebble.NewRotating(path, 16<<20, 128)
+	if err != nil {
+		t.Fatal(err)
+	}
+	reopened := nodestore.NewRotatingKVDatabase(
+		reopenedBackend,
+		"rotating",
+		&nodestore.DatabaseConfig{CacheSize: 32, CacheTTL: time.Hour},
+	)
+	defer reopened.Close()
+	for _, want := range []*nodestore.Node{live, newLive} {
+		node, err := reopened.Fetch(ctx, want.Hash)
+		if err != nil || node == nil {
+			t.Fatalf("reopened live node %x = %+v, %v", want.Hash[:8], node, err)
+		}
+	}
+}
+
 func TestRotation_AdvancesAcquisitionFloorBeforeLiveStateRefresh(t *testing.T) {
 	ctx := context.Background()
 	db := nodestore.NewKVDatabase(memorydb.New(), "mem", 100, time.Hour)
@@ -135,16 +241,17 @@ func TestRotation_AdvancesAcquisitionFloorBeforeLiveStateRefresh(t *testing.T) {
 	}
 	rot := shamapstore.NewRotator(store, db, nil,
 		shamapstore.RotationConfig{DeleteInterval: 256}, nil)
-	rot.SetStateRefresh(func(_ context.Context, seq uint32) error {
+	rot.SetStateRefresh(func(_ context.Context, seq uint32, _ func(time.Duration) error) (uint32, error) {
 		err := family.StoreBatch(ctx, []shamap.FlushEntry{{
 			Hash: hash, Data: data, LedgerSeq: 150, MapType: shamap.TypeState,
 		}})
 		if !errors.Is(err, shamap.ErrStoreBelowMinimum) {
 			t.Fatalf("historical write during refresh = %v, want %v", err, shamap.ErrStoreBelowMinimum)
 		}
-		return family.StoreBatch(ctx, []shamap.FlushEntry{{
+		err = family.StoreBatch(ctx, []shamap.FlushEntry{{
 			Hash: hash, Data: data, LedgerSeq: seq, MapType: shamap.TypeState,
 		}})
+		return seq, err
 	}, family.SetMinimumLedgerSeq, family.BeginPrune)
 
 	rot.NotifyForTest(200)

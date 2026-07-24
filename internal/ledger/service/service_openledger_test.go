@@ -10,6 +10,7 @@ import (
 
 	binarycodec "github.com/LeJamon/go-xrpl/codec/binarycodec"
 	consensuscommon "github.com/LeJamon/go-xrpl/internal/consensus/common"
+	"github.com/LeJamon/go-xrpl/internal/ledger"
 	"github.com/LeJamon/go-xrpl/internal/ledger/openledger"
 	"github.com/LeJamon/go-xrpl/internal/ledger/service"
 	jtx "github.com/LeJamon/go-xrpl/internal/testing"
@@ -149,6 +150,45 @@ func TestService_AcceptConsensusResult_RebuildsOpenView(t *testing.T) {
 	}
 	if !svc.OpenLedgerHasTx(hash2) {
 		t.Errorf("post-Accept OpenLedgerHasTx(hash2) = false; replay dropped tx2")
+	}
+}
+
+func TestService_SwitchToPreferredLedgerReplaysOpenTransactions(t *testing.T) {
+	svc := newServiceForOpenLedgerTest(t)
+
+	env := jtx.NewTestEnv(t)
+	blob, hash := buildSignedPaymentBlob(
+		t,
+		env,
+		jtx.MasterAccount(),
+		jtx.NewAccount("preferred-switch-destination"),
+		50_000_000,
+		1,
+	)
+	res, err := svc.SubmitOpenLedgerTx(blob, true)
+	if err != nil {
+		t.Fatalf("SubmitOpenLedgerTx: %v", err)
+	}
+	if res != openledger.ResultSuccess {
+		t.Fatalf("SubmitOpenLedgerTx result = %v, want ResultSuccess", res)
+	}
+
+	preferred, err := ledger.NewOpen(svc.GetClosedLedger(), time.Now())
+	if err != nil {
+		t.Fatalf("NewOpen: %v", err)
+	}
+	if err := preferred.Close(time.Now(), 0); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+	if err := svc.SwitchToPreferredLedger(preferred); err != nil {
+		t.Fatalf("SwitchToPreferredLedger: %v", err)
+	}
+
+	if got := svc.GetClosedLedger(); got.Hash() != preferred.Hash() {
+		t.Fatalf("closed ledger = %x, want %x", got.Hash(), preferred.Hash())
+	}
+	if !svc.OpenLedgerHasTx(hash) {
+		t.Fatal("preferred-ledger switch dropped a transaction from the open view")
 	}
 }
 

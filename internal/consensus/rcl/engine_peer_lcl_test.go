@@ -38,10 +38,14 @@ func TestEngine_CheckLedger_UnanimousPeerLCL_NoTrustedBacking_Switches(t *testin
 
 	engine.StartRound(consensus.RoundID{Seq: 101, ParentHash: ourID}, true)
 
-	engine.mu.Lock()
-	engine.prevLedger = &mockLedger{
+	ourLedger := &mockLedger{
 		id: ourID, seq: 100, parentID: consensus.LedgerID{0x99}, closeTime: adaptor.now,
 	}
+	adaptor.mu.Lock()
+	adaptor.lastLCL = ourLedger
+	adaptor.mu.Unlock()
+	engine.mu.Lock()
+	engine.prevLedger = ourLedger
 	// No trusted validations for targetID anywhere — the gate this test kills.
 	engine.checkLedger()
 	gotMode := engine.mode
@@ -91,6 +95,9 @@ func TestEngine_CheckLedger_ValidationMajorityBreaksConsensusIsland(t *testing.T
 	defer engine.Stop()
 
 	engine.StartRound(consensus.RoundID{Seq: 123, ParentHash: own122.id}, true)
+	adaptor.mu.Lock()
+	adaptor.lastLCL = own122
+	adaptor.mu.Unlock()
 
 	now := adaptor.now
 	engine.mu.Lock()
@@ -171,10 +178,14 @@ func TestEngine_CheckLedger_RefusesSwitchBehindValidated(t *testing.T) {
 
 	engine.StartRound(consensus.RoundID{Seq: 101, ParentHash: ourID}, true)
 
-	engine.mu.Lock()
-	engine.prevLedger = &mockLedger{
+	ourLedger := &mockLedger{
 		id: ourID, seq: 100, parentID: consensus.LedgerID{0x99}, closeTime: adaptor.now,
 	}
+	adaptor.mu.Lock()
+	adaptor.lastLCL = ourLedger
+	adaptor.mu.Unlock()
+	engine.mu.Lock()
+	engine.prevLedger = ourLedger
 	engine.checkLedger()
 	gotPrev := engine.prevLedger.ID()
 	engine.mu.Unlock()

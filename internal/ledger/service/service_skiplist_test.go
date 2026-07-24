@@ -173,6 +173,9 @@ func TestService_AcceptConsensusResult_RebuildSameSeq_NoSkipListLeak(t *testing.
 	// parent again. This resets s.closedLedger to parent and rebuilds
 	// the open ledger.
 	closeTime = closeTime.Add(2 * time.Second)
+	if err := svc.SwitchToPreferredLedger(parent); err != nil {
+		t.Fatalf("switch chain: %v", err)
+	}
 	if _, err := svc.AcceptConsensusResult(context.TODO(), parent, nil, nil, closeTime, true); err != nil {
 		t.Fatalf("second build (chain switch): %v", err)
 	}
@@ -270,6 +273,9 @@ func TestService_AcceptConsensusResult_SiblingForkSwitchesChain(t *testing.T) {
 	// chain-switch check (seq matches), and alt's openLedger stayed
 	// pinned to the alt-built state.
 	nextCloseTime := altCloseTime.Add(2 * time.Second)
+	if err := alt.SwitchToPreferredLedger(canonTip); err != nil {
+		t.Fatalf("switch to canonical chain: %v", err)
+	}
 	if _, err := alt.AcceptConsensusResult(context.TODO(), canonTip, nil, nil, nextCloseTime, true); err != nil {
 		t.Fatalf("alt rebuild on canonical parent: %v", err)
 	}

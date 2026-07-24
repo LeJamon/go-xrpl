@@ -4,8 +4,13 @@ import (
 	"testing"
 	"time"
 
+	"github.com/LeJamon/go-xrpl/crypto/sha512half"
+	"github.com/LeJamon/go-xrpl/internal/consensus"
+	"github.com/LeJamon/go-xrpl/internal/ledger/header"
 	"github.com/LeJamon/go-xrpl/internal/ledger/inbound"
 	"github.com/LeJamon/go-xrpl/internal/peermanagement"
+	"github.com/LeJamon/go-xrpl/internal/peermanagement/message"
+	"github.com/LeJamon/go-xrpl/protocol"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -72,4 +77,35 @@ func TestRouter_RequestLedger_NoPeers(t *testing.T) {
 	require.Len(t, calls, 1)
 	assert.Equal(t, uint64(7), calls[0].peerID)
 	assert.Equal(t, []uint64{7}, il.Peers())
+}
+
+func TestGenericAcquisitionJoinedByConsensusNotifiesExactTarget(t *testing.T) {
+	r, _, _, svc := makeRouter(t)
+	engine := &mockEngine{}
+	r.engine = engine
+	rootHash, rootData, wire := buildSelfHealSourceState(t)
+	closed := svc.GetClosedLedger()
+	require.NotNil(t, closed)
+	hdr := header.LedgerHeader{
+		LedgerIndex: closed.Sequence() + 10,
+		ParentHash:  closed.Hash(),
+		AccountHash: rootHash,
+	}
+	headerData := header.AddRaw(hdr, false)
+	target := sha512half.Sum(protocol.HashPrefixLedgerMaster().Bytes(), headerData)
+	acquired := inbound.NewGeneric(target, hdr.LedgerIndex, 7, serveTestLogger())
+	require.NoError(t, acquired.GotBase([]message.LedgerNode{
+		{NodeData: headerData},
+		{NodeData: rootData},
+	}))
+	require.NoError(t, acquired.GotStateNodes(wire))
+	acquired.CollectMissingRequest(false)
+	require.True(t, acquired.IsComplete())
+	r.fetchTracker.Track(acquired)
+	r.consensusRecovery = consensusRecovery{targetHash: target, stepHash: target}
+
+	r.completeInboundLedger(acquired)
+
+	require.Equal(t, []consensus.LedgerID{consensus.LedgerID(target)}, engine.getLedgers())
+	require.Equal(t, consensusRecovery{anchorHash: target, anchorSeq: hdr.LedgerIndex}, r.consensusRecovery)
 }

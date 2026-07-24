@@ -51,21 +51,22 @@ func startBootstrapTestOverlay(t *testing.T, opts ...Option) *Overlay {
 	return overlay
 }
 
-func TestOverlayPrepareAutoconnectCapsOnlyColdBootstrap(t *testing.T) {
+func TestOverlayPrepareAutoconnectPreservesColdTarget(t *testing.T) {
 	overlay := &Overlay{}
 
 	count, cold, lease, ok := overlay.prepareAutoconnect(5)
 	require.True(t, ok)
 	assert.True(t, cold)
-	assert.Equal(t, 1, count)
+	assert.Equal(t, 5, count)
 	require.NotNil(t, lease)
 	assert.Equal(t, 1, overlay.bootstrap.activeCount())
 
-	blockedCount, blockedCold, blockedLease, blocked := overlay.prepareAutoconnect(5)
-	assert.False(t, blocked)
-	assert.True(t, blockedCold)
-	assert.Zero(t, blockedCount)
-	assert.Nil(t, blockedLease)
+	count, cold, secondLease, ok := overlay.prepareAutoconnect(5)
+	require.True(t, ok)
+	assert.True(t, cold)
+	assert.Equal(t, 5, count)
+	assert.Nil(t, secondLease)
+	assert.Equal(t, 1, overlay.bootstrap.activeCount())
 
 	lease.markReady()
 	count, cold, lease, ok = overlay.prepareAutoconnect(5)
@@ -503,7 +504,7 @@ func TestOverlayDroppedManifestDoesNotAcknowledgeBootstrap(t *testing.T) {
 	}
 }
 
-func TestOverlayStagesNextOutboundPeerUntilStartupFrameCompletes(t *testing.T) {
+func TestOverlayConnectsOutboundTargetBeforeStartupFrameCompletes(t *testing.T) {
 	connections := make(chan bootstrapConnection, 2)
 	first := startBootstrapTestOverlay(t)
 	second := startBootstrapTestOverlay(t, WithListenAddr("[::1]:0"))
@@ -537,27 +538,18 @@ func TestOverlayStagesNextOutboundPeerUntilStartupFrameCompletes(t *testing.T) {
 		}
 	}
 
-	var connected bootstrapConnection
-	select {
-	case connected = <-connections:
-	case <-time.After(10 * time.Second):
-		t.Fatal("first bootstrap peer did not connect")
+	connected := make([]bootstrapConnection, 0, 2)
+	for len(connected) < 2 {
+		select {
+		case peer := <-connections:
+			connected = append(connected, peer)
+		case <-time.After(10 * time.Second):
+			t.Fatal("outbound target did not connect before startup manifests completed")
+		}
 	}
 
-	client.autoconnect(context.Background())
-	select {
-	case <-connections:
-		t.Fatal("second bootstrap peer connected before the first startup frame completed")
-	case <-time.After(250 * time.Millisecond):
-	}
-
-	acknowledge(connected)
+	assert.False(t, client.bootstrap.isReady())
+	acknowledge(connected[0])
+	acknowledge(connected[1])
 	require.Eventually(t, client.bootstrap.isReady, 5*time.Second, 10*time.Millisecond)
-
-	client.autoconnect(context.Background())
-	select {
-	case <-connections:
-	case <-time.After(10 * time.Second):
-		t.Fatal("second bootstrap peer did not connect after the startup frame completed")
-	}
 }

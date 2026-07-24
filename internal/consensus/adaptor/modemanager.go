@@ -14,8 +14,8 @@ import (
 // Production router and catch-up paths set the operating mode directly via
 // Adaptor.SetOperatingMode, so m.mode is not
 // the authoritative source of truth — OnEvent reads the adaptor's mode
-// and only steers the wrongLedger ↔ syncing/tracking edges consensus
-// signals. The earlier peer-count / LCL-acquisition ladder
+// and only applies the Connected demotion signaled by wrong-ledger consensus
+// recovery. The earlier peer-count / LCL-acquisition ladder
 // (Disconnected→Connected→Syncing→Tracking→Full) was never wired to
 // overlay events and has been removed; SetMode remains for manual
 // override.
@@ -63,13 +63,8 @@ func (m *ModeManager) OnEvent(event consensus.Event) {
 	if mc.NewMode == consensus.ModeWrongLedger {
 		if current == consensus.OpModeFull || current == consensus.OpModeTracking {
 			m.mu.Lock()
-			p = m.stageTransitionLocked(consensus.OpModeSyncing)
-			m.mu.Unlock()
-		}
-	} else if mc.OldMode == consensus.ModeWrongLedger {
-		if current == consensus.OpModeSyncing {
-			m.mu.Lock()
-			p = m.stageTransitionLocked(consensus.OpModeTracking)
+			m.mode = consensus.OpModeConnected
+			p = &pendingTransition{oldMode: current, newMode: consensus.OpModeConnected}
 			m.mu.Unlock()
 		}
 	}

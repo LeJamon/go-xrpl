@@ -317,6 +317,119 @@ func TestBackedWalkResumesWithoutRereadingCompletedNodes(t *testing.T) {
 	}
 }
 
+func TestBackedWalkResumesAfterTraversalBudget(t *testing.T) {
+	source := buildRandomState(t, 512)
+	rootHash, err := source.Hash()
+	if err != nil {
+		t.Fatal(err)
+	}
+	rootData, err := source.SerializeRoot()
+	if err != nil {
+		t.Fatal(err)
+	}
+	batch, err := source.FlushDirty()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	base := NewMemoryNodeStoreFamily()
+	if err := base.StoreBatch(t.Context(), batch.Entries); err != nil {
+		t.Fatal(err)
+	}
+	family := &countingDurableFamily{base: base, reads: make(map[[32]byte]int)}
+	dest, err := NewBacked(TypeState, family)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := dest.AddRootNode(rootHash, rootData); err != nil {
+		t.Fatal(err)
+	}
+
+	_, err = dest.GetMissingNodesContext(WithTraversalBudget(t.Context(), 1), 1, nil)
+	if !errors.Is(err, ErrTraversalBudget) {
+		t.Fatalf("first traversal error = %v, want %v", err, ErrTraversalBudget)
+	}
+	if got := family.totalReads(); got != 1 {
+		t.Fatalf("first traversal durable reads = %d, want 1", got)
+	}
+
+	const budget = 32
+	for pass := 0; pass < len(batch.Entries); pass++ {
+		readsBefore := family.totalReads()
+		missing, walkErr := dest.GetMissingNodesContext(WithTraversalBudget(t.Context(), budget), 1, nil)
+		if got := family.totalReads() - readsBefore; got > budget {
+			t.Fatalf("pass %d durable reads = %d, exceeds budget %d", pass, got, budget)
+		}
+		if errors.Is(walkErr, ErrTraversalBudget) {
+			continue
+		}
+		if walkErr != nil {
+			t.Fatalf("pass %d: %v", pass, walkErr)
+		}
+		if len(missing) != 0 {
+			t.Fatalf("pass %d returned %d missing nodes from a complete store", pass, len(missing))
+		}
+		if err := dest.FinishSync(); err != nil {
+			t.Fatalf("FinishSync: %v", err)
+		}
+		return
+	}
+	t.Fatal("budgeted traversal did not complete")
+}
+
+func TestBackedWalkBudgetsFinalRootProof(t *testing.T) {
+	source := New(TypeState)
+	var key [32]byte
+	key[0] = 1
+	if err := source.Put(key, make([]byte, 12)); err != nil {
+		t.Fatal(err)
+	}
+	rootHash, err := source.Hash()
+	if err != nil {
+		t.Fatal(err)
+	}
+	rootData, err := source.SerializeRoot()
+	if err != nil {
+		t.Fatal(err)
+	}
+	batch, err := source.FlushDirty()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	base := NewMemoryNodeStoreFamily()
+	if err := base.StoreBatch(t.Context(), batch.Entries); err != nil {
+		t.Fatal(err)
+	}
+	family := &countingDurableFamily{base: base, reads: make(map[[32]byte]int)}
+	dest, err := NewBacked(TypeState, family)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := dest.AddRootNode(rootHash, rootData); err != nil {
+		t.Fatal(err)
+	}
+
+	_, err = dest.GetMissingNodesContext(WithTraversalBudget(t.Context(), 1), 1, nil)
+	if !errors.Is(err, ErrTraversalBudget) {
+		t.Fatalf("child traversal error = %v, want %v before root proof", err, ErrTraversalBudget)
+	}
+	if got := family.totalReads(); got != 1 {
+		t.Fatalf("child traversal durable reads = %d, want 1", got)
+	}
+
+	missing, err := dest.GetMissingNodesContext(WithTraversalBudget(t.Context(), 1), 1, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(missing) != 0 {
+		t.Fatalf("complete store reported missing nodes: %v", missing)
+	}
+	if got := family.totalReads(); got != 2 {
+		t.Fatalf("completed traversal durable reads = %d, want 2", got)
+	}
+}
+
 func TestBackedWalkRetainsExactPositionAcrossCappedPasses(t *testing.T) {
 	source := buildRandomState(t, 512)
 	rootHash, err := source.Hash()
@@ -347,7 +460,7 @@ func TestBackedWalkRetainsExactPositionAcrossCappedPasses(t *testing.T) {
 
 	now := time.Unix(1_000, 0)
 	base := NewMemoryNodeStoreFamily()
-	base.fullBelow = newFullBelowCacheWithClock(1, time.Second, time.Hour, func() time.Time { return now })
+	base.fullBelow = newFullBelowCacheWithClock(1, time.Second, func() time.Time { return now })
 	if err := base.StoreBatch(context.Background(), stored); err != nil {
 		t.Fatal(err)
 	}
@@ -440,10 +553,10 @@ func TestBackedWalkCachesShallowProofsAcrossLedgerRoots(t *testing.T) {
 		t.Fatal("first root performed no durable reads")
 	}
 
-	var deepHash [32]byte
-	var findDeep func(*innerNode, int)
-	findDeep = func(node *innerNode, depth int) {
-		if deepHash != ([32]byte{}) {
+	var shallowHash, deepHash [32]byte
+	var findProofs func(*innerNode, int)
+	findProofs = func(node *innerNode, depth int) {
+		if shallowHash != ([32]byte{}) && deepHash != ([32]byte{}) {
 			return
 		}
 		for branch := range BranchFactor {
@@ -455,20 +568,29 @@ func TestBackedWalkCachesShallowProofsAcrossLedgerRoots(t *testing.T) {
 			if !ok {
 				continue
 			}
-			if depth+1 > fullBelowCacheMaxDepth {
-				deepHash = hash
-				return
+			childDepth := depth + 1
+			if childDepth == 4 && shallowHash == ([32]byte{}) {
+				shallowHash = hash
 			}
-			findDeep(inner, depth+1)
+			if childDepth > 4 {
+				deepHash = hash
+				if shallowHash != ([32]byte{}) {
+					return
+				}
+			}
+			findProofs(inner, childDepth)
 		}
 	}
-	findDeep(firstSource.root, 0)
-	if deepHash == ([32]byte{}) {
-		t.Fatal("test tree has no inner node below the retained cache depth")
+	findProofs(firstSource.root, 0)
+	if shallowHash == ([32]byte{}) || deepHash == ([32]byte{}) {
+		t.Fatal("test tree does not contain both shallow and deep inner nodes")
 	}
 	gen := base.fullBelow.Generation()
+	if !base.fullBelow.Has(gen, shallowHash) {
+		t.Fatal("depth-four complete subtree was not cached")
+	}
 	if base.fullBelow.Has(gen, deepHash) {
-		t.Fatal("deep proof displaced capacity reserved for shallow subtrees")
+		t.Fatal("complete subtree deeper than depth four was cached")
 	}
 
 	second, err := NewBacked(TypeState, family)
@@ -484,6 +606,83 @@ func TestBackedWalkCachesShallowProofsAcrossLedgerRoots(t *testing.T) {
 	secondReads := family.totalReads() - firstReads
 	if secondReads >= firstReads/4 {
 		t.Fatalf("shared-root traversal used %d reads after %d cold reads", secondReads, firstReads)
+	}
+}
+
+func TestBackedWalkProofCacheSurvivesSweeps(t *testing.T) {
+	build := func(changed bool) (*SHAMap, [32]byte, []byte, *NodeBatch) {
+		sm := New(TypeState)
+		for i := range 4096 {
+			var key [32]byte
+			prefix := uint16(i%1024) * 40503
+			binary.BigEndian.PutUint16(key[:2], prefix)
+			binary.BigEndian.PutUint16(key[2:4], uint16(i/1024+1))
+			data := make([]byte, 12)
+			binary.BigEndian.PutUint32(data, uint32(i))
+			if changed && i == 0 {
+				data[4] = 1
+			}
+			if err := sm.Put(key, data); err != nil {
+				t.Fatal(err)
+			}
+		}
+		hash, err := sm.Hash()
+		if err != nil {
+			t.Fatal(err)
+		}
+		root, err := sm.SerializeRoot()
+		if err != nil {
+			t.Fatal(err)
+		}
+		batch, err := sm.FlushDirty()
+		if err != nil {
+			t.Fatal(err)
+		}
+		return sm, hash, root, batch
+	}
+
+	_, firstHash, firstRoot, firstBatch := build(false)
+	_, secondHash, secondRoot, secondBatch := build(true)
+	now := time.Unix(4_000, 0)
+	base := NewMemoryNodeStoreFamily()
+	base.fullBelow = newFullBelowCacheWithClock(fullBelowCacheTarget, 10*time.Minute, func() time.Time { return now })
+	if err := base.StoreBatch(t.Context(), firstBatch.Entries); err != nil {
+		t.Fatal(err)
+	}
+	if err := base.StoreBatch(t.Context(), secondBatch.Entries); err != nil {
+		t.Fatal(err)
+	}
+	family := &countingDurableFamily{base: base, reads: make(map[[32]byte]int)}
+	walkReads := func(hash [32]byte, root []byte) int {
+		t.Helper()
+		before := family.totalReads()
+		sm, err := NewBacked(TypeState, family)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := sm.AddRootNode(hash, root); err != nil {
+			t.Fatal(err)
+		}
+		if missing := sm.GetMissingNodes(1, nil); len(missing) != 0 {
+			t.Fatalf("root %x reported missing nodes: %v", hash[:8], missing)
+		}
+		return family.totalReads() - before
+	}
+
+	coldReads := walkReads(firstHash, firstRoot)
+	if size := base.fullBelow.Size(); size == 0 || size > len(firstBatch.Entries)+1 {
+		t.Fatalf("proof cache size = %d, want 1..%d", size, len(firstBatch.Entries)+1)
+	}
+
+	for range 10 {
+		now = now.Add(30 * time.Second)
+		base.fullBelow.Sweep()
+	}
+	warmReads := walkReads(secondHash, secondRoot)
+	base.fullBelow.Bump()
+	uncachedReads := walkReads(secondHash, secondRoot)
+	if warmReads*4 >= uncachedReads {
+		t.Fatalf("proof cache used %d durable reads versus %d uncached reads (first cold walk %d)", warmReads, uncachedReads, coldReads)
 	}
 }
 
@@ -546,12 +745,49 @@ func TestBackedWalkDoesNotPublishDurableRootAbovePendingDescendant(t *testing.T)
 		t.Fatal(err)
 	}
 
+	ancestorForLeaf := func(entry FlushEntry) ([32]byte, int, bool) {
+		node, err := deserializeFromPrefix(entry.Data)
+		if err != nil {
+			return [32]byte{}, 0, false
+		}
+		leaf, ok := node.(LeafNode)
+		if !ok {
+			return [32]byte{}, 0, false
+		}
+		key := leaf.Item().Key()
+		current := source.root
+		var candidate [32]byte
+		candidateDepth := 0
+		for depth := 1; depth <= MaxDepth; depth++ {
+			child, hash, set := current.LoadChild(selectBranchForPath(key, depth-1))
+			if !set {
+				break
+			}
+			inner, ok := child.(*innerNode)
+			if !ok {
+				break
+			}
+			if depth >= 2 {
+				candidate = hash
+				candidateDepth = depth
+			}
+			current = inner
+		}
+		return candidate, candidateDepth, candidate != ([32]byte{})
+	}
+
 	var pending FlushEntry
+	var pendingAncestor [32]byte
+	pendingAncestorDepth := 0
 	durable := make([]FlushEntry, 0, len(batch.Entries)-1)
 	for _, entry := range batch.Entries {
 		if pending.Hash == ([32]byte{}) && len(entry.Data) >= 4 && bytes.Equal(entry.Data[:4], protocol.HashPrefixLeafNode().Bytes()) {
-			pending = entry
-			continue
+			if ancestor, depth, ok := ancestorForLeaf(entry); ok {
+				pending = entry
+				pendingAncestor = ancestor
+				pendingAncestorDepth = depth
+				continue
+			}
 		}
 		durable = append(durable, entry)
 	}
@@ -579,9 +815,19 @@ func TestBackedWalkDoesNotPublishDurableRootAbovePendingDescendant(t *testing.T)
 	if missing := first.GetMissingNodes(1, nil); len(missing) != 0 {
 		t.Fatalf("pending descendant reported missing: %v", missing)
 	}
+	proofs := 0
+	for i := range BranchFactor {
+		proofs += first.backedWalk.lanes[i].proofs.count()
+	}
+	if proofs > BranchFactor {
+		t.Fatalf("pending subtree retained %d proofs, want at most one maximal proof per lane", proofs)
+	}
 	gen := family.cache.Generation()
 	if family.cache.Has(gen, rootHash) {
 		t.Fatal("durable root above pending descendant was published as full below")
+	}
+	if family.cache.Has(gen, pendingAncestor) {
+		t.Fatalf("depth-%d ancestor above pending descendant was published", pendingAncestorDepth)
 	}
 
 	delete(family.pending, pending.Hash)
@@ -606,12 +852,89 @@ func TestBackedWalkDoesNotPublishDurableRootAbovePendingDescendant(t *testing.T)
 	if missing := retry.GetMissingNodes(1, nil); len(missing) != 0 {
 		t.Fatalf("durable retry reported missing nodes: %v", missing)
 	}
+	if family.cache.Has(gen, rootHash) {
+		t.Fatal("resolved frontier published the shared root before persistence acknowledgement")
+	}
+	if err := retry.AcknowledgePersistedContext(t.Context()); err != nil {
+		t.Fatal(err)
+	}
 	if !family.cache.Has(gen, rootHash) {
-		t.Fatal("fully durable retry did not publish the shared root")
+		t.Fatal("persistence acknowledgement did not publish the shared root")
+	}
+	if retry.backedWalk != nil {
+		t.Fatal("persistence acknowledgement retained the completed walk cursor")
+	}
+	for branch := range BranchFactor {
+		child, _, set := retry.root.LoadChild(branch)
+		if set && child != nil {
+			t.Fatalf("persistence acknowledgement retained root child %d", branch)
+		}
 	}
 }
 
-func TestBackedWalkReprovesPendingSubtreeAfterBlockedRetry(t *testing.T) {
+func TestBackedWalkAcknowledgementIgnoresStaleGeneration(t *testing.T) {
+	source := buildRandomState(t, 64)
+	rootHash, err := source.Hash()
+	if err != nil {
+		t.Fatal(err)
+	}
+	rootData, err := source.SerializeRoot()
+	if err != nil {
+		t.Fatal(err)
+	}
+	batch, err := source.FlushDirty()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var pending FlushEntry
+	durable := make([]FlushEntry, 0, len(batch.Entries)-1)
+	for _, entry := range batch.Entries {
+		if pending.Hash == ([32]byte{}) && len(entry.Data) >= 4 && bytes.Equal(entry.Data[:4], protocol.HashPrefixLeafNode().Bytes()) {
+			pending = entry
+			continue
+		}
+		durable = append(durable, entry)
+	}
+	if pending.Hash == ([32]byte{}) {
+		t.Fatal("no leaf available for pending descendant")
+	}
+
+	base := NewMemoryNodeStoreFamily()
+	if err := base.StoreBatch(t.Context(), durable); err != nil {
+		t.Fatal(err)
+	}
+	family := &pendingDurableFamily{
+		base:    base,
+		pending: map[[32]byte][]byte{pending.Hash: pending.Data},
+		cache:   base.FullBelowCache(),
+	}
+	dest, err := NewBacked(TypeState, family)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := dest.AddRootNode(rootHash, rootData); err != nil {
+		t.Fatal(err)
+	}
+	if missing := dest.GetMissingNodes(1, nil); len(missing) != 0 {
+		t.Fatalf("pending descendant reported missing: %v", missing)
+	}
+
+	family.cache.Bump()
+	delete(family.pending, pending.Hash)
+	if err := base.StoreBatch(t.Context(), []FlushEntry{pending}); err != nil {
+		t.Fatal(err)
+	}
+	if err := dest.AcknowledgePersistedContext(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	gen := family.cache.Generation()
+	if family.cache.Has(gen, rootHash) {
+		t.Fatal("stale traversal generation published the shared root")
+	}
+}
+
+func TestBackedWalkDefersPendingProofUntilAcknowledged(t *testing.T) {
 	source := New(TypeState)
 	for i := range 64 {
 		var key [32]byte
@@ -676,26 +999,178 @@ func TestBackedWalkReprovesPendingSubtreeAfterBlockedRetry(t *testing.T) {
 	if len(frontier) != 1 || frontier[0].Hash != missing.Hash {
 		t.Fatalf("frontier = %v, want missing descendant %x", frontier, missing.Hash[:8])
 	}
+	delete(family.pending, pending.Hash)
+	if err := base.StoreBatch(context.Background(), []FlushEntry{pending}); err != nil {
+		t.Fatal(err)
+	}
+	if err := dest.AcknowledgePersistedContext(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	gen := family.cache.Generation()
+	if family.cache.Has(gen, rootHash) {
+		t.Fatal("incomplete persistence checkpoint published the shared root")
+	}
+	if dest.backedWalk == nil {
+		t.Fatal("incomplete persistence checkpoint discarded the live frontier")
+	}
+	for i := range BranchFactor {
+		if count := dest.backedWalk.lanes[i].proofs.count(); count != 0 {
+			t.Fatalf("lane %d retained %d acknowledged proofs", i, count)
+		}
+	}
+
 	if err := base.StoreBatch(context.Background(), []FlushEntry{missing}); err != nil {
 		t.Fatal(err)
 	}
 	if frontier := dest.GetMissingNodes(1, nil); len(frontier) != 0 {
 		t.Fatalf("resolved blocked descendant still missing: %v", frontier)
 	}
-	gen := family.cache.Generation()
 	if family.cache.Has(gen, rootHash) {
 		t.Fatal("blocked retry published root above a non-durable pending subtree")
 	}
 
-	delete(family.pending, pending.Hash)
-	if err := base.StoreBatch(context.Background(), []FlushEntry{pending}); err != nil {
-		t.Fatal(err)
-	}
+	family.durableFetches.Store(0)
 	if frontier := dest.GetMissingNodes(1, nil); len(frontier) != 0 {
 		t.Fatalf("fully durable tree reported missing: %v", frontier)
 	}
+	if reads := family.durableFetches.Load(); reads != 0 {
+		t.Fatalf("logically complete frontier poll performed %d durable reads", reads)
+	}
+	if family.cache.Has(gen, rootHash) {
+		t.Fatal("frontier poll published the shared root before persistence acknowledgement")
+	}
+
+	canceled, cancel := context.WithCancel(t.Context())
+	cancel()
+	if err := dest.AcknowledgePersistedContext(canceled); !errors.Is(err, context.Canceled) {
+		t.Fatalf("canceled persistence acknowledgement error = %v", err)
+	}
+	if family.cache.Has(gen, rootHash) {
+		t.Fatal("canceled persistence acknowledgement published the shared root")
+	}
+
+	if err := dest.AcknowledgePersistedContext(t.Context()); err != nil {
+		t.Fatal(err)
+	}
 	if !family.cache.Has(gen, rootHash) {
-		t.Fatal("fully durable root was not published after proof")
+		t.Fatal("persistence acknowledgement did not publish the shared root")
+	}
+}
+
+func TestBackedWalkCompletionRetainsMaximalCheckpointProof(t *testing.T) {
+	for _, stored := range []bool{false, true} {
+		name := "pending"
+		if stored {
+			name = "stored"
+		}
+		t.Run(name, func(t *testing.T) {
+			sm := New(TypeState)
+			cache := newFullBelowCacheWithClock(8, time.Hour, time.Now)
+			gen := cache.Generation()
+			lane := backedWalkLane{passDurable: true}
+			lane.proofs.add([32]byte{0x11}, 3)
+			lane.proofs.add([32]byte{0x12}, 4)
+			hash := [32]byte{0x21}
+			lane.stack = []backedWalkFrame{{
+				item:       backedWalkItem{hash: hash, depth: 2},
+				full:       true,
+				stored:     stored,
+				topLevel:   true,
+				proofStart: 0,
+			}}
+
+			sm.finishBackedWalkFrame(&lane, cache, gen, true, stored)
+
+			if got := lane.proofs.count(); got != 1 {
+				t.Fatalf("proof count = %d, want one maximal proof", got)
+			}
+			if got := lane.proofs.chunks[0][0]; got.hash != hash || got.depth != 2 {
+				t.Fatalf("proof = (%x, %d), want completed root (%x, 2)", got.hash[:8], got.depth, hash[:8])
+			}
+		})
+	}
+}
+
+func TestPublishAcknowledgedFullBelowPreservesProofDepthAdmission(t *testing.T) {
+	sm := New(TypeState)
+	rootHash, err := sm.Hash()
+	if err != nil {
+		t.Fatal(err)
+	}
+	sm.fullBelow = newFullBelowCacheWithClock(64, time.Hour, time.Now)
+	gen := sm.fullBelow.Generation()
+	sm.backedWalk = &backedWalkCursor{generation: gen, rootHash: rootHash}
+
+	shallow := [32]byte{0x31}
+	deep := [32]byte{0x32}
+	lane := &sm.backedWalk.lanes[0]
+	lane.proofs.add(shallow, fullBelowCacheMaxDepth)
+	lane.proofs.add(deep, fullBelowCacheMaxDepth+1)
+
+	complete, release := sm.publishAcknowledgedFullBelow()
+	if complete {
+		t.Fatal("incomplete cursor reported complete")
+	}
+	if !sm.fullBelow.Has(gen, shallow) {
+		t.Fatal("shallow acknowledged proof was not admitted")
+	}
+	if sm.fullBelow.Has(gen, deep) {
+		t.Fatal("deep acknowledged proof was admitted")
+	}
+	if _, ok := release[shallow]; !ok {
+		t.Fatal("shallow acknowledged proof was not releasable")
+	}
+	if _, ok := release[deep]; !ok {
+		t.Fatal("deep acknowledged proof was not releasable")
+	}
+	if got := lane.proofs.count(); got != 0 {
+		t.Fatalf("published proof count = %d, want 0", got)
+	}
+}
+
+func TestAcknowledgePersistedReleasesProofsEvictedDuringPublication(t *testing.T) {
+	sm := New(TypeState)
+	for branch := range BranchFactor {
+		var key [32]byte
+		key[0] = byte(branch << 4)
+		data := make([]byte, 12)
+		data[0] = byte(branch)
+		if err := sm.Put(key, data); err != nil {
+			t.Fatal(err)
+		}
+	}
+	rootHash, err := sm.Hash()
+	if err != nil {
+		t.Fatal(err)
+	}
+	sm.fullBelow = newFullBelowCacheWithClock(1, time.Hour, time.Now)
+	gen := sm.fullBelow.Generation()
+	sm.backedWalk = &backedWalkCursor{generation: gen, rootHash: rootHash}
+
+	proofs := 0
+	for branch := range BranchFactor {
+		child, hash, set := sm.root.LoadChild(branch)
+		if !set || child == nil {
+			continue
+		}
+		sm.backedWalk.lanes[branch].proofs.add(hash, 1)
+		proofs++
+	}
+	if proofs < 2 {
+		t.Fatalf("tree produced %d attached proof roots, want at least two", proofs)
+	}
+
+	if err := sm.AcknowledgePersistedContext(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	if got := sm.fullBelow.Size(); got != 1 {
+		t.Fatalf("FullBelow size = %d, want capacity 1 after publication churn", got)
+	}
+	for branch := range BranchFactor {
+		child, _, set := sm.root.LoadChild(branch)
+		if set && child != nil {
+			t.Fatalf("acknowledgement retained durably complete child %d", branch)
+		}
 	}
 }
 

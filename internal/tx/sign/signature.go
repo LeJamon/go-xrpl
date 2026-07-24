@@ -475,6 +475,9 @@ func copyMap(m map[string]any) map[string]any {
 }
 
 func flattenForSigning(tx txcore.Transaction) (map[string]any, error) {
+	if raw := tx.GetRawBytes(); len(raw) > 0 {
+		return binarycodec.DecodeBytes(raw)
+	}
 	txMap, err := tx.Flatten()
 	if err != nil {
 		return nil, err
