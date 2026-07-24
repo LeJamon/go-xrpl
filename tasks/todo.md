@@ -1856,9 +1856,10 @@ conditions and JSON types.
 - Finalization reviews found and resolved publication-gap skipping,
   unretrievable completed-ledger ranges, stale sibling transaction indexes,
   preferred-ledger movement across the validated frontier, false secure-port
-  advertisement, and stale build-output paths. Independent build,
-  RPC/conformance, and ledger/concurrency reviews report no remaining Blocking
-  or Minor findings.
+  advertisement, stale build-output paths, and a numeric-selector regression
+  that returned the mutable open ledger instead of a snapshot. Independent
+  build, RPC/conformance, and ledger/concurrency reviews report no remaining
+  Blocking or Minor findings.
 - Passing gates: focused tests (including 20-run sibling-fork stress), full
   ledger tests, ledger race tests, `just test-core`, `just vet`, strict
   `golangci-lint`, `just build`, `just build-all`, `just build-nocgo`, shell and
