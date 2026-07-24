@@ -164,6 +164,7 @@ func NewRotating(path string, cache int, handles int) (*RotatingStore, error) {
 	return r, nil
 }
 
+// Has reports whether either generation contains key.
 func (r *RotatingStore) Has(key []byte) (bool, error) {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
@@ -177,6 +178,7 @@ func (r *RotatingStore) Has(key []byte) (bool, error) {
 	return r.archive.Has(key)
 }
 
+// Get returns key from the writable generation or falls back to the archive.
 func (r *RotatingStore) Get(key []byte) ([]byte, error) {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
@@ -186,6 +188,7 @@ func (r *RotatingStore) Get(key []byte) ([]byte, error) {
 	return r.getLocked(key, false)
 }
 
+// CanRotateWithoutRefresh reports whether the archive is empty.
 func (r *RotatingStore) CanRotateWithoutRefresh() (bool, error) {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
@@ -231,6 +234,7 @@ func (r *RotatingStore) getLocked(key []byte, promote bool) ([]byte, error) {
 	return data, nil
 }
 
+// Put writes key and value to the writable generation.
 func (r *RotatingStore) Put(key []byte, value []byte) error {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
@@ -240,6 +244,7 @@ func (r *RotatingStore) Put(key []byte, value []byte) error {
 	return r.writable.Put(key, value)
 }
 
+// Delete removes key from both generations.
 func (r *RotatingStore) Delete(key []byte) error {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
@@ -249,10 +254,12 @@ func (r *RotatingStore) Delete(key []byte) error {
 	return errors.Join(r.writable.Delete(key), r.archive.Delete(key))
 }
 
+// NewBatch returns a batch that applies operations to the rotating store.
 func (r *RotatingStore) NewBatch() kvstore.Batch {
 	return &rotatingBatch{store: r}
 }
 
+// NewIterator returns a merged iterator over both generations.
 func (r *RotatingStore) NewIterator(prefix []byte, start []byte) kvstore.Iterator {
 	r.mu.RLock()
 	if r.closed {
@@ -266,6 +273,7 @@ func (r *RotatingStore) NewIterator(prefix []byte, start []byte) kvstore.Iterato
 	}
 }
 
+// Stat returns statistics for both generations.
 func (r *RotatingStore) Stat() (string, error) {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
@@ -283,6 +291,7 @@ func (r *RotatingStore) Stat() (string, error) {
 	return "writable:\n" + writable + "\narchive:\n" + archive, nil
 }
 
+// Compact compacts the requested range in both generations.
 func (r *RotatingStore) Compact(start []byte, limit []byte) error {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
@@ -295,6 +304,7 @@ func (r *RotatingStore) Compact(start []byte, limit []byte) error {
 	return r.archive.Compact(start, limit)
 }
 
+// Sync flushes the writable generation.
 func (r *RotatingStore) Sync() error {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
@@ -304,6 +314,7 @@ func (r *RotatingStore) Sync() error {
 	return r.writable.Sync()
 }
 
+// Close closes both generations.
 func (r *RotatingStore) Close() error {
 	r.mu.Lock()
 	defer r.mu.Unlock()

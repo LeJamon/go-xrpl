@@ -67,6 +67,7 @@ func (d *RotatingKVDatabaseImpl) FetchForPromotion(ctx context.Context, hash Has
 	return node, nil
 }
 
+// CanRotateWithoutRefresh reports whether the archive generation is empty.
 func (d *RotatingKVDatabaseImpl) CanRotateWithoutRefresh(ctx context.Context) (bool, error) {
 	if err := ctx.Err(); err != nil {
 		return false, err
