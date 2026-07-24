@@ -28,9 +28,10 @@ Then build:
 
 ```bash
 just build                 # → ../tmp/main (CGO + OpenSSL)
-# or
-go build -o ./tmp/main ./cmd/xrpld
 ```
+
+The recipe embeds `git describe --tags --always --dirty` in the binary. Set
+`VERSION` explicitly to override it for a packaged build.
 
 A `CGO_ENABLED=0 go build ./cmd/xrpld` also works: the resulting binary cannot
 connect to or accept peers (`peertls` returns `ErrSessionSigUnsupported`) and uses
@@ -42,7 +43,7 @@ other subsystem work unchanged. Useful for contributors without a CGO toolchain.
 ```bash
 just run                   # go run ./cmd/xrpld
 # or run the built binary
-./tmp/main
+../tmp/main
 # or hot-reload during development (needs `air`)
 just dev
 ```
@@ -87,13 +88,19 @@ loopback requests also receive admin role; other clients receive **guest** role.
 Always set `secure_gateway` on a same-host public proxy backend so loopback does
 not trigger that admin fallback.
 
+`server_info` and `server_state` omit rippled's optional job-queue `load`,
+requested `counters`, and `current_activities` fields. go-xrpl does not yet have
+equivalent job/performance instrumentation, so these fields remain unsupported
+rather than reporting placeholder data.
+
 ### TLS and reverse proxies
 
 The HTTP and WebSocket listeners do not terminate TLS. For public RPC, run a TLS
 reverse proxy on the same host and bind the guest RPC ports to loopback rather
-than a public interface. Set `secure_gateway` on each proxied guest port to the
-proxy's exact source IP; for a same-host proxy this is normally `127.0.0.1` or
-`::1`:
+than a public interface. The configuration rejects `https` and `wss` protocols
+until native TLS termination is available. Set `secure_gateway` on each proxied
+guest port to the proxy's exact source IP; for a same-host proxy this is normally
+`127.0.0.1` or `::1`:
 
 ```toml
 [port_rpc_public]

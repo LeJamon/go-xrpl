@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"strconv"
 	"testing"
 	"time"
 
@@ -59,10 +60,9 @@ func TestBackfill_BelowTipDrainDoesNotRewindValidated(t *testing.T) {
 		AccountHash: stateRoot,
 	}
 	require.NoError(t, svc.AdoptLedgerWithState(context.TODO(), hdr, stateMap, txMap))
+	svc.FlushPersists()
 
 	svc.mu.RLock()
-	defer svc.mu.RUnlock()
-
 	require.NotNil(t, svc.validatedLedger)
 	assert.Equal(t, tip.Sequence(), svc.validatedLedger.Sequence(),
 		"a below-tip backfill drain must not rewind the validated pointer")
@@ -74,4 +74,8 @@ func TestBackfill_BelowTipDrainDoesNotRewindValidated(t *testing.T) {
 		"the backfilled ledger itself is validated — only the pointer must not move")
 	_, stashed := svc.pendingLedgerValidations[baseSeq]
 	assert.False(t, stashed, "the stash must be consumed either way")
+	svc.mu.RUnlock()
+
+	assert.Equal(t, strconv.FormatUint(uint64(baseSeq), 10), svc.GetServerInfo().CompleteLedgers,
+		"a below-tip validated backfill must use validated-history persistence")
 }

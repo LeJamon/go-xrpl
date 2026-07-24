@@ -106,14 +106,11 @@ func (s *Service) AcceptLedgerAt(ctx context.Context, explicitCloseTime time.Tim
 	// eventCallback fires immediately rather than being stashed.
 	s.fireLedgerClosedHooksLocked(ledgerInfo, txResults, closeTime, validatedLedgers)
 
-	if s.eventCallback != nil {
-		event := &LedgerAcceptedEvent{
-			LedgerInfo:         ledgerInfo,
-			Ledger:             s.closedLedger,
-			TransactionResults: txResults,
-		}
-		s.dispatchLedgerEvent(event)
-	}
+	s.dispatchLedgerEvent(&LedgerAcceptedEvent{
+		LedgerInfo:         ledgerInfo,
+		Ledger:             s.closedLedger,
+		TransactionResults: txResults,
+	})
 
 	s.logger.Info("Ledger accepted",
 		"sequence", closedSeq,
@@ -284,6 +281,7 @@ func (s *Service) fixMismatchLocked(adopted *ledger.Ledger) {
 				delete(s.txPositionIndex, txHash)
 			}
 		}
+		s.invalidateCompleteLedger(adoptedSeq - 1)
 		s.deleteHistoryLocked(adoptedSeq - 1)
 		s.logger.Warn("history backfill replaced a stale fork ledger below it",
 			"seq", adoptedSeq-1,
@@ -295,6 +293,7 @@ func (s *Service) fixMismatchLocked(adopted *ledger.Ledger) {
 
 	// Purge: the mismatched prev-seq, the same-seq alt (caller overwrites it
 	// anyway, but its tx-index must go), and every seq > adoptedSeq (orphans).
+	s.invalidateCompleteLedgerRange(adoptedSeq-1, ^uint32(0))
 	var toRemove []uint32
 	toRemove = append(toRemove, adoptedSeq-1)
 	if sameSeq, ok := s.ledgerHistory[adoptedSeq]; ok && sameSeq.Hash() != adopted.Hash() {
@@ -410,6 +409,13 @@ func (s *Service) SwitchToPreferredLedger(parent *ledger.Ledger) error {
 	}
 
 	parentHash := parent.Hash()
+	if s.validatedLedger != nil {
+		validatedSeq := s.validatedLedger.Sequence()
+		if parent.Sequence() < validatedSeq ||
+			(parent.Sequence() == validatedSeq && parentHash != s.validatedLedger.Hash()) {
+			return ErrPreferredChainSwitch
+		}
+	}
 	if parent.Sequence() == s.closedLedger.Sequence() && parentHash == s.closedLedger.Hash() {
 		return nil
 	}
@@ -429,6 +435,7 @@ func (s *Service) SwitchToPreferredLedger(parent *ledger.Ledger) error {
 	s.collectTransactionResults(parent, parent.Sequence(), parentHash)
 	if parent.IsValidated() {
 		s.evictOldHistoryLocked(parent.Sequence())
+		s.enqueuePersist(parent)
 	}
 
 	s.processClosedLedgerLocked()
@@ -444,12 +451,18 @@ func (s *Service) SwitchToPreferredLedger(parent *ledger.Ledger) error {
 func (s *Service) purgeHistoryAfterPreferredSwitchLocked(parent *ledger.Ledger) {
 	parentSeq := parent.Sequence()
 	parentHash := parent.Hash()
+	if parentSeq != ^uint32(0) {
+		s.invalidateCompleteLedgerRange(parentSeq+1, ^uint32(0))
+	}
 	removed := make(map[uint32]struct{})
 	for seq, existing := range s.ledgerHistory {
 		if seq < parentSeq || (seq == parentSeq && existing.Hash() == parentHash) {
 			continue
 		}
 		removed[seq] = struct{}{}
+		if seq == parentSeq {
+			s.invalidateCompleteLedgerHash(seq, existing.Hash())
+		}
 		s.deleteHistoryLocked(seq)
 	}
 	for txHash, txSeq := range s.txIndex {
@@ -608,6 +621,8 @@ func (s *Service) acceptConsensusResult(
 	}
 	if promotedByDrain {
 		s.enqueuePersist(s.closedLedger)
+	} else if s.closedLedger.IsValidated() {
+		s.enqueueValidatedHistoryPersist(s.closedLedger)
 	} else {
 		s.enqueueNodePersist(s.closedLedger)
 	}
@@ -626,17 +641,15 @@ func (s *Service) acceptConsensusResult(
 	// with validated_ledger. Exception: if the drain above already promoted
 	// inline, no SetValidatedLedger will arrive — fire inline instead of
 	// orphaning the event.
-	if s.eventCallback != nil {
-		event := &LedgerAcceptedEvent{
-			LedgerInfo:         ledgerInfo,
-			Ledger:             s.closedLedger,
-			TransactionResults: txResults,
-		}
-		if promotedByDrain {
-			s.dispatchLedgerEvent(event)
-		} else {
-			s.stashPendingValidationLocked(closedLedgerHash, event)
-		}
+	event := &LedgerAcceptedEvent{
+		LedgerInfo:         ledgerInfo,
+		Ledger:             s.closedLedger,
+		TransactionResults: txResults,
+	}
+	if promotedByDrain {
+		s.dispatchLedgerEvent(event)
+	} else if s.eventCallback != nil {
+		s.stashPendingValidationLocked(closedLedgerHash, event)
 	}
 
 	s.logger.Info("Consensus ledger accepted",
@@ -654,6 +667,32 @@ func (s *Service) acceptConsensusResult(
 // must NOT be flipped to validated.
 func (s *Service) SetValidatedLedger(seq uint32, expectedHash [32]byte) {
 	s.SetValidatedLedgerAt(seq, expectedHash, time.Time{})
+}
+
+func (s *Service) validatedLedgerEventLocked(l *ledger.Ledger) *LedgerAcceptedEvent {
+	event := s.drainPendingValidationLocked(l.Hash())
+	if event == nil {
+		return &LedgerAcceptedEvent{
+			LedgerInfo: &LedgerInfo{
+				Sequence:   l.Sequence(),
+				Hash:       l.Hash(),
+				ParentHash: l.ParentHash(),
+				CloseTime:  l.CloseTime(),
+				TotalDrops: l.TotalDrops(),
+				Validated:  true,
+				Closed:     l.IsClosed(),
+			},
+			Ledger: l,
+		}
+	}
+	if event.LedgerInfo != nil {
+		event.LedgerInfo.Validated = true
+	}
+	event.Ledger = l
+	for i := range event.TransactionResults {
+		event.TransactionResults[i].Validated = true
+	}
+	return event
 }
 
 // SetValidatedLedgerAt marks a ledger validated using the trusted-validation
@@ -700,6 +739,7 @@ func (s *Service) SetValidatedLedgerAt(seq uint32, expectedHash [32]byte, signTi
 	// pointer — same rule as drainPendingLedgerValidationLocked.
 	if s.validatedLedger != nil && seq <= s.validatedLedger.Sequence() {
 		s.enqueueValidatedHistoryPersist(l)
+		s.dispatchLedgerEvent(s.validatedLedgerEventLocked(l))
 		s.mu.Unlock()
 		return
 	}
@@ -713,9 +753,10 @@ func (s *Service) SetValidatedLedgerAt(seq uint32, expectedHash [32]byte, signTi
 	// Sweep the held local pool against the just-validated ledger (not every
 	// close — consensus may abandon a closed ledger).
 	pool := s.localTxs
-	event := s.drainPendingValidationLocked(expectedHash)
+	event := s.validatedLedgerEventLocked(l)
 	s.enqueuePersist(l)
 	notification := s.validatedLedgerNotificationLocked(previousValidatedSeq)
+	s.dispatchLedgerEvent(event)
 	s.mu.Unlock()
 
 	// Fold into the amendment table outside the lock (it has its own mutex).
@@ -725,15 +766,6 @@ func (s *Service) SetValidatedLedgerAt(seq uint32, expectedHash [32]byte, signTi
 		pool.Sweep(l)
 	}
 
-	if event != nil {
-		if event.LedgerInfo != nil {
-			event.LedgerInfo.Validated = true
-		}
-		for i := range event.TransactionResults {
-			event.TransactionResults[i].Validated = true
-		}
-		s.dispatchLedgerEvent(event)
-	}
 	notification.notify()
 }
 
@@ -939,6 +971,20 @@ func (s *Service) storeLedgerWithStateLocked(ctx context.Context, h *header.Ledg
 	promotedByDrain := s.drainPendingLedgerValidationLocked(stored.Sequence(), stored)
 	if promotedByDrain {
 		s.enqueuePersist(stored)
+		s.dispatchLedgerEvent(&LedgerAcceptedEvent{
+			LedgerInfo: &LedgerInfo{
+				Sequence:   stored.Sequence(),
+				Hash:       stored.Hash(),
+				ParentHash: stored.ParentHash(),
+				CloseTime:  stored.CloseTime(),
+				TotalDrops: stored.TotalDrops(),
+				Validated:  true,
+				Closed:     stored.IsClosed(),
+			},
+			Ledger: stored,
+		})
+	} else if stored.IsValidated() {
+		s.enqueueValidatedHistoryPersist(stored)
 	} else {
 		s.enqueueNodePersist(stored)
 	}
@@ -1018,6 +1064,8 @@ func (s *Service) adoptLedgerWithStateLocked(
 	txResults := s.collectTransactionResults(adopted, h.LedgerIndex, h.Hash)
 	if promotedByDrain {
 		s.enqueuePersist(adopted)
+	} else if adopted.IsValidated() {
+		s.enqueueValidatedHistoryPersist(adopted)
 	} else {
 		s.enqueueNodePersist(adopted)
 	}
@@ -1059,17 +1107,15 @@ func (s *Service) adoptLedgerWithStateLocked(
 		// drain. Exception: if the drain above promoted inline, no
 		// SetValidatedLedger will arrive — fire inline instead of orphaning the
 		// event (and avoid a double-fire on a late-duplicate SetValidatedLedger).
-		if s.eventCallback != nil {
-			event := &LedgerAcceptedEvent{
-				LedgerInfo:         ledgerInfo,
-				Ledger:             adopted,
-				TransactionResults: txResults,
-			}
-			if promotedByDrain {
-				s.dispatchLedgerEvent(event)
-			} else {
-				s.stashPendingValidationLocked(h.Hash, event)
-			}
+		event := &LedgerAcceptedEvent{
+			LedgerInfo:         ledgerInfo,
+			Ledger:             adopted,
+			TransactionResults: txResults,
+		}
+		if promotedByDrain {
+			s.dispatchLedgerEvent(event)
+		} else if s.eventCallback != nil {
+			s.stashPendingValidationLocked(h.Hash, event)
 		}
 	}
 

@@ -30,16 +30,6 @@ func HaveSetToMessage(id consensus.TxSetID, status message.TxSetStatus) *message
 	}
 }
 
-// size reports the number of cached fetch-pack nodes.
-func (c *fetchPackCache) size() int {
-	if c == nil {
-		return 0
-	}
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	return len(c.nodes)
-}
-
 // newLedgerProviderForTest builds a provider over an arbitrary lookup.
 func newLedgerProviderForTest(lookup ledgerLookup) *LedgerProvider {
 	return &LedgerProvider{svc: lookup}

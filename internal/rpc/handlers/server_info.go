@@ -4,8 +4,10 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"strconv"
 	"strings"
 	"time"
+	"unicode"
 
 	"github.com/LeJamon/go-xrpl/amendment"
 	"github.com/LeJamon/go-xrpl/codec/addresscodec"
@@ -137,6 +139,7 @@ func buildServerWarnings(services *types.ServiceContainer, isAdmin bool) []types
 func buildServerInfo(ctx *types.RpcContext, human bool) map[string]any {
 	services := ctx.Services
 	serverInfo := services.Ledger.GetServerInfo()
+	configSnapshot := services.ServerInfoConfig
 	baseFee, reserveBase, reserveIncrement := services.Ledger.GetCurrentFees()
 
 	// Uptime in seconds
@@ -190,6 +193,26 @@ func buildServerInfo(ctx *types.RpcContext, human bool) map[string]any {
 		// `current.count()` = now - last-transition-time.
 		"server_state_duration_us": fmt.Sprintf("%d", accounting.currentDurationUs),
 		"state_accounting":         accounting.modes,
+	}
+
+	info["ports"] = buildServerInfoPorts(configSnapshot.Ports, ctx.IsAdmin)
+	if configSnapshot.ServerDomain != "" {
+		info["server_domain"] = configSnapshot.ServerDomain
+	}
+	if ctx.IsAdmin {
+		nodeSize := configSnapshot.NodeSize
+		if nodeSize == "" {
+			nodeSize = "medium"
+		}
+		info["node_size"] = nodeSize
+		if configSnapshot.GitHash != "" {
+			info["git"] = map[string]any{"hash": configSnapshot.GitHash}
+		}
+	}
+	if services.FetchPackCacheSize != nil {
+		if size := services.FetchPackCacheSize(); size != 0 {
+			info["fetch_pack"] = size
+		}
 	}
 
 	// Rippled emits initial_sync_duration_us only when the node has
@@ -391,13 +414,13 @@ func buildServerInfo(ctx *types.RpcContext, human bool) map[string]any {
 		}
 	}
 
-	// published_ledger: rippled includes "none" if no published ledger,
-	// or the sequence if it differs from closed.
-	// For now, report the validated sequence as published.
-	if serverInfo.ValidatedLedgerSeq > 0 {
-		info["published_ledger"] = serverInfo.ValidatedLedgerSeq
-	} else {
-		info["published_ledger"] = "none"
+	if haveLedger {
+		switch {
+		case !serverInfo.HavePublished:
+			info["published_ledger"] = "none"
+		case serverInfo.PublishedLedgerSeq != ledgerSeq:
+			info["published_ledger"] = serverInfo.PublishedLedgerSeq
+		}
 	}
 
 	// network_id: only include if configured (non-zero), matching rippled
@@ -411,6 +434,45 @@ func buildServerInfo(ctx *types.RpcContext, human bool) map[string]any {
 	}
 
 	return info
+}
+
+func buildServerInfoPorts(ports []types.ServerInfoPortSnapshot, isAdmin bool) []map[string]any {
+	result := make([]map[string]any, 0, len(ports))
+	for _, port := range ports {
+		protocols, grpc := serverInfoProtocols(port.Protocol)
+		if len(protocols) != 0 && (isAdmin || !port.Admin) {
+			result = append(result, map[string]any{
+				"port":     strconv.Itoa(port.Port),
+				"protocol": protocols,
+			})
+		}
+		if grpc {
+			result = append(result, map[string]any{
+				"port":     strconv.Itoa(port.Port),
+				"protocol": []string{"grpc"},
+			})
+		}
+	}
+	return result
+}
+
+func serverInfoProtocols(configured string) ([]string, bool) {
+	set := make(map[string]struct{})
+	for _, protocol := range strings.FieldsFunc(configured, func(r rune) bool {
+		return r == ',' || unicode.IsSpace(r)
+	}) {
+		set[protocol] = struct{}{}
+	}
+
+	supported := [...]string{"http", "https", "peer", "ws", "ws2", "wss", "wss2"}
+	protocols := make([]string, 0, len(set))
+	for _, protocol := range supported {
+		if _, ok := set[protocol]; ok {
+			protocols = append(protocols, protocol)
+		}
+	}
+	_, grpc := set["grpc"]
+	return protocols, grpc
 }
 
 func getPeerCount(ctx *types.RpcContext) int {

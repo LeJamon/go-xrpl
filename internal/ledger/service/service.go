@@ -7,7 +7,6 @@ import (
 	"runtime"
 	"strconv"
 	"sync"
-	"sync/atomic"
 	"time"
 
 	"github.com/LeJamon/go-xrpl/amendment"
@@ -17,6 +16,7 @@ import (
 	"github.com/LeJamon/go-xrpl/internal/ledger/genesis"
 	"github.com/LeJamon/go-xrpl/internal/ledger/header"
 	"github.com/LeJamon/go-xrpl/internal/ledger/localtxs"
+	"github.com/LeJamon/go-xrpl/internal/ledger/manager"
 	"github.com/LeJamon/go-xrpl/internal/ledger/openledger"
 	"github.com/LeJamon/go-xrpl/internal/ledger/service/svcerr"
 	"github.com/LeJamon/go-xrpl/internal/tx"
@@ -138,6 +138,11 @@ type Service struct {
 	validatedSignTime time.Time
 	validatedAgeNow   func() time.Time
 
+	// Published ledger (highest ledger delivered at the ordered validated
+	// publication boundary).
+	publishedLedgerSeq uint32
+	havePublished      bool
+
 	// Genesis ledger
 	genesisLedger *ledger.Ledger
 
@@ -217,6 +222,15 @@ type Service struct {
 	// reclaimed ledgers. Nil when online_delete is off.
 	minimumOnlineFunc func() uint32
 
+	// completeMu guards completedLedgers, their canonical hashes, the retention
+	// floor, and active tokens used to reject stale persistence completions.
+	completeMu              sync.RWMutex
+	completedLedgers        *manager.CompleteLedgerSet
+	completeLedgerHashes    map[uint32][32]byte
+	completeLedgerFloor     uint32
+	completeLedgerTokens    map[uint32]uint64
+	nextCompleteLedgerToken uint64
+
 	// openLedgerView is the persistent open-ledger view — source of truth for
 	// the open pool. Built by Start, rebuilt by adopt paths, advanced by Accept.
 	openLedgerView *openledger.OpenLedger
@@ -256,28 +270,31 @@ type Service struct {
 	// the TxQ's timeLeap flag by processClosedLedgerLocked. Zero in standalone.
 	lastConsensusRoundTime time.Duration
 
-	persistMu       sync.Mutex
-	persistQueue    []persistJob
-	persistWake     chan struct{}
-	persistStarted  bool
-	persistStopping bool
-	persistWG       sync.WaitGroup
-	validatedTipMu  sync.Mutex
-	sweepMu         sync.Mutex
-	sweepCancel     context.CancelFunc
-	sweepDone       chan struct{}
-	sweepInterval   time.Duration
+	persistMu            sync.Mutex
+	persistQueue         []*persistJob
+	validatedPersistJobs map[uint32]*persistJob
+	persistWake          chan struct{}
+	persistStarted       bool
+	persistStopping      bool
+	persistWG            sync.WaitGroup
+	canonicalPersistMu   sync.Mutex
+	sweepMu              sync.Mutex
+	sweepCancel          context.CancelFunc
+	sweepDone            chan struct{}
+	sweepInterval        time.Duration
 
-	// ledgerEventCh feeds the single accepted-ledger event dispatcher (see
-	// dispatchLedgerEvent). A single consumer preserves FIFO delivery and runs
-	// eventCallback single-threaded, replacing per-event goroutines that ran the
-	// callback concurrently with itself — racing the subscriber's mutable state
-	// and reordering ledgerClosed stream events. Started by Start, joined by Stop.
-	ledgerEventCh       chan *LedgerAcceptedEvent
-	ledgerEventQuit     chan struct{}
-	ledgerEventStopped  bool
-	ledgerEventWG       sync.WaitGroup
-	droppedLedgerEvents atomic.Uint64
+	// ledgerEventMu guards the publication candidates and lossless FIFO queue.
+	// The single dispatcher runs eventCallback serially and is started by Start.
+	ledgerEventMu           sync.Mutex
+	ledgerEventQueue        []*LedgerAcceptedEvent
+	ledgerEventCandidates   map[uint32]*LedgerAcceptedEvent
+	ledgerEventFrontierSeq  uint32
+	ledgerEventFrontierHash [32]byte
+	ledgerEventHaveFrontier bool
+	ledgerEventWake         chan struct{}
+	ledgerEventStarted      bool
+	ledgerEventStopping     bool
+	ledgerEventWG           sync.WaitGroup
 
 	// configCacheMu guards the memoised open-ledger ApplyConfig below. The config
 	// is a pure function of closedLedger, rebuilt only when it advances, keeping
@@ -331,11 +348,16 @@ func New(cfg Config) (*Service, error) {
 		pendingValidation:        make(map[[32]byte]*LedgerAcceptedEvent),
 		pendingLedgerValidations: make(map[uint32]pendingValidationEntry),
 		heldAdoptions:            make(map[uint32]*pendingAdopt),
+		completedLedgers:         manager.NewCompleteLedgerSet(),
+		completeLedgerHashes:     make(map[uint32][32]byte),
+		completeLedgerTokens:     make(map[uint32]uint64),
+		validatedPersistJobs:     make(map[uint32]*persistJob),
 		txQueue:                  txq.New(txqCfg),
 		localTxs:                 localtxs.New(),
 		feeTrack:                 feetrack.New(),
 		validatedAgeNow:          time.Now,
 		persistWake:              make(chan struct{}, 1),
+		ledgerEventCandidates:    make(map[uint32]*LedgerAcceptedEvent),
 		sweepInterval:            nodeStoreSweepIntervalForSize(cfg.NodeSize),
 	}
 	return s, nil
@@ -446,9 +468,11 @@ func (s *Service) Start() error {
 	if startWorkers {
 		go s.runPersistWorker()
 
-		s.ledgerEventCh = make(chan *LedgerAcceptedEvent, ledgerEventBufferDepth)
-		s.ledgerEventQuit = make(chan struct{})
+		s.ledgerEventMu.Lock()
+		s.ledgerEventWake = make(chan struct{}, 1)
+		s.ledgerEventStarted = true
 		s.ledgerEventWG.Add(1)
+		s.ledgerEventMu.Unlock()
 		go s.runLedgerEventDispatcher()
 	}
 
@@ -509,6 +533,17 @@ func (s *Service) Start() error {
 		s.closedLedger = latest
 		s.validatedLedger = latest
 		s.validatedSignTime = latest.CloseTime()
+		s.publishedLedgerSeq = latest.Sequence()
+		s.havePublished = true
+		s.ledgerEventMu.Lock()
+		s.ledgerEventFrontierSeq = latest.Sequence()
+		s.ledgerEventFrontierHash = latest.Hash()
+		s.ledgerEventHaveFrontier = true
+		s.ledgerEventMu.Unlock()
+		s.completeMu.Lock()
+		s.completedLedgers.Add(latest.Sequence())
+		s.completeLedgerHashes[latest.Sequence()] = latest.Hash()
+		s.completeMu.Unlock()
 		if latest.Sequence() != genesisLedger.Sequence() {
 			s.deleteHistoryLocked(genesisLedger.Sequence())
 		}
@@ -1012,18 +1047,78 @@ func (s *Service) XRPFeesEnabled() bool {
 }
 
 // GetLedgerBySequence returns a ledger by sequence, falling back to the open
-// ledger when its sequence matches.
+// ledger or durable validated history.
 func (s *Service) GetLedgerBySequence(seq uint32) (*ledger.Ledger, error) {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
+	return s.getLedgerBySequence(context.Background(), seq)
+}
 
-	if l, ok := s.ledgerHistory[seq]; ok {
-		return l, nil
-	}
+func (s *Service) getLedgerBySequence(ctx context.Context, seq uint32) (*ledger.Ledger, error) {
+	s.mu.RLock()
+	history := s.ledgerHistory[seq]
+	var open *ledger.Ledger
 	if s.openLedger != nil && s.openLedger.Sequence() == seq {
-		return s.openLedger, nil
+		open = s.openLedger
 	}
-	return nil, ErrLedgerNotFound
+	s.mu.RUnlock()
+
+	s.completeMu.RLock()
+	hash, complete := s.completeLedgerHashes[seq]
+	complete = complete && s.completedLedgers != nil && s.completedLedgers.Contains(seq)
+	s.completeMu.RUnlock()
+	if history != nil && (!complete || history.Hash() == hash) {
+		return history, nil
+	}
+	if open != nil && (!complete || open.Hash() == hash) {
+		return open, nil
+	}
+	if !complete || s.nodeStore == nil || s.shamapFamily == nil {
+		return nil, ErrLedgerNotFound
+	}
+
+	s.mu.RLock()
+	cached := s.persistedLedgers[hash]
+	s.mu.RUnlock()
+	if cached != nil && cached.Sequence() == seq {
+		if cached.IsValidated() {
+			return cached, nil
+		}
+		validated, err := cached.Snapshot()
+		if err != nil {
+			return nil, err
+		}
+		if err := validated.SetValidated(); err != nil {
+			return nil, err
+		}
+		return validated, nil
+	}
+
+	loaded, err := s.loadStoredLedgerByHash(ctx, hash)
+	if err != nil {
+		if errors.Is(err, errStoredLedgerUnavailable) {
+			return nil, fmt.Errorf("%w: load ledger %d from nodestore: %v", ErrLedgerNotFound, seq, err)
+		}
+		return nil, fmt.Errorf("load ledger %d from nodestore: %w", seq, err)
+	}
+	if loaded == nil || loaded.Sequence() != seq {
+		return nil, ErrLedgerNotFound
+	}
+	if err := loaded.SetValidated(); err != nil {
+		return nil, err
+	}
+
+	s.completeMu.RLock()
+	stillComplete := s.completedLedgers != nil &&
+		s.completedLedgers.Contains(seq) &&
+		s.completeLedgerHashes[seq] == hash
+	s.completeMu.RUnlock()
+	if !stillComplete {
+		return nil, ErrLedgerNotFound
+	}
+
+	s.mu.Lock()
+	s.cachePersistedLedgerLocked(loaded)
+	s.mu.Unlock()
+	return loaded, nil
 }
 
 // AdoptedLedgerBySequence returns a closed ledger from adopted history only,
@@ -1325,16 +1420,9 @@ func (s *Service) GetValidatedLedgerIndex() uint32 {
 	return s.validatedLedger.Sequence()
 }
 
-// getValidatedLedgersRange returns a string representation of validated ledger range
+// getValidatedLedgersRange returns the actual completed-ledger ranges.
 func (s *Service) getValidatedLedgersRange() string {
-	minSeq, maxSeq, ok := s.ledgerHistoryRangeLocked()
-	if !ok {
-		return "empty"
-	}
-	if minSeq == maxSeq {
-		return strconv.FormatUint(uint64(minSeq), 10)
-	}
-	return formatRange(minSeq, maxSeq)
+	return s.completeLedgersString()
 }
 
 // SetServerStateFunc sets a function that provides the server state string.
@@ -1407,8 +1495,9 @@ func (s *Service) GetServerInfo() ServerInfo {
 		Standalone:         s.config.Standalone,
 		ServerState:        "full",
 		NeedsNetworkLedger: s.needsInitialSync,
-		CompleteLedgers:    "",
 		NetworkID:          s.config.NetworkID,
+		HavePublished:      s.havePublished,
+		PublishedLedgerSeq: s.publishedLedgerSeq,
 	}
 
 	if s.openLedger != nil {
@@ -1428,7 +1517,6 @@ func (s *Service) GetServerInfo() ServerInfo {
 		info.ValidatedLedgerCloseTime = protocol.RippleSeconds(s.validatedLedger.CloseTime())
 	}
 
-	minSeq, maxSeq, haveRange := s.ledgerHistoryRangeLocked()
 	serverStateFunc := s.serverStateFunc
 	minimumOnlineFunc := s.minimumOnlineFunc
 	s.mu.RUnlock()
@@ -1437,20 +1525,9 @@ func (s *Service) GetServerInfo() ServerInfo {
 		info.ServerState = serverStateFunc()
 	}
 	if minimumOnlineFunc != nil {
-		if floor := minimumOnlineFunc(); floor > minSeq {
-			minSeq = floor
-		}
+		s.clampCompleteLedgers(minimumOnlineFunc())
 	}
-	if minSeq > maxSeq {
-		haveRange = false
-	}
-	if haveRange {
-		if minSeq == maxSeq {
-			info.CompleteLedgers = strconv.FormatUint(uint64(minSeq), 10)
-		} else {
-			info.CompleteLedgers = formatRange(minSeq, maxSeq)
-		}
-	}
+	info.CompleteLedgers = s.completeLedgersString()
 
 	return info
 }
@@ -1469,6 +1546,8 @@ type ServerInfo struct {
 	ValidatedLedgerHash      [32]byte
 	ValidatedLedgerCloseTime int64 // Ripple-epoch seconds
 	CompleteLedgers          string
+	HavePublished            bool
+	PublishedLedgerSeq       uint32
 	NetworkID                uint32
 }
 

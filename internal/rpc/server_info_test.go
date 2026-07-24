@@ -76,6 +76,8 @@ func (m *mockLedgerServiceServerInfo) GetServerInfo() types.LedgerServerInfo {
 		ValidatedLedgerHash:      m.serverInfo.ValidatedLedgerHash,
 		ValidatedLedgerCloseTime: m.serverInfo.ValidatedLedgerCloseTime,
 		CompleteLedgers:          m.serverInfo.CompleteLedgers,
+		HavePublished:            m.serverInfo.HavePublished,
+		PublishedLedgerSeq:       m.serverInfo.PublishedLedgerSeq,
 	}
 }
 
@@ -137,6 +139,189 @@ func servicesForServerInfo(mock *mockLedgerServiceServerInfo) *types.ServiceCont
 	}
 }
 
+func callServerStatus(t *testing.T, ctx *types.RpcContext, human bool) map[string]any {
+	t.Helper()
+	if human {
+		result, rpcErr := (&handlers.ServerInfoMethod{}).Handle(ctx, nil)
+		require.Nil(t, rpcErr)
+		return result.(map[string]any)["info"].(map[string]any)
+	}
+	result, rpcErr := (&handlers.ServerStateMethod{}).Handle(ctx, nil)
+	require.Nil(t, rpcErr)
+	return result.(map[string]any)["state"].(map[string]any)
+}
+
+func TestServerStatusRuntimeFields(t *testing.T) {
+	const gitHash = "0123456789abcdef0123456789abcdef01234567"
+	mock := newMockLedgerServiceServerInfo()
+	services := servicesForServerInfo(mock)
+	services.ServerInfoConfig = types.ServerInfoConfigSnapshot{
+		Ports: []types.ServerInfoPortSnapshot{
+			{Port: 5005, Protocol: "ws2 http,http ignored"},
+			{Port: 6006, Protocol: "wss2, https", Admin: true},
+			{Port: 50051, Protocol: "grpc", Admin: true},
+		},
+		ServerDomain: "example.test",
+		NodeSize:     "large",
+		GitHash:      gitHash,
+	}
+	services.FetchPackCacheSize = func() uint32 { return 7 }
+
+	publicPorts := []map[string]any{
+		{"port": "5005", "protocol": []string{"http", "ws2"}},
+		{"port": "50051", "protocol": []string{"grpc"}},
+	}
+	adminPorts := []map[string]any{
+		{"port": "5005", "protocol": []string{"http", "ws2"}},
+		{"port": "6006", "protocol": []string{"https", "wss2"}},
+		{"port": "50051", "protocol": []string{"grpc"}},
+	}
+
+	for _, human := range []bool{true, false} {
+		mode := "server_state"
+		if human {
+			mode = "server_info"
+		}
+		t.Run(mode, func(t *testing.T) {
+			for _, tc := range []struct {
+				name      string
+				admin     bool
+				wantPorts []map[string]any
+			}{
+				{name: "guest", wantPorts: publicPorts},
+				{name: "admin", admin: true, wantPorts: adminPorts},
+			} {
+				t.Run(tc.name, func(t *testing.T) {
+					role := types.RoleGuest
+					if tc.admin {
+						role = types.RoleAdmin
+					}
+					ctx := &types.RpcContext{
+						Context:  t.Context(),
+						Role:     role,
+						IsAdmin:  tc.admin,
+						Services: services,
+					}
+					info := callServerStatus(t, ctx, human)
+
+					assert.Equal(t, tc.wantPorts, info["ports"])
+					assert.Equal(t, "example.test", info["server_domain"])
+					assert.IsType(t, uint32(0), info["fetch_pack"])
+					assert.Equal(t, uint32(7), info["fetch_pack"])
+
+					if tc.admin {
+						assert.Equal(t, "large", info["node_size"])
+						assert.Equal(t, map[string]any{"hash": gitHash}, info["git"])
+					} else {
+						assert.NotContains(t, info, "node_size")
+						assert.NotContains(t, info, "git")
+					}
+				})
+			}
+		})
+	}
+}
+
+func TestServerStatusRuntimeFieldOmissions(t *testing.T) {
+	mock := newMockLedgerServiceServerInfo()
+	services := servicesForServerInfo(mock)
+	services.FetchPackCacheSize = func() uint32 { return 0 }
+
+	for _, human := range []bool{true, false} {
+		ctx := &types.RpcContext{
+			Context:  t.Context(),
+			Role:     types.RoleAdmin,
+			IsAdmin:  true,
+			Services: services,
+		}
+		info := callServerStatus(t, ctx, human)
+		assert.Equal(t, []map[string]any{}, info["ports"])
+		assert.NotContains(t, info, "fetch_pack")
+		assert.NotContains(t, info, "server_domain")
+		assert.NotContains(t, info, "git")
+		assert.Equal(t, "medium", info["node_size"])
+
+		encoded, err := json.Marshal(info)
+		require.NoError(t, err)
+		assert.Contains(t, string(encoded), `"ports":[]`)
+	}
+}
+
+func TestServerStatusPublishedLedger(t *testing.T) {
+	tests := []struct {
+		name          string
+		closed        uint32
+		validated     uint32
+		havePublished bool
+		published     uint32
+		want          any
+		wantPresent   bool
+	}{
+		{
+			name: "no selected ledger omits field",
+		},
+		{
+			name:        "no published ledger",
+			closed:      10,
+			want:        "none",
+			wantPresent: true,
+		},
+		{
+			name:          "published equals closed",
+			closed:        10,
+			havePublished: true,
+			published:     10,
+		},
+		{
+			name:          "publication lags closed",
+			closed:        10,
+			havePublished: true,
+			published:     9,
+			want:          uint32(9),
+			wantPresent:   true,
+		},
+		{
+			name:          "published equals validated selection",
+			closed:        11,
+			validated:     10,
+			havePublished: true,
+			published:     10,
+		},
+		{
+			name:          "publication lags validated selection",
+			closed:        11,
+			validated:     10,
+			havePublished: true,
+			published:     9,
+			want:          uint32(9),
+			wantPresent:   true,
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			mock := newMockLedgerServiceServerInfo()
+			mock.closedLedgerIndex = test.closed
+			mock.validatedLedgerIndex = test.validated
+			mock.serverInfo.HavePublished = test.havePublished
+			mock.serverInfo.PublishedLedgerSeq = test.published
+			services := servicesForServerInfo(mock)
+
+			for _, human := range []bool{true, false} {
+				info := callServerStatus(t, &types.RpcContext{
+					Context:  t.Context(),
+					Services: services,
+				}, human)
+				got, present := info["published_ledger"]
+				assert.Equal(t, test.wantPresent, present)
+				if test.wantPresent {
+					assert.Equal(t, test.want, got)
+				}
+			}
+		})
+	}
+}
+
 type serverInfoValidatorList struct {
 	publisherCount int
 	threshold      int
@@ -188,7 +373,7 @@ func TestServerInfoResponseFields(t *testing.T) {
 
 		// Check build_version
 		assert.Contains(t, info, "build_version")
-		assert.NotEmpty(t, info["build_version"])
+		assert.Equal(t, handlers.BuildVersion, info["build_version"])
 	})
 
 	t.Run("info.complete_ledgers field present", func(t *testing.T) {

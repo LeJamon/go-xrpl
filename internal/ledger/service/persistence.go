@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"sort"
+	"sync/atomic"
 	"time"
 
 	addresscodec "github.com/LeJamon/go-xrpl/codec/addresscodec"
@@ -29,6 +30,22 @@ func (s *Service) persistLedger(ctx context.Context, l *ledger.Ledger) error {
 
 func (s *Service) persistValidatedLedger(ctx context.Context, l *ledger.Ledger, updateTip bool) error {
 	seq := l.Sequence()
+	var token uint64
+	if l.IsValidated() {
+		token = s.beginValidatedPersistence(seq, l.Hash())
+	}
+	return s.persistValidatedLedgerAtToken(ctx, l, updateTip, token, false, nil)
+}
+
+func (s *Service) persistValidatedLedgerAtToken(
+	ctx context.Context,
+	l *ledger.Ledger,
+	updateTip bool,
+	token uint64,
+	allowTipReplacement bool,
+	canceled func() bool,
+) error {
+	seq := l.Sequence()
 	var persistErr error
 
 	if s.nodeStore != nil {
@@ -36,18 +53,30 @@ func (s *Service) persistValidatedLedger(ctx context.Context, l *ledger.Ledger, 
 			persistErr = err
 		}
 	}
+	if canceled != nil && canceled() {
+		return nil
+	}
 
 	if s.relationalDB != nil {
+		s.canonicalPersistMu.Lock()
 		if err := s.persistToRelationalDB(ctx, l); err != nil {
 			persistErr = errors.Join(persistErr, err)
 		}
+		if canceled != nil && canceled() {
+			s.canonicalPersistMu.Unlock()
+			return nil
+		}
 		if persistErr == nil && updateTip && s.nodeStore != nil {
-			if err := s.persistValidatedTip(ctx, l); err != nil {
+			if err := s.persistValidatedTipLocked(ctx, l, allowTipReplacement); err != nil {
 				persistErr = err
 			}
 		}
+		s.canonicalPersistMu.Unlock()
 	}
 
+	if l.IsValidated() {
+		s.recordValidatedPersistence(seq, token, persistErr == nil)
+	}
 	return persistErr
 }
 
@@ -55,10 +84,13 @@ func (s *Service) persistValidatedLedger(ctx context.Context, l *ledger.Ledger, 
 // barrier (nil ledger + done) that flushes the FIFO queue for callers that
 // need persistence to be observable (tests, shutdown paths).
 type persistJob struct {
-	l          *ledger.Ledger
-	done       chan struct{}
-	validated  bool
-	updatesTip bool
+	l               *ledger.Ledger
+	done            chan struct{}
+	validated       bool
+	tipOnly         bool
+	canceled        atomic.Bool
+	updatesTip      atomic.Bool
+	completionToken uint64
 }
 
 func (s *Service) enqueuePersist(l *ledger.Ledger) {
@@ -77,20 +109,60 @@ func (s *Service) enqueueLedgerPersist(l *ledger.Ledger, validated, updatesTip b
 	if l == nil {
 		return
 	}
+	seq := l.Sequence()
 	s.persistMu.Lock()
+	if validated {
+		if existing := s.validatedPersistJobs[seq]; existing != nil {
+			if existing.l != nil && existing.l.Hash() == l.Hash() {
+				if updatesTip {
+					existing.updatesTip.Store(true)
+				}
+				s.persistMu.Unlock()
+				return
+			}
+			if !updatesTip && existing.updatesTip.Load() {
+				s.persistMu.Unlock()
+				return
+			}
+			existing.canceled.Store(true)
+			delete(s.validatedPersistJobs, seq)
+		}
+		if s.hasCompleteLedger(l) && !updatesTip {
+			s.persistMu.Unlock()
+			return
+		}
+	}
+	job := &persistJob{
+		l:         l,
+		validated: validated,
+	}
+	job.updatesTip.Store(updatesTip)
+	if validated {
+		if s.hasCompleteLedger(l) {
+			job.tipOnly = true
+		} else if l.IsValidated() {
+			job.completionToken = s.beginValidatedPersistence(seq, l.Hash())
+		}
+		s.validatedPersistJobs[seq] = job
+	}
 	if !s.persistStarted {
 		s.persistMu.Unlock()
-		if err := s.persistLedgerJob(context.Background(), l, validated, updatesTip); err != nil {
-			s.logger.Error("failed to persist ledger inline", "seq", l.Sequence(), "err", err)
-		}
+		s.runPersistJob(job)
 		return
 	}
 	if s.persistStopping {
+		if validated {
+			job.canceled.Store(true)
+			delete(s.validatedPersistJobs, seq)
+		}
 		s.persistMu.Unlock()
-		s.logger.Warn("persist skipped: service stopping", "seq", l.Sequence())
+		if validated && !job.tipOnly {
+			s.invalidateCompleteLedger(seq)
+		}
+		s.logger.Warn("persist skipped: service stopping", "seq", seq)
 		return
 	}
-	s.persistQueue = append(s.persistQueue, persistJob{l: l, validated: validated, updatesTip: updatesTip})
+	s.persistQueue = append(s.persistQueue, job)
 	s.signalPersistLocked()
 	s.persistMu.Unlock()
 }
@@ -113,7 +185,7 @@ func (s *Service) flushPersists(ctx context.Context) error {
 		s.persistMu.Unlock()
 		return nil
 	}
-	s.persistQueue = append(s.persistQueue, persistJob{done: done})
+	s.persistQueue = append(s.persistQueue, &persistJob{done: done})
 	s.signalPersistLocked()
 	s.persistMu.Unlock()
 	select {
@@ -140,17 +212,15 @@ func (s *Service) Stop() {
 	}
 	s.persistMu.Unlock()
 
-	s.mu.Lock()
-	var eventQuit chan struct{}
-	if !s.ledgerEventStopped {
-		s.ledgerEventStopped = true
-		eventQuit = s.ledgerEventQuit
+	s.ledgerEventMu.Lock()
+	if s.ledgerEventStarted && !s.ledgerEventStopping {
+		s.ledgerEventStopping = true
+		select {
+		case s.ledgerEventWake <- struct{}{}:
+		default:
+		}
 	}
-	s.mu.Unlock()
-
-	if eventQuit != nil {
-		close(eventQuit)
-	}
+	s.ledgerEventMu.Unlock()
 	if persistWasStarted {
 		s.persistWG.Wait()
 	}
@@ -163,7 +233,7 @@ func (s *Service) runPersistWorker() {
 		s.persistMu.Lock()
 		if len(s.persistQueue) > 0 {
 			job := s.persistQueue[0]
-			s.persistQueue[0] = persistJob{}
+			s.persistQueue[0] = nil
 			s.persistQueue = s.persistQueue[1:]
 			s.persistMu.Unlock()
 			s.runPersistJob(job)
@@ -178,9 +248,56 @@ func (s *Service) runPersistWorker() {
 	}
 }
 
-func (s *Service) runPersistJob(job persistJob) {
+func (s *Service) runPersistJob(job *persistJob) {
+	if job == nil {
+		return
+	}
 	if job.l != nil {
-		if err := s.persistLedgerJob(context.Background(), job.l, job.validated, job.updatesTip); err != nil {
+		updateTip := job.updatesTip.Load()
+		var err error
+		if !job.canceled.Load() && job.tipOnly {
+			if s.nodeStore != nil && s.relationalDB != nil {
+				err = s.persistValidatedTipJob(
+					context.Background(),
+					job.l,
+					true,
+					job.canceled.Load,
+				)
+			}
+		} else if !job.canceled.Load() {
+			err = s.persistLedgerJob(
+				context.Background(),
+				job.l,
+				job.validated,
+				updateTip,
+				job.completionToken,
+				true,
+				job.canceled.Load,
+			)
+		}
+		s.persistMu.Lock()
+		lateTip := job.validated && !job.tipOnly && !job.canceled.Load() &&
+			!updateTip && job.updatesTip.Load()
+		if !lateTip && job.validated && s.validatedPersistJobs[job.l.Sequence()] == job {
+			delete(s.validatedPersistJobs, job.l.Sequence())
+		}
+		s.persistMu.Unlock()
+		if err == nil && lateTip && s.nodeStore != nil && s.relationalDB != nil {
+			err = s.persistValidatedTipJob(
+				context.Background(),
+				job.l,
+				true,
+				job.canceled.Load,
+			)
+		}
+		if lateTip {
+			s.persistMu.Lock()
+			if s.validatedPersistJobs[job.l.Sequence()] == job {
+				delete(s.validatedPersistJobs, job.l.Sequence())
+			}
+			s.persistMu.Unlock()
+		}
+		if err != nil {
 			s.logger.Error("failed to persist ledger; chain advance continues",
 				"seq", job.l.Sequence(), "err", err)
 		}
@@ -190,9 +307,23 @@ func (s *Service) runPersistJob(job persistJob) {
 	}
 }
 
-func (s *Service) persistLedgerJob(ctx context.Context, l *ledger.Ledger, validated, updatesTip bool) error {
+func (s *Service) persistLedgerJob(
+	ctx context.Context,
+	l *ledger.Ledger,
+	validated, updatesTip bool,
+	completionToken uint64,
+	allowTipReplacement bool,
+	canceled func() bool,
+) error {
 	if validated {
-		return s.persistValidatedLedger(ctx, l, updatesTip)
+		return s.persistValidatedLedgerAtToken(
+			ctx,
+			l,
+			updatesTip,
+			completionToken,
+			allowTipReplacement,
+			canceled,
+		)
 	}
 	if s.nodeStore == nil {
 		return nil
@@ -255,8 +386,28 @@ func (s *Service) persistToNodeStore(ctx context.Context, l *ledger.Ledger, seq 
 }
 
 func (s *Service) persistValidatedTip(ctx context.Context, l *ledger.Ledger) error {
-	s.validatedTipMu.Lock()
-	defer s.validatedTipMu.Unlock()
+	return s.persistValidatedTipJob(ctx, l, false, nil)
+}
+
+func (s *Service) persistValidatedTipJob(
+	ctx context.Context,
+	l *ledger.Ledger,
+	allowSameSequenceReplacement bool,
+	canceled func() bool,
+) error {
+	s.canonicalPersistMu.Lock()
+	defer s.canonicalPersistMu.Unlock()
+	if canceled != nil && canceled() {
+		return nil
+	}
+	return s.persistValidatedTipLocked(ctx, l, allowSameSequenceReplacement)
+}
+
+func (s *Service) persistValidatedTipLocked(
+	ctx context.Context,
+	l *ledger.Ledger,
+	allowSameSequenceReplacement bool,
+) error {
 	hash := l.Hash()
 	current, err := s.nodeStore.Fetch(ctx, validatedTipKey)
 	if err != nil {
@@ -270,7 +421,9 @@ func (s *Service) persistValidatedTip(ctx context.Context, l *ledger.Ledger) err
 			if bytes.Equal(current.Data, hash[:]) {
 				return nil
 			}
-			return fmt.Errorf("validated ledger tip %d conflicts with persisted hash", l.Sequence())
+			if !allowSameSequenceReplacement {
+				return fmt.Errorf("validated ledger tip %d conflicts with persisted hash", l.Sequence())
+			}
 		}
 	}
 	if err := s.nodeStore.Store(ctx, &nodestore.Node{
@@ -285,6 +438,48 @@ func (s *Service) persistValidatedTip(ctx context.Context, l *ledger.Ledger) err
 		return fmt.Errorf("sync validated ledger tip %d: %w", l.Sequence(), err)
 	}
 	return nil
+}
+
+func (s *Service) invalidatePersistedValidatedTip(start, end uint32) {
+	s.invalidatePersistedValidatedTipMatching(start, end, nil)
+}
+
+func (s *Service) invalidatePersistedValidatedTipHash(seq uint32, hash [32]byte) {
+	s.invalidatePersistedValidatedTipMatching(seq, seq, &hash)
+}
+
+func (s *Service) invalidatePersistedValidatedTipMatching(start, end uint32, expectedHash *[32]byte) {
+	if s.nodeStore == nil || start > end {
+		return
+	}
+	s.canonicalPersistMu.Lock()
+	defer s.canonicalPersistMu.Unlock()
+
+	ctx := context.Background()
+	current, err := s.nodeStore.Fetch(ctx, validatedTipKey)
+	if err != nil {
+		s.logger.Error("failed to inspect validated ledger tip during invalidation", "err", err)
+		return
+	}
+	if current == nil || current.Type != nodestore.NodeLedger || len(current.Data) != 32 ||
+		current.LedgerSeq < start || current.LedgerSeq > end {
+		return
+	}
+	if expectedHash != nil && !bytes.Equal(current.Data, expectedHash[:]) {
+		return
+	}
+	if err := s.nodeStore.Store(ctx, &nodestore.Node{
+		Type:      nodestore.NodeLedger,
+		Hash:      validatedTipKey,
+		Data:      make([]byte, 32),
+		LedgerSeq: 0,
+	}); err != nil {
+		s.logger.Error("failed to invalidate validated ledger tip", "seq", current.LedgerSeq, "err", err)
+		return
+	}
+	if err := s.nodeStore.Sync(ctx); err != nil {
+		s.logger.Error("failed to sync invalidated validated ledger tip", "seq", current.LedgerSeq, "err", err)
+	}
 }
 
 const (
@@ -442,6 +637,9 @@ func (s *Service) persistToRelationalDB(ctx context.Context, l *ledger.Ledger) e
 	seq := relationaldb.LedgerIndex(l.Sequence())
 
 	return s.relationalDB.WithTransaction(ctx, func(txCtx relationaldb.TransactionContext) error {
+		if err := txCtx.Transaction().DeleteTransactionsByLedgerSeq(ctx, seq); err != nil {
+			return err
+		}
 		if err := txCtx.Ledger().SaveValidatedLedger(ctx, ledgerInfo); err != nil {
 			return err
 		}

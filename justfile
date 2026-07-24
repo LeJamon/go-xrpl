@@ -16,7 +16,7 @@ default:
 
 # Build the xrpld binary into ../tmp/main (CGO + OpenSSL).
 build:
-    go build -v -o ../tmp/main ./cmd/xrpld
+    ./scripts/build.sh
 
 # Compile every package in the module.
 build-all:

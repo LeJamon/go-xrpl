@@ -25,9 +25,15 @@ RUN go mod download
 
 COPY . .
 
-RUN CGO_ENABLED=1 go build \
+ARG VERSION
+
+RUN if [ -z "${VERSION}" ] || [ "${VERSION}" = "dev" ]; then \
+      echo "VERSION must identify a release or commit" >&2; \
+      exit 2; \
+    fi \
+ && CGO_ENABLED=1 go build \
     -trimpath \
-    -ldflags="-s -w -linkmode external -extldflags '-static'" \
+    -ldflags="-s -w -linkmode external -extldflags '-static' -X=github.com/LeJamon/go-xrpl/version.Version=${VERSION}" \
     -o /usr/local/bin/goxrpl ./cmd/xrpld
 
 # Stage 2: Runtime

@@ -375,3 +375,84 @@ func TestStringEmpty(t *testing.T) {
 		t.Errorf("String() on empty set = %q, want %q", got, "empty")
 	}
 }
+
+func TestRemoveRange(t *testing.T) {
+	tests := []struct {
+		name  string
+		start uint32
+		end   uint32
+		want  string
+	}{
+		{name: "single sequence splits range", start: 5, end: 5, want: "1-4,6-10"},
+		{name: "prefix", start: 0, end: 3, want: "4-10"},
+		{name: "suffix", start: 8, end: 20, want: "1-7"},
+		{name: "whole range", start: 0, end: 20, want: "empty"},
+		{name: "disjoint before", start: 0, end: 0, want: "1-10"},
+		{name: "disjoint after", start: 11, end: 20, want: "1-10"},
+		{name: "inverted ignored", start: 8, end: 7, want: "1-10"},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			c := NewCompleteLedgerSet()
+			c.AddRange(1, 10)
+			c.RemoveRange(test.start, test.end)
+			if got := c.String(); got != test.want {
+				t.Fatalf("String() = %q, want %q", got, test.want)
+			}
+		})
+	}
+}
+
+func TestRemoveRangeSplitPreservesLaterRanges(t *testing.T) {
+	c := NewCompleteLedgerSet()
+	c.AddRange(1, 10)
+	c.AddRange(20, 30)
+
+	c.Remove(5)
+
+	if got, want := c.String(), "1-4,6-10,20-30"; got != want {
+		t.Fatalf("String() = %q, want %q", got, want)
+	}
+}
+
+func TestRemoveAcrossRanges(t *testing.T) {
+	c := NewCompleteLedgerSet()
+	c.AddRange(1, 5)
+	c.AddRange(10, 15)
+	c.AddRange(20, 25)
+
+	c.RemoveRange(3, 22)
+
+	if got := c.String(); got != "1-2,23-25" {
+		t.Fatalf("String() = %q, want %q", got, "1-2,23-25")
+	}
+	if got := c.Count(); got != 5 {
+		t.Fatalf("Count() = %d, want 5", got)
+	}
+}
+
+func TestRemoveSingle(t *testing.T) {
+	c := NewCompleteLedgerSet()
+	c.AddRange(7, 9)
+	c.Remove(8)
+
+	if got := c.String(); got != "7,9" {
+		t.Fatalf("String() = %q, want %q", got, "7,9")
+	}
+}
+
+func TestRangeOperationsAtUint32Max(t *testing.T) {
+	maxUint32 := ^uint32(0)
+	c := NewCompleteLedgerSet()
+	c.Add(maxUint32)
+	c.Add(maxUint32 - 1)
+	if got := c.String(); got != "4294967294-4294967295" {
+		t.Fatalf("String() = %q, want max range", got)
+	}
+
+	c.Remove(maxUint32)
+	if got := c.String(); got != "4294967294" {
+		t.Fatalf("String() after Remove(max) = %q, want %q", got, "4294967294")
+	}
+}

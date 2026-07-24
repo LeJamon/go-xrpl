@@ -80,6 +80,24 @@ func (c *fetchPackCache) get(hash [32]byte, now time.Time) ([]byte, bool) {
 	return e.data, true
 }
 
+// Size returns the number of cached fetch-pack nodes.
+func (c *fetchPackCache) Size() int {
+	if c == nil {
+		return 0
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return len(c.nodes)
+}
+
+// FetchPackCacheSize returns the current inbound fetch-pack cache size.
+func (r *Router) FetchPackCacheSize() uint32 {
+	if r == nil {
+		return 0
+	}
+	return uint32(r.fetchPacks.Size())
+}
+
 // sweep drops entries at least as old as the effective max age for the current
 // size: the full TTL while within the target, and a proportionally shorter
 // window once over it. The age is computed once against the pre-sweep size so a

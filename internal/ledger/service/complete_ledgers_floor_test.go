@@ -3,31 +3,15 @@ package service
 import (
 	"testing"
 	"time"
-
-	"github.com/LeJamon/go-xrpl/internal/ledger"
-	"github.com/LeJamon/go-xrpl/internal/ledger/header"
 )
 
-// seedHistory replaces the in-memory history window with placeholder ledgers
-// for [lo, hi], so GetServerInfo derives complete_ledgers from a known range.
-// Start() seeds the genesis ledger; clear it first so the range is exactly
-// [lo, hi].
-func seedHistory(t *testing.T, svc *Service, lo, hi uint32) {
+func seedCompleteLedgers(t *testing.T, svc *Service, lo, hi uint32) {
 	t.Helper()
-	svc.ledgerHistory = make(map[uint32]*ledger.Ledger)
-	for seq := lo; seq <= hi; seq++ {
-		stateMap, err := svc.genesisLedger.StateMapSnapshot()
-		if err != nil {
-			t.Fatalf("StateMapSnapshot: %v", err)
-		}
-		txMap, err := svc.genesisLedger.TxMapSnapshot()
-		if err != nil {
-			t.Fatalf("TxMapSnapshot: %v", err)
-		}
-		var h header.LedgerHeader
-		h.LedgerIndex = seq
-		svc.ledgerHistory[seq] = mustNewOpenWithHeader(t, h, stateMap, txMap)
-	}
+	svc.completeMu.Lock()
+	defer svc.completeMu.Unlock()
+	svc.ensureCompleteLedgerStateLocked()
+	svc.completedLedgers.Clear()
+	svc.completedLedgers.AddRange(lo, hi)
 }
 
 // TestGetServerInfo_CompleteLedgers_ClampedToFloor verifies that after a
@@ -43,7 +27,7 @@ func TestGetServerInfo_CompleteLedgers_ClampedToFloor(t *testing.T) {
 		t.Fatalf("Start: %v", err)
 	}
 
-	seedHistory(t, svc, 10, 100)
+	seedCompleteLedgers(t, svc, 10, 100)
 
 	// Without a floor the range is the full window.
 	if got := svc.GetServerInfo().CompleteLedgers; got != "10-100" {
@@ -68,7 +52,7 @@ func TestGetServerInfo_CompleteLedgers_FloorBelowWindow(t *testing.T) {
 		t.Fatalf("Start: %v", err)
 	}
 
-	seedHistory(t, svc, 10, 100)
+	seedCompleteLedgers(t, svc, 10, 100)
 
 	svc.SetMinimumOnlineFunc(func() uint32 { return 5 }) // below window lo
 	if got := svc.GetServerInfo().CompleteLedgers; got != "10-100" {
@@ -93,11 +77,11 @@ func TestGetServerInfo_CompleteLedgers_FloorAboveWindow(t *testing.T) {
 		t.Fatalf("Start: %v", err)
 	}
 
-	seedHistory(t, svc, 10, 100)
+	seedCompleteLedgers(t, svc, 10, 100)
 
 	svc.SetMinimumOnlineFunc(func() uint32 { return 200 }) // above window hi
-	if got := svc.GetServerInfo().CompleteLedgers; got != "" {
-		t.Fatalf("floor above window = %q, want empty", got)
+	if got := svc.GetServerInfo().CompleteLedgers; got != "empty" {
+		t.Fatalf("floor above window = %q, want %q", got, "empty")
 	}
 }
 
@@ -111,7 +95,7 @@ func TestGetServerInfo_CompleteLedgersDoesNotUseFetchDepth(t *testing.T) {
 	if err := svc.Start(); err != nil {
 		t.Fatalf("Start: %v", err)
 	}
-	seedHistory(t, svc, 10, 100)
+	seedCompleteLedgers(t, svc, 10, 100)
 
 	if got := svc.GetServerInfo().CompleteLedgers; got != "10-100" {
 		t.Fatalf("complete_ledgers = %q, want %q", got, "10-100")

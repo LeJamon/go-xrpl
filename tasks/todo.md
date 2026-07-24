@@ -1802,3 +1802,69 @@ Behavioral oracle: clean local rippled `3.2.0` worktree at
 - Three independent final reviews found no Go-correctness, test-quality,
   verification, or rippled v3.2.0 conformance findings.
 - Published as PR #1411: https://github.com/LeJamon/go-xrpl/pull/1411.
+# Current Task - Issue #1420 server_info release and ledger-status parity
+
+## Goal
+
+Make production builds identify their exact go-xrpl revision and make
+`server_info` / `server_state` report publication, completed-ledger ranges, and
+supported runtime fields from authoritative state with rippled 3.2.0-compatible
+conditions and JSON types.
+
+## Plan
+
+- [x] Validate GitHub access, issue state/comments, linked PRs, repository
+      identity, default base branch, and clean worktree availability.
+- [x] Compare version, publication, completed-range, and remaining-field
+      requirements with the local rippled v3.2.0 oracle.
+- [x] Inject exact build identifiers into normal and production image builds,
+      and verify propagation through the final binary.
+- [x] Replace history-cache bounds with a real completed-ledger interval set,
+      preserving holes, cache eviction independence, invalidation, persistence
+      failure, and online-delete semantics.
+- [x] Track the actual ordered publication frontier and match
+      `published_ledger` omission, string, and numeric rules.
+- [x] Wire only fields with authoritative runtime sources: ports, fetch-pack
+      size, server domain, admin node size, and admin build revision.
+- [x] Document `load`, `counters`, and `current_activities` as unsupported until
+      equivalent job/performance instrumentation exists.
+- [x] Add focused tests for fresh startup, pre-validation, progress,
+      publication lag, history holes, visibility conditions, and build version.
+- [x] Run formatting, affected tests and race tests, build variants, vet, strict
+      lint, Docker image verification, and final diff/oracle review.
+- [x] Stage intentional files only, commit, push, open the PR, and verify the
+      published head.
+
+## Review
+
+- Base: `origin/main` at `239f7c543a581d7dbc180c46c958f4cedca6538c`.
+- Oracle: clean rippled `3.2.0` at
+  `3c43f4614f87965298773279ff5b85d4c56c637b`.
+- Production binaries and images now carry an exact revision; local builds use
+  `git describe --tags --always --dirty`. Docker validation covered missing,
+  `dev`, and full-SHA build arguments plus a live admin `server_info` response.
+- Completed-ledger state is independent of the bounded history cache, preserves
+  holes, owns each sequence by canonical hash, and rejects stale or canceled
+  persistence across failures, online deletion, deep rollback, and sibling
+  forks. Evicted sequences remain advertised only when they can be reconstructed
+  from durable storage. Publication holds gaps of 100 ledgers or fewer and
+  advances only at the ordered validated-event boundary.
+- `server_info` and `server_state` now apply rippled-compatible omission,
+  visibility, and JSON-type rules for publication, ports, fetch-pack size,
+  server domain, node size, and git revision. Runtime fields without an
+  authoritative source are documented as unsupported.
+- Finalization reviews found and resolved publication-gap skipping,
+  unretrievable completed-ledger ranges, stale sibling transaction indexes,
+  preferred-ledger movement across the validated frontier, false secure-port
+  advertisement, stale build-output paths, and a numeric-selector regression
+  that returned the mutable open ledger instead of a snapshot. Independent
+  build, RPC/conformance, and ledger/concurrency reviews report no remaining
+  Blocking or Minor findings.
+- Passing gates: focused tests (including 20-run sibling-fork stress), full
+  ledger tests, ledger race tests, `just test-core`, `just vet`, strict
+  `golangci-lint`, `just build`, `just build-all`, `just build-nocgo`, shell and
+  workflow syntax checks, and `git diff --check`.
+- The repository-wide `just test` still exits non-zero in the existing
+  conformance backlog; affected packages and the complete core group pass.
+
+---

@@ -152,6 +152,23 @@ type ListedValidator struct {
 	Trusted   bool
 }
 
+// ServerInfoPortSnapshot is the immutable portion of a configured listener
+// surfaced by server_info and server_state.
+type ServerInfoPortSnapshot struct {
+	Port     int
+	Protocol string
+	Admin    bool
+}
+
+// ServerInfoConfigSnapshot holds startup configuration used by the server
+// status RPCs. The node builds it once before serving requests.
+type ServerInfoConfigSnapshot struct {
+	Ports        []ServerInfoPortSnapshot
+	ServerDomain string
+	NodeSize     string
+	GitHash      string
+}
+
 // ManifestLookup is the read-only facet of the validator-manifest cache
 // that the `manifest` RPC needs. Expressed as an interface (not a
 // concrete type) so internal/rpc/types doesn't import
@@ -186,6 +203,10 @@ type ServiceContainer struct {
 
 	// NodePublicKey is the base58-encoded node identity public key (e.g. "n9...")
 	NodePublicKey string
+
+	// ServerInfoConfig is the immutable startup configuration and build
+	// metadata surfaced by server_info and server_state.
+	ServerInfoConfig ServerInfoConfigSnapshot
 
 	// LastCloseInfo returns proposer count and convergence time (ms) from the last consensus round
 	LastCloseInfo func() (proposers int, convergeTimeMs int)
@@ -319,6 +340,10 @@ type ServiceContainer struct {
 	// object in human mode when |offset| >= 60s
 	// (NetworkOPs.cpp:2946-2949). Nil before consensus is wired.
 	CloseTimeOffset func() time.Duration
+
+	// FetchPackCacheSize returns the number of inbound fetch-pack nodes
+	// currently cached by the consensus router. Nil in standalone mode.
+	FetchPackCacheSize func() uint32
 
 	// LoadFactorFees returns the LoadFeeTrack local/net/cluster fees
 	// driving the admin-only human-mode load_factor_local/net/cluster
@@ -973,6 +998,8 @@ type LedgerServerInfo struct {
 	ValidatedLedgerHash      [32]byte
 	ValidatedLedgerCloseTime int64 // Ripple-epoch seconds; 0 when unknown.
 	CompleteLedgers          string
+	HavePublished            bool
+	PublishedLedgerSeq       uint32
 	NetworkID                uint32
 }
 

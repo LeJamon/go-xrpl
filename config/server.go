@@ -139,10 +139,12 @@ func (p *PortConfig) validateProtocols() error {
 
 	for _, protocol := range protocols {
 		switch protocol {
-		case "ws", "wss":
+		case "ws":
 			hasWebSocket = true
-		case "http", "https":
+		case "http":
 			hasNonWebSocket = true
+		case "https", "wss":
+			return fmt.Errorf("%s protocol is unsupported because RPC listeners do not terminate TLS", protocol)
 		case "peer":
 			peerCount++
 		case "grpc":

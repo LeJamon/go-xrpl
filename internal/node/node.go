@@ -9,6 +9,8 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"runtime/debug"
+	"sort"
 	"strings"
 	"syscall"
 	"time"
@@ -41,6 +43,7 @@ import (
 	"github.com/LeJamon/go-xrpl/storage/relationaldb"
 	"github.com/LeJamon/go-xrpl/storage/relationaldb/postgres"
 	sqlitedb "github.com/LeJamon/go-xrpl/storage/relationaldb/sqlite"
+	"github.com/LeJamon/go-xrpl/version"
 	googlegrpc "google.golang.org/grpc"
 )
 
@@ -53,6 +56,77 @@ func effectivePeerFetchDepth(fetchDepth uint32, onlineDelete int) uint32 {
 		return uint32(onlineDelete)
 	}
 	return fetchDepth
+}
+
+func serverInfoConfigSnapshot(cfg *config.Config) types.ServerInfoConfigSnapshot {
+	if cfg == nil {
+		return types.ServerInfoConfigSnapshot{}
+	}
+
+	nodeSize := cfg.NodeSize
+	if nodeSize == "" {
+		nodeSize = "medium"
+	}
+
+	names := append([]string(nil), cfg.Server.Ports...)
+	if len(names) == 0 {
+		names = make([]string, 0, len(cfg.Ports))
+		for name := range cfg.Ports {
+			names = append(names, name)
+		}
+		sort.Strings(names)
+	}
+
+	ports := make([]types.ServerInfoPortSnapshot, 0, len(names))
+	for _, name := range names {
+		port, ok := cfg.Ports[name]
+		if !ok {
+			continue
+		}
+		admin := port.AdminUser != "" || port.AdminPassword != ""
+		if adminNets, err := port.ParseAdminNets(); err != nil || len(adminNets) != 0 {
+			admin = true
+		}
+		ports = append(ports, types.ServerInfoPortSnapshot{
+			Port:     port.Port,
+			Protocol: port.Protocol,
+			Admin:    admin,
+		})
+	}
+
+	return types.ServerInfoConfigSnapshot{
+		Ports:        ports,
+		ServerDomain: cfg.ServerDomain,
+		NodeSize:     nodeSize,
+		GitHash:      goBuildRevision(),
+	}
+}
+
+func goBuildRevision() string {
+	info, ok := debug.ReadBuildInfo()
+	return resolveBuildRevision(info, ok, version.Version)
+}
+
+func resolveBuildRevision(info *debug.BuildInfo, haveBuildInfo bool, fallback string) string {
+	if haveBuildInfo && info != nil {
+		for _, setting := range info.Settings {
+			if setting.Key == "vcs.revision" {
+				return setting.Value
+			}
+		}
+	}
+	if isFullGitHash(fallback) {
+		return fallback
+	}
+	return ""
+}
+
+func isFullGitHash(value string) bool {
+	if len(value) != 40 {
+		return false
+	}
+	_, err := hex.DecodeString(value)
+	return err == nil
 }
 
 // Run assembles and starts every node subsystem from the parsed config, then
@@ -191,6 +265,7 @@ func Run(appConfig *config.Config, configPath string, standalone bool, rootLogge
 	// Wire up RPC services
 	ledgerAdapter := rpc.NewLedgerServiceAdapter(ledgerService)
 	services := types.NewServiceContainer(ledgerAdapter)
+	services.ServerInfoConfig = serverInfoConfigSnapshot(appConfig)
 
 	// Gate the beta RPC API (api_version 3) on the operator's beta_rpc_api
 	// knob, mirroring rippled Config::BETA_RPC_API.
@@ -621,6 +696,7 @@ func Run(appConfig *config.Config, configPath string, standalone bool, rootLogge
 			services.FetchInfo = router.FetchInfo
 			services.FetchInfoClear = router.ClearFetchInfo
 			services.RequestLedger = router.RequestLedger
+			services.FetchPackCacheSize = router.FetchPackCacheSize
 		}
 
 		// Expose the validator-manifest cache to the `manifest` RPC.

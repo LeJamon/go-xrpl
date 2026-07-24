@@ -258,6 +258,26 @@ func (s *Service) resolveLedgerForQuery(ctx context.Context, ledgerIndex string)
 		}
 		return l, l.IsValidated(), nil
 	}
+	if sequence, ok := selection.Sequence(); ok {
+		s.mu.RLock()
+		if s.ledgerHistory[sequence] == nil &&
+			s.openLedger != nil &&
+			s.openLedger.Sequence() == sequence {
+			snapshot, snapshotErr := s.openLedger.Snapshot()
+			s.mu.RUnlock()
+			if snapshotErr != nil {
+				return nil, false, snapshotErr
+			}
+			return snapshot, snapshot.IsValidated(), nil
+		}
+		s.mu.RUnlock()
+
+		l, err := s.getLedgerBySequence(ctx, sequence)
+		if err != nil {
+			return nil, false, serviceLedgerSelectorError(selection, err)
+		}
+		return l, l.IsValidated(), nil
+	}
 
 	s.mu.RLock()
 	defer s.mu.RUnlock()
