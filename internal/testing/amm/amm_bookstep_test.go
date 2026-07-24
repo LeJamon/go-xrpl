@@ -2986,6 +2986,49 @@ func TestAMMBookStep_RequireAuth(t *testing.T) {
 	jtx.RequireIOUBalance(t, env.TestEnv, env.Bob, env.GW, "USD", 0)
 }
 
+func TestAMMBookStep_RequireAuthRejectsUnauthorizedSyntheticOffer(t *testing.T) {
+	env := amm.NewAMMTestEnv(t)
+	env.TestEnv.FundAmount(env.GW, uint64(jtx.XRP(400000)))
+	env.TestEnv.FundAmount(env.Alice, uint64(jtx.XRP(400000)))
+	env.TestEnv.FundAmount(env.Bob, uint64(jtx.XRP(400000)))
+	env.Close()
+
+	env.TestEnv.EnableRequireAuth(env.GW)
+	env.Close()
+
+	env.TestEnv.AuthorizeTrustLine(env.GW, env.Alice, "USD")
+	env.Trust(env.Alice, env.GW, "USD", 2000)
+	env.TestEnv.AuthorizeTrustLine(env.GW, env.Bob, "USD")
+	env.Trust(env.Bob, env.GW, "USD", 100)
+	env.PayIOU(env.GW, env.Alice, "USD", 1000)
+	env.PayIOU(env.GW, env.Bob, "USD", 50)
+	env.Close()
+
+	createTx := amm.AMMCreate(env.Alice,
+		amm.IOUAmount(env.GW, "USD", 1000),
+		amm.XRPAmount(1050)).Build()
+	jtx.RequireTxSuccess(t, env.Submit(createTx))
+	env.Close()
+
+	ammAcc := amm.AMMAccount(t, env,
+		tx.Asset{Currency: "USD", Issuer: env.GW.Address},
+		amm.XRP())
+
+	offerTx := offerbuild.OfferCreate(env.Bob,
+		amm.XRPAmount(50),
+		amm.IOUAmount(env.GW, "USD", 50)).Build()
+	jtx.RequireTxSuccess(t, env.Submit(offerTx))
+	env.Close()
+
+	env.ExpectAMMBalances(t, ammAcc,
+		uint64(jtx.XRP(1050)), env.GW, "USD", 1000)
+	jtx.RequireIOUBalance(t, env.TestEnv, env.Bob, env.GW, "USD", 50)
+	offerbuild.RequireOfferCount(t, env.TestEnv, env.Bob, 1)
+	offerbuild.RequireIsOffer(t, env.TestEnv, env.Bob,
+		amm.XRPAmount(50),
+		amm.IOUAmount(env.GW, "USD", 50))
+}
+
 // TestAMMBookStep_Offers tests offer scenarios with AMM.
 // This is an umbrella test in rippled that calls:
 // testRmFundedOffer, testEnforceNoRipple, testFillModes, testOfferCrossWithXRP,
