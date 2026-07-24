@@ -342,7 +342,7 @@ func (s *BookStep) forEachOffer(
 			switch {
 			case s.book.In.IsMPT:
 				authorized = mptutil.RequireAuthAt(authView, s.book.In.MPTID, offerOwner, true, s.parentCloseTime) == ter.TesSUCCESS
-			case !isAMM && !s.book.In.IsXRP():
+			case !s.book.In.IsXRP():
 				authorized = s.isOfferOwnerAuthorized(
 					authView, offerOwner, s.book.In.Issuer, s.book.In.Currency,
 				)
