@@ -11,6 +11,24 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func awaitPublishedLedger(t *testing.T, published <-chan uint32) uint32 {
+	t.Helper()
+	select {
+	case seq := <-published:
+		return seq
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for published ledger")
+		return 0
+	}
+}
+
+func publishSequence(event *LedgerAcceptedEvent) uint32 {
+	if event == nil || event.Ledger == nil {
+		return 0
+	}
+	return event.Ledger.Sequence()
+}
+
 func TestPublishedFrontier_AdvancesBeforeCallback(t *testing.T) {
 	svc, err := New(DefaultConfig())
 	require.NoError(t, err)
@@ -116,7 +134,7 @@ func TestPublishedFrontier_LosslessBeyondFormerQueueCapacity(t *testing.T) {
 		}
 	})
 
-	first := makeStubLedger(t, 100, [32]byte{0x01}, [32]byte{})
+	first := makeStubLedger(t, 100, [32]byte{0x00, 0x64}, [32]byte{})
 	svc.dispatchLedgerEvent(&LedgerAcceptedEvent{Ledger: first})
 	select {
 	case <-firstStarted:
@@ -141,4 +159,88 @@ func TestPublishedFrontier_LosslessBeyondFormerQueueCapacity(t *testing.T) {
 	}
 	assert.Equal(t, uint32(eventCount), calls.Load())
 	assert.Equal(t, uint32(100+eventCount-1), svc.GetServerInfo().PublishedLedgerSeq)
+}
+
+func TestPublishedFrontier_HoldsGapUntilBelowTipLedgerArrives(t *testing.T) {
+	svc, err := New(DefaultConfig())
+	require.NoError(t, err)
+	require.NoError(t, svc.Start())
+	t.Cleanup(svc.Stop)
+
+	const frontier = uint32(50)
+	first := makeStubLedger(t, frontier, [32]byte{0x50}, [32]byte{0x49})
+	missing := makeStubLedger(t, frontier+1, [32]byte{0x51}, first.Hash())
+	tip := makeStubLedger(t, frontier+2, [32]byte{0x52}, missing.Hash())
+
+	published := make(chan uint32, 3)
+	svc.SetEventCallback(func(event *LedgerAcceptedEvent) {
+		published <- publishSequence(event)
+	})
+	svc.dispatchLedgerEvent(&LedgerAcceptedEvent{Ledger: first})
+	require.Equal(t, frontier, awaitPublishedLedger(t, published))
+
+	svc.mu.Lock()
+	svc.putHistoryLocked(first)
+	svc.putHistoryLocked(missing)
+	svc.putHistoryLocked(tip)
+	svc.validatedLedger = first
+	svc.localTxs = nil
+	svc.mu.Unlock()
+
+	svc.SetValidatedLedger(tip.Sequence(), tip.Hash())
+	select {
+	case seq := <-published:
+		t.Fatalf("published ledger %d across a missing sequence", seq)
+	case <-time.After(25 * time.Millisecond):
+	}
+	assert.Equal(t, frontier, svc.GetServerInfo().PublishedLedgerSeq)
+
+	svc.SetValidatedLedger(missing.Sequence(), missing.Hash())
+	assert.Equal(t, frontier+1, awaitPublishedLedger(t, published))
+	assert.Equal(t, frontier+2, awaitPublishedLedger(t, published))
+	assert.Equal(t, frontier+2, svc.GetServerInfo().PublishedLedgerSeq)
+}
+
+func TestPublishedFrontier_JumpsWhenGapExceedsLimit(t *testing.T) {
+	svc, err := New(DefaultConfig())
+	require.NoError(t, err)
+	require.NoError(t, svc.Start())
+	t.Cleanup(svc.Stop)
+
+	published := make(chan uint32, 3)
+	svc.SetEventCallback(func(event *LedgerAcceptedEvent) {
+		published <- publishSequence(event)
+	})
+
+	first := makeStubLedger(t, 10, [32]byte{0x10}, [32]byte{0x09})
+	held := makeStubLedger(t, 12, [32]byte{0x12}, [32]byte{0x11})
+	tip := makeStubLedger(t, 111, [32]byte{0x6f}, [32]byte{0x6e})
+	svc.dispatchLedgerEvent(&LedgerAcceptedEvent{Ledger: first})
+	require.Equal(t, uint32(10), awaitPublishedLedger(t, published))
+
+	svc.dispatchLedgerEvent(&LedgerAcceptedEvent{Ledger: held})
+	svc.dispatchLedgerEvent(&LedgerAcceptedEvent{Ledger: tip})
+	assert.Equal(t, uint32(111), awaitPublishedLedger(t, published))
+	assert.Equal(t, uint32(111), svc.GetServerInfo().PublishedLedgerSeq)
+
+	svc.ledgerEventMu.Lock()
+	assert.Empty(t, svc.ledgerEventCandidates)
+	svc.ledgerEventMu.Unlock()
+}
+
+func TestPublishedFrontier_FirstPublicationStartsAtValidatedTip(t *testing.T) {
+	svc, err := New(DefaultConfig())
+	require.NoError(t, err)
+	require.NoError(t, svc.Start())
+	t.Cleanup(svc.Stop)
+
+	published := make(chan uint32, 1)
+	svc.SetEventCallback(func(event *LedgerAcceptedEvent) {
+		published <- publishSequence(event)
+	})
+
+	tip := makeStubLedger(t, 75, [32]byte{0x75}, [32]byte{0x74})
+	svc.dispatchLedgerEvent(&LedgerAcceptedEvent{Ledger: tip})
+	assert.Equal(t, tip.Sequence(), awaitPublishedLedger(t, published))
+	assert.Equal(t, tip.Sequence(), svc.GetServerInfo().PublishedLedgerSeq)
 }

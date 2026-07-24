@@ -409,6 +409,13 @@ func (s *Service) SwitchToPreferredLedger(parent *ledger.Ledger) error {
 	}
 
 	parentHash := parent.Hash()
+	if s.validatedLedger != nil {
+		validatedSeq := s.validatedLedger.Sequence()
+		if parent.Sequence() < validatedSeq ||
+			(parent.Sequence() == validatedSeq && parentHash != s.validatedLedger.Hash()) {
+			return ErrPreferredChainSwitch
+		}
+	}
 	if parent.Sequence() == s.closedLedger.Sequence() && parentHash == s.closedLedger.Hash() {
 		return nil
 	}
@@ -662,6 +669,32 @@ func (s *Service) SetValidatedLedger(seq uint32, expectedHash [32]byte) {
 	s.SetValidatedLedgerAt(seq, expectedHash, time.Time{})
 }
 
+func (s *Service) validatedLedgerEventLocked(l *ledger.Ledger) *LedgerAcceptedEvent {
+	event := s.drainPendingValidationLocked(l.Hash())
+	if event == nil {
+		return &LedgerAcceptedEvent{
+			LedgerInfo: &LedgerInfo{
+				Sequence:   l.Sequence(),
+				Hash:       l.Hash(),
+				ParentHash: l.ParentHash(),
+				CloseTime:  l.CloseTime(),
+				TotalDrops: l.TotalDrops(),
+				Validated:  true,
+				Closed:     l.IsClosed(),
+			},
+			Ledger: l,
+		}
+	}
+	if event.LedgerInfo != nil {
+		event.LedgerInfo.Validated = true
+	}
+	event.Ledger = l
+	for i := range event.TransactionResults {
+		event.TransactionResults[i].Validated = true
+	}
+	return event
+}
+
 // SetValidatedLedgerAt marks a ledger validated using the trusted-validation
 // signing-time median. A zero signing time falls back to the ledger close time.
 func (s *Service) SetValidatedLedgerAt(seq uint32, expectedHash [32]byte, signTime time.Time) {
@@ -706,6 +739,7 @@ func (s *Service) SetValidatedLedgerAt(seq uint32, expectedHash [32]byte, signTi
 	// pointer — same rule as drainPendingLedgerValidationLocked.
 	if s.validatedLedger != nil && seq <= s.validatedLedger.Sequence() {
 		s.enqueueValidatedHistoryPersist(l)
+		s.dispatchLedgerEvent(s.validatedLedgerEventLocked(l))
 		s.mu.Unlock()
 		return
 	}
@@ -719,30 +753,9 @@ func (s *Service) SetValidatedLedgerAt(seq uint32, expectedHash [32]byte, signTi
 	// Sweep the held local pool against the just-validated ledger (not every
 	// close — consensus may abandon a closed ledger).
 	pool := s.localTxs
-	event := s.drainPendingValidationLocked(expectedHash)
+	event := s.validatedLedgerEventLocked(l)
 	s.enqueuePersist(l)
 	notification := s.validatedLedgerNotificationLocked(previousValidatedSeq)
-	if event == nil {
-		event = &LedgerAcceptedEvent{
-			LedgerInfo: &LedgerInfo{
-				Sequence:   l.Sequence(),
-				Hash:       l.Hash(),
-				ParentHash: l.ParentHash(),
-				CloseTime:  l.CloseTime(),
-				TotalDrops: l.TotalDrops(),
-				Validated:  true,
-				Closed:     l.IsClosed(),
-			},
-			Ledger: l,
-		}
-	} else {
-		if event.LedgerInfo != nil {
-			event.LedgerInfo.Validated = true
-		}
-		for i := range event.TransactionResults {
-			event.TransactionResults[i].Validated = true
-		}
-	}
 	s.dispatchLedgerEvent(event)
 	s.mu.Unlock()
 

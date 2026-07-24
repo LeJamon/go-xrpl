@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"sync"
@@ -9,6 +10,10 @@ import (
 	"testing"
 	"time"
 
+	"github.com/LeJamon/go-xrpl/codec/addresscodec"
+	"github.com/LeJamon/go-xrpl/codec/binarycodec"
+	"github.com/LeJamon/go-xrpl/drops"
+	"github.com/LeJamon/go-xrpl/internal/ledger"
 	"github.com/LeJamon/go-xrpl/shamap"
 	"github.com/LeJamon/go-xrpl/storage/kvstore/memorydb"
 	"github.com/LeJamon/go-xrpl/storage/nodestore"
@@ -45,6 +50,50 @@ func (d *controlledSyncDatabase) Sync(ctx context.Context) error {
 		return errors.New("injected sync failure")
 	}
 	return d.Database.Sync(ctx)
+}
+
+func makeStubLedgerWithTransaction(
+	t *testing.T,
+	seq uint32,
+	hash, parentHash [32]byte,
+	account string,
+	accountSequence uint32,
+) (*ledger.Ledger, [32]byte) {
+	t.Helper()
+
+	txHex, err := binarycodec.Encode(map[string]any{
+		"TransactionType": "AccountSet",
+		"Account":         account,
+		"Fee":             "10",
+		"Sequence":        accountSequence,
+	})
+	require.NoError(t, err)
+	txBytes, err := hex.DecodeString(txHex)
+	require.NoError(t, err)
+	txBlob, txID := makeTxMetaBlobForTest(t, txBytes, 0)
+
+	txMap := shamap.New(shamap.TypeTransaction)
+	require.NoError(t, txMap.PutWithNodeType(txID, txBlob, shamap.NodeTypeTransactionWithMeta))
+	txRoot, err := txMap.Hash()
+	require.NoError(t, err)
+
+	hdr := makeStubLedger(t, seq, hash, parentHash).Header()
+	hdr.TxHash = txRoot
+	l, err := ledger.NewFromHeader(hdr, shamap.New(shamap.TypeState), txMap, drops.Fees{})
+	require.NoError(t, err)
+	return l, txID
+}
+
+func accountIDFromAddress(t *testing.T, address string) relationaldb.AccountID {
+	t.Helper()
+
+	_, raw, err := addresscodec.DecodeClassicAddressToAccountID(address)
+	require.NoError(t, err)
+	require.Len(t, raw, len(relationaldb.AccountID{}))
+
+	var accountID relationaldb.AccountID
+	copy(accountID[:], raw)
+	return accountID
 }
 
 func TestCompleteLedgers_FreshNetworkStartupIsEmpty(t *testing.T) {
@@ -248,6 +297,77 @@ func TestCompleteLedgers_SameSequenceSwitchKeepsPreferredPersistence(t *testing.
 	require.NotNil(t, pair)
 	assert.Equal(t, preferredHash, [32]byte(pair.LedgerHash))
 	assert.Equal(t, fmt.Sprint(seq), svc.completeLedgersString())
+}
+
+func TestCompleteLedgers_SameSequenceReplacementRebuildsTransactionIndexes(t *testing.T) {
+	ctx := context.Background()
+	repositories, err := sqlitedb.NewRepositoryManager(t.TempDir())
+	require.NoError(t, err)
+	require.NoError(t, repositories.Open(ctx))
+	t.Cleanup(func() { require.NoError(t, repositories.Close(ctx)) })
+
+	cfg := DefaultConfig()
+	cfg.RelationalDB = repositories
+	svc, err := New(cfg)
+	require.NoError(t, err)
+
+	const (
+		seq                uint32 = 27
+		abandonedAccount          = "r9cZA1mLK5R5Am25ArfXFmqgNwjZgnfk59"
+		replacementAccount        = "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh"
+	)
+	parentHash := [32]byte{0x26}
+	abandoned, abandonedTx := makeStubLedgerWithTransaction(
+		t, seq, [32]byte{0xA1}, parentHash, abandonedAccount, 1,
+	)
+	replacement, replacementTx := makeStubLedgerWithTransaction(
+		t, seq, [32]byte{0xB1}, parentHash, replacementAccount, 2,
+	)
+
+	queryAccount := func(address string) []relationaldb.TransactionInfo {
+		t.Helper()
+		txs, err := repositories.AccountTransaction().GetOldestAccountTxs(ctx, relationaldb.AccountTxOptions{
+			Account:   accountIDFromAddress(t, address),
+			MinLedger: relationaldb.LedgerIndex(seq),
+			MaxLedger: relationaldb.LedgerIndex(seq),
+			Unlimited: true,
+		})
+		require.NoError(t, err)
+		return txs
+	}
+
+	require.NoError(t, svc.persistValidatedLedger(ctx, abandoned, false))
+	abandonedInfo, _, err := repositories.Transaction().GetTransaction(
+		ctx, relationaldb.Hash(abandonedTx), nil,
+	)
+	require.NoError(t, err)
+	require.NotNil(t, abandonedInfo)
+	require.Len(t, queryAccount(abandonedAccount), 1)
+
+	require.NoError(t, svc.persistValidatedLedger(ctx, replacement, false))
+
+	ledgerInfo, err := repositories.Ledger().GetLedgerInfoBySeq(ctx, relationaldb.LedgerIndex(seq))
+	require.NoError(t, err)
+	require.NotNil(t, ledgerInfo)
+	assert.Equal(t, replacement.Hash(), [32]byte(ledgerInfo.Hash))
+
+	abandonedInfo, _, err = repositories.Transaction().GetTransaction(
+		ctx, relationaldb.Hash(abandonedTx), nil,
+	)
+	require.NoError(t, err)
+	assert.Nil(t, abandonedInfo)
+
+	replacementInfo, _, err := repositories.Transaction().GetTransaction(
+		ctx, relationaldb.Hash(replacementTx), nil,
+	)
+	require.NoError(t, err)
+	require.NotNil(t, replacementInfo)
+	assert.Equal(t, relationaldb.LedgerIndex(seq), replacementInfo.LedgerSeq)
+
+	assert.Empty(t, queryAccount(abandonedAccount))
+	replacementAccountTxs := queryAccount(replacementAccount)
+	require.Len(t, replacementAccountTxs, 1)
+	assert.Equal(t, relationaldb.Hash(replacementTx), replacementAccountTxs[0].Hash)
 }
 
 func TestCompleteLedgers_InvalidationRepairsInFlightValidatedTip(t *testing.T) {

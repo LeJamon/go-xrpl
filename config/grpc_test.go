@@ -64,6 +64,16 @@ func TestValidateProtocols_GRPC(t *testing.T) {
 	})
 }
 
+func TestValidateProtocols_RejectsUnsupportedTLS(t *testing.T) {
+	for _, protocol := range []string{"https", "wss"} {
+		t.Run(protocol, func(t *testing.T) {
+			p := &PortConfig{Port: 5005, IP: "127.0.0.1", Protocol: protocol}
+			require.EqualError(t, p.Validate(),
+				protocol+" protocol is unsupported because RPC listeners do not terminate TLS")
+		})
+	}
+}
+
 // TestGRPCPort_SecureGatewayExpandsWildcard confirms the rippled-faithful
 // expansion of 0.0.0.0 into the IPv4+IPv6 wildcard nets. The grpc server
 // wiring (internal/cli) rejects this unspecified entry at startup,

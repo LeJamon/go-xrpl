@@ -26,7 +26,7 @@ just build
 
 ```bash
 # Start the node
-./tmp/main
+../tmp/main
 
 # Or with hot reload during development
 cd cmd/xrpld && air

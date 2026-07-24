@@ -43,7 +43,7 @@ other subsystem work unchanged. Useful for contributors without a CGO toolchain.
 ```bash
 just run                   # go run ./cmd/xrpld
 # or run the built binary
-./tmp/main
+../tmp/main
 # or hot-reload during development (needs `air`)
 just dev
 ```
@@ -97,9 +97,10 @@ rather than reporting placeholder data.
 
 The HTTP and WebSocket listeners do not terminate TLS. For public RPC, run a TLS
 reverse proxy on the same host and bind the guest RPC ports to loopback rather
-than a public interface. Set `secure_gateway` on each proxied guest port to the
-proxy's exact source IP; for a same-host proxy this is normally `127.0.0.1` or
-`::1`:
+than a public interface. The configuration rejects `https` and `wss` protocols
+until native TLS termination is available. Set `secure_gateway` on each proxied
+guest port to the proxy's exact source IP; for a same-host proxy this is normally
+`127.0.0.1` or `::1`:
 
 ```toml
 [port_rpc_public]

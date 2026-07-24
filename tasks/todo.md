@@ -1846,14 +1846,19 @@ conditions and JSON types.
 - Completed-ledger state is independent of the bounded history cache, preserves
   holes, owns each sequence by canonical hash, and rejects stale or canceled
   persistence across failures, online deletion, deep rollback, and sibling
-  forks. Publication state advances only at the ordered validated-event
-  boundary.
+  forks. Evicted sequences remain advertised only when they can be reconstructed
+  from durable storage. Publication holds gaps of 100 ledgers or fewer and
+  advances only at the ordered validated-event boundary.
 - `server_info` and `server_state` now apply rippled-compatible omission,
   visibility, and JSON-type rules for publication, ports, fetch-pack size,
   server domain, node size, and git revision. Runtime fields without an
   authoritative source are documented as unsupported.
-- Independent build, RPC/conformance, and ledger/concurrency reviews report no
-  remaining Blocking or Minor findings.
+- Finalization reviews found and resolved publication-gap skipping,
+  unretrievable completed-ledger ranges, stale sibling transaction indexes,
+  preferred-ledger movement across the validated frontier, false secure-port
+  advertisement, and stale build-output paths. Independent build,
+  RPC/conformance, and ledger/concurrency reviews report no remaining Blocking
+  or Minor findings.
 - Passing gates: focused tests (including 20-run sibling-fork stress), full
   ledger tests, ledger race tests, `just test-core`, `just vet`, strict
   `golangci-lint`, `just build`, `just build-all`, `just build-nocgo`, shell and

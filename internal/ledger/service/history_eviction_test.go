@@ -154,8 +154,8 @@ func TestAcceptLedgerLoop_BoundsHistory(t *testing.T) {
 		t.Errorf("ledgerHistory unbounded under AcceptLedger loop: got %d, want <= %d", size, historyWindow+1)
 	}
 	last := svc.GetClosedLedgerIndex()
-	if got, want := svc.GetServerInfo().CompleteLedgers, formatRange(3, last); got != want {
-		t.Errorf("complete_ledgers changed with history eviction: got %q, want %q", got, want)
+	if got, want := svc.GetServerInfo().CompleteLedgers, formatRange(last-historyWindow+1, last); got != want {
+		t.Errorf("complete_ledgers includes evicted in-memory history: got %q, want %q", got, want)
 	}
 }
 

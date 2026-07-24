@@ -283,14 +283,18 @@ type Service struct {
 	sweepDone            chan struct{}
 	sweepInterval        time.Duration
 
-	// ledgerEventMu guards the lossless FIFO publication queue. The single
-	// dispatcher runs eventCallback serially and is started by Start.
-	ledgerEventMu       sync.Mutex
-	ledgerEventQueue    []*LedgerAcceptedEvent
-	ledgerEventWake     chan struct{}
-	ledgerEventStarted  bool
-	ledgerEventStopping bool
-	ledgerEventWG       sync.WaitGroup
+	// ledgerEventMu guards the publication candidates and lossless FIFO queue.
+	// The single dispatcher runs eventCallback serially and is started by Start.
+	ledgerEventMu           sync.Mutex
+	ledgerEventQueue        []*LedgerAcceptedEvent
+	ledgerEventCandidates   map[uint32]*LedgerAcceptedEvent
+	ledgerEventFrontierSeq  uint32
+	ledgerEventFrontierHash [32]byte
+	ledgerEventHaveFrontier bool
+	ledgerEventWake         chan struct{}
+	ledgerEventStarted      bool
+	ledgerEventStopping     bool
+	ledgerEventWG           sync.WaitGroup
 
 	// configCacheMu guards the memoised open-ledger ApplyConfig below. The config
 	// is a pure function of closedLedger, rebuilt only when it advances, keeping
@@ -353,6 +357,7 @@ func New(cfg Config) (*Service, error) {
 		feeTrack:                 feetrack.New(),
 		validatedAgeNow:          time.Now,
 		persistWake:              make(chan struct{}, 1),
+		ledgerEventCandidates:    make(map[uint32]*LedgerAcceptedEvent),
 		sweepInterval:            nodeStoreSweepIntervalForSize(cfg.NodeSize),
 	}
 	return s, nil
@@ -530,6 +535,11 @@ func (s *Service) Start() error {
 		s.validatedSignTime = latest.CloseTime()
 		s.publishedLedgerSeq = latest.Sequence()
 		s.havePublished = true
+		s.ledgerEventMu.Lock()
+		s.ledgerEventFrontierSeq = latest.Sequence()
+		s.ledgerEventFrontierHash = latest.Hash()
+		s.ledgerEventHaveFrontier = true
+		s.ledgerEventMu.Unlock()
 		s.completeMu.Lock()
 		s.completedLedgers.Add(latest.Sequence())
 		s.completeLedgerHashes[latest.Sequence()] = latest.Hash()
@@ -1037,18 +1047,78 @@ func (s *Service) XRPFeesEnabled() bool {
 }
 
 // GetLedgerBySequence returns a ledger by sequence, falling back to the open
-// ledger when its sequence matches.
+// ledger or durable validated history.
 func (s *Service) GetLedgerBySequence(seq uint32) (*ledger.Ledger, error) {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
+	return s.getLedgerBySequence(context.Background(), seq)
+}
 
-	if l, ok := s.ledgerHistory[seq]; ok {
-		return l, nil
-	}
+func (s *Service) getLedgerBySequence(ctx context.Context, seq uint32) (*ledger.Ledger, error) {
+	s.mu.RLock()
+	history := s.ledgerHistory[seq]
+	var open *ledger.Ledger
 	if s.openLedger != nil && s.openLedger.Sequence() == seq {
-		return s.openLedger, nil
+		open = s.openLedger
 	}
-	return nil, ErrLedgerNotFound
+	s.mu.RUnlock()
+
+	s.completeMu.RLock()
+	hash, complete := s.completeLedgerHashes[seq]
+	complete = complete && s.completedLedgers != nil && s.completedLedgers.Contains(seq)
+	s.completeMu.RUnlock()
+	if history != nil && (!complete || history.Hash() == hash) {
+		return history, nil
+	}
+	if open != nil && (!complete || open.Hash() == hash) {
+		return open, nil
+	}
+	if !complete || s.nodeStore == nil || s.shamapFamily == nil {
+		return nil, ErrLedgerNotFound
+	}
+
+	s.mu.RLock()
+	cached := s.persistedLedgers[hash]
+	s.mu.RUnlock()
+	if cached != nil && cached.Sequence() == seq {
+		if cached.IsValidated() {
+			return cached, nil
+		}
+		validated, err := cached.Snapshot()
+		if err != nil {
+			return nil, err
+		}
+		if err := validated.SetValidated(); err != nil {
+			return nil, err
+		}
+		return validated, nil
+	}
+
+	loaded, err := s.loadStoredLedgerByHash(ctx, hash)
+	if err != nil {
+		if errors.Is(err, errStoredLedgerUnavailable) {
+			return nil, fmt.Errorf("%w: load ledger %d from nodestore: %v", ErrLedgerNotFound, seq, err)
+		}
+		return nil, fmt.Errorf("load ledger %d from nodestore: %w", seq, err)
+	}
+	if loaded == nil || loaded.Sequence() != seq {
+		return nil, ErrLedgerNotFound
+	}
+	if err := loaded.SetValidated(); err != nil {
+		return nil, err
+	}
+
+	s.completeMu.RLock()
+	stillComplete := s.completedLedgers != nil &&
+		s.completedLedgers.Contains(seq) &&
+		s.completeLedgerHashes[seq] == hash
+	s.completeMu.RUnlock()
+	if !stillComplete {
+		return nil, ErrLedgerNotFound
+	}
+
+	s.mu.Lock()
+	s.cachePersistedLedgerLocked(loaded)
+	s.mu.Unlock()
+	return loaded, nil
 }
 
 // AdoptedLedgerBySequence returns a closed ledger from adopted history only,

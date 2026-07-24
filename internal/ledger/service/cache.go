@@ -178,6 +178,21 @@ func (s *Service) completeLedgersString() string {
 	return s.completedLedgers.String()
 }
 
+func (s *Service) completeLedgerEvictionStatus(seq uint32) (tracked, durable bool) {
+	s.completeMu.RLock()
+	defer s.completeMu.RUnlock()
+	_, hasHash := s.completeLedgerHashes[seq]
+	_, pending := s.completeLedgerTokens[seq]
+	complete := s.completedLedgers != nil && s.completedLedgers.Contains(seq)
+	tracked = complete || hasHash || pending
+	durable = s.nodeStore != nil &&
+		s.shamapFamily != nil &&
+		complete &&
+		hasHash &&
+		!pending
+	return tracked, durable
+}
+
 // evictOldHistoryLocked drops ledgerHistory + tx-index entries older than the
 // historyWindow. Caller must hold s.mu.
 func (s *Service) evictOldHistoryLocked(latestValidatedSeq uint32) {
@@ -188,6 +203,9 @@ func (s *Service) evictOldHistoryLocked(latestValidatedSeq uint32) {
 	for seq, l := range s.ledgerHistory {
 		if seq > cutoff {
 			continue
+		}
+		if tracked, durable := s.completeLedgerEvictionStatus(seq); tracked && !durable {
+			s.invalidateCompleteLedger(seq)
 		}
 		_ = l.ForEachTransaction(func(txHash [32]byte, _ []byte) bool {
 			delete(s.txIndex, txHash)

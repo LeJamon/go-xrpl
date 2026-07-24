@@ -17,6 +17,8 @@ import (
 
 const invalidTransactionIndex = ^uint32(0)
 
+const maxLedgerPublicationGap uint32 = 100
+
 // LedgerAcceptedEvent contains information about an accepted ledger and its transactions
 type LedgerAcceptedEvent struct {
 	LedgerInfo         *LedgerInfo
@@ -82,25 +84,82 @@ func (s *Service) dispatchLedgerEvent(event *LedgerAcceptedEvent) {
 		return
 	}
 	s.ledgerEventMu.Lock()
+	if s.ledgerEventStarted && s.ledgerEventStopping {
+		s.ledgerEventMu.Unlock()
+		return
+	}
+	ready := s.ledgerEventsReadyToQueueLocked(event)
+	if len(ready) == 0 {
+		s.ledgerEventMu.Unlock()
+		return
+	}
 	if !s.ledgerEventStarted {
 		s.ledgerEventMu.Unlock()
 		// Dispatcher not started (paths that emit without Start). Deliver on a
 		// fresh goroutine to preserve the "callback fires, never under s.mu"
 		// contract; ordering isn't guaranteed here, but Start-anchored callers
 		// (production and the event tests) always take the channel path.
-		go s.deliverLedgerEvent(event)
+		go func() {
+			for _, queued := range ready {
+				s.deliverLedgerEvent(queued)
+			}
+		}()
 		return
 	}
-	if s.ledgerEventStopping {
-		s.ledgerEventMu.Unlock()
-		return
-	}
-	s.ledgerEventQueue = append(s.ledgerEventQueue, event)
+	s.ledgerEventQueue = append(s.ledgerEventQueue, ready...)
 	select {
 	case s.ledgerEventWake <- struct{}{}:
 	default:
 	}
 	s.ledgerEventMu.Unlock()
+}
+
+func (s *Service) ledgerEventsReadyToQueueLocked(event *LedgerAcceptedEvent) []*LedgerAcceptedEvent {
+	if event.Ledger == nil || !event.Ledger.IsValidated() {
+		return []*LedgerAcceptedEvent{event}
+	}
+
+	seq := event.Ledger.Sequence()
+	hash := event.Ledger.Hash()
+	if !s.ledgerEventHaveFrontier {
+		s.ledgerEventHaveFrontier = true
+		s.ledgerEventFrontierSeq = seq
+		s.ledgerEventFrontierHash = hash
+		s.pruneLedgerEventCandidatesLocked(seq)
+		return []*LedgerAcceptedEvent{event}
+	}
+	if seq <= s.ledgerEventFrontierSeq {
+		return nil
+	}
+	if seq-s.ledgerEventFrontierSeq > maxLedgerPublicationGap {
+		s.ledgerEventFrontierSeq = seq
+		s.ledgerEventFrontierHash = hash
+		s.pruneLedgerEventCandidatesLocked(seq)
+		return []*LedgerAcceptedEvent{event}
+	}
+
+	s.ledgerEventCandidates[seq] = event
+	ready := make([]*LedgerAcceptedEvent, 0, len(s.ledgerEventCandidates))
+	for s.ledgerEventFrontierSeq != ^uint32(0) {
+		nextSeq := s.ledgerEventFrontierSeq + 1
+		next, ok := s.ledgerEventCandidates[nextSeq]
+		if !ok || next.Ledger.ParentHash() != s.ledgerEventFrontierHash {
+			break
+		}
+		delete(s.ledgerEventCandidates, nextSeq)
+		ready = append(ready, next)
+		s.ledgerEventFrontierSeq = nextSeq
+		s.ledgerEventFrontierHash = next.Ledger.Hash()
+	}
+	return ready
+}
+
+func (s *Service) pruneLedgerEventCandidatesLocked(frontier uint32) {
+	for seq := range s.ledgerEventCandidates {
+		if seq <= frontier {
+			delete(s.ledgerEventCandidates, seq)
+		}
+	}
 }
 
 // runLedgerEventDispatcher is the single consumer that delivers accepted-ledger
