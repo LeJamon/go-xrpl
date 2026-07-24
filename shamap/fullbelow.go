@@ -7,16 +7,11 @@ import (
 )
 
 const (
-	fullBelowCacheTarget        = 1 << 19
-	fullBelowCacheExpiration    = 10 * time.Minute
-	fullBelowCacheSweepInterval = 30 * time.Second
-	fullBelowMinimumAge         = time.Second
-	fullBelowCacheMaxDepth      = 4
+	fullBelowCacheTarget     = 1 << 19
+	fullBelowCacheExpiration = 10 * time.Minute
+	fullBelowCacheShards     = 16
+	fullBelowCacheMaxDepth   = 4
 )
-
-type fullBelowEntry struct {
-	lastAccess time.Time
-}
 
 // FullBelowStats is a point-in-time cache snapshot.
 type FullBelowStats struct {
@@ -29,26 +24,91 @@ type FullBelowStats struct {
 	Sweeps     uint64
 }
 
+type fullBelowShard struct {
+	mu           sync.Mutex
+	targetSize   int
+	currentLimit int
+	current      map[[32]byte]struct{}
+	previous     map[[32]byte]struct{}
+	lastRotation time.Time
+}
+
+func newFullBelowShard(targetSize int, now time.Time) fullBelowShard {
+	limit := targetSize / 2
+	if limit == 0 {
+		limit = 1
+	}
+	return fullBelowShard{
+		targetSize:   targetSize,
+		currentLimit: limit,
+		current:      make(map[[32]byte]struct{}),
+		previous:     make(map[[32]byte]struct{}),
+		lastRotation: now,
+	}
+}
+
+func (s *fullBelowShard) advance(now time.Time, targetAge time.Duration) int {
+	if now.Before(s.lastRotation) {
+		s.lastRotation = now
+		return 0
+	}
+	if now.Sub(s.lastRotation) >= targetAge {
+		evicted := len(s.current) + len(s.previous)
+		clear(s.current)
+		clear(s.previous)
+		s.lastRotation = now
+		return evicted
+	}
+	if s.targetSize == 1 {
+		return 0
+	}
+	if now.Sub(s.lastRotation) < targetAge/2 {
+		return 0
+	}
+	evicted := len(s.previous)
+	clear(s.previous)
+	s.previous, s.current = s.current, s.previous
+	s.lastRotation = now
+	return evicted
+}
+
+func (s *fullBelowShard) makeRoom(now time.Time) int {
+	if len(s.current) < s.currentLimit {
+		return 0
+	}
+	if s.targetSize == 1 {
+		evicted := len(s.current)
+		clear(s.current)
+		s.lastRotation = now
+		return evicted
+	}
+	evicted := len(s.previous)
+	clear(s.previous)
+	s.previous, s.current = s.current, s.previous
+	s.lastRotation = now
+	return evicted
+}
+
 // FullBelowCache remembers durable SHAMap inner nodes whose descendants have
-// all been proven present. The target is deliberately soft: entries age out
-// during periodic sweeps instead of being evicted synchronously at insertion,
-// so one large acquisition can retain the subtrees it has already completed.
+// all been proven present. It uses bounded two-generation recency sets because
+// rippled's soft proportional-age target permits a fresh acquisition burst to
+// retain millions of entries before they become old enough to sweep.
 type FullBelowCache struct {
 	gen atomic.Uint32
 
 	// walks prevents a generation reset from overtaking an in-flight walk.
-	walks sync.RWMutex
-	mu    sync.Mutex
+	walks   sync.RWMutex
+	stateMu sync.RWMutex
 
 	targetSize int
 	targetAge  time.Duration
 	now        func() time.Time
-	entries    map[[32]byte]fullBelowEntry
-	hits       uint64
-	misses     uint64
-	inserts    uint64
-	evictions  uint64
-	sweeps     uint64
+	shards     []fullBelowShard
+	hits       atomic.Uint64
+	misses     atomic.Uint64
+	inserts    atomic.Uint64
+	evictions  atomic.Uint64
+	sweeps     atomic.Uint64
 }
 
 // NewFullBelowCache returns a cache at generation 1. Generation 0 is reserved
@@ -57,7 +117,6 @@ func NewFullBelowCache() *FullBelowCache {
 	return newFullBelowCacheWithClock(
 		fullBelowCacheTarget,
 		fullBelowCacheExpiration,
-		fullBelowCacheSweepInterval,
 		time.Now,
 	)
 }
@@ -65,7 +124,6 @@ func NewFullBelowCache() *FullBelowCache {
 func newFullBelowCacheWithClock(
 	targetSize int,
 	targetAge time.Duration,
-	sweepEvery time.Duration,
 	now func() time.Time,
 ) *FullBelowCache {
 	if targetSize <= 0 {
@@ -74,17 +132,27 @@ func newFullBelowCacheWithClock(
 	if targetAge <= 0 {
 		panic("shamap: FullBelowCache target age must be positive")
 	}
-	if sweepEvery <= 0 {
-		panic("shamap: FullBelowCache sweep interval must be positive")
-	}
 	if now == nil {
 		panic("shamap: FullBelowCache clock must not be nil")
 	}
+
+	shardCount := min(fullBelowCacheShards, targetSize)
+	shards := make([]fullBelowShard, shardCount)
+	base, remainder := targetSize/shardCount, targetSize%shardCount
+	createdAt := now()
+	for i := range shards {
+		shardTarget := base
+		if i < remainder {
+			shardTarget++
+		}
+		shards[i] = newFullBelowShard(shardTarget, createdAt)
+	}
+
 	c := &FullBelowCache{
 		targetSize: targetSize,
 		targetAge:  targetAge,
 		now:        now,
-		entries:    make(map[[32]byte]fullBelowEntry),
+		shards:     shards,
 	}
 	c.gen.Store(1)
 	return c
@@ -110,47 +178,96 @@ func (c *FullBelowCache) Bump() {
 
 func (c *FullBelowCache) invalidateAndLock() func() {
 	c.walks.Lock()
-
-	c.mu.Lock()
-	c.entries = make(map[[32]byte]fullBelowEntry)
+	c.stateMu.Lock()
 	if c.gen.Add(1) == 0 {
 		c.gen.Store(1)
 	}
-	c.mu.Unlock()
+	resetAt := c.now()
+	for i := range c.shards {
+		shard := &c.shards[i]
+		shard.mu.Lock()
+		clear(shard.current)
+		clear(shard.previous)
+		shard.lastRotation = resetAt
+		shard.mu.Unlock()
+	}
+	c.stateMu.Unlock()
 	return c.walks.Unlock
 }
 
-// Has reports whether hash is proven full-below and refreshes its age.
+func (c *FullBelowCache) shard(hash [32]byte) *fullBelowShard {
+	return &c.shards[int(hash[0])%len(c.shards)]
+}
+
+// Has reports whether hash is proven full-below and refreshes its recency.
 func (c *FullBelowCache) Has(generation uint32, hash [32]byte) bool {
-	c.mu.Lock()
-	defer c.mu.Unlock()
+	c.stateMu.RLock()
+	defer c.stateMu.RUnlock()
 	if c.gen.Load() != generation {
 		return false
 	}
-	entry, ok := c.entries[hash]
-	if !ok {
-		c.misses++
-		return false
+
+	now := c.now()
+	shard := c.shard(hash)
+	shard.mu.Lock()
+	if evicted := shard.advance(now, c.targetAge); evicted != 0 {
+		c.evictions.Add(uint64(evicted))
 	}
-	entry.lastAccess = c.now()
-	c.entries[hash] = entry
-	c.hits++
-	return true
+	if _, ok := shard.current[hash]; ok {
+		if shard.targetSize == 1 {
+			shard.lastRotation = now
+		}
+		shard.mu.Unlock()
+		c.hits.Add(1)
+		return true
+	}
+	if _, ok := shard.previous[hash]; ok {
+		delete(shard.previous, hash)
+		if evicted := shard.makeRoom(now); evicted != 0 {
+			c.evictions.Add(uint64(evicted))
+		}
+		shard.current[hash] = struct{}{}
+		shard.mu.Unlock()
+		c.hits.Add(1)
+		return true
+	}
+	shard.mu.Unlock()
+	c.misses.Add(1)
+	return false
 }
 
-// Insert records hash as full-below. Existing marks are refreshed. The cache
-// may grow beyond its target between sweeps.
+// Insert records hash as full-below. Existing marks are promoted to the
+// current generation and scan-cold marks are discarded on rotation.
 func (c *FullBelowCache) Insert(generation uint32, hash [32]byte) {
-	now := c.now()
-	c.mu.Lock()
-	defer c.mu.Unlock()
+	c.stateMu.RLock()
+	defer c.stateMu.RUnlock()
 	if c.gen.Load() != generation {
 		return
 	}
-	if _, exists := c.entries[hash]; !exists {
-		c.inserts++
+
+	now := c.now()
+	shard := c.shard(hash)
+	shard.mu.Lock()
+	if evicted := shard.advance(now, c.targetAge); evicted != 0 {
+		c.evictions.Add(uint64(evicted))
 	}
-	c.entries[hash] = fullBelowEntry{lastAccess: now}
+	if _, ok := shard.current[hash]; ok {
+		if shard.targetSize == 1 {
+			shard.lastRotation = now
+		}
+		shard.mu.Unlock()
+		return
+	}
+	if _, ok := shard.previous[hash]; ok {
+		delete(shard.previous, hash)
+	} else {
+		c.inserts.Add(1)
+	}
+	if evicted := shard.makeRoom(now); evicted != 0 {
+		c.evictions.Add(uint64(evicted))
+	}
+	shard.current[hash] = struct{}{}
+	shard.mu.Unlock()
 }
 
 func cacheFullBelow(c *FullBelowCache, generation uint32, hash [32]byte, depth int) {
@@ -159,52 +276,45 @@ func cacheFullBelow(c *FullBelowCache, generation uint32, hash [32]byte, depth i
 	}
 }
 
-// Sweep expires old entries. At or below target size, entries retain the full
-// target age. Above target, the age is reduced proportionally but never below
-// one second.
+// Sweep advances the time-based generations without scanning every entry.
 func (c *FullBelowCache) Sweep() {
+	c.stateMu.RLock()
 	now := c.now()
-	c.mu.Lock()
-	c.sweepLocked(now)
-	c.mu.Unlock()
-}
-
-func (c *FullBelowCache) sweepLocked(now time.Time) {
-	age := c.targetAge
-	if size := len(c.entries); size > c.targetSize {
-		age = time.Duration(int64(c.targetAge) * int64(c.targetSize) / int64(size))
-		if age < fullBelowMinimumAge {
-			age = fullBelowMinimumAge
+	for i := range c.shards {
+		shard := &c.shards[i]
+		shard.mu.Lock()
+		if evicted := shard.advance(now, c.targetAge); evicted != 0 {
+			c.evictions.Add(uint64(evicted))
 		}
+		shard.mu.Unlock()
 	}
-	cutoff := now.Add(-age)
-	for hash, entry := range c.entries {
-		if !entry.lastAccess.After(cutoff) {
-			delete(c.entries, hash)
-			c.evictions++
-		}
-	}
-	c.sweeps++
+	c.sweeps.Add(1)
+	c.stateMu.RUnlock()
 }
 
 // Size reports the number of recorded hashes.
 func (c *FullBelowCache) Size() int {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	return len(c.entries)
+	c.stateMu.RLock()
+	defer c.stateMu.RUnlock()
+	size := 0
+	for i := range c.shards {
+		shard := &c.shards[i]
+		shard.mu.Lock()
+		size += len(shard.current) + len(shard.previous)
+		shard.mu.Unlock()
+	}
+	return size
 }
 
 // Stats returns cache size, target and cumulative activity counters.
 func (c *FullBelowCache) Stats() FullBelowStats {
-	c.mu.Lock()
-	defer c.mu.Unlock()
 	return FullBelowStats{
-		Size:       len(c.entries),
+		Size:       c.Size(),
 		TargetSize: c.targetSize,
-		Hits:       c.hits,
-		Misses:     c.misses,
-		Inserts:    c.inserts,
-		Evictions:  c.evictions,
-		Sweeps:     c.sweeps,
+		Hits:       c.hits.Load(),
+		Misses:     c.misses.Load(),
+		Inserts:    c.inserts.Load(),
+		Evictions:  c.evictions.Load(),
+		Sweeps:     c.sweeps.Load(),
 	}
 }

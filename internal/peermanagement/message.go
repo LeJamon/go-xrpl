@@ -88,8 +88,12 @@ func ReadMessage(r io.Reader) (*MessageHeader, []byte, error) {
 	return message.ReadMessage(r)
 }
 
-func readMessageWithHeader(r io.Reader, onHeader func(MessageHeader) error) (*MessageHeader, []byte, error) {
-	return message.ReadMessageWithHeader(r, onHeader)
+func readMessageHeader(r io.Reader) (*MessageHeader, error) {
+	return message.ReadHeader(r)
+}
+
+func readMessagePayload(r io.Reader, header MessageHeader) ([]byte, error) {
+	return message.ReadPayload(r, header)
 }
 
 // WriteMessage writes a message with header to the writer.

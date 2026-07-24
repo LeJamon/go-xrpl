@@ -49,6 +49,9 @@ type KVDatabaseImpl struct {
 	negativeCache *NegativeCache
 	// Advances after a successful backend write and before negative-cache invalidation.
 	storeGeneration atomic.Uint64
+	// Advances before a backend rotation clears the decoded cache. Fetches that
+	// crossed the cutover must not repopulate entries from the retired archive.
+	cacheGeneration atomic.Uint64
 	name            string
 	stats           struct {
 		reads             uint64
@@ -150,6 +153,7 @@ func (d *KVDatabaseImpl) Fetch(ctx context.Context, hash Hash256) (*Node, error)
 		}
 		atomic.AddUint64(&d.stats.cacheMisses, 1)
 	}
+	cacheGeneration := d.cacheGeneration.Load()
 
 	data, err := d.fetchBackend(hash)
 	if err != nil || data == nil {
@@ -163,10 +167,34 @@ func (d *KVDatabaseImpl) Fetch(ctx context.Context, hash Hash256) (*Node, error)
 
 	atomic.AddUint64(&d.stats.fetchHits, 1)
 	atomic.AddUint64(&d.stats.readBytes, uint64(len(node.Data)))
-	if d.cache != nil {
+	if d.cache != nil && d.cacheGeneration.Load() == cacheGeneration {
 		d.cache.putOwned(node)
 	}
 
+	return node, nil
+}
+
+// FetchCached returns a node only when it is already in the decoded-node cache.
+// A miss never reaches the backing store.
+func (d *KVDatabaseImpl) FetchCached(ctx context.Context, hash Hash256) (*Node, error) {
+	select {
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	default:
+	}
+
+	atomic.AddUint64(&d.stats.reads, 1)
+	if d.cache == nil {
+		return nil, nil
+	}
+	node, found := d.cache.Get(hash)
+	if !found {
+		atomic.AddUint64(&d.stats.cacheMisses, 1)
+		return nil, nil
+	}
+	atomic.AddUint64(&d.stats.cacheHits, 1)
+	atomic.AddUint64(&d.stats.fetchHits, 1)
+	atomic.AddUint64(&d.stats.readBytes, uint64(len(node.Data)))
 	return node, nil
 }
 

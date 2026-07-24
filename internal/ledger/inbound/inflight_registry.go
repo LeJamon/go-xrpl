@@ -27,6 +27,7 @@ type inFlightRegistry[T inFlightItem] struct {
 	items       map[[32]byte]T
 	maxInFlight int
 	maxPerPeer  int
+	stopped     bool
 }
 
 // newInFlightRegistry returns an empty registry with the given caps.
@@ -50,6 +51,9 @@ func (r *inFlightRegistry[T]) add(hash [32]byte, peerID uint64, factory func() T
 	defer r.mu.Unlock()
 
 	var zero T
+	if r.stopped {
+		return zero, ErrAcquisitionStopped
+	}
 	if _, exists := r.items[hash]; exists {
 		return zero, ErrAcquisitionExists
 	}
@@ -100,13 +104,14 @@ func (r *inFlightRegistry[T]) count() int {
 	return len(r.items)
 }
 
-// drain empties the registry and returns the number of entries removed,
-// so a shutdown caller has an observable "N still pending" count.
-func (r *inFlightRegistry[T]) drain() int {
+// stop terminally empties the registry and returns the number of entries
+// removed, so a shutdown caller has an observable pending count.
+func (r *inFlightRegistry[T]) stop() int {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	n := len(r.items)
 	r.items = make(map[[32]byte]T)
+	r.stopped = true
 	return n
 }
 

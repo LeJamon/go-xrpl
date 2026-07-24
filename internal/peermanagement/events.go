@@ -110,6 +110,9 @@ type Event struct {
 	// Payload is the message payload (for MessageReceived events).
 	Payload []byte
 
+	// ManifestFrame carries an oversized manifest payload spooled to disk.
+	ManifestFrame *ManifestFrame
+
 	// WireSize is the on-wire payload size in bytes (compressed if the
 	// frame was compressed, excluding the header) for MessageReceived
 	// events. Mirrors rippled's header.payload_wire_size passed to
@@ -136,6 +139,9 @@ type InboundMessage struct {
 
 	// Payload is the raw message payload.
 	Payload []byte
+
+	// ManifestFrame carries an oversized manifest payload spooled to disk.
+	ManifestFrame *ManifestFrame
 
 	// Tx carries an already-decoded transaction for inner frames fanned
 	// out from a TMTransactions batch, so the consumer can skip decoding

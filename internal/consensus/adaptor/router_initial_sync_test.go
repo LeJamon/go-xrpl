@@ -95,5 +95,6 @@ func TestAdaptor_ValidationQuorumChecksPeerTrackingDuringInitialSync(t *testing.
 	require.Equal(t, []uint32{10_000}, sender.seqs)
 	sender.mu.Unlock()
 	require.True(t, svc.NeedsInitialSync())
-	require.Equal(t, uint32(1), svc.GetValidatedLedgerIndex())
+	require.Nil(t, svc.GetValidatedLedger())
+	require.Zero(t, svc.GetValidatedLedgerIndex())
 }

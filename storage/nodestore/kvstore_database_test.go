@@ -18,6 +18,21 @@ type staleMissStore struct {
 	once   sync.Once
 }
 
+type blockingGetStore struct {
+	kvstore.KeyValueStore
+	started chan struct{}
+	release chan struct{}
+	once    sync.Once
+}
+
+func (s *blockingGetStore) Get(key []byte) ([]byte, error) {
+	s.once.Do(func() {
+		close(s.started)
+		<-s.release
+	})
+	return s.KeyValueStore.Get(key)
+}
+
 func (s *staleMissStore) Get(key []byte) ([]byte, error) {
 	stale := false
 	if bytes.Equal(key, s.target[:]) {
@@ -119,5 +134,42 @@ func TestStoreBatchWithoutNodesDoesNotAdvanceGeneration(t *testing.T) {
 				t.Fatalf("store generation = %d, want 0", got)
 			}
 		})
+	}
+}
+
+func TestFetchCrossingCacheGenerationDoesNotRepopulate(t *testing.T) {
+	ctx := context.Background()
+	store := &blockingGetStore{
+		KeyValueStore: memorydb.New(),
+		started:       make(chan struct{}),
+		release:       make(chan struct{}),
+	}
+	db := NewKVDatabase(store, "cache-generation", 16, time.Hour)
+	t.Cleanup(func() { _ = db.Close() })
+	node := &Node{
+		Type: NodeAccount,
+		Hash: ComputeHash256([]byte("cache-generation")),
+		Data: []byte("cache-generation"),
+	}
+	encoded := encodeNodeData(node)
+	if err := store.Put(node.Hash[:], encoded); err != nil {
+		t.Fatal(err)
+	}
+	releaseEncodeBuf(encoded)
+
+	done := make(chan error, 1)
+	go func() {
+		_, err := db.Fetch(ctx, node.Hash)
+		done <- err
+	}()
+	<-store.started
+	db.cacheGeneration.Add(1)
+	db.cache.Clear()
+	close(store.release)
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+	if _, found := db.cache.Get(node.Hash); found {
+		t.Fatal("fetch crossing a cache generation repopulated a retired entry")
 	}
 }

@@ -41,10 +41,28 @@ func (s *acquisitionStoreScope) Fetch(ctx context.Context, hash [32]byte) ([]byt
 	if durableOnly {
 		return s.lane.FetchDurable(ctx, hash)
 	}
-	return s.lane.fetchScope(ctx, s.id, hash)
+	if data, ok := s.lane.fetchPending(s.id, hash); ok {
+		return data, nil
+	}
+	return s.FetchDurable(ctx, hash)
 }
 
 func (s *acquisitionStoreScope) FetchDurable(ctx context.Context, hash [32]byte) ([]byte, error) {
+	if data, err := s.lane.FetchCached(ctx, hash); err != nil || data != nil {
+		return data, err
+	}
+	return s.lane.FetchDurable(ctx, hash)
+}
+
+func (s *acquisitionStoreScope) FetchForNodePlacement(ctx context.Context, hash [32]byte) ([]byte, error) {
+	s.mu.Lock()
+	durableOnly := s.promoted || s.retired
+	s.mu.Unlock()
+	if !durableOnly {
+		if data, ok := s.lane.fetchPending(s.id, hash); ok {
+			return data, nil
+		}
+	}
 	return s.lane.FetchDurable(ctx, hash)
 }
 
@@ -66,7 +84,13 @@ func (s *acquisitionStoreScope) StoreBatch(ctx context.Context, entries []shamap
 }
 
 func (s *acquisitionStoreScope) Flush(ctx context.Context) error {
-	return s.lane.flushScope(ctx, s)
+	s.admission.Lock()
+	defer s.admission.Unlock()
+
+	if err := s.lane.flushScope(ctx, s); err != nil {
+		return err
+	}
+	return nil
 }
 
 func (s *acquisitionStoreScope) Retire(context.Context) error {
@@ -115,12 +139,10 @@ func (s *acquisitionStoreScope) recordFailure(err error) {
 	}
 }
 
-func (s *acquisitionStoreScope) takeFailure() error {
+func (s *acquisitionStoreScope) failure() error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	err := s.err
-	s.err = nil
-	return err
+	return s.err
 }
 
 type pendingAcquisitionNode struct {
@@ -194,16 +216,23 @@ func (l *acquisitionStoreLane) Fetch(ctx context.Context, hash [32]byte) ([]byte
 }
 
 func (l *acquisitionStoreLane) fetchScope(ctx context.Context, scope uint64, hash [32]byte) ([]byte, error) {
+	if data, ok := l.fetchPending(scope, hash); ok {
+		return data, nil
+	}
+	return l.FetchDurable(ctx, hash)
+}
+
+func (l *acquisitionStoreLane) fetchPending(scope uint64, hash [32]byte) ([]byte, bool) {
 	key := pendingAcquisitionKey{scope: scope, hash: hash}
 	l.pendingMu.RLock()
 	pending, ok := l.pending[key]
 	if ok {
 		data := bytes.Clone(pending.data)
 		l.pendingMu.RUnlock()
-		return data, nil
+		return data, true
 	}
 	l.pendingMu.RUnlock()
-	return l.FetchDurable(ctx, hash)
+	return nil, false
 }
 
 func (l *acquisitionStoreLane) FetchDurable(ctx context.Context, hash [32]byte) ([]byte, error) {
@@ -213,6 +242,15 @@ func (l *acquisitionStoreLane) FetchDurable(ctx context.Context, hash [32]byte) 
 		return durable.FetchDurable(ctx, hash)
 	}
 	return l.base.Fetch(ctx, hash)
+}
+
+func (l *acquisitionStoreLane) FetchCached(ctx context.Context, hash [32]byte) ([]byte, error) {
+	if cached, ok := l.base.(interface {
+		FetchCached(context.Context, [32]byte) ([]byte, error)
+	}); ok {
+		return cached.FetchCached(ctx, hash)
+	}
+	return nil, nil
 }
 
 func (l *acquisitionStoreLane) StoreBatch(ctx context.Context, entries []shamap.FlushEntry) error {
@@ -348,7 +386,7 @@ func (l *acquisitionStoreLane) run(ctx context.Context, jobs <-chan acquisitionS
 		case job = <-jobs:
 		}
 		if job.barrier != nil {
-			err := job.owner.takeFailure()
+			err := job.owner.failure()
 			select {
 			case job.barrier <- err:
 			case <-ctx.Done():

@@ -19,10 +19,39 @@ type fakeNodePruner struct {
 	before     func()
 }
 
+type fakeGenerationPruner struct {
+	fakeNodePruner
+	rotations     int
+	committed     bool
+	rotateErr     error
+	lastRotated   uint32
+	minimumOnline uint32
+}
+
+func (f *fakeGenerationPruner) RotateGeneration(
+	_ context.Context,
+	lastRotated, minimumOnline uint32,
+) (bool, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.rotations++
+	if f.committed {
+		f.lastRotated = lastRotated
+		f.minimumOnline = minimumOnline
+	}
+	return f.committed, f.rotateErr
+}
+
+func (f *fakeGenerationPruner) GenerationState() (uint32, uint32) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.lastRotated, f.minimumOnline
+}
+
 func TestRotate_RefreshFailureAbortsDeletion(t *testing.T) {
 	r, nodes, rel := newTestRotator(t, false, 256)
-	r.SetStateRefresh(func(context.Context, uint32) error {
-		return errors.New("missing live node")
+	r.SetStateRefresh(func(context.Context, uint32, func(time.Duration) error) (uint32, error) {
+		return 0, errors.New("missing live node")
 	}, nil, nil)
 	r.maybeRotate(context.Background(), 500)
 	r.maybeRotate(context.Background(), 800)
@@ -60,6 +89,165 @@ func TestRotate_WaitsForHealthyNode(t *testing.T) {
 	}
 }
 
+func TestRotate_RefreshCheckpointWaitsForHealthRecovery(t *testing.T) {
+	r, nodes, _ := newTestRotator(t, false, 256)
+	r.maybeRotate(context.Background(), 500)
+
+	var healthy atomic.Bool
+	healthy.Store(true)
+	r.SetHealthCheck(healthy.Load, time.Millisecond)
+	checkpointReached := make(chan struct{})
+	r.SetStateRefresh(func(_ context.Context, seq uint32, checkpoint func(time.Duration) error) (uint32, error) {
+		healthy.Store(false)
+		close(checkpointReached)
+		if err := checkpoint(time.Millisecond); err != nil {
+			return 0, err
+		}
+		return seq, nil
+	}, nil, nil)
+
+	done := make(chan struct{})
+	go func() {
+		r.maybeRotate(context.Background(), 800)
+		close(done)
+	}()
+	<-checkpointReached
+	if len(nodes.calls()) != 0 {
+		t.Fatal("pruning started while the refresh was paused")
+	}
+	healthy.Store(true)
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("refresh did not resume after health recovered")
+	}
+	if got := nodes.calls(); len(got) != 1 || got[0] != 500 {
+		t.Fatalf("prune calls = %v, want [500]", got)
+	}
+}
+
+func TestRotate_RefreshCheckpointHonorsCancellation(t *testing.T) {
+	r, nodes, _ := newTestRotator(t, false, 256)
+	r.maybeRotate(context.Background(), 500)
+
+	var healthy atomic.Bool
+	healthy.Store(true)
+	r.SetHealthCheck(healthy.Load, time.Millisecond)
+	checkpointReached := make(chan struct{})
+	r.SetStateRefresh(func(_ context.Context, seq uint32, checkpoint func(time.Duration) error) (uint32, error) {
+		healthy.Store(false)
+		close(checkpointReached)
+		if err := checkpoint(time.Millisecond); err != nil {
+			return 0, err
+		}
+		return seq, nil
+	}, nil, nil)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() {
+		r.maybeRotate(ctx, 800)
+		close(done)
+	}()
+	<-checkpointReached
+	cancel()
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("refresh did not stop after cancellation")
+	}
+	if got := nodes.calls(); len(got) != 0 {
+		t.Fatalf("prune calls after cancellation = %v, want none", got)
+	}
+	if got := r.store.GetLastRotated(); got != 500 {
+		t.Fatalf("lastRotated after cancellation = %d, want 500", got)
+	}
+}
+
+func TestRotate_RefreshPacingHonorsCancellation(t *testing.T) {
+	r, nodes, _ := newTestRotator(t, false, 256)
+	r.maybeRotate(context.Background(), 500)
+	r.cfg.BackOff = time.Hour
+
+	var healthy atomic.Bool
+	healthy.Store(true)
+	r.SetHealthCheck(healthy.Load, time.Millisecond)
+	checkpointReached := make(chan struct{})
+	r.SetStateRefresh(func(_ context.Context, seq uint32, checkpoint func(time.Duration) error) (uint32, error) {
+		close(checkpointReached)
+		if err := checkpoint(time.Hour); err != nil {
+			return 0, err
+		}
+		return seq, nil
+	}, nil, nil)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() {
+		r.maybeRotate(ctx, 800)
+		close(done)
+	}()
+	<-checkpointReached
+	cancel()
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("refresh pacing did not stop after cancellation")
+	}
+	if got := nodes.calls(); len(got) != 0 {
+		t.Fatalf("prune calls after paced cancellation = %v, want none", got)
+	}
+	if got := r.store.GetLastRotated(); got != 500 {
+		t.Fatalf("lastRotated after paced cancellation = %d, want 500", got)
+	}
+}
+
+func TestRotator_LongRefreshPersistsActualSequenceAndCoalescesQueuedNotifications(t *testing.T) {
+	r, nodes, _ := newTestRotator(t, false, 256)
+	refreshRequests := make(chan uint32, 3)
+	resumeRefresh := make(chan struct{})
+	r.SetStateRefresh(func(_ context.Context, requested uint32, _ func(time.Duration) error) (uint32, error) {
+		refreshRequests <- requested
+		if requested == 800 {
+			<-resumeRefresh
+			return 1100, nil
+		}
+		return requested, nil
+	}, nil, nil)
+	r.Start()
+	defer r.Stop()
+
+	r.Notify(500)
+	waitFor(t, func() bool { return r.store.GetLastRotated() == 500 })
+	r.Notify(800)
+	if got := <-refreshRequests; got != 800 {
+		t.Fatalf("first refresh request = %d, want 800", got)
+	}
+	// The validated ledger advances to 1100 while the expensive state walk is
+	// still in flight, so its notification is stale once that walk completes.
+	r.Notify(900)
+	r.Notify(1100)
+	close(resumeRefresh)
+	waitFor(t, func() bool { return r.store.GetLastRotated() == 1100 })
+
+	// A later eligible notification is the next refresh. If either queued
+	// notification caused redundant work, it would arrive on refreshRequests
+	// before 1356.
+	r.Notify(1356)
+	select {
+	case got := <-refreshRequests:
+		if got != 1356 {
+			t.Fatalf("refresh after coalescing = %d, want 1356", got)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("eligible refresh did not run")
+	}
+	waitFor(t, func() bool { return r.store.GetLastRotated() == 1356 })
+	if got := nodes.calls(); len(got) != 2 || got[0] != 500 || got[1] != 1100 {
+		t.Fatalf("prune calls = %v, want [500 1100]", got)
+	}
+}
+
 func (f *fakeNodePruner) DeleteBefore(_ context.Context, boundary uint32, _ int) (uint64, error) {
 	if f.before != nil {
 		f.before()
@@ -76,7 +264,7 @@ func TestRotate_PartialPruneResetsCacheWithoutAdvancing(t *testing.T) {
 	nodes.deleted = 3
 	nodes.err = errors.New("partial prune")
 	locked, unlocked := 0, 0
-	r.SetStateRefresh(func(context.Context, uint32) error { return nil }, nil, func() func() {
+	r.SetStateRefresh(func(_ context.Context, seq uint32, _ func(time.Duration) error) (uint32, error) { return seq, nil }, nil, func() func() {
 		locked++
 		return func() { unlocked++ }
 	})
@@ -127,7 +315,7 @@ func newTestRotator(t *testing.T, advisory bool, interval uint32) (*Rotator, *fa
 	if r == nil {
 		t.Fatal("NewRotator returned nil")
 	}
-	r.SetStateRefresh(func(context.Context, uint32) error { return nil }, nil, nil)
+	r.SetStateRefresh(func(_ context.Context, seq uint32, _ func(time.Duration) error) (uint32, error) { return seq, nil }, nil, nil)
 	return r, nodes, rel
 }
 
@@ -185,6 +373,78 @@ func TestRotate_WaitsForFullInterval(t *testing.T) {
 	}
 	if got := r.MinimumOnline(); got != 1001 {
 		t.Fatalf("minimumOnline = %d, want 1001 (lastRotated+1)", got)
+	}
+}
+
+func TestRotate_PrefersGenerationRotationOverSequencePruning(t *testing.T) {
+	store, err := New(false, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	nodes := &fakeGenerationPruner{committed: true}
+	r := NewRotator(store, nodes, nil, RotationConfig{DeleteInterval: 256}, nil)
+	r.SetStateRefresh(func(_ context.Context, seq uint32, _ func(time.Duration) error) (uint32, error) {
+		return seq, nil
+	}, nil, nil)
+
+	r.maybeRotate(context.Background(), 500)
+	r.maybeRotate(context.Background(), 800)
+
+	if nodes.rotations != 1 {
+		t.Fatalf("generation rotations = %d, want 1", nodes.rotations)
+	}
+	if got := nodes.calls(); len(got) != 0 {
+		t.Fatalf("legacy prune calls = %v, want none", got)
+	}
+	if got := r.store.GetLastRotated(); got != 800 {
+		t.Fatalf("lastRotated = %d, want 800", got)
+	}
+}
+
+func TestRotate_CommittedGenerationAdvancesDespiteCleanupError(t *testing.T) {
+	store, err := New(false, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	nodes := &fakeGenerationPruner{
+		committed: true,
+		rotateErr: errors.New("retired directory cleanup failed"),
+	}
+	r := NewRotator(store, nodes, nil, RotationConfig{DeleteInterval: 256}, nil)
+	r.SetStateRefresh(func(_ context.Context, seq uint32, _ func(time.Duration) error) (uint32, error) {
+		return seq, nil
+	}, nil, nil)
+
+	r.maybeRotate(context.Background(), 500)
+	r.maybeRotate(context.Background(), 800)
+
+	if got := r.store.GetLastRotated(); got != 800 {
+		t.Fatalf("lastRotated = %d, want committed generation sequence 800", got)
+	}
+}
+
+func TestRotator_ReconcilesDurableGenerationAfterBookkeepingCrash(t *testing.T) {
+	store, err := New(false, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.SetRotation(500, 1); err != nil {
+		t.Fatal(err)
+	}
+	nodes := &fakeGenerationPruner{
+		committed:     true,
+		lastRotated:   800,
+		minimumOnline: 501,
+	}
+	r := NewRotator(store, nodes, nil, RotationConfig{DeleteInterval: 256}, nil)
+	if err := r.ReconcileGenerationState(); err != nil {
+		t.Fatal(err)
+	}
+	if got := store.GetLastRotated(); got != 800 {
+		t.Fatalf("reconciled lastRotated = %d, want 800", got)
+	}
+	if got := r.MinimumOnline(); got != 501 {
+		t.Fatalf("reconciled minimumOnline = %d, want 501", got)
 	}
 }
 
@@ -282,7 +542,7 @@ func TestRotate_TolerantOfNilRelationalPruner(t *testing.T) {
 	if r == nil {
 		t.Fatal("rotator nil with valid node pruner")
 	}
-	r.SetStateRefresh(func(context.Context, uint32) error { return nil }, nil, nil)
+	r.SetStateRefresh(func(_ context.Context, seq uint32, _ func(time.Duration) error) (uint32, error) { return seq, nil }, nil, nil)
 	r.maybeRotate(context.Background(), 500)
 	r.maybeRotate(context.Background(), 800)
 	if nc := nodes.calls(); len(nc) != 1 || nc[0] != 500 {

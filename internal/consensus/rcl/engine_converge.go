@@ -224,9 +224,7 @@ func (e *Engine) canSwitchToLedgerLocked(candidate consensus.Ledger) bool {
 // canBeCurrentLocked mirrors rippled LedgerMaster::canBeCurrent
 // (LedgerMaster.cpp:341-407): never rewind behind the validated tip, close
 // time within 5 minutes of network time, and seq at most
-// validated+10+elapsed/2 ahead. goXRPL's ledger surface has no parent close
-// time, so the candidate's own close time stands in (one close interval of
-// slack inside a 5-minute window). Caller must hold e.mu.
+// validated+10+elapsed/2 ahead. Caller must hold e.mu.
 func (e *Engine) canBeCurrentLocked(candidate consensus.Ledger) bool {
 	now := e.adaptor.Now()
 	var validated consensus.Ledger
@@ -239,7 +237,12 @@ func (e *Engine) canBeCurrentLocked(candidate consensus.Ledger) bool {
 		return false
 	}
 	if validated != nil || candidate.Seq() > 10 {
-		gap := now.Sub(candidate.CloseTime())
+		closeTime := candidate.CloseTime()
+		if reporter, ok := candidate.(parentCloseTimeReporter); ok &&
+			!reporter.ParentCloseTime().IsZero() {
+			closeTime = reporter.ParentCloseTime()
+		}
+		gap := now.Sub(closeTime)
 		if gap < 0 {
 			gap = -gap
 		}
@@ -249,7 +252,12 @@ func (e *Engine) canBeCurrentLocked(candidate consensus.Ledger) bool {
 	}
 	if validated != nil {
 		maxSeq := validated.Seq() + 10
-		if elapsed := now.Sub(validated.CloseTime()); elapsed > 0 {
+		validatedCloseTime := validated.CloseTime()
+		if reporter, ok := validated.(parentCloseTimeReporter); ok &&
+			!reporter.ParentCloseTime().IsZero() {
+			validatedCloseTime = reporter.ParentCloseTime()
+		}
+		if elapsed := now.Sub(validatedCloseTime); elapsed > 0 {
 			maxSeq += uint32(elapsed / (2 * time.Second))
 		}
 		if candidate.Seq() > maxSeq {

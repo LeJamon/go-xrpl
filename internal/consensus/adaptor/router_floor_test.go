@@ -1,13 +1,18 @@
 package adaptor
 
 import (
+	"context"
 	"testing"
 	"time"
 
+	"github.com/LeJamon/go-xrpl/crypto/sha512half"
 	"github.com/LeJamon/go-xrpl/internal/consensus"
+	"github.com/LeJamon/go-xrpl/internal/ledger/header"
+	"github.com/LeJamon/go-xrpl/internal/ledger/inbound"
 	"github.com/LeJamon/go-xrpl/internal/ledger/service"
 	"github.com/LeJamon/go-xrpl/internal/peermanagement"
 	"github.com/LeJamon/go-xrpl/internal/peermanagement/message"
+	"github.com/LeJamon/go-xrpl/protocol"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -34,6 +39,18 @@ func TestRouter_RequestLedger_Floor_DeclinesBelowBoundary(t *testing.T) {
 	assert.Empty(t, rs.legacyCalls(), "no base fetch may be issued below the floor")
 	assert.Empty(t, rs.replayCalls(), "no replay-delta fetch may be issued below the floor")
 	assert.Nil(t, r.fetchTracker.Find(target), "no acquisition may be registered below the floor")
+}
+
+func TestRouter_InternalAcquisitionEntrypointsDeclineKnownSeqBelowFloor(t *testing.T) {
+	r, _, sender, _ := makeRouter(t)
+	r.SetMinimumOnlineFloor(stubFloor(100))
+	target := [32]byte{0x43}
+
+	assert.False(t, r.startLedgerAcquisition(99, target, 7))
+	r.startLedgerAcquisitionLegacy(99, target, 7)
+	assert.Empty(t, sender.legacyCalls())
+	assert.Empty(t, sender.replayCalls())
+	assert.Nil(t, r.fetchTracker.Find(target))
 }
 
 // TestRouter_RequestLedger_Floor_AllowsAtOrAboveBoundary verifies a request at
@@ -68,6 +85,54 @@ func TestRouter_RequestLedger_NilFloor_Unchanged(t *testing.T) {
 	_, started, _ := r.RequestLedger(target, 1) // a very low seq, no floor → allowed
 	assert.True(t, started, "with no floor any sequence is acquirable")
 	require.Len(t, rs.legacyCalls(), 1)
+}
+
+func TestRouter_HashOnlyHeaderBelowFloorTerminatesConsensusTarget(t *testing.T) {
+	r, _, _, _ := makeRouter(t)
+	engine := &mockEngine{}
+	r.engine = engine
+	r.SetMinimumOnlineFloor(stubFloor(100))
+	rootHash, rootData, _ := buildSelfHealSourceState(t)
+	headerData := header.AddRaw(header.LedgerHeader{LedgerIndex: 50, AccountHash: rootHash}, false)
+	target := sha512half.Sum(protocol.HashPrefixLedgerMaster().Bytes(), headerData)
+	r.consensusRecovery = consensusRecovery{targetHash: target, stepHash: target}
+	acquisition := inbound.New(target, 0, 7, serveTestLogger(), r.acquisitionOpts()...)
+	r.fetchTracker.Track(acquisition)
+
+	result := processAcquisitionWork(context.Background(), acquisition, []acquisitionWorkEvent{{
+		kind: acquisitionWorkData,
+		data: &message.LedgerData{
+			InfoType: message.LedgerInfoBase,
+			Nodes:    []message.LedgerNode{{NodeData: headerData}, {NodeData: rootData}},
+		},
+		peerID: 7,
+	}})
+	require.True(t, result.remove)
+	require.True(t, result.policyFailure)
+	require.Empty(t, result.badData, "a valid but locally stale header must not blame its peer")
+	r.handleAcquisitionWorkResult(result)
+
+	assert.Nil(t, r.fetchTracker.Find(target))
+	assert.Equal(t, consensusRecovery{}, r.consensusRecovery)
+	assert.Equal(t, []consensus.LedgerID{consensus.LedgerID(target)}, engine.getAcquireFailed())
+	assert.True(t, r.catchupRetryBlocked(target, time.Now()))
+	r.armConsensusCatchup()
+	assert.Nil(t, r.fetchTracker.Find(target), "terminal stale target must not be re-armed")
+}
+
+func TestRouter_HashOnlyHeaderAtFloorIsAdmitted(t *testing.T) {
+	r, _, _, _ := makeRouter(t)
+	r.SetMinimumOnlineFloor(stubFloor(100))
+	rootHash, rootData, _ := buildSelfHealSourceState(t)
+	headerData := header.AddRaw(header.LedgerHeader{LedgerIndex: 100, AccountHash: rootHash}, false)
+	target := sha512half.Sum(protocol.HashPrefixLedgerMaster().Bytes(), headerData)
+	acquisition := inbound.New(target, 0, 7, serveTestLogger(), r.acquisitionOpts()...)
+
+	require.NoError(t, acquisition.GotBase([]message.LedgerNode{
+		{NodeData: headerData},
+		{NodeData: rootData},
+	}))
+	assert.Equal(t, uint32(100), acquisition.Seq())
 }
 
 // TestRouter_HandleGetLedger_Floor_DeclinesBelowBoundary drives the legacy

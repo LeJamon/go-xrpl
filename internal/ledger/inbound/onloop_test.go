@@ -77,10 +77,10 @@ func TestLedger_OnTimer_FailsCleanlyAfterBudget(t *testing.T) {
 	}
 }
 
-// TestLedger_OnTimer_ProgressDefersFailure confirms an interval that made
-// forward progress neither counts a timeout nor escalates, so a healthy
-// acquisition never fails (rippled onTimer(true)).
-func TestLedger_OnTimer_ProgressDefersFailure(t *testing.T) {
+// TestLedger_OnTimer_ProgressPreservesCumulativeFailureBudget confirms useful
+// intervals do not count as timeouts but also do not erase prior no-progress
+// strikes, matching rippled's TimeoutCounter.
+func TestLedger_OnTimer_ProgressPreservesCumulativeFailureBudget(t *testing.T) {
 	t.Parallel()
 	il := New([32]byte{0x01}, 7, 1, discardLogger())
 	il.state = StateWantState
@@ -97,29 +97,31 @@ func TestLedger_OnTimer_ProgressDefersFailure(t *testing.T) {
 	il.mu.Lock()
 	il.markProgressLocked()
 	il.mu.Unlock()
-	if got := il.OnTimer(base.Add(6 * acquireTimerInterval)); got != TimerNone {
-		t.Fatalf("progress fire: got %v, want TimerNone", got)
+	if got := il.OnTimer(base.Add(6 * acquireTimerInterval)); got != TimerRefresh {
+		t.Fatalf("progress fire: got %v, want TimerRefresh", got)
 	}
 	if il.Timeouts() != 5 {
 		t.Fatalf("a progressing interval must not count a timeout, got %d", il.Timeouts())
 	}
-	if il.consecutiveTimeouts != 0 {
-		t.Fatalf("progress must renew the stall budget, got %d consecutive timeouts", il.consecutiveTimeouts)
+
+	next := base.Add(7 * acquireTimerInterval)
+	if got := il.OnTimer(next); got != TimerEscalate {
+		t.Fatalf("sixth no-progress fire: got %v, want TimerEscalate", got)
+	}
+	il.RearmTimer(next)
+
+	il.mu.Lock()
+	il.markProgressLocked()
+	il.mu.Unlock()
+	if got := il.OnTimer(base.Add(8 * acquireTimerInterval)); got != TimerRefresh {
+		t.Fatalf("second progress fire: got %v, want TimerRefresh", got)
+	}
+	if got := il.Timeouts(); got != ledgerTimeoutRetriesMax {
+		t.Fatalf("progress erased the cumulative budget: got %d, want %d", got, ledgerTimeoutRetriesMax)
 	}
 
-	for i := 1; i <= ledgerTimeoutRetriesMax; i++ {
-		now := base.Add(time.Duration(6+i) * acquireTimerInterval)
-		if got := il.OnTimer(now); got != TimerEscalate {
-			t.Fatalf("post-progress fire %d: got %v, want TimerEscalate", i, got)
-		}
-		if il.State() == StateFailed {
-			t.Fatalf("post-progress fire %d exhausted a renewed stall budget", i)
-		}
-	}
-
-	final := base.Add(time.Duration(7+ledgerTimeoutRetriesMax) * acquireTimerInterval)
-	if got := il.OnTimer(final); got != TimerFailed {
-		t.Fatalf("renewed budget fire: got %v, want TimerFailed", got)
+	if got := il.OnTimer(base.Add(9 * acquireTimerInterval)); got != TimerFailed {
+		t.Fatalf("seventh no-progress fire: got %v, want TimerFailed", got)
 	}
 }
 
@@ -131,8 +133,8 @@ func TestLedger_OnTimer_BaseReplyCountsAsProgress(t *testing.T) {
 	il.lastTimer = base
 	il.mu.Unlock()
 
-	if got := il.OnTimer(base.Add(acquireTimerInterval)); got != TimerNone {
-		t.Fatalf("timer action = %v, want TimerNone after useful base reply", got)
+	if got := il.OnTimer(base.Add(acquireTimerInterval)); got != TimerRefresh {
+		t.Fatalf("timer action = %v, want TimerRefresh after useful base reply", got)
 	}
 	if got := il.Timeouts(); got != 0 {
 		t.Fatalf("timeouts = %d, want 0 after useful base reply", got)

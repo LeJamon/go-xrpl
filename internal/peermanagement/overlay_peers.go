@@ -70,6 +70,8 @@ func (o *Overlay) connectReserved(addr string, bootstrapLease *bootstrapLease) e
 	peer.SetDroppedEventsCounter(&o.droppedEvents)
 	peer.SetAcquisitionEvents(o.acquisitionEvents)
 	peer.SetManifestMessages(o.manifestMessages)
+	peer.SetManifestReadBudget(o.manifestReadBudget)
+	peer.SetManifestSpoolDir(o.manifestSpoolDir)
 	peer.handshakeCfg = o.handshakeConfigFor()
 	peer.onRedirect = func(peerIPs []string) {
 		o.ingestRedirectEndpoints(peerIPs, peerID)
@@ -101,8 +103,11 @@ func (o *Overlay) connectReserved(addr string, bootstrapLease *bootstrapLease) e
 	}
 	compression := peer.compressionNegotiated()
 	o.discovery.markNegotiatedCompression(addr, compression)
+	ledgerReplay := peer.Capabilities().HasFeature(FeatureLedgerReplay)
 	slog.Info("Peer handshake complete", "t", "Overlay", "addr", addr,
-		"protocol", peer.ProtocolVersion(), "compression", compression)
+		"protocol", peer.ProtocolVersion(), "compression", compression,
+		"ledger_replay_local", o.cfg.EnableLedgerReplay,
+		"ledger_replay_negotiated", ledgerReplay)
 	if bootstrapLease != nil {
 		peer.onBootstrapReady = func() { o.completePeerBootstrap(peerID) }
 		peer.onBootstrapProgress = func(progress bootstrapFrameProgress) {

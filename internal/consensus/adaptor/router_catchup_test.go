@@ -128,6 +128,39 @@ func TestRouter_StatusWithoutLedgerHashCannotSteerCatchup(t *testing.T) {
 	assert.False(t, tracked)
 }
 
+func TestRouter_LostSyncClearsPeerLedgerWithoutAcquiringAdvertisedHash(t *testing.T) {
+	r, adaptor, sender, svc := makeRouter(t)
+	peerID := peermanagement.PeerID(7)
+	currentHash := [32]byte{0xA1}
+	r.handleMessage(statusChangeMessage(t, peerID, svc.GetClosedLedgerIndex()+1, currentHash))
+	replayBefore := len(sender.replayCalls())
+	legacyBefore := len(sender.legacyCalls())
+
+	staleHash := [32]byte{0xB2}
+	sc := &message.StatusChange{
+		NewEvent:   message.NodeEventLostSync,
+		LedgerSeq:  15750,
+		LedgerHash: staleHash[:],
+	}
+	encoded, err := message.Encode(sc)
+	require.NoError(t, err)
+	r.handleMessage(&peermanagement.InboundMessage{
+		PeerID:  peerID,
+		Type:    uint16(message.TypeStatusChange),
+		Payload: encoded,
+	})
+
+	r.peersMu.RLock()
+	_, tracked := r.peerStates[peerID]
+	r.peersMu.RUnlock()
+	assert.False(t, tracked)
+	assert.Empty(t, adaptor.PeerReportedLedgers())
+	assert.Equal(t, replayBefore, len(sender.replayCalls()))
+	assert.Equal(t, legacyBefore, len(sender.legacyCalls()))
+	_, recorded := r.lookupSeqHash(sc.LedgerSeq)
+	assert.False(t, recorded)
+}
+
 // TestRouter_CheckBehindArmsAcquisition verifies the checkBehind fix:
 // when a peer is far ahead, the router must arm a real acquisition
 // (via startLedgerAcquisition), not just broadcast an unresponded
@@ -156,6 +189,18 @@ func TestRouter_CheckBehindArmsAcquisition(t *testing.T) {
 	totalCalls := len(replayCalls) + len(legacyCalls)
 	require.GreaterOrEqual(t, totalCalls, 1,
 		"checkBehind must arm an acquisition when peer is far ahead")
+}
+
+func TestRouter_FullNodeBehindPeerLeavesFullBeforeCatchup(t *testing.T) {
+	r, a, rs, svc := makeRouter(t)
+	a.SetOperatingMode(consensus.OpModeFull)
+
+	peerSeq := svc.GetClosedLedgerIndex() + 3
+	r.handleMessage(statusChangeMessage(t, peermanagement.PeerID(7), peerSeq, [32]byte{0xB1}))
+	r.handleMessage(statusChangeMessage(t, peermanagement.PeerID(9), peerSeq, [32]byte{0xB1}))
+
+	assert.Equal(t, consensus.OpModeConnected, a.GetOperatingMode())
+	require.GreaterOrEqual(t, acquireCount(rs), 1)
 }
 
 // acquireCount totals the acquisition requests the router emitted via either
@@ -191,6 +236,43 @@ func TestRouter_TrustedValidation_FutureUnknownLedger_Acquires(t *testing.T) {
 	assert.Equal(t, hash, calls[0].hash)
 	assert.Equal(t, uint32(99999), calls[0].seq)
 	assert.Equal(t, uint64(7), calls[0].peerID, "the validating peer is used as the acquisition hint")
+}
+
+func TestRouter_TrustedValidationAheadLeavesFullBeforeAcquire(t *testing.T) {
+	r, a, rs, svc := makeRouter(t)
+	a.SetOperatingMode(consensus.OpModeFull)
+	trusted, err := a.GetValidatorKey()
+	require.NoError(t, err)
+
+	v := &consensus.Validation{
+		NodeID:    trusted,
+		LedgerSeq: svc.GetClosedLedgerIndex() + 3,
+		LedgerID:  consensus.LedgerID{0xCA, 0x11},
+	}
+	r.maybeAcquireFromValidation(v, 7)
+
+	assert.Equal(t, consensus.OpModeConnected, a.GetOperatingMode())
+	require.GreaterOrEqual(t, acquireCount(rs), 1)
+}
+
+func TestRouter_FullNodeDoesNotSpeculativelyAcquireNextLedger(t *testing.T) {
+	r, a, rs, svc := makeRouter(t)
+	a.SetOperatingMode(consensus.OpModeFull)
+	trusted, err := a.GetValidatorKey()
+	require.NoError(t, err)
+	closed := svc.GetClosedLedgerIndex()
+	hash := consensus.LedgerID{0xCA, 0x12}
+
+	r.maybeAcquireFromValidation(&consensus.Validation{
+		NodeID: trusted, LedgerSeq: closed + 1, LedgerID: hash,
+	}, 7)
+	r.armValidationStashAcquisition(closed+1, [32]byte(hash))
+	r.armConsensusCatchup()
+
+	assert.Equal(t, consensus.OpModeFull, a.GetOperatingMode())
+	assert.Zero(t, acquireCount(rs))
+	assert.Zero(t, r.catchupInFlight())
+	assert.Equal(t, closed, svc.GetClosedLedgerIndex())
 }
 
 // An UNTRUSTED validator must not steer acquisition (RCLValidations.cpp:194).

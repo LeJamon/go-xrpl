@@ -660,10 +660,11 @@ func (a *mockAdaptor) OnPhaseChange(oldPhase, newPhase consensus.Phase) {
 	a.phaseChanges = append(a.phaseChanges, newPhase)
 }
 
-func (a *mockAdaptor) OnLedgerSwitched(ledger consensus.Ledger) {
+func (a *mockAdaptor) OnLedgerSwitched(ledger consensus.Ledger) error {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	a.switchedLedgers = append(a.switchedLedgers, ledger)
+	return nil
 }
 
 func (a *mockAdaptor) setTrusted(nodes []consensus.NodeID) {
@@ -1451,19 +1452,29 @@ func TestEngine_IsValidating(t *testing.T) {
 	// Not configured as a validator: never validating, even when synced.
 	adaptor.validator = false
 	adaptor.opMode = consensus.OpModeFull
+	if err := engine.StartRound(consensus.RoundID{Seq: 101}, false); err != nil {
+		t.Fatalf("StartRound: %v", err)
+	}
 	if engine.IsValidating() {
 		t.Error("non-validator should not be validating")
 	}
 
-	// Configured validator but not yet synced to FULL: not validating.
+	// A configured, eligible validator validates while not fully synced; its
+	// validation is partial because it is not proposing.
 	adaptor.validator = true
 	adaptor.opMode = consensus.OpModeTracking
-	if engine.IsValidating() {
-		t.Error("validator below OpModeFull should not be validating")
+	if err := engine.StartRound(consensus.RoundID{Seq: 102}, false); err != nil {
+		t.Fatalf("StartRound: %v", err)
+	}
+	if !engine.IsValidating() {
+		t.Error("eligible tracking validator should be validating")
 	}
 
-	// Validator synced to FULL: validating.
+	// Validator synced to FULL remains validating.
 	adaptor.opMode = consensus.OpModeFull
+	if err := engine.StartRound(consensus.RoundID{Seq: 103}, true); err != nil {
+		t.Fatalf("StartRound: %v", err)
+	}
 	if !engine.IsValidating() {
 		t.Error("validator synced to OpModeFull should be validating")
 	}
@@ -1799,14 +1810,16 @@ func TestEngine_CheckLedger_CompletesHeldWrongLedgerSwitch(t *testing.T) {
 
 		engine.StartRound(consensus.RoundID{Seq: 101, ParentHash: ourID}, true)
 
+		staleLedger := &mockLedger{id: ourID, seq: 100, parentID: consensus.LedgerID{0x99}, closeTime: adaptor.now}
 		adaptor.mu.Lock()
 		adaptor.ledgersRequested = nil
+		adaptor.lastLCL = staleLedger
 		now := adaptor.now
 		adaptor.mu.Unlock()
 
 		engine.mu.Lock()
 		// We hold a stale fork; the network prefers targetID.
-		engine.prevLedger = &mockLedger{id: ourID, seq: 100, parentID: consensus.LedgerID{0x99}, closeTime: now}
+		engine.prevLedger = staleLedger
 		engine.wrongLedgerID = targetID
 		engine.setMode(consensus.ModeWrongLedger)
 		if engine.state != nil {
@@ -3587,6 +3600,9 @@ func TestEngine_StartRound_RestartFloorForcesObserving(t *testing.T) {
 	if engine.Mode() != consensus.ModeObserving {
 		t.Fatalf("round at the restart floor: want Observing, got %v", engine.Mode())
 	}
+	if engine.IsValidating() {
+		t.Fatal("round at the restart floor must not report validating")
+	}
 
 	// Round building seq 501 (prevLedger seq 500 >= floor) → proposes.
 	round = consensus.RoundID{Seq: 501, ParentHash: consensus.LedgerID{2}}
@@ -3595,6 +3611,9 @@ func TestEngine_StartRound_RestartFloorForcesObserving(t *testing.T) {
 	}
 	if engine.Mode() != consensus.ModeProposing {
 		t.Fatalf("round above the restart floor: want Proposing, got %v", engine.Mode())
+	}
+	if !engine.IsValidating() {
+		t.Fatal("round above the restart floor must report validating")
 	}
 }
 

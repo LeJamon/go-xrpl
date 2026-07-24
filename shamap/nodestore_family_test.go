@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -15,6 +16,57 @@ type blockingNodeStore struct {
 	once    sync.Once
 	entered chan struct{}
 	release chan struct{}
+}
+
+type controlledFetchNodeStore struct {
+	nodestore.Database
+	calls    atomic.Int32
+	entered  chan struct{}
+	release  chan struct{}
+	firstErr error
+	data     []byte
+	once     sync.Once
+}
+
+func (s *controlledFetchNodeStore) Fetch(ctx context.Context, hash nodestore.Hash256) (*nodestore.Node, error) {
+	call := s.calls.Add(1)
+	if call == 1 {
+		s.once.Do(func() { close(s.entered) })
+		select {
+		case <-s.release:
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		}
+		if s.firstErr != nil {
+			return nil, s.firstErr
+		}
+	}
+	return &nodestore.Node{Hash: hash, Data: s.data}, nil
+}
+
+func waitForDurableReadWaiters(t *testing.T, family *NodeStoreFamily, hash [32]byte, want int) {
+	t.Helper()
+	deadline := time.NewTimer(time.Second)
+	defer deadline.Stop()
+	ticker := time.NewTicker(time.Millisecond)
+	defer ticker.Stop()
+	for {
+		family.durable.mu.Lock()
+		flight := family.durable.flights[hash]
+		got := 0
+		if flight != nil {
+			got = flight.waiters
+		}
+		family.durable.mu.Unlock()
+		if got == want {
+			return
+		}
+		select {
+		case <-deadline.C:
+			t.Fatalf("durable read waiters = %d, want %d", got, want)
+		case <-ticker.C:
+		}
+	}
 }
 
 func (s *blockingNodeStore) StoreBatch(ctx context.Context, nodes []*nodestore.Node) error {
@@ -122,5 +174,144 @@ func TestNodeStoreFamily_MinimumWaitsForInFlightStore(t *testing.T) {
 	}
 	if stored != nil {
 		t.Fatalf("below-floor store after advance = %+v", stored)
+	}
+}
+
+func TestNodeStoreFamily_FetchDurableCoalescesConcurrentHash(t *testing.T) {
+	base := NewMemoryNodeStoreFamily().db
+	store := &controlledFetchNodeStore{
+		Database: base,
+		entered:  make(chan struct{}),
+		release:  make(chan struct{}),
+		data:     []byte("shared durable node"),
+	}
+	family := NewNodeStoreFamily(store)
+	hash := [32]byte{0xB1}
+
+	const callers = 16
+	type result struct {
+		data []byte
+		err  error
+	}
+	results := make(chan result, callers)
+	for range callers {
+		go func() {
+			data, err := family.FetchDurable(context.Background(), hash)
+			results <- result{data: data, err: err}
+		}()
+	}
+	<-store.entered
+	waitForDurableReadWaiters(t, family, hash, callers)
+	close(store.release)
+
+	for range callers {
+		got := <-results
+		if got.err != nil {
+			t.Fatal(got.err)
+		}
+		if string(got.data) != string(store.data) {
+			t.Fatalf("data = %q, want %q", got.data, store.data)
+		}
+	}
+	if got := store.calls.Load(); got != 1 {
+		t.Fatalf("backend fetches = %d, want 1", got)
+	}
+}
+
+func TestNodeStoreFamily_FetchDurableWaiterCancellationDoesNotCancelRead(t *testing.T) {
+	base := NewMemoryNodeStoreFamily().db
+	store := &controlledFetchNodeStore{
+		Database: base,
+		entered:  make(chan struct{}),
+		release:  make(chan struct{}),
+		data:     []byte("durable after cancellation"),
+	}
+	family := NewNodeStoreFamily(store)
+	hash := [32]byte{0xB2}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	first := make(chan error, 1)
+	go func() {
+		_, err := family.FetchDurable(ctx, hash)
+		first <- err
+	}()
+	<-store.entered
+
+	type result struct {
+		data []byte
+		err  error
+	}
+	second := make(chan result, 1)
+	go func() {
+		data, err := family.FetchDurable(context.Background(), hash)
+		second <- result{data: data, err: err}
+	}()
+	waitForDurableReadWaiters(t, family, hash, 2)
+
+	cancel()
+	if err := <-first; !errors.Is(err, context.Canceled) {
+		t.Fatalf("canceled waiter error = %v, want context.Canceled", err)
+	}
+	select {
+	case got := <-second:
+		t.Fatalf("shared read finished before backend release: %+v", got)
+	default:
+	}
+	if got := store.calls.Load(); got != 1 {
+		t.Fatalf("backend fetches after waiter cancellation = %d, want 1", got)
+	}
+
+	close(store.release)
+	got := <-second
+	if got.err != nil {
+		t.Fatal(got.err)
+	}
+	if string(got.data) != string(store.data) {
+		t.Fatalf("data = %q, want %q", got.data, store.data)
+	}
+}
+
+func TestNodeStoreFamily_FetchDurableErrorPropagatesAndRetries(t *testing.T) {
+	base := NewMemoryNodeStoreFamily().db
+	fetchErr := errors.New("durable fetch failed")
+	store := &controlledFetchNodeStore{
+		Database: base,
+		entered:  make(chan struct{}),
+		release:  make(chan struct{}),
+		firstErr: fetchErr,
+		data:     []byte("retry succeeded"),
+	}
+	family := NewNodeStoreFamily(store)
+	hash := [32]byte{0xB3}
+
+	const callers = 8
+	results := make(chan error, callers)
+	for range callers {
+		go func() {
+			_, err := family.FetchDurable(context.Background(), hash)
+			results <- err
+		}()
+	}
+	<-store.entered
+	waitForDurableReadWaiters(t, family, hash, callers)
+	close(store.release)
+	for range callers {
+		if err := <-results; !errors.Is(err, fetchErr) {
+			t.Fatalf("coalesced error = %v, want %v", err, fetchErr)
+		}
+	}
+	if got := store.calls.Load(); got != 1 {
+		t.Fatalf("backend fetches after shared error = %d, want 1", got)
+	}
+
+	data, err := family.FetchDurable(context.Background(), hash)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(data) != string(store.data) {
+		t.Fatalf("retry data = %q, want %q", data, store.data)
+	}
+	if got := store.calls.Load(); got != 2 {
+		t.Fatalf("backend fetches after retry = %d, want 2", got)
 	}
 }

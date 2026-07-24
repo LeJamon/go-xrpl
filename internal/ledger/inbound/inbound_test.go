@@ -2,6 +2,7 @@ package inbound
 
 import (
 	"bytes"
+	"errors"
 	"io"
 	"log/slog"
 	"strings"
@@ -325,5 +326,54 @@ func TestGotBase_AdoptsSeqWhenZero(t *testing.T) {
 	}
 	if il.seq != 500 {
 		t.Fatalf("seq = %d, want 500 adopted from header", il.seq)
+	}
+}
+
+func TestGotBase_HeaderAdmissionPrecedesAdoptionAndPersistence(t *testing.T) {
+	t.Parallel()
+	source := shamap.New(shamap.TypeState)
+	var key [32]byte
+	key[0] = 0x67
+	key[31] = 0xA5
+	if err := source.Put(key, make([]byte, 12)); err != nil {
+		t.Fatalf("put: %v", err)
+	}
+	rootHash, err := source.Hash()
+	if err != nil {
+		t.Fatalf("source hash: %v", err)
+	}
+	rootData, err := source.SerializeRoot()
+	if err != nil {
+		t.Fatalf("serialize root: %v", err)
+	}
+	headerData, ledgerHash := encodeHeader(header.LedgerHeader{LedgerIndex: 499, AccountHash: rootHash})
+	family := shamap.NewMemoryNodeStoreFamily()
+	policyErr := errors.New("below retained floor")
+	acquisition := New(ledgerHash, 0, 13, slog.New(slog.NewTextHandler(io.Discard, nil)),
+		WithFamily(family),
+		WithHeaderAdmission(func(seq uint32) error {
+			if seq != 499 {
+				t.Fatalf("header admission seq = %d, want 499", seq)
+			}
+			return policyErr
+		}),
+	)
+
+	err = acquisition.GotBase([]message.LedgerNode{{NodeData: headerData}, {NodeData: rootData}})
+	if !errors.Is(err, ErrHeaderRejected) || !errors.Is(err, policyErr) {
+		t.Fatalf("GotBase error = %v, want header and policy rejection", err)
+	}
+	if acquisition.Seq() != 0 {
+		t.Fatalf("rejected hash-only header adopted seq %d", acquisition.Seq())
+	}
+	if acquisition.header != nil || acquisition.stateMap != nil || acquisition.txMap != nil {
+		t.Fatal("rejected header mutated acquisition maps")
+	}
+	stored, fetchErr := family.Fetch(t.Context(), rootHash)
+	if fetchErr != nil {
+		t.Fatalf("fetch rejected root: %v", fetchErr)
+	}
+	if stored != nil {
+		t.Fatal("rejected header persisted its state root")
 	}
 }

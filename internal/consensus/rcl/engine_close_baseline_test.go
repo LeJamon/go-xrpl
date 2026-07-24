@@ -5,6 +5,8 @@ import (
 	"time"
 
 	"github.com/LeJamon/go-xrpl/internal/consensus"
+	"github.com/LeJamon/go-xrpl/protocol"
+	"github.com/stretchr/testify/require"
 )
 
 // reporterLedger is a mockLedger that also reports close-time agreement,
@@ -61,6 +63,99 @@ func TestEngine_LastCloseBaseline(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestEngine_CanBeCurrentUsesParentCloseTime(t *testing.T) {
+	a := newMockAdaptor()
+	e := NewEngine(a, DefaultConfig())
+
+	tests := []struct {
+		name        string
+		closeTime   time.Time
+		parentClose time.Time
+		want        bool
+	}{
+		{"stale parent is rejected", a.Now(), a.Now().Add(-6 * time.Minute), false},
+		{"current parent is accepted", a.Now().Add(-6 * time.Minute), a.Now(), true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			candidate := &reporterLedger{
+				mockLedger:      &mockLedger{seq: 101, closeTime: tt.closeTime},
+				closeAgree:      true,
+				parentCloseTime: tt.parentClose,
+			}
+			if got := e.canBeCurrentLocked(candidate); got != tt.want {
+				t.Fatalf("canBeCurrentLocked() = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestEngine_CanBeCurrentAllowsEarlyLedgerBeforeFirstValidation(t *testing.T) {
+	tests := []struct {
+		name          string
+		sequence      uint32
+		haveValidated bool
+		want          bool
+	}{
+		{"ledger 2 before first validation", 2, false, true},
+		{"ledger 2 after first validation", 2, true, false},
+		{"ledger 11 before first validation", 11, false, false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			a := newMockAdaptor()
+			if tt.haveValidated {
+				validatedID := consensus.LedgerID{2}
+				a.ledgers[validatedID] = &mockLedger{
+					id:        validatedID,
+					seq:       1,
+					closeTime: a.Now(),
+				}
+				a.validatedLedgerHashOverride = validatedID
+			}
+			e := NewEngine(a, DefaultConfig())
+			candidate := &reporterLedger{
+				mockLedger: &mockLedger{
+					seq:       tt.sequence,
+					closeTime: a.Now(),
+				},
+				closeAgree:      true,
+				parentCloseTime: protocol.FromRippleTime(0),
+			}
+
+			if got := e.canBeCurrentLocked(candidate); got != tt.want {
+				t.Fatalf("canBeCurrentLocked() = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestEngine_CanBeCurrentSequenceLimitUsesValidatedParentCloseTime(t *testing.T) {
+	a := newMockAdaptor()
+	validatedID := consensus.LedgerID{2}
+	a.ledgers[validatedID] = &reporterLedger{
+		mockLedger: &mockLedger{
+			id:        validatedID,
+			seq:       100,
+			closeTime: a.Now(),
+		},
+		parentCloseTime: a.Now().Add(-4 * time.Second),
+	}
+	a.validatedLedgerHashOverride = validatedID
+	e := NewEngine(a, DefaultConfig())
+
+	candidate := &reporterLedger{
+		mockLedger: &mockLedger{
+			seq:       112,
+			closeTime: a.Now(),
+		},
+		parentCloseTime: a.Now(),
+	}
+
+	require.True(t, e.canBeCurrentLocked(candidate))
 }
 
 // TestEngine_PrevCloseTime_SeededAcrossRounds checks the cross-round carry of

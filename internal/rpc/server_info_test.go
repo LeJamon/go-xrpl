@@ -66,6 +66,8 @@ func (m *mockLedgerServiceServerInfo) GetCurrentFees() (baseFee, reserveBase, re
 func (m *mockLedgerServiceServerInfo) GetServerInfo() types.LedgerServerInfo {
 	return types.LedgerServerInfo{
 		Standalone:               m.standalone,
+		ServerState:              m.serverState,
+		NeedsNetworkLedger:       m.serverInfo.NeedsNetworkLedger,
 		OpenLedgerSeq:            m.currentLedgerIndex,
 		ClosedLedgerSeq:          m.closedLedgerIndex,
 		ClosedLedgerCloseTime:    m.serverInfo.ClosedLedgerCloseTime,
@@ -75,6 +77,56 @@ func (m *mockLedgerServiceServerInfo) GetServerInfo() types.LedgerServerInfo {
 		ValidatedLedgerCloseTime: m.serverInfo.ValidatedLedgerCloseTime,
 		CompleteLedgers:          m.serverInfo.CompleteLedgers,
 	}
+}
+
+func TestServerInfoRoleAliasesAreAdminOnly(t *testing.T) {
+	for _, state := range []string{"proposing", "validating"} {
+		t.Run(state, func(t *testing.T) {
+			mock := newMockLedgerServiceServerInfo()
+			mock.standalone = false
+			mock.serverState = state
+			services := servicesForServerInfo(mock)
+
+			for _, tc := range []struct {
+				name  string
+				admin bool
+				want  string
+			}{
+				{name: "guest", want: "full"},
+				{name: "admin", admin: true, want: state},
+			} {
+				t.Run(tc.name, func(t *testing.T) {
+					ctx := &types.RpcContext{Context: t.Context(), Services: services, IsAdmin: tc.admin}
+					infoResult, rpcErr := (&handlers.ServerInfoMethod{}).Handle(ctx, nil)
+					require.Nil(t, rpcErr)
+					assert.Equal(t, tc.want, infoResult.(map[string]any)["info"].(map[string]any)["server_state"])
+
+					stateResult, rpcErr := (&handlers.ServerStateMethod{}).Handle(ctx, nil)
+					require.Nil(t, rpcErr)
+					assert.Equal(t, tc.want, stateResult.(map[string]any)["state"].(map[string]any)["server_state"])
+				})
+			}
+		})
+	}
+}
+
+func TestServerInfoNetworkLedgerWaiting(t *testing.T) {
+	mock := newMockLedgerServiceServerInfo()
+	services := servicesForServerInfo(mock)
+	ctx := &types.RpcContext{Context: t.Context(), Services: services}
+
+	mock.serverInfo.NeedsNetworkLedger = true
+	infoResult, rpcErr := (&handlers.ServerInfoMethod{}).Handle(ctx, nil)
+	require.Nil(t, rpcErr)
+	assert.Equal(t, "waiting", infoResult.(map[string]any)["info"].(map[string]any)["network_ledger"])
+	stateResult, rpcErr := (&handlers.ServerStateMethod{}).Handle(ctx, nil)
+	require.Nil(t, rpcErr)
+	assert.Equal(t, "waiting", stateResult.(map[string]any)["state"].(map[string]any)["network_ledger"])
+
+	mock.serverInfo.NeedsNetworkLedger = false
+	infoResult, rpcErr = (&handlers.ServerInfoMethod{}).Handle(ctx, nil)
+	require.Nil(t, rpcErr)
+	assert.NotContains(t, infoResult.(map[string]any)["info"].(map[string]any), "network_ledger")
 }
 
 // servicesForServerInfo builds a per-test ServiceContainer with a server_info mock.

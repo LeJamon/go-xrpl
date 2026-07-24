@@ -167,8 +167,15 @@ func (a *Adaptor) maybePromoteAfterConsensus(ledger consensus.Ledger) {
 	}
 	if target == consensus.OpModeConnected || target == consensus.OpModeTracking {
 		resolution := a.CloseTimeResolution()
-		if a.Now().Before(ledger.CloseTime().Add(2 * resolution)) {
+		networkSeq := a.networkValidatedSeq.Load()
+		if a.Now().Before(ledger.CloseTime().Add(2*resolution)) &&
+			!aheadByMoreThan(networkSeq, ledger.Seq(), 1) {
 			target = consensus.OpModeFull
+		} else if aheadByMoreThan(networkSeq, ledger.Seq(), 1) {
+			a.logger.Info("operating mode Full promotion deferred — validated network is ahead",
+				"ledger_seq", ledger.Seq(),
+				"network_validated_seq", networkSeq,
+			)
 		}
 	}
 	if target == current {
@@ -300,6 +307,21 @@ func (a *Adaptor) ancestorOf(ledger consensus.Ledger, targetSeq uint32) consensu
 // matching hash (fork safety, keyed on the ledger not seq alone), then refreshes
 // LoadFeeTrack's remoteFee from the median sfLoadFee across trusted validations.
 func (a *Adaptor) OnLedgerFullyValidated(ledgerID consensus.LedgerID, seq uint32) {
+	for {
+		current := a.networkValidatedSeq.Load()
+		if seq <= current || a.networkValidatedSeq.CompareAndSwap(current, seq) {
+			break
+		}
+	}
+	if closed := a.ledgerService.GetClosedLedger(); closed != nil && a.GetOperatingMode() == consensus.OpModeFull &&
+		aheadByMoreThan(seq, closed.Sequence(), 1) {
+		a.SetOperatingMode(consensus.OpModeConnected)
+		a.logger.Info("operating mode demoted — validated network is ahead",
+			"closed_seq", closed.Sequence(),
+			"network_validated_seq", seq,
+		)
+	}
+
 	var hash [32]byte
 	copy(hash[:], ledgerID[:])
 	if a.ledgerService.NeedsInitialSync() {
@@ -308,7 +330,7 @@ func (a *Adaptor) OnLedgerFullyValidated(ledgerID consensus.LedgerID, seq uint32
 		}
 	}
 	a.ledgerService.SetValidatedLedgerAt(seq, hash, a.validatedSignTime(ledgerID, seq))
-	a.logger.Info("Ledger fully validated",
+	a.logger.Info("trusted validation quorum observed",
 		"seq", seq,
 		"hash", fmt.Sprintf("%x", hash[:8]),
 	)
@@ -433,13 +455,19 @@ func (a *Adaptor) OnPhaseChange(oldPhase, newPhase consensus.Phase) {
 }
 
 // OnLedgerSwitched tells peers we abandoned our previous LCL for ledger.
-func (a *Adaptor) OnLedgerSwitched(ledger consensus.Ledger) {
+func (a *Adaptor) OnLedgerSwitched(ledger consensus.Ledger) error {
 	if ledger == nil {
-		return
+		return nil
+	}
+	if wrapped, ok := ledger.(*LedgerWrapper); ok {
+		if err := a.ledgerService.SwitchToPreferredLedger(wrapped.Unwrap()); err != nil {
+			return fmt.Errorf("switch canonical closed ledger at sequence %d: %w", ledger.Seq(), err)
+		}
 	}
 	id := ledger.ID()
 	parent := ledger.ParentID()
 	a.broadcastSwitchedLedger(ledger.Seq(), id[:], parent[:])
+	return nil
 }
 
 // networkTime is the current time-adjusted clock as ripple-epoch seconds, for

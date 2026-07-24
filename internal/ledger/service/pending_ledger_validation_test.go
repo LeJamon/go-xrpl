@@ -572,7 +572,11 @@ func TestPendingValidationDrainRechecksBeforeBelowTipValidation(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, svc.Start())
 
+	closed := svc.GetClosedLedger()
+	require.NotNil(t, closed)
+	svc.SetValidatedLedger(closed.Sequence(), closed.Hash())
 	seq := svc.GetValidatedLedgerIndex()
+	require.Equal(t, closed.Sequence(), seq)
 	stateMap := shamap.New(shamap.TypeState)
 	txMap := shamap.New(shamap.TypeTransaction)
 	candidate, err := ledger.NewOpenWithHeader(header.LedgerHeader{LedgerIndex: seq}, stateMap, txMap, drops.Fees{})

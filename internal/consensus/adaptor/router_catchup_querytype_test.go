@@ -153,7 +153,7 @@ func TestRequestMissingAcquisitionNodes_QueryTypeEscalation(t *testing.T) {
 	// The useful base reply consumes the next timer interval without counting a
 	// timeout. The following no-progress fire latches relayable mode.
 	now := time.Now()
-	require.Equal(t, inbound.TimerNone, il.OnTimer(now.Add(time.Hour)))
+	require.Equal(t, inbound.TimerRefresh, il.OnTimer(now.Add(time.Hour)))
 	require.Equal(t, inbound.TimerEscalate, il.OnTimer(now.Add(2*time.Hour)))
 	require.Greater(t, il.Timeouts(), 0)
 	router.requestMissingAcquisitionNodes(il, 0)

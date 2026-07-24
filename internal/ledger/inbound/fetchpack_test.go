@@ -2,7 +2,9 @@ package inbound
 
 import (
 	"context"
+	"errors"
 	"testing"
+	"time"
 
 	"github.com/LeJamon/go-xrpl/internal/ledger/header"
 	"github.com/LeJamon/go-xrpl/internal/peermanagement/message"
@@ -125,6 +127,59 @@ func TestCheckLocal_PersistsRecoveredNodesWithoutDirtyingTree(t *testing.T) {
 	}
 	if called {
 		t.Fatal("verified sync nodes were left dirty after incremental persistence")
+	}
+}
+
+func TestCheckLocal_PersistsProgressBeforeTraversalYield(t *testing.T) {
+	source, rootHash, rootData := buildSourceStateMap(t)
+	packNodes, err := source.WalkFetchPackNodes(1 << 20)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cache := make(map[[32]byte][]byte, len(packNodes))
+	for _, node := range packNodes {
+		cache[node.Hash] = node.Data
+	}
+
+	family := shamap.NewMemoryNodeStoreFamily()
+	hdr := header.LedgerHeader{LedgerIndex: 324, AccountHash: rootHash}
+	hdrBytes, ledgerHash := encodeHeader(hdr)
+	il := New(ledgerHash, 324, 7, discardLogger(), WithFamily(family))
+	if err := il.GotBase([]message.LedgerNode{{NodeData: hdrBytes}, {NodeData: rootData}}); err != nil {
+		t.Fatal(err)
+	}
+	clock := time.Now()
+	il.RearmTimer(clock)
+
+	progressed, complete, err := il.CheckLocalContext(shamap.WithTraversalBudget(t.Context(), 4), func(hash [32]byte) ([]byte, bool) {
+		data, ok := cache[hash]
+		return data, ok
+	})
+	if !errors.Is(err, shamap.ErrTraversalBudget) {
+		t.Fatalf("CheckLocalContext error = %v, want %v", err, shamap.ErrTraversalBudget)
+	}
+	if !progressed || complete {
+		t.Fatalf("CheckLocalContext = progressed %t, complete %t; want true, false", progressed, complete)
+	}
+
+	stored := 0
+	for _, node := range packNodes {
+		data, fetchErr := family.Fetch(t.Context(), node.Hash)
+		if fetchErr != nil {
+			t.Fatal(fetchErr)
+		}
+		if data != nil {
+			stored++
+		}
+	}
+	if stored == 0 {
+		t.Fatal("traversal yield discarded locally recovered nodes")
+	}
+	if got := il.OnTimer(clock.Add(4 * time.Second)); got != TimerRefresh {
+		t.Fatalf("timer result after yielded progress = %v, want %v", got, TimerRefresh)
+	}
+	if got := il.Timeouts(); got != 0 {
+		t.Fatalf("timeouts after yielded progress = %d, want 0", got)
 	}
 }
 

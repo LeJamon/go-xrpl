@@ -22,8 +22,19 @@ type blockingPersistenceFamily struct {
 	store func([]shamap.FlushEntry) error
 }
 
+type checkpointFamily struct {
+	shamap.Family
+	flushes int
+	err     error
+}
+
 func (f blockingPersistenceFamily) StoreBatch(_ context.Context, entries []shamap.FlushEntry) error {
 	return f.store(entries)
+}
+
+func (f *checkpointFamily) Flush(context.Context) error {
+	f.flushes++
+	return f.err
 }
 
 func (f failingStoreFamily) Fetch(ctx context.Context, hash [32]byte) ([]byte, error) {
@@ -100,6 +111,21 @@ func toLedgerNodes(wire []shamap.WireNode) []message.LedgerNode {
 		out = append(out, message.LedgerNode{NodeID: w.NodeID, NodeData: w.Data})
 	}
 	return out
+}
+
+func TestCheckpointPersistenceUsesBoundedUsefulNodeBatches(t *testing.T) {
+	family := &checkpointFamily{Family: shamap.NewMemoryNodeStoreFamily()}
+	ledger := New([32]byte{1}, 1, 1, discardLogger(), WithFamily(family))
+
+	require.NoError(t, ledger.CheckpointPersistence(t.Context(), persistenceCheckpointNodes-1))
+	require.Equal(t, 0, family.flushes)
+	require.NoError(t, ledger.CheckpointPersistence(t.Context(), 1))
+	require.Equal(t, 1, family.flushes)
+
+	wantErr := errors.New("checkpoint failed")
+	family.err = wantErr
+	require.ErrorIs(t, ledger.CheckpointPersistence(t.Context(), persistenceCheckpointNodes), wantErr)
+	require.Equal(t, 2, family.flushes)
 }
 
 // TestGotBase_BackedCompletesEntirelyFromStore proves a node-store-backed
@@ -305,7 +331,7 @@ func TestCheckLocal_PartialRetainedStoreResetsNoProgressInterval(t *testing.T) {
 	require.NoError(t, acquisition.GotBase([]message.LedgerNode{{NodeData: headerData}, {NodeData: rootData}}))
 
 	base := time.Now()
-	require.Equal(t, TimerNone, acquisition.OnTimer(base.Add(time.Hour)), "consume base progress")
+	require.Equal(t, TimerRefresh, acquisition.OnTimer(base.Add(time.Hour)), "consume base progress")
 	wire, err := source.WalkWireNodes()
 	require.NoError(t, err)
 	var retained shamap.FlushEntry
@@ -327,7 +353,7 @@ func TestCheckLocal_PartialRetainedStoreResetsNoProgressInterval(t *testing.T) {
 	require.NoError(t, err)
 	require.True(t, progressed)
 	require.False(t, complete)
-	require.Equal(t, TimerNone, acquisition.OnTimer(base.Add(2*time.Hour)),
+	require.Equal(t, TimerRefresh, acquisition.OnTimer(base.Add(2*time.Hour)),
 		"retained-store hydration must prevent a no-progress strike")
 	require.Zero(t, acquisition.Timeouts())
 }

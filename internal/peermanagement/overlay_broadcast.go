@@ -98,10 +98,17 @@ func (o *Overlay) Broadcast(msg []byte) error {
 // connected peer. Each peer owns its sequence lifecycle, so a slow peer cannot
 // consume the ordinary queue one chunk at a time during this fan-out.
 func (o *Overlay) BroadcastManifestFrames(frames [][]byte) error {
+	return o.BroadcastManifestFramesExcept(0, frames)
+}
+
+func (o *Overlay) BroadcastManifestFramesExcept(exceptPeer PeerID, frames [][]byte) error {
 	o.peersMu.RLock()
 	defer o.peersMu.RUnlock()
-	for _, peer := range o.peers {
+	for id, peer := range o.peers {
 		if peer.State() != PeerStateConnected {
+			continue
+		}
+		if exceptPeer != 0 && id == exceptPeer {
 			continue
 		}
 		if err := peer.SendManifestFrames(frames); err != nil {

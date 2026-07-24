@@ -10,12 +10,87 @@ import (
 	"github.com/LeJamon/go-xrpl/protocol"
 )
 
+const backedWalkProofChunkSize = 1024
+
+type traversalBudgetKey struct{}
+
+type traversalBudget struct {
+	remaining atomic.Int64
+}
+
+// WithTraversalBudget bounds the number of uncached nodes examined by backed
+// SHAMap walks sharing the returned context. Exhaustion preserves the walk
+// cursor and returns ErrTraversalBudget so the caller can resume later.
+func WithTraversalBudget(ctx context.Context, maxVisits int64) context.Context {
+	if maxVisits <= 0 {
+		return ctx
+	}
+	budget := &traversalBudget{}
+	budget.remaining.Store(maxVisits)
+	return context.WithValue(ctx, traversalBudgetKey{}, budget)
+}
+
+func takeTraversalVisit(ctx context.Context) bool {
+	budget, _ := ctx.Value(traversalBudgetKey{}).(*traversalBudget)
+	return budget == nil || budget.remaining.Add(-1) >= 0
+}
+
+type backedWalkProof struct {
+	hash  [32]byte
+	depth uint8
+}
+
+type backedWalkProofs struct {
+	chunks [][]backedWalkProof
+	size   int
+}
+
+func (proofs *backedWalkProofs) add(hash [32]byte, depth int) {
+	if len(proofs.chunks) == 0 || len(proofs.chunks[len(proofs.chunks)-1]) == backedWalkProofChunkSize {
+		proofs.chunks = append(proofs.chunks, make([]backedWalkProof, 0, backedWalkProofChunkSize))
+	}
+	last := len(proofs.chunks) - 1
+	proofs.chunks[last] = append(proofs.chunks[last], backedWalkProof{hash: hash, depth: uint8(depth)})
+	proofs.size++
+}
+
+func (proofs backedWalkProofs) count() int {
+	return proofs.size
+}
+
+func (proofs *backedWalkProofs) truncate(size int) {
+	if size >= proofs.size {
+		return
+	}
+	if size <= 0 {
+		for i := range proofs.chunks {
+			proofs.chunks[i] = nil
+		}
+		proofs.chunks = nil
+		proofs.size = 0
+		return
+	}
+	keepChunks := (size + backedWalkProofChunkSize - 1) / backedWalkProofChunkSize
+	for i := keepChunks; i < len(proofs.chunks); i++ {
+		proofs.chunks[i] = nil
+	}
+	proofs.chunks = proofs.chunks[:keepChunks]
+	lastSize := size - (keepChunks-1)*backedWalkProofChunkSize
+	proofs.chunks[keepChunks-1] = proofs.chunks[keepChunks-1][:lastSize]
+	proofs.size = size
+}
+
+func (proofs *backedWalkProofs) clear() {
+	proofs.truncate(0)
+}
+
 type backedWalkItem struct {
 	hash       [32]byte
 	parentHash [32]byte
 	nodeID     NodeID
 	depth      int
 	branch     int
+	parent     *innerNode
 	node       Node
 }
 
@@ -27,12 +102,14 @@ type backedWalkFrame struct {
 	stored     bool
 	loaded     bool
 	topLevel   bool
+	proofStart int
 }
 
 type backedWalkLane struct {
 	root        backedWalkItem
 	stack       []backedWalkFrame
 	blocked     []backedWalkItem
+	proofs      backedWalkProofs
 	complete    bool
 	durable     bool
 	passDurable bool
@@ -105,13 +182,8 @@ func (sm *SHAMap) walkBackedContext(
 
 	for i := range BranchFactor {
 		lane := &cursor.lanes[i]
-		if lane.complete && lane.durable {
-			continue
-		}
 		if lane.complete {
-			lane.complete = false
-			lane.passDurable = true
-			lane.stack = append(lane.stack, backedWalkFrame{item: lane.root, topLevel: true})
+			continue
 		}
 		wg.Add(1)
 		go func() {
@@ -143,6 +215,9 @@ func (sm *SHAMap) walkBackedContext(
 		root.setFullBelowGen(gen)
 	}
 	if complete && durable {
+		if !takeTraversalVisit(ctx) {
+			return nil, ErrTraversalBudget
+		}
 		data, stored, err := fetchWithDurability(ctx, family, rootHash)
 		if err != nil {
 			return nil, err
@@ -173,10 +248,10 @@ func newBackedWalkCursor(root *innerNode, rootHash [32]byte, gen uint32) *backed
 			continue
 		}
 		item := backedWalkItem{
-			hash: hash, parentHash: rootHash, nodeID: childID, depth: 1, branch: branch, node: child,
+			hash: hash, parentHash: rootHash, nodeID: childID, depth: 1, branch: branch, parent: root, node: child,
 		}
 		cursor.lanes[branch].root = item
-		cursor.lanes[branch].stack = []backedWalkFrame{{item: item, topLevel: true}}
+		cursor.lanes[branch].stack = []backedWalkFrame{{item: item, topLevel: true, proofStart: 0}}
 		cursor.lanes[branch].passDurable = true
 	}
 	return cursor
@@ -193,10 +268,11 @@ func (sm *SHAMap) walkBackedLane(
 	stop *atomic.Bool,
 	report func(backedWalkItem),
 ) error {
-	retryingBlocked := len(lane.blocked) != 0
 	if len(lane.blocked) != 0 {
 		for _, item := range dedupeBackedWalkItems(lane.blocked) {
-			lane.stack = append(lane.stack, backedWalkFrame{item: item, topLevel: true})
+			lane.stack = append(lane.stack, backedWalkFrame{
+				item: item, topLevel: true, proofStart: lane.proofs.count(),
+			})
 		}
 		lane.blocked = lane.blocked[:0]
 	}
@@ -212,8 +288,11 @@ func (sm *SHAMap) walkBackedLane(
 		frame := &lane.stack[last]
 		if !frame.loaded {
 			if cache.Has(gen, frame.item.hash) {
-				finishBackedWalkFrame(lane, true, true)
+				sm.finishBackedWalkFrame(lane, cache, gen, true, true)
 				continue
+			}
+			if !takeTraversalVisit(ctx) {
+				return ErrTraversalBudget
 			}
 			view, found, stored, err := sm.loadTraversalNode(ctx, family, root, frame.item)
 			if err != nil {
@@ -224,11 +303,11 @@ func (sm *SHAMap) walkBackedLane(
 				if filter.ShouldFetch(frame.item.hash) {
 					report(frame.item)
 				}
-				finishBackedWalkFrame(lane, false, false)
+				sm.finishBackedWalkFrame(lane, cache, gen, false, false)
 				continue
 			}
 			if !view.inner {
-				finishBackedWalkFrame(lane, true, stored)
+				sm.finishBackedWalkFrame(lane, cache, gen, true, stored)
 				continue
 			}
 			frame.view = view
@@ -242,10 +321,7 @@ func (sm *SHAMap) walkBackedLane(
 		}
 		if frame.nextBranch == BranchFactor {
 			full, stored := frame.full, frame.stored
-			if full && stored {
-				cacheFullBelow(cache, gen, frame.item.hash, frame.item.depth)
-			}
-			finishBackedWalkFrame(lane, full, stored)
+			sm.finishBackedWalkFrame(lane, cache, gen, full, stored)
 			continue
 		}
 
@@ -255,19 +331,22 @@ func (sm *SHAMap) walkBackedLane(
 			return err
 		}
 		frame.nextBranch++
-		lane.stack = append(lane.stack, backedWalkFrame{item: backedWalkItem{
-			hash:       frame.view.hashes[branch],
-			parentHash: frame.item.hash,
-			nodeID:     childID,
-			depth:      frame.item.depth + 1,
-			branch:     branch,
-			node:       frame.view.children[branch],
-		}})
-	}
-	if len(lane.blocked) == 0 && !lane.passDurable && retryingBlocked {
-		lane.passDurable = true
-		lane.stack = append(lane.stack, backedWalkFrame{item: lane.root, topLevel: true})
-		return sm.walkBackedLane(ctx, family, cache, gen, root, lane, filter, stop, report)
+		var parent *innerNode
+		if attached, ok := frame.item.node.(*innerNode); ok {
+			parent = attached
+		}
+		lane.stack = append(lane.stack, backedWalkFrame{
+			item: backedWalkItem{
+				hash:       frame.view.hashes[branch],
+				parentHash: frame.item.hash,
+				nodeID:     childID,
+				depth:      frame.item.depth + 1,
+				branch:     branch,
+				parent:     parent,
+				node:       frame.view.children[branch],
+			},
+			proofStart: lane.proofs.count(),
+		})
 	}
 	if len(lane.blocked) == 0 {
 		lane.complete = true
@@ -277,6 +356,31 @@ func (sm *SHAMap) walkBackedLane(
 		lane.durable = false
 	}
 	return nil
+}
+
+func (lane *backedWalkLane) rememberProof(hash [32]byte, depth int) {
+	lane.proofs.add(hash, depth)
+}
+
+func (sm *SHAMap) finishBackedWalkFrame(
+	lane *backedWalkLane,
+	cache *FullBelowCache,
+	generation uint32,
+	full bool,
+	stored bool,
+) {
+	frame := &lane.stack[len(lane.stack)-1]
+	if full {
+		lane.proofs.truncate(frame.proofStart)
+		lane.rememberProof(frame.item.hash, frame.item.depth)
+		if stored {
+			cacheFullBelow(cache, generation, frame.item.hash, frame.item.depth)
+			if frame.item.parent != nil && frame.item.node != nil {
+				sm.releaseChild(frame.item.parent, frame.item.branch, frame.item.node)
+			}
+		}
+	}
+	finishBackedWalkFrame(lane, full, stored)
 }
 
 func finishBackedWalkFrame(lane *backedWalkLane, full, stored bool) {

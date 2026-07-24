@@ -51,6 +51,9 @@ var (
 	// MAX_PEERS_PER_LEDGER semantic).
 	ErrPerPeerCapacityFull = errors.New("replay delta per-peer capacity full")
 
+	// ErrAcquisitionStopped signals Acquire was called after terminal shutdown.
+	ErrAcquisitionStopped = errors.New("replay delta acquisition coordinator stopped")
+
 	// ErrNoMatchingAcquisition signals HandleResponse received a
 	// response whose LedgerHash doesn't match any in-flight acquisition.
 	// This is a normal race (a stale or unsolicited reply) and should
@@ -208,7 +211,7 @@ func (r *Replayer) Abandon(hash [32]byte) {
 // "log each outstanding replay at stop") can iterate the slice returned
 // by InFlight() before calling Stop.
 func (r *Replayer) Stop() int {
-	return r.delta.drain()
+	return r.delta.stop()
 }
 
 // InFlight returns a snapshot of hashes currently being acquired.

@@ -2,7 +2,9 @@ package nodestore
 
 import (
 	"bytes"
+	"container/heap"
 	"context"
+	"sync"
 	"testing"
 	"time"
 
@@ -89,6 +91,42 @@ func TestFetchDataUncachedDoesNotPopulateNodeCache(t *testing.T) {
 	}
 }
 
+func TestFetchCachedNeverFallsThroughToBackend(t *testing.T) {
+	backend := memorydb.New()
+	want := NewNode(NodeTransaction, Blob("cache-only payload"))
+	encoded := encodeNodeData(want)
+	if err := backend.Put(want.Hash[:], encoded); err != nil {
+		releaseEncodeBuf(encoded)
+		t.Fatalf("Put: %v", err)
+	}
+	releaseEncodeBuf(encoded)
+
+	db := NewKVDatabaseWithConfig(backend, "test", &DatabaseConfig{
+		CacheSize: 1,
+		CacheTTL:  time.Hour,
+	})
+	t.Cleanup(func() { _ = db.Close() })
+
+	got, err := db.FetchCached(t.Context(), want.Hash)
+	if err != nil {
+		t.Fatalf("FetchCached miss: %v", err)
+	}
+	if got != nil {
+		t.Fatal("FetchCached read through to the backend")
+	}
+
+	if _, err := db.Fetch(t.Context(), want.Hash); err != nil {
+		t.Fatalf("Fetch: %v", err)
+	}
+	got, err = db.FetchCached(t.Context(), want.Hash)
+	if err != nil {
+		t.Fatalf("FetchCached hit: %v", err)
+	}
+	if got == nil || !bytes.Equal(got.Data, want.Data) {
+		t.Fatalf("FetchCached data = %v, want %x", got, want.Data)
+	}
+}
+
 func TestCacheSweepRemovesExpiredEntryAheadOfFreshTail(t *testing.T) {
 	cache := NewCache(32, time.Hour)
 	expired := &Node{Hash: Hash256{0x10}, Type: NodeTransaction, Data: Blob("expired")}
@@ -101,8 +139,8 @@ func TestCacheSweepRemovesExpiredEntryAheadOfFreshTail(t *testing.T) {
 
 	shard := cache.shardFor(expired.Hash)
 	shard.mu.Lock()
-	shard.items[expired.Hash].Value.(*cacheEntry).expiresAt = time.Now().Add(-time.Hour)
-	shard.items[fresh.Hash].Value.(*cacheEntry).expiresAt = time.Now().Add(time.Hour)
+	setCacheEntryExpiryLocked(shard, expired.Hash, time.Now().Add(-time.Hour))
+	setCacheEntryExpiryLocked(shard, fresh.Hash, time.Now().Add(time.Hour))
 	shard.mu.Unlock()
 
 	if removed := cache.Sweep(); removed != 1 {
@@ -130,8 +168,8 @@ func TestCacheCapacityPrefersExpiredEntryOverFreshLRU(t *testing.T) {
 
 	shard := cache.shardFor(expired.Hash)
 	shard.mu.Lock()
-	shard.items[expired.Hash].Value.(*cacheEntry).expiresAt = time.Now().Add(-time.Hour)
-	shard.items[fresh.Hash].Value.(*cacheEntry).expiresAt = time.Now().Add(time.Hour)
+	setCacheEntryExpiryLocked(shard, expired.Hash, time.Now().Add(-time.Hour))
+	setCacheEntryExpiryLocked(shard, fresh.Hash, time.Now().Add(time.Hour))
 	shard.mu.Unlock()
 
 	cache.putOwned(newest)
@@ -147,6 +185,82 @@ func TestCacheCapacityPrefersExpiredEntryOverFreshLRU(t *testing.T) {
 	if stats.Expirations != 1 || stats.Evictions != 0 {
 		t.Fatalf("cache stats = expirations %d, evictions %d; want 1, 0", stats.Expirations, stats.Evictions)
 	}
+}
+
+func TestCacheReplacementReordersExpiration(t *testing.T) {
+	cache := NewCache(32, time.Hour)
+	fresh := &Node{Hash: Hash256{0x10}, Type: NodeTransaction, Data: Blob("fresh")}
+	replaced := &Node{Hash: Hash256{0x20}, Type: NodeTransaction, Data: Blob("replaced")}
+	cache.putOwned(fresh)
+	cache.putOwned(replaced)
+
+	cache.SetTTL(-time.Hour)
+	cache.putOwned(replaced)
+
+	if removed := cache.Sweep(); removed != 1 {
+		t.Fatalf("Sweep removed %d entries, want 1", removed)
+	}
+	if _, ok := cache.Get(replaced.Hash); ok {
+		t.Fatal("replacement with elapsed TTL remained cached")
+	}
+	if _, ok := cache.Get(fresh.Hash); !ok {
+		t.Fatal("fresh entry expired with replaced entry")
+	}
+}
+
+func TestCacheConcurrentMutationPreservesIndexes(t *testing.T) {
+	cache := NewCache(256, time.Hour)
+	const workers = 8
+	const operations = 500
+
+	var wg sync.WaitGroup
+	wg.Add(workers)
+	for worker := range workers {
+		go func() {
+			defer wg.Done()
+			for operation := range operations {
+				var hash Hash256
+				hash[0] = byte((worker + operation) % cacheShardCount)
+				hash[1] = byte(worker)
+				hash[2] = byte(operation)
+				node := &Node{Hash: hash, Type: NodeTransaction, Data: Blob{byte(operation)}}
+				cache.putOwned(node)
+				if operation%3 == 0 {
+					cache.Get(hash)
+				}
+				if operation%5 == 0 {
+					cache.Remove(hash)
+				}
+				if operation%17 == 0 {
+					cache.Sweep()
+				}
+			}
+		}()
+	}
+	wg.Wait()
+
+	for _, shard := range cache.shards {
+		shard.mu.Lock()
+		if len(shard.items) != shard.currentSize || shard.lru.Len() != shard.currentSize || len(shard.expiry) != shard.currentSize {
+			t.Fatalf("shard indexes disagree: items=%d lru=%d expiry=%d size=%d", len(shard.items), shard.lru.Len(), len(shard.expiry), shard.currentSize)
+		}
+		for position, entry := range shard.expiry {
+			if entry.expiryPos != position {
+				t.Fatalf("expiry position=%d, want %d", entry.expiryPos, position)
+			}
+			element, ok := shard.items[entry.key]
+			if !ok || element.Value.(*cacheEntry) != entry {
+				t.Fatalf("expiry entry %x absent from item index", entry.key[:4])
+			}
+		}
+		shard.mu.Unlock()
+	}
+}
+
+func setCacheEntryExpiryLocked(shard *cacheShard, hash Hash256, expiresAt time.Time) {
+	entry := shard.items[hash].Value.(*cacheEntry)
+	entry.expiresAt = expiresAt
+	heap.Fix(&shard.expiry, entry.expiryPos)
 }
 
 func TestDecodeNodeDataTakesOwnership(t *testing.T) {

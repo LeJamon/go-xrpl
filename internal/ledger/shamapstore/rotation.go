@@ -2,6 +2,7 @@ package shamapstore
 
 import (
 	"context"
+	"fmt"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -12,13 +13,26 @@ import (
 // defaultDeleteBatch is the per-batch deletion size used when delete_batch is
 // left unconfigured. It bounds the work done between context checks so a prune
 // pass stays responsive to shutdown.
-const defaultDeleteBatch = 65536
+const (
+	defaultDeleteBatch = 65536
+	defaultBackOff     = 100 * time.Millisecond
+)
 
 // NodePruner deletes stored nodes below a retention boundary. It is satisfied
 // by the nodestore's PrunableDatabase. boundary is exclusive: nodes with a
 // ledger sequence strictly below it are removed.
 type NodePruner interface {
 	DeleteBefore(ctx context.Context, boundary uint32, batchSize int) (deleted uint64, err error)
+}
+
+// NodeGenerationRotator retires whole storage generations and exposes the
+// boundary durably committed with the active pair.
+type NodeGenerationRotator interface {
+	RotateGeneration(
+		ctx context.Context,
+		lastRotated, minimumOnline uint32,
+	) (committed bool, err error)
+	GenerationState() (lastRotated, minimumOnline uint32)
 }
 
 // RelationalPruner deletes ledger and transaction index rows below a retention
@@ -28,6 +42,12 @@ type NodePruner interface {
 type RelationalPruner interface {
 	DeleteLedgersBefore(ctx context.Context, boundary uint32) error
 }
+
+// StateRefresh preserves the live state at or above minimumSeq. Rotating stores
+// promote it into the writable generation; legacy stores re-stamp it in place.
+// checkpoint must be called periodically while walking the state tree. The
+// returned sequence identifies the validated ledger that was preserved.
+type StateRefresh func(ctx context.Context, minimumSeq uint32, checkpoint func(time.Duration) error) (uint32, error)
 
 // RotationConfig carries the node_db online-delete settings the rotator needs.
 type RotationConfig struct {
@@ -39,12 +59,16 @@ type RotationConfig struct {
 	// DeleteBatch is node_db delete_batch: the maximum number of records removed
 	// per backend batch. Zero selects a default.
 	DeleteBatch int
+
+	// BackOff is the cooperative pause between live-state promotion checkpoints.
+	// Zero selects the rippled node_db default.
+	BackOff time.Duration
 }
 
 // Rotator runs the online-delete rotation: every DeleteInterval validated
-// ledgers it deletes complete ledgers below the rotation boundary from the
-// nodestore and relational stores, advancing the advisory-delete state's
-// lastRotated and the minimum-online boundary.
+// ledgers it retires the oldest node-store generation (or prunes a legacy
+// single store) and removes old relational rows, advancing the advisory-delete
+// state's lastRotated and minimum-online boundary.
 //
 // It mirrors the decision logic of rippled's SHAMapStoreImp::run: the first
 // notification seeds lastRotated; thereafter a rotation fires when the
@@ -60,7 +84,7 @@ type Rotator struct {
 	rel        RelationalPruner
 	cfg        RotationConfig
 	logger     xrpllog.Logger
-	refresh    func(context.Context, uint32) error
+	refresh    StateRefresh
 	advance    func(uint32)
 	beginPrune func() func()
 	healthMu   sync.RWMutex
@@ -94,7 +118,7 @@ func (r *Rotator) SetHealthCheck(healthy func() bool, recoveryWait time.Duration
 
 // SetStateRefresh installs the live-state refresh, acquisition-floor advance,
 // and exclusive cache guard required around node-store pruning.
-func (r *Rotator) SetStateRefresh(refresh func(context.Context, uint32) error, advance func(uint32), beginPrune func() func()) {
+func (r *Rotator) SetStateRefresh(refresh StateRefresh, advance func(uint32), beginPrune func() func()) {
 	if r == nil {
 		return
 	}
@@ -118,6 +142,9 @@ func NewRotator(store *Store, nodes NodePruner, rel RelationalPruner, cfg Rotati
 	if cfg.DeleteBatch <= 0 {
 		cfg.DeleteBatch = defaultDeleteBatch
 	}
+	if cfg.BackOff <= 0 {
+		cfg.BackOff = defaultBackOff
+	}
 	r := &Rotator{
 		store:    store,
 		nodes:    nodes,
@@ -130,6 +157,30 @@ func NewRotator(store *Store, nodes NodePruner, rel RelationalPruner, cfg Rotati
 	}
 	r.minimumOnline.Store(store.GetMinimumOnline())
 	return r
+}
+
+// ReconcileGenerationState repairs advisory-delete bookkeeping after a crash
+// that durably published a generation swap but stopped before SetRotation.
+func (r *Rotator) ReconcileGenerationState() error {
+	if r == nil {
+		return nil
+	}
+	generations, ok := r.nodes.(NodeGenerationRotator)
+	if !ok {
+		return nil
+	}
+	lastRotated, minimumOnline := generations.GenerationState()
+	if lastRotated <= r.store.GetLastRotated() {
+		return nil
+	}
+	if minimumOnline == 0 {
+		return fmt.Errorf("generation %d has no minimum-online boundary", lastRotated)
+	}
+	if err := r.store.SetRotation(lastRotated, minimumOnline); err != nil {
+		return err
+	}
+	r.minimumOnline.Store(minimumOnline)
+	return nil
 }
 
 // Start launches the background rotation worker. Safe to call once.
@@ -274,11 +325,30 @@ func (r *Rotator) waitHealthy(ctx context.Context) bool {
 	}
 }
 
-// rotate deletes everything below lastRotated, then advances the boundary to
-// validatedSeq. Deletion runs below the OLD boundary (lastRotated): the live
-// state at validatedSeq is preserved because every live state node was
-// re-persisted at the current sequence, so it carries a LedgerSeq at or above
-// the retained range and is never matched by the below-boundary scan.
+func (r *Rotator) refreshCheckpoint(ctx context.Context, work time.Duration) error {
+	if !r.waitHealthy(ctx) {
+		return ctx.Err()
+	}
+	pause := min(work, r.cfg.BackOff)
+	if pause > 0 {
+		timer := time.NewTimer(pause)
+		defer timer.Stop()
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-timer.C:
+		}
+	}
+	if !r.waitHealthy(ctx) {
+		return ctx.Err()
+	}
+	return nil
+}
+
+// rotate retires everything below lastRotated, then advances the boundary to
+// validatedSeq. A rotating store first promotes the live state into its current
+// writable generation and then drops the former archive. A legacy store retains
+// the sequence-stamp pruning path.
 func (r *Rotator) rotate(ctx context.Context, validatedSeq, lastRotated uint32) {
 	r.logger.Info("online delete: rotating",
 		"validatedSeq", validatedSeq, "lastRotated", lastRotated,
@@ -296,10 +366,18 @@ func (r *Rotator) rotate(ctx context.Context, validatedSeq, lastRotated uint32) 
 	if r.advance != nil {
 		r.advance(minimumOnline)
 	}
-	if err := r.refresh(ctx, validatedSeq); err != nil {
+	refreshedSeq, err := r.refresh(ctx, validatedSeq, func(work time.Duration) error {
+		return r.refreshCheckpoint(ctx, work)
+	})
+	if err != nil {
 		if ctx.Err() == nil {
 			r.logger.Warn("online delete: live-state refresh failed", "seq", validatedSeq, "err", err)
 		}
+		return
+	}
+	if refreshedSeq < validatedSeq {
+		r.logger.Warn("online delete: live-state refresh returned stale ledger",
+			"requestedSeq", validatedSeq, "refreshedSeq", refreshedSeq)
 		return
 	}
 	if !r.waitHealthy(ctx) {
@@ -318,25 +396,41 @@ func (r *Rotator) rotate(ctx context.Context, validatedSeq, lastRotated uint32) 
 		return
 	}
 
-	deleted, err := func() (uint64, error) {
+	deleted, committed, err := func() (uint64, bool, error) {
 		if r.beginPrune != nil {
 			unlock := r.beginPrune()
 			defer unlock()
 		}
-		return r.nodes.DeleteBefore(ctx, lastRotated, r.cfg.DeleteBatch)
+		if generations, ok := r.nodes.(NodeGenerationRotator); ok {
+			committed, err := generations.RotateGeneration(ctx, refreshedSeq, minimumOnline)
+			return 0, committed, err
+		}
+		deleted, err := r.nodes.DeleteBefore(ctx, lastRotated, r.cfg.DeleteBatch)
+		return deleted, err == nil, err
 	}()
 	if err != nil {
+		if committed {
+			r.logger.Warn("online delete: retired generation cleanup failed", "err", err)
+		} else {
+			if ctx.Err() != nil {
+				return
+			}
+			r.logger.Warn("online delete: nodestore rotation failed", "boundary", lastRotated, "deleted", deleted, "err", err)
+			return
+		}
+	}
+	if !committed {
 		if ctx.Err() != nil {
 			return
 		}
-		r.logger.Warn("online delete: nodestore prune failed", "boundary", lastRotated, "deleted", deleted, "err", err)
+		r.logger.Warn("online delete: nodestore rotation did not commit", "boundary", lastRotated)
 		return
 	}
-	if err := r.store.SetRotation(validatedSeq, minimumOnline); err != nil {
-		r.logger.Warn("online delete: failed to persist lastRotated", "seq", validatedSeq, "err", err)
+	if err := r.store.SetRotation(refreshedSeq, minimumOnline); err != nil {
+		r.logger.Warn("online delete: failed to persist lastRotated", "seq", refreshedSeq, "err", err)
 		return
 	}
 
 	r.logger.Info("online delete: rotation finished",
-		"validatedSeq", validatedSeq, "nodesDeleted", deleted, "minimumOnline", minimumOnline)
+		"validatedSeq", refreshedSeq, "nodesDeleted", deleted, "minimumOnline", minimumOnline)
 }

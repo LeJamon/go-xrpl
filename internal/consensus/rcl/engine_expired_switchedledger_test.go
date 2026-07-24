@@ -77,7 +77,6 @@ func TestConsensus_Expired_NoCloseTimeConsensus_WaitsForResync(t *testing.T) {
 
 	phaseAfter := engine.phase
 	modeAfter := engine.mode
-	resyncArmed := engine.adaptor.Now().Before(engine.degradedResyncUntil)
 	engine.mu.Unlock()
 
 	if phaseAfter != consensus.PhaseEstablish {
@@ -86,10 +85,6 @@ func TestConsensus_Expired_NoCloseTimeConsensus_WaitsForResync(t *testing.T) {
 	if modeAfter != consensus.ModeObserving {
 		t.Errorf("expired proposer must bow out to ModeObserving (rippled leaveConsensus), got %v", modeAfter)
 	}
-	if resyncArmed {
-		t.Error("round expiry must not force a degraded resync")
-	}
-
 	select {
 	case ev := <-subscriber.events:
 		if cre, ok := ev.(*consensus.ConsensusReachedEvent); ok {

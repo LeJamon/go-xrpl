@@ -21,7 +21,6 @@ const (
 	DefaultMessageBufferSize   = 256
 	DefaultSendBufferSize      = 64
 	acquisitionEventBufferSize = 16
-	manifestMessageBufferSize  = 4
 	acquisitionSendBufferSize  = 192
 	manifestSendBufferSize     = DefaultSendBufferSize
 
@@ -45,6 +44,13 @@ const (
 
 	DefaultUserAgent = "goXRPL/0.1.0"
 )
+
+func manifestMessageBufferSize(maxPeers int) int {
+	if maxPeers < 1 {
+		return 1
+	}
+	return maxPeers
+}
 
 // Config holds the configuration for the overlay network.
 type Config struct {

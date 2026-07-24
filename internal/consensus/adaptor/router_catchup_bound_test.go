@@ -40,17 +40,17 @@ func TestRouter_CatchupFanoutBoundedByCap(t *testing.T) {
 
 	assert.LessOrEqual(t, acquireCount(rs), maxConcurrentCatchup,
 		"feeding %d ever-higher trusted tips must arm at most maxConcurrentCatchup acquisitions, not one per event", n)
-	assert.Equal(t, maxConcurrentCatchup, r.catchupInFlight(),
-		"exactly maxConcurrentCatchup consensus acquisitions must be in flight")
+	assert.Equal(t, maxConcurrentSpeculativeCatchup, r.catchupInFlight(),
+		"gossip catch-up must leave one slot for an exact consensus target")
 
 	tSeq, _, _ := r.bestCatchupTarget()
 	assert.Equal(t, highest, tSeq,
 		"the recorded catch-up target must be the highest tip seen")
 }
 
-// On completion the router must re-arm one acquisition toward the LATEST
-// recorded target — the retarget loop that replaces the fan-out.
-func TestRouter_RetargetsOnCompletion(t *testing.T) {
+// A far-behind completion remains store-only and immediately re-arms toward the
+// newest target instead of handing the intermediate ledger to consensus.
+func TestRouter_FarCompletionStoresAndRetargets(t *testing.T) {
 	r, _, rs, svc := makeRouter(t)
 	closedSeq := svc.GetClosedLedgerIndex()
 
@@ -61,27 +61,22 @@ func TestRouter_RetargetsOnCompletion(t *testing.T) {
 	trackCatchupPeer(r, 7, targetSeq)
 	r.recordCatchupTarget(targetSeq, targetHash, 7)
 
-	// Complete a deep catch-up acquisition (jump-adopt). On completion the
-	// router advances the closed ledger and, since the recorded target is still
-	// ahead, re-arms exactly one acquisition toward it.
+	// Completion stores the fetched ledger without moving the service frontier.
 	il := completedCatchUpAcquisition(t, closedSeq+10)
 	r.fetchTracker.Track(il)
 	r.completeInboundLedger(il)
 
-	require.Equal(t, closedSeq+10, svc.GetClosedLedgerIndex(),
-		"jump-adopt must advance the closed ledger to the acquired tip")
-
-	require.Equal(t, 1, acquireCount(rs),
-		"completion must re-arm exactly one acquisition toward the best target")
-	calls := rs.legacyCalls()
-	require.Len(t, calls, 1, "target far ahead → legacy path")
-	assert.Equal(t, targetHash, calls[0].hash)
-	assert.Equal(t, targetSeq, calls[0].seq)
-	assert.Equal(t, uint64(7), calls[0].peerID)
+	require.Equal(t, closedSeq, svc.GetClosedLedgerIndex())
+	stored, err := svc.GetLedgerByHash(il.Hash())
+	require.NoError(t, err)
+	require.Equal(t, closedSeq+10, stored.Sequence())
+	require.Equal(t, 1, acquireCount(rs))
+	require.Len(t, rs.legacyCalls(), 1)
+	assert.Equal(t, targetHash, rs.legacyCalls()[0].hash)
 }
 
-// Retarget must be a no-op once the closed ledger has caught up to the recorded
-// target: completing the tip that reaches the target arms nothing further.
+// Completing the recorded target never arms another acquisition from the
+// completion callback.
 func TestRouter_NoRetargetWhenCaughtUp(t *testing.T) {
 	r, _, rs, svc := makeRouter(t)
 	closedSeq := svc.GetClosedLedgerIndex()
@@ -93,7 +88,9 @@ func TestRouter_NoRetargetWhenCaughtUp(t *testing.T) {
 	r.fetchTracker.Track(il)
 	r.completeInboundLedger(il)
 
-	require.Equal(t, tipSeq, svc.GetClosedLedgerIndex())
+	require.Equal(t, closedSeq, svc.GetClosedLedgerIndex())
+	_, err := svc.GetLedgerByHash(il.Hash())
+	require.NoError(t, err)
 	assert.Zero(t, acquireCount(rs),
 		"once closed reaches the target, completion must not arm another acquisition")
 }
@@ -137,4 +134,19 @@ func TestRouter_InitialSyncPathStillArms(t *testing.T) {
 
 	require.Equal(t, 1, acquireCount(rs),
 		"a fresh node in initial sync must still arm a bounded catch-up acquisition")
+}
+
+func TestRouter_InitialConsensusAcquisitionBootstrapsClosedLedger(t *testing.T) {
+	svc := adg_newNonStandaloneService(t)
+	a, _ := newRecordingAdaptor(t, svc)
+	r := NewRouter(nil, a, make(chan *peermanagement.InboundMessage, 8))
+	tipSeq := svc.GetClosedLedgerIndex() + 1
+	il := completedCatchUpAcquisition(t, tipSeq)
+	r.fetchTracker.Track(il)
+
+	r.completeInboundLedger(il)
+
+	require.False(t, svc.NeedsInitialSync())
+	require.Equal(t, tipSeq, svc.GetClosedLedgerIndex())
+	require.Equal(t, il.Hash(), svc.GetClosedLedger().Hash())
 }

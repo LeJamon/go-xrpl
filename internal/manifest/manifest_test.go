@@ -13,6 +13,7 @@ import (
 	"github.com/LeJamon/go-xrpl/crypto/secp256k1"
 	"github.com/LeJamon/go-xrpl/internal/manifest"
 	"github.com/LeJamon/go-xrpl/protocol"
+	"github.com/stretchr/testify/require"
 )
 
 // secp256k1CurveOrderN is the order N of the secp256k1 curve, used to
@@ -119,6 +120,32 @@ func BenchmarkVerifyManifest(b *testing.B) {
 			b.Fatal(err)
 		}
 	}
+}
+
+func TestManifest_RejectsFieldsOutsideManifestFormat(t *testing.T) {
+	serialized, _, _ := buildManifest(t, 1, false, 0x05, 0x06)
+	for field, value := range map[string]any{
+		"Flags":        uint32(0),
+		"TxnSignature": "00",
+	} {
+		t.Run(field, func(t *testing.T) {
+			decoded, err := binarycodec.Decode(hex.EncodeToString(serialized))
+			require.NoError(t, err)
+			decoded[field] = value
+			encoded, err := binarycodec.Encode(decoded)
+			require.NoError(t, err)
+			withExtraField, err := hex.DecodeString(encoded)
+			require.NoError(t, err)
+
+			_, err = manifest.Deserialize(withExtraField)
+			require.ErrorContains(t, err, "unexpected field "+field)
+		})
+	}
+}
+
+func TestManifest_RejectsOversizedPayloadBeforeDecode(t *testing.T) {
+	_, err := manifest.Deserialize(make([]byte, 1025))
+	require.ErrorContains(t, err, "payload exceeds 1024 bytes")
 }
 
 // deterministicEd25519Keypair returns a 33-byte xrpl-style public key
@@ -632,4 +659,15 @@ func TestManifest_Domain_Validation(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestManifest_MaximumDomainFitsSerializedLimit(t *testing.T) {
+	domain := strings.Repeat("a", 63) + "." + strings.Repeat("b", 61) + ".cc"
+	require.Len(t, domain, 128)
+	serialized := buildManifestWithDomain(t, domain, 0x72, 0x73)
+	require.Less(t, len(serialized), 1024)
+	parsed, err := manifest.Deserialize(serialized)
+	require.NoError(t, err)
+	require.Equal(t, domain, parsed.Domain)
+	require.NoError(t, parsed.Verify())
 }

@@ -99,6 +99,15 @@ func (f *fakeManifestSender) BroadcastManifestFrames(frames [][]byte) error {
 	return nil
 }
 
+func (f *fakeManifestSender) BroadcastManifestFramesExcept(peerID peermanagement.PeerID, frames [][]byte) error {
+	for _, frame := range frames {
+		if err := f.BroadcastExcept(peerID, frame); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 func (f *fakeManifestSender) BroadcastExcept(peerID peermanagement.PeerID, frame []byte) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()

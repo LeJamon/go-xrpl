@@ -8,6 +8,7 @@ import (
 	"io"
 	"net"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -295,6 +296,56 @@ func TestPeerManifestDispatchBackpressuresUntilCapacity(t *testing.T) {
 	assert.Equal(t, peer.ID(), inbound.PeerID)
 	assert.Equal(t, uint16(message.TypeManifests), inbound.Type)
 	assert.Equal(t, []byte("manifest"), inbound.Payload)
+}
+
+type countingReader struct {
+	reader *bytes.Reader
+	read   atomic.Int64
+}
+
+func (r *countingReader) Read(dst []byte) (int, error) {
+	n, err := r.reader.Read(dst)
+	r.read.Add(int64(n))
+	return n, err
+}
+
+func TestPeerManifestReadBudgetBoundsPayloadAllocation(t *testing.T) {
+	payload := bytes.Repeat([]byte{0x4d}, 32*1024)
+	frame := manifestFrame(t, payload)
+	budget := newReadBudget(int64(len(payload)))
+
+	firstQueue := make(chan *InboundMessage, 1)
+	firstQueue <- &InboundMessage{}
+	first := newLatencyTestPeer(t)
+	first.bufReader = bufio.NewReader(bytes.NewReader(frame))
+	first.SetManifestMessages(firstQueue)
+	first.SetManifestReadBudget(budget)
+	firstDone := make(chan error, 1)
+	go func() { firstDone <- first.readLoop(context.Background()) }()
+	require.Eventually(t, func() bool {
+		budget.mu.Lock()
+		defer budget.mu.Unlock()
+		return budget.used == int64(len(payload))
+	}, time.Second, time.Millisecond)
+
+	secondReader := &countingReader{reader: bytes.NewReader(frame)}
+	secondQueue := make(chan *InboundMessage, 1)
+	second := newLatencyTestPeer(t)
+	second.bufReader = bufio.NewReader(secondReader)
+	second.SetManifestMessages(secondQueue)
+	second.SetManifestReadBudget(budget)
+	secondDone := make(chan error, 1)
+	go func() { secondDone <- second.readLoop(context.Background()) }()
+
+	require.Eventually(t, func() bool { return secondReader.read.Load() > 0 }, time.Second, time.Millisecond)
+	time.Sleep(25 * time.Millisecond)
+	require.Less(t, secondReader.read.Load(), int64(len(frame)))
+
+	<-firstQueue
+	require.Eventually(t, func() bool { return secondReader.read.Load() == int64(len(frame)) }, time.Second, time.Millisecond)
+	require.Equal(t, payload, (<-secondQueue).Payload)
+	require.ErrorIs(t, <-firstDone, io.EOF)
+	require.ErrorIs(t, <-secondDone, io.EOF)
 }
 
 func (c *chunkedLivenessConn) Close() error                { return nil }

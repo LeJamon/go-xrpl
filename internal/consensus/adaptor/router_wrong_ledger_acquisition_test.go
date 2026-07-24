@@ -1,10 +1,8 @@
 package adaptor
 
 import (
-	"context"
 	"sync"
 	"testing"
-	"time"
 
 	"github.com/LeJamon/go-xrpl/internal/consensus"
 	"github.com/LeJamon/go-xrpl/internal/ledger/inbound"
@@ -44,7 +42,22 @@ func TestAdaptorRequestLedgerTracksExactConsensusTarget(t *testing.T) {
 	assert.Nil(t, r.fetchTracker.Find(target), "matching reply must be consumed by the tracked acquisition")
 }
 
-func TestAdaptorRequestLedgerSupersedesSpeculativeConsensusTarget(t *testing.T) {
+func TestHeldConsensusTargetDoesNotReenterEngine(t *testing.T) {
+	r, _, _, svc := makeRouter(t)
+	engine := &mockEngine{}
+	r.engine = engine
+	target := svc.GetClosedLedger().Hash()
+	r.consensusRecovery.targetHash = target
+
+	require.True(t, r.armPendingConsensusLedger())
+	assert.Empty(t, engine.getLedgers())
+	assert.Equal(t, consensusRecovery{
+		anchorHash: target,
+		anchorSeq:  svc.GetClosedLedgerIndex(),
+	}, r.consensusRecovery)
+}
+
+func TestAdaptorRequestLedgerStartsExactTargetAlongsideActiveTraversal(t *testing.T) {
 	r, a, sender, svc := makeRouter(t)
 	oldHash := [32]byte{0xB1}
 	exactHash := [32]byte{0xB2}
@@ -55,79 +68,203 @@ func TestAdaptorRequestLedgerSupersedesSpeculativeConsensusTarget(t *testing.T) 
 
 	require.NoError(t, a.RequestLedger(consensus.LedgerID(exactHash)))
 
-	assert.Nil(t, r.fetchTracker.Find(oldHash))
-	exact := r.fetchTracker.Find(exactHash)
-	require.NotNil(t, exact)
-	assert.Equal(t, uint32(0), exact.Seq())
-	assert.Equal(t, exactHash, r.activeConsensusLedger)
-	assert.Equal(t, [32]byte{}, r.pendingConsensusLedger)
-	assert.Equal(t, 1, r.catchupInFlight())
+	require.NotNil(t, r.fetchTracker.Find(oldHash))
+	assert.NotNil(t, r.fetchTracker.Find(exactHash))
+	assert.Equal(t, exactHash, r.consensusRecovery.targetHash)
+	assert.Equal(t, 2, r.catchupInFlight())
 	require.Len(t, sender.legacyCalls(), 1)
 	assert.Equal(t, exactHash, sender.legacyCalls()[0].hash)
 }
 
-func TestAdaptorRequestLedgerCancelsSupersededTraversal(t *testing.T) {
-	r, a, _, svc := makeRouter(t)
-	oldHash := [32]byte{0xD1}
-	exactHash := [32]byte{0xD2}
+func TestConcurrentSpeculativeAdmissionHardCap(t *testing.T) {
+	r, _, sender, svc := makeRouter(t)
 	targetSeq := svc.GetClosedLedgerIndex() + 100
 	trackCatchupPeer(r, 7, targetSeq)
-	active := inbound.New(oldHash, targetSeq-1, 7, serveTestLogger())
-	r.fetchTracker.Track(active)
 
-	lane := newAcquisitionWorkLane(1)
-	started := make(chan struct{})
-	lane.process = func(ctx context.Context, ledger *inbound.Ledger, _ []acquisitionWorkEvent) acquisitionWorkResult {
-		close(started)
-		<-ctx.Done()
-		return acquisitionWorkResult{ledger: ledger, err: ctx.Err()}
+	const contenders = 32
+	start := make(chan struct{})
+	var wg sync.WaitGroup
+	for i := 0; i < contenders; i++ {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			<-start
+			hash := [32]byte{byte(i + 1), 0xA5}
+			r.startLedgerAcquisition(targetSeq, hash, 7)
+		}(i)
 	}
-	ctx, cancel := context.WithCancel(t.Context())
-	defer cancel()
-	lane.start(ctx)
-	r.acquisitionWork = lane
-	require.True(t, lane.submit(active, acquisitionWorkEvent{kind: acquisitionWorkLocal}))
-	<-started
+	close(start)
+	wg.Wait()
 
-	require.NoError(t, a.RequestLedger(consensus.LedgerID(exactHash)))
-	result := <-lane.results()
-	assert.Same(t, active, result.ledger)
-	assert.ErrorIs(t, result.err, context.Canceled)
-	r.handleAcquisitionWorkResult(result)
-	require.Eventually(t, func() bool { return !lane.has(active) }, time.Second, time.Millisecond)
-	assert.Nil(t, r.fetchTracker.Find(oldHash))
-	require.NotNil(t, r.fetchTracker.Find(exactHash))
-
-	lane.stop()
+	assert.Equal(t, maxConcurrentSpeculativeCatchup, r.catchupInFlight())
+	assert.Len(t, sender.legacyCalls(), maxConcurrentSpeculativeCatchup)
 }
 
-func TestAdaptorRequestLedgerLetsExactAcquisitionFinish(t *testing.T) {
+func TestExactConsensusAdmissionUsesReservedSlot(t *testing.T) {
+	r, a, sender, svc := makeRouter(t)
+	targetSeq := svc.GetClosedLedgerIndex() + 100
+	trackCatchupPeer(r, 7, targetSeq)
+
+	for i := 0; i < maxConcurrentSpeculativeCatchup; i++ {
+		hash := [32]byte{byte(0xC0 + i)}
+		require.True(t, r.startLedgerAcquisition(targetSeq, hash, 7))
+	}
+	exactHash := [32]byte{0xCF}
+	require.NoError(t, a.RequestLedger(consensus.LedgerID(exactHash)))
+
+	assert.Equal(t, maxConcurrentCatchup, r.catchupInFlight())
+	assert.NotNil(t, r.fetchTracker.Find(exactHash))
+	assert.Equal(t, exactHash, r.consensusRecovery.stepHash)
+	require.Len(t, sender.legacyCalls(), maxConcurrentCatchup)
+
+	extraHash := [32]byte{0xD0}
+	assert.False(t, r.startLedgerAcquisition(targetSeq, extraHash, 7))
+	assert.Nil(t, r.fetchTracker.Find(extraHash))
+	assert.Equal(t, maxConcurrentCatchup, r.catchupInFlight())
+}
+
+func TestAdaptorRequestLedgerKeepsActiveStepAndQueuesLatestTarget(t *testing.T) {
 	r, a, sender, svc := makeRouter(t)
 	firstHash := [32]byte{0xB3}
 	intermediateHash := [32]byte{0xB8}
 	latestHash := [32]byte{0xB4}
-	trackCatchupPeer(r, 7, svc.GetClosedLedgerIndex()+100)
+	queuedHash := [32]byte{0xB9}
+	targetSeq := svc.GetClosedLedgerIndex() + 100
+	trackCatchupPeer(r, 7, targetSeq)
 
 	require.NoError(t, a.RequestLedger(consensus.LedgerID(firstHash)))
 	require.NoError(t, a.RequestLedger(consensus.LedgerID(intermediateHash)))
 	require.NoError(t, a.RequestLedger(consensus.LedgerID(latestHash)))
+	require.NoError(t, a.RequestLedger(consensus.LedgerID(queuedHash)))
+	r.armConsensusCatchup()
 
 	require.NotNil(t, r.fetchTracker.Find(firstHash))
 	assert.Nil(t, r.fetchTracker.Find(intermediateHash))
 	assert.Nil(t, r.fetchTracker.Find(latestHash))
-	assert.Equal(t, firstHash, r.activeConsensusLedger)
-	assert.Equal(t, latestHash, r.pendingConsensusLedger)
+	assert.Nil(t, r.fetchTracker.Find(queuedHash))
+	assert.Equal(t, firstHash, r.consensusRecovery.stepHash)
+	assert.Equal(t, queuedHash, r.consensusRecovery.targetHash)
 	require.Len(t, sender.legacyCalls(), 1)
 	assert.Equal(t, firstHash, sender.legacyCalls()[0].hash)
 
 	first := r.fetchTracker.Find(firstHash)
 	require.True(t, r.fetchTracker.DiscardExpected(first))
+	notify, rearm := r.finishConsensusRecoveryStep(targetSeq-3, firstHash)
+	assert.False(t, notify)
+	require.True(t, rearm)
 	r.armConsensusCatchup()
 
-	require.NotNil(t, r.fetchTracker.Find(latestHash))
-	assert.Equal(t, latestHash, r.activeConsensusLedger)
+	require.NotNil(t, r.fetchTracker.Find(queuedHash))
+	assert.Equal(t, queuedHash, r.consensusRecovery.stepHash)
+	assert.Equal(t, queuedHash, r.consensusRecovery.targetHash)
 	require.Len(t, sender.legacyCalls(), 2)
-	assert.Equal(t, latestHash, sender.legacyCalls()[1].hash)
+	assert.Equal(t, queuedHash, sender.legacyCalls()[1].hash)
+}
+
+func TestSpeculativeAcquisitionDefersDuringConsensusRecovery(t *testing.T) {
+	r, a, sender, svc := makeRouter(t)
+	targetSeq := svc.GetClosedLedgerIndex() + 100
+	trackCatchupPeer(r, 7, targetSeq)
+
+	exactHash := [32]byte{0xD4}
+	require.NoError(t, a.RequestLedger(consensus.LedgerID(exactHash)))
+	require.NotNil(t, r.fetchTracker.Find(exactHash))
+
+	speculativeHash := [32]byte{0xD5}
+	assert.False(t, r.startLedgerAcquisition(targetSeq+1, speculativeHash, 7))
+	assert.Nil(t, r.fetchTracker.Find(speculativeHash))
+	require.Len(t, sender.legacyCalls(), 1)
+
+	r.recordCatchupTarget(targetSeq+1, speculativeHash, 7)
+	seq, hash, peer := r.bestCatchupTarget()
+	assert.Equal(t, targetSeq+1, seq)
+	assert.Equal(t, speculativeHash, hash)
+	assert.Equal(t, uint64(7), peer)
+}
+
+func TestSupersededReplayFailureDoesNotRestartStaleTarget(t *testing.T) {
+	r, a, sender, svc := makeRouter(t)
+	parent := svc.GetClosedLedger()
+	require.NotNil(t, parent)
+	trackCatchupPeer(r, 7, parent.Sequence()+10)
+
+	oldStep := [32]byte{0xD1}
+	oldTarget := [32]byte{0xD2}
+	newTarget := [32]byte{0xD3}
+	require.NoError(t, r.startReplayDeltaAcquisition(parent.Sequence()+1, oldStep, 7, parent))
+	r.consensusRecovery = consensusRecovery{targetHash: oldTarget, stepHash: oldStep}
+	require.NoError(t, a.RequestLedger(consensus.LedgerID(newTarget)))
+
+	r.replayer.Abandon(oldStep)
+	r.fallbackReplayAcquisition(parent.Sequence()+1, oldStep, 7)
+
+	legacy := sender.legacyCalls()
+	require.Len(t, legacy, 1)
+	assert.Equal(t, newTarget, legacy[0].hash)
+	assert.Nil(t, r.fetchTracker.Find(oldStep))
+	assert.Equal(t, newTarget, r.consensusRecovery.stepHash)
+}
+
+func TestConsensusRecoveryAnchorRequiresCurrentTargetAncestry(t *testing.T) {
+	r, _, _, _ := makeRouter(t)
+	canonical := [32]byte{0xE1}
+	child := [32]byte{0xE2}
+	target := [32]byte{0xE3}
+	fork := [32]byte{0xEF}
+	r.recordSeqHash(10, canonical, [32]byte{0xE0}, true)
+	r.recordSeqHash(11, child, canonical, true)
+	r.recordSeqHash(12, target, child, true)
+	r.consensusRecovery.targetHash = target
+
+	notify, rearm := r.finishConsensusRecoveryStep(11, fork)
+	assert.False(t, notify)
+	assert.True(t, rearm)
+	assert.Equal(t, [32]byte{}, r.consensusRecovery.anchorHash)
+
+	notify, rearm = r.finishConsensusRecoveryStep(10, canonical)
+	assert.False(t, notify)
+	assert.True(t, rearm)
+	assert.Equal(t, canonical, r.consensusRecovery.anchorHash)
+	assert.Equal(t, uint32(10), r.consensusRecovery.anchorSeq)
+}
+
+func TestConsensusRecoveryExactTargetReplacesHigherAnchor(t *testing.T) {
+	r, _, _, _ := makeRouter(t)
+	higher := [32]byte{0xF1}
+	target := [32]byte{0xF2}
+	r.consensusRecovery = consensusRecovery{
+		targetHash: target,
+		stepHash:   target,
+		anchorHash: higher,
+		anchorSeq:  200,
+	}
+
+	notify, rearm := r.finishConsensusRecoveryStep(100, target)
+	assert.True(t, notify)
+	assert.False(t, rearm)
+	assert.Equal(t, consensusRecovery{anchorHash: target, anchorSeq: 100}, r.consensusRecovery)
+}
+
+func TestRouterStopAcquisitionsDrainsBothPaths(t *testing.T) {
+	r, _, _, svc := makeRouter(t)
+	parent := svc.GetClosedLedger()
+	require.NotNil(t, parent)
+	legacyHash := [32]byte{0xF3}
+	replayHash := [32]byte{0xF4}
+	require.True(t, r.startLedgerAcquisition(parent.Sequence()+10, legacyHash, 7))
+	require.NoError(t, r.startReplayDeltaAcquisition(parent.Sequence()+1, replayHash, 8, parent))
+
+	legacy, replay := r.StopAcquisitions()
+	assert.Equal(t, 1, legacy)
+	assert.Equal(t, 1, replay)
+	assert.Nil(t, r.fetchTracker.Find(legacyHash))
+	assert.Zero(t, r.replayer.Count())
+	assert.False(t, r.startLedgerAcquisition(parent.Sequence()+11, [32]byte{0xF5}, 7))
+	_, err := r.replayer.Acquire([32]byte{0xF6}, 8, parent)
+	assert.ErrorIs(t, err, inbound.ErrAcquisitionStopped)
+	legacy, replay = r.StopAcquisitions()
+	assert.Zero(t, legacy)
+	assert.Zero(t, replay)
 }
 
 func TestPendingConsensusTargetPrecedesRecordedCatchupTarget(t *testing.T) {

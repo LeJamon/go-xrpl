@@ -44,6 +44,20 @@ func TestRouter_ForwardDeltaStep_SameBranch(t *testing.T) {
 	assert.True(t, r.replayer.Has(nextHash), "replay-delta acquisition must be in flight for closed+1")
 }
 
+func TestRouter_CaughtUpLeavesNextLedgerToConsensus(t *testing.T) {
+	r, _, rs, svc := makeRouter(t)
+	closed := svc.GetClosedLedgerIndex()
+	target := [32]byte{0xC1}
+	trackCatchupPeer(r, 7, closed+1)
+	r.recordCatchupTarget(closed+1, target, 7)
+
+	r.armCatchupTowardTarget()
+
+	assert.Empty(t, rs.replayCalls())
+	assert.Empty(t, rs.legacyCalls())
+	assert.Zero(t, r.catchupInFlight())
+}
+
 // Same branch, parent unknown (validation-only): closed+1 has a hash but no
 // recorded parent; the same-branch check falls back to our own closed seq's
 // recorded hash. When it matches our closed hash the forward step is still taken.
@@ -144,9 +158,9 @@ func TestRouter_ForwardDeltaStep_FarGapJumpAdopts(t *testing.T) {
 	assert.Equal(t, tipSeq, legacy[0].seq)
 }
 
-// Forward walk: completing a forward step advances closed by one and re-arms the
-// NEXT forward step (closed+2), not a jump — the serial walk that converges.
-func TestRouter_ForwardWalk_RearmsNextOnCompletion(t *testing.T) {
+// A completed forward fetch becomes available to consensus without advancing
+// the service frontier or re-arming the acquisition walk.
+func TestRouter_ForwardWalkStoresNextForConsensus(t *testing.T) {
 	r, _, rs, svc := makeRouter(t)
 	parent := svc.GetClosedLedger()
 	require.NotNil(t, parent)
@@ -182,13 +196,12 @@ func TestRouter_ForwardWalk_RearmsNextOnCompletion(t *testing.T) {
 
 	r.completeInboundLedger(il)
 
-	require.Equal(t, c+1, svc.GetClosedLedgerIndex(), "forward step advances closed by one")
-	require.Equal(t, childHash, svc.GetClosedLedger().Hash())
-
-	replays := rs.replayCalls()
-	require.Len(t, replays, 1, "completion must re-arm the next forward step")
-	assert.Equal(t, next2, replays[0].hash)
-	assert.Empty(t, rs.legacyCalls(), "the re-arm must be a forward delta, not a jump")
+	require.Equal(t, c, svc.GetClosedLedgerIndex())
+	stored, err := svc.GetLedgerByHash(childHash)
+	require.NoError(t, err)
+	require.Equal(t, c+1, stored.Sequence())
+	assert.Empty(t, rs.replayCalls())
+	assert.Empty(t, rs.legacyCalls())
 }
 
 // maxConcurrentCatchup is preserved: while a forward step is in flight, a second
@@ -205,12 +218,12 @@ func TestRouter_ForwardWalk_SerialUnderCap(t *testing.T) {
 	r.recordCatchupTarget(closed+5, [32]byte{0xF0}, 7)
 
 	r.armCatchupTowardTarget()
-	require.Equal(t, maxConcurrentCatchup, r.catchupInFlight(), "one forward step in flight")
+	require.Equal(t, 1, r.catchupInFlight(), "one forward step in flight")
 
 	// A second arm while the first is in flight must not add another.
 	r.armCatchupTowardTarget()
-	assert.Equal(t, maxConcurrentCatchup, r.catchupInFlight(),
-		"the forward walk stays serial under the concurrency cap")
+	assert.Equal(t, 1, r.catchupInFlight(),
+		"the same forward target remains deduplicated")
 	assert.Len(t, rs.replayCalls(), 1, "no second acquisition while one is in flight")
 }
 

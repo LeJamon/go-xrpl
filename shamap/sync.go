@@ -19,6 +19,8 @@ var (
 	ErrEmptyBranchOnPath = errors.New("path descends into an empty branch")
 	ErrParentNotInTree   = errors.New("parent node not yet loaded for path")
 	ErrNodeSerialization = errors.New("verified node serialization failed")
+	// ErrTraversalBudget means a resumable backed walk reached its visit limit.
+	ErrTraversalBudget = errors.New("SHAMap traversal budget exhausted")
 	// ErrNodeNotInStore marks a backed-map descend whose child is genuinely
 	// absent from the family store, distinguishing a true miss from a
 	// transient fetch failure (I/O error, cancellation).
@@ -437,17 +439,17 @@ func (sm *SHAMap) AddKnownNode(nodeHash [32]byte, data []byte) error {
 //
 // Returns the same results as AddKnownNodeByID.
 func (sm *SHAMap) AddKnownNodeFromPrefix(nodeID NodeID, data []byte) (AddNodeResult, error) {
-	result, _, err := sm.addKnownNodeFromPrefix(nodeID, data, false)
+	result, _, err := sm.addKnownNodeFromPrefix(context.Background(), nodeID, data, false)
 	return result, err
 }
 
 // AddKnownNodeFromPrefixWithEntry inserts and verifies a prefix-format node,
 // returning the clean node's NodeStore entry for the caller to persist.
 func (sm *SHAMap) AddKnownNodeFromPrefixWithEntry(nodeID NodeID, data []byte) (AddNodeResult, FlushEntry, error) {
-	return sm.addKnownNodeFromPrefix(nodeID, data, true)
+	return sm.addKnownNodeFromPrefix(context.Background(), nodeID, data, true)
 }
 
-func (sm *SHAMap) addKnownNodeFromPrefix(nodeID NodeID, data []byte, withEntry bool) (AddNodeResult, FlushEntry, error) {
+func (sm *SHAMap) addKnownNodeFromPrefix(ctx context.Context, nodeID NodeID, data []byte, withEntry bool) (AddNodeResult, FlushEntry, error) {
 	sm.mu.Lock()
 	defer sm.mu.Unlock()
 	sm.attachmentMu.Lock()
@@ -464,7 +466,7 @@ func (sm *SHAMap) addKnownNodeFromPrefix(nodeID NodeID, data []byte, withEntry b
 	}
 
 	var verified Node
-	result, err := sm.attachKnownNodeAt(nodeID, !withEntry, func() (Node, error) {
+	result, err := sm.attachKnownNodeAt(ctx, nodeID, !withEntry, func() (Node, error) {
 		var derr error
 		verified, derr = deserializeFromPrefix(data)
 		return verified, derr
@@ -496,17 +498,23 @@ func (sm *SHAMap) addKnownNodeFromPrefix(nodeID NodeID, data []byte, withEntry b
 //     not reference), ErrNodeHashMismatch, ErrUnexpectedNode (inner where only
 //     a leaf may live), or ErrSyncNotInProgress / ErrInvalidNodeData on misuse
 func (sm *SHAMap) AddKnownNodeByID(nodeID NodeID, data []byte) (AddNodeResult, error) {
-	result, _, err := sm.addKnownNodeByID(nodeID, data, false)
+	result, _, err := sm.addKnownNodeByID(context.Background(), nodeID, data, false)
 	return result, err
 }
 
 // AddKnownNodeByIDWithEntry inserts and verifies a wire node, returning the
 // clean node's NodeStore entry for the caller to persist.
 func (sm *SHAMap) AddKnownNodeByIDWithEntry(nodeID NodeID, data []byte) (AddNodeResult, FlushEntry, error) {
-	return sm.addKnownNodeByID(nodeID, data, true)
+	return sm.AddKnownNodeByIDWithEntryContext(context.Background(), nodeID, data)
 }
 
-func (sm *SHAMap) addKnownNodeByID(nodeID NodeID, data []byte, withEntry bool) (AddNodeResult, FlushEntry, error) {
+// AddKnownNodeByIDWithEntryContext is AddKnownNodeByIDWithEntry with
+// cancellation for required backing-store reads.
+func (sm *SHAMap) AddKnownNodeByIDWithEntryContext(ctx context.Context, nodeID NodeID, data []byte) (AddNodeResult, FlushEntry, error) {
+	return sm.addKnownNodeByID(ctx, nodeID, data, true)
+}
+
+func (sm *SHAMap) addKnownNodeByID(ctx context.Context, nodeID NodeID, data []byte, withEntry bool) (AddNodeResult, FlushEntry, error) {
 	sm.mu.Lock()
 	defer sm.mu.Unlock()
 	sm.attachmentMu.Lock()
@@ -523,7 +531,7 @@ func (sm *SHAMap) addKnownNodeByID(nodeID NodeID, data []byte, withEntry bool) (
 	}
 
 	var verified Node
-	result, err := sm.attachKnownNodeAt(nodeID, !withEntry, func() (Node, error) {
+	result, err := sm.attachKnownNodeAt(ctx, nodeID, !withEntry, func() (Node, error) {
 		var derr error
 		verified, derr = deserializeNodeFromWire(data)
 		return verified, derr
@@ -549,7 +557,7 @@ func (sm *SHAMap) addKnownNodeByID(nodeID NodeID, data []byte, withEntry bool) (
 // AddKnownNodeFromPrefix. Caller must hold the write lock and have validated
 // state and nodeID. markDirty is false when the caller receives and persists a
 // FlushEntry; attaching verified immutable data does not modify the tree hash.
-func (sm *SHAMap) attachKnownNodeAt(nodeID NodeID, markDirty bool, deserialize func() (Node, error)) (AddNodeResult, error) {
+func (sm *SHAMap) attachKnownNodeAt(ctx context.Context, nodeID NodeID, markDirty bool, deserialize func() (Node, error)) (AddNodeResult, error) {
 	if sm.root == nil {
 		return NodeInvalid, ErrParentNotInTree
 	}
@@ -604,8 +612,14 @@ func (sm *SHAMap) attachKnownNodeAt(nodeID NodeID, markDirty bool, deserialize f
 		}
 
 		if child == nil {
-			loaded, _, loadErr := fetchFromStoreContext(context.Background(), sm, sm.family, parent, branch)
-			if loadErr != nil || loaded == nil {
+			loaded, loadErr := fetchFromStoreForNodePlacementContext(ctx, sm, sm.family, parent, branch)
+			if loadErr != nil {
+				if errors.Is(loadErr, context.Canceled) || errors.Is(loadErr, context.DeadlineExceeded) {
+					return NodeInvalid, loadErr
+				}
+				return NodeReRequest, nil
+			}
+			if loaded == nil {
 				return NodeReRequest, nil
 			}
 			child = parent.SetChildIfNil(branch, loaded)

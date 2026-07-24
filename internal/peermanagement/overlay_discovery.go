@@ -51,9 +51,9 @@ func (o *Overlay) prepareAutoconnect(count int) (int, bool, *bootstrapLease, boo
 	}
 	lease, ok := o.bootstrap.tryReserve()
 	if !ok {
-		return 0, true, nil, false
+		return count, true, nil, true
 	}
-	return min(count, 1), true, lease, true
+	return count, true, lease, true
 }
 
 // autoconnect attempts to connect to peers if we need more.

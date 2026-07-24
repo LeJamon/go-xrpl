@@ -60,3 +60,21 @@ type KeyValueStore interface {
 	Sync() error
 	Close() error
 }
+
+// RotatingStore keeps a writable generation and one read-only archive
+// generation. Rotate installs a fresh writable generation, moves the previous
+// writable generation to the archive slot, and retires the former archive.
+type RotatingStore interface {
+	KeyValueStore
+	// CanRotateWithoutRefresh reports whether the archive is empty, so retiring
+	// it cannot discard a record.
+	CanRotateWithoutRefresh() (bool, error)
+	// Promote returns a caller-owned value and ensures an archive hit is copied
+	// into the current writable generation before it returns.
+	Promote(key []byte) ([]byte, error)
+	// committed is true once the durable generation manifest names the new
+	// writable/archive pair. An error with committed=true reports work after the
+	// manifest rename; the rotation must not be retried.
+	Rotate(lastRotated, minimumOnline uint32) (committed bool, err error)
+	RotationState() (lastRotated, minimumOnline uint32)
+}

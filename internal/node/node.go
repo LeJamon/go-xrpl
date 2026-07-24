@@ -227,9 +227,13 @@ func Run(appConfig *config.Config, configPath string, standalone bool, rootLogge
 					shamapstore.RotationConfig{
 						DeleteInterval: uint32(appConfig.NodeDB.OnlineDelete),
 						DeleteBatch:    appConfig.NodeDB.DeleteBatch,
+						BackOff:        time.Duration(appConfig.NodeDB.BackOffMilliseconds) * time.Millisecond,
 					},
 					serverLog,
 				)
+				if err := rotator.ReconcileGenerationState(); err != nil {
+					return fmt.Errorf("reconcile online-delete generation state: %w", err)
+				}
 				minimumOnline := rotator.MinimumOnline()
 				if minimumOnline == 0 && repoManager != nil {
 					minSeq, minErr := repoManager.Ledger().GetMinLedgerSeq(context.Background())
@@ -1096,12 +1100,28 @@ func setupStorage(cfg *config.Config, log xrpllog.Logger) (nodestore.Database, r
 	var db nodestore.Database
 	nodestorePath := cfg.NodeDB.Path
 	if nodestorePath != "" {
-		store, err := kvpebble.New(nodestorePath, pebbleBlockCacheBytes, pebbleFileHandles, false)
-		if err != nil {
-			return nil, nil, fmt.Errorf("storage backend: %w", err)
-		}
 		cacheSize, cacheTTL := nodeStoreCacheParams(cfg.NodeDB, cfg.NodeSize)
-		db = nodestore.NewKVDatabase(store, "pebble("+nodestorePath+")", cacheSize, cacheTTL)
+		hasRotationState, err := kvpebble.HasRotationState(nodestorePath)
+		if err != nil {
+			return nil, nil, fmt.Errorf("inspect rotating storage state: %w", err)
+		}
+		if cfg.NodeDB.IsOnlineDeleteEnabled() || hasRotationState {
+			store, err := kvpebble.NewRotating(nodestorePath, pebbleBlockCacheBytes, pebbleFileHandles)
+			if err != nil {
+				return nil, nil, fmt.Errorf("rotating storage backend: %w", err)
+			}
+			db = nodestore.NewRotatingKVDatabase(
+				store,
+				"pebble("+nodestorePath+")",
+				&nodestore.DatabaseConfig{CacheSize: cacheSize, CacheTTL: cacheTTL},
+			)
+		} else {
+			store, err := kvpebble.New(nodestorePath, pebbleBlockCacheBytes, pebbleFileHandles, false)
+			if err != nil {
+				return nil, nil, fmt.Errorf("storage backend: %w", err)
+			}
+			db = nodestore.NewKVDatabase(store, "pebble("+nodestorePath+")", cacheSize, cacheTTL)
+		}
 		log.Info("Storage initialized", "backend", "pebble", "path", nodestorePath,
 			"cache_size", cacheSize, "cache_age", cacheTTL)
 	} else {

@@ -101,6 +101,10 @@ func (e *Engine) timerEntry() {
 		(e.adaptor.IsAmendmentBlocked() || e.adaptor.IsUNLBlocked()) {
 		e.adaptor.SetOperatingMode(consensus.OpModeConnected)
 	}
+	if e.mode == consensus.ModeProposing &&
+		e.adaptor.GetOperatingMode() != consensus.OpModeFull {
+		e.leaveConsensusLocked()
+	}
 
 	// A peer-triggered accept may be applying the LCL off e.mu on another
 	// goroutine; don't drive rounds until its commit tail runs (rippled parks
@@ -115,10 +119,6 @@ func (e *Engine) timerEntry() {
 	if e.validationTracker != nil {
 		e.validationTracker.FlushStale()
 	}
-
-	// Runs every tick regardless of phase: a WrongLedger pin taken at
-	// PhaseAccepted advances no rounds, so the checkLedger path below never runs.
-	e.checkStuckWrongLedger()
 
 	// checkLedger runs in every non-disconnected mode — the Syncing/Tracking
 	// → Full recovery path; gating on Full would wedge us after a wrongLedger
@@ -181,16 +181,6 @@ func (e *Engine) checkAndStartRoundInner() {
 	e.startRoundLocked(round, proposing, false)
 }
 
-// checkStuckWrongLedger drops to a degraded resync once pinned in
-// ModeWrongLedger past wrongLedgerStuckTimeout, backing the clean-failure hatch
-// which can't arm under a livelock or moving target. Caller must hold e.mu.
-func (e *Engine) checkStuckWrongLedger() {
-	if e.mode == consensus.ModeWrongLedger && !e.wrongLedgerSince.IsZero() &&
-		e.adaptor.Now().Sub(e.wrongLedgerSince) > wrongLedgerStuckTimeout {
-		e.dropToDegradedResync("stuck-timeout")
-	}
-}
-
 // checkLedger compares prevLedger against the network-preferred ledger
 // and calls handleWrongLedger on a mismatch.
 func (e *Engine) checkLedger() {
@@ -198,6 +188,35 @@ func (e *Engine) checkLedger() {
 		return
 	}
 	ourID := e.prevLedger.ID()
+	if closed, err := e.adaptor.GetLastClosedLedger(); err == nil && closed != nil && closed.ID() != ourID {
+		closedID := closed.ID()
+		slog.Warn("Closed ledger changed during consensus",
+			"t", "consensus",
+			"event", "closed-ledger-changed",
+			"our", fmt.Sprintf("%x", ourID[:8]),
+			"closed", fmt.Sprintf("%x", closedID[:8]),
+		)
+		e.demoteForLedgerChange()
+		e.handleWrongLedger(closedID, closed)
+		return
+	}
+	if e.mode == consensus.ModeWrongLedger {
+		validatedID := e.adaptor.GetValidatedLedgerHash()
+		if validatedID != (consensus.LedgerID{}) && validatedID != ourID {
+			if validated := e.resolveTargetLedger(validatedID); validated != nil &&
+				e.canSwitchToLedgerLocked(validated) {
+				slog.Info("Switching to held validated recovery ledger",
+					"t", "consensus",
+					"event", "validated-recovery-lcl",
+					"seq", validated.Seq(),
+					"hash", fmt.Sprintf("%x", validatedID[:8]),
+				)
+				e.demoteForLedgerChange()
+				e.handleWrongLedger(validatedID, validated)
+				return
+			}
+		}
+	}
 	netLgr := e.getNetworkLedger()
 	if netLgr != ourID {
 		// Network is on our parent: we're ahead, not wrong — wait, don't
@@ -222,7 +241,15 @@ func (e *Engine) checkLedger() {
 			"our", fmt.Sprintf("%x", ourID[:8]),
 			"net", fmt.Sprintf("%x", netLgr[:8]),
 		)
+		e.demoteForLedgerChange()
 		e.handleWrongLedger(netLgr, target)
+	}
+}
+
+func (e *Engine) demoteForLedgerChange() {
+	mode := e.adaptor.GetOperatingMode()
+	if mode == consensus.OpModeFull || mode == consensus.OpModeTracking {
+		e.adaptor.SetOperatingMode(consensus.OpModeConnected)
 	}
 }
 
@@ -325,7 +352,11 @@ func (e *Engine) getNetworkLedger() consensus.LedgerID {
 // behind the validated index. ok=false when no trusted validation signal
 // exists. Caller holds e.mu.
 func (e *Engine) validationPreferredLocked() (consensus.LedgerID, bool) {
-	if e.validationTracker == nil {
+	return e.validationPreferredForLedgerLocked(e.prevLedger)
+}
+
+func (e *Engine) validationPreferredForLedgerLocked(ledger consensus.Ledger) (consensus.LedgerID, bool) {
+	if ledger == nil || e.validationTracker == nil {
 		return consensus.LedgerID{}, false
 	}
 	minSeq := e.validatedSeqLocked()
@@ -337,8 +368,8 @@ func (e *Engine) validationPreferredLocked() (consensus.LedgerID, bool) {
 		return consensus.LedgerID{}, false
 	}
 
-	ourID := e.prevLedger.ID()
-	ourSeq := e.prevLedger.Seq()
+	ourID := ledger.ID()
+	ourSeq := ledger.Seq()
 	if id == ourID {
 		return ourID, true
 	}
@@ -353,26 +384,42 @@ func (e *Engine) validationPreferredLocked() (consensus.LedgerID, bool) {
 	if seq > ourSeq {
 		return id, true
 	}
-	if e.ancestorAtLocked(seq) != id {
+	if e.ancestorFromLedgerLocked(ledger, seq) != id {
 		return id, true
 	}
 	return ourID, true
 }
 
-// ancestorAtLocked resolves our chain's ledger ID at targetSeq by walking
-// locally-held parents from prevLedger; the zero ID when unresolvable —
-// treated as a different chain, like rippled's out-of-skip-list ID{0}
-// (RCLValidations.cpp:78-95). Caller holds e.mu.
-func (e *Engine) ancestorAtLocked(targetSeq uint32) consensus.LedgerID {
+// isCurrentPreferredLCLLocked reports whether ledger remains the correct LCL
+// under the trusted-validation preference rules. No validation signal means
+// there is nothing to switch to. A directly preferred child also keeps its
+// parent current, matching the stay-on-parent rule used by getNetworkLedger.
+func (e *Engine) isCurrentPreferredLCLLocked(ledger consensus.Ledger) bool {
+	if ledger == nil {
+		return true
+	}
+	if e.validatedSeqLocked() > ledger.Seq() {
+		return false
+	}
+	id, ok := e.validationPreferredForLedgerLocked(ledger)
+	return !ok || id == ledger.ID()
+}
+
+// ancestorFromLedgerLocked resolves ledger's chain ID at targetSeq by walking
+// locally-held parents. Caller holds e.mu.
+func (e *Engine) ancestorFromLedgerLocked(ledger consensus.Ledger, targetSeq uint32) consensus.LedgerID {
+	if ledger == nil {
+		return consensus.LedgerID{}
+	}
 	const maxWalk = 256 // rippled's skip-list reach
-	seq := e.prevLedger.Seq()
+	seq := ledger.Seq()
 	if targetSeq > seq || seq-targetSeq > maxWalk {
 		return consensus.LedgerID{}
 	}
 	if targetSeq == seq {
-		return e.prevLedger.ID()
+		return ledger.ID()
 	}
-	cur := e.prevLedger.ParentID()
+	cur := ledger.ParentID()
 	for s := seq - 1; s > targetSeq; s-- {
 		l, err := e.adaptor.GetLedger(cur)
 		if err != nil || l == nil {
@@ -466,7 +513,6 @@ func (e *Engine) handleWrongLedger(netLedgerID consensus.LedgerID, target consen
 		)
 		e.prevLedger = newLedger
 		e.wrongLedgerID = consensus.LedgerID{}
-		e.wrongLedgerAcquireFailures = 0
 		if e.state != nil {
 			e.state.HaveCorrectLCL = true
 		}
@@ -478,18 +524,9 @@ func (e *Engine) handleWrongLedger(netLedgerID consensus.LedgerID, target consen
 			e.adaptor.GetOperatingMode() == consensus.OpModeFull
 		e.startRoundLocked(nextRound, proposing, true)
 	} else {
-		// Not found — request from peers. Inside the degraded-resync cooldown,
-		// stay advancing rather than re-pinning wrongLedger: a pinned node
-		// closes no ledgers and makes no progress toward the network tip.
+		// Not found — request from peers and remain pinned until the preferred
+		// ledger is acquired or the router reports terminal acquisition failure.
 		e.adaptor.RequestLedger(netLedgerID)
-		if e.adaptor.Now().Before(e.degradedResyncUntil) {
-			slog.Info("Retrying network ledger in degraded resync",
-				"t", "consensus",
-				"event", "wrong-lcl-degraded-retry",
-				"hash", fmt.Sprintf("%x", netLedgerID[:8]),
-			)
-			return
-		}
 		slog.Info("Cannot acquire network ledger, entering wrongLedger mode",
 			"t", "consensus",
 			"event", "wrong-lcl",
@@ -503,27 +540,9 @@ func (e *Engine) handleWrongLedger(netLedgerID consensus.LedgerID, target consen
 	}
 }
 
-// wrongLedgerAcquireMaxFailures bounds clean acquisition failures before
-// dropping to a degraded resync; degradedResyncCooldown is how long it
-// then stays unpinned and advancing.
-const (
-	wrongLedgerAcquireMaxFailures = 3
-	degradedResyncCooldown        = 20 * time.Second
-
-	// wrongLedgerStuckTimeout bounds continuous time pinned in ModeWrongLedger.
-	// The clean-failure hatch can fail to arm — a livelocked acquisition never
-	// times out, and a target moving as the network advances leaves each clean
-	// failure on a stale id the hatch ignores — so without this bound the node
-	// wedges forever. Set above the clean-failure budget so it only backstops
-	// a genuinely stuck node.
-	wrongLedgerStuckTimeout = 60 * time.Second
-)
-
 // OnLedgerAcquireFailed reports a clean acquisition failure for id. If
-// pinned in wrongLedger on id it must not stay frozen (a frozen
-// wrongLedger closes no ledgers and never rejoins): each failure un-pins
-// so checkLedger re-resolves; at the limit it drops to a degraded resync
-// so closes resume while recovery continues.
+// pinned in wrongLedger on id, un-pin so the router can re-resolve and retry
+// the latest preferred ledger without resuming consensus on the stale LCL.
 func (e *Engine) OnLedgerAcquireFailed(id consensus.LedgerID) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
@@ -532,43 +551,10 @@ func (e *Engine) OnLedgerAcquireFailed(id consensus.LedgerID) {
 		return
 	}
 
-	e.wrongLedgerAcquireFailures++
-	// Un-pin so the next checkLedger re-resolves and re-requests.
 	e.wrongLedgerID = consensus.LedgerID{}
-
-	if e.wrongLedgerAcquireFailures < wrongLedgerAcquireMaxFailures {
-		slog.Warn("wrongLedger acquisition failed; will re-attempt",
-			"t", "consensus",
-			"event", "wrong-lcl-retry",
-			"hash", fmt.Sprintf("%x", id[:8]),
-			"failures", e.wrongLedgerAcquireFailures,
-		)
-		return
-	}
-
-	// Persistent clean failure: validated ledger unacquirable.
-	e.dropToDegradedResync("acquire-max-failures")
-}
-
-// dropToDegradedResync demotes a node that cannot acquire its wrongLedger
-// target: ModeObserving keeps rounds advancing while checkLedger retries, so
-// closes resume. Reached from both the clean-failure hatch (at its limit) and
-// the stuck-acquisition backstop. Caller must hold e.mu.
-func (e *Engine) dropToDegradedResync(reason string) {
-	slog.Warn("wrongLedger ledger unacquirable; dropping to degraded resync",
+	slog.Warn("wrongLedger acquisition failed; will re-resolve and retry",
 		"t", "consensus",
-		"event", "wrong-lcl-degraded",
-		"reason", reason,
+		"event", "wrong-lcl-retry",
+		"hash", fmt.Sprintf("%x", id[:8]),
 	)
-	e.wrongLedgerAcquireFailures = 0
-	// Un-pin so the next checkLedger re-resolves and re-requests.
-	e.wrongLedgerID = consensus.LedgerID{}
-	e.degradedResyncUntil = e.adaptor.Now().Add(degradedResyncCooldown)
-	if e.state != nil {
-		e.state.HaveCorrectLCL = false
-	}
-	e.setMode(consensus.ModeObserving)
-	if e.adaptor.GetOperatingMode() == consensus.OpModeFull {
-		e.adaptor.SetOperatingMode(consensus.OpModeTracking)
-	}
 }

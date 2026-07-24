@@ -475,6 +475,22 @@ func fullBelowContext(sm *SHAMap) (uint32, *FullBelowCache, func()) {
 }
 
 func fetchFromStoreContext(ctx context.Context, sm *SHAMap, family Family, parent *innerNode, branch int) (Node, bool, error) {
+	return fetchFromStoreModeContext(ctx, sm, family, parent, branch, false)
+}
+
+func fetchFromStoreForNodePlacementContext(ctx context.Context, sm *SHAMap, family Family, parent *innerNode, branch int) (Node, error) {
+	node, _, err := fetchFromStoreModeContext(ctx, sm, family, parent, branch, true)
+	return node, err
+}
+
+func fetchFromStoreModeContext(
+	ctx context.Context,
+	sm *SHAMap,
+	family Family,
+	parent *innerNode,
+	branch int,
+	forNodePlacement bool,
+) (Node, bool, error) {
 	if sm == nil || family == nil {
 		return nil, false, nil
 	}
@@ -485,7 +501,16 @@ func fetchFromStoreContext(ctx context.Context, sm *SHAMap, family Family, paren
 	if !hasBranch || isZeroHash(hash) {
 		return nil, false, nil
 	}
-	data, stored, err := fetchWithDurability(ctx, family, hash)
+	var (
+		data   []byte
+		stored bool
+		err    error
+	)
+	if forNodePlacement {
+		data, err = fetchForNodePlacement(ctx, family, hash)
+	} else {
+		data, stored, err = fetchWithDurability(ctx, family, hash)
+	}
 	if err != nil {
 		return nil, false, err
 	}

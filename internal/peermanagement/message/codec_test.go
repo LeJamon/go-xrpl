@@ -3,6 +3,7 @@ package message
 import (
 	"bytes"
 	"errors"
+	"io"
 	"testing"
 )
 
@@ -331,6 +332,62 @@ func TestReadMessageWithHeaderRunsCallbackBeforePayloadRead(t *testing.T) {
 
 	if !errors.Is(err, want) {
 		t.Fatalf("ReadMessageWithHeader err = %v, want callback error", err)
+	}
+}
+
+func TestReadHeaderDoesNotConsumePayload(t *testing.T) {
+	const payloadSize = 4
+	headerBytes := make([]byte, HeaderSizeUncompressed, HeaderSizeUncompressed+len("dataafter"))
+	if err := EncodeHeader(headerBytes, payloadSize, TypeManifests, AlgorithmNone, 0); err != nil {
+		t.Fatalf("EncodeHeader: %v", err)
+	}
+	reader := bytes.NewReader(append(headerBytes, []byte("dataafter")...))
+
+	header, err := ReadHeader(reader)
+	if err != nil {
+		t.Fatalf("ReadHeader: %v", err)
+	}
+	if got, want := reader.Len(), payloadSize+len("after"); got != want {
+		t.Fatalf("bytes remaining after ReadHeader = %d, want %d", got, want)
+	}
+
+	payload, err := ReadPayload(reader, *header)
+	if err != nil {
+		t.Fatalf("ReadPayload: %v", err)
+	}
+	if !bytes.Equal(payload, []byte("data")) {
+		t.Fatalf("ReadPayload = %q, want data", payload)
+	}
+	rest := make([]byte, reader.Len())
+	if _, err := io.ReadFull(reader, rest); err != nil {
+		t.Fatalf("read trailing bytes: %v", err)
+	}
+	if !bytes.Equal(rest, []byte("after")) {
+		t.Fatalf("trailing bytes = %q, want after", rest)
+	}
+}
+
+func TestReadHeaderAndPayloadRejectClaimsBeforeAllocation(t *testing.T) {
+	headerBytes := make([]byte, HeaderSizeUncompressed, HeaderSizeUncompressed+1)
+	if err := EncodeHeader(headerBytes, mediumMsgMax+1, TypePing, AlgorithmNone, 0); err != nil {
+		t.Fatalf("EncodeHeader: %v", err)
+	}
+	reader := bytes.NewReader(append(headerBytes, 0x7f))
+
+	if _, err := ReadHeader(reader); !errors.Is(err, ErrMessageTooLarge) {
+		t.Fatalf("ReadHeader err = %v, want ErrMessageTooLarge", err)
+	}
+	if got := reader.Len(); got != 1 {
+		t.Fatalf("ReadHeader consumed %d payload bytes, want 0", 1-got)
+	}
+
+	_, err := ReadPayload(bytes.NewReader(nil), Header{
+		PayloadSize:      mediumMsgMax + 1,
+		MessageType:      TypePing,
+		UncompressedSize: mediumMsgMax + 1,
+	})
+	if !errors.Is(err, ErrMessageTooLarge) {
+		t.Fatalf("ReadPayload err = %v, want ErrMessageTooLarge", err)
 	}
 }
 

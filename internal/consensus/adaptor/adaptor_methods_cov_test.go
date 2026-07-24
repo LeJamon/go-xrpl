@@ -69,6 +69,34 @@ func TestAdg_BuildLedger(t *testing.T) {
 	_ = svc
 }
 
+func TestOnLedgerSwitchedMovesCanonicalFrontierBeforeBuild(t *testing.T) {
+	a := newTestAdaptor(t)
+	txSet, err := a.BuildTxSet(nil)
+	require.NoError(t, err)
+	preferred, err := a.GetLastClosedLedger()
+	require.NoError(t, err)
+
+	closeTime := time.Unix(1_700_000_000, 0)
+	frontier := preferred
+	for range 2 {
+		closeTime = closeTime.Add(2 * time.Second)
+		frontier, err = a.BuildLedger(frontier, txSet, closeTime, true, nil)
+		require.NoError(t, err)
+	}
+
+	_, err = a.BuildLedger(preferred, txSet, closeTime.Add(2*time.Second), true, nil)
+	require.ErrorIs(t, err, service.ErrConsensusParentMismatch)
+	assert.Equal(t, frontier.ID(), consensus.LedgerID(a.ledgerService.GetClosedLedger().Hash()))
+
+	a.OnLedgerSwitched(preferred)
+	assert.Equal(t, preferred.ID(), consensus.LedgerID(a.ledgerService.GetClosedLedger().Hash()))
+	assert.Equal(t, preferred.Seq()+1, a.ledgerService.GetCurrentLedgerIndex())
+	built, err := a.BuildLedger(preferred, txSet, closeTime.Add(4*time.Second), true, nil)
+	require.NoError(t, err)
+	assert.Equal(t, preferred.Seq()+1, built.Seq())
+	assert.Equal(t, preferred.ID(), built.ParentID())
+}
+
 func TestAdg_ValidateLedger(t *testing.T) {
 	a := newTestAdaptor(t)
 

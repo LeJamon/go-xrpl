@@ -22,6 +22,9 @@ import (
 type acquisitionStoreTestFamily struct {
 	mu         sync.Mutex
 	data       map[[32]byte][]byte
+	cached     map[[32]byte][]byte
+	fetchCalls int
+	cacheCalls int
 	calls      [][32]byte
 	started    chan [32]byte
 	blockFirst chan struct{}
@@ -32,6 +35,7 @@ type acquisitionStoreTestFamily struct {
 func newAcquisitionStoreTestFamily() *acquisitionStoreTestFamily {
 	return &acquisitionStoreTestFamily{
 		data:    make(map[[32]byte][]byte),
+		cached:  make(map[[32]byte][]byte),
 		started: make(chan [32]byte, 16),
 	}
 }
@@ -39,7 +43,21 @@ func newAcquisitionStoreTestFamily() *acquisitionStoreTestFamily {
 func (f *acquisitionStoreTestFamily) Fetch(_ context.Context, hash [32]byte) ([]byte, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	f.fetchCalls++
 	return bytes.Clone(f.data[hash]), nil
+}
+
+func (f *acquisitionStoreTestFamily) FetchCached(_ context.Context, hash [32]byte) ([]byte, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.cacheCalls++
+	return bytes.Clone(f.cached[hash]), nil
+}
+
+func (f *acquisitionStoreTestFamily) clearCached() {
+	f.mu.Lock()
+	clear(f.cached)
+	f.mu.Unlock()
 }
 
 func (f *acquisitionStoreTestFamily) StoreBatch(ctx context.Context, entries []shamap.FlushEntry) error {
@@ -72,6 +90,7 @@ func (f *acquisitionStoreTestFamily) StoreBatch(ctx context.Context, entries []s
 	defer f.mu.Unlock()
 	for i := range entries {
 		f.data[entries[i].Hash] = bytes.Clone(entries[i].Data)
+		f.cached[entries[i].Hash] = bytes.Clone(entries[i].Data)
 	}
 	return nil
 }
@@ -83,6 +102,427 @@ func acquisitionEntry(id byte) shamap.FlushEntry {
 		LedgerSeq: uint32(id),
 		MapType:   shamap.TypeState,
 	}
+}
+
+func TestAcquisitionStoreScopeDurableReadsDoNotExhaust(t *testing.T) {
+	base := newAcquisitionStoreTestFamily()
+	const reads = 16*1024 + 1
+	entries := make([]shamap.FlushEntry, 0, reads)
+	for i := range reads {
+		hash := [32]byte{byte(i), byte(i >> 8), byte(i >> 16)}
+		entries = append(entries, shamap.FlushEntry{Hash: hash, Data: []byte{byte(i)}})
+	}
+	require.NoError(t, base.StoreBatch(t.Context(), entries))
+	base.clearCached()
+
+	lane := newAcquisitionStoreLane(base, slog.Default(), 1)
+	scope := lane.scope().(*acquisitionStoreScope)
+
+	for i := range reads {
+		data, err := scope.FetchDurable(t.Context(), entries[i].Hash)
+		require.NoError(t, err)
+		require.Equal(t, entries[i].Data, data)
+	}
+
+	base.mu.Lock()
+	fetchCalls := base.fetchCalls
+	base.mu.Unlock()
+	require.Equal(t, reads, fetchCalls)
+}
+
+func TestAcquisitionStoreScopeCheckpointPreservesDurableReads(t *testing.T) {
+	base := newAcquisitionStoreTestFamily()
+	first := acquisitionEntry(1)
+	second := acquisitionEntry(2)
+	require.NoError(t, base.StoreBatch(t.Context(), []shamap.FlushEntry{first, second}))
+	base.clearCached()
+
+	lane := newAcquisitionStoreLane(base, slog.Default(), 1)
+	lane.start(context.Background())
+	defer lane.stopDrain()
+
+	scope := lane.scope().(*acquisitionStoreScope)
+	data, err := scope.FetchDurable(t.Context(), first.Hash)
+	require.NoError(t, err)
+	require.Equal(t, first.Data, data)
+	data, err = scope.FetchDurable(t.Context(), second.Hash)
+	require.NoError(t, err)
+	require.Equal(t, second.Data, data)
+
+	checkpoint := acquisitionEntry(3)
+	require.NoError(t, scope.StoreBatch(t.Context(), []shamap.FlushEntry{checkpoint}))
+	require.NoError(t, scope.Flush(t.Context()))
+
+	base.clearCached()
+	data, err = scope.FetchDurable(t.Context(), second.Hash)
+	require.NoError(t, err)
+	require.Equal(t, second.Data, data)
+}
+
+func TestAcquisitionStoreScopeRepeatedCheckpointsPreserveDurableReads(t *testing.T) {
+	base := newAcquisitionStoreTestFamily()
+	first := acquisitionEntry(1)
+	second := acquisitionEntry(2)
+	third := acquisitionEntry(3)
+	require.NoError(t, base.StoreBatch(t.Context(), []shamap.FlushEntry{first, second, third}))
+	base.clearCached()
+
+	lane := newAcquisitionStoreLane(base, slog.Default(), 1)
+	lane.start(context.Background())
+	defer lane.stopDrain()
+
+	scope := lane.scope().(*acquisitionStoreScope)
+	data, err := scope.FetchDurable(t.Context(), first.Hash)
+	require.NoError(t, err)
+	require.Equal(t, first.Data, data)
+
+	require.NoError(t, scope.StoreBatch(t.Context(), []shamap.FlushEntry{acquisitionEntry(4)}))
+	require.NoError(t, scope.Flush(t.Context()))
+
+	base.clearCached()
+	data, err = scope.FetchDurable(t.Context(), second.Hash)
+	require.NoError(t, err)
+	require.Equal(t, second.Data, data)
+	data, err = scope.FetchDurable(t.Context(), third.Hash)
+	require.NoError(t, err)
+	require.Equal(t, third.Data, data)
+}
+
+func TestAcquisitionStoreScopeFailedCheckpointKeepsDurableReads(t *testing.T) {
+	base := newAcquisitionStoreTestFamily()
+	persisted := acquisitionEntry(1)
+	require.NoError(t, base.StoreBatch(t.Context(), []shamap.FlushEntry{persisted}))
+	base.clearCached()
+	base.failAll = true
+
+	lane := newAcquisitionStoreLane(base, slog.New(slog.NewTextHandler(&bytes.Buffer{}, nil)), 1)
+	lane.start(context.Background())
+	defer lane.stopDrain()
+
+	scope := lane.scope().(*acquisitionStoreScope)
+	data, err := scope.FetchDurable(t.Context(), persisted.Hash)
+	require.NoError(t, err)
+	require.Equal(t, persisted.Data, data)
+
+	require.NoError(t, scope.StoreBatch(t.Context(), []shamap.FlushEntry{acquisitionEntry(2)}))
+	require.EqualError(t, scope.Flush(t.Context()), "store failed")
+
+	base.clearCached()
+	data, err = scope.FetchDurable(t.Context(), persisted.Hash)
+	require.NoError(t, err)
+	require.Equal(t, persisted.Data, data)
+}
+
+func TestAcquisitionStoreScopeCanceledCheckpointRetainsPersistenceFailure(t *testing.T) {
+	base := newAcquisitionStoreTestFamily()
+	base.blockFirst = make(chan struct{})
+	base.failFirst = true
+	lane := newAcquisitionStoreLane(base, slog.New(slog.NewTextHandler(&bytes.Buffer{}, nil)), 1)
+	lane.start(context.Background())
+	defer lane.stopDrain()
+
+	scope := lane.scope().(*acquisitionStoreScope)
+	_, err := scope.FetchDurable(t.Context(), [32]byte{0xff})
+	require.NoError(t, err)
+
+	require.NoError(t, scope.StoreBatch(t.Context(), []shamap.FlushEntry{acquisitionEntry(3)}))
+	require.Equal(t, [32]byte{3}, <-base.started)
+
+	ctx, cancel := context.WithCancel(t.Context())
+	checkpointDone := make(chan error, 1)
+	go func() {
+		checkpointDone <- scope.Flush(ctx)
+	}()
+	cancel()
+	require.ErrorIs(t, <-checkpointDone, context.Canceled)
+
+	close(base.blockFirst)
+	require.EqualError(t, scope.Flush(t.Context()), "store failed")
+
+	require.NoError(t, scope.Retire(t.Context()))
+	require.NoError(t, scope.Flush(t.Context()))
+}
+
+func TestAcquisitionStoreScopeCheckpointReprovesFromDurableStore(t *testing.T) {
+	base := newAcquisitionStoreTestFamily()
+	lane := newAcquisitionStoreLane(base, slog.Default(), 1)
+	lane.start(context.Background())
+	defer lane.stopDrain()
+
+	scope := lane.scope().(*acquisitionStoreScope)
+	_, err := scope.FetchDurable(t.Context(), [32]byte{0xff})
+	require.NoError(t, err)
+
+	rootHash, rootData, wire := buildSelfHealSourceState(t)
+	dest, err := shamap.NewBacked(shamap.TypeState, scope)
+	require.NoError(t, err)
+	require.NoError(t, dest.AddRootNode(rootHash, rootData))
+	require.NotEmpty(t, dest.GetMissingNodes(1024, nil))
+
+	entries := make([]shamap.FlushEntry, 0, len(wire))
+	for _, node := range wire {
+		nodeID, parseErr := shamap.ParseNodeID(node.NodeID)
+		require.NoError(t, parseErr)
+		if nodeID.IsRoot() {
+			continue
+		}
+		result, entry, addErr := dest.AddKnownNodeByIDWithEntry(nodeID, node.NodeData)
+		require.NoError(t, addErr)
+		if result == shamap.NodeUseful {
+			entries = append(entries, entry)
+		}
+	}
+	require.NotEmpty(t, entries)
+	require.Empty(t, dest.GetMissingNodes(1024, nil))
+
+	require.NoError(t, scope.StoreBatch(t.Context(), entries))
+	require.NoError(t, scope.Flush(t.Context()))
+	require.NoError(t, dest.AcknowledgePersistedContext(t.Context()))
+
+	base.mu.Lock()
+	storedBeforeReload := len(base.data)
+	fetchesBeforeReload := base.fetchCalls
+	base.mu.Unlock()
+
+	base.clearCached()
+	require.Empty(t, dest.GetMissingNodes(1024, nil))
+
+	scope.FullBelowCache().Bump()
+	require.Empty(t, dest.GetMissingNodes(1024, nil))
+
+	base.mu.Lock()
+	require.Equal(t, storedBeforeReload, len(base.data))
+	require.Greater(t, base.fetchCalls, fetchesBeforeReload)
+	base.mu.Unlock()
+
+	for _, node := range wire {
+		nodeID, parseErr := shamap.ParseNodeID(node.NodeID)
+		require.NoError(t, parseErr)
+		if nodeID.IsRoot() {
+			continue
+		}
+		_, _, addErr := dest.AddKnownNodeByIDWithEntryContext(t.Context(), nodeID, node.NodeData)
+		require.NoError(t, addErr)
+	}
+	require.Empty(t, dest.GetMissingNodes(1024, nil))
+}
+
+func TestAcquisitionStoreScopeNodePlacementLoadsDurableAncestors(t *testing.T) {
+	base := newAcquisitionStoreTestFamily()
+	rootHash, rootData, wire := buildSelfHealSourceState(t)
+
+	entries := make([]shamap.FlushEntry, 0, len(wire))
+	var target message.LedgerNode
+	var targetID shamap.NodeID
+	for i := range wire {
+		entry, err := shamap.FlushEntryFromWire(wire[i].NodeData, 88, shamap.TypeState)
+		require.NoError(t, err)
+		entries = append(entries, entry)
+
+		nodeID, err := shamap.ParseNodeID(wire[i].NodeID)
+		require.NoError(t, err)
+		if targetID.Depth() < 2 && nodeID.Depth() >= 2 {
+			target = wire[i]
+			targetID = nodeID
+		}
+	}
+	require.GreaterOrEqual(t, targetID.Depth(), uint8(2))
+	require.NoError(t, base.StoreBatch(t.Context(), entries))
+	base.clearCached()
+
+	lane := newAcquisitionStoreLane(base, slog.Default(), 1)
+	scope := lane.scope().(*acquisitionStoreScope)
+
+	dest, err := shamap.NewBacked(shamap.TypeState, scope)
+	require.NoError(t, err)
+	require.NoError(t, dest.AddRootNode(rootHash, rootData))
+
+	base.mu.Lock()
+	fetchesBeforePlacement := base.fetchCalls
+	base.mu.Unlock()
+	result, entry, err := dest.AddKnownNodeByIDWithEntryContext(t.Context(), targetID, target.NodeData)
+	require.NoError(t, err)
+	require.Equal(t, shamap.NodeUseful, result)
+	require.NotEqual(t, [32]byte{}, entry.Hash)
+
+	base.mu.Lock()
+	require.Greater(t, base.fetchCalls, fetchesBeforePlacement)
+	base.mu.Unlock()
+}
+
+func TestAcquisitionStoreScopeNodePlacementSeesOnlySameScopePendingAncestors(t *testing.T) {
+	base := newAcquisitionStoreTestFamily()
+	base.blockFirst = make(chan struct{})
+	lane := newAcquisitionStoreLane(base, slog.Default(), 1)
+	lane.start(context.Background())
+	defer lane.stopDrain()
+
+	rootHash, rootData, wire := buildSelfHealSourceState(t)
+	var target message.LedgerNode
+	var targetID shamap.NodeID
+	for i := range wire {
+		nodeID, err := shamap.ParseNodeID(wire[i].NodeID)
+		require.NoError(t, err)
+		if targetID.Depth() < 2 && nodeID.Depth() >= 2 {
+			target = wire[i]
+			targetID = nodeID
+		}
+	}
+	require.GreaterOrEqual(t, targetID.Depth(), uint8(2))
+
+	entries := make([]shamap.FlushEntry, 0, len(wire)-1)
+	for i := range wire {
+		if bytes.Equal(wire[i].NodeID, target.NodeID) {
+			continue
+		}
+		entry, err := shamap.FlushEntryFromWire(wire[i].NodeData, 88, shamap.TypeState)
+		require.NoError(t, err)
+		entries = append(entries, entry)
+	}
+
+	owner := lane.scope().(*acquisitionStoreScope)
+	require.NoError(t, owner.StoreBatch(t.Context(), entries))
+	require.Equal(t, entries[0].Hash, <-base.started)
+
+	ownerMap, err := shamap.NewBacked(shamap.TypeState, owner)
+	require.NoError(t, err)
+	require.NoError(t, ownerMap.AddRootNode(rootHash, rootData))
+	result, _, err := ownerMap.AddKnownNodeByIDWithEntryContext(t.Context(), targetID, target.NodeData)
+	require.NoError(t, err)
+	require.Equal(t, shamap.NodeUseful, result)
+
+	other := lane.scope().(*acquisitionStoreScope)
+	otherMap, err := shamap.NewBacked(shamap.TypeState, other)
+	require.NoError(t, err)
+	require.NoError(t, otherMap.AddRootNode(rootHash, rootData))
+	result, _, err = otherMap.AddKnownNodeByIDWithEntryContext(t.Context(), targetID, target.NodeData)
+	require.NoError(t, err)
+	require.Equal(t, shamap.NodeReRequest, result)
+
+	close(base.blockFirst)
+	require.NoError(t, owner.Flush(t.Context()))
+}
+
+func TestAcquisitionStoreScopeSharesFreshCachedNodes(t *testing.T) {
+	base := newAcquisitionStoreTestFamily()
+	lane := newAcquisitionStoreLane(base, slog.Default(), 1)
+	lane.start(context.Background())
+	defer lane.stopDrain()
+
+	consumer := lane.scope().(*acquisitionStoreScope)
+	missing := [32]byte{0xff}
+	data, err := consumer.FetchDurable(t.Context(), missing)
+	require.NoError(t, err)
+	require.Nil(t, data)
+
+	producer := lane.scope().(*acquisitionStoreScope)
+	entry := acquisitionEntry(8)
+	require.NoError(t, producer.StoreBatch(t.Context(), []shamap.FlushEntry{entry}))
+	require.NoError(t, producer.Flush(t.Context()))
+
+	base.mu.Lock()
+	beforeDurable := base.fetchCalls
+	base.mu.Unlock()
+	data, err = consumer.FetchDurable(t.Context(), entry.Hash)
+	require.NoError(t, err)
+	require.Equal(t, entry.Data, data)
+	base.mu.Lock()
+	require.Equal(t, beforeDurable, base.fetchCalls)
+	base.mu.Unlock()
+}
+
+func TestAcquisitionStoreScopeKeepsPendingWritesReadable(t *testing.T) {
+	base := newAcquisitionStoreTestFamily()
+	base.blockFirst = make(chan struct{})
+	lane := newAcquisitionStoreLane(base, slog.Default(), 1)
+	lane.start(context.Background())
+	defer lane.stopDrain()
+
+	scope := lane.scope().(*acquisitionStoreScope)
+	missing := [32]byte{0xff}
+	data, err := scope.FetchDurable(t.Context(), missing)
+	require.NoError(t, err)
+	require.Nil(t, data)
+
+	entry := acquisitionEntry(7)
+	require.NoError(t, scope.StoreBatch(t.Context(), []shamap.FlushEntry{entry}))
+	require.Equal(t, entry.Hash, <-base.started)
+	data, err = scope.Fetch(t.Context(), entry.Hash)
+	require.NoError(t, err)
+	require.Equal(t, entry.Data, data)
+
+	close(base.blockFirst)
+	require.NoError(t, scope.Flush(t.Context()))
+	stored, err := base.Fetch(t.Context(), entry.Hash)
+	require.NoError(t, err)
+	require.Equal(t, entry.Data, stored)
+}
+
+func TestAcquisitionStoreScopePromotionKeepsDurableReads(t *testing.T) {
+	base := newAcquisitionStoreTestFamily()
+	first := acquisitionEntry(5)
+	second := acquisitionEntry(6)
+	require.NoError(t, base.StoreBatch(t.Context(), []shamap.FlushEntry{first, second}))
+	base.clearCached()
+
+	lane := newAcquisitionStoreLane(base, slog.Default(), 1)
+	scope := lane.scope().(*acquisitionStoreScope)
+	data, err := scope.FetchDurable(t.Context(), first.Hash)
+	require.NoError(t, err)
+	require.Equal(t, first.Data, data)
+	data, err = scope.FetchDurable(t.Context(), second.Hash)
+	require.NoError(t, err)
+	require.Equal(t, second.Data, data)
+
+	require.NoError(t, scope.Promote(t.Context()))
+	data, err = scope.FetchDurable(t.Context(), second.Hash)
+	require.NoError(t, err)
+	require.Equal(t, second.Data, data)
+}
+
+func TestRouterAcquisitionOptionsUseScopedDurableStore(t *testing.T) {
+	base := newAcquisitionStoreTestFamily()
+	rootHash, rootData, wire := buildSelfHealSourceState(t)
+	entries := make([]shamap.FlushEntry, 0, len(wire))
+	for i := range wire {
+		entry, err := shamap.FlushEntryFromWire(wire[i].NodeData, 88, shamap.TypeState)
+		require.NoError(t, err)
+		entries = append(entries, entry)
+	}
+	require.NoError(t, base.StoreBatch(t.Context(), entries))
+	base.clearCached()
+
+	router := NewRouter(nil, nil, nil)
+	router.SetAcquisitionFamily(base)
+	headerData := header.AddRaw(header.LedgerHeader{LedgerIndex: 88, AccountHash: rootHash}, false)
+	ledgerHash := sha512half.Sum(protocol.HashPrefixLedgerMaster().Bytes(), headerData)
+
+	acquired := inbound.New(ledgerHash, 88, 7, serveTestLogger(), router.acquisitionOpts()...)
+	require.NoError(t, acquired.GotBase([]message.LedgerNode{{NodeData: headerData}, {NodeData: rootData}}))
+	for !acquired.IsComplete() {
+		base.mu.Lock()
+		before := base.fetchCalls
+		base.mu.Unlock()
+		state, tx, complete, err := acquired.CollectMissingRequestContext(
+			shamap.WithTraversalBudget(t.Context(), 1), false)
+		base.mu.Lock()
+		passFetches := base.fetchCalls - before
+		base.mu.Unlock()
+		require.LessOrEqual(t, passFetches, 1)
+		if errors.Is(err, shamap.ErrTraversalBudget) {
+			require.Empty(t, state)
+			require.Empty(t, tx)
+			continue
+		}
+		require.NoError(t, err)
+		require.True(t, complete)
+		require.Empty(t, state)
+		require.Empty(t, tx)
+	}
+	base.mu.Lock()
+	fetches := base.fetchCalls
+	base.mu.Unlock()
+	require.Greater(t, fetches, 1)
 }
 
 func TestAcquisitionStoreLaneSynchronousWhenStopped(t *testing.T) {
@@ -390,6 +830,50 @@ func TestAcquisitionStoreScopePromoteWaitsForAdmittedWrite(t *testing.T) {
 	require.Equal(t, second.Data, stored)
 }
 
+func TestAcquisitionStoreScopeCheckpointWaitsForAdmittedWrite(t *testing.T) {
+	base := newAcquisitionStoreTestFamily()
+	base.blockFirst = make(chan struct{})
+	lane := newAcquisitionStoreLane(base, slog.Default(), 0)
+	lane.start(context.Background())
+	defer lane.stopDrain()
+
+	scope := lane.scope().(*acquisitionStoreScope)
+	first := acquisitionEntry(42)
+	second := acquisitionEntry(43)
+	require.NoError(t, scope.StoreBatch(t.Context(), []shamap.FlushEntry{first}))
+	require.Equal(t, first.Hash, <-base.started)
+
+	secondDone := make(chan error, 1)
+	go func() {
+		secondDone <- scope.StoreBatch(t.Context(), []shamap.FlushEntry{second})
+	}()
+	require.Eventually(t, func() bool {
+		lane.pendingMu.RLock()
+		defer lane.pendingMu.RUnlock()
+		_, ok := lane.pending[pendingAcquisitionKey{scope: scope.id, hash: second.Hash}]
+		return ok
+	}, time.Second, time.Millisecond)
+
+	checkpointDone := make(chan error, 1)
+	go func() {
+		checkpointDone <- scope.Flush(t.Context())
+	}()
+	select {
+	case err := <-checkpointDone:
+		t.Fatalf("checkpoint passed an admitted write: %v", err)
+	case <-time.After(25 * time.Millisecond):
+	}
+
+	close(base.blockFirst)
+	require.NoError(t, <-secondDone)
+	require.Equal(t, second.Hash, <-base.started)
+	require.NoError(t, <-checkpointDone)
+
+	stored, err := base.Fetch(t.Context(), second.Hash)
+	require.NoError(t, err)
+	require.Equal(t, second.Data, stored)
+}
+
 func TestAcquisitionStoreLaneStopCancelsBlockedWrites(t *testing.T) {
 	base := newAcquisitionStoreTestFamily()
 	base.blockFirst = make(chan struct{})
@@ -520,6 +1004,10 @@ func TestCompleteInboundLedgerPromotesResultMapPersistence(t *testing.T) {
 
 	_, stateMap, _, err := acquired.Result()
 	require.NoError(t, err)
+	stateRoot, err := stateMap.Hash()
+	require.NoError(t, err)
+	fullBelow := stateMap.FullBelowCache()
+	require.True(t, fullBelow.Has(fullBelow.Generation(), stateRoot), "promoted acquisition must publish its durable root proof")
 	base.mu.Lock()
 	callsAfterCompletion := len(base.calls)
 	base.mu.Unlock()

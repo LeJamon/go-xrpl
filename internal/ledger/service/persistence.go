@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"sort"
+	"time"
 
 	addresscodec "github.com/LeJamon/go-xrpl/codec/addresscodec"
 	binarycodec "github.com/LeJamon/go-xrpl/codec/binarycodec"
@@ -286,25 +287,79 @@ func (s *Service) persistValidatedTip(ctx context.Context, l *ledger.Ledger) err
 	return nil
 }
 
-// RefreshValidatedState re-stamps the complete live state tree before online
-// deletion removes older node-store records.
-func (s *Service) RefreshValidatedState(ctx context.Context, minimumSeq uint32) error {
-	if err := s.flushPersists(ctx); err != nil {
-		return err
-	}
+const (
+	refreshHealthCheckInterval = 1000
+	refreshHealthCheckPeriod   = 10 * time.Millisecond
+)
 
+// RefreshValidatedState preserves the complete live state tree before online
+// deletion retires older node-store records. Rotating stores promote archive
+// reads into their writable generation; legacy stores re-stamp records in place.
+// It returns the validated sequence whose state was preserved.
+func (s *Service) RefreshValidatedState(
+	ctx context.Context,
+	minimumSeq uint32,
+	checkpoint func(time.Duration) error,
+) (uint32, error) {
 	s.mu.RLock()
 	validated := s.validatedLedger
 	s.mu.RUnlock()
 	if validated == nil || validated.Sequence() < minimumSeq {
-		return fmt.Errorf("validated ledger is behind rotation target %d", minimumSeq)
+		return 0, fmt.Errorf("validated ledger is behind rotation target %d", minimumSeq)
+	}
+	if err := s.flushPersists(ctx); err != nil {
+		return 0, err
 	}
 	seq := validated.Sequence()
-	root, err := validated.StateMapHash()
-	if err != nil {
-		return err
+
+	if generations, ok := s.nodeStore.(nodestore.GenerationDatabase); ok {
+		skipRefresh, err := generations.CanRotateWithoutRefresh(ctx)
+		if err != nil {
+			return 0, err
+		}
+		if skipRefresh {
+			if err := s.nodeStore.Sync(ctx); err != nil {
+				return 0, err
+			}
+			return seq, nil
+		}
+		root, err := validated.StateMapHash()
+		if err != nil {
+			return 0, err
+		}
+		visited := 0
+		checkpointStarted := time.Now()
+		err = s.walkStoredSHAMapWithFetch(
+			ctx,
+			root,
+			shamap.TypeState,
+			generations.FetchForPromotion,
+			func(_ [32]byte, _ *nodestore.Node) error {
+				visited++
+				work := time.Since(checkpointStarted)
+				if checkpoint != nil &&
+					(visited%refreshHealthCheckInterval == 0 || work >= refreshHealthCheckPeriod) {
+					if err := checkpoint(work); err != nil {
+						return err
+					}
+					checkpointStarted = time.Now()
+				}
+				return nil
+			},
+		)
+		if err != nil {
+			return 0, err
+		}
+		if err := s.nodeStore.Sync(ctx); err != nil {
+			return 0, err
+		}
+		return seq, nil
 	}
 
+	root, err := validated.StateMapHash()
+	if err != nil {
+		return 0, err
+	}
 	const batchSize = 4096
 	batch := make([]*nodestore.Node, 0, batchSize)
 	flush := func() error {
@@ -318,6 +373,8 @@ func (s *Service) RefreshValidatedState(ctx context.Context, minimumSeq uint32) 
 		return nil
 	}
 
+	visited := 0
+	checkpointStarted := time.Now()
 	err = s.walkStoredSHAMap(ctx, root, shamap.TypeState, func(hash [32]byte, node *nodestore.Node) error {
 		batch = append(batch, &nodestore.Node{
 			Type:      nodestore.NodeAccount,
@@ -330,15 +387,27 @@ func (s *Service) RefreshValidatedState(ctx context.Context, minimumSeq uint32) 
 				return err
 			}
 		}
+		visited++
+		work := time.Since(checkpointStarted)
+		if checkpoint != nil &&
+			(visited%refreshHealthCheckInterval == 0 || work >= refreshHealthCheckPeriod) {
+			if err := checkpoint(work); err != nil {
+				return err
+			}
+			checkpointStarted = time.Now()
+		}
 		return nil
 	})
 	if err != nil {
-		return err
+		return 0, err
 	}
 	if err := flush(); err != nil {
-		return err
+		return 0, err
 	}
-	return s.nodeStore.Sync(ctx)
+	if err := s.nodeStore.Sync(ctx); err != nil {
+		return 0, err
+	}
+	return seq, nil
 }
 
 // persistToRelationalDB writes ledger metadata and transactions to the

@@ -160,6 +160,8 @@ func buildServerInfo(ctx *types.RpcContext, human bool) map[string]any {
 	}
 	if serverInfo.Standalone {
 		serverState = "standalone"
+	} else if !ctx.IsAdmin && (serverState == "proposing" || serverState == "validating") {
+		serverState = "full"
 	}
 
 	// Fallback used only when consensus hasn't wired a state-accounting tracker.
@@ -194,6 +196,9 @@ func buildServerInfo(ctx *types.RpcContext, human bool) map[string]any {
 	// completed its first sync to Full (NetworkOPs.cpp:4847-4848).
 	if accounting.initialSyncUs > 0 {
 		info["initial_sync_duration_us"] = fmt.Sprintf("%d", accounting.initialSyncUs)
+	}
+	if serverInfo.NeedsNetworkLedger {
+		info["network_ledger"] = "waiting"
 	}
 
 	// pubkey_validator: admin-only, mirrors rippled NetworkOPs.cpp:2779-2791.

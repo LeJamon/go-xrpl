@@ -372,7 +372,7 @@ func TestRouter_PeerDoesNotSupportReplay_FallsBackToLegacy(t *testing.T) {
 //
 // We use an empty tx set so Apply trivially succeeds without needing
 // real, parseable tx blobs — the goal here is to verify routing +
-// post-state adoption wiring, not engine semantics. The Apply path
+// post-state storage wiring, not engine semantics. The Apply path
 // itself is exhaustively covered in
 // internal/ledger/inbound/replay_delta_apply_test.go.
 func TestRouter_ReplayDeltaResponse_Routed(t *testing.T) {
@@ -392,11 +392,11 @@ func TestRouter_ReplayDeltaResponse_Routed(t *testing.T) {
 		Payload: payload,
 	})
 
-	assert.Equal(t, 0, r.replayer.Count(), "successful adoption must clear the active acquisition")
-	// Service should have advanced its closed ledger to the verified seq.
-	closed := svc.GetClosedLedger()
-	require.NotNil(t, closed)
-	assert.Equal(t, expectedHash, closed.Hash())
+	assert.Equal(t, 0, r.replayer.Count(), "successful storage must clear the active acquisition")
+	stored, err := svc.GetLedgerByHash(expectedHash)
+	require.NoError(t, err)
+	assert.Equal(t, seq, stored.Sequence())
+	assert.NotEqual(t, expectedHash, svc.GetClosedLedger().Hash())
 	// And the operating mode should be at least Tracking.
 	assert.True(t, a.GetOperatingMode() >= consensus.OpModeTracking,
 		"adoption should advance to Tracking or higher (was %s)", a.GetOperatingMode())
@@ -458,14 +458,14 @@ func TestRouter_MaintenanceTick_TimeoutFallback(t *testing.T) {
 	require.Len(t, rs.legacyCalls(), 1, "tick must re-issue via the legacy path")
 }
 
-// TestRouter_ReplayDeltaApply_AdoptsDerivedLedger verifies that the
-// router runs Apply (not just GotResponse) and adopts the
-// post-state-derived ledger. Specifically: the adopted ledger's
+// TestRouter_ReplayDeltaApplyStoresDerivedLedger verifies that the
+// router runs Apply (not just GotResponse) and stores the
+// post-state-derived ledger. Specifically: the stored ledger's
 // StateMapHash must differ from the parent's — the empty-tx successor
 // has an updated state map (LedgerHashes skip-list), so a router
 // path that cheaply forwarded the parent's state map would fail this
 // invariant.
-func TestRouter_ReplayDeltaApply_AdoptsDerivedLedger(t *testing.T) {
+func TestRouter_ReplayDeltaApplyStoresDerivedLedger(t *testing.T) {
 	r, _, _, svc := makeRouter(t)
 	parent := svc.GetClosedLedger()
 	require.NotNil(t, parent)
@@ -493,12 +493,10 @@ func TestRouter_ReplayDeltaApply_AdoptsDerivedLedger(t *testing.T) {
 		Payload: payload,
 	})
 
-	require.Equal(t, 0, r.replayer.Count(), "successful adoption must clear the active acquisition")
-	closed := svc.GetClosedLedger()
-	require.NotNil(t, closed)
-	assert.Equal(t, expectedHash, closed.Hash(),
-		"adopted ledger must be the verified successor")
-	closedState, err := closed.StateMapHash()
+	require.Equal(t, 0, r.replayer.Count(), "successful storage must clear the active acquisition")
+	stored, err := svc.GetLedgerByHash(expectedHash)
+	require.NoError(t, err)
+	closedState, err := stored.StateMapHash()
 	require.NoError(t, err)
 	assert.NotEqual(t, parentState, closedState,
 		"adopted state map must reflect the post-Close skip-list update — proves Apply ran")
@@ -592,10 +590,10 @@ func TestRouter_ConcurrentAcquisitions_RouteCorrectly(t *testing.T) {
 	assert.True(t, r.replayer.Has(otherHash), "unrelated acquisition must not be cleared")
 	assert.Equal(t, 1, r.replayer.Count())
 
-	// Closed ledger advanced to the verified successor.
-	closed := svc.GetClosedLedger()
-	require.NotNil(t, closed)
-	assert.Equal(t, realHash, closed.Hash())
+	stored, err := svc.GetLedgerByHash(realHash)
+	require.NoError(t, err)
+	assert.Equal(t, seq, stored.Sequence())
+	assert.Equal(t, parent.Hash(), svc.GetClosedLedger().Hash())
 }
 
 // TestRouter_IgnoresUnsolicitedReplayDeltaResponse verifies that a
@@ -621,11 +619,8 @@ func TestRouter_IgnoresUnsolicitedReplayDeltaResponse(t *testing.T) {
 
 // buildSuccessorAgainstParent is the same close-and-serialize dance as
 // buildEmptyClosedSuccessorResponse, but against an arbitrary parent
-// Ledger object rather than svc.GetClosedLedger(). This lets the F6
-// cascade test construct a two-link chain (N+1, N+2) where N+1 is
-// held in-memory rather than installed in svc history — exactly the
-// situation the router must handle when a replay-delta for N+2
-// arrives ahead of N+1.
+// Ledger object rather than svc.GetClosedLedger(). This lets tests construct a
+// two-link chain where N+1 is held in memory while N+2 arrives first.
 func buildSuccessorAgainstParent(t *testing.T, parent *ledger.Ledger) (*message.ReplayDeltaResponse, *ledger.Ledger, [32]byte, uint32) {
 	t.Helper()
 	// Offset by seq so each ledger in a chain has a distinct close time
@@ -647,22 +642,218 @@ func buildSuccessorAgainstParent(t *testing.T, parent *ledger.Ledger) (*message.
 	return resp, open, hdr.Hash, hdr.LedgerIndex
 }
 
-// TestRouter_ReplayDelta_CascadesOutOfOrderArrival is the F6 integration
-// test. It wires the replay-delta path end-to-end (acquisition →
-// response → Apply → adopt) and drives an OUT-OF-ORDER arrival: the
-// seq N+2 response reaches the router before the seq N+1 response.
-// The router is expected to route both through SubmitHeldAdoption,
-// which stashes N+2 until N+1 lands and then cascade-promotes it.
-//
-// Without the F6 wiring this test would fail at two points:
-//  1. On delivery of the N+2 response, AdoptLedgerWithState would
-//     return an error (parent-hash mismatch against the then-current
-//     closedLedger at seq N) and the derived ledger would be lost —
-//     svc's closedLedger never advances past N+1 even after N+1
-//     arrives.
-//  2. svc.GetLedgerByHash(N+2) would stay error-returning because no
-//     second acquisition round retries N+2.
-func TestRouter_ReplayDelta_CascadesOutOfOrderArrival(t *testing.T) {
+func TestRouter_ConsensusRecoveryWalkNotifiesOnlyExactTarget(t *testing.T) {
+	r, a, sender, svc := makeRouter(t)
+	engine := &mockEngine{}
+	r.engine = engine
+	_, err := svc.AcceptLedger(context.TODO())
+	require.NoError(t, err)
+	parent := svc.GetClosedLedger()
+	require.NotNil(t, parent)
+
+	resp1, ledger1, hash1, seq1 := buildSuccessorAgainstParent(t, parent)
+	resp2, ledger2, hash2, seq2 := buildSuccessorAgainstParent(t, ledger1)
+	r.recordSeqHash(seq1, hash1, parent.Hash(), true)
+	r.recordSeqHash(seq2, hash2, hash1, true)
+	trackCatchupPeer(r, 7, seq2)
+
+	require.NoError(t, a.RequestLedger(consensus.LedgerID(hash2)))
+	require.Equal(t, consensusRecovery{targetHash: hash2, stepHash: hash1}, r.consensusRecovery)
+	require.Equal(t, []replayDeltaCall{{peerID: 7, hash: hash1}}, sender.replayCalls())
+
+	payload1, err := message.Encode(resp1)
+	require.NoError(t, err)
+	r.handleMessage(&peermanagement.InboundMessage{
+		PeerID: 7, Type: uint16(message.TypeReplayDeltaResponse), Payload: payload1,
+	})
+	require.Empty(t, engine.getLedgers())
+	require.Equal(t, consensusRecovery{
+		targetHash: hash2,
+		stepHash:   hash2,
+		anchorHash: hash1,
+		anchorSeq:  seq1,
+	}, r.consensusRecovery)
+	require.Equal(t, []replayDeltaCall{{peerID: 7, hash: hash1}, {peerID: 7, hash: hash2}}, sender.replayCalls())
+
+	payload2, err := message.Encode(resp2)
+	require.NoError(t, err)
+	r.handleMessage(&peermanagement.InboundMessage{
+		PeerID: 7, Type: uint16(message.TypeReplayDeltaResponse), Payload: payload2,
+	})
+	require.Equal(t, []consensus.LedgerID{consensus.LedgerID(hash2)}, engine.getLedgers())
+	require.Equal(t, consensusRecovery{anchorHash: hash2, anchorSeq: seq2}, r.consensusRecovery)
+	require.Equal(t, parent.Sequence(), svc.GetClosedLedgerIndex())
+
+	_, _, hash3, seq3 := buildSuccessorAgainstParent(t, ledger2)
+	r.recordSeqHash(seq3, hash3, hash2, true)
+	trackCatchupPeer(r, 7, seq3)
+	require.NoError(t, a.RequestLedger(consensus.LedgerID(hash3)))
+	require.Equal(t, consensusRecovery{
+		targetHash: hash3,
+		stepHash:   hash3,
+		anchorHash: hash2,
+		anchorSeq:  seq2,
+	}, r.consensusRecovery)
+	require.Equal(t, replayDeltaCall{peerID: 7, hash: hash3}, sender.replayCalls()[2])
+}
+
+func TestRouter_ConsensusRecoveryTargetChangeKeepsStepStoreOnly(t *testing.T) {
+	r, a, sender, svc := makeRouter(t)
+	engine := &mockEngine{}
+	r.engine = engine
+	_, err := svc.AcceptLedger(context.TODO())
+	require.NoError(t, err)
+	parent := svc.GetClosedLedger()
+	require.NotNil(t, parent)
+
+	resp1, ledger1, hash1, seq1 := buildSuccessorAgainstParent(t, parent)
+	_, _, oldTarget, oldTargetSeq := buildSuccessorAgainstParent(t, ledger1)
+	r.recordSeqHash(seq1, hash1, parent.Hash(), true)
+	r.recordSeqHash(oldTargetSeq, oldTarget, hash1, true)
+	trackCatchupPeer(r, 7, oldTargetSeq)
+	require.NoError(t, a.RequestLedger(consensus.LedgerID(oldTarget)))
+
+	newTarget := [32]byte{0xE7}
+	require.NoError(t, a.RequestLedger(consensus.LedgerID(newTarget)))
+	require.Equal(t, consensusRecovery{targetHash: newTarget, stepHash: hash1}, r.consensusRecovery)
+	legacy := sender.legacyCalls()
+	require.Empty(t, legacy)
+
+	payload, err := message.Encode(resp1)
+	require.NoError(t, err)
+	r.handleMessage(&peermanagement.InboundMessage{
+		PeerID: 7, Type: uint16(message.TypeReplayDeltaResponse), Payload: payload,
+	})
+	require.Empty(t, engine.getLedgers())
+	require.Equal(t, consensusRecovery{
+		targetHash: newTarget,
+		stepHash:   newTarget,
+	}, r.consensusRecovery)
+	legacy = sender.legacyCalls()
+	require.Len(t, legacy, 1)
+	require.Equal(t, newTarget, legacy[0].hash)
+}
+
+func TestRouter_ConsensusRecoveryUsesStoredJumpAsReplayAnchor(t *testing.T) {
+	r, a, sender, svc := makeRouter(t)
+	_, err := svc.AcceptLedger(context.TODO())
+	require.NoError(t, err)
+	closed := svc.GetClosedLedger()
+	require.NotNil(t, closed)
+
+	parent := closed
+	var jump *ledger.Ledger
+	var hashes [5][32]byte
+	for i := range hashes {
+		_, next, hash, seq := buildSuccessorAgainstParent(t, parent)
+		hashes[i] = hash
+		r.recordSeqHash(seq, hash, parent.Hash(), true)
+		parent = next
+		if i == 2 {
+			jump = next
+		}
+	}
+	require.NotNil(t, jump)
+	stateMap, err := jump.StateMapSnapshot()
+	require.NoError(t, err)
+	txMap, err := jump.TxMapSnapshot()
+	require.NoError(t, err)
+	h := jump.Header()
+	require.NoError(t, svc.StoreLedgerWithState(t.Context(), &h, stateMap, txMap))
+	r.consensusRecovery.anchorHash = jump.Hash()
+	r.consensusRecovery.anchorSeq = jump.Sequence()
+
+	targetHash := hashes[len(hashes)-1]
+	targetSeq := closed.Sequence() + uint32(len(hashes))
+	trackCatchupPeer(r, 7, targetSeq)
+	require.NoError(t, a.RequestLedger(consensus.LedgerID(targetHash)))
+
+	require.Equal(t, consensusRecovery{
+		targetHash: targetHash,
+		stepHash:   hashes[3],
+		anchorHash: jump.Hash(),
+		anchorSeq:  jump.Sequence(),
+	}, r.consensusRecovery)
+	require.Equal(t, []replayDeltaCall{{peerID: 7, hash: hashes[3]}}, sender.replayCalls())
+	require.Empty(t, sender.legacyCalls())
+}
+
+func TestRouter_ConsensusRecoveryReplaysPastSpeculativeGap(t *testing.T) {
+	r, a, sender, svc := makeRouter(t)
+	_, err := svc.AcceptLedger(context.TODO())
+	require.NoError(t, err)
+	closed := svc.GetClosedLedger()
+	require.NotNil(t, closed)
+
+	parent := closed
+	var anchor *ledger.Ledger
+	var firstReplayHash [32]byte
+	var targetHash [32]byte
+	var targetSeq uint32
+	for i := 0; i <= maxForwardDeltaGap+1; i++ {
+		_, next, hash, seq := buildSuccessorAgainstParent(t, parent)
+		r.recordSeqHash(seq, hash, parent.Hash(), true)
+		parent = next
+		switch i {
+		case 0:
+			anchor = next
+		case 1:
+			firstReplayHash = hash
+		}
+		targetHash = hash
+		targetSeq = seq
+	}
+	require.NotNil(t, anchor)
+	stateMap, err := anchor.StateMapSnapshot()
+	require.NoError(t, err)
+	txMap, err := anchor.TxMapSnapshot()
+	require.NoError(t, err)
+	h := anchor.Header()
+	require.NoError(t, svc.StoreLedgerWithState(t.Context(), &h, stateMap, txMap))
+	r.consensusRecovery.anchorHash = anchor.Hash()
+	r.consensusRecovery.anchorSeq = anchor.Sequence()
+
+	trackCatchupPeer(r, 7, targetSeq)
+	require.NoError(t, a.RequestLedger(consensus.LedgerID(targetHash)))
+
+	require.Equal(t, firstReplayHash, r.consensusRecovery.stepHash)
+	require.Equal(t, []replayDeltaCall{{peerID: 7, hash: firstReplayHash}}, sender.replayCalls())
+	require.Empty(t, sender.legacyCalls())
+}
+
+func TestRouter_ConsensusRecoveryBrokenAnchorLinkFallsBackToExactTarget(t *testing.T) {
+	r, a, sender, svc := makeRouter(t)
+	_, err := svc.AcceptLedger(context.TODO())
+	require.NoError(t, err)
+	closed := svc.GetClosedLedger()
+	require.NotNil(t, closed)
+
+	_, anchor, anchorHash, anchorSeq := buildSuccessorAgainstParent(t, closed)
+	_, _, targetHash, targetSeq := buildSuccessorAgainstParent(t, anchor)
+	r.recordSeqHash(anchorSeq, anchorHash, closed.Hash(), true)
+	r.recordSeqHash(targetSeq, targetHash, [32]byte{0xFF}, true)
+	stateMap, err := anchor.StateMapSnapshot()
+	require.NoError(t, err)
+	txMap, err := anchor.TxMapSnapshot()
+	require.NoError(t, err)
+	h := anchor.Header()
+	require.NoError(t, svc.StoreLedgerWithState(t.Context(), &h, stateMap, txMap))
+	r.consensusRecovery.anchorHash = anchorHash
+	r.consensusRecovery.anchorSeq = anchorSeq
+	trackCatchupPeer(r, 7, targetSeq)
+
+	require.NoError(t, a.RequestLedger(consensus.LedgerID(targetHash)))
+
+	require.Empty(t, sender.replayCalls())
+	legacy := sender.legacyCalls()
+	require.Len(t, legacy, 1)
+	require.Equal(t, targetHash, legacy[0].hash)
+	require.Equal(t, consensusRecovery{targetHash: targetHash, stepHash: targetHash}, r.consensusRecovery)
+}
+
+// Out-of-order replay deltas are independently retrievable by hash and do not
+// mutate the canonical frontier.
+func TestRouter_ReplayDeltaStoresOutOfOrderArrivalsByHash(t *testing.T) {
 	r, a, _, svc := makeRouter(t)
 
 	// Step svc past genesis once so we have a real N-at-seq-2 parent
@@ -686,14 +877,6 @@ func TestRouter_ReplayDelta_CascadesOutOfOrderArrival(t *testing.T) {
 	require.Equal(t, parentSeq+2, seqN2)
 	require.NotEqual(t, hashN1, hashN2, "chained successors must have distinct hashes")
 
-	// --- Out-of-order delivery: N+2 arrives first ---
-	//
-	// Arm an acquisition for N+2 with ledgerN1 as the parent object.
-	// startReplayDeltaAcquisition takes the parent Ledger directly, so
-	// we can supply an in-memory N+1 that svc doesn't yet know about.
-	// Apply will use it to derive N+2's post-state; the router then
-	// hands the derived ledger to SubmitHeldAdoption, which must stash
-	// because svc has no N+1 in ledgerHistory.
 	require.NoError(t, r.startReplayDeltaAcquisition(seqN2, hashN2, 7, ledgerN1))
 	payloadN2, err := message.Encode(respN2)
 	require.NoError(t, err)
@@ -703,24 +886,14 @@ func TestRouter_ReplayDelta_CascadesOutOfOrderArrival(t *testing.T) {
 		Payload: payloadN2,
 	})
 
-	// N+2's verified acquisition slot has been cleared, and the adopt
-	// was stashed (not persisted to history). Issue #397: when
-	// SubmitHeldAdoption stashes, the router auto-arms a backward-
-	// chain acquisition for the awaited parent (N+1). So the in-flight
-	// count is now 1 — the auto-armed N+1 slot — not 0.
-	require.Equal(t, 1, r.replayer.Count(),
-		"after stash the router must auto-arm a backward-chain acquisition for the missing parent")
-	require.True(t, r.replayer.Has(hashN1),
-		"the auto-armed acquisition must target the awaited parent hash N+1")
-	_, err = svc.GetLedgerByHash(hashN2)
-	require.Error(t, err,
-		"N+2 must NOT be in svc history yet — parent seq N+1 has not arrived, so SubmitHeldAdoption must stash")
+	require.Equal(t, 0, r.replayer.Count())
+	gotN2, err := svc.GetLedgerByHash(hashN2)
+	require.NoError(t, err)
+	assert.Equal(t, seqN2, gotN2.Sequence())
 	assert.Equal(t, parentSeq, svc.GetClosedLedger().Sequence(),
-		"closedLedger must not advance when the replay-delta is stashed")
+		"acquisition must not advance the closed ledger")
 
-	// In-order arrival: N+1 lands into the auto-armed slot, fast-paths
-	// the adopt (parentN IS in svc history), and cascadeHeldAdoptions
-	// promotes the stashed N+2 entry keyed by seqN1.
+	require.NoError(t, r.startReplayDeltaAcquisition(seqN1, hashN1, 9, parentN))
 	payloadN1, err := message.Encode(respN1)
 	require.NoError(t, err)
 	r.handleMessage(&peermanagement.InboundMessage{
@@ -730,45 +903,23 @@ func TestRouter_ReplayDelta_CascadesOutOfOrderArrival(t *testing.T) {
 	})
 
 	require.Equal(t, 0, r.replayer.Count(),
-		"N+1 adoption should clear the acquisition")
+		"N+1 storage should clear the acquisition")
 
-	// Both N+1 AND N+2 must be in svc history. This is the F6
-	// contract: a single AdoptLedgerWithState at the parent seq
-	// drains every held child whose ParentHash matches.
 	gotN1, err := svc.GetLedgerByHash(hashN1)
-	require.NoError(t, err, "N+1 must be adopted by its own response")
+	require.NoError(t, err)
 	assert.Equal(t, hashN1, gotN1.Hash())
 
-	gotN2, err := svc.GetLedgerByHash(hashN2)
-	require.NoError(t, err,
-		"N+2 must be cascade-adopted when its awaited parent N+1 lands — this fails without F6 wiring")
+	gotN2, err = svc.GetLedgerByHash(hashN2)
+	require.NoError(t, err)
 	assert.Equal(t, hashN2, gotN2.Hash())
-
-	// closedLedger must advance to the cascade tip (N+2), not stop
-	// at N+1. This is the observable signal that the cascade ran
-	// end-to-end through the router — half-cascades (stop at N+1)
-	// leave the node visibly behind until the inbound loop retries.
-	assert.Equal(t, hashN2, svc.GetClosedLedger().Hash(),
-		"closedLedger must advance to the cascade tip N+2")
-	assert.Equal(t, seqN2, svc.GetClosedLedger().Sequence())
-
-	// Cascade-driven adoption still advances operating mode to
-	// Tracking. Router's adoptVerifiedLedger only runs the
-	// SetOperatingMode branch for the outer ledger (N+1); N+2 is
-	// promoted from inside the service and the router never sees it.
-	// But the N+1 adoption already did the Tracking transition, so
-	// the final state must be >= Tracking regardless.
+	assert.Equal(t, parentSeq, svc.GetClosedLedger().Sequence())
 	assert.True(t, a.GetOperatingMode() >= consensus.OpModeTracking,
-		"operating mode must be at least Tracking after cascade (was %s)", a.GetOperatingMode())
+		"operating mode must be at least Tracking after acquisition (was %s)", a.GetOperatingMode())
 }
 
-// Issue #397 regression: under tip-only acquisition (checkBehind), a
-// replay-delta whose parent is missing from svc history must trigger a
-// backward-chain acquisition for that parent — otherwise the candidate
-// ages out at heldAdoptionTTL and the chain stays stuck. This test pins
-// the auto-arm signal; cascade-forward is covered by
-// TestRouter_ReplayDelta_CascadesOutOfOrderArrival.
-func TestRouter_ReplayDelta_Issue397_AutoArmsParentOnStash(t *testing.T) {
+// A verified replay delta already carries a complete derived ledger, so storing
+// it does not require a parent-history chase.
+func TestRouter_ReplayDeltaStoresWithoutParentChase(t *testing.T) {
 	r, _, rs, svc := makeRouter(t)
 
 	// Step svc past genesis so we have a real parent at seq 2 whose
@@ -809,30 +960,14 @@ func TestRouter_ReplayDelta_Issue397_AutoArmsParentOnStash(t *testing.T) {
 		Payload: payloadN2,
 	})
 
-	// Stash assertion: N+2 must not be in svc history (parent missing
-	// → SubmitHeldAdoption stashed) and closedLedger must not advance.
-	// These hold both before and after the fix.
-	_, err = svc.GetLedgerByHash(hashN2)
-	require.Error(t, err, "N+2 must be stashed, not adopted")
+	stored, err := svc.GetLedgerByHash(hashN2)
+	require.NoError(t, err)
+	require.Equal(t, seqN2, stored.Sequence())
 	assert.Equal(t, parentSeq, svc.GetClosedLedger().Sequence(),
-		"closedLedger must not advance while N+2 is stashed")
+		"closedLedger must not advance for a stored acquisition")
 
-	// Auto-arm assertion. Either path (replay-delta or legacy) is
-	// acceptable — both terminate at the network layer with a request
-	// for the awaited parent's hash.
 	totalAutoArmCalls := len(rs.replayCalls()) + len(rs.legacyCalls())
-	require.Equal(t, 1, totalAutoArmCalls,
-		"router must auto-arm exactly one backward-chain acquisition (issue #397)")
-
-	armedHash, armedSeq := autoArmTarget(rs)
-	assert.Equal(t, hashN1, armedHash,
-		"auto-arm must target the awaited parent hash (issue #397)")
-	if armedSeq != 0 {
-		// Only the legacy path carries seq on the wire — replay-delta
-		// is hash-keyed. When legacy was chosen, also pin the seq.
-		assert.Equal(t, seqN1, armedSeq,
-			"auto-arm must target the awaited parent seq")
-	}
+	require.Zero(t, totalAutoArmCalls)
 }
 
 // autoArmTarget returns the hash and seq of the single auto-armed

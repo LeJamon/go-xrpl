@@ -47,7 +47,11 @@ type Engine struct {
 	// bowedOut is the per-round voluntary bow-out: the configured validator
 	// list expired, so this round neither proposes nor validates. Snapshotted
 	// at round start (under e.mu); atomic for the lock-free IsValidating path.
-	bowedOut   atomic.Bool
+	bowedOut atomic.Bool
+	// validating is the per-round validator eligibility snapshot. It is
+	// independent of sync state: observing validators may emit partial
+	// validations. Written at round start under e.mu and read lock-free by RPC.
+	validating atomic.Bool
 	state      *consensus.RoundState
 	prevLedger consensus.Ledger
 
@@ -55,7 +59,8 @@ type Engine struct {
 	// (rippled's jtACCEPT job window). While set, round-driving (timerEntry,
 	// OnLedger) parks so no second goroutine starts a round before the commit
 	// tail runs. Mutated under e.mu.
-	buildInProgress bool
+	buildInProgress       bool
+	pendingRecoveryLedger consensus.Ledger
 
 	ourTxSet  consensus.TxSet
 	converged bool
@@ -149,22 +154,6 @@ type Engine struct {
 	// wrongLedgerID is the ledger we're acquiring in ModeWrongLedger;
 	// prevents spamming handleWrongLedger.
 	wrongLedgerID consensus.LedgerID
-
-	// wrongLedgerAcquireFailures counts clean acquisition failures of
-	// wrongLedgerID; at wrongLedgerAcquireMaxFailures the engine drops to a
-	// degraded resync rather than freezing.
-	wrongLedgerAcquireFailures int
-
-	// wrongLedgerSince is when we last entered ModeWrongLedger (zero when not
-	// pinned); it measures continuous time stuck regardless of target-hash
-	// churn, arming the wrongLedgerStuckTimeout watchdog.
-	wrongLedgerSince time.Time
-
-	// degradedResyncUntil, when in the future, suppresses re-pinning
-	// ModeWrongLedger so the node keeps closing ledgers (observer-mode
-	// advancement) while it retries acquisition. Engine-global: every
-	// wrongLedger pin is skipped while the window is open.
-	degradedResyncUntil time.Time
 
 	// lastRefusedSwitch de-duplicates the switch-refused log while checkLedger
 	// keeps re-deriving the same incompatible target.
@@ -579,7 +568,9 @@ func (e *Engine) startRoundLocked(round consensus.RoundID, proposing, recovering
 	// A recovery restart means we just jumped to a different LCL — tell peers
 	// via SWITCHED_LEDGER so their tallies drop our abandoned ledger.
 	if recovering && e.prevLedger != nil {
-		e.adaptor.OnLedgerSwitched(e.prevLedger)
+		if err := e.adaptor.OnLedgerSwitched(e.prevLedger); err != nil {
+			return fmt.Errorf("switch ledger: %w", err)
+		}
 	}
 
 	// Carry our own observed close time across rounds. The first round seeds
@@ -624,9 +615,22 @@ func (e *Engine) startRoundLocked(round consensus.RoundID, proposing, recovering
 	// An amendment-blocked node observes only: it can no longer build correct
 	// ledgers, so proposing or validating them would poison the network.
 	belowFloor := round.Seq <= e.adaptor.GetMaxDisallowedLedgerSeq()
+	e.validating.Store(e.adaptor.IsValidator() &&
+		!belowFloor &&
+		!e.adaptor.IsAmendmentBlocked() &&
+		!bowedOut)
+	preferredLCL := e.isCurrentPreferredLCLLocked(e.prevLedger)
+	if e.adaptor.GetOperatingMode() == consensus.OpModeFull && !preferredLCL {
+		e.adaptor.SetOperatingMode(consensus.OpModeConnected)
+		slog.Info("Observing: trusted validations prefer another LCL",
+			"t", "consensus",
+			"event", "preferred-lcl-observe",
+			"round_seq", round.Seq,
+		)
+	}
 	fullValidator := e.adaptor.IsValidator() &&
 		e.adaptor.GetOperatingMode() == consensus.OpModeFull &&
-		!e.adaptor.IsAmendmentBlocked() && !bowedOut
+		!e.adaptor.IsAmendmentBlocked() && !bowedOut && preferredLCL
 	switch {
 	case belowFloor:
 		if proposing && e.adaptor.IsValidator() {
@@ -638,7 +642,7 @@ func (e *Engine) startRoundLocked(round consensus.RoundID, proposing, recovering
 			)
 		}
 		e.setMode(consensus.ModeObserving)
-	case recovering && fullValidator:
+	case recovering:
 		e.setMode(consensus.ModeSwitchedLedger)
 	case proposing && fullValidator:
 		e.setMode(consensus.ModeProposing)
@@ -783,15 +787,11 @@ func (e *Engine) IsProposing() bool {
 	return consensus.Mode(e.modeAtomic.Load()) == consensus.ModeProposing
 }
 
-// IsValidating reports whether the node is issuing validations this round:
-// a configured validator, synced to OpModeFull, not amendment-blocked, and
-// not bowed out over an expired validator list. Takes no engine lock, safe
-// on the server_info hot path under ledger.service.s.mu.
+// IsValidating reports whether the node is eligible to issue validations in
+// this round. Sync state only determines whether those validations are full or
+// partial. Takes no engine lock, safe on the server_info hot path.
 func (e *Engine) IsValidating() bool {
-	return e.adaptor.IsValidator() &&
-		e.adaptor.GetOperatingMode() == consensus.OpModeFull &&
-		!e.adaptor.IsAmendmentBlocked() &&
-		!e.bowedOut.Load()
+	return e.validating.Load()
 }
 func (e *Engine) Timing() consensus.Timing {
 	return e.timing
@@ -1005,15 +1005,6 @@ func (e *Engine) setMode(newMode consensus.Mode) {
 	// old or new — fine for the snapshot.
 	e.modeAtomic.Store(int32(newMode))
 
-	// Stamp wrongLedgerSince on entry to ModeWrongLedger, clear on exit. A re-pin
-	// stays in the same mode, so the stamp survives a churning target.
-	switch {
-	case newMode == consensus.ModeWrongLedger && oldMode != consensus.ModeWrongLedger:
-		e.wrongLedgerSince = e.adaptor.Now()
-	case newMode != consensus.ModeWrongLedger:
-		e.wrongLedgerSince = time.Time{}
-	}
-
 	e.eventBus.Publish(&consensus.ModeChangedEvent{
 		OldMode:   oldMode,
 		NewMode:   newMode,
@@ -1096,12 +1087,16 @@ func (e *Engine) shouldCloseLedger() bool {
 	return e.closeOnTimers(openTime, timeSincePrevClose)
 }
 
+type parentCloseTimeReporter interface {
+	ParentCloseTime() time.Time
+}
+
 // closeAgreementReporter is optionally implemented by a prevLedger that can
 // report whether its close time was reached by consensus. Ledgers that don't
 // (simulation/test ledgers) are treated as having agreed — the normal case.
 type closeAgreementReporter interface {
+	parentCloseTimeReporter
 	CloseAgree() bool
-	ParentCloseTime() time.Time
 }
 
 // lastCloseBaseline returns the reference close time the idle/close timers
