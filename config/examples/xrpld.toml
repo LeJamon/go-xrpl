@@ -137,8 +137,10 @@ type = "pebble"
 path = "/var/lib/xrpld/db/pebble"
 online_delete = 512
 advisory_delete = 0
-cache_size = 16384               # node-object cache entries (0 = default 10000)
-cache_age = 5                    # node-object cache age in minutes (0 = default 10)
+cache_mb = 256                   # Pebble block cache in MiB (0 = default 256)
+open_files = 500                # steady-state Pebble open-file soft limit (0 = default 500)
+cache_size = 16384               # decoded node-object cache entries (0 = node_size profile)
+cache_age = 5                    # decoded node-object cache age in minutes (0 = node_size profile)
 fast_load = false
 earliest_seq = 32570
 delete_batch = 100

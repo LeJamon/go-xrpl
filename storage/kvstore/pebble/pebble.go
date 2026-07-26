@@ -23,34 +23,32 @@ import (
 type Store struct {
 	mu       sync.RWMutex
 	db       *pebble.DB
+	options  Options
+	cache    *pebble.Cache
 	closed   bool
 	readonly bool
 }
 
 // New opens a Pebble database at the given path.
-// cache is the block cache size in bytes (0 for default).
-// handles is the number of open file handles allowed (0 for default).
 // readonly opens the database in read-only mode if true.
-func New(path string, cache int, handles int, readonly bool) (*Store, error) {
-	if cache <= 0 {
-		cache = 256 << 20 // 256MB default
+func New(path string, options Options, readonly bool) (*Store, error) {
+	resolved, err := options.Resolve()
+	if err != nil {
+		return nil, err
 	}
-	pebbleCache := pebble.NewCache(int64(cache))
+	pebbleCache := pebble.NewCache(resolved.BlockCacheBytes)
 	defer pebbleCache.Unref()
-	return newWithCache(path, pebbleCache, handles, readonly)
+	return newWithCache(path, pebbleCache, resolved, readonly)
 }
 
-func newWithCache(path string, pebbleCache *pebble.Cache, handles int, readonly bool) (*Store, error) {
+func newWithCache(path string, pebbleCache *pebble.Cache, options Options, readonly bool) (*Store, error) {
 	if err := os.MkdirAll(path, 0755); err != nil {
 		return nil, fmt.Errorf("kvstore/pebble: failed to create directory %s: %w", path, err)
-	}
-	if handles <= 0 {
-		handles = 500
 	}
 
 	opts := &pebble.Options{
 		Cache:                       pebbleCache,
-		MaxOpenFiles:                handles,
+		MaxOpenFiles:                options.MaxOpenFiles,
 		MemTableSize:                64 << 20, // 64MB memtables
 		MemTableStopWritesThreshold: 4,
 		MaxConcurrentCompactions: func() int {
@@ -83,7 +81,12 @@ func newWithCache(path string, pebbleCache *pebble.Cache, handles int, readonly 
 		return nil, fmt.Errorf("kvstore/pebble: failed to open %s: %w", path, err)
 	}
 
-	return &Store{db: db, readonly: readonly}, nil
+	return &Store{
+		db:       db,
+		options:  options,
+		cache:    pebbleCache,
+		readonly: readonly,
+	}, nil
 }
 
 // Has returns true if the key exists in the store.

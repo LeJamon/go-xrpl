@@ -3,7 +3,15 @@ package config
 import (
 	"errors"
 	"fmt"
+	"math"
 	"slices"
+)
+
+const (
+	bytesPerMiB = int64(1 << 20)
+	// Pebble reserves 10 non-table files above its minimum 64-entry table cache.
+	minimumPebbleOpenFiles   = 74
+	minimumRotatingOpenFiles = 2 * minimumPebbleOpenFiles
 )
 
 // NodeDBConfig represents the [node_db] section.
@@ -13,6 +21,8 @@ import (
 type NodeDBConfig struct {
 	Type                string `toml:"type" mapstructure:"type"`
 	Path                string `toml:"path" mapstructure:"path"`
+	CacheMB             int64  `toml:"cache_mb" mapstructure:"cache_mb"`     // Pebble block cache in MiB; 0 = default
+	OpenFiles           int    `toml:"open_files" mapstructure:"open_files"` // Pebble open-file soft limit; 0 = default
 	CacheSize           int    `toml:"cache_size" mapstructure:"cache_size"` // node-object cache entries; 0 = default
 	CacheAge            int    `toml:"cache_age" mapstructure:"cache_age"`   // node-object cache age in minutes; 0 = default
 	FastLoad            bool   `toml:"fast_load" mapstructure:"fast_load"`
@@ -60,6 +70,15 @@ func (n *NodeDBConfig) Validate() error {
 		return errors.New("node_db path is required")
 	}
 
+	if n.CacheMB < 0 {
+		return fmt.Errorf("cache_mb must be non-negative, got %d", n.CacheMB)
+	}
+	if n.CacheMB > math.MaxInt64/bytesPerMiB {
+		return fmt.Errorf("cache_mb is too large: %d MiB overflows bytes", n.CacheMB)
+	}
+	if err := validateNonNegative("open_files", n.OpenFiles); err != nil {
+		return err
+	}
 	if err := validateNonNegative("cache_size", n.CacheSize); err != nil {
 		return err
 	}
@@ -73,6 +92,18 @@ func (n *NodeDBConfig) Validate() error {
 	// Validate online_delete
 	if n.OnlineDelete != 0 && n.OnlineDelete < 256 {
 		return fmt.Errorf("online_delete must be at least 256, got %d", n.OnlineDelete)
+	}
+	if n.OpenFiles > 0 {
+		minimum := minimumPebbleOpenFiles
+		if n.OnlineDelete > 0 {
+			minimum = minimumRotatingOpenFiles
+		}
+		if n.OpenFiles < minimum {
+			return fmt.Errorf("open_files must be at least %d, got %d", minimum, n.OpenFiles)
+		}
+		if n.OnlineDelete > 0 && n.OpenFiles%2 != 0 {
+			return fmt.Errorf("open_files must be even when online_delete is enabled, got %d", n.OpenFiles)
+		}
 	}
 
 	if err := validateZeroOrOne("advisory_delete", n.AdvisoryDelete); err != nil {

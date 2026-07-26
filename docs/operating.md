@@ -185,12 +185,14 @@ List IPs in `admin` to grant those clients admin role.
 
 | Key | Example | Meaning |
 |-----|---------|---------|
-| `type` | `"NuDB"` | Backend engine (`NuDB` or `RocksDB`). |
-| `path` | `/var/lib/xrpld/db/nudb` | Node-store directory. |
+| `type` | `"pebble"` | Backend engine. |
+| `path` | `/var/lib/xrpld/db/pebble` | Node-store directory. |
 | `online_delete` | `512` | Keep this many recent ledgers online (`0` disables online delete). |
 | `advisory_delete` | `0` | `1` = only delete on an explicit trigger. |
-| `cache_size` | `16384` | In-memory node-cache entries. |
-| `cache_age` | `5` | Node-cache age in minutes. |
+| `cache_mb` | `2048` | Pebble block-cache capacity in MiB (`0` = 256 MiB). The writable and archive generations share this total. |
+| `open_files` | `1000` | Pebble open-file soft limit (`0` = 500). Single stores require at least 74; rotating stores require an even value of at least 148 and split it between generations. A rotation briefly opens a third generation and may use another half-limit. |
+| `cache_size` | `16384` | Decoded node-object cache entries (`0` = the `node_size` profile). This is independent of `cache_mb`. |
+| `cache_age` | `5` | Decoded node-object cache age in minutes (`0` = the `node_size` profile). |
 | `earliest_seq` | `32570` | Lowest ledger sequence to retain. |
 | `delete_batch` / `back_off_milliseconds` / `age_threshold_seconds` / `recovery_wait_seconds` | `100`/`100`/`60`/`5` | Online-delete pacing (batch size, inter-batch pause, minimum age, catch-up wait). |
 
