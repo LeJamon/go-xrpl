@@ -85,6 +85,7 @@ func TestMovingCatchupFrontierEventuallyNotifies(t *testing.T) {
 
 func TestInitialBootstrapNotifiesBehindFrontier(t *testing.T) {
 	r, a, engine := newCatchupHandoffRouter(t)
+	engine.switchResult = consensus.LedgerSwitchAccepted
 	hash := [32]byte{0xF0}
 	r.recordCatchupTarget(200, [32]byte{0xF2}, 7)
 
@@ -93,4 +94,41 @@ func TestInitialBootstrapNotifiesBehindFrontier(t *testing.T) {
 	require.Equal(t, []consensus.LedgerID{consensus.LedgerID(hash)}, engine.getLedgers())
 	assert.Equal(t, consensus.OpModeTracking, a.GetOperatingMode())
 	assert.Equal(t, uint32(100), r.lastHandoffSeq)
+}
+
+func TestRejectedInitialCandidateRemainsStoreOnlyAnchor(t *testing.T) {
+	r, a, engine := newCatchupHandoffRouter(t)
+	engine.switchResult = consensus.LedgerSwitchRejected
+	hash := [32]byte{0xF1}
+	r.consensusRecovery = consensusRecovery{targetHash: hash, stepHash: hash}
+
+	switched := r.completeStoredConsensusRecovery(100, hash, [32]byte{0xF0}, true)
+
+	assert.False(t, switched)
+	require.Equal(t, []consensus.LedgerID{consensus.LedgerID(hash)}, engine.getLedgers())
+	assert.Equal(t, consensus.OpModeConnected, a.GetOperatingMode())
+	assert.Equal(t, uint32(0), r.lastHandoffSeq)
+	assert.Equal(t, consensusRecovery{anchorHash: hash, anchorSeq: 100}, r.consensusRecovery)
+}
+
+func TestBusyInitialCandidateRetainsTargetForRetry(t *testing.T) {
+	r, a, engine := newCatchupHandoffRouter(t)
+	engine.switchResult = consensus.LedgerSwitchBusy
+	hash := [32]byte{0xF2}
+	r.consensusRecovery = consensusRecovery{targetHash: hash, stepHash: hash}
+
+	switched := r.completeStoredConsensusRecovery(100, hash, [32]byte{0xF1}, true)
+
+	assert.False(t, switched)
+	assert.Equal(t, consensus.OpModeConnected, a.GetOperatingMode())
+	assert.Equal(t, uint32(0), r.lastHandoffSeq)
+	assert.Equal(t, consensusRecovery{targetHash: hash}, r.consensusRecovery)
+
+	engine.switchResult = consensus.LedgerSwitchAccepted
+	switched = r.completeStoredConsensusRecovery(100, hash, [32]byte{0xF1}, true)
+
+	assert.True(t, switched)
+	assert.Equal(t, consensus.OpModeTracking, a.GetOperatingMode())
+	assert.Equal(t, uint32(100), r.lastHandoffSeq)
+	assert.Equal(t, consensusRecovery{anchorHash: hash, anchorSeq: 100}, r.consensusRecovery)
 }

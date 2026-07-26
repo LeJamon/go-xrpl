@@ -314,6 +314,145 @@ func TestEngine_OnLedger_IgnoresOrdinaryAcquisitionOutsideRecovery(t *testing.T)
 	}
 }
 
+func TestEngine_TrySwitchToLedger_AcceptsEligibleLedger(t *testing.T) {
+	tests := []struct {
+		name         string
+		selectLedger func(*Engine, *mockAdaptor, consensus.LedgerID)
+	}{
+		{
+			name: "exact wrong-ledger target",
+			selectLedger: func(e *Engine, _ *mockAdaptor, id consensus.LedgerID) {
+				e.mode = consensus.ModeWrongLedger
+				e.wrongLedgerID = id
+			},
+		},
+		{
+			name: "validated tip",
+			selectLedger: func(e *Engine, a *mockAdaptor, id consensus.LedgerID) {
+				e.mode = consensus.ModeObserving
+				a.validatedLedgerHashOverride = id
+			},
+		},
+		{
+			name: "network preference",
+			selectLedger: func(e *Engine, a *mockAdaptor, id consensus.LedgerID) {
+				e.mode = consensus.ModeObserving
+				a.peerLCLs = []consensus.LedgerID{id, id}
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			a := newMockAdaptor()
+			e := NewEngine(a, DefaultConfig())
+			initial := a.ledgers[consensus.LedgerID{1}]
+			target := chainLedger(101, 101, 1)
+			a.ledgers[target.ID()] = target
+			descendant := chainLedger(102, 102, 101)
+			a.ledgers[descendant.ID()] = descendant
+			e.prevLedger = initial
+			tt.selectLedger(e, a, target.ID())
+
+			got, err := e.TrySwitchToLedger(target.ID())
+			if err != nil {
+				t.Fatalf("TrySwitchToLedger: %v", err)
+			}
+			if got != consensus.LedgerSwitchAccepted {
+				t.Fatalf("result = %v, want Accepted", got)
+			}
+			if e.prevLedger.ID() != target.ID() {
+				t.Fatal("eligible ledger was not selected")
+			}
+			if got := e.Mode(); got != consensus.ModeSwitchedLedger {
+				t.Fatalf("mode = %v, want switchedLedger", got)
+			}
+			if len(a.switchedLedgers) != 1 || a.switchedLedgers[0].ID() != target.ID() {
+				t.Fatalf("switched ledgers = %v, want target", a.switchedLedgers)
+			}
+		})
+	}
+}
+
+func TestEngine_TrySwitchToLedger_ReturnsBusyWithoutQueuing(t *testing.T) {
+	a := newMockAdaptor()
+	e := NewEngine(a, DefaultConfig())
+	initial := a.ledgers[consensus.LedgerID{1}]
+	target := chainLedger(101, 101, 1)
+	a.ledgers[target.ID()] = target
+	e.prevLedger = initial
+	e.mode = consensus.ModeWrongLedger
+	e.wrongLedgerID = target.ID()
+	e.buildInProgress = true
+
+	got, err := e.TrySwitchToLedger(target.ID())
+	if err != nil {
+		t.Fatalf("TrySwitchToLedger: %v", err)
+	}
+	if got != consensus.LedgerSwitchBusy {
+		t.Fatalf("result = %v, want Busy", got)
+	}
+	if e.prevLedger.ID() != initial.ID() {
+		t.Fatal("busy switch changed the consensus parent")
+	}
+	if e.pendingRecoveryLedger != nil {
+		t.Fatal("synchronous switch queued a deferred recovery ledger")
+	}
+	if len(a.switchedLedgers) != 0 {
+		t.Fatal("busy switch announced a ledger change")
+	}
+}
+
+func TestEngine_TrySwitchToLedger_RejectsUnsafeLedger(t *testing.T) {
+	a := newMockAdaptor()
+	e := NewEngine(a, DefaultConfig())
+	initial := a.ledgers[consensus.LedgerID{1}]
+	target := chainLedger(101, 101, 1)
+	target.closeTime = a.Now().Add(-6 * time.Minute)
+	a.ledgers[target.ID()] = target
+	a.validatedLedgerHashOverride = target.ID()
+	e.prevLedger = initial
+	e.mode = consensus.ModeObserving
+
+	got, err := e.TrySwitchToLedger(target.ID())
+	if err != nil {
+		t.Fatalf("TrySwitchToLedger: %v", err)
+	}
+	if got != consensus.LedgerSwitchRejected {
+		t.Fatalf("result = %v, want Rejected", got)
+	}
+	if e.prevLedger.ID() != initial.ID() {
+		t.Fatal("rejected switch changed the consensus parent")
+	}
+	if len(a.switchedLedgers) != 0 {
+		t.Fatal("rejected switch announced a ledger change")
+	}
+}
+
+func TestEngine_TrySwitchToLedger_IgnoresUnselectedLedger(t *testing.T) {
+	a := newMockAdaptor()
+	e := NewEngine(a, DefaultConfig())
+	initial := a.ledgers[consensus.LedgerID{1}]
+	target := chainLedger(101, 101, 1)
+	a.ledgers[target.ID()] = target
+	e.prevLedger = initial
+	e.mode = consensus.ModeObserving
+
+	got, err := e.TrySwitchToLedger(target.ID())
+	if err != nil {
+		t.Fatalf("TrySwitchToLedger: %v", err)
+	}
+	if got != consensus.LedgerSwitchIrrelevant {
+		t.Fatalf("result = %v, want Irrelevant", got)
+	}
+	if e.prevLedger.ID() != initial.ID() {
+		t.Fatal("irrelevant switch changed the consensus parent")
+	}
+	if len(a.switchedLedgers) != 0 {
+		t.Fatal("irrelevant switch announced a ledger change")
+	}
+}
+
 func TestEngine_CurrentPreferredLCL_RejectsValidatedTipAhead(t *testing.T) {
 	a := newMockAdaptor()
 	e := NewEngine(a, DefaultConfig())

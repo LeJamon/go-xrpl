@@ -40,18 +40,97 @@ func TestFreshNodeSwitchesToNetworkLedgerTwoBeforeFirstValidation(t *testing.T) 
 	networkHeader.Hash = header.CalculateHash(networkHeader)
 	require.NotEqual(t, local.Hash(), networkHeader.Hash)
 
-	bootstrapped, err := svc.BootstrapLedgerWithState(t.Context(), &networkHeader, stateMap, txMap)
+	initialCandidate, err := svc.BootstrapLedgerWithState(t.Context(), &networkHeader, stateMap, txMap)
 	require.NoError(t, err)
-	require.True(t, bootstrapped)
+	require.True(t, initialCandidate)
+	require.True(t, svc.NeedsInitialSync())
 	require.Equal(t, consensus.LedgerID{}, a.GetValidatedLedgerHash())
 
+	a.UpdatePeerLCL(1, consensus.LedgerID(networkHeader.Hash))
+	a.UpdatePeerLCL(2, consensus.LedgerID(networkHeader.Hash))
 	engine.TimerEntry()
 
+	require.False(t, svc.NeedsInitialSync())
 	require.Equal(t, consensus.ModeSwitchedLedger, engine.Mode())
 	state := engine.State()
 	require.NotNil(t, state)
 	require.Equal(t, uint32(3), state.Round.Seq)
 	require.Equal(t, networkHeader.Hash, state.Round.ParentHash)
+}
+
+func TestSlowInitialAcquisitionWaitsForCurrentConsensusSwitch(t *testing.T) {
+	svc := adg_newNonStandaloneService(t)
+	t.Cleanup(svc.Stop)
+	a := New(Config{LedgerService: svc})
+	a.SetOperatingMode(consensus.OpModeConnected)
+
+	local := svc.GetClosedLedger()
+	require.NotNil(t, local)
+	require.Equal(t, uint32(2), local.Sequence())
+
+	cfg := rcl.DefaultConfig()
+	cfg.ManualTick = true
+	engine := rcl.NewEngine(a, cfg)
+	require.NoError(t, engine.Start(t.Context()))
+	t.Cleanup(func() { require.NoError(t, engine.Stop()) })
+	require.NoError(t, engine.StartRound(consensus.RoundID{
+		Seq:        local.Sequence() + 1,
+		ParentHash: consensus.LedgerID(local.Hash()),
+	}, false))
+	router := NewRouter(engine, a, make(chan *peermanagement.InboundMessage, 1))
+
+	now := a.Now()
+	stale := completedCatchUpAcquisitionWithHeader(t, header.LedgerHeader{
+		LedgerIndex:         10_000,
+		ParentHash:          [32]byte{0xA0},
+		ParentCloseTime:     now.Add(-7 * time.Minute),
+		CloseTime:           now.Add(-7*time.Minute + time.Second),
+		CloseTimeResolution: 10,
+	})
+	router.fetchTracker.Track(stale)
+	a.UpdatePeerLCL(1, consensus.LedgerID(stale.Hash()))
+	a.UpdatePeerLCL(2, consensus.LedgerID(stale.Hash()))
+	engine.TimerEntry()
+	require.Equal(t, consensus.ModeWrongLedger, engine.Mode())
+
+	router.completeInboundLedger(stale)
+
+	storedStale, err := svc.GetLedgerByHash(stale.Hash())
+	require.NoError(t, err)
+	require.Equal(t, stale.Hash(), storedStale.Hash())
+	require.Equal(t, local.Hash(), svc.GetClosedLedger().Hash())
+	require.True(t, svc.NeedsInitialSync())
+	require.Equal(t, consensus.OpModeConnected, a.GetOperatingMode())
+	require.Equal(t, consensus.ModeWrongLedger, engine.Mode())
+	require.False(t, engine.IsProposing())
+	state := engine.State()
+	require.NotNil(t, state)
+	require.Equal(t, local.Hash(), state.Round.ParentHash)
+
+	fresh := completedCatchUpAcquisitionWithHeader(t, header.LedgerHeader{
+		LedgerIndex:         stale.Seq() + 1,
+		ParentHash:          stale.Hash(),
+		ParentCloseTime:     now.Add(-2 * time.Second),
+		CloseTime:           now,
+		CloseTimeResolution: 10,
+	})
+	router.fetchTracker.Track(fresh)
+	a.UpdatePeerLCL(1, consensus.LedgerID(fresh.Hash()))
+	a.UpdatePeerLCL(2, consensus.LedgerID(fresh.Hash()))
+	engine.TimerEntry()
+	require.Equal(t, consensus.ModeWrongLedger, engine.Mode())
+
+	router.completeInboundLedger(fresh)
+
+	require.False(t, svc.NeedsInitialSync())
+	require.Equal(t, fresh.Hash(), svc.GetClosedLedger().Hash())
+	require.Equal(t, consensus.OpModeTracking, a.GetOperatingMode())
+	require.Equal(t, consensus.ModeSwitchedLedger, engine.Mode())
+	require.False(t, engine.IsProposing())
+	state = engine.State()
+	require.NotNil(t, state)
+	require.Equal(t, fresh.Seq()+1, state.Round.Seq)
+	require.Equal(t, fresh.Hash(), state.Round.ParentHash)
 }
 
 func TestAcquiredValidatedTipSurvivesRecoveryTimerTick(t *testing.T) {

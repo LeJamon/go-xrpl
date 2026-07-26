@@ -382,6 +382,35 @@ func (e *Engine) OnLedger(id consensus.LedgerID, ledger []byte) error {
 	return nil
 }
 
+// TrySwitchToLedger synchronously evaluates and adopts a locally-held ledger
+// selected by consensus recovery, validation, or the current network view.
+func (e *Engine) TrySwitchToLedger(id consensus.LedgerID) (consensus.LedgerSwitchResult, error) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+
+	exactRecoveryTarget := e.mode == consensus.ModeWrongLedger && id == e.wrongLedgerID
+	validatedTip := e.adaptor.GetValidatedLedgerHash() == id
+	networkPreferred := e.prevLedger != nil && e.getNetworkLedger() == id
+	if !exactRecoveryTarget && !validatedTip && !networkPreferred {
+		return consensus.LedgerSwitchIrrelevant, nil
+	}
+
+	l, err := e.adaptor.GetLedger(id)
+	if err != nil {
+		return consensus.LedgerSwitchIrrelevant, err
+	}
+	if l == nil {
+		return consensus.LedgerSwitchIrrelevant, nil
+	}
+	if e.buildInProgress {
+		return consensus.LedgerSwitchBusy, nil
+	}
+	if !e.switchToLedgerLocked(id, l) {
+		return consensus.LedgerSwitchRejected, nil
+	}
+	return consensus.LedgerSwitchAccepted, nil
+}
+
 func (e *Engine) switchToAcquiredLedgerLocked(id consensus.LedgerID, l consensus.Ledger) bool {
 	exactRecoveryTarget := e.mode == consensus.ModeWrongLedger && id == e.wrongLedgerID
 	validatedTip := e.adaptor.GetValidatedLedgerHash() == id
@@ -403,6 +432,10 @@ func (e *Engine) switchToAcquiredLedgerLocked(id consensus.LedgerID, l consensus
 			l = next
 		}
 	}
+	return e.switchToLedgerLocked(id, l)
+}
+
+func (e *Engine) switchToLedgerLocked(id consensus.LedgerID, l consensus.Ledger) bool {
 	if !e.canSwitchToLedgerLocked(l) {
 		if e.lastRefusedSwitch != id {
 			e.lastRefusedSwitch = id

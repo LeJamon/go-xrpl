@@ -50,7 +50,7 @@ func TestStoreLedgerWithStateDoesNotMoveCanonicalFrontier(t *testing.T) {
 	require.ErrorIs(t, err, ErrLedgerNotFound)
 }
 
-func TestBootstrapLedgerWithStateAdoptsOnlyFirstPeerLedger(t *testing.T) {
+func TestBootstrapLedgerWithStateStagesUntilConsensusSwitch(t *testing.T) {
 	cfg := DefaultConfig()
 	cfg.Standalone = false
 	svc, err := New(cfg)
@@ -58,18 +58,25 @@ func TestBootstrapLedgerWithStateAdoptsOnlyFirstPeerLedger(t *testing.T) {
 	require.NoError(t, svc.Start())
 	t.Cleanup(svc.Stop)
 	require.True(t, svc.NeedsInitialSync())
+	originalClosed := svc.GetClosedLedger()
+	require.NotNil(t, originalClosed)
 
 	first, firstState, firstTx := acquiredLedgerFixture(t, 100, 0xB1)
-	bootstrapped, err := svc.BootstrapLedgerWithState(t.Context(), first, firstState, firstTx)
+	initialCandidate, err := svc.BootstrapLedgerWithState(t.Context(), first, firstState, firstTx)
 	require.NoError(t, err)
-	require.True(t, bootstrapped)
+	require.True(t, initialCandidate)
+	require.True(t, svc.NeedsInitialSync())
+	require.Equal(t, originalClosed.Hash(), svc.GetClosedLedger().Hash())
+	storedFirst, err := svc.GetLedgerByHash(first.Hash)
+	require.NoError(t, err)
+	require.NoError(t, svc.SwitchToPreferredLedger(storedFirst))
 	require.False(t, svc.NeedsInitialSync())
-	require.Equal(t, first.LedgerIndex, svc.GetClosedLedgerIndex())
+	require.Equal(t, first.Hash, svc.GetClosedLedger().Hash())
 
 	second, secondState, secondTx := acquiredLedgerFixture(t, 105, 0xB2)
-	bootstrapped, err = svc.BootstrapLedgerWithState(t.Context(), second, secondState, secondTx)
+	initialCandidate, err = svc.BootstrapLedgerWithState(t.Context(), second, secondState, secondTx)
 	require.NoError(t, err)
-	require.False(t, bootstrapped)
+	require.False(t, initialCandidate)
 	require.Equal(t, first.LedgerIndex, svc.GetClosedLedgerIndex())
 	stored, err := svc.GetLedgerByHash(second.Hash)
 	require.NoError(t, err)

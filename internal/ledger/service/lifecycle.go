@@ -910,17 +910,14 @@ func (s *Service) StoreLedgerWithState(ctx context.Context, h *header.LedgerHead
 	return s.storeLedgerWithStateLocked(ctx, h, stateMap, txMap)
 }
 
-// BootstrapLedgerWithState adopts the first peer ledger. Once bootstrap has
-// completed, later calls only store the acquired ledger for explicit consensus
-// selection.
+// BootstrapLedgerWithState stores an acquired ledger and reports whether the
+// node still needs an initial network-ledger switch. Consensus owns that switch.
 func (s *Service) BootstrapLedgerWithState(ctx context.Context, h *header.LedgerHeader, stateMap *shamap.SHAMap, txMap *shamap.SHAMap) (bool, error) {
 	s.mu.Lock()
 	previousValidatedSeq := s.validatedLedgerSeqLocked()
 	defer s.unlockAndNotifyValidatedLedger(previousValidatedSeq)
-	if !s.needsInitialSync {
-		return false, s.storeLedgerWithStateLocked(ctx, h, stateMap, txMap)
-	}
-	return true, s.adoptLedgerWithStateLocked(ctx, h, stateMap, txMap, 0)
+	initialCandidate := s.needsInitialSync
+	return initialCandidate, s.storeLedgerWithStateLocked(ctx, h, stateMap, txMap)
 }
 
 // AdoptLedgerWithState adopts a ledger using a fully-fetched state map from a
