@@ -297,12 +297,12 @@ func (l *LoanManage) defaultLoan(ctx *tx.ApplyContext, loanKey keylet.Keylet, lo
 
 	// Liquidation cover: min(debtTotal * coverMin * coverLiq, totalDefault),
 	// capped at the broker's available cover.
-	minimumCover := lmath.TenthBipsOfValue(debtTotal, b.CoverRateMinimum)
-	liq := lmath.TenthBipsOfValue(minimumCover, b.CoverRateLiquidation)
+	minimumCover := lmath.TenthBipsOfValueRounded(debtTotal, b.CoverRateMinimum, state.RoundUpward)
+	liq := lmath.TenthBipsOfValueRounded(minimumCover, b.CoverRateLiquidation, state.RoundUpward)
 	if liq.Cmp(totalDefault) > 0 {
 		liq = totalDefault
 	}
-	covered := lmath.RoundAssetNearest(asset, liq, loanScale)
+	covered := lmath.RoundAssetUpward(asset, liq, loanScale)
 	if covered.Cmp(lendNumForRules(b.CoverAvailable, ctx.Rules())) > 0 {
 		covered = lendNumForRules(b.CoverAvailable, ctx.Rules())
 	}
