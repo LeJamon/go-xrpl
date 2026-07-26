@@ -105,38 +105,3 @@ func TestLoadAmendments_RetiredPermanentlyEnabled(t *testing.T) {
 		})
 	}
 }
-
-func TestIsAmendmentStoredInLedgerEntry_ExactMembership(t *testing.T) {
-	data := encodeAmendmentsEntry(t, [][32]byte{
-		amendment.FeatureFlow,
-		amendment.FeatureNonFungibleTokensV1_1,
-	})
-
-	for _, tc := range []struct {
-		name string
-		id   [32]byte
-		want bool
-	}{
-		{name: "stored", id: amendment.FeatureFlow, want: true},
-		{name: "retired baseline is not injected", id: amendment.FeatureFixPayChanRecipientOwnerDir},
-		{name: "rule alias is not treated as stored", id: amendment.FeatureNonFungibleTokensV1},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			got, err := IsAmendmentStoredInLedgerEntry(data, tc.id)
-			if err != nil {
-				t.Fatalf("IsAmendmentStoredInLedgerEntry: %v", err)
-			}
-			if got != tc.want {
-				t.Fatalf("IsAmendmentStoredInLedgerEntry = %t, want %t", got, tc.want)
-			}
-		})
-	}
-
-	current, err := LoadAmendmentsFromLedgerEntry(data)
-	if err != nil {
-		t.Fatalf("LoadAmendmentsFromLedgerEntry: %v", err)
-	}
-	if !current.Enabled(amendment.FeatureFixPayChanRecipientOwnerDir) {
-		t.Fatal("the default loader must preserve the current retired-amendment baseline")
-	}
-}

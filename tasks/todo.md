@@ -1962,3 +1962,50 @@ replacing its specialized traversal algorithms.
   SHAMap normal and race suites, package vet, repository-wide `go test ./...`,
   `just build-all`, `just build-nocgo`, strict `golangci-lint` with zero issues,
   coverage, benchmarks, and `git diff --check`.
+
+---
+
+# Issue #1414 — historical pay-channel replay boundary
+
+Target: `origin/main` at `956cca8d211ce0ed718e40edaa149d46302f59a8`.
+Behavioral oracle: local rippled `3.2.0` source declared at
+`3c43f4614f87965298773279ff5b85d4c56c637b`; its detached worktree metadata is
+unavailable, so source contents can be reviewed but Git cleanliness cannot be
+independently re-verified.
+
+## Plan
+
+- [x] Validate GitHub access, issue state and discussion, linked PRs, repository
+      identity, default base branch, clean worktree, and exact merge base.
+- [x] Trace the replay-only compatibility option, PaymentChannelCreate state
+      effects, existing regressions, and rippled v3.2.0 default behavior.
+- [x] Replace retired-amendment SLE inference with explicit replay provenance:
+      whole-range pre-fix semantics by default, plus a caller-supplied first
+      post-fix ledger for ranges crossing activation.
+- [x] Add focused regressions for the captured parent Amendments shape, both
+      sides of the explicit boundary, default v3.2.0 behavior, recipient
+      directory membership, `DestinationNode`, and recipient `OwnerCount`.
+- [x] Run formatting, focused and affected tests, race coverage where useful,
+      build, vet, strict CI lint, advisory lint, and diff checks.
+- [x] Review the complete diff against rippled v3.2.0 and the issue acceptance
+      criteria, and record exact results.
+
+## Review
+
+- Replaced raw Amendments-entry membership inference with explicit replay
+  provenance. Legacy mode selects pre-fix semantics for the selected range;
+  optional boundary `F` uses pre-fix behavior only for target ledgers `< F`.
+- Preserved rippled v3.2.0 behavior by default: channel creation adds both owner
+  directory links and `DestinationNode`, changes only the source `OwnerCount`,
+  and channel closure consults optional `DestinationNode` so old channels remain
+  removable after the fix.
+- Removed the now-unused exact-membership helper that existed only for the
+  retired-amendment replay inference.
+- Verified with focused replay/ledger/paychan tests, paychan race tests,
+  `just test-tx`, `just build-all`, `just vet`, postgres-tagged vet, strict CI
+  lint, advisory lint, formatting, and `git diff --check`.
+- The exact ledger 3,288,772 replay could not run locally because the captured
+  Devnet database/checkpoint is absent and PostgreSQL on `localhost:5432` is not
+  available. The captured parent Amendments shape and the state invariants are
+  covered by deterministic regressions.
+- No blocking, major, or minor correctness or conformance findings remain.
