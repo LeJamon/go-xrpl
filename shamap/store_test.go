@@ -8,66 +8,6 @@ import (
 	"testing"
 )
 
-// memoryFamily is a test implementation of Family using an in-memory map.
-type memoryFamily struct {
-	mu    sync.RWMutex
-	store map[[32]byte][]byte
-}
-
-func newMemoryFamily() *memoryFamily {
-	return &memoryFamily{
-		store: make(map[[32]byte][]byte),
-	}
-}
-
-func (f *memoryFamily) Fetch(ctx context.Context, hash [32]byte) ([]byte, error) {
-	if err := ctx.Err(); err != nil {
-		return nil, err
-	}
-	f.mu.RLock()
-	defer f.mu.RUnlock()
-	data, ok := f.store[hash]
-	if !ok {
-		return nil, nil
-	}
-	// Return a copy to avoid shared mutable state
-	cp := make([]byte, len(data))
-	copy(cp, data)
-	return cp, nil
-}
-
-func (f *memoryFamily) StoreBatch(ctx context.Context, entries []FlushEntry) error {
-	if err := ctx.Err(); err != nil {
-		return err
-	}
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	for _, e := range entries {
-		cp := make([]byte, len(e.Data))
-		copy(cp, e.Data)
-		f.store[e.Hash] = cp
-	}
-	return nil
-}
-
-func (f *memoryFamily) Len() int {
-	f.mu.RLock()
-	defer f.mu.RUnlock()
-	return len(f.store)
-}
-
-// flushToFamily is a helper that flushes a SHAMap and stores entries in a Family.
-func flushToFamily(sm *SHAMap, family *memoryFamily) error {
-	batch, err := sm.FlushDirty()
-	if err != nil {
-		return fmt.Errorf("FlushDirty: %w", err)
-	}
-	if len(batch.Entries) > 0 {
-		return family.StoreBatch(context.Background(), batch.Entries)
-	}
-	return nil
-}
-
 // TestDirtyFlag_NewNodes verifies that newly created nodes are marked dirty.
 func TestDirtyFlag_NewNodes(t *testing.T) {
 	// Inner node
@@ -264,7 +204,7 @@ func TestFlushDirty_BasicRoundTrip(t *testing.T) {
 	}
 
 	// Root should no longer be dirty
-	if sMap.root.IsDirty() {
+	if sMap.tree.root.IsDirty() {
 		t.Error("Root should be clean after FlushDirty")
 	}
 
@@ -399,7 +339,7 @@ func TestAcknowledgePersistedContextCancellationLeavesRetryableRoot(t *testing.T
 	if err := sMap.AcknowledgePersistedContext(ctx); err != context.Canceled {
 		t.Fatalf("AcknowledgePersistedContext error = %v, want context.Canceled", err)
 	}
-	if !sMap.root.IsDirty() {
+	if !sMap.tree.root.IsDirty() {
 		t.Fatal("canceled acknowledgement cleared the root and made a retry skip dirty nodes")
 	}
 }
@@ -510,7 +450,7 @@ func TestFlushDirty_ReleaseChildren(t *testing.T) {
 
 	// Verify root's children are nil (released)
 	for i := range BranchFactor {
-		child, _, _ := sMap.root.LoadChild(i)
+		child, _, _ := sMap.tree.root.LoadChild(i)
 		if child != nil {
 			t.Errorf("Branch %d child should be nil after release", i)
 		}
@@ -519,8 +459,8 @@ func TestFlushDirty_ReleaseChildren(t *testing.T) {
 	// But hashes should still be set for non-empty branches
 	hasNonEmpty := false
 	for i := range BranchFactor {
-		if !sMap.root.IsEmptyBranch(i) {
-			_, hash, _ := sMap.root.LoadChild(i)
+		if !sMap.tree.root.IsEmptyBranch(i) {
+			_, hash, _ := sMap.tree.root.LoadChild(i)
 			if isZeroHash(hash) {
 				t.Errorf("Branch %d has bit set but zero hash after release", i)
 			}
@@ -738,13 +678,13 @@ func TestBacked_LazyLoading(t *testing.T) {
 	// Root should have branches with hashes set but children nil (not yet loaded)
 	childrenLoaded := 0
 	for i := range BranchFactor {
-		if !backed.root.IsEmptyBranch(i) {
-			child, _, _ := backed.root.LoadChild(i)
+		if !backed.tree.root.IsEmptyBranch(i) {
+			child, _, _ := backed.tree.root.LoadChild(i)
 			if child != nil {
 				childrenLoaded++
 			}
 			// Hash should be set
-			_, hash, _ := backed.root.LoadChild(i)
+			_, hash, _ := backed.tree.root.LoadChild(i)
 			if isZeroHash(hash) {
 				t.Errorf("Branch %d has bit set but zero hash", i)
 			}
@@ -769,7 +709,7 @@ func TestBacked_LazyLoading(t *testing.T) {
 	// Now some children should be loaded (the path to key1)
 	childrenLoadedAfter := 0
 	for i := range BranchFactor {
-		if c, _, _ := backed.root.LoadChild(i); c != nil {
+		if c, _, _ := backed.tree.root.LoadChild(i); c != nil {
 			childrenLoadedAfter++
 		}
 	}
@@ -1145,7 +1085,7 @@ func TestBacked_Snapshot(t *testing.T) {
 	}
 }
 
-func TestBacked_SnapshotMutableUnflushedDefersStore(t *testing.T) {
+func TestBacked_MutableForkDefersStore(t *testing.T) {
 	family := newMemoryFamily()
 	source, err := NewBacked(TypeState, family)
 	if err != nil {
@@ -1161,7 +1101,7 @@ func TestBacked_SnapshotMutableUnflushedDefersStore(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	snap, err := source.SnapshotMutableUnflushed()
+	snap, err := source.MutableFork()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1310,7 +1250,7 @@ func TestBacked_Iterator(t *testing.T) {
 	}
 
 	count := 0
-	iter := backed.begin()
+	iter := newTestIterator(backed)
 	for iter.Next() {
 		item := iter.Item()
 		if item == nil {

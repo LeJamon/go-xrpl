@@ -9,18 +9,18 @@ import (
 
 func bitsOnesCount16(x uint16) int { return bits.OnesCount16(x) }
 
-// TestReproLargeTxSetReconstructFatLeaves builds a SHAMap of N tx blobs,
+// TestSyncLargeTxSetReconstructsFatLeaves builds a SHAMap of N tx blobs,
 // extracts the wire nodes WITHOUT leaf blobs (fatLeaves=false — the
 // rippled liTS_CANDIDATE serve behaviour at PeerImp.cpp:3318), and
 // reconstructs from those inner-only nodes plus the original blobs
 // (sourced "locally" like goxrpl's pending-pool fill). Asserts that the
 // reconstructed root matches the original, then re-walks leaves into
 // blobs and rebuilds a third SHAMap via the same Put path used in
-// adaptor.NewTxSet — that third hash MUST also match. Reproduces the
+// adaptor.NewTxSet — that third hash MUST also match. Covers the
 // iter4 seq 28 / seq 257 stall pattern where goxrpl receives a 130-tx
 // peer tx_set, "reconstructs" it, but the computed root differs from
 // the expected.
-func TestReproLargeTxSetReconstructFatLeaves(t *testing.T) {
+func TestSyncLargeTxSetReconstructsFatLeaves(t *testing.T) {
 	const N = 130
 
 	source := New(TypeTransaction)
@@ -32,7 +32,7 @@ func TestReproLargeTxSetReconstructFatLeaves(t *testing.T) {
 			t.Fatalf("rand: %v", err)
 		}
 		blobs[i] = blob
-		key := computeReproKey(blob)
+		key := computeTxSetKey(blob)
 		if err := source.PutWithNodeType(key, blob, NodeTypeTransactionNoMeta); err != nil {
 			t.Fatalf("Put %d: %v", i, err)
 		}
@@ -77,7 +77,7 @@ func TestReproLargeTxSetReconstructFatLeaves(t *testing.T) {
 		if err != nil {
 			continue
 		}
-		if _, ok := node.(LeafNode); ok {
+		if _, ok := node.(mapLeaf); ok {
 			continue
 		}
 		if _, err := dest.AddKnownNodeByID(nid, w.Data); err != nil {
@@ -98,7 +98,7 @@ func TestReproLargeTxSetReconstructFatLeaves(t *testing.T) {
 				}
 			}
 			// Walk source to this NodeID, dump the actual node
-			var srcNode Node = source.root
+			var srcNode mapNode = source.tree.root
 			for d := 0; d < int(nid.Depth()); d++ {
 				srcInner, ok := srcNode.(*innerNode)
 				if !ok {
@@ -142,7 +142,7 @@ func TestReproLargeTxSetReconstructFatLeaves(t *testing.T) {
 
 	blobByHash := make(map[[32]byte][]byte, N)
 	for _, b := range blobs {
-		blobByHash[computeReproKey(b)] = b
+		blobByHash[computeTxSetKey(b)] = b
 	}
 	filled := 0
 	for _, m := range missing {
@@ -183,7 +183,7 @@ func TestReproLargeTxSetReconstructFatLeaves(t *testing.T) {
 
 	rebuilt := New(TypeTransaction)
 	for i, b := range extractedBlobs {
-		key := computeReproKey(b)
+		key := computeTxSetKey(b)
 		if err := rebuilt.PutWithNodeType(key, b, NodeTypeTransactionNoMeta); err != nil {
 			t.Fatalf("rebuilt Put %d: %v", i, err)
 		}
@@ -198,7 +198,7 @@ func TestReproLargeTxSetReconstructFatLeaves(t *testing.T) {
 	}
 }
 
-func computeReproKey(blob []byte) [32]byte {
+func computeTxSetKey(blob []byte) [32]byte {
 	prefix := [4]byte{'T', 'X', 'N', 0x00}
 	h := sha512.New()
 	h.Write(prefix[:])

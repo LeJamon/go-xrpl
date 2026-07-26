@@ -311,7 +311,7 @@ func TestCmpMaxCountZeroNoLimit(t *testing.T) {
 func TestCmpInvalidMapError(t *testing.T) {
 	valid := New(TypeState)
 	invalid := New(TypeState)
-	invalid.state = StateInvalid
+	invalid.tree.state = stateInvalid
 
 	_, err := valid.Compare(invalid, 0)
 	if err == nil {
@@ -431,7 +431,7 @@ func TestCmpFirstItemsPopulated(t *testing.T) {
 		if d.SecondItem != nil {
 			t.Error("DiffRemoved: SecondItem must be nil")
 		}
-		if !bytes.Equal(d.FirstItem.DataUnsafe(), cmp_val(55)) {
+		if !bytes.Equal(d.FirstItem.dataBytes(), cmp_val(55)) {
 			t.Error("DiffRemoved: FirstItem data mismatch")
 		}
 	}
@@ -457,7 +457,7 @@ func TestCmpSecondItemsPopulated(t *testing.T) {
 		if d.FirstItem != nil {
 			t.Error("DiffAdded: FirstItem must be nil")
 		}
-		if !bytes.Equal(d.SecondItem.DataUnsafe(), cmp_val(66)) {
+		if !bytes.Equal(d.SecondItem.dataBytes(), cmp_val(66)) {
 			t.Error("DiffAdded: SecondItem data mismatch")
 		}
 	}
@@ -843,5 +843,23 @@ func TestCmpInnerCompareMaxCountTruncation(t *testing.T) {
 	}
 	if ds.Len() > 1 {
 		t.Errorf("leaf-vs-inner maxCount=1: expected at most 1, got %d", ds.Len())
+	}
+}
+
+func TestSme_FindDifferenceNilOther(t *testing.T) {
+	sm := New(TypeState)
+	if _, err := sm.FindDifference(nil); err == nil {
+		t.Error("FindDifference(nil) should return error")
+	}
+}
+
+func TestSme_FindDifferenceInvalidMap(t *testing.T) {
+	sm1 := New(TypeState)
+	sm2 := New(TypeState)
+	sm1.tree.mu.Lock()
+	sm1.tree.state = stateInvalid
+	sm1.tree.mu.Unlock()
+	if _, err := sm1.FindDifference(sm2); err == nil {
+		t.Error("FindDifference with invalid map should return error")
 	}
 }

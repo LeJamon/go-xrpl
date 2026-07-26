@@ -14,7 +14,7 @@ import (
 	txengine "github.com/LeJamon/go-xrpl/internal/tx/engine"
 	"github.com/LeJamon/go-xrpl/internal/txq"
 	"github.com/LeJamon/go-xrpl/keylet"
-	"github.com/LeJamon/go-xrpl/shamap"
+	"github.com/LeJamon/go-xrpl/shamap/backend"
 )
 
 // TestEnv manages a test ledger environment for transaction testing.
@@ -96,7 +96,7 @@ type TestEnv struct {
 	// Optional state map family for backed SHAMaps (PebbleDB on disk).
 	// Only set when using NewTestEnvBacked() for heavy tests that would OOM otherwise.
 	// When nil, SHAMaps use unbacked mode (fast, full in-memory clones).
-	stateFamily *shamap.NodeStoreFamily
+	stateFamily *backend.NodeStore
 
 	// Transaction queue (optional). When non-nil, Submit() routes through the
 	// TxQ for fee escalation and sequence-gap queuing.
@@ -280,7 +280,7 @@ func NewTestEnvBacked(t testing.TB) *TestEnv {
 // Must be called before any transactions are submitted.
 func (e *TestEnv) enablePebbleBacking(t testing.TB) {
 	t.Helper()
-	stateFamily, err := shamap.NewPebbleNodeStoreFamily(t.TempDir(), 256, 200000)
+	stateFamily, err := backend.OpenPebble(t.TempDir(), 256, 200000)
 	if err != nil {
 		t.Fatalf("Failed to create state family: %v", err)
 	}

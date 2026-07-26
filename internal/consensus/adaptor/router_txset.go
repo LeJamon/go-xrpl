@@ -139,8 +139,8 @@ func (r *Router) learnTxFromLeaf(originPeer uint64, wire []byte) {
 }
 
 // txLeafWire frames a raw transaction blob as a SHAMap transaction-leaf
-// node: `tx_blob || WireTypeTransaction`. shamap.NewTransactionLeafFromWire
-// and the DeserializeNodeFromWire dispatch are the inverse.
+// node: `tx_blob || WireTypeTransaction`. The SHAMap wire decoders reverse
+// this framing.
 func txLeafWire(blob []byte) []byte {
 	wire := make([]byte, len(blob)+1)
 	copy(wire, blob)

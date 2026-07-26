@@ -6,7 +6,7 @@ import (
 	"time"
 
 	"github.com/LeJamon/go-xrpl/internal/ledger"
-	"github.com/LeJamon/go-xrpl/shamap"
+	"github.com/LeJamon/go-xrpl/shamap/backend"
 	"github.com/LeJamon/go-xrpl/storage/kvstore/memorydb"
 	"github.com/LeJamon/go-xrpl/storage/nodestore"
 	"github.com/stretchr/testify/require"
@@ -18,7 +18,7 @@ func TestCompleteLedgers_EvictedSequenceLoadsFromNodeStore(t *testing.T) {
 
 	cfg := DefaultConfig()
 	cfg.NodeStore = db
-	cfg.SHAMapFamily = shamap.NewNodeStoreFamily(db)
+	cfg.SHAMapFamily = backend.New(db)
 	svc, err := New(cfg)
 	require.NoError(t, err)
 	require.NoError(t, svc.Start())

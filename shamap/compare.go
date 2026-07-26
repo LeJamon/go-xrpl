@@ -8,8 +8,8 @@ import (
 
 // stackEntry represents a pair of nodes being compared
 type stackEntry struct {
-	ourNode   Node
-	otherNode Node
+	ourNode   mapNode
+	otherNode mapNode
 }
 
 // Compare compares this SHAMap with another and returns differences
@@ -22,13 +22,13 @@ func (sm *SHAMap) Compare(other *SHAMap, maxCount int) (*DifferenceSet, error) {
 // CompareContext compares this SHAMap with another while forwarding ctx to
 // lazy storage fetches.
 func (sm *SHAMap) CompareContext(ctx context.Context, other *SHAMap, maxCount int) (*DifferenceSet, error) {
-	sm.mu.RLock()
-	defer sm.mu.RUnlock()
+	sm.tree.mu.RLock()
+	defer sm.tree.mu.RUnlock()
 
-	other.mu.RLock()
-	defer other.mu.RUnlock()
+	other.tree.mu.RLock()
+	defer other.tree.mu.RUnlock()
 
-	if sm.state == StateInvalid || other.state == StateInvalid {
+	if sm.tree.state == stateInvalid || other.tree.state == stateInvalid {
 		return nil, fmt.Errorf("%w: cannot compare invalid SHAMaps", ErrInvalidState)
 	}
 
@@ -56,13 +56,13 @@ func (sm *SHAMap) FindDifference(other *SHAMap) ([][32]byte, error) {
 		return nil, fmt.Errorf("cannot compare with nil map")
 	}
 
-	sm.mu.RLock()
-	defer sm.mu.RUnlock()
+	sm.tree.mu.RLock()
+	defer sm.tree.mu.RUnlock()
 
-	other.mu.RLock()
-	defer other.mu.RUnlock()
+	other.tree.mu.RLock()
+	defer other.tree.mu.RUnlock()
 
-	if sm.state == StateInvalid || other.state == StateInvalid {
+	if sm.tree.state == stateInvalid || other.tree.state == stateInvalid {
 		return nil, fmt.Errorf("%w: cannot compare invalid SHAMaps", ErrInvalidState)
 	}
 
@@ -84,12 +84,12 @@ func (sm *SHAMap) FindDifference(other *SHAMap) ([][32]byte, error) {
 func (sm *SHAMap) diffUnsafe(ctx context.Context, other *SHAMap, emit func(DifferenceItem) bool) (complete bool, err error) {
 	// Direct root hash comparison for early exit: identical hashes mean
 	// identical maps.
-	if sm.root.Hash() == other.root.Hash() {
+	if sm.tree.root.Hash() == other.tree.root.Hash() {
 		return true, nil
 	}
 
 	// Use a stack to track nodes we're comparing
-	stack := []stackEntry{{ourNode: sm.root, otherNode: other.root}}
+	stack := []stackEntry{{ourNode: sm.tree.root, otherNode: other.tree.root}}
 
 	for len(stack) > 0 {
 		if err := ctx.Err(); err != nil {
@@ -117,18 +117,18 @@ func (sm *SHAMap) diffUnsafe(ctx context.Context, other *SHAMap, emit func(Diffe
 			}
 		case ourIsInner && !otherIsInner:
 			// Our node is inner, other is leaf - walk our branch
-			otherLeaf, ok := otherNode.(LeafNode)
+			otherLeaf, ok := otherNode.(mapLeaf)
 			if !ok {
-				return false, fmt.Errorf("expected LeafNode, got %T", otherNode)
+				return false, fmt.Errorf("expected leaf, got %T", otherNode)
 			}
 			cont, err := sm.walkBranch(ctx, ourInner, otherLeaf.Item(), true, emit)
 			if err != nil || !cont {
 				return false, err
 			}
 		case !ourIsInner && otherIsInner:
-			ourLeaf, ok := ourNode.(LeafNode)
+			ourLeaf, ok := ourNode.(mapLeaf)
 			if !ok {
-				return false, fmt.Errorf("expected LeafNode, got %T", ourNode)
+				return false, fmt.Errorf("expected leaf, got %T", ourNode)
 			}
 			cont, err := other.walkBranch(ctx, otherInner, ourLeaf.Item(), false, emit)
 			if err != nil || !cont {
@@ -149,12 +149,12 @@ func (sm *SHAMap) diffUnsafe(ctx context.Context, other *SHAMap, emit func(Diffe
 
 // emitLeafDiff emits the difference(s) between two leaf nodes.
 // Returns false if emit asked to stop.
-func (sm *SHAMap) emitLeafDiff(ourNode, otherNode Node, emit func(DifferenceItem) bool) bool {
-	ourLeaf, ok := ourNode.(LeafNode)
+func (sm *SHAMap) emitLeafDiff(ourNode, otherNode mapNode, emit func(DifferenceItem) bool) bool {
+	ourLeaf, ok := ourNode.(mapLeaf)
 	if !ok {
 		return false
 	}
-	otherLeaf, ok := otherNode.(LeafNode)
+	otherLeaf, ok := otherNode.(mapLeaf)
 	if !ok {
 		return false
 	}
@@ -165,7 +165,7 @@ func (sm *SHAMap) emitLeafDiff(ourNode, otherNode Node, emit func(DifferenceItem
 	otherKey := otherItem.Key()
 
 	if bytes.Equal(ourKey[:], otherKey[:]) {
-		if !bytes.Equal(ourItem.DataUnsafe(), otherItem.DataUnsafe()) {
+		if !bytes.Equal(ourItem.dataBytes(), otherItem.dataBytes()) {
 			return emit(DifferenceItem{Key: ourKey, Type: DiffModified, FirstItem: ourItem, SecondItem: otherItem})
 		}
 	} else {
@@ -248,8 +248,8 @@ func (sm *SHAMap) diffInner(ctx context.Context, ourInner, otherInner *innerNode
 // walkBranch walks a branch of a SHAMap that's matched by an empty branch
 // or single item in the other map. emit is called for each difference;
 // if it returns false the walk stops early (cont=false).
-func (sm *SHAMap) walkBranch(ctx context.Context, node Node, otherMapItem *Item, isFirstMap bool, emit func(DifferenceItem) bool) (bool, error) {
-	nodeStack := []Node{node}
+func (sm *SHAMap) walkBranch(ctx context.Context, node mapNode, otherMapItem *Item, isFirstMap bool, emit func(DifferenceItem) bool) (bool, error) {
+	nodeStack := []mapNode{node}
 
 	emptyBranch := otherMapItem == nil
 
@@ -273,9 +273,9 @@ func (sm *SHAMap) walkBranch(ctx context.Context, node Node, otherMapItem *Item,
 			continue
 		}
 
-		leaf, ok := current.(LeafNode)
+		leaf, ok := current.(mapLeaf)
 		if !ok {
-			return false, fmt.Errorf("expected LeafNode, got %T", current)
+			return false, fmt.Errorf("expected leaf, got %T", current)
 		}
 
 		item := leaf.Item()
@@ -305,7 +305,7 @@ func (sm *SHAMap) walkBranch(ctx context.Context, node Node, otherMapItem *Item,
 				return false, nil
 			}
 		} else if otherMapItem != nil {
-			if !bytes.Equal(item.DataUnsafe(), otherMapItem.DataUnsafe()) {
+			if !bytes.Equal(item.dataBytes(), otherMapItem.dataBytes()) {
 				var firstItem, secondItem *Item
 
 				if isFirstMap {

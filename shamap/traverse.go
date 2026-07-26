@@ -7,7 +7,7 @@ import (
 
 // pathEntry represents an entry in the traversal path
 type pathEntry struct {
-	node   Node
+	node   mapNode
 	nodeID NodeID
 }
 
@@ -24,12 +24,12 @@ func newNodeStack() *nodeStack {
 }
 
 // Push adds a node and its ID to the stack
-func (s *nodeStack) Push(node Node, id NodeID) {
+func (s *nodeStack) Push(node mapNode, id NodeID) {
 	s.entries = append(s.entries, pathEntry{node, id})
 }
 
 // Pop removes and returns the top node and ID from the stack
-func (s *nodeStack) Pop() (Node, NodeID, bool) {
+func (s *nodeStack) Pop() (mapNode, NodeID, bool) {
 	if len(s.entries) == 0 {
 		return nil, NodeID{}, false
 	}
@@ -38,16 +38,6 @@ func (s *nodeStack) Pop() (Node, NodeID, bool) {
 	entry := s.entries[idx]
 	s.entries = s.entries[:idx]
 
-	return entry.node, entry.nodeID, true
-}
-
-// Top returns the top node and ID without removing them
-func (s *nodeStack) Top() (Node, NodeID, bool) {
-	if len(s.entries) == 0 {
-		return nil, NodeID{}, false
-	}
-
-	entry := s.entries[len(s.entries)-1]
 	return entry.node, entry.nodeID, true
 }
 
@@ -69,12 +59,12 @@ func (s *nodeStack) Len() int {
 // walkToKey traverses the tree toward a specific key and returns the leaf node.
 // If stack is non-nil, it is filled with the path from root to (but not including)
 // the leaf.  If pushLeaf is true, the final leaf is also pushed onto the stack.
-func (sm *SHAMap) walkToKey(ctx context.Context, key [32]byte, stack *nodeStack, pushLeaf bool) (Node, error) {
+func (sm *SHAMap) walkToKey(ctx context.Context, key [32]byte, stack *nodeStack, pushLeaf bool) (mapNode, error) {
 	if stack != nil && !stack.IsEmpty() {
 		stack.Clear()
 	}
 
-	var node Node = sm.root
+	var node mapNode = sm.tree.root
 	nodeID := NewRootNodeID()
 
 	for {
@@ -119,14 +109,14 @@ func (sm *SHAMap) walkToKey(ctx context.Context, key [32]byte, stack *nodeStack,
 // fn for each item. If fn returns false iteration stops early. The check on
 // ctx fires before each child descend so a long-running scan can be
 // interrupted. Caller must hold the read lock.
-func (sm *SHAMap) walkLeavesUnsafe(ctx context.Context, start Node, fn func(*Item) bool) error {
+func (sm *SHAMap) walkLeavesUnsafe(ctx context.Context, start mapNode, fn func(*Item) bool) error {
 	_, err := sm.walkLeavesRec(ctx, start, fn)
 	return err
 }
 
 // walkLeavesRec reports whether the walk should continue into further
 // siblings (false once fn has asked to stop).
-func (sm *SHAMap) walkLeavesRec(ctx context.Context, node Node, fn func(*Item) bool) (bool, error) {
+func (sm *SHAMap) walkLeavesRec(ctx context.Context, node mapNode, fn func(*Item) bool) (bool, error) {
 	if node == nil {
 		return true, nil
 	}
@@ -136,7 +126,7 @@ func (sm *SHAMap) walkLeavesRec(ctx context.Context, node Node, fn func(*Item) b
 
 	inner, ok := node.(*innerNode)
 	if !ok {
-		leaf, ok := node.(LeafNode)
+		leaf, ok := node.(mapLeaf)
 		if !ok {
 			return false, ErrInvalidType
 		}
@@ -163,7 +153,7 @@ func (sm *SHAMap) walkLeavesRec(ctx context.Context, node Node, fn func(*Item) b
 
 // onlyBelow checks if there's exactly one item below the given node
 // Returns the item if found, nil if there are 0 or multiple items
-func (sm *SHAMap) onlyBelow(node Node) (*Item, error) {
+func (sm *SHAMap) onlyBelow(node mapNode) (*Item, error) {
 	if node == nil {
 		return nil, nil
 	}
@@ -175,7 +165,7 @@ func (sm *SHAMap) onlyBelow(node Node) (*Item, error) {
 			break
 		}
 
-		var nextNode Node = nil
+		var nextNode mapNode
 		for i := range BranchFactor {
 			child, err := sm.descend(inner, i)
 			if err != nil {
@@ -200,7 +190,7 @@ func (sm *SHAMap) onlyBelow(node Node) (*Item, error) {
 	}
 
 	// Found exactly one leaf
-	leaf, ok := current.(LeafNode)
+	leaf, ok := current.(mapLeaf)
 	if !ok {
 		return nil, ErrInvalidType
 	}
@@ -213,10 +203,10 @@ func (sm *SHAMap) onlyBelow(node Node) (*Item, error) {
 // largest-key leaf otherwise (branch 15 first). A non-empty branch whose
 // child cannot be loaded is an error, matching rippled's descendThrow in
 // belowHelper (SHAMap.cpp:481).
-func (sm *SHAMap) boundBelowCtx(ctx context.Context, node Node, ascending bool) (LeafNode, error) {
+func (sm *SHAMap) boundBelowCtx(ctx context.Context, node mapNode, ascending bool) (mapLeaf, error) {
 	inner, ok := node.(*innerNode)
 	if !ok {
-		leaf, _ := node.(LeafNode)
+		leaf, _ := node.(mapLeaf)
 		return leaf, nil
 	}
 
@@ -242,7 +232,7 @@ func (sm *SHAMap) boundBelowCtx(ctx context.Context, node Node, ascending bool) 
 	return nil, nil
 }
 
-// walkFullBelow is the full-below-aware DFS behind WalkMap, WalkMapParallel,
+// walkFullBelow is the full-below-aware DFS behind walkMap, walkMapParallel,
 // GetMissingNodes and the sync completeness checks. It walks the subtree
 // rooted at node, invoking report for every non-empty branch whose child is
 // neither in memory nor recoverable from sm's family, and marking each
@@ -278,9 +268,15 @@ func walkFullBelow(
 	report func(MissingNode) bool,
 	shouldStop func() bool,
 ) (fullBelow, stopped bool, err error) {
-	canRelease := sm != nil && sm.backed && sm.family != nil && cache != nil
-	result, err := walkFullBelowState(
-		ctx, sm, sm.family, node, nodeID, nodeHash, depth, gen, filter, strict, cache, false, canRelease, report, shouldStop,
+	var access *familyAccess
+	if sm != nil {
+		sm.backing.mu.RLock()
+		access = sm.backing.access
+		sm.backing.mu.RUnlock()
+	}
+	canRelease := sm != nil && access.available() && cache != nil
+	result, err := walkFullBelowStateAccess(
+		ctx, sm, access, node, nodeID, nodeHash, depth, gen, filter, strict, cache, false, canRelease, report, shouldStop,
 	)
 	return result.full, result.stopped, err
 }
@@ -291,10 +287,10 @@ type fullBelowWalkResult struct {
 	stopped bool
 }
 
-func walkFullBelowState(
+func walkFullBelowStateAccess(
 	ctx context.Context,
 	sm *SHAMap,
-	family Family,
+	access *familyAccess,
 	node *innerNode,
 	nodeID NodeID,
 	nodeHash [32]byte,
@@ -317,7 +313,7 @@ func walkFullBelowState(
 	if shouldStop != nil && shouldStop() {
 		return fullBelowWalkResult{stopped: true}, nil
 	}
-	backed := family != nil && cache != nil
+	backed := access.available() && cache != nil
 	if backed && cache.Has(gen, nodeHash) {
 		return fullBelowWalkResult{full: true, stored: true}, nil
 	}
@@ -325,7 +321,7 @@ func walkFullBelowState(
 		return fullBelowWalkResult{full: true}, nil
 	}
 	if backed && !nodeStored {
-		nodeStored = storedNodeExistsContext(ctx, family, nodeHash)
+		nodeStored = storedNodeExistsContext(ctx, access, nodeHash)
 		if err := ctx.Err(); err != nil {
 			return fullBelowWalkResult{stopped: true}, err
 		}
@@ -358,7 +354,7 @@ func walkFullBelowState(
 		attached := child != nil
 		childStored := false
 		if child == nil {
-			loaded, stored, lerr := fetchFromStoreContext(ctx, sm, family, node, branch)
+			loaded, stored, lerr := fetchFromStoreContext(ctx, sm, access, node, branch)
 			if err := ctx.Err(); err != nil {
 				return fullBelowWalkResult{stopped: true}, err
 			}
@@ -395,7 +391,7 @@ func walkFullBelowState(
 		inner, ok := child.(*innerNode)
 		if !ok {
 			if backed && !childStored {
-				childStored = storedNodeExistsContext(ctx, family, childHash)
+				childStored = storedNodeExistsContext(ctx, access, childHash)
 				if err := ctx.Err(); err != nil {
 					return fullBelowWalkResult{stopped: true}, err
 				}
@@ -408,8 +404,8 @@ func walkFullBelowState(
 			continue
 		}
 
-		childResult, childErr := walkFullBelowState(
-			ctx, sm, family, inner, childNodeID, childHash, depth+1, gen, filter, strict, cache, childStored, canRelease, report, shouldStop,
+		childResult, childErr := walkFullBelowStateAccess(
+			ctx, sm, access, inner, childNodeID, childHash, depth+1, gen, filter, strict, cache, childStored, canRelease, report, shouldStop,
 		)
 		if childErr != nil {
 			return fullBelowWalkResult{}, childErr
@@ -467,31 +463,37 @@ func walkSubtreeForMissing(
 // zero-value map by falling back to generation 0 (which no node ever
 // matches, disabling the prune) and a nil cache.
 func fullBelowContext(sm *SHAMap) (uint32, *FullBelowCache, func()) {
-	if sm == nil || sm.fullBelow == nil {
+	if sm == nil {
 		return 0, nil, func() {}
 	}
-	gen, done := sm.fullBelow.Begin()
-	return gen, sm.fullBelow, done
+	sm.backing.mu.RLock()
+	cache := sm.backing.fullBelow
+	sm.backing.mu.RUnlock()
+	if cache == nil {
+		return 0, nil, func() {}
+	}
+	gen, done := cache.Begin()
+	return gen, cache, done
 }
 
-func fetchFromStoreContext(ctx context.Context, sm *SHAMap, family Family, parent *innerNode, branch int) (Node, bool, error) {
-	return fetchFromStoreModeContext(ctx, sm, family, parent, branch, false)
+func fetchFromStoreContext(ctx context.Context, sm *SHAMap, access *familyAccess, parent *innerNode, branch int) (mapNode, bool, error) {
+	return fetchFromStoreModeContext(ctx, sm, access, parent, branch, false)
 }
 
-func fetchFromStoreForNodePlacementContext(ctx context.Context, sm *SHAMap, family Family, parent *innerNode, branch int) (Node, error) {
-	node, _, err := fetchFromStoreModeContext(ctx, sm, family, parent, branch, true)
+func fetchFromStoreForNodePlacementContext(ctx context.Context, sm *SHAMap, access *familyAccess, parent *innerNode, branch int) (mapNode, error) {
+	node, _, err := fetchFromStoreModeContext(ctx, sm, access, parent, branch, true)
 	return node, err
 }
 
 func fetchFromStoreModeContext(
 	ctx context.Context,
 	sm *SHAMap,
-	family Family,
+	access *familyAccess,
 	parent *innerNode,
 	branch int,
 	forNodePlacement bool,
-) (Node, bool, error) {
-	if sm == nil || family == nil {
+) (mapNode, bool, error) {
+	if sm == nil || !access.available() {
 		return nil, false, nil
 	}
 	child, hash, hasBranch := parent.LoadChild(branch)
@@ -507,9 +509,9 @@ func fetchFromStoreModeContext(
 		err    error
 	)
 	if forNodePlacement {
-		data, err = fetchForNodePlacement(ctx, family, hash)
+		data, err = access.fetchForPlacement(ctx, hash)
 	} else {
-		data, stored, err = fetchWithDurability(ctx, family, hash)
+		data, stored, err = access.fetchPreferDurable(ctx, hash)
 	}
 	if err != nil {
 		return nil, false, err
@@ -517,35 +519,19 @@ func fetchFromStoreModeContext(
 	if data == nil {
 		return nil, false, nil
 	}
-	node, err := deserializeFromPrefix(data)
+	node, err := decodeAndVerifyPrefixNode(data, hash)
 	if err != nil {
-		return nil, false, fmt.Errorf("%w: failed to deserialize child node: %v", ErrInvalidNodeData, err)
+		return nil, false, err
 	}
-	if actual := node.Hash(); actual != hash {
-		return nil, false, fmt.Errorf("%w: child node hash mismatch: expected %x, got %x", ErrInvalidNodeData, hash[:8], actual[:8])
-	}
-	sm.familyLoads.Add(1)
+	sm.backing.loads.Add(1)
 	return node, stored, nil
 }
 
-func fetchWithDurability(ctx context.Context, family Family, hash [32]byte) ([]byte, bool, error) {
-	if durable, ok := family.(durableFamily); ok {
-		data, err := durable.FetchDurable(ctx, hash)
-		if err != nil || len(data) > 0 {
-			return data, len(data) > 0, err
-		}
-		data, err = family.Fetch(ctx, hash)
-		return data, false, err
-	}
-	data, err := family.Fetch(ctx, hash)
-	return data, len(data) > 0, err
-}
-
-func storedNodeExistsContext(ctx context.Context, family Family, hash [32]byte) bool {
-	if family == nil || isZeroHash(hash) {
+func storedNodeExistsContext(ctx context.Context, access *familyAccess, hash [32]byte) bool {
+	if !access.available() || isZeroHash(hash) {
 		return false
 	}
-	data, err := fetchDurable(ctx, family, hash)
+	data, err := access.fetchDurable(ctx, hash)
 	if err != nil || len(data) == 0 {
 		return false
 	}
@@ -553,8 +539,8 @@ func storedNodeExistsContext(ctx context.Context, family Family, hash [32]byte) 
 	return err == nil && node.Hash() == hash
 }
 
-func (sm *SHAMap) releaseChild(parent *innerNode, branch int, child Node) bool {
-	sm.attachmentMu.Lock()
-	defer sm.attachmentMu.Unlock()
+func (sm *SHAMap) releaseChild(parent *innerNode, branch int, child mapNode) bool {
+	sm.acquisition.attachmentMu.Lock()
+	defer sm.acquisition.attachmentMu.Unlock()
 	return parent.ReleaseChild(branch, child)
 }

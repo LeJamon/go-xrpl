@@ -398,7 +398,7 @@ func TestNid_Validate_DirtyLowNibble(t *testing.T) {
 
 func TestNid_IteratorEmpty(t *testing.T) {
 	sm := New(TypeState)
-	it := sm.begin()
+	it := newTestIterator(sm)
 	if it.Next() {
 		t.Error("empty map: Next() should return false")
 	}
@@ -425,7 +425,7 @@ func TestNid_IteratorFullTraversal(t *testing.T) {
 		}
 	}
 
-	it := sm.begin()
+	it := newTestIterator(sm)
 	count := 0
 	var prev [32]byte
 	for it.Next() {
@@ -457,7 +457,7 @@ func TestNid_IteratorSingleItem(t *testing.T) {
 	if err := sm.Put(k, intToBytes(1)); err != nil {
 		t.Fatal(err)
 	}
-	it := sm.begin()
+	it := newTestIterator(sm)
 	if !it.Next() {
 		t.Fatal("expected one item")
 	}
@@ -484,8 +484,8 @@ func TestNid_AccountStateLeafNode_Basic(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, ok := Node(leaf).(LeafNode); !ok {
-		t.Error("leaf should implement LeafNode")
+	if _, ok := mapNode(leaf).(mapLeaf); !ok {
+		t.Error("leaf should implement mapLeaf")
 	}
 	if leaf.Item() == nil {
 		t.Error("Item() should not be nil")
@@ -886,8 +886,8 @@ func TestNid_LeafNodeItem(t *testing.T) {
 	}
 
 	inner := newInnerNode()
-	if _, ok := Node(inner).(LeafNode); ok {
-		t.Error("innerNode must not implement LeafNode")
+	if _, ok := mapNode(inner).(mapLeaf); ok {
+		t.Error("innerNode must not implement mapLeaf")
 	}
 }
 

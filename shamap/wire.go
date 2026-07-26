@@ -10,14 +10,14 @@ import (
 //
 // Returns the serialized wire format of the root node.
 func (sm *SHAMap) SerializeRoot() ([]byte, error) {
-	sm.mu.RLock()
-	defer sm.mu.RUnlock()
+	sm.tree.mu.RLock()
+	defer sm.tree.mu.RUnlock()
 
-	if sm.root == nil {
+	if sm.tree.root == nil {
 		return nil, errors.New("no root node")
 	}
 
-	return sm.root.SerializeForWire()
+	return sm.tree.root.SerializeForWire()
 }
 
 // WireNode is a node ready for wire transmission via TMLedgerData.
@@ -29,7 +29,7 @@ type WireNode struct {
 	Data   []byte
 }
 
-func wireNodeAt(node Node, path [32]byte, depth int) (WireNode, error) {
+func wireNodeAt(node mapNode, path [32]byte, depth int) (WireNode, error) {
 	data, err := node.SerializeForWire()
 	if err != nil {
 		return WireNode{}, err
@@ -44,21 +44,21 @@ func wireNodeAt(node Node, path [32]byte, depth int) (WireNode, error) {
 // wire data. Each NodeID is 33 bytes per SHAMapNodeID::getRawString.
 // For backed maps, hash-only branches are lazy-loaded from the family.
 func (sm *SHAMap) WalkWireNodes() ([]WireNode, error) {
-	sm.mu.RLock()
-	defer sm.mu.RUnlock()
+	sm.tree.mu.RLock()
+	defer sm.tree.mu.RUnlock()
 
-	if sm.root == nil {
+	if sm.tree.root == nil {
 		return nil, nil
 	}
 
 	var out []WireNode
-	if err := sm.walkWireNodesRec(sm.root, [32]byte{}, 0, &out); err != nil {
+	if err := sm.walkWireNodesRec(sm.tree.root, [32]byte{}, 0, &out); err != nil {
 		return nil, err
 	}
 	return out, nil
 }
 
-func (sm *SHAMap) walkWireNodesRec(node Node, path [32]byte, depth int, out *[]WireNode) error {
+func (sm *SHAMap) walkWireNodesRec(node mapNode, path [32]byte, depth int, out *[]WireNode) error {
 	if node == nil {
 		return nil
 	}
@@ -98,15 +98,15 @@ func (sm *SHAMap) walkWireNodesRec(node Node, path [32]byte, depth int, out *[]W
 // only when fatLeaves is true (liTS_CANDIDATE callers pass false).
 // For backed maps, hash-only branches are lazy-loaded from the family.
 func (sm *SHAMap) GetNodeFatByPath(wantedPath [32]byte, wantedDepth int, depth int, fatLeaves bool) ([]WireNode, error) {
-	sm.mu.RLock()
-	defer sm.mu.RUnlock()
+	sm.tree.mu.RLock()
+	defer sm.tree.mu.RUnlock()
 
-	if sm.root == nil {
+	if sm.tree.root == nil {
 		return nil, nil
 	}
 
 	// 1. Descend to the requested node.
-	node := Node(sm.root)
+	node := mapNode(sm.tree.root)
 	curDepth := 0
 	curPath := [32]byte{}
 	for node != nil && curDepth < wantedDepth {
@@ -142,7 +142,7 @@ func (sm *SHAMap) GetNodeFatByPath(wantedPath [32]byte, wantedDepth int, depth i
 
 	// 2-3. Stack walk with the depth budget.
 	type fatStackEntry struct {
-		node  Node
+		node  mapNode
 		path  [32]byte
 		depth int
 		// budget is the remaining child-descent levels, mirroring

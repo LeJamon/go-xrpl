@@ -25,8 +25,8 @@ func (sm *SHAMap) GetProofPath(key [32]byte) (*ProofPath, error) {
 // GetProofPathContext returns a proof while forwarding ctx to lazy storage
 // fetches.
 func (sm *SHAMap) GetProofPathContext(ctx context.Context, key [32]byte) (*ProofPath, error) {
-	sm.mu.RLock()
-	defer sm.mu.RUnlock()
+	sm.tree.mu.RLock()
+	defer sm.tree.mu.RUnlock()
 
 	stack := newNodeStack()
 	leaf, err := sm.walkToKey(ctx, key, stack, true)
@@ -39,7 +39,7 @@ func (sm *SHAMap) GetProofPathContext(ctx context.Context, key [32]byte) (*Proof
 		return &ProofPath{Key: key, Found: false}, nil
 	}
 
-	leafNode, ok := leaf.(LeafNode)
+	leafNode, ok := leaf.(mapLeaf)
 	if !ok {
 		return &ProofPath{Key: key, Found: false}, nil
 	}
@@ -152,7 +152,7 @@ func VerifyProofPathWithValue(rootHash [32]byte, key [32]byte, path [][]byte) []
 			}
 
 			currentHash = childHash
-		case LeafNode:
+		case mapLeaf:
 			// This should be the final leaf node.
 			// Verify we've exhausted all blobs (leaf must be at position 0).
 			if i != 0 {

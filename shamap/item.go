@@ -36,9 +36,7 @@ func (item *Item) Data() []byte {
 	return result
 }
 
-// DataUnsafe returns the internal data slice without copying
-// Use with caution - caller must not modify the returned slice
-func (item *Item) DataUnsafe() []byte {
+func (item *Item) dataBytes() []byte {
 	return item.data
 }
 

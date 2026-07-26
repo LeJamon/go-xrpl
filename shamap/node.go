@@ -1,10 +1,8 @@
 package shamap
 
 import (
-	"encoding/hex"
 	"errors"
 	"fmt"
-	"strings"
 	"sync/atomic"
 
 	"github.com/LeJamon/go-xrpl/protocol"
@@ -41,7 +39,7 @@ func (nt NodeType) String() string {
 
 // NodeReader is the read-only view of a SHAMap node returned to callers
 // outside the package. It deliberately excludes the dirty-flag, hashing and
-// serialization mutators of Node so external consumers cannot corrupt
+// serialization mutators so external consumers cannot corrupt
 // tree/hash state.
 type NodeReader interface {
 	Hash() [32]byte
@@ -55,18 +53,13 @@ type InnerNodeReader interface {
 	IsEmptyBranch(index int) bool
 }
 
-// Node defines the interface all tree nodes must implement.
-// Concrete nodes are either *innerNode or a LeafNode; callers
-// discriminate with a type switch.
-type Node interface {
+// mapNode is the mutable interface implemented by nodes owned by a SHAMap.
+type mapNode interface {
 	Hash() [32]byte
 	Type() NodeType
 	UpdateHash() error
 	SerializeForWire() ([]byte, error)
 	SerializeWithPrefix() ([]byte, error)
-	String(nodeID NodeID) string
-	Invariants(isRoot bool) error
-	Clone() (Node, error)
 	IsDirty() bool
 	SetDirty(bool)
 }
@@ -104,28 +97,14 @@ func (b *baseNode) setHash(data ...[]byte) error {
 	return nil
 }
 
-// String returns a string representation of the base node
-func (b *baseNode) String(id NodeID) string {
-	var sb strings.Builder
-	sb.WriteString(fmt.Sprintf("NodeID: %s", id.String()))
-	sb.WriteString(fmt.Sprintf(", Hash: %s", hex.EncodeToString(b.hash[:])))
-	return sb.String()
-}
-
 // IsZeroHash returns true if the hash is zero (uninitialized)
 func (b *baseNode) IsZeroHash() bool {
 	return b.hash == [32]byte{}
 }
 
-// DeserializeNodeFromWire reconstructs a node from its wire-format encoding,
-// returning a read-only NodeReader.
-func DeserializeNodeFromWire(data []byte) (NodeReader, error) {
-	return deserializeNodeFromWire(data)
-}
-
-// deserializeNodeFromWire reconstructs a Node from its wire-format encoding,
+// deserializeNodeFromWire reconstructs a node from its wire-format encoding,
 // dispatching on the trailing wire-type byte.
-func deserializeNodeFromWire(data []byte) (Node, error) {
+func deserializeNodeFromWire(data []byte) (mapNode, error) {
 	if len(data) == 0 {
 		return nil, errors.New("empty wire data")
 	}

@@ -39,7 +39,7 @@ func FlushEntryFromWire(data []byte, ledgerSeq uint32, mapType Type) (FlushEntry
 	return flushEntryForNode(node, ledgerSeq, mapType)
 }
 
-func flushEntryForNode(node Node, ledgerSeq uint32, mapType Type) (FlushEntry, error) {
+func flushEntryForNode(node mapNode, ledgerSeq uint32, mapType Type) (FlushEntry, error) {
 	prefixed, err := node.SerializeWithPrefix()
 	if err != nil {
 		return FlushEntry{}, err
@@ -52,13 +52,32 @@ func flushEntryForNode(node Node, ledgerSeq uint32, mapType Type) (FlushEntry, e
 	}, nil
 }
 
-// deserializeFromPrefix creates a SHAMap node from prefix-format data.
-// The first 4 bytes are the hash prefix which identifies the node type.
-// Inner nodes are created with hashes set but children nil (lazy loading).
-// All deserialized nodes are marked as not dirty.
-func deserializeFromPrefix(data []byte) (Node, error) {
+type storedNodeKind uint8
+
+const (
+	storedInner storedNodeKind = iota + 1
+	storedAccountState
+	storedTransaction
+	storedTransactionWithMeta
+)
+
+type prefixNodeBody struct {
+	kind    storedNodeKind
+	payload []byte
+	key     [32]byte
+}
+
+func deserializeFromPrefix(data []byte) (mapNode, error) {
+	body, err := decodePrefixBody(data)
+	if err != nil {
+		return nil, err
+	}
+	return materializePrefixNode(body)
+}
+
+func decodePrefixBody(data []byte) (prefixNodeBody, error) {
 	if len(data) < 4 {
-		return nil, fmt.Errorf("data too short for prefix: %d bytes", len(data))
+		return prefixNodeBody{}, fmt.Errorf("data too short for prefix: %d bytes", len(data))
 	}
 
 	var prefix [4]byte
@@ -66,73 +85,85 @@ func deserializeFromPrefix(data []byte) (Node, error) {
 
 	switch prefix {
 	case protocol.HashPrefixInnerNode():
-		return parseInnerNodeFromPrefix(data)
+		if len(data) != fullInnerSerializedSize {
+			return prefixNodeBody{}, fmt.Errorf("invalid inner node prefix data size: expected %d, got %d", fullInnerSerializedSize, len(data))
+		}
+		return prefixNodeBody{kind: storedInner, payload: data[4:]}, nil
 	case protocol.HashPrefixLeafNode():
-		return parseAccountStateLeafFromPrefix(data)
+		if len(data) < 4+32 {
+			return prefixNodeBody{}, fmt.Errorf("account state prefix data too short: %d bytes", len(data))
+		}
+		body := prefixNodeBody{kind: storedAccountState}
+		keyStart := len(data) - 32
+		body.payload = data[4:keyStart]
+		copy(body.key[:], data[keyStart:])
+		if isZeroHash(body.key) {
+			return prefixNodeBody{}, fmt.Errorf("invalid account state: zero key")
+		}
+		return body, nil
 	case protocol.HashPrefixTransactionID():
-		return parseTransactionLeafFromPrefix(data)
+		if len(data) <= 4 {
+			return prefixNodeBody{}, fmt.Errorf("transaction prefix data too short: %d bytes", len(data))
+		}
+		return prefixNodeBody{kind: storedTransaction, payload: data[4:]}, nil
 	case protocol.HashPrefixTxNode():
-		return parseTransactionWithMetaLeafFromPrefix(data)
+		if len(data) < 4+32 {
+			return prefixNodeBody{}, fmt.Errorf("transaction+meta prefix data too short: %d bytes", len(data))
+		}
+		body := prefixNodeBody{kind: storedTransactionWithMeta}
+		keyStart := len(data) - 32
+		body.payload = data[4:keyStart]
+		copy(body.key[:], data[keyStart:])
+		return body, nil
 	default:
-		return nil, fmt.Errorf("unknown hash prefix: %x", prefix)
+		return prefixNodeBody{}, fmt.Errorf("unknown hash prefix: %x", prefix)
 	}
 }
 
-// parseInnerNodeFromPrefix deserializes an inner node from prefix format.
-// Format: [4-byte prefix][16 x 32-byte child hashes] = 516 bytes
-// Children are hash-only (pointers nil) — they are loaded lazily.
-func parseInnerNodeFromPrefix(data []byte) (*innerNode, error) {
-	const expectedSize = 4 + BranchFactor*32 // 4 + 512 = 516
-	if len(data) != expectedSize {
-		return nil, fmt.Errorf("invalid inner node prefix data size: expected %d, got %d", expectedSize, len(data))
+func decodeInnerBranches(body prefixNodeBody, hashes *[BranchFactor][32]byte) (uint16, error) {
+	if body.kind != storedInner || len(body.payload) != BranchFactor*32 {
+		return 0, fmt.Errorf("invalid inner node body")
 	}
-
-	node := &innerNode{} // dirty=false by default (zero value)
-
-	// Skip 4-byte prefix, read 16 child hashes
-	for i := range BranchFactor {
-		start := 4 + i*32
-		end := start + 32
-
-		var hash [32]byte
-		copy(hash[:], data[start:end])
-
-		if !isZeroHash(hash) {
-			node.hashes[i] = hash
-			node.isBranch |= 1 << i
-			// children[i] remains nil — lazy loaded on demand
+	var branches uint16
+	for branch := range BranchFactor {
+		start := branch * 32
+		copy(hashes[branch][:], body.payload[start:start+32])
+		if !isZeroHash(hashes[branch]) {
+			branches |= 1 << branch
 		}
 	}
-
-	// Compute the node's own hash
-	if err := node.UpdateHash(); err != nil {
-		return nil, fmt.Errorf("failed to update inner node hash: %w", err)
-	}
-
-	return node, nil
+	return branches, nil
 }
 
-// parseAccountStateLeafFromPrefix deserializes an account state leaf from prefix format.
-// Format: [4-byte prefix][state_data][32-byte key]
-func parseAccountStateLeafFromPrefix(data []byte) (*leafNode, error) {
-	if len(data) < 4+32 {
-		return nil, fmt.Errorf("account state prefix data too short: %d bytes", len(data))
+func materializePrefixNode(body prefixNodeBody) (mapNode, error) {
+	if body.kind == storedInner {
+		node := &innerNode{}
+		branches, err := decodeInnerBranches(body, &node.hashes)
+		if err != nil {
+			return nil, err
+		}
+		node.isBranch = branches
+		if err := node.UpdateHash(); err != nil {
+			return nil, fmt.Errorf("failed to update inner node hash: %w", err)
+		}
+		return node, nil
 	}
 
-	nodeData := data[4:]
-
-	keyStart := len(nodeData) - 32
-	var key [32]byte
-	copy(key[:], nodeData[keyStart:])
-
-	if isZeroHash(key) {
-		return nil, fmt.Errorf("invalid account state: zero key")
+	var (
+		node *leafNode
+		err  error
+	)
+	switch body.kind {
+	case storedAccountState:
+		node, err = newAccountStateLeafNode(NewItem(body.key, body.payload))
+	case storedTransaction:
+		key := sha512half.Sum(protocol.HashPrefixTransactionID().Bytes(), body.payload)
+		node, err = newTransactionLeafNode(NewItem(key, body.payload))
+	case storedTransactionWithMeta:
+		node, err = newTransactionWithMetaLeafNode(NewItem(body.key, body.payload))
+	default:
+		return nil, fmt.Errorf("unknown stored node kind: %d", body.kind)
 	}
-
-	stateData := nodeData[:keyStart]
-	item := NewItem(key, stateData)
-
-	node, err := newAccountStateLeafNode(item)
 	if err != nil {
 		return nil, err
 	}
@@ -140,46 +171,13 @@ func parseAccountStateLeafFromPrefix(data []byte) (*leafNode, error) {
 	return node, nil
 }
 
-// parseTransactionLeafFromPrefix deserializes a transaction leaf from prefix format.
-// Format: [4-byte prefix][tx_data]
-func parseTransactionLeafFromPrefix(data []byte) (*leafNode, error) {
-	if len(data) <= 4 {
-		return nil, fmt.Errorf("transaction prefix data too short: %d bytes", len(data))
-	}
-
-	txData := data[4:]
-
-	key := sha512half.Sum(protocol.HashPrefixTransactionID().Bytes(), txData)
-	item := NewItem(key, txData)
-
-	node, err := newTransactionLeafNode(item)
+func decodeAndVerifyPrefixNode(data []byte, expected [32]byte) (mapNode, error) {
+	node, err := deserializeFromPrefix(data)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("%w: failed to deserialize child node: %v", ErrInvalidNodeData, err)
 	}
-	node.SetDirty(false)
-	return node, nil
-}
-
-// parseTransactionWithMetaLeafFromPrefix deserializes a tx+meta leaf from prefix format.
-// Format: [4-byte prefix][tx+meta_data][32-byte key]
-func parseTransactionWithMetaLeafFromPrefix(data []byte) (*leafNode, error) {
-	if len(data) < 4+32 {
-		return nil, fmt.Errorf("transaction+meta prefix data too short: %d bytes", len(data))
+	if actual := node.Hash(); actual != expected {
+		return nil, fmt.Errorf("%w: child node hash mismatch: expected %x, got %x", ErrInvalidNodeData, expected[:8], actual[:8])
 	}
-
-	nodeData := data[4:]
-
-	keyStart := len(nodeData) - 32
-	var key [32]byte
-	copy(key[:], nodeData[keyStart:])
-
-	txData := nodeData[:keyStart]
-	item := NewItem(key, txData)
-
-	node, err := newTransactionWithMetaLeafNode(item)
-	if err != nil {
-		return nil, err
-	}
-	node.SetDirty(false)
 	return node, nil
 }

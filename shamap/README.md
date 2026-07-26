@@ -122,14 +122,14 @@ Path through tree determined by key nibbles:
   `Family` (persistent node store).
 - `NewFromRootHash(mapType, rootHash, family)` — open an existing tree by
   root hash; children resolve lazily from the store.
-- `Family` implementations: `NodeStoreFamily` (memory or PebbleDB via
-  `NewMemoryNodeStoreFamily` / `NewPebbleNodeStoreFamily` /
-  `NewNodeStoreFamily`) and `OverlayFamily` (copy-on-write overlay over a
+- `Family` implementations: `backend.NodeStore` (memory, PebbleDB, or an
+  existing NodeStore database via `backend.NewMemory`, `backend.OpenPebble`,
+  and `backend.New`) and `OverlayFamily` (copy-on-write overlay over a
   read-only base).
 
 ### Items
 
-- `Put(key, data)` / `PutItem` / `PutWithNodeType` / `putItemWithNodeType`
+- `Put(key, data)` / `PutItem` / `PutWithNodeType`
 - `Get(key)` / `Has(key)` / `Delete(key)`
 - `ForEach` / `ForEachCtx` — in-order leaf iteration.
 - `UpperBound(key)` — iterator at the first item with key > the argument.
@@ -138,11 +138,12 @@ Path through tree determined by key nibbles:
 ### Lifecycle & snapshots
 
 - `Hash()` — root hash.
-- `Snapshot(mutable)` — O(1) structurally-shared copy; mutations are
-  path-copy persistent so snapshots never observe changes.
-- `SetImmutable()` / `State()` / `Type()` / `IsBacked()` / `SetFamily`.
-- `FlushDirty(releaseChildren)` — serialize dirty nodes for the store;
-  optionally release child pointers for lazy reload.
+- `SnapshotMutable` / `SnapshotImmutable` / `MutableFork` — O(1)
+  structurally-shared copies; mutations are path-copy persistent so snapshots
+  never observe changes.
+- `SetImmutable()` / `Type()` / `IsBacked()` / `SetFamily`.
+- `FlushDirty` / `FlushDirtyAndRelease` — serialize dirty nodes for the store;
+  the latter also releases child pointers for lazy reload.
 
 ### Comparison
 
@@ -156,11 +157,11 @@ Path through tree determined by key nibbles:
 - `AddRootNode(hash, wireData)` — install the root from a peer.
 - `AddKnownNodeByID(nodeID, wireData)` — attach a peer-supplied node at the
   position given by its 33-byte SHAMapNodeID (path + depth).
-- `AddKnownNodeFromPrefix(nodeID, prefixData)` — same, for
-  `[HashPrefix][body]` fetch-pack data.
+- `AddKnownNodeFromPrefixWithEntry(nodeID, prefixData)` — same, for
+  `[HashPrefix][body]` fetch-pack data, returning the persistence entry.
 - `AddKnownNode(hash, wireData)` — hash-located attach (legacy tx-set path).
-- `WalkMap` / `WalkMapParallel` / `GetMissingNodes` — enumerate referenced
-  nodes that are neither in memory nor in the local store.
+- `GetMissingNodes` / `GetMissingNodesContext` — enumerate referenced nodes
+  that are neither in memory nor in the local store.
 - `CheckComplete(ctx)` — full store-walk completeness report.
 
 ### Wire serving
@@ -181,7 +182,12 @@ Path through tree determined by key nibbles:
 
 ## Concurrency Model
 
-- Each `SHAMap` has one RWMutex: multiple concurrent readers, single writer.
+- `tree.mu` guards the root, map type, lifecycle, sequence, and full-map state.
+- `backing.mu` guards the backing-family capability and `FullBelow` cache.
+- `walkMu` serializes resumable walks and their cursor; `attachmentMu`
+  serializes lazy child attachment and release.
+- When more than one lock is needed, the order is `walkMu` → `tree.mu` →
+  `backing.mu` → `attachmentMu`.
 - Snapshots share subtrees with the source map; mutation paths shallow-clone
   every touched inner node (path-copy persistence), so shared nodes are never
   structurally modified.

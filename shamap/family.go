@@ -26,18 +26,80 @@ type nodePlacementFamily interface {
 	FetchForNodePlacement(ctx context.Context, hash [32]byte) ([]byte, error)
 }
 
-func fetchDurable(ctx context.Context, family Family, hash [32]byte) ([]byte, error) {
-	if durable, ok := family.(durableFamily); ok {
-		return durable.FetchDurable(ctx, hash)
-	}
-	return family.Fetch(ctx, hash)
+// familyAccess caches the optional capabilities exposed by a Family. A value
+// is bound once when the Family is installed on a map and is immutable after
+// that.
+type familyAccess struct {
+	Family
+	durable   durableFamily
+	placement nodePlacementFamily
 }
 
-func fetchForNodePlacement(ctx context.Context, family Family, hash [32]byte) ([]byte, error) {
-	if placement, ok := family.(nodePlacementFamily); ok {
-		return placement.FetchForNodePlacement(ctx, hash)
+func bindFamily(family Family) *familyAccess {
+	if family == nil {
+		return nil
 	}
-	return fetchDurable(ctx, family, hash)
+	access := &familyAccess{Family: family}
+	access.durable, _ = family.(durableFamily)
+	access.placement, _ = family.(nodePlacementFamily)
+	return access
+}
+
+func (a *familyAccess) available() bool {
+	return a != nil && a.Family != nil
+}
+
+func (a *familyAccess) fetch(ctx context.Context, hash [32]byte) ([]byte, error) {
+	if !a.available() {
+		return nil, nil
+	}
+	return a.Fetch(ctx, hash)
+}
+
+func (a *familyAccess) storeBatch(ctx context.Context, entries []FlushEntry) error {
+	if !a.available() {
+		return nil
+	}
+	return a.StoreBatch(ctx, entries)
+}
+
+func (a *familyAccess) fetchDurable(ctx context.Context, hash [32]byte) ([]byte, error) {
+	if a == nil {
+		return nil, nil
+	}
+	if a.durable != nil {
+		return a.durable.FetchDurable(ctx, hash)
+	}
+	return a.fetch(ctx, hash)
+}
+
+func (a *familyAccess) fetchPreferDurable(ctx context.Context, hash [32]byte) ([]byte, bool, error) {
+	if a == nil {
+		return nil, false, nil
+	}
+	if a.durable != nil {
+		data, err := a.durable.FetchDurable(ctx, hash)
+		if err != nil || len(data) > 0 {
+			return data, len(data) > 0, err
+		}
+		data, err = a.fetch(ctx, hash)
+		return data, false, err
+	}
+	if !a.available() {
+		return nil, false, nil
+	}
+	data, err := a.fetch(ctx, hash)
+	return data, len(data) > 0, err
+}
+
+func (a *familyAccess) fetchForPlacement(ctx context.Context, hash [32]byte) ([]byte, error) {
+	if a == nil {
+		return nil, nil
+	}
+	if a.placement != nil {
+		return a.placement.FetchForNodePlacement(ctx, hash)
+	}
+	return a.fetchDurable(ctx, hash)
 }
 
 func familyFullBelowCache(family Family) *FullBelowCache {

@@ -14,6 +14,7 @@ import (
 	"github.com/LeJamon/go-xrpl/internal/peermanagement/message"
 	"github.com/LeJamon/go-xrpl/protocol"
 	"github.com/LeJamon/go-xrpl/shamap"
+	"github.com/LeJamon/go-xrpl/shamap/backend"
 )
 
 type trackerBlockingFamily struct {
@@ -368,7 +369,7 @@ func TestTracker_InfoUsesCachedFrontierWithoutStoreReads(t *testing.T) {
 	_, rootHash, rootData := buildBackedTestState(t, 32)
 	hdr, hash := encodeHeader(header.LedgerHeader{LedgerIndex: 501, AccountHash: rootHash})
 	family := &trackerBlockingFamily{
-		base:    shamap.NewMemoryNodeStoreFamily(),
+		base:    backend.NewMemory(),
 		entered: make(chan struct{}),
 		release: make(chan struct{}),
 	}
@@ -433,7 +434,7 @@ func TestTracker_InfoDoesNotWaitForWorkerStoreRead(t *testing.T) {
 	rootHash, rootData, wire := buildSourceMap(t, shamap.TypeState)
 	hdr, hash := encodeHeader(header.LedgerHeader{LedgerIndex: 502, AccountHash: rootHash})
 	family := &trackerBlockingFamily{
-		base:    shamap.NewMemoryNodeStoreFamily(),
+		base:    backend.NewMemory(),
 		entered: make(chan struct{}),
 		release: make(chan struct{}),
 	}

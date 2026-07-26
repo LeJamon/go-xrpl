@@ -2,8 +2,180 @@ package shamap
 
 import (
 	"bytes"
+	"encoding/hex"
 	"fmt"
+	"strings"
 )
+
+func cloneNode(n mapNode) (mapNode, error) {
+	cloneable, ok := n.(interface{ Clone() (mapNode, error) })
+	if !ok {
+		return nil, fmt.Errorf("%T does not support cloning", n)
+	}
+	return cloneable.Clone()
+}
+
+func checkNodeInvariants(n mapNode, isRoot bool) error {
+	checkable, ok := n.(interface{ Invariants(bool) error })
+	if !ok {
+		return fmt.Errorf("%T does not support invariant checks", n)
+	}
+	return checkable.Invariants(isRoot)
+}
+
+func (n *innerNode) firstStalePreimage() (branch int, cached, live [32]byte, ok bool) {
+	for i := range BranchFactor {
+		child := n.children[i]
+		if child == nil {
+			continue
+		}
+		if live := child.Hash(); live != n.hashes[i] {
+			return i, n.hashes[i], live, true
+		}
+	}
+	return 0, [32]byte{}, [32]byte{}, false
+}
+
+func (b *baseNode) String(id NodeID) string {
+	return fmt.Sprintf("NodeID: %s, Hash: %s", id.String(), hex.EncodeToString(b.hash[:]))
+}
+
+func (n *leafNode) SetItem(item *Item) (bool, error) {
+	if item == nil {
+		return false, ErrNilItem
+	}
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	oldHash := n.hash
+	n.item = item
+	n.SetDirty(true)
+	if err := n.updateHashUnsafe(); err != nil {
+		return false, fmt.Errorf("failed to update hash: %w", err)
+	}
+	return n.hash != oldHash, nil
+}
+
+func (n *leafNode) Invariants(bool) error {
+	n.mu.RLock()
+	defer n.mu.RUnlock()
+	if n.item == nil {
+		return fmt.Errorf("leaf has nil item")
+	}
+	if n.IsZeroHash() {
+		return fmt.Errorf("leaf has zero hash")
+	}
+	return nil
+}
+
+func (n *leafNode) String(id NodeID) string {
+	n.mu.RLock()
+	defer n.mu.RUnlock()
+	var sb strings.Builder
+	sb.WriteString(fmt.Sprintf("%s ID: %s\n", leafKinds[n.kind].label, id.String()))
+	sb.WriteString(fmt.Sprintf("Hash: %s\n", hex.EncodeToString(n.hash[:])))
+	if n.item != nil {
+		key := n.item.Key()
+		sb.WriteString(fmt.Sprintf("Key: %s\n", hex.EncodeToString(key[:])))
+		sb.WriteString(fmt.Sprintf("Data Size: %d bytes\n", n.item.Size()))
+	}
+	return sb.String()
+}
+
+func (n *leafNode) Clone() (mapNode, error) {
+	n.mu.RLock()
+	defer n.mu.RUnlock()
+	if n.item == nil {
+		return nil, ErrNilItem
+	}
+	clonedItem, err := n.item.Clone()
+	if err != nil {
+		return nil, fmt.Errorf("failed to clone item: %w", err)
+	}
+	return newLeafNode(n.kind, clonedItem)
+}
+
+func (n *innerNode) String(id NodeID) string {
+	n.mu.RLock()
+	defer n.mu.RUnlock()
+
+	var sb strings.Builder
+	sb.WriteString(fmt.Sprintf("innerNode ID: %s\n", id.String()))
+	sb.WriteString(fmt.Sprintf("Hash: %s\n", hex.EncodeToString(n.hash[:])))
+	sb.WriteString("Branches:\n")
+	for i := range BranchFactor {
+		if n.isBranch&(1<<i) != 0 {
+			sb.WriteString(fmt.Sprintf("  %d: %s\n", i, hex.EncodeToString(n.hashes[i][:])))
+		}
+	}
+	return sb.String()
+}
+
+func (n *innerNode) Invariants(isRoot bool) error {
+	n.mu.RLock()
+	defer n.mu.RUnlock()
+
+	count := 0
+	for i := range BranchFactor {
+		hasChild := n.children[i] != nil
+		hasBit := (n.isBranch & (1 << i)) != 0
+		hasHash := !isZeroHash(n.hashes[i])
+		if hasBit && !hasHash {
+			return fmt.Errorf("branch %d: bit set but no hash", i)
+		}
+		if hasChild && !hasBit {
+			return fmt.Errorf("branch %d: child present but bit not set", i)
+		}
+		if !hasBit && hasChild {
+			return fmt.Errorf("branch %d: child present in empty branch", i)
+		}
+		if hasChild || hasBit {
+			count++
+		}
+	}
+	if branch, _, _, stale := n.firstStalePreimage(); stale {
+		return fmt.Errorf("branch %d hash mismatch", branch)
+	}
+	if count == 0 && !isRoot {
+		return ErrEmptyNonRoot
+	}
+	if !n.IsZeroHash() {
+		temp := &innerNode{
+			isBranch: n.isBranch,
+			hashes:   n.hashes,
+			children: n.children,
+		}
+		if err := temp.updateHashUnsafe(); err != nil {
+			return fmt.Errorf("failed to verify hash: %w", err)
+		}
+		if temp.hash != n.hash {
+			return fmt.Errorf("stored hash does not match computed hash")
+		}
+	}
+	return nil
+}
+
+func (n *innerNode) Clone() (mapNode, error) {
+	n.mu.RLock()
+	defer n.mu.RUnlock()
+
+	clone := &innerNode{
+		isBranch:     n.isBranch,
+		hashes:       n.hashes,
+		fullBelowGen: n.fullBelowGen,
+	}
+	clone.hash = n.hash
+	clone.SetDirty(true)
+	for i := range BranchFactor {
+		if n.children[i] != nil {
+			childClone, err := cloneNode(n.children[i])
+			if err != nil {
+				return nil, fmt.Errorf("failed to clone child at branch %d: %w", i, err)
+			}
+			clone.children[i] = childClone
+		}
+	}
+	return clone, nil
+}
 
 // invariantError describes a single invariant violation found during a check.
 type invariantError struct {
@@ -58,8 +230,8 @@ func (r *invariantCheckResult) String() string {
 //
 // Returns an error describing the first inconsistency found, or nil if valid.
 func (sm *SHAMap) invariants() error {
-	sm.mu.RLock()
-	defer sm.mu.RUnlock()
+	sm.tree.mu.RLock()
+	defer sm.tree.mu.RUnlock()
 
 	return sm.invariantsUnsafe()
 }
@@ -67,15 +239,15 @@ func (sm *SHAMap) invariants() error {
 // invariantsUnsafe performs invariant checking without locking.
 // Caller must hold the read lock.
 func (sm *SHAMap) invariantsUnsafe() error {
-	if sm.root == nil {
-		if sm.state != StateInvalid {
+	if sm.tree.root == nil {
+		if sm.tree.state != stateInvalid {
 			return nil // Empty map is valid
 		}
 		return fmt.Errorf("%w: invalid state with nil root", ErrInvalidState)
 	}
 
 	var firstErr error
-	sm.walkInvariantsUnsafe(sm.root, NewRootNodeID(), true, false, nil, func(e *invariantError) bool {
+	sm.walkInvariantsUnsafe(sm.tree.root, NewRootNodeID(), true, false, nil, func(e *invariantError) bool {
 		firstErr = e
 		return false
 	})
@@ -86,18 +258,18 @@ func (sm *SHAMap) invariantsUnsafe() error {
 // detailed results. Unlike invariants(), this continues checking even after
 // finding errors.
 func (sm *SHAMap) invariantsDetailed() *invariantCheckResult {
-	sm.mu.RLock()
-	defer sm.mu.RUnlock()
+	sm.tree.mu.RLock()
+	defer sm.tree.mu.RUnlock()
 
 	result := &invariantCheckResult{
 		Errors: make([]*invariantError, 0),
 	}
 
-	if sm.root == nil {
+	if sm.tree.root == nil {
 		return result
 	}
 
-	sm.walkInvariantsUnsafe(sm.root, NewRootNodeID(), true, false, result, func(e *invariantError) bool {
+	sm.walkInvariantsUnsafe(sm.tree.root, NewRootNodeID(), true, false, result, func(e *invariantError) bool {
 		result.Errors = append(result.Errors, e)
 		return true
 	})
@@ -107,15 +279,15 @@ func (sm *SHAMap) invariantsDetailed() *invariantCheckResult {
 // verifyHashes walks the entire tree and verifies all hashes are correct.
 // This is a simpler check than full invariants, focusing only on hash integrity.
 func (sm *SHAMap) verifyHashes() error {
-	sm.mu.RLock()
-	defer sm.mu.RUnlock()
+	sm.tree.mu.RLock()
+	defer sm.tree.mu.RUnlock()
 
-	if sm.root == nil {
+	if sm.tree.root == nil {
 		return nil
 	}
 
 	var firstErr error
-	sm.walkInvariantsUnsafe(sm.root, NewRootNodeID(), true, true, nil, func(e *invariantError) bool {
+	sm.walkInvariantsUnsafe(sm.tree.root, NewRootNodeID(), true, true, nil, func(e *invariantError) bool {
 		firstErr = e
 		return false
 	})
@@ -128,7 +300,7 @@ func (sm *SHAMap) verifyHashes() error {
 // every violation and returns false to stop the walk; res, when non-nil,
 // accumulates node counters. The walk returns false once stopped.
 // Caller must hold the read lock.
-func (sm *SHAMap) walkInvariantsUnsafe(node Node, nodeID NodeID, isRoot, hashOnly bool, res *invariantCheckResult, report func(*invariantError) bool) bool {
+func (sm *SHAMap) walkInvariantsUnsafe(node mapNode, nodeID NodeID, isRoot, hashOnly bool, res *invariantCheckResult, report func(*invariantError) bool) bool {
 	if node == nil {
 		return true
 	}
@@ -147,7 +319,7 @@ func (sm *SHAMap) walkInvariantsUnsafe(node Node, nodeID NodeID, isRoot, hashOnl
 
 	// Check node-specific invariants
 	if !hashOnly {
-		if err := node.Invariants(isRoot); err != nil {
+		if err := checkNodeInvariants(node, isRoot); err != nil {
 			if !report(&invariantError{
 				NodeID:      nodeID,
 				Description: "node invariants check failed",
@@ -202,7 +374,7 @@ func (sm *SHAMap) walkInvariantsUnsafe(node Node, nodeID NodeID, isRoot, hashOnl
 		// Verify bitmap matches actual children. A set bit with a nil child
 		// is legal while syncing and for backed maps (hash-only branches).
 		if !hashOnly {
-			if hasChild && child == nil && sm.state != StateSyncing && !sm.backed {
+			if hasChild && child == nil && sm.tree.state != stateSyncing && !sm.backing.access.available() {
 				if !report(&invariantError{
 					NodeID:      nodeID,
 					Description: fmt.Sprintf("branch %d marked as non-empty but child is nil", branch),
@@ -267,7 +439,7 @@ func (sm *SHAMap) walkInvariantsUnsafe(node Node, nodeID NodeID, isRoot, hashOnl
 	// Non-root inner nodes must have at least one child.
 	// For backed maps, hash-only branches may legitimately have no
 	// in-memory children.
-	if !hashOnly && !nodeID.IsRoot() && childCount == 0 && !sm.backed {
+	if !hashOnly && !nodeID.IsRoot() && childCount == 0 && !sm.backing.access.available() {
 		if !report(&invariantError{
 			NodeID:      nodeID,
 			Description: "non-root inner node has no children",
@@ -280,9 +452,9 @@ func (sm *SHAMap) walkInvariantsUnsafe(node Node, nodeID NodeID, isRoot, hashOnl
 }
 
 // verifyNodeHash verifies that a node's hash is correctly computed.
-func (sm *SHAMap) verifyNodeHash(node Node, nodeID NodeID) *invariantError {
+func (sm *SHAMap) verifyNodeHash(node mapNode, nodeID NodeID) *invariantError {
 	// Clone the node and recompute its hash
-	cloned, err := node.Clone()
+	cloned, err := cloneNode(node)
 	if err != nil {
 		return &invariantError{
 			NodeID:      nodeID,
@@ -331,12 +503,12 @@ func (sm *SHAMap) verifyNodeHash(node Node, nodeID NodeID) *invariantError {
 }
 
 // checkLeafNodeInvariants checks invariants specific to leaf nodes.
-func checkLeafNodeInvariants(node Node, nodeID NodeID) *invariantError {
-	leaf, ok := node.(LeafNode)
+func checkLeafNodeInvariants(node mapNode, nodeID NodeID) *invariantError {
+	leaf, ok := node.(mapLeaf)
 	if !ok {
 		return &invariantError{
 			NodeID:      nodeID,
-			Description: "non-inner node doesn't implement LeafNode",
+			Description: "non-inner node doesn't implement leaf",
 		}
 	}
 

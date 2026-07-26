@@ -16,7 +16,7 @@ import (
 	"github.com/LeJamon/go-xrpl/internal/ledger/state"
 	"github.com/LeJamon/go-xrpl/keylet"
 	"github.com/LeJamon/go-xrpl/protocol"
-	"github.com/LeJamon/go-xrpl/shamap"
+	shamapbackend "github.com/LeJamon/go-xrpl/shamap/backend"
 	"github.com/LeJamon/go-xrpl/storage/kvstore/memorydb"
 	"github.com/LeJamon/go-xrpl/storage/nodestore"
 	"github.com/LeJamon/go-xrpl/storage/relationaldb"
@@ -48,7 +48,7 @@ func TestService_GetLedgerByHashLoadsEvictedLedgerFromNodeStore(t *testing.T) {
 		Standalone:    true,
 		GenesisConfig: genesisConfig,
 		NodeStore:     db,
-		SHAMapFamily:  shamap.NewNodeStoreFamily(db),
+		SHAMapFamily:  shamapbackend.New(db),
 		RelationalDB:  rm,
 	})
 	require.NoError(t, err)
@@ -165,7 +165,7 @@ func TestService_GetLedgerByHashRejectsNodeStoreOnlyLedger(t *testing.T) {
 		Standalone:    true,
 		GenesisConfig: genesis.DefaultConfig(),
 		NodeStore:     db,
-		SHAMapFamily:  shamap.NewNodeStoreFamily(db),
+		SHAMapFamily:  shamapbackend.New(db),
 		RelationalDB:  rm,
 	})
 	require.NoError(t, err)
@@ -220,7 +220,7 @@ func TestService_GetLedgerByHashDoesNotValidateStaleRelationalFork(t *testing.T)
 		Standalone:    true,
 		GenesisConfig: genesis.DefaultConfig(),
 		NodeStore:     db,
-		SHAMapFamily:  shamap.NewNodeStoreFamily(db),
+		SHAMapFamily:  shamapbackend.New(db),
 		RelationalDB:  rm,
 	})
 	require.NoError(t, err)
@@ -258,7 +258,7 @@ func TestService_GetLedgerByHashValidatesHistoricalCanonicalChain(t *testing.T) 
 	svc, err := New(Config{
 		GenesisConfig: genesis.DefaultConfig(),
 		NodeStore:     db,
-		SHAMapFamily:  shamap.NewNodeStoreFamily(db),
+		SHAMapFamily:  shamapbackend.New(db),
 		RelationalDB:  rm,
 	})
 	require.NoError(t, err)
@@ -337,7 +337,7 @@ func TestService_GetLedgerByHashReturnsNotFoundWithoutPersistedLedger(t *testing
 		}))
 		svc, err := New(Config{
 			NodeStore:    db,
-			SHAMapFamily: shamap.NewNodeStoreFamily(db),
+			SHAMapFamily: shamapbackend.New(db),
 			RelationalDB: rm,
 		})
 		require.NoError(t, err)
@@ -358,7 +358,7 @@ func TestService_GetLedgerByHashReturnsNotFoundWithoutPersistedLedger(t *testing
 		t.Cleanup(func() { require.NoError(t, rm.Close(ctx)) })
 		svc, err := New(Config{
 			NodeStore:    db,
-			SHAMapFamily: shamap.NewNodeStoreFamily(db),
+			SHAMapFamily: shamapbackend.New(db),
 			RelationalDB: rm,
 		})
 		require.NoError(t, err)
@@ -386,7 +386,7 @@ func TestService_GetLedgerByHashReturnsNotFoundWithoutPersistedLedger(t *testing
 		}))
 		svc, err := New(Config{
 			NodeStore:    db,
-			SHAMapFamily: shamap.NewNodeStoreFamily(db),
+			SHAMapFamily: shamapbackend.New(db),
 			RelationalDB: rm,
 		})
 		require.NoError(t, err)
@@ -412,7 +412,7 @@ func TestService_GetLedgerByHashReturnsNotFoundWithoutPersistedLedger(t *testing
 		}))
 		svc, err := New(Config{
 			NodeStore:    db,
-			SHAMapFamily: shamap.NewNodeStoreFamily(db),
+			SHAMapFamily: shamapbackend.New(db),
 			RelationalDB: rm,
 		})
 		require.NoError(t, err)
@@ -443,7 +443,7 @@ func TestService_GetLedgerByHashTreatsCorruptPersistedHeaderAsNotFound(t *testin
 	}))
 	svc, err := New(Config{
 		NodeStore:    db,
-		SHAMapFamily: shamap.NewNodeStoreFamily(db),
+		SHAMapFamily: shamapbackend.New(db),
 		RelationalDB: rm,
 	})
 	require.NoError(t, err)

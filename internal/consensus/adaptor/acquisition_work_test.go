@@ -15,6 +15,7 @@ import (
 	"github.com/LeJamon/go-xrpl/internal/peermanagement/message"
 	"github.com/LeJamon/go-xrpl/protocol"
 	"github.com/LeJamon/go-xrpl/shamap"
+	"github.com/LeJamon/go-xrpl/shamap/backend"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -1024,7 +1025,7 @@ func TestAcquisitionWork_FailureSnapshotDoesNotScanNodeStore(t *testing.T) {
 func TestAcquisitionWorkLane_PersistenceFailureStopsYieldedBatch(t *testing.T) {
 	wantErr := errors.New("checkpoint failed")
 	family := failingAcquisitionCheckpointFamily{
-		Family: shamap.NewMemoryNodeStoreFamily(),
+		Family: backend.NewMemory(),
 		err:    wantErr,
 	}
 	ledger := inbound.New([32]byte{0xF3}, 44, 7, serveTestLogger(), inbound.WithFamily(family))

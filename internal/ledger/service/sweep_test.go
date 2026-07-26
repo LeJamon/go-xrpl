@@ -4,7 +4,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/LeJamon/go-xrpl/shamap"
+	"github.com/LeJamon/go-xrpl/shamap/backend"
 	"github.com/stretchr/testify/require"
 )
 
@@ -26,7 +26,7 @@ func TestNodeStoreSweepIntervalForSize(t *testing.T) {
 }
 
 func TestServiceNodeStoreSweeperRunsWhileIdleAndStops(t *testing.T) {
-	family := shamap.NewMemoryNodeStoreFamily()
+	family := backend.NewMemory()
 	t.Cleanup(func() { require.NoError(t, family.Close()) })
 
 	cfg := DefaultConfig()

@@ -117,9 +117,9 @@ func FuzzAddKnownNode(f *testing.F) {
 		}
 
 		// Manually set the root on the syncing map
-		sm.mu.Lock()
-		sm.root = root
-		sm.mu.Unlock()
+		sm.tree.mu.Lock()
+		sm.tree.root = root
+		sm.tree.mu.Unlock()
 
 		// Must not panic — errors are expected
 		_ = sm.AddKnownNode(hash, data)

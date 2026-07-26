@@ -225,7 +225,7 @@ func TestBuildAndTear(t *testing.T) {
 
 		if actualHash != expectedHashes[k] {
 			t.Errorf("Tree dump after adding item %d (hash mismatch):", k)
-			dumpTree(sMap.root, "", false)
+			dumpTree(sMap.tree.root, "", false)
 			t.Errorf("Hash mismatch after adding item %d: expected %x, got %x",
 				k, expectedHashes[k], actualHash)
 		}
@@ -241,7 +241,7 @@ func TestBuildAndTear(t *testing.T) {
 		}
 		if actualHash != expectedHashes[k] {
 			t.Errorf("Tree dump after adding item %d (hash mismatch):", k)
-			dumpTree(sMap.root, "", false)
+			dumpTree(sMap.tree.root, "", false)
 			t.Errorf("Hash mismatch after adding item %d: expected %x, got %x",
 				k, expectedHashes[k], actualHash)
 		}
@@ -476,8 +476,8 @@ func TestSnapshot_StructuralSharing(t *testing.T) {
 	mutatedBranch := getBranchAtDepth(target, 0)
 	shared, diverged := 0, 0
 	for i := range BranchFactor {
-		srcChild, _, srcSet := src.root.LoadChild(i)
-		snapChild, _, snapSet := snap.root.LoadChild(i)
+		srcChild, _, srcSet := src.tree.root.LoadChild(i)
+		snapChild, _, snapSet := snap.tree.root.LoadChild(i)
 		if srcSet != snapSet {
 			t.Fatalf("branch %d set bit diverged: src=%v snap=%v", i, srcSet, snapSet)
 		}
@@ -686,7 +686,7 @@ func BenchmarkSnapshot(b *testing.B) {
 }
 
 // Helper function for debugging - simplified tree dump
-func dumpTree(node Node, prefix string, isTail bool) {
+func dumpTree(node mapNode, prefix string, isTail bool) {
 	switch n := node.(type) {
 	case *innerNode:
 		fmt.Printf("%s%sInnerNode %p, hash: %x\n", prefix, branchSymbol(isTail), n, n.Hash())
@@ -694,14 +694,14 @@ func dumpTree(node Node, prefix string, isTail bool) {
 		// Get all non-empty children
 		var children []struct {
 			index int
-			child Node
+			child mapNode
 		}
 		for i := range BranchFactor {
 			if !n.IsEmptyBranch(i) {
 				if child, err := n.Child(i); err == nil && child != nil {
 					children = append(children, struct {
 						index int
-						child Node
+						child mapNode
 					}{index: i, child: child})
 				}
 			}
@@ -964,7 +964,7 @@ func TestIterator(t *testing.T) {
 	}
 
 	// Test Begin() iterator - should visit all items in key order
-	iter := sMap.begin()
+	iter := newTestIterator(sMap)
 	count := 0
 	var lastKey [32]byte
 	for iter.Next() {
@@ -987,7 +987,7 @@ func TestIterator(t *testing.T) {
 
 	// Test empty map
 	emptyMap := New(TypeState)
-	iter = emptyMap.begin()
+	iter = newTestIterator(emptyMap)
 	if iter.Next() {
 		t.Error("Empty map iterator should return false on Next()")
 	}
@@ -1112,7 +1112,7 @@ func TestIteratorWithManyItems(t *testing.T) {
 	}
 
 	// Count items via iterator
-	iter := sMap.begin()
+	iter := newTestIterator(sMap)
 	count := 0
 	for iter.Next() {
 		count++

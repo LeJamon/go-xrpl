@@ -19,7 +19,7 @@ type FetchPackNode struct {
 // identical SerializeWithPrefix() bytes so a rippled peer's consume check
 // (hash == sha512Half(data), LedgerMaster.cpp:2019) accepts every node, and a
 // go-xrpl receiver verifies and reconstructs the tree by feeding each blob to
-// AddKnownNodeFromPrefix keyed by Hash.
+// its prefix-format acquisition path keyed by Hash.
 //
 // Pre-order guarantees the root precedes its descendants, so a result
 // truncated at maxNodes is always a connected prefix of the tree the receiver
@@ -30,27 +30,27 @@ type FetchPackNode struct {
 // — so a diff would leave it unable to complete. Sending want's full (capped)
 // tree is correct for any receiver: a node it already holds is simply ignored.
 func (sm *SHAMap) WalkFetchPackNodes(maxNodes int) ([]FetchPackNode, error) {
-	sm.mu.RLock()
-	defer sm.mu.RUnlock()
+	sm.tree.mu.RLock()
+	defer sm.tree.mu.RUnlock()
 
-	if sm.root == nil || maxNodes <= 0 {
+	if sm.tree.root == nil || maxNodes <= 0 {
 		return nil, nil
 	}
 	// An empty map's root is an empty inner node with no serialized form;
 	// there is nothing to pack. Production never walks an empty map (state
 	// maps are non-empty and tx maps are skipped when the tx tree is empty),
 	// but guard it so the walk is total.
-	if !sm.root.HasChildren() {
+	if !sm.tree.root.HasChildren() {
 		return nil, nil
 	}
 	out := make([]FetchPackNode, 0, maxNodes)
-	if err := walkFetchPackRec(sm.root, maxNodes, &out); err != nil {
+	if err := walkFetchPackRec(sm.tree.root, maxNodes, &out); err != nil {
 		return nil, err
 	}
 	return out, nil
 }
 
-func walkFetchPackRec(node Node, maxNodes int, out *[]FetchPackNode) error {
+func walkFetchPackRec(node mapNode, maxNodes int, out *[]FetchPackNode) error {
 	if node == nil || len(*out) >= maxNodes {
 		return nil
 	}

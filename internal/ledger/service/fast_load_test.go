@@ -14,6 +14,7 @@ import (
 	"github.com/LeJamon/go-xrpl/keylet"
 	"github.com/LeJamon/go-xrpl/protocol"
 	"github.com/LeJamon/go-xrpl/shamap"
+	"github.com/LeJamon/go-xrpl/shamap/backend"
 	"github.com/LeJamon/go-xrpl/storage/kvstore/memorydb"
 	"github.com/LeJamon/go-xrpl/storage/nodestore"
 	sqlitedb "github.com/LeJamon/go-xrpl/storage/relationaldb/sqlite"
@@ -119,7 +120,7 @@ func TestService_FastLoadRestoresPersistedValidatedLedger(t *testing.T) {
 		Standalone:    true,
 		GenesisConfig: genesis.DefaultConfig(),
 		NodeStore:     db,
-		SHAMapFamily:  shamap.NewNodeStoreFamily(db),
+		SHAMapFamily:  backend.New(db),
 		RelationalDB:  rm,
 	})
 	require.NoError(t, err)
@@ -140,7 +141,7 @@ func TestService_FastLoadRestoresPersistedValidatedLedger(t *testing.T) {
 		Standalone:    false,
 		GenesisConfig: genesis.DefaultConfig(),
 		NodeStore:     db,
-		SHAMapFamily:  shamap.NewNodeStoreFamily(db),
+		SHAMapFamily:  backend.New(db),
 		RelationalDB:  rm,
 		FastLoad:      true,
 	})
@@ -177,7 +178,7 @@ func TestService_VerifyStoredSHAMapWalksRootBranchesInParallel(t *testing.T) {
 		Standalone:    true,
 		GenesisConfig: genesis.DefaultConfig(),
 		NodeStore:     db,
-		SHAMapFamily:  shamap.NewNodeStoreFamily(db),
+		SHAMapFamily:  backend.New(db),
 	})
 	require.NoError(t, err)
 	require.NoError(t, svc.Start())
@@ -223,7 +224,7 @@ func TestService_FastLoadFallsBackWhenStorageIsEmpty(t *testing.T) {
 		Standalone:    false,
 		GenesisConfig: genesis.DefaultConfig(),
 		NodeStore:     db,
-		SHAMapFamily:  shamap.NewNodeStoreFamily(db),
+		SHAMapFamily:  backend.New(db),
 		RelationalDB:  rm,
 		FastLoad:      true,
 	})
@@ -248,7 +249,7 @@ func TestService_FastLoadRejectsRelationalLedgerWithoutValidatedTip(t *testing.T
 		Standalone:    false,
 		GenesisConfig: genesis.DefaultConfig(),
 		NodeStore:     db,
-		SHAMapFamily:  shamap.NewNodeStoreFamily(db),
+		SHAMapFamily:  backend.New(db),
 		RelationalDB:  rm,
 	})
 	require.NoError(t, err)
@@ -259,7 +260,7 @@ func TestService_FastLoadRejectsRelationalLedgerWithoutValidatedTip(t *testing.T
 		Standalone:    false,
 		GenesisConfig: genesis.DefaultConfig(),
 		NodeStore:     db,
-		SHAMapFamily:  shamap.NewNodeStoreFamily(db),
+		SHAMapFamily:  backend.New(db),
 		RelationalDB:  rm,
 		FastLoad:      true,
 	})
@@ -284,7 +285,7 @@ func TestService_FastLoadFallsBackWhenTreeIsCorrupt(t *testing.T) {
 		Standalone:    true,
 		GenesisConfig: genesis.DefaultConfig(),
 		NodeStore:     db,
-		SHAMapFamily:  shamap.NewNodeStoreFamily(db),
+		SHAMapFamily:  backend.New(db),
 		RelationalDB:  rm,
 	})
 	require.NoError(t, err)
@@ -309,7 +310,7 @@ func TestService_FastLoadFallsBackWhenTreeIsCorrupt(t *testing.T) {
 		Standalone:    false,
 		GenesisConfig: genesis.DefaultConfig(),
 		NodeStore:     db,
-		SHAMapFamily:  shamap.NewNodeStoreFamily(db),
+		SHAMapFamily:  backend.New(db),
 		RelationalDB:  rm,
 		FastLoad:      true,
 	})
@@ -330,7 +331,7 @@ func TestService_GetLedgerByHashTreatsCorruptDescendantAsNotFound(t *testing.T) 
 	require.NoError(t, rm.Open(ctx))
 	t.Cleanup(func() { require.NoError(t, rm.Close(ctx)) })
 
-	family := shamap.NewNodeStoreFamily(db)
+	family := backend.New(db)
 	writer, err := New(Config{
 		Standalone:    true,
 		GenesisConfig: genesis.DefaultConfig(),

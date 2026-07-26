@@ -6,9 +6,7 @@ import (
 	"github.com/LeJamon/go-xrpl/protocol"
 )
 
-// FuzzDeserializeNodeFromWire fuzzes the main network deserialization entry point.
-// DeserializeNodeFromWire dispatches based on the last byte (wire type) to one of
-// five node parsers. Any crafted input must not cause a panic.
+// FuzzDeserializeNodeFromWire fuzzes the network deserialization path.
 func FuzzDeserializeNodeFromWire(f *testing.F) {
 	// Empty input
 	f.Add([]byte{})
@@ -84,7 +82,7 @@ func FuzzDeserializeNodeFromWire(f *testing.F) {
 		_ = node.Hash()
 		_ = node.Type()
 
-		_ = node.Invariants(true)
+		_ = checkNodeInvariants(node, true)
 	})
 }
 
@@ -147,7 +145,7 @@ func FuzzNewInnerNodeFromWire(f *testing.F) {
 		}
 		_ = node.Hash()
 		_ = node.BranchCount()
-		_ = node.Invariants(true)
+		_ = checkNodeInvariants(node, true)
 
 		// Hash must be deterministic
 		if err := node.UpdateHash(); err != nil {
@@ -201,7 +199,7 @@ func FuzzNewAccountStateLeafFromWire(f *testing.F) {
 		_ = node.Hash()
 		_ = node.Type()
 		_ = node.Item()
-		_ = node.Invariants(true)
+		_ = checkNodeInvariants(node, true)
 	})
 }
 
@@ -235,7 +233,7 @@ func FuzzNewTransactionLeafFromWire(f *testing.F) {
 		_ = node.Hash()
 		_ = node.Type()
 		_ = node.Item()
-		_ = node.Invariants(true)
+		_ = checkNodeInvariants(node, true)
 	})
 }
 
@@ -272,7 +270,7 @@ func FuzzNewTransactionWithMetaLeafFromWire(f *testing.F) {
 		_ = node.Hash()
 		_ = node.Type()
 		_ = node.Item()
-		_ = node.Invariants(true)
+		_ = checkNodeInvariants(node, true)
 	})
 }
 
@@ -343,6 +341,6 @@ func FuzzDeserializeFromPrefix(f *testing.F) {
 		_ = node.Hash()
 		_ = node.Type()
 
-		_ = node.Invariants(true)
+		_ = checkNodeInvariants(node, true)
 	})
 }

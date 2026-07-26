@@ -1868,3 +1868,97 @@ conditions and JSON types.
   conformance backlog; affected packages and the complete core group pass.
 
 ---
+
+# SHAMap maintainability refactor
+
+Base: `origin/main` at `f16d6d386cc3f893eb6fb46bf17cdd11bd9689be`.
+Branch: `refactor/shamap-maintainability`.
+Worktree: `goXRPL-worktrees/shamap-maintainability`.
+
+## Goal
+
+Reduce dead code, API surface, hidden ownership contracts, and duplicated
+implementation mechanics in `shamap` without changing SHAMap behavior or
+replacing its specialized traversal algorithms.
+
+## Plan
+
+- [x] Create a clean worktree from the latest `origin/main`, preserve the dirty
+      primary checkout, and record the exact base and behavioral constraints.
+- [x] Pin focused test, race, coverage, lint, dead-code, allocation, and
+      benchmark baselines before changing production code.
+- [x] Add black-box contract tests for the public construction, mutation,
+      snapshot, persistence, iteration, proof-generation, and acquisition
+      surfaces that remain supported.
+- [x] Remove hard-dead and production-test-only helpers; move invariant
+      diagnostics into test support and eliminate the dead durable-read waiter
+      bookkeeping without changing coalescing semantics.
+- [x] Privatize mutable node interfaces, remove public unsafe item-data access,
+      collapse the duplicate mutable-fork operation, and remove unused
+      compatibility wrappers after migrating every repository caller.
+- [x] Split the large map, sync, and persistence files by responsibility and
+      group tree, backing, and acquisition ownership inside private state
+      components while preserving the existing lock order.
+- [x] Normalize optional Family capabilities once when a backing is installed;
+      centralize stored-node fetch/decode/verify mechanics while retaining
+      explicit ordinary, durable, placement, inspection, and lightweight
+      traversal modes.
+- [x] Separate wire/prefix framing from shared node-body decoding without
+      materializing full nodes in the backed traversal hot path.
+- [x] Move concrete NodeStore, memory, and Pebble construction into a
+      `shamap/backend` adapter package and migrate all production and test
+      callers; keep the core package dependent only on its storage contract.
+- [x] Reorganize coverage/reproducer tests by owned behavior, add a reusable
+      function-hook family test double, and retain white-box tests only where
+      internal fault injection or lock validation requires them.
+- [x] Run focused tests after each phase, then complete race, core/library,
+      build, vet, strict/advisory lint, dead-code, benchmark, coverage, and
+      whitespace verification; compare the final public API and performance
+      against the pinned baseline.
+- [x] Review the complete diff for accidental behavior changes, allocation
+      regressions, lock-order changes, stale compatibility APIs, and unnecessary
+      abstraction; record the final evidence below.
+
+## Review
+
+- Baseline: SHAMap tests, race, vet, and strict lint pass with 87.9% statement
+  coverage and 184 top-level documented public declarations. SSA reports the
+  invariant framework, `begin`, `setFull`, `nodeStack.Top`, the public wire
+  decoder wrapper, and proof verification as production-unreachable.
+- Baseline allocations: Put 131 allocs/op, Get 64, Snapshot 1, structural
+  traversal decode 2, and materialized traversal decode 1.
+- The concrete NodeStore adapter now lives in `shamap/backend`; the core package
+  no longer imports NodeStore or KV backends. Durable-read coalescing retained
+  its cancellation and retry behavior while dropping unused waiter counters.
+  Focused SHAMap/backend tests and race tests pass.
+- Family capabilities are bound once per installed backing and carried through
+  lock-pinned traversals without duplicate state or interface comparisons.
+  Prefix framing and branch decoding are shared while backed traversal remains
+  lightweight at 64 B and 2 allocations per decode (no baseline regression).
+- External-package contract tests now cover ownership, CRUD, snapshot
+  isolation, iteration/bounds, proof round trips, persistence/root reload, and
+  acquisition/root reconstruction. Focused and race suites pass.
+- The 859-line core map file is split into core access/lifecycle, mutation,
+  snapshot, and iteration units; sync and persistence were similarly split by
+  lifecycle, acquisition, traversal, collection, and acknowledgement.
+- Six mixed coverage/reproducer buckets became 14 behavior-owned test files.
+  All 190 tests and all 53 cases from the former mixed edge bucket were
+  retained; focused, race, and vet checks pass.
+- Tree, backing, and acquisition state now have explicit private owners and the
+  documented global lock order is `walkMu` → `tree.mu` → `backing.mu` →
+  `attachmentMu`. Adversarial review found and fixed a snapshot race that could
+  flush to one Family and bind the resulting clean snapshot to another; a
+  deterministic regression pins the Family across flush and snapshot capture.
+- Final core coverage is 88.3%, up from 87.9%. The documented top-level public
+  surface fell from 184 declarations to 156, and non-test core production code
+  fell from 7,332 to 6,500 lines. Final allocation counts match the baseline:
+  Put 131, Get 64, Snapshot 1, structural decode 2, and materialized decode 1.
+  The lock-corrected snapshot remains 144 B/op and 1 allocation at about
+  37 ns/op in the isolated benchmark.
+- Final SSA dead-code output for `shamap` contains only the two intentionally
+  retained public proof-verification functions, both covered by black-box
+  contract tests.
+- Passing final gates: focused snapshot regression repeated 10 times, complete
+  SHAMap normal and race suites, package vet, repository-wide `go test ./...`,
+  `just build-all`, `just build-nocgo`, strict `golangci-lint` with zero issues,
+  coverage, benchmarks, and `git diff --check`.

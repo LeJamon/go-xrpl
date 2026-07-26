@@ -10,6 +10,7 @@ import (
 
 	"github.com/LeJamon/go-xrpl/internal/ledger/shamapstore"
 	"github.com/LeJamon/go-xrpl/shamap"
+	"github.com/LeJamon/go-xrpl/shamap/backend"
 	"github.com/LeJamon/go-xrpl/storage/kvstore/memorydb"
 	kvpebble "github.com/LeJamon/go-xrpl/storage/kvstore/pebble"
 	"github.com/LeJamon/go-xrpl/storage/nodestore"
@@ -226,7 +227,7 @@ func TestRotation_AdvancesAcquisitionFloorBeforeLiveStateRefresh(t *testing.T) {
 	ctx := context.Background()
 	db := nodestore.NewKVDatabase(memorydb.New(), "mem", 100, time.Hour)
 	defer db.Close()
-	family := shamap.NewNodeStoreFamily(db)
+	family := backend.New(db)
 	data := []byte("shared-live-node")
 	hash := [32]byte(nodestore.ComputeHash256(data))
 	if err := family.StoreBatch(ctx, []shamap.FlushEntry{{
@@ -245,8 +246,8 @@ func TestRotation_AdvancesAcquisitionFloorBeforeLiveStateRefresh(t *testing.T) {
 		err := family.StoreBatch(ctx, []shamap.FlushEntry{{
 			Hash: hash, Data: data, LedgerSeq: 150, MapType: shamap.TypeState,
 		}})
-		if !errors.Is(err, shamap.ErrStoreBelowMinimum) {
-			t.Fatalf("historical write during refresh = %v, want %v", err, shamap.ErrStoreBelowMinimum)
+		if !errors.Is(err, backend.ErrStoreBelowMinimum) {
+			t.Fatalf("historical write during refresh = %v, want %v", err, backend.ErrStoreBelowMinimum)
 		}
 		err = family.StoreBatch(ctx, []shamap.FlushEntry{{
 			Hash: hash, Data: data, LedgerSeq: seq, MapType: shamap.TypeState,

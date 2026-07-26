@@ -1,9 +1,7 @@
 package shamap
 
 import (
-	"encoding/hex"
 	"fmt"
-	"strings"
 	"sync"
 
 	"github.com/LeJamon/go-xrpl/crypto/sha512half"
@@ -56,20 +54,19 @@ var leafKinds = [...]leafKindInfo{
 
 // LeafReader is the read-only view of a leaf node returned to callers outside
 // the package: the node's identity plus its stored Item, without the
-// item-replacement or hashing mutators of LeafNode.
+// item-replacement or hashing mutators.
 type LeafReader interface {
 	NodeReader
 	Item() *Item
 }
 
-// LeafNode interface extends Node with item-level access.
-type LeafNode interface {
-	Node
+// mapLeaf is the mutable interface implemented by leaf nodes owned by a SHAMap.
+type mapLeaf interface {
+	mapNode
 	Item() *Item
-	SetItem(item *Item) (bool, error)
 }
 
-// leafNode is the single implementation of LeafNode for all three leaf
+// leafNode is the single leaf implementation for all three
 // flavours.  Which hash prefix, wire format, and node type to use is
 // dispatched on kind.
 type leafNode struct {
@@ -128,22 +125,6 @@ func (n *leafNode) Item() *Item {
 	return n.item
 }
 
-// SetItem replaces the stored item and reports whether the node hash changed.
-func (n *leafNode) SetItem(item *Item) (bool, error) {
-	if item == nil {
-		return false, ErrNilItem
-	}
-	n.mu.Lock()
-	defer n.mu.Unlock()
-	oldHash := n.hash
-	n.item = item
-	n.SetDirty(true)
-	if err := n.updateHashUnsafe(); err != nil {
-		return false, fmt.Errorf("failed to update hash: %w", err)
-	}
-	return n.hash != oldHash, nil
-}
-
 // UpdateHash recomputes the node's hash from its item.
 func (n *leafNode) UpdateHash() error {
 	n.mu.Lock()
@@ -157,9 +138,9 @@ func (n *leafNode) updateHashUnsafe() error {
 	}
 	if n.keyOnWire() {
 		key := n.item.Key()
-		return n.setHash(n.hashPrefix(), n.item.DataUnsafe(), key[:])
+		return n.setHash(n.hashPrefix(), n.item.dataBytes(), key[:])
 	}
-	return n.setHash(n.hashPrefix(), n.item.DataUnsafe())
+	return n.setHash(n.hashPrefix(), n.item.dataBytes())
 }
 
 // Type returns the SHAMap node type.
@@ -189,7 +170,7 @@ func (n *leafNode) SerializeForWire() ([]byte, error) {
 	if n.item == nil {
 		return nil, ErrNilItem
 	}
-	data := n.item.DataUnsafe()
+	data := n.item.dataBytes()
 	if n.keyOnWire() {
 		key := n.item.Key()
 		result := make([]byte, 0, len(data)+33)
@@ -212,7 +193,7 @@ func (n *leafNode) SerializeWithPrefix() ([]byte, error) {
 	if n.item == nil {
 		return nil, ErrNilItem
 	}
-	data := n.item.DataUnsafe()
+	data := n.item.dataBytes()
 	if n.keyOnWire() {
 		key := n.item.Key()
 		result := make([]byte, 0, 4+len(data)+32)
@@ -310,49 +291,8 @@ func newTransactionWithMetaLeafFromWire(data []byte) (*leafNode, error) {
 	return node, nil
 }
 
-// Invariants checks the leaf's structural invariants.
-func (n *leafNode) Invariants(isRoot bool) error {
-	n.mu.RLock()
-	defer n.mu.RUnlock()
-	if n.item == nil {
-		return fmt.Errorf("leaf has nil item")
-	}
-	if n.IsZeroHash() {
-		return fmt.Errorf("leaf has zero hash")
-	}
-	return nil
-}
-
-func (n *leafNode) String(id NodeID) string {
-	n.mu.RLock()
-	defer n.mu.RUnlock()
-	var sb strings.Builder
-	sb.WriteString(fmt.Sprintf("%s ID: %s\n", leafKinds[n.kind].label, id.String()))
-	sb.WriteString(fmt.Sprintf("Hash: %s\n", hex.EncodeToString(n.hash[:])))
-	if n.item != nil {
-		key := n.item.Key()
-		sb.WriteString(fmt.Sprintf("Key: %s\n", hex.EncodeToString(key[:])))
-		sb.WriteString(fmt.Sprintf("Data Size: %d bytes\n", n.item.Size()))
-	}
-	return sb.String()
-}
-
-// Clone returns a deep copy of the leaf node.
-func (n *leafNode) Clone() (Node, error) {
-	n.mu.RLock()
-	defer n.mu.RUnlock()
-	if n.item == nil {
-		return nil, ErrNilItem
-	}
-	clonedItem, err := n.item.Clone()
-	if err != nil {
-		return nil, fmt.Errorf("failed to clone item: %w", err)
-	}
-	return newLeafNode(n.kind, clonedItem)
-}
-
 // createLeafNode creates the appropriate leaf node type for the given node type.
-func createLeafNode(nodeType NodeType, item *Item) (LeafNode, error) {
+func createLeafNode(nodeType NodeType, item *Item) (mapLeaf, error) {
 	if item == nil {
 		return nil, ErrNilItem
 	}

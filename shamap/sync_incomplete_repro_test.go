@@ -178,9 +178,9 @@ func TestIncompleteSyncMap_CompletenessConsistency(t *testing.T) {
 	t.Run("IncrementalFeedConverges", func(t *testing.T) {
 		// Deliver the genuinely-absent node as a peer would, then the tree
 		// finalizes and all three views agree it is complete.
-		res, err := dest.AddKnownNodeFromPrefix(absentID, absentPrefix)
+		res, err := dest.addKnownNodeFromPrefixForTest(absentID, absentPrefix)
 		if err != nil {
-			t.Fatalf("AddKnownNodeFromPrefix: %v", err)
+			t.Fatalf("prefix acquisition: %v", err)
 		}
 		if res != NodeUseful {
 			t.Fatalf("feeding absent node: want NodeUseful, got %v", res)

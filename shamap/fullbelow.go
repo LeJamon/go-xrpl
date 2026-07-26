@@ -172,11 +172,13 @@ func (c *FullBelowCache) Begin() (uint32, func()) {
 
 // Bump invalidates every outstanding mark after a backing-store replacement.
 func (c *FullBelowCache) Bump() {
-	unlock := c.invalidateAndLock()
+	unlock := c.BeginMutation()
 	unlock()
 }
 
-func (c *FullBelowCache) invalidateAndLock() func() {
+// BeginMutation invalidates completeness marks and blocks missing-node walks
+// until the returned function is called after the backing-store mutation.
+func (c *FullBelowCache) BeginMutation() func() {
 	c.walks.Lock()
 	c.stateMu.Lock()
 	if c.gen.Add(1) == 0 {

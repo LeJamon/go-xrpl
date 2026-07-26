@@ -11,6 +11,7 @@ import (
 	"github.com/LeJamon/go-xrpl/internal/ledger/header"
 	"github.com/LeJamon/go-xrpl/internal/peermanagement/message"
 	"github.com/LeJamon/go-xrpl/shamap"
+	"github.com/LeJamon/go-xrpl/shamap/backend"
 )
 
 // Regression for issue #395: after GotBase, NeedsMissingNodeIDs must
@@ -347,7 +348,7 @@ func TestGotBase_HeaderAdmissionPrecedesAdoptionAndPersistence(t *testing.T) {
 		t.Fatalf("serialize root: %v", err)
 	}
 	headerData, ledgerHash := encodeHeader(header.LedgerHeader{LedgerIndex: 499, AccountHash: rootHash})
-	family := shamap.NewMemoryNodeStoreFamily()
+	family := backend.NewMemory()
 	policyErr := errors.New("below retained floor")
 	acquisition := New(ledgerHash, 0, 13, slog.New(slog.NewTextHandler(io.Discard, nil)),
 		WithFamily(family),
