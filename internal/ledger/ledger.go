@@ -878,11 +878,11 @@ func (l *Ledger) MutableSnapshotUnflushed() (*Ledger, error) {
 	l.mu.RLock()
 	defer l.mu.RUnlock()
 
-	stateMapCopy, err := l.stateMap.SnapshotMutableUnflushed()
+	stateMapCopy, err := l.stateMap.MutableFork()
 	if err != nil {
 		return nil, err
 	}
-	txMapCopy, err := l.txMap.SnapshotMutableUnflushed()
+	txMapCopy, err := l.txMap.MutableFork()
 	if err != nil {
 		return nil, err
 	}

@@ -38,6 +38,7 @@ import (
 	xrpllog "github.com/LeJamon/go-xrpl/log"
 	"github.com/LeJamon/go-xrpl/protocol"
 	"github.com/LeJamon/go-xrpl/shamap"
+	"github.com/LeJamon/go-xrpl/shamap/backend"
 	kvpebble "github.com/LeJamon/go-xrpl/storage/kvstore/pebble"
 	"github.com/LeJamon/go-xrpl/storage/nodestore"
 	"github.com/LeJamon/go-xrpl/storage/relationaldb"
@@ -161,9 +162,9 @@ func Run(appConfig *config.Config, configPath string, standalone bool, rootLogge
 	if err != nil {
 		return err
 	}
-	var nodeFamily *shamap.NodeStoreFamily
+	var nodeFamily *backend.NodeStore
 	if db != nil {
-		nodeFamily = shamap.NewNodeStoreFamily(db)
+		nodeFamily = backend.New(db)
 	}
 
 	// Load genesis configuration from config file path (if set)
@@ -442,7 +443,7 @@ func Run(appConfig *config.Config, configPath string, standalone bool, rootLogge
 	if nodeFamily != nil {
 		cleanerFamily = nodeFamily
 	} else {
-		memFamily := shamap.NewMemoryNodeStoreFamily()
+		memFamily := backend.NewMemory()
 		cleanerFamily = memFamily
 	}
 	ledgerCleaner = cleaner.New(&ledgerCleanerSource{svc: ledgerSvcRef, family: cleanerFamily}, rootLogger)

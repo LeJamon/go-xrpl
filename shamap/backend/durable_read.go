@@ -1,4 +1,4 @@
-package shamap
+package backend
 
 import (
 	"context"
@@ -6,10 +6,9 @@ import (
 )
 
 type durableReadFlight struct {
-	done    chan struct{}
-	data    []byte
-	err     error
-	waiters int
+	done chan struct{}
+	data []byte
+	err  error
 }
 
 type durableReadCoalescer struct {
@@ -36,15 +35,12 @@ func (c *durableReadCoalescer) fetch(
 		c.flights[hash] = flight
 		go c.read(context.WithoutCancel(ctx), hash, flight, read)
 	}
-	flight.waiters++
 	c.mu.Unlock()
 
 	select {
 	case <-ctx.Done():
-		c.leave(flight)
 		return nil, ctx.Err()
 	case <-flight.done:
-		c.leave(flight)
 		return flight.data, flight.err
 	}
 }
@@ -64,11 +60,5 @@ func (c *durableReadCoalescer) read(
 		delete(c.flights, hash)
 	}
 	close(flight.done)
-	c.mu.Unlock()
-}
-
-func (c *durableReadCoalescer) leave(flight *durableReadFlight) {
-	c.mu.Lock()
-	flight.waiters--
 	c.mu.Unlock()
 }

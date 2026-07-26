@@ -73,7 +73,7 @@ func TestFlushNode_GuardsStalePreimage(t *testing.T) {
 		}
 	}
 
-	root := sm.root
+	root := sm.tree.root
 	if root == nil {
 		t.Fatal("root is nil after Put")
 	}

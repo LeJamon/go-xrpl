@@ -12,10 +12,11 @@ import (
 	"github.com/LeJamon/go-xrpl/internal/ledger/header"
 	"github.com/LeJamon/go-xrpl/internal/peermanagement/message"
 	"github.com/LeJamon/go-xrpl/shamap"
+	"github.com/LeJamon/go-xrpl/shamap/backend"
 )
 
 type countingMissingFamily struct {
-	base  *shamap.NodeStoreFamily
+	base  *backend.NodeStore
 	reads atomic.Int64
 }
 
@@ -132,7 +133,7 @@ func TestCollectMissingReplyRequests_SixDisjointFrontiers(t *testing.T) {
 		opts []Option
 	}{
 		{name: "unbacked"},
-		{name: "backed", opts: []Option{WithFamily(shamap.NewMemoryNodeStoreFamily())}},
+		{name: "backed", opts: []Option{WithFamily(backend.NewMemory())}},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			il := newWideAcquisition(t, test.opts...)
@@ -223,7 +224,7 @@ func TestCollectMissingReplyRequests_ReleasesFailedAssignment(t *testing.T) {
 }
 
 func TestCollectMissingReplyRequests_DoesNotRescanReservedFrontier(t *testing.T) {
-	family := &countingMissingFamily{base: shamap.NewMemoryNodeStoreFamily()}
+	family := &countingMissingFamily{base: backend.NewMemory()}
 	il := newAcquisitionWithMissingNodesAndOptions(t, WithFamily(family))
 	first, complete, err := il.CollectMissingReplyRequestsContext(t.Context(), []uint64{21})
 	if err != nil || complete || len(first) != 1 {

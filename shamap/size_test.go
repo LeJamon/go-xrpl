@@ -55,13 +55,13 @@ func TestSize_CachedWhenImmutable(t *testing.T) {
 		}
 	}
 
-	if v := sm.cachedSize.Load(); v != -1 {
+	if v := sm.tree.cachedSize.Load(); v != -1 {
 		t.Fatalf("mutable map cachedSize = %d, want -1", v)
 	}
 	if got := sm.Size(); got != 5 {
 		t.Errorf("Size = %d, want 5", got)
 	}
-	if v := sm.cachedSize.Load(); v != -1 {
+	if v := sm.tree.cachedSize.Load(); v != -1 {
 		t.Errorf("after mutable Size cachedSize = %d, want -1 (no caching for mutable maps)", v)
 	}
 
@@ -72,13 +72,13 @@ func TestSize_CachedWhenImmutable(t *testing.T) {
 	if got := sm.Size(); got != 5 {
 		t.Errorf("immutable Size = %d, want 5", got)
 	}
-	if v := sm.cachedSize.Load(); v != 5 {
+	if v := sm.tree.cachedSize.Load(); v != 5 {
 		t.Errorf("after immutable Size cachedSize = %d, want 5", v)
 	}
 
 	// Overwrite the cache with a sentinel: Size returning it proves the
 	// walk is skipped on subsequent calls.
-	sm.cachedSize.Store(999)
+	sm.tree.cachedSize.Store(999)
 	if got := sm.Size(); got != 999 {
 		t.Errorf("cached Size = %d, want 999 (cache not consulted)", got)
 	}
@@ -97,7 +97,7 @@ func TestSize_SnapshotInheritsImmutableCache(t *testing.T) {
 		t.Fatalf("SetImmutable: %v", err)
 	}
 	_ = sm.Size() // prime parent cache
-	if v := sm.cachedSize.Load(); v != 3 {
+	if v := sm.tree.cachedSize.Load(); v != 3 {
 		t.Fatalf("parent cachedSize = %d, want 3", v)
 	}
 
@@ -105,7 +105,7 @@ func TestSize_SnapshotInheritsImmutableCache(t *testing.T) {
 	if err != nil {
 		t.Fatalf("snapshot: %v", err)
 	}
-	if v := snap.cachedSize.Load(); v != 3 {
+	if v := snap.tree.cachedSize.Load(); v != 3 {
 		t.Errorf("immutable snapshot cachedSize = %d, want 3 (inheritance)", v)
 	}
 
@@ -114,7 +114,7 @@ func TestSize_SnapshotInheritsImmutableCache(t *testing.T) {
 	if err != nil {
 		t.Fatalf("snapshot mutable: %v", err)
 	}
-	if v := mut.cachedSize.Load(); v != -1 {
+	if v := mut.tree.cachedSize.Load(); v != -1 {
 		t.Errorf("mutable snapshot cachedSize = %d, want -1", v)
 	}
 }
@@ -157,7 +157,7 @@ func TestSize_DoesNotCacheOnWalkError(t *testing.T) {
 		}
 	}
 
-	// FlushDirty(true) drops in-memory children, so any subsequent
+	// FlushDirtyAndRelease drops in-memory children, so any subsequent
 	// descend() goes through Family.Fetch.
 	batch, err := sm.FlushDirtyAndRelease()
 	if err != nil {
@@ -174,7 +174,7 @@ func TestSize_DoesNotCacheOnWalkError(t *testing.T) {
 	sm.SetFamily(&failingFamily{inner: mem, failAfter: 1})
 
 	_ = sm.Size()
-	if v := sm.cachedSize.Load(); v != -1 {
+	if v := sm.tree.cachedSize.Load(); v != -1 {
 		t.Errorf("after errored walk cachedSize = %d, want -1 (partial counts must not be cached)", v)
 	}
 
@@ -184,7 +184,7 @@ func TestSize_DoesNotCacheOnWalkError(t *testing.T) {
 	if got := sm.Size(); got != len(keys) {
 		t.Errorf("post-recovery Size = %d, want %d", got, len(keys))
 	}
-	if v := sm.cachedSize.Load(); v != int64(len(keys)) {
+	if v := sm.tree.cachedSize.Load(); v != int64(len(keys)) {
 		t.Errorf("post-recovery cachedSize = %d, want %d", v, len(keys))
 	}
 }
@@ -208,7 +208,7 @@ func TestSize_BackedSnapshotInheritsImmutableCache(t *testing.T) {
 	if got := sm.Size(); got != 4 {
 		t.Fatalf("source Size = %d, want 4", got)
 	}
-	if v := sm.cachedSize.Load(); v != 4 {
+	if v := sm.tree.cachedSize.Load(); v != 4 {
 		t.Fatalf("source cachedSize = %d, want 4", v)
 	}
 
@@ -216,7 +216,7 @@ func TestSize_BackedSnapshotInheritsImmutableCache(t *testing.T) {
 	if err != nil {
 		t.Fatalf("snapshot: %v", err)
 	}
-	if v := snap.cachedSize.Load(); v != 4 {
+	if v := snap.tree.cachedSize.Load(); v != 4 {
 		t.Errorf("backed immutable snapshot cachedSize = %d, want 4 (inheritance)", v)
 	}
 
@@ -225,7 +225,7 @@ func TestSize_BackedSnapshotInheritsImmutableCache(t *testing.T) {
 	if err != nil {
 		t.Fatalf("snapshot mutable: %v", err)
 	}
-	if v := mut.cachedSize.Load(); v != -1 {
+	if v := mut.tree.cachedSize.Load(); v != -1 {
 		t.Errorf("backed mutable snapshot cachedSize = %d, want -1", v)
 	}
 }

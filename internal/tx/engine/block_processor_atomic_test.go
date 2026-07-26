@@ -13,7 +13,7 @@ import (
 	txcore "github.com/LeJamon/go-xrpl/internal/tx"
 	"github.com/LeJamon/go-xrpl/internal/tx/ter"
 	"github.com/LeJamon/go-xrpl/keylet"
-	"github.com/LeJamon/go-xrpl/shamap"
+	"github.com/LeJamon/go-xrpl/shamap/backend"
 )
 
 func TestBlockProcessor_MetadataSerializationFailureIsAtomic(t *testing.T) {
@@ -99,11 +99,11 @@ func TestBlockProcessor_StagingDoesNotFlushBackedSHAMaps(t *testing.T) {
 	if err != nil {
 		t.Fatalf("create open ledger: %v", err)
 	}
-	family := shamap.NewMemoryNodeStoreFamily()
+	family := backend.NewMemory()
 	family.SetMinimumLedgerSeq(view.Sequence() + 1)
 	view.SetStateMapFamily(family)
-	if _, err := view.MutableSnapshot(); !errors.Is(err, shamap.ErrStoreBelowMinimum) {
-		t.Fatalf("flushing snapshot error = %v, want %v", err, shamap.ErrStoreBelowMinimum)
+	if _, err := view.MutableSnapshot(); !errors.Is(err, backend.ErrStoreBelowMinimum) {
+		t.Fatalf("flushing snapshot error = %v, want %v", err, backend.ErrStoreBelowMinimum)
 	}
 
 	bp := NewBlockProcessor(recoveryEngine(view, txcore.TapNONE))

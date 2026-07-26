@@ -9,6 +9,7 @@ import (
 	"github.com/LeJamon/go-xrpl/drops"
 	"github.com/LeJamon/go-xrpl/internal/statecompare"
 	"github.com/LeJamon/go-xrpl/shamap"
+	"github.com/LeJamon/go-xrpl/shamap/backend"
 )
 
 // StateSource loads the seed account-state SHAMap for a ledger. It exists so
@@ -46,9 +47,9 @@ type nodestoreStateSource struct {
 	dir            string
 	baseCacheMB    int
 	overlayCacheMB int
-	overlay        *shamap.NodeStoreFamily
+	overlay        *backend.NodeStore
 	overlayDir     string
-	opened         []*shamap.NodeStoreFamily
+	opened         []*backend.NodeStore
 }
 
 // baseNodeCacheItems / overlayNodeCacheItems size the positive node LRU (a count
@@ -71,7 +72,7 @@ func newNodestoreStateSource(client *statecompare.Client, dir string, baseCacheM
 	if err != nil {
 		return nil, fmt.Errorf("creating overlay dir: %w", err)
 	}
-	overlay, err := shamap.NewPebbleNodeStoreFamily(overlayDir, overlayCacheMB, overlayNodeCacheItems)
+	overlay, err := backend.OpenPebble(overlayDir, overlayCacheMB, overlayNodeCacheItems)
 	if err != nil {
 		os.RemoveAll(overlayDir)
 		return nil, fmt.Errorf("opening overlay nodestore: %w", err)
@@ -83,7 +84,7 @@ func newNodestoreStateSource(client *statecompare.Client, dir string, baseCacheM
 		overlayCacheMB: overlayCacheMB,
 		overlay:        overlay,
 		overlayDir:     overlayDir,
-		opened:         []*shamap.NodeStoreFamily{overlay},
+		opened:         []*backend.NodeStore{overlay},
 	}, nil
 }
 
@@ -94,7 +95,7 @@ func (s *nodestoreStateSource) Load(ctx context.Context, ledgerIndex uint32) (*s
 	}
 
 	basePath := filepath.Join(s.dir, fmt.Sprintf("ckpt-%d", ledgerIndex))
-	base, err := shamap.NewPebbleNodeStoreFamily(basePath, s.baseCacheMB, baseNodeCacheItems)
+	base, err := backend.OpenPebble(basePath, s.baseCacheMB, baseNodeCacheItems)
 	if err != nil {
 		return nil, nil, drops.Fees{}, fmt.Errorf("opening base nodestore %s: %w", basePath, err)
 	}

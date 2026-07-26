@@ -62,7 +62,7 @@ func (f *concurrentFetchFamily) Fetch(ctx context.Context, hash [32]byte) ([]byt
 }
 
 func newCountingFamily() *countingFamily {
-	return &countingFamily{inner: NewMemoryNodeStoreFamily()}
+	return &countingFamily{inner: newMemoryFamily()}
 }
 
 func (c *countingFamily) Fetch(ctx context.Context, hash [32]byte) ([]byte, error) {
@@ -109,7 +109,7 @@ func TestWalkFullBelow_HonorsSharedStopBeforeStoreRead(t *testing.T) {
 	defer done()
 	full, stopped, err := walkFullBelow(
 		context.Background(), dest,
-		dest.root,
+		dest.tree.root,
 		NewRootNodeID(),
 		rootHash,
 		0,
@@ -146,7 +146,7 @@ func TestWalkMapParallel_BoundsFanoutAtRootBranches(t *testing.T) {
 		t.Fatalf("FlushDirty: %v", err)
 	}
 
-	base := NewMemoryNodeStoreFamily()
+	base := newMemoryFamily()
 	if err := base.StoreBatch(context.Background(), batch.Entries); err != nil {
 		t.Fatalf("StoreBatch: %v", err)
 	}
@@ -212,7 +212,7 @@ func TestWalkMapParallel_ReleasesCompleteStoredSubtrees(t *testing.T) {
 		t.Fatalf("complete backed map reported %d missing nodes", len(missing))
 	}
 	for branch := range BranchFactor {
-		child, _, isSet := dest.root.LoadChild(branch)
+		child, _, isSet := dest.tree.root.LoadChild(branch)
 		if isSet && child != nil {
 			t.Fatalf("stored root branch %d remained materialized", branch)
 		}
@@ -269,7 +269,7 @@ func TestFinishSync_ReleasesColdDurableTree(t *testing.T) {
 		t.Fatalf("cold completeness walk fetched %d nodes, want more than one root fan-out", got)
 	}
 	for branch := range BranchFactor {
-		child, _, isSet := dest.root.LoadChild(branch)
+		child, _, isSet := dest.tree.root.LoadChild(branch)
 		if isSet && child != nil {
 			t.Fatalf("durable root branch %d remained materialized after FinishSync", branch)
 		}
@@ -318,7 +318,7 @@ func TestWalkMapParallel_RetainsIncompleteFrontier(t *testing.T) {
 			entries = append(entries, entry)
 		}
 	}
-	family := NewMemoryNodeStoreFamily()
+	family := newMemoryFamily()
 	if err := family.StoreBatch(context.Background(), entries); err != nil {
 		t.Fatalf("StoreBatch: %v", err)
 	}
@@ -433,12 +433,12 @@ func TestFullBelow_MarksCompleteSubtrees(t *testing.T) {
 	}
 	syncInto(t, dest, source, nil)
 
-	if missing := dest.WalkMap(0, nil); len(missing) != 0 {
+	if missing := dest.walkMap(0, nil); len(missing) != 0 {
 		t.Fatalf("complete tree should have no missing nodes, got %d", len(missing))
 	}
 
 	gen := dest.FullBelowCache().Generation()
-	if !dest.root.isFullBelow(gen) {
+	if !dest.tree.root.isFullBelow(gen) {
 		t.Error("root should be marked full-below after a complete walk")
 	}
 	// Every resident inner node must be marked.
@@ -460,7 +460,7 @@ func TestFullBelow_MarksCompleteSubtrees(t *testing.T) {
 		}
 		return true
 	}
-	if !check(dest.root) {
+	if !check(dest.tree.root) {
 		t.Error("every inner node in a complete tree should be full-below")
 	}
 }
@@ -507,18 +507,18 @@ func TestFullBelow_NeverMarkedWhileDescendantMissing(t *testing.T) {
 		return string(id) == withheldBytes
 	})
 
-	missing := dest.WalkMap(0, nil)
+	missing := dest.walkMap(0, nil)
 	if len(missing) == 0 {
 		t.Fatal("expected the withheld leaf to be reported missing")
 	}
 
 	gen := dest.FullBelowCache().Generation()
-	if dest.root.isFullBelow(gen) {
+	if dest.tree.root.isFullBelow(gen) {
 		t.Error("root must NOT be full-below while a descendant is missing")
 	}
 
 	// Branch 0's subtree is complete and must be marked; branch 1's must not.
-	b0, _, set0 := dest.root.LoadChild(0)
+	b0, _, set0 := dest.tree.root.LoadChild(0)
 	if !set0 {
 		t.Fatal("branch 0 should be populated")
 	}
@@ -527,7 +527,7 @@ func TestFullBelow_NeverMarkedWhileDescendantMissing(t *testing.T) {
 			t.Error("complete branch-0 subtree should be full-below")
 		}
 	}
-	b1, _, set1 := dest.root.LoadChild(1)
+	b1, _, set1 := dest.tree.root.LoadChild(1)
 	if !set1 {
 		t.Fatal("branch 1 should be populated")
 	}
@@ -542,10 +542,10 @@ func TestFullBelow_NeverMarkedWhileDescendantMissing(t *testing.T) {
 	if _, err := dest.AddKnownNodeByID(withheldLeafID, leafData); err != nil {
 		t.Fatalf("AddKnownNodeByID(withheld): %v", err)
 	}
-	if missing := dest.WalkMap(0, nil); len(missing) != 0 {
+	if missing := dest.walkMap(0, nil); len(missing) != 0 {
 		t.Fatalf("tree should be complete after filling the hole, got %d missing", len(missing))
 	}
-	if !dest.root.isFullBelow(gen) {
+	if !dest.tree.root.isFullBelow(gen) {
 		t.Error("root should be full-below once the hole is filled")
 	}
 }
@@ -586,7 +586,7 @@ func TestFullBelow_PrunesReleasedSubtree(t *testing.T) {
 	}
 
 	// Walk 1 (cold): materializes the tree from the store — O(tree) fetches.
-	if missing := dest.WalkMap(0, nil); len(missing) != 0 {
+	if missing := dest.walkMap(0, nil); len(missing) != 0 {
 		t.Fatalf("backed complete tree should have no missing nodes, got %d", len(missing))
 	}
 	coldFetches := fam.count()
@@ -596,11 +596,11 @@ func TestFullBelow_PrunesReleasedSubtree(t *testing.T) {
 
 	// Release the root's children so the whole tree is hash-only again, but
 	// keep the root (which stays marked full-below).
-	dest.root.ReleaseChildren()
+	dest.tree.root.ReleaseChildren()
 
 	// Walk 2 (warm marks): the root is proven full-below → prune, zero fetches.
 	fam.reset()
-	if missing := dest.WalkMap(0, nil); len(missing) != 0 {
+	if missing := dest.walkMap(0, nil); len(missing) != 0 {
 		t.Fatalf("warm walk found %d missing on a complete tree", len(missing))
 	}
 	if got := fam.count(); got != 0 {
@@ -612,7 +612,7 @@ func TestFullBelow_PrunesReleasedSubtree(t *testing.T) {
 	// pre-full-below O(tree) behaviour we are replacing.
 	dest.FullBelowCache().Bump()
 	fam.reset()
-	if missing := dest.WalkMap(0, nil); len(missing) != 0 {
+	if missing := dest.walkMap(0, nil); len(missing) != 0 {
 		t.Fatalf("post-bump walk found %d missing on a complete tree", len(missing))
 	}
 	if got := fam.count(); got == 0 {
@@ -651,7 +651,7 @@ func TestFullBelow_HashSetSkipsReleasedChildWithoutFetch(t *testing.T) {
 	}
 
 	// Materialize and mark the tree; the source flush populated the shared set.
-	if missing := dest.WalkMap(0, nil); len(missing) != 0 {
+	if missing := dest.walkMap(0, nil); len(missing) != 0 {
 		t.Fatalf("warm-up walk found %d missing", len(missing))
 	}
 	if dest.FullBelowCache().Size() == 0 {
@@ -661,13 +661,13 @@ func TestFullBelow_HashSetSkipsReleasedChildWithoutFetch(t *testing.T) {
 	// Release the root's children to hash-only stubs (their hashes remain in
 	// the set) and force the root itself to be re-evaluated, so the walk
 	// must reach the child slots and decide via the set.
-	dest.root.ReleaseChildren()
-	dest.root.mu.Lock()
-	dest.root.fullBelowGen = 0
-	dest.root.mu.Unlock()
+	dest.tree.root.ReleaseChildren()
+	dest.tree.root.mu.Lock()
+	dest.tree.root.fullBelowGen = 0
+	dest.tree.root.mu.Unlock()
 
 	fam.reset()
-	if missing := dest.WalkMap(0, nil); len(missing) != 0 {
+	if missing := dest.walkMap(0, nil); len(missing) != 0 {
 		t.Fatalf("walk found %d missing on a complete tree", len(missing))
 	}
 	if got := fam.count(); got != 0 {
@@ -676,11 +676,11 @@ func TestFullBelow_HashSetSkipsReleasedChildWithoutFetch(t *testing.T) {
 
 	// Clear the set: the same released children must now be re-fetched.
 	dest.FullBelowCache().Bump()
-	dest.root.mu.Lock()
-	dest.root.fullBelowGen = 0
-	dest.root.mu.Unlock()
+	dest.tree.root.mu.Lock()
+	dest.tree.root.fullBelowGen = 0
+	dest.tree.root.mu.Unlock()
 	fam.reset()
-	if missing := dest.WalkMap(0, nil); len(missing) != 0 {
+	if missing := dest.walkMap(0, nil); len(missing) != 0 {
 		t.Fatalf("post-bump walk found %d missing", len(missing))
 	}
 	if got := fam.count(); got == 0 {
@@ -689,18 +689,18 @@ func TestFullBelow_HashSetSkipsReleasedChildWithoutFetch(t *testing.T) {
 }
 
 func TestFullBelow_SharedCacheDoesNotPublishUnstoredSubtree(t *testing.T) {
-	family := NewMemoryNodeStoreFamily()
+	family := newMemoryFamily()
 	source := buildRandomState(t, 100)
 	rootHash, err := source.Hash()
 	if err != nil {
 		t.Fatal(err)
 	}
-	rootWire, err := source.root.SerializeForWire()
+	rootWire, err := source.tree.root.SerializeForWire()
 	if err != nil {
 		t.Fatal(err)
 	}
-	source.fullBelow = family.FullBelowCache()
-	if missing := source.WalkMap(0, nil); len(missing) != 0 {
+	source.backing.fullBelow = family.FullBelowCache()
+	if missing := source.walkMap(0, nil); len(missing) != 0 {
 		t.Fatalf("materialized source missing %d nodes", len(missing))
 	}
 
@@ -717,7 +717,7 @@ func TestFullBelow_SharedCacheDoesNotPublishUnstoredSubtree(t *testing.T) {
 }
 
 func TestWalkMapParallel_DoesNotReleaseUnstoredResidentSubtrees(t *testing.T) {
-	family := NewMemoryNodeStoreFamily()
+	family := newMemoryFamily()
 	source := buildRandomState(t, 256)
 	rootHash, err := source.Hash()
 	if err != nil {
@@ -741,7 +741,7 @@ func TestWalkMapParallel_DoesNotReleaseUnstoredResidentSubtrees(t *testing.T) {
 	}
 	resident := 0
 	for branch := range BranchFactor {
-		child, _, isSet := dest.root.LoadChild(branch)
+		child, _, isSet := dest.tree.root.LoadChild(branch)
 		if isSet && child != nil {
 			resident++
 		}
@@ -768,7 +768,7 @@ func TestWalkMapParallel_DoesNotReleasePendingNodesBeforeDurability(t *testing.T
 	if err != nil {
 		t.Fatal(err)
 	}
-	base := NewMemoryNodeStoreFamily()
+	base := newMemoryFamily()
 	family := &pendingDurableFamily{
 		base:    base,
 		pending: make(map[[32]byte][]byte, len(batch.Entries)),
@@ -789,7 +789,7 @@ func TestWalkMapParallel_DoesNotReleasePendingNodesBeforeDurability(t *testing.T
 	}
 	resident := 0
 	for branch := range BranchFactor {
-		child, _, isSet := dest.root.LoadChild(branch)
+		child, _, isSet := dest.tree.root.LoadChild(branch)
 		if isSet && child != nil {
 			resident++
 		}
@@ -823,7 +823,7 @@ func TestWalkMapParallel_DoesNotReleasePendingNodesBeforeDurability(t *testing.T
 }
 
 func TestStoreDirty_DoesNotPublishPartialSubtree(t *testing.T) {
-	family := NewMemoryNodeStoreFamily()
+	family := newMemoryFamily()
 	source := buildRandomState(t, 256)
 	rootHash, err := source.Hash()
 	if err != nil {
@@ -884,7 +884,7 @@ func TestStoreDirty_DoesNotPublishPartialSubtree(t *testing.T) {
 }
 
 func TestStoreDirty_DoesNotHoldFullBelowLease(t *testing.T) {
-	family := NewMemoryNodeStoreFamily()
+	family := newMemoryFamily()
 	sm, err := NewBacked(TypeState, family)
 	if err != nil {
 		t.Fatal(err)
@@ -931,11 +931,10 @@ func leafNodeIDFor(t testing.TB, sm *SHAMap, key [32]byte) NodeID {
 	if _, err := sm.walkToKey(context.Background(), key, stack, true); err != nil {
 		t.Fatalf("walkToKey: %v", err)
 	}
-	_, id, ok := stack.Top()
-	if !ok {
+	if stack.IsEmpty() {
 		t.Fatalf("no leaf on stack for key %x", key[:4])
 	}
-	return id
+	return stack.entries[len(stack.entries)-1].nodeID
 }
 
 // TestFullBelowCache_GenerationAndBump covers the cache's generation
@@ -980,6 +979,39 @@ func TestFullBelowCache_GenerationAndBump(t *testing.T) {
 	}
 }
 
+func TestFullBelowCacheBeginMutationInvalidatesAndBlocksWalks(t *testing.T) {
+	cache := NewFullBelowCache()
+	generation := cache.Generation()
+	hash := [32]byte{0xA5}
+	cache.Insert(generation, hash)
+
+	endMutation := cache.BeginMutation()
+	if got := cache.Generation(); got == generation {
+		t.Fatalf("generation remained %d during backing mutation", got)
+	}
+	if got := cache.Size(); got != 0 {
+		t.Fatalf("cache size during backing mutation = %d, want 0", got)
+	}
+
+	walkStarted := make(chan struct{})
+	walkDone := make(chan struct{})
+	go func() {
+		close(walkStarted)
+		_, endWalk := cache.Begin()
+		endWalk()
+		close(walkDone)
+	}()
+	<-walkStarted
+	select {
+	case <-walkDone:
+		t.Fatal("walk started before backing mutation completed")
+	default:
+	}
+
+	endMutation()
+	<-walkDone
+}
+
 func TestFullBelowCache_RejectsStaleGenerationInsert(t *testing.T) {
 	c := NewFullBelowCache()
 	stale := c.Generation()
@@ -992,7 +1024,7 @@ func TestFullBelowCache_RejectsStaleGenerationInsert(t *testing.T) {
 }
 
 func TestFullBelowCache_SharedByFamily(t *testing.T) {
-	family := NewMemoryNodeStoreFamily()
+	family := newMemoryFamily()
 	first, err := NewBacked(TypeState, family)
 	if err != nil {
 		t.Fatal(err)
@@ -1298,7 +1330,7 @@ func benchmarkMissingWalk(b *testing.B, leaves int, bumpEachWalk bool) {
 	leafSeen := 0
 	for i := len(nodes) - 1; i >= 0 && leafSeen < withhold; i-- {
 		if node, derr := deserializeNodeFromWire(nodes[i].Data); derr == nil {
-			if _, isLeaf := node.(LeafNode); isLeaf {
+			if _, isLeaf := node.(mapLeaf); isLeaf {
 				nodes[i], nodes[len(nodes)-1-leafSeen] = nodes[len(nodes)-1-leafSeen], nodes[i]
 				leafSeen++
 			}

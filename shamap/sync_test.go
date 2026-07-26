@@ -7,6 +7,11 @@ import (
 	"testing"
 )
 
+func (sm *SHAMap) addKnownNodeFromPrefixForTest(nodeID NodeID, data []byte) (AddNodeResult, error) {
+	result, _, err := sm.addKnownNodeFromPrefix(context.Background(), nodeID, data, false)
+	return result, err
+}
+
 func TestSyncFilter(t *testing.T) {
 	// Test DefaultSyncFilter
 	t.Run("DefaultSyncFilter", func(t *testing.T) {
@@ -176,8 +181,8 @@ func TestAddRootNodeErrors(t *testing.T) {
 	}
 }
 
-// TestWalkMap_NotGatedOnState verifies that unlike GetMissingNodes, the
-// named WalkMap/WalkMapParallel APIs walk the tree regardless of the
+// TestwalkMap_NotGatedOnState verifies that unlike GetMissingNodes, the
+// named walkMap/walkMapParallel APIs walk the tree regardless of the
 // map's state. This matches rippled's SHAMap::walkMap which has no
 // state precondition.
 func TestWalkMap_NotGatedOnState(t *testing.T) {
@@ -190,22 +195,22 @@ func TestWalkMap_NotGatedOnState(t *testing.T) {
 		}
 	}
 
-	// source is StateModifying — a complete tree.
-	if got := source.WalkMap(0, nil); len(got) != 0 {
-		t.Errorf("WalkMap on complete StateModifying map: want 0 missing, got %d", len(got))
+	// source is modifying — a complete tree.
+	if got := source.walkMap(0, nil); len(got) != 0 {
+		t.Errorf("walkMap on complete modifying map: want 0 missing, got %d", len(got))
 	}
-	if got := source.WalkMapParallel(0, nil); len(got) != 0 {
-		t.Errorf("WalkMapParallel on complete StateModifying map: want 0 missing, got %d", len(got))
+	if got := source.walkMapParallel(0, nil); len(got) != 0 {
+		t.Errorf("walkMapParallel on complete modifying map: want 0 missing, got %d", len(got))
 	}
 
-	// GetMissingNodes still requires StateSyncing.
+	// GetMissingNodes still requires a syncing map.
 	if got := source.GetMissingNodes(0, nil); got != nil {
 		t.Errorf("GetMissingNodes on non-syncing map: want nil, got %v", got)
 	}
 }
 
-// TestWalkMap_SerialVsParallelAgree builds a partially-synced destination
-// map and asserts WalkMap and WalkMapParallel agree on the set of missing
+// TestwalkMap_SerialVsParallelAgree builds a partially-synced destination
+// map and asserts walkMap and walkMapParallel agree on the set of missing
 // nodes. The parallel version may reorder results, so comparison is
 // set-based.
 func TestWalkMap_SerialVsParallelAgree(t *testing.T) {
@@ -237,8 +242,8 @@ func TestWalkMap_SerialVsParallelAgree(t *testing.T) {
 		t.Fatalf("AddRootNode: %v", err)
 	}
 
-	serial := dest.WalkMap(0, nil)
-	parallel := dest.WalkMapParallel(0, nil)
+	serial := dest.walkMap(0, nil)
+	parallel := dest.walkMapParallel(0, nil)
 
 	if len(serial) == 0 {
 		t.Fatal("expected missing nodes from a root-only dest, got none")
@@ -268,7 +273,7 @@ func TestWalkMap_SerialVsParallelAgree(t *testing.T) {
 	}
 }
 
-// TestWalkMap_MaxMissingHonored verifies both walkers respect the
+// TestwalkMap_MaxMissingHonored verifies both walkers respect the
 // maxMissing bound and return exactly that many entries when at least
 // that many are available.
 func TestWalkMap_MaxMissingHonored(t *testing.T) {
@@ -295,30 +300,30 @@ func TestWalkMap_MaxMissingHonored(t *testing.T) {
 	}
 
 	// 16 leaves on distinct first-nibble branches → 16 missing.
-	full := dest.WalkMap(0, nil)
+	full := dest.walkMap(0, nil)
 	if len(full) < 4 {
 		t.Fatalf("expected at least 4 missing nodes, got %d", len(full))
 	}
 
 	bound := 3
-	got := dest.WalkMap(bound, nil)
+	got := dest.walkMap(bound, nil)
 	if len(got) != bound {
-		t.Errorf("WalkMap(maxMissing=%d): got %d entries", bound, len(got))
+		t.Errorf("walkMap(maxMissing=%d): got %d entries", bound, len(got))
 	}
 
 	// The parallel walker's stop flag lives inside the shared-result
 	// mutex, so an exact bound holds — workers that hit the lock after
 	// stopped is set skip their append entirely.
-	gotP := dest.WalkMapParallel(bound, nil)
+	gotP := dest.walkMapParallel(bound, nil)
 	if len(gotP) != bound {
-		t.Errorf("WalkMapParallel(maxMissing=%d): got %d entries", bound, len(gotP))
+		t.Errorf("walkMapParallel(maxMissing=%d): got %d entries", bound, len(gotP))
 	}
 }
 
-// TestWalkMap_BackedLazyLoadAfterRelease pins the conformance behavior
+// TestwalkMap_BackedLazyLoadAfterRelease pins the conformance behavior
 // against rippled's descendNoStore-based walker (SHAMap.cpp:351-357): on
 // a backed map whose in-memory children have been released after a
-// flush, both WalkMap and WalkMapParallel must reach the on-disk data
+// flush, both walkMap and walkMapParallel must reach the on-disk data
 // via lazy-load and report zero missing nodes — not the false positives
 // that a pure in-memory walker would emit.
 func TestWalkMap_BackedLazyLoadAfterRelease(t *testing.T) {
@@ -341,8 +346,8 @@ func TestWalkMap_BackedLazyLoadAfterRelease(t *testing.T) {
 		}
 	}
 
-	// FlushDirty(true) writes every dirty node to family and then calls
-	// ReleaseChildren on each inner — children are nil, hashes remain.
+	// FlushDirtyAndRelease writes every dirty node to family, then releases
+	// each inner node's children while retaining their hashes.
 	batch, err := src.FlushDirtyAndRelease()
 	if err != nil {
 		t.Fatalf("FlushDirty: %v", err)
@@ -351,11 +356,11 @@ func TestWalkMap_BackedLazyLoadAfterRelease(t *testing.T) {
 		t.Fatalf("StoreBatch: %v", err)
 	}
 
-	if got := src.WalkMap(0, nil); len(got) != 0 {
-		t.Errorf("WalkMap on backed map with released children: want 0 missing, got %d", len(got))
+	if got := src.walkMap(0, nil); len(got) != 0 {
+		t.Errorf("walkMap on backed map with released children: want 0 missing, got %d", len(got))
 	}
-	if got := src.WalkMapParallel(0, nil); len(got) != 0 {
-		t.Errorf("WalkMapParallel on backed map with released children: want 0 missing, got %d", len(got))
+	if got := src.walkMapParallel(0, nil); len(got) != 0 {
+		t.Errorf("walkMapParallel on backed map with released children: want 0 missing, got %d", len(got))
 	}
 
 	// Sanity: every original key still resolves through the lazy-load
@@ -797,11 +802,11 @@ func TestAddKnownNodeByID_LeafMidPathReturnsDuplicate(t *testing.T) {
 	}
 }
 
-// Direct exercise of the public AddKnownNodeFromPrefix API: reconstructs a
-// map from fetch-pack ([HashPrefix][body]) blobs keyed by the NodeIDs that
-// GetMissingNodes reports, then pins the duplicate / poison / root /
-// empty-data / not-syncing outcomes.
-func TestAddKnownNodeFromPrefix_Direct(t *testing.T) {
+// Directly exercises prefix-format acquisition: reconstructs a map from
+// fetch-pack ([HashPrefix][body]) blobs keyed by the NodeIDs that
+// GetMissingNodes reports, then pins duplicate, poison, root, empty-data, and
+// not-syncing outcomes.
+func TestPrefixAcquisitionDirect(t *testing.T) {
 	source := New(TypeTransaction)
 	for branch := range byte(3) {
 		for sub := range byte(3) {
@@ -836,7 +841,7 @@ func TestAddKnownNodeFromPrefix_Direct(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ChildNodeID: %v", err)
 	}
-	if _, err := dest.AddKnownNodeFromPrefix(someID, []byte{1}); !errors.Is(err, ErrSyncNotInProgress) {
+	if _, err := dest.addKnownNodeFromPrefixForTest(someID, []byte{1}); !errors.Is(err, ErrSyncNotInProgress) {
 		t.Errorf("not-syncing: want ErrSyncNotInProgress, got %v", err)
 	}
 
@@ -847,10 +852,10 @@ func TestAddKnownNodeFromPrefix_Direct(t *testing.T) {
 		t.Fatalf("AddRootNode: %v", err)
 	}
 
-	if _, err := dest.AddKnownNodeFromPrefix(NewRootNodeID(), rootData); !errors.Is(err, ErrUnexpectedNode) {
+	if _, err := dest.addKnownNodeFromPrefixForTest(NewRootNodeID(), rootData); !errors.Is(err, ErrUnexpectedNode) {
 		t.Errorf("root nodeID: want ErrUnexpectedNode, got %v", err)
 	}
-	if _, err := dest.AddKnownNodeFromPrefix(someID, nil); !errors.Is(err, ErrInvalidNodeData) {
+	if _, err := dest.addKnownNodeFromPrefixForTest(someID, nil); !errors.Is(err, ErrInvalidNodeData) {
 		t.Errorf("empty data: want ErrInvalidNodeData, got %v", err)
 	}
 
@@ -864,7 +869,7 @@ func TestAddKnownNodeFromPrefix_Direct(t *testing.T) {
 		// rejected by the parent-hash check before it can attach.
 		if !poisonTested && len(missing) >= 2 && missing[0].Hash != missing[1].Hash {
 			poisonTested = true
-			if _, err := dest.AddKnownNodeFromPrefix(missing[0].NodeID, byHash[missing[1].Hash]); !errors.Is(err, ErrNodeHashMismatch) {
+			if _, err := dest.addKnownNodeFromPrefixForTest(missing[0].NodeID, byHash[missing[1].Hash]); !errors.Is(err, ErrNodeHashMismatch) {
 				t.Fatalf("poison: want ErrNodeHashMismatch, got %v", err)
 			}
 		}
@@ -873,14 +878,14 @@ func TestAddKnownNodeFromPrefix_Direct(t *testing.T) {
 			if !ok {
 				t.Fatalf("no fetch-pack blob for missing hash %x", missing[i].Hash[:8])
 			}
-			res, err := dest.AddKnownNodeFromPrefix(missing[i].NodeID, data)
+			res, err := dest.addKnownNodeFromPrefixForTest(missing[i].NodeID, data)
 			if err != nil {
-				t.Fatalf("AddKnownNodeFromPrefix depth=%d: %v", missing[i].NodeID.Depth(), err)
+				t.Fatalf("prefix acquisition depth=%d: %v", missing[i].NodeID.Depth(), err)
 			}
 			if res != NodeUseful {
 				t.Fatalf("fresh attach depth=%d: want NodeUseful, got %v", missing[i].NodeID.Depth(), res)
 			}
-			res, err = dest.AddKnownNodeFromPrefix(missing[i].NodeID, data)
+			res, err = dest.addKnownNodeFromPrefixForTest(missing[i].NodeID, data)
 			if err != nil || res != NodeDuplicate {
 				t.Fatalf("duplicate: want (NodeDuplicate, nil), got (%v, %v)", res, err)
 			}

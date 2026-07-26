@@ -6,8 +6,6 @@ import (
 	"fmt"
 	"sync"
 	"sync/atomic"
-
-	"github.com/LeJamon/go-xrpl/protocol"
 )
 
 const backedWalkProofChunkSize = 1024
@@ -91,7 +89,7 @@ type backedWalkItem struct {
 	depth      int
 	branch     int
 	parent     *innerNode
-	node       Node
+	node       mapNode
 }
 
 type backedWalkFrame struct {
@@ -125,13 +123,13 @@ type traversalNode struct {
 	inner    bool
 	branches uint16
 	hashes   [BranchFactor][32]byte
-	children [BranchFactor]Node
+	children [BranchFactor]mapNode
 }
 
 func (sm *SHAMap) walkBackedContext(
 	ctx context.Context,
 	root *innerNode,
-	family Family,
+	access *familyAccess,
 	cache *FullBelowCache,
 	gen uint32,
 	maxMissing int,
@@ -141,10 +139,10 @@ func (sm *SHAMap) walkBackedContext(
 	if cache.Has(gen, rootHash) {
 		return nil, nil
 	}
-	if sm.backedWalk == nil || sm.backedWalk.generation != gen || sm.backedWalk.rootHash != rootHash {
-		sm.backedWalk = newBackedWalkCursor(root, rootHash, gen)
+	if sm.acquisition.cursor == nil || sm.acquisition.cursor.generation != gen || sm.acquisition.cursor.rootHash != rootHash {
+		sm.acquisition.cursor = newBackedWalkCursor(root, rootHash, gen)
 	}
-	cursor := sm.backedWalk
+	cursor := sm.acquisition.cursor
 
 	var (
 		missing  []MissingNode
@@ -188,7 +186,7 @@ func (sm *SHAMap) walkBackedContext(
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			if err := sm.walkBackedLane(ctx, family, cache, gen, root, lane, filter, &stop, report); err != nil {
+			if err := sm.walkBackedLane(ctx, access, cache, gen, root, lane, filter, &stop, report); err != nil {
 				errMu.Lock()
 				if firstErr == nil {
 					firstErr = err
@@ -218,7 +216,7 @@ func (sm *SHAMap) walkBackedContext(
 		if !takeTraversalVisit(ctx) {
 			return nil, ErrTraversalBudget
 		}
-		data, stored, err := fetchWithDurability(ctx, family, rootHash)
+		data, stored, err := access.fetchPreferDurable(ctx, rootHash)
 		if err != nil {
 			return nil, err
 		}
@@ -259,7 +257,7 @@ func newBackedWalkCursor(root *innerNode, rootHash [32]byte, gen uint32) *backed
 
 func (sm *SHAMap) walkBackedLane(
 	ctx context.Context,
-	family Family,
+	access *familyAccess,
 	cache *FullBelowCache,
 	gen uint32,
 	root *innerNode,
@@ -294,7 +292,7 @@ func (sm *SHAMap) walkBackedLane(
 			if !takeTraversalVisit(ctx) {
 				return ErrTraversalBudget
 			}
-			view, found, stored, err := sm.loadTraversalNode(ctx, family, root, frame.item)
+			view, found, stored, err := sm.loadTraversalNode(ctx, access, root, frame.item)
 			if err != nil {
 				return err
 			}
@@ -412,13 +410,13 @@ func dedupeBackedWalkItems(items []backedWalkItem) []backedWalkItem {
 	return out
 }
 
-func (sm *SHAMap) loadTraversalNode(ctx context.Context, family Family, root *innerNode, item backedWalkItem) (traversalNode, bool, bool, error) {
-	data, stored, err := fetchWithDurability(ctx, family, item.hash)
+func (sm *SHAMap) loadTraversalNode(ctx context.Context, access *familyAccess, root *innerNode, item backedWalkItem) (traversalNode, bool, bool, error) {
+	data, stored, err := access.fetchPreferDurable(ctx, item.hash)
 	if err != nil {
 		return traversalNode{}, false, false, err
 	}
 	if len(data) != 0 {
-		sm.familyLoads.Add(1)
+		sm.backing.loads.Add(1)
 		view, err := decodeTraversalNode(data, item.hash)
 		if err != nil {
 			return traversalNode{}, false, false, err
@@ -434,8 +432,8 @@ func (sm *SHAMap) loadTraversalNode(ctx context.Context, family Family, root *in
 	return traversalNode{}, false, false, nil
 }
 
-func attachedNode(root *innerNode, nodeID NodeID) Node {
-	current := Node(root)
+func attachedNode(root *innerNode, nodeID NodeID) mapNode {
+	current := mapNode(root)
 	if current == nil {
 		return nil
 	}
@@ -454,7 +452,7 @@ func attachedNode(root *innerNode, nodeID NodeID) Node {
 	return current
 }
 
-func traversalNodeFromNode(node Node) traversalNode {
+func traversalNodeFromNode(node mapNode) traversalNode {
 	inner, ok := node.(*innerNode)
 	if !ok {
 		return traversalNode{}
@@ -467,43 +465,30 @@ func traversalNodeFromNode(node Node) traversalNode {
 }
 
 func decodeTraversalNode(data []byte, expected [32]byte) (traversalNode, error) {
-	if len(data) < 4 {
-		return traversalNode{}, fmt.Errorf("%w: data too short for prefix: %d bytes", ErrInvalidNodeData, len(data))
+	body, err := decodePrefixBody(data)
+	if err != nil {
+		return traversalNode{}, fmt.Errorf("%w: %v", ErrInvalidNodeData, err)
 	}
-	var prefix [4]byte
-	copy(prefix[:], data[:4])
 	view := traversalNode{}
-	switch prefix {
-	case protocol.HashPrefixInnerNode():
-		if len(data) != fullInnerSerializedSize {
-			return traversalNode{}, fmt.Errorf("%w: invalid inner node size: %d", ErrInvalidNodeData, len(data))
-		}
+	switch body.kind {
+	case storedInner:
 		view.inner = true
-		for branch := range BranchFactor {
-			copy(view.hashes[branch][:], data[4+branch*32:4+(branch+1)*32])
-			if !isZeroHash(view.hashes[branch]) {
-				view.branches |= 1 << branch
-			}
+		view.branches, err = decodeInnerBranches(body, &view.hashes)
+		if err != nil {
+			return traversalNode{}, fmt.Errorf("%w: %v", ErrInvalidNodeData, err)
 		}
-	case protocol.HashPrefixLeafNode():
-		if len(data) < 4+12+32 {
+	case storedAccountState:
+		if len(body.payload) < 12 {
 			return traversalNode{}, fmt.Errorf("%w: account-state leaf too short: %d", ErrInvalidNodeData, len(data))
 		}
-		var key [32]byte
-		copy(key[:], data[len(data)-32:])
-		if isZeroHash(key) {
-			return traversalNode{}, fmt.Errorf("%w: account-state leaf has zero key", ErrInvalidNodeData)
-		}
-	case protocol.HashPrefixTransactionID():
-		if len(data) < 4+12 {
+	case storedTransaction:
+		if len(body.payload) < 12 {
 			return traversalNode{}, fmt.Errorf("%w: transaction leaf too short: %d", ErrInvalidNodeData, len(data))
 		}
-	case protocol.HashPrefixTxNode():
-		if len(data) < 4+12+32 {
+	case storedTransactionWithMeta:
+		if len(body.payload) < 12 {
 			return traversalNode{}, fmt.Errorf("%w: transaction-with-metadata leaf too short: %d", ErrInvalidNodeData, len(data))
 		}
-	default:
-		return traversalNode{}, fmt.Errorf("%w: unknown hash prefix: %x", ErrInvalidNodeData, prefix)
 	}
 	digest := sha512.Sum512(data)
 	var actual [32]byte

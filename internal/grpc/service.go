@@ -357,9 +357,9 @@ func appendNeighbors(ctx context.Context, obj *rpcv1.RawLedgerObject, resp *rpcv
 	var blob []byte
 	switch d.Type {
 	case shamap.DiffAdded:
-		blob = d.SecondItem.DataUnsafe()
+		blob = d.SecondItem.Data()
 	case shamap.DiffRemoved:
-		blob = d.FirstItem.DataUnsafe()
+		blob = d.FirstItem.Data()
 	}
 	if !isBookDirectory(blob) {
 		return nil

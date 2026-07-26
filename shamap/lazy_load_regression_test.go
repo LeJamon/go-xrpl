@@ -88,25 +88,25 @@ func TestFindDifferenceBackedLazyLoad(t *testing.T) {
 // TestIsCompleteBackedLazyLoad is a regression test for the missing-node
 // walk divergence: FinishSync/IsComplete used a raw-pointer walk that did
 // not lazy-load, so a backed map with released children was reported
-// incomplete even though WalkMap (which lazy-loads) said it was complete.
+// incomplete even though walkMap (which lazy-loads) said it was complete.
 func TestIsCompleteBackedLazyLoad(t *testing.T) {
 	family := newMemoryFamily()
 	sm := llr_buildBacked(t, family, 12)
 
-	// IsComplete/FinishSync must run before WalkMap: WalkMap's lazy load
+	// IsComplete/FinishSync must run before walkMap: walkMap's lazy load
 	// installs the fetched children back into the tree, which would mask
 	// a non-lazy-loading completeness walk.
 	if err := sm.StartSync(); err != nil {
 		t.Fatalf("StartSync: %v", err)
 	}
 	if !sm.IsComplete() {
-		t.Error("IsComplete must agree with WalkMap on a backed map with released children")
+		t.Error("IsComplete must agree with walkMap on a backed map with released children")
 	}
 	if err := sm.FinishSync(); err != nil {
 		t.Errorf("FinishSync on fully-stored backed map: %v", err)
 	}
-	if missing := sm.WalkMap(0, nil); len(missing) != 0 {
-		t.Fatalf("WalkMap reports %d missing nodes on a fully-stored map", len(missing))
+	if missing := sm.walkMap(0, nil); len(missing) != 0 {
+		t.Fatalf("walkMap reports %d missing nodes on a fully-stored map", len(missing))
 	}
 }
 

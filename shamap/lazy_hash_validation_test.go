@@ -26,11 +26,11 @@ func TestLazyFetchRejectsChildHashMismatch(t *testing.T) {
 	if err := flushToFamily(source, family); err != nil {
 		t.Fatal(err)
 	}
-	firstHash, err := source.root.ChildHash(1)
+	firstHash, err := source.tree.root.ChildHash(1)
 	if err != nil {
 		t.Fatal(err)
 	}
-	secondHash, err := source.root.ChildHash(8)
+	secondHash, err := source.tree.root.ChildHash(8)
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -25,11 +25,11 @@ import (
 //     The two methods walk identically, so callers can zip them.
 //   - Bytes:               O(N) walk.
 //
-// SHAMap errors. For an unbacked SHAMap that stays in StateModifying —
-// which is how we use it here — the only error source on Has/Hash is
-// StateInvalid, which TxSetImpl never enters. (Backed maps additionally
-// propagate I/O errors from descend(); mutators reject StateImmutable
-// and StateSyncing.) Contains treats any such error as "fail open"
+// SHAMap errors. For an unbacked, mutable SHAMap — which is how we use it
+// here — the only error source on Has/Hash is the private invalid state,
+// which TxSetImpl never enters. (Backed maps additionally propagate I/O
+// errors from descend(); mutators reject immutable and syncing maps.)
+// Contains treats any such error as "fail open"
 // (false); ID treats it as the zero hash, which collides with the
 // canonical hash of the empty SHAMap. Reaching that path is a
 // programmer-error condition.
@@ -176,20 +176,13 @@ func (ts *TxSetImpl) Size() int {
 // Bytes returns the tx blobs concatenated with a 4-byte length prefix
 // each, walked in canonical SHAMap key order.
 //
-// Uses Item.DataUnsafe() (zero-copy) because each blob is written into
-// our own owned buffer before the next ForEach iteration — the unsafe
-// alias never escapes. Txs(), by contrast, uses Item.Data() because
-// the slices are handed back to callers who may mutate or retain them.
-// Do not "normalize" this asymmetry without thinking through both
-// invariants.
-//
 // Not currently wired to the wire or to disk. If it ever is,
 // consumers must accept the canonical-order framing (insertion order
 // is no longer observable).
 func (ts *TxSetImpl) Bytes() []byte {
 	var buf bytes.Buffer
 	_ = ts.txMap.ForEach(func(it *shamap.Item) bool {
-		blob := it.DataUnsafe()
+		blob := it.Data()
 		l := uint32(len(blob))
 		buf.Write([]byte{byte(l >> 24), byte(l >> 16), byte(l >> 8), byte(l)})
 		buf.Write(blob)

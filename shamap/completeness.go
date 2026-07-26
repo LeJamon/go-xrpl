@@ -42,24 +42,27 @@ const maxWalkDepth = 64
 // simply does not have is recorded in Missing and the walk continues, so a
 // single call enumerates every gap in one pass.
 func (sm *SHAMap) CheckComplete(ctx context.Context) (*CompletenessResult, error) {
-	sm.mu.RLock()
-	defer sm.mu.RUnlock()
+	sm.tree.mu.RLock()
+	defer sm.tree.mu.RUnlock()
+	sm.backing.mu.RLock()
+	defer sm.backing.mu.RUnlock()
 
 	res := &CompletenessResult{}
-	if sm.root == nil {
+	if sm.tree.root == nil {
 		return res, nil
 	}
-	if err := sm.checkNodeComplete(ctx, sm.root, 0, res); err != nil {
+	if err := sm.checkNodeComplete(ctx, sm.tree.root, 0, res); err != nil {
 		return nil, err
 	}
 	return res, nil
 }
 
-// checkNodeComplete recurses into node. The caller holds sm.mu.RLock; node is
+// checkNodeComplete recurses into node. The caller holds the tree and backing
+// read locks; node is
 // an already-resolved node (the root, an in-memory child, or one just fetched
 // from the store), so it is never itself missing — only its referenced
 // children can be.
-func (sm *SHAMap) checkNodeComplete(ctx context.Context, node Node, depth int, res *CompletenessResult) error {
+func (sm *SHAMap) checkNodeComplete(ctx context.Context, node mapNode, depth int, res *CompletenessResult) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
@@ -103,12 +106,12 @@ func (sm *SHAMap) checkNodeComplete(ctx context.Context, node Node, depth int, r
 			ParentHash: parentHash,
 			Branch:     branch,
 		}
-		if !sm.backed || sm.family == nil {
+		if !sm.backing.access.available() {
 			res.Missing = append(res.Missing, miss)
 			continue
 		}
 
-		data, err := sm.family.Fetch(ctx, miss.Hash)
+		data, err := sm.backing.access.fetch(ctx, miss.Hash)
 		if err != nil {
 			return fmt.Errorf("shamap: fetch node %x at depth %d: %w", miss.Hash[:8], miss.Depth, err)
 		}

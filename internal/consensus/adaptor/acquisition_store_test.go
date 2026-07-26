@@ -266,7 +266,7 @@ func TestAcquisitionStoreScopeCheckpointReprovesFromDurableStore(t *testing.T) {
 		if nodeID.IsRoot() {
 			continue
 		}
-		result, entry, addErr := dest.AddKnownNodeByIDWithEntry(nodeID, node.NodeData)
+		result, entry, addErr := dest.AddKnownNodeByIDWithEntryContext(t.Context(), nodeID, node.NodeData)
 		require.NoError(t, addErr)
 		if result == shamap.NodeUseful {
 			entries = append(entries, entry)

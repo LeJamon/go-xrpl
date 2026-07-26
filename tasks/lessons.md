@@ -19,3 +19,6 @@
 - Before reporting lint as green, run the exact required CI configuration.
   `just lint` uses the advisory warnings config and does not replace the strict
   default `golangci-lint run` check used by GitHub Actions.
+- Do not expand a maintainability or dead-code audit into protocol-conformance
+  work when behavior is explicitly treated as established. Preserve behavior
+  and evaluate only the requested engineering qualities.

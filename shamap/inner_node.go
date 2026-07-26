@@ -2,11 +2,9 @@ package shamap
 
 import (
 	"crypto/sha512"
-	"encoding/hex"
 	"errors"
 	"fmt"
 	"math/bits"
-	"strings"
 	"sync"
 
 	"github.com/LeJamon/go-xrpl/protocol"
@@ -28,7 +26,7 @@ var (
 type innerNode struct {
 	baseNode
 	mu       sync.RWMutex
-	children [BranchFactor]Node
+	children [BranchFactor]mapNode
 	hashes   [BranchFactor][32]byte
 	isBranch uint16
 	// fullBelowGen caches the FullBelowCache generation at which this node
@@ -86,7 +84,7 @@ func (n *innerNode) BranchCount() int {
 }
 
 // Child returns the child node at the given branch index
-func (n *innerNode) Child(index int) (Node, error) {
+func (n *innerNode) Child(index int) (mapNode, error) {
 	if index < 0 || index >= BranchFactor {
 		return nil, ErrInvalidBranch
 	}
@@ -97,7 +95,7 @@ func (n *innerNode) Child(index int) (Node, error) {
 }
 
 // SetChild sets the child node at the given branch index
-func (n *innerNode) SetChild(index int, child Node) error {
+func (n *innerNode) SetChild(index int, child mapNode) error {
 	if index < 0 || index >= BranchFactor {
 		return ErrInvalidBranch
 	}
@@ -125,7 +123,7 @@ func (n *innerNode) SetChild(index int, child Node) error {
 // may lag child.Hash() during a mutation cycle because dirtyUp clears
 // parent hashes before they are recomputed. Callers that need the child's
 // own current hash should call child.Hash() on the returned pointer.
-func (n *innerNode) LoadChild(index int) (Node, [32]byte, bool) {
+func (n *innerNode) LoadChild(index int) (mapNode, [32]byte, bool) {
 	n.mu.RLock()
 	defer n.mu.RUnlock()
 	return n.children[index], n.hashes[index], n.isBranch&(1<<index) != 0
@@ -140,7 +138,7 @@ func (n *innerNode) LoadChild(index int) (Node, [32]byte, bool) {
 // SHAMapInnerNode.cpp:397-412, enforced by construction at callers, not at
 // runtime): branch must be a non-empty branch in isBranch, child must be
 // non-nil, and child.Hash() must equal n.hashes[index].
-func (n *innerNode) SetChildIfNil(index int, child Node) Node {
+func (n *innerNode) SetChildIfNil(index int, child mapNode) mapNode {
 	n.mu.Lock()
 	defer n.mu.Unlock()
 	if existing := n.children[index]; existing != nil {
@@ -150,7 +148,7 @@ func (n *innerNode) SetChildIfNil(index int, child Node) Node {
 	return child
 }
 
-func (n *innerNode) ReleaseChild(index int, child Node) bool {
+func (n *innerNode) ReleaseChild(index int, child mapNode) bool {
 	if child == nil {
 		return false
 	}
@@ -233,23 +231,6 @@ func (n *innerNode) childPreimageHash(i int) [32]byte {
 		return child.Hash()
 	}
 	return n.hashes[i]
-}
-
-// firstStalePreimage reports the first loaded branch whose cached hashes[i]
-// disagrees with its live child's hash. ok is false when every loaded child
-// matches its cached preimage — the invariant SetChild and updateHashDeep
-// maintain. Caller must hold n.mu.
-func (n *innerNode) firstStalePreimage() (branch int, cached, live [32]byte, ok bool) {
-	for i := range BranchFactor {
-		child := n.children[i]
-		if child == nil {
-			continue
-		}
-		if lh := child.Hash(); lh != n.hashes[i] {
-			return i, n.hashes[i], lh, true
-		}
-	}
-	return 0, [32]byte{}, [32]byte{}, false
 }
 
 // updateHashDeep resyncs the cached hashes[] preimage with every loaded child,
@@ -434,109 +415,6 @@ func parseCompressedInnerNode(data []byte) (*innerNode, error) {
 
 	node.SetDirty(false) // loaded from wire, not modified
 	return node, nil
-}
-
-// String returns a human-readable representation of the node
-func (n *innerNode) String(id NodeID) string {
-	n.mu.RLock()
-	defer n.mu.RUnlock()
-
-	var sb strings.Builder
-	sb.WriteString(fmt.Sprintf("innerNode ID: %s\n", id.String()))
-	sb.WriteString(fmt.Sprintf("Hash: %s\n", hex.EncodeToString(n.hash[:])))
-	sb.WriteString("Branches:\n")
-
-	for i := range BranchFactor {
-		if n.isBranch&(1<<i) != 0 {
-			sb.WriteString(fmt.Sprintf("  %d: %s\n", i, hex.EncodeToString(n.hashes[i][:])))
-		}
-	}
-
-	return sb.String()
-}
-
-// Invariants performs internal consistency checks
-func (n *innerNode) Invariants(isRoot bool) error {
-	n.mu.RLock()
-	defer n.mu.RUnlock()
-
-	count := 0
-	for i := range BranchFactor {
-		hasChild := n.children[i] != nil
-		hasBit := (n.isBranch & (1 << i)) != 0
-		hasHash := !isZeroHash(n.hashes[i])
-
-		// Valid states:
-		// 1. hasBit && hasChild && hasHash — expanded node
-		// 2. hasBit && !hasChild && hasHash — hash-only (lazy, backed)
-		// 3. !hasBit && !hasChild && !hasHash — empty branch
-		if hasBit && !hasHash {
-			return fmt.Errorf("branch %d: bit set but no hash", i)
-		}
-		if hasChild && !hasBit {
-			return fmt.Errorf("branch %d: child present but bit not set", i)
-		}
-		if !hasBit && hasChild {
-			return fmt.Errorf("branch %d: child present in empty branch", i)
-		}
-
-		if hasChild || hasBit {
-			count++
-		}
-	}
-
-	if branch, _, _, stale := n.firstStalePreimage(); stale {
-		return fmt.Errorf("branch %d hash mismatch", branch)
-	}
-
-	if count == 0 && !isRoot {
-		return ErrEmptyNonRoot
-	}
-
-	// Verify hash is correct
-	if !n.IsZeroHash() {
-		// Create a temporary copy to verify hash
-		temp := &innerNode{
-			isBranch: n.isBranch,
-			hashes:   n.hashes,
-			children: n.children,
-		}
-		if err := temp.updateHashUnsafe(); err != nil {
-			return fmt.Errorf("failed to verify hash: %w", err)
-		}
-		if temp.hash != n.hash {
-			return fmt.Errorf("stored hash does not match computed hash")
-		}
-	}
-
-	return nil
-}
-
-// Clone returns a deep copy of the node
-func (n *innerNode) Clone() (Node, error) {
-	n.mu.RLock()
-	defer n.mu.RUnlock()
-
-	clone := &innerNode{
-		isBranch:     n.isBranch,
-		hashes:       n.hashes, // Copy the array
-		fullBelowGen: n.fullBelowGen,
-	}
-	clone.hash = n.hash
-	clone.SetDirty(true)
-
-	// Deep clone children
-	for i := range BranchFactor {
-		if n.children[i] != nil {
-			childClone, err := n.children[i].Clone()
-			if err != nil {
-				return nil, fmt.Errorf("failed to clone child at branch %d: %w", i, err)
-			}
-			clone.children[i] = childClone
-		}
-	}
-
-	return clone, nil
 }
 
 // shallowClone returns a copy of n that shares every child pointer and

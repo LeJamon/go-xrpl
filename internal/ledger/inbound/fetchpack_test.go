@@ -9,6 +9,7 @@ import (
 	"github.com/LeJamon/go-xrpl/internal/ledger/header"
 	"github.com/LeJamon/go-xrpl/internal/peermanagement/message"
 	"github.com/LeJamon/go-xrpl/shamap"
+	"github.com/LeJamon/go-xrpl/shamap/backend"
 )
 
 // buildSourceStateMap builds a multi-level state tree and returns it together
@@ -93,7 +94,7 @@ func TestCheckLocal_PersistsRecoveredNodesWithoutDirtyingTree(t *testing.T) {
 		cache[node.Hash] = node.Data
 	}
 
-	family := shamap.NewMemoryNodeStoreFamily()
+	family := backend.NewMemory()
 	hdr := header.LedgerHeader{LedgerIndex: 323, AccountHash: rootHash}
 	hdrBytes, ledgerHash := encodeHeader(hdr)
 	il := New(ledgerHash, 323, 7, discardLogger(), WithFamily(family))
@@ -141,7 +142,7 @@ func TestCheckLocal_PersistsProgressBeforeTraversalYield(t *testing.T) {
 		cache[node.Hash] = node.Data
 	}
 
-	family := shamap.NewMemoryNodeStoreFamily()
+	family := backend.NewMemory()
 	hdr := header.LedgerHeader{LedgerIndex: 324, AccountHash: rootHash}
 	hdrBytes, ledgerHash := encodeHeader(hdr)
 	il := New(ledgerHash, 324, 7, discardLogger(), WithFamily(family))

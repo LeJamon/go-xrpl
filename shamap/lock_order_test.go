@@ -31,7 +31,7 @@ func (f *blockingWalkFamily) FullBelowCache() *FullBelowCache {
 }
 
 func TestWalkMapParallelDoesNotHoldMapLockWhileWaitingForPrune(t *testing.T) {
-	family := NewMemoryNodeStoreFamily()
+	family := newMemoryFamily()
 	sm, err := NewBacked(TypeState, family)
 	if err != nil {
 		t.Fatalf("NewBacked: %v", err)
@@ -50,15 +50,15 @@ func TestWalkMapParallelDoesNotHoldMapLockWhileWaitingForPrune(t *testing.T) {
 
 	walkDone := make(chan error, 1)
 	go func() {
-		_, err := sm.WalkMapParallelContext(context.Background(), 1, nil)
+		_, err := sm.walkMapParallelContext(context.Background(), 1, nil)
 		walkDone <- err
 	}()
 
 	mapLock := make(chan struct{})
 	go func() {
-		sm.mu.Lock()
+		sm.tree.mu.Lock()
 		close(mapLock)
-		sm.mu.Unlock()
+		sm.tree.mu.Unlock()
 	}()
 	select {
 	case <-mapLock:
@@ -81,10 +81,10 @@ func TestWalkMapParallelDoesNotHoldMapLockWhileWaitingForPrune(t *testing.T) {
 		t.Fatalf("FinishSync returned before prune ended: %v", err)
 	case <-time.After(10 * time.Millisecond):
 	}
-	if !sm.mu.TryLock() {
+	if !sm.tree.mu.TryLock() {
 		t.Fatal("FinishSync held the SHAMap lock while waiting for FullBelow")
 	}
-	sm.mu.Unlock()
+	sm.tree.mu.Unlock()
 
 	endPrune()
 	pruneHeld = false
@@ -92,7 +92,7 @@ func TestWalkMapParallelDoesNotHoldMapLockWhileWaitingForPrune(t *testing.T) {
 	select {
 	case err := <-walkDone:
 		if err != nil {
-			t.Fatalf("WalkMapParallelContext: %v", err)
+			t.Fatalf("walkMapParallelContext: %v", err)
 		}
 	case <-time.After(time.Second):
 		t.Fatal("parallel walk deadlocked with prune and FinishSync")
@@ -122,7 +122,7 @@ func TestWalkMapParallelPruneAndFinishDoNotInvertLocks(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	base := NewMemoryNodeStoreFamily()
+	base := newMemoryFamily()
 	if err := base.StoreBatch(context.Background(), batch.Entries); err != nil {
 		t.Fatal(err)
 	}
@@ -141,7 +141,7 @@ func TestWalkMapParallelPruneAndFinishDoNotInvertLocks(t *testing.T) {
 
 	walkDone := make(chan error, 1)
 	go func() {
-		_, err := sm.WalkMapParallelContext(context.Background(), 1, nil)
+		_, err := sm.walkMapParallelContext(context.Background(), 1, nil)
 		walkDone <- err
 	}()
 	<-family.started
@@ -167,10 +167,10 @@ func TestWalkMapParallelPruneAndFinishDoNotInvertLocks(t *testing.T) {
 		t.Fatalf("FinishSync returned while the active traversal was blocked: %v", err)
 	case <-time.After(10 * time.Millisecond):
 	}
-	if !sm.mu.TryLock() {
+	if !sm.tree.mu.TryLock() {
 		t.Fatal("FinishSync held the map lock behind the active traversal")
 	}
-	sm.mu.Unlock()
+	sm.tree.mu.Unlock()
 	close(family.release)
 
 	select {
@@ -210,7 +210,7 @@ func TestWalkMapParallelPinsFamilyUntilTraversalEnds(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	base := NewMemoryNodeStoreFamily()
+	base := newMemoryFamily()
 	if err := base.StoreBatch(context.Background(), batch.Entries); err != nil {
 		t.Fatal(err)
 	}
@@ -229,13 +229,13 @@ func TestWalkMapParallelPinsFamilyUntilTraversalEnds(t *testing.T) {
 
 	walkDone := make(chan error, 1)
 	go func() {
-		_, err := sm.WalkMapParallelContext(context.Background(), 1, nil)
+		_, err := sm.walkMapParallelContext(context.Background(), 1, nil)
 		walkDone <- err
 	}()
 	<-family.started
 	switched := make(chan struct{})
 	go func() {
-		sm.SetFamily(NewMemoryNodeStoreFamily())
+		sm.SetFamily(newMemoryFamily())
 		close(switched)
 	}()
 	select {

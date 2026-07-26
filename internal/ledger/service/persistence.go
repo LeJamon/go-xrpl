@@ -16,6 +16,7 @@ import (
 	"github.com/LeJamon/go-xrpl/internal/ledger"
 	"github.com/LeJamon/go-xrpl/internal/tx"
 	"github.com/LeJamon/go-xrpl/shamap"
+	"github.com/LeJamon/go-xrpl/shamap/backend"
 	"github.com/LeJamon/go-xrpl/storage/nodestore"
 	"github.com/LeJamon/go-xrpl/storage/relationaldb"
 )
@@ -335,7 +336,7 @@ func (s *Service) persistLedgerJob(
 func (s *Service) persistToNodeStore(ctx context.Context, l *ledger.Ledger, seq uint32) error {
 	store := func(nodeType nodestore.NodeType) func([]shamap.FlushEntry) error {
 		return func(entries []shamap.FlushEntry) error {
-			if family, ok := s.shamapFamily.(*shamap.NodeStoreFamily); ok {
+			if family, ok := s.shamapFamily.(*backend.NodeStore); ok {
 				return family.StoreBatch(ctx, entries)
 			}
 			const batchSize = 4096

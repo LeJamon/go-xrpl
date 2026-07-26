@@ -9,6 +9,7 @@ import (
 	"github.com/LeJamon/go-xrpl/internal/ledger/header"
 	"github.com/LeJamon/go-xrpl/internal/peermanagement/message"
 	"github.com/LeJamon/go-xrpl/shamap"
+	"github.com/LeJamon/go-xrpl/shamap/backend"
 	"github.com/stretchr/testify/require"
 )
 
@@ -88,9 +89,9 @@ func buildBackedTestState(t *testing.T, extra int) (sm *shamap.SHAMap, rootHash 
 
 // seedFamilyFrom stores every node of sm into a fresh in-memory node-store
 // family, modeling the nodes a node already holds in its local store.
-func seedFamilyFrom(t *testing.T, sm *shamap.SHAMap) *shamap.NodeStoreFamily {
+func seedFamilyFrom(t *testing.T, sm *shamap.SHAMap) *backend.NodeStore {
 	t.Helper()
-	family := shamap.NewMemoryNodeStoreFamily()
+	family := backend.NewMemory()
 	nodes, err := sm.WalkFetchPackNodes(1 << 20)
 	if err != nil {
 		t.Fatalf("walk fetch-pack nodes: %v", err)
@@ -114,7 +115,7 @@ func toLedgerNodes(wire []shamap.WireNode) []message.LedgerNode {
 }
 
 func TestCheckpointPersistenceUsesBoundedUsefulNodeBatches(t *testing.T) {
-	family := &checkpointFamily{Family: shamap.NewMemoryNodeStoreFamily()}
+	family := &checkpointFamily{Family: backend.NewMemory()}
 	ledger := New([32]byte{1}, 1, 1, discardLogger(), WithFamily(family))
 
 	require.NoError(t, ledger.CheckpointPersistence(t.Context(), persistenceCheckpointNodes-1))
@@ -164,7 +165,7 @@ func TestGotBase_ColdStoreMatchesUnbacked(t *testing.T) {
 	if err := unbacked.GotBase(base); err != nil {
 		t.Fatalf("unbacked GotBase: %v", err)
 	}
-	backedCold := New(ledgerHash, 100, 7, discardLogger(), WithFamily(shamap.NewMemoryNodeStoreFamily()))
+	backedCold := New(ledgerHash, 100, 7, discardLogger(), WithFamily(backend.NewMemory()))
 	if err := backedCold.GotBase(base); err != nil {
 		t.Fatalf("backed-cold GotBase: %v", err)
 	}
@@ -253,7 +254,7 @@ func TestGotBase_BackedFetchesOnlyForkDelta(t *testing.T) {
 
 func TestGotBase_StoreCompleteTreePersistsOnlyReceivedRoot(t *testing.T) {
 	source, rootHash, rootData := buildBackedTestState(t, 0)
-	family := shamap.NewMemoryNodeStoreFamily()
+	family := backend.NewMemory()
 	nodes, err := source.WalkFetchPackNodes(1 << 20)
 	if err != nil {
 		t.Fatalf("walk fetch-pack nodes: %v", err)
@@ -298,7 +299,7 @@ func TestGotBase_StoreCompleteTreePersistsOnlyReceivedRoot(t *testing.T) {
 
 func TestCheckLocal_RetainedStoreCompletesAfterBase(t *testing.T) {
 	source, rootHash, rootData := buildBackedTestState(t, 0)
-	family := shamap.NewMemoryNodeStoreFamily()
+	family := backend.NewMemory()
 	headerData, ledgerHash := encodeHeader(header.LedgerHeader{LedgerIndex: 100, AccountHash: rootHash})
 	acquisition := New(ledgerHash, 100, 7, discardLogger(), WithFamily(family))
 	require.NoError(t, acquisition.GotBase([]message.LedgerNode{{NodeData: headerData}, {NodeData: rootData}}))
@@ -325,7 +326,7 @@ func TestCheckLocal_RetainedStoreCompletesAfterBase(t *testing.T) {
 
 func TestCheckLocal_PartialRetainedStoreResetsNoProgressInterval(t *testing.T) {
 	source, rootHash, rootData := buildBackedTestState(t, 0)
-	family := shamap.NewMemoryNodeStoreFamily()
+	family := backend.NewMemory()
 	headerData, ledgerHash := encodeHeader(header.LedgerHeader{LedgerIndex: 100, AccountHash: rootHash})
 	acquisition := New(ledgerHash, 100, 7, discardLogger(), WithFamily(family))
 	require.NoError(t, acquisition.GotBase([]message.LedgerNode{{NodeData: headerData}, {NodeData: rootData}}))
@@ -399,7 +400,7 @@ func TestGotStateNodes_PartialWorkSurvivesDifferentRootAcquisition(t *testing.T)
 		t.Fatal("trees have no shared depth-one node")
 	}
 
-	family := shamap.NewMemoryNodeStoreFamily()
+	family := backend.NewMemory()
 	firstHeader, firstHash := encodeHeader(header.LedgerHeader{LedgerIndex: 100, AccountHash: firstRoot})
 	acquisition := New(firstHash, 100, 7, discardLogger(), WithFamily(family))
 	if err := acquisition.GotBase([]message.LedgerNode{{NodeData: firstHeader}, {NodeData: firstRootData}}); err != nil {
@@ -447,7 +448,7 @@ func TestGotBase_StoreFailureDoesNotFailAcquisition(t *testing.T) {
 		t.Fatalf("walk wire nodes: %v", err)
 	}
 	family := failingStoreFamily{
-		base: shamap.NewMemoryNodeStoreFamily(),
+		base: backend.NewMemory(),
 		err:  errors.New("store unavailable"),
 	}
 	headerData, ledgerHash := encodeHeader(header.LedgerHeader{LedgerIndex: 100, AccountHash: rootHash})
@@ -465,7 +466,7 @@ func TestGotBase_StoreFailureDoesNotFailAcquisition(t *testing.T) {
 
 func TestGotBase_PersistsStateRootWhileWaitingForTransactionRoot(t *testing.T) {
 	_, rootHash, rootData := buildBackedTestState(t, 0)
-	family := shamap.NewMemoryNodeStoreFamily()
+	family := backend.NewMemory()
 	headerData, ledgerHash := encodeHeader(header.LedgerHeader{
 		LedgerIndex: 100,
 		AccountHash: rootHash,
@@ -484,7 +485,7 @@ func TestGotBase_PersistsStateRootWhileWaitingForTransactionRoot(t *testing.T) {
 
 func TestGotBase_PersistsBeforeReleasingAcquisitionLock(t *testing.T) {
 	_, rootHash, rootData := buildBackedTestState(t, 0)
-	family := shamap.NewMemoryNodeStoreFamily()
+	family := backend.NewMemory()
 	headerData, ledgerHash := encodeHeader(header.LedgerHeader{LedgerIndex: 100, AccountHash: rootHash})
 	entered := make(chan struct{})
 	release := make(chan struct{})

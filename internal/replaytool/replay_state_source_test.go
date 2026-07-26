@@ -6,6 +6,7 @@ import (
 
 	"github.com/LeJamon/go-xrpl/internal/statecompare"
 	"github.com/LeJamon/go-xrpl/shamap"
+	"github.com/LeJamon/go-xrpl/shamap/backend"
 )
 
 // syntheticEntries returns n state entries with distinct keys and >=12-byte
@@ -52,8 +53,8 @@ func TestBuildOrOpenLazyState_ColdBuildThenLazyRead(t *testing.T) {
 	ctx := context.Background()
 	entries, accountHash := syntheticEntries(t, 250)
 
-	base := shamap.NewMemoryNodeStoreFamily()
-	overlay := shamap.NewMemoryNodeStoreFamily()
+	base := backend.NewMemory()
+	overlay := backend.NewMemory()
 
 	loads := 0
 	state, err := buildOrOpenLazyState(ctx, base, overlay, accountHash, func(fn func(statecompare.StateEntry) error) error {
@@ -88,8 +89,8 @@ func TestBuildOrOpenLazyState_WarmOpenSkipsRebuild(t *testing.T) {
 	ctx := context.Background()
 	entries, accountHash := syntheticEntries(t, 64)
 
-	base := shamap.NewMemoryNodeStoreFamily()
-	overlay := shamap.NewMemoryNodeStoreFamily()
+	base := backend.NewMemory()
+	overlay := backend.NewMemory()
 
 	if _, err := buildOrOpenLazyState(ctx, base, overlay, accountHash, streamAll(entries)); err != nil {
 		t.Fatalf("cold build: %v", err)
@@ -97,7 +98,7 @@ func TestBuildOrOpenLazyState_WarmOpenSkipsRebuild(t *testing.T) {
 
 	// A second open over the now-populated base must not rebuild: streamEntries
 	// failing the test if called proves the open path is "open the nodestore".
-	overlay2 := shamap.NewMemoryNodeStoreFamily()
+	overlay2 := backend.NewMemory()
 	state, err := buildOrOpenLazyState(ctx, base, overlay2, accountHash, func(func(statecompare.StateEntry) error) error {
 		t.Fatalf("streamEntries called on warm open")
 		return nil
@@ -115,8 +116,8 @@ func TestBuildOrOpenLazyState_VerifyGate(t *testing.T) {
 	ctx := context.Background()
 	entries, accountHash := syntheticEntries(t, 32)
 
-	base := shamap.NewMemoryNodeStoreFamily()
-	overlay := shamap.NewMemoryNodeStoreFamily()
+	base := backend.NewMemory()
+	overlay := backend.NewMemory()
 
 	// Claim a wrong account_hash: the built root must not match and the build
 	// must fail rather than hand back an unverified seed.

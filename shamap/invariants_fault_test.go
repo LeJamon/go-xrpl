@@ -15,8 +15,8 @@ func (f *inv_failingFamily) Fetch(_ context.Context, _ [32]byte) ([]byte, error)
 }
 func (f *inv_failingFamily) StoreBatch(_ context.Context, _ []FlushEntry) error { return nil }
 
-// inv_fakeInnerNode implements Node but is neither *innerNode nor a
-// LeafNode. Used to cover the type-assertion failure paths.
+// inv_fakeInnerNode implements node but is neither *innerNode nor a
+// leaf. Used to cover the type-assertion failure paths.
 type inv_fakeInnerNode struct {
 	baseNode
 }
@@ -27,13 +27,13 @@ func (n *inv_fakeInnerNode) SerializeForWire() ([]byte, error)    { return nil, 
 func (n *inv_fakeInnerNode) SerializeWithPrefix() ([]byte, error) { return nil, fmt.Errorf("fake") }
 func (n *inv_fakeInnerNode) String(nodeID NodeID) string          { return "fakeInner" }
 func (n *inv_fakeInnerNode) Invariants(isRoot bool) error         { return nil }
-func (n *inv_fakeInnerNode) Clone() (Node, error) {
+func (n *inv_fakeInnerNode) Clone() (mapNode, error) {
 	c := &inv_fakeInnerNode{}
 	c.hash = n.hash
 	return c, nil
 }
 
-// inv_fakeLeafNode implements Node but does NOT implement LeafNode (no
+// inv_fakeLeafNode implements node but does NOT implement leaf (no
 // Item() / SetItem() methods). Used to cover the leaf type-assertion
 // failure paths.
 type inv_fakeLeafNode struct {
@@ -46,7 +46,7 @@ func (n *inv_fakeLeafNode) SerializeForWire() ([]byte, error)    { return nil, f
 func (n *inv_fakeLeafNode) SerializeWithPrefix() ([]byte, error) { return nil, fmt.Errorf("fake") }
 func (n *inv_fakeLeafNode) String(nodeID NodeID) string          { return "fakeLeaf" }
 func (n *inv_fakeLeafNode) Invariants(isRoot bool) error         { return nil }
-func (n *inv_fakeLeafNode) Clone() (Node, error) {
+func (n *inv_fakeLeafNode) Clone() (mapNode, error) {
 	c := &inv_fakeLeafNode{}
 	c.hash = n.hash
 	return c, nil
@@ -63,7 +63,7 @@ func (n *inv_cloneErrorNode) SerializeForWire() ([]byte, error)    { return nil,
 func (n *inv_cloneErrorNode) SerializeWithPrefix() ([]byte, error) { return nil, fmt.Errorf("fake") }
 func (n *inv_cloneErrorNode) String(nodeID NodeID) string          { return "cloneError" }
 func (n *inv_cloneErrorNode) Invariants(isRoot bool) error         { return nil }
-func (n *inv_cloneErrorNode) Clone() (Node, error)                 { return nil, fmt.Errorf("clone always fails") }
+func (n *inv_cloneErrorNode) Clone() (mapNode, error)              { return nil, fmt.Errorf("clone always fails") }
 
 // Used to cover the UpdateHash() error path in verifyNodeHash.
 type inv_updateHashErrorNode struct {
@@ -78,7 +78,7 @@ func (n *inv_updateHashErrorNode) SerializeWithPrefix() ([]byte, error) {
 }
 func (n *inv_updateHashErrorNode) String(nodeID NodeID) string  { return "updateHashError" }
 func (n *inv_updateHashErrorNode) Invariants(isRoot bool) error { return nil }
-func (n *inv_updateHashErrorNode) Clone() (Node, error) {
+func (n *inv_updateHashErrorNode) Clone() (mapNode, error) {
 	c := &inv_updateHashErrorNode{}
 	c.hash = n.hash
 	return c, nil
@@ -105,21 +105,21 @@ func inv_makeKey(v byte) [32]byte {
 
 func TestInv_InvariantsUnsafe_InvalidStateNilRoot(t *testing.T) {
 	sm := New(TypeState)
-	sm.root = nil
-	sm.state = StateInvalid
+	sm.tree.root = nil
+	sm.tree.state = stateInvalid
 
 	if err := sm.invariants(); err == nil {
-		t.Fatal("expected error for StateInvalid with nil root, got nil")
+		t.Fatal("expected error for invalid state with nil root, got nil")
 	}
 }
 
 func TestInv_InvariantsUnsafe_NilRootValidState(t *testing.T) {
 	sm := New(TypeState)
-	sm.root = nil
-	sm.state = StateModifying
+	sm.tree.root = nil
+	sm.tree.state = stateModifying
 
 	if err := sm.invariants(); err != nil {
-		t.Fatalf("expected nil for nil root + StateModifying, got: %v", err)
+		t.Fatalf("expected nil for nil root in modifying state, got: %v", err)
 	}
 }
 
@@ -139,7 +139,7 @@ func TestInv_NodeInvariantsHashMismatch(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	root := sm.root
+	root := sm.tree.root
 	root.mu.RLock()
 	childNode := root.children[0]
 	root.mu.RUnlock()
@@ -187,7 +187,7 @@ func TestInv_VerifyNodeHash_StalePreimage_Detailed(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	root := sm.root
+	root := sm.tree.root
 	root.mu.RLock()
 	childNode := root.children[0]
 	root.mu.RUnlock()
@@ -251,7 +251,7 @@ func TestInv_CheckInnerNode_ChildHashMismatch(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	root := sm.root
+	root := sm.tree.root
 	root.mu.RLock()
 	childNode := root.children[0]
 	root.mu.RUnlock()
@@ -279,7 +279,7 @@ func TestInv_CheckInnerNode_ChildHashMismatch(t *testing.T) {
 // TestInv_CheckInnerNode_HasChildNilUnbacked covers the "branch N marked as
 // non-empty but child is nil" path in checkInnerNodeInvariants. We flush a
 // two-level map with releaseChildren=true so the inner child at depth 1 ends
-// up with hash-only branches (nil children), then set sm.backed=false so the
+// up with hash-only branches (nil children), then remove the backing family so the
 // check fires.
 func TestInv_CheckInnerNode_HasChildNilUnbacked(t *testing.T) {
 	sm := New(TypeState)
@@ -301,10 +301,9 @@ func TestInv_CheckInnerNode_HasChildNilUnbacked(t *testing.T) {
 	}
 
 	// Now root has bit 0 set, hashes[0] non-zero, but children[0] == nil.
-	// sm.backed is false; flip to backed=false explicitly (it already is) and
-	// ensure sm.state != StateSyncing.
-	sm.backed = false
-	sm.state = StateModifying
+	// The family is nil and the map is not syncing.
+	sm.backing.access = nil
+	sm.tree.state = stateModifying
 
 	err := sm.invariants()
 	if err == nil {
@@ -322,7 +321,7 @@ func TestInv_CheckLeafNode_NilItem(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	root := sm.root
+	root := sm.tree.root
 	var leaf *leafNode
 	for i := 0; i < BranchFactor; i++ {
 		root.mu.RLock()
@@ -360,7 +359,7 @@ func TestInv_CheckLeafNode_InvalidItem(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	root := sm.root
+	root := sm.tree.root
 	var leaf *leafNode
 	for i := 0; i < BranchFactor; i++ {
 		root.mu.RLock()
@@ -395,7 +394,7 @@ func TestInv_CheckLeafNode_InvalidItem(t *testing.T) {
 
 func TestInv_InvariantsDetailed_InvalidStateNilRoot(t *testing.T) {
 	sm := New(TypeState)
-	sm.root = nil
+	sm.tree.root = nil
 
 	result := sm.invariantsDetailed()
 	if result.HasErrors() {
@@ -413,7 +412,7 @@ func TestInv_InvariantsDetailed_NilItemLeaf(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	root := sm.root
+	root := sm.tree.root
 	var leaf *leafNode
 	for i := 0; i < BranchFactor; i++ {
 		root.mu.RLock()
@@ -455,8 +454,8 @@ func TestInv_InvariantsDetailed_HasChildNilUnbacked(t *testing.T) {
 	if _, err := sm.FlushDirtyAndRelease(); err != nil {
 		t.Fatal(err)
 	}
-	sm.backed = false
-	sm.state = StateModifying
+	sm.backing.access = nil
+	sm.tree.state = stateModifying
 
 	result := sm.invariantsDetailed()
 	if !result.HasErrors() {
@@ -475,7 +474,7 @@ func TestInv_InvariantsDetailed_ChildHashMismatch(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	root := sm.root
+	root := sm.tree.root
 	root.mu.RLock()
 	childNode := root.children[0]
 	root.mu.RUnlock()
@@ -509,7 +508,7 @@ func TestInv_InvariantsDetailed_ChildHashMismatch(t *testing.T) {
 
 func TestInv_VerifyHashes_NilRoot(t *testing.T) {
 	sm := New(TypeState)
-	sm.root = nil
+	sm.tree.root = nil
 	if err := sm.verifyHashes(); err != nil {
 		t.Fatalf("VerifyHashes with nil root should return nil, got: %v", err)
 	}
@@ -533,7 +532,7 @@ func TestInv_VerifyHashes_StalePreimage(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	root := sm.root
+	root := sm.tree.root
 	root.mu.RLock()
 	childNode := root.children[0]
 	root.mu.RUnlock()
@@ -584,7 +583,7 @@ func TestInv_InvariantsDetailed_InvalidItem(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	root := sm.root
+	root := sm.tree.root
 	var leaf *leafNode
 	for i := 0; i < BranchFactor; i++ {
 		root.mu.RLock()
@@ -615,7 +614,7 @@ func TestInv_InvariantsDetailed_InvalidItem(t *testing.T) {
 
 // The caller is responsible for ensuring the node has a non-zero hash before
 // calling this function (so root.invariants() "bit set but no hash" doesn't fire).
-func inv_injectNodeIntoRoot(root *innerNode, branch int, child Node) {
+func inv_injectNodeIntoRoot(root *innerNode, branch int, child mapNode) {
 	root.mu.Lock()
 	root.children[branch] = child
 	root.hashes[branch] = child.Hash()
@@ -629,14 +628,14 @@ func TestInv_CheckNodeInvariants_NotInnerNode(t *testing.T) {
 
 	fake := &inv_fakeInnerNode{}
 	fake.hash[0] = 0xAB // non-zero so root.invariants() "bit set but no hash" doesn't fire
-	inv_injectNodeIntoRoot(sm.root, 3, fake)
+	inv_injectNodeIntoRoot(sm.tree.root, 3, fake)
 
 	err := sm.invariants()
 	if err == nil {
 		t.Fatal("expected error for foreign non-inner node, got nil")
 	}
-	if !strings.Contains(err.Error(), "LeafNode") {
-		t.Fatalf("expected LeafNode-implementation error, got: %v", err)
+	if !strings.Contains(err.Error(), "leaf") {
+		t.Fatalf("expected leaf-implementation error, got: %v", err)
 	}
 }
 
@@ -645,14 +644,14 @@ func TestInv_CheckLeafNode_NotLeafNode(t *testing.T) {
 
 	fake := &inv_fakeLeafNode{}
 	fake.hash[0] = 0xAB
-	inv_injectNodeIntoRoot(sm.root, 4, fake)
+	inv_injectNodeIntoRoot(sm.tree.root, 4, fake)
 
 	err := sm.invariants()
 	if err == nil {
-		t.Fatal("expected error for foreign non-LeafNode, got nil")
+		t.Fatal("expected error for foreign non-leaf, got nil")
 	}
-	if !strings.Contains(err.Error(), "LeafNode") {
-		t.Fatalf("expected 'LeafNode' in error, got: %v", err)
+	if !strings.Contains(err.Error(), "leaf") {
+		t.Fatalf("expected 'leaf' in error, got: %v", err)
 	}
 }
 
@@ -661,7 +660,7 @@ func TestInv_CheckNodeDetailed_NotInnerNode(t *testing.T) {
 
 	fake := &inv_fakeInnerNode{}
 	fake.hash[0] = 0xCD
-	inv_injectNodeIntoRoot(sm.root, 5, fake)
+	inv_injectNodeIntoRoot(sm.tree.root, 5, fake)
 
 	result := sm.invariantsDetailed()
 	if !result.HasErrors() {
@@ -669,13 +668,13 @@ func TestInv_CheckNodeDetailed_NotInnerNode(t *testing.T) {
 	}
 	found := false
 	for _, e := range result.Errors {
-		if strings.Contains(e.Description, "LeafNode") {
+		if strings.Contains(e.Description, "leaf") {
 			found = true
 			break
 		}
 	}
 	if !found {
-		t.Fatalf("expected LeafNode-implementation error in detailed result, got: %v", result.Errors)
+		t.Fatalf("expected leaf-implementation error in detailed result, got: %v", result.Errors)
 	}
 }
 
@@ -684,7 +683,7 @@ func TestInv_VerifyHashes_NotInnerNode(t *testing.T) {
 
 	fake := &inv_fakeInnerNode{}
 	fake.hash[0] = 0xEF
-	inv_injectNodeIntoRoot(sm.root, 6, fake)
+	inv_injectNodeIntoRoot(sm.tree.root, 6, fake)
 
 	// verifyHashes only checks hash integrity; a hash-consistent foreign
 	// node has no children to recurse into and passes. Structural checks
@@ -699,7 +698,7 @@ func TestInv_VerifyNodeHash_CloneError(t *testing.T) {
 
 	fake := &inv_cloneErrorNode{}
 	fake.hash[0] = 0x42 // non-zero so root.invariants() passes
-	root := sm.root
+	root := sm.tree.root
 	root.mu.Lock()
 	root.children[7] = fake
 	root.hashes[7] = fake.Hash()
@@ -721,7 +720,7 @@ func TestInv_VerifyNodeHash_UpdateHashError(t *testing.T) {
 
 	fake := &inv_updateHashErrorNode{}
 	fake.hash[0] = 0x55
-	root := sm.root
+	root := sm.tree.root
 	root.mu.Lock()
 	root.children[8] = fake
 	root.hashes[8] = fake.Hash()
@@ -768,7 +767,7 @@ func TestInv_DescendError_Invariants(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	backed.family = &inv_failingFamily{}
+	backed.SetFamily(&inv_failingFamily{})
 
 	err = backed.invariants()
 	if err == nil {
@@ -803,7 +802,7 @@ func TestInv_DescendError_InvariantsDetailed(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	backed.family = &inv_failingFamily{}
+	backed.SetFamily(&inv_failingFamily{})
 
 	result := backed.invariantsDetailed()
 	if !result.HasErrors() {
@@ -845,7 +844,7 @@ func TestInv_DescendError_VerifyHashes(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	backed.family = &inv_failingFamily{}
+	backed.SetFamily(&inv_failingFamily{})
 
 	if err := backed.verifyHashes(); err == nil {
 		t.Fatal("expected error from descend() failure in VerifyHashes, got nil")
@@ -859,8 +858,8 @@ func TestInv_CheckInnerNode_EmptyBranchChildExists(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	root := sm.root
-	var leaf Node
+	root := sm.tree.root
+	var leaf mapNode
 	root.mu.RLock()
 	for i := 0; i < BranchFactor; i++ {
 		if root.children[i] != nil {

@@ -6,9 +6,9 @@ import (
 	"testing"
 )
 
-func mustMemFamily(t *testing.T) *NodeStoreFamily {
+func mustMemFamily(t *testing.T) *memoryFamily {
 	t.Helper()
-	fam := NewMemoryNodeStoreFamily()
+	fam := newMemoryFamily()
 	return fam
 }
 

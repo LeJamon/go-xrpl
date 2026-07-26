@@ -85,7 +85,7 @@ type Node struct {
 
 // NewNode creates a new Node with the specified type and data, deriving a
 // synthetic key via ComputeHash256. Production callers do not use NewNode; they
-// set Hash directly to the XRPL SHA-512Half key (see NodeStoreFamily.StoreBatch
+// set Hash directly to the XRPL SHA-512Half key (see backend.NodeStore.StoreBatch
 // and the ledger persistence path). NewNode exists for tests and standalone uses
 // that just need a deterministic key for a blob.
 func NewNode(nodeType NodeType, data Blob) *Node {

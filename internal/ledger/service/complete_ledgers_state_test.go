@@ -15,6 +15,7 @@ import (
 	"github.com/LeJamon/go-xrpl/drops"
 	"github.com/LeJamon/go-xrpl/internal/ledger"
 	"github.com/LeJamon/go-xrpl/shamap"
+	"github.com/LeJamon/go-xrpl/shamap/backend"
 	"github.com/LeJamon/go-xrpl/storage/kvstore/memorydb"
 	"github.com/LeJamon/go-xrpl/storage/nodestore"
 	"github.com/LeJamon/go-xrpl/storage/relationaldb"
@@ -193,7 +194,7 @@ func TestCompleteLedgers_InvalidatedQueuedPersistenceSkipsAbandonedFork(t *testi
 
 	svc, err := New(Config{
 		NodeStore:    db,
-		SHAMapFamily: shamap.NewNodeStoreFamily(db),
+		SHAMapFamily: backend.New(db),
 		RelationalDB: repositories,
 	})
 	require.NoError(t, err)
@@ -242,7 +243,7 @@ func TestCompleteLedgers_SameSequenceSwitchKeepsPreferredPersistence(t *testing.
 	cfg := DefaultConfig()
 	cfg.Standalone = false
 	cfg.NodeStore = db
-	cfg.SHAMapFamily = shamap.NewNodeStoreFamily(db)
+	cfg.SHAMapFamily = backend.New(db)
 	cfg.RelationalDB = repositories
 	svc, err := New(cfg)
 	require.NoError(t, err)
@@ -386,7 +387,7 @@ func TestCompleteLedgers_InvalidationRepairsInFlightValidatedTip(t *testing.T) {
 
 	svc, err := New(Config{
 		NodeStore:    db,
-		SHAMapFamily: shamap.NewNodeStoreFamily(db),
+		SHAMapFamily: backend.New(db),
 		RelationalDB: repositories,
 	})
 	require.NoError(t, err)

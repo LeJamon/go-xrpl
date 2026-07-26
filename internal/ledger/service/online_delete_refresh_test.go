@@ -13,6 +13,7 @@ import (
 	"github.com/LeJamon/go-xrpl/internal/ledger/genesis"
 	"github.com/LeJamon/go-xrpl/keylet"
 	"github.com/LeJamon/go-xrpl/shamap"
+	shamapbackend "github.com/LeJamon/go-xrpl/shamap/backend"
 	"github.com/LeJamon/go-xrpl/storage/kvstore/memorydb"
 	kvpebble "github.com/LeJamon/go-xrpl/storage/kvstore/pebble"
 	"github.com/LeJamon/go-xrpl/storage/nodestore"
@@ -82,7 +83,7 @@ func TestService_RefreshValidatedStateSurvivesPruning(t *testing.T) {
 	ctx := context.Background()
 	db := nodestore.NewKVDatabase(memorydb.New(), "refresh", 10_000, time.Hour)
 	t.Cleanup(func() { require.NoError(t, db.Close()) })
-	family := shamap.NewNodeStoreFamily(db)
+	family := shamapbackend.New(db)
 	svc, err := New(Config{
 		Standalone:    true,
 		GenesisConfig: genesis.DefaultConfig(),
@@ -129,7 +130,7 @@ func TestService_RefreshValidatedStatePromotesWithoutRestamping(t *testing.T) {
 		Standalone:    true,
 		GenesisConfig: genesis.DefaultConfig(),
 		NodeStore:     db,
-		SHAMapFamily:  shamap.NewNodeStoreFamily(db),
+		SHAMapFamily:  shamapbackend.New(db),
 	})
 	require.NoError(t, err)
 	require.NoError(t, svc.Start())
@@ -197,7 +198,7 @@ func TestService_RefreshSnapshotsValidatedLedgerBeforePersistenceBarrier(t *test
 		Standalone:    true,
 		GenesisConfig: genesis.DefaultConfig(),
 		NodeStore:     db,
-		SHAMapFamily:  shamap.NewNodeStoreFamily(db),
+		SHAMapFamily:  shamapbackend.New(db),
 	})
 	require.NoError(t, err)
 	require.NoError(t, svc.Start())
@@ -279,7 +280,7 @@ func TestService_RefreshValidatedStateRunsInWalkCheckpoint(t *testing.T) {
 		Standalone:    true,
 		GenesisConfig: genesis.DefaultConfig(),
 		NodeStore:     db,
-		SHAMapFamily:  shamap.NewNodeStoreFamily(db),
+		SHAMapFamily:  shamapbackend.New(db),
 	})
 	require.NoError(t, err)
 	require.NoError(t, svc.Start())
@@ -379,7 +380,7 @@ func TestService_RefreshValidatedStateChecksHealthByElapsedWork(t *testing.T) {
 		Standalone:    true,
 		GenesisConfig: genesis.DefaultConfig(),
 		NodeStore:     db,
-		SHAMapFamily:  shamap.NewNodeStoreFamily(db),
+		SHAMapFamily:  shamapbackend.New(db),
 	})
 	require.NoError(t, err)
 	require.NoError(t, svc.Start())

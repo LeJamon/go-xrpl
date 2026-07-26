@@ -1,0 +1,295 @@
+package shamap
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"strings"
+	"testing"
+)
+
+func TestSme_AddKnownNodeUnchecked(t *testing.T) {
+	source := New(TypeTransaction)
+	k := sme_keyFromByte(0x01)
+	if err := source.Put(k, []byte{0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11}); err != nil {
+		t.Fatalf("Put: %v", err)
+	}
+	rootHash, err := source.Hash()
+	if err != nil {
+		t.Fatalf("Hash: %v", err)
+	}
+	rootData, err := source.SerializeRoot()
+	if err != nil {
+		t.Fatalf("SerializeRoot: %v", err)
+	}
+
+	wireNodes, err := source.WalkWireNodes()
+	if err != nil {
+		t.Fatalf("WalkWireNodes: %v", err)
+	}
+
+	dest1 := New(TypeTransaction)
+	someID, err := NewRootNodeID().ChildNodeID(0)
+	if err != nil {
+		t.Fatalf("ChildNodeID: %v", err)
+	}
+	if _, err := dest1.AddKnownNodeByID(someID, []byte{1, 2, 3}); !errors.Is(err, ErrSyncNotInProgress) {
+		t.Errorf("AddKnownNodeByID not-syncing: want ErrSyncNotInProgress, got %v", err)
+	}
+
+	dest2 := New(TypeTransaction)
+	if err := dest2.StartSync(); err != nil {
+		t.Fatalf("StartSync: %v", err)
+	}
+	if err := dest2.AddRootNode(rootHash, rootData); err != nil {
+		t.Fatalf("AddRootNode: %v", err)
+	}
+	if _, err := dest2.AddKnownNodeByID(someID, nil); !errors.Is(err, ErrInvalidNodeData) {
+		t.Errorf("AddKnownNodeByID nil data: want ErrInvalidNodeData, got %v", err)
+	}
+
+	dest3 := New(TypeTransaction)
+	if err := dest3.StartSync(); err != nil {
+		t.Fatalf("StartSync: %v", err)
+	}
+	if err := dest3.AddRootNode(rootHash, rootData); err != nil {
+		t.Fatalf("AddRootNode: %v", err)
+	}
+	for _, w := range wireNodes {
+		nid, err := ParseNodeID(w.NodeID)
+		if err != nil {
+			t.Fatalf("UnmarshalBinary: %v", err)
+		}
+		if nid.IsRoot() {
+			continue
+		}
+		if _, err := dest3.AddKnownNodeByID(nid, w.Data); err != nil {
+			t.Fatalf("AddKnownNodeByID: %v", err)
+		}
+	}
+}
+
+func TestSme_AddKnownNodeByID_RootNodeID(t *testing.T) {
+	sm := New(TypeTransaction)
+	if err := sm.StartSync(); err != nil {
+		t.Fatalf("StartSync: %v", err)
+	}
+	rootID := NewRootNodeID()
+	if _, err := sm.AddKnownNodeByID(rootID, []byte{1}); !errors.Is(err, ErrUnexpectedNode) {
+		t.Errorf("AddKnownNodeByID(root): want ErrUnexpectedNode, got %v", err)
+	}
+}
+
+func TestSme_GetMissingNodesNotSyncing(t *testing.T) {
+	sm := New(TypeState)
+	if got := sm.GetMissingNodes(0, nil); got != nil {
+		t.Errorf("GetMissingNodes on non-syncing map: want nil, got %v", got)
+	}
+}
+
+func TestSme_FinishSyncNotSyncing(t *testing.T) {
+	sm := New(TypeState)
+	if err := sm.FinishSync(); !errors.Is(err, ErrSyncNotInProgress) {
+		t.Errorf("FinishSync not syncing: want ErrSyncNotInProgress, got %v", err)
+	}
+}
+
+func TestSme_StartSyncOnInvalidMap(t *testing.T) {
+	sm := New(TypeState)
+	sm.tree.mu.Lock()
+	sm.tree.state = stateInvalid
+	sm.tree.mu.Unlock()
+	if err := sm.StartSync(); err == nil {
+		t.Error("StartSync on invalid map should return error")
+	}
+}
+
+func TestSme_IsCompleteWithFullFalse(t *testing.T) {
+	sm := New(TypeState)
+	sm.tree.mu.Lock()
+	sm.tree.full = false
+	sm.tree.mu.Unlock()
+	if !sm.IsComplete() {
+		t.Error("empty tree with full=false should still be complete")
+	}
+}
+
+func TestSme_SyncProgressWithItems(t *testing.T) {
+	sm := New(TypeState)
+	for i := byte(1); i <= 5; i++ {
+		if err := sm.Put(sme_keyFromByte(i), sme_data12(i)); err != nil {
+			t.Fatalf("Put: %v", err)
+		}
+	}
+	present, total := sm.SyncProgress()
+	if total == 0 {
+		t.Error("total should be > 0 for non-empty map")
+	}
+	if present != total {
+		t.Errorf("complete map should have present==total, got %d/%d", present, total)
+	}
+}
+
+func TestSme_AddKnownNodeHashMismatch(t *testing.T) {
+	source := New(TypeState)
+	k := sme_keyFromByte(0x10)
+	if err := source.Put(k, sme_data12(1)); err != nil {
+		t.Fatalf("Put: %v", err)
+	}
+	rootHash, _ := source.Hash()
+	rootData, _ := source.SerializeRoot()
+
+	wireNodes, err := source.WalkWireNodes()
+	if err != nil {
+		t.Fatalf("WalkWireNodes: %v", err)
+	}
+
+	dest := New(TypeState)
+	if err := dest.StartSync(); err != nil {
+		t.Fatalf("StartSync: %v", err)
+	}
+	if err := dest.AddRootNode(rootHash, rootData); err != nil {
+		t.Fatalf("AddRootNode: %v", err)
+	}
+
+	for _, w := range wireNodes {
+		nid, _ := ParseNodeID(w.NodeID)
+		if nid.IsRoot() {
+			continue
+		}
+		var wrongHash [32]byte
+		wrongHash[0] = 0xFF
+		err := dest.AddKnownNode(wrongHash, w.Data)
+		if !errors.Is(err, ErrNodeHashMismatch) {
+			t.Errorf("AddKnownNode with wrong hash: want ErrNodeHashMismatch, got %v", err)
+		}
+		break
+	}
+}
+
+func TestSme_WalkSubtreeStopsOnReport(t *testing.T) {
+	source := New(TypeState)
+	for branch := byte(0); branch < 4; branch++ {
+		k := sme_keyFromByte(branch << 4)
+		if err := source.Put(k, sme_data12(branch)); err != nil {
+			t.Fatalf("Put: %v", err)
+		}
+	}
+	rootHash, _ := source.Hash()
+	rootData, _ := source.SerializeRoot()
+	dest := New(TypeState)
+	if err := dest.AddRootNode(rootHash, rootData); err != nil {
+		t.Fatalf("AddRootNode: %v", err)
+	}
+
+	count := 0
+	stop, err := walkSubtreeForMissing(
+		context.Background(), dest,
+		dest.tree.root,
+		NewRootNodeID(),
+		dest.tree.root.Hash(),
+		0,
+		&DefaultSyncFilter{},
+		false,
+		func(MissingNode) bool {
+			count++
+			return true
+		},
+	)
+	if err != nil {
+		t.Fatalf("walkSubtreeForMissing: %v", err)
+	}
+	if !stop {
+		t.Error("walkSubtreeForMissing: expected stop=true when report returns true")
+	}
+	if count != 1 {
+		t.Errorf("walkSubtreeForMissing: expected 1 report call, got %d", count)
+	}
+}
+
+func TestSme_AddRootNodeAlreadySet(t *testing.T) {
+	source := New(TypeState)
+	k := sme_keyFromByte(0x01)
+	if err := source.Put(k, sme_data12(1)); err != nil {
+		t.Fatalf("Put: %v", err)
+	}
+	rootHash, _ := source.Hash()
+	rootData, _ := source.SerializeRoot()
+
+	dest := New(TypeState)
+	if err := dest.AddRootNode(rootHash, rootData); err != nil {
+		t.Fatalf("first AddRootNode: %v", err)
+	}
+	wireNodes, _ := source.WalkWireNodes()
+	for _, w := range wireNodes {
+		nid, _ := ParseNodeID(w.NodeID)
+		if nid.IsRoot() {
+			continue
+		}
+		_, _ = dest.AddKnownNodeByID(nid, w.Data)
+		break
+	}
+	if err := dest.AddRootNode(rootHash, rootData); !errors.Is(err, ErrRootAlreadySet) {
+		t.Errorf("second AddRootNode: want ErrRootAlreadySet, got %v", err)
+	}
+}
+
+func TestSme_AddKnownNodeSuccess(t *testing.T) {
+	source := New(TypeState)
+	for i := byte(0); i < 4; i++ {
+		k := sme_keyFromTwo(i<<4, i)
+		if err := source.Put(k, sme_data12(i)); err != nil {
+			t.Fatalf("Put: %v", err)
+		}
+	}
+	rootHash, _ := source.Hash()
+	rootData, _ := source.SerializeRoot()
+	wireNodes, _ := source.WalkWireNodes()
+
+	dest := New(TypeState)
+	if err := dest.StartSync(); err != nil {
+		t.Fatalf("StartSync: %v", err)
+	}
+	if err := dest.AddRootNode(rootHash, rootData); err != nil {
+		t.Fatalf("AddRootNode: %v", err)
+	}
+
+	for _, w := range wireNodes {
+		nid, err := ParseNodeID(w.NodeID)
+		if err != nil {
+			t.Fatalf("UnmarshalBinary: %v", err)
+		}
+		if nid.IsRoot() {
+			continue
+		}
+		if nid.Depth() == 1 {
+			node, err2 := deserializeNodeFromWire(w.Data)
+			if err2 != nil {
+				continue
+			}
+			if err2 := node.UpdateHash(); err2 != nil {
+				continue
+			}
+			nodeHash := node.Hash()
+			if err := dest.AddKnownNode(nodeHash, w.Data); err != nil {
+				t.Logf("AddKnownNode depth=1: %v (may be ErrUnexpectedNode)", err)
+			}
+		}
+	}
+}
+
+func TestSme_MissingNodeStringFull(t *testing.T) {
+	mn := &MissingNode{
+		Hash:       [32]byte{0xAB, 0xCD},
+		Depth:      7,
+		ParentHash: [32]byte{0x11, 0x22},
+		Branch:     0xF,
+	}
+	s := mn.String()
+	if s == "" {
+		t.Error("MissingNode.String() must not be empty")
+	}
+	if !strings.Contains(s, fmt.Sprintf("%d", 7)) {
+		t.Errorf("MissingNode.String() = %q, expected depth 7", s)
+	}
+}
