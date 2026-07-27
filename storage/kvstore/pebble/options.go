@@ -7,11 +7,12 @@ import (
 )
 
 const (
+	// DefaultBlockCacheBytes is the block-cache capacity used when none is configured.
 	DefaultBlockCacheBytes int64 = 256 << 20
-	DefaultMaxOpenFiles = 500
+	DefaultMaxOpenFiles          = 500
 	// MinimumOpenFiles is the smallest soft limit Pebble can honor for one
 	// database: 64 table-cache entries plus 10 non-table files.
-	MinimumOpenFiles = 74
+	MinimumOpenFiles         = 74
 	MinimumRotatingOpenFiles = 2 * MinimumOpenFiles
 )
 
@@ -37,6 +38,7 @@ func OptionsFromMiB(blockCacheMB int64, maxOpenFiles int) (Options, error) {
 	}).Resolve()
 }
 
+// Resolve validates o and fills in default values.
 func (o Options) Resolve() (Options, error) {
 	if o.BlockCacheBytes < 0 {
 		return Options{}, errors.New("kvstore/pebble: block cache size cannot be negative")
