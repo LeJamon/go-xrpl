@@ -13,7 +13,8 @@ const (
 	DefaultMaxOpenFiles = 500
 	// MinimumOpenFiles is the smallest soft limit Pebble can honor for one
 	// database: 64 table-cache entries plus 10 non-table files.
-	MinimumOpenFiles         = 74
+	MinimumOpenFiles = 74
+	// MinimumRotatingOpenFiles is the smallest steady-state total for two generations.
 	MinimumRotatingOpenFiles = 2 * MinimumOpenFiles
 )
 
