@@ -727,12 +727,15 @@ func OverlayOptionsFromConfig(appCfg *config.Config) []peermanagement.Option {
 		opts = append(opts, peermanagement.WithListenAddr(""))
 	}
 
-	// Bootstrap peers (convert "host port" → "host:port")
-	if len(appCfg.IPs) > 0 {
-		opts = append(opts, peermanagement.WithBootstrapPeers(normalizeAddresses(appCfg.IPs)...))
+	bootstrapPeers := appCfg.IPs
+	if len(bootstrapPeers) == 0 {
+		bootstrapPeers = appCfg.IPsFixed
 	}
+	if len(bootstrapPeers) == 0 {
+		bootstrapPeers = defaultBootstrapPeers
+	}
+	opts = append(opts, peermanagement.WithBootstrapPeers(normalizeAddresses(bootstrapPeers)...))
 
-	// Fixed peers (convert "host port" → "host:port")
 	if len(appCfg.IPsFixed) > 0 {
 		opts = append(opts, peermanagement.WithFixedPeers(normalizeAddresses(appCfg.IPsFixed)...))
 	}
@@ -913,15 +916,70 @@ func DecodeValidatorKeyWithMaster(key string) (nodeID consensus.NodeID, master [
 	return consensus.CalcNodeID(master), master, nil
 }
 
-// normalizeAddresses converts rippled-style "host port" addresses to "host:port".
+const defaultPeerPort = "2459"
+
+var defaultBootstrapPeers = []string{
+	"r.ripple.com 51235",
+	"sahyadri.isrdc.in 51235",
+	"hubs.xrpkuwait.com 51235",
+	"hub.xrpl-commons.org 51235",
+}
+
 func normalizeAddresses(addrs []string) []string {
 	out := make([]string, len(addrs))
 	for i, addr := range addrs {
-		if parts := strings.Fields(addr); len(parts) == 2 && !strings.Contains(addr, ":") {
-			out[i] = parts[0] + ":" + parts[1]
-		} else {
-			out[i] = addr
+		parts := strings.Fields(addr)
+		if len(parts) == 1 {
+			if host, port, err := net.SplitHostPort(parts[0]); err == nil {
+				if strings.Trim(port, "0") == "" {
+					port = defaultPeerPort
+				}
+				out[i] = net.JoinHostPort(host, port)
+				continue
+			}
+			host, ok := normalizedHost(parts[0], true)
+			if !ok {
+				out[i] = addr
+				continue
+			}
+			out[i] = net.JoinHostPort(host, defaultPeerPort)
+			continue
 		}
+		if len(parts) != 2 {
+			out[i] = addr
+			continue
+		}
+		host, ok := normalizedHost(parts[0], false)
+		if !ok {
+			out[i] = addr
+			continue
+		}
+		port := parts[1]
+		if strings.Trim(port, "0") == "" {
+			port = defaultPeerPort
+		}
+		out[i] = net.JoinHostPort(host, port)
 	}
 	return out
+}
+
+func normalizedHost(host string, allowUnclosedBracket bool) (string, bool) {
+	hasOpen := strings.HasPrefix(host, "[")
+	hasClose := strings.HasSuffix(host, "]")
+	if hasClose && !hasOpen {
+		return "", false
+	}
+	if hasOpen && !hasClose && !allowUnclosedBracket {
+		return "", false
+	}
+	if hasOpen {
+		host = strings.TrimPrefix(host, "[")
+		if hasClose {
+			host = strings.TrimSuffix(host, "]")
+		}
+		if net.ParseIP(host) == nil {
+			return "", false
+		}
+	}
+	return host, true
 }
