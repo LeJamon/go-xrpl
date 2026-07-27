@@ -419,9 +419,12 @@ func recordDivergenceAndReset(
 	if err != nil {
 		return nil, fmt.Errorf("reconstructing mainnet state: %w", err)
 	}
-	diverging, err := divergingObjects(goxrplPost, corrected)
-	if err != nil {
-		return nil, fmt.Errorf("computing diverging objects: %w", err)
+	var diverging []divergingObject
+	if verified {
+		diverging, err = divergingObjects(goxrplPost, corrected)
+		if err != nil {
+			return nil, fmt.Errorf("computing diverging objects: %w", err)
+		}
 	}
 	finding := buildFinding(commit, ledgerIndex, parentHash, result, verified, diverging)
 	if err := findings.Write(finding); err != nil {

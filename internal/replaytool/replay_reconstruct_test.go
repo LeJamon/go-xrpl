@@ -308,6 +308,105 @@ func TestReconstructFromMeta_CreatedOfferDefaults(t *testing.T) {
 	}
 }
 
+func TestReconstructFromMeta_CreatedLoanBrokerDefaults(t *testing.T) {
+	const (
+		ledgerIndexHex = "75F04A09A3F45F989E015B92A39F8B70B99857D31D5D61955AEB16190B7E7341"
+		txHashHex      = "B40964DF5BC8EA1DF5EDC1EDC2F44463CDBCD45B3D273D68D7AC72A397F4E7B9"
+		canonicalHex   = "11008822000000002400325E0E2500325E1C203D00000001340000000000000000301E000000000000000055B40964DF5BC8EA1DF5EDC1EDC2F44463CDBCD45B3D273D68D7AC72A397F4E7B9502315032ADB6CACAE93D1DA6C73FBF10E67071133303154EA69F2956A0BC4137D858114B87371891D6215AB177F93F8A84DC5CCBB48C0788214E6D10E126C40BA4428FEE64BC2C4F3F2C31AB9B8"
+		vaultAccount   = "rpRrVjCLggyjBaAYreukcyuWuzb23wuWrn"
+		ledgerSeq      = uint32(3_300_892)
+	)
+
+	full, err := binarycodec.Decode(canonicalHex)
+	if err != nil {
+		t.Fatalf("Decode canonical LoanBroker: %v", err)
+	}
+	owner, ok := full["Owner"].(string)
+	if !ok {
+		t.Fatalf("canonical LoanBroker Owner = %T, want string", full["Owner"])
+	}
+	vaultIDHex, ok := full["VaultID"].(string)
+	if !ok {
+		t.Fatalf("canonical LoanBroker VaultID = %T, want string", full["VaultID"])
+	}
+	ownerID, err := state.DecodeAccountID(owner)
+	if err != nil {
+		t.Fatalf("Decode owner: %v", err)
+	}
+	vaultAccountID, err := state.DecodeAccountID(vaultAccount)
+	if err != nil {
+		t.Fatalf("Decode vault account: %v", err)
+	}
+	ledgerIndex := mustIndex(t, ledgerIndexHex)
+	vaultID := mustIndex(t, vaultIDHex)
+	ownerDir := keylet.OwnerDirPage(ownerID, 0).Key
+	vaultDir := keylet.OwnerDirPage(vaultAccountID, 0).Key
+
+	newFields := maps.Clone(full)
+	for _, field := range []string{
+		"LedgerEntryType",
+		"Flags",
+		"OwnerNode",
+		"VaultNode",
+		"PreviousTxnID",
+		"PreviousTxnLgrSeq",
+	} {
+		delete(newFields, field)
+	}
+	meta := encodeMeta(t,
+		map[string]any{"ModifiedNode": map[string]any{
+			"LedgerEntryType": "DirectoryNode",
+			"LedgerIndex":     protocol.Hash256Hex(ownerDir),
+			"FinalFields": map[string]any{
+				"Flags": 0, "Owner": owner, "RootIndex": protocol.Hash256Hex(ownerDir),
+			},
+		}},
+		map[string]any{"ModifiedNode": map[string]any{
+			"LedgerEntryType": "DirectoryNode",
+			"LedgerIndex":     protocol.Hash256Hex(vaultDir),
+			"FinalFields": map[string]any{
+				"Flags": 0, "Owner": vaultAccount, "RootIndex": protocol.Hash256Hex(vaultDir),
+			},
+		}},
+		map[string]any{"CreatedNode": map[string]any{
+			"LedgerEntryType": "LoanBroker",
+			"LedgerIndex":     ledgerIndexHex,
+			"NewFields":       newFields,
+		}},
+	)
+
+	corrected, err := reconstructFromMeta(
+		putAll(t, map[[32]byte][]byte{
+			keylet.VaultByID(vaultID).Key: vaultSLE(t, vaultAccount, owner),
+			ownerDir: encodeSLE(t, map[string]any{
+				"LedgerEntryType": "DirectoryNode", "Flags": 0,
+				"Owner": owner, "RootIndex": protocol.Hash256Hex(ownerDir),
+			}),
+			vaultDir: encodeSLE(t, map[string]any{
+				"LedgerEntryType": "DirectoryNode", "Flags": 0,
+				"Owner": vaultAccount, "RootIndex": protocol.Hash256Hex(vaultDir),
+			}),
+		}),
+		[]metaTx{{Blob: meta, TxHash: mustIndex(t, txHashHex)}},
+		ledgerSeq,
+	)
+	if err != nil {
+		t.Fatalf("reconstructFromMeta: %v", err)
+	}
+	item, found, err := corrected.Get(ledgerIndex)
+	if err != nil {
+		t.Fatalf("Get LoanBroker: %v", err)
+	}
+	if !found {
+		t.Fatal("reconstructed LoanBroker is missing")
+	}
+	if got := strings.ToUpper(hex.EncodeToString(item.Data())); got != canonicalHex {
+		t.Fatalf("reconstructed LoanBroker\n got: %s\nwant: %s", got, canonicalHex)
+	}
+	assertDirectoryMembers(t, corrected, ownerDir, ledgerIndex)
+	assertDirectoryMembers(t, corrected, vaultDir, ledgerIndex)
+}
+
 func TestApplyAffectedNode_AMMCreateDefaults(t *testing.T) {
 	const (
 		ammIndex   = "00000000000000000000000000000000000000000000000000000000000000A0"
@@ -1203,6 +1302,58 @@ func TestReconstructFromMeta_LoanDeleteDirectories(t *testing.T) {
 	assertDirectoryMembers(t, corrected, brokerDir)
 }
 
+func TestReconstructFromMeta_LoanBrokerDeleteDirectories(t *testing.T) {
+	const (
+		brokerAccount = "rEaWzpDUL2cBckwDJhRENZiKCbNKwG2cAZ"
+		owner         = "rrrrrrrrrrrrrrrrrrrrBZbvji"
+		vaultAccount  = "rpRrVjCLggyjBaAYreukcyuWuzb23wuWrn"
+		brokerIDHex   = "33353F075781FD714AE43F61FC6B4A88BCB5CE3C348FE0FF40B1F6F803C7D86A"
+		vaultIDHex    = "44453F075781FD714AE43F61FC6B4A88BCB5CE3C348FE0FF40B1F6F803C7D86A"
+	)
+
+	ownerID, _ := state.DecodeAccountID(owner)
+	vaultAccountID, _ := state.DecodeAccountID(vaultAccount)
+	brokerKey := mustIndex(t, brokerIDHex)
+	vaultID := mustIndex(t, vaultIDHex)
+	ownerDir := keylet.OwnerDirPage(ownerID, 2).Key
+	vaultDir := keylet.OwnerDirPage(vaultAccountID, 3).Key
+	brokerFields := map[string]any{
+		"LedgerEntryType": "LoanBroker", "Flags": 0, "Sequence": uint32(1),
+		"OwnerNode": "2", "VaultNode": "3", "VaultID": vaultIDHex,
+		"Account": brokerAccount, "Owner": owner, "LoanSequence": uint32(1),
+		"PreviousTxnID": testTxHashHex, "PreviousTxnLgrSeq": testLedgerSeq - 1,
+	}
+	preState := putAll(t, map[[32]byte][]byte{
+		brokerKey:                     encodeSLE(t, brokerFields),
+		keylet.VaultByID(vaultID).Key: vaultSLE(t, vaultAccount, owner),
+		ownerDir: encodeSLE(t, map[string]any{
+			"LedgerEntryType": "DirectoryNode", "Flags": 0, "Owner": owner,
+			"RootIndex": protocol.Hash256Hex(keylet.OwnerDir(ownerID).Key), "Indexes": []string{brokerIDHex},
+		}),
+		vaultDir: encodeSLE(t, map[string]any{
+			"LedgerEntryType": "DirectoryNode", "Flags": 0, "Owner": vaultAccount,
+			"RootIndex": protocol.Hash256Hex(keylet.OwnerDir(vaultAccountID).Key), "Indexes": []string{brokerIDHex},
+		}),
+	})
+	finalFields := maps.Clone(brokerFields)
+	delete(finalFields, "LedgerEntryType")
+	delete(finalFields, "PreviousTxnID")
+	delete(finalFields, "PreviousTxnLgrSeq")
+	meta := encodeMeta(t, map[string]any{"DeletedNode": map[string]any{
+		"LedgerEntryType": "LoanBroker", "LedgerIndex": brokerIDHex, "FinalFields": finalFields,
+	}})
+
+	corrected, err := reconstructFromMeta(preState, []metaTx{{Blob: meta}}, testLedgerSeq)
+	if err != nil {
+		t.Fatalf("reconstructFromMeta: %v", err)
+	}
+	if _, found, err := corrected.Get(brokerKey); err != nil || found {
+		t.Fatalf("deleted LoanBroker present (found=%v err=%v)", found, err)
+	}
+	assertDirectoryMembers(t, corrected, ownerDir)
+	assertDirectoryMembers(t, corrected, vaultDir)
+}
+
 func TestReconstructFromMeta_LoanDeleteAfterLoanBrokerDelete(t *testing.T) {
 	const borrower = "rEaWzpDUL2cBckwDJhRENZiKCbNKwG2cAZ"
 	const brokerAccount = "rpRrVjCLggyjBaAYreukcyuWuzb23wuWrn"
@@ -1223,8 +1374,9 @@ func TestReconstructFromMeta_LoanDeleteAfterLoanBrokerDelete(t *testing.T) {
 		"StartDate": uint32(836247371), "PaymentInterval": uint32(400), "PeriodicPayment": "10000",
 	}
 	preState := putAll(t, map[[32]byte][]byte{
-		brokerKey: loanBrokerSLE(t, brokerAccount, brokerOwner),
-		loanKey:   encodeSLE(t, loanFields),
+		brokerKey:                        loanBrokerSLE(t, brokerAccount, brokerOwner),
+		loanKey:                          encodeSLE(t, loanFields),
+		keylet.VaultByID([32]byte{}).Key: vaultSLE(t, brokerAccount, brokerOwner),
 		borrowerDir: encodeSLE(t, map[string]any{
 			"LedgerEntryType": "DirectoryNode", "Flags": 0, "Owner": borrower,
 			"RootIndex": protocol.Hash256Hex(borrowerDir), "Indexes": []string{loanKeyHex},
@@ -1239,7 +1391,10 @@ func TestReconstructFromMeta_LoanDeleteAfterLoanBrokerDelete(t *testing.T) {
 	meta := encodeMeta(t,
 		map[string]any{"DeletedNode": map[string]any{
 			"LedgerEntryType": "LoanBroker", "LedgerIndex": brokerIDHex,
-			"FinalFields": map[string]any{"Account": brokerAccount, "OwnerNode": "0"},
+			"FinalFields": map[string]any{
+				"Account": brokerAccount, "Owner": brokerOwner,
+				"OwnerNode": "0", "VaultNode": "0", "VaultID": strings.Repeat("0", 64),
+			},
 		}},
 		map[string]any{"DeletedNode": map[string]any{
 			"LedgerEntryType": "Loan", "LedgerIndex": loanKeyHex,
@@ -1291,12 +1446,76 @@ func TestReconstructFromMeta_LoanBrokerResolutionErrors(t *testing.T) {
 	}
 }
 
+func TestReconstructFromMeta_LoanBrokerVaultResolutionErrors(t *testing.T) {
+	const vaultIDHex = "44453F075781FD714AE43F61FC6B4A88BCB5CE3C348FE0FF40B1F6F803C7D86A"
+	vaultID := mustIndex(t, vaultIDHex)
+	vaultKey := keylet.VaultByID(vaultID).Key
+	meta := encodeMeta(t, map[string]any{"CreatedNode": map[string]any{
+		"LedgerEntryType": "LoanBroker",
+		"LedgerIndex":     "33353F075781FD714AE43F61FC6B4A88BCB5CE3C348FE0FF40B1F6F803C7D86A",
+		"NewFields": map[string]any{
+			"Account":      "rEaWzpDUL2cBckwDJhRENZiKCbNKwG2cAZ",
+			"Owner":        "rrrrrrrrrrrrrrrrrrrrBZbvji",
+			"Sequence":     uint32(1),
+			"LoanSequence": uint32(1),
+			"VaultID":      vaultIDHex,
+		},
+	}})
+
+	for _, tt := range []struct {
+		name    string
+		entries map[[32]byte][]byte
+		want    string
+	}{
+		{name: "missing vault", want: "not found"},
+		{
+			name:    "corrupt vault",
+			entries: map[[32]byte][]byte{vaultKey: bytes.Repeat([]byte{0xff}, 12)},
+			want:    "decoding Vault",
+		},
+		{
+			name: "wrong entry type",
+			entries: map[[32]byte][]byte{vaultKey: encodeSLE(t, map[string]any{
+				"LedgerEntryType": "AccountRoot", "Account": testAccount,
+				"Balance": "0", "Flags": 0, "OwnerCount": 0, "Sequence": 0,
+			})},
+			want: "resolved to AccountRoot",
+		},
+		{
+			name: "missing account",
+			entries: map[[32]byte][]byte{vaultKey: encodeSLE(t, map[string]any{
+				"LedgerEntryType": "Vault", "Flags": 0, "Sequence": uint32(1),
+				"OwnerNode": "0", "Owner": testAccount,
+			})},
+			want: "invalid Account",
+		},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			_, err := reconstructFromMeta(putAll(t, tt.entries), []metaTx{{Blob: meta}}, testLedgerSeq)
+			if err == nil || !strings.Contains(err.Error(), tt.want) {
+				t.Fatalf("error = %v, want substring %q", err, tt.want)
+			}
+		})
+	}
+}
+
 func loanBrokerSLE(t *testing.T, account, owner string) []byte {
 	t.Helper()
 	return encodeSLE(t, map[string]any{
 		"LedgerEntryType": "LoanBroker", "Flags": 0, "Sequence": uint32(0),
 		"OwnerNode": "0", "VaultNode": "0", "VaultID": strings.Repeat("0", 64),
 		"Account": account, "Owner": owner, "LoanSequence": uint32(0),
+		"PreviousTxnID": strings.Repeat("0", 64), "PreviousTxnLgrSeq": uint32(0),
+	})
+}
+
+func vaultSLE(t *testing.T, account, owner string) []byte {
+	t.Helper()
+	return encodeSLE(t, map[string]any{
+		"LedgerEntryType": "Vault", "Flags": 0, "Sequence": uint32(0),
+		"OwnerNode": "0", "Owner": owner, "Account": account,
+		"Asset":      map[string]any{"currency": "XRP"},
+		"ShareMPTID": strings.Repeat("0", 48), "WithdrawalPolicy": 1,
 		"PreviousTxnID": strings.Repeat("0", 64), "PreviousTxnLgrSeq": uint32(0),
 	})
 }
