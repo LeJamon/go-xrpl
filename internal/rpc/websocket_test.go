@@ -208,12 +208,30 @@ func TestWebSocketServer_Close_ContextInterruptsBlockedControlWrite(t *testing.T
 		t.Fatal("server write did not block")
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
-	defer cancel()
+	ctx, cancel := context.WithCancel(context.Background())
 	start := time.Now()
-	err = ws.Close(ctx)
-	if !errors.Is(err, context.DeadlineExceeded) {
-		t.Fatalf("Close error = %v, want context deadline exceeded", err)
+	closeDone := make(chan error, 1)
+	go func() {
+		closeDone <- ws.Close(ctx)
+	}()
+	for {
+		ws.connectionsMutex.RLock()
+		closing := ws.closing
+		ws.connectionsMutex.RUnlock()
+		if closing {
+			break
+		}
+		runtime.Gosched()
+	}
+	cancel()
+
+	select {
+	case err = <-closeDone:
+	case <-time.After(500 * time.Millisecond):
+		t.Fatal("Close did not return after context cancellation")
+	}
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("Close error = %v, want context canceled", err)
 	}
 	if elapsed := time.Since(start); elapsed > 500*time.Millisecond {
 		t.Fatalf("Close took %v with a blocked control write", elapsed)

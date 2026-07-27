@@ -45,19 +45,21 @@ type URLSubscriptionRegistry struct {
 	ctx    context.Context
 	cancel context.CancelFunc
 
-	mu     sync.Mutex
-	subs   map[string]*rpcSub
-	closed bool
+	mu        sync.Mutex
+	subs      map[string]*rpcSub
+	closed    bool
+	closeDone chan struct{}
 }
 
 func newURLSubscriptionRegistry(ws *WebSocketServer) *URLSubscriptionRegistry {
 	ctx, cancel := context.WithCancel(context.Background())
 	return &URLSubscriptionRegistry{
-		ws:     ws,
-		client: &http.Client{Timeout: rpcSubRequestTimeout},
-		ctx:    ctx,
-		cancel: cancel,
-		subs:   make(map[string]*rpcSub),
+		ws:        ws,
+		client:    &http.Client{Timeout: rpcSubRequestTimeout},
+		ctx:       ctx,
+		cancel:    cancel,
+		subs:      make(map[string]*rpcSub),
+		closeDone: make(chan struct{}),
 	}
 }
 
@@ -194,13 +196,16 @@ func (r *URLSubscriptionRegistry) tryRemove(rawURL string) {
 func (r *URLSubscriptionRegistry) Close() {
 	r.mu.Lock()
 	if r.closed {
+		closeDone := r.closeDone
 		r.mu.Unlock()
+		<-closeDone
 		return
 	}
 	r.closed = true
 	subs := r.subs
 	r.subs = make(map[string]*rpcSub)
 	r.mu.Unlock()
+	defer close(r.closeDone)
 
 	r.cancel()
 	for _, sub := range subs {
