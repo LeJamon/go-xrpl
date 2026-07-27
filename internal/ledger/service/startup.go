@@ -15,7 +15,6 @@ import (
 	"github.com/LeJamon/go-xrpl/storage/relationaldb"
 )
 
-// StartupMode selects how the ledger service establishes its initial frontier.
 type StartupMode uint8
 
 const (
@@ -33,7 +32,6 @@ const (
 	StartupNetwork
 )
 
-// StartupConfig describes the explicitly selected startup mode and its operand.
 type StartupConfig struct {
 	Mode   StartupMode
 	Ledger string

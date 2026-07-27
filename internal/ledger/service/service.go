@@ -53,8 +53,7 @@ var (
 // Config holds configuration for the LedgerService
 type Config struct {
 	Standalone bool
-	// Startup selects an explicit initial-ledger workflow.
-	Startup StartupConfig
+	Startup    StartupConfig
 	// NodeSize selects rippled's cache sweep cadence. Empty uses the medium
 	// profile, matching the top-level configuration default.
 	NodeSize string
