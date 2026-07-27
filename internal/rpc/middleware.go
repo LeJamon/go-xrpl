@@ -2,7 +2,8 @@ package rpc
 
 import (
 	"net/http"
-	"strings"
+
+	"github.com/gorilla/websocket"
 )
 
 // PortMiddleware returns an http.Handler that enforces per-port connection
@@ -35,5 +36,5 @@ func PortMiddleware(pc *PortContext, limiter *ConnLimiter, next http.Handler) ht
 
 // isWebSocketUpgrade returns true if the request is a WebSocket upgrade.
 func isWebSocketUpgrade(r *http.Request) bool {
-	return strings.EqualFold(r.Header.Get("Upgrade"), "websocket")
+	return websocket.IsWebSocketUpgrade(r)
 }

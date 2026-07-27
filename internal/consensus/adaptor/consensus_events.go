@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/LeJamon/go-xrpl/internal/consensus"
+	"github.com/LeJamon/go-xrpl/internal/ledger"
 	"github.com/LeJamon/go-xrpl/internal/peermanagement/message"
 	"github.com/LeJamon/go-xrpl/protocol"
 )
@@ -459,15 +460,55 @@ func (a *Adaptor) OnLedgerSwitched(ledger consensus.Ledger) error {
 	if ledger == nil {
 		return nil
 	}
+	var historyFloor uint32
+	switched := false
 	if wrapped, ok := ledger.(*LedgerWrapper); ok {
+		selected := wrapped.Unwrap()
+		historyFloor = switchedLedgerHistoryFloor(
+			selected,
+			a.ledgerService.GetClosedLedger(),
+			a.ledgerService.GetValidatedLedger(),
+		)
 		if err := a.ledgerService.SwitchToPreferredLedger(wrapped.Unwrap()); err != nil {
 			return fmt.Errorf("switch canonical closed ledger at sequence %d: %w", ledger.Seq(), err)
 		}
+		switched = true
 	}
 	id := ledger.ID()
 	parent := ledger.ParentID()
+	if switched && a.onLedgerSwitched != nil {
+		a.onLedgerSwitched(ledger.Seq(), [32]byte(id), [32]byte(parent), historyFloor)
+	}
 	a.broadcastSwitchedLedger(ledger.Seq(), id[:], parent[:])
 	return nil
+}
+
+func switchedLedgerHistoryFloor(selected, closed, validated *ledger.Ledger) uint32 {
+	if selected == nil || selected.Sequence() == 0 {
+		return 0
+	}
+	if closed != nil {
+		if selected.Hash() == closed.Hash() {
+			return selected.Sequence() - 1
+		}
+		if selected.Sequence() > closed.Sequence() &&
+			selected.Sequence()-closed.Sequence() == 1 &&
+			selected.ParentHash() == closed.Hash() {
+			return selected.Sequence() - 1
+		}
+	}
+
+	var floor uint32
+	for _, candidate := range []*ledger.Ledger{validated, closed} {
+		if candidate == nil || candidate.Sequence() >= selected.Sequence() || candidate.Sequence() <= floor {
+			continue
+		}
+		hash, ok, err := selected.HashOfSeq(candidate.Sequence())
+		if err == nil && ok && hash == candidate.Hash() {
+			floor = candidate.Sequence()
+		}
+	}
+	return floor
 }
 
 // networkTime is the current time-adjusted clock as ripple-epoch seconds, for

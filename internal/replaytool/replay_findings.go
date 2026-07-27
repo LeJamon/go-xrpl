@@ -15,16 +15,16 @@ const findingSchema = "goxrpl.replay.finding/v1"
 // form so the parallel fleet can survey every divergence in a single pass and
 // dedup by root cause downstream.
 type Finding struct {
-	Schema                 string            `json:"schema"`
-	GoXRPLCommit           string            `json:"goxrpl_commit"`
-	LedgerIndex            uint32            `json:"ledger_index"`
-	ParentLedgerHash       string            `json:"parent_ledger_hash"`
-	TxCount                int               `json:"tx_count"`
-	Hashes                 findingHashes     `json:"hashes"`
-	ReconstructionVerified bool              `json:"reconstruction_verified"`
-	DivergingObjects       []divergingObject `json:"diverging_objects"`
-	TxSet                  []findingTx       `json:"tx_set"`
-	Errors                 []string          `json:"errors,omitempty"`
+	Schema                 string             `json:"schema"`
+	GoXRPLCommit           string             `json:"goxrpl_commit"`
+	LedgerIndex            uint32             `json:"ledger_index"`
+	ParentLedgerHash       string             `json:"parent_ledger_hash"`
+	TxCount                int                `json:"tx_count"`
+	Hashes                 findingHashes      `json:"hashes"`
+	ReconstructionVerified bool               `json:"reconstruction_verified"`
+	DivergingObjects       *[]divergingObject `json:"diverging_objects,omitempty"`
+	TxSet                  []findingTx        `json:"tx_set"`
+	Errors                 []string           `json:"errors,omitempty"`
 }
 
 type findingHashes struct {
@@ -103,9 +103,17 @@ func goxrplCommit(override string) string {
 
 // buildFinding assembles a Finding from a divergent block result and the
 // reconstructed mainnet post-state. diverging holds the exact set of objects
-// that differ between goXRPL's post-state and mainnet's.
+// that differ between goXRPL's post-state and a verified mainnet reconstruction;
+// unverified candidates never carry object-level diagnoses.
 func buildFinding(commit string, ledgerIndex uint32, parentHash [32]byte, result *BlockResult, reconstructionVerified bool, diverging []divergingObject) *Finding {
 	hexOf := func(b [32]byte) string { return hex.EncodeToString(b[:]) }
+	var findingDiverging *[]divergingObject
+	if reconstructionVerified {
+		if diverging == nil {
+			diverging = []divergingObject{}
+		}
+		findingDiverging = &diverging
+	}
 
 	txSet := make([]findingTx, 0, len(result.TxResults))
 	for _, t := range result.TxResults {
@@ -134,7 +142,7 @@ func buildFinding(commit string, ledgerIndex uint32, parentHash [32]byte, result
 			TotalCoinsExpected:  result.ExpectedTotalCoins,
 		},
 		ReconstructionVerified: reconstructionVerified,
-		DivergingObjects:       diverging,
+		DivergingObjects:       findingDiverging,
 		TxSet:                  txSet,
 		Errors:                 result.Errors,
 	}

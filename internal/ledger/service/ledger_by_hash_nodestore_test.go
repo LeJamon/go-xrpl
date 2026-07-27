@@ -46,6 +46,7 @@ func TestService_GetLedgerByHashLoadsEvictedLedgerFromNodeStore(t *testing.T) {
 	genesisConfig.Amendments = append(genesisConfig.Amendments, amendment.FeatureXRPFees)
 	svc, err := New(Config{
 		Standalone:    true,
+		Startup:       StartupConfig{Mode: StartupFresh},
 		GenesisConfig: genesisConfig,
 		NodeStore:     db,
 		SHAMapFamily:  shamapbackend.New(db),

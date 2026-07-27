@@ -122,7 +122,10 @@ func TestRotation_ReclaimsNodeStoreSpace(t *testing.T) {
 func TestRotation_RotatingPebblePromotesLiveStateAndRetiresHistory(t *testing.T) {
 	ctx := context.Background()
 	path := filepath.Join(t.TempDir(), "nodes")
-	backend, err := kvpebble.NewRotating(path, 16<<20, 128)
+	backend, err := kvpebble.NewRotating(
+		path,
+		kvpebble.Options{BlockCacheBytes: 16 << 20, MaxOpenFiles: 200},
+	)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -205,7 +208,10 @@ func TestRotation_RotatingPebblePromotesLiveStateAndRetiresHistory(t *testing.T)
 		t.Fatal(err)
 	}
 
-	reopenedBackend, err := kvpebble.NewRotating(path, 16<<20, 128)
+	reopenedBackend, err := kvpebble.NewRotating(
+		path,
+		kvpebble.Options{BlockCacheBytes: 16 << 20, MaxOpenFiles: 200},
+	)
 	if err != nil {
 		t.Fatal(err)
 	}

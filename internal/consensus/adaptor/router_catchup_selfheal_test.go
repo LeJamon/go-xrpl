@@ -21,18 +21,21 @@ func completedCatchUpAcquisition(t *testing.T, seq uint32) *inbound.Ledger {
 
 	var parentHash [32]byte
 	parentHash[0] = 0xEE // not in local history — forces the parentless path
-
-	rootHash, rootData, wire := buildSelfHealSourceState(t)
-	hdr := header.LedgerHeader{
+	return completedCatchUpAcquisitionWithHeader(t, header.LedgerHeader{
 		LedgerIndex: seq,
 		ParentHash:  parentHash,
-		AccountHash: rootHash,
-		// TxHash left zero: empty tx tree, complete once the state tree is filled.
-	}
+	})
+}
+
+func completedCatchUpAcquisitionWithHeader(t *testing.T, hdr header.LedgerHeader) *inbound.Ledger {
+	t.Helper()
+
+	rootHash, rootData, wire := buildSelfHealSourceState(t)
+	hdr.AccountHash = rootHash
 	data := header.AddRaw(hdr, false)
 	ledgerHash := sha512half.Sum(protocol.HashPrefixLedgerMaster().Bytes(), data)
 
-	il := inbound.New(ledgerHash, seq, 7, serveTestLogger())
+	il := inbound.New(ledgerHash, hdr.LedgerIndex, 7, serveTestLogger())
 	require.NoError(t, il.GotBase([]message.LedgerNode{
 		{NodeData: data},
 		{NodeData: rootData},

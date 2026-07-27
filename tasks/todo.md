@@ -2009,3 +2009,94 @@ independently re-verified.
   available. The captured parent Amendments shape and the state invariants are
   covered by deterministic regressions.
 - No blocking, major, or minor correctness or conformance findings remain.
+
+# PR #1429 regression fixes
+
+Target: `fix/issue-1428-slow-bootstrap-wedge` at
+`b90ba356b5fccdbba16aeb633a3fa536453ba4c1`.
+Behavioral oracle: local rippled v3.2.0 checkout at
+`rippled-worktrees/v3.2.0-oracle/`.
+
+## Plan
+
+- [x] Keep staged bootstrap candidates hash-addressable without advancing the
+      validated frontier before currentness and compatibility checks.
+- [x] Install fetched and already-held validated history into sequence history,
+      durable indexes, and `complete_ledgers` without moving closed/open state.
+- [x] Schedule deep-gap history recovery after immediate, replay, and deferred
+      initial switches.
+- [x] Add regressions for stale pending-validation promotion, history completion,
+      held bootstrap anchors, replay switches, and maintenance retries.
+- [x] Run focused and full verification, review the complete diff against
+      rippled v3.2.0, and record the results.
+- [x] Stage only the scoped changes, commit, push the PR branch, and confirm the
+      published head and checks.
+
+## Review
+
+- Stored/bootstrap candidates remain hash-addressable but cannot advance the
+  closed, open, or validated frontiers before a successful consensus switch.
+  Live trusted quorum and currentness are rechecked before adoption; router
+  handoff, recovery, and operating-mode state commit only after acceptance.
+- Historical acquisitions now populate validated sequence history, transaction
+  indexes, persistence, and `complete_ledgers` only when they connect to the
+  selected canonical child, without moving current ledger frontiers.
+- Every successful preferred-ledger switch schedules ancestry-bounded history
+  recovery. Held anchors, replay switches, deferred Busy retries, stale walk
+  generations, and synchronous peer failures are covered by regressions.
+- Post-validation amendment and local-transaction work runs after releasing the
+  service mutex. Independent conformance review found no remaining issues.
+- Passing gates: affected packages normally and under `-race`, `just test-core`,
+  `just build`, `just vet`, configured and strict `golangci-lint`, and
+  `git diff --check`. The aggregate core gate initially hit an unrelated missing
+  Go build-cache entry in an RPC analyzer; its isolated test and uncontended
+  core rerun passed.
+- The local rippled oracle files were reviewed, but its `.git` worktree pointer
+  is broken, so the configured v3.2.0 SHA/tag and clean status could not be
+  independently re-verified.
+
+# Issue #1435 — peerfinder bootstrap fallback
+
+Target: `origin/main` at `2d58a04e3e447e0c737a1dbba779ffa3a1fd05cb`.
+Behavioral oracle: local rippled v3.2.0 snapshot at
+`rippled-worktrees/v3.2.0-oracle/`.
+
+## Plan
+
+- [x] Validate GitHub access, repository identity, open issue state, absence of
+      linked work, default base branch, and clean dedicated worktree.
+- [x] Trace bootstrap-source precedence, address normalization, fixed-peer
+      persistence, and standalone startup in goXRPL and rippled v3.2.0.
+- [x] Add focused configuration tests for explicit, fixed-only, empty, and
+      legacy address forms plus a fixed-only startup regression; verify the
+      standalone composition-root gate remains intact.
+- [x] Implement the smallest production-quality fallback matching rippled while
+      retaining the independent fixed-peer lane.
+- [x] Run formatting, focused and affected tests, race coverage where useful,
+      build, vet, strict lint, and final diff/conformance review.
+- [x] Record exact review results, stage only intentional files, commit, push,
+      open the PR against `main`, and verify the published head.
+
+## Review
+
+- `OverlayOptionsFromConfig` now applies rippled's `[ips]`, `[ips_fixed]`, then
+  four-public-default precedence. Fixed-only endpoints are copied into the
+  bootstrap source and separately retained as fixed peers.
+- The four public defaults remain explicitly on port 51235. Configured
+  endpoints with an omitted, empty, or zero port use rippled's IANA default
+  2459 in both roles; IPv4, hostname, IPv6, whitespace, and legacy bracket
+  forms follow the v3.2.0 parser behavior.
+- Portless `[ips_fixed]` entries are now valid so the same normalization is
+  reachable through loaded configurations. Standalone still skips
+  `adaptor.NewFromConfig` entirely and therefore initiates no peer discovery.
+- The startup integration regression removes the fixed-peer lane after option
+  derivation and proves a fixed-only endpoint still connects through ordinary
+  bootstrap selection.
+- Passing gates: focused tests repeated, affected packages under `-race`,
+  `just test-core`, `just test-libs`, `just build-all`, `just vet`, tagged
+  PostgreSQL vet, strict CI and advisory golangci-lint v2.11.3, formatting, and
+  `git diff --check`.
+- Independent Go-quality and rippled-conformance reviews found no remaining
+  findings. The designated local oracle snapshot was reviewed directly; its
+  detached worktree metadata cannot independently prove the expected
+  `3c43f4614f87965298773279ff5b85d4c56c637b` commit.

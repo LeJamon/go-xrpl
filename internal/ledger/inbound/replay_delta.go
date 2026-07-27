@@ -186,6 +186,154 @@ func NewReplayDeltaWithClock(hash [32]byte, peerID uint64, parent *ledger.Ledger
 	}
 }
 
+// NewStoredLedgerReplay creates a complete replay from locally stored parent
+// and target ledgers. The target's transaction leaves are decoded and ordered
+// by sfTransactionIndex so Apply can rebuild the target deterministically.
+func NewStoredLedgerReplay(parent, target *ledger.Ledger, logger *slog.Logger) (*ReplayDelta, error) {
+	if parent == nil {
+		return nil, errors.New("stored replay parent is nil")
+	}
+	if target == nil {
+		return nil, errors.New("stored replay target is nil")
+	}
+	if !parent.IsClosed() {
+		return nil, errors.New("stored replay parent is not closed")
+	}
+	if !target.IsClosed() {
+		return nil, errors.New("stored replay target is not closed")
+	}
+
+	parentHash := parent.Hash()
+	targetHeader := target.Header()
+	if targetHeader.ParentHash != parentHash {
+		return nil, fmt.Errorf(
+			"%w: target parent %x, expected %x",
+			ErrReplayParentMismatch,
+			targetHeader.ParentHash[:8],
+			parentHash[:8],
+		)
+	}
+	if parent.Sequence() == ^uint32(0) {
+		return nil, fmt.Errorf(
+			"%w: parent sequence %d has no successor",
+			ErrReplaySequenceMismatch,
+			parent.Sequence(),
+		)
+	}
+	expectedSequence := parent.Sequence() + 1
+	if targetHeader.LedgerIndex != expectedSequence {
+		return nil, fmt.Errorf(
+			"%w: target %d, expected %d",
+			ErrReplaySequenceMismatch,
+			targetHeader.LedgerIndex,
+			expectedSequence,
+		)
+	}
+	parentHeader := parent.Header()
+	expectedResolution := consensus.GetNextLedgerTimeResolution(
+		parentHeader.CloseTimeResolution,
+		parentHeader.GetCloseAgree(),
+		targetHeader.LedgerIndex,
+	)
+	if targetHeader.CloseTimeResolution != expectedResolution {
+		return nil, fmt.Errorf(
+			"stored replay target close time resolution: got %d, derived %d from parent",
+			targetHeader.CloseTimeResolution,
+			expectedResolution,
+		)
+	}
+	targetHash := target.Hash()
+	if calculated := header.CalculateHash(targetHeader); calculated != targetHash {
+		return nil, fmt.Errorf(
+			"stored replay target header hash mismatch: computed %x stored %x",
+			calculated[:8],
+			targetHash[:8],
+		)
+	}
+	txRoot, err := target.TxMapHash()
+	if err != nil {
+		return nil, fmt.Errorf("stored replay target transaction map: %w", err)
+	}
+	if txRoot != targetHeader.TxHash {
+		return nil, fmt.Errorf(
+			"stored replay target transaction root mismatch: computed %x header %x",
+			txRoot[:8],
+			targetHeader.TxHash[:8],
+		)
+	}
+
+	decoded := make([]DecodedTx, 0, target.TxCount())
+	seenIndices := make(map[uint32][32]byte)
+	var decodeErr error
+	err = target.ForEachTransaction(func(itemHash [32]byte, leafBlob []byte) bool {
+		txBytes, metaBytes, err := tx.SplitTxWithMetaBlob(leafBlob)
+		if err != nil {
+			decodeErr = fmt.Errorf("stored replay tx %x: split leaf: %w", itemHash[:8], err)
+			return false
+		}
+		if len(metaBytes) == 0 {
+			decodeErr = fmt.Errorf("stored replay tx %x: missing metadata", itemHash[:8])
+			return false
+		}
+		txIndex, ok := tx.TransactionIndexFromMetadata(metaBytes)
+		if !ok {
+			decodeErr = fmt.Errorf("stored replay tx %x: missing transaction index", itemHash[:8])
+			return false
+		}
+		if previous, duplicate := seenIndices[txIndex]; duplicate {
+			decodeErr = fmt.Errorf(
+				"stored replay duplicate transaction index %d for %x and %x",
+				txIndex,
+				previous[:8],
+				itemHash[:8],
+			)
+			return false
+		}
+		computedHash := sha512half.Sum(protocol.HashPrefixTransactionID().Bytes(), txBytes)
+		if computedHash != itemHash {
+			decodeErr = fmt.Errorf(
+				"stored replay transaction hash mismatch: computed %x stored %x",
+				computedHash[:8],
+				itemHash[:8],
+			)
+			return false
+		}
+
+		seenIndices[txIndex] = itemHash
+		decoded = append(decoded, DecodedTx{
+			Index:     txIndex,
+			Hash:      itemHash,
+			TxBytes:   append([]byte(nil), txBytes...),
+			MetaBytes: append([]byte(nil), metaBytes...),
+			LeafBlob:  append([]byte(nil), leafBlob...),
+		})
+		return true
+	})
+	if err != nil {
+		return nil, fmt.Errorf("walk stored replay transactions: %w", err)
+	}
+	if decodeErr != nil {
+		return nil, decodeErr
+	}
+
+	sort.Slice(decoded, func(i, j int) bool { return decoded[i].Index < decoded[j].Index })
+	for expected, dtx := range decoded {
+		if dtx.Index != uint32(expected) {
+			return nil, fmt.Errorf(
+				"stored replay missing transaction index %d; next index is %d",
+				expected,
+				dtx.Index,
+			)
+		}
+	}
+
+	replay := NewReplayDelta(targetHash, 0, parent, logger)
+	replay.result = target
+	replay.txs = decoded
+	replay.state = StateComplete
+	return replay, nil
+}
+
 // Hash returns the ledger hash being acquired.
 func (r *ReplayDelta) Hash() [32]byte { return r.hash }
 

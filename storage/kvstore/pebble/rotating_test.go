@@ -13,9 +13,17 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func rotatingTestOptions() kvpebble.Options {
+	return kvpebble.Options{BlockCacheBytes: 16 << 20, MaxOpenFiles: 200}
+}
+
+func legacyTestOptions() kvpebble.Options {
+	return kvpebble.Options{BlockCacheBytes: 8 << 20, MaxOpenFiles: 80}
+}
+
 func TestRotatingStoreConformance(t *testing.T) {
 	kvstoretest.RunConformance(t, func(t *testing.T) kvstore.KeyValueStore {
-		store, err := kvpebble.NewRotating(filepath.Join(t.TempDir(), "nodes"), 16<<20, 128)
+		store, err := kvpebble.NewRotating(filepath.Join(t.TempDir(), "nodes"), rotatingTestOptions())
 		require.NoError(t, err)
 		t.Cleanup(func() { require.NoError(t, store.Close()) })
 		return store
@@ -24,13 +32,13 @@ func TestRotatingStoreConformance(t *testing.T) {
 
 func TestRotatingStoreCanSkipRefreshOnlyForEmptyArchive(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "nodes")
-	legacy, err := kvpebble.New(path, 8<<20, 64, false)
+	legacy, err := kvpebble.New(path, legacyTestOptions(), false)
 	require.NoError(t, err)
 	require.NoError(t, legacy.Put([]byte("legacy"), []byte("value")))
 	require.NoError(t, legacy.Sync())
 	require.NoError(t, legacy.Close())
 
-	store, err := kvpebble.NewRotating(path, 16<<20, 128)
+	store, err := kvpebble.NewRotating(path, rotatingTestOptions())
 	require.NoError(t, err)
 	canSkip, err := store.CanRotateWithoutRefresh()
 	require.NoError(t, err)
@@ -48,7 +56,7 @@ func TestRotatingStoreCanSkipRefreshOnlyForEmptyArchive(t *testing.T) {
 	require.False(t, canSkip)
 	require.NoError(t, store.Close())
 
-	reopened, err := kvpebble.NewRotating(path, 16<<20, 128)
+	reopened, err := kvpebble.NewRotating(path, rotatingTestOptions())
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, reopened.Close()) })
 	canSkip, err = reopened.CanRotateWithoutRefresh()
@@ -63,14 +71,14 @@ func TestRotatingStoreCanSkipRefreshOnlyForEmptyArchive(t *testing.T) {
 
 func TestRotatingStoreExplicitPromotionPreservesLiveRecords(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "nodes")
-	legacy, err := kvpebble.New(path, 8<<20, 64, false)
+	legacy, err := kvpebble.New(path, legacyTestOptions(), false)
 	require.NoError(t, err)
 	require.NoError(t, legacy.Put([]byte("live"), []byte("live-value")))
 	require.NoError(t, legacy.Put([]byte("historical"), []byte("historical-value")))
 	require.NoError(t, legacy.Sync())
 	require.NoError(t, legacy.Close())
 
-	store, err := kvpebble.NewRotating(path, 16<<20, 128)
+	store, err := kvpebble.NewRotating(path, rotatingTestOptions())
 	require.NoError(t, err)
 
 	committed, err := store.Rotate(11, 1)
@@ -108,7 +116,7 @@ func TestRotatingStoreExplicitPromotionPreservesLiveRecords(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, store.Close())
 
-	reopened, err := kvpebble.NewRotating(path, 16<<20, 128)
+	reopened, err := kvpebble.NewRotating(path, rotatingTestOptions())
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, reopened.Close()) })
 	value, err = reopened.Get([]byte("live"))
@@ -118,7 +126,7 @@ func TestRotatingStoreExplicitPromotionPreservesLiveRecords(t *testing.T) {
 
 func TestRotatingStoreMissingCommittedGenerationIsFatal(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "nodes")
-	store, err := kvpebble.NewRotating(path, 16<<20, 128)
+	store, err := kvpebble.NewRotating(path, rotatingTestOptions())
 	require.NoError(t, err)
 	require.NoError(t, store.Close())
 
@@ -132,7 +140,7 @@ func TestRotatingStoreMissingCommittedGenerationIsFatal(t *testing.T) {
 	require.NotEmpty(t, state.Archive)
 	require.NoError(t, os.RemoveAll(filepath.Join(filepath.Dir(path), state.Archive)))
 
-	_, err = kvpebble.NewRotating(path, 16<<20, 128)
+	_, err = kvpebble.NewRotating(path, rotatingTestOptions())
 	require.Error(t, err)
 	require.ErrorContains(t, err, "generation")
 	require.ErrorContains(t, err, "unavailable")
@@ -140,7 +148,7 @@ func TestRotatingStoreMissingCommittedGenerationIsFatal(t *testing.T) {
 
 func TestRotatingStoreBatchTargetsWritableAtCommitTime(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "nodes")
-	store, err := kvpebble.NewRotating(path, 16<<20, 128)
+	store, err := kvpebble.NewRotating(path, rotatingTestOptions())
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, store.Close()) })
 
@@ -161,7 +169,7 @@ func TestRotatingStoreBatchTargetsWritableAtCommitTime(t *testing.T) {
 
 func TestRotatingStoreIteratorPinsGenerationsUntilRelease(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "nodes")
-	store, err := kvpebble.NewRotating(path, 16<<20, 128)
+	store, err := kvpebble.NewRotating(path, rotatingTestOptions())
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, store.Close()) })
 
@@ -187,7 +195,7 @@ func TestRotatingStoreIteratorPinsGenerationsUntilRelease(t *testing.T) {
 
 func TestRotatingStoreIteratorMergesGenerationsInKeyOrder(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "nodes")
-	store, err := kvpebble.NewRotating(path, 16<<20, 128)
+	store, err := kvpebble.NewRotating(path, rotatingTestOptions())
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, store.Close()) })
 
@@ -215,7 +223,7 @@ func TestRotatingStoreIteratorMergesGenerationsInKeyOrder(t *testing.T) {
 
 func TestRotatingStoreManifestFailureRollsBackCutover(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "nodes")
-	store, err := kvpebble.NewRotating(path, 16<<20, 128)
+	store, err := kvpebble.NewRotating(path, rotatingTestOptions())
 	require.NoError(t, err)
 	require.NoError(t, store.Put([]byte("durable"), []byte("value")))
 	require.NoError(t, store.Sync())
@@ -236,7 +244,7 @@ func TestRotatingStoreManifestFailureRollsBackCutover(t *testing.T) {
 	require.NoError(t, os.Rename(backupPath, statePath))
 	require.NoError(t, store.Close())
 
-	reopened, err := kvpebble.NewRotating(path, 16<<20, 128)
+	reopened, err := kvpebble.NewRotating(path, rotatingTestOptions())
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, reopened.Close()) })
 	value, err = reopened.Get([]byte("durable"))

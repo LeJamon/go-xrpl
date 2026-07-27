@@ -10,7 +10,7 @@ import (
 
 func TestRotateKeepsPublishedGenerationAfterDirectorySyncFailure(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "nodes")
-	store, err := NewRotating(path, 16<<20, 128)
+	store, err := NewRotating(path, Options{BlockCacheBytes: 16 << 20, MaxOpenFiles: 200})
 	require.NoError(t, err)
 	require.NoError(t, store.Put([]byte("durable"), []byte("value")))
 	require.NoError(t, store.Sync())
@@ -26,7 +26,7 @@ func TestRotateKeepsPublishedGenerationAfterDirectorySyncFailure(t *testing.T) {
 	require.Equal(t, []byte("value"), value)
 	require.NoError(t, store.Close())
 
-	reopened, err := NewRotating(path, 16<<20, 128)
+	reopened, err := NewRotating(path, Options{BlockCacheBytes: 16 << 20, MaxOpenFiles: 200})
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, reopened.Close()) })
 	lastRotated, minimumOnline := reopened.RotationState()

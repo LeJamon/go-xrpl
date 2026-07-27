@@ -59,6 +59,62 @@ A fully-commented example lives at
 is **required** unless marked optional — the server refuses to start if a required
 field is missing.
 
+### Startup ledger selection
+
+The `server` command accepts one startup mode:
+
+| Flag | Behavior |
+|------|----------|
+| `--start` | Start from a fresh ledger without consulting local history or the network. |
+| `--load` | Load the newest complete ledger available in local storage. |
+| `--ledger ID` | Load a locally stored ledger selected by `ID`. |
+| `--ledgerfile PATH` | Load a full, expanded rippled ledger JSON file. |
+| `--replay --ledger ID` | Load the selected ledger and its parent, then deterministically replay the selected close. |
+| `--net` | Ignore local startup history and acquire the initial ledger from peers. |
+
+The modes are mutually exclusive, except that `--replay` requires an explicitly
+specified `--ledger`. A ledger identifier may be a 64-character hexadecimal hash,
+the case-insensitive word `latest`, or an unsigned 32-bit decimal ledger sequence.
+An explicitly empty `--ledger=` also means the latest local ledger.
+`--ledgerfile` requires a non-empty path; its input is the full expanded ledger
+JSON produced by rippled, including the expanded account state.
+
+Fresh startup seeds the temporary chain with the configured genesis amendments
+and does not request a network ledger. Network startup uses an amendment-empty,
+unvalidated temporary ledger until a peer ledger is acquired. A successfully
+loaded ledger file is stored in the configured node and relational databases, so
+later `--load` or `--ledger` startups can select it without the source file.
+
+An explicit local load, file load, or replay failure normally stops startup. Set
+`[node_db].fast_load = true` only when falling back is acceptable: a failed
+explicit load then starts from genesis in standalone mode or acquires an initial
+ledger from the network in networked mode. With no startup flag on a networked
+node, `fast_load` first attempts the latest local ledger and otherwise acquires
+one from peers.
+
+Startup replay is separate from the top-level `ledger_replay` setting.
+`ledger_replay` advertises and controls peer replay capability; it does not select
+a startup mode. `--replay` starts from the selected ledger's stored parent and
+stages the selected transactions and close metadata for deterministic application
+on the next ledger close.
+
+Common recovery commands:
+
+```bash
+# Resume from the newest complete local ledger.
+xrpld server --conf /etc/xrpld/xrpld.toml --load
+
+# Recover from a known local sequence (a 64-character hash also works).
+xrpld server --conf /etc/xrpld/xrpld.toml --ledger 32570
+
+# Import an expanded ledger snapshot.
+xrpld server --conf /etc/xrpld/xrpld.toml --ledgerfile /var/lib/xrpld/recovery-ledger.json
+
+# Reproduce a stored close from its parent, or bypass suspect local history.
+xrpld server --conf /etc/xrpld/xrpld.toml --replay --ledger 32570
+xrpld server --conf /etc/xrpld/xrpld.toml --net
+```
+
 ### Time synchronization
 
 Accurate host time is a hard requirement. The peer handshake rejects a connection
@@ -160,7 +216,7 @@ keys to precede any `[section]` header.
 | `ledger_history` | `256` | Ledgers to retain: integer, `"full"`, or `"none"`. |
 | `fetch_depth` | `"full"` | Back-fill depth: integer, `"full"`, or `"none"` (values < 10 clamp to 10). |
 | `network_id` | `"main"` | `"main"`, `"testnet"`, `"devnet"`, or an integer. |
-| `ledger_replay` | `0` | `0` = disabled, `1` = enabled. |
+| `ledger_replay` | `0` | `0` = disabled, `1` = advertise peer replay capability. Unrelated to startup `--replay`. |
 
 ### Top-level — client, storage, diagnostics
 
@@ -185,12 +241,15 @@ List IPs in `admin` to grant those clients admin role.
 
 | Key | Example | Meaning |
 |-----|---------|---------|
-| `type` | `"NuDB"` | Backend engine (`NuDB` or `RocksDB`). |
-| `path` | `/var/lib/xrpld/db/nudb` | Node-store directory. |
+| `type` | `"pebble"` | Backend engine. |
+| `path` | `/var/lib/xrpld/db/pebble` | Node-store directory. |
 | `online_delete` | `512` | Keep this many recent ledgers online (`0` disables online delete). |
 | `advisory_delete` | `0` | `1` = only delete on an explicit trigger. |
-| `cache_size` | `16384` | In-memory node-cache entries. |
-| `cache_age` | `5` | Node-cache age in minutes. |
+| `cache_mb` | `2048` | Pebble block-cache capacity in MiB (`0` = 256 MiB). The writable and archive generations share this total. |
+| `open_files` | `1000` | Pebble open-file soft limit (`0` = 500). Single stores require at least 74; rotating stores require an even value of at least 148 and split it between generations. A rotation briefly opens a third generation and may use another half-limit. |
+| `cache_size` | `16384` | Decoded node-object cache entries (`0` = the `node_size` profile). This is independent of `cache_mb`. |
+| `cache_age` | `5` | Decoded node-object cache age in minutes (`0` = the `node_size` profile). |
+| `fast_load` | `false` | On networked startup, try the newest local ledger by default; also permit explicit load/replay failures to fall back to genesis or network acquisition. |
 | `earliest_seq` | `32570` | Lowest ledger sequence to retain. |
 | `delete_batch` / `back_off_milliseconds` / `age_threshold_seconds` / `recovery_wait_seconds` | `100`/`100`/`60`/`5` | Online-delete pacing (batch size, inter-batch pause, minimum age, catch-up wait). |
 

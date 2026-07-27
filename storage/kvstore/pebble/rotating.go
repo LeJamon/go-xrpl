@@ -33,7 +33,7 @@ type RotatingStore struct {
 
 	basePath   string
 	statePath  string
-	handles    int
+	options    Options
 	blockCache *cockroachpebble.Cache
 
 	writable      *Store
@@ -62,9 +62,26 @@ func HasRotationState(path string) (bool, error) {
 // NewRotating opens a two-generation Pebble store. An existing database at
 // path becomes the initial writable generation, so enabling online deletion
 // does not copy or rename an operator's current database.
-func NewRotating(path string, cache int, handles int) (*RotatingStore, error) {
+func NewRotating(path string, options Options) (*RotatingStore, error) {
 	if path == "" {
 		return nil, errors.New("kvstore/pebble: rotating store path is empty")
+	}
+	resolved, err := options.Resolve()
+	if err != nil {
+		return nil, err
+	}
+	if resolved.MaxOpenFiles < MinimumRotatingOpenFiles {
+		return nil, fmt.Errorf(
+			"kvstore/pebble: rotating store requires at least %d max open files, got %d",
+			MinimumRotatingOpenFiles,
+			resolved.MaxOpenFiles,
+		)
+	}
+	if resolved.MaxOpenFiles%2 != 0 {
+		return nil, fmt.Errorf(
+			"kvstore/pebble: rotating store requires an even max open files value, got %d",
+			resolved.MaxOpenFiles,
+		)
 	}
 	basePath, err := filepath.Abs(filepath.Clean(path))
 	if err != nil {
@@ -75,14 +92,12 @@ func NewRotating(path string, cache int, handles int) (*RotatingStore, error) {
 		return nil, fmt.Errorf("kvstore/pebble: create rotating parent: %w", err)
 	}
 
-	perGenerationHandles := 250
-	if handles > 0 {
-		perGenerationHandles = max(handles/2, 1)
-	}
+	perGenerationOptions := resolved
+	perGenerationOptions.MaxOpenFiles = resolved.MaxOpenFiles / 2
 	r := &RotatingStore{
 		basePath:  basePath,
 		statePath: basePath + generationStateSuffix,
-		handles:   perGenerationHandles,
+		options:   perGenerationOptions,
 		syncDir:   syncDirectory,
 	}
 
@@ -114,10 +129,7 @@ func NewRotating(path string, cache int, handles int) (*RotatingStore, error) {
 		}
 	}
 
-	if cache <= 0 {
-		cache = 256 << 20
-	}
-	r.blockCache = cockroachpebble.NewCache(int64(cache))
+	r.blockCache = cockroachpebble.NewCache(resolved.BlockCacheBytes)
 	keepCache := false
 	defer func() {
 		if !keepCache {
@@ -125,14 +137,14 @@ func NewRotating(path string, cache int, handles int) (*RotatingStore, error) {
 		}
 	}()
 
-	r.writable, err = newWithCache(r.writablePath, r.blockCache, r.handles, false)
+	r.writable, err = newWithCache(r.writablePath, r.blockCache, r.options, false)
 	if err != nil {
 		if !found {
 			_ = os.RemoveAll(r.archivePath)
 		}
 		return nil, err
 	}
-	r.archive, err = newWithCache(r.archivePath, r.blockCache, r.handles, false)
+	r.archive, err = newWithCache(r.archivePath, r.blockCache, r.options, false)
 	if err != nil {
 		_ = r.writable.Close()
 		if !found {
@@ -374,7 +386,7 @@ func (r *RotatingStore) Rotate(lastRotated, minimumOnline uint32) (bool, error) 
 		_ = os.RemoveAll(newPath)
 		return false, kvstore.ErrClosed
 	}
-	newWritable, err := newWithCache(newPath, r.blockCache, r.handles, false)
+	newWritable, err := newWithCache(newPath, r.blockCache, r.options, false)
 	r.mu.RUnlock()
 	if err != nil {
 		_ = os.RemoveAll(newPath)

@@ -450,3 +450,43 @@ func TestRPCSub_CloseStopsDelivery(t *testing.T) {
 	ws.SubscriptionManager().BroadcastToStream(types.SubLedger, data, nil)
 	sink.expectNone(t)
 }
+
+func TestRPCSub_ConcurrentCloseWaitsForDeliveryLoops(t *testing.T) {
+	ws, _ := newRPCSubTestServer(t)
+	sub := &rpcSub{
+		conn:     &types.Connection{ID: "blocked-rpcsub"},
+		done:     make(chan struct{}),
+		finished: make(chan struct{}),
+	}
+	ws.urlSubs.subs["blocked"] = sub
+
+	firstDone := make(chan struct{})
+	go func() {
+		ws.urlSubs.Close()
+		close(firstDone)
+	}()
+	<-sub.done
+
+	secondDone := make(chan struct{})
+	go func() {
+		ws.urlSubs.Close()
+		close(secondDone)
+	}()
+	select {
+	case <-secondDone:
+		t.Error("concurrent Close returned before the delivery loop finished")
+	case <-time.After(50 * time.Millisecond):
+	}
+
+	close(sub.finished)
+	select {
+	case <-firstDone:
+	case <-time.After(time.Second):
+		t.Fatal("first Close did not return after the delivery loop finished")
+	}
+	select {
+	case <-secondDone:
+	case <-time.After(time.Second):
+		t.Fatal("concurrent Close did not join the delivery loop")
+	}
+}

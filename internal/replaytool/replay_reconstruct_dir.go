@@ -133,6 +133,23 @@ func directoryPlacements(state *shamap.SHAMap, entryType string, fields map[stri
 		add(keylet.OwnerDirPage(broker, metaUint64(fields["LoanBrokerNode"])), dirSorted)
 		return out, nil
 
+	case "LoanBroker":
+		owner, ok := metaAccountID(fields, "Owner")
+		if !ok {
+			return nil, fmt.Errorf("LoanBroker has invalid Owner")
+		}
+		vaultID, ok := metaHash256(fields, "VaultID")
+		if !ok {
+			return nil, fmt.Errorf("LoanBroker has invalid VaultID")
+		}
+		vault, err := vaultDirectoryAccount(state, vaultID)
+		if err != nil {
+			return nil, err
+		}
+		add(keylet.OwnerDirPage(owner, metaUint64(fields["OwnerNode"])), dirSorted)
+		add(keylet.OwnerDirPage(vault, metaUint64(fields["VaultNode"])), dirSorted)
+		return out, nil
+
 	case "MPTokenIssuance":
 		if issuer, ok := metaAccountID(fields, "Issuer"); ok {
 			add(keylet.OwnerDirPage(issuer, metaUint64(fields["OwnerNode"])), dirSorted)
@@ -211,6 +228,29 @@ func loanBrokerAccount(state *shamap.SHAMap, brokerID [32]byte, brokerAccounts m
 	account, ok := metaAccountID(broker, "Account")
 	if !ok {
 		return [20]byte{}, fmt.Errorf("LoanBroker %X has invalid Account", brokerID)
+	}
+	return account, nil
+}
+
+func vaultDirectoryAccount(state *shamap.SHAMap, vaultID [32]byte) ([20]byte, error) {
+	vaultKey := keylet.VaultByID(vaultID).Key
+	item, found, err := state.Get(vaultKey)
+	if err != nil {
+		return [20]byte{}, fmt.Errorf("reading Vault %X: %w", vaultID, err)
+	}
+	if !found || item == nil {
+		return [20]byte{}, fmt.Errorf("Vault %X not found", vaultID)
+	}
+	vault, err := binarycodec.Decode(hex.EncodeToString(item.Data()))
+	if err != nil {
+		return [20]byte{}, fmt.Errorf("decoding Vault %X: %w", vaultID, err)
+	}
+	if vault["LedgerEntryType"] != "Vault" {
+		return [20]byte{}, fmt.Errorf("Vault %X resolved to %v", vaultID, vault["LedgerEntryType"])
+	}
+	account, ok := metaAccountID(vault, "Account")
+	if !ok {
+		return [20]byte{}, fmt.Errorf("Vault %X has invalid Account", vaultID)
 	}
 	return account, nil
 }

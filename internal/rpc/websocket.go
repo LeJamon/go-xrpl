@@ -46,6 +46,7 @@ type WebSocketServer struct {
 	methodRegistry      *types.MethodRegistry
 	connections         map[string]*WebSocketConnection
 	connectionsMutex    sync.RWMutex
+	closing             bool
 	timeout             time.Duration
 	ledgerInfoProvider  types.LedgerInfoProvider
 	connLimiter         *ConnLimiter
@@ -57,8 +58,8 @@ type WebSocketServer struct {
 	// so concurrency tests can drive the ping path without waiting on the
 	// production cadence.
 	pingInterval time.Duration
-	// wg tracks per-connection goroutines (read loop, send pump, ping loop)
-	// so Close can join them on shutdown.
+	// wg tracks admitted HTTP handlers and per-connection goroutines so Close
+	// can join them on shutdown.
 	wg sync.WaitGroup
 }
 
@@ -163,14 +164,28 @@ func (ws *WebSocketServer) SetConnLimiter(limiter *ConnLimiter) {
 
 func (ws *WebSocketServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	portCtx := GetPortContext(r.Context())
+	isWebSocket := isWebSocketUpgrade(r)
+
+	ws.connectionsMutex.Lock()
+	if ws.closing {
+		ws.connectionsMutex.Unlock()
+		if isWebSocket {
+			ws.releaseConnectionSlot(portCtx)
+		}
+		http.Error(w, "server shutting down", http.StatusServiceUnavailable)
+		return
+	}
+	ws.wg.Add(1)
+	ws.connectionsMutex.Unlock()
+	defer ws.wg.Done()
 
 	conn, err := ws.upgrader.Upgrade(w, r, nil)
 	if err != nil {
 		// PortMiddleware acquired a slot for this WS request and delegated its
 		// release to closeConnection, which never runs when the upgrade fails.
 		// Release here so a malformed upgrade can't permanently leak the slot.
-		if ws.connLimiter != nil && portCtx != nil {
-			ws.connLimiter.Release(portCtx.PortName)
+		if isWebSocket {
+			ws.releaseConnectionSlot(portCtx)
 		}
 		wsLog().Error("WebSocket upgrade failed", "err", err)
 		return
@@ -208,9 +223,12 @@ func (ws *WebSocketServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		forwardedFor:  fwd,
 	}
 
-	ws.attachConnection(wsConn)
+	if !ws.attachConnection(wsConn) {
+		wsConn.closeSocket()
+		ws.releaseConnectionSlot(portCtx)
+		return
+	}
 
-	ws.wg.Add(2)
 	go func() {
 		defer ws.wg.Done()
 		ws.handleConnection(wsConn)
@@ -218,6 +236,10 @@ func (ws *WebSocketServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	go func() {
 		defer ws.wg.Done()
 		ws.handleSend(wsConn)
+	}()
+	go func() {
+		defer ws.wg.Done()
+		ws.pingLoop(wsConn)
 	}()
 }
 
@@ -229,12 +251,6 @@ func (ws *WebSocketServer) handleConnection(wsConn *WebSocketConnection) {
 		wsConn.conn.SetReadDeadline(time.Now().Add(90 * time.Second))
 		return nil
 	})
-
-	ws.wg.Add(1)
-	go func() {
-		defer ws.wg.Done()
-		ws.pingLoop(wsConn)
-	}()
 
 	for {
 		wsConn.conn.SetReadDeadline(time.Now().Add(90 * time.Second))
@@ -1042,7 +1058,7 @@ func marshalWebSocketJSON(value any) ([]byte, error) {
 // subscription manager. Pairing this with detachConnection makes it
 // impossible for the two maps to drift on Add/Remove ordering — the
 // "duplicated connection state" concern flagged in the #428 audit.
-func (ws *WebSocketServer) attachConnection(wsConn *WebSocketConnection) {
+func (ws *WebSocketServer) attachConnection(wsConn *WebSocketConnection) bool {
 	legacy := &types.Connection{
 		ID:            wsConn.ID,
 		Subscriptions: wsConn.subscriptions,
@@ -1054,11 +1070,18 @@ func (ws *WebSocketServer) attachConnection(wsConn *WebSocketConnection) {
 		// ReadMessage until the 90 s deadline.
 		Disconnect: wsConn.closeSocket,
 	}
-	wsConn.legacy = legacy
+
 	ws.connectionsMutex.Lock()
+	if ws.closing {
+		ws.connectionsMutex.Unlock()
+		return false
+	}
+	ws.wg.Add(3)
+	wsConn.legacy = legacy
 	ws.connections[wsConn.ID] = wsConn
 	ws.connectionsMutex.Unlock()
 	ws.subscriptionManager.AddConnection(legacy)
+	return true
 }
 
 // detachConnection is the inverse of attachConnection.
@@ -1104,6 +1127,12 @@ func (ws *WebSocketServer) closeConnection(wsConn *WebSocketConnection) {
 	wsConn.conn.Close()
 
 	wsLog().Debug("WebSocket connection closed", "connID", wsConn.ID)
+}
+
+func (ws *WebSocketServer) releaseConnectionSlot(portCtx *PortContext) {
+	if ws.connLimiter != nil && portCtx != nil {
+		ws.connLimiter.Release(portCtx.PortName)
+	}
 }
 
 // buildSubscribeAck assembles the subscribe response payload shared by the
@@ -1277,32 +1306,66 @@ func (ws *WebSocketServer) SubscriptionManager() *subscription.Manager {
 }
 
 // Close gracefully closes all active WebSocket connections and url (RPCSub)
-// subscriptions, waiting for all per-connection goroutines (read loop, send
-// pump, ping loop) and url delivery loops to exit. The wait is bounded by
-// ctx so a misbehaving handler cannot stall shutdown indefinitely; if ctx
-// expires first, Close returns ctx.Err().
+// subscriptions, waiting for admitted HTTP handlers, per-connection
+// goroutines, and url delivery loops to exit. The wait is bounded by ctx so a
+// misbehaving handler cannot stall shutdown indefinitely; if ctx expires first,
+// Close returns ctx.Err().
 func (ws *WebSocketServer) Close(ctx context.Context) error {
 	ws.connectionsMutex.Lock()
+	ws.closing = true
+	connections := make([]*WebSocketConnection, 0, len(ws.connections))
 	for _, conn := range ws.connections {
-		// WriteControl (not WriteMessage) so the shutdown close frame
-		// serializes against a possibly-still-running handleSend instead of
-		// racing its message-frame write (#746).
-		conn.conn.WriteControl(
-			websocket.CloseMessage,
-			websocket.FormatCloseMessage(websocket.CloseGoingAway, "server shutdown"),
-			time.Now().Add(10*time.Second),
-		)
-		conn.cancel()
-		conn.conn.Close()
+		connections = append(connections, conn)
 	}
 	ws.connectionsMutex.Unlock()
 
+	closeDeadline := time.Now().Add(10 * time.Second)
+	if deadline, ok := ctx.Deadline(); ok && deadline.Before(closeDeadline) {
+		closeDeadline = deadline
+	}
+
+	var closeFrames sync.WaitGroup
+	closeFrames.Add(len(connections))
+	for _, conn := range connections {
+		conn.cancel()
+		go func() {
+			defer closeFrames.Done()
+			_ = conn.conn.WriteControl(
+				websocket.CloseMessage,
+				websocket.FormatCloseMessage(websocket.CloseGoingAway, "server shutdown"),
+				closeDeadline,
+			)
+		}()
+	}
+
+	closeFramesDone := make(chan struct{})
+	go func() {
+		closeFrames.Wait()
+		close(closeFramesDone)
+	}()
+
+	var shutdownErr error
+	select {
+	case <-closeFramesDone:
+		shutdownErr = ctx.Err()
+	case <-ctx.Done():
+		shutdownErr = ctx.Err()
+	}
+
+	for _, conn := range connections {
+		_ = conn.conn.Close()
+	}
+
 	done := make(chan struct{})
 	go func() {
+		closeFrames.Wait()
 		ws.wg.Wait()
 		ws.urlSubs.Close()
 		close(done)
 	}()
+	if shutdownErr != nil {
+		return shutdownErr
+	}
 	select {
 	case <-done:
 		return nil
