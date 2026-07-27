@@ -168,6 +168,22 @@ func TestNewOpenForBuildUsesProvisionalApplicationTime(t *testing.T) {
 	}
 }
 
+func TestNewOpenRejectsParentWithoutSuccessor(t *testing.T) {
+	result, err := genesis.Create(genesis.DefaultConfig())
+	if err != nil {
+		t.Fatalf("genesis.Create: %v", err)
+	}
+	parent := FromGenesis(result.Header, result.StateMap, result.TxMap, drops.Fees{})
+	parent.header.LedgerIndex = ^uint32(0)
+
+	if _, err = NewOpen(parent, time.Now()); err == nil {
+		t.Fatal("NewOpen accepted a maximum-sequence parent")
+	}
+	if _, err = NewOpenForBuild(parent, time.Now()); err == nil {
+		t.Fatal("NewOpenForBuild accepted a maximum-sequence parent")
+	}
+}
+
 // TestLedger_Close_DynamicResolution_Disagree verifies the
 // symmetric path: when the parent's CloseFlags carry
 // sLCF_NoConsensusTime (previousAgree=false) and the child seq is on

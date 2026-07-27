@@ -149,6 +149,9 @@ func newOpen(parent *Ledger, closeTime time.Time, building bool) (*Ledger, error
 	if parent == nil {
 		return nil, errors.New("parent ledger cannot be nil")
 	}
+	if parent.header.LedgerIndex == ^uint32(0) {
+		return nil, fmt.Errorf("parent ledger sequence %d has no successor", parent.header.LedgerIndex)
+	}
 	parentRules, err := parent.loadRules()
 	if err != nil {
 		return nil, fmt.Errorf("failed to load parent amendment rules: %w", err)

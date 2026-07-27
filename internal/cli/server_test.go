@@ -9,6 +9,16 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func TestDefaultServerCommandHasStartupFlags(t *testing.T) {
+	for _, name := range []string{"standalone", "start", "load", "net", "replay", "ledger", "ledgerfile"} {
+		require.NotNil(t, rootCmd.Flags().Lookup(name), "root command is missing --%s", name)
+	}
+
+	startup, err := startupConfigFromFlags(rootCmd.Flags())
+	require.NoError(t, err)
+	assert.Equal(t, service.StartupConfig{Mode: service.StartupNormal}, startup)
+}
+
 func TestStartupConfigFromFlags(t *testing.T) {
 	tests := []struct {
 		name string

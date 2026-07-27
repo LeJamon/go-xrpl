@@ -485,7 +485,11 @@ func (s *Service) Start() error {
 
 	genesisConfig := s.config.GenesisConfig
 	switch s.config.Startup.Mode {
-	case StartupLoad, StartupLoadFile, StartupReplay, StartupNetwork:
+	case StartupFresh:
+		if s.amendmentTable != nil {
+			genesisConfig.Amendments = s.amendmentTable.Desired()
+		}
+	default:
 		genesisConfig.Amendments = nil
 	}
 	genesisResult, err := genesis.Create(genesisConfig)
@@ -532,6 +536,7 @@ func (s *Service) Start() error {
 	}
 	if selection.loaded {
 		s.installLoadedStartupLocked(selection.ledger, genesisLedger)
+		s.syncTable(selection.ledger)
 	} else {
 		s.closedLedger = selection.ledger
 		s.putHistoryLocked(selection.ledger)

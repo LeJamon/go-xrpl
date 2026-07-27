@@ -9,12 +9,15 @@ import (
 	"testing"
 	"time"
 
+	"github.com/LeJamon/go-xrpl/amendment"
 	binarycodec "github.com/LeJamon/go-xrpl/codec/binarycodec"
 	"github.com/LeJamon/go-xrpl/internal/ledger"
 	"github.com/LeJamon/go-xrpl/internal/ledger/genesis"
+	"github.com/LeJamon/go-xrpl/internal/ledger/header"
 	jtx "github.com/LeJamon/go-xrpl/internal/testing"
 	"github.com/LeJamon/go-xrpl/internal/testing/payment"
 	"github.com/LeJamon/go-xrpl/internal/tx"
+	"github.com/LeJamon/go-xrpl/internal/tx/pseudo"
 	"github.com/LeJamon/go-xrpl/keylet"
 	"github.com/LeJamon/go-xrpl/protocol"
 	"github.com/LeJamon/go-xrpl/shamap/backend"
@@ -25,10 +28,15 @@ import (
 )
 
 func TestService_StartupFreshAndNetworkAreDistinct(t *testing.T) {
+	table := amendment.NewTable()
+	table.Veto(amendment.DefaultYesFeatures()[0].ID)
+	table.UpVote(amendment.FeatureAMM)
+
 	fresh, err := New(Config{
 		Standalone:    false,
 		Startup:       StartupConfig{Mode: StartupFresh},
 		GenesisConfig: genesis.DefaultConfig(),
+		Table:         table,
 	})
 	require.NoError(t, err)
 	require.NoError(t, fresh.Start())
@@ -38,6 +46,9 @@ func TestService_StartupFreshAndNetworkAreDistinct(t *testing.T) {
 	freshAmendments, err := fresh.GetClosedLedger().Read(keylet.Amendments())
 	require.NoError(t, err)
 	require.NotNil(t, freshAmendments)
+	freshAmendmentSLE, err := pseudo.ParseAmendmentsSLE(freshAmendments)
+	require.NoError(t, err)
+	require.ElementsMatch(t, table.Desired(), freshAmendmentSLE.Amendments)
 
 	network, err := New(Config{
 		Standalone:    false,
@@ -52,6 +63,21 @@ func TestService_StartupFreshAndNetworkAreDistinct(t *testing.T) {
 	networkAmendments, err := network.GetClosedLedger().Read(keylet.Amendments())
 	require.NoError(t, err)
 	require.Nil(t, networkAmendments)
+}
+
+func TestService_StartupNormalUsesEmptyInitialAmendments(t *testing.T) {
+	svc, err := New(Config{
+		Standalone:    true,
+		Startup:       StartupConfig{Mode: StartupNormal},
+		GenesisConfig: genesis.DefaultConfig(),
+	})
+	require.NoError(t, err)
+	require.NoError(t, svc.Start())
+	t.Cleanup(svc.Stop)
+
+	data, err := svc.GetClosedLedger().Read(keylet.Amendments())
+	require.NoError(t, err)
+	require.Nil(t, data)
 }
 
 func TestService_ExplicitLoadFailureUsesConfiguredFastLoadFallback(t *testing.T) {
@@ -113,6 +139,68 @@ func TestService_StartupLoadIdentifiers(t *testing.T) {
 			require.False(t, svc.NeedsInitialSync())
 		})
 	}
+}
+
+func TestService_StartupLoadSynchronizesAmendmentTable(t *testing.T) {
+	ctx := context.Background()
+	db, rm := newStartupTestStorage(t, ctx)
+	unknown := amendment.FeatureID("startup-test-unsupported-amendment")
+	genesisConfig := genesis.DefaultConfig()
+	genesisConfig.Amendments = append(genesisConfig.Amendments, unknown)
+	target := persistStartupTargetWithGenesis(t, ctx, db, rm, genesisConfig)
+
+	table := amendment.NewTable()
+	svc, err := New(Config{
+		Standalone:    true,
+		Startup:       StartupConfig{Mode: StartupLoad, Ledger: fmt.Sprintf("%X", target.Hash())},
+		GenesisConfig: genesis.DefaultConfig(),
+		NodeStore:     db,
+		SHAMapFamily:  backend.New(db),
+		RelationalDB:  rm,
+		Table:         table,
+	})
+	require.NoError(t, err)
+	require.NoError(t, svc.Start())
+	t.Cleanup(svc.Stop)
+
+	require.True(t, table.IsEnabled(unknown))
+	require.True(t, svc.IsAmendmentBlocked())
+	require.False(t, table.NeedValidatedLedger(target.Sequence()))
+}
+
+func TestService_StartupLoadRejectsLedgerWithoutSuccessor(t *testing.T) {
+	ctx := context.Background()
+	db, rm := newStartupTestStorage(t, ctx)
+	source := persistStartupTarget(t, ctx, db, rm, false)
+	stateMap, err := source.StateMapSnapshot()
+	require.NoError(t, err)
+	txMap, err := source.TxMapSnapshot()
+	require.NoError(t, err)
+	hdr := source.Header()
+	hdr.LedgerIndex = ^uint32(0)
+	hdr.Hash = header.CalculateHash(hdr)
+	maxLedger, err := ledger.NewFromHeader(hdr, stateMap, txMap, source.GetFees())
+	require.NoError(t, err)
+
+	persister, err := New(Config{
+		NodeStore:    db,
+		SHAMapFamily: backend.New(db),
+		RelationalDB: rm,
+	})
+	require.NoError(t, err)
+	require.NoError(t, persister.persistValidatedLedger(ctx, maxLedger, false))
+
+	svc, err := New(Config{
+		Standalone:    true,
+		Startup:       StartupConfig{Mode: StartupLoad, Ledger: fmt.Sprintf("%X", maxLedger.Hash())},
+		GenesisConfig: genesis.DefaultConfig(),
+		NodeStore:     db,
+		SHAMapFamily:  backend.New(db),
+		RelationalDB:  rm,
+	})
+	require.NoError(t, err)
+	t.Cleanup(svc.Stop)
+	require.ErrorContains(t, svc.Start(), "has no successor")
 }
 
 func TestService_StartupLedgerFilePersistsForSubsequentLoad(t *testing.T) {
@@ -287,9 +375,21 @@ func persistStartupTarget(
 		_, target, _ := persistStartupReplayChain(t, ctx, db, rm)
 		return target
 	}
+	return persistStartupTargetWithGenesis(t, ctx, db, rm, genesis.DefaultConfig())
+}
+
+func persistStartupTargetWithGenesis(
+	t *testing.T,
+	ctx context.Context,
+	db nodestore.Database,
+	rm *sqlitedb.RepositoryManager,
+	genesisConfig genesis.Config,
+) *ledger.Ledger {
+	t.Helper()
 	writer, err := New(Config{
 		Standalone:    true,
-		GenesisConfig: genesis.DefaultConfig(),
+		Startup:       StartupConfig{Mode: StartupFresh},
+		GenesisConfig: genesisConfig,
 		NodeStore:     db,
 		SHAMapFamily:  backend.New(db),
 		RelationalDB:  rm,

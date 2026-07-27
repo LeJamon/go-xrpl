@@ -73,13 +73,16 @@ func (s *Service) selectStartup(ctx context.Context, initial *ledger.Ledger) (st
 	mode := s.config.Startup.Mode
 	switch mode {
 	case StartupNormal:
-		if !s.config.Standalone && s.config.FastLoad {
+		if s.config.FastLoad {
 			loaded, err := s.loadLatestLedger(ctx)
 			if err == nil && loaded != nil {
 				return startupSelection{ledger: loaded, loaded: true, validate: true}, nil
 			}
 			if err != nil {
-				s.logger.Warn("fast load failed; acquiring initial ledger from network", "err", err)
+				s.logger.Warn("fast load failed; using initial ledger",
+					"network_acquisition", !s.config.Standalone,
+					"err", err,
+				)
 			}
 		}
 		return startupSelection{
@@ -105,9 +108,10 @@ func (s *Service) selectStartup(ctx context.Context, initial *ledger.Ledger) (st
 		return startupSelection{}, err
 	}
 
-	s.logger.Warn("explicit startup load failed; acquiring initial ledger from network",
+	s.logger.Warn("explicit startup load failed; using initial ledger",
 		"mode", mode,
 		"ledger", s.config.Startup.Ledger,
+		"network_acquisition", !s.config.Standalone,
 		"err", err,
 	)
 	return startupSelection{

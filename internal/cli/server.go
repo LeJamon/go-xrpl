@@ -39,9 +39,13 @@ func init() {
 	// Set server as the default command
 	rootCmd.RunE = runServer
 
-	// Server-specific flags — operational concerns only
-	serverCmd.Flags().BoolVarP(&standalone, "standalone", "a", false, "run in standalone mode (no peers)")
-	bindStartupFlags(serverCmd.Flags())
+	bindServerFlags(rootCmd.Flags())
+	bindServerFlags(serverCmd.Flags())
+}
+
+func bindServerFlags(flags *pflag.FlagSet) {
+	flags.BoolVarP(&standalone, "standalone", "a", false, "run in standalone mode (no peers)")
+	bindStartupFlags(flags)
 }
 
 func runServer(cmd *cobra.Command, args []string) error {
