@@ -18,7 +18,8 @@ func TestOpenPebbleRejectsOverflowingBlockCache(t *testing.T) {
 	if strconv.IntSize < 64 {
 		t.Skip("overflowing MiB value does not fit in int")
 	}
-	blockCacheMB := int(math.MaxInt64/(1<<20) + 1)
+	overflowingMiB := int64(math.MaxInt64/(1<<20) + 1)
+	blockCacheMB := int(overflowingMiB)
 	if _, err := OpenPebble(t.TempDir(), blockCacheMB, 1); err == nil {
 		t.Fatal("OpenPebble succeeded with an overflowing block cache, want error")
 	}
