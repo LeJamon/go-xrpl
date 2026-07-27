@@ -576,11 +576,17 @@ func (r *Router) armCatchupTowardTargetWithPeer(peerHint uint64) {
 		if !found {
 			return
 		}
+		if r.isBuildingLedger(seq) {
+			return
+		}
 		r.startLedgerAcquisition(seq, hash, peer)
 		return
 	}
 	peer, found := r.resolveAcquisitionPeer(tSeq, peerHint)
 	if !found {
+		return
+	}
+	if r.isBuildingLedger(tSeq) {
 		return
 	}
 	r.startLedgerAcquisition(tSeq, tHash, peer)
@@ -660,13 +666,8 @@ func (r *Router) ensureCatchupAcquisitionWithPriority(
 		r.recordCatchupTarget(seq, hash, peerID)
 	} else {
 		r.recordValidationCatchupTarget(seq, hash, peerID, source)
-		if r.engine != nil {
-			state := r.engine.State()
-			if state != nil &&
-				state.Round.Seq == seq &&
-				r.engine.Phase() != consensus.PhaseOpen {
-				return
-			}
+		if r.isBuildingLedger(seq) {
+			return
 		}
 		if il := r.fetchTracker.Find(hash); il != nil && il.Reason() == inbound.ReasonConsensus {
 			r.refreshCatchupAcquisitionPeer(il, peerID)
@@ -1822,12 +1823,24 @@ func (r *Router) armValidationStashAcquisition(seq uint32, hash [32]byte) {
 		preferredPeerID,
 		catchupSourceQuorum,
 	)
+	if r.isBuildingLedger(seq) {
+		return
+	}
 	r.logger.Info("arming acquisition for stashed validation",
 		"seq", seq,
 		"hash", fmt.Sprintf("%x", hash[:8]),
 		"preferred_peer", preferredPeerID,
 	)
 	r.startLedgerAcquisition(seq, hash, preferredPeerID)
+}
+
+type buildingLedgerEngine interface {
+	BuildingLedgerSeq() uint32
+}
+
+func (r *Router) isBuildingLedger(seq uint32) bool {
+	engine, ok := r.engine.(buildingLedgerEngine)
+	return ok && seq != 0 && engine.BuildingLedgerSeq() == seq
 }
 
 // checkBehind decides what to do based on how far behind a peer

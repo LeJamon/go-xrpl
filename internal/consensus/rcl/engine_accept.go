@@ -114,6 +114,7 @@ func (e *Engine) acceptLedger(result consensus.Result) {
 		e.processPendingRecoveryLedgerLocked()
 		return
 	}
+	e.buildingLedgerSeq.Store(0)
 
 	parentID := prevLedger.ID()
 	parentClose := prevLedger.CloseTime()

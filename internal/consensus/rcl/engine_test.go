@@ -192,6 +192,7 @@ type mockAdaptor struct {
 	// observe engine behaviour while it runs. Read under a.mu, then called
 	// without the lock so it can't deadlock adaptor calls made concurrently.
 	buildLedgerHook func()
+	buildLedgerErr  error
 }
 
 func newMockAdaptor() *mockAdaptor {
@@ -306,9 +307,13 @@ func (a *mockAdaptor) GetLastClosedLedger() (consensus.Ledger, error) {
 func (a *mockAdaptor) BuildLedger(parent consensus.Ledger, txSet consensus.TxSet, closeTime time.Time, _ bool, _ [][]byte) (consensus.Ledger, error) {
 	a.mu.RLock()
 	hook := a.buildLedgerHook
+	buildErr := a.buildLedgerErr
 	a.mu.RUnlock()
 	if hook != nil {
 		hook()
+	}
+	if buildErr != nil {
+		return nil, buildErr
 	}
 	newLedger := &mockLedger{
 		id:        consensus.LedgerID{byte(parent.Seq() + 1)},

@@ -28,16 +28,16 @@ type mockEngine struct {
 	acquireFailed []consensus.LedgerID
 	switchResult  consensus.LedgerSwitchResult
 	switchHook    func(consensus.LedgerID)
-	state         *consensus.RoundState
-	phase         consensus.Phase
+	buildingSeq   uint32
 }
 
 func (m *mockEngine) Start(context.Context) error              { return nil }
 func (m *mockEngine) Stop() error                              { return nil }
 func (m *mockEngine) StartRound(consensus.RoundID, bool) error { return nil }
-func (m *mockEngine) State() *consensus.RoundState             { return m.state }
+func (m *mockEngine) State() *consensus.RoundState             { return nil }
 func (m *mockEngine) Mode() consensus.Mode                     { return consensus.ModeObserving }
-func (m *mockEngine) Phase() consensus.Phase                   { return m.phase }
+func (m *mockEngine) Phase() consensus.Phase                   { return consensus.PhaseOpen }
+func (m *mockEngine) BuildingLedgerSeq() uint32                { return m.buildingSeq }
 func (m *mockEngine) IsProposing() bool                        { return false }
 func (m *mockEngine) Timing() consensus.Timing                 { return consensus.DefaultTiming() }
 func (m *mockEngine) GetLastCloseInfo() (int, time.Duration)   { return 0, 0 }

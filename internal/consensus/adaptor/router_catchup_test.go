@@ -414,9 +414,6 @@ func TestRouter_OpenRoundAcquiresTargetLedger(t *testing.T) {
 	trusted, err := a.GetValidatorKey()
 	require.NoError(t, err)
 	closed := svc.GetClosedLedgerIndex()
-	r.engine = &mockEngine{state: &consensus.RoundState{
-		Round: consensus.RoundID{Seq: closed + 1},
-	}}
 	hash := consensus.LedgerID{0xCA, 0x12}
 
 	r.maybeAcquireFromValidation(&consensus.Validation{
@@ -432,31 +429,34 @@ func TestRouter_OpenRoundAcquiresTargetLedger(t *testing.T) {
 }
 
 func TestRouter_ActiveBuildDoesNotAcquireItsTargetLedger(t *testing.T) {
-	for _, phase := range []consensus.Phase{consensus.PhaseEstablish, consensus.PhaseAccepted} {
-		t.Run(phase.String(), func(t *testing.T) {
-			r, a, rs, svc := makeRouter(t)
-			a.SetOperatingMode(consensus.OpModeFull)
-			trusted, err := a.GetValidatorKey()
-			require.NoError(t, err)
-			closed := svc.GetClosedLedgerIndex()
-			r.engine = &mockEngine{
-				state: &consensus.RoundState{
-					Round: consensus.RoundID{Seq: closed + 1},
-				},
-				phase: phase,
-			}
-			hash := consensus.LedgerID{0xCA, 0x12}
-
-			r.maybeAcquireFromValidation(&consensus.Validation{
-				NodeID: trusted, LedgerSeq: closed + 1, LedgerID: hash,
-			}, 7)
-			r.armValidationStashAcquisition(closed+1, [32]byte(hash))
-
-			assert.Zero(t, acquireCount(rs))
-			assert.Zero(t, r.catchupInFlight())
-			assert.Equal(t, closed, svc.GetClosedLedgerIndex())
-		})
+	r, a, rs, svc := makeRouter(t)
+	a.SetOperatingMode(consensus.OpModeFull)
+	trusted, err := a.GetValidatorKey()
+	require.NoError(t, err)
+	closed := svc.GetClosedLedgerIndex()
+	engine := &mockEngine{buildingSeq: closed + 1}
+	r.engine = engine
+	hash := consensus.LedgerID{0xCA, 0x12}
+	r.peerStates[7] = &peerLedgerState{
+		LedgerSeq:  closed + 1,
+		LedgerHash: [32]byte(hash),
 	}
+
+	r.maybeAcquireFromValidation(&consensus.Validation{
+		NodeID: trusted, LedgerSeq: closed + 1, LedgerID: hash,
+	}, 7)
+	r.armValidationStashAcquisition(closed+1, [32]byte(hash))
+	r.armConsensusCatchup()
+
+	assert.Zero(t, acquireCount(rs))
+	assert.Zero(t, r.catchupInFlight())
+	assert.Equal(t, closed, svc.GetClosedLedgerIndex())
+
+	engine.buildingSeq = 0
+	r.maybeAcquireFromValidation(&consensus.Validation{
+		NodeID: trusted, LedgerSeq: closed + 1, LedgerID: hash,
+	}, 7)
+	require.GreaterOrEqual(t, acquireCount(rs), 1)
 }
 
 // An UNTRUSTED validator must not steer acquisition (RCLValidations.cpp:194).
