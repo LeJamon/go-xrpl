@@ -1,3 +1,39 @@
+# Issue #1422 — LoanManage default cover rounding
+
+Target: `origin/main` at `f16d6d386cc3f893eb6fb46bf17cdd11bd9689be`.
+Behavioral oracle: clean local rippled `3.2.0` worktree at
+`3c43f4614f87965298773279ff5b85d4c56c637b`.
+
+## Plan
+
+- [x] Validate GitHub access, issue state and discussion, linked PRs, repository
+      identity, exact base, and clean dedicated worktree.
+- [x] Trace the complete LoanManage default cover calculation in Go and rippled,
+      including scoped rounding behavior and existing lending math primitives.
+- [x] Add a focused replay-value regression that fails on nearest rounding and
+      proves broker/vault balances plus persisted cover and vault asset totals.
+- [x] Implement the smallest upward-rounding correction for all three calculations.
+- [x] Run formatting, focused and affected tests, race coverage where useful,
+      build, vet, strict CI lint, conformance/diff review, and exact-head checks.
+- [x] Record review results, stage intentional files only, commit, push, and open
+      the PR against `main`.
+
+## Review
+
+- `LoanManage.defaultLoan` now applies upward rounding to both tenth-bips rate
+  calculations and the final loan-scale asset rounding, exactly matching the
+  scope of rippled v3.2.0's rounding guard while preserving both caps and all
+  later accounting modes.
+- The regression recreates the validated ledger 3,477,625 state and proves the
+  one-drop correction across `LoanBroker.CoverAvailable`, both pseudo-account
+  XRP balances, and the Vault's `AssetsAvailable` and `AssetsTotal`.
+- Canonical metadata shows the issue prose has an extra zero: the actual cover
+  transfer is 100,001 drops rather than 1,000,001. The pre-fix test failed with
+  9,900,000 cover remaining; the fixed path matches rippled at 9,899,999.
+- Focused and race lending tests, full transaction and integration suites,
+  formatting, full build, ordinary and PostgreSQL-tagged vet, CI-pinned strict
+  lint, advisory lint, and diff checks pass.
+
 # Issue #1357 — AMMClawback pseudo-account metadata
 
 Target: `origin/main` at `25a82672eb73ec5f76d95e00b8ef54d27cab21b2`.
