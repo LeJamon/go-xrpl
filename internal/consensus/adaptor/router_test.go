@@ -26,6 +26,8 @@ type mockEngine struct {
 	txSets        []consensus.TxSetID
 	ledgers       []consensus.LedgerID
 	acquireFailed []consensus.LedgerID
+	switchResult  consensus.LedgerSwitchResult
+	switchHook    func(consensus.LedgerID)
 }
 
 func (m *mockEngine) Start(context.Context) error              { return nil }
@@ -45,6 +47,18 @@ func (m *mockEngine) OnLedger(id consensus.LedgerID, _ []byte) error {
 	defer m.mu.Unlock()
 	m.ledgers = append(m.ledgers, id)
 	return nil
+}
+
+func (m *mockEngine) TrySwitchToLedger(id consensus.LedgerID) (consensus.LedgerSwitchResult, error) {
+	m.mu.Lock()
+	m.ledgers = append(m.ledgers, id)
+	result := m.switchResult
+	hook := m.switchHook
+	m.mu.Unlock()
+	if result == consensus.LedgerSwitchAccepted && hook != nil {
+		hook(id)
+	}
+	return result, nil
 }
 
 func (m *mockEngine) OnLedgerAcquireFailed(id consensus.LedgerID) {

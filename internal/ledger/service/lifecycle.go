@@ -399,7 +399,19 @@ func (s *Service) AcceptConsensusResult(ctx context.Context, parent *ledger.Ledg
 func (s *Service) SwitchToPreferredLedger(parent *ledger.Ledger) error {
 	s.mu.Lock()
 	previousValidatedSeq := s.validatedLedgerSeqLocked()
-	defer s.unlockAndNotifyValidatedLedger(previousValidatedSeq)
+	pool := s.localTxs
+	var promotedLedger *ledger.Ledger
+	defer func() {
+		notification := s.validatedLedgerNotificationLocked(previousValidatedSeq)
+		s.mu.Unlock()
+		if promotedLedger != nil {
+			s.syncTable(promotedLedger)
+			if pool != nil {
+				pool.Sweep(promotedLedger)
+			}
+		}
+		notification.notify()
+	}()
 
 	if s.closedLedger == nil {
 		return ErrNoClosedLedger
@@ -417,6 +429,7 @@ func (s *Service) SwitchToPreferredLedger(parent *ledger.Ledger) error {
 		}
 	}
 	if parent.Sequence() == s.closedLedger.Sequence() && parentHash == s.closedLedger.Hash() {
+		s.needsInitialSync = false
 		return nil
 	}
 
@@ -432,8 +445,15 @@ func (s *Service) SwitchToPreferredLedger(parent *ledger.Ledger) error {
 	s.closedLedger = parent
 	s.openLedger = newOpen
 	s.needsInitialSync = false
-	s.collectTransactionResults(parent, parent.Sequence(), parentHash)
-	if parent.IsValidated() {
+	promotedByDrain := s.drainPendingLedgerValidationLocked(parent.Sequence(), parent)
+	txResults := s.collectTransactionResults(parent, parent.Sequence(), parentHash)
+	if promotedByDrain {
+		s.enqueuePersist(parent)
+		event := s.validatedLedgerEventLocked(parent)
+		event.TransactionResults = txResults
+		s.dispatchLedgerEvent(event)
+		promotedLedger = parent
+	} else if parent.IsValidated() {
 		s.evictOldHistoryLocked(parent.Sequence())
 		s.enqueuePersist(parent)
 	}
@@ -701,11 +721,6 @@ func (s *Service) SetValidatedLedgerAt(seq uint32, expectedHash [32]byte, signTi
 	s.mu.Lock()
 	previousValidatedSeq := s.validatedLedgerSeqLocked()
 	l, ok := s.ledgerHistory[seq]
-	if !ok || l.Hash() != expectedHash {
-		if acquired, found := s.persistedLedgers[expectedHash]; found && acquired.Sequence() == seq {
-			l, ok = acquired, true
-		}
-	}
 	// rippled checkAccept is hash-keyed; our seq-keyed map splits into "no entry"
 	// or "different-hash" (same-height fork) — both stash and arm acquisition.
 	if !ok || l.Hash() != expectedHash {
@@ -905,22 +920,85 @@ func (s *Service) NeedsInitialSync() bool {
 // the stored ledger as its preferred parent.
 func (s *Service) StoreLedgerWithState(ctx context.Context, h *header.LedgerHeader, stateMap *shamap.SHAMap, txMap *shamap.SHAMap) error {
 	s.mu.Lock()
-	previousValidatedSeq := s.validatedLedgerSeqLocked()
-	defer s.unlockAndNotifyValidatedLedger(previousValidatedSeq)
+	defer s.mu.Unlock()
 	return s.storeLedgerWithStateLocked(ctx, h, stateMap, txMap)
 }
 
-// BootstrapLedgerWithState adopts the first peer ledger. Once bootstrap has
-// completed, later calls only store the acquired ledger for explicit consensus
-// selection.
+// BootstrapLedgerWithState stores an acquired ledger and reports whether the
+// node still needs an initial network-ledger switch. Consensus owns that switch.
 func (s *Service) BootstrapLedgerWithState(ctx context.Context, h *header.LedgerHeader, stateMap *shamap.SHAMap, txMap *shamap.SHAMap) (bool, error) {
 	s.mu.Lock()
-	previousValidatedSeq := s.validatedLedgerSeqLocked()
-	defer s.unlockAndNotifyValidatedLedger(previousValidatedSeq)
-	if !s.needsInitialSync {
-		return false, s.storeLedgerWithStateLocked(ctx, h, stateMap, txMap)
+	defer s.mu.Unlock()
+	initialCandidate := s.needsInitialSync
+	return initialCandidate, s.storeLedgerWithStateLocked(ctx, h, stateMap, txMap)
+}
+
+// IngestHistoricalLedgerWithState installs an acquired ledger into validated
+// history without changing the node's current ledger frontiers.
+func (s *Service) IngestHistoricalLedgerWithState(ctx context.Context, h *header.LedgerHeader, stateMap *shamap.SHAMap, txMap *shamap.SHAMap) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if err := ctx.Err(); err != nil {
+		return err
 	}
-	return true, s.adoptLedgerWithStateLocked(ctx, h, stateMap, txMap, 0)
+	historical, err := s.ledgerWithStateLocked(h, stateMap, txMap)
+	if err != nil {
+		return err
+	}
+
+	seq := historical.Sequence()
+	hash := historical.Hash()
+	if s.closedLedger == nil || seq >= s.closedLedger.Sequence() {
+		return fmt.Errorf("historical ledger %d is not below the closed ledger frontier", seq)
+	}
+	existing, existingAtSeq := s.ledgerHistory[seq]
+	sameHistoricalLedger := existingAtSeq && existing.Hash() == hash
+	child, childExists := s.ledgerHistory[seq+1]
+	if childExists && child.ParentHash() != hash {
+		return fmt.Errorf("historical ledger %d does not connect to canonical child", seq)
+	}
+	if sameHistoricalLedger {
+		historical = existing
+	} else if !childExists {
+		return fmt.Errorf("historical ledger %d has no canonical child", seq)
+	}
+	if !historical.IsValidated() {
+		if err := historical.SetValidated(); err != nil {
+			return fmt.Errorf("failed to validate historical ledger: %w", err)
+		}
+	}
+
+	if existing, ok := s.ledgerHistory[seq]; ok && existing.Hash() != hash {
+		existingHash := existing.Hash()
+		_ = existing.ForEachTransaction(func(txHash [32]byte, _ []byte) bool {
+			delete(s.txIndex, txHash)
+			delete(s.txPositionIndex, txHash)
+			return true
+		})
+		s.invalidateCompleteLedgerHash(seq, existingHash)
+	}
+
+	s.putHistoryLocked(historical)
+	s.cachePersistedLedgerLocked(historical)
+	s.collectTransactionResults(historical, seq, hash)
+	delete(s.pendingLedgerValidations, seq)
+	for i, pendingSeq := range s.pendingLedgerValidationsOrder {
+		if pendingSeq == seq {
+			s.pendingLedgerValidationsOrder = append(
+				s.pendingLedgerValidationsOrder[:i],
+				s.pendingLedgerValidationsOrder[i+1:]...,
+			)
+			break
+		}
+	}
+	s.enqueueValidatedHistoryPersist(historical)
+
+	s.logger.Info("Ingested historical ledger",
+		"seq", seq,
+		"hash", fmt.Sprintf("%x", hash[:8]),
+	)
+	return nil
 }
 
 // AdoptLedgerWithState adopts a ledger using a fully-fetched state map from a
@@ -968,26 +1046,7 @@ func (s *Service) storeLedgerWithStateLocked(ctx context.Context, h *header.Ledg
 	}
 
 	s.cachePersistedLedgerLocked(stored)
-	promotedByDrain := s.drainPendingLedgerValidationLocked(stored.Sequence(), stored)
-	if promotedByDrain {
-		s.enqueuePersist(stored)
-		s.dispatchLedgerEvent(&LedgerAcceptedEvent{
-			LedgerInfo: &LedgerInfo{
-				Sequence:   stored.Sequence(),
-				Hash:       stored.Hash(),
-				ParentHash: stored.ParentHash(),
-				CloseTime:  stored.CloseTime(),
-				TotalDrops: stored.TotalDrops(),
-				Validated:  true,
-				Closed:     stored.IsClosed(),
-			},
-			Ledger: stored,
-		})
-	} else if stored.IsValidated() {
-		s.enqueueValidatedHistoryPersist(stored)
-	} else {
-		s.enqueueNodePersist(stored)
-	}
+	s.enqueueNodePersist(stored)
 
 	storedHash := stored.Hash()
 	s.logger.Info("Stored acquired ledger",

@@ -27,6 +27,11 @@ type Engine interface {
 
 	OnLedger(id LedgerID, ledger []byte) error
 
+	// TrySwitchToLedger synchronously attempts to make a locally-held ledger
+	// the consensus parent. The candidate must be the exact wrong-ledger
+	// recovery target, the validated tip, or the current network preference.
+	TrySwitchToLedger(id LedgerID) (LedgerSwitchResult, error)
+
 	// OnLedgerAcquireFailed reports a clean inbound-acquire failure after the
 	// retry budget. Lets a node pinned in wrongLedger un-pin and drop to
 	// degraded resync rather than starving the stall watchdog into os.Exit.
@@ -52,6 +57,16 @@ type Engine interface {
 	// fires events on its own goroutine, so OnEvent must not block.
 	Subscribe(sub EventSubscriber)
 }
+
+// LedgerSwitchResult describes the outcome of a synchronous ledger switch.
+type LedgerSwitchResult uint8
+
+const (
+	LedgerSwitchIrrelevant LedgerSwitchResult = iota
+	LedgerSwitchAccepted
+	LedgerSwitchBusy
+	LedgerSwitchRejected
+)
 
 // ValidationHistorian exposes the validation subsystem to an adaptor:
 // per-ledger trusted-validation lookups and trie-based preferred-LCL

@@ -342,12 +342,17 @@ func (e *Engine) OnLedger(id consensus.LedgerID, ledger []byte) error {
 	defer e.mu.Unlock()
 
 	recovering := e.mode == consensus.ModeWrongLedger
-	validatedTip := e.adaptor.GetValidatedLedgerHash() == id
 	exactRecoveryTarget := recovering && id == e.wrongLedgerID
-	if recovering && !exactRecoveryTarget && !validatedTip {
+	l, err := e.adaptor.GetLedger(id)
+	if err != nil || l == nil {
 		return nil
 	}
-	if !recovering && !validatedTip {
+	validatedCandidate := e.adaptor.GetValidatedLedgerHash() == id ||
+		e.isQuorumValidatedCandidateLocked(l)
+	if recovering && !exactRecoveryTarget && !validatedCandidate {
+		return nil
+	}
+	if !recovering && !validatedCandidate {
 		return nil
 	}
 	slog.Info("Recovery ledger completion received",
@@ -356,17 +361,6 @@ func (e *Engine) OnLedger(id consensus.LedgerID, ledger []byte) error {
 		"hash", fmt.Sprintf("%x", id[:8]),
 		"build_in_progress", e.buildInProgress,
 	)
-
-	l, err := e.adaptor.GetLedger(id)
-	if err != nil || l == nil {
-		slog.Info("Completed recovery ledger is not locally available",
-			"t", "consensus",
-			"event", "recovery-ledger-unavailable",
-			"hash", fmt.Sprintf("%x", id[:8]),
-			"error", err,
-		)
-		return nil
-	}
 
 	// acceptLedger applies off-lock like rippled's serialized jtACCEPT job.
 	// Retain the newest completed recovery acquisition until its commit tail
@@ -382,16 +376,47 @@ func (e *Engine) OnLedger(id consensus.LedgerID, ledger []byte) error {
 	return nil
 }
 
+// TrySwitchToLedger synchronously evaluates and adopts a locally-held ledger
+// selected by consensus recovery, validation, or the current network view.
+func (e *Engine) TrySwitchToLedger(id consensus.LedgerID) (consensus.LedgerSwitchResult, error) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+
+	exactRecoveryTarget := e.mode == consensus.ModeWrongLedger && id == e.wrongLedgerID
+	networkPreferred := e.prevLedger != nil && e.getNetworkLedger() == id
+
+	l, err := e.adaptor.GetLedger(id)
+	if err != nil {
+		return consensus.LedgerSwitchIrrelevant, err
+	}
+	if l == nil {
+		return consensus.LedgerSwitchIrrelevant, nil
+	}
+	validatedCandidate := e.adaptor.GetValidatedLedgerHash() == id ||
+		e.isQuorumValidatedCandidateLocked(l)
+	if !exactRecoveryTarget && !validatedCandidate && !networkPreferred {
+		return consensus.LedgerSwitchIrrelevant, nil
+	}
+	if e.buildInProgress {
+		return consensus.LedgerSwitchBusy, nil
+	}
+	if !e.switchToLedgerLocked(id, l) {
+		return consensus.LedgerSwitchRejected, nil
+	}
+	return consensus.LedgerSwitchAccepted, nil
+}
+
 func (e *Engine) switchToAcquiredLedgerLocked(id consensus.LedgerID, l consensus.Ledger) bool {
 	exactRecoveryTarget := e.mode == consensus.ModeWrongLedger && id == e.wrongLedgerID
-	validatedTip := e.adaptor.GetValidatedLedgerHash() == id
-	if e.mode == consensus.ModeWrongLedger && !exactRecoveryTarget && !validatedTip {
+	validatedCandidate := e.adaptor.GetValidatedLedgerHash() == id ||
+		e.isQuorumValidatedCandidateLocked(l)
+	if e.mode == consensus.ModeWrongLedger && !exactRecoveryTarget && !validatedCandidate {
 		return false
 	}
 	// Never regress on out-of-order acquisition arrivals — EXCEPT for the hash
 	// checkLedger explicitly pinned: the preferred ledger may be on a lower
 	// sequence of another chain.
-	if e.prevLedger != nil && l.Seq() <= e.prevLedger.Seq() && !exactRecoveryTarget && !validatedTip {
+	if e.prevLedger != nil && l.Seq() <= e.prevLedger.Seq() && !exactRecoveryTarget && !validatedCandidate {
 		return false
 	}
 	if e.mode != consensus.ModeWrongLedger {
@@ -403,6 +428,21 @@ func (e *Engine) switchToAcquiredLedgerLocked(id consensus.LedgerID, l consensus
 			l = next
 		}
 	}
+	return e.switchToLedgerLocked(id, l)
+}
+
+// isQuorumValidatedCandidateLocked rechecks the live trusted-validation set
+// without advancing the adaptor's accepted validated tip. The selected ledger
+// still passes canSwitchToLedgerLocked before it can become current.
+func (e *Engine) isQuorumValidatedCandidateLocked(l consensus.Ledger) bool {
+	if l == nil || e.validationTracker == nil || e.adaptor.IsQuorumUnavailable() {
+		return false
+	}
+	_, _, accepted := e.validationTracker.RecheckFullyValidated(l.ID(), l.Seq())
+	return accepted
+}
+
+func (e *Engine) switchToLedgerLocked(id consensus.LedgerID, l consensus.Ledger) bool {
 	if !e.canSwitchToLedgerLocked(l) {
 		if e.lastRefusedSwitch != id {
 			e.lastRefusedSwitch = id

@@ -136,17 +136,21 @@ func TestRouter_InitialSyncPathStillArms(t *testing.T) {
 		"a fresh node in initial sync must still arm a bounded catch-up acquisition")
 }
 
-func TestRouter_InitialConsensusAcquisitionBootstrapsClosedLedger(t *testing.T) {
+func TestRouter_InitialConsensusAcquisitionStagesClosedLedger(t *testing.T) {
 	svc := adg_newNonStandaloneService(t)
 	a, _ := newRecordingAdaptor(t, svc)
 	r := NewRouter(nil, a, make(chan *peermanagement.InboundMessage, 8))
+	closed := svc.GetClosedLedger()
+	require.NotNil(t, closed)
 	tipSeq := svc.GetClosedLedgerIndex() + 1
 	il := completedCatchUpAcquisition(t, tipSeq)
 	r.fetchTracker.Track(il)
 
 	r.completeInboundLedger(il)
 
-	require.False(t, svc.NeedsInitialSync())
-	require.Equal(t, tipSeq, svc.GetClosedLedgerIndex())
-	require.Equal(t, il.Hash(), svc.GetClosedLedger().Hash())
+	require.True(t, svc.NeedsInitialSync())
+	require.Equal(t, closed.Hash(), svc.GetClosedLedger().Hash())
+	stored, err := svc.GetLedgerByHash(il.Hash())
+	require.NoError(t, err)
+	require.Equal(t, tipSeq, stored.Sequence())
 }
