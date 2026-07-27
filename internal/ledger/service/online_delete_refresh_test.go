@@ -116,8 +116,7 @@ func TestService_RefreshValidatedStatePromotesWithoutRestamping(t *testing.T) {
 	ctx := context.Background()
 	backend, err := kvpebble.NewRotating(
 		filepath.Join(t.TempDir(), "nodes"),
-		16<<20,
-		128,
+		kvpebble.Options{BlockCacheBytes: 16 << 20, MaxOpenFiles: 200},
 	)
 	require.NoError(t, err)
 	base := nodestore.NewRotatingKVDatabase(backend, "refresh-generation", &nodestore.DatabaseConfig{
@@ -176,8 +175,7 @@ func TestService_RefreshSnapshotsValidatedLedgerBeforePersistenceBarrier(t *test
 	ctx := context.Background()
 	backend, err := kvpebble.NewRotating(
 		filepath.Join(t.TempDir(), "nodes"),
-		16<<20,
-		128,
+		kvpebble.Options{BlockCacheBytes: 16 << 20, MaxOpenFiles: 200},
 	)
 	require.NoError(t, err)
 	base := nodestore.NewRotatingKVDatabase(backend, "refresh-generation", &nodestore.DatabaseConfig{
@@ -366,8 +364,7 @@ func TestService_RefreshValidatedStateChecksHealthByElapsedWork(t *testing.T) {
 	ctx := context.Background()
 	backend, err := kvpebble.NewRotating(
 		filepath.Join(t.TempDir(), "nodes"),
-		16<<20,
-		128,
+		kvpebble.Options{BlockCacheBytes: 16 << 20, MaxOpenFiles: 200},
 	)
 	require.NoError(t, err)
 	base := nodestore.NewRotatingKVDatabase(backend, "refresh-generation", &nodestore.DatabaseConfig{

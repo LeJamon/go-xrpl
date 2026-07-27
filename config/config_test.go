@@ -42,6 +42,8 @@ protocol = "http"
 [node_db]
 type = "pebble"
 path = "/tmp/test/db"
+cache_mb = 2048
+open_files = 1000
 cache_size = 16384
 cache_age = 5
 earliest_seq = 32570
@@ -118,6 +120,8 @@ func TestLoadConfig(t *testing.T) {
 	assert.Equal(t, []string{"port_test"}, config.Server.Ports)
 	assert.Equal(t, "pebble", config.NodeDB.Type)
 	assert.Equal(t, "/tmp/test/db", config.NodeDB.Path)
+	assert.Equal(t, int64(2048), config.NodeDB.CacheMB)
+	assert.Equal(t, 1000, config.NodeDB.OpenFiles)
 	require.NotNil(t, config.FeeDefault)
 	assert.Equal(t, 13, *config.FeeDefault)
 
@@ -126,6 +130,43 @@ func TestLoadConfig(t *testing.T) {
 	assert.Equal(t, 8080, portConfig.Port)
 	assert.Equal(t, "127.0.0.1", portConfig.IP)
 	assert.Equal(t, "http", portConfig.Protocol)
+}
+
+func TestNodeDBConfigPebbleResourcesValidation(t *testing.T) {
+	tests := []struct {
+		name    string
+		cacheMB int64
+		files   int
+		online  int
+		wantErr string
+	}{
+		{name: "defaults"},
+		{name: "custom", cacheMB: 4096, files: 2000},
+		{name: "negative cache", cacheMB: -1, wantErr: "cache_mb must be non-negative"},
+		{name: "cache conversion overflow", cacheMB: math.MaxInt64/(1<<20) + 1, wantErr: "cache_mb is too large"},
+		{name: "negative open files", files: -1, wantErr: "open_files must be non-negative"},
+		{name: "single store open files too small", files: 73, wantErr: "open_files must be at least 74"},
+		{name: "rotating open files too small", files: 147, online: 256, wantErr: "open_files must be at least 148"},
+		{name: "rotating open files must be even", files: 149, online: 256, wantErr: "open_files must be even"},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			cfg := NodeDBConfig{
+				Type:         "pebble",
+				Path:         t.TempDir(),
+				CacheMB:      test.cacheMB,
+				OpenFiles:    test.files,
+				OnlineDelete: test.online,
+			}
+			err := cfg.Validate()
+			if test.wantErr == "" {
+				require.NoError(t, err)
+				return
+			}
+			require.ErrorContains(t, err, test.wantErr)
+		})
+	}
 }
 
 func TestLoadConfigTracksExplicitZeroVotingValues(t *testing.T) {

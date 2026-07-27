@@ -45,7 +45,11 @@ func NewMemory() *NodeStore {
 // blockCacheMB sizes Pebble's block cache in MiB. nodeCacheItems bounds the
 // decoded-node cache by entry count.
 func OpenPebble(path string, blockCacheMB, nodeCacheItems int) (*NodeStore, error) {
-	store, err := kvpebble.New(path, blockCacheMB*1024*1024, 500, false)
+	options, err := kvpebble.OptionsFromMiB(int64(blockCacheMB), kvpebble.DefaultMaxOpenFiles)
+	if err != nil {
+		return nil, err
+	}
+	store, err := kvpebble.New(path, options, false)
 	if err != nil {
 		return nil, err
 	}

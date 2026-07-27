@@ -3,7 +3,7 @@ package node
 import (
 	"encoding/hex"
 	"encoding/json"
-
+	"math"
 	"strings"
 	"testing"
 	"time"
@@ -17,6 +17,7 @@ import (
 	"github.com/LeJamon/go-xrpl/internal/rpc"
 	"github.com/LeJamon/go-xrpl/internal/rpc/types"
 	"github.com/LeJamon/go-xrpl/protocol"
+	kvpebble "github.com/LeJamon/go-xrpl/storage/kvstore/pebble"
 )
 
 func TestConsensusPhaseName(t *testing.T) {
@@ -502,5 +503,39 @@ func TestNodeStoreCacheParams(t *testing.T) {
 	size, age = nodeStoreCacheParams(config.NodeDBConfig{}, "huge")
 	if size != 8_388_608 || age != 900*time.Minute {
 		t.Errorf("huge profile = (%d, %v)", size, age)
+	}
+}
+
+func TestPebbleStoreOptions(t *testing.T) {
+	options, err := pebbleStoreOptions(config.NodeDBConfig{})
+	if err != nil {
+		t.Fatalf("defaults: %v", err)
+	}
+	if options.BlockCacheBytes != kvpebble.DefaultBlockCacheBytes {
+		t.Errorf("default block cache = %d, want %d", options.BlockCacheBytes, kvpebble.DefaultBlockCacheBytes)
+	}
+	if options.MaxOpenFiles != kvpebble.DefaultMaxOpenFiles {
+		t.Errorf("default open files = %d, want %d", options.MaxOpenFiles, kvpebble.DefaultMaxOpenFiles)
+	}
+
+	options, err = pebbleStoreOptions(config.NodeDBConfig{CacheMB: 2048, OpenFiles: 1000})
+	if err != nil {
+		t.Fatalf("custom options: %v", err)
+	}
+	if options.BlockCacheBytes != 2048*(1<<20) {
+		t.Errorf("block cache = %d, want %d", options.BlockCacheBytes, int64(2048*(1<<20)))
+	}
+	if options.MaxOpenFiles != 1000 {
+		t.Errorf("open files = %d, want 1000", options.MaxOpenFiles)
+	}
+
+	for _, invalid := range []config.NodeDBConfig{
+		{CacheMB: -1},
+		{CacheMB: math.MaxInt64/(1<<20) + 1},
+		{OpenFiles: -1},
+	} {
+		if _, err := pebbleStoreOptions(invalid); err == nil {
+			t.Errorf("pebbleStoreOptions(%+v) succeeded, want error", invalid)
+		}
 	}
 }

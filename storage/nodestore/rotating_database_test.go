@@ -13,7 +13,7 @@ import (
 func TestRotatingKVDatabasePromotionBypassesDecodedCache(t *testing.T) {
 	ctx := context.Background()
 	path := filepath.Join(t.TempDir(), "nodes")
-	store, err := kvpebble.NewRotating(path, 16<<20, 128)
+	store, err := kvpebble.NewRotating(path, kvpebble.Options{BlockCacheBytes: 16 << 20, MaxOpenFiles: 200})
 	require.NoError(t, err)
 	db := NewRotatingKVDatabase(store, "rotating", &DatabaseConfig{
 		CacheSize: 16,
@@ -46,7 +46,7 @@ func TestRotatingKVDatabasePromotionBypassesDecodedCache(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, db.Close())
 
-	reopenedStore, err := kvpebble.NewRotating(path, 16<<20, 128)
+	reopenedStore, err := kvpebble.NewRotating(path, kvpebble.Options{BlockCacheBytes: 16 << 20, MaxOpenFiles: 200})
 	require.NoError(t, err)
 	reopened := NewRotatingKVDatabase(reopenedStore, "rotating", &DatabaseConfig{
 		CacheSize: 16,
@@ -60,7 +60,10 @@ func TestRotatingKVDatabasePromotionBypassesDecodedCache(t *testing.T) {
 
 func TestRotatingKVDatabaseCanRotateWithoutRefresh(t *testing.T) {
 	ctx := context.Background()
-	store, err := kvpebble.NewRotating(filepath.Join(t.TempDir(), "nodes"), 16<<20, 128)
+	store, err := kvpebble.NewRotating(
+		filepath.Join(t.TempDir(), "nodes"),
+		kvpebble.Options{BlockCacheBytes: 16 << 20, MaxOpenFiles: 200},
+	)
 	require.NoError(t, err)
 	db := NewRotatingKVDatabase(store, "rotating", &DatabaseConfig{
 		CacheSize: 16,

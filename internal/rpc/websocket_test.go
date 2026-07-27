@@ -3,6 +3,8 @@ package rpc
 import (
 	"context"
 	"encoding/json"
+	"errors"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"runtime"
@@ -14,6 +16,51 @@ import (
 	"github.com/LeJamon/go-xrpl/internal/rpc/types"
 	"github.com/gorilla/websocket"
 )
+
+type blockingWriteConn struct {
+	net.Conn
+	armed        chan struct{}
+	writeStarted chan struct{}
+	closed       chan struct{}
+	startOnce    sync.Once
+	closeOnce    sync.Once
+}
+
+func (c *blockingWriteConn) Write(p []byte) (int, error) {
+	select {
+	case <-c.armed:
+		c.startOnce.Do(func() { close(c.writeStarted) })
+		<-c.closed
+		return 0, net.ErrClosed
+	default:
+		return c.Conn.Write(p)
+	}
+}
+
+func (c *blockingWriteConn) Close() error {
+	c.closeOnce.Do(func() { close(c.closed) })
+	return c.Conn.Close()
+}
+
+type blockingWriteListener struct {
+	net.Listener
+	accepted chan *blockingWriteConn
+}
+
+func (l *blockingWriteListener) Accept() (net.Conn, error) {
+	conn, err := l.Listener.Accept()
+	if err != nil {
+		return nil, err
+	}
+	wrapped := &blockingWriteConn{
+		Conn:         conn,
+		armed:        make(chan struct{}),
+		writeStarted: make(chan struct{}),
+		closed:       make(chan struct{}),
+	}
+	l.accepted <- wrapped
+	return wrapped, nil
+}
 
 // TestWebSocketServer_Close_JoinsHandlers verifies that Close blocks until
 // all per-connection goroutines (read loop, send pump, ping loop) have exited.
@@ -110,6 +157,100 @@ func TestWebSocketServer_Close_RespectsContext(t *testing.T) {
 	}
 }
 
+func TestWebSocketServer_Close_ContextInterruptsBlockedControlWrite(t *testing.T) {
+	ws := NewWebSocketServer(30*time.Second, nil)
+	limiter := NewConnLimiter()
+	ws.SetConnLimiter(limiter)
+	pc := &PortContext{PortName: "wsport", Limit: 1}
+
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	wrappedListener := &blockingWriteListener{
+		Listener: listener,
+		accepted: make(chan *blockingWriteConn, 1),
+	}
+	httpSrv := httptest.NewUnstartedServer(PortMiddleware(pc, limiter, http.HandlerFunc(ws.ServeHTTP)))
+	httpSrv.Listener.Close()
+	httpSrv.Listener = wrappedListener
+	httpSrv.Start()
+	defer httpSrv.Close()
+
+	wsURL := "ws" + strings.TrimPrefix(httpSrv.URL, "http")
+	client, _, err := websocket.DefaultDialer.Dial(wsURL, nil)
+	if err != nil {
+		t.Fatalf("dial: %v", err)
+	}
+	defer client.Close()
+	serverConn := <-wrappedListener.accepted
+
+	var wsConn *WebSocketConnection
+	deadline := time.Now().Add(time.Second)
+	for wsConn == nil && time.Now().Before(deadline) {
+		ws.connectionsMutex.RLock()
+		for _, conn := range ws.connections {
+			wsConn = conn
+			break
+		}
+		ws.connectionsMutex.RUnlock()
+		runtime.Gosched()
+	}
+	if wsConn == nil {
+		t.Fatal("WebSocket connection was not registered")
+	}
+
+	close(serverConn.armed)
+	wsConn.sendChannel <- []byte("block the server writer")
+	select {
+	case <-serverConn.writeStarted:
+	case <-time.After(time.Second):
+		t.Fatal("server write did not block")
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	start := time.Now()
+	closeDone := make(chan error, 1)
+	go func() {
+		closeDone <- ws.Close(ctx)
+	}()
+	for {
+		ws.connectionsMutex.RLock()
+		closing := ws.closing
+		ws.connectionsMutex.RUnlock()
+		if closing {
+			break
+		}
+		runtime.Gosched()
+	}
+	cancel()
+
+	select {
+	case err = <-closeDone:
+	case <-time.After(500 * time.Millisecond):
+		t.Fatal("Close did not return after context cancellation")
+	}
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("Close error = %v, want context canceled", err)
+	}
+	if elapsed := time.Since(start); elapsed > 500*time.Millisecond {
+		t.Fatalf("Close took %v with a blocked control write", elapsed)
+	}
+	select {
+	case <-serverConn.closed:
+	default:
+		t.Fatal("Close did not close the blocked socket")
+	}
+
+	deadline = time.Now().Add(time.Second)
+	for limiter.Count(pc.PortName) != 0 && time.Now().Before(deadline) {
+		runtime.Gosched()
+	}
+	if got := limiter.Count(pc.PortName); got != 0 {
+		t.Fatalf("connection slots after Close = %d, want 0", got)
+	}
+}
+
 // TestWebSocketServer_Close_NoConnections verifies Close is safe with no
 // active connections and returns immediately.
 func TestWebSocketServer_Close_NoConnections(t *testing.T) {
@@ -118,6 +259,159 @@ func TestWebSocketServer_Close_NoConnections(t *testing.T) {
 	defer cancel()
 	if err := ws.Close(ctx); err != nil {
 		t.Fatalf("Close on empty server: %v", err)
+	}
+}
+
+func TestWebSocketServer_Close_RejectsNewConnections(t *testing.T) {
+	ws := NewWebSocketServer(30*time.Second, nil)
+	limiter := NewConnLimiter()
+	ws.SetConnLimiter(limiter)
+	pc := &PortContext{PortName: "wsport", Limit: 1}
+	httpSrv := httptest.NewServer(PortMiddleware(pc, limiter, http.HandlerFunc(ws.ServeHTTP)))
+	defer httpSrv.Close()
+
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	if err := ws.Close(ctx); err != nil {
+		t.Fatalf("Close on empty server: %v", err)
+	}
+
+	wsURL := "ws" + strings.TrimPrefix(httpSrv.URL, "http")
+	conn, resp, err := websocket.DefaultDialer.Dial(wsURL, nil)
+	if conn != nil {
+		conn.Close()
+		t.Fatal("connection accepted after Close")
+	}
+	if err == nil {
+		t.Fatal("expected connection attempt after Close to fail")
+	}
+	if resp == nil {
+		t.Fatal("expected HTTP response for rejected connection")
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusServiceUnavailable {
+		t.Fatalf("status = %d, want %d", resp.StatusCode, http.StatusServiceUnavailable)
+	}
+	if got := limiter.Count(pc.PortName); got != 0 {
+		t.Fatalf("connection slots after rejected upgrade = %d, want 0", got)
+	}
+}
+
+func TestWebSocketServer_Close_WaitsForInFlightUpgrade(t *testing.T) {
+	ws := NewWebSocketServer(30*time.Second, nil)
+	upgradeStarted := make(chan struct{})
+	continueUpgrade := make(chan struct{})
+	ws.upgrader.CheckOrigin = func(*http.Request) bool {
+		close(upgradeStarted)
+		<-continueUpgrade
+		return true
+	}
+
+	httpSrv := httptest.NewServer(http.HandlerFunc(ws.ServeHTTP))
+	defer httpSrv.Close()
+	defer func() {
+		select {
+		case <-continueUpgrade:
+		default:
+			close(continueUpgrade)
+		}
+	}()
+
+	type dialResult struct {
+		conn *websocket.Conn
+		resp *http.Response
+	}
+	dialDone := make(chan dialResult, 1)
+	wsURL := "ws" + strings.TrimPrefix(httpSrv.URL, "http")
+	go func() {
+		conn, resp, _ := websocket.DefaultDialer.Dial(wsURL, nil)
+		dialDone <- dialResult{conn: conn, resp: resp}
+	}()
+
+	select {
+	case <-upgradeStarted:
+	case <-time.After(time.Second):
+		t.Fatal("WebSocket upgrade did not start")
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	closeDone := make(chan error, 1)
+	go func() {
+		closeDone <- ws.Close(ctx)
+	}()
+
+	deadline := time.Now().Add(time.Second)
+	for {
+		ws.connectionsMutex.RLock()
+		closing := ws.closing
+		ws.connectionsMutex.RUnlock()
+		if closing {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("Close did not begin shutdown")
+		}
+		runtime.Gosched()
+	}
+
+	select {
+	case err := <-closeDone:
+		t.Fatalf("Close returned before the admitted upgrade finished: %v", err)
+	default:
+	}
+
+	close(continueUpgrade)
+
+	select {
+	case err := <-closeDone:
+		if err != nil {
+			t.Fatalf("Close returned error: %v", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("Close did not return after the upgrade finished")
+	}
+
+	result := <-dialDone
+	if result.conn != nil {
+		result.conn.Close()
+	}
+	if result.resp != nil {
+		result.resp.Body.Close()
+	}
+
+	ws.connectionsMutex.RLock()
+	connectionCount := len(ws.connections)
+	ws.connectionsMutex.RUnlock()
+	if connectionCount != 0 {
+		t.Fatalf("registered connections = %d, want 0", connectionCount)
+	}
+}
+
+func TestIsWebSocketUpgrade(t *testing.T) {
+	for _, test := range []struct {
+		name       string
+		connection string
+		upgrade    string
+		want       bool
+	}{
+		{name: "canonical", connection: "Upgrade", upgrade: "websocket", want: true},
+		{name: "token lists", connection: "keep-alive, Upgrade", upgrade: "websocket, other", want: true},
+		{name: "missing connection", upgrade: "websocket"},
+		{name: "missing upgrade", connection: "Upgrade"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			req := httptest.NewRequest(http.MethodGet, "/", nil)
+			if test.connection != "" {
+				req.Header.Set("Connection", test.connection)
+			}
+			if test.upgrade != "" {
+				req.Header.Set("Upgrade", test.upgrade)
+			}
+			if got := isWebSocketUpgrade(req); got != test.want {
+				t.Fatalf("isWebSocketUpgrade() = %t, want %t", got, test.want)
+			}
+		})
 	}
 }
 
@@ -140,29 +434,39 @@ func TestWebSocketServer_FailedUpgrade_ReleasesSlot(t *testing.T) {
 	httpSrv := httptest.NewServer(handler)
 	defer httpSrv.Close()
 
-	// Send several malformed upgrade requests. Each carries Upgrade: websocket
-	// (so PortMiddleware classifies it as WS and skips its own release) but
-	// omits Sec-WebSocket-Key, so gorilla rejects the upgrade.
-	for i := range 5 {
-		req, err := http.NewRequest(http.MethodGet, httpSrv.URL, nil)
-		if err != nil {
-			t.Fatalf("new request %d: %v", i, err)
-		}
-		req.Header.Set("Upgrade", "websocket")
-		req.Header.Set("Connection", "Upgrade")
+	for _, headers := range []struct {
+		name       string
+		connection string
+		upgrade    string
+	}{
+		{name: "canonical", connection: "Upgrade", upgrade: "websocket"},
+		{name: "token lists", connection: "keep-alive, Upgrade", upgrade: "websocket, other"},
+		{name: "not an upgrade", upgrade: "websocket"},
+	} {
+		t.Run(headers.name, func(t *testing.T) {
+			for i := range 5 {
+				req, err := http.NewRequest(http.MethodGet, httpSrv.URL, nil)
+				if err != nil {
+					t.Fatalf("new request %d: %v", i, err)
+				}
+				if headers.connection != "" {
+					req.Header.Set("Connection", headers.connection)
+				}
+				req.Header.Set("Upgrade", headers.upgrade)
 
-		resp, err := http.DefaultClient.Do(req)
-		if err != nil {
-			t.Fatalf("malformed upgrade %d: %v", i, err)
+				resp, err := http.DefaultClient.Do(req)
+				if err != nil {
+					t.Fatalf("malformed upgrade %d: %v", i, err)
+				}
+				resp.Body.Close()
+				if resp.StatusCode == http.StatusServiceUnavailable {
+					t.Fatalf("request %d got 503 — slot leaked from a prior failed upgrade", i)
+				}
+			}
+		})
+		if got := limiter.Count(portName); got != 0 {
+			t.Fatalf("connection slots leaked after %s requests: count=%d, want 0", headers.name, got)
 		}
-		resp.Body.Close()
-		if resp.StatusCode == http.StatusServiceUnavailable {
-			t.Fatalf("request %d got 503 — slot leaked from a prior failed upgrade", i)
-		}
-	}
-
-	if got := limiter.Count(portName); got != 0 {
-		t.Fatalf("connection slots leaked after failed upgrades: count=%d, want 0", got)
 	}
 
 	// A legitimate client must still be able to connect (limit=1).

@@ -1178,12 +1178,16 @@ func setupStorage(cfg *config.Config, log xrpllog.Logger) (nodestore.Database, r
 	nodestorePath := cfg.NodeDB.Path
 	if nodestorePath != "" {
 		cacheSize, cacheTTL := nodeStoreCacheParams(cfg.NodeDB, cfg.NodeSize)
+		pebbleOptions, err := pebbleStoreOptions(cfg.NodeDB)
+		if err != nil {
+			return nil, nil, err
+		}
 		hasRotationState, err := kvpebble.HasRotationState(nodestorePath)
 		if err != nil {
 			return nil, nil, fmt.Errorf("inspect rotating storage state: %w", err)
 		}
 		if cfg.NodeDB.IsOnlineDeleteEnabled() || hasRotationState {
-			store, err := kvpebble.NewRotating(nodestorePath, pebbleBlockCacheBytes, pebbleFileHandles)
+			store, err := kvpebble.NewRotating(nodestorePath, pebbleOptions)
 			if err != nil {
 				return nil, nil, fmt.Errorf("rotating storage backend: %w", err)
 			}
@@ -1193,14 +1197,16 @@ func setupStorage(cfg *config.Config, log xrpllog.Logger) (nodestore.Database, r
 				&nodestore.DatabaseConfig{CacheSize: cacheSize, CacheTTL: cacheTTL},
 			)
 		} else {
-			store, err := kvpebble.New(nodestorePath, pebbleBlockCacheBytes, pebbleFileHandles, false)
+			store, err := kvpebble.New(nodestorePath, pebbleOptions, false)
 			if err != nil {
 				return nil, nil, fmt.Errorf("storage backend: %w", err)
 			}
 			db = nodestore.NewKVDatabase(store, "pebble("+nodestorePath+")", cacheSize, cacheTTL)
 		}
 		log.Info("Storage initialized", "backend", "pebble", "path", nodestorePath,
-			"cache_size", cacheSize, "cache_age", cacheTTL)
+			"cache_size", cacheSize, "cache_age", cacheTTL,
+			"cache_mb", pebbleOptions.BlockCacheBytes/(1<<20),
+			"open_files", pebbleOptions.MaxOpenFiles)
 	} else {
 		log.Info("Storage initialized", "backend", "in-memory")
 	}
@@ -1409,19 +1415,20 @@ const (
 	httpIdleTimeout       = 60 * time.Second
 )
 
-// Pebble-internal tuning with no corresponding config key: the block
-// cache for the storage engine itself and the max open file handles.
-const (
-	pebbleBlockCacheBytes = 256 << 20
-	pebbleFileHandles     = 500
-)
-
 // Node-object cache defaults applied when the operator leaves node_db
 // cache_size / cache_age unset.
 const (
 	defaultNodeCacheSize = 2_097_152
 	defaultNodeCacheAge  = 90 * time.Minute
 )
+
+func pebbleStoreOptions(n config.NodeDBConfig) (kvpebble.Options, error) {
+	resolved, err := kvpebble.OptionsFromMiB(n.CacheMB, n.OpenFiles)
+	if err != nil {
+		return kvpebble.Options{}, fmt.Errorf("node_db Pebble options: %w", err)
+	}
+	return resolved, nil
+}
 
 // nodeStoreCacheParams maps node_db cache_size (entries) and cache_age
 // (minutes) onto the node-object cache parameters, substituting the

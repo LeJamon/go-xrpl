@@ -19,7 +19,7 @@ var _ interface{ Sync() error } = (*pebble.Store)(nil)
 
 func TestStoreConformance(t *testing.T) {
 	kvstoretest.RunConformance(t, func(t *testing.T) kvstore.KeyValueStore {
-		store, err := pebble.New(t.TempDir(), 0, 0, false)
+		store, err := pebble.New(t.TempDir(), pebble.Options{}, false)
 		if err != nil {
 			t.Fatalf("open pebble: %v", err)
 		}
@@ -33,7 +33,7 @@ func TestStoreConformance(t *testing.T) {
 func TestStorePersistence(t *testing.T) {
 	dir := t.TempDir()
 
-	store, err := pebble.New(dir, 0, 0, false)
+	store, err := pebble.New(dir, pebble.Options{}, false)
 	if err != nil {
 		t.Fatalf("open: %v", err)
 	}
@@ -44,7 +44,7 @@ func TestStorePersistence(t *testing.T) {
 		t.Fatalf("Close: %v", err)
 	}
 
-	reopened, err := pebble.New(dir, 0, 0, false)
+	reopened, err := pebble.New(dir, pebble.Options{}, false)
 	if err != nil {
 		t.Fatalf("reopen: %v", err)
 	}
@@ -64,7 +64,7 @@ func TestStorePersistence(t *testing.T) {
 func TestStoreSyncDurability(t *testing.T) {
 	dir := t.TempDir()
 
-	store, err := pebble.New(dir, 0, 0, false)
+	store, err := pebble.New(dir, pebble.Options{}, false)
 	if err != nil {
 		t.Fatalf("open: %v", err)
 	}
@@ -85,7 +85,7 @@ func TestStoreSyncDurability(t *testing.T) {
 		t.Fatalf("Close: %v", err)
 	}
 
-	reopened, err := pebble.New(dir, 0, 0, false)
+	reopened, err := pebble.New(dir, pebble.Options{}, false)
 	if err != nil {
 		t.Fatalf("reopen: %v", err)
 	}
@@ -104,7 +104,7 @@ func TestStoreSyncDurability(t *testing.T) {
 func TestStoreReadonly(t *testing.T) {
 	dir := t.TempDir()
 
-	rw, err := pebble.New(dir, 0, 0, false)
+	rw, err := pebble.New(dir, pebble.Options{}, false)
 	if err != nil {
 		t.Fatalf("open rw: %v", err)
 	}
@@ -115,7 +115,7 @@ func TestStoreReadonly(t *testing.T) {
 		t.Fatalf("Close rw: %v", err)
 	}
 
-	ro, err := pebble.New(dir, 0, 0, true)
+	ro, err := pebble.New(dir, pebble.Options{}, true)
 	if err != nil {
 		t.Fatalf("open readonly: %v", err)
 	}
@@ -132,7 +132,7 @@ func TestStoreReadonly(t *testing.T) {
 
 	// The handle must actually be released: a subsequent open of the same
 	// directory would fail on pebble's file lock if Close leaked it.
-	again, err := pebble.New(dir, 0, 0, false)
+	again, err := pebble.New(dir, pebble.Options{}, false)
 	if err != nil {
 		t.Fatalf("reopen after readonly close: %v", err)
 	}
@@ -149,7 +149,7 @@ func TestStoreReadonly(t *testing.T) {
 // never a panic.
 func TestConcurrentCloseNoPanic(t *testing.T) {
 	dir := t.TempDir()
-	store, err := pebble.New(dir, 0, 0, false)
+	store, err := pebble.New(dir, pebble.Options{}, false)
 	if err != nil {
 		t.Fatalf("open: %v", err)
 	}
