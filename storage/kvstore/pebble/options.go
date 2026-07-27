@@ -9,7 +9,8 @@ import (
 const (
 	// DefaultBlockCacheBytes is the block-cache capacity used when none is configured.
 	DefaultBlockCacheBytes int64 = 256 << 20
-	DefaultMaxOpenFiles          = 500
+	// DefaultMaxOpenFiles is the open-file soft limit used when none is configured.
+	DefaultMaxOpenFiles = 500
 	// MinimumOpenFiles is the smallest soft limit Pebble can honor for one
 	// database: 64 table-cache entries plus 10 non-table files.
 	MinimumOpenFiles         = 74
