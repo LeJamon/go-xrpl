@@ -35,3 +35,4 @@ main
 # Worktrees
 .worktrees/
 worktrees/
+tasks/
