@@ -660,9 +660,13 @@ func (r *Router) ensureCatchupAcquisitionWithPriority(
 		r.recordCatchupTarget(seq, hash, peerID)
 	} else {
 		r.recordValidationCatchupTarget(seq, hash, peerID, source)
-		if r.adaptor.GetOperatingMode() == consensus.OpModeFull &&
-			!aheadByMoreThan(seq, svc.GetClosedLedgerIndex(), 1) {
-			return
+		if r.engine != nil {
+			state := r.engine.State()
+			if state != nil &&
+				state.Round.Seq == seq &&
+				r.engine.Phase() != consensus.PhaseOpen {
+				return
+			}
 		}
 		if il := r.fetchTracker.Find(hash); il != nil && il.Reason() == inbound.ReasonConsensus {
 			r.refreshCatchupAcquisitionPeer(il, peerID)
