@@ -1,6 +1,7 @@
 package paychan
 
 import (
+	"encoding/hex"
 	"testing"
 
 	"github.com/LeJamon/go-xrpl/amendment"
@@ -30,6 +31,8 @@ func TestPayChanCreateRecipientOwnerDirectoryCompatibility(t *testing.T) {
 			env.FundAmount(bob, uint64(jtx.XRP(10000)))
 			env.Close()
 
+			aliceOwnerCount := env.OwnerCount(alice)
+			bobOwnerCount := env.OwnerCount(bob)
 			sequence := env.Seq(alice)
 			channelKey := chanKeylet(alice, bob, sequence)
 			transaction := ChannelCreate(alice, bob, xrp(1000), 100, alice.PublicKeyHex()).
@@ -59,8 +62,21 @@ func TestPayChanCreateRecipientOwnerDirectoryCompatibility(t *testing.T) {
 			require.True(t, inOwnerDir(env, alice, channelKey.Key))
 			require.Equal(t, test.wantRecipientDir, inOwnerDir(env, bob, channelKey.Key))
 			require.Equal(t, test.wantRecipientDir, channel.HasDestNode)
+			require.Equal(t, aliceOwnerCount+1, env.OwnerCount(alice))
+			require.Equal(t, bobOwnerCount, env.OwnerCount(bob))
 			if test.wantRecipientDir {
 				require.Equal(t, uint64(0), channel.DestinationNode)
+			}
+
+			if test.replayPreFix {
+				env.Close()
+				channelID := hex.EncodeToString(channelKey.Key[:])
+				jtx.RequireTxSuccess(t, env.Submit(ChannelClaim(bob, channelID).Close().Build()))
+				require.False(t, chanExists(env, channelKey))
+				require.False(t, inOwnerDir(env, alice, channelKey.Key))
+				require.False(t, inOwnerDir(env, bob, channelKey.Key))
+				require.Equal(t, aliceOwnerCount, env.OwnerCount(alice))
+				require.Equal(t, bobOwnerCount, env.OwnerCount(bob))
 			}
 		})
 	}

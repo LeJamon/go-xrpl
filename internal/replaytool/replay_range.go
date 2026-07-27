@@ -52,6 +52,7 @@ type replayRangeRunner struct {
 	findingsOut          string
 	goxrplCommit         string
 	legacyPayChanDirGate bool
+	payChanDirFirstFixed uint32
 }
 
 // newReplayRangeCmd builds the `replay-range` command and its flags.
@@ -82,11 +83,14 @@ correctly. The seed state's tree root is verified against the known
 account_hash before replay starts, so an incomplete or corrupt import fails
 fast instead of looking like an execution bug at from+1.
 
-Retired amendment IDs may be absent from that ledger entry, so it cannot always
-identify their historical behavior. Replay uses rippled v3.2.0 semantics by
-default. For ranges known to predate fixPayChanRecipientOwnerDir,
---legacy-paychan-owner-dir-gate restores that amendment's historical
-parent-ledger gate without changing live behavior.
+Retired amendment IDs may remain in or be absent from that ledger entry, so its
+membership cannot identify their historical behavior. Replay uses rippled
+v3.2.0 post-fix fixPayChanRecipientOwnerDir semantics for every target ledger
+by default.
+--legacy-paychan-owner-dir-gate explicitly uses pre-fix semantics for every
+target ledger. With that flag, --paychan-owner-dir-first-fixed-ledger defines the
+first target ledger that uses fixed semantics; target ledgers below it remain
+pre-fix. A first-fixed ledger of zero leaves the entire selected range pre-fix.
 
 By default the whole state tree is held in RAM (~6-12 GB for a mainnet
 checkpoint). With --nodestore-dir the seed state is instead held lazily in a
@@ -116,6 +120,7 @@ Example:
     xrpld replay-range --from 32750 --to 32800 -v
     xrpld replay-range --from 32750 --to 32800 --dump-dir ./debug
     xrpld replay-range --from 3100000 --to 3278999 --legacy-paychan-owner-dir-gate
+    xrpld replay-range --from 3275000 --to 3285000 --legacy-paychan-owner-dir-gate --paychan-owner-dir-first-fixed-ledger 3280000
     xrpld replay-range --from 99226370 --to 99236370 --checkpoint-dir ./ckpt
     xrpld replay-range --from 99226370 --to 99236370 --checkpoint-dir ./ckpt --resume-from 99230000`,
 		RunE: func(cmd *cobra.Command, args []string) error {
@@ -139,7 +144,8 @@ Example:
 	cmd.Flags().BoolVar(&r.continueOnDivergence, "continue-on-divergence", false, "On a hash mismatch, record a finding and reset to mainnet ground truth, then continue (survey all divergences) instead of stopping")
 	cmd.Flags().StringVar(&r.findingsOut, "findings-out", "", "Path to the findings JSONL file (default <dump-dir>/findings.jsonl or ./debug/findings.jsonl); used with --continue-on-divergence")
 	cmd.Flags().StringVar(&r.goxrplCommit, "goxrpl-commit", "", "Commit/image tag recorded in findings (default: VCS revision from build info)")
-	cmd.Flags().BoolVar(&r.legacyPayChanDirGate, "legacy-paychan-owner-dir-gate", false, "Derive fixPayChanRecipientOwnerDir from each parent ledger instead of assuming current v3.2.0 semantics")
+	cmd.Flags().BoolVar(&r.legacyPayChanDirGate, "legacy-paychan-owner-dir-gate", false, "Use pre-fix recipient owner-directory semantics for every target ledger unless --paychan-owner-dir-first-fixed-ledger sets a transition")
+	cmd.Flags().Uint32Var(&r.payChanDirFirstFixed, "paychan-owner-dir-first-fixed-ledger", 0, "First target ledger that uses fixed recipient owner-directory semantics; a nonzero value requires --legacy-paychan-owner-dir-gate (0 keeps the entire range pre-fix when legacy mode is enabled)")
 
 	// MarkFlagRequired only errors if the flag does not exist — a construction
 	// bug, so fail fast rather than ignoring the error.
@@ -164,8 +170,8 @@ type RangeReplayStats struct {
 }
 
 func (r *replayRangeRunner) run() error {
-	if r.from >= r.to {
-		return fmt.Errorf("--from must be less than --to")
+	if err := r.validateFlags(); err != nil {
+		return err
 	}
 
 	// Effective starting point. With --resume-from we seed from an on-disk
@@ -208,10 +214,13 @@ func (r *replayRangeRunner) run() error {
 	fmt.Fprintln(r.out, "                    XRPL Continuous State Replay")
 	fmt.Fprintln(r.out, "================================================================================")
 	fmt.Fprintf(r.out, "Range:      %d -> %d (%d blocks)\n", r.from, r.to, r.to-r.from)
-	if r.legacyPayChanDirGate {
-		fmt.Fprintln(r.out, "Compatibility: historical fixPayChanRecipientOwnerDir gate")
-	} else {
-		fmt.Fprintln(r.out, "Compatibility: rippled v3.2.0 retired-amendment semantics")
+	switch {
+	case !r.legacyPayChanDirGate:
+		fmt.Fprintln(r.out, "Compatibility: post-fix fixPayChanRecipientOwnerDir semantics for every target ledger (rippled v3.2.0)")
+	case r.payChanDirFirstFixed == 0:
+		fmt.Fprintln(r.out, "Compatibility: pre-fix fixPayChanRecipientOwnerDir semantics for every target ledger")
+	default:
+		fmt.Fprintf(r.out, "Compatibility: pre-fix fixPayChanRecipientOwnerDir semantics before target ledger %d; fixed semantics at and after it\n", r.payChanDirFirstFixed)
 	}
 	fmt.Fprintf(r.out, "Started at: %s\n", startTime.Format(time.RFC3339))
 	fmt.Fprintln(r.out)
@@ -370,6 +379,16 @@ func (r *replayRangeRunner) run() error {
 	if stats.FailedAtBlock > 0 {
 		// The failure is already reported above; only the exit code is left.
 		return cmdexit.ErrReported
+	}
+	return nil
+}
+
+func (r *replayRangeRunner) validateFlags() error {
+	if r.from >= r.to {
+		return fmt.Errorf("--from must be less than --to")
+	}
+	if r.payChanDirFirstFixed != 0 && !r.legacyPayChanDirGate {
+		return errors.New("--paychan-owner-dir-first-fixed-ledger requires --legacy-paychan-owner-dir-gate")
 	}
 	return nil
 }
@@ -547,22 +566,8 @@ func loadRulesFromState(stateMap *shamap.SHAMap) (*amendment.Rules, error) {
 	return rules, nil
 }
 
-func replayPreFixPayChanRecipientOwnerDir(stateMap *shamap.SHAMap, historicalGate bool) (bool, error) {
-	if !historicalGate {
-		return false, nil
-	}
-	item, found, err := stateMap.Get(keylet.Amendments().Key)
-	if err != nil {
-		return false, fmt.Errorf("reading amendments entry: %w", err)
-	}
-	if !found || item == nil {
-		return true, nil
-	}
-	enabled, err := ledger.IsAmendmentStoredInLedgerEntry(item.Data(), amendment.FeatureFixPayChanRecipientOwnerDir)
-	if err != nil {
-		return false, fmt.Errorf("parsing stored amendments entry: %w", err)
-	}
-	return !enabled, nil
+func replayPreFixPayChanRecipientOwnerDir(targetLedger uint32, legacyGate bool, firstFixedLedger uint32) bool {
+	return legacyGate && (firstFixedLedger == 0 || targetLedger < firstFixedLedger)
 }
 
 // extractFeesFromSHAMap extracts the fee schedule from the FeeSettings entry of
@@ -665,10 +670,7 @@ func (r *replayRangeRunner) processBlock(
 	if err != nil {
 		return nil, nil, fmt.Errorf("loading amendments: %w", err)
 	}
-	replayPreFix, err := replayPreFixPayChanRecipientOwnerDir(preStateMap, r.legacyPayChanDirGate)
-	if err != nil {
-		return nil, nil, fmt.Errorf("loading historical fixPayChanRecipientOwnerDir state: %w", err)
-	}
+	replayPreFix := replayPreFixPayChanRecipientOwnerDir(targetLedger, r.legacyPayChanDirGate, r.payChanDirFirstFixed)
 
 	// Flag-ledger NegativeUNL transition: on a flag ledger, apply the pending
 	// ValidatorToDisable / ValidatorToReEnable transitions to the NegativeUNL

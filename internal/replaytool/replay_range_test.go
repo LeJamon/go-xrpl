@@ -130,40 +130,43 @@ func TestLoadRulesFromState_Populated(t *testing.T) {
 }
 
 func TestReplayPreFixPayChanRecipientOwnerDir(t *testing.T) {
-	withoutFix, err := pseudo.SerializeAmendmentsSLE(&pseudo.AmendmentsSLE{
-		Amendments: [][32]byte{amendment.FeatureFlow},
-	})
-	if err != nil {
-		t.Fatalf("serializing amendments SLE without fix: %v", err)
-	}
-	withFix, err := pseudo.SerializeAmendmentsSLE(&pseudo.AmendmentsSLE{
+	capturedParentAmendments, err := pseudo.SerializeAmendmentsSLE(&pseudo.AmendmentsSLE{
 		Amendments: [][32]byte{amendment.FeatureFlow, amendment.FeatureFixPayChanRecipientOwnerDir},
 	})
 	if err != nil {
-		t.Fatalf("serializing amendments SLE with fix: %v", err)
+		t.Fatalf("serializing captured parent amendments SLE: %v", err)
+	}
+	parentState := buildReplayStateMap(t, map[[32]byte][]byte{
+		keylet.Amendments().Key: capturedParentAmendments,
+	})
+	rules, err := loadRulesFromState(parentState)
+	if err != nil {
+		t.Fatalf("loading captured parent amendments SLE: %v", err)
+	}
+	if !rules.Enabled(amendment.FeatureFixPayChanRecipientOwnerDir) {
+		t.Fatal("captured parent rules must enable fixPayChanRecipientOwnerDir")
+	}
+	if got := replayPreFixPayChanRecipientOwnerDir(42, true, 0); !got {
+		t.Fatal("legacy flag must force pre-fix semantics despite the parent Amendments entry")
 	}
 
 	for _, tc := range []struct {
-		name           string
-		historicalGate bool
-		entry          []byte
-		wantPreFix     bool
+		name             string
+		targetLedger     uint32
+		legacyGate       bool
+		firstFixedLedger uint32
+		wantPreFix       bool
 	}{
-		{name: "default ignores absent retired ID", entry: withoutFix},
-		{name: "historical gate before activation", historicalGate: true, entry: withoutFix, wantPreFix: true},
-		{name: "historical gate after activation", historicalGate: true, entry: withFix},
-		{name: "historical gate without Amendments entry", historicalGate: true, wantPreFix: true},
+		{name: "no-flag default", targetLedger: 99, firstFixedLedger: 100},
+		{name: "boundary minus one", targetLedger: 99, legacyGate: true, firstFixedLedger: 100, wantPreFix: true},
+		{name: "boundary", targetLedger: 100, legacyGate: true, firstFixedLedger: 100},
+		{name: "boundary plus one", targetLedger: 101, legacyGate: true, firstFixedLedger: 100},
+		{name: "legacy entire range", targetLedger: 101, legacyGate: true, wantPreFix: true},
+		{name: "transition before range", targetLedger: 42, legacyGate: true, firstFixedLedger: 1},
+		{name: "transition after range", targetLedger: 42, legacyGate: true, firstFixedLedger: 100, wantPreFix: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			entries := map[[32]byte][]byte{{0x01}: entry(0xaa)}
-			if tc.entry != nil {
-				entries[keylet.Amendments().Key] = tc.entry
-			}
-			stateMap := buildReplayStateMap(t, entries)
-			got, err := replayPreFixPayChanRecipientOwnerDir(stateMap, tc.historicalGate)
-			if err != nil {
-				t.Fatalf("replayPreFixPayChanRecipientOwnerDir: %v", err)
-			}
+			got := replayPreFixPayChanRecipientOwnerDir(tc.targetLedger, tc.legacyGate, tc.firstFixedLedger)
 			if got != tc.wantPreFix {
 				t.Fatalf("replayPreFixPayChanRecipientOwnerDir = %t, want %t", got, tc.wantPreFix)
 			}
@@ -173,12 +176,44 @@ func TestReplayPreFixPayChanRecipientOwnerDir(t *testing.T) {
 
 func TestReplayRangeLegacyPayChanOwnerDirFlag(t *testing.T) {
 	cmd := newReplayRangeCmd()
-	flag := cmd.Flags().Lookup("legacy-paychan-owner-dir-gate")
-	if flag == nil {
-		t.Fatal("legacy-paychan-owner-dir-gate flag is not registered")
+	for _, tc := range []struct {
+		name       string
+		defaultVal string
+	}{
+		{name: "legacy-paychan-owner-dir-gate", defaultVal: "false"},
+		{name: "paychan-owner-dir-first-fixed-ledger", defaultVal: "0"},
+	} {
+		flag := cmd.Flags().Lookup(tc.name)
+		if flag == nil {
+			t.Fatalf("%s flag is not registered", tc.name)
+		}
+		if flag.DefValue != tc.defaultVal {
+			t.Fatalf("%s default = %q, want %s", tc.name, flag.DefValue, tc.defaultVal)
+		}
 	}
-	if flag.DefValue != "false" {
-		t.Fatalf("legacy-paychan-owner-dir-gate default = %q, want false", flag.DefValue)
+}
+
+func TestReplayRangePayChanFirstFixedRequiresLegacyFlag(t *testing.T) {
+	runner := &replayRangeRunner{
+		from:                 41,
+		to:                   43,
+		payChanDirFirstFixed: 42,
+	}
+	err := runner.validateFlags()
+	if err == nil || err.Error() != "--paychan-owner-dir-first-fixed-ledger requires --legacy-paychan-owner-dir-gate" {
+		t.Fatalf("validateFlags error = %v", err)
+	}
+
+	for _, firstFixed := range []uint32{1, 100} {
+		runner := &replayRangeRunner{
+			from:                 41,
+			to:                   43,
+			legacyPayChanDirGate: true,
+			payChanDirFirstFixed: firstFixed,
+		}
+		if err := runner.validateFlags(); err != nil {
+			t.Fatalf("first fixed ledger %d outside selected range: %v", firstFixed, err)
+		}
 	}
 }
 
