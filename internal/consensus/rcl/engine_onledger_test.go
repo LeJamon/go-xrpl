@@ -20,6 +20,24 @@ func chainLedger(seq uint32, idb, pb byte) *mockLedger {
 	}
 }
 
+func stageQuorumValidatedLedger(e *Engine, a *mockAdaptor, l consensus.Ledger) {
+	nodes := []consensus.NodeID{{0x21}, {0x22}}
+	e.validationTracker = NewValidationTracker(len(nodes), 5*time.Minute)
+	e.validationTracker.SetTrustedAndQuorum(nodes, len(nodes))
+	e.validationTracker.SetNow(a.Now)
+	now := a.Now()
+	for _, node := range nodes {
+		e.validationTracker.Add(&consensus.Validation{
+			NodeID:    node,
+			LedgerID:  l.ID(),
+			LedgerSeq: l.Seq(),
+			Full:      true,
+			SignTime:  now,
+			SeenTime:  now,
+		})
+	}
+}
+
 func TestEngine_OnLedger_SelectsExactWrongLedgerTarget(t *testing.T) {
 	a := newMockAdaptor()
 	e := NewEngine(a, DefaultConfig())
@@ -295,6 +313,29 @@ func TestEngine_OnLedger_UsesValidatedTipOutsideRecovery(t *testing.T) {
 	}
 }
 
+func TestEngine_OnLedger_UsesQuorumValidatedCandidateBeforeTipAdvances(t *testing.T) {
+	a := newMockAdaptor()
+	e := NewEngine(a, DefaultConfig())
+	initial := a.ledgers[consensus.LedgerID{1}]
+	target := chainLedger(105, 105, 104)
+	a.StoreLedger(target)
+	stageQuorumValidatedLedger(e, a, target)
+
+	e.prevLedger = initial
+	e.mode = consensus.ModeObserving
+
+	if err := e.OnLedger(target.ID(), nil); err != nil {
+		t.Fatalf("OnLedger: %v", err)
+	}
+	if got := e.prevLedger.ID(); got != target.ID() {
+		want := target.ID()
+		t.Fatalf("prevLedger = %x, want quorum-validated candidate %x", got[:2], want[:2])
+	}
+	if got := e.Mode(); got != consensus.ModeSwitchedLedger {
+		t.Fatalf("mode = %v, want switchedLedger", got)
+	}
+}
+
 func TestEngine_OnLedger_IgnoresOrdinaryAcquisitionOutsideRecovery(t *testing.T) {
 	a := newMockAdaptor()
 	e := NewEngine(a, DefaultConfig())
@@ -331,6 +372,13 @@ func TestEngine_TrySwitchToLedger_AcceptsEligibleLedger(t *testing.T) {
 			selectLedger: func(e *Engine, a *mockAdaptor, id consensus.LedgerID) {
 				e.mode = consensus.ModeObserving
 				a.validatedLedgerHashOverride = id
+			},
+		},
+		{
+			name: "quorum validated candidate",
+			selectLedger: func(e *Engine, a *mockAdaptor, id consensus.LedgerID) {
+				e.mode = consensus.ModeObserving
+				stageQuorumValidatedLedger(e, a, a.ledgers[id])
 			},
 		},
 		{

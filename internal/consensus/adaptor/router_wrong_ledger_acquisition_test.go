@@ -42,15 +42,15 @@ func TestAdaptorRequestLedgerTracksExactConsensusTarget(t *testing.T) {
 	assert.Nil(t, r.fetchTracker.Find(target), "matching reply must be consumed by the tracked acquisition")
 }
 
-func TestHeldConsensusTargetDoesNotReenterEngine(t *testing.T) {
+func TestHeldConsensusTargetRequiresEngineAcceptance(t *testing.T) {
 	r, _, _, svc := makeRouter(t)
-	engine := &mockEngine{}
+	engine := &mockEngine{switchResult: consensus.LedgerSwitchAccepted}
 	r.engine = engine
 	target := svc.GetClosedLedger().Hash()
 	r.consensusRecovery.targetHash = target
 
 	require.True(t, r.armPendingConsensusLedger())
-	assert.Empty(t, engine.getLedgers())
+	assert.Equal(t, []consensus.LedgerID{consensus.LedgerID(target)}, engine.getLedgers())
 	assert.Equal(t, consensusRecovery{
 		anchorHash: target,
 		anchorSeq:  svc.GetClosedLedgerIndex(),
@@ -307,6 +307,21 @@ func TestHistoryBackfillWaitsForConsensusCatchup(t *testing.T) {
 	r.armHistoryBackfill()
 	require.NotNil(t, r.fetchTracker.Find(historyHash))
 	assert.Len(t, sender.legacyCalls(), 1)
+}
+
+func TestSupersededHistoryCompletionDoesNotOverwriteNewWalk(t *testing.T) {
+	r, _, _, _ := makeRouter(t)
+	oldHash := [32]byte{0xC3}
+	newHash := [32]byte{0xC4}
+	r.startHistoryBackfill(90, oldHash, 7, 10)
+	r.startHistoryBackfill(190, newHash, 8, 20)
+
+	r.completeHistoryBackfill(90, oldHash, [32]byte{0xC2}, 7)
+
+	r.historyMu.Lock()
+	defer r.historyMu.Unlock()
+	assert.Equal(t, catchupTarget{seq: 190, hash: newHash, peerID: 8}, r.history)
+	assert.Equal(t, uint32(20), r.historyFloor)
 }
 
 func TestBehindPeerCannotPromoteWhileNetworkTargetIsAhead(t *testing.T) {

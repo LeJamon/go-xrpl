@@ -1962,3 +1962,48 @@ replacing its specialized traversal algorithms.
   SHAMap normal and race suites, package vet, repository-wide `go test ./...`,
   `just build-all`, `just build-nocgo`, strict `golangci-lint` with zero issues,
   coverage, benchmarks, and `git diff --check`.
+
+# PR #1429 regression fixes
+
+Target: `fix/issue-1428-slow-bootstrap-wedge` at
+`b90ba356b5fccdbba16aeb633a3fa536453ba4c1`.
+Behavioral oracle: local rippled v3.2.0 checkout at
+`rippled-worktrees/v3.2.0-oracle/`.
+
+## Plan
+
+- [x] Keep staged bootstrap candidates hash-addressable without advancing the
+      validated frontier before currentness and compatibility checks.
+- [x] Install fetched and already-held validated history into sequence history,
+      durable indexes, and `complete_ledgers` without moving closed/open state.
+- [x] Schedule deep-gap history recovery after immediate, replay, and deferred
+      initial switches.
+- [x] Add regressions for stale pending-validation promotion, history completion,
+      held bootstrap anchors, replay switches, and maintenance retries.
+- [x] Run focused and full verification, review the complete diff against
+      rippled v3.2.0, and record the results.
+- [x] Stage only the scoped changes, commit, push the PR branch, and confirm the
+      published head and checks.
+
+## Review
+
+- Stored/bootstrap candidates remain hash-addressable but cannot advance the
+  closed, open, or validated frontiers before a successful consensus switch.
+  Live trusted quorum and currentness are rechecked before adoption; router
+  handoff, recovery, and operating-mode state commit only after acceptance.
+- Historical acquisitions now populate validated sequence history, transaction
+  indexes, persistence, and `complete_ledgers` only when they connect to the
+  selected canonical child, without moving current ledger frontiers.
+- Every successful preferred-ledger switch schedules ancestry-bounded history
+  recovery. Held anchors, replay switches, deferred Busy retries, stale walk
+  generations, and synchronous peer failures are covered by regressions.
+- Post-validation amendment and local-transaction work runs after releasing the
+  service mutex. Independent conformance review found no remaining issues.
+- Passing gates: affected packages normally and under `-race`, `just test-core`,
+  `just build`, `just vet`, configured and strict `golangci-lint`, and
+  `git diff --check`. The aggregate core gate initially hit an unrelated missing
+  Go build-cache entry in an RPC analyzer; its isolated test and uncontended
+  core rerun passed.
+- The local rippled oracle files were reviewed, but its `.git` worktree pointer
+  is broken, so the configured v3.2.0 SHA/tag and clean status could not be
+  independently re-verified.

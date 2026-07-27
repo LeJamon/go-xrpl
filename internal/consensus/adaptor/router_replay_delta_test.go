@@ -397,9 +397,7 @@ func TestRouter_ReplayDeltaResponse_Routed(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, seq, stored.Sequence())
 	assert.NotEqual(t, expectedHash, svc.GetClosedLedger().Hash())
-	// And the operating mode should be at least Tracking.
-	assert.True(t, a.GetOperatingMode() >= consensus.OpModeTracking,
-		"adoption should advance to Tracking or higher (was %s)", a.GetOperatingMode())
+	assert.Equal(t, consensus.OpModeDisconnected, a.GetOperatingMode())
 }
 
 // TestRouter_FallsBackToLegacyOnReplayFailure verifies that a malformed
@@ -644,7 +642,7 @@ func buildSuccessorAgainstParent(t *testing.T, parent *ledger.Ledger) (*message.
 
 func TestRouter_ConsensusRecoveryWalkNotifiesOnlyExactTarget(t *testing.T) {
 	r, a, sender, svc := makeRouter(t)
-	engine := &mockEngine{}
+	engine := &mockEngine{switchResult: consensus.LedgerSwitchAccepted}
 	r.engine = engine
 	_, err := svc.AcceptLedger(context.TODO())
 	require.NoError(t, err)
@@ -913,8 +911,7 @@ func TestRouter_ReplayDeltaStoresOutOfOrderArrivalsByHash(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, hashN2, gotN2.Hash())
 	assert.Equal(t, parentSeq, svc.GetClosedLedger().Sequence())
-	assert.True(t, a.GetOperatingMode() >= consensus.OpModeTracking,
-		"operating mode must be at least Tracking after acquisition (was %s)", a.GetOperatingMode())
+	assert.Equal(t, consensus.OpModeDisconnected, a.GetOperatingMode())
 }
 
 // A verified replay delta already carries a complete derived ledger, so storing
@@ -968,6 +965,111 @@ func TestRouter_ReplayDeltaStoresWithoutParentChase(t *testing.T) {
 
 	totalAutoArmCalls := len(rs.replayCalls()) + len(rs.legacyCalls())
 	require.Zero(t, totalAutoArmCalls)
+}
+
+func TestRouter_InitialReplaySwitchSchedulesHistoryBackfill(t *testing.T) {
+	svc := adg_newNonStandaloneService(t)
+	t.Cleanup(svc.Stop)
+	a, _ := newRecordingAdaptor(t, svc)
+	a.SetOperatingMode(consensus.OpModeConnected)
+	engine := &mockEngine{switchResult: consensus.LedgerSwitchAccepted}
+	engine.switchHook = func(id consensus.LedgerID) {
+		selected, err := a.GetLedger(id)
+		require.NoError(t, err)
+		require.NoError(t, a.OnLedgerSwitched(selected))
+	}
+	r := NewRouter(engine, a, make(chan *peermanagement.InboundMessage, 1))
+
+	closed := svc.GetClosedLedger()
+	require.NotNil(t, closed)
+	_, anchor, anchorHash, anchorSeq := buildSuccessorAgainstParent(t, closed)
+	anchorState, err := anchor.StateMapSnapshot()
+	require.NoError(t, err)
+	anchorTx, err := anchor.TxMapSnapshot()
+	require.NoError(t, err)
+	anchorHeader := anchor.Header()
+	require.NoError(t, svc.StoreLedgerWithState(t.Context(), &anchorHeader, anchorState, anchorTx))
+
+	response, _, targetHash, targetSeq := buildSuccessorAgainstParent(t, anchor)
+	require.NoError(t, r.startReplayDeltaAcquisition(targetSeq, targetHash, 7, anchor))
+	payload, err := message.Encode(response)
+	require.NoError(t, err)
+	r.handleMessage(&peermanagement.InboundMessage{
+		PeerID:  7,
+		Type:    uint16(message.TypeReplayDeltaResponse),
+		Payload: payload,
+	})
+
+	require.Equal(t, []consensus.LedgerID{consensus.LedgerID(targetHash)}, engine.getLedgers())
+	r.historyMu.Lock()
+	assert.Equal(t, catchupTarget{seq: anchorSeq, hash: anchorHash}, r.history)
+	assert.Equal(t, closed.Sequence(), r.historyFloor)
+	r.historyMu.Unlock()
+}
+
+func TestRouter_LaterPreferredInitialSwitchSchedulesHistoryBackfill(t *testing.T) {
+	svc := adg_newNonStandaloneService(t)
+	t.Cleanup(svc.Stop)
+	a, _ := newRecordingAdaptor(t, svc)
+	engine := &mockEngine{switchResult: consensus.LedgerSwitchIrrelevant}
+	r := NewRouter(engine, a, nil)
+
+	closed := svc.GetClosedLedger()
+	require.NotNil(t, closed)
+	_, anchor, anchorHash, anchorSeq := buildSuccessorAgainstParent(t, closed)
+	_, selected, selectedHash, selectedSeq := buildSuccessorAgainstParent(t, anchor)
+	stateMap, err := selected.StateMapSnapshot()
+	require.NoError(t, err)
+	txMap, err := selected.TxMapSnapshot()
+	require.NoError(t, err)
+	selectedHeader := selected.Header()
+	initialCandidate, err := svc.BootstrapLedgerWithState(t.Context(), &selectedHeader, stateMap, txMap)
+	require.NoError(t, err)
+	require.True(t, initialCandidate)
+	require.False(t, r.completeStoredConsensusRecovery(
+		selectedSeq,
+		selectedHash,
+		anchorHash,
+		initialCandidate,
+	))
+
+	r.historyMu.Lock()
+	assert.Equal(t, catchupTarget{}, r.history)
+	r.historyMu.Unlock()
+
+	require.NoError(t, a.OnLedgerSwitched(WrapLedger(selected)))
+
+	r.historyMu.Lock()
+	assert.Equal(t, catchupTarget{seq: anchorSeq, hash: anchorHash}, r.history)
+	assert.Equal(t, closed.Sequence(), r.historyFloor)
+	r.historyMu.Unlock()
+}
+
+func TestSwitchedLedgerHistoryFloorFallsBackFromForkedClosedLedger(t *testing.T) {
+	svc := newTestLedgerService(t)
+	validated := svc.GetClosedLedger()
+	require.NotNil(t, validated)
+	_, canonicalChild, _, _ := buildSuccessorAgainstParent(t, validated)
+	_, canonicalGrandchild, _, _ := buildSuccessorAgainstParent(t, canonicalChild)
+	_, selected, _, _ := buildSuccessorAgainstParent(t, canonicalGrandchild)
+
+	forkTime := canonicalChild.CloseTime().Add(time.Hour)
+	forkedClosed, err := ledger.NewOpen(validated, forkTime)
+	require.NoError(t, err)
+	require.NoError(t, forkedClosed.Close(forkTime, 0))
+	require.NotEqual(t, canonicalChild.Hash(), forkedClosed.Hash())
+	_, forkedGrandchild, _, _ := buildSuccessorAgainstParent(t, forkedClosed)
+	_, forkedGreatGrandchild, _, _ := buildSuccessorAgainstParent(t, forkedGrandchild)
+	_, laterForkedClosed, _, _ := buildSuccessorAgainstParent(t, forkedGreatGrandchild)
+
+	assert.Equal(t, validated.Sequence(), switchedLedgerHistoryFloor(selected, forkedClosed, validated))
+	assert.Equal(t, validated.Sequence(), switchedLedgerHistoryFloor(selected, laterForkedClosed, validated))
+	assert.Equal(t, validated.Sequence(), switchedLedgerHistoryFloor(canonicalGrandchild, forkedClosed, validated))
+	assert.Equal(t, canonicalGrandchild.Sequence()-1,
+		switchedLedgerHistoryFloor(canonicalGrandchild, canonicalChild, validated))
+	assert.Equal(t, canonicalChild.Sequence()-1, switchedLedgerHistoryFloor(canonicalChild, forkedClosed, validated))
+	assert.Equal(t, canonicalChild.Sequence()-1,
+		switchedLedgerHistoryFloor(canonicalChild, canonicalChild, validated))
 }
 
 // autoArmTarget returns the hash and seq of the single auto-armed

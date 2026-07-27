@@ -131,6 +131,14 @@ func TestSlowInitialAcquisitionWaitsForCurrentConsensusSwitch(t *testing.T) {
 	require.NotNil(t, state)
 	require.Equal(t, fresh.Seq()+1, state.Round.Seq)
 	require.Equal(t, fresh.Hash(), state.Round.ParentHash)
+
+	svc.SetValidatedLedger(fresh.Seq(), fresh.Hash())
+	router.maintenanceTick()
+
+	historicalStale, err := svc.AdoptedLedgerBySequence(stale.Seq())
+	require.NoError(t, err)
+	require.Equal(t, stale.Hash(), historicalStale.Hash())
+	require.Equal(t, fresh.Hash(), svc.GetClosedLedger().Hash())
 }
 
 func TestAcquiredValidatedTipSurvivesRecoveryTimerTick(t *testing.T) {
@@ -138,6 +146,11 @@ func TestAcquiredValidatedTipSurvivesRecoveryTimerTick(t *testing.T) {
 	svc := a.ledgerService
 	stale := svc.GetClosedLedger()
 	require.NotNil(t, stale)
+	cfg := rcl.DefaultConfig()
+	cfg.ManualTick = true
+	engine := rcl.NewEngine(a, cfg)
+	require.NoError(t, engine.Start(t.Context()))
+	t.Cleanup(func() { require.NoError(t, engine.Stop()) })
 
 	stateMap, err := stale.StateMapSnapshot()
 	require.NoError(t, err)
@@ -160,13 +173,18 @@ func TestAcquiredValidatedTipSurvivesRecoveryTimerTick(t *testing.T) {
 	targetHeader.Validated = false
 
 	require.NoError(t, svc.StoreLedgerWithState(t.Context(), &targetHeader, stateMap, txMap))
-	svc.SetValidatedLedger(targetHeader.LedgerIndex, targetHeader.Hash)
-	require.Equal(t, targetHeader.Hash, svc.GetValidatedLedger().Hash())
+	validation := &consensus.Validation{
+		LedgerSeq: targetHeader.LedgerIndex,
+		LedgerID:  consensus.LedgerID(targetHeader.Hash),
+		SignTime:  a.Now(),
+		SeenTime:  a.Now(),
+		Full:      true,
+	}
+	require.NoError(t, a.SignValidation(validation))
+	require.NoError(t, engine.OnValidation(validation, 0))
+	require.Equal(t, stale.Hash(), svc.GetValidatedLedger().Hash())
 	require.Equal(t, stale.Hash(), svc.GetClosedLedger().Hash())
 
-	cfg := rcl.DefaultConfig()
-	cfg.ManualTick = true
-	engine := rcl.NewEngine(a, cfg)
 	require.NoError(t, engine.StartRound(consensus.RoundID{
 		Seq:        stale.Sequence() + 1,
 		ParentHash: consensus.LedgerID(stale.Hash()),
@@ -192,6 +210,11 @@ func TestAcquiredValidatedTipSurvivesMovingRecoveryTarget(t *testing.T) {
 	svc := a.ledgerService
 	stale := svc.GetClosedLedger()
 	require.NotNil(t, stale)
+	cfg := rcl.DefaultConfig()
+	cfg.ManualTick = true
+	engine := rcl.NewEngine(a, cfg)
+	require.NoError(t, engine.Start(t.Context()))
+	t.Cleanup(func() { require.NoError(t, engine.Stop()) })
 
 	stateMap, err := stale.StateMapSnapshot()
 	require.NoError(t, err)
@@ -214,12 +237,16 @@ func TestAcquiredValidatedTipSurvivesMovingRecoveryTarget(t *testing.T) {
 	targetHeader.Validated = false
 
 	require.NoError(t, svc.StoreLedgerWithState(t.Context(), &targetHeader, stateMap, txMap))
-	svc.SetValidatedLedger(targetHeader.LedgerIndex, targetHeader.Hash)
-	require.Equal(t, targetHeader.Hash, svc.GetValidatedLedger().Hash())
-
-	cfg := rcl.DefaultConfig()
-	cfg.ManualTick = true
-	engine := rcl.NewEngine(a, cfg)
+	validation := &consensus.Validation{
+		LedgerSeq: targetHeader.LedgerIndex,
+		LedgerID:  consensus.LedgerID(targetHeader.Hash),
+		SignTime:  a.Now(),
+		SeenTime:  a.Now(),
+		Full:      true,
+	}
+	require.NoError(t, a.SignValidation(validation))
+	require.NoError(t, engine.OnValidation(validation, 0))
+	require.Equal(t, stale.Hash(), svc.GetValidatedLedger().Hash())
 	require.NoError(t, engine.StartRound(consensus.RoundID{
 		Seq:        stale.Sequence() + 1,
 		ParentHash: consensus.LedgerID(stale.Hash()),

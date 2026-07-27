@@ -350,6 +350,7 @@ func NewRouter(engine consensus.Engine, adaptor *Adaptor, inbox <-chan *peermana
 		// attempt-cap state.
 		adaptor.SetOnTxSetRequested(r.MarkTxSetStillNeeded)
 		adaptor.SetOnLedgerRequested(r.requestConsensusLedger)
+		adaptor.setOnLedgerSwitched(r.onLedgerSwitched)
 	}
 	return r
 }

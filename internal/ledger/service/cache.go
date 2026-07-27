@@ -309,6 +309,15 @@ type pendingValidationEntry struct {
 // 10min covers deep-gap catch-up (one backward hop per peer round-trip)
 const pendingValidationTTL = 10 * time.Minute
 
+// HasPendingLedgerValidation reports whether seq and hash still have a
+// non-expired trusted-validation notification awaiting canonical selection.
+func (s *Service) HasPendingLedgerValidation(seq uint32, hash [32]byte) bool {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	entry, ok := s.pendingLedgerValidations[seq]
+	return ok && entry.expectedHash == hash && time.Since(entry.at) < pendingValidationTTL
+}
+
 // stashPendingLedgerValidationLocked stores a (seq, expectedHash, at) entry
 // drained when ledgerHistory[seq] lands, LRU-evicting at the cap.
 // Caller must hold s.mu.

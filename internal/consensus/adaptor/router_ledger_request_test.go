@@ -81,7 +81,7 @@ func TestRouter_RequestLedger_NoPeers(t *testing.T) {
 
 func TestGenericAcquisitionJoinedByConsensusNotifiesExactTarget(t *testing.T) {
 	r, _, _, svc := makeRouter(t)
-	engine := &mockEngine{}
+	engine := &mockEngine{switchResult: consensus.LedgerSwitchAccepted}
 	r.engine = engine
 	rootHash, rootData, wire := buildSelfHealSourceState(t)
 	closed := svc.GetClosedLedger()

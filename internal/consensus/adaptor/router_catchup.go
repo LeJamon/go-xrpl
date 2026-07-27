@@ -386,17 +386,11 @@ func (r *Router) armPendingConsensusLedger() bool {
 					}
 					return false
 				}
-				r.acquisitionMu.Lock()
-				if r.consensusRecovery.targetHash != hash {
-					r.acquisitionMu.Unlock()
-					continue
+				accepted, rearm := r.tryConsensusLedgerSwitch(held.Sequence(), held.Hash())
+				if accepted || !rearm {
+					return true
 				}
-				r.consensusRecovery.anchorHash = held.Hash()
-				r.consensusRecovery.anchorSeq = held.Sequence()
-				r.consensusRecovery.targetHash = [32]byte{}
-				r.consensusRecovery.stepHash = [32]byte{}
-				r.acquisitionMu.Unlock()
-				return true
+				return false
 			}
 		}
 		seq, known := r.lookupSeqForHash(hash)
@@ -928,11 +922,23 @@ func (r *Router) startHistoryBackfill(seq uint32, hash [32]byte, peerID uint64, 
 	r.historyMu.Unlock()
 }
 
-// currentHistoryFloor returns the active backfill walk's lower bound.
-func (r *Router) currentHistoryFloor() uint32 {
+func (r *Router) onLedgerSwitched(seq uint32, _ [32]byte, parentHash [32]byte, historyFloor uint32) {
+	if seq == 0 {
+		return
+	}
+	r.startHistoryBackfill(seq-1, parentHash, 0, historyFloor)
+}
+
+func (r *Router) completeHistoryBackfill(seq uint32, hash, parentHash [32]byte, peerID uint64) {
+	if seq == 0 {
+		return
+	}
 	r.historyMu.Lock()
 	defer r.historyMu.Unlock()
-	return r.historyFloor
+	if r.history.seq != seq || r.history.hash != hash {
+		return
+	}
+	r.history = catchupTarget{seq: seq - 1, hash: parentHash, peerID: peerID}
 }
 
 // armHistoryBackfill drives one backward history-backfill acquisition from the
@@ -961,8 +967,10 @@ func (r *Router) armHistoryBackfill() {
 	for {
 		if target.seq == 0 || target.seq <= floor || target.hash == ([32]byte{}) || r.belowFloor(target.seq) {
 			r.historyMu.Lock()
-			r.history = catchupTarget{}
-			r.historyFloor = 0
+			if r.history == target && r.historyFloor == floor {
+				r.history = catchupTarget{}
+				r.historyFloor = 0
+			}
 			r.historyMu.Unlock()
 			return
 		}
@@ -970,10 +978,39 @@ func (r *Router) armHistoryBackfill() {
 		if err != nil || held == nil {
 			break
 		}
-		target = catchupTarget{seq: target.seq - 1, hash: held.ParentHash(), peerID: target.peerID}
+		hdr := held.Header()
+		stateMap, err := held.StateMapSnapshot()
+		if err != nil {
+			r.logger.Warn("history backfill: snapshot held ledger state failed",
+				"error", err, "seq", target.seq)
+			return
+		}
+		txMap, err := held.TxMapSnapshot()
+		if err != nil {
+			r.logger.Warn("history backfill: snapshot held ledger transactions failed",
+				"error", err, "seq", target.seq)
+			return
+		}
+		if err = svc.IngestHistoricalLedgerWithState(context.TODO(), &hdr, stateMap, txMap); err != nil {
+			r.logger.Warn("history backfill: held ledger ingest failed",
+				"error", err, "seq", target.seq)
+			return
+		}
+		next := catchupTarget{seq: target.seq - 1, hash: held.ParentHash(), peerID: target.peerID}
 		r.historyMu.Lock()
-		r.history = target
+		if r.history != target || r.historyFloor != floor {
+			r.historyMu.Unlock()
+			return
+		}
+		r.history = next
 		r.historyMu.Unlock()
+		target = next
+	}
+	r.historyMu.Lock()
+	stillCurrent := r.history == target && r.historyFloor == floor
+	r.historyMu.Unlock()
+	if !stillCurrent {
+		return
 	}
 	if r.fetchTracker.CountReason(inbound.ReasonHistory) >= 1 || r.isAcquiring(target.hash) {
 		return
@@ -982,24 +1019,39 @@ func (r *Router) armHistoryBackfill() {
 	if !ok {
 		return
 	}
-	r.startHistoryAcquisition(target.seq, target.hash, peer)
+	r.historyMu.Lock()
+	if r.history != target || r.historyFloor != floor {
+		r.historyMu.Unlock()
+		return
+	}
+	il := r.prepareHistoryAcquisition(target.seq, target.hash, peer)
+	r.historyMu.Unlock()
+	if il == nil {
+		return
+	}
+	r.requestHistoryAcquisition(il, peer)
 }
 
-// startHistoryAcquisition requests a skipped historical ledger (header + state)
-// over legacy mtGET_LEDGER as a ReasonHistory acquisition. Replay-delta doesn't
-// apply: the walk is backward, so the parent is never locally available.
-func (r *Router) startHistoryAcquisition(seq uint32, hash [32]byte, peerID uint64) {
+func (r *Router) prepareHistoryAcquisition(seq uint32, hash [32]byte, peerID uint64) *inbound.Ledger {
 	if r.replayer.Has(hash) {
-		return
+		return nil
 	}
 	il, created := r.fetchTracker.GetOrCreate(hash, func() *inbound.Ledger {
 		return inbound.NewHistory(hash, seq, peerID, r.logger, r.acquisitionOpts()...)
 	})
 	if !created {
-		return
+		return nil
 	}
+	return il
+}
+
+// requestHistoryAcquisition requests a skipped historical ledger (header +
+// state) over legacy mtGET_LEDGER. Replay-delta doesn't apply: the walk is
+// backward, so the parent is never locally available.
+func (r *Router) requestHistoryAcquisition(il *inbound.Ledger, peerID uint64) {
+	hash := il.Hash()
 	r.logger.Info("starting history backfill acquisition",
-		"seq", seq,
+		"seq", il.Seq(),
 		"hash", fmt.Sprintf("%x", hash[:8]),
 		"peer", peerID,
 	)
@@ -1317,19 +1369,67 @@ func (r *Router) completeStoredConsensusRecovery(seq uint32, hash, parentHash [3
 		return accepted
 	}
 
-	notify, rearm := r.finishConsensusRecoveryStep(seq, hash)
-	if notify && r.adaptor.GetOperatingMode() < consensus.OpModeTracking {
-		r.adaptor.SetOperatingMode(consensus.OpModeTracking)
-	}
-	if notify && r.engine != nil {
-		if err := r.engine.OnLedger(consensus.LedgerID(hash), nil); err != nil {
-			r.logger.Debug("engine rejected adopted ledger", "error", err, "seq", seq)
+	if !r.shouldSwitchConsensusLedger(seq, hash) {
+		_, rearm := r.finishConsensusRecoveryStep(seq, hash)
+		if rearm {
+			r.armConsensusCatchup()
 		}
+		return false
 	}
+
+	accepted, rearm := r.tryConsensusLedgerSwitch(seq, hash)
 	if rearm {
 		r.armConsensusCatchup()
 	}
-	return false
+	return accepted
+}
+
+func (r *Router) shouldSwitchConsensusLedger(seq uint32, hash [32]byte) bool {
+	frontierSeq, _, _ := r.bestCatchupTarget()
+	validatedRecovery := r.isCurrentValidatedLedger(seq, hash)
+
+	r.acquisitionMu.Lock()
+	defer r.acquisitionMu.Unlock()
+
+	target := r.consensusRecovery.targetHash
+	if target != ([32]byte{}) {
+		return target == hash || validatedRecovery && seq > r.lastHandoffSeq
+	}
+	if validatedRecovery && seq > r.lastHandoffSeq {
+		return true
+	}
+	return !aheadByMoreThan(frontierSeq, seq, 1) && seq > r.lastHandoffSeq
+}
+
+func (r *Router) tryConsensusLedgerSwitch(seq uint32, hash [32]byte) (accepted, rearm bool) {
+	result := consensus.LedgerSwitchIrrelevant
+	if r.engine != nil {
+		var err error
+		result, err = r.engine.TrySwitchToLedger(consensus.LedgerID(hash))
+		if err != nil {
+			r.logger.Debug("consensus ledger switch failed", "error", err, "seq", seq)
+			result = consensus.LedgerSwitchIrrelevant
+		}
+	}
+	if result != consensus.LedgerSwitchAccepted {
+		r.retainConsensusLedgerSwitch(hash)
+		return false, false
+	}
+
+	_, rearm = r.finishConsensusRecoveryStep(seq, hash)
+	if r.adaptor.GetOperatingMode() < consensus.OpModeTracking {
+		r.adaptor.SetOperatingMode(consensus.OpModeTracking)
+	}
+	return true, rearm
+}
+
+func (r *Router) retainConsensusLedgerSwitch(hash [32]byte) {
+	r.acquisitionMu.Lock()
+	defer r.acquisitionMu.Unlock()
+
+	if r.consensusRecovery.targetHash == ([32]byte{}) {
+		r.consensusRecovery.targetHash = hash
+	}
 }
 
 func (r *Router) finishConsensusRecoveryStep(seq uint32, hash [32]byte) (notify, rearm bool) {
@@ -1420,6 +1520,9 @@ func (r *Router) finishInitialLedgerSwitch(
 	}
 	target := r.consensusRecovery.targetHash
 	if result == consensus.LedgerSwitchBusy {
+		if target == ([32]byte{}) {
+			r.consensusRecovery.targetHash = hash
+		}
 		return false
 	}
 
@@ -1458,7 +1561,8 @@ func (r *Router) isCurrentValidatedLedger(seq uint32, hash [32]byte) bool {
 		return false
 	}
 	validated := svc.GetValidatedLedger()
-	return validated != nil && validated.Sequence() == seq && validated.Hash() == hash
+	return validated != nil && validated.Sequence() == seq && validated.Hash() == hash ||
+		svc.HasPendingLedgerValidation(seq, hash)
 }
 
 func (r *Router) recordConsensusHandoffLocked(seq uint32) {
@@ -1573,6 +1677,12 @@ func (r *Router) armValidationStashAcquisition(seq uint32, hash [32]byte) {
 	// closedSeq >> validatedSeq, leaving us stuck on the private chain
 	// forever.
 	if seq <= svc.GetValidatedLedgerIndex() {
+		return
+	}
+	if held, err := svc.GetLedgerByHash(hash); err == nil && held != nil && held.Sequence() == seq {
+		r.acquisitionMu.Lock()
+		r.consensusRecovery.targetHash = hash
+		r.acquisitionMu.Unlock()
 		return
 	}
 
@@ -2227,11 +2337,11 @@ func (r *Router) completeInboundLedgerReady(il *inbound.Ledger) {
 	recoveryTarget := r.consensusRecovery.targetHash == h.Hash
 	r.acquisitionMu.Unlock()
 
-	// A history backfill is a store-only ingest below the closed tip: persist,
-	// then advance the backward walk to its parent. Never touches operating mode
-	// or the consensus engine.
+	// A history backfill installs validated sequence history below the closed tip,
+	// then advances the backward walk to its parent. It never touches operating
+	// mode or the consensus engine.
 	if il.Reason() == inbound.ReasonHistory {
-		if err = svc.StoreLedgerWithState(context.TODO(), h, stateMap, txMap); err != nil {
+		if err = svc.IngestHistoricalLedgerWithState(context.TODO(), h, stateMap, txMap); err != nil {
 			r.logger.Warn("inbound ledger: history backfill ingest failed",
 				"error", err, "seq", h.LedgerIndex)
 			return
@@ -2239,7 +2349,7 @@ func (r *Router) completeInboundLedgerReady(il *inbound.Ledger) {
 		if recoveryTarget {
 			r.completeStoredConsensusRecovery(h.LedgerIndex, h.Hash, h.ParentHash, false)
 		} else {
-			r.startHistoryBackfill(h.LedgerIndex-1, h.ParentHash, peerID, r.currentHistoryFloor())
+			r.completeHistoryBackfill(h.LedgerIndex, h.Hash, h.ParentHash, peerID)
 		}
 		return
 	}
@@ -2268,7 +2378,6 @@ func (r *Router) completeInboundLedgerReady(il *inbound.Ledger) {
 		return
 	}
 
-	preBootstrapClosed := svc.GetClosedLedgerIndex()
 	initialCandidate, err := svc.BootstrapLedgerWithState(context.TODO(), h, stateMap, txMap)
 	if err != nil {
 		r.logger.Warn("inbound ledger: failed to store consensus ledger", "error", err, "seq", h.LedgerIndex)
@@ -2281,8 +2390,5 @@ func (r *Router) completeInboundLedgerReady(il *inbound.Ledger) {
 		"account_hash", fmt.Sprintf("%x", h.AccountHash[:8]),
 		"initial_candidate", initialCandidate,
 	)
-	switched := r.completeStoredConsensusRecovery(h.LedgerIndex, h.Hash, h.ParentHash, initialCandidate)
-	if switched && h.LedgerIndex > preBootstrapClosed+1 {
-		r.startHistoryBackfill(h.LedgerIndex-1, h.ParentHash, peerID, preBootstrapClosed)
-	}
+	r.completeStoredConsensusRecovery(h.LedgerIndex, h.Hash, h.ParentHash, initialCandidate)
 }

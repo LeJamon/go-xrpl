@@ -2,8 +2,10 @@ package adaptor
 
 import (
 	"testing"
+	"time"
 
 	"github.com/LeJamon/go-xrpl/internal/consensus"
+	"github.com/LeJamon/go-xrpl/internal/ledger/header"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -11,7 +13,7 @@ import (
 func newCatchupHandoffRouter(t *testing.T) (*Router, *Adaptor, *mockEngine) {
 	t.Helper()
 	r, a, _, _ := makeRouter(t)
-	engine := &mockEngine{}
+	engine := &mockEngine{switchResult: consensus.LedgerSwitchAccepted}
 	r.engine = engine
 	a.SetOperatingMode(consensus.OpModeConnected)
 	return r, a, engine
@@ -112,23 +114,131 @@ func TestRejectedInitialCandidateRemainsStoreOnlyAnchor(t *testing.T) {
 }
 
 func TestBusyInitialCandidateRetainsTargetForRetry(t *testing.T) {
-	r, a, engine := newCatchupHandoffRouter(t)
+	svc := adg_newNonStandaloneService(t)
+	t.Cleanup(svc.Stop)
+	a := New(Config{LedgerService: svc})
+	a.SetOperatingMode(consensus.OpModeConnected)
+	engine := &mockEngine{}
+	engine.switchHook = func(id consensus.LedgerID) {
+		selected, err := a.GetLedger(id)
+		require.NoError(t, err)
+		require.NoError(t, a.OnLedgerSwitched(selected))
+	}
 	engine.switchResult = consensus.LedgerSwitchBusy
-	hash := [32]byte{0xF2}
-	r.consensusRecovery = consensusRecovery{targetHash: hash, stepHash: hash}
+	r := NewRouter(engine, a, nil)
 
-	switched := r.completeStoredConsensusRecovery(100, hash, [32]byte{0xF1}, true)
+	local := svc.GetClosedLedger()
+	require.NotNil(t, local)
+	stateMap, err := local.StateMapSnapshot()
+	require.NoError(t, err)
+	txMap, err := local.TxMapSnapshot()
+	require.NoError(t, err)
+	hdr := local.Header()
+	hdr.LedgerIndex = local.Sequence() + 5
+	hdr.ParentHash = [32]byte{0xF1}
+	hdr.Hash = header.CalculateHash(hdr)
+	initialCandidate, err := svc.BootstrapLedgerWithState(t.Context(), &hdr, stateMap, txMap)
+	require.NoError(t, err)
+	require.True(t, initialCandidate)
+
+	switched := r.completeStoredConsensusRecovery(
+		hdr.LedgerIndex,
+		hdr.Hash,
+		hdr.ParentHash,
+		initialCandidate,
+	)
 
 	assert.False(t, switched)
 	assert.Equal(t, consensus.OpModeConnected, a.GetOperatingMode())
 	assert.Equal(t, uint32(0), r.lastHandoffSeq)
-	assert.Equal(t, consensusRecovery{targetHash: hash}, r.consensusRecovery)
+	assert.Equal(t, consensusRecovery{targetHash: hdr.Hash}, r.consensusRecovery)
 
 	engine.switchResult = consensus.LedgerSwitchAccepted
-	switched = r.completeStoredConsensusRecovery(100, hash, [32]byte{0xF1}, true)
+	r.maintenanceTick()
 
-	assert.True(t, switched)
 	assert.Equal(t, consensus.OpModeTracking, a.GetOperatingMode())
-	assert.Equal(t, uint32(100), r.lastHandoffSeq)
-	assert.Equal(t, consensusRecovery{anchorHash: hash, anchorSeq: 100}, r.consensusRecovery)
+	assert.Equal(t, hdr.LedgerIndex, r.lastHandoffSeq)
+	assert.Equal(t, consensusRecovery{anchorHash: hdr.Hash, anchorSeq: hdr.LedgerIndex}, r.consensusRecovery)
+	assert.Equal(t, []consensus.LedgerID{
+		consensus.LedgerID(hdr.Hash),
+		consensus.LedgerID(hdr.Hash),
+	}, engine.getLedgers())
+
+	r.historyMu.Lock()
+	assert.Equal(t, catchupTarget{
+		seq:  hdr.LedgerIndex - 1,
+		hash: hdr.ParentHash,
+	}, r.history)
+	assert.Zero(t, r.historyFloor)
+	r.historyMu.Unlock()
+}
+
+func TestStoredConsensusCandidateRetriesUntilEngineAccepts(t *testing.T) {
+	tests := []struct {
+		name        string
+		firstResult consensus.LedgerSwitchResult
+	}{
+		{name: "busy", firstResult: consensus.LedgerSwitchBusy},
+		{name: "quorum unavailable", firstResult: consensus.LedgerSwitchIrrelevant},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			svc := adg_newNonStandaloneService(t)
+			t.Cleanup(svc.Stop)
+			local := svc.GetClosedLedger()
+			require.NotNil(t, local)
+			require.NoError(t, svc.SwitchToPreferredLedger(local))
+
+			a := New(Config{LedgerService: svc})
+			a.SetOperatingMode(consensus.OpModeConnected)
+			engine := &mockEngine{switchResult: tt.firstResult}
+			engine.switchHook = func(id consensus.LedgerID) {
+				selected, err := a.GetLedger(id)
+				require.NoError(t, err)
+				require.NoError(t, a.OnLedgerSwitched(selected))
+			}
+			r := NewRouter(engine, a, nil)
+
+			stateMap, err := local.StateMapSnapshot()
+			require.NoError(t, err)
+			txMap, err := local.TxMapSnapshot()
+			require.NoError(t, err)
+			hdr := local.Header()
+			hdr.LedgerIndex = local.Sequence() + 5
+			hdr.ParentHash = [32]byte{0xF2}
+			hdr.Hash = header.CalculateHash(hdr)
+			initialCandidate, err := svc.BootstrapLedgerWithState(t.Context(), &hdr, stateMap, txMap)
+			require.NoError(t, err)
+			require.False(t, initialCandidate)
+
+			svc.SetValidatedLedgerAt(hdr.LedgerIndex, hdr.Hash, time.Now())
+			require.Eventually(t, func() bool {
+				r.acquisitionMu.Lock()
+				defer r.acquisitionMu.Unlock()
+				return r.consensusRecovery.targetHash == hdr.Hash
+			}, time.Second, time.Millisecond)
+			r.maintenanceTick()
+
+			assert.Equal(t, local.Hash(), svc.GetClosedLedger().Hash())
+			assert.Equal(t, consensus.OpModeConnected, a.GetOperatingMode())
+			assert.Equal(t, uint32(0), r.lastHandoffSeq)
+			assert.Equal(t, hdr.Hash, r.consensusRecovery.targetHash)
+
+			engine.switchResult = consensus.LedgerSwitchAccepted
+			r.maintenanceTick()
+
+			assert.Equal(t, hdr.Hash, svc.GetClosedLedger().Hash())
+			assert.Equal(t, consensus.OpModeTracking, a.GetOperatingMode())
+			assert.Equal(t, hdr.LedgerIndex, r.lastHandoffSeq)
+			assert.Equal(t, consensusRecovery{
+				anchorHash: hdr.Hash,
+				anchorSeq:  hdr.LedgerIndex,
+			}, r.consensusRecovery)
+			assert.Equal(t, []consensus.LedgerID{
+				consensus.LedgerID(hdr.Hash),
+				consensus.LedgerID(hdr.Hash),
+			}, engine.getLedgers())
+		})
+	}
 }
