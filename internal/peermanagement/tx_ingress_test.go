@@ -12,10 +12,6 @@ import (
 	"github.com/LeJamon/go-xrpl/internal/peermanagement/message"
 )
 
-// newLaneTestOverlay builds a bare Overlay with the inbound lanes
-// wired, sized for ingress-routing tests. The zero-value cfg leaves
-// reduce-relay metrics off so onMessageReceived takes the plain forward
-// path.
 func newLaneTestOverlay(consensusCap, txCap, ledgerDataCap int) *Overlay {
 	return &Overlay{
 		consensusMessages:        make(chan *InboundMessage, consensusCap),
@@ -69,10 +65,8 @@ func TestOverlay_TxLane_BoundedByCapacity(t *testing.T) {
 // (mtLEDGER_DATA) to be dropped. Each rides its own lane, so a saturated
 // tx lane leaves both untouched.
 func TestOverlay_TxFlood_DoesNotStarveConsensusLane(t *testing.T) {
-	// Tiny tx lane, easily saturated; the other lanes have their own room.
 	o := newLaneTestOverlay(8, 2, 8)
 
-	// Saturate the tx lane well past capacity.
 	for range 1000 {
 		o.onMessageReceived(Event{
 			Type:        EventMessageReceived,
@@ -113,11 +107,6 @@ func TestOverlay_TxFlood_DoesNotStarveConsensusLane(t *testing.T) {
 		"no consensus frame may be dropped while only the tx lane is saturated")
 }
 
-// TestOverlay_OrdinaryTrafficUsesBestEffortLane confirms the counters stay
-// class-specific: a recoverable request that overflows the ordinary lane
-// bumps droppedMessages and never touches
-// droppedTransactions, so the jq_trans_overflow signal isn't polluted by
-// unrelated traffic. The tx and acquisition lanes stay empty.
 func TestOverlay_OrdinaryTrafficUsesBestEffortLane(t *testing.T) {
 	o := newLaneTestOverlay(1, 8, 8)
 

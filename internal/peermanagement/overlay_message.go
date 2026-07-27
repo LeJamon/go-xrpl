@@ -145,7 +145,6 @@ func (o *Overlay) onMessageReceived(evt Event) {
 	// the engine's timerEntry would never advance (issue #381).
 	if msgType == message.TypeStatusChange {
 		o.handleStatusChange(evt)
-		// fall through to the o.messages forward
 	}
 
 	// Serve mtREPLAY_DELTA_REQ from the local ledger sync handler.
@@ -199,13 +198,6 @@ func (o *Overlay) onMessageReceived(evt Event) {
 		}
 	}
 
-	// mtREPLAY_DELTA_RESPONSE / mtPROOF_PATH_RESPONSE that pass the
-	// feature gate above reach the consensus router via the overlay's
-	// Messages() channel — like every other peer-originated consensus
-	// frame (mtLEDGER_DATA, mtPROPOSE, mtVALIDATION). Transactions ride
-	// the separate TxMessages() lane. The router owns the verification +
-	// adoption state and is the only place that can drive it.
-
 	// Transport-level messages with no consensus-router impact are
 	// handled inline here and NOT forwarded to o.messages.
 	switch msgType {
@@ -228,10 +220,6 @@ func (o *Overlay) onMessageReceived(evt Event) {
 
 	slog.Debug("Message received", "t", "Overlay", "type", msgType.String(), "peer", evt.PeerID, "size", len(evt.Payload))
 
-	// Transactions ride a dedicated lane so a tx flood can't crowd
-	// consensus/acquisition frames out of the messages channel and get
-	// us resource-disconnected for dropping mtLEDGER_DATA/mtPROPOSE/
-	// mtVALIDATION (issue #1103).
 	if msgType == message.TypeTransaction {
 		o.forwardTransaction(&InboundMessage{
 			PeerID:  evt.PeerID,
@@ -241,11 +229,6 @@ func (o *Overlay) onMessageReceived(evt Event) {
 		return
 	}
 
-	// Acquisition replies ride a dedicated lane so a
-	// serve/propose/validation flood on the shared messages channel can't
-	// shed a reply this node explicitly requested and wedge catch-up. The
-	// replay-delta / proof-path responses already passed their feature gate
-	// above.
 	switch msgType {
 	case message.TypeLedgerData, message.TypeReplayDeltaResponse, message.TypeProofPathResponse:
 		o.forwardLedgerData(&InboundMessage{
@@ -273,8 +256,6 @@ func (o *Overlay) onMessageReceived(evt Event) {
 		return
 	}
 
-	// Recoverable service and control frames remain best-effort. Peers can
-	// retry requests or refresh control state after pressure subsides.
 	select {
 	case o.messages <- &InboundMessage{
 		PeerID:  evt.PeerID,

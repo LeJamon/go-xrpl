@@ -414,13 +414,8 @@ func TestOverlay_PeersJSON_StatusOmittedForOutOfRangeEnum(t *testing.T) {
 	assert.False(t, present, "unknown enum values must not surface as `status`")
 }
 
-// TestOverlay_onMessageReceived_StatusChangeReachesRouter pins issue
-// #381: an inbound TMStatusChange must be forwarded to the consensus lane so
-// the consensus router's handleStatusChange runs. PR #270 introduced
-// an early-return after the overlay-level handleStatusChange that
-// severed this path; without forwarding, a fresh observer node never
-// kicks off ledger acquisition, never leaves OpModeDisconnected, and
-// the engine's heartbeat loop is a no-op forever.
+// Issue #381: without forwarding TMStatusChange to the consensus lane, a fresh
+// observer never starts ledger acquisition or leaves OpModeDisconnected.
 func TestOverlay_onMessageReceived_StatusChangeReachesRouter(t *testing.T) {
 	id, err := NewIdentity()
 	require.NoError(t, err)

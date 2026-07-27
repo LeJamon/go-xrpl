@@ -212,8 +212,6 @@ type Overlay struct {
 	// case the cluster timer leaves the self-entry out.
 	localNodeIdentity []byte
 
-	// droppedMessages counts how many times the non-blocking send to the
-	// best-effort messages channel hit its default branch.
 	droppedMessages atomic.Uint64
 
 	// droppedTransactions counts inbound TMTransaction frames shed

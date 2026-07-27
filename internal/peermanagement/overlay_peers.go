@@ -426,8 +426,6 @@ func (o *Overlay) PeerCount() int {
 	return len(o.peers)
 }
 
-// Messages returns the best-effort channel for recoverable service and
-// control frames.
 func (o *Overlay) Messages() <-chan *InboundMessage {
 	return o.messages
 }

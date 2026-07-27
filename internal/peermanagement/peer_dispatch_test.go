@@ -11,8 +11,6 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// Ordinary dispatch must never block; only acquisition traffic intentionally
-// propagates bounded backpressure to the peer read loop.
 func TestPeer_DispatchEvent_NonBlocking(t *testing.T) {
 	id, err := NewIdentity()
 	require.NoError(t, err)

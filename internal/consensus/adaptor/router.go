@@ -383,12 +383,10 @@ func (r *Router) SetTxInbox(txInbox <-chan *peermanagement.InboundMessage) {
 	r.txInbox = txInbox
 }
 
-// SetServiceInbox installs the overlay's best-effort service lane.
 func (r *Router) SetServiceInbox(serviceInbox <-chan *peermanagement.InboundMessage) {
 	r.serviceInbox = serviceInbox
 }
 
-// SetConsensusControlInbox installs the overlay's protected consensus-control lane.
 func (r *Router) SetConsensusControlInbox(inbox <-chan *peermanagement.InboundMessage) {
 	r.consensusControlInbox = inbox
 }

@@ -347,9 +347,6 @@ func NewFromConfig(
 	// proposing, so wrongLedger needs to demote opMode.
 	engine.Subscribe(modeManager)
 
-	// Consensus, transaction, acquisition-reply, and manifest traffic arrive
-	// on independent overlay lanes, so expensive verification or a flood on
-	// one lane cannot starve the others.
 	router := NewRouter(engine, adaptor, overlay.ConsensusMessages())
 	router.SetConsensusControlInbox(overlay.ConsensusControlMessages())
 	router.SetServiceInbox(overlay.Messages())
