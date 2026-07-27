@@ -468,6 +468,47 @@ func TestRouter_ActiveBuildDoesNotAcquireItsTargetLedger(t *testing.T) {
 	require.GreaterOrEqual(t, acquireCount(rs), 1)
 }
 
+func TestRouter_LedgerBuiltRearmsQuorumTargetWithoutPeerStatus(t *testing.T) {
+	r, a, rs, svc := makeRouter(t)
+	a.SetOperatingMode(consensus.OpModeFull)
+	trusted, err := a.GetValidatorKey()
+	require.NoError(t, err)
+	closed := svc.GetClosedLedgerIndex()
+	engine := &mockEngine{buildingSeq: closed + 1}
+	r.engine = engine
+	hash := consensus.LedgerID{0xCA, 0x13}
+
+	r.onLedgerFullyValidated(closed+1, [32]byte(hash))
+	r.maybeAcquireFromValidation(&consensus.Validation{
+		NodeID: trusted, LedgerSeq: closed + 1, LedgerID: hash,
+	}, 7)
+
+	assert.Equal(t, catchupTarget{
+		seq:    closed + 1,
+		hash:   [32]byte(hash),
+		peerID: 7,
+		source: catchupSourceQuorum,
+	}, r.catchup)
+	assert.Empty(t, r.peerStates)
+	assert.Zero(t, acquireCount(rs))
+
+	_, err = svc.AcceptConsensusResult(
+		context.Background(),
+		svc.GetClosedLedger(),
+		nil,
+		nil,
+		time.Now(),
+		true,
+	)
+	require.NoError(t, err)
+	built := svc.GetClosedLedger()
+	require.NotNil(t, built)
+	engine.buildingSeq = 0
+	r.onLedgerBuilt(built.Sequence(), built.Hash())
+
+	require.GreaterOrEqual(t, acquireCount(rs), 1)
+}
+
 // An UNTRUSTED validator must not steer acquisition (RCLValidations.cpp:194).
 func TestRouter_UntrustedValidation_NoAcquire(t *testing.T) {
 	r, _, rs, svc := makeRouter(t)

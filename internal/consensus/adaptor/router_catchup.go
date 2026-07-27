@@ -562,6 +562,9 @@ func (r *Router) armCatchupTowardTargetWithPeer(peerHint uint64) {
 	r.catchupMu.Lock()
 	target := r.catchup
 	r.catchupMu.Unlock()
+	if peerHint == 0 {
+		peerHint = target.peerID
+	}
 	tSeq, tHash := target.seq, target.hash
 	if tSeq == 0 {
 		return
@@ -1021,8 +1024,14 @@ func (r *Router) onLedgerFullyValidated(seq uint32, hash [32]byte) {
 	r.acquisitionMu.Unlock()
 
 	r.catchupMu.Lock()
-	if r.catchup.seq == seq && r.catchup.hash != hash {
+	if r.catchup.seq < seq {
 		r.catchup = catchupTarget{seq: seq, hash: hash, source: catchupSourceQuorum}
+	} else if r.catchup.seq == seq {
+		if r.catchup.hash == hash {
+			r.catchup.source = catchupSourceQuorum
+		} else {
+			r.catchup = catchupTarget{seq: seq, hash: hash, source: catchupSourceQuorum}
+		}
 	}
 	r.catchupMu.Unlock()
 
