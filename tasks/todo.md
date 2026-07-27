@@ -1,3 +1,55 @@
+# Issue #1439 — fast-load SHAMap verification progress
+
+Target: `origin/main` at `13de46b832c764f90ae6f65aed3521a1ac5829ab`.
+
+## Goal
+
+Make long stored SHAMap integrity walks visibly advance without adding a second
+traversal, log amplification, unbounded metric labels, or contention that
+materially slows concurrent root-branch workers.
+
+## Plan
+
+- [x] Validate GitHub access, issue state and discussion, linked PRs, repository
+      identity, default base branch, exact merge base, and clean worktree.
+- [x] Trace the complete verification lifecycle, node-visit boundary,
+      cancellation semantics, logging conventions, and local rippled
+      observability patterns.
+- [x] Add low-contention aggregate progress state with deterministic reporting
+      seams and structured start, periodic, success, failure, and cancellation
+      summaries for each state or transaction tree.
+- [x] Extend focused tests to prove monotonic concurrent aggregation, periodic
+      rate limiting, quiet short walks, branch completion, and terminal summaries
+      for success, traversal errors, and caller cancellation.
+- [x] Run formatting, focused tests, race coverage, affected service/core tests,
+      build, vet, strict CI lint, advisory lint, and diff checks.
+- [x] Review the complete diff for traversal overhead, goroutine/ticker cleanup,
+      cancellation races, log semantics, and unnecessary API surface.
+- [x] Record exact review results, stage only intentional files, commit, push,
+      open the PR against `main`, and verify the published head.
+
+## Review
+
+- Each state or transaction tree now emits structured start, 15-second progress,
+  and terminal records with an eight-byte root prefix, elapsed time, verified
+  node total, effective nodes/second, and completed/active root branches.
+- Root-branch concurrency and first-error cancellation remain unchanged. Each
+  worker accumulates nodes locally and updates the shared atomic only every 256
+  verified nodes, then flushes its exact remainder before completion or failure.
+- Completion performs a final interval-qualified progress check, guaranteeing a
+  periodic record for verification lasting at least 15 seconds even when the
+  ticker and worker completion become ready together. Short walks still emit
+  only start and completion.
+- Deterministic JSON-log tests cover exact concurrent aggregation, rate-limit
+  boundaries, quiet short success, the completion/tick race, traversal failure,
+  and caller cancellation. Focused tests passed 20 repetitions and focused race
+  tests passed 5 repetitions; the complete service normal/race suites pass.
+- `just test-core`, `just build-all`, `just vet`, PostgreSQL-tagged vet, strict
+  CI lint v2.11.3, advisory lint, `just fmt`, and `git diff --check` pass.
+- Rippled v3.2.0 has no comparable periodic progress log. Its relevant
+  root-branch join and failure semantics are preserved; independent Go and
+  acceptance reviews found no remaining Blocking, Major, Minor, or Nit findings.
+
 # Issue #1422 — LoanManage default cover rounding
 
 Target: `origin/main` at `f16d6d386cc3f893eb6fb46bf17cdd11bd9689be`.

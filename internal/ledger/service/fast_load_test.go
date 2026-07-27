@@ -1,8 +1,12 @@
 package service
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
+	"fmt"
+	"io"
 	"sync"
 	"testing"
 	"time"
@@ -12,6 +16,7 @@ import (
 	"github.com/LeJamon/go-xrpl/drops"
 	"github.com/LeJamon/go-xrpl/internal/ledger/genesis"
 	"github.com/LeJamon/go-xrpl/keylet"
+	xrpllog "github.com/LeJamon/go-xrpl/log"
 	"github.com/LeJamon/go-xrpl/protocol"
 	"github.com/LeJamon/go-xrpl/shamap"
 	"github.com/LeJamon/go-xrpl/shamap/backend"
@@ -34,6 +39,41 @@ type parallelFetchDatabase struct {
 	mu      sync.Mutex
 	active  int
 	peak    int
+}
+
+type blockingVerificationDatabase struct {
+	nodestore.Database
+	root    nodestore.Hash256
+	started chan struct{}
+	release chan struct{}
+	err     error
+	once    sync.Once
+}
+
+type synchronizedLogBuffer struct {
+	mu     sync.Mutex
+	buffer bytes.Buffer
+	writes chan struct{}
+}
+
+type verificationLogRecord struct {
+	Level             string `json:"level"`
+	Message           string `json:"msg"`
+	Topic             string `json:"t"`
+	MapType           string `json:"map_type"`
+	Root              string `json:"root"`
+	Elapsed           string `json:"elapsed"`
+	NodesChecked      uint64 `json:"nodes_checked"`
+	NodesPerSecond    uint64 `json:"nodes_per_second"`
+	ActiveBranches    uint32 `json:"active_branches"`
+	BranchesComplete  uint32 `json:"branches_complete"`
+	BranchesTotal     uint32 `json:"branches_total"`
+	VerificationError string `json:"err"`
+}
+
+type verificationTestClock struct {
+	mu  sync.Mutex
+	now time.Time
 }
 
 func (d *parallelFetchDatabase) Fetch(ctx context.Context, hash nodestore.Hash256) (*nodestore.Node, error) {
@@ -63,6 +103,137 @@ func (d *parallelFetchDatabase) Fetch(ctx context.Context, hash nodestore.Hash25
 	d.active--
 	d.mu.Unlock()
 	return node, err
+}
+
+func (d *blockingVerificationDatabase) Fetch(ctx context.Context, hash nodestore.Hash256) (*nodestore.Node, error) {
+	if hash == d.root {
+		return d.Database.Fetch(ctx, hash)
+	}
+	d.once.Do(func() { close(d.started) })
+	select {
+	case <-d.release:
+		if d.err != nil {
+			return nil, d.err
+		}
+		return d.Database.Fetch(ctx, hash)
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	}
+}
+
+func (b *synchronizedLogBuffer) Write(data []byte) (int, error) {
+	b.mu.Lock()
+	n, err := b.buffer.Write(data)
+	b.mu.Unlock()
+	select {
+	case b.writes <- struct{}{}:
+	default:
+	}
+	return n, err
+}
+
+func (b *synchronizedLogBuffer) bytes() []byte {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return bytes.Clone(b.buffer.Bytes())
+}
+
+func (c *verificationTestClock) Now() time.Time {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.now
+}
+
+func (c *verificationTestClock) Set(now time.Time) {
+	c.mu.Lock()
+	c.now = now
+	c.mu.Unlock()
+}
+
+func newVerificationLogCapture() (*synchronizedLogBuffer, xrpllog.Logger) {
+	capture := &synchronizedLogBuffer{writes: make(chan struct{}, 16)}
+	cfg := &xrpllog.Config{
+		Level:  xrpllog.LevelInfo,
+		Format: "json",
+		Output: capture,
+	}
+	return capture, xrpllog.New(xrpllog.NewHandler(cfg), cfg)
+}
+
+func decodeVerificationLogs(t *testing.T, capture *synchronizedLogBuffer) []verificationLogRecord {
+	t.Helper()
+	decoder := json.NewDecoder(bytes.NewReader(capture.bytes()))
+	var records []verificationLogRecord
+	for {
+		var record verificationLogRecord
+		err := decoder.Decode(&record)
+		if errors.Is(err, io.EOF) {
+			return records
+		}
+		require.NoError(t, err)
+		records = append(records, record)
+	}
+}
+
+func waitForVerificationSignal(t *testing.T, signal <-chan struct{}) {
+	t.Helper()
+	select {
+	case <-signal:
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for stored SHAMap verification")
+	}
+}
+
+func newStoredVerificationFixture(
+	t *testing.T,
+	branches int,
+) (*Service, nodestore.Database, [32]byte, uint64, uint32) {
+	t.Helper()
+	ctx := context.Background()
+	db := nodestore.NewKVDatabase(memorydb.New(), "verification-progress", 10_000, time.Hour)
+	t.Cleanup(func() { require.NoError(t, db.Close()) })
+	svc, err := New(Config{
+		Standalone:    true,
+		GenesisConfig: genesis.DefaultConfig(),
+		NodeStore:     db,
+		SHAMapFamily:  backend.New(db),
+	})
+	require.NoError(t, err)
+	require.NoError(t, svc.Start())
+	t.Cleanup(svc.Stop)
+
+	for branch := range branches {
+		var key [32]byte
+		key[0] = byte(branch << 4)
+		key[31] = byte(branch + 1)
+		data := make([]byte, 12)
+		data[11] = byte(branch + 1)
+		require.NoError(t, svc.openLedger.Insert(keylet.Keylet{Key: key}, data))
+	}
+	_, err = svc.AcceptLedger(ctx)
+	require.NoError(t, err)
+	svc.FlushPersists()
+	root, err := svc.GetValidatedLedger().StateMapHash()
+	require.NoError(t, err)
+
+	var nodes uint64
+	require.NoError(t, svc.walkStoredSHAMap(ctx, root, shamap.TypeState,
+		func([32]byte, *nodestore.Node) error {
+			nodes++
+			return nil
+		},
+	))
+	rootNode, _, err := svc.loadStoredSHAMapNode(ctx, storedSHAMapNode{hash: root}, shamap.TypeState)
+	require.NoError(t, err)
+	inner, ok := rootNode.(shamap.InnerNodeReader)
+	require.True(t, ok)
+	var activeBranches uint32
+	for branch := range shamap.BranchFactor {
+		if !inner.IsEmptyBranch(branch) {
+			activeBranches++
+		}
+	}
+	return svc, db, root, nodes, activeBranches
 }
 
 func (d *parallelFetchDatabase) peakFetches() int {
@@ -209,6 +380,162 @@ func TestService_VerifyStoredSHAMapWalksRootBranchesInParallel(t *testing.T) {
 	require.NoError(t, svc.verifyStoredSHAMap(walkCtx, root, shamap.TypeState))
 	require.Greater(t, tracked.peakFetches(), 1)
 	require.LessOrEqual(t, tracked.peakFetches(), shamap.BranchFactor)
+}
+
+func TestService_VerifyStoredSHAMapReportsConcurrentSuccess(t *testing.T) {
+	svc, _, root, expectedNodes, expectedBranches := newStoredVerificationFixture(t, shamap.BranchFactor)
+	capture, logger := newVerificationLogCapture()
+	svc.logger = logger.Named(xrpllog.PartitionLedger)
+	startedAt := time.Date(2026, time.July, 27, 20, 0, 0, 0, time.UTC)
+	now := func() time.Time {
+		return startedAt.Add(2 * time.Second)
+	}
+
+	require.NoError(t, svc.verifyStoredSHAMapWithTicks(
+		context.Background(),
+		root,
+		shamap.TypeState,
+		startedAt,
+		now,
+		nil,
+	))
+
+	records := decodeVerificationLogs(t, capture)
+	require.Len(t, records, 2)
+	require.Equal(t, "stored SHAMap verification started", records[0].Message)
+	require.Equal(t, "INFO", records[0].Level)
+	require.Equal(t, "Ledger", records[0].Topic)
+	require.Equal(t, "state", records[0].MapType)
+	require.Equal(t, fmt.Sprintf("%x", root[:8]), records[0].Root)
+	require.Equal(t, expectedBranches, records[0].ActiveBranches)
+	require.Equal(t, "stored SHAMap verification complete", records[1].Message)
+	require.Equal(t, "2s", records[1].Elapsed)
+	require.Equal(t, expectedNodes, records[1].NodesChecked)
+	require.Equal(t, expectedNodes/2, records[1].NodesPerSecond)
+	require.Equal(t, expectedBranches, records[1].BranchesComplete)
+	require.Equal(t, expectedBranches, records[1].BranchesTotal)
+}
+
+func TestService_VerifyStoredSHAMapReportsProgressAtCompletionBoundary(t *testing.T) {
+	svc, _, root, expectedNodes, expectedBranches := newStoredVerificationFixture(t, 1)
+	capture, logger := newVerificationLogCapture()
+	svc.logger = logger.Named(xrpllog.PartitionLedger)
+	startedAt := time.Date(2026, time.July, 27, 20, 0, 0, 0, time.UTC)
+	finishedAt := startedAt.Add(storedSHAMapVerificationLogInterval)
+
+	require.NoError(t, svc.verifyStoredSHAMapWithTicks(
+		context.Background(),
+		root,
+		shamap.TypeState,
+		startedAt,
+		func() time.Time { return finishedAt },
+		nil,
+	))
+
+	records := decodeVerificationLogs(t, capture)
+	require.Len(t, records, 3)
+	require.Equal(t, "stored SHAMap verification started", records[0].Message)
+	require.Equal(t, "stored SHAMap verification progress", records[1].Message)
+	require.Equal(t, storedSHAMapVerificationLogInterval.String(), records[1].Elapsed)
+	require.Equal(t, expectedNodes, records[1].NodesChecked)
+	require.Equal(t, expectedBranches, records[1].BranchesComplete)
+	require.Equal(t, "stored SHAMap verification complete", records[2].Message)
+}
+
+func TestService_VerifyStoredSHAMapRateLimitsProgressAndReportsCancellation(t *testing.T) {
+	svc, db, root, _, expectedBranches := newStoredVerificationFixture(t, 1)
+	blocked := &blockingVerificationDatabase{
+		Database: db,
+		root:     nodestore.Hash256(root),
+		started:  make(chan struct{}),
+		release:  make(chan struct{}),
+	}
+	svc.nodeStore = blocked
+	capture, logger := newVerificationLogCapture()
+	svc.logger = logger.Named(xrpllog.PartitionLedger)
+	startedAt := time.Date(2026, time.July, 27, 20, 0, 0, 0, time.UTC)
+	clock := &verificationTestClock{now: startedAt}
+	ticks := make(chan time.Time, 4)
+	ctx, cancel := context.WithCancel(context.Background())
+	errs := make(chan error, 1)
+	go func() {
+		errs <- svc.verifyStoredSHAMapWithTicks(ctx, root, shamap.TypeState, startedAt, clock.Now, ticks)
+	}()
+
+	waitForVerificationSignal(t, blocked.started)
+	waitForVerificationSignal(t, capture.writes)
+	ticks <- startedAt.Add(5 * time.Second)
+	ticks <- startedAt.Add(15 * time.Second)
+	ticks <- startedAt.Add(16 * time.Second)
+	ticks <- startedAt.Add(30 * time.Second)
+	waitForVerificationSignal(t, capture.writes)
+	waitForVerificationSignal(t, capture.writes)
+	clock.Set(startedAt.Add(31 * time.Second))
+	cancel()
+	select {
+	case err := <-errs:
+		require.ErrorIs(t, err, context.Canceled)
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for canceled stored SHAMap verification")
+	}
+
+	records := decodeVerificationLogs(t, capture)
+	require.Len(t, records, 4)
+	require.Equal(t, "stored SHAMap verification started", records[0].Message)
+	require.Equal(t, "stored SHAMap verification progress", records[1].Message)
+	require.Equal(t, "15s", records[1].Elapsed)
+	require.EqualValues(t, 1, records[1].NodesChecked)
+	require.Equal(t, "stored SHAMap verification progress", records[2].Message)
+	require.Equal(t, "30s", records[2].Elapsed)
+	require.GreaterOrEqual(t, records[2].NodesChecked, records[1].NodesChecked)
+	require.Equal(t, "stored SHAMap verification failed", records[3].Message)
+	require.Equal(t, "WARN", records[3].Level)
+	require.Equal(t, "31s", records[3].Elapsed)
+	require.GreaterOrEqual(t, records[3].NodesChecked, records[2].NodesChecked)
+	require.Zero(t, records[3].BranchesComplete)
+	require.Equal(t, expectedBranches, records[3].BranchesTotal)
+	require.Contains(t, records[3].VerificationError, context.Canceled.Error())
+}
+
+func TestService_VerifyStoredSHAMapReportsTraversalFailure(t *testing.T) {
+	svc, db, root, _, expectedBranches := newStoredVerificationFixture(t, 1)
+	fetchErr := errors.New("read stored node")
+	release := make(chan struct{})
+	close(release)
+	svc.nodeStore = &blockingVerificationDatabase{
+		Database: db,
+		root:     nodestore.Hash256(root),
+		started:  make(chan struct{}),
+		release:  release,
+		err:      fetchErr,
+	}
+	capture, logger := newVerificationLogCapture()
+	svc.logger = logger.Named(xrpllog.PartitionLedger)
+	startedAt := time.Date(2026, time.July, 27, 20, 0, 0, 0, time.UTC)
+	now := func() time.Time {
+		return startedAt.Add(3 * time.Second)
+	}
+
+	err := svc.verifyStoredSHAMapWithTicks(
+		context.Background(),
+		root,
+		shamap.TypeState,
+		startedAt,
+		now,
+		nil,
+	)
+	require.ErrorIs(t, err, fetchErr)
+
+	records := decodeVerificationLogs(t, capture)
+	require.Len(t, records, 2)
+	require.Equal(t, "stored SHAMap verification started", records[0].Message)
+	require.Equal(t, "stored SHAMap verification failed", records[1].Message)
+	require.Equal(t, "WARN", records[1].Level)
+	require.Equal(t, "3s", records[1].Elapsed)
+	require.EqualValues(t, 1, records[1].NodesChecked)
+	require.Zero(t, records[1].BranchesComplete)
+	require.Equal(t, expectedBranches, records[1].BranchesTotal)
+	require.Contains(t, records[1].VerificationError, fetchErr.Error())
 }
 
 func TestService_FastLoadFallsBackWhenStorageIsEmpty(t *testing.T) {
