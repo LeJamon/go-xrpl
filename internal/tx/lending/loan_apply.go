@@ -315,6 +315,12 @@ func (l *LoanManage) defaultLoan(ctx *tx.ApplyContext, loanKey keylet.Keylet, lo
 	vaultDefaultRounded := lmath.RoundAssetDownward(asset, vaultDefault, vaultScale)
 	newTotal := lendNumForRules(v.AssetsTotal, ctx.Rules()).Sub(vaultDefaultRounded)
 	newAvailable := lendNumForRules(v.AssetsAvailable, ctx.Rules()).Add(covered)
+	if newAvailable.Cmp(newTotal) > 0 && !integral {
+		difference := newAvailable.Sub(newTotal)
+		if newAvailable.Exponent()-difference.Exponent() > 13 {
+			newTotal = newAvailable
+		}
+	}
 	if newAvailable.Cmp(newTotal) > 0 {
 		return ter.TecINTERNAL
 	}
