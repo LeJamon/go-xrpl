@@ -57,7 +57,15 @@ type peerBootstrapAcknowledger interface {
 type Router struct {
 	engine  consensus.Engine
 	adaptor *Adaptor
-	inbox   <-chan *peermanagement.InboundMessage
+	// inbox is the overlay's bounded, backpressured consensus lane.
+	inbox <-chan *peermanagement.InboundMessage
+	// serviceInbox carries best-effort, recoverable peer traffic. Keeping it
+	// separate prevents ledger requests and other service frames from occupying
+	// the consensus lane.
+	serviceInbox <-chan *peermanagement.InboundMessage
+	// consensusControlInbox carries status changes and transaction-set
+	// availability on a protected lane separate from proposals and validations.
+	consensusControlInbox <-chan *peermanagement.InboundMessage
 	// txInbox is the overlay's dedicated transaction lane. Run drains it
 	// alongside inbox and hands each frame to the worker pool, so a tx
 	// flood on this lane can't starve consensus/acquisition frames
@@ -253,7 +261,16 @@ type catchupTarget struct {
 	seq    uint32
 	hash   [32]byte
 	peerID uint64
+	source catchupTargetSource
 }
+
+type catchupTargetSource uint8
+
+const (
+	catchupSourcePeer catchupTargetSource = iota
+	catchupSourceValidation
+	catchupSourceQuorum
+)
 
 type consensusRecovery struct {
 	targetHash [32]byte
@@ -351,6 +368,8 @@ func NewRouter(engine consensus.Engine, adaptor *Adaptor, inbox <-chan *peermana
 		adaptor.SetOnTxSetRequested(r.MarkTxSetStillNeeded)
 		adaptor.SetOnLedgerRequested(r.requestConsensusLedger)
 		adaptor.setOnLedgerSwitched(r.onLedgerSwitched)
+		adaptor.setOnLedgerFullyValidated(r.onLedgerFullyValidated)
+		adaptor.setOnLedgerBuilt(r.onLedgerBuilt)
 	}
 	return r
 }
@@ -362,6 +381,14 @@ func NewRouter(engine consensus.Engine, adaptor *Adaptor, inbox <-chan *peermana
 // inbox-only behaviour tests rely on.
 func (r *Router) SetTxInbox(txInbox <-chan *peermanagement.InboundMessage) {
 	r.txInbox = txInbox
+}
+
+func (r *Router) SetServiceInbox(serviceInbox <-chan *peermanagement.InboundMessage) {
+	r.serviceInbox = serviceInbox
+}
+
+func (r *Router) SetConsensusControlInbox(inbox <-chan *peermanagement.InboundMessage) {
+	r.consensusControlInbox = inbox
 }
 
 // SetAcqInbox installs the overlay's dedicated acquisition-reply lane (see the
@@ -644,6 +671,9 @@ func (r *Router) Run(ctx context.Context) {
 	defer ticker.Stop()
 	r.drainPeerConnects()
 	for {
+		if !r.drainConsensusInbox(ctx) {
+			return
+		}
 		acqInbox := r.acqInbox
 		if !workLane.canAcceptData() {
 			acqInbox = nil
@@ -654,6 +684,18 @@ func (r *Router) Run(ctx context.Context) {
 		case msg, ok := <-r.inbox:
 			if !ok {
 				return
+			}
+			r.handleMessage(msg)
+		case msg, ok := <-r.serviceInbox:
+			if !ok {
+				r.serviceInbox = nil
+				continue
+			}
+			r.handleMessage(msg)
+		case msg, ok := <-r.consensusControlInbox:
+			if !ok {
+				r.consensusControlInbox = nil
+				continue
 			}
 			r.handleMessage(msg)
 		case msg, ok := <-acqInbox:
@@ -687,6 +729,25 @@ func (r *Router) Run(ctx context.Context) {
 			r.maintenanceTick()
 		}
 	}
+}
+
+const consensusDrainBatch = 32
+
+func (r *Router) drainConsensusInbox(ctx context.Context) bool {
+	for range consensusDrainBatch {
+		select {
+		case <-ctx.Done():
+			return false
+		case msg, ok := <-r.inbox:
+			if !ok {
+				return false
+			}
+			r.handleMessage(msg)
+		default:
+			return true
+		}
+	}
+	return true
 }
 
 func (r *Router) drainAcquisitionInboxBeforeMaintenance(workLane *acquisitionWorkLane) int {

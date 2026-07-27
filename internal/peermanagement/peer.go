@@ -94,15 +94,17 @@ type Peer struct {
 	bootstrapManifest        atomic.Bool
 	bootstrapManifestPending atomic.Bool
 
-	sendMu             sync.Mutex
-	send               chan []byte
-	prioritySend       chan []byte
-	manifestSend       chan [][]byte
-	events             chan<- Event
-	acquisitionEvents  chan<- Event
-	manifestMessages   chan<- *InboundMessage
-	manifestReadBudget *readBudget
-	manifestSpoolDir   string
+	sendMu                 sync.Mutex
+	send                   chan []byte
+	prioritySend           chan []byte
+	manifestSend           chan [][]byte
+	events                 chan<- Event
+	consensusEvents        chan<- Event
+	consensusControlEvents chan<- Event
+	acquisitionEvents      chan<- Event
+	manifestMessages       chan<- *InboundMessage
+	manifestReadBudget     *readBudget
+	manifestSpoolDir       string
 
 	// droppedEvents counts non-blocking event sends that fell through
 	// because the overlay event loop was wedged. nil until wired by
@@ -288,6 +290,14 @@ func (p *Peer) SetAcquisitionEvents(events chan<- Event) {
 	p.acquisitionEvents = events
 }
 
+func (p *Peer) SetConsensusEvents(events chan<- Event) {
+	p.consensusEvents = events
+}
+
+func (p *Peer) SetConsensusControlEvents(events chan<- Event) {
+	p.consensusControlEvents = events
+}
+
 func (p *Peer) SetManifestMessages(messages chan<- *InboundMessage) {
 	p.manifestMessages = messages
 }
@@ -308,9 +318,9 @@ func manifestReadReservation(header MessageHeader) int64 {
 	return size
 }
 
-// dispatchEvent applies bounded backpressure to acquisition traffic and uses
-// the best-effort event lane for other traffic. Closing the peer releases a
-// read loop waiting for acquisition capacity.
+// dispatchEvent applies bounded backpressure to consensus and acquisition
+// traffic and uses the best-effort event lane for other traffic. Closing the
+// peer releases a read loop waiting for capacity.
 func (p *Peer) dispatchEvent(evt Event) bool {
 	if evt.Type == EventMessageReceived && message.MessageType(evt.MessageType) == message.TypeManifests && p.manifestMessages != nil {
 		select {
@@ -320,6 +330,22 @@ func (p *Peer) dispatchEvent(evt Event) bool {
 			Payload:       evt.Payload,
 			ManifestFrame: evt.ManifestFrame,
 		}:
+			return true
+		case <-p.closeCh:
+			return false
+		}
+	}
+	if evt.Type == EventMessageReceived && isConsensusPriorityMessageType(message.MessageType(evt.MessageType)) && p.consensusEvents != nil {
+		select {
+		case p.consensusEvents <- evt:
+			return true
+		case <-p.closeCh:
+			return false
+		}
+	}
+	if evt.Type == EventMessageReceived && isConsensusControlMessageType(message.MessageType(evt.MessageType)) && p.consensusControlEvents != nil {
+		select {
+		case p.consensusControlEvents <- evt:
 			return true
 		case <-p.closeCh:
 			return false
@@ -343,6 +369,27 @@ func (p *Peer) dispatchEvent(evt Event) bool {
 		if p.droppedEvents != nil {
 			p.droppedEvents.Add(1)
 		}
+		return false
+	}
+}
+
+func isConsensusPriorityMessageType(msgType message.MessageType) bool {
+	switch msgType {
+	case message.TypeProposeLedger,
+		message.TypeValidation,
+		message.TypeValidatorList,
+		message.TypeValidatorListCollection:
+		return true
+	default:
+		return false
+	}
+}
+
+func isConsensusControlMessageType(msgType message.MessageType) bool {
+	switch msgType {
+	case message.TypeStatusChange, message.TypeHaveSet:
+		return true
+	default:
 		return false
 	}
 }

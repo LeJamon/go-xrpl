@@ -1,6 +1,7 @@
 package peermanagement
 
 import (
+	"context"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -10,8 +11,6 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// Ordinary dispatch must never block; only acquisition traffic intentionally
-// propagates bounded backpressure to the peer read loop.
 func TestPeer_DispatchEvent_NonBlocking(t *testing.T) {
 	id, err := NewIdentity()
 	require.NoError(t, err)
@@ -93,6 +92,186 @@ func TestPeer_DispatchEvent_BackpressuresAcquisitionSeparately(t *testing.T) {
 		require.True(t, delivered)
 	case <-time.After(time.Second):
 		t.Fatal("acquisition dispatch did not resume")
+	}
+}
+
+func TestPeer_DispatchEvent_BackpressuresConsensusSeparately(t *testing.T) {
+	for _, msgType := range []message.MessageType{
+		message.TypeProposeLedger,
+		message.TypeValidation,
+		message.TypeValidatorList,
+		message.TypeValidatorListCollection,
+	} {
+		t.Run(msgType.String(), func(t *testing.T) {
+			id, err := NewIdentity()
+			require.NoError(t, err)
+			events := make(chan Event, 1)
+			consensus := make(chan Event, 1)
+			peer := NewPeer(PeerID(1), Endpoint{Host: "127.0.0.1", Port: 1}, false, id, events)
+			peer.SetConsensusEvents(consensus)
+
+			evt := Event{Type: EventMessageReceived, MessageType: uint16(msgType)}
+			require.True(t, peer.dispatchEvent(evt))
+			done := make(chan bool, 1)
+			go func() { done <- peer.dispatchEvent(evt) }()
+			select {
+			case <-done:
+				t.Fatal("full consensus lane did not apply backpressure")
+			case <-time.After(20 * time.Millisecond):
+			}
+
+			<-consensus
+			select {
+			case delivered := <-done:
+				require.True(t, delivered)
+			case <-time.After(time.Second):
+				t.Fatal("consensus dispatch did not resume")
+			}
+			assert.Empty(t, events)
+		})
+	}
+}
+
+func TestPeer_DispatchEvent_BackpressuresConsensusControlSeparately(t *testing.T) {
+	for _, msgType := range []message.MessageType{
+		message.TypeStatusChange,
+		message.TypeHaveSet,
+	} {
+		t.Run(msgType.String(), func(t *testing.T) {
+			id, err := NewIdentity()
+			require.NoError(t, err)
+			events := make(chan Event, 1)
+			control := make(chan Event, 1)
+			peer := NewPeer(PeerID(1), Endpoint{Host: "127.0.0.1", Port: 1}, false, id, events)
+			peer.SetConsensusControlEvents(control)
+
+			evt := Event{Type: EventMessageReceived, MessageType: uint16(msgType)}
+			require.True(t, peer.dispatchEvent(evt))
+			done := make(chan bool, 1)
+			go func() { done <- peer.dispatchEvent(evt) }()
+			select {
+			case <-done:
+				t.Fatal("full consensus control lane did not apply backpressure")
+			case <-time.After(20 * time.Millisecond):
+			}
+
+			<-control
+			select {
+			case delivered := <-done:
+				require.True(t, delivered)
+			case <-time.After(time.Second):
+				t.Fatal("consensus control dispatch did not resume")
+			}
+			assert.Empty(t, events)
+		})
+	}
+}
+
+func TestPeer_DispatchEvent_ConsensusBackpressureReleasesOnClose(t *testing.T) {
+	tests := []struct {
+		name    string
+		msgType message.MessageType
+		wire    func(*Peer, chan<- Event)
+	}{
+		{"priority", message.TypeValidation, (*Peer).SetConsensusEvents},
+		{"control", message.TypeStatusChange, (*Peer).SetConsensusControlEvents},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			id, err := NewIdentity()
+			require.NoError(t, err)
+			lane := make(chan Event, 1)
+			peer := NewPeer(PeerID(1), Endpoint{Host: "127.0.0.1", Port: 1}, false, id, make(chan Event, 1))
+			tc.wire(peer, lane)
+			evt := Event{Type: EventMessageReceived, MessageType: uint16(tc.msgType)}
+			require.True(t, peer.dispatchEvent(evt))
+
+			done := make(chan bool, 1)
+			go func() { done <- peer.dispatchEvent(evt) }()
+			select {
+			case <-done:
+				t.Fatal("full consensus lane did not apply backpressure")
+			case <-time.After(20 * time.Millisecond):
+			}
+			require.NoError(t, peer.Close())
+			select {
+			case delivered := <-done:
+				assert.False(t, delivered)
+			case <-time.After(time.Second):
+				t.Fatal("consensus dispatch did not release when the peer closed")
+			}
+			assert.Len(t, lane, 1)
+		})
+	}
+}
+
+func TestConsensusMessageClassification(t *testing.T) {
+	for _, msgType := range []message.MessageType{
+		message.TypeProposeLedger,
+		message.TypeValidation,
+		message.TypeValidatorList,
+		message.TypeValidatorListCollection,
+	} {
+		assert.True(t, isConsensusPriorityMessageType(msgType), msgType.String())
+		assert.False(t, isConsensusControlMessageType(msgType), msgType.String())
+	}
+	for _, msgType := range []message.MessageType{
+		message.TypeStatusChange,
+		message.TypeHaveSet,
+	} {
+		assert.False(t, isConsensusPriorityMessageType(msgType), msgType.String())
+		assert.True(t, isConsensusControlMessageType(msgType), msgType.String())
+	}
+	for _, msgType := range []message.MessageType{
+		message.TypeGetLedger,
+		message.TypeTransaction,
+		message.TypeLedgerData,
+	} {
+		assert.False(t, isConsensusPriorityMessageType(msgType), msgType.String())
+		assert.False(t, isConsensusControlMessageType(msgType), msgType.String())
+	}
+}
+
+func TestConsensusPriorityLanePreservesValidatorListValidationOrder(t *testing.T) {
+	id, err := NewIdentity()
+	require.NoError(t, err)
+	o := &Overlay{
+		consensusEvents:   make(chan Event, 2),
+		consensusMessages: make(chan *InboundMessage, 2),
+		stopCh:            make(chan struct{}),
+	}
+	peer := NewPeer(PeerID(1), Endpoint{Host: "127.0.0.1", Port: 1}, false, id, make(chan Event, 1))
+	peer.SetConsensusEvents(o.consensusEvents)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	loopDone := make(chan error, 1)
+	go func() { loopDone <- o.consensusEventLoop(ctx) }()
+
+	require.True(t, peer.dispatchEvent(Event{
+		Type:        EventMessageReceived,
+		PeerID:      PeerID(1),
+		MessageType: uint16(message.TypeValidatorList),
+		Payload:     []byte{0x01},
+	}))
+	require.True(t, peer.dispatchEvent(Event{
+		Type:        EventMessageReceived,
+		PeerID:      PeerID(1),
+		MessageType: uint16(message.TypeValidation),
+		Payload:     []byte{0x02},
+	}))
+
+	first := <-o.consensusMessages
+	second := <-o.consensusMessages
+	assert.Equal(t, uint16(message.TypeValidatorList), first.Type)
+	assert.Equal(t, []byte{0x01}, first.Payload)
+	assert.Equal(t, uint16(message.TypeValidation), second.Type)
+	assert.Equal(t, []byte{0x02}, second.Payload)
+
+	cancel()
+	select {
+	case <-loopDone:
+	case <-time.After(time.Second):
+		t.Fatal("consensus event loop did not stop")
 	}
 }
 

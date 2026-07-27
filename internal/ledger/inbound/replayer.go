@@ -196,6 +196,17 @@ func (r *Replayer) Abandon(hash [32]byte) {
 	r.Complete(hash)
 }
 
+// AbandonOtherAtSequence removes replay acquisitions for competing hashes at
+// seq while preserving the hash selected by trusted validation quorum.
+func (r *Replayer) AbandonOtherAtSequence(seq uint32, keep [32]byte) [][32]byte {
+	if r == nil {
+		return nil
+	}
+	return r.delta.removeMatching(func(hash [32]byte, replay *ReplayDelta) bool {
+		return hash != keep && replay.Seq() == seq
+	})
+}
+
 // Stop drains the coordinator's in-flight map on shutdown. Returns the
 // number of acquisitions that were in flight at stop time. Intended
 // to be called from Components.Stop() during graceful shutdown so

@@ -70,6 +70,9 @@ func (a *Adaptor) OnConsensusReached(ledger consensus.Ledger, validations []*con
 	}
 
 	a.maybePromoteAfterConsensus(ledger)
+	if a.onLedgerBuilt != nil {
+		a.onLedgerBuilt(ledger.Seq(), [32]byte(ledger.ID()))
+	}
 }
 
 // emitConsensusPhase delivers a consensus-phase notification through a single
@@ -325,6 +328,9 @@ func (a *Adaptor) OnLedgerFullyValidated(ledgerID consensus.LedgerID, seq uint32
 
 	var hash [32]byte
 	copy(hash[:], ledgerID[:])
+	if a.onLedgerFullyValidated != nil {
+		a.onLedgerFullyValidated(seq, hash)
+	}
 	if a.ledgerService.NeedsInitialSync() {
 		if _, err := a.ledgerService.GetLedgerByHash(hash); err != nil {
 			a.sender.CheckTracking(seq)

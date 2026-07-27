@@ -141,6 +141,8 @@ func (o *Overlay) handleInbound(ctx context.Context, conn net.Conn) {
 	peerID := PeerID(o.nextID.Add(1))
 	peer := NewPeer(peerID, endpoint, true, o.identity, o.events)
 	peer.SetDroppedEventsCounter(&o.droppedEvents)
+	peer.SetConsensusEvents(o.consensusEvents)
+	peer.SetConsensusControlEvents(o.consensusControlEvents)
 	peer.SetAcquisitionEvents(o.acquisitionEvents)
 	peer.SetManifestMessages(o.manifestMessages)
 	peer.SetManifestReadBudget(o.manifestReadBudget)

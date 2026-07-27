@@ -12,16 +12,14 @@ import (
 	"github.com/LeJamon/go-xrpl/internal/peermanagement/message"
 )
 
-// newLaneTestOverlay builds a bare Overlay with the three inbound lanes
-// wired, sized for ingress-routing tests. The zero-value cfg leaves
-// reduce-relay metrics off so onMessageReceived takes the plain forward
-// path.
 func newLaneTestOverlay(consensusCap, txCap, ledgerDataCap int) *Overlay {
 	return &Overlay{
-		messages:   make(chan *InboundMessage, consensusCap),
-		txMessages: make(chan *InboundMessage, txCap),
-		ledgerData: make(chan *InboundMessage, ledgerDataCap),
-		stopCh:     make(chan struct{}),
+		consensusMessages:        make(chan *InboundMessage, consensusCap),
+		consensusControlMessages: make(chan *InboundMessage, consensusCap),
+		messages:                 make(chan *InboundMessage, consensusCap),
+		txMessages:               make(chan *InboundMessage, txCap),
+		ledgerData:               make(chan *InboundMessage, ledgerDataCap),
+		stopCh:                   make(chan struct{}),
 	}
 }
 
@@ -52,7 +50,11 @@ func TestOverlay_TxLane_BoundedByCapacity(t *testing.T) {
 	// The consensus lane is a different buffer and must be untouched by a
 	// pure transaction flood — that is the whole point of issue #1103.
 	assert.Equal(t, 0, len(o.messages),
+		"transaction flood must not consume the ordinary lane")
+	assert.Equal(t, 0, len(o.consensusMessages),
 		"transaction flood must not consume the consensus lane")
+	assert.Equal(t, 0, len(o.consensusControlMessages),
+		"transaction flood must not consume the consensus control lane")
 	assert.Equal(t, uint64(0), o.DroppedMessages(),
 		"DroppedMessages must not move for transaction-lane shedding")
 }
@@ -63,10 +65,8 @@ func TestOverlay_TxLane_BoundedByCapacity(t *testing.T) {
 // (mtLEDGER_DATA) to be dropped. Each rides its own lane, so a saturated
 // tx lane leaves both untouched.
 func TestOverlay_TxFlood_DoesNotStarveConsensusLane(t *testing.T) {
-	// Tiny tx lane, easily saturated; the other lanes have their own room.
 	o := newLaneTestOverlay(8, 2, 8)
 
-	// Saturate the tx lane well past capacity.
 	for range 1000 {
 		o.onMessageReceived(Event{
 			Type:        EventMessageReceived,
@@ -99,7 +99,7 @@ func TestOverlay_TxFlood_DoesNotStarveConsensusLane(t *testing.T) {
 		Payload:     []byte{0x00},
 	})
 
-	assert.Equal(t, 2, len(o.messages),
+	assert.Equal(t, 2, len(o.consensusMessages),
 		"proposals/validations must reach the consensus lane despite the tx flood")
 	assert.Equal(t, 1, len(o.ledgerData),
 		"acquisition replies must reach the dedicated lane despite the tx flood")
@@ -107,31 +107,210 @@ func TestOverlay_TxFlood_DoesNotStarveConsensusLane(t *testing.T) {
 		"no consensus frame may be dropped while only the tx lane is saturated")
 }
 
-// TestOverlay_NonTxUsesConsensusLane confirms the counters stay
-// class-specific: a consensus frame (mtPROPOSE) that overflows the
-// consensus lane bumps droppedMessages and never touches
-// droppedTransactions, so the jq_trans_overflow signal isn't polluted by
-// unrelated traffic. The tx and acquisition lanes stay empty.
-func TestOverlay_NonTxUsesConsensusLane(t *testing.T) {
+func TestOverlay_OrdinaryTrafficUsesBestEffortLane(t *testing.T) {
 	o := newLaneTestOverlay(1, 8, 8)
 
 	for range 4 {
 		o.onMessageReceived(Event{
 			Type:        EventMessageReceived,
 			PeerID:      PeerID(1),
-			MessageType: uint16(message.TypeProposeLedger),
+			MessageType: uint16(message.TypeGetLedger),
 			Payload:     []byte{0x00},
 		})
 	}
 
 	assert.Greater(t, o.DroppedMessages(), uint64(0),
-		"DroppedMessages must record consensus-lane overflow")
+		"DroppedMessages must record best-effort lane overflow")
 	assert.Equal(t, uint64(0), o.DroppedTransactions(),
 		"DroppedTransactions must not move when only consensus frames overflow")
 	assert.Equal(t, 0, len(o.txMessages),
-		"consensus traffic must never reach the tx lane")
+		"ordinary traffic must never reach the tx lane")
 	assert.Equal(t, 0, len(o.ledgerData),
-		"consensus traffic must never reach the acquisition lane")
+		"ordinary traffic must never reach the acquisition lane")
+	assert.Equal(t, 0, len(o.consensusMessages),
+		"ordinary traffic must never reach the consensus lane")
+	assert.Equal(t, 0, len(o.consensusControlMessages),
+		"ordinary traffic must never reach the consensus control lane")
+}
+
+func TestOverlay_ConsensusTrafficBackpressures(t *testing.T) {
+	for _, msgType := range []message.MessageType{
+		message.TypeProposeLedger,
+		message.TypeValidation,
+		message.TypeValidatorList,
+		message.TypeValidatorListCollection,
+	} {
+		t.Run(msgType.String(), func(t *testing.T) {
+			o := newLaneTestOverlay(1, 8, 8)
+			evt := Event{
+				Type:        EventMessageReceived,
+				PeerID:      PeerID(1),
+				MessageType: uint16(msgType),
+				Payload:     []byte{0x00},
+			}
+			o.onMessageReceived(evt)
+
+			done := make(chan struct{})
+			go func() {
+				o.onMessageReceived(evt)
+				close(done)
+			}()
+			select {
+			case <-done:
+				t.Fatal("full consensus message lane did not apply backpressure")
+			case <-time.After(20 * time.Millisecond):
+			}
+
+			first := <-o.consensusMessages
+			assert.Equal(t, uint16(msgType), first.Type)
+			select {
+			case <-done:
+			case <-time.After(time.Second):
+				t.Fatal("consensus message did not resume after capacity became available")
+			}
+			second := <-o.consensusMessages
+			assert.Equal(t, uint16(msgType), second.Type)
+			assert.Equal(t, uint64(0), o.DroppedMessages())
+			assert.Empty(t, o.messages)
+		})
+	}
+}
+
+func TestOverlay_ConsensusControlTrafficBackpressures(t *testing.T) {
+	for _, msgType := range []message.MessageType{
+		message.TypeStatusChange,
+		message.TypeHaveSet,
+	} {
+		t.Run(msgType.String(), func(t *testing.T) {
+			o := newLaneTestOverlay(1, 8, 8)
+			evt := Event{
+				Type:        EventMessageReceived,
+				PeerID:      PeerID(1),
+				MessageType: uint16(msgType),
+				Payload:     []byte{0x00},
+			}
+			o.onMessageReceived(evt)
+
+			done := make(chan struct{})
+			go func() {
+				o.onMessageReceived(evt)
+				close(done)
+			}()
+			select {
+			case <-done:
+				t.Fatal("full consensus control lane did not apply backpressure")
+			case <-time.After(20 * time.Millisecond):
+			}
+
+			first := <-o.consensusControlMessages
+			assert.Equal(t, uint16(msgType), first.Type)
+			select {
+			case <-done:
+			case <-time.After(time.Second):
+				t.Fatal("consensus control message did not resume after capacity became available")
+			}
+			second := <-o.consensusControlMessages
+			assert.Equal(t, uint16(msgType), second.Type)
+			assert.Equal(t, uint64(0), o.DroppedMessages())
+			assert.Empty(t, o.messages)
+			assert.Empty(t, o.consensusMessages)
+		})
+	}
+}
+
+func TestOverlay_ConsensusBackpressureReleasesOnShutdown(t *testing.T) {
+	tests := []struct {
+		name    string
+		msgType message.MessageType
+		lane    func(*Overlay) chan *InboundMessage
+	}{
+		{"priority", message.TypeValidation, func(o *Overlay) chan *InboundMessage { return o.consensusMessages }},
+		{"control", message.TypeStatusChange, func(o *Overlay) chan *InboundMessage { return o.consensusControlMessages }},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			o := newLaneTestOverlay(1, 8, 8)
+			evt := Event{
+				Type:        EventMessageReceived,
+				PeerID:      PeerID(1),
+				MessageType: uint16(tc.msgType),
+				Payload:     []byte{0x00},
+			}
+			o.onMessageReceived(evt)
+
+			done := make(chan struct{})
+			go func() {
+				o.onMessageReceived(evt)
+				close(done)
+			}()
+			select {
+			case <-done:
+				t.Fatal("full consensus lane did not apply backpressure")
+			case <-time.After(20 * time.Millisecond):
+			}
+			close(o.stopCh)
+			select {
+			case <-done:
+			case <-time.After(time.Second):
+				t.Fatal("consensus backpressure did not release during shutdown")
+			}
+			assert.Len(t, tc.lane(o), 1)
+			assert.Equal(t, uint64(0), o.DroppedMessages())
+		})
+	}
+}
+
+func TestOverlay_ServiceSaturationDoesNotBlockConsensusLanes(t *testing.T) {
+	o := newLaneTestOverlay(8, 8, 8)
+	serviceEvent := Event{
+		Type:        EventMessageReceived,
+		PeerID:      PeerID(1),
+		MessageType: uint16(message.TypeGetLedger),
+		Payload:     []byte{0x00},
+	}
+	for range cap(o.messages) + 3 {
+		o.onMessageReceived(serviceEvent)
+	}
+	require.Len(t, o.messages, cap(o.messages))
+	require.Equal(t, uint64(3), o.DroppedMessages())
+
+	priorityTypes := []message.MessageType{
+		message.TypeProposeLedger,
+		message.TypeValidation,
+		message.TypeValidatorList,
+		message.TypeValidatorListCollection,
+	}
+	for _, msgType := range priorityTypes {
+		o.onMessageReceived(Event{
+			Type:        EventMessageReceived,
+			PeerID:      PeerID(1),
+			MessageType: uint16(msgType),
+			Payload:     []byte{0x00},
+		})
+	}
+	controlTypes := []message.MessageType{
+		message.TypeStatusChange,
+		message.TypeHaveSet,
+	}
+	for _, msgType := range controlTypes {
+		o.onMessageReceived(Event{
+			Type:        EventMessageReceived,
+			PeerID:      PeerID(1),
+			MessageType: uint16(msgType),
+			Payload:     []byte{0x00},
+		})
+	}
+
+	assert.Len(t, o.consensusMessages, 4)
+	assert.Len(t, o.consensusControlMessages, 2)
+	for _, want := range priorityTypes {
+		assert.Equal(t, uint16(want), (<-o.consensusMessages).Type)
+	}
+	for _, want := range controlTypes {
+		assert.Equal(t, uint16(want), (<-o.consensusControlMessages).Type)
+	}
+	assert.Equal(t, uint64(3), o.DroppedMessages(),
+		"consensus traffic must not increment service shedding")
 }
 
 // TestOverlay_AcquisitionRepliesUseDedicatedLane pins bounded backpressure:
@@ -174,9 +353,13 @@ func TestOverlay_AcquisitionRepliesUseDedicatedLane(t *testing.T) {
 	assert.Equal(t, uint64(0), o.DroppedTransactions(),
 		"acquisition-lane overflow must not touch the tx-lane counter")
 	assert.Equal(t, 0, len(o.messages),
-		"acquisition replies must never reach the consensus lane")
+		"acquisition replies must never reach the ordinary lane")
 	assert.Equal(t, 0, len(o.txMessages),
 		"acquisition replies must never reach the tx lane")
+	assert.Equal(t, 0, len(o.consensusMessages),
+		"acquisition replies must never reach the consensus lane")
+	assert.Equal(t, 0, len(o.consensusControlMessages),
+		"acquisition replies must never reach the consensus control lane")
 }
 
 func TestOverlay_AcquisitionBackpressureReleasesOnRunShutdown(t *testing.T) {

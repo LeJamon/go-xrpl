@@ -68,6 +68,8 @@ func (o *Overlay) connectReserved(addr string, bootstrapLease *bootstrapLease) e
 	peerID := PeerID(o.nextID.Add(1))
 	peer := NewPeer(peerID, endpoint, false, o.identity, o.events)
 	peer.SetDroppedEventsCounter(&o.droppedEvents)
+	peer.SetConsensusEvents(o.consensusEvents)
+	peer.SetConsensusControlEvents(o.consensusControlEvents)
 	peer.SetAcquisitionEvents(o.acquisitionEvents)
 	peer.SetManifestMessages(o.manifestMessages)
 	peer.SetManifestReadBudget(o.manifestReadBudget)
@@ -424,10 +426,20 @@ func (o *Overlay) PeerCount() int {
 	return len(o.peers)
 }
 
-// Messages returns the channel of inbound consensus- and
-// ledger-acquisition-relevant frames (everything except transactions).
 func (o *Overlay) Messages() <-chan *InboundMessage {
 	return o.messages
+}
+
+// ConsensusMessages returns the lossless bounded lane for validator-list
+// updates, proposals, and validations.
+func (o *Overlay) ConsensusMessages() <-chan *InboundMessage {
+	return o.consensusMessages
+}
+
+// ConsensusControlMessages returns the lossless bounded lane for status
+// changes and transaction-set availability.
+func (o *Overlay) ConsensusControlMessages() <-chan *InboundMessage {
+	return o.consensusControlMessages
 }
 
 // TxMessages returns the channel of inbound TMTransaction frames. It is

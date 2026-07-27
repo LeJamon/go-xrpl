@@ -60,6 +60,7 @@ type Engine struct {
 	// OnLedger) parks so no second goroutine starts a round before the commit
 	// tail runs. Mutated under e.mu.
 	buildInProgress       bool
+	buildingLedgerSeq     atomic.Uint32
 	pendingRecoveryLedger consensus.Ledger
 
 	ourTxSet  consensus.TxSet
@@ -781,6 +782,12 @@ func (e *Engine) Phase() consensus.Phase {
 	return e.phase
 }
 
+// BuildingLedgerSeq returns the ledger sequence being built after the open
+// phase, or zero when no ledger build is active.
+func (e *Engine) BuildingLedgerSeq() uint32 {
+	return e.buildingLedgerSeq.Load()
+}
+
 // IsProposing reports whether we're actively proposing (lock-free atomic
 // read; called on the RPC hot path under ledger.service.s.mu — see modeAtomic).
 func (e *Engine) IsProposing() bool {
@@ -1230,6 +1237,8 @@ func (e *Engine) closeLedger() {
 			)
 		}
 	}
+
+	e.buildingLedgerSeq.Store(e.state.Round.Seq)
 
 	// Filter pending txs through the open-ledger gate when proposing;
 	// non-proposing modes skip the per-round apply cost (position isn't broadcast).

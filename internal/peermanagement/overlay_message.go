@@ -145,7 +145,6 @@ func (o *Overlay) onMessageReceived(evt Event) {
 	// the engine's timerEntry would never advance (issue #381).
 	if msgType == message.TypeStatusChange {
 		o.handleStatusChange(evt)
-		// fall through to the o.messages forward
 	}
 
 	// Serve mtREPLAY_DELTA_REQ from the local ledger sync handler.
@@ -199,13 +198,6 @@ func (o *Overlay) onMessageReceived(evt Event) {
 		}
 	}
 
-	// mtREPLAY_DELTA_RESPONSE / mtPROOF_PATH_RESPONSE that pass the
-	// feature gate above reach the consensus router via the overlay's
-	// Messages() channel — like every other peer-originated consensus
-	// frame (mtLEDGER_DATA, mtPROPOSE, mtVALIDATION). Transactions ride
-	// the separate TxMessages() lane. The router owns the verification +
-	// adoption state and is the only place that can drive it.
-
 	// Transport-level messages with no consensus-router impact are
 	// handled inline here and NOT forwarded to o.messages.
 	switch msgType {
@@ -228,10 +220,6 @@ func (o *Overlay) onMessageReceived(evt Event) {
 
 	slog.Debug("Message received", "t", "Overlay", "type", msgType.String(), "peer", evt.PeerID, "size", len(evt.Payload))
 
-	// Transactions ride a dedicated lane so a tx flood can't crowd
-	// consensus/acquisition frames out of the messages channel and get
-	// us resource-disconnected for dropping mtLEDGER_DATA/mtPROPOSE/
-	// mtVALIDATION (issue #1103).
 	if msgType == message.TypeTransaction {
 		o.forwardTransaction(&InboundMessage{
 			PeerID:  evt.PeerID,
@@ -241,11 +229,6 @@ func (o *Overlay) onMessageReceived(evt Event) {
 		return
 	}
 
-	// Acquisition replies ride a dedicated lane so a
-	// serve/propose/validation flood on the shared messages channel can't
-	// shed a reply this node explicitly requested and wedge catch-up. The
-	// replay-delta / proof-path responses already passed their feature gate
-	// above.
 	switch msgType {
 	case message.TypeLedgerData, message.TypeReplayDeltaResponse, message.TypeProofPathResponse:
 		o.forwardLedgerData(&InboundMessage{
@@ -256,9 +239,23 @@ func (o *Overlay) onMessageReceived(evt Event) {
 		return
 	}
 
-	// Forward consensus/acquisition frames. On back-pressure (channel
-	// full), increment a visible counter rather than silently dropping —
-	// the warn log alone is easy to miss at production log levels.
+	if isConsensusPriorityMessageType(msgType) {
+		o.forwardConsensus(&InboundMessage{
+			PeerID:  evt.PeerID,
+			Type:    evt.MessageType,
+			Payload: evt.Payload,
+		})
+		return
+	}
+	if isConsensusControlMessageType(msgType) {
+		o.forwardConsensusControl(&InboundMessage{
+			PeerID:  evt.PeerID,
+			Type:    evt.MessageType,
+			Payload: evt.Payload,
+		})
+		return
+	}
+
 	select {
 	case o.messages <- &InboundMessage{
 		PeerID:  evt.PeerID,
@@ -271,6 +268,28 @@ func (o *Overlay) onMessageReceived(evt Event) {
 		if msgType == message.TypeManifests {
 			o.RejectPeerBootstrap(evt.PeerID)
 		}
+	}
+}
+
+func (o *Overlay) forwardConsensus(msg *InboundMessage) {
+	if o.consensusMessages == nil {
+		return
+	}
+	select {
+	case o.consensusMessages <- msg:
+	case <-o.stopCh:
+	case <-o.runDone:
+	}
+}
+
+func (o *Overlay) forwardConsensusControl(msg *InboundMessage) {
+	if o.consensusControlMessages == nil {
+		return
+	}
+	select {
+	case o.consensusControlMessages <- msg:
+	case <-o.stopCh:
+	case <-o.runDone:
 	}
 }
 
@@ -313,11 +332,8 @@ func (o *Overlay) forwardLedgerData(msg *InboundMessage) {
 	}
 }
 
-// DroppedMessages returns the cumulative count of inbound messages the
-// overlay had to drop because the downstream consumer channel was
-// full. Surfaced via server_info/server_state for operators to detect
-// consumer back-pressure — a nonzero and growing value indicates the
-// router/engine can't keep up with network ingress.
+// DroppedMessages returns the cumulative count of best-effort inbound
+// messages shed because the downstream consumer channel was full.
 func (o *Overlay) DroppedMessages() uint64 {
 	return o.droppedMessages.Load()
 }
