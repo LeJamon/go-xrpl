@@ -3,6 +3,8 @@ package backend
 import (
 	"context"
 	"errors"
+	"math"
+	"strconv"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -11,6 +13,16 @@ import (
 	"github.com/LeJamon/go-xrpl/shamap"
 	"github.com/LeJamon/go-xrpl/storage/nodestore"
 )
+
+func TestOpenPebbleRejectsOverflowingBlockCache(t *testing.T) {
+	if strconv.IntSize < 64 {
+		t.Skip("overflowing MiB value does not fit in int")
+	}
+	blockCacheMB := int(math.MaxInt64/(1<<20) + 1)
+	if _, err := OpenPebble(t.TempDir(), blockCacheMB, 1); err == nil {
+		t.Fatal("OpenPebble succeeded with an overflowing block cache, want error")
+	}
+}
 
 type blockingNodeStore struct {
 	nodestore.Database

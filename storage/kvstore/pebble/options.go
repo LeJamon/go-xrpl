@@ -3,6 +3,7 @@ package pebble
 import (
 	"errors"
 	"fmt"
+	"math"
 )
 
 const (
@@ -26,6 +27,17 @@ type Options struct {
 	// MaxOpenFiles is the open-file soft limit. A rotating store divides this
 	// steady-state total evenly across both generations.
 	MaxOpenFiles int
+}
+
+// OptionsFromMiB validates MiB-based input and resolves package defaults.
+func OptionsFromMiB(blockCacheMB int64, maxOpenFiles int) (Options, error) {
+	if blockCacheMB < 0 || blockCacheMB > math.MaxInt64/(1<<20) {
+		return Options{}, fmt.Errorf("kvstore/pebble: block cache MiB is out of range: %d", blockCacheMB)
+	}
+	return (Options{
+		BlockCacheBytes: blockCacheMB * (1 << 20),
+		MaxOpenFiles:    maxOpenFiles,
+	}).Resolve()
 }
 
 // Resolve validates o and fills in default values.

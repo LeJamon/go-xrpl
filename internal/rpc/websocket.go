@@ -164,7 +164,7 @@ func (ws *WebSocketServer) SetConnLimiter(limiter *ConnLimiter) {
 
 func (ws *WebSocketServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	portCtx := GetPortContext(r.Context())
-	isWebSocket := websocket.IsWebSocketUpgrade(r)
+	isWebSocket := isWebSocketUpgrade(r)
 
 	ws.connectionsMutex.Lock()
 	if ws.closing {
@@ -1319,25 +1319,53 @@ func (ws *WebSocketServer) Close(ctx context.Context) error {
 	}
 	ws.connectionsMutex.Unlock()
 
+	closeDeadline := time.Now().Add(10 * time.Second)
+	if deadline, ok := ctx.Deadline(); ok && deadline.Before(closeDeadline) {
+		closeDeadline = deadline
+	}
+
+	var closeFrames sync.WaitGroup
+	closeFrames.Add(len(connections))
 	for _, conn := range connections {
-		// WriteControl (not WriteMessage) so the shutdown close frame
-		// serializes against a possibly-still-running handleSend instead of
-		// racing its message-frame write (#746).
-		conn.conn.WriteControl(
-			websocket.CloseMessage,
-			websocket.FormatCloseMessage(websocket.CloseGoingAway, "server shutdown"),
-			time.Now().Add(10*time.Second),
-		)
 		conn.cancel()
-		conn.conn.Close()
+		go func() {
+			defer closeFrames.Done()
+			_ = conn.conn.WriteControl(
+				websocket.CloseMessage,
+				websocket.FormatCloseMessage(websocket.CloseGoingAway, "server shutdown"),
+				closeDeadline,
+			)
+		}()
+	}
+
+	closeFramesDone := make(chan struct{})
+	go func() {
+		closeFrames.Wait()
+		close(closeFramesDone)
+	}()
+
+	var shutdownErr error
+	select {
+	case <-closeFramesDone:
+		shutdownErr = ctx.Err()
+	case <-ctx.Done():
+		shutdownErr = ctx.Err()
+	}
+
+	for _, conn := range connections {
+		_ = conn.conn.Close()
 	}
 
 	done := make(chan struct{})
 	go func() {
+		closeFrames.Wait()
 		ws.wg.Wait()
 		ws.urlSubs.Close()
 		close(done)
 	}()
+	if shutdownErr != nil {
+		return shutdownErr
+	}
 	select {
 	case <-done:
 		return nil

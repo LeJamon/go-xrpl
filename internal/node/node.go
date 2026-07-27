@@ -6,7 +6,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"math"
 	"net/http"
 	"os"
 	"os/signal"
@@ -1424,14 +1423,7 @@ const (
 )
 
 func pebbleStoreOptions(n config.NodeDBConfig) (kvpebble.Options, error) {
-	if n.CacheMB < 0 || n.CacheMB > math.MaxInt64/(1<<20) {
-		return kvpebble.Options{}, fmt.Errorf("node_db cache_mb is out of range: %d", n.CacheMB)
-	}
-	options := kvpebble.Options{
-		BlockCacheBytes: n.CacheMB * (1 << 20),
-		MaxOpenFiles:    n.OpenFiles,
-	}
-	resolved, err := options.Resolve()
+	resolved, err := kvpebble.OptionsFromMiB(n.CacheMB, n.OpenFiles)
 	if err != nil {
 		return kvpebble.Options{}, fmt.Errorf("node_db Pebble options: %w", err)
 	}

@@ -1,6 +1,26 @@
 package pebble
 
-import "testing"
+import (
+	"math"
+	"testing"
+)
+
+func TestOptionsFromMiB(t *testing.T) {
+	options, err := OptionsFromMiB(64, 128)
+	if err != nil {
+		t.Fatalf("OptionsFromMiB: %v", err)
+	}
+	want := Options{BlockCacheBytes: 64 << 20, MaxOpenFiles: 128}
+	if options != want {
+		t.Fatalf("OptionsFromMiB() = %+v, want %+v", options, want)
+	}
+
+	for _, cacheMB := range []int64{-1, math.MaxInt64/(1<<20) + 1} {
+		if _, err := OptionsFromMiB(cacheMB, 128); err == nil {
+			t.Fatalf("OptionsFromMiB(%d, 128) succeeded, want error", cacheMB)
+		}
+	}
+}
 
 func TestOptionsResolve(t *testing.T) {
 	t.Run("defaults", func(t *testing.T) {
@@ -17,7 +37,7 @@ func TestOptionsResolve(t *testing.T) {
 	})
 
 	t.Run("custom", func(t *testing.T) {
-		want := Options{BlockCacheBytes: 64 << 20, MaxOpenFiles: 128}
+		want := Options{BlockCacheBytes: 64 << 20, MaxOpenFiles: MinimumOpenFiles}
 		resolved, err := want.Resolve()
 		if err != nil {
 			t.Fatalf("Resolve: %v", err)
@@ -117,6 +137,15 @@ func TestNewRotatingSharesConfiguredResources(t *testing.T) {
 	}
 	if store.writable.cache != store.blockCache || store.archive.cache != store.blockCache {
 		t.Fatal("rotated generations do not share the store block cache")
+	}
+	if store.writable.options.MaxOpenFiles != wantPerGeneration ||
+		store.archive.options.MaxOpenFiles != wantPerGeneration {
+		t.Fatalf(
+			"rotated MaxOpenFiles = writable %d, archive %d; want %d each",
+			store.writable.options.MaxOpenFiles,
+			store.archive.options.MaxOpenFiles,
+			wantPerGeneration,
+		)
 	}
 }
 
