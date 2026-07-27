@@ -33,6 +33,7 @@ func driveToEstablish(t *testing.T, e *Engine, a *mockAdaptor) {
 	t.Helper()
 	e.mu.Lock()
 	e.prevLedger = a.lastLCL
+	e.buildingLedgerSeq.Store(e.state.Round.Seq)
 	e.setPhase(consensus.PhaseEstablish)
 	e.mu.Unlock()
 }

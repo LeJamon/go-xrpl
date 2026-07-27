@@ -114,8 +114,6 @@ func (e *Engine) acceptLedger(result consensus.Result) {
 		e.processPendingRecoveryLedgerLocked()
 		return
 	}
-	e.buildingLedgerSeq.Store(0)
-
 	parentID := prevLedger.ID()
 	parentClose := prevLedger.CloseTime()
 	newID := newLedger.ID()
@@ -251,6 +249,7 @@ func (e *Engine) acceptLedger(result consensus.Result) {
 
 	validations := e.proposalTracker.ValidationsFor(newLedger.ID())
 
+	e.buildingLedgerSeq.Store(0)
 	e.adaptor.OnConsensusReached(newLedger, validations, roundTime)
 
 	e.eventBus.Publish(&consensus.LedgerAcceptedEvent{

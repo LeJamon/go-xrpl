@@ -559,12 +559,26 @@ func (r *Router) armCatchupTowardTargetWithPeer(peerHint uint64) {
 	if r.catchupInFlight() >= maxConcurrentSpeculativeCatchup {
 		return
 	}
-	tSeq, tHash, _ := r.bestCatchupTarget()
+	r.catchupMu.Lock()
+	target := r.catchup
+	r.catchupMu.Unlock()
+	tSeq, tHash := target.seq, target.hash
 	if tSeq == 0 {
 		return
 	}
 	closed := svc.GetClosedLedgerIndex()
 	if tSeq <= closed {
+		if target.source != catchupSourceQuorum {
+			return
+		}
+		if held, err := svc.GetLedgerByHash(tHash); err == nil && held != nil {
+			return
+		}
+		peer, found := r.resolveAcquisitionPeer(tSeq, peerHint)
+		if !found || r.isBuildingLedger(tSeq) {
+			return
+		}
+		r.startLedgerAcquisition(tSeq, tHash, peer)
 		return
 	}
 	if !svc.NeedsInitialSync() && !aheadByMoreThan(tSeq, closed, 1) {
@@ -1742,6 +1756,9 @@ func (r *Router) maybeAcquireFromValidation(v *consensus.Validation, originPeer 
 	// closed, so acquire it directly — without it the validation trie can never
 	// place the majority branch (rippled RCLValidationsAdaptor::acquire).
 	if v.LedgerSeq <= svc.GetClosedLedgerIndex() {
+		if r.isBuildingLedger(v.LedgerSeq) {
+			return
+		}
 		r.startLedgerAcquisition(v.LedgerSeq, hash, originPeer)
 		return
 	}
@@ -1841,6 +1858,10 @@ type buildingLedgerEngine interface {
 func (r *Router) isBuildingLedger(seq uint32) bool {
 	engine, ok := r.engine.(buildingLedgerEngine)
 	return ok && seq != 0 && engine.BuildingLedgerSeq() == seq
+}
+
+func (r *Router) onLedgerBuilt(uint32, [32]byte) {
+	r.armCatchupTowardTarget()
 }
 
 // checkBehind decides what to do based on how far behind a peer

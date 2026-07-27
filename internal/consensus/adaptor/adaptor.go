@@ -145,6 +145,7 @@ type Adaptor struct {
 	onLedgerSwitched func(seq uint32, hash, parentHash [32]byte, historyFloor uint32)
 	// Set once by NewRouter before validation processing starts.
 	onLedgerFullyValidated func(seq uint32, hash [32]byte)
+	onLedgerBuilt          func(seq uint32, hash [32]byte)
 
 	// onTxSetBuilt fires when BuildTxSet caches a new tx set, so the overlay
 	// can broadcast mtHAVE_SET{tsHAVE} for it. nil-safe.
@@ -556,6 +557,10 @@ func (a *Adaptor) setOnLedgerSwitched(cb func(uint32, [32]byte, [32]byte, uint32
 
 func (a *Adaptor) setOnLedgerFullyValidated(cb func(uint32, [32]byte)) {
 	a.onLedgerFullyValidated = cb
+}
+
+func (a *Adaptor) setOnLedgerBuilt(cb func(uint32, [32]byte)) {
+	a.onLedgerBuilt = cb
 }
 
 func (a *Adaptor) RequestTxSet(id consensus.TxSetID) error {

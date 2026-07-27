@@ -369,6 +369,7 @@ func NewRouter(engine consensus.Engine, adaptor *Adaptor, inbox <-chan *peermana
 		adaptor.SetOnLedgerRequested(r.requestConsensusLedger)
 		adaptor.setOnLedgerSwitched(r.onLedgerSwitched)
 		adaptor.setOnLedgerFullyValidated(r.onLedgerFullyValidated)
+		adaptor.setOnLedgerBuilt(r.onLedgerBuilt)
 	}
 	return r
 }

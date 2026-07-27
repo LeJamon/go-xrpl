@@ -70,6 +70,9 @@ func (a *Adaptor) OnConsensusReached(ledger consensus.Ledger, validations []*con
 	}
 
 	a.maybePromoteAfterConsensus(ledger)
+	if a.onLedgerBuilt != nil {
+		a.onLedgerBuilt(ledger.Seq(), [32]byte(ledger.ID()))
+	}
 }
 
 // emitConsensusPhase delivers a consensus-phase notification through a single

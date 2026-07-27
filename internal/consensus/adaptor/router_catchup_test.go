@@ -452,10 +452,19 @@ func TestRouter_ActiveBuildDoesNotAcquireItsTargetLedger(t *testing.T) {
 	assert.Zero(t, r.catchupInFlight())
 	assert.Equal(t, closed, svc.GetClosedLedgerIndex())
 
+	_, err = svc.AcceptConsensusResult(
+		context.Background(),
+		svc.GetClosedLedger(),
+		nil,
+		nil,
+		time.Now(),
+		true,
+	)
+	require.NoError(t, err)
+	built := svc.GetClosedLedger()
+	require.NotNil(t, built)
 	engine.buildingSeq = 0
-	r.maybeAcquireFromValidation(&consensus.Validation{
-		NodeID: trusted, LedgerSeq: closed + 1, LedgerID: hash,
-	}, 7)
+	r.onLedgerBuilt(built.Sequence(), built.Hash())
 	require.GreaterOrEqual(t, acquireCount(rs), 1)
 }
 
