@@ -957,13 +957,17 @@ func (r *Router) requestLedgerBaseFromPeer(il *inbound.Ledger, peerID uint64, lo
 		return true
 	}
 	r.logger.Warn(logMessage, "error", err, "peer", peerID)
-	if !errors.Is(err, peermanagement.ErrPeerNotFound) &&
-		!errors.Is(err, peermanagement.ErrConnectionClosed) {
+	if !isAcquisitionDisconnectError(err) {
 		return true
 	}
 	il.RemovePeer(peerID)
 	r.HandlePeerDisconnect(peermanagement.PeerID(peerID))
 	return false
+}
+
+func isAcquisitionDisconnectError(err error) bool {
+	return errors.Is(err, peermanagement.ErrPeerNotFound) ||
+		errors.Is(err, peermanagement.ErrConnectionClosed)
 }
 
 func (r *Router) invalidateHistoryPeer(peerID uint64) {
@@ -2209,17 +2213,27 @@ func (r *Router) handleInboundLedgerData(il *inbound.Ledger, ld *message.LedgerD
 // indirect (query_type=qtINDIRECT) so peers relay them on our behalf,
 // mirroring rippled's InboundLedger::trigger timeouts_ != 0 gate.
 func (r *Router) requestMissingAcquisitionNodes(il *inbound.Ledger, target uint64) {
-	indirect := il.Timeouts() > 0
-	// target != 0 is the reply path (re-request to the answering peer), throttled
-	// against nodes already requested this timer interval so a reply can't
-	// re-request outstanding nodes at RTT rate; target == 0 is the timeout
-	// fan-out, which bypasses that throttle to still reach everyone.
-	isReply := target != 0
-	queryDepth := uint32(0)
-	if isReply {
-		queryDepth = 1
+	if target != 0 {
+		requests, complete, err := il.CollectMissingReplyRequestsContext(context.Background(), []uint64{target})
+		if err != nil {
+			r.logger.Warn("inbound ledger: failed to collect missing nodes", "error", err)
+			return
+		}
+		if complete {
+			r.completeInboundLedger(il)
+			return
+		}
+		released := 0
+		for _, request := range requests {
+			if r.sendMissingReplyRequest(il, request) {
+				released++
+			}
+		}
+		r.retryMissingAcquisitionNodes(il, missingNodeRetry{}, released)
+		return
 	}
-	stateIDs, txIDs, complete, err := il.CollectMissingRequestContext(context.Background(), isReply)
+
+	stateIDs, txIDs, complete, err := il.CollectMissingRequestContext(context.Background(), false)
 	if err != nil {
 		r.logger.Warn("inbound ledger: failed to collect missing nodes", "error", err)
 		return
@@ -2231,23 +2245,9 @@ func (r *Router) requestMissingAcquisitionNodes(il *inbound.Ledger, target uint6
 	if len(stateIDs) == 0 && len(txIDs) == 0 {
 		return
 	}
-	hash := il.Hash()
 	peers := il.Peers()
-	if target != 0 {
-		peers = []uint64{target}
-	}
-	for _, peerID := range peers {
-		if len(stateIDs) > 0 {
-			if err := r.adaptor.RequestStateNodes(peerID, hash, stateIDs, queryDepth, indirect); err != nil {
-				r.logger.Warn("inbound ledger: failed to request state nodes", "error", err)
-			}
-		}
-		if len(txIDs) > 0 {
-			if err := r.adaptor.RequestTransactionNodes(peerID, hash, txIDs, queryDepth, indirect); err != nil {
-				r.logger.Warn("inbound ledger: failed to request tx nodes", "error", err)
-			}
-		}
-	}
+	retry := r.sendMissingAcquisitionNodes(il, peers, stateIDs, txIDs, 0)
+	r.retryMissingAcquisitionNodes(il, retry, 0)
 }
 
 func (r *Router) requestMissingAcquisitionNodesFromAddedPeer(il *inbound.Ledger, peerID uint64) {
@@ -2260,8 +2260,88 @@ func (r *Router) requestMissingAcquisitionNodesFromAddedPeer(il *inbound.Ledger,
 		r.completeInboundLedger(il)
 		return
 	}
+	released := 0
 	for _, request := range requests {
-		r.sendMissingReplyRequest(il, request)
+		if r.sendMissingReplyRequest(il, request) {
+			released++
+		}
+	}
+	r.retryMissingAcquisitionNodes(il, missingNodeRetry{}, released)
+}
+
+func (r *Router) handleMissingNodeSendFailure(
+	il *inbound.Ledger,
+	peerID uint64,
+	transaction bool,
+	err error,
+) bool {
+	hash := il.Hash()
+	r.logger.Warn(
+		"inbound ledger: failed to request missing nodes",
+		"peer", peerID,
+		"ledger_seq", il.Seq(),
+		"ledger_hash", fmt.Sprintf("%x", hash[:8]),
+		"transaction", transaction,
+		"error", err,
+	)
+	if !isAcquisitionDisconnectError(err) {
+		return false
+	}
+	il.RemovePeer(peerID)
+	r.HandlePeerDisconnect(peermanagement.PeerID(peerID))
+	return true
+}
+
+func (r *Router) retryMissingAcquisitionNodes(
+	il *inbound.Ledger,
+	retry missingNodeRetry,
+	released int,
+) {
+	if len(retry.stateIDs) == 0 && len(retry.txIDs) == 0 && released == 0 {
+		return
+	}
+
+	peers := il.Peers()
+	replacements := released
+	if len(retry.stateIDs) > 0 || len(retry.txIDs) > 0 {
+		replacements++
+	}
+	replacements = min(max(replacements, 1), acquisitionMaxUsefulPeers)
+	added := make([]uint64, 0, replacements)
+	for _, peerID := range r.adaptor.SelectLedgerPeers(il.Hash(), il.Seq(), peers, replacements) {
+		if il.AddPeer(peerID) {
+			added = append(added, peerID)
+		}
+	}
+	candidates := acquisitionRequestCandidates(added, il.Peers())
+	if len(candidates) > acquisitionMaxUsefulPeers {
+		candidates = candidates[:acquisitionMaxUsefulPeers]
+	}
+	if len(candidates) == 0 {
+		if len(retry.stateIDs) > 0 || len(retry.txIDs) > 0 {
+			il.ReleaseUnreservedMissingNodes()
+		}
+		return
+	}
+
+	queued := r.submitAcquisitionWork(il, acquisitionWorkEvent{
+		kind:       acquisitionWorkRetarget,
+		peers:      candidates,
+		stateIDs:   append([][]byte(nil), retry.stateIDs...),
+		txIDs:      append([][]byte(nil), retry.txIDs...),
+		queryDepth: retry.queryDepth,
+		collect:    released > 0,
+	})
+	if !queued {
+		if len(retry.stateIDs) > 0 || len(retry.txIDs) > 0 {
+			il.ReleaseUnreservedMissingNodes()
+		}
+		hash := il.Hash()
+		r.logger.Warn(
+			"inbound ledger: missing-node retarget deferred; acquisition worker saturated",
+			"ledger_seq", il.Seq(),
+			"ledger_hash", fmt.Sprintf("%x", hash[:8]),
+		)
 	}
 }
 
