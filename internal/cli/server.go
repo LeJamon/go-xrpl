@@ -5,11 +5,13 @@ import (
 	"log/slog"
 	"os"
 
+	"github.com/LeJamon/go-xrpl/internal/ledger/service"
 	"github.com/LeJamon/go-xrpl/internal/node"
 	"github.com/LeJamon/go-xrpl/internal/observability"
 	xrpllog "github.com/LeJamon/go-xrpl/log"
 	"github.com/LeJamon/go-xrpl/version"
 	"github.com/spf13/cobra"
+	"github.com/spf13/pflag"
 )
 
 var (
@@ -39,6 +41,7 @@ func init() {
 
 	// Server-specific flags — operational concerns only
 	serverCmd.Flags().BoolVarP(&standalone, "standalone", "a", false, "run in standalone mode (no peers)")
+	bindStartupFlags(serverCmd.Flags())
 }
 
 func runServer(cmd *cobra.Command, args []string) error {
@@ -47,6 +50,11 @@ func runServer(cmd *cobra.Command, args []string) error {
 		// pre-print here would duplicate the message Execute() emits.
 		return fmt.Errorf("%w\n  Use 'xrpld generate-config' to create an initial configuration file."+
 			"\n  Example: xrpld server --conf /path/to/xrpld.toml", err)
+	}
+
+	startup, err := startupConfigFromFlags(cmd.Flags())
+	if err != nil {
+		return err
 	}
 
 	// Initialize structured logger from config + CLI flag overrides.
@@ -90,5 +98,86 @@ func runServer(cmd *cobra.Command, args []string) error {
 		serverLog.Info("prometheus metrics enabled", "addr", addr)
 	}
 
-	return node.Run(globalConfig, configFile, standalone, rootLogger, serverLog)
+	return node.Run(globalConfig, configFile, standalone, startup, rootLogger, serverLog)
+}
+
+func bindStartupFlags(flags *pflag.FlagSet) {
+	flags.Bool("start", false, "start from a fresh ledger")
+	flags.Bool("load", false, "load the latest ledger from local storage")
+	flags.Bool("net", false, "acquire the initial ledger from the network")
+	flags.Bool("replay", false, "replay the ledger close selected by --ledger")
+	flags.String("ledger", "", "load the ledger identified by a hash, sequence, or shortcut")
+	flags.String("ledgerfile", "", "load a ledger from a JSON file")
+}
+
+func startupConfigFromFlags(flags *pflag.FlagSet) (service.StartupConfig, error) {
+	start, err := flags.GetBool("start")
+	if err != nil {
+		return service.StartupConfig{}, err
+	}
+	load, err := flags.GetBool("load")
+	if err != nil {
+		return service.StartupConfig{}, err
+	}
+	network, err := flags.GetBool("net")
+	if err != nil {
+		return service.StartupConfig{}, err
+	}
+	replay, err := flags.GetBool("replay")
+	if err != nil {
+		return service.StartupConfig{}, err
+	}
+	ledger, err := flags.GetString("ledger")
+	if err != nil {
+		return service.StartupConfig{}, err
+	}
+	ledgerFile, err := flags.GetString("ledgerfile")
+	if err != nil {
+		return service.StartupConfig{}, err
+	}
+
+	ledgerSet := flags.Changed("ledger")
+	ledgerFileSet := flags.Changed("ledgerfile")
+	if replay && !ledgerSet {
+		return service.StartupConfig{}, fmt.Errorf("--replay requires --ledger")
+	}
+	if ledgerFileSet && ledgerFile == "" {
+		return service.StartupConfig{}, fmt.Errorf("--ledgerfile requires a non-empty path")
+	}
+
+	selected := 0
+	for _, active := range []bool{
+		start,
+		load,
+		network,
+		replay,
+		ledgerFileSet,
+		ledgerSet && !replay,
+	} {
+		if active {
+			selected++
+		}
+	}
+	if selected > 1 {
+		return service.StartupConfig{}, fmt.Errorf(
+			"startup modes are mutually exclusive: choose only one of --start, --load, --net, --replay, --ledger, or --ledgerfile",
+		)
+	}
+
+	switch {
+	case start:
+		return service.StartupConfig{Mode: service.StartupFresh}, nil
+	case load:
+		return service.StartupConfig{Mode: service.StartupLoad}, nil
+	case network:
+		return service.StartupConfig{Mode: service.StartupNetwork}, nil
+	case replay:
+		return service.StartupConfig{Mode: service.StartupReplay, Ledger: ledger}, nil
+	case ledgerFileSet:
+		return service.StartupConfig{Mode: service.StartupLoadFile, Ledger: ledgerFile}, nil
+	case ledgerSet:
+		return service.StartupConfig{Mode: service.StartupLoad, Ledger: ledger}, nil
+	default:
+		return service.StartupConfig{Mode: service.StartupNormal}, nil
+	}
 }

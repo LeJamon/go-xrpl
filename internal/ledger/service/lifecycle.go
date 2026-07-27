@@ -46,7 +46,13 @@ func (s *Service) AcceptLedgerAt(ctx context.Context, explicitCloseTime time.Tim
 
 	// Re-apply pending in canonical order on a fresh ledger built from the LCL.
 	var retriableTxs []openledger.PendingTx
-	if len(s.pendingTxs) > 0 {
+	replayed, err := s.applyStartupReplayLocked()
+	if err != nil {
+		return 0, err
+	}
+	if replayed {
+		retriableTxs = append(retriableTxs, s.pendingTxs...)
+	} else if len(s.pendingTxs) > 0 {
 		built, err := s.buildClosedLedgerLocked(s.pendingTxs, closeTime, s.config.Standalone)
 		if err != nil {
 			return 0, err
@@ -61,13 +67,19 @@ func (s *Service) AcceptLedgerAt(ctx context.Context, explicitCloseTime time.Tim
 
 	s.pendingTxs = nil
 
-	if err := s.openLedger.Close(closeTime, 0); err != nil {
-		return 0, fmt.Errorf("failed to close ledger: %w", err)
+	if !replayed {
+		if err := s.openLedger.Close(closeTime, 0); err != nil {
+			return 0, fmt.Errorf("failed to close ledger: %w", err)
+		}
 	}
 
 	// Standalone validates immediately.
 	if err := s.openLedger.SetValidated(); err != nil {
 		return 0, fmt.Errorf("failed to validate ledger: %w", err)
+	}
+	if replayed {
+		s.startupReplay = nil
+		closeTime = s.openLedger.CloseTime()
 	}
 
 	// Persist best-effort: a persistence failure must not be fatal — treating it
@@ -535,10 +547,22 @@ func (s *Service) acceptConsensusResult(
 		}
 		pending = append(pending, ptx)
 	}
-
-	retriableTxs, err := s.buildClosedLedgerLocked(pending, closeTime, false)
+	replayed, err := s.applyStartupReplayLocked()
 	if err != nil {
 		return 0, err
+	}
+	var retriableTxs []openledger.PendingTx
+	if !replayed {
+		retriableTxs, err = s.buildClosedLedgerLocked(pending, closeTime, false)
+		if err != nil {
+			return 0, err
+		}
+	} else {
+		canonicalSort(pending, computeSalt(pending))
+		retriableTxs = append(retriableTxs, pending...)
+		s.startupReplay = nil
+		closeTime = s.openLedger.CloseTime()
+		closeTimeCorrect = s.openLedger.Header().CloseFlags&header.LCFNoConsensusTime == 0
 	}
 
 	// Pseudo-txs can't succeed in a later ledger; malformed blobs are
@@ -584,8 +608,12 @@ func (s *Service) acceptConsensusResult(
 	if !closeTimeCorrect {
 		closeFlags = header.LCFNoConsensusTime
 	}
-	if err := s.openLedger.Close(closeTime, closeFlags); err != nil {
-		return 0, fmt.Errorf("failed to close ledger: %w", err)
+	if !replayed {
+		if err := s.openLedger.Close(closeTime, closeFlags); err != nil {
+			return 0, fmt.Errorf("failed to close ledger: %w", err)
+		}
+	} else {
+		closeFlags = s.openLedger.Header().CloseFlags
 	}
 
 	// Do NOT auto-validate — validation comes from the consensus validation tracker.
@@ -610,7 +638,7 @@ func (s *Service) acceptConsensusResult(
 			"state_root", fmt.Sprintf("%x", stateRoot[:8]),
 			"tx_root", fmt.Sprintf("%x", txRoot[:8]),
 			"total_drops", s.openLedger.TotalDrops(),
-			"tx_count", len(txBlobs),
+			"tx_count", s.openLedger.TxCount(),
 			"tx_hashes", canonicalTxHashes,
 		)
 	}

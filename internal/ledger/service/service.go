@@ -15,6 +15,7 @@ import (
 	"github.com/LeJamon/go-xrpl/internal/ledger"
 	"github.com/LeJamon/go-xrpl/internal/ledger/genesis"
 	"github.com/LeJamon/go-xrpl/internal/ledger/header"
+	"github.com/LeJamon/go-xrpl/internal/ledger/inbound"
 	"github.com/LeJamon/go-xrpl/internal/ledger/localtxs"
 	"github.com/LeJamon/go-xrpl/internal/ledger/manager"
 	"github.com/LeJamon/go-xrpl/internal/ledger/openledger"
@@ -52,6 +53,8 @@ var (
 // Config holds configuration for the LedgerService
 type Config struct {
 	Standalone bool
+	// Startup selects an explicit initial-ledger workflow.
+	Startup StartupConfig
 	// NodeSize selects rippled's cache sweep cadence. Empty uses the medium
 	// profile, matching the top-level configuration default.
 	NodeSize string
@@ -212,6 +215,10 @@ type Service struct {
 	// needsInitialSync is true when the node is in consensus mode
 	// and hasn't yet adopted a ledger from peers.
 	needsInitialSync bool
+
+	// startupReplay is the one-shot replay staged for the first close and is
+	// guarded by mu together with the closed/open ledger frontier.
+	startupReplay *inbound.ReplayDelta
 
 	// serverStateFunc optionally provides the operating mode string for server_info.
 	// Set by the consensus adaptor after startup.
@@ -476,7 +483,12 @@ func (s *Service) Start() error {
 		go s.runLedgerEventDispatcher()
 	}
 
-	genesisResult, err := genesis.Create(s.config.GenesisConfig)
+	genesisConfig := s.config.GenesisConfig
+	switch s.config.Startup.Mode {
+	case StartupLoad, StartupLoadFile, StartupReplay, StartupNetwork:
+		genesisConfig.Amendments = nil
+	}
+	genesisResult, err := genesis.Create(genesisConfig)
 	if err != nil {
 		return fmt.Errorf("failed to create genesis ledger: %w", err)
 	}
@@ -501,57 +513,35 @@ func (s *Service) Start() error {
 		"hash", strconv.FormatUint(uint64(hash[0])<<24|uint64(hash[1])<<16|uint64(hash[2])<<8|uint64(hash[3]), 16)+"...",
 	)
 
-	var latest *ledger.Ledger
-	if !s.config.Standalone && s.config.FastLoad {
-		latest, err = s.loadLatestLedger(context.Background())
-		if err != nil {
-			s.logger.Warn("fast load failed; starting from genesis", "err", err)
-		}
+	initialClosed, err := ledger.NewOpen(genesisLedger, time.Now())
+	if err != nil {
+		return fmt.Errorf("failed to create initial closed ledger: %w", err)
+	}
+	if err := initialClosed.Close(time.Now(), 0); err != nil {
+		return fmt.Errorf("failed to close initial ledger: %w", err)
 	}
 
-	if latest == nil {
-		initialClosed, err := ledger.NewOpen(genesisLedger, time.Now())
-		if err != nil {
-			return fmt.Errorf("failed to create initial closed ledger: %w", err)
+	selection, err := s.selectStartup(context.Background(), initialClosed)
+	if err != nil {
+		return fmt.Errorf("select startup ledger: %w", err)
+	}
+	if selection.validate && !selection.ledger.IsValidated() {
+		if err := selection.ledger.SetValidated(); err != nil {
+			return fmt.Errorf("validate startup ledger: %w", err)
 		}
-		if err := initialClosed.Close(time.Now(), 0); err != nil {
-			return fmt.Errorf("failed to close initial ledger: %w", err)
-		}
-		s.closedLedger = initialClosed
-		s.putHistoryLocked(initialClosed)
-
-		if s.config.Standalone {
-			if err := initialClosed.SetValidated(); err != nil {
-				return fmt.Errorf("failed to validate initial ledger: %w", err)
-			}
-			s.validatedLedger = initialClosed
-			s.validatedSignTime = initialClosed.CloseTime()
-		} else {
-			s.needsInitialSync = true
-		}
+	}
+	if selection.loaded {
+		s.installLoadedStartupLocked(selection.ledger, genesisLedger)
 	} else {
-		s.closedLedger = latest
-		s.validatedLedger = latest
-		s.validatedSignTime = latest.CloseTime()
-		s.publishedLedgerSeq = latest.Sequence()
-		s.havePublished = true
-		s.ledgerEventMu.Lock()
-		s.ledgerEventFrontierSeq = latest.Sequence()
-		s.ledgerEventFrontierHash = latest.Hash()
-		s.ledgerEventHaveFrontier = true
-		s.ledgerEventMu.Unlock()
-		s.completeMu.Lock()
-		s.completedLedgers.Add(latest.Sequence())
-		s.completeLedgerHashes[latest.Sequence()] = latest.Hash()
-		s.completeMu.Unlock()
-		if latest.Sequence() != genesisLedger.Sequence() {
-			s.deleteHistoryLocked(genesisLedger.Sequence())
+		s.closedLedger = selection.ledger
+		s.putHistoryLocked(selection.ledger)
+		if selection.ledger.IsValidated() {
+			s.validatedLedger = selection.ledger
+			s.validatedSignTime = selection.ledger.CloseTime()
 		}
-		s.putHistoryLocked(latest)
-		s.collectTransactionResults(latest, latest.Sequence(), latest.Hash())
-		s.needsInitialSync = false
-		s.logger.Info("Loaded persisted validated ledger", "sequence", latest.Sequence())
+		s.needsInitialSync = selection.needsInitialSync
 	}
+	s.startupReplay = selection.replay
 
 	openLedger, err := ledger.NewOpen(s.closedLedger, time.Now())
 	if err != nil {
@@ -563,6 +553,9 @@ func (s *Service) Start() error {
 
 	// Initialise the persistent open-ledger view, anchored on closedLedger.
 	if err := s.rebuildOpenLedgerViewLocked(); err != nil {
+		return err
+	}
+	if err := s.stageStartupReplayLocked(); err != nil {
 		return err
 	}
 
