@@ -82,7 +82,9 @@ func (r *Router) handleStatusChange(msg *peermanagement.InboundMessage) {
 		// During initial sync, fetch the full ledger from the peer.
 		// Don't adopt with synthetic headers — wait for real state data.
 		if r.adaptor.NeedsInitialSync() && sc.LedgerSeq > 1 {
-			r.ensureCatchupAcquisition(sc.LedgerSeq, peerHash, uint64(msg.PeerID))
+			if r.peerLedgerIsPreferred(peerHash) {
+				r.ensureCatchupAcquisition(sc.LedgerSeq, peerHash, uint64(msg.PeerID))
+			}
 			return
 		}
 
@@ -94,6 +96,9 @@ func (r *Router) handleStatusChange(msg *peermanagement.InboundMessage) {
 			if svc != nil {
 				ourSeq := svc.GetClosedLedgerIndex()
 				if aheadByMoreThan(sc.LedgerSeq, ourSeq, 2) {
+					if !r.peerLedgerIsPreferred(peerHash) {
+						return
+					}
 					leftFull := false
 					if lcl, err := r.adaptor.GetLastClosedLedger(); err == nil && lcl != nil &&
 						r.adaptor.networkLedgerDiffers(lcl, consensus.OpModeFull) {
@@ -119,35 +124,9 @@ func (r *Router) handleStatusChange(msg *peermanagement.InboundMessage) {
 			if svc != nil {
 				ourSeq := svc.GetClosedLedgerIndex()
 				if aheadByMoreThan(sc.LedgerSeq, ourSeq, 1) {
-					r.ensureCatchupAcquisition(sc.LedgerSeq, peerHash, uint64(msg.PeerID))
-					return
-				}
-			}
-		}
-
-		// Hash-divergence catch-up. A late-join node (or a node whose
-		// consensus ran in isolation while disconnected) can end up at
-		// the same seq as its peers but with a different ledger hash.
-		// The seq-based branches above don't fire because ourSeq ==
-		// peerSeq; we need to detect that our LCL hash differs from the
-		// peer's and acquire theirs. Only fire if we're NOT already
-		// acquiring that hash (startLedgerAcquisition dedupes internally
-		// via the replayer / acquisition-registry guards, but checking
-		// here saves a lookup in the hot path).
-		svc := r.adaptor.LedgerService()
-		if svc != nil && sc.LedgerSeq > 1 && len(sc.LedgerHash) == 32 {
-			closed := svc.GetClosedLedger()
-			if closed != nil {
-				ourSeq := closed.Sequence()
-				ourHash := closed.Hash()
-				if ourSeq == sc.LedgerSeq && ourHash != peerHash {
-					r.logger.Warn("ledger hash divergence at same seq, acquiring peer's ledger",
-						"seq", sc.LedgerSeq,
-						"our_hash", fmt.Sprintf("%x", ourHash[:8]),
-						"peer_hash", fmt.Sprintf("%x", peerHash[:8]),
-						"peer", msg.PeerID,
-					)
-					r.startLedgerAcquisition(sc.LedgerSeq, peerHash, uint64(msg.PeerID))
+					if r.peerLedgerIsPreferred(peerHash) {
+						r.ensureCatchupAcquisition(sc.LedgerSeq, peerHash, uint64(msg.PeerID))
+					}
 					return
 				}
 			}
@@ -155,6 +134,15 @@ func (r *Router) handleStatusChange(msg *peermanagement.InboundMessage) {
 
 		r.checkBehind(sc.LedgerSeq, peerHash, uint64(msg.PeerID))
 	}
+}
+
+func (r *Router) peerLedgerIsPreferred(hash [32]byte) bool {
+	closed, err := r.adaptor.GetLastClosedLedger()
+	if err != nil || closed == nil {
+		return false
+	}
+	preferred := r.adaptor.preferredLCL(closed, r.adaptor.GetOperatingMode())
+	return preferred != closed.ID() && preferred == consensus.LedgerID(hash)
 }
 
 // maxConcurrentCatchup bounds the hash-keyed current-ledger acquisition set.
@@ -281,8 +269,32 @@ func (r *Router) catchupInFlight() int {
 func (r *Router) recordCatchupTarget(seq uint32, hash [32]byte, peerID uint64) {
 	r.catchupMu.Lock()
 	defer r.catchupMu.Unlock()
+	if r.catchup.source != catchupSourcePeer && r.catchup.hash == hash {
+		r.catchup.peerID = peerID
+		return
+	}
 	if seq > r.catchup.seq {
 		r.catchup = catchupTarget{seq: seq, hash: hash, peerID: peerID}
+	} else if seq == r.catchup.seq && hash == r.catchup.hash {
+		r.catchup.peerID = peerID
+	}
+}
+
+func (r *Router) recordValidationCatchupTarget(
+	seq uint32,
+	hash [32]byte,
+	peerID uint64,
+	source catchupTargetSource,
+) {
+	r.catchupMu.Lock()
+	defer r.catchupMu.Unlock()
+	// Trusted evidence replaces a peer-derived target at any sequence. Once
+	// validation-driven, only a higher sequence or same-sequence quorum can
+	// move the frontier.
+	if r.catchup.source == catchupSourcePeer ||
+		(source == catchupSourceQuorum && seq == r.catchup.seq) ||
+		seq > r.catchup.seq {
+		r.catchup = catchupTarget{seq: seq, hash: hash, peerID: peerID, source: source}
 	} else if seq == r.catchup.seq && hash == r.catchup.hash {
 		r.catchup.peerID = peerID
 	}
@@ -618,6 +630,21 @@ func (r *Router) forwardDeltaStep(svc *service.Service, closed, tipSeq uint32) (
 // path re-arms toward the latest target. Bounds CONCURRENCY only — callers do
 // their own eligibility gating first.
 func (r *Router) ensureCatchupAcquisition(seq uint32, hash [32]byte, peerID uint64) {
+	r.ensureCatchupAcquisitionWithPriority(seq, hash, peerID, catchupSourcePeer)
+}
+
+// ensureValidationCatchupAcquisition acquires each trusted-validation ledger
+// without allowing a lagging validator to lower the preferred catch-up frontier.
+func (r *Router) ensureValidationCatchupAcquisition(seq uint32, hash [32]byte, peerID uint64) {
+	r.ensureCatchupAcquisitionWithPriority(seq, hash, peerID, catchupSourceValidation)
+}
+
+func (r *Router) ensureCatchupAcquisitionWithPriority(
+	seq uint32,
+	hash [32]byte,
+	peerID uint64,
+	source catchupTargetSource,
+) {
 	svc := r.adaptor.LedgerService()
 	if svc == nil {
 		return
@@ -625,8 +652,25 @@ func (r *Router) ensureCatchupAcquisition(seq uint32, hash [32]byte, peerID uint
 	if seq == 0 || seq <= svc.GetClosedLedgerIndex() {
 		return
 	}
+	if held, err := svc.GetLedgerByHash(hash); err == nil && held != nil {
+		return
+	}
 	peerID, _ = r.resolveAcquisitionPeer(seq, peerID)
-	r.recordCatchupTarget(seq, hash, peerID)
+	if source == catchupSourcePeer {
+		r.recordCatchupTarget(seq, hash, peerID)
+	} else {
+		r.recordValidationCatchupTarget(seq, hash, peerID, source)
+		if r.adaptor.GetOperatingMode() == consensus.OpModeFull &&
+			!aheadByMoreThan(seq, svc.GetClosedLedgerIndex(), 1) {
+			return
+		}
+		if il := r.fetchTracker.Find(hash); il != nil && il.Reason() == inbound.ReasonConsensus {
+			r.refreshCatchupAcquisitionPeer(il, peerID)
+			return
+		}
+		r.startLedgerAcquisition(seq, hash, peerID)
+		return
+	}
 	if il := r.fetchTracker.Find(hash); il != nil && il.Reason() == inbound.ReasonConsensus {
 		r.refreshCatchupAcquisitionPeer(il, peerID)
 		return
@@ -927,6 +971,50 @@ func (r *Router) onLedgerSwitched(seq uint32, _ [32]byte, parentHash [32]byte, h
 		return
 	}
 	r.startHistoryBackfill(seq-1, parentHash, 0, historyFloor)
+}
+
+func (r *Router) onLedgerFullyValidated(seq uint32, hash [32]byte) {
+	r.recordSeqHash(seq, hash, [32]byte{}, false)
+
+	removed := make(map[[32]byte]struct{})
+	var legacy []*inbound.Ledger
+
+	r.acquisitionMu.Lock()
+	for _, candidate := range r.fetchTracker.Active() {
+		if candidate.Reason() != inbound.ReasonConsensus ||
+			candidate.Seq() != seq || candidate.Hash() == hash {
+			continue
+		}
+		if r.fetchTracker.DiscardExpected(candidate) {
+			legacy = append(legacy, candidate)
+			removed[candidate.Hash()] = struct{}{}
+		}
+	}
+	for _, replayHash := range r.replayer.AbandonOtherAtSequence(seq, hash) {
+		removed[replayHash] = struct{}{}
+	}
+	if _, ok := removed[r.consensusRecovery.stepHash]; ok {
+		r.consensusRecovery.stepHash = [32]byte{}
+	}
+	if _, ok := removed[r.consensusRecovery.targetHash]; ok {
+		r.consensusRecovery = consensusRecovery{}
+	}
+	r.acquisitionMu.Unlock()
+
+	r.catchupMu.Lock()
+	if r.catchup.seq == seq && r.catchup.hash != hash {
+		r.catchup = catchupTarget{seq: seq, hash: hash, source: catchupSourceQuorum}
+	}
+	r.catchupMu.Unlock()
+
+	r.retireLegacyAcquisitions(legacy)
+	if len(removed) > 0 {
+		r.logger.Info("canceled acquisitions superseded by trusted validation quorum",
+			"seq", seq,
+			"hash", fmt.Sprintf("%x", hash[:8]),
+			"canceled", len(removed),
+		)
+	}
 }
 
 func (r *Router) completeHistoryBackfill(seq uint32, hash, parentHash [32]byte, peerID uint64) {
@@ -1633,6 +1721,12 @@ func (r *Router) maybeAcquireFromValidation(v *consensus.Validation, originPeer 
 		return
 	}
 	hash := [32]byte(v.LedgerID)
+	r.recordValidationCatchupTarget(
+		v.LedgerSeq,
+		hash,
+		originPeer,
+		catchupSourceValidation,
+	)
 	// Already have it (built or adopted) — nothing to fetch.
 	if l, err := svc.GetLedgerByHash(hash); err == nil && l != nil {
 		return
@@ -1646,7 +1740,7 @@ func (r *Router) maybeAcquireFromValidation(v *consensus.Validation, originPeer 
 		r.startLedgerAcquisition(v.LedgerSeq, hash, originPeer)
 		return
 	}
-	r.ensureCatchupAcquisition(v.LedgerSeq, hash, originPeer)
+	r.ensureValidationCatchupAcquisition(v.LedgerSeq, hash, originPeer)
 }
 
 // armValidationStashAcquisition arms inbound acquisition for a (seq, hash)
@@ -1718,7 +1812,12 @@ func (r *Router) armValidationStashAcquisition(seq uint32, hash [32]byte) {
 
 	// Keep the newest target even when the speculative slots are full; completion
 	// or maintenance will re-arm it when capacity becomes available.
-	r.recordCatchupTarget(seq, hash, preferredPeerID)
+	r.recordValidationCatchupTarget(
+		seq,
+		hash,
+		preferredPeerID,
+		catchupSourceQuorum,
+	)
 	r.logger.Info("arming acquisition for stashed validation",
 		"seq", seq,
 		"hash", fmt.Sprintf("%x", hash[:8]),
@@ -1732,12 +1831,11 @@ func (r *Router) armValidationStashAcquisition(seq uint32, hash [32]byte) {
 //
 //   - peerSeq <= ourSeq+1: we're caught up. If still in Tracking and
 //     our LCL hash matches peers' majority, transition to Full.
-//     Otherwise stay in Tracking — the hash-mismatch branch in
-//     handleStatusChange will have already fired the right acquisition.
-//   - peerSeq > ourSeq+1: we're behind by more than one ledger. Arm a
-//     single acquisition for the peer's tip. Subsequent status changes
-//     from peers will chain more acquisitions forward as we adopt each
-//     ledger and ourSeq advances.
+//     Otherwise stay in Tracking until network preference is established.
+//   - peerSeq > ourSeq+1: we're behind by more than one ledger. If the
+//     peer's tip is network-preferred, arm one acquisition. Subsequent
+//     status changes chain acquisitions forward as we adopt each ledger
+//     and ourSeq advances.
 //
 // Only one acquisition fires per call. A faster "range walk" that
 // issues concurrent requests for every seq between ourLCL+1 and
@@ -1787,6 +1885,9 @@ func (r *Router) checkBehind(peerSeq uint32, peerHash [32]byte, peerID uint64) {
 		return
 	}
 	if !aheadByMoreThan(peerSeq, ourSeq, 1) {
+		return
+	}
+	if !r.peerLedgerIsPreferred(peerHash) {
 		return
 	}
 

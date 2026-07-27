@@ -91,6 +91,19 @@ func (r *inFlightRegistry[T]) remove(hash [32]byte) {
 	delete(r.items, hash)
 }
 
+func (r *inFlightRegistry[T]) removeMatching(match func([32]byte, T) bool) [][32]byte {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	removed := make([][32]byte, 0)
+	for hash, item := range r.items {
+		if match(hash, item) {
+			delete(r.items, hash)
+			removed = append(removed, hash)
+		}
+	}
+	return removed
+}
+
 func (r *inFlightRegistry[T]) has(hash [32]byte) bool {
 	r.mu.Lock()
 	defer r.mu.Unlock()

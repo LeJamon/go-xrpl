@@ -103,9 +103,9 @@ type Overlay struct {
 	// Coordination channels
 	//
 	// events is the best-effort hot path for ordinary EventMessageReceived
-	// traffic and EventLedgerResponse. Acquisition traffic uses the separate
-	// bounded acquisitionEvents path so requested replies apply transport
-	// backpressure instead of being discarded.
+	// traffic and EventLedgerResponse. Consensus and acquisition traffic use
+	// separate bounded paths so they apply transport backpressure instead of
+	// being discarded.
 	//
 	// lifecycle is the dedicated NON-LOSSY path for peer lifecycle events
 	// (Connecting/Connected/Disconnected/Failed). Sends BLOCK until the
@@ -114,20 +114,21 @@ type Overlay struct {
 	// would leak router/relay per-peer state until the idle sweep. Keeping
 	// it off the message channel means a message burst can no longer crowd
 	// out a disconnect. Both are drained by the single eventLoop goroutine.
-	events            chan Event
-	acquisitionEvents chan Event
-	lifecycle         chan Event
+	events                 chan Event
+	consensusEvents        chan Event
+	consensusControlEvents chan Event
+	acquisitionEvents      chan Event
+	lifecycle              chan Event
 
-	// messages carries ordinary consensus peer frames (proposals,
-	// validations, status changes, and validator lists) to the
-	// router. txMessages carries inbound TMTransaction frames on a
-	// separate lane. Splitting the two means a transaction flood that
-	// saturates txMessages can no longer crowd consensus/acquisition
-	// traffic out of a single shared buffer and get the node
-	// resource-disconnected for dropping mtLEDGER_DATA/mtPROPOSE/
-	// mtVALIDATION (issue #1103).
-	messages   chan *InboundMessage
-	txMessages chan *InboundMessage
+	// consensusMessages preserves ordering between trust updates and the
+	// proposals and validations that depend on them. consensusControlMessages
+	// isolates advisory status and transaction-set availability frames.
+	// Both lanes use bounded backpressure. messages remains best-effort for
+	// recoverable service traffic.
+	consensusMessages        chan *InboundMessage
+	consensusControlMessages chan *InboundMessage
+	messages                 chan *InboundMessage
+	txMessages               chan *InboundMessage
 	// manifestMessages is fed directly by peer read loops with bounded
 	// backpressure. Signature verification is intentionally isolated from both
 	// the overlay event loop and the consensus router.
@@ -211,12 +212,8 @@ type Overlay struct {
 	// case the cluster timer leaves the self-entry out.
 	localNodeIdentity []byte
 
-	// droppedMessages counts how many times the non-blocking send to
-	// the consensus messages channel hit its default branch (downstream
-	// consumer slow). Exposed via DroppedMessages() so server_info /
-	// telemetry can surface back-pressure to operators. Without this
-	// counter a slow consumer silently loses events with only a
-	// debug-level log.
+	// droppedMessages counts how many times the non-blocking send to the
+	// best-effort messages channel hit its default branch.
 	droppedMessages atomic.Uint64
 
 	// droppedTransactions counts inbound TMTransaction frames shed
@@ -834,34 +831,38 @@ func New(opts ...Option) (*Overlay, error) {
 	}
 
 	o := &Overlay{
-		cfg:                cfg,
-		identity:           identity,
-		cluster:            clusterReg,
-		instanceCookie:     cookie,
-		discovery:          NewDiscovery(&cfg, events),
-		autoconnectWake:    make(chan struct{}, 1),
-		ledgerSync:         NewLedgerSyncHandler(events),
-		peers:              make(map[PeerID]*Peer),
-		peerKeys:           make(map[string]PeerID),
-		peerEndpoints:      make(map[string]PeerID),
-		inboundIPs:         make(map[string]int),
-		pendingInbound:     make(map[PeerID]struct{}),
-		events:             events,
-		acquisitionEvents:  make(chan Event, acquisitionEventBufferSize),
-		messages:           make(chan *InboundMessage, messageBufferSize(cfg.MessageBufferSize)),
-		txMessages:         make(chan *InboundMessage, txLaneBufferSize(cfg.MaxTransactions)),
-		manifestMessages:   make(chan *InboundMessage, manifestMessageBufferSize(cfg.MaxPeers)),
-		manifestReadBudget: newReadBudget(manifestReadBudgetBytes),
-		manifestSpoolDir:   manifestSpoolDir,
-		ledgerData:         make(chan *InboundMessage, DefaultLedgerDataBufferSize),
-		lifecycle:          make(chan Event, lifecycleBufferSize(&cfg)),
-		stopCh:             make(chan struct{}),
-		listenerReady:      make(chan struct{}),
-		relayedIndex:       make(map[[32]byte]*relayedEntry),
-		clockForIndex:      time.Now,
-		inboundSem:         make(chan struct{}, inboundCap),
-		outboundSem:        make(chan struct{}, outboundCap),
-		resourceManager:    resource.NewManager(nil, nil),
+		cfg:                      cfg,
+		identity:                 identity,
+		cluster:                  clusterReg,
+		instanceCookie:           cookie,
+		discovery:                NewDiscovery(&cfg, events),
+		autoconnectWake:          make(chan struct{}, 1),
+		ledgerSync:               NewLedgerSyncHandler(events),
+		peers:                    make(map[PeerID]*Peer),
+		peerKeys:                 make(map[string]PeerID),
+		peerEndpoints:            make(map[string]PeerID),
+		inboundIPs:               make(map[string]int),
+		pendingInbound:           make(map[PeerID]struct{}),
+		events:                   events,
+		consensusEvents:          make(chan Event, eventBufferSize(cfg.EventBufferSize)),
+		consensusControlEvents:   make(chan Event, eventBufferSize(cfg.EventBufferSize)),
+		acquisitionEvents:        make(chan Event, acquisitionEventBufferSize),
+		consensusMessages:        make(chan *InboundMessage, messageBufferSize(cfg.MessageBufferSize)),
+		consensusControlMessages: make(chan *InboundMessage, messageBufferSize(cfg.MessageBufferSize)),
+		messages:                 make(chan *InboundMessage, messageBufferSize(cfg.MessageBufferSize)),
+		txMessages:               make(chan *InboundMessage, txLaneBufferSize(cfg.MaxTransactions)),
+		manifestMessages:         make(chan *InboundMessage, manifestMessageBufferSize(cfg.MaxPeers)),
+		manifestReadBudget:       newReadBudget(manifestReadBudgetBytes),
+		manifestSpoolDir:         manifestSpoolDir,
+		ledgerData:               make(chan *InboundMessage, DefaultLedgerDataBufferSize),
+		lifecycle:                make(chan Event, lifecycleBufferSize(&cfg)),
+		stopCh:                   make(chan struct{}),
+		listenerReady:            make(chan struct{}),
+		relayedIndex:             make(map[[32]byte]*relayedEntry),
+		clockForIndex:            time.Now,
+		inboundSem:               make(chan struct{}, inboundCap),
+		outboundSem:              make(chan struct{}, outboundCap),
+		resourceManager:          resource.NewManager(nil, nil),
 	}
 	if identity != nil {
 		o.localNodeIdentity = identity.PublicKey()
@@ -973,6 +974,8 @@ func (o *Overlay) Run(ctx context.Context) error {
 
 	// Event processing loops
 	g.Go(func() error { return o.eventLoop(gCtx) })
+	g.Go(func() error { return o.consensusEventLoop(gCtx) })
+	g.Go(func() error { return o.consensusControlEventLoop(gCtx) })
 	g.Go(func() error { return o.acquisitionEventLoop(gCtx) })
 
 	// Discovery/autoconnect loop
@@ -1060,6 +1063,28 @@ func (o *Overlay) acquisitionEventLoop(ctx context.Context) error {
 		case <-ctx.Done():
 			return ctx.Err()
 		case evt := <-o.acquisitionEvents:
+			o.onMessageReceived(evt)
+		}
+	}
+}
+
+func (o *Overlay) consensusEventLoop(ctx context.Context) error {
+	for {
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case evt := <-o.consensusEvents:
+			o.onMessageReceived(evt)
+		}
+	}
+}
+
+func (o *Overlay) consensusControlEventLoop(ctx context.Context) error {
+	for {
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case evt := <-o.consensusControlEvents:
 			o.onMessageReceived(evt)
 		}
 	}

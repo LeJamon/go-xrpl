@@ -256,9 +256,25 @@ func (o *Overlay) onMessageReceived(evt Event) {
 		return
 	}
 
-	// Forward consensus/acquisition frames. On back-pressure (channel
-	// full), increment a visible counter rather than silently dropping —
-	// the warn log alone is easy to miss at production log levels.
+	if isConsensusPriorityMessageType(msgType) {
+		o.forwardConsensus(&InboundMessage{
+			PeerID:  evt.PeerID,
+			Type:    evt.MessageType,
+			Payload: evt.Payload,
+		})
+		return
+	}
+	if isConsensusControlMessageType(msgType) {
+		o.forwardConsensusControl(&InboundMessage{
+			PeerID:  evt.PeerID,
+			Type:    evt.MessageType,
+			Payload: evt.Payload,
+		})
+		return
+	}
+
+	// Recoverable service and control frames remain best-effort. Peers can
+	// retry requests or refresh control state after pressure subsides.
 	select {
 	case o.messages <- &InboundMessage{
 		PeerID:  evt.PeerID,
@@ -271,6 +287,28 @@ func (o *Overlay) onMessageReceived(evt Event) {
 		if msgType == message.TypeManifests {
 			o.RejectPeerBootstrap(evt.PeerID)
 		}
+	}
+}
+
+func (o *Overlay) forwardConsensus(msg *InboundMessage) {
+	if o.consensusMessages == nil {
+		return
+	}
+	select {
+	case o.consensusMessages <- msg:
+	case <-o.stopCh:
+	case <-o.runDone:
+	}
+}
+
+func (o *Overlay) forwardConsensusControl(msg *InboundMessage) {
+	if o.consensusControlMessages == nil {
+		return
+	}
+	select {
+	case o.consensusControlMessages <- msg:
+	case <-o.stopCh:
+	case <-o.runDone:
 	}
 }
 
@@ -313,11 +351,8 @@ func (o *Overlay) forwardLedgerData(msg *InboundMessage) {
 	}
 }
 
-// DroppedMessages returns the cumulative count of inbound messages the
-// overlay had to drop because the downstream consumer channel was
-// full. Surfaced via server_info/server_state for operators to detect
-// consumer back-pressure — a nonzero and growing value indicates the
-// router/engine can't keep up with network ingress.
+// DroppedMessages returns the cumulative count of best-effort inbound
+// messages shed because the downstream consumer channel was full.
 func (o *Overlay) DroppedMessages() uint64 {
 	return o.droppedMessages.Load()
 }
