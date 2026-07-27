@@ -121,6 +121,126 @@ func TestWebSocketServer_Close_NoConnections(t *testing.T) {
 	}
 }
 
+func TestWebSocketServer_Close_RejectsNewConnections(t *testing.T) {
+	ws := NewWebSocketServer(30*time.Second, nil)
+	httpSrv := httptest.NewServer(http.HandlerFunc(ws.ServeHTTP))
+	defer httpSrv.Close()
+
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	if err := ws.Close(ctx); err != nil {
+		t.Fatalf("Close on empty server: %v", err)
+	}
+
+	wsURL := "ws" + strings.TrimPrefix(httpSrv.URL, "http")
+	conn, resp, err := websocket.DefaultDialer.Dial(wsURL, nil)
+	if conn != nil {
+		conn.Close()
+		t.Fatal("connection accepted after Close")
+	}
+	if err == nil {
+		t.Fatal("expected connection attempt after Close to fail")
+	}
+	if resp == nil {
+		t.Fatal("expected HTTP response for rejected connection")
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusServiceUnavailable {
+		t.Fatalf("status = %d, want %d", resp.StatusCode, http.StatusServiceUnavailable)
+	}
+}
+
+func TestWebSocketServer_Close_WaitsForInFlightUpgrade(t *testing.T) {
+	ws := NewWebSocketServer(30*time.Second, nil)
+	upgradeStarted := make(chan struct{})
+	continueUpgrade := make(chan struct{})
+	ws.upgrader.CheckOrigin = func(*http.Request) bool {
+		close(upgradeStarted)
+		<-continueUpgrade
+		return true
+	}
+
+	httpSrv := httptest.NewServer(http.HandlerFunc(ws.ServeHTTP))
+	defer httpSrv.Close()
+	defer func() {
+		select {
+		case <-continueUpgrade:
+		default:
+			close(continueUpgrade)
+		}
+	}()
+
+	type dialResult struct {
+		conn *websocket.Conn
+		resp *http.Response
+	}
+	dialDone := make(chan dialResult, 1)
+	wsURL := "ws" + strings.TrimPrefix(httpSrv.URL, "http")
+	go func() {
+		conn, resp, _ := websocket.DefaultDialer.Dial(wsURL, nil)
+		dialDone <- dialResult{conn: conn, resp: resp}
+	}()
+
+	select {
+	case <-upgradeStarted:
+	case <-time.After(time.Second):
+		t.Fatal("WebSocket upgrade did not start")
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	closeDone := make(chan error, 1)
+	go func() {
+		closeDone <- ws.Close(ctx)
+	}()
+
+	deadline := time.Now().Add(time.Second)
+	for {
+		ws.connectionsMutex.RLock()
+		closing := ws.closing
+		ws.connectionsMutex.RUnlock()
+		if closing {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("Close did not begin shutdown")
+		}
+		runtime.Gosched()
+	}
+
+	select {
+	case err := <-closeDone:
+		t.Fatalf("Close returned before the admitted upgrade finished: %v", err)
+	default:
+	}
+
+	close(continueUpgrade)
+
+	select {
+	case err := <-closeDone:
+		if err != nil {
+			t.Fatalf("Close returned error: %v", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("Close did not return after the upgrade finished")
+	}
+
+	result := <-dialDone
+	if result.conn != nil {
+		result.conn.Close()
+	}
+	if result.resp != nil {
+		result.resp.Body.Close()
+	}
+
+	ws.connectionsMutex.RLock()
+	connectionCount := len(ws.connections)
+	ws.connectionsMutex.RUnlock()
+	if connectionCount != 0 {
+		t.Fatalf("registered connections = %d, want 0", connectionCount)
+	}
+}
+
 // TestWebSocketServer_FailedUpgrade_ReleasesSlot verifies that a malformed
 // WebSocket upgrade request does not permanently leak its per-port connection
 // slot. PortMiddleware acquires a slot and delegates release to closeConnection,
