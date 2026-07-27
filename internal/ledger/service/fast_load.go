@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"sync"
+	"time"
 
 	"github.com/LeJamon/go-xrpl/drops"
 	"github.com/LeJamon/go-xrpl/internal/ledger"
@@ -207,6 +208,25 @@ func mergeFeeSettings(fees drops.Fees, settings *state.FeeSettings) drops.Fees {
 }
 
 func (s *Service) verifyStoredSHAMap(ctx context.Context, root [32]byte, mapType shamap.Type) error {
+	startedAt := time.Now()
+	ticker := time.NewTicker(storedSHAMapVerificationLogInterval)
+	defer ticker.Stop()
+	return s.verifyStoredSHAMapWithTicks(ctx, root, mapType, startedAt, time.Now, ticker.C)
+}
+
+func (s *Service) verifyStoredSHAMapWithTicks(
+	ctx context.Context,
+	root [32]byte,
+	mapType shamap.Type,
+	startedAt time.Time,
+	now func() time.Time,
+	ticks <-chan time.Time,
+) (err error) {
+	progress := newStoredSHAMapVerificationProgress(s.logger, root, mapType, startedAt)
+	defer func() {
+		progress.finish(now(), err)
+	}()
+
 	if root == ([32]byte{}) {
 		return fmt.Errorf("zero root")
 	}
@@ -215,37 +235,76 @@ func (s *Service) verifyStoredSHAMap(ctx context.Context, root [32]byte, mapType
 	if err != nil {
 		return err
 	}
+	progress.nodesChecked.Add(1)
 	inner, ok := rootNode.(shamap.InnerNodeReader)
 	if !ok {
 		return fmt.Errorf("root node %x is not an inner node", root[:8])
 	}
 
-	walkCtx, cancel := context.WithCancelCause(ctx)
-	defer cancel(nil)
-	var wg sync.WaitGroup
+	branches := make([][32]byte, 0, shamap.BranchFactor)
 	for branch := range shamap.BranchFactor {
 		if inner.IsEmptyBranch(branch) {
 			continue
 		}
-		child, err := inner.ChildHash(branch)
-		if err != nil {
-			return err
+		child, childErr := inner.ChildHash(branch)
+		if childErr != nil {
+			return childErr
 		}
+		branches = append(branches, child)
+	}
+	progress.branchesTotal = uint32(len(branches))
+	progress.start()
+
+	walkCtx, cancel := context.WithCancelCause(ctx)
+	defer cancel(nil)
+	var wg sync.WaitGroup
+	for _, child := range branches {
 		wg.Add(1)
-		go func() {
+		go func(child [32]byte) {
 			defer wg.Done()
-			if err := s.walkStoredSHAMapNodes(
+			var unreportedNodes uint64
+			walkErr := s.walkStoredSHAMapNodes(
 				walkCtx,
 				[]storedSHAMapNode{{hash: child, depth: 1}},
 				mapType,
-				nil,
-			); err != nil {
-				cancel(err)
+				func([32]byte, *nodestore.Node) error {
+					unreportedNodes++
+					if unreportedNodes == storedSHAMapNodeCountBatch {
+						progress.nodesChecked.Add(unreportedNodes)
+						unreportedNodes = 0
+					}
+					return nil
+				},
+			)
+			if unreportedNodes > 0 {
+				progress.nodesChecked.Add(unreportedNodes)
 			}
-		}()
+			if walkErr != nil {
+				cancel(walkErr)
+				return
+			}
+			progress.branchesComplete.Add(1)
+		}(child)
 	}
-	wg.Wait()
-	return context.Cause(walkCtx)
+	workersDone := make(chan struct{})
+	go func() {
+		wg.Wait()
+		close(workersDone)
+	}()
+
+	for {
+		select {
+		case tick, ok := <-ticks:
+			if !ok {
+				ticks = nil
+				continue
+			}
+			progress.report(tick)
+		case <-workersDone:
+			progress.report(now())
+			return context.Cause(walkCtx)
+		}
+	}
 }
 
 type storedSHAMapNode struct {
