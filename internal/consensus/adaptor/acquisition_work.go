@@ -38,19 +38,24 @@ const (
 	acquisitionWorkLocal
 	acquisitionWorkFailure
 	acquisitionWorkAdded
+	acquisitionWorkRetarget
 )
 
 type acquisitionWorkEvent struct {
-	kind   acquisitionWorkKind
-	data   *message.LedgerData
-	peerID uint64
-	resume bool
-	useful int
-	fetch  func([32]byte) ([]byte, bool)
-	after  func()
-	peers  []uint64
-	added  []uint64
-	at     time.Time
+	kind       acquisitionWorkKind
+	data       *message.LedgerData
+	peerID     uint64
+	resume     bool
+	useful     int
+	fetch      func([32]byte) ([]byte, bool)
+	after      func()
+	peers      []uint64
+	added      []uint64
+	stateIDs   [][]byte
+	txIDs      [][]byte
+	queryDepth uint32
+	collect    bool
+	at         time.Time
 }
 
 type acquisitionWorkBatch struct {
@@ -78,6 +83,8 @@ type acquisitionWorkResult struct {
 	timerAt        time.Time
 	rearmTimer     bool
 	retryBase      bool
+	retarget       bool
+	queryDepth     uint32
 	complete       bool
 	snapshot       inbound.Snapshot
 	haveSnapshot   bool
@@ -397,6 +404,7 @@ func processAcquisitionWorkWithBudget(ctx context.Context, ledger *inbound.Ledge
 	}
 	usefulByPeer := make(map[uint64]int)
 	var addedPeers []uint64
+	var retargetPeers []uint64
 	var runLocal, runTimerCheck, runTimer, runFailure bool
 	var timerAt time.Time
 	var fetch func([32]byte) ([]byte, bool)
@@ -508,6 +516,18 @@ func processAcquisitionWorkWithBudget(ctx context.Context, ledger *inbound.Ledge
 		case acquisitionWorkFailure:
 		case acquisitionWorkAdded:
 			addedPeers = append(addedPeers, event.peerID)
+		case acquisitionWorkRetarget:
+			result.retarget = true
+			if len(result.stateIDs) == 0 && len(result.txIDs) == 0 &&
+				len(event.peers) > 0 && (len(event.stateIDs) > 0 || len(event.txIDs) > 0) {
+				result.targets = append(result.targets[:0], event.peers[0])
+				result.stateIDs = event.stateIDs
+				result.txIDs = event.txIDs
+				result.queryDepth = event.queryDepth
+			}
+			if event.collect {
+				retargetPeers = append(retargetPeers, event.peers...)
+			}
 		}
 	}
 
@@ -559,6 +579,22 @@ func processAcquisitionWorkWithBudget(ctx context.Context, ledger *inbound.Ledge
 		peers := acquisitionRequestCandidates(preferred, ledger.Peers())
 		result.requests, result.complete, result.err = ledger.CollectMissingReplyRequestsContext(workCtx, peers)
 		if result.err != nil || result.complete {
+			return result
+		}
+	}
+	if len(retargetPeers) > 0 {
+		requests, complete, err := ledger.CollectMissingReplyRequestsContext(workCtx, retargetPeers)
+		if err != nil {
+			for _, request := range result.requests {
+				ledger.ReleaseMissingRequest(request.PeerID, request.NodeHashes)
+			}
+			result.requests = nil
+			result.err = err
+			return result
+		}
+		result.requests = append(result.requests, requests...)
+		if complete {
+			result.complete = true
 			return result
 		}
 	}
@@ -722,11 +758,21 @@ func (r *Router) handleAcquisitionWorkResult(result acquisitionWorkResult) {
 			"useful", reply.useful,
 		)
 	}
+	retry := missingNodeRetry{queryDepth: result.queryDepth}
 	if len(result.stateIDs) > 0 || len(result.txIDs) > 0 {
-		r.sendMissingAcquisitionNodes(ledger, result.targets, result.stateIDs, result.txIDs)
+		retry = r.sendMissingAcquisitionNodes(
+			ledger,
+			result.targets,
+			result.stateIDs,
+			result.txIDs,
+			result.queryDepth,
+		)
 	}
+	released := 0
 	for _, request := range result.requests {
-		r.sendMissingReplyRequest(ledger, request)
+		if r.sendMissingReplyRequest(ledger, request) {
+			released++
+		}
 	}
 	if len(result.requests) > 0 {
 		var stateNodes, txNodes int
@@ -746,6 +792,11 @@ func (r *Router) handleAcquisitionWorkResult(result acquisitionWorkResult) {
 			"tx_nodes", txNodes,
 		)
 	}
+	if result.retarget && (len(retry.stateIDs) > 0 || len(retry.txIDs) > 0) {
+		ledger.ReleaseUnreservedMissingNodes()
+	} else if !result.retarget {
+		r.retryMissingAcquisitionNodes(ledger, retry, released)
+	}
 	if len(result.byHashState) > 0 || len(result.byHashTx) > 0 {
 		peers := ledger.Peers()
 		r.sendNodesByHash(peers, ledger.Hash(), ledger.Seq(), result.byHashState, message.ObjectTypeStateNode)
@@ -753,7 +804,7 @@ func (r *Router) handleAcquisitionWorkResult(result acquisitionWorkResult) {
 	}
 }
 
-func (r *Router) sendMissingReplyRequest(ledger *inbound.Ledger, request inbound.MissingRequest) {
+func (r *Router) sendMissingReplyRequest(ledger *inbound.Ledger, request inbound.MissingRequest) bool {
 	indirect := ledger.Timeouts() > 0
 	queryDepth := uint32(1)
 	if request.Blind {
@@ -768,27 +819,58 @@ func (r *Router) sendMissingReplyRequest(ledger *inbound.Ledger, request inbound
 		err = r.adaptor.RequestStateNodes(request.PeerID, ledger.Hash(), request.NodeIDs, queryDepth, indirect)
 	}
 	if err == nil {
-		return
+		return false
 	}
 	ledger.ReleaseMissingRequest(request.PeerID, request.NodeHashes)
-	r.logger.Warn("inbound ledger: failed to request missing nodes", "peer", request.PeerID, "transaction", request.Transaction, "error", err)
+	return r.handleMissingNodeSendFailure(ledger, request.PeerID, request.Transaction, err)
 }
 
-func (r *Router) sendMissingAcquisitionNodes(ledger *inbound.Ledger, peers []uint64, stateIDs, txIDs [][]byte) {
+type missingNodeRetry struct {
+	stateIDs   [][]byte
+	txIDs      [][]byte
+	queryDepth uint32
+}
+
+func (r *Router) sendMissingAcquisitionNodes(
+	ledger *inbound.Ledger,
+	peers []uint64,
+	stateIDs, txIDs [][]byte,
+	queryDepth uint32,
+) missingNodeRetry {
 	indirect := ledger.Timeouts() > 0
-	queryDepth := uint32(0)
+	var stateSent, stateDisconnected bool
+	var txSent, txDisconnected bool
 	for _, peerID := range peers {
+		disconnected := false
 		if len(stateIDs) > 0 {
 			if err := r.adaptor.RequestStateNodes(peerID, ledger.Hash(), stateIDs, queryDepth, indirect); err != nil {
-				r.logger.Warn("inbound ledger: failed to request state nodes", "error", err)
+				disconnected = r.handleMissingNodeSendFailure(ledger, peerID, false, err)
+				stateDisconnected = stateDisconnected || disconnected
+			} else {
+				stateSent = true
 			}
+		}
+		if disconnected {
+			txDisconnected = txDisconnected || len(txIDs) > 0
+			continue
 		}
 		if len(txIDs) > 0 {
 			if err := r.adaptor.RequestTransactionNodes(peerID, ledger.Hash(), txIDs, queryDepth, indirect); err != nil {
-				r.logger.Warn("inbound ledger: failed to request tx nodes", "error", err)
+				disconnected = r.handleMissingNodeSendFailure(ledger, peerID, true, err)
+				txDisconnected = txDisconnected || disconnected
+			} else {
+				txSent = true
 			}
 		}
 	}
+	retry := missingNodeRetry{queryDepth: queryDepth}
+	if stateDisconnected && !stateSent {
+		retry.stateIDs = stateIDs
+	}
+	if txDisconnected && !txSent {
+		retry.txIDs = txIDs
+	}
+	return retry
 }
 
 func applyAcquisitionData(ctx context.Context, ledger *inbound.Ledger, data *message.LedgerData) (useful int, badKind string, remove, complete bool, err error) {

@@ -1310,6 +1310,18 @@ func (l *Ledger) ReleaseMissingRequest(peerID uint64, hashes [][32]byte) {
 	l.releaseMissingRequests([]MissingRequest{{PeerID: peerID, NodeHashes: hashes}})
 }
 
+// ReleaseUnreservedMissingNodes makes a failed timeout fan-out eligible for a
+// later peer without disturbing peer-owned reservations.
+func (l *Ledger) ReleaseUnreservedMissingNodes() {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	for hash, owner := range l.recentNodes {
+		if owner == 0 {
+			delete(l.recentNodes, hash)
+		}
+	}
+}
+
 // ReleaseMissingPeer marks a peer's previous request as answered. Its node
 // reservations remain until they arrive or the acquisition timer advances.
 func (l *Ledger) ReleaseMissingPeer(peerID uint64) {
