@@ -562,7 +562,7 @@ func (r *Router) armCatchupTowardTargetWithPeer(peerHint uint64) {
 	r.catchupMu.Lock()
 	target := r.catchup
 	r.catchupMu.Unlock()
-	if peerHint == 0 {
+	if peerHint == 0 && target.source == catchupSourceQuorum {
 		peerHint = target.peerID
 	}
 	tSeq, tHash := target.seq, target.hash
