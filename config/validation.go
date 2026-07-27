@@ -279,7 +279,7 @@ func validateIPEntry(entry string) error {
 	}
 
 	if len(parts) == 2 {
-		if err := validatePortString(parts[1]); err != nil {
+		if err := validatePeerPortString(parts[1]); err != nil {
 			return fmt.Errorf("invalid port: %w", err)
 		}
 	}
@@ -293,19 +293,26 @@ func validateFixedIPEntry(entry string) error {
 		return errors.New("fixed IP entry cannot be empty")
 	}
 
-	parts := strings.Fields(entry)
-	if len(parts) != 2 {
-		return errors.New("fixed IP entries must include a port, expected 'IP port'")
+	return validateIPEntry(entry)
+}
+
+func validatePeerPortString(portStr string) error {
+	if portStr == "" {
+		return errors.New("port cannot be empty")
+	}
+	for _, digit := range portStr {
+		if digit < '0' || digit > '9' {
+			return errors.New("port must be numeric")
+		}
 	}
 
-	if parts[0] == "" {
-		return errors.New("IP address cannot be empty")
+	port, err := strconv.Atoi(portStr)
+	if err != nil {
+		return fmt.Errorf("port must be numeric: %w", err)
 	}
-
-	if err := validatePortString(parts[1]); err != nil {
-		return fmt.Errorf("invalid port: %w", err)
+	if port < 0 || port > 65535 {
+		return fmt.Errorf("port must be between 0 and 65535, got %d", port)
 	}
-
 	return nil
 }
 
