@@ -6,6 +6,7 @@ package amendment
 
 import (
 	"encoding/hex"
+	"slices"
 	"testing"
 )
 
@@ -145,6 +146,25 @@ func TestTableVoting(t *testing.T) {
 	}
 	if table.IsVetoed(FeatureAMM) {
 		t.Error("UpVote should clear any veto")
+	}
+}
+
+func TestTableDesired(t *testing.T) {
+	table := NewTable()
+	defaultYes := DefaultYesFeatures()[0].ID
+
+	if !slices.Contains(table.Desired(), defaultYes) {
+		t.Fatal("Desired omitted a default-yes amendment")
+	}
+
+	table.Veto(defaultYes)
+	if slices.Contains(table.Desired(), defaultYes) {
+		t.Fatal("Desired retained a vetoed amendment")
+	}
+
+	table.UpVote(FeatureAMM)
+	if !slices.Contains(table.Desired(), FeatureAMM) {
+		t.Fatal("Desired omitted an explicitly upvoted supported amendment")
 	}
 }
 

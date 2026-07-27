@@ -5,7 +5,9 @@
 package amendment
 
 import (
+	"bytes"
 	"maps"
+	"sort"
 	"sync"
 )
 
@@ -159,6 +161,27 @@ func (t *Table) IsUpVoted(featureID [32]byte) bool {
 	t.mu.RLock()
 	defer t.mu.RUnlock()
 	return t.upVoted[featureID]
+}
+
+// Desired returns the supported amendments this node currently votes to enable.
+func (t *Table) Desired() [][32]byte {
+	t.mu.RLock()
+	defer t.mu.RUnlock()
+
+	result := make([][32]byte, 0)
+	for _, feature := range AllFeatures() {
+		if feature.Supported != SupportedYes || t.vetoed[feature.ID] {
+			continue
+		}
+		if t.upVoted[feature.ID] ||
+			(feature.Vote == VoteDefaultYes && !feature.Retired) {
+			result = append(result, feature.ID)
+		}
+	}
+	sort.Slice(result, func(i, j int) bool {
+		return bytes.Compare(result[i][:], result[j][:]) < 0
+	})
+	return result
 }
 
 // HasUnsupportedEnabled returns the sticky unsupportedEnabled flag: true once an

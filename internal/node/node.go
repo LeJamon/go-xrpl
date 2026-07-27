@@ -133,7 +133,7 @@ func isFullGitHash(value string) bool {
 // Run assembles and starts every node subsystem from the parsed config, then
 // blocks until a terminating signal or fatal error. It is the composition root
 // extracted from the CLI so flag parsing and node wiring stay separable.
-func Run(appConfig *config.Config, configPath string, standalone bool, rootLogger, serverLog xrpllog.Logger) error {
+func Run(appConfig *config.Config, configPath string, standalone bool, startup service.StartupConfig, rootLogger, serverLog xrpllog.Logger) error {
 	if err := validateTrustedValidatorConfig(appConfig, standalone); err != nil {
 		return err
 	}
@@ -241,6 +241,7 @@ func Run(appConfig *config.Config, configPath string, standalone bool, rootLogge
 		Logger:       rootLogger,
 		Table:        amendmentTable,
 		TxQ:          &txqCfg,
+		Startup:      startup,
 	}
 	cfg.GenesisConfig = genesisConfig
 	configuredFees := configuredLedgerLoadFees(appConfig)

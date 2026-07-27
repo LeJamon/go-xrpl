@@ -33,6 +33,7 @@ fetch_depth = "full"             # integer, "full", or "none" (values < 10 are c
 # Network: "main", "testnet", "devnet", or integer
 network_id = "main"
 
+# Peer replay capability only; unrelated to the server's startup --replay mode.
 ledger_replay = 0    # 0 = disabled, 1 = enabled
 
 # Database path (SQLite location)
@@ -141,6 +142,9 @@ cache_mb = 256                   # Pebble block cache in MiB (0 = default 256)
 open_files = 500                # steady-state Pebble open-file soft limit (0 = default 500)
 cache_size = 16384               # decoded node-object cache entries (0 = node_size profile)
 cache_age = 5                    # decoded node-object cache age in minutes (0 = node_size profile)
+# With no startup flag on a networked node, try the newest local ledger first.
+# Also permits failed explicit --load, --ledger, --ledgerfile, or --replay
+# startup to fall back to genesis (standalone) or network acquisition.
 fast_load = false
 earliest_seq = 32570
 delete_batch = 100
