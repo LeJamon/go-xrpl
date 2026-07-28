@@ -543,8 +543,8 @@ func (s *Service) Start() error {
 			s.validatedLedger = selection.ledger
 			s.validatedSignTime = selection.ledger.CloseTime()
 		}
-		s.needsInitialSync = selection.needsInitialSync
 	}
+	s.needsInitialSync = selection.needsInitialSync
 	s.startupReplay = selection.replay
 
 	openLedger, err := ledger.NewOpen(s.closedLedger, time.Now())

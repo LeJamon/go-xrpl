@@ -5,13 +5,24 @@ import (
 	"time"
 
 	"github.com/LeJamon/go-xrpl/crypto/sha512half"
+	"github.com/LeJamon/go-xrpl/internal/consensus"
 	"github.com/LeJamon/go-xrpl/internal/ledger/header"
 	"github.com/LeJamon/go-xrpl/internal/ledger/inbound"
+	"github.com/LeJamon/go-xrpl/internal/ledger/service"
+	"github.com/LeJamon/go-xrpl/internal/peermanagement"
 	"github.com/LeJamon/go-xrpl/internal/peermanagement/message"
 	"github.com/LeJamon/go-xrpl/protocol"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+func makeProvisionalWarmRouter(t *testing.T) (*Router, *recordingSender, *service.Service) {
+	t.Helper()
+	svc := adg_newNonStandaloneService(t)
+	t.Cleanup(svc.Stop)
+	a, sender := newRecordingAdaptor(t, svc)
+	return NewRouter(nil, a, make(chan *peermanagement.InboundMessage, 1)), sender, svc
+}
 
 // Issue #1161 keep-up: catch-up WALKS FORWARD one ledger at a time via
 // replay-delta against the held parent when behind on the SAME branch, rather
@@ -156,6 +167,68 @@ func TestRouter_ForwardDeltaStep_FarGapJumpAdopts(t *testing.T) {
 	legacy := rs.legacyCalls()
 	require.Len(t, legacy, 1)
 	assert.Equal(t, tipSeq, legacy[0].seq)
+}
+
+func TestRouter_ProvisionalWarmStartRecentBranchReplaysForward(t *testing.T) {
+	r, sender, svc := makeProvisionalWarmRouter(t)
+	require.True(t, svc.NeedsInitialSync())
+	require.Equal(t, consensus.OpModeDisconnected, r.adaptor.GetOperatingMode())
+	closed := svc.GetClosedLedger()
+	require.NotNil(t, closed)
+
+	var nextHash [32]byte
+	nextHash[0] = 0xB1
+	r.recordSeqHash(closed.Sequence()+1, nextHash, closed.Hash(), true)
+	tipSeq := closed.Sequence() + 2
+	trackCatchupPeer(r, 7, tipSeq)
+	r.recordCatchupTarget(tipSeq, [32]byte{0xF0}, 7)
+
+	r.armCatchupTowardTarget()
+
+	replay := sender.replayCalls()
+	require.Len(t, replay, 1)
+	assert.Equal(t, nextHash, replay[0].hash)
+	assert.Empty(t, sender.legacyCalls())
+	assert.Equal(t, closed.Hash(), svc.GetClosedLedger().Hash())
+	assert.True(t, svc.NeedsInitialSync())
+}
+
+func TestRouter_ProvisionalWarmStartFarGapJumpAdoptsAcrossBranches(t *testing.T) {
+	for _, tc := range []struct {
+		name       string
+		parentHash [32]byte
+	}{
+		{name: "preferred branch"},
+		{name: "divergent branch", parentHash: [32]byte{0xD1}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			r, sender, svc := makeProvisionalWarmRouter(t)
+			require.True(t, svc.NeedsInitialSync())
+			require.Equal(t, consensus.OpModeDisconnected, r.adaptor.GetOperatingMode())
+			closed := svc.GetClosedLedger()
+			require.NotNil(t, closed)
+
+			parentHash := tc.parentHash
+			if parentHash == ([32]byte{}) {
+				parentHash = closed.Hash()
+			}
+			r.recordSeqHash(closed.Sequence()+1, [32]byte{0xB1}, parentHash, true)
+			tipSeq := closed.Sequence() + maxForwardDeltaGap + 1
+			tipHash := [32]byte{0xF0}
+			trackCatchupPeer(r, 7, tipSeq)
+			r.recordCatchupTarget(tipSeq, tipHash, 7)
+
+			r.armCatchupTowardTarget()
+
+			assert.Empty(t, sender.replayCalls())
+			legacy := sender.legacyCalls()
+			require.Len(t, legacy, 1)
+			assert.Equal(t, tipSeq, legacy[0].seq)
+			assert.Equal(t, tipHash, legacy[0].hash)
+			assert.Equal(t, closed.Hash(), svc.GetClosedLedger().Hash())
+			assert.True(t, svc.NeedsInitialSync())
+		})
+	}
 }
 
 // A completed forward fetch becomes available to consensus without advancing

@@ -332,8 +332,16 @@ func (a *Adaptor) OnLedgerFullyValidated(ledgerID consensus.LedgerID, seq uint32
 		a.onLedgerFullyValidated(seq, hash)
 	}
 	if a.ledgerService.NeedsInitialSync() {
-		if _, err := a.ledgerService.GetLedgerByHash(hash); err != nil {
+		held, err := a.ledgerService.GetLedgerByHash(hash)
+		if err != nil {
 			a.sender.CheckTracking(seq)
+		} else if closed := a.ledgerService.GetClosedLedger(); held != nil && closed != nil &&
+			held.Sequence() == seq && held.Sequence() == closed.Sequence() && held.Hash() == closed.Hash() {
+			if err := a.ledgerService.SwitchToPreferredLedger(closed); err != nil {
+				a.logger.Warn("failed to confirm current network ledger", "seq", seq, "error", err)
+			} else if a.GetOperatingMode() < consensus.OpModeTracking {
+				a.SetOperatingMode(consensus.OpModeTracking)
+			}
 		}
 	}
 	a.ledgerService.SetValidatedLedgerAt(seq, hash, a.validatedSignTime(ledgerID, seq))

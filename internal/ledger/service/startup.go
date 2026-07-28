@@ -74,7 +74,12 @@ func (s *Service) selectStartup(ctx context.Context, initial *ledger.Ledger) (st
 		if s.config.FastLoad {
 			loaded, err := s.loadLatestLedger(ctx)
 			if err == nil && loaded != nil {
-				return startupSelection{ledger: loaded, loaded: true, validate: true}, nil
+				return startupSelection{
+					ledger:           loaded,
+					loaded:           true,
+					validate:         true,
+					needsInitialSync: !s.config.Standalone,
+				}, nil
 			}
 			if err != nil {
 				s.logger.Warn("fast load failed; using initial ledger",
@@ -254,7 +259,6 @@ func (s *Service) installLoadedStartupLocked(loaded, genesisLedger *ledger.Ledge
 	}
 	s.putHistoryLocked(loaded)
 	s.collectTransactionResults(loaded, loaded.Sequence(), loaded.Hash())
-	s.needsInitialSync = false
 	loadedHash := loaded.Hash()
 	s.logger.Info("Loaded startup ledger", "sequence", loaded.Sequence(), "hash", fmt.Sprintf("%x", loadedHash[:8]))
 }

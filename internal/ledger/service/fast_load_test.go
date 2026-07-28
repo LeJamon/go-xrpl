@@ -320,7 +320,7 @@ func TestService_FastLoadRestoresPersistedValidatedLedger(t *testing.T) {
 	require.NoError(t, second.Start())
 	t.Cleanup(second.Stop)
 
-	require.False(t, second.NeedsInitialSync())
+	require.True(t, second.NeedsInitialSync())
 	require.Equal(t, seq, second.GetValidatedLedgerIndex())
 	require.Equal(t, wantHash, second.GetValidatedLedger().Hash())
 	second.SetValidatedLedgerAgeClock(func() time.Time {

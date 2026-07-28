@@ -378,6 +378,8 @@ func (l *Ledger) OnTimer(now time.Time) TimerAction {
 		return TimerNone
 	}
 
+	requestPeerCount := len(l.requestPeers)
+
 	// Reset the per-interval de-dup set, pacing re-requests at ~once/interval.
 	// Mirrors rippled onTimer's mRecentNodes.clear() (InboundLedger.cpp:368).
 	clear(l.recentNodes)
@@ -398,8 +400,17 @@ func (l *Ledger) OnTimer(now time.Time) TimerAction {
 			"seq", l.seq,
 			"hash", fmt.Sprintf("%x", l.hash[:8]),
 			"timeouts", l.timeouts,
+			"phase", l.snapshotLocked().Phase(),
 			"have_state", l.haveState,
 			"have_tx", l.haveTx,
+			"peers", len(l.peers),
+			"request_peers", requestPeerCount,
+			"needed_state", len(l.neededState),
+			"needed_tx", len(l.neededTx),
+			"state_received_total", l.stateRecv,
+			"state_useful_total", l.stateUseful,
+			"tx_received_total", l.txRecv,
+			"tx_useful_total", l.txUseful,
 			"reject_count", l.rejectCount,
 			"last_reject", l.lastRejectErr,
 		)
@@ -413,8 +424,17 @@ func (l *Ledger) OnTimer(now time.Time) TimerAction {
 		"seq", l.seq,
 		"hash", fmt.Sprintf("%x", l.hash[:8]),
 		"timeouts", l.timeouts,
+		"phase", l.snapshotLocked().Phase(),
 		"have_state", l.haveState,
 		"have_tx", l.haveTx,
+		"peers", len(l.peers),
+		"request_peers", requestPeerCount,
+		"needed_state", len(l.neededState),
+		"needed_tx", len(l.neededTx),
+		"state_received_total", l.stateRecv,
+		"state_useful_total", l.stateUseful,
+		"tx_received_total", l.txRecv,
+		"tx_useful_total", l.txUseful,
 		"reject_count", l.rejectCount,
 		"last_reject", l.lastRejectErr,
 	)
@@ -1351,6 +1371,24 @@ type Snapshot struct {
 	TxUseful         uint64
 	NeededState      [][32]byte // hashes of up to missingNodeBatch missing state nodes
 	NeededTx         [][32]byte // hashes of up to missingNodeBatch missing tx nodes
+}
+
+// Phase reports the current acquisition traversal phase.
+func (s Snapshot) Phase() string {
+	switch {
+	case s.Failed:
+		return "failed"
+	case s.Complete:
+		return "complete"
+	case !s.HaveHeader:
+		return "base"
+	case !s.HaveState:
+		return "state"
+	case !s.HaveTransactions:
+		return "transactions"
+	default:
+		return "complete"
+	}
 }
 
 // Snapshot returns the acquisition fields and the most recently scanned

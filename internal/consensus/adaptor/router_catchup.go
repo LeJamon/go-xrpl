@@ -2033,8 +2033,24 @@ func (r *Router) handleLedgerData(msg *peermanagement.InboundMessage) {
 		r.adaptor.IncPeerBadData(uint64(msg.PeerID), "ledger-data-error")
 		return
 	}
+	if ld.Error != message.ReplyErrorNone {
+		r.logger.Warn("inbound ledger: peer returned reply error",
+			"peer", msg.PeerID,
+			"seq", ld.LedgerSeq,
+			"info_type", ld.InfoType,
+			"reply_error", ld.Error,
+			"nodes", len(ld.Nodes),
+		)
+	}
 	if err := inbound.ValidateReplyNodeCount(ld.Nodes); err != nil {
-		r.logger.Warn("invalid ledger_data node count", "error", err, "peer", msg.PeerID)
+		r.logger.Warn("invalid ledger_data node count",
+			"error", err,
+			"peer", msg.PeerID,
+			"seq", ld.LedgerSeq,
+			"info_type", ld.InfoType,
+			"reply_error", ld.Error,
+			"nodes", len(ld.Nodes),
+		)
 		r.adaptor.IncPeerBadData(uint64(msg.PeerID), "ledger-data-count")
 		return
 	}
