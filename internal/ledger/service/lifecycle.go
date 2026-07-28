@@ -433,15 +433,21 @@ func (s *Service) SwitchToPreferredLedger(parent *ledger.Ledger) error {
 	}
 
 	parentHash := parent.Hash()
+	replacingProvisional := false
 	if s.validatedLedger != nil {
 		validatedSeq := s.validatedLedger.Sequence()
-		if parent.Sequence() < validatedSeq ||
-			(parent.Sequence() == validatedSeq && parentHash != s.validatedLedger.Hash()) {
+		if parent.Sequence() < validatedSeq {
 			return ErrPreferredChainSwitch
+		}
+		if parent.Sequence() == validatedSeq && parentHash != s.validatedLedger.Hash() {
+			if s.networkLedgerState != networkLedgerFastLoadProvisional {
+				return ErrPreferredChainSwitch
+			}
+			replacingProvisional = true
 		}
 	}
 	if parent.Sequence() == s.closedLedger.Sequence() && parentHash == s.closedLedger.Hash() {
-		s.needsInitialSync = false
+		s.completeInitialSyncLocked()
 		return nil
 	}
 
@@ -450,14 +456,36 @@ func (s *Service) SwitchToPreferredLedger(parent *ledger.Ledger) error {
 		return fmt.Errorf("failed to create open ledger after preferred chain switch: %w", err)
 	}
 
+	promotedByDrain := false
+	if replacingProvisional {
+		promotedByDrain = s.drainPendingLedgerValidationLocked(parent.Sequence(), parent)
+		if !promotedByDrain {
+			return ErrPreferredChainSwitch
+		}
+	}
+
 	s.fixMismatchLocked(parent)
 	s.purgeHistoryAfterPreferredSwitchLocked(parent)
 	s.putHistoryLocked(parent)
 	s.cachePersistedLedgerLocked(parent)
 	s.closedLedger = parent
 	s.openLedger = newOpen
-	s.needsInitialSync = false
-	promotedByDrain := s.drainPendingLedgerValidationLocked(parent.Sequence(), parent)
+	if replacingProvisional {
+		s.ledgerEventMu.Lock()
+		s.ledgerEventHaveFrontier = parent.Sequence() != 0
+		if s.ledgerEventHaveFrontier {
+			s.ledgerEventFrontierSeq = parent.Sequence() - 1
+			s.ledgerEventFrontierHash = parent.ParentHash()
+		}
+		for seq := range s.ledgerEventCandidates {
+			delete(s.ledgerEventCandidates, seq)
+		}
+		s.ledgerEventMu.Unlock()
+	}
+	s.completeInitialSyncLocked()
+	if !replacingProvisional {
+		promotedByDrain = s.drainPendingLedgerValidationLocked(parent.Sequence(), parent)
+	}
 	txResults := s.collectTransactionResults(parent, parent.Sequence(), parentHash)
 	if promotedByDrain {
 		s.enqueuePersist(parent)
@@ -765,7 +793,8 @@ func (s *Service) SetValidatedLedgerAt(seq uint32, expectedHash [32]byte, signTi
 			if s.validatedLedger != nil {
 				validatedSeq = s.validatedLedger.Sequence()
 			}
-			if seq > validatedSeq {
+			if seq > validatedSeq ||
+				(s.networkLedgerState == networkLedgerFastLoadProvisional && seq == validatedSeq) {
 				handler = s.onPendingValidationStashed
 				fire = true
 			}
@@ -777,6 +806,7 @@ func (s *Service) SetValidatedLedgerAt(seq uint32, expectedHash [32]byte, signTi
 		return
 	}
 	_ = l.SetValidated()
+	s.confirmFastLoadLocked(seq, expectedHash)
 	// The validated tip is monotonic (rippled LedgerMaster.cpp:948): a late
 	// quorum for a below-tip seq marks it validated but must not rewind the
 	// pointer — same rule as drainPendingLedgerValidationLocked.
@@ -791,6 +821,9 @@ func (s *Service) SetValidatedLedgerAt(seq uint32, expectedHash [32]byte, signTi
 		signTime = l.CloseTime()
 	}
 	s.validatedSignTime = signTime
+	if s.networkLedgerState == networkLedgerFastLoadProvisional {
+		s.networkLedgerState = networkLedgerReady
+	}
 	s.evictOldHistoryLocked(seq)
 
 	// Sweep the held local pool against the just-validated ledger (not every
@@ -936,11 +969,34 @@ func (s *Service) cascadeHeldAdoptionsLocked(ctx context.Context, adopted *ledge
 	}
 }
 
-// NeedsInitialSync returns true if the node hasn't yet adopted a ledger from peers.
+func (s *Service) completeInitialSyncLocked() {
+	if s.networkLedgerState == networkLedgerNeeded {
+		s.networkLedgerState = networkLedgerReady
+	}
+}
+
+func (s *Service) confirmFastLoadLocked(seq uint32, hash [32]byte) {
+	if s.networkLedgerState != networkLedgerFastLoadProvisional || s.validatedLedger == nil {
+		return
+	}
+	if seq == s.validatedLedger.Sequence() && hash == s.validatedLedger.Hash() {
+		s.networkLedgerState = networkLedgerReady
+	}
+}
+
+// NeedsInitialSync reports whether explicit network-ledger acquisition is active.
 func (s *Service) NeedsInitialSync() bool {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	return s.needsInitialSync
+	return s.networkLedgerState == networkLedgerNeeded
+}
+
+// IsFastLoadProvisional reports whether FastLoad startup still awaits trusted
+// network confirmation or replacement.
+func (s *Service) IsFastLoadProvisional() bool {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.networkLedgerState == networkLedgerFastLoadProvisional
 }
 
 // StoreLedgerWithState makes a fully-fetched ledger available by hash without
@@ -957,7 +1013,7 @@ func (s *Service) StoreLedgerWithState(ctx context.Context, h *header.LedgerHead
 func (s *Service) BootstrapLedgerWithState(ctx context.Context, h *header.LedgerHeader, stateMap *shamap.SHAMap, txMap *shamap.SHAMap) (bool, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	initialCandidate := s.needsInitialSync
+	initialCandidate := s.networkLedgerState != networkLedgerReady
 	return initialCandidate, s.storeLedgerWithStateLocked(ctx, h, stateMap, txMap)
 }
 
@@ -1117,7 +1173,7 @@ func (s *Service) adoptLedgerWithStateLocked(
 		s.closedLedger = canonical
 		advanced = true
 	}
-	s.needsInitialSync = false
+	s.completeInitialSyncLocked()
 
 	// Install skipped (validated entry already at this seq, different hash):
 	// persist/drain/collect/hooks already ran for the canonical entry.

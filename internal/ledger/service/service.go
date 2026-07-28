@@ -107,6 +107,21 @@ func DefaultConfig() Config {
 	}
 }
 
+type networkLedgerState uint8
+
+const (
+	networkLedgerReady networkLedgerState = iota
+	networkLedgerNeeded
+	networkLedgerFastLoadProvisional
+)
+
+func networkLedgerStateFor(enabled bool, state networkLedgerState) networkLedgerState {
+	if enabled {
+		return state
+	}
+	return networkLedgerReady
+}
+
 // Service manages the ledger lifecycle
 type Service struct {
 	// mu guards the Service's mutable ledger state. Lock ordering: a path
@@ -211,9 +226,7 @@ type Service struct {
 	// hooks provides event callbacks for external subscribers
 	hooks *EventHooks
 
-	// needsInitialSync is true when the node is in consensus mode
-	// and hasn't yet adopted a ledger from peers.
-	needsInitialSync bool
+	networkLedgerState networkLedgerState
 
 	// startupReplay is the one-shot replay staged for the first close and is
 	// guarded by mu together with the closed/open ledger frontier.
@@ -544,7 +557,7 @@ func (s *Service) Start() error {
 			s.validatedSignTime = selection.ledger.CloseTime()
 		}
 	}
-	s.needsInitialSync = selection.needsInitialSync
+	s.networkLedgerState = selection.networkState
 	s.startupReplay = selection.replay
 
 	openLedger, err := ledger.NewOpen(s.closedLedger, time.Now())
@@ -566,7 +579,8 @@ func (s *Service) Start() error {
 	s.logger.Info("Ledger service started",
 		"standalone", s.config.Standalone,
 		"openLedger", s.openLedger.Sequence(),
-		"needsInitialSync", s.needsInitialSync,
+		"needsInitialSync", s.networkLedgerState == networkLedgerNeeded,
+		"fastLoadProvisional", s.networkLedgerState == networkLedgerFastLoadProvisional,
 	)
 	s.startNodeStoreSweeper()
 
@@ -1491,7 +1505,7 @@ func (s *Service) GetServerInfo() ServerInfo {
 	info := ServerInfo{
 		Standalone:         s.config.Standalone,
 		ServerState:        "full",
-		NeedsNetworkLedger: s.needsInitialSync,
+		NeedsNetworkLedger: s.networkLedgerState == networkLedgerNeeded,
 		NetworkID:          s.config.NetworkID,
 		HavePublished:      s.havePublished,
 		PublishedLedgerSeq: s.publishedLedgerSeq,

@@ -217,8 +217,33 @@ func (e *Engine) canSwitchToLedgerLocked(candidate consensus.Ledger) bool {
 	if candidate == nil {
 		return false
 	}
-	return e.canBeCurrentLocked(candidate) &&
-		e.isBuildCompatibleWithValidatedLocked(candidate)
+	if !e.canBeCurrentLocked(candidate) {
+		return false
+	}
+	if e.isBuildCompatibleWithValidatedLocked(candidate) {
+		return true
+	}
+	return e.canReplaceFastLoadProvisionalLocked(candidate)
+}
+
+type fastLoadProvisionalReporter interface {
+	IsFastLoadProvisional() bool
+}
+
+func (e *Engine) canReplaceFastLoadProvisionalLocked(candidate consensus.Ledger) bool {
+	reporter, ok := e.adaptor.(fastLoadProvisionalReporter)
+	if !ok || !reporter.IsFastLoadProvisional() {
+		return false
+	}
+	validatedID := e.adaptor.GetValidatedLedgerHash()
+	if validatedID == (consensus.LedgerID{}) || candidate.ID() == validatedID {
+		return false
+	}
+	validated, err := e.adaptor.GetLedger(validatedID)
+	if err != nil || validated == nil || candidate.Seq() != validated.Seq() {
+		return false
+	}
+	return e.isQuorumValidatedCandidateLocked(candidate)
 }
 
 // canBeCurrentLocked mirrors rippled LedgerMaster::canBeCurrent

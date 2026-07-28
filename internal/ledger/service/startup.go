@@ -56,11 +56,11 @@ func (c StartupConfig) validate() error {
 }
 
 type startupSelection struct {
-	ledger           *ledger.Ledger
-	replay           *inbound.ReplayDelta
-	loaded           bool
-	validate         bool
-	needsInitialSync bool
+	ledger       *ledger.Ledger
+	replay       *inbound.ReplayDelta
+	loaded       bool
+	validate     bool
+	networkState networkLedgerState
 }
 
 func (s *Service) selectStartup(ctx context.Context, initial *ledger.Ledger) (startupSelection, error) {
@@ -75,10 +75,13 @@ func (s *Service) selectStartup(ctx context.Context, initial *ledger.Ledger) (st
 			loaded, err := s.loadLatestLedger(ctx)
 			if err == nil && loaded != nil {
 				return startupSelection{
-					ledger:           loaded,
-					loaded:           true,
-					validate:         true,
-					needsInitialSync: !s.config.Standalone,
+					ledger:   loaded,
+					loaded:   true,
+					validate: true,
+					networkState: networkLedgerStateFor(
+						!s.config.Standalone,
+						networkLedgerFastLoadProvisional,
+					),
 				}, nil
 			}
 			if err != nil {
@@ -88,18 +91,25 @@ func (s *Service) selectStartup(ctx context.Context, initial *ledger.Ledger) (st
 				)
 			}
 		}
+		fallbackState := networkLedgerNeeded
+		if s.config.FastLoad {
+			fallbackState = networkLedgerFastLoadProvisional
+		}
 		return startupSelection{
-			ledger:           initial,
-			validate:         s.config.Standalone,
-			needsInitialSync: !s.config.Standalone,
+			ledger:   initial,
+			validate: s.config.Standalone,
+			networkState: networkLedgerStateFor(
+				!s.config.Standalone,
+				fallbackState,
+			),
 		}, nil
 	case StartupFresh:
 		return startupSelection{ledger: initial, validate: s.config.Standalone}, nil
 	case StartupNetwork:
 		return startupSelection{
-			ledger:           initial,
-			validate:         s.config.Standalone,
-			needsInitialSync: !s.config.Standalone,
+			ledger:       initial,
+			validate:     s.config.Standalone,
+			networkState: networkLedgerStateFor(!s.config.Standalone, networkLedgerNeeded),
 		}, nil
 	}
 
@@ -118,9 +128,12 @@ func (s *Service) selectStartup(ctx context.Context, initial *ledger.Ledger) (st
 		"err", err,
 	)
 	return startupSelection{
-		ledger:           initial,
-		validate:         s.config.Standalone,
-		needsInitialSync: !s.config.Standalone,
+		ledger:   initial,
+		validate: s.config.Standalone,
+		networkState: networkLedgerStateFor(
+			!s.config.Standalone,
+			networkLedgerFastLoadProvisional,
+		),
 	}, nil
 }
 

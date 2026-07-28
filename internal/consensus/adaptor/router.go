@@ -231,6 +231,7 @@ type Router struct {
 	catchupMu       sync.Mutex
 	catchup         catchupTarget
 	catchupFailures map[[32]byte]time.Time
+	linkageWait     catchupLinkageWait
 
 	acquisitionMu     sync.Mutex
 	consensusRecovery consensusRecovery
@@ -262,6 +263,13 @@ type catchupTarget struct {
 	hash   [32]byte
 	peerID uint64
 	source catchupTargetSource
+}
+
+type catchupLinkageWait struct {
+	closed uint32
+	seq    uint32
+	hash   [32]byte
+	since  time.Time
 }
 
 type catchupTargetSource uint8
@@ -531,6 +539,7 @@ func (r *Router) StopAcquisitions() (legacy, replay int) {
 	r.catchupMu.Lock()
 	r.catchup = catchupTarget{}
 	r.catchupFailures = nil
+	r.linkageWait = catchupLinkageWait{}
 	r.catchupMu.Unlock()
 	r.retireLegacyAcquisitions(legacyLedgers)
 	return legacy, replay

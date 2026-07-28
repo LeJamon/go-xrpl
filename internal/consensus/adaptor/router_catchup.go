@@ -27,12 +27,15 @@ func (r *Router) handleStatusChange(msg *peermanagement.InboundMessage) {
 		return
 	}
 
+	svc := r.adaptor.LedgerService()
+	fastLoadProvisional := svc != nil && svc.IsFastLoadProvisional()
 	r.logger.Info("peer status change",
 		"peer", msg.PeerID,
 		"status", sc.NewStatus,
 		"event", sc.NewEvent,
 		"ledger_seq", sc.LedgerSeq,
 		"needs_sync", r.adaptor.NeedsInitialSync(),
+		"fast_load_provisional", fastLoadProvisional,
 	)
 
 	if sc.NewEvent == message.NodeEventLostSync {
@@ -79,10 +82,12 @@ func (r *Router) handleStatusChange(msg *peermanagement.InboundMessage) {
 		// when no proposal has (yet) arrived from this peer.
 		r.adaptor.UpdatePeerLCL(uint64(msg.PeerID), consensus.LedgerID(peerHash))
 
-		// During initial sync, fetch the full ledger from the peer.
-		// Don't adopt with synthetic headers — wait for real state data.
-		if r.adaptor.NeedsInitialSync() && sc.LedgerSeq > 1 {
-			if r.peerLedgerIsPreferred(peerHash) {
+		// During network startup or fast-load confirmation, acquire the
+		// peer-preferred ledger. Don't adopt with synthetic headers — wait for
+		// real state data.
+		if r.needsStartupLedgerConfirmation() && sc.LedgerSeq > 1 {
+			if r.peerLedgerIsPreferred(peerHash) ||
+				r.isValidationCatchupTarget(sc.LedgerSeq, peerHash) {
 				r.ensureCatchupAcquisition(sc.LedgerSeq, peerHash, uint64(msg.PeerID))
 			}
 			return
@@ -145,6 +150,11 @@ func (r *Router) peerLedgerIsPreferred(hash [32]byte) bool {
 	return preferred != closed.ID() && preferred == consensus.LedgerID(hash)
 }
 
+func (r *Router) needsStartupLedgerConfirmation() bool {
+	svc := r.adaptor.LedgerService()
+	return svc != nil && (svc.NeedsInitialSync() || svc.IsFastLoadProvisional())
+}
+
 // maxConcurrentCatchup bounds the hash-keyed current-ledger acquisition set.
 // Separate target hashes share the NodeStore and remain independently useful
 // when the preferred ledger moves during a long state walk.
@@ -161,6 +171,8 @@ const maxConcurrentSpeculativeCatchup = maxConcurrentCatchup - 1
 // or far-behind start jumps straight to the validated tip. Mirrors rippled
 // reserving InboundLedger full-state acquisition for the cold/forked case.
 const maxForwardDeltaGap = 128
+
+const catchupLinkageGracePeriod = 2 * time.Second
 
 // seqHashRetain bounds the seqHash table to a trailing window of sequences so a
 // long-running node never grows it unbounded.
@@ -300,6 +312,14 @@ func (r *Router) recordValidationCatchupTarget(
 	}
 }
 
+func (r *Router) isValidationCatchupTarget(seq uint32, hash [32]byte) bool {
+	r.catchupMu.Lock()
+	defer r.catchupMu.Unlock()
+	return r.catchup.source != catchupSourcePeer &&
+		r.catchup.seq == seq &&
+		r.catchup.hash == hash
+}
+
 func (r *Router) invalidateCatchupPeer(peerID uint64) {
 	r.catchupMu.Lock()
 	defer r.catchupMu.Unlock()
@@ -391,7 +411,7 @@ func (r *Router) armPendingConsensusLedger() bool {
 		svc := r.adaptor.LedgerService()
 		if svc != nil {
 			if held, err := svc.GetLedgerByHash(hash); err == nil && held != nil {
-				if svc.NeedsInitialSync() {
+				if svc.NeedsInitialSync() || svc.IsFastLoadProvisional() {
 					accepted, rearm := r.tryInitialLedgerSwitch(held.Sequence(), held.Hash())
 					if accepted || !rearm {
 						return true
@@ -584,7 +604,9 @@ func (r *Router) armCatchupTowardTargetWithPeer(peerHint uint64) {
 		r.startLedgerAcquisition(tSeq, tHash, peer)
 		return
 	}
-	if !svc.NeedsInitialSync() && !aheadByMoreThan(tSeq, closed, 1) {
+	if target.source == catchupSourcePeer &&
+		!svc.NeedsInitialSync() && !svc.IsFastLoadProvisional() &&
+		!aheadByMoreThan(tSeq, closed, 1) {
 		return
 	}
 
@@ -599,6 +621,11 @@ func (r *Router) armCatchupTowardTargetWithPeer(peerHint uint64) {
 		r.startLedgerAcquisition(seq, hash, peer)
 		return
 	}
+	if svc.IsFastLoadProvisional() && r.forwardLinkagePending(svc, closed, tSeq) {
+		if r.withinCatchupLinkageGrace(closed, tSeq, tHash, time.Now()) {
+			return
+		}
+	}
 	peer, found := r.resolveAcquisitionPeer(tSeq, peerHint)
 	if !found {
 		return
@@ -609,6 +636,47 @@ func (r *Router) armCatchupTowardTargetWithPeer(peerHint uint64) {
 	r.startLedgerAcquisition(tSeq, tHash, peer)
 }
 
+func (r *Router) withinCatchupLinkageGrace(
+	closed, seq uint32,
+	hash [32]byte,
+	now time.Time,
+) bool {
+	r.catchupMu.Lock()
+	defer r.catchupMu.Unlock()
+	if r.linkageWait.closed != closed || r.linkageWait.since.IsZero() {
+		r.linkageWait = catchupLinkageWait{
+			closed: closed,
+			seq:    seq,
+			hash:   hash,
+			since:  now,
+		}
+		return true
+	}
+	r.linkageWait.seq = seq
+	r.linkageWait.hash = hash
+	return now.Sub(r.linkageWait.since) < catchupLinkageGracePeriod
+}
+
+func (r *Router) forwardLinkagePending(svc *service.Service, closed, tipSeq uint32) bool {
+	if tipSeq <= closed+1 || tipSeq-closed > maxForwardDeltaGap {
+		return false
+	}
+	next, known := r.lookupSeqHash(closed + 1)
+	if !known || next.hash == ([32]byte{}) {
+		tip, tipKnown := r.lookupSeqHash(tipSeq)
+		return !tipKnown || !tip.haveParent
+	}
+	closedLedger := svc.GetClosedLedger()
+	if closedLedger == nil {
+		return true
+	}
+	if next.haveParent {
+		return false
+	}
+	current, known := r.lookupSeqHash(closed)
+	return !known || current.hash == ([32]byte{})
+}
+
 // forwardDeltaStep returns the (seq, hash) for a forward one-ledger step
 // against our held closed ledger when all hold, else ok=false (deferring to
 // jump-adopt):
@@ -616,9 +684,10 @@ func (r *Router) armCatchupTowardTargetWithPeer(peerHint uint64) {
 //   - gap to tip within maxForwardDeltaGap;
 //   - a known network hash for closed+1; and
 //   - closed+1 descends from our closed ledger (same branch) — either closed+1's
-//     recorded parentHash equals our closed hash, or, when only a validation
-//     populated closed+1, the recorded hash for our closed seq equals it. The
-//     parent of closed+1 IS the ledger at our closed seq, so these are equivalent.
+//     recorded parentHash equals our closed hash, or the recorded hash for our
+//     closed seq equals it. A provisional fast load may also probe a parentless
+//     closed+1 hash; replay verification rejects it before apply if its header
+//     names a different parent.
 func (r *Router) forwardDeltaStep(svc *service.Service, closed, tipSeq uint32) (seq uint32, hash [32]byte, ok bool) {
 	if tipSeq-closed > maxForwardDeltaGap {
 		return 0, [32]byte{}, false
@@ -637,6 +706,8 @@ func (r *Router) forwardDeltaStep(svc *service.Service, closed, tipSeq uint32) (
 	sameBranch := false
 	if entry.haveParent {
 		sameBranch = entry.parentHash == closedHash
+	} else if svc.IsFastLoadProvisional() {
+		sameBranch = true
 	} else if cEntry, okC := r.lookupSeqHash(closed); okC && cEntry.hash != ([32]byte{}) {
 		sameBranch = cEntry.hash == closedHash
 	}
@@ -683,15 +754,6 @@ func (r *Router) ensureCatchupAcquisitionWithPriority(
 		r.recordCatchupTarget(seq, hash, peerID)
 	} else {
 		r.recordValidationCatchupTarget(seq, hash, peerID, source)
-		if r.isBuildingLedger(seq) {
-			return
-		}
-		if il := r.fetchTracker.Find(hash); il != nil && il.Reason() == inbound.ReasonConsensus {
-			r.refreshCatchupAcquisitionPeer(il, peerID)
-			return
-		}
-		r.startLedgerAcquisition(seq, hash, peerID)
-		return
 	}
 	if il := r.fetchTracker.Find(hash); il != nil && il.Reason() == inbound.ReasonConsensus {
 		r.refreshCatchupAcquisitionPeer(il, peerID)
@@ -1745,11 +1807,12 @@ func (r *Router) maybeAcquireFromValidation(v *consensus.Validation, originPeer 
 			"validated_seq", v.LedgerSeq,
 		)
 	}
-	// Gate on the VALIDATED tip, never the closed/built tip — same rationale
-	// as armValidationStashAcquisition: a node that ran its closed chain
-	// ahead would otherwise skip the acquire and stay stuck on the wrong
-	// chain.
-	if v.LedgerSeq <= svc.GetValidatedLedgerIndex() {
+	// Gate on the VALIDATED tip, never the closed/built tip. The equal-sequence
+	// exception retains the validating peer only while a fast-loaded ledger is
+	// provisional; promotion still requires quorum.
+	validated := svc.GetValidatedLedgerIndex()
+	if v.LedgerSeq < validated ||
+		(v.LedgerSeq == validated && !svc.IsFastLoadProvisional()) {
 		return
 	}
 	hash := [32]byte(v.LedgerID)
@@ -1798,20 +1861,20 @@ func (r *Router) armValidationStashAcquisition(seq uint32, hash [32]byte) {
 	if svc == nil {
 		return
 	}
-	// Skip only when seq is at or below the last *validated* ledger.
-	// Gating on the closed-ledger index instead silently swallowed
-	// recovery for a node that had run ahead on a private chain: when the
-	// validation tracker observed quorum on canonical seq=N with a
-	// different hash than our local seq=N, the acquire was skipped because
-	// closedSeq >> validatedSeq, leaving us stuck on the private chain
-	// forever.
-	if seq <= svc.GetValidatedLedgerIndex() {
+	// Ordinary validated history stays monotonic. The equal-sequence exception
+	// is limited to replacing a provisional fast-loaded ledger after quorum;
+	// gating on the closed-ledger index would also swallow recovery from a
+	// private chain whose closed frontier ran ahead of its validated frontier.
+	validated := svc.GetValidatedLedgerIndex()
+	if seq < validated ||
+		(seq == validated && !svc.IsFastLoadProvisional()) {
 		return
 	}
 	if held, err := svc.GetLedgerByHash(hash); err == nil && held != nil && held.Sequence() == seq {
 		r.acquisitionMu.Lock()
 		r.consensusRecovery.targetHash = hash
 		r.acquisitionMu.Unlock()
+		r.armConsensusCatchup()
 		return
 	}
 
@@ -1861,7 +1924,7 @@ func (r *Router) armValidationStashAcquisition(seq uint32, hash [32]byte) {
 		"hash", fmt.Sprintf("%x", hash[:8]),
 		"preferred_peer", preferredPeerID,
 	)
-	r.startLedgerAcquisition(seq, hash, preferredPeerID)
+	r.armCatchupTowardTargetWithPeer(preferredPeerID)
 }
 
 type buildingLedgerEngine interface {

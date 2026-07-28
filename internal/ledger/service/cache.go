@@ -383,10 +383,16 @@ func (s *Service) drainPendingLedgerValidationLocked(seq uint32, adopted *ledger
 		}
 	}
 
+	replaceProvisional := s.networkLedgerState == networkLedgerFastLoadProvisional &&
+		s.validatedLedger != nil &&
+		seq == s.validatedLedger.Sequence() &&
+		adopted.Hash() != s.validatedLedger.Hash()
+
 	// The validated tip is monotonic (rippled LedgerMaster::setFullLedger,
 	// LedgerMaster.cpp:948): a below-tip match marks the ledger validated but
-	// must not rewind the pointer.
-	if s.validatedLedger != nil && seq <= s.validatedLedger.Sequence() {
+	// must not rewind the pointer. The sole same-height exception replaces a
+	// provisional fast-loaded ledger after the current trusted quorum recheck.
+	if s.validatedLedger != nil && seq <= s.validatedLedger.Sequence() && !replaceProvisional {
 		_ = adopted.SetValidated()
 		return false
 	}
@@ -397,6 +403,9 @@ func (s *Service) drainPendingLedgerValidationLocked(seq uint32, adopted *ledger
 	_ = adopted.SetValidated()
 	s.validatedLedger = adopted
 	s.validatedSignTime = signTime
+	if s.networkLedgerState == networkLedgerFastLoadProvisional {
+		s.networkLedgerState = networkLedgerReady
+	}
 	s.evictOldHistoryLocked(seq)
 	return true
 }
