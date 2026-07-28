@@ -741,11 +741,16 @@ func OverlayOptionsFromConfig(appCfg *config.Config) []peermanagement.Option {
 
 	// Max peers
 	maxPeers, maxInbound, maxOutbound := peerLimits(appCfg.PeersMax, hasPeerPort && appCfg.PeerPrivate == 0)
+	outboundRetainedBytes := max(
+		peermanagement.DefaultOutboundRetainedBytes,
+		peermanagement.MinimumOutboundRetainedBytes(maxPeers),
+	)
 	opts = append(opts,
 		peermanagement.WithMaxPeers(maxPeers),
 		peermanagement.WithMaxInbound(maxInbound),
 		peermanagement.WithMaxOutbound(maxOutbound),
 		peermanagement.WithIPLimit(appCfg.Overlay.IPLimit),
+		peermanagement.WithOutboundRetainedBytes(outboundRetainedBytes),
 	)
 
 	// Private mode

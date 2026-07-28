@@ -63,13 +63,16 @@ type Overlay struct {
 	ledgerSync *LedgerSyncHandler
 
 	// Peer management
-	peers          map[PeerID]*Peer
-	peerKeys       map[string]PeerID
-	peerEndpoints  map[string]PeerID
-	inboundIPs     map[string]int
-	pendingInbound map[PeerID]struct{}
-	peersMu        sync.RWMutex
-	nextID         atomic.Uint64
+	peers                          map[PeerID]*Peer
+	peerKeys                       map[string]PeerID
+	peerEndpoints                  map[string]PeerID
+	inboundIPs                     map[string]int
+	pendingInbound                 map[PeerID]struct{}
+	peersMu                        sync.RWMutex
+	nextID                         atomic.Uint64
+	outboundBudget                 *outboundBudget
+	outboundCriticalLocalFailures  atomic.Uint64
+	outboundCriticalSharedFailures atomic.Uint64
 
 	// peerWG joins every peer.Run goroutine launched by handleInbound
 	// or Connect. Stop blocks on it for deterministic shutdown.
@@ -91,14 +94,15 @@ type Overlay struct {
 	bootstrapLeases  map[PeerID]*bootstrapLease
 	bootstrapDiag    atomic.Uint64
 
-	// relayedIndex maps suppression-hash → set of peers known to have
-	// that message. Populated as we forward a validator message (each
-	// recipient joins the set) and queried by the consensus router on
-	// duplicate arrivals so ALL known-havers feed the reduce-relay
-	// slot — not just the peer that delivered the current duplicate.
+	// relayedIndex maps a suppression hash to peers that delivered the
+	// corresponding message to us. Outbound recipients are never recorded.
 	relayedIndex   map[[32]byte]*relayedEntry
 	relayedIndexMu sync.Mutex
 	clockForIndex  func() time.Time
+
+	fanoutLogMu         sync.Mutex
+	fanoutLogLast       time.Time
+	fanoutLogSuppressed int
 
 	// Coordination channels
 	//
@@ -861,6 +865,7 @@ func New(opts ...Option) (*Overlay, error) {
 		inboundSem:               make(chan struct{}, inboundCap),
 		outboundSem:              make(chan struct{}, outboundCap),
 		resourceManager:          resource.NewManager(nil, nil),
+		outboundBudget:           newOutboundBudget(cfg.OutboundRetainedBytes, cfg.MaxPeers),
 	}
 	if identity != nil {
 		o.localNodeIdentity = identity.PublicKey()
@@ -881,6 +886,22 @@ func New(opts ...Option) (*Overlay, error) {
 	o.ledgerSync.SetPeerLedgerHintLookup(o.PeersWithClosedLedger)
 
 	return o, nil
+}
+
+func (o *Overlay) attachOutboundBudget(peer *Peer) {
+	peer.outbound.setBudget(o.outboundBudget)
+	peer.outbound.setFatalObserver(func(err *SendQueueError) {
+		if err.Reason == SendQueueSharedByteLimit {
+			o.outboundCriticalSharedFailures.Add(1)
+			return
+		}
+		o.outboundCriticalLocalFailures.Add(1)
+	})
+}
+
+// OutboundCriticalQueueFailures reports peer-terminal admission failures.
+func (o *Overlay) OutboundCriticalQueueFailures() (local, shared uint64) {
+	return o.outboundCriticalLocalFailures.Load(), o.outboundCriticalSharedFailures.Load()
 }
 
 // chargeIgnoredSquelch is the Relay-layer callback fired when a peer

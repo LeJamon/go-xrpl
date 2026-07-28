@@ -87,3 +87,17 @@ func TestOverlay_Disconnect_NeverAddedPeer(t *testing.T) {
 	assert.Equal(t, 0, disconnected,
 		"closing a never-added peer must not emit a disconnect event")
 }
+
+func TestOverlayDisconnectPeerTerminatesLiveSession(t *testing.T) {
+	o, err := New(WithDataDir(t.TempDir()))
+	require.NoError(t, err)
+
+	peer := NewPeer(PeerID(19), Endpoint{Host: "127.0.0.1", Port: 51235}, true, o.identity, o.events)
+	peer.setState(PeerStateConnected)
+	require.NoError(t, o.addPeer(peer))
+
+	require.True(t, o.DisconnectPeer(peer.ID()))
+	require.Equal(t, PeerStateDisconnected, peer.State())
+	require.False(t, o.IsPeerConnected(peer.ID()))
+	require.False(t, o.DisconnectPeer(PeerID(20)))
+}

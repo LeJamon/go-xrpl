@@ -7,76 +7,128 @@ import (
 	"time"
 )
 
-// RelayedIndexTTL bounds how long a suppression-key → peers entry is
-// kept in the reverse index. Must match the consensus router's
-// messageDedupTTL so that a hash remains queryable for as long as the
-// router may observe duplicates for it. If the index expired before
-// the dedup window, a duplicate hitting router.handleProposal could
-// find no "peers that have the message" entry and under-feed the
-// slot — the exact bug B3 was filed to fix.
-const RelayedIndexTTL = 30 * time.Second
+// RelayedIndexTTL matches rippled's default HashRouter hold time.
+const RelayedIndexTTL = 300 * time.Second
 
-// RelayedIndexMaxEntries caps memory for the reverse index under
-// adversarial traffic. Sized to match the adaptor's dedup cap so both
-// age out together under sustained churn.
-const RelayedIndexMaxEntries = 4096
+// RelayedIndexMaxEntries caps inbound source tracking under adversarial
+// traffic.
+const RelayedIndexMaxEntries = 65_536
 
-// relayedEntry is one bucket in the reverse index — the set of peers
-// we know "have" a given suppression-key, plus the last-update time
-// for TTL reaping.
+// relayedEntry holds peers that delivered a message to us. Outbound
+// recipients are never added.
 type relayedEntry struct {
-	peers  map[PeerID]struct{}
-	seenAt time.Time
+	peers     map[PeerID]struct{}
+	seenAt    time.Time
+	relayedAt time.Time
 }
 
-// sendAndLog sends msg to peer and logs a failure under opName:
-// ErrSendBufferFull at Warn (silent drops masked TMTransaction relay loss
-// in #401), other failures at Info. Shared by the broadcast / relay
-// fan-out loops below.
-func (o *Overlay) sendAndLog(peer *Peer, msg []byte, opName string, priority bool) {
-	var err error
-	if priority {
-		err = peer.SendPriority(msg)
-	} else {
-		err = peer.Send(msg)
+const fanoutLogInterval = time.Second
+
+type connectedPeer struct {
+	id   PeerID
+	peer *Peer
+}
+
+type fanoutResult struct {
+	operation string
+	attempted int
+	failed    int
+	critical  int
+	causes    []error
+}
+
+func (r *fanoutResult) record(err error) {
+	r.attempted++
+	if err == nil {
+		return
 	}
-	if err != nil {
-		level := slog.LevelInfo
-		if errors.Is(err, ErrSendBufferFull) {
-			level = slog.LevelWarn
-		}
-		slog.Log(context.Background(), level, opName+" send failed",
-			"t", "Overlay",
-			"peer", peer.ID(),
-			"frame_size", len(msg),
-			"err", err.Error(),
-		)
+	r.failed++
+	r.causes = append(r.causes, err)
+	if errors.Is(err, ErrCriticalSendQueueFull) {
+		r.critical++
 	}
 }
 
-// forEachConnected sends msg to every connected peer for which skip
-// returns false (skip nil = no filter), logging Send failures under
-// opName. Holds peersMu.RLock for the iteration and returns the peer IDs
-// the frame was handed to (best-effort: included even when the Send
-// errored, matching the reverse-index contract). Extracts the
-// send-and-log fan-out shared by Broadcast / BroadcastExcept /
-// BroadcastExceptSet / RelayFromValidator.
-func (o *Overlay) forEachConnected(msg []byte, opName string, priority bool, skip func(PeerID, *Peer) bool) []PeerID {
+func (r *fanoutResult) err() error {
+	if r.failed == 0 {
+		return nil
+	}
+	return &FanoutError{
+		Operation: r.operation,
+		Attempted: r.attempted,
+		Failed:    r.failed,
+		Critical:  r.critical,
+		Err:       errors.Join(r.causes...),
+	}
+}
+
+func (o *Overlay) connectedPeers() []connectedPeer {
 	o.peersMu.RLock()
-	defer o.peersMu.RUnlock()
-
-	var sent []PeerID
+	peers := make([]connectedPeer, 0, len(o.peers))
 	for id, peer := range o.peers {
-		if peer.State() != PeerStateConnected {
-			continue
+		if peer.State() == PeerStateConnected {
+			peers = append(peers, connectedPeer{id: id, peer: peer})
 		}
-		if skip != nil && skip(id, peer) {
-			continue
-		}
-		o.sendAndLog(peer, msg, opName, priority)
-		sent = append(sent, id)
 	}
-	return sent
+	o.peersMu.RUnlock()
+	return peers
+}
+
+func sendPeer(peer *Peer, msg []byte, priority bool) error {
+	if priority {
+		return peer.SendPriority(msg)
+	}
+	return peer.Send(msg)
+}
+
+func (o *Overlay) logFanoutFailure(err error) {
+	if err == nil {
+		return
+	}
+	var summary *FanoutError
+	if !errors.As(err, &summary) {
+		return
+	}
+
+	now := time.Now()
+	o.fanoutLogMu.Lock()
+	if summary.Critical == 0 &&
+		!o.fanoutLogLast.IsZero() &&
+		now.Sub(o.fanoutLogLast) < fanoutLogInterval {
+		o.fanoutLogSuppressed += summary.Failed
+		o.fanoutLogMu.Unlock()
+		return
+	}
+	suppressed := o.fanoutLogSuppressed
+	o.fanoutLogSuppressed = 0
+	o.fanoutLogLast = now
+	o.fanoutLogMu.Unlock()
+
+	level := slog.LevelInfo
+	if errors.Is(summary, ErrSendBufferFull) {
+		level = slog.LevelWarn
+	}
+	slog.Log(context.Background(), level, summary.Operation+" fanout enqueue failures",
+		"t", "Overlay",
+		"attempted", summary.Attempted,
+		"failed", summary.Failed,
+		"critical", summary.Critical,
+		"suppressed_since_last_log", suppressed,
+		"err", summary.Err,
+	)
+}
+
+func (o *Overlay) forEachConnected(msg []byte, operation string, priority bool, skip func(PeerID, *Peer) bool) error {
+	result := fanoutResult{operation: operation}
+	for _, target := range o.connectedPeers() {
+		if skip != nil && skip(target.id, target.peer) {
+			continue
+		}
+		result.record(sendPeer(target.peer, msg, priority))
+	}
+	err := result.err()
+	o.logFanoutFailure(err)
+	return err
 }
 
 // Broadcast sends a message to all connected peers, unfiltered. Used
@@ -90,8 +142,7 @@ func (o *Overlay) forEachConnected(msg []byte, opName string, priority bool, ski
 // forwarded, use RelayFromValidator which applies the squelch filter
 // and excludes the originating peer.
 func (o *Overlay) Broadcast(msg []byte) error {
-	o.forEachConnected(msg, "broadcast", false, nil)
-	return nil
+	return o.forEachConnected(msg, "broadcast", false, nil)
 }
 
 // BroadcastManifestFrames schedules one paced manifest sequence for every
@@ -102,32 +153,22 @@ func (o *Overlay) BroadcastManifestFrames(frames [][]byte) error {
 }
 
 func (o *Overlay) BroadcastManifestFramesExcept(exceptPeer PeerID, frames [][]byte) error {
-	o.peersMu.RLock()
-	defer o.peersMu.RUnlock()
-	for id, peer := range o.peers {
-		if peer.State() != PeerStateConnected {
+	result := fanoutResult{operation: "broadcast-manifests"}
+	for _, target := range o.connectedPeers() {
+		if exceptPeer != 0 && target.id == exceptPeer {
 			continue
 		}
-		if exceptPeer != 0 && id == exceptPeer {
-			continue
-		}
-		if err := peer.SendManifestFrames(frames); err != nil {
-			level := slog.LevelInfo
-			if errors.Is(err, ErrSendBufferFull) {
-				level = slog.LevelWarn
-			}
-			slog.Log(context.Background(), level, "broadcast-manifests send failed",
-				"t", "Overlay", "peer", peer.ID(), "frames", len(frames), "err", err.Error())
-		}
+		result.record(target.peer.SendManifestFrames(frames))
 	}
-	return nil
+	err := result.err()
+	o.logFanoutFailure(err)
+	return err
 }
 
-// BroadcastPriority sends acquisition and control traffic to all connected
-// peers using each peer's independent priority queue.
+// BroadcastPriority admits acquisition traffic to each peer's protected share
+// of the reliable FIFO.
 func (o *Overlay) BroadcastPriority(msg []byte) error {
-	o.forEachConnected(msg, "broadcast-priority", true, nil)
-	return nil
+	return o.forEachConnected(msg, "broadcast-priority", true, nil)
 }
 
 // BroadcastExcept sends a message to every connected peer except the
@@ -135,10 +176,9 @@ func (o *Overlay) BroadcastPriority(msg []byte) error {
 // RelayFromValidator doesn't apply. Pass 0 for exceptPeer to fall through
 // to a plain Broadcast.
 func (o *Overlay) BroadcastExcept(exceptPeer PeerID, msg []byte) error {
-	o.forEachConnected(msg, "broadcast-except", false, func(id PeerID, _ *Peer) bool {
+	return o.forEachConnected(msg, "broadcast-except", false, func(id PeerID, _ *Peer) bool {
 		return id == exceptPeer
 	})
-	return nil
 }
 
 // BroadcastExceptSet sends a message to every connected peer whose
@@ -175,22 +215,11 @@ func (o *Overlay) broadcastExceptSet(excluded map[PeerID]bool, msg []byte, prior
 		}
 		return o.Broadcast(msg)
 	}
-	// Hold peersMu for the whole pass so the #724 starvation decision and
-	// the sends observe the same connected set: a peer joining or leaving
-	// between a separate "all excluded?" scan and the send loop could
-	// either starve the broadcast or skip a now-eligible peer. This can't
-	// reuse forEachConnected (which takes its own lock), so the
-	// scan-then-send is inlined under a single RLock.
-	o.peersMu.RLock()
-	defer o.peersMu.RUnlock()
-
+	peers := o.connectedPeers()
 	connected, eligible := 0, 0
-	for id, peer := range o.peers {
-		if peer.State() != PeerStateConnected {
-			continue
-		}
+	for _, target := range peers {
 		connected++
-		if !excluded[id] {
+		if !excluded[target.id] {
 			eligible++
 		}
 	}
@@ -198,16 +227,16 @@ func (o *Overlay) broadcastExceptSet(excluded map[PeerID]bool, msg []byte, prior
 	// rather than dropping the request on the floor.
 	ignoreExclusion := eligible == 0 && connected > 0
 
-	for id, peer := range o.peers {
-		if peer.State() != PeerStateConnected {
+	result := fanoutResult{operation: "broadcast-except-set"}
+	for _, target := range peers {
+		if !ignoreExclusion && excluded[target.id] {
 			continue
 		}
-		if !ignoreExclusion && excluded[id] {
-			continue
-		}
-		o.sendAndLog(peer, msg, "broadcast-except-set", priority)
+		result.record(sendPeer(target.peer, msg, priority))
 	}
-	return nil
+	err := result.err()
+	o.logFanoutFailure(err)
+	return err
 }
 
 // RelayFromValidator forwards a peer-originated validator message
@@ -217,35 +246,33 @@ func (o *Overlay) broadcastExceptSet(excluded map[PeerID]bool, msg []byte, prior
 // when no peer should be excluded (e.g. tests that synthesize a relay).
 //
 // suppressionHash is the consensus-router suppression key for this
-// message (same [32]byte used by the dedup cache). Every peer we
-// actually send to is recorded in the reverse index so a later
-// duplicate arrival from ANOTHER peer can query
-// Overlay.PeersThatHave(suppressionHash) and feed the reduce-relay
-// slot with the full set of known-havers.
+// message. Peers that previously delivered the same hash are atomically
+// released from the inbound source index and excluded from this relay.
 //
 // The squelch is consulted before each outbound send and expired
 // squelches auto-clear via Peer.ExpireSquelch. Self-origin is handled
 // by a separate code path (see Broadcast) that skips the filter
 // entirely.
 func (o *Overlay) RelayFromValidator(validator []byte, suppressionHash [32]byte, exceptPeer PeerID, msg []byte) error {
-	// forEachConnected returns the peers we forwarded to (best-effort,
-	// including any whose Send errored). Record into the reverse index
-	// AFTER it releases peersMu so we never nest index-mutex inside
-	// peers-mutex.
-	forwarded := o.forEachConnected(msg, "relay-from-validator", false, func(id PeerID, peer *Peer) bool {
-		return id == exceptPeer || !peer.ExpireSquelch(validator)
-	})
-
-	if len(forwarded) > 0 {
-		o.recordRelayedPeers(suppressionHash, forwarded)
+	sources := o.releaseMessageSources(suppressionHash)
+	sourceSet := make(map[PeerID]struct{}, len(sources))
+	for _, id := range sources {
+		sourceSet[id] = struct{}{}
 	}
-	return nil
+
+	err := o.forEachConnected(msg, "relay-from-validator", false, func(id PeerID, peer *Peer) bool {
+		_, wasSource := sourceSet[id]
+		return wasSource || id == exceptPeer || !peer.ExpireSquelch(validator)
+	})
+	for _, id := range sources {
+		o.OnValidatorMessage(validator, id)
+	}
+	return err
 }
 
-// recordRelayedPeers adds peerIDs to the reverse-index bucket for
-// suppressionHash, trimming expired buckets if we hit the size cap.
-// Safe for concurrent callers.
-func (o *Overlay) recordRelayedPeers(suppressionHash [32]byte, peerIDs []PeerID) {
+// RecordMessageSource records an inbound peer as a source of the message.
+// It must be called for every arrival, including duplicates.
+func (o *Overlay) RecordMessageSource(suppressionHash [32]byte, peerID PeerID) {
 	if o.relayedIndex == nil {
 		return
 	}
@@ -258,18 +285,20 @@ func (o *Overlay) recordRelayedPeers(suppressionHash [32]byte, peerIDs []PeerID)
 	o.relayedIndexMu.Lock()
 	defer o.relayedIndexMu.Unlock()
 
-	// Trim if we're at capacity. A cheap TTL sweep rather than a
-	// formal LRU — the index is a cache, not a hot path.
-	if len(o.relayedIndex) >= RelayedIndexMaxEntries {
+	entry, ok := o.relayedIndex[suppressionHash]
+	if ok && now.Sub(entry.seenAt) >= RelayedIndexTTL {
+		delete(o.relayedIndex, suppressionHash)
+		entry = nil
+		ok = false
+	}
+
+	if !ok && len(o.relayedIndex) >= RelayedIndexMaxEntries {
 		cutoff := now.Add(-RelayedIndexTTL)
 		for h, e := range o.relayedIndex {
 			if e.seenAt.Before(cutoff) {
 				delete(o.relayedIndex, h)
 			}
 		}
-		// If that didn't free enough space (adversarial churn), drop
-		// half the map — bounded worst case, same shape as the
-		// messageSuppression eviction in the consensus router.
 		if len(o.relayedIndex) >= RelayedIndexMaxEntries {
 			i := 0
 			for h := range o.relayedIndex {
@@ -282,21 +311,17 @@ func (o *Overlay) recordRelayedPeers(suppressionHash [32]byte, peerIDs []PeerID)
 		}
 	}
 
-	entry, ok := o.relayedIndex[suppressionHash]
 	if !ok {
 		entry = &relayedEntry{peers: make(map[PeerID]struct{})}
 		o.relayedIndex[suppressionHash] = entry
 	}
-	for _, id := range peerIDs {
-		entry.peers[id] = struct{}{}
-	}
+	entry.peers[peerID] = struct{}{}
 	entry.seenAt = now
 }
 
 // PeersThatHave returns the set of peer IDs known to have the message
-// whose suppression-hash is `suppressionHash`. Entries are populated
-// when we relay a validator message outward (RelayFromValidator) and
-// expire after RelayedIndexTTL.
+// whose suppression-hash is suppressionHash. The set contains only
+// inbound sources and expires after RelayedIndexTTL.
 //
 // Returns nil when the hash is unknown or the bucket has aged out —
 // callers treat both equivalently (nothing to feed the slot with
@@ -305,6 +330,37 @@ func (o *Overlay) recordRelayedPeers(suppressionHash [32]byte, peerIDs []PeerID)
 // Thread-safe. The returned slice is a private copy the caller may
 // mutate freely.
 func (o *Overlay) PeersThatHave(suppressionHash [32]byte) []PeerID {
+	return o.messageSources(suppressionHash, false)
+}
+
+func (o *Overlay) releaseMessageSources(suppressionHash [32]byte) []PeerID {
+	return o.messageSources(suppressionHash, true)
+}
+
+// MessageRelayedRecently reports whether this hash was relayed within the
+// reduce-relay duplicate-counting window.
+func (o *Overlay) MessageRelayedRecently(suppressionHash [32]byte) bool {
+	if o.relayedIndex == nil {
+		return false
+	}
+	clock := o.clockForIndex
+	if clock == nil {
+		clock = time.Now
+	}
+	now := clock()
+	o.relayedIndexMu.Lock()
+	defer o.relayedIndexMu.Unlock()
+	entry, ok := o.relayedIndex[suppressionHash]
+	if !ok || now.Sub(entry.seenAt) >= RelayedIndexTTL {
+		if ok {
+			delete(o.relayedIndex, suppressionHash)
+		}
+		return false
+	}
+	return !entry.relayedAt.IsZero() && now.Sub(entry.relayedAt) < Idled
+}
+
+func (o *Overlay) messageSources(suppressionHash [32]byte, release bool) []PeerID {
 	if o.relayedIndex == nil {
 		return nil
 	}
@@ -324,7 +380,8 @@ func (o *Overlay) PeersThatHave(suppressionHash [32]byte) []PeerID {
 	// "unknown". Keeps queries from returning stale peers after the
 	// dedup window has elapsed (which would feed the slot with
 	// counters the rest of the network would have dropped long ago).
-	if clock().Sub(entry.seenAt) >= RelayedIndexTTL {
+	now := clock()
+	if now.Sub(entry.seenAt) >= RelayedIndexTTL {
 		delete(o.relayedIndex, suppressionHash)
 		return nil
 	}
@@ -332,6 +389,11 @@ func (o *Overlay) PeersThatHave(suppressionHash [32]byte) []PeerID {
 	out := make([]PeerID, 0, len(entry.peers))
 	for id := range entry.peers {
 		out = append(out, id)
+	}
+	if release {
+		entry.peers = make(map[PeerID]struct{})
+		entry.relayedAt = now
+		entry.seenAt = now
 	}
 	return out
 }

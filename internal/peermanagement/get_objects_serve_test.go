@@ -17,8 +17,7 @@ import (
 // frame is waiting.
 func decodeGetObjectsReply(t *testing.T, peer *Peer) *message.GetObjectByHash {
 	t.Helper()
-	select {
-	case frame := <-peer.send:
+	if frame, ok := takeOutboundFrame(peer); ok {
 		hdr, payload, err := message.ReadMessage(bytes.NewReader(frame))
 		require.NoError(t, err)
 		require.Equal(t, message.TypeGetObjects, hdr.MessageType)
@@ -27,7 +26,7 @@ func decodeGetObjectsReply(t *testing.T, peer *Peer) *message.GetObjectByHash {
 		reply, ok := decoded.(*message.GetObjectByHash)
 		require.True(t, ok)
 		return reply
-	default:
+	} else {
 		t.Fatal("expected a TMGetObjectByHash reply frame, got none")
 		return nil
 	}
@@ -123,10 +122,8 @@ func TestServeGetObjects_RejectsOversizedRequest(t *testing.T) {
 	o.serveGetObjects(peer.ID(), req)
 
 	assert.Zero(t, lookups, "an oversized request is rejected before any node-store lookup")
-	select {
-	case frame := <-peer.send:
+	if frame, ok := takeOutboundFrame(peer); ok {
 		t.Fatalf("no reply expected for an oversized request, got %d bytes", len(frame))
-	default:
 	}
 	assert.Positive(t, peer.Load(), "an oversized request must charge the peer")
 }
@@ -212,10 +209,8 @@ func TestServeGetObjects_NilProviderDropsWithoutCharge(t *testing.T) {
 	}
 	o.serveGetObjects(peer.ID(), req)
 
-	select {
-	case frame := <-peer.send:
+	if frame, ok := takeOutboundFrame(peer); ok {
 		t.Fatalf("no reply expected when no node store is wired, got %d bytes", len(frame))
-	default:
 	}
 	assert.Zero(t, peer.Load(), "unserved request must not charge the peer")
 }
@@ -244,10 +239,8 @@ func TestServeGetObjects_BadLedgerHashCharged(t *testing.T) {
 	o.serveGetObjects(peer.ID(), req)
 
 	assert.Zero(t, lookups, "a malformed ledger hash short-circuits before any fetch")
-	select {
-	case frame := <-peer.send:
+	if frame, ok := takeOutboundFrame(peer); ok {
 		t.Fatalf("no reply expected for a malformed ledger hash, got %d bytes", len(frame))
-	default:
 	}
 	assert.Positive(t, peer.Load(), "a malformed ledger hash must charge the peer")
 }

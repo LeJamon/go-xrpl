@@ -143,6 +143,16 @@ func TestOverlay_PeersJSON_EmitsMetricsObject(t *testing.T) {
 	// async read/write callbacks would (PeerImp.cpp:911, 970).
 	p.metrics.recv.addMessage(2048)
 	p.metrics.sent.addMessage(512)
+	p.recordSendDrop(OutboundClassConsensus, &SendQueueError{
+		Class:           OutboundClassConsensus,
+		Reason:          SendQueueFrameLimit,
+		AttemptedFrames: 2,
+	})
+	p.recordSendDrop(OutboundClassOrdinary, &SendQueueError{
+		Class:           OutboundClassOrdinary,
+		Reason:          SendQueueFrameLimit,
+		AttemptedFrames: 1,
+	})
 
 	o := newTestOverlayWithPeers(map[PeerID]*Peer{1: p})
 	entries := o.PeersJSON()
@@ -156,6 +166,12 @@ func TestOverlay_PeersJSON_EmitsMetricsObject(t *testing.T) {
 		"total_bytes_sent",
 		"avg_bps_recv",
 		"avg_bps_sent",
+		"send_drops",
+		"send_drops_control",
+		"send_drops_consensus",
+		"send_drops_acquisition",
+		"send_drops_ordinary",
+		"send_drops_bulk",
 	} {
 		val, present := metrics[key]
 		require.True(t, present, "metrics.%s missing", key)
@@ -173,6 +189,12 @@ func TestOverlay_PeersJSON_EmitsMetricsObject(t *testing.T) {
 	// schema is what we're pinning, not the value.
 	assert.Equal(t, "0", metrics["avg_bps_recv"])
 	assert.Equal(t, "0", metrics["avg_bps_sent"])
+	assert.Equal(t, "3", metrics["send_drops"])
+	assert.Equal(t, "0", metrics["send_drops_control"])
+	assert.Equal(t, "2", metrics["send_drops_consensus"])
+	assert.Equal(t, "0", metrics["send_drops_acquisition"])
+	assert.Equal(t, "1", metrics["send_drops_ordinary"])
+	assert.Equal(t, "0", metrics["send_drops_bulk"])
 }
 
 // TestOverlay_PeersJSON_EmitsMetricsForEveryPeer guards against a

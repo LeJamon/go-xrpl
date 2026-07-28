@@ -3,6 +3,7 @@ package peermanagement
 import (
 	"errors"
 	"fmt"
+	"math"
 	"net"
 	"time"
 )
@@ -17,12 +18,30 @@ const (
 	DefaultConnectTimeout   = 10 * time.Second
 	DefaultHandshakeTimeout = 5 * time.Second
 
-	DefaultEventBufferSize     = 256
-	DefaultMessageBufferSize   = 256
-	DefaultSendBufferSize      = 64
-	acquisitionEventBufferSize = 16
-	acquisitionSendBufferSize  = 192
-	manifestSendBufferSize     = DefaultSendBufferSize
+	DefaultEventBufferSize             = 256
+	DefaultMessageBufferSize           = 256
+	DefaultSendBufferSize              = 64
+	DefaultOutboundRetainedBytes int64 = 8 * MaxMessageSize
+	acquisitionEventBufferSize         = 16
+
+	reliableSendBufferSize = 512
+
+	controlSendMinimum     = 8
+	consensusSendMinimum   = 256
+	acquisitionSendMinimum = 64
+	ordinarySendMinimum    = DefaultSendBufferSize
+
+	controlSendMaximum     = 16
+	consensusSendMaximum   = 320
+	acquisitionSendMaximum = 192
+	ordinarySendMaximum    = 128
+
+	bulkSequenceBufferSize         = 4
+	reliableFramesPerBulkFrame     = 16
+	outboundCriticalByteReserve    = 2 * 1024 * 1024
+	outboundNonCriticalByteMaximum = MaxMessageSize
+	outboundRetainedByteMaximum    = outboundNonCriticalByteMaximum + outboundCriticalByteReserve
+	maxOutboundReservedPeers       = (math.MaxInt64 - int64(outboundNonCriticalByteMaximum)) / int64(outboundCriticalByteReserve)
 
 	// DefaultLedgerDataBufferSize sizes the dedicated acquisition-reply
 	// lane (mtLEDGER_DATA and the replay-delta / proof-path responses).
@@ -50,6 +69,19 @@ func manifestMessageBufferSize(maxPeers int) int {
 		return 1
 	}
 	return maxPeers
+}
+
+// MinimumOutboundRetainedBytes returns the shared ceiling required to preserve
+// one critical reservation per configured peer.
+func MinimumOutboundRetainedBytes(maxPeers int) int64 {
+	if maxPeers <= 0 {
+		return int64(outboundNonCriticalByteMaximum)
+	}
+	if int64(maxPeers) > maxOutboundReservedPeers {
+		return math.MaxInt64
+	}
+	return int64(outboundNonCriticalByteMaximum) +
+		int64(maxPeers)*int64(outboundCriticalByteReserve)
 }
 
 // Config holds the configuration for the overlay network.
@@ -80,10 +112,13 @@ type Config struct {
 	HandshakeTimeout time.Duration
 
 	// Buffer sizes. EventBufferSize and MessageBufferSize size the
-	// overlay's internal channels (see New); the per-peer send queue is a
-	// fixed DefaultSendBufferSize.
+	// overlay's internal channels (see New).
 	EventBufferSize   int
 	MessageBufferSize int
+	// OutboundRetainedBytes bounds queued and actively written frame bytes
+	// across all peers. Noncritical traffic cannot consume the critical
+	// reserve derived from MaxPeers.
+	OutboundRetainedBytes int64
 
 	// MaxTransactions sizes the overlay's dedicated inbound
 	// TMTransaction lane. Inbound tx frames past this ceiling are shed
@@ -182,9 +217,10 @@ func DefaultConfig() Config {
 		ConnectTimeout:   DefaultConnectTimeout,
 		HandshakeTimeout: DefaultHandshakeTimeout,
 
-		EventBufferSize:   DefaultEventBufferSize,
-		MessageBufferSize: DefaultMessageBufferSize,
-		MaxTransactions:   DefaultMaxTransactions,
+		EventBufferSize:       DefaultEventBufferSize,
+		MessageBufferSize:     DefaultMessageBufferSize,
+		MaxTransactions:       DefaultMaxTransactions,
+		OutboundRetainedBytes: DefaultOutboundRetainedBytes,
 
 		// Reduce-relay is opt-in. Leaving these zero-valued avoids
 		// advertising vprr/txrr on a stock rippled network where peers
@@ -247,6 +283,13 @@ func WithMaxOutbound(n int) Option {
 func WithIPLimit(n int) Option {
 	return func(c *Config) {
 		c.IPLimit = n
+	}
+}
+
+// WithOutboundRetainedBytes sets the overlay-wide outbound memory ceiling.
+func WithOutboundRetainedBytes(bytes int64) Option {
+	return func(c *Config) {
+		c.OutboundRetainedBytes = bytes
 	}
 }
 
@@ -423,6 +466,17 @@ func (c *Config) Validate() error {
 	}
 	if c.MaxInbound+c.MaxOutbound > c.MaxPeers {
 		return errors.New("MaxInbound + MaxOutbound cannot exceed MaxPeers")
+	}
+	if int64(c.MaxPeers) > maxOutboundReservedPeers {
+		return errors.New("MaxPeers is too large for outbound critical reservations")
+	}
+	if c.OutboundRetainedBytes == 0 {
+		c.OutboundRetainedBytes = DefaultOutboundRetainedBytes
+	}
+	minimumOutboundBytes := MinimumOutboundRetainedBytes(c.MaxPeers)
+	if c.OutboundRetainedBytes < minimumOutboundBytes {
+		return fmt.Errorf("OutboundRetainedBytes must be at least %d for MaxPeers=%d",
+			minimumOutboundBytes, c.MaxPeers)
 	}
 	limit := c.IPLimit
 	if limit == 0 {

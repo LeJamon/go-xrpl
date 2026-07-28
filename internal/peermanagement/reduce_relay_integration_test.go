@@ -26,7 +26,7 @@ import (
 // reduce-relay for the whole fleet.
 //
 // Approach: build a bare Overlay with a fake clock past WaitOnBootup,
-// register several mock peers with real Peer.send channels, feed the
+// register several mock peers with real outbound queues, feed the
 // Relay enough activity to cross selection threshold via the
 // production OnValidatorMessage entry point, and assert that at least
 // one TMSquelch wire frame materialized in a non-selected peer's
@@ -65,7 +65,7 @@ func TestOverlay_ReduceRelay_NaturalSelection_EndToEnd(t *testing.T) {
 
 	// Build 10 mock peers. MaxSelectedPeers=5 of them will be chosen
 	// and the other 5 will each receive a TMSquelch wire frame on
-	// their Peer.send channel.
+	// their outbound queue.
 	const numPeers = 10
 	identity, err := NewIdentity()
 	require.NoError(t, err)
@@ -116,7 +116,7 @@ func TestOverlay_ReduceRelay_NaturalSelection_EndToEnd(t *testing.T) {
 	require.Equal(t, MaxSelectedPeers, len(selected),
 		"exactly MaxSelectedPeers must be picked as the source set")
 
-	// For each non-selected peer, its Peer.send channel must now
+	// For each non-selected peer, its outbound queue must now
 	// contain a TMSquelch wire frame. This is the integration gate:
 	// selection fired → onSquelch callback invoked → handleSquelch
 	// built and sent the wire frame. Any regression in that chain
@@ -130,19 +130,16 @@ func TestOverlay_ReduceRelay_NaturalSelection_EndToEnd(t *testing.T) {
 	for id, p := range peers {
 		if _, isSelected := selectedSet[id]; isSelected {
 			// Selected peers MUST NOT have received a squelch.
-			select {
-			case frame := <-p.send:
+			if frame, ok := takeOutboundFrame(p); ok {
 				// Sanity: it's possible the overlay sent something
 				// else (unlikely in this barebones test, but guard).
 				t.Errorf("selected peer %d unexpectedly received a frame (%d bytes)", id, len(frame))
-			default:
 			}
 			continue
 		}
 		// Non-selected peer — expect exactly one TMSquelch frame in
 		// the send queue.
-		select {
-		case frame := <-p.send:
+		if frame, ok := takeOutboundFrame(p); ok {
 			// Decode the wire frame header to confirm it's TMSquelch.
 			require.GreaterOrEqual(t, len(frame), message.HeaderSizeUncompressed,
 				"squelched peer %d received an undersized frame", id)
@@ -151,7 +148,7 @@ func TestOverlay_ReduceRelay_NaturalSelection_EndToEnd(t *testing.T) {
 			assert.Equal(t, uint16(message.TypeSquelch), msgType,
 				"non-selected peer %d should receive a TMSquelch frame, got type %d", id, msgType)
 			squelchesSeen++
-		default:
+		} else {
 			t.Errorf("non-selected peer %d never received a TMSquelch frame", id)
 		}
 	}

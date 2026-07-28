@@ -37,6 +37,12 @@ type peerSessionView interface {
 	IsPeerConnected(peermanagement.PeerID) bool
 }
 
+type peerValidationTerminator interface {
+	DisconnectPeer(peermanagement.PeerID) bool
+}
+
+var _ peerValidationTerminator = (*peermanagement.Overlay)(nil)
+
 type peerCountView interface {
 	PeerCount() int
 }
@@ -131,6 +137,13 @@ type Router struct {
 	// messages would accelerate selection and produce earlier squelches for
 	// the same traffic pattern.
 	messageSeen *messageSuppression
+	// validationWork verifies signatures outside the router goroutine. Trusted
+	// and untrusted work use separate bounded queues so untrusted traffic cannot
+	// occupy the trusted capacity.
+	validationWork                      *validationWorkLane
+	validationTrustedOverloadDisconnect atomic.Uint64
+	validationTrustedOverloadUnresolved atomic.Uint64
+	validationShedUntrusted             atomic.Uint64
 
 	// manifests is the validator manifest cache. Wired by the
 	// Components bootstrap so the router can apply inbound TMManifests
@@ -333,11 +346,8 @@ var serveWorkerCount = max(2, runtime.GOMAXPROCS(0)/2)
 
 const serveQueueDepth = 256
 
-// messageDedupTTL is how long a proposal/validation hash is
-// remembered for duplicate-detection purposes. 30s comfortably covers a
-// consensus round while aging out cross-round stragglers so the dedup
-// table doesn't grow unbounded under sustained gossip.
-const messageDedupTTL = 30 * time.Second
+// messageDedupTTL matches rippled's five-minute suppression hold.
+const messageDedupTTL = 300 * time.Second
 
 // messageDedupMaxEntries caps the dedup table size. One entry per
 // unique (validator, position, txSet, closeTime) tuple in a healthy
@@ -367,6 +377,18 @@ func NewRouter(engine consensus.Engine, adaptor *Adaptor, inbox <-chan *peermana
 	// Wire the stash → acquisition hook so quorum decisions on unknown
 	// ledgers don't sit silently in pendingLedgerValidations.
 	if adaptor != nil {
+		if _, ok := engine.(consensus.VerifiedValidationProcessor); ok {
+			r.validationWork = newValidationWorkLane(
+				adaptor.VerifyValidation,
+				func(peerID peermanagement.PeerID) bool {
+					return r.peerSessions == nil || r.peerSessions.IsPeerConnected(peerID)
+				},
+				adaptor.IsTrusted,
+			)
+			r.validationWork.onUntrustedResultShed = func(count uint64) {
+				r.logUntrustedValidationSaturation("result", count)
+			}
+		}
 		if svc := adaptor.LedgerService(); svc != nil {
 			svc.SetOnPendingValidationStashed(r.armValidationStashAcquisition)
 		}
@@ -676,10 +698,17 @@ func (r *Router) Run(ctx context.Context) {
 	r.startServeWorkers(ctx)
 	r.startManifestWorker(ctx)
 	defer r.stopManifestWorker()
+	if r.validationWork != nil {
+		r.validationWork.start(ctx)
+		defer r.validationWork.stop()
+	}
 	ticker := time.NewTicker(inboundReplayDeltaTickInterval)
 	defer ticker.Stop()
 	r.drainPeerConnects()
 	for {
+		if !r.drainTrustedValidationResults(ctx) {
+			return
+		}
 		if !r.drainConsensusInbox(ctx) {
 			return
 		}
@@ -731,6 +760,13 @@ func (r *Router) Run(ctx context.Context) {
 			r.submitTxJob(msg)
 		case result := <-workLane.results():
 			r.handleAcquisitionWorkResult(result)
+		case result := <-r.trustedValidationWorkResults():
+			r.handleValidationWorkResult(result)
+		case result := <-r.untrustedValidationWorkResults():
+			if !r.drainTrustedValidationResults(ctx) {
+				return
+			}
+			r.handleValidationWorkResult(result)
 		case <-r.peerConnectWake:
 			r.drainPeerConnects()
 		case <-ticker.C:
@@ -741,6 +777,19 @@ func (r *Router) Run(ctx context.Context) {
 }
 
 const consensusDrainBatch = 32
+
+func (r *Router) drainTrustedValidationResults(ctx context.Context) bool {
+	for {
+		select {
+		case <-ctx.Done():
+			return false
+		case result := <-r.trustedValidationWorkResults():
+			r.handleValidationWorkResult(result)
+		default:
+			return true
+		}
+	}
+}
 
 func (r *Router) drainConsensusInbox(ctx context.Context) bool {
 	for range consensusDrainBatch {

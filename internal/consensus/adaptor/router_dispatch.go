@@ -197,22 +197,19 @@ func (r *Router) handleProposal(msg *peermanagement.InboundMessage) {
 	// can thread it to Overlay's reverse index without recomputing.
 	suppressionHash := hashProposalSuppression(proposal)
 	proposal.SuppressionHash = suppressionHash
-	firstSeen, lastSeen := r.messageSeen.observe(suppressionHash)
+	r.adaptor.RecordMessageSource(suppressionHash, originPeer)
+	firstSeen, _ := r.messageSeen.observe(suppressionHash)
 
 	// Drop duplicates before the engine path (re-running OnProposal
 	// just re-verifies ECDSA). Still feed the IDLED-gated relay slot
 	// on dupes for squelch accounting.
 	//
-	// Deliberate deviation: rippled tracks suppression per (hash, peer),
-	// re-running the handler so per-peer slot entries grow on each new
-	// sender. Our dedup is hash-only, so a second peer's copy is dropped
-	// at the gate. Quorum/position tracking unaffected (first arrival
-	// counts the validator); reduce-relay accuracy is partly compensated
-	// via PeersThatHave + UpdateRelaySlot below.
+	// Rippled counts a duplicate for reduce-relay only after the first copy
+	// was relayed. Sources received before that point are accumulated and
+	// counted atomically by RelayFromValidator.
 	if !firstSeen {
-		if time.Since(lastSeen) < peermanagement.Idled {
-			seenPeers := r.adaptor.PeersThatHave(suppressionHash)
-			r.adaptor.UpdateRelaySlot(proposal.SigningPubKey[:], originPeer, seenPeers)
+		if r.adaptor.MessageRelayedRecently(suppressionHash) {
+			r.adaptor.UpdateRelaySlot(proposal.SigningPubKey[:], originPeer, nil)
 		}
 		return
 	}
@@ -270,7 +267,8 @@ func (r *Router) handleValidation(msg *peermanagement.InboundMessage) {
 	// validations signed outside our UNL here, before the engine spends
 	// CPU verifying the signature. rippled's PeerImp does the same under
 	// RELAY_UNTRUSTED_VALIDATIONS == -1.
-	if r.adaptor.DropUntrustedValidations() && !r.adaptor.IsTrusted(validation.NodeID) {
+	trusted := r.adaptor.IsTrusted(validation.NodeID)
+	if r.adaptor.DropUntrustedValidations() && !trusted {
 		return
 	}
 
@@ -287,30 +285,177 @@ func (r *Router) handleValidation(msg *peermanagement.InboundMessage) {
 	// path can thread it to Overlay's reverse index without recomputing.
 	suppressionHash := hashValidationSuppression(val.Validation)
 	validation.SuppressionHash = suppressionHash
-	firstSeen, lastSeen := r.messageSeen.observe(suppressionHash)
+	r.adaptor.RecordMessageSource(suppressionHash, originPeer)
+	firstSeen, _ := r.messageSeen.observe(suppressionHash)
 
 	// Drop duplicates before the engine path (re-running OnValidation
 	// just re-verifies ECDSA, dominating CPU under gossip fan-out).
 	// Still update the relay slot for squelch accounting.
 	//
-	// Deliberate deviation: rippled's per-(hash, peer) suppression
-	// re-processes new senders; our hash-only dedup drops them at the
-	// gate. See handleProposal for the full rationale.
+	// Sources received before the verified first relay are accumulated by the
+	// overlay. Later duplicates feed only their current origin into the slot.
 	if !firstSeen {
-		if time.Since(lastSeen) < peermanagement.Idled {
-			seenPeers := r.adaptor.PeersThatHave(suppressionHash)
-			r.adaptor.UpdateRelaySlot(validation.SigningPubKey[:], originPeer, seenPeers)
+		if r.adaptor.MessageRelayedRecently(suppressionHash) {
+			r.adaptor.UpdateRelaySlot(validation.SigningPubKey[:], originPeer, nil)
 		}
 		return
 	}
 
+	origin, tracking := r.validationPeerContext(msg.PeerID)
+	if !trusted && (tracking == peermanagement.PeerTrackingDiverged || r.isLoadedLocal()) {
+		return
+	}
+
+	if _, ok := r.engine.(consensus.VerifiedValidationProcessor); !ok {
+		r.handleLegacyValidation(validation, originPeer, msg.PeerID)
+		return
+	}
+
+	work := validationWork{
+		validation: validation,
+		origin:     origin,
+		trusted:    trusted,
+	}
+	r.submitValidationWork(work)
+}
+
+type validationWorkAdmissionOutcome uint8
+
+const (
+	validationWorkQueued validationWorkAdmissionOutcome = iota
+	validationWorkProcessedSynchronously
+	validationWorkShedUntrusted
+	validationWorkDisconnectedTrustedPeer
+	validationWorkTrustedOverloadUnresolved
+	validationWorkStopped
+)
+
+const validationSaturationLogInterval = 64
+
+func (r *Router) submitValidationWork(work validationWork) validationWorkAdmissionOutcome {
+	if r.validationWork != nil && r.validationWork.running() {
+		switch r.validationWork.submit(work) {
+		case validationQueueAccepted:
+			return validationWorkQueued
+		case validationQueueStopped:
+			return validationWorkStopped
+		}
+		if !work.trusted {
+			count := r.validationShedUntrusted.Add(1)
+			r.logUntrustedValidationSaturation("job", count)
+			return validationWorkShedUntrusted
+		}
+
+		terminator, ok := r.peerSessions.(peerValidationTerminator)
+		if ok &&
+			work.origin.PeerID != 0 &&
+			terminator.DisconnectPeer(peermanagement.PeerID(work.origin.PeerID)) {
+			count := r.validationTrustedOverloadDisconnect.Add(1)
+			r.logTrustedValidationSaturation("peer-disconnected", work.origin.PeerID, count)
+			return validationWorkDisconnectedTrustedPeer
+		}
+
+		count := r.validationTrustedOverloadUnresolved.Add(1)
+		r.logTrustedValidationSaturation("terminator-unavailable", work.origin.PeerID, count)
+		return validationWorkTrustedOverloadUnresolved
+	}
+
+	r.handleValidationWorkResult(validationWorkResult{
+		validation: work.validation,
+		origin:     work.origin,
+		err:        r.adaptor.VerifyValidation(work.validation),
+	})
+	return validationWorkProcessedSynchronously
+}
+
+func (r *Router) logUntrustedValidationSaturation(stage string, count uint64) {
+	if count != 1 && count%validationSaturationLogInterval != 0 {
+		return
+	}
+	r.logger.Warn("untrusted validation verifier saturated",
+		"stage", stage,
+		"dropped", count)
+}
+
+func (r *Router) logTrustedValidationSaturation(resolution string, peerID, count uint64) {
+	if count != 1 && count%validationSaturationLogInterval != 0 {
+		return
+	}
+	level := slog.LevelWarn
+	if resolution == "terminator-unavailable" {
+		level = slog.LevelError
+	}
+	r.logger.Log(context.Background(), level, "trusted validation verifier saturated",
+		"resolution", resolution,
+		"peer", peerID,
+		"count", count)
+}
+
+func (r *Router) handleValidationWorkResult(result validationWorkResult) {
+	if result.err != nil {
+		r.logger.Info("invalid validation signature",
+			"t", "consensus",
+			"event", "validation-invalid-signature",
+			"error", result.err,
+			"peer", result.origin.PeerID)
+		r.adaptor.IncPeerBadData(result.origin.PeerID, "validation-invalid-signature")
+		return
+	}
+
+	processor, ok := r.engine.(consensus.VerifiedValidationProcessor)
+	if !ok {
+		return
+	}
+	disposition, err := processor.ProcessVerifiedValidation(result.validation, result.origin)
+	if err != nil {
+		r.logger.Info("engine rejected verified validation",
+			"t", "consensus",
+			"event", "validation-rejected",
+			"error", err,
+			"peer", result.origin.PeerID)
+		return
+	}
+
+	if disposition.Status == consensus.ValidationMultiple ||
+		disposition.Status == consensus.ValidationConflicting {
+		level := slog.LevelError
+		if !disposition.Trusted {
+			level = slog.LevelInfo
+		}
+		r.logger.Log(context.Background(), level, "byzantine validation detected",
+			"t", "consensus",
+			"event", "byzantine-validation",
+			"reason", disposition.Status.String(),
+			"trusted", disposition.Trusted,
+			"peer", result.origin.PeerID)
+	}
+
+	r.logger.Debug("inbound validation processed",
+		"t", "consensus",
+		"event", "validation-recv",
+		"peer", result.origin.PeerID,
+		"seq", result.validation.LedgerSeq,
+		"status", disposition.Status.String(),
+		"hash_short", fmt.Sprintf("%x", result.validation.LedgerID[:8]))
+
+	if disposition.AcquireEligible() {
+		r.maybeAcquireFromValidation(result.validation, result.origin.PeerID)
+	}
+	if disposition.Relay {
+		if err := r.adaptor.RelayValidation(result.validation, result.origin.PeerID); err != nil {
+			r.logger.Debug("failed to relay validation",
+				"error", err,
+				"peer", result.origin.PeerID)
+		}
+	}
+}
+
+func (r *Router) handleLegacyValidation(
+	validation *consensus.Validation,
+	originPeer uint64,
+	peerID peermanagement.PeerID,
+) {
 	if err := r.engine.OnValidation(validation, originPeer); err != nil {
-		// A same-seq double-sign (conflicting/multiple) is Byzantine
-		// behaviour, but the validation is well-formed and correctly
-		// signed and the engine has already relayed it. Like rippled
-		// (handleNewValidation logs trusted offenders at error, untrusted
-		// at info, and forwards; no Resource::Charge), log it and do NOT
-		// charge the delivering peer — it is an innocent relay.
 		var bv *consensus.ByzantineValidationError
 		if errors.As(err, &bv) {
 			level := slog.LevelError
@@ -322,33 +467,49 @@ func (r *Router) handleValidation(msg *peermanagement.InboundMessage) {
 				"event", "byzantine-validation",
 				"reason", bv.Reason,
 				"trusted", bv.Trusted,
-				"peer", msg.PeerID)
+				"peer", peerID)
 			return
 		}
 		r.logger.Info("engine rejected validation",
 			"t", "consensus",
 			"event", "validation-rejected",
 			"error", err.Error(),
-			"peer", msg.PeerID)
+			"peer", peerID)
 		return
 	}
-	r.logger.Debug("inbound validation processed",
-		"t", "consensus",
-		"event", "validation-recv",
-		"peer", msg.PeerID,
-		"seq", validation.LedgerSeq,
-		"hash_short", fmt.Sprintf("%x", validation.LedgerID[:8]))
-
-	// Per-validation catch-up acquire on EVERY trusted current
-	// validation, not only at quorum. Under sustained load a node that
-	// falls one ledger behind enters the wrongLedger chase loop holding
-	// no position (our_pos_seq=0); with only 3 of the 4-quorum trusted
-	// validators on the network tip, the quorum-gated stash acquire
-	// (armValidationStashAcquisition) never fires, so the node never
-	// fetches the tip the network is converging on and the chain stalls
-	// below quorum until a slow periodic sweep recovers it. Acquiring on
-	// each trusted validation breaks that loop.
 	r.maybeAcquireFromValidation(validation, originPeer)
+}
+
+func (r *Router) validationPeerContext(
+	peerID peermanagement.PeerID,
+) (consensus.ValidationOrigin, peermanagement.PeerTracking) {
+	origin := consensus.ValidationOrigin{PeerID: uint64(peerID)}
+	tracking := peermanagement.PeerTrackingUnknown
+	view, ok := r.peerSessions.(interface {
+		Peers() []peermanagement.PeerInfo
+	})
+	if !ok {
+		return origin, tracking
+	}
+	for _, peer := range view.Peers() {
+		if peer.ID != peerID {
+			continue
+		}
+		tracking = peer.Tracking
+		if r.overlay != nil && r.overlay.Cluster() != nil && len(peer.PublicKeyBytes) != 0 {
+			_, origin.Cluster = r.overlay.Cluster().Member(peer.PublicKeyBytes)
+		}
+		break
+	}
+	return origin, tracking
+}
+
+func (r *Router) isLoadedLocal() bool {
+	if r.adaptor == nil || r.adaptor.LedgerService() == nil {
+		return false
+	}
+	feeTrack := r.adaptor.LedgerService().FeeTrack()
+	return feeTrack != nil && feeTrack.IsLoadedLocal()
 }
 
 // resolveMasterNodeID looks the inbound signing pubkey up in the

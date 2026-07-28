@@ -176,10 +176,6 @@ func TestPeer_RunPingTick_HappyPathRecordsAndSends(t *testing.T) {
 	p.latencyMu.RUnlock()
 	assert.Equal(t, 1, inFlight, "happy path records exactly one in-flight ping")
 
-	select {
-	case msg := <-p.send:
-		assert.NotEmpty(t, msg, "ping must be queued on the send channel")
-	default:
-		t.Fatal("expected a wire message on p.send after a successful tick")
-	}
+	msg := requireOutboundFrame(t, p)
+	assert.NotEmpty(t, msg, "ping must be queued")
 }

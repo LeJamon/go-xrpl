@@ -151,14 +151,39 @@ func (e *Engine) OnProposal(proposal *consensus.Proposal, originPeer uint64) err
 	return nil
 }
 
-// OnValidation handles an incoming validation. originPeer (0 = self) is
-// excluded from the RelayValidation gossip forward.
+// OnValidation is the synchronous compatibility path used by direct engine
+// callers. The network router verifies validations on its worker queues and
+// calls ProcessVerifiedValidation instead.
 func (e *Engine) OnValidation(validation *consensus.Validation, originPeer uint64) error {
-	// Verify before taking e.mu — see OnProposal.
 	if err := e.adaptor.VerifyValidation(validation); err != nil {
 		return fmt.Errorf("invalid validation signature: %w", err)
 	}
 
+	disposition, err := e.ProcessVerifiedValidation(validation, consensus.ValidationOrigin{PeerID: originPeer})
+	if err != nil {
+		return err
+	}
+	if disposition.Relay {
+		_ = e.adaptor.RelayValidation(validation, originPeer)
+	}
+	if disposition.Status == consensus.ValidationMultiple ||
+		disposition.Status == consensus.ValidationConflicting {
+		return &consensus.ByzantineValidationError{
+			NodeID:  validation.NodeID,
+			Reason:  disposition.Status.String(),
+			Trusted: disposition.Trusted,
+		}
+	}
+	return nil
+}
+
+// ProcessVerifiedValidation applies a signature-verified validation to local
+// consensus state. It deliberately performs no network I/O; the router acts on
+// the returned disposition after this method releases the engine lock.
+func (e *Engine) ProcessVerifiedValidation(
+	validation *consensus.Validation,
+	origin consensus.ValidationOrigin,
+) (consensus.ValidationDisposition, error) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 
@@ -175,36 +200,20 @@ func (e *Engine) OnValidation(validation *consensus.Validation, originPeer uint6
 		tracked = e.listedOracle.IsListed(validation.NodeID)
 	}
 
-	// Operator [relay_validations] stance: "all" (the default, matching
-	// rippled) also forwards verified, current validations signed outside
-	// our UNL, so peers with a different UNL that do trust the signer still
-	// receive them.
-	relay := trusted || (e.relayPolicy != nil && e.relayPolicy.RelayUntrustedValidations())
-
-	// Feed the tracker — the gate that advances validated_ledger once a
-	// quorum of trusted FULL validations accumulates (partials steer the trie
-	// but don't count). Listed-but-untrusted keys are tracked too so a later
-	// trust change promotes what was already seen; untrusted-and-unlisted keys
-	// are dropped so the byNode map can't grow unboundedly.
-	//
-	// AddStatus doubles as the Byzantine detector: a validator must not sign
-	// two ledgers (or re-sign differently) for one seq, even a seq its tip has
-	// already superseded. On conflicting/multiple the validation is kept out
-	// of quorum/trie but STILL relayed under the relay policy (peers should
-	// observe it too) and no one is charged; the returned error only tells the
-	// router to skip the catch-up acquire, not to penalise the relaying peer.
-	if tracked && e.validationTracker != nil {
-		switch status := e.validationTracker.AddStatus(validation); status {
-		case ValStatusConflicting, ValStatusMultiple:
-			if relay {
-				e.adaptor.RelayValidation(validation, originPeer)
-			}
-			return &consensus.ByzantineValidationError{NodeID: validation.NodeID, Reason: status.String(), Trusted: trusted}
-		}
+	disposition := consensus.ValidationDisposition{
+		Status:  consensus.ValidationUntracked,
+		Tracked: tracked,
+		Trusted: trusted,
+		Relay: trusted ||
+			origin.Cluster ||
+			(e.relayPolicy != nil && e.relayPolicy.RelayUntrustedValidations()),
 	}
 
-	// Round-scoped bookkeeping stays trusted-only.
-	if trusted {
+	if tracked && e.validationTracker != nil {
+		disposition.Status = validationDispositionStatus(e.validationTracker.AddStatus(validation))
+	}
+
+	if disposition.AcquireEligible() {
 		e.proposalTracker.SetValidation(validation)
 	}
 
@@ -214,11 +223,24 @@ func (e *Engine) OnValidation(validation *consensus.Validation, originPeer uint6
 		Timestamp:  e.adaptor.Now(),
 	})
 
-	if relay {
-		e.adaptor.RelayValidation(validation, originPeer)
-	}
+	return disposition, nil
+}
 
-	return nil
+func validationDispositionStatus(status ValStatus) consensus.ValidationStatus {
+	switch status {
+	case ValStatusCurrent:
+		return consensus.ValidationCurrent
+	case ValStatusStale:
+		return consensus.ValidationStale
+	case ValStatusBadSeq:
+		return consensus.ValidationBadSeq
+	case ValStatusMultiple:
+		return consensus.ValidationMultiple
+	case ValStatusConflicting:
+		return consensus.ValidationConflicting
+	default:
+		return consensus.ValidationUntracked
+	}
 }
 
 // OnTxSet handles receiving a transaction set we requested.

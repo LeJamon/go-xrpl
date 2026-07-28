@@ -83,11 +83,16 @@ func (o *Overlay) PeersJSON() []map[string]any {
 		// Emit the metrics object; values are decimal strings to match
 		// rippled's formatting.
 		entry["metrics"] = map[string]any{
-			"total_bytes_recv": strconv.FormatUint(p.TotalBytesRecv, 10),
-			"total_bytes_sent": strconv.FormatUint(p.TotalBytesSent, 10),
-			"avg_bps_recv":     strconv.FormatUint(p.AvgBpsRecv, 10),
-			"avg_bps_sent":     strconv.FormatUint(p.AvgBpsSent, 10),
-			"send_drops":       strconv.FormatUint(p.SendDrops, 10),
+			"total_bytes_recv":       strconv.FormatUint(p.TotalBytesRecv, 10),
+			"total_bytes_sent":       strconv.FormatUint(p.TotalBytesSent, 10),
+			"avg_bps_recv":           strconv.FormatUint(p.AvgBpsRecv, 10),
+			"avg_bps_sent":           strconv.FormatUint(p.AvgBpsSent, 10),
+			"send_drops":             strconv.FormatUint(p.SendDrops, 10),
+			"send_drops_control":     strconv.FormatUint(p.SendDropsControl, 10),
+			"send_drops_consensus":   strconv.FormatUint(p.SendDropsConsensus, 10),
+			"send_drops_acquisition": strconv.FormatUint(p.SendDropsAcquisition, 10),
+			"send_drops_ordinary":    strconv.FormatUint(p.SendDropsOrdinary, 10),
+			"send_drops_bulk":        strconv.FormatUint(p.SendDropsBulk, 10),
 		}
 		out = append(out, entry)
 	}

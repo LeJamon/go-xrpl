@@ -255,6 +255,16 @@ func (o *Overlay) IsPeerConnected(peerID PeerID) bool {
 	return ok && peer.State() == PeerStateConnected
 }
 
+// DisconnectPeer terminates the live session identified by peerID.
+func (o *Overlay) DisconnectPeer(peerID PeerID) bool {
+	peer, ok := o.getPeer(peerID)
+	if !ok {
+		return false
+	}
+	_ = peer.Close()
+	return true
+}
+
 // PeerLatency returns the overlay's smoothed round-trip estimate for peerID.
 func (o *Overlay) PeerLatency(peerID PeerID) (time.Duration, bool) {
 	peer, ok := o.getPeer(peerID)
@@ -516,6 +526,7 @@ func (o *Overlay) addPeer(peer *Peer) error {
 		}
 		o.peerKeys[key] = peer.ID()
 	}
+	o.attachOutboundBudget(peer)
 	o.peerEndpoints[endpoint] = peer.ID()
 	o.peers[peer.ID()] = peer
 	delete(o.pendingInbound, peer.ID())

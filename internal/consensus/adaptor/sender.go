@@ -58,19 +58,16 @@ func (s *OverlaySender) BroadcastValidation(validation *consensus.Validation) er
 // validator's gossip are skipped) and excluding the originating peer
 // itself.
 //
-// proposal.SuppressionHash is the router-level dedup key (populated
-// by the consensus router from the canonical proposalUniqueId hash at
-// parse time). The overlay registers each recipient against that key
-// in its reverse index; the index is queried by the consensus router
-// on a later duplicate arrival so the slot is fed with the full set
-// of known-havers.
+// proposal.SuppressionHash is the router-level dedup key populated at
+// parse time. The overlay uses it to exclude every peer that delivered
+// this message to us.
 func (s *OverlaySender) RelayProposal(proposal *consensus.Proposal, exceptPeer uint64) error {
 	msg := ProposalToMessage(proposal)
 	frame, err := message.EncodeFrame(msg)
 	if err != nil {
 		return fmt.Errorf("encode proposal: %w", err)
 	}
-	return s.overlay.RelayFromValidator(proposal.NodeID[:], proposal.SuppressionHash, peermanagement.PeerID(exceptPeer), frame)
+	return s.overlay.RelayFromValidator(proposal.SigningPubKey[:], proposal.SuppressionHash, peermanagement.PeerID(exceptPeer), frame)
 }
 
 // RelayValidation forwards a peer-originated validation to other peers
@@ -82,7 +79,7 @@ func (s *OverlaySender) RelayValidation(validation *consensus.Validation, except
 	if err != nil {
 		return fmt.Errorf("encode validation: %w", err)
 	}
-	return s.overlay.RelayFromValidator(validation.NodeID[:], validation.SuppressionHash, peermanagement.PeerID(exceptPeer), frame)
+	return s.overlay.RelayFromValidator(validation.SigningPubKey[:], validation.SuppressionHash, peermanagement.PeerID(exceptPeer), frame)
 }
 
 // UpdateRelaySlot feeds the overlay's reduce-relay state machine with
@@ -332,11 +329,13 @@ func (s *OverlaySender) IncPeerBadData(peerID uint64, reason string) {
 	s.overlay.IncPeerBadData(peermanagement.PeerID(peerID), reason)
 }
 
-// PeersThatHave returns the peer IDs the overlay knows have the
-// message with this suppression hash. Populated by the overlay as
-// messages are relayed outward (see Overlay.RelayFromValidator); the
-// consensus router queries this on duplicate arrivals so the
-// reduce-relay slot gets fed with every known-haver.
+// RecordMessageSource records an inbound source for a proposal or validation.
+func (s *OverlaySender) RecordMessageSource(suppressionHash [32]byte, peerID uint64) {
+	s.overlay.RecordMessageSource(suppressionHash, peermanagement.PeerID(peerID))
+}
+
+// PeersThatHave returns the accumulated inbound sources for this
+// suppression hash.
 func (s *OverlaySender) PeersThatHave(suppressionHash [32]byte) []uint64 {
 	raw := s.overlay.PeersThatHave(suppressionHash)
 	if len(raw) == 0 {
@@ -347,6 +346,10 @@ func (s *OverlaySender) PeersThatHave(suppressionHash [32]byte) []uint64 {
 		out[i] = uint64(p)
 	}
 	return out
+}
+
+func (s *OverlaySender) MessageRelayedRecently(suppressionHash [32]byte) bool {
+	return s.overlay.MessageRelayedRecently(suppressionHash)
 }
 
 // RequestReplayDelta asks a specific peer for a fast-catchup replay delta

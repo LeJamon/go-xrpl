@@ -420,7 +420,7 @@ func (l *Ledger) OnTimer(now time.Time) TimerAction {
 	// No progress, budget remains: arm a by-hash escalation and surface the
 	// diagnostic that the swallowed Debug-level rejections used to hide.
 	l.byHash = true
-	l.logger.Warn("inbound ledger: no acquisition progress",
+	l.logger.Warn("inbound ledger: no progress in current interval",
 		"seq", l.seq,
 		"hash", fmt.Sprintf("%x", l.hash[:8]),
 		"timeouts", l.timeouts,
