@@ -1373,7 +1373,6 @@ type Snapshot struct {
 	NeededTx         [][32]byte // hashes of up to missingNodeBatch missing tx nodes
 }
 
-// Phase reports the current acquisition traversal phase.
 func (s Snapshot) Phase() string {
 	switch {
 	case s.Failed:
