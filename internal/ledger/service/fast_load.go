@@ -5,7 +5,9 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"runtime"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/LeJamon/go-xrpl/drops"
@@ -222,7 +224,7 @@ func (s *Service) verifyStoredSHAMapWithTicks(
 	now func() time.Time,
 	ticks <-chan time.Time,
 ) (err error) {
-	progress := newStoredSHAMapVerificationProgress(s.logger, root, mapType, startedAt)
+	progress := newStoredSHAMapVerificationProgress(s.logger, s.nodeStore, root, mapType, startedAt)
 	defer func() {
 		progress.finish(now(), err)
 	}()
@@ -231,7 +233,13 @@ func (s *Service) verifyStoredSHAMapWithTicks(
 		return fmt.Errorf("zero root")
 	}
 
-	rootNode, _, err := s.loadStoredSHAMapNode(ctx, storedSHAMapNode{hash: root}, mapType)
+	fetch := s.storedSHAMapVerificationFetch()
+	rootNode, _, err := s.loadStoredSHAMapNodeWithFetch(
+		ctx,
+		storedSHAMapNode{hash: root},
+		mapType,
+		fetch,
+	)
 	if err != nil {
 		return err
 	}
@@ -253,38 +261,100 @@ func (s *Service) verifyStoredSHAMapWithTicks(
 		branches = append(branches, child)
 	}
 	progress.branchesTotal = uint32(len(branches))
+	workers := resolveStoredSHAMapWorkers(s.config.FastLoadWorkers)
+	progress.configureWorkers(workers, 0, len(branches))
 	progress.start()
+	frontier, outstanding, err := s.buildStoredSHAMapFrontier(
+		ctx,
+		branches,
+		workers*storedSHAMapFrontierTasksPerWorker,
+		mapType,
+		fetch,
+		func() {
+			progress.nodesChecked.Add(1)
+		},
+	)
+	for _, count := range outstanding {
+		if count == 0 {
+			progress.branchesComplete.Add(1)
+		}
+	}
+	if err != nil {
+		return err
+	}
+
+	startedWorkers := min(workers, len(frontier))
+	progress.configureWorkers(workers, startedWorkers, len(frontier))
+	if len(frontier) == 0 {
+		return nil
+	}
 
 	walkCtx, cancel := context.WithCancelCause(ctx)
 	defer cancel(nil)
+	var cancelOnce sync.Once
+	branchOutstanding := make([]atomic.Int64, len(outstanding))
+	for branch, count := range outstanding {
+		branchOutstanding[branch].Store(int64(count))
+	}
+
+	tasks := make(chan storedSHAMapTask, len(frontier))
+	for _, task := range frontier {
+		tasks <- task
+	}
+	close(tasks)
+
 	var wg sync.WaitGroup
-	for _, child := range branches {
+	for range startedWorkers {
 		wg.Add(1)
-		go func(child [32]byte) {
+		go func() {
 			defer wg.Done()
-			var unreportedNodes uint64
-			walkErr := s.walkStoredSHAMapNodes(
-				walkCtx,
-				[]storedSHAMapNode{{hash: child, depth: 1}},
-				mapType,
-				func([32]byte, *nodestore.Node) error {
-					unreportedNodes++
-					if unreportedNodes == storedSHAMapNodeCountBatch {
-						progress.nodesChecked.Add(unreportedNodes)
-						unreportedNodes = 0
+			for {
+				if walkCtx.Err() != nil {
+					return
+				}
+				var task storedSHAMapTask
+				var ok bool
+				select {
+				case task, ok = <-tasks:
+					if !ok {
+						return
 					}
-					return nil
-				},
-			)
-			if unreportedNodes > 0 {
-				progress.nodesChecked.Add(unreportedNodes)
+				case <-walkCtx.Done():
+					return
+				}
+
+				progress.frontierSize.Add(-1)
+				progress.activeWorkers.Add(1)
+				var unreportedNodes uint64
+				walkErr := s.walkStoredSHAMapNodesWithFetch(
+					walkCtx,
+					[]storedSHAMapNode{task.node},
+					mapType,
+					fetch,
+					func([32]byte, *nodestore.Node) error {
+						unreportedNodes++
+						if unreportedNodes == storedSHAMapNodeCountBatch {
+							progress.nodesChecked.Add(unreportedNodes)
+							unreportedNodes = 0
+						}
+						return nil
+					},
+				)
+				if unreportedNodes > 0 {
+					progress.nodesChecked.Add(unreportedNodes)
+				}
+				progress.activeWorkers.Add(-1)
+				if walkErr != nil {
+					cancelOnce.Do(func() {
+						cancel(walkErr)
+					})
+					return
+				}
+				if branchOutstanding[task.branch].Add(-1) == 0 {
+					progress.branchesComplete.Add(1)
+				}
 			}
-			if walkErr != nil {
-				cancel(walkErr)
-				return
-			}
-			progress.branchesComplete.Add(1)
-		}(child)
+		}()
 	}
 	workersDone := make(chan struct{})
 	go func() {
@@ -299,9 +369,13 @@ func (s *Service) verifyStoredSHAMapWithTicks(
 				ticks = nil
 				continue
 			}
+			select {
+			case <-workersDone:
+				return context.Cause(walkCtx)
+			default:
+			}
 			progress.report(tick)
 		case <-workersDone:
-			progress.report(now())
 			return context.Cause(walkCtx)
 		}
 	}
@@ -312,7 +386,96 @@ type storedSHAMapNode struct {
 	depth int
 }
 
+type storedSHAMapTask struct {
+	node   storedSHAMapNode
+	branch int
+}
+
 type storedSHAMapFetch func(context.Context, nodestore.Hash256) (*nodestore.Node, error)
+
+const (
+	maxStoredSHAMapWorkers             = 64
+	storedSHAMapFrontierTasksPerWorker = 4
+)
+
+func resolveStoredSHAMapWorkers(configured int) int {
+	if configured <= 0 {
+		configured = runtime.GOMAXPROCS(0)
+	}
+	return min(configured, maxStoredSHAMapWorkers)
+}
+
+func (s *Service) storedSHAMapVerificationFetch() storedSHAMapFetch {
+	uncached, ok := s.nodeStore.(interface {
+		FetchDataUncached(context.Context, nodestore.Hash256) ([]byte, error)
+	})
+	if !ok {
+		return s.nodeStore.Fetch
+	}
+	return func(ctx context.Context, hash nodestore.Hash256) (*nodestore.Node, error) {
+		data, err := uncached.FetchDataUncached(ctx, hash)
+		if err != nil || data == nil {
+			return nil, err
+		}
+		return &nodestore.Node{Hash: hash, Data: data}, nil
+	}
+}
+
+func (s *Service) buildStoredSHAMapFrontier(
+	ctx context.Context,
+	branches [][32]byte,
+	target int,
+	mapType shamap.Type,
+	fetch storedSHAMapFetch,
+	visit func(),
+) ([]storedSHAMapTask, []uint32, error) {
+	splitRootBranches := target > storedSHAMapFrontierTasksPerWorker
+	target = max(target, len(branches))
+	frontier := make(
+		[]storedSHAMapTask,
+		0,
+		target+len(branches)*(shamap.BranchFactor-1),
+	)
+	outstanding := make([]uint32, len(branches))
+	for branch, hash := range branches {
+		outstanding[branch] = 1
+		frontier = append(frontier, storedSHAMapTask{
+			node:   storedSHAMapNode{hash: hash, depth: 1},
+			branch: branch,
+		})
+	}
+	initialSplits := 0
+	if splitRootBranches {
+		initialSplits = len(branches)
+	}
+	for split := 0; len(frontier) > 0 && (split < initialSplits || len(frontier) < target); split++ {
+		task := frontier[0]
+		copy(frontier, frontier[1:])
+		frontier = frontier[:len(frontier)-1]
+
+		node, _, err := s.loadStoredSHAMapNodeWithFetch(ctx, task.node, mapType, fetch)
+		if err != nil {
+			return frontier, outstanding, err
+		}
+		var childBuffer [shamap.BranchFactor]storedSHAMapNode
+		children, err := appendStoredSHAMapChildren(childBuffer[:0], task.node, node)
+		if err != nil {
+			return frontier, outstanding, err
+		}
+		if visit != nil {
+			visit()
+		}
+		outstanding[task.branch]--
+		for _, child := range children {
+			frontier = append(frontier, storedSHAMapTask{
+				node:   child,
+				branch: task.branch,
+			})
+			outstanding[task.branch]++
+		}
+	}
+	return frontier, outstanding, nil
+}
 
 func (s *Service) walkStoredSHAMap(
 	ctx context.Context,
@@ -342,15 +505,6 @@ func (s *Service) walkStoredSHAMapWithFetch(
 	)
 }
 
-func (s *Service) walkStoredSHAMapNodes(
-	ctx context.Context,
-	stack []storedSHAMapNode,
-	mapType shamap.Type,
-	visit func([32]byte, *nodestore.Node) error,
-) error {
-	return s.walkStoredSHAMapNodesWithFetch(ctx, stack, mapType, s.nodeStore.Fetch, visit)
-}
-
 func (s *Service) walkStoredSHAMapNodesWithFetch(
 	ctx context.Context,
 	stack []storedSHAMapNode,
@@ -368,20 +522,9 @@ func (s *Service) walkStoredSHAMapNodesWithFetch(
 		if err != nil {
 			return err
 		}
-		if inner, ok := node.(shamap.InnerNodeReader); ok {
-			if pending.depth >= 64 {
-				return fmt.Errorf("inner node %x exceeds maximum depth", pending.hash[:8])
-			}
-			for branch := 0; branch < shamap.BranchFactor; branch++ {
-				if inner.IsEmptyBranch(branch) {
-					continue
-				}
-				child, err := inner.ChildHash(branch)
-				if err != nil {
-					return err
-				}
-				stack = append(stack, storedSHAMapNode{hash: child, depth: pending.depth + 1})
-			}
+		stack, err = appendStoredSHAMapChildren(stack, pending, node)
+		if err != nil {
+			return err
 		}
 		if visit != nil {
 			if err := visit(pending.hash, stored); err != nil {
@@ -390,6 +533,34 @@ func (s *Service) walkStoredSHAMapNodesWithFetch(
 		}
 	}
 	return nil
+}
+
+func appendStoredSHAMapChildren(
+	children []storedSHAMapNode,
+	pending storedSHAMapNode,
+	node shamap.NodeReader,
+) ([]storedSHAMapNode, error) {
+	inner, ok := node.(shamap.InnerNodeReader)
+	if !ok {
+		return children, nil
+	}
+	if pending.depth >= 64 {
+		return nil, fmt.Errorf("inner node %x exceeds maximum depth", pending.hash[:8])
+	}
+	for branch := range shamap.BranchFactor {
+		if inner.IsEmptyBranch(branch) {
+			continue
+		}
+		child, err := inner.ChildHash(branch)
+		if err != nil {
+			return nil, err
+		}
+		children = append(children, storedSHAMapNode{
+			hash:  child,
+			depth: pending.depth + 1,
+		})
+	}
+	return children, nil
 }
 
 func (s *Service) loadStoredSHAMapNode(

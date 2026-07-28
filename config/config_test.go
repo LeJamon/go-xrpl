@@ -46,6 +46,7 @@ cache_mb = 2048
 open_files = 1000
 cache_size = 16384
 cache_age = 5
+fast_load_workers = 32
 earliest_seq = 32570
 online_delete = 512
 delete_batch = 100
@@ -122,6 +123,7 @@ func TestLoadConfig(t *testing.T) {
 	assert.Equal(t, "/tmp/test/db", config.NodeDB.Path)
 	assert.Equal(t, int64(2048), config.NodeDB.CacheMB)
 	assert.Equal(t, 1000, config.NodeDB.OpenFiles)
+	assert.Equal(t, 32, config.NodeDB.FastLoadWorkers)
 	require.NotNil(t, config.FeeDefault)
 	assert.Equal(t, 13, *config.FeeDefault)
 
@@ -158,6 +160,36 @@ func TestNodeDBConfigPebbleResourcesValidation(t *testing.T) {
 				CacheMB:      test.cacheMB,
 				OpenFiles:    test.files,
 				OnlineDelete: test.online,
+			}
+			err := cfg.Validate()
+			if test.wantErr == "" {
+				require.NoError(t, err)
+				return
+			}
+			require.ErrorContains(t, err, test.wantErr)
+		})
+	}
+}
+
+func TestNodeDBConfigFastLoadWorkersValidation(t *testing.T) {
+	tests := []struct {
+		name    string
+		workers int
+		wantErr string
+	}{
+		{name: "automatic"},
+		{name: "one worker", workers: 1},
+		{name: "maximum", workers: 64},
+		{name: "negative", workers: -1, wantErr: "fast_load_workers must be non-negative"},
+		{name: "over maximum", workers: 65, wantErr: "fast_load_workers must not exceed 64"},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			cfg := NodeDBConfig{
+				Type:            "pebble",
+				Path:            t.TempDir(),
+				FastLoadWorkers: test.workers,
 			}
 			err := cfg.Validate()
 			if test.wantErr == "" {
