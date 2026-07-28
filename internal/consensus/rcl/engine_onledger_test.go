@@ -477,6 +477,89 @@ func TestEngine_TrySwitchToLedger_RejectsUnsafeLedger(t *testing.T) {
 	}
 }
 
+type fastLoadProvisionalMockAdaptor struct {
+	*mockAdaptor
+	provisional bool
+}
+
+func (a *fastLoadProvisionalMockAdaptor) IsFastLoadProvisional() bool {
+	return a.provisional
+}
+
+func TestEngine_TrySwitchToLedger_FastLoadSameHeightReplacement(t *testing.T) {
+	tests := []struct {
+		name           string
+		provisional    bool
+		stageQuorum    bool
+		selectRecovery bool
+		want           consensus.LedgerSwitchResult
+	}{
+		{
+			name:        "provisional with live quorum",
+			provisional: true,
+			stageQuorum: true,
+			want:        consensus.LedgerSwitchAccepted,
+		},
+		{
+			name:        "not provisional",
+			provisional: false,
+			stageQuorum: true,
+			want:        consensus.LedgerSwitchRejected,
+		},
+		{
+			name:           "no live quorum",
+			provisional:    true,
+			selectRecovery: true,
+			want:           consensus.LedgerSwitchRejected,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			base := newMockAdaptor()
+			a := &fastLoadProvisionalMockAdaptor{
+				mockAdaptor: base,
+				provisional: tt.provisional,
+			}
+			e := NewEngine(a, DefaultConfig())
+			initial := base.ledgers[consensus.LedgerID{1}]
+			target := chainLedger(initial.Seq(), 101, initial.ParentID()[0])
+			base.ledgers[target.ID()] = target
+			base.validatedLedgerHashOverride = initial.ID()
+			e.prevLedger = initial
+			e.mode = consensus.ModeObserving
+
+			if tt.stageQuorum {
+				stageQuorumValidatedLedger(e, base, target)
+			}
+			if tt.selectRecovery {
+				e.mode = consensus.ModeWrongLedger
+				e.wrongLedgerID = target.ID()
+			}
+
+			got, err := e.TrySwitchToLedger(target.ID())
+			if err != nil {
+				t.Fatalf("TrySwitchToLedger: %v", err)
+			}
+			if got != tt.want {
+				t.Fatalf("result = %v, want %v", got, tt.want)
+			}
+			if tt.want == consensus.LedgerSwitchAccepted {
+				if e.prevLedger.ID() != target.ID() {
+					t.Fatal("accepted replacement did not become the consensus parent")
+				}
+				return
+			}
+			if e.prevLedger.ID() != initial.ID() {
+				t.Fatal("rejected replacement changed the consensus parent")
+			}
+			if len(base.switchedLedgers) != 0 {
+				t.Fatal("rejected replacement announced a ledger change")
+			}
+		})
+	}
+}
+
 func TestEngine_TrySwitchToLedger_IgnoresUnselectedLedger(t *testing.T) {
 	a := newMockAdaptor()
 	e := NewEngine(a, DefaultConfig())

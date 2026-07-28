@@ -98,3 +98,21 @@ func TestAdaptor_ValidationQuorumChecksPeerTrackingDuringInitialSync(t *testing.
 	require.Nil(t, svc.GetValidatedLedger())
 	require.Zero(t, svc.GetValidatedLedgerIndex())
 }
+
+func TestAdaptor_ValidationQuorumConfirmsCurrentInitialLedger(t *testing.T) {
+	svc := adg_newNonStandaloneService(t)
+	a := New(Config{LedgerService: svc})
+	closed := svc.GetClosedLedger()
+	require.NotNil(t, closed)
+	require.True(t, svc.NeedsInitialSync())
+	svc.SetValidatedLedgerAt(closed.Sequence(), closed.Hash(), closed.CloseTime())
+	require.Equal(t, closed.Hash(), svc.GetValidatedLedger().Hash())
+	require.True(t, svc.NeedsInitialSync())
+
+	a.OnLedgerFullyValidated(consensus.LedgerID(closed.Hash()), closed.Sequence())
+
+	require.False(t, svc.NeedsInitialSync())
+	require.Equal(t, consensus.OpModeTracking, a.GetOperatingMode())
+	require.Equal(t, closed.Hash(), svc.GetClosedLedger().Hash())
+	require.Equal(t, closed.Hash(), svc.GetValidatedLedger().Hash())
+}

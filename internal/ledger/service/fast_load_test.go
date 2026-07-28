@@ -321,6 +321,8 @@ func TestService_FastLoadRestoresPersistedValidatedLedger(t *testing.T) {
 	t.Cleanup(second.Stop)
 
 	require.False(t, second.NeedsInitialSync())
+	require.True(t, second.IsFastLoadProvisional())
+	require.False(t, second.GetServerInfo().NeedsNetworkLedger)
 	require.Equal(t, seq, second.GetValidatedLedgerIndex())
 	require.Equal(t, wantHash, second.GetValidatedLedger().Hash())
 	second.SetValidatedLedgerAgeClock(func() time.Time {
@@ -339,6 +341,161 @@ func TestService_FastLoadRestoresPersistedValidatedLedger(t *testing.T) {
 	require.True(t, ok)
 	require.Equal(t, seq, firstSeq)
 	require.Equal(t, seq, lastSeq)
+
+	loaded := second.GetValidatedLedger()
+	second.SetValidatedLedgerAt(seq, wantHash, wantCloseTime.Add(time.Second))
+	require.False(t, second.IsFastLoadProvisional())
+	require.Same(t, loaded, second.GetValidatedLedger())
+	require.Equal(t, wantHash, second.GetValidatedLedger().Hash())
+}
+
+func TestService_FastLoadReplacesSameHeightOnlyAfterTrustedQuorum(t *testing.T) {
+	ctx := context.Background()
+	db := nodestore.NewKVDatabase(memorydb.New(), "fast-load-replacement", 10_000, time.Hour)
+	t.Cleanup(func() { require.NoError(t, db.Close()) })
+	rm, err := sqlitedb.NewRepositoryManager(t.TempDir())
+	require.NoError(t, err)
+	require.NoError(t, rm.Open(ctx))
+	t.Cleanup(func() { require.NoError(t, rm.Close(ctx)) })
+
+	writer, err := New(Config{
+		Standalone:    true,
+		GenesisConfig: genesis.DefaultConfig(),
+		NodeStore:     db,
+		SHAMapFamily:  backend.New(db),
+		RelationalDB:  rm,
+	})
+	require.NoError(t, err)
+	require.NoError(t, writer.Start())
+	_, err = writer.AcceptLedger(ctx)
+	require.NoError(t, err)
+	writer.FlushPersists()
+	writer.Stop()
+
+	svc, err := New(Config{
+		Standalone:    false,
+		GenesisConfig: genesis.DefaultConfig(),
+		NodeStore:     db,
+		SHAMapFamily:  backend.New(db),
+		RelationalDB:  rm,
+		FastLoad:      true,
+	})
+	require.NoError(t, err)
+	require.NoError(t, svc.Start())
+	t.Cleanup(svc.Stop)
+
+	loaded := svc.GetValidatedLedger()
+	require.NotNil(t, loaded)
+	loadedHash := loaded.Hash()
+	require.True(t, svc.IsFastLoadProvisional())
+	require.False(t, svc.NeedsInitialSync())
+
+	events := make(chan *LedgerAcceptedEvent, 4)
+	svc.SetEventCallback(func(event *LedgerAcceptedEvent) {
+		events <- event
+	})
+
+	stateMap, err := loaded.StateMapSnapshot()
+	require.NoError(t, err)
+	txMap, err := loaded.TxMapSnapshot()
+	require.NoError(t, err)
+	replacementHeader := loaded.Header()
+	replacementHeader.Validated = false
+	replacementHeader.Hash[0] ^= 0xFF
+	replacementHash := replacementHeader.Hash
+
+	initialCandidate, err := svc.BootstrapLedgerWithState(
+		ctx,
+		&replacementHeader,
+		stateMap,
+		txMap,
+	)
+	require.NoError(t, err)
+	require.True(t, initialCandidate)
+	require.Equal(t, loadedHash, svc.GetClosedLedger().Hash())
+	require.Equal(t, loadedHash, svc.GetValidatedLedger().Hash())
+
+	replacement, err := svc.GetLedgerByHash(replacementHash)
+	require.NoError(t, err)
+	closedBefore := svc.GetClosedLedger()
+	openBefore := svc.GetOpenLedger()
+	err = svc.SwitchToPreferredLedger(replacement)
+	require.ErrorIs(t, err, ErrPreferredChainSwitch)
+	require.Same(t, closedBefore, svc.GetClosedLedger())
+	require.Same(t, openBefore, svc.GetOpenLedger())
+	require.Same(t, loaded, svc.GetValidatedLedger())
+	require.True(t, svc.IsFastLoadProvisional())
+
+	stashed := make(chan struct{}, 1)
+	svc.SetOnPendingValidationStashed(func(seq uint32, hash [32]byte) {
+		if seq == replacement.Sequence() && hash == replacementHash {
+			stashed <- struct{}{}
+		}
+	})
+	signTime := loaded.CloseTime().Add(2 * time.Second)
+	svc.SetPendingValidationResolver(func(seq uint32, hash [32]byte) (time.Time, bool) {
+		return signTime, seq == replacement.Sequence() && hash == replacementHash
+	})
+	svc.SetValidatedLedgerAt(replacement.Sequence(), replacementHash, signTime)
+	select {
+	case <-stashed:
+	case <-time.After(time.Second):
+		t.Fatal("same-height provisional validation did not arm acquisition")
+	}
+	require.True(t, svc.HasPendingLedgerValidation(replacement.Sequence(), replacementHash))
+
+	require.NoError(t, svc.SwitchToPreferredLedger(replacement))
+	require.Equal(t, replacementHash, svc.GetClosedLedger().Hash())
+	require.Equal(t, replacementHash, svc.GetValidatedLedger().Hash())
+	require.True(t, svc.GetValidatedLedger().IsValidated())
+	require.False(t, svc.IsFastLoadProvisional())
+	require.False(t, svc.NeedsInitialSync())
+	require.False(t, svc.HasPendingLedgerValidation(replacement.Sequence(), replacementHash))
+
+	svc.mu.RLock()
+	gotSignTime := svc.validatedSignTime
+	svc.mu.RUnlock()
+	require.Equal(t, signTime, gotSignTime)
+	svc.ledgerEventMu.Lock()
+	frontierHash := svc.ledgerEventFrontierHash
+	svc.ledgerEventMu.Unlock()
+	require.Equal(t, replacementHash, frontierHash)
+
+	select {
+	case event := <-events:
+		require.NotNil(t, event.Ledger)
+		require.Equal(t, replacementHash, event.Ledger.Hash())
+	case <-time.After(time.Second):
+		t.Fatal("same-height replacement was not published")
+	}
+
+	svc.SetValidatedLedgerAt(replacement.Sequence(), replacementHash, signTime)
+	select {
+	case event := <-events:
+		t.Fatalf("same-height replacement published twice: %x", event.Ledger.Hash())
+	case <-time.After(50 * time.Millisecond):
+	}
+
+	childSeq, err := svc.AcceptConsensusResult(
+		ctx,
+		replacement,
+		nil,
+		nil,
+		replacement.CloseTime().Add(time.Second),
+		true,
+	)
+	require.NoError(t, err)
+	child := svc.GetClosedLedger()
+	childHash := child.Hash()
+	svc.SetValidatedLedgerAt(childSeq, childHash, child.CloseTime())
+	select {
+	case event := <-events:
+		require.NotNil(t, event.Ledger)
+		require.Equal(t, childHash, event.Ledger.Hash())
+		require.Equal(t, replacementHash, event.Ledger.ParentHash())
+	case <-time.After(time.Second):
+		t.Fatal("replacement child was not published")
+	}
 }
 
 func TestService_VerifyStoredSHAMapWalksRootBranchesInParallel(t *testing.T) {
@@ -558,7 +715,9 @@ func TestService_FastLoadFallsBackWhenStorageIsEmpty(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, svc.Start())
 	t.Cleanup(svc.Stop)
-	require.True(t, svc.NeedsInitialSync())
+	require.False(t, svc.NeedsInitialSync())
+	require.True(t, svc.IsFastLoadProvisional())
+	require.False(t, svc.GetServerInfo().NeedsNetworkLedger)
 	require.Nil(t, svc.GetValidatedLedger())
 	require.Zero(t, svc.GetValidatedLedgerIndex())
 }
@@ -594,7 +753,9 @@ func TestService_FastLoadRejectsRelationalLedgerWithoutValidatedTip(t *testing.T
 	require.NoError(t, err)
 	require.NoError(t, reader.Start())
 	t.Cleanup(reader.Stop)
-	require.True(t, reader.NeedsInitialSync())
+	require.False(t, reader.NeedsInitialSync())
+	require.True(t, reader.IsFastLoadProvisional())
+	require.False(t, reader.GetServerInfo().NeedsNetworkLedger)
 	require.Nil(t, reader.GetValidatedLedger())
 	require.Zero(t, reader.GetValidatedLedgerIndex())
 }
@@ -644,7 +805,9 @@ func TestService_FastLoadFallsBackWhenTreeIsCorrupt(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, second.Start())
 	t.Cleanup(second.Stop)
-	require.True(t, second.NeedsInitialSync())
+	require.False(t, second.NeedsInitialSync())
+	require.True(t, second.IsFastLoadProvisional())
+	require.False(t, second.GetServerInfo().NeedsNetworkLedger)
 	require.Nil(t, second.GetValidatedLedger())
 	require.Zero(t, second.GetValidatedLedgerIndex())
 }

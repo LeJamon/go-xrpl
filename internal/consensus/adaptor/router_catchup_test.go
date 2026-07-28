@@ -278,7 +278,8 @@ func TestRouter_TrustedCatchupTargetDoesNotRegress(t *testing.T) {
 		source: catchupSourceValidation,
 	}, r.catchup)
 	assert.True(t, r.isAcquiring(aheadHash))
-	assert.True(t, r.isAcquiring(laggingHash))
+	assert.False(t, r.isAcquiring(laggingHash),
+		"a lower validation must not start a second acquisition after the frontier is set")
 }
 
 // acquireCount totals the acquisition requests the router emitted via either

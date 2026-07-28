@@ -1,17 +1,90 @@
 package adaptor
 
 import (
+	"context"
 	"testing"
 	"time"
 
 	"github.com/LeJamon/go-xrpl/crypto/sha512half"
+	"github.com/LeJamon/go-xrpl/internal/consensus"
+	"github.com/LeJamon/go-xrpl/internal/ledger/genesis"
 	"github.com/LeJamon/go-xrpl/internal/ledger/header"
 	"github.com/LeJamon/go-xrpl/internal/ledger/inbound"
+	"github.com/LeJamon/go-xrpl/internal/ledger/service"
+	"github.com/LeJamon/go-xrpl/internal/peermanagement"
 	"github.com/LeJamon/go-xrpl/internal/peermanagement/message"
 	"github.com/LeJamon/go-xrpl/protocol"
+	"github.com/LeJamon/go-xrpl/shamap/backend"
+	"github.com/LeJamon/go-xrpl/storage/kvstore/memorydb"
+	"github.com/LeJamon/go-xrpl/storage/nodestore"
+	sqlitedb "github.com/LeJamon/go-xrpl/storage/relationaldb/sqlite"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+func makeProvisionalWarmRouter(t *testing.T) (*Router, *recordingSender, *service.Service) {
+	t.Helper()
+	ctx := context.Background()
+	db := nodestore.NewKVDatabase(memorydb.New(), "router-fast-load", 10_000, time.Hour)
+	rm, err := sqlitedb.NewRepositoryManager(t.TempDir())
+	require.NoError(t, err)
+	require.NoError(t, rm.Open(ctx))
+
+	writer, err := service.New(service.Config{
+		Standalone:    true,
+		GenesisConfig: genesis.DefaultConfig(),
+		NodeStore:     db,
+		SHAMapFamily:  backend.New(db),
+		RelationalDB:  rm,
+	})
+	require.NoError(t, err)
+	require.NoError(t, writer.Start())
+	_, err = writer.AcceptLedger(ctx)
+	require.NoError(t, err)
+	writer.FlushPersists()
+	writer.Stop()
+
+	svc, err := service.New(service.Config{
+		Standalone:    false,
+		GenesisConfig: genesis.DefaultConfig(),
+		NodeStore:     db,
+		SHAMapFamily:  backend.New(db),
+		RelationalDB:  rm,
+		FastLoad:      true,
+	})
+	require.NoError(t, err)
+	require.NoError(t, svc.Start())
+	t.Cleanup(func() {
+		svc.Stop()
+		require.NoError(t, rm.Close(ctx))
+		require.NoError(t, db.Close())
+	})
+	require.False(t, svc.NeedsInitialSync())
+	require.True(t, svc.IsFastLoadProvisional())
+	a, sender := newRecordingAdaptor(t, svc)
+	return NewRouter(nil, a, make(chan *peermanagement.InboundMessage, 1)), sender, svc
+}
+
+func statusChangeWithParent(
+	t *testing.T,
+	peerID peermanagement.PeerID,
+	seq uint32,
+	hash, parentHash [32]byte,
+) *peermanagement.InboundMessage {
+	t.Helper()
+	encoded, err := message.Encode(&message.StatusChange{
+		NewEvent:           message.NodeEventClosingLedger,
+		LedgerSeq:          seq,
+		LedgerHash:         hash[:],
+		LedgerHashPrevious: parentHash[:],
+	})
+	require.NoError(t, err)
+	return &peermanagement.InboundMessage{
+		PeerID:  peerID,
+		Type:    uint16(message.TypeStatusChange),
+		Payload: encoded,
+	}
+}
 
 // Issue #1161 keep-up: catch-up WALKS FORWARD one ledger at a time via
 // replay-delta against the held parent when behind on the SAME branch, rather
@@ -156,6 +229,306 @@ func TestRouter_ForwardDeltaStep_FarGapJumpAdopts(t *testing.T) {
 	legacy := rs.legacyCalls()
 	require.Len(t, legacy, 1)
 	assert.Equal(t, tipSeq, legacy[0].seq)
+}
+
+func TestRouter_ProvisionalWarmStartRecentBranchReplaysForward(t *testing.T) {
+	r, sender, svc := makeProvisionalWarmRouter(t)
+	require.True(t, svc.IsFastLoadProvisional())
+	require.Equal(t, consensus.OpModeDisconnected, r.adaptor.GetOperatingMode())
+	closed := svc.GetClosedLedger()
+	require.NotNil(t, closed)
+
+	var nextHash [32]byte
+	nextHash[0] = 0xB1
+	r.recordSeqHash(closed.Sequence()+1, nextHash, closed.Hash(), true)
+	tipSeq := closed.Sequence() + 2
+	trackCatchupPeer(r, 7, tipSeq)
+	r.recordCatchupTarget(tipSeq, [32]byte{0xF0}, 7)
+
+	r.armCatchupTowardTarget()
+
+	replay := sender.replayCalls()
+	require.Len(t, replay, 1)
+	assert.Equal(t, nextHash, replay[0].hash)
+	assert.Empty(t, sender.legacyCalls())
+	assert.Equal(t, closed.Hash(), svc.GetClosedLedger().Hash())
+	assert.True(t, svc.IsFastLoadProvisional())
+}
+
+func TestRouter_ProvisionalWarmStartFarGapJumpAdopts(t *testing.T) {
+	r, sender, svc := makeProvisionalWarmRouter(t)
+	closed := svc.GetClosedLedger()
+	require.NotNil(t, closed)
+
+	r.recordSeqHash(closed.Sequence()+1, [32]byte{0xB1}, closed.Hash(), true)
+	tipSeq := closed.Sequence() + maxForwardDeltaGap + 1
+	tipHash := [32]byte{0xF0}
+	trackCatchupPeer(r, 7, tipSeq)
+	r.recordCatchupTarget(tipSeq, tipHash, 7)
+
+	r.armCatchupTowardTarget()
+
+	assert.Empty(t, sender.replayCalls())
+	legacy := sender.legacyCalls()
+	require.Len(t, legacy, 1)
+	assert.Equal(t, tipSeq, legacy[0].seq)
+	assert.Equal(t, tipHash, legacy[0].hash)
+	assert.Equal(t, closed.Hash(), svc.GetClosedLedger().Hash())
+	assert.True(t, svc.IsFastLoadProvisional())
+}
+
+func TestRouter_ProvisionalWarmStartRecentForkJumpAdopts(t *testing.T) {
+	r, sender, svc := makeProvisionalWarmRouter(t)
+	closed := svc.GetClosedLedger()
+	require.NotNil(t, closed)
+
+	r.recordSeqHash(closed.Sequence()+1, [32]byte{0xB1}, [32]byte{0xD1}, true)
+	tipSeq := closed.Sequence() + 3
+	tipHash := [32]byte{0xF0}
+	trackCatchupPeer(r, 7, tipSeq)
+	r.recordCatchupTarget(tipSeq, tipHash, 7)
+
+	r.armCatchupTowardTarget()
+
+	assert.Empty(t, sender.replayCalls())
+	legacy := sender.legacyCalls()
+	require.Len(t, legacy, 1)
+	assert.Equal(t, tipSeq, legacy[0].seq)
+	assert.Equal(t, tipHash, legacy[0].hash)
+	assert.True(t, svc.IsFastLoadProvisional())
+}
+
+func TestRouter_ProvisionalWarmStartEventOrderPreservesForwardReplay(t *testing.T) {
+	for _, validationFirst := range []bool{true, false} {
+		name := "status_before_validation"
+		if validationFirst {
+			name = "validation_before_status"
+		}
+		t.Run(name, func(t *testing.T) {
+			r, sender, svc := makeProvisionalWarmRouter(t)
+			closed := svc.GetClosedLedger()
+			require.NotNil(t, closed)
+			trusted, err := r.adaptor.GetValidatorKey()
+			require.NoError(t, err)
+
+			peerID := peermanagement.PeerID(7)
+			nextHash := [32]byte{0xB1}
+			tipHash := consensus.LedgerID{0xF0}
+			tipSeq := closed.Sequence() + 2
+			trackCatchupPeer(r, peerID, tipSeq)
+
+			tipValidation := &consensus.Validation{
+				NodeID:    trusted,
+				LedgerSeq: tipSeq,
+				LedgerID:  tipHash,
+			}
+			status := statusChangeWithParent(
+				t,
+				peerID,
+				tipSeq,
+				[32]byte(tipHash),
+				nextHash,
+			)
+
+			if validationFirst {
+				r.maybeAcquireFromValidation(tipValidation, uint64(peerID))
+				assert.Empty(t, sender.replayCalls())
+				assert.Empty(t, sender.legacyCalls())
+				r.handleMessage(status)
+			} else {
+				r.handleMessage(status)
+				assert.Empty(t, sender.legacyCalls())
+				r.maybeAcquireFromValidation(tipValidation, uint64(peerID))
+			}
+
+			replay := sender.replayCalls()
+			require.Len(t, replay, 1)
+			assert.Equal(t, nextHash, replay[0].hash)
+			assert.Empty(t, sender.legacyCalls())
+			assert.True(t, svc.IsFastLoadProvisional())
+		})
+	}
+}
+
+func TestRouter_ProvisionalWarmStartEventOrderFallsBackWhenLinkageIsIncomplete(t *testing.T) {
+	for _, validationFirst := range []bool{true, false} {
+		name := "status_before_validation"
+		if validationFirst {
+			name = "validation_before_status"
+		}
+		t.Run(name, func(t *testing.T) {
+			r, sender, svc := makeProvisionalWarmRouter(t)
+			closed := svc.GetClosedLedger()
+			require.NotNil(t, closed)
+			trusted, err := r.adaptor.GetValidatorKey()
+			require.NoError(t, err)
+
+			peerID := peermanagement.PeerID(7)
+			tipHash := consensus.LedgerID{0xF0}
+			tipSeq := closed.Sequence() + 3
+			trackCatchupPeer(r, peerID, tipSeq)
+			validation := &consensus.Validation{
+				NodeID:    trusted,
+				LedgerSeq: tipSeq,
+				LedgerID:  tipHash,
+			}
+			status := statusChangeWithParent(
+				t,
+				peerID,
+				tipSeq,
+				[32]byte(tipHash),
+				[32]byte{0xB2},
+			)
+
+			if validationFirst {
+				r.maybeAcquireFromValidation(validation, uint64(peerID))
+				assert.Empty(t, sender.replayCalls())
+				assert.Empty(t, sender.legacyCalls())
+				r.handleMessage(status)
+			} else {
+				r.handleMessage(status)
+				r.maybeAcquireFromValidation(validation, uint64(peerID))
+			}
+
+			assert.Empty(t, sender.replayCalls())
+			legacy := sender.legacyCalls()
+			require.Len(t, legacy, 1)
+			assert.Equal(t, tipSeq, legacy[0].seq)
+			assert.Equal(t, [32]byte(tipHash), legacy[0].hash)
+			assert.True(t, svc.IsFastLoadProvisional())
+		})
+	}
+}
+
+func TestRouter_ProvisionalWarmStartMaintenanceFallsBackAfterGrace(t *testing.T) {
+	r, sender, svc := makeProvisionalWarmRouter(t)
+	closed := svc.GetClosedLedger()
+	require.NotNil(t, closed)
+	trusted, err := r.adaptor.GetValidatorKey()
+	require.NoError(t, err)
+
+	peerID := peermanagement.PeerID(7)
+	tipHash := consensus.LedgerID{0xF0}
+	tipSeq := closed.Sequence() + 2
+	trackCatchupPeer(r, peerID, tipSeq)
+	r.maybeAcquireFromValidation(&consensus.Validation{
+		NodeID:    trusted,
+		LedgerSeq: tipSeq,
+		LedgerID:  tipHash,
+	}, uint64(peerID))
+
+	assert.Empty(t, sender.replayCalls())
+	assert.Empty(t, sender.legacyCalls())
+	r.catchupMu.Lock()
+	firstWait := r.linkageWait.since
+	r.catchupMu.Unlock()
+
+	latestHash := consensus.LedgerID{0xF1}
+	latestSeq := tipSeq + 1
+	r.maybeAcquireFromValidation(&consensus.Validation{
+		NodeID:    trusted,
+		LedgerSeq: latestSeq,
+		LedgerID:  latestHash,
+	}, uint64(peerID))
+
+	r.catchupMu.Lock()
+	assert.Equal(t, firstWait, r.linkageWait.since)
+	r.linkageWait.since = time.Now().Add(-catchupLinkageGracePeriod)
+	r.catchupMu.Unlock()
+
+	r.maintenanceTick()
+
+	assert.Empty(t, sender.replayCalls())
+	legacy := sender.legacyCalls()
+	require.Len(t, legacy, 1)
+	assert.Equal(t, latestSeq, legacy[0].seq)
+	assert.Equal(t, [32]byte(latestHash), legacy[0].hash)
+}
+
+func TestAdaptor_FastLoadedLedgerIsReplacedBySameHeightQuorum(t *testing.T) {
+	r, _, svc := makeProvisionalWarmRouter(t)
+	loaded := svc.GetValidatedLedger()
+	require.NotNil(t, loaded)
+
+	stateMap, err := loaded.StateMapSnapshot()
+	require.NoError(t, err)
+	txMap, err := loaded.TxMapSnapshot()
+	require.NoError(t, err)
+	replacementHeader := loaded.Header()
+	replacementHeader.Validated = false
+	replacementHeader.Hash[0] ^= 0xFF
+	replacementHash := replacementHeader.Hash
+	initialCandidate, err := svc.BootstrapLedgerWithState(
+		context.Background(),
+		&replacementHeader,
+		stateMap,
+		txMap,
+	)
+	require.NoError(t, err)
+	require.True(t, initialCandidate)
+
+	switchDone := make(chan error, 1)
+	engine := &mockEngine{switchResult: consensus.LedgerSwitchAccepted}
+	engine.switchHook = func(id consensus.LedgerID) {
+		selected, err := r.adaptor.GetLedger(id)
+		if err == nil {
+			err = r.adaptor.OnLedgerSwitched(selected)
+		}
+		switchDone <- err
+	}
+	r.engine = engine
+	r.adaptor.OnLedgerFullyValidated(
+		consensus.LedgerID(replacementHash),
+		replacementHeader.LedgerIndex,
+	)
+
+	select {
+	case err = <-switchDone:
+		require.NoError(t, err)
+	case <-time.After(time.Second):
+		t.Fatal("quorum-backed provisional replacement was not handed to consensus")
+	}
+	require.Equal(t, replacementHash, svc.GetClosedLedger().Hash())
+	require.Equal(t, replacementHash, svc.GetValidatedLedger().Hash())
+	require.False(t, svc.IsFastLoadProvisional())
+	require.False(t, svc.NeedsInitialSync())
+	require.Equal(t, consensus.OpModeTracking, r.adaptor.GetOperatingMode())
+	require.Contains(t, engine.getLedgers(), consensus.LedgerID(replacementHash))
+}
+
+func TestRouter_FastLoadedSameHeightQuorumAcquiresUnknownReplacement(t *testing.T) {
+	r, sender, svc := makeProvisionalWarmRouter(t)
+	loaded := svc.GetValidatedLedger()
+	require.NotNil(t, loaded)
+	peerID := peermanagement.PeerID(7)
+	replacementHash := loaded.Hash()
+	replacementHash[0] ^= 0xFF
+	trusted, err := r.adaptor.GetValidatorKey()
+	require.NoError(t, err)
+
+	r.maybeAcquireFromValidation(&consensus.Validation{
+		NodeID:    trusted,
+		LedgerSeq: loaded.Sequence(),
+		LedgerID:  consensus.LedgerID(replacementHash),
+	}, uint64(peerID))
+
+	r.adaptor.OnLedgerFullyValidated(
+		consensus.LedgerID(replacementHash),
+		loaded.Sequence(),
+	)
+
+	require.Eventually(t, func() bool {
+		return len(sender.legacyCalls()) == 1
+	}, time.Second, 10*time.Millisecond)
+	assert.Empty(t, sender.replayCalls())
+	legacy := sender.legacyCalls()
+	require.Len(t, legacy, 1)
+	assert.Equal(t, loaded.Sequence(), legacy[0].seq)
+	assert.Equal(t, replacementHash, legacy[0].hash)
+	assert.Equal(t, uint64(peerID), legacy[0].peerID)
+	assert.Empty(t, r.peerStates)
+	assert.True(t, svc.IsFastLoadProvisional())
+	assert.Equal(t, loaded.Hash(), svc.GetClosedLedger().Hash())
 }
 
 // A completed forward fetch becomes available to consensus without advancing

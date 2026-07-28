@@ -331,12 +331,23 @@ func (a *Adaptor) OnLedgerFullyValidated(ledgerID consensus.LedgerID, seq uint32
 	if a.onLedgerFullyValidated != nil {
 		a.onLedgerFullyValidated(seq, hash)
 	}
-	if a.ledgerService.NeedsInitialSync() {
-		if _, err := a.ledgerService.GetLedgerByHash(hash); err != nil {
+	startupConfirmation := a.ledgerService.NeedsInitialSync() ||
+		a.ledgerService.IsFastLoadProvisional()
+	a.ledgerService.SetValidatedLedgerAt(seq, hash, a.validatedSignTime(ledgerID, seq))
+	if startupConfirmation {
+		held, err := a.ledgerService.GetLedgerByHash(hash)
+		if err != nil {
 			a.sender.CheckTracking(seq)
+		} else if closed := a.ledgerService.GetClosedLedger(); held != nil && closed != nil &&
+			held.Sequence() == seq && held.Sequence() == closed.Sequence() &&
+			held.Hash() == closed.Hash() {
+			if err := a.ledgerService.SwitchToPreferredLedger(held); err != nil {
+				a.logger.Warn("failed to confirm current network ledger", "seq", seq, "error", err)
+			} else if a.GetOperatingMode() < consensus.OpModeTracking {
+				a.SetOperatingMode(consensus.OpModeTracking)
+			}
 		}
 	}
-	a.ledgerService.SetValidatedLedgerAt(seq, hash, a.validatedSignTime(ledgerID, seq))
 	a.logger.Info("trusted validation quorum observed",
 		"seq", seq,
 		"hash", fmt.Sprintf("%x", hash[:8]),
@@ -437,9 +448,15 @@ func (a *Adaptor) OnModeChange(oldMode, newMode consensus.Mode) {
 	}
 }
 
-// NeedsInitialSync returns true if the node hasn't yet adopted a ledger from peers.
+// NeedsInitialSync reports whether startup still requires a network ledger.
 func (a *Adaptor) NeedsInitialSync() bool {
 	return a.ledgerService.NeedsInitialSync()
+}
+
+// IsFastLoadProvisional reports whether FastLoad startup still requires trusted
+// network confirmation.
+func (a *Adaptor) IsFastLoadProvisional() bool {
+	return a.ledgerService != nil && a.ledgerService.IsFastLoadProvisional()
 }
 
 func (a *Adaptor) OnPhaseChange(oldPhase, newPhase consensus.Phase) {

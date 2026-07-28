@@ -218,7 +218,6 @@ func TestStoredConsensusCandidateRetriesUntilEngineAccepts(t *testing.T) {
 				defer r.acquisitionMu.Unlock()
 				return r.consensusRecovery.targetHash == hdr.Hash
 			}, time.Second, time.Millisecond)
-			r.maintenanceTick()
 
 			assert.Equal(t, local.Hash(), svc.GetClosedLedger().Hash())
 			assert.Equal(t, consensus.OpModeConnected, a.GetOperatingMode())
