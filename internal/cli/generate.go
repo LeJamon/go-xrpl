@@ -291,6 +291,7 @@ open_files = 500
 cache_size = 16384
 cache_age = 5
 fast_load = false
+fast_load_workers = 0 # 0 = automatic based on available CPUs; maximum 64
 earliest_seq = 32570
 delete_batch = 100
 back_off_milliseconds = 100

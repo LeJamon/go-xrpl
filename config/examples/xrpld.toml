@@ -146,6 +146,7 @@ cache_age = 5                    # decoded node-object cache age in minutes (0 =
 # Also permits failed explicit --load, --ledger, --ledgerfile, or --replay
 # startup to fall back to genesis (standalone) or network acquisition.
 fast_load = false
+fast_load_workers = 0             # 0 = automatic based on available CPUs; maximum 64
 earliest_seq = 32570
 delete_batch = 100
 back_off_milliseconds = 100

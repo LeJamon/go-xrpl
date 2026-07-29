@@ -12,6 +12,7 @@ const (
 	// Pebble reserves 10 non-table files above its minimum 64-entry table cache.
 	minimumPebbleOpenFiles   = 74
 	minimumRotatingOpenFiles = 2 * minimumPebbleOpenFiles
+	maxFastLoadWorkers       = 64
 )
 
 // NodeDBConfig represents the [node_db] section.
@@ -26,6 +27,7 @@ type NodeDBConfig struct {
 	CacheSize           int    `toml:"cache_size" mapstructure:"cache_size"` // node-object cache entries; 0 = default
 	CacheAge            int    `toml:"cache_age" mapstructure:"cache_age"`   // node-object cache age in minutes; 0 = default
 	FastLoad            bool   `toml:"fast_load" mapstructure:"fast_load"`
+	FastLoadWorkers     int    `toml:"fast_load_workers" mapstructure:"fast_load_workers"`
 	EarliestSeq         int    `toml:"earliest_seq" mapstructure:"earliest_seq"`
 	OnlineDelete        int    `toml:"online_delete" mapstructure:"online_delete"`
 	AdvisoryDelete      int    `toml:"advisory_delete" mapstructure:"advisory_delete"`
@@ -84,6 +86,12 @@ func (n *NodeDBConfig) Validate() error {
 	}
 	if err := validateNonNegative("cache_age", n.CacheAge); err != nil {
 		return err
+	}
+	if err := validateNonNegative("fast_load_workers", n.FastLoadWorkers); err != nil {
+		return err
+	}
+	if n.FastLoadWorkers > maxFastLoadWorkers {
+		return fmt.Errorf("fast_load_workers must not exceed %d, got %d", maxFastLoadWorkers, n.FastLoadWorkers)
 	}
 	if err := validateNonNegative("earliest_seq", n.EarliestSeq); err != nil {
 		return err
