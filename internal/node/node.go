@@ -1615,7 +1615,9 @@ func doShutdown(
 	}
 
 	if consensusComponents != nil {
-		consensusComponents.Stop()
+		if err := consensusComponents.Stop(); err != nil {
+			logger.Warn("Consensus component shutdown failed", "err", err)
+		}
 		logger.Info("Consensus components stopped")
 	}
 

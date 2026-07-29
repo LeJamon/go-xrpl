@@ -1,8 +1,11 @@
 package archive
 
 import (
+	"bytes"
 	"context"
 	"errors"
+	"log/slog"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -22,6 +25,7 @@ type fakeRepo struct {
 
 	deletes   []int64 // maxSeq arguments in order
 	deleteErr error
+	deleteCh  chan int64
 }
 
 func (f *fakeRepo) Save(ctx context.Context, v *relationaldb.ValidationRecord) error {
@@ -30,7 +34,13 @@ func (f *fakeRepo) Save(ctx context.Context, v *relationaldb.ValidationRecord) e
 
 func (f *fakeRepo) SaveBatch(ctx context.Context, vs []*relationaldb.ValidationRecord) error {
 	if f.saveWait > 0 {
-		time.Sleep(f.saveWait)
+		timer := time.NewTimer(f.saveWait)
+		defer timer.Stop()
+		select {
+		case <-timer.C:
+		case <-ctx.Done():
+			return ctx.Err()
+		}
 	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -71,13 +81,16 @@ func (f *fakeRepo) DeleteOlderThanSeq(ctx context.Context, maxSeq relationaldb.L
 	kept := f.rows[:0]
 	removed := int64(0)
 	for _, r := range f.rows {
-		if r.LedgerSeq < maxSeq {
+		if r.LedgerSeq < maxSeq && (batchSize <= 0 || removed < int64(batchSize)) {
 			removed++
 			continue
 		}
 		kept = append(kept, r)
 	}
 	f.rows = kept
+	if f.deleteCh != nil {
+		f.deleteCh <- removed
+	}
 	return removed, nil
 }
 
@@ -172,8 +185,9 @@ func TestArchive_CloseDrainsPending(t *testing.T) {
 	if repo.rowCount() != 4 {
 		t.Fatalf("Close did not commit pending rows: got %d, want 4", repo.rowCount())
 	}
-	// Close is idempotent.
-	if err := a.Close(context.Background()); err != nil {
+	canceled, cancel := context.WithCancel(context.Background())
+	cancel()
+	if err := a.Close(canceled); err != nil {
 		t.Fatalf("second Close errored: %v", err)
 	}
 }
@@ -196,7 +210,7 @@ func TestArchive_OnStale_NonBlocking_UnderSlowRepo(t *testing.T) {
 
 func TestArchive_ApplyRetention_HonorsLastSeq(t *testing.T) {
 	repo := &fakeRepo{}
-	a := New(repo, Config{BatchSize: 1, FlushInterval: time.Hour, RetentionLedgers: 10, DeleteBatch: 1000}, nil)
+	a := New(repo, Config{BatchSize: 1000, FlushInterval: time.Hour, RetentionLedgers: 10, DeleteBatch: 1000}, nil)
 	defer a.Close(context.Background())
 
 	for i := uint32(1); i <= 20; i++ {
@@ -222,7 +236,7 @@ func TestArchive_ApplyRetention_HonorsLastSeq(t *testing.T) {
 
 func TestArchive_ApplyRetention_ZeroRetention_Noop(t *testing.T) {
 	repo := &fakeRepo{}
-	a := New(repo, Config{BatchSize: 1, FlushInterval: time.Hour, RetentionLedgers: 0, DeleteBatch: 1000}, nil)
+	a := New(repo, Config{BatchSize: 1000, FlushInterval: time.Hour, RetentionLedgers: 0, DeleteBatch: 1000}, nil)
 	defer a.Close(context.Background())
 
 	for i := uint32(1); i <= 5; i++ {
@@ -308,16 +322,15 @@ func TestArchive_SaveBatch_RetryOnceThenSucceed(t *testing.T) {
 	}
 }
 
-func TestArchive_SaveBatch_PersistentFailure_DropsAndContinues(t *testing.T) {
+func TestArchive_SaveBatch_PersistentFailureRemainsObservable(t *testing.T) {
 	base := &fakeRepo{}
 	// More failures than retries → batch is dropped after attempts.
 	repo := &flakyRepo{fakeRepo: base, failureLeft: 100}
 	a := New(repo, Config{BatchSize: 1, FlushInterval: time.Hour, DeleteBatch: 1}, nil)
-	defer a.Close(context.Background())
 
 	a.OnStale(mkVal(100, 0x01))
-	if err := a.Flush(context.Background()); err != nil {
-		t.Fatal(err)
+	if err := a.Flush(context.Background()); !errors.Is(err, ErrDurability) {
+		t.Fatalf("Flush returned %v, want ErrDurability", err)
 	}
 
 	// Failed batch must be dropped — no row in the underlying repo.
@@ -332,11 +345,18 @@ func TestArchive_SaveBatch_PersistentFailure_DropsAndContinues(t *testing.T) {
 	repo.mu.Unlock()
 
 	a.OnStale(mkVal(101, 0x02))
-	if err := a.Flush(context.Background()); err != nil {
-		t.Fatal(err)
+	if err := a.Flush(context.Background()); !errors.Is(err, ErrDurability) {
+		t.Fatalf("later Flush returned %v, want sticky ErrDurability", err)
 	}
 	if base.rowCount() != 1 {
 		t.Fatalf("writer dead after persistent failure: rowCount=%d, want 1", base.rowCount())
+	}
+	if err := a.Close(context.Background()); !errors.Is(err, ErrDurability) {
+		t.Fatalf("Close returned %v, want sticky ErrDurability", err)
+	}
+	health := a.Health()
+	if health.WriteFailures != 1 || health.PersistenceDropped != 1 || health.Healthy {
+		t.Fatalf("unexpected health after persistence failure: %+v", health)
 	}
 }
 
@@ -375,5 +395,260 @@ func TestArchive_OnStale_AfterClose_IsNoop(t *testing.T) {
 	case <-doneCh:
 	case <-time.After(200 * time.Millisecond):
 		t.Fatalf("OnStale blocked after Close; completed %d/50", dropped.Load())
+	}
+	if got := a.Health().ClosedDropped; got != 50 {
+		t.Fatalf("closed drop count=%d, want 50", got)
+	}
+}
+
+type blockingRepo struct {
+	*fakeRepo
+	started chan struct{}
+	release chan struct{}
+	once    sync.Once
+}
+
+func newBlockingRepo() *blockingRepo {
+	return &blockingRepo{
+		fakeRepo: &fakeRepo{},
+		started:  make(chan struct{}),
+		release:  make(chan struct{}),
+	}
+}
+
+func (r *blockingRepo) SaveBatch(
+	ctx context.Context,
+	vs []*relationaldb.ValidationRecord,
+) error {
+	r.once.Do(func() { close(r.started) })
+	select {
+	case <-r.release:
+		return r.fakeRepo.SaveBatch(ctx, vs)
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+
+func TestArchive_FlushRacingCloseWaitsForPersistence(t *testing.T) {
+	repo := newBlockingRepo()
+	a := New(repo, Config{BatchSize: 1000, FlushInterval: time.Hour, DeleteBatch: 1}, nil)
+	a.OnStale(mkVal(1, 1))
+
+	flushDone := make(chan error, 1)
+	go func() { flushDone <- a.Flush(context.Background()) }()
+	<-repo.started
+
+	closeDone := make(chan error, 1)
+	go func() { closeDone <- a.Close(context.Background()) }()
+
+	select {
+	case err := <-flushDone:
+		t.Fatalf("Flush returned before persistence completed: %v", err)
+	default:
+	}
+	select {
+	case err := <-closeDone:
+		t.Fatalf("Close returned before persistence completed: %v", err)
+	default:
+	}
+
+	close(repo.release)
+	if err := <-flushDone; err != nil {
+		t.Fatalf("Flush returned %v", err)
+	}
+	if err := <-closeDone; err != nil {
+		t.Fatalf("Close returned %v", err)
+	}
+	if got := repo.rowCount(); got != 1 {
+		t.Fatalf("persisted rows=%d, want 1", got)
+	}
+}
+
+func TestArchive_FlushRacingCloseReturnsErrClosedWhenCloseWins(t *testing.T) {
+	repo := newBlockingRepo()
+	a := New(repo, Config{BatchSize: 1, FlushInterval: time.Hour, DeleteBatch: 1}, nil)
+	a.OnStale(mkVal(1, 1))
+	<-repo.started
+
+	closeDone := make(chan error, 1)
+	go func() { closeDone <- a.Close(context.Background()) }()
+	<-a.stop
+
+	if err := a.Flush(context.Background()); !errors.Is(err, ErrClosed) {
+		t.Fatalf("Flush returned %v, want ErrClosed", err)
+	}
+	close(repo.release)
+	if err := <-closeDone; err != nil {
+		t.Fatalf("Close returned %v", err)
+	}
+}
+
+func TestArchive_CloseTimeoutRemainsWaitable(t *testing.T) {
+	repo := newBlockingRepo()
+	a := New(repo, Config{BatchSize: 1, FlushInterval: time.Hour, DeleteBatch: 1}, nil)
+	a.OnStale(mkVal(1, 1))
+	<-repo.started
+
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
+	defer cancel()
+	if err := a.Close(ctx); !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("first Close returned %v, want deadline exceeded", err)
+	}
+
+	waitCtx, waitCancel := context.WithTimeout(context.Background(), time.Second)
+	defer waitCancel()
+	err := a.Close(waitCtx)
+	if !errors.Is(err, ErrDurability) {
+		t.Fatalf("second Close returned %v, want terminal ErrDurability", err)
+	}
+	if got := a.Health().PersistenceDropped; got != 1 {
+		t.Fatalf("persistence drops=%d, want 1", got)
+	}
+}
+
+func TestArchive_OnStaleSaturationIsNonBlockingAndCounted(t *testing.T) {
+	repo := newBlockingRepo()
+	var logs bytes.Buffer
+	logger := slog.New(slog.NewTextHandler(&logs, nil))
+	a := New(repo, Config{BatchSize: 1, FlushInterval: time.Hour, DeleteBatch: 1}, logger)
+
+	a.OnStale(mkVal(1, 1))
+	<-repo.started
+	for i := range cap(a.ch) {
+		a.OnStale(mkVal(uint32(i+2), 1))
+	}
+	start := time.Now()
+	for i := range 100 {
+		a.OnStale(mkVal(uint32(i+100), 2))
+	}
+	if elapsed := time.Since(start); elapsed > 250*time.Millisecond {
+		t.Fatalf("100 saturated OnStale calls took %v", elapsed)
+	}
+
+	health := a.Health()
+	if health.OverloadDropped != 100 {
+		t.Fatalf("overload drops=%d, want 100", health.OverloadDropped)
+	}
+	if got := strings.Count(logs.String(), "channel full"); got != 1 {
+		t.Fatalf("overload warning count=%d, want 1\n%s", got, logs.String())
+	}
+
+	close(repo.release)
+	if err := a.Close(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if got, want := repo.rowCount(), int(health.Enqueued); got != want {
+		t.Fatalf("persisted rows=%d, admitted=%d", got, want)
+	}
+}
+
+func TestArchive_ConcurrentAdmissionAndCloseAccountsEveryValidation(t *testing.T) {
+	repo := &fakeRepo{}
+	a := New(repo, Config{BatchSize: 1000, FlushInterval: time.Hour, DeleteBatch: 1}, nil)
+
+	start := make(chan struct{})
+	var producers sync.WaitGroup
+	for i := range 200 {
+		producers.Add(1)
+		go func(i int) {
+			defer producers.Done()
+			<-start
+			a.OnStale(mkVal(uint32(i+1), byte(i)))
+		}(i)
+	}
+	closeDone := make(chan error, 1)
+	go func() {
+		<-start
+		closeDone <- a.Close(context.Background())
+	}()
+	close(start)
+	producers.Wait()
+	if err := <-closeDone; err != nil {
+		t.Fatal(err)
+	}
+
+	health := a.Health()
+	if got := health.Enqueued + health.ClosedDropped + health.OverloadDropped; got != 200 {
+		t.Fatalf("accounted validations=%d, want 200; health=%+v", got, health)
+	}
+	if got := uint64(repo.rowCount()); got != health.Enqueued {
+		t.Fatalf("persisted rows=%d, admitted=%d", got, health.Enqueued)
+	}
+	if got := len(a.ch); got != 0 {
+		t.Fatalf("buffered rows after Close=%d, want 0", got)
+	}
+}
+
+func TestArchive_MalformedDropsAreCountedAndRateLimited(t *testing.T) {
+	repo := &fakeRepo{}
+	var logs bytes.Buffer
+	logger := slog.New(slog.NewTextHandler(&logs, nil))
+	a := New(repo, Config{BatchSize: 100, FlushInterval: time.Hour, DeleteBatch: 1}, logger)
+	defer a.Close(context.Background())
+
+	for i := range 5 {
+		v := mkVal(uint32(i+1), 1)
+		v.Raw = nil
+		a.OnStale(v)
+	}
+	if err := a.Flush(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	health := a.Health()
+	if health.MalformedDropped != 5 {
+		t.Fatalf("malformed drops=%d, want 5", health.MalformedDropped)
+	}
+	if got := strings.Count(logs.String(), "without canonical raw bytes"); got != 1 {
+		t.Fatalf("malformed warning count=%d, want 1\n%s", got, logs.String())
+	}
+}
+
+func TestArchive_PersistsPartialValidation(t *testing.T) {
+	repo := &fakeRepo{}
+	a := New(repo, Config{BatchSize: 100, FlushInterval: time.Hour, DeleteBatch: 1}, nil)
+	defer a.Close(context.Background())
+
+	v := mkVal(10, 1)
+	v.Full = false
+	v.Flags = 0x80000000
+	a.OnStale(v)
+	if err := a.Flush(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if got := repo.rowCount(); got != 1 {
+		t.Fatalf("partial validation rows=%d, want 1", got)
+	}
+}
+
+func TestArchive_RetentionRunsIdleAndContinuesPastBudget(t *testing.T) {
+	deleteCh := make(chan int64, 32)
+	repo := &fakeRepo{deleteCh: deleteCh}
+	for seq := uint32(1); seq <= 30; seq++ {
+		repo.rows = append(repo.rows, toRecord(mkVal(seq, byte(seq)), seq))
+	}
+	ticks := make(chan time.Time, 1)
+	a := newArchive(
+		repo,
+		Config{
+			BatchSize:        100,
+			FlushInterval:    time.Hour,
+			RetentionLedgers: 10,
+			DeleteBatch:      2,
+		},
+		nil,
+		ticks,
+	)
+	defer a.Close(context.Background())
+	a.NoteFullyValidated(30)
+
+	ticks <- time.Now()
+	for i := 0; i < 10; i++ {
+		<-deleteCh
+	}
+	if got := repo.rowCount(); got != 11 {
+		t.Fatalf("rows after idle catch-up=%d, want 11", got)
+	}
+	if health := a.Health(); health.RetentionFailures != 0 {
+		t.Fatalf("unexpected retention health: %+v", health)
 	}
 }

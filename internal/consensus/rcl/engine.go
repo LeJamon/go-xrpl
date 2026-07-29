@@ -384,8 +384,8 @@ func (e *Engine) TimerEntry() {
 
 // SetArchive wires (or, with nil, detaches) the validation archive.
 // Detach clears the onStale callback so the archive can be Close()d
-// without a use-after-close send. Safe before/after Start and with Stop,
-// not with Start.
+// without a use-after-close send. Safe before or after Start; callers must
+// not replace the owned archive concurrently with Start or Stop.
 func (e *Engine) SetArchive(a ValidationArchive) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
@@ -510,8 +510,7 @@ func (e *Engine) Start(ctx context.Context) error {
 }
 
 // Stop shuts down the engine. A wired archive is drained and committed
-// before return so no stale validations are lost (modulo SaveBatch
-// failures, which the writer re-queues).
+// before return, and any terminal durability failure is returned.
 func (e *Engine) Stop() error {
 	// Guard against Stop before Start: e.cancel is nil until Start runs, and a
 	// defensive doShutdown / error-path stop must not nil-panic (same class as
@@ -522,17 +521,23 @@ func (e *Engine) Stop() error {
 	e.wg.Wait()
 	e.eventBus.Stop()
 
-	// Flush has no archive interaction, so its ordering relative to the
-	// archive close below is irrelevant.
+	arc := e.loadArchive()
+	if arc != nil {
+		e.SetArchive(nil)
+	}
+
 	if e.validationTracker != nil {
 		e.validationTracker.Flush()
 	}
 
-	if arc := e.loadArchive(); arc != nil {
+	if arc != nil {
 		// Bounded close — a stuck archive must not hang shutdown.
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-		_ = arc.Close(ctx)
+		err := arc.Close(ctx)
 		cancel()
+		if err != nil {
+			return fmt.Errorf("close validation archive: %w", err)
+		}
 	}
 	return nil
 }

@@ -173,7 +173,8 @@ func (c *Components) runValidatorListTick(ctx context.Context, interval time.Dur
 }
 
 // Stop gracefully shuts down all components.
-func (c *Components) Stop() {
+func (c *Components) Stop() error {
+	var engineErr error
 	if c.vlTickCancel != nil {
 		c.vlTickCancel()
 	}
@@ -200,7 +201,7 @@ func (c *Components) Stop() {
 		c.Adaptor.StopConsensusPhaseDispatcher()
 	}
 	if c.Engine != nil {
-		_ = c.Engine.Stop()
+		engineErr = c.Engine.Stop()
 	}
 	// Drain both acquisition paths after the router loop has stopped. Components
 	// are one-shot; a process restart constructs a fresh Router.
@@ -219,6 +220,7 @@ func (c *Components) Stop() {
 	if c.Overlay != nil {
 		_ = c.Overlay.Stop()
 	}
+	return engineErr
 }
 
 // NewFromConfig creates and wires all consensus/networking components from the app config.
