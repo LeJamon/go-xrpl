@@ -49,7 +49,9 @@ func TestStatusChange_WrongLedgerSubstitutesLostSync(t *testing.T) {
 	_, err := svc.AcceptLedger(context.TODO())
 	require.NoError(t, err)
 
+	a.SetOperatingMode(consensus.OpModeFull)
 	a.OnModeChange(consensus.ModeObserving, consensus.ModeWrongLedger)
+	require.Equal(t, consensus.OpModeConnected, a.GetOperatingMode())
 	a.OnPhaseChange(consensus.PhaseOpen, consensus.PhaseEstablish)
 	a.OnPhaseChange(consensus.PhaseEstablish, consensus.PhaseAccepted)
 
@@ -68,6 +70,33 @@ func TestStatusChange_WrongLedgerSubstitutesLostSync(t *testing.T) {
 	require.Len(t, events, 5)
 	assert.Equal(t, message.NodeEventClosingLedger, events[3])
 	assert.Equal(t, message.NodeEventAcceptedLedger, events[4])
+}
+
+func TestStatusChange_WrongLedgerDemotionPolicy(t *testing.T) {
+	tests := []struct {
+		name    string
+		initial consensus.OperatingMode
+		newMode consensus.Mode
+		want    consensus.OperatingMode
+	}{
+		{name: "full", initial: consensus.OpModeFull, newMode: consensus.ModeWrongLedger, want: consensus.OpModeConnected},
+		{name: "tracking", initial: consensus.OpModeTracking, newMode: consensus.ModeWrongLedger, want: consensus.OpModeConnected},
+		{name: "connected", initial: consensus.OpModeConnected, newMode: consensus.ModeWrongLedger, want: consensus.OpModeConnected},
+		{name: "syncing", initial: consensus.OpModeSyncing, newMode: consensus.ModeWrongLedger, want: consensus.OpModeSyncing},
+		{name: "disconnected", initial: consensus.OpModeDisconnected, newMode: consensus.ModeWrongLedger, want: consensus.OpModeDisconnected},
+		{name: "recovery does not promote", initial: consensus.OpModeFull, newMode: consensus.ModeObserving, want: consensus.OpModeFull},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			svc := newTestLedgerService(t)
+			a := New(Config{LedgerService: svc, Sender: &scRecordingSender{}})
+			a.SetOperatingMode(tt.initial)
+
+			a.OnModeChange(consensus.ModeObserving, tt.newMode)
+
+			require.Equal(t, tt.want, a.GetOperatingMode())
+		})
+	}
 }
 
 // The SWITCHED_LEDGER broadcast carries the adopted ledger's identity and,

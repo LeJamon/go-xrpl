@@ -389,8 +389,8 @@ const (
 )
 
 // checkConvergence drives the accept gate (rippled's
-// phaseEstablish→haveConsensus→checkConsensus flow): maintain the local
-// "converged" observability flag, compute consensusState, then dispatch.
+// phaseEstablish→haveConsensus→checkConsensus flow): compute consensusState,
+// then dispatch.
 // Every accept path — Yes, MovedOn, and Expired — sits behind the
 // close-time gate, exactly as in rippled where haveConsensus returns true
 // for all three and phaseEstablish then returns on !haveCloseTimeConsensus_
@@ -412,13 +412,6 @@ func (e *Engine) checkConvergence() {
 	agree, disagree := e.countAgreement()
 	total := agree + disagree
 
-	// EarlyConvergencePct is a go-xrpl-local observability flag; acceptance
-	// uses MinConsensusPct inside checkConsensusState.
-	if total > 0 && agree*100 >= total*e.thresholds.EarlyConvergencePct {
-		e.converged = true
-		e.state.Converged = true
-	}
-
 	state := e.checkConsensusState(roundTime, agree, total)
 
 	if state == consensusStateNo {
@@ -432,7 +425,7 @@ func (e *Engine) checkConvergence() {
 	// stays in Establish and recovers only via checkLedger resyncing it onto
 	// the network's ledger.
 	if state == consensusStateExpired {
-		minimumCounter := len(e.parms.AvalancheCutoffs) * e.parms.MinRounds
+		minimumCounter := e.parms.AvalancheCutoffCount() * e.parms.MinRounds
 		if e.establishCounter < minimumCounter {
 			slog.Warn("consensus expired but inside retry window — continuing",
 				"t", "consensus",
@@ -554,8 +547,7 @@ func (e *Engine) reproposeCurrentLocked() {
 }
 
 // checkConsensusState mirrors rippled's checkConsensus, returning
-// {No, Yes, MovedOn, Expired}. Args are caller-computed so e.converged
-// stays on a consistent snapshot. Priority order:
+// {No, Yes, MovedOn, Expired}. Priority order:
 //
 //  1. roundTime <= ledgerMIN_CONSENSUS                         → No
 //  2. currentProposers < prevProposers*3/4 AND

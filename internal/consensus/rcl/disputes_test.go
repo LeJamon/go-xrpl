@@ -183,6 +183,19 @@ func TestDisputeTracker_AllStalled(t *testing.T) {
 			t.Fatalf("AllStalled must be false when any dispute is not stalled")
 		}
 	})
+
+	t.Run("invalid avalanche state panics", func(t *testing.T) {
+		dt := NewDisputeTracker()
+		txID := makeTxID(7)
+		dt.CreateDispute(txID, nil, true)
+		dt.Dispute(txID).AvalancheState = consensus.AvalancheStuck + 1
+		defer func() {
+			if recover() == nil {
+				t.Fatal("AllStalled did not panic")
+			}
+		}()
+		dt.AllStalled(parms, true, parms.StalledRounds+1)
+	})
 }
 
 func TestConsensus_OverlappingDisjointProposals_Converges(t *testing.T) {

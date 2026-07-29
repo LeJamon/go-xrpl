@@ -1,6 +1,7 @@
 package consensus
 
 import (
+	"errors"
 	"log/slog"
 	"sync"
 	"sync/atomic"
@@ -163,13 +164,21 @@ type EventSubscriber interface {
 	OnEvent(event Event)
 }
 
+var (
+	// ErrEventBusStarted reports an attempt to start a running EventBus.
+	ErrEventBusStarted = errors.New("consensus event bus already started")
+	// ErrEventBusStopped reports an attempt to restart a stopped EventBus.
+	ErrEventBusStopped = errors.New("consensus event bus stopped")
+)
+
 // EventBus manages event subscriptions and delivery.
 type EventBus struct {
 	mu          sync.RWMutex
 	subscribers []EventSubscriber
 	eventCh     chan Event
-	stopCh      chan struct{}
-	stopOnce    sync.Once
+	doneCh      chan struct{}
+	started     bool
+	stopped     bool
 	dropped     atomic.Uint64
 	lastDropLog atomic.Int64 // unix-nanos of the last drop warning, for rate limiting
 }
@@ -182,7 +191,7 @@ func NewEventBus(bufferSize int) *EventBus {
 	return &EventBus{
 		subscribers: make([]EventSubscriber, 0),
 		eventCh:     make(chan Event, bufferSize),
-		stopCh:      make(chan struct{}),
+		doneCh:      make(chan struct{}),
 	}
 }
 
@@ -193,14 +202,22 @@ func (eb *EventBus) Subscribe(sub EventSubscriber) {
 	eb.mu.Unlock()
 }
 
-// Publish sends an event to all subscribers. On a full buffer the event is
-// dropped — but counted and (rate-limited) logged, so an operator debugging
+// Publish queues an event on a running bus and reports whether it was accepted.
+// Calls before Start or after Stop are rejected. On a full buffer the event is
+// dropped, counted, and logged with rate limiting, so an operator debugging
 // "missing validations on the stream" has a signal instead of silence. This is
 // the one lossy consensus channel; every other shed in the tree is counted, and
 // now so is this one.
-func (eb *EventBus) Publish(event Event) {
+func (eb *EventBus) Publish(event Event) bool {
+	eb.mu.RLock()
+	defer eb.mu.RUnlock()
+	if !eb.started || eb.stopped {
+		return false
+	}
+
 	select {
 	case eb.eventCh <- event:
+		return true
 	default:
 		n := eb.dropped.Add(1)
 		// Rate-limit to at most one warning per second so a burst that overflows
@@ -211,6 +228,7 @@ func (eb *EventBus) Publish(event Event) {
 			slog.Warn("consensus event bus buffer full; dropping events",
 				"t", "consensus", "eventType", event.Type(), "droppedTotal", n)
 		}
+		return false
 	}
 }
 
@@ -218,34 +236,47 @@ func (eb *EventBus) Publish(event Event) {
 // was full.
 func (eb *EventBus) DroppedEvents() uint64 { return eb.dropped.Load() }
 
-// Start begins processing events.
-func (eb *EventBus) Start() {
+// Start begins processing events. An EventBus has a one-shot lifecycle.
+func (eb *EventBus) Start() error {
+	eb.mu.Lock()
+	if eb.stopped {
+		eb.mu.Unlock()
+		return ErrEventBusStopped
+	}
+	if eb.started {
+		eb.mu.Unlock()
+		return ErrEventBusStarted
+	}
+	eb.started = true
+	eb.mu.Unlock()
+
 	go eb.run()
+	return nil
 }
 
-// Stop stops the event bus. Idempotent: a second call (defensive cleanup,
-// error-path + deferred stop) is a no-op rather than a close-of-closed panic.
+// Stop stops the event bus after delivering every event accepted before stop.
 func (eb *EventBus) Stop() {
-	eb.stopOnce.Do(func() { close(eb.stopCh) })
-}
-
-// Events returns the event channel for direct consumption.
-func (eb *EventBus) Events() <-chan Event {
-	return eb.eventCh
+	eb.mu.Lock()
+	if !eb.stopped {
+		eb.stopped = true
+		close(eb.eventCh)
+		if !eb.started {
+			close(eb.doneCh)
+		}
+	}
+	done := eb.doneCh
+	eb.mu.Unlock()
+	<-done
 }
 
 func (eb *EventBus) run() {
-	for {
-		select {
-		case <-eb.stopCh:
-			return
-		case event := <-eb.eventCh:
-			eb.mu.RLock()
-			subs := eb.subscribers
-			eb.mu.RUnlock()
-			for _, sub := range subs {
-				sub.OnEvent(event)
-			}
+	defer close(eb.doneCh)
+	for event := range eb.eventCh {
+		eb.mu.RLock()
+		subs := append([]EventSubscriber(nil), eb.subscribers...)
+		eb.mu.RUnlock()
+		for _, sub := range subs {
+			sub.OnEvent(event)
 		}
 	}
 }

@@ -16,7 +16,7 @@ import (
 // the entry into ledgerHistory[seq] but MUST NOT regress
 // s.closedLedger.Sequence(). Without the gate, goxrpl's
 // closed_ledger.seq oscillates downward each time a parent acquires,
-// the ModeManager's Tracking → Full check (which compares ourSeq vs
+// the catch-up Tracking → Full check (which compares ourSeq vs
 // peerSeq) wedges on the regressing tip, and the engine never gets
 // promoted to OpModeFull — the structural bootstrap deadlock that
 // blocked the all-5-UNL soak rerun in the second-pass review.

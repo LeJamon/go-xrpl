@@ -5,15 +5,21 @@ import (
 	"time"
 )
 
-// Engine is the consensus algorithm interface that node implementations plug into.
-type Engine interface {
+// EngineLifecycle owns consensus background resources.
+type EngineLifecycle interface {
 	Start(ctx context.Context) error
 
 	Stop() error
+}
 
+// EngineRoundDriver starts consensus rounds.
+type EngineRoundDriver interface {
 	// StartRound begins a round; proposing enables this node's proposal.
 	StartRound(round RoundID, proposing bool) error
+}
 
+// EngineInbound accepts network consensus messages.
+type EngineInbound interface {
 	// OnProposal handles an incoming proposal. originPeer is the overlay peer
 	// ID that delivered it (0 for self-originated); passed to the relay path
 	// so gossip forwards exclude the originator.
@@ -24,9 +30,15 @@ type Engine interface {
 	OnValidation(validation *Validation, originPeer uint64) error
 
 	OnTxSet(id TxSetID, txs [][]byte) error
+}
 
+// EngineLedgerReceiver accepts an acquired ledger from an external driver.
+type EngineLedgerReceiver interface {
 	OnLedger(id LedgerID, ledger []byte) error
+}
 
+// EngineLedgerSwitch drives wrong-ledger recovery.
+type EngineLedgerSwitch interface {
 	// TrySwitchToLedger synchronously attempts to make a locally-held ledger
 	// the consensus parent. The candidate must be the exact wrong-ledger
 	// recovery target, the validated tip, or the current network preference.
@@ -36,26 +48,44 @@ type Engine interface {
 	// retry budget. Lets a node pinned in wrongLedger un-pin and drop to
 	// degraded resync rather than starving the stall watchdog into os.Exit.
 	OnLedgerAcquireFailed(id LedgerID)
+}
 
-	State() *RoundState
-
+// EngineObservability exposes immutable consensus status.
+type EngineObservability interface {
 	Mode() Mode
 
 	Phase() Phase
 
 	IsProposing() bool
 
-	Timing() Timing
-
 	GetLastCloseInfo() (proposers int, convergeTime time.Duration)
 
 	// GetJSON returns the consensus-round state as a JSON map backing the
 	// consensus_info RPC; full requests the detailed view.
 	GetJSON(full bool) map[string]any
+}
 
+// EngineEvents registers observational event subscribers.
+type EngineEvents interface {
 	// Subscribe registers a sink for the engine's typed event bus. The engine
 	// fires events on its own goroutine, so OnEvent must not block.
 	Subscribe(sub EventSubscriber)
+}
+
+// RouterEngine is the consensus surface used by the message router.
+type RouterEngine interface {
+	EngineInbound
+	EngineLedgerSwitch
+}
+
+// Engine is the complete consensus surface used by node wiring.
+type Engine interface {
+	EngineLifecycle
+	EngineRoundDriver
+	RouterEngine
+	EngineLedgerReceiver
+	EngineObservability
+	EngineEvents
 }
 
 // VerifiedValidationProcessor is implemented by engines that separate

@@ -435,6 +435,12 @@ func collectValidationFees(historian consensus.ValidationHistorian, ledgerID con
 
 func (a *Adaptor) OnModeChange(oldMode, newMode consensus.Mode) {
 	a.consensusMode.Store(int32(newMode))
+	if newMode == consensus.ModeWrongLedger {
+		current := a.GetOperatingMode()
+		if current == consensus.OpModeFull || current == consensus.OpModeTracking {
+			a.SetOperatingMode(consensus.OpModeConnected)
+		}
+	}
 	a.logger.Info("Consensus mode changed",
 		"from", oldMode.String(),
 		"to", newMode.String(),

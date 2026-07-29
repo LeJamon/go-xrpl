@@ -3,6 +3,7 @@ package rcl
 import (
 	"bytes"
 	"context"
+	"errors"
 	"log/slog"
 	"slices"
 	"strings"
@@ -12,6 +13,12 @@ import (
 
 	"github.com/LeJamon/go-xrpl/internal/consensus"
 )
+
+type testEventSubscriberFunc func(consensus.Event)
+
+func (f testEventSubscriberFunc) OnEvent(event consensus.Event) {
+	f(event)
+}
 
 // mockLedger implements consensus.Ledger for testing
 type mockLedger struct {
@@ -106,9 +113,12 @@ type mockAdaptor struct {
 	quorumUnavailable bool
 
 	// Data stores
-	ledgers map[consensus.LedgerID]consensus.Ledger
-	txSets  map[consensus.TxSetID]consensus.TxSet
-	lastLCL consensus.Ledger
+	ledgers    map[consensus.LedgerID]consensus.Ledger
+	txSets     map[consensus.TxSetID]consensus.TxSet
+	lastLCL    consensus.Ledger
+	lastLCLErr error
+	lclStarted chan struct{}
+	lclRelease chan struct{}
 
 	// Peer-reported LCLs served by PeerReportedLedgers.
 	peerLCLs []consensus.LedgerID
@@ -300,8 +310,16 @@ func (a *mockAdaptor) GetLedgerBySeq(seq uint32) (consensus.Ledger, error) {
 
 func (a *mockAdaptor) GetLastClosedLedger() (consensus.Ledger, error) {
 	a.mu.RLock()
-	defer a.mu.RUnlock()
-	return a.lastLCL, nil
+	ledger, err := a.lastLCL, a.lastLCLErr
+	started, release := a.lclStarted, a.lclRelease
+	a.mu.RUnlock()
+	if started != nil {
+		close(started)
+	}
+	if release != nil {
+		<-release
+	}
+	return ledger, err
 }
 
 func (a *mockAdaptor) BuildLedger(parent consensus.Ledger, txSet consensus.TxSet, closeTime time.Time, _ bool, _ [][]byte) (consensus.Ledger, error) {
@@ -771,6 +789,90 @@ func TestEngine_StartStop(t *testing.T) {
 	}
 }
 
+func TestEngine_StartFailureCanRetry(t *testing.T) {
+	adaptor := newMockAdaptor()
+	adaptor.lastLCLErr = errors.New("load failed")
+	config := DefaultConfig()
+	config.ManualTick = true
+	engine := NewEngine(adaptor, config)
+
+	if err := engine.Start(t.Context()); err == nil {
+		t.Fatal("Start succeeded with a failed LCL lookup")
+	}
+	if engine.ctx != nil || engine.cancel != nil {
+		t.Fatal("failed Start retained context state")
+	}
+
+	adaptor.lastLCLErr = nil
+	if err := engine.Start(t.Context()); err != nil {
+		t.Fatalf("retry Start: %v", err)
+	}
+	if err := engine.Stop(); err != nil {
+		t.Fatalf("Stop: %v", err)
+	}
+}
+
+func TestEngine_StartTwicePreservesContext(t *testing.T) {
+	config := DefaultConfig()
+	config.ManualTick = true
+	engine := NewEngine(newMockAdaptor(), config)
+	if err := engine.Start(t.Context()); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	firstCtx := engine.ctx
+	if err := engine.Start(t.Context()); !errors.Is(err, consensus.ErrEventBusStarted) {
+		t.Fatalf("second Start error = %v, want %v", err, consensus.ErrEventBusStarted)
+	}
+	if engine.ctx != firstCtx {
+		t.Fatal("second Start replaced the running context")
+	}
+	if err := engine.Stop(); err != nil {
+		t.Fatalf("Stop: %v", err)
+	}
+}
+
+func TestEngine_StopWaitsForConcurrentStart(t *testing.T) {
+	adaptor := newMockAdaptor()
+	adaptor.lclStarted = make(chan struct{})
+	adaptor.lclRelease = make(chan struct{})
+	config := DefaultConfig()
+	config.ManualTick = true
+	engine := NewEngine(adaptor, config)
+
+	startResult := make(chan error, 1)
+	go func() {
+		startResult <- engine.Start(t.Context())
+	}()
+	<-adaptor.lclStarted
+
+	stopCalled := make(chan struct{})
+	stopResult := make(chan error, 1)
+	go func() {
+		close(stopCalled)
+		stopResult <- engine.Stop()
+	}()
+	<-stopCalled
+	select {
+	case err := <-stopResult:
+		t.Fatalf("Stop returned before Start completed: %v", err)
+	case <-time.After(20 * time.Millisecond):
+	}
+
+	close(adaptor.lclRelease)
+	if err := <-startResult; err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	if err := <-stopResult; err != nil {
+		t.Fatalf("Stop: %v", err)
+	}
+	if engine.ctx == nil || engine.ctx.Err() == nil {
+		t.Fatal("engine context remained live after Stop")
+	}
+	if engine.eventBus.Publish(&consensus.TimerFiredEvent{}) {
+		t.Fatal("event bus accepted publication after Stop")
+	}
+}
+
 func TestEngine_StartRound_Proposing(t *testing.T) {
 	adaptor := newMockAdaptor()
 	adaptor.validator = true
@@ -792,13 +894,12 @@ func TestEngine_StartRound_Proposing(t *testing.T) {
 		t.Errorf("Expected Open phase, got %v", engine.Phase())
 	}
 
-	state := engine.State()
-	if state == nil {
+	if engine.state == nil {
 		t.Fatal("Expected state to be set")
 	}
 
-	if state.Round != round {
-		t.Errorf("Expected round %v, got %v", round, state.Round)
+	if engine.state.Round != round {
+		t.Errorf("Expected round %v, got %v", round, engine.state.Round)
 	}
 }
 
@@ -1485,28 +1586,6 @@ func TestEngine_IsValidating(t *testing.T) {
 	}
 }
 
-func TestEngine_Timing(t *testing.T) {
-	adaptor := newMockAdaptor()
-	config := DefaultConfig()
-	engine := NewEngine(adaptor, config)
-
-	timing := engine.Timing()
-	if timing.LedgerMinClose != config.Timing.LedgerMinClose {
-		t.Error("Timing mismatch")
-	}
-}
-
-func TestEngine_Events(t *testing.T) {
-	adaptor := newMockAdaptor()
-	config := DefaultConfig()
-	engine := NewEngine(adaptor, config)
-
-	events := engine.Events()
-	if events == nil {
-		t.Error("Expected events channel to be non-nil")
-	}
-}
-
 func TestEngine_ModeTransitions(t *testing.T) {
 	adaptor := newMockAdaptor()
 	adaptor.validator = true
@@ -1529,6 +1608,47 @@ func TestEngine_ModeTransitions(t *testing.T) {
 
 	if engine.Mode() != consensus.ModeProposing {
 		t.Errorf("Expected Proposing mode, got %v", engine.Mode())
+	}
+}
+
+func TestEngine_ModeChangeBypassesSaturatedEventBus(t *testing.T) {
+	adaptor := newMockAdaptor()
+	engine := NewEngine(adaptor, DefaultConfig())
+	entered := make(chan struct{})
+	release := make(chan struct{})
+	var blockOnce sync.Once
+	engine.eventBus.Subscribe(testEventSubscriberFunc(func(consensus.Event) {
+		blockOnce.Do(func() {
+			close(entered)
+			<-release
+		})
+	}))
+	if err := engine.eventBus.Start(); err != nil {
+		t.Fatalf("Start event bus: %v", err)
+	}
+	if !engine.eventBus.Publish(&consensus.TimerFiredEvent{}) {
+		t.Fatal("initial event was rejected")
+	}
+	<-entered
+	for range 100 {
+		if !engine.eventBus.Publish(&consensus.TimerFiredEvent{}) {
+			t.Fatal("event bus filled before its configured capacity")
+		}
+	}
+
+	engine.mu.Lock()
+	engine.setMode(consensus.ModeWrongLedger)
+	engine.mu.Unlock()
+	close(release)
+	engine.eventBus.Stop()
+
+	if got := engine.eventBus.DroppedEvents(); got != 1 {
+		t.Fatalf("DroppedEvents = %d, want 1", got)
+	}
+	adaptor.mu.RLock()
+	defer adaptor.mu.RUnlock()
+	if got := adaptor.modeChanges[len(adaptor.modeChanges)-1]; got != consensus.ModeWrongLedger {
+		t.Fatalf("reliable mode callback = %v, want %v", got, consensus.ModeWrongLedger)
 	}
 }
 
@@ -1626,10 +1746,6 @@ func TestDefaultConfig(t *testing.T) {
 
 	if config.Timing.LedgerMaxConsensus == 0 {
 		t.Error("LedgerMaxConsensus should not be zero")
-	}
-
-	if config.Thresholds.EarlyConvergencePct == 0 {
-		t.Error("EarlyConvergencePct should not be zero")
 	}
 
 	if config.Thresholds.MinConsensusPct == 0 {
@@ -2757,7 +2873,7 @@ func TestConsensus_AbandonHardTimeout(t *testing.T) {
 	// abandon only fires once each avalanche level has had its minimum
 	// dwell. The +1 covers the increment phaseEstablish performs on
 	// entry.
-	engine.establishCounter = len(engine.parms.AvalancheCutoffs)*engine.parms.MinRounds + 1
+	engine.establishCounter = engine.parms.AvalancheCutoffCount()*engine.parms.MinRounds + 1
 	// Inject disagreeing trusted peers so we don't hit the
 	// alone-too-long carve-out (which would resolve to Yes via
 	// checkConsensusReached(_, 0, ..., reachedMax=true, ...)).
