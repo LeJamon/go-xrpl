@@ -6,6 +6,7 @@ import (
 
 	"github.com/LeJamon/go-xrpl/internal/consensus"
 	"github.com/LeJamon/go-xrpl/internal/consensus/ledgertrie"
+	"github.com/LeJamon/go-xrpl/internal/consensus/ledgertrietest"
 )
 
 type lockProbeAncestryProvider struct {
@@ -32,7 +33,7 @@ func TestValidationTracker_UnresolvableValidationParksThenReplays(t *testing.T) 
 	now := time.Now()
 	vt.SetNow(func() time.Time { return now })
 
-	b := ledgertrie.NewTestLedgerBuilder()
+	b := ledgertrietest.NewTestLedgerBuilder()
 	abc := b.Build("abc")
 	abcd := b.Build("abcd")
 
@@ -83,7 +84,7 @@ func TestValidationTracker_AncestryLookupDoesNotHoldTrackerLock(t *testing.T) {
 	now := time.Now()
 	vt.SetNow(func() time.Time { return now })
 
-	ledger := ledgertrie.NewTestLedgerBuilder().Build("abc")
+	ledger := ledgertrietest.NewTestLedgerBuilder().Build("abc")
 	node := consensus.NodeID{1}
 	provider := &lockProbeAncestryProvider{}
 	vt.SetTrusted([]consensus.NodeID{node})
@@ -123,7 +124,7 @@ func TestValidationTracker_TrieDecidesWithMajorityParked(t *testing.T) {
 	now := time.Now()
 	vt.SetNow(func() time.Time { return now })
 
-	b := ledgertrie.NewTestLedgerBuilder()
+	b := ledgertrietest.NewTestLedgerBuilder()
 	abc := b.Build("abc")   // island tip, locally held
 	abde := b.Build("abde") // majority tip, not held yet
 
@@ -172,7 +173,7 @@ func TestValidationTracker_ReadPollReplaysParked(t *testing.T) {
 	now := time.Now()
 	vt.SetNow(func() time.Time { return now })
 
-	b := ledgertrie.NewTestLedgerBuilder()
+	b := ledgertrietest.NewTestLedgerBuilder()
 	abc := b.Build("abc")
 	abcd := b.Build("abcd")
 
@@ -205,7 +206,7 @@ func TestValidationTracker_GetTrustedSupportPollReplaysParked(t *testing.T) {
 	now := time.Now()
 	vt.SetNow(func() time.Time { return now })
 
-	b := ledgertrie.NewTestLedgerBuilder()
+	b := ledgertrietest.NewTestLedgerBuilder()
 	abcd := b.Build("abcd")
 
 	provider := newMapAncestryProvider()
@@ -230,7 +231,7 @@ func TestValidationTracker_GetPreferred_AcquiringMajorityFallback(t *testing.T) 
 	now := time.Now()
 	vt.SetNow(func() time.Time { return now })
 
-	b := ledgertrie.NewTestLedgerBuilder()
+	b := ledgertrietest.NewTestLedgerBuilder()
 	abcx := b.Build("abcx")
 	abcy := b.Build("abcy")
 
@@ -255,7 +256,7 @@ func TestValidationTracker_GetPreferred_AcquiringTieBreaksOnGreaterID(t *testing
 	now := time.Now()
 	vt.SetNow(func() time.Time { return now })
 
-	b := ledgertrie.NewTestLedgerBuilder()
+	b := ledgertrietest.NewTestLedgerBuilder()
 	abcx := b.Build("abcx")
 	abcy := b.Build("abcy") // same seq, greater ID than abcx
 
@@ -281,7 +282,7 @@ func TestValidationTracker_SupersededValidationUnparks(t *testing.T) {
 	now := time.Now()
 	vt.SetNow(func() time.Time { return now })
 
-	b := ledgertrie.NewTestLedgerBuilder()
+	b := ledgertrietest.NewTestLedgerBuilder()
 	abcz := b.Build("abcz")   // greater ID: would win the tie-break if it lingered
 	abcwv := b.Build("abcwv") // higher seq, lesser ID at the fork byte
 
@@ -308,7 +309,7 @@ func TestValidationTracker_ExpireOldUnparks(t *testing.T) {
 	now := time.Now()
 	vt.SetNow(func() time.Time { return now })
 
-	b := ledgertrie.NewTestLedgerBuilder()
+	b := ledgertrietest.NewTestLedgerBuilder()
 	abcd := b.Build("abcd")
 
 	n1 := consensus.NodeID{1}
@@ -334,7 +335,7 @@ func TestValidationTracker_FlushStaleUnparks(t *testing.T) {
 	now := time.Now()
 	vt.SetNow(func() time.Time { return now })
 
-	b := ledgertrie.NewTestLedgerBuilder()
+	b := ledgertrietest.NewTestLedgerBuilder()
 	abcd := b.Build("abcd")
 
 	provider := newMapAncestryProvider()
@@ -374,7 +375,7 @@ func TestValidationTracker_DetrustedParkedValidationNotReplayed(t *testing.T) {
 	now := time.Now()
 	vt.SetNow(func() time.Time { return now })
 
-	b := ledgertrie.NewTestLedgerBuilder()
+	b := ledgertrietest.NewTestLedgerBuilder()
 	abcd := b.Build("abcd")
 
 	provider := newMapAncestryProvider()
@@ -406,7 +407,7 @@ func TestValidationTracker_TrustChangeReparksFromByNode(t *testing.T) {
 	now := time.Now()
 	vt.SetNow(func() time.Time { return now })
 
-	b := ledgertrie.NewTestLedgerBuilder()
+	b := ledgertrietest.NewTestLedgerBuilder()
 	abcd := b.Build("abcd")
 
 	n1 := consensus.NodeID{1}

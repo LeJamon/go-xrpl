@@ -1,10 +1,7 @@
-package ledgertrie
+package ledgertrietest
 
-import (
-	"github.com/LeJamon/go-xrpl/internal/consensus"
-)
+import "github.com/LeJamon/go-xrpl/internal/consensus"
 
-// TestLedger is a deterministic in-memory ledger for unit tests.
 type TestLedger struct {
 	id        consensus.LedgerID
 	seq       uint32
@@ -22,11 +19,6 @@ func (l *TestLedger) Ancestor(s uint32) consensus.LedgerID {
 	return l.ancestors[s]
 }
 
-// TestLedgerBuilder constructs TestLedgers from path strings: Build("abc")
-// is genesis → 'a' → 'b' → 'c'; "ab" and "abc" share the "ab" prefix.
-// Each path rune is written into byte `depth` of the LedgerID so
-// lexicographic byte-order on IDs agrees with rune-order on paths.
-// Limited to ASCII paths shorter than 32 bytes.
 type TestLedgerBuilder struct {
 	genesis  *TestLedger
 	children map[childKey]*TestLedger
@@ -34,12 +26,11 @@ type TestLedgerBuilder struct {
 
 type childKey struct {
 	parent consensus.LedgerID
-	r      rune
+	edge   byte
 }
 
 func NewTestLedgerBuilder() *TestLedgerBuilder {
 	genesis := &TestLedger{
-		seq:       0,
 		ancestors: []consensus.LedgerID{{}},
 	}
 	return &TestLedgerBuilder{
@@ -50,17 +41,23 @@ func NewTestLedgerBuilder() *TestLedgerBuilder {
 
 func (b *TestLedgerBuilder) Genesis() *TestLedger { return b.genesis }
 
-// Build returns the memoized ledger for s; empty s returns genesis.
-func (b *TestLedgerBuilder) Build(s string) *TestLedger {
-	if len(s) >= 32 {
+func (b *TestLedgerBuilder) Build(path string) *TestLedger {
+	if len(path) >= len(consensus.LedgerID{}) {
 		panic("TestLedgerBuilder: path too long for 32-byte ID encoding")
 	}
+	for i := range len(path) {
+		if path[i] == 0 || path[i] > 0x7f {
+			panic("TestLedgerBuilder: path must contain non-NUL ASCII bytes")
+		}
+	}
+
 	curr := b.genesis
-	for i, r := range s {
-		key := childKey{parent: curr.id, r: r}
+	for depth := range len(path) {
+		edge := path[depth]
+		key := childKey{parent: curr.id, edge: edge}
 		child, ok := b.children[key]
 		if !ok {
-			child = b.extend(curr, r, i)
+			child = extend(curr, edge, depth)
 			b.children[key] = child
 		}
 		curr = child
@@ -68,10 +65,9 @@ func (b *TestLedgerBuilder) Build(s string) *TestLedger {
 	return curr
 }
 
-func (b *TestLedgerBuilder) extend(parent *TestLedger, r rune, depth int) *TestLedger {
-	var id consensus.LedgerID
-	copy(id[:], parent.id[:])
-	id[depth] = byte(r)
+func extend(parent *TestLedger, edge byte, depth int) *TestLedger {
+	id := parent.id
+	id[depth] = edge
 
 	ancestors := make([]consensus.LedgerID, parent.seq+2)
 	copy(ancestors, parent.ancestors)

@@ -4,6 +4,8 @@ package ledgertrie
 
 import (
 	"bytes"
+	"math"
+	"reflect"
 	"slices"
 
 	"github.com/LeJamon/go-xrpl/internal/consensus"
@@ -19,10 +21,10 @@ type Ledger interface {
 	Ancestor(s uint32) consensus.LedgerID
 }
 
-// Mismatch returns the first sequence at which a and b diverge, or 1 when the
+// mismatch returns the first sequence at which a and b diverge, or 1 when the
 // overlap is empty or mismatches at its floor (rippled's post-genesis-divergence
 // fallback, RCLValidations.cpp:99).
-func Mismatch(a, b Ledger) uint32 {
+func mismatch(a, b Ledger) uint32 {
 	upper := min(b.Seq(), a.Seq())
 	lower := a.MinSeq()
 	if bm := b.MinSeq(); bm > lower {
@@ -51,18 +53,13 @@ func Mismatch(a, b Ledger) uint32 {
 
 // SpanTip is the read-only view of a span's tip.
 type SpanTip struct {
-	Seq    uint32
-	ID     consensus.LedgerID
-	ledger Ledger
+	Seq uint32
+	ID  consensus.LedgerID
 }
-
-// Ancestor returns the ID at sequence s; s must be <= Seq.
-func (t SpanTip) Ancestor(s uint32) consensus.LedgerID { return t.ledger.Ancestor(s) }
 
 // Trie is the ancestry trie. The zero value is not usable — call New.
 type Trie struct {
-	root    *node
-	genesis Ledger
+	root *node
 
 	// seqKeys is the sorted-key view over seqSupport.
 	seqSupport map[uint32]uint32
@@ -71,15 +68,32 @@ type Trie struct {
 
 // New constructs an empty trie. genesis must satisfy Seq() == 0.
 func New(genesis Ledger) *Trie {
+	if isNilLedger(genesis) {
+		panic("ledgertrie: nil genesis ledger")
+	}
+	if genesis.Seq() != 0 {
+		panic("ledgertrie: genesis sequence must be zero")
+	}
 	return &Trie{
 		root:       newEmptyNode(genesis),
-		genesis:    genesis,
 		seqSupport: make(map[uint32]uint32),
 	}
 }
 
-// Empty reports whether the trie holds any support.
-func (t *Trie) Empty() bool { return t.root == nil || t.root.branchSupport == 0 }
+func isNilLedger(l Ledger) bool {
+	if l == nil {
+		return true
+	}
+	v := reflect.ValueOf(l)
+	switch v.Kind() {
+	case reflect.Chan, reflect.Func, reflect.Interface, reflect.Map, reflect.Pointer, reflect.Slice:
+		return v.IsNil()
+	default:
+		return false
+	}
+}
+
+func (t *Trie) empty() bool { return t.root == nil || t.root.branchSupport == 0 }
 
 // find returns the node sharing the longest common prefix with l and
 // the sequence at which they diverge.
@@ -126,11 +140,15 @@ func findByIDWalk(curr *node, id consensus.LedgerID) *node {
 // seqSupportAdd/seqSupportSub keep seqKeys sorted with O(n) shifts. The set of
 // distinct sequences with active branch support is small, so this stays simple.
 func (t *Trie) seqSupportAdd(seq uint32, delta uint32) {
-	if _, ok := t.seqSupport[seq]; !ok {
+	current, ok := t.seqSupport[seq]
+	if current > math.MaxUint32-delta {
+		panic("ledgertrie: sequence support overflow")
+	}
+	if !ok {
 		idx, _ := slices.BinarySearch(t.seqKeys, seq)
 		t.seqKeys = slices.Insert(t.seqKeys, idx, seq)
 	}
-	t.seqSupport[seq] += delta
+	t.seqSupport[seq] = current + delta
 }
 
 // seqSupportSub panics on under-subtract (XRPL_ASSERT, LedgerTrie.h:553).
@@ -154,16 +172,35 @@ func (t *Trie) seqSupportSub(seq uint32, delta uint32) {
 // no-op: a 0-count insert that takes the newSuffix branch would create a
 // 0-tip leaf and break the compressed-trie invariant.
 func (t *Trie) Insert(l Ledger, count uint32) {
+	if isNilLedger(l) {
+		panic("ledgertrie: nil ledger")
+	}
+	seq := l.Seq()
+	if seq == math.MaxUint32 {
+		panic("ledgertrie: ledger sequence cannot be represented")
+	}
 	if count == 0 {
 		return
 	}
 	loc, diffSeq := t.find(l)
 
-	incNode := loc
-
 	prefix, hasPrefix := loc.s.before(diffSeq)
 	oldSuffix, hasOldSuffix := loc.s.from(diffSeq)
 	newSuffix, hasNewSuffix := newSpanFromLedger(l).from(diffSeq)
+
+	if !hasOldSuffix && !hasNewSuffix && loc.tipSupport > math.MaxUint32-count {
+		panic("ledgertrie: tip support overflow")
+	}
+	for cur := loc; cur != nil; cur = cur.parent {
+		if cur.branchSupport > math.MaxUint32-count {
+			panic("ledgertrie: branch support overflow")
+		}
+	}
+	if t.seqSupport[seq] > math.MaxUint32-count {
+		panic("ledgertrie: sequence support overflow")
+	}
+
+	incNode := loc
 
 	if hasOldSuffix {
 		if !hasPrefix {
@@ -196,7 +233,7 @@ func (t *Trie) Insert(l Ledger, count uint32) {
 		cur.branchSupport += count
 	}
 
-	t.seqSupportAdd(l.Seq(), count)
+	t.seqSupportAdd(seq, count)
 }
 
 // Remove decreases l's tip support by up to count, compacting the trie
@@ -266,12 +303,12 @@ func (t *Trie) BranchSupport(l Ledger) uint32 {
 // trie is empty. largestIssued seeds uncommitted support from earlier
 // sequences so ancient validations cannot retroactively swing preference.
 func (t *Trie) GetPreferred(largestIssued uint32) (SpanTip, bool) {
-	if t.Empty() {
+	if t.empty() {
 		return SpanTip{}, false
 	}
 
 	curr := t.root
-	uncommitted := uint32(0)
+	uncommitted := uint64(0)
 	uncommittedIdx := 0
 
 	for curr != nil {
@@ -279,14 +316,14 @@ func (t *Trie) GetPreferred(largestIssued uint32) (SpanTip, bool) {
 		nextSeq := curr.s.start + 1
 		floor := max(largestIssued, nextSeq)
 		for uncommittedIdx < len(t.seqKeys) && t.seqKeys[uncommittedIdx] < floor {
-			uncommitted += t.seqSupport[t.seqKeys[uncommittedIdx]]
+			uncommitted += uint64(t.seqSupport[t.seqKeys[uncommittedIdx]])
 			uncommittedIdx++
 		}
 
-		for nextSeq < curr.s.end && curr.branchSupport > uncommitted {
+		for nextSeq < curr.s.end && uint64(curr.branchSupport) > uncommitted {
 			if uncommittedIdx < len(t.seqKeys) && t.seqKeys[uncommittedIdx] < curr.s.end {
 				nextSeq = t.seqKeys[uncommittedIdx] + 1
-				uncommitted += t.seqSupport[t.seqKeys[uncommittedIdx]]
+				uncommitted += uint64(t.seqSupport[t.seqKeys[uncommittedIdx]])
 				uncommittedIdx++
 			} else {
 				nextSeq = curr.s.end
@@ -303,24 +340,41 @@ func (t *Trie) GetPreferred(largestIssued uint32) (SpanTip, bool) {
 		}
 
 		var best *node
-		var margin uint32
+		var margin uint64
 		switch len(curr.children) {
 		case 0:
 			best = nil
 		case 1:
 			best = curr.children[0]
-			margin = best.branchSupport
+			margin = uint64(best.branchSupport)
 		default:
-			// Inline top-2 by (branchSupport, startID) desc.
-			var second *node
-			for _, c := range curr.children {
-				if best == nil || nodeOutranks(c, best) {
-					second, best = best, c
-				} else if second == nil || nodeOutranks(c, second) {
-					second = c
+			bestIndex := 0
+			secondIndex := 1
+			if nodeOutranks(curr.children[secondIndex], curr.children[bestIndex]) {
+				bestIndex, secondIndex = secondIndex, bestIndex
+			}
+			for i := 2; i < len(curr.children); i++ {
+				if nodeOutranks(curr.children[i], curr.children[bestIndex]) {
+					secondIndex = bestIndex
+					bestIndex = i
+				} else if nodeOutranks(curr.children[i], curr.children[secondIndex]) {
+					secondIndex = i
 				}
 			}
-			margin = best.branchSupport - second.branchSupport
+
+			best = curr.children[bestIndex]
+			second := curr.children[secondIndex]
+			if bestIndex != 0 {
+				curr.children[0], curr.children[bestIndex] = curr.children[bestIndex], curr.children[0]
+			}
+			for i := 1; i < len(curr.children); i++ {
+				if curr.children[i] == second {
+					curr.children[1], curr.children[i] = curr.children[i], curr.children[1]
+					break
+				}
+			}
+
+			margin = uint64(best.branchSupport) - uint64(second.branchSupport)
 			if ledgerIDGreater(best.s.startID(), second.s.startID()) {
 				margin++
 			}
@@ -352,29 +406,48 @@ func nodeOutranks(a, b *node) bool {
 // branchSupport == tipSupport + Σ child.branchSupport, parent pointers
 // are consistent, and seqSupport matches the sum of tip supports.
 func (t *Trie) CheckInvariants() bool {
-	expected := make(map[uint32]uint32)
+	if t == nil || t.root == nil || t.root.parent != nil {
+		return false
+	}
+	if len(t.seqKeys) != len(t.seqSupport) {
+		return false
+	}
+	for i, seq := range t.seqKeys {
+		if i > 0 && t.seqKeys[i-1] >= seq {
+			return false
+		}
+		if support, ok := t.seqSupport[seq]; !ok || support == 0 {
+			return false
+		}
+	}
+
+	expected := make(map[uint32]uint64)
 	stack := []*node{t.root}
 	for len(stack) > 0 {
 		curr := stack[len(stack)-1]
 		stack = stack[:len(stack)-1]
-		if curr == nil {
-			continue
+		if curr == nil || curr.s.start >= curr.s.end || isNilLedger(curr.s.ledger) {
+			return false
 		}
 		if curr != t.root && curr.tipSupport == 0 && len(curr.children) < 2 {
 			return false
 		}
-		support := curr.tipSupport
+		support := uint64(curr.tipSupport)
 		if curr.tipSupport != 0 {
-			expected[curr.s.end-1] += curr.tipSupport
+			seq := curr.s.end - 1
+			expected[seq] += uint64(curr.tipSupport)
+			if expected[seq] > math.MaxUint32 {
+				return false
+			}
 		}
 		for _, c := range curr.children {
 			if c.parent != curr {
 				return false
 			}
-			support += c.branchSupport
+			support += uint64(c.branchSupport)
 			stack = append(stack, c)
 		}
-		if support != curr.branchSupport {
+		if support > math.MaxUint32 || support != uint64(curr.branchSupport) {
 			return false
 		}
 	}
@@ -382,7 +455,7 @@ func (t *Trie) CheckInvariants() bool {
 		return false
 	}
 	for k, v := range expected {
-		if t.seqSupport[k] != v {
+		if uint64(t.seqSupport[k]) != v {
 			return false
 		}
 	}
