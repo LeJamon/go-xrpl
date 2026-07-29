@@ -3,7 +3,6 @@
 package memorydb
 
 import (
-	"fmt"
 	"sort"
 	"strings"
 	"sync"
@@ -23,17 +22,6 @@ func New() *MemDatabase {
 	return &MemDatabase{
 		db: make(map[string][]byte),
 	}
-}
-
-// Has returns true if the key exists in the store.
-func (m *MemDatabase) Has(key []byte) (bool, error) {
-	m.lock.RLock()
-	defer m.lock.RUnlock()
-	if m.closed {
-		return false, kvstore.ErrClosed
-	}
-	_, ok := m.db[string(key)]
-	return ok, nil
 }
 
 // Get retrieves the value for the given key.
@@ -67,32 +55,24 @@ func (m *MemDatabase) Put(key []byte, value []byte) error {
 	return nil
 }
 
-// Delete removes the value for the given key.
-func (m *MemDatabase) Delete(key []byte) error {
-	m.lock.Lock()
-	defer m.lock.Unlock()
-	if m.closed {
-		return kvstore.ErrClosed
-	}
-	delete(m.db, string(key))
-	return nil
-}
-
 // NewBatch returns a new batch for accumulating writes.
-func (m *MemDatabase) NewBatch() kvstore.Batch {
-	return &memBatch{db: m}
+func (m *MemDatabase) NewBatch() (kvstore.Batch, error) {
+	m.lock.RLock()
+	defer m.lock.RUnlock()
+	if m.closed {
+		return nil, kvstore.ErrClosed
+	}
+	return &memBatch{db: m}, nil
 }
 
 // NewIterator returns an iterator over key/value pairs.
 // prefix filters keys that start with prefix.
 // start sets the starting position (relative to prefix).
-// On a closed store the returned iterator is empty and reports ErrClosed
-// via Error.
-func (m *MemDatabase) NewIterator(prefix []byte, start []byte) kvstore.Iterator {
+func (m *MemDatabase) NewIterator(prefix []byte, start []byte) (kvstore.Iterator, error) {
 	m.lock.RLock()
 	defer m.lock.RUnlock()
 	if m.closed {
-		return &memIterator{pos: -1, err: kvstore.ErrClosed}
+		return nil, kvstore.ErrClosed
 	}
 
 	// Collect all keys with the given prefix
@@ -122,27 +102,7 @@ func (m *MemDatabase) NewIterator(prefix []byte, start []byte) kvstore.Iterator 
 		pairs = append(pairs, kv{key: []byte(k), val: cp})
 	}
 
-	return &memIterator{pairs: pairs, pos: -1}
-}
-
-// Stat returns a string with the count of keys in the store.
-func (m *MemDatabase) Stat() (string, error) {
-	m.lock.RLock()
-	defer m.lock.RUnlock()
-	if m.closed {
-		return "", kvstore.ErrClosed
-	}
-	return fmt.Sprintf("memdb: %d keys", len(m.db)), nil
-}
-
-// Compact is a no-op for the in-memory store.
-func (m *MemDatabase) Compact(start []byte, limit []byte) error {
-	m.lock.RLock()
-	defer m.lock.RUnlock()
-	if m.closed {
-		return kvstore.ErrClosed
-	}
-	return nil
+	return &memIterator{pairs: pairs, pos: -1}, nil
 }
 
 // Sync is a no-op: the store has no durable medium.
@@ -164,13 +124,6 @@ func (m *MemDatabase) Close() error {
 	return nil
 }
 
-// Len returns the number of entries in the store.
-func (m *MemDatabase) Len() int {
-	m.lock.RLock()
-	defer m.lock.RUnlock()
-	return len(m.db)
-}
-
 // kv is an internal key-value pair used by the iterator.
 type kv struct {
 	key []byte
@@ -181,9 +134,10 @@ type kv struct {
 // a single ordered list so interleaved Put/Delete of the same key replays in
 // insertion order, matching the pebble backend.
 type memBatch struct {
-	db   *MemDatabase
-	ops  []batchOp
-	size int
+	db     *MemDatabase
+	ops    []batchOp
+	size   int
+	closed bool
 }
 
 // batchOp is a single queued batch operation: a put when delete is false,
@@ -196,6 +150,9 @@ type batchOp struct {
 
 // Put queues a key/value write.
 func (b *memBatch) Put(key []byte, value []byte) error {
+	if b.closed {
+		return kvstore.ErrClosed
+	}
 	kCopy := make([]byte, len(key))
 	copy(kCopy, key)
 	vCopy := make([]byte, len(value))
@@ -207,6 +164,9 @@ func (b *memBatch) Put(key []byte, value []byte) error {
 
 // Delete queues deletion of a key.
 func (b *memBatch) Delete(key []byte) error {
+	if b.closed {
+		return kvstore.ErrClosed
+	}
 	kCopy := make([]byte, len(key))
 	copy(kCopy, key)
 	b.ops = append(b.ops, batchOp{key: kCopy, delete: true})
@@ -219,6 +179,9 @@ func (b *memBatch) ValueSize() int {
 }
 
 func (b *memBatch) Write() error {
+	if b.closed {
+		return kvstore.ErrClosed
+	}
 	b.db.lock.Lock()
 	defer b.db.lock.Unlock()
 	if b.db.closed {
@@ -236,21 +199,37 @@ func (b *memBatch) Write() error {
 
 // Reset clears the accumulated writes.
 func (b *memBatch) Reset() {
+	if b.closed {
+		return
+	}
 	// Drop the backing array so a one-shot large batch does not pin
 	// memory indefinitely. Subsequent Puts will reallocate as needed.
 	b.ops = nil
 	b.size = 0
 }
 
+func (b *memBatch) Close() error {
+	if b.closed {
+		return nil
+	}
+	b.ops = nil
+	b.size = 0
+	b.closed = true
+	return nil
+}
+
 // memIterator implements kvstore.Iterator for MemDatabase.
 type memIterator struct {
-	pairs []kv
-	pos   int
-	err   error
+	pairs  []kv
+	pos    int
+	closed bool
 }
 
 // Next advances the iterator and reports whether a pair is available.
 func (it *memIterator) Next() bool {
+	if it.closed {
+		return false
+	}
 	it.pos++
 	return it.pos < len(it.pairs)
 }
@@ -272,12 +251,17 @@ func (it *memIterator) Value() []byte {
 }
 
 func (it *memIterator) Error() error {
-	return it.err
+	return nil
 }
 
-// Release frees the iterator's resources.
-func (it *memIterator) Release() {
+// Close frees the iterator's resources.
+func (it *memIterator) Close() error {
+	if it.closed {
+		return nil
+	}
 	it.pairs = nil
+	it.closed = true
+	return nil
 }
 
 // Ensure MemDatabase implements kvstore.KeyValueStore at compile time.

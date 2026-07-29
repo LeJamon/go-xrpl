@@ -91,8 +91,9 @@ func (p *LedgerPruner) clear(
 	for min < boundary {
 		upTo := boundary
 		if p.batch > 0 {
-			if step := min + uint32(p.batch); step < boundary {
-				upTo = step
+			remaining := uint64(boundary) - uint64(min)
+			if uint64(p.batch) < remaining {
+				upTo = min + uint32(p.batch)
 			}
 		}
 		if err := ctx.Err(); err != nil {

@@ -1,4 +1,4 @@
-package nodestore_test
+package nodestore
 
 import (
 	"bytes"
@@ -6,10 +6,8 @@ import (
 	"fmt"
 	"sync"
 	"testing"
-	"time"
 
 	"github.com/LeJamon/go-xrpl/storage/kvstore/memorydb"
-	"github.com/LeJamon/go-xrpl/storage/nodestore"
 )
 
 // TestConcurrentStoreEncodeBuf guards against the encodeBufPool aliasing bug:
@@ -30,12 +28,12 @@ func TestConcurrentStoreEncodeBuf(t *testing.T) {
 		payloadSize = 200
 	)
 
-	makeNode := func(seed int) *nodestore.Node {
-		data := make(nodestore.Blob, payloadSize)
+	makeNode := func(seed int) *Node {
+		data := make([]byte, payloadSize)
 		for i := range data {
 			data[i] = byte(seed + i)
 		}
-		return nodestore.NewNode(nodestore.NodeTransaction, data)
+		return testNode(NodeTransaction, data, 0)
 	}
 
 	ctx := context.Background()
@@ -43,13 +41,17 @@ func TestConcurrentStoreEncodeBuf(t *testing.T) {
 	errCh := make(chan error, dbs*goroutinesPer)
 
 	for d := range dbs {
-		db := nodestore.NewKVDatabase(memorydb.New(), fmt.Sprintf("db%d", d), 0, time.Minute)
+		db, err := NewKVDatabase(memorydb.New(), noCacheConfig())
+		if err != nil {
+			t.Fatalf("NewKVDatabase db%d: %v", d, err)
+		}
+		t.Cleanup(func() { _ = db.Close() })
 		for g := range goroutinesPer {
 			wg.Add(1)
 			go func(d, g int) {
 				defer wg.Done()
 				for b := range batchesPerGoro {
-					nodes := make([]*nodestore.Node, nodesPerBatch)
+					nodes := make([]*Node, nodesPerBatch)
 					for n := range nodes {
 						// Unique seed per node so each has a distinct hash/key.
 						nodes[n] = makeNode((((d*goroutinesPer+g)*batchesPerGoro+b)*nodesPerBatch + n) * payloadSize)

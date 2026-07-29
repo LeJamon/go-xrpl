@@ -5,108 +5,91 @@ import (
 	"fmt"
 )
 
-// Sentinel errors returned by the relational database layer.
 var (
-	// Configuration errors
-	ErrMissingHost            = errors.New("database host is required")
-	ErrMissingDatabase        = errors.New("database name is required")
-	ErrMissingUsername        = errors.New("database username is required")
-	ErrInvalidPort            = errors.New("invalid database port")
-	ErrInvalidMaxOpenConns    = errors.New("max open connections must be >= 0")
-	ErrInvalidMaxIdleConns    = errors.New("max idle connections must be >= 0")
-	ErrMaxIdleExceedsMaxOpen  = errors.New("max idle connections cannot exceed max open connections")
-	ErrInvalidTimeout         = errors.New("timeout must be positive")
+	// ErrMissingHost indicates that a PostgreSQL host was not configured.
+	ErrMissingHost = errors.New("database host is required")
+	// ErrMissingDatabase indicates that a PostgreSQL database was not configured.
+	ErrMissingDatabase = errors.New("database name is required")
+	// ErrMissingUsername indicates that a PostgreSQL username was not configured.
+	ErrMissingUsername = errors.New("database username is required")
+	// ErrInvalidPort indicates that the configured database port is invalid.
+	ErrInvalidPort = errors.New("invalid database port")
+	// ErrInvalidMaxOpenConns indicates an invalid maximum-open-connection count.
+	ErrInvalidMaxOpenConns = errors.New("max open connections must be >= 0")
+	// ErrInvalidMaxIdleConns indicates an invalid maximum-idle-connection count.
+	ErrInvalidMaxIdleConns = errors.New("max idle connections must be >= 0")
+	// ErrMaxIdleExceedsMaxOpen indicates an inconsistent connection pool size.
+	ErrMaxIdleExceedsMaxOpen = errors.New("max idle connections cannot exceed max open connections")
+	// ErrInvalidTimeout indicates a non-positive connection timeout.
+	ErrInvalidTimeout = errors.New("timeout must be positive")
+	// ErrInvalidConnMaxLifetime indicates a negative connection lifetime.
 	ErrInvalidConnMaxLifetime = errors.New("connection max lifetime must be >= 0")
+	// ErrInvalidConnMaxIdleTime indicates a negative connection idle duration.
 	ErrInvalidConnMaxIdleTime = errors.New("connection max idle time must be >= 0")
-	ErrInvalidMaxRetries      = errors.New("max retries must be >= 0")
-	ErrInvalidRetryDelay      = errors.New("retry delay must be >= 0")
-	ErrInvalidRetryMaxDelay   = errors.New("retry max delay must be >= retry delay")
-	ErrInvalidMinFreeSpace    = errors.New("minimum free space must be >= 100MB")
 
-	// ErrDatabaseClosed is returned when an operation runs against a closed connection.
+	// ErrDatabaseClosed indicates an operation on a closed repository manager.
 	ErrDatabaseClosed = errors.New("database connection is closed")
-
-	// ErrTransactionClosed is returned when a transaction context is reused
-	// after Commit or Rollback.
+	// ErrTransactionClosed indicates an operation on a completed transaction.
 	ErrTransactionClosed = errors.New("transaction is closed")
-
-	// ErrLedgerNotFound is returned when a requested ledger is not stored.
+	// ErrLedgerNotFound indicates that no ledger matched the requested key.
 	ErrLedgerNotFound = errors.New("ledger not found")
+	// ErrInvalidData indicates malformed relational data.
+	ErrInvalidData = errors.New("invalid relational data")
+	// ErrInvalidSchema indicates an unsupported or inconsistent schema version.
+	ErrInvalidSchema = errors.New("invalid relational schema")
 )
 
-// ErrorType represents different categories of database errors
-type ErrorType int
-
-// ErrorType values categorize database errors.
-const (
-	ErrorTypeUnknown ErrorType = iota
-	ErrorTypeConfiguration
-	ErrorTypeConnection
-	ErrorTypeTransaction
-	ErrorTypeData
-	ErrorTypeQuery
-	ErrorTypeSchema
-)
-
-// DatabaseError provides detailed information about database errors
+// DatabaseError adds an operation and category to a relational database error.
 type DatabaseError struct {
-	Type      ErrorType `json:"type"`
-	Operation string    `json:"operation"`
-	Message   string    `json:"message"`
-	// Cause carries the underlying error and is not JSON-serializable, so it
-	// has no tag; use Unwrap/errors.Is/As to reach it.
-	Cause error `json:"-"`
+	Operation string
+	Message   string
+	Cause     error
 }
 
-// Error implements the error interface
 func (e *DatabaseError) Error() string {
-	if e.Cause != nil {
-		return fmt.Sprintf("%s: %s (caused by: %v)", e.Operation, e.Message, e.Cause)
+	if e.Cause == nil {
+		return fmt.Sprintf("%s: %s", e.Operation, e.Message)
 	}
-	return fmt.Sprintf("%s: %s", e.Operation, e.Message)
+	return fmt.Sprintf("%s: %s: %v", e.Operation, e.Message, e.Cause)
 }
 
-// Unwrap returns the underlying cause error
 func (e *DatabaseError) Unwrap() error {
 	return e.Cause
 }
 
-// NewDatabaseError creates a new DatabaseError
-func NewDatabaseError(errorType ErrorType, operation, message string, cause error) *DatabaseError {
-	return &DatabaseError{
-		Type:      errorType,
-		Operation: operation,
-		Message:   message,
-		Cause:     cause,
-	}
+func newDatabaseError(operation, message string, cause error) *DatabaseError {
+	return &DatabaseError{Operation: operation, Message: message, Cause: cause}
 }
 
-// NewConfigurationError creates a configuration error
+// NewConfigurationError creates a configuration database error.
 func NewConfigurationError(operation, message string, cause error) *DatabaseError {
-	return NewDatabaseError(ErrorTypeConfiguration, operation, message, cause)
+	return newDatabaseError(operation, message, cause)
 }
 
-// NewConnectionError creates a connection error
+// NewConnectionError creates a connection database error.
 func NewConnectionError(operation, message string, cause error) *DatabaseError {
-	return NewDatabaseError(ErrorTypeConnection, operation, message, cause)
+	return newDatabaseError(operation, message, cause)
 }
 
-// NewTransactionError creates a transaction error
+// NewTransactionError creates a transaction database error.
 func NewTransactionError(operation, message string, cause error) *DatabaseError {
-	return NewDatabaseError(ErrorTypeTransaction, operation, message, cause)
+	return newDatabaseError(operation, message, cause)
 }
 
-// NewDataError creates a data error
+// NewDataError creates a malformed-data database error.
 func NewDataError(operation, message string, cause error) *DatabaseError {
-	return NewDatabaseError(ErrorTypeData, operation, message, cause)
+	if cause == nil {
+		cause = ErrInvalidData
+	}
+	return newDatabaseError(operation, message, cause)
 }
 
-// NewQueryError creates a query error
+// NewQueryError creates a query database error.
 func NewQueryError(operation, message string, cause error) *DatabaseError {
-	return NewDatabaseError(ErrorTypeQuery, operation, message, cause)
+	return newDatabaseError(operation, message, cause)
 }
 
-// NewSchemaError creates a schema error
+// NewSchemaError creates a schema database error.
 func NewSchemaError(operation, message string, cause error) *DatabaseError {
-	return NewDatabaseError(ErrorTypeSchema, operation, message, cause)
+	return newDatabaseError(operation, message, cause)
 }

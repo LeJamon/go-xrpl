@@ -2,7 +2,6 @@ package sqlite
 
 import (
 	"context"
-	"database/sql"
 
 	"github.com/LeJamon/go-xrpl/storage/relationaldb"
 )
@@ -10,14 +9,14 @@ import (
 // amendmentVoteRepository is the SQLite-backed store of operator amendment-vote
 // preferences (the feature_votes table in ledger.db).
 type amendmentVoteRepository struct {
-	db *sql.DB
+	db executor
 }
 
 // Compile-time interface check.
 var _ relationaldb.AmendmentVoteRepository = (*amendmentVoteRepository)(nil)
 
 // newAmendmentVoteRepository creates a SQLite amendment-vote repository.
-func newAmendmentVoteRepository(db *sql.DB) *amendmentVoteRepository {
+func newAmendmentVoteRepository(db executor) *amendmentVoteRepository {
 	return &amendmentVoteRepository{db: db}
 }
 
@@ -36,6 +35,9 @@ func (r *amendmentVoteRepository) LoadAmendmentVotes(ctx context.Context) ([]*re
 		if err := rows.Scan(&rec.Amendment, &rec.Name, &vetoed); err != nil {
 			return nil, relationaldb.NewQueryError("amendment_vote_load", "failed to scan row", err)
 		}
+		if err := rec.Validate(); err != nil {
+			return nil, relationaldb.NewDataError("amendment_vote_load", "malformed amendment ID", err)
+		}
 		rec.Vetoed = vetoed != 0
 		result = append(result, &rec)
 	}
@@ -46,9 +48,9 @@ func (r *amendmentVoteRepository) LoadAmendmentVotes(ctx context.Context) ([]*re
 }
 
 // SaveAmendmentVote inserts or updates an amendment-vote preference (upsert on amendment).
-func (r *amendmentVoteRepository) SaveAmendmentVote(ctx context.Context, rec *relationaldb.AmendmentVoteRecord) error {
-	if rec == nil {
-		return relationaldb.NewDataError("amendment_vote_save", "nil record", nil)
+func (r *amendmentVoteRepository) SaveAmendmentVote(ctx context.Context, rec relationaldb.AmendmentVoteRecord) error {
+	if err := rec.Validate(); err != nil {
+		return err
 	}
 	vetoed := 0
 	if rec.Vetoed {
@@ -66,6 +68,9 @@ func (r *amendmentVoteRepository) SaveAmendmentVote(ctx context.Context, rec *re
 
 // DeleteAmendmentVote removes the vote preference for the given amendment.
 func (r *amendmentVoteRepository) DeleteAmendmentVote(ctx context.Context, amendment string) error {
+	if err := (relationaldb.AmendmentVoteRecord{Amendment: amendment}).Validate(); err != nil {
+		return err
+	}
 	_, err := r.db.ExecContext(ctx, `DELETE FROM feature_votes WHERE amendment = ?`, amendment)
 	if err != nil {
 		return relationaldb.NewQueryError("amendment_vote_delete", "failed to delete feature vote", err)

@@ -5,30 +5,21 @@ import (
 	"database/sql"
 
 	"github.com/LeJamon/go-xrpl/storage/relationaldb"
+	"github.com/LeJamon/go-xrpl/storage/relationaldb/internal/sqlutil"
 )
 
 // accountTransactionRepository is the SQLite-backed account-transaction repository.
 type accountTransactionRepository struct {
-	db *sql.DB
-	tx *sql.Tx
+	executor executor
 }
 
 // newAccountTransactionRepository creates a SQLite account-transaction repository.
-func newAccountTransactionRepository(db *sql.DB) *accountTransactionRepository {
-	return &accountTransactionRepository{db: db}
-}
-
-// newAccountTransactionRepositoryWithTx creates a SQLite account-transaction
-// repository bound to an existing transaction.
-func newAccountTransactionRepositoryWithTx(tx *sql.Tx) *accountTransactionRepository {
-	return &accountTransactionRepository{tx: tx}
+func newAccountTransactionRepository(executor executor) *accountTransactionRepository {
+	return &accountTransactionRepository{executor: executor}
 }
 
 func (r *accountTransactionRepository) getExecutor() executor {
-	if r.tx != nil {
-		return r.tx
-	}
-	return r.db
+	return r.executor
 }
 
 // GetAccountTransactionsMinLedgerSeq returns the lowest ledger sequence present
@@ -44,79 +35,6 @@ func (r *accountTransactionRepository) GetAccountTransactionsMinLedgerSeq(ctx co
 	}
 	result := relationaldb.LedgerIndex(seq.Int64)
 	return &result, nil
-}
-
-// GetAccountTransactionCount returns the number of rows in the account-transactions index.
-func (r *accountTransactionRepository) GetAccountTransactionCount(ctx context.Context) (int64, error) {
-	var count int64
-	err := r.getExecutor().QueryRowContext(ctx, "SELECT COUNT(*) FROM account_transactions").Scan(&count)
-	if err != nil {
-		return 0, relationaldb.NewQueryError("get_account_transaction_count", "failed to count account transactions", err)
-	}
-	return count, nil
-}
-
-func (r *accountTransactionRepository) queryAccountTxs(ctx context.Context, opName string, options relationaldb.AccountTxOptions, orderDir string) ([]relationaldb.TransactionInfo, error) {
-	query := `SELECT t.trans_id, t.ledger_seq, t.status, t.raw_txn, t.txn_meta, at.txn_seq
-			  FROM account_transactions at
-			  INNER JOIN transactions t ON t.trans_id = at.trans_id
-			  WHERE at.account = ?`
-
-	args := []any{options.Account.String()}
-
-	if options.MinLedger > 0 {
-		query += " AND at.ledger_seq >= ?"
-		args = append(args, options.MinLedger)
-	}
-	if options.MaxLedger > 0 {
-		query += " AND at.ledger_seq <= ?"
-		args = append(args, options.MaxLedger)
-	}
-
-	query += " ORDER BY at.ledger_seq " + orderDir + ", at.txn_seq " + orderDir
-
-	if !options.Unlimited && options.Limit > 0 {
-		query += " LIMIT ?"
-		args = append(args, options.Limit)
-		if options.Offset > 0 {
-			query += " OFFSET ?"
-			args = append(args, options.Offset)
-		}
-	}
-
-	rows, err := r.getExecutor().QueryContext(ctx, query, args...)
-	if err != nil {
-		return nil, relationaldb.NewQueryError(opName, "failed to query account transactions", err)
-	}
-	defer rows.Close()
-
-	var results []relationaldb.TransactionInfo
-	for rows.Next() {
-		var info relationaldb.TransactionInfo
-		var hashBytes, txnMeta []byte
-
-		if err := rows.Scan(&hashBytes, &info.LedgerSeq, &info.Status, &info.RawTxn, &txnMeta, &info.TxnSeq); err != nil {
-			return nil, relationaldb.NewQueryError(opName, "failed to scan row", err)
-		}
-		copy(info.Hash[:], hashBytes)
-		copy(info.Account[:], options.Account[:])
-		info.TxnMeta = txnMeta
-		results = append(results, info)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, relationaldb.NewQueryError(opName, "error iterating rows", err)
-	}
-	return results, nil
-}
-
-// GetOldestAccountTxs returns an account's transactions oldest-first, filtered by options.
-func (r *accountTransactionRepository) GetOldestAccountTxs(ctx context.Context, options relationaldb.AccountTxOptions) ([]relationaldb.TransactionInfo, error) {
-	return r.queryAccountTxs(ctx, "get_oldest_account_txs", options, "ASC")
-}
-
-// GetNewestAccountTxs returns an account's transactions newest-first, filtered by options.
-func (r *accountTransactionRepository) GetNewestAccountTxs(ctx context.Context, options relationaldb.AccountTxOptions) ([]relationaldb.TransactionInfo, error) {
-	return r.queryAccountTxs(ctx, "get_newest_account_txs", options, "DESC")
 }
 
 func (r *accountTransactionRepository) queryAccountTxsPage(ctx context.Context, opName string, options relationaldb.AccountTxPageOptions, orderDir string, markerCmp string) (*relationaldb.AccountTxResult, error) {
@@ -163,7 +81,9 @@ func (r *accountTransactionRepository) queryAccountTxsPage(ctx context.Context, 
 		if err := rows.Scan(&hashBytes, &info.LedgerSeq, &info.Status, &info.RawTxn, &txnMeta, &info.TxnSeq); err != nil {
 			return nil, relationaldb.NewQueryError(opName, "failed to scan row", err)
 		}
-		copy(info.Hash[:], hashBytes)
+		if err := sqlutil.CopyExact(info.Hash[:], hashBytes, "trans_id"); err != nil {
+			return nil, relationaldb.NewDataError(opName, "malformed transaction hash", err)
+		}
 		copy(info.Account[:], options.Account[:])
 		info.TxnMeta = txnMeta
 		transactions = append(transactions, info)
@@ -208,7 +128,7 @@ func (r *accountTransactionRepository) GetNewestAccountTxsPage(ctx context.Conte
 }
 
 // SaveAccountTransaction inserts or updates an account-transaction index entry.
-func (r *accountTransactionRepository) SaveAccountTransaction(ctx context.Context, accountID relationaldb.AccountID, txInfo *relationaldb.TransactionInfo) error {
+func (r *accountTransactionRepository) SaveAccountTransaction(ctx context.Context, accountID relationaldb.AccountID, txInfo relationaldb.TransactionInfo) error {
 	query := `INSERT INTO account_transactions (trans_id, account, ledger_seq, txn_seq)
 			  VALUES (?, ?, ?, ?)
 			  ON CONFLICT (trans_id, account) DO UPDATE SET

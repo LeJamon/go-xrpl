@@ -445,7 +445,7 @@ func (s *Service) SetAmendmentVote(ctx context.Context, id [32]byte, vetoed bool
 	if f := amendment.FeatureByID(id); f != nil {
 		name = f.Name
 	}
-	return s.relationalDB.Amendment().SaveAmendmentVote(ctx, &relationaldb.AmendmentVoteRecord{
+	return s.relationalDB.Amendment().SaveAmendmentVote(ctx, relationaldb.AmendmentVoteRecord{
 		Amendment: protocol.Hash256Hex(id),
 		Name:      name,
 		Vetoed:    vetoed,

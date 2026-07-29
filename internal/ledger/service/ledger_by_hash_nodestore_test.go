@@ -17,10 +17,8 @@ import (
 	"github.com/LeJamon/go-xrpl/keylet"
 	"github.com/LeJamon/go-xrpl/protocol"
 	shamapbackend "github.com/LeJamon/go-xrpl/shamap/backend"
-	"github.com/LeJamon/go-xrpl/storage/kvstore/memorydb"
 	"github.com/LeJamon/go-xrpl/storage/nodestore"
 	"github.com/LeJamon/go-xrpl/storage/relationaldb"
-	sqlitedb "github.com/LeJamon/go-xrpl/storage/relationaldb/sqlite"
 	"github.com/stretchr/testify/require"
 )
 
@@ -35,12 +33,9 @@ func (d *fetchErrorDatabase) Fetch(context.Context, nodestore.Hash256) (*nodesto
 
 func TestService_GetLedgerByHashLoadsEvictedLedgerFromNodeStore(t *testing.T) {
 	ctx := context.Background()
-	db := nodestore.NewKVDatabase(memorydb.New(), "ledger-by-hash", 10_000, time.Hour)
+	db := newTestNodeStore(t, 10_000)
 	t.Cleanup(func() { require.NoError(t, db.Close()) })
-	rm, err := sqlitedb.NewRepositoryManager(t.TempDir())
-	require.NoError(t, err)
-	require.NoError(t, rm.Open(ctx))
-	t.Cleanup(func() { require.NoError(t, rm.Close(ctx)) })
+	rm := newTestRepositories(t, ctx)
 
 	genesisConfig := genesis.DefaultConfig()
 	genesisConfig.Amendments = append(genesisConfig.Amendments, amendment.FeatureXRPFees)
@@ -156,12 +151,9 @@ func TestService_GetLedgerByHashLoadsEvictedLedgerFromNodeStore(t *testing.T) {
 
 func TestService_GetLedgerByHashRejectsNodeStoreOnlyLedger(t *testing.T) {
 	ctx := context.Background()
-	db := nodestore.NewKVDatabase(memorydb.New(), "ledger-by-hash-unvalidated", 10_000, time.Hour)
+	db := newTestNodeStore(t, 10_000)
 	t.Cleanup(func() { require.NoError(t, db.Close()) })
-	rm, err := sqlitedb.NewRepositoryManager(t.TempDir())
-	require.NoError(t, err)
-	require.NoError(t, rm.Open(ctx))
-	t.Cleanup(func() { require.NoError(t, rm.Close(ctx)) })
+	rm := newTestRepositories(t, ctx)
 	svc, err := New(Config{
 		Standalone:    true,
 		GenesisConfig: genesis.DefaultConfig(),
@@ -211,12 +203,9 @@ func TestService_GetLedgerByHashRejectsNodeStoreOnlyLedger(t *testing.T) {
 
 func TestService_GetLedgerByHashDoesNotValidateStaleRelationalFork(t *testing.T) {
 	ctx := context.Background()
-	db := nodestore.NewKVDatabase(memorydb.New(), "ledger-by-hash-stale-fork", 10_000, time.Hour)
+	db := newTestNodeStore(t, 10_000)
 	t.Cleanup(func() { require.NoError(t, db.Close()) })
-	rm, err := sqlitedb.NewRepositoryManager(t.TempDir())
-	require.NoError(t, err)
-	require.NoError(t, rm.Open(ctx))
-	t.Cleanup(func() { require.NoError(t, rm.Close(ctx)) })
+	rm := newTestRepositories(t, ctx)
 	svc, err := New(Config{
 		Standalone:    true,
 		GenesisConfig: genesis.DefaultConfig(),
@@ -250,12 +239,9 @@ func TestService_GetLedgerByHashDoesNotValidateStaleRelationalFork(t *testing.T)
 
 func TestService_GetLedgerByHashValidatesHistoricalCanonicalChain(t *testing.T) {
 	ctx := context.Background()
-	db := nodestore.NewKVDatabase(memorydb.New(), "ledger-by-hash-historical", 100_000, time.Hour)
+	db := newTestNodeStore(t, 100_000)
 	t.Cleanup(func() { require.NoError(t, db.Close()) })
-	rm, err := sqlitedb.NewRepositoryManager(t.TempDir())
-	require.NoError(t, err)
-	require.NoError(t, rm.Open(ctx))
-	t.Cleanup(func() { require.NoError(t, rm.Close(ctx)) })
+	rm := newTestRepositories(t, ctx)
 	svc, err := New(Config{
 		GenesisConfig: genesis.DefaultConfig(),
 		NodeStore:     db,
@@ -325,14 +311,11 @@ func TestService_GetLedgerByHashReturnsNotFoundWithoutPersistedLedger(t *testing
 
 	t.Run("missing nodestore header", func(t *testing.T) {
 		ctx := context.Background()
-		db := nodestore.NewKVDatabase(memorydb.New(), "ledger-by-hash-missing", 100, time.Hour)
+		db := newTestNodeStore(t, 100)
 		t.Cleanup(func() { require.NoError(t, db.Close()) })
-		rm, err := sqlitedb.NewRepositoryManager(t.TempDir())
-		require.NoError(t, err)
-		require.NoError(t, rm.Open(ctx))
-		t.Cleanup(func() { require.NoError(t, rm.Close(ctx)) })
+		rm := newTestRepositories(t, ctx)
 		missingHash := [32]byte{0x02}
-		require.NoError(t, rm.Ledger().SaveValidatedLedger(ctx, &relationaldb.LedgerInfo{
+		require.NoError(t, rm.Ledger().SaveValidatedLedger(ctx, relationaldb.LedgerInfo{
 			Hash:     relationaldb.Hash(missingHash),
 			Sequence: 2,
 		}))
@@ -351,12 +334,9 @@ func TestService_GetLedgerByHashReturnsNotFoundWithoutPersistedLedger(t *testing
 
 	t.Run("canceled relational lookup", func(t *testing.T) {
 		ctx := context.Background()
-		db := nodestore.NewKVDatabase(memorydb.New(), "ledger-by-hash-canceled", 100, time.Hour)
+		db := newTestNodeStore(t, 100)
 		t.Cleanup(func() { require.NoError(t, db.Close()) })
-		rm, err := sqlitedb.NewRepositoryManager(t.TempDir())
-		require.NoError(t, err)
-		require.NoError(t, rm.Open(ctx))
-		t.Cleanup(func() { require.NoError(t, rm.Close(ctx)) })
+		rm := newTestRepositories(t, ctx)
 		svc, err := New(Config{
 			NodeStore:    db,
 			SHAMapFamily: shamapbackend.New(db),
@@ -372,16 +352,13 @@ func TestService_GetLedgerByHashReturnsNotFoundWithoutPersistedLedger(t *testing
 
 	t.Run("nodestore failure remains operational", func(t *testing.T) {
 		ctx := context.Background()
-		backend := nodestore.NewKVDatabase(memorydb.New(), "ledger-by-hash-fetch-error", 100, time.Hour)
+		backend := newTestNodeStore(t, 100)
 		t.Cleanup(func() { require.NoError(t, backend.Close()) })
 		fetchErr := errors.New("nodestore unavailable")
 		db := &fetchErrorDatabase{Database: backend, err: fetchErr}
-		rm, err := sqlitedb.NewRepositoryManager(t.TempDir())
-		require.NoError(t, err)
-		require.NoError(t, rm.Open(ctx))
-		t.Cleanup(func() { require.NoError(t, rm.Close(ctx)) })
+		rm := newTestRepositories(t, ctx)
 		wantHash := [32]byte{0x05}
-		require.NoError(t, rm.Ledger().SaveValidatedLedger(ctx, &relationaldb.LedgerInfo{
+		require.NoError(t, rm.Ledger().SaveValidatedLedger(ctx, relationaldb.LedgerInfo{
 			Hash:     relationaldb.Hash(wantHash),
 			Sequence: 2,
 		}))
@@ -399,15 +376,12 @@ func TestService_GetLedgerByHashReturnsNotFoundWithoutPersistedLedger(t *testing
 
 	t.Run("nodestore cancellation remains cancellation", func(t *testing.T) {
 		ctx := context.Background()
-		backend := nodestore.NewKVDatabase(memorydb.New(), "ledger-by-hash-fetch-canceled", 100, time.Hour)
+		backend := newTestNodeStore(t, 100)
 		t.Cleanup(func() { require.NoError(t, backend.Close()) })
 		db := &fetchErrorDatabase{Database: backend, err: context.Canceled}
-		rm, err := sqlitedb.NewRepositoryManager(t.TempDir())
-		require.NoError(t, err)
-		require.NoError(t, rm.Open(ctx))
-		t.Cleanup(func() { require.NoError(t, rm.Close(ctx)) })
+		rm := newTestRepositories(t, ctx)
 		wantHash := [32]byte{0x06}
-		require.NoError(t, rm.Ledger().SaveValidatedLedger(ctx, &relationaldb.LedgerInfo{
+		require.NoError(t, rm.Ledger().SaveValidatedLedger(ctx, relationaldb.LedgerInfo{
 			Hash:     relationaldb.Hash(wantHash),
 			Sequence: 2,
 		}))
@@ -426,14 +400,11 @@ func TestService_GetLedgerByHashReturnsNotFoundWithoutPersistedLedger(t *testing
 
 func TestService_GetLedgerByHashTreatsCorruptPersistedHeaderAsNotFound(t *testing.T) {
 	ctx := context.Background()
-	db := nodestore.NewKVDatabase(memorydb.New(), "ledger-by-hash-corrupt", 100, time.Hour)
+	db := newTestNodeStore(t, 100)
 	t.Cleanup(func() { require.NoError(t, db.Close()) })
-	rm, err := sqlitedb.NewRepositoryManager(t.TempDir())
-	require.NoError(t, err)
-	require.NoError(t, rm.Open(ctx))
-	t.Cleanup(func() { require.NoError(t, rm.Close(ctx)) })
+	rm := newTestRepositories(t, ctx)
 	wantHash := [32]byte{0x03}
-	require.NoError(t, rm.Ledger().SaveValidatedLedger(ctx, &relationaldb.LedgerInfo{
+	require.NoError(t, rm.Ledger().SaveValidatedLedger(ctx, relationaldb.LedgerInfo{
 		Hash:     relationaldb.Hash(wantHash),
 		Sequence: 1,
 	}))

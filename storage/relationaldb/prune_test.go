@@ -153,6 +153,23 @@ func TestLedgerPruner_ZeroBoundaryNoOp(t *testing.T) {
 	}
 }
 
+func TestLedgerPruner_BatchDoesNotOverflow(t *testing.T) {
+	min := ^uint32(0) - 2
+	boundary := ^uint32(0)
+	m := newFakeManager(seqPtr(min), seqPtr(min), seqPtr(min))
+	p := NewLedgerPruner(m, 10)
+
+	if err := p.DeleteLedgersBefore(context.Background(), boundary); err != nil {
+		t.Fatalf("DeleteLedgersBefore: %v", err)
+	}
+	if got := m.tx.deleteArgs; len(got) != 1 || got[0] != LedgerIndex(boundary) {
+		t.Fatalf("transaction delete args = %v, want [%d]", got, boundary)
+	}
+	if got := m.ledger.deleteArgs; len(got) != 1 || got[0] != LedgerIndex(boundary-1) {
+		t.Fatalf("ledger delete args = %v, want [%d]", got, boundary-1)
+	}
+}
+
 func equalSeqs(a, b []LedgerIndex) bool {
 	if len(a) != len(b) {
 		return false

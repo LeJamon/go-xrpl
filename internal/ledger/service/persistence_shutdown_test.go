@@ -11,7 +11,6 @@ import (
 	"github.com/LeJamon/go-xrpl/internal/ledger"
 	"github.com/LeJamon/go-xrpl/internal/ledger/header"
 	"github.com/LeJamon/go-xrpl/shamap"
-	"github.com/LeJamon/go-xrpl/storage/kvstore/memorydb"
 	"github.com/LeJamon/go-xrpl/storage/nodestore"
 )
 
@@ -25,9 +24,10 @@ type gatedStore struct {
 	release     chan struct{}
 }
 
-func newGatedStore() *gatedStore {
+func newGatedStore(t *testing.T) *gatedStore {
+	t.Helper()
 	return &gatedStore{
-		Database: nodestore.NewKVDatabase(memorydb.New(), "mem", 10000, time.Hour),
+		Database: newTestNodeStore(t, 10000),
 		release:  make(chan struct{}),
 	}
 }
@@ -67,7 +67,7 @@ func buildLedgerWithState(t *testing.T, seq uint32) *ledger.Ledger {
 // forces the worker to stall so the ledgers genuinely queue behind an in-flight
 // write, exercising the drain-then-exit path.
 func TestService_Stop_DrainsQueuedPersists(t *testing.T) {
-	store := newGatedStore()
+	store := newGatedStore(t)
 	svc, err := New(Config{Standalone: false, NodeStore: store})
 	if err != nil {
 		t.Fatalf("New: %v", err)
@@ -122,7 +122,7 @@ func TestService_Stop_DrainsQueuedPersists(t *testing.T) {
 }
 
 func TestService_PersistLedgerWritesHeader(t *testing.T) {
-	store := newGatedStore()
+	store := newGatedStore(t)
 	store.open()
 	svc, err := New(Config{Standalone: false, NodeStore: store})
 	if err != nil {
@@ -139,7 +139,7 @@ func TestService_PersistLedgerWritesHeader(t *testing.T) {
 }
 
 func TestService_ValidatedTipDoesNotRegress(t *testing.T) {
-	store := newGatedStore()
+	store := newGatedStore(t)
 	store.open()
 	svc, err := New(Config{Standalone: false, NodeStore: store})
 	if err != nil {
@@ -186,7 +186,7 @@ func TestService_Stop_Idempotent(t *testing.T) {
 // TestService_EnqueuePersist_AfterStop_Dropped confirms the stopped guard keeps
 // a late enqueue from sending on the queue after the worker has been joined.
 func TestService_EnqueuePersist_AfterStop_Dropped(t *testing.T) {
-	store := newGatedStore()
+	store := newGatedStore(t)
 	store.open() // never stall
 	svc, err := New(Config{Standalone: false, NodeStore: store})
 	if err != nil {

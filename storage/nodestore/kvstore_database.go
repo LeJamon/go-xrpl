@@ -11,177 +11,194 @@ import (
 	"github.com/LeJamon/go-xrpl/storage/kvstore"
 )
 
-// DatabaseConfig holds configuration for creating a Database.
-type DatabaseConfig struct {
-	// CacheSize is the maximum number of items in the positive cache.
-	CacheSize int
-
-	// CacheTTL is the time-to-live for positive cache entries.
-	CacheTTL time.Duration
-
-	// NegativeCacheTTL is the time-to-live for negative cache entries.
-	// Set to 0 to disable negative caching.
-	NegativeCacheTTL time.Duration
-
-	// NegativeCacheMaxSize is the maximum number of entries in the negative cache.
-	NegativeCacheMaxSize int
+// CacheConfig configures one optional NodeStore cache.
+type CacheConfig struct {
+	Enabled    bool
+	MaxEntries int
+	TTL        time.Duration
 }
 
-// DefaultDatabaseConfig returns a DatabaseConfig with sensible defaults.
-func DefaultDatabaseConfig() *DatabaseConfig {
-	return &DatabaseConfig{
-		CacheSize:            2000,
-		CacheTTL:             time.Hour,
-		NegativeCacheTTL:     5 * time.Minute,
-		NegativeCacheMaxSize: 100000,
+// DatabaseConfig configures the positive and negative NodeStore caches.
+type DatabaseConfig struct {
+	PositiveCache CacheConfig
+	NegativeCache CacheConfig
+}
+
+type nodeCacheAccess interface {
+	Get(Hash256) (*Node, bool)
+	Put(*Node)
+	putOwned(*Node)
+	Remove(Hash256)
+	Clear()
+	Sweep() int
+}
+
+// DefaultDatabaseConfig returns the production cache defaults.
+func DefaultDatabaseConfig() DatabaseConfig {
+	return DatabaseConfig{
+		PositiveCache: CacheConfig{
+			Enabled:    true,
+			MaxEntries: 2000,
+			TTL:        time.Hour,
+		},
+		NegativeCache: CacheConfig{
+			Enabled:    true,
+			MaxEntries: 100000,
+			TTL:        5 * time.Minute,
+		},
 	}
 }
 
-// KVDatabaseImpl wraps a kvstore.KeyValueStore to implement the Database interface.
-type KVDatabaseImpl struct {
-	// pruneMu serialises online-delete pruning against writers. Writers take
-	// the read side; DeleteBefore's flush takes the write side so its
-	// re-read-then-delete of each key is atomic w.r.t. a concurrent Store —
-	// otherwise a key re-created live during a prune could be erased.
+func (c DatabaseConfig) validate() error {
+	if err := validateCacheConfig("positive", c.PositiveCache); err != nil {
+		return err
+	}
+	return validateCacheConfig("negative", c.NegativeCache)
+}
+
+func validateCacheConfig(name string, config CacheConfig) error {
+	if !config.Enabled {
+		if config.MaxEntries != 0 || config.TTL != 0 {
+			return fmt.Errorf("%w: %s cache is disabled but configured", ErrInvalidConfig, name)
+		}
+		return nil
+	}
+	if config.MaxEntries <= 0 {
+		return fmt.Errorf("%w: %s cache max entries must be positive", ErrInvalidConfig, name)
+	}
+	if config.TTL <= 0 {
+		return fmt.Errorf("%w: %s cache TTL must be positive", ErrInvalidConfig, name)
+	}
+	return nil
+}
+
+// KVDatabase stores validated nodes in a key-value backend.
+type KVDatabase struct {
+	lifecycleMu sync.RWMutex
+	closed      bool
+	syncGate    chan struct{}
+
 	pruneMu       sync.RWMutex
 	store         kvstore.KeyValueStore
-	cache         *Cache
-	negativeCache *NegativeCache
-	// Advances after a successful backend write and before negative-cache invalidation.
+	cache         nodeCacheAccess
+	negativeCache *negativeCache
+
 	storeGeneration atomic.Uint64
-	// Advances before a backend rotation clears the decoded cache. Fetches that
-	// crossed the cutover must not repopulate entries from the retired archive.
 	cacheGeneration atomic.Uint64
-	name            string
 	stats           struct {
-		reads             uint64
-		fetchHits         uint64
-		cacheHits         uint64
-		cacheMisses       uint64
-		negativeCacheHits uint64
-		writes            uint64
-		readBytes         uint64
-		writeBytes        uint64
+		reads      uint64
+		fetchHits  uint64
+		writes     uint64
+		readBytes  uint64
+		writeBytes uint64
 	}
 }
 
-// NewKVDatabase creates a new Database from a kvstore.KeyValueStore.
-func NewKVDatabase(store kvstore.KeyValueStore, name string, cacheSize int, cacheTTL time.Duration) *KVDatabaseImpl {
-	var cache *Cache
-	if cacheSize > 0 {
-		cache = NewCache(cacheSize, cacheTTL)
+// NewKVDatabase constructs a NodeStore over store using config.
+func NewKVDatabase(store kvstore.KeyValueStore, config DatabaseConfig) (*KVDatabase, error) {
+	if store == nil {
+		return nil, fmt.Errorf("%w: nil store", ErrInvalidConfig)
 	}
-	return &KVDatabaseImpl{
-		store: store,
-		cache: cache,
-		name:  name,
+	if err := config.validate(); err != nil {
+		return nil, err
 	}
+
+	database := &KVDatabase{
+		store:    store,
+		syncGate: make(chan struct{}, 1),
+	}
+	database.syncGate <- struct{}{}
+	if config.PositiveCache.Enabled {
+		database.cache = newNodeCache(config.PositiveCache.MaxEntries, config.PositiveCache.TTL)
+	}
+	if config.NegativeCache.Enabled {
+		database.negativeCache = newNegativeCache(config.NegativeCache.TTL, config.NegativeCache.MaxEntries)
+	}
+	return database, nil
 }
 
-// NewKVDatabaseWithConfig creates a new Database from a kvstore.KeyValueStore with full configuration.
-func NewKVDatabaseWithConfig(store kvstore.KeyValueStore, name string, config *DatabaseConfig) *KVDatabaseImpl {
-	if config == nil {
-		config = DefaultDatabaseConfig()
+func (d *KVDatabase) begin(ctx context.Context) error {
+	d.lifecycleMu.RLock()
+	if d.closed {
+		d.lifecycleMu.RUnlock()
+		return ErrClosed
 	}
-
-	db := &KVDatabaseImpl{
-		store: store,
-		name:  name,
+	if err := ctx.Err(); err != nil {
+		d.lifecycleMu.RUnlock()
+		return err
 	}
-
-	if config.CacheSize > 0 {
-		db.cache = NewCache(config.CacheSize, config.CacheTTL)
-	}
-
-	if config.NegativeCacheTTL > 0 {
-		db.negativeCache = NewNegativeCacheWithConfig(&NegativeCacheConfig{
-			TTL:     config.NegativeCacheTTL,
-			MaxSize: config.NegativeCacheMaxSize,
-		})
-	}
-
-	return db
+	return nil
 }
 
-// Store persists a node to the store.
-func (d *KVDatabaseImpl) Store(ctx context.Context, node *Node) error {
-	select {
-	case <-ctx.Done():
-		return ctx.Err()
-	default:
+// Store validates and persists one node.
+func (d *KVDatabase) Store(ctx context.Context, node *Node) error {
+	if err := d.begin(ctx); err != nil {
+		return err
+	}
+	defer d.lifecycleMu.RUnlock()
+	if err := validateNode(node); err != nil {
+		return err
 	}
 
 	encoded := encodeNodeData(node)
 	d.pruneMu.RLock()
 	err := d.store.Put(node.Hash[:], encoded)
-	d.pruneMu.RUnlock()
 	releaseEncodeBuf(encoded)
 	if err != nil {
+		d.pruneMu.RUnlock()
 		return fmt.Errorf("store failed: %w", err)
 	}
 	if d.negativeCache != nil {
 		d.storeGeneration.Add(1)
 		d.negativeCache.Remove(node.Hash)
 	}
-
 	atomic.AddUint64(&d.stats.writes, 1)
 	atomic.AddUint64(&d.stats.writeBytes, uint64(len(node.Data)))
-
 	if d.cache != nil {
 		d.cache.Put(node)
 	}
-
+	d.pruneMu.RUnlock()
 	return nil
 }
 
-// Fetch retrieves a node by its hash.
-func (d *KVDatabaseImpl) Fetch(ctx context.Context, hash Hash256) (*Node, error) {
-	select {
-	case <-ctx.Done():
-		return nil, ctx.Err()
-	default:
+// Fetch returns a node by hash, consulting configured caches.
+func (d *KVDatabase) Fetch(ctx context.Context, hash Hash256) (*Node, error) {
+	if err := d.begin(ctx); err != nil {
+		return nil, err
 	}
+	defer d.lifecycleMu.RUnlock()
 
 	atomic.AddUint64(&d.stats.reads, 1)
-
 	if d.cache != nil {
 		if node, found := d.cache.Get(hash); found {
-			atomic.AddUint64(&d.stats.cacheHits, 1)
 			atomic.AddUint64(&d.stats.fetchHits, 1)
 			atomic.AddUint64(&d.stats.readBytes, uint64(len(node.Data)))
 			return node, nil
 		}
-		atomic.AddUint64(&d.stats.cacheMisses, 1)
 	}
 	cacheGeneration := d.cacheGeneration.Load()
-
 	data, err := d.fetchBackend(hash)
 	if err != nil || data == nil {
 		return nil, err
 	}
-
 	node, err := decodeNodeData(hash, data)
 	if err != nil {
 		return nil, err
 	}
-
 	atomic.AddUint64(&d.stats.fetchHits, 1)
 	atomic.AddUint64(&d.stats.readBytes, uint64(len(node.Data)))
 	if d.cache != nil && d.cacheGeneration.Load() == cacheGeneration {
 		d.cache.putOwned(node)
 	}
-
 	return node, nil
 }
 
-// FetchCached returns a node only when it is already in the decoded-node cache.
-// A miss never reaches the backing store.
-func (d *KVDatabaseImpl) FetchCached(ctx context.Context, hash Hash256) (*Node, error) {
-	select {
-	case <-ctx.Done():
-		return nil, ctx.Err()
-	default:
+// FetchCached returns a node only when it is in the positive cache.
+func (d *KVDatabase) FetchCached(ctx context.Context, hash Hash256) (*Node, error) {
+	if err := d.begin(ctx); err != nil {
+		return nil, err
 	}
+	defer d.lifecycleMu.RUnlock()
 
 	atomic.AddUint64(&d.stats.reads, 1)
 	if d.cache == nil {
@@ -189,44 +206,38 @@ func (d *KVDatabaseImpl) FetchCached(ctx context.Context, hash Hash256) (*Node, 
 	}
 	node, found := d.cache.Get(hash)
 	if !found {
-		atomic.AddUint64(&d.stats.cacheMisses, 1)
 		return nil, nil
 	}
-	atomic.AddUint64(&d.stats.cacheHits, 1)
 	atomic.AddUint64(&d.stats.fetchHits, 1)
 	atomic.AddUint64(&d.stats.readBytes, uint64(len(node.Data)))
 	return node, nil
 }
 
-// FetchDataUncached retrieves a node's opaque payload without populating the
-// decoded-node LRU. It is used by one-shot content-addressed traversals whose
-// working set is much larger than that cache.
-func (d *KVDatabaseImpl) FetchDataUncached(ctx context.Context, hash Hash256) ([]byte, error) {
-	select {
-	case <-ctx.Done():
-		return nil, ctx.Err()
-	default:
+// FetchDataUncached returns validated node data without populating the positive cache.
+func (d *KVDatabase) FetchDataUncached(ctx context.Context, hash Hash256) ([]byte, error) {
+	if err := d.begin(ctx); err != nil {
+		return nil, err
 	}
+	defer d.lifecycleMu.RUnlock()
 
 	atomic.AddUint64(&d.stats.reads, 1)
 	data, err := d.fetchBackend(hash)
 	if err != nil || data == nil {
 		return nil, err
 	}
-	if len(data) < nodeEncodingHeaderSize {
-		return nil, fmt.Errorf("%w: data too short (%d bytes)", ErrDataCorrupt, len(data))
+	node, err := decodeNodeData(hash, data)
+	if err != nil {
+		return nil, err
 	}
-	payload := data[nodeEncodingHeaderSize:len(data):len(data)]
 	atomic.AddUint64(&d.stats.fetchHits, 1)
-	atomic.AddUint64(&d.stats.readBytes, uint64(len(payload)))
-	return payload, nil
+	atomic.AddUint64(&d.stats.readBytes, uint64(len(node.Data)))
+	return node.Data, nil
 }
 
-func (d *KVDatabaseImpl) fetchBackend(hash Hash256) ([]byte, error) {
+func (d *KVDatabase) fetchBackend(hash Hash256) ([]byte, error) {
 	var storeGeneration uint64
 	if d.negativeCache != nil {
 		if d.negativeCache.IsMissing(hash) {
-			atomic.AddUint64(&d.stats.negativeCacheHits, 1)
 			return nil, nil
 		}
 		storeGeneration = d.storeGeneration.Load()
@@ -248,59 +259,67 @@ func (d *KVDatabaseImpl) fetchBackend(hash Hash256) ([]byte, error) {
 	return nil, nil
 }
 
-// StoreBatch stores multiple nodes efficiently using a batch.
-func (d *KVDatabaseImpl) StoreBatch(ctx context.Context, nodes []*Node) error {
-	select {
-	case <-ctx.Done():
-		return ctx.Err()
-	default:
+// StoreBatch validates and atomically persists a collection of nodes.
+func (d *KVDatabase) StoreBatch(ctx context.Context, nodes []*Node) (err error) {
+	if err := d.begin(ctx); err != nil {
+		return err
+	}
+	defer d.lifecycleMu.RUnlock()
+	for _, node := range nodes {
+		if err := validateNode(node); err != nil {
+			return err
+		}
+	}
+	if len(nodes) == 0 {
+		return nil
 	}
 
-	batch := d.store.NewBatch()
-	wroteNode := false
+	batch, err := d.store.NewBatch()
+	if err != nil {
+		return fmt.Errorf("create store batch: %w", err)
+	}
+	defer func() {
+		err = errors.Join(err, batch.Close())
+	}()
 	for _, node := range nodes {
-		if node == nil {
-			continue
-		}
 		encoded := encodeNodeData(node)
-		err := batch.Put(node.Hash[:], encoded)
+		putErr := batch.Put(node.Hash[:], encoded)
 		releaseEncodeBuf(encoded)
-		if err != nil {
-			return fmt.Errorf("store batch failed: %w", err)
+		if putErr != nil {
+			return fmt.Errorf("store batch failed: %w", putErr)
 		}
-		wroteNode = true
 	}
 	d.pruneMu.RLock()
-	err := batch.Write()
-	d.pruneMu.RUnlock()
-	if err != nil {
-		return fmt.Errorf("store batch commit failed: %w", err)
+	writeErr := batch.Write()
+	if writeErr != nil {
+		d.pruneMu.RUnlock()
+		return fmt.Errorf("store batch commit failed: %w", writeErr)
 	}
-	if d.negativeCache != nil && wroteNode {
+	if d.negativeCache != nil {
 		d.storeGeneration.Add(1)
 		for _, node := range nodes {
-			if node != nil {
-				d.negativeCache.Remove(node.Hash)
-			}
+			d.negativeCache.Remove(node.Hash)
 		}
 	}
-
 	for _, node := range nodes {
-		if node == nil {
-			continue
-		}
 		atomic.AddUint64(&d.stats.writes, 1)
 		atomic.AddUint64(&d.stats.writeBytes, uint64(len(node.Data)))
 		if d.cache != nil {
 			d.cache.Put(node)
 		}
 	}
-
+	d.pruneMu.RUnlock()
 	return nil
 }
 
-// Sweep removes expired entries from caches.
-func (d *KVDatabaseImpl) Sweep() error {
+// Sweep removes expired entries from configured caches.
+func (d *KVDatabase) Sweep() error {
+	d.lifecycleMu.RLock()
+	if d.closed {
+		d.lifecycleMu.RUnlock()
+		return ErrClosed
+	}
+	defer d.lifecycleMu.RUnlock()
 	if d.cache != nil {
 		d.cache.Sweep()
 	}
@@ -310,59 +329,83 @@ func (d *KVDatabaseImpl) Sweep() error {
 	return nil
 }
 
-// Stats returns performance statistics.
-func (d *KVDatabaseImpl) Stats() Statistics {
-	stats := Statistics{
-		Reads:             atomic.LoadUint64(&d.stats.reads),
-		FetchHits:         atomic.LoadUint64(&d.stats.fetchHits),
-		CacheHits:         atomic.LoadUint64(&d.stats.cacheHits),
-		CacheMisses:       atomic.LoadUint64(&d.stats.cacheMisses),
-		NegativeCacheHits: atomic.LoadUint64(&d.stats.negativeCacheHits),
-		ReadBytes:         atomic.LoadUint64(&d.stats.readBytes),
-		Writes:            atomic.LoadUint64(&d.stats.writes),
-		WriteBytes:        atomic.LoadUint64(&d.stats.writeBytes),
-		BackendName:       d.name,
+// Stats returns the database's operational counters.
+func (d *KVDatabase) Stats() Statistics {
+	return Statistics{
+		Reads:      atomic.LoadUint64(&d.stats.reads),
+		FetchHits:  atomic.LoadUint64(&d.stats.fetchHits),
+		ReadBytes:  atomic.LoadUint64(&d.stats.readBytes),
+		Writes:     atomic.LoadUint64(&d.stats.writes),
+		WriteBytes: atomic.LoadUint64(&d.stats.writeBytes),
 	}
-
-	if d.cache != nil {
-		cacheStats := d.cache.Stats()
-		stats.CacheSize = uint64(cacheStats.CurrentSize)
-		stats.CacheMaxSize = uint64(cacheStats.MaxSize)
-	}
-
-	return stats
 }
 
-// Sync forces pending writes to disk. The flush itself is
-// uninterruptible; ctx cancellation unblocks the caller while the
-// underlying store flush continues in the background.
-func (d *KVDatabaseImpl) Sync(ctx context.Context) error {
+// Sync makes all preceding backend writes durable.
+func (d *KVDatabase) Sync(ctx context.Context) error {
+	d.lifecycleMu.RLock()
+	if d.closed {
+		d.lifecycleMu.RUnlock()
+		return ErrClosed
+	}
+	d.lifecycleMu.RUnlock()
 	if err := ctx.Err(); err != nil {
 		return err
 	}
+
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-d.syncGate:
+	}
+
+	d.lifecycleMu.RLock()
+	if d.closed {
+		d.lifecycleMu.RUnlock()
+		d.syncGate <- struct{}{}
+		return ErrClosed
+	}
+	if err := ctx.Err(); err != nil {
+		d.lifecycleMu.RUnlock()
+		d.syncGate <- struct{}{}
+		return err
+	}
+
 	done := make(chan error, 1)
-	go func() { done <- d.store.Sync() }()
+	go func() {
+		err := d.store.Sync()
+		d.lifecycleMu.RUnlock()
+		d.syncGate <- struct{}{}
+		done <- err
+	}()
+
 	select {
 	case err := <-done:
 		return err
 	case <-ctx.Done():
-		return ctx.Err()
-	}
-}
-
-// Close closes the database.
-func (d *KVDatabaseImpl) Close() error {
-	var lastErr error
-	if d.negativeCache != nil {
-		if err := d.negativeCache.Close(); err != nil {
-			lastErr = err
+		select {
+		case err := <-done:
+			return err
+		default:
+			return ctx.Err()
 		}
 	}
-	if err := d.store.Close(); err != nil {
-		lastErr = err
-	}
-	return lastErr
 }
 
-// Ensure KVDatabaseImpl implements Database at compile time.
-var _ Database = (*KVDatabaseImpl)(nil)
+// Close releases caches and closes the underlying store.
+func (d *KVDatabase) Close() error {
+	d.lifecycleMu.Lock()
+	defer d.lifecycleMu.Unlock()
+	if d.closed {
+		return nil
+	}
+	d.closed = true
+	if d.cache != nil {
+		d.cache.Clear()
+	}
+	if d.negativeCache != nil {
+		d.negativeCache.Clear()
+	}
+	return d.store.Close()
+}
+
+var _ Database = (*KVDatabase)(nil)

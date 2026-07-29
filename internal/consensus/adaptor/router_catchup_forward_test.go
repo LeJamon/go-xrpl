@@ -25,10 +25,16 @@ import (
 func makeProvisionalWarmRouter(t *testing.T) (*Router, *recordingSender, *service.Service) {
 	t.Helper()
 	ctx := context.Background()
-	db := nodestore.NewKVDatabase(memorydb.New(), "router-fast-load", 10_000, time.Hour)
-	rm, err := sqlitedb.NewRepositoryManager(t.TempDir())
+	db, err := nodestore.NewKVDatabase(memorydb.New(), nodestore.DatabaseConfig{
+		PositiveCache: nodestore.CacheConfig{
+			Enabled:    true,
+			MaxEntries: 10_000,
+			TTL:        time.Hour,
+		},
+	})
 	require.NoError(t, err)
-	require.NoError(t, rm.Open(ctx))
+	rm, err := sqlitedb.NewRepositoryManager(ctx, t.TempDir(), sqlitedb.Settings{})
+	require.NoError(t, err)
 
 	writer, err := service.New(service.Config{
 		Standalone:    true,
@@ -56,7 +62,7 @@ func makeProvisionalWarmRouter(t *testing.T) (*Router, *recordingSender, *servic
 	require.NoError(t, svc.Start())
 	t.Cleanup(func() {
 		svc.Stop()
-		require.NoError(t, rm.Close(ctx))
+		require.NoError(t, rm.Close())
 		require.NoError(t, db.Close())
 	})
 	require.False(t, svc.NeedsInitialSync())

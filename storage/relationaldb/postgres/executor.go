@@ -1,13 +1,5 @@
 package postgres
 
-import (
-	"context"
-	"database/sql"
-)
+import "github.com/LeJamon/go-xrpl/storage/relationaldb/internal/sqlutil"
 
-// executor interface allows using both sql.DB and sql.Tx
-type executor interface {
-	QueryRowContext(ctx context.Context, query string, args ...any) *sql.Row
-	QueryContext(ctx context.Context, query string, args ...any) (*sql.Rows, error)
-	ExecContext(ctx context.Context, query string, args ...any) (sql.Result, error)
-}
+type executor = sqlutil.Executor

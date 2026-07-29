@@ -55,16 +55,6 @@ type TransactionInfo struct {
 	Account   AccountID   `json:"account"`
 }
 
-// AccountTxOptions contains criteria for account transaction queries
-type AccountTxOptions struct {
-	Account   AccountID   `json:"account"`
-	MinLedger LedgerIndex `json:"min_ledger"`
-	MaxLedger LedgerIndex `json:"max_ledger"`
-	Offset    uint32      `json:"offset"`
-	Limit     uint32      `json:"limit"`
-	Unlimited bool        `json:"unlimited"`
-}
-
 // AccountTxMarker represents pagination marker for account transactions
 type AccountTxMarker struct {
 	LedgerSeq LedgerIndex `json:"ledger_seq"`
@@ -78,7 +68,6 @@ type AccountTxPageOptions struct {
 	MaxLedger LedgerIndex      `json:"max_ledger"`
 	Marker    *AccountTxMarker `json:"marker,omitempty"`
 	Limit     uint32           `json:"limit"`
-	Admin     bool             `json:"admin"`
 }
 
 // AccountTxResult contains the result of an account transaction query
@@ -87,13 +76,6 @@ type AccountTxResult struct {
 	LedgerRange  LedgerRange       `json:"ledger_range"`
 	Limit        uint32            `json:"limit"`
 	Marker       *AccountTxMarker  `json:"marker,omitempty"`
-}
-
-// CountMinMax contains count and range information
-type CountMinMax struct {
-	Count        int64       `json:"count"`
-	MinLedgerSeq LedgerIndex `json:"min_ledger_seq"`
-	MaxLedgerSeq LedgerIndex `json:"max_ledger_seq"`
 }
 
 // TxSearchResult represents the result of a transaction search
@@ -113,63 +95,77 @@ type LedgerRepository interface {
 	GetLedgerInfoBySeq(ctx context.Context, seq LedgerIndex) (*LedgerInfo, error)
 	GetLedgerInfoByHash(ctx context.Context, hash Hash) (*LedgerInfo, error)
 	GetNewestLedgerInfo(ctx context.Context) (*LedgerInfo, error)
-	GetLimitedOldestLedgerInfo(ctx context.Context, minSeq LedgerIndex) (*LedgerInfo, error)
-	GetLimitedNewestLedgerInfo(ctx context.Context, minSeq LedgerIndex) (*LedgerInfo, error)
-	GetHashByIndex(ctx context.Context, seq LedgerIndex) (*Hash, error)
-	GetHashesByIndex(ctx context.Context, seq LedgerIndex) (*LedgerHashPair, error)
 	GetHashesByRange(ctx context.Context, minSeq, maxSeq LedgerIndex) (map[LedgerIndex]LedgerHashPair, error)
-	SaveValidatedLedger(ctx context.Context, ledger *LedgerInfo) error
+	// SaveValidatedLedger stores only a ledger header. Callers persisting a
+	// complete validated ledger must use RepositoryManager.PersistValidatedLedger.
+	SaveValidatedLedger(ctx context.Context, ledger LedgerInfo) error
 	DeleteLedgersBySeq(ctx context.Context, maxSeq LedgerIndex) error
-	GetLedgerCountMinMax(ctx context.Context) (*CountMinMax, error)
-	GetKBUsedLedger(ctx context.Context) (uint32, error)
 }
 
 // TransactionRepository handles transaction-related database operations
 type TransactionRepository interface {
 	GetTransactionsMinLedgerSeq(ctx context.Context) (*LedgerIndex, error)
-	GetTransactionCount(ctx context.Context) (int64, error)
 	GetTransaction(ctx context.Context, hash Hash, ledgerRange *LedgerRange) (*TransactionInfo, TxSearchResult, error)
 	GetTxHistory(ctx context.Context, startIndex LedgerIndex, limit int) ([]TransactionInfo, error)
-	SaveTransaction(ctx context.Context, txInfo *TransactionInfo) error
+	SaveTransaction(ctx context.Context, txInfo TransactionInfo) error
 	DeleteTransactionsByLedgerSeq(ctx context.Context, ledgerSeq LedgerIndex) error
 	DeleteTransactionsBeforeLedgerSeq(ctx context.Context, ledgerSeq LedgerIndex) error
-	GetKBUsedTransaction(ctx context.Context) (uint32, error)
 }
 
 // AccountTransactionRepository handles account transaction-related database operations
 type AccountTransactionRepository interface {
 	GetAccountTransactionsMinLedgerSeq(ctx context.Context) (*LedgerIndex, error)
-	GetAccountTransactionCount(ctx context.Context) (int64, error)
-	GetOldestAccountTxs(ctx context.Context, options AccountTxOptions) ([]TransactionInfo, error)
-	GetNewestAccountTxs(ctx context.Context, options AccountTxOptions) ([]TransactionInfo, error)
 	GetOldestAccountTxsPage(ctx context.Context, options AccountTxPageOptions) (*AccountTxResult, error)
 	GetNewestAccountTxsPage(ctx context.Context, options AccountTxPageOptions) (*AccountTxResult, error)
-	SaveAccountTransaction(ctx context.Context, accountID AccountID, txInfo *TransactionInfo) error
+	SaveAccountTransaction(ctx context.Context, accountID AccountID, txInfo TransactionInfo) error
 	DeleteAccountTransactionsBeforeLedgerSeq(ctx context.Context, ledgerSeq LedgerIndex) error
 }
 
-// SystemRepository handles system-level database operations
-type SystemRepository interface {
-	GetKBUsedAll(ctx context.Context) (uint32, error)
-	Ping(ctx context.Context) error
-	Begin(ctx context.Context) (TransactionContext, error)
+// IndexedTransaction associates a transaction with every affected account.
+type IndexedTransaction struct {
+	Transaction TransactionInfo
+	Accounts    []AccountID
 }
 
-// TransactionContext represents a database transaction context with repository access.
-//
-// Atomicity contract: Transaction() and AccountTransaction() are always bound
-// to the transaction. Ledger() is backend-dependent: PostgreSQL binds it to
-// the same transaction, but SQLite stores ledgers in a separate database file
-// and has no cross-database transactions, so the SQLite Ledger() repository
-// operates outside the transaction — its writes apply immediately and are NOT
-// rolled back. Callers needing atomic ledger writes must not rely on
-// WithTransaction for them on SQLite.
-type TransactionContext interface {
-	Commit(ctx context.Context) error
-	Rollback(ctx context.Context) error
+// ValidatedLedger contains a ledger header and its indexed transactions.
+type ValidatedLedger struct {
+	Ledger       LedgerInfo
+	Transactions []IndexedTransaction
+}
 
-	// Repository access within transaction
-	Ledger() LedgerRepository
+// Validate checks the invariants required for atomic ledger persistence.
+func (v ValidatedLedger) Validate() error {
+	if v.Ledger.Hash.IsZero() {
+		return NewDataError("persist_validated_ledger", "ledger hash is zero", ErrInvalidData)
+	}
+	for i, indexed := range v.Transactions {
+		if indexed.Transaction.LedgerSeq != v.Ledger.Sequence {
+			return NewDataError(
+				"persist_validated_ledger",
+				fmt.Sprintf("transaction %d has ledger sequence %d, want %d", i, indexed.Transaction.LedgerSeq, v.Ledger.Sequence),
+				ErrInvalidData,
+			)
+		}
+		if indexed.Transaction.Hash.IsZero() {
+			return NewDataError(
+				"persist_validated_ledger",
+				fmt.Sprintf("transaction %d has zero hash", i),
+				ErrInvalidData,
+			)
+		}
+		if len(indexed.Transaction.RawTxn) == 0 {
+			return NewDataError(
+				"persist_validated_ledger",
+				fmt.Sprintf("transaction %d has empty payload", i),
+				ErrInvalidData,
+			)
+		}
+	}
+	return nil
+}
+
+// TransactionRepositories exposes repositories bound to one database transaction.
+type TransactionRepositories interface {
 	Transaction() TransactionRepository
 	AccountTransaction() AccountTransactionRepository
 }
@@ -182,14 +178,14 @@ type RepositoryManager interface {
 	AccountTransaction() AccountTransactionRepository
 	Validation() ValidationRepository
 	Amendment() AmendmentVoteRepository
-	System() SystemRepository
-
-	// Connection management
-	Open(ctx context.Context) error
-	Close(ctx context.Context) error
-
-	// Transaction management
-	WithTransaction(ctx context.Context, fn func(TransactionContext) error) error
+	Close() error
+	WithTransaction(ctx context.Context, fn func(TransactionRepositories) error) error
+	// PersistValidatedLedger stores a header, transactions, and account indexes
+	// as one recoverable unit. PostgreSQL commits them in one transaction.
+	// SQLite removes any same-sequence header, commits the complete indexes, and
+	// publishes the replacement header last. A failed call is safe to retry and
+	// never exposes a header whose indexes are only partially persisted.
+	PersistValidatedLedger(ctx context.Context, ledger ValidatedLedger) error
 }
 
 // Helper methods for Hash type

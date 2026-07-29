@@ -606,23 +606,16 @@ func (s *Service) RefreshValidatedState(
 	return seq, nil
 }
 
-// persistToRelationalDB writes ledger metadata and transactions to the
-// relational database inside a single transaction so the per-tx index
-// entries either all commit or all roll back on cancel / DB error.
-//
-// WithTransaction is invoked directly on RepositoryManager, bypassing
-// Manager.ExecuteInTransaction's retry layer. The persist call site
-// in service.go logs and discards the error to match rippled's
-// fail-soft pendSaveValidated; retrying inside the transactional
-// scope would not help if the failure is the chain-advance ordering
-// itself, and would lengthen the time the Service mutex is held.
+// persistToRelationalDB materializes a validated ledger and all of its
+// transaction indexes before handing the immutable unit to the relational
+// backend. The backend owns commit ordering and retry safety.
 func (s *Service) persistToRelationalDB(ctx context.Context, l *ledger.Ledger) error {
 	h := l.Header()
 
 	stateHash, _ := l.StateMapHash()
 	txHash, _ := l.TxMapHash()
 
-	ledgerInfo := &relationaldb.LedgerInfo{
+	ledgerInfo := relationaldb.LedgerInfo{
 		Hash:            relationaldb.Hash(l.Hash()),
 		Sequence:        relationaldb.LedgerIndex(h.LedgerIndex),
 		ParentHash:      relationaldb.Hash(h.ParentHash),
@@ -637,70 +630,64 @@ func (s *Service) persistToRelationalDB(ctx context.Context, l *ledger.Ledger) e
 
 	seq := relationaldb.LedgerIndex(l.Sequence())
 
-	return s.relationalDB.WithTransaction(ctx, func(txCtx relationaldb.TransactionContext) error {
-		if err := txCtx.Transaction().DeleteTransactionsByLedgerSeq(ctx, seq); err != nil {
-			return err
+	indexed := make([]relationaldb.IndexedTransaction, 0)
+	var loopErr error
+	_ = l.ForEachTransaction(func(txHashBytes [32]byte, txData []byte) bool {
+		if err := ctx.Err(); err != nil {
+			loopErr = err
+			return false
 		}
-		if err := txCtx.Ledger().SaveValidatedLedger(ctx, ledgerInfo); err != nil {
-			return err
+
+		txBlob, metaBlob, err := tx.SplitTxWithMetaBlob(txData)
+		if err != nil {
+			// Bad blob is a data issue, not a DB issue —
+			// skip this tx, keep the ledger persist alive.
+			s.logger.Warn("failed to split tx+meta blob", "tx", hex.EncodeToString(txHashBytes[:8]), "error", err)
+			return true
 		}
 
-		var loopErr error
-		_ = l.ForEachTransaction(func(txHashBytes [32]byte, txData []byte) bool {
-			if err := ctx.Err(); err != nil {
-				loopErr = err
-				return false
-			}
+		var accountID relationaldb.AccountID
+		var destinationID relationaldb.AccountID
 
-			txBlob, metaBlob, err := tx.SplitTxWithMetaBlob(txData)
-			if err != nil {
-				// Bad blob is a data issue, not a DB issue —
-				// skip this tx, keep the ledger persist alive.
-				s.logger.Warn("failed to split tx+meta blob", "tx", hex.EncodeToString(txHashBytes[:8]), "error", err)
-				return true
-			}
-
-			var accountID relationaldb.AccountID
-			var destinationID relationaldb.AccountID
-
-			txBlobHex := hex.EncodeToString(txBlob)
-			if txJSON, decErr := binarycodec.Decode(txBlobHex); decErr == nil {
-				if accountStr, ok := txJSON["Account"].(string); ok {
-					if _, accountBytes, err := addresscodec.DecodeClassicAddressToAccountID(accountStr); err == nil && len(accountBytes) == 20 {
-						copy(accountID[:], accountBytes)
-					}
-				}
-				if destStr, ok := txJSON["Destination"].(string); ok {
-					if _, destBytes, err := addresscodec.DecodeClassicAddressToAccountID(destStr); err == nil && len(destBytes) == 20 {
-						copy(destinationID[:], destBytes)
-					}
+		txBlobHex := hex.EncodeToString(txBlob)
+		if txJSON, decErr := binarycodec.Decode(txBlobHex); decErr == nil {
+			if accountStr, ok := txJSON["Account"].(string); ok {
+				if _, accountBytes, err := addresscodec.DecodeClassicAddressToAccountID(accountStr); err == nil && len(accountBytes) == 20 {
+					copy(accountID[:], accountBytes)
 				}
 			}
-
-			// account_tx must be queryable by every account the transaction
-			// affected — not just Account/Destination but offer counterparties,
-			// trust-line issuers, and so on — mirroring rippled's
-			// TxMeta::getAffectedAccounts (AcceptedLedgerTx.cpp:35).
-			affected := map[relationaldb.AccountID]struct{}{}
-			if !accountID.IsZero() {
-				affected[accountID] = struct{}{}
-			}
-			if !destinationID.IsZero() {
-				affected[destinationID] = struct{}{}
-			}
-
-			txnSeq := invalidTransactionIndex
-			if len(metaBlob) > 0 {
-				if txIndex, ok := tx.TransactionIndexFromMetadata(metaBlob); ok {
-					txnSeq = txIndex
-				}
-				metaHex := hex.EncodeToString(metaBlob)
-				if metaJSON, err := binarycodec.Decode(metaHex); err == nil {
-					addMetaAffectedAccounts(metaJSON, affected)
+			if destStr, ok := txJSON["Destination"].(string); ok {
+				if _, destBytes, err := addresscodec.DecodeClassicAddressToAccountID(destStr); err == nil && len(destBytes) == 20 {
+					copy(destinationID[:], destBytes)
 				}
 			}
+		}
 
-			txInfo := &relationaldb.TransactionInfo{
+		// account_tx must be queryable by every account the transaction
+		// affected — not just Account/Destination but offer counterparties,
+		// trust-line issuers, and so on — mirroring rippled's
+		// TxMeta::getAffectedAccounts (AcceptedLedgerTx.cpp:35).
+		affected := map[relationaldb.AccountID]struct{}{}
+		if !accountID.IsZero() {
+			affected[accountID] = struct{}{}
+		}
+		if !destinationID.IsZero() {
+			affected[destinationID] = struct{}{}
+		}
+
+		txnSeq := invalidTransactionIndex
+		if len(metaBlob) > 0 {
+			if txIndex, ok := tx.TransactionIndexFromMetadata(metaBlob); ok {
+				txnSeq = txIndex
+			}
+			metaHex := hex.EncodeToString(metaBlob)
+			if metaJSON, err := binarycodec.Decode(metaHex); err == nil {
+				addMetaAffectedAccounts(metaJSON, affected)
+			}
+		}
+
+		indexed = append(indexed, relationaldb.IndexedTransaction{
+			Transaction: relationaldb.TransactionInfo{
 				Hash:      relationaldb.Hash(txHashBytes),
 				LedgerSeq: seq,
 				TxnSeq:    txnSeq,
@@ -708,26 +695,18 @@ func (s *Service) persistToRelationalDB(ctx context.Context, l *ledger.Ledger) e
 				RawTxn:    txBlob,
 				TxnMeta:   metaBlob,
 				Account:   accountID,
-			}
-
-			// DB errors propagate so the whole ledger rolls back —
-			// partial tx index is worse than a retried persist.
-			if err := txCtx.Transaction().SaveTransaction(ctx, txInfo); err != nil {
-				loopErr = err
-				return false
-			}
-
-			for _, acc := range sortedAccountIDs(affected) {
-				if err := txCtx.AccountTransaction().SaveAccountTransaction(ctx, acc, txInfo); err != nil {
-					loopErr = err
-					return false
-				}
-			}
-
-			return true
+			},
+			Accounts: sortedAccountIDs(affected),
 		})
 
+		return true
+	})
+	if loopErr != nil {
 		return loopErr
+	}
+	return s.relationalDB.PersistValidatedLedger(ctx, relationaldb.ValidatedLedger{
+		Ledger:       ledgerInfo,
+		Transactions: indexed,
 	})
 }
 

@@ -2,645 +2,734 @@ package sqlite
 
 import (
 	"context"
-	"math"
+	"database/sql"
+	"errors"
+	"fmt"
+	"path/filepath"
+	"strings"
+	"sync"
 	"testing"
 	"time"
 
 	"github.com/LeJamon/go-xrpl/storage/relationaldb"
-)
-
-// Compile-time interface checks
-var (
-	_ relationaldb.RepositoryManager            = (*RepositoryManager)(nil)
-	_ relationaldb.LedgerRepository             = (*ledgerRepository)(nil)
-	_ relationaldb.TransactionRepository        = (*transactionRepository)(nil)
-	_ relationaldb.AccountTransactionRepository = (*accountTransactionRepository)(nil)
-	_ relationaldb.SystemRepository             = (*systemRepository)(nil)
-	_ relationaldb.TransactionContext           = (*transactionContext)(nil)
+	"github.com/LeJamon/go-xrpl/storage/relationaldb/internal/contracttest"
+	_ "modernc.org/sqlite"
 )
 
 func setupTestDB(t *testing.T) *RepositoryManager {
 	t.Helper()
-	dir := t.TempDir()
-	rm, err := NewRepositoryManager(dir)
+	rm, err := NewRepositoryManager(context.Background(), t.TempDir(), Settings{})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := rm.Open(context.Background()); err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { rm.Close(context.Background()) })
+	t.Cleanup(func() {
+		if err := rm.Close(); err != nil {
+			t.Fatal(err)
+		}
+	})
 	return rm
 }
 
-func makeLedgerInfo(seq uint32) *relationaldb.LedgerInfo {
-	var hash, parentHash, accountHash, txHash relationaldb.Hash
-	hash[0] = byte(seq)
-	parentHash[0] = byte(seq - 1)
-	accountHash[1] = byte(seq)
-	txHash[2] = byte(seq)
-	return &relationaldb.LedgerInfo{
-		Hash:            hash,
-		Sequence:        relationaldb.LedgerIndex(seq),
-		ParentHash:      parentHash,
-		AccountHash:     accountHash,
-		TransactionHash: txHash,
-		TotalCoins:      100000000000,
-		CloseTime:       time.Date(2025, 1, 1, 0, 0, 0, 0, time.UTC),
-		ParentCloseTime: time.Date(2024, 12, 31, 23, 59, 56, 0, time.UTC),
-		CloseTimeRes:    10,
-		CloseFlags:      0,
-	}
-}
-
-func TestOpenClose(t *testing.T) {
-	dir := t.TempDir()
-	rm, err := NewRepositoryManager(dir)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := rm.Open(context.Background()); err != nil {
-		t.Fatal(err)
-	}
-	if err := rm.System().Ping(context.Background()); err != nil {
-		t.Fatal(err)
-	}
-	if err := rm.Close(context.Background()); err != nil {
-		t.Fatal(err)
-	}
-}
-
-func TestLedgerCRUD(t *testing.T) {
+func TestCurrentSchemaRejectsMalformedRows(t *testing.T) {
 	rm := setupTestDB(t)
 	ctx := context.Background()
+	ledgerDB := rm.ledgerDB.Raw()
+	txDB := rm.txDB.Raw()
 
-	// Empty state
-	minSeq, err := rm.Ledger().GetMinLedgerSeq(ctx)
-	if err != nil {
-		t.Fatal(err)
+	statements := []struct {
+		name string
+		db   *sql.DB
+		sql  string
+	}{
+		{
+			name: "ledger hash",
+			db:   ledgerDB,
+			sql: `INSERT INTO ledgers (
+				ledger_hash, ledger_seq, prev_hash, total_coins, closing_time,
+				prev_closing_time, close_time_res, close_flags, account_set_hash, trans_set_hash
+			) VALUES (x'01', 1, zeroblob(32), 1, 1, 1, 1, 0, zeroblob(32), zeroblob(32))`,
+		},
+		{
+			name: "transaction ID",
+			db:   txDB,
+			sql:  `INSERT INTO transactions VALUES (x'01', 1, 'tesSUCCESS', x'01', NULL)`,
+		},
+		{
+			name: "validation node key",
+			db:   ledgerDB,
+			sql: `INSERT INTO validations (
+				ledger_seq, initial_seq, ledger_hash, node_pubkey,
+				sign_time, seen_time, flags, raw
+			) VALUES (1, 1, zeroblob(32), x'01', 1, 1, 0, x'01')`,
+		},
+		{
+			name: "amendment ID",
+			db:   ledgerDB,
+			sql:  `INSERT INTO feature_votes VALUES ('aa', 'Alpha', 0)`,
+		},
 	}
-	if minSeq != nil {
-		t.Fatal("expected nil min seq on empty DB")
-	}
-
-	// Save ledger
-	info := makeLedgerInfo(10)
-	if err := rm.Ledger().SaveValidatedLedger(ctx, info); err != nil {
-		t.Fatal(err)
-	}
-
-	// Read back by seq
-	got, err := rm.Ledger().GetLedgerInfoBySeq(ctx, 10)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if got.Sequence != 10 {
-		t.Fatalf("expected seq 10, got %d", got.Sequence)
-	}
-	if got.TotalCoins != 100000000000 {
-		t.Fatalf("expected total_coins 100000000000, got %d", got.TotalCoins)
-	}
-	if got.Hash != info.Hash {
-		t.Fatalf("hash mismatch")
-	}
-
-	// Read by hash
-	got2, err := rm.Ledger().GetLedgerInfoByHash(ctx, info.Hash)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if got2.Sequence != 10 {
-		t.Fatalf("expected seq 10 from hash lookup, got %d", got2.Sequence)
-	}
-
-	// Newest
-	newest, err := rm.Ledger().GetNewestLedgerInfo(ctx)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if newest.Sequence != 10 {
-		t.Fatalf("expected newest seq 10, got %d", newest.Sequence)
-	}
-
-	// Min/Max
-	minSeq, err = rm.Ledger().GetMinLedgerSeq(ctx)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if *minSeq != 10 {
-		t.Fatalf("expected min 10, got %d", *minSeq)
-	}
-
-	maxSeq, err := rm.Ledger().GetMaxLedgerSeq(ctx)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if *maxSeq != 10 {
-		t.Fatalf("expected max 10, got %d", *maxSeq)
-	}
-
-	// CountMinMax
-	stats, err := rm.Ledger().GetLedgerCountMinMax(ctx)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if stats.Count != 1 {
-		t.Fatalf("expected count 1, got %d", stats.Count)
-	}
-
-	// Upsert: save again with updated total
-	info.TotalCoins = 200000000000
-	if err := rm.Ledger().SaveValidatedLedger(ctx, info); err != nil {
-		t.Fatal(err)
-	}
-	got3, err := rm.Ledger().GetLedgerInfoBySeq(ctx, 10)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if got3.TotalCoins != 200000000000 {
-		t.Fatalf("expected upserted total_coins 200000000000, got %d", got3.TotalCoins)
+	for _, test := range statements {
+		t.Run(test.name, func(t *testing.T) {
+			if _, err := test.db.ExecContext(ctx, test.sql); err == nil {
+				t.Fatal("malformed row passed database constraint")
+			}
+		})
 	}
 }
 
-func TestLedgerHashQueries(t *testing.T) {
-	rm := setupTestDB(t)
-	ctx := context.Background()
-
-	for i := uint32(1); i <= 5; i++ {
-		if err := rm.Ledger().SaveValidatedLedger(ctx, makeLedgerInfo(i)); err != nil {
+func TestMalformedStoredRowsRejectedByScanners(t *testing.T) {
+	t.Run("ledger hash", func(t *testing.T) {
+		rm := setupTestDB(t)
+		ctx := context.Background()
+		db := rm.ledgerDB.Raw()
+		if _, err := db.ExecContext(ctx, `PRAGMA ignore_check_constraints = ON`); err != nil {
 			t.Fatal(err)
 		}
-	}
-
-	hash, err := rm.Ledger().GetHashByIndex(ctx, 3)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if hash[0] != 3 {
-		t.Fatalf("expected hash[0]=3, got %d", hash[0])
-	}
-
-	pair, err := rm.Ledger().GetHashesByIndex(ctx, 3)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if pair.LedgerHash[0] != 3 || pair.ParentHash[0] != 2 {
-		t.Fatalf("unexpected hash pair")
-	}
-
-	rangeResult, err := rm.Ledger().GetHashesByRange(ctx, 2, 4)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(rangeResult) != 3 {
-		t.Fatalf("expected 3 results, got %d", len(rangeResult))
-	}
-}
-
-func TestLedgerDelete(t *testing.T) {
-	rm := setupTestDB(t)
-	ctx := context.Background()
-
-	for i := uint32(1); i <= 5; i++ {
-		if err := rm.Ledger().SaveValidatedLedger(ctx, makeLedgerInfo(i)); err != nil {
+		if _, err := db.ExecContext(ctx, `INSERT INTO ledgers (
+			ledger_hash, ledger_seq, prev_hash, total_coins, closing_time,
+			prev_closing_time, close_time_res, close_flags, account_set_hash, trans_set_hash
+		) VALUES (x'01', 1, zeroblob(32), 1, 1, 1, 1, 0, zeroblob(32), zeroblob(32))`); err != nil {
 			t.Fatal(err)
 		}
-	}
+		if _, err := rm.Ledger().GetLedgerInfoBySeq(ctx, 1); !errors.Is(err, relationaldb.ErrInvalidData) {
+			t.Fatalf("GetLedgerInfoBySeq() error = %v, want ErrInvalidData", err)
+		}
+	})
 
-	if err := rm.Ledger().DeleteLedgersBySeq(ctx, 3); err != nil {
-		t.Fatal(err)
-	}
-	stats, err := rm.Ledger().GetLedgerCountMinMax(ctx)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if stats.Count != 2 {
-		t.Fatalf("expected 2 remaining, got %d", stats.Count)
-	}
-}
-
-func TestLedgerLimited(t *testing.T) {
-	rm := setupTestDB(t)
-	ctx := context.Background()
-
-	for i := uint32(5); i <= 10; i++ {
-		if err := rm.Ledger().SaveValidatedLedger(ctx, makeLedgerInfo(i)); err != nil {
+	t.Run("transaction ID", func(t *testing.T) {
+		rm := setupTestDB(t)
+		ctx := context.Background()
+		db := rm.txDB.Raw()
+		if _, err := db.ExecContext(ctx, `PRAGMA ignore_check_constraints = ON`); err != nil {
 			t.Fatal(err)
 		}
-	}
-
-	oldest, err := rm.Ledger().GetLimitedOldestLedgerInfo(ctx, 7)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if oldest.Sequence != 7 {
-		t.Fatalf("expected 7, got %d", oldest.Sequence)
-	}
-
-	newest, err := rm.Ledger().GetLimitedNewestLedgerInfo(ctx, 7)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if newest.Sequence != 10 {
-		t.Fatalf("expected 10, got %d", newest.Sequence)
-	}
-}
-
-func TestTransactionCRUD(t *testing.T) {
-	rm := setupTestDB(t)
-	ctx := context.Background()
-
-	txInfo := &relationaldb.TransactionInfo{
-		LedgerSeq: 10,
-		Status:    "validated",
-		RawTxn:    []byte("raw-data"),
-		TxnMeta:   []byte("meta-data"),
-	}
-	txInfo.Hash[0] = 0xAB
-
-	if err := rm.Transaction().SaveTransaction(ctx, txInfo); err != nil {
-		t.Fatal(err)
-	}
-
-	count, err := rm.Transaction().GetTransactionCount(ctx)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if count != 1 {
-		t.Fatalf("expected count 1, got %d", count)
-	}
-
-	got, searchResult, err := rm.Transaction().GetTransaction(ctx, txInfo.Hash, nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if searchResult != relationaldb.TxSearchAll {
-		t.Fatalf("expected TxSearchAll, got %d", searchResult)
-	}
-	if got.LedgerSeq != 10 {
-		t.Fatalf("expected ledger_seq 10, got %d", got.LedgerSeq)
-	}
-	if string(got.RawTxn) != "raw-data" {
-		t.Fatalf("raw_txn mismatch")
-	}
-	if string(got.TxnMeta) != "meta-data" {
-		t.Fatalf("txn_meta mismatch")
-	}
-
-	// Not found
-	var missingHash relationaldb.Hash
-	missingHash[0] = 0xFF
-	_, sr, err := rm.Transaction().GetTransaction(ctx, missingHash, nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if sr != relationaldb.TxSearchUnknown {
-		t.Fatalf("expected TxSearchUnknown, got %d", sr)
-	}
-}
-
-// TestTransactionRangeSearch verifies the "searched all/some" semantics on a
-// miss: the count of distinct ledgers carrying a transaction in range, matching
-// rippled (COUNT(DISTINCT ledger_seq) FROM transactions).
-func TestTransactionRangeSearch(t *testing.T) {
-	rm := setupTestDB(t)
-	ctx := context.Background()
-
-	// One transaction in each of ledgers 1..5.
-	for i := uint32(1); i <= 5; i++ {
-		txInfo := &relationaldb.TransactionInfo{
-			LedgerSeq: relationaldb.LedgerIndex(i),
-			Status:    "validated",
-			RawTxn:    []byte("raw"),
-		}
-		txInfo.Hash[0] = byte(i)
-		if err := rm.Transaction().SaveTransaction(ctx, txInfo); err != nil {
+		if _, err := db.ExecContext(ctx,
+			`INSERT INTO transactions VALUES (x'01', 1, 'tesSUCCESS', x'01', NULL)`); err != nil {
 			t.Fatal(err)
 		}
+		if _, err := rm.Transaction().GetTxHistory(ctx, 0, 1); !errors.Is(err, relationaldb.ErrInvalidData) {
+			t.Fatalf("GetTxHistory() error = %v, want ErrInvalidData", err)
+		}
+	})
+
+	for _, test := range []struct {
+		name       string
+		ledgerHash string
+		nodeKey    string
+	}{
+		{name: "validation ledger hash", ledgerHash: "x'01'", nodeKey: "zeroblob(33)"},
+		{name: "validation node key", ledgerHash: "zeroblob(32)", nodeKey: "x'01'"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			rm := setupTestDB(t)
+			ctx := context.Background()
+			db := rm.ledgerDB.Raw()
+			if _, err := db.ExecContext(ctx, `PRAGMA ignore_check_constraints = ON`); err != nil {
+				t.Fatal(err)
+			}
+			query := fmt.Sprintf(`INSERT INTO validations (
+				ledger_seq, initial_seq, ledger_hash, node_pubkey,
+				sign_time, seen_time, flags, raw
+			) VALUES (1, 1, %s, %s, 1, 1, 0, x'01')`, test.ledgerHash, test.nodeKey)
+			if _, err := db.ExecContext(ctx, query); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := rm.Validation().GetValidationsForLedger(ctx, 1); !errors.Is(err, relationaldb.ErrInvalidData) {
+				t.Fatalf("GetValidationsForLedger() error = %v, want ErrInvalidData", err)
+			}
+		})
 	}
 
-	var missingHash relationaldb.Hash
-	missingHash[0] = 0xFF
+	t.Run("amendment ID", func(t *testing.T) {
+		rm := setupTestDB(t)
+		ctx := context.Background()
+		db := rm.ledgerDB.Raw()
+		if _, err := db.ExecContext(ctx, `PRAGMA ignore_check_constraints = ON`); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := db.ExecContext(ctx, `INSERT INTO feature_votes VALUES ('aa', 'Alpha', 0)`); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := rm.Amendment().LoadAmendmentVotes(ctx); !errors.Is(err, relationaldb.ErrInvalidData) {
+			t.Fatalf("LoadAmendmentVotes() error = %v, want ErrInvalidData", err)
+		}
+	})
+}
 
-	// Every ledger in range carries a transaction → TxSearchAll.
-	_, sr, err := rm.Transaction().GetTransaction(ctx, missingHash, &relationaldb.LedgerRange{Min: 1, Max: 5})
-	if err != nil {
+func TestRepositoryContract(t *testing.T) {
+	contracttest.Run(t, func(t *testing.T) relationaldb.RepositoryManager {
+		return setupTestDB(t)
+	})
+}
+
+func makeLedgerInfo(seq uint32) relationaldb.LedgerInfo {
+	var info relationaldb.LedgerInfo
+	info.Hash[0] = byte(seq)
+	info.ParentHash[0] = byte(seq - 1)
+	info.AccountHash[1] = byte(seq)
+	info.TransactionHash[2] = byte(seq)
+	info.Sequence = relationaldb.LedgerIndex(seq)
+	info.TotalCoins = 100_000_000
+	info.CloseTime = time.Unix(1_700_000_000+int64(seq), 0).UTC()
+	info.ParentCloseTime = info.CloseTime.Add(-time.Second)
+	info.CloseTimeRes = 10
+	return info
+}
+
+func makePersistValue(seq uint32) relationaldb.ValidatedLedger {
+	var tx relationaldb.TransactionInfo
+	tx.Hash[0] = byte(seq)
+	tx.LedgerSeq = relationaldb.LedgerIndex(seq)
+	tx.TxnSeq = 1
+	tx.Status = "validated"
+	tx.RawTxn = []byte{1, 2, 3}
+	var account relationaldb.AccountID
+	account[0] = 1
+	return relationaldb.ValidatedLedger{
+		Ledger: makeLedgerInfo(seq),
+		Transactions: []relationaldb.IndexedTransaction{{
+			Transaction: tx,
+			Accounts:    []relationaldb.AccountID{account},
+		}},
+	}
+}
+
+func TestReadyLifecycleAndRetainedRepository(t *testing.T) {
+	ctx := context.Background()
+	rm := setupTestDB(t)
+	repo := rm.Ledger()
+	if err := repo.SaveValidatedLedger(ctx, makeLedgerInfo(1)); err != nil {
 		t.Fatal(err)
 	}
-	if sr != relationaldb.TxSearchAll {
-		t.Fatalf("expected TxSearchAll, got %d", sr)
-	}
-
-	// Range extends past the transactions present → TxSearchSome.
-	_, sr, err = rm.Transaction().GetTransaction(ctx, missingHash, &relationaldb.LedgerRange{Min: 1, Max: 10})
-	if err != nil {
+	if err := rm.Close(); err != nil {
 		t.Fatal(err)
 	}
-	if sr != relationaldb.TxSearchSome {
-		t.Fatalf("expected TxSearchSome, got %d", sr)
+	if err := rm.Close(); err != nil {
+		t.Fatal(err)
 	}
+	_, err := repo.GetMaxLedgerSeq(ctx)
+	if !errors.Is(err, relationaldb.ErrDatabaseClosed) {
+		t.Fatalf("retained repository error = %v, want ErrDatabaseClosed", err)
+	}
+	_, err = rm.Transaction().GetTxHistory(ctx, 0, 1)
+	if !errors.Is(err, relationaldb.ErrDatabaseClosed) {
+		t.Fatalf("manager repository error = %v, want ErrDatabaseClosed", err)
+	}
+}
 
-	// The range count must also work from inside a transaction context.
-	err = rm.WithTransaction(ctx, func(tc relationaldb.TransactionContext) error {
-		_, sr, err := tc.Transaction().GetTransaction(ctx, missingHash, &relationaldb.LedgerRange{Min: 1, Max: 5})
-		if err != nil {
+func TestWithTransactionCommitRollbackAndPanic(t *testing.T) {
+	ctx := context.Background()
+	rm := setupTestDB(t)
+	value := makePersistValue(1).Transactions[0].Transaction
+	if err := rm.WithTransaction(ctx, func(repos relationaldb.TransactionRepositories) error {
+		return repos.Transaction().SaveTransaction(ctx, value)
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := rm.WithTransaction(ctx, func(repos relationaldb.TransactionRepositories) error {
+		tx := value
+		tx.Hash[0] = 2
+		if err := repos.Transaction().SaveTransaction(ctx, tx); err != nil {
 			return err
 		}
-		if sr != relationaldb.TxSearchAll {
-			t.Fatalf("expected TxSearchAll inside transaction, got %d", sr)
+		return errors.New("rollback")
+	}); err == nil {
+		t.Fatal("expected rollback error")
+	}
+	func() {
+		defer func() {
+			if recover() == nil {
+				t.Fatal("expected panic")
+			}
+		}()
+		_ = rm.WithTransaction(ctx, func(repos relationaldb.TransactionRepositories) error {
+			tx := value
+			tx.Hash[0] = 3
+			if err := repos.Transaction().SaveTransaction(ctx, tx); err != nil {
+				t.Fatal(err)
+			}
+			panic("rollback")
+		})
+	}()
+	for _, first := range []byte{2, 3} {
+		var hash relationaldb.Hash
+		hash[0] = first
+		got, _, err := rm.Transaction().GetTransaction(ctx, hash, nil)
+		if err != nil || got != nil {
+			t.Fatalf("transaction %d survived rollback: got=%v err=%v", first, got, err)
+		}
+	}
+}
+
+func TestPersistValidatedLedgerFailureRecovery(t *testing.T) {
+	ctx := context.Background()
+	t.Run("mid-index", func(t *testing.T) {
+		rm := setupTestDB(t)
+		rm.persistHook = func(stage string, index int) error {
+			if stage == "index" && index == 1 {
+				return errors.New("injected")
+			}
+			return nil
+		}
+		value := makePersistValue(10)
+		if err := rm.PersistValidatedLedger(ctx, value); err == nil {
+			t.Fatal("expected injected error")
+		}
+		if info, err := rm.Ledger().GetLedgerInfoBySeq(ctx, value.Ledger.Sequence); info != nil || !errors.Is(err, relationaldb.ErrLedgerNotFound) {
+			t.Fatalf("published partial ledger: info=%v err=%v", info, err)
+		}
+		rm.persistHook = nil
+		if err := rm.PersistValidatedLedger(ctx, value); err != nil {
+			t.Fatal(err)
+		}
+		assertPersisted(t, rm, value)
+	})
+	t.Run("after-ledger", func(t *testing.T) {
+		rm := setupTestDB(t)
+		rm.persistHook = func(stage string, _ int) error {
+			if stage == "ledger" {
+				return errors.New("injected")
+			}
+			return nil
+		}
+		value := makePersistValue(11)
+		if err := rm.PersistValidatedLedger(ctx, value); err == nil {
+			t.Fatal("expected injected error")
+		}
+		if info, err := rm.Ledger().GetLedgerInfoBySeq(ctx, value.Ledger.Sequence); info != nil || !errors.Is(err, relationaldb.ErrLedgerNotFound) {
+			t.Fatalf("published partial ledger: info=%v err=%v", info, err)
+		}
+		rm.persistHook = nil
+		if err := rm.PersistValidatedLedger(ctx, value); err != nil {
+			t.Fatal(err)
+		}
+		assertPersisted(t, rm, value)
+	})
+}
+
+func TestPersistValidatedLedgerReplacementFailureUnpublishesHeader(t *testing.T) {
+	ctx := context.Background()
+	rm := setupTestDB(t)
+	neighbor := makePersistValue(19)
+	if err := rm.PersistValidatedLedger(ctx, neighbor); err != nil {
+		t.Fatal(err)
+	}
+	original := makePersistValue(20)
+	original.Transactions[0].Accounts[0][0] = 3
+	if err := rm.PersistValidatedLedger(ctx, original); err != nil {
+		t.Fatal(err)
+	}
+
+	replacement := makePersistValue(20)
+	replacement.Ledger.Hash[0] = 0xee
+	replacement.Ledger.TotalCoins = 200_000_000
+	replacement.Transactions[0].Transaction.Hash[0] = 0xdd
+	replacement.Transactions[0].Transaction.RawTxn = []byte{4, 5, 6}
+	replacement.Transactions[0].Accounts[0][0] = 2
+	rm.persistHook = func(stage string, index int) error {
+		if stage == "index" && index == 1 {
+			return errors.New("injected")
 		}
 		return nil
+	}
+	if err := rm.PersistValidatedLedger(ctx, replacement); err == nil {
+		t.Fatal("expected injected replacement error")
+	}
+	if info, err := rm.Ledger().GetLedgerInfoBySeq(ctx, replacement.Ledger.Sequence); info != nil || !errors.Is(err, relationaldb.ErrLedgerNotFound) {
+		t.Fatalf("replacement left old header published: info=%v err=%v", info, err)
+	}
+	if _, err := rm.Ledger().GetLedgerInfoBySeq(ctx, neighbor.Ledger.Sequence); err != nil {
+		t.Fatalf("unpublished neighboring ledger: %v", err)
+	}
+
+	rm.persistHook = nil
+	if err := rm.PersistValidatedLedger(ctx, replacement); err != nil {
+		t.Fatal(err)
+	}
+	gotLedger, err := rm.Ledger().GetLedgerInfoBySeq(ctx, replacement.Ledger.Sequence)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if gotLedger.Hash != replacement.Ledger.Hash || gotLedger.TotalCoins != replacement.Ledger.TotalCoins {
+		t.Fatalf("ledger = %+v, want replacement %+v", gotLedger, replacement.Ledger)
+	}
+	oldTx, _, err := rm.Transaction().GetTransaction(ctx, original.Transactions[0].Transaction.Hash, nil)
+	if err != nil || oldTx != nil {
+		t.Fatalf("old transaction remains after retry: tx=%v err=%v", oldTx, err)
+	}
+	assertPersisted(t, rm, replacement)
+	oldPage, err := rm.AccountTransaction().GetOldestAccountTxsPage(ctx, relationaldb.AccountTxPageOptions{
+		Account: original.Transactions[0].Accounts[0],
+		Limit:   1,
 	})
 	if err != nil {
 		t.Fatal(err)
+	}
+	if len(oldPage.Transactions) != 0 {
+		t.Fatalf("old account index remains after retry: %+v", oldPage.Transactions)
 	}
 }
 
-func TestTransactionHistory(t *testing.T) {
-	rm := setupTestDB(t)
+func TestConcurrentSameSequencePersistenceRemainsConsistent(t *testing.T) {
 	ctx := context.Background()
+	rm := setupTestDB(t)
+	first := makePersistValue(21)
+	first.Ledger.Hash[0] = 0xa1
+	first.Transactions[0].Transaction.Hash[0] = 0xa2
+	first.Transactions[0].Accounts[0][0] = 0xa3
+	second := makePersistValue(21)
+	second.Ledger.Hash[0] = 0xb1
+	second.Transactions[0].Transaction.Hash[0] = 0xb2
+	second.Transactions[0].Accounts[0][0] = 0xb3
 
-	for i := uint32(1); i <= 5; i++ {
-		tx := &relationaldb.TransactionInfo{
-			LedgerSeq: relationaldb.LedgerIndex(i),
-			Status:    "validated",
-			RawTxn:    []byte("data"),
+	blocked := make(chan struct{})
+	release := make(chan struct{})
+	var blockOnce sync.Once
+	rm.persistHook = func(stage string, index int) error {
+		if stage == "index" && index == 1 {
+			blockOnce.Do(func() {
+				close(blocked)
+				<-release
+			})
 		}
-		tx.Hash[0] = byte(i)
-		if err := rm.Transaction().SaveTransaction(ctx, tx); err != nil {
-			t.Fatal(err)
-		}
+		return nil
 	}
+	firstDone := make(chan error, 1)
+	go func() {
+		firstDone <- rm.PersistValidatedLedger(ctx, first)
+	}()
+	<-blocked
+	secondStarted := make(chan struct{})
+	secondDone := make(chan error, 1)
+	go func() {
+		close(secondStarted)
+		secondDone <- rm.PersistValidatedLedger(ctx, second)
+	}()
+	<-secondStarted
+	close(release)
+	if err := <-firstDone; err != nil {
+		t.Fatal(err)
+	}
+	if err := <-secondDone; err != nil {
+		t.Fatal(err)
+	}
+	rm.persistHook = nil
 
-	history, err := rm.Transaction().GetTxHistory(ctx, 0, 3)
+	gotLedger, err := rm.Ledger().GetLedgerInfoBySeq(ctx, second.Ledger.Sequence)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(history) != 3 {
-		t.Fatalf("expected 3 results, got %d", len(history))
+	if gotLedger.Hash != second.Ledger.Hash {
+		t.Fatalf("final ledger hash = %x, want %x", gotLedger.Hash, second.Ledger.Hash)
 	}
-	// Should be descending order
-	if history[0].LedgerSeq != 5 || history[2].LedgerSeq != 3 {
-		t.Fatal("unexpected order")
+	firstTx, _, err := rm.Transaction().GetTransaction(ctx, first.Transactions[0].Transaction.Hash, nil)
+	if err != nil || firstTx != nil {
+		t.Fatalf("first transaction remains: tx=%v err=%v", firstTx, err)
+	}
+	assertPersisted(t, rm, second)
+	firstPage, err := rm.AccountTransaction().GetOldestAccountTxsPage(ctx, relationaldb.AccountTxPageOptions{
+		Account: first.Transactions[0].Accounts[0],
+		Limit:   1,
+	})
+	if err != nil || len(firstPage.Transactions) != 0 {
+		t.Fatalf("first account index remains: page=%v err=%v", firstPage, err)
 	}
 }
 
-func TestTransactionDelete(t *testing.T) {
-	rm := setupTestDB(t)
+func TestCloseWaitsForLedgerPublication(t *testing.T) {
 	ctx := context.Background()
-
-	for i := uint32(1); i <= 5; i++ {
-		tx := &relationaldb.TransactionInfo{
-			LedgerSeq: relationaldb.LedgerIndex(i),
-			Status:    "validated",
-			RawTxn:    []byte("data"),
-		}
-		tx.Hash[0] = byte(i)
-		if err := rm.Transaction().SaveTransaction(ctx, tx); err != nil {
-			t.Fatal(err)
-		}
-	}
-
-	if err := rm.Transaction().DeleteTransactionsBeforeLedgerSeq(ctx, 3); err != nil {
-		t.Fatal(err)
-	}
-	count, err := rm.Transaction().GetTransactionCount(ctx)
+	dir := t.TempDir()
+	rm, err := NewRepositoryManager(ctx, dir, Settings{})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if count != 3 {
-		t.Fatalf("expected 3 remaining, got %d", count)
+	value := makePersistValue(22)
+	blocked := make(chan struct{})
+	release := make(chan struct{})
+	rm.persistHook = func(stage string, _ int) error {
+		if stage == "ledger" {
+			close(blocked)
+			<-release
+		}
+		return nil
 	}
+	persistDone := make(chan error, 1)
+	go func() {
+		persistDone <- rm.PersistValidatedLedger(ctx, value)
+	}()
+	<-blocked
+	closeStarted := make(chan struct{})
+	closeDone := make(chan error, 1)
+	go func() {
+		close(closeStarted)
+		closeDone <- rm.Close()
+	}()
+	<-closeStarted
+	select {
+	case err := <-closeDone:
+		t.Fatalf("Close returned before publication completed: %v", err)
+	case <-time.After(25 * time.Millisecond):
+	}
+	close(release)
+	if err := <-persistDone; err != nil {
+		t.Fatal(err)
+	}
+	if err := <-closeDone; err != nil {
+		t.Fatal(err)
+	}
+	if err := rm.PersistValidatedLedger(ctx, value); !errors.Is(err, relationaldb.ErrDatabaseClosed) {
+		t.Fatalf("post-close persistence error = %v, want ErrDatabaseClosed", err)
+	}
+
+	reopened, err := NewRepositoryManager(ctx, dir, Settings{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = reopened.Close() })
+	assertPersisted(t, reopened, value)
 }
 
-func TestAccountTransactionCRUD(t *testing.T) {
-	rm := setupTestDB(t)
+func assertPersisted(t *testing.T, rm *RepositoryManager, value relationaldb.ValidatedLedger) {
+	t.Helper()
 	ctx := context.Background()
-
-	var accountID relationaldb.AccountID
-	accountID[0] = 0x01
-
-	txInfo := &relationaldb.TransactionInfo{
-		LedgerSeq: 10,
-		TxnSeq:    1,
-		Status:    "validated",
-		RawTxn:    []byte("raw"),
-	}
-	txInfo.Hash[0] = 0xAA
-
-	// Save the transaction first (needed for JOIN)
-	if err := rm.Transaction().SaveTransaction(ctx, txInfo); err != nil {
+	if _, err := rm.Ledger().GetLedgerInfoBySeq(ctx, value.Ledger.Sequence); err != nil {
 		t.Fatal(err)
 	}
-
-	if err := rm.AccountTransaction().SaveAccountTransaction(ctx, accountID, txInfo); err != nil {
-		t.Fatal(err)
+	got, _, err := rm.Transaction().GetTransaction(ctx, value.Transactions[0].Transaction.Hash, nil)
+	if err != nil || got == nil {
+		t.Fatalf("transaction missing: got=%v err=%v", got, err)
 	}
-
-	count, err := rm.AccountTransaction().GetAccountTransactionCount(ctx)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if count != 1 {
-		t.Fatalf("expected 1, got %d", count)
-	}
-
-	// Query oldest
-	results, err := rm.AccountTransaction().GetOldestAccountTxs(ctx, relationaldb.AccountTxOptions{
-		Account: accountID,
-		Limit:   10,
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(results) != 1 {
-		t.Fatalf("expected 1 result, got %d", len(results))
-	}
-	if results[0].LedgerSeq != 10 {
-		t.Fatalf("expected ledger_seq 10, got %d", results[0].LedgerSeq)
-	}
-}
-
-func TestAccountTransactionPagination(t *testing.T) {
-	rm := setupTestDB(t)
-	ctx := context.Background()
-
-	var accountID relationaldb.AccountID
-	accountID[0] = 0x01
-
-	// Save 5 transactions
-	for i := uint32(1); i <= 5; i++ {
-		tx := &relationaldb.TransactionInfo{
-			LedgerSeq: relationaldb.LedgerIndex(i),
-			TxnSeq:    i,
-			Status:    "validated",
-			RawTxn:    []byte("raw"),
-		}
-		tx.Hash[0] = byte(i)
-		if err := rm.Transaction().SaveTransaction(ctx, tx); err != nil {
-			t.Fatal(err)
-		}
-		if err := rm.AccountTransaction().SaveAccountTransaction(ctx, accountID, tx); err != nil {
-			t.Fatal(err)
-		}
-	}
-
-	// First page
-	page1, err := rm.AccountTransaction().GetOldestAccountTxsPage(ctx, relationaldb.AccountTxPageOptions{
-		Account: accountID,
-		Limit:   2,
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(page1.Transactions) != 2 {
-		t.Fatalf("expected 2 txs, got %d", len(page1.Transactions))
-	}
-	if page1.Marker == nil {
-		t.Fatal("expected marker for more results")
-	}
-
-	// Second page
-	page2, err := rm.AccountTransaction().GetOldestAccountTxsPage(ctx, relationaldb.AccountTxPageOptions{
-		Account: accountID,
-		Limit:   2,
-		Marker:  page1.Marker,
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(page2.Transactions) != 2 {
-		t.Fatalf("expected 2 txs, got %d", len(page2.Transactions))
-	}
-
-	// Third page (last)
-	page3, err := rm.AccountTransaction().GetOldestAccountTxsPage(ctx, relationaldb.AccountTxPageOptions{
-		Account: accountID,
-		Limit:   2,
-		Marker:  page2.Marker,
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(page3.Transactions) != 1 {
-		t.Fatalf("expected 1 tx, got %d", len(page3.Transactions))
-	}
-	if page3.Marker != nil {
-		t.Fatal("expected no marker on last page")
-	}
-
-	maxLimitPage, err := rm.AccountTransaction().GetOldestAccountTxsPage(ctx, relationaldb.AccountTxPageOptions{
-		Account: accountID,
-		Limit:   math.MaxUint32,
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(maxLimitPage.Transactions) != 5 {
-		t.Fatalf("expected 5 txs with maximum limit, got %d", len(maxLimitPage.Transactions))
-	}
-	if maxLimitPage.Marker != nil {
-		t.Fatal("expected no marker with maximum limit")
-	}
-}
-
-func TestAccountTransactionPaginationZeroLimit(t *testing.T) {
-	rm := setupTestDB(t)
-	ctx := context.Background()
-
-	var accountID relationaldb.AccountID
-	accountID[0] = 0x01
-
-	tx := &relationaldb.TransactionInfo{
-		LedgerSeq: 1,
-		TxnSeq:    1,
-		Status:    "validated",
-		RawTxn:    []byte("raw"),
-	}
-	tx.Hash[0] = 0x01
-	if err := rm.Transaction().SaveTransaction(ctx, tx); err != nil {
-		t.Fatal(err)
-	}
-	if err := rm.AccountTransaction().SaveAccountTransaction(ctx, accountID, tx); err != nil {
-		t.Fatal(err)
-	}
-
 	page, err := rm.AccountTransaction().GetOldestAccountTxsPage(ctx, relationaldb.AccountTxPageOptions{
-		Account: accountID,
-		Limit:   0,
+		Account: value.Transactions[0].Accounts[0],
+		Limit:   1,
 	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(page.Transactions) != 0 {
-		t.Fatalf("expected 0 txs, got %d", len(page.Transactions))
-	}
-	if page.Marker != nil {
-		t.Fatal("expected no marker for zero limit")
+	if err != nil || len(page.Transactions) != 1 {
+		t.Fatalf("account index missing: page=%v err=%v", page, err)
 	}
 }
 
-func TestWithTransaction(t *testing.T) {
-	rm := setupTestDB(t)
+func TestLegacySignatureSchemaMigrates(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "ledger.db")
+	db, err := sql.Open("sqlite", path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = db.Exec(`CREATE TABLE validations (
+		ledger_seq INTEGER NOT NULL, initial_seq INTEGER NOT NULL,
+		ledger_hash BLOB NOT NULL, node_pubkey BLOB NOT NULL,
+		signature BLOB NOT NULL, sign_time INTEGER NOT NULL,
+		seen_time INTEGER NOT NULL, flags INTEGER NOT NULL, raw BLOB NOT NULL,
+		PRIMARY KEY (ledger_hash, node_pubkey))`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatal(err)
+	}
+	rm, err := NewRepositoryManager(context.Background(), dir, Settings{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rm.Close()
+	rows, err := rm.ledgerDB.QueryContext(context.Background(), "PRAGMA table_info(validations)")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var cid, notNull, pk int
+		var name, typ string
+		var defaultValue any
+		if err := rows.Scan(&cid, &name, &typ, &notNull, &defaultValue, &pk); err != nil {
+			t.Fatal(err)
+		}
+		if name == "signature" {
+			t.Fatal("legacy signature column was not removed")
+		}
+	}
+}
+
+func TestMalformedLegacyWidthAbortsMigration(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "ledger.db")
+	db, err := sql.Open("sqlite", path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = db.Exec(`CREATE TABLE ledgers (
+		ledger_hash BLOB PRIMARY KEY, ledger_seq INTEGER UNIQUE NOT NULL,
+		prev_hash BLOB NOT NULL, total_coins INTEGER NOT NULL,
+		closing_time INTEGER NOT NULL, prev_closing_time INTEGER NOT NULL,
+		close_time_res INTEGER NOT NULL, close_flags INTEGER NOT NULL,
+		account_set_hash BLOB NOT NULL, trans_set_hash BLOB NOT NULL);
+		INSERT INTO ledgers VALUES (x'01', 1, zeroblob(32), 1, 1, 1, 1, 0, zeroblob(32), zeroblob(32))`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = db.Close()
+	if rm, err := NewRepositoryManager(context.Background(), dir, Settings{}); err == nil {
+		_ = rm.Close()
+		t.Fatal("malformed legacy hash unexpectedly migrated")
+	}
+}
+
+func TestFutureSchemaVersionRejected(t *testing.T) {
+	dir := t.TempDir()
+	db, err := sql.Open("sqlite", filepath.Join(dir, "ledger.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec("PRAGMA user_version = 5"); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if rm, err := NewRepositoryManager(context.Background(), dir, Settings{}); !errors.Is(err, relationaldb.ErrInvalidSchema) {
+		if rm != nil {
+			_ = rm.Close()
+		}
+		t.Fatalf("future schema error = %v, want ErrInvalidSchema", err)
+	}
+}
+
+func TestEveryRecordedSchemaVersionUpgrades(t *testing.T) {
+	for version := 0; version <= len(ledgerMigrations); version++ {
+		t.Run(fmt.Sprintf("version-%d", version), func(t *testing.T) {
+			dir := t.TempDir()
+			createHistoricalSQLiteDatabases(t, dir, version)
+			upgraded, err := NewRepositoryManager(context.Background(), dir, Settings{})
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer upgraded.Close()
+			for _, db := range []executor{upgraded.ledgerDB, upgraded.txDB} {
+				var got int
+				if err := db.QueryRowContext(context.Background(), "PRAGMA user_version").Scan(&got); err != nil {
+					t.Fatal(err)
+				}
+				if got != len(ledgerMigrations) {
+					t.Fatalf("schema version = %d, want %d", got, len(ledgerMigrations))
+				}
+			}
+			if version == 0 {
+				return
+			}
+			assertHistoricalSQLiteData(t, upgraded, version)
+		})
+	}
+}
+
+func createHistoricalSQLiteDatabases(t *testing.T, dir string, version int) {
+	t.Helper()
 	ctx := context.Background()
-
-	// Commit path
-	err := rm.WithTransaction(ctx, func(tc relationaldb.TransactionContext) error {
-		tx := &relationaldb.TransactionInfo{
-			LedgerSeq: 1,
-			Status:    "validated",
-			RawTxn:    []byte("data"),
-		}
-		tx.Hash[0] = 0x01
-		return tc.Transaction().SaveTransaction(ctx, tx)
-	})
+	ledgerDB, err := sql.Open("sqlite", filepath.Join(dir, "ledger.db"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	count, _ := rm.Transaction().GetTransactionCount(ctx)
-	if count != 1 {
-		t.Fatalf("expected 1 after commit, got %d", count)
+	txDB, err := sql.Open("sqlite", filepath.Join(dir, "transaction.db"))
+	if err != nil {
+		_ = ledgerDB.Close()
+		t.Fatal(err)
 	}
-
-	// Rollback path
-	err = rm.WithTransaction(ctx, func(tc relationaldb.TransactionContext) error {
-		tx := &relationaldb.TransactionInfo{
-			LedgerSeq: 2,
-			Status:    "validated",
-			RawTxn:    []byte("data"),
-		}
-		tx.Hash[0] = 0x02
-		if err := tc.Transaction().SaveTransaction(ctx, tx); err != nil {
-			return err
-		}
-		return context.Canceled // force rollback
-	})
-	if err == nil {
-		t.Fatal("expected error")
+	defer ledgerDB.Close()
+	defer txDB.Close()
+	if err := migrate(ctx, ledgerDB, ledgerMigrations[:version]); err != nil {
+		t.Fatal(err)
 	}
-	count, _ = rm.Transaction().GetTransactionCount(ctx)
-	if count != 1 {
-		t.Fatalf("expected 1 after rollback, got %d", count)
+	if err := migrate(ctx, txDB, transactionMigrations[:version]); err != nil {
+		t.Fatal(err)
+	}
+	if version == 0 {
+		return
+	}
+	hash := make([]byte, 32)
+	hash[0] = 40
+	parent := make([]byte, 32)
+	parent[0] = 39
+	if _, err := ledgerDB.ExecContext(ctx, `INSERT INTO ledgers VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		hash, 40, parent, 100, 10, 9, 1, 0, hash, parent); err != nil {
+		t.Fatal(err)
+	}
+	txHash := make([]byte, 32)
+	txHash[0] = 41
+	if _, err := txDB.ExecContext(ctx, `INSERT INTO transactions VALUES (?, ?, ?, ?, ?)`,
+		txHash, 40, "validated", []byte{1, 2}, []byte{3}); err != nil {
+		t.Fatal(err)
+	}
+	account := relationaldb.AccountID{9}
+	if _, err := txDB.ExecContext(ctx, `INSERT INTO account_transactions VALUES (?, ?, ?, ?)`,
+		txHash, account.String(), 40, 1); err != nil {
+		t.Fatal(err)
+	}
+	if version >= 2 {
+		nodeKey := make([]byte, 33)
+		nodeKey[0] = 2
+		if version < 4 {
+			_, err = ledgerDB.ExecContext(ctx, `INSERT INTO validations
+				(ledger_seq, initial_seq, ledger_hash, node_pubkey, signature, sign_time, seen_time, flags, raw)
+				VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+				40, 39, hash, nodeKey, []byte{4}, 10, 11, 1, []byte{5})
+		} else {
+			_, err = ledgerDB.ExecContext(ctx, `INSERT INTO validations
+				(ledger_seq, initial_seq, ledger_hash, node_pubkey, sign_time, seen_time, flags, raw)
+				VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+				40, 39, hash, nodeKey, 10, 11, 1, []byte{5})
+		}
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	if version >= 3 {
+		if _, err := ledgerDB.ExecContext(ctx,
+			`INSERT INTO feature_votes(amendment, name, vetoed) VALUES (?, ?, ?)`,
+			strings.Repeat("A", 64), "Alpha", true); err != nil {
+			t.Fatal(err)
+		}
 	}
 }
 
-func TestSystemSize(t *testing.T) {
-	rm := setupTestDB(t)
+func assertHistoricalSQLiteData(t *testing.T, rm *RepositoryManager, version int) {
+	t.Helper()
 	ctx := context.Background()
-
-	kb, err := rm.System().GetKBUsedAll(ctx)
-	if err != nil {
-		t.Fatal(err)
+	info, err := rm.Ledger().GetLedgerInfoBySeq(ctx, 40)
+	if err != nil || info.TotalCoins != 100 {
+		t.Fatalf("ledger not preserved: info=%v err=%v", info, err)
 	}
-	// Empty DB should have some minimum size from schema
-	if kb == 0 {
-		t.Fatal("expected non-zero size")
+	var txHash relationaldb.Hash
+	txHash[0] = 41
+	transaction, _, err := rm.Transaction().GetTransaction(ctx, txHash, nil)
+	if err != nil || transaction == nil || string(transaction.RawTxn) != string([]byte{1, 2}) {
+		t.Fatalf("transaction not preserved: tx=%v err=%v", transaction, err)
 	}
-}
-
-func TestNewRepositoryManagerEmptyDir(t *testing.T) {
-	_, err := NewRepositoryManager("")
-	if err == nil {
-		t.Fatal("expected error for empty dir")
+	account := relationaldb.AccountID{9}
+	page, err := rm.AccountTransaction().GetOldestAccountTxsPage(ctx, relationaldb.AccountTxPageOptions{
+		Account: account,
+		Limit:   1,
+	})
+	if err != nil || len(page.Transactions) != 1 {
+		t.Fatalf("account index not preserved: page=%v err=%v", page, err)
+	}
+	if version >= 2 {
+		validations, err := rm.Validation().GetValidationsForLedger(ctx, 40)
+		if err != nil || len(validations) != 1 || string(validations[0].Raw) != string([]byte{5}) {
+			t.Fatalf("validation not preserved: validations=%v err=%v", validations, err)
+		}
+		var signatureColumns int
+		if err := rm.ledgerDB.QueryRowContext(ctx, `
+			SELECT COUNT(*) FROM pragma_table_info('validations') WHERE name = 'signature'
+		`).Scan(&signatureColumns); err != nil {
+			t.Fatal(err)
+		}
+		if signatureColumns != 0 {
+			t.Fatal("legacy signature column remains")
+		}
+	}
+	if version >= 3 {
+		votes, err := rm.Amendment().LoadAmendmentVotes(ctx)
+		if err != nil || len(votes) != 1 || votes[0].Amendment != strings.Repeat("A", 64) || !votes[0].Vetoed {
+			t.Fatalf("amendment vote not preserved: votes=%v err=%v", votes, err)
+		}
 	}
 }

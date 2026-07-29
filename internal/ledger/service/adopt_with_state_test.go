@@ -12,7 +12,6 @@ import (
 	"github.com/LeJamon/go-xrpl/protocol"
 	"github.com/LeJamon/go-xrpl/shamap"
 	"github.com/LeJamon/go-xrpl/storage/relationaldb"
-	sqlitedb "github.com/LeJamon/go-xrpl/storage/relationaldb/sqlite"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -189,10 +188,7 @@ func TestAdoptLedgerWithState_PersistsToRelationalDB(t *testing.T) {
 
 	// Spin up an on-disk (temp-dir) SQLite repository manager — sqlite
 	// is the supported test backend; there is no in-memory variant.
-	rm, err := sqlitedb.NewRepositoryManager(t.TempDir())
-	require.NoError(t, err)
-	require.NoError(t, rm.Open(ctx))
-	t.Cleanup(func() { _ = rm.Close(ctx) })
+	rm := newTestRepositories(t, ctx)
 
 	cfg := DefaultConfig()
 	cfg.RelationalDB = rm
