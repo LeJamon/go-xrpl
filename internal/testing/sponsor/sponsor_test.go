@@ -218,7 +218,7 @@ func TestSponsorshipSetPreclaimMatrix(t *testing.T) {
 	require.False(t, env.LedgerEntryExists(keylet.Sponsorship(sponsor.ID, sponsee.ID)))
 
 	setPseudoAccount(t, env, sponsee)
-	require.Equal(t, "tecPSEUDO_ACCOUNT", setSponsorship(env, sponsor, sponsee, 0, &remaining).Code)
+	require.Equal(t, "tecNO_PERMISSION", setSponsorship(env, sponsor, sponsee, 0, &remaining).Code)
 	require.False(t, env.LedgerEntryExists(keylet.Sponsorship(sponsor.ID, sponsee.ID)))
 
 	pseudoSponsorEnv, ordinarySponsee, _, pseudoSponsor, _ := sponsorEnv(t)
@@ -226,7 +226,7 @@ func TestSponsorshipSetPreclaimMatrix(t *testing.T) {
 	deleteFromSponsee := sponsortx.NewSponsorshipSet(ordinarySponsee.Address)
 	deleteFromSponsee.CounterpartySponsor = pseudoSponsor.Address
 	deleteFromSponsee.SetFlags(sponsortx.SponsorshipSetFlagDelete)
-	require.Equal(t, "tecPSEUDO_ACCOUNT", pseudoSponsorEnv.Submit(deleteFromSponsee).Code)
+	require.Equal(t, "tecNO_PERMISSION", pseudoSponsorEnv.Submit(deleteFromSponsee).Code)
 	require.False(t, pseudoSponsorEnv.LedgerEntryExists(keylet.Sponsorship(pseudoSponsor.ID, ordinarySponsee.ID)))
 }
 
@@ -476,7 +476,7 @@ func TestSponsorshipSetDirectoryFailureRollsBackFirstInsert(t *testing.T) {
 
 	// Keep the DirectoryNode type marker but omit required directory fields.
 	// The sponsor directory insert succeeds in the sandbox; parsing this
-	// sponsee directory then fails, forcing tecDIR_FULL and a full rollback.
+	// sponsee directory then fails, forcing a full rollback.
 	malformedDirectory, err := binarycodec.EncodeBytes(map[string]any{
 		"LedgerEntryType": "DirectoryNode",
 	})
@@ -488,7 +488,7 @@ func TestSponsorshipSetDirectoryFailureRollsBackFirstInsert(t *testing.T) {
 
 	remaining := uint32(1)
 	result := setSponsorship(env, sponsor, sponsee, 0, &remaining)
-	require.Equal(t, "tecDIR_FULL", result.Code)
+	require.Equal(t, "tefINTERNAL", result.Code)
 	require.False(t, env.LedgerEntryExists(keylet.Sponsorship(sponsor.ID, sponsee.ID)))
 	require.False(t, env.LedgerEntryExists(keylet.OwnerDir(sponsor.ID)),
 		"the first directory insert must not escape the failed transaction sandbox")

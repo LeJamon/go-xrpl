@@ -45,7 +45,7 @@ const (
 	// tesSUCCESS and related (0-99)
 	TesSUCCESS Result = 0
 
-	// tecCLAIM and other "claimed cost" codes (100-199)
+	// tecCLAIM and other "claimed cost" codes (100 and above)
 	// Transaction succeeded but with a caveat
 	TecCLAIM                              Result = 100
 	TecPATH_PARTIAL                       Result = 101
@@ -475,12 +475,12 @@ func (r Result) IsSuccess() bool {
 // IsClaimed returns true if the result indicates the fee was claimed
 // This includes tec codes where the transaction "succeeded" with a caveat
 func (r Result) IsClaimed() bool {
-	return r >= TecCLAIM && r <= 255
+	return r >= TecCLAIM
 }
 
 // IsTec returns true if this is a tec (claimed cost) code
 func (r Result) IsTec() bool {
-	return r >= 100 && r <= 255
+	return r >= TecCLAIM
 }
 
 // IsTef returns true if this is a tef (failure) code
