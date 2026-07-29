@@ -242,6 +242,16 @@ type CounterpartySignature struct {
 	Signers       []SignerWrapper `json:"Signers,omitempty"`
 }
 
+// SponsorSignature is the nested signature object attached by a transaction's
+// sponsor. Like CounterpartySignature, the field itself is excluded from the
+// transaction signing payload while its inner fields use their normal wire
+// definitions.
+type SponsorSignature struct {
+	SigningPubKey string          `json:"SigningPubKey,omitempty"`
+	TxnSignature  string          `json:"TxnSignature,omitempty"`
+	Signers       []SignerWrapper `json:"Signers,omitempty"`
+}
+
 // ToMap serializes the counterparty object for the binary codec. SigningPubKey
 // is always emitted — a single-signed object carries the signer's key and a
 // multi-signed object carries an empty key — so a decode/encode round-trip
@@ -254,6 +264,27 @@ func (cs *CounterpartySignature) ToMap() map[string]any {
 	if len(cs.Signers) > 0 {
 		signers := make([]map[string]any, len(cs.Signers))
 		for i, sw := range cs.Signers {
+			signers[i] = map[string]any{
+				"Signer": map[string]any{
+					"Account":       sw.Signer.Account,
+					"SigningPubKey": sw.Signer.SigningPubKey,
+					"TxnSignature":  sw.Signer.TxnSignature,
+				},
+			}
+		}
+		m["Signers"] = signers
+	}
+	return m
+}
+
+func (ss *SponsorSignature) ToMap() map[string]any {
+	m := map[string]any{"SigningPubKey": ss.SigningPubKey}
+	if ss.TxnSignature != "" {
+		m["TxnSignature"] = ss.TxnSignature
+	}
+	if len(ss.Signers) > 0 {
+		signers := make([]map[string]any, len(ss.Signers))
+		for i, sw := range ss.Signers {
 			signers[i] = map[string]any{
 				"Signer": map[string]any{
 					"Account":       sw.Signer.Account,
@@ -301,6 +332,10 @@ type Common struct {
 	// against the delegate's keys.
 	// Reference: rippled Transactor.cpp sfDelegate
 	Delegate string `json:"Delegate,omitempty"`
+
+	Sponsor          string            `json:"Sponsor,omitempty"`
+	SponsorFlags     *uint32           `json:"SponsorFlags,omitempty"`
+	SponsorSignature *SponsorSignature `json:"SponsorSignature,omitempty"`
 
 	// RawBytes stores the original serialized bytes for hash computation
 	RawBytes []byte `json:"-"`
@@ -515,6 +550,15 @@ func (c *Common) ToMap() map[string]any {
 	}
 	if c.Delegate != "" {
 		m["Delegate"] = c.Delegate
+	}
+	if c.Sponsor != "" {
+		m["Sponsor"] = c.Sponsor
+	}
+	if c.SponsorFlags != nil {
+		m["SponsorFlags"] = *c.SponsorFlags
+	}
+	if c.SponsorSignature != nil {
+		m["SponsorSignature"] = c.SponsorSignature.ToMap()
 	}
 
 	return m

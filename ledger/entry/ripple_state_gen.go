@@ -34,8 +34,11 @@ type RippleState struct {
 	LowQualityOut     uint32
 	HighQualityIn     uint32
 	HighQualityOut    uint32
+	HighSponsor       string // AccountID (base58)
+	LowSponsor        string // AccountID (base58)
 	PreviousTxnID     string // Hash256 (uppercase hex)
 	PreviousTxnLgrSeq uint32
+	Sponsor           string // AccountID (base58)
 }
 
 // Type returns the concrete ledger-entry type.
@@ -54,8 +57,11 @@ const (
 	ripplestateBitLowQualityOut
 	ripplestateBitHighQualityIn
 	ripplestateBitHighQualityOut
+	ripplestateBitHighSponsor
+	ripplestateBitLowSponsor
 	ripplestateBitPreviousTxnID
 	ripplestateBitPreviousTxnLgrSeq
+	ripplestateBitSponsor
 )
 
 // SetFlags assigns Flags and updates its serialized presence.
@@ -128,6 +134,20 @@ func (r *RippleState) SetHighQualityOut(value uint32) {
 	r.present |= ripplestateBitHighQualityOut
 }
 
+// SetHighSponsor assigns HighSponsor and updates its serialized presence.
+func (r *RippleState) SetHighSponsor(value string) {
+	r.HighSponsor = value
+	r.dirty = true
+	r.present |= ripplestateBitHighSponsor
+}
+
+// SetLowSponsor assigns LowSponsor and updates its serialized presence.
+func (r *RippleState) SetLowSponsor(value string) {
+	r.LowSponsor = value
+	r.dirty = true
+	r.present |= ripplestateBitLowSponsor
+}
+
 // SetPreviousTxnID assigns PreviousTxnID and updates its serialized presence.
 func (r *RippleState) SetPreviousTxnID(value string) {
 	r.PreviousTxnID = value
@@ -140,6 +160,13 @@ func (r *RippleState) SetPreviousTxnLgrSeq(value uint32) {
 	r.PreviousTxnLgrSeq = value
 	r.dirty = true
 	r.present |= ripplestateBitPreviousTxnLgrSeq
+}
+
+// SetSponsor assigns Sponsor and updates its serialized presence.
+func (r *RippleState) SetSponsor(value string) {
+	r.Sponsor = value
+	r.dirty = true
+	r.present |= ripplestateBitSponsor
 }
 
 func (r *RippleState) validateRequired() error {
@@ -302,6 +329,24 @@ func (r *RippleState) decode(data []byte, legacy bool) error {
 			default:
 				return newErrUnknownField("RippleState", typeCode, fieldCode)
 			}
+		case 8: // AccountID
+			val, err := sr.readAccountID()
+			if err != nil {
+				return err
+			}
+			switch fieldCode {
+			case 27:
+				r.Sponsor = val
+				r.present |= ripplestateBitSponsor
+			case 28:
+				r.HighSponsor = val
+				r.present |= ripplestateBitHighSponsor
+			case 29:
+				r.LowSponsor = val
+				r.present |= ripplestateBitLowSponsor
+			default:
+				return newErrUnknownField("RippleState", typeCode, fieldCode)
+			}
 		default:
 			return newErrUnknownField("RippleState", typeCode, fieldCode)
 		}
@@ -353,6 +398,15 @@ func (r *RippleState) emitAll(out map[string]any, skipDefault bool) {
 	if r.present&ripplestateBitHighQualityOut != 0 && !(skipDefault && r.HighQualityOut == 0) {
 		out["HighQualityOut"] = r.HighQualityOut
 	}
+	if r.present&ripplestateBitHighSponsor != 0 && !(skipDefault && r.HighSponsor == "") {
+		out["HighSponsor"] = r.HighSponsor
+	}
+	if r.present&ripplestateBitLowSponsor != 0 && !(skipDefault && r.LowSponsor == "") {
+		out["LowSponsor"] = r.LowSponsor
+	}
+	if r.present&ripplestateBitSponsor != 0 && !(skipDefault && r.Sponsor == "") {
+		out["Sponsor"] = r.Sponsor
+	}
 }
 
 // EmitNewFields emits fields for a CreatedNode (sMD_Create | sMD_Always),
@@ -384,6 +438,9 @@ func (r *RippleState) EmitPreviousFields(prev Entry, out map[string]any) {
 	emitIfChangedUint32(out, "LowQualityOut", prv.LowQualityOut, r.LowQualityOut, prv.present&ripplestateBitLowQualityOut, r.present&ripplestateBitLowQualityOut)
 	emitIfChangedUint32(out, "HighQualityIn", prv.HighQualityIn, r.HighQualityIn, prv.present&ripplestateBitHighQualityIn, r.present&ripplestateBitHighQualityIn)
 	emitIfChangedUint32(out, "HighQualityOut", prv.HighQualityOut, r.HighQualityOut, prv.present&ripplestateBitHighQualityOut, r.present&ripplestateBitHighQualityOut)
+	emitIfChangedString(out, "HighSponsor", prv.HighSponsor, r.HighSponsor, prv.present&ripplestateBitHighSponsor, r.present&ripplestateBitHighSponsor)
+	emitIfChangedString(out, "LowSponsor", prv.LowSponsor, r.LowSponsor, prv.present&ripplestateBitLowSponsor, r.present&ripplestateBitLowSponsor)
+	emitIfChangedString(out, "Sponsor", prv.Sponsor, r.Sponsor, prv.present&ripplestateBitSponsor, r.present&ripplestateBitSponsor)
 }
 
 // EmitChangeOrigFields writes the names of every present field carrying
@@ -421,6 +478,15 @@ func (r *RippleState) EmitChangeOrigFields(out map[string]any) {
 	}
 	if r.present&ripplestateBitHighQualityOut != 0 {
 		out["HighQualityOut"] = r.HighQualityOut
+	}
+	if r.present&ripplestateBitHighSponsor != 0 {
+		out["HighSponsor"] = r.HighSponsor
+	}
+	if r.present&ripplestateBitLowSponsor != 0 {
+		out["LowSponsor"] = r.LowSponsor
+	}
+	if r.present&ripplestateBitSponsor != 0 {
+		out["Sponsor"] = r.Sponsor
 	}
 }
 
@@ -493,11 +559,20 @@ func (r *RippleState) ToMap() map[string]any {
 	if r.present&ripplestateBitHighQualityOut != 0 {
 		out["HighQualityOut"] = r.HighQualityOut
 	}
+	if r.present&ripplestateBitHighSponsor != 0 {
+		out["HighSponsor"] = r.HighSponsor
+	}
+	if r.present&ripplestateBitLowSponsor != 0 {
+		out["LowSponsor"] = r.LowSponsor
+	}
 	if r.present&ripplestateBitPreviousTxnID != 0 {
 		out["PreviousTxnID"] = r.PreviousTxnID
 	}
 	if r.present&ripplestateBitPreviousTxnLgrSeq != 0 {
 		out["PreviousTxnLgrSeq"] = r.PreviousTxnLgrSeq
+	}
+	if r.present&ripplestateBitSponsor != 0 {
+		out["Sponsor"] = r.Sponsor
 	}
 	return out
 }

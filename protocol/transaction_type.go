@@ -85,6 +85,8 @@ const (
 	TxTypeLoanDelete                   TxType = 81 // ttLOAN_DELETE
 	TxTypeLoanManage                   TxType = 82 // ttLOAN_MANAGE
 	TxTypeLoanPay                      TxType = 84 // ttLOAN_PAY
+	TxTypeSponsorshipTransfer          TxType = 90 // ttSPONSORSHIP_TRANSFER
+	TxTypeSponsorshipSet               TxType = 91 // ttSPONSORSHIP_SET
 
 	// System-generated transaction types (pseudo-transactions).
 	TxTypeAmendment TxType = 100 // ttAMENDMENT
@@ -239,6 +241,10 @@ func (t TxType) String() string {
 		return "LoanManage"
 	case TxTypeLoanPay:
 		return "LoanPay"
+	case TxTypeSponsorshipTransfer:
+		return "SponsorshipTransfer"
+	case TxTypeSponsorshipSet:
+		return "SponsorshipSet"
 	case TxTypeAmendment:
 		return "EnableAmendment"
 	case TxTypeFee:
@@ -324,6 +330,8 @@ var txTypeNameMap = map[string]TxType{
 	"LoanDelete":                        TxTypeLoanDelete,
 	"LoanManage":                        TxTypeLoanManage,
 	"LoanPay":                           TxTypeLoanPay,
+	"SponsorshipTransfer":               TxTypeSponsorshipTransfer,
+	"SponsorshipSet":                    TxTypeSponsorshipSet,
 	"EnableAmendment":                   TxTypeAmendment,
 	"SetFee":                            TxTypeFee,
 	"UNLModify":                         TxTypeUNLModify,

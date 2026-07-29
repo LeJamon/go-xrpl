@@ -87,6 +87,8 @@ const (
 	TypeLoanDelete                   = protocol.TxTypeLoanDelete
 	TypeLoanManage                   = protocol.TxTypeLoanManage
 	TypeLoanPay                      = protocol.TxTypeLoanPay
+	TypeSponsorshipTransfer          = protocol.TxTypeSponsorshipTransfer
+	TypeSponsorshipSet               = protocol.TxTypeSponsorshipSet
 
 	TypeAmendment = protocol.TxTypeAmendment
 	TypeFee       = protocol.TxTypeFee

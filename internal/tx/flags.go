@@ -14,4 +14,8 @@ const (
 
 	// TfUniversalMask is used to check for invalid flags (any bit not in TfUniversal)
 	TfUniversalMask uint32 = ^TfUniversal
+
+	SpfSponsorFee      uint32 = 0x00000001
+	SpfSponsorReserve  uint32 = 0x00000002
+	SpfSponsorFlagMask uint32 = ^(SpfSponsorFee | SpfSponsorReserve)
 )

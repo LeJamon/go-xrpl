@@ -27,6 +27,7 @@ type LedgerHashes struct {
 	FirstLedgerSequence uint32
 	LastLedgerSequence  uint32
 	Hashes              []string
+	Sponsor             string // AccountID (base58)
 }
 
 // Type returns the concrete ledger-entry type.
@@ -39,6 +40,7 @@ const (
 	ledgerhashesBitFirstLedgerSequence
 	ledgerhashesBitLastLedgerSequence
 	ledgerhashesBitHashes
+	ledgerhashesBitSponsor
 )
 
 // SetFlags assigns Flags and updates its serialized presence.
@@ -67,6 +69,13 @@ func (l *LedgerHashes) SetHashes(value []string) {
 	l.Hashes = value
 	l.dirty = true
 	l.present |= ledgerhashesBitHashes
+}
+
+// SetSponsor assigns Sponsor and updates its serialized presence.
+func (l *LedgerHashes) SetSponsor(value string) {
+	l.Sponsor = value
+	l.dirty = true
+	l.present |= ledgerhashesBitSponsor
 }
 
 func (l *LedgerHashes) validateRequired() error {
@@ -151,6 +160,18 @@ func (l *LedgerHashes) decode(data []byte, legacy bool) error {
 			default:
 				return newErrUnknownField("LedgerHashes", typeCode, fieldCode)
 			}
+		case 8: // AccountID
+			val, err := sr.readAccountID()
+			if err != nil {
+				return err
+			}
+			switch fieldCode {
+			case 27:
+				l.Sponsor = val
+				l.present |= ledgerhashesBitSponsor
+			default:
+				return newErrUnknownField("LedgerHashes", typeCode, fieldCode)
+			}
 		case 19: // Vector256
 			val, err := sr.readVector256()
 			if err != nil {
@@ -193,6 +214,9 @@ func (l *LedgerHashes) emitAll(out map[string]any, skipDefault bool) {
 	if l.present&ledgerhashesBitHashes != 0 && !(skipDefault && len(l.Hashes) == 0) {
 		out["Hashes"] = l.Hashes
 	}
+	if l.present&ledgerhashesBitSponsor != 0 && !(skipDefault && l.Sponsor == "") {
+		out["Sponsor"] = l.Sponsor
+	}
 }
 
 // EmitNewFields emits fields for a CreatedNode (sMD_Create | sMD_Always),
@@ -218,6 +242,7 @@ func (l *LedgerHashes) EmitPreviousFields(prev Entry, out map[string]any) {
 	emitIfChangedUint32(out, "FirstLedgerSequence", prv.FirstLedgerSequence, l.FirstLedgerSequence, prv.present&ledgerhashesBitFirstLedgerSequence, l.present&ledgerhashesBitFirstLedgerSequence)
 	emitIfChangedUint32(out, "LastLedgerSequence", prv.LastLedgerSequence, l.LastLedgerSequence, prv.present&ledgerhashesBitLastLedgerSequence, l.present&ledgerhashesBitLastLedgerSequence)
 	emitIfChangedStringSlice(out, "Hashes", prv.Hashes, l.Hashes, prv.present&ledgerhashesBitHashes, l.present&ledgerhashesBitHashes)
+	emitIfChangedString(out, "Sponsor", prv.Sponsor, l.Sponsor, prv.present&ledgerhashesBitSponsor, l.present&ledgerhashesBitSponsor)
 }
 
 // EmitChangeOrigFields writes the names of every present field carrying
@@ -237,6 +262,9 @@ func (l *LedgerHashes) EmitChangeOrigFields(out map[string]any) {
 	}
 	if l.present&ledgerhashesBitHashes != 0 {
 		out["Hashes"] = l.Hashes
+	}
+	if l.present&ledgerhashesBitSponsor != 0 {
+		out["Sponsor"] = l.Sponsor
 	}
 }
 
@@ -278,6 +306,9 @@ func (l *LedgerHashes) ToMap() map[string]any {
 	}
 	if l.present&ledgerhashesBitHashes != 0 {
 		out["Hashes"] = l.Hashes
+	}
+	if l.present&ledgerhashesBitSponsor != 0 {
+		out["Sponsor"] = l.Sponsor
 	}
 	return out
 }

@@ -71,6 +71,22 @@ func TestXRPNotCreated_StrictEquality(t *testing.T) {
 	}
 }
 
+func TestLedgerEntryTypesMatchAcceptsSponsorship(t *testing.T) {
+	encoded := mustEncode(t, map[string]any{
+		"LedgerEntryType":   "Sponsorship",
+		"PreviousTxnID":     strings.Repeat("0", 64),
+		"PreviousTxnLgrSeq": uint32(0),
+		"Owner":             "rrrrrrrrrrrrrrrrrrrrrhoLvTp",
+		"Sponsee":           "rrrrrrrrrrrrrrrrrrrrBZbvji",
+		"OwnerNode":         "0",
+		"SponseeNode":       "0",
+		"Flags":             uint32(0),
+	})
+	if violation := checkLedgerEntryTypesMatch([]InvariantEntry{{EntryType: entry.TypeSponsorship, After: encoded}}); violation != nil {
+		t.Fatalf("well-formed Sponsorship rejected by ledger type invariant: %v", violation)
+	}
+}
+
 // TestValidNewAccountRoot_PermittedTypes ensures the allow-list covers
 // Payment / AMMCreate / VaultCreate and the XChain attestation tx types.
 // Batch is NOT in the list: rippled has no ttBATCH arm (InvariantCheck.cpp:

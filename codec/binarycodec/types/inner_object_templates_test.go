@@ -112,6 +112,11 @@ func TestInnerObjectTemplateRegistry(t *testing.T) {
 			{name: "TxnSignature", style: innerOptional},
 			{name: "Signers", style: innerOptional},
 		},
+		"SponsorSignature": {
+			{name: "SigningPubKey", style: innerOptional},
+			{name: "TxnSignature", style: innerOptional},
+			{name: "Signers", style: innerOptional},
+		},
 	}
 
 	if !reflect.DeepEqual(innerObjectTemplates, expected) {

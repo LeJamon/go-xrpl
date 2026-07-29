@@ -48,6 +48,7 @@ const (
 	spaceDelegate       uint16 = 'E' // Delegate
 	spaceLoanBroker     uint16 = 'l' // Loan broker (lower-case L)
 	spaceLoan           uint16 = 'L' // Loan
+	spaceSponsorship    uint16 = '>' // Sponsorship
 )
 
 // Keylet represents an addressable location in the ledger state.
@@ -79,6 +80,16 @@ func Account(accountID [20]byte) Keylet {
 	return Keylet{
 		Type: entry.TypeAccountRoot,
 		Key:  indexHash(spaceAccount, accountID[:]),
+	}
+}
+
+// Sponsorship returns the directional keylet for a sponsor/sponsee pair.
+// Unlike trust lines, the account IDs are not sorted: each role is part of the
+// key and reversing them identifies a different relationship.
+func Sponsorship(sponsor, sponsee [20]byte) Keylet {
+	return Keylet{
+		Type: entry.TypeSponsorship,
+		Key:  indexHash(spaceSponsorship, sponsor[:], sponsee[:]),
 	}
 }
 

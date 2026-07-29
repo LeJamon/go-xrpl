@@ -26,12 +26,19 @@ func TestSpecCoversRippledMacro(t *testing.T) {
 		t.Fatalf("parse %s: %v", macroPath, err)
 	}
 
-	if len(rippled) != len(Specs) {
-		t.Fatalf("rippled has %d ledger templates, schema has %d", len(rippled), len(Specs))
+	if len(rippled)+1 != len(Specs) {
+		t.Fatalf("rippled v3.2.0 has %d ledger templates, schema has %d (want the Sponsorship delta only)", len(rippled), len(Specs))
 	}
 	haveEntries := make(map[string]bool, len(Specs))
 	for _, entry := range Specs {
 		haveEntries[entry.Name] = true
+		if entry.Name == "Sponsorship" {
+			info, found := protocol.LedgerEntryTypeByName(entry.Name)
+			if !found || info.Type != protocol.LedgerEntryTypeSponsorship || info.RPCName != "sponsorship" || info.Deprecated {
+				t.Errorf("Sponsorship registry entry is missing or invalid")
+			}
+			continue
+		}
 		rEntry, found := rippled[entry.Name]
 		if !found {
 			t.Errorf("entry %q is absent from rippled", entry.Name)
@@ -71,6 +78,9 @@ func TestSpecCoversRippledMacro(t *testing.T) {
 			continue
 		}
 		canonical++
+		if info.Name == "Sponsorship" {
+			continue
+		}
 		rEntry, found := rippled[info.Name]
 		if !found {
 			t.Errorf("registry entry %q is absent from rippled", info.Name)
@@ -80,8 +90,8 @@ func TestSpecCoversRippledMacro(t *testing.T) {
 			t.Errorf("registry entry %q does not match rippled", info.Name)
 		}
 	}
-	if canonical != len(rippled) {
-		t.Errorf("registry has %d canonical entries, rippled has %d", canonical, len(rippled))
+	if canonical != len(rippled)+1 {
+		t.Errorf("registry has %d canonical entries, rippled v3.2.0 has %d plus Sponsorship", canonical, len(rippled))
 	}
 }
 

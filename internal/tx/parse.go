@@ -22,14 +22,23 @@ func ParseJSON(data []byte) (Transaction, error) {
 		if err := json.Unmarshal(data, &header); err != nil {
 			return nil, fmt.Errorf("failed to parse transaction: %w", err)
 		}
-		txType, _ := TypeFromName(header.TransactionType)
-		var baseTx BaseTx
-		if err := json.Unmarshal(data, &baseTx); err != nil {
-			return nil, fmt.Errorf("failed to parse transaction: %w", err)
-		}
+		txType, knownType := TypeFromName(header.TransactionType)
 		presentFields, err := jsonPresentFields(data)
 		if err != nil {
 			return nil, fmt.Errorf("failed to parse transaction fields: %w", err)
+		}
+		if knownType {
+			var values map[string]any
+			if err := json.Unmarshal(data, &values); err != nil {
+				return nil, fmt.Errorf("failed to parse transaction fields: %w", err)
+			}
+			if err := checkTemplate(txType, presentFields, values); err != nil {
+				return nil, fmt.Errorf("failed to validate transaction template: %w", err)
+			}
+		}
+		var baseTx BaseTx
+		if err := json.Unmarshal(data, &baseTx); err != nil {
+			return nil, fmt.Errorf("failed to parse transaction: %w", err)
 		}
 		baseTx.SetPresentFields(presentFields)
 		baseTx.txType = txType

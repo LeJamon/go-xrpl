@@ -106,6 +106,18 @@ func directoryPlacements(state *shamap.SHAMap, entryType string, fields map[stri
 		}
 		return out, nil
 
+	case "Sponsorship":
+		// A directional sponsorship relation is listed in both participants'
+		// owner directories, using the role-specific page pointers carried by
+		// the SLE.
+		if owner, ok := metaAccountID(fields, "Owner"); ok {
+			add(keylet.OwnerDirPage(owner, metaUint64(fields["OwnerNode"])), dirSorted)
+		}
+		if sponsee, ok := metaAccountID(fields, "Sponsee"); ok {
+			add(keylet.OwnerDirPage(sponsee, metaUint64(fields["SponseeNode"])), dirSorted)
+		}
+		return out, nil
+
 	case "Credential":
 		// The issuer always lists the credential in its directory. The subject
 		// lists it too, except for a self-issued credential (subject == issuer),
