@@ -291,6 +291,41 @@ func TestTryFetchPackEscalation_NoChildIsNoOp(t *testing.T) {
 	}
 }
 
+type fetchPackPrioritySender struct {
+	noopSender
+	ordinary int
+	priority int
+}
+
+func (s *fetchPackPrioritySender) SendToPeer(uint64, []byte) error {
+	s.ordinary++
+	return nil
+}
+
+func (s *fetchPackPrioritySender) SendPriorityToPeer(uint64, []byte) error {
+	s.priority++
+	return nil
+}
+
+func TestTryFetchPackEscalationUsesAcquisitionLane(t *testing.T) {
+	adaptor := newTestAdaptor(t)
+	sender := &fetchPackPrioritySender{}
+	adaptor.sender = sender
+	svc := adaptor.LedgerService()
+	child := svc.GetClosedLedger()
+	require.NotNil(t, child)
+	parent, err := svc.GetLedgerByHash(child.ParentHash())
+	require.NoError(t, err)
+	require.NotNil(t, parent)
+
+	r := NewRouter(nil, adaptor, make(chan *peermanagement.InboundMessage, 1))
+	il := inbound.New(parent.Hash(), parent.Sequence(), 3, serveTestLogger())
+
+	require.True(t, r.tryFetchPackEscalation(il))
+	assert.Equal(t, 1, sender.priority)
+	assert.Zero(t, sender.ordinary)
+}
+
 // armFetchAcquisition registers one in-flight acquisition so the fetch-pack
 // reply handler's solicitation gate lets a pack through.
 func armFetchAcquisition(r *Router) {

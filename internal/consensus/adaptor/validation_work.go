@@ -13,6 +13,7 @@ const (
 	trustedValidationQueueDepth   = 256
 	untrustedValidationQueueDepth = 64
 	validationWorkerCount         = 2
+	trustedValidationPerPeerDepth = trustedValidationQueueDepth / 4
 )
 
 type validationWork struct {
@@ -53,9 +54,10 @@ type validationWorkLane struct {
 	trustedResultCh   chan validationWorkResult
 	untrustedResultCh chan validationWorkResult
 	workers           int
+	trustedPending    map[peermanagement.PeerID]int
 
 	// Set before start and immutable while workers run.
-	onUntrustedResultShed func(uint64)
+	onUntrustedResultShed func(validationWorkResult, uint64)
 	untrustedResultShed   atomic.Uint64
 
 	mu     sync.Mutex
@@ -78,6 +80,7 @@ func newValidationWorkLane(
 		trustedResultCh:   make(chan validationWorkResult, trustedValidationQueueDepth),
 		untrustedResultCh: make(chan validationWorkResult, untrustedValidationQueueDepth),
 		workers:           validationWorkerCount,
+		trustedPending:    make(map[peermanagement.PeerID]int),
 	}
 }
 
@@ -126,21 +129,32 @@ func (l *validationWorkLane) submit(work validationWork) validationQueueAdmissio
 
 	l.mu.Lock()
 	done := l.done
-	l.mu.Unlock()
 	if done == nil {
+		l.mu.Unlock()
 		return validationQueueStopped
 	}
 
 	jobs := l.untrustedJobs
 	if work.trusted {
 		jobs = l.trustedJobs
+		peerID := peermanagement.PeerID(work.origin.PeerID)
+		if peerID != 0 && l.trustedPending[peerID] >= trustedValidationPerPeerDepth {
+			l.mu.Unlock()
+			return validationQueueSaturated
+		}
 	}
 	select {
 	case jobs <- work:
+		if work.trusted && work.origin.PeerID != 0 {
+			l.trustedPending[peermanagement.PeerID(work.origin.PeerID)]++
+		}
+		l.mu.Unlock()
 		return validationQueueAccepted
 	case <-done:
+		l.mu.Unlock()
 		return validationQueueStopped
 	default:
+		l.mu.Unlock()
 		return validationQueueSaturated
 	}
 }
@@ -232,7 +246,7 @@ func (l *validationWorkLane) deliverResult(
 	default:
 		count := l.untrustedResultShed.Add(1)
 		if l.onUntrustedResultShed != nil {
-			l.onUntrustedResultShed(count)
+			l.onUntrustedResultShed(result, count)
 		}
 		return validationResultUntrustedSaturated
 	}
@@ -241,16 +255,32 @@ func (l *validationWorkLane) deliverResult(
 func (l *validationWorkLane) next(ctx context.Context) (validationWork, bool) {
 	select {
 	case work := <-l.trustedJobs:
+		l.markDequeued(work)
 		return work, true
 	default:
 	}
 
 	select {
 	case work := <-l.trustedJobs:
+		l.markDequeued(work)
 		return work, true
 	case work := <-l.untrustedJobs:
 		return work, true
 	case <-ctx.Done():
 		return validationWork{}, false
 	}
+}
+
+func (l *validationWorkLane) markDequeued(work validationWork) {
+	if !work.trusted || work.origin.PeerID == 0 {
+		return
+	}
+	peerID := peermanagement.PeerID(work.origin.PeerID)
+	l.mu.Lock()
+	if l.trustedPending[peerID] <= 1 {
+		delete(l.trustedPending, peerID)
+	} else {
+		l.trustedPending[peerID]--
+	}
+	l.mu.Unlock()
 }

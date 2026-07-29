@@ -6,6 +6,8 @@ import (
 	"math"
 	"net"
 	"time"
+
+	"github.com/LeJamon/go-xrpl/internal/peermanagement/message"
 )
 
 // Default configuration values.
@@ -39,7 +41,7 @@ const (
 	bulkSequenceBufferSize         = 4
 	reliableFramesPerBulkFrame     = 16
 	outboundCriticalByteReserve    = 2 * 1024 * 1024
-	outboundNonCriticalByteMaximum = MaxMessageSize
+	outboundNonCriticalByteMaximum = MaxMessageSize + message.HeaderSizeCompressed
 	outboundRetainedByteMaximum    = outboundNonCriticalByteMaximum + outboundCriticalByteReserve
 	maxOutboundReservedPeers       = (math.MaxInt64 - int64(outboundNonCriticalByteMaximum)) / int64(outboundCriticalByteReserve)
 

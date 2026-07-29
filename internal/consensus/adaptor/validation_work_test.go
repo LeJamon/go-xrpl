@@ -78,9 +78,7 @@ func (s *validationCaptureSender) RecordMessageSource(hash [32]byte, peerID uint
 }
 
 type validationPeerSessions struct {
-	mu           sync.Mutex
-	peers        []peermanagement.PeerInfo
-	disconnected []peermanagement.PeerID
+	peers []peermanagement.PeerInfo
 }
 
 func (s *validationPeerSessions) IsPeerConnected(peermanagement.PeerID) bool {
@@ -89,19 +87,6 @@ func (s *validationPeerSessions) IsPeerConnected(peermanagement.PeerID) bool {
 
 func (s *validationPeerSessions) Peers() []peermanagement.PeerInfo {
 	return append([]peermanagement.PeerInfo(nil), s.peers...)
-}
-
-func (s *validationPeerSessions) DisconnectPeer(peerID peermanagement.PeerID) bool {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	s.disconnected = append(s.disconnected, peerID)
-	return true
-}
-
-func (s *validationPeerSessions) disconnectedPeers() []peermanagement.PeerID {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	return append([]peermanagement.PeerID(nil), s.disconnected...)
 }
 
 func TestValidationWorkLanePrioritizesTrustedQueue(t *testing.T) {
@@ -150,7 +135,41 @@ func TestValidationWorkLaneStopsWithoutClosingProducerChannels(t *testing.T) {
 		lane.submit(validationWork{validation: &consensus.Validation{}}))
 }
 
-func TestRouterTrustedValidationQueueFullDisconnectsPeerWithoutCrypto(t *testing.T) {
+func TestValidationWorkLaneLimitsTrustedClaimsPerPeer(t *testing.T) {
+	lane := newValidationWorkLane(func(*consensus.Validation) error { return nil }, nil, nil)
+	lane.workers = 0
+	lane.start(t.Context())
+	defer lane.stop()
+
+	for range trustedValidationPerPeerDepth {
+		require.Equal(t, validationQueueAccepted, lane.submit(validationWork{
+			validation: &consensus.Validation{},
+			origin:     consensus.ValidationOrigin{PeerID: 10},
+			trusted:    true,
+		}))
+	}
+	require.Equal(t, validationQueueSaturated, lane.submit(validationWork{
+		validation: &consensus.Validation{},
+		origin:     consensus.ValidationOrigin{PeerID: 10},
+		trusted:    true,
+	}))
+	require.Equal(t, validationQueueAccepted, lane.submit(validationWork{
+		validation: &consensus.Validation{},
+		origin:     consensus.ValidationOrigin{PeerID: 11},
+		trusted:    true,
+	}))
+
+	work, ok := lane.next(t.Context())
+	require.True(t, ok)
+	require.Equal(t, uint64(10), work.origin.PeerID)
+	require.Equal(t, validationQueueAccepted, lane.submit(validationWork{
+		validation: &consensus.Validation{},
+		origin:     consensus.ValidationOrigin{PeerID: 10},
+		trusted:    true,
+	}))
+}
+
+func TestRouterTrustedValidationQueueFullShedsWithoutCrypto(t *testing.T) {
 	adaptor := newTestAdaptor(t)
 	engine := &validationProcessorEngine{
 		mockEngine: &mockEngine{},
@@ -170,8 +189,6 @@ func TestRouterTrustedValidationQueueFullDisconnectsPeerWithoutCrypto(t *testing
 	lane.start(t.Context())
 	defer lane.stop()
 	router.validationWork = lane
-	sessions := &validationPeerSessions{}
-	router.setPeerSessionView(sessions)
 	var logs bytes.Buffer
 	router.logger = slog.New(slog.NewTextHandler(&logs, nil))
 
@@ -189,46 +206,81 @@ func TestRouterTrustedValidationQueueFullDisconnectsPeerWithoutCrypto(t *testing
 			origin:     consensus.ValidationOrigin{PeerID: 15},
 			trusted:    true,
 		})
-		require.Equal(t, validationWorkDisconnectedTrustedPeer, outcome)
+		require.Equal(t, validationWorkShedTrusted, outcome)
 	}
 	require.Zero(t, verifyCalls, "unverified trust claims must not force router-thread crypto")
 	require.Zero(t, engine.processedCount())
-	require.Len(t, sessions.disconnectedPeers(), 130)
-	require.Equal(t, uint64(130), router.validationTrustedOverloadDisconnect.Load())
-	require.Zero(t, router.validationTrustedOverloadUnresolved.Load())
+	require.Equal(t, uint64(130), router.validationShedTrusted.Load())
 	require.Zero(t, router.validationShedUntrusted.Load())
 	require.Equal(t, 3, strings.Count(logs.String(), "trusted validation verifier saturated"),
 		"saturation logs should emit for counts 1, 64, and 128")
 }
 
-func TestRouterTrustedValidationQueueFullWithoutTerminatorRecordsUnresolved(t *testing.T) {
-	adaptor := newTestAdaptor(t)
-	engine := &validationProcessorEngine{mockEngine: &mockEngine{}}
-	router := NewRouter(engine, adaptor, nil)
-	var logs bytes.Buffer
-	router.logger = slog.New(slog.NewTextHandler(&logs, nil))
-	lane := router.validationWork
-	lane.workers = 0
-	lane.start(t.Context())
-	defer lane.stop()
-	for range cap(lane.trustedJobs) {
-		require.Equal(t, validationQueueAccepted, lane.submit(validationWork{
-			validation: &consensus.Validation{},
-			trusted:    true,
-		}))
+func TestRouterValidationAdmissionFailureAllowsDuplicateRetry(t *testing.T) {
+	for _, tc := range []struct {
+		name       string
+		trusted    bool
+		queue      func(*validationWorkLane) chan validationWork
+		validation func(*testing.T, *Adaptor) *consensus.Validation
+	}{
+		{
+			name:    "trusted",
+			trusted: true,
+			queue:   func(lane *validationWorkLane) chan validationWork { return lane.trustedJobs },
+			validation: func(t *testing.T, adaptor *Adaptor) *consensus.Validation {
+				validation := &consensus.Validation{
+					Full:      true,
+					LedgerSeq: 42,
+					LedgerID:  consensus.LedgerID{1},
+					SignTime:  time.Now(),
+				}
+				require.NoError(t, adaptor.identity.SignValidation(validation))
+				return validation
+			},
+		},
+		{
+			name:  "untrusted",
+			queue: func(lane *validationWorkLane) chan validationWork { return lane.untrustedJobs },
+			validation: func(_ *testing.T, _ *Adaptor) *consensus.Validation {
+				return &consensus.Validation{
+					Full:          true,
+					LedgerSeq:     42,
+					LedgerID:      consensus.LedgerID{1},
+					SigningPubKey: consensus.SigningPubKey{0x02, 1},
+					SignTime:      time.Now(),
+					Signature:     make([]byte, 70),
+				}
+			},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			adaptor := newTestAdaptor(t)
+			router := NewRouter(&validationProcessorEngine{mockEngine: &mockEngine{}}, adaptor, nil)
+			lane := router.validationWork
+			lane.workers = 0
+			lane.start(t.Context())
+			defer lane.stop()
+			router.setPeerSessionView(&validationPeerSessions{})
+
+			jobs := tc.queue(lane)
+			for range cap(jobs) {
+				require.Equal(t, validationQueueAccepted, lane.submit(validationWork{
+					validation: &consensus.Validation{},
+					trusted:    tc.trusted,
+				}))
+			}
+
+			serialized := SerializeSTValidation(tc.validation(t, adaptor))
+			payload := encodePayload(t, &message.Validation{Validation: serialized})
+			suppressionHash := hashValidationSuppression(serialized)
+			router.handleValidation(&peermanagement.InboundMessage{PeerID: 12, Payload: payload})
+
+			require.False(t, router.messageSeen.seenRecently(suppressionHash))
+			<-jobs
+			router.handleValidation(&peermanagement.InboundMessage{PeerID: 13, Payload: payload})
+			require.Len(t, jobs, cap(jobs))
+		})
 	}
-
-	outcome := router.submitValidationWork(validationWork{
-		validation: &consensus.Validation{},
-		origin:     consensus.ValidationOrigin{PeerID: 17},
-		trusted:    true,
-	})
-
-	require.Equal(t, validationWorkTrustedOverloadUnresolved, outcome)
-	require.Equal(t, uint64(1), router.validationTrustedOverloadUnresolved.Load())
-	require.Zero(t, router.validationTrustedOverloadDisconnect.Load())
-	require.Zero(t, engine.processedCount())
-	require.Contains(t, logs.String(), "resolution=terminator-unavailable")
 }
 
 func TestRouterUntrustedValidationQueueSaturationRateLimited(t *testing.T) {
@@ -272,10 +324,19 @@ func TestValidationResultCapacityIsolatedAndRateLimited(t *testing.T) {
 	for range cap(lane.untrustedResultCh) {
 		lane.untrustedResultCh <- validationWorkResult{}
 	}
-	for range 130 {
-		outcome := lane.deliverResult(t.Context(), validationWorkResult{}, false)
+	suppressionHash := [32]byte{1}
+	router.messageSeen.observe(suppressionHash)
+	for i := range 130 {
+		result := validationWorkResult{}
+		if i == 0 {
+			result.validation = &consensus.Validation{SuppressionHash: suppressionHash}
+		}
+		outcome := lane.deliverResult(t.Context(), result, false)
 		require.Equal(t, validationResultUntrustedSaturated, outcome)
 	}
+	require.False(t, router.messageSeen.seenRecently(suppressionHash))
+	firstSeen, _ := router.messageSeen.observe(suppressionHash)
+	require.True(t, firstSeen)
 
 	trusted := validationWorkResult{
 		validation: &consensus.Validation{LedgerID: consensus.LedgerID{9}},

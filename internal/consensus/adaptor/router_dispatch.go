@@ -316,7 +316,10 @@ func (r *Router) handleValidation(msg *peermanagement.InboundMessage) {
 		origin:     origin,
 		trusted:    trusted,
 	}
-	r.submitValidationWork(work)
+	outcome := r.submitValidationWork(work)
+	if outcome != validationWorkQueued && outcome != validationWorkProcessedSynchronously {
+		r.messageSeen.allowRetry(suppressionHash)
+	}
 }
 
 type validationWorkAdmissionOutcome uint8
@@ -325,8 +328,7 @@ const (
 	validationWorkQueued validationWorkAdmissionOutcome = iota
 	validationWorkProcessedSynchronously
 	validationWorkShedUntrusted
-	validationWorkDisconnectedTrustedPeer
-	validationWorkTrustedOverloadUnresolved
+	validationWorkShedTrusted
 	validationWorkStopped
 )
 
@@ -346,18 +348,9 @@ func (r *Router) submitValidationWork(work validationWork) validationWorkAdmissi
 			return validationWorkShedUntrusted
 		}
 
-		terminator, ok := r.peerSessions.(peerValidationTerminator)
-		if ok &&
-			work.origin.PeerID != 0 &&
-			terminator.DisconnectPeer(peermanagement.PeerID(work.origin.PeerID)) {
-			count := r.validationTrustedOverloadDisconnect.Add(1)
-			r.logTrustedValidationSaturation("peer-disconnected", work.origin.PeerID, count)
-			return validationWorkDisconnectedTrustedPeer
-		}
-
-		count := r.validationTrustedOverloadUnresolved.Add(1)
-		r.logTrustedValidationSaturation("terminator-unavailable", work.origin.PeerID, count)
-		return validationWorkTrustedOverloadUnresolved
+		count := r.validationShedTrusted.Add(1)
+		r.logTrustedValidationSaturation(work.origin.PeerID, count)
+		return validationWorkShedTrusted
 	}
 
 	r.handleValidationWorkResult(validationWorkResult{
@@ -377,18 +370,13 @@ func (r *Router) logUntrustedValidationSaturation(stage string, count uint64) {
 		"dropped", count)
 }
 
-func (r *Router) logTrustedValidationSaturation(resolution string, peerID, count uint64) {
+func (r *Router) logTrustedValidationSaturation(peerID, count uint64) {
 	if count != 1 && count%validationSaturationLogInterval != 0 {
 		return
 	}
-	level := slog.LevelWarn
-	if resolution == "terminator-unavailable" {
-		level = slog.LevelError
-	}
-	r.logger.Log(context.Background(), level, "trusted validation verifier saturated",
-		"resolution", resolution,
+	r.logger.Warn("trusted validation verifier saturated",
 		"peer", peerID,
-		"count", count)
+		"dropped", count)
 }
 
 func (r *Router) handleValidationWorkResult(result validationWorkResult) {

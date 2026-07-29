@@ -166,8 +166,8 @@ type Peer struct {
 	// sendDrops counts frames dropped because the bounded send queue was
 	// full. go-xrpl drops the frame and returns ErrSendBufferFull rather
 	// than queueing unboundedly like rippled; this per-peer counter is
-	// surfaced via the `peers` RPC metrics so operators can see which
-	// peers are shedding outbound frames.
+	// surfaced via the `peers` RPC outbound_queue diagnostics so operators
+	// can see which peers are shedding outbound frames.
 	sendDrops        atomic.Uint64
 	sendDropsByClass [outboundClassCount]atomic.Uint64
 
@@ -247,7 +247,7 @@ type PeerConfig struct {
 }
 
 // DefaultPeerConfig returns defaults; callers must set PeerTLSConfig
-// before Connect. The per-peer send queue is a fixed DefaultSendBufferSize.
+// before Connect.
 func DefaultPeerConfig() PeerConfig {
 	return PeerConfig{}
 }
@@ -1990,6 +1990,9 @@ func (p *Peer) recordSendDrop(class OutboundSendClass, err error) {
 	frames := uint64(1)
 	var queueErr *SendQueueError
 	if errors.As(err, &queueErr) {
+		if queueErr.Reason == SendQueueClosed {
+			return
+		}
 		class = queueErr.Class
 		if queueErr.AttemptedFrames > 0 {
 			frames = uint64(queueErr.AttemptedFrames)
@@ -2103,7 +2106,7 @@ type PeerInfo struct {
 
 	// SendDrops is the count of outbound frames dropped because the peer's
 	// bounded send queue was full. go-xrpl-specific (rippled queues
-	// unboundedly); surfaced under the `metrics` object in `peers` RPC.
+	// unboundedly); surfaced under the `outbound_queue` object in `peers` RPC.
 	SendDrops            uint64
 	SendDropsControl     uint64
 	SendDropsConsensus   uint64

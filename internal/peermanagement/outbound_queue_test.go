@@ -144,6 +144,14 @@ func TestOutboundQueueRetainedByteLimitsIncludeInFlight(t *testing.T) {
 	queue.complete(token)
 }
 
+func TestOutboundQueueByteLimitAllowsMaximumPayloadAndHeader(t *testing.T) {
+	queue := newOutboundQueue()
+	maxFrameBytes := int64(message.MaxMessageSize + message.HeaderSizeCompressed)
+
+	assert.True(t, queue.canAdmitBytesLocked(OutboundClassOrdinary, maxFrameBytes))
+	assert.False(t, queue.canAdmitBytesLocked(OutboundClassOrdinary, maxFrameBytes+1))
+}
+
 func TestOutboundQueueCloseReleasesQueuedAndInFlightAccounting(t *testing.T) {
 	queue := newOutboundQueue()
 	require.NoError(t, queue.enqueueReliable(OutboundClassOrdinary, []byte("reliable")))

@@ -166,12 +166,6 @@ func TestOverlay_PeersJSON_EmitsMetricsObject(t *testing.T) {
 		"total_bytes_sent",
 		"avg_bps_recv",
 		"avg_bps_sent",
-		"send_drops",
-		"send_drops_control",
-		"send_drops_consensus",
-		"send_drops_acquisition",
-		"send_drops_ordinary",
-		"send_drops_bulk",
 	} {
 		val, present := metrics[key]
 		require.True(t, present, "metrics.%s missing", key)
@@ -189,12 +183,31 @@ func TestOverlay_PeersJSON_EmitsMetricsObject(t *testing.T) {
 	// schema is what we're pinning, not the value.
 	assert.Equal(t, "0", metrics["avg_bps_recv"])
 	assert.Equal(t, "0", metrics["avg_bps_sent"])
-	assert.Equal(t, "3", metrics["send_drops"])
-	assert.Equal(t, "0", metrics["send_drops_control"])
-	assert.Equal(t, "2", metrics["send_drops_consensus"])
-	assert.Equal(t, "0", metrics["send_drops_acquisition"])
-	assert.Equal(t, "1", metrics["send_drops_ordinary"])
-	assert.Equal(t, "0", metrics["send_drops_bulk"])
+	assert.Len(t, metrics, 4)
+
+	queue, ok := entries[0]["outbound_queue"].(map[string]any)
+	require.True(t, ok)
+	assert.Equal(t, "3", queue["send_drops"])
+	byClass, ok := queue["send_drops_by_class"].(map[string]any)
+	require.True(t, ok)
+	assert.Equal(t, "0", byClass["control"])
+	assert.Equal(t, "2", byClass["consensus"])
+	assert.Equal(t, "0", byClass["acquisition"])
+	assert.Equal(t, "1", byClass["ordinary"])
+	assert.Equal(t, "0", byClass["bulk"])
+}
+
+func TestPeerClosedQueueRejectionDoesNotCountAsCapacityDrop(t *testing.T) {
+	peer := NewPeer(1, Endpoint{}, false, nil, nil)
+
+	peer.recordSendDrop(OutboundClassOrdinary, &SendQueueError{
+		Class:           OutboundClassOrdinary,
+		Reason:          SendQueueClosed,
+		AttemptedFrames: 1,
+	})
+
+	assert.Zero(t, peer.SendDrops())
+	assert.Zero(t, peer.SendDropsByClass(OutboundClassOrdinary))
 }
 
 // TestOverlay_PeersJSON_EmitsMetricsForEveryPeer guards against a

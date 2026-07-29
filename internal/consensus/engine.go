@@ -206,8 +206,7 @@ type NetworkBroadcaster interface {
 
 	// RelayProposal forwards a peer's proposal to others, honoring per-peer
 	// squelch and excluding exceptPeer (0 = all). SuppressionHash must be set:
-	// the overlay records each recipient in its reverse index for duplicate-
-	// arrival lookups.
+	// the overlay uses it to exclude known inbound sources and record relay time.
 	RelayProposal(proposal *Proposal, exceptPeer uint64) error
 
 	// RelayValidation forwards a peer's validation to others; same semantics

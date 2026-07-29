@@ -37,12 +37,6 @@ type peerSessionView interface {
 	IsPeerConnected(peermanagement.PeerID) bool
 }
 
-type peerValidationTerminator interface {
-	DisconnectPeer(peermanagement.PeerID) bool
-}
-
-var _ peerValidationTerminator = (*peermanagement.Overlay)(nil)
-
 type peerCountView interface {
 	PeerCount() int
 }
@@ -140,10 +134,9 @@ type Router struct {
 	// validationWork verifies signatures outside the router goroutine. Trusted
 	// and untrusted work use separate bounded queues so untrusted traffic cannot
 	// occupy the trusted capacity.
-	validationWork                      *validationWorkLane
-	validationTrustedOverloadDisconnect atomic.Uint64
-	validationTrustedOverloadUnresolved atomic.Uint64
-	validationShedUntrusted             atomic.Uint64
+	validationWork          *validationWorkLane
+	validationShedTrusted   atomic.Uint64
+	validationShedUntrusted atomic.Uint64
 
 	// manifests is the validator manifest cache. Wired by the
 	// Components bootstrap so the router can apply inbound TMManifests
@@ -349,11 +342,7 @@ const serveQueueDepth = 256
 // messageDedupTTL matches rippled's five-minute suppression hold.
 const messageDedupTTL = 300 * time.Second
 
-// messageDedupMaxEntries caps the dedup table size. One entry per
-// unique (validator, position, txSet, closeTime) tuple in a healthy
-// 100-validator round; 4096 gives ~40x headroom before the trim
-// fires. Cheap memory — 32-byte key + 24-byte time.
-const messageDedupMaxEntries = 4096
+const messageDedupSweepThreshold = 4096
 
 // NewRouter creates a new Router.
 func NewRouter(engine consensus.Engine, adaptor *Adaptor, inbox <-chan *peermanagement.InboundMessage) *Router {
@@ -369,7 +358,7 @@ func NewRouter(engine consensus.Engine, adaptor *Adaptor, inbox <-chan *peermana
 		replayer:           inbound.NewReplayer(logger, inbound.SystemClock, inbound.DefaultMaxInFlightReplays),
 		fetchTracker:       inbound.NewTracker(),
 		fetchPacks:         newFetchPackCache(),
-		messageSeen:        newMessageSuppression(messageDedupTTL, messageDedupMaxEntries),
+		messageSeen:        newMessageSuppression(messageDedupTTL, messageDedupSweepThreshold),
 		txSetAcquire:       make(map[consensus.TxSetID]*txSetAcquireState),
 		txSetRetryKnobs:    defaultTxSetRetryKnobs(),
 		seqHash:            make(map[uint32]ledgerHashEntry),
@@ -385,7 +374,10 @@ func NewRouter(engine consensus.Engine, adaptor *Adaptor, inbox <-chan *peermana
 				},
 				adaptor.IsTrusted,
 			)
-			r.validationWork.onUntrustedResultShed = func(count uint64) {
+			r.validationWork.onUntrustedResultShed = func(result validationWorkResult, count uint64) {
+				if result.validation != nil {
+					r.messageSeen.allowRetry(result.validation.SuppressionHash)
+				}
 				r.logUntrustedValidationSaturation("result", count)
 			}
 		}

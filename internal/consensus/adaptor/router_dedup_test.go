@@ -93,3 +93,20 @@ func TestMessageSuppression_RecordPeerAndHasHash(t *testing.T) {
 	assert.False(t, s.peerHasHash(other, 42),
 		"peer-set must be scoped per hash")
 }
+
+func TestMessageSuppression_DoesNotEvictLiveEntriesAtSweepThreshold(t *testing.T) {
+	now := time.Unix(1_700_000_000, 0)
+	s := newMessageSuppression(5*time.Minute, 4)
+	s.now = func() time.Time { return now }
+
+	first := [32]byte{1}
+	firstSeen, _ := s.observe(first)
+	assert.True(t, firstSeen)
+	for i := byte(2); i <= 8; i++ {
+		hash := [32]byte{i}
+		s.observe(hash)
+	}
+
+	firstSeen, _ = s.observe(first)
+	assert.False(t, firstSeen)
+}
