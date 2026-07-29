@@ -1,6 +1,7 @@
 package sponsor
 
 import (
+	"math"
 	"testing"
 
 	"github.com/LeJamon/go-xrpl/internal/ledger/state"
@@ -229,5 +230,16 @@ func TestSponsorReserveUsesEffectiveCounts(t *testing.T) {
 	account.SponsoredOwnerCount = 11
 	if _, ok := reserveRequired(config, account, 0, 0); ok {
 		t.Fatal("reserveRequired accepted SponsoredOwnerCount > OwnerCount")
+	}
+
+	account.OwnerCount = 10
+	account.SponsoredOwnerCount = 0
+	account.SponsoringOwnerCount = math.MaxUint32
+	effective, ok := effectiveOwnerCount(account, 0)
+	if !ok {
+		t.Fatal("effectiveOwnerCount rejected valid boundary counts")
+	}
+	if want := uint32(math.MaxInt32) + account.OwnerCount; effective != want {
+		t.Fatalf("effective owner count = %d, want %d", effective, want)
 	}
 }

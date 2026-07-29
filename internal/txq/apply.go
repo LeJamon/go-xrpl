@@ -190,6 +190,12 @@ func (q *TxQ) Apply(ctx ApplyContext, txn tx.Transaction, txID [32]byte, account
 	if ctx.GetApplyFlags()&tx.TapFAIL_HARD != 0 {
 		return ApplyResult{Result: ter.TelCAN_NOT_QUEUE, Applied: false}
 	}
+	if common.Delegate != "" {
+		return ApplyResult{Result: ter.TelCAN_NOT_QUEUE, Applied: false}
+	}
+	if common.SponsorFlags != nil && *common.SponsorFlags&tx.SpfSponsorFee != 0 {
+		return ApplyResult{Result: ter.TelCAN_NOT_QUEUE, Applied: false}
+	}
 
 	if !ctx.AccountExists(account) {
 		return ApplyResult{Result: ter.TerNO_ACCOUNT, Applied: false}

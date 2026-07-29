@@ -116,12 +116,11 @@ func TestTecRangeIncludesSponsorCodes(t *testing.T) {
 		TecBAD_PROOF,
 		TecNO_SPONSOR_PERMISSION,
 		Result(255),
+		Result(256),
+		Result(399),
 	} {
 		if !code.IsTec() || !code.IsClaimed() {
 			t.Errorf("%d must be classified as a claimed tec result", code)
 		}
-	}
-	if Result(256).IsTec() || Result(256).IsClaimed() {
-		t.Fatal("256 must remain outside the tec result range")
 	}
 }

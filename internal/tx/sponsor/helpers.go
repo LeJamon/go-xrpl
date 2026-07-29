@@ -114,12 +114,14 @@ func effectiveOwnerCount(account *state.AccountRoot, delta uint32) (uint32, bool
 	if account.SponsoredOwnerCount > account.OwnerCount {
 		return 0, false
 	}
-	total := uint64(account.OwnerCount-account.SponsoredOwnerCount) +
-		uint64(account.SponsoringOwnerCount) + uint64(delta)
-	if total > math.MaxUint32 {
-		return math.MaxUint32, true
+	adjustment := int64(delta) - int64(account.SponsoredOwnerCount) +
+		int64(account.SponsoringOwnerCount)
+	if adjustment > math.MaxInt32 {
+		adjustment = math.MaxInt32
+	} else if adjustment < math.MinInt32 {
+		adjustment = math.MinInt32
 	}
-	return uint32(total), true
+	return tx.ConfineOwnerCount(account.OwnerCount, int(adjustment)), true
 }
 
 func effectiveAccountCount(account *state.AccountRoot, delta uint32) uint32 {

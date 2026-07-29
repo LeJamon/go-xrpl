@@ -1,6 +1,8 @@
 package sponsor
 
 import (
+	"errors"
+
 	"github.com/LeJamon/go-xrpl/amendment"
 	"github.com/LeJamon/go-xrpl/internal/ledger/state"
 	"github.com/LeJamon/go-xrpl/internal/tx"
@@ -129,7 +131,7 @@ func (s *SponsorshipSet) Preclaim(view tx.LedgerView, _ tx.EngineConfig) ter.Res
 		return result
 	}
 	if sponsor.IsPseudoAccount() || sponsee.IsPseudoAccount() {
-		return ter.TecPSEUDO_ACCOUNT
+		return ter.TecNO_PERMISSION
 	}
 
 	existing, exists, result := loadSponsorship(view, sponsorID, sponseeID)
@@ -227,14 +229,20 @@ func (s *SponsorshipSet) create(
 		dir.Owner = sponsorID
 	})
 	if err != nil {
-		return ter.TecDIR_FULL
+		if errors.Is(err, state.ErrDirFull) {
+			return ter.TecDIR_FULL
+		}
+		return ctx.Internal("insert sponsor owner directory", err)
 	}
 	object.OwnerNode = ownerInsert.Page
 	sponseeInsert, err := state.DirInsert(ctx.View, keylet.OwnerDir(sponseeID), objectKey.Key, false, func(dir *state.DirectoryNode) {
 		dir.Owner = sponseeID
 	})
 	if err != nil {
-		return ter.TecDIR_FULL
+		if errors.Is(err, state.ErrDirFull) {
+			return ter.TecDIR_FULL
+		}
+		return ctx.Internal("insert sponsee owner directory", err)
 	}
 	object.SponseeNode = sponseeInsert.Page
 
