@@ -170,7 +170,6 @@ func (s *Store) SetRotation(lastRotated, minimumOnline uint32) error {
 		if lastRotated > next.LastRotated {
 			next.LastRotated = lastRotated
 		}
-		minimumOnline = max(minimumOnline, rotationMinimum(next.LastRotated))
 		if minimumOnline > next.MinimumOnline {
 			next.MinimumOnline = minimumOnline
 		}
@@ -211,7 +210,7 @@ func (s *Store) load() error {
 		s.canDelete = ps.CanDelete
 	}
 	s.lastRotated = ps.LastRotated
-	s.minimumOnline = max(ps.MinimumOnline, rotationMinimum(ps.LastRotated))
+	s.minimumOnline = ps.MinimumOnline
 	return nil
 }
 

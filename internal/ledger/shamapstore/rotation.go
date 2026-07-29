@@ -2,6 +2,7 @@ package shamapstore
 
 import (
 	"context"
+	"fmt"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -180,15 +181,20 @@ func (r *Rotator) ReconcileGenerationState() error {
 		return nil
 	}
 	generationLast, generationMinimum := generations.GenerationState()
-	lastRotated := max(generationLast, r.store.GetLastRotated())
-	minimumOnline := max(generationMinimum, r.store.GetMinimumOnline(), rotationMinimum(lastRotated))
-	if lastRotated == r.store.GetLastRotated() && minimumOnline == r.store.GetMinimumOnline() {
+	storedLast := r.store.GetLastRotated()
+	storedMinimum := r.store.GetMinimumOnline()
+	if generationLast > storedLast && generationMinimum == 0 && storedMinimum == 0 {
+		return fmt.Errorf("generation state at ledger %d has no minimum online boundary", generationLast)
+	}
+	lastRotated := max(generationLast, storedLast)
+	minimumOnline := max(generationMinimum, storedMinimum)
+	if lastRotated == storedLast && minimumOnline == storedMinimum {
 		return nil
 	}
 	if err := r.store.SetRotation(lastRotated, minimumOnline); err != nil {
 		return err
 	}
-	r.minimumOnline.Store(minimumOnline)
+	r.minimumOnline.Store(r.store.GetMinimumOnline())
 	return nil
 }
 

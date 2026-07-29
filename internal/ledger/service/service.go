@@ -525,8 +525,10 @@ func (s *Service) Start() (err error) {
 			if err := s.persistValidatedLedger(context.Background(), selection.ledger, true); err != nil {
 				return fmt.Errorf("persist fresh initial ledger: %w", err)
 			}
-		} else if err := s.persistToNodeStore(context.Background(), selection.ledger, selection.ledger.Sequence()); err != nil {
-			return fmt.Errorf("persist fresh initial ledger: %w", err)
+		} else if s.nodeStore != nil {
+			if err := s.persistToNodeStore(context.Background(), selection.ledger, selection.ledger.Sequence()); err != nil {
+				return fmt.Errorf("persist fresh initial ledger: %w", err)
+			}
 		}
 	}
 	if selection.loaded {

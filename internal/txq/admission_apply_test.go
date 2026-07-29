@@ -565,7 +565,7 @@ func TestApplyAccountRootReadErrorsAreFatal(t *testing.T) {
 		{
 			name: "balance",
 			ctx: &stubApplyCtx{
-				seq:        5,
+				seq:        4,
 				balanceErr: errors.New("balance read failed"),
 				exists:     true,
 				baseFee:    10,

@@ -15,6 +15,7 @@ import (
 	"github.com/LeJamon/go-xrpl/crypto/sha512half"
 	"github.com/LeJamon/go-xrpl/drops"
 	"github.com/LeJamon/go-xrpl/internal/ledger/genesis"
+	"github.com/LeJamon/go-xrpl/internal/ledger/header"
 	"github.com/LeJamon/go-xrpl/keylet"
 	xrpllog "github.com/LeJamon/go-xrpl/log"
 	"github.com/LeJamon/go-xrpl/protocol"
@@ -522,8 +523,7 @@ func TestService_FastLoadRestoresPersistedValidatedLedger(t *testing.T) {
 	})
 	require.NoError(t, err)
 	require.NoError(t, first.Start())
-	txBlob := []byte("synthetic-tx")
-	txHash := sha512half.Sum(protocol.HashPrefixTransactionID().Bytes(), txBlob)
+	txBlob, txHash := makeTxMetaBlobForTest(t, []byte("synthetic-tx"), 0)
 	require.NoError(t, first.openLedger.AddTransaction(txHash, txBlob))
 	seq, err := first.AcceptLedger(ctx)
 	require.NoError(t, err)
@@ -627,7 +627,8 @@ func TestService_FastLoadReplacesSameHeightOnlyAfterTrustedQuorum(t *testing.T) 
 	require.NoError(t, err)
 	replacementHeader := loaded.Header()
 	replacementHeader.Validated = false
-	replacementHeader.Hash[0] ^= 0xFF
+	replacementHeader.CloseFlags ^= header.LCFNoConsensusTime
+	replacementHeader.Hash = header.CalculateHash(replacementHeader)
 	replacementHash := replacementHeader.Hash
 
 	initialCandidate, err := svc.BootstrapLedgerWithState(

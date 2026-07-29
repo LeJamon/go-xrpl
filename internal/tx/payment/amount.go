@@ -271,5 +271,6 @@ func toNumberAmount(amt EitherAmount) tx.Amount {
 	if amt.IsMPT {
 		return tx.NewIssuedAmount(amt.MPT, 0, "", "")
 	}
-	return amt.IOU
+	value := amt.IOU.IOU()
+	return tx.NewIssuedAmount(value.Mantissa(), value.Exponent(), "", "")
 }

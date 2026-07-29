@@ -448,6 +448,28 @@ func TestRotator_ReconcilesDurableGenerationAfterBookkeepingCrash(t *testing.T) 
 	}
 }
 
+func TestRotator_ReconcileRejectsGenerationWithoutMinimumOnline(t *testing.T) {
+	store, err := New(false, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.SetLastRotated(500); err != nil {
+		t.Fatal(err)
+	}
+	nodes := &fakeGenerationPruner{
+		committed:   true,
+		lastRotated: 800,
+	}
+	r := NewRotator(store, nodes, nil, RotationConfig{DeleteInterval: 256}, nil)
+
+	if err := r.ReconcileGenerationState(); err == nil {
+		t.Fatal("ReconcileGenerationState accepted a generation without a minimum online boundary")
+	}
+	if got := store.GetLastRotated(); got != 500 {
+		t.Fatalf("lastRotated = %d after rejected reconciliation, want 500", got)
+	}
+}
+
 func TestRotator_ReconcilePreservesHigherExistingMinimumOnline(t *testing.T) {
 	store, err := New(false, "")
 	if err != nil {
