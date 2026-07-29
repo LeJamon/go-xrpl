@@ -48,10 +48,7 @@ func incompleteStateAcquisition(t *testing.T) *Ledger {
 	return il
 }
 
-// TestLedger_OnTimer_FailsCleanlyAfterBudget pins the core of issue #985: a
-// non-progressing acquisition escalates for ledgerTimeoutRetriesMax no-progress
-// intervals, then fails cleanly instead of re-arming the same stall forever.
-func TestLedger_OnTimer_FailsCleanlyAfterBudget(t *testing.T) {
+func TestLedger_OnTimer_FailsAfterSevenConsecutiveQuietIntervals(t *testing.T) {
 	t.Parallel()
 	il := New([32]byte{0xAB}, 42, 1, discardLogger())
 	il.state = StateWantState
@@ -75,8 +72,8 @@ func TestLedger_OnTimer_FailsCleanlyAfterBudget(t *testing.T) {
 	if il.State() != StateFailed {
 		t.Fatalf("state = %v, want StateFailed", il.State())
 	}
-	if il.Err() == nil {
-		t.Fatal("a failed acquisition must carry a terminal error")
+	if err := il.Err(); err == nil || !strings.Contains(err.Error(), "7 consecutive timeouts") {
+		t.Fatalf("terminal error = %v, want seven consecutive timeouts", err)
 	}
 }
 
@@ -108,51 +105,35 @@ func TestLedger_OnTimer_ReportsIntervalStallWithLifetimeTotals(t *testing.T) {
 	}
 }
 
-// TestLedger_OnTimer_ProgressPreservesCumulativeFailureBudget confirms useful
-// intervals do not count as timeouts but also do not erase prior no-progress
-// strikes, matching rippled's TimeoutCounter.
-func TestLedger_OnTimer_ProgressPreservesCumulativeFailureBudget(t *testing.T) {
+func TestLedger_OnTimer_AlternatingProgressAndQuietPreservesCumulativeTimeouts(t *testing.T) {
 	t.Parallel()
 	il := New([32]byte{0x01}, 7, 1, discardLogger())
 	il.state = StateWantState
 	base := time.Unix(1_700_000_000, 0)
 	il.lastTimer = base
 
-	for i := 1; i <= 5; i++ {
-		il.OnTimer(base.Add(time.Duration(i) * acquireTimerInterval))
-	}
-	if il.Timeouts() != 5 {
-		t.Fatalf("timeouts = %d, want 5 after five no-progress fires", il.Timeouts())
-	}
+	now := base
+	quietIntervals := ledgerTimeoutRetriesMax + 2
+	for i := 1; i <= quietIntervals; i++ {
+		now = now.Add(acquireTimerInterval)
+		if got := il.OnTimer(now); got != TimerEscalate {
+			t.Fatalf("quiet interval %d: got %v, want TimerEscalate", i, got)
+		}
+		il.RearmTimer(now)
 
-	il.mu.Lock()
-	il.markProgressLocked()
-	il.mu.Unlock()
-	if got := il.OnTimer(base.Add(6 * acquireTimerInterval)); got != TimerRefresh {
-		t.Fatalf("progress fire: got %v, want TimerRefresh", got)
+		il.mu.Lock()
+		il.markProgressLocked()
+		il.mu.Unlock()
+		now = now.Add(acquireTimerInterval)
+		if got := il.OnTimer(now); got != TimerRefresh {
+			t.Fatalf("progress interval %d: got %v, want TimerRefresh", i, got)
+		}
+		if il.State() == StateFailed {
+			t.Fatalf("alternating progress failed after %d cumulative quiet intervals", i)
+		}
 	}
-	if il.Timeouts() != 5 {
-		t.Fatalf("a progressing interval must not count a timeout, got %d", il.Timeouts())
-	}
-
-	next := base.Add(7 * acquireTimerInterval)
-	if got := il.OnTimer(next); got != TimerEscalate {
-		t.Fatalf("sixth no-progress fire: got %v, want TimerEscalate", got)
-	}
-	il.RearmTimer(next)
-
-	il.mu.Lock()
-	il.markProgressLocked()
-	il.mu.Unlock()
-	if got := il.OnTimer(base.Add(8 * acquireTimerInterval)); got != TimerRefresh {
-		t.Fatalf("second progress fire: got %v, want TimerRefresh", got)
-	}
-	if got := il.Timeouts(); got != ledgerTimeoutRetriesMax {
-		t.Fatalf("progress erased the cumulative budget: got %d, want %d", got, ledgerTimeoutRetriesMax)
-	}
-
-	if got := il.OnTimer(base.Add(9 * acquireTimerInterval)); got != TimerFailed {
-		t.Fatalf("seventh no-progress fire: got %v, want TimerFailed", got)
+	if got := il.Timeouts(); got != quietIntervals {
+		t.Fatalf("timeouts = %d, want cumulative total %d", got, quietIntervals)
 	}
 }
 

@@ -148,20 +148,9 @@ func (o *Overlay) connectReserved(addr string, bootstrapLease *bootstrapLease) e
 	go func() {
 		defer o.peerWG.Done()
 		err := peer.Run(baseCtx)
-		if bootstrapLease != nil && baseCtx.Err() == nil {
-			retry := recentConnectAttempt
-			var frameErr *FrameReadError
-			if errors.As(err, &frameErr) && frameErr.MessageType == TypeManifests && frameErr.BytesRead > 0 {
-				retry = bootstrapPartialRetry
-				slog.Info("Bootstrap source quarantined", "t", "Overlay", "addr", addr,
-					"retry_after", retry, "wire_size", frameErr.WireSize,
-					"compressed", frameErr.Compressed, "bytes_read", frameErr.BytesRead,
-					"elapsed", frameErr.Elapsed, "rate", frameReadRate(frameErr.BytesRead, frameErr.Elapsed),
-					"projected", projectedFrameDuration(frameErr.WireSize, frameErr.BytesRead, frameErr.Elapsed))
-			}
-			o.discovery.delayBootstrapRetry(addr, retry)
-		}
-		o.onBootstrapTransportEnd(peerID, bootstrapLease != nil && peer.bootstrapManifestPending.Load(), baseCtx.Err() != nil)
+		stopping := baseCtx.Err() != nil
+		o.delayPeerRetry(addr, bootstrapLease != nil, err, stopping)
+		o.onBootstrapTransportEnd(peerID, bootstrapLease != nil && peer.bootstrapManifestPending.Load(), stopping)
 		if err != nil {
 			slog.Info("Peer run ended", "t", "Overlay", "addr", addr, "err", err)
 			o.notePeerRunEnded(err)
@@ -170,6 +159,28 @@ func (o *Overlay) connectReserved(addr string, bootstrapLease *bootstrapLease) e
 	}()
 
 	return nil
+}
+
+func (o *Overlay) delayPeerRetry(addr string, bootstrap bool, err error, stopping bool) {
+	if stopping {
+		return
+	}
+	retry := time.Duration(0)
+	if bootstrap {
+		retry = recentConnectAttempt
+	}
+	var frameErr *FrameReadError
+	if errors.As(err, &frameErr) && frameErr.MessageType == TypeManifests && frameErr.BytesRead > 0 {
+		retry = bootstrapPartialRetry
+		slog.Info("Manifest source quarantined", "t", "Overlay", "addr", addr,
+			"retry_after", retry, "wire_size", frameErr.WireSize,
+			"compressed", frameErr.Compressed, "bytes_read", frameErr.BytesRead,
+			"elapsed", frameErr.Elapsed, "rate", frameReadRate(frameErr.BytesRead, frameErr.Elapsed),
+			"projected", projectedFrameDuration(frameErr.WireSize, frameErr.BytesRead, frameErr.Elapsed))
+	}
+	if retry > 0 {
+		o.discovery.delayConnectRetry(addr, retry)
+	}
 }
 
 func (o *Overlay) trackPeerBootstrap(peerID PeerID, lease *bootstrapLease) {

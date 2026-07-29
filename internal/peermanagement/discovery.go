@@ -1084,7 +1084,7 @@ func (d *Discovery) markNegotiatedCompression(address string, enabled bool) {
 	peer.supportsCompression = enabled
 }
 
-func (d *Discovery) delayBootstrapRetry(address string, delay time.Duration) {
+func (d *Discovery) delayConnectRetry(address string, delay time.Duration) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	host := connectAttemptHost(address)
