@@ -16,7 +16,6 @@ import (
 	_ "modernc.org/sqlite"
 )
 
-// RepositoryManager owns SQLite relational repositories and their lifecycle.
 type RepositoryManager struct {
 	ledgerDB *sqlutil.DB
 	txDB     *sqlutil.DB
@@ -170,22 +169,18 @@ func (rm *RepositoryManager) Transaction() relationaldb.TransactionRepository {
 	return rm.transactionRepo
 }
 
-// AccountTransaction returns the account transaction repository.
 func (rm *RepositoryManager) AccountTransaction() relationaldb.AccountTransactionRepository {
 	return rm.accountTransactionRepo
 }
 
-// Validation returns the validation archive repository.
 func (rm *RepositoryManager) Validation() relationaldb.ValidationRepository {
 	return rm.validationRepo
 }
 
-// Amendment returns the amendment vote repository.
 func (rm *RepositoryManager) Amendment() relationaldb.AmendmentVoteRepository {
 	return rm.amendmentVoteRepo
 }
 
-// WithTransaction invokes fn with transaction-bound repositories.
 func (rm *RepositoryManager) WithTransaction(ctx context.Context, fn func(relationaldb.TransactionRepositories) error) (err error) {
 	end, err := rm.gate.Begin()
 	if err != nil {

@@ -100,8 +100,6 @@ func (c *nodeCache) shardFor(h Hash256) *cacheShard {
 }
 
 // Get returns the cached *Node and true on hit, (nil, false) otherwise.
-// The returned *Node aliases the cache entry; see the nodeCache doc for the
-// no-mutation contract.
 func (c *nodeCache) Get(hash Hash256) (*Node, bool) {
 	s := c.shardFor(hash)
 	s.mu.Lock()
@@ -208,7 +206,6 @@ func (c *nodeCache) Size() int {
 	return size
 }
 
-// Sweep removes expired entries across every shard.
 func (c *nodeCache) Sweep() int {
 	removed := 0
 	now := time.Now()

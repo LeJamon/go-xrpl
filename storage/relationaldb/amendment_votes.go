@@ -19,7 +19,6 @@ type AmendmentVoteRecord struct {
 	Vetoed bool
 }
 
-// Validate checks that Amendment is a canonical amendment identifier.
 func (r AmendmentVoteRecord) Validate() error {
 	if len(r.Amendment) != 64 {
 		return fmt.Errorf("%w: amendment ID has length %d, want 64", ErrInvalidData, len(r.Amendment))

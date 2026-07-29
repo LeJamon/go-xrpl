@@ -11,7 +11,6 @@ import (
 	"github.com/LeJamon/go-xrpl/storage/relationaldb/internal/sqlutil"
 )
 
-// ledgerRepository is the SQLite-backed ledger repository.
 type ledgerRepository struct {
 	db executor
 }

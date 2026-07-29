@@ -127,13 +127,11 @@ type IndexedTransaction struct {
 	Accounts    []AccountID
 }
 
-// ValidatedLedger contains a ledger header and its indexed transactions.
 type ValidatedLedger struct {
 	Ledger       LedgerInfo
 	Transactions []IndexedTransaction
 }
 
-// Validate checks the invariants required for atomic ledger persistence.
 func (v ValidatedLedger) Validate() error {
 	if v.Ledger.Hash.IsZero() {
 		return NewDataError("persist_validated_ledger", "ledger hash is zero", ErrInvalidData)

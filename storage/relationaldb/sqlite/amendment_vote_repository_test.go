@@ -50,7 +50,6 @@ func TestAmendmentVoteRepository_RoundTrip(t *testing.T) {
 		t.Fatalf("beta should be vetoed: %+v", byID[beta])
 	}
 
-	// Upsert: flip alpha to vetoed.
 	if err := repo.SaveAmendmentVote(ctx, relationaldb.AmendmentVoteRecord{Amendment: alpha, Name: "Alpha", Vetoed: true}); err != nil {
 		t.Fatalf("upsert: %v", err)
 	}
@@ -59,7 +58,6 @@ func TestAmendmentVoteRepository_RoundTrip(t *testing.T) {
 		t.Fatalf("upsert must not duplicate; got %d rows", len(got))
 	}
 
-	// Delete beta.
 	if err := repo.DeleteAmendmentVote(ctx, beta); err != nil {
 		t.Fatalf("delete: %v", err)
 	}

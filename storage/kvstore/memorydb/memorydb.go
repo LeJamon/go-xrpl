@@ -55,7 +55,6 @@ func (m *MemDatabase) Put(key []byte, value []byte) error {
 	return nil
 }
 
-// NewBatch returns a new batch for accumulating writes.
 func (m *MemDatabase) NewBatch() (kvstore.Batch, error) {
 	m.lock.RLock()
 	defer m.lock.RUnlock()
@@ -254,7 +253,6 @@ func (it *memIterator) Error() error {
 	return nil
 }
 
-// Close frees the iterator's resources.
 func (it *memIterator) Close() error {
 	if it.closed {
 		return nil

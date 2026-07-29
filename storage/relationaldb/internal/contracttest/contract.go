@@ -1,4 +1,3 @@
-// Package contracttest verifies relational repository backend parity.
 package contracttest
 
 import (
@@ -12,10 +11,8 @@ import (
 	"github.com/LeJamon/go-xrpl/storage/relationaldb"
 )
 
-// Factory creates an isolated repository manager for one test.
 type Factory func(*testing.T) relationaldb.RepositoryManager
 
-// Run executes the shared relational repository contract.
 func Run(t *testing.T, factory Factory) {
 	t.Helper()
 	t.Run("ready lifecycle", func(t *testing.T) {
@@ -757,7 +754,6 @@ func runAmendmentRepository(t *testing.T, factory Factory) {
 	}
 }
 
-// WaitForTransactionRejection waits until a closing manager rejects new work.
 func WaitForTransactionRejection(t *testing.T, manager relationaldb.RepositoryManager) {
 	t.Helper()
 	deadline := time.Now().Add(time.Second)
