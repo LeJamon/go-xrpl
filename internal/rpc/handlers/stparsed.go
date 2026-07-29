@@ -128,6 +128,11 @@ var innerObjectTemplates = map[string]map[string]innerFieldStyle{
 		"TxnSignature":  innerOptional,
 		"Signers":       innerOptional,
 	},
+	"SponsorSignature": {
+		"SigningPubKey": innerOptional,
+		"TxnSignature":  innerOptional,
+		"Signers":       innerOptional,
+	},
 }
 
 func serializedFieldParseMessage(value any, path string, defs *binarycodecdefs.Definitions) string {

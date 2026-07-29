@@ -40,6 +40,7 @@ type Check struct {
 	Flags             uint32
 	PreviousTxnID     string // Hash256 (uppercase hex)
 	PreviousTxnLgrSeq uint32
+	Sponsor           string // AccountID (base58)
 }
 
 const (
@@ -56,6 +57,7 @@ const (
 	checkBitFlags
 	checkBitPreviousTxnID
 	checkBitPreviousTxnLgrSeq
+	checkBitSponsor
 )
 
 // SetAccount assigns Account and updates its serialized presence.
@@ -147,6 +149,13 @@ func (c *Check) SetPreviousTxnLgrSeq(value uint32) {
 	c.PreviousTxnLgrSeq = value
 	c.dirty = true
 	c.present |= checkBitPreviousTxnLgrSeq
+}
+
+// SetSponsor assigns Sponsor and updates its serialized presence.
+func (c *Check) SetSponsor(value string) {
+	c.Sponsor = value
+	c.dirty = true
+	c.present |= checkBitSponsor
 }
 
 func (c *Check) validateRequired() error {
@@ -334,6 +343,9 @@ func (c *Check) decode(data []byte, legacy bool) error {
 			case 3:
 				c.Destination = val
 				c.present |= checkBitDestination
+			case 27:
+				c.Sponsor = val
+				c.present |= checkBitSponsor
 			default:
 				return newErrUnknownField("Check", typeCode, fieldCode)
 			}
@@ -388,6 +400,9 @@ func (c *Check) emitAll(out map[string]any, skipDefault bool) {
 	if c.present&checkBitFlags != 0 && !(skipDefault && c.Flags == 0) {
 		out["Flags"] = c.Flags
 	}
+	if c.present&checkBitSponsor != 0 && !(skipDefault && c.Sponsor == "") {
+		out["Sponsor"] = c.Sponsor
+	}
 }
 
 // EmitNewFields emits fields for a CreatedNode (sMD_Create | sMD_Always),
@@ -420,6 +435,7 @@ func (c *Check) EmitPreviousFields(prev Entry, out map[string]any) {
 	emitIfChangedUint32(out, "SourceTag", prv.SourceTag, c.SourceTag, prv.present&checkBitSourceTag, c.present&checkBitSourceTag)
 	emitIfChangedUint32(out, "DestinationTag", prv.DestinationTag, c.DestinationTag, prv.present&checkBitDestinationTag, c.present&checkBitDestinationTag)
 	emitIfChangedUint32(out, "Flags", prv.Flags, c.Flags, prv.present&checkBitFlags, c.present&checkBitFlags)
+	emitIfChangedString(out, "Sponsor", prv.Sponsor, c.Sponsor, prv.present&checkBitSponsor, c.present&checkBitSponsor)
 }
 
 // EmitChangeOrigFields writes the names of every present field carrying
@@ -460,6 +476,9 @@ func (c *Check) EmitChangeOrigFields(out map[string]any) {
 	}
 	if c.present&checkBitFlags != 0 {
 		out["Flags"] = c.Flags
+	}
+	if c.present&checkBitSponsor != 0 {
+		out["Sponsor"] = c.Sponsor
 	}
 }
 
@@ -540,6 +559,9 @@ func (c *Check) ToMap() map[string]any {
 	}
 	if c.present&checkBitPreviousTxnLgrSeq != 0 {
 		out["PreviousTxnLgrSeq"] = c.PreviousTxnLgrSeq
+	}
+	if c.present&checkBitSponsor != 0 {
+		out["Sponsor"] = c.Sponsor
 	}
 	return out
 }

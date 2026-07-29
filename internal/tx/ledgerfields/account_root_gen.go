@@ -24,33 +24,37 @@ func init() {
 // every canonical field declared in the spec — including those excluded from
 // metadata (sMD_Never) — so decoding and re-encoding does not drop them.
 type AccountRoot struct {
-	present              uint64
-	decoded              bool
-	dirty                bool
-	Account              string // AccountID (base58)
-	Balance              any    // Amount (XRP string | IOU map)
-	Sequence             uint32
-	OwnerCount           uint32
-	Flags                uint32
-	RegularKey           string // AccountID (base58)
-	Domain               string // Blob (uppercase hex)
-	EmailHash            string // Hash128 (uppercase hex)
-	MessageKey           string // Blob (uppercase hex)
-	TransferRate         uint32
-	TickSize             int
-	NFTokenMinter        string // AccountID (base58)
-	MintedNFTokens       uint32
-	BurnedNFTokens       uint32
-	FirstNFTokenSequence uint32
-	AccountTxnID         string // Hash256 (uppercase hex)
-	WalletLocator        string // Hash256 (uppercase hex)
-	TicketCount          uint32
-	AMMID                string // Hash256 (uppercase hex)
-	VaultID              string // Hash256 (uppercase hex)
-	LoanBrokerID         string // Hash256 (uppercase hex)
-	WalletSize           uint32
-	PreviousTxnID        string // Hash256 (uppercase hex)
-	PreviousTxnLgrSeq    uint32
+	present                uint64
+	decoded                bool
+	dirty                  bool
+	Account                string // AccountID (base58)
+	Balance                any    // Amount (XRP string | IOU map)
+	Sequence               uint32
+	OwnerCount             uint32
+	SponsoredOwnerCount    uint32
+	SponsoringOwnerCount   uint32
+	SponsoringAccountCount uint32
+	Flags                  uint32
+	RegularKey             string // AccountID (base58)
+	Domain                 string // Blob (uppercase hex)
+	EmailHash              string // Hash128 (uppercase hex)
+	MessageKey             string // Blob (uppercase hex)
+	TransferRate           uint32
+	TickSize               int
+	NFTokenMinter          string // AccountID (base58)
+	MintedNFTokens         uint32
+	BurnedNFTokens         uint32
+	FirstNFTokenSequence   uint32
+	AccountTxnID           string // Hash256 (uppercase hex)
+	WalletLocator          string // Hash256 (uppercase hex)
+	TicketCount            uint32
+	AMMID                  string // Hash256 (uppercase hex)
+	VaultID                string // Hash256 (uppercase hex)
+	LoanBrokerID           string // Hash256 (uppercase hex)
+	WalletSize             uint32
+	PreviousTxnID          string // Hash256 (uppercase hex)
+	PreviousTxnLgrSeq      uint32
+	Sponsor                string // AccountID (base58)
 }
 
 const (
@@ -58,6 +62,9 @@ const (
 	accountrootBitBalance
 	accountrootBitSequence
 	accountrootBitOwnerCount
+	accountrootBitSponsoredOwnerCount
+	accountrootBitSponsoringOwnerCount
+	accountrootBitSponsoringAccountCount
 	accountrootBitFlags
 	accountrootBitRegularKey
 	accountrootBitDomain
@@ -78,6 +85,7 @@ const (
 	accountrootBitWalletSize
 	accountrootBitPreviousTxnID
 	accountrootBitPreviousTxnLgrSeq
+	accountrootBitSponsor
 )
 
 // SetAccount assigns Account and updates its serialized presence.
@@ -106,6 +114,39 @@ func (a *AccountRoot) SetOwnerCount(value uint32) {
 	a.OwnerCount = value
 	a.dirty = true
 	a.present |= accountrootBitOwnerCount
+}
+
+// SetSponsoredOwnerCount assigns SponsoredOwnerCount and updates its serialized presence.
+func (a *AccountRoot) SetSponsoredOwnerCount(value uint32) {
+	a.SponsoredOwnerCount = value
+	a.dirty = true
+	if value == 0 {
+		a.present &^= accountrootBitSponsoredOwnerCount
+		return
+	}
+	a.present |= accountrootBitSponsoredOwnerCount
+}
+
+// SetSponsoringOwnerCount assigns SponsoringOwnerCount and updates its serialized presence.
+func (a *AccountRoot) SetSponsoringOwnerCount(value uint32) {
+	a.SponsoringOwnerCount = value
+	a.dirty = true
+	if value == 0 {
+		a.present &^= accountrootBitSponsoringOwnerCount
+		return
+	}
+	a.present |= accountrootBitSponsoringOwnerCount
+}
+
+// SetSponsoringAccountCount assigns SponsoringAccountCount and updates its serialized presence.
+func (a *AccountRoot) SetSponsoringAccountCount(value uint32) {
+	a.SponsoringAccountCount = value
+	a.dirty = true
+	if value == 0 {
+		a.present &^= accountrootBitSponsoringAccountCount
+		return
+	}
+	a.present |= accountrootBitSponsoringAccountCount
 }
 
 // SetFlags assigns Flags and updates its serialized presence.
@@ -256,6 +297,13 @@ func (a *AccountRoot) SetPreviousTxnLgrSeq(value uint32) {
 	a.present |= accountrootBitPreviousTxnLgrSeq
 }
 
+// SetSponsor assigns Sponsor and updates its serialized presence.
+func (a *AccountRoot) SetSponsor(value string) {
+	a.Sponsor = value
+	a.dirty = true
+	a.present |= accountrootBitSponsor
+}
+
 func (a *AccountRoot) validateRequired() error {
 	if a.decoded && !a.dirty {
 		return nil
@@ -290,6 +338,15 @@ func (a *AccountRoot) validateDecoded() error {
 	}
 	if a.present&accountrootBitOwnerCount == 0 {
 		return errors.New("ledgerfields: AccountRoot: required field OwnerCount is missing")
+	}
+	if a.present&accountrootBitSponsoredOwnerCount != 0 && a.SponsoredOwnerCount == 0 {
+		return errors.New("ledgerfields: AccountRoot: default field SponsoredOwnerCount is explicitly set")
+	}
+	if a.present&accountrootBitSponsoringOwnerCount != 0 && a.SponsoringOwnerCount == 0 {
+		return errors.New("ledgerfields: AccountRoot: default field SponsoringOwnerCount is explicitly set")
+	}
+	if a.present&accountrootBitSponsoringAccountCount != 0 && a.SponsoringAccountCount == 0 {
+		return errors.New("ledgerfields: AccountRoot: default field SponsoringAccountCount is explicitly set")
 	}
 	if a.present&accountrootBitFlags == 0 {
 		return errors.New("ledgerfields: AccountRoot: required field Flags is missing")
@@ -386,6 +443,15 @@ func (a *AccountRoot) decode(data []byte, legacy bool) error {
 			case 50:
 				a.FirstNFTokenSequence = val
 				a.present |= accountrootBitFirstNFTokenSequence
+			case 70:
+				a.SponsoredOwnerCount = val
+				a.present |= accountrootBitSponsoredOwnerCount
+			case 71:
+				a.SponsoringOwnerCount = val
+				a.present |= accountrootBitSponsoringOwnerCount
+			case 72:
+				a.SponsoringAccountCount = val
+				a.present |= accountrootBitSponsoringAccountCount
 			default:
 				return newErrUnknownField("AccountRoot", typeCode, fieldCode)
 			}
@@ -472,6 +538,9 @@ func (a *AccountRoot) decode(data []byte, legacy bool) error {
 			case 9:
 				a.NFTokenMinter = val
 				a.present |= accountrootBitNFTokenMinter
+			case 27:
+				a.Sponsor = val
+				a.present |= accountrootBitSponsor
 			default:
 				return newErrUnknownField("AccountRoot", typeCode, fieldCode)
 			}
@@ -517,6 +586,15 @@ func (a *AccountRoot) emitAll(out map[string]any, skipDefault bool) {
 	}
 	if a.present&accountrootBitOwnerCount != 0 && !(skipDefault && a.OwnerCount == 0) {
 		out["OwnerCount"] = a.OwnerCount
+	}
+	if a.present&accountrootBitSponsoredOwnerCount != 0 && !(skipDefault && a.SponsoredOwnerCount == 0) {
+		out["SponsoredOwnerCount"] = a.SponsoredOwnerCount
+	}
+	if a.present&accountrootBitSponsoringOwnerCount != 0 && !(skipDefault && a.SponsoringOwnerCount == 0) {
+		out["SponsoringOwnerCount"] = a.SponsoringOwnerCount
+	}
+	if a.present&accountrootBitSponsoringAccountCount != 0 && !(skipDefault && a.SponsoringAccountCount == 0) {
+		out["SponsoringAccountCount"] = a.SponsoringAccountCount
 	}
 	if a.present&accountrootBitFlags != 0 && !(skipDefault && a.Flags == 0) {
 		out["Flags"] = a.Flags
@@ -572,6 +650,9 @@ func (a *AccountRoot) emitAll(out map[string]any, skipDefault bool) {
 	if a.present&accountrootBitWalletSize != 0 && !(skipDefault && a.WalletSize == 0) {
 		out["WalletSize"] = a.WalletSize
 	}
+	if a.present&accountrootBitSponsor != 0 && !(skipDefault && a.Sponsor == "") {
+		out["Sponsor"] = a.Sponsor
+	}
 }
 
 // EmitNewFields emits fields for a CreatedNode (sMD_Create | sMD_Always),
@@ -597,6 +678,9 @@ func (a *AccountRoot) EmitPreviousFields(prev Entry, out map[string]any) {
 	emitIfChangedAmount(out, "Balance", prv.Balance, a.Balance, prv.present&accountrootBitBalance, a.present&accountrootBitBalance)
 	emitIfChangedUint32(out, "Sequence", prv.Sequence, a.Sequence, prv.present&accountrootBitSequence, a.present&accountrootBitSequence)
 	emitIfChangedUint32(out, "OwnerCount", prv.OwnerCount, a.OwnerCount, prv.present&accountrootBitOwnerCount, a.present&accountrootBitOwnerCount)
+	emitIfChangedUint32(out, "SponsoredOwnerCount", prv.SponsoredOwnerCount, a.SponsoredOwnerCount, prv.present&accountrootBitSponsoredOwnerCount, a.present&accountrootBitSponsoredOwnerCount)
+	emitIfChangedUint32(out, "SponsoringOwnerCount", prv.SponsoringOwnerCount, a.SponsoringOwnerCount, prv.present&accountrootBitSponsoringOwnerCount, a.present&accountrootBitSponsoringOwnerCount)
+	emitIfChangedUint32(out, "SponsoringAccountCount", prv.SponsoringAccountCount, a.SponsoringAccountCount, prv.present&accountrootBitSponsoringAccountCount, a.present&accountrootBitSponsoringAccountCount)
 	emitIfChangedUint32(out, "Flags", prv.Flags, a.Flags, prv.present&accountrootBitFlags, a.present&accountrootBitFlags)
 	emitIfChangedString(out, "RegularKey", prv.RegularKey, a.RegularKey, prv.present&accountrootBitRegularKey, a.present&accountrootBitRegularKey)
 	emitIfChangedString(out, "Domain", prv.Domain, a.Domain, prv.present&accountrootBitDomain, a.present&accountrootBitDomain)
@@ -615,6 +699,7 @@ func (a *AccountRoot) EmitPreviousFields(prev Entry, out map[string]any) {
 	emitIfChangedString(out, "VaultID", prv.VaultID, a.VaultID, prv.present&accountrootBitVaultID, a.present&accountrootBitVaultID)
 	emitIfChangedString(out, "LoanBrokerID", prv.LoanBrokerID, a.LoanBrokerID, prv.present&accountrootBitLoanBrokerID, a.present&accountrootBitLoanBrokerID)
 	emitIfChangedUint32(out, "WalletSize", prv.WalletSize, a.WalletSize, prv.present&accountrootBitWalletSize, a.present&accountrootBitWalletSize)
+	emitIfChangedString(out, "Sponsor", prv.Sponsor, a.Sponsor, prv.present&accountrootBitSponsor, a.present&accountrootBitSponsor)
 }
 
 // EmitChangeOrigFields writes the names of every present field carrying
@@ -634,6 +719,15 @@ func (a *AccountRoot) EmitChangeOrigFields(out map[string]any) {
 	}
 	if a.present&accountrootBitOwnerCount != 0 {
 		out["OwnerCount"] = a.OwnerCount
+	}
+	if a.present&accountrootBitSponsoredOwnerCount != 0 {
+		out["SponsoredOwnerCount"] = a.SponsoredOwnerCount
+	}
+	if a.present&accountrootBitSponsoringOwnerCount != 0 {
+		out["SponsoringOwnerCount"] = a.SponsoringOwnerCount
+	}
+	if a.present&accountrootBitSponsoringAccountCount != 0 {
+		out["SponsoringAccountCount"] = a.SponsoringAccountCount
 	}
 	if a.present&accountrootBitFlags != 0 {
 		out["Flags"] = a.Flags
@@ -688,6 +782,9 @@ func (a *AccountRoot) EmitChangeOrigFields(out map[string]any) {
 	}
 	if a.present&accountrootBitWalletSize != 0 {
 		out["WalletSize"] = a.WalletSize
+	}
+	if a.present&accountrootBitSponsor != 0 {
+		out["Sponsor"] = a.Sponsor
 	}
 }
 
@@ -742,6 +839,15 @@ func (a *AccountRoot) ToMap() map[string]any {
 	if a.present&accountrootBitOwnerCount != 0 {
 		out["OwnerCount"] = a.OwnerCount
 	}
+	if a.present&accountrootBitSponsoredOwnerCount != 0 {
+		out["SponsoredOwnerCount"] = a.SponsoredOwnerCount
+	}
+	if a.present&accountrootBitSponsoringOwnerCount != 0 {
+		out["SponsoringOwnerCount"] = a.SponsoringOwnerCount
+	}
+	if a.present&accountrootBitSponsoringAccountCount != 0 {
+		out["SponsoringAccountCount"] = a.SponsoringAccountCount
+	}
 	if a.present&accountrootBitFlags != 0 {
 		out["Flags"] = a.Flags
 	}
@@ -801,6 +907,9 @@ func (a *AccountRoot) ToMap() map[string]any {
 	}
 	if a.present&accountrootBitPreviousTxnLgrSeq != 0 {
 		out["PreviousTxnLgrSeq"] = a.PreviousTxnLgrSeq
+	}
+	if a.present&accountrootBitSponsor != 0 {
+		out["Sponsor"] = a.Sponsor
 	}
 	return out
 }

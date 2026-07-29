@@ -38,6 +38,7 @@ type Bridge struct {
 	Flags                    uint32
 	PreviousTxnID            string // Hash256 (uppercase hex)
 	PreviousTxnLgrSeq        uint32
+	Sponsor                  string // AccountID (base58)
 }
 
 const (
@@ -52,6 +53,7 @@ const (
 	bridgeBitFlags
 	bridgeBitPreviousTxnID
 	bridgeBitPreviousTxnLgrSeq
+	bridgeBitSponsor
 )
 
 // SetAccount assigns Account and updates its serialized presence.
@@ -129,6 +131,13 @@ func (b *Bridge) SetPreviousTxnLgrSeq(value uint32) {
 	b.PreviousTxnLgrSeq = value
 	b.dirty = true
 	b.present |= bridgeBitPreviousTxnLgrSeq
+}
+
+// SetSponsor assigns Sponsor and updates its serialized presence.
+func (b *Bridge) SetSponsor(value string) {
+	b.Sponsor = value
+	b.dirty = true
+	b.present |= bridgeBitSponsor
 }
 
 func (b *Bridge) validateRequired() error {
@@ -321,6 +330,9 @@ func (b *Bridge) decode(data []byte, legacy bool) error {
 			case 1:
 				b.Account = val
 				b.present |= bridgeBitAccount
+			case 27:
+				b.Sponsor = val
+				b.present |= bridgeBitSponsor
 			default:
 				return newErrUnknownField("Bridge", typeCode, fieldCode)
 			}
@@ -381,6 +393,9 @@ func (b *Bridge) emitAll(out map[string]any, skipDefault bool) {
 	if b.present&bridgeBitFlags != 0 && !(skipDefault && b.Flags == 0) {
 		out["Flags"] = b.Flags
 	}
+	if b.present&bridgeBitSponsor != 0 && !(skipDefault && b.Sponsor == "") {
+		out["Sponsor"] = b.Sponsor
+	}
 }
 
 // EmitNewFields emits fields for a CreatedNode (sMD_Create | sMD_Always),
@@ -411,6 +426,7 @@ func (b *Bridge) EmitPreviousFields(prev Entry, out map[string]any) {
 	emitIfChangedString(out, "XChainAccountClaimCount", prv.XChainAccountClaimCount, b.XChainAccountClaimCount, prv.present&bridgeBitXChainAccountClaimCount, b.present&bridgeBitXChainAccountClaimCount)
 	emitIfChangedString(out, "OwnerNode", prv.OwnerNode, b.OwnerNode, prv.present&bridgeBitOwnerNode, b.present&bridgeBitOwnerNode)
 	emitIfChangedUint32(out, "Flags", prv.Flags, b.Flags, prv.present&bridgeBitFlags, b.present&bridgeBitFlags)
+	emitIfChangedString(out, "Sponsor", prv.Sponsor, b.Sponsor, prv.present&bridgeBitSponsor, b.present&bridgeBitSponsor)
 }
 
 // EmitChangeOrigFields writes the names of every present field carrying
@@ -445,6 +461,9 @@ func (b *Bridge) EmitChangeOrigFields(out map[string]any) {
 	}
 	if b.present&bridgeBitFlags != 0 {
 		out["Flags"] = b.Flags
+	}
+	if b.present&bridgeBitSponsor != 0 {
+		out["Sponsor"] = b.Sponsor
 	}
 }
 
@@ -519,6 +538,9 @@ func (b *Bridge) ToMap() map[string]any {
 	}
 	if b.present&bridgeBitPreviousTxnLgrSeq != 0 {
 		out["PreviousTxnLgrSeq"] = b.PreviousTxnLgrSeq
+	}
+	if b.present&bridgeBitSponsor != 0 {
+		out["Sponsor"] = b.Sponsor
 	}
 	return out
 }

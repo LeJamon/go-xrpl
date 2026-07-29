@@ -37,6 +37,7 @@ type NFTokenOffer struct {
 	Flags             uint32
 	PreviousTxnID     string // Hash256 (uppercase hex)
 	PreviousTxnLgrSeq uint32
+	Sponsor           string // AccountID (base58)
 }
 
 const (
@@ -50,6 +51,7 @@ const (
 	nftokenofferBitFlags
 	nftokenofferBitPreviousTxnID
 	nftokenofferBitPreviousTxnLgrSeq
+	nftokenofferBitSponsor
 )
 
 // SetOwner assigns Owner and updates its serialized presence.
@@ -120,6 +122,13 @@ func (n *NFTokenOffer) SetPreviousTxnLgrSeq(value uint32) {
 	n.PreviousTxnLgrSeq = value
 	n.dirty = true
 	n.present |= nftokenofferBitPreviousTxnLgrSeq
+}
+
+// SetSponsor assigns Sponsor and updates its serialized presence.
+func (n *NFTokenOffer) SetSponsor(value string) {
+	n.Sponsor = value
+	n.dirty = true
+	n.present |= nftokenofferBitSponsor
 }
 
 func (n *NFTokenOffer) validateRequired() error {
@@ -301,6 +310,9 @@ func (n *NFTokenOffer) decode(data []byte, legacy bool) error {
 			case 3:
 				n.Destination = val
 				n.present |= nftokenofferBitDestination
+			case 27:
+				n.Sponsor = val
+				n.present |= nftokenofferBitSponsor
 			default:
 				return newErrUnknownField("NFTokenOffer", typeCode, fieldCode)
 			}
@@ -346,6 +358,9 @@ func (n *NFTokenOffer) emitAll(out map[string]any, skipDefault bool) {
 	if n.present&nftokenofferBitFlags != 0 && !(skipDefault && n.Flags == 0) {
 		out["Flags"] = n.Flags
 	}
+	if n.present&nftokenofferBitSponsor != 0 && !(skipDefault && n.Sponsor == "") {
+		out["Sponsor"] = n.Sponsor
+	}
 }
 
 // EmitNewFields emits fields for a CreatedNode (sMD_Create | sMD_Always),
@@ -375,6 +390,7 @@ func (n *NFTokenOffer) EmitPreviousFields(prev Entry, out map[string]any) {
 	emitIfChangedString(out, "Destination", prv.Destination, n.Destination, prv.present&nftokenofferBitDestination, n.present&nftokenofferBitDestination)
 	emitIfChangedUint32(out, "Expiration", prv.Expiration, n.Expiration, prv.present&nftokenofferBitExpiration, n.present&nftokenofferBitExpiration)
 	emitIfChangedUint32(out, "Flags", prv.Flags, n.Flags, prv.present&nftokenofferBitFlags, n.present&nftokenofferBitFlags)
+	emitIfChangedString(out, "Sponsor", prv.Sponsor, n.Sponsor, prv.present&nftokenofferBitSponsor, n.present&nftokenofferBitSponsor)
 }
 
 // EmitChangeOrigFields writes the names of every present field carrying
@@ -406,6 +422,9 @@ func (n *NFTokenOffer) EmitChangeOrigFields(out map[string]any) {
 	}
 	if n.present&nftokenofferBitFlags != 0 {
 		out["Flags"] = n.Flags
+	}
+	if n.present&nftokenofferBitSponsor != 0 {
+		out["Sponsor"] = n.Sponsor
 	}
 }
 
@@ -477,6 +496,9 @@ func (n *NFTokenOffer) ToMap() map[string]any {
 	}
 	if n.present&nftokenofferBitPreviousTxnLgrSeq != 0 {
 		out["PreviousTxnLgrSeq"] = n.PreviousTxnLgrSeq
+	}
+	if n.present&nftokenofferBitSponsor != 0 {
+		out["Sponsor"] = n.Sponsor
 	}
 	return out
 }

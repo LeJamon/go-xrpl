@@ -33,6 +33,7 @@ type Ticket struct {
 	Flags             uint32
 	PreviousTxnID     string // Hash256 (uppercase hex)
 	PreviousTxnLgrSeq uint32
+	Sponsor           string // AccountID (base58)
 }
 
 const (
@@ -42,6 +43,7 @@ const (
 	ticketBitFlags
 	ticketBitPreviousTxnID
 	ticketBitPreviousTxnLgrSeq
+	ticketBitSponsor
 )
 
 // SetAccount assigns Account and updates its serialized presence.
@@ -84,6 +86,13 @@ func (t *Ticket) SetPreviousTxnLgrSeq(value uint32) {
 	t.PreviousTxnLgrSeq = value
 	t.dirty = true
 	t.present |= ticketBitPreviousTxnLgrSeq
+}
+
+// SetSponsor assigns Sponsor and updates its serialized presence.
+func (t *Ticket) SetSponsor(value string) {
+	t.Sponsor = value
+	t.dirty = true
+	t.present |= ticketBitSponsor
 }
 
 func (t *Ticket) validateRequired() error {
@@ -219,6 +228,9 @@ func (t *Ticket) decode(data []byte, legacy bool) error {
 			case 1:
 				t.Account = val
 				t.present |= ticketBitAccount
+			case 27:
+				t.Sponsor = val
+				t.present |= ticketBitSponsor
 			default:
 				return newErrUnknownField("Ticket", typeCode, fieldCode)
 			}
@@ -252,6 +264,9 @@ func (t *Ticket) emitAll(out map[string]any, skipDefault bool) {
 	if t.present&ticketBitFlags != 0 && !(skipDefault && t.Flags == 0) {
 		out["Flags"] = t.Flags
 	}
+	if t.present&ticketBitSponsor != 0 && !(skipDefault && t.Sponsor == "") {
+		out["Sponsor"] = t.Sponsor
+	}
 }
 
 // EmitNewFields emits fields for a CreatedNode (sMD_Create | sMD_Always),
@@ -277,6 +292,7 @@ func (t *Ticket) EmitPreviousFields(prev Entry, out map[string]any) {
 	emitIfChangedString(out, "OwnerNode", prv.OwnerNode, t.OwnerNode, prv.present&ticketBitOwnerNode, t.present&ticketBitOwnerNode)
 	emitIfChangedUint32(out, "TicketSequence", prv.TicketSequence, t.TicketSequence, prv.present&ticketBitTicketSequence, t.present&ticketBitTicketSequence)
 	emitIfChangedUint32(out, "Flags", prv.Flags, t.Flags, prv.present&ticketBitFlags, t.present&ticketBitFlags)
+	emitIfChangedString(out, "Sponsor", prv.Sponsor, t.Sponsor, prv.present&ticketBitSponsor, t.present&ticketBitSponsor)
 }
 
 // EmitChangeOrigFields writes the names of every present field carrying
@@ -296,6 +312,9 @@ func (t *Ticket) EmitChangeOrigFields(out map[string]any) {
 	}
 	if t.present&ticketBitFlags != 0 {
 		out["Flags"] = t.Flags
+	}
+	if t.present&ticketBitSponsor != 0 {
+		out["Sponsor"] = t.Sponsor
 	}
 }
 
@@ -355,6 +374,9 @@ func (t *Ticket) ToMap() map[string]any {
 	}
 	if t.present&ticketBitPreviousTxnLgrSeq != 0 {
 		out["PreviousTxnLgrSeq"] = t.PreviousTxnLgrSeq
+	}
+	if t.present&ticketBitSponsor != 0 {
+		out["Sponsor"] = t.Sponsor
 	}
 	return out
 }

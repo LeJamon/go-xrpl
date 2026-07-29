@@ -35,6 +35,7 @@ type DID struct {
 	Flags             uint32
 	PreviousTxnID     string // Hash256 (uppercase hex)
 	PreviousTxnLgrSeq uint32
+	Sponsor           string // AccountID (base58)
 }
 
 const (
@@ -46,6 +47,7 @@ const (
 	didBitFlags
 	didBitPreviousTxnID
 	didBitPreviousTxnLgrSeq
+	didBitSponsor
 )
 
 // SetAccount assigns Account and updates its serialized presence.
@@ -102,6 +104,13 @@ func (d *DID) SetPreviousTxnLgrSeq(value uint32) {
 	d.PreviousTxnLgrSeq = value
 	d.dirty = true
 	d.present |= didBitPreviousTxnLgrSeq
+}
+
+// SetSponsor assigns Sponsor and updates its serialized presence.
+func (d *DID) SetSponsor(value string) {
+	d.Sponsor = value
+	d.dirty = true
+	d.present |= didBitSponsor
 }
 
 func (d *DID) validateRequired() error {
@@ -246,6 +255,9 @@ func (d *DID) decode(data []byte, legacy bool) error {
 			case 1:
 				d.Account = val
 				d.present |= didBitAccount
+			case 27:
+				d.Sponsor = val
+				d.present |= didBitSponsor
 			default:
 				return newErrUnknownField("DID", typeCode, fieldCode)
 			}
@@ -285,6 +297,9 @@ func (d *DID) emitAll(out map[string]any, skipDefault bool) {
 	if d.present&didBitFlags != 0 && !(skipDefault && d.Flags == 0) {
 		out["Flags"] = d.Flags
 	}
+	if d.present&didBitSponsor != 0 && !(skipDefault && d.Sponsor == "") {
+		out["Sponsor"] = d.Sponsor
+	}
 }
 
 // EmitNewFields emits fields for a CreatedNode (sMD_Create | sMD_Always),
@@ -312,6 +327,7 @@ func (d *DID) EmitPreviousFields(prev Entry, out map[string]any) {
 	emitIfChangedString(out, "Data", prv.Data, d.Data, prv.present&didBitData, d.present&didBitData)
 	emitIfChangedString(out, "OwnerNode", prv.OwnerNode, d.OwnerNode, prv.present&didBitOwnerNode, d.present&didBitOwnerNode)
 	emitIfChangedUint32(out, "Flags", prv.Flags, d.Flags, prv.present&didBitFlags, d.present&didBitFlags)
+	emitIfChangedString(out, "Sponsor", prv.Sponsor, d.Sponsor, prv.present&didBitSponsor, d.present&didBitSponsor)
 }
 
 // EmitChangeOrigFields writes the names of every present field carrying
@@ -337,6 +353,9 @@ func (d *DID) EmitChangeOrigFields(out map[string]any) {
 	}
 	if d.present&didBitFlags != 0 {
 		out["Flags"] = d.Flags
+	}
+	if d.present&didBitSponsor != 0 {
+		out["Sponsor"] = d.Sponsor
 	}
 }
 
@@ -402,6 +421,9 @@ func (d *DID) ToMap() map[string]any {
 	}
 	if d.present&didBitPreviousTxnLgrSeq != 0 {
 		out["PreviousTxnLgrSeq"] = d.PreviousTxnLgrSeq
+	}
+	if d.present&didBitSponsor != 0 {
+		out["Sponsor"] = d.Sponsor
 	}
 	return out
 }

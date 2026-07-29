@@ -13,12 +13,14 @@ var ledgerCommonFields = []ledgerFormatField{
 	{"LedgerIndex", 1},
 	{"LedgerEntryType", 0},
 	{"Flags", 0},
+	{"Sponsor", 1},
 }
 
 // ledgerFormatTemplates maps each ledger-entry type NAME (as in
 // definitions LedgerEntryTypes, e.g. "AccountRoot","DirectoryNode") to its
 // UNIQUE fields (common fields excluded), in ledger_entries.macro order.
-// Transcribed from rippled 3.2.0 ledger_entries.macro.
+// Transcribed from rippled 3.2.0 ledger_entries.macro plus the Sponsor protocol
+// additions pinned to rippled 3.3.0-rc1 commit 18e311e1.
 var ledgerFormatTemplates = map[string][]ledgerFormatField{
 	"NFTokenOffer": {
 		{"Owner", 0},
@@ -105,6 +107,9 @@ var ledgerFormatTemplates = map[string][]ledgerFormatField{
 		{"MintedNFTokens", 2},
 		{"BurnedNFTokens", 2},
 		{"FirstNFTokenSequence", 1},
+		{"SponsoredOwnerCount", 2},
+		{"SponsoringOwnerCount", 2},
+		{"SponsoringAccountCount", 2},
 		{"AMMID", 1},
 		{"VaultID", 1},
 		{"LoanBrokerID", 1},
@@ -195,6 +200,8 @@ var ledgerFormatTemplates = map[string][]ledgerFormatField{
 		{"HighNode", 1},
 		{"HighQualityIn", 1},
 		{"HighQualityOut", 1},
+		{"HighSponsor", 1},
+		{"LowSponsor", 1},
 	},
 	"FeeSettings": {
 		{"BaseFee", 1},
@@ -391,5 +398,16 @@ var ledgerFormatTemplates = map[string][]ledgerFormatField{
 		{"TotalValueOutstanding", 2},
 		{"ManagementFeeOutstanding", 2},
 		{"LoanScale", 2},
+	},
+	"Sponsorship": {
+		{"PreviousTxnID", 0},
+		{"PreviousTxnLgrSeq", 0},
+		{"Owner", 0},
+		{"Sponsee", 0},
+		{"FeeAmount", 1},
+		{"MaxFee", 1},
+		{"RemainingOwnerCount", 2},
+		{"OwnerNode", 0},
+		{"SponseeNode", 0},
 	},
 }

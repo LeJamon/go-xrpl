@@ -37,6 +37,7 @@ type Credential struct {
 	Flags             uint32
 	PreviousTxnID     string // Hash256 (uppercase hex)
 	PreviousTxnLgrSeq uint32
+	Sponsor           string // AccountID (base58)
 }
 
 const (
@@ -50,6 +51,7 @@ const (
 	credentialBitFlags
 	credentialBitPreviousTxnID
 	credentialBitPreviousTxnLgrSeq
+	credentialBitSponsor
 )
 
 // SetSubject assigns Subject and updates its serialized presence.
@@ -120,6 +122,13 @@ func (c *Credential) SetPreviousTxnLgrSeq(value uint32) {
 	c.PreviousTxnLgrSeq = value
 	c.dirty = true
 	c.present |= credentialBitPreviousTxnLgrSeq
+}
+
+// SetSponsor assigns Sponsor and updates its serialized presence.
+func (c *Credential) SetSponsor(value string) {
+	c.Sponsor = value
+	c.dirty = true
+	c.present |= credentialBitSponsor
 }
 
 func (c *Credential) validateRequired() error {
@@ -286,6 +295,9 @@ func (c *Credential) decode(data []byte, legacy bool) error {
 			case 24:
 				c.Subject = val
 				c.present |= credentialBitSubject
+			case 27:
+				c.Sponsor = val
+				c.present |= credentialBitSponsor
 			default:
 				return newErrUnknownField("Credential", typeCode, fieldCode)
 			}
@@ -331,6 +343,9 @@ func (c *Credential) emitAll(out map[string]any, skipDefault bool) {
 	if c.present&credentialBitFlags != 0 && !(skipDefault && c.Flags == 0) {
 		out["Flags"] = c.Flags
 	}
+	if c.present&credentialBitSponsor != 0 && !(skipDefault && c.Sponsor == "") {
+		out["Sponsor"] = c.Sponsor
+	}
 }
 
 // EmitNewFields emits fields for a CreatedNode (sMD_Create | sMD_Always),
@@ -360,6 +375,7 @@ func (c *Credential) EmitPreviousFields(prev Entry, out map[string]any) {
 	emitIfChangedString(out, "IssuerNode", prv.IssuerNode, c.IssuerNode, prv.present&credentialBitIssuerNode, c.present&credentialBitIssuerNode)
 	emitIfChangedString(out, "SubjectNode", prv.SubjectNode, c.SubjectNode, prv.present&credentialBitSubjectNode, c.present&credentialBitSubjectNode)
 	emitIfChangedUint32(out, "Flags", prv.Flags, c.Flags, prv.present&credentialBitFlags, c.present&credentialBitFlags)
+	emitIfChangedString(out, "Sponsor", prv.Sponsor, c.Sponsor, prv.present&credentialBitSponsor, c.present&credentialBitSponsor)
 }
 
 // EmitChangeOrigFields writes the names of every present field carrying
@@ -391,6 +407,9 @@ func (c *Credential) EmitChangeOrigFields(out map[string]any) {
 	}
 	if c.present&credentialBitFlags != 0 {
 		out["Flags"] = c.Flags
+	}
+	if c.present&credentialBitSponsor != 0 {
+		out["Sponsor"] = c.Sponsor
 	}
 }
 
@@ -462,6 +481,9 @@ func (c *Credential) ToMap() map[string]any {
 	}
 	if c.present&credentialBitPreviousTxnLgrSeq != 0 {
 		out["PreviousTxnLgrSeq"] = c.PreviousTxnLgrSeq
+	}
+	if c.present&credentialBitSponsor != 0 {
+		out["Sponsor"] = c.Sponsor
 	}
 	return out
 }

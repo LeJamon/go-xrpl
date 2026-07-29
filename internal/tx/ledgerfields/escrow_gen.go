@@ -43,6 +43,7 @@ type Escrow struct {
 	Flags             uint32
 	PreviousTxnID     string // Hash256 (uppercase hex)
 	PreviousTxnLgrSeq uint32
+	Sponsor           string // AccountID (base58)
 }
 
 const (
@@ -62,6 +63,7 @@ const (
 	escrowBitFlags
 	escrowBitPreviousTxnID
 	escrowBitPreviousTxnLgrSeq
+	escrowBitSponsor
 )
 
 // SetAccount assigns Account and updates its serialized presence.
@@ -174,6 +176,13 @@ func (e *Escrow) SetPreviousTxnLgrSeq(value uint32) {
 	e.PreviousTxnLgrSeq = value
 	e.dirty = true
 	e.present |= escrowBitPreviousTxnLgrSeq
+}
+
+// SetSponsor assigns Sponsor and updates its serialized presence.
+func (e *Escrow) SetSponsor(value string) {
+	e.Sponsor = value
+	e.dirty = true
+	e.present |= escrowBitSponsor
 }
 
 func (e *Escrow) validateRequired() error {
@@ -371,6 +380,9 @@ func (e *Escrow) decode(data []byte, legacy bool) error {
 			case 3:
 				e.Destination = val
 				e.present |= escrowBitDestination
+			case 27:
+				e.Sponsor = val
+				e.present |= escrowBitSponsor
 			default:
 				return newErrUnknownField("Escrow", typeCode, fieldCode)
 			}
@@ -434,6 +446,9 @@ func (e *Escrow) emitAll(out map[string]any, skipDefault bool) {
 	if e.present&escrowBitFlags != 0 && !(skipDefault && e.Flags == 0) {
 		out["Flags"] = e.Flags
 	}
+	if e.present&escrowBitSponsor != 0 && !(skipDefault && e.Sponsor == "") {
+		out["Sponsor"] = e.Sponsor
+	}
 }
 
 // EmitNewFields emits fields for a CreatedNode (sMD_Create | sMD_Always),
@@ -469,6 +484,7 @@ func (e *Escrow) EmitPreviousFields(prev Entry, out map[string]any) {
 	emitIfChangedUint32(out, "TransferRate", prv.TransferRate, e.TransferRate, prv.present&escrowBitTransferRate, e.present&escrowBitTransferRate)
 	emitIfChangedString(out, "IssuerNode", prv.IssuerNode, e.IssuerNode, prv.present&escrowBitIssuerNode, e.present&escrowBitIssuerNode)
 	emitIfChangedUint32(out, "Flags", prv.Flags, e.Flags, prv.present&escrowBitFlags, e.present&escrowBitFlags)
+	emitIfChangedString(out, "Sponsor", prv.Sponsor, e.Sponsor, prv.present&escrowBitSponsor, e.present&escrowBitSponsor)
 }
 
 // EmitChangeOrigFields writes the names of every present field carrying
@@ -518,6 +534,9 @@ func (e *Escrow) EmitChangeOrigFields(out map[string]any) {
 	}
 	if e.present&escrowBitFlags != 0 {
 		out["Flags"] = e.Flags
+	}
+	if e.present&escrowBitSponsor != 0 {
+		out["Sponsor"] = e.Sponsor
 	}
 }
 
@@ -607,6 +626,9 @@ func (e *Escrow) ToMap() map[string]any {
 	}
 	if e.present&escrowBitPreviousTxnLgrSeq != 0 {
 		out["PreviousTxnLgrSeq"] = e.PreviousTxnLgrSeq
+	}
+	if e.present&escrowBitSponsor != 0 {
+		out["Sponsor"] = e.Sponsor
 	}
 	return out
 }

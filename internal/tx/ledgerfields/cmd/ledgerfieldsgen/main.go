@@ -46,7 +46,7 @@ func main() {
 		if err := os.WriteFile(path, formatted, 0o644); err != nil { //nolint:gosec // G306: generated source artifact, world-readable by intent
 			log.Fatalf("write %s: %v", path, err)
 		}
-		fmt.Printf("wrote %s (%d fields)\n", path, len(entry.Fields))
+		fmt.Printf("wrote %s (%d fields)\n", path, len(entry.AllFields()))
 	}
 }
 
@@ -119,9 +119,10 @@ func generate(defs *definitions.Definitions, entry spec.Entry, outDir string) (s
 		AllowBadCurrencyDecode: entry.AllowBadCurrencyDecode,
 		EntryTypeCode:          int(entryTypeCode),
 	}
-	fieldsByName := make(map[string]spec.Field, len(entry.Fields))
-	fieldInstances := make(map[string]*definitions.FieldInstance, len(entry.Fields))
-	for _, f := range entry.Fields {
+	fields := entry.AllFields()
+	fieldsByName := make(map[string]spec.Field, len(fields))
+	fieldInstances := make(map[string]*definitions.FieldInstance, len(fields))
+	for _, f := range fields {
 		if _, exists := fieldsByName[f.Name]; exists {
 			return "", nil, fmt.Errorf("field %s: duplicate specification", f.Name)
 		}
@@ -132,7 +133,7 @@ func generate(defs *definitions.Definitions, entry spec.Entry, outDir string) (s
 		fieldsByName[f.Name] = f
 		fieldInstances[f.Name] = fi
 	}
-	for _, f := range entry.Fields {
+	for _, f := range fields {
 		if f.DecodeAlias == "" {
 			continue
 		}
@@ -166,7 +167,7 @@ func generate(defs *definitions.Definitions, entry spec.Entry, outDir string) (s
 		Meta:      spec.MetaNever,
 	}}
 
-	for _, f := range entry.Fields {
+	for _, f := range fields {
 		if f.Style < spec.StyleRequired || f.Style > spec.StyleDefault {
 			return "", nil, fmt.Errorf("field %s: serialization style is not set", f.Name)
 		}

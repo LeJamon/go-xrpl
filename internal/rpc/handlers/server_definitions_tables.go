@@ -1,14 +1,14 @@
 package handlers
 
-// Canonical flag tables for the server_definitions RPC method's 3.2.0
+// Canonical flag tables for the server_definitions RPC method's protocol
 // TRANSACTION_FLAGS / LEDGER_ENTRY_FLAGS / ACCOUNT_SET_FLAGS sections.
 //
 // These are protocol constants (identical across implementations), so they are
-// transcribed directly from rippled 3.2.0's TxFlags.h (getAllTxFlags /
-// getUniversalFlags / getAsfFlagMap) and LedgerFormats.h (getAllLedgerFlags)
-// rather than assembled from go-xrpl's per-package Go-named flag constants. The
-// section is a static protocol description and, like rippled, is emitted
-// unconditionally regardless of amendment activation.
+// transcribed directly from rippled's TxFlags.h (getAllTxFlags /
+// getUniversalFlags / getAsfFlagMap) and LedgerFormats.h (getAllLedgerFlags).
+// The baseline is rippled 3.2.0 plus the Sponsor additions pinned to 3.3.0-rc1
+// commit 18e311e1. The section is a static protocol description and, like
+// rippled, is emitted unconditionally regardless of amendment activation.
 
 // txFlagsTable maps a transaction-flag group name to its flag name->value map.
 // The "universal" key holds the flags valid on every transaction; every other
@@ -35,9 +35,10 @@ var txFlagsTable = map[string]map[string]uint32{
 		"tfHybrid":            0x00100000,
 	},
 	"Payment": {
-		"tfNoRippleDirect": 0x00010000,
-		"tfPartialPayment": 0x00020000,
-		"tfLimitQuality":   0x00040000,
+		"tfNoRippleDirect":        0x00010000,
+		"tfPartialPayment":        0x00020000,
+		"tfLimitQuality":          0x00040000,
+		"tfSponsorCreatedAccount": 0x00080000,
 	},
 	"TrustSet": {
 		"tfSetfAuth":        0x00010000,
@@ -126,6 +127,18 @@ var txFlagsTable = map[string]map[string]uint32{
 		"tfLoanImpair":   0x00020000,
 		"tfLoanUnimpair": 0x00040000,
 	},
+	"SponsorshipSet": {
+		"tfSponsorshipSetRequireSignForFee":       0x00010000,
+		"tfSponsorshipClearRequireSignForFee":     0x00020000,
+		"tfSponsorshipSetRequireSignForReserve":   0x00040000,
+		"tfSponsorshipClearRequireSignForReserve": 0x00080000,
+		"tfDeleteObject":                          0x00100000,
+	},
+	"SponsorshipTransfer": {
+		"tfSponsorshipEnd":      0x00010000,
+		"tfSponsorshipCreate":   0x00020000,
+		"tfSponsorshipReassign": 0x00040000,
+	},
 }
 
 // ledgerFlagsTable maps a ledger-object group name to its lsf*/lsmf* flag map.
@@ -212,6 +225,10 @@ var ledgerFlagsTable = map[string]map[string]uint32{
 		"lsfLoanDefault":     0x00010000,
 		"lsfLoanImpaired":    0x00020000,
 		"lsfLoanOverpayment": 0x00040000,
+	},
+	"Sponsorship": {
+		"lsfSponsorshipRequireSignForFee":     0x00010000,
+		"lsfSponsorshipRequireSignForReserve": 0x00020000,
 	},
 }
 

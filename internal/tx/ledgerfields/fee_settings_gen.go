@@ -37,6 +37,7 @@ type FeeSettings struct {
 	Flags                 uint32
 	PreviousTxnID         string // Hash256 (uppercase hex)
 	PreviousTxnLgrSeq     uint32
+	Sponsor               string // AccountID (base58)
 }
 
 const (
@@ -50,6 +51,7 @@ const (
 	feesettingsBitFlags
 	feesettingsBitPreviousTxnID
 	feesettingsBitPreviousTxnLgrSeq
+	feesettingsBitSponsor
 )
 
 // SetBaseFee assigns BaseFee and updates its serialized presence.
@@ -120,6 +122,13 @@ func (f *FeeSettings) SetPreviousTxnLgrSeq(value uint32) {
 	f.PreviousTxnLgrSeq = value
 	f.dirty = true
 	f.present |= feesettingsBitPreviousTxnLgrSeq
+}
+
+// SetSponsor assigns Sponsor and updates its serialized presence.
+func (f *FeeSettings) SetSponsor(value string) {
+	f.Sponsor = value
+	f.dirty = true
+	f.present |= feesettingsBitSponsor
 }
 
 func (f *FeeSettings) validateRequired() error {
@@ -246,6 +255,18 @@ func (f *FeeSettings) decode(data []byte, legacy bool) error {
 			default:
 				return newErrUnknownField("FeeSettings", typeCode, fieldCode)
 			}
+		case 8: // AccountID
+			val, err := sr.readAccountID()
+			if err != nil {
+				return err
+			}
+			switch fieldCode {
+			case 27:
+				f.Sponsor = val
+				f.present |= feesettingsBitSponsor
+			default:
+				return newErrUnknownField("FeeSettings", typeCode, fieldCode)
+			}
 		default:
 			return newErrUnknownField("FeeSettings", typeCode, fieldCode)
 		}
@@ -288,6 +309,9 @@ func (f *FeeSettings) emitAll(out map[string]any, skipDefault bool) {
 	if f.present&feesettingsBitFlags != 0 && !(skipDefault && f.Flags == 0) {
 		out["Flags"] = f.Flags
 	}
+	if f.present&feesettingsBitSponsor != 0 && !(skipDefault && f.Sponsor == "") {
+		out["Sponsor"] = f.Sponsor
+	}
 }
 
 // EmitNewFields emits fields for a CreatedNode (sMD_Create | sMD_Always),
@@ -317,6 +341,7 @@ func (f *FeeSettings) EmitPreviousFields(prev Entry, out map[string]any) {
 	emitIfChangedAmount(out, "ReserveBaseDrops", prv.ReserveBaseDrops, f.ReserveBaseDrops, prv.present&feesettingsBitReserveBaseDrops, f.present&feesettingsBitReserveBaseDrops)
 	emitIfChangedAmount(out, "ReserveIncrementDrops", prv.ReserveIncrementDrops, f.ReserveIncrementDrops, prv.present&feesettingsBitReserveIncrementDrops, f.present&feesettingsBitReserveIncrementDrops)
 	emitIfChangedUint32(out, "Flags", prv.Flags, f.Flags, prv.present&feesettingsBitFlags, f.present&feesettingsBitFlags)
+	emitIfChangedString(out, "Sponsor", prv.Sponsor, f.Sponsor, prv.present&feesettingsBitSponsor, f.present&feesettingsBitSponsor)
 }
 
 // EmitChangeOrigFields writes the names of every present field carrying
@@ -348,6 +373,9 @@ func (f *FeeSettings) EmitChangeOrigFields(out map[string]any) {
 	}
 	if f.present&feesettingsBitFlags != 0 {
 		out["Flags"] = f.Flags
+	}
+	if f.present&feesettingsBitSponsor != 0 {
+		out["Sponsor"] = f.Sponsor
 	}
 }
 
@@ -419,6 +447,9 @@ func (f *FeeSettings) ToMap() map[string]any {
 	}
 	if f.present&feesettingsBitPreviousTxnLgrSeq != 0 {
 		out["PreviousTxnLgrSeq"] = f.PreviousTxnLgrSeq
+	}
+	if f.present&feesettingsBitSponsor != 0 {
+		out["Sponsor"] = f.Sponsor
 	}
 	return out
 }

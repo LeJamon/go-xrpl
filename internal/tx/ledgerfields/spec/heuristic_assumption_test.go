@@ -42,7 +42,7 @@ func TestEmitFinalFieldsSubsetOfEmitPreviousFields(t *testing.T) {
 			emitPrevFields := extractEmitPreviousFields(string(data))
 			emitChangeOrigFields := extractEmitChangeOrigFields(string(data))
 
-			for _, f := range entry.Fields {
+			for _, f := range entry.AllFields() {
 				if f.DecodeOnly {
 					// DecodeOnly fields are consumed-and-discarded on decode and
 					// never appear in any emit method, so the heuristic does not

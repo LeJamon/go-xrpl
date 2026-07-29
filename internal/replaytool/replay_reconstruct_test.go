@@ -80,6 +80,35 @@ func putAll(t *testing.T, entries map[[32]byte][]byte) *shamap.SHAMap {
 	return m
 }
 
+func TestDirectoryPlacementsSponsorship(t *testing.T) {
+	const sponsee = "rPMh7Pi9ct699iZUTWaytJUoHcJ7cgyziK"
+	ownerID, err := state.DecodeAccountID(testAccount)
+	if err != nil {
+		t.Fatalf("decode owner: %v", err)
+	}
+	sponseeID, err := state.DecodeAccountID(sponsee)
+	if err != nil {
+		t.Fatalf("decode sponsee: %v", err)
+	}
+
+	placements, err := directoryPlacements(nil, "Sponsorship", map[string]any{
+		"Owner":       testAccount,
+		"Sponsee":     sponsee,
+		"OwnerNode":   "4",
+		"SponseeNode": "7",
+	}, nil)
+	if err != nil {
+		t.Fatalf("directoryPlacements: %v", err)
+	}
+	want := []dirPlacement{
+		{Key: keylet.OwnerDirPage(ownerID, 4).Key, Strategy: dirSorted},
+		{Key: keylet.OwnerDirPage(sponseeID, 7).Key, Strategy: dirSorted},
+	}
+	if !slices.Equal(placements, want) {
+		t.Fatalf("Sponsorship placements = %#v, want %#v", placements, want)
+	}
+}
+
 // TestReconstructFromMeta_ModifyWithFieldRemoval covers the hardest path: a
 // ModifiedNode whose FinalFields is a partial delta (Balance changed) and whose
 // PreviousFields names a field removed by the transaction (Domain). The

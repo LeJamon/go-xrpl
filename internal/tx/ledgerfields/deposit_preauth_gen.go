@@ -34,6 +34,7 @@ type DepositPreauth struct {
 	Flags                uint32
 	PreviousTxnID        string // Hash256 (uppercase hex)
 	PreviousTxnLgrSeq    uint32
+	Sponsor              string // AccountID (base58)
 }
 
 const (
@@ -44,6 +45,7 @@ const (
 	depositpreauthBitFlags
 	depositpreauthBitPreviousTxnID
 	depositpreauthBitPreviousTxnLgrSeq
+	depositpreauthBitSponsor
 )
 
 // SetAccount assigns Account and updates its serialized presence.
@@ -93,6 +95,13 @@ func (d *DepositPreauth) SetPreviousTxnLgrSeq(value uint32) {
 	d.PreviousTxnLgrSeq = value
 	d.dirty = true
 	d.present |= depositpreauthBitPreviousTxnLgrSeq
+}
+
+// SetSponsor assigns Sponsor and updates its serialized presence.
+func (d *DepositPreauth) SetSponsor(value string) {
+	d.Sponsor = value
+	d.dirty = true
+	d.present |= depositpreauthBitSponsor
 }
 
 func (d *DepositPreauth) validateRequired() error {
@@ -222,6 +231,9 @@ func (d *DepositPreauth) decode(data []byte, legacy bool) error {
 			case 5:
 				d.Authorize = val
 				d.present |= depositpreauthBitAuthorize
+			case 27:
+				d.Sponsor = val
+				d.present |= depositpreauthBitSponsor
 			default:
 				return newErrUnknownField("DepositPreauth", typeCode, fieldCode)
 			}
@@ -270,6 +282,9 @@ func (d *DepositPreauth) emitAll(out map[string]any, skipDefault bool) {
 	if d.present&depositpreauthBitFlags != 0 && !(skipDefault && d.Flags == 0) {
 		out["Flags"] = d.Flags
 	}
+	if d.present&depositpreauthBitSponsor != 0 && !(skipDefault && d.Sponsor == "") {
+		out["Sponsor"] = d.Sponsor
+	}
 }
 
 // EmitNewFields emits fields for a CreatedNode (sMD_Create | sMD_Always),
@@ -296,6 +311,7 @@ func (d *DepositPreauth) EmitPreviousFields(prev Entry, out map[string]any) {
 	emitIfChangedString(out, "OwnerNode", prv.OwnerNode, d.OwnerNode, prv.present&depositpreauthBitOwnerNode, d.present&depositpreauthBitOwnerNode)
 	emitIfChangedDeep(out, "AuthorizeCredentials", prv.AuthorizeCredentials, d.AuthorizeCredentials, prv.present&depositpreauthBitAuthorizeCredentials, d.present&depositpreauthBitAuthorizeCredentials)
 	emitIfChangedUint32(out, "Flags", prv.Flags, d.Flags, prv.present&depositpreauthBitFlags, d.present&depositpreauthBitFlags)
+	emitIfChangedString(out, "Sponsor", prv.Sponsor, d.Sponsor, prv.present&depositpreauthBitSponsor, d.present&depositpreauthBitSponsor)
 }
 
 // EmitChangeOrigFields writes the names of every present field carrying
@@ -318,6 +334,9 @@ func (d *DepositPreauth) EmitChangeOrigFields(out map[string]any) {
 	}
 	if d.present&depositpreauthBitFlags != 0 {
 		out["Flags"] = d.Flags
+	}
+	if d.present&depositpreauthBitSponsor != 0 {
+		out["Sponsor"] = d.Sponsor
 	}
 }
 
@@ -380,6 +399,9 @@ func (d *DepositPreauth) ToMap() map[string]any {
 	}
 	if d.present&depositpreauthBitPreviousTxnLgrSeq != 0 {
 		out["PreviousTxnLgrSeq"] = d.PreviousTxnLgrSeq
+	}
+	if d.present&depositpreauthBitSponsor != 0 {
+		out["Sponsor"] = d.Sponsor
 	}
 	return out
 }
