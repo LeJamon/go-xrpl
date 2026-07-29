@@ -52,9 +52,6 @@ func TestRouter_RequestLedger_TriggersGenericAcquisition(t *testing.T) {
 	assert.Len(t, rs.legacyCalls(), 1, "repeat request must not re-issue the fetch")
 }
 
-// TestRouter_RequestLedger_NoPeerDoesNotPoisonLaterRetry verifies that a
-// request made before any peer is available does not register an inert
-// acquisition which blocks a later request after a peer connects.
 func TestRouter_RequestLedger_NoPeerDoesNotPoisonLaterRetry(t *testing.T) {
 	r, _, rs, _ := makeRouter(t)
 

@@ -284,16 +284,9 @@ func TestSetValidatedLedger_StashesOnForkDivergence(t *testing.T) {
 		"handler must fire exactly once with the stashed seq")
 }
 
-// TestAdoptLedgerWithState_EventSinkFiresAfterValidationFirstRace pins
-// the validation-first race fix: when SetValidatedLedger arrives BEFORE the
-// adopt path installs the ledger, the subsequent adopt's F4 drain promotes
-// validatedLedger in-line — but nothing will ever call SetValidatedLedger
-// again for that hash, so the hash-keyed LedgerAcceptedEvent stash would
-// never drain. The legacy eventCallback (wired to the WebSocket
-// ledgerClosed + transaction streams) must therefore fire inline when F4
-// drain returns true, and the hash-keyed stash must NOT be populated in
-// that case (no one will drain it). Skipping the stash also prevents a
-// double-fire hazard if a late duplicate SetValidatedLedger arrives.
+// A validation can arrive before adoption. The adoption path must publish
+// inline when it promotes that ledger, without leaving a duplicate stashed
+// event for a late validation.
 func TestAdoptLedgerWithState_EventSinkFiresAfterValidationFirstRace(t *testing.T) {
 	cfg := DefaultConfig()
 	svc, err := New(cfg)
@@ -351,26 +344,23 @@ func TestAdoptLedgerWithState_EventSinkFiresAfterValidationFirstRace(t *testing.
 	require.True(t, seqStashed,
 		"setup: SetValidatedLedger must stash (seq, hash) when seq not in history")
 
-	// Now adopt. F4 drain inside adoptLedgerWithStateLocked sees the
-	// matching-hash, non-expired stash and promotes validatedLedger
-	// to the adopted ledger. Because no SetValidatedLedger will arrive
-	// later for this hash, the legacy eventCallback MUST fire inline.
+	// Adoption drains the matching validation and publishes inline because no
+	// later validation call will revisit this hash.
 	require.NoError(t, svc.AdoptLedgerWithState(context.TODO(), hdr, stateMap, txMap))
 
 	assert.Equal(t, adoptedSeq, svc.GetValidatedLedgerIndex(),
 		"F4 drain must promote validatedLedger on matching adopt")
 
-	// Wait for the inline-dispatched eventCallback.
 	select {
 	case <-done:
 	case <-time.After(2 * time.Second):
-		t.Fatal("eventCallback must fire inline when F4 drain promotes the adopted ledger — " +
+		t.Fatal("event sink must fire inline when validation promotes the adopted ledger: " +
 			"no later SetValidatedLedger will arrive to drain the hash-keyed stash")
 	}
 
 	mu.Lock()
 	assert.Equal(t, 1, callbackCount,
-		"eventCallback must fire exactly once on the validation-first race path")
+		"event sink must fire exactly once on the validation-first race path")
 	require.NotNil(t, lastEvent)
 	require.NotNil(t, lastEvent.LedgerInfo)
 	assert.Equal(t, adoptedSeq, lastEvent.LedgerInfo.Sequence,
@@ -391,29 +381,23 @@ func TestAdoptLedgerWithState_EventSinkFiresAfterValidationFirstRace(t *testing.
 		"pendingValidation[hash] must NOT be populated when F4 drain fires inline — "+
 			"the event has already been consumed")
 
-	// Defense-in-depth: a second SetValidatedLedger call for the same
-	// (seq, hash) must be a no-op (seq is in history and already validated)
-	// and MUST NOT fire eventCallback again.
+	// A duplicate validation for an already validated history entry is a no-op.
 	svc.SetValidatedLedger(adoptedSeq, adoptedHash)
 
 	select {
 	case <-done:
-		t.Fatal("eventCallback must not fire twice — no late-duplicate stash should remain")
+		t.Fatal("event sink must not fire twice: no duplicate stash should remain")
 	case <-time.After(100 * time.Millisecond):
 	}
 
 	mu.Lock()
 	defer mu.Unlock()
 	assert.Equal(t, 1, callbackCount,
-		"late-duplicate SetValidatedLedger must not cause a second eventCallback dispatch")
+		"duplicate validation must not cause a second event dispatch")
 }
 
-// TestAcceptConsensusResult_EventSinkFiresAfterValidationFirstRace pins
-// the same fix for the consensus-close path. When a trusted-validation
-// gossip for seq N arrives before the local consensus round closes seq N,
-// AcceptConsensusResult's F4 drain promotes validatedLedger in-line — and
-// likewise no later SetValidatedLedger will arrive to drain the hash-keyed
-// stash. The eventCallback must fire inline.
+// Trusted validation can arrive before local consensus closes the ledger. The
+// close path must publish inline when it promotes that ledger.
 func TestAcceptConsensusResult_EventSinkFiresAfterValidationFirstRace(t *testing.T) {
 	cfg := DefaultConfig()
 	svc, err := New(cfg)
@@ -475,9 +459,8 @@ func TestAcceptConsensusResult_EventSinkFiresAfterValidationFirstRace(t *testing
 	require.True(t, seqStashed,
 		"setup: SetValidatedLedger must stash (seq, hash) when seq not in history")
 
-	// Close the consensus ledger. F4 drain sees the matching-hash,
-	// non-expired stash and promotes validatedLedger. eventCallback MUST
-	// fire inline because no later SetValidatedLedger will arrive.
+	// Closing drains the matching validation and publishes inline because no
+	// later validation call will revisit this hash.
 	closedSeq, err := svc.AcceptConsensusResult(context.TODO(), parentReal, nil, nil, closeTime, true)
 	require.NoError(t, err)
 	require.Equal(t, expectedSeq, closedSeq)
@@ -488,12 +471,12 @@ func TestAcceptConsensusResult_EventSinkFiresAfterValidationFirstRace(t *testing
 	select {
 	case <-done:
 	case <-time.After(2 * time.Second):
-		t.Fatal("eventCallback must fire inline when F4 drain promotes the closed ledger")
+		t.Fatal("event sink must fire inline when validation promotes the closed ledger")
 	}
 
 	mu.Lock()
 	assert.Equal(t, 1, callbackCount,
-		"eventCallback must fire exactly once on the consensus-close validation-first race path")
+		"event sink must fire exactly once on the consensus-close validation-first race path")
 	require.NotNil(t, lastEvent)
 	require.NotNil(t, lastEvent.LedgerInfo)
 	assert.Equal(t, expectedSeq, lastEvent.LedgerInfo.Sequence)

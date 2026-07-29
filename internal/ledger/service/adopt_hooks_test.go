@@ -157,12 +157,9 @@ func TestAdoptLedgerWithState_PublishesTransactions(t *testing.T) {
 	}
 }
 
-// TestAdoptLedgerWithState_StashesLegacyEventUntilValidated pins F3: the
-// legacy eventCallback must NOT fire at adopt time (the adopted ledger
-// isn't yet trust-validated), but the event must be stashed so a later
-// SetValidatedLedger for the same hash drains it exactly once. Matches
-// the consensus-close path's stash/drain pattern.
-func TestAdoptLedgerWithState_StashesLegacyEventUntilValidated(t *testing.T) {
+// An adopted ledger is published only after trusted validation confirms its
+// hash. The pending event is drained exactly once.
+func TestAdoptLedgerWithState_StashesEventUntilValidated(t *testing.T) {
 	cfg := DefaultConfig()
 	svc, err := New(cfg)
 	require.NoError(t, err)
@@ -210,13 +207,13 @@ func TestAdoptLedgerWithState_StashesLegacyEventUntilValidated(t *testing.T) {
 	// Give any erroneously-dispatched callback a chance to run.
 	select {
 	case <-done:
-		t.Fatal("eventCallback must NOT fire at adopt time — adopted ledger is not yet trust-validated")
+		t.Fatal("event sink must not fire at adopt time: ledger is not trust-validated")
 	case <-time.After(100 * time.Millisecond):
 	}
 
 	mu.Lock()
 	assert.Equal(t, 0, callbackCount,
-		"eventCallback must NOT fire at adopt time")
+		"event sink must not fire at adopt time")
 	mu.Unlock()
 
 	// The event must be stashed keyed by hash so SetValidatedLedger can drain it.
@@ -226,20 +223,19 @@ func TestAdoptLedgerWithState_StashesLegacyEventUntilValidated(t *testing.T) {
 	assert.True(t, stashed,
 		"adopt must stash a LedgerAcceptedEvent keyed by the adopted ledger hash")
 
-	// When the validation tracker confirms this ledger, SetValidatedLedger
-	// must drain the stashed event and fire eventCallback exactly once.
+	// Trusted validation drains the stashed event exactly once.
 	svc.SetValidatedLedger(adoptedSeq, adoptedHash)
 
 	select {
 	case <-done:
 	case <-time.After(2 * time.Second):
-		t.Fatal("eventCallback did not fire after SetValidatedLedger drained the stashed event")
+		t.Fatal("event sink did not fire after validation drained the stashed event")
 	}
 
 	mu.Lock()
 	defer mu.Unlock()
 	assert.Equal(t, 1, callbackCount,
-		"eventCallback must fire exactly once after SetValidatedLedger")
+		"event sink must fire exactly once after validation")
 	require.NotNil(t, lastEvent)
 	require.NotNil(t, lastEvent.LedgerInfo)
 	assert.Equal(t, adoptedSeq, lastEvent.LedgerInfo.Sequence,
@@ -287,10 +283,10 @@ func TestAdoptLedgerWithState_NoEventSinkInstalled_IsQuiet(t *testing.T) {
 	require.NoError(t, svc.AdoptLedgerWithState(context.TODO(), hdr, stateMap, txMap),
 		"adopt must succeed without an event sink")
 
-	// No pending stash entry should exist when there is no eventCallback.
+	// Without an event sink there is nothing to publish later.
 	svc.mu.RLock()
 	_, stashed := svc.pendingValidation[adoptedHash]
 	svc.mu.RUnlock()
 	assert.False(t, stashed,
-		"no eventCallback means nothing to stash")
+		"no event sink means nothing to stash")
 }

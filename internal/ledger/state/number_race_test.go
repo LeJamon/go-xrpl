@@ -5,8 +5,6 @@ import (
 	"testing"
 )
 
-// TestNumberRounding_ConcurrentDeterministic proves independent immutable
-// contexts retain both their arithmetic regime and rounding mode concurrently.
 func TestNumberRounding_ConcurrentDeterministic(t *testing.T) {
 	a := NewIssuedAmountFromValue(7333333333333333, -16, "USD", "rIssuer") // ~0.7333333333333333
 	b := NewIssuedAmountFromValue(3141592653589793, -15, "USD", "rIssuer") // ~3.141592653589793

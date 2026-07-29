@@ -1187,8 +1187,8 @@ func (s *Service) adoptLedgerWithStateLocked(
 	}
 	s.completeInitialSyncLocked()
 
-	// Install skipped (validated entry already at this seq, different hash):
-	// Persistence, validation draining, and event collection already ran for the canonical entry.
+	// The canonical entry has already completed persistence, validation
+	// draining, and event collection.
 	if canonical != adopted {
 		openLedger, err := ledger.NewOpen(canonical, time.Now())
 		if err != nil {
@@ -1239,10 +1239,8 @@ func (s *Service) adoptLedgerWithStateLocked(
 		}
 	}
 
-	// Publish so `ledger` and `transactions` subscribers see peer-adopted ledgers
-	// (else the streams silently skip every catch-up ledger). Forward adoption
-	// only: a below-tip history backfill must not emit backward-running stream
-	// events (rippled's fetchForHistory ingest is silent).
+	// Forward adoption publishes catch-up ledgers. Below-tip history backfills
+	// remain silent so streams never run backward.
 	if advanced {
 		ledgerInfo := &LedgerInfo{
 			Sequence:   h.LedgerIndex,

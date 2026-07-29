@@ -95,13 +95,9 @@ func (p *eventPublisher) hasEventSink() bool {
 	return p.eventSink != nil
 }
 
-// dispatchLedgerEvent hands an accepted-ledger event to the single ordered
-// dispatcher so eventSink runs FIFO and single-threaded, instead of the
-// per-event goroutines that ran it concurrently with itself — a data race on
-// the subscriber's state and out-of-order ledgerClosed delivery. rippled
-// serializes the equivalent through NetworkOPs' single job-queue strand.
-// Enqueue is non-blocking and lossless: a lagging subscriber grows the queue
-// without stalling ledger close or dropping publication state.
+// dispatchLedgerEvent enqueues accepted ledgers for FIFO, single-threaded
+// delivery. Enqueue is non-blocking and lossless: a lagging subscriber grows
+// the queue without stalling ledger close or dropping publication state.
 func (s *Service) dispatchLedgerEvent(event *LedgerAcceptedEvent) {
 	s.eventPublisher.dispatchLedgerEvent(event)
 }

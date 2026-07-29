@@ -173,8 +173,6 @@ func TestXRPLNumber_ToIOUAmountValue_Underflow(t *testing.T) {
 	require.True(t, iou.IsZero())
 }
 
-// TestAddIOUValues_WithNumberContext tests that both arithmetic regimes remain
-// available without mutable process state.
 func TestAddIOUValues_WithNumberContext(t *testing.T) {
 	a := IOUAmountValue{mantissa: -1000000000000000, exponent: -15} // -1.0
 	b := IOUAmountValue{mantissa: 3350000000000000, exponent: -17}  // 0.0335
