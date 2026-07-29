@@ -18,12 +18,16 @@ import (
 // parent-hash chain check, which consumes the *stored* header values.
 func makeStubLedger(t *testing.T, seq uint32, hash, parentHash [32]byte) *ledger.Ledger {
 	t.Helper()
-	stateMap := shamap.New(shamap.TypeState)
+	stateMap, stateRoot := makeStubStateMap(t, seq)
 	txMap := shamap.New(shamap.TypeTransaction)
+	txRoot, err := txMap.Hash()
+	require.NoError(t, err)
 	hdr := header.LedgerHeader{
 		LedgerIndex: seq,
 		Hash:        hash,
 		ParentHash:  parentHash,
+		AccountHash: stateRoot,
+		TxHash:      txRoot,
 		Validated:   true,
 	}
 	l, err := ledger.NewFromHeader(hdr, stateMap, txMap, drops.Fees{})
@@ -31,6 +35,16 @@ func makeStubLedger(t *testing.T, seq uint32, hash, parentHash [32]byte) *ledger
 		t.Fatalf("NewFromHeader: %v", err)
 	}
 	return l
+}
+
+func makeStubStateMap(t *testing.T, seq uint32) (*shamap.SHAMap, [32]byte) {
+	t.Helper()
+	stateMap := shamap.New(shamap.TypeState)
+	key := [32]byte{0x53, byte(seq), byte(seq >> 8), byte(seq >> 16), byte(seq >> 24)}
+	require.NoError(t, stateMap.Put(key, []byte("stub-state")))
+	root, err := stateMap.Hash()
+	require.NoError(t, err)
+	return stateMap, root
 }
 
 // TestAdoptLedgerWithState_FixMismatchInvalidatesDivergedTail pins F5:

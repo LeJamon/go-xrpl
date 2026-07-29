@@ -8,7 +8,6 @@ import (
 	"time"
 
 	"github.com/LeJamon/go-xrpl/amendment"
-	"github.com/LeJamon/go-xrpl/crypto/sha512half"
 	"github.com/LeJamon/go-xrpl/drops"
 	"github.com/LeJamon/go-xrpl/internal/ledger"
 	"github.com/LeJamon/go-xrpl/internal/ledger/genesis"
@@ -51,9 +50,9 @@ func TestService_GetLedgerByHashLoadsEvictedLedgerFromNodeStore(t *testing.T) {
 	require.NoError(t, svc.Start())
 	t.Cleanup(svc.Stop)
 
-	txBlob := []byte("persisted-transaction")
-	txHash := sha512half.Sum(protocol.HashPrefixTransactionID().Bytes(), txBlob)
-	require.NoError(t, svc.openLedger.AddTransaction(txHash, txBlob))
+	rawTx, _ := validRelationalTestTransaction(t, 1)
+	txBlob, txHash := makeTxMetaBlobForTest(t, rawTx, 0)
+	require.NoError(t, svc.openLedger.AddTransactionWithMeta(txHash, txBlob))
 	entryKey := [32]byte{0xAA, 0xBB, 0xCC}
 	entryData := []byte("persisted-state")
 	require.NoError(t, svc.openLedger.Insert(keylet.Keylet{Key: entryKey}, entryData))

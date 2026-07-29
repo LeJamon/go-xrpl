@@ -37,12 +37,28 @@ func encodeVLForTest(length int) []byte {
 // to extract txn_seq without mattering to the index build.
 // Returns (blob, txID) where txID is the canonical XRPL tx hash used as
 // the SHAMap key.
-func makeTxMetaBlobForTest(t *testing.T, txBytes []byte, txIndex uint32) ([]byte, [32]byte) {
+func makeTxMetaBlobForTest(
+	t *testing.T,
+	txBytes []byte,
+	txIndex uint32,
+	affectedAccounts ...string,
+) ([]byte, [32]byte) {
 	t.Helper()
 
+	affectedNodes := make([]any, 0, len(affectedAccounts))
+	for _, account := range affectedAccounts {
+		affectedNodes = append(affectedNodes, map[string]any{
+			"ModifiedNode": map[string]any{
+				"FinalFields": map[string]any{
+					"Account": account,
+				},
+			},
+		})
+	}
 	metaHex, err := binarycodec.Encode(map[string]any{
 		"TransactionResult": "tesSUCCESS",
 		"TransactionIndex":  txIndex,
+		"AffectedNodes":     affectedNodes,
 	})
 	require.NoError(t, err)
 	metaBytes, err := hex.DecodeString(metaHex)
@@ -199,14 +215,17 @@ func TestAdoptLedgerWithState_PersistsToRelationalDB(t *testing.T) {
 	// Two txs with canonical-hash keys so the DB row's trans_id column
 	// matches the hash we query for.
 	txMap := shamap.New(shamap.TypeTransaction)
-	blob1, id1 := makeTxMetaBlobForTest(t, []byte("persist-tx-blob-A-padding-pad"), 0)
-	blob2, id2 := makeTxMetaBlobForTest(t, []byte("persist-tx-blob-B-padding-pad"), 1)
+	raw1, _ := validRelationalTestTransaction(t, 1)
+	raw2, _ := validRelationalTestTransaction(t, 2)
+	blob1, id1 := makeTxMetaBlobForTest(t, raw1, 0)
+	blob2, id2 := makeTxMetaBlobForTest(t, raw2, 1)
 	require.NoError(t, txMap.PutWithNodeType(id1, blob1, shamap.NodeTypeTransactionWithMeta))
 	require.NoError(t, txMap.PutWithNodeType(id2, blob2, shamap.NodeTypeTransactionWithMeta))
 	txRoot, err := txMap.Hash()
 	require.NoError(t, err)
 
 	stateMap := shamap.New(shamap.TypeState)
+	require.NoError(t, stateMap.Put([32]byte{0xAD, 0x0F, 0x01}, []byte("adopted-state")))
 	stateRoot, err := stateMap.Hash()
 	require.NoError(t, err)
 

@@ -47,9 +47,12 @@ func TestTxqAdapterGetBaseFeeWaivesEligibleSetRegularKey(t *testing.T) {
 	alice := jtx.NewAccount("alice")
 	regularKey := jtx.NewAccount("regular-key")
 	env.Fund(alice)
+	setRegularKeyTx := jtx.NewSetRegularKeyTx(alice, regularKey)
+	sequence := env.Seq(alice)
+	setRegularKeyTx.GetCommon().Sequence = &sequence
 	view := freshView(t, env)
 
-	blob := buildSignedBlob(t, env, jtx.NewSetRegularKeyTx(alice, regularKey), alice)
+	blob := buildSignedBlob(t, env, setRegularKeyTx, alice)
 	setRegularKey, err := tx.ParseFromBinary(blob)
 	if err != nil {
 		t.Fatalf("ParseFromBinary: %v", err)

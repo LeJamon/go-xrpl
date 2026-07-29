@@ -351,6 +351,8 @@ func signTransactionJSON(ctx context.Context, services *types.ServiceContainer, 
 	// payload; the counterparty's key goes into the nested object.
 	if signatureTarget == "" {
 		txMap["SigningPubKey"] = publicKey
+	} else if _, ok := txMap["SigningPubKey"]; !ok {
+		txMap["SigningPubKey"] = ""
 	}
 
 	unsignedBlob, err := binarycodec.EncodeBytes(txMap)

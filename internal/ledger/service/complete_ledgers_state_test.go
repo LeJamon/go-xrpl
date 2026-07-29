@@ -65,11 +65,12 @@ func makeStubLedgerWithTransaction(
 		"Account":         account,
 		"Fee":             "10",
 		"Sequence":        accountSequence,
+		"SigningPubKey":   "",
 	})
 	require.NoError(t, err)
 	txBytes, err := hex.DecodeString(txHex)
 	require.NoError(t, err)
-	txBlob, txID := makeTxMetaBlobForTest(t, txBytes, 0)
+	txBlob, txID := makeTxMetaBlobForTest(t, txBytes, 0, account)
 
 	txMap := shamap.New(shamap.TypeTransaction)
 	require.NoError(t, txMap.PutWithNodeType(txID, txBlob, shamap.NodeTypeTransactionWithMeta))
@@ -78,7 +79,9 @@ func makeStubLedgerWithTransaction(
 
 	hdr := makeStubLedger(t, seq, hash, parentHash).Header()
 	hdr.TxHash = txRoot
-	l, err := ledger.NewFromHeader(hdr, shamap.New(shamap.TypeState), txMap, drops.Fees{})
+	stateMap, stateRoot := makeStubStateMap(t, seq)
+	hdr.AccountHash = stateRoot
+	l, err := ledger.NewFromHeader(hdr, stateMap, txMap, drops.Fees{})
 	require.NoError(t, err)
 	return l, txID
 }

@@ -49,13 +49,13 @@ func TestPersistToRelationalDBRejectsMalformedTransactionData(t *testing.T) {
 	})
 
 	t.Run("transaction hash does not match map key", func(t *testing.T) {
-		raw, hash := validRelationalTestTransaction(t)
+		raw, hash := validRelationalTestTransaction(t, 1)
 		hash[0] ^= 0xff
 		assertRelationalPersistRejected(t, raw, validMeta, hash)
 	})
 
 	t.Run("metadata missing transaction result", func(t *testing.T) {
-		raw, hash := validRelationalTestTransaction(t)
+		raw, hash := validRelationalTestTransaction(t, 1)
 		meta := encodeRelationalTestMap(t, map[string]any{
 			"AffectedNodes":    []any{},
 			"TransactionIndex": uint32(0),
@@ -113,9 +113,8 @@ func relationalTestLedger(t *testing.T, hash [32]byte, combined []byte) *ledger.
 	return l
 }
 
-func validRelationalTestTransaction(t *testing.T) ([]byte, [32]byte) {
+func validRelationalTestTransaction(t *testing.T, sequence uint32) ([]byte, [32]byte) {
 	t.Helper()
-	sequence := uint32(1)
 	transaction := payment.NewPayment(
 		"rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh",
 		"rN7n7otQDd6FczFgLdSqtcsAUxDkw6fzRH",

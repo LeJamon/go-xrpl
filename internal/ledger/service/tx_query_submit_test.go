@@ -56,6 +56,7 @@ func memoPaymentBlob(t *testing.T, from, to string, memoDataHex string) []byte {
 		"Amount":          "100000000",
 		"Fee":             "10",
 		"Sequence":        uint32(1),
+		"SigningPubKey":   "",
 		"Memos": []map[string]any{
 			{"Memo": map[string]any{"MemoData": memoDataHex}},
 		},

@@ -48,9 +48,20 @@ func buildLedgerWithState(t *testing.T, seq uint32) *ledger.Ledger {
 	if err := stateMap.Put(key, []byte("state-payload")); err != nil {
 		t.Fatalf("state Put: %v", err)
 	}
+	stateRoot, err := stateMap.Hash()
+	if err != nil {
+		t.Fatalf("state Hash: %v", err)
+	}
+	txMap := shamap.New(shamap.TypeTransaction)
+	txRoot, err := txMap.Hash()
+	if err != nil {
+		t.Fatalf("transaction Hash: %v", err)
+	}
 	hdr := header.LedgerHeader{
 		LedgerIndex:         seq,
 		Drops:               100_000_000_000_000,
+		AccountHash:         stateRoot,
+		TxHash:              txRoot,
 		CloseTime:           time.Unix(1_700_000_000+int64(seq), 0).UTC(),
 		ParentCloseTime:     time.Unix(1_699_999_990+int64(seq), 0).UTC(),
 		CloseTimeResolution: 10,
@@ -58,7 +69,7 @@ func buildLedgerWithState(t *testing.T, seq uint32) *ledger.Ledger {
 		Accepted:            true,
 	}
 	hdr.Hash = [32]byte{0xED, byte(seq), byte(seq >> 8)}
-	return ledger.FromGenesis(hdr, stateMap, shamap.New(shamap.TypeTransaction), drops.Fees{})
+	return ledger.FromGenesis(hdr, stateMap, txMap, drops.Fees{})
 }
 
 // TestService_Stop_DrainsQueuedPersists proves the shutdown contract: ledgers
