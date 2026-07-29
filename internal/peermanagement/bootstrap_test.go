@@ -4,6 +4,8 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"os"
+	"syscall"
 	"testing"
 	"time"
 
@@ -402,7 +404,13 @@ func TestDiscoveryPartialBootstrapFailureIsQuarantined(t *testing.T) {
 		Clock:       func() time.Time { return now },
 	}, nil)
 	d.AddPeer(address, 0, 0)
-	d.delayConnectRetry(address, bootstrapPartialRetry)
+	overlay := &Overlay{discovery: d}
+	overlay.delayPeerRetry(address, true, &FrameReadError{
+		MessageType: TypeManifests,
+		WireSize:    1024,
+		BytesRead:   1,
+		Err:         errors.New("connection reset"),
+	}, false)
 
 	now = now.Add(recentConnectAttempt)
 	assert.Empty(t, d.selectPeersToConnect(1, true))
@@ -410,8 +418,62 @@ func TestDiscoveryPartialBootstrapFailureIsQuarantined(t *testing.T) {
 	assert.Equal(t, []string{address}, d.selectPeersToConnect(1, true))
 }
 
-func TestOverlayPartialManifestFailureQuarantinesOrdinarySource(t *testing.T) {
+func TestOverlayPartialManifestFailurePreservesOrdinarySourceSquelch(t *testing.T) {
 	now := time.Unix(4_500, 0)
+	address := "192.0.2.1:51235"
+	discovery := NewDiscovery(&Config{
+		MaxOutbound: 1,
+		Clock:       func() time.Time { return now },
+	}, nil)
+	discovery.AddPeer(address, 0, 0)
+	require.Equal(t, []string{address}, discovery.SelectPeersToConnect(1))
+	now = now.Add(10 * time.Second)
+	discovery.MarkConnected(address, 1)
+	overlay := &Overlay{discovery: discovery}
+
+	now = now.Add(20 * time.Second)
+	overlay.delayPeerRetry(address, false, &FrameReadError{
+		MessageType: TypeManifests,
+		WireSize:    1024,
+		BytesRead:   1,
+		Err:         errors.New("connection reset"),
+	}, false)
+	discovery.MarkDisconnected(1)
+
+	assert.Empty(t, discovery.SelectPeersToConnect(1))
+	now = now.Add(recentConnectAttempt/2 - time.Nanosecond)
+	assert.Empty(t, discovery.SelectPeersToConnect(1))
+	now = now.Add(time.Nanosecond)
+	assert.Equal(t, []string{address}, discovery.SelectPeersToConnect(1))
+}
+
+func TestOverlayLongLivedOrdinaryManifestFailureDoesNotRestartSquelch(t *testing.T) {
+	now := time.Unix(4_600, 0)
+	address := "192.0.2.1:51235"
+	discovery := NewDiscovery(&Config{
+		MaxOutbound: 1,
+		Clock:       func() time.Time { return now },
+	}, nil)
+	discovery.AddPeer(address, 0, 0)
+	require.Equal(t, []string{address}, discovery.SelectPeersToConnect(1))
+	now = now.Add(10 * time.Second)
+	discovery.MarkConnected(address, 1)
+	overlay := &Overlay{discovery: discovery}
+
+	now = now.Add(2 * recentConnectAttempt)
+	overlay.delayPeerRetry(address, false, &FrameReadError{
+		MessageType: TypeManifests,
+		WireSize:    1024,
+		BytesRead:   1,
+		Err:         errors.New("connection reset"),
+	}, false)
+	discovery.MarkDisconnected(1)
+
+	assert.Equal(t, []string{address}, discovery.SelectPeersToConnect(1))
+}
+
+func TestOverlayLocalSpoolFailureDoesNotExtendBootstrapQuarantine(t *testing.T) {
+	now := time.Unix(4_750, 0)
 	address := "192.0.2.1:51235"
 	discovery := NewDiscovery(&Config{
 		MaxOutbound: 1,
@@ -420,18 +482,24 @@ func TestOverlayPartialManifestFailureQuarantinesOrdinarySource(t *testing.T) {
 	discovery.AddPeer(address, 0, 0)
 	overlay := &Overlay{discovery: discovery}
 
-	overlay.delayPeerRetry(address, false, &FrameReadError{
+	overlay.delayPeerRetry(address, true, &FrameReadError{
 		MessageType: TypeManifests,
 		WireSize:    1024,
 		BytesRead:   1,
-		Err:         errors.New("connection reset"),
+		Err: &manifestSpoolLocalError{
+			operation: "spool manifest payload",
+			err: &os.PathError{
+				Op:   "write",
+				Path: "manifest-spool",
+				Err:  syscall.ETIMEDOUT,
+			},
+		},
 	}, false)
 
-	assert.Empty(t, discovery.SelectPeersToConnect(1))
-	now = now.Add(bootstrapPartialRetry - time.Nanosecond)
-	assert.Empty(t, discovery.SelectPeersToConnect(1))
+	now = now.Add(recentConnectAttempt - time.Nanosecond)
+	assert.Empty(t, discovery.selectPeersToConnect(1, true))
 	now = now.Add(time.Nanosecond)
-	assert.Equal(t, []string{address}, discovery.SelectPeersToConnect(1))
+	assert.Equal(t, []string{address}, discovery.selectPeersToConnect(1, true))
 }
 
 func TestOverlayOrdinaryPeerFailuresDoNotTriggerManifestQuarantine(t *testing.T) {

@@ -170,7 +170,12 @@ func (o *Overlay) delayPeerRetry(addr string, bootstrap bool, err error, stoppin
 		retry = recentConnectAttempt
 	}
 	var frameErr *FrameReadError
-	if errors.As(err, &frameErr) && frameErr.MessageType == TypeManifests && frameErr.BytesRead > 0 {
+	var localSpoolErr *manifestSpoolLocalError
+	if bootstrap &&
+		errors.As(err, &frameErr) &&
+		frameErr.MessageType == TypeManifests &&
+		frameErr.BytesRead > 0 &&
+		!errors.As(frameErr.Err, &localSpoolErr) {
 		retry = bootstrapPartialRetry
 		slog.Info("Manifest source quarantined", "t", "Overlay", "addr", addr,
 			"retry_after", retry, "wire_size", frameErr.WireSize,
