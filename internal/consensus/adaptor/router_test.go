@@ -358,7 +358,6 @@ func TestRouterStopsOnContextCancel(t *testing.T) {
 	}
 }
 
-// countingSender wraps noopSender with a counter on UpdateRelaySlot.
 type countingSender struct {
 	noopSender
 	mu      sync.Mutex

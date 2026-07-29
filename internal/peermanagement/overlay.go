@@ -899,7 +899,6 @@ func (o *Overlay) attachOutboundBudget(peer *Peer) {
 	})
 }
 
-// OutboundCriticalQueueFailures reports peer-terminal admission failures.
 func (o *Overlay) OutboundCriticalQueueFailures() (local, shared uint64) {
 	return o.outboundCriticalLocalFailures.Load(), o.outboundCriticalSharedFailures.Load()
 }

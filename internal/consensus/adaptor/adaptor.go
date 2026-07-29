@@ -516,13 +516,10 @@ func (a *Adaptor) BroadcastValidation(validation *consensus.Validation) error {
 	return a.sender.BroadcastValidation(validation)
 }
 
-// RecordMessageSource records an inbound proposal or validation source.
 func (a *Adaptor) RecordMessageSource(suppressionHash [32]byte, peerID uint64) {
 	a.sender.RecordMessageSource(suppressionHash, peerID)
 }
 
-// PeersThatHave delegates to NetworkSender so higher layers can query without
-// importing the overlay.
 func (a *Adaptor) PeersThatHave(suppressionHash [32]byte) []uint64 {
 	return a.sender.PeersThatHave(suppressionHash)
 }

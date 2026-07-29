@@ -50,7 +50,6 @@ var (
 	ErrShutdown   = errors.New("overlay is shutting down")
 )
 
-// SendQueueError describes why a bounded outbound admission failed.
 type SendQueueError struct {
 	Class           OutboundSendClass
 	Reason          SendQueueFailureReason

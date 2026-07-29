@@ -288,7 +288,6 @@ func WithIPLimit(n int) Option {
 	}
 }
 
-// WithOutboundRetainedBytes sets the overlay-wide outbound memory ceiling.
 func WithOutboundRetainedBytes(bytes int64) Option {
 	return func(c *Config) {
 		c.OutboundRetainedBytes = bytes

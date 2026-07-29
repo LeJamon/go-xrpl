@@ -66,7 +66,6 @@ type VerifiedValidationProcessor interface {
 	ProcessVerifiedValidation(validation *Validation, origin ValidationOrigin) (ValidationDisposition, error)
 }
 
-// ValidationOrigin describes the peer that delivered a validation.
 type ValidationOrigin struct {
 	PeerID  uint64
 	Cluster bool
@@ -104,8 +103,6 @@ func (s ValidationStatus) String() string {
 	}
 }
 
-// ValidationDisposition tells the router which post-processing actions are
-// appropriate for a verified validation.
 type ValidationDisposition struct {
 	Status  ValidationStatus
 	Tracked bool

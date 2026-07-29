@@ -2010,7 +2010,6 @@ func (p *Peer) SendDrops() uint64 {
 	return p.sendDrops.Load()
 }
 
-// SendDropsByClass returns the dropped-frame count for one admission class.
 func (p *Peer) SendDropsByClass(class OutboundSendClass) uint64 {
 	if class >= outboundClassCount {
 		return 0

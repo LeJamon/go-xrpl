@@ -329,13 +329,10 @@ func (s *OverlaySender) IncPeerBadData(peerID uint64, reason string) {
 	s.overlay.IncPeerBadData(peermanagement.PeerID(peerID), reason)
 }
 
-// RecordMessageSource records an inbound source for a proposal or validation.
 func (s *OverlaySender) RecordMessageSource(suppressionHash [32]byte, peerID uint64) {
 	s.overlay.RecordMessageSource(suppressionHash, peermanagement.PeerID(peerID))
 }
 
-// PeersThatHave returns the accumulated inbound sources for this
-// suppression hash.
 func (s *OverlaySender) PeersThatHave(suppressionHash [32]byte) []uint64 {
 	raw := s.overlay.PeersThatHave(suppressionHash)
 	if len(raw) == 0 {

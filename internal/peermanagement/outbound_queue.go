@@ -6,7 +6,6 @@ import (
 	"sync"
 )
 
-// OutboundSendClass identifies an outbound admission class.
 type OutboundSendClass uint8
 
 const (
@@ -35,7 +34,6 @@ func (c OutboundSendClass) String() string {
 	}
 }
 
-// SendQueueFailureReason identifies the exhausted queue resource.
 type SendQueueFailureReason uint8
 
 const (
