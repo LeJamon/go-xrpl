@@ -20,29 +20,27 @@ import (
 	"github.com/spf13/cobra"
 )
 
-// rpcCmd represents the rpc command group
-var rpcCmd = &cobra.Command{
-	Use:   "rpc",
-	Short: "RPC client commands",
-	Long: `Forward RPC commands to a running go-xrpl node over HTTP JSON-RPC.
+func (a *application) newRPCCommand() *cobra.Command {
+	command := &cobra.Command{
+		Use:   "rpc",
+		Short: "RPC client commands",
+		Long: `Forward RPC commands to a running go-xrpl node over HTTP JSON-RPC.
 
 The target node's host and port are read from the HTTP port in --conf, so a
 config file is required. Start the node with 'xrpld server --conf ...' first;
 admin methods (stop, peers, feature, ...) succeed when the configured HTTP
 port grants admin to localhost.`,
-}
-
-func init() {
-	rootCmd.AddCommand(rpcCmd)
-	for _, spec := range rpcCommandSpecs {
-		rpcCmd.AddCommand(spec.command())
 	}
-	rpcCmd.AddCommand(jsonCmd)
-	rpcCmd.PersistentFlags().Bool(
-		"allow-insecure-rpc-credentials",
+	for _, spec := range rpcCommandSpecs {
+		command.AddCommand(spec.commandWithRunner(nil, a.runRPC))
+	}
+	command.AddCommand(newJSONCommand(a.runRPC))
+	command.PersistentFlags().Bool(
+		insecureRPCFlag,
 		false,
 		"allow credentials to be sent over cleartext HTTP to a non-loopback host",
 	)
+	return command
 }
 
 const (
@@ -53,11 +51,15 @@ const (
 	adminPasswordParam  = "admin_password"
 )
 
-var rpcHTTPClient = &http.Client{
-	CheckRedirect: func(_ *http.Request, _ []*http.Request) error {
-		return http.ErrUseLastResponse
-	},
+func newRPCHTTPClient() *http.Client {
+	return &http.Client{
+		CheckRedirect: func(_ *http.Request, _ []*http.Request) error {
+			return http.ErrUseLastResponse
+		},
+	}
 }
+
+type rpcRunFunc func(*cobra.Command, string, any) error
 
 // rpcCommandSpec is a single `xrpld rpc <name>` subcommand. The command name
 // and (by default) the RPC method are the first token of Use; params builds
@@ -82,10 +84,10 @@ func (s rpcCommandSpec) methodName() string {
 }
 
 func (s rpcCommandSpec) command() *cobra.Command {
-	return s.commandWithSecretPrompt(nil)
+	return s.commandWithRunner(nil, nil)
 }
 
-func (s rpcCommandSpec) commandWithSecretPrompt(ask rpcSecretPrompt) *cobra.Command {
+func (s rpcCommandSpec) commandWithRunner(ask rpcSecretPrompt, run rpcRunFunc) *cobra.Command {
 	method := s.methodName()
 	args := s.args
 	if args == nil {
@@ -115,7 +117,10 @@ func (s rpcCommandSpec) commandWithSecretPrompt(ask rpcSecretPrompt) *cobra.Comm
 					return err
 				}
 			}
-			return runRPC(cmd, method, params)
+			if run == nil {
+				return fmt.Errorf("RPC command is not attached to a root command")
+			}
+			return run(cmd, method, params)
 		},
 	}
 	if s.paramsWithSecret != nil {
@@ -128,12 +133,12 @@ func (s rpcCommandSpec) commandWithSecretPrompt(ask rpcSecretPrompt) *cobra.Comm
 // prints the result. The request uses XRPL's rippled-style envelope —
 // {"method": m, "params": [p]} — and the response is the {"result": {...}}
 // object the server returns.
-func runRPC(cmd *cobra.Command, method string, params any) error {
-	cfg, err := requireConfig()
+func (a *application) runRPC(cmd *cobra.Command, method string, params any) error {
+	cfg, err := a.requireConfig(false)
 	if err != nil {
 		return err
 	}
-	endpoint, port, err := rpcEndpoint(cfg)
+	endpoint, port, err := rpcEndpoint(cfg, a.options.configFile)
 	if err != nil {
 		return err
 	}
@@ -176,7 +181,7 @@ func runRPC(cmd *cobra.Command, method string, params any) error {
 		httpReq.SetBasicAuth(user, pass)
 	}
 
-	resp, err := rpcHTTPClient.Do(httpReq)
+	resp, err := a.deps.httpClient.Do(httpReq)
 	if err != nil {
 		return fmt.Errorf("connecting to node at %s: %w (is the server running?)", endpoint, err)
 	}
@@ -196,10 +201,10 @@ func runRPC(cmd *cobra.Command, method string, params any) error {
 // rpcEndpoint resolves the JSON-RPC URL to POST to from the HTTP ports in the
 // config. An admin port is preferred so admin methods work; ports are sorted
 // by name for deterministic selection.
-func rpcEndpoint(cfg *config.Config) (string, *config.PortConfig, error) {
+func rpcEndpoint(cfg *config.Config, configPath string) (string, *config.PortConfig, error) {
 	ports := cfg.HTTPPorts()
 	if len(ports) == 0 {
-		return "", nil, fmt.Errorf("no HTTP port configured in %s; 'xrpld rpc' forwards to a running node's JSON-RPC port", configFile)
+		return "", nil, fmt.Errorf("no HTTP port configured in %s; 'xrpld rpc' forwards to a running node's JSON-RPC port", configPath)
 	}
 
 	names := make([]string, 0, len(ports))
@@ -1178,17 +1183,20 @@ deprecated and emit a warning.`,
 	{use: "validator_list_sites", short: "Get validator list sites"},
 }
 
-// jsonCmd is the generic escape hatch: it takes the method name and a raw JSON
-// params object, so it cannot be expressed by the fixed-method table above.
-var jsonCmd = &cobra.Command{
-	Use:   "json <method> <json_params>",
-	Short: "Execute any RPC method with JSON parameters",
-	Args:  cobra.ExactArgs(2),
-	RunE: func(cmd *cobra.Command, args []string) error {
-		params, err := parseJSONObject("parameters", args[1])
-		if err != nil {
-			return err
-		}
-		return runRPC(cmd, args[0], params)
-	},
+func newJSONCommand(run rpcRunFunc) *cobra.Command {
+	return &cobra.Command{
+		Use:   "json <method> <json_params>",
+		Short: "Execute any RPC method with JSON parameters",
+		Args:  cobra.ExactArgs(2),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			params, err := parseJSONObject("parameters", args[1])
+			if err != nil {
+				return err
+			}
+			if run == nil {
+				return fmt.Errorf("RPC command is not attached to a root command")
+			}
+			return run(cmd, args[0], params)
+		},
+	}
 }

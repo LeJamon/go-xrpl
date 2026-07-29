@@ -133,7 +133,10 @@ func isFullGitHash(value string) bool {
 // Run assembles and starts every node subsystem from the parsed config, then
 // blocks until a terminating signal or fatal error. It is the composition root
 // extracted from the CLI so flag parsing and node wiring stay separable.
-func Run(appConfig *config.Config, configPath string, standalone bool, startup service.StartupConfig, rootLogger, serverLog xrpllog.Logger) error {
+func Run(ctx context.Context, appConfig *config.Config, configPath string, standalone bool, startup service.StartupConfig, rootLogger, serverLog xrpllog.Logger) error {
+	if err := context.Cause(ctx); err != nil {
+		return err
+	}
 	if err := validateTrustedValidatorConfig(appConfig, standalone); err != nil {
 		return err
 	}
@@ -160,6 +163,9 @@ func Run(appConfig *config.Config, configPath string, standalone bool, startup s
 
 	db, repoManager, err = setupStorage(appConfig, serverLog)
 	if err != nil {
+		return err
+	}
+	if err := context.Cause(ctx); err != nil {
 		return err
 	}
 	var nodeFamily *backend.NodeStore
@@ -256,6 +262,9 @@ func Run(appConfig *config.Config, configPath string, standalone bool, startup s
 	if err := ledgerService.Start(); err != nil {
 		return fmt.Errorf("start ledger service: %w", err)
 	}
+	if err := context.Cause(ctx); err != nil {
+		return err
+	}
 
 	// Start the goroutine-scheduling-latency sampler. Runs in both
 	// standalone and consensus modes; cancelled when runServer returns.
@@ -333,6 +342,9 @@ func Run(appConfig *config.Config, configPath string, standalone bool, startup s
 					nodeFamily.SetMinimumLedgerSeq,
 					nodeFamily.BeginPrune,
 				)
+				if err := context.Cause(ctx); err != nil {
+					return err
+				}
 				rotator.Start()
 				serverLog.Info("Online delete enabled",
 					"online_delete", appConfig.NodeDB.OnlineDelete,
@@ -449,6 +461,9 @@ func Run(appConfig *config.Config, configPath string, standalone bool, startup s
 		cleanerFamily = memFamily
 	}
 	ledgerCleaner = cleaner.New(&ledgerCleanerSource{svc: ledgerSvcRef, family: cleanerFamily}, rootLogger)
+	if err := context.Cause(ctx); err != nil {
+		return err
+	}
 	ledgerCleaner.Start()
 
 	cleanerRef := ledgerCleaner
@@ -512,6 +527,9 @@ func Run(appConfig *config.Config, configPath string, standalone bool, startup s
 			}
 		}
 
+		if err := context.Cause(ctx); err != nil {
+			return err
+		}
 		if err := consensusComponents.Start(); err != nil {
 			return fmt.Errorf("start consensus components: %w", err)
 		}
@@ -1032,6 +1050,9 @@ func Run(appConfig *config.Config, configPath string, standalone bool, startup s
 		)
 	})
 
+	if err := context.Cause(ctx); err != nil {
+		return err
+	}
 	var listenerErrCh chan error
 	if httpSrvs, wsSrvs, listenerErrCh, err = startListeners(serverLog, appConfig, httpServer, wsServer); err != nil {
 		return err
@@ -1086,6 +1107,7 @@ func Run(appConfig *config.Config, configPath string, standalone bool, startup s
 
 	sigCh := make(chan os.Signal, 1)
 	signal.Notify(sigCh, syscall.SIGTERM, syscall.SIGINT)
+	defer signal.Stop(sigCh)
 
 	// SIGHUP triggers a UNL reload: re-read the config from --conf and
 	// replace the adaptor's trusted validator set. Per-round delta
@@ -1096,6 +1118,7 @@ func Run(appConfig *config.Config, configPath string, standalone bool, startup s
 	// subsystem. Buffered so a flurry of HUPs coalesces.
 	reloadCh := make(chan os.Signal, 1)
 	signal.Notify(reloadCh, syscall.SIGHUP)
+	defer signal.Stop(reloadCh)
 
 	// shutdownCh lets the RPC stop command trigger the same path
 	shutdownCh := make(chan struct{}, 1)
@@ -1110,7 +1133,7 @@ func Run(appConfig *config.Config, configPath string, standalone bool, startup s
 		}
 	})
 
-	return waitForShutdown(serverLog, sigCh, reloadCh, shutdownCh, listenerErrCh, consensusComponents, configPath)
+	return waitForShutdown(ctx, serverLog, sigCh, reloadCh, shutdownCh, listenerErrCh, consensusComponents, configPath)
 }
 
 func configuredLedgerLoadFees(appConfig *config.Config) drops.Fees {
@@ -1148,6 +1171,7 @@ func validateTrustedValidatorConfig(appConfig *config.Config, standalone bool) e
 // listener error (if any) so the caller's deferred cleanup runs.
 
 func waitForShutdown(
+	ctx context.Context,
 	log xrpllog.Logger,
 	sigCh, reloadCh chan os.Signal,
 	shutdownCh chan struct{},
@@ -1157,6 +1181,8 @@ func waitForShutdown(
 ) error {
 	for {
 		select {
+		case <-ctx.Done():
+			return context.Cause(ctx)
 		case sig := <-sigCh:
 			log.Info("Received signal, shutting down", "signal", sig)
 			return nil

@@ -27,18 +27,19 @@ type stateFileEntry struct {
 	Decoded map[string]any  `json:"decoded,omitempty"`
 }
 
-var (
-	compareShowAll      bool
-	compareShowDecoded  bool
-	compareFilterType   string
-	compareOutputFormat string
-)
+type compareOptions struct {
+	showAll     bool
+	showDecoded bool
+	filterType  string
+	outputPath  string
+}
 
-// compareCmd represents the compare command
-var compareCmd = &cobra.Command{
-	Use:   "compare <file1> <file2>",
-	Short: "Compare two state dump files",
-	Long: `Compare two state dump JSON files and show differences.
+func newCompareCommand() *cobra.Command {
+	options := &compareOptions{}
+	command := &cobra.Command{
+		Use:   "compare <file1> <file2>",
+		Short: "Compare two state dump files",
+		Long: `Compare two state dump JSON files and show differences.
 
 Supports multiple formats:
 - Fixture state.json files (entries with index/data)
@@ -58,20 +59,19 @@ Examples:
     xrpld compare debug/post_state.json expected_state.json --decoded
     xrpld compare file1.json file2.json --filter AccountRoot
     xrpld compare file1.json file2.json --all`,
-	Args: cobra.ExactArgs(2),
-	RunE: runCompare,
+		Args: cobra.ExactArgs(2),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			return runCompare(cmd, args, options)
+		},
+	}
+	command.Flags().BoolVarP(&options.showAll, "all", "a", false, "Show all entries, not just differences")
+	command.Flags().BoolVarP(&options.showDecoded, "decoded", "d", true, "Show decoded JSON (default true)")
+	command.Flags().StringVarP(&options.filterType, "filter", "f", "", "Filter by LedgerEntryType (e.g., AccountRoot, RippleState)")
+	command.Flags().StringVarP(&options.outputPath, "output", "o", "", "Output diff to JSON file")
+	return command
 }
 
-func init() {
-	rootCmd.AddCommand(compareCmd)
-
-	compareCmd.Flags().BoolVarP(&compareShowAll, "all", "a", false, "Show all entries, not just differences")
-	compareCmd.Flags().BoolVarP(&compareShowDecoded, "decoded", "d", true, "Show decoded JSON (default true)")
-	compareCmd.Flags().StringVarP(&compareFilterType, "filter", "f", "", "Filter by LedgerEntryType (e.g., AccountRoot, RippleState)")
-	compareCmd.Flags().StringVarP(&compareOutputFormat, "output", "o", "", "Output diff to JSON file")
-}
-
-func runCompare(cmd *cobra.Command, args []string) error {
+func runCompare(cmd *cobra.Command, args []string, options *compareOptions) error {
 	w := cmd.OutOrStdout()
 	file1Path := args[0]
 	file2Path := args[1]
@@ -102,12 +102,12 @@ func runCompare(cmd *cobra.Command, args []string) error {
 	added, removed, modified, unchanged := compareStates(map1, map2)
 
 	// Apply filter if specified
-	if compareFilterType != "" {
-		added = filterByType(added, compareFilterType)
-		removed = filterByType(removed, compareFilterType)
-		modified = filterModifiedByType(modified, compareFilterType)
-		unchanged = filterByType(unchanged, compareFilterType)
-		fmt.Fprintf(w, "Filtered by type: %s\n\n", compareFilterType)
+	if options.filterType != "" {
+		added = filterByType(added, options.filterType)
+		removed = filterByType(removed, options.filterType)
+		modified = filterModifiedByType(modified, options.filterType)
+		unchanged = filterByType(unchanged, options.filterType)
+		fmt.Fprintf(w, "Filtered by type: %s\n\n", options.filterType)
 	}
 
 	// Print summary
@@ -120,24 +120,24 @@ func runCompare(cmd *cobra.Command, args []string) error {
 
 	// Print details
 	if len(added) > 0 {
-		printAddedEntries(w, added)
+		printAddedEntries(w, added, options)
 	}
 
 	if len(removed) > 0 {
-		printRemovedEntries(w, removed)
+		printRemovedEntries(w, removed, options)
 	}
 
 	if len(modified) > 0 {
-		printModifiedEntries(w, modified)
+		printModifiedEntries(w, modified, options)
 	}
 
-	if compareShowAll && len(unchanged) > 0 {
+	if options.showAll && len(unchanged) > 0 {
 		printUnchangedEntries(w, unchanged)
 	}
 
 	// Output to file if requested
-	if compareOutputFormat != "" {
-		if err := writeDiffJSON(w, compareOutputFormat, added, removed, modified); err != nil {
+	if options.outputPath != "" {
+		if err := writeDiffJSON(w, options.outputPath, added, removed, modified); err != nil {
 			return err
 		}
 	}
@@ -295,31 +295,31 @@ func filterModifiedByType(entries []modifiedEntry, entryType string) []modifiedE
 	return result
 }
 
-func printAddedEntries(w io.Writer, entries []stateEntry) {
+func printAddedEntries(w io.Writer, entries []stateEntry, options *compareOptions) {
 	fmt.Fprintln(w, "================================================================================")
 	fmt.Fprintln(w, "                              ADDED ENTRIES")
 	fmt.Fprintln(w, "================================================================================")
 
 	for i, e := range entries {
 		fmt.Fprintf(w, "\n[+] Entry %d: %s\n", i+1, e.Index)
-		printEntryDetails(w, e.Decoded)
+		printEntryDetails(w, e.Decoded, options)
 	}
 	fmt.Fprintln(w)
 }
 
-func printRemovedEntries(w io.Writer, entries []stateEntry) {
+func printRemovedEntries(w io.Writer, entries []stateEntry, options *compareOptions) {
 	fmt.Fprintln(w, "================================================================================")
 	fmt.Fprintln(w, "                             REMOVED ENTRIES")
 	fmt.Fprintln(w, "================================================================================")
 
 	for i, e := range entries {
 		fmt.Fprintf(w, "\n[-] Entry %d: %s\n", i+1, e.Index)
-		printEntryDetails(w, e.Decoded)
+		printEntryDetails(w, e.Decoded, options)
 	}
 	fmt.Fprintln(w)
 }
 
-func printModifiedEntries(w io.Writer, entries []modifiedEntry) {
+func printModifiedEntries(w io.Writer, entries []modifiedEntry, options *compareOptions) {
 	fmt.Fprintln(w, "================================================================================")
 	fmt.Fprintln(w, "                            MODIFIED ENTRIES")
 	fmt.Fprintln(w, "================================================================================")
@@ -340,7 +340,7 @@ func printModifiedEntries(w io.Writer, entries []modifiedEntry) {
 		fmt.Fprintln(w, "    ---")
 
 		// Show field-by-field diff
-		if compareShowDecoded && e.OldDecoded != nil && e.NewDecoded != nil {
+		if options.showDecoded && e.OldDecoded != nil && e.NewDecoded != nil {
 			printFieldDiff(w, e.OldDecoded, e.NewDecoded, e.ChangedKeys)
 		}
 	}
@@ -364,7 +364,7 @@ func printUnchangedEntries(w io.Writer, entries []stateEntry) {
 	fmt.Fprintln(w)
 }
 
-func printEntryDetails(w io.Writer, decoded map[string]any) {
+func printEntryDetails(w io.Writer, decoded map[string]any, options *compareOptions) {
 	if decoded == nil {
 		fmt.Fprintln(w, "    (unable to decode)")
 		return
@@ -374,12 +374,12 @@ func printEntryDetails(w io.Writer, decoded map[string]any) {
 		fmt.Fprintf(w, "    Type: %s\n", t)
 	}
 
-	if compareShowDecoded {
+	if options.showDecoded {
 		// Print key fields based on entry type
 		printKeyFields(w, decoded)
 
 		// Optionally print full JSON
-		if compareShowAll {
+		if options.showAll {
 			prettyJSON, _ := json.MarshalIndent(decoded, "    ", "  ")
 			fmt.Fprintf(w, "    Full data:\n    %s\n", string(prettyJSON))
 		}

@@ -277,9 +277,6 @@ func TestPrintEntries(t *testing.T) {
 		"LedgerEntryType": "AccountRoot", "Account": "rAcct", "Balance": "1", "Sequence": uint32(1), "OwnerCount": uint32(0), "Flags": uint32(0),
 	}}
 
-	prevAll, prevDecoded := compareShowAll, compareShowDecoded
-	defer func() { compareShowAll, compareShowDecoded = prevAll, prevDecoded }()
-
 	tests := []struct {
 		name       string
 		showAll    bool
@@ -330,9 +327,9 @@ func TestPrintEntries(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			compareShowAll, compareShowDecoded = tt.showAll, tt.showDecode
+			options := &compareOptions{showAll: tt.showAll, showDecoded: tt.showDecode}
 			var output bytes.Buffer
-			printAddedEntries(&output, []stateEntry{entry})
+			printAddedEntries(&output, []stateEntry{entry}, options)
 			got := output.String()
 			const banner = "================================================================================\n" +
 				"                              ADDED ENTRIES\n" +
@@ -360,17 +357,13 @@ func TestPrintUnchangedEntries(t *testing.T) {
 }
 
 func TestPrintUnknownFieldsSorted(t *testing.T) {
-	prevAll, prevDecoded := compareShowAll, compareShowDecoded
-	defer func() { compareShowAll, compareShowDecoded = prevAll, prevDecoded }()
-	compareShowAll, compareShowDecoded = false, true
-
 	var output bytes.Buffer
 	printEntryDetails(&output, map[string]any{
 		"LedgerEntryType": "SomethingUnknown",
 		"Zulu":            3,
 		"Alpha":           1,
 		"Middle":          2,
-	})
+	}, &compareOptions{showDecoded: true})
 	want := "    Type: SomethingUnknown\n" +
 		"    Alpha: 1\n" +
 		"    Middle: 2\n" +
@@ -387,9 +380,6 @@ func TestPrintModifiedEntriesDecodedFlag(t *testing.T) {
 		NewDecoded:  map[string]any{"LedgerEntryType": "RippleState", "Balance": "2"},
 		ChangedKeys: []string{"Balance"},
 	}
-	prevDecoded := compareShowDecoded
-	defer func() { compareShowDecoded = prevDecoded }()
-
 	const banner = "================================================================================\n" +
 		"                            MODIFIED ENTRIES\n" +
 		"================================================================================\n" +
@@ -406,9 +396,8 @@ func TestPrintModifiedEntriesDecodedFlag(t *testing.T) {
 		{"raw summary", false, banner + "\n"},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
-			compareShowDecoded = tt.decoded
 			var output bytes.Buffer
-			printModifiedEntries(&output, []modifiedEntry{entry})
+			printModifiedEntries(&output, []modifiedEntry{entry}, &compareOptions{showDecoded: tt.decoded})
 			if got := output.String(); got != tt.want {
 				t.Fatalf("printModifiedEntries() =\n%q\nwant\n%q", got, tt.want)
 			}
@@ -448,14 +437,6 @@ func TestWriteDiffJSON(t *testing.T) {
 }
 
 func TestRunCompare_IdenticalFiles(t *testing.T) {
-	// Reset the command flags to defaults so a prior test cannot trigger the
-	// diff path or a stray file write.
-	prevAll, prevDecoded, prevFilter, prevOut := compareShowAll, compareShowDecoded, compareFilterType, compareOutputFormat
-	defer func() {
-		compareShowAll, compareShowDecoded, compareFilterType, compareOutputFormat = prevAll, prevDecoded, prevFilter, prevOut
-	}()
-	compareShowAll, compareShowDecoded, compareFilterType, compareOutputFormat = false, true, "", ""
-
 	dir := t.TempDir()
 	content := []byte(`{"entries":[{"index":"00000000000000000000000000000000000000000000000000000000000000FF","data":"` + feeSettingsHex(t) + `"}]}`)
 	f1 := filepath.Join(dir, "a.json")
@@ -471,18 +452,12 @@ func TestRunCompare_IdenticalFiles(t *testing.T) {
 	cmd.SetOut(io.Discard)
 	// Identical files produce no differences, so runCompare returns nil
 	// (cmdexit.ErrReported is only returned when there is a diff).
-	if err := runCompare(cmd, []string{f1, f2}); err != nil {
+	if err := runCompare(cmd, []string{f1, f2}, &compareOptions{showDecoded: true}); err != nil {
 		t.Fatalf("runCompare on identical files: %v", err)
 	}
 }
 
 func TestRunCompare_DiffReportsExit(t *testing.T) {
-	prevAll, prevDecoded, prevFilter, prevOut := compareShowAll, compareShowDecoded, compareFilterType, compareOutputFormat
-	defer func() {
-		compareShowAll, compareShowDecoded, compareFilterType, compareOutputFormat = prevAll, prevDecoded, prevFilter, prevOut
-	}()
-	compareShowAll, compareShowDecoded, compareFilterType, compareOutputFormat = false, true, "", ""
-
 	dir := t.TempDir()
 	f1 := filepath.Join(dir, "a.json")
 	f2 := filepath.Join(dir, "b.json")
@@ -495,7 +470,7 @@ func TestRunCompare_DiffReportsExit(t *testing.T) {
 
 	cmd := &cobra.Command{}
 	cmd.SetOut(io.Discard)
-	if err := runCompare(cmd, []string{f1, f2}); !errors.Is(err, cmdexit.ErrReported) {
+	if err := runCompare(cmd, []string{f1, f2}, &compareOptions{showDecoded: true}); !errors.Is(err, cmdexit.ErrReported) {
 		t.Fatalf("expected cmdexit.ErrReported on diff, got %v", err)
 	}
 }
