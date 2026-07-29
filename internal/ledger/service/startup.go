@@ -37,7 +37,7 @@ type StartupConfig struct {
 	Ledger string
 }
 
-func (c StartupConfig) validate() error {
+func (c StartupConfig) validate(fastLoad bool) error {
 	switch c.Mode {
 	case StartupNormal, StartupFresh, StartupNetwork:
 		if c.Ledger != "" {
@@ -45,7 +45,7 @@ func (c StartupConfig) validate() error {
 		}
 	case StartupLoad:
 	case StartupLoadFile:
-		if c.Ledger == "" {
+		if c.Ledger == "" && !fastLoad {
 			return errors.New("ledger file path cannot be empty")
 		}
 	case StartupReplay:
@@ -64,7 +64,7 @@ type startupSelection struct {
 }
 
 func (s *Service) selectStartup(ctx context.Context, initial *ledger.Ledger) (startupSelection, error) {
-	if err := s.config.Startup.validate(); err != nil {
+	if err := s.config.Startup.validate(s.config.FastLoad); err != nil {
 		return startupSelection{}, err
 	}
 

@@ -1,12 +1,16 @@
 package main
 
 import (
+	"context"
+	"os"
+
 	"github.com/LeJamon/go-xrpl/internal/cli"
 )
 
 func main() {
-	// Use CLI for all cases - it handles both server mode and RPC commands
-	// - No arguments: runs server (default command)
-	// - With arguments: executes CLI commands
-	cli.Execute()
+	os.Exit(cli.Run(context.Background(), os.Args[1:], cli.IOStreams{
+		In:     os.Stdin,
+		Out:    os.Stdout,
+		ErrOut: os.Stderr,
+	}))
 }

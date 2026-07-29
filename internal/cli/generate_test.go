@@ -52,16 +52,12 @@ func TestGenerateConfigContent(t *testing.T) {
 }
 
 func TestRunGenerateConfig(t *testing.T) {
-	prevNet, prevOut := generateNetwork, generateOutput
-	defer func() { generateNetwork, generateOutput = prevNet, prevOut }()
-
 	out := filepath.Join(t.TempDir(), "xrpld.toml")
-	generateNetwork = "testnet"
-	generateOutput = out
+	options := &generateOptions{network: "testnet", output: out}
 
 	cmd := &cobra.Command{}
 	cmd.SetOut(io.Discard)
-	if err := runGenerateConfig(cmd, nil); err != nil {
+	if err := runGenerateConfig(cmd, options); err != nil {
 		t.Fatalf("runGenerateConfig: %v", err)
 	}
 
@@ -88,23 +84,33 @@ func TestRunGenerateConfig(t *testing.T) {
 		!strings.Contains(string(validatorsData), "ED264807102805220DA0F312E71FC2C69E1552C9C5790F6C25E3729DEB573D5860") {
 		t.Error("testnet validators config does not contain only the altnet trust anchor")
 	}
+	configInfo, err := os.Stat(out)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := configInfo.Mode().Perm(); got != 0o600 {
+		t.Errorf("main config permissions = %o, want 600", got)
+	}
+	validatorsInfo, err := os.Stat(filepath.Join(filepath.Dir(out), generatedValidatorsFilename))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := validatorsInfo.Mode().Perm(); got != 0o644 {
+		t.Errorf("validators permissions = %o, want 644", got)
+	}
 }
 
 func TestRunGenerateConfig_DoesNotOverwriteExistingOutput(t *testing.T) {
-	prevNet, prevOut := generateNetwork, generateOutput
-	defer func() { generateNetwork, generateOutput = prevNet, prevOut }()
-
 	dir := t.TempDir()
 	validatorsPath := filepath.Join(dir, generatedValidatorsFilename)
 	if err := os.WriteFile(validatorsPath, []byte("operator-owned\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	generateNetwork = "testnet"
-	generateOutput = filepath.Join(dir, "xrpld.toml")
+	options := &generateOptions{network: "testnet", output: filepath.Join(dir, "xrpld.toml")}
 
 	cmd := &cobra.Command{}
 	cmd.SetOut(io.Discard)
-	if err := runGenerateConfig(cmd, nil); err == nil {
+	if err := runGenerateConfig(cmd, options); err == nil {
 		t.Fatal("expected existing validators output to be rejected")
 	}
 	data, err := os.ReadFile(validatorsPath)
@@ -114,15 +120,12 @@ func TestRunGenerateConfig_DoesNotOverwriteExistingOutput(t *testing.T) {
 	if string(data) != "operator-owned\n" {
 		t.Fatal("existing validators file was modified")
 	}
-	if _, err := os.Stat(generateOutput); !os.IsNotExist(err) {
+	if _, err := os.Stat(options.output); !os.IsNotExist(err) {
 		t.Fatalf("config output exists after rejected generation: %v", err)
 	}
 }
 
 func TestRunGenerateConfig_RecoversIdenticalValidatorsOutput(t *testing.T) {
-	prevNet, prevOut := generateNetwork, generateOutput
-	defer func() { generateNetwork, generateOutput = prevNet, prevOut }()
-
 	dir := t.TempDir()
 	validatorsContent, ok := generateValidatorsContent("testnet")
 	if !ok {
@@ -131,24 +134,47 @@ func TestRunGenerateConfig_RecoversIdenticalValidatorsOutput(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(dir, generatedValidatorsFilename), []byte(validatorsContent), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	generateNetwork = "testnet"
-	generateOutput = filepath.Join(dir, "xrpld.toml")
+	options := &generateOptions{network: "testnet", output: filepath.Join(dir, "xrpld.toml")}
 
 	cmd := &cobra.Command{}
 	cmd.SetOut(io.Discard)
-	if err := runGenerateConfig(cmd, nil); err != nil {
+	if err := runGenerateConfig(cmd, options); err != nil {
 		t.Fatalf("runGenerateConfig: %v", err)
 	}
-	if _, err := os.Stat(generateOutput); err != nil {
+	if _, err := os.Stat(options.output); err != nil {
 		t.Fatalf("config output was not recovered: %v", err)
+	}
+}
+
+func TestRunGenerateConfig_TightensIdenticalMainConfigPermissions(t *testing.T) {
+	output := filepath.Join(t.TempDir(), "xrpld.toml")
+	if err := os.WriteFile(output, []byte(generateConfigContent("devnet")), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(output, 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	cmd := &cobra.Command{}
+	cmd.SetOut(io.Discard)
+	if err := runGenerateConfig(cmd, &generateOptions{network: "devnet", output: output}); err != nil {
+		t.Fatalf("runGenerateConfig: %v", err)
+	}
+
+	info, err := os.Stat(output)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := info.Mode().Perm(); got != 0o600 {
+		t.Fatalf("main config permissions = %o, want 600", got)
 	}
 }
 
 func TestPublishGeneratedFiles_RollsBackPartialPublish(t *testing.T) {
 	dir := t.TempDir()
 	files := []generatedFile{
-		{path: filepath.Join(dir, "validators.toml"), data: []byte("validators")},
-		{path: filepath.Join(dir, "xrpld.toml"), data: []byte("config")},
+		{path: filepath.Join(dir, "validators.toml"), data: []byte("validators"), mode: 0o644},
+		{path: filepath.Join(dir, "xrpld.toml"), data: []byte("config"), mode: 0o600},
 	}
 	links := 0
 	err := publishGeneratedFiles(files, func(oldPath, newPath string) error {

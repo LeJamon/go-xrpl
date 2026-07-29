@@ -130,31 +130,48 @@ func TestService_StartupNormalUsesEmptyInitialAmendments(t *testing.T) {
 }
 
 func TestService_ExplicitLoadFailureUsesConfiguredFastLoadFallback(t *testing.T) {
-	fatalLoad, err := New(Config{
-		Standalone:    false,
-		Startup:       StartupConfig{Mode: StartupLoad},
-		GenesisConfig: genesis.DefaultConfig(),
-	})
-	require.NoError(t, err)
-	t.Cleanup(fatalLoad.Stop)
-	require.ErrorContains(t, fatalLoad.Start(), "relational database is required")
+	tests := []struct {
+		name    string
+		startup StartupConfig
+	}{
+		{
+			name:    "latest ledger",
+			startup: StartupConfig{Mode: StartupLoad},
+		},
+		{
+			name:    "empty ledger file",
+			startup: StartupConfig{Mode: StartupLoadFile},
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			fatalLoad, err := New(Config{
+				Standalone:    false,
+				Startup:       test.startup,
+				GenesisConfig: genesis.DefaultConfig(),
+			})
+			require.NoError(t, err)
+			t.Cleanup(fatalLoad.Stop)
+			require.Error(t, fatalLoad.Start())
 
-	fallback, err := New(Config{
-		Standalone:    false,
-		Startup:       StartupConfig{Mode: StartupLoad},
-		GenesisConfig: genesis.DefaultConfig(),
-		FastLoad:      true,
-	})
-	require.NoError(t, err)
-	require.NoError(t, fallback.Start())
-	t.Cleanup(fallback.Stop)
-	require.False(t, fallback.NeedsInitialSync())
-	require.True(t, fallback.IsFastLoadProvisional())
-	require.False(t, fallback.GetServerInfo().NeedsNetworkLedger)
-	require.Nil(t, fallback.GetValidatedLedger())
-	fallbackAmendments, err := fallback.GetClosedLedger().Read(keylet.Amendments())
-	require.NoError(t, err)
-	require.Nil(t, fallbackAmendments)
+			fallback, err := New(Config{
+				Standalone:    false,
+				Startup:       test.startup,
+				GenesisConfig: genesis.DefaultConfig(),
+				FastLoad:      true,
+			})
+			require.NoError(t, err)
+			require.NoError(t, fallback.Start())
+			t.Cleanup(fallback.Stop)
+			require.False(t, fallback.NeedsInitialSync())
+			require.True(t, fallback.IsFastLoadProvisional())
+			require.False(t, fallback.GetServerInfo().NeedsNetworkLedger)
+			require.Nil(t, fallback.GetValidatedLedger())
+			fallbackAmendments, err := fallback.GetClosedLedger().Read(keylet.Amendments())
+			require.NoError(t, err)
+			require.Nil(t, fallbackAmendments)
+		})
+	}
 }
 
 func TestService_StartupLoadIdentifiers(t *testing.T) {

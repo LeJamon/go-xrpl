@@ -14,9 +14,11 @@ require (
 	github.com/lib/pq v1.10.9
 	github.com/pierrec/lz4 v2.6.1+incompatible
 	github.com/spf13/cobra v1.9.1
+	github.com/spf13/pflag v1.0.6
 	github.com/spf13/viper v1.20.1
 	github.com/stretchr/testify v1.10.0
 	golang.org/x/sync v0.18.0
+	golang.org/x/term v0.37.0
 	golang.org/x/tools v0.38.0
 	google.golang.org/grpc v1.78.0
 	modernc.org/sqlite v1.46.1
@@ -35,7 +37,6 @@ require (
 	github.com/sourcegraph/conc v0.3.0 // indirect
 	github.com/spf13/afero v1.12.0 // indirect
 	github.com/spf13/cast v1.7.1 // indirect
-	github.com/spf13/pflag v1.0.6 // indirect
 	github.com/subosito/gotenv v1.6.0 // indirect
 	go.uber.org/atomic v1.9.0 // indirect
 	go.uber.org/multierr v1.9.0 // indirect
