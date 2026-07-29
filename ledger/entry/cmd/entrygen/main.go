@@ -97,6 +97,7 @@ type entryRender struct {
 type decodeArm struct {
 	TypeCode        int
 	FieldCode       int
+	FieldName       string
 	XRPLType        string
 	GoField         string
 	BitConst        string
@@ -160,6 +161,7 @@ func generate(defs *definitions.Definitions, entry schema.Entry, outDir string) 
 	er.DecodeArms[1] = []decodeArm{{
 		TypeCode:  1,
 		FieldCode: 1,
+		FieldName: "LedgerEntryType",
 		XRPLType:  "UInt16",
 		GoField:   "LedgerEntryType",
 		BitConst:  "",
@@ -183,6 +185,7 @@ func generate(defs *definitions.Definitions, entry schema.Entry, outDir string) 
 			arm := decodeArm{
 				TypeCode:  int(fi.FieldHeader.TypeCode),
 				FieldCode: int(fi.Nth),
+				FieldName: f.Name,
 				XRPLType:  fi.Type,
 				GoField:   f.Name,
 				BitConst:  "",
@@ -225,6 +228,7 @@ func generate(defs *definitions.Definitions, entry schema.Entry, outDir string) 
 		arm := decodeArm{
 			TypeCode:        int(fi.FieldHeader.TypeCode),
 			FieldCode:       int(fi.Nth),
+			FieldName:       f.Name,
 			XRPLType:        fi.Type,
 			GoField:         fr.GoField,
 			BitConst:        fr.BitConst,
@@ -701,12 +705,12 @@ func ({{ .Receiver }} *{{ .StructName }}) decode(data []byte, legacy bool) error
 				return err
 			}
 {{- else if eq $first.XRPLType "STObject" }}
-			val, err := sr.readSTObject({{ printf "%q" $first.Name }})
+			val, err := sr.readSTObject({{ printf "%q" $first.FieldName }})
 			if err != nil {
 				return err
 			}
 {{- else if eq $first.XRPLType "STArray" }}
-			val, err := sr.readSTArray({{ printf "%q" $first.Name }})
+			val, err := sr.readSTArray({{ printf "%q" $first.FieldName }})
 			if err != nil {
 				return err
 			}
