@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"encoding/hex"
 	"encoding/json"
-	"errors"
 	"reflect"
 	"testing"
 
@@ -49,14 +48,6 @@ func TestSponsorTransactionFormats(t *testing.T) {
 	for _, test := range tests {
 		if got := formats[test.name]; !reflect.DeepEqual(got, test.want) {
 			t.Errorf("%s format = %#v, want %#v", test.name, got, test.want)
-		}
-	}
-}
-
-func TestSponsorTransactionsRemainUnregistered(t *testing.T) {
-	for _, txType := range []Type{TypeSponsorshipTransfer, TypeSponsorshipSet} {
-		if _, err := NewFromType(txType); !errors.Is(err, ErrUnknownTransactionType) {
-			t.Errorf("NewFromType(%s) error = %v, want ErrUnknownTransactionType", txType, err)
 		}
 	}
 }

@@ -40,6 +40,7 @@ type AccountRoot struct {
 	SponsoringOwnerCount   uint32 // Owner-count units this account sponsors
 	SponsoringAccountCount uint32 // Distinct accounts sponsored by this account
 	Sponsor                string
+	HasSponsor             bool
 	Flags                  uint32
 	RegularKey             string
 	Domain                 string
@@ -185,6 +186,7 @@ func ParseAccountRoot(data []byte) (*AccountRoot, error) {
 		SponsoringOwnerCount:   decoded.SponsoringOwnerCount,
 		SponsoringAccountCount: decoded.SponsoringAccountCount,
 		Sponsor:                decoded.Sponsor,
+		HasSponsor:             fields["Sponsor"] != nil,
 		Flags:                  decoded.Flags,
 		RegularKey:             decoded.RegularKey,
 		Domain:                 string(domain),
@@ -268,7 +270,7 @@ func SerializeAccountRoot(account *AccountRoot) ([]byte, error) {
 	if account.SponsoringAccountCount > 0 {
 		sle.SetSponsoringAccountCount(account.SponsoringAccountCount)
 	}
-	if account.Sponsor != "" {
+	if account.HasSponsor || account.Sponsor != "" {
 		sle.SetSponsor(account.Sponsor)
 	}
 	sle.SetFlags(account.Flags)

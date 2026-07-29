@@ -154,7 +154,7 @@ func (e *Engine) preflightStructure(tx txcore.Transaction, common *txcore.Common
 // Reference: rippled Transactor.cpp preflight1/preflight0.
 func (e *Engine) preflight1(tx txcore.Transaction, common *txcore.Common, rules *amendment.Rules) ter.Result {
 	// The delegate check precedes preflight0 (and thus the NetworkID checks).
-	if result := checkDelegate(common, rules); result != ter.TesSUCCESS {
+	if result := checkDelegate(tx, common, rules); result != ter.TesSUCCESS {
 		return result
 	}
 	// preflight0: NetworkID canonicality then the flags mask.
@@ -297,7 +297,7 @@ func (e *Engine) preflightInner(innerTx txcore.Transaction) ter.Result {
 	if result := checkSigningKeyShape(common); result != ter.TesSUCCESS {
 		return result
 	}
-	if result := checkDelegate(common, rules); result != ter.TesSUCCESS {
+	if result := checkDelegate(innerTx, common, rules); result != ter.TesSUCCESS {
 		return result
 	}
 	if result := checkSponsorFields(innerTx, common, rules); result != ter.TesSUCCESS {
@@ -337,7 +337,7 @@ func preflightInnerBatchFlag(common *txcore.Common, rules *amendment.Rules) ter.
 
 // checkDelegate validates the sfDelegate field.
 // Reference: rippled Transactor.cpp preflight1 (delegate block, before preflight0).
-func checkDelegate(common *txcore.Common, rules *amendment.Rules) ter.Result {
+func checkDelegate(transaction txcore.Transaction, common *txcore.Common, rules *amendment.Rules) ter.Result {
 	if common.Delegate == "" {
 		return ter.TesSUCCESS
 	}
@@ -347,13 +347,16 @@ func checkDelegate(common *txcore.Common, rules *amendment.Rules) ter.Result {
 	if common.Delegate == common.Account {
 		return ter.TemBAD_SIGNER
 	}
+	if transaction.TxType() == txcore.TypeSponsorshipTransfer {
+		return ter.TemINVALID
+	}
 	return ter.TesSUCCESS
 }
 
-func checkSponsorFields(tx txcore.Transaction, common *txcore.Common, rules *amendment.Rules) ter.Result {
+func checkSponsorFields(transaction txcore.Transaction, common *txcore.Common, rules *amendment.Rules) ter.Result {
 	hasSponsor := common.Sponsor != "" || common.HasField("Sponsor")
-	hasSponsorFlags := common.SponsorFlags != nil
-	hasSponsorSignature := common.SponsorSignature != nil
+	hasSponsorFlags := common.SponsorFlags != nil || common.HasField("SponsorFlags")
+	hasSponsorSignature := common.SponsorSignature != nil || common.HasField("SponsorSignature")
 	if !hasSponsor && !hasSponsorFlags && !hasSponsorSignature {
 		return ter.TesSUCCESS
 	}
@@ -367,11 +370,14 @@ func checkSponsorFields(tx txcore.Transaction, common *txcore.Common, rules *ame
 		return ter.TemMALFORMED
 	}
 	if hasSponsorFlags {
+		if common.SponsorFlags == nil {
+			return ter.TemINVALID_FLAG
+		}
 		flags := *common.SponsorFlags
 		if flags == 0 || flags&txcore.SpfSponsorFlagMask != 0 {
 			return ter.TemINVALID_FLAG
 		}
-		if flags&txcore.SpfSponsorReserve != 0 && !reserveSponsorAllowed(tx.TxType()) {
+		if flags&txcore.SpfSponsorReserve != 0 && !reserveSponsorAllowed(transaction.TxType()) {
 			return ter.TemINVALID_FLAG
 		}
 	}

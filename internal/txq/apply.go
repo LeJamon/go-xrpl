@@ -10,6 +10,7 @@ import (
 	"github.com/LeJamon/go-xrpl/internal/tx/offer"
 	"github.com/LeJamon/go-xrpl/internal/tx/paychan"
 	"github.com/LeJamon/go-xrpl/internal/tx/payment"
+	"github.com/LeJamon/go-xrpl/internal/tx/sponsor"
 	"github.com/LeJamon/go-xrpl/internal/tx/ter"
 	"github.com/LeJamon/go-xrpl/internal/tx/ticket"
 	"github.com/LeJamon/go-xrpl/internal/tx/xchain"
@@ -713,7 +714,8 @@ func (q *TxQ) tryClearAccountQueue(
 }
 
 func (q *TxQ) canBeHeld(common *tx.Common, flags tx.ApplyFlags, ledgerSeq uint32, aq *accountQueue, replacingCandidate *candidate, seqProxy SeqProxy, acctSeq uint32) (bool, ApplyResult) {
-	if common.HasField("PreviousTxnID") || common.AccountTxnID != "" || flags&tx.TapFAIL_HARD != 0 {
+	if common.HasField("PreviousTxnID") || common.AccountTxnID != "" || common.Delegate != "" ||
+		(common.SponsorFlags != nil && *common.SponsorFlags&tx.SpfSponsorFee != 0) || flags&tx.TapFAIL_HARD != 0 {
 		return true, ApplyResult{Result: ter.TelCAN_NOT_QUEUE, Applied: false}
 	}
 	if common.LastLedgerSequence != nil &&
@@ -884,6 +886,10 @@ func computeConsequences(txn tx.Transaction, seqProxy SeqProxy) txConsequences {
 		// (XChainBridge.cpp:1895-1906).
 		if t.Amount.IsNative() && uint64(t.Amount.Drops()) > 0 {
 			cons.PotentialSpend = uint64(t.Amount.Drops())
+		}
+	case *sponsor.SponsorshipSet:
+		if t.FeeAmount != nil && t.FeeAmount.IsNative() && t.FeeAmount.Signum() > 0 {
+			cons.PotentialSpend = uint64(t.FeeAmount.Drops())
 		}
 	}
 

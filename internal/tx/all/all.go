@@ -32,6 +32,7 @@ import (
 	"github.com/LeJamon/go-xrpl/internal/tx/permissioneddomain"
 	"github.com/LeJamon/go-xrpl/internal/tx/pseudo"
 	"github.com/LeJamon/go-xrpl/internal/tx/signerlist"
+	"github.com/LeJamon/go-xrpl/internal/tx/sponsor"
 	"github.com/LeJamon/go-xrpl/internal/tx/ticket"
 	"github.com/LeJamon/go-xrpl/internal/tx/trustset"
 	"github.com/LeJamon/go-xrpl/internal/tx/vault"
@@ -65,6 +66,7 @@ func RegisterAll() {
 		permissioneddomain.Register()
 		pseudo.Register()
 		signerlist.Register()
+		sponsor.Register()
 		ticket.Register()
 		trustset.Register()
 		vault.Register()

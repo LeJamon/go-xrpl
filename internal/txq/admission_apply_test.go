@@ -19,6 +19,8 @@ type seqTx struct {
 	accountTxnID  string
 	previousTxnID bool
 	lastLedger    *uint32
+	delegate      string
+	sponsorFlags  *uint32
 }
 
 func (m *seqTx) TxType() tx.Type { return tx.TypeAccountSet }
@@ -30,6 +32,8 @@ func (m *seqTx) GetCommon() *tx.Common {
 		Fee:                m.fee,
 		AccountTxnID:       m.accountTxnID,
 		LastLedgerSequence: m.lastLedger,
+		Delegate:           m.delegate,
+		SponsorFlags:       m.sponsorFlags,
 	}
 	if m.previousTxnID {
 		common.SetPresentFields(map[string]bool{"PreviousTxnID": true})
@@ -326,6 +330,41 @@ func TestAcceptPreflightFailureMarksDropPenalty(t *testing.T) {
 	require.True(t, aq.DropPenalty)
 	require.True(t, aq.Empty())
 	require.Equal(t, ter.TemMALFORMED, candidate.LastResult)
+}
+
+func TestApplyRejectsDelegatedAndFeeSponsoredTransactionsFromQueue(t *testing.T) {
+	feeSponsorFlags := tx.SpfSponsorFee
+	tests := []struct {
+		name string
+		txn  *seqTx
+	}{
+		{
+			name: "delegated",
+			txn:  &seqTx{seq: 5, fee: "10", delegate: "rDelegate"},
+		},
+		{
+			name: "fee sponsored",
+			txn:  &seqTx{seq: 5, fee: "10", sponsorFlags: &feeSponsorFlags},
+		},
+	}
+
+	for i, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			q := mustNew(makeAdmissionConfig())
+			ctx := &stubApplyCtx{
+				seq:        5,
+				balance:    1_000_000,
+				exists:     true,
+				baseFee:    10,
+				txInLedger: 100,
+				preclaim:   ter.TesSUCCESS,
+			}
+			result := q.Apply(ctx, test.txn, [32]byte{byte(i + 1)}, [20]byte{1})
+			require.Equal(t, ter.TelCAN_NOT_QUEUE, result.Result)
+			require.False(t, result.Applied)
+			require.Zero(t, q.Size())
+		})
+	}
 }
 
 func TestAcceptRevisitsNextAccountCandidateAcrossGap(t *testing.T) {
