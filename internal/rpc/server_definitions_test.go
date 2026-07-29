@@ -257,9 +257,6 @@ func TestServerDefinitionsInvalidSentinel(t *testing.T) {
 	}
 }
 
-// TestServerDefinitions_3_2_0_Sections verifies the five sections introduced in
-// rippled 3.2.0 (#6321), including the Sponsor protocol delta pinned to
-// 3.3.0-rc1.
 func TestServerDefinitions_3_2_0_Sections(t *testing.T) {
 	method := &handlers.ServerDefinitionsMethod{}
 	ctx := &types.RpcContext{

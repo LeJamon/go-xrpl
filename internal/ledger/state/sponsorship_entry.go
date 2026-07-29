@@ -30,7 +30,6 @@ type SponsorshipData struct {
 	PreviousTxnLgrSeq   uint32
 }
 
-// ParseSponsorship decodes a Sponsorship ledger entry.
 func ParseSponsorship(data []byte) (*SponsorshipData, error) {
 	var decoded ledgerfields.Sponsorship
 	if err := decoded.Decode(data); err != nil {
@@ -87,8 +86,6 @@ func ParseSponsorship(data []byte) (*SponsorshipData, error) {
 	return entry, nil
 }
 
-// SerializeSponsorship encodes a Sponsorship ledger entry using the canonical
-// field definitions shared with transaction metadata.
 func SerializeSponsorship(entry *SponsorshipData) ([]byte, error) {
 	if entry == nil {
 		return nil, errors.New("failed to encode Sponsorship: nil entry")

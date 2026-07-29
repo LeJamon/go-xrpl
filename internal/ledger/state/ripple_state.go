@@ -46,7 +46,6 @@ type RippleState struct {
 	HighQualityOut    uint32
 	HasHighQualityOut bool
 
-	// Reserve sponsors for the high and low trust-line owners.
 	HighSponsor string
 	LowSponsor  string
 
