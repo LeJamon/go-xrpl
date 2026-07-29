@@ -21,7 +21,7 @@ func relayTestPeer(t *testing.T, ident *Identity, id PeerID, txrr bool) *Peer {
 	return p
 }
 
-func gotFrame(p *Peer) bool { return len(p.send) > 0 }
+func gotFrame(p *Peer) bool { return p.SendQueueLen() > 0 }
 
 // TestRelayTransaction_FeatureOff relays to every candidate peer and records
 // no metrics when tx-reduce-relay is disabled (OverlayImpl.cpp:1251-1259 with
@@ -121,6 +121,35 @@ func TestRelayTransaction_ReducePathSelectsSubset(t *testing.T) {
 	assert.Equal(t, uint64(3), o.txm.selected.accum, "selected = enabledTarget")
 	assert.Equal(t, uint64(1), o.txm.suppressed.accum, "suppressed = origin")
 	assert.Equal(t, uint64(2), o.txm.notEnabled.accum, "notEnabled = disabled count")
+}
+
+func TestRelayTransactionCandidatesReplacesFailedEnabledSend(t *testing.T) {
+	ident, err := NewIdentity()
+	require.NoError(t, err)
+	full := relayTestPeer(t, ident, 1, true)
+	firstHealthy := relayTestPeer(t, ident, 2, true)
+	secondHealthy := relayTestPeer(t, ident, 3, true)
+	for range ordinarySendMaximum {
+		require.NoError(t, full.Send([]byte{0xAA}))
+	}
+
+	result := fanoutResult{operation: "relay-transaction"}
+	send := func(peer *Peer) bool {
+		err := peer.Send([]byte{0xBB})
+		result.record(err)
+		return err == nil
+	}
+	relayTransactionCandidates(
+		[]*Peer{full, firstHealthy, secondHealthy},
+		0,
+		2,
+		send,
+	)
+
+	require.True(t, gotFrame(firstHealthy))
+	require.True(t, gotFrame(secondHealthy))
+	require.Equal(t, 1, result.failed)
+	require.Equal(t, 3, result.attempted)
 }
 
 // TestRecordInboundTxMetric_LedgerCategorisation pins that only the

@@ -191,6 +191,15 @@ func (f *snd_fakeOverlay) PeersThatHave(suppressionHash [32]byte) []uint64 {
 	return append([]uint64(nil), f.peersThatHave[suppressionHash]...)
 }
 
+func (f *snd_fakeOverlay) RecordMessageSource(suppressionHash [32]byte, peerID uint64) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.peersThatHave == nil {
+		f.peersThatHave = make(map[[32]byte][]uint64)
+	}
+	f.peersThatHave[suppressionHash] = append(f.peersThatHave[suppressionHash], peerID)
+}
+
 func (f *snd_fakeOverlay) ShouldShedLedgerRequest(peerID uint64, loadedLocal bool) bool {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -334,6 +343,9 @@ func TestSndAdaptor_PeersThatHave(t *testing.T) {
 	hash[0] = 0x01
 	got := a.PeersThatHave(hash)
 	assert.ElementsMatch(t, []uint64{10, 20}, got)
+
+	a.RecordMessageSource(hash, 30)
+	assert.ElementsMatch(t, []uint64{10, 20, 30}, a.PeersThatHave(hash))
 
 	assert.Nil(t, a.PeersThatHave([32]byte{}))
 }

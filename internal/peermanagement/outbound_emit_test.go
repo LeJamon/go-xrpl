@@ -80,12 +80,7 @@ func TestSendClusterUpdate_EmitsExportedConsumerGossip(t *testing.T) {
 
 	o.sendClusterUpdate()
 
-	var frame []byte
-	select {
-	case frame = <-peer.send:
-	default:
-		t.Fatal("cluster-member peer did not receive a TMCluster frame")
-	}
+	frame := requireOutboundFrame(t, peer)
 
 	_, payload, err := message.ReadMessage(bytes.NewReader(frame))
 	require.NoError(t, err)

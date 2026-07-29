@@ -11,41 +11,68 @@ func TestBroadcast_AttemptsBackpressuredPeerOnceAndContinues(t *testing.T) {
 	healthy := newTestPeer(t, 2)
 	full.setState(PeerStateConnected)
 	healthy.setState(PeerStateConnected)
-	for i := range DefaultSendBufferSize {
+	for i := range ordinarySendMaximum {
 		require.NoError(t, full.Send([]byte{byte(i)}))
 	}
 
 	overlay := newTestOverlayWithPeers(map[PeerID]*Peer{1: full, 2: healthy})
 	frame := []byte{0xAA, 0xBB, 0xCC}
-	require.NoError(t, overlay.Broadcast(frame))
+	err := overlay.Broadcast(frame)
+	require.ErrorIs(t, err, ErrSendBufferFull)
+	var fanoutErr *FanoutError
+	require.ErrorAs(t, err, &fanoutErr)
+	require.Equal(t, 2, fanoutErr.Attempted)
+	require.Equal(t, 1, fanoutErr.Failed)
+	require.Zero(t, fanoutErr.Critical)
 
 	require.Equal(t, uint64(1), full.SendDrops())
 	require.Zero(t, full.largeSendQ.Load())
-	require.Len(t, full.send, DefaultSendBufferSize)
-	require.Equal(t, frame, <-healthy.send)
+	require.Equal(t, ordinarySendMaximum, full.SendQueueLen())
+	require.Equal(t, frame, requireOutboundFrame(t, healthy))
 }
 
-func TestBroadcastPriorityUsesIndependentQueue(t *testing.T) {
+func TestBroadcastFanoutErrorPreservesMixedFailureCategories(t *testing.T) {
+	closed := newTestPeer(t, 1)
+	closed.setState(PeerStateConnected)
+	closed.closed.Store(true)
+	full := newTestPeer(t, 2)
+	full.setState(PeerStateConnected)
+	for range ordinarySendMaximum {
+		require.NoError(t, full.Send([]byte{0xAA}))
+	}
+	overlay := newTestOverlayWithPeers(map[PeerID]*Peer{1: closed, 2: full})
+
+	err := overlay.Broadcast([]byte{0xBB})
+	require.ErrorIs(t, err, ErrConnectionClosed)
+	require.ErrorIs(t, err, ErrSendBufferFull)
+	var fanoutErr *FanoutError
+	require.ErrorAs(t, err, &fanoutErr)
+	require.Equal(t, 2, fanoutErr.Attempted)
+	require.Equal(t, 2, fanoutErr.Failed)
+}
+
+func TestBroadcastPriorityUsesProtectedAdmission(t *testing.T) {
 	peer := newTestPeer(t, 1)
 	peer.setState(PeerStateConnected)
-	for i := range DefaultSendBufferSize {
+	for i := range ordinarySendMaximum {
 		require.NoError(t, peer.Send([]byte{byte(i)}))
 	}
 	overlay := newTestOverlayWithPeers(map[PeerID]*Peer{1: peer})
 	frame := []byte{0xAA}
 
 	require.NoError(t, overlay.BroadcastPriority(frame))
-	require.Len(t, peer.send, DefaultSendBufferSize)
-	require.Equal(t, frame, <-peer.prioritySend)
+	snapshot := peer.outbound.snapshot()
+	require.Equal(t, ordinarySendMaximum, snapshot.ClassFrames[OutboundClassOrdinary])
+	require.Equal(t, 1, snapshot.ClassFrames[OutboundClassAcquisition])
 	require.Zero(t, peer.SendDrops())
 }
 
-func TestBroadcastPriorityExceptSetUsesIndependentQueue(t *testing.T) {
+func TestBroadcastPriorityExceptSetUsesProtectedAdmission(t *testing.T) {
 	excluded := newTestPeer(t, 1)
 	eligible := newTestPeer(t, 2)
 	excluded.setState(PeerStateConnected)
 	eligible.setState(PeerStateConnected)
-	for i := range DefaultSendBufferSize {
+	for i := range ordinarySendMaximum {
 		require.NoError(t, excluded.Send([]byte{byte(i)}))
 		require.NoError(t, eligible.Send([]byte{byte(i)}))
 	}
@@ -53,10 +80,12 @@ func TestBroadcastPriorityExceptSetUsesIndependentQueue(t *testing.T) {
 	frame := []byte{0xAA}
 
 	require.NoError(t, overlay.BroadcastPriorityExceptSet(map[PeerID]bool{1: true}, frame))
-	require.Len(t, excluded.send, DefaultSendBufferSize)
-	require.Empty(t, excluded.prioritySend)
-	require.Len(t, eligible.send, DefaultSendBufferSize)
-	require.Equal(t, frame, <-eligible.prioritySend)
+	excludedSnapshot := excluded.outbound.snapshot()
+	require.Equal(t, ordinarySendMaximum, excludedSnapshot.ClassFrames[OutboundClassOrdinary])
+	require.Zero(t, excludedSnapshot.ClassFrames[OutboundClassAcquisition])
+	eligibleSnapshot := eligible.outbound.snapshot()
+	require.Equal(t, ordinarySendMaximum, eligibleSnapshot.ClassFrames[OutboundClassOrdinary])
+	require.Equal(t, 1, eligibleSnapshot.ClassFrames[OutboundClassAcquisition])
 	require.Zero(t, excluded.SendDrops())
 	require.Zero(t, eligible.SendDrops())
 }
@@ -70,8 +99,10 @@ func TestBroadcastManifestFramesExceptSkipsSourcePeer(t *testing.T) {
 	frames := [][]byte{{0xAA}, {0xBB}}
 
 	require.NoError(t, overlay.BroadcastManifestFramesExcept(source.ID(), frames))
-	require.Empty(t, source.manifestSend)
-	require.Equal(t, frames, <-other.manifestSend)
+	require.Zero(t, source.outbound.snapshot().BulkSequences)
+	require.Equal(t, 1, other.outbound.snapshot().BulkSequences)
+	require.Equal(t, frames[0], requireOutboundFrame(t, other))
+	require.Equal(t, frames[1], requireOutboundFrame(t, other))
 }
 
 func TestBroadcastExceptDoesNotEchoToSource(t *testing.T) {
@@ -83,6 +114,6 @@ func TestBroadcastExceptDoesNotEchoToSource(t *testing.T) {
 	frame := []byte{0xAA, 0xBB, 0xCC}
 
 	require.NoError(t, overlay.BroadcastExcept(source.ID(), frame))
-	require.Empty(t, source.send)
-	require.Equal(t, frame, <-other.send)
+	require.Zero(t, source.SendQueueLen())
+	require.Equal(t, frame, requireOutboundFrame(t, other))
 }

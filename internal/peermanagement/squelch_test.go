@@ -196,18 +196,15 @@ func TestRelayFromValidator_SkipsSquelchedPeers(t *testing.T) {
 	require.NoError(t, o.RelayFromValidator(validator, hash, PeerID(0), payload))
 
 	// `allowed` must have received exactly the payload.
-	select {
-	case got := <-allowed.send:
+	if got, ok := takeOutboundFrame(allowed); ok {
 		assert.Equal(t, payload, got)
-	default:
+	} else {
 		t.Fatal("allowed peer did not receive the broadcast")
 	}
 
 	// `squelched` must NOT have received anything.
-	select {
-	case got := <-squelched.send:
+	if got, ok := takeOutboundFrame(squelched); ok {
 		t.Fatalf("squelched peer received a frame it should have been filtered: %q", got)
-	default:
 	}
 }
 

@@ -516,10 +516,19 @@ func (a *Adaptor) BroadcastValidation(validation *consensus.Validation) error {
 	return a.sender.BroadcastValidation(validation)
 }
 
-// PeersThatHave delegates to NetworkSender so higher layers can query without
-// importing the overlay. See NetworkSender.PeersThatHave.
+func (a *Adaptor) RecordMessageSource(suppressionHash [32]byte, peerID uint64) {
+	a.sender.RecordMessageSource(suppressionHash, peerID)
+}
+
 func (a *Adaptor) PeersThatHave(suppressionHash [32]byte) []uint64 {
 	return a.sender.PeersThatHave(suppressionHash)
+}
+
+func (a *Adaptor) MessageRelayedRecently(suppressionHash [32]byte) bool {
+	view, ok := a.sender.(interface {
+		MessageRelayedRecently([32]byte) bool
+	})
+	return ok && view.MessageRelayedRecently(suppressionHash)
 }
 
 // RelayProposal forwards a peer-originated proposal, excluding exceptPeer

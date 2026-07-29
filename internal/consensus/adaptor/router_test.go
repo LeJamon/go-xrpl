@@ -358,16 +358,11 @@ func TestRouterStopsOnContextCancel(t *testing.T) {
 	}
 }
 
-// countingSender wraps noopSender with a counter on UpdateRelaySlot
-// so router tests can assert how many times the reduce-relay slot
-// was fed. B3: also captures the seenPeers argument so tests can
-// verify the slot is fed with the full known-haver set from the
-// overlay's reverse index, not just the duplicate's originator.
 type countingSender struct {
 	noopSender
-	mu            sync.Mutex
-	calls         []countingRelaySlotCall
-	peersThatHave map[[32]byte][]uint64
+	mu      sync.Mutex
+	calls   []countingRelaySlotCall
+	relayed map[[32]byte]bool
 }
 
 type countingRelaySlotCall struct {
@@ -385,25 +380,19 @@ func (s *countingSender) UpdateRelaySlot(validator []byte, originPeer uint64, se
 	s.calls = append(s.calls, countingRelaySlotCall{Validator: cp, OriginPeer: originPeer, SeenPeers: seenCp})
 }
 
-// PeersThatHave returns the preconfigured set for suppressionHash.
-// Router tests seed this to simulate the overlay having already
-// relayed a message to a known peer set.
-func (s *countingSender) PeersThatHave(suppressionHash [32]byte) []uint64 {
+func (s *countingSender) MessageRelayedRecently(suppressionHash [32]byte) bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if s.peersThatHave == nil {
-		return nil
-	}
-	return append([]uint64(nil), s.peersThatHave[suppressionHash]...)
+	return s.relayed[suppressionHash]
 }
 
-func (s *countingSender) setPeersThatHave(suppressionHash [32]byte, peers []uint64) {
+func (s *countingSender) setRelayed(suppressionHash [32]byte) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if s.peersThatHave == nil {
-		s.peersThatHave = make(map[[32]byte][]uint64)
+	if s.relayed == nil {
+		s.relayed = make(map[[32]byte]bool)
 	}
-	s.peersThatHave[suppressionHash] = append([]uint64(nil), peers...)
+	s.relayed[suppressionHash] = true
 }
 
 func (s *countingSender) getCalls() []countingRelaySlotCall {
@@ -471,6 +460,7 @@ func TestRouter_UpdateRelaySlot_DuplicatesOnly(t *testing.T) {
 	firstRound := sender.getCalls()
 	assert.Empty(t, firstRound,
 		"first-seen proposal must NOT feed UpdateRelaySlot (rippled fires only on duplicates)")
+	sender.setRelayed(hashProposalSuppression(ProposalFromMessage(proposeSet)))
 
 	// Peer B delivers the same bytes: duplicate, MUST fire UpdateRelaySlot.
 	inbox <- &peermanagement.InboundMessage{
@@ -532,6 +522,7 @@ func TestRouter_UpdateRelaySlot_UntrustedValidator(t *testing.T) {
 
 	inbox <- &peermanagement.InboundMessage{PeerID: 1, Type: uint16(message.TypeProposeLedger), Payload: payload}
 	time.Sleep(30 * time.Millisecond)
+	sender.setRelayed(hashProposalSuppression(ProposalFromMessage(proposeSet)))
 	inbox <- &peermanagement.InboundMessage{PeerID: 2, Type: uint16(message.TypeProposeLedger), Payload: payload}
 	time.Sleep(30 * time.Millisecond)
 
@@ -541,19 +532,7 @@ func TestRouter_UpdateRelaySlot_UntrustedValidator(t *testing.T) {
 	assert.Equal(t, uint64(2), calls[0].OriginPeer)
 }
 
-// TestRelay_DuplicateArrivalFeedsAllKnownRelayers pins B3: when a
-// duplicate proposal arrives from peer C, and the overlay's reverse
-// index already maps the proposal's suppression hash to peers {A, B}
-// (from a prior outbound relay), UpdateRelaySlot must be fed with
-// the full set {A, B, C} — not just C. Matches rippled's
-// overlay_.relay returning haveMessage and PeerImp passing it whole
-// to updateSlotAndSquelch (PeerImp.cpp:3010-3017 for proposals).
-//
-// Regression guard: a mutation that feeds only originPeer — the
-// pre-B3 behavior — would register exactly one peer in the seenPeers
-// slice (C), under-counting multi-path delivery evidence and slowing
-// selection convergence vs. rippled.
-func TestRelay_DuplicateArrivalFeedsAllKnownRelayers(t *testing.T) {
+func TestRelay_DuplicateAfterRelayFeedsOnlyCurrentSource(t *testing.T) {
 	engine := &mockEngine{}
 	svc := newTestLedgerService(t)
 
@@ -598,20 +577,10 @@ func TestRelay_DuplicateArrivalFeedsAllKnownRelayers(t *testing.T) {
 	time.Sleep(30 * time.Millisecond)
 	require.Empty(t, sender.getCalls(), "first-seen proposal must not feed the slot")
 
-	// Seed the overlay reverse index: the proposal's suppression key
-	// maps to peers {A=1, B=2} — as if we had already relayed it to
-	// them after the first-seen arrival. The proposal's suppression
-	// hash is computed from its decoded fields via
-	// hashProposalSuppression, so we reconstruct a matching Proposal
-	// to produce the same key the router will compute on the
-	// duplicate arrival below.
 	seedProposal := ProposalFromMessage(proposeSet)
 	seedHash := hashProposalSuppression(seedProposal)
-	sender.setPeersThatHave(seedHash, []uint64{1, 2})
+	sender.setRelayed(seedHash)
 
-	// Duplicate delivery from peer C=3: UpdateRelaySlot must fire
-	// with originPeer=3 AND seenPeers containing 1 and 2 — the full
-	// set of peers the network believes already have this message.
 	inbox <- &peermanagement.InboundMessage{
 		PeerID:  3,
 		Type:    uint16(message.TypeProposeLedger),
@@ -624,15 +593,8 @@ func TestRelay_DuplicateArrivalFeedsAllKnownRelayers(t *testing.T) {
 	call := calls[0]
 	assert.Equal(t, uint64(3), call.OriginPeer,
 		"UpdateRelaySlot must be fed with the DUPLICATE peer's ID as originPeer")
-
-	// seenPeers must contain peers 1 and 2 (the known-havers from
-	// the reverse index). Order is not fixed (it's a set walk).
-	seenSet := make(map[uint64]struct{}, len(call.SeenPeers))
-	for _, p := range call.SeenPeers {
-		seenSet[p] = struct{}{}
-	}
-	assert.Contains(t, seenSet, uint64(1), "seenPeers must include peer A (prior known-haver)")
-	assert.Contains(t, seenSet, uint64(2), "seenPeers must include peer B (prior known-haver)")
+	assert.Empty(t, call.SeenPeers,
+		"the verified first-source set was counted when relay completed")
 }
 
 // TestRelay_FirstSeenMessageDoesNotFeedSlot pins the other half of
@@ -670,11 +632,6 @@ func TestRelay_FirstSeenMessageDoesNotFeedSlot(t *testing.T) {
 	ctx := t.Context()
 	go router.Run(ctx)
 
-	// Construct a proposal and PRE-SEED the overlay's reverse index
-	// with a non-empty known-haver set for its suppression hash. If
-	// the gate were inverted, this test would exercise a code path
-	// that feeds seenPeers into the slot even on a first-seen
-	// arrival — exactly the regression we're pinning against.
 	proposeSet := &message.ProposeSet{
 		ProposeSeq:     7,
 		CurrentTxHash:  make([]byte, 32),
@@ -687,7 +644,7 @@ func TestRelay_FirstSeenMessageDoesNotFeedSlot(t *testing.T) {
 
 	seedProposal := ProposalFromMessage(proposeSet)
 	seedHash := hashProposalSuppression(seedProposal)
-	sender.setPeersThatHave(seedHash, []uint64{11, 22, 33})
+	sender.setRelayed(seedHash)
 
 	// Deliver the message exactly once — from a fresh peer, no prior
 	// observation. This is the rippled `!added == false` branch in

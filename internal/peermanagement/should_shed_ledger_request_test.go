@@ -44,7 +44,7 @@ func TestShouldShedLedgerRequest(t *testing.T) {
 		p := relayTestPeer(t, ident, 1, true)
 		o.peers[1] = p
 		for range peerSendQueueDropThreshold {
-			p.send <- []byte{0x00}
+			require.NoError(t, p.Send([]byte{0x00}))
 		}
 		assert.True(t, o.ShouldShedLedgerRequest(1, false),
 			"send_queue_ >= dropSendQueue → drop (PeerImp.cpp:3322)")

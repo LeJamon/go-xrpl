@@ -64,9 +64,11 @@ type NetworkSender interface {
 	// the overlay can charge it toward the eviction threshold. No-op for
 	// unknown peers; reason is a short stable label for logs.
 	IncPeerBadData(peerID uint64, reason string)
-	// PeersThatHave returns the peer IDs the overlay knows have the message
-	// keyed by suppressionHash (nil if unknown or aged out). The router feeds
-	// these known-havers into the reduce-relay slot on a duplicate arrival.
+	// RecordMessageSource records every inbound source of a proposal or
+	// validation, including duplicate arrivals.
+	RecordMessageSource(suppressionHash [32]byte, peerID uint64)
+	// PeersThatHave returns the accumulated inbound sources keyed by
+	// suppressionHash (nil if unknown or aged out).
 	PeersThatHave(suppressionHash [32]byte) []uint64
 	// ShouldShedLedgerRequest reports whether a ledger-BODY request (liBASE /
 	// liAS_NODE / liTX_NODE) from peerID should be dropped under load: peer
@@ -122,6 +124,7 @@ func (n *noopSender) SendPriorityToPeer(uint64, []byte) error                   
 func (n *noopSender) PeerSupportsReplay(uint64) bool                             { return false }
 func (n *noopSender) ReplayCapablePeersExcluding([]uint64, int) []uint64         { return nil }
 func (n *noopSender) IncPeerBadData(uint64, string)                              {}
+func (n *noopSender) RecordMessageSource([32]byte, uint64)                       {}
 func (n *noopSender) PeersThatHave([32]byte) []uint64                            { return nil }
 func (n *noopSender) ShouldShedLedgerRequest(uint64, bool) bool                  { return false }
 func (n *noopSender) PeerWithLedger([32]byte, uint32, uint64) (uint64, bool)     { return 0, false }
