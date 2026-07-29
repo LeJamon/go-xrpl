@@ -333,10 +333,6 @@ type Common struct {
 	// Reference: rippled Transactor.cpp sfDelegate
 	Delegate string `json:"Delegate,omitempty"`
 
-	// Sponsor identifies the fee or reserve sponsor. SponsorFlags describes the
-	// sponsored obligations and SponsorSignature carries the sponsor's nested
-	// authorization. Sponsor behavior remains gated until the Sponsor amendment
-	// lifecycle is implemented.
 	Sponsor          string            `json:"Sponsor,omitempty"`
 	SponsorFlags     *uint32           `json:"SponsorFlags,omitempty"`
 	SponsorSignature *SponsorSignature `json:"SponsorSignature,omitempty"`

@@ -71,11 +71,6 @@ func TestXRPNotCreated_StrictEquality(t *testing.T) {
 	}
 }
 
-// TestLedgerEntryTypesMatchAcceptsSponsorship keeps the generic ledger-entry
-// type invariant in lockstep with the protocol ledger-entry registry. The
-// Sponsor-specific linkage and reserve invariants remain part of the later
-// lifecycle work; this check only proves that a well-formed Sponsorship SLE is
-// recognized as a valid ledger type.
 func TestLedgerEntryTypesMatchAcceptsSponsorship(t *testing.T) {
 	encoded := mustEncode(t, map[string]any{
 		"LedgerEntryType":   "Sponsorship",
