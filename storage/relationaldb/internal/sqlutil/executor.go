@@ -1,3 +1,4 @@
+// Package sqlutil provides guarded database executors shared by relational backends.
 package sqlutil
 
 import (
@@ -11,10 +12,12 @@ import (
 	"github.com/LeJamon/go-xrpl/storage/relationaldb"
 )
 
+// Scanner is the row-scanning subset implemented by sql.Row and guarded rows.
 type Scanner interface {
 	Scan(dest ...any) error
 }
 
+// Executor is the query subset used by relational repositories.
 type Executor interface {
 	QueryRowContext(ctx context.Context, query string, args ...any) Scanner
 	QueryContext(ctx context.Context, query string, args ...any) (*sql.Rows, error)
@@ -136,10 +139,12 @@ type DB struct {
 	closed atomic.Bool
 }
 
+// NewDB wraps db with closed-state checks.
 func NewDB(db *sql.DB) *DB {
 	return &DB{db: db}
 }
 
+// QueryRowContext executes a query returning at most one row.
 func (db *DB) QueryRowContext(ctx context.Context, query string, args ...any) Scanner {
 	if db == nil || db.closed.Load() {
 		return errorScanner{err: relationaldb.ErrDatabaseClosed}
@@ -147,6 +152,7 @@ func (db *DB) QueryRowContext(ctx context.Context, query string, args ...any) Sc
 	return db.db.QueryRowContext(ctx, query, args...)
 }
 
+// QueryContext executes a query returning rows.
 func (db *DB) QueryContext(ctx context.Context, query string, args ...any) (*sql.Rows, error) {
 	if db == nil || db.closed.Load() {
 		return nil, relationaldb.ErrDatabaseClosed
@@ -154,6 +160,7 @@ func (db *DB) QueryContext(ctx context.Context, query string, args ...any) (*sql
 	return db.db.QueryContext(ctx, query, args...)
 }
 
+// ExecContext executes a statement.
 func (db *DB) ExecContext(ctx context.Context, query string, args ...any) (sql.Result, error) {
 	if db == nil || db.closed.Load() {
 		return nil, relationaldb.ErrDatabaseClosed
@@ -161,6 +168,7 @@ func (db *DB) ExecContext(ctx context.Context, query string, args ...any) (sql.R
 	return db.db.ExecContext(ctx, query, args...)
 }
 
+// BeginTx begins a guarded transaction.
 func (db *DB) BeginTx(ctx context.Context, opts *sql.TxOptions) (*Tx, error) {
 	if db == nil || db.closed.Load() {
 		return nil, relationaldb.ErrDatabaseClosed
@@ -172,6 +180,7 @@ func (db *DB) BeginTx(ctx context.Context, opts *sql.TxOptions) (*Tx, error) {
 	return newTx(tx), nil
 }
 
+// Close closes the underlying database once.
 func (db *DB) Close() error {
 	if db == nil || !db.closed.CompareAndSwap(false, true) {
 		return nil
@@ -179,6 +188,7 @@ func (db *DB) Close() error {
 	return db.db.Close()
 }
 
+// Raw returns the underlying database handle.
 func (db *DB) Raw() *sql.DB {
 	return db.db
 }
@@ -195,6 +205,7 @@ func newTx(tx *sql.Tx) *Tx {
 	return result
 }
 
+// QueryRowContext executes a transaction query returning at most one row.
 func (tx *Tx) QueryRowContext(ctx context.Context, query string, args ...any) Scanner {
 	if tx == nil || !tx.active.Load() {
 		return errorScanner{err: relationaldb.ErrTransactionClosed}
@@ -202,6 +213,7 @@ func (tx *Tx) QueryRowContext(ctx context.Context, query string, args ...any) Sc
 	return tx.tx.QueryRowContext(ctx, query, args...)
 }
 
+// QueryContext executes a transaction query returning rows.
 func (tx *Tx) QueryContext(ctx context.Context, query string, args ...any) (*sql.Rows, error) {
 	if tx == nil || !tx.active.Load() {
 		return nil, relationaldb.ErrTransactionClosed
@@ -209,6 +221,7 @@ func (tx *Tx) QueryContext(ctx context.Context, query string, args ...any) (*sql
 	return tx.tx.QueryContext(ctx, query, args...)
 }
 
+// ExecContext executes a transaction statement.
 func (tx *Tx) ExecContext(ctx context.Context, query string, args ...any) (sql.Result, error) {
 	if tx == nil || !tx.active.Load() {
 		return nil, relationaldb.ErrTransactionClosed
@@ -216,6 +229,7 @@ func (tx *Tx) ExecContext(ctx context.Context, query string, args ...any) (sql.R
 	return tx.tx.ExecContext(ctx, query, args...)
 }
 
+// Commit commits the transaction once.
 func (tx *Tx) Commit() error {
 	if tx == nil || !tx.active.CompareAndSwap(true, false) {
 		return relationaldb.ErrTransactionClosed
@@ -223,6 +237,7 @@ func (tx *Tx) Commit() error {
 	return tx.tx.Commit()
 }
 
+// Rollback rolls back the transaction once.
 func (tx *Tx) Rollback() error {
 	if tx == nil || !tx.active.CompareAndSwap(true, false) {
 		return nil
