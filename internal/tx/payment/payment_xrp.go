@@ -1,6 +1,7 @@
 package payment
 
 import (
+	"math"
 	"strconv"
 
 	"github.com/LeJamon/go-xrpl/internal/ledger/state"
@@ -27,20 +28,25 @@ func (p *Payment) applyXRPPayment(ctx *tx.ApplyContext) ter.Result {
 	}
 
 	// PriorBalance is the source account's balance before its own fee was
-	// deducted (rippled's mPriorBalance). For a delegated payment the fee is
-	// charged to the delegate, so the source balance is untouched.
+	// deducted (rippled's mPriorBalance). When a delegate or sponsor pays the
+	// fee, the source balance is untouched.
 	priorBalance := ctx.PriorBalance()
 
-	// Calculate reserve as: ReserveBase + (ownerCount * ReserveIncrement)
-	// This matches rippled's accountReserve(ownerCount) calculation
-	reserve := ctx.Config.ReserveBase + (uint64(ctx.Account.OwnerCount) * ctx.Config.ReserveIncrement)
+	accountCountDelta := uint32(0)
+	if p.GetFlags()&PaymentFlagSponsorCreatedAccount != 0 {
+		accountCountDelta = 1
+	}
+	reserve, ok := effectiveAccountReserve(ctx.Config, ctx.Account, accountCountDelta)
+	if !ok {
+		return ter.TecINTERNAL
+	}
 
 	// The final spend may dip into the reserve to cover its own fee — but only
-	// when the source account is the fee payer. In a delegated payment the fee
-	// payer is the delegate, so the source need only keep its plain reserve.
+	// when the source account is the fee payer. With an external delegate or
+	// sponsor, the source need only keep its plain reserve.
 	// Reference: rippled Payment.cpp doApply() (fix: decouple reserve from fee).
 	minRequired := reserve
-	if p.GetCommon().Delegate == "" {
+	if ctx.SourceFeeCharged != 0 {
 		minRequired = max(feeDrops, reserve)
 	}
 
@@ -121,8 +127,11 @@ func (p *Payment) applyXRPPayment(ctx *tx.ApplyContext) ter.Result {
 	}
 
 	// Destination doesn't exist - need to create it
-	// Check minimum amount for account creation
-	if amountDrops < ctx.Config.ReserveBase {
+	sponsorCreated := p.GetFlags()&PaymentFlagSponsorCreatedAccount != 0
+
+	// A normally-created account must fund its own base reserve. A sponsored
+	// account may start with a single drop because the source funds that reserve.
+	if amountDrops < ctx.Config.ReserveBase && !sponsorCreated {
 		return ter.TecNO_DST_INSUF_XRP
 	}
 
@@ -136,6 +145,14 @@ func (p *Payment) applyXRPPayment(ctx *tx.ApplyContext) ter.Result {
 		Flags:             0,
 		PreviousTxnID:     ctx.TxHash,
 		PreviousTxnLgrSeq: ctx.Config.LedgerSequence,
+	}
+	if sponsorCreated {
+		if ctx.Account.SponsoringAccountCount == math.MaxUint32 {
+			return ter.TecINTERNAL
+		}
+		ctx.Account.SponsoringAccountCount++
+		newAccount.Sponsor = p.Account
+		newAccount.HasSponsor = true
 	}
 
 	// Debit sender
@@ -153,4 +170,23 @@ func (p *Payment) applyXRPPayment(ctx *tx.ApplyContext) ter.Result {
 	}
 
 	return ter.TesSUCCESS
+}
+
+// effectiveAccountReserve mirrors accountReserve(AccountRoot): owner increments
+// paid by another sponsor are removed, owner/account units paid by this account
+// are added, and a sponsored account does not fund its own base reserve.
+func effectiveAccountReserve(config tx.EngineConfig, account *state.AccountRoot, accountDelta uint32) (uint64, bool) {
+	if account == nil || account.SponsoredOwnerCount > account.OwnerCount {
+		return 0, false
+	}
+	owners := uint64(account.OwnerCount-account.SponsoredOwnerCount) +
+		uint64(account.SponsoringOwnerCount)
+	accounts := uint64(account.SponsoringAccountCount) + uint64(accountDelta)
+	if !account.HasSponsor {
+		accounts++
+	}
+	if owners > math.MaxUint32 || accounts > math.MaxUint32 {
+		return 0, false
+	}
+	return config.AccountReserveWithCounts(uint32(owners), uint32(accounts)), true
 }

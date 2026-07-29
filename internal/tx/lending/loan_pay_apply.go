@@ -70,10 +70,7 @@ func accountToLoan(loan *loanData, acc *lmath.LoanAccount) {
 // loanMaximumPaymentsPerTransaction / loanPaymentsPerFeeIncrement increments.
 func (l *LoanPay) CalculateBaseFee(view tx.LedgerView, config tx.EngineConfig) uint64 {
 	number := func(value string) lmath.N { return lendNumForRules(value, config.RequireRules()) }
-	normal := config.BaseFee
-	if sign.IsMultiSigned(l) {
-		normal = sign.CalculateMultiSigFee(config.BaseFee, len(l.GetCommon().Signers))
-	}
+	normal := sign.CalculateDefaultBaseFee(l, config)
 	if l.GetFlags()&(TfLoanFullPayment|TfLoanLatePayment) != 0 {
 		return normal
 	}
