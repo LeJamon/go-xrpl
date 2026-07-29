@@ -43,6 +43,19 @@ var nonAccountObjectTypes = map[string]bool{
 	"NegativeUNL":   true,
 }
 
+var sponsorshipSupportedObjectTypes = map[string]bool{
+	"Check":           true,
+	"Credential":      true,
+	"Delegate":        true,
+	"DepositPreauth":  true,
+	"Escrow":          true,
+	"MPToken":         true,
+	"MPTokenIssuance": true,
+	"NFTokenPage":     true,
+	"PayChannel":      true,
+	"SignerList":      true,
+}
+
 func chooseAccountObjectType(raw json.RawMessage, present bool) (string, *types.RpcError) {
 	if !present {
 		return "", nil
@@ -125,6 +138,19 @@ func (m *AccountObjectsMethod) Handle(ctx *types.RpcContext, params json.RawMess
 		return nil, mErr
 	}
 
+	var sponsoredFilter *bool
+	if raw, ok := fields["sponsored"]; ok {
+		var value any
+		if err := json.Unmarshal(raw, &value); err != nil {
+			return nil, types.RpcErrorExpectedField("sponsored", "boolean")
+		}
+		sponsored, ok := value.(bool)
+		if !ok {
+			return nil, types.RpcErrorExpectedField("sponsored", "boolean")
+		}
+		sponsoredFilter = &sponsored
+	}
+
 	result, err := ctx.Services.Ledger.GetAccountObjects(ctx.Context, account, ledgerIndex, effectiveType, limit, markerStr)
 	if err != nil {
 		if rerr := mapLedgerLookupErr(err); rerr != nil {
@@ -169,6 +195,9 @@ func (m *AccountObjectsMethod) Handle(ctx *types.RpcContext, params json.RawMess
 			})
 			continue
 		}
+		if sponsoredFilter != nil && accountObjectIsSponsored(decoded) != *sponsoredFilter {
+			continue
+		}
 		decoded["index"] = strings.ToUpper(obj.Index)
 		objects = append(objects, decoded)
 	}
@@ -186,6 +215,21 @@ func (m *AccountObjectsMethod) Handle(ctx *types.RpcContext, params json.RawMess
 
 	setLoadMedium(ctx)
 	return response, nil
+}
+
+func accountObjectIsSponsored(object map[string]any) bool {
+	ledgerEntryType, _ := object["LedgerEntryType"].(string)
+	switch ledgerEntryType {
+	case "RippleState":
+		return hasAccountField(object, "HighSponsor") || hasAccountField(object, "LowSponsor")
+	default:
+		return sponsorshipSupportedObjectTypes[ledgerEntryType] && hasAccountField(object, "Sponsor")
+	}
+}
+
+func hasAccountField(object map[string]any, name string) bool {
+	_, ok := object[name]
+	return ok
 }
 
 // sleTypeToRPCName converts a PascalCase SLE type name to the rippled RPC name

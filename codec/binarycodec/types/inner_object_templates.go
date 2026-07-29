@@ -125,6 +125,11 @@ var innerObjectTemplates = map[string][]innerObjectField{
 		{name: "TxnSignature", style: innerOptional},
 		{name: "Signers", style: innerOptional},
 	},
+	"SponsorSignature": {
+		{name: "SigningPubKey", style: innerOptional},
+		{name: "TxnSignature", style: innerOptional},
+		{name: "Signers", style: innerOptional},
+	},
 }
 
 // MeetsInnerObjectTemplate reports whether an object satisfies the registered

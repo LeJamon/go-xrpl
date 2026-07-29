@@ -257,3 +257,16 @@ func TestSerializedFieldParseMessageUsesSharedDefaultStyle(t *testing.T) {
 		t.Fatalf("message = %q, want %q", got, want)
 	}
 }
+
+func TestSerializedFieldParseMessageSponsorSignatureTemplate(t *testing.T) {
+	object := map[string]any{
+		"SponsorSignature": map[string]any{
+			"SigningPubKey": "",
+			"Sequence":      1,
+		},
+	}
+	want := "Object 'SponsorSignature' contents did not meet requirements for that type."
+	if got := serializedFieldParseMessage(object, "tx_json", binarycodecdefs.Get()); got != want {
+		t.Fatalf("message = %q, want %q", got, want)
+	}
+}
