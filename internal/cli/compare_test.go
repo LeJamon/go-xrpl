@@ -1,12 +1,14 @@
 package cli
 
 import (
+	"bytes"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"io"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/LeJamon/go-xrpl/internal/cmdexit"
@@ -33,54 +35,125 @@ func feeSettingsHex(t *testing.T) string {
 func TestLoadStateFile_Formats(t *testing.T) {
 	dir := t.TempDir()
 
-	// 1. StateFile wrapper format with entries.
 	wrapped := filepath.Join(dir, "wrapped.json")
 	if err := os.WriteFile(wrapped, []byte(`{"ledger_index":100,"entries":[{"index":"AB","data":"CD"}]}`), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	entries, err := loadStateFile(wrapped)
-	if err != nil || len(entries) != 1 || entries[0].Index != "AB" {
+	if err != nil || len(entries) != 1 || entries["ab"].Index != "AB" {
 		t.Fatalf("wrapped format: entries=%v err=%v", entries, err)
 	}
 
-	// 2. Bare array of StateFileEntry.
 	bareArr := filepath.Join(dir, "bare.json")
 	if err := os.WriteFile(bareArr, []byte(`[{"index":"11","data_hex":"22"}]`), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	entries, err = loadStateFile(bareArr)
-	if err != nil || len(entries) != 1 || entries[0].DataHex != "22" {
+	if err != nil || len(entries) != 1 || entries["11"].DataHex != "22" {
 		t.Fatalf("bare array format: entries=%v err=%v", entries, err)
 	}
 
-	// 3. Map-fallback path: content that does not unmarshal cleanly into
-	// []StateFileEntry (here `decoded` is a string, not an object) falls back to
-	// generic-map parsing, which keeps only entries carrying a non-empty index.
-	mapArr := filepath.Join(dir, "maps.json")
-	content := `[{"index":"33","data":"44","decoded":"not-an-object"},{"index":"","data":"noindex"}]`
-	if err := os.WriteFile(mapArr, []byte(content), 0o644); err != nil {
+	empty := filepath.Join(dir, "empty.json")
+	if err := os.WriteFile(empty, []byte(`{"entries":[]}`), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	entries, err = loadStateFile(mapArr)
-	if err != nil {
-		t.Fatalf("map array format: %v", err)
-	}
-	if len(entries) != 1 || entries[0].Index != "33" || entries[0].Data != "44" {
-		t.Fatalf("map array format: unexpected entries %+v", entries)
+	entries, err = loadStateFile(empty)
+	if err != nil || len(entries) != 0 {
+		t.Fatalf("empty wrapper: entries=%v err=%v", entries, err)
 	}
 
-	// 4. Missing file → error.
 	if _, err := loadStateFile(filepath.Join(dir, "nope.json")); err == nil {
 		t.Fatal("expected error for missing file")
 	}
 
-	// 5. Unrecognized content → error.
 	junk := filepath.Join(dir, "junk.json")
 	if err := os.WriteFile(junk, []byte(`"just a string"`), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := loadStateFile(junk); err == nil {
 		t.Fatal("expected unrecognized-format error")
+	}
+}
+
+func TestLoadStateFileRejectsAmbiguousEntries(t *testing.T) {
+	tests := []struct {
+		name    string
+		content string
+		wantErr string
+	}{
+		{
+			name:    "missing wrapper entries",
+			content: `{"ledger_index":100}`,
+			wantErr: "state snapshot is missing entries",
+		},
+		{
+			name:    "missing index",
+			content: `[{"data":"11"}]`,
+			wantErr: "entry 1 has no index",
+		},
+		{
+			name:    "blank index",
+			content: `[{"index":"  ","data":"11"}]`,
+			wantErr: "entry 1 has no index",
+		},
+		{
+			name:    "duplicate normalized index",
+			content: `[{"index":"AB","data":"11"},{"index":"ab","data":"22"}]`,
+			wantErr: `entry 2 index "ab" duplicates "AB"`,
+		},
+		{
+			name:    "decoded only",
+			content: `[{"index":"AB","decoded":{"LedgerEntryType":"AccountRoot"}}]`,
+			wantErr: `entry "AB" has no raw data`,
+		},
+		{
+			name:    "both raw fields",
+			content: `[{"index":"AB","data":"11","data_hex":"11"}]`,
+			wantErr: `entry "AB" has both data and data_hex`,
+		},
+		{
+			name:    "empty data with data hex",
+			content: `[{"index":"AB","data":"","data_hex":"11"}]`,
+			wantErr: `entry "AB" has both data and data_hex`,
+		},
+		{
+			name:    "null data with data hex",
+			content: `[{"index":"AB","data":null,"data_hex":"11"}]`,
+			wantErr: `entry "AB" has both data and data_hex`,
+		},
+		{
+			name:    "non-string raw data",
+			content: `[{"index":"AB","data":11}]`,
+			wantErr: `entry "AB" raw data must be a string`,
+		},
+		{
+			name:    "invalid raw data",
+			content: `[{"index":"AB","data":"not-hex"}]`,
+			wantErr: `entry "AB" has invalid raw data`,
+		},
+		{
+			name:    "wrong decoded type",
+			content: `[{"index":"AB","data":"11","decoded":"object required"}]`,
+			wantErr: "decoding state entries",
+		},
+		{
+			name:    "null entries",
+			content: `{"entries":null}`,
+			wantErr: "state snapshot entries must be an array",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "state.json")
+			if err := os.WriteFile(path, []byte(tt.content), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			_, err := loadStateFile(path)
+			if err == nil || !strings.Contains(err.Error(), tt.wantErr) {
+				t.Fatalf("loadStateFile() error = %v, want containing %q", err, tt.wantErr)
+			}
+		})
 	}
 }
 
@@ -93,21 +166,19 @@ func TestDecodeStateData(t *testing.T) {
 	}
 }
 
-func TestBuildStateMap(t *testing.T) {
+func TestNormalizeStateEntries(t *testing.T) {
 	feeHex := feeSettingsHex(t)
-	entries := []StateFileEntry{
-		// data present → decoded lazily from the codec.
-		{Index: "AA", Data: feeHex},
-		// only data_hex present → falls back to DataHex.
-		{Index: "BB", DataHex: feeHex},
-		// pre-decoded → used as-is, codec not invoked.
-		{Index: "CC", Decoded: map[string]interface{}{"LedgerEntryType": "AccountRoot"}},
-		// nothing decodable.
-		{Index: "DD"},
+	entries := []stateFileEntry{
+		{Index: "AA", Data: json.RawMessage(`"` + feeHex + `"`)},
+		{Index: "BB", DataHex: json.RawMessage(`"` + feeHex + `"`), Decoded: map[string]interface{}{"LedgerEntryType": "Stale"}},
+		{Index: "CC", DataHex: json.RawMessage(`"00"`), Decoded: map[string]interface{}{"LedgerEntryType": "AccountRoot"}},
 	}
-	m := buildStateMap(entries)
-	if len(m) != 4 {
-		t.Fatalf("expected 4 entries, got %d", len(m))
+	m, err := normalizeStateEntries(entries)
+	if err != nil {
+		t.Fatalf("normalizeStateEntries: %v", err)
+	}
+	if len(m) != 3 {
+		t.Fatalf("expected 3 entries, got %d", len(m))
 	}
 	if m["aa"].Decoded["LedgerEntryType"] != "FeeSettings" {
 		t.Errorf("aa not decoded from Data: %+v", m["aa"])
@@ -115,11 +186,11 @@ func TestBuildStateMap(t *testing.T) {
 	if m["bb"].DataHex != feeHex || m["bb"].Decoded == nil {
 		t.Errorf("bb not decoded from DataHex: %+v", m["bb"])
 	}
+	if m["bb"].Decoded["LedgerEntryType"] != "FeeSettings" {
+		t.Errorf("bb used stale supplied decoded data: %+v", m["bb"])
+	}
 	if m["cc"].Decoded["LedgerEntryType"] != "AccountRoot" {
 		t.Errorf("cc pre-decoded value lost: %+v", m["cc"])
-	}
-	if m["dd"].Decoded != nil {
-		t.Errorf("dd should have no decoded data: %+v", m["dd"])
 	}
 }
 
@@ -150,27 +221,6 @@ func TestCompareStates(t *testing.T) {
 	}
 	if len(modified[0].ChangedKeys) != 1 || modified[0].ChangedKeys[0] != "Balance" {
 		t.Errorf("changed keys = %v", modified[0].ChangedKeys)
-	}
-}
-
-func TestFindChangedKeys(t *testing.T) {
-	if got := findChangedKeys(nil, map[string]interface{}{"a": 1}); got != nil {
-		t.Errorf("nil old should yield nil, got %v", got)
-	}
-	if got := findChangedKeys(map[string]interface{}{"a": 1}, nil); got != nil {
-		t.Errorf("nil new should yield nil, got %v", got)
-	}
-	old := map[string]interface{}{"same": 1, "changed": 1, "removed": 1}
-	new := map[string]interface{}{"same": 1, "changed": 2, "added": 1}
-	got := findChangedKeys(old, new)
-	want := []string{"added", "changed", "removed"} // sorted
-	if len(got) != len(want) {
-		t.Fatalf("got %v want %v", got, want)
-	}
-	for i := range want {
-		if got[i] != want[i] {
-			t.Fatalf("got %v want %v", got, want)
-		}
 	}
 }
 
@@ -221,49 +271,160 @@ func TestFormatValue(t *testing.T) {
 	}
 }
 
-func TestPrintFunctions(t *testing.T) {
+func TestPrintEntries(t *testing.T) {
 	idx := "00000000000000000000000000000000000000000000000000000000000000FF"
-	added := []stateEntry{{Index: idx, Decoded: map[string]interface{}{
+	entry := stateEntry{Index: idx, Decoded: map[string]interface{}{
 		"LedgerEntryType": "AccountRoot", "Account": "rAcct", "Balance": "1", "Sequence": uint32(1), "OwnerCount": uint32(0), "Flags": uint32(0),
-	}}}
-	removed := []stateEntry{{Index: idx, Decoded: nil}} // exercises the "unable to decode" branch
-	modified := []modifiedEntry{{
-		Index:       idx,
-		OldDecoded:  map[string]interface{}{"LedgerEntryType": "RippleState", "Balance": "1"},
-		NewDecoded:  map[string]interface{}{"LedgerEntryType": "RippleState", "Balance": "2"},
-		ChangedKeys: []string{"Balance"},
 	}}
-	unchanged := []stateEntry{{Index: idx, Decoded: map[string]interface{}{"LedgerEntryType": "Offer"}}}
 
-	// compareShowAll/compareShowDecoded influence the print depth; restore after.
 	prevAll, prevDecoded := compareShowAll, compareShowDecoded
 	defer func() { compareShowAll, compareShowDecoded = prevAll, prevDecoded }()
-	compareShowAll, compareShowDecoded = true, true
 
-	printAddedEntries(io.Discard, added)
-	printRemovedEntries(io.Discard, removed)
-	printModifiedEntries(io.Discard, modified)
-	printUnchangedEntries(io.Discard, unchanged)
+	tests := []struct {
+		name       string
+		showAll    bool
+		showDecode bool
+		want       string
+	}{
+		{
+			name: "summary only",
+			want: "\n[+] Entry 1: " + idx + "\n    Type: AccountRoot\n\n",
+		},
+		{
+			name:       "decoded key fields",
+			showDecode: true,
+			want: "\n[+] Entry 1: " + idx + "\n" +
+				"    Type: AccountRoot\n" +
+				"    Account: rAcct\n" +
+				"    Balance: 1\n" +
+				"    Sequence: 1\n" +
+				"    OwnerCount: 0\n" +
+				"    Flags: 0\n\n",
+		},
+		{
+			name:    "all with decoded disabled",
+			showAll: true,
+			want:    "\n[+] Entry 1: " + idx + "\n    Type: AccountRoot\n\n",
+		},
+		{
+			name:       "all decoded",
+			showAll:    true,
+			showDecode: true,
+			want: "\n[+] Entry 1: " + idx + "\n" +
+				"    Type: AccountRoot\n" +
+				"    Account: rAcct\n" +
+				"    Balance: 1\n" +
+				"    Sequence: 1\n" +
+				"    OwnerCount: 0\n" +
+				"    Flags: 0\n" +
+				"    Full data:\n" +
+				"    {\n" +
+				"      \"Account\": \"rAcct\",\n" +
+				"      \"Balance\": \"1\",\n" +
+				"      \"Flags\": 0,\n" +
+				"      \"LedgerEntryType\": \"AccountRoot\",\n" +
+				"      \"OwnerCount\": 0,\n" +
+				"      \"Sequence\": 1\n" +
+				"    }\n\n",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			compareShowAll, compareShowDecoded = tt.showAll, tt.showDecode
+			var output bytes.Buffer
+			printAddedEntries(&output, []stateEntry{entry})
+			got := output.String()
+			const banner = "================================================================================\n" +
+				"                              ADDED ENTRIES\n" +
+				"================================================================================\n"
+			if got != banner+tt.want {
+				t.Fatalf("printAddedEntries() =\n%q\nwant\n%q", got, banner+tt.want)
+			}
+		})
+	}
+}
 
-	// Exercise printKeyFields for each well-known entry type.
-	for _, d := range []map[string]interface{}{
-		{"LedgerEntryType": "AccountRoot", "Account": "rA", "Balance": "1", "Sequence": uint32(1), "OwnerCount": uint32(0), "Flags": uint32(0)},
-		{"LedgerEntryType": "RippleState", "Balance": map[string]interface{}{"currency": "USD", "value": "1", "issuer": "rIssuerAcct"}, "LowLimit": "0", "HighLimit": "0", "Flags": uint32(0)},
-		{"LedgerEntryType": "Offer", "Account": "rA", "TakerGets": "1", "TakerPays": "2", "Sequence": uint32(1)},
-		{"LedgerEntryType": "DirectoryNode", "Owner": "rA", "RootIndex": "X"},
-		{"LedgerEntryType": "FeeSettings", "BaseFeeDrops": "10", "ReserveBaseDrops": "1", "ReserveIncrementDrops": "1"},
-		{"LedgerEntryType": "Amendments", "Amendments": []interface{}{"a", "b"}},
-		{"LedgerEntryType": "SomethingUnknown", "FieldOne": "v", "FieldTwo": uint32(3)},
+func TestPrintUnchangedEntries(t *testing.T) {
+	var output bytes.Buffer
+	printUnchangedEntries(&output, []stateEntry{{
+		Index:   "123456789012345678901234567890123",
+		Decoded: map[string]any{"LedgerEntryType": "Offer"},
+	}})
+	want := "================================================================================\n" +
+		"                           UNCHANGED ENTRIES\n" +
+		"================================================================================\n" +
+		"[=] 1: 12345678901234567890123456789012... (Offer)\n\n"
+	if got := output.String(); got != want {
+		t.Fatalf("printUnchangedEntries() =\n%q\nwant\n%q", got, want)
+	}
+}
+
+func TestPrintUnknownFieldsSorted(t *testing.T) {
+	prevAll, prevDecoded := compareShowAll, compareShowDecoded
+	defer func() { compareShowAll, compareShowDecoded = prevAll, prevDecoded }()
+	compareShowAll, compareShowDecoded = false, true
+
+	var output bytes.Buffer
+	printEntryDetails(&output, map[string]any{
+		"LedgerEntryType": "SomethingUnknown",
+		"Zulu":            3,
+		"Alpha":           1,
+		"Middle":          2,
+	})
+	want := "    Type: SomethingUnknown\n" +
+		"    Alpha: 1\n" +
+		"    Middle: 2\n" +
+		"    Zulu: 3\n"
+	if got := output.String(); got != want {
+		t.Fatalf("printEntryDetails() =\n%q\nwant\n%q", got, want)
+	}
+}
+
+func TestPrintModifiedEntriesDecodedFlag(t *testing.T) {
+	entry := modifiedEntry{
+		Index:       "AB",
+		OldDecoded:  map[string]any{"LedgerEntryType": "RippleState", "Balance": "1"},
+		NewDecoded:  map[string]any{"LedgerEntryType": "RippleState", "Balance": "2"},
+		ChangedKeys: []string{"Balance"},
+	}
+	prevDecoded := compareShowDecoded
+	defer func() { compareShowDecoded = prevDecoded }()
+
+	const banner = "================================================================================\n" +
+		"                            MODIFIED ENTRIES\n" +
+		"================================================================================\n" +
+		"\n[~] Entry 1: AB\n" +
+		"    Type: RippleState\n" +
+		"    Changed fields: [Balance]\n" +
+		"    ---\n"
+	for _, tt := range []struct {
+		name    string
+		decoded bool
+		want    string
+	}{
+		{"decoded", true, banner + "    Balance:\n      - 1\n      + 2\n\n"},
+		{"raw summary", false, banner + "\n"},
 	} {
-		printEntryDetails(io.Discard, d)
+		t.Run(tt.name, func(t *testing.T) {
+			compareShowDecoded = tt.decoded
+			var output bytes.Buffer
+			printModifiedEntries(&output, []modifiedEntry{entry})
+			if got := output.String(); got != tt.want {
+				t.Fatalf("printModifiedEntries() =\n%q\nwant\n%q", got, tt.want)
+			}
+		})
 	}
 }
 
 func TestWriteDiffJSON(t *testing.T) {
 	out := filepath.Join(t.TempDir(), "diff.json")
-	added := []stateEntry{{Index: "A", Decoded: map[string]interface{}{"k": "v"}}}
-	removed := []stateEntry{{Index: "B"}}
-	modified := []modifiedEntry{{Index: "C", ChangedKeys: []string{"Balance"}, OldDecoded: map[string]interface{}{"Balance": "1"}, NewDecoded: map[string]interface{}{"Balance": "2"}}}
+	added := []stateEntry{{Index: "A", DataHex: "AA", Decoded: map[string]interface{}{"k": "v"}}}
+	removed := []stateEntry{{Index: "B", DataHex: "BB"}}
+	modified := []modifiedEntry{{
+		Index:      "C",
+		OldDataHex: "CC",
+		NewDataHex: "DD",
+	}}
 
 	if err := writeDiffJSON(io.Discard, out, added, removed, modified); err != nil {
 		t.Fatalf("writeDiffJSON: %v", err)
@@ -273,19 +434,16 @@ func TestWriteDiffJSON(t *testing.T) {
 	if err != nil {
 		t.Fatalf("reading diff: %v", err)
 	}
-	var parsed struct {
-		Added    []map[string]interface{} `json:"added"`
-		Removed  []map[string]interface{} `json:"removed"`
-		Modified []map[string]interface{} `json:"modified"`
+	var compact bytes.Buffer
+	if err := json.Compact(&compact, data); err != nil {
+		t.Fatalf("compacting diff: %v", err)
 	}
-	if err := json.Unmarshal(data, &parsed); err != nil {
-		t.Fatalf("unmarshalling diff: %v", err)
-	}
-	if len(parsed.Added) != 1 || len(parsed.Removed) != 1 || len(parsed.Modified) != 1 {
-		t.Fatalf("unexpected diff contents: %+v", parsed)
-	}
-	if parsed.Modified[0]["index"] != "C" {
-		t.Errorf("modified index = %v", parsed.Modified[0]["index"])
+	want := `{"added":[{"data_hex":"AA","decoded":{"k":"v"},"index":"A"}],` +
+		`"modified":[{"changed_keys":null,"index":"C","new":null,` +
+		`"new_data_hex":"DD","old":null,"old_data_hex":"CC"}],` +
+		`"removed":[{"data_hex":"BB","decoded":null,"index":"B"}]}`
+	if got := compact.String(); got != want {
+		t.Fatalf("writeDiffJSON() =\n%s\nwant\n%s", got, want)
 	}
 }
 

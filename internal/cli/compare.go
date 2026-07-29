@@ -1,10 +1,13 @@
 package cli
 
 import (
+	"bytes"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
 	"os"
+	"sort"
 	"strings"
 
 	binarycodec "github.com/LeJamon/go-xrpl/codec/binarycodec"
@@ -13,19 +16,15 @@ import (
 	"github.com/spf13/cobra"
 )
 
-// StateFile represents a state dump file (either from fixtures or debug output)
-type StateFile struct {
-	LedgerIndex uint32           `json:"ledger_index,omitempty"`
-	AccountHash string           `json:"account_hash,omitempty"`
-	Entries     []StateFileEntry `json:"entries,omitempty"`
+type stateFile struct {
+	Entries json.RawMessage `json:"entries"`
 }
 
-// StateFileEntry represents a state entry that could come from different formats
-type StateFileEntry struct {
-	Index   string         `json:"index"`
-	Data    string         `json:"data,omitempty"`     // From fixture state.json
-	DataHex string         `json:"data_hex,omitempty"` // From debug post_state.json
-	Decoded map[string]any `json:"decoded,omitempty"`  // Pre-decoded data
+type stateFileEntry struct {
+	Index   string          `json:"index"`
+	Data    json.RawMessage `json:"data"`
+	DataHex json.RawMessage `json:"data_hex"`
+	Decoded map[string]any  `json:"decoded,omitempty"`
 }
 
 var (
@@ -85,23 +84,19 @@ func runCompare(cmd *cobra.Command, args []string) error {
 	fmt.Fprintln(w)
 
 	// Load both files
-	state1, err := loadStateFile(file1Path)
+	map1, err := loadStateFile(file1Path)
 	if err != nil {
 		return fmt.Errorf("loading file1 %q: %w", file1Path, err)
 	}
 
-	state2, err := loadStateFile(file2Path)
+	map2, err := loadStateFile(file2Path)
 	if err != nil {
 		return fmt.Errorf("loading file2 %q: %w", file2Path, err)
 	}
 
-	fmt.Fprintf(w, "File 1: %d entries\n", len(state1))
-	fmt.Fprintf(w, "File 2: %d entries\n", len(state2))
+	fmt.Fprintf(w, "File 1: %d entries\n", len(map1))
+	fmt.Fprintf(w, "File 2: %d entries\n", len(map2))
 	fmt.Fprintln(w)
-
-	// Build maps for comparison
-	map1 := buildStateMap(state1)
-	map2 := buildStateMap(state2)
 
 	// Find differences
 	added, removed, modified, unchanged := compareStates(map1, map2)
@@ -155,77 +150,106 @@ func runCompare(cmd *cobra.Command, args []string) error {
 	return nil
 }
 
-func loadStateFile(path string) ([]StateFileEntry, error) {
+func loadStateFile(path string) (map[string]stateEntry, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return nil, err
 	}
 
-	// Try parsing as StateFile first
-	var stateFile StateFile
-	if err := json.Unmarshal(data, &stateFile); err == nil {
-		if len(stateFile.Entries) > 0 {
-			return stateFile.Entries, nil
+	entries, err := parseStateEntries(data)
+	if err != nil {
+		return nil, err
+	}
+	return normalizeStateEntries(entries)
+}
+
+func parseStateEntries(data []byte) ([]stateFileEntry, error) {
+	var topLevel json.RawMessage
+	if err := json.Unmarshal(data, &topLevel); err != nil {
+		return nil, fmt.Errorf("decoding JSON: %w", err)
+	}
+	topLevel = bytes.TrimSpace(topLevel)
+
+	var entries []stateFileEntry
+	switch {
+	case len(topLevel) > 0 && topLevel[0] == '{':
+		var snapshot stateFile
+		if err := json.Unmarshal(topLevel, &snapshot); err != nil {
+			return nil, fmt.Errorf("decoding state snapshot: %w", err)
 		}
-	}
-
-	// Try parsing as array of entries directly (debug post_state.json format)
-	var entries []StateFileEntry
-	if err := json.Unmarshal(data, &entries); err == nil {
-		return entries, nil
-	}
-
-	// Try parsing as array of maps
-	var mapEntries []map[string]any
-	if err := json.Unmarshal(data, &mapEntries); err == nil {
-		entries := make([]StateFileEntry, 0, len(mapEntries))
-		for _, m := range mapEntries {
-			entry := StateFileEntry{}
-			if idx, ok := m["index"].(string); ok {
-				entry.Index = idx
-			}
-			if data, ok := m["data"].(string); ok {
-				entry.Data = data
-			}
-			if dataHex, ok := m["data_hex"].(string); ok {
-				entry.DataHex = dataHex
-			}
-			if decoded, ok := m["decoded"].(map[string]any); ok {
-				entry.Decoded = decoded
-			}
-			if entry.Index != "" {
-				entries = append(entries, entry)
-			}
+		if snapshot.Entries == nil {
+			return nil, fmt.Errorf("state snapshot is missing entries")
 		}
-		return entries, nil
+		snapshot.Entries = bytes.TrimSpace(snapshot.Entries)
+		if len(snapshot.Entries) == 0 || snapshot.Entries[0] != '[' {
+			return nil, fmt.Errorf("state snapshot entries must be an array")
+		}
+		if err := json.Unmarshal(snapshot.Entries, &entries); err != nil {
+			return nil, fmt.Errorf("decoding state entries: %w", err)
+		}
+	case len(topLevel) > 0 && topLevel[0] == '[':
+		if err := json.Unmarshal(topLevel, &entries); err != nil {
+			return nil, fmt.Errorf("decoding state entries: %w", err)
+		}
+	default:
+		return nil, fmt.Errorf("expected a state snapshot object or entry array")
 	}
-
-	return nil, fmt.Errorf("unrecognized file format")
+	return entries, nil
 }
 
 type stateEntry = replaytool.ComparableStateEntry
 
-func buildStateMap(entries []StateFileEntry) map[string]stateEntry {
-	result := make(map[string]stateEntry)
-	for _, e := range entries {
-		key := strings.ToLower(e.Index)
-		dataHex := e.Data
-		if dataHex == "" {
-			dataHex = e.DataHex
+func normalizeStateEntries(entries []stateFileEntry) (map[string]stateEntry, error) {
+	result := make(map[string]stateEntry, len(entries))
+	originalIndexes := make(map[string]string, len(entries))
+	for i, entry := range entries {
+		index := strings.TrimSpace(entry.Index)
+		if index == "" {
+			return nil, fmt.Errorf("entry %d has no index", i+1)
+		}
+		key := strings.ToLower(index)
+		if original, exists := originalIndexes[key]; exists {
+			return nil, fmt.Errorf("entry %d index %q duplicates %q", i+1, index, original)
+		}
+		originalIndexes[key] = index
+
+		if entry.Data != nil && entry.DataHex != nil {
+			return nil, fmt.Errorf("entry %q has both data and data_hex", index)
 		}
 
-		decoded := e.Decoded
-		if decoded == nil && dataHex != "" {
-			decoded = decodeStateData(dataHex)
+		var rawData json.RawMessage
+		switch {
+		case entry.Data != nil:
+			rawData = entry.Data
+		case entry.DataHex != nil:
+			rawData = entry.DataHex
+		default:
+			return nil, fmt.Errorf("entry %q has no raw data", index)
+		}
+
+		var dataHex string
+		if err := json.Unmarshal(rawData, &dataHex); err != nil {
+			return nil, fmt.Errorf("entry %q raw data must be a string: %w", index, err)
+		}
+		if dataHex == "" {
+			return nil, fmt.Errorf("entry %q has no raw data", index)
+		}
+		if _, err := hex.DecodeString(dataHex); err != nil {
+			return nil, fmt.Errorf("entry %q has invalid raw data: %w", index, err)
+		}
+
+		decoded := decodeStateData(dataHex)
+		if decoded == nil {
+			decoded = entry.Decoded
 		}
 
 		result[key] = stateEntry{
-			Index:   e.Index,
+			Index:   index,
 			DataHex: dataHex,
 			Decoded: decoded,
 		}
 	}
-	return result
+	return result, nil
 }
 
 func decodeStateData(hexData string) map[string]any {
@@ -241,10 +265,6 @@ type modifiedEntry = replaytool.StateModification
 func compareStates(map1, map2 map[string]stateEntry) (added, removed []stateEntry, modified []modifiedEntry, unchanged []stateEntry) {
 	comparison := replaytool.CompareStates(map1, map2)
 	return comparison.Added, comparison.Removed, comparison.Modified, comparison.Unchanged
-}
-
-func findChangedKeys(old, new map[string]any) []string {
-	return replaytool.ChangedStateKeys(old, new)
 }
 
 func filterByType(entries []stateEntry, entryType string) []stateEntry {
@@ -401,11 +421,15 @@ func printKeyFields(w io.Writer, decoded map[string]any) {
 			fmt.Fprintf(w, "    Amendments: %d enabled\n", len(amendments))
 		}
 	default:
-		// Print all fields for unknown types
-		for k, v := range decoded {
-			if k != "LedgerEntryType" {
-				fmt.Fprintf(w, "    %s: %v\n", k, formatValue(v))
+		fields := make([]string, 0, len(decoded))
+		for field := range decoded {
+			if field != "LedgerEntryType" {
+				fields = append(fields, field)
 			}
+		}
+		sort.Strings(fields)
+		for _, field := range fields {
+			fmt.Fprintf(w, "    %s: %v\n", field, formatValue(decoded[field]))
 		}
 	}
 }
@@ -457,15 +481,17 @@ func writeDiffJSON(w io.Writer, path string, added, removed []stateEntry, modifi
 
 	for _, e := range added {
 		output["added"] = append(output["added"].([]map[string]any), map[string]any{
-			"index":   e.Index,
-			"decoded": e.Decoded,
+			"index":    e.Index,
+			"data_hex": e.DataHex,
+			"decoded":  e.Decoded,
 		})
 	}
 
 	for _, e := range removed {
 		output["removed"] = append(output["removed"].([]map[string]any), map[string]any{
-			"index":   e.Index,
-			"decoded": e.Decoded,
+			"index":    e.Index,
+			"data_hex": e.DataHex,
+			"decoded":  e.Decoded,
 		})
 	}
 
@@ -473,6 +499,8 @@ func writeDiffJSON(w io.Writer, path string, added, removed []stateEntry, modifi
 		output["modified"] = append(output["modified"].([]map[string]any), map[string]any{
 			"index":        e.Index,
 			"changed_keys": e.ChangedKeys,
+			"old_data_hex": e.OldDataHex,
+			"new_data_hex": e.NewDataHex,
 			"old":          e.OldDecoded,
 			"new":          e.NewDecoded,
 		})
