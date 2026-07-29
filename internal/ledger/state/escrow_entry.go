@@ -5,7 +5,7 @@ import (
 	"strings"
 
 	addresscodec "github.com/LeJamon/go-xrpl/codec/addresscodec"
-	"github.com/LeJamon/go-xrpl/internal/tx/ledgerfields"
+	ledgerfields "github.com/LeJamon/go-xrpl/ledger/entry"
 )
 
 // SerializeEscrow serializes an Escrow ledger entry from its creation inputs.

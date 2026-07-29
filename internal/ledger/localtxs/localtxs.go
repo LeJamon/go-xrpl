@@ -17,13 +17,9 @@ import (
 	"github.com/LeJamon/go-xrpl/keylet"
 )
 
-// HoldLedgers mirrors rippled LocalTxs.h:40 — after this many ledgers a
-// tx that hasn't applied is dropped from the held pool.
-const HoldLedgers uint32 = 5
+const holdLedgers uint32 = 5
 
-// LocalTx is one entry in the local held-tx pool. Mirrors the rippled
-// LocalTx wrapper (LocalTxs.cpp:53-104).
-type LocalTx struct {
+type localTx struct {
 	// ExpireLedgerSeq is the highest ledger index at which this tx is
 	// still considered live. Mirrors rippled m_expire — set at push_back
 	// to index + HoldLedgers and clamped by LastLedgerSequence+1 when
@@ -36,7 +32,7 @@ type LocalTx struct {
 // LocalTxs is the held pool. All methods are safe for concurrent callers.
 type LocalTxs struct {
 	mu  sync.Mutex
-	txs []LocalTx
+	txs []localTx
 }
 
 func New() *LocalTxs { return &LocalTxs{} }
@@ -52,7 +48,7 @@ func New() *LocalTxs { return &LocalTxs{} }
 // relay-then-RPC echo extends the hold window instead of locking it to
 // whichever insertion arrived first.
 func (l *LocalTxs) PushBack(currentLedgerSeq uint32, ptx openledger.PendingTx) {
-	expire := currentLedgerSeq + HoldLedgers
+	expire := currentLedgerSeq + holdLedgers
 	if ptx.HasLastLedgerSequence {
 		if lastExpire := ptx.LastLedgerSequence + 1; lastExpire < expire {
 			expire = lastExpire
@@ -67,7 +63,7 @@ func (l *LocalTxs) PushBack(currentLedgerSeq uint32, ptx openledger.PendingTx) {
 			return
 		}
 	}
-	l.txs = append(l.txs, LocalTx{
+	l.txs = append(l.txs, localTx{
 		ExpireLedgerSeq: expire,
 		Ptx:             ptx,
 	})
@@ -107,7 +103,7 @@ func (l *LocalTxs) Sweep(view *ledger.Ledger) {
 	}
 	// Zero the tail so we don't pin dropped tx blobs in memory.
 	for i := len(kept); i < len(l.txs); i++ {
-		l.txs[i] = LocalTx{}
+		l.txs[i] = localTx{}
 	}
 	l.txs = kept
 }

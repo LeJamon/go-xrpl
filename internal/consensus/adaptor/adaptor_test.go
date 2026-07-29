@@ -875,7 +875,7 @@ func TestNew_SeedsRestartValidationFloor(t *testing.T) {
 		require.NoError(t, rm.Ledger().SaveValidatedLedger(ctx, info))
 	}
 
-	cfg := service.DefaultConfig()
+	cfg := service.Config{Standalone: true, GenesisConfig: genesis.DefaultConfig()}
 	cfg.Standalone = true
 	cfg.GenesisConfig = genesis.DefaultConfig()
 	cfg.RelationalDB = rm

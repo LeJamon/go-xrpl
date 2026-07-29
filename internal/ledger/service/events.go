@@ -42,7 +42,18 @@ type TransactionResultEvent struct {
 	AffectedAccounts []string
 }
 
-type EventCallback func(event *LedgerAcceptedEvent)
+type EventSink interface {
+	// LedgerAccepted must not call Service.Stop synchronously.
+	LedgerAccepted(event *LedgerAcceptedEvent)
+}
+
+type EventSinkFunc func(event *LedgerAcceptedEvent)
+
+func (f EventSinkFunc) LedgerAccepted(event *LedgerAcceptedEvent) {
+	if f != nil {
+		f(event)
+	}
+}
 
 // SubmittedTxEvent carries the inputs the WebSocket transactions_proposed
 // publisher needs from a SubmitTransaction call.
@@ -66,98 +77,145 @@ type Result struct {
 
 type SubmittedTxCallback func(SubmittedTxEvent)
 
-func (s *Service) SetEventCallback(callback EventCallback) {
+func (s *Service) SetEventSink(sink EventSink) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	s.eventCallback = callback
+	s.eventPublisher.setEventSink(sink)
+}
+
+func (p *eventPublisher) setEventSink(sink EventSink) {
+	p.subscriberMu.Lock()
+	defer p.subscriberMu.Unlock()
+	p.eventSink = sink
+}
+
+func (p *eventPublisher) hasEventSink() bool {
+	p.subscriberMu.RLock()
+	defer p.subscriberMu.RUnlock()
+	return p.eventSink != nil
 }
 
 // dispatchLedgerEvent hands an accepted-ledger event to the single ordered
-// dispatcher so eventCallback runs FIFO and single-threaded, instead of the
+// dispatcher so eventSink runs FIFO and single-threaded, instead of the
 // per-event goroutines that ran it concurrently with itself — a data race on
 // the subscriber's state and out-of-order ledgerClosed delivery. rippled
 // serializes the equivalent through NetworkOPs' single job-queue strand.
 // Enqueue is non-blocking and lossless: a lagging subscriber grows the queue
 // without stalling ledger close or dropping publication state.
 func (s *Service) dispatchLedgerEvent(event *LedgerAcceptedEvent) {
+	s.eventPublisher.dispatchLedgerEvent(event)
+}
+
+func (p *eventPublisher) dispatchLedgerEvent(event *LedgerAcceptedEvent) {
 	if event == nil {
 		return
 	}
-	s.ledgerEventMu.Lock()
-	if s.ledgerEventStarted && s.ledgerEventStopping {
-		s.ledgerEventMu.Unlock()
+	p.ledgerEventMu.Lock()
+	if p.ledgerEventStopping {
+		p.ledgerEventMu.Unlock()
 		return
 	}
-	ready := s.ledgerEventsReadyToQueueLocked(event)
+	startDispatcher := p.startLedgerEventDispatcherLocked()
+	ready := p.ledgerEventsReadyToQueueLocked(event)
 	if len(ready) == 0 {
-		s.ledgerEventMu.Unlock()
+		p.ledgerEventMu.Unlock()
+		if startDispatcher {
+			go p.runLedgerEventDispatcher()
+		}
 		return
 	}
-	if !s.ledgerEventStarted {
-		s.ledgerEventMu.Unlock()
-		// Dispatcher not started (paths that emit without Start). Deliver on a
-		// fresh goroutine to preserve the "callback fires, never under s.mu"
-		// contract; ordering isn't guaranteed here, but Start-anchored callers
-		// (production and the event tests) always take the channel path.
-		go func() {
-			for _, queued := range ready {
-				s.deliverLedgerEvent(queued)
-			}
-		}()
-		return
-	}
-	s.ledgerEventQueue = append(s.ledgerEventQueue, ready...)
+	p.ledgerEventQueue = append(p.ledgerEventQueue, ready...)
 	select {
-	case s.ledgerEventWake <- struct{}{}:
+	case p.ledgerEventWake <- struct{}{}:
 	default:
 	}
-	s.ledgerEventMu.Unlock()
+	p.ledgerEventMu.Unlock()
+	if startDispatcher {
+		go p.runLedgerEventDispatcher()
+	}
 }
 
-func (s *Service) ledgerEventsReadyToQueueLocked(event *LedgerAcceptedEvent) []*LedgerAcceptedEvent {
+func (p *eventPublisher) startLedgerEventDispatcherLocked() bool {
+	if p.ledgerEventStarted || p.ledgerEventStopping {
+		return false
+	}
+	p.ledgerEventWake = make(chan struct{}, 1)
+	p.ledgerEventStarted = true
+	p.ledgerEventWG.Add(1)
+	return true
+}
+
+func (p *eventPublisher) start() {
+	p.ledgerEventMu.Lock()
+	startDispatcher := p.startLedgerEventDispatcherLocked()
+	p.ledgerEventMu.Unlock()
+	if startDispatcher {
+		go p.runLedgerEventDispatcher()
+	}
+}
+
+func (p *eventPublisher) stop() {
+	p.ledgerEventMu.Lock()
+	started := p.ledgerEventStarted
+	if !p.ledgerEventStopping {
+		p.ledgerEventStopping = true
+		if started {
+			select {
+			case p.ledgerEventWake <- struct{}{}:
+			default:
+			}
+		}
+	}
+	p.ledgerEventMu.Unlock()
+	if started {
+		p.ledgerEventWG.Wait()
+	}
+}
+
+func (p *eventPublisher) ledgerEventsReadyToQueueLocked(event *LedgerAcceptedEvent) []*LedgerAcceptedEvent {
 	if event.Ledger == nil || !event.Ledger.IsValidated() {
 		return []*LedgerAcceptedEvent{event}
 	}
 
 	seq := event.Ledger.Sequence()
 	hash := event.Ledger.Hash()
-	if !s.ledgerEventHaveFrontier {
-		s.ledgerEventHaveFrontier = true
-		s.ledgerEventFrontierSeq = seq
-		s.ledgerEventFrontierHash = hash
-		s.pruneLedgerEventCandidatesLocked(seq)
+	if !p.ledgerEventHaveFrontier {
+		p.ledgerEventHaveFrontier = true
+		p.ledgerEventFrontierSeq = seq
+		p.ledgerEventFrontierHash = hash
+		p.pruneLedgerEventCandidatesLocked(seq)
 		return []*LedgerAcceptedEvent{event}
 	}
-	if seq <= s.ledgerEventFrontierSeq {
+	if seq <= p.ledgerEventFrontierSeq {
 		return nil
 	}
-	if seq-s.ledgerEventFrontierSeq > maxLedgerPublicationGap {
-		s.ledgerEventFrontierSeq = seq
-		s.ledgerEventFrontierHash = hash
-		s.pruneLedgerEventCandidatesLocked(seq)
+	if seq-p.ledgerEventFrontierSeq > maxLedgerPublicationGap {
+		p.ledgerEventFrontierSeq = seq
+		p.ledgerEventFrontierHash = hash
+		p.pruneLedgerEventCandidatesLocked(seq)
 		return []*LedgerAcceptedEvent{event}
 	}
 
-	s.ledgerEventCandidates[seq] = event
-	ready := make([]*LedgerAcceptedEvent, 0, len(s.ledgerEventCandidates))
-	for s.ledgerEventFrontierSeq != ^uint32(0) {
-		nextSeq := s.ledgerEventFrontierSeq + 1
-		next, ok := s.ledgerEventCandidates[nextSeq]
-		if !ok || next.Ledger.ParentHash() != s.ledgerEventFrontierHash {
+	p.ledgerEventCandidates[seq] = event
+	ready := make([]*LedgerAcceptedEvent, 0, len(p.ledgerEventCandidates))
+	for p.ledgerEventFrontierSeq != ^uint32(0) {
+		nextSeq := p.ledgerEventFrontierSeq + 1
+		next, ok := p.ledgerEventCandidates[nextSeq]
+		if !ok || next.Ledger.ParentHash() != p.ledgerEventFrontierHash {
 			break
 		}
-		delete(s.ledgerEventCandidates, nextSeq)
+		delete(p.ledgerEventCandidates, nextSeq)
 		ready = append(ready, next)
-		s.ledgerEventFrontierSeq = nextSeq
-		s.ledgerEventFrontierHash = next.Ledger.Hash()
+		p.ledgerEventFrontierSeq = nextSeq
+		p.ledgerEventFrontierHash = next.Ledger.Hash()
 	}
 	return ready
 }
 
-func (s *Service) pruneLedgerEventCandidatesLocked(frontier uint32) {
-	for seq := range s.ledgerEventCandidates {
+func (p *eventPublisher) pruneLedgerEventCandidatesLocked(frontier uint32) {
+	for seq := range p.ledgerEventCandidates {
 		if seq <= frontier {
-			delete(s.ledgerEventCandidates, seq)
+			delete(p.ledgerEventCandidates, seq)
 		}
 	}
 }
@@ -165,22 +223,22 @@ func (s *Service) pruneLedgerEventCandidatesLocked(frontier uint32) {
 // runLedgerEventDispatcher is the single consumer that delivers accepted-ledger
 // events in FIFO order. It drains the queue on Stop before exiting so a shutdown
 // doesn't drop already-queued stream events.
-func (s *Service) runLedgerEventDispatcher() {
-	defer s.ledgerEventWG.Done()
+func (p *eventPublisher) runLedgerEventDispatcher() {
+	defer p.ledgerEventWG.Done()
 	for {
-		<-s.ledgerEventWake
+		<-p.ledgerEventWake
 		for {
-			s.ledgerEventMu.Lock()
-			if len(s.ledgerEventQueue) != 0 {
-				ev := s.ledgerEventQueue[0]
-				s.ledgerEventQueue[0] = nil
-				s.ledgerEventQueue = s.ledgerEventQueue[1:]
-				s.ledgerEventMu.Unlock()
-				s.deliverLedgerEvent(ev)
+			p.ledgerEventMu.Lock()
+			if len(p.ledgerEventQueue) != 0 {
+				ev := p.ledgerEventQueue[0]
+				p.ledgerEventQueue[0] = nil
+				p.ledgerEventQueue = p.ledgerEventQueue[1:]
+				p.ledgerEventMu.Unlock()
+				p.deliverLedgerEvent(ev)
 				continue
 			}
-			stopping := s.ledgerEventStopping
-			s.ledgerEventMu.Unlock()
+			stopping := p.ledgerEventStopping
+			p.ledgerEventMu.Unlock()
 			if stopping {
 				return
 			}
@@ -191,7 +249,8 @@ func (s *Service) runLedgerEventDispatcher() {
 
 // deliverLedgerEvent advances the published frontier at the ordered delivery
 // boundary, then invokes the current callback outside the lock.
-func (s *Service) deliverLedgerEvent(event *LedgerAcceptedEvent) {
+func (p *eventPublisher) deliverLedgerEvent(event *LedgerAcceptedEvent) {
+	s := p.service
 	s.mu.Lock()
 	if event.Ledger != nil && event.Ledger.IsValidated() {
 		seq := event.Ledger.Sequence()
@@ -200,10 +259,12 @@ func (s *Service) deliverLedgerEvent(event *LedgerAcceptedEvent) {
 			s.havePublished = true
 		}
 	}
-	cb := s.eventCallback
 	s.mu.Unlock()
-	if cb != nil {
-		cb(event)
+	p.subscriberMu.RLock()
+	sink := p.eventSink
+	p.subscriberMu.RUnlock()
+	if sink != nil {
+		sink.LedgerAccepted(event)
 	}
 }
 
@@ -291,63 +352,18 @@ func (n validatedLedgerNotification) notify() {
 	}
 }
 
-// SetEventHooks registers structured event hooks (richer than SetEventCallback).
-func (s *Service) SetEventHooks(hooks *EventHooks) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	s.hooks = hooks
+func (s *Service) SetConsensusPhaseCallback(callback func(string)) {
+	s.subscriberMu.Lock()
+	defer s.subscriberMu.Unlock()
+	s.consensusPhaseCallback = callback
 }
 
-// EventHooks returns the current event hooks (may be nil)
-func (s *Service) EventHooks() *EventHooks {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	return s.hooks
-}
-
-// fireLedgerClosedHooksLocked fires hooks.OnLedgerClosed and OnTransaction for a
-// closed ledger. Each hook runs on its own goroutine so subscriber callbacks
-// can't deadlock against s.mu; safe with nil hooks. Caller must hold s.mu.
-func (s *Service) fireLedgerClosedHooksLocked(
-	info *LedgerInfo,
-	txResults []TransactionResultEvent,
-	closeTime time.Time,
-	validatedLedgers string,
-) {
-	if s.hooks == nil {
-		return
-	}
-
-	if s.hooks.OnLedgerClosed != nil {
-		txCount := len(txResults)
-		hooks := s.hooks
-		capturedInfo := *info
-		capturedRange := validatedLedgers
-		go hooks.OnLedgerClosed(&capturedInfo, txCount, capturedRange)
-	}
-
-	if s.hooks.OnTransaction != nil {
-		hooks := s.hooks
-		ledgerSeq := info.Sequence
-		ledgerHash := info.Hash
-		closeTimeVal := closeTime
-		for _, txResult := range txResults {
-			txInfo := TransactionInfo{
-				Hash:             txResult.TxHash,
-				TxBlob:           txResult.TxData,
-				AffectedAccounts: txResult.AffectedAccounts,
-			}
-			txIndex, ok := s.txPositionIndex[txResult.TxHash]
-			if !ok {
-				txIndex = invalidTransactionIndex
-			}
-			result := TxResult{
-				Applied:  txResult.Validated,
-				Metadata: txResult.MetaData,
-				TxIndex:  txIndex,
-			}
-			go hooks.OnTransaction(txInfo, result, ledgerSeq, ledgerHash, closeTimeVal)
-		}
+func (s *Service) NotifyConsensusPhase(phase string) {
+	s.subscriberMu.RLock()
+	callback := s.consensusPhaseCallback
+	s.subscriberMu.RUnlock()
+	if callback != nil {
+		callback(phase)
 	}
 }
 
@@ -356,10 +372,17 @@ type transactionResultSource interface {
 	ForEachTransaction(func(txHash [32]byte, txData []byte) bool) error
 }
 
-// collectTransactionResults gathers per-tx results from the closed ledger and
-// populates s.txIndex/s.txPositionIndex (hash -> seq, metadata index). Idempotent with
-// the Apply-time write; the sole index site for the Apply-less peer-adopt path.
+// collectTransactionResults is the history-safe entry point for callers that
+// are not already inside a frontier/history mutation.
 func (s *Service) collectTransactionResults(l transactionResultSource, ledgerSeq uint32, ledgerHash [32]byte) []TransactionResultEvent {
+	s.historyComponent.mu.Lock()
+	defer s.historyComponent.mu.Unlock()
+	return s.collectTransactionResultsLocked(l, ledgerSeq, ledgerHash)
+}
+
+// collectTransactionResultsLocked gathers per-tx results and updates the
+// history component's transaction indexes. Caller holds historyComponent.mu.
+func (s *Service) collectTransactionResultsLocked(l transactionResultSource, ledgerSeq uint32, ledgerHash [32]byte) []TransactionResultEvent {
 	var results []TransactionResultEvent
 	validated := l.IsValidated()
 

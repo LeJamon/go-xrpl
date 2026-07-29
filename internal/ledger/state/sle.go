@@ -6,61 +6,8 @@ import (
 
 	"github.com/LeJamon/go-xrpl/keylet"
 	"github.com/LeJamon/go-xrpl/ledger/entry"
+	"github.com/LeJamon/go-xrpl/protocol"
 )
-
-// IsDefaultValue reports whether a decoded field value should be omitted
-// from CreatedNode.NewFields metadata. Used by the generic (non-typed)
-// metadata path in internal/tx/apply_state_table.go; the typed path in
-// internal/tx/ledgerfields filters defaults per-field at codegen time.
-func IsDefaultValue(value any) bool {
-	if value == nil {
-		return true
-	}
-	switch v := value.(type) {
-	case int:
-		return v == 0
-	case int64:
-		return v == 0
-	case uint32:
-		return v == 0
-	case uint64:
-		return v == 0
-	case float64:
-		return v == 0
-	case string:
-		if v == "" || v == "0" {
-			return true
-		}
-		if isAllZeroHex(v) {
-			return true
-		}
-		return false
-	case []byte:
-		return len(v) == 0
-	case [32]byte:
-		var zero [32]byte
-		return v == zero
-	case map[string]any:
-		// IOU/MPT amounts carry currency/issuer even when value is zero;
-		// they're never default once serialized.
-		return false
-	}
-	return false
-}
-
-// isAllZeroHex reports whether s is a non-empty string consisting entirely
-// of '0' characters — i.e. the hex representation of a zero hash.
-func isAllZeroHex(s string) bool {
-	if len(s) == 0 {
-		return false
-	}
-	for _, c := range s {
-		if c != '0' {
-			return false
-		}
-	}
-	return true
-}
 
 // GetOwnerNode extracts the OwnerNode (UInt64 type=3, field=4) from raw
 // binary SLE data. Returns 0 if the field is absent or the data is malformed.
@@ -82,29 +29,42 @@ func GetOwnerNode(data []byte) uint64 {
 	return ownerNode
 }
 
-// GetLedgerEntryType extracts the LedgerEntryType (UInt16, field code 1)
-// from raw binary SLE data without a full codec decode. XRPL serialization
-// always places this field first with header byte 0x11.
-func GetLedgerEntryType(data []byte) (uint16, error) {
+// DecodeType extracts and validates the typed LedgerEntryType header.
+func DecodeType(data []byte) (entry.Type, error) {
 	if len(data) < 3 {
 		return 0, errors.New("data too short to contain LedgerEntryType")
 	}
 	if data[0] != 0x11 {
 		return 0, errors.New("unexpected header byte, expected 0x11 for LedgerEntryType")
 	}
-	return EntryTypeCode(data), nil
+	typ := entry.Type(binary.BigEndian.Uint16(data[1:3]))
+	if _, ok := protocol.LedgerEntryTypeByCode(typ); !ok {
+		return 0, errors.New("unknown LedgerEntryType")
+	}
+	return typ, nil
+}
+
+// GetLedgerEntryType extracts the raw LedgerEntryType code.
+//
+// Deprecated: use DecodeType.
+func GetLedgerEntryType(data []byte) (uint16, error) {
+	typ, err := DecodeType(data)
+	return uint16(typ), err
 }
 
 // MatchesKeyletType reports whether data satisfies a keylet's type constraint.
 // TypeAny imposes no serialization constraint.
 func MatchesKeyletType(k keylet.Keylet, data []byte) bool {
-	entryType := entry.Type(EntryTypeCode(data))
 	switch k.Type {
 	case entry.TypeAny:
 		return true
-	case entry.TypeChild:
-		return entryType != entry.TypeAny && entryType != entry.TypeChild && entryType != entry.TypeDirectoryNode
-	default:
-		return entryType == k.Type
 	}
+	entryType, err := DecodeType(data)
+	if err != nil {
+		return false
+	}
+	if k.Type == entry.TypeChild {
+		return entryType != entry.TypeDirectoryNode
+	}
+	return entryType == k.Type
 }

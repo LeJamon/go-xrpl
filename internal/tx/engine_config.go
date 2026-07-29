@@ -187,14 +187,17 @@ func (c EngineConfig) RequireRules() *amendment.Rules {
 // corrected large scale.
 func NumberContextForRules(rules *amendment.Rules) state.NumberContext {
 	if rules == nil {
-		return state.NewNumberContext(state.MantissaScaleForRulesWithFix(false, false, false, false))
+		return state.NewNumberContext(
+			state.MantissaScaleForRulesWithFix(false, false, false, false),
+			true,
+		)
 	}
 	return state.NewNumberContext(state.MantissaScaleForRulesWithFix(
 		true,
 		rules.Enabled(amendment.FeatureSingleAssetVault),
 		rules.Enabled(amendment.FeatureLendingProtocol),
 		rules.FixCleanup3_2_0Enabled(),
-	))
+	), rules.Enabled(amendment.FeatureFixUniversalNumber))
 }
 
 // NumberContext returns the immutable Number context for this transaction.

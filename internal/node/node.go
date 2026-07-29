@@ -448,7 +448,8 @@ func Run(appConfig *config.Config, configPath string, standalone bool, startup s
 		memFamily := backend.NewMemory()
 		cleanerFamily = memFamily
 	}
-	ledgerCleaner = cleaner.New(&ledgerCleanerSource{svc: ledgerSvcRef, family: cleanerFamily}, rootLogger)
+	cleanerSource := &ledgerCleanerSource{svc: ledgerSvcRef, family: cleanerFamily}
+	ledgerCleaner = cleaner.New(cleanerSource, rootLogger)
 	ledgerCleaner.Start()
 
 	cleanerRef := ledgerCleaner
@@ -459,6 +460,7 @@ func Run(appConfig *config.Config, configPath string, standalone bool, startup s
 			MaxLedger:  p.MaxLedger,
 			Full:       p.Full,
 			CheckNodes: p.CheckNodes,
+			FixTxns:    p.FixTxns,
 			Stop:       p.Stop,
 		}))
 	}
@@ -514,6 +516,18 @@ func Run(appConfig *config.Config, configPath string, standalone bool, startup s
 
 		if err := consensusComponents.Start(); err != nil {
 			return fmt.Errorf("start consensus components: %w", err)
+		}
+		if router := consensusComponents.Router; router != nil {
+			cleanerSource.SetReacquire(func(ctx context.Context, seq uint32) error {
+				if err := ctx.Err(); err != nil {
+					return err
+				}
+				_, started, _ := router.RequestLedger([32]byte{}, seq)
+				if !started {
+					return fmt.Errorf("ledger_cleaner: unable to acquire ledger %d", seq)
+				}
+				return nil
+			})
 		}
 
 		// Wire transaction relay: when a tx is submitted via RPC,
@@ -919,7 +933,7 @@ func Run(appConfig *config.Config, configPath string, standalone bool, startup s
 	var lastServerSnapshot serverStatusSnapshot
 
 	// Wire up ledger service events to WebSocket broadcasts
-	ledgerService.SetEventCallback(func(event *service.LedgerAcceptedEvent) {
+	ledgerService.SetEventSink(service.EventSinkFunc(func(event *service.LedgerAcceptedEvent) {
 		if event == nil || event.LedgerInfo == nil {
 			return
 		}
@@ -1030,7 +1044,7 @@ func Run(appConfig *config.Config, configPath string, standalone bool, startup s
 			"sequence", event.LedgerInfo.Sequence,
 			"txs", len(event.TransactionResults),
 		)
-	})
+	}))
 
 	var listenerErrCh chan error
 	if httpSrvs, wsSrvs, listenerErrCh, err = startListeners(serverLog, appConfig, httpServer, wsServer); err != nil {

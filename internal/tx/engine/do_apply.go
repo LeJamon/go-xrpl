@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/LeJamon/go-xrpl/amendment"
 	"github.com/LeJamon/go-xrpl/drops"
 	txcore "github.com/LeJamon/go-xrpl/internal/tx"
 
@@ -13,6 +12,7 @@ import (
 	"github.com/LeJamon/go-xrpl/internal/tx/invariants"
 	"github.com/LeJamon/go-xrpl/internal/tx/ter"
 	"github.com/LeJamon/go-xrpl/keylet"
+	"github.com/LeJamon/go-xrpl/ledger/entry"
 )
 
 // applyState holds the per-doApply scratch state shared between the helper
@@ -123,11 +123,6 @@ func (e *Engine) doApply(ctx context.Context, tx txcore.Transaction, metadata *t
 			return result, 0
 		}
 	}
-
-	// Set NumberSwitchover based on fixUniversalNumber amendment.
-	// When enabled, IOUAmount arithmetic uses Guard-based precision (XRPLNumber).
-	// Reference: rippled's setSTNumberSwitchover() in IOUAmount.cpp
-	state.SetNumberSwitchover(e.rules().Enabled(amendment.FeatureFixUniversalNumber))
 
 	// Dispatch to the per-tx-type Apply().
 	result := e.invokeApply(st)
@@ -356,9 +351,9 @@ func isReapplyOnRetryTec(r ter.Result) bool {
 // removeExpiredNFTokenOffers).
 func (e *Engine) applyTecRecovery(st *applyState, result ter.Result) ter.Result {
 	// Collect keys-to-redelete from the to-be-discarded sandbox.
-	removedOfferKeys := collectErasedKeysOfType(st.table, "Offer", result == ter.TecOVERSIZE || result == ter.TecKILLED, 1000)
-	removedTrustLineKeys := collectErasedKeysOfType(st.table, "RippleState", result == ter.TecINCOMPLETE, 512)
-	expiredNFTokenOfferKeys := collectErasedKeysOfType(st.table, "NFTokenOffer", result == ter.TecEXPIRED, 256)
+	removedOfferKeys := collectErasedKeysOfType(st.table, entry.TypeOffer, result == ter.TecOVERSIZE || result == ter.TecKILLED, 1000)
+	removedTrustLineKeys := collectErasedKeysOfType(st.table, entry.TypeRippleState, result == ter.TecINCOMPLETE, 512)
+	expiredNFTokenOfferKeys := collectErasedKeysOfType(st.table, entry.TypeNFTokenOffer, result == ter.TecEXPIRED, 256)
 
 	// Discard the transaction table — all doApply() side effects are lost.
 	// Reference: rippled Transactor.cpp — reset() discards the sandbox.
@@ -465,7 +460,7 @@ func (e *Engine) applyTecRecovery(st *applyState, result ter.Result) ter.Result 
 // keys whose entries are erased ledger entries of the given type. When
 // `enabled` is false, returns nil. Used by tec recovery to re-apply specific
 // deletions after the sandbox is discarded.
-func collectErasedKeysOfType(table *applystate.ApplyStateTable, entryType string, enabled bool, limit int) [][32]byte {
+func collectErasedKeysOfType(table *applystate.ApplyStateTable, entryType entry.Type, enabled bool, limit int) [][32]byte {
 	if !enabled {
 		return nil
 	}
@@ -474,11 +469,11 @@ func collectErasedKeysOfType(table *applystate.ApplyStateTable, entryType string
 		if entry.Action != applystate.ActionErase {
 			continue
 		}
-		t := state.EntryType(entry.Original)
-		if t == "" && entry.Current != nil {
-			t = state.EntryType(entry.Current)
+		t, err := state.DecodeType(entry.Original)
+		if err != nil && entry.Current != nil {
+			t, err = state.DecodeType(entry.Current)
 		}
-		if t == entryType {
+		if err == nil && t == entryType {
 			keys = append(keys, key)
 			if len(keys) >= limit {
 				break

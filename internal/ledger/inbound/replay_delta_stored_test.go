@@ -48,7 +48,7 @@ func makeStoredReplayTarget(
 		AccountHash:         stateRoot,
 		ParentCloseTime:     parent.CloseTime(),
 		CloseTime:           time.Date(2025, 2, 3, 4, 5, 6, 0, time.UTC),
-		CloseTimeResolution: parent.CloseTimeResolution(),
+		CloseTimeResolution: uint8(parent.CloseTimeResolution()),
 		Drops:               parent.TotalDrops(),
 		Accepted:            true,
 	}

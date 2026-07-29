@@ -104,7 +104,7 @@ func buildDeltaResponse(
 		ParentHash:          parentHash,
 		ParentCloseTime:     closeTime,
 		CloseTime:           closeTime.Add(10 * time.Second),
-		CloseTimeResolution: parent.CloseTimeResolution(),
+		CloseTimeResolution: uint8(parent.CloseTimeResolution()),
 		CloseFlags:          0,
 		Drops:               parent.TotalDrops(),
 		TxHash:              txRoot,

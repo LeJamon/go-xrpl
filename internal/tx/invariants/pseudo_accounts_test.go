@@ -6,6 +6,7 @@ import (
 
 	"github.com/LeJamon/go-xrpl/amendment"
 	"github.com/LeJamon/go-xrpl/internal/ledger/state"
+	"github.com/LeJamon/go-xrpl/ledger/entry"
 )
 
 const testPseudoAddr = "rrrrrrrrrrrrrrrrrrrrrhoLvTp"
@@ -34,11 +35,11 @@ func TestValidPseudoAccounts_Valid(t *testing.T) {
 	after := mustSerializeAccount(t, validPseudoAccount())
 
 	// Creation.
-	if v := checkValidPseudoAccounts([]InvariantEntry{{EntryType: "AccountRoot", After: after}}, rules); v != nil {
+	if v := checkValidPseudoAccounts([]InvariantEntry{{EntryType: entry.TypeAccountRoot, After: after}}, rules); v != nil {
 		t.Fatalf("valid pseudo-account creation: unexpected violation %v", v)
 	}
 	// Idempotent modification (before == after).
-	if v := checkValidPseudoAccounts([]InvariantEntry{{EntryType: "AccountRoot", Before: after, After: after}}, rules); v != nil {
+	if v := checkValidPseudoAccounts([]InvariantEntry{{EntryType: entry.TypeAccountRoot, Before: after, After: after}}, rules); v != nil {
 		t.Fatalf("valid pseudo-account modification: unexpected violation %v", v)
 	}
 }
@@ -86,7 +87,7 @@ func TestValidPseudoAccounts_Violations(t *testing.T) {
 			acct := validPseudoAccount()
 			tc.mutate(acct)
 			after := mustSerializeAccount(t, acct)
-			v := checkValidPseudoAccounts([]InvariantEntry{{EntryType: "AccountRoot", Before: before, After: after}}, rules)
+			v := checkValidPseudoAccounts([]InvariantEntry{{EntryType: entry.TypeAccountRoot, Before: before, After: after}}, rules)
 			if v == nil {
 				t.Fatalf("%s: expected violation", tc.name)
 			}
@@ -104,7 +105,7 @@ func TestValidPseudoAccounts_ZeroSequenceRegularAccount(t *testing.T) {
 	rules := rulesWithSingleAssetVaultOnly()
 	before := mustSerializeAccount(t, &state.AccountRoot{Account: testPseudoAddr, Balance: 1_000_000, Sequence: 7})
 	after := mustSerializeAccount(t, &state.AccountRoot{Account: testPseudoAddr, Balance: 1_000_000, Sequence: 0})
-	v := checkValidPseudoAccounts([]InvariantEntry{{EntryType: "AccountRoot", Before: before, After: after}}, rules)
+	v := checkValidPseudoAccounts([]InvariantEntry{{EntryType: entry.TypeAccountRoot, Before: before, After: after}}, rules)
 	if v == nil {
 		t.Fatal("expected violation for zero-sequence non-pseudo account")
 	}
@@ -121,7 +122,7 @@ func TestValidPseudoAccounts_Gating(t *testing.T) {
 	broken.VaultID = [32]byte{} // 0 designator fields, still zero-sequence
 	after := mustSerializeAccount(t, broken)
 
-	entries := []InvariantEntry{{EntryType: "AccountRoot", Before: before, After: after}}
+	entries := []InvariantEntry{{EntryType: entry.TypeAccountRoot, Before: before, After: after}}
 
 	if v := checkValidPseudoAccounts(entries, amendment.NewRules(nil)); v != nil {
 		t.Fatalf("disabled amendment: unexpected violation %v", v)
@@ -136,7 +137,7 @@ func TestValidPseudoAccounts_IgnoresDeletion(t *testing.T) {
 	broken := validPseudoAccount()
 	broken.VaultID = [32]byte{}
 	before := mustSerializeAccount(t, broken)
-	entries := []InvariantEntry{{EntryType: "AccountRoot", Before: before, IsDelete: true}}
+	entries := []InvariantEntry{{EntryType: entry.TypeAccountRoot, Before: before, IsDelete: true}}
 	if v := checkValidPseudoAccounts(entries, rulesWithSingleAssetVaultOnly()); v != nil {
 		t.Fatalf("deletion: unexpected violation %v", v)
 	}

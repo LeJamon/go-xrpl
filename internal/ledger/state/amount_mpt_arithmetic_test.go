@@ -58,41 +58,37 @@ func TestAmountMPTMulPreservesIssue(t *testing.T) {
 	require.Equal(t, int64(42), mustMPTRaw(t, product))
 	require.Equal(t, arithmeticMPTID, product.MPTIssuanceID())
 
-	previous := GetNumberSwitchover()
-	SetNumberSwitchover(true)
-	t.Cleanup(func() { SetNumberSwitchover(previous) })
 	half := NewIssuedAmountFromValue(5, -1, "", "")
-	scaled := a.Mul(half, false)
+	scaled := a.MulWithNumberContext(
+		half,
+		NewNumberContext(MantissaScaleSmall, true),
+		false,
+		RoundToNearest,
+	)
 	require.Equal(t, int64(4), mustMPTRaw(t, scaled))
 	require.Equal(t, arithmeticMPTID, scaled.MPTIssuanceID())
 }
 
 func TestAmountMPTMulAsIntegralOperand(t *testing.T) {
-	previous := GetNumberSwitchover()
-	t.Cleanup(func() { SetNumberSwitchover(previous) })
-
 	for _, switchover := range []bool{false, true} {
-		SetNumberSwitchover(switchover)
+		ctx := NewNumberContext(MantissaScaleSmall, switchover)
 		rate := NewIssuedAmountFromValue(100_000, 0, "", "")
 		mpt := NewMPTAmountWithIssuanceID(80, "rIssuer", arithmeticMPTID)
-		product := rate.Mul(mpt, false)
+		product := rate.MulWithNumberContext(mpt, ctx, false, RoundToNearest)
 		require.Equal(t, 0, product.Compare(NewIssuedAmountFromValue(8_000_000, 0, "", "")), "switchover=%v, product=%v", switchover, product.Float64())
 	}
 }
 
 func TestAmountMPTDivPreservesIntegralIssue(t *testing.T) {
-	previous := GetNumberSwitchover()
-	t.Cleanup(func() { SetNumberSwitchover(previous) })
-
 	for _, switchover := range []bool{false, true} {
-		SetNumberSwitchover(switchover)
+		ctx := NewNumberContext(MantissaScaleSmall, switchover)
 		amount := NewMPTAmountWithIssuanceID(100, "rIssuer", arithmeticMPTID)
-		quotient := amount.Div(NewXRPAmountFromInt(12), false)
+		quotient := amount.DivWithNumberContext(NewXRPAmountFromInt(12), ctx, false)
 		require.Equal(t, int64(8), mustMPTRaw(t, quotient), "switchover=%v", switchover)
 		require.Equal(t, arithmeticMPTID, quotient.MPTIssuanceID())
 
 		zero := NewMPTAmountWithIssuanceID(0, "rIssuer", arithmeticMPTID).
-			Div(NewXRPAmountFromInt(12), false)
+			DivWithNumberContext(NewXRPAmountFromInt(12), ctx, false)
 		require.Zero(t, mustMPTRaw(t, zero))
 		require.Equal(t, arithmeticMPTID, zero.MPTIssuanceID())
 	}

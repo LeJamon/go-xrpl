@@ -124,11 +124,11 @@ func (s *DirectStepI) Rev(
 	}
 
 	// Calculate srcToDst = out / dstQIn (round up)
-	srcToDst := mulRatioAmount(out.IOU, QualityOne, dstQIn, true)
+	srcToDst := mulRatioAmount(out.IOU, QualityOne, dstQIn, true, sb.NumberContext())
 
 	if srcToDst.Compare(maxSrcToDst) <= 0 {
 		// Non-limiting case
-		in := mulRatioAmount(srcToDst, srcQOut, QualityOne, true)
+		in := mulRatioAmount(srcToDst, srcQOut, QualityOne, true, sb.NumberContext())
 		s.cache = &directCache{
 			in:         in,
 			srcToDst:   srcToDst,
@@ -143,8 +143,8 @@ func (s *DirectStepI) Rev(
 	}
 
 	// Limiting case
-	in := mulRatioAmount(maxSrcToDst, srcQOut, QualityOne, true)
-	actualOut := mulRatioAmount(maxSrcToDst, dstQIn, QualityOne, false)
+	in := mulRatioAmount(maxSrcToDst, srcQOut, QualityOne, true, sb.NumberContext())
+	actualOut := mulRatioAmount(maxSrcToDst, dstQIn, QualityOne, false, sb.NumberContext())
 
 	s.cache = &directCache{
 		in:         in,
@@ -212,12 +212,12 @@ func (s *DirectStepI) Fwd(
 	}
 
 	// Calculate srcToDst = in / srcQOut (round down)
-	srcToDst := mulRatioAmount(in.IOU, QualityOne, srcQOut, false)
+	srcToDst := mulRatioAmount(in.IOU, QualityOne, srcQOut, false, sb.NumberContext())
 
 	if srcToDst.Compare(maxSrcToDst) <= 0 {
 		// Non-limiting case
-		out := mulRatioAmount(srcToDst, dstQIn, QualityOne, false)
-		s.setCacheLimiting(in.IOU, srcToDst, out, srcDebtDir)
+		out := mulRatioAmount(srcToDst, dstQIn, QualityOne, false, sb.NumberContext())
+		s.setCacheLimiting(in.IOU, srcToDst, out, srcDebtDir, sb.NumberContext())
 
 		// Execute the credit
 		_ = tx.RippleCredit(sb, s.src, s.dst, s.cache.srcToDst)
@@ -226,9 +226,9 @@ func (s *DirectStepI) Fwd(
 	}
 
 	// Limiting case
-	actualIn := mulRatioAmount(maxSrcToDst, srcQOut, QualityOne, true)
-	out := mulRatioAmount(maxSrcToDst, dstQIn, QualityOne, false)
-	s.setCacheLimiting(actualIn, maxSrcToDst, out, srcDebtDir)
+	actualIn := mulRatioAmount(maxSrcToDst, srcQOut, QualityOne, true, sb.NumberContext())
+	out := mulRatioAmount(maxSrcToDst, dstQIn, QualityOne, false, sb.NumberContext())
+	s.setCacheLimiting(actualIn, maxSrcToDst, out, srcDebtDir, sb.NumberContext())
 
 	// Execute the credit
 	_ = tx.RippleCredit(sb, s.src, s.dst, s.cache.srcToDst)
@@ -243,7 +243,11 @@ func (s *DirectStepI) Fwd(
 // mantissa, or a mantissa ratio above 1.01) the entire cache is replaced
 // with the forward values rather than clamped to the minimums.
 // Reference: rippled DirectStep.cpp:590-630 (setCacheLimiting)
-func (s *DirectStepI) setCacheLimiting(fwdIn, fwdSrcToDst, fwdOut tx.Amount, srcDebtDir DebtDirection) {
+func (s *DirectStepI) setCacheLimiting(
+	fwdIn, fwdSrcToDst, fwdOut tx.Amount,
+	srcDebtDir DebtDirection,
+	numberContext state.NumberContext,
+) {
 	if s.cache == nil {
 		s.cache = &directCache{
 			in:         fwdIn,
@@ -257,7 +261,7 @@ func (s *DirectStepI) setCacheLimiting(fwdIn, fwdSrcToDst, fwdOut tx.Amount, src
 	if s.cache.in.Compare(fwdIn) < 0 {
 		// Unit-less magnitude threshold (Amount.Compare/Sub ignore currency).
 		smallDiff := tx.NewIssuedAmount(1, -9, "", "")
-		diff, _ := fwdIn.Sub(s.cache.in)
+		diff, _ := fwdIn.SubWithNumberContext(s.cache.in, numberContext, state.RoundToNearest)
 		if diff.Compare(smallDiff) > 0 {
 			if fwdIn.Exponent() != s.cache.in.Exponent() ||
 				s.cache.in.Mantissa() == 0 ||
@@ -448,7 +452,7 @@ func (s *DirectStepI) maxPaymentFlow(sb *PaymentSandbox) (tx.Amount, DebtDirecti
 	// They can issue up to (credit limit - what they've already issued)
 	creditLimit := s.creditLimit(sb)
 	// srcOwed is negative, so creditLimit + srcOwed = creditLimit - |srcOwed|
-	maxIssue, _ := creditLimit.Add(srcOwed)
+	maxIssue, _ := creditLimit.AddWithNumberContext(srcOwed, sb.NumberContext(), state.RoundToNearest)
 	return maxIssue, DebtDirectionIssues
 }
 
@@ -930,6 +934,11 @@ func checkNoRipple(view *PaymentSandbox, prev, cur, next [20]byte, currency stri
 }
 
 // mulRatioAmount multiplies an Amount by num/den
-func mulRatioAmount(amt tx.Amount, num, den uint32, roundUp bool) tx.Amount {
-	return amt.MulRatio(num, den, roundUp)
+func mulRatioAmount(
+	amt tx.Amount,
+	num, den uint32,
+	roundUp bool,
+	numberContext state.NumberContext,
+) tx.Amount {
+	return amt.MulRatioWithNumberContext(num, den, roundUp, numberContext)
 }

@@ -3,10 +3,6 @@ package state
 import "testing"
 
 func TestUniversalAmountArithmeticIgnoresLegacySwitchover(t *testing.T) {
-	previous := GetNumberSwitchover()
-	SetNumberSwitchover(false)
-	defer SetNumberSwitchover(previous)
-
 	one := NewIssuedAmountFromValue(1000000000000000, -15, "USD", "rIssuer")
 	small := NewIssuedAmountFromValue(6000000000000000, -31, "USD", "rIssuer")
 	sum, err := one.AddUniversal(small)

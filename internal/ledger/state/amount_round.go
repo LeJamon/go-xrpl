@@ -35,14 +35,32 @@ func PrepareMulDivOperand(a Amount) (mantissa int64, exponent int) {
 }
 
 func MulRoundMPT(v1, v2 Amount, roundUp bool) int64 {
-	return mulRoundMPT(v1, v2, roundUp, false)
+	return MulRoundMPTWithNumberContext(
+		v1,
+		v2,
+		NewNumberContext(MantissaScaleSmall, false),
+		roundUp,
+	)
+}
+
+func MulRoundMPTWithNumberContext(v1, v2 Amount, ctx NumberContext, roundUp bool) int64 {
+	return mulRoundMPT(v1, v2, ctx, roundUp, false)
 }
 
 func MulRoundMPTStrict(v1, v2 Amount, roundUp bool) int64 {
-	return mulRoundMPT(v1, v2, roundUp, true)
+	return MulRoundMPTStrictWithNumberContext(
+		v1,
+		v2,
+		NewNumberContext(MantissaScaleSmall, false),
+		roundUp,
+	)
 }
 
-func mulRoundMPT(v1, v2 Amount, roundUp, strict bool) int64 {
+func MulRoundMPTStrictWithNumberContext(v1, v2 Amount, ctx NumberContext, roundUp bool) int64 {
+	return mulRoundMPT(v1, v2, ctx, roundUp, true)
+}
+
+func mulRoundMPT(v1, v2 Amount, ctx NumberContext, roundUp, strict bool) int64 {
 	if v1.IsZero() || v2.IsZero() {
 		return 0
 	}
@@ -52,18 +70,36 @@ func mulRoundMPT(v1, v2 Amount, roundUp, strict bool) int64 {
 	addSlop := resultNegative != roundUp
 	amount := MulMantissas(value1, value2, addSlop)
 	offset := offset1 + offset2 + 14
-	return finalizeMPTRound(amount, offset, resultNegative, roundUp, addSlop, strict, strict)
+	return finalizeMPTRound(amount, offset, resultNegative, roundUp, addSlop, strict, strict, ctx)
 }
 
 func DivRoundMPT(num, den Amount, roundUp bool) int64 {
-	return divRoundMPT(num, den, roundUp, false)
+	return DivRoundMPTWithNumberContext(
+		num,
+		den,
+		NewNumberContext(MantissaScaleSmall, false),
+		roundUp,
+	)
 }
 
 func DivRoundMPTStrict(num, den Amount, roundUp bool) int64 {
-	return divRoundMPT(num, den, roundUp, true)
+	return DivRoundMPTStrictWithNumberContext(
+		num,
+		den,
+		NewNumberContext(MantissaScaleSmall, false),
+		roundUp,
+	)
 }
 
-func divRoundMPT(num, den Amount, roundUp, strict bool) int64 {
+func DivRoundMPTWithNumberContext(num, den Amount, ctx NumberContext, roundUp bool) int64 {
+	return divRoundMPT(num, den, ctx, roundUp, false)
+}
+
+func DivRoundMPTStrictWithNumberContext(num, den Amount, ctx NumberContext, roundUp bool) int64 {
+	return divRoundMPT(num, den, ctx, roundUp, true)
+}
+
+func divRoundMPT(num, den Amount, ctx NumberContext, roundUp, strict bool) int64 {
 	if den.IsZero() {
 		panic("division by zero")
 	}
@@ -76,10 +112,15 @@ func divRoundMPT(num, den Amount, roundUp, strict bool) int64 {
 	addSlop := resultNegative != roundUp
 	amount := DivMantissas(numVal, denVal, addSlop)
 	offset := numOffset - denOffset - 17
-	return finalizeMPTRound(amount, offset, resultNegative, roundUp, addSlop, strict, false)
+	return finalizeMPTRound(amount, offset, resultNegative, roundUp, addSlop, strict, false, ctx)
 }
 
-func finalizeMPTRound(amount uint64, offset int, resultNegative, roundUp, addSlop, strict, strictCanonicalize bool) int64 {
+func finalizeMPTRound(
+	amount uint64,
+	offset int,
+	resultNegative, roundUp, addSlop, strict, strictCanonicalize bool,
+	ctx NumberContext,
+) int64 {
 	if amount == 0 || offset <= -20 {
 		if roundUp && !resultNegative {
 			return 1
@@ -89,7 +130,7 @@ func finalizeMPTRound(amount uint64, offset int, resultNegative, roundUp, addSlo
 	if addSlop {
 		amount, offset = canonicalizeIntegralRound(amount, offset, roundUp, strictCanonicalize)
 	} else {
-		amount = canonicalizeMPTNoRound(amount, offset, strict)
+		amount = canonicalizeMPTNoRound(amount, offset, strict, ctx)
 		offset = 0
 	}
 	if offset > 18 {
@@ -144,8 +185,8 @@ func canonicalizeIntegralRound(amount uint64, offset int, roundUp, strict bool) 
 	return (amount + adder) / 10, offset + 1
 }
 
-func canonicalizeMPTNoRound(amount uint64, offset int, strict bool) uint64 {
-	if !strict && GetNumberSwitchover() {
+func canonicalizeMPTNoRound(amount uint64, offset int, strict bool, ctx NumberContext) uint64 {
+	if !strict && ctx.UniversalNumberEnabled() {
 		if amount > maxInt64Value {
 			panic("MPT amount out of range")
 		}
@@ -319,8 +360,8 @@ func CanonicalizeDropsStrict(mantissa int64, exponent int, roundUp bool) int64 {
 // to-nearest (banker's); the strict variant guards Number to towards-zero
 // (mulRoundStrict) / downward (divRoundStrict), i.e. truncation. Pre-switchover
 // both truncate.
-func canonicalizeDropsNoRound(amount uint64, offset int, strict bool) int64 {
-	if !strict && GetNumberSwitchover() {
+func canonicalizeDropsNoRound(amount uint64, offset int, strict bool, ctx NumberContext) int64 {
+	if !strict && ctx.UniversalNumberEnabled() {
 		if amount == 0 || offset <= -20 {
 			return 0
 		}
@@ -355,6 +396,23 @@ func canonicalizeDropsNoRound(amount uint64, offset int, strict bool) int64 {
 // and pre-switchover truncate). A positive round-up that collapses to zero yields
 // 1 drop.
 func NativeRoundDrops(amount uint64, offset int, resultNegative, roundUp, addSlop, strict bool) int64 {
+	return NativeRoundDropsWithNumberContext(
+		amount,
+		offset,
+		resultNegative,
+		roundUp,
+		addSlop,
+		strict,
+		NewNumberContext(MantissaScaleSmall, false),
+	)
+}
+
+func NativeRoundDropsWithNumberContext(
+	amount uint64,
+	offset int,
+	resultNegative, roundUp, addSlop, strict bool,
+	ctx NumberContext,
+) int64 {
 	var drops int64
 	if addSlop {
 		if strict {
@@ -363,7 +421,7 @@ func NativeRoundDrops(amount uint64, offset int, resultNegative, roundUp, addSlo
 			drops = CanonicalizeDrops(int64(amount), offset)
 		}
 	} else {
-		drops = canonicalizeDropsNoRound(amount, offset, strict)
+		drops = canonicalizeDropsNoRound(amount, offset, strict, ctx)
 	}
 	if drops == 0 && roundUp && !resultNegative {
 		drops = 1
@@ -379,18 +437,39 @@ func NativeRoundDrops(amount uint64, offset int, resultNegative, roundUp, addSlo
 // otherwise the legacy non-mode constructor is used. A positive round-up that
 // collapsed to zero returns the minimum representable value.
 func FinalizeRoundIOU(amount uint64, offset int, resultNegative, roundUp bool, currency, issuer string, mode RoundingMode, useMode bool) Amount {
+	return FinalizeRoundIOUWithNumberContext(
+		amount,
+		offset,
+		resultNegative,
+		roundUp,
+		currency,
+		issuer,
+		mode,
+		useMode,
+		NewNumberContext(MantissaScaleSmall, false),
+	)
+}
+
+func FinalizeRoundIOUWithNumberContext(
+	amount uint64,
+	offset int,
+	resultNegative, roundUp bool,
+	currency, issuer string,
+	mode RoundingMode,
+	useMode bool,
+	ctx NumberContext,
+) Amount {
 	mantissa := int64(amount)
 	if resultNegative {
 		mantissa = -mantissa
 	}
-	var result Amount
+	resultMode := RoundToNearest
 	if useMode {
-		result = NewIssuedAmountFromValueRounded(mantissa, offset, currency, issuer, mode)
-	} else {
-		result = NewIssuedAmountFromValue(mantissa, offset, currency, issuer)
+		resultMode = mode
 	}
+	result := ctx.IssuedAmount(mantissa, offset, currency, issuer, resultMode)
 	if roundUp && !resultNegative && result.IsZero() {
-		return NewIssuedAmountFromValue(MinMantissa, MinExponent, currency, issuer)
+		return ctx.IssuedAmount(MinMantissa, MinExponent, currency, issuer, RoundToNearest)
 	}
 	return result
 }
@@ -398,6 +477,22 @@ func FinalizeRoundIOU(amount uint64, offset int, resultNegative, roundUp bool, c
 // MulRoundStrict multiplies two Amounts using rippled's mulRoundStrict algorithm
 // (canonicalizeRoundStrict + NumberRoundModeGuard(towards_zero)).
 func MulRoundStrict(v1, v2 Amount, currency, issuer string, roundUp bool) Amount {
+	return MulRoundStrictWithNumberContext(
+		v1,
+		v2,
+		currency,
+		issuer,
+		NewNumberContext(MantissaScaleSmall, false),
+		roundUp,
+	)
+}
+
+func MulRoundStrictWithNumberContext(
+	v1, v2 Amount,
+	currency, issuer string,
+	ctx NumberContext,
+	roundUp bool,
+) Amount {
 	if v1.IsZero() || v2.IsZero() {
 		return NewIssuedAmountFromValue(0, -100, currency, issuer)
 	}
@@ -411,7 +506,9 @@ func MulRoundStrict(v1, v2 Amount, currency, issuer string, roundUp bool) Amount
 	if addSlop {
 		amount, offset = CanonicalizeRoundIOUOverflow(amount, offset)
 	}
-	return FinalizeRoundIOU(amount, offset, resultNegative, roundUp, currency, issuer, RoundTowardsZero, true)
+	return FinalizeRoundIOUWithNumberContext(
+		amount, offset, resultNegative, roundUp, currency, issuer, RoundTowardsZero, true, ctx,
+	)
 }
 
 // MulRound multiplies two Amounts using rippled's mulRound (non-strict)
@@ -419,6 +516,22 @@ func MulRoundStrict(v1, v2 Amount, currency, issuer string, roundUp bool) Amount
 // canonicalize adds 9 or 10 based on loop count rather than the actual
 // remainder, and installs no Number rounding-mode guard.
 func MulRound(v1, v2 Amount, currency, issuer string, roundUp bool) Amount {
+	return MulRoundWithNumberContext(
+		v1,
+		v2,
+		currency,
+		issuer,
+		NewNumberContext(MantissaScaleSmall, false),
+		roundUp,
+	)
+}
+
+func MulRoundWithNumberContext(
+	v1, v2 Amount,
+	currency, issuer string,
+	ctx NumberContext,
+	roundUp bool,
+) Amount {
 	if v1.IsZero() || v2.IsZero() {
 		return NewIssuedAmountFromValue(0, -100, currency, issuer)
 	}
@@ -432,12 +545,30 @@ func MulRound(v1, v2 Amount, currency, issuer string, roundUp bool) Amount {
 	if addSlop {
 		amount, offset = CanonicalizeRoundIOUOverflow(amount, offset)
 	}
-	return FinalizeRoundIOU(amount, offset, resultNegative, roundUp, currency, issuer, 0, false)
+	return FinalizeRoundIOUWithNumberContext(
+		amount, offset, resultNegative, roundUp, currency, issuer, 0, false, ctx,
+	)
 }
 
 // DivRound divides two Amounts using rippled's divRound (non-strict) algorithm
 // (canonicalizeRound + DontAffectNumberRoundMode).
 func DivRound(num, den Amount, currency, issuer string, roundUp bool) Amount {
+	return DivRoundWithNumberContext(
+		num,
+		den,
+		currency,
+		issuer,
+		NewNumberContext(MantissaScaleSmall, false),
+		roundUp,
+	)
+}
+
+func DivRoundWithNumberContext(
+	num, den Amount,
+	currency, issuer string,
+	ctx NumberContext,
+	roundUp bool,
+) Amount {
 	if den.IsZero() {
 		panic("division by zero")
 	}
@@ -454,13 +585,31 @@ func DivRound(num, den Amount, currency, issuer string, roundUp bool) Amount {
 	if addSlop {
 		amount, offset = CanonicalizeRoundIOUOverflow(amount, offset)
 	}
-	return FinalizeRoundIOU(amount, offset, resultNegative, roundUp, currency, issuer, 0, false)
+	return FinalizeRoundIOUWithNumberContext(
+		amount, offset, resultNegative, roundUp, currency, issuer, 0, false, ctx,
+	)
 }
 
 // DivRoundStrict divides two Amounts using rippled's divRoundStrict algorithm
 // (canonicalizeRound + NumberRoundModeGuard). The guard mode is upward when
 // rounding away from zero and downward otherwise.
 func DivRoundStrict(num, den Amount, currency, issuer string, roundUp bool) Amount {
+	return DivRoundStrictWithNumberContext(
+		num,
+		den,
+		currency,
+		issuer,
+		NewNumberContext(MantissaScaleSmall, false),
+		roundUp,
+	)
+}
+
+func DivRoundStrictWithNumberContext(
+	num, den Amount,
+	currency, issuer string,
+	ctx NumberContext,
+	roundUp bool,
+) Amount {
 	if den.IsZero() {
 		panic("division by zero")
 	}
@@ -481,12 +630,27 @@ func DivRoundStrict(num, den Amount, currency, issuer string, roundUp bool) Amou
 	if roundUp != resultNegative {
 		mode = RoundUpward
 	}
-	return FinalizeRoundIOU(amount, offset, resultNegative, roundUp, currency, issuer, mode, true)
+	return FinalizeRoundIOUWithNumberContext(
+		amount, offset, resultNegative, roundUp, currency, issuer, mode, true, ctx,
+	)
 }
 
 // DivRoundNative divides two Amounts and returns the result as XRP drops, using
 // the native canonicalizeRound path (native=true) of rippled's divRoundImpl.
 func DivRoundNative(num, den Amount, roundUp bool) int64 {
+	return DivRoundNativeWithNumberContext(
+		num,
+		den,
+		NewNumberContext(MantissaScaleSmall, false),
+		roundUp,
+	)
+}
+
+func DivRoundNativeWithNumberContext(
+	num, den Amount,
+	ctx NumberContext,
+	roundUp bool,
+) int64 {
 	if den.IsZero() {
 		panic("division by zero")
 	}
@@ -500,7 +664,9 @@ func DivRoundNative(num, den Amount, roundUp bool) int64 {
 
 	amount := DivMantissas(numVal, denVal, addSlop)
 	offset := numOff - denOff - 17
-	return NativeRoundDrops(amount, offset, resultNegative, roundUp, addSlop, false)
+	return NativeRoundDropsWithNumberContext(
+		amount, offset, resultNegative, roundUp, addSlop, false, ctx,
+	)
 }
 
 // MulRoundNative multiplies two Amounts and returns the result as XRP drops,
@@ -509,6 +675,19 @@ func DivRoundNative(num, den Amount, roundUp bool) int64 {
 // native×native fast path: the product of the two drop values under an overflow
 // guard.
 func MulRoundNative(v1, v2 Amount, roundUp bool) int64 {
+	return MulRoundNativeWithNumberContext(
+		v1,
+		v2,
+		NewNumberContext(MantissaScaleSmall, false),
+		roundUp,
+	)
+}
+
+func MulRoundNativeWithNumberContext(
+	v1, v2 Amount,
+	ctx NumberContext,
+	roundUp bool,
+) int64 {
 	if v1.IsZero() || v2.IsZero() {
 		return 0
 	}
@@ -522,7 +701,9 @@ func MulRoundNative(v1, v2 Amount, roundUp bool) int64 {
 
 	amount := MulMantissas(value1, value2, addSlop)
 	offset := offset1 + offset2 + 14
-	return NativeRoundDrops(amount, offset, resultNegative, roundUp, addSlop, false)
+	return NativeRoundDropsWithNumberContext(
+		amount, offset, resultNegative, roundUp, addSlop, false, ctx,
+	)
 }
 
 // MulRoundNativeStrict multiplies two Amounts and returns the result as XRP
@@ -534,6 +715,19 @@ func MulRoundNative(v1, v2 Amount, roundUp bool) int64 {
 // MulRoundStrict which first collapses the product to a 16-digit mantissa and
 // discards that remainder.
 func MulRoundNativeStrict(v1, v2 Amount, roundUp bool) int64 {
+	return MulRoundNativeStrictWithNumberContext(
+		v1,
+		v2,
+		NewNumberContext(MantissaScaleSmall, false),
+		roundUp,
+	)
+}
+
+func MulRoundNativeStrictWithNumberContext(
+	v1, v2 Amount,
+	ctx NumberContext,
+	roundUp bool,
+) int64 {
 	if v1.IsZero() || v2.IsZero() {
 		return 0
 	}
@@ -547,7 +741,9 @@ func MulRoundNativeStrict(v1, v2 Amount, roundUp bool) int64 {
 
 	amount := MulMantissas(value1, value2, addSlop)
 	offset := offset1 + offset2 + 14
-	return NativeRoundDrops(amount, offset, resultNegative, roundUp, addSlop, true)
+	return NativeRoundDropsWithNumberContext(
+		amount, offset, resultNegative, roundUp, addSlop, true, ctx,
+	)
 }
 
 // DivRoundNativeStrict divides two Amounts and returns the result as XRP drops,
@@ -560,6 +756,19 @@ func MulRoundNativeStrict(v1, v2 Amount, roundUp bool) int64 {
 // nearest. Like MulRoundNativeStrict it canonicalizes the raw product, not an
 // IOU-collapsed mantissa.
 func DivRoundNativeStrict(num, den Amount, roundUp bool) int64 {
+	return DivRoundNativeStrictWithNumberContext(
+		num,
+		den,
+		NewNumberContext(MantissaScaleSmall, false),
+		roundUp,
+	)
+}
+
+func DivRoundNativeStrictWithNumberContext(
+	num, den Amount,
+	ctx NumberContext,
+	roundUp bool,
+) int64 {
 	if den.IsZero() {
 		panic("division by zero")
 	}
@@ -583,7 +792,7 @@ func DivRoundNativeStrict(num, den Amount, roundUp bool) int64 {
 		}
 		return drops
 	}
-	drops := canonicalizeDropsNoRound(amount, offset, true)
+	drops := canonicalizeDropsNoRound(amount, offset, true, ctx)
 	if resultNegative {
 		drops = -drops
 	}

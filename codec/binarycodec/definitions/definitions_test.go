@@ -1,6 +1,7 @@
 package definitions
 
 import (
+	"maps"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -63,4 +64,21 @@ func BenchmarkLoadDefinitions(b *testing.B) {
 func TestGet(t *testing.T) {
 	loadDefinitions()
 	require.Equal(t, definitions, Get())
+}
+
+func TestValidateEmbeddedLedgerEntryTypesFailsClosed(t *testing.T) {
+	valid := definitions.LedgerEntryTypes()
+	require.NoError(t, validateEmbeddedLedgerEntryTypes(valid))
+
+	missing := maps.Clone(valid)
+	delete(missing, "AccountRoot")
+	require.Error(t, validateEmbeddedLedgerEntryTypes(missing))
+
+	wrong := maps.Clone(valid)
+	wrong["AccountRoot"]++
+	require.Error(t, validateEmbeddedLedgerEntryTypes(wrong))
+
+	extra := maps.Clone(valid)
+	extra["UnknownEntry"] = 1234
+	require.Error(t, validateEmbeddedLedgerEntryTypes(extra))
 }

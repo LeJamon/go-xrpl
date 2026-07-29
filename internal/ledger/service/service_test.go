@@ -8,6 +8,13 @@ import (
 	"github.com/LeJamon/go-xrpl/internal/ledger/genesis"
 )
 
+func TestNewValidatesStartupConfiguration(t *testing.T) {
+	svc, err := New(Config{Startup: StartupConfig{Mode: StartupLoadFile}})
+	if err == nil || svc != nil {
+		t.Fatalf("New = (%v, %v), want nil service and configuration error", svc, err)
+	}
+}
+
 func TestGetValidatedLedgerAge(t *testing.T) {
 	svc, err := New(DefaultConfig())
 	if err != nil {

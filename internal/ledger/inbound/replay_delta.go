@@ -231,11 +231,11 @@ func NewStoredLedgerReplay(parent, target *ledger.Ledger, logger *slog.Logger) (
 	}
 	parentHeader := parent.Header()
 	expectedResolution := consensus.GetNextLedgerTimeResolution(
-		parentHeader.CloseTimeResolution,
+		uint32(parentHeader.CloseTimeResolution),
 		parentHeader.GetCloseAgree(),
 		targetHeader.LedgerIndex,
 	)
-	if targetHeader.CloseTimeResolution != expectedResolution {
+	if uint32(targetHeader.CloseTimeResolution) != expectedResolution {
 		return nil, fmt.Errorf(
 			"stored replay target close time resolution: got %d, derived %d from parent",
 			targetHeader.CloseTimeResolution,
@@ -582,11 +582,11 @@ func (r *ReplayDelta) verifyAndBuild(resp *message.ReplayDeltaResponse) error {
 		}
 		parentHeader := r.parent.Header()
 		applicationResolution := consensus.GetNextLedgerTimeResolution(
-			parentHeader.CloseTimeResolution,
+			uint32(parentHeader.CloseTimeResolution),
 			parentHeader.GetCloseAgree(),
 			hdr.LedgerIndex,
 		)
-		if hdr.CloseTimeResolution != applicationResolution {
+		if uint32(hdr.CloseTimeResolution) != applicationResolution {
 			return fmt.Errorf(
 				"target close time resolution: got %d, derived %d from parent",
 				hdr.CloseTimeResolution, applicationResolution,
@@ -669,17 +669,6 @@ func (r *ReplayDelta) verifyAndBuild(resp *message.ReplayDeltaResponse) error {
 	return nil
 }
 
-// AppendTxForTest appends a synthetic DecodedTx to r.txs so a sibling
-// package's test can simulate a peer sending a divergent tx set
-// (e.g., a duplicate hash that triggers tefALREADY on the second
-// apply). Production code never calls this — it lives outside a
-// *_test.go because it must be reachable from internal/testing/p2p.
-func (r *ReplayDelta) AppendTxForTest(dtx DecodedTx) {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	r.txs = append(r.txs, dtx)
-}
-
 // Apply re-derives the new ledger by replaying every orderedTx through the
 // engine against a mutable copy of the parent's state, then verifies the
 // resulting state-map and tx-map roots match the target header.
@@ -730,11 +719,11 @@ func (r *ReplayDelta) Apply(engineCfg tx.EngineConfig) (*ledger.Ledger, error) {
 	txMap := shamap.New(shamap.TypeTransaction)
 	parentHeader := r.parent.Header()
 	applicationResolution := consensus.GetNextLedgerTimeResolution(
-		parentHeader.CloseTimeResolution,
+		uint32(parentHeader.CloseTimeResolution),
 		parentHeader.GetCloseAgree(),
 		hdr.LedgerIndex,
 	)
-	if hdr.CloseTimeResolution != applicationResolution {
+	if uint32(hdr.CloseTimeResolution) != applicationResolution {
 		return nil, fmt.Errorf(
 			"target close time resolution: got %d, derived %d from parent",
 			hdr.CloseTimeResolution, applicationResolution,
@@ -1033,216 +1022,10 @@ func splitTxWithMetaBlob(blob []byte) (txBytes, metaBytes []byte, err error) {
 	return txBytes, metaBytes, nil
 }
 
-// extractTransactionIndex decodes the metadata STObject and returns
-// the sfTransactionIndex value. Mirrors rippled's
-// `meta[sfTransactionIndex]` access in processReplayDeltaResponse :265.
-//
-// Uses a streaming field-header walk over the STObject bytes, skipping
-// past every field that isn't (type=UINT32, field=TransactionIndex).
-// This avoids the O(n²) constant-factor blowup from decoding the
-// entire metadata into a Go map just to read one uint32 — rippled
-// uses SerialIter::skip for the same optimization.
-//
-// Falls back to the legacy full-decode path on skip error so malformed
-// but binarycodec-recoverable metadata still works. In practice the
-// metadata written by our own engine always has TransactionIndex as
-// the second field, so the fast path completes in ~2 field headers.
 func extractTransactionIndex(metaBytes []byte) (uint32, error) {
-	if len(metaBytes) == 0 {
-		return 0, errors.New("empty metadata")
-	}
-
-	const (
-		// sfTransactionIndex is type UINT32 (2), field 28 in SField.cpp.
-		miTypeUint32          = 2
-		miFieldTransactionIdx = 28
-	)
-
-	if idx, ok := streamingFindUint32(metaBytes, miTypeUint32, miFieldTransactionIdx); ok {
-		return idx, nil
-	}
-
-	// Fallback: full decode for malformed or extension-carrying inputs.
-	decoded, err := binarycodec.Decode(hex.EncodeToString(metaBytes))
-	if err != nil {
-		return 0, fmt.Errorf("decode metadata: %w", err)
-	}
-	raw, ok := decoded["TransactionIndex"]
+	index, ok := tx.TransactionIndexFromMetadata(metaBytes)
 	if !ok {
-		return 0, errors.New("metadata missing TransactionIndex")
+		return 0, errors.New("metadata missing or invalid TransactionIndex")
 	}
-	switch v := raw.(type) {
-	case uint32:
-		return v, nil
-	case int:
-		return uint32(v), nil
-	case int64:
-		return uint32(v), nil
-	case uint64:
-		return uint32(v), nil
-	case float64:
-		return uint32(v), nil
-	default:
-		return 0, fmt.Errorf("metadata TransactionIndex has unexpected type %T", raw)
-	}
-}
-
-// streamingFindUint32 scans an STObject byte slice for the first UINT32
-// field whose (type, fieldCode) matches the target and returns its
-// big-endian value. Returns (_, false) when the field is absent or the
-// stream is malformed — the caller is expected to fall back to a full
-// decoder in that case.
-//
-// Field headers follow XRPL's compact encoding: upper nibble is type,
-// lower nibble is field, with escape sequences when either exceeds 15.
-// We skip past every non-matching field using a per-type length rule;
-// unknown types bail out so caller can retry via the full decoder.
-func streamingFindUint32(data []byte, targetType, targetField int) (uint32, bool) {
-	pos := 0
-	for pos < len(data) {
-		if data[pos] == 0xE1 || data[pos] == 0xF1 {
-			// End-of-object / end-of-array markers. Shouldn't appear at
-			// top level, but bail defensively rather than mis-parse.
-			return 0, false
-		}
-		typeCode, fieldCode, ok := readFieldHeaderAt(data, &pos)
-		if !ok {
-			return 0, false
-		}
-		if typeCode == targetType && fieldCode == targetField {
-			if pos+4 > len(data) {
-				return 0, false
-			}
-			return uint32(data[pos])<<24 |
-				uint32(data[pos+1])<<16 |
-				uint32(data[pos+2])<<8 |
-				uint32(data[pos+3]), true
-		}
-		if !skipFieldValue(typeCode, data, &pos) {
-			return 0, false
-		}
-	}
-	return 0, false
-}
-
-// readFieldHeaderAt reads the XRPL field-id encoding at data[*pos] and
-// advances *pos past it. Returns (typeCode, fieldCode, ok).
-func readFieldHeaderAt(data []byte, pos *int) (int, int, bool) {
-	if *pos >= len(data) {
-		return 0, 0, false
-	}
-	b := data[*pos]
-	*pos++
-	typeCode := int(b >> 4)
-	fieldCode := int(b & 0x0F)
-	if typeCode == 0 {
-		if *pos >= len(data) {
-			return 0, 0, false
-		}
-		typeCode = int(data[*pos])
-		*pos++
-	}
-	if fieldCode == 0 {
-		if *pos >= len(data) {
-			return 0, 0, false
-		}
-		fieldCode = int(data[*pos])
-		*pos++
-	}
-	return typeCode, fieldCode, true
-}
-
-// skipFieldValue advances *pos past the value for a field whose type
-// was just read. Returns false on unknown type or short input — the
-// caller bails to the full-decoder fallback. The rules match XRPL's
-// type encoding; we only need types that can precede sfTransactionIndex
-// in a metadata STObject.
-func skipFieldValue(typeCode int, data []byte, pos *int) bool {
-	switch typeCode {
-	case 1: // UINT16
-		return advancePos(data, pos, 2)
-	case 2: // UINT32
-		return advancePos(data, pos, 4)
-	case 3: // UINT64
-		return advancePos(data, pos, 8)
-	case 4: // Hash128
-		return advancePos(data, pos, 16)
-	case 5: // Hash256
-		return advancePos(data, pos, 32)
-	case 6: // Amount — 8 bytes XRP or 48 bytes IOU
-		if *pos+1 > len(data) {
-			return false
-		}
-		isNotXRP := data[*pos]&0x80 != 0
-		if !isNotXRP {
-			return advancePos(data, pos, 8)
-		}
-		// IOU canonical zero is 0x8000...00 (8 bytes); otherwise 48.
-		if data[*pos] == 0x80 {
-			allZero := true
-			for i := 1; i < 8 && *pos+i < len(data); i++ {
-				if data[*pos+i] != 0 {
-					allZero = false
-					break
-				}
-			}
-			if allZero {
-				return advancePos(data, pos, 8)
-			}
-		}
-		return advancePos(data, pos, 48)
-	case 7, 8: // Blob (VL), AccountID (VL)
-		n, ok := readVLLen(data, pos)
-		if !ok {
-			return false
-		}
-		return advancePos(data, pos, n)
-	case 16: // UINT8
-		return advancePos(data, pos, 1)
-	case 17: // Hash160
-		return advancePos(data, pos, 20)
-	default:
-		// 14 (STObject), 15 (STArray), 18 (PathSet), 19 (Vector256)
-		// and anything else require nested decoding — not worth
-		// reimplementing here. Bail to the full-decoder fallback.
-		return false
-	}
-}
-
-func advancePos(data []byte, pos *int, n int) bool {
-	if *pos+n > len(data) {
-		return false
-	}
-	*pos += n
-	return true
-}
-
-// readVLLen decodes the XRPL variable-length prefix and advances *pos
-// past the length bytes (not the content). Returns (length, ok).
-func readVLLen(data []byte, pos *int) (int, bool) {
-	if *pos >= len(data) {
-		return 0, false
-	}
-	b1 := int(data[*pos])
-	*pos++
-	switch {
-	case b1 <= 192:
-		return b1, true
-	case b1 <= 240:
-		if *pos >= len(data) {
-			return 0, false
-		}
-		b2 := int(data[*pos])
-		*pos++
-		return 193 + (b1-193)*256 + b2, true
-	case b1 <= 254:
-		if *pos+1 >= len(data) {
-			return 0, false
-		}
-		b2 := int(data[*pos])
-		b3 := int(data[*pos+1])
-		*pos += 2
-		return 12481 + (b1-241)*65536 + b2*256 + b3, true
-	}
-	return 0, false
+	return index, nil
 }

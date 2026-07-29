@@ -5,6 +5,8 @@ import (
 	"fmt"
 
 	"github.com/LeJamon/go-xrpl/internal/ledger/state"
+	"github.com/LeJamon/go-xrpl/ledger/entry"
+	"github.com/LeJamon/go-xrpl/protocol"
 )
 
 // checkNoBadOffers verifies that an Offer never carries a negative TakerPays or
@@ -14,7 +16,7 @@ import (
 // Reference: rippled InvariantCheck.cpp — NoBadOffers (lines 228-245).
 func checkNoBadOffers(entries []InvariantEntry) *InvariantViolation {
 	for _, e := range entries {
-		if e.EntryType != "Offer" {
+		if e.EntryType != entry.TypeOffer {
 			continue
 		}
 		for _, data := range [][]byte{e.Before, e.After} {
@@ -56,7 +58,7 @@ func checkNoBadOffers(entries []InvariantEntry) *InvariantViolation {
 func checkNoZeroEscrow(entries []InvariantEntry) *InvariantViolation {
 	for _, e := range entries {
 		switch e.EntryType {
-		case "Escrow":
+		case entry.TypeEscrow:
 			for _, data := range [][]byte{e.Before, e.After} {
 				if data == nil {
 					continue
@@ -65,14 +67,14 @@ func checkNoZeroEscrow(entries []InvariantEntry) *InvariantViolation {
 					return v
 				}
 			}
-		case "MPTokenIssuance":
+		case entry.TypeMPTokenIssuance:
 			if e.After == nil {
 				continue
 			}
 			if v := checkMPTokenIssuanceAmounts(e.After); v != nil {
 				return v
 			}
-		case "MPToken":
+		case entry.TypeMPToken:
 			if e.After == nil {
 				continue
 			}
@@ -86,7 +88,7 @@ func checkNoZeroEscrow(entries []InvariantEntry) *InvariantViolation {
 
 // MaxMPTokenAmount is the maximum representable MPT amount (2^63 - 1).
 // Reference: rippled maxMPTokenAmount constant.
-const MaxMPTokenAmount uint64 = 0x7FFFFFFFFFFFFFFF
+const MaxMPTokenAmount = protocol.MaxMPTokenAmount
 
 func checkEscrowAmount(data []byte) *InvariantViolation {
 	esc, err := state.ParseEscrow(data)

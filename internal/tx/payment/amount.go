@@ -3,6 +3,7 @@ package payment
 import (
 	"math/big"
 
+	"github.com/LeJamon/go-xrpl/internal/ledger/state"
 	tx "github.com/LeJamon/go-xrpl/internal/tx"
 )
 
@@ -85,25 +86,45 @@ func (e EitherAmount) IsNegative() bool {
 
 // Add adds two EitherAmounts (must be same type - both XRP or both IOU)
 func (e EitherAmount) Add(other EitherAmount) EitherAmount {
+	return e.AddWithNumberContext(
+		other,
+		state.NewNumberContext(state.MantissaScaleSmall, false),
+	)
+}
+
+func (e EitherAmount) AddWithNumberContext(
+	other EitherAmount,
+	numberContext state.NumberContext,
+) EitherAmount {
 	if e.IsNative {
 		return NewXRPEitherAmount(e.XRP + other.XRP)
 	}
 	if e.IsMPT {
 		return NewMPTEitherAmount(e.MPT+other.MPT, e.MPTID)
 	}
-	result, _ := e.IOU.Add(other.IOU)
+	result, _ := e.IOU.AddWithNumberContext(other.IOU, numberContext, state.RoundToNearest)
 	return NewIOUEitherAmount(result)
 }
 
 // Sub subtracts other from e (must be same type)
 func (e EitherAmount) Sub(other EitherAmount) EitherAmount {
+	return e.SubWithNumberContext(
+		other,
+		state.NewNumberContext(state.MantissaScaleSmall, false),
+	)
+}
+
+func (e EitherAmount) SubWithNumberContext(
+	other EitherAmount,
+	numberContext state.NumberContext,
+) EitherAmount {
 	if e.IsNative {
 		return NewXRPEitherAmount(e.XRP - other.XRP)
 	}
 	if e.IsMPT {
 		return NewMPTEitherAmount(e.MPT-other.MPT, e.MPTID)
 	}
-	result, _ := e.IOU.Sub(other.IOU)
+	result, _ := e.IOU.SubWithNumberContext(other.IOU, numberContext, state.RoundToNearest)
 	return NewIOUEitherAmount(result)
 }
 
@@ -171,6 +192,21 @@ func FromEitherAmount(e EitherAmount) tx.Amount {
 }
 
 func MulRatio(amt EitherAmount, num, den uint32, roundUp bool) EitherAmount {
+	return MulRatioWithNumberContext(
+		amt,
+		num,
+		den,
+		roundUp,
+		state.NewNumberContext(state.MantissaScaleSmall, false),
+	)
+}
+
+func MulRatioWithNumberContext(
+	amt EitherAmount,
+	num, den uint32,
+	roundUp bool,
+	numberContext state.NumberContext,
+) EitherAmount {
 	if den == 0 {
 		panic("division by zero")
 	}
@@ -184,7 +220,9 @@ func MulRatio(amt EitherAmount, num, den uint32, roundUp bool) EitherAmount {
 		return NewMPTEitherAmount(mptMulRatio(amt.MPT, num, den, roundUp), amt.MPTID)
 	}
 
-	return NewIOUEitherAmount(amt.IOU.MulRatio(num, den, roundUp))
+	return NewIOUEitherAmount(
+		amt.IOU.MulRatioWithNumberContext(num, den, roundUp, numberContext),
+	)
 }
 
 func mptMulRatio(amount int64, num, den uint32, roundUp bool) int64 {

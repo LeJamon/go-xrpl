@@ -264,14 +264,14 @@ func (s *Service) installLoadedStartupLocked(loaded, genesisLedger *ledger.Ledge
 	s.ledgerEventHaveFrontier = true
 	s.ledgerEventMu.Unlock()
 	s.completeMu.Lock()
-	s.completedLedgers.Add(loaded.Sequence())
+	s.completedLedgers.add(loaded.Sequence())
 	s.completeLedgerHashes[loaded.Sequence()] = loaded.Hash()
 	s.completeMu.Unlock()
 	if loaded.Sequence() != genesisLedger.Sequence() {
 		s.deleteHistoryLocked(genesisLedger.Sequence())
 	}
 	s.putHistoryLocked(loaded)
-	s.collectTransactionResults(loaded, loaded.Sequence(), loaded.Hash())
+	s.collectTransactionResultsLocked(loaded, loaded.Sequence(), loaded.Hash())
 	loadedHash := loaded.Hash()
 	s.logger.Info("Loaded startup ledger", "sequence", loaded.Sequence(), "hash", fmt.Sprintf("%x", loadedHash[:8]))
 }

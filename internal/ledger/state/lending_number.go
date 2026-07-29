@@ -43,7 +43,12 @@ func (n XRPLNumber) RoundToAssetScale(integral bool, scale int, mode RoundingMod
 		v := n.ToInt64WithMode(mode)
 		return NewXRPLNumberScaled(v, 0, n.scale, RoundToNearest)
 	}
-	iou := newIOUAmountValueRounded(n.Mantissa(), n.Exponent(), mode)
+	iou := newIOUAmountValueRoundedWithContext(
+		n.Mantissa(),
+		n.Exponent(),
+		mode,
+		NewNumberContext(MantissaScaleSmall, true),
+	)
 	iou = roundIOUToScale(iou, scale, mode)
 	if iou.IsZero() {
 		return n.zero()
@@ -59,7 +64,12 @@ func (n XRPLNumber) AssetExponent(integral bool, mode RoundingMode) int {
 	if n.IsZero() || integral {
 		return 0
 	}
-	return newIOUAmountValueRounded(n.Mantissa(), n.Exponent(), mode).Exponent()
+	return newIOUAmountValueRoundedWithContext(
+		n.Mantissa(),
+		n.Exponent(),
+		mode,
+		NewNumberContext(MantissaScaleSmall, true),
+	).Exponent()
 }
 
 // roundIOUToScale rounds a 16-digit IOU value to the coarser decimal exponent
@@ -77,6 +87,7 @@ func roundIOUToScale(v IOUAmountValue, scale int, mode RoundingMode) IOUAmountVa
 	}
 	ref := IOUAmountValue{mantissa: refMant, exponent: scale}
 	negRef := IOUAmountValue{mantissa: -refMant, exponent: scale}
-	sum := addIOUValuesRounded(v, ref, mode)
-	return addIOUValuesRounded(sum, negRef, mode)
+	numberContext := NewNumberContext(MantissaScaleSmall, true)
+	sum := addIOUValuesRoundedWithContext(v, ref, mode, numberContext)
+	return addIOUValuesRoundedWithContext(sum, negRef, mode, numberContext)
 }

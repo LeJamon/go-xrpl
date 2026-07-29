@@ -111,8 +111,8 @@ func TestCloseRejectsMalformedAmendmentsEntry(t *testing.T) {
 	if err := l.Close(l.CloseTime(), 0); err == nil {
 		t.Fatal("close accepted malformed Amendments entry")
 	}
-	if l.State() != StateOpen {
-		t.Fatalf("failed close changed state to %v", l.State())
+	if !l.IsOpen() {
+		t.Fatal("failed close changed ledger out of open state")
 	}
 }
 

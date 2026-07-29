@@ -210,7 +210,7 @@ func buildLedgerJSON(l types.LedgerReader, binaryMode, full bool, apiVersion int
 				AccountHash:         l.StateMapHash(),
 				Drops:               l.TotalDrops(),
 				CloseFlags:          l.CloseFlags(),
-				CloseTimeResolution: l.CloseTimeResolution(),
+				CloseTimeResolution: uint8(l.CloseTimeResolution()),
 				CloseTime:           protocol.FromRippleTime(uint32(max(l.CloseTime(), 0))),
 			}, false))),
 		}

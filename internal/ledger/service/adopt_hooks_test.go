@@ -19,7 +19,7 @@ import (
 // from peers. Without this, the `ledger` stream silently skips every
 // peer-adopted ledger — an observable divergence from rippled where
 // pubLedger fires for both consensus-closed and sync-adopted ledgers.
-func TestAdoptLedgerWithState_FiresOnLedgerClosedHook(t *testing.T) {
+func TestAdoptLedgerWithState_PublishesLedgerEvent(t *testing.T) {
 	cfg := DefaultConfig()
 	svc, err := New(cfg)
 	require.NoError(t, err)
@@ -27,28 +27,24 @@ func TestAdoptLedgerWithState_FiresOnLedgerClosedHook(t *testing.T) {
 
 	// Capture OnLedgerClosed invocations.
 	var (
-		mu               sync.Mutex
-		callCount        int
-		capturedInfo     *LedgerInfo
-		capturedTxCount  int
-		capturedValRange string
+		mu              sync.Mutex
+		callCount       int
+		capturedInfo    *LedgerInfo
+		capturedTxCount int
 	)
 	done := make(chan struct{}, 1)
 
-	hooks := DefaultEventHooks()
-	hooks.OnLedgerClosed = func(info *LedgerInfo, txCount int, validatedLedgers string) {
+	setEventSinkFunc(svc, func(event *LedgerAcceptedEvent) {
 		mu.Lock()
 		callCount++
-		capturedInfo = info
-		capturedTxCount = txCount
-		capturedValRange = validatedLedgers
+		capturedInfo = event.LedgerInfo
+		capturedTxCount = len(event.TransactionResults)
 		mu.Unlock()
 		select {
 		case done <- struct{}{}:
 		default:
 		}
-	}
-	svc.SetEventHooks(hooks)
+	})
 
 	// Build a tx map with 2 txs so txCount assertion is meaningful.
 	txMap := shamap.New(shamap.TypeTransaction)
@@ -75,6 +71,7 @@ func TestAdoptLedgerWithState_FiresOnLedgerClosedHook(t *testing.T) {
 	}
 
 	require.NoError(t, svc.AdoptLedgerWithState(context.TODO(), hdr, stateMap, txMap))
+	svc.SetValidatedLedger(adoptedSeq, adoptedHash)
 
 	// Wait for the goroutine-dispatched hook to fire.
 	select {
@@ -90,7 +87,6 @@ func TestAdoptLedgerWithState_FiresOnLedgerClosedHook(t *testing.T) {
 	assert.Equal(t, adoptedSeq, capturedInfo.Sequence, "LedgerInfo.Sequence must match adopted ledger seq")
 	assert.Equal(t, adoptedHash, capturedInfo.Hash, "LedgerInfo.Hash must match adopted ledger hash")
 	assert.Equal(t, 2, capturedTxCount, "txCount must match the number of txs in the adopted tx map")
-	assert.NotEmpty(t, capturedValRange, "validatedLedgers range must be populated")
 }
 
 // TestAdoptLedgerWithState_FiresOnTransactionHook pins F3: peer-adopted
@@ -99,7 +95,7 @@ func TestAdoptLedgerWithState_FiresOnLedgerClosedHook(t *testing.T) {
 // tx. Matches rippled's pubValidatedTransactions which emits for every tx
 // in a newly-published ledger regardless of whether it was consensus-
 // closed locally or adopted from a peer.
-func TestAdoptLedgerWithState_FiresOnTransactionHook(t *testing.T) {
+func TestAdoptLedgerWithState_PublishesTransactions(t *testing.T) {
 	cfg := DefaultConfig()
 	svc, err := New(cfg)
 	require.NoError(t, err)
@@ -109,16 +105,16 @@ func TestAdoptLedgerWithState_FiresOnTransactionHook(t *testing.T) {
 	seenHashes := &sync.Map{}
 	done := make(chan struct{}, 4)
 
-	hooks := DefaultEventHooks()
-	hooks.OnTransaction = func(txi TransactionInfo, result TxResult, seq uint32, hash [32]byte, closeTime time.Time) {
-		atomic.AddInt32(&txCallCount, 1)
-		seenHashes.Store(txi.Hash, struct{}{})
-		select {
-		case done <- struct{}{}:
-		default:
+	setEventSinkFunc(svc, func(event *LedgerAcceptedEvent) {
+		for _, result := range event.TransactionResults {
+			atomic.AddInt32(&txCallCount, 1)
+			seenHashes.Store(result.TxHash, struct{}{})
+			select {
+			case done <- struct{}{}:
+			default:
+			}
 		}
-	}
-	svc.SetEventHooks(hooks)
+	})
 
 	txMap := shamap.New(shamap.TypeTransaction)
 	blob1, id1 := makeTxMetaBlobForTest(t, []byte("hook-onTx-blob-A-padding-padp"), 0)
@@ -141,6 +137,7 @@ func TestAdoptLedgerWithState_FiresOnTransactionHook(t *testing.T) {
 		AccountHash: stateRoot,
 	}
 	require.NoError(t, svc.AdoptLedgerWithState(context.TODO(), hdr, stateMap, txMap))
+	svc.SetValidatedLedger(hdr.LedgerIndex, adoptedHash)
 
 	// Wait for both tx dispatches.
 	deadline := time.After(2 * time.Second)
@@ -178,7 +175,7 @@ func TestAdoptLedgerWithState_StashesLegacyEventUntilValidated(t *testing.T) {
 	)
 	done := make(chan struct{}, 1)
 
-	svc.SetEventCallback(func(event *LedgerAcceptedEvent) {
+	setEventSinkFunc(svc, func(event *LedgerAcceptedEvent) {
 		mu.Lock()
 		callbackCount++
 		lastEvent = event
@@ -266,18 +263,11 @@ func TestAdoptLedgerWithState_StashesLegacyEventUntilValidated(t *testing.T) {
 		"SetValidatedLedger must remove the stashed event after firing")
 }
 
-// TestAdoptLedgerWithState_NoHooksInstalled_IsQuiet verifies that the
-// adopt path doesn't panic or otherwise misbehave when neither hooks nor
-// eventCallback are installed. The production wiring installs both, but
-// tests and embedders may run without either; the helper must tolerate
-// that.
-func TestAdoptLedgerWithState_NoHooksInstalled_IsQuiet(t *testing.T) {
+func TestAdoptLedgerWithState_NoEventSinkInstalled_IsQuiet(t *testing.T) {
 	cfg := DefaultConfig()
 	svc, err := New(cfg)
 	require.NoError(t, err)
 	require.NoError(t, svc.Start())
-
-	// Deliberately: no SetEventHooks, no SetEventCallback.
 
 	txMap := shamap.New(shamap.TypeTransaction)
 	stateMap := shamap.New(shamap.TypeState)
@@ -295,7 +285,7 @@ func TestAdoptLedgerWithState_NoHooksInstalled_IsQuiet(t *testing.T) {
 		AccountHash: stateRoot,
 	}
 	require.NoError(t, svc.AdoptLedgerWithState(context.TODO(), hdr, stateMap, txMap),
-		"adopt must succeed even when no hooks or eventCallback are installed")
+		"adopt must succeed without an event sink")
 
 	// No pending stash entry should exist when there is no eventCallback.
 	svc.mu.RLock()

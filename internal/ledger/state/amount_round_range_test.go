@@ -34,8 +34,22 @@ func TestCanonicalizeDropsMaxNative(t *testing.T) {
 		{"CanonicalizeDrops offset>17", func() int64 { return CanonicalizeDrops(1, 18) }},
 		{"CanonicalizeDropsStrict over ceiling", func() int64 { return CanonicalizeDropsStrict(10_000_000_000_000_001, 1, false) }},
 		{"CanonicalizeDropsStrict offset>17", func() int64 { return CanonicalizeDropsStrict(1, 18, true) }},
-		{"canonicalizeDropsNoRound truncate over ceiling", func() int64 { return canonicalizeDropsNoRound(20_000_000_000_000_000, 1, true) }},
-		{"canonicalizeDropsNoRound offset>17", func() int64 { return canonicalizeDropsNoRound(1, 18, true) }},
+		{"canonicalizeDropsNoRound truncate over ceiling", func() int64 {
+			return canonicalizeDropsNoRound(
+				20_000_000_000_000_000,
+				1,
+				true,
+				NewNumberContext(MantissaScaleSmall, false),
+			)
+		}},
+		{"canonicalizeDropsNoRound offset>17", func() int64 {
+			return canonicalizeDropsNoRound(
+				1,
+				18,
+				true,
+				NewNumberContext(MantissaScaleSmall, false),
+			)
+		}},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

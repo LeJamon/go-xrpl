@@ -4,7 +4,7 @@ import (
 	"fmt"
 
 	addresscodec "github.com/LeJamon/go-xrpl/codec/addresscodec"
-	"github.com/LeJamon/go-xrpl/internal/tx/ledgerfields"
+	ledgerfields "github.com/LeJamon/go-xrpl/ledger/entry"
 )
 
 // CheckData represents a Check ledger entry

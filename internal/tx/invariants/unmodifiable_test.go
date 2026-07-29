@@ -8,6 +8,7 @@ import (
 	"github.com/LeJamon/go-xrpl/amendment"
 	binarycodec "github.com/LeJamon/go-xrpl/codec/binarycodec"
 	"github.com/LeJamon/go-xrpl/internal/ledger/state"
+	"github.com/LeJamon/go-xrpl/ledger/entry"
 )
 
 func rulesWithLendingProtocol() *amendment.Rules {
@@ -50,7 +51,7 @@ func TestNoModifiedUnmodifiableFields_LedgerEntryType(t *testing.T) {
 	after := append([]byte(nil), before...)
 	after[2]++
 
-	entries := []InvariantEntry{{EntryType: "AccountRoot", Before: before, After: after}}
+	entries := []InvariantEntry{{EntryType: entry.TypeAccountRoot, Before: before, After: after}}
 	if v := checkNoModifiedUnmodifiableFields(entries, rulesWithLendingProtocol()); v == nil {
 		t.Fatal("expected violation for changed LedgerEntryType")
 	}
@@ -65,7 +66,7 @@ func TestNoModifiedUnmodifiableFields_LedgerIndex(t *testing.T) {
 	afterMap["LedgerIndex"] = strings.Repeat("0", 63) + "1"
 	after := encodeSLE(t, afterMap)
 
-	entries := []InvariantEntry{{EntryType: "AccountRoot", Before: before, After: after}}
+	entries := []InvariantEntry{{EntryType: entry.TypeAccountRoot, Before: before, After: after}}
 	if v := checkNoModifiedUnmodifiableFields(entries, rulesWithLendingProtocol()); v == nil {
 		t.Fatal("expected violation for added LedgerIndex")
 	}
@@ -76,7 +77,7 @@ func TestNoModifiedUnmodifiableFields_LedgerIndex(t *testing.T) {
 func TestNoModifiedUnmodifiableFields_NoChange(t *testing.T) {
 	before := mustSerializeAccount(t, &state.AccountRoot{Account: testPseudoAddr, Balance: 1_000_000, Sequence: 1})
 	after := mustSerializeAccount(t, &state.AccountRoot{Account: testPseudoAddr, Balance: 999_990, Sequence: 2})
-	entries := []InvariantEntry{{EntryType: "AccountRoot", Before: before, After: after}}
+	entries := []InvariantEntry{{EntryType: entry.TypeAccountRoot, Before: before, After: after}}
 	if v := checkNoModifiedUnmodifiableFields(entries, rulesWithLendingProtocol()); v != nil {
 		t.Fatalf("unexpected violation for ordinary modification: %v", v)
 	}
@@ -87,10 +88,10 @@ func TestNoModifiedUnmodifiableFields_NoChange(t *testing.T) {
 func TestNoModifiedUnmodifiableFields_IgnoresCreateDelete(t *testing.T) {
 	acct := mustSerializeAccount(t, &state.AccountRoot{Account: testPseudoAddr, Balance: 1_000_000, Sequence: 1})
 	rules := rulesWithLendingProtocol()
-	if v := checkNoModifiedUnmodifiableFields([]InvariantEntry{{EntryType: "AccountRoot", After: acct}}, rules); v != nil {
+	if v := checkNoModifiedUnmodifiableFields([]InvariantEntry{{EntryType: entry.TypeAccountRoot, After: acct}}, rules); v != nil {
 		t.Fatalf("creation: unexpected violation %v", v)
 	}
-	if v := checkNoModifiedUnmodifiableFields([]InvariantEntry{{EntryType: "AccountRoot", Before: acct, IsDelete: true}}, rules); v != nil {
+	if v := checkNoModifiedUnmodifiableFields([]InvariantEntry{{EntryType: entry.TypeAccountRoot, Before: acct, IsDelete: true}}, rules); v != nil {
 		t.Fatalf("deletion: unexpected violation %v", v)
 	}
 }
@@ -101,7 +102,7 @@ func TestNoModifiedUnmodifiableFields_Gating(t *testing.T) {
 	before := mustSerializeAccount(t, &state.AccountRoot{Account: testPseudoAddr, Balance: 1_000_000, Sequence: 1})
 	after := append([]byte(nil), before...)
 	after[2]++
-	entries := []InvariantEntry{{EntryType: "AccountRoot", Before: before, After: after}}
+	entries := []InvariantEntry{{EntryType: entry.TypeAccountRoot, Before: before, After: after}}
 	if v := checkNoModifiedUnmodifiableFields(entries, amendment.NewRules(nil)); v != nil {
 		t.Fatalf("disabled amendment: unexpected violation %v", v)
 	}

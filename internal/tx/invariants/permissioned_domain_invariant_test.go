@@ -4,6 +4,7 @@ import (
 	"testing"
 
 	"github.com/LeJamon/go-xrpl/internal/ledger/state"
+	"github.com/LeJamon/go-xrpl/ledger/entry"
 )
 
 const pdOwnerAddr = "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh"
@@ -69,11 +70,11 @@ func TestValidPermissionedDomain_PreAmendment(t *testing.T) {
 		wantV   bool
 	}{
 		{"PDSet valid domain", TypePermissionedDomainSet, TesSUCCESS,
-			[]InvariantEntry{{EntryType: "PermissionedDomain", After: valid}}, false},
+			[]InvariantEntry{{EntryType: entry.TypePermissionedDomain, After: valid}}, false},
 		{"PDSet unsorted domain", TypePermissionedDomainSet, TesSUCCESS,
-			[]InvariantEntry{{EntryType: "PermissionedDomain", After: bad}}, true},
+			[]InvariantEntry{{EntryType: entry.TypePermissionedDomain, After: bad}}, true},
 		{"Payment touching domain ignored", TypePayment, TesSUCCESS,
-			[]InvariantEntry{{EntryType: "PermissionedDomain", After: valid}}, false},
+			[]InvariantEntry{{EntryType: entry.TypePermissionedDomain, After: valid}}, false},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
@@ -106,27 +107,27 @@ func TestValidPermissionedDomain_PostAmendment(t *testing.T) {
 		wantV   bool
 	}{
 		{"PDSet creates valid domain", set, TesSUCCESS,
-			[]InvariantEntry{{EntryType: "PermissionedDomain", After: valid}}, false},
+			[]InvariantEntry{{EntryType: entry.TypePermissionedDomain, After: valid}}, false},
 		{"PDSet unsorted domain fails", set, TesSUCCESS,
-			[]InvariantEntry{{EntryType: "PermissionedDomain", After: bad}}, true},
+			[]InvariantEntry{{EntryType: entry.TypePermissionedDomain, After: bad}}, true},
 		{"PDSet touches no domain fails", set, TesSUCCESS, nil, true},
 		{"PDSet deletes domain fails", set, TesSUCCESS,
-			[]InvariantEntry{{EntryType: "PermissionedDomain", Before: valid, IsDelete: true}}, true},
+			[]InvariantEntry{{EntryType: entry.TypePermissionedDomain, Before: valid, IsDelete: true}}, true},
 		{"PDDelete deletes domain ok", del, TesSUCCESS,
-			[]InvariantEntry{{EntryType: "PermissionedDomain", Before: valid, IsDelete: true}}, false},
+			[]InvariantEntry{{EntryType: entry.TypePermissionedDomain, Before: valid, IsDelete: true}}, false},
 		{"PDDelete modifies (not delete) fails", del, TesSUCCESS,
-			[]InvariantEntry{{EntryType: "PermissionedDomain", Before: valid, After: valid}}, true},
+			[]InvariantEntry{{EntryType: entry.TypePermissionedDomain, Before: valid, After: valid}}, true},
 		{"PDDelete touches no domain fails", del, TesSUCCESS, nil, true},
 		{"Payment touching domain fails", TypePayment, TesSUCCESS,
-			[]InvariantEntry{{EntryType: "PermissionedDomain", After: valid}}, true},
+			[]InvariantEntry{{EntryType: entry.TypePermissionedDomain, After: valid}}, true},
 		{"Payment not touching domain ok", TypePayment, TesSUCCESS, nil, false},
 		{"failed PDSet touching domain fails", set, TecINCOMPLETE,
-			[]InvariantEntry{{EntryType: "PermissionedDomain", After: valid}}, true},
+			[]InvariantEntry{{EntryType: entry.TypePermissionedDomain, After: valid}}, true},
 		{"failed PDSet touching nothing ok", set, TecINCOMPLETE, nil, false},
 		{"two domains affected fails", set, TesSUCCESS,
 			[]InvariantEntry{
-				{EntryType: "PermissionedDomain", After: valid},
-				{EntryType: "PermissionedDomain", After: valid},
+				{EntryType: entry.TypePermissionedDomain, After: valid},
+				{EntryType: entry.TypePermissionedDomain, After: valid},
 			}, true},
 	}
 	for _, tc := range tests {

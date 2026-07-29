@@ -201,6 +201,21 @@ func (q Quality) Rate() tx.Amount {
 // and clamp result.in to amount.in.
 // Reference: rippled Quality.cpp ceil_out_impl with mulRoundStrict (lines 115-155)
 func (q Quality) CeilOutStrict(amtIn, amtOut EitherAmount, limit EitherAmount, roundUp bool) (EitherAmount, EitherAmount) {
+	return q.CeilOutStrictWithNumberContext(
+		amtIn,
+		amtOut,
+		limit,
+		roundUp,
+		state.NewNumberContext(state.MantissaScaleSmall, false),
+	)
+}
+
+func (q Quality) CeilOutStrictWithNumberContext(
+	amtIn, amtOut EitherAmount,
+	limit EitherAmount,
+	roundUp bool,
+	numberContext state.NumberContext,
+) (EitherAmount, EitherAmount) {
 	if amtOut.Compare(limit) <= 0 {
 		return amtIn, amtOut
 	}
@@ -231,12 +246,21 @@ func (q Quality) CeilOutStrict(amtIn, amtOut EitherAmount, limit EitherAmount, r
 		// drops. Routing through the IOU MulRoundStrict first collapses the
 		// product to a 16-digit mantissa and discards any sub-drop remainder, so
 		// the subsequent drops canonicalize has nothing left to round up.
-		resultInEither = NewXRPEitherAmount(state.MulRoundNativeStrict(limitAmt, qRate, roundUp))
+		resultInEither = NewXRPEitherAmount(
+			state.MulRoundNativeStrictWithNumberContext(limitAmt, qRate, numberContext, roundUp),
+		)
 	} else if amtIn.IsMPT {
-		value := state.MulRoundMPTStrict(limitAmt, qRate, roundUp)
+		value := state.MulRoundMPTStrictWithNumberContext(limitAmt, qRate, numberContext, roundUp)
 		resultInEither = NewMPTEitherAmount(value, amtIn.MPTID)
 	} else {
-		resultIn := state.MulRoundStrict(limitAmt, qRate, inCurrency, inIssuer, roundUp)
+		resultIn := state.MulRoundStrictWithNumberContext(
+			limitAmt,
+			qRate,
+			inCurrency,
+			inIssuer,
+			numberContext,
+			roundUp,
+		)
 		resultInEither = NewIOUEitherAmount(tx.NewIssuedAmount(
 			resultIn.Mantissa(), resultIn.Exponent(), inCurrency, inIssuer))
 	}
@@ -254,6 +278,19 @@ func (q Quality) CeilOutStrict(amtIn, amtOut EitherAmount, limit EitherAmount, r
 // Used when fixReducedOffersV2 is NOT enabled.
 // Reference: rippled Quality.cpp ceil_in (lines 100-104) uses divRound (always rounds up)
 func (q Quality) CeilIn(amtIn, amtOut EitherAmount, limit EitherAmount) (EitherAmount, EitherAmount) {
+	return q.CeilInWithNumberContext(
+		amtIn,
+		amtOut,
+		limit,
+		state.NewNumberContext(state.MantissaScaleSmall, false),
+	)
+}
+
+func (q Quality) CeilInWithNumberContext(
+	amtIn, amtOut EitherAmount,
+	limit EitherAmount,
+	numberContext state.NumberContext,
+) (EitherAmount, EitherAmount) {
 	if amtIn.Compare(limit) <= 0 {
 		return amtIn, amtOut
 	}
@@ -282,13 +319,22 @@ func (q Quality) CeilIn(amtIn, amtOut EitherAmount, limit EitherAmount) (EitherA
 		// The non-native DivRound path applies IOU canonicalization first, which
 		// uses different rounding than the native path and causes off-by-one errors.
 		// Reference: rippled STAmount.cpp divRoundImpl + canonicalizeRound(native=true)
-		resultOutEither = NewXRPEitherAmount(state.DivRoundNative(limitAmt, qRate, true))
+		resultOutEither = NewXRPEitherAmount(
+			state.DivRoundNativeWithNumberContext(limitAmt, qRate, numberContext, true),
+		)
 	} else if amtOut.IsMPT {
-		value := state.DivRoundMPT(limitAmt, qRate, true)
+		value := state.DivRoundMPTWithNumberContext(limitAmt, qRate, numberContext, true)
 		resultOutEither = NewMPTEitherAmount(value, amtOut.MPTID)
 	} else {
 		// Non-strict: divRound with roundUp=true (matching rippled's ceil_in which uses divRound)
-		resultOut := state.DivRound(limitAmt, qRate, outCurrency, outIssuer, true)
+		resultOut := state.DivRoundWithNumberContext(
+			limitAmt,
+			qRate,
+			outCurrency,
+			outIssuer,
+			numberContext,
+			true,
+		)
 		resultOutEither = NewIOUEitherAmount(tx.NewIssuedAmount(
 			resultOut.Mantissa(), resultOut.Exponent(), outCurrency, outIssuer))
 	}
@@ -306,6 +352,21 @@ func (q Quality) CeilIn(amtIn, amtOut EitherAmount, limit EitherAmount) (EitherA
 // and clamp result.out to amount.out.
 // Reference: rippled Quality.cpp ceil_in_impl with divRoundStrict (lines 75-113)
 func (q Quality) CeilInStrict(amtIn, amtOut EitherAmount, limit EitherAmount, roundUp bool) (EitherAmount, EitherAmount) {
+	return q.CeilInStrictWithNumberContext(
+		amtIn,
+		amtOut,
+		limit,
+		roundUp,
+		state.NewNumberContext(state.MantissaScaleSmall, false),
+	)
+}
+
+func (q Quality) CeilInStrictWithNumberContext(
+	amtIn, amtOut EitherAmount,
+	limit EitherAmount,
+	roundUp bool,
+	numberContext state.NumberContext,
+) (EitherAmount, EitherAmount) {
 	if amtIn.Compare(limit) <= 0 {
 		return amtIn, amtOut
 	}
@@ -334,12 +395,21 @@ func (q Quality) CeilInStrict(amtIn, amtOut EitherAmount, limit EitherAmount, ro
 		// canonicalizing the un-truncated muldiv product to drops. Routing through
 		// the IOU DivRoundStrict first collapses the product to a 16-digit mantissa
 		// and discards any sub-drop remainder before the drops canonicalize.
-		resultOutEither = NewXRPEitherAmount(state.DivRoundNativeStrict(limitAmt, qRate, roundUp))
+		resultOutEither = NewXRPEitherAmount(
+			state.DivRoundNativeStrictWithNumberContext(limitAmt, qRate, numberContext, roundUp),
+		)
 	} else if amtOut.IsMPT {
-		value := state.DivRoundMPTStrict(limitAmt, qRate, roundUp)
+		value := state.DivRoundMPTStrictWithNumberContext(limitAmt, qRate, numberContext, roundUp)
 		resultOutEither = NewMPTEitherAmount(value, amtOut.MPTID)
 	} else {
-		resultOut := state.DivRoundStrict(limitAmt, qRate, outCurrency, outIssuer, roundUp)
+		resultOut := state.DivRoundStrictWithNumberContext(
+			limitAmt,
+			qRate,
+			outCurrency,
+			outIssuer,
+			numberContext,
+			roundUp,
+		)
 		resultOutEither = NewIOUEitherAmount(tx.NewIssuedAmount(
 			resultOut.Mantissa(), resultOut.Exponent(), outCurrency, outIssuer))
 	}

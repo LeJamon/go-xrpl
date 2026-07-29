@@ -43,11 +43,6 @@ type XRPAmount struct {
 	drops int64
 }
 
-// NewXRPAmountFromDrops creates an XRP amount from drops
-func NewXRPAmountFromDrops(drops int64) XRPAmount {
-	return XRPAmount{drops: drops}
-}
-
 // Drops returns the amount in drops
 func (x XRPAmount) Drops() int64 {
 	return x.drops
@@ -111,8 +106,22 @@ func NewIOUAmountValue(mantissa int64, exponent int) IOUAmountValue {
 }
 
 func newIOUAmountValueRounded(mantissa int64, exponent int, mode RoundingMode) IOUAmountValue {
+	return newIOUAmountValueRoundedWithContext(
+		mantissa,
+		exponent,
+		mode,
+		NewNumberContext(MantissaScaleSmall, false),
+	)
+}
+
+func newIOUAmountValueRoundedWithContext(
+	mantissa int64,
+	exponent int,
+	mode RoundingMode,
+	ctx NumberContext,
+) IOUAmountValue {
 	v := IOUAmountValue{mantissa: mantissa, exponent: exponent}
-	v.normalizeRounded(mode)
+	v.normalizeRounded(mode, ctx)
 	return v
 }
 
@@ -125,7 +134,7 @@ func ZeroIOUValue() IOUAmountValue {
 // mode, matching rippled's IOUAmount::normalize().
 // When fixUniversalNumber is enabled, delegates to XRPLNumber for Guard-based rounding.
 // Reference: IOUAmount.cpp lines 75-126
-func (v *IOUAmountValue) normalizeRounded(mode RoundingMode) {
+func (v *IOUAmountValue) normalizeRounded(mode RoundingMode, ctx NumberContext) {
 	if v.mantissa == 0 {
 		v.mantissa = 0
 		v.exponent = zeroExponent
@@ -134,17 +143,9 @@ func (v *IOUAmountValue) normalizeRounded(mode RoundingMode) {
 
 	// When switchover is on, delegate to XRPLNumber (Guard-based precision)
 	// Reference: IOUAmount.cpp lines 83-93
-	if GetNumberSwitchover() {
-		n := NewXRPLNumberRounded(v.mantissa, v.exponent, mode)
-		v.mantissa = n.Mantissa()
-		v.exponent = n.Exponent()
-		if v.exponent > MaxExponent {
-			panic("IOUAmount overflow")
-		}
-		if v.exponent < MinExponent {
-			v.mantissa = 0
-			v.exponent = zeroExponent
-		}
+	if ctx.UniversalNumberEnabled() {
+		n := ctx.Number(v.mantissa, v.exponent, mode)
+		*v = n.ToIOUAmountValueRounded(mode)
 		return
 	}
 

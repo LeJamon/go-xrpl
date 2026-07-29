@@ -9,8 +9,8 @@ import (
 	"encoding/hex"
 	"fmt"
 
-	"github.com/LeJamon/go-xrpl/internal/tx/ledgerfields"
 	"github.com/LeJamon/go-xrpl/keylet"
+	ledgerfields "github.com/LeJamon/go-xrpl/ledger/entry"
 	"github.com/LeJamon/go-xrpl/shamap"
 )
 

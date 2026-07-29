@@ -7,7 +7,6 @@ import (
 	"strings"
 
 	addresscodec "github.com/LeJamon/go-xrpl/codec/addresscodec"
-	"github.com/LeJamon/go-xrpl/internal/tx/ledgerfields"
 	"github.com/LeJamon/go-xrpl/keylet"
 	"github.com/LeJamon/go-xrpl/ledger/entry"
 )
@@ -166,7 +165,7 @@ func encodeAccountID(accountID [20]byte) (string, error) {
 
 // ParseAccountRoot parses account data from binary format
 func ParseAccountRoot(data []byte) (*AccountRoot, error) {
-	var decoded ledgerfields.AccountRoot
+	var decoded entry.AccountRoot
 	if err := decoded.Decode(data); err != nil {
 		return nil, fmt.Errorf("failed to decode AccountRoot: %w", err)
 	}
@@ -258,7 +257,7 @@ func SerializeAccountRoot(account *AccountRoot) ([]byte, error) {
 		return nil, errors.New("failed to encode AccountRoot: nil entry")
 	}
 
-	var sle ledgerfields.AccountRoot
+	var sle entry.AccountRoot
 	sle.SetBalance(fmt.Sprintf("%d", account.Balance))
 	sle.SetSequence(account.Sequence)
 	sle.SetOwnerCount(account.OwnerCount)

@@ -52,7 +52,7 @@ type LedgerHeader struct {
 	CloseFlags uint8
 
 	// the resolution for this ledger close time (2-120 seconds)
-	CloseTimeResolution uint32
+	CloseTimeResolution uint8
 
 	// For closed ledgers, the time the ledger
 	// closed. For open ledgers, the time the ledger
@@ -83,7 +83,7 @@ func appendRawBody(out []byte, h LedgerHeader) []byte {
 	out = append(out, h.AccountHash[:]...)
 	out = binary.BigEndian.AppendUint32(out, protocol.ToRippleTime(h.ParentCloseTime))
 	out = binary.BigEndian.AppendUint32(out, protocol.ToRippleTime(h.CloseTime))
-	out = append(out, uint8(h.CloseTimeResolution))
+	out = append(out, h.CloseTimeResolution)
 	return append(out, h.CloseFlags)
 }
 
@@ -156,7 +156,7 @@ func DeserializeHeader(data []byte, hasHash bool) (*LedgerHeader, error) {
 	if err := binary.Read(reader, binary.BigEndian, &closeTimeResolution); err != nil {
 		return nil, err
 	}
-	header.CloseTimeResolution = uint32(closeTimeResolution)
+	header.CloseTimeResolution = closeTimeResolution
 
 	// Read close flags (uint8)
 	if err := binary.Read(reader, binary.BigEndian, &header.CloseFlags); err != nil {

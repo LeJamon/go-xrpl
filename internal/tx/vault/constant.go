@@ -3,6 +3,8 @@ package vault
 import (
 	"github.com/LeJamon/go-xrpl/internal/tx"
 	"github.com/LeJamon/go-xrpl/internal/tx/ter"
+	"github.com/LeJamon/go-xrpl/ledger/entry"
+	"github.com/LeJamon/go-xrpl/protocol"
 )
 
 // Vault constants
@@ -11,7 +13,7 @@ const (
 	MaxVaultDataLength = 256
 
 	// MaxMPTokenMetadataLength is the maximum length of MPTokenMetadata
-	MaxMPTokenMetadataLength = 1024
+	MaxMPTokenMetadataLength = protocol.MaxMPTokenMetadataLength
 
 	// VaultStrategyFirstComeFirstServe is the only valid withdrawal policy
 	VaultStrategyFirstComeFirstServe uint8 = 1
@@ -25,14 +27,14 @@ const (
 
 	// maxMPTokenAmount is the largest amount an MPT issuance may put into
 	// circulation (2^63-1), the default cap when an issuance omits MaximumAmount.
-	maxMPTokenAmount uint64 = 0x7FFFFFFFFFFFFFFF
+	maxMPTokenAmount = protocol.MaxMPTokenAmount
 )
 
 // VaultCreate flags (tf*) and the vault SLE flag (lsf*). tfVaultPrivate mirrors
 // lsfVaultPrivate, the only flag persisted on the vault ledger entry.
 const (
 	// VaultFlagPrivate makes the vault private (shares require authorization).
-	VaultFlagPrivate uint32 = 0x00010000
+	VaultFlagPrivate = entry.LsfVaultPrivate
 	// VaultFlagShareNonTransferable makes vault shares non-transferable.
 	VaultFlagShareNonTransferable uint32 = 0x00020000
 

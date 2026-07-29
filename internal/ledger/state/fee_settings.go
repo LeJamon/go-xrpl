@@ -6,7 +6,7 @@ import (
 	"fmt"
 
 	"github.com/LeJamon/go-xrpl/drops"
-	"github.com/LeJamon/go-xrpl/internal/tx/ledgerfields"
+	ledgerfields "github.com/LeJamon/go-xrpl/ledger/entry"
 )
 
 var ErrInvalidFeeSettings = errors.New("invalid FeeSettings field combination")

@@ -11,6 +11,7 @@ import (
 	"github.com/LeJamon/go-xrpl/internal/tx/ter"
 	"github.com/LeJamon/go-xrpl/keylet"
 	"github.com/LeJamon/go-xrpl/ledger/entry"
+	"github.com/LeJamon/go-xrpl/protocol"
 )
 
 // applyMPTPayment applies an MPT direct payment.
@@ -194,7 +195,7 @@ func (p *Payment) mptDirectTransfer(ctx *tx.ApplyContext, issuance *state.MPToke
 	// If sender is issuer: check MaximumAmount
 	// Reference: rippled View.cpp rippleSendMPT() lines 2044-2055
 	if senderIsIssuer {
-		maxAmount := uint64(maxMPTokenAmount)
+		maxAmount := maxMPTokenAmount
 		if issuance.MaximumAmount != nil {
 			maxAmount = *issuance.MaximumAmount
 		}
@@ -341,7 +342,7 @@ const (
 	// mptRateOne is the identity transfer rate (1.0) in rippled's rate format.
 	mptRateOne = 1_000_000_000
 	// maxMPTokenAmount is the maximum MPT value (int64 max)
-	maxMPTokenAmount = 0x7FFFFFFFFFFFFFFF
+	maxMPTokenAmount = protocol.MaxMPTokenAmount
 )
 
 // mptMultiply multiplies amount by rate/QUALITY_ONE using big.Int to avoid overflow.

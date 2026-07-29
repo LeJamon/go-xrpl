@@ -149,19 +149,19 @@ func deleteAMMTrustLines(view tx.LedgerView, ammAccountID [20]byte, maxTrustline
 				return ter.TefBAD_LEDGER
 			}
 
-			entryType, err := state.GetLedgerEntryType(itemData)
+			entryType, err := state.DecodeType(itemData)
 			if err != nil {
 				return ter.TecINTERNAL
 			}
 
 			// MPToken holdings are removed only after every trust line is gone,
 			// so an interrupted cleanup can still reinitialize the empty AMM.
-			if entry.Type(entryType) == entry.TypeAMM || entry.Type(entryType) == entry.TypeMPToken {
+			if entryType == entry.TypeAMM || entryType == entry.TypeMPToken {
 				i++
 				continue
 			}
 
-			if entry.Type(entryType) != entry.TypeRippleState {
+			if entryType != entry.TypeRippleState {
 				return ter.TecINTERNAL
 			}
 

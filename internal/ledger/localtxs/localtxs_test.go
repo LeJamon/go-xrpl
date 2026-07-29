@@ -17,6 +17,8 @@ import (
 	"github.com/LeJamon/go-xrpl/keylet"
 )
 
+const holdLedgers uint32 = 5
+
 func buildSignedBlob(t *testing.T, env *jtx.TestEnv, txn tx.Transaction, signer *jtx.Account) []byte {
 	t.Helper()
 	env.SignWith(txn, signer)
@@ -80,7 +82,7 @@ func TestLocalTxs_PushBack_Dedup(t *testing.T) {
 }
 
 // TestLocalTxs_Sweep_ExpiresOldEntries verifies that an entry pushed at
-// ledger N is dropped when the sweep view's seq exceeds N + HoldLedgers.
+// ledger N is dropped when the sweep view's seq exceeds the retention window.
 func TestLocalTxs_Sweep_ExpiresOldEntries(t *testing.T) {
 	env := jtx.NewTestEnv(t)
 	alice := jtx.NewAccount("alice")
@@ -88,16 +90,16 @@ func TestLocalTxs_Sweep_ExpiresOldEntries(t *testing.T) {
 	env.Fund(alice, bob)
 
 	// Advance the LCL enough that we can anchor strictly before
-	// view.Sequence() - HoldLedgers.
-	for range localtxs.HoldLedgers + 3 {
+	// view.Sequence() - holdLedgers.
+	for range holdLedgers + 3 {
 		env.Close()
 	}
 
 	ptx, view := pendingFromPay(t, env, alice, bob, env.Seq(alice))
-	if view.Sequence() <= localtxs.HoldLedgers+2 {
+	if view.Sequence() <= holdLedgers+2 {
 		t.Fatalf("test setup: view seq %d too small to expire", view.Sequence())
 	}
-	anchor := view.Sequence() - localtxs.HoldLedgers - 2
+	anchor := view.Sequence() - holdLedgers - 2
 
 	pool := localtxs.New()
 	pool.PushBack(anchor, ptx)

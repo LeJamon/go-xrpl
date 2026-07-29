@@ -14,7 +14,7 @@ import (
 	"github.com/LeJamon/go-xrpl/codec/binarycodec/types"
 	"github.com/LeJamon/go-xrpl/internal/ledger/state"
 	"github.com/LeJamon/go-xrpl/internal/tx"
-	"github.com/LeJamon/go-xrpl/internal/tx/ledgerfields"
+	ledgerfields "github.com/LeJamon/go-xrpl/ledger/entry"
 )
 
 // vaultData is the parsed form of an ltVAULT ledger entry.

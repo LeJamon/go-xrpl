@@ -374,7 +374,7 @@ func (r *replayRunner) executeReplayVerbose(state *StateFixture, env *EnvFixture
 		ParentHash:          parentHash,
 		ParentCloseTime:     parentCloseTime,
 		CloseTime:           applicationCloseTime,
-		CloseTimeResolution: env.CloseTimeResolution,
+		CloseTimeResolution: uint8(env.CloseTimeResolution),
 		CloseFlags:          env.CloseFlags,
 		Drops:               totalCoins,
 	}

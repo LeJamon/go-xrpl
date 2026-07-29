@@ -103,7 +103,7 @@ func TestService_GetLedgerByHashLoadsEvictedLedgerFromNodeStore(t *testing.T) {
 	got, err := svc.GetLedgerByHash(wantHash)
 	require.NoError(t, err)
 	require.NotSame(t, want, got)
-	require.Equal(t, ledger.StateValidated, got.State())
+	require.True(t, got.IsValidated())
 	require.Equal(t, wantHash, got.Hash())
 	baseFee, reserveBase, reserveIncrement := readFeesFromLedger(want)
 	require.Equal(t, drops.Fees{
@@ -129,13 +129,13 @@ func TestService_GetLedgerByHashLoadsEvictedLedgerFromNodeStore(t *testing.T) {
 	require.False(t, indexPresent)
 	persisted := svc.persistedLedgers[wantHash]
 	require.NotNil(t, persisted)
-	require.Equal(t, ledger.StateClosed, persisted.State())
+	require.True(t, persisted.IsClosed())
 	svc.mu.RUnlock()
 
 	cached, err := svc.GetLedgerByHash(wantHash)
 	require.NoError(t, err)
 	require.NotSame(t, got, cached)
-	require.Equal(t, ledger.StateValidated, cached.State())
+	require.True(t, cached.IsValidated())
 
 	clearPersistedCache := func() {
 		svc.mu.Lock()
@@ -244,7 +244,7 @@ func TestService_GetLedgerByHashDoesNotValidateStaleRelationalFork(t *testing.T)
 
 	loaded, err := svc.GetLedgerByHash(fork.Hash())
 	require.NoError(t, err)
-	require.Equal(t, ledger.StateClosed, loaded.State())
+	require.True(t, loaded.IsClosed())
 	require.False(t, loaded.IsValidated())
 }
 
@@ -311,7 +311,7 @@ func TestService_GetLedgerByHashValidatesHistoricalCanonicalChain(t *testing.T) 
 	loadedFork, err := svc.GetLedgerByHash(fork.Hash())
 	require.NoError(t, err)
 	require.False(t, loadedFork.IsValidated())
-	require.Equal(t, ledger.StateClosed, loadedFork.State())
+	require.True(t, loadedFork.IsClosed())
 }
 
 func TestService_GetLedgerByHashReturnsNotFoundWithoutPersistedLedger(t *testing.T) {
@@ -454,7 +454,11 @@ func TestService_GetLedgerByHashTreatsCorruptPersistedHeaderAsNotFound(t *testin
 }
 
 func TestService_PersistedLedgerHashCacheIsBounded(t *testing.T) {
-	svc := &Service{persistedLedgers: make(map[[32]byte]*ledger.Ledger)}
+	svc := &Service{
+		historyComponent: historyComponent{
+			persistedLedgers: make(map[[32]byte]*ledger.Ledger),
+		},
+	}
 	var firstHash, lastHash [32]byte
 	for i := uint32(1); i <= persistedLedgerCacheSize+1; i++ {
 		l := buildLedgerWithState(t, i)

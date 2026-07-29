@@ -14,8 +14,8 @@ import (
 	"github.com/LeJamon/go-xrpl/crypto/sha512half"
 	"github.com/LeJamon/go-xrpl/drops"
 	"github.com/LeJamon/go-xrpl/internal/ledger/header"
-	"github.com/LeJamon/go-xrpl/internal/tx/ledgerfields"
 	"github.com/LeJamon/go-xrpl/keylet"
+	ledgerfields "github.com/LeJamon/go-xrpl/ledger/entry"
 	"github.com/LeJamon/go-xrpl/shamap"
 )
 
@@ -76,6 +76,11 @@ type InitialAccount struct {
 	Balance  uint64
 	Sequence uint32
 	Flags    uint32
+}
+
+type validatedInitialAccount struct {
+	InitialAccount
+	id [20]byte
 }
 
 // DefaultGenesisAmendments returns all non-vetoed amendment IDs for the genesis ledger.
@@ -180,35 +185,52 @@ func Create(cfg Config) (*GenesisLedger, error) {
 	if closeTimeRes == 0 {
 		closeTimeRes = GenesisTimeResolution
 	}
+	if !validCloseTimeResolution(closeTimeRes) {
+		return nil, fmt.Errorf(
+			"invalid close time resolution %d: must be 10, 20, 30, 60, 90, or 120",
+			closeTimeRes,
+		)
+	}
 
 	accountID, address, err := GenerateAccountIDFromPassphrase(passphrase)
 	if err != nil {
 		return nil, fmt.Errorf("failed to generate genesis account: %w", err)
 	}
 
-	stateMap := shamap.New(shamap.TypeState)
-
-	txMap := shamap.New(shamap.TypeTransaction)
-
-	// The genesis account holds the total supply minus any initial accounts.
 	genesisBalance := totalXRP
-	for _, acc := range cfg.InitialAccounts {
-		if acc.Balance > genesisBalance {
-			return nil, errors.New("initial accounts balance exceeds total XRP")
-		}
-		genesisBalance -= acc.Balance
-	}
-
-	if err := createGenesisAccountWithBalance(stateMap, accountID, genesisBalance); err != nil {
-		return nil, fmt.Errorf("failed to create genesis account: %w", err)
-	}
-
+	initialAccounts := make([]validatedInitialAccount, 0, len(cfg.InitialAccounts))
+	seen := make(map[[20]byte]struct{}, len(cfg.InitialAccounts))
 	for _, acc := range cfg.InitialAccounts {
 		accID, err := DecodeAddress(acc.Address)
 		if err != nil {
 			return nil, fmt.Errorf("failed to decode address %s: %w", acc.Address, err)
 		}
-		if err := createInitialAccount(stateMap, accID, acc.Balance, acc.Sequence, acc.Flags); err != nil {
+		if accID == accountID {
+			return nil, fmt.Errorf("initial account %s is the genesis account", acc.Address)
+		}
+		if _, duplicate := seen[accID]; duplicate {
+			return nil, fmt.Errorf("duplicate initial account %s", acc.Address)
+		}
+		if acc.Balance > genesisBalance {
+			return nil, errors.New("initial accounts balance exceeds total XRP")
+		}
+		genesisBalance -= acc.Balance
+		seen[accID] = struct{}{}
+		initialAccounts = append(initialAccounts, validatedInitialAccount{
+			InitialAccount: acc,
+			id:             accID,
+		})
+	}
+
+	stateMap := shamap.New(shamap.TypeState)
+	txMap := shamap.New(shamap.TypeTransaction)
+
+	if err := createGenesisAccountWithBalance(stateMap, accountID, genesisBalance); err != nil {
+		return nil, fmt.Errorf("failed to create genesis account: %w", err)
+	}
+
+	for _, acc := range initialAccounts {
+		if err := createInitialAccount(stateMap, acc.id, acc.Balance, acc.Sequence, acc.Flags); err != nil {
 			return nil, fmt.Errorf("failed to create account %s: %w", acc.Address, err)
 		}
 	}
@@ -245,7 +267,7 @@ func Create(cfg Config) (*GenesisLedger, error) {
 		LedgerIndex:         GenesisLedgerSequence,
 		ParentCloseTime:     time.Date(2000, 1, 1, 0, 0, 0, 0, time.UTC),
 		CloseTime:           time.Date(2000, 1, 1, 0, 0, 0, 0, time.UTC),
-		CloseTimeResolution: closeTimeRes,
+		CloseTimeResolution: uint8(closeTimeRes),
 		CloseFlags:          0,
 		ParentHash:          [32]byte{}, // Genesis has no parent
 		TxHash:              txHash,
@@ -264,6 +286,15 @@ func Create(cfg Config) (*GenesisLedger, error) {
 		GenesisAccount: accountID,
 		GenesisAddress: address,
 	}, nil
+}
+
+func validCloseTimeResolution(resolution uint32) bool {
+	switch resolution {
+	case 10, 20, 30, 60, 90, 120:
+		return true
+	default:
+		return false
+	}
 }
 
 func createGenesisAccountWithBalance(stateMap *shamap.SHAMap, accountID [20]byte, balance uint64) error {

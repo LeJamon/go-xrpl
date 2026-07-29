@@ -7,7 +7,7 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/LeJamon/go-xrpl/internal/tx/ledgerfields"
+	ledgerfields "github.com/LeJamon/go-xrpl/ledger/entry"
 )
 
 // DisabledValidator is one entry of the NegativeUNL's sfDisabledValidators

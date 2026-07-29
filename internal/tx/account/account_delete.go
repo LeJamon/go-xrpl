@@ -180,15 +180,14 @@ func (a *AccountDelete) Apply(ctx *tx.ApplyContext) ter.Result {
 		if err != nil || data == nil {
 			return ter.TefBAD_LEDGER
 		}
-		etRaw, err := state.GetLedgerEntryType(data)
+		et, err := state.DecodeType(data)
 		if err != nil {
 			return ter.TecHAS_OBLIGATIONS
 		}
-		et := entry.Type(etRaw)
 		deleter := nonObligationDeleter(et)
 		if deleter == nil {
 			ctx.Log.Error("account delete: undeletable item in owner directory",
-				"entryType", etRaw,
+				"entryType", et,
 			)
 			return ter.TecHAS_OBLIGATIONS
 		}

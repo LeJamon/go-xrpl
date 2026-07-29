@@ -2,6 +2,9 @@ package genesis
 
 import (
 	"encoding/hex"
+	"math"
+	"strconv"
+	"strings"
 	"testing"
 
 	"github.com/LeJamon/go-xrpl/amendment"
@@ -9,6 +12,154 @@ import (
 	"github.com/LeJamon/go-xrpl/internal/ledger/state"
 	"github.com/LeJamon/go-xrpl/keylet"
 )
+
+func TestCreateValidatesCloseTimeResolution(t *testing.T) {
+	t.Parallel()
+
+	for _, resolution := range []uint32{0, 10, 20, 30, 60, 90, 120} {
+		t.Run(strconv.FormatUint(uint64(resolution), 10), func(t *testing.T) {
+			cfg := DefaultConfig()
+			cfg.CloseTimeResolution = resolution
+			genesis, err := Create(cfg)
+			if err != nil {
+				t.Fatalf("Create resolution %d: %v", resolution, err)
+			}
+			want := resolution
+			if want == 0 {
+				want = GenesisTimeResolution
+			}
+			if got := uint32(genesis.Header.CloseTimeResolution); got != want {
+				t.Fatalf("CloseTimeResolution = %d, want %d", got, want)
+			}
+		})
+	}
+
+	for _, resolution := range []uint32{1, 9, 11, 255, 256, math.MaxUint32} {
+		t.Run(strconv.FormatUint(uint64(resolution), 10), func(t *testing.T) {
+			cfg := DefaultConfig()
+			cfg.CloseTimeResolution = resolution
+			if genesis, err := Create(cfg); err == nil || genesis != nil {
+				t.Fatalf("Create resolution %d = (%v, %v), want nil ledger and error", resolution, genesis, err)
+			}
+		})
+	}
+}
+
+func TestCreateValidatesInitialAccountsBeforeBuilding(t *testing.T) {
+	t.Parallel()
+
+	_, firstAddress, err := GenerateAccountIDFromPassphrase("initial-account-one")
+	if err != nil {
+		t.Fatalf("derive first account: %v", err)
+	}
+
+	tests := []struct {
+		name     string
+		accounts []InitialAccount
+		total    uint64
+		wantErr  string
+	}{
+		{
+			name: "invalid address",
+			accounts: []InitialAccount{
+				{Address: "not-an-xrpl-address", Balance: 1},
+			},
+			wantErr: "failed to decode address",
+		},
+		{
+			name: "duplicate account",
+			accounts: []InitialAccount{
+				{Address: firstAddress, Balance: 1},
+				{Address: firstAddress, Balance: 2},
+			},
+			wantErr: "duplicate initial account",
+		},
+		{
+			name: "genesis account",
+			accounts: []InitialAccount{
+				{Address: "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh", Balance: 1},
+			},
+			wantErr: "is the genesis account",
+		},
+		{
+			name: "allocation exceeds supply",
+			accounts: []InitialAccount{
+				{Address: firstAddress, Balance: 101},
+			},
+			total:   100,
+			wantErr: "initial accounts balance exceeds total XRP",
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			cfg := DefaultConfig()
+			cfg.InitialAccounts = test.accounts
+			if test.total != 0 {
+				cfg.TotalXRP = test.total
+			}
+			genesis, err := Create(cfg)
+			if err == nil || genesis != nil {
+				t.Fatalf("Create = (%v, %v), want nil ledger and error", genesis, err)
+			}
+			if !strings.Contains(err.Error(), test.wantErr) {
+				t.Fatalf("Create error = %q, want substring %q", err, test.wantErr)
+			}
+		})
+	}
+}
+
+func TestCreateInitialAccountsConservesSupply(t *testing.T) {
+	t.Parallel()
+
+	firstID, firstAddress, err := GenerateAccountIDFromPassphrase("initial-account-one")
+	if err != nil {
+		t.Fatalf("derive first account: %v", err)
+	}
+	secondID, secondAddress, err := GenerateAccountIDFromPassphrase("initial-account-two")
+	if err != nil {
+		t.Fatalf("derive second account: %v", err)
+	}
+
+	const total = uint64(1_000)
+	cfg := DefaultConfig()
+	cfg.TotalXRP = total
+	cfg.InitialAccounts = []InitialAccount{
+		{Address: firstAddress, Balance: 250},
+		{Address: secondAddress, Balance: 125},
+	}
+	genesis, err := Create(cfg)
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+
+	balances := make([]uint64, 0, 3)
+	for _, accountID := range [][20]byte{genesis.GenesisAccount, firstID, secondID} {
+		item, found, err := genesis.StateMap.Get(keylet.Account(accountID).Key)
+		if err != nil {
+			t.Fatalf("read account %x: %v", accountID, err)
+		}
+		if !found {
+			t.Fatalf("account %x not found", accountID)
+		}
+		account, err := state.ParseAccountRoot(item.Data())
+		if err != nil {
+			t.Fatalf("parse account %x: %v", accountID, err)
+		}
+		balances = append(balances, account.Balance)
+	}
+
+	var sum uint64
+	for _, balance := range balances {
+		sum += balance
+	}
+	if sum != total {
+		t.Fatalf("account balance sum = %d, want %d", sum, total)
+	}
+	if genesis.Header.Drops != total {
+		t.Fatalf("header drops = %d, want %d", genesis.Header.Drops, total)
+	}
+}
 
 func TestGenerateGenesisAccountID(t *testing.T) {
 	t.Parallel()

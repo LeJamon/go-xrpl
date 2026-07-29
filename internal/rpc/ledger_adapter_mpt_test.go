@@ -3,6 +3,7 @@ package rpc
 import (
 	"testing"
 
+	"github.com/LeJamon/go-xrpl/internal/ledger/genesis"
 	"github.com/LeJamon/go-xrpl/internal/ledger/service"
 	"github.com/LeJamon/go-xrpl/internal/ledger/state"
 	"github.com/LeJamon/go-xrpl/internal/rpc/types"
@@ -25,7 +26,7 @@ func TestRPCBookAmountMPT(t *testing.T) {
 }
 
 func TestLedgerServiceAdapterSimulatePreservesCurrentLedgerCloseTime(t *testing.T) {
-	svc, err := service.New(service.DefaultConfig())
+	svc, err := service.New(service.Config{Standalone: true, GenesisConfig: genesis.DefaultConfig()})
 	require.NoError(t, err)
 	require.NoError(t, svc.Start())
 	t.Cleanup(svc.Stop)

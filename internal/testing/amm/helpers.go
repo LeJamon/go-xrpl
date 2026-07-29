@@ -462,8 +462,9 @@ func (e *AMMTestEnv) CheckInvariant(asset1, asset2 tx.Asset, fixAMMv1_3 bool, sh
 	}
 
 	// Compute sqrt(amount1 * amount2)
-	product := bal1.MulRounded(bal2, false, mode)
-	result := product.SqrtRounded(mode)
+	numberContext := state.NewNumberContext(state.MantissaScaleSmall, true)
+	product := bal1.MulWithNumberContext(bal2, numberContext, false, mode)
+	result := product.SqrtWithNumberContext(numberContext, mode)
 
 	cmp := result.Compare(lptBalance)
 	if shouldFail {

@@ -916,15 +916,6 @@ func TestAMMBookStep_FixDefaultInnerObj(t *testing.T) {
 // TestAMMBookStep_FixChangeSpotPriceQuality tests spot price quality fix.
 // Reference: rippled AMM_test.cpp testFixChangeSpotPriceQuality (line 6405)
 func TestAMMBookStep_FixChangeSpotPriceQuality(t *testing.T) {
-	// Save and restore numberSwitchover state — other tests may contaminate via the engine.
-	// rippled's test uses `all` features (fixUniversalNumber enabled), but the pre-fix path's
-	// toAmount rounding is at STAmount precision. Our Amount arithmetic delegates to XRPLNumber
-	// when switchover is on, which changes the quadratic solver's precision.
-	// Use switchover=false to match the pre-fix path's expected behavior.
-	savedSwitchover := state.GetNumberSwitchover()
-	state.SetNumberSwitchover(false)
-	defer state.SetNumberSwitchover(savedSwitchover)
-
 	type Status int
 	const (
 		SucceedShouldSucceedResize Status = iota

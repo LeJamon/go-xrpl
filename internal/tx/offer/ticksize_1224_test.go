@@ -49,7 +49,7 @@ func TestMultiplyByQualityRetainsTransactionNumberScaleUntilIOUBoundary(t *testi
 			currency,
 			issuer,
 			rules,
-			state.NewNumberContext(scale),
+			state.NewNumberContext(scale, true),
 		)
 		if result.Mantissa() != 8_301_922_391_725_538 || result.Exponent() != -14 {
 			t.Fatalf("scale %d: got %de%d, want 8301922391725538e-14", scale, result.Mantissa(), result.Exponent())

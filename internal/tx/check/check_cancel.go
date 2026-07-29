@@ -8,6 +8,7 @@ import (
 	"github.com/LeJamon/go-xrpl/internal/tx"
 	"github.com/LeJamon/go-xrpl/internal/tx/ter"
 	"github.com/LeJamon/go-xrpl/keylet"
+	"github.com/LeJamon/go-xrpl/ledger/entry"
 )
 
 // CheckCancel cancels a Check.
@@ -76,7 +77,8 @@ func (c *CheckCancel) Preclaim(view tx.LedgerView, config tx.EngineConfig) ter.R
 	if readErr != nil || checkData == nil {
 		return ter.TecNO_ENTRY
 	}
-	if state.EntryType(checkData) != "Check" {
+	checkType, err := state.DecodeType(checkData)
+	if err != nil || checkType != entry.TypeCheck {
 		return ter.TecNO_ENTRY
 	}
 	check, parseErr := state.ParseCheck(checkData)
@@ -122,7 +124,8 @@ func (c *CheckCancel) Apply(ctx *tx.ApplyContext) ter.Result {
 
 	// View.Read is untyped, so reject a CheckID that resolves to a non-Check
 	// object, matching rippled's tecNO_ENTRY.
-	if state.EntryType(checkData) != "Check" {
+	checkType, err := state.DecodeType(checkData)
+	if err != nil || checkType != entry.TypeCheck {
 		return ter.TecNO_ENTRY
 	}
 

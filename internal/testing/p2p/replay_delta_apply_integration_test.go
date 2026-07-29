@@ -237,21 +237,13 @@ func TestReplay_TefTxDoesNotInstallPeerLeaf(t *testing.T) {
 	hdrBytes := header.AddRaw(successor.Header(), false)
 	successorHash := successor.Hash()
 
-	// Wire response carries ONE legitimate tx; GotResponse builds r.txs
-	// from it. We then force-inject a second DecodedTx with the same
-	// hash + blob to simulate a divergent delta — the engine returns
-	// tefALREADY on the duplicate apply, which D5 must surface as
-	// ErrReplayTxDiverged instead of silently installing the peer leaf.
 	resp := &message.ReplayDeltaResponse{
 		LedgerHash:   successorHash[:],
 		LedgerHeader: hdrBytes,
-		Transactions: [][]byte{txMetaBlob},
+		Transactions: [][]byte{txMetaBlob, txMetaBlob},
 	}
 	rd := inbound.NewReplayDelta(successorHash, 7, parent, nil)
 	require.NoError(t, rd.GotResponse(resp))
-
-	// Duplicate hash in the replay set → tefALREADY on the second apply.
-	injectDuplicateTx(rd)
 
 	_, err = rd.Apply(tx.EngineConfig{
 		BaseFee:                   10,
@@ -263,16 +255,6 @@ func TestReplay_TefTxDoesNotInstallPeerLeaf(t *testing.T) {
 	require.Error(t, err, "tef during replay must fail the replay loudly (D5 — only applied==true installs peer leaf)")
 	assert.ErrorIs(t, err, inbound.ErrReplayTxDiverged,
 		"tef during replay must surface as ErrReplayTxDiverged rather than silently continuing")
-}
-
-// injectDuplicateTx appends a duplicate of r.txs[0] to r.txs so Apply
-// will replay the same hash twice and observe tefALREADY on the
-// second pass. Cross-package access to the unexported field is OK
-// because this is a test file linked into the inbound package's
-// test binary indirectly via the inbound import — here we use the
-// public TxsForTest hook below.
-func injectDuplicateTx(rd *inbound.ReplayDelta) {
-	rd.AppendTxForTest(rd.OrderedTxs()[0])
 }
 
 // buildClosedSuccessor opens a child of parent, applies a single

@@ -617,7 +617,7 @@ func TestService_FastLoadReplacesSameHeightOnlyAfterTrustedQuorum(t *testing.T) 
 	require.False(t, svc.NeedsInitialSync())
 
 	events := make(chan *LedgerAcceptedEvent, 4)
-	svc.SetEventCallback(func(event *LedgerAcceptedEvent) {
+	setEventSinkFunc(svc, func(event *LedgerAcceptedEvent) {
 		events <- event
 	})
 

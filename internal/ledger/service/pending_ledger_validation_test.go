@@ -284,7 +284,7 @@ func TestSetValidatedLedger_StashesOnForkDivergence(t *testing.T) {
 		"handler must fire exactly once with the stashed seq")
 }
 
-// TestAdoptLedgerWithState_EventCallbackFiresAfterValidationFirstRace pins
+// TestAdoptLedgerWithState_EventSinkFiresAfterValidationFirstRace pins
 // the validation-first race fix: when SetValidatedLedger arrives BEFORE the
 // adopt path installs the ledger, the subsequent adopt's F4 drain promotes
 // validatedLedger in-line — but nothing will ever call SetValidatedLedger
@@ -294,7 +294,7 @@ func TestSetValidatedLedger_StashesOnForkDivergence(t *testing.T) {
 // drain returns true, and the hash-keyed stash must NOT be populated in
 // that case (no one will drain it). Skipping the stash also prevents a
 // double-fire hazard if a late duplicate SetValidatedLedger arrives.
-func TestAdoptLedgerWithState_EventCallbackFiresAfterValidationFirstRace(t *testing.T) {
+func TestAdoptLedgerWithState_EventSinkFiresAfterValidationFirstRace(t *testing.T) {
 	cfg := DefaultConfig()
 	svc, err := New(cfg)
 	require.NoError(t, err)
@@ -307,7 +307,7 @@ func TestAdoptLedgerWithState_EventCallbackFiresAfterValidationFirstRace(t *test
 	)
 	done := make(chan struct{}, 1)
 
-	svc.SetEventCallback(func(event *LedgerAcceptedEvent) {
+	setEventSinkFunc(svc, func(event *LedgerAcceptedEvent) {
 		mu.Lock()
 		callbackCount++
 		lastEvent = event
@@ -408,13 +408,13 @@ func TestAdoptLedgerWithState_EventCallbackFiresAfterValidationFirstRace(t *test
 		"late-duplicate SetValidatedLedger must not cause a second eventCallback dispatch")
 }
 
-// TestAcceptConsensusResult_EventCallbackFiresAfterValidationFirstRace pins
+// TestAcceptConsensusResult_EventSinkFiresAfterValidationFirstRace pins
 // the same fix for the consensus-close path. When a trusted-validation
 // gossip for seq N arrives before the local consensus round closes seq N,
 // AcceptConsensusResult's F4 drain promotes validatedLedger in-line — and
 // likewise no later SetValidatedLedger will arrive to drain the hash-keyed
 // stash. The eventCallback must fire inline.
-func TestAcceptConsensusResult_EventCallbackFiresAfterValidationFirstRace(t *testing.T) {
+func TestAcceptConsensusResult_EventSinkFiresAfterValidationFirstRace(t *testing.T) {
 	cfg := DefaultConfig()
 	svc, err := New(cfg)
 	require.NoError(t, err)
@@ -427,7 +427,7 @@ func TestAcceptConsensusResult_EventCallbackFiresAfterValidationFirstRace(t *tes
 	)
 	done := make(chan struct{}, 1)
 
-	svc.SetEventCallback(func(event *LedgerAcceptedEvent) {
+	setEventSinkFunc(svc, func(event *LedgerAcceptedEvent) {
 		mu.Lock()
 		callbackCount++
 		lastEvent = event

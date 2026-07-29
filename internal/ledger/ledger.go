@@ -66,8 +66,6 @@ type Reader interface {
 	// TotalDrops returns the total XRP in existence
 	TotalDrops() uint64
 
-	State() State
-
 	Read(k keylet.Keylet) ([]byte, error)
 
 	Exists(k keylet.Keylet) (bool, error)
@@ -169,7 +167,7 @@ func newOpen(parent *Ledger, closeTime time.Time, building bool) (*Ledger, error
 	// previousAgree through every NewOpen caller.
 	newLedgerSeq := parent.header.LedgerIndex + 1
 	newResolution := consensus.GetNextLedgerTimeResolution(
-		parent.header.CloseTimeResolution,
+		uint32(parent.header.CloseTimeResolution),
 		parent.header.GetCloseAgree(),
 		newLedgerSeq,
 	)
@@ -182,7 +180,7 @@ func newOpen(parent *Ledger, closeTime time.Time, building bool) (*Ledger, error
 		ParentHash:          parent.header.Hash,
 		ParentCloseTime:     parent.header.CloseTime,
 		CloseTime:           closeTime,
-		CloseTimeResolution: newResolution,
+		CloseTimeResolution: uint8(newResolution),
 		Drops:               parent.header.Drops,
 		// Hash, TxHash, AccountHash will be set when closed
 	}
@@ -248,16 +246,6 @@ func NewFromHeaderContext(
 		state = StateValidated
 	}
 	return newFromHeaderContext(ctx, hdr, stateMap, txMap, fees, state)
-}
-
-// NewClosedFromHeader reconstructs an immutable ledger without asserting validation.
-func NewClosedFromHeader(
-	hdr header.LedgerHeader,
-	stateMap *shamap.SHAMap,
-	txMap *shamap.SHAMap,
-	fees drops.Fees,
-) (*Ledger, error) {
-	return NewClosedFromHeaderContext(context.Background(), hdr, stateMap, txMap, fees)
 }
 
 // NewClosedFromHeaderContext reconstructs a closed ledger while forwarding ctx
@@ -378,19 +366,13 @@ func (l *Ledger) ParentCloseTime() time.Time {
 func (l *Ledger) CloseTimeResolution() uint32 {
 	l.mu.RLock()
 	defer l.mu.RUnlock()
-	return l.header.CloseTimeResolution
+	return uint32(l.header.CloseTimeResolution)
 }
 
 func (l *Ledger) TotalDrops() uint64 {
 	l.mu.RLock()
 	defer l.mu.RUnlock()
 	return l.header.Drops
-}
-
-func (l *Ledger) State() State {
-	l.mu.RLock()
-	defer l.mu.RUnlock()
-	return l.state
 }
 
 // Header returns a copy of the ledger header

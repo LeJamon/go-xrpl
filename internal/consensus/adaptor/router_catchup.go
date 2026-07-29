@@ -1337,15 +1337,19 @@ func (r *Router) RequestLedger(hash [32]byte, seq uint32) (acquiring map[string]
 // startGenericAcquisition begins (or joins) a ReasonGeneric acquisition for
 // hash, issuing a base fetch from a selected peer only when it creates a fresh
 // one. Returns the acquisition snapshot, or ok=false when no peer is available
-// or the initial fetch could not be issued. The fetchTracker's GetOrCreate is
-// atomic, so a concurrent consensus catch-up arming the same hash is joined
-// rather than duplicated.
+// before creation. If the selected peer disconnects during the initial request,
+// the acquisition remains active so maintenance can select a replacement. The
+// fetchTracker's GetOrCreate is atomic, so a concurrent consensus catch-up
+// arming the same hash is joined rather than duplicated.
 func (r *Router) startGenericAcquisition(hash [32]byte, seq uint32) (map[string]any, bool) {
 	if il := r.fetchTracker.Find(hash); il != nil {
 		return inbound.AcquisitionJSON(il.Snapshot()), true
 	}
 
-	peerID, _ := r.selectAcquisitionPeer(seq)
+	peerID, ok := r.selectAcquisitionPeer(seq)
+	if !ok {
+		return nil, false
+	}
 
 	il, created := r.fetchTracker.GetOrCreate(hash, func() *inbound.Ledger {
 		return inbound.NewGeneric(hash, seq, peerID, r.logger, r.acquisitionOpts()...)
@@ -1356,9 +1360,7 @@ func (r *Router) startGenericAcquisition(hash [32]byte, seq uint32) (map[string]
 			"hash", fmt.Sprintf("%x", hash[:8]),
 			"peer", peerID,
 		)
-		if peerID != 0 {
-			r.requestLedgerBase(il, peerID, "ledger_request: failed to request ledger base")
-		}
+		r.requestLedgerBase(il, peerID, "ledger_request: failed to request ledger base")
 	}
 	return inbound.AcquisitionJSON(il.Snapshot()), true
 }

@@ -7,6 +7,7 @@ import (
 	"github.com/LeJamon/go-xrpl/amendment"
 	"github.com/LeJamon/go-xrpl/internal/ledger/state"
 	"github.com/LeJamon/go-xrpl/internal/tx/lending/lmath"
+	"github.com/LeJamon/go-xrpl/protocol"
 )
 
 // maxDataPayloadLength bounds the sfData blob on lending objects (rippled
@@ -14,7 +15,7 @@ import (
 const maxDataPayloadLength = 256
 
 // maxMPTokenAmount is the DebtMaximum upper bound (2^63-1).
-const maxMPTokenAmount int64 = 0x7FFFFFFFFFFFFFFF
+const maxMPTokenAmount = int64(protocol.MaxMPTokenAmount)
 
 // LoanSet schedule bounds (rippled Protocol.h): the minimum payment interval and
 // grace period are both 60 seconds.

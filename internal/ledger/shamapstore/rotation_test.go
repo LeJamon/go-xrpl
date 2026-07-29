@@ -448,6 +448,171 @@ func TestRotator_ReconcilesDurableGenerationAfterBookkeepingCrash(t *testing.T) 
 	}
 }
 
+func TestRotator_ReconcileFailureBlocksAnotherGenerationRotation(t *testing.T) {
+	store, err := New(false, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.SetRotation(500, 1); err != nil {
+		t.Fatal(err)
+	}
+	nodes := &fakeGenerationPruner{committed: true}
+	r := NewRotator(store, nodes, nil, RotationConfig{DeleteInterval: 256}, nil)
+	r.SetStateRefresh(func(_ context.Context, seq uint32, _ func(time.Duration) error) (uint32, error) {
+		return seq, nil
+	}, nil, nil)
+
+	realPersist := store.persist
+	writeErr := errors.New("bookkeeping unavailable")
+	store.persist = func(next persistedState) (bool, error) {
+		if next.LastRotated == 500 {
+			return true, nil
+		}
+		return false, writeErr
+	}
+	r.maybeRotate(context.Background(), 800)
+	if nodes.rotations != 1 {
+		t.Fatalf("rotations after committed generation = %d, want 1", nodes.rotations)
+	}
+	r.maybeRotate(context.Background(), 1100)
+	if nodes.rotations != 1 {
+		t.Fatalf("rotation proceeded with unreconciled generation: %d", nodes.rotations)
+	}
+
+	store.persist = realPersist
+	r.maybeRotate(context.Background(), 1100)
+	if nodes.rotations != 2 {
+		t.Fatalf("rotations after reconciliation = %d, want 2", nodes.rotations)
+	}
+}
+
+func TestRotator_LifecycleIsIdempotent(t *testing.T) {
+	store, err := New(false, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	r := NewRotator(store, &fakeNodePruner{}, nil, RotationConfig{DeleteInterval: 256}, nil)
+
+	var starts sync.WaitGroup
+	for range 20 {
+		starts.Add(1)
+		go func() {
+			defer starts.Done()
+			r.Start()
+		}()
+	}
+	starts.Wait()
+
+	var stops sync.WaitGroup
+	for range 20 {
+		stops.Add(1)
+		go func() {
+			defer stops.Done()
+			r.Stop()
+		}()
+	}
+	stops.Wait()
+	r.Start()
+	r.Stop()
+}
+
+func TestRotator_StopBeforeStartReturns(t *testing.T) {
+	store, err := New(false, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	r := NewRotator(store, &fakeNodePruner{}, nil, RotationConfig{DeleteInterval: 256}, nil)
+	done := make(chan struct{})
+	go func() {
+		r.Stop()
+		close(done)
+	}()
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("Stop before Start blocked")
+	}
+	r.Start()
+	r.Stop()
+}
+
+func TestRotator_StateRefreshHooksCanBeUpdatedConcurrently(t *testing.T) {
+	r, _, _ := newTestRotator(t, false, 256)
+	refresh := func(
+		_ context.Context,
+		seq uint32,
+		_ func(time.Duration) error,
+	) (uint32, error) {
+		return seq, nil
+	}
+	r.SetStateRefresh(refresh, func(uint32) {}, func() func() {
+		return func() {}
+	})
+	r.maybeRotate(context.Background(), 500)
+
+	var updates sync.WaitGroup
+	updates.Add(1)
+	go func() {
+		defer updates.Done()
+		for range 1000 {
+			r.SetStateRefresh(refresh, func(uint32) {}, func() func() {
+				return func() {}
+			})
+		}
+	}()
+	r.maybeRotate(context.Background(), 800)
+	updates.Wait()
+}
+
+func TestRotator_StateRefreshUsesConsistentHookSnapshot(t *testing.T) {
+	r, _, _ := newTestRotator(t, false, 256)
+	entered := make(chan struct{})
+	release := make(chan struct{})
+	done := make(chan struct{})
+	var oldAdvance, oldPrune, newPrune int
+	r.SetStateRefresh(
+		func(
+			_ context.Context,
+			seq uint32,
+			_ func(time.Duration) error,
+		) (uint32, error) {
+			close(entered)
+			<-release
+			return seq, nil
+		},
+		func(uint32) { oldAdvance++ },
+		func() func() {
+			oldPrune++
+			return func() {}
+		},
+	)
+	r.maybeRotate(context.Background(), 500)
+	go func() {
+		r.maybeRotate(context.Background(), 800)
+		close(done)
+	}()
+	<-entered
+	r.SetStateRefresh(
+		func(_ context.Context, seq uint32, _ func(time.Duration) error) (uint32, error) {
+			return seq, nil
+		},
+		func(uint32) {},
+		func() func() {
+			newPrune++
+			return func() {}
+		},
+	)
+	close(release)
+	<-done
+
+	if oldAdvance != 1 || oldPrune != 1 || newPrune != 0 {
+		t.Fatalf(
+			"mixed hook bundle: oldAdvance=%d oldPrune=%d newPrune=%d",
+			oldAdvance, oldPrune, newPrune,
+		)
+	}
+}
+
 func TestRotate_DeletesBelowOldBoundaryInBothStores(t *testing.T) {
 	r, nodes, rel := newTestRotator(t, false, 256)
 	nodes.before = func() {

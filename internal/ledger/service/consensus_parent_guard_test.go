@@ -67,7 +67,7 @@ func TestPreferredChainSwitchMovesFrontierBeforeConsensusBuild(t *testing.T) {
 	staleSeq := preferredParent.Sequence() + historyWindow + 10
 	staleToken := svc.beginValidatedPersistence(staleSeq, [32]byte{0xEE})
 	svc.completeMu.Lock()
-	svc.completedLedgers.AddRange(
+	svc.completedLedgers.addRange(
 		preferredParent.Sequence()+1,
 		staleSeq,
 	)

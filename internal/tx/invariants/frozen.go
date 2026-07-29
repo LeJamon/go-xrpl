@@ -5,7 +5,9 @@ import (
 
 	"github.com/LeJamon/go-xrpl/amendment"
 	"github.com/LeJamon/go-xrpl/internal/ledger/state"
+	txcore "github.com/LeJamon/go-xrpl/internal/tx"
 	"github.com/LeJamon/go-xrpl/keylet"
+	"github.com/LeJamon/go-xrpl/ledger/entry"
 )
 
 // ---------------------------------------------------------------------------
@@ -57,7 +59,13 @@ type frozenIssueKey struct {
 	issuer   string // base58 address of the potential issuer
 }
 
-func checkTransfersNotFrozen(tx Transaction, entries []InvariantEntry, view ReadView, rules *amendment.Rules) *InvariantViolation {
+func checkTransfersNotFrozen(
+	tx Transaction,
+	entries []InvariantEntry,
+	view ReadView,
+	rules *amendment.Rules,
+	numberContexts ...state.NumberContext,
+) *InvariantViolation {
 	// Phase 1: visitEntry — collect AccountRoot possible issuers and
 	// RippleState balance changes.
 
@@ -66,6 +74,10 @@ func checkTransfersNotFrozen(tx Transaction, entries []InvariantEntry, view Read
 	// failure when enforcing rather than a silently skipped entry.
 	// Reference: rippled InvariantCheck.cpp lines 706-707.
 	enforce := rules != nil && rules.DeepFreezeEnabled()
+	numberContext := txcore.NumberContextForRules(rules)
+	if len(numberContexts) > 0 {
+		numberContext = numberContexts[0]
+	}
 
 	// possibleIssuers maps account address → parsed AccountRoot data.
 	// Used to look up global freeze flag without hitting the view.
@@ -90,9 +102,12 @@ func checkTransfersNotFrozen(tx Transaction, entries []InvariantEntry, view Read
 		// --- isValidEntry ---
 
 		// Check type from afterData.
-		afterType := state.EntryType(afterData)
+		afterType, err := state.DecodeType(afterData)
+		if err != nil {
+			continue
+		}
 
-		if afterType == "AccountRoot" {
+		if afterType == entry.TypeAccountRoot {
 			// Store as possible issuer for finalize phase.
 			acct, err := state.ParseAccountRoot(afterData)
 			if err != nil {
@@ -110,15 +125,15 @@ func checkTransfersNotFrozen(tx Transaction, entries []InvariantEntry, view Read
 			continue
 		}
 
-		if afterType != "RippleState" {
+		if afterType != entry.TypeRippleState {
 			continue
 		}
 
 		// If before exists, verify it's also a RippleState.
 		// Reference: rippled line 761-762
 		if e.Before != nil {
-			beforeType := state.EntryType(e.Before)
-			if beforeType != "RippleState" {
+			beforeType, err := state.DecodeType(e.Before)
+			if err != nil || beforeType != entry.TypeRippleState {
 				continue
 			}
 		}
@@ -189,7 +204,11 @@ func checkTransfersNotFrozen(tx Transaction, entries []InvariantEntry, view Read
 			}
 		}
 
-		balanceChange, err := balanceAfter.Sub(balanceBefore)
+		balanceChange, err := balanceAfter.SubWithNumberContext(
+			balanceBefore,
+			numberContext,
+			state.RoundToNearest,
+		)
 		if err != nil {
 			continue
 		}

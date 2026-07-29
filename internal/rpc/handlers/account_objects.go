@@ -9,6 +9,7 @@ import (
 	"github.com/LeJamon/go-xrpl/codec/binarycodec"
 	"github.com/LeJamon/go-xrpl/internal/ledger/service/svcerr"
 	"github.com/LeJamon/go-xrpl/internal/rpc/types"
+	"github.com/LeJamon/go-xrpl/protocol"
 )
 
 // AccountObjectsMethod handles account_objects: it enumerates the raw ledger
@@ -217,66 +218,8 @@ func (m *AccountObjectsMethod) Handle(ctx *types.RpcContext, params json.RawMess
 // sleTypeToRPCName converts a PascalCase SLE type name to the rippled RPC name
 // (lowercase/snake_case) used in the deletionBlockerTypes map.
 func sleTypeToRPCName(sleType string) string {
-	switch sleType {
-	case "AccountRoot":
-		return "account"
-	case "AMM":
-		return "amm"
-	case "Bridge":
-		return "bridge"
-	case "Check":
-		return "check"
-	case "Credential":
-		return "credential"
-	case "Delegate":
-		return "delegate"
-	case "DepositPreauth":
-		return "deposit_preauth"
-	case "DID":
-		return "did"
-	case "DirectoryNode":
-		return "directory"
-	case "Escrow":
-		return "escrow"
-	case "FeeSettings":
-		return "fee"
-	case "LedgerHashes":
-		return "hashes"
-	case "Loan":
-		return "loan"
-	case "LoanBroker":
-		return "loan_broker"
-	case "MPToken":
-		return "mptoken"
-	case "MPTokenIssuance":
-		return "mpt_issuance"
-	case "NFTokenOffer":
-		return "nft_offer"
-	case "NFTokenPage":
-		return "nft_page"
-	case "NegativeUNL":
-		return "nunl"
-	case "Offer":
-		return "offer"
-	case "Oracle":
-		return "oracle"
-	case "PayChannel":
-		return "payment_channel"
-	case "PermissionedDomain":
-		return "permissioned_domain"
-	case "RippleState":
-		return "state"
-	case "SignerList":
-		return "signer_list"
-	case "Ticket":
-		return "ticket"
-	case "Vault":
-		return "vault"
-	case "XChainOwnedClaimID":
-		return "xchain_owned_claim_id"
-	case "XChainOwnedCreateAccountClaimID":
-		return "xchain_owned_create_account_claim_id"
-	default:
-		return strings.ToLower(sleType)
+	if info, ok := protocol.LedgerEntryTypeByName(sleType); ok && !info.Deprecated && info.RPCName != "" {
+		return info.RPCName
 	}
+	return strings.ToLower(sleType)
 }
