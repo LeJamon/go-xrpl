@@ -612,12 +612,17 @@ func (r *ReplayDelta) verifyAndBuild(resp *message.ReplayDeltaResponse) error {
 	txMap := shamap.New(shamap.TypeTransaction)
 
 	decoded := make([]DecodedTx, 0, len(resp.Transactions))
+	seenTxIDs := make(map[[32]byte]struct{}, len(resp.Transactions))
 	for i, blob := range resp.Transactions {
 		txBytes, metaBytes, err := splitTxWithMetaBlob(blob)
 		if err != nil {
 			return fmt.Errorf("tx %d: split blob: %w", i, err)
 		}
 		txID := sha512half.Sum(protocol.HashPrefixTransactionID().Bytes(), txBytes)
+		if _, exists := seenTxIDs[txID]; exists {
+			return fmt.Errorf("tx %d: duplicate transaction %x", i, txID[:8])
+		}
+		seenTxIDs[txID] = struct{}{}
 		txIndex, err := extractTransactionIndex(metaBytes)
 		if err != nil {
 			return fmt.Errorf("tx %d: extract index: %w", i, err)

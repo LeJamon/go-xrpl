@@ -98,7 +98,8 @@ func TestReplayDelta_Apply_Integration(t *testing.T) {
 
 	rd := inbound.NewReplayDelta(successorHash, 7, parent, nil)
 	require.NoError(t, rd.GotResponse(resp), "GotResponse must verify the wire framing")
-	require.True(t, rd.IsComplete())
+	require.Equal(t, inbound.StateReplayReady, rd.State())
+	require.False(t, rd.IsComplete())
 
 	// Apply must reproduce the successor's hash byte-for-byte.
 	derived, err := rd.Apply(tx.EngineConfig{
@@ -110,6 +111,7 @@ func TestReplayDelta_Apply_Integration(t *testing.T) {
 	})
 	require.NoError(t, err)
 	require.NotNil(t, derived)
+	require.True(t, rd.IsComplete())
 
 	assert.Equal(t, successorHash, derived.Hash(),
 		"Apply must derive a ledger whose canonical hash matches the verified header")
@@ -184,26 +186,7 @@ func TestReplayDelta_Apply_PseudoTransaction(t *testing.T) {
 	assert.Equal(t, wantTx, gotTx)
 }
 
-// TestReplay_TefTxDoesNotInstallPeerLeaf verifies D5 — the apply
-// switch installs the peer-supplied tx leaf only when the engine
-// returned applied==true (tes / tec). On tef / tem / tel / ter, the
-// leaf is DROPPED and replay fails loudly with ErrReplayTxDiverged.
-//
-// This reverses the earlier R6.4 "preserve peer leaf on all branches
-// and let the AccountHash check be the safety net" policy. Rippled's
-// Transactor.cpp:1108 + 1215-1267 sets applied = isTesSuccess(result)
-// (tec claims also promote to applied at :1215), and
-// BuildLedger.cpp:246 calls rawTxInsert only when applied==true —
-// everything else silently drops the tx from the view. Preserving
-// the leaf was a go-xrpl-only divergence: if the engine disagrees
-// with the peer on whether a tx applies, AccountHash diverges
-// regardless, so the leaf-preservation bought nothing and obscured
-// the real disagreement.
-//
-// We trigger tef by replaying a duplicate tx (engine returns
-// tefALREADY on the second apply). That's a reliable, real-engine
-// path to a tef result during replay.
-func TestReplay_TefTxDoesNotInstallPeerLeaf(t *testing.T) {
+func TestReplay_RejectsDuplicateTransaction(t *testing.T) {
 	env := jtx.NewTestEnv(t)
 	env.VerifySignatures = true
 
@@ -243,18 +226,7 @@ func TestReplay_TefTxDoesNotInstallPeerLeaf(t *testing.T) {
 		Transactions: [][]byte{txMetaBlob, txMetaBlob},
 	}
 	rd := inbound.NewReplayDelta(successorHash, 7, parent, nil)
-	require.NoError(t, rd.GotResponse(resp))
-
-	_, err = rd.Apply(tx.EngineConfig{
-		BaseFee:                   10,
-		ReserveBase:               200_000_000,
-		ReserveIncrement:          50_000_000,
-		SkipSignatureVerification: false,
-		Rules:                     amendment.AllSupportedRules(),
-	})
-	require.Error(t, err, "tef during replay must fail the replay loudly (D5 — only applied==true installs peer leaf)")
-	assert.ErrorIs(t, err, inbound.ErrReplayTxDiverged,
-		"tef during replay must surface as ErrReplayTxDiverged rather than silently continuing")
+	require.ErrorContains(t, rd.GotResponse(resp), "duplicate transaction")
 }
 
 // buildClosedSuccessor opens a child of parent, applies a single

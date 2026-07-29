@@ -463,19 +463,20 @@ func (e *AMMTestEnv) CheckInvariant(asset1, asset2 tx.Asset, fixAMMv1_3 bool, sh
 
 	// Compute sqrt(amount1 * amount2)
 	numberContext := state.NewNumberContext(state.MantissaScaleSmall, true)
-	product := bal1.MulWithNumberContext(bal2, numberContext, false, mode)
-	result := product.SqrtWithNumberContext(numberContext, mode)
-
-	cmp := result.Compare(lptBalance)
+	product := numberContext.FromAmount(bal1, mode).
+		MulRounded(numberContext.FromAmount(bal2, mode), mode)
+	result := product.Root2Rounded(mode)
+	lptNumber := numberContext.FromAmount(lptBalance, mode)
+	cmp := result.Cmp(lptNumber)
 	if shouldFail {
 		if cmp >= 0 {
 			e.T.Errorf("invariant %s: expected violation (sqrt < lpt), but sqrt=%s >= lpt=%s",
-				msg, result.Value(), lptBalance.Value())
+				msg, result.String(), lptNumber.String())
 		}
 	} else {
 		if cmp < 0 {
 			e.T.Errorf("invariant %s: violated! sqrt=%s < lpt=%s (bal1=%s, bal2=%s)",
-				msg, result.Value(), lptBalance.Value(), bal1.Value(), bal2.Value())
+				msg, result.String(), lptNumber.String(), bal1.Value(), bal2.Value())
 		}
 	}
 }
