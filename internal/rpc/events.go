@@ -52,7 +52,7 @@ type TransactionEvent struct {
 type ValidationEvent struct {
 	Type                string   `json:"type"`                     // Always "validationReceived"
 	Amendments          []string `json:"amendments,omitempty"`     // Amendments this validator is voting for
-	BaseFee             uint64   `json:"base_fee,omitempty"`       // Unscaled transaction cost
+	BaseFee             any      `json:"base_fee,omitempty"`       // Unscaled transaction cost
 	Cookie              string   `json:"cookie,omitempty"`         // Unique cookie value (if any)
 	Data                string   `json:"data,omitempty"`           // Raw STValidation wire bytes, hex-encoded (NetworkOPs.cpp:2422)
 	Flags               uint32   `json:"flags"`                    // Validation flags
@@ -62,8 +62,8 @@ type ValidationEvent struct {
 	LoadFee             *uint32  `json:"load_fee,omitempty"`       // Local load-scaled transaction cost
 	MasterKey           string   `json:"master_key,omitempty"`     // Master public key — emitted only when the manifest cache resolves a master distinct from the signing key (NetworkOPs.cpp:2434-2438)
 	NetworkID           uint32   `json:"network_id,omitempty"`     // Network identifier (NetworkOPs.cpp:2423)
-	ReserveBase         uint64   `json:"reserve_base,omitempty"`   // Minimum reserve
-	ReserveInc          uint64   `json:"reserve_inc,omitempty"`    // Owner reserve increment
+	ReserveBase         any      `json:"reserve_base,omitempty"`   // Minimum reserve
+	ReserveInc          any      `json:"reserve_inc,omitempty"`    // Owner reserve increment
 	ServerVersion       string   `json:"server_version,omitempty"` // Version of rippled
 	Signature           string   `json:"signature"`                // Signature of the validation
 	SigningTime         uint32   `json:"signing_time"`             // When validation was signed

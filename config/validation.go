@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
+
+	"github.com/LeJamon/go-xrpl/drops"
 )
 
 // ValidateConfig performs comprehensive validation on the complete configuration.
@@ -216,7 +218,7 @@ func validateMiscSettings(config *Config) []error {
 		errs = append(errs, err)
 	}
 	if config.FeeDefault != nil {
-		if err := validateNonNegative("fee_default", *config.FeeDefault); err != nil {
+		if err := validateVotingValue("fee_default", *config.FeeDefault, uint64(drops.MaxDrops)); err != nil {
 			errs = append(errs, err)
 		}
 	}

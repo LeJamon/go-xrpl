@@ -3,6 +3,7 @@ package node
 import (
 	"encoding/hex"
 	"encoding/json"
+	"math"
 	"strconv"
 	"strings"
 	"time"
@@ -291,20 +292,23 @@ func buildValidationEvent(e *consensus.ValidationReceivedEvent, manifests *manif
 	if v.ServerVersion != 0 {
 		ev.ServerVersion = strconv.FormatUint(v.ServerVersion, 10)
 	}
-	if v.BaseFee != 0 {
-		ev.BaseFee = v.BaseFee
-	} else if v.BaseFeeDrops != 0 {
-		ev.BaseFee = v.BaseFeeDrops
+	if v.HasBaseFee() {
+		ev.BaseFee = float64(v.BaseFee)
 	}
-	if v.ReserveBase != 0 {
-		ev.ReserveBase = uint64(v.ReserveBase)
-	} else if v.ReserveBaseDrops != 0 {
-		ev.ReserveBase = v.ReserveBaseDrops
+	if amount, ok := v.BaseFeeDropsVote(); ok {
+		ev.BaseFee = jsonClippedXRPAmount(amount.Drops())
 	}
-	if v.ReserveIncrement != 0 {
-		ev.ReserveInc = uint64(v.ReserveIncrement)
-	} else if v.ReserveIncrementDrops != 0 {
-		ev.ReserveInc = v.ReserveIncrementDrops
+	if v.HasReserveBase() {
+		ev.ReserveBase = v.ReserveBase
+	}
+	if amount, ok := v.ReserveBaseDropsVote(); ok {
+		ev.ReserveBase = jsonClippedXRPAmount(amount.Drops())
+	}
+	if v.HasReserveIncrement() {
+		ev.ReserveInc = v.ReserveIncrement
+	}
+	if amount, ok := v.ReserveIncrementDropsVote(); ok {
+		ev.ReserveInc = jsonClippedXRPAmount(amount.Drops())
 	}
 	if len(v.Amendments) > 0 {
 		ev.Amendments = make([]string, len(v.Amendments))
@@ -316,6 +320,16 @@ func buildValidationEvent(e *consensus.ValidationReceivedEvent, manifests *manif
 		ev.ValidatedHash = upperHex(v.ValidatedHash[:])
 	}
 	return ev
+}
+
+func jsonClippedXRPAmount(value int64) int32 {
+	if value < math.MinInt32 {
+		return math.MinInt32
+	}
+	if value > math.MaxInt32 {
+		return math.MaxInt32
+	}
+	return int32(value)
 }
 
 // extractBookPairsFromTxData walks a VL-encoded tx+meta blob and

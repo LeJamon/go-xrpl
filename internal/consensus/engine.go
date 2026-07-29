@@ -307,14 +307,31 @@ type ValidatorIdentity interface {
 	VerifyValidation(validation *Validation) error
 }
 
-// FeeVoteResult is a validator's fee-vote stance emitted on every validation.
-// PostXRPFees selects the AMOUNT triple over the legacy UINT triple; zero
-// values mean "no vote" and are omitted.
+// FeeVoteResult is a validator's fee-vote stance emitted on flag-ledger
+// validations. The Set fields distinguish explicit zero from omission.
 type FeeVoteResult struct {
-	BaseFee          uint64
-	ReserveBase      uint64
-	ReserveIncrement uint64
-	PostXRPFees      bool
+	BaseFee             uint64
+	ReserveBase         uint64
+	ReserveIncrement    uint64
+	BaseFeeSet          bool
+	ReserveBaseSet      bool
+	ReserveIncrementSet bool
+	PostXRPFees         bool
+}
+
+// HasBaseFee reports whether the base-fee vote is present.
+func (f FeeVoteResult) HasBaseFee() bool {
+	return f.BaseFeeSet || f.BaseFee != 0
+}
+
+// HasReserveBase reports whether the reserve-base vote is present.
+func (f FeeVoteResult) HasReserveBase() bool {
+	return f.ReserveBaseSet || f.ReserveBase != 0
+}
+
+// HasReserveIncrement reports whether the reserve-increment vote is present.
+func (f FeeVoteResult) HasReserveIncrement() bool {
+	return f.ReserveIncrementSet || f.ReserveIncrement != 0
 }
 
 // TrustOracle exposes the UNL / negative-UNL / quorum state and the
@@ -372,7 +389,7 @@ type TrustOracle interface {
 	// GetLoadFee returns the advertised sfLoadFee; zero omits the field.
 	GetLoadFee() uint32
 
-	GetFeeVote() FeeVoteResult
+	GetFeeVote(Ledger) FeeVoteResult
 
 	// GetAmendmentVote returns the amendment IDs to vote for on the next flag ledger.
 	GetAmendmentVote() [][32]byte
