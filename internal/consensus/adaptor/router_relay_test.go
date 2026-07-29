@@ -54,10 +54,16 @@ func (s *relayRecorder) PeerWithTxSet(_ [32]byte, exclude uint64) (uint64, bool)
 	return s.txsetPeer, s.txsetOK
 }
 
-func (s *relayRecorder) NotePeerHasTxSet(peerID uint64, hash [32]byte) {
+func (s *relayRecorder) NotePeerHasTxSet(peerID uint64, hash [32]byte) bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	for _, noted := range s.noted {
+		if noted.peerID == peerID && noted.hash == hash {
+			return false
+		}
+	}
 	s.noted = append(s.noted, notedTxSet{peerID: peerID, hash: hash})
+	return true
 }
 
 func (s *relayRecorder) IncPeerBadData(peerID uint64, reason string) {

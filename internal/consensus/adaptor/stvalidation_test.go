@@ -417,7 +417,7 @@ func TestParseSTValidation_MissingRequiredFields(t *testing.T) {
 	assert.Error(t, err)
 }
 
-func TestParseSTValidation_UnknownFieldsSkipped(t *testing.T) {
+func TestParseSTValidation_UnknownFieldsRejected(t *testing.T) {
 	orig := buildTestValidation()
 	blob := SerializeSTValidation(orig)
 
@@ -452,12 +452,8 @@ func TestParseSTValidation_UnknownFieldsSkipped(t *testing.T) {
 	modified = append(modified, make([]byte, 32)...)
 	modified = append(modified, blob[insertPos:]...)
 
-	parsed, err := parseSTValidation(modified)
-	require.NoError(t, err)
-
-	assert.Equal(t, orig.LedgerSeq, parsed.LedgerSeq)
-	assert.Equal(t, orig.LedgerID, parsed.LedgerID)
-	assert.Equal(t, orig.NodeID, parsed.NodeID)
+	_, err := parseSTValidation(modified)
+	assert.ErrorIs(t, err, errUnexpectedField)
 }
 
 func TestSerializeSTValidation_CanonicalOrder(t *testing.T) {

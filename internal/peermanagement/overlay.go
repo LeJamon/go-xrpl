@@ -453,10 +453,11 @@ func peerSetScore(p *Peer, haveItem bool) int {
 // NotePeerHasTxSet records that the peer with id peerID advertised tx-set
 // root hash. No-op when the peer is unknown. Fed by the consensus router
 // on inbound mtHAVE_TRANSACTION_SET{tsHAVE}.
-func (o *Overlay) NotePeerHasTxSet(peerID PeerID, hash [32]byte) {
+func (o *Overlay) NotePeerHasTxSet(peerID PeerID, hash [32]byte) bool {
 	if peer, ok := o.getPeer(peerID); ok {
-		peer.AddTxSet(hash)
+		return peer.AddTxSet(hash)
 	}
+	return false
 }
 
 // SetLedgerHintProvider wires the hint source; nil suppresses headers.

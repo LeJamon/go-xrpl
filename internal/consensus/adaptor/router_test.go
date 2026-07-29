@@ -722,7 +722,8 @@ func TestConverterTransactionRoundTrip(t *testing.T) {
 func TestConverterHaveSetRoundTrip(t *testing.T) {
 	id := consensus.TxSetID{0x01, 0x02, 0x03}
 	msg := HaveSetToMessage(id, message.TxSetStatusNeed)
-	restoredID, restoredStatus := HaveSetFromMessage(msg)
+	restoredID, restoredStatus, err := HaveSetFromMessage(msg)
+	require.NoError(t, err)
 	assert.Equal(t, id, restoredID)
 	assert.Equal(t, message.TxSetStatusNeed, restoredStatus)
 }

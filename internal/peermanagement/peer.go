@@ -686,18 +686,19 @@ func (p *Peer) PreviousLedger() ([32]byte, bool) {
 const maxRecentTxSets = 128
 
 // AddTxSet records that the peer advertised tx-set root hash (tsHAVE).
-// Duplicates are ignored; once the ring is full the oldest entry is
-// evicted. Mirrors rippled PeerImp::onMessage(TMHaveTransactionSet).
-func (p *Peer) AddTxSet(hash [32]byte) {
+// It reports whether the hash was inserted. Once the ring is full the
+// oldest entry is evicted. Mirrors rippled PeerImp::onMessage(TMHaveTransactionSet).
+func (p *Peer) AddTxSet(hash [32]byte) bool {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	if slices.Contains(p.recentTxSets, hash) {
-		return
+		return false
 	}
 	if len(p.recentTxSets) >= maxRecentTxSets {
 		p.recentTxSets = p.recentTxSets[1:]
 	}
 	p.recentTxSets = append(p.recentTxSets, hash)
+	return true
 }
 
 // HasTxSet reports whether the peer has advertised tx-set root hash.
@@ -1837,6 +1838,7 @@ func chargeForReason(reason string) resource.Charge {
 		"proof-path-resp-unnegotiated",
 		"compression-unnegotiated",
 		"get-objects-ledgerhash",
+		"have-set-hashsize",
 		"proposal-decode",
 		"validation-decode",
 		"validation-parse",

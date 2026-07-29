@@ -211,7 +211,7 @@ func (f *snd_fakeOverlay) SelectLedgerPeers([32]byte, uint32, []uint64, int) []u
 	return nil
 }
 func (f *snd_fakeOverlay) PeerWithTxSet([32]byte, uint64) (uint64, bool) { return 0, false }
-func (f *snd_fakeOverlay) NotePeerHasTxSet(uint64, [32]byte)             {}
+func (f *snd_fakeOverlay) NotePeerHasTxSet(uint64, [32]byte) bool        { return true }
 func (f *snd_fakeOverlay) CheckTracking(uint32)                          {}
 
 func snd_newAdaptorWithFake(t *testing.T, fake *snd_fakeOverlay) *Adaptor {

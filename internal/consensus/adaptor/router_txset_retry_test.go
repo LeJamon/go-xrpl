@@ -167,6 +167,7 @@ func TestTxSetRetry_NoProgressReplyDefersToTimer(t *testing.T) {
 	router, rs := newRetryRouter(t)
 	withRetryKnobs(router, 0, 1_000_000, 1_000_000, func() {
 		ld, txSetID := rootOnlyTxSetLedgerData(t, 4)
+		router.MarkTxSetStillNeeded(txSetID)
 
 		// A progressing (root) reply pipelines exactly one request.
 		router.handleTxSetData(ld, 1)
@@ -191,6 +192,7 @@ func TestTxSetRetry_InboundProgressNeverGivesUp(t *testing.T) {
 	// telemetry it would trip and delete the acquire.
 	withRetryKnobs(router, 0, 3, 1_000_000, func() {
 		ld, txSetID := rootOnlyTxSetLedgerData(t, 4)
+		router.MarkTxSetStillNeeded(txSetID)
 
 		const replies = 25
 		for i := range replies {
@@ -225,6 +227,7 @@ func TestTxSetRetry_DeprioritizesNonProgressingPeer(t *testing.T) {
 	const threshold = 2
 	withRetryKnobs(router, 0, 1_000_000, threshold, func() {
 		ld, txSetID := rootOnlyTxSetLedgerData(t, 4)
+		router.MarkTxSetStillNeeded(txSetID)
 		noProgressLD := emptyTxSetLedgerData(txSetID)
 		const badPeer = uint64(7)
 
@@ -262,6 +265,7 @@ func TestTxSetRetry_ProgressResetsNonProgressCounter(t *testing.T) {
 	const threshold = 2
 	withRetryKnobs(router, 0, 1_000_000, threshold, func() {
 		ld, txSetID := rootOnlyTxSetLedgerData(t, 4)
+		router.MarkTxSetStillNeeded(txSetID)
 		noProgressLD := emptyTxSetLedgerData(txSetID)
 		const peer = uint64(11)
 
@@ -306,6 +310,7 @@ func TestTxSetRetry_BadNonRootInvalidatesWholeReply(t *testing.T) {
 	const threshold = 2
 	withRetryKnobs(router, 0, 1_000_000, threshold, func() {
 		_, txSetID, wireNodes := buildTxSetForTest(t, 4)
+		router.MarkTxSetStillNeeded(txSetID)
 		rootNode := wireNodes[0]
 		require.Greater(t, len(wireNodes), 1)
 
@@ -361,6 +366,7 @@ func TestTxSetRetry_StillNeededReArmsDormantAcquire(t *testing.T) {
 	const maxStall = 2
 	withRetryKnobs(router, 0, maxStall, 1_000_000, func() {
 		ld, txSetID := rootOnlyTxSetLedgerData(t, 4)
+		router.MarkTxSetStillNeeded(txSetID)
 
 		// Progress reply creates the acquire and pipelines one request.
 		router.handleTxSetData(ld, 1)
@@ -391,22 +397,19 @@ func TestTxSetRetry_StillNeededReArmsDormantAcquire(t *testing.T) {
 	})
 }
 
-// TestTxSetRetry_StillNeededNoOpOnUnknownTxSet pins that the
-// stillNeed hook is a safe no-op when no acquisition is in flight —
-// matching rippled's getSet path where the stillNeed call is gated on
-// `it->second.mAcquire` being live (InboundTransactions.cpp:110-113).
-func TestTxSetRetry_StillNeededNoOpOnUnknownTxSet(t *testing.T) {
+func TestTxSetRetry_StillNeededRecordsRequestedTxSet(t *testing.T) {
 	router, _ := newRetryRouter(t)
 	var unknownID consensus.TxSetID
 	unknownID[0] = 0xab
 
-	// Must not panic, must not allocate state, must not broadcast.
 	router.MarkTxSetStillNeeded(unknownID)
 
 	router.txSetAcquireMu.Lock()
-	_, exists := router.txSetAcquire[unknownID]
+	state, exists := router.txSetAcquire[unknownID]
 	router.txSetAcquireMu.Unlock()
-	assert.False(t, exists, "MarkTxSetStillNeeded must not allocate state for unknown tx-sets")
+	require.True(t, exists, "the request hook must record the tx-set before the request is sent")
+	assert.Nil(t, state.txMap, "recording intent must not allocate a SHAMap before data arrives")
+	assert.False(t, state.done)
 }
 
 // TestTxSetRetry_QueryTypeEscalation pins issue #977's requester-side
@@ -423,7 +426,8 @@ func TestTxSetRetry_QueryTypeEscalation(t *testing.T) {
 	// MinInterval=0 so neither the inbound throttle nor the timer skip
 	// fires; high attempt cap so nothing is dropped mid-test.
 	withRetryKnobs(router, 0, 1_000_000, 1_000_000, func() {
-		ld, _ := rootOnlyTxSetLedgerData(t, 4)
+		ld, txSetID := rootOnlyTxSetLedgerData(t, 4)
+		router.MarkTxSetStillNeeded(txSetID)
 
 		// First attempt is inbound-driven, before any timeout → direct.
 		router.handleTxSetData(ld, 1)

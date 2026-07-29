@@ -88,8 +88,8 @@ type NetworkSender interface {
 	// liTS_CANDIDATE GetLedger.
 	PeerWithTxSet(target [32]byte, exclude uint64) (uint64, bool)
 	// NotePeerHasTxSet records that peerID advertised tx-set root hash,
-	// feeding PeerWithTxSet.
-	NotePeerHasTxSet(peerID uint64, hash [32]byte)
+	// feeding PeerWithTxSet. It reports whether the advertisement was new.
+	NotePeerHasTxSet(peerID uint64, hash [32]byte) bool
 }
 
 // noopSender is a no-op NetworkSender for standalone or test use.
@@ -130,4 +130,4 @@ func (n *noopSender) ShouldShedLedgerRequest(uint64, bool) bool                 
 func (n *noopSender) PeerWithLedger([32]byte, uint32, uint64) (uint64, bool)     { return 0, false }
 func (n *noopSender) SelectLedgerPeers([32]byte, uint32, []uint64, int) []uint64 { return nil }
 func (n *noopSender) PeerWithTxSet([32]byte, uint64) (uint64, bool)              { return 0, false }
-func (n *noopSender) NotePeerHasTxSet(uint64, [32]byte)                          {}
+func (n *noopSender) NotePeerHasTxSet(uint64, [32]byte) bool                     { return true }

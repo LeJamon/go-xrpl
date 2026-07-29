@@ -135,6 +135,7 @@ func TestTxSetAcquire_PipelinesOnProgressAtRTT(t *testing.T) {
 	// replies. MaxStallTicks is small so any regression to timer-driven
 	// give-up would surface as a premature dormancy.
 	withRetryKnobs(router, time.Hour, 3, 1_000_000, func() {
+		router.MarkTxSetStillNeeded(txSetID)
 		// Batch 0: the root. A progressing root reply pipelines exactly one
 		// missing-nodes request immediately.
 		rootID := make([]byte, 33)
@@ -210,6 +211,7 @@ func TestTxSetAcquire_PipelinesOnProgressAtRTT(t *testing.T) {
 func TestTxSetAcquire_DormantRetainsMapAndResumes(t *testing.T) {
 	router, rs, _ := newPipelineRouter(t)
 	ld, txSetID := rootOnlyTxSetLedgerData(t, 8)
+	router.MarkTxSetStillNeeded(txSetID)
 
 	const maxStall = 3
 	withRetryKnobs(router, 0, maxStall, 1_000_000, func() {

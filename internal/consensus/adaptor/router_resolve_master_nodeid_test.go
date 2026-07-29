@@ -1,13 +1,18 @@
 package adaptor
 
 import (
+	"bytes"
+	"encoding/hex"
 	"testing"
 	"time"
 
+	"github.com/LeJamon/go-xrpl/codec/binarycodec"
+	"github.com/LeJamon/go-xrpl/crypto/secp256k1"
 	"github.com/LeJamon/go-xrpl/internal/consensus"
 	"github.com/LeJamon/go-xrpl/internal/manifest"
 	"github.com/LeJamon/go-xrpl/internal/peermanagement"
 	"github.com/LeJamon/go-xrpl/internal/peermanagement/message"
+	"github.com/LeJamon/go-xrpl/protocol"
 	"github.com/stretchr/testify/require"
 )
 
@@ -15,7 +20,38 @@ import (
 // to the cache, returning the master and ephemeral pubkeys.
 func installManifest(t *testing.T, cache *manifest.Cache, masterSeed, ephSeed byte) (master [33]byte, ephemeral [33]byte) {
 	t.Helper()
-	serialized := buildWireManifest(t, 1, masterSeed, ephSeed)
+
+	algo := secp256k1.Algorithm{}
+	masterSecret := bytes.Repeat([]byte{masterSeed}, 32)
+	ephemeralSecret := bytes.Repeat([]byte{ephSeed}, 32)
+	masterPublic, err := algo.DerivePublicKeyFromSecret(masterSecret)
+	require.NoError(t, err)
+	ephemeralPublic, err := algo.DerivePublicKeyFromSecret(ephemeralSecret)
+	require.NoError(t, err)
+
+	fields := map[string]any{
+		"PublicKey":     hex.EncodeToString(masterPublic),
+		"SigningPubKey": hex.EncodeToString(ephemeralPublic),
+		"Sequence":      uint32(1),
+	}
+	encoded, err := binarycodec.Encode(fields)
+	require.NoError(t, err)
+	body, err := hex.DecodeString(encoded)
+	require.NoError(t, err)
+	prefix := protocol.HashPrefixManifest()
+	preimage := append(prefix[:], body...)
+
+	signature, err := algo.Sign(string(preimage), hex.EncodeToString(ephemeralSecret))
+	require.NoError(t, err)
+	masterSignature, err := algo.Sign(string(preimage), hex.EncodeToString(masterSecret))
+	require.NoError(t, err)
+	fields["Signature"] = signature
+	fields["MasterSignature"] = masterSignature
+
+	encoded, err = binarycodec.Encode(fields)
+	require.NoError(t, err)
+	serialized, err := hex.DecodeString(encoded)
+	require.NoError(t, err)
 	parsed, err := manifest.Deserialize(serialized)
 	require.NoError(t, err)
 	if disp := cache.ApplyManifest(parsed); disp != manifest.Accepted {
@@ -98,11 +134,10 @@ func TestRouter_ResolveMasterNodeID_Validation_NoMappingPreservesSigning(t *test
 	ctx := t.Context()
 	go router.Run(ctx)
 
+	signingBytes, err := secp256k1.Algorithm{}.DerivePublicKeyFromSecret(bytes.Repeat([]byte{0x42}, 32))
+	require.NoError(t, err)
 	var signing [33]byte
-	signing[0] = 0xED
-	for i := 1; i < len(signing); i++ {
-		signing[i] = byte(i)
-	}
+	copy(signing[:], signingBytes)
 
 	v := &consensus.Validation{
 		Full:      true,

@@ -4,6 +4,7 @@ import (
 	"encoding/binary"
 	"errors"
 	"fmt"
+	"sort"
 
 	"github.com/LeJamon/go-xrpl/drops"
 	"github.com/LeJamon/go-xrpl/internal/consensus"
@@ -86,10 +87,72 @@ const (
 )
 
 var (
-	errShortData     = errors.New("stvalidation: unexpected end of data")
-	errInvalidVL     = errors.New("stvalidation: invalid VL encoding")
-	errMissingFields = errors.New("stvalidation: missing required fields")
+	errShortData           = errors.New("stvalidation: unexpected end of data")
+	errInvalidVL           = errors.New("stvalidation: invalid VL encoding")
+	errMissingFields       = errors.New("stvalidation: missing required fields")
+	errDuplicateField      = errors.New("stvalidation: duplicate field")
+	errUnexpectedField     = errors.New("stvalidation: unexpected field")
+	errNonCanonicalFieldID = errors.New("stvalidation: non-canonical field id")
+	errInvalidFieldValue   = errors.New("stvalidation: invalid field value")
 )
+
+type validationFieldSpec struct {
+	name        string
+	requiredBit uint32
+	defaultZero bool
+}
+
+const (
+	requiredFlags uint32 = 1 << iota
+	requiredLedgerHash
+	requiredLedgerSequence
+	requiredSigningTime
+	requiredSigningPubKey
+	requiredSignature
+
+	allRequiredValidationFields = requiredFlags |
+		requiredLedgerHash |
+		requiredLedgerSequence |
+		requiredSigningTime |
+		requiredSigningPubKey |
+		requiredSignature
+)
+
+func validationFieldKey(typeCode, fieldCode int) uint32 {
+	return uint32(typeCode)<<16 | uint32(fieldCode)
+}
+
+var validationTemplate = map[uint32]validationFieldSpec{
+	validationFieldKey(typeUINT32, fieldFlags):          {name: "Flags", requiredBit: requiredFlags},
+	validationFieldKey(typeUINT32, fieldLedgerSequence): {name: "LedgerSequence", requiredBit: requiredLedgerSequence},
+	validationFieldKey(typeUINT32, fieldCloseTime):      {name: "CloseTime"},
+	validationFieldKey(typeUINT32, fieldSigningTime):    {name: "SigningTime", requiredBit: requiredSigningTime},
+	validationFieldKey(typeUINT32, fieldLoadFee):        {name: "LoadFee"},
+	validationFieldKey(typeUINT32, fieldReserveBase):    {name: "ReserveBase"},
+	validationFieldKey(typeUINT32, fieldReserveInc):     {name: "ReserveIncrement"},
+
+	validationFieldKey(typeUINT64, fieldBaseFee):       {name: "BaseFee"},
+	validationFieldKey(typeUINT64, fieldCookie):        {name: "Cookie", defaultZero: true},
+	validationFieldKey(typeUINT64, fieldServerVersion): {name: "ServerVersion"},
+
+	validationFieldKey(typeHash256, fieldLedgerHash):    {name: "LedgerHash", requiredBit: requiredLedgerHash},
+	validationFieldKey(typeHash256, fieldConsensusHash): {name: "ConsensusHash"},
+	validationFieldKey(typeHash256, fieldValidatedHash): {name: "ValidatedHash"},
+
+	validationFieldKey(typeAmount, fieldBaseFeeDrops):          {name: "BaseFeeDrops"},
+	validationFieldKey(typeAmount, fieldReserveBaseDrops):      {name: "ReserveBaseDrops"},
+	validationFieldKey(typeAmount, fieldReserveIncrementDrops): {name: "ReserveIncrementDrops"},
+
+	validationFieldKey(typeBlob, fieldSigningPubKey): {name: "SigningPubKey", requiredBit: requiredSigningPubKey},
+	validationFieldKey(typeBlob, fieldSignature):     {name: "Signature", requiredBit: requiredSignature},
+
+	validationFieldKey(typeVector256, fieldAmendments): {name: "Amendments"},
+}
+
+type validationSigningField struct {
+	key  uint32
+	wire []byte
+}
 
 // parseSTValidation parses XRPL-binary-encoded STValidation bytes into a
 // consensus.Validation. It also populates SigningData with the serialized
@@ -101,7 +164,9 @@ func parseSTValidation(data []byte) (*consensus.Validation, error) {
 	}
 
 	v := &consensus.Validation{}
-	var signingBuf []byte
+	var signingFields []validationSigningField
+	var present uint32
+	seen := make(map[uint32]struct{}, len(validationTemplate))
 
 	pos := 0
 	for pos < len(data) {
@@ -112,9 +177,13 @@ func parseSTValidation(data []byte) (*consensus.Validation, error) {
 			return nil, err
 		}
 
-		// End-of-object marker for nested objects — stop at top level.
-		if typeCode == 0 && fieldCode == 0 {
-			break
+		key := validationFieldKey(typeCode, fieldCode)
+		spec, allowed := validationTemplate[key]
+		if !allowed {
+			return nil, fmt.Errorf("%w: type=%d field=%d", errUnexpectedField, typeCode, fieldCode)
+		}
+		if _, duplicate := seen[key]; duplicate {
+			return nil, fmt.Errorf("%w: %s", errDuplicateField, spec.name)
 		}
 
 		// Determine field data length and advance pos past it.
@@ -126,13 +195,35 @@ func parseSTValidation(data []byte) (*consensus.Validation, error) {
 		}
 
 		fieldData := data[pos-dataLen : pos]
+		if spec.defaultZero && binary.BigEndian.Uint64(fieldData) == 0 {
+			return nil, fmt.Errorf("%w: %s may not be explicitly set to default", errInvalidFieldValue, spec.name)
+		}
+		if typeCode == typeAmount {
+			if err := validateAmount(fieldData); err != nil {
+				return nil, fmt.Errorf("%w: %s: %v", errInvalidFieldValue, spec.name, err)
+			}
+		}
+		if typeCode == typeVector256 && len(fieldData)%32 != 0 {
+			return nil, fmt.Errorf("%w: %s length %d", errInvalidFieldValue, spec.name, len(fieldData))
+		}
+		if typeCode == typeBlob && fieldCode == fieldSigningPubKey {
+			if len(fieldData) != 33 || (fieldData[0] != 0x02 && fieldData[0] != 0x03) {
+				return nil, fmt.Errorf("%w: %s", errInvalidFieldValue, spec.name)
+			}
+		}
+
+		seen[key] = struct{}{}
+		present |= spec.requiredBit
 
 		// sfSignature (isSigningField=false) is excluded from the signing hash.
 		// All other fields, including sfSigningPubKey (isSigningField=true), are included.
 		excludeFromSigning := (typeCode == typeBlob && fieldCode == fieldSignature)
 
 		if !excludeFromSigning {
-			signingBuf = append(signingBuf, data[fieldStart:pos]...)
+			signingFields = append(signingFields, validationSigningField{
+				key:  key,
+				wire: data[fieldStart:pos],
+			})
 		}
 
 		// Extract known fields.
@@ -197,44 +288,32 @@ func parseSTValidation(data []byte) (*consensus.Validation, error) {
 			}
 
 		case typeCode == typeHash256 && fieldCode == fieldLedgerHash:
-			if len(fieldData) == 32 {
-				copy(v.LedgerID[:], fieldData)
-			}
+			copy(v.LedgerID[:], fieldData)
 
 		case typeCode == typeHash256 && fieldCode == fieldConsensusHash:
-			if len(fieldData) == 32 {
-				copy(v.ConsensusHash[:], fieldData)
-			}
+			copy(v.ConsensusHash[:], fieldData)
 
 		case typeCode == typeHash256 && fieldCode == fieldValidatedHash:
-			if len(fieldData) == 32 {
-				copy(v.ValidatedHash[:], fieldData)
-			}
+			copy(v.ValidatedHash[:], fieldData)
 
 		case typeCode == typeVector256 && fieldCode == fieldAmendments:
-			// Vector256 is VL-wrapped concat of 32-byte IDs. fieldData
-			// is the VL payload, so iterate in 32-byte chunks.
-			if len(fieldData)%32 == 0 {
-				n := len(fieldData) / 32
-				v.Amendments = make([][32]byte, 0, n)
-				for i := range n {
-					var id [32]byte
-					copy(id[:], fieldData[i*32:(i+1)*32])
-					v.Amendments = append(v.Amendments, id)
-				}
+			n := len(fieldData) / 32
+			v.Amendments = make([][32]byte, 0, n)
+			for i := range n {
+				var id [32]byte
+				copy(id[:], fieldData[i*32:(i+1)*32])
+				v.Amendments = append(v.Amendments, id)
 			}
 
 		case typeCode == typeBlob && fieldCode == fieldSigningPubKey:
-			if len(fieldData) == 33 {
-				copy(v.SigningPubKey[:], fieldData)
-				// Default NodeID to calcNodeID(signingKey). The
-				// consensus router substitutes the master-derived
-				// NodeID via the manifest cache after parsing when
-				// the validator has rotated keys; absent a manifest
-				// mapping, the signing-key-derived value is the
-				// fallback.
-				v.NodeID = consensus.CalcNodeID(v.SigningPubKey)
-			}
+			copy(v.SigningPubKey[:], fieldData)
+			// Default NodeID to calcNodeID(signingKey). The
+			// consensus router substitutes the master-derived
+			// NodeID via the manifest cache after parsing when
+			// the validator has rotated keys; absent a manifest
+			// mapping, the signing-key-derived value is the
+			// fallback.
+			v.NodeID = consensus.CalcNodeID(v.SigningPubKey)
 
 		case typeCode == typeBlob && fieldCode == fieldSignature:
 			v.Signature = make([]byte, len(fieldData))
@@ -242,15 +321,16 @@ func parseSTValidation(data []byte) (*consensus.Validation, error) {
 		}
 	}
 
-	v.SigningData = signingBuf
+	sort.Slice(signingFields, func(i, j int) bool {
+		return signingFields[i].key < signingFields[j].key
+	})
+	for _, field := range signingFields {
+		v.SigningData = append(v.SigningData, field.wire...)
+	}
 	v.Raw = append([]byte(nil), data...)
 
-	// Validate required fields were present. SigningPubKey doubles as
-	// the presence check for sfSigningPubKey: parseSTValidation only
-	// populates it when the wire field is exactly 33 bytes, so a zero
-	// SigningPubKey means the field was missing or malformed.
-	if v.LedgerSeq == 0 || v.LedgerID == (consensus.LedgerID{}) || v.SigningPubKey == (consensus.SigningPubKey{}) {
-		return nil, errMissingFields
+	if missing := allRequiredValidationFields &^ present; missing != 0 {
+		return nil, fmt.Errorf("%w: mask=0x%x", errMissingFields, missing)
 	}
 
 	return v, nil
@@ -443,6 +523,9 @@ func readFieldHeader(data []byte, pos *int) (int, int, error) {
 		}
 		typeCode = int(data[*pos])
 		*pos++
+		if typeCode < 16 {
+			return 0, 0, errNonCanonicalFieldID
+		}
 	}
 
 	if fieldCode == 0 {
@@ -451,6 +534,9 @@ func readFieldHeader(data []byte, pos *int) (int, int, error) {
 		}
 		fieldCode = int(data[*pos])
 		*pos++
+		if fieldCode < 16 {
+			return 0, 0, errNonCanonicalFieldID
+		}
 	}
 
 	return typeCode, fieldCode, nil
@@ -505,23 +591,90 @@ func advanceFixed(data []byte, pos *int, n int) (int, error) {
 	return n, nil
 }
 
-// skipAmount determines the length of an Amount field.
+// skipAmount determines the serialized length of an Amount field.
 func skipAmount(data []byte, pos *int) (int, error) {
 	if *pos+8 > len(data) {
 		return 0, errShortData
 	}
 
-	if data[*pos]&0x80 != 0 {
-		return advanceFixed(data, pos, 48)
+	raw := binary.BigEndian.Uint64(data[*pos : *pos+8])
+	length := 8
+	switch {
+	case raw&(uint64(1)<<63) != 0:
+		length = 48
+	case raw&(uint64(1)<<61) != 0:
+		length = 33
 	}
-	if data[*pos]&0x20 != 0 {
-		return advanceFixed(data, pos, 33)
-	}
-
-	if binary.BigEndian.Uint64(data[*pos:*pos+8]) == 0 {
+	if length == 8 && raw == 0 {
 		return 0, errors.New("negative zero is not canonical")
 	}
-	return advanceFixed(data, pos, 8)
+	if *pos+length > len(data) {
+		return 0, errShortData
+	}
+	*pos += length
+	return length, nil
+}
+
+func validateAmount(data []byte) error {
+	if len(data) < 8 {
+		return errShortData
+	}
+
+	raw := binary.BigEndian.Uint64(data[:8])
+	switch {
+	case raw&(uint64(1)<<63) != 0:
+		if len(data) != 48 {
+			return fmt.Errorf("issued amount length %d", len(data))
+		}
+		if isZero160(data[8:28]) {
+			return errors.New("invalid native currency")
+		}
+		if isZero160(data[28:48]) {
+			return errors.New("invalid native account")
+		}
+
+		offset := int(raw >> 54)
+		mantissa := raw & ((uint64(1) << 54) - 1)
+		if mantissa == 0 {
+			if offset != 512 {
+				return errors.New("invalid currency value")
+			}
+			return nil
+		}
+
+		exponent := (offset & 255) - 97
+		if mantissa < 1_000_000_000_000_000 ||
+			mantissa > 9_999_999_999_999_999 ||
+			exponent < -96 ||
+			exponent > 80 {
+			return errors.New("invalid currency value")
+		}
+		return nil
+
+	case raw&(uint64(1)<<61) != 0:
+		if len(data) != 33 {
+			return fmt.Errorf("MPT amount length %d", len(data))
+		}
+		return nil
+
+	default:
+		if len(data) != 8 {
+			return fmt.Errorf("native amount length %d", len(data))
+		}
+		if raw == 0 {
+			return errors.New("negative zero is not canonical")
+		}
+		return nil
+	}
+}
+
+func isZero160(data []byte) bool {
+	for _, b := range data {
+		if b != 0 {
+			return false
+		}
+	}
+	return true
 }
 
 // skipVL reads a variable-length prefix and advances past the data.
