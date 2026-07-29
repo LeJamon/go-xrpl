@@ -36,6 +36,15 @@ func (a Amount) Sqrt() Amount {
 // Panics if the amount is negative.
 // When fixUniversalNumber is enabled, delegates to XRPLNumber.root2().
 func (a Amount) SqrtRounded(mode RoundingMode) Amount {
+	return a.SqrtWithNumberContext(
+		NewNumberContext(MantissaScaleSmall, false),
+		mode,
+	)
+}
+
+// SqrtWithNumberContext returns the square root under the transaction's Number
+// semantics.
+func (a Amount) SqrtWithNumberContext(ctx NumberContext, mode RoundingMode) Amount {
 	// Handle special cases
 	if a.IsZero() {
 		if a.IsNative() {
@@ -56,11 +65,11 @@ func (a Amount) SqrtRounded(mode RoundingMode) Amount {
 	}
 
 	// When switchover is on, delegate to XRPLNumber.root2()
-	if GetNumberSwitchover() {
-		n := NewXRPLNumberRounded(a.iou.Mantissa(), a.iou.Exponent(), mode)
+	if ctx.UniversalNumberEnabled() {
+		n := ctx.Number(a.iou.Mantissa(), a.iou.Exponent(), mode)
 		result := n.root2Rounded(mode)
 		iou := result.ToIOUAmountValue()
-		return NewIssuedAmountFromValueRounded(iou.mantissa, iou.exponent, a.Currency, a.Issuer, mode)
+		return ctx.IssuedAmount(iou.mantissa, iou.exponent, a.Currency, a.Issuer, mode)
 	}
 
 	// Legacy (pre-fixUniversalNumber) path: a hand-rolled Newton-Raphson

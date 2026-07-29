@@ -84,6 +84,7 @@ type Rotator struct {
 	rel        RelationalPruner
 	cfg        RotationConfig
 	logger     xrpllog.Logger
+	hooksMu    sync.RWMutex
 	refresh    StateRefresh
 	advance    func(uint32)
 	beginPrune func() func()
@@ -93,14 +94,23 @@ type Rotator struct {
 
 	notifyCh chan uint32
 	stopCh   chan struct{}
-	stopOnce sync.Once
-	doneCh   chan struct{}
+	lifeMu   sync.Mutex
+	life     rotatorLifecycle
+	workers  sync.WaitGroup
 
 	// minimumOnline is the lowest ledger sequence the node still retains in
 	// full. Acquisition / fetch-pack serving must not reach below it. Zero
 	// until the first rotation.
 	minimumOnline atomic.Uint32
 }
+
+type rotatorLifecycle uint8
+
+const (
+	rotatorNew rotatorLifecycle = iota
+	rotatorRunning
+	rotatorStopped
+)
 
 // SetHealthCheck gates rotation on the node being fully synchronized.
 func (r *Rotator) SetHealthCheck(healthy func() bool, recoveryWait time.Duration) {
@@ -122,9 +132,11 @@ func (r *Rotator) SetStateRefresh(refresh StateRefresh, advance func(uint32), be
 	if r == nil {
 		return
 	}
+	r.hooksMu.Lock()
 	r.refresh = refresh
 	r.advance = advance
 	r.beginPrune = beginPrune
+	r.hooksMu.Unlock()
 }
 
 // NewRotator constructs a Rotator. store and nodes are required; rel may be nil
@@ -153,7 +165,6 @@ func NewRotator(store *Store, nodes NodePruner, rel RelationalPruner, cfg Rotati
 		logger:   logger,
 		notifyCh: make(chan uint32, 1),
 		stopCh:   make(chan struct{}),
-		doneCh:   make(chan struct{}),
 	}
 	r.minimumOnline.Store(store.GetMinimumOnline())
 	return r
@@ -169,25 +180,38 @@ func (r *Rotator) ReconcileGenerationState() error {
 	if !ok {
 		return nil
 	}
-	lastRotated, minimumOnline := generations.GenerationState()
-	if lastRotated <= r.store.GetLastRotated() {
-		return nil
+	generationLast, generationMinimum := generations.GenerationState()
+	storedLast := r.store.GetLastRotated()
+	storedMinimum := r.store.GetMinimumOnline()
+	if generationLast > storedLast && generationMinimum == 0 && storedMinimum == 0 {
+		return fmt.Errorf("generation state at ledger %d has no minimum online boundary", generationLast)
 	}
-	if minimumOnline == 0 {
-		return fmt.Errorf("generation %d has no minimum-online boundary", lastRotated)
+	lastRotated := max(generationLast, storedLast)
+	minimumOnline := max(generationMinimum, storedMinimum)
+	if lastRotated == storedLast && minimumOnline == storedMinimum {
+		return nil
 	}
 	if err := r.store.SetRotation(lastRotated, minimumOnline); err != nil {
 		return err
 	}
-	r.minimumOnline.Store(minimumOnline)
+	r.minimumOnline.Store(r.store.GetMinimumOnline())
 	return nil
 }
 
-// Start launches the background rotation worker. Safe to call once.
+// Start launches the background rotation worker. Repeated calls and calls
+// after Stop are no-ops.
 func (r *Rotator) Start() {
 	if r == nil {
 		return
 	}
+	r.lifeMu.Lock()
+	if r.life != rotatorNew {
+		r.lifeMu.Unlock()
+		return
+	}
+	r.life = rotatorRunning
+	r.workers.Add(1)
+	r.lifeMu.Unlock()
 	go r.run()
 }
 
@@ -196,8 +220,19 @@ func (r *Rotator) Stop() {
 	if r == nil {
 		return
 	}
-	r.stopOnce.Do(func() { close(r.stopCh) })
-	<-r.doneCh
+	r.lifeMu.Lock()
+	if r.life == rotatorNew {
+		r.life = rotatorStopped
+		close(r.stopCh)
+		r.lifeMu.Unlock()
+		return
+	}
+	if r.life == rotatorRunning {
+		r.life = rotatorStopped
+		close(r.stopCh)
+	}
+	r.lifeMu.Unlock()
+	r.workers.Wait()
 }
 
 // Notify reports a newly validated ledger sequence. It never blocks: if a
@@ -212,8 +247,8 @@ func (r *Rotator) Notify(validatedSeq uint32) {
 		select {
 		case r.notifyCh <- validatedSeq:
 			return
-		case <-r.notifyCh:
-			// Drop the stale queued sequence and retry with the newer one.
+		case queued := <-r.notifyCh:
+			validatedSeq = max(validatedSeq, queued)
 		case <-r.stopCh:
 			return
 		}
@@ -250,7 +285,7 @@ func (r *Rotator) SetMinimumOnlineFloor(seq uint32) error {
 }
 
 func (r *Rotator) run() {
-	defer close(r.doneCh)
+	defer r.workers.Done()
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -272,6 +307,10 @@ func (r *Rotator) run() {
 // maybeRotate applies the rippled readyToRotate predicate for validatedSeq and,
 // when it holds, deletes complete ledgers below the rotation boundary.
 func (r *Rotator) maybeRotate(ctx context.Context, validatedSeq uint32) {
+	if err := r.ReconcileGenerationState(); err != nil {
+		r.logger.Warn("online delete: generation reconciliation failed", "err", err)
+		return
+	}
 	lastRotated := r.store.GetLastRotated()
 
 	// First validated ledger seeds the boundary without deleting anything,
@@ -284,7 +323,7 @@ func (r *Rotator) maybeRotate(ctx context.Context, validatedSeq uint32) {
 		return
 	}
 
-	if validatedSeq < lastRotated+r.cfg.DeleteInterval {
+	if validatedSeq <= lastRotated || validatedSeq-lastRotated < r.cfg.DeleteInterval {
 		return
 	}
 
@@ -354,19 +393,25 @@ func (r *Rotator) rotate(ctx context.Context, validatedSeq, lastRotated uint32) 
 		"validatedSeq", validatedSeq, "lastRotated", lastRotated,
 		"deleteInterval", r.cfg.DeleteInterval)
 
-	if r.refresh == nil {
+	r.hooksMu.RLock()
+	refresh := r.refresh
+	advance := r.advance
+	beginPrune := r.beginPrune
+	r.hooksMu.RUnlock()
+
+	if refresh == nil {
 		r.logger.Warn("online delete: live-state refresh is not configured")
 		return
 	}
-	minimumOnline := lastRotated + 1
+	minimumOnline := max(r.MinimumOnline(), rotationMinimum(lastRotated))
 	if err := r.SetMinimumOnlineFloor(minimumOnline); err != nil {
 		r.logger.Warn("online delete: failed to persist minimum online ledger", "seq", minimumOnline, "err", err)
 		return
 	}
-	if r.advance != nil {
-		r.advance(minimumOnline)
+	if advance != nil {
+		advance(minimumOnline)
 	}
-	refreshedSeq, err := r.refresh(ctx, validatedSeq, func(work time.Duration) error {
+	refreshedSeq, err := refresh(ctx, validatedSeq, func(work time.Duration) error {
 		return r.refreshCheckpoint(ctx, work)
 	})
 	if err != nil {
@@ -390,6 +435,7 @@ func (r *Rotator) rotate(ctx context.Context, validatedSeq, lastRotated uint32) 
 				return
 			}
 			r.logger.Warn("online delete: relational prune failed", "boundary", lastRotated, "err", err)
+			return
 		}
 	}
 	if !r.waitHealthy(ctx) {
@@ -397,8 +443,8 @@ func (r *Rotator) rotate(ctx context.Context, validatedSeq, lastRotated uint32) 
 	}
 
 	deleted, committed, err := func() (uint64, bool, error) {
-		if r.beginPrune != nil {
-			unlock := r.beginPrune()
+		if beginPrune != nil {
+			unlock := beginPrune()
 			defer unlock()
 		}
 		if generations, ok := r.nodes.(NodeGenerationRotator); ok {

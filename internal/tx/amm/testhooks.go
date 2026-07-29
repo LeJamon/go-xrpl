@@ -14,14 +14,14 @@ import (
 // ToIOUForCalcExported preserves the legacy test helper API while using the
 // default large Number context.
 func ToIOUForCalcExported(amt tx.Amount) tx.Amount {
-	math := numberMath{ctx: state.NewNumberContext(state.MantissaScaleLarge)}
+	math := numberMath{ctx: state.NewNumberContext(state.MantissaScaleLarge, true)}
 	return math.toAmount(math.fromAmount(amt), zeroIOU(), state.RoundToNearest)
 }
 
 // AMMAssetOutExported wraps ammAssetOut without fixAMMv1_3, computing the asset
 // amount received for burning lpTokens.
 func AMMAssetOutExported(assetBalance, lptBalance, lpTokens tx.Amount, tfee uint16) tx.Amount {
-	math := numberMath{ctx: state.NewNumberContext(state.MantissaScaleLarge)}
+	math := numberMath{ctx: state.NewNumberContext(state.MantissaScaleLarge, true)}
 	return ammAssetOut(math, assetBalance, lptBalance, lpTokens, tfee, false)
 }
 

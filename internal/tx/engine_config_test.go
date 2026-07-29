@@ -74,7 +74,7 @@ func TestApplyContextNumberContextUsesConfigRules(t *testing.T) {
 func TestEngineConfigNumberContextOverride(t *testing.T) {
 	t.Parallel()
 
-	override := state.NewNumberContext(state.MantissaScaleSmall)
+	override := state.NewNumberContext(state.MantissaScaleSmall, false)
 	cfg := EngineConfig{
 		Rules:                 amendment.AllSupportedRules(),
 		NumberContextOverride: &override,

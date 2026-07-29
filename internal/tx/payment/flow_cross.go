@@ -114,6 +114,7 @@ func FlowCross(
 	if params.NumberContext != nil {
 		sandbox.SetNumberContext(*params.NumberContext)
 	}
+	numberContext := sandbox.NumberContext()
 
 	// Convert deliver amount (what taker wants to receive)
 	// Reference: rippled CreateOffer.cpp - deliver = takerAmount.out = takerPays
@@ -139,7 +140,10 @@ func FlowCross(
 			transferRate := mptutil.TransferRate(view, id)
 			if transferRate != QualityOne {
 				rateAmt := rateAsAmount(transferRate)
-				sendMax = NewMPTEitherAmount(state.MulRoundMPT(takerGets, rateAmt, true), id)
+				sendMax = NewMPTEitherAmount(
+					state.MulRoundMPTWithNumberContext(takerGets, rateAmt, numberContext, true),
+					id,
+				)
 			}
 		}
 	} else if !takerGets.IsNative() {
@@ -153,7 +157,14 @@ func FlowCross(
 				// as_amount(Rate) = STAmount(noIssue(), rate.value, -9, false)
 				// This uses STAmount multiply (muldiv/10^14) NOT IOUAmount::mulRatio
 				rateAmt := rateAsAmount(transferRate)
-				result := state.MulRound(sendMax.IOU, rateAmt, takerGets.Currency, takerGets.Issuer, true)
+				result := state.MulRoundWithNumberContext(
+					sendMax.IOU,
+					rateAmt,
+					takerGets.Currency,
+					takerGets.Issuer,
+					numberContext,
+					true,
+				)
 				sendMax = NewIOUEitherAmount(result)
 			}
 		}
@@ -315,7 +326,15 @@ func FlowCross(
 			transferRate := mptutil.TransferRate(view, id)
 			if transferRate != QualityOne && transferRate > 0 {
 				rateAmt := rateAsAmount(transferRate)
-				takerPaidNet = NewMPTEitherAmount(state.DivRoundMPT(FromEitherAmount(result.In), rateAmt, true), id)
+				takerPaidNet = NewMPTEitherAmount(
+					state.DivRoundMPTWithNumberContext(
+						FromEitherAmount(result.In),
+						rateAmt,
+						numberContext,
+						true,
+					),
+					id,
+				)
 			}
 		}
 	} else if !takerGets.IsNative() {
@@ -324,7 +343,14 @@ func FlowCross(
 			transferRate := GetTransferRate(view, issuerID)
 			if transferRate != QualityOne && transferRate > 0 {
 				rateAmt := rateAsAmount(transferRate)
-				netResult := state.DivRound(result.In.IOU, rateAmt, takerGets.Currency, takerGets.Issuer, true)
+				netResult := state.DivRoundWithNumberContext(
+					result.In.IOU,
+					rateAmt,
+					takerGets.Currency,
+					takerGets.Issuer,
+					numberContext,
+					true,
+				)
 				takerPaidNet = NewIOUEitherAmount(netResult)
 			}
 		}

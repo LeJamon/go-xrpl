@@ -106,14 +106,10 @@ func TestAmount_Add_MatchingIOU(t *testing.T) {
 }
 
 func TestAmountAddWithNumberContextPreservesBoundaryRounding(t *testing.T) {
-	previous := GetNumberSwitchover()
-	SetNumberSwitchover(true)
-	t.Cleanup(func() { SetNumberSwitchover(previous) })
-
 	a := NewIssuedAmountFromValue(1_000_000_000_000_000, 0, "USD", "rIssuer")
 	b := NewIssuedAmountFromValue(6_789_012_345_678_901, -4, "USD", "rIssuer")
 	for _, scale := range []MantissaScale{MantissaScaleLargeLegacy, MantissaScaleLarge} {
-		ctx := NewNumberContext(scale)
+		ctx := NewNumberContext(scale, true)
 		downward, err := a.AddWithNumberContext(b, ctx, RoundDownward)
 		if err != nil {
 			t.Fatalf("scale %d downward addition: %v", scale, err)

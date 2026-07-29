@@ -116,7 +116,7 @@ func (o *OfferCreate) applyGuts(ctx *tx.ApplyContext, sb, sbCancel *payment.Paym
 
 	// Calculate the original rate (quality) for the offer
 	// Reference: line 601
-	uRate := state.GetRate(saTakerGets, saTakerPays)
+	uRate := state.GetRateWithNumberContext(saTakerGets, saTakerPays, ctx.NumberContext())
 
 	// Process cancellation request if specified
 	// Reference: lines 608-621

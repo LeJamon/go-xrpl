@@ -9,6 +9,7 @@ import (
 	"github.com/LeJamon/go-xrpl/internal/ledger/state"
 	"github.com/LeJamon/go-xrpl/internal/tx/ter"
 	"github.com/LeJamon/go-xrpl/keylet"
+	"github.com/LeJamon/go-xrpl/ledger/entry"
 	"github.com/LeJamon/go-xrpl/protocol"
 )
 
@@ -123,7 +124,7 @@ func vvIssuanceEntry(t *testing.T, pseudo [20]byte, shareMPTID [24]byte, before,
 	t.Helper()
 	return InvariantEntry{
 		Key:       keylet.MPTIssuance(shareMPTID).Key,
-		EntryType: "MPTokenIssuance",
+		EntryType: entry.TypeMPTokenIssuance,
 		Before:    vvCraftIssuance(t, pseudo, 1, before),
 		After:     vvCraftIssuance(t, pseudo, 1, after),
 	}
@@ -133,7 +134,7 @@ func vvMPTokenEntry(t *testing.T, account [20]byte, shareMPTID [24]byte, before,
 	t.Helper()
 	return InvariantEntry{
 		Key:       keylet.MPTokenByID(shareMPTID, account).Key,
-		EntryType: "MPToken",
+		EntryType: entry.TypeMPToken,
 		Before:    vvCraftMPToken(t, account, shareMPTID, before),
 		After:     vvCraftMPToken(t, account, shareMPTID, after),
 	}
@@ -179,7 +180,7 @@ func vvIOULineEntry(t *testing.T, account, issuer [20]byte, before, after string
 	}
 	return InvariantEntry{
 		Key:       keylet.Line(account, issuer, "USD").Key,
-		EntryType: "RippleState",
+		EntryType: entry.TypeRippleState,
 		Before:    encode(before),
 		After:     encode(after),
 	}
@@ -216,7 +217,7 @@ func TestValidVault_StructuralViolations(t *testing.T) {
 
 	// A modify entry for the share issuance, so updatedShares is found in the
 	// after-set without a view read.
-	issuanceEntry := InvariantEntry{EntryType: "MPTokenIssuance", Before: issuance, After: issuance}
+	issuanceEntry := InvariantEntry{EntryType: entry.TypeMPTokenIssuance, Before: issuance, After: issuance}
 
 	setTx := vvTx{txType: protocol.TxTypeVaultSet, acct: ownerAddr}
 
@@ -230,7 +231,7 @@ func TestValidVault_StructuralViolations(t *testing.T) {
 			name: "valid set no-op",
 			tx:   setTx,
 			entries: []InvariantEntry{
-				{EntryType: "Vault",
+				{EntryType: entry.TypeVault,
 					Before: vvCraftVault(t, ownerAddr, pseudoAddr, shareMPTID, "1000", "1000", "", ""),
 					After:  vvCraftVault(t, ownerAddr, pseudoAddr, shareMPTID, "1000", "1000", "", "")},
 				issuanceEntry,
@@ -241,7 +242,7 @@ func TestValidVault_StructuralViolations(t *testing.T) {
 			name: "assets available exceeds assets outstanding",
 			tx:   setTx,
 			entries: []InvariantEntry{
-				{EntryType: "Vault",
+				{EntryType: entry.TypeVault,
 					Before: vvCraftVault(t, ownerAddr, pseudoAddr, shareMPTID, "1000", "1000", "", ""),
 					After:  vvCraftVault(t, ownerAddr, pseudoAddr, shareMPTID, "1000", "2000", "", "")},
 				issuanceEntry,
@@ -252,7 +253,7 @@ func TestValidVault_StructuralViolations(t *testing.T) {
 			name: "loss unrealized changed by non-loan transaction",
 			tx:   setTx,
 			entries: []InvariantEntry{
-				{EntryType: "Vault",
+				{EntryType: entry.TypeVault,
 					Before: vvCraftVault(t, ownerAddr, pseudoAddr, shareMPTID, "1000", "800", "", ""),
 					After:  vvCraftVault(t, ownerAddr, pseudoAddr, shareMPTID, "1000", "800", "", "100")},
 				issuanceEntry,
@@ -263,7 +264,7 @@ func TestValidVault_StructuralViolations(t *testing.T) {
 			name: "immutable data (pseudo-account) changed",
 			tx:   setTx,
 			entries: []InvariantEntry{
-				{EntryType: "Vault",
+				{EntryType: entry.TypeVault,
 					Before: vvCraftVault(t, ownerAddr, pseudoAddr, shareMPTID, "1000", "1000", "", ""),
 					After:  vvCraftVault(t, ownerAddr, ownerAddr, shareMPTID, "1000", "1000", "", "")},
 				issuanceEntry,
@@ -274,7 +275,7 @@ func TestValidVault_StructuralViolations(t *testing.T) {
 			name: "wrong transaction type touches a vault",
 			tx:   vvTx{txType: protocol.TxTypePayment, acct: ownerAddr},
 			entries: []InvariantEntry{
-				{EntryType: "Vault",
+				{EntryType: entry.TypeVault,
 					Before: vvCraftVault(t, ownerAddr, pseudoAddr, shareMPTID, "1000", "1000", "", ""),
 					After:  vvCraftVault(t, ownerAddr, pseudoAddr, shareMPTID, "1000", "1000", "", "")},
 			},
@@ -284,9 +285,9 @@ func TestValidVault_StructuralViolations(t *testing.T) {
 			name: "deleted vault still holds assets",
 			tx:   vvTx{txType: protocol.TxTypeVaultDelete, acct: ownerAddr},
 			entries: []InvariantEntry{
-				{EntryType: "Vault", IsDelete: true,
+				{EntryType: entry.TypeVault, IsDelete: true,
 					Before: vvCraftVault(t, ownerAddr, pseudoAddr, shareMPTID, "1000", "1000", "", "")},
-				{EntryType: "MPTokenIssuance", IsDelete: true, Before: deletedIssuance},
+				{EntryType: entry.TypeMPTokenIssuance, IsDelete: true, Before: deletedIssuance},
 			},
 			wantMsg: "deleted vault must have no assets outstanding",
 		},
@@ -313,10 +314,10 @@ func TestValidVault_EnforceGate(t *testing.T) {
 	issuance := vvCraftIssuance(t, pseudo, 1, 0)
 
 	entries := []InvariantEntry{
-		{EntryType: "Vault",
+		{EntryType: entry.TypeVault,
 			Before: vvCraftVault(t, ownerAddr, pseudoAddr, shareMPTID, "1000", "1000", "", ""),
 			After:  vvCraftVault(t, ownerAddr, pseudoAddr, shareMPTID, "1000", "2000", "", "")},
-		{EntryType: "MPTokenIssuance", Before: issuance, After: issuance},
+		{EntryType: entry.TypeMPTokenIssuance, Before: issuance, After: issuance},
 	}
 	setTx := vvTx{txType: protocol.TxTypeVaultSet, acct: ownerAddr}
 
@@ -388,7 +389,7 @@ func TestValidVault_IOUAssetReconciliation(t *testing.T) {
 			name: "set rejects canonical vault line movement",
 			tx:   vvTx{txType: protocol.TxTypeVaultSet, acct: ownerAddr},
 			entries: []InvariantEntry{
-				{EntryType: "Vault", Before: vault("1000", "1000"), After: vault("1000", "1000")},
+				{EntryType: entry.TypeVault, Before: vault("1000", "1000"), After: vault("1000", "1000")},
 				issuance(1000, 1000),
 				vvIOULineEntry(t, pseudo, issuer, "1000", "1001"),
 			},
@@ -400,7 +401,7 @@ func TestValidVault_IOUAssetReconciliation(t *testing.T) {
 				"Amount": amount("5"),
 			}},
 			entries: []InvariantEntry{
-				{EntryType: "Vault", Before: vault("1000", "1000"), After: vault("1005", "1005")},
+				{EntryType: entry.TypeVault, Before: vault("1000", "1000"), After: vault("1005", "1005")},
 				issuance(1000, 1005),
 				holderShares(1000, 1005),
 				vvIOULineEntry(t, pseudo, issuer, "1000", "1005"),
@@ -413,7 +414,7 @@ func TestValidVault_IOUAssetReconciliation(t *testing.T) {
 				"Amount": amount("5"),
 			}},
 			entries: []InvariantEntry{
-				{EntryType: "Vault", Before: vault("1000", "1000"), After: vault("1005", "1005")},
+				{EntryType: entry.TypeVault, Before: vault("1000", "1000"), After: vault("1005", "1005")},
 				issuance(1000, 1005),
 				holderShares(1000, 1005),
 				vvIOULineEntry(t, pseudo, issuer, "1000", "1004"),
@@ -427,7 +428,7 @@ func TestValidVault_IOUAssetReconciliation(t *testing.T) {
 				"Destination": issuerAddr,
 			}},
 			entries: []InvariantEntry{
-				{EntryType: "Vault", Before: vault("1000", "1000"), After: vault("995", "995")},
+				{EntryType: entry.TypeVault, Before: vault("1000", "1000"), After: vault("995", "995")},
 				issuance(1000, 995),
 				holderShares(1000, 995),
 				vvIOULineEntry(t, pseudo, issuer, "1000", "995"),
@@ -439,7 +440,7 @@ func TestValidVault_IOUAssetReconciliation(t *testing.T) {
 				"Destination": issuerAddr,
 			}},
 			entries: []InvariantEntry{
-				{EntryType: "Vault", Before: vault("1000", "1000"), After: vault("995", "995")},
+				{EntryType: entry.TypeVault, Before: vault("1000", "1000"), After: vault("995", "995")},
 				issuance(1000, 995),
 				holderShares(1000, 995),
 				vvIOULineEntry(t, pseudo, issuer, "1000", "996"),
@@ -452,7 +453,7 @@ func TestValidVault_IOUAssetReconciliation(t *testing.T) {
 				"Holder": ownerAddr,
 			}},
 			entries: []InvariantEntry{
-				{EntryType: "Vault", Before: vault("1000", "1000"), After: vault("995", "995")},
+				{EntryType: entry.TypeVault, Before: vault("1000", "1000"), After: vault("995", "995")},
 				issuance(1000, 995),
 				holderShares(1000, 995),
 				vvIOULineEntry(t, pseudo, issuer, "1000", "995"),
@@ -464,7 +465,7 @@ func TestValidVault_IOUAssetReconciliation(t *testing.T) {
 				"Holder": ownerAddr,
 			}},
 			entries: []InvariantEntry{
-				{EntryType: "Vault", Before: vault("1000", "1000"), After: vault("995", "995")},
+				{EntryType: entry.TypeVault, Before: vault("1000", "1000"), After: vault("995", "995")},
 				issuance(1000, 995),
 				holderShares(1000, 995),
 				vvIOULineEntry(t, pseudo, issuer, "1000", "996"),
@@ -498,7 +499,7 @@ func TestValidVault_IOUScaleBoundaryAmendment(t *testing.T) {
 	baseEntries := func() []InvariantEntry {
 		return []InvariantEntry{
 			{
-				EntryType: "Vault",
+				EntryType: entry.TypeVault,
 				Before:    vault("10000000000000000"),
 				After:     vault("9999999999999995"),
 			},
@@ -569,7 +570,7 @@ func TestValidVault_IOUWithdrawDestinationRounding(t *testing.T) {
 	}
 	entries := func(after string, shares uint64) []InvariantEntry {
 		return []InvariantEntry{
-			{EntryType: "Vault", Before: vault("1000"), After: vault(after)},
+			{EntryType: entry.TypeVault, Before: vault("1000"), After: vault(after)},
 			vvIssuanceEntry(t, pseudo, shareMPTID, 1000, shares),
 			vvMPTokenEntry(t, owner, shareMPTID, 1000, shares),
 			vvIOULineEntry(t, pseudo, issuer, "1000", after),

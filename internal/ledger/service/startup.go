@@ -37,20 +37,25 @@ type StartupConfig struct {
 	Ledger string
 }
 
-func (c StartupConfig) validate(fastLoad bool) error {
+func (c StartupConfig) validateMode() error {
 	switch c.Mode {
 	case StartupNormal, StartupFresh, StartupNetwork:
 		if c.Ledger != "" {
 			return fmt.Errorf("startup mode %d does not accept a ledger identifier", c.Mode)
 		}
-	case StartupLoad:
-	case StartupLoadFile:
-		if c.Ledger == "" && !fastLoad {
-			return errors.New("ledger file path cannot be empty")
-		}
-	case StartupReplay:
+	case StartupLoad, StartupLoadFile, StartupReplay:
 	default:
 		return fmt.Errorf("unknown startup mode %d", c.Mode)
+	}
+	return nil
+}
+
+func (c StartupConfig) validate(fastLoad bool) error {
+	if err := c.validateMode(); err != nil {
+		return err
+	}
+	if c.Mode == StartupLoadFile && c.Ledger == "" && !fastLoad {
+		return errors.New("ledger file path cannot be empty")
 	}
 	return nil
 }
@@ -252,7 +257,10 @@ func (s *Service) loadVerifiedStoredLedgerByHash(ctx context.Context, hash [32]b
 	return loaded, nil
 }
 
-func (s *Service) installLoadedStartupLocked(loaded, genesisLedger *ledger.Ledger) {
+func (s *Service) installLoadedStartupLocked(loaded, genesisLedger *ledger.Ledger) error {
+	if _, err := s.collectTransactionResultsLocked(loaded, loaded.Sequence(), loaded.Hash()); err != nil {
+		return fmt.Errorf("index loaded startup ledger transactions: %w", err)
+	}
 	s.closedLedger = loaded
 	s.validatedLedger = loaded
 	s.validatedSignTime = loaded.CloseTime()
@@ -264,16 +272,16 @@ func (s *Service) installLoadedStartupLocked(loaded, genesisLedger *ledger.Ledge
 	s.ledgerEventHaveFrontier = true
 	s.ledgerEventMu.Unlock()
 	s.completeMu.Lock()
-	s.completedLedgers.Add(loaded.Sequence())
+	s.completedLedgers.add(loaded.Sequence())
 	s.completeLedgerHashes[loaded.Sequence()] = loaded.Hash()
 	s.completeMu.Unlock()
 	if loaded.Sequence() != genesisLedger.Sequence() {
 		s.deleteHistoryLocked(genesisLedger.Sequence())
 	}
 	s.putHistoryLocked(loaded)
-	s.collectTransactionResults(loaded, loaded.Sequence(), loaded.Hash())
 	loadedHash := loaded.Hash()
 	s.logger.Info("Loaded startup ledger", "sequence", loaded.Sequence(), "hash", fmt.Sprintf("%x", loadedHash[:8]))
+	return nil
 }
 
 func (s *Service) stageStartupReplayLocked() error {

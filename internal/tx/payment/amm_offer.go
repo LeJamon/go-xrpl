@@ -107,7 +107,13 @@ func (o *AMMOffer) Consume() {
 // Reference: rippled AMMOffer.cpp limitOut()
 func (o *AMMOffer) LimitOut(ofrIn, ofrOut, limit EitherAmount, roundUp bool) (EitherAmount, EitherAmount) {
 	if o.ammLiquidity.ammContext.MultiPath() {
-		return o.quality.CeilOutStrict(ofrIn, ofrOut, limit, roundUp)
+		return o.quality.CeilOutStrictWithNumberContext(
+			ofrIn,
+			ofrOut,
+			limit,
+			roundUp,
+			o.ammLiquidity.ammContext.numberContext,
+		)
 	}
 	// Single path: use swap function for exact conservation
 	limitAmt := eitherToAmount(limit)
@@ -126,9 +132,20 @@ func (o *AMMOffer) LimitOut(ofrIn, ofrOut, limit EitherAmount, roundUp bool) (Ei
 func (o *AMMOffer) LimitIn(ofrIn, ofrOut, limit EitherAmount, roundUp bool, fixReducedV2 bool) (EitherAmount, EitherAmount) {
 	if o.ammLiquidity.ammContext.MultiPath() {
 		if fixReducedV2 {
-			return o.quality.CeilInStrict(ofrIn, ofrOut, limit, roundUp)
+			return o.quality.CeilInStrictWithNumberContext(
+				ofrIn,
+				ofrOut,
+				limit,
+				roundUp,
+				o.ammLiquidity.ammContext.numberContext,
+			)
 		}
-		return o.quality.CeilIn(ofrIn, ofrOut, limit)
+		return o.quality.CeilInWithNumberContext(
+			ofrIn,
+			ofrOut,
+			limit,
+			o.ammLiquidity.ammContext.numberContext,
+		)
 	}
 	// Single path: use swap function
 	limitAmt := eitherToAmount(limit)

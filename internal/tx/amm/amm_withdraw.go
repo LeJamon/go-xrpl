@@ -494,35 +494,45 @@ func (a *AMMWithdraw) Apply(ctx *tx.ApplyContext) ter.Result {
 			return ter.TemMALFORMED
 		}
 
-		frac := math.div(math.fromAmount(amount1), math.fromAmount(assetBalance1), state.RoundToNearest)
+		amountBalance1, amountBalance2 := assetBalance1, assetBalance2
+		amount1IsAsset1 := matchesAsset(a.Amount, a.Asset)
+		if !amount1IsAsset1 {
+			amountBalance1, amountBalance2 = amountBalance2, amountBalance1
+		}
+
+		frac := math.div(math.fromAmount(amount1), math.fromAmount(amountBalance1), state.RoundToNearest)
 		tokensAdj := getRoundedLPTokens(math, fixV1_3, lptBalance, frac, false)
 		if fixV1_3 && tokensAdj.IsZero() {
 			return ter.TecAMM_INVALID_TOKENS
 		}
 		// factor in the adjusted tokens
 		frac = adjustFracByTokens(math, fixV1_3, lptBalance, tokensAdj, frac)
-		amount2Withdraw := getRoundedAsset(math, fixV1_3, assetBalance2, frac, false)
+		amount1Withdraw := amount1
+		amount2Withdraw := getRoundedAsset(math, fixV1_3, amountBalance2, frac, false)
 
 		if compareAmounts(amount2Withdraw, amount2) <= 0 {
-			withdrawAmount1 = amount1
-			withdrawAmount2 = amount2Withdraw
 			lpTokensToRedeem = tokensAdj
 		} else {
-			frac = math.div(math.fromAmount(amount2), math.fromAmount(assetBalance2), state.RoundToNearest)
+			frac = math.div(math.fromAmount(amount2), math.fromAmount(amountBalance2), state.RoundToNearest)
 			tokensAdj = getRoundedLPTokens(math, fixV1_3, lptBalance, frac, false)
 			if fixV1_3 && tokensAdj.IsZero() {
 				return ter.TecAMM_INVALID_TOKENS
 			}
 			frac = adjustFracByTokens(math, fixV1_3, lptBalance, tokensAdj, frac)
-			amountWithdraw := getRoundedAsset(math, fixV1_3, assetBalance1, frac, false)
+			amountWithdraw := getRoundedAsset(math, fixV1_3, amountBalance1, frac, false)
 
 			if fixV1_3 && compareAmounts(amountWithdraw, amount1) > 0 {
 				return ter.TecAMM_FAILED
 			}
 
-			withdrawAmount1 = amountWithdraw
-			withdrawAmount2 = amount2
+			amount1Withdraw = amountWithdraw
+			amount2Withdraw = amount2
 			lpTokensToRedeem = tokensAdj
+		}
+		if amount1IsAsset1 {
+			withdrawAmount1, withdrawAmount2 = amount1Withdraw, amount2Withdraw
+		} else {
+			withdrawAmount1, withdrawAmount2 = amount2Withdraw, amount1Withdraw
 		}
 
 	case flags&tfOneAssetLPToken != 0:

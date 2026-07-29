@@ -49,7 +49,6 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
-	"sync/atomic"
 )
 
 // XRPLNumber exponent bounds and the zero sentinel exponent.
@@ -107,17 +106,25 @@ func MantissaScaleForRulesWithFix(hasRules, singleAssetVault, lendingProtocol, f
 // Transaction code derives one context from the ledger rules and passes its
 // values explicitly, so concurrent ledgers cannot affect each other's math.
 type NumberContext struct {
-	scale MantissaScale
+	scale           MantissaScale
+	universalNumber bool
 }
 
-// NewNumberContext returns a Number context fixed to scale.
-func NewNumberContext(scale MantissaScale) NumberContext {
-	return NumberContext{scale: scale}
+// NewNumberContext returns a Number context fixed to scale and arithmetic
+// behavior.
+func NewNumberContext(scale MantissaScale, universalNumber bool) NumberContext {
+	return NumberContext{scale: scale, universalNumber: universalNumber}
 }
 
 // Scale returns the context's mantissa scale.
 func (c NumberContext) Scale() MantissaScale {
 	return c.scale
+}
+
+// UniversalNumberEnabled reports whether STAmount and IOUAmount operations use
+// XRPLNumber arithmetic.
+func (c NumberContext) UniversalNumberEnabled() bool {
+	return c.universalNumber
 }
 
 // Number creates a Number in the context's scale under mode.
@@ -188,26 +195,28 @@ func (c NumberContext) ToAmountWithNativeRounding(
 	return c.ToAmount(number, prototype, ambientMode)
 }
 
+// IOUAmountValue constructs and normalizes an IOU amount under the context.
+func (c NumberContext) IOUAmountValue(mantissa int64, exponent int, mode RoundingMode) IOUAmountValue {
+	return newIOUAmountValueRoundedWithContext(mantissa, exponent, mode, c)
+}
+
+// IssuedAmount constructs and normalizes an issued amount under the context.
+func (c NumberContext) IssuedAmount(
+	mantissa int64,
+	exponent int,
+	currency, issuer string,
+	mode RoundingMode,
+) Amount {
+	return Amount{
+		iou:      c.IOUAmountValue(mantissa, exponent, mode),
+		Currency: currency,
+		Issuer:   issuer,
+	}
+}
+
 func (s MantissaScale) cuspRoundingFixEnabled() bool {
 	return s == MantissaScaleLarge
 }
-
-// Package-level switchover flag, the Go equivalent of rippled's per-thread
-// getSTNumberSwitchover() / setSTNumberSwitchover() (LocalValue<bool>).
-//
-// Unlike the mantissa scale and rounding mode, the switchover is written only by
-// the single transaction-apply goroutine (do_apply.go, from
-// rules().Enabled(fixUniversalNumber)) and is constant for the duration of a
-// ledger. An atomic.Bool removes the data race while preserving exact behavior:
-// every reader observes the value the apply goroutine established for the
-// current ledger.
-var numberSwitchoverEnabled atomic.Bool
-
-// SetNumberSwitchover enables or disables the XRPLNumber switchover.
-func SetNumberSwitchover(enabled bool) { numberSwitchoverEnabled.Store(enabled) }
-
-// GetNumberSwitchover returns whether the XRPLNumber switchover is enabled.
-func GetNumberSwitchover() bool { return numberSwitchoverEnabled.Load() }
 
 // RoundingMode controls how XRPLNumber rounds during normalization. rippled
 // stores the active mode in a thread_local (Number::mode_); go-xrpl threads it

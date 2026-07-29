@@ -5,40 +5,21 @@ import (
 	"testing"
 )
 
-// TestNumberRounding_ConcurrentDeterministic is the -race regression guard for
-// issue #740: the Number switchover flag and rounding mode must never be shared
-// mutable package globals.
-//
-// Many goroutines perform amount arithmetic under different rounding modes at
-// the same time, mirroring a live node where the apply goroutine and the
-// concurrent RPC/path-find goroutines both run Number math. Two properties must
-// hold:
-//
-//   - No data race. The switchover flag (atomic.Bool, written only by apply) and
-//     the rounding mode (threaded explicitly, never shared) leave nothing to
-//     race on. If the rounding mode regressed to a package global, the per-step
-//     setround()/getround() of concurrent goroutines would be flagged by -race.
-//   - Determinism. Each goroutine rounding the same expression under a fixed
-//     mode must reproduce the sequential golden result. A shared global mode
-//     would let an Upward goroutine clobber a Downward goroutine mid-computation,
-//     producing a different amount — the root cause of the #724 non-deterministic
-//     consensus forks.
-//
-// Run with `go test -race` (CI does) to exercise the race detector.
 func TestNumberRounding_ConcurrentDeterministic(t *testing.T) {
-	SetNumberSwitchover(true)
-
 	a := NewIssuedAmountFromValue(7333333333333333, -16, "USD", "rIssuer") // ~0.7333333333333333
 	b := NewIssuedAmountFromValue(3141592653589793, -15, "USD", "rIssuer") // ~3.141592653589793
+	universal := NewNumberContext(MantissaScaleSmall, true)
+	legacy := NewNumberContext(MantissaScaleSmall, false)
 
 	// Golden values, computed sequentially. The three multiply modes and the
 	// two sqrt modes must actually differ, otherwise the test would pass even if
 	// the mode were ignored entirely.
-	wantNearest := a.MulRounded(b, false, RoundToNearest)
-	wantUp := a.MulRounded(b, false, RoundUpward)
-	wantDown := a.MulRounded(b, false, RoundDownward)
-	wantSqrtDown := b.SqrtRounded(RoundDownward)
-	wantSqrtUp := b.SqrtRounded(RoundUpward)
+	wantNearest := a.MulWithNumberContext(b, universal, false, RoundToNearest)
+	wantUp := a.MulWithNumberContext(b, universal, false, RoundUpward)
+	wantDown := a.MulWithNumberContext(b, universal, false, RoundDownward)
+	wantSqrtDown := b.SqrtWithNumberContext(universal, RoundDownward)
+	wantSqrtUp := b.SqrtWithNumberContext(universal, RoundUpward)
+	wantLegacy := a.MulWithNumberContext(b, legacy, false, RoundToNearest)
 
 	if wantUp.Compare(wantDown) == 0 {
 		t.Fatalf("test setup is not mode-sensitive: up == down (%s)", wantUp.Value())
@@ -54,45 +35,40 @@ func TestNumberRounding_ConcurrentDeterministic(t *testing.T) {
 
 	var wg sync.WaitGroup
 
-	// Writers: mirror the apply goroutine establishing the (constant per ledger)
-	// switchover. Concurrent with the readers below, this would trip -race
-	// against a plain bool global.
+	errs := make(chan string, goroutines*2)
 	for range goroutines {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
 			for range iterations {
-				SetNumberSwitchover(true)
-			}
-		}()
-	}
-
-	// Readers: each independently rounds the same expressions and must agree
-	// with the golden values bit-for-bit.
-	errs := make(chan string, goroutines)
-	for range goroutines {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			for range iterations {
-				if a.MulRounded(b, false, RoundToNearest).Compare(wantNearest) != 0 {
+				if a.MulWithNumberContext(b, universal, false, RoundToNearest).Compare(wantNearest) != 0 {
 					errs <- "mul to-nearest mismatch"
 					return
 				}
-				if a.MulRounded(b, false, RoundUpward).Compare(wantUp) != 0 {
+				if a.MulWithNumberContext(b, universal, false, RoundUpward).Compare(wantUp) != 0 {
 					errs <- "mul upward mismatch"
 					return
 				}
-				if a.MulRounded(b, false, RoundDownward).Compare(wantDown) != 0 {
+				if a.MulWithNumberContext(b, universal, false, RoundDownward).Compare(wantDown) != 0 {
 					errs <- "mul downward mismatch"
 					return
 				}
-				if b.SqrtRounded(RoundDownward).Compare(wantSqrtDown) != 0 {
+				if b.SqrtWithNumberContext(universal, RoundDownward).Compare(wantSqrtDown) != 0 {
 					errs <- "sqrt downward mismatch"
 					return
 				}
-				if b.SqrtRounded(RoundUpward).Compare(wantSqrtUp) != 0 {
+				if b.SqrtWithNumberContext(universal, RoundUpward).Compare(wantSqrtUp) != 0 {
 					errs <- "sqrt upward mismatch"
+					return
+				}
+			}
+		}()
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for range iterations {
+				if a.MulWithNumberContext(b, legacy, false, RoundToNearest).Compare(wantLegacy) != 0 {
+					errs <- "legacy mul mismatch"
 					return
 				}
 			}

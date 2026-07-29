@@ -6,15 +6,12 @@ import (
 	"testing"
 )
 
-// TestXRPLNumberAddDebug mutates the package-level numberSwitchoverEnabled —
-// must not run in parallel with other state tests that read or write it.
 func TestXRPLNumberAddDebug(t *testing.T) {
 	// Test: -1.0 + 0.03350000000000001
 	// Expected with switchover: -0.9665000000333333 = {-9665000000333333, -16}
 	// Expected without switchover: -0.966500000033334 = {-9665000000333340, -16}
 
-	SetNumberSwitchover(true)
-	defer SetNumberSwitchover(false)
+	ctx := NewNumberContext(MantissaScaleSmall, true)
 
 	// 1. Test XRPLNumber.Add directly
 	x := NewXRPLNumber(-1000000000000000, -15)
@@ -25,13 +22,13 @@ func TestXRPLNumberAddDebug(t *testing.T) {
 	// 2. Test addIOUValues
 	a := NewIOUAmountValue(-1000000000000000, -15)
 	b := NewIOUAmountValue(3350000000000001, -17)
-	r := addIOUValues(a, b)
+	r := addIOUValuesRoundedWithContext(a, b, RoundToNearest, ctx)
 	fmt.Printf("addIOUValues({-1000000000000000,-15}, {3350000000000001,-17}) = {%d, %d}\n", r.mantissa, r.exponent)
 
 	// 3. Test through Amount.Sub (1.0 - 0.0335...)
 	amtA := NewIssuedAmountFromValue(1000000000000000, -15, "USD", "gateway")
 	amtB := NewIssuedAmountFromValue(3350000000000001, -17, "USD", "gateway")
-	result2, err := amtA.Sub(amtB)
+	result2, err := amtA.SubWithNumberContext(amtB, ctx, RoundToNearest)
 	if err != nil {
 		t.Fatalf("Error: %v", err)
 	}
@@ -40,7 +37,7 @@ func TestXRPLNumberAddDebug(t *testing.T) {
 
 	// 4. Test: -1.0 + 0.0335... (as Amount.Add)
 	amtC := NewIssuedAmountFromValue(-1000000000000000, -15, "USD", "gateway")
-	result3, _ := amtC.Add(amtB)
+	result3, _ := amtC.AddWithNumberContext(amtB, ctx, RoundToNearest)
 	iou3 := result3.IOU()
 	fmt.Printf("Amount.Add({-1000000000000000,-15}, {3350000000000001,-17}) = {%d, %d} = %s\n", iou3.mantissa, iou3.exponent, result3.Value())
 

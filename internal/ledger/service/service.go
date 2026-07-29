@@ -17,7 +17,6 @@ import (
 	"github.com/LeJamon/go-xrpl/internal/ledger/header"
 	"github.com/LeJamon/go-xrpl/internal/ledger/inbound"
 	"github.com/LeJamon/go-xrpl/internal/ledger/localtxs"
-	"github.com/LeJamon/go-xrpl/internal/ledger/manager"
 	"github.com/LeJamon/go-xrpl/internal/ledger/openledger"
 	"github.com/LeJamon/go-xrpl/internal/ledger/service/svcerr"
 	"github.com/LeJamon/go-xrpl/internal/tx"
@@ -99,17 +98,6 @@ type Config struct {
 	TxQ *txq.Config
 }
 
-// DefaultConfig returns the default service configuration
-func DefaultConfig() Config {
-	return Config{
-		Standalone:    true,
-		GenesisConfig: genesis.DefaultConfig(),
-		NodeStore:     nil,
-		RelationalDB:  nil,
-		Logger:        xrpllog.Discard(),
-	}
-}
-
 type networkLedgerState uint8
 
 const (
@@ -127,10 +115,19 @@ func networkLedgerStateFor(enabled bool, state networkLedgerState) networkLedger
 
 // Service manages the ledger lifecycle
 type Service struct {
-	// mu guards the Service's mutable ledger state. Lock ordering: a path
-	// needing both mu and the TxQ mutex MUST take mu first. TxQ never reaches
-	// back into the Service, so this one rule keeps submit/close deadlock-free.
+	lifecycleMu    sync.Mutex
+	lifecycleState serviceLifecycleState
+	stopDone       chan struct{}
+
+	// mu guards the lifecycle frontier and cross-component state. Lock ordering
+	// is mu, historyComponent.mu, then component-specific locks such as TxQ.
+	// History-only query paths take historyComponent.mu without taking mu.
 	mu sync.RWMutex
+
+	persistenceWorker
+	eventPublisher
+	historyComponent
+	queries queryFacade
 
 	config         Config
 	logger         xrpllog.Logger
@@ -166,34 +163,12 @@ type Service struct {
 	// Genesis ledger
 	genesisLedger *ledger.Ledger
 
-	// Ledger history (sequence -> ledger) - in-memory cache
-	ledgerHistory map[uint32]*ledger.Ledger
-
-	// By-hash index over ledgerHistory (ledger hash -> sequence). Kept in
-	// sync exclusively by putHistoryLocked/deleteHistoryLocked.
-	ledgerByHash map[[32]byte]uint32
-
-	// Persisted ledgers loaded by hash are cached separately because the node
-	// store may contain non-canonical ledgers at a sequence already in history.
-	persistedLedgers    map[[32]byte]*ledger.Ledger
-	persistedLedgerFIFO [][32]byte
-
-	// Transaction index (hash -> ledger sequence) - in-memory cache
-	txIndex map[[32]byte]uint32
-
-	txPositionIndex map[[32]byte]uint32
-
 	// Pending transactions accumulated during the open ledger phase;
 	// re-applied in canonical order at AcceptLedger time.
-	pendingTxs []pendingTx
-
-	// eventCallback fires when a ledger becomes validated — at quorum-gate time
-	// from SetValidatedLedger, not close time, so subscribers stay in lockstep
-	// with server_info.validated_ledger.
-	eventCallback EventCallback
+	pendingTxs []openledger.PendingTx
 
 	// pendingValidation stashes accepted events by hash at close time so
-	// eventCallback can fire at quorum. Bounded — see pendingValidationMaxLen.
+	// eventSink can fire at quorum. Bounded — see pendingValidationMaxLen.
 	pendingValidation map[[32]byte]*LedgerAcceptedEvent
 
 	// pendingValidationOrder tracks insertion order for LRU eviction.
@@ -226,9 +201,6 @@ type Service struct {
 	// recursion. Unlike the two pending* maps, this holds the ledger payload.
 	heldAdoptions map[uint32]*pendingAdopt
 
-	// hooks provides event callbacks for external subscribers
-	hooks *EventHooks
-
 	networkLedgerState networkLedgerState
 
 	// startupReplay is the one-shot replay staged for the first close and is
@@ -243,15 +215,6 @@ type Service struct {
 	// complete_ledgers is clamped up to it so server_info never advertises
 	// reclaimed ledgers. Nil when online_delete is off.
 	minimumOnlineFunc func() uint32
-
-	// completeMu guards completedLedgers, their canonical hashes, the retention
-	// floor, and active tokens used to reject stale persistence completions.
-	completeMu              sync.RWMutex
-	completedLedgers        *manager.CompleteLedgerSet
-	completeLedgerHashes    map[uint32][32]byte
-	completeLedgerFloor     uint32
-	completeLedgerTokens    map[uint32]uint64
-	nextCompleteLedgerToken uint64
 
 	// openLedgerView is the persistent open-ledger view — source of truth for
 	// the open pool. Built by Start, rebuilt by adopt paths, advanced by Accept.
@@ -292,32 +255,6 @@ type Service struct {
 	// the TxQ's timeLeap flag by processClosedLedgerLocked. Zero in standalone.
 	lastConsensusRoundTime time.Duration
 
-	persistMu            sync.Mutex
-	persistQueue         []*persistJob
-	validatedPersistJobs map[uint32]*persistJob
-	persistWake          chan struct{}
-	persistStarted       bool
-	persistStopping      bool
-	persistWG            sync.WaitGroup
-	canonicalPersistMu   sync.Mutex
-	sweepMu              sync.Mutex
-	sweepCancel          context.CancelFunc
-	sweepDone            chan struct{}
-	sweepInterval        time.Duration
-
-	// ledgerEventMu guards the publication candidates and lossless FIFO queue.
-	// The single dispatcher runs eventCallback serially and is started by Start.
-	ledgerEventMu           sync.Mutex
-	ledgerEventQueue        []*LedgerAcceptedEvent
-	ledgerEventCandidates   map[uint32]*LedgerAcceptedEvent
-	ledgerEventFrontierSeq  uint32
-	ledgerEventFrontierHash [32]byte
-	ledgerEventHaveFrontier bool
-	ledgerEventWake         chan struct{}
-	ledgerEventStarted      bool
-	ledgerEventStopping     bool
-	ledgerEventWG           sync.WaitGroup
-
 	// configCacheMu guards the memoised open-ledger ApplyConfig below. The config
 	// is a pure function of closedLedger, rebuilt only when it advances, keeping
 	// per-tx ingress off an O(amendments) parse + Rules allocation per submit.
@@ -329,8 +266,23 @@ type Service struct {
 	configCache       openledger.ApplyConfig
 }
 
+type serviceLifecycleState uint8
+
+const (
+	serviceCreated serviceLifecycleState = iota
+	serviceStarting
+	serviceRunning
+	serviceFailed
+	serviceStopping
+	serviceStopped
+)
+
 // New creates a new LedgerService
 func New(cfg Config) (*Service, error) {
+	if err := cfg.Startup.validateMode(); err != nil {
+		return nil, fmt.Errorf("invalid ledger service configuration: %w", err)
+	}
+
 	logger := cfg.Logger
 	if logger == nil {
 		logger = xrpllog.Discard()
@@ -355,33 +307,44 @@ func New(cfg Config) (*Service, error) {
 	}
 
 	s := &Service{
-		config:                   cfg,
-		logger:                   logger.Named(xrpllog.PartitionLedger),
-		configuredFees:           configuredFees,
-		nodeStore:                cfg.NodeStore,
-		shamapFamily:             cfg.SHAMapFamily,
-		relationalDB:             cfg.RelationalDB,
-		amendmentTable:           cfg.Table,
-		ledgerHistory:            make(map[uint32]*ledger.Ledger),
-		ledgerByHash:             make(map[[32]byte]uint32),
-		persistedLedgers:         make(map[[32]byte]*ledger.Ledger),
-		txIndex:                  make(map[[32]byte]uint32),
-		txPositionIndex:          make(map[[32]byte]uint32),
+		config:         cfg,
+		logger:         logger.Named(xrpllog.PartitionLedger),
+		configuredFees: configuredFees,
+		nodeStore:      cfg.NodeStore,
+		shamapFamily:   cfg.SHAMapFamily,
+		relationalDB:   cfg.RelationalDB,
+		amendmentTable: cfg.Table,
+		persistenceWorker: persistenceWorker{
+			validatedPersistJobs: make(map[uint32]*persistJob),
+			persistWake:          make(chan struct{}, 1),
+		},
+		eventPublisher: eventPublisher{
+			ledgerEventCandidates: make(map[uint32]*LedgerAcceptedEvent),
+		},
+		historyComponent: historyComponent{
+			ledgerHistory:        make(map[uint32]*ledger.Ledger),
+			ledgerByHash:         make(map[[32]byte]uint32),
+			persistedLedgers:     make(map[[32]byte]*ledger.Ledger),
+			txIndex:              make(map[[32]byte]uint32),
+			txPositionIndex:      make(map[[32]byte]uint32),
+			completedLedgers:     newCompleteLedgerSet(),
+			completeLedgerHashes: make(map[uint32][32]byte),
+			completeLedgerTokens: make(map[uint32]uint64),
+			sweepInterval:        nodeStoreSweepIntervalForSize(cfg.NodeSize),
+		},
 		pendingValidation:        make(map[[32]byte]*LedgerAcceptedEvent),
 		pendingLedgerValidations: make(map[uint32]pendingValidationEntry),
 		heldAdoptions:            make(map[uint32]*pendingAdopt),
-		completedLedgers:         manager.NewCompleteLedgerSet(),
-		completeLedgerHashes:     make(map[uint32][32]byte),
-		completeLedgerTokens:     make(map[uint32]uint64),
-		validatedPersistJobs:     make(map[uint32]*persistJob),
 		txQueue:                  txq.New(txqCfg),
 		localTxs:                 localtxs.New(),
 		feeTrack:                 feetrack.New(),
 		validatedAgeNow:          time.Now,
-		persistWake:              make(chan struct{}, 1),
-		ledgerEventCandidates:    make(map[uint32]*LedgerAcceptedEvent),
-		sweepInterval:            nodeStoreSweepIntervalForSize(cfg.NodeSize),
 	}
+	s.persistenceWorker.service = s
+	s.eventPublisher.service = s
+	s.queries.service = s
+	s.queries.history = &s.historyComponent
+	s.queries.relationalDB = s.relationalDB
 	return s, nil
 }
 
@@ -475,28 +438,33 @@ func (s *Service) AmendmentFirstUnsupportedExpected() (uint32, bool) {
 	return s.amendmentTable.FirstUnsupportedExpected()
 }
 
-// Start initializes the service with a genesis ledger
-func (s *Service) Start() error {
+// Start initializes the service with a genesis ledger.
+func (s *Service) Start() (err error) {
+	s.lifecycleMu.Lock()
+	defer s.lifecycleMu.Unlock()
+	switch s.lifecycleState {
+	case serviceRunning:
+		return nil
+	case serviceStarting:
+		return errors.New("ledger service is already starting")
+	case serviceFailed:
+		return errors.New("ledger service startup previously failed")
+	case serviceStopping:
+		return errors.New("ledger service is stopping")
+	case serviceStopped:
+		return errors.New("ledger service has been stopped")
+	}
+	s.lifecycleState = serviceStarting
+	defer func() {
+		if err != nil {
+			s.lifecycleState = serviceFailed
+		}
+	}()
+
 	s.mu.Lock()
 	defer s.mu.Unlock()
-
-	s.persistMu.Lock()
-	startWorkers := !s.persistStarted
-	if startWorkers {
-		s.persistStarted = true
-		s.persistWG.Add(1)
-	}
-	s.persistMu.Unlock()
-	if startWorkers {
-		go s.runPersistWorker()
-
-		s.ledgerEventMu.Lock()
-		s.ledgerEventWake = make(chan struct{}, 1)
-		s.ledgerEventStarted = true
-		s.ledgerEventWG.Add(1)
-		s.ledgerEventMu.Unlock()
-		go s.runLedgerEventDispatcher()
-	}
+	s.historyComponent.mu.Lock()
+	defer s.historyComponent.mu.Unlock()
 
 	genesisConfig := s.config.GenesisConfig
 	switch s.config.Startup.Mode {
@@ -549,8 +517,24 @@ func (s *Service) Start() error {
 			return fmt.Errorf("validate startup ledger: %w", err)
 		}
 	}
+	if s.config.Startup.Mode == StartupFresh {
+		if err := s.persistValidatedLedger(context.Background(), genesisLedger, false); err != nil {
+			return fmt.Errorf("persist fresh genesis ledger: %w", err)
+		}
+		if selection.ledger.IsValidated() {
+			if err := s.persistValidatedLedger(context.Background(), selection.ledger, true); err != nil {
+				return fmt.Errorf("persist fresh initial ledger: %w", err)
+			}
+		} else if s.nodeStore != nil {
+			if err := s.persistToNodeStore(context.Background(), selection.ledger, selection.ledger.Sequence()); err != nil {
+				return fmt.Errorf("persist fresh initial ledger: %w", err)
+			}
+		}
+	}
 	if selection.loaded {
-		s.installLoadedStartupLocked(selection.ledger, genesisLedger)
+		if err := s.installLoadedStartupLocked(selection.ledger, genesisLedger); err != nil {
+			return err
+		}
 		s.syncTable(selection.ledger)
 	} else {
 		s.closedLedger = selection.ledger
@@ -586,6 +570,9 @@ func (s *Service) Start() error {
 		"fastLoadProvisional", s.networkLedgerState == networkLedgerFastLoadProvisional,
 	)
 	s.startNodeStoreSweeper()
+	s.persistenceWorker.start()
+	s.eventPublisher.start()
+	s.lifecycleState = serviceRunning
 
 	return nil
 }
@@ -1068,16 +1055,18 @@ func (s *Service) GetLedgerBySequence(seq uint32) (*ledger.Ledger, error) {
 
 func (s *Service) getLedgerBySequence(ctx context.Context, seq uint32) (*ledger.Ledger, error) {
 	s.mu.RLock()
+	s.historyComponent.mu.RLock()
 	history := s.ledgerHistory[seq]
 	var open *ledger.Ledger
 	if s.openLedger != nil && s.openLedger.Sequence() == seq {
 		open = s.openLedger
 	}
+	s.historyComponent.mu.RUnlock()
 	s.mu.RUnlock()
 
 	s.completeMu.RLock()
 	hash, complete := s.completeLedgerHashes[seq]
-	complete = complete && s.completedLedgers != nil && s.completedLedgers.Contains(seq)
+	complete = complete && s.completedLedgers != nil && s.completedLedgers.contains(seq)
 	s.completeMu.RUnlock()
 	if history != nil && (!complete || history.Hash() == hash) {
 		return history, nil
@@ -1089,9 +1078,9 @@ func (s *Service) getLedgerBySequence(ctx context.Context, seq uint32) (*ledger.
 		return nil, ErrLedgerNotFound
 	}
 
-	s.mu.RLock()
+	s.historyComponent.mu.RLock()
 	cached := s.persistedLedgers[hash]
-	s.mu.RUnlock()
+	s.historyComponent.mu.RUnlock()
 	if cached != nil && cached.Sequence() == seq {
 		if cached.IsValidated() {
 			return cached, nil
@@ -1122,16 +1111,16 @@ func (s *Service) getLedgerBySequence(ctx context.Context, seq uint32) (*ledger.
 
 	s.completeMu.RLock()
 	stillComplete := s.completedLedgers != nil &&
-		s.completedLedgers.Contains(seq) &&
+		s.completedLedgers.contains(seq) &&
 		s.completeLedgerHashes[seq] == hash
 	s.completeMu.RUnlock()
 	if !stillComplete {
 		return nil, ErrLedgerNotFound
 	}
 
-	s.mu.Lock()
+	s.historyComponent.mu.Lock()
 	s.cachePersistedLedgerLocked(loaded)
-	s.mu.Unlock()
+	s.historyComponent.mu.Unlock()
 	return loaded, nil
 }
 
@@ -1139,8 +1128,8 @@ func (s *Service) getLedgerBySequence(ctx context.Context, seq uint32) (*ledger.
 // never the mutable open ledger — the consensus catch-up walk needs immutable,
 // parent-hash-chained ledgers.
 func (s *Service) AdoptedLedgerBySequence(seq uint32) (*ledger.Ledger, error) {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
+	s.historyComponent.mu.RLock()
+	defer s.historyComponent.mu.RUnlock()
 	if l, ok := s.ledgerHistory[seq]; ok {
 		return l, nil
 	}
@@ -1156,20 +1145,20 @@ func (s *Service) GetLedgerByHashContext(ctx context.Context, hash [32]byte) (*l
 }
 
 func (s *Service) getLedgerByHash(ctx context.Context, hash [32]byte) (*ledger.Ledger, error) {
-	s.mu.RLock()
+	s.historyComponent.mu.RLock()
 	if seq, ok := s.ledgerByHash[hash]; ok {
 		if l, ok := s.ledgerHistory[seq]; ok {
-			s.mu.RUnlock()
+			s.historyComponent.mu.RUnlock()
 			return l, nil
 		}
 	}
 	if l, ok := s.persistedLedgers[hash]; ok {
-		s.mu.RUnlock()
+		s.historyComponent.mu.RUnlock()
 		return s.validatedPersistedLedger(ctx, l)
 	}
 	canLoad := s.nodeStore != nil && s.shamapFamily != nil &&
 		s.relationalDB != nil && s.relationalDB.Ledger() != nil
-	s.mu.RUnlock()
+	s.historyComponent.mu.RUnlock()
 	if !canLoad {
 		return nil, ErrLedgerNotFound
 	}
@@ -1179,19 +1168,19 @@ func (s *Service) getLedgerByHash(ctx context.Context, hash [32]byte) (*ledger.L
 		return nil, err
 	}
 
-	s.mu.Lock()
+	s.historyComponent.mu.Lock()
 	if seq, ok := s.ledgerByHash[hash]; ok {
 		if l, ok := s.ledgerHistory[seq]; ok {
-			s.mu.Unlock()
+			s.historyComponent.mu.Unlock()
 			return l, nil
 		}
 	}
 	if l, ok := s.persistedLedgers[hash]; ok {
-		s.mu.Unlock()
+		s.historyComponent.mu.Unlock()
 		return s.validatedPersistedLedger(ctx, l)
 	}
 	s.cachePersistedLedgerLocked(loaded)
-	s.mu.Unlock()
+	s.historyComponent.mu.Unlock()
 	return s.validatedPersistedLedger(ctx, loaded)
 }
 
@@ -1326,10 +1315,10 @@ func (s *Service) MaxPersistedLedgerSeq(ctx context.Context) uint32 {
 }
 
 // ledgerHistoryRangeLocked returns the inclusive [min, max] span of in-memory
-// history, or ok=false when empty. Caller holds s.mu. NB: the span assumes
+// history, or ok=false when empty. Caller holds historyComponent.mu. NB: the span assumes
 // contiguity — purges/backward-fills can leave gaps, so callers reporting durable
 // availability must layer their own floor (see GetServerInfo's clamp).
-func (s *Service) ledgerHistoryRangeLocked() (min, max uint32, ok bool) {
+func (s *historyComponent) ledgerHistoryRangeLocked() (min, max uint32, ok bool) {
 	first := true
 	for seq := range s.ledgerHistory {
 		if first || seq < min {
@@ -1346,12 +1335,14 @@ func (s *Service) ledgerHistoryRangeLocked() (min, max uint32, ok bool) {
 // AvailableLedgerRange returns the inclusive [min, max] range of locally held
 // ledgers, or ok=false when none. Used to bound a ledger-integrity cleaning run.
 func (s *Service) AvailableLedgerRange() (min, max uint32, ok bool) {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
+	s.historyComponent.mu.RLock()
+	defer s.historyComponent.mu.RUnlock()
 	return s.ledgerHistoryRangeLocked()
 }
 
 func (s *Service) contiguousValidatedRangeLocked() (first, last uint32, ok bool) {
+	s.historyComponent.mu.RLock()
+	defer s.historyComponent.mu.RUnlock()
 	if s.validatedLedger == nil {
 		return 0, 0, false
 	}

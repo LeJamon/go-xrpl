@@ -111,9 +111,7 @@ func (a *Adaptor) runConsensusPhaseDispatcher() {
 	for {
 		select {
 		case p := <-a.consensusPhaseCh:
-			if hooks := a.ledgerService.EventHooks(); hooks != nil && hooks.OnConsensusPhase != nil {
-				hooks.OnConsensusPhase(p)
-			}
+			a.ledgerService.NotifyConsensusPhase(p)
 		case <-a.consensusPhaseQuit:
 			return
 		}

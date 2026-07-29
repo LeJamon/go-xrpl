@@ -25,7 +25,7 @@ import (
 // a pending ValidatorToDisable seeded on the parent and asserts the transition
 // materialised.
 func TestAcceptConsensusResult_FlagLedgerAppliesNegativeUNL(t *testing.T) {
-	cfg := service.DefaultConfig()
+	cfg := defaultServiceConfig()
 	cfg.Standalone = false
 	svc, err := service.New(cfg)
 	if err != nil {

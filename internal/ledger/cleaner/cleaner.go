@@ -4,18 +4,12 @@
 // It walks the state and transaction SHAMap trees of a ledger (or a ledger
 // range) against the content-addressed node store, reporting nodes that are
 // missing or corrupt.
-//
-// Divergence from rippled, by design: rippled re-acquires missing nodes from
-// peers and loops on a ledger until it is whole. go-xrpl has no inbound-ledger
-// acquisition wired here, so the worker reports gaps and advances rather than
-// blocking — every ledger in the range is checked exactly once. Re-acquisition
-// (and rippled's fix_txns relational-index repair) are follow-ups that land
-// with the content-addressed persistence migration.
 package cleaner
 
 import (
 	"context"
 	"errors"
+	"fmt"
 	"sync"
 	"time"
 
@@ -26,9 +20,12 @@ import (
 // errNoFamily is returned when the cleaner has no node store to walk against.
 var errNoFamily = errors.New("ledger_cleaner: no node store configured")
 
-// interLedgerPause is the small courtesy delay between ledgers so the verifier
-// never monopolises the node store.
-const interLedgerPause = 50 * time.Millisecond
+var errIncompleteLedger = errors.New("ledger_cleaner: ledger is incomplete")
+
+const (
+	interLedgerPause  = 50 * time.Millisecond
+	defaultRetryDelay = 2 * time.Second
+)
 
 // LedgerSource supplies everything the cleaner needs to verify a ledger's
 // trees against the node store. Implemented by an adapter over the ledger
@@ -38,13 +35,34 @@ type LedgerSource interface {
 	// node can verify locally. ok is false when no ledger is available.
 	AvailableRange() (min, max uint32, ok bool)
 
-	// LedgerRoots returns the state-tree and transaction-tree root hashes for
-	// a ledger sequence. ok is false when the ledger is unknown locally. A
-	// zero hash denotes an empty tree.
-	LedgerRoots(seq uint32) (stateRoot, txRoot [32]byte, ok bool)
+	// Ledger returns the locally indexed ledger header and tree roots.
+	Ledger(ctx context.Context, seq uint32) (LedgerData, bool, error)
+
+	// CanonicalHash returns the hash committed by the validated chain.
+	CanonicalHash(ctx context.Context, seq uint32) ([32]byte, bool, error)
+
+	// RepairLedgerIndex installs the canonical sequence-to-hash mapping and
+	// reports whether relational ledger or transaction rows must be rewritten.
+	RepairLedgerIndex(ctx context.Context, ledger LedgerData) (bool, error)
 
 	// Family is the content-addressed node store the trees are walked against.
 	Family() shamap.Family
+
+	// Reacquire requests the ledger from peers after an incomplete or failed
+	// verification. The cleaner retries the same sequence after the request.
+	Reacquire(ctx context.Context, seq uint32) error
+
+	// RepairTransactions rewrites the relational transaction indexes for seq.
+	// Implementations without relational persistence return nil.
+	RepairTransactions(ctx context.Context, seq uint32) error
+}
+
+type LedgerData struct {
+	Sequence   uint32
+	Hash       [32]byte
+	ParentHash [32]byte
+	StateRoot  [32]byte
+	TxRoot     [32]byte
 }
 
 // Params configures a cleaning run; the fields mirror the parameters rippled's
@@ -53,8 +71,9 @@ type Params struct {
 	Ledger     *uint32 // single ledger; sets min==max and forces a deep check
 	MinLedger  *uint32 // lower bound of the range
 	MaxLedger  *uint32 // upper bound of the range
-	Full       bool    // deep check: walk every node (implies CheckNodes)
-	CheckNodes bool    // walk every node rather than just the roots
+	Full       *bool   // set both CheckNodes and FixTxns
+	CheckNodes *bool   // explicit node-check override
+	FixTxns    *bool   // explicit relational-index repair override
 	Stop       bool    // stop an in-progress run
 }
 
@@ -64,6 +83,7 @@ type Status struct {
 	MinLedger      uint32
 	MaxLedger      uint32
 	CheckNodes     bool
+	FixTxns        bool
 	Failures       int
 	LedgersChecked uint64
 	NodesChecked   uint64
@@ -76,31 +96,37 @@ type Cleaner struct {
 	src    LedgerSource
 	logger xrpllog.Logger
 
-	mu       sync.Mutex
-	cond     *sync.Cond
-	running  bool // worker goroutine is processing a range
-	started  bool
-	exit     bool
-	min, max uint32
-	deep     bool
-	failures int
+	mu         sync.Mutex
+	cond       *sync.Cond
+	running    bool // worker goroutine is processing a range
+	started    bool
+	exit       bool
+	min, max   uint32
+	deep       bool
+	fixTxns    bool
+	failures   int
+	generation uint64
 
 	ledgersChecked uint64
 	nodesChecked   uint64
 	missingNodes   uint64
 	lastError      string
 
-	ctx    context.Context
-	cancel context.CancelFunc
-	done   chan struct{}
+	ctx        context.Context
+	cancel     context.CancelFunc
+	runCtx     context.Context
+	runCancel  context.CancelFunc
+	retryDelay time.Duration
+	done       chan struct{}
 }
 
 // New creates a Cleaner. The worker does not run until Start is called.
 func New(src LedgerSource, logger xrpllog.Logger) *Cleaner {
 	c := &Cleaner{
-		src:    src,
-		logger: logger,
-		done:   make(chan struct{}),
+		src:        src,
+		logger:     logger,
+		retryDelay: defaultRetryDelay,
+		done:       make(chan struct{}),
 	}
 	c.cond = sync.NewCond(&c.mu)
 	c.ctx, c.cancel = context.WithCancel(context.Background())
@@ -110,7 +136,7 @@ func New(src LedgerSource, logger xrpllog.Logger) *Cleaner {
 // Start launches the background worker. Idempotent.
 func (c *Cleaner) Start() {
 	c.mu.Lock()
-	if c.started {
+	if c.started || c.exit {
 		c.mu.Unlock()
 		return
 	}
@@ -122,13 +148,26 @@ func (c *Cleaner) Start() {
 // Stop signals the worker to exit and waits for it to finish. Idempotent.
 func (c *Cleaner) Stop() {
 	c.mu.Lock()
-	if !c.started || c.exit {
+	if c.exit {
+		started := c.started
 		c.mu.Unlock()
+		if started {
+			<-c.done
+		}
 		return
 	}
 	c.exit = true
+	c.running = false
+	c.generation++
+	if c.runCancel != nil {
+		c.runCancel()
+	}
 	c.cancel()
 	c.cond.Broadcast()
+	if !c.started {
+		c.mu.Unlock()
+		return
+	}
 	c.mu.Unlock()
 	<-c.done
 }
@@ -136,38 +175,85 @@ func (c *Cleaner) Stop() {
 // Clean configures and (unless Stop is set) starts a verification run, then
 // returns the resulting status.
 func (c *Cleaner) Clean(p Params) Status {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-
 	if p.Stop {
+		c.mu.Lock()
+		defer c.mu.Unlock()
+		if c.exit {
+			c.lastError = "ledger_cleaner: cleaner stopped"
+			return c.statusLocked()
+		}
+		c.generation++
+		if c.runCancel != nil {
+			c.runCancel()
+			c.runCancel = nil
+		}
 		c.running = false
 		c.min, c.max = 0, 0
 		c.cond.Broadcast()
 		return c.statusLocked()
 	}
 
-	// Default the range to the locally-available validated range, then let
-	// explicit parameters narrow it.
-	min, max, ok := c.src.AvailableRange()
+	// The range provider may perform storage I/O. Keep it outside the cleaner
+	// mutex so status and stop requests cannot be blocked behind that work.
+	availableMin, availableMax, ok := c.src.AvailableRange()
+
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	if c.exit {
+		c.lastError = "ledger_cleaner: cleaner stopped"
+		return c.statusLocked()
+	}
 	if !ok {
 		c.lastError = "no ledgers available to verify"
 		return c.statusLocked()
 	}
 
-	c.deep = p.Full || p.CheckNodes
-	c.failures = 0
-	c.lastError = ""
-
-	if p.MinLedger != nil && *p.MinLedger > min {
-		min = *p.MinLedger
+	min, max := availableMin, availableMax
+	if p.Ledger != nil {
+		min, max = *p.Ledger, *p.Ledger
 	}
-	if p.MaxLedger != nil && *p.MaxLedger < max {
+	if p.MaxLedger != nil {
 		max = *p.MaxLedger
 	}
-	if p.Ledger != nil {
-		// A single ledger forces a deep check.
-		min, max = *p.Ledger, *p.Ledger
-		c.deep = true
+	if p.MinLedger != nil {
+		min = *p.MinLedger
+	}
+	if min == 0 || max == 0 || min > max {
+		c.lastError = fmt.Sprintf("invalid ledger range %d-%d", min, max)
+		return c.statusLocked()
+	}
+	if min < availableMin || max > availableMax {
+		c.lastError = fmt.Sprintf(
+			"ledger range %d-%d is outside available range %d-%d",
+			min, max, availableMin, availableMax,
+		)
+		return c.statusLocked()
+	}
+
+	if c.runCancel != nil {
+		c.runCancel()
+	}
+	c.generation++
+	c.runCtx, c.runCancel = context.WithCancel(c.ctx)
+
+	c.deep = p.Ledger != nil
+	c.fixTxns = p.Ledger != nil
+	c.failures = 0
+	c.ledgersChecked = 0
+	c.nodesChecked = 0
+	c.missingNodes = 0
+	c.lastError = ""
+
+	if p.Full != nil {
+		c.deep = *p.Full
+		c.fixTxns = *p.Full
+	}
+	if p.FixTxns != nil {
+		c.fixTxns = *p.FixTxns
+	}
+	if p.CheckNodes != nil {
+		c.deep = *p.CheckNodes
 	}
 
 	c.min, c.max = min, max
@@ -185,7 +271,9 @@ func (c *Cleaner) Status() Status {
 
 func (c *Cleaner) statusLocked() Status {
 	state := "idle"
-	if c.running {
+	if c.exit {
+		state = "stopped"
+	} else if c.running {
 		state = "running"
 	}
 	return Status{
@@ -193,6 +281,7 @@ func (c *Cleaner) statusLocked() Status {
 		MinLedger:      c.min,
 		MaxLedger:      c.max,
 		CheckNodes:     c.deep,
+		FixTxns:        c.fixTxns,
 		Failures:       c.failures,
 		LedgersChecked: c.ledgersChecked,
 		NodesChecked:   c.nodesChecked,
@@ -215,41 +304,70 @@ func (c *Cleaner) run() {
 			return
 		}
 		// Process from the top of the range downward.
-		if c.min > c.max {
+		if c.min == 0 || c.max == 0 || c.min > c.max {
+			c.min, c.max = 0, 0
 			c.running = false
+			if c.runCancel != nil {
+				c.runCancel()
+				c.runCancel = nil
+			}
 			c.mu.Unlock()
 			continue
 		}
 		seq := c.max
 		deep := c.deep
+		fixTxns := c.fixTxns
+		generation := c.generation
+		runCtx := c.runCtx
 		c.mu.Unlock()
 
-		nodes, missing, err := c.cleanLedger(c.ctx, seq, deep)
+		nodes, missing, repairTxns, reacquire, err := c.cleanLedger(runCtx, seq, deep)
+		if err == nil && missing == 0 && (fixTxns || repairTxns) {
+			err = c.src.RepairTransactions(runCtx, seq)
+		}
+		failed := err != nil || missing != 0
+		if failed && runCtx.Err() == nil && (reacquire || missing != 0) {
+			reacquireErr := c.src.Reacquire(runCtx, seq)
+			if err == nil {
+				err = errIncompleteLedger
+			}
+			if reacquireErr != nil {
+				err = errors.Join(err, reacquireErr)
+			}
+		}
 
 		c.mu.Lock()
 		if c.exit {
 			c.mu.Unlock()
 			return
 		}
-		c.ledgersChecked++
+		if generation != c.generation || !c.running {
+			c.mu.Unlock()
+			continue
+		}
 		c.nodesChecked += nodes
 		c.missingNodes += missing
-		if err != nil {
+		if failed {
 			c.failures++
-			c.lastError = err.Error()
+			if err != nil {
+				c.lastError = err.Error()
+			}
 			if c.logger != nil {
 				c.logger.Warn("ledger_cleaner: ledger verification failed", "seq", seq, "err", err)
 			}
-		} else if missing > 0 {
-			c.failures++
-			if c.logger != nil {
-				c.logger.Warn("ledger_cleaner: incomplete ledger", "seq", seq, "missing_nodes", missing)
+			c.mu.Unlock()
+			if c.sleepRun(runCtx, c.retryDelay) {
+				continue
 			}
-		} else if c.logger != nil {
+			continue
+		}
+
+		c.failures = 0
+		c.lastError = ""
+		c.ledgersChecked++
+		if c.logger != nil {
 			c.logger.Debug("ledger_cleaner: ledger verified complete", "seq", seq, "nodes", nodes)
 		}
-		// Advance regardless of outcome: with no peer re-acquisition there is
-		// nothing to retry, so draining the range guarantees termination.
 		if seq == c.min {
 			c.min++
 		}
@@ -258,27 +376,34 @@ func (c *Cleaner) run() {
 		}
 		if c.min > c.max {
 			c.running = false
+			if c.runCancel != nil {
+				c.runCancel()
+				c.runCancel = nil
+			}
 			if c.logger != nil {
 				c.logger.Info("ledger_cleaner: run complete",
 					"ledgers_checked", c.ledgersChecked,
-					"missing_nodes", c.missingNodes,
-					"failures", c.failures)
+					"missing_nodes", c.missingNodes)
 			}
 		}
 		c.mu.Unlock()
 
-		if c.sleep(interLedgerPause) {
+		if c.sleepRun(runCtx, interLedgerPause) {
+			continue
+		}
+		if c.ctx.Err() != nil {
 			return
 		}
 	}
 }
 
-// sleep pauses for d, returning true if the cleaner was stopped meanwhile.
-func (c *Cleaner) sleep(d time.Duration) (stopped bool) {
+func (c *Cleaner) sleepRun(ctx context.Context, d time.Duration) bool {
+	timer := time.NewTimer(d)
+	defer timer.Stop()
 	select {
-	case <-c.ctx.Done():
+	case <-ctx.Done():
 		return true
-	case <-time.After(d):
+	case <-timer.C:
 		return false
 	}
 }
@@ -287,22 +412,69 @@ func (c *Cleaner) sleep(d time.Duration) (stopped bool) {
 // set it walks every node; otherwise it only confirms the tree roots are
 // present (a shallow check). It returns the number of nodes inspected and the
 // number found missing or corrupt.
-func (c *Cleaner) cleanLedger(ctx context.Context, seq uint32, deep bool) (nodes, missing uint64, err error) {
-	stateRoot, txRoot, ok := c.src.LedgerRoots(seq)
+func (c *Cleaner) cleanLedger(
+	ctx context.Context,
+	seq uint32,
+	deep bool,
+) (nodes, missing uint64, repairTxns, reacquire bool, err error) {
+	info, ok, err := c.src.Ledger(ctx, seq)
+	if err != nil {
+		return 0, 0, false, true, err
+	}
 	if !ok {
-		return 0, 1, nil // ledger unavailable locally; counts as one gap
+		return 0, 1, false, true, nil
+	}
+	if info.Sequence != seq {
+		return 0, 0, false, true, fmt.Errorf(
+			"ledger_cleaner: ledger sequence %d indexed at %d",
+			info.Sequence,
+			seq,
+		)
+	}
+	canonicalHash, ok, err := c.src.CanonicalHash(ctx, seq)
+	if err != nil {
+		return 0, 0, false, true, err
+	}
+	if !ok {
+		return 0, 0, false, true, fmt.Errorf("ledger_cleaner: canonical hash unavailable for ledger %d", seq)
+	}
+	if info.Hash != canonicalHash {
+		return 0, 0, false, true, fmt.Errorf("ledger_cleaner: ledger %d hash does not match validated chain", seq)
+	}
+	expectedParent := [32]byte{}
+	if seq > 1 {
+		expectedParent, ok, err = c.src.CanonicalHash(ctx, seq-1)
+		if err != nil {
+			return 0, 0, false, true, err
+		}
+		if !ok {
+			return 0, 0, false, true, fmt.Errorf(
+				"ledger_cleaner: canonical parent unavailable for ledger %d",
+				seq,
+			)
+		}
+	}
+	if info.ParentHash != expectedParent {
+		return 0, 0, false, true, fmt.Errorf(
+			"ledger_cleaner: ledger %d parent does not match validated chain",
+			seq,
+		)
+	}
+	repairTxns, err = c.src.RepairLedgerIndex(ctx, info)
+	if err != nil {
+		return 0, 0, false, false, err
 	}
 	family := c.src.Family()
 	if family == nil {
-		return 0, 0, errNoFamily
+		return 0, 0, repairTxns, false, errNoFamily
 	}
 
 	for _, t := range []struct {
 		root    [32]byte
 		mapType shamap.Type
 	}{
-		{stateRoot, shamap.TypeState},
-		{txRoot, shamap.TypeTransaction},
+		{info.StateRoot, shamap.TypeState},
+		{info.TxRoot, shamap.TypeTransaction},
 	} {
 		if isZeroHash(t.root) {
 			continue // empty tree
@@ -322,12 +494,12 @@ func (c *Cleaner) cleanLedger(ctx context.Context, seq uint32, deep bool) (nodes
 
 		res, cerr := sm.CheckComplete(ctx)
 		if cerr != nil {
-			return nodes, missing, cerr
+			return nodes, missing, repairTxns, true, cerr
 		}
 		nodes += uint64(res.InnerNodes + res.LeafNodes)
 		missing += uint64(len(res.Missing) + len(res.Corrupt))
 	}
-	return nodes, missing, nil
+	return nodes, missing, repairTxns, missing != 0, nil
 }
 
 func isZeroHash(h [32]byte) bool {

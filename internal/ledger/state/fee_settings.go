@@ -6,7 +6,7 @@ import (
 	"fmt"
 
 	"github.com/LeJamon/go-xrpl/drops"
-	"github.com/LeJamon/go-xrpl/internal/tx/ledgerfields"
+	ledgerfields "github.com/LeJamon/go-xrpl/ledger/entry"
 )
 
 var ErrInvalidFeeSettings = errors.New("invalid FeeSettings field combination")
@@ -95,10 +95,11 @@ func ParseFeeSettings(data []byte) (*FeeSettings, error) {
 		if err != nil {
 			return nil, err
 		}
-		if !decodedAmount.IsNative() {
-			return nil, fmt.Errorf("%w: FeeSettings contains a non-native XRP fee", ErrInvalidFeeSettings)
+		drops, err := nonNegativeNativeDrops("FeeSettings."+amount.name, decodedAmount)
+		if err != nil {
+			return nil, fmt.Errorf("%w: %v", ErrInvalidFeeSettings, err)
 		}
-		*amount.dst = nativeMagnitude(decodedAmount)
+		*amount.dst = drops
 		*amount.present = true
 	}
 	if _, ok := fields["PreviousTxnID"]; ok {

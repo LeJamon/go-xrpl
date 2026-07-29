@@ -7,10 +7,11 @@ package skiplist
 import (
 	"context"
 	"encoding/hex"
+	"errors"
 	"fmt"
 
-	"github.com/LeJamon/go-xrpl/internal/tx/ledgerfields"
 	"github.com/LeJamon/go-xrpl/keylet"
+	ledgerfields "github.com/LeJamon/go-xrpl/ledger/entry"
 	"github.com/LeJamon/go-xrpl/shamap"
 )
 
@@ -22,6 +23,12 @@ import (
 // non-chain-advance path mutated it (issue #470: speculative-consensus leakage).
 // Failing loudly here prevents emitting a divergent ledger and forking the network.
 func UpdateOnMap(stateMap *shamap.SHAMap, ledgerSeq uint32, parentHash [32]byte) error {
+	if stateMap == nil {
+		return errors.New("nil state map")
+	}
+	if ledgerSeq == 0 {
+		return nil
+	}
 	prevIndex := ledgerSeq - 1
 
 	// Genesis ledger (seq 1) has no parent to record.
@@ -31,6 +38,7 @@ func UpdateOnMap(stateMap *shamap.SHAMap, ledgerSeq uint32, parentHash [32]byte)
 
 	// Historical skiplist: append without trimming; grows monotonically up to
 	// 256 entries (a 64K window holds 65536/256 = 256).
+	var writes []*shamap.Item
 	if (prevIndex & 0xff) == 0 {
 		histKey := keylet.LedgerHashesForSeq(prevIndex)
 		fields, hashes, lastSeq, err := ReadLedgerHashesSLE(stateMap, histKey.Key)
@@ -41,9 +49,11 @@ func UpdateOnMap(stateMap *shamap.SHAMap, ledgerSeq uint32, parentHash [32]byte)
 			return fmt.Errorf("historical LedgerHashes (key %x): %w", histKey.Key, err)
 		}
 		hashes = append(hashes, parentHash)
-		if err := Write(stateMap, histKey.Key, fields, hashes, prevIndex); err != nil {
-			return fmt.Errorf("write historical skip list: %w", err)
+		data, err := encode(fields, hashes, prevIndex)
+		if err != nil {
+			return fmt.Errorf("encode historical skip list: %w", err)
 		}
+		writes = append(writes, shamap.NewItem(histKey.Key, data))
 	}
 
 	// Rolling-256 skiplist: every ledger.
@@ -60,10 +70,15 @@ func UpdateOnMap(stateMap *shamap.SHAMap, ledgerSeq uint32, parentHash [32]byte)
 		hashes = hashes[1:]
 	}
 	hashes = append(hashes, parentHash)
-	if err := Write(stateMap, rollingKey.Key, fields, hashes, prevIndex); err != nil {
-		return fmt.Errorf("write rolling skip list: %w", err)
+	data, err := encode(fields, hashes, prevIndex)
+	if err != nil {
+		return fmt.Errorf("encode rolling skip list: %w", err)
 	}
+	writes = append(writes, shamap.NewItem(rollingKey.Key, data))
 
+	if err := stateMap.PutItemsAtomically(writes...); err != nil {
+		return fmt.Errorf("write skip lists: %w", err)
+	}
 	return nil
 }
 
@@ -104,6 +119,16 @@ func assertHistoricalSkipListConsistent(hashes [][32]byte, lastSeq, prevIndex ui
 		return fmt.Errorf("existing LastLedgerSequence=%d, want %d (prevIndex-256); state was mutated by a non-chain-advance path",
 			lastSeq, wantLastSeq)
 	}
+	offset := prevIndex & 0xffff
+	wantLen := 0
+	if prevIndex>>16 != 0 {
+		wantLen = int(offset >> 8)
+	} else if offset != 0 {
+		wantLen = int(offset>>8) - 1
+	}
+	if len(hashes) != wantLen {
+		return fmt.Errorf("existing Hashes length=%d, want %d for historical page", len(hashes), wantLen)
+	}
 	return nil
 }
 
@@ -129,6 +154,19 @@ func ReadLedgerHashesSLEContext(ctx context.Context, stateMap *shamap.SHAMap, ke
 	hashes, err := decodeHashesField(entry.Hashes)
 	if err != nil {
 		return nil, nil, 0, err
+	}
+	fields := entry.ToMap()
+	if _, ok := fields["LastLedgerSequence"]; !ok {
+		return nil, nil, 0, errors.New("LedgerHashes missing LastLedgerSequence")
+	}
+	if len(hashes) == 0 || len(hashes) > 256 {
+		return nil, nil, 0, fmt.Errorf("LedgerHashes has invalid Hashes cardinality %d", len(hashes))
+	}
+	if firstRaw, ok := fields["FirstLedgerSequence"]; ok {
+		first, ok := firstRaw.(uint32)
+		if !ok || first == 0 || first > entry.LastLedgerSequence {
+			return nil, nil, 0, errors.New("LedgerHashes has invalid FirstLedgerSequence")
+		}
 	}
 	return entry, hashes, entry.LastLedgerSequence, nil
 }
@@ -160,6 +198,14 @@ func ReadHashes(stateMap *shamap.SHAMap, key [32]byte) ([][32]byte, error) {
 // Write serializes a LedgerHashes SLE to the state map. Existing entries retain
 // every decoded optional field; fresh entries leave FirstLedgerSequence absent.
 func Write(stateMap *shamap.SHAMap, key [32]byte, entry *ledgerfields.LedgerHashes, hashes [][32]byte, lastSeq uint32) error {
+	data, err := encode(entry, hashes, lastSeq)
+	if err != nil {
+		return err
+	}
+	return stateMap.Put(key, data)
+}
+
+func encode(entry *ledgerfields.LedgerHashes, hashes [][32]byte, lastSeq uint32) ([]byte, error) {
 	hashHexes := make([]string, len(hashes))
 	for i, h := range hashes {
 		hashHexes[i] = fmt.Sprintf("%064X", h)
@@ -174,8 +220,7 @@ func Write(stateMap *shamap.SHAMap, key [32]byte, entry *ledgerfields.LedgerHash
 
 	data, err := entry.Encode()
 	if err != nil {
-		return fmt.Errorf("encode LedgerHashes: %w", err)
+		return nil, fmt.Errorf("encode LedgerHashes: %w", err)
 	}
-
-	return stateMap.Put(key, data)
+	return data, nil
 }

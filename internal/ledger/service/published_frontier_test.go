@@ -35,7 +35,7 @@ func TestPublishedFrontier_AdvancesBeforeCallback(t *testing.T) {
 
 	validated := makeStubLedger(t, 10, [32]byte{0x10}, [32]byte{0x09})
 	var observed ServerInfo
-	svc.SetEventCallback(func(*LedgerAcceptedEvent) {
+	setEventSinkFunc(svc, func(*LedgerAcceptedEvent) {
 		observed = svc.GetServerInfo()
 	})
 
@@ -77,7 +77,7 @@ func TestPublishedFrontier_LagsValidatedQueueUntilOrderedDelivery(t *testing.T) 
 	releaseFirst := make(chan struct{})
 	secondDelivered := make(chan struct{})
 	var calls atomic.Uint32
-	svc.SetEventCallback(func(*LedgerAcceptedEvent) {
+	setEventSinkFunc(svc, func(*LedgerAcceptedEvent) {
 		switch calls.Add(1) {
 		case 1:
 			close(firstStarted)
@@ -124,7 +124,7 @@ func TestPublishedFrontier_LosslessBeyondFormerQueueCapacity(t *testing.T) {
 	releaseFirst := make(chan struct{})
 	allDelivered := make(chan struct{})
 	var calls atomic.Uint32
-	svc.SetEventCallback(func(*LedgerAcceptedEvent) {
+	setEventSinkFunc(svc, func(*LedgerAcceptedEvent) {
 		switch calls.Add(1) {
 		case 1:
 			close(firstStarted)
@@ -173,7 +173,7 @@ func TestPublishedFrontier_HoldsGapUntilBelowTipLedgerArrives(t *testing.T) {
 	tip := makeStubLedger(t, frontier+2, [32]byte{0x52}, missing.Hash())
 
 	published := make(chan uint32, 3)
-	svc.SetEventCallback(func(event *LedgerAcceptedEvent) {
+	setEventSinkFunc(svc, func(event *LedgerAcceptedEvent) {
 		published <- publishSequence(event)
 	})
 	svc.dispatchLedgerEvent(&LedgerAcceptedEvent{Ledger: first})
@@ -208,7 +208,7 @@ func TestPublishedFrontier_JumpsWhenGapExceedsLimit(t *testing.T) {
 	t.Cleanup(svc.Stop)
 
 	published := make(chan uint32, 3)
-	svc.SetEventCallback(func(event *LedgerAcceptedEvent) {
+	setEventSinkFunc(svc, func(event *LedgerAcceptedEvent) {
 		published <- publishSequence(event)
 	})
 
@@ -235,7 +235,7 @@ func TestPublishedFrontier_FirstPublicationStartsAtValidatedTip(t *testing.T) {
 	t.Cleanup(svc.Stop)
 
 	published := make(chan uint32, 1)
-	svc.SetEventCallback(func(event *LedgerAcceptedEvent) {
+	setEventSinkFunc(svc, func(event *LedgerAcceptedEvent) {
 		published <- publishSequence(event)
 	})
 

@@ -24,7 +24,7 @@ func TestPaymentNumberMathUsesRulesScale(t *testing.T) {
 
 func TestSolveQuadraticEqRetainsRulesScale(t *testing.T) {
 	small := legacyNumberMath()
-	large := numberMath{ctx: state.NewNumberContext(state.MantissaScaleLarge)}
+	large := numberMath{ctx: state.NewNumberContext(state.MantissaScaleLarge, true)}
 
 	coefficients := func(m numberMath) (state.XRPLNumber, state.XRPLNumber, state.XRPLNumber) {
 		three := m.int(3)
@@ -44,7 +44,7 @@ func TestSolveQuadraticEqRetainsRulesScale(t *testing.T) {
 }
 
 func TestAMMQualityFunctionKeepsNumberContext(t *testing.T) {
-	m := numberMath{ctx: state.NewNumberContext(state.MantissaScaleLarge)}
+	m := numberMath{ctx: state.NewNumberContext(state.MantissaScaleLarge, true)}
 	poolGets := state.NewXRPAmountFromInt(10_000_000)
 	poolPays := tx.NewIssuedAmount(10_000_000_000_000_00, -11, "USD", "issuer")
 

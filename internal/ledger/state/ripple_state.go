@@ -9,7 +9,6 @@ import (
 	"github.com/LeJamon/go-xrpl/codec/binarycodec/definitions"
 	"github.com/LeJamon/go-xrpl/codec/binarycodec/serdes"
 	"github.com/LeJamon/go-xrpl/codec/binarycodec/types"
-	"github.com/LeJamon/go-xrpl/internal/tx/ledgerfields"
 	"github.com/LeJamon/go-xrpl/keylet"
 	"github.com/LeJamon/go-xrpl/ledger/entry"
 )
@@ -81,7 +80,7 @@ const badCurrencyHex = "0000000000000000000000005852500000000000"
 
 // ParseRippleState parses a RippleState from binary data
 func ParseRippleState(data []byte) (*RippleState, error) {
-	var decoded ledgerfields.RippleState
+	var decoded entry.RippleState
 	if err := decoded.Decode(data); err != nil {
 		return nil, fmt.Errorf("failed to decode RippleState: %w", err)
 	}
@@ -242,7 +241,7 @@ func SerializeRippleState(rs *RippleState) ([]byte, error) {
 		encodedCurrency = "USD"
 	}
 
-	entry := &ledgerfields.RippleState{}
+	entry := &entry.RippleState{}
 	entry.SetFlags(rs.Flags)
 	entry.SetBalance(serializeAmount(rs.Balance, encodedCurrency, true))
 	entry.SetLowLimit(serializeAmount(rs.LowLimit, encodedCurrency, false))

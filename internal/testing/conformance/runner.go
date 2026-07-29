@@ -541,7 +541,7 @@ func RunFixture(t *testing.T, fixturePath string) {
 
 	var numberContextOverride *state.NumberContext
 	if fixture.Suite == "ripple.app.AMM" || fixture.Suite == "ripple.app.AMMExtended" {
-		numberContext := state.NewNumberContext(state.MantissaScaleSmall)
+		numberContext := state.NewNumberContext(state.MantissaScaleSmall, true)
 		numberContextOverride = &numberContext
 	}
 

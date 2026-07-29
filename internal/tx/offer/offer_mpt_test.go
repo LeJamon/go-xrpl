@@ -241,6 +241,7 @@ func TestOfferMPTIssuerMayPlaceUnfundedOffer(t *testing.T) {
 		offerMPTAmount(id, 0),
 		true,
 		false,
+		state.NewNumberContext(state.MantissaScaleLarge, true),
 	)
 	value, ok := remainingGets.MPTRaw()
 	require.True(t, ok)

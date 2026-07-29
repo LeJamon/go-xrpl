@@ -26,6 +26,8 @@ func (s *Service) AcceptLedger(ctx context.Context) (uint32, error) {
 func (s *Service) AcceptLedgerAt(ctx context.Context, explicitCloseTime time.Time) (uint32, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	s.historyComponent.mu.Lock()
+	defer s.historyComponent.mu.Unlock()
 
 	if !s.config.Standalone {
 		return 0, ErrNotStandalone
@@ -65,8 +67,6 @@ func (s *Service) AcceptLedgerAt(ctx context.Context, explicitCloseTime time.Tim
 		}
 	}
 
-	s.pendingTxs = nil
-
 	if !replayed {
 		if err := s.openLedger.Close(closeTime, 0); err != nil {
 			return 0, fmt.Errorf("failed to close ledger: %w", err)
@@ -78,8 +78,18 @@ func (s *Service) AcceptLedgerAt(ctx context.Context, explicitCloseTime time.Tim
 		return 0, fmt.Errorf("failed to validate ledger: %w", err)
 	}
 	if replayed {
-		s.startupReplay = nil
 		closeTime = s.openLedger.CloseTime()
+	}
+
+	closedSeq := s.openLedger.Sequence()
+	closedLedgerHash := s.openLedger.Hash()
+	stagedResults, err := stageTransactionResults(s.openLedger, closedSeq, closedLedgerHash)
+	if err != nil {
+		return 0, fmt.Errorf("collect transaction results: %w", err)
+	}
+	s.pendingTxs = nil
+	if replayed {
+		s.startupReplay = nil
 	}
 
 	// Persist best-effort: a persistence failure must not be fatal — treating it
@@ -89,8 +99,6 @@ func (s *Service) AcceptLedgerAt(ctx context.Context, explicitCloseTime time.Tim
 			"seq", s.openLedger.Sequence(), "err", err)
 	}
 
-	closedSeq := s.openLedger.Sequence()
-	closedLedgerHash := s.openLedger.Hash()
 	s.closedLedger = s.openLedger
 	s.validatedLedger = s.openLedger
 	s.validatedSignTime = s.openLedger.CloseTime()
@@ -104,19 +112,16 @@ func (s *Service) AcceptLedgerAt(ctx context.Context, explicitCloseTime time.Tim
 	// re-close (redundant here since standalone already validated). No-op if none.
 	s.drainPendingLedgerValidationLocked(closedSeq, s.closedLedger)
 
+	s.commitTransactionResultsLocked(stagedResults)
 	var txResults []TransactionResultEvent
-	if s.eventCallback != nil || (s.hooks != nil && (s.hooks.OnLedgerClosed != nil || s.hooks.OnTransaction != nil)) {
-		txResults = s.collectTransactionResults(s.closedLedger, closedSeq, closedLedgerHash)
+	if s.hasEventSink() {
+		txResults = stagedResults.results
 	}
 
-	ledgerInfo, validatedLedgers, err := s.advanceToNewOpenLedgerLocked(closedSeq, closedLedgerHash, retriableTxs)
+	ledgerInfo, _, err := s.advanceToNewOpenLedgerLocked(closedSeq, closedLedgerHash, retriableTxs)
 	if err != nil {
 		return 0, err
 	}
-
-	// Fire structured hooks; standalone is already validated so the legacy
-	// eventCallback fires immediately rather than being stashed.
-	s.fireLedgerClosedHooksLocked(ledgerInfo, txResults, closeTime, validatedLedgers)
 
 	s.dispatchLedgerEvent(&LedgerAcceptedEvent{
 		LedgerInfo:         ledgerInfo,
@@ -134,9 +139,9 @@ func (s *Service) AcceptLedgerAt(ctx context.Context, explicitCloseTime time.Tim
 }
 
 // buildClosedLedgerLocked canonically sorts pending, re-applies it onto a fresh
-// ledger from s.closedLedger, hoists committed txs into s.txIndex, and installs
-// the result as s.openLedger, returning the txs left in retry state. Shared by
-// the standalone and consensus close paths. Caller must hold s.mu.
+// ledger from s.closedLedger, and installs the result as s.openLedger, returning
+// the txs left in retry state. Shared by the standalone and consensus close
+// paths. Caller must hold s.mu.
 // applyFlagLedgerNegativeUNL applies the pending NegativeUNL transition on a
 // flag ledger; skipping it on the local close path forks account_hash from the
 // network. Caller must hold s.mu.
@@ -150,9 +155,9 @@ func (s *Service) applyFlagLedgerNegativeUNL(l *ledger.Ledger) error {
 	return nil
 }
 
-func (s *Service) buildClosedLedgerLocked(pending []pendingTx, closeTime time.Time, skipSigVerify bool) ([]openledger.PendingTx, error) {
+func (s *Service) buildClosedLedgerLocked(pending []openledger.PendingTx, closeTime time.Time, skipSigVerify bool) ([]openledger.PendingTx, error) {
 	// Salt = SHAMap root of the tx set (rippled consensus-build convention).
-	canonicalSort(pending, computeSalt(pending))
+	openledger.CanonicalSort(pending, openledger.ComputeSalt(pending))
 
 	freshLedger, err := ledger.NewOpenForBuild(s.closedLedger, closeTime)
 	if err != nil {
@@ -186,12 +191,6 @@ func (s *Service) buildClosedLedgerLocked(pending []pendingTx, closeTime time.Ti
 	if err := openledger.ApplyTxs(freshLedger, pending, &retriableTxs, applyCfg); err != nil {
 		return nil, fmt.Errorf("openledger.ApplyTxs: %w", err)
 	}
-
-	// Track every committed tx (tesSUCCESS and tec) by the ledger seq.
-	_ = freshLedger.ForEachTransaction(func(txHash [32]byte, _ []byte) bool {
-		s.txIndex[txHash] = freshLedger.Sequence()
-		return true
-	})
 
 	s.openLedger = freshLedger
 	return retriableTxs, nil
@@ -410,16 +409,20 @@ func (s *Service) AcceptConsensusResult(ctx context.Context, parent *ledger.Ledg
 // the canonical closed-ledger frontier before the recovery round starts.
 func (s *Service) SwitchToPreferredLedger(parent *ledger.Ledger) error {
 	s.mu.Lock()
+	s.historyComponent.mu.Lock()
 	previousValidatedSeq := s.validatedLedgerSeqLocked()
 	pool := s.localTxs
 	var promotedLedger *ledger.Ledger
 	defer func() {
 		notification := s.validatedLedgerNotificationLocked(previousValidatedSeq)
+		s.historyComponent.mu.Unlock()
 		s.mu.Unlock()
 		if promotedLedger != nil {
 			s.syncTable(promotedLedger)
 			if pool != nil {
-				pool.Sweep(promotedLedger)
+				if err := pool.Sweep(promotedLedger); err != nil {
+					s.logger.Warn("failed to sweep local transactions", "ledger_seq", promotedLedger.Sequence(), "err", err)
+				}
 			}
 		}
 		notification.notify()
@@ -456,6 +459,10 @@ func (s *Service) SwitchToPreferredLedger(parent *ledger.Ledger) error {
 		return fmt.Errorf("failed to create open ledger after preferred chain switch: %w", err)
 	}
 
+	stagedResults, err := stageTransactionResults(parent, parent.Sequence(), parentHash)
+	if err != nil {
+		return fmt.Errorf("collect transaction results: %w", err)
+	}
 	promotedByDrain := false
 	if replacingProvisional {
 		promotedByDrain = s.drainPendingLedgerValidationLocked(parent.Sequence(), parent)
@@ -486,7 +493,8 @@ func (s *Service) SwitchToPreferredLedger(parent *ledger.Ledger) error {
 	if !replacingProvisional {
 		promotedByDrain = s.drainPendingLedgerValidationLocked(parent.Sequence(), parent)
 	}
-	txResults := s.collectTransactionResults(parent, parent.Sequence(), parentHash)
+	s.commitTransactionResultsLocked(stagedResults)
+	txResults := stagedResults.results
 	if promotedByDrain {
 		s.enqueuePersist(parent)
 		event := s.validatedLedgerEventLocked(parent)
@@ -543,6 +551,8 @@ func (s *Service) acceptConsensusResult(
 	s.mu.Lock()
 	previousValidatedSeq := s.validatedLedgerSeqLocked()
 	defer s.unlockAndNotifyValidatedLedger(previousValidatedSeq)
+	s.historyComponent.mu.Lock()
+	defer s.historyComponent.mu.Unlock()
 
 	if s.closedLedger == nil {
 		return 0, ErrNoClosedLedger
@@ -567,9 +577,9 @@ func (s *Service) acceptConsensusResult(
 	// so an empty round carries a non-zero per-node tx_root and forks validators
 	// with differing pending traffic (a zero-tx ledger must have tx_root=0).
 	var canonicalTxHashes []string
-	pending := make([]pendingTx, 0, len(txBlobs))
+	pending := make([]openledger.PendingTx, 0, len(txBlobs))
 	for _, blob := range txBlobs {
-		ptx, err := parsePendingTx(blob)
+		ptx, err := openledger.ParsePendingTx(blob)
 		if err != nil {
 			continue
 		}
@@ -586,7 +596,7 @@ func (s *Service) acceptConsensusResult(
 			return 0, err
 		}
 	} else {
-		canonicalSort(pending, computeSalt(pending))
+		openledger.CanonicalSort(pending, openledger.ComputeSalt(pending))
 		retriableTxs = append(retriableTxs, pending...)
 		s.startupReplay = nil
 		closeTime = s.openLedger.CloseTime()
@@ -603,7 +613,7 @@ func (s *Service) acceptConsensusResult(
 		}
 		added := false
 		for _, blob := range disputedBlobs {
-			ptx, perr := parsePendingTx(blob)
+			ptx, perr := openledger.ParsePendingTx(blob)
 			if perr != nil {
 				continue
 			}
@@ -618,7 +628,7 @@ func (s *Service) acceptConsensusResult(
 			added = true
 		}
 		if added {
-			canonicalSort(retriableTxs, computeSalt(pending))
+			openledger.CanonicalSort(retriableTxs, openledger.ComputeSalt(pending))
 		}
 	}
 
@@ -627,8 +637,6 @@ func (s *Service) acceptConsensusResult(
 	for _, ptx := range pending {
 		canonicalTxHashes = append(canonicalTxHashes, fmt.Sprintf("%x", ptx.Hash[:8]))
 	}
-
-	s.pendingTxs = nil
 
 	// Close at the consensus close time; set NoConsensusTime when consensus
 	// didn't agree, so the hash matches rippled (issue #361).
@@ -648,6 +656,11 @@ func (s *Service) acceptConsensusResult(
 
 	closedSeq := s.openLedger.Sequence()
 	closedLedgerHash := s.openLedger.Hash()
+	stagedResults, err := stageTransactionResults(s.openLedger, closedSeq, closedLedgerHash)
+	if err != nil {
+		return 0, fmt.Errorf("collect transaction results: %w", err)
+	}
+	s.pendingTxs = nil
 
 	// One line per locally-built ledger for diffing against rippled.
 	{
@@ -688,12 +701,13 @@ func (s *Service) acceptConsensusResult(
 
 	// Drain a validation that arrived before this close (tracker leading the
 	// close); fail-safe on expired/mismatch. A true return means it was promoted
-	// inline, so the eventCallback must fire inline below (no later
+	// inline, so the event sink must fire inline below (no later
 	// SetValidatedLedger will arrive to drain a hash-keyed stash).
 	promotedByDrain := s.drainPendingLedgerValidationLocked(closedSeq, s.closedLedger)
+	s.commitTransactionResultsLocked(stagedResults)
 	var txResults []TransactionResultEvent
-	if s.eventCallback != nil || (s.hooks != nil && (s.hooks.OnLedgerClosed != nil || s.hooks.OnTransaction != nil)) {
-		txResults = s.collectTransactionResults(s.closedLedger, closedSeq, closedLedgerHash)
+	if s.hasEventSink() {
+		txResults = stagedResults.results
 	}
 	if promotedByDrain {
 		s.enqueuePersist(s.closedLedger)
@@ -703,14 +717,10 @@ func (s *Service) acceptConsensusResult(
 		s.enqueueNodePersist(s.closedLedger)
 	}
 
-	ledgerInfo, validatedLedgers, err := s.advanceToNewOpenLedgerLocked(closedSeq, closedLedgerHash, retriableTxs)
+	ledgerInfo, _, err := s.advanceToNewOpenLedgerLocked(closedSeq, closedLedgerHash, retriableTxs)
 	if err != nil {
 		return 0, err
 	}
-
-	// Same hook dispatch as the other close paths; positions come from
-	// s.txPositionIndex, not a constant 0.
-	s.fireLedgerClosedHooksLocked(ledgerInfo, txResults, closeTime, validatedLedgers)
 
 	// Consensus close isn't validated yet: stash the event by hash for
 	// SetValidatedLedger to fire at quorum, keeping ledgerClosed in lockstep
@@ -724,7 +734,7 @@ func (s *Service) acceptConsensusResult(
 	}
 	if promotedByDrain {
 		s.dispatchLedgerEvent(event)
-	} else if s.eventCallback != nil {
+	} else if s.hasEventSink() {
 		s.stashPendingValidationLocked(closedLedgerHash, event)
 	}
 
@@ -738,7 +748,7 @@ func (s *Service) acceptConsensusResult(
 }
 
 // SetValidatedLedger marks a ledger validated by consensus and fires any stashed
-// eventCallback. expectedHash guards against forks: if peers validated a
+// event sink. expectedHash guards against forks: if peers validated a
 // different hash than we closed at this seq, our ledger is on the wrong fork and
 // must NOT be flipped to validated.
 func (s *Service) SetValidatedLedger(seq uint32, expectedHash [32]byte) {
@@ -775,6 +785,7 @@ func (s *Service) validatedLedgerEventLocked(l *ledger.Ledger) *LedgerAcceptedEv
 // signing-time median. A zero signing time falls back to the ledger close time.
 func (s *Service) SetValidatedLedgerAt(seq uint32, expectedHash [32]byte, signTime time.Time) {
 	s.mu.Lock()
+	s.historyComponent.mu.Lock()
 	previousValidatedSeq := s.validatedLedgerSeqLocked()
 	l, ok := s.ledgerHistory[seq]
 	// rippled checkAccept is hash-keyed; our seq-keyed map splits into "no entry"
@@ -799,6 +810,7 @@ func (s *Service) SetValidatedLedgerAt(seq uint32, expectedHash [32]byte, signTi
 				fire = true
 			}
 		}
+		s.historyComponent.mu.Unlock()
 		s.mu.Unlock()
 		if fire {
 			go handler(seq, expectedHash)
@@ -813,6 +825,7 @@ func (s *Service) SetValidatedLedgerAt(seq uint32, expectedHash [32]byte, signTi
 	if s.validatedLedger != nil && seq <= s.validatedLedger.Sequence() {
 		s.enqueueValidatedHistoryPersist(l)
 		s.dispatchLedgerEvent(s.validatedLedgerEventLocked(l))
+		s.historyComponent.mu.Unlock()
 		s.mu.Unlock()
 		return
 	}
@@ -833,13 +846,16 @@ func (s *Service) SetValidatedLedgerAt(seq uint32, expectedHash [32]byte, signTi
 	s.enqueuePersist(l)
 	notification := s.validatedLedgerNotificationLocked(previousValidatedSeq)
 	s.dispatchLedgerEvent(event)
+	s.historyComponent.mu.Unlock()
 	s.mu.Unlock()
 
 	// Fold into the amendment table outside the lock (it has its own mutex).
 	s.syncTable(l)
 
 	if pool != nil {
-		pool.Sweep(l)
+		if err := pool.Sweep(l); err != nil {
+			s.logger.Warn("failed to sweep local transactions", "ledger_seq", l.Sequence(), "err", err)
+		}
 	}
 
 	notification.notify()
@@ -883,6 +899,15 @@ func (s *Service) SubmitHeldAdoption(ctx context.Context, h *header.LedgerHeader
 	s.mu.Lock()
 	previousValidatedSeq := s.validatedLedgerSeqLocked()
 	defer s.unlockAndNotifyValidatedLedger(previousValidatedSeq)
+	s.historyComponent.mu.Lock()
+	defer s.historyComponent.mu.Unlock()
+
+	if h.LedgerIndex == 0 {
+		return res, errors.New("SubmitHeldAdoption: ledger sequence must be non-zero")
+	}
+	if _, err := s.ledgerWithStateLocked(h, stateMap, txMap); err != nil {
+		return res, fmt.Errorf("SubmitHeldAdoption: validate candidate: %w", err)
+	}
 
 	// Evict stale entries on every submission.
 	s.evictExpiredHeldAdoptionsLocked()
@@ -1005,6 +1030,8 @@ func (s *Service) IsFastLoadProvisional() bool {
 func (s *Service) StoreLedgerWithState(ctx context.Context, h *header.LedgerHeader, stateMap *shamap.SHAMap, txMap *shamap.SHAMap) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	s.historyComponent.mu.Lock()
+	defer s.historyComponent.mu.Unlock()
 	return s.storeLedgerWithStateLocked(ctx, h, stateMap, txMap)
 }
 
@@ -1013,6 +1040,8 @@ func (s *Service) StoreLedgerWithState(ctx context.Context, h *header.LedgerHead
 func (s *Service) BootstrapLedgerWithState(ctx context.Context, h *header.LedgerHeader, stateMap *shamap.SHAMap, txMap *shamap.SHAMap) (bool, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	s.historyComponent.mu.Lock()
+	defer s.historyComponent.mu.Unlock()
 	initialCandidate := s.networkLedgerState != networkLedgerReady
 	return initialCandidate, s.storeLedgerWithStateLocked(ctx, h, stateMap, txMap)
 }
@@ -1022,6 +1051,8 @@ func (s *Service) BootstrapLedgerWithState(ctx context.Context, h *header.Ledger
 func (s *Service) IngestHistoricalLedgerWithState(ctx context.Context, h *header.LedgerHeader, stateMap *shamap.SHAMap, txMap *shamap.SHAMap) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	s.historyComponent.mu.Lock()
+	defer s.historyComponent.mu.Unlock()
 
 	if err := ctx.Err(); err != nil {
 		return err
@@ -1052,20 +1083,35 @@ func (s *Service) IngestHistoricalLedgerWithState(ctx context.Context, h *header
 			return fmt.Errorf("failed to validate historical ledger: %w", err)
 		}
 	}
+	stagedResults, err := stageTransactionResults(historical, seq, hash)
+	if err != nil {
+		return fmt.Errorf("collect historical transaction results: %w", err)
+	}
 
-	if existing, ok := s.ledgerHistory[seq]; ok && existing.Hash() != hash {
-		existingHash := existing.Hash()
-		_ = existing.ForEachTransaction(func(txHash [32]byte, _ []byte) bool {
+	var replacedTxHashes [][32]byte
+	replacedHash := [32]byte{}
+	replacing := existingAtSeq && existing.Hash() != hash
+	if replacing {
+		replacedHash = existing.Hash()
+		if err := existing.ForEachTransaction(func(txHash [32]byte, _ []byte) bool {
+			replacedTxHashes = append(replacedTxHashes, txHash)
+			return true
+		}); err != nil {
+			return fmt.Errorf("collect replaced historical transaction hashes: %w", err)
+		}
+	}
+
+	if replacing {
+		for _, txHash := range replacedTxHashes {
 			delete(s.txIndex, txHash)
 			delete(s.txPositionIndex, txHash)
-			return true
-		})
-		s.invalidateCompleteLedgerHash(seq, existingHash)
+		}
+		s.invalidateCompleteLedgerHash(seq, replacedHash)
 	}
 
 	s.putHistoryLocked(historical)
 	s.cachePersistedLedgerLocked(historical)
-	s.collectTransactionResults(historical, seq, hash)
+	s.commitTransactionResultsLocked(stagedResults)
 	delete(s.pendingLedgerValidations, seq)
 	for i, pendingSeq := range s.pendingLedgerValidationsOrder {
 		if pendingSeq == seq {
@@ -1092,6 +1138,8 @@ func (s *Service) AdoptLedgerWithState(ctx context.Context, h *header.LedgerHead
 	s.mu.Lock()
 	previousValidatedSeq := s.validatedLedgerSeqLocked()
 	defer s.unlockAndNotifyValidatedLedger(previousValidatedSeq)
+	s.historyComponent.mu.Lock()
+	defer s.historyComponent.mu.Unlock()
 	return s.adoptLedgerWithStateLocked(ctx, h, stateMap, txMap, 0)
 }
 
@@ -1105,12 +1153,32 @@ func (s *Service) ledgerWithStateLocked(h *header.LedgerHeader, stateMap *shamap
 	if stateMap == nil {
 		return nil, errors.New("nil ledger state map")
 	}
+	if calculated := header.CalculateHash(*h); calculated != h.Hash {
+		return nil, fmt.Errorf("acquired ledger header hash mismatch: got %x, want %x", calculated, h.Hash)
+	}
+	stateHash, err := stateMap.Hash()
+	if err != nil {
+		return nil, fmt.Errorf("failed to calculate acquired state map hash: %w", err)
+	}
+	if stateHash != h.AccountHash {
+		return nil, fmt.Errorf("acquired state map root mismatch: got %x, want %x", stateHash, h.AccountHash)
+	}
 	if txMap == nil {
+		if h.TxHash != ([32]byte{}) {
+			return nil, errors.New("nil transaction map for non-empty transaction root")
+		}
 		empty, err := s.genesisLedger.TxMapSnapshot()
 		if err != nil {
 			return nil, fmt.Errorf("failed to snapshot empty tx map: %w", err)
 		}
 		txMap = empty
+	}
+	txHash, err := txMap.Hash()
+	if err != nil {
+		return nil, fmt.Errorf("failed to calculate acquired transaction map hash: %w", err)
+	}
+	if txHash != h.TxHash {
+		return nil, fmt.Errorf("acquired transaction map root mismatch: got %x, want %x", txHash, h.TxHash)
 	}
 
 	acquired, err := ledger.NewFromHeader(*h, stateMap, txMap, drops.Fees{})
@@ -1154,6 +1222,10 @@ func (s *Service) adoptLedgerWithStateLocked(
 	if err != nil {
 		return err
 	}
+	stagedResults, err := stageTransactionResults(adopted, h.LedgerIndex, h.Hash)
+	if err != nil {
+		return fmt.Errorf("collect adopted transaction results: %w", err)
+	}
 
 	// Invalidate the history tail if adopted doesn't chain to our seq-1 entry
 	// (divergent fork) so RPCs don't resolve stale state. See fixMismatchLocked.
@@ -1175,8 +1247,8 @@ func (s *Service) adoptLedgerWithStateLocked(
 	}
 	s.completeInitialSyncLocked()
 
-	// Install skipped (validated entry already at this seq, different hash):
-	// persist/drain/collect/hooks already ran for the canonical entry.
+	// The canonical entry has already completed persistence, validation
+	// draining, and event collection.
 	if canonical != adopted {
 		openLedger, err := ledger.NewOpen(canonical, time.Now())
 		if err != nil {
@@ -1202,9 +1274,8 @@ func (s *Service) adoptLedgerWithStateLocked(
 	// inline below instead of stashing (see the callback block).
 	promotedByDrain := s.drainPendingLedgerValidationLocked(h.LedgerIndex, adopted)
 
-	// Populate the tx-index and capture per-tx event records (side effect +
-	// return) so hooks and stream subscribers see every adopted tx.
-	txResults := s.collectTransactionResults(adopted, h.LedgerIndex, h.Hash)
+	s.commitTransactionResultsLocked(stagedResults)
+	txResults := stagedResults.results
 	if promotedByDrain {
 		s.enqueuePersist(adopted)
 	} else if adopted.IsValidated() {
@@ -1227,10 +1298,8 @@ func (s *Service) adoptLedgerWithStateLocked(
 		}
 	}
 
-	// Fire hooks so `ledger`/`transactions` subscribers see peer-adopted ledgers
-	// (else the streams silently skip every catch-up ledger). Forward adoption
-	// only: a below-tip history backfill must not emit backward-running stream
-	// events (rippled's fetchForHistory ingest is silent).
+	// Forward adoption publishes catch-up ledgers. Below-tip history backfills
+	// remain silent so streams never run backward.
 	if advanced {
 		ledgerInfo := &LedgerInfo{
 			Sequence:   h.LedgerIndex,
@@ -1241,11 +1310,7 @@ func (s *Service) adoptLedgerWithStateLocked(
 			Validated:  adopted.IsValidated(),
 			Closed:     adopted.IsClosed(),
 		}
-		validatedLedgers := s.getValidatedLedgersRange()
-		// Use the adopted header's close time (network-agreed), not a local one.
-		s.fireLedgerClosedHooksLocked(ledgerInfo, txResults, adopted.CloseTime(), validatedLedgers)
-
-		// eventCallback fires on *validated*, not *closed*; peer-adopt advances
+		// The event sink fires on *validated*, not *closed*; peer-adopt advances
 		// closedLedger only. Stash by hash for the next SetValidatedLedger to
 		// drain. Exception: if the drain above promoted inline, no
 		// SetValidatedLedger will arrive — fire inline instead of orphaning the
@@ -1257,7 +1322,7 @@ func (s *Service) adoptLedgerWithStateLocked(
 		}
 		if promotedByDrain {
 			s.dispatchLedgerEvent(event)
-		} else if s.eventCallback != nil {
+		} else if s.hasEventSink() {
 			s.stashPendingValidationLocked(h.Hash, event)
 		}
 	}

@@ -81,10 +81,11 @@ const (
 type State int
 
 const (
-	StateWantBase  State = iota // Waiting for header + root nodes
-	StateWantState              // Have header, fetching state tree nodes
-	StateComplete               // Fully acquired
-	StateFailed                 // Unrecoverable error
+	StateWantBase    State = iota // Waiting for header + root nodes
+	StateWantState                // Have header, fetching state tree nodes
+	StateComplete                 // Fully acquired
+	StateFailed                   // Unrecoverable error
+	StateReplayReady              // Replay response verified; apply pending
 )
 
 // TimerAction tells the router what to do after an OnTimer evaluation,
@@ -1403,50 +1404,6 @@ func (l *Ledger) Snapshot() Snapshot {
 		return *snapshotCopy(*cached)
 	}
 	return Snapshot{}
-}
-
-// SnapshotContext returns the acquisition fields under its mutex, then gathers
-// diagnostic missing hashes without holding that mutex across node-store reads.
-func (l *Ledger) SnapshotContext(ctx context.Context) (Snapshot, error) {
-	l.mu.Lock()
-	s := l.snapshotLocked()
-	var stateMap, txMap *shamap.SHAMap
-	if !l.haveState && l.stateMap != nil {
-		stateMap = l.stateMap
-	}
-	if !l.haveTx && l.txMap != nil {
-		txMap = l.txMap
-	}
-	l.mu.Unlock()
-
-	var stateMissing, txMissing []shamap.MissingNode
-	if stateMap != nil {
-		missing, err := stateMap.GetMissingNodesContext(ctx, missingNodeBatch, nil)
-		if err != nil {
-			return s, err
-		}
-		stateMissing = missing
-		s.NeededState = missingHashes(missing)
-	}
-	if txMap != nil {
-		missing, err := txMap.GetMissingNodesContext(ctx, missingNodeBatch, nil)
-		if err != nil {
-			return s, err
-		}
-		txMissing = missing
-		s.NeededTx = missingHashes(missing)
-	}
-
-	l.mu.Lock()
-	if stateMap != nil && l.state == StateWantState && l.stateMap == stateMap && !l.haveState {
-		l.cacheMissingLocked(false, stateMissing)
-	}
-	if txMap != nil && l.state == StateWantState && l.txMap == txMap && !l.haveTx {
-		l.cacheMissingLocked(true, txMissing)
-	}
-	l.mu.Unlock()
-
-	return s, nil
 }
 
 func (l *Ledger) snapshotLocked() Snapshot {

@@ -2,7 +2,6 @@ package adaptor
 
 import (
 	"testing"
-	"time"
 
 	"github.com/LeJamon/go-xrpl/crypto/sha512half"
 	"github.com/LeJamon/go-xrpl/internal/consensus"
@@ -53,29 +52,29 @@ func TestRouter_RequestLedger_TriggersGenericAcquisition(t *testing.T) {
 	assert.Len(t, rs.legacyCalls(), 1, "repeat request must not re-issue the fetch")
 }
 
-// TestRouter_RequestLedger_NoPeers verifies that an acquisition remains
-// available for a peer that connects after the RPC request.
-func TestRouter_RequestLedger_NoPeers(t *testing.T) {
+func TestRouter_RequestLedger_NoPeerDoesNotPoisonLaterRetry(t *testing.T) {
 	r, _, rs, _ := makeRouter(t)
 
 	var target [32]byte
 	target[0] = 0x99
 
 	snap, started, _ := r.RequestLedger(target, 0)
-	require.True(t, started)
-	require.NotNil(t, snap)
+	require.False(t, started)
+	require.Nil(t, snap)
 	assert.Empty(t, rs.legacyCalls())
-	il := r.fetchTracker.Find(target)
-	require.NotNil(t, il)
-	assert.Equal(t, inbound.ReasonGeneric, il.Reason())
-	assert.Empty(t, il.Peers())
+	require.Nil(t, r.fetchTracker.Find(target))
 
 	trackCatchupPeer(r, 7, 1)
-	r.escalateAcquisition(il, time.Now().Add(4*time.Second))
+	snap, started, reference := r.RequestLedger(target, 0)
+	require.True(t, started)
+	require.False(t, reference)
+	require.NotNil(t, snap)
 
 	calls := rs.legacyCalls()
 	require.Len(t, calls, 1)
 	assert.Equal(t, uint64(7), calls[0].peerID)
+	il := r.fetchTracker.Find(target)
+	require.NotNil(t, il)
 	assert.Equal(t, []uint64{7}, il.Peers())
 }
 

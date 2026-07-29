@@ -1,100 +1,82 @@
 package entry
 
-import (
-	"fmt"
-
-	"github.com/LeJamon/go-xrpl/codec/binarycodec/definitions"
-)
+import "github.com/LeJamon/go-xrpl/protocol"
 
 // Type represents a ledger entry type.
-type Type uint16
+type Type = protocol.LedgerEntryType
 
 // Pseudo-types used only as keylet constraints.
 const (
-	TypeAny   Type = 0
-	TypeChild Type = 0x1CD2
+	TypeAny   = protocol.LedgerEntryTypeAny
+	TypeChild = protocol.LedgerEntryTypeChild
 )
 
 // All known ledger entry types
 // Reference: rippled/include/xrpl/protocol/detail/ledger_entries.macro
 const (
 	// NFT/Token Objects
-	TypeNFTokenOffer Type = 0x0037 // NFT trading offers
-	TypeCheck        Type = 0x0043 // Check objects
+	TypeNFTokenOffer = protocol.LedgerEntryTypeNFTokenOffer
+	TypeCheck        = protocol.LedgerEntryTypeCheck
 
 	// Identity & UNL
-	TypeDID         Type = 0x0049 // Decentralized Identifiers
-	TypeNegativeUNL Type = 0x004e // Negative UNL state (singleton)
+	TypeDID         = protocol.LedgerEntryTypeDID
+	TypeNegativeUNL = protocol.LedgerEntryTypeNegativeUNL
 
 	// NFT Pages
-	TypeNFTokenPage Type = 0x0050 // NFT collections
+	TypeNFTokenPage = protocol.LedgerEntryTypeNFTokenPage
 
 	// Signing & Tickets
-	TypeSignerList Type = 0x0053 // Multi-signing lists
-	TypeTicket     Type = 0x0054 // Sequence tickets
+	TypeSignerList = protocol.LedgerEntryTypeSignerList
+	TypeTicket     = protocol.LedgerEntryTypeTicket
 
 	// Account & Directory
-	TypeAccountRoot   Type = 0x0061 // Account objects
-	TypeContract      Type = 0x0063 // Deprecated contract objects
-	TypeDirectoryNode Type = 0x0064 // Directory nodes
+	TypeAccountRoot = protocol.LedgerEntryTypeAccountRoot
+	// Deprecated: Contract ledger entries are unsupported legacy objects.
+	TypeContract      = protocol.LedgerEntryTypeContract
+	TypeDirectoryNode = protocol.LedgerEntryTypeDirectoryNode
 
 	// System Singletons
-	TypeAmendments   Type = 0x0066 // Protocol amendments (singleton)
-	TypeGeneratorMap Type = 0x0067 // Deprecated generator maps
-	TypeLedgerHashes Type = 0x0068 // Historical hashes (singleton)
+	TypeAmendments = protocol.LedgerEntryTypeAmendments
+	// Deprecated: GeneratorMap ledger entries are unsupported legacy objects.
+	TypeGeneratorMap = protocol.LedgerEntryTypeGeneratorMap
+	TypeLedgerHashes = protocol.LedgerEntryTypeLedgerHashes
 
 	// Cross-Chain Bridge
-	TypeBridge   Type = 0x0069 // Sidechain bridges
-	TypeNickname Type = 0x006e // Deprecated nickname objects
+	TypeBridge = protocol.LedgerEntryTypeBridge
+	// Deprecated: Nickname ledger entries are unsupported legacy objects.
+	TypeNickname = protocol.LedgerEntryTypeNickname
 
 	// DEX & Trust
-	TypeOffer          Type = 0x006f // DEX offers
-	TypeDepositPreauth Type = 0x0070 // Deposit preauthorization
+	TypeOffer          = protocol.LedgerEntryTypeOffer
+	TypeDepositPreauth = protocol.LedgerEntryTypeDepositPreauth
 
 	// Cross-Chain Claims
-	TypeXChainOwnedClaimID              Type = 0x0071 // Cross-chain claims
-	TypeRippleState                     Type = 0x0072 // Trust lines
-	TypeFeeSettings                     Type = 0x0073 // Network fees (singleton)
-	TypeXChainOwnedCreateAccountClaimID Type = 0x0074 // Cross-chain account creation claims
+	TypeXChainOwnedClaimID              = protocol.LedgerEntryTypeXChainOwnedClaimID
+	TypeRippleState                     = protocol.LedgerEntryTypeRippleState
+	TypeFeeSettings                     = protocol.LedgerEntryTypeFeeSettings
+	TypeXChainOwnedCreateAccountClaimID = protocol.LedgerEntryTypeXChainOwnedCreateAccountClaimID
 
 	// Escrow & Payment Channels
-	TypeEscrow     Type = 0x0075 // Escrow objects
-	TypePayChannel Type = 0x0078 // Payment channels
+	TypeEscrow     = protocol.LedgerEntryTypeEscrow
+	TypePayChannel = protocol.LedgerEntryTypePayChannel
 
 	// AMM
-	TypeAMM Type = 0x0079 // Automated Market Maker pools
+	TypeAMM = protocol.LedgerEntryTypeAMM
 
 	// Multi-Purpose Tokens
-	TypeMPTokenIssuance Type = 0x007e // MPT issuances
-	TypeMPToken         Type = 0x007f // MPT holdings
+	TypeMPTokenIssuance = protocol.LedgerEntryTypeMPTokenIssuance
+	TypeMPToken         = protocol.LedgerEntryTypeMPToken
 
 	// Oracle, Credentials, Permissions
-	TypeOracle             Type = 0x0080 // Price oracles
-	TypeCredential         Type = 0x0081 // Verifiable credentials
-	TypePermissionedDomain Type = 0x0082 // Permissioned domain objects
-	TypeDelegate           Type = 0x0083 // Delegated permissions
+	TypeOracle             = protocol.LedgerEntryTypeOracle
+	TypeCredential         = protocol.LedgerEntryTypeCredential
+	TypePermissionedDomain = protocol.LedgerEntryTypePermissionedDomain
+	TypeDelegate           = protocol.LedgerEntryTypeDelegate
 
 	// Vault
-	TypeVault Type = 0x0084 // Asset vaults
+	TypeVault = protocol.LedgerEntryTypeVault
 
 	// Lending protocol
-	TypeLoanBroker Type = 0x0088 // Loan brokers
-	TypeLoan       Type = 0x0089 // Loans
+	TypeLoanBroker = protocol.LedgerEntryTypeLoanBroker
+	TypeLoan       = protocol.LedgerEntryTypeLoan
 )
-
-// String returns the concrete ledger entry type name. Pseudo-types are unknown.
-func (t Type) String() string {
-	switch t {
-	case TypeContract:
-		return "Contract"
-	case TypeGeneratorMap:
-		return "GeneratorMap"
-	case TypeNickname:
-		return "Nickname"
-	}
-	name, err := definitions.Get().LedgerEntryTypeName(int32(t))
-	if err != nil {
-		return fmt.Sprintf("Unknown(0x%04x)", uint16(t))
-	}
-	return name
-}

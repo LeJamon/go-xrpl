@@ -236,7 +236,7 @@ func ResultCodeCategory(code string) string {
 // counting filters by type; for trust lines both the low and high side
 // directories reference the shared RippleState entry, so each line the
 // account participates in is counted exactly once.
-func requireOwnedEntries(t testing.TB, env *TestEnv, acc *Account, entryType uint16, label string, expected uint32) {
+func requireOwnedEntries(t testing.TB, env *TestEnv, acc *Account, entryType entry.Type, label string, expected uint32) {
 	t.Helper()
 	info := env.AccountInfo(acc)
 	if info == nil {
@@ -254,7 +254,7 @@ func requireOwnedEntries(t testing.TB, env *TestEnv, acc *Account, entryType uin
 		if readErr != nil || len(data) == 0 {
 			return nil
 		}
-		itemType, typeErr := state.GetLedgerEntryType(data)
+		itemType, typeErr := state.DecodeType(data)
 		if typeErr != nil {
 			return nil
 		}
@@ -273,14 +273,14 @@ func requireOwnedEntries(t testing.TB, env *TestEnv, acc *Account, entryType uin
 // This counts RippleState entries in the account's owner directory.
 func RequireLines(t testing.TB, env *TestEnv, acc *Account, expected uint32) {
 	t.Helper()
-	requireOwnedEntries(t, env, acc, uint16(entry.TypeRippleState), "trust line", expected)
+	requireOwnedEntries(t, env, acc, entry.TypeRippleState, "trust line", expected)
 }
 
 // RequireOffers asserts that an account has the expected number of offers.
 // This counts Offer entries in the account's owner directory.
 func RequireOffers(t testing.TB, env *TestEnv, acc *Account, expected uint32) {
 	t.Helper()
-	requireOwnedEntries(t, env, acc, uint16(entry.TypeOffer), "offer", expected)
+	requireOwnedEntries(t, env, acc, entry.TypeOffer, "offer", expected)
 }
 
 // RequireFlags asserts that an account has the expected flags set.
@@ -367,12 +367,11 @@ func RequireTicketCount(t testing.TB, env *TestEnv, acc *Account, expected uint3
 		if readErr != nil || len(data) == 0 {
 			return nil
 		}
-		entryType, typeErr := state.GetLedgerEntryType(data)
+		entryType, typeErr := state.DecodeType(data)
 		if typeErr != nil {
 			return nil
 		}
-		// Ticket type = 0x0054
-		if entryType == 0x0054 {
+		if entryType == entry.TypeTicket {
 			count++
 		}
 		return nil

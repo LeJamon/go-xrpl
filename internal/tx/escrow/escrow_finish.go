@@ -381,6 +381,7 @@ func (e *EscrowFinish) Apply(ctx *tx.ApplyContext) ter.Result {
 				escrowEntry.Account,
 				escrowEntry.DestinationID,
 				originalAmount,
+				ctx.NumberContext(),
 			)
 
 			// fixTokenEscrowV1 clears the gross (originally locked) amount and burns
@@ -423,6 +424,7 @@ func (e *EscrowFinish) Apply(ctx *tx.ApplyContext) ter.Result {
 				true, // finish bumps the destination account's OwnerCount
 				ctx.Config.ReserveBase,
 				ctx.Config.ReserveIncrement,
+				ctx.NumberContext(),
 			); result != ter.TesSUCCESS {
 				return result
 			}

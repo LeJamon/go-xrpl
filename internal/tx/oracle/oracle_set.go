@@ -408,7 +408,7 @@ func (o *OracleSet) doApplyUpdate(ctx *tx.ApplyContext, oracleKey keylet.Keylet,
 			pd.AssetPrice = *p.price
 			pd.HasPrice = true
 		}
-		if p.scale != nil {
+		if p.scale != nil && *p.scale != 0 {
 			pd.Scale = *p.scale
 			pd.HasScale = true
 		}
@@ -475,7 +475,7 @@ func (o *OracleSet) doApplyCreate(ctx *tx.ApplyContext, oracleKey keylet.Keylet,
 				spd.AssetPrice = *entry.AssetPrice
 				spd.HasPrice = true
 			}
-			if entry.Scale != nil {
+			if entry.Scale != nil && *entry.Scale != 0 {
 				spd.Scale = *entry.Scale
 				spd.HasScale = true
 			}
@@ -505,7 +505,7 @@ func (o *OracleSet) doApplyCreate(ctx *tx.ApplyContext, oracleKey keylet.Keylet,
 				spd.AssetPrice = *p.price
 				spd.HasPrice = true
 			}
-			if p.scale != nil {
+			if p.scale != nil && *p.scale != 0 {
 				spd.Scale = *p.scale
 				spd.HasScale = true
 			}

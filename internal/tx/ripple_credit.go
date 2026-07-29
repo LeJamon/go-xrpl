@@ -51,6 +51,23 @@ func adjustTrustLineOwnerCount(view LedgerView, accountID [20]byte, delta int) t
 //
 // Reference: rippled View.cpp rippleCreditIOU (lines 1635-1782).
 func RippleCredit(view LedgerView, sender, receiver [20]byte, amount Amount) ter.Result {
+	return RippleCreditWithNumberContext(
+		view,
+		sender,
+		receiver,
+		amount,
+		numberContextForView(view),
+	)
+}
+
+// RippleCreditWithNumberContext applies a trust-line credit under the selected
+// transaction arithmetic semantics.
+func RippleCreditWithNumberContext(
+	view LedgerView,
+	sender, receiver [20]byte,
+	amount Amount,
+	numberContext state.NumberContext,
+) ter.Result {
 	if amount.IsZero() {
 		return ter.TesSUCCESS
 	}
@@ -85,9 +102,17 @@ func RippleCredit(view LedgerView, sender, receiver [20]byte, amount Amount) ter
 	// Sending lowers the sender's holding: subtract from the stored
 	// low-perspective balance when the sender is low, add when it is high.
 	if senderIsLow {
-		rs.Balance, err = rs.Balance.Sub(amount)
+		rs.Balance, err = rs.Balance.SubWithNumberContext(
+			amount,
+			numberContext,
+			state.RoundToNearest,
+		)
 	} else {
-		rs.Balance, err = rs.Balance.Add(amount)
+		rs.Balance, err = rs.Balance.AddWithNumberContext(
+			amount,
+			numberContext,
+			state.RoundToNearest,
+		)
 	}
 	if err != nil {
 		return ter.TefINTERNAL
@@ -160,6 +185,25 @@ func RippleCredit(view LedgerView, sender, receiver [20]byte, amount Amount) ter
 //
 // Reference: rippled View.cpp rippleSendIOU.
 func RippleSendIOU(view LedgerView, sender, receiver [20]byte, amount Amount, waiveFee bool) ter.Result {
+	return RippleSendIOUWithNumberContext(
+		view,
+		sender,
+		receiver,
+		amount,
+		waiveFee,
+		numberContextForView(view),
+	)
+}
+
+// RippleSendIOUWithNumberContext sends an IOU under the selected transaction
+// arithmetic semantics.
+func RippleSendIOUWithNumberContext(
+	view LedgerView,
+	sender, receiver [20]byte,
+	amount Amount,
+	waiveFee bool,
+	numberContext state.NumberContext,
+) ter.Result {
 	if amount.IsZero() || sender == receiver {
 		return ter.TesSUCCESS
 	}
@@ -170,7 +214,7 @@ func RippleSendIOU(view LedgerView, sender, receiver [20]byte, amount Amount, wa
 	}
 
 	if sender == issuerID || receiver == issuerID {
-		return RippleCredit(view, sender, receiver, amount)
+		return RippleCreditWithNumberContext(view, sender, receiver, amount, numberContext)
 	}
 
 	// Third-party transit: the receiver is credited the delivered amount while
@@ -179,14 +223,34 @@ func RippleSendIOU(view LedgerView, sender, receiver [20]byte, amount Amount, wa
 	if !waiveFee {
 		if rate := GetTransferRate(view, amount.Issuer); rate != TransferRateParity {
 			rateAmount := state.NewIssuedAmountFromValue(int64(rate), -9, amount.Currency, amount.Issuer)
-			senderAmount = amount.Mul(rateAmount, false)
+			senderAmount = amount.MulWithNumberContext(
+				rateAmount,
+				numberContext,
+				false,
+				state.RoundToNearest,
+			)
 		}
 	}
 
-	if r := RippleCredit(view, issuerID, receiver, amount); r != ter.TesSUCCESS {
+	if r := RippleCreditWithNumberContext(
+		view,
+		issuerID,
+		receiver,
+		amount,
+		numberContext,
+	); r != ter.TesSUCCESS {
 		return r
 	}
-	return RippleCredit(view, sender, issuerID, senderAmount)
+	return RippleCreditWithNumberContext(view, sender, issuerID, senderAmount, numberContext)
+}
+
+func numberContextForView(view LedgerView) state.NumberContext {
+	if provider, ok := view.(interface {
+		NumberContext() state.NumberContext
+	}); ok {
+		return provider.NumberContext()
+	}
+	return NumberContextForRules(view.Rules())
 }
 
 // rippleCreditCreate is RippleCredit's missing-line branch: it auto-creates the

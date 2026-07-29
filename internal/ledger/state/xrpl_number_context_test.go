@@ -10,8 +10,8 @@ import (
 func TestNumberContextCreatesValuesInSelectedScale(t *testing.T) {
 	t.Parallel()
 
-	small := NewNumberContext(MantissaScaleSmall)
-	large := NewNumberContext(MantissaScaleLarge)
+	small := NewNumberContext(MantissaScaleSmall, true)
+	large := NewNumberContext(MantissaScaleLarge, true)
 
 	require.Equal(t, MantissaScaleSmall, small.Scale())
 	require.Equal(t, MantissaScaleLarge, large.Scale())
@@ -22,7 +22,7 @@ func TestNumberContextCreatesValuesInSelectedScale(t *testing.T) {
 func TestNumberContextAmountConversions(t *testing.T) {
 	t.Parallel()
 
-	ctx := NewNumberContext(MantissaScaleLarge)
+	ctx := NewNumberContext(MantissaScaleLarge, true)
 	issuer := "rIssuer"
 
 	xrp := NewXRPAmountFromInt(5_000_000)
@@ -47,7 +47,7 @@ func TestNumberContextAmountConversions(t *testing.T) {
 func TestNumberContextToIntegralAmountUsesExplicitRounding(t *testing.T) {
 	t.Parallel()
 
-	ctx := NewNumberContext(MantissaScaleLarge)
+	ctx := NewNumberContext(MantissaScaleLarge, true)
 	prototype := NewXRPAmountFromInt(0)
 	positive := ctx.New(15, -1, RoundToNearest)
 	negative := ctx.New(-15, -1, RoundToNearest)
@@ -61,7 +61,7 @@ func TestNumberContextToIntegralAmountUsesExplicitRounding(t *testing.T) {
 func TestNumberContextToIOUAmountNormalizesBeforeExponentBounds(t *testing.T) {
 	t.Parallel()
 
-	ctx := NewNumberContext(MantissaScaleLarge)
+	ctx := NewNumberContext(MantissaScaleLarge, true)
 	prototype := NewIssuedAmountFromValue(0, 0, "USD", "rIssuer")
 	number := ctx.Number(1_000_000_000_000_000_000, -99, RoundToNearest)
 
@@ -73,7 +73,7 @@ func TestNumberContextToIOUAmountNormalizesBeforeExponentBounds(t *testing.T) {
 func TestNumberContextToIOUAmountUsesExplicitRounding(t *testing.T) {
 	t.Parallel()
 
-	ctx := NewNumberContext(MantissaScaleLarge)
+	ctx := NewNumberContext(MantissaScaleLarge, true)
 	prototype := NewIssuedAmountFromValue(0, 0, "USD", "rIssuer")
 	number := ctx.Number(1_234_567_890_123_456_500, 0, RoundToNearest)
 
@@ -86,7 +86,7 @@ func TestNumberContextToIOUAmountUsesExplicitRounding(t *testing.T) {
 func TestNumberContextExplicitAssetRoundingOnlyAppliesToXRP(t *testing.T) {
 	t.Parallel()
 
-	ctx := NewNumberContext(MantissaScaleLarge)
+	ctx := NewNumberContext(MantissaScaleLarge, true)
 	fractional := ctx.Number(11, -1, RoundToNearest)
 
 	xrp := ctx.ToAmountWithNativeRounding(
@@ -111,9 +111,9 @@ func TestNumberContextsAreIndependentUnderConcurrency(t *testing.T) {
 	t.Parallel()
 
 	contexts := []NumberContext{
-		NewNumberContext(MantissaScaleSmall),
-		NewNumberContext(MantissaScaleLargeLegacy),
-		NewNumberContext(MantissaScaleLarge),
+		NewNumberContext(MantissaScaleSmall, true),
+		NewNumberContext(MantissaScaleLargeLegacy, true),
+		NewNumberContext(MantissaScaleLarge, true),
 	}
 
 	var wg sync.WaitGroup

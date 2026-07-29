@@ -282,7 +282,7 @@ func TestDeserializePrefixedHeader(t *testing.T) {
 
 	t.Run("matches unprefixed decode", func(t *testing.T) {
 		raw := AddRaw(orig, true)
-		prefix := []byte{0xDE, 0xAD, 0xBE, 0xEF}
+		prefix := protocol.HashPrefixLedgerMaster().Bytes()
 		prefixed := append(append([]byte{}, prefix...), raw...)
 
 		fromPrefixed, err := DeserializePrefixedHeader(prefixed, true)
@@ -294,6 +294,14 @@ func TestDeserializePrefixedHeader(t *testing.T) {
 			t.Fatalf("DeserializeHeader error: %v", err)
 		}
 		assertHeaderFieldsEqual(t, fromPrefixed, *fromPlain, true)
+	})
+
+	t.Run("wrong prefix returns error", func(t *testing.T) {
+		raw := AddRaw(orig, true)
+		prefixed := append([]byte{0xDE, 0xAD, 0xBE, 0xEF}, raw...)
+		if _, err := DeserializePrefixedHeader(prefixed, true); err == nil {
+			t.Fatal("expected error for wrong ledger header prefix")
+		}
 	})
 
 	t.Run("too short returns error", func(t *testing.T) {
@@ -324,6 +332,12 @@ func TestDeserializeHeaderErrors(t *testing.T) {
 	t.Run("exactly SizeBase decodes without hash", func(t *testing.T) {
 		if _, err := DeserializeHeader(full[:SizeBase], false); err != nil {
 			t.Fatalf("unexpected error decoding exactly SizeBase bytes: %v", err)
+		}
+	})
+
+	t.Run("trailing bytes are rejected", func(t *testing.T) {
+		if _, err := DeserializeHeader(append(full[:SizeBase], 0), false); err == nil {
+			t.Fatal("expected error for trailing ledger header data")
 		}
 	})
 }

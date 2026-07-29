@@ -11,6 +11,7 @@ import (
 	"github.com/LeJamon/go-xrpl/internal/tx"
 	"github.com/LeJamon/go-xrpl/internal/tx/vault"
 	"github.com/LeJamon/go-xrpl/keylet"
+	"github.com/LeJamon/go-xrpl/ledger/entry"
 )
 
 // XLS-66 lending invariants, ported from rippled InvariantCheck.cpp
@@ -23,7 +24,7 @@ import (
 // bound (==) added by fixCleanup3_1_3. Pseudo-accounts carry no XRP reserve, so
 // the XRP holdings are the full balance (rippled xrpLiquid + isPseudoAccount).
 
-const lsfLoanOverpaymentFlag uint32 = 0x00040000
+const lsfLoanOverpaymentFlag = entry.LsfLoanOverpayment
 
 // decodeEntry decodes a serialized SLE into its field map.
 func decodeEntry(data []byte) (map[string]any, error) {
@@ -67,7 +68,7 @@ func checkValidLoan(entries []InvariantEntry, rules *amendment.Rules) *Invariant
 		return nil
 	}
 	for _, e := range entries {
-		if e.EntryType != "Loan" || e.After == nil {
+		if e.EntryType != entry.TypeLoan || e.After == nil {
 			continue
 		}
 		after, err := decodeEntry(e.After)
@@ -131,14 +132,14 @@ func checkValidLoanBroker(entries []InvariantEntry, view ReadView, rules *amendm
 			continue
 		}
 		switch e.EntryType {
-		case "LoanBroker":
+		case entry.TypeLoanBroker:
 			broker := brokerState{before: e.Before, after: e.After}
 			if e.Key == ([32]byte{}) {
 				unkeyedBrokers = append(unkeyedBrokers, broker)
 			} else {
 				brokers[e.Key] = broker
 			}
-		case "AccountRoot":
+		case entry.TypeAccountRoot:
 			account, err := state.ParseAccountRoot(e.After)
 			if err != nil {
 				return lendingViolation("ValidLoanBroker", fmt.Sprintf("could not decode AccountRoot: %v", err))
@@ -146,9 +147,9 @@ func checkValidLoanBroker(entries []InvariantEntry, view ReadView, rules *amendm
 			if account.HasLoanBrokerID() {
 				addBroker(account.LoanBrokerID)
 			}
-		case "RippleState":
+		case entry.TypeRippleState:
 			lines = append(lines, e.After)
-		case "MPToken":
+		case entry.TypeMPToken:
 			mpts = append(mpts, e.After)
 		}
 	}

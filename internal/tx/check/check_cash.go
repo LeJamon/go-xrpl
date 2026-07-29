@@ -12,6 +12,7 @@ import (
 	"github.com/LeJamon/go-xrpl/internal/tx/payment"
 	"github.com/LeJamon/go-xrpl/internal/tx/ter"
 	"github.com/LeJamon/go-xrpl/keylet"
+	"github.com/LeJamon/go-xrpl/ledger/entry"
 )
 
 // CheckCash cashes a Check, drawing from the sender's balance.
@@ -154,7 +155,8 @@ func (c *CheckCash) Apply(ctx *tx.ApplyContext) ter.Result {
 
 	// View.Read is untyped, so reject a CheckID that resolves to a non-Check
 	// object, matching rippled's tecNO_ENTRY.
-	if state.EntryType(checkData) != "Check" {
+	checkType, err := state.DecodeType(checkData)
+	if err != nil || checkType != entry.TypeCheck {
 		return ter.TecNO_ENTRY
 	}
 

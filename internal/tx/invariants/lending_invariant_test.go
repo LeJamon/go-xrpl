@@ -8,6 +8,7 @@ import (
 	"github.com/LeJamon/go-xrpl/amendment"
 	"github.com/LeJamon/go-xrpl/internal/ledger/state"
 	"github.com/LeJamon/go-xrpl/keylet"
+	"github.com/LeJamon/go-xrpl/ledger/entry"
 )
 
 // mapView routes keylet reads to crafted SLE bytes for the ValidLoanBroker
@@ -77,7 +78,7 @@ func TestValidLoanBroker_CoverAvailableBounds(t *testing.T) {
 
 	broker := func(cover string) []InvariantEntry {
 		return []InvariantEntry{{
-			EntryType: "LoanBroker",
+			EntryType: entry.TypeLoanBroker,
 			After: mustEncode(t, map[string]any{
 				"LedgerEntryType":   "LoanBroker",
 				"Flags":             0,
@@ -201,7 +202,7 @@ func TestValidLoanBroker_MPTCoverMatchesPseudoHolding(t *testing.T) {
 		amendment.FeatureLendingProtocol,
 		amendment.FeatureFixCleanup3_1_3,
 	})
-	entries := []InvariantEntry{{Key: brokerID, EntryType: "LoanBroker", After: brokerBytes}}
+	entries := []InvariantEntry{{Key: brokerID, EntryType: entry.TypeLoanBroker, After: brokerBytes}}
 
 	if violation := checkValidLoanBroker(entries, view, rules); violation != nil {
 		t.Fatalf("matching MPT cover rejected: %v", violation)
@@ -226,7 +227,7 @@ func TestValidLoanBroker_MPTCoverMatchesPseudoHolding(t *testing.T) {
 			name: "MPToken",
 			entry: InvariantEntry{
 				Key:       keylet.MPTokenByID(mptID, pseudoID).Key,
-				EntryType: "MPToken",
+				EntryType: entry.TypeMPToken,
 				Before:    tokenBytes,
 				After:     modifiedTokenBytes,
 			},
@@ -235,7 +236,7 @@ func TestValidLoanBroker_MPTCoverMatchesPseudoHolding(t *testing.T) {
 			name: "AccountRoot",
 			entry: InvariantEntry{
 				Key:       keylet.Account(pseudoID).Key,
-				EntryType: "AccountRoot",
+				EntryType: entry.TypeAccountRoot,
 				After:     accountBytes,
 			},
 		},
@@ -336,7 +337,7 @@ func TestValidLoanBroker_DiscoversChangedRippleState(t *testing.T) {
 		amendment.FeatureLendingProtocol,
 		amendment.FeatureFixCleanup3_1_3,
 	})
-	entry := InvariantEntry{Key: lineKey.Key, EntryType: "RippleState", After: lineBytes}
+	entry := InvariantEntry{Key: lineKey.Key, EntryType: entry.TypeRippleState, After: lineBytes}
 
 	violation := checkValidLoanBroker([]InvariantEntry{entry}, view, rules)
 	if violation == nil || !strings.Contains(violation.Message, "less than") {
@@ -347,7 +348,7 @@ func TestValidLoanBroker_DiscoversChangedRippleState(t *testing.T) {
 // TestValidLoanBroker_InertWhenLendingDisabled asserts the invariant does not run
 // (and cannot false-positive) while LendingProtocol is off.
 func TestValidLoanBroker_InertWhenLendingDisabled(t *testing.T) {
-	entries := []InvariantEntry{{EntryType: "LoanBroker", After: []byte{0x01}}}
+	entries := []InvariantEntry{{EntryType: entry.TypeLoanBroker, After: []byte{0x01}}}
 	if v := checkValidLoanBroker(entries, stubView{}, amendment.EmptyRules()); v != nil {
 		t.Fatalf("expected inert check with LendingProtocol off, got %v", v)
 	}

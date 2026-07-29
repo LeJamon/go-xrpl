@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"github.com/LeJamon/go-xrpl/amendment"
+	"github.com/LeJamon/go-xrpl/ledger/entry"
 )
 
 func TestHasInvalidAmount_JSON(t *testing.T) {
@@ -111,7 +112,7 @@ func TestHasInvalidAmountBinary(t *testing.T) {
 
 func TestCheckValidAmounts_Gating(t *testing.T) {
 	badEntry := []InvariantEntry{{
-		EntryType: "AccountRoot",
+		EntryType: entry.TypeAccountRoot,
 		After:     balanceFieldObject(maxNativeN + 1),
 	}}
 
@@ -126,13 +127,13 @@ func TestCheckValidAmounts_Gating(t *testing.T) {
 	}
 
 	// A canonical entry passes even with the amendment on.
-	goodEntry := []InvariantEntry{{EntryType: "AccountRoot", After: balanceFieldObject(maxNativeN)}}
+	goodEntry := []InvariantEntry{{EntryType: entry.TypeAccountRoot, After: balanceFieldObject(maxNativeN)}}
 	if v := checkValidAmounts(goodEntry, on); v != nil {
 		t.Fatalf("canonical entry must pass, got %v", v)
 	}
 
 	// Deleted entries are never scanned (rippled visitEntry skips them).
-	del := []InvariantEntry{{EntryType: "AccountRoot", IsDelete: true, Before: balanceFieldObject(maxNativeN + 1)}}
+	del := []InvariantEntry{{EntryType: entry.TypeAccountRoot, IsDelete: true, Before: balanceFieldObject(maxNativeN + 1)}}
 	if v := checkValidAmounts(del, on); v != nil {
 		t.Fatalf("deleted entry must be skipped, got %v", v)
 	}

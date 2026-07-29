@@ -249,6 +249,7 @@ func (e *EscrowCancel) Apply(ctx *tx.ApplyContext) ter.Result {
 				// to it.
 				rules.Enabled(amendment.FeatureFixCleanup3_2_0),
 				ctx.Config.ReserveBase, ctx.Config.ReserveIncrement,
+				ctx.NumberContext(),
 			); result != ter.TesSUCCESS {
 				return result
 			}

@@ -1,5 +1,7 @@
 package definitions
 
+import "github.com/LeJamon/go-xrpl/protocol"
+
 // TypeCode returns the type code associated with the given type name.
 func (d *Definitions) TypeCode(n string) (int32, error) {
 	typeCode, ok := d.types[n]
@@ -103,21 +105,22 @@ func (d *Definitions) TransactionResultCode(n string) (int32, error) {
 
 // LedgerEntryTypeCode returns the ledger entry type code associated with the ledger entry type name.
 func (d *Definitions) LedgerEntryTypeCode(n string) (int32, error) {
-	ledgerEntryTypeCode, ok := d.ledgerEntryTypes[n]
-
-	if !ok {
+	info, ok := protocol.LedgerEntryTypeByName(n)
+	if !ok || info.Deprecated {
 		return 0, &NotFoundError{
 			Instance: "LedgerEntryTypeName",
 			Input:    n,
 		}
 	}
-	return ledgerEntryTypeCode, nil
+	return int32(info.Type), nil
 }
 
 // LedgerEntryTypeName returns the ledger entry type name associated with the ledger entry type code.
 func (d *Definitions) LedgerEntryTypeName(c int32) (string, error) {
-	if name, ok := d.ledgerEntryTypeNames[c]; ok {
-		return name, nil
+	if c >= 0 {
+		if info, ok := protocol.LedgerEntryTypeByCode(protocol.LedgerEntryType(c)); ok && !info.Deprecated {
+			return info.Name, nil
+		}
 	}
 	return "", &NotFoundErrorInt{
 		Instance: "LedgerEntryTypeCode",

@@ -10,6 +10,7 @@ import (
 	jtx "github.com/LeJamon/go-xrpl/internal/testing"
 	"github.com/LeJamon/go-xrpl/internal/tx"
 	"github.com/LeJamon/go-xrpl/keylet"
+	"github.com/LeJamon/go-xrpl/ledger/entry"
 	"github.com/LeJamon/go-xrpl/protocol"
 	"github.com/stretchr/testify/require"
 )
@@ -104,12 +105,11 @@ func CountOffers(env *jtx.TestEnv, acc *jtx.Account) uint32 {
 		if readErr != nil || len(data) == 0 {
 			return nil
 		}
-		entryType, typeErr := state.GetLedgerEntryType(data)
+		entryType, typeErr := state.DecodeType(data)
 		if typeErr != nil {
 			return nil
 		}
-		// Offer type = 0x006f
-		if entryType == 0x006f {
+		if entryType == entry.TypeOffer {
 			count++
 		}
 		return nil
@@ -127,11 +127,11 @@ func OffersOnAccount(env *jtx.TestEnv, acc *jtx.Account) []*state.LedgerOffer {
 		if readErr != nil || len(data) == 0 {
 			return nil
 		}
-		entryType, typeErr := state.GetLedgerEntryType(data)
+		entryType, typeErr := state.DecodeType(data)
 		if typeErr != nil {
 			return nil
 		}
-		if entryType == 0x006f {
+		if entryType == entry.TypeOffer {
 			offer, parseErr := state.ParseLedgerOffer(data)
 			if parseErr == nil {
 				offers = append(offers, offer)
