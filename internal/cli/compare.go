@@ -21,10 +21,10 @@ type stateFile struct {
 }
 
 type stateFileEntry struct {
-	Index   string         `json:"index"`
-	Data    string         `json:"data,omitempty"`
-	DataHex string         `json:"data_hex,omitempty"`
-	Decoded map[string]any `json:"decoded,omitempty"`
+	Index   string          `json:"index"`
+	Data    json.RawMessage `json:"data"`
+	DataHex json.RawMessage `json:"data_hex"`
+	Decoded map[string]any  `json:"decoded,omitempty"`
 }
 
 var (
@@ -213,12 +213,23 @@ func normalizeStateEntries(entries []stateFileEntry) (map[string]stateEntry, err
 		}
 		originalIndexes[key] = index
 
-		if entry.Data != "" && entry.DataHex != "" {
+		if entry.Data != nil && entry.DataHex != nil {
 			return nil, fmt.Errorf("entry %q has both data and data_hex", index)
 		}
-		dataHex := entry.Data
-		if dataHex == "" {
-			dataHex = entry.DataHex
+
+		var rawData json.RawMessage
+		switch {
+		case entry.Data != nil:
+			rawData = entry.Data
+		case entry.DataHex != nil:
+			rawData = entry.DataHex
+		default:
+			return nil, fmt.Errorf("entry %q has no raw data", index)
+		}
+
+		var dataHex string
+		if err := json.Unmarshal(rawData, &dataHex); err != nil {
+			return nil, fmt.Errorf("entry %q raw data must be a string: %w", index, err)
 		}
 		if dataHex == "" {
 			return nil, fmt.Errorf("entry %q has no raw data", index)

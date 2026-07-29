@@ -112,6 +112,21 @@ func TestLoadStateFileRejectsAmbiguousEntries(t *testing.T) {
 			wantErr: `entry "AB" has both data and data_hex`,
 		},
 		{
+			name:    "empty data with data hex",
+			content: `[{"index":"AB","data":"","data_hex":"11"}]`,
+			wantErr: `entry "AB" has both data and data_hex`,
+		},
+		{
+			name:    "null data with data hex",
+			content: `[{"index":"AB","data":null,"data_hex":"11"}]`,
+			wantErr: `entry "AB" has both data and data_hex`,
+		},
+		{
+			name:    "non-string raw data",
+			content: `[{"index":"AB","data":11}]`,
+			wantErr: `entry "AB" raw data must be a string`,
+		},
+		{
 			name:    "invalid raw data",
 			content: `[{"index":"AB","data":"not-hex"}]`,
 			wantErr: `entry "AB" has invalid raw data`,
@@ -154,9 +169,9 @@ func TestDecodeStateData(t *testing.T) {
 func TestNormalizeStateEntries(t *testing.T) {
 	feeHex := feeSettingsHex(t)
 	entries := []stateFileEntry{
-		{Index: "AA", Data: feeHex},
-		{Index: "BB", DataHex: feeHex, Decoded: map[string]interface{}{"LedgerEntryType": "Stale"}},
-		{Index: "CC", DataHex: "00", Decoded: map[string]interface{}{"LedgerEntryType": "AccountRoot"}},
+		{Index: "AA", Data: json.RawMessage(`"` + feeHex + `"`)},
+		{Index: "BB", DataHex: json.RawMessage(`"` + feeHex + `"`), Decoded: map[string]interface{}{"LedgerEntryType": "Stale"}},
+		{Index: "CC", DataHex: json.RawMessage(`"00"`), Decoded: map[string]interface{}{"LedgerEntryType": "AccountRoot"}},
 	}
 	m, err := normalizeStateEntries(entries)
 	if err != nil {
