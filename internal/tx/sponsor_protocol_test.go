@@ -3,6 +3,7 @@ package tx
 import (
 	"bytes"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"reflect"
 	"testing"
@@ -172,6 +173,67 @@ func TestSponsorTransactionTemplatesRejectForeignFields(t *testing.T) {
 			_, err = ParseFromBinary(raw)
 			if result, ok := ter.AsResultError(err); !ok || result.Code != ter.TemMALFORMED {
 				t.Fatalf("ParseFromBinary error = %v, want temMALFORMED", err)
+			}
+			jsonData, err := json.Marshal(fields)
+			if err != nil {
+				t.Fatalf("Marshal: %v", err)
+			}
+			if _, err := ParseJSON(jsonData); err == nil {
+				t.Fatal("ParseJSON accepted foreign SponsorSignature field")
+			}
+		})
+	}
+}
+
+func TestSponsorSignatureTemplateRejectsForeignFields(t *testing.T) {
+	tests := []struct {
+		name      string
+		signature map[string]any
+	}{
+		{
+			name: "direct field",
+			signature: map[string]any{
+				"SigningPubKey": "",
+				"Sequence":      uint32(1),
+			},
+		},
+		{
+			name: "nested Signer field",
+			signature: map[string]any{
+				"Signers": []any{
+					map[string]any{
+						"Signer": map[string]any{
+							"Sequence": uint32(1),
+						},
+					},
+				},
+			},
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			fields := baseCommon("Payment")
+			fields["Destination"] = testDestination
+			fields["Amount"] = "1"
+			fields["SponsorSignature"] = test.signature
+			encoded, err := binarycodec.Encode(fields)
+			if err != nil {
+				t.Fatalf("Encode: %v", err)
+			}
+			raw, err := hex.DecodeString(encoded)
+			if err != nil {
+				t.Fatalf("decode transaction: %v", err)
+			}
+			_, err = ParseFromBinary(raw)
+			if result, ok := ter.AsResultError(err); !ok || result.Code != ter.TemMALFORMED {
+				t.Fatalf("ParseFromBinary error = %v, want temMALFORMED", err)
+			}
+			jsonData, err := json.Marshal(fields)
+			if err != nil {
+				t.Fatalf("Marshal: %v", err)
+			}
+			if _, err := ParseJSON(jsonData); err == nil {
+				t.Fatal("ParseJSON accepted foreign transaction field")
 			}
 		})
 	}

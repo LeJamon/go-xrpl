@@ -2,10 +2,13 @@ package rpc
 
 import (
 	"context"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"testing"
 
+	"github.com/LeJamon/go-xrpl/codec/binarycodec"
 	"github.com/LeJamon/go-xrpl/internal/ledger/service/svcerr"
 	"github.com/LeJamon/go-xrpl/internal/rpc/handlers"
 	"github.com/LeJamon/go-xrpl/internal/rpc/types"
@@ -581,6 +584,131 @@ func TestAccountObjectsDeletionBlockersOnly(t *testing.T) {
 		require.Nil(t, rpcErr, "Expected no RPC error")
 		require.NotNil(t, result)
 	})
+}
+
+func TestAccountObjectsSponsoredFilter(t *testing.T) {
+	const account = "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh"
+	const sponsor = "rPMh7Pi9ct699iZUTWaytJUoHcJ7cgyziK"
+
+	encode := func(fields map[string]any) []byte {
+		serialized, err := binarycodec.Encode(fields)
+		require.NoError(t, err)
+		data, err := hex.DecodeString(serialized)
+		require.NoError(t, err)
+		return data
+	}
+
+	items := []types.AccountObjectItem{
+		{Index: "01", LedgerEntryType: "Check", Data: encode(map[string]any{
+			"LedgerEntryType": "Check",
+			"Flags":           0,
+			"Sponsor":         sponsor,
+		})},
+		{Index: "02", LedgerEntryType: "Check", Data: encode(map[string]any{
+			"LedgerEntryType": "Check",
+			"Flags":           0,
+		})},
+		{Index: "03", LedgerEntryType: "RippleState", Data: encode(map[string]any{
+			"LedgerEntryType": "RippleState",
+			"Flags":           0,
+			"LowSponsor":      sponsor,
+		})},
+		{Index: "04", LedgerEntryType: "Offer", Data: encode(map[string]any{
+			"LedgerEntryType": "Offer",
+			"Flags":           0,
+			"Sponsor":         sponsor,
+		})},
+		{Index: "05", LedgerEntryType: "NFTokenPage", Data: encode(map[string]any{
+			"LedgerEntryType": "NFTokenPage",
+			"Flags":           0,
+			"Sponsor":         sponsor,
+		})},
+		{Index: "06", LedgerEntryType: "Check", Data: encode(map[string]any{
+			"LedgerEntryType": "Check",
+			"Flags":           0,
+			"Sponsor":         "",
+		})},
+	}
+
+	tests := []struct {
+		name      string
+		sponsored any
+		want      []string
+	}{
+		{name: "unset", want: []string{"01", "02", "03", "04", "05", "06"}},
+		{name: "true", sponsored: true, want: []string{"01", "03", "05", "06"}},
+		{name: "false", sponsored: false, want: []string{"02", "04"}},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			mock := newAccountObjectsMock()
+			mock.getAccountObjectsFn = func(account string, _ string, _ string, _ uint32, _ string) (*types.AccountObjectsResult, error) {
+				return &types.AccountObjectsResult{
+					Account:        account,
+					AccountObjects: items,
+					LedgerIndex:    2,
+					Validated:      true,
+					Marker:         "next",
+				}, nil
+			}
+			ctx := &types.RpcContext{
+				Context:    context.Background(),
+				Role:       types.RoleGuest,
+				ApiVersion: types.ApiVersion1,
+				Services:   newAccountObjectsTestServices(mock),
+			}
+			request := map[string]any{"account": account}
+			if test.name != "unset" {
+				request["sponsored"] = test.sponsored
+			}
+			params, err := json.Marshal(request)
+			require.NoError(t, err)
+
+			result, rpcErr := (&handlers.AccountObjectsMethod{}).Handle(ctx, params)
+			require.Nil(t, rpcErr)
+			response := result.(map[string]any)
+			objects := response["account_objects"].([]map[string]any)
+			indexes := make([]string, 0, len(objects))
+			for _, object := range objects {
+				indexes = append(indexes, object["index"].(string))
+			}
+			assert.Equal(t, test.want, indexes)
+			assert.Equal(t, "next", response["marker"])
+		})
+	}
+}
+
+func TestAccountObjectsSponsoredFilterType(t *testing.T) {
+	const account = "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh"
+	for _, value := range []any{nil, 1, "true", []any{}, map[string]any{}} {
+		t.Run(fmt.Sprint(value), func(t *testing.T) {
+			mock := newAccountObjectsMock()
+			serviceCalled := false
+			mock.getAccountObjectsFn = func(string, string, string, uint32, string) (*types.AccountObjectsResult, error) {
+				serviceCalled = true
+				return nil, nil
+			}
+			ctx := &types.RpcContext{
+				Context:    context.Background(),
+				Role:       types.RoleGuest,
+				ApiVersion: types.ApiVersion1,
+				Services:   newAccountObjectsTestServices(mock),
+			}
+			params, err := json.Marshal(map[string]any{
+				"account":   account,
+				"sponsored": value,
+			})
+			require.NoError(t, err)
+
+			result, rpcErr := (&handlers.AccountObjectsMethod{}).Handle(ctx, params)
+			assert.Nil(t, result)
+			require.NotNil(t, rpcErr)
+			assert.Equal(t, types.RpcINVALID_PARAMS, rpcErr.Code)
+			assert.Equal(t, "Invalid field 'sponsored', not boolean.", rpcErr.Message)
+			assert.False(t, serviceCalled)
+		})
+	}
 }
 
 func TestAccountObjectsDeletionBlockerTypeIntersection(t *testing.T) {

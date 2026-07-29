@@ -22,7 +22,16 @@ func ParseJSON(data []byte) (Transaction, error) {
 		if err := json.Unmarshal(data, &header); err != nil {
 			return nil, fmt.Errorf("failed to parse transaction: %w", err)
 		}
-		txType, _ := TypeFromName(header.TransactionType)
+		txType, knownType := TypeFromName(header.TransactionType)
+		if knownType {
+			var values map[string]any
+			if err := json.Unmarshal(data, &values); err != nil {
+				return nil, fmt.Errorf("failed to parse transaction fields: %w", err)
+			}
+			if err := ValidateTemplateFields(txType, values); err != nil {
+				return nil, fmt.Errorf("failed to validate transaction template: %w", err)
+			}
+		}
 		var baseTx BaseTx
 		if err := json.Unmarshal(data, &baseTx); err != nil {
 			return nil, fmt.Errorf("failed to parse transaction: %w", err)
@@ -79,7 +88,7 @@ func ParseFromBinary(blob []byte) (Transaction, error) {
 	// its type would be silently applied while rippled rejects it at
 	// deserialization, forking the ledger.
 	if knownType {
-		if err := checkTemplate(txType, presentFields); err != nil {
+		if err := checkTemplate(txType, presentFields, jsonMap); err != nil {
 			return nil, err
 		}
 	}

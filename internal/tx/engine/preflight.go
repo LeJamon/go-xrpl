@@ -145,7 +145,7 @@ func (e *Engine) preflightStructure(tx txcore.Transaction, common *txcore.Common
 // preflight1 runs rippled Transactor::preflight1 (which invokes preflight0) in
 // its exact order: delegate → preflight0 (NetworkID, flags mask) → account →
 // fee → signing-key shape → ticket+AccountTxnID → the outer-only
-// tfInnerBatchTxn rejection (last).
+// tfInnerBatchTxn rejection → Sponsor field validation.
 // Reference: rippled Transactor.cpp preflight1/preflight0.
 func (e *Engine) preflight1(tx txcore.Transaction, common *txcore.Common, rules *amendment.Rules) ter.Result {
 	// The delegate check precedes preflight0 (and thus the NetworkID checks).
@@ -172,11 +172,11 @@ func (e *Engine) preflight1(tx txcore.Transaction, common *txcore.Common, rules 
 	if result := e.preflightSequence(common); result != ter.TesSUCCESS {
 		return result
 	}
-	// The outer tfInnerBatchTxn rejection is the last preflight1 check.
+	// The outer tfInnerBatchTxn rejection precedes the common Sponsor checks.
 	if result := preflightInnerBatchFlag(common, rules); result != ter.TesSUCCESS {
 		return result
 	}
-	if result := checkSponsorFields(common, rules); result != ter.TesSUCCESS {
+	if result := checkSponsorFields(tx, common, rules); result != ter.TesSUCCESS {
 		return result
 	}
 	return ter.TesSUCCESS
@@ -295,7 +295,7 @@ func (e *Engine) preflightInner(innerTx txcore.Transaction) ter.Result {
 	if result := checkDelegate(common, rules); result != ter.TesSUCCESS {
 		return result
 	}
-	if result := checkSponsorFields(common, rules); result != ter.TesSUCCESS {
+	if result := checkSponsorFields(innerTx, common, rules); result != ter.TesSUCCESS {
 		return result
 	}
 	return runTypePreflight(innerTx, rules)
@@ -305,9 +305,8 @@ func (e *Engine) preflightInner(innerTx txcore.Transaction) ter.Result {
 // that carries tfInnerBatchTxn. That flag is only ever set by the Batch
 // transactor on the inner transactions it applies (which flow through
 // preflightInner, not here), so on the outer path it is always illegitimate. It
-// is the last preflight1 check, so a transaction that is both inner-flagged and
-// malformed in fee/sequence surfaces the earlier code (matching rippled, where
-// this rejection is the final preflight1 check).
+// follows fee and sequence validation, so a transaction that is both
+// inner-flagged and malformed there surfaces the earlier code.
 //
 // The rejection code mirrors rippled across the two amendment gates:
 //   - Batch disabled: the flag itself is undefined → temINVALID_FLAG
@@ -346,19 +345,68 @@ func checkDelegate(common *txcore.Common, rules *amendment.Rules) ter.Result {
 	return ter.TesSUCCESS
 }
 
-// checkSponsorFields keeps the newly defined common Sponsor wire fields
-// unreachable while go-xrpl advertises the amendment as unsupported. The
-// complete Sponsor preflight and apply semantics are added with the lifecycle
-// implementation; until then, any transaction carrying one of these fields
-// follows rippled's amendment-off result.
-func checkSponsorFields(common *txcore.Common, rules *amendment.Rules) ter.Result {
-	if common.Sponsor == "" && common.SponsorFlags == nil && common.SponsorSignature == nil {
+func checkSponsorFields(tx txcore.Transaction, common *txcore.Common, rules *amendment.Rules) ter.Result {
+	hasSponsor := common.Sponsor != "" || common.HasField("Sponsor")
+	hasSponsorFlags := common.SponsorFlags != nil
+	hasSponsorSignature := common.SponsorSignature != nil
+	if !hasSponsor && !hasSponsorFlags && !hasSponsorSignature {
 		return ter.TesSUCCESS
 	}
 	if !rules.Enabled(amendment.FeatureSponsor) {
 		return ter.TemDISABLED
 	}
+	if hasSponsor != hasSponsorFlags {
+		return ter.TemINVALID_FLAG
+	}
+	if hasSponsorSignature && (!hasSponsor || !hasSponsorFlags) {
+		return ter.TemMALFORMED
+	}
+	if hasSponsorFlags {
+		flags := *common.SponsorFlags
+		if flags == 0 || flags&txcore.SpfSponsorFlagMask != 0 {
+			return ter.TemINVALID_FLAG
+		}
+		if flags&txcore.SpfSponsorReserve != 0 && !reserveSponsorAllowed(tx.TxType()) {
+			return ter.TemINVALID_FLAG
+		}
+	}
+	if hasSponsor && common.Sponsor == common.Account {
+		return ter.TemMALFORMED
+	}
 	return ter.TesSUCCESS
+}
+
+func reserveSponsorAllowed(txType txcore.Type) bool {
+	switch txType {
+	case txcore.TypeDelegateSet,
+		txcore.TypeDepositPreauth,
+		txcore.TypePayment,
+		txcore.TypeSignerListSet,
+		txcore.TypeCheckCancel,
+		txcore.TypeCheckCash,
+		txcore.TypeCheckCreate,
+		txcore.TypeEscrowCancel,
+		txcore.TypeEscrowCreate,
+		txcore.TypeEscrowFinish,
+		txcore.TypePaymentChannelClaim,
+		txcore.TypePaymentChannelCreate,
+		txcore.TypePaymentChannelFund,
+		txcore.TypeClawback,
+		txcore.TypeMPTokenAuthorize,
+		txcore.TypeMPTokenIssuanceCreate,
+		txcore.TypeMPTokenIssuanceDestroy,
+		txcore.TypeMPTokenIssuanceSet,
+		txcore.TypeTrustSet,
+		txcore.TypeCredentialAccept,
+		txcore.TypeCredentialCreate,
+		txcore.TypeCredentialDelete,
+		txcore.TypeAccountSet,
+		txcore.TypeRegularKeySet,
+		txcore.TypeSponsorshipTransfer:
+		return true
+	default:
+		return false
+	}
 }
 
 // checkAccountPresent rejects a zero/empty source account.

@@ -504,6 +504,18 @@ var txTemplates = map[Type][]templateField{
 
 var commonFieldStyles = indexTemplate(commonFields)
 var txTemplateStyles = indexTemplates(txTemplates)
+var innerObjectTemplateStyles = map[string]map[string]fieldStyle{
+	"Signer": indexTemplate([]templateField{
+		{name: "Account", style: soeREQUIRED},
+		{name: "SigningPubKey", style: soeREQUIRED},
+		{name: "TxnSignature", style: soeREQUIRED},
+	}),
+	"SponsorSignature": indexTemplate([]templateField{
+		{name: "SigningPubKey", style: soeOPTIONAL},
+		{name: "TxnSignature", style: soeOPTIONAL},
+		{name: "Signers", style: soeOPTIONAL},
+	}),
+}
 var commonRequiredFields = []string{
 	"TransactionType",
 	"Account",
@@ -658,7 +670,10 @@ func ValidateTemplateFields(txType Type, values map[string]any) error {
 		}
 	}
 
-	return validateTemplateAllowlist(txType, fields)
+	if err := validateTemplateAllowlist(txType, fields); err != nil {
+		return err
+	}
+	return validateInnerObjectTemplates(values)
 }
 
 func isExplicitDefault(value any) bool {
@@ -696,11 +711,95 @@ func validateTemplateAllowlist(txType Type, fields map[string]bool) error {
 	return nil
 }
 
+func validateInnerObjectTemplates(values map[string]any) error {
+	for objectName := range innerObjectTemplateStyles {
+		raw, present := values[objectName]
+		if !present {
+			continue
+		}
+		object, ok := raw.(map[string]any)
+		if !ok {
+			return errors.New("Field '" + objectName + "' is not an object.")
+		}
+		if err := validateNamedInnerObject(objectName, object); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func validateNamedInnerObject(objectName string, object map[string]any) error {
+	template, ok := innerObjectTemplateStyles[objectName]
+	if !ok {
+		return nil
+	}
+	names := make([]string, 0, len(object))
+	for name := range object {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	for _, name := range names {
+		if _, ok := template[name]; !ok {
+			return errors.New("Field '" + objectName + "." + name + "' found in disallowed location.")
+		}
+	}
+	for name, style := range template {
+		if _, present := object[name]; style == soeREQUIRED && !present {
+			return errors.New("Field '" + objectName + "." + name + "' is required but missing.")
+		}
+	}
+	if signers, present := object["Signers"]; present {
+		if err := validateInnerObjectArray(objectName+".Signers", signers); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func validateInnerObjectArray(path string, value any) error {
+	var items []any
+	switch typed := value.(type) {
+	case []any:
+		items = typed
+	case []map[string]any:
+		items = make([]any, len(typed))
+		for i := range typed {
+			items[i] = typed[i]
+		}
+	default:
+		return errors.New("Field '" + path + "' is not an array.")
+	}
+	for _, item := range items {
+		wrapper, ok := item.(map[string]any)
+		if !ok || len(wrapper) != 1 {
+			return errors.New("Field '" + path + "' contains an invalid object.")
+		}
+		for objectName, raw := range wrapper {
+			if objectName != "Signer" {
+				return errors.New("Field '" + path + "." + objectName + "' found in disallowed location.")
+			}
+			object, ok := raw.(map[string]any)
+			if !ok {
+				return errors.New("Field '" + path + "." + objectName + "' is not an object.")
+			}
+			if err := validateNamedInnerObject(objectName, object); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
 // checkTemplate preserves the transaction-engine TER contract for decoded
 // fields that appear outside their transaction template.
-func checkTemplate(txType Type, fields map[string]bool) error {
+func checkTemplate(txType Type, fields map[string]bool, values ...map[string]any) error {
 	if err := validateTemplateAllowlist(txType, fields); err != nil {
 		return ter.Errorf(ter.TemMALFORMED, "%s", err)
+	}
+	if len(values) != 0 {
+		if err := validateInnerObjectTemplates(values[0]); err != nil {
+			return ter.Errorf(ter.TemMALFORMED, "%s", err)
+		}
 	}
 	return nil
 }
