@@ -50,6 +50,7 @@ func TestTxqAdapterGetBaseFeeWaivesEligibleSetRegularKey(t *testing.T) {
 	setRegularKeyTx := jtx.NewSetRegularKeyTx(alice, regularKey)
 	sequence := env.Seq(alice)
 	setRegularKeyTx.GetCommon().Sequence = &sequence
+	setRegularKeyTx.GetCommon().Fee = "0"
 	view := freshView(t, env)
 
 	blob := buildSignedBlob(t, env, setRegularKeyTx, alice)

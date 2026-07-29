@@ -41,7 +41,7 @@ func makeStubStateMap(t *testing.T, seq uint32) (*shamap.SHAMap, [32]byte) {
 	t.Helper()
 	stateMap := shamap.New(shamap.TypeState)
 	key := [32]byte{0x53, byte(seq), byte(seq >> 8), byte(seq >> 16), byte(seq >> 24)}
-	require.NoError(t, stateMap.Put(key, []byte("stub-state")))
+	require.NoError(t, stateMap.Put(key, []byte("stub-state-data")))
 	root, err := stateMap.Hash()
 	require.NoError(t, err)
 	return stateMap, root
