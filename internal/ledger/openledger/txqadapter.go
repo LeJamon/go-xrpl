@@ -80,7 +80,6 @@ func (a *TxqAdapter) GetTxInLedger() uint32 {
 	return a.view.TxCount()
 }
 
-// GetAccountSequence reads the AccountRoot.Sequence for accountID.
 func (a *TxqAdapter) GetAccountSequence(accountID [20]byte) (uint32, error) {
 	ar, err := a.readAccountRoot(accountID)
 	if err != nil || ar == nil {
@@ -111,7 +110,6 @@ func (a *TxqAdapter) TicketExists(accountID [20]byte, ticketSeq uint32) bool {
 	return exists
 }
 
-// GetAccountBalance returns the account's XRP balance in drops.
 func (a *TxqAdapter) GetAccountBalance(accountID [20]byte) (uint64, error) {
 	ar, err := a.readAccountRoot(accountID)
 	if err != nil || ar == nil {

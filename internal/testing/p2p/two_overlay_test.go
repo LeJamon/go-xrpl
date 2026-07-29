@@ -463,7 +463,6 @@ Loop:
 		}
 	}
 
-	// Verify the round-tripped response reconstructs the exact transaction set.
 	rd := inbound.NewReplayDelta(hash, uint64(peerAOnB), parent, nil)
 	require.NoError(t, rd.GotResponse(resp))
 	assert.Equal(t, inbound.StateReplayReady, rd.State())

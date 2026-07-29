@@ -245,7 +245,6 @@ func TestGetOwnerNode_TicketSeqContainsHeaderByte(t *testing.T) {
 	assert.Equal(t, uint64(2), got)
 }
 
-// TestGetOwnerNode_Absent rejects an SLE with no OwnerNode field.
 func TestGetOwnerNode_Absent(t *testing.T) {
 	t.Parallel()
 
