@@ -233,7 +233,6 @@ func TestSubmitHeldAdoption_ParentPresentButHashMismatch(t *testing.T) {
 
 	// Adopt 101 with hash AA.
 	fx101 := buildHeldAdoptionInputs(t, baseSeq, hash101Present, parent101)
-	hash101Present = fx101.hdr.Hash
 	require.NoError(t, svc.AdoptLedgerWithState(context.TODO(), fx101.hdr, fx101.stateMap, fx101.txMap))
 
 	// Submit 102 claiming parent BB (≠ AA). Must not adopt onto the

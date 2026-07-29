@@ -160,8 +160,11 @@ var coverageFixtures = map[string]map[string]any{
 		"PreviousTxnLgrSeq": uint32(9),
 	},
 	"NegativeUNL": {
-		"Flags":               uint32(0),
-		"DisabledValidators":  []any{map[string]any{"DisabledValidator": map[string]any{"PublicKey": fxBlob}}},
+		"Flags": uint32(0),
+		"DisabledValidators": []any{map[string]any{"DisabledValidator": map[string]any{
+			"PublicKey":           fxBlob,
+			"FirstLedgerSequence": uint32(1),
+		}}},
 		"ValidatorToDisable":  fxBlob,
 		"ValidatorToReEnable": fxBlob,
 		"PreviousTxnID":       fxHash256,

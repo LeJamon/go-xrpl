@@ -313,8 +313,6 @@ func TestAdoptLedgerWithState_FixMismatchValidatedLedgerInvalidationLogsError(t 
 	prevValidated := svc.validatedLedger
 	svc.mu.Unlock()
 
-	var hashD [32]byte
-	hashD[0] = 0xD4
 	var divergentParent [32]byte
 	divergentParent[0] = 0xAB
 
@@ -332,7 +330,6 @@ func TestAdoptLedgerWithState_FixMismatchValidatedLedgerInvalidationLogsError(t 
 		AccountHash: stateRoot,
 	}
 	hdrD.Hash = header.CalculateHash(*hdrD)
-	hashD = hdrD.Hash
 
 	require.NoError(t, svc.AdoptLedgerWithState(context.TODO(), hdrD, stateMap, txMap))
 
@@ -382,8 +379,6 @@ func TestAdoptLedgerWithState_FixMismatchPurgesTxIndex(t *testing.T) {
 	svc.mu.Unlock()
 
 	// Divergent D at seq S+1.
-	var hashD [32]byte
-	hashD[0] = 0x1D
 	var divergentParent [32]byte
 	divergentParent[0] = 0xEE
 
@@ -401,7 +396,6 @@ func TestAdoptLedgerWithState_FixMismatchPurgesTxIndex(t *testing.T) {
 		AccountHash: stateRoot,
 	}
 	hdrD.Hash = header.CalculateHash(*hdrD)
-	hashD = hdrD.Hash
 
 	require.NoError(t, svc.AdoptLedgerWithState(context.TODO(), hdrD, stateMap, txMap))
 

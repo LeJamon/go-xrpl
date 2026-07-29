@@ -158,10 +158,6 @@ func TestSetValidatedLedger_StashHashMismatch(t *testing.T) {
 	stateRoot, err := stateMap.Hash()
 	require.NoError(t, err)
 
-	// Peer-adoption path will install hash B.
-	var adoptedHashB [32]byte
-	adoptedHashB[0] = 0xC3
-
 	// But trusted validation arrived earlier referencing hash A.
 	var validatedHashA [32]byte
 	validatedHashA[0] = 0xC4
@@ -173,7 +169,6 @@ func TestSetValidatedLedger_StashHashMismatch(t *testing.T) {
 		AccountHash: stateRoot,
 	}
 	hdr.Hash = header.CalculateHash(*hdr)
-	adoptedHashB = hdr.Hash
 
 	startValidated := svc.GetValidatedLedgerIndex()
 
@@ -226,8 +221,6 @@ func TestSetValidatedLedger_StashesOnForkDivergence(t *testing.T) {
 	stateRoot, err := stateMap.Hash()
 	require.NoError(t, err)
 
-	var localHashB [32]byte
-	localHashB[0] = 0xD1
 	adoptedSeq := svc.GetClosedLedgerIndex() + 1
 	hdr := &header.LedgerHeader{
 		LedgerIndex: adoptedSeq,
@@ -235,7 +228,6 @@ func TestSetValidatedLedger_StashesOnForkDivergence(t *testing.T) {
 		AccountHash: stateRoot,
 	}
 	hdr.Hash = header.CalculateHash(*hdr)
-	localHashB = hdr.Hash
 	require.NoError(t, svc.AdoptLedgerWithState(context.TODO(), hdr, stateMap, txMap))
 	require.Equal(t, adoptedSeq, svc.GetClosedLedgerIndex(),
 		"setup: adopt must advance closedLedger so the fork case sits at seq == closed")
@@ -607,7 +599,7 @@ func pendingAdoptionFixture(
 
 	hdr := &header.LedgerHeader{
 		LedgerIndex: svc.GetClosedLedgerIndex() + 1,
-		CloseFlags:  uint8(hashTag),
+		CloseFlags:  hashTag,
 		TxHash:      txRoot,
 		AccountHash: stateRoot,
 	}

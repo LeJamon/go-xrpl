@@ -117,7 +117,7 @@ func TestInnerObjectTemplateRejectsWrongDecodedType(t *testing.T) {
 			"SignerWeight": uint32(1),
 		},
 	}})
-	if err == nil || !strings.Contains(err.Error(), "want int") {
+	if err == nil || !strings.Contains(err.Error(), "want UInt16") {
 		t.Fatalf("validation error = %v, want wrong-type failure", err)
 	}
 }
