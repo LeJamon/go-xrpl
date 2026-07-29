@@ -100,12 +100,12 @@ func TestNewStoredLedgerReplayOrdersTransactions(t *testing.T) {
 
 	replay, err := NewStoredLedgerReplay(parent, target, nil)
 	require.NoError(t, err)
-	require.True(t, replay.IsComplete())
+	require.Equal(t, StateReplayReady, replay.State())
+	require.False(t, replay.IsComplete())
 	assert.Equal(t, target.Hash(), replay.Hash())
 
-	result, err := replay.Result()
-	require.NoError(t, err)
-	assert.Same(t, target, result)
+	_, err = replay.Result()
+	require.Error(t, err)
 
 	ordered := replay.OrderedTxs()
 	require.Len(t, ordered, 3)

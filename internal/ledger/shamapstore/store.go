@@ -143,7 +143,9 @@ func (s *Store) GetLastRotated() uint32 {
 // lastRotated.
 func (s *Store) SetLastRotated(seq uint32) error {
 	return s.update(func(next *persistedState) {
-		next.LastRotated = seq
+		if seq > next.LastRotated {
+			next.LastRotated = seq
+		}
 	})
 }
 
@@ -165,9 +167,24 @@ func (s *Store) SetMinimumOnline(seq uint32) error {
 
 func (s *Store) SetRotation(lastRotated, minimumOnline uint32) error {
 	return s.update(func(next *persistedState) {
-		next.LastRotated = lastRotated
-		next.MinimumOnline = minimumOnline
+		if lastRotated > next.LastRotated {
+			next.LastRotated = lastRotated
+		}
+		minimumOnline = max(minimumOnline, rotationMinimum(next.LastRotated))
+		if minimumOnline > next.MinimumOnline {
+			next.MinimumOnline = minimumOnline
+		}
 	})
+}
+
+func rotationMinimum(lastRotated uint32) uint32 {
+	if lastRotated == 0 {
+		return 0
+	}
+	if lastRotated == ^uint32(0) {
+		return lastRotated
+	}
+	return lastRotated + 1
 }
 
 func (s *Store) load() error {
@@ -194,7 +211,7 @@ func (s *Store) load() error {
 		s.canDelete = ps.CanDelete
 	}
 	s.lastRotated = ps.LastRotated
-	s.minimumOnline = ps.MinimumOnline
+	s.minimumOnline = max(ps.MinimumOnline, rotationMinimum(ps.LastRotated))
 	return nil
 }
 

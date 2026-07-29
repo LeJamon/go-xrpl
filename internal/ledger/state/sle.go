@@ -9,11 +9,10 @@ import (
 	"github.com/LeJamon/go-xrpl/protocol"
 )
 
-// GetOwnerNode extracts the OwnerNode (UInt64 type=3, field=4) from raw
-// binary SLE data. Returns 0 if the field is absent or the data is malformed.
-// Used by DirRemove callers to find the right directory page when erasing a
-// ledger entry.
-func GetOwnerNode(data []byte) uint64 {
+// GetOwnerNode extracts the typed OwnerNode field from raw binary SLE data.
+// Missing or malformed data is an error because substituting directory page
+// zero can mutate the wrong page before ledger corruption is detected.
+func GetOwnerNode(data []byte) (uint64, error) {
 	var ownerNode uint64
 	errFound := errors.New("found")
 	err := WalkFields(data, func(f Field) error {
@@ -23,10 +22,13 @@ func GetOwnerNode(data []byte) uint64 {
 		}
 		return nil
 	})
-	if err != nil && !errors.Is(err, errFound) {
-		return 0
+	if errors.Is(err, errFound) {
+		return ownerNode, nil
 	}
-	return ownerNode
+	if err != nil {
+		return 0, err
+	}
+	return 0, errors.New("OwnerNode field is missing")
 }
 
 // DecodeType extracts and validates the typed LedgerEntryType header.

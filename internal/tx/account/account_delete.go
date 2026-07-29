@@ -294,7 +294,11 @@ func deleteOffer(ctx *tx.ApplyContext, _ keylet.Keylet, ik keylet.Keylet, data [
 }
 
 func deleteTicket(ctx *tx.ApplyContext, ownerDirKey, ik keylet.Keylet, data []byte) ter.Result {
-	if !removeFromDir(ctx, ownerDirKey, state.GetOwnerNode(data), ik.Key, true) {
+	ownerNode, err := state.GetOwnerNode(data)
+	if err != nil {
+		return ter.TefBAD_LEDGER
+	}
+	if !removeFromDir(ctx, ownerDirKey, ownerNode, ik.Key, true) {
 		return ter.TefBAD_LEDGER
 	}
 	if err := ctx.View.Erase(ik); err != nil {

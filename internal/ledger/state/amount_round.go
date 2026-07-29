@@ -814,5 +814,7 @@ func mulNativeNative(a, b int64) int64 {
 	if (maxV>>32)*minV > 2_095_475_792 {
 		panic("Native value overflow")
 	}
-	return int64(minV * maxV)
+	product := int64(minV * maxV)
+	guardNativeDrops(product)
+	return product
 }

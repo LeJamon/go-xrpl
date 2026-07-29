@@ -44,10 +44,11 @@ func TestSetValidatedLedger_StashesWhenSeqMissing_FiresOnAdopt(t *testing.T) {
 	adoptedSeq := svc.GetClosedLedgerIndex() + 1
 	hdr := &header.LedgerHeader{
 		LedgerIndex: adoptedSeq,
-		Hash:        adoptedHash,
 		TxHash:      txRoot,
 		AccountHash: stateRoot,
 	}
+	hdr.Hash = header.CalculateHash(*hdr)
+	adoptedHash = hdr.Hash
 
 	// Validation races ahead of adopt: call SetValidatedLedger *before*
 	// the seq exists in ledgerHistory. Must NOT promote yet — just stash.
@@ -104,10 +105,11 @@ func TestSetValidatedLedger_StashExpires(t *testing.T) {
 	adoptedSeq := svc.GetClosedLedgerIndex() + 1
 	hdr := &header.LedgerHeader{
 		LedgerIndex: adoptedSeq,
-		Hash:        adoptedHash,
 		TxHash:      txRoot,
 		AccountHash: stateRoot,
 	}
+	hdr.Hash = header.CalculateHash(*hdr)
+	adoptedHash = hdr.Hash
 
 	startValidated := svc.GetValidatedLedgerIndex()
 
@@ -167,10 +169,11 @@ func TestSetValidatedLedger_StashHashMismatch(t *testing.T) {
 	adoptedSeq := svc.GetClosedLedgerIndex() + 1
 	hdr := &header.LedgerHeader{
 		LedgerIndex: adoptedSeq,
-		Hash:        adoptedHashB,
 		TxHash:      txRoot,
 		AccountHash: stateRoot,
 	}
+	hdr.Hash = header.CalculateHash(*hdr)
+	adoptedHashB = hdr.Hash
 
 	startValidated := svc.GetValidatedLedgerIndex()
 
@@ -228,10 +231,11 @@ func TestSetValidatedLedger_StashesOnForkDivergence(t *testing.T) {
 	adoptedSeq := svc.GetClosedLedgerIndex() + 1
 	hdr := &header.LedgerHeader{
 		LedgerIndex: adoptedSeq,
-		Hash:        localHashB,
 		TxHash:      txRoot,
 		AccountHash: stateRoot,
 	}
+	hdr.Hash = header.CalculateHash(*hdr)
+	localHashB = hdr.Hash
 	require.NoError(t, svc.AdoptLedgerWithState(context.TODO(), hdr, stateMap, txMap))
 	require.Equal(t, adoptedSeq, svc.GetClosedLedgerIndex(),
 		"setup: adopt must advance closedLedger so the fork case sits at seq == closed")
@@ -326,10 +330,11 @@ func TestAdoptLedgerWithState_EventSinkFiresAfterValidationFirstRace(t *testing.
 	adoptedSeq := svc.GetClosedLedgerIndex() + 1
 	hdr := &header.LedgerHeader{
 		LedgerIndex: adoptedSeq,
-		Hash:        adoptedHash,
 		TxHash:      txRoot,
 		AccountHash: stateRoot,
 	}
+	hdr.Hash = header.CalculateHash(*hdr)
+	adoptedHash = hdr.Hash
 
 	// Validation-first race: trusted-validation quorum gossip reaches us
 	// before the peer-adopt loop installs seq N. This stashes in
@@ -600,12 +605,12 @@ func pendingAdoptionFixture(
 	stateRoot, err := stateMap.Hash()
 	require.NoError(t, err)
 
-	var hash [32]byte
-	hash[0] = hashTag
-	return &header.LedgerHeader{
+	hdr := &header.LedgerHeader{
 		LedgerIndex: svc.GetClosedLedgerIndex() + 1,
-		Hash:        hash,
+		CloseFlags:  uint8(hashTag),
 		TxHash:      txRoot,
 		AccountHash: stateRoot,
-	}, stateMap, txMap
+	}
+	hdr.Hash = header.CalculateHash(*hdr)
+	return hdr, stateMap, txMap
 }

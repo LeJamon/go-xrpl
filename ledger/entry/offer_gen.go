@@ -342,7 +342,7 @@ func (o *Offer) decode(data []byte, legacy bool) error {
 				return newErrUnknownField("Offer", typeCode, fieldCode)
 			}
 		case 15: // STArray
-			val, err := sr.readSTArray()
+			val, err := sr.readSTArray("AdditionalBooks")
 			if err != nil {
 				return err
 			}
@@ -565,6 +565,11 @@ func (o *Offer) ToMap() map[string]any {
 func (o *Offer) Encode() ([]byte, error) {
 	if err := o.validateRequired(); err != nil {
 		return nil, err
+	}
+	if o.present&offerBitAdditionalBooks != 0 {
+		if err := validateSTArrayForEncode("AdditionalBooks", o.AdditionalBooks); err != nil {
+			return nil, err
+		}
 	}
 	out := o.ToMap()
 	if o.present&offerBitPreviousTxnID == 0 {

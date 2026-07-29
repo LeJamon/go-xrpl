@@ -34,43 +34,12 @@ var deletionBlockerTypes = map[string]bool{
 	"vault":                                true,
 }
 
-type accountObjectLedgerType struct {
-	canonical string
-	rpcName   string
-	valid     bool
-}
-
-var accountObjectLedgerTypes = []accountObjectLedgerType{
-	{"NFTokenOffer", "nft_offer", true},
-	{"Check", "check", true},
-	{"DID", "did", true},
-	{"NegativeUNL", "nunl", false},
-	{"NFTokenPage", "nft_page", true},
-	{"SignerList", "signer_list", true},
-	{"Ticket", "ticket", true},
-	{"AccountRoot", "account", true},
-	{"DirectoryNode", "directory", false},
-	{"Amendments", "amendments", false},
-	{"LedgerHashes", "hashes", false},
-	{"Bridge", "bridge", true},
-	{"Offer", "offer", true},
-	{"DepositPreauth", "deposit_preauth", true},
-	{"XChainOwnedClaimID", "xchain_owned_claim_id", true},
-	{"RippleState", "state", true},
-	{"FeeSettings", "fee", false},
-	{"XChainOwnedCreateAccountClaimID", "xchain_owned_create_account_claim_id", true},
-	{"Escrow", "escrow", true},
-	{"PayChannel", "payment_channel", true},
-	{"AMM", "amm", true},
-	{"MPTokenIssuance", "mpt_issuance", true},
-	{"MPToken", "mptoken", true},
-	{"Oracle", "oracle", true},
-	{"Credential", "credential", true},
-	{"PermissionedDomain", "permissioned_domain", true},
-	{"Delegate", "delegate", true},
-	{"Vault", "vault", true},
-	{"LoanBroker", "loan_broker", true},
-	{"Loan", "loan", true},
+var nonAccountObjectTypes = map[string]bool{
+	"Amendments":    true,
+	"DirectoryNode": true,
+	"FeeSettings":   true,
+	"LedgerHashes":  true,
+	"NegativeUNL":   true,
 }
 
 func chooseAccountObjectType(raw json.RawMessage, present bool) (string, *types.RpcError) {
@@ -87,12 +56,15 @@ func chooseAccountObjectType(raw json.RawMessage, present bool) (string, *types.
 		return "", types.RpcErrorExpectedField("type", "string")
 	}
 
-	for _, ledgerType := range accountObjectLedgerTypes {
-		if strings.EqualFold(ledgerType.canonical, filter) || ledgerType.rpcName == filter {
-			if !ledgerType.valid {
+	for _, ledgerType := range protocol.LedgerEntryTypes() {
+		if ledgerType.Deprecated || ledgerType.RPCName == "" {
+			continue
+		}
+		if strings.EqualFold(ledgerType.Name, filter) || ledgerType.RPCName == filter {
+			if nonAccountObjectTypes[ledgerType.Name] {
 				return "", types.RpcErrorInvalidField("type")
 			}
-			return ledgerType.rpcName, nil
+			return ledgerType.RPCName, nil
 		}
 	}
 	return "", types.RpcErrorInvalidField("type")

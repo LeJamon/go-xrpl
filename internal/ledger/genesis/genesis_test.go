@@ -262,6 +262,37 @@ func TestCreateGenesisLedgerWithAmendments(t *testing.T) {
 	t.Logf("Genesis with amendments created successfully")
 }
 
+func TestCreateGenesisLedgerCanonicalizesAmendments(t *testing.T) {
+	t.Parallel()
+	a := [32]byte{1}
+	b := [32]byte{2}
+	canonical := DefaultConfig()
+	canonical.Amendments = [][32]byte{a, b}
+	want, err := Create(canonical)
+	if err != nil {
+		t.Fatalf("Create canonical genesis: %v", err)
+	}
+
+	unsorted := canonical
+	unsorted.Amendments = [][32]byte{b, a, b}
+	got, err := Create(unsorted)
+	if err != nil {
+		t.Fatalf("Create unsorted genesis: %v", err)
+	}
+	if got.Header.Hash != want.Header.Hash {
+		t.Fatalf("canonical genesis hash = %x, want %x", got.Header.Hash, want.Header.Hash)
+	}
+}
+
+func TestCreateGenesisLedgerRejectsSupplyAboveProtocolMaximum(t *testing.T) {
+	t.Parallel()
+	cfg := DefaultConfig()
+	cfg.TotalXRP = uint64(drops.MaxDrops) + 1
+	if _, err := Create(cfg); err == nil {
+		t.Fatal("expected error for genesis supply above protocol maximum")
+	}
+}
+
 func TestCreateGenesisLedgerLegacyFees(t *testing.T) {
 	t.Parallel()
 

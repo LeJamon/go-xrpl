@@ -255,7 +255,7 @@ func (d *Delegate) decode(data []byte, legacy bool) error {
 				return newErrUnknownField("Delegate", typeCode, fieldCode)
 			}
 		case 15: // STArray
-			val, err := sr.readSTArray()
+			val, err := sr.readSTArray("Permissions")
 			if err != nil {
 				return err
 			}
@@ -428,6 +428,11 @@ func (d *Delegate) ToMap() map[string]any {
 func (d *Delegate) Encode() ([]byte, error) {
 	if err := d.validateRequired(); err != nil {
 		return nil, err
+	}
+	if d.present&delegateBitPermissions != 0 {
+		if err := validateSTArrayForEncode("Permissions", d.Permissions); err != nil {
+			return nil, err
+		}
 	}
 	out := d.ToMap()
 	if d.present&delegateBitPreviousTxnID == 0 {

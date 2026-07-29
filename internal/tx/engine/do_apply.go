@@ -499,9 +499,13 @@ func (e *Engine) eraseTicketEntry(st *applyState, table *applystate.ApplyStateTa
 	ticketKey := keylet.Ticket(st.accountID, *st.common.TicketSequence)
 	ownerDirKey := keylet.OwnerDir(st.accountID)
 	// Read the ticket SLE to get its OwnerNode (directory page) for removal.
-	var ticketOwnerNode uint64
-	if ticketData, ticketErr := table.Read(ticketKey); ticketErr == nil && ticketData != nil {
-		ticketOwnerNode = state.GetOwnerNode(ticketData)
+	ticketData, ticketErr := table.Read(ticketKey)
+	if ticketErr != nil || ticketData == nil {
+		return ter.TefBAD_LEDGER
+	}
+	ticketOwnerNode, ticketErr := state.GetOwnerNode(ticketData)
+	if ticketErr != nil {
+		return ter.TefBAD_LEDGER
 	}
 	// A ticket that cannot be removed from its owner directory leaves a stale
 	// directory entry that later breaks AccountDelete; rippled's ticketDelete

@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/binary"
 	"errors"
+	"fmt"
 	"strconv"
 
 	addresscodec "github.com/LeJamon/go-xrpl/codec/addresscodec"
@@ -281,7 +282,7 @@ func (r *streamReader) readVector256() ([]string, error) {
 // substitution) that is not worth re-implementing inline; the cost is one
 // BinaryParser allocation per compound field, paid only on ledger entries
 // that carry one (AMM, SignerList, NFTokenPage, Vault, …).
-func (r *streamReader) readSTObject() (map[string]any, error) {
+func (r *streamReader) readSTObject(templateName string) (map[string]any, error) {
 	// Depth 1: the object is a nested field of the entry, so the nesting-depth
 	// cap counts it as one level in (STVar.cpp:122).
 	v, err := r.decodeViaCodec(&types.STObject{}, 1)
@@ -292,10 +293,13 @@ func (r *streamReader) readSTObject() (map[string]any, error) {
 	if !ok {
 		return nil, errors.New("ledgerfields: STObject decode returned wrong type")
 	}
+	if err := validateDecodedInnerObject(templateName, m); err != nil {
+		return nil, fmt.Errorf("ledgerfields: %s: %w", templateName, err)
+	}
 	return m, nil
 }
 
-func (r *streamReader) readSTArray() ([]any, error) {
+func (r *streamReader) readSTArray(fieldName string) ([]any, error) {
 	// Depth 1: the array is a nested field of the entry, so the nesting-depth
 	// cap counts it as one level in (STVar.cpp:122).
 	v, err := r.decodeViaCodec(&types.STArray{}, 1)
@@ -305,6 +309,9 @@ func (r *streamReader) readSTArray() ([]any, error) {
 	a, ok := v.([]any)
 	if !ok {
 		return nil, errors.New("ledgerfields: STArray decode returned wrong type")
+	}
+	if err := validateDecodedSTArray(fieldName, a); err != nil {
+		return nil, err
 	}
 	return a, nil
 }

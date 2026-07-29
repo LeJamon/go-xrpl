@@ -188,7 +188,7 @@ func (n *NegativeUNL) decode(data []byte, legacy bool) error {
 				return newErrUnknownField("NegativeUNL", typeCode, fieldCode)
 			}
 		case 15: // STArray
-			val, err := sr.readSTArray()
+			val, err := sr.readSTArray("DisabledValidators")
 			if err != nil {
 				return err
 			}
@@ -341,6 +341,11 @@ func (n *NegativeUNL) ToMap() map[string]any {
 func (n *NegativeUNL) Encode() ([]byte, error) {
 	if err := n.validateRequired(); err != nil {
 		return nil, err
+	}
+	if n.present&negativeunlBitDisabledValidators != 0 {
+		if err := validateSTArrayForEncode("DisabledValidators", n.DisabledValidators); err != nil {
+			return nil, err
+		}
 	}
 	out := n.ToMap()
 	return binarycodec.EncodeBytes(out)

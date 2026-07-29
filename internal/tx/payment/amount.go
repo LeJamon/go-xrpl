@@ -1,6 +1,7 @@
 package payment
 
 import (
+	"fmt"
 	"math/big"
 
 	"github.com/LeJamon/go-xrpl/internal/ledger/state"
@@ -128,28 +129,40 @@ func (e EitherAmount) SubWithNumberContext(
 	return NewIOUEitherAmount(result)
 }
 
-// Compare compares two EitherAmounts
-// Returns -1 if e < other, 0 if equal, 1 if e > other
 func (e EitherAmount) Compare(other EitherAmount) int {
+	cmp, err := e.CompareChecked(other)
+	if err != nil {
+		panic(err)
+	}
+	return cmp
+}
+
+func (e EitherAmount) CompareChecked(other EitherAmount) (int, error) {
+	if e.IsNative != other.IsNative || e.IsMPT != other.IsMPT {
+		return 0, fmt.Errorf("temBAD_AMOUNT: cannot compare amounts with different assets")
+	}
 	if e.IsNative {
 		if e.XRP < other.XRP {
-			return -1
+			return -1, nil
 		}
 		if e.XRP > other.XRP {
-			return 1
+			return 1, nil
 		}
-		return 0
+		return 0, nil
 	}
 	if e.IsMPT {
+		if e.MPTID != other.MPTID {
+			return 0, fmt.Errorf("temBAD_AMOUNT: cannot compare different MPT issuances")
+		}
 		if e.MPT < other.MPT {
-			return -1
+			return -1, nil
 		}
 		if e.MPT > other.MPT {
-			return 1
+			return 1, nil
 		}
-		return 0
+		return 0, nil
 	}
-	return e.IOU.Compare(other.IOU)
+	return e.IOU.CompareChecked(other.IOU)
 }
 
 func (e EitherAmount) Min(other EitherAmount) EitherAmount {

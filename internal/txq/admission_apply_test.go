@@ -31,15 +31,17 @@ func (m *seqTx) RequiredAmendments() [][32]byte   { return nil }
 // preflight/preclaim/apply results are dialled in per test so we can pin which
 // admission path rejects (or queues) a submission.
 type stubApplyCtx struct {
-	seq        uint32
-	balance    uint64
-	reserve    uint64
-	exists     bool
-	tickets    map[uint32]bool
-	baseFee    uint64
-	txInLedger uint32
-	ledgerSeq  uint32
-	flags      tx.ApplyFlags
+	seq         uint32
+	sequenceErr error
+	balance     uint64
+	balanceErr  error
+	reserve     uint64
+	exists      bool
+	tickets     map[uint32]bool
+	baseFee     uint64
+	txInLedger  uint32
+	ledgerSeq   uint32
+	flags       tx.ApplyFlags
 
 	preflight ter.Result
 	preclaim  ter.Result
@@ -48,10 +50,10 @@ type stubApplyCtx struct {
 	applyFn   func(tx.Transaction) (ter.Result, bool)
 }
 
-func (c *stubApplyCtx) GetAccountSequence([20]byte) uint32             { return c.seq }
+func (c *stubApplyCtx) GetAccountSequence([20]byte) (uint32, error)    { return c.seq, c.sequenceErr }
 func (c *stubApplyCtx) AccountExists([20]byte) bool                    { return c.exists }
 func (c *stubApplyCtx) TicketExists(_ [20]byte, t uint32) bool         { return c.tickets[t] }
-func (c *stubApplyCtx) GetAccountBalance([20]byte) uint64              { return c.balance }
+func (c *stubApplyCtx) GetAccountBalance([20]byte) (uint64, error)     { return c.balance, c.balanceErr }
 func (c *stubApplyCtx) GetAccountReserve(uint32) uint64                { return c.reserve }
 func (c *stubApplyCtx) GetBaseFees(tx.Transaction) (uint64, uint64)    { return c.baseFee, c.baseFee }
 func (c *stubApplyCtx) GetReferenceFee() uint64                        { return c.baseFee }
@@ -546,6 +548,41 @@ func TestApply_H1_PreclaimPassesQueues(t *testing.T) {
 
 	require.Equal(t, ter.TerQUEUED, res.Result)
 	require.True(t, res.Queued)
+}
+
+func TestApplyAccountRootReadErrorsAreFatal(t *testing.T) {
+	tests := []struct {
+		name string
+		ctx  *stubApplyCtx
+	}{
+		{
+			name: "sequence",
+			ctx: &stubApplyCtx{
+				sequenceErr: errors.New("sequence read failed"),
+				baseFee:     10,
+			},
+		},
+		{
+			name: "balance",
+			ctx: &stubApplyCtx{
+				seq:        5,
+				balanceErr: errors.New("balance read failed"),
+				exists:     true,
+				baseFee:    10,
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			q := New(makeAdmissionConfig())
+			res := q.Apply(tt.ctx, &seqTx{seq: 5, fee: "10"}, [32]byte{0xEF}, [20]byte{9})
+			require.Equal(t, ter.TefINTERNAL, res.Result)
+			require.False(t, res.Applied)
+			require.False(t, res.Queued)
+			require.Zero(t, q.Size())
+		})
+	}
 }
 
 // TestApply_BadFeeRejected pins that a malformed Fee string is rejected with

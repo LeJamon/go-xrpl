@@ -468,12 +468,22 @@ func (l *Ledger) HashOfSeqContext(ctx context.Context, seq uint32) ([32]byte, bo
 
 	// Rolling 256: this ledger's skip list holds hashes for seqs
 	// [lseq-len .. lseq-1], so hash(seq) sits at index len-diff.
-	_, hashes, _, err := skiplist.ReadLedgerHashesSLEContext(ctx, l.stateMap, keylet.LedgerHashes().Key)
+	_, hashes, lastSeq, err := skiplist.ReadLedgerHashesSLEContext(ctx, l.stateMap, keylet.LedgerHashes().Key)
 	if err != nil {
 		return [32]byte{}, false, err
 	}
-	if diff := lseq - seq; diff <= uint32(len(hashes)) {
-		return hashes[uint32(len(hashes))-diff], true, nil
+	if len(hashes) != 0 {
+		if lseq == 0 || lastSeq != lseq-1 {
+			return [32]byte{}, false, fmt.Errorf("rolling LedgerHashes ends at %d, want %d", lastSeq, lseq-1)
+		}
+		wantLen := min(int(lastSeq), 256)
+		if len(hashes) != wantLen {
+			return [32]byte{}, false, fmt.Errorf("rolling LedgerHashes cardinality %d, want %d", len(hashes), wantLen)
+		}
+		firstSeq := lastSeq - uint32(len(hashes)) + 1
+		if seq >= firstSeq && seq <= lastSeq {
+			return hashes[seq-firstSeq], true, nil
+		}
 	}
 
 	// Beyond the rolling window only 256-aligned ancestors are enshrined in the
@@ -486,10 +496,22 @@ func (l *Ledger) HashOfSeqContext(ctx context.Context, seq uint32) ([32]byte, bo
 	if err != nil {
 		return [32]byte{}, false, err
 	}
-	if lastSeq >= seq {
-		if d := (lastSeq - seq) >> 8; uint32(len(histHashes)) > d {
-			return histHashes[uint32(len(histHashes))-d-1], true, nil
-		}
+	if len(histHashes) == 0 {
+		return [32]byte{}, false, nil
+	}
+	if lastSeq&0xff != 0 || lastSeq>>16 != seq>>16 {
+		return [32]byte{}, false, fmt.Errorf("historical LedgerHashes has invalid last sequence %d for ledger %d", lastSeq, seq)
+	}
+	firstSeq := (lastSeq >> 16) << 16
+	if firstSeq == 0 {
+		firstSeq = 256
+	}
+	wantLen := int((lastSeq-firstSeq)>>8) + 1
+	if len(histHashes) != wantLen {
+		return [32]byte{}, false, fmt.Errorf("historical LedgerHashes cardinality %d, want %d", len(histHashes), wantLen)
+	}
+	if seq >= firstSeq && seq <= lastSeq {
+		return histHashes[(seq-firstSeq)>>8], true, nil
 	}
 	return [32]byte{}, false, nil
 }

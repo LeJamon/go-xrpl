@@ -175,6 +175,10 @@ func Create(cfg Config) (*GenesisLedger, error) {
 	if totalXRP == 0 {
 		totalXRP = InitialXRP
 	}
+	if totalXRP > uint64(drops.MaxDrops) {
+		return nil, fmt.Errorf("genesis XRP supply %d exceeds protocol maximum %d", totalXRP, drops.MaxDrops)
+	}
+	cfg.Amendments = canonicalAmendments(cfg.Amendments)
 
 	passphrase := cfg.MasterPassphrase
 	if passphrase == "" {
@@ -286,6 +290,25 @@ func Create(cfg Config) (*GenesisLedger, error) {
 		GenesisAccount: accountID,
 		GenesisAddress: address,
 	}, nil
+}
+
+func canonicalAmendments(amendments [][32]byte) [][32]byte {
+	if len(amendments) < 2 {
+		return append([][32]byte(nil), amendments...)
+	}
+	canonical := append([][32]byte(nil), amendments...)
+	sort.Slice(canonical, func(i, j int) bool {
+		return bytes.Compare(canonical[i][:], canonical[j][:]) < 0
+	})
+	write := 1
+	for read := 1; read < len(canonical); read++ {
+		if canonical[read] == canonical[write-1] {
+			continue
+		}
+		canonical[write] = canonical[read]
+		write++
+	}
+	return canonical[:write]
 }
 
 func validCloseTimeResolution(resolution uint32) bool {

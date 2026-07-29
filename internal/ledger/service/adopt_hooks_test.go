@@ -64,11 +64,12 @@ func TestAdoptLedgerWithState_PublishesLedgerEvent(t *testing.T) {
 	adoptedSeq := svc.GetClosedLedgerIndex() + 1
 	hdr := &header.LedgerHeader{
 		LedgerIndex: adoptedSeq,
-		Hash:        adoptedHash,
 		TxHash:      txRoot,
 		AccountHash: stateRoot,
 		CloseTime:   time.Unix(1700000000, 0),
 	}
+	hdr.Hash = header.CalculateHash(*hdr)
+	adoptedHash = hdr.Hash
 
 	require.NoError(t, svc.AdoptLedgerWithState(context.TODO(), hdr, stateMap, txMap))
 	svc.SetValidatedLedger(adoptedSeq, adoptedHash)
@@ -132,10 +133,11 @@ func TestAdoptLedgerWithState_PublishesTransactions(t *testing.T) {
 	adoptedHash[0] = 0xF4
 	hdr := &header.LedgerHeader{
 		LedgerIndex: svc.GetClosedLedgerIndex() + 1,
-		Hash:        adoptedHash,
 		TxHash:      txRoot,
 		AccountHash: stateRoot,
 	}
+	hdr.Hash = header.CalculateHash(*hdr)
+	adoptedHash = hdr.Hash
 	require.NoError(t, svc.AdoptLedgerWithState(context.TODO(), hdr, stateMap, txMap))
 	svc.SetValidatedLedger(hdr.LedgerIndex, adoptedHash)
 
@@ -198,10 +200,11 @@ func TestAdoptLedgerWithState_StashesEventUntilValidated(t *testing.T) {
 	adoptedSeq := svc.GetClosedLedgerIndex() + 1
 	hdr := &header.LedgerHeader{
 		LedgerIndex: adoptedSeq,
-		Hash:        adoptedHash,
 		TxHash:      txRoot,
 		AccountHash: stateRoot,
 	}
+	hdr.Hash = header.CalculateHash(*hdr)
+	adoptedHash = hdr.Hash
 	require.NoError(t, svc.AdoptLedgerWithState(context.TODO(), hdr, stateMap, txMap))
 
 	// Give any erroneously-dispatched callback a chance to run.
@@ -276,10 +279,11 @@ func TestAdoptLedgerWithState_NoEventSinkInstalled_IsQuiet(t *testing.T) {
 	adoptedHash[0] = 0xF6
 	hdr := &header.LedgerHeader{
 		LedgerIndex: svc.GetClosedLedgerIndex() + 1,
-		Hash:        adoptedHash,
 		TxHash:      txRoot,
 		AccountHash: stateRoot,
 	}
+	hdr.Hash = header.CalculateHash(*hdr)
+	adoptedHash = hdr.Hash
 	require.NoError(t, svc.AdoptLedgerWithState(context.TODO(), hdr, stateMap, txMap),
 		"adopt must succeed without an event sink")
 

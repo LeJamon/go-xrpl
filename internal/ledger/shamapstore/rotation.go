@@ -2,7 +2,6 @@ package shamapstore
 
 import (
 	"context"
-	"fmt"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -180,12 +179,11 @@ func (r *Rotator) ReconcileGenerationState() error {
 	if !ok {
 		return nil
 	}
-	lastRotated, minimumOnline := generations.GenerationState()
-	if lastRotated <= r.store.GetLastRotated() {
+	generationLast, generationMinimum := generations.GenerationState()
+	lastRotated := max(generationLast, r.store.GetLastRotated())
+	minimumOnline := max(generationMinimum, r.store.GetMinimumOnline(), rotationMinimum(lastRotated))
+	if lastRotated == r.store.GetLastRotated() && minimumOnline == r.store.GetMinimumOnline() {
 		return nil
-	}
-	if minimumOnline == 0 {
-		return fmt.Errorf("generation %d has no minimum-online boundary", lastRotated)
 	}
 	if err := r.store.SetRotation(lastRotated, minimumOnline); err != nil {
 		return err
@@ -243,8 +241,8 @@ func (r *Rotator) Notify(validatedSeq uint32) {
 		select {
 		case r.notifyCh <- validatedSeq:
 			return
-		case <-r.notifyCh:
-			// Drop the stale queued sequence and retry with the newer one.
+		case queued := <-r.notifyCh:
+			validatedSeq = max(validatedSeq, queued)
 		case <-r.stopCh:
 			return
 		}
@@ -319,7 +317,7 @@ func (r *Rotator) maybeRotate(ctx context.Context, validatedSeq uint32) {
 		return
 	}
 
-	if validatedSeq < lastRotated+r.cfg.DeleteInterval {
+	if validatedSeq <= lastRotated || validatedSeq-lastRotated < r.cfg.DeleteInterval {
 		return
 	}
 
@@ -399,7 +397,7 @@ func (r *Rotator) rotate(ctx context.Context, validatedSeq, lastRotated uint32) 
 		r.logger.Warn("online delete: live-state refresh is not configured")
 		return
 	}
-	minimumOnline := lastRotated + 1
+	minimumOnline := max(r.MinimumOnline(), rotationMinimum(lastRotated))
 	if err := r.SetMinimumOnlineFloor(minimumOnline); err != nil {
 		r.logger.Warn("online delete: failed to persist minimum online ledger", "seq", minimumOnline, "err", err)
 		return
@@ -431,6 +429,7 @@ func (r *Rotator) rotate(ctx context.Context, validatedSeq, lastRotated uint32) 
 				return
 			}
 			r.logger.Warn("online delete: relational prune failed", "boundary", lastRotated, "err", err)
+			return
 		}
 	}
 	if !r.waitHealthy(ctx) {

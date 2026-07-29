@@ -239,7 +239,7 @@ func (p *PermissionedDomain) decode(data []byte, legacy bool) error {
 				return newErrUnknownField("PermissionedDomain", typeCode, fieldCode)
 			}
 		case 15: // STArray
-			val, err := sr.readSTArray()
+			val, err := sr.readSTArray("AcceptedCredentials")
 			if err != nil {
 				return err
 			}
@@ -402,6 +402,11 @@ func (p *PermissionedDomain) ToMap() map[string]any {
 func (p *PermissionedDomain) Encode() ([]byte, error) {
 	if err := p.validateRequired(); err != nil {
 		return nil, err
+	}
+	if p.present&permissioneddomainBitAcceptedCredentials != 0 {
+		if err := validateSTArrayForEncode("AcceptedCredentials", p.AcceptedCredentials); err != nil {
+			return nil, err
+		}
 	}
 	out := p.ToMap()
 	if p.present&permissioneddomainBitPreviousTxnID == 0 {

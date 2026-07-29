@@ -189,35 +189,52 @@ func addIOUValuesRoundedWithContext(
 	return r
 }
 
-// Compare compares two amounts
-// Returns -1 if a < b, 0 if a == b, 1 if a > b
+// Compare compares two comparable amounts and panics when their assets differ.
+// Use CompareChecked when the asset relationship is not already guaranteed.
 func (a Amount) Compare(b Amount) int {
+	cmp, err := a.CompareChecked(b)
+	if err != nil {
+		panic(err)
+	}
+	return cmp
+}
+
+// CompareChecked compares two amounts after validating rippled's
+// STAmount::areComparable asset rules.
+func (a Amount) CompareChecked(b Amount) (int, error) {
+	if !amountsComparable(a, b) {
+		return 0, fmt.Errorf("temBAD_AMOUNT: cannot compare amounts with different assets")
+	}
 	if a.IsNative() && b.IsNative() {
 		if a.xrp.drops < b.xrp.drops {
-			return -1
+			return -1, nil
 		}
 		if a.xrp.drops > b.xrp.drops {
-			return 1
+			return 1, nil
 		}
-		return 0
+		return 0, nil
 	}
-	if !a.IsNative() && !b.IsNative() {
-		if a.mptRaw != nil && b.mptRaw != nil {
-			if *a.mptRaw < *b.mptRaw {
-				return -1
-			}
-			if *a.mptRaw > *b.mptRaw {
-				return 1
-			}
-			return 0
+	if a.mptRaw != nil {
+		if *a.mptRaw < *b.mptRaw {
+			return -1, nil
 		}
-		return compareIOUValues(a.iou, b.iou)
+		if *a.mptRaw > *b.mptRaw {
+			return 1, nil
+		}
+		return 0, nil
 	}
-	// Mixed types - XRP comes first
-	if a.IsNative() {
-		return -1
+	return compareIOUValues(a.iou, b.iou), nil
+}
+
+func amountsComparable(a, b Amount) bool {
+	if a.IsNative() || b.IsNative() {
+		return a.IsNative() && b.IsNative()
 	}
-	return 1
+	if a.mptRaw != nil || b.mptRaw != nil {
+		return a.mptRaw != nil && b.mptRaw != nil &&
+			a.mptIssuanceID == b.mptIssuanceID
+	}
+	return a.Currency == b.Currency
 }
 
 // compareIOUValues compares two IOU values using mantissa/exponent without float64 conversion.
@@ -280,10 +297,10 @@ func (a Amount) MulRatioWithNumberContext(
 	roundUp bool,
 	ctx NumberContext,
 ) Amount {
+	if den == 0 {
+		panic("division by zero")
+	}
 	if a.mptRaw != nil {
-		if den == 0 {
-			panic("division by zero")
-		}
 		product := new(big.Int).Mul(big.NewInt(*a.mptRaw), new(big.Int).SetUint64(uint64(num)))
 		quotient := new(big.Int)
 		remainder := new(big.Int)
@@ -301,24 +318,24 @@ func (a Amount) MulRatioWithNumberContext(
 		return newMPTAmountLike(a, quotient.Int64())
 	}
 	if a.IsNative() {
-		// Use big.Int to avoid int64 overflow for large XRP amounts.
-		// E.g. 150000000000 drops * 1000000000 overflows int64.
-		// Reference: rippled uses uint128_t for XRP mulRatio.
 		bigDrops := new(big.Int).SetInt64(a.Drops())
-		bigNum := new(big.Int).SetInt64(int64(num))
-		bigDen := new(big.Int).SetInt64(int64(den))
-		product := new(big.Int).Mul(bigDrops, bigNum)
-		result := new(big.Int).Div(product, bigDen)
-		if roundUp {
-			rem := new(big.Int).Mod(product, bigDen)
-			if rem.Sign() != 0 {
+		product := new(big.Int).Mul(bigDrops, new(big.Int).SetUint64(uint64(num)))
+		result, remainder := new(big.Int), new(big.Int)
+		result.QuoRem(product, new(big.Int).SetUint64(uint64(den)), remainder)
+		if remainder.Sign() != 0 {
+			if product.Sign() >= 0 && roundUp {
 				result.Add(result, big.NewInt(1))
+			} else if product.Sign() < 0 && !roundUp {
+				result.Sub(result, big.NewInt(1))
 			}
+		}
+		if !result.IsInt64() {
+			panic("XRP mulRatio overflow")
 		}
 		return NewXRPAmountFromInt(result.Int64())
 	}
 
-	if den == 0 || a.IsZero() {
+	if a.IsZero() {
 		return a
 	}
 
@@ -579,8 +596,7 @@ func (a Amount) mulRounded(
 
 	// Handle XRP * XRP case
 	if a.IsNative() && other.IsNative() {
-		result := a.Drops() * other.Drops()
-		return NewXRPAmountFromInt(result)
+		return NewXRPAmountFromInt(mulNativeNative(a.Drops(), other.Drops()))
 	}
 
 	// For IOU multiplication, use precise big.Int arithmetic
@@ -706,16 +722,7 @@ func (a Amount) mulRounded(
 	}
 
 	if a.IsNative() {
-		// Result is XRP - convert from mantissa/exponent to drops
-		for resultExp > 0 {
-			resultMant *= 10
-			resultExp--
-		}
-		for resultExp < 0 {
-			resultMant /= 10
-			resultExp++
-		}
-		return NewXRPAmountFromInt(resultMant)
+		return nativeAmountFromMagnitude(bigResult, resultExp, negative)
 	}
 
 	result := ctx.IssuedAmount(resultMant, resultExp, a.Currency, a.Issuer, mode)
@@ -778,7 +785,11 @@ func (a Amount) divWithNumberContext(
 	if a.IsNative() && other.IsNative() {
 		result := a.Drops() / other.Drops()
 		if roundUp && a.Drops()%other.Drops() != 0 {
-			result++
+			if (a.Drops() < 0) != (other.Drops() < 0) {
+				result--
+			} else {
+				result++
+			}
 		}
 		return NewXRPAmountFromInt(result)
 	}
@@ -912,17 +923,29 @@ func (a Amount) divWithNumberContext(
 	}
 
 	if a.IsNative() {
-		// Result is XRP - convert from mantissa/exponent to drops
-		for resultExp > 0 {
-			resultMant *= 10
-			resultExp--
-		}
-		for resultExp < 0 {
-			resultMant /= 10
-			resultExp++
-		}
-		return NewXRPAmountFromInt(resultMant)
+		return nativeAmountFromMagnitude(bigResult, resultExp, negative)
 	}
 
 	return NewIssuedAmountFromValue(resultMant, resultExp, a.Currency, a.Issuer)
+}
+
+func nativeAmountFromMagnitude(magnitude *big.Int, exponent int, negative bool) Amount {
+	drops := new(big.Int).Set(magnitude)
+	if exponent > 0 {
+		drops.Mul(drops, pow10Big(exponent))
+	} else if exponent < 0 {
+		drops.Quo(drops, pow10Big(-exponent))
+	}
+	if drops.Sign() == 0 {
+		return NewXRPAmountFromInt(0)
+	}
+	if !drops.IsInt64() {
+		panic("Native currency amount out of range")
+	}
+	value := drops.Int64()
+	guardNativeDrops(value)
+	if negative {
+		value = -value
+	}
+	return NewXRPAmountFromInt(value)
 }

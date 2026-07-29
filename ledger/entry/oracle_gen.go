@@ -308,7 +308,7 @@ func (o *Oracle) decode(data []byte, legacy bool) error {
 				return newErrUnknownField("Oracle", typeCode, fieldCode)
 			}
 		case 15: // STArray
-			val, err := sr.readSTArray()
+			val, err := sr.readSTArray("PriceDataSeries")
 			if err != nil {
 				return err
 			}
@@ -511,6 +511,11 @@ func (o *Oracle) ToMap() map[string]any {
 func (o *Oracle) Encode() ([]byte, error) {
 	if err := o.validateRequired(); err != nil {
 		return nil, err
+	}
+	if o.present&oracleBitPriceDataSeries != 0 {
+		if err := validateSTArrayForEncode("PriceDataSeries", o.PriceDataSeries); err != nil {
+			return nil, err
+		}
 	}
 	out := o.ToMap()
 	if o.present&oracleBitPreviousTxnID == 0 {

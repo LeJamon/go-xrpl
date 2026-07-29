@@ -395,6 +395,9 @@ func (a Amount) MPTIssuanceID() string {
 // NewIssuedAmountFromFloat64 creates an issued currency amount from a float64 value.
 // This is a convenience function that converts the float to mantissa/exponent internally.
 func NewIssuedAmountFromFloat64(value float64, currency, issuer string) Amount {
+	if math.IsNaN(value) || math.IsInf(value, 0) {
+		panic("issued amount must be finite")
+	}
 	mantissa, exponent := Float64ToMantissaExponent(value)
 	return NewIssuedAmountFromValue(mantissa, exponent, currency, issuer)
 }
@@ -402,6 +405,9 @@ func NewIssuedAmountFromFloat64(value float64, currency, issuer string) Amount {
 // Float64ToMantissaExponent converts a float64 to mantissa and exponent.
 // Returns (mantissa, exponent) where value = mantissa * 10^exponent.
 func Float64ToMantissaExponent(value float64) (int64, int) {
+	if math.IsNaN(value) || math.IsInf(value, 0) {
+		panic("issued amount must be finite")
+	}
 	if value == 0 {
 		return 0, zeroExponent
 	}
@@ -607,7 +613,10 @@ func (a *Amount) UnmarshalJSON(data []byte) error {
 // silently collapsing to zero. An unparseable string returns an error rather
 // than a masked zero.
 func parseIOUValueFromString(value string) (IOUAmountValue, error) {
-	if value == "" || value == "0" {
+	if !amountNumberRe.MatchString(value) {
+		return ZeroIOUValue(), fmt.Errorf("invalid IOU value %q", value)
+	}
+	if value == "0" {
 		return ZeroIOUValue(), nil
 	}
 

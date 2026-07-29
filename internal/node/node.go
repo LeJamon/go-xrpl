@@ -37,7 +37,6 @@ import (
 	"github.com/LeJamon/go-xrpl/internal/watchdog"
 	xrpllog "github.com/LeJamon/go-xrpl/log"
 	"github.com/LeJamon/go-xrpl/protocol"
-	"github.com/LeJamon/go-xrpl/shamap"
 	"github.com/LeJamon/go-xrpl/shamap/backend"
 	kvpebble "github.com/LeJamon/go-xrpl/storage/kvstore/pebble"
 	"github.com/LeJamon/go-xrpl/storage/nodestore"
@@ -278,7 +277,7 @@ func Run(appConfig *config.Config, configPath string, standalone bool, startup s
 	// consensus modes; gated by node_db advisory_delete and persisted under
 	// database_path. Mirrors rippled's SHAMapStore advisory-delete state.
 	if advisoryStore, asErr := shamapstore.New(
-		appConfig.NodeDB.IsAdvisoryDeleteEnabled(),
+		appConfig.NodeDB.IsOnlineDeleteEnabled() && appConfig.NodeDB.IsAdvisoryDeleteEnabled(),
 		appConfig.LocalStateDir(),
 	); asErr != nil {
 		if appConfig.NodeDB.IsOnlineDeleteEnabled() {
@@ -435,37 +434,30 @@ func Run(appConfig *config.Config, configPath string, standalone bool, startup s
 		}
 	}
 
-	// Background ledger-integrity verifier (admin ledger_cleaner). rippled keeps
-	// this subsystem present in every instance (Application always constructs
-	// and starts its LedgerCleaner); mirror that by always wiring it, falling
-	// back to an in-memory content-addressed family when no persistent node
-	// store is configured (standalone / RPC-only). The RPC's own availability
-	// is then gated on network/sync state, as in rippled, not on storage.
-	var cleanerFamily shamap.Family
+	// Background ledger-integrity verification requires the same durable SHAMap
+	// family used by the ledger service. A private in-memory fallback cannot
+	// verify persisted ledger contents and would report misleading failures.
+	var cleanerSource *ledgerCleanerSource
 	if nodeFamily != nil {
-		cleanerFamily = nodeFamily
-	} else {
-		memFamily := backend.NewMemory()
-		cleanerFamily = memFamily
-	}
-	cleanerSource := &ledgerCleanerSource{svc: ledgerSvcRef, family: cleanerFamily}
-	ledgerCleaner = cleaner.New(cleanerSource, rootLogger)
-	ledgerCleaner.Start()
+		cleanerSource = &ledgerCleanerSource{svc: ledgerSvcRef, family: nodeFamily}
+		ledgerCleaner = cleaner.New(cleanerSource, rootLogger)
+		ledgerCleaner.Start()
 
-	cleanerRef := ledgerCleaner
-	services.LedgerCleanerConfigure = func(p types.LedgerCleanerParams) types.LedgerCleanerStatus {
-		return toCleanerStatus(cleanerRef.Clean(cleaner.Params{
-			Ledger:     p.Ledger,
-			MinLedger:  p.MinLedger,
-			MaxLedger:  p.MaxLedger,
-			Full:       p.Full,
-			CheckNodes: p.CheckNodes,
-			FixTxns:    p.FixTxns,
-			Stop:       p.Stop,
-		}))
-	}
-	services.LedgerCleanerStatusFn = func() types.LedgerCleanerStatus {
-		return toCleanerStatus(cleanerRef.Status())
+		cleanerRef := ledgerCleaner
+		services.LedgerCleanerConfigure = func(p types.LedgerCleanerParams) types.LedgerCleanerStatus {
+			return toCleanerStatus(cleanerRef.Clean(cleaner.Params{
+				Ledger:     p.Ledger,
+				MinLedger:  p.MinLedger,
+				MaxLedger:  p.MaxLedger,
+				Full:       p.Full,
+				CheckNodes: p.CheckNodes,
+				FixTxns:    p.FixTxns,
+				Stop:       p.Stop,
+			}))
+		}
+		services.LedgerCleanerStatusFn = func() types.LedgerCleanerStatus {
+			return toCleanerStatus(cleanerRef.Status())
+		}
 	}
 
 	// Start consensus/networking if not in standalone mode
@@ -517,7 +509,7 @@ func Run(appConfig *config.Config, configPath string, standalone bool, startup s
 		if err := consensusComponents.Start(); err != nil {
 			return fmt.Errorf("start consensus components: %w", err)
 		}
-		if router := consensusComponents.Router; router != nil {
+		if router := consensusComponents.Router; router != nil && cleanerSource != nil {
 			cleanerSource.SetReacquire(func(ctx context.Context, seq uint32) error {
 				if err := ctx.Err(); err != nil {
 					return err

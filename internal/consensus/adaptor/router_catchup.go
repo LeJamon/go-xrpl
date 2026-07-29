@@ -1439,7 +1439,7 @@ func (r *Router) handleReplayDeltaResponse(msg *peermanagement.InboundMessage) {
 		return
 	}
 
-	rd, err := r.replayer.HandleResponse(resp)
+	rd, err := r.replayer.HandleResponseFrom(uint64(msg.PeerID), resp)
 	if errors.Is(err, inbound.ErrNoMatchingAcquisition) {
 		// Stale or unsolicited — drop silently without charging the
 		// peer. A misbehaving peer sending genuinely bogus data would
@@ -1449,12 +1449,22 @@ func (r *Router) handleReplayDeltaResponse(msg *peermanagement.InboundMessage) {
 			"peer", msg.PeerID)
 		return
 	}
+	if errors.Is(err, inbound.ErrUnexpectedReplayPeer) {
+		hash := rd.Hash()
+		r.logger.Warn("replay delta response from unexpected peer",
+			"peer", msg.PeerID,
+			"expected_peer", rd.PeerID(),
+			"hash", fmt.Sprintf("%x", hash[:8]),
+		)
+		r.adaptor.IncPeerBadData(uint64(msg.PeerID), "replay-delta-peer")
+		return
+	}
 	if err != nil {
 		// Verification failed. rd is still registered in the Replayer so
 		// we can read its provenance before abandoning the slot.
 		seq := rd.Seq()
 		hash := rd.Hash()
-		peerID := rd.PeerID()
+		peerID := uint64(msg.PeerID)
 		r.replayer.Abandon(hash)
 		r.logger.Warn("replay delta verification failed; falling back to legacy",
 			"seq", seq,

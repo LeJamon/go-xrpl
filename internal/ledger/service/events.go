@@ -3,6 +3,7 @@ package service
 import (
 	"encoding/hex"
 	"encoding/json"
+	"fmt"
 	"sort"
 	"time"
 
@@ -368,21 +369,46 @@ type transactionResultSource interface {
 	ForEachTransaction(func(txHash [32]byte, txData []byte) bool) error
 }
 
+type stagedTransactionResults struct {
+	results          []TransactionResultEvent
+	positions        map[[32]byte]uint32
+	missingPositions [][32]byte
+	ledgerSeq        uint32
+}
+
 // collectTransactionResults is the history-safe entry point for callers that
 // are not already inside a frontier/history mutation.
-func (s *Service) collectTransactionResults(l transactionResultSource, ledgerSeq uint32, ledgerHash [32]byte) []TransactionResultEvent {
+func (s *Service) collectTransactionResults(l transactionResultSource, ledgerSeq uint32, ledgerHash [32]byte) ([]TransactionResultEvent, error) {
+	staged, err := stageTransactionResults(l, ledgerSeq, ledgerHash)
+	if err != nil {
+		return nil, err
+	}
 	s.historyComponent.mu.Lock()
 	defer s.historyComponent.mu.Unlock()
-	return s.collectTransactionResultsLocked(l, ledgerSeq, ledgerHash)
+	s.commitTransactionResultsLocked(staged)
+	return staged.results, nil
 }
 
 // collectTransactionResultsLocked gathers per-tx results and updates the
 // history component's transaction indexes. Caller holds historyComponent.mu.
-func (s *Service) collectTransactionResultsLocked(l transactionResultSource, ledgerSeq uint32, ledgerHash [32]byte) []TransactionResultEvent {
+func (s *Service) collectTransactionResultsLocked(l transactionResultSource, ledgerSeq uint32, ledgerHash [32]byte) ([]TransactionResultEvent, error) {
+	staged, err := stageTransactionResults(l, ledgerSeq, ledgerHash)
+	if err != nil {
+		return nil, err
+	}
+	s.commitTransactionResultsLocked(staged)
+	return staged.results, nil
+}
+
+func stageTransactionResults(l transactionResultSource, ledgerSeq uint32, ledgerHash [32]byte) (*stagedTransactionResults, error) {
+	staged := &stagedTransactionResults{
+		positions: make(map[[32]byte]uint32),
+		ledgerSeq: ledgerSeq,
+	}
 	var results []TransactionResultEvent
 	validated := l.IsValidated()
 
-	l.ForEachTransaction(func(txHash [32]byte, txData []byte) bool {
+	if err := l.ForEachTransaction(func(txHash [32]byte, txData []byte) bool {
 		result := TransactionResultEvent{
 			TxHash:      txHash,
 			TxData:      txData,
@@ -392,18 +418,34 @@ func (s *Service) collectTransactionResultsLocked(l transactionResultSource, led
 		}
 		result.AffectedAccounts = extractAffectedAccounts(txData)
 
-		s.txIndex[txHash] = ledgerSeq
 		if txIndex, ok := txcore.TransactionIndexFromTxWithMetaBlob(txData); ok {
-			s.txPositionIndex[txHash] = txIndex
+			staged.positions[txHash] = txIndex
 		} else {
-			delete(s.txPositionIndex, txHash)
+			staged.missingPositions = append(staged.missingPositions, txHash)
 		}
 
 		results = append(results, result)
 		return true
-	})
+	}); err != nil {
+		return nil, fmt.Errorf("walk ledger transactions: %w", err)
+	}
+	staged.results = results
+	return staged, nil
+}
 
-	return results
+func (s *Service) commitTransactionResultsLocked(staged *stagedTransactionResults) {
+	if staged == nil {
+		return
+	}
+	for _, result := range staged.results {
+		s.txIndex[result.TxHash] = staged.ledgerSeq
+	}
+	for txHash, txIndex := range staged.positions {
+		s.txPositionIndex[txHash] = txIndex
+	}
+	for _, txHash := range staged.missingPositions {
+		delete(s.txPositionIndex, txHash)
+	}
 }
 
 // extractAffectedAccounts returns the accounts named by the final state of each

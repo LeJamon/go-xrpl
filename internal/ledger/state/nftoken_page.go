@@ -237,7 +237,11 @@ func parseNFTokenOffer(entry *ledgerfields.NFTokenOffer) (*NFTokenOfferData, err
 		}
 		switch {
 		case amount.IsNative():
-			offer.Amount = nativeMagnitude(amount)
+			drops := amount.Drops()
+			if drops < 0 {
+				drops = -drops
+			}
+			offer.Amount = uint64(drops)
 			offer.Negative = amount.IsNegative()
 		case !amount.IsMPT():
 			offer.Negative = amount.IsNegative()

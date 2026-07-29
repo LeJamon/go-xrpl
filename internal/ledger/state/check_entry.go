@@ -90,12 +90,10 @@ func ParseCheck(data []byte) (*CheckData, error) {
 		}
 		check.IsNativeSendMax = check.SendMaxAmount.IsNative()
 		if check.IsNativeSendMax {
-			drops := check.SendMaxAmount.Drops()
-			if drops < 0 {
-				drops = -drops
+			check.SendMax, err = nonNegativeNativeDrops("Check.SendMax", check.SendMaxAmount)
+			if err != nil {
+				return nil, err
 			}
-			check.SendMax = uint64(drops)
-			check.SendMaxAmount = NewXRPAmountFromInt(drops)
 		}
 	}
 

@@ -37,11 +37,12 @@ func buildHeldAdoptionInputs(t *testing.T, seq uint32, hash, parentHash [32]byte
 
 	hdr := &header.LedgerHeader{
 		LedgerIndex: seq,
-		Hash:        hash,
 		ParentHash:  parentHash,
+		CloseFlags:  hash[0],
 		TxHash:      txRoot,
 		AccountHash: stateRoot,
 	}
+	hdr.Hash = header.CalculateHash(*hdr)
 	return heldAdoptionFixture{hdr: hdr, stateMap: stateMap, txMap: txMap}
 }
 
@@ -72,7 +73,9 @@ func TestAdoptLedgerWithState_CascadesHeldOrphan(t *testing.T) {
 	// chain on 101 itself, just the held-cascade onto 102.
 	var parent101 [32]byte
 	fx101 := buildHeldAdoptionInputs(t, baseSeq, hash101, parent101)
+	hash101 = fx101.hdr.Hash
 	fx102 := buildHeldAdoptionInputs(t, baseSeq+1, hash102, hash101) // 102 chains to 101
+	hash102 = fx102.hdr.Hash
 
 	// Submit 102 as a held adoption. 101 is not yet in history so it
 	// must stash, not adopt immediately.
@@ -135,9 +138,11 @@ func TestAdoptLedgerWithState_OrphanMismatchDropped(t *testing.T) {
 
 	var parent101 [32]byte
 	fx101 := buildHeldAdoptionInputs(t, baseSeq, hashY, parent101)
+	hashY = fx101.hdr.Hash
 
 	// 102 says its parent is X (a different fork), not Y.
 	fx102 := buildHeldAdoptionInputs(t, baseSeq+1, hash102, hashX)
+	hash102 = fx102.hdr.Hash
 
 	_, err = svc.SubmitHeldAdoption(context.TODO(), fx102.hdr, fx102.stateMap, fx102.txMap)
 	require.NoError(t, err)
@@ -180,9 +185,11 @@ func TestSubmitHeldAdoption_ParentAlreadyPresent(t *testing.T) {
 	var parent101 [32]byte
 
 	fx101 := buildHeldAdoptionInputs(t, baseSeq, hash101, parent101)
+	hash101 = fx101.hdr.Hash
 	require.NoError(t, svc.AdoptLedgerWithState(context.TODO(), fx101.hdr, fx101.stateMap, fx101.txMap))
 
 	fx102 := buildHeldAdoptionInputs(t, baseSeq+1, hash102, hash101)
+	hash102 = fx102.hdr.Hash
 	res, err := svc.SubmitHeldAdoption(context.TODO(), fx102.hdr, fx102.stateMap, fx102.txMap)
 	require.NoError(t, err)
 	require.True(t, res.Adopted, "fast path must report Adopted=true when parent is present")
@@ -226,12 +233,14 @@ func TestSubmitHeldAdoption_ParentPresentButHashMismatch(t *testing.T) {
 
 	// Adopt 101 with hash AA.
 	fx101 := buildHeldAdoptionInputs(t, baseSeq, hash101Present, parent101)
+	hash101Present = fx101.hdr.Hash
 	require.NoError(t, svc.AdoptLedgerWithState(context.TODO(), fx101.hdr, fx101.stateMap, fx101.txMap))
 
 	// Submit 102 claiming parent BB (≠ AA). Must not adopt onto the
 	// mismatched chain; it must be refused as a no-op from the ledger-
 	// history perspective.
 	fx102 := buildHeldAdoptionInputs(t, baseSeq+1, hash102, hash101Wanted)
+	hash102 = fx102.hdr.Hash
 	_, err = svc.SubmitHeldAdoption(context.TODO(), fx102.hdr, fx102.stateMap, fx102.txMap)
 	require.NoError(t, err)
 
@@ -260,7 +269,9 @@ func TestAdoptLedgerWithState_HeldAdoptionExpires(t *testing.T) {
 	var parent101 [32]byte
 
 	fx101 := buildHeldAdoptionInputs(t, baseSeq, hash101, parent101)
+	hash101 = fx101.hdr.Hash
 	fx102 := buildHeldAdoptionInputs(t, baseSeq+1, hash102, hash101)
+	hash102 = fx102.hdr.Hash
 
 	// Manually stash 102 with a stale `at` to simulate age > TTL.
 	svc.mu.Lock()
@@ -308,8 +319,11 @@ func TestAdoptLedgerWithState_MultiLevelCascade(t *testing.T) {
 	var parent101 [32]byte
 
 	fx101 := buildHeldAdoptionInputs(t, baseSeq, hash101, parent101)
+	hash101 = fx101.hdr.Hash
 	fx102 := buildHeldAdoptionInputs(t, baseSeq+1, hash102, hash101)
+	hash102 = fx102.hdr.Hash
 	fx103 := buildHeldAdoptionInputs(t, baseSeq+2, hash103, hash102)
+	hash103 = fx103.hdr.Hash
 
 	// Submit 103 before 102 — both stash.
 	_, err = svc.SubmitHeldAdoption(context.TODO(), fx103.hdr, fx103.stateMap, fx103.txMap)
@@ -358,4 +372,29 @@ func TestSubmitHeldAdoption_RejectsNil(t *testing.T) {
 	hdr := &header.LedgerHeader{LedgerIndex: 42}
 	_, err = svc.SubmitHeldAdoption(context.TODO(), hdr, nil, nil)
 	assert.Error(t, err, "nil state map must be rejected")
+}
+
+func TestSubmitHeldAdoption_RejectsCorruptCommitmentBeforeStash(t *testing.T) {
+	svc, err := New(DefaultConfig())
+	require.NoError(t, err)
+	require.NoError(t, svc.Start())
+	t.Cleanup(svc.Stop)
+
+	seq := svc.GetClosedLedgerIndex() + 2
+	fixture := buildHeldAdoptionInputs(t, seq, [32]byte{0xCC}, [32]byte{0xBB})
+	require.NoError(t, fixture.stateMap.Put([32]byte{0xA0, 0x01}, []byte("changed after commitment")))
+
+	result, err := svc.SubmitHeldAdoption(
+		t.Context(),
+		fixture.hdr,
+		fixture.stateMap,
+		fixture.txMap,
+	)
+	require.Error(t, err)
+	require.False(t, result.Adopted)
+	require.False(t, result.Stashed)
+
+	svc.mu.RLock()
+	defer svc.mu.RUnlock()
+	require.Empty(t, svc.heldAdoptions)
 }

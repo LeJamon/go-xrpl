@@ -11,6 +11,7 @@ import (
 	"github.com/LeJamon/go-xrpl/internal/tx"
 	"github.com/LeJamon/go-xrpl/protocol"
 	"github.com/LeJamon/go-xrpl/shamap"
+	shamapbackend "github.com/LeJamon/go-xrpl/shamap/backend"
 	"github.com/LeJamon/go-xrpl/storage/relationaldb"
 	sqlitedb "github.com/LeJamon/go-xrpl/storage/relationaldb/sqlite"
 	"github.com/stretchr/testify/assert"
@@ -96,14 +97,13 @@ func TestAdoptLedgerWithState_PreservesTxMap(t *testing.T) {
 
 	// Construct a header whose TxHash matches the tx map root. The
 	// adopted ledger's tx map must hash to this same value.
-	var adoptedHash [32]byte
-	adoptedHash[0] = 0xAD // arbitrary distinct value
 	hdr := &header.LedgerHeader{
 		LedgerIndex: svc.GetClosedLedgerIndex() + 1,
-		Hash:        adoptedHash,
 		TxHash:      expectedTxRoot,
 		AccountHash: expectedStateRoot,
 	}
+	hdr.Hash = header.CalculateHash(*hdr)
+	adoptedHash := hdr.Hash
 
 	require.NoError(t, svc.AdoptLedgerWithState(context.TODO(), hdr, stateMap, txMap),
 		"AdoptLedgerWithState must accept a caller-supplied tx map")
@@ -154,14 +154,13 @@ func TestAdoptLedgerWithState_NilTxMapFallsBackToEmpty(t *testing.T) {
 	emptyTxRoot, err := emptyTxMap.Hash()
 	require.NoError(t, err)
 
-	var adoptedHash [32]byte
-	adoptedHash[0] = 0xBE
 	hdr := &header.LedgerHeader{
 		LedgerIndex: svc.GetClosedLedgerIndex() + 1,
-		Hash:        adoptedHash,
 		TxHash:      emptyTxRoot,
 		AccountHash: stateRoot,
 	}
+	hdr.Hash = header.CalculateHash(*hdr)
+	adoptedHash := hdr.Hash
 
 	require.NoError(t, svc.AdoptLedgerWithState(context.TODO(), hdr, stateMap, nil),
 		"AdoptLedgerWithState must accept nil txMap (legacy catchup path)")
@@ -214,14 +213,13 @@ func TestAdoptLedgerWithState_PersistsToRelationalDB(t *testing.T) {
 	stateRoot, err := stateMap.Hash()
 	require.NoError(t, err)
 
-	var adoptedHash [32]byte
-	adoptedHash[0] = 0xC1
 	hdr := &header.LedgerHeader{
 		LedgerIndex: svc.GetClosedLedgerIndex() + 1,
-		Hash:        adoptedHash,
 		TxHash:      txRoot,
 		AccountHash: stateRoot,
 	}
+	hdr.Hash = header.CalculateHash(*hdr)
+	adoptedHash := hdr.Hash
 
 	require.NoError(t, svc.AdoptLedgerWithState(context.TODO(), hdr, stateMap, txMap))
 	svc.FlushPersists()
@@ -281,14 +279,12 @@ func TestAdoptLedgerWithState_PopulatesTxIndex(t *testing.T) {
 	stateRoot, err := stateMap.Hash()
 	require.NoError(t, err)
 
-	var adoptedHash [32]byte
-	adoptedHash[0] = 0xF2
 	hdr := &header.LedgerHeader{
 		LedgerIndex: svc.GetClosedLedgerIndex() + 1,
-		Hash:        adoptedHash,
 		TxHash:      txRoot,
 		AccountHash: stateRoot,
 	}
+	hdr.Hash = header.CalculateHash(*hdr)
 
 	require.NoError(t, svc.AdoptLedgerWithState(context.TODO(), hdr, stateMap, txMap))
 
@@ -330,14 +326,12 @@ func TestAdoptLedgerWithState_UsesMetadataTransactionIndex(t *testing.T) {
 	stateRoot, err := stateMap.Hash()
 	require.NoError(t, err)
 
-	var adoptedHash [32]byte
-	adoptedHash[0] = 0xF3
 	hdr := &header.LedgerHeader{
 		LedgerIndex: svc.GetClosedLedgerIndex() + 1,
-		Hash:        adoptedHash,
 		TxHash:      txRoot,
 		AccountHash: stateRoot,
 	}
+	hdr.Hash = header.CalculateHash(*hdr)
 	require.NoError(t, svc.AdoptLedgerWithState(context.TODO(), hdr, stateMap, txMap))
 
 	for hash, want := range wantIndex {
@@ -346,4 +340,65 @@ func TestAdoptLedgerWithState_UsesMetadataTransactionIndex(t *testing.T) {
 		require.NoError(t, err)
 		assert.Equal(t, want, result.TxIndex)
 	}
+}
+
+func TestAdoptLedgerWithState_TraversalFailureLeavesCanonicalStateUnchanged(t *testing.T) {
+	svc, err := New(DefaultConfig())
+	require.NoError(t, err)
+	require.NoError(t, svc.Start())
+	t.Cleanup(svc.Stop)
+
+	txMap := shamap.New(shamap.TypeTransaction)
+	for i := range 2 {
+		blob, id := makeTxMetaBlobForTest(t, []byte{byte(i + 1)}, uint32(i))
+		require.NoError(t, txMap.PutWithNodeType(id, blob, shamap.NodeTypeTransactionWithMeta))
+	}
+	txRoot, err := txMap.Hash()
+	require.NoError(t, err)
+	batch, err := txMap.FlushDirty()
+	require.NoError(t, err)
+
+	baseFamily := shamapbackend.NewMemory()
+	require.NoError(t, baseFamily.StoreBatch(t.Context(), batch.Entries))
+	family := &corruptDescendantFamily{
+		inner: baseFamily,
+		roots: map[[32]byte]struct{}{txRoot: {}},
+	}
+	backedTxMap, err := shamap.NewFromRootHash(shamap.TypeTransaction, txRoot, family)
+	require.NoError(t, err)
+
+	stateMap := shamap.New(shamap.TypeState)
+	stateRoot, err := stateMap.Hash()
+	require.NoError(t, err)
+
+	closedBefore := svc.GetClosedLedger()
+	openBefore := svc.GetOpenLedger()
+	hdr := &header.LedgerHeader{
+		LedgerIndex: closedBefore.Sequence() + 1,
+		ParentHash:  closedBefore.Hash(),
+		TxHash:      txRoot,
+		AccountHash: stateRoot,
+	}
+	hdr.Hash = header.CalculateHash(*hdr)
+
+	svc.historyComponent.mu.RLock()
+	historyLenBefore := len(svc.ledgerHistory)
+	byHashLenBefore := len(svc.ledgerByHash)
+	persistedLenBefore := len(svc.persistedLedgers)
+	txIndexLenBefore := len(svc.txIndex)
+	svc.historyComponent.mu.RUnlock()
+
+	err = svc.AdoptLedgerWithState(t.Context(), hdr, stateMap, backedTxMap)
+	require.Error(t, err)
+
+	require.Same(t, closedBefore, svc.GetClosedLedger())
+	require.Same(t, openBefore, svc.GetOpenLedger())
+	svc.historyComponent.mu.RLock()
+	defer svc.historyComponent.mu.RUnlock()
+	require.Len(t, svc.ledgerHistory, historyLenBefore)
+	require.Len(t, svc.ledgerByHash, byHashLenBefore)
+	require.Len(t, svc.persistedLedgers, persistedLenBefore)
+	require.Len(t, svc.txIndex, txIndexLenBefore)
+	require.NotContains(t, svc.ledgerHistory, hdr.LedgerIndex)
+	require.NotContains(t, svc.ledgerByHash, hdr.Hash)
 }

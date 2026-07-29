@@ -1,6 +1,7 @@
 package shamap
 
 import (
+	"bytes"
 	"context"
 	"testing"
 )
@@ -143,6 +144,59 @@ func TestCheckComplete_DetectsCorruptNode(t *testing.T) {
 	if !corruptReported {
 		t.Errorf("expected corrupt node %x flagged, got missing=%+v corrupt=%+v", corrupted[:8], res.Missing, res.Corrupt)
 	}
+}
+
+func TestCheckComplete_DetectsValidNodeUnderWrongHash(t *testing.T) {
+	family := newMemoryFamily()
+	rootHash, _ := buildBackedStateMap(t, family, []string{
+		"092891fe4ef6cee585fdc6fda0e09eb4d386363158ec3321b8123e5a772c6ca7",
+		"436ccbac3347baa1f1e53baeef1f43334da88f1f6d70d963b833afd6dfa289fe",
+		"b92891fe4ef6cee585fdc6fda1e09eb4d386363158ec3321b8123e5a772c6ca8",
+	})
+
+	family.mu.RLock()
+	rootData := bytes.Clone(family.store[rootHash])
+	family.mu.RUnlock()
+	node, err := deserializeFromPrefix(rootData)
+	if err != nil {
+		t.Fatal(err)
+	}
+	root := node.(*innerNode)
+	var children [][32]byte
+	for branch := range BranchFactor {
+		childHash, hashErr := root.ChildHash(branch)
+		if hashErr != nil {
+			t.Fatal(hashErr)
+		}
+		if childHash != ([32]byte{}) {
+			children = append(children, childHash)
+		}
+	}
+	if len(children) < 2 {
+		t.Fatalf("need at least two root descendants, got %d", len(children))
+	}
+
+	family.mu.Lock()
+	family.store[children[0]] = bytes.Clone(family.store[children[1]])
+	family.mu.Unlock()
+
+	backed, err := NewFromRootHash(TypeState, rootHash, family)
+	if err != nil {
+		t.Fatal(err)
+	}
+	res, err := backed.CheckComplete(context.Background())
+	if err != nil {
+		t.Fatalf("CheckComplete: %v", err)
+	}
+	if res.Complete() {
+		t.Fatal("valid descendant stored under the wrong hash was accepted")
+	}
+	for _, corrupt := range res.Corrupt {
+		if corrupt.Hash == children[0] {
+			return
+		}
+	}
+	t.Fatalf("substituted descendant %x not reported corrupt: %+v", children[0][:8], res.Corrupt)
 }
 
 func TestCheckComplete_UnbackedMapIsComplete(t *testing.T) {

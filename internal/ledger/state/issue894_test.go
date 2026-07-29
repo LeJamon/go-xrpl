@@ -44,7 +44,11 @@ func TestGetOwnerNode_TicketSequenceWith0x34(t *testing.T) {
 		t.Fatal("expected a 0x34 byte in the serialized ticket to exercise the byte-scan hazard")
 	}
 
-	if got := GetOwnerNode(data); got != wantOwnerNode {
+	got, err := GetOwnerNode(data)
+	if err != nil {
+		t.Fatalf("GetOwnerNode: %v", err)
+	}
+	if got != wantOwnerNode {
 		t.Fatalf("GetOwnerNode = %#016x, want %#016x", got, wantOwnerNode)
 	}
 }

@@ -80,15 +80,13 @@ func (a *TxqAdapter) GetTxInLedger() uint32 {
 	return a.view.TxCount()
 }
 
-// GetAccountSequence reads the AccountRoot.Sequence for accountID. Returns
-// 0 when the account does not exist (matching rippled's behavior:
-// unknown account → caller will then hit AccountExists=false and bail).
-func (a *TxqAdapter) GetAccountSequence(accountID [20]byte) uint32 {
-	ar, ok := a.readAccountRoot(accountID)
-	if !ok {
-		return 0
+// GetAccountSequence reads the AccountRoot.Sequence for accountID.
+func (a *TxqAdapter) GetAccountSequence(accountID [20]byte) (uint32, error) {
+	ar, err := a.readAccountRoot(accountID)
+	if err != nil || ar == nil {
+		return 0, err
 	}
-	return ar.Sequence
+	return ar.Sequence, nil
 }
 
 func (a *TxqAdapter) AccountExists(accountID [20]byte) bool {
@@ -113,14 +111,13 @@ func (a *TxqAdapter) TicketExists(accountID [20]byte, ticketSeq uint32) bool {
 	return exists
 }
 
-// GetAccountBalance returns the account's XRP balance in drops. Returns 0
-// when the account does not exist.
-func (a *TxqAdapter) GetAccountBalance(accountID [20]byte) uint64 {
-	ar, ok := a.readAccountRoot(accountID)
-	if !ok {
-		return 0
+// GetAccountBalance returns the account's XRP balance in drops.
+func (a *TxqAdapter) GetAccountBalance(accountID [20]byte) (uint64, error) {
+	ar, err := a.readAccountRoot(accountID)
+	if err != nil || ar == nil {
+		return 0, err
 	}
-	return ar.Balance
+	return ar.Balance, nil
 }
 
 // GetAccountReserve returns the reserve requirement for an account at the
@@ -163,6 +160,7 @@ func (a *TxqAdapter) baseFeeConfig() tx.EngineConfig {
 		ParentCloseTime:           a.cfg.ParentCloseTime,
 		Logger:                    a.cfg.Logger,
 		Rules:                     a.cfg.Rules,
+		ApplyFlags:                a.cfg.ApplyFlags,
 		FeeTrack:                  a.cfg.FeeTrack,
 		SkipSignatureVerification: a.cfg.SkipSignatureVerification,
 	}
@@ -206,6 +204,7 @@ func (a *TxqAdapter) ApplyTransaction(txn tx.Transaction) (ter.Result, bool) {
 		Logger:                    a.cfg.Logger,
 		SkipSignatureVerification: a.cfg.SkipSignatureVerification,
 		Rules:                     a.cfg.Rules,
+		ApplyFlags:                a.cfg.ApplyFlags,
 		FeeTrack:                  a.cfg.FeeTrack,
 		EnforceLoadFee:            true,
 	}
@@ -256,6 +255,7 @@ func (a *TxqAdapter) PreflightTransaction(txn tx.Transaction) ter.Result {
 		Logger:                    a.cfg.Logger,
 		SkipSignatureVerification: a.cfg.SkipSignatureVerification,
 		Rules:                     a.cfg.Rules,
+		ApplyFlags:                a.cfg.ApplyFlags,
 		FeeTrack:                  a.cfg.FeeTrack,
 	}
 	return txengine.NewEngine(a.view, engineCfg).Preflight(txn)
@@ -322,6 +322,7 @@ func (a *TxqAdapter) PreclaimTransaction(txn tx.Transaction, accountID [20]byte,
 		Logger:                    a.cfg.Logger,
 		SkipSignatureVerification: a.cfg.SkipSignatureVerification,
 		Rules:                     a.cfg.Rules,
+		ApplyFlags:                a.cfg.ApplyFlags,
 		FeeTrack:                  a.cfg.FeeTrack,
 		EnforceLoadFee:            true,
 	}
@@ -367,9 +368,9 @@ func (s *txqSandbox) Commit() error {
 	return nil
 }
 
-func (a *TxqAdapter) readAccountRoot(accountID [20]byte) (*state.AccountRoot, bool) {
+func (a *TxqAdapter) readAccountRoot(accountID [20]byte) (*state.AccountRoot, error) {
 	if a.view == nil {
-		return nil, false
+		return nil, nil
 	}
 	return state.ReadAccountRoot(a.view, accountID)
 }

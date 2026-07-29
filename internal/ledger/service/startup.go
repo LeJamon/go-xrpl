@@ -252,7 +252,10 @@ func (s *Service) loadVerifiedStoredLedgerByHash(ctx context.Context, hash [32]b
 	return loaded, nil
 }
 
-func (s *Service) installLoadedStartupLocked(loaded, genesisLedger *ledger.Ledger) {
+func (s *Service) installLoadedStartupLocked(loaded, genesisLedger *ledger.Ledger) error {
+	if _, err := s.collectTransactionResultsLocked(loaded, loaded.Sequence(), loaded.Hash()); err != nil {
+		return fmt.Errorf("index loaded startup ledger transactions: %w", err)
+	}
 	s.closedLedger = loaded
 	s.validatedLedger = loaded
 	s.validatedSignTime = loaded.CloseTime()
@@ -271,9 +274,9 @@ func (s *Service) installLoadedStartupLocked(loaded, genesisLedger *ledger.Ledge
 		s.deleteHistoryLocked(genesisLedger.Sequence())
 	}
 	s.putHistoryLocked(loaded)
-	s.collectTransactionResultsLocked(loaded, loaded.Sequence(), loaded.Hash())
 	loadedHash := loaded.Hash()
 	s.logger.Info("Loaded startup ledger", "sequence", loaded.Sequence(), "hash", fmt.Sprintf("%x", loadedHash[:8]))
+	return nil
 }
 
 func (s *Service) stageStartupReplayLocked() error {

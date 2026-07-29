@@ -227,7 +227,7 @@ func (d *DepositPreauth) decode(data []byte, legacy bool) error {
 				return newErrUnknownField("DepositPreauth", typeCode, fieldCode)
 			}
 		case 15: // STArray
-			val, err := sr.readSTArray()
+			val, err := sr.readSTArray("AuthorizeCredentials")
 			if err != nil {
 				return err
 			}
@@ -390,6 +390,11 @@ func (d *DepositPreauth) ToMap() map[string]any {
 func (d *DepositPreauth) Encode() ([]byte, error) {
 	if err := d.validateRequired(); err != nil {
 		return nil, err
+	}
+	if d.present&depositpreauthBitAuthorizeCredentials != 0 {
+		if err := validateSTArrayForEncode("AuthorizeCredentials", d.AuthorizeCredentials); err != nil {
+			return nil, err
+		}
 	}
 	out := d.ToMap()
 	if d.present&depositpreauthBitPreviousTxnID == 0 {

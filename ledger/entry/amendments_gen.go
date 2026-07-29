@@ -164,7 +164,7 @@ func (a *Amendments) decode(data []byte, legacy bool) error {
 				return newErrUnknownField("Amendments", typeCode, fieldCode)
 			}
 		case 15: // STArray
-			val, err := sr.readSTArray()
+			val, err := sr.readSTArray("Majorities")
 			if err != nil {
 				return err
 			}
@@ -319,6 +319,11 @@ func (a *Amendments) ToMap() map[string]any {
 func (a *Amendments) Encode() ([]byte, error) {
 	if err := a.validateRequired(); err != nil {
 		return nil, err
+	}
+	if a.present&amendmentsBitMajorities != 0 {
+		if err := validateSTArrayForEncode("Majorities", a.Majorities); err != nil {
+			return nil, err
+		}
 	}
 	out := a.ToMap()
 	return binarycodec.EncodeBytes(out)

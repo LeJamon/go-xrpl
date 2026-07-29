@@ -294,7 +294,7 @@ func (a *AMM) decode(data []byte, legacy bool) error {
 				return newErrUnknownField("AMM", typeCode, fieldCode)
 			}
 		case 14: // STObject
-			val, err := sr.readSTObject()
+			val, err := sr.readSTObject("AuctionSlot")
 			if err != nil {
 				return err
 			}
@@ -306,7 +306,7 @@ func (a *AMM) decode(data []byte, legacy bool) error {
 				return newErrUnknownField("AMM", typeCode, fieldCode)
 			}
 		case 15: // STArray
-			val, err := sr.readSTArray()
+			val, err := sr.readSTArray("VoteSlots")
 			if err != nil {
 				return err
 			}
@@ -524,6 +524,16 @@ func (a *AMM) ToMap() map[string]any {
 func (a *AMM) Encode() ([]byte, error) {
 	if err := a.validateRequired(); err != nil {
 		return nil, err
+	}
+	if a.present&ammBitVoteSlots != 0 {
+		if err := validateSTArrayForEncode("VoteSlots", a.VoteSlots); err != nil {
+			return nil, err
+		}
+	}
+	if a.present&ammBitAuctionSlot != 0 {
+		if err := validateInnerObjectForEncode("AuctionSlot", a.AuctionSlot); err != nil {
+			return nil, err
+		}
 	}
 	out := a.ToMap()
 	return binarycodec.EncodeBytes(out)

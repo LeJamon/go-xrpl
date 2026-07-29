@@ -175,14 +175,13 @@ func (c *Cleaner) Stop() {
 // Clean configures and (unless Stop is set) starts a verification run, then
 // returns the resulting status.
 func (c *Cleaner) Clean(p Params) Status {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-
-	if c.exit {
-		c.lastError = "ledger_cleaner: cleaner stopped"
-		return c.statusLocked()
-	}
 	if p.Stop {
+		c.mu.Lock()
+		defer c.mu.Unlock()
+		if c.exit {
+			c.lastError = "ledger_cleaner: cleaner stopped"
+			return c.statusLocked()
+		}
 		c.generation++
 		if c.runCancel != nil {
 			c.runCancel()
@@ -194,11 +193,41 @@ func (c *Cleaner) Clean(p Params) Status {
 		return c.statusLocked()
 	}
 
-	// Default the range to the locally-available validated range, then let
-	// explicit parameters narrow it.
-	min, max, ok := c.src.AvailableRange()
+	// The range provider may perform storage I/O. Keep it outside the cleaner
+	// mutex so status and stop requests cannot be blocked behind that work.
+	availableMin, availableMax, ok := c.src.AvailableRange()
+
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	if c.exit {
+		c.lastError = "ledger_cleaner: cleaner stopped"
+		return c.statusLocked()
+	}
 	if !ok {
 		c.lastError = "no ledgers available to verify"
+		return c.statusLocked()
+	}
+
+	min, max := availableMin, availableMax
+	if p.Ledger != nil {
+		min, max = *p.Ledger, *p.Ledger
+	}
+	if p.MaxLedger != nil {
+		max = *p.MaxLedger
+	}
+	if p.MinLedger != nil {
+		min = *p.MinLedger
+	}
+	if min == 0 || max == 0 || min > max {
+		c.lastError = fmt.Sprintf("invalid ledger range %d-%d", min, max)
+		return c.statusLocked()
+	}
+	if min < availableMin || max > availableMax {
+		c.lastError = fmt.Sprintf(
+			"ledger range %d-%d is outside available range %d-%d",
+			min, max, availableMin, availableMax,
+		)
 		return c.statusLocked()
 	}
 
@@ -208,25 +237,14 @@ func (c *Cleaner) Clean(p Params) Status {
 	c.generation++
 	c.runCtx, c.runCancel = context.WithCancel(c.ctx)
 
-	c.deep = false
-	c.fixTxns = false
+	c.deep = p.Ledger != nil
+	c.fixTxns = p.Ledger != nil
 	c.failures = 0
 	c.ledgersChecked = 0
 	c.nodesChecked = 0
 	c.missingNodes = 0
 	c.lastError = ""
 
-	if p.Ledger != nil {
-		min, max = *p.Ledger, *p.Ledger
-		c.deep = true
-		c.fixTxns = true
-	}
-	if p.MaxLedger != nil {
-		max = *p.MaxLedger
-	}
-	if p.MinLedger != nil {
-		min = *p.MinLedger
-	}
 	if p.Full != nil {
 		c.deep = *p.Full
 		c.fixTxns = *p.Full

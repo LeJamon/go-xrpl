@@ -154,14 +154,12 @@ func TestInboundReplayDelta_GotResponse_Success(t *testing.T) {
 
 	rd := NewReplayDelta(expectedHash, 42, parent, nil)
 	require.NoError(t, rd.GotResponse(resp))
-	assert.True(t, rd.IsComplete())
+	assert.Equal(t, StateReplayReady, rd.State())
+	assert.False(t, rd.IsComplete())
 	assert.Nil(t, rd.Err())
 
-	out, err := rd.Result()
-	require.NoError(t, err)
-	require.NotNil(t, out)
-	assert.Equal(t, expectedHash, out.Hash())
-	assert.Equal(t, parent.Sequence()+1, out.Sequence())
+	_, err := rd.Result()
+	require.Error(t, err)
 
 	ordered := rd.OrderedTxs()
 	require.Len(t, ordered, 3)

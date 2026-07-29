@@ -191,7 +191,7 @@ func (n *NFTokenPage) decode(data []byte, legacy bool) error {
 				return newErrUnknownField("NFTokenPage", typeCode, fieldCode)
 			}
 		case 15: // STArray
-			val, err := sr.readSTArray()
+			val, err := sr.readSTArray("NFTokens")
 			if err != nil {
 				return err
 			}
@@ -344,6 +344,11 @@ func (n *NFTokenPage) ToMap() map[string]any {
 func (n *NFTokenPage) Encode() ([]byte, error) {
 	if err := n.validateRequired(); err != nil {
 		return nil, err
+	}
+	if n.present&nftokenpageBitNFTokens != 0 {
+		if err := validateSTArrayForEncode("NFTokens", n.NFTokens); err != nil {
+			return nil, err
+		}
 	}
 	out := n.ToMap()
 	if n.present&nftokenpageBitPreviousTxnID == 0 {

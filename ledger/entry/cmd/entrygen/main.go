@@ -701,12 +701,12 @@ func ({{ .Receiver }} *{{ .StructName }}) decode(data []byte, legacy bool) error
 				return err
 			}
 {{- else if eq $first.XRPLType "STObject" }}
-			val, err := sr.readSTObject()
+			val, err := sr.readSTObject({{ printf "%q" $first.Name }})
 			if err != nil {
 				return err
 			}
 {{- else if eq $first.XRPLType "STArray" }}
-			val, err := sr.readSTArray()
+			val, err := sr.readSTArray({{ printf "%q" $first.Name }})
 			if err != nil {
 				return err
 			}
@@ -885,6 +885,19 @@ func ({{ .Receiver }} *{{ .StructName }}) Encode() ([]byte, error) {
 	if err := {{ .Receiver }}.validateRequired(); err != nil {
 		return nil, err
 	}
+{{- range .Fields }}{{ if eq .XRPLType "STArray" }}
+	if {{ $.Receiver }}.present&{{ .BitConst }} != 0 {
+		if err := validateSTArrayForEncode({{ printf "%q" .Name }}, {{ $.Receiver }}.{{ .GoField }}); err != nil {
+			return nil, err
+		}
+	}
+{{- else if eq .XRPLType "STObject" }}
+	if {{ $.Receiver }}.present&{{ .BitConst }} != 0 {
+		if err := validateInnerObjectForEncode({{ printf "%q" .Name }}, {{ $.Receiver }}.{{ .GoField }}); err != nil {
+			return nil, err
+		}
+	}
+{{- end }}{{ end }}
 {{- if .AllowBadCurrencyDecode }}
 	if {{ .Receiver }}.decoded && !{{ .Receiver }}.dirty && len({{ .Receiver }}.decodedBinary) != 0 {
 		return append([]byte(nil), {{ .Receiver }}.decodedBinary...), nil

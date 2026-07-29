@@ -3,6 +3,7 @@ package localtxs_test
 import (
 	"bytes"
 	"encoding/hex"
+	"errors"
 	"testing"
 	"time"
 
@@ -104,7 +105,9 @@ func TestLocalTxs_Sweep_ExpiresOldEntries(t *testing.T) {
 	pool := localtxs.New()
 	pool.PushBack(anchor, ptx)
 
-	pool.Sweep(view)
+	if err := pool.Sweep(view); err != nil {
+		t.Fatalf("Sweep: %v", err)
+	}
 	if got := pool.Size(); got != 0 {
 		t.Errorf("Size after expiring Sweep = %d, want 0", got)
 	}
@@ -127,7 +130,9 @@ func TestLocalTxs_Sweep_KeepsFreshEntries(t *testing.T) {
 	pool := localtxs.New()
 	pool.PushBack(view.Sequence(), ptx)
 
-	pool.Sweep(view)
+	if err := pool.Sweep(view); err != nil {
+		t.Fatalf("Sweep: %v", err)
+	}
 	if got := pool.Size(); got != 1 {
 		t.Errorf("Size after fresh Sweep = %d, want 1", got)
 	}
@@ -151,7 +156,9 @@ func TestLocalTxs_Sweep_DropsBySeqAdvance(t *testing.T) {
 	pool := localtxs.New()
 	pool.PushBack(view.Sequence(), ptx)
 
-	pool.Sweep(view)
+	if err := pool.Sweep(view); err != nil {
+		t.Fatalf("Sweep: %v", err)
+	}
 	if got := pool.Size(); got != 0 {
 		t.Errorf("Size after seq-advance Sweep = %d, want 0", got)
 	}
@@ -177,7 +184,9 @@ func TestLocalTxs_Sweep_DropsAlreadyValidatedTx(t *testing.T) {
 	pool := localtxs.New()
 	pool.PushBack(view.Sequence(), ptx)
 
-	pool.Sweep(view)
+	if err := pool.Sweep(view); err != nil {
+		t.Fatalf("Sweep: %v", err)
+	}
 	if got := pool.Size(); got != 0 {
 		t.Errorf("Size after txExists Sweep = %d, want 0", got)
 	}
@@ -251,6 +260,96 @@ func TestLocalTxs_GetTxSet_SortsBySequenceWithinAccount(t *testing.T) {
 			got[0].Sequence, got[1].Sequence, got[2].Sequence,
 			seq+10, seq+11, seq+12)
 	}
+}
+
+func TestLocalTxs_DuplicateAdmissionDoesNotShortenExpiry(t *testing.T) {
+	env := jtx.NewTestEnv(t)
+	alice := jtx.NewAccount("alice")
+	bob := jtx.NewAccount("bob")
+	env.Fund(alice, bob)
+	for range holdLedgers + 6 {
+		env.Close()
+	}
+
+	ptx, view := pendingFromPay(t, env, alice, bob, env.Seq(alice)+100)
+	pool := localtxs.New()
+	pool.PushBack(view.Sequence(), ptx)
+	pool.PushBack(view.Sequence()-holdLedgers-1, ptx)
+
+	if err := pool.Sweep(view); err != nil {
+		t.Fatalf("Sweep: %v", err)
+	}
+	if got := pool.Size(); got != 1 {
+		t.Fatalf("Size after older duplicate and Sweep = %d, want 1", got)
+	}
+}
+
+func TestLocalTxs_OwnsInputAndSnapshotBlobs(t *testing.T) {
+	ptx := openledger.PendingTx{
+		Blob: []byte{1, 2, 3, 4},
+		Hash: [32]byte{1},
+	}
+	pool := localtxs.New()
+	pool.PushBack(1, ptx)
+	ptx.Blob[0] = 9
+
+	first := pool.GetTxSet()
+	if got := first[0].Blob; !bytes.Equal(got, []byte{1, 2, 3, 4}) {
+		t.Fatalf("stored blob = %v, want owned input copy", got)
+	}
+	first[0].Blob[1] = 9
+	second := pool.GetTxSet()
+	if got := second[0].Blob; !bytes.Equal(got, []byte{1, 2, 3, 4}) {
+		t.Fatalf("stored blob after snapshot mutation = %v", got)
+	}
+}
+
+func TestLocalTxs_SweepRejectsNilView(t *testing.T) {
+	if err := localtxs.New().Sweep(nil); err == nil {
+		t.Fatal("Sweep(nil) succeeded")
+	}
+	var view *ledger.Ledger
+	if err := localtxs.New().Sweep(view); err == nil {
+		t.Fatal("Sweep((*ledger.Ledger)(nil)) succeeded")
+	}
+}
+
+func TestLocalTxs_SweepReturnsStateReadErrorWithoutMutation(t *testing.T) {
+	pool := localtxs.New()
+	pool.PushBack(10, openledger.PendingTx{
+		Blob:     []byte{1},
+		Hash:     [32]byte{1},
+		Account:  [20]byte{2},
+		Sequence: 1,
+	})
+	wantErr := errors.New("state read failed")
+	err := pool.Sweep(errorSweepView{err: wantErr})
+	if !errors.Is(err, wantErr) {
+		t.Fatalf("Sweep error = %v, want %v", err, wantErr)
+	}
+	if got := pool.Size(); got != 1 {
+		t.Fatalf("Size after failed Sweep = %d, want 1", got)
+	}
+}
+
+type errorSweepView struct {
+	err error
+}
+
+func (v errorSweepView) Sequence() uint32 {
+	return 10
+}
+
+func (v errorSweepView) TxExists([32]byte) bool {
+	return false
+}
+
+func (v errorSweepView) Read(keylet.Keylet) ([]byte, error) {
+	return nil, v.err
+}
+
+func (v errorSweepView) Exists(keylet.Keylet) (bool, error) {
+	return false, v.err
 }
 
 // buildPendingTx constructs a signed payment from `from` to `to` at the

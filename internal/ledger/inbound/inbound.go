@@ -81,10 +81,11 @@ const (
 type State int
 
 const (
-	StateWantBase  State = iota // Waiting for header + root nodes
-	StateWantState              // Have header, fetching state tree nodes
-	StateComplete               // Fully acquired
-	StateFailed                 // Unrecoverable error
+	StateWantBase    State = iota // Waiting for header + root nodes
+	StateWantState                // Have header, fetching state tree nodes
+	StateComplete                 // Fully acquired
+	StateFailed                   // Unrecoverable error
+	StateReplayReady              // Replay response verified; apply pending
 )
 
 // TimerAction tells the router what to do after an OnTimer evaluation,

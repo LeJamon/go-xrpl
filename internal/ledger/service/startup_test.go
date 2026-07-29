@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -26,6 +27,15 @@ import (
 	sqlitedb "github.com/LeJamon/go-xrpl/storage/relationaldb/sqlite"
 	"github.com/stretchr/testify/require"
 )
+
+type failingStartupStore struct {
+	nodestore.Database
+	err error
+}
+
+func (s *failingStartupStore) StoreBatch(context.Context, []*nodestore.Node) error {
+	return s.err
+}
 
 func TestService_StartupFreshAndNetworkAreDistinct(t *testing.T) {
 	table := amendment.NewTable()
@@ -63,6 +73,45 @@ func TestService_StartupFreshAndNetworkAreDistinct(t *testing.T) {
 	networkAmendments, err := network.GetClosedLedger().Read(keylet.Amendments())
 	require.NoError(t, err)
 	require.Nil(t, networkAmendments)
+}
+
+func TestService_StartupFreshDurablyStoresGenesisAndInitialLedger(t *testing.T) {
+	t.Parallel()
+	db := nodestore.NewKVDatabase(memorydb.New(), "startup-fresh-durable", 1_000, time.Hour)
+	t.Cleanup(func() { require.NoError(t, db.Close()) })
+	svc, err := New(Config{
+		Standalone:    true,
+		Startup:       StartupConfig{Mode: StartupFresh},
+		GenesisConfig: genesis.DefaultConfig(),
+		NodeStore:     db,
+		SHAMapFamily:  backend.New(db),
+	})
+	require.NoError(t, err)
+	require.NoError(t, svc.Start())
+	t.Cleanup(svc.Stop)
+
+	for _, hash := range [][32]byte{svc.genesisLedger.Hash(), svc.GetClosedLedger().Hash()} {
+		node, err := db.Fetch(t.Context(), nodestore.Hash256(hash))
+		require.NoError(t, err)
+		require.NotNil(t, node)
+	}
+}
+
+func TestService_StartupFreshFailsWhenDurableStoreFails(t *testing.T) {
+	t.Parallel()
+	base := nodestore.NewKVDatabase(memorydb.New(), "startup-fresh-failure", 1_000, time.Hour)
+	t.Cleanup(func() { require.NoError(t, base.Close()) })
+	sentinel := errors.New("store failed")
+	db := &failingStartupStore{Database: base, err: sentinel}
+	svc, err := New(Config{
+		Standalone:    true,
+		Startup:       StartupConfig{Mode: StartupFresh},
+		GenesisConfig: genesis.DefaultConfig(),
+		NodeStore:     db,
+		SHAMapFamily:  backend.New(db),
+	})
+	require.NoError(t, err)
+	require.ErrorIs(t, svc.Start(), sentinel)
 }
 
 func TestService_StartupNormalUsesEmptyInitialAmendments(t *testing.T) {

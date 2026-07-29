@@ -663,8 +663,14 @@ func (s *Service) RepairLedgerTransactions(ctx context.Context, seq uint32) erro
 func (s *Service) persistToRelationalDB(ctx context.Context, l *ledger.Ledger) error {
 	h := l.Header()
 
-	stateHash, _ := l.StateMapHash()
-	txHash, _ := l.TxMapHash()
+	stateHash, err := l.StateMapHash()
+	if err != nil {
+		return fmt.Errorf("calculate state map hash: %w", err)
+	}
+	txHash, err := l.TxMapHash()
+	if err != nil {
+		return fmt.Errorf("calculate transaction map hash: %w", err)
+	}
 
 	ledgerInfo := &relationaldb.LedgerInfo{
 		Hash:            relationaldb.Hash(l.Hash()),
@@ -690,7 +696,7 @@ func (s *Service) persistToRelationalDB(ctx context.Context, l *ledger.Ledger) e
 		}
 
 		var loopErr error
-		_ = l.ForEachTransaction(func(txHashBytes [32]byte, txData []byte) bool {
+		walkErr := l.ForEachTransaction(func(txHashBytes [32]byte, txData []byte) bool {
 			if err := ctx.Err(); err != nil {
 				loopErr = err
 				return false
@@ -698,10 +704,8 @@ func (s *Service) persistToRelationalDB(ctx context.Context, l *ledger.Ledger) e
 
 			txBlob, metaBlob, err := tx.SplitTxWithMetaBlob(txData)
 			if err != nil {
-				// Bad blob is a data issue, not a DB issue —
-				// skip this tx, keep the ledger persist alive.
-				s.logger.Warn("failed to split tx+meta blob", "tx", hex.EncodeToString(txHashBytes[:8]), "error", err)
-				return true
+				loopErr = fmt.Errorf("split tx+meta blob %s: %w", hex.EncodeToString(txHashBytes[:8]), err)
+				return false
 			}
 
 			var accountID relationaldb.AccountID
@@ -770,6 +774,9 @@ func (s *Service) persistToRelationalDB(ctx context.Context, l *ledger.Ledger) e
 
 			return true
 		})
+		if walkErr != nil {
+			return fmt.Errorf("walk ledger transactions: %w", walkErr)
+		}
 
 		return loopErr
 	})

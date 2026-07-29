@@ -48,6 +48,17 @@ func decodeLedgerAmount(field string, value any) (Amount, error) {
 	return amount, nil
 }
 
+func nonNegativeNativeDrops(field string, amount Amount) (uint64, error) {
+	if !amount.IsNative() {
+		return 0, fmt.Errorf("%s: expected native XRP amount", field)
+	}
+	drops := amount.Drops()
+	if drops < 0 {
+		return 0, fmt.Errorf("%s: negative XRP amount %d", field, drops)
+	}
+	return uint64(drops), nil
+}
+
 func decodeNativeLedgerBalance(field string, value any) (uint64, error) {
 	drops, ok := value.(string)
 	if !ok {

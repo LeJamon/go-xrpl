@@ -330,7 +330,7 @@ func NewStoredLedgerReplay(parent, target *ledger.Ledger, logger *slog.Logger) (
 	replay := NewReplayDelta(targetHash, 0, parent, logger)
 	replay.result = target
 	replay.txs = decoded
-	replay.state = StateComplete
+	replay.state = StateReplayReady
 	return replay, nil
 }
 
@@ -406,7 +406,7 @@ func (r *ReplayDelta) IsComplete() bool {
 func (r *ReplayDelta) IsTimedOut() bool {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	if r.state == StateComplete || r.state == StateFailed {
+	if r.state == StateComplete || r.state == StateReplayReady || r.state == StateFailed {
 		return false
 	}
 	return r.clock.Now().Sub(r.created) > replayDeltaTimeout
@@ -421,7 +421,7 @@ func (r *ReplayDelta) IsTimedOut() bool {
 func (r *ReplayDelta) IsSubTaskTimedOut() bool {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	if r.state == StateComplete || r.state == StateFailed {
+	if r.state == StateComplete || r.state == StateReplayReady || r.state == StateFailed {
 		return false
 	}
 	return r.clock.Now().Sub(r.subTaskStart) > subTaskRetryInterval
@@ -457,6 +457,20 @@ func (r *ReplayDelta) TriedPeers() []uint64 {
 	return out
 }
 
+// WasTried reports whether a replay request for this acquisition was sent to
+// peerID. Responses from earlier rotated peers remain legitimate while their
+// requests are outstanding.
+func (r *ReplayDelta) WasTried(peerID uint64) bool {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	for _, tried := range r.triedPeers {
+		if tried == peerID {
+			return true
+		}
+	}
+	return false
+}
+
 // NoteSubTaskRetry advances the sub-task state to a new peer:
 // updates peerID, resets the sub-task timer, and appends to
 // triedPeers so subsequent rotations don't cycle back. Caller is
@@ -474,31 +488,27 @@ func (r *ReplayDelta) NoteSubTaskRetry(newPeerID uint64) {
 // Result returns the ledger reconstructed from the verified delta. Only
 // valid after IsComplete() returns true.
 //
-// If Apply has been called successfully, Result returns the DERIVED ledger
-// (verified header + verified tx map + engine-derived state map). Otherwise
-// it returns the ledger with the parent's state map unchanged — safe for
-// inspection but NOT safe to feed to consensus without running Apply first.
-// Callers that need the canonical post-state should call Apply directly and
-// use its return value.
+// Result is deliberately unavailable until Apply has successfully re-derived
+// and verified the state map.
 func (r *ReplayDelta) Result() (*ledger.Ledger, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	if r.state != StateComplete {
 		return nil, fmt.Errorf("replay delta not complete (state=%d)", r.state)
 	}
-	if r.derived != nil {
-		return r.derived, nil
+	if r.derived == nil {
+		return nil, errors.New("replay delta complete without derived ledger")
 	}
-	return r.result, nil
+	return r.derived, nil
 }
 
 // OrderedTxs returns the verified transactions sorted by sfTransactionIndex
 // so a consumer can re-apply them in the original execution order. Only
-// valid after IsComplete() returns true.
+// valid once the response is verified so Apply can consume them.
 func (r *ReplayDelta) OrderedTxs() []DecodedTx {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	if r.state != StateComplete {
+	if r.state != StateReplayReady && r.state != StateComplete {
 		return nil
 	}
 	out := make([]DecodedTx, len(r.txs))
@@ -515,14 +525,14 @@ func (r *ReplayDelta) Err() error {
 
 // GotResponse verifies an inbound mtREPLAY_DELTA_RESPONSE against the
 // expected ledger hash and reconstructs the tx SHAMap. Returns nil on
-// success (state → StateComplete, Result() and OrderedTxs() populated)
+// success (state → StateReplayReady, OrderedTxs() populated)
 // or the verification error on failure (state → StateFailed). Subsequent
 // calls after a terminal state are no-ops.
 func (r *ReplayDelta) GotResponse(resp *message.ReplayDeltaResponse) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
-	if r.state == StateComplete || r.state == StateFailed {
+	if r.state == StateComplete || r.state == StateReplayReady || r.state == StateFailed {
 		return r.err
 	}
 
@@ -531,7 +541,7 @@ func (r *ReplayDelta) GotResponse(resp *message.ReplayDeltaResponse) error {
 		r.err = err
 		return err
 	}
-	r.state = StateComplete
+	r.state = StateReplayReady
 	return nil
 }
 
@@ -678,7 +688,7 @@ func (r *ReplayDelta) verifyAndBuild(resp *message.ReplayDeltaResponse) error {
 // order (naturally assigned by the engine), commit, verify both roots.
 //
 // Returns the fully-derived ledger on success, or an error with a clear
-// divergence marker on failure. Only call after IsComplete(); errors here
+// divergence marker on failure. Only call after GotResponse succeeds; errors here
 // mean either the peer lied or our engine diverges from rippled.
 //
 // The supplied EngineConfig provides shared (non-per-ledger) settings
@@ -689,13 +699,19 @@ func (r *ReplayDelta) verifyAndBuild(resp *message.ReplayDeltaResponse) error {
 // Reference:
 //   - rippled/src/xrpld/app/ledger/detail/BuildLedger.cpp:225-248
 //   - rippled/src/xrpld/app/ledger/detail/BuildLedger.cpp:38-86
-func (r *ReplayDelta) Apply(engineCfg tx.EngineConfig) (*ledger.Ledger, error) {
+func (r *ReplayDelta) Apply(engineCfg tx.EngineConfig) (derived *ledger.Ledger, err error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
-	if r.state != StateComplete {
+	if r.state != StateReplayReady {
 		return nil, fmt.Errorf("Apply called before response verified (state=%d)", r.state)
 	}
+	defer func() {
+		if err != nil {
+			r.state = StateFailed
+			r.err = err
+		}
+	}()
 	if r.parent == nil {
 		return nil, errors.New("cannot apply replay delta without parent ledger")
 	}
@@ -952,6 +968,8 @@ func (r *ReplayDelta) Apply(engineCfg tx.EngineConfig) (*ledger.Ledger, error) {
 	// instead of the pre-apply (stale state) ledger. Eliminates the
 	// footgun where a caller forgets to use Apply's return value.
 	r.derived = child
+	r.state = StateComplete
+	r.err = nil
 	return child, nil
 }
 

@@ -229,6 +229,58 @@ func TestRotation_RotatingPebblePromotesLiveStateAndRetiresHistory(t *testing.T)
 	}
 }
 
+func TestRotation_RealGenerationPreservesHigherExistingFloor(t *testing.T) {
+	ctx := context.Background()
+	rotating, err := kvpebble.NewRotating(
+		filepath.Join(t.TempDir(), "nodes"),
+		kvpebble.Options{BlockCacheBytes: 16 << 20, MaxOpenFiles: 200},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	db := nodestore.NewRotatingKVDatabase(
+		rotating,
+		"rotating-floor",
+		&nodestore.DatabaseConfig{CacheSize: 32, CacheTTL: time.Hour},
+	)
+	defer db.Close()
+
+	state, err := shamapstore.New(false, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := state.SetRotation(500, 900); err != nil {
+		t.Fatal(err)
+	}
+	rot := shamapstore.NewRotator(
+		state,
+		db,
+		nil,
+		shamapstore.RotationConfig{DeleteInterval: 256},
+		nil,
+	)
+	rot.SetStateRefresh(
+		func(_ context.Context, seq uint32, _ func(time.Duration) error) (uint32, error) {
+			return seq, db.Sync(ctx)
+		},
+		nil,
+		nil,
+	)
+
+	rot.NotifyForTest(800)
+
+	lastRotated, minimumOnline := db.GenerationState()
+	if lastRotated != 800 {
+		t.Fatalf("generation lastRotated = %d, want 800", lastRotated)
+	}
+	if minimumOnline != 900 {
+		t.Fatalf("generation minimumOnline = %d, want existing floor 900", minimumOnline)
+	}
+	if got := rot.MinimumOnline(); got != 900 {
+		t.Fatalf("rotator minimumOnline = %d, want existing floor 900", got)
+	}
+}
+
 func TestRotation_AdvancesAcquisitionFloorBeforeLiveStateRefresh(t *testing.T) {
 	ctx := context.Background()
 	db := nodestore.NewKVDatabase(memorydb.New(), "mem", 100, time.Hour)

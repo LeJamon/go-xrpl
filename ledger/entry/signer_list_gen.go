@@ -259,7 +259,7 @@ func (s *SignerList) decode(data []byte, legacy bool) error {
 				return newErrUnknownField("SignerList", typeCode, fieldCode)
 			}
 		case 15: // STArray
-			val, err := sr.readSTArray()
+			val, err := sr.readSTArray("SignerEntries")
 			if err != nil {
 				return err
 			}
@@ -432,6 +432,11 @@ func (s *SignerList) ToMap() map[string]any {
 func (s *SignerList) Encode() ([]byte, error) {
 	if err := s.validateRequired(); err != nil {
 		return nil, err
+	}
+	if s.present&signerlistBitSignerEntries != 0 {
+		if err := validateSTArrayForEncode("SignerEntries", s.SignerEntries); err != nil {
+			return nil, err
+		}
 	}
 	out := s.ToMap()
 	if s.present&signerlistBitPreviousTxnID == 0 {

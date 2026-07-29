@@ -36,17 +36,19 @@ func TestAdoptLedgerWithState_BackwardFillDoesNotRegressClosed(t *testing.T) {
 	require.NoError(t, svc.Start())
 
 	mkHeader := func(seq uint32, salt byte) (*header.LedgerHeader, *shamap.SHAMap) {
-		var h, parent [32]byte
-		h[0] = salt
-		h[1] = byte(seq)
+		var parent [32]byte
 		parent[0] = salt
 		parent[1] = byte(seq - 1)
 		stateMap := shamap.New(shamap.TypeState)
-		return &header.LedgerHeader{
+		stateRoot, err := stateMap.Hash()
+		require.NoError(t, err)
+		h := &header.LedgerHeader{
 			LedgerIndex: seq,
-			Hash:        h,
 			ParentHash:  parent,
-		}, stateMap
+			AccountHash: stateRoot,
+		}
+		h.Hash = header.CalculateHash(*h)
+		return h, stateMap
 	}
 
 	// Pre-condition: closed at genesis (seq 2 in goxrpl).

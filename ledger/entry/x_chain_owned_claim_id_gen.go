@@ -303,7 +303,7 @@ func (x *XChainOwnedClaimID) decode(data []byte, legacy bool) error {
 				return newErrUnknownField("XChainOwnedClaimID", typeCode, fieldCode)
 			}
 		case 15: // STArray
-			val, err := sr.readSTArray()
+			val, err := sr.readSTArray("XChainClaimAttestations")
 			if err != nil {
 				return err
 			}
@@ -508,6 +508,11 @@ func (x *XChainOwnedClaimID) ToMap() map[string]any {
 func (x *XChainOwnedClaimID) Encode() ([]byte, error) {
 	if err := x.validateRequired(); err != nil {
 		return nil, err
+	}
+	if x.present&xchainownedclaimidBitXChainClaimAttestations != 0 {
+		if err := validateSTArrayForEncode("XChainClaimAttestations", x.XChainClaimAttestations); err != nil {
+			return nil, err
+		}
 	}
 	out := x.ToMap()
 	if x.present&xchainownedclaimidBitPreviousTxnID == 0 {
