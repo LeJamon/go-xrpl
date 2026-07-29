@@ -524,7 +524,7 @@ func TestService_FastLoadRestoresPersistedValidatedLedger(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, first.Start())
 	txBlob, txHash := makeTxMetaBlobForTest(t, []byte("synthetic-tx"), 0)
-	require.NoError(t, first.openLedger.AddTransaction(txHash, txBlob))
+	require.NoError(t, first.openLedger.AddTransactionWithMeta(txHash, txBlob))
 	seq, err := first.AcceptLedger(ctx)
 	require.NoError(t, err)
 	first.FlushPersists()
