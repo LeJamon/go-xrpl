@@ -714,8 +714,13 @@ func (q *TxQ) tryClearAccountQueue(
 }
 
 func (q *TxQ) canBeHeld(common *tx.Common, flags tx.ApplyFlags, ledgerSeq uint32, aq *accountQueue, replacingCandidate *candidate, seqProxy SeqProxy, acctSeq uint32) (bool, ApplyResult) {
-	if common.HasField("PreviousTxnID") || common.AccountTxnID != "" || common.Delegate != "" ||
-		(common.SponsorFlags != nil && *common.SponsorFlags&tx.SpfSponsorFee != 0) || flags&tx.TapFAIL_HARD != 0 {
+	if common.HasField("PreviousTxnID") || common.AccountTxnID != "" || flags&tx.TapFAIL_HARD != 0 {
+		return true, ApplyResult{Result: ter.TelCAN_NOT_QUEUE, Applied: false}
+	}
+	if common.Delegate != "" {
+		return true, ApplyResult{Result: ter.TelCAN_NOT_QUEUE, Applied: false}
+	}
+	if common.Sponsor != "" && common.SponsorFlags != nil && *common.SponsorFlags&tx.SpfSponsorFee != 0 {
 		return true, ApplyResult{Result: ter.TelCAN_NOT_QUEUE, Applied: false}
 	}
 	if common.LastLedgerSequence != nil &&

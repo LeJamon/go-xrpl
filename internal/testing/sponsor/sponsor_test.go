@@ -9,7 +9,11 @@ import (
 	"github.com/LeJamon/go-xrpl/internal/ledger/state"
 	jtx "github.com/LeJamon/go-xrpl/internal/testing"
 	"github.com/LeJamon/go-xrpl/internal/tx"
+	accounttx "github.com/LeJamon/go-xrpl/internal/tx/account"
 	checktx "github.com/LeJamon/go-xrpl/internal/tx/check"
+	delegatetx "github.com/LeJamon/go-xrpl/internal/tx/delegate"
+	paymenttx "github.com/LeJamon/go-xrpl/internal/tx/payment"
+	signtx "github.com/LeJamon/go-xrpl/internal/tx/sign"
 	sponsortx "github.com/LeJamon/go-xrpl/internal/tx/sponsor"
 	"github.com/LeJamon/go-xrpl/keylet"
 	"github.com/stretchr/testify/require"
@@ -45,6 +49,124 @@ func setSponsorship(
 	}
 	txn.RemainingOwnerCount = remaining
 	return env.Submit(txn)
+}
+
+func setFeeSponsorship(
+	env *jtx.TestEnv,
+	sponsor, sponsee *jtx.Account,
+	feeDrops, maxFeeDrops uint64,
+) jtx.TxResult {
+	txn := sponsortx.NewSponsorshipSet(sponsor.Address)
+	txn.Sponsee = sponsee.Address
+	feeAmount := tx.NewXRPAmount(int64(feeDrops))
+	txn.FeeAmount = &feeAmount
+	if maxFeeDrops != 0 {
+		maxFee := tx.NewXRPAmount(int64(maxFeeDrops))
+		txn.MaxFee = &maxFee
+	}
+	return env.Submit(txn)
+}
+
+func grantDelegatePermission(
+	t *testing.T,
+	env *jtx.TestEnv,
+	source, delegate *jtx.Account,
+	permission string,
+) {
+	t.Helper()
+	env.EnableFeature("PermissionDelegationV1_1")
+	env.Close()
+	transaction := delegatetx.NewDelegateSet(source.Address)
+	transaction.Authorize = delegate.Address
+	transaction.Permissions = []delegatetx.Permission{{
+		Permission: delegatetx.PermissionData{PermissionValue: permission},
+	}}
+	require.Equal(t, "tesSUCCESS", env.SubmitSignedWith(transaction, source).Code)
+	env.Close()
+}
+
+func signingPrivateKey(account *jtx.Account) string {
+	prefix := "00"
+	if account.IsEd25519() {
+		prefix = "ED"
+	}
+	return prefix + account.PrivateKeyHex()
+}
+
+// attachSponsorSignature fills every ordinary signed field first, then signs
+// the same STX projection as the transaction's top-level account.
+func attachSponsorSignature(
+	t *testing.T,
+	env *jtx.TestEnv,
+	transaction tx.Transaction,
+	source, signer *jtx.Account,
+) {
+	t.Helper()
+	attachSponsorSignatureFor(t, env, transaction, source, source, signer)
+}
+
+func attachSponsorSignatureFor(
+	t *testing.T,
+	env *jtx.TestEnv,
+	transaction tx.Transaction,
+	source, transactionSigner, sponsorSigner *jtx.Account,
+) {
+	t.Helper()
+	common := transaction.GetCommon()
+	if common.Sequence == nil && common.TicketSequence == nil {
+		sequence := env.Seq(source)
+		common.Sequence = &sequence
+	}
+	if common.Fee == "" {
+		common.Fee = "10"
+	}
+	common.SigningPubKey = transactionSigner.PublicKeyHex()
+	signature, err := signtx.SignSponsor(
+		transaction,
+		sponsorSigner.PublicKeyHex(),
+		signingPrivateKey(sponsorSigner),
+	)
+	require.NoError(t, err)
+	common.SponsorSignature = signature
+}
+
+func attachSponsorMultiSignature(
+	t *testing.T,
+	env *jtx.TestEnv,
+	transaction tx.Transaction,
+	source *jtx.Account,
+	signers ...*jtx.Account,
+) {
+	t.Helper()
+	common := transaction.GetCommon()
+	if common.Sequence == nil && common.TicketSequence == nil {
+		sequence := env.Seq(source)
+		common.Sequence = &sequence
+	}
+	common.SigningPubKey = source.PublicKeyHex()
+
+	wrappers := make([]tx.SignerWrapper, 0, len(signers))
+	for _, signer := range signers {
+		signature, err := signtx.SignTransactionForMultiSign(
+			transaction,
+			signer.Address,
+			signingPrivateKey(signer),
+		)
+		require.NoError(t, err)
+		wrappers = append(wrappers, tx.SignerWrapper{Signer: tx.Signer{
+			Account:       signer.Address,
+			SigningPubKey: signer.PublicKeyHex(),
+			TxnSignature:  signature,
+		}})
+	}
+	sort.Slice(wrappers, func(i, j int) bool {
+		left, leftErr := state.DecodeAccountID(wrappers[i].Signer.Account)
+		right, rightErr := state.DecodeAccountID(wrappers[j].Signer.Account)
+		require.NoError(t, leftErr)
+		require.NoError(t, rightErr)
+		return string(left[:]) < string(right[:])
+	})
+	common.SponsorSignature = &tx.SponsorSignature{Signers: wrappers}
 }
 
 func sponsorshipEntry(t *testing.T, env *jtx.TestEnv, sponsor, sponsee *jtx.Account) *state.SponsorshipData {
@@ -469,6 +591,607 @@ func TestSponsorshipTransferAuthorizationLimitAndRollback(t *testing.T) {
 	require.Equal(t, uint32(0), sponsorshipEntry(t, env, sponsor, sponsee).RemainingOwnerCount)
 }
 
+func TestSponsorSingleSignatureAuthorizationAndReplayProtection(t *testing.T) {
+	t.Run("master key", func(t *testing.T) {
+		env, source, _, sponsor, _ := sponsorEnv(t)
+		sourceBefore := env.Balance(source)
+		sponsorBefore := env.Balance(sponsor)
+
+		transaction := accounttx.NewAccountSet(source.Address)
+		transaction.Fee = "10"
+		transaction.Sponsor = sponsor.Address
+		flags := tx.SpfSponsorFee
+		transaction.SponsorFlags = &flags
+		attachSponsorSignature(t, env, transaction, source, sponsor)
+
+		result := env.SubmitSigned(transaction)
+		require.Equal(t, "tesSUCCESS", result.Code)
+		require.Equal(t, sourceBefore, env.Balance(source))
+		require.Equal(t, sponsorBefore-10, env.Balance(sponsor))
+	})
+
+	t.Run("stale after mutation", func(t *testing.T) {
+		env, source, _, sponsor, _ := sponsorEnv(t)
+		sourceBefore := env.Balance(source)
+		sponsorBefore := env.Balance(sponsor)
+		sequenceBefore := env.Seq(source)
+
+		transaction := accounttx.NewAccountSet(source.Address)
+		transaction.Fee = "10"
+		transaction.Sponsor = sponsor.Address
+		flags := tx.SpfSponsorFee
+		transaction.SponsorFlags = &flags
+		attachSponsorSignature(t, env, transaction, source, sponsor)
+		transaction.Fee = "11"
+
+		result := env.SubmitSigned(transaction)
+		require.Equal(t, "temINVALID", result.Code)
+		require.Equal(t, sequenceBefore, env.Seq(source))
+		require.Equal(t, sourceBefore, env.Balance(source))
+		require.Equal(t, sponsorBefore, env.Balance(sponsor))
+	})
+
+	t.Run("unauthorized key", func(t *testing.T) {
+		env, source, _, sponsor, wrongSigner := sponsorEnv(t)
+		sourceBefore := env.Balance(source)
+		sponsorBefore := env.Balance(sponsor)
+		sequenceBefore := env.Seq(source)
+
+		transaction := accounttx.NewAccountSet(source.Address)
+		transaction.Fee = "10"
+		transaction.Sponsor = sponsor.Address
+		flags := tx.SpfSponsorFee
+		transaction.SponsorFlags = &flags
+		attachSponsorSignature(t, env, transaction, source, wrongSigner)
+
+		result := env.SubmitSigned(transaction)
+		require.Equal(t, "tefBAD_AUTH", result.Code)
+		require.Equal(t, sequenceBefore, env.Seq(source))
+		require.Equal(t, sourceBefore, env.Balance(source))
+		require.Equal(t, sponsorBefore, env.Balance(sponsor))
+	})
+
+	t.Run("regular key and disabled master", func(t *testing.T) {
+		env, source, _, sponsor, regularKey := sponsorEnv(t)
+		env.SetRegularKey(sponsor, regularKey)
+		env.DisableMasterKey(sponsor)
+
+		masterSigned := accounttx.NewAccountSet(source.Address)
+		masterSigned.Fee = "10"
+		masterSigned.Sponsor = sponsor.Address
+		flags := tx.SpfSponsorFee
+		masterSigned.SponsorFlags = &flags
+		attachSponsorSignature(t, env, masterSigned, source, sponsor)
+		sponsorBefore := env.Balance(sponsor)
+
+		result := env.SubmitSigned(masterSigned)
+		require.Equal(t, "tefMASTER_DISABLED", result.Code)
+		require.Equal(t, sponsorBefore, env.Balance(sponsor))
+
+		regularSigned := accounttx.NewAccountSet(source.Address)
+		regularSigned.Fee = "10"
+		regularSigned.Sponsor = sponsor.Address
+		regularSigned.SponsorFlags = &flags
+		attachSponsorSignature(t, env, regularSigned, source, regularKey)
+
+		result = env.SubmitSigned(regularSigned)
+		require.Equal(t, "tesSUCCESS", result.Code)
+		require.Equal(t, sponsorBefore-10, env.Balance(sponsor))
+	})
+}
+
+func TestSponsorAuthorizationFailuresNeverDebit(t *testing.T) {
+	t.Run("missing relationship and signature", func(t *testing.T) {
+		env, source, _, sponsor, _ := sponsorEnv(t)
+		sourceBefore := env.Balance(source)
+		sponsorBefore := env.Balance(sponsor)
+		sequenceBefore := env.Seq(source)
+
+		transaction := accounttx.NewAccountSet(source.Address)
+		transaction.Fee = "10"
+		transaction.Sponsor = sponsor.Address
+		flags := tx.SpfSponsorFee
+		transaction.SponsorFlags = &flags
+
+		require.Equal(t, "terNO_PERMISSION", env.Submit(transaction).Code)
+		require.Equal(t, sequenceBefore, env.Seq(source))
+		require.Equal(t, sourceBefore, env.Balance(source))
+		require.Equal(t, sponsorBefore, env.Balance(sponsor))
+	})
+
+	t.Run("missing sponsor account", func(t *testing.T) {
+		env, source, _, _, _ := sponsorEnv(t)
+		missingSponsor := jtx.NewAccount("missing-fee-sponsor")
+		sourceBefore := env.Balance(source)
+		sequenceBefore := env.Seq(source)
+
+		transaction := accounttx.NewAccountSet(source.Address)
+		transaction.Fee = "10"
+		transaction.Sponsor = missingSponsor.Address
+		flags := tx.SpfSponsorFee
+		transaction.SponsorFlags = &flags
+		transaction.SponsorSignature = &tx.SponsorSignature{}
+
+		require.Equal(t, "terNO_ACCOUNT", env.Submit(transaction).Code)
+		require.Equal(t, sequenceBefore, env.Seq(source))
+		require.Equal(t, sourceBefore, env.Balance(source))
+	})
+}
+
+func TestSponsorSignatureStructuralFailures(t *testing.T) {
+	env, source, _, sponsor, _ := sponsorEnv(t)
+	signer1 := jtx.NewAccount("sponsor-structure-signer-1")
+	signer2 := jtx.NewAccount("sponsor-structure-signer-2")
+	flags := tx.SpfSponsorFee
+
+	sorted := []tx.SignerWrapper{
+		{Signer: tx.Signer{Account: signer1.Address}},
+		{Signer: tx.Signer{Account: signer2.Address}},
+	}
+	sort.Slice(sorted, func(i, j int) bool {
+		left, _ := state.DecodeAccountID(sorted[i].Signer.Account)
+		right, _ := state.DecodeAccountID(sorted[j].Signer.Account)
+		return string(left[:]) < string(right[:])
+	})
+	unsorted := append([]tx.SignerWrapper(nil), sorted...)
+	unsorted[0], unsorted[1] = unsorted[1], unsorted[0]
+
+	testCases := []struct {
+		name      string
+		signature *tx.SponsorSignature
+	}{
+		{
+			name: "single and multi",
+			signature: &tx.SponsorSignature{
+				SigningPubKey: sponsor.PublicKeyHex(),
+				TxnSignature:  "AA",
+				Signers:       sorted,
+			},
+		},
+		{
+			name:      "unsorted multisigners",
+			signature: &tx.SponsorSignature{Signers: unsorted},
+		},
+		{
+			name:      "duplicate multisigners",
+			signature: &tx.SponsorSignature{Signers: []tx.SignerWrapper{sorted[0], sorted[0]}},
+		},
+		{
+			name:      "signature without key",
+			signature: &tx.SponsorSignature{TxnSignature: "AA"},
+		},
+	}
+
+	for _, testCase := range testCases {
+		t.Run(testCase.name, func(t *testing.T) {
+			sourceBefore := env.Balance(source)
+			sponsorBefore := env.Balance(sponsor)
+			sequenceBefore := env.Seq(source)
+			transaction := accounttx.NewAccountSet(source.Address)
+			transaction.Fee = "10"
+			transaction.Sponsor = sponsor.Address
+			transaction.SponsorFlags = &flags
+			transaction.SponsorSignature = testCase.signature
+
+			require.Equal(t, "temINVALID", env.Submit(transaction).Code)
+			require.Equal(t, sequenceBefore, env.Seq(source))
+			require.Equal(t, sourceBefore, env.Balance(source))
+			require.Equal(t, sponsorBefore, env.Balance(sponsor))
+		})
+	}
+}
+
+func TestSponsorMultisignAuthorizationAndFeeUnits(t *testing.T) {
+	env, source, _, sponsor, _ := sponsorEnv(t)
+	signer1 := jtx.NewAccount("sponsor-multisigner-1")
+	signer2 := jtx.NewAccount("sponsor-multisigner-2")
+	env.SetSignerList(sponsor, 2, []jtx.TestSigner{
+		{Account: signer1, Weight: 1},
+		{Account: signer2, Weight: 1},
+	})
+
+	flags := tx.SpfSponsorFee
+	oneSigner := accounttx.NewAccountSet(source.Address)
+	oneSigner.Fee = "20"
+	oneSigner.Sponsor = sponsor.Address
+	oneSigner.SponsorFlags = &flags
+	attachSponsorMultiSignature(t, env, oneSigner, source, signer1)
+	require.Equal(t, "tefBAD_QUORUM", env.SubmitSigned(oneSigner).Code)
+
+	underpaid := accounttx.NewAccountSet(source.Address)
+	underpaid.Fee = "29"
+	underpaid.Sponsor = sponsor.Address
+	underpaid.SponsorFlags = &flags
+	attachSponsorMultiSignature(t, env, underpaid, source, signer1, signer2)
+	require.Equal(t, "telINSUF_FEE_P", env.SubmitSigned(underpaid).Code)
+
+	sourceBefore := env.Balance(source)
+	sponsorBefore := env.Balance(sponsor)
+	valid := accounttx.NewAccountSet(source.Address)
+	valid.Fee = "30"
+	valid.Sponsor = sponsor.Address
+	valid.SponsorFlags = &flags
+	attachSponsorMultiSignature(t, env, valid, source, signer1, signer2)
+	require.Equal(t, "tesSUCCESS", env.SubmitSigned(valid).Code)
+	require.Equal(t, sourceBefore, env.Balance(source))
+	require.Equal(t, sponsorBefore-30, env.Balance(sponsor))
+}
+
+func TestTopLevelMultisignWithSponsorFee(t *testing.T) {
+	env, source, _, sponsor, _ := sponsorEnv(t)
+	sourceSigner := jtx.NewAccount("source-multisigner")
+	env.SetSignerList(source, 1, []jtx.TestSigner{{Account: sourceSigner, Weight: 1}})
+
+	transaction := accounttx.NewAccountSet(source.Address)
+	transaction.Fee = "20"
+	sequence := env.Seq(source)
+	transaction.Sequence = &sequence
+	transaction.SigningPubKey = ""
+	transaction.Sponsor = sponsor.Address
+	flags := tx.SpfSponsorFee
+	transaction.SponsorFlags = &flags
+	sponsorSignature, err := signtx.SignSponsor(
+		transaction,
+		sponsor.PublicKeyHex(),
+		signingPrivateKey(sponsor),
+	)
+	require.NoError(t, err)
+	transaction.SponsorSignature = sponsorSignature
+
+	sourceBefore := env.Balance(source)
+	sponsorBefore := env.Balance(sponsor)
+	require.Equal(t, "tesSUCCESS", env.SubmitMultiSigned(transaction, []*jtx.Account{sourceSigner}).Code)
+	require.Equal(t, sourceBefore, env.Balance(source))
+	require.Equal(t, sponsorBefore-20, env.Balance(sponsor))
+}
+
+func TestSponsorPrefundedFeeSelectionLimitsAndRecovery(t *testing.T) {
+	env, source, destination, sponsor, _ := sponsorEnv(t)
+	require.Equal(t, "tesSUCCESS", setFeeSponsorship(env, sponsor, source, 100, 10).Code)
+
+	sourceBefore := env.Balance(source)
+	destinationBefore := env.Balance(destination)
+	sponsorBefore := env.Balance(sponsor)
+	flags := tx.SpfSponsorFee
+	payment := paymenttx.NewPayment(source.Address, destination.Address, tx.NewXRPAmount(1_000))
+	payment.Fee = "10"
+	payment.Sponsor = sponsor.Address
+	payment.SponsorFlags = &flags
+	// Even with a co-signature present, the existing pre-funded relationship
+	// remains the selected payer.
+	payment.SponsorSignature = &tx.SponsorSignature{}
+	require.Equal(t, "tesSUCCESS", env.Submit(payment).Code)
+	require.Equal(t, sourceBefore-1_000, env.Balance(source))
+	require.Equal(t, destinationBefore+1_000, env.Balance(destination))
+	require.Equal(t, sponsorBefore, env.Balance(sponsor))
+	require.Equal(t, uint64(90), sponsorshipEntry(t, env, sponsor, source).FeeAmount)
+
+	overMax := accounttx.NewAccountSet(source.Address)
+	overMax.Fee = "11"
+	overMax.Sponsor = sponsor.Address
+	overMax.SponsorFlags = &flags
+	require.Equal(t, "terINSUF_FEE_B", env.Submit(overMax).Code)
+	require.Equal(t, uint64(90), sponsorshipEntry(t, env, sponsor, source).FeeAmount)
+
+	sourceBefore = env.Balance(source)
+	destinationBefore = env.Balance(destination)
+	failingPayment := paymenttx.NewPayment(
+		source.Address,
+		destination.Address,
+		tx.NewXRPAmount(jtx.XRP(20_000)),
+	)
+	failingPayment.Fee = "10"
+	failingPayment.Sponsor = sponsor.Address
+	failingPayment.SponsorFlags = &flags
+	require.Equal(t, "tecUNFUNDED_PAYMENT", env.Submit(failingPayment).Code)
+	require.Equal(t, sourceBefore, env.Balance(source))
+	require.Equal(t, destinationBefore, env.Balance(destination))
+	require.Equal(t, sponsorBefore, env.Balance(sponsor))
+	require.Equal(t, uint64(80), sponsorshipEntry(t, env, sponsor, source).FeeAmount)
+
+	// On a closed view, a fee above MaxFee claims only the authorized cap.
+	env.SetOpenLedger(false)
+	closedLedgerFailure := accounttx.NewAccountSet(source.Address)
+	closedLedgerFailure.Fee = "1000"
+	closedLedgerFailure.Sponsor = sponsor.Address
+	closedLedgerFailure.SponsorFlags = &flags
+	require.Equal(t, "tecINSUFF_FEE", env.Submit(closedLedgerFailure).Code)
+	require.Equal(t, uint64(70), sponsorshipEntry(t, env, sponsor, source).FeeAmount)
+	require.Equal(t, sponsorBefore, env.Balance(sponsor))
+}
+
+func TestReserveOnlySponsorDoesNotPayFee(t *testing.T) {
+	env, source, _, sponsor, _ := sponsorEnv(t)
+	transaction := accounttx.NewAccountSet(source.Address)
+	transaction.Fee = "10"
+	transaction.Sponsor = sponsor.Address
+	flags := tx.SpfSponsorReserve
+	transaction.SponsorFlags = &flags
+	attachSponsorSignature(t, env, transaction, source, sponsor)
+
+	sourceBefore := env.Balance(source)
+	sponsorBefore := env.Balance(sponsor)
+	require.Equal(t, "tesSUCCESS", env.SubmitSigned(transaction).Code)
+	require.Equal(t, sourceBefore-10, env.Balance(source))
+	require.Equal(t, sponsorBefore, env.Balance(sponsor))
+}
+
+func TestCosignedSponsorFeeNeverConsumesReserve(t *testing.T) {
+	t.Run("exactly fee above reserve", func(t *testing.T) {
+		env, source, _, sponsor, _ := sponsorEnv(t)
+		setAccountBalance(t, env, sponsor, env.ReserveBase()+10)
+		sourceBefore := env.Balance(source)
+
+		transaction := accounttx.NewAccountSet(source.Address)
+		transaction.Fee = "10"
+		transaction.Sponsor = sponsor.Address
+		flags := tx.SpfSponsorFee
+		transaction.SponsorFlags = &flags
+		attachSponsorSignature(t, env, transaction, source, sponsor)
+
+		require.Equal(t, "tesSUCCESS", env.SubmitSigned(transaction).Code)
+		require.Equal(t, sourceBefore, env.Balance(source))
+		require.Equal(t, env.ReserveBase(), env.Balance(sponsor))
+	})
+
+	t.Run("one drop short", func(t *testing.T) {
+		env, source, _, sponsor, _ := sponsorEnv(t)
+		setAccountBalance(t, env, sponsor, env.ReserveBase()+9)
+		sourceBefore := env.Balance(source)
+		sponsorBefore := env.Balance(sponsor)
+		sequenceBefore := env.Seq(source)
+
+		transaction := accounttx.NewAccountSet(source.Address)
+		transaction.Fee = "10"
+		transaction.Sponsor = sponsor.Address
+		flags := tx.SpfSponsorFee
+		transaction.SponsorFlags = &flags
+		attachSponsorSignature(t, env, transaction, source, sponsor)
+
+		require.Equal(t, "terINSUF_FEE_B", env.SubmitSigned(transaction).Code)
+		require.Equal(t, sequenceBefore, env.Seq(source))
+		require.Equal(t, sourceBefore, env.Balance(source))
+		require.Equal(t, sponsorBefore, env.Balance(sponsor))
+	})
+}
+
+func TestSponsorFeeWithTicketConsumesTicketNotSequence(t *testing.T) {
+	env, source, _, sponsor, _ := sponsorEnv(t)
+	ticketSequence := env.CreateTickets(source, 1)
+	require.Equal(t, "tesSUCCESS", setFeeSponsorship(env, sponsor, source, 30, 0).Code)
+
+	sourceBalance := env.Balance(source)
+	sourceSequence := env.Seq(source)
+	transaction := accounttx.NewAccountSet(source.Address)
+	transaction.Fee = "10"
+	transaction.Sponsor = sponsor.Address
+	flags := tx.SpfSponsorFee
+	transaction.SponsorFlags = &flags
+	jtx.WithTicketSeq(transaction, ticketSequence)
+
+	require.Equal(t, "tesSUCCESS", env.Submit(transaction).Code)
+	require.Equal(t, sourceBalance, env.Balance(source))
+	require.Equal(t, sourceSequence, env.Seq(source))
+	require.Zero(t, env.TicketCount(source))
+	require.Equal(t, uint64(20), sponsorshipEntry(t, env, sponsor, source).FeeAmount)
+}
+
+func TestDelegatedTransactionSponsorFeePayer(t *testing.T) {
+	t.Run("co-signed sponsor account", func(t *testing.T) {
+		env, source, destination, sponsor, delegate := sponsorEnv(t)
+		grantDelegatePermission(t, env, source, delegate, "Payment")
+
+		sourceBefore := env.Balance(source)
+		delegateBefore := env.Balance(delegate)
+		destinationBefore := env.Balance(destination)
+		sponsorBefore := env.Balance(sponsor)
+
+		payment := paymenttx.NewPayment(source.Address, destination.Address, tx.NewXRPAmount(1_000))
+		payment.Fee = "10"
+		payment.Delegate = delegate.Address
+		payment.Sponsor = sponsor.Address
+		flags := tx.SpfSponsorFee
+		payment.SponsorFlags = &flags
+		attachSponsorSignatureFor(t, env, payment, source, delegate, sponsor)
+
+		require.Equal(t, "tesSUCCESS", env.SubmitSignedWith(payment, delegate).Code)
+		require.Equal(t, sourceBefore-1_000, env.Balance(source))
+		require.Equal(t, delegateBefore, env.Balance(delegate))
+		require.Equal(t, destinationBefore+1_000, env.Balance(destination))
+		require.Equal(t, sponsorBefore-10, env.Balance(sponsor))
+	})
+
+	t.Run("pre-funded relationship targets delegate", func(t *testing.T) {
+		env, source, destination, sponsor, delegate := sponsorEnv(t)
+		grantDelegatePermission(t, env, source, delegate, "Payment")
+		require.Equal(t, "tesSUCCESS", setFeeSponsorship(env, sponsor, delegate, 100, 0).Code)
+		env.Close()
+
+		sourceBefore := env.Balance(source)
+		delegateBefore := env.Balance(delegate)
+		destinationBefore := env.Balance(destination)
+		sponsorBefore := env.Balance(sponsor)
+		require.False(t, env.LedgerEntryExists(keylet.Sponsorship(sponsor.ID, source.ID)))
+
+		payment := paymenttx.NewPayment(source.Address, destination.Address, tx.NewXRPAmount(1_000))
+		payment.Fee = "10"
+		payment.Delegate = delegate.Address
+		payment.Sponsor = sponsor.Address
+		flags := tx.SpfSponsorFee
+		payment.SponsorFlags = &flags
+
+		require.Equal(t, "tesSUCCESS", env.SubmitSignedWith(payment, delegate).Code)
+		require.Equal(t, sourceBefore-1_000, env.Balance(source))
+		require.Equal(t, delegateBefore, env.Balance(delegate))
+		require.Equal(t, destinationBefore+1_000, env.Balance(destination))
+		require.Equal(t, sponsorBefore, env.Balance(sponsor))
+		require.Equal(t, uint64(90), sponsorshipEntry(t, env, sponsor, delegate).FeeAmount)
+	})
+}
+
+func TestDelegatedTransactionRejectsReserveSponsor(t *testing.T) {
+	for _, testCase := range []struct {
+		name      string
+		prefunded bool
+	}{
+		{name: "co-signed"},
+		{name: "pre-funded", prefunded: true},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			env, source, destination, sponsor, delegate := sponsorEnv(t)
+			grantDelegatePermission(t, env, source, delegate, "CheckCreate")
+			if testCase.prefunded {
+				remaining := uint32(1)
+				require.Equal(t, "tesSUCCESS", setSponsorship(env, sponsor, delegate, 0, &remaining).Code)
+			}
+			env.Close()
+
+			sourceBefore := env.Balance(source)
+			delegateBefore := env.Balance(delegate)
+			sponsorBefore := env.Balance(sponsor)
+			sequenceBefore := env.Seq(source)
+
+			transaction := checktx.NewCheckCreate(
+				source.Address,
+				destination.Address,
+				tx.NewXRPAmount(1_000),
+			)
+			transaction.Delegate = delegate.Address
+			transaction.Sponsor = sponsor.Address
+			flags := tx.SpfSponsorReserve
+			transaction.SponsorFlags = &flags
+			if !testCase.prefunded {
+				attachSponsorSignatureFor(t, env, transaction, source, delegate, sponsor)
+			}
+
+			require.Equal(t, "temINVALID", env.SubmitSignedWith(transaction, delegate).Code)
+			require.Equal(t, sequenceBefore, env.Seq(source))
+			require.Equal(t, sourceBefore, env.Balance(source))
+			require.Equal(t, delegateBefore, env.Balance(delegate))
+			require.Equal(t, sponsorBefore, env.Balance(sponsor))
+		})
+	}
+}
+
+func TestSponsorCreatedAccount(t *testing.T) {
+	t.Run("one drop account", func(t *testing.T) {
+		env, source, _, _, _ := sponsorEnv(t)
+		destination := jtx.NewAccount("sponsor-created-destination")
+		sourceBefore := env.Balance(source)
+
+		payment := paymenttx.NewPayment(source.Address, destination.Address, tx.NewXRPAmount(1))
+		payment.Fee = "10"
+		payment.SetFlags(paymenttx.PaymentFlagSponsorCreatedAccount)
+		require.Equal(t, "tesSUCCESS", env.Submit(payment).Code)
+
+		require.Equal(t, sourceBefore-11, env.Balance(source))
+		require.Equal(t, uint64(1), env.Balance(destination))
+		destinationRoot := accountState(t, env, destination)
+		require.True(t, destinationRoot.HasSponsor)
+		require.Equal(t, source.Address, destinationRoot.Sponsor)
+		require.Equal(t, uint32(1), accountState(t, env, source).SponsoringAccountCount)
+	})
+
+	t.Run("existing destination", func(t *testing.T) {
+		env, source, destination, _, _ := sponsorEnv(t)
+		sourceBefore := env.Balance(source)
+		destinationBefore := env.Balance(destination)
+
+		payment := paymenttx.NewPayment(source.Address, destination.Address, tx.NewXRPAmount(1))
+		payment.Fee = "10"
+		payment.SetFlags(paymenttx.PaymentFlagSponsorCreatedAccount)
+		require.Equal(t, "tecNO_SPONSOR_PERMISSION", env.Submit(payment).Code)
+		require.Equal(t, sourceBefore-10, env.Balance(source))
+		require.Equal(t, destinationBefore, env.Balance(destination))
+		require.Zero(t, accountState(t, env, source).SponsoringAccountCount)
+	})
+
+	t.Run("source reserve boundary", func(t *testing.T) {
+		t.Run("one drop short", func(t *testing.T) {
+			env, source, _, _, _ := sponsorEnv(t)
+			destination := jtx.NewAccount("sponsor-created-boundary-short")
+			required := 2*env.ReserveBase() + 1
+			setAccountBalance(t, env, source, required-1)
+
+			payment := paymenttx.NewPayment(source.Address, destination.Address, tx.NewXRPAmount(1))
+			payment.Fee = "10"
+			payment.SetFlags(paymenttx.PaymentFlagSponsorCreatedAccount)
+			require.Equal(t, "tecUNFUNDED_PAYMENT", env.Submit(payment).Code)
+			require.False(t, env.LedgerEntryExists(keylet.Account(destination.ID)))
+			require.Equal(t, required-1-10, env.Balance(source))
+			require.Zero(t, accountState(t, env, source).SponsoringAccountCount)
+		})
+
+		t.Run("exact", func(t *testing.T) {
+			env, source, _, _, _ := sponsorEnv(t)
+			destination := jtx.NewAccount("sponsor-created-boundary-exact")
+			required := 2*env.ReserveBase() + 1
+			setAccountBalance(t, env, source, required)
+
+			payment := paymenttx.NewPayment(source.Address, destination.Address, tx.NewXRPAmount(1))
+			payment.Fee = "10"
+			payment.SetFlags(paymenttx.PaymentFlagSponsorCreatedAccount)
+			require.Equal(t, "tesSUCCESS", env.Submit(payment).Code)
+			require.Equal(t, required-11, env.Balance(source))
+			require.Equal(t, uint32(1), accountState(t, env, source).SponsoringAccountCount)
+		})
+	})
+}
+
+func TestSponsorCreatedAccountPreflightMatrix(t *testing.T) {
+	env, source, _, issuer, _ := sponsorEnv(t)
+	destination := jtx.NewAccount("sponsor-created-preflight-destination")
+
+	testCases := []struct {
+		name    string
+		mutate  func(*paymenttx.Payment)
+		wantTER string
+	}{
+		{
+			name: "path flag",
+			mutate: func(payment *paymenttx.Payment) {
+				payment.SetFlags(
+					paymenttx.PaymentFlagSponsorCreatedAccount |
+						paymenttx.PaymentFlagPartialPayment,
+				)
+			},
+			wantTER: "temINVALID_FLAG",
+		},
+		{
+			name: "SendMax",
+			mutate: func(payment *paymenttx.Payment) {
+				sendMax := tx.NewXRPAmount(2)
+				payment.SendMax = &sendMax
+			},
+			wantTER: "temINVALID",
+		},
+		{
+			name: "Paths",
+			mutate: func(payment *paymenttx.Payment) {
+				payment.Paths = [][]paymenttx.PathStep{{{Account: issuer.Address}}}
+			},
+			wantTER: "temINVALID",
+		},
+		{
+			name: "issued amount",
+			mutate: func(payment *paymenttx.Payment) {
+				payment.Amount = issuer.IOU("USD", 1)
+			},
+			wantTER: "temBAD_AMOUNT",
+		},
+	}
+
+	for _, testCase := range testCases {
+		t.Run(testCase.name, func(t *testing.T) {
+			payment := paymenttx.NewPayment(source.Address, destination.Address, tx.NewXRPAmount(1))
+			payment.Fee = "10"
+			payment.SetFlags(paymenttx.PaymentFlagSponsorCreatedAccount)
+			testCase.mutate(payment)
+			require.Equal(t, testCase.wantTER, env.Submit(payment).Code)
+		})
+	}
+}
+
 func TestSponsorshipSetDirectoryFailureRollsBackFirstInsert(t *testing.T) {
 	env, sponsee, _, sponsor, _ := sponsorEnv(t)
 
@@ -497,7 +1220,12 @@ func TestSponsorAmendmentGate(t *testing.T) {
 	env := jtx.NewTestEnv(t)
 	sponsor := jtx.NewAccount("gate-sponsor")
 	sponsee := jtx.NewAccount("gate-sponsee")
+	destination := jtx.NewAccount("gate-destination")
 	env.Fund(sponsor, sponsee)
 	remaining := uint32(1)
 	require.Equal(t, "temDISABLED", setSponsorship(env, sponsor, sponsee, 0, &remaining).Code)
+
+	payment := paymenttx.NewPayment(sponsee.Address, destination.Address, tx.NewXRPAmount(1))
+	payment.SetFlags(paymenttx.PaymentFlagSponsorCreatedAccount)
+	require.Equal(t, "temDISABLED", env.Submit(payment).Code)
 }
