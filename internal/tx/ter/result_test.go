@@ -77,6 +77,8 @@ func TestResultMessage(t *testing.T) {
 		{TefALREADY, "The exact transaction was already in this ledger."},
 		{TelCAN_NOT_QUEUE, "Can not queue at this time."},
 		{TerRETRY, "Retry transaction."},
+		{TerNO_PERMISSION, "No permission to perform requested operation."},
+		{TecNO_SPONSOR_PERMISSION, "Sponsor has not authorized this transaction."},
 		{TelENV_RPC_FAILED, "Unit test RPC failure."},
 		{TemCAN_NOT_PREAUTH_SELF, "Malformed: An account may not preauthorize itself."},
 	}
@@ -105,5 +107,20 @@ func TestResultStringUnknown(t *testing.T) {
 	}
 	if got := TesSUCCESS.String(); got != "tesSUCCESS" {
 		t.Errorf("String(tesSUCCESS): got %q, want %q", got, "tesSUCCESS")
+	}
+}
+
+func TestTecRangeIncludesSponsorCodes(t *testing.T) {
+	for _, code := range []Result{
+		TecNO_DELEGATE_PERMISSION,
+		TecBAD_PROOF,
+		TecNO_SPONSOR_PERMISSION,
+		Result(255),
+		Result(256),
+		Result(399),
+	} {
+		if !code.IsTec() || !code.IsClaimed() {
+			t.Errorf("%d must be classified as a claimed tec result", code)
+		}
 	}
 }

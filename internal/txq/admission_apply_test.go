@@ -12,14 +12,22 @@ import (
 
 // seqTx is a minimal sequence-based tx.Transaction for driving TxQ.Apply.
 type seqTx struct {
-	seq uint32
-	fee string
+	seq          uint32
+	fee          string
+	delegate     string
+	sponsorFlags *uint32
 }
 
 func (m *seqTx) TxType() tx.Type { return tx.TypeAccountSet }
 func (m *seqTx) GetCommon() *tx.Common {
 	s := m.seq
-	return &tx.Common{Account: "rTest", Sequence: &s, Fee: m.fee}
+	return &tx.Common{
+		Account:      "rTest",
+		Sequence:     &s,
+		Fee:          m.fee,
+		Delegate:     m.delegate,
+		SponsorFlags: m.sponsorFlags,
+	}
 }
 func (m *seqTx) Validate() error                  { return nil }
 func (m *seqTx) Flatten() (map[string]any, error) { return map[string]any{}, nil }
@@ -131,6 +139,40 @@ func TestAcceptDropsTefCategory(t *testing.T) {
 				require.Equal(t, RetriesAllowed-1, candidate.RetriesRemaining)
 				require.Equal(t, test.result, candidate.LastResult)
 			}
+		})
+	}
+}
+
+func TestApplyRejectsDelegatedAndFeeSponsoredTransactionsFromQueue(t *testing.T) {
+	feeSponsorFlags := tx.SpfSponsorFee
+	tests := []struct {
+		name string
+		txn  *seqTx
+	}{
+		{
+			name: "delegated",
+			txn:  &seqTx{seq: 6, fee: "10", delegate: "rDelegate"},
+		},
+		{
+			name: "fee sponsored",
+			txn:  &seqTx{seq: 6, fee: "10", sponsorFlags: &feeSponsorFlags},
+		},
+	}
+
+	for i, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			q := New(makeAdmissionConfig())
+			ctx := &stubApplyCtx{
+				seq:      5,
+				balance:  1_000_000,
+				exists:   true,
+				baseFee:  10,
+				preclaim: ter.TesSUCCESS,
+			}
+			result := q.Apply(ctx, test.txn, [32]byte{byte(i + 1)}, [20]byte{1})
+			require.Equal(t, ter.TelCAN_NOT_QUEUE, result.Result)
+			require.False(t, result.Applied)
+			require.Zero(t, q.Size())
 		})
 	}
 }

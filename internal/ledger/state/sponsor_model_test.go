@@ -14,6 +14,7 @@ func TestAccountRootSponsorCountersRoundTrip(t *testing.T) {
 		SponsoringOwnerCount:   4,
 		SponsoringAccountCount: 2,
 		Sponsor:                walkerTestAccount,
+		HasSponsor:             true,
 	}
 	encoded, err := SerializeAccountRoot(entry)
 	if err != nil {
@@ -33,7 +34,7 @@ func TestAccountRootSponsorCountersRoundTrip(t *testing.T) {
 		}
 	}
 	if got := fields["Sponsor"]; got != walkerTestAccount {
-		t.Errorf("Sponsor = %#v, want %s", got, walkerTestAccount)
+		t.Fatalf("Sponsor = %#v, want %q", got, walkerTestAccount)
 	}
 	parsed, err := ParseAccountRoot(encoded)
 	if err != nil {
@@ -42,8 +43,8 @@ func TestAccountRootSponsorCountersRoundTrip(t *testing.T) {
 	if parsed.SponsoredOwnerCount != 3 || parsed.SponsoringOwnerCount != 4 || parsed.SponsoringAccountCount != 2 {
 		t.Fatalf("parsed sponsor counters = (%d, %d, %d)", parsed.SponsoredOwnerCount, parsed.SponsoringOwnerCount, parsed.SponsoringAccountCount)
 	}
-	if parsed.Sponsor != walkerTestAccount {
-		t.Fatalf("parsed Sponsor = %q, want %q", parsed.Sponsor, walkerTestAccount)
+	if !parsed.HasSponsor || parsed.Sponsor != walkerTestAccount {
+		t.Fatalf("parsed Sponsor = (%t, %q), want (true, %q)", parsed.HasSponsor, parsed.Sponsor, walkerTestAccount)
 	}
 	roundTrip, err := SerializeAccountRoot(parsed)
 	if err != nil {

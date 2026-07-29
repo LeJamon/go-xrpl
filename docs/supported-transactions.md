@@ -6,7 +6,7 @@ Transaction types registered with the engine, generated from the `tx.Register`
 registry (`internal/tx`). Each runs the full Validate → Preflight → Preclaim →
 Apply pipeline. The numeric code is the XRPL `TransactionType` field value.
 
-Total: 75 transaction types.
+Total: 77 transaction types.
 
 | Transaction type | Type code |
 |------------------|-----------|
@@ -68,6 +68,8 @@ Total: 75 transaction types.
 | `SetFee` | 101 |
 | `SetRegularKey` | 5 |
 | `SignerListSet` | 12 |
+| `SponsorshipSet` | 91 |
+| `SponsorshipTransfer` | 90 |
 | `TicketCreate` | 10 |
 | `TrustSet` | 20 |
 | `UNLModify` | 102 |

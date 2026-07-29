@@ -13,6 +13,14 @@ func (c EngineConfig) AccountReserve(ownerCount uint32) uint64 {
 	return c.ReserveBase + (uint64(ownerCount) * c.ReserveIncrement)
 }
 
+// AccountReserveWithCounts calculates the reserve for an account that funds
+// accountCount base reserves and ownerCount incremental reserves. Sponsor uses
+// this form because a sponsored account funds no base reserve of its own while
+// a sponsor may fund several accounts.
+func (c EngineConfig) AccountReserveWithCounts(ownerCount, accountCount uint32) uint64 {
+	return (uint64(accountCount) * c.ReserveBase) + (uint64(ownerCount) * c.ReserveIncrement)
+}
+
 // ReserveForNewObject calculates the reserve required for creating a new ledger
 // object. The first 2 objects don't require extra reserve.
 // Reference: rippled SetTrust.cpp:405-407
