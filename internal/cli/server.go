@@ -96,6 +96,7 @@ func (a *application) runServer(cmd *cobra.Command, options *serverOptions) erro
 		options,
 		commandFlagChanged(cmd, "ledger"),
 		commandFlagChanged(cmd, "ledgerfile"),
+		cfg.NodeDB.FastLoad,
 	)
 	if err != nil {
 		return err
@@ -161,47 +162,36 @@ func commandFlagChanged(command *cobra.Command, name string) bool {
 	return false
 }
 
-func startupConfig(options *serverOptions, ledgerSet, ledgerFileSet bool) (service.StartupConfig, error) {
-	if options.replay && !ledgerSet {
-		return service.StartupConfig{}, fmt.Errorf("--replay requires --ledger")
-	}
-	if ledgerFileSet && options.ledgerFile == "" {
-		return service.StartupConfig{}, fmt.Errorf("--ledgerfile requires a non-empty path")
-	}
-
-	selected := 0
-	for _, active := range []bool{
-		options.start,
-		options.load,
-		options.network,
-		options.replay,
-		ledgerFileSet,
-		ledgerSet && !options.replay,
-	} {
-		if active {
-			selected++
-		}
-	}
-	if selected > 1 {
-		return service.StartupConfig{}, fmt.Errorf(
-			"startup modes are mutually exclusive: choose only one of --start, --load, --net, --replay, --ledger, or --ledgerfile",
-		)
+func startupConfig(options *serverOptions, ledgerSet, ledgerFileSet, fastLoad bool) (service.StartupConfig, error) {
+	startup := service.StartupConfig{Mode: service.StartupNormal}
+	if options.start {
+		startup.Mode = service.StartupFresh
 	}
 
 	switch {
-	case options.start:
-		return service.StartupConfig{Mode: service.StartupFresh}, nil
-	case options.load:
-		return service.StartupConfig{Mode: service.StartupLoad}, nil
-	case options.network:
-		return service.StartupConfig{Mode: service.StartupNetwork}, nil
-	case options.replay:
-		return service.StartupConfig{Mode: service.StartupReplay, Ledger: options.ledger}, nil
-	case ledgerFileSet:
-		return service.StartupConfig{Mode: service.StartupLoadFile, Ledger: options.ledgerFile}, nil
 	case ledgerSet:
-		return service.StartupConfig{Mode: service.StartupLoad, Ledger: options.ledger}, nil
-	default:
-		return service.StartupConfig{Mode: service.StartupNormal}, nil
+		startup.Ledger = options.ledger
+		if options.replay {
+			startup.Mode = service.StartupReplay
+		} else {
+			startup.Mode = service.StartupLoad
+		}
+	case ledgerFileSet:
+		startup = service.StartupConfig{Mode: service.StartupLoadFile, Ledger: options.ledgerFile}
+	case options.load:
+		startup = service.StartupConfig{Mode: service.StartupLoad}
+	case fastLoad:
+		startup = service.StartupConfig{Mode: service.StartupNormal}
 	}
+
+	if options.network && !fastLoad {
+		if startup.Mode == service.StartupLoad || startup.Mode == service.StartupReplay {
+			return service.StartupConfig{}, fmt.Errorf("--net is incompatible with --load or --ledger")
+		}
+		startup = service.StartupConfig{Mode: service.StartupNetwork}
+	}
+	if startup.Mode == service.StartupLoadFile && startup.Ledger == "" && !fastLoad {
+		return service.StartupConfig{}, fmt.Errorf("--ledgerfile requires a non-empty path")
+	}
+	return startup, nil
 }

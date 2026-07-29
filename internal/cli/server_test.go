@@ -28,9 +28,10 @@ func TestDefaultServerCommandHasStartupFlags(t *testing.T) {
 
 func TestStartupConfig(t *testing.T) {
 	tests := []struct {
-		name string
-		args []string
-		want service.StartupConfig
+		name     string
+		args     []string
+		fastLoad bool
+		want     service.StartupConfig
 	}{
 		{
 			name: "normal",
@@ -76,6 +77,93 @@ func TestStartupConfig(t *testing.T) {
 			args: []string{"--replay", "--ledger="},
 			want: service.StartupConfig{Mode: service.StartupReplay},
 		},
+		{
+			name: "replay without ledger is ignored",
+			args: []string{"--replay"},
+			want: service.StartupConfig{Mode: service.StartupNormal},
+		},
+		{
+			name: "load overrides fresh",
+			args: []string{"--start", "--load"},
+			want: service.StartupConfig{Mode: service.StartupLoad},
+		},
+		{
+			name: "ledger overrides load and fresh",
+			args: []string{"--start", "--load", "--ledger", "43"},
+			want: service.StartupConfig{Mode: service.StartupLoad, Ledger: "43"},
+		},
+		{
+			name: "replay ledger overrides load",
+			args: []string{"--load", "--replay", "--ledger", "43"},
+			want: service.StartupConfig{Mode: service.StartupReplay, Ledger: "43"},
+		},
+		{
+			name: "ledger overrides ledger file",
+			args: []string{"--ledger", "43", "--ledgerfile", "ledger.json"},
+			want: service.StartupConfig{Mode: service.StartupLoad, Ledger: "43"},
+		},
+		{
+			name: "network overrides fresh",
+			args: []string{"--start", "--net"},
+			want: service.StartupConfig{Mode: service.StartupNetwork},
+		},
+		{
+			name: "network overrides ledger file",
+			args: []string{"--net", "--ledgerfile", "ledger.json"},
+			want: service.StartupConfig{Mode: service.StartupNetwork},
+		},
+		{
+			name:     "fast load",
+			fastLoad: true,
+			want:     service.StartupConfig{Mode: service.StartupNormal},
+		},
+		{
+			name:     "fast load overrides fresh",
+			args:     []string{"--start"},
+			fastLoad: true,
+			want:     service.StartupConfig{Mode: service.StartupNormal},
+		},
+		{
+			name:     "explicit load overrides fast load",
+			args:     []string{"--load"},
+			fastLoad: true,
+			want:     service.StartupConfig{Mode: service.StartupLoad},
+		},
+		{
+			name:     "ledger overrides fast load",
+			args:     []string{"--ledger", "43"},
+			fastLoad: true,
+			want:     service.StartupConfig{Mode: service.StartupLoad, Ledger: "43"},
+		},
+		{
+			name:     "replay ledger overrides fast load",
+			args:     []string{"--replay", "--ledger", "43"},
+			fastLoad: true,
+			want:     service.StartupConfig{Mode: service.StartupReplay, Ledger: "43"},
+		},
+		{
+			name:     "ledger file overrides fast load",
+			args:     []string{"--ledgerfile", "ledger.json"},
+			fastLoad: true,
+			want:     service.StartupConfig{Mode: service.StartupLoadFile, Ledger: "ledger.json"},
+		},
+		{
+			name:     "empty ledger file falls back with fast load",
+			args:     []string{"--ledgerfile="},
+			fastLoad: true,
+			want:     service.StartupConfig{Mode: service.StartupLoadFile},
+		},
+		{
+			name:     "fast load ignores network",
+			args:     []string{"--net"},
+			fastLoad: true,
+			want:     service.StartupConfig{Mode: service.StartupNormal},
+		},
+		{
+			name: "network overrides empty ledger file",
+			args: []string{"--net", "--ledgerfile="},
+			want: service.StartupConfig{Mode: service.StartupNetwork},
+		},
 	}
 
 	for _, tt := range tests {
@@ -85,7 +173,7 @@ func TestStartupConfig(t *testing.T) {
 			bindStartupFlags(flags, options)
 			require.NoError(t, flags.Parse(tt.args))
 
-			got, err := startupConfig(options, flags.Changed("ledger"), flags.Changed("ledgerfile"))
+			got, err := startupConfig(options, flags.Changed("ledger"), flags.Changed("ledgerfile"), tt.fastLoad)
 			require.NoError(t, err)
 			assert.Equal(t, tt.want, got)
 		})
@@ -99,34 +187,29 @@ func TestStartupConfigRejectsInvalidCombinations(t *testing.T) {
 		wantErr string
 	}{
 		{
-			name:    "replay without ledger",
-			args:    []string{"--replay"},
-			wantErr: "--replay requires --ledger",
-		},
-		{
 			name:    "empty ledger file",
 			args:    []string{"--ledgerfile="},
 			wantErr: "--ledgerfile requires a non-empty path",
 		},
 		{
-			name:    "fresh and load",
-			args:    []string{"--start", "--load"},
-			wantErr: "startup modes are mutually exclusive",
-		},
-		{
 			name:    "network and selected ledger",
 			args:    []string{"--net", "--ledger", "43"},
-			wantErr: "startup modes are mutually exclusive",
+			wantErr: "--net is incompatible",
+		},
+		{
+			name:    "network and empty ledger",
+			args:    []string{"--net", "--ledger="},
+			wantErr: "--net is incompatible",
 		},
 		{
 			name:    "load and replay",
-			args:    []string{"--load", "--replay", "--ledger", "32570"},
-			wantErr: "startup modes are mutually exclusive",
+			args:    []string{"--net", "--load", "--replay", "--ledger", "32570"},
+			wantErr: "--net is incompatible",
 		},
 		{
-			name:    "ledger and ledger file",
-			args:    []string{"--ledger", "43", "--ledgerfile", "ledger.json"},
-			wantErr: "startup modes are mutually exclusive",
+			name:    "network and load",
+			args:    []string{"--net", "--load"},
+			wantErr: "--net is incompatible",
 		},
 	}
 
@@ -137,7 +220,7 @@ func TestStartupConfigRejectsInvalidCombinations(t *testing.T) {
 			bindStartupFlags(flags, options)
 			require.NoError(t, flags.Parse(tt.args))
 
-			_, err := startupConfig(options, flags.Changed("ledger"), flags.Changed("ledgerfile"))
+			_, err := startupConfig(options, flags.Changed("ledger"), flags.Changed("ledgerfile"), false)
 			require.ErrorContains(t, err, tt.wantErr)
 		})
 	}
