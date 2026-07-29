@@ -279,7 +279,7 @@ const (
 
 // New creates a new LedgerService
 func New(cfg Config) (*Service, error) {
-	if err := cfg.Startup.validate(cfg.FastLoad); err != nil {
+	if err := cfg.Startup.validateMode(); err != nil {
 		return nil, fmt.Errorf("invalid ledger service configuration: %w", err)
 	}
 

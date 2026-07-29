@@ -37,20 +37,25 @@ type StartupConfig struct {
 	Ledger string
 }
 
-func (c StartupConfig) validate(fastLoad bool) error {
+func (c StartupConfig) validateMode() error {
 	switch c.Mode {
 	case StartupNormal, StartupFresh, StartupNetwork:
 		if c.Ledger != "" {
 			return fmt.Errorf("startup mode %d does not accept a ledger identifier", c.Mode)
 		}
-	case StartupLoad:
-	case StartupLoadFile:
-		if c.Ledger == "" && !fastLoad {
-			return errors.New("ledger file path cannot be empty")
-		}
-	case StartupReplay:
+	case StartupLoad, StartupLoadFile, StartupReplay:
 	default:
 		return fmt.Errorf("unknown startup mode %d", c.Mode)
+	}
+	return nil
+}
+
+func (c StartupConfig) validate(fastLoad bool) error {
+	if err := c.validateMode(); err != nil {
+		return err
+	}
+	if c.Mode == StartupLoadFile && c.Ledger == "" && !fastLoad {
+		return errors.New("ledger file path cannot be empty")
 	}
 	return nil
 }
