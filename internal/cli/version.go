@@ -9,13 +9,16 @@ import (
 	"github.com/spf13/cobra"
 )
 
-var versionCmd = &cobra.Command{
-	Use:   "version",
-	Short: "Show version information",
-	Long:  `Display version information for go-xrpl including build details and Go version.`,
-	Run: func(cmd *cobra.Command, args []string) {
-		fmt.Print(versionText(rootCmd.Version))
-	},
+func newVersionCommand() *cobra.Command {
+	return &cobra.Command{
+		Use:   "version",
+		Short: "Show version information",
+		Long:  `Display version information for go-xrpl including build details and Go version.`,
+		Args:  cobra.NoArgs,
+		Run: func(cmd *cobra.Command, args []string) {
+			fmt.Fprint(cmd.OutOrStdout(), versionText(cmd.Root().Version))
+		},
+	}
 }
 
 // versionText renders the version command output. VCS details (commit,
@@ -55,8 +58,4 @@ func vcsText(settings []rdebug.BuildSetting) string {
 		fmt.Fprintf(&b, "Commit time: %s\n", t)
 	}
 	return b.String()
-}
-
-func init() {
-	rootCmd.AddCommand(versionCmd)
 }

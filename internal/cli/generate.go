@@ -15,67 +15,70 @@ const generatedValidatorsFilename = "validators.toml"
 type generatedFile struct {
 	path string
 	data []byte
+	mode os.FileMode
 }
 
-var (
-	generateNetwork string
-	generateOutput  string
-)
+type generateOptions struct {
+	network string
+	output  string
+}
 
-var generateConfigCmd = &cobra.Command{
-	Use:   "generate-config",
-	Short: "Generate a complete configuration file",
-	Long: `Generate a complete xrpld.toml configuration file with all required fields.
+func newGenerateConfigCommand() *cobra.Command {
+	options := &generateOptions{}
+	command := &cobra.Command{
+		Use:   "generate-config",
+		Short: "Generate a complete configuration file",
+		Long: `Generate a complete xrpld.toml configuration file with all required fields.
 The generated file is a working starting point that passes validation.
 Review and adjust the values before using it to start the server.`,
-	RunE: runGenerateConfig,
+		Args: cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			return runGenerateConfig(cmd, options)
+		},
+	}
+	command.Flags().StringVar(&options.network, "network", "main", "network type: main, testnet, or devnet")
+	command.Flags().StringVar(&options.output, "output", "xrpld.toml", "output file path")
+	return command
 }
 
-func init() {
-	rootCmd.AddCommand(generateConfigCmd)
-
-	generateConfigCmd.Flags().StringVar(&generateNetwork, "network", "main", "network type: main, testnet, or devnet")
-	generateConfigCmd.Flags().StringVar(&generateOutput, "output", "xrpld.toml", "output file path")
-}
-
-func runGenerateConfig(cmd *cobra.Command, args []string) error {
+func runGenerateConfig(cmd *cobra.Command, options *generateOptions) error {
 	var networkID string
-	switch generateNetwork {
+	switch options.network {
 	case "main", "testnet", "devnet":
-		networkID = generateNetwork
+		networkID = options.network
 	default:
-		return fmt.Errorf("unknown network %q (valid: main, testnet, devnet)", generateNetwork)
+		return fmt.Errorf("unknown network %q (valid: main, testnet, devnet)", options.network)
 	}
 
 	content := generateConfigContent(networkID)
 	validatorsContent, hasValidators := generateValidatorsContent(networkID)
 	files := make([]generatedFile, 0, 2)
 	if hasValidators {
-		validatorsOutput := filepath.Join(filepath.Dir(generateOutput), generatedValidatorsFilename)
-		if filepath.Clean(validatorsOutput) == filepath.Clean(generateOutput) {
+		validatorsOutput := filepath.Join(filepath.Dir(options.output), generatedValidatorsFilename)
+		if filepath.Clean(validatorsOutput) == filepath.Clean(options.output) {
 			return fmt.Errorf("output path must not be named %s", generatedValidatorsFilename)
 		}
-		files = append(files, generatedFile{path: validatorsOutput, data: []byte(validatorsContent)})
+		files = append(files, generatedFile{path: validatorsOutput, data: []byte(validatorsContent), mode: 0o644})
 	}
-	files = append(files, generatedFile{path: generateOutput, data: []byte(content)})
+	files = append(files, generatedFile{path: options.output, data: []byte(content), mode: 0o600})
 	if err := publishGeneratedFiles(files, os.Link); err != nil {
 		return err
 	}
 
 	w := cmd.OutOrStdout()
-	fmt.Fprintf(w, "Configuration file generated: %s\n", generateOutput)
+	fmt.Fprintf(w, "Configuration file generated: %s\n", options.output)
 	fmt.Fprintf(w, "  Network: %s\n", networkID)
 	if hasValidators {
-		fmt.Fprintf(w, "  Validators: %s\n", filepath.Join(filepath.Dir(generateOutput), generatedValidatorsFilename))
+		fmt.Fprintf(w, "  Validators: %s\n", filepath.Join(filepath.Dir(options.output), generatedValidatorsFilename))
 	}
 	fmt.Fprintln(w)
 	fmt.Fprintln(w, "Next steps:")
 	fmt.Fprintln(w, "  1. Review and adjust the configuration values")
 	if networkID == "devnet" {
 		fmt.Fprintln(w, "  2. Configure trusted validators, or start in standalone mode:")
-		fmt.Fprintln(w, "     xrpld server --standalone --conf", generateOutput)
+		fmt.Fprintln(w, "     xrpld server --standalone --conf", options.output)
 	} else {
-		fmt.Fprintln(w, "  2. Start the server: xrpld server --conf", generateOutput)
+		fmt.Fprintln(w, "  2. Start the server: xrpld server --conf", options.output)
 	}
 	return nil
 }
@@ -83,6 +86,7 @@ func runGenerateConfig(cmd *cobra.Command, args []string) error {
 func publishGeneratedFiles(files []generatedFile, link func(string, string) error) error {
 	seen := make(map[string]struct{}, len(files))
 	pending := make([]generatedFile, 0, len(files))
+	permissionUpdates := make([]generatedFile, 0, len(files))
 	for _, file := range files {
 		path, err := filepath.Abs(file.path)
 		if err != nil {
@@ -104,6 +108,10 @@ func publishGeneratedFiles(files []generatedFile, link func(string, string) erro
 			if !bytes.Equal(existing, file.data) {
 				return fmt.Errorf("output already exists with different content: %s", file.path)
 			}
+			if currentMode := info.Mode().Perm(); currentMode&^file.mode != 0 {
+				file.mode = currentMode & file.mode
+				permissionUpdates = append(permissionUpdates, file)
+			}
 			continue
 		} else if !os.IsNotExist(err) {
 			return fmt.Errorf("inspect output path %s: %w", file.path, err)
@@ -111,6 +119,11 @@ func publishGeneratedFiles(files []generatedFile, link func(string, string) erro
 		pending = append(pending, file)
 	}
 	files = pending
+	for _, file := range permissionUpdates {
+		if err := os.Chmod(file.path, file.mode); err != nil {
+			return fmt.Errorf("tighten output permissions %s: %w", file.path, err)
+		}
+	}
 
 	temps := make([]string, len(files))
 	defer func() {
@@ -126,7 +139,7 @@ func publishGeneratedFiles(files []generatedFile, link func(string, string) erro
 			return fmt.Errorf("stage output %s: %w", file.path, err)
 		}
 		temps[i] = tmp.Name()
-		if err := tmp.Chmod(0o644); err != nil { //nolint:gosec // generated configuration is intentionally world-readable
+		if err := tmp.Chmod(file.mode); err != nil {
 			_ = tmp.Close()
 			return fmt.Errorf("set output permissions %s: %w", file.path, err)
 		}

@@ -165,7 +165,7 @@ func TestRPCEndpointSelection(t *testing.T) {
 
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			endpoint, _, err := rpcEndpoint(&config.Config{Ports: test.ports})
+			endpoint, _, err := rpcEndpoint(&config.Config{Ports: test.ports}, "test.toml")
 			if test.wantErr != "" {
 				if err == nil || !strings.Contains(err.Error(), test.wantErr) {
 					t.Fatalf("rpcEndpoint() error = %v, want error containing %q", err, test.wantErr)
@@ -408,8 +408,6 @@ func TestRPCCommandsRejectInvalidInputBeforeRequest(t *testing.T) {
 		_, _ = io.WriteString(w, successfulRPCResponse)
 	}))
 	defer server.Close()
-	setTestConfig(t, server.Listener.Addr().String())
-
 	tests := []struct {
 		name   string
 		method string
@@ -448,7 +446,8 @@ func TestRPCCommandsRejectInvalidInputBeforeRequest(t *testing.T) {
 
 	t.Run("generic JSON", func(t *testing.T) {
 		before := requests.Load()
-		if err := jsonCmd.RunE(jsonCmd, []string{"server_info", "{"}); err == nil {
+		command := newJSONCommand(nil)
+		if err := command.RunE(command, []string{"server_info", "{"}); err == nil {
 			t.Fatal("json command accepted malformed JSON")
 		}
 		if got := requests.Load(); got != before {
@@ -470,9 +469,9 @@ func TestRunRPCAuthentication(t *testing.T) {
 		port := testPort(t, server.Listener.Addr().String())
 		port.AdminUser = "admin"
 		port.AdminPassword = "secret"
-		setTestRPCPorts(t, rpcPorts(port))
+		app := testRPCApplication(rpcPorts(port), nil)
 
-		if err := runRPC(newRPCCommand(), "stop", nil); err != nil {
+		if err := app.runRPC(newRPCCommand(), "stop", nil); err != nil {
 			t.Fatalf("runRPC(): %v", err)
 		}
 		assertJSONEqual(
@@ -498,9 +497,9 @@ func TestRunRPCAuthentication(t *testing.T) {
 		port := testPort(t, server.Listener.Addr().String())
 		port.User = "http-user"
 		port.Password = "http-password"
-		setTestRPCPorts(t, rpcPorts(port))
+		app := testRPCApplication(rpcPorts(port), nil)
 
-		if err := runRPC(newRPCCommand(), "ping", nil); err != nil {
+		if err := app.runRPC(newRPCCommand(), "ping", nil); err != nil {
 			t.Fatalf("runRPC(): %v", err)
 		}
 		if !gotAuth || gotUser != "http-user" || gotPassword != "http-password" {
@@ -511,21 +510,21 @@ func TestRunRPCAuthentication(t *testing.T) {
 }
 
 func TestRunRPCRejectsCleartextCredentialsToNonLoopback(t *testing.T) {
-	setTestRPCPorts(t, rpcPorts(config.PortConfig{
+	ports := rpcPorts(config.PortConfig{
 		IP:       "rpc.example.test",
 		Port:     5005,
 		Protocol: "http",
 		User:     "http-user",
 		Password: "http-password",
-	}))
+	})
 
 	var requests atomic.Int32
-	setTestRPCClient(t, &http.Client{Transport: roundTripFunc(func(*http.Request) (*http.Response, error) {
+	app := testRPCApplication(ports, &http.Client{Transport: roundTripFunc(func(*http.Request) (*http.Response, error) {
 		requests.Add(1)
 		return rpcHTTPResponse(http.StatusOK, successfulRPCResponse), nil
 	})})
 
-	err := runRPC(newRPCCommand(), "ping", nil)
+	err := app.runRPC(newRPCCommand(), "ping", nil)
 	if err == nil || !strings.Contains(err.Error(), "refusing to send RPC credentials over cleartext HTTP") {
 		t.Fatalf("runRPC() error = %v, want cleartext credential refusal", err)
 	}
@@ -538,7 +537,7 @@ func TestRunRPCRejectsCleartextCredentialsToNonLoopback(t *testing.T) {
 	if err := command.Flags().Set(insecureRPCFlag, "true"); err != nil {
 		t.Fatal(err)
 	}
-	if err := runRPC(command, "ping", nil); err != nil {
+	if err := app.runRPC(command, "ping", nil); err != nil {
 		t.Fatalf("runRPC() with --%s: %v", insecureRPCFlag, err)
 	}
 	if requests.Load() != 1 {
@@ -558,9 +557,9 @@ func TestRunRPCDoesNotFollowRedirects(t *testing.T) {
 		http.Redirect(w, request, redirected.URL, http.StatusTemporaryRedirect)
 	}))
 	defer redirector.Close()
-	setTestConfig(t, redirector.Listener.Addr().String())
+	app := testRPCApplication(rpcPorts(testPort(t, redirector.Listener.Addr().String())), nil)
 
-	err := runRPC(newRPCCommand(), "ping", nil)
+	err := app.runRPC(newRPCCommand(), "ping", nil)
 	if err == nil || !strings.Contains(err.Error(), "HTTP 307 Temporary Redirect") {
 		t.Fatalf("runRPC() error = %v, want redirect status error", err)
 	}
@@ -576,9 +575,9 @@ func TestRunRPCRejectsNonSuccessfulHTTPStatus(t *testing.T) {
 				http.Error(w, "request failed", status)
 			}))
 			defer server.Close()
-			setTestConfig(t, server.Listener.Addr().String())
+			app := testRPCApplication(rpcPorts(testPort(t, server.Listener.Addr().String())), nil)
 
-			err := runRPC(newRPCCommand(), "server_info", nil)
+			err := app.runRPC(newRPCCommand(), "server_info", nil)
 			want := "HTTP " + strconv.Itoa(status) + " " + http.StatusText(status)
 			if err == nil || !strings.Contains(err.Error(), want) {
 				t.Fatalf("runRPC() error = %v, want containing %q", err, want)
@@ -794,12 +793,12 @@ func TestRPCStopUsesAdminCredentialsWithRPCServer(t *testing.T) {
 			port.Admin = []string{"127.0.0.1"}
 			port.AdminUser = test.adminUser
 			port.AdminPassword = test.adminPassword
-			setTestRPCPorts(t, rpcPorts(port))
+			app := testRPCApplication(rpcPorts(port), nil)
 
 			var output strings.Builder
 			command := newRPCCommand()
 			command.SetOut(&output)
-			if err := runRPC(command, "stop", nil); err != nil {
+			if err := app.runRPC(command, "stop", nil); err != nil {
 				t.Fatalf("runRPC(stop): %v", err)
 			}
 			select {
@@ -815,13 +814,11 @@ func TestRPCStopUsesAdminCredentialsWithRPCServer(t *testing.T) {
 }
 
 func TestRunRPCNoConfig(t *testing.T) {
-	previousConfig, previousError := globalConfig, globalConfigErr
-	globalConfig, globalConfigErr = nil, nil
-	t.Cleanup(func() {
-		globalConfig, globalConfigErr = previousConfig, previousError
-	})
-
-	if err := runRPC(newRPCCommand(), "ping", nil); err == nil {
+	app := &application{deps: commandDependencies{
+		loadConfig: config.LoadConfig,
+		httpClient: newRPCHTTPClient(),
+	}}
+	if err := app.runRPC(newRPCCommand(), "ping", nil); err == nil {
 		t.Fatal("runRPC() succeeded without a loaded config")
 	}
 }
@@ -839,9 +836,10 @@ func executeCapturedRPCCommand(
 		_, _ = io.WriteString(w, successfulRPCResponse)
 	}))
 	t.Cleanup(server.Close)
-	setTestConfig(t, server.Listener.Addr().String())
+	app := testRPCApplication(rpcPorts(testPort(t, server.Listener.Addr().String())), nil)
 
-	_, stderr, err := executeRPCCommand(t, specByMethod(t, method).command(), args, input)
+	command := specByMethod(t, method).commandWithRunner(nil, app.runRPC)
+	_, stderr, err := executeRPCCommand(t, command, args, input)
 	return body, stderr, err
 }
 
@@ -893,11 +891,6 @@ func rpcPorts(port config.PortConfig) map[string]config.PortConfig {
 	return map[string]config.PortConfig{"rpc": port}
 }
 
-func setTestConfig(t *testing.T, address string) {
-	t.Helper()
-	setTestRPCPorts(t, rpcPorts(testPort(t, address)))
-}
-
 func testPort(t *testing.T, address string) config.PortConfig {
 	t.Helper()
 	host, portString, err := net.SplitHostPort(address)
@@ -916,23 +909,19 @@ func testPort(t *testing.T, address string) config.PortConfig {
 	}
 }
 
-func setTestRPCPorts(t *testing.T, ports map[string]config.PortConfig) {
-	t.Helper()
-	previousConfig, previousError := globalConfig, globalConfigErr
-	globalConfig = &config.Config{Ports: ports}
-	globalConfigErr = nil
-	t.Cleanup(func() {
-		globalConfig, globalConfigErr = previousConfig, previousError
-	})
-}
-
-func setTestRPCClient(t *testing.T, client *http.Client) {
-	t.Helper()
-	previous := rpcHTTPClient
-	rpcHTTPClient = client
-	t.Cleanup(func() {
-		rpcHTTPClient = previous
-	})
+func testRPCApplication(ports map[string]config.PortConfig, client *http.Client) *application {
+	if client == nil {
+		client = newRPCHTTPClient()
+	}
+	return &application{
+		options: rootOptions{configFile: "test.toml"},
+		deps: commandDependencies{
+			loadConfig: func(config.Paths) (*config.Config, error) {
+				return &config.Config{Ports: ports}, nil
+			},
+			httpClient: client,
+		},
+	}
 }
 
 func newRPCCommand() *cobra.Command {
