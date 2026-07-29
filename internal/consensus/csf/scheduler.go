@@ -1,24 +1,15 @@
 // Package csf provides a Consensus Simulation Framework: a deterministic
 // discrete-event scheduler, a simulated peer-to-peer network, a trust graph
-// and a ledger oracle for exercising consensus without real time or sockets.
-// It follows the structure of rippled's csf test harness.
-//
-// EnginePeer (engine_adaptor.go) is the real integration: it implements
-// consensus.Adaptor over these primitives and drives the PRODUCTION engine
-// (internal/consensus/rcl) in ManualTick mode with the engine's clock pinned
-// to the scheduler's virtual time, so the suite validates the real state
-// machine deterministically (see engine_sim_test.go).
-//
-// The older Peer (peer.go) carries a SIMPLIFIED inline state machine rather
-// than the real engine; it remains as a lightweight gossip/topology sandbox
-// for network scenarios (slow peers, partitions, healing) that the
-// engine-driven path does not yet cover, and is being migrated to EnginePeer.
+// and a ledger oracle for exercising the production consensus engine without
+// real time or sockets.
 package csf
 
 import (
 	"container/heap"
 	"sync"
 	"time"
+
+	"github.com/LeJamon/go-xrpl/protocol"
 )
 
 // SimTime represents simulated time as a duration from epoch.
@@ -73,10 +64,12 @@ func (h *eventHeap) Pop() any {
 // Scheduler implements a discrete event scheduler with simulated time.
 // Events are processed in time order without any real delays.
 type Scheduler struct {
-	mu      sync.Mutex
-	now     SimTime
-	events  eventHeap
-	nextSeq uint64
+	// driverMu serializes stepping APIs and remains held while handlers run.
+	driverMu sync.Mutex
+	mu       sync.Mutex
+	now      SimTime
+	events   eventHeap
+	nextSeq  uint64
 }
 
 // NewScheduler creates a new discrete event scheduler starting at time 0.
@@ -95,19 +88,30 @@ func (s *Scheduler) Now() SimTime {
 	return s.now
 }
 
-// NowTime returns the current simulated time as time.Time (from Unix epoch).
+// NowTime returns the simulated network time used by rippled's CSF peers.
 func (s *Scheduler) NowTime() time.Time {
-	return time.Unix(0, int64(s.Now()))
+	return time.Unix(
+		protocol.RippleEpochUnix,
+		int64(24*time.Hour)+int64(s.Now()),
+	).UTC()
 }
 
 // In schedules a handler to execute after the given duration.
 // Returns a cancel function that can be used to cancel the event.
 func (s *Scheduler) In(d SimDuration, handler func()) func() {
+	if d < 0 {
+		panic("csf: cannot schedule an event with a negative delay")
+	}
+
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
+	when := s.now + SimTime(d)
+	if when < s.now {
+		panic("csf: scheduled event time overflow")
+	}
 	e := &event{
-		when:    s.now + SimTime(d),
+		when:    when,
 		seq:     s.nextSeq,
 		handler: handler,
 	}
@@ -129,6 +133,9 @@ func (s *Scheduler) At(when SimTime, handler func()) func() {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
+	if when < s.now {
+		panic("csf: cannot schedule an event in the past")
+	}
 	e := &event{
 		when:    when,
 		seq:     s.nextSeq,
@@ -149,6 +156,12 @@ func (s *Scheduler) At(when SimTime, handler func()) func() {
 // StepOne processes a single event if available.
 // Returns true if an event was processed, false if queue is empty.
 func (s *Scheduler) StepOne() bool {
+	s.driverMu.Lock()
+	defer s.driverMu.Unlock()
+	return s.stepOne()
+}
+
+func (s *Scheduler) stepOne() bool {
 	s.mu.Lock()
 	if s.events.Len() == 0 {
 		s.mu.Unlock()
@@ -156,6 +169,10 @@ func (s *Scheduler) StepOne() bool {
 	}
 
 	e := heap.Pop(&s.events).(*event)
+	if e.when < s.now {
+		s.mu.Unlock()
+		panic("csf: scheduled event would regress simulation time")
+	}
 	s.now = e.when
 	handler := e.handler
 	s.mu.Unlock()
@@ -164,25 +181,14 @@ func (s *Scheduler) StepOne() bool {
 	return true
 }
 
-// Step processes all events up to and including the current time.
+// Step processes all scheduled events, advancing time to each event in turn.
 // Returns the number of events processed.
 func (s *Scheduler) Step() int {
-	count := 0
-	for {
-		s.mu.Lock()
-		if s.events.Len() == 0 {
-			s.mu.Unlock()
-			break
-		}
-		if s.events[0].when > s.now {
-			s.mu.Unlock()
-			break
-		}
-		e := heap.Pop(&s.events).(*event)
-		handler := e.handler
-		s.mu.Unlock()
+	s.driverMu.Lock()
+	defer s.driverMu.Unlock()
 
-		handler()
+	count := 0
+	for s.stepOne() {
 		count++
 	}
 	return count
@@ -191,16 +197,40 @@ func (s *Scheduler) Step() int {
 // StepFor processes events for the given duration of simulated time.
 // Returns the number of events processed.
 func (s *Scheduler) StepFor(d SimDuration) int {
+	if d < 0 {
+		panic("csf: cannot step for a negative duration")
+	}
+
+	s.driverMu.Lock()
+	defer s.driverMu.Unlock()
+
 	s.mu.Lock()
 	endTime := s.now + SimTime(d)
+	if endTime < s.now {
+		s.mu.Unlock()
+		panic("csf: step duration overflows simulation time")
+	}
 	s.mu.Unlock()
 
-	return s.StepUntil(endTime)
+	return s.stepUntil(endTime)
 }
 
 // StepUntil processes events until the given simulated time.
 // Returns the number of events processed.
 func (s *Scheduler) StepUntil(until SimTime) int {
+	s.driverMu.Lock()
+	defer s.driverMu.Unlock()
+	return s.stepUntil(until)
+}
+
+func (s *Scheduler) stepUntil(until SimTime) int {
+	s.mu.Lock()
+	if until < s.now {
+		s.mu.Unlock()
+		panic("csf: cannot step backwards")
+	}
+	s.mu.Unlock()
+
 	count := 0
 	for {
 		s.mu.Lock()
@@ -229,9 +259,12 @@ func (s *Scheduler) StepUntil(until SimTime) int {
 // StepWhile processes events while the predicate returns true.
 // Returns the number of events processed.
 func (s *Scheduler) StepWhile(pred func() bool) int {
+	s.driverMu.Lock()
+	defer s.driverMu.Unlock()
+
 	count := 0
 	for pred() {
-		if !s.StepOne() {
+		if !s.stepOne() {
 			break
 		}
 		count++

@@ -10,6 +10,7 @@ type Link struct {
 	Inbound     bool
 	Delay       SimDuration
 	Established SimTime
+	pending     map[uint64]func()
 }
 
 // BasicNetwork simulates a peer-to-peer network with configurable delays.
@@ -18,6 +19,7 @@ type BasicNetwork struct {
 	mu        sync.RWMutex
 	scheduler *Scheduler
 	links     map[PeerID]map[PeerID]*Link
+	nextSend  uint64
 }
 
 // NewBasicNetwork creates a new simulated network.
@@ -53,6 +55,7 @@ func (n *BasicNetwork) Connect(from, to PeerID, delay SimDuration) bool {
 		Inbound:     false,
 		Delay:       delay,
 		Established: now,
+		pending:     make(map[uint64]func()),
 	}
 
 	// Create inbound link to -> from
@@ -63,6 +66,7 @@ func (n *BasicNetwork) Connect(from, to PeerID, delay SimDuration) bool {
 		Inbound:     true,
 		Delay:       delay,
 		Established: now,
+		pending:     make(map[uint64]func()),
 	}
 
 	return true
@@ -77,12 +81,35 @@ func (n *BasicNetwork) Disconnect(from, to PeerID) bool {
 		return false
 	}
 
+	n.cancelLinkLocked(n.links[from][to])
 	delete(n.links[from], to)
 	if n.links[to] != nil {
+		n.cancelLinkLocked(n.links[to][from])
 		delete(n.links[to], from)
 	}
 
 	return true
+}
+
+func (n *BasicNetwork) DisconnectAll() {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	for _, links := range n.links {
+		for _, link := range links {
+			n.cancelLinkLocked(link)
+		}
+	}
+	n.links = make(map[PeerID]map[PeerID]*Link)
+}
+
+func (n *BasicNetwork) cancelLinkLocked(link *Link) {
+	if link == nil {
+		return
+	}
+	for id, cancel := range link.pending {
+		cancel()
+		delete(link.pending, id)
+	}
 }
 
 // IsConnected checks if two peers are connected.
@@ -141,18 +168,29 @@ func (n *BasicNetwork) Peers(id PeerID) []PeerID {
 // The handler is called when the message "arrives" at the destination.
 // Returns false if the peers are not connected.
 func (n *BasicNetwork) Send(from, to PeerID, handler func()) bool {
-	delay, ok := n.Delay(from, to)
-	if !ok {
+	n.mu.Lock()
+	link := n.links[from][to]
+	if link == nil {
+		n.mu.Unlock()
 		return false
 	}
-
-	// Schedule delivery after delay
-	n.scheduler.In(delay, func() {
-		// Check still connected at delivery time
-		if n.IsConnected(from, to) {
+	delay := link.Delay
+	sendID := n.nextSend
+	n.nextSend++
+	cancel := n.scheduler.In(delay, func() {
+		n.mu.Lock()
+		current := n.links[from][to]
+		sameLink := current == link
+		if sameLink {
+			delete(link.pending, sendID)
+		}
+		n.mu.Unlock()
+		if sameLink {
 			handler()
 		}
 	})
+	link.pending[sendID] = cancel
+	n.mu.Unlock()
 
 	return true
 }
