@@ -1,5 +1,3 @@
-// Package sponsor_test exercises the XLS-68 lifecycle against the full
-// transaction engine and metadata pipeline.
 package sponsor_test
 
 import (

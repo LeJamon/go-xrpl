@@ -342,7 +342,6 @@ func checkDelegate(transaction txcore.Transaction, common *txcore.Common, rules 
 	if common.Delegate == common.Account {
 		return ter.TemBAD_SIGNER
 	}
-	// SponsorshipTransfer is explicitly not delegatable in transactions.macro.
 	if transaction.TxType() == txcore.TypeSponsorshipTransfer {
 		return ter.TemINVALID
 	}
