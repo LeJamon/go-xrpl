@@ -17,7 +17,6 @@ func (c EngineConfig) AccountReserve(ownerCount uint32) uint64 {
 // accountCount base reserves and ownerCount incremental reserves. Sponsor uses
 // this form because a sponsored account funds no base reserve of its own while
 // a sponsor may fund several accounts.
-// Reference: rippled Fees::accountReserve(ownerCount, accountCount).
 func (c EngineConfig) AccountReserveWithCounts(ownerCount, accountCount uint32) uint64 {
 	return (uint64(accountCount) * c.ReserveBase) + (uint64(ownerCount) * c.ReserveIncrement)
 }
