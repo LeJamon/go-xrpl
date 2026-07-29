@@ -77,6 +77,9 @@ type Config struct {
 	SHAMapFamily shamap.Family
 	// FastLoad restores the newest complete persisted ledger at startup.
 	FastLoad bool
+	// FastLoadWorkers controls persisted SHAMap verification concurrency.
+	// Zero selects an automatic value.
+	FastLoadWorkers int
 	// RelationalDB is the repository manager for transaction indexing (optional)
 	RelationalDB relationaldb.RepositoryManager
 

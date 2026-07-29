@@ -1,6 +1,9 @@
 package inbound
 
 import (
+	"bytes"
+	"log/slog"
+	"strings"
 	"testing"
 	"time"
 
@@ -74,6 +77,34 @@ func TestLedger_OnTimer_FailsCleanlyAfterBudget(t *testing.T) {
 	}
 	if il.Err() == nil {
 		t.Fatal("a failed acquisition must carry a terminal error")
+	}
+}
+
+func TestLedger_OnTimer_ReportsIntervalStallWithLifetimeTotals(t *testing.T) {
+	t.Parallel()
+	var output bytes.Buffer
+	logger := slog.New(slog.NewJSONHandler(&output, nil))
+	il := New([32]byte{0xAC}, 43, 1, logger)
+	il.state = StateWantState
+	il.stateRecv = 1365
+	il.stateUseful = 1365
+	base := time.Unix(1_700_000_000, 0)
+	il.lastTimer = base
+
+	if got := il.OnTimer(base.Add(acquireTimerInterval)); got != TimerEscalate {
+		t.Fatalf("timer action = %v, want TimerEscalate", got)
+	}
+	logged := output.String()
+	if !strings.Contains(logged, "no progress in current interval") {
+		t.Fatalf("interval-progress diagnostic missing from %q", logged)
+	}
+	for _, lifetimeField := range []string{
+		`"state_received_total":1365`,
+		`"state_useful_total":1365`,
+	} {
+		if !strings.Contains(logged, lifetimeField) {
+			t.Fatalf("lifetime progress %s missing from %q", lifetimeField, logged)
+		}
 	}
 }
 

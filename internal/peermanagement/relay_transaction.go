@@ -30,9 +30,6 @@ func peerTxReduceRelayEnabled(p *Peer) bool {
 // not track (see router.relayTransaction); suppressed is therefore reported as
 // the single origin peer.
 func (o *Overlay) RelayTransaction(except PeerID, frame []byte) {
-	o.peersMu.RLock()
-	defer o.peersMu.RUnlock()
-
 	// getActivePeers (OverlayImpl.cpp:1062-1094): total counts every active
 	// peer; disabled counts peers without the feature; candidates are the
 	// peers not in toSkip; enabledInSkip counts skipped peers that have the
@@ -43,10 +40,8 @@ func (o *Overlay) RelayTransaction(except PeerID, frame []byte) {
 		enabledInSkip uint64
 		candidates    []*Peer
 	)
-	for id, peer := range o.peers {
-		if peer.State() != PeerStateConnected {
-			continue
-		}
+	for _, target := range o.connectedPeers() {
+		id, peer := target.id, target.peer
 		total++
 		enabled := peerTxReduceRelayEnabled(peer)
 		if !enabled {
@@ -61,8 +56,14 @@ func (o *Overlay) RelayTransaction(except PeerID, frame []byte) {
 		candidates = append(candidates, peer)
 	}
 
-	sendFull := func(p *Peer) {
-		o.sendAndLog(p, frame, "relay-transaction", false)
+	result := fanoutResult{operation: "relay-transaction"}
+	defer func() {
+		o.logFanoutFailure(result.err())
+	}()
+	sendFull := func(p *Peer) bool {
+		err := p.Send(frame)
+		result.record(err)
+		return err == nil
 	}
 
 	const suppressed = 1 // go-xrpl's toSkip is the single originating peer
@@ -102,13 +103,23 @@ func (o *Overlay) RelayTransaction(except PeerID, frame []byte) {
 	}
 
 	enabledAndRelayed := enabledInSkip
+	relayTransactionCandidates(candidates, enabledAndRelayed, enabledTarget, sendFull)
+}
+
+func relayTransactionCandidates(
+	candidates []*Peer,
+	enabledAndRelayed uint64,
+	enabledTarget uint64,
+	sendFull func(*Peer) bool,
+) {
 	for _, p := range candidates {
 		switch {
 		case !peerTxReduceRelayEnabled(p):
 			sendFull(p) // always relay to peers without the feature
 		case enabledAndRelayed < enabledTarget:
-			enabledAndRelayed++
-			sendFull(p)
+			if sendFull(p) {
+				enabledAndRelayed++
+			}
 		default:
 			// Remaining enabled peers learn of the tx via the periodic
 			// TMHaveTransactions announce (rippled's addTxQueue analogue).

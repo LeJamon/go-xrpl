@@ -304,7 +304,7 @@ func (r *Router) tryFetchPackEscalation(il *inbound.Ledger) bool {
 	if err != nil {
 		return false
 	}
-	if err := r.adaptor.SendToPeer(peerID, frame); err != nil {
+	if err := r.adaptor.SendPriorityToPeer(peerID, frame); err != nil {
 		r.logger.Debug("fetch-pack request send failed",
 			"seq", il.Seq(), "err", err)
 		return false

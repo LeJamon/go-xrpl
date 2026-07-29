@@ -160,14 +160,8 @@ func TestPeer_SendBufferFull(t *testing.T) {
 	peer.setState(PeerStateConnected)
 	peer.closed.Store(false)
 
-	// Fill the send buffer
-	for range DefaultSendBufferSize {
-		select {
-		case peer.send <- []byte("data"):
-		default:
-			// Buffer full
-			break
-		}
+	for range ordinarySendMaximum {
+		require.NoError(t, peer.Send([]byte("data")))
 	}
 
 	// Next send should fail with buffer full

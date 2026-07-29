@@ -1,6 +1,7 @@
 package adaptor
 
 import (
+	"errors"
 	"fmt"
 
 	"github.com/LeJamon/go-xrpl/internal/ledger/inbound"
@@ -127,6 +128,10 @@ func (r *Router) BroadcastLocalManifest() int {
 	}
 	if err := sender.BroadcastManifestFrames(frames); err != nil {
 		r.logger.Warn("broadcast local manifest failed", "error", err)
+		var fanoutErr *peermanagement.FanoutError
+		if errors.As(err, &fanoutErr) {
+			return fanoutErr.Attempted - fanoutErr.Failed
+		}
 		return 0
 	}
 	return len(peers)

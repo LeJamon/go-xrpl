@@ -58,6 +58,64 @@ type Engine interface {
 	Subscribe(sub EventSubscriber)
 }
 
+// VerifiedValidationProcessor is implemented by engines that separate
+// signature verification from stateful validation processing. The router uses
+// this seam to verify on bounded worker queues, then serializes processing on
+// its own goroutine.
+type VerifiedValidationProcessor interface {
+	ProcessVerifiedValidation(validation *Validation, origin ValidationOrigin) (ValidationDisposition, error)
+}
+
+type ValidationOrigin struct {
+	PeerID  uint64
+	Cluster bool
+}
+
+// ValidationStatus describes how the validation tracker classified a verified
+// validation. Untracked means the signer was neither trusted nor listed.
+type ValidationStatus uint8
+
+const (
+	ValidationUntracked ValidationStatus = iota
+	ValidationCurrent
+	ValidationStale
+	ValidationBadSeq
+	ValidationMultiple
+	ValidationConflicting
+)
+
+func (s ValidationStatus) String() string {
+	switch s {
+	case ValidationUntracked:
+		return "untracked"
+	case ValidationCurrent:
+		return "current"
+	case ValidationStale:
+		return "stale"
+	case ValidationBadSeq:
+		return "badSeq"
+	case ValidationMultiple:
+		return "multiple"
+	case ValidationConflicting:
+		return "conflicting"
+	default:
+		return "unknown"
+	}
+}
+
+type ValidationDisposition struct {
+	Status  ValidationStatus
+	Tracked bool
+	Trusted bool
+	Relay   bool
+}
+
+// AcquireEligible reports whether the validation can drive ledger catch-up.
+// Only trusted validations accepted as current participate.
+func (d ValidationDisposition) AcquireEligible() bool {
+	return d.Tracked && d.Trusted && d.Status == ValidationCurrent
+}
+
 // LedgerSwitchResult describes the outcome of a synchronous ledger switch.
 type LedgerSwitchResult uint8
 
@@ -145,8 +203,7 @@ type NetworkBroadcaster interface {
 
 	// RelayProposal forwards a peer's proposal to others, honoring per-peer
 	// squelch and excluding exceptPeer (0 = all). SuppressionHash must be set:
-	// the overlay records each recipient in its reverse index for duplicate-
-	// arrival lookups.
+	// the overlay uses it to exclude known inbound sources and record relay time.
 	RelayProposal(proposal *Proposal, exceptPeer uint64) error
 
 	// RelayValidation forwards a peer's validation to others; same semantics

@@ -230,18 +230,19 @@ func Run(appConfig *config.Config, configPath string, standalone bool, startup s
 
 	// Initialize ledger service
 	cfg := service.Config{
-		Standalone:   standalone,
-		NodeSize:     appConfig.NodeSize,
-		FetchDepth:   effectivePeerFetchDepth(appConfig.GetFetchDepthUint32(), appConfig.NodeDB.OnlineDelete),
-		NetworkID:    uint32(networkID),
-		NodeStore:    db,
-		SHAMapFamily: nodeFamily,
-		FastLoad:     appConfig.NodeDB.FastLoad,
-		RelationalDB: repoManager,
-		Logger:       rootLogger,
-		Table:        amendmentTable,
-		TxQ:          &txqCfg,
-		Startup:      startup,
+		Standalone:      standalone,
+		NodeSize:        appConfig.NodeSize,
+		FetchDepth:      effectivePeerFetchDepth(appConfig.GetFetchDepthUint32(), appConfig.NodeDB.OnlineDelete),
+		NetworkID:       uint32(networkID),
+		NodeStore:       db,
+		SHAMapFamily:    nodeFamily,
+		FastLoad:        appConfig.NodeDB.FastLoad,
+		FastLoadWorkers: appConfig.NodeDB.FastLoadWorkers,
+		RelationalDB:    repoManager,
+		Logger:          rootLogger,
+		Table:           amendmentTable,
+		TxQ:             &txqCfg,
+		Startup:         startup,
 	}
 	cfg.GenesisConfig = genesisConfig
 	configuredFees := configuredLedgerLoadFees(appConfig)

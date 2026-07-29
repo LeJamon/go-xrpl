@@ -94,10 +94,7 @@ type Peer struct {
 	bootstrapManifest        atomic.Bool
 	bootstrapManifestPending atomic.Bool
 
-	sendMu                 sync.Mutex
-	send                   chan []byte
-	prioritySend           chan []byte
-	manifestSend           chan [][]byte
+	outbound               *outboundQueue
 	events                 chan<- Event
 	consensusEvents        chan<- Event
 	consensusControlEvents chan<- Event
@@ -169,9 +166,10 @@ type Peer struct {
 	// sendDrops counts frames dropped because the bounded send queue was
 	// full. go-xrpl drops the frame and returns ErrSendBufferFull rather
 	// than queueing unboundedly like rippled; this per-peer counter is
-	// surfaced via the `peers` RPC metrics so operators can see which
-	// peers are shedding outbound frames.
-	sendDrops atomic.Uint64
+	// surfaced via the `peers` RPC outbound_queue diagnostics so operators
+	// can see which peers are shedding outbound frames.
+	sendDrops        atomic.Uint64
+	sendDropsByClass [outboundClassCount]atomic.Uint64
 
 	// consecutiveDecompressFailures: back-to-back LZ4 errors; closed
 	// at maxConsecutiveDecompressFailures.
@@ -249,7 +247,7 @@ type PeerConfig struct {
 }
 
 // DefaultPeerConfig returns defaults; callers must set PeerTLSConfig
-// before Connect. The per-peer send queue is a fixed DefaultSendBufferSize.
+// before Connect.
 func DefaultPeerConfig() PeerConfig {
 	return PeerConfig{}
 }
@@ -261,9 +259,7 @@ func NewPeer(id PeerID, endpoint Endpoint, inbound bool, identity *Identity, eve
 		inbound:       inbound,
 		identity:      identity,
 		state:         PeerStateDisconnected,
-		send:          make(chan []byte, DefaultSendBufferSize),
-		prioritySend:  make(chan []byte, acquisitionSendBufferSize),
-		manifestSend:  make(chan [][]byte, manifestSendBufferSize),
+		outbound:      newOutboundQueue(),
 		events:        events,
 		traffic:       NewTrafficCounter(),
 		metrics:       newPeerMetrics(nil),
@@ -977,6 +973,8 @@ func (p *Peer) Run(ctx context.Context) error {
 	select {
 	case <-ctx.Done():
 		runErr = ctx.Err()
+	case err := <-p.outbound.fatalSignal():
+		runErr = err
 	case err := <-errCh:
 		runErr = err
 	}
@@ -1362,20 +1360,18 @@ func (p *Peer) acknowledgeBootstrap() {
 }
 
 func (p *Peer) writeLoop(ctx context.Context) error {
-	schedule := outboundSchedule{}
 	for {
-		data, err := p.nextOutbound(ctx, &schedule)
+		token, err := p.outbound.next(ctx)
 		if err != nil {
 			return err
 		}
-		if data == nil {
-			return nil
-		}
+		data := token.data
 		p.mu.RLock()
 		conn := p.conn
 		p.mu.RUnlock()
 
 		if conn == nil {
+			p.outbound.complete(token)
 			return ErrConnectionClosed
 		}
 
@@ -1383,6 +1379,7 @@ func (p *Peer) writeLoop(ctx context.Context) error {
 		compressionEnabled := p.compressionNegotiated()
 		if header, err := message.DecodeHeader(data); err == nil && header.Compressed {
 			if !compressionEnabled {
+				p.outbound.complete(token)
 				return errCompressionUnnegotiated
 			}
 		} else if compressionEnabled {
@@ -1390,9 +1387,11 @@ func (p *Peer) writeLoop(ctx context.Context) error {
 		}
 
 		if err := conn.SetWriteDeadline(time.Now().Add(p.frameReadBudget(uint32(len(wire))))); err != nil {
+			p.outbound.complete(token)
 			return err
 		}
-		n, err := conn.Write(wire)
+		n, err := writeComplete(conn, wire)
+		p.outbound.complete(token)
 		if err != nil {
 			if netErr, ok := err.(net.Error); ok && netErr.Timeout() {
 				return ErrWriteIdle
@@ -1406,56 +1405,21 @@ func (p *Peer) writeLoop(ctx context.Context) error {
 	}
 }
 
-const ordinaryFramesPerManifestChunk = 16
-
-type outboundSchedule struct {
-	manifests         [][]byte
-	ordinaryRemaining int
-}
-
-func (p *Peer) nextOutbound(ctx context.Context, schedule *outboundSchedule) ([]byte, error) {
-	select {
-	case data := <-p.prioritySend:
-		return data, nil
-	default:
-	}
-	if schedule.ordinaryRemaining > 0 {
-		select {
-		case data := <-p.send:
-			schedule.ordinaryRemaining--
-			return data, nil
-		default:
+func writeComplete(conn net.Conn, data []byte) (int, error) {
+	written := 0
+	for written < len(data) {
+		n, err := conn.Write(data[written:])
+		if n > 0 {
+			written += n
+		}
+		if err != nil {
+			return written, err
+		}
+		if n == 0 {
+			return written, io.ErrNoProgress
 		}
 	}
-	if len(schedule.manifests) > 0 {
-		data := schedule.manifests[0]
-		schedule.manifests = schedule.manifests[1:]
-		schedule.ordinaryRemaining = ordinaryFramesPerManifestChunk
-		return data, nil
-	}
-	select {
-	case batch := <-p.manifestSend:
-		data := batch[0]
-		schedule.manifests = batch[1:]
-		schedule.ordinaryRemaining = ordinaryFramesPerManifestChunk
-		return data, nil
-	default:
-	}
-	select {
-	case <-ctx.Done():
-		return nil, ctx.Err()
-	case <-p.closeCh:
-		return nil, nil
-	case data := <-p.prioritySend:
-		return data, nil
-	case batch := <-p.manifestSend:
-		data := batch[0]
-		schedule.manifests = batch[1:]
-		schedule.ordinaryRemaining = ordinaryFramesPerManifestChunk
-		return data, nil
-	case data := <-p.send:
-		return data, nil
-	}
+	return written, nil
 }
 
 func (p *Peer) pingLoop(ctx context.Context) error {
@@ -1563,14 +1527,8 @@ const (
 	pingsInFlightCap = 16
 	// Tuning::sendqIntervals (PeerImp.cpp:705 + Tuning.h).
 	sendqIntervals = 4
-	// targetSendQueue is the depth the send queue must drain back below
-	// before the large-send-queue strike count is cleared. Mirrors
-	// rippled's reset against Tuning::targetSendQueue (PeerImp.cpp:270-276)
-	// but scaled to go-xrpl's shallower DefaultSendBufferSize=64 queue. A
-	// queue oscillating at-or-above this depth keeps accumulating strikes
-	// toward the sendqIntervals disconnect instead of resetting on each
-	// transient success.
-	targetSendQueue = DefaultSendBufferSize / 2
+	// targetSendQueue is rippled's retained-frame pressure threshold.
+	targetSendQueue = 128
 	// maxConsecutiveDecompressFailures: close after this many
 	// back-to-back LZ4 errors. A single bad frame still charges
 	// bad-data but resets on the next successful decompress.
@@ -1964,17 +1922,9 @@ func (p *Peer) ExpireSquelch(validator []byte) bool {
 	return true
 }
 
-// Send enqueues a wire frame for transmission. Drop policy (a deliberate
-// divergence from rippled): the per-peer send queue is bounded
-// (DefaultSendBufferSize) and a full queue DROPS the frame and returns
-// ErrSendBufferFull rather than queueing unboundedly. rippled queues
-// without bound and disconnects only after sendqIntervals timer ticks
-// above targetSendQueue; go-xrpl's goroutine-per-peer writer makes a
-// bounded queue reasonable, and the largeSendQ strike count below
-// approximates rippled's disconnect. Callers must treat the returned error
-// as "frame not delivered" — request/response paths that discard it (e.g.
-// a TMLedgerData reply) leave the requester to time out and retry. Dropped
-// frames are counted per peer (sendDrops) and surfaced via the `peers` RPC.
+// Send admits a frame to the reliable FIFO. Control and consensus traffic
+// have protected capacity; exhausting either class signals the peer lifecycle
+// to close a connection that cannot keep up with protocol-critical traffic.
 func (p *Peer) Send(data []byte) error {
 	if p.closed.Load() {
 		return ErrConnectionClosed
@@ -1982,19 +1932,33 @@ func (p *Peer) Send(data []byte) error {
 	if p.SendQueueLen() < targetSendQueue {
 		p.largeSendQ.Store(0)
 	}
-
-	p.sendMu.Lock()
-	defer p.sendMu.Unlock()
-	if len(p.send) >= DefaultSendBufferSize {
-		p.sendDrops.Add(1)
-		return ErrSendBufferFull
+	class := outboundClassForFrame(data)
+	if err := p.outbound.enqueueReliable(class, data); err != nil {
+		p.recordSendDrop(class, err)
+		return err
 	}
-	p.send <- data
 	return nil
 }
 
-// SendPriority admits acquisition and control traffic independently from
-// best-effort gossip. The writer drains this lane first between wire frames.
+func outboundClassForFrame(data []byte) OutboundSendClass {
+	header, err := message.DecodeHeader(data)
+	if err != nil {
+		return OutboundClassOrdinary
+	}
+	switch {
+	case isConsensusPriorityMessageType(header.MessageType):
+		return OutboundClassConsensus
+	case header.MessageType == message.TypePing,
+		header.MessageType == message.TypeSquelch,
+		isConsensusControlMessageType(header.MessageType):
+		return OutboundClassControl
+	default:
+		return OutboundClassOrdinary
+	}
+}
+
+// SendPriority admits acquisition traffic to the same reliable FIFO while
+// protecting its share of the bounded queue.
 func (p *Peer) SendPriority(data []byte) error {
 	if p.closed.Load() {
 		return ErrConnectionClosed
@@ -2002,39 +1966,41 @@ func (p *Peer) SendPriority(data []byte) error {
 	if p.SendQueueLen() < targetSendQueue {
 		p.largeSendQ.Store(0)
 	}
-	p.sendMu.Lock()
-	defer p.sendMu.Unlock()
-	if len(p.prioritySend) >= cap(p.prioritySend) {
-		p.sendDrops.Add(1)
-		return ErrSendBufferFull
+	if err := p.outbound.enqueueReliable(OutboundClassAcquisition, data); err != nil {
+		p.recordSendDrop(OutboundClassAcquisition, err)
+		return err
 	}
-	p.prioritySend <- data
 	return nil
 }
 
-// SendManifestFrames schedules a complete manifest snapshot as one bounded
-// writer item. The writer pulls one frame at a time and checks the priority
-// lane between frames, so large snapshots neither fill the ordinary send
-// queue nor block acquisition traffic behind the whole snapshot.
+// SendManifestFrames schedules a complete manifest snapshot in the bounded
+// bulk lane. The writer emits at most one bulk frame per 16 reliable frames.
 func (p *Peer) SendManifestFrames(frames [][]byte) error {
 	if p.closed.Load() {
 		return ErrConnectionClosed
 	}
-	batch := make([][]byte, 0, len(frames))
-	for _, frame := range frames {
-		if len(frame) != 0 {
-			batch = append(batch, frame)
+	if err := p.outbound.enqueueBulk(frames); err != nil {
+		p.recordSendDrop(OutboundClassBulk, err)
+		return err
+	}
+	return nil
+}
+
+func (p *Peer) recordSendDrop(class OutboundSendClass, err error) {
+	frames := uint64(1)
+	var queueErr *SendQueueError
+	if errors.As(err, &queueErr) {
+		if queueErr.Reason == SendQueueClosed {
+			return
+		}
+		class = queueErr.Class
+		if queueErr.AttemptedFrames > 0 {
+			frames = uint64(queueErr.AttemptedFrames)
 		}
 	}
-	if len(batch) == 0 {
-		return nil
-	}
-	select {
-	case p.manifestSend <- batch:
-		return nil
-	default:
-		p.sendDrops.Add(1)
-		return ErrSendBufferFull
+	p.sendDrops.Add(frames)
+	if class < outboundClassCount {
+		p.sendDropsByClass[class].Add(frames)
 	}
 }
 
@@ -2044,13 +2010,23 @@ func (p *Peer) SendDrops() uint64 {
 	return p.sendDrops.Load()
 }
 
+func (p *Peer) SendDropsByClass(class OutboundSendClass) uint64 {
+	if class >= outboundClassCount {
+		return 0
+	}
+	return p.sendDropsByClass[class].Load()
+}
+
 // SendQueueLen returns the number of frames currently buffered for
 // transmission to this peer. Used by handlers that should refuse new
 // outbound work when the pipe is already saturated — mirrors the
 // rippled gate at PeerImp.cpp:2452 (`send_queue_.size() >=
 // Tuning::dropSendQueue`).
 func (p *Peer) SendQueueLen() int {
-	return len(p.send) + len(p.prioritySend)
+	if p.outbound == nil {
+		return 0
+	}
+	return p.outbound.snapshot().TotalFrames
 }
 
 func (p *Peer) Close() error {
@@ -2061,6 +2037,9 @@ func (p *Peer) Close() error {
 	p.mu.Lock()
 	p.state = PeerStateClosing
 	close(p.closeCh)
+	if p.outbound != nil {
+		p.outbound.close()
+	}
 	conn := p.conn
 	p.conn = nil
 	p.mu.Unlock()
@@ -2126,8 +2105,13 @@ type PeerInfo struct {
 
 	// SendDrops is the count of outbound frames dropped because the peer's
 	// bounded send queue was full. go-xrpl-specific (rippled queues
-	// unboundedly); surfaced under the `metrics` object in `peers` RPC.
-	SendDrops uint64
+	// unboundedly); surfaced under the `outbound_queue` object in `peers` RPC.
+	SendDrops            uint64
+	SendDropsControl     uint64
+	SendDropsConsensus   uint64
+	SendDropsAcquisition uint64
+	SendDropsOrdinary    uint64
+	SendDropsBulk        uint64
 }
 
 func (p *Peer) Info() PeerInfo {
@@ -2158,30 +2142,35 @@ func (p *Peer) Info() PeerInfo {
 	latency, hasLatency := p.Latency()
 
 	return PeerInfo{
-		ID:              p.id,
-		Endpoint:        p.endpoint,
-		Inbound:         p.inbound,
-		State:           p.state,
-		PublicKey:       pubKey,
-		PublicKeyBytes:  pubKeyBytes,
-		ConnectedAt:     p.createdAt,
-		MessagesIn:      stats.MessagesIn,
-		MessagesOut:     stats.MessagesOut,
-		ServerDomain:    p.serverDomain,
-		NetworkID:       p.networkID,
-		Version:         p.userAgent,
-		ClosedLedger:    closedLedger,
-		CompleteLedgers: completeLedgers,
-		Tracking:        PeerTracking(p.tracking.Load()),
-		Load:            p.Load(),
-		Latency:         latency,
-		HasLatency:      hasLatency,
-		Protocol:        p.protocolVersion,
-		Status:          p.lastStatus,
-		TotalBytesRecv:  p.metrics.recv.totalBytesSnapshot(),
-		TotalBytesSent:  p.metrics.sent.totalBytesSnapshot(),
-		AvgBpsRecv:      p.metrics.recv.averageBytes(),
-		AvgBpsSent:      p.metrics.sent.averageBytes(),
-		SendDrops:       p.sendDrops.Load(),
+		ID:                   p.id,
+		Endpoint:             p.endpoint,
+		Inbound:              p.inbound,
+		State:                p.state,
+		PublicKey:            pubKey,
+		PublicKeyBytes:       pubKeyBytes,
+		ConnectedAt:          p.createdAt,
+		MessagesIn:           stats.MessagesIn,
+		MessagesOut:          stats.MessagesOut,
+		ServerDomain:         p.serverDomain,
+		NetworkID:            p.networkID,
+		Version:              p.userAgent,
+		ClosedLedger:         closedLedger,
+		CompleteLedgers:      completeLedgers,
+		Tracking:             PeerTracking(p.tracking.Load()),
+		Load:                 p.Load(),
+		Latency:              latency,
+		HasLatency:           hasLatency,
+		Protocol:             p.protocolVersion,
+		Status:               p.lastStatus,
+		TotalBytesRecv:       p.metrics.recv.totalBytesSnapshot(),
+		TotalBytesSent:       p.metrics.sent.totalBytesSnapshot(),
+		AvgBpsRecv:           p.metrics.recv.averageBytes(),
+		AvgBpsSent:           p.metrics.sent.averageBytes(),
+		SendDrops:            p.sendDrops.Load(),
+		SendDropsControl:     p.SendDropsByClass(OutboundClassControl),
+		SendDropsConsensus:   p.SendDropsByClass(OutboundClassConsensus),
+		SendDropsAcquisition: p.SendDropsByClass(OutboundClassAcquisition),
+		SendDropsOrdinary:    p.SendDropsByClass(OutboundClassOrdinary),
+		SendDropsBulk:        p.SendDropsByClass(OutboundClassBulk),
 	}
 }

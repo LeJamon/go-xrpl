@@ -29,6 +29,10 @@ import (
 // own server_info; sequence numbers and proposer/converge counts stay numeric.
 type PrintMethod struct{ AdminHandler }
 
+type outboundCriticalQueueFailureSource interface {
+	OutboundCriticalQueueFailures() (local, shared uint64)
+}
+
 func (m *PrintMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (any, *types.RpcError) {
 	if ctx.Services == nil || ctx.Services.Ledger == nil {
 		return nil, rpcInternalInvariantError("print: ledger service unavailable")
@@ -57,6 +61,13 @@ func (m *PrintMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (any
 		}
 		if cluster := ctx.PeerSource.ClusterJSON(); cluster != nil {
 			overlay["cluster"] = cluster
+		}
+		if failures, ok := ctx.PeerSource.(outboundCriticalQueueFailureSource); ok {
+			local, shared := failures.OutboundCriticalQueueFailures()
+			overlay["outbound_queue"] = map[string]any{
+				"critical_failures_local":  fmt.Sprintf("%d", local),
+				"critical_failures_shared": fmt.Sprintf("%d", shared),
+			}
 		}
 		out["overlay"] = overlay
 	}

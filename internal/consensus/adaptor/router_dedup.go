@@ -101,7 +101,7 @@ func appendVLPrefix(buf []byte, n int) []byte {
 type messageSuppression struct {
 	mu sync.Mutex
 	// seen maps a suppression hash to the most recent observation time.
-	// TTL-evicted on observe when at maxSize.
+	// TTL-evicted on observe once the sweep threshold is reached.
 	seen map[[32]byte]time.Time
 	// peers maps a suppression hash to the set of peer IDs known to
 	// already have the message. Populated both on inbound observe (the
@@ -109,22 +109,22 @@ type messageSuppression struct {
 	// broadcast (the recipient now has it because we sent it to them).
 	// Used by validator-list broadcast to skip peers known to already have
 	// the same content.
-	peers   map[[32]byte]map[uint64]struct{}
-	ttl     time.Duration
-	maxSize int
-	now     func() time.Time
+	peers          map[[32]byte]map[uint64]struct{}
+	ttl            time.Duration
+	sweepThreshold int
+	nextSweep      time.Time
+	now            func() time.Time
 }
 
 // newMessageSuppression returns a dedup tracker. ttl bounds how long a
-// hash is remembered; maxSize caps memory for adversarial traffic
-// (when the set is full we trim half the oldest entries).
-func newMessageSuppression(ttl time.Duration, maxSize int) *messageSuppression {
+// hash is remembered; sweepThreshold controls when stale-entry scans begin.
+func newMessageSuppression(ttl time.Duration, sweepThreshold int) *messageSuppression {
 	return &messageSuppression{
-		seen:    make(map[[32]byte]time.Time),
-		peers:   make(map[[32]byte]map[uint64]struct{}),
-		ttl:     ttl,
-		maxSize: maxSize,
-		now:     time.Now,
+		seen:           make(map[[32]byte]time.Time),
+		peers:          make(map[[32]byte]map[uint64]struct{}),
+		ttl:            ttl,
+		sweepThreshold: sweepThreshold,
+		now:            time.Now,
 	}
 }
 
@@ -143,9 +143,8 @@ func (s *messageSuppression) observe(hash [32]byte) (firstSeen bool, lastSeenAt 
 
 	now := s.now()
 
-	// Evict stale entries if we're at capacity. A cheap scan rather
-	// than a formal LRU — the tracker is a cache, not a hot path.
-	if len(s.seen) >= s.maxSize {
+	if len(s.seen) >= s.sweepThreshold &&
+		(s.nextSweep.IsZero() || !now.Before(s.nextSweep)) {
 		cutoff := now.Add(-s.ttl)
 		for h, seenAt := range s.seen {
 			if seenAt.Before(cutoff) {
@@ -153,17 +152,11 @@ func (s *messageSuppression) observe(hash [32]byte) (firstSeen bool, lastSeenAt 
 				delete(s.peers, h)
 			}
 		}
-		if len(s.seen) >= s.maxSize {
-			i := 0
-			for h := range s.seen {
-				if i >= s.maxSize/2 {
-					break
-				}
-				delete(s.seen, h)
-				delete(s.peers, h)
-				i++
-			}
+		sweepInterval := s.ttl / 4
+		if sweepInterval <= 0 {
+			sweepInterval = s.ttl
 		}
+		s.nextSweep = now.Add(sweepInterval)
 	}
 
 	if seenAt, ok := s.seen[hash]; ok && now.Sub(seenAt) < s.ttl {
@@ -172,6 +165,12 @@ func (s *messageSuppression) observe(hash [32]byte) (firstSeen bool, lastSeenAt 
 	}
 	s.seen[hash] = now
 	return true, time.Time{}
+}
+
+func (s *messageSuppression) allowRetry(hash [32]byte) {
+	s.mu.Lock()
+	delete(s.seen, hash)
+	s.mu.Unlock()
 }
 
 func (s *messageSuppression) seenRecently(hash [32]byte) bool {

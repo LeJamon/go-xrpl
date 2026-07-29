@@ -87,8 +87,7 @@ func TestServeFetchPack_RepliesWithPack(t *testing.T) {
 	require.Equal(t, 1, prov.calls, "MakeFetchPack must be invoked once")
 	require.Equal(t, haveHash, prov.gotHave[:], "the have-hash must be forwarded to the provider")
 
-	select {
-	case frame := <-peer.send:
+	if frame, ok := takeOutboundFrame(peer); ok {
 		require.GreaterOrEqual(t, len(frame), message.HeaderSizeUncompressed)
 		msgType := (uint16(frame[4]) << 8) | uint16(frame[5])
 		require.Equal(t, uint16(message.TypeGetObjects), msgType)
@@ -100,7 +99,7 @@ func TestServeFetchPack_RepliesWithPack(t *testing.T) {
 		assert.Equal(t, message.ObjectTypeFetchPack, gob.ObjType)
 		assert.Equal(t, haveHash, gob.LedgerHash)
 		assert.Len(t, gob.Objects, 2)
-	default:
+	} else {
 		t.Fatal("no fetch-pack reply was sent to the peer")
 	}
 }
@@ -127,10 +126,8 @@ func TestServeFetchPack_EmptyPackNoReply(t *testing.T) {
 	})
 
 	require.Equal(t, 1, prov.calls)
-	select {
-	case <-peer.send:
+	if _, ok := takeOutboundFrame(peer); ok {
 		t.Fatal("an empty pack must not produce a reply")
-	default:
 	}
 	assert.NotZero(t, peer.BadDataCount(),
 		"a valid fetch-pack request is charged feeHeavyBurdenPeer up front even when the pack is empty")
@@ -155,10 +152,8 @@ func TestServeFetchPack_TooEarlyAddsMalformedCharge(t *testing.T) {
 
 	require.Equal(t, 1, prov.calls)
 	assert.Greater(t, peer.Load(), controlPeer.Load())
-	select {
-	case <-peer.send:
+	if _, ok := takeOutboundFrame(peer); ok {
 		t.Fatal("a too-early fetch pack must not produce a reply")
-	default:
 	}
 }
 

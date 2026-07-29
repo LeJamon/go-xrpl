@@ -92,6 +92,11 @@ ledger from the network in networked mode. With no startup flag on a networked
 node, `fast_load` first attempts the latest local ledger and otherwise acquires
 one from peers.
 
+Fast-load integrity verification uses `[node_db].fast_load_workers` concurrent
+workers. Leave it at `0` to select an automatic value based on available CPUs,
+or set an explicit value from `1` through `64`. More workers can improve
+verification throughput until storage bandwidth is saturated.
+
 Startup replay is separate from the top-level `ledger_replay` setting.
 `ledger_replay` advertises and controls peer replay capability; it does not select
 a startup mode. `--replay` starts from the selected ledger's stored parent and
@@ -250,6 +255,7 @@ List IPs in `admin` to grant those clients admin role.
 | `cache_size` | `16384` | Decoded node-object cache entries (`0` = the `node_size` profile). This is independent of `cache_mb`. |
 | `cache_age` | `5` | Decoded node-object cache age in minutes (`0` = the `node_size` profile). |
 | `fast_load` | `false` | On networked startup, try the newest local ledger by default; also permit explicit load/replay failures to fall back to genesis or network acquisition. |
+| `fast_load_workers` | `0` | Concurrent workers for fast-load integrity verification. `0` selects an automatic value based on available CPUs; explicit values may range from `1` to `64`. |
 | `earliest_seq` | `32570` | Lowest ledger sequence to retain. |
 | `delete_batch` / `back_off_milliseconds` / `age_threshold_seconds` / `recovery_wait_seconds` | `100`/`100`/`60`/`5` | Online-delete pacing (batch size, inter-batch pause, minimum age, catch-up wait). |
 

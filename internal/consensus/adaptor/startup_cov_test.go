@@ -646,6 +646,7 @@ func TestStup_OverlayOptionsFromConfig_PeerLimits(t *testing.T) {
 		{name: "twenty peers", peersMax: 20, ports: peerPort, wantMax: 20, wantInbound: 10, wantOutbound: 10, wantIPLimit: 2},
 		{name: "rippled default", peersMax: 21, ports: peerPort, wantMax: 21, wantInbound: 11, wantOutbound: 10, wantIPLimit: 2},
 		{name: "large limit", peersMax: 100, ports: peerPort, wantMax: 100, wantInbound: 85, wantOutbound: 15, wantIPLimit: 6},
+		{name: "limit beyond default outbound budget", peersMax: 225, ports: peerPort, wantMax: 225, wantInbound: 191, wantOutbound: 34, wantIPLimit: 7},
 		{name: "private", peersMax: 20, peerPrivate: 1, ports: peerPort, wantMax: 20, wantInbound: 0, wantOutbound: 20, wantIPLimit: 1},
 		{name: "no peer listener", peersMax: 20, wantMax: 20, wantInbound: 0, wantOutbound: 20, wantIPLimit: 1},
 	}
@@ -673,6 +674,8 @@ func TestStup_OverlayOptionsFromConfig_PeerLimits(t *testing.T) {
 			}
 			require.NoError(t, pcfg.Validate())
 			assert.Equal(t, tt.wantIPLimit, pcfg.IPLimit)
+			assert.GreaterOrEqual(t, pcfg.OutboundRetainedBytes,
+				peermanagement.MinimumOutboundRetainedBytes(tt.wantMax))
 		})
 	}
 }

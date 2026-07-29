@@ -516,6 +516,7 @@ func (o *Overlay) addPeer(peer *Peer) error {
 		}
 		o.peerKeys[key] = peer.ID()
 	}
+	o.attachOutboundBudget(peer)
 	o.peerEndpoints[endpoint] = peer.ID()
 	o.peers[peer.ID()] = peer
 	delete(o.pendingInbound, peer.ID())
