@@ -198,6 +198,16 @@ func (c *nodeCache) Clear() {
 	}
 }
 
+func (c *nodeCache) Size() int {
+	size := 0
+	for _, s := range c.shards {
+		s.mu.Lock()
+		size += s.currentSize
+		s.mu.Unlock()
+	}
+	return size
+}
+
 // Sweep removes expired entries across every shard.
 func (c *nodeCache) Sweep() int {
 	removed := 0

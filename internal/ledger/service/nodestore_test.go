@@ -12,7 +12,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func newTestNodeStore(t *testing.T, cacheSize int) *nodestore.KVDatabase {
+func newTestNodeStore(t testing.TB, cacheSize int) *nodestore.KVDatabase {
 	t.Helper()
 	config := nodestore.DatabaseConfig{}
 	if cacheSize > 0 {

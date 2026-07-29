@@ -30,6 +30,7 @@ type nodeCacheAccess interface {
 	putOwned(*Node)
 	Remove(Hash256)
 	Clear()
+	Size() int
 	Sweep() int
 }
 
@@ -86,11 +87,13 @@ type KVDatabase struct {
 	storeGeneration atomic.Uint64
 	cacheGeneration atomic.Uint64
 	stats           struct {
-		reads      uint64
-		fetchHits  uint64
-		writes     uint64
-		readBytes  uint64
-		writeBytes uint64
+		reads       uint64
+		fetchHits   uint64
+		cacheHits   uint64
+		cacheMisses uint64
+		writes      uint64
+		readBytes   uint64
+		writeBytes  uint64
 	}
 }
 
@@ -171,10 +174,12 @@ func (d *KVDatabase) Fetch(ctx context.Context, hash Hash256) (*Node, error) {
 	atomic.AddUint64(&d.stats.reads, 1)
 	if d.cache != nil {
 		if node, found := d.cache.Get(hash); found {
+			atomic.AddUint64(&d.stats.cacheHits, 1)
 			atomic.AddUint64(&d.stats.fetchHits, 1)
 			atomic.AddUint64(&d.stats.readBytes, uint64(len(node.Data)))
 			return node, nil
 		}
+		atomic.AddUint64(&d.stats.cacheMisses, 1)
 	}
 	cacheGeneration := d.cacheGeneration.Load()
 	data, err := d.fetchBackend(hash)
@@ -206,8 +211,10 @@ func (d *KVDatabase) FetchCached(ctx context.Context, hash Hash256) (*Node, erro
 	}
 	node, found := d.cache.Get(hash)
 	if !found {
+		atomic.AddUint64(&d.stats.cacheMisses, 1)
 		return nil, nil
 	}
+	atomic.AddUint64(&d.stats.cacheHits, 1)
 	atomic.AddUint64(&d.stats.fetchHits, 1)
 	atomic.AddUint64(&d.stats.readBytes, uint64(len(node.Data)))
 	return node, nil
@@ -331,13 +338,19 @@ func (d *KVDatabase) Sweep() error {
 
 // Stats returns the database's operational counters.
 func (d *KVDatabase) Stats() Statistics {
-	return Statistics{
-		Reads:      atomic.LoadUint64(&d.stats.reads),
-		FetchHits:  atomic.LoadUint64(&d.stats.fetchHits),
-		ReadBytes:  atomic.LoadUint64(&d.stats.readBytes),
-		Writes:     atomic.LoadUint64(&d.stats.writes),
-		WriteBytes: atomic.LoadUint64(&d.stats.writeBytes),
+	stats := Statistics{
+		Reads:       atomic.LoadUint64(&d.stats.reads),
+		FetchHits:   atomic.LoadUint64(&d.stats.fetchHits),
+		CacheHits:   atomic.LoadUint64(&d.stats.cacheHits),
+		CacheMisses: atomic.LoadUint64(&d.stats.cacheMisses),
+		ReadBytes:   atomic.LoadUint64(&d.stats.readBytes),
+		Writes:      atomic.LoadUint64(&d.stats.writes),
+		WriteBytes:  atomic.LoadUint64(&d.stats.writeBytes),
 	}
+	if d.cache != nil {
+		stats.CacheSize = uint64(d.cache.Size())
+	}
+	return stats
 }
 
 // Sync makes all preceding backend writes durable.

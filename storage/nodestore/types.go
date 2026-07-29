@@ -95,9 +95,12 @@ type GenerationDatabase interface {
 
 // Statistics holds performance metrics for the NodeStore.
 type Statistics struct {
-	Reads      uint64 // Total number of read operations
-	FetchHits  uint64 // Reads that returned a found object
-	ReadBytes  uint64 // Total bytes of found objects
-	Writes     uint64 // Total number of write operations
-	WriteBytes uint64 // Total bytes written
+	Reads       uint64 // Total number of read operations
+	FetchHits   uint64 // Reads that returned a found object
+	CacheHits   uint64 // Positive-cache lookups that returned a node
+	CacheMisses uint64 // Positive-cache lookups that did not return a node
+	CacheSize   uint64 // Current number of positive-cache entries
+	ReadBytes   uint64 // Total bytes of found objects
+	Writes      uint64 // Total number of write operations
+	WriteBytes  uint64 // Total bytes written
 }

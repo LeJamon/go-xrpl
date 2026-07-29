@@ -128,6 +128,38 @@ func TestFetchDoesNotCacheMissAcrossStore(t *testing.T) {
 	}
 }
 
+func TestStatsTrackPositiveCacheActivity(t *testing.T) {
+	ctx := context.Background()
+	store := memorydb.New()
+	db := testDatabase(t, store, positiveCacheConfig(16))
+	missing := testHash([]byte("missing"))
+	if node, err := db.Fetch(ctx, missing); err != nil || node != nil {
+		t.Fatalf("Fetch missing = (%v, %v), want (nil, nil)", node, err)
+	}
+
+	node := testNode(NodeAccount, []byte("cached"), 1)
+	encoded := encodeNodeData(node)
+	if err := store.Put(node.Hash[:], encoded); err != nil {
+		releaseEncodeBuf(encoded)
+		t.Fatal(err)
+	}
+	releaseEncodeBuf(encoded)
+	for range 2 {
+		if got, err := db.Fetch(ctx, node.Hash); err != nil || got == nil {
+			t.Fatalf("Fetch stored = (%v, %v), want node", got, err)
+		}
+	}
+
+	stats := db.Stats()
+	if stats.Reads != 3 ||
+		stats.FetchHits != 2 ||
+		stats.CacheHits != 1 ||
+		stats.CacheMisses != 2 ||
+		stats.CacheSize != 1 {
+		t.Fatalf("unexpected statistics: %+v", stats)
+	}
+}
+
 func TestStoreBatchWithoutNodesDoesNotAdvanceGeneration(t *testing.T) {
 	tests := []struct {
 		name  string

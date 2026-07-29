@@ -379,7 +379,7 @@ func newParallelStoredVerificationFixture(
 	t *testing.T,
 ) (*Service, nodestore.Database, [32]byte, []nodestore.Hash256) {
 	t.Helper()
-	db := nodestore.NewKVDatabase(memorydb.New(), "parallel-verification", 10_000, time.Hour)
+	db := newTestNodeStore(t, 10_000)
 	t.Cleanup(func() { require.NoError(t, db.Close()) })
 	svc, err := New(Config{NodeStore: db})
 	require.NoError(t, err)
@@ -859,7 +859,7 @@ func TestService_VerifyStoredSHAMapUncachedReadsPreserveIntegrityChecks(t *testi
 
 func TestService_VerifyStoredSHAMapPreservesLeafAndDepthChecks(t *testing.T) {
 	t.Run("wrong leaf type", func(t *testing.T) {
-		db := nodestore.NewKVDatabase(memorydb.New(), "wrong-leaf", 32, time.Hour)
+		db := newTestNodeStore(t, 32)
 		t.Cleanup(func() { require.NoError(t, db.Close()) })
 		txData := append(protocol.HashPrefixTransactionID().Bytes(), []byte("transaction!")...)
 		txHash := storePrefixedVerificationNode(t, db, txData)
@@ -876,7 +876,7 @@ func TestService_VerifyStoredSHAMapPreservesLeafAndDepthChecks(t *testing.T) {
 	})
 
 	t.Run("excessive depth", func(t *testing.T) {
-		db := nodestore.NewKVDatabase(memorydb.New(), "excessive-depth", 128, time.Hour)
+		db := newTestNodeStore(t, 128)
 		t.Cleanup(func() { require.NoError(t, db.Close()) })
 		leafData := make([]byte, 4+12+32)
 		copy(leafData, protocol.HashPrefixLeafNode().Bytes())
@@ -968,7 +968,7 @@ func TestService_VerifyStoredSHAMapCancelsSaturatedWorkers(t *testing.T) {
 
 func TestService_StoredSHAMapFrontierIsBounded(t *testing.T) {
 	ctx := t.Context()
-	db := nodestore.NewKVDatabase(memorydb.New(), "bounded-frontier", 10_000, time.Hour)
+	db := newTestNodeStore(t, 10_000)
 	t.Cleanup(func() { require.NoError(t, db.Close()) })
 	svc, err := New(Config{
 		Standalone:    true,
@@ -1023,7 +1023,7 @@ func TestService_StoredSHAMapFrontierIsBounded(t *testing.T) {
 }
 
 func TestService_StoredSHAMapFrontierSplitsEveryRootBranch(t *testing.T) {
-	db := nodestore.NewKVDatabase(memorydb.New(), "fair-frontier", 256, time.Hour)
+	db := newTestNodeStore(t, 256)
 	t.Cleanup(func() { require.NoError(t, db.Close()) })
 	svc, err := New(Config{NodeStore: db})
 	require.NoError(t, err)
@@ -1070,7 +1070,7 @@ func TestService_StoredSHAMapFrontierSplitsEveryRootBranch(t *testing.T) {
 }
 
 func TestService_StoredSHAMapFrontierRedistributesUnusedCapacity(t *testing.T) {
-	db := nodestore.NewKVDatabase(memorydb.New(), "imbalanced-frontier", 2_048, time.Hour)
+	db := newTestNodeStore(t, 2_048)
 	t.Cleanup(func() { require.NoError(t, db.Close()) })
 	svc, err := New(Config{NodeStore: db})
 	require.NoError(t, err)
@@ -1129,7 +1129,7 @@ func TestService_StoredSHAMapFrontierRedistributesUnusedCapacity(t *testing.T) {
 
 func BenchmarkService_VerifyStoredSHAMapWorkers(b *testing.B) {
 	ctx := b.Context()
-	db := nodestore.NewKVDatabase(memorydb.New(), "verification-benchmark", 32_768, time.Hour)
+	db := newTestNodeStore(b, 32_768)
 	b.Cleanup(func() { require.NoError(b, db.Close()) })
 	svc, err := New(Config{
 		Standalone:    true,
