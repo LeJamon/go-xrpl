@@ -29,7 +29,7 @@ func TestFlowCalculationSettingsUseUniversalDefaultNumberContext(t *testing.T) {
 
 func TestComputeQualityUsesLedgerNumberContext(t *testing.T) {
 	out := payment.ToEitherAmount(state.NewXRPAmountFromInt(3))
-	in := payment.ToEitherAmount(state.NewXRPAmountFromInt(2))
+	in := payment.ToEitherAmount(state.NewXRPAmountFromInt(1))
 	legacy := state.NewNumberContext(state.MantissaScaleSmall, false)
 	universal := state.NewNumberContext(state.MantissaScaleSmall, true)
 
@@ -37,12 +37,12 @@ func TestComputeQualityUsesLedgerNumberContext(t *testing.T) {
 	gotUniversal := computeQuality(out, in, universal)
 	wantLegacy := state.GetRateWithNumberContext(
 		state.NewXRPAmountFromInt(3),
-		state.NewXRPAmountFromInt(2),
+		state.NewXRPAmountFromInt(1),
 		legacy,
 	)
 	wantUniversal := state.GetRateWithNumberContext(
 		state.NewXRPAmountFromInt(3),
-		state.NewXRPAmountFromInt(2),
+		state.NewXRPAmountFromInt(1),
 		universal,
 	)
 	if gotLegacy != wantLegacy {

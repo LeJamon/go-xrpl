@@ -259,9 +259,8 @@ func (s *DirectStepI) setCacheLimiting(
 	}
 
 	if s.cache.in.Compare(fwdIn) < 0 {
-		// Unit-less magnitude threshold (Amount.Compare/Sub ignore currency).
-		smallDiff := tx.NewIssuedAmount(1, -9, "", "")
 		diff, _ := fwdIn.SubWithNumberContext(s.cache.in, numberContext, state.RoundToNearest)
+		smallDiff := tx.NewIssuedAmount(1, -9, diff.Currency, diff.Issuer)
 		if diff.Compare(smallDiff) > 0 {
 			if fwdIn.Exponent() != s.cache.in.Exponent() ||
 				s.cache.in.Mantissa() == 0 ||
