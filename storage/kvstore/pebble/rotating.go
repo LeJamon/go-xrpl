@@ -587,6 +587,13 @@ func (r *RotatingStore) Rotate(lastRotated, minimumOnline uint32) (bool, error) 
 		}
 		return true, nil
 	}
+	if completedMinimum != 0 && minimumOnline < completedMinimum {
+		return false, fmt.Errorf(
+			"kvstore/pebble: minimum online %d precedes committed minimum %d",
+			minimumOnline,
+			completedMinimum,
+		)
+	}
 
 	newPath, err := r.newGenerationPath()
 	if err != nil {
@@ -690,7 +697,7 @@ func (r *RotatingStore) loadState() (generationState, bool, error) {
 	}
 	if state.Version == legacyGenerationStateVersion {
 		return generationState{}, false, fmt.Errorf(
-			"%w: close the store, verify both manifest generations, then call pebble.MigrateLegacyRotationState(%q)",
+			"%w: close the store, verify both manifest generations, then run the offline rotation-state migration for %q",
 			ErrLegacyRotationState,
 			r.basePath,
 		)

@@ -25,15 +25,25 @@ type blockingGetStore struct {
 	once    sync.Once
 }
 
+type staleReadStore struct {
+	kvstore.KeyValueStore
+	started chan struct{}
+	release chan struct{}
+	once    sync.Once
+}
+
 type blockingPutCache struct {
 	*nodeCache
 	started chan struct{}
 	release chan struct{}
+	once    sync.Once
 }
 
 func (c *blockingPutCache) Put(node *Node) {
-	close(c.started)
-	<-c.release
+	c.once.Do(func() {
+		close(c.started)
+		<-c.release
+	})
 	c.nodeCache.Put(node)
 }
 
@@ -43,6 +53,15 @@ func (s *blockingGetStore) Get(key []byte) ([]byte, error) {
 		<-s.release
 	})
 	return s.KeyValueStore.Get(key)
+}
+
+func (s *staleReadStore) Get(key []byte) ([]byte, error) {
+	data, err := s.KeyValueStore.Get(key)
+	s.once.Do(func() {
+		close(s.started)
+		<-s.release
+	})
+	return data, err
 }
 
 func (s *staleMissStore) Get(key []byte) ([]byte, error) {
@@ -228,6 +247,77 @@ func TestFetchCrossingCacheGenerationDoesNotRepopulate(t *testing.T) {
 	}
 }
 
+func TestStoreDoesNotAllowStaleFetchToOverwriteCache(t *testing.T) {
+	tests := []struct {
+		name  string
+		store func(context.Context, *KVDatabase, *Node) error
+	}{
+		{
+			name: "Store",
+			store: func(ctx context.Context, database *KVDatabase, node *Node) error {
+				return database.Store(ctx, node)
+			},
+		},
+		{
+			name: "StoreBatch",
+			store: func(ctx context.Context, database *KVDatabase, node *Node) error {
+				return database.StoreBatch(ctx, []*Node{node})
+			},
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			backend := memorydb.New()
+			store := &staleReadStore{
+				KeyValueStore: backend,
+				started:       make(chan struct{}),
+				release:       make(chan struct{}),
+			}
+			database := testDatabase(t, store, positiveCacheConfig(16))
+			hash := testHash([]byte("mutable-node"))
+			oldNode := &Node{
+				Type:      NodeLedger,
+				Hash:      hash,
+				Data:      []byte("old"),
+				LedgerSeq: 1,
+			}
+			newNode := &Node{
+				Type:      NodeLedger,
+				Hash:      hash,
+				Data:      []byte("new"),
+				LedgerSeq: 2,
+			}
+			encoded := encodeNodeData(oldNode)
+			if err := backend.Put(hash[:], encoded); err != nil {
+				t.Fatal(err)
+			}
+			releaseEncodeBuf(encoded)
+
+			done := make(chan error, 1)
+			go func() {
+				_, err := database.Fetch(context.Background(), hash)
+				done <- err
+			}()
+			<-store.started
+			if err := test.store(context.Background(), database, newNode); err != nil {
+				close(store.release)
+				t.Fatalf("%s: %v", test.name, err)
+			}
+			close(store.release)
+			if err := <-done; err != nil {
+				t.Fatal(err)
+			}
+			cached, found := database.cache.Get(hash)
+			if !found {
+				t.Fatal("stored node was not published to the cache")
+			}
+			if !bytes.Equal(cached.Data, newNode.Data) || cached.LedgerSeq != newNode.LedgerSeq {
+				t.Fatalf("cache contains stale node: data=%q ledger=%d", cached.Data, cached.LedgerSeq)
+			}
+		})
+	}
+}
+
 func TestStorePublishesCacheUnderPruneLock(t *testing.T) {
 	tests := []struct {
 		name  string
@@ -276,6 +366,90 @@ func TestStorePublishesCacheUnderPruneLock(t *testing.T) {
 			database.pruneMu.Unlock()
 			if _, found := blocking.Get(node.Hash); !found {
 				t.Fatal("stored node was not published to the cache")
+			}
+		})
+	}
+}
+
+func TestStoresPublishCacheInBackendOrder(t *testing.T) {
+	tests := []struct {
+		name        string
+		firstStore  func(context.Context, *KVDatabase, *Node) error
+		secondStore func(context.Context, *KVDatabase, *Node) error
+	}{
+		{
+			name: "Store then StoreBatch",
+			firstStore: func(ctx context.Context, database *KVDatabase, node *Node) error {
+				return database.Store(ctx, node)
+			},
+			secondStore: func(ctx context.Context, database *KVDatabase, node *Node) error {
+				return database.StoreBatch(ctx, []*Node{node})
+			},
+		},
+		{
+			name: "StoreBatch then Store",
+			firstStore: func(ctx context.Context, database *KVDatabase, node *Node) error {
+				return database.StoreBatch(ctx, []*Node{node})
+			},
+			secondStore: func(ctx context.Context, database *KVDatabase, node *Node) error {
+				return database.Store(ctx, node)
+			},
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			database := testDatabase(t, memorydb.New(), positiveCacheConfig(16))
+			blocking := &blockingPutCache{
+				nodeCache: database.cache.(*nodeCache),
+				started:   make(chan struct{}),
+				release:   make(chan struct{}),
+			}
+			database.cache = blocking
+			hash := testHash([]byte("restamped-node"))
+			oldNode := &Node{
+				Type:      NodeLedger,
+				Hash:      hash,
+				Data:      []byte("old"),
+				LedgerSeq: 1,
+			}
+			newNode := &Node{
+				Type:      NodeLedger,
+				Hash:      hash,
+				Data:      []byte("new"),
+				LedgerSeq: 2,
+			}
+
+			firstDone := make(chan error, 1)
+			go func() {
+				firstDone <- test.firstStore(context.Background(), database, oldNode)
+			}()
+			<-blocking.started
+
+			secondStarted := make(chan struct{})
+			secondDone := make(chan error, 1)
+			go func() {
+				close(secondStarted)
+				secondDone <- test.secondStore(context.Background(), database, newNode)
+			}()
+			<-secondStarted
+			if database.writeMu.TryLock() {
+				database.writeMu.Unlock()
+				t.Fatal("write lock was available before cache publication completed")
+			}
+
+			close(blocking.release)
+			if err := <-firstDone; err != nil {
+				t.Fatalf("first store: %v", err)
+			}
+			if err := <-secondDone; err != nil {
+				t.Fatalf("second store: %v", err)
+			}
+			cached, found := blocking.Get(hash)
+			if !found {
+				t.Fatal("stored node was not published to the cache")
+			}
+			if !bytes.Equal(cached.Data, newNode.Data) || cached.LedgerSeq != newNode.LedgerSeq {
+				t.Fatalf("cache is out of backend order: data=%q ledger=%d", cached.Data, cached.LedgerSeq)
 			}
 		})
 	}

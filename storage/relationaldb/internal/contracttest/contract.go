@@ -131,6 +131,62 @@ func Run(t *testing.T, factory Factory) {
 		}
 	})
 
+	t.Run("validated ledger replaces account indexes by transaction", func(t *testing.T) {
+		ctx := context.Background()
+		manager := factory(t)
+		original := validatedLedger(8)
+		replacement := validatedLedger(9)
+		replacement.Transactions[0].Transaction.Hash = original.Transactions[0].Transaction.Hash
+		replacement.Transactions[0].Accounts[0] = accountID(9)
+		if err := manager.PersistValidatedLedger(ctx, original); err != nil {
+			t.Fatal(err)
+		}
+		if err := manager.PersistValidatedLedger(ctx, replacement); err != nil {
+			t.Fatal(err)
+		}
+		stale, err := manager.AccountTransaction().GetOldestAccountTxsPage(ctx, relationaldb.AccountTxPageOptions{
+			Account: original.Transactions[0].Accounts[0],
+			Limit:   1,
+		})
+		if err != nil || len(stale.Transactions) != 0 {
+			t.Fatalf("stale account index remains: page=%v error=%v", stale, err)
+		}
+		current, err := manager.AccountTransaction().GetOldestAccountTxsPage(ctx, relationaldb.AccountTxPageOptions{
+			Account: replacement.Transactions[0].Accounts[0],
+			Limit:   1,
+		})
+		if err != nil || len(current.Transactions) != 1 ||
+			current.Transactions[0].LedgerSeq != replacement.Ledger.Sequence {
+			t.Fatalf("replacement account index missing: page=%v error=%v", current, err)
+		}
+	})
+
+	t.Run("validated ledger replacement removes omitted account indexes", func(t *testing.T) {
+		ctx := context.Background()
+		manager := factory(t)
+		original := validatedLedger(10)
+		if err := manager.PersistValidatedLedger(ctx, original); err != nil {
+			t.Fatal(err)
+		}
+
+		replacement := original
+		replacement.Ledger.Hash[0] = 0xaa
+		replacement.Ledger.TransactionHash = relationaldb.Hash{}
+		replacement.Transactions = nil
+		if err := manager.PersistValidatedLedger(ctx, replacement); err != nil {
+			t.Fatal(err)
+		}
+
+		min, err := manager.AccountTransaction().GetAccountTransactionsMinLedgerSeq(ctx)
+		if err != nil || min != nil {
+			t.Fatalf("account index minimum = %v, %v; want nil, nil", min, err)
+		}
+		stale, _, err := manager.Transaction().GetTransaction(ctx, original.Transactions[0].Transaction.Hash, nil)
+		if err != nil || stale != nil {
+			t.Fatalf("omitted transaction remains: value=%v error=%v", stale, err)
+		}
+	})
+
 	t.Run("aggregate preflight is non-mutating", func(t *testing.T) {
 		ctx := context.Background()
 		manager := factory(t)
@@ -183,7 +239,9 @@ func Run(t *testing.T, factory Factory) {
 	t.Run("empty ledger aggregate", func(t *testing.T) {
 		ctx := context.Background()
 		manager := factory(t)
-		value := relationaldb.ValidatedLedger{Ledger: ledger(6)}
+		ledger := ledger(6)
+		ledger.TransactionHash = relationaldb.Hash{}
+		value := relationaldb.ValidatedLedger{Ledger: ledger}
 		if err := manager.PersistValidatedLedger(ctx, value); err != nil {
 			t.Fatal(err)
 		}
@@ -753,10 +811,12 @@ func transaction(seq byte) relationaldb.TransactionInfo {
 func validatedLedger(seq byte) relationaldb.ValidatedLedger {
 	var account relationaldb.AccountID
 	account[0] = seq
+	transaction := transaction(seq)
+	transaction.TxnSeq = 0
 	return relationaldb.ValidatedLedger{
 		Ledger: ledger(seq),
 		Transactions: []relationaldb.IndexedTransaction{{
-			Transaction: transaction(seq),
+			Transaction: transaction,
 			Accounts:    []relationaldb.AccountID{account},
 		}},
 	}

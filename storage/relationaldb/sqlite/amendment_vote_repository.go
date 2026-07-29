@@ -38,6 +38,9 @@ func (r *amendmentVoteRepository) LoadAmendmentVotes(ctx context.Context) ([]*re
 		if err := rec.Validate(); err != nil {
 			return nil, relationaldb.NewDataError("amendment_vote_load", "malformed amendment ID", err)
 		}
+		if vetoed != 0 && vetoed != 1 {
+			return nil, relationaldb.NewDataError("amendment_vote_load", "malformed vetoed value", relationaldb.ErrInvalidData)
+		}
 		rec.Vetoed = vetoed != 0
 		result = append(result, &rec)
 	}

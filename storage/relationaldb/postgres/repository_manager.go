@@ -18,7 +18,7 @@ type RepositoryManager struct {
 	ledgerRepo             *ledgerRepository
 	transactionRepo        *transactionRepository
 	accountTransactionRepo *accountTransactionRepository
-	validationRepo         *validationRepository
+	validationRepo         relationaldb.ValidationRepository
 	amendmentVoteRepo      *amendmentVoteRepository
 
 	persistHook func(stage string, index int) error
@@ -61,7 +61,7 @@ func NewRepositoryManager(ctx context.Context, config *relationaldb.Config) (*Re
 	rm.ledgerRepo = newLedgerRepository(rm.db)
 	rm.transactionRepo = newTransactionRepository(rm.db)
 	rm.accountTransactionRepo = newAccountTransactionRepository(rm.db)
-	rm.validationRepo = newValidationRepository(rm.db)
+	rm.validationRepo = sqlutil.NewGatedValidationRepository(&rm.gate, newValidationRepository(rm.db))
 	rm.amendmentVoteRepo = newAmendmentVoteRepository(rm.db)
 	return rm, nil
 }
@@ -153,11 +153,17 @@ func (rm *RepositoryManager) PersistValidatedLedger(ctx context.Context, value r
 	transactionRepo := newTransactionRepository(tx)
 	accountRepo := newAccountTransactionRepository(tx)
 	ledgerRepo := newLedgerRepository(tx)
+	if err := accountRepo.deleteByLedgerSequence(ctx, value.Ledger.Sequence); err != nil {
+		return errors.Join(err, tx.Rollback())
+	}
 	if err := transactionRepo.DeleteTransactionsByLedgerSeq(ctx, value.Ledger.Sequence); err != nil {
 		return errors.Join(err, tx.Rollback())
 	}
 	index := 0
 	for _, indexed := range value.Transactions {
+		if err := accountRepo.deleteByTransactionID(ctx, indexed.Transaction.Hash); err != nil {
+			return errors.Join(err, tx.Rollback())
+		}
 		if err := transactionRepo.SaveTransaction(ctx, indexed.Transaction); err != nil {
 			return errors.Join(err, tx.Rollback())
 		}

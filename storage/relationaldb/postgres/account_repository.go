@@ -170,6 +170,20 @@ func (r *accountTransactionRepository) SaveAccountTransaction(ctx context.Contex
 	return nil
 }
 
+func (r *accountTransactionRepository) deleteByTransactionID(ctx context.Context, transactionID relationaldb.Hash) error {
+	if _, err := r.getExecutor().ExecContext(ctx, "DELETE FROM account_transactions WHERE trans_id = $1", transactionID[:]); err != nil {
+		return relationaldb.NewQueryError("delete_account_transactions_by_transaction_id", "failed to delete account transactions", err)
+	}
+	return nil
+}
+
+func (r *accountTransactionRepository) deleteByLedgerSequence(ctx context.Context, ledgerSeq relationaldb.LedgerIndex) error {
+	if _, err := r.getExecutor().ExecContext(ctx, "DELETE FROM account_transactions WHERE ledger_seq = $1", ledgerSeq); err != nil {
+		return relationaldb.NewQueryError("delete_account_transactions_by_ledger_sequence", "failed to delete account transactions", err)
+	}
+	return nil
+}
+
 // DeleteAccountTransactionsBeforeLedgerSeq deletes index entries in ledgers below ledgerSeq.
 func (r *accountTransactionRepository) DeleteAccountTransactionsBeforeLedgerSeq(ctx context.Context, ledgerSeq relationaldb.LedgerIndex) error {
 	_, err := r.getExecutor().ExecContext(ctx, "DELETE FROM account_transactions WHERE ledger_seq < $1", ledgerSeq)

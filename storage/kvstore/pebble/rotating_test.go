@@ -124,6 +124,24 @@ func TestRotatingStoreExplicitPromotionPreservesLiveRecords(t *testing.T) {
 	require.Equal(t, []byte("live-value"), value)
 }
 
+func TestRotatingStoreRejectsRetentionFloorRollback(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "nodes")
+	store, err := kvpebble.NewRotating(path, rotatingTestOptions())
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, store.Close()) })
+
+	committed, err := store.Rotate(100, 51)
+	require.True(t, committed)
+	require.NoError(t, err)
+
+	committed, err = store.Rotate(200, 50)
+	require.False(t, committed)
+	require.ErrorContains(t, err, "precedes committed minimum")
+	lastRotated, minimumOnline := store.RotationState()
+	require.Equal(t, uint32(100), lastRotated)
+	require.Equal(t, uint32(51), minimumOnline)
+}
+
 func TestRotatingStoreMissingCommittedGenerationIsFatal(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "nodes")
 	store, err := kvpebble.NewRotating(path, rotatingTestOptions())
@@ -192,7 +210,7 @@ func TestRotatingStoreLegacyManifestRequiresExplicitMigration(t *testing.T) {
 
 	_, err = kvpebble.NewRotating(path, rotatingTestOptions())
 	require.ErrorIs(t, err, kvpebble.ErrLegacyRotationState)
-	require.ErrorContains(t, err, "MigrateLegacyRotationState")
+	require.ErrorContains(t, err, "offline rotation-state migration")
 	for _, generationPath := range []string{path, archivePath} {
 		_, markerErr := os.Lstat(filepath.Join(generationPath, ".goxrpl-generation.json"))
 		require.ErrorIs(t, markerErr, os.ErrNotExist)

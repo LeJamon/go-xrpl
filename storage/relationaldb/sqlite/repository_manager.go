@@ -25,7 +25,7 @@ type RepositoryManager struct {
 	ledgerRepo             *ledgerRepository
 	transactionRepo        *transactionRepository
 	accountTransactionRepo *accountTransactionRepository
-	validationRepo         *validationRepository
+	validationRepo         relationaldb.ValidationRepository
 	amendmentVoteRepo      *amendmentVoteRepository
 
 	persistMu   sync.Mutex
@@ -93,7 +93,7 @@ func NewRepositoryManager(ctx context.Context, dbDir string, settings Settings) 
 	rm.ledgerRepo = newLedgerRepository(rm.ledgerDB)
 	rm.transactionRepo = newTransactionRepository(rm.txDB)
 	rm.accountTransactionRepo = newAccountTransactionRepository(rm.txDB)
-	rm.validationRepo = newValidationRepository(rm.ledgerDB)
+	rm.validationRepo = sqlutil.NewGatedValidationRepository(&rm.gate, newValidationRepository(rm.ledgerDB))
 	rm.amendmentVoteRepo = newAmendmentVoteRepository(rm.ledgerDB)
 	return rm, nil
 }
@@ -233,11 +233,18 @@ func (rm *RepositoryManager) PersistValidatedLedger(ctx context.Context, value r
 		return err
 	}
 	if err := rm.withTransaction(ctx, func(repos relationaldb.TransactionRepositories) error {
+		scoped := repos.(*transactionRepositories)
+		if err := scoped.accountTransaction.deleteByLedgerSequence(ctx, value.Ledger.Sequence); err != nil {
+			return err
+		}
 		if err := repos.Transaction().DeleteTransactionsByLedgerSeq(ctx, value.Ledger.Sequence); err != nil {
 			return err
 		}
 		index := 0
 		for _, indexed := range value.Transactions {
+			if err := scoped.accountTransaction.deleteByTransactionID(ctx, indexed.Transaction.Hash); err != nil {
+				return err
+			}
 			if err := repos.Transaction().SaveTransaction(ctx, indexed.Transaction); err != nil {
 				return err
 			}

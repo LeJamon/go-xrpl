@@ -80,6 +80,7 @@ type KVDatabase struct {
 	syncGate    chan struct{}
 
 	pruneMu       sync.RWMutex
+	writeMu       sync.Mutex
 	store         kvstore.KeyValueStore
 	cache         nodeCacheAccess
 	negativeCache *negativeCache
@@ -144,6 +145,8 @@ func (d *KVDatabase) Store(ctx context.Context, node *Node) error {
 	}
 
 	encoded := encodeNodeData(node)
+	d.writeMu.Lock()
+	defer d.writeMu.Unlock()
 	d.pruneMu.RLock()
 	err := d.store.Put(node.Hash[:], encoded)
 	releaseEncodeBuf(encoded)
@@ -154,6 +157,9 @@ func (d *KVDatabase) Store(ctx context.Context, node *Node) error {
 	if d.negativeCache != nil {
 		d.storeGeneration.Add(1)
 		d.negativeCache.Remove(node.Hash)
+	}
+	if d.cache != nil {
+		d.cacheGeneration.Add(1)
 	}
 	atomic.AddUint64(&d.stats.writes, 1)
 	atomic.AddUint64(&d.stats.writeBytes, uint64(len(node.Data)))
@@ -296,6 +302,8 @@ func (d *KVDatabase) StoreBatch(ctx context.Context, nodes []*Node) (err error) 
 			return fmt.Errorf("store batch failed: %w", putErr)
 		}
 	}
+	d.writeMu.Lock()
+	defer d.writeMu.Unlock()
 	d.pruneMu.RLock()
 	writeErr := batch.Write()
 	if writeErr != nil {
@@ -307,6 +315,9 @@ func (d *KVDatabase) StoreBatch(ctx context.Context, nodes []*Node) (err error) 
 		for _, node := range nodes {
 			d.negativeCache.Remove(node.Hash)
 		}
+	}
+	if d.cache != nil {
+		d.cacheGeneration.Add(1)
 	}
 	for _, node := range nodes {
 		atomic.AddUint64(&d.stats.writes, 1)

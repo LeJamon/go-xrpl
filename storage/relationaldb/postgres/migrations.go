@@ -26,18 +26,19 @@ func migrateTo(ctx context.Context, db *sql.DB, migrations []migration) error {
 	if err != nil {
 		return err
 	}
+	defer tx.Rollback()
+	if _, err := tx.ExecContext(ctx,
+		`SELECT pg_advisory_xact_lock(hashtextextended(current_database() || ':' || current_schema(), 0))`); err != nil {
+		return fmt.Errorf("acquire migration lock: %w", err)
+	}
 	if _, err := tx.ExecContext(ctx, `CREATE TABLE IF NOT EXISTS schema_migrations (
 		version INTEGER PRIMARY KEY,
 		applied_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 	)`); err != nil {
-		_ = tx.Rollback()
-		return err
-	}
-	if err := tx.Commit(); err != nil {
 		return err
 	}
 
-	rows, err := db.QueryContext(ctx, `SELECT version FROM schema_migrations ORDER BY version`)
+	rows, err := tx.QueryContext(ctx, `SELECT version FROM schema_migrations ORDER BY version`)
 	if err != nil {
 		return err
 	}
@@ -70,22 +71,16 @@ func migrateTo(ctx context.Context, db *sql.DB, migrations []migration) error {
 		if migration.version <= current {
 			continue
 		}
-		tx, err := db.BeginTx(ctx, nil)
-		if err != nil {
-			return err
-		}
 		if err := migration.apply(ctx, tx); err != nil {
-			_ = tx.Rollback()
 			return fmt.Errorf("migration %d: %w", migration.version, err)
 		}
 		if _, err := tx.ExecContext(ctx, `INSERT INTO schema_migrations(version) VALUES ($1)`, migration.version); err != nil {
-			_ = tx.Rollback()
 			return fmt.Errorf("record migration %d: %w", migration.version, err)
 		}
-		if err := tx.Commit(); err != nil {
-			return fmt.Errorf("commit migration %d: %w", migration.version, err)
-		}
 		current = migration.version
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("commit migrations: %w", err)
 	}
 	return nil
 }

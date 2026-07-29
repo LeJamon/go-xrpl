@@ -114,6 +114,18 @@ var ledgerMigrations = []migration{
 		)`)
 	}},
 	{version: 4, apply: migrateLedgerWidths},
+	{version: 5, apply: func(ctx context.Context, tx *sql.Tx) error {
+		return execAll(ctx, tx,
+			`CREATE TABLE feature_votes_new (
+				amendment TEXT PRIMARY KEY CHECK(length(amendment) = 64 AND amendment NOT GLOB '*[^0-9A-F]*'),
+				name TEXT NOT NULL,
+				vetoed INTEGER NOT NULL CHECK(vetoed IN (0, 1))
+			)`,
+			`INSERT INTO feature_votes_new SELECT amendment, name, vetoed FROM feature_votes`,
+			`DROP TABLE feature_votes`,
+			`ALTER TABLE feature_votes_new RENAME TO feature_votes`,
+		)
+	}},
 }
 
 func migrateLedgerWidths(ctx context.Context, tx *sql.Tx) error {
@@ -194,6 +206,7 @@ var transactionMigrations = []migration{
 	{version: 2, apply: func(context.Context, *sql.Tx) error { return nil }},
 	{version: 3, apply: func(context.Context, *sql.Tx) error { return nil }},
 	{version: 4, apply: migrateTransactionWidths},
+	{version: 5, apply: func(context.Context, *sql.Tx) error { return nil }},
 }
 
 func migrateTransactionWidths(ctx context.Context, tx *sql.Tx) error {

@@ -138,6 +138,17 @@ func (v ValidatedLedger) Validate() error {
 	if v.Ledger.Hash.IsZero() {
 		return NewDataError("persist_validated_ledger", "ledger hash is zero", ErrInvalidData)
 	}
+	if v.Ledger.AccountHash.IsZero() {
+		return NewDataError("persist_validated_ledger", "account state hash is zero", ErrInvalidData)
+	}
+	if len(v.Transactions) == 0 && !v.Ledger.TransactionHash.IsZero() {
+		return NewDataError("persist_validated_ledger", "empty ledger has a non-zero transaction hash", ErrInvalidData)
+	}
+	if len(v.Transactions) > 0 && v.Ledger.TransactionHash.IsZero() {
+		return NewDataError("persist_validated_ledger", "transaction hash is zero", ErrInvalidData)
+	}
+	transactionHashes := make(map[Hash]struct{}, len(v.Transactions))
+	transactionIndexes := make(map[uint32]struct{}, len(v.Transactions))
 	for i, indexed := range v.Transactions {
 		if indexed.Transaction.LedgerSeq != v.Ledger.Sequence {
 			return NewDataError(
@@ -153,12 +164,60 @@ func (v ValidatedLedger) Validate() error {
 				ErrInvalidData,
 			)
 		}
+		if _, exists := transactionHashes[indexed.Transaction.Hash]; exists {
+			return NewDataError(
+				"persist_validated_ledger",
+				fmt.Sprintf("transaction %d has duplicate hash", i),
+				ErrInvalidData,
+			)
+		}
+		transactionHashes[indexed.Transaction.Hash] = struct{}{}
+		if uint64(indexed.Transaction.TxnSeq) >= uint64(len(v.Transactions)) {
+			return NewDataError(
+				"persist_validated_ledger",
+				fmt.Sprintf("transaction %d has index %d outside transaction set", i, indexed.Transaction.TxnSeq),
+				ErrInvalidData,
+			)
+		}
+		if _, exists := transactionIndexes[indexed.Transaction.TxnSeq]; exists {
+			return NewDataError(
+				"persist_validated_ledger",
+				fmt.Sprintf("transaction %d has duplicate index %d", i, indexed.Transaction.TxnSeq),
+				ErrInvalidData,
+			)
+		}
+		transactionIndexes[indexed.Transaction.TxnSeq] = struct{}{}
 		if len(indexed.Transaction.RawTxn) == 0 {
 			return NewDataError(
 				"persist_validated_ledger",
 				fmt.Sprintf("transaction %d has empty payload", i),
 				ErrInvalidData,
 			)
+		}
+		if len(indexed.Transaction.TxnMeta) == 0 {
+			return NewDataError(
+				"persist_validated_ledger",
+				fmt.Sprintf("transaction %d has empty metadata", i),
+				ErrInvalidData,
+			)
+		}
+		accounts := make(map[AccountID]struct{}, len(indexed.Accounts))
+		for accountIndex, account := range indexed.Accounts {
+			if account.IsZero() {
+				return NewDataError(
+					"persist_validated_ledger",
+					fmt.Sprintf("transaction %d account %d is zero", i, accountIndex),
+					ErrInvalidData,
+				)
+			}
+			if _, exists := accounts[account]; exists {
+				return NewDataError(
+					"persist_validated_ledger",
+					fmt.Sprintf("transaction %d account %d is duplicated", i, accountIndex),
+					ErrInvalidData,
+				)
+			}
+			accounts[account] = struct{}{}
 		}
 	}
 	return nil

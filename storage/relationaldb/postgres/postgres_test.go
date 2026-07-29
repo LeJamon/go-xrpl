@@ -67,9 +67,10 @@ func makePersistValue(seq uint32) relationaldb.ValidatedLedger {
 	var tx relationaldb.TransactionInfo
 	tx.Hash[0] = byte(seq)
 	tx.LedgerSeq = relationaldb.LedgerIndex(seq)
-	tx.TxnSeq = 1
+	tx.TxnSeq = 0
 	tx.Status = "validated"
 	tx.RawTxn = []byte{1, 2, 3}
+	tx.TxnMeta = []byte{4, 5, 6}
 	var account relationaldb.AccountID
 	account[0] = 1
 	return relationaldb.ValidatedLedger{
@@ -408,6 +409,62 @@ func TestEveryRecordedSchemaVersionUpgrades(t *testing.T) {
 				assertHistoricalPostgresData(t, upgraded, version)
 			}
 		})
+	}
+}
+
+func TestConcurrentMigrationStartup(t *testing.T) {
+	admin := setupTestDB(t)
+	schema := "relational_migration_concurrent"
+	schemaID := pq.QuoteIdentifier(schema)
+	if _, err := admin.db.ExecContext(context.Background(), `DROP SCHEMA IF EXISTS `+schemaID+` CASCADE`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := admin.db.ExecContext(context.Background(), `CREATE SCHEMA `+schemaID); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		_, _ = admin.db.ExecContext(context.Background(), `DROP SCHEMA IF EXISTS `+schemaID+` CASCADE`)
+	})
+	dsn := postgresDSNWithSchema(t, os.Getenv(postgresDSNEnv), schema)
+	start := make(chan struct{})
+	type result struct {
+		manager *RepositoryManager
+		err     error
+	}
+	results := make(chan result, 2)
+	for range 2 {
+		go func() {
+			<-start
+			manager, err := NewRepositoryManager(
+				context.Background(),
+				relationaldb.NewConfig().WithConnectionString(dsn),
+			)
+			results <- result{manager: manager, err: err}
+		}()
+	}
+	close(start)
+	managers := make([]*RepositoryManager, 0, 2)
+	for range 2 {
+		result := <-results
+		if result.err != nil {
+			t.Fatal(result.err)
+		}
+		managers = append(managers, result.manager)
+	}
+	t.Cleanup(func() {
+		for _, manager := range managers {
+			_ = manager.Close()
+		}
+	})
+	var count, minimum, maximum int
+	if err := managers[0].db.QueryRowContext(
+		context.Background(),
+		`SELECT COUNT(*), MIN(version), MAX(version) FROM schema_migrations`,
+	).Scan(&count, &minimum, &maximum); err != nil {
+		t.Fatal(err)
+	}
+	if count != len(postgresMigrations) || minimum != 1 || maximum != len(postgresMigrations) {
+		t.Fatalf("migration history = count %d range %d-%d", count, minimum, maximum)
 	}
 }
 

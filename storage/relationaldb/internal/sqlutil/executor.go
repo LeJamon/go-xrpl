@@ -32,6 +32,72 @@ type OperationGate struct {
 	closeErr  error
 }
 
+type gatedValidationRepository struct {
+	gate       *OperationGate
+	repository relationaldb.ValidationRepository
+}
+
+// NewGatedValidationRepository pins validation operations until manager shutdown.
+func NewGatedValidationRepository(gate *OperationGate, repository relationaldb.ValidationRepository) relationaldb.ValidationRepository {
+	return &gatedValidationRepository{gate: gate, repository: repository}
+}
+
+func (r *gatedValidationRepository) Save(ctx context.Context, value *relationaldb.ValidationRecord) error {
+	end, err := r.gate.Begin()
+	if err != nil {
+		return err
+	}
+	defer end()
+	return r.repository.Save(ctx, value)
+}
+
+func (r *gatedValidationRepository) SaveBatch(ctx context.Context, values []*relationaldb.ValidationRecord) error {
+	end, err := r.gate.Begin()
+	if err != nil {
+		return err
+	}
+	defer end()
+	return r.repository.SaveBatch(ctx, values)
+}
+
+func (r *gatedValidationRepository) GetValidationsForLedger(
+	ctx context.Context,
+	sequence relationaldb.LedgerIndex,
+) ([]*relationaldb.ValidationRecord, error) {
+	end, err := r.gate.Begin()
+	if err != nil {
+		return nil, err
+	}
+	defer end()
+	return r.repository.GetValidationsForLedger(ctx, sequence)
+}
+
+func (r *gatedValidationRepository) GetValidationsByValidator(
+	ctx context.Context,
+	nodeKey []byte,
+	limit int,
+) ([]*relationaldb.ValidationRecord, error) {
+	end, err := r.gate.Begin()
+	if err != nil {
+		return nil, err
+	}
+	defer end()
+	return r.repository.GetValidationsByValidator(ctx, nodeKey, limit)
+}
+
+func (r *gatedValidationRepository) DeleteOlderThanSeq(
+	ctx context.Context,
+	maxSequence relationaldb.LedgerIndex,
+	batchSize int,
+) (int64, error) {
+	end, err := r.gate.Begin()
+	if err != nil {
+		return 0, err
+	}
+	defer end()
+	return r.repository.DeleteOlderThanSeq(ctx, maxSequence, batchSize)
+}
+
 // Begin registers an operation and returns its release function.
 func (g *OperationGate) Begin() (func(), error) {
 	if g == nil || g.closing.Load() {

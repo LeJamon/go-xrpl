@@ -67,6 +67,11 @@ func TestCurrentSchemaRejectsMalformedRows(t *testing.T) {
 			db:   ledgerDB,
 			sql:  `INSERT INTO feature_votes VALUES ('aa', 'Alpha', 0)`,
 		},
+		{
+			name: "amendment veto",
+			db:   ledgerDB,
+			sql:  `INSERT INTO feature_votes VALUES ('AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA', 'Alpha', 2)`,
+		},
 	}
 	for _, test := range statements {
 		t.Run(test.name, func(t *testing.T) {
@@ -154,6 +159,22 @@ func TestMalformedStoredRowsRejectedByScanners(t *testing.T) {
 			t.Fatalf("LoadAmendmentVotes() error = %v, want ErrInvalidData", err)
 		}
 	})
+
+	t.Run("amendment veto", func(t *testing.T) {
+		rm := setupTestDB(t)
+		ctx := context.Background()
+		db := rm.ledgerDB.Raw()
+		if _, err := db.ExecContext(ctx, `PRAGMA ignore_check_constraints = ON`); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := db.ExecContext(ctx,
+			`INSERT INTO feature_votes VALUES ('AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA', 'Alpha', 2)`); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := rm.Amendment().LoadAmendmentVotes(ctx); !errors.Is(err, relationaldb.ErrInvalidData) {
+			t.Fatalf("LoadAmendmentVotes() error = %v, want ErrInvalidData", err)
+		}
+	})
 }
 
 func TestRepositoryContract(t *testing.T) {
@@ -180,9 +201,10 @@ func makePersistValue(seq uint32) relationaldb.ValidatedLedger {
 	var tx relationaldb.TransactionInfo
 	tx.Hash[0] = byte(seq)
 	tx.LedgerSeq = relationaldb.LedgerIndex(seq)
-	tx.TxnSeq = 1
+	tx.TxnSeq = 0
 	tx.Status = "validated"
 	tx.RawTxn = []byte{1, 2, 3}
+	tx.TxnMeta = []byte{4, 5, 6}
 	var account relationaldb.AccountID
 	account[0] = 1
 	return relationaldb.ValidatedLedger{
@@ -576,15 +598,19 @@ func TestMalformedLegacyWidthAbortsMigration(t *testing.T) {
 
 func TestFutureSchemaVersionRejected(t *testing.T) {
 	dir := t.TempDir()
-	db, err := sql.Open("sqlite", filepath.Join(dir, "ledger.db"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err := db.Exec("PRAGMA user_version = 5"); err != nil {
-		t.Fatal(err)
-	}
-	if err := db.Close(); err != nil {
-		t.Fatal(err)
+	futureVersion := len(ledgerMigrations) + 1
+	for _, name := range []string{"ledger.db", "transaction.db"} {
+		db, err := sql.Open("sqlite", filepath.Join(dir, name))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := db.Exec(fmt.Sprintf("PRAGMA user_version = %d", futureVersion)); err != nil {
+			_ = db.Close()
+			t.Fatal(err)
+		}
+		if err := db.Close(); err != nil {
+			t.Fatal(err)
+		}
 	}
 	if rm, err := NewRepositoryManager(context.Background(), dir, Settings{}); !errors.Is(err, relationaldb.ErrInvalidSchema) {
 		if rm != nil {
