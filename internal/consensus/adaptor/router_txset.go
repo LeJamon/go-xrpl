@@ -15,9 +15,10 @@ import (
 )
 
 type txSetAcquireState struct {
-	txMap      *shamap.SHAMap
-	startedAt  time.Time
-	lastUpdate time.Time
+	txMap         *shamap.SHAMap
+	startedAt     time.Time
+	lastUpdate    time.Time
+	retainedBytes int64
 
 	// Retry bookkeeping. lastRequest is when we most recently broadcast a
 	// RequestTxSetMissingNodes. attempts is pure telemetry (the broadcast
@@ -60,9 +61,144 @@ type txSetAcquireState struct {
 	done bool
 }
 
-// 60s covers a consensus round (~15s) plus retries with margin while
-// bounding memory under a stalled consumer.
-const txSetAcquireTTL = 60 * time.Second
+const (
+	// 60s covers a consensus round (~15s) plus retries with margin.
+	txSetAcquireTTL = 60 * time.Second
+
+	// Acquisition limits bound both the number of independently addressable
+	// SHAMaps and the work or payload that any one peer response can retain.
+	// The node ceiling matches the production serve-path hard cap. The byte
+	// limits independently prevent a peer from turning a requested set into
+	// unbounded process memory.
+	txSetAcquireMaxActive      = 64
+	txSetAcquireMaxReplyNodes  = 12288
+	txSetAcquireMaxReplyBytes  = int64(message.MaxMessageSize)
+	txSetAcquireMaxSetBytes    = int64(message.MaxMessageSize)
+	txSetAcquireMaxGlobalBytes = 4 * txSetAcquireMaxSetBytes
+)
+
+func txSetReplyBytes(ld *message.LedgerData) (int64, bool) {
+	if len(ld.Nodes) > txSetAcquireMaxReplyNodes {
+		return 0, false
+	}
+	var total int64
+	for _, node := range ld.Nodes {
+		nodeBytes := int64(len(node.NodeID)) + int64(len(node.NodeData))
+		if nodeBytes > txSetAcquireMaxReplyBytes-total {
+			return 0, false
+		}
+		total += nodeBytes
+	}
+	return total, true
+}
+
+// Caller must hold r.txSetAcquireMu.
+func (r *Router) txSetRetainedBytesLocked() int64 {
+	var total int64
+	for _, state := range r.txSetAcquire {
+		total += state.retainedBytes
+	}
+	return total
+}
+
+// Caller must hold r.txSetAcquireMu.
+func (r *Router) makeTxSetByteRoomLocked(state *txSetAcquireState, additional int64) bool {
+	if additional < 0 || additional > txSetAcquireMaxSetBytes-state.retainedBytes {
+		return false
+	}
+	for additional > txSetAcquireMaxGlobalBytes-r.txSetRetainedBytesLocked() {
+		oldestID, ok := r.oldestDoneTxSetAcquireLocked(true, true, state)
+		if !ok {
+			return false
+		}
+		r.deleteTxSetAcquireLocked(oldestID)
+	}
+	return true
+}
+
+func (r *Router) reserveTxSetNodeBytes(txSetID consensus.TxSetID, state *txSetAcquireState, txMap *shamap.SHAMap, nodeBytes int64) bool {
+	r.txSetAcquireMu.Lock()
+	defer r.txSetAcquireMu.Unlock()
+	current, ok := r.txSetAcquire[txSetID]
+	if !ok || current != state || current.txMap != txMap || current.done ||
+		!r.makeTxSetByteRoomLocked(current, nodeBytes) {
+		return false
+	}
+	current.retainedBytes += nodeBytes
+	return true
+}
+
+func (r *Router) releaseTxSetNodeBytes(txSetID consensus.TxSetID, state *txSetAcquireState, txMap *shamap.SHAMap, nodeBytes int64) {
+	r.txSetAcquireMu.Lock()
+	defer r.txSetAcquireMu.Unlock()
+	current, ok := r.txSetAcquire[txSetID]
+	if !ok || current != state || current.txMap != txMap {
+		return
+	}
+	current.retainedBytes -= nodeBytes
+}
+
+// Caller must hold r.txSetAcquireMu.
+func (r *Router) releaseTxSetMapLocked(state *txSetAcquireState) {
+	state.txMap = nil
+	state.retainedBytes = 0
+}
+
+// Caller must hold r.txSetAcquireMu.
+func (r *Router) deleteTxSetAcquireLocked(txSetID consensus.TxSetID) {
+	if state, ok := r.txSetAcquire[txSetID]; ok {
+		r.releaseTxSetMapLocked(state)
+		delete(r.txSetAcquire, txSetID)
+	}
+}
+
+func txSetIDLess(left, right consensus.TxSetID) bool {
+	for i := range left {
+		if left[i] != right[i] {
+			return left[i] < right[i]
+		}
+	}
+	return false
+}
+
+// Caller must hold r.txSetAcquireMu.
+func (r *Router) oldestDoneTxSetAcquireLocked(
+	dormant bool,
+	retainedOnly bool,
+	exclude *txSetAcquireState,
+) (consensus.TxSetID, bool) {
+	var oldestID consensus.TxSetID
+	var oldestUpdate time.Time
+	found := false
+	for id, state := range r.txSetAcquire {
+		if state == exclude || !state.done || state.dormant != dormant ||
+			(retainedOnly && state.retainedBytes == 0) {
+			continue
+		}
+		if !found || state.lastUpdate.Before(oldestUpdate) ||
+			(state.lastUpdate.Equal(oldestUpdate) && txSetIDLess(id, oldestID)) {
+			oldestID = id
+			oldestUpdate = state.lastUpdate
+			found = true
+		}
+	}
+	return oldestID, found
+}
+
+// Caller must hold r.txSetAcquireMu.
+func (r *Router) makeTxSetAcquireRoomLocked() bool {
+	if len(r.txSetAcquire) < txSetAcquireMaxActive {
+		return true
+	}
+	for _, dormant := range []bool{false, true} {
+		oldestID, ok := r.oldestDoneTxSetAcquireLocked(dormant, false, nil)
+		if ok {
+			r.deleteTxSetAcquireLocked(oldestID)
+			return true
+		}
+	}
+	return false
+}
 
 // txSetRetryKnobs collects the tunable parameters of the tx-set acquire
 // retry loop. The inbound path pipelines a re-request on every
@@ -191,13 +327,27 @@ func (r *Router) handleTxSetData(ld *message.LedgerData, originPeer uint64) {
 	if len(ld.LedgerHash) != 32 {
 		return
 	}
+	_, withinReplyLimit := txSetReplyBytes(ld)
+	if !withinReplyLimit {
+		r.logger.Info("tx-set sync: reply exceeds resource limit",
+			"t", "consensus", "event", "txset-resource-limit",
+			"node_count", len(ld.Nodes))
+		return
+	}
 	var txSetID consensus.TxSetID
 	copy(txSetID[:], ld.LedgerHash)
 
 	r.txSetAcquireMu.Lock()
 	r.sweepStaleTxSetAcquireLocked()
 	state, exists := r.txSetAcquire[txSetID]
-	if !exists || state.done {
+	if !exists {
+		r.txSetAcquireMu.Unlock()
+		if originPeer != 0 {
+			r.adaptor.IncPeerBadData(originPeer, "txset-useless-unneeded")
+		}
+		return
+	}
+	if state.done {
 		r.txSetAcquireMu.Unlock()
 		if originPeer != 0 {
 			r.adaptor.IncPeerBadData(originPeer, "txset-useless-unneeded")
@@ -206,9 +356,7 @@ func (r *Router) handleTxSetData(ld *message.LedgerData, originPeer uint64) {
 	}
 
 	if len(ld.Nodes) == 0 {
-		if originPeer != 0 {
-			state.peerNonProgress[originPeer]++
-		}
+		state.peerNonProgress[originPeer]++
 		r.txSetAcquireMu.Unlock()
 		if originPeer != 0 {
 			r.adaptor.IncPeerBadData(originPeer, "txset-useless-nonprogress")
@@ -233,8 +381,9 @@ func (r *Router) handleTxSetData(ld *message.LedgerData, originPeer uint64) {
 	}
 
 	if state.txMap == nil {
-		txMap := shamap.New(shamap.TypeTransaction)
-		if err := txMap.StartSync(); err != nil {
+		state.txMap = shamap.New(shamap.TypeTransaction)
+		if err := state.txMap.StartSync(); err != nil {
+			r.deleteTxSetAcquireLocked(txSetID)
 			r.txSetAcquireMu.Unlock()
 			r.logger.Info("tx-set sync: StartSync failed",
 				"t", "consensus", "event", "txset-reject",
@@ -242,38 +391,80 @@ func (r *Router) handleTxSetData(ld *message.LedgerData, originPeer uint64) {
 				"error", err.Error())
 			return
 		}
-		state.txMap = txMap
 	}
+	state.lastUpdate = time.Now()
 	txMap := state.txMap
 	haveRoot := state.haveRoot
 	r.txSetAcquireMu.Unlock()
 
-	// Process nodes in wire order. A bad root is tolerated and processing
-	// continues, while a bad non-root invalidates the reply immediately.
-	// This ordering lets a later valid root recover from an earlier bad root,
-	// but does not let a later root rescue a non-root that arrived before it.
+	resourceLimited := false
+	defer func() {
+		if !resourceLimited {
+			return
+		}
+		r.txSetAcquireMu.Lock()
+		state, exists := r.txSetAcquire[txSetID]
+		if !exists || state.retainedBytes != 0 {
+			r.txSetAcquireMu.Unlock()
+			return
+		}
+		r.deleteTxSetAcquireLocked(txSetID)
+		r.txSetAcquireMu.Unlock()
+	}()
+
+	// Root NodeID is 33 zero bytes. AddRootNode is idempotent
+	// (ErrRootAlreadySet treated as success). rootAccepted feeds
+	// per-peer progress accounting so a peer whose reply contains
+	// only the root still counts as making progress.
 	rootAccepted := false
 	badRootProvided := false
+	for _, node := range ld.Nodes {
+		if !isShamapRootNodeID(node.NodeID) {
+			continue
+		}
+		nodeBytes := int64(len(node.NodeID)) + int64(len(node.NodeData))
+		reserved := haveRoot || r.reserveTxSetNodeBytes(txSetID, state, txMap, nodeBytes)
+		if !reserved {
+			resourceLimited = true
+			continue
+		}
+		err := txMap.AddRootNode([32]byte(txSetID), node.NodeData)
+		switch {
+		case err == nil:
+			rootAccepted = true
+		case errors.Is(err, shamap.ErrRootAlreadySet):
+			rootAccepted = true
+			if !haveRoot {
+				r.releaseTxSetNodeBytes(txSetID, state, txMap, nodeBytes)
+			}
+		default:
+			badRootProvided = true
+			if !haveRoot {
+				r.releaseTxSetNodeBytes(txSetID, state, txMap, nodeBytes)
+			}
+			r.logger.Info("tx-set sync: AddRootNode failed",
+				"t", "consensus", "event", "txset-reject",
+				"txset", fmt.Sprintf("%x", txSetID[:8]),
+				"error", err.Error())
+		}
+		continue
+	}
+	if rootAccepted && !haveRoot {
+		haveRoot = true
+		r.txSetAcquireMu.Lock()
+		state.haveRoot = true
+		r.txSetAcquireMu.Unlock()
+	}
+
+	// Process nodes in wire order. A bad root is tolerated and processing
+	// continues, while a bad non-root invalidates the reply immediately.
 	added := 0
 	duplicates := 0
 	replyValid := true
 	for _, node := range ld.Nodes {
 		if isShamapRootNodeID(node.NodeID) {
-			err := txMap.AddRootNode([32]byte(txSetID), node.NodeData)
-			switch {
-			case err == nil, errors.Is(err, shamap.ErrRootAlreadySet):
-				rootAccepted = true
-				haveRoot = true
-			default:
-				badRootProvided = true
-				r.logger.Info("tx-set sync: AddRootNode failed",
-					"t", "consensus", "event", "txset-reject",
-					"txset", fmt.Sprintf("%x", txSetID[:8]),
-					"error", err.Error())
-			}
 			continue
 		}
-
 		parsedID, err := shamap.ParseNodeID(node.NodeID)
 		if err != nil {
 			replyValid = false
@@ -284,7 +475,15 @@ func (r *Router) handleTxSetData(ld *message.LedgerData, originPeer uint64) {
 				"error", err.Error())
 			break
 		}
+		nodeBytes := int64(len(node.NodeID)) + int64(len(node.NodeData))
+		if !r.reserveTxSetNodeBytes(txSetID, state, txMap, nodeBytes) {
+			resourceLimited = true
+			continue
+		}
 		res, err := txMap.AddKnownNodeByID(parsedID, node.NodeData)
+		if res != shamap.NodeUseful {
+			r.releaseTxSetNodeBytes(txSetID, state, txMap, nodeBytes)
+		}
 		if res == shamap.NodeReRequest {
 			continue
 		}
@@ -304,12 +503,6 @@ func (r *Router) handleTxSetData(ld *message.LedgerData, originPeer uint64) {
 		}
 		added++
 		r.learnTxFromLeaf(originPeer, node.NodeData)
-	}
-
-	if haveRoot && !state.haveRoot {
-		r.txSetAcquireMu.Lock()
-		state.haveRoot = true
-		r.txSetAcquireMu.Unlock()
 	}
 
 	if !replyValid {
@@ -369,10 +562,7 @@ func (r *Router) handleTxSetData(ld *message.LedgerData, originPeer uint64) {
 		// Request the missing nodes. Before going to peers, fill any
 		// missing TX-leaf nodes from our own pending pool. For
 		// tnTRANSACTION_NM the leaf-node hash equals the tx ID, so a
-		// single tx-ID lookup resolves the leaf. This is a round-trip
-		// optimization, not a correctness requirement: a peer DOES return
-		// a leaf requested directly by node ID, but local sourcing avoids
-		// the extra request for a tx we already relayed.
+		// single tx-ID lookup resolves the leaf.
 		missing := txMap.GetMissingNodes(256, nil)
 		if len(missing) == 0 {
 			// Root present but the map is inconsistent: terminal. Latch done
@@ -387,7 +577,9 @@ func (r *Router) handleTxSetData(ld *message.LedgerData, originPeer uint64) {
 			return
 		}
 
-		filledFromPool := r.fillTxSetFromLocalPool(txMap, missing)
+		r.txSetAcquireMu.Lock()
+		filledFromPool := r.fillTxSetFromLocalPool(txSetID, state, missing)
+		r.txSetAcquireMu.Unlock()
 		var remaining []shamap.MissingNode
 		if filledFromPool > 0 {
 			if syncErr := txMap.FinishSync(); syncErr == nil {
@@ -420,9 +612,8 @@ func (r *Router) handleTxSetData(ld *message.LedgerData, originPeer uint64) {
 			if !madeProgress && !validAllDuplicate {
 				// No fresh attach: do NOT re-request inline — that would let a
 				// junk/empty-reply peer amplify into a broadcast storm; let the
-				// 250ms stall timer drive it. Charge the peer's non-progress
-				// counter.
-				if originPeer != 0 {
+				// 250ms stall timer drive it.
+				if originPeer != 0 && !resourceLimited {
 					state.peerNonProgress[originPeer]++
 				}
 				r.txSetAcquireMu.Unlock()
@@ -467,8 +658,6 @@ func (r *Router) handleTxSetData(ld *message.LedgerData, originPeer uint64) {
 				"excluded_peers", len(excluded),
 				"indirect", indirect,
 			)
-			// Pipeline UNICAST to the replying peer (RTT rate-limits, no storm);
-			// the 250ms timer owns the broadcast fallback for silent peers.
 			if reqErr := r.requestTxSetMissingNodesUnicast(txSetID, nodeIDs, originPeer, excluded, indirect); reqErr != nil {
 				r.logger.Info("tx-set sync: missing-nodes request failed",
 					"t", "consensus", "event", "txset-reject",
@@ -477,13 +666,11 @@ func (r *Router) handleTxSetData(ld *message.LedgerData, originPeer uint64) {
 			}
 			return
 		}
-		// fall through: tree complete via local fill
 	}
 
-	// Walk leaves into blobs, feed the engine, then latch the acquire done and
-	// KEEP it: stragglers for the finished set are dropped (see the top of
-	// handleTxSetData) rather than recreating a fresh empty acquire. The TTL
-	// sweep reclaims it.
+	// Walk leaves into blobs, then replace the completed map with a lightweight
+	// terminal tombstone. Stragglers are dropped without retaining the SHAMap
+	// payload until the TTL sweep.
 	blobs := make([][]byte, 0, added+1)
 	if err := txMap.ForEach(func(item *shamap.Item) bool {
 		blobs = append(blobs, item.Data())
@@ -509,7 +696,7 @@ func (r *Router) handleTxSetData(ld *message.LedgerData, originPeer uint64) {
 
 func (r *Router) deleteTxSetAcquire(txSetID consensus.TxSetID) {
 	r.txSetAcquireMu.Lock()
-	delete(r.txSetAcquire, txSetID)
+	r.deleteTxSetAcquireLocked(txSetID)
 	r.txSetAcquireMu.Unlock()
 }
 
@@ -518,6 +705,7 @@ func (r *Router) markTxSetComplete(txSetID consensus.TxSetID) {
 	if state, ok := r.txSetAcquire[txSetID]; ok {
 		state.done = true
 		state.completed = true
+		r.releaseTxSetMapLocked(state)
 	}
 	r.txSetAcquireMu.Unlock()
 }
@@ -582,17 +770,24 @@ func (r *Router) submitTxSetToEngine(txSetID consensus.TxSetID, blobs [][]byte) 
 // filled. For tnTRANSACTION_NM the leaf-node hash equals the tx ID, so a
 // single GetTx lookup resolves the leaf — avoiding a peer round-trip for a
 // tx we already hold. Shared by the inbound (handleTxSetData) and timer
-// (retryStalledTxSetAcquires) paths. The caller owns txMap (both callers
-// run on the Run() goroutine) and decides how to recompute the remaining
-// set afterward.
-func (r *Router) fillTxSetFromLocalPool(txMap *shamap.SHAMap, missing []shamap.MissingNode) int {
+// (retryStalledTxSetAcquires) paths. Both callers run on the Run() goroutine
+// and hold txSetAcquireMu while this updates retained-byte accounting.
+func (r *Router) fillTxSetFromLocalPool(txSetID consensus.TxSetID, state *txSetAcquireState, missing []shamap.MissingNode) int {
 	filled := 0
 	for _, m := range missing {
 		blob, err := r.adaptor.GetTx(consensus.TxID(m.Hash))
 		if err != nil || len(blob) == 0 {
 			continue
 		}
-		if addErr := txMap.AddKnownNode(m.Hash, txLeafWire(blob)); addErr == nil {
+		wire := txLeafWire(blob)
+		nodeBytes := int64(shamap.NodeIDSize) + int64(len(wire))
+		current, ok := r.txSetAcquire[txSetID]
+		if !ok || current != state || current.txMap == nil ||
+			!r.makeTxSetByteRoomLocked(current, nodeBytes) {
+			continue
+		}
+		if addErr := current.txMap.AddKnownNode(m.Hash, wire); addErr == nil {
+			current.retainedBytes += nodeBytes
 			filled++
 		}
 	}
@@ -608,6 +803,9 @@ func (r *Router) MarkTxSetStillNeeded(txSetID consensus.TxSetID) {
 	now := time.Now()
 	state, ok := r.txSetAcquire[txSetID]
 	if !ok {
+		if !r.makeTxSetAcquireRoomLocked() {
+			return
+		}
 		r.txSetAcquire[txSetID] = &txSetAcquireState{
 			startedAt:       now,
 			lastUpdate:      now,
@@ -633,7 +831,7 @@ func (r *Router) sweepStaleTxSetAcquireLocked() {
 	cutoff := time.Now().Add(-txSetAcquireTTL)
 	for id, state := range r.txSetAcquire {
 		if state.lastUpdate.Before(cutoff) {
-			delete(r.txSetAcquire, id)
+			r.deleteTxSetAcquireLocked(id)
 		}
 	}
 }
@@ -750,7 +948,7 @@ func (r *Router) retryStalledTxSetAcquires() {
 		// last inbound reply it can complete the tree outright. GetTx is a
 		// local pool read and txMap is owned by this (Run) goroutine, so the
 		// fill is safe under txSetAcquireMu.
-		filled := r.fillTxSetFromLocalPool(state.txMap, missing)
+		filled := r.fillTxSetFromLocalPool(id, state, missing)
 		var finishErr error
 		if filled > 0 {
 			finishErr = state.txMap.FinishSync()
@@ -858,8 +1056,8 @@ func (r *Router) finalizeCompletedTxSet(txSetID consensus.TxSetID, txMap *shamap
 		r.deleteTxSetAcquire(txSetID)
 		return
 	}
-	// Latch done + KEEP the entry so stragglers are dropped rather than
-	// recreating a fresh empty acquire; the TTL sweep reclaims it.
+	// Keep a lightweight tombstone so stragglers are dropped; the retained
+	// SHAMap payload is released immediately.
 	r.markTxSetComplete(txSetID)
 	if len(blobs) == 0 {
 		return
