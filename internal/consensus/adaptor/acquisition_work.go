@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/LeJamon/go-xrpl/internal/ledger/inbound"
+	"github.com/LeJamon/go-xrpl/internal/peermanagement"
 	"github.com/LeJamon/go-xrpl/internal/peermanagement/message"
 	"github.com/LeJamon/go-xrpl/shamap"
 )
@@ -812,6 +813,11 @@ func (r *Router) sendMissingReplyRequest(ledger *inbound.Ledger, request inbound
 	} else if latency, ok := r.adaptor.PeerLatency(request.PeerID); ok && latency >= 300*time.Millisecond {
 		queryDepth = 2
 	}
+	if !r.acquisitionPeerConnected(request.PeerID) {
+		ledger.ReleaseMissingRequest(request.PeerID, request.NodeHashes)
+		r.removeStaleAcquisitionPeer(ledger, request.PeerID)
+		return true
+	}
 	var err error
 	if request.Transaction {
 		err = r.adaptor.RequestTransactionNodes(request.PeerID, ledger.Hash(), request.NodeIDs, queryDepth, indirect)
@@ -842,6 +848,12 @@ func (r *Router) sendMissingAcquisitionNodes(
 	var txSent, txDisconnected bool
 	for _, peerID := range peers {
 		disconnected := false
+		if !r.acquisitionPeerConnected(peerID) {
+			r.removeStaleAcquisitionPeer(ledger, peerID)
+			stateDisconnected = stateDisconnected || len(stateIDs) > 0
+			txDisconnected = txDisconnected || len(txIDs) > 0
+			continue
+		}
 		if len(stateIDs) > 0 {
 			if err := r.adaptor.RequestStateNodes(peerID, ledger.Hash(), stateIDs, queryDepth, indirect); err != nil {
 				disconnected = r.handleMissingNodeSendFailure(ledger, peerID, false, err)
@@ -871,6 +883,15 @@ func (r *Router) sendMissingAcquisitionNodes(
 		retry.txIDs = txIDs
 	}
 	return retry
+}
+
+func (r *Router) acquisitionPeerConnected(peerID uint64) bool {
+	return r.peerSessions == nil || r.peerSessions.IsPeerConnected(peermanagement.PeerID(peerID))
+}
+
+func (r *Router) removeStaleAcquisitionPeer(ledger *inbound.Ledger, peerID uint64) {
+	ledger.RemovePeer(peerID)
+	r.HandlePeerDisconnect(peermanagement.PeerID(peerID))
 }
 
 func applyAcquisitionData(ctx context.Context, ledger *inbound.Ledger, data *message.LedgerData) (useful int, badKind string, remove, complete bool, err error) {

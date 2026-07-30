@@ -3,6 +3,7 @@ package adaptor
 import (
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/LeJamon/go-xrpl/internal/consensus"
 	"github.com/LeJamon/go-xrpl/internal/ledger/inbound"
@@ -159,6 +160,66 @@ func TestAdaptorRequestLedgerKeepsActiveStepAndQueuesLatestTarget(t *testing.T) 
 	assert.Equal(t, queuedHash, r.consensusRecovery.targetHash)
 	require.Len(t, sender.legacyCalls(), 2)
 	assert.Equal(t, queuedHash, sender.legacyCalls()[1].hash)
+}
+
+func TestConsensusRecoveryKeepsProgressingStepAcrossIntermittentStalls(t *testing.T) {
+	r, a, sender, _ := makeRouter(t)
+	source := newWideWorkSource(t, 4)
+	ledger, baseNodes := newWantBaseWorkLedger(t, source, []uint64{7})
+	require.NoError(t, ledger.GotBase(baseNodes))
+
+	wire, err := source.WalkWireNodes()
+	require.NoError(t, err)
+	var ancestors, replies []message.LedgerNode
+	for _, node := range wire {
+		depth := node.NodeID[32]
+		ledgerNode := message.LedgerNode{NodeID: node.NodeID, NodeData: node.Data}
+		if depth == 1 || depth == 2 {
+			ancestors = append(ancestors, ledgerNode)
+		} else if depth == 3 && len(replies) < 7 {
+			replies = append(replies, ledgerNode)
+		}
+	}
+	added, err := ledger.GotStateNodesUseful(ancestors)
+	require.NoError(t, err)
+	require.Equal(t, len(ancestors), added)
+	require.Len(t, replies, 7)
+
+	activeHash := ledger.Hash()
+	latestHash := [32]byte{0xBA}
+	r.fetchTracker.Track(ledger)
+	r.consensusRecovery = consensusRecovery{
+		targetHash: activeHash,
+		stepHash:   activeHash,
+	}
+	require.NoError(t, a.RequestLedger(consensus.LedgerID(latestHash)))
+	require.Equal(t, latestHash, r.consensusRecovery.targetHash)
+
+	now := time.Unix(1_700_000_000, 0)
+	ledger.RearmTimer(now)
+	require.Equal(t, inbound.TimerRefresh, ledger.OnTimer(now.Add(time.Minute)))
+	now = now.Add(time.Minute)
+
+	for i, reply := range replies {
+		now = now.Add(time.Minute)
+		require.Equal(t, inbound.TimerEscalate, ledger.OnTimer(now), "stall %d", i+1)
+		ledger.RearmTimer(now)
+
+		added, err := ledger.GotStateNodesUseful([]message.LedgerNode{reply})
+		require.NoError(t, err)
+		require.Equal(t, 1, added)
+
+		now = now.Add(time.Minute)
+		require.Equal(t, inbound.TimerRefresh, ledger.OnTimer(now), "progress %d", i+1)
+		r.armConsensusCatchup()
+		require.Same(t, ledger, r.fetchTracker.Find(activeHash))
+		assert.Nil(t, r.fetchTracker.Find(latestHash))
+		assert.Equal(t, activeHash, r.consensusRecovery.stepHash)
+	}
+
+	assert.Equal(t, 7, ledger.Timeouts())
+	assert.Equal(t, inbound.StateWantState, ledger.State())
+	assert.Empty(t, sender.legacyCalls())
 }
 
 func TestSpeculativeAcquisitionDefersDuringConsensusRecovery(t *testing.T) {

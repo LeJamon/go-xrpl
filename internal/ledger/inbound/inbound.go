@@ -144,14 +144,15 @@ type Ledger struct {
 
 	// Retry-loop bookkeeping ported from rippled's TimeoutCounter. lastTimer
 	// is when OnTimer last evaluated; progress records a fresh node attach
-	// since then; timeouts is the cumulative no-progress count used for both
-	// escalation and terminal failure.
+	// since then; timeouts is the cumulative no-progress count used for
+	// diagnostics and escalation; consecutiveTimeouts bounds terminal stalls.
 	// byHash latches eligibility for a by-hash escalation on the next aggressive
 	// request. All guarded by mu.
-	lastTimer time.Time
-	progress  bool
-	timeouts  int
-	byHash    bool
+	lastTimer           time.Time
+	progress            bool
+	timeouts            int
+	consecutiveTimeouts int
+	byHash              bool
 
 	// recentNodes keeps request frontiers disjoint within a timer interval.
 	// requestPeers caps the acquisition at one active request per peer and six
@@ -393,14 +394,16 @@ func (l *Ledger) OnTimer(now time.Time) TimerAction {
 	}
 
 	l.timeouts++
-	if l.timeouts > ledgerTimeoutRetriesMax {
+	l.consecutiveTimeouts++
+	if l.consecutiveTimeouts > ledgerTimeoutRetriesMax {
 		l.state = StateFailed
-		l.err = fmt.Errorf("inbound ledger %d: acquisition failed after %d timeouts (have_state=%t have_tx=%t last_reject=%q)",
-			l.seq, l.timeouts, l.haveState, l.haveTx, l.lastRejectErr)
+		l.err = fmt.Errorf("inbound ledger %d: acquisition failed after %d consecutive timeouts (%d total; have_state=%t have_tx=%t last_reject=%q)",
+			l.seq, l.consecutiveTimeouts, l.timeouts, l.haveState, l.haveTx, l.lastRejectErr)
 		l.logger.Warn("inbound ledger: acquisition failed, retry budget exhausted",
 			"seq", l.seq,
 			"hash", fmt.Sprintf("%x", l.hash[:8]),
 			"timeouts", l.timeouts,
+			"consecutive_timeouts", l.consecutiveTimeouts,
 			"phase", l.snapshotLocked().Phase(),
 			"have_state", l.haveState,
 			"have_tx", l.haveTx,
@@ -459,6 +462,7 @@ func (l *Ledger) RearmTimer(now time.Time) {
 // timing out (rippled sets progress_ on a useful received node). Caller holds mu.
 func (l *Ledger) markProgressLocked() {
 	l.progress = true
+	l.consecutiveTimeouts = 0
 }
 
 // TakeByHashRequest returns the content hashes of up to max still-missing nodes

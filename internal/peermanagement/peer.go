@@ -1131,6 +1131,24 @@ func (p *Peer) frameProgressBlocksPing(progress inboundFrameProgress, ping pingI
 		now.Sub(progress.lastProgress) < p.readPolicy.idleTimeout
 }
 
+func normalizeManifestSpoolReadError(err error, budgetDeadlineArmed bool) error {
+	var localSpoolErr *manifestSpoolLocalError
+	if errors.As(err, &localSpoolErr) {
+		return err
+	}
+	if errors.Is(err, ErrFrameReadTooSlow) {
+		return ErrFrameReadTooSlow
+	}
+	var netErr net.Error
+	if errors.As(err, &netErr) && netErr.Timeout() {
+		if budgetDeadlineArmed {
+			return ErrFrameReadTooSlow
+		}
+		return ErrReadIdle
+	}
+	return err
+}
+
 func (p *Peer) readLoop(ctx context.Context) error {
 	var outstandingManifest <-chan struct{}
 	for {
@@ -1188,17 +1206,10 @@ func (p *Peer) readLoop(ctx context.Context) error {
 				if p.closed.Load() {
 					return nil
 				}
-				if errors.Is(spoolErr, ErrFrameReadTooSlow) {
-					return frameReader.failure(ErrFrameReadTooSlow, now)
-				}
-				var ne net.Error
-				if errors.As(spoolErr, &ne) && ne.Timeout() {
-					if frameReader.budgetDeadlineArmed {
-						return frameReader.failure(ErrFrameReadTooSlow, now)
-					}
-					return frameReader.failure(ErrReadIdle, now)
-				}
-				return frameReader.failure(spoolErr, now)
+				return frameReader.failure(
+					normalizeManifestSpoolReadError(spoolErr, frameReader.budgetDeadlineArmed),
+					now,
+				)
 			}
 
 			payloadWireSize := uint64(header.PayloadSize)
