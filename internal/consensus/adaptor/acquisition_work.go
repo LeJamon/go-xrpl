@@ -697,7 +697,7 @@ func (r *Router) handleAcquisitionWorkResult(result acquisitionWorkResult) {
 			for _, request := range result.requests {
 				ledger.ReleaseMissingRequest(request.PeerID, request.NodeHashes)
 			}
-			r.retireAcquisitionStore(context.TODO(), ledger)
+			r.retireAcquisitionStore(r.lifecycleContext(), ledger)
 		}
 		return
 	}
@@ -716,7 +716,7 @@ func (r *Router) handleAcquisitionWorkResult(result acquisitionWorkResult) {
 	if result.persistenceErr != nil {
 		r.logger.Warn("inbound ledger: verified-node persistence failed", "error", result.persistenceErr, "seq", ledger.Seq())
 		if r.fetchTracker.DiscardExpected(ledger) {
-			r.retireAcquisitionStore(context.TODO(), ledger)
+			r.retireAcquisitionStore(r.lifecycleContext(), ledger)
 		}
 		return
 	}
@@ -728,11 +728,11 @@ func (r *Router) handleAcquisitionWorkResult(result acquisitionWorkResult) {
 			r.failInboundAcquisitionWithSnapshot(ledger, result.snapshot)
 		} else if result.haveSnapshot {
 			if r.fetchTracker.RemoveExpectedWithSnapshot(ledger, result.snapshot, false) {
-				r.retireAcquisitionStore(context.TODO(), ledger)
+				r.retireAcquisitionStore(r.lifecycleContext(), ledger)
 			}
 		} else {
 			if r.fetchTracker.RemoveExpectedWithSnapshot(ledger, ledger.Snapshot(), false) {
-				r.retireAcquisitionStore(context.TODO(), ledger)
+				r.retireAcquisitionStore(r.lifecycleContext(), ledger)
 			}
 		}
 		return

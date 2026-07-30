@@ -277,6 +277,7 @@ func ParseRelayValidationsPolicy(s string) RelayValidationsPolicy {
 type Config struct {
 	LedgerService *service.Service
 	Sender        NetworkSender
+	OnTxSetBuilt  func(consensus.TxSetID)
 	Identity      *ValidatorIdentity
 	Validators    []consensus.NodeID // UNL
 	// ValidatorMasterKeys are the 33-byte master pubkeys index-aligned with
@@ -420,6 +421,7 @@ func New(cfg Config) *Adaptor {
 		peerLCLs:          make(map[uint64]consensus.LedgerID),
 		reqLedgerLast:     make(map[consensus.LedgerID]time.Time),
 		announcedSets:     make(map[consensus.TxSetID]struct{}),
+		onTxSetBuilt:      cfg.OnTxSetBuilt,
 		maxDisallowedSeq:  maxDisallowedSeq,
 		cookie:            cookie,
 		feeVote:           feeVote,
@@ -933,12 +935,6 @@ func (a *Adaptor) BuildTxSet(txs [][]byte) (consensus.TxSet, error) {
 		}
 	}
 	return ts, nil
-}
-
-// SetOnTxSetBuilt installs a callback invoked once per BuildTxSet (after
-// caching); the CLI wires it to Overlay.BroadcastHaveTxSet. nil clears.
-func (a *Adaptor) SetOnTxSetBuilt(cb func(consensus.TxSetID)) {
-	a.onTxSetBuilt = cb
 }
 
 // HasTx reports whether the persistent open view contains this tx.

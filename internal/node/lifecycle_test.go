@@ -39,6 +39,7 @@ func TestWaitForShutdownReturnsContextCause(t *testing.T) {
 			make(chan struct{}),
 			make(chan error),
 			nil,
+			nil,
 			"",
 		)
 	}()
@@ -51,5 +52,28 @@ func TestWaitForShutdownReturnsContextCause(t *testing.T) {
 		}
 	case <-time.After(time.Second):
 		t.Fatal("waitForShutdown() did not return after context cancellation")
+	}
+}
+
+func TestWaitForShutdownReturnsComponentError(t *testing.T) {
+	t.Parallel()
+
+	componentErr := errors.New("consensus router stopped")
+	componentErrCh := make(chan error, 1)
+	componentErrCh <- componentErr
+
+	err := waitForShutdown(
+		context.Background(),
+		xrpllog.Discard(),
+		make(chan os.Signal),
+		make(chan os.Signal),
+		make(chan struct{}),
+		make(chan error),
+		componentErrCh,
+		nil,
+		"",
+	)
+	if !errors.Is(err, componentErr) {
+		t.Fatalf("waitForShutdown() error = %v, want %v", err, componentErr)
 	}
 }
