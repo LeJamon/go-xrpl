@@ -55,7 +55,7 @@ func TestRouter_ValidationFreshnessGate(t *testing.T) {
 				Sender:        rs,
 				Identity:      identity,
 			})
-			router := NewRouter(engine, a, make(chan *peermanagement.InboundMessage, 1))
+			router := newTestRouter(engine, a, make(chan *peermanagement.InboundMessage, 1))
 
 			router.handleValidation(buildValidationAt(t, 7, tc.signTime))
 

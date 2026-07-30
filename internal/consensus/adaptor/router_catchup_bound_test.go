@@ -125,7 +125,7 @@ func TestRouter_InitialSyncPathStillArms(t *testing.T) {
 
 	a, rs := newRecordingAdaptor(t, svc)
 	inbox := make(chan *peermanagement.InboundMessage, 8)
-	r := NewRouter(nil, a, inbox)
+	r := newTestRouter(nil, a, inbox)
 
 	var peerHash [32]byte
 	peerHash[0] = 0x5C
@@ -139,7 +139,7 @@ func TestRouter_InitialSyncPathStillArms(t *testing.T) {
 func TestRouter_InitialConsensusAcquisitionStagesClosedLedger(t *testing.T) {
 	svc := adg_newNonStandaloneService(t)
 	a, _ := newRecordingAdaptor(t, svc)
-	r := NewRouter(nil, a, make(chan *peermanagement.InboundMessage, 8))
+	r := newTestRouter(nil, a, make(chan *peermanagement.InboundMessage, 8))
 	closed := svc.GetClosedLedger()
 	require.NotNil(t, closed)
 	tipSeq := svc.GetClosedLedgerIndex() + 1

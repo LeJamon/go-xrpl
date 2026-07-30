@@ -23,8 +23,8 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// recordingSender captures the calls the router makes against the
-// NetworkSender interface. The router is the unit under test, so the
+// recordingSender captures the calls the router makes against its acquisition
+// network. The router is the unit under test, so the
 // sender is the natural seam to inspect for "preferred replay-delta vs
 // fell back to legacy" assertions.
 type recordingSender struct {
@@ -293,7 +293,7 @@ func makeRouter(t *testing.T) (*Router, *Adaptor, *recordingSender, *service.Ser
 	svc := newTestLedgerService(t)
 	a, rs := newRecordingAdaptor(t, svc)
 	inbox := make(chan *peermanagement.InboundMessage, 8)
-	r := NewRouter(nil, a, inbox)
+	r := newTestRouter(nil, a, inbox)
 	return r, a, rs, svc
 }
 
@@ -978,7 +978,7 @@ func TestRouter_InitialReplaySwitchSchedulesHistoryBackfill(t *testing.T) {
 		require.NoError(t, err)
 		require.NoError(t, a.OnLedgerSwitched(selected))
 	}
-	r := NewRouter(engine, a, make(chan *peermanagement.InboundMessage, 1))
+	r := newTestRouter(engine, a, make(chan *peermanagement.InboundMessage, 1))
 
 	closed := svc.GetClosedLedger()
 	require.NotNil(t, closed)
@@ -1012,7 +1012,7 @@ func TestRouter_LaterPreferredInitialSwitchSchedulesHistoryBackfill(t *testing.T
 	t.Cleanup(svc.Stop)
 	a, _ := newRecordingAdaptor(t, svc)
 	engine := &mockEngine{switchResult: consensus.LedgerSwitchIrrelevant}
-	r := NewRouter(engine, a, nil)
+	r := newTestRouter(engine, a, nil)
 
 	closed := svc.GetClosedLedger()
 	require.NotNil(t, closed)

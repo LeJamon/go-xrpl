@@ -11,8 +11,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// fakeFetchPackProvider implements LedgerProvider; only MakeFetchPack is
-// exercised, the rest are inert stubs.
+// fakeFetchPackProvider implements LedgerProvider for fetch-pack tests.
 type fakeFetchPackProvider struct {
 	objects []message.IndexedObject
 	err     error
@@ -20,15 +19,6 @@ type fakeFetchPackProvider struct {
 	calls   int
 }
 
-func (f *fakeFetchPackProvider) GetLedgerHeader(_ []byte, _ uint32) ([]byte, error) {
-	return nil, nil
-}
-func (f *fakeFetchPackProvider) GetAccountStateNode(_ []byte, _ []byte) ([]byte, error) {
-	return nil, nil
-}
-func (f *fakeFetchPackProvider) GetTransactionNode(_ []byte, _ []byte) ([]byte, error) {
-	return nil, nil
-}
 func (f *fakeFetchPackProvider) GetReplayDelta(_ []byte) ([]byte, [][]byte, error) {
 	return nil, nil, nil
 }

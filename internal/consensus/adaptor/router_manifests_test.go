@@ -103,7 +103,7 @@ func TestRouter_HandleManifests_AppliesAccepted(t *testing.T) {
 	adaptor := newTestAdaptor(t)
 	inbox := make(chan *peermanagement.InboundMessage, 4)
 
-	router := NewRouter(engine, adaptor, inbox)
+	router := newTestRouter(engine, adaptor, inbox)
 	cache := manifest.NewCache()
 	// Pass nil overlay — the relay step is a no-op; we're only
 	// verifying apply.
@@ -207,7 +207,7 @@ func TestRouter_HandleManifests_InvalidDoesNotStore(t *testing.T) {
 	adaptor := newTestAdaptor(t)
 	inbox := make(chan *peermanagement.InboundMessage, 4)
 
-	router := NewRouter(engine, adaptor, inbox)
+	router := newTestRouter(engine, adaptor, inbox)
 	cache := manifest.NewCache()
 	router.SetManifestCache(cache, nil)
 
@@ -361,7 +361,7 @@ func TestRouter_HandleManifests_RelaysAcceptedEntriesExceptSource(t *testing.T) 
 	sender := &fakeManifestSender{broadcastErr: peermanagement.ErrSendBufferFull}
 	router, _, _ := routerWithCache(t, sender, 0, 0)
 	badData := &badDataRecordingSender{}
-	router.adaptor.sender = badData
+	router.gossip = badData
 
 	const acceptedCount = 100
 	wires := make([][]byte, 0, acceptedCount)
@@ -401,7 +401,7 @@ func TestRouter_ManifestWorkerDoesNotBlockDispatch(t *testing.T) {
 	adaptor := newTestAdaptor(t)
 	inbox := make(chan *peermanagement.InboundMessage, 10)
 	manifestInbox := make(chan *peermanagement.InboundMessage, 4)
-	router := NewRouter(&mockEngine{}, adaptor, inbox)
+	router := newTestRouter(&mockEngine{}, adaptor, inbox)
 	router.SetManifestInbox(manifestInbox)
 	cache := manifest.NewCache()
 	router.SetManifestCache(cache, nil)
@@ -470,7 +470,7 @@ func TestRouter_ManifestWorkerDoesNotBlockDispatch(t *testing.T) {
 func TestRouter_ManifestWorkerJoinsOnShutdown(t *testing.T) {
 	inbox := make(chan *peermanagement.InboundMessage, 3)
 	manifestInbox := make(chan *peermanagement.InboundMessage, 3)
-	router := NewRouter(&mockEngine{}, newTestAdaptor(t), inbox)
+	router := newTestRouter(&mockEngine{}, newTestAdaptor(t), inbox)
 	router.SetManifestInbox(manifestInbox)
 	cache := manifest.NewCache()
 	sender := &fakeManifestSender{}

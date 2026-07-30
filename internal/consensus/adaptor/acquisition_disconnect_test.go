@@ -107,7 +107,7 @@ func newMissingNodeChurnRouter(t *testing.T, sender *missingNodeChurnSender) *Ro
 	t.Helper()
 	adaptor := newTestAdaptor(t)
 	adaptor.sender = sender
-	return NewRouter(nil, adaptor, nil)
+	return newTestRouter(nil, adaptor, nil)
 }
 
 func newDisconnectFrontier(

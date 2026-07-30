@@ -59,10 +59,7 @@ func TestStartupIncludeLocalValidator(t *testing.T) {
 	require.Empty(t, configuredIDs)
 	require.Empty(t, configuredMasters)
 
-	c := &Components{Adaptor: &Adaptor{identity: identity}}
-	effectiveIDs, effectiveMasters := c.snapshotEffectiveStatic()
-	require.Equal(t, []consensus.NodeID{identity.NodeID}, effectiveIDs)
-	require.Equal(t, [][33]byte{master}, effectiveMasters)
+	c := &Components{}
 	require.Empty(t, c.StaticTrustedMasterKeys())
 }
 
@@ -510,7 +507,7 @@ func TestStup_ComponentsStart_AndStop(t *testing.T) {
 
 	eng := &mockEngine{}
 	inbox := overlay.Messages()
-	router := NewRouter(eng, ad, inbox)
+	router := newTestRouter(eng, ad, inbox)
 
 	c := &Components{
 		Overlay:             overlay,

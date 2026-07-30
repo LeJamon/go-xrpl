@@ -151,7 +151,7 @@ func TestRouter_LostSyncClearsPeerLedgerWithoutAcquiringAdvertisedHash(t *testin
 // TestRouter_CheckBehindArmsAcquisition verifies the checkBehind fix:
 // when a peer is far ahead, the router must arm a real acquisition
 // (via startLedgerAcquisition), not just broadcast an unresponded
-// mtGET_LEDGER. The pre-fix path called RequestLedgerByHashAndSeq
+// mtGET_LEDGER. The pre-fix path used a direct hash-and-sequence broadcast
 // which broadcasts without arming an InboundLedger, so responses
 // arrived with has_inbound=false and got dropped.
 func TestRouter_CheckBehindArmsAcquisition(t *testing.T) {

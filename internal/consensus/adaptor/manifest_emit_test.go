@@ -180,7 +180,7 @@ func routerWithCache(t *testing.T, sender manifestSender, seedKey byte, seq uint
 		}
 	}
 
-	router := NewRouter(&mockEngine{}, ad, nil)
+	router := newTestRouter(&mockEngine{}, ad, nil)
 	router.manifests = cache
 	router.overrideManifestSender = sender
 	return router, cache, id
@@ -431,7 +431,7 @@ func TestRouter_HandlePeerConnect_DelegatesToSendLocalManifest(t *testing.T) {
 
 func TestRouterHandlePeerConnectSeedsHandshakeLedgerHint(t *testing.T) {
 	ad := newTestAdaptor(t)
-	router := NewRouter(&mockEngine{}, ad, nil)
+	router := newTestRouter(&mockEngine{}, ad, nil)
 	closed := [32]byte{0xAA, 0xBB}
 	router.setPeerSessionView(peerLedgerHints{closed: closed})
 

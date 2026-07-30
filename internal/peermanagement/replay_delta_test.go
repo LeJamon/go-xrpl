@@ -12,8 +12,7 @@ import (
 )
 
 // fakeReplayDeltaProvider is a minimal LedgerProvider double used by the
-// replay-delta tests. The only method exercised is GetReplayDelta — the
-// other interface methods are no-ops for these tests.
+// replay-delta tests.
 type fakeReplayDeltaProvider struct {
 	header   []byte
 	txLeaves [][]byte
@@ -21,15 +20,6 @@ type fakeReplayDeltaProvider struct {
 	calls    int
 }
 
-func (f *fakeReplayDeltaProvider) GetLedgerHeader(_ []byte, _ uint32) ([]byte, error) {
-	return nil, nil
-}
-func (f *fakeReplayDeltaProvider) GetAccountStateNode(_ []byte, _ []byte) ([]byte, error) {
-	return nil, nil
-}
-func (f *fakeReplayDeltaProvider) GetTransactionNode(_ []byte, _ []byte) ([]byte, error) {
-	return nil, nil
-}
 func (f *fakeReplayDeltaProvider) GetReplayDelta(_ []byte) ([]byte, [][]byte, error) {
 	f.calls++
 	return f.header, f.txLeaves, f.err

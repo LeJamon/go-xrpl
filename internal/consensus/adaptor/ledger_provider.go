@@ -1,8 +1,7 @@
 // LedgerProvider implements peermanagement.LedgerProvider over
 // *service.Service. It is wired into the overlay by NewFromConfig so
-// peer-side ledger-sync handlers (mtREPLAY_DELTA_REQ, mtPROOF_PATH_REQ,
-// mtGET_LEDGER) can answer real requests instead of silently dropping
-// them.
+// peer-side replay, proof-path, and fetch-pack handlers can answer real
+// requests instead of silently dropping them.
 //
 // This adapter lives in this layer (not in internal/peermanagement)
 // because it needs to import internal/ledger and internal/ledger/service —
@@ -28,7 +27,6 @@ import (
 // the production type's surface.
 type ledgerLookup interface {
 	GetLedgerByHash(hash [32]byte) (*ledger.Ledger, error)
-	GetLedgerBySequence(seq uint32) (*ledger.Ledger, error)
 	EarliestFetch() uint32
 }
 
@@ -83,48 +81,6 @@ func (p *LedgerProvider) belowFloor(seq uint32) bool {
 	}
 	floor := p.floor.MinimumOnline()
 	return floor != 0 && seq < floor
-}
-
-// GetLedgerHeader returns the serialized header for a ledger identified by
-// hash (preferred) or, when no hash is supplied, by sequence. Returns
-// (nil, nil) when the ledger is unknown or below the online-delete floor; a
-// nil node means "no data to serve".
-func (p *LedgerProvider) GetLedgerHeader(hash []byte, seq uint32) ([]byte, error) {
-	l := p.lookupLedger(hash, seq)
-	if l == nil || p.belowFloor(l.Sequence()) {
-		return nil, nil
-	}
-	return l.SerializeHeader(), nil
-}
-
-// GetAccountStateNode returns the leaf data for nodeID in the account-state
-// SHAMap of the ledger identified by ledgerHash. nodeID must be a 32-byte
-// SHAMap key — partial-path SHAMapNodeID lookups are not supported here;
-// peers that request them get an empty response, which the dispatcher treats
-// the same as a missing node.
-func (p *LedgerProvider) GetAccountStateNode(ledgerHash []byte, nodeID []byte) ([]byte, error) {
-	l := p.lookupLedger(ledgerHash, 0)
-	if l == nil || p.belowFloor(l.Sequence()) {
-		return nil, nil
-	}
-	stateMap, err := l.StateMapSnapshot()
-	if err != nil {
-		return nil, fmt.Errorf("snapshot state map: %w", err)
-	}
-	return lookupLeaf(stateMap, nodeID)
-}
-
-// GetTransactionNode mirrors GetAccountStateNode against the tx SHAMap.
-func (p *LedgerProvider) GetTransactionNode(ledgerHash []byte, nodeID []byte) ([]byte, error) {
-	l := p.lookupLedger(ledgerHash, 0)
-	if l == nil || p.belowFloor(l.Sequence()) {
-		return nil, nil
-	}
-	txMap, err := l.TxMapSnapshot()
-	if err != nil {
-		return nil, fmt.Errorf("snapshot tx map: %w", err)
-	}
-	return lookupLeaf(txMap, nodeID)
 }
 
 // GetReplayDelta serves an mtREPLAY_DELTA_REQ:
@@ -321,42 +277,4 @@ func (p *LedgerProvider) GetProofPath(
 	}
 
 	return l.SerializeHeader(), proof.Path, nil
-}
-
-// lookupLedger resolves a ledger by its 32-byte hash when supplied,
-// falling back to a sequence-based lookup. Returns nil on any miss so
-// callers can shortcut to "no data for you" without surfacing the
-// service's sentinel error.
-func (p *LedgerProvider) lookupLedger(hash []byte, seq uint32) *ledger.Ledger {
-	if h, ok := inbound.ToHash32(hash); ok {
-		if l, err := p.svc.GetLedgerByHash(h); err == nil && l != nil {
-			return l
-		}
-	}
-	if seq != 0 {
-		if l, err := p.svc.GetLedgerBySequence(seq); err == nil && l != nil {
-			return l
-		}
-	}
-	return nil
-}
-
-// lookupLeaf returns the data blob for a 32-byte SHAMap key. Non-32-byte
-// nodeIDs (e.g. a path-based SHAMapNodeID) are not supported and yield
-// (nil, nil), matching the dispatcher's "skip silently" behavior on missing
-// nodes.
-func lookupLeaf(snap *shamap.SHAMap, nodeID []byte) ([]byte, error) {
-	key, ok := inbound.ToHash32(nodeID)
-	if !ok {
-		return nil, nil
-	}
-	item, found, err := snap.Get(key)
-	if err != nil {
-		return nil, fmt.Errorf("get leaf: %w", err)
-	}
-	if !found || item == nil {
-		return nil, nil
-	}
-	raw := item.Data()
-	return append([]byte(nil), raw...), nil
 }

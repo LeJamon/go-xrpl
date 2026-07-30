@@ -75,7 +75,7 @@ func TestSlowInitialAcquisitionWaitsForCurrentConsensusSwitch(t *testing.T) {
 		Seq:        local.Sequence() + 1,
 		ParentHash: consensus.LedgerID(local.Hash()),
 	}, false))
-	router := NewRouter(engine, a, make(chan *peermanagement.InboundMessage, 1))
+	router := newTestRouter(engine, a, make(chan *peermanagement.InboundMessage, 1))
 
 	now := a.Now()
 	stale := completedCatchUpAcquisitionWithHeader(t, header.LedgerHeader{
@@ -241,7 +241,7 @@ func TestAcquiredValidatedTipSurvivesMovingRecoveryTarget(t *testing.T) {
 	}, false))
 
 	newerPreferred := [32]byte{0xB8}
-	router := NewRouter(engine, a, make(chan *peermanagement.InboundMessage, 1))
+	router := newTestRouter(engine, a, make(chan *peermanagement.InboundMessage, 1))
 	router.consensusRecovery = consensusRecovery{
 		targetHash: newerPreferred,
 		stepHash:   newerPreferred,

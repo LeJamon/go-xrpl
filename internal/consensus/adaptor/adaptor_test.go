@@ -399,7 +399,7 @@ func TestLedgerWrapper(t *testing.T) {
 	assert.Equal(t, l, wrapper.Unwrap())
 }
 
-func TestNetworkSenderNoopDefault(t *testing.T) {
+func TestAdaptorNetworkNoopDefault(t *testing.T) {
 	svc := newTestLedgerService(t)
 	a := New(Config{
 		LedgerService: svc,

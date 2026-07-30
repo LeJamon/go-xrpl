@@ -26,7 +26,7 @@ func newPipelineRouter(t *testing.T) (*Router, *retryRecordingSender, *mockEngin
 		Validators:    []consensus.NodeID{identity.NodeID},
 	})
 	eng := &mockEngine{}
-	router := NewRouter(eng, a, make(chan *peermanagement.InboundMessage, 1))
+	router := newTestRouter(eng, a, make(chan *peermanagement.InboundMessage, 1))
 	return router, rs, eng
 }
 

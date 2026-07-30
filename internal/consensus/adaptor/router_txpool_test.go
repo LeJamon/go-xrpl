@@ -43,7 +43,7 @@ func signedPaymentFrame(t *testing.T, env *jtx.TestEnv, seq uint32) ([]byte, con
 // a depth-1 queue is pre-filled and no worker drains it, so the non-blocking
 // send sheds on every call.
 func TestSubmitTxJobShedsWhenPoolSaturated(t *testing.T) {
-	r := NewRouter(&mockEngine{}, newTestAdaptor(t), make(chan *peermanagement.InboundMessage, 1))
+	r := newTestRouter(&mockEngine{}, newTestAdaptor(t), make(chan *peermanagement.InboundMessage, 1))
 
 	// Install a full queue with no drainers so every submit sheds.
 	r.lifecycleState = routerLifecycleRunning
@@ -70,7 +70,7 @@ func TestSubmitTxJobShedsWhenPoolSaturated(t *testing.T) {
 // sleep — that absence of a sleep is the assertion that the path is synchronous.
 func TestSubmitTxJobInlineFallback(t *testing.T) {
 	a := newTestAdaptor(t)
-	r := NewRouter(&mockEngine{}, a, make(chan *peermanagement.InboundMessage, 1))
+	r := newTestRouter(&mockEngine{}, a, make(chan *peermanagement.InboundMessage, 1))
 	require.Nil(t, r.txJobs, "pool must be unstarted so submitTxJob takes the inline path")
 
 	env := jtx.NewTestEnv(t)
@@ -94,7 +94,7 @@ func TestRunDrainsTxLane(t *testing.T) {
 	a := newTestAdaptor(t)
 	// nil consensus inbox: that select case is never ready, so Run is
 	// driven solely by the tx lane and the maintenance ticker.
-	r := NewRouter(&mockEngine{}, a, nil)
+	r := newTestRouter(&mockEngine{}, a, nil)
 
 	txLane := make(chan *peermanagement.InboundMessage, 4)
 	r.SetTxInbox(txLane)
@@ -122,14 +122,11 @@ func TestRunDrainsTxLane(t *testing.T) {
 // `go test -race` is what makes this test meaningful — it verifies the
 // channel / atomic-counter / worker handoff is free of data races.
 func TestSubmitTxJobConcurrent(t *testing.T) {
-	inbox := make(chan *peermanagement.InboundMessage)
-	r := NewRouter(&mockEngine{}, newTestAdaptor(t), inbox)
-	done := make(chan struct{})
-	go func() {
-		r.Run(t.Context())
-		close(done)
-	}()
-	inbox <- &peermanagement.InboundMessage{}
+	r := newTestRouter(&mockEngine{}, newTestAdaptor(t), make(chan *peermanagement.InboundMessage, 1))
+
+	// Workers exit when t.Context() is canceled at test cleanup, so they
+	// don't leak across tests.
+	r.startTxWorkers(t.Context())
 
 	const n = 500 // < txQueueDepth (1024): the buffer absorbs all, so 0 sheds
 	var wg sync.WaitGroup
@@ -146,6 +143,4 @@ func TestSubmitTxJobConcurrent(t *testing.T) {
 	wg.Wait()
 
 	require.Equal(t, uint64(0), r.DroppedTxJobs())
-	close(inbox)
-	<-done
 }

@@ -244,10 +244,6 @@ type NetworkBroadcaster interface {
 	// validator message from originPeer and every known-haver in seenPeers.
 	UpdateRelaySlot(validatorKey []byte, originPeer uint64, seenPeers []uint64)
 
-	// PeersThatHave returns peer IDs known to hold suppressionHash, or nil if
-	// unknown or aged out.
-	PeersThatHave(suppressionHash [32]byte) []uint64
-
 	RequestTxSet(id TxSetID) error
 
 	// RequestLedger may be called repeatedly while a ledger remains unavailable;

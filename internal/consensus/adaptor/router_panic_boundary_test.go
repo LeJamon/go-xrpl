@@ -40,7 +40,7 @@ func TestRouter_HandleMessage_RecoversHandlerPanic(t *testing.T) {
 		Identity:      identity,
 	})
 	inbox := make(chan *peermanagement.InboundMessage, 8)
-	r := NewRouter(&panicEngine{}, a, inbox)
+	r := newTestRouter(&panicEngine{}, a, inbox)
 
 	proposeSet := &message.ProposeSet{
 		ProposeSeq:     1,

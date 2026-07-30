@@ -19,7 +19,7 @@ import (
 // slice so tests can pin throttle, give-up, de-prioritization, and the
 // unicast-inline / broadcast-timer split. peerID is 0 for a broadcast and the
 // target peer for a unicast; excluded is populated only on broadcasts. Other
-// NetworkSender methods inherit from noopSender.
+// Other tx-set methods inherit from noopSender.
 type retryRecordingSender struct {
 	noopSender
 	mu        sync.Mutex
@@ -90,7 +90,7 @@ func (s *retryRecordingSender) callAt(i int) retryRecordedCall {
 	return s.calls[i]
 }
 
-// newRetryRouter wires a Router whose NetworkSender records every
+// newRetryRouter wires a Router whose network sender records every
 // RequestTxSetMissingNodes call. The router is NOT started — tests
 // invoke handleTxSetData directly so timings are deterministic.
 func newRetryRouter(t *testing.T) (*Router, *retryRecordingSender) {
@@ -105,7 +105,7 @@ func newRetryRouter(t *testing.T) (*Router, *retryRecordingSender) {
 		Identity:      identity,
 		Validators:    []consensus.NodeID{identity.NodeID},
 	})
-	router := NewRouter(&mockEngine{}, a, make(chan *peermanagement.InboundMessage, 1))
+	router := newTestRouter(&mockEngine{}, a, make(chan *peermanagement.InboundMessage, 1))
 	return router, rs
 }
 
@@ -148,13 +148,13 @@ func emptyTxSetLedgerData(txSetID consensus.TxSetID) *message.LedgerData {
 // production 250 ms cadence window. Restores prior values on return.
 func withRetryKnobs(router *Router, minInterval time.Duration, maxStallTicks, peerThreshold int, fn func()) {
 	prev := router.txSetRetryKnobs
-	router.SetTxSetRetryKnobsForTest(txSetRetryKnobs{
+	router.setTxSetRetryKnobsForTest(txSetRetryKnobs{
 		MinInterval:              minInterval,
 		NormalTimeouts:           1,
 		MaxStallTicks:            maxStallTicks,
 		PeerNonProgressThreshold: peerThreshold,
 	})
-	defer router.SetTxSetRetryKnobsForTest(prev)
+	defer router.setTxSetRetryKnobsForTest(prev)
 	fn()
 }
 
