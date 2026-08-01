@@ -40,11 +40,25 @@ func TestMismatch(t *testing.T) {
 		b    Ledger
 		want uint32
 	}{
-		{name: "EmptyOverlap", a: b.Build(""), b: b.Build("a"), want: 1},
+		{name: "GenesisOverlap", a: b.Build(""), b: b.Build("a"), want: 1},
 		{name: "SharedHistory", a: b.Build("abc"), b: b.Build("abcde"), want: 4},
 		{name: "DivergentAtFloor", a: b.Build("abc"), b: b.Build("xyz"), want: 1},
 		{name: "SameSequenceDivergence", a: b.Build("abc"), b: b.Build("abd"), want: 3},
 		{name: "DifferentSequenceDivergence", a: b.Build("abc"), b: b.Build("abdef"), want: 3},
+		{name: "NoKnownOverlap", a: limitedHistoryLedger{seq: 300}, b: limitedHistoryLedger{seq: 1}, want: 1},
+		{name: "SharedAtWindow", a: limitedHistoryLedger{seq: 300}, b: limitedHistoryLedger{seq: 299}, want: 300},
+		{
+			name: "DivergenceAtWindowFloor",
+			a:    limitedHistoryBranchLedger{seq: 300, fork: 44, branch: 1},
+			b:    limitedHistoryBranchLedger{seq: 300, fork: 44, branch: 2},
+			want: 1,
+		},
+		{
+			name: "DivergenceInsideWindow",
+			a:    limitedHistoryBranchLedger{seq: 300, fork: 100, branch: 1},
+			b:    limitedHistoryBranchLedger{seq: 300, fork: 100, branch: 2},
+			want: 100,
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -846,6 +860,31 @@ func (l limitedHistoryLedger) Ancestor(seq uint32) consensus.LedgerID {
 		return consensus.LedgerID{}
 	}
 	return sequenceLedgerID(seq)
+}
+
+type limitedHistoryBranchLedger struct {
+	seq    uint32
+	fork   uint32
+	branch byte
+}
+
+func (l limitedHistoryBranchLedger) ID() consensus.LedgerID { return l.Ancestor(l.seq) }
+func (l limitedHistoryBranchLedger) Seq() uint32            { return l.seq }
+func (l limitedHistoryBranchLedger) MinSeq() uint32 {
+	if l.seq > 256 {
+		return l.seq - 256
+	}
+	return 0
+}
+func (l limitedHistoryBranchLedger) Ancestor(seq uint32) consensus.LedgerID {
+	if seq < l.MinSeq() || seq > l.seq {
+		return consensus.LedgerID{}
+	}
+	id := sequenceLedgerID(seq)
+	if seq >= l.fork {
+		id[0] = l.branch
+	}
+	return id
 }
 
 func sequenceLedgerID(seq uint32) consensus.LedgerID {
