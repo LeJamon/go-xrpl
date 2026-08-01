@@ -1173,7 +1173,7 @@ func (r *Router) armHistoryBackfill() {
 				"error", err, "seq", target.seq)
 			return
 		}
-		if err = svc.IngestHistoricalLedgerWithState(context.TODO(), &hdr, stateMap, txMap); err != nil {
+		if err = svc.IngestHistoricalLedgerWithState(r.lifecycleContext(), &hdr, stateMap, txMap); err != nil {
 			r.logger.Warn("history backfill: held ledger ingest failed",
 				"error", err, "seq", target.seq)
 			return
@@ -1257,7 +1257,7 @@ func (r *Router) retireLegacyAcquisitions(ledgers []*inbound.Ledger) {
 		if lane := r.currentAcquisitionWork(); lane != nil {
 			lane.cancelLedger(ledger)
 		}
-		r.retireAcquisitionStore(context.TODO(), ledger)
+		r.retireAcquisitionStore(r.lifecycleContext(), ledger)
 	}
 }
 
@@ -1536,11 +1536,7 @@ func (r *Router) adoptVerifiedLedger(l *ledger.Ledger) error {
 	if err != nil {
 		return fmt.Errorf("snapshot tx map: %w", err)
 	}
-	// context.TODO: adoptVerifiedLedger is reached from a peer-message
-	// handler stack that does not currently carry a context. Threading
-	// one through the message-dispatch chain is tracked separately from
-	// this issue (#185).
-	initialCandidate, err := svc.BootstrapLedgerWithState(context.TODO(), &hdr, stateMap, txMap)
+	initialCandidate, err := svc.BootstrapLedgerWithState(r.lifecycleContext(), &hdr, stateMap, txMap)
 	if err != nil {
 		return fmt.Errorf("store replay-delta ledger: %w", err)
 	}
@@ -2223,7 +2219,7 @@ func (r *Router) handleInboundLedgerData(il *inbound.Ledger, ld *message.LedgerD
 		if len(ld.Nodes) < 2 {
 			r.logger.Debug("inbound ledger: response has < 2 nodes", "nodes", len(ld.Nodes))
 			if r.fetchTracker.RemoveExpectedWithSnapshot(il, il.Snapshot(), false) {
-				r.retireAcquisitionStore(context.TODO(), il)
+				r.retireAcquisitionStore(r.lifecycleContext(), il)
 			}
 			return true
 		}
@@ -2234,7 +2230,7 @@ func (r *Router) handleInboundLedgerData(il *inbound.Ledger, ld *message.LedgerD
 			} else {
 				r.adaptor.IncPeerBadData(peerID, "ledger-data-base")
 				if r.fetchTracker.RemoveExpectedWithSnapshot(il, il.Snapshot(), false) {
-					r.retireAcquisitionStore(context.TODO(), il)
+					r.retireAcquisitionStore(r.lifecycleContext(), il)
 				}
 			}
 			return true
@@ -2524,7 +2520,7 @@ func (r *Router) failInboundAcquisitionWithSnapshot(il *inbound.Ledger, snapshot
 	if !r.fetchTracker.RemoveExpectedWithSnapshot(il, snapshot, false) {
 		return
 	}
-	r.retireAcquisitionStore(context.TODO(), il)
+	r.retireAcquisitionStore(r.lifecycleContext(), il)
 	r.logger.Warn("inbound ledger acquisition failed",
 		"seq", il.Seq(),
 		"hash", fmt.Sprintf("%x", hash[:8]),
@@ -2608,10 +2604,10 @@ func (r *Router) sendNodesByHash(peers []uint64, ledgerHash [32]byte, seq uint32
 // for querying but does not flip operating mode or notify consensus, so an
 // arbitrary historical fetch can't disturb the active chain.
 func (r *Router) completeInboundLedger(il *inbound.Ledger) {
-	if err := r.flushAcquisitionStore(context.TODO(), il); err != nil {
+	if err := r.flushAcquisitionStore(r.lifecycleContext(), il); err != nil {
 		r.logger.Warn("inbound ledger: verified-node persistence failed", "error", err, "seq", il.Seq())
 		if r.fetchTracker.DiscardExpected(il) {
-			r.retireAcquisitionStore(context.TODO(), il)
+			r.retireAcquisitionStore(r.lifecycleContext(), il)
 		}
 		return
 	}
@@ -2623,32 +2619,32 @@ func (r *Router) completeInboundLedgerReady(il *inbound.Ledger) {
 	if err != nil {
 		r.logger.Warn("inbound ledger: failed to get result", "error", err)
 		if r.fetchTracker.DiscardExpected(il) {
-			r.retireAcquisitionStore(context.TODO(), il)
+			r.retireAcquisitionStore(r.lifecycleContext(), il)
 		}
 		return
 	}
 	if r.adaptor == nil {
 		if r.fetchTracker.DiscardExpected(il) {
-			r.retireAcquisitionStore(context.TODO(), il)
+			r.retireAcquisitionStore(r.lifecycleContext(), il)
 		}
 		return
 	}
 	svc := r.adaptor.LedgerService()
 	if svc == nil {
 		if r.fetchTracker.DiscardExpected(il) {
-			r.retireAcquisitionStore(context.TODO(), il)
+			r.retireAcquisitionStore(r.lifecycleContext(), il)
 		}
 		return
 	}
-	if err = r.promoteAcquisitionStore(context.TODO(), il); err != nil {
+	if err = r.promoteAcquisitionStore(r.lifecycleContext(), il); err != nil {
 		r.logger.Warn("inbound ledger: failed to promote persistence scope", "error", err, "seq", il.Seq())
 		if r.fetchTracker.DiscardExpected(il) {
-			r.retireAcquisitionStore(context.TODO(), il)
+			r.retireAcquisitionStore(r.lifecycleContext(), il)
 		}
 		return
 	}
 	if !r.fetchTracker.RemoveExpectedWithSnapshot(il, il.Snapshot(), true) {
-		r.retireAcquisitionStore(context.TODO(), il)
+		r.retireAcquisitionStore(r.lifecycleContext(), il)
 		return
 	}
 	peerID := il.PeerID()
@@ -2660,7 +2656,7 @@ func (r *Router) completeInboundLedgerReady(il *inbound.Ledger) {
 	// then advances the backward walk to its parent. It never touches operating
 	// mode or the consensus engine.
 	if il.Reason() == inbound.ReasonHistory {
-		if err = svc.IngestHistoricalLedgerWithState(context.TODO(), h, stateMap, txMap); err != nil {
+		if err = svc.IngestHistoricalLedgerWithState(r.lifecycleContext(), h, stateMap, txMap); err != nil {
 			r.logger.Warn("inbound ledger: history backfill ingest failed",
 				"error", err, "seq", h.LedgerIndex)
 			return
@@ -2677,13 +2673,10 @@ func (r *Router) completeInboundLedgerReady(il *inbound.Ledger) {
 	// is nil only when the ledger has no transactions (empty tx tree), in which
 	// case the service installs the genesis-shaped empty tx map.
 	//
-	// context.TODO: same as adoptVerifiedLedger — reached from a peer-message
-	// handler stack with no plumbed context. See note there.
-	//
 	// Generic acquisitions are queryable by hash but never mutate the service's
 	// canonical frontier or feed consensus.
 	if il.Reason() == inbound.ReasonGeneric {
-		if err = svc.StoreLedgerWithState(context.TODO(), h, stateMap, txMap); err != nil {
+		if err = svc.StoreLedgerWithState(r.lifecycleContext(), h, stateMap, txMap); err != nil {
 			r.logger.Warn("inbound ledger: generic store failed", "error", err, "seq", h.LedgerIndex)
 			return
 		}
@@ -2697,7 +2690,7 @@ func (r *Router) completeInboundLedgerReady(il *inbound.Ledger) {
 		return
 	}
 
-	initialCandidate, err := svc.BootstrapLedgerWithState(context.TODO(), h, stateMap, txMap)
+	initialCandidate, err := svc.BootstrapLedgerWithState(r.lifecycleContext(), h, stateMap, txMap)
 	if err != nil {
 		r.logger.Warn("inbound ledger: failed to store consensus ledger", "error", err, "seq", h.LedgerIndex)
 		return

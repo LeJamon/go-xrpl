@@ -473,28 +473,6 @@ func TestStup_ComponentsStop_NilSafe(t *testing.T) {
 	assert.NotPanics(t, func() { c.Stop() })
 }
 
-func TestStup_ComponentsStop_CancelsAllFunctions(t *testing.T) {
-	var called [4]bool
-	c := &Components{
-		vlTickCancel: func() {
-			called[0] = true
-		},
-		sitePollerCancel: func() {
-			called[1] = true
-		},
-		routerCancel: func() {
-			called[2] = true
-		},
-		overlayCancel: func() {
-			called[3] = true
-		},
-	}
-	c.Stop()
-	for i, v := range called {
-		assert.True(t, v, "cancel[%d] was not called", i)
-	}
-}
-
 func TestStup_ComponentsStop_NilEngineAndOverlaySafe(t *testing.T) {
 	c := &Components{
 		Engine:  nil,
@@ -544,13 +522,13 @@ func TestStup_ComponentsStart_AndStop(t *testing.T) {
 	}
 	_ = svc
 
-	err = c.Start()
+	err = c.Start(t.Context())
 	require.NoError(t, err)
 
-	assert.NotNil(t, c.overlayCancel)
-	assert.NotNil(t, c.routerCancel)
-	assert.Nil(t, c.sitePollerCancel, "no poller configured")
-	assert.Nil(t, c.vlTickCancel, "no ValidatorList configured")
+	assert.NotNil(t, c.runCancel)
+	assert.NotNil(t, c.overlayDone)
+	assert.NotNil(t, c.routerDone)
+	assert.Nil(t, c.vlTickDone, "no ValidatorList configured")
 
 	assert.NotPanics(t, func() { c.Stop() })
 }
@@ -563,13 +541,17 @@ func TestStup_ComponentsStart_ListenerBindFailure(t *testing.T) {
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = overlay.Stop() })
 
+	eng := &mockEngine{}
+	ad := newTestAdaptor(t)
 	c := &Components{
 		Overlay: overlay,
-		Engine:  &mockEngine{},
+		Engine:  eng,
+		Adaptor: ad,
+		Router:  NewRouter(eng, ad, overlay.ConsensusMessages()),
 	}
 
 	done := make(chan error, 1)
-	go func() { done <- c.Start() }()
+	go func() { done <- c.Start(t.Context()) }()
 	select {
 	case startErr := <-done:
 		require.Error(t, startErr, "a listener bind failure must fail boot")
@@ -586,11 +568,14 @@ func TestStup_ComponentsStart_EngineStartError(t *testing.T) {
 	t.Cleanup(func() { _ = overlay.Stop() })
 
 	eng := &stup_errStartEngine{err: assert.AnError}
+	ad := newTestAdaptor(t)
 	c := &Components{
 		Overlay: overlay,
 		Engine:  eng,
+		Adaptor: ad,
+		Router:  NewRouter(eng, ad, overlay.ConsensusMessages()),
 	}
-	startErr := c.Start()
+	startErr := c.Start(t.Context())
 	assert.Error(t, startErr)
 }
 

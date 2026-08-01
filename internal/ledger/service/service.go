@@ -871,6 +871,12 @@ func (s *Service) SubmitOpenLedgerTx(blob []byte, local bool) (openledger.Result
 // concurrently; unparseable blobs are skipped (the in-strand preflight rejects
 // them authoritatively).
 func (s *Service) PrewarmSignatures(blobs [][]byte) {
+	s.PrewarmSignaturesContext(context.Background(), blobs)
+}
+
+// PrewarmSignaturesContext verifies transaction signatures until ctx is
+// canceled.
+func (s *Service) PrewarmSignaturesContext(ctx context.Context, blobs [][]byte) {
 	if len(blobs) == 0 {
 		return
 	}
@@ -888,15 +894,33 @@ func (s *Service) PrewarmSignatures(blobs [][]byte) {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			for blob := range work {
-				if ptx, err := openledger.ParsePendingTx(blob); err == nil {
-					txengine.PrewarmSignature(ptx.Parsed)
+			for {
+				select {
+				case <-ctx.Done():
+					return
+				default:
+				}
+				select {
+				case <-ctx.Done():
+					return
+				case blob, ok := <-work:
+					if !ok {
+						return
+					}
+					if ptx, err := openledger.ParsePendingTx(blob); err == nil {
+						txengine.PrewarmSignature(ptx.Parsed)
+					}
 				}
 			}
 		}()
 	}
+feed:
 	for _, blob := range blobs {
-		work <- blob
+		select {
+		case <-ctx.Done():
+			break feed
+		case work <- blob:
+		}
 	}
 	close(work)
 	wg.Wait()

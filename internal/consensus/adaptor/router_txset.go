@@ -1,6 +1,7 @@
 package adaptor
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"time"
@@ -562,8 +563,10 @@ func (r *Router) submitTxSetToEngine(txSetID consensus.TxSetID, blobs [][]byte) 
 	// Verify signatures off-strand so the accept build hits the sig-cache
 	// instead of a cold check per acquired tx under the apply mutex. Async:
 	// consensus sees the set immediately; anything unreached verifies in-strand.
-	if svc := r.adaptor.LedgerService(); svc != nil {
-		go svc.PrewarmSignatures(blobs)
+	if prewarm := r.prewarmSignatures; prewarm != nil {
+		r.runLifecycleTask(func(ctx context.Context) {
+			prewarm(ctx, blobs)
+		})
 	}
 	if err := r.engine.OnTxSet(txSetID, blobs); err != nil {
 		r.logger.Info("engine rejected tx-set",
