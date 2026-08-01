@@ -883,6 +883,10 @@ func (l limitedHistoryBranchLedger) Ancestor(seq uint32) consensus.LedgerID {
 	id := sequenceLedgerID(seq)
 	if seq >= l.fork {
 		id[0] = l.branch
+		id[1] = byte(l.fork >> 24)
+		id[2] = byte(l.fork >> 16)
+		id[3] = byte(l.fork >> 8)
+		id[4] = byte(l.fork)
 	}
 	return id
 }
