@@ -50,11 +50,12 @@ func TestTxSetAcquire_TimerRetriggersWhenInboundQuiet(t *testing.T) {
 
 func TestTxSetAcquire_InitialRequestDefersRetryMaintenance(t *testing.T) {
 	for _, test := range []struct {
-		name    string
-		dormant bool
+		name         string
+		dormant      bool
+		wantTimeouts int
 	}{
 		{name: "new"},
-		{name: "revived", dormant: true},
+		{name: "revived", dormant: true, wantTimeouts: 1},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			router, sender := newRetryRouter(t)
@@ -80,8 +81,8 @@ func TestTxSetAcquire_InitialRequestDefersRetryMaintenance(t *testing.T) {
 			state := router.txSetAcquire[id]
 			require.NotNil(t, state)
 			require.False(t, state.lastRequest.Before(before))
-			require.Zero(t, state.stallTicks,
-				"maintenance inside MinInterval must not consume a stall tick")
+			require.Equal(t, test.wantTimeouts, state.stallTicks,
+				"stillNeed clamps prior timeouts and maintenance inside MinInterval consumes none")
 			router.txSetAcquireMu.Unlock()
 			require.Zero(t, sender.calledN(),
 				"maintenance inside MinInterval must not send a missing-node request")
@@ -136,7 +137,7 @@ func TestTxSetAcquire_TimerFinalizesCompleteMapAfterInvalidTrailingNode(t *testi
 		"the retry driver must finalize a complete map left by an invalid trailing node")
 }
 
-func TestTxSetAcquire_TimerLatchesTerminalMap(t *testing.T) {
+func TestTxSetAcquire_TimerFailedMapIsRevivable(t *testing.T) {
 	router, rs := newRetryRouter(t)
 	ld, id := rootOnlyTxSetLedgerData(t, 8)
 	router.MarkTxSetStillNeeded(id)
@@ -156,12 +157,58 @@ func TestTxSetAcquire_TimerLatchesTerminalMap(t *testing.T) {
 	})
 
 	router.txSetAcquireMu.Lock()
-	defer router.txSetAcquireMu.Unlock()
 	assertState := router.txSetAcquire[id]
 	require.NotNil(t, assertState)
-	require.True(t, assertState.done, "a zero-frontier map that cannot FinishSync is terminal")
-	require.False(t, assertState.dormant)
+	require.True(t, assertState.done, "a zero-frontier map that cannot FinishSync is failed")
+	require.True(t, assertState.dormant, "failed maps wait for stillNeed before accepting more data")
+	require.False(t, assertState.completed)
+	router.txSetAcquireMu.Unlock()
 	require.Equal(t, before, rs.calledN(), "terminal maps must not spin requests")
+
+	router.MarkTxSetStillNeeded(id)
+	router.txSetAcquireMu.Lock()
+	assertState = router.txSetAcquire[id]
+	require.False(t, assertState.done, "stillNeed clears rippled's failed_ analogue")
+	require.False(t, assertState.dormant)
+	router.txSetAcquireMu.Unlock()
+}
+
+func TestTxSetAcquire_TimerMatchesRippledTimeoutCadence(t *testing.T) {
+	router, sender := newRetryRouter(t)
+	ld, id := rootOnlyTxSetLedgerData(t, 8)
+	router.MarkTxSetStillNeeded(id)
+	router.SetTxSetRetryKnobsForTest(txSetRetryKnobs{
+		MinInterval:              0,
+		NormalTimeouts:           4,
+		MaxStallTicks:            20,
+		PeerNonProgressThreshold: 3,
+	})
+	router.handleTxSetData(ld, 4)
+	baseline := sender.calledN()
+
+	for range 3 {
+		router.maintenanceTick()
+	}
+	require.Equal(t, baseline, sender.calledN(), "timeouts 1-3 do not broadcast missing nodes")
+
+	router.maintenanceTick()
+	require.Equal(t, baseline+1, sender.calledN(), "timeout 4 starts normal retries")
+	require.True(t, sender.lastCall().indirect)
+
+	for range 16 {
+		router.maintenanceTick()
+	}
+	atTwenty := sender.calledN()
+	require.Equal(t, baseline+17, atTwenty, "timeouts 4 through 20 all retry")
+
+	router.maintenanceTick()
+	require.Equal(t, atTwenty, sender.calledN(), "timeout 21 fails without another retry")
+	router.txSetAcquireMu.Lock()
+	state := router.txSetAcquire[id]
+	require.True(t, state.done)
+	require.True(t, state.dormant)
+	require.False(t, state.completed)
+	router.txSetAcquireMu.Unlock()
 }
 
 // The timer respects the MinInterval cadence: an acquire whose inbound path

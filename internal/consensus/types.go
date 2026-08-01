@@ -331,6 +331,36 @@ type Validation struct {
 	Raw []byte
 }
 
+func (v *Validation) SetBaseFeeDrops(drops uint64, negative bool) {
+	v.BaseFeeDrops = drops
+	v.baseFeeDropsPresent = true
+	v.baseFeeDropsNegative = negative && drops != 0
+}
+
+func (v *Validation) BaseFeeDropsValue() (uint64, bool, bool) {
+	return v.BaseFeeDrops, v.baseFeeDropsNegative, v.baseFeeDropsPresent || v.BaseFeeDrops != 0
+}
+
+func (v *Validation) SetReserveBaseDrops(drops uint64, negative bool) {
+	v.ReserveBaseDrops = drops
+	v.reserveBaseDropsPresent = true
+	v.reserveBaseDropsNegative = negative && drops != 0
+}
+
+func (v *Validation) ReserveBaseDropsValue() (uint64, bool, bool) {
+	return v.ReserveBaseDrops, v.reserveBaseDropsNegative, v.reserveBaseDropsPresent || v.ReserveBaseDrops != 0
+}
+
+func (v *Validation) SetReserveIncrementDrops(drops uint64, negative bool) {
+	v.ReserveIncrementDrops = drops
+	v.reserveIncrementDropsPresent = true
+	v.reserveIncrementDropsNegative = negative && drops != 0
+}
+
+func (v *Validation) ReserveIncrementDropsValue() (uint64, bool, bool) {
+	return v.ReserveIncrementDrops, v.reserveIncrementDropsNegative, v.reserveIncrementDropsPresent || v.ReserveIncrementDrops != 0
+}
+
 // SetLoadFee records sfLoadFee as present, including when fee is zero.
 func (v *Validation) SetLoadFee(fee uint32) {
 	v.LoadFee = fee

@@ -340,9 +340,8 @@ func parseSTValidation(data []byte) (*consensus.Validation, error) {
 // consensus.Validation. Fields are written in canonical order (ascending type
 // code, then ascending field code within each type).
 //
-// Outbound validations set both vfFullValidation and vfFullyCanonicalSig on
-// sfFlags. Optional supplementary fields are emitted when present; fields
-// without explicit presence tracking use a non-zero value as their proxy.
+// Optional supplementary fields are emitted when present; fields without
+// explicit presence tracking use a non-zero value as their proxy.
 //
 // Exported so external packages (the validation archive) can reserialize
 // self-built validations whose Raw field is nil.
@@ -351,20 +350,19 @@ func SerializeSTValidation(v *consensus.Validation) []byte {
 
 	// --- UINT32 fields (type 2) ---
 
-	// sfFlags (field 2). For round-trip fidelity, prefer the original
-	// wire word captured by parseSTValidation (so we re-emit any vendor
-	// bits the validator set). For self-built validations whose Flags
-	// field is zero, synthesize the rippled-canonical pair: stamp
-	// vfFullyCanonicalSig on every outbound validation so canonical-sig-
-	// strict peers don't need to special-case us, plus vfFullValidation
-	// when v.Full.
-	flags := outboundValidationFlags(v)
+	// sfFlags (field 2)
+	flags := v.Flags
 	buf = appendFieldHeader(buf, typeUINT32, fieldFlags)
 	buf = binary.BigEndian.AppendUint32(buf, flags)
 
 	// sfLedgerSequence (field 6)
 	buf = appendFieldHeader(buf, typeUINT32, fieldLedgerSequence)
 	buf = binary.BigEndian.AppendUint32(buf, v.LedgerSeq)
+
+	if !v.CloseTime.IsZero() {
+		buf = appendFieldHeader(buf, typeUINT32, fieldCloseTime)
+		buf = binary.BigEndian.AppendUint32(buf, timeToXrplEpoch(v.CloseTime))
+	}
 
 	// sfSigningTime (field 9)
 	buf = appendFieldHeader(buf, typeUINT32, fieldSigningTime)
@@ -758,7 +756,7 @@ func appendFieldHeader(buf []byte, typeCode, fieldCode int) []byte {
 // parseXRPAmount decodes an 8-byte native XRPL Amount.
 func parseXRPAmount(data []byte) (drops.XRPAmount, bool) {
 	if len(data) != 8 {
-		return 0, false
+		return 0, false, false
 	}
 	raw := binary.BigEndian.Uint64(data)
 	if raw == 0 || raw&(1<<63) != 0 || raw&(1<<61) != 0 {

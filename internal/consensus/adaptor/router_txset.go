@@ -20,9 +20,8 @@ type txSetAcquireState struct {
 
 	// Retry bookkeeping. lastRequest is when we most recently broadcast a
 	// RequestTxSetMissingNodes. attempts is pure telemetry (the broadcast
-	// count surfaced in logs). stallTicks counts CONSECUTIVE no-progress
-	// timer ticks — the give-up signal — and is reset to 0 whenever an
-	// inbound reply makes progress. peerNonProgress tracks consecutive
+	// count surfaced in logs). stallTicks counts no-progress timer ticks —
+	// the give-up signal. peerNonProgress tracks consecutive
 	// TMLedgerData responses from a peer that failed to extend the SHAMap;
 	// peers at or over the per-peer threshold are skipped during the next
 	// broadcast.
@@ -44,6 +43,11 @@ type txSetAcquireState struct {
 	// sweep still reclaims a truly-abandoned entry.
 	dormant bool
 
+	// completed distinguishes a successfully acquired set from recoverable
+	// terminal failures. stillNeed revives failed acquisitions, but never a set
+	// that was already delivered to consensus.
+	completed bool
+
 	// haveRoot latches once the real root node for this tx-set hash has been
 	// installed. A fresh shamap.New carries a non-nil but EMPTY root, which
 	// would let an empty tree "complete" with zero leaves; until haveRoot is
@@ -51,7 +55,7 @@ type txSetAcquireState struct {
 	haveRoot bool
 
 	// done latches a terminal acquire: completed (set built and fed to the
-	// engine) or given-up (dormant past MaxStallTicks). A data reply for a
+	// engine) or failed/given-up. A data reply for a
 	// done acquire is charged and dropped so a straggler can neither recreate
 	// a fresh empty map nor fan out re-requests; MarkTxSetStillNeeded clears it
 	// to revive a genuinely-needed set.
@@ -80,6 +84,7 @@ const txSetAcquireTTL = 60 * time.Second
 //     stuck peer and large enough to ride out a transient empty reply.
 type txSetRetryKnobs struct {
 	MinInterval              time.Duration
+	NormalTimeouts           int
 	MaxStallTicks            int
 	PeerNonProgressThreshold int
 }
@@ -87,6 +92,7 @@ type txSetRetryKnobs struct {
 func defaultTxSetRetryKnobs() txSetRetryKnobs {
 	return txSetRetryKnobs{
 		MinInterval:              250 * time.Millisecond,
+		NormalTimeouts:           4,
 		MaxStallTicks:            20,
 		PeerNonProgressThreshold: 3,
 	}
@@ -343,7 +349,6 @@ func (r *Router) handleTxSetData(ld *message.LedgerData, originPeer uint64) {
 		if badRootProvided {
 			now := time.Now()
 			state.dormant = false
-			state.stallTicks = 0
 			state.attempts++
 			state.lastRequest = now
 			state.lastUpdate = now
@@ -376,7 +381,7 @@ func (r *Router) handleTxSetData(ld *message.LedgerData, originPeer uint64) {
 			// and KEEP the entry (TTL reclaims it); MarkTxSetStillNeeded can
 			// revive it. Deleting would let the next straggler recreate a fresh
 			// empty acquire.
-			r.markTxSetDone(txSetID)
+			r.markTxSetFailed(txSetID)
 			r.logger.Info("tx-set sync: stuck",
 				"t", "consensus", "event", "txset-reject",
 				"txset", fmt.Sprintf("%x", txSetID[:8]),
@@ -439,13 +444,12 @@ func (r *Router) handleTxSetData(ld *message.LedgerData, originPeer uint64) {
 			// The RTT itself rate-limits (one re-request per received reply),
 			// so there is no storm and no MinInterval gate is needed. A fresh
 			// lastRequest keeps the stall timer out of an actively-progressing
-			// acquire; reset stallTicks and un-dormant so a resumed acquire
-			// keeps pipelining. Give-up lives only on the timer.
+			// acquire; un-dormant so a resumed acquire keeps pipelining.
+			// Give-up lives only on the timer.
 			if originPeer != 0 {
 				state.peerNonProgress[originPeer] = 0
 			}
 			state.dormant = false
-			state.stallTicks = 0
 			state.attempts++
 			state.lastRequest = time.Now()
 			state.lastUpdate = state.lastRequest
@@ -490,7 +494,7 @@ func (r *Router) handleTxSetData(ld *message.LedgerData, originPeer uint64) {
 		r.deleteTxSetAcquire(txSetID)
 		return
 	}
-	r.markTxSetDone(txSetID)
+	r.markTxSetComplete(txSetID)
 
 	r.logger.Info("received tx-set from peer",
 		"t", "consensus", "event", "txset-recv",
@@ -511,14 +515,21 @@ func (r *Router) deleteTxSetAcquire(txSetID consensus.TxSetID) {
 	r.txSetAcquireMu.Unlock()
 }
 
-// markTxSetDone latches a tx-set acquire terminal (completed or given-up) and
-// KEEPS it, so later data replies are dropped rather than recreating a fresh
-// empty acquire. The TTL sweep reclaims it; MarkTxSetStillNeeded clears the
-// latch to revive a genuinely-needed set. No-op if the entry is gone.
-func (r *Router) markTxSetDone(txSetID consensus.TxSetID) {
+func (r *Router) markTxSetComplete(txSetID consensus.TxSetID) {
 	r.txSetAcquireMu.Lock()
 	if state, ok := r.txSetAcquire[txSetID]; ok {
 		state.done = true
+		state.completed = true
+	}
+	r.txSetAcquireMu.Unlock()
+}
+
+func (r *Router) markTxSetFailed(txSetID consensus.TxSetID) {
+	r.txSetAcquireMu.Lock()
+	if state, ok := r.txSetAcquire[txSetID]; ok {
+		state.done = true
+		state.dormant = true
+		state.completed = false
 	}
 	r.txSetAcquireMu.Unlock()
 }
@@ -595,11 +606,10 @@ func (r *Router) fillTxSetFromLocalPool(txMap *shamap.SHAMap, missing []shamap.M
 // immediately duplicating the wire request. An arriving data reply still resumes
 // from the retained partial map without waiting out the TTL.
 // haveRoot is preserved — a revived acquire keeps any root it already had. A
-// terminal non-dormant acquire (a set already completed and fed to the engine,
-// or a stuck/inconsistent map) is left latched: reviving the former is a
-// redundant re-feed the engine dedups, and the latter would only re-stick. Only
-// a dormant acquire is revived, mirroring rippled's stillNeed clearing failed_
-// but never complete_.
+// A completed acquire remains latched. Failed and retry-exhausted acquisitions
+// are revived, mirroring rippled's stillNeed clearing failed_ but never
+// complete_. The timeout count is clamped to the normal-retry threshold rather
+// than reset, matching TransactionAcquire::stillNeed.
 func (r *Router) MarkTxSetStillNeeded(txSetID consensus.TxSetID) {
 	r.txSetAcquireMu.Lock()
 	defer r.txSetAcquireMu.Unlock()
@@ -616,12 +626,12 @@ func (r *Router) MarkTxSetStillNeeded(txSetID consensus.TxSetID) {
 		return
 	}
 	state.lastUpdate = now
-	if state.done && !state.dormant {
+	if state.done && state.completed {
 		return
 	}
 	state.done = false
 	state.dormant = false
-	state.stallTicks = 0
+	state.stallTicks = min(state.stallTicks, r.txSetRetryKnobs.NormalTimeouts)
 	state.attempts = 0
 	state.lastRequest = now
 }
@@ -646,7 +656,7 @@ func (r *Router) sweepStaleTxSetAcquireLocked() {
 // the remaining nodes, so the acquisition would stall until the 60s TTL sweep;
 // under load that drops the node into wrongLedger and the mixed network below
 // quorum. This timer is the missing driver. Each firing on a stalled acquire
-// is a consecutive no-progress tick (stallTicks); past MaxStallTicks the
+// is a no-progress tick (stallTicks); past MaxStallTicks the
 // acquire goes dormant, RETAINING its partial map rather than deleting it, so
 // a later MarkTxSetStillNeeded / progressing reply can resume it. Because the
 // inbound path keeps lastRequest fresh while making progress, the MinInterval
@@ -715,15 +725,18 @@ func (r *Router) retryStalledTxSetAcquires() {
 			// fallback for a silent peer) with the same stall accounting as any
 			// stalled re-trigger.
 			state.stallTicks++
-			if state.stallTicks >= knobs.MaxStallTicks {
+			state.timedOut = true
+			if state.stallTicks > knobs.MaxStallTicks {
 				state.dormant = true
 				state.done = true
 				drops = append(drops, txSetDrop{id: id, attempts: state.attempts, missing: 0})
 				continue
 			}
+			if state.stallTicks < knobs.NormalTimeouts {
+				continue
+			}
 			state.attempts++
 			state.lastRequest = now
-			state.timedOut = true
 			rootKicks = append(rootKicks, id)
 			continue
 		}
@@ -731,8 +744,11 @@ func (r *Router) retryStalledTxSetAcquires() {
 		if len(missing) == 0 {
 			state.done = true
 			if err := state.txMap.FinishSync(); err == nil {
+				state.completed = true
 				completes = append(completes, txSetComplete{id: id, txMap: state.txMap})
 			} else {
+				state.dormant = true
+				state.completed = false
 				terminals = append(terminals, txSetTerminal{id: id, attempts: state.attempts, err: err})
 			}
 			continue
@@ -749,6 +765,7 @@ func (r *Router) retryStalledTxSetAcquires() {
 			finishErr = state.txMap.FinishSync()
 			if finishErr == nil {
 				state.done = true
+				state.completed = true
 				completes = append(completes, txSetComplete{id: id, txMap: state.txMap, filled: filled})
 				continue
 			}
@@ -756,16 +773,18 @@ func (r *Router) retryStalledTxSetAcquires() {
 		}
 		if len(missing) == 0 {
 			state.done = true
+			state.dormant = true
+			state.completed = false
 			terminals = append(terminals, txSetTerminal{id: id, attempts: state.attempts, err: finishErr})
 			continue
 		}
-		// A firing timer on a stalled acquire IS a consecutive no-progress
-		// tick — no inbound reply has reset stallTicks since the last one.
+		// A firing timer on a stalled acquire is a no-progress tick.
 		// Past MaxStallTicks the acquire goes dormant: it RETAINS its partial
 		// map (only the TTL sweep or an explicit resume reclaims it) instead
 		// of being deleted, so consensus re-asking picks up where it left off.
 		state.stallTicks++
-		if state.stallTicks >= knobs.MaxStallTicks {
+		state.timedOut = true
+		if state.stallTicks > knobs.MaxStallTicks {
 			// Give up: latch dormant AND done so stragglers are dropped, while
 			// KEEPING the partial map. Only MarkTxSetStillNeeded revives it; the
 			// TTL sweep reclaims it if it stays abandoned.
@@ -774,12 +793,11 @@ func (r *Router) retryStalledTxSetAcquires() {
 			drops = append(drops, txSetDrop{id: id, attempts: state.attempts, missing: len(missing)})
 			continue
 		}
+		if state.stallTicks < knobs.NormalTimeouts {
+			continue
+		}
 		state.attempts++
 		state.lastRequest = now
-		// The timer firing IS the stall signal: latch timedOut so this and
-		// every later request for the set escalates to an indirect (relayable)
-		// fetch, mirroring rippled's TransactionAcquire timeouts_ != 0 gate.
-		state.timedOut = true
 		excluded := buildExcludedPeers(state.peerNonProgress, knobs.PeerNonProgressThreshold)
 		nodeIDs := missingNodeIDs(missing)
 		kicks = append(kicks, txSetKick{id: id, nodeIDs: nodeIDs, excluded: excluded, attempts: state.attempts, missing: len(missing)})
@@ -855,7 +873,7 @@ func (r *Router) finalizeCompletedTxSet(txSetID consensus.TxSetID, txMap *shamap
 	}
 	// Latch done + KEEP the entry so stragglers are dropped rather than
 	// recreating a fresh empty acquire; the TTL sweep reclaims it.
-	r.markTxSetDone(txSetID)
+	r.markTxSetComplete(txSetID)
 	if len(blobs) == 0 {
 		return
 	}

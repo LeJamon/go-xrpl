@@ -150,6 +150,7 @@ func withRetryKnobs(router *Router, minInterval time.Duration, maxStallTicks, pe
 	prev := router.txSetRetryKnobs
 	router.SetTxSetRetryKnobsForTest(txSetRetryKnobs{
 		MinInterval:              minInterval,
+		NormalTimeouts:           1,
 		MaxStallTicks:            maxStallTicks,
 		PeerNonProgressThreshold: peerThreshold,
 	})
@@ -183,9 +184,8 @@ func TestTxSetRetry_NoProgressReplyDefersToTimer(t *testing.T) {
 
 // TestTxSetRetry_InboundProgressNeverGivesUp pins that the inbound path
 // has NO give-up cap: give-up now lives solely on the stall timer, keyed
-// on consecutive no-progress ticks. Many progressing replies in a row each
-// pipeline a fresh request and never delete the acquire nor accrue stall
-// ticks — the pre-pipelining inbound MaxAttempts delete-on-cap is gone.
+// on timer ticks. Many progressing replies in a row each pipeline a fresh
+// request and never delete the acquire or erase accumulated timeout history.
 func TestTxSetRetry_InboundProgressNeverGivesUp(t *testing.T) {
 	router, rs := newRetryRouter(t)
 	// MaxStallTicks deliberately small: if the inbound path fed stall
@@ -193,6 +193,7 @@ func TestTxSetRetry_InboundProgressNeverGivesUp(t *testing.T) {
 	withRetryKnobs(router, 0, 3, 1_000_000, func() {
 		ld, txSetID := rootOnlyTxSetLedgerData(t, 4)
 		router.MarkTxSetStillNeeded(txSetID)
+		router.txSetAcquire[txSetID].stallTicks = 2
 
 		const replies = 25
 		for i := range replies {
@@ -209,7 +210,7 @@ func TestTxSetRetry_InboundProgressNeverGivesUp(t *testing.T) {
 		}
 		router.txSetAcquireMu.Unlock()
 		require.True(t, tracked, "a progressing acquire is never deleted by the inbound path")
-		assert.Equal(t, 0, stall, "progressing replies keep stallTicks pinned at 0")
+		assert.Equal(t, 2, stall, "progressing replies preserve accumulated timeout history")
 		assert.False(t, dormant, "a progressing acquire never goes dormant")
 	})
 }
@@ -373,7 +374,7 @@ func TestTxSetRetry_StillNeededReArmsDormantAcquire(t *testing.T) {
 		require.Equal(t, 1, rs.calledN())
 
 		// Drive consecutive no-progress timer ticks to dormancy.
-		for range maxStall {
+		for range maxStall + 1 {
 			router.retryStalledTxSetAcquires()
 		}
 		router.txSetAcquireMu.Lock()
