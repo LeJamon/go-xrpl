@@ -135,6 +135,7 @@ func TestTxSetAcquire_PipelinesOnProgressAtRTT(t *testing.T) {
 	// replies. MaxStallTicks is small so any regression to timer-driven
 	// give-up would surface as a premature dormancy.
 	withRetryKnobs(router, time.Hour, 3, 1_000_000, func() {
+		router.MarkTxSetStillNeeded(txSetID)
 		// Batch 0: the root. A progressing root reply pipelines exactly one
 		// missing-nodes request immediately.
 		rootID := make([]byte, 33)
@@ -202,25 +203,17 @@ func TestTxSetAcquire_PipelinesOnProgressAtRTT(t *testing.T) {
 	})
 }
 
-// TestTxSetAcquire_DormantRetainsMapAndResumes pins property (d): after
-// MaxStallTicks consecutive no-progress timer ticks the acquire goes dormant
-// but its partial map is RETAINED (not deleted), and a subsequent
-// MarkTxSetStillNeeded + progressing reply resumes it from that partial map.
-// Mirrors rippled keeping mMap across retries and stillNeed() re-arming.
 func TestTxSetAcquire_DormantRetainsMapAndResumes(t *testing.T) {
 	router, rs, _ := newPipelineRouter(t)
 	ld, txSetID := rootOnlyTxSetLedgerData(t, 8)
+	router.MarkTxSetStillNeeded(txSetID)
 
 	const maxStall = 3
 	withRetryKnobs(router, 0, maxStall, 1_000_000, func() {
-		// Progress reply creates the acquire (root only → incomplete) and
-		// pipelines one request.
 		router.handleTxSetData(ld, 1)
 		require.Equal(t, 1, rs.calledN())
 
-		// No inbound progress arrives; consecutive timer ticks accrue stall
-		// ticks until the acquire goes dormant at MaxStallTicks.
-		for range maxStall {
+		for range maxStall + 1 {
 			router.retryStalledTxSetAcquires()
 		}
 
@@ -229,22 +222,17 @@ func TestTxSetAcquire_DormantRetainsMapAndResumes(t *testing.T) {
 		var dormant, resumable bool
 		if tracked {
 			dormant = state.dormant
-			// Root present, children still missing → a resumable partial map.
 			resumable = len(state.txMap.GetMissingNodes(256, nil)) > 0
 		}
 		router.txSetAcquireMu.Unlock()
 		require.True(t, tracked, "dormant acquire must be RETAINED, not deleted")
-		require.True(t, dormant, "acquire must be dormant after MaxStallTicks consecutive stall ticks")
+		require.True(t, dormant, "acquire must be dormant after exceeding MaxStallTicks")
 		require.True(t, resumable, "the partial SHAMap must be retained for resume")
 
-		// While dormant, further timer ticks must not re-request.
 		nAtDormant := rs.calledN()
 		router.retryStalledTxSetAcquires()
 		require.Equal(t, nAtDormant, rs.calledN(), "a dormant acquire must not re-request")
 
-		// Re-arm: consensus re-asks (MarkTxSetStillNeeded) AND a progressing
-		// reply arrives. Together they must wake the acquire and resume
-		// pipelining from the retained partial map.
 		router.MarkTxSetStillNeeded(txSetID)
 		router.handleTxSetData(ld, 1)
 		require.Greater(t, rs.calledN(), nAtDormant,
@@ -260,6 +248,7 @@ func TestTxSetAcquire_DormantRetainsMapAndResumes(t *testing.T) {
 		router.txSetAcquireMu.Unlock()
 		require.True(t, tracked)
 		require.False(t, stillDormant, "resuming must clear the dormant latch")
-		require.Equal(t, 0, stall, "resuming must reset the stall counter")
+		require.Equal(t, router.txSetRetryKnobs.NormalTimeouts, stall,
+			"resuming must clamp the timeout history to the normal retry threshold")
 	})
 }

@@ -1,6 +1,7 @@
 package adaptor
 
 import (
+	"fmt"
 	"time"
 
 	"github.com/LeJamon/go-xrpl/internal/consensus"
@@ -98,12 +99,13 @@ func TransactionFromMessage(msg *message.Transaction) []byte {
 }
 
 // HaveSetFromMessage converts a decoded HaveTransactionSet message.
-func HaveSetFromMessage(msg *message.HaveTransactionSet) (consensus.TxSetID, message.TxSetStatus) {
+func HaveSetFromMessage(msg *message.HaveTransactionSet) (consensus.TxSetID, message.TxSetStatus, error) {
 	var id consensus.TxSetID
-	if len(msg.Hash) == 32 {
-		copy(id[:], msg.Hash)
+	if len(msg.Hash) != len(id) {
+		return id, msg.Status, fmt.Errorf("have_set hash must be %d bytes: got %d", len(id), len(msg.Hash))
 	}
-	return id, msg.Status
+	copy(id[:], msg.Hash)
+	return id, msg.Status, nil
 }
 
 func xrplEpochToTime(epoch uint32) time.Time {

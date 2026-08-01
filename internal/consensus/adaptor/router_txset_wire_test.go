@@ -327,6 +327,7 @@ func TestRouter_LedgerData_TsCandidate_FeedsEngine(t *testing.T) {
 		InfoType:   message.LedgerInfoTsCandidate,
 		Nodes:      ldNodes,
 	}
+	require.NoError(t, adaptor.RequestTxSet(consensus.TxSetID(id)))
 	inbox <- &peermanagement.InboundMessage{
 		PeerID:  3,
 		Type:    uint16(message.TypeLedgerData),

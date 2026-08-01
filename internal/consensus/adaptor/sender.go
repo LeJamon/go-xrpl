@@ -316,8 +316,8 @@ func (s *OverlaySender) PeerWithTxSet(target [32]byte, exclude uint64) (uint64, 
 
 // NotePeerHasTxSet forwards to Overlay.NotePeerHasTxSet, recording a
 // peer's tsHAVE tx-set advertisement for later relay selection.
-func (s *OverlaySender) NotePeerHasTxSet(peerID uint64, hash [32]byte) {
-	s.overlay.NotePeerHasTxSet(peermanagement.PeerID(peerID), hash)
+func (s *OverlaySender) NotePeerHasTxSet(peerID uint64, hash [32]byte) bool {
+	return s.overlay.NotePeerHasTxSet(peermanagement.PeerID(peerID), hash)
 }
 
 // IncPeerBadData forwards to Overlay.IncPeerBadData. Called by the

@@ -30,9 +30,9 @@ func TestPeer_TxSetRing(t *testing.T) {
 
 	a, b := hash32(0x01), hash32(0x02)
 	assert.False(t, p.HasTxSet(a))
-	p.AddTxSet(a)
-	p.AddTxSet(a) // duplicate ignored
-	p.AddTxSet(b)
+	assert.True(t, p.AddTxSet(a))
+	assert.False(t, p.AddTxSet(a))
+	assert.True(t, p.AddTxSet(b))
 	assert.True(t, p.HasTxSet(a))
 	assert.True(t, p.HasTxSet(b))
 
@@ -277,11 +277,12 @@ func TestOverlay_NotePeerHasTxSet(t *testing.T) {
 	p := newRelayTestPeer(1)
 	o.peers[p.id] = p
 
-	o.NotePeerHasTxSet(1, root)
+	assert.True(t, o.NotePeerHasTxSet(1, root))
 	assert.True(t, p.HasTxSet(root))
+	assert.False(t, o.NotePeerHasTxSet(1, root))
 
 	// Unknown peer: must not panic and must record nothing.
-	o.NotePeerHasTxSet(999, root)
+	assert.False(t, o.NotePeerHasTxSet(999, root))
 
 	got, ok := o.PeerWithTxSet(root, 0)
 	require.True(t, ok)

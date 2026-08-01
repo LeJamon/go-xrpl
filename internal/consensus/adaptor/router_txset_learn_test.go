@@ -72,6 +72,7 @@ func TestRouter_TxSetAcquire_LearnsTransaction(t *testing.T) {
 		InfoType:   message.LedgerInfoTsCandidate,
 		Nodes:      ldNodes,
 	}
+	router.MarkTxSetStillNeeded(consensus.TxSetID(setID))
 	inbox <- &peermanagement.InboundMessage{
 		PeerID:  5,
 		Type:    uint16(message.TypeLedgerData),

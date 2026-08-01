@@ -675,21 +675,19 @@ func (r *Router) handleHaveSet(msg *peermanagement.InboundMessage) {
 		return
 	}
 
-	txSetID, status := HaveSetFromMessage(hts)
+	txSetID, status, err := HaveSetFromMessage(hts)
+	if err != nil {
+		r.adaptor.IncPeerBadData(uint64(msg.PeerID), "have-set-hashsize")
+		return
+	}
 
-	switch status {
-	case message.TxSetStatusHave:
+	if status == message.TxSetStatusHave {
 		// Record the advertisement so an inbound GetLedger we can't satisfy
 		// can be relayed to this peer (rippled getPeerWithTree).
-		r.adaptor.NotePeerHasTxSet(uint64(msg.PeerID), [32]byte(txSetID))
-		r.logger.Debug("peer has txset", "txset", txSetID, "peer", msg.PeerID)
-	case message.TxSetStatusNeed:
-		// Peer needs a tx set we might have — check cache and respond.
-		if ts, ok := r.adaptor.txSetCache.Get(txSetID); ok {
-			// We have it — notify the engine with the tx set data
-			if err := r.engine.OnTxSet(ts.ID(), ts.Txs()); err != nil {
-				r.logger.Debug("engine rejected txset", "error", err)
-			}
+		if !r.adaptor.NotePeerHasTxSet(uint64(msg.PeerID), [32]byte(txSetID)) {
+			r.adaptor.IncPeerBadData(uint64(msg.PeerID), "have-set-duplicate")
+			return
 		}
+		r.logger.Debug("peer has txset", "txset", txSetID, "peer", msg.PeerID)
 	}
 }

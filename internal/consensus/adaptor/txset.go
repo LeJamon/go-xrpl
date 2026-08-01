@@ -228,8 +228,11 @@ type TxSetCache struct {
 }
 
 func NewTxSetCache() *TxSetCache {
+	zero := &TxSetImpl{txMap: shamap.New(shamap.TypeTransaction)}
 	return &TxSetCache{
-		cache: make(map[consensus.TxSetID]*TxSetImpl),
+		cache: map[consensus.TxSetID]*TxSetImpl{
+			{}: zero,
+		},
 		added: make(map[consensus.TxSetID]time.Time),
 		now:   time.Now,
 	}
@@ -246,12 +249,18 @@ func (c *TxSetCache) Put(ts *TxSetImpl) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	id := ts.ID()
+	if id == (consensus.TxSetID{}) {
+		return
+	}
 	c.cache[id] = ts
 	c.added[id] = c.now()
 	c.sweepLocked()
 }
 
 func (c *TxSetCache) Remove(id consensus.TxSetID) {
+	if id == (consensus.TxSetID{}) {
+		return
+	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	delete(c.cache, id)

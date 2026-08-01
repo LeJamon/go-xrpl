@@ -22,25 +22,20 @@ func TestStvReadFieldHeader_TypeZero(t *testing.T) {
 
 func TestStvReadFieldHeader_FieldZero(t *testing.T) {
 	// fieldCode == 0: next byte is the extended field code.
-	data := []byte{0x20, 0x0F} // high nibble 2, low nibble 0 → extended field; next byte = 15
+	data := []byte{0x20, 0x10} // high nibble 2, low nibble 0 → extended field; next byte = 16
 	pos := 0
 	tc, fc, err := readFieldHeader(data, &pos)
 	require.NoError(t, err)
 	assert.Equal(t, 2, tc)
-	assert.Equal(t, 0x0F, fc)
+	assert.Equal(t, 0x10, fc)
 	assert.Equal(t, 2, pos)
 }
 
 func TestStvReadFieldHeader_BothZero(t *testing.T) {
-	// byte 0x00 → typeCode=0 (needs extended type byte), fieldCode=0.
-	// With extended-type byte = 0 and extended-field byte = 0, the result
-	// is (typeCode=0, fieldCode=0) — the EOO marker. We need 3 bytes.
 	data := []byte{0x00, 0x00, 0x00}
 	pos := 0
-	tc, fc, err := readFieldHeader(data, &pos)
-	require.NoError(t, err)
-	assert.Equal(t, 0, tc)
-	assert.Equal(t, 0, fc)
+	_, _, err := readFieldHeader(data, &pos)
+	assert.ErrorIs(t, err, errNonCanonicalFieldID)
 }
 
 func TestStvReadFieldHeader_TypeZeroTruncated(t *testing.T) {
@@ -505,7 +500,6 @@ func TestStvParseSTValidation_InvalidAmendmentsLength(t *testing.T) {
 }
 
 func TestStvParseSTValidation_ShortSigningPubKey(t *testing.T) {
-	// SigningPubKey VL field with length != 33 → treated as absent → errMissingFields.
 	var buf []byte
 	buf = appendFieldHeader(buf, typeUINT32, fieldFlags)
 	buf = binary.BigEndian.AppendUint32(buf, vfFullValidation)
@@ -529,7 +523,7 @@ func TestStvParseSTValidation_ShortSigningPubKey(t *testing.T) {
 	buf = appendVL(buf, make([]byte, 70))
 
 	_, err := parseSTValidation(buf)
-	assert.ErrorIs(t, err, errMissingFields)
+	assert.ErrorIs(t, err, errInvalidFieldValue)
 }
 
 func TestStvParseSTValidation_AllOptionalUINT32Fields(t *testing.T) {
@@ -609,7 +603,6 @@ func TestStvParseSTValidation_FieldHeaderError(t *testing.T) {
 }
 
 func TestStvSerializeSTValidation_ZeroFlagsNotFull(t *testing.T) {
-	// Flags=0, Full=false → synthesize only vfFullyCanonicalSig
 	orig := buildTestValidation()
 	orig.Flags = 0
 	orig.Full = false
@@ -618,7 +611,7 @@ func TestStvSerializeSTValidation_ZeroFlagsNotFull(t *testing.T) {
 	parsed, err := parseSTValidation(blob)
 	require.NoError(t, err)
 
-	assert.Equal(t, uint32(vfFullyCanonicalSig), parsed.Flags)
+	assert.Zero(t, parsed.Flags)
 	assert.False(t, parsed.Full)
 }
 
@@ -628,9 +621,8 @@ func TestStvSerializeSTValidation_WithSignature(t *testing.T) {
 	orig.Signature = nil
 
 	blob := SerializeSTValidation(orig)
-	parsed, err := parseSTValidation(blob)
-	require.NoError(t, err)
-	assert.Empty(t, parsed.Signature)
+	_, err := parseSTValidation(blob)
+	assert.ErrorIs(t, err, errMissingFields)
 }
 
 func TestStvSkipAmount_IOUNonZeroMiddleBytes(t *testing.T) {

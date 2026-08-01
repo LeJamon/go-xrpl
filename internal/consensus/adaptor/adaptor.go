@@ -575,6 +575,9 @@ func (a *Adaptor) setOnLedgerBuilt(cb func(uint32, [32]byte)) {
 }
 
 func (a *Adaptor) RequestTxSet(id consensus.TxSetID) error {
+	if id == (consensus.TxSetID{}) {
+		return nil
+	}
 	if a.onTxSetRequested != nil {
 		a.onTxSetRequested(id)
 	}
@@ -723,8 +726,8 @@ func (a *Adaptor) PeerWithTxSet(target [32]byte, exclude uint64) (uint64, bool) 
 // NotePeerHasTxSet delegates to NetworkSender; the Router calls it on
 // inbound mtHAVE_TRANSACTION_SET{tsHAVE} so PeerWithTxSet can later find
 // the advertising peer.
-func (a *Adaptor) NotePeerHasTxSet(peerID uint64, hash [32]byte) {
-	a.sender.NotePeerHasTxSet(peerID, hash)
+func (a *Adaptor) NotePeerHasTxSet(peerID uint64, hash [32]byte) bool {
+	return a.sender.NotePeerHasTxSet(peerID, hash)
 }
 
 // LedgerService returns the underlying ledger service for direct queries.
