@@ -129,7 +129,7 @@ func TestUpdateCloseTimePositionProposesDisagreement(t *testing.T) {
 	engine.mode = consensus.ModeProposing
 	engine.roundStartTime = adaptor.now
 	engine.prevRoundTime = 10 * time.Second
-	engine.state = &consensus.RoundState{
+	engine.state = &roundState{
 		Round: consensus.RoundID{Seq: 2, ParentHash: consensus.LedgerID{1}},
 		OurPosition: &consensus.Proposal{
 			Position:  3,

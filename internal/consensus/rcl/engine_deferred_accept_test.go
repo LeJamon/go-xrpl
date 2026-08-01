@@ -191,12 +191,11 @@ func TestDeferredLedgerAcceptBuildFailureRestoresEstablish(t *testing.T) {
 
 	engine.mu.RLock()
 	phase := engine.phase
-	statePhase := engine.state.Phase
 	building := engine.buildInProgress
 	consensusCount := engine.consensusCount
 	engine.mu.RUnlock()
-	if phase != consensus.PhaseEstablish || statePhase != consensus.PhaseEstablish {
-		t.Fatalf("failed build phase = (%v, state=%v), want Establish", phase, statePhase)
+	if phase != consensus.PhaseEstablish {
+		t.Fatalf("failed build phase = %v, want Establish", phase)
 	}
 	if building {
 		t.Fatal("buildInProgress remained set after failed deferred build")

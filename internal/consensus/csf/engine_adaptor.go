@@ -537,8 +537,8 @@ func (p *Peer) PrevLedgerID() consensus.LedgerID {
 	engine := p.engine
 	p.lifecycleMu.Unlock()
 	if engine != nil {
-		if state := engine.State(); state != nil {
-			return state.Round.ParentHash
+		if round, ok := engine.CurrentRound(); ok {
+			return round.ParentHash
 		}
 	}
 	return p.LastClosedLedger().ID()

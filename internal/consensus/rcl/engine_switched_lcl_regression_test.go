@@ -19,7 +19,7 @@ func TestStartRoundLocked_RecoveryPreservesPreviousCloseTime(t *testing.T) {
 	engine.prevLedger = ledger
 	baseline := adaptor.Now().Add(-time.Second)
 	engine.prevCloseTime = baseline
-	engine.state = &consensus.RoundState{
+	engine.state = &roundState{
 		CloseTimes: consensus.CloseTimes{Self: time.Time{}},
 	}
 

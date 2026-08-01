@@ -853,6 +853,16 @@ func (e *Engine) Phase() consensus.Phase {
 	return e.phase
 }
 
+// CurrentRound returns the selected round without exposing mutable engine state.
+func (e *Engine) CurrentRound() (consensus.RoundID, bool) {
+	e.mu.RLock()
+	defer e.mu.RUnlock()
+	if e.state == nil {
+		return consensus.RoundID{}, false
+	}
+	return e.state.Round, true
+}
+
 // BuildingLedgerSeq returns the ledger sequence being built after the open
 // phase, or zero when no ledger build is active.
 func (e *Engine) BuildingLedgerSeq() uint32 {
