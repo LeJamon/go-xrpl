@@ -7,6 +7,7 @@ import (
 	"time"
 
 	rootcrypto "github.com/LeJamon/go-xrpl/crypto"
+	"github.com/LeJamon/go-xrpl/drops"
 	"github.com/LeJamon/go-xrpl/internal/consensus"
 	"github.com/LeJamon/go-xrpl/protocol"
 	"github.com/btcsuite/btcd/btcec/v2"
@@ -43,13 +44,12 @@ func TestVerifyValidationEnforcesCanonicalFlag(t *testing.T) {
 
 func TestSTValidationPreservesSignedAmountPresence(t *testing.T) {
 	for _, test := range []struct {
-		name     string
-		raw      uint64
-		drops    uint64
-		negative bool
+		name  string
+		raw   uint64
+		value drops.XRPAmount
 	}{
 		{name: "positive zero", raw: 1 << 62},
-		{name: "negative one", raw: 1, drops: 1, negative: true},
+		{name: "negative one", raw: 1, value: -1},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			identity, fields := signedValidationFixture(t)
@@ -65,15 +65,13 @@ func TestSTValidationPreservesSignedAmountPresence(t *testing.T) {
 			blob, _, _ := signValidationWireFields(t, identity, fields)
 			validation, err := parseSTValidation(blob)
 			require.NoError(t, err)
-			drops, negative, present := validation.BaseFeeDropsValue()
+			value, present := validation.BaseFeeDropsVote()
 			require.True(t, present)
-			require.Equal(t, test.drops, drops)
-			require.Equal(t, test.negative, negative)
+			require.Equal(t, test.value, value)
 
 			vote := extractFeeVote(validation, true)
 			require.NotNil(t, vote.BaseFee)
-			require.Equal(t, test.drops, *vote.BaseFee)
-			require.Equal(t, test.negative, vote.BaseFeeNegative)
+			require.Equal(t, test.value, *vote.BaseFee)
 		})
 	}
 }

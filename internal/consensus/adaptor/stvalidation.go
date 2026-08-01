@@ -739,7 +739,7 @@ func appendFieldHeader(buf []byte, typeCode, fieldCode int) []byte {
 // parseXRPAmount decodes an 8-byte native XRPL Amount.
 func parseXRPAmount(data []byte) (drops.XRPAmount, bool) {
 	if len(data) != 8 {
-		return 0, false, false
+		return 0, false
 	}
 	raw := binary.BigEndian.Uint64(data)
 	if raw == 0 || raw&(1<<63) != 0 || raw&(1<<61) != 0 {
