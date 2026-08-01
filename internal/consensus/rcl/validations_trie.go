@@ -185,9 +185,14 @@ func (vt *ValidationTracker) unparkLocked(key acquiringKey, nodeID consensus.Nod
 // Caller must hold vt.mu (write).
 func (vt *ValidationTracker) insertTipLocked(nodeID consensus.NodeID, lgr ledgertrie.Ledger) {
 	if prev, existed := vt.trieTips[nodeID]; existed {
-		safeTrieCall("Remove", func() { vt.trie.Remove(prev, 1) })
+		if safeTrieCall("Remove", func() { vt.trie.Remove(prev, 1) }) {
+			return
+		}
+		delete(vt.trieTips, nodeID)
 	}
-	safeTrieCall("Insert", func() { vt.trie.Insert(lgr, 1) })
+	if safeTrieCall("Insert", func() { vt.trie.Insert(lgr, 1) }) {
+		return
+	}
 	vt.trieTips[nodeID] = lgr
 }
 
