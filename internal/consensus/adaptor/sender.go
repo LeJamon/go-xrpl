@@ -9,7 +9,6 @@ import (
 	"github.com/LeJamon/go-xrpl/internal/peermanagement/message"
 )
 
-// OverlaySender implements the consensus and Router network contracts.
 type OverlaySender struct {
 	overlay *peermanagement.Overlay
 }
@@ -209,7 +208,6 @@ func (s *OverlaySender) SendPriorityToPeer(peerID uint64, frame []byte) error {
 	return s.overlay.SendPriority(peermanagement.PeerID(peerID), frame)
 }
 
-// ShouldShedLedgerRequest forwards to the overlay's load gate.
 func (s *OverlaySender) ShouldShedLedgerRequest(peerID uint64, loadedLocal bool) bool {
 	return s.overlay.ShouldShedLedgerRequest(peermanagement.PeerID(peerID), loadedLocal)
 }
@@ -314,11 +312,6 @@ func (s *OverlaySender) NotePeerHasTxSet(peerID uint64, hash [32]byte) bool {
 	return s.overlay.NotePeerHasTxSet(peermanagement.PeerID(peerID), hash)
 }
 
-// IncPeerBadData forwards to Overlay.IncPeerBadData. Called by the
-// consensus router via Adaptor.IncPeerBadData when it detects malformed
-// or invalid data from a peer (e.g., replay-delta verification
-// failures, ledger-data hash/root mismatches). Safe no-op for unknown
-// peers.
 func (s *OverlaySender) IncPeerBadData(peerID uint64, reason string) {
 	s.overlay.IncPeerBadData(peermanagement.PeerID(peerID), reason)
 }

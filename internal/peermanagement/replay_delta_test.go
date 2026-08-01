@@ -11,8 +11,6 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// fakeReplayDeltaProvider is a minimal LedgerProvider double used by the
-// replay-delta tests.
 type fakeReplayDeltaProvider struct {
 	header   []byte
 	txLeaves [][]byte

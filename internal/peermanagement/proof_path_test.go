@@ -11,8 +11,6 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// fakeProofPathProvider is a minimal LedgerProvider double used by the
-// proof-path tests.
 type fakeProofPathProvider struct {
 	header []byte
 	path   [][]byte

@@ -7,8 +7,6 @@ import (
 	"github.com/LeJamon/go-xrpl/internal/peermanagement/message"
 )
 
-// consensusNetwork is the outbound network surface owned by Adaptor as the
-// consensus engine bridge.
 type consensusNetwork interface {
 	BroadcastProposal(proposal *consensus.Proposal) error
 	BroadcastValidation(validation *consensus.Validation) error
@@ -21,7 +19,6 @@ type consensusNetwork interface {
 	RequestLedger(id consensus.LedgerID) error
 }
 
-// noopSender supplies zero-behavior defaults for each local network contract.
 type noopSender struct{}
 
 var (

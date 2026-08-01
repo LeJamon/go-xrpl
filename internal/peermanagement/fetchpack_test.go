@@ -11,7 +11,6 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// fakeFetchPackProvider implements LedgerProvider for fetch-pack tests.
 type fakeFetchPackProvider struct {
 	objects []message.IndexedObject
 	err     error
