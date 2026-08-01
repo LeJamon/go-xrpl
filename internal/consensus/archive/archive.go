@@ -68,6 +68,7 @@ type Archive struct {
 	flushWake         chan struct{}
 	retentionWake     chan struct{}
 	retentionTick     <-chan time.Time
+	retentionTimeout  time.Duration
 	stopTicker        func()
 	stop              chan struct{}
 	done              chan struct{}
@@ -135,6 +136,7 @@ func newArchive(
 		flushWake:         make(chan struct{}, 1),
 		retentionWake:     make(chan struct{}, 1),
 		retentionTick:     retentionTick,
+		retentionTimeout:  retentionSweepTimeout,
 		stop:              make(chan struct{}),
 		done:              make(chan struct{}),
 		runCtx:            runCtx,
@@ -486,7 +488,7 @@ func (a *Archive) applyRetentionBudget() {
 	if a.cfg.RetentionLedgers == 0 {
 		return
 	}
-	ctx, cancel := context.WithTimeout(a.maintenanceCtx, retentionSweepTimeout)
+	ctx, cancel := context.WithTimeout(a.maintenanceCtx, a.retentionTimeout)
 	defer cancel()
 
 	backlog := false
@@ -494,6 +496,10 @@ func (a *Archive) applyRetentionBudget() {
 		n, err := a.ApplyRetention(ctx)
 		if err != nil {
 			if a.maintenanceCtx.Err() != nil {
+				return
+			}
+			if backlog && errors.Is(ctx.Err(), context.DeadlineExceeded) {
+				a.wakeRetention()
 				return
 			}
 			a.retentionFailures.Add(1)
@@ -507,10 +513,14 @@ func (a *Archive) applyRetentionBudget() {
 		}
 	}
 	if backlog {
-		select {
-		case a.retentionWake <- struct{}{}:
-		default:
-		}
+		a.wakeRetention()
+	}
+}
+
+func (a *Archive) wakeRetention() {
+	select {
+	case a.retentionWake <- struct{}{}:
+	default:
 	}
 }
 

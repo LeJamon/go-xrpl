@@ -652,3 +652,59 @@ func TestArchive_RetentionRunsIdleAndContinuesPastBudget(t *testing.T) {
 		t.Fatalf("unexpected retention health: %+v", health)
 	}
 }
+
+type deadlineRetentionRepo struct {
+	*fakeRepo
+	calls atomic.Int32
+}
+
+func (r *deadlineRetentionRepo) DeleteOlderThanSeq(
+	ctx context.Context,
+	maxSeq relationaldb.LedgerIndex,
+	batchSize int,
+) (int64, error) {
+	if r.calls.Add(1) == 2 {
+		<-ctx.Done()
+		return 0, errors.New("driver interrupted")
+	}
+	return r.fakeRepo.DeleteOlderThanSeq(ctx, maxSeq, batchSize)
+}
+
+func TestArchive_RetentionDeadlineAfterProgressContinuesPromptly(t *testing.T) {
+	deleteCh := make(chan int64, 8)
+	base := &fakeRepo{deleteCh: deleteCh}
+	for seq := uint32(1); seq <= 6; seq++ {
+		base.rows = append(base.rows, toRecord(mkVal(seq, byte(seq)), seq))
+	}
+	repo := &deadlineRetentionRepo{fakeRepo: base}
+	ticks := make(chan time.Time, 1)
+	a := newArchive(
+		repo,
+		Config{
+			BatchSize:        100,
+			FlushInterval:    time.Hour,
+			RetentionLedgers: 1,
+			DeleteBatch:      2,
+		},
+		nil,
+		ticks,
+	)
+	a.retentionTimeout = 20 * time.Millisecond
+	defer a.Close(context.Background())
+	a.NoteFullyValidated(10)
+
+	ticks <- time.Now()
+	for range 4 {
+		select {
+		case <-deleteCh:
+		case <-time.After(time.Second):
+			t.Fatal("retention did not continue promptly after its time budget expired")
+		}
+	}
+	if got := repo.rowCount(); got != 0 {
+		t.Fatalf("rows after deadline continuation=%d, want 0", got)
+	}
+	if health := a.Health(); health.RetentionFailures != 0 {
+		t.Fatalf("time-budget exhaustion marked retention unhealthy: %+v", health)
+	}
+}

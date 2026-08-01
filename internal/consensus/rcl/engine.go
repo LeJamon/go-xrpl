@@ -523,7 +523,13 @@ func (e *Engine) Stop() error {
 
 	arc := e.loadArchive()
 	if arc != nil {
-		e.SetArchive(nil)
+		// Stop new stale deliveries, but retain the owned archive so a later
+		// Stop can observe terminal completion after a bounded Close times out.
+		e.mu.Lock()
+		if e.validationTracker != nil {
+			e.validationTracker.SetOnStale(nil)
+		}
+		e.mu.Unlock()
 	}
 
 	if e.validationTracker != nil {
