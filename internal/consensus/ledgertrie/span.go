@@ -39,11 +39,11 @@ func (s span) before(spot uint32) (span, bool) { return s.sub(s.start, spot) }
 
 func (s span) startID() consensus.LedgerID { return s.ledger.Ancestor(s.start) }
 
-func (s span) diff(o Ledger) uint32 { return s.clamp(Mismatch(s.ledger, o)) }
+func (s span) diff(o Ledger) uint32 { return s.clamp(mismatch(s.ledger, o)) }
 
 func (s span) tip() SpanTip {
 	tipSeq := s.end - 1
-	return SpanTip{Seq: tipSeq, ID: s.ledger.Ancestor(tipSeq), ledger: s.ledger}
+	return SpanTip{Seq: tipSeq, ID: s.ledger.Ancestor(tipSeq)}
 }
 
 // mergeSpans combines two adjacent spans, taking the ledger from the
