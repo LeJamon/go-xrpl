@@ -684,7 +684,6 @@ func (e *Engine) updatePosition() {
 		return
 	}
 
-	// Re-vote each dispute at the current converge percent.
 	proposing := e.mode == consensus.ModeProposing
 	disputeCount := e.disputeTracker.Count()
 	changed := e.disputeTracker.UpdateOurVote(e.convergePercent(), proposing, e.parms)
