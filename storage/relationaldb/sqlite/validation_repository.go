@@ -162,8 +162,8 @@ func (r *validationRepository) GetValidationCount(ctx context.Context) (int64, e
 }
 
 // DeleteOlderThanSeq removes up to batchSize rows with ledger_seq < maxSeq.
-// A bounded DELETE keeps the retention sweep from blocking the writer on
-// multi-second scans — the archive loop calls this once per flush tick.
+// A bounded DELETE keeps retention maintenance from blocking the writer on
+// one unbounded scan.
 func (r *validationRepository) DeleteOlderThanSeq(ctx context.Context, maxSeq relationaldb.LedgerIndex, batchSize int) (int64, error) {
 	q := `DELETE FROM validations WHERE rowid IN (
 		SELECT rowid FROM validations WHERE ledger_seq < ?`

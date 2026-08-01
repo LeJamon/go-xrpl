@@ -1647,7 +1647,33 @@ func doShutdown(
 	}
 
 	if consensusComponents != nil {
-		consensusComponents.Stop()
+		stopErr := consensusComponents.Stop()
+		if stopErr != nil {
+			logger.Warn("Consensus component shutdown failed", "err", stopErr)
+			if consensusComponents.Archive != nil {
+				waitCtx, waitCancel := context.WithTimeout(context.Background(), 5*time.Second)
+				terminalErr := consensusComponents.Archive.Close(waitCtx)
+				waitCancel()
+				if terminalErr != nil && !errors.Is(stopErr, terminalErr) {
+					logger.Warn("Validation archive terminal shutdown failed", "err", terminalErr)
+				}
+			}
+		}
+		if consensusComponents.Archive != nil {
+			health := consensusComponents.Archive.Health()
+			if !health.Healthy {
+				logger.Warn("Validation archive unhealthy at shutdown",
+					"enqueued", health.Enqueued,
+					"overload_dropped", health.OverloadDropped,
+					"closed_dropped", health.ClosedDropped,
+					"malformed_dropped", health.MalformedDropped,
+					"persistence_dropped", health.PersistenceDropped,
+					"write_failures", health.WriteFailures,
+					"retention_failures", health.RetentionFailures,
+					"last_error", health.LastError,
+				)
+			}
+		}
 		logger.Info("Consensus components stopped")
 	}
 
