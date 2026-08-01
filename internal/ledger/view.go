@@ -114,7 +114,7 @@ func (l *Ledger) ForEach(fn func(key [32]byte, data []byte) bool) error {
 // between leaf callbacks (the SHAMap descent observes ctx).
 func (l *Ledger) ForEachContext(ctx context.Context, fn func(key [32]byte, data []byte) bool) error {
 	l.mu.RLock()
-	stateMap, err := l.stateMap.SnapshotImmutable()
+	stateMap, err := l.stateMap.SnapshotImmutableContext(ctx)
 	l.mu.RUnlock()
 	if err != nil {
 		return err
@@ -152,7 +152,7 @@ func (l *Ledger) SuccContext(ctx context.Context, key [32]byte) ([32]byte, []byt
 // entry continues from the next entry instead of rescanning or yielding nothing.
 func (l *Ledger) IterateStateFrom(ctx context.Context, after [32]byte, fn func(key [32]byte, data []byte) bool) error {
 	l.mu.RLock()
-	stateMap, err := l.stateMap.SnapshotImmutable()
+	stateMap, err := l.stateMap.SnapshotImmutableContext(ctx)
 	l.mu.RUnlock()
 	if err != nil {
 		return err
@@ -196,7 +196,7 @@ func (l *Ledger) ForEachTransaction(fn func(txHash [32]byte, txData []byte) bool
 
 func (l *Ledger) ForEachTransactionContext(ctx context.Context, fn func(txHash [32]byte, txData []byte) bool) error {
 	l.mu.RLock()
-	txMap, err := l.txMap.SnapshotImmutable()
+	txMap, err := l.txMap.SnapshotImmutableContext(ctx)
 	l.mu.RUnlock()
 	if err != nil {
 		return err

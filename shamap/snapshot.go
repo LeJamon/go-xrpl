@@ -9,13 +9,31 @@ import (
 // SnapshotMutable returns a structurally-shared copy that may be modified.
 // See snapshot for the sharing and flushing semantics.
 func (sm *SHAMap) SnapshotMutable() (*SHAMap, error) {
-	return sm.snapshot(true)
+	return sm.snapshot(context.Background(), true, nil)
 }
 
 // SnapshotImmutable returns a read-only structurally-shared copy.
 // See snapshot for the sharing and flushing semantics.
 func (sm *SHAMap) SnapshotImmutable() (*SHAMap, error) {
-	return sm.snapshot(false)
+	return sm.SnapshotImmutableContext(context.Background())
+}
+
+// SnapshotImmutableContext is SnapshotImmutable with caller-controlled
+// cancellation for dirty-node persistence.
+func (sm *SHAMap) SnapshotImmutableContext(ctx context.Context) (*SHAMap, error) {
+	return sm.snapshot(ctx, false, nil)
+}
+
+// SnapshotMutableWithLedgerSeq returns a mutable snapshot stamped with
+// ledgerSeq without changing the source map's sequence metadata.
+func (sm *SHAMap) SnapshotMutableWithLedgerSeq(ledgerSeq uint32) (*SHAMap, error) {
+	return sm.snapshot(context.Background(), true, &ledgerSeq)
+}
+
+// SnapshotImmutableWithLedgerSeqContext returns an immutable snapshot stamped
+// with ledgerSeq without changing the source map's sequence metadata.
+func (sm *SHAMap) SnapshotImmutableWithLedgerSeqContext(ctx context.Context, ledgerSeq uint32) (*SHAMap, error) {
+	return sm.snapshot(ctx, false, &ledgerSeq)
 }
 
 // snapshot returns a structurally-shared copy of the SHAMap in O(1).
@@ -31,15 +49,20 @@ func (sm *SHAMap) SnapshotImmutable() (*SHAMap, error) {
 // Flushing a structurally-shared subtree from either map is safe: the
 // dirty flag is atomic and node hashes are read and written under each
 // node's own lock.
-func (sm *SHAMap) snapshot(mutable bool) (*SHAMap, error) {
+func (sm *SHAMap) snapshot(ctx context.Context, mutable bool, ledgerSeq *uint32) (*SHAMap, error) {
 	sm.tree.mu.Lock()
 	defer sm.tree.mu.Unlock()
 	sm.backing.mu.RLock()
 	defer sm.backing.mu.RUnlock()
+	if ledgerSeq != nil {
+		sourceLedgerSeq := sm.tree.ledgerSeq
+		sm.tree.ledgerSeq = *ledgerSeq
+		defer func() { sm.tree.ledgerSeq = sourceLedgerSeq }()
+	}
 
 	if sm.backing.access.available() {
 		if err := sm.storeDirtyLocked(func(entries []FlushEntry) error {
-			return sm.backing.access.storeBatch(context.Background(), entries)
+			return sm.backing.access.storeBatch(ctx, entries)
 		}); err != nil {
 			return nil, fmt.Errorf("failed to store dirty nodes: %w", err)
 		}

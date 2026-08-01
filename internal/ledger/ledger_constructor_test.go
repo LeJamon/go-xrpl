@@ -2,6 +2,8 @@ package ledger
 
 import (
 	"bytes"
+	"context"
+	"sync"
 	"testing"
 
 	"github.com/LeJamon/go-xrpl/drops"
@@ -9,6 +11,46 @@ import (
 	"github.com/LeJamon/go-xrpl/keylet"
 	"github.com/LeJamon/go-xrpl/shamap"
 )
+
+type constructorRecordingFamily struct {
+	mu      sync.Mutex
+	nodes   map[[32]byte][]byte
+	entries []shamap.FlushEntry
+}
+
+func newConstructorRecordingFamily() *constructorRecordingFamily {
+	return &constructorRecordingFamily{nodes: make(map[[32]byte][]byte)}
+}
+
+func (f *constructorRecordingFamily) Fetch(ctx context.Context, hash [32]byte) ([]byte, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return bytes.Clone(f.nodes[hash]), nil
+}
+
+func (f *constructorRecordingFamily) StoreBatch(ctx context.Context, entries []shamap.FlushEntry) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	for _, entry := range entries {
+		f.entries = append(f.entries, entry)
+		f.nodes[entry.Hash] = bytes.Clone(entry.Data)
+	}
+	return nil
+}
+
+func (f *constructorRecordingFamily) takeEntries() []shamap.FlushEntry {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	entries := append([]shamap.FlushEntry(nil), f.entries...)
+	f.entries = nil
+	return entries
+}
 
 func TestLedgerConstructorsRejectNilAndWrongMapTypes(t *testing.T) {
 	constructors := map[string]func(*shamap.SHAMap, *shamap.SHAMap) (*Ledger, error){
@@ -128,5 +170,83 @@ func TestNewOpenWithHeaderDetachesReplayInputs(t *testing.T) {
 	}
 	if err := l.AddTransaction([32]byte{0x63}, bytes.Repeat([]byte{0x41}, 16)); err != nil {
 		t.Fatalf("detached ledger transaction map is not writable: %v", err)
+	}
+}
+
+func TestHeaderConstructorsSnapshotAtHeaderSequenceWithoutMutatingInputs(t *testing.T) {
+	constructors := map[string]func(header.LedgerHeader, *shamap.SHAMap, *shamap.SHAMap) (*Ledger, error){
+		"closed": func(hdr header.LedgerHeader, stateMap, txMap *shamap.SHAMap) (*Ledger, error) {
+			return NewFromHeader(hdr, stateMap, txMap, drops.Fees{})
+		},
+		"open": func(hdr header.LedgerHeader, stateMap, txMap *shamap.SHAMap) (*Ledger, error) {
+			return NewOpenWithHeader(hdr, stateMap, txMap, drops.Fees{})
+		},
+	}
+
+	for name, construct := range constructors {
+		t.Run(name, func(t *testing.T) {
+			family := newConstructorRecordingFamily()
+			stateMap, err := shamap.NewBacked(shamap.TypeState, family)
+			if err != nil {
+				t.Fatalf("NewBacked state: %v", err)
+			}
+			txMap, err := shamap.NewBacked(shamap.TypeTransaction, family)
+			if err != nil {
+				t.Fatalf("NewBacked transaction: %v", err)
+			}
+			stateMap.SetLedgerSeq(11)
+			txMap.SetLedgerSeq(12)
+			if err := stateMap.Put(mutAcct(0x71).Key, mutData(0x11)); err != nil {
+				t.Fatalf("seed state: %v", err)
+			}
+			if err := txMap.Put([32]byte{0x72}, bytes.Repeat([]byte{0x22}, 16)); err != nil {
+				t.Fatalf("seed transaction: %v", err)
+			}
+
+			const targetSeq = uint32(600)
+			if _, err := construct(header.LedgerHeader{LedgerIndex: targetSeq}, stateMap, txMap); err != nil {
+				t.Fatalf("construct ledger: %v", err)
+			}
+			entries := family.takeEntries()
+			if len(entries) == 0 {
+				t.Fatal("constructor did not flush dirty inputs")
+			}
+			seenTypes := make(map[shamap.Type]bool)
+			for _, entry := range entries {
+				if entry.LedgerSeq != targetSeq {
+					t.Fatalf("constructor flush ledger sequence = %d, want %d", entry.LedgerSeq, targetSeq)
+				}
+				seenTypes[entry.MapType] = true
+			}
+			if !seenTypes[shamap.TypeState] || !seenTypes[shamap.TypeTransaction] {
+				t.Fatalf("constructor flush map types = %v, want state and transaction", seenTypes)
+			}
+
+			if err := stateMap.Put(mutAcct(0x73).Key, mutData(0x33)); err != nil {
+				t.Fatalf("mutate caller state: %v", err)
+			}
+			if err := txMap.Put([32]byte{0x74}, bytes.Repeat([]byte{0x44}, 16)); err != nil {
+				t.Fatalf("mutate caller transaction: %v", err)
+			}
+			if _, err := stateMap.SnapshotImmutable(); err != nil {
+				t.Fatalf("snapshot caller state: %v", err)
+			}
+			if _, err := txMap.SnapshotImmutable(); err != nil {
+				t.Fatalf("snapshot caller transaction: %v", err)
+			}
+			entries = family.takeEntries()
+			if len(entries) == 0 {
+				t.Fatal("caller mutations did not flush")
+			}
+			for _, entry := range entries {
+				want := uint32(11)
+				if entry.MapType == shamap.TypeTransaction {
+					want = 12
+				}
+				if entry.LedgerSeq != want {
+					t.Fatalf("caller %s flush ledger sequence = %d, want %d", entry.MapType, entry.LedgerSeq, want)
+				}
+			}
+		})
 	}
 }

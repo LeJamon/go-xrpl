@@ -410,10 +410,14 @@ func New(cfg Config) *Adaptor {
 	if cfg.Identity != nil && len(trustedMasterKeys) > 0 {
 		negUNLVoter = negativeunlvote.NewVoter(cfg.Identity.NodeID)
 	}
+	var txLookup openLedgerTxLookup
+	if cfg.LedgerService != nil {
+		txLookup = cfg.LedgerService
+	}
 
 	a := &Adaptor{
 		ledgerService:     cfg.LedgerService,
-		txLookup:          cfg.LedgerService,
+		txLookup:          txLookup,
 		sender:            sender,
 		identity:          cfg.Identity,
 		trustedValidators: cfg.Validators,

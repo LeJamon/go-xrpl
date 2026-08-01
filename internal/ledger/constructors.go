@@ -159,16 +159,14 @@ func newFromHeaderContext(
 	if err := validateMaps(stateMap, txMap); err != nil {
 		return nil, err
 	}
-	immutableState, err := stateMap.SnapshotImmutable()
+	immutableState, err := stateMap.SnapshotImmutableWithLedgerSeqContext(ctx, hdr.LedgerIndex)
 	if err != nil {
 		return nil, fmt.Errorf("failed to snapshot state map: %w", err)
 	}
-	immutableTx, err := txMap.SnapshotImmutable()
+	immutableTx, err := txMap.SnapshotImmutableWithLedgerSeqContext(ctx, hdr.LedgerIndex)
 	if err != nil {
 		return nil, fmt.Errorf("failed to snapshot transaction map: %w", err)
 	}
-	setMapLedgerSeq(immutableState, hdr.LedgerIndex)
-	setMapLedgerSeq(immutableTx, hdr.LedgerIndex)
 	rules, err := LoadAmendmentsFromSHAMapContext(ctx, immutableState)
 	if err != nil {
 		return nil, fmt.Errorf("failed to load amendment rules: %w", err)
@@ -195,16 +193,14 @@ func NewOpenWithHeader(
 	if err := validateMaps(stateMap, txMap); err != nil {
 		return nil, err
 	}
-	ownedState, err := stateMap.SnapshotMutable()
+	ownedState, err := stateMap.SnapshotMutableWithLedgerSeq(hdr.LedgerIndex)
 	if err != nil {
 		return nil, fmt.Errorf("failed to snapshot state map: %w", err)
 	}
-	ownedTx, err := txMap.SnapshotMutable()
+	ownedTx, err := txMap.SnapshotMutableWithLedgerSeq(hdr.LedgerIndex)
 	if err != nil {
 		return nil, fmt.Errorf("failed to snapshot transaction map: %w", err)
 	}
-	setMapLedgerSeq(ownedState, hdr.LedgerIndex)
-	setMapLedgerSeq(ownedTx, hdr.LedgerIndex)
 	rules, err := loadAmendmentsFromSHAMap(ownedState)
 	if err != nil {
 		return nil, fmt.Errorf("failed to load amendment rules: %w", err)
@@ -234,10 +230,4 @@ func validateMaps(stateMap, txMap *shamap.SHAMap) error {
 		return fmt.Errorf("transaction map has type %s, want %s", txMap.Type(), shamap.TypeTransaction)
 	}
 	return nil
-}
-
-func setMapLedgerSeq(sm *shamap.SHAMap, seq uint32) {
-	if sm != nil {
-		sm.SetLedgerSeq(seq)
-	}
 }
