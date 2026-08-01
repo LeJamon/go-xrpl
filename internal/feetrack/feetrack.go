@@ -102,7 +102,6 @@ func (t *LoadFeeTrack) IsLoadedLocal() bool {
 	return t.raiseCount != 0 || t.localFee != LoadBase
 }
 
-// IsLoadedCluster reports whether the cluster-load admission gate is active.
 func (t *LoadFeeTrack) IsLoadedCluster() bool {
 	t.mu.RLock()
 	defer t.mu.RUnlock()

@@ -97,8 +97,6 @@ func TestSubmitMultisigned_FeeNotPresent(t *testing.T) {
 	assert.Equal(t, "Missing field 'tx_json.Fee'.", rpcErr.Message)
 }
 
-// TestSubmitMultisigned_FeeNumeric verifies that a JSON integer Fee is
-// canonicalized to an XRP drops string before submission.
 func TestSubmitMultisigned_FeeNumeric(t *testing.T) {
 	mock := newMockLedgerServiceSubmit()
 	services := newSubmitTestServices(mock)

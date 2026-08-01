@@ -52,7 +52,6 @@ func TestRaiseLowerLocalFee(t *testing.T) {
 		t.Fatal("IsLoadedLocal must be true once localFee != LoadBase")
 	}
 
-	// Repeated decay must clamp at LoadBase.
 	for range 10 {
 		tr.LowerLocalFee()
 	}

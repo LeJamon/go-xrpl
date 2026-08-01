@@ -351,7 +351,6 @@ type ServiceContainer struct {
 	// subsystem lands — handler suppresses the fields when nil.
 	LoadFactorFees func() LoadFactorFees
 
-	// IsLoadedCluster reports whether the signing load-admission gate is active.
 	// Nil in RPC-only test contexts, which handlers treat as unloaded.
 	IsLoadedCluster func() bool
 

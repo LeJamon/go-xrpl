@@ -126,7 +126,6 @@ func (m *SubmitMultisignedMethod) Handle(ctx *types.RpcContext, params json.RawM
 		return nil, types.RpcErrorSigningMalformed()
 	}
 
-	// Fee must be XRP drops and must be > 0.
 	// Matches rippled: "Invalid Fee field.  Fees must be specified in XRP." /
 	// "Invalid Fee field.  Fees must be greater than zero."
 	feeVal := txMap["Fee"]
