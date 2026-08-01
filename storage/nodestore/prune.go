@@ -10,6 +10,7 @@ import (
 
 const defaultDeleteBatch = 65536
 
+// DeleteBefore removes nodes whose ledger sequence is below boundary.
 func (d *KVDatabase) DeleteBefore(
 	ctx context.Context,
 	boundary uint32,

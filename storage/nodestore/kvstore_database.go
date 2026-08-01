@@ -11,12 +11,14 @@ import (
 	"github.com/LeJamon/go-xrpl/storage/kvstore"
 )
 
+// CacheConfig configures one optional NodeStore cache.
 type CacheConfig struct {
 	Enabled    bool
 	MaxEntries int
 	TTL        time.Duration
 }
 
+// DatabaseConfig configures the positive and negative NodeStore caches.
 type DatabaseConfig struct {
 	PositiveCache CacheConfig
 	NegativeCache CacheConfig
@@ -32,6 +34,7 @@ type nodeCacheAccess interface {
 	Sweep() int
 }
 
+// DefaultDatabaseConfig returns the production cache defaults.
 func DefaultDatabaseConfig() DatabaseConfig {
 	return DatabaseConfig{
 		PositiveCache: CacheConfig{
@@ -70,6 +73,7 @@ func validateCacheConfig(name string, config CacheConfig) error {
 	return nil
 }
 
+// KVDatabase stores validated nodes in a key-value backend.
 type KVDatabase struct {
 	lifecycleMu sync.RWMutex
 	closed      bool
@@ -94,6 +98,7 @@ type KVDatabase struct {
 	}
 }
 
+// NewKVDatabase constructs a NodeStore over store using config.
 func NewKVDatabase(store kvstore.KeyValueStore, config DatabaseConfig) (*KVDatabase, error) {
 	if store == nil {
 		return nil, fmt.Errorf("%w: nil store", ErrInvalidConfig)
@@ -129,6 +134,7 @@ func (d *KVDatabase) begin(ctx context.Context) error {
 	return nil
 }
 
+// Store validates and persists one node.
 func (d *KVDatabase) Store(ctx context.Context, node *Node) error {
 	if err := d.begin(ctx); err != nil {
 		return err
@@ -164,6 +170,7 @@ func (d *KVDatabase) Store(ctx context.Context, node *Node) error {
 	return nil
 }
 
+// Fetch returns a node by hash, consulting configured caches.
 func (d *KVDatabase) Fetch(ctx context.Context, hash Hash256) (*Node, error) {
 	if err := d.begin(ctx); err != nil {
 		return nil, err
@@ -323,6 +330,7 @@ func (d *KVDatabase) StoreBatch(ctx context.Context, nodes []*Node) (err error) 
 	return nil
 }
 
+// Sweep removes expired entries from configured caches.
 func (d *KVDatabase) Sweep() error {
 	d.lifecycleMu.RLock()
 	if d.closed {
@@ -339,6 +347,7 @@ func (d *KVDatabase) Sweep() error {
 	return nil
 }
 
+// Stats returns the database's operational counters.
 func (d *KVDatabase) Stats() Statistics {
 	stats := Statistics{
 		Reads:       atomic.LoadUint64(&d.stats.reads),
@@ -406,6 +415,7 @@ func (d *KVDatabase) Sync(ctx context.Context) error {
 	}
 }
 
+// Close releases caches and closes the underlying store.
 func (d *KVDatabase) Close() error {
 	d.lifecycleMu.Lock()
 	defer d.lifecycleMu.Unlock()

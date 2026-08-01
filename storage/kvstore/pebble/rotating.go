@@ -568,6 +568,7 @@ func (r *RotatingStore) Put(key []byte, value []byte) error {
 	return r.writable.Put(key, value)
 }
 
+// NewBatch returns a batch that applies operations to the rotating store.
 func (r *RotatingStore) NewBatch() (kvstore.Batch, error) {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
@@ -602,6 +603,7 @@ func (r *RotatingStore) NewIterator(prefix []byte, start []byte) (kvstore.Iterat
 	}, nil
 }
 
+// Sync flushes both generations.
 func (r *RotatingStore) Sync() error {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
