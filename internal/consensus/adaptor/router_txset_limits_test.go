@@ -64,11 +64,12 @@ func resourceAcquireState(t *testing.T, retained int64) *txSetAcquireState {
 
 func TestTxSetAcquire_ActiveCountBound(t *testing.T) {
 	router, _ := newRetryRouter(t)
+	oldestUpdate := time.Now().Add(-time.Second)
 
 	for i := 0; i < txSetAcquireMaxActive; i++ {
 		id := resourceTxSetID(byte(i + 1))
 		state := resourceAcquireState(t, int64(i+1))
-		state.lastUpdate = time.Unix(int64(i+1), 0)
+		state.lastUpdate = oldestUpdate.Add(time.Duration(i) * time.Millisecond)
 		router.txSetAcquire[id] = state
 	}
 
