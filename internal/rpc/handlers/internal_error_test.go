@@ -291,6 +291,15 @@ func (a *rpcInternalErrorAuditor) approvedInternalConstructorCalls(pkg *packages
 		if !ok {
 			continue
 		}
+		if function.Name.Name == "RpcErrorInvalidTransactionType" {
+			call, exact := exactInvalidTransactionTypeConstructor(pkg, function)
+			if !exact {
+				a.report(pkg, function, "RpcErrorInvalidTransactionType must remain the constrained transaction-type constructor")
+				continue
+			}
+			approved[call] = struct{}{}
+			continue
+		}
 		message, fixed := fixedInternalConstructorMessage(function.Name.Name)
 		if !fixed {
 			continue
@@ -309,6 +318,42 @@ func (a *rpcInternalErrorAuditor) approvedInternalConstructorCalls(pkg *packages
 		}
 	}
 	return approved
+}
+
+func exactInvalidTransactionTypeConstructor(pkg *packages.Package, function *ast.FuncDecl) (*ast.CallExpr, bool) {
+	object, _ := pkg.TypesInfo.Defs[function.Name].(*gotypes.Func)
+	if object == nil {
+		return nil, false
+	}
+	signature, _ := object.Type().(*gotypes.Signature)
+	if signature == nil || function.Recv != nil || function.Type.TypeParams != nil ||
+		signature.Params().Len() != 1 || !isBasicType(signature.Params().At(0).Type(), gotypes.Uint16) ||
+		signature.Results().Len() != 1 || !isRpcErrorPointer(signature.Results().At(0).Type()) ||
+		function.Body == nil || len(function.Body.List) != 1 {
+		return nil, false
+	}
+	result, ok := function.Body.List[0].(*ast.ReturnStmt)
+	if !ok || len(result.Results) != 1 {
+		return nil, false
+	}
+	call, ok := unparen(result.Results[0]).(*ast.CallExpr)
+	if !ok || !isRPCFunction(auditUsedFunction(pkg, call.Fun), "NewRpcError") || len(call.Args) != 4 ||
+		!isRPCInternalConstant(pkg.TypesInfo.Types[call.Args[0]].Value) ||
+		!isStringConstant(pkg, call.Args[1], "internal") ||
+		!isStringConstant(pkg, call.Args[2], "internal") {
+		return nil, false
+	}
+	messageCall, ok := unparen(call.Args[3]).(*ast.CallExpr)
+	if !ok || len(messageCall.Args) != 2 || !isNamedFunction(auditUsedFunction(pkg, messageCall.Fun), "fmt", "Sprintf") ||
+		!isStringConstant(pkg, messageCall.Args[0], "Exception while serializing transaction: Invalid transaction type %d") {
+		return nil, false
+	}
+	argument, ok := unparen(messageCall.Args[1]).(*ast.Ident)
+	return call, ok && pkg.TypesInfo.Uses[argument] == signature.Params().At(0)
+}
+
+func isNamedFunction(function *gotypes.Func, packagePath, name string) bool {
+	return function != nil && function.Pkg() != nil && function.Pkg().Path() == packagePath && function.Name() == name
 }
 
 func (a *rpcInternalErrorAuditor) approvedRpcErrorFactoryLiterals(pkg *packages.Package, file *ast.File) map[*ast.CompositeLit]struct{} {

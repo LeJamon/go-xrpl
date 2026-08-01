@@ -100,19 +100,19 @@ func TestSignTransactionJSONPreservesExplicitEmptyFields(t *testing.T) {
 	}{
 		{
 			name:     "empty array",
-			txJSON:   json.RawMessage(`{"TransactionType":"AccountSet","Fee":"10","Sequence":1,"Memos":[]}`),
+			txJSON:   json.RawMessage(`{"TransactionType":"AccountSet","Account":"r9zRhGr7b6xPekLvT6wP4qNdWMryaumZS7","Fee":"10","Sequence":1,"Memos":[]}`),
 			field:    "Memos",
 			expected: []any{},
 		},
 		{
 			name:     "empty blob",
-			txJSON:   json.RawMessage(`{"TransactionType":"AccountSet","Fee":"10","Sequence":1,"Domain":""}`),
+			txJSON:   json.RawMessage(`{"TransactionType":"AccountSet","Account":"r9zRhGr7b6xPekLvT6wP4qNdWMryaumZS7","Fee":"10","Sequence":1,"Domain":""}`),
 			field:    "Domain",
 			expected: "",
 		},
 		{
 			name:     "nested empty blob",
-			txJSON:   json.RawMessage(`{"TransactionType":"AccountSet","Fee":"10","Sequence":1,"Memos":[{"Memo":{"MemoData":""}}]}`),
+			txJSON:   json.RawMessage(`{"TransactionType":"AccountSet","Account":"r9zRhGr7b6xPekLvT6wP4qNdWMryaumZS7","Fee":"10","Sequence":1,"Memos":[{"Memo":{"MemoData":""}}]}`),
 			field:    "Memos",
 			expected: []any{map[string]any{"Memo": map[string]any{"MemoData": ""}}},
 		},
@@ -120,7 +120,7 @@ func TestSignTransactionJSONPreservesExplicitEmptyFields(t *testing.T) {
 
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			result, rpcErr := signTransactionJSON(context.Background(), nil, test.txJSON, signCredentials{}, true, false, 2, params, "")
+			result, rpcErr := signTransactionJSON(&types.RpcContext{Context: context.Background(), ApiVersion: 2}, test.txJSON, signCredentials{}, true, params, "")
 			if rpcErr != nil {
 				t.Fatalf("sign transaction: %v", rpcErr)
 			}

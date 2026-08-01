@@ -98,6 +98,15 @@ func (m *SignForMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (a
 	if signatureTargetPresent && request.SignatureTarget != counterpartySignatureField {
 		return nil, types.RpcErrorInvalidParams(request.SignatureTarget)
 	}
+	if rpcErr := validateSigningTxJSONShape(txMap); rpcErr != nil {
+		return nil, rpcErr
+	}
+	if rpcErr := rejectOnlineSigningWithoutCurrentLedger(ctx.Services, request.Offline, ctx.ApiVersion); rpcErr != nil {
+		return nil, rpcErr
+	}
+	if rpcErr := rejectSigningWhenLoaded(ctx.Services, ctx.Unlimited); rpcErr != nil {
+		return nil, rpcErr
+	}
 	if rpcErr := validateSignForPreConflict(txMap, params); rpcErr != nil {
 		return nil, rpcErr
 	}
@@ -186,20 +195,10 @@ func (m *SignForMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (a
 }
 
 func validateSignForPreConflict(txMap map[string]any, params json.RawMessage) *types.RpcError {
-	transactionType, ok := txMap["TransactionType"]
-	if !ok {
-		return types.RpcErrorMissingField("tx_json.TransactionType")
-	}
-	account, ok := txMap["Account"].(string)
-	if !ok || !addresscodec.IsValidClassicAddress(account) {
-		if _, present := txMap["Account"]; !present {
-			return types.RpcErrorSrcActMissing("Missing field 'tx_json.Account'.")
-		}
-		return types.RpcErrorSrcActMalformed("Invalid field 'tx_json.Account'.")
-	}
 	if _, ok := txMap["Fee"]; !ok {
 		return types.RpcErrorMissingField("tx_json.Fee")
 	}
+	transactionType := txMap["TransactionType"]
 	if transactionType != "Payment" {
 		return nil
 	}
@@ -240,6 +239,20 @@ func validateSignForPreConflict(txMap map[string]any, params json.RawMessage) *t
 		if !ok || err != nil || len(decoded) != 32 {
 			return types.RpcErrorDomainMalformed("Unable to parse 'DomainID'.")
 		}
+	}
+	return nil
+}
+
+func validateSigningTxJSONShape(txMap map[string]any) *types.RpcError {
+	if _, ok := txMap["TransactionType"]; !ok {
+		return types.RpcErrorMissingField("tx_json.TransactionType")
+	}
+	account, ok := txMap["Account"].(string)
+	if !ok || !addresscodec.IsValidClassicAddress(account) {
+		if _, present := txMap["Account"]; !present {
+			return types.RpcErrorSrcActMissing("Missing field 'tx_json.Account'.")
+		}
+		return types.RpcErrorSrcActMalformed("Invalid field 'tx_json.Account'.")
 	}
 	return nil
 }

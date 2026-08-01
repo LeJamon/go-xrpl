@@ -351,6 +351,9 @@ type ServiceContainer struct {
 	// subsystem lands — handler suppresses the fields when nil.
 	LoadFactorFees func() LoadFactorFees
 
+	// Nil in RPC-only test contexts, which handlers treat as unloaded.
+	IsLoadedCluster func() bool
+
 	// ClientLoad is the shared in-flight client-RPC counter that drives
 	// the rpcTOO_BUSY load-shedding gates. Approximates rippled's
 	// jtCLIENT backpressure via in-flight RPC count: rippled measures

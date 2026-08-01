@@ -212,6 +212,17 @@ func TestRpcErrorDBDeserialization(t *testing.T) {
 	}
 }
 
+func TestRpcErrorInvalidTransactionType(t *testing.T) {
+	err := RpcErrorInvalidTransactionType(65535)
+	if err.Code != RpcINTERNAL || err.ErrorString != "internal" {
+		t.Fatalf("error = %#v, want internal RPC error", err)
+	}
+	want := "Exception while serializing transaction: Invalid transaction type 65535"
+	if err.Message != want {
+		t.Fatalf("message = %q, want %q", err.Message, want)
+	}
+}
+
 // Bare-token errors mirror rippled handlers that set jvResult[jss::error]
 // directly (e.g. VaultInfo.cpp:101, TransactionEntry.cpp:71): only `error` is
 // wired, never error_code or error_message. Errors built through inject_error

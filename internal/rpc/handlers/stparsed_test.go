@@ -2,6 +2,7 @@ package handlers
 
 import (
 	"encoding/json"
+	"reflect"
 	"testing"
 
 	binarycodecdefs "github.com/LeJamon/go-xrpl/codec/binarycodec/definitions"
@@ -31,6 +32,18 @@ func TestSerializedFieldParseMessageLeafValidation(t *testing.T) {
 			field:   "CloseResolution",
 			value:   json.Number("256"),
 			message: "Field 'tx_json.CloseResolution' is out of range.",
+		},
+		{
+			name:    "transaction type does not accept ledger entry name",
+			field:   "TransactionType",
+			value:   "AccountRoot",
+			message: "Field 'tx_json.TransactionType' has invalid data.",
+		},
+		{
+			name:    "UInt16 string does not accept leading plus",
+			field:   "SignerWeight",
+			value:   "+1",
+			message: "Field 'tx_json.SignerWeight' has invalid data.",
 		},
 		{
 			name:    "hash bad type",
@@ -74,6 +87,34 @@ func TestSerializedFieldParseMessageLeafValidation(t *testing.T) {
 			value:   []any{},
 			message: "Field 'tx_json.Amount' has invalid data.",
 		},
+		{
+			name:  "numeric amount",
+			field: "Fee",
+			value: json.Number("50"),
+		},
+		{
+			name:    "numeric amount outside JSON uint range",
+			field:   "Fee",
+			value:   json.Number("4294967296"),
+			message: "Field 'tx_json.Fee' has invalid data.",
+		},
+		{
+			name:    "numeric amount exponent",
+			field:   "Fee",
+			value:   json.Number("1e2"),
+			message: "Field 'tx_json.Fee' has invalid data.",
+		},
+		{
+			name:  "string amount integral exponent",
+			field: "Fee",
+			value: "1e2",
+		},
+		{
+			name:    "string amount leading zero",
+			field:   "Fee",
+			value:   "010",
+			message: "Field 'tx_json.Fee' has invalid data.",
+		},
 	}
 
 	defs := binarycodecdefs.Get()
@@ -84,6 +125,31 @@ func TestSerializedFieldParseMessageLeafValidation(t *testing.T) {
 				t.Fatalf("message = %q, want %q", got, test.message)
 			}
 		})
+	}
+}
+
+func TestSerializedFieldParseMessageCanonicalizesNativeAmount(t *testing.T) {
+	object := map[string]any{"Fee": "1e2"}
+	if message := serializedFieldParseMessage(object, "tx_json", binarycodecdefs.Get()); message != "" {
+		t.Fatalf("message = %q, want success", message)
+	}
+	if got := object["Fee"]; got != "100" {
+		t.Fatalf("Fee = %#v, want canonical drops string", got)
+	}
+}
+
+func TestSerializedFieldParseMessageCanonicalizesIssuedAmountString(t *testing.T) {
+	object := map[string]any{"Amount": "1/USD/rMRxj8jED6ZCjtjgFxB4cz1MGVNtYqCEyS"}
+	if message := serializedFieldParseMessage(object, "tx_json", binarycodecdefs.Get()); message != "" {
+		t.Fatalf("message = %q, want success", message)
+	}
+	want := map[string]any{
+		"value":    "1",
+		"currency": "USD",
+		"issuer":   "rMRxj8jED6ZCjtjgFxB4cz1MGVNtYqCEyS",
+	}
+	if got := object["Amount"]; !reflect.DeepEqual(got, want) {
+		t.Fatalf("Amount = %#v, want %#v", got, want)
 	}
 }
 

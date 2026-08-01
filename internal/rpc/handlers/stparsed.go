@@ -11,6 +11,7 @@ import (
 
 	binarycodecdefs "github.com/LeJamon/go-xrpl/codec/binarycodec/definitions"
 	binarycodectypes "github.com/LeJamon/go-xrpl/codec/binarycodec/types"
+	"github.com/LeJamon/go-xrpl/internal/ledger/state"
 	"github.com/LeJamon/go-xrpl/internal/rpc/types"
 )
 
@@ -223,13 +224,40 @@ func validateSerializedLeaf(
 	case "UInt8":
 		return validateUInt8(name, value, path, defs)
 	case "UInt16":
-		return validateUInt16(value, path, defs)
+		return validateUInt16(name, value, path, defs)
 	case "UInt32":
 		return validateUInt32(name, value, path, defs)
 	case "UInt64":
 		return validateUInt64(name, value, path)
 	case "Int32":
 		return validateInt32(value, path)
+	case "Amount":
+		switch value.(type) {
+		case string, json.Number:
+			raw, err := json.Marshal(value)
+			if err != nil {
+				return value, fmt.Sprintf("Field '%s' has invalid data.", path)
+			}
+			amount, err := state.AmountFromJSON(raw)
+			if err != nil {
+				return value, fmt.Sprintf("Field '%s' has invalid data.", path)
+			}
+			switch {
+			case amount.IsNative():
+				value = amount.Value()
+			case amount.IsMPT():
+				value = map[string]any{
+					"value":           amount.Value(),
+					"mpt_issuance_id": amount.MPTIssuanceID(),
+				}
+			default:
+				value = map[string]any{
+					"value":    amount.Value(),
+					"currency": amount.Currency,
+					"issuer":   amount.Issuer,
+				}
+			}
+		}
 	case "Hash128":
 		return validateHash(value, path, 16)
 	case "Hash160":
@@ -292,13 +320,20 @@ func validateUInt8(name string, value any, path string, defs *binarycodecdefs.De
 	return uint8(n), ""
 }
 
-func validateUInt16(value any, path string, defs *binarycodecdefs.Definitions) (any, string) {
+func validateUInt16(name string, value any, path string, defs *binarycodecdefs.Definitions) (any, string) {
 	if text, ok := value.(string); ok {
-		if code, err := defs.TransactionTypeCode(text); err == nil {
-			return uint16(code), ""
+		switch name {
+		case "TransactionType":
+			if code, err := defs.TransactionTypeCode(text); err == nil {
+				return uint16(code), ""
+			}
+		case "LedgerEntryType":
+			if code, err := defs.LedgerEntryTypeCode(text); err == nil {
+				return uint16(code), ""
+			}
 		}
-		if code, err := defs.LedgerEntryTypeCode(text); err == nil {
-			return uint16(code), ""
+		if text == "" || text[0] < '0' || text[0] > '9' {
+			return value, fmt.Sprintf("Field '%s' has invalid data.", path)
 		}
 		n, err := strconv.ParseUint(text, 10, 16)
 		if err != nil {

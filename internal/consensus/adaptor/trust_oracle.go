@@ -8,6 +8,7 @@ import (
 	"github.com/LeJamon/go-xrpl/amendment"
 	"github.com/LeJamon/go-xrpl/internal/consensus"
 	"github.com/LeJamon/go-xrpl/internal/consensus/amendmentvote"
+	"github.com/LeJamon/go-xrpl/internal/feetrack"
 	"github.com/LeJamon/go-xrpl/internal/ledger"
 	"github.com/LeJamon/go-xrpl/internal/ledger/state"
 	"github.com/LeJamon/go-xrpl/internal/tx/pseudo"
@@ -358,7 +359,7 @@ func (a *Adaptor) GetLoadFee() uint32 {
 	if c := ft.ClusterFee(); c > fee {
 		fee = c
 	}
-	if fee <= ft.LoadBase() {
+	if fee <= feetrack.LoadBase {
 		return 0
 	}
 	return fee
