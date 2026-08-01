@@ -128,11 +128,12 @@ type RotatingStore struct {
 	mu       sync.RWMutex
 	rotateMu sync.Mutex
 
-	basePath   string
-	statePath  string
-	options    Options
-	blockCache *cockroachpebble.Cache
-	ownerID    string
+	basePath              string
+	statePath             string
+	options               Options
+	blockCache            *cockroachpebble.Cache
+	ownerID               string
+	unpublishedBaseMarker bool
 
 	writable       *Store
 	writablePath   string
@@ -148,7 +149,11 @@ type RotatingStore struct {
 
 // HasRotationState reports whether path has a durable generation manifest.
 func HasRotationState(path string) (bool, error) {
-	info, err := os.Lstat(filepath.Clean(path) + generationStateSuffix)
+	basePath, err := filepath.Abs(filepath.Clean(path))
+	if err != nil {
+		return false, fmt.Errorf("kvstore/pebble: resolve rotating path: %w", err)
+	}
+	info, err := os.Lstat(basePath + generationStateSuffix)
 	if err == nil {
 		if info.Mode()&os.ModeSymlink != 0 {
 			return false, errors.New("kvstore/pebble: generation state must not be a symlink")
@@ -158,10 +163,68 @@ func HasRotationState(path string) (bool, error) {
 		}
 		return true, nil
 	}
-	if os.IsNotExist(err) {
-		return false, nil
+	if !os.IsNotExist(err) {
+		return false, err
 	}
-	return false, err
+	if err := rejectUnmanifestedGenerations(basePath); err != nil {
+		return false, err
+	}
+	return false, nil
+}
+
+func rejectUnmanifestedGenerations(basePath string) error {
+	marked, err := hasGenerationMarker(basePath)
+	if err != nil {
+		return fmt.Errorf("kvstore/pebble: inspect unmanifested base generation: %w", err)
+	}
+	if marked {
+		return errors.New("kvstore/pebble: generation state is missing but the base generation has an ownership marker")
+	}
+
+	parent := filepath.Dir(basePath)
+	entries, err := os.ReadDir(parent)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil
+		}
+		return fmt.Errorf("kvstore/pebble: inspect unmanifested generations: %w", err)
+	}
+	prefix := "." + filepath.Base(basePath) + "-generation-"
+	for _, entry := range entries {
+		if !strings.HasPrefix(entry.Name(), prefix) {
+			continue
+		}
+		generationPath := filepath.Join(parent, entry.Name())
+		marked, err := hasGenerationMarker(generationPath)
+		if err != nil {
+			return fmt.Errorf("kvstore/pebble: inspect unmanifested generation %s: %w", generationPath, err)
+		}
+		if marked {
+			return fmt.Errorf(
+				"kvstore/pebble: generation state is missing but generation %s has an ownership marker",
+				generationPath,
+			)
+		}
+	}
+	return nil
+}
+
+func hasGenerationMarker(path string) (bool, error) {
+	info, err := os.Lstat(path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return false, nil
+		}
+		return false, err
+	}
+	if info.Mode()&os.ModeSymlink != 0 {
+		return false, errors.New("generation path must not be a symlink")
+	}
+	if !info.IsDir() {
+		return false, errors.New("generation path is not a directory")
+	}
+	_, found, err := readGenerationMarker(path)
+	return found, err
 }
 
 // MigrateLegacyRotationState upgrades a version-1 rotation manifest with
@@ -303,7 +366,7 @@ func NewRotating(path string, options Options) (*RotatingStore, error) {
 	if err != nil {
 		return nil, err
 	}
-	if err := r.openGenerations(resolved.BlockCacheBytes, found); err != nil {
+	if err := r.openGenerations(resolved.BlockCacheBytes, found, newWithCache); err != nil {
 		return nil, err
 	}
 	return r, nil
@@ -314,11 +377,6 @@ func prepareRotatingStore(path string, options Options) (*RotatingStore, bool, e
 	if err != nil {
 		return nil, false, fmt.Errorf("kvstore/pebble: resolve rotating path: %w", err)
 	}
-	parent := filepath.Dir(basePath)
-	if err := os.MkdirAll(parent, 0o755); err != nil {
-		return nil, false, fmt.Errorf("kvstore/pebble: create rotating parent: %w", err)
-	}
-
 	r := &RotatingStore{
 		basePath:  basePath,
 		statePath: basePath + generationStateSuffix,
@@ -332,6 +390,15 @@ func prepareRotatingStore(path string, options Options) (*RotatingStore, bool, e
 	state, found, err := r.loadState()
 	if err != nil {
 		return nil, false, err
+	}
+	if !found {
+		if err := rejectUnmanifestedGenerations(basePath); err != nil {
+			return nil, false, err
+		}
+	}
+	parent := filepath.Dir(basePath)
+	if err := os.MkdirAll(parent, 0o755); err != nil {
+		return nil, false, fmt.Errorf("kvstore/pebble: create rotating parent: %w", err)
 	}
 	if found {
 		r.ownerID = state.OwnerID
@@ -362,50 +429,64 @@ func prepareRotatingStore(path string, options Options) (*RotatingStore, bool, e
 		}
 		r.archivePath, err = r.newGenerationPath()
 		if err != nil {
-			return nil, false, err
+			return nil, false, errors.Join(err, r.rollbackBaseMarker())
 		}
 	}
 	return r, found, nil
 }
 
-func (r *RotatingStore) openGenerations(blockCacheBytes int64, existingState bool) (resultErr error) {
+type generationOpener func(string, *cockroachpebble.Cache, Options) (*Store, error)
+
+func (r *RotatingStore) openGenerations(
+	blockCacheBytes int64,
+	existingState bool,
+	openGeneration generationOpener,
+) (resultErr error) {
+	published := existingState
 	r.blockCache = cockroachpebble.NewCache(blockCacheBytes)
 	defer func() {
 		if resultErr != nil {
 			r.blockCache.Unref()
+			if !published {
+				resultErr = errors.Join(resultErr, r.rollbackBaseMarker())
+			}
 		}
 	}()
 
 	var err error
-	r.writable, err = newWithCache(r.writablePath, r.blockCache, r.options)
+	r.writable, err = openGeneration(r.writablePath, r.blockCache, r.options)
 	if err != nil {
+		var cleanupErr error
 		if !existingState {
-			_ = r.removeOwnedGeneration(r.archivePath)
+			cleanupErr = r.removeOwnedGeneration(r.archivePath)
 		}
-		return err
+		return errors.Join(err, cleanupErr)
 	}
-	r.archive, err = newWithCache(r.archivePath, r.blockCache, r.options)
+	r.archive, err = openGeneration(r.archivePath, r.blockCache, r.options)
 	if err != nil {
-		_ = r.writable.Close()
+		cleanupErr := r.writable.Close()
 		if !existingState {
-			_ = r.removeOwnedGeneration(r.archivePath)
+			cleanupErr = errors.Join(cleanupErr, r.removeOwnedGeneration(r.archivePath))
 		}
-		return err
+		return errors.Join(err, cleanupErr)
 	}
 	if !existingState {
-		published, saveErr := r.saveState(generationState{
+		statePublished, saveErr := r.saveState(generationState{
 			Version:  generationStateVersion,
 			OwnerID:  r.ownerID,
 			Writable: filepath.Base(r.writablePath),
 			Archive:  filepath.Base(r.archivePath),
 		})
+		if statePublished {
+			published = true
+			r.unpublishedBaseMarker = false
+		}
 		if saveErr != nil {
-			_ = r.archive.Close()
-			_ = r.writable.Close()
-			if !published {
-				_ = r.removeOwnedGeneration(r.archivePath)
+			cleanupErr := errors.Join(r.archive.Close(), r.writable.Close())
+			if !statePublished {
+				cleanupErr = errors.Join(cleanupErr, r.removeOwnedGeneration(r.archivePath))
 			}
-			return saveErr
+			return errors.Join(saveErr, cleanupErr)
 		}
 	}
 	if err := r.cleanupOrphans(); err != nil {
@@ -844,22 +925,64 @@ func (r *RotatingStore) prepareInitialGeneration() (string, error) {
 		}
 	}
 
-	marker, found, err := readGenerationMarker(r.basePath)
+	_, found, err := readGenerationMarker(r.basePath)
 	if err != nil {
 		return "", err
 	}
 	if found {
-		return marker.OwnerID, nil
+		return "", errors.New("kvstore/pebble: generation state is missing but the base generation has an ownership marker")
 	}
 	ownerID, err := newOwnerID()
 	if err != nil {
 		return "", err
 	}
 	r.ownerID = ownerID
+	r.unpublishedBaseMarker = true
 	if err := r.writeGenerationMarker(r.basePath); err != nil {
-		return "", err
+		return "", errors.Join(err, r.rollbackBaseMarker())
 	}
 	return ownerID, nil
+}
+
+func (r *RotatingStore) rollbackBaseMarker() error {
+	if !r.unpublishedBaseMarker {
+		return nil
+	}
+	marker, found, err := readGenerationMarker(r.basePath)
+	if err != nil {
+		if os.IsNotExist(err) {
+			if err := syncDirectory(filepath.Dir(r.basePath)); err != nil {
+				return fmt.Errorf("kvstore/pebble: sync initial generation marker rollback: %w", err)
+			}
+			r.unpublishedBaseMarker = false
+			return nil
+		}
+		return fmt.Errorf("kvstore/pebble: inspect initial generation marker rollback: %w", err)
+	}
+	if !found {
+		return r.syncBaseMarkerRemoval()
+	}
+	if marker.OwnerID != r.ownerID {
+		return errGenerationNotOwned
+	}
+	if err := os.Remove(filepath.Join(r.basePath, generationMarkerName)); err != nil {
+		if os.IsNotExist(err) {
+			return r.syncBaseMarkerRemoval()
+		}
+		return fmt.Errorf("kvstore/pebble: remove initial generation marker: %w", err)
+	}
+	return r.syncBaseMarkerRemoval()
+}
+
+func (r *RotatingStore) syncBaseMarkerRemoval() error {
+	if err := errors.Join(
+		syncDirectory(r.basePath),
+		syncDirectory(filepath.Dir(r.basePath)),
+	); err != nil {
+		return fmt.Errorf("kvstore/pebble: sync initial generation marker rollback: %w", err)
+	}
+	r.unpublishedBaseMarker = false
+	return nil
 }
 
 func (r *RotatingStore) writeGenerationMarker(path string) error {
@@ -1014,8 +1137,8 @@ func (b *rotatingBatch) Write() (resultErr error) {
 	if b.closed {
 		return kvstore.ErrClosed
 	}
-	b.store.mu.RLock()
-	defer b.store.mu.RUnlock()
+	b.store.mu.Lock()
+	defer b.store.mu.Unlock()
 	if b.store.closed {
 		return kvstore.ErrClosed
 	}
@@ -1039,28 +1162,30 @@ func (b *rotatingBatch) Write() (resultErr error) {
 			return err
 		}
 	}
-	if err := writableBatch.Write(); err != nil {
-		return err
-	}
-	if !hasDeletes {
-		return nil
-	}
-	archiveBatch, err := b.store.archive.NewBatch()
-	if err != nil {
-		return err
-	}
-	defer func() {
-		resultErr = errors.Join(resultErr, archiveBatch.Close())
-	}()
-	for _, op := range b.ops {
-		if !op.delete {
-			continue
+	if hasDeletes {
+		archiveBatch, err := b.store.archive.NewBatch()
+		if err != nil {
+			return err
 		}
-		if err := archiveBatch.Delete(op.key); err != nil {
+		for _, op := range b.ops {
+			if !op.delete {
+				continue
+			}
+			if err := archiveBatch.Delete(op.key); err != nil {
+				return errors.Join(err, archiveBatch.Close())
+			}
+		}
+		if err := archiveBatch.Write(); err != nil {
+			return errors.Join(err, archiveBatch.Close())
+		}
+		if err := archiveBatch.Close(); err != nil {
 			return err
 		}
 	}
-	return archiveBatch.Write()
+	if err := writableBatch.Write(); err != nil {
+		return err
+	}
+	return nil
 }
 
 func (b *rotatingBatch) Reset() {

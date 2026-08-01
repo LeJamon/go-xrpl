@@ -186,6 +186,25 @@ func formatSignResult(result signResult, apiVersion int) map[string]any {
 	return response
 }
 
+func jsonFieldPresent(params json.RawMessage, field string) bool {
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(params, &fields); err != nil {
+		return false
+	}
+	_, ok := fields[field]
+	return ok
+}
+
+func rpcErrorAlreadyMultisigned() *types.RpcError {
+	return types.NewRpcError(
+		types.RpcALREADY_MULTISIG, "alreadyMultisig", "alreadyMultisig", "Already multisigned.")
+}
+
+func rpcErrorAlreadySingleSigned() *types.RpcError {
+	return types.NewRpcError(
+		types.RpcALREADY_SINGLE_SIG, "alreadySingleSig", "alreadySingleSig", "Already single-signed.")
+}
+
 func submitWithFailHard(ledger types.LedgerService, txJSON []byte, txBlob string, failHard bool) (*types.SubmitResult, error) {
 	if failHard {
 		if submitter, ok := ledger.(types.FailHardSubmitter); ok {
@@ -227,12 +246,12 @@ func signTransactionJSON(ctx context.Context, services *types.ServiceContainer, 
 	if err := json.Unmarshal(txJSON, &txMap); err != nil {
 		return nil, types.RpcErrorInvalidParams(fmt.Sprintf("Invalid tx_json: %v", err))
 	}
-
 	// signature_target directs the signature into a nested inner object instead
 	// of the top level. Only CounterpartySignature is a valid target; any other
 	// field name is rejected with the field name as the message, matching
 	// rippled TransactionSign.cpp.
-	if signatureTarget != "" && signatureTarget != counterpartySignatureField {
+	signatureTargetPresent := jsonFieldPresent(rawParams, "signature_target")
+	if signatureTargetPresent && signatureTarget != counterpartySignatureField {
 		return nil, types.RpcErrorInvalidParams(signatureTarget)
 	}
 
@@ -244,7 +263,7 @@ func signTransactionJSON(ctx context.Context, services *types.ServiceContainer, 
 	// the caller's Account (the primary signer) is the source and its ownership
 	// is not checked.
 	srcAddress := address
-	if signatureTarget == "" {
+	if !signatureTargetPresent {
 		if txAccount, ok := txMap["Account"].(string); ok {
 			if !types.IsValidClassicAddress(txAccount) {
 				return nil, types.RpcErrorSrcActMalformed("Invalid field 'tx_json.Account'.")
@@ -344,25 +363,29 @@ func signTransactionJSON(ctx context.Context, services *types.ServiceContainer, 
 			return nil, types.RpcErrorMissingField("tx_json.Fee")
 		}
 	}
+	if _, ok := txMap["Signers"]; ok {
+		return nil, rpcErrorAlreadyMultisigned()
+	}
 
 	// Without a target the signing key is the transaction's own key, placed at
 	// the top level. With a target the top-level SigningPubKey (the primary
 	// signer's) is left untouched so the counterparty covers the same signing
 	// payload; the counterparty's key goes into the nested object.
-	if signatureTarget == "" {
+	var targetObj map[string]any
+	if !signatureTargetPresent {
 		txMap["SigningPubKey"] = publicKey
-	} else if _, ok := txMap["SigningPubKey"]; !ok {
-		txMap["SigningPubKey"] = ""
+	} else {
+		var rpcErr *types.RpcError
+		targetObj, rpcErr = signatureTargetObject(txMap, signatureTarget)
+		if rpcErr != nil {
+			return nil, rpcErr
+		}
+		targetObj["SigningPubKey"] = publicKey
 	}
 
-	unsignedBlob, err := binarycodec.EncodeBytes(txMap)
-	if err != nil {
-		return nil, types.RpcErrorInvalidParams(fmt.Sprintf("Failed to parse transaction: %v", err))
-	}
-
-	transaction, err := tx.ParseFromBinary(unsignedBlob)
-	if err != nil {
-		return nil, types.RpcErrorInvalidParams(fmt.Sprintf("Failed to parse transaction: %v", err))
+	transaction, rpcErr := parseTransactionForSigning(txMap)
+	if rpcErr != nil {
+		return nil, rpcErr
 	}
 
 	signature, err := sign.SignTransaction(transaction, privateKey)
@@ -370,18 +393,10 @@ func signTransactionJSON(ctx context.Context, services *types.ServiceContainer, 
 		return nil, rpcInternalError("sign: transaction signing failed", err)
 	}
 
-	if signatureTarget == "" {
+	if !signatureTargetPresent {
 		txMap["TxnSignature"] = signature
 	} else {
-		// Write SigningPubKey + TxnSignature into the nested target object,
-		// preserving any fields the caller already placed there.
-		targetObj, _ := txMap[signatureTarget].(map[string]any)
-		if targetObj == nil {
-			targetObj = map[string]any{}
-		}
-		targetObj["SigningPubKey"] = publicKey
 		targetObj["TxnSignature"] = signature
-		txMap[signatureTarget] = targetObj
 	}
 
 	txBlob, err := binarycodec.Encode(txMap)
@@ -396,4 +411,30 @@ func signTransactionJSON(ctx context.Context, services *types.ServiceContainer, 
 		TxMap:  txMap,
 		TxBlob: txBlob,
 	}, nil
+}
+
+func signatureTargetObject(txMap map[string]any, target string) (map[string]any, *types.RpcError) {
+	value, exists := txMap[target]
+	if !exists {
+		object := make(map[string]any)
+		txMap[target] = object
+		return object, nil
+	}
+	object, ok := value.(map[string]any)
+	if !ok {
+		return nil, types.RpcErrorInvalidParams(fmt.Sprintf("Invalid field 'tx_json.%s'.", target))
+	}
+	return object, nil
+}
+
+func parseTransactionForSigning(txMap map[string]any) (tx.Transaction, *types.RpcError) {
+	blob, err := binarycodec.EncodeBytes(txMap)
+	if err != nil {
+		return nil, types.RpcErrorInvalidParams(fmt.Sprintf("Failed to parse transaction: %v", err))
+	}
+	transaction, err := tx.ParseFromBinary(blob)
+	if err != nil {
+		return nil, types.RpcErrorInvalidParams(fmt.Sprintf("Failed to parse transaction: %v", err))
+	}
+	return transaction, nil
 }

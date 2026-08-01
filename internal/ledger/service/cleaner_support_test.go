@@ -52,14 +52,11 @@ func TestRepairCleanerLedgerIndexReplacesWrongHistoryMapping(t *testing.T) {
 
 func TestCleanerRepairRewritesMissingRelationalLedger(t *testing.T) {
 	ctx := context.Background()
-	repositories, err := sqlitedb.NewRepositoryManager(t.TempDir())
+	repositories, err := sqlitedb.NewRepositoryManager(ctx, t.TempDir(), sqlitedb.Settings{})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := repositories.Open(ctx); err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = repositories.Close(ctx) })
+	t.Cleanup(func() { _ = repositories.Close() })
 
 	cfg := DefaultConfig()
 	cfg.RelationalDB = repositories

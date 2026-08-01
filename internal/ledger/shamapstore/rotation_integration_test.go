@@ -270,11 +270,7 @@ func TestRotation_RealGenerationPreservesHigherExistingFloor(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	db := nodestore.NewRotatingKVDatabase(
-		rotating,
-		"rotating-floor",
-		&nodestore.DatabaseConfig{CacheSize: 32, CacheTTL: time.Hour},
-	)
+	db := testRotatingNodeDatabase(t, rotating, 32)
 	defer db.Close()
 
 	state, err := shamapstore.New(false, "")

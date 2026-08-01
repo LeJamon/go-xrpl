@@ -183,6 +183,85 @@ func TestPersistValidatedLedgerFailureRecovery(t *testing.T) {
 	}
 }
 
+func TestConcurrentSameSequencePersistenceRemainsConsistent(t *testing.T) {
+	ctx := context.Background()
+	firstManager := setupTestDB(t)
+	secondManager, err := NewRepositoryManager(
+		ctx,
+		relationaldb.NewConfig().WithConnectionString(os.Getenv(postgresDSNEnv)),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = secondManager.Close() })
+
+	first := makePersistValue(20)
+	first.Ledger.Hash[0] = 0xa1
+	first.Transactions[0].Transaction.Hash[0] = 0xa2
+	first.Transactions[0].Accounts[0][0] = 0xa3
+	second := makePersistValue(20)
+	second.Ledger.Hash[0] = 0xb1
+	second.Transactions[0].Transaction.Hash[0] = 0xb2
+	second.Transactions[0].Accounts[0][0] = 0xb3
+
+	blocked := make(chan struct{})
+	release := make(chan struct{})
+	firstManager.persistHook = func(stage string, index int) error {
+		if stage == "index" && index == 1 {
+			close(blocked)
+			<-release
+		}
+		return nil
+	}
+	firstDone := make(chan error, 1)
+	go func() {
+		firstDone <- firstManager.PersistValidatedLedger(ctx, first)
+	}()
+	<-blocked
+
+	waitCtx, cancel := context.WithTimeout(ctx, 100*time.Millisecond)
+	err = secondManager.PersistValidatedLedger(waitCtx, second)
+	waitErr := waitCtx.Err()
+	cancel()
+	if err == nil || !errors.Is(waitErr, context.DeadlineExceeded) {
+		close(release)
+		<-firstDone
+		t.Fatalf("concurrent persistence returned before the lock deadline: error=%v context=%v", err, waitErr)
+	}
+
+	close(release)
+	if err := <-firstDone; err != nil {
+		t.Fatal(err)
+	}
+	firstManager.persistHook = nil
+	if err := secondManager.PersistValidatedLedger(ctx, second); err != nil {
+		t.Fatal(err)
+	}
+
+	gotLedger, err := secondManager.Ledger().GetLedgerInfoBySeq(ctx, second.Ledger.Sequence)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if gotLedger.Hash != second.Ledger.Hash {
+		t.Fatalf("final ledger hash = %x, want %x", gotLedger.Hash, second.Ledger.Hash)
+	}
+	if _, err := secondManager.Ledger().GetLedgerInfoByHash(ctx, first.Ledger.Hash); !errors.Is(err, relationaldb.ErrLedgerNotFound) {
+		t.Fatalf("replaced ledger hash error = %v, want ErrLedgerNotFound", err)
+	}
+	assertPersisted(t, secondManager, second)
+	stale, _, err := secondManager.Transaction().GetTransaction(ctx, first.Transactions[0].Transaction.Hash, nil)
+	if err != nil || stale != nil {
+		t.Fatalf("first transaction remains after replacement: transaction=%v error=%v", stale, err)
+	}
+	stalePage, err := secondManager.AccountTransaction().GetOldestAccountTxsPage(ctx, relationaldb.AccountTxPageOptions{
+		Account: first.Transactions[0].Accounts[0],
+		Limit:   1,
+	})
+	if err != nil || len(stalePage.Transactions) != 0 {
+		t.Fatalf("first account index remains after replacement: page=%v error=%v", stalePage, err)
+	}
+}
+
 func assertPersisted(t *testing.T, rm *RepositoryManager, value relationaldb.ValidatedLedger) {
 	t.Helper()
 	ctx := context.Background()

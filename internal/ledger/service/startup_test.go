@@ -76,7 +76,7 @@ func TestService_StartupFreshAndNetworkAreDistinct(t *testing.T) {
 
 func TestService_StartupFreshDurablyStoresGenesisAndInitialLedger(t *testing.T) {
 	t.Parallel()
-	db := nodestore.NewKVDatabase(memorydb.New(), "startup-fresh-durable", 1_000, time.Hour)
+	db := newTestNodeStore(t, 1_000)
 	t.Cleanup(func() { require.NoError(t, db.Close()) })
 	svc, err := New(Config{
 		Standalone:    true,
@@ -98,7 +98,7 @@ func TestService_StartupFreshDurablyStoresGenesisAndInitialLedger(t *testing.T) 
 
 func TestService_StartupFreshFailsWhenDurableStoreFails(t *testing.T) {
 	t.Parallel()
-	base := nodestore.NewKVDatabase(memorydb.New(), "startup-fresh-failure", 1_000, time.Hour)
+	base := newTestNodeStore(t, 1_000)
 	t.Cleanup(func() { require.NoError(t, base.Close()) })
 	sentinel := errors.New("store failed")
 	db := &failingStartupStore{Database: base, err: sentinel}

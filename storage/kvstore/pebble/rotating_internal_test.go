@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/LeJamon/go-xrpl/storage/kvstore"
+	cockroachpebble "github.com/cockroachdb/pebble"
 	"github.com/stretchr/testify/require"
 )
 
@@ -72,6 +73,94 @@ func TestGenerationStateValidationIsSharedByLoadAndSave(t *testing.T) {
 	require.ErrorContains(t, err, "invalid generation boundaries")
 }
 
+func TestUnpublishedInitializationRollsBackBaseMarkerAndCanRetry(t *testing.T) {
+	openErr := errors.New("generation open failed")
+	for _, test := range []struct {
+		name      string
+		configure func(*RotatingStore) generationOpener
+	}{
+		{
+			name: "writable open",
+			configure: func(*RotatingStore) generationOpener {
+				return func(string, *cockroachpebble.Cache, Options) (*Store, error) {
+					return nil, openErr
+				}
+			},
+		},
+		{
+			name: "archive open",
+			configure: func(*RotatingStore) generationOpener {
+				calls := 0
+				return func(path string, cache *cockroachpebble.Cache, options Options) (*Store, error) {
+					calls++
+					if calls == 2 {
+						return nil, openErr
+					}
+					return newWithCache(path, cache, options)
+				}
+			},
+		},
+		{
+			name: "manifest save",
+			configure: func(store *RotatingStore) generationOpener {
+				store.statePath = filepath.Join(filepath.Dir(store.basePath), "missing", "state.json")
+				return newWithCache
+			},
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			root := t.TempDir()
+			path := filepath.Join(root, "nodes")
+			legacy, err := New(path, Options{BlockCacheBytes: 8 << 20, MaxOpenFiles: 80})
+			require.NoError(t, err)
+			require.NoError(t, legacy.Put([]byte("legacy"), []byte("value")))
+			require.NoError(t, legacy.Sync())
+			require.NoError(t, legacy.Close())
+
+			resolved, perGeneration, err := resolveRotatingOptions(
+				Options{BlockCacheBytes: 16 << 20, MaxOpenFiles: 200},
+			)
+			require.NoError(t, err)
+			store, found, err := prepareRotatingStore(path, perGeneration)
+			require.NoError(t, err)
+			require.False(t, found)
+			require.True(t, store.unpublishedBaseMarker)
+
+			err = store.openGenerations(resolved.BlockCacheBytes, false, test.configure(store))
+			require.Error(t, err)
+			_, markerErr := os.Lstat(filepath.Join(path, generationMarkerName))
+			require.ErrorIs(t, markerErr, os.ErrNotExist)
+			_, stateErr := os.Lstat(path + generationStateSuffix)
+			require.ErrorIs(t, stateErr, os.ErrNotExist)
+			orphans, err := filepath.Glob(filepath.Join(root, ".nodes-generation-*"))
+			require.NoError(t, err)
+			require.Empty(t, orphans)
+			hasState, err := HasRotationState(path)
+			require.NoError(t, err)
+			require.False(t, hasState)
+
+			retried, err := NewRotating(path, Options{BlockCacheBytes: 16 << 20, MaxOpenFiles: 200})
+			require.NoError(t, err)
+			t.Cleanup(func() { require.NoError(t, retried.Close()) })
+			value, err := retried.Get([]byte("legacy"))
+			require.NoError(t, err)
+			require.Equal(t, []byte("value"), value)
+		})
+	}
+}
+
+func TestRollbackBaseMarkerAcceptsMarkerAlreadyRemoved(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "nodes")
+	require.NoError(t, os.Mkdir(path, 0o755))
+	store := &RotatingStore{
+		basePath:              path,
+		ownerID:               "00000000000000000000000000000000",
+		unpublishedBaseMarker: true,
+	}
+	require.NoError(t, store.rollbackBaseMarker())
+	require.False(t, store.unpublishedBaseMarker)
+}
+
 func TestRotateRejectsInvalidBoundariesBeforeCreatingGeneration(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "nodes")
 	store, err := NewRotating(path, Options{BlockCacheBytes: 16 << 20, MaxOpenFiles: 200})
@@ -120,6 +209,26 @@ func TestRotatingStoreSyncFlushesArchiveAfterDelete(t *testing.T) {
 	err = store.Sync()
 	require.ErrorIs(t, err, archiveSyncErr)
 	require.Equal(t, []*Store{store.writable, store.archive}, synced)
+}
+
+func TestRotatingBatchArchiveFailureDoesNotCommitWritableOperations(t *testing.T) {
+	store := newPromoteRaceStore(t)
+	require.NoError(t, store.Put([]byte("key"), []byte("current")))
+
+	batch, err := store.NewBatch()
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, batch.Close()) })
+	require.NoError(t, batch.Delete([]byte("key")))
+	require.NoError(t, batch.Put([]byte("new"), []byte("value")))
+	require.NoError(t, store.archive.Close())
+
+	err = batch.Write()
+	require.ErrorIs(t, err, kvstore.ErrClosed)
+	value, err := store.writable.Get([]byte("key"))
+	require.NoError(t, err)
+	require.Equal(t, []byte("current"), value)
+	_, err = store.writable.Get([]byte("new"))
+	require.ErrorIs(t, err, kvstore.ErrNotFound)
 }
 
 func TestPromoteDoesNotOverwriteConcurrentPut(t *testing.T) {

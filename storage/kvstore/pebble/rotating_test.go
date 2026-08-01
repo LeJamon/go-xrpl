@@ -2,6 +2,7 @@ package pebble_test
 
 import (
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
@@ -37,6 +38,9 @@ func TestRotatingStoreCanSkipRefreshOnlyForEmptyArchive(t *testing.T) {
 	require.NoError(t, legacy.Put([]byte("legacy"), []byte("value")))
 	require.NoError(t, legacy.Sync())
 	require.NoError(t, legacy.Close())
+	hasState, err := kvpebble.HasRotationState(path)
+	require.NoError(t, err)
+	require.False(t, hasState)
 
 	store, err := kvpebble.NewRotating(path, rotatingTestOptions())
 	require.NoError(t, err)
@@ -360,6 +364,122 @@ func TestRotatingStoreLeavesUnmarkedFakePrefixOrphan(t *testing.T) {
 	got, err := os.ReadFile(sentinelPath)
 	require.NoError(t, err)
 	require.Equal(t, sentinel, got)
+}
+
+func TestRotatingStoreRejectsMissingManifestWithoutTouchingGenerations(t *testing.T) {
+	for _, rotations := range []int{1, 2} {
+		t.Run(fmt.Sprintf("after %d rotations", rotations), func(t *testing.T) {
+			root := t.TempDir()
+			path := filepath.Join(root, "nodes")
+			store, err := kvpebble.NewRotating(path, rotatingTestOptions())
+			require.NoError(t, err)
+			require.NoError(t, store.Put([]byte("key-0"), []byte("value-0")))
+			for rotation := 1; rotation <= rotations; rotation++ {
+				minimumOnline := uint32(1)
+				if rotation > 1 {
+					minimumOnline = uint32((rotation-1)*10 + 2)
+				}
+				committed, err := store.Rotate(uint32(rotation*10+1), minimumOnline)
+				require.True(t, committed)
+				require.NoError(t, err)
+				key := fmt.Sprintf("key-%d", rotation)
+				require.NoError(t, store.Put([]byte(key), []byte(fmt.Sprintf("value-%d", rotation))))
+			}
+			require.NoError(t, store.Sync())
+			require.NoError(t, store.Close())
+
+			statePath := path + ".generations.json"
+			stateData, err := os.ReadFile(statePath)
+			require.NoError(t, err)
+			var state struct {
+				Writable string `json:"writable"`
+				Archive  string `json:"archive"`
+			}
+			require.NoError(t, json.Unmarshal(stateData, &state))
+			generationPaths := []string{
+				filepath.Join(root, state.Writable),
+				filepath.Join(root, state.Archive),
+			}
+			for _, generationPath := range generationPaths {
+				require.NoError(t, os.WriteFile(
+					filepath.Join(generationPath, "missing-manifest-sentinel"),
+					[]byte(generationPath),
+					0o600,
+				))
+			}
+			before, err := filepath.Glob(filepath.Join(root, ".nodes-generation-*"))
+			require.NoError(t, err)
+
+			backupPath := statePath + ".backup"
+			require.NoError(t, os.Rename(statePath, backupPath))
+			hasState, err := kvpebble.HasRotationState(path)
+			require.False(t, hasState)
+			require.ErrorContains(t, err, "generation state is missing")
+			unexpected, err := kvpebble.NewRotating(path, rotatingTestOptions())
+			if unexpected != nil {
+				require.NoError(t, unexpected.Close())
+			}
+			require.ErrorContains(t, err, "generation state is missing")
+			_, statErr := os.Lstat(statePath)
+			require.ErrorIs(t, statErr, os.ErrNotExist)
+			backupData, err := os.ReadFile(backupPath)
+			require.NoError(t, err)
+			require.Equal(t, stateData, backupData)
+
+			after, err := filepath.Glob(filepath.Join(root, ".nodes-generation-*"))
+			require.NoError(t, err)
+			require.ElementsMatch(t, before, after)
+			for _, generationPath := range generationPaths {
+				sentinelPath := filepath.Join(generationPath, "missing-manifest-sentinel")
+				got, err := os.ReadFile(sentinelPath)
+				require.NoError(t, err)
+				require.Equal(t, []byte(generationPath), got)
+				require.NoError(t, os.Remove(sentinelPath))
+			}
+
+			require.NoError(t, os.Rename(backupPath, statePath))
+			reopened, err := kvpebble.NewRotating(path, rotatingTestOptions())
+			require.NoError(t, err)
+			t.Cleanup(func() { require.NoError(t, reopened.Close()) })
+			for keyNumber := rotations - 1; keyNumber <= rotations; keyNumber++ {
+				key := fmt.Sprintf("key-%d", keyNumber)
+				value, err := reopened.Get([]byte(key))
+				require.NoError(t, err)
+				require.Equal(t, []byte(fmt.Sprintf("value-%d", keyNumber)), value)
+			}
+		})
+	}
+}
+
+func TestRotatingStoreRejectsCorruptUnmanifestedMarker(t *testing.T) {
+	for _, markerLocation := range []string{"base", "sibling"} {
+		t.Run(markerLocation, func(t *testing.T) {
+			root := t.TempDir()
+			path := filepath.Join(root, "nodes")
+			markerDirectory := path
+			if markerLocation == "sibling" {
+				markerDirectory = filepath.Join(root, ".nodes-generation-corrupt")
+			}
+			require.NoError(t, os.Mkdir(markerDirectory, 0o755))
+			markerPath := filepath.Join(markerDirectory, ".goxrpl-generation.json")
+			markerData := []byte("not-json")
+			require.NoError(t, os.WriteFile(markerPath, markerData, 0o600))
+
+			hasState, err := kvpebble.HasRotationState(path)
+			require.False(t, hasState)
+			require.ErrorContains(t, err, "generation marker")
+			unexpected, err := kvpebble.NewRotating(path, rotatingTestOptions())
+			if unexpected != nil {
+				require.NoError(t, unexpected.Close())
+			}
+			require.ErrorContains(t, err, "generation marker")
+			got, err := os.ReadFile(markerPath)
+			require.NoError(t, err)
+			require.Equal(t, markerData, got)
+			_, statErr := os.Lstat(path + ".generations.json")
+			require.ErrorIs(t, statErr, os.ErrNotExist)
+		})
+	}
 }
 
 func TestRotatingStoreBatchTargetsWritableAtCommitTime(t *testing.T) {

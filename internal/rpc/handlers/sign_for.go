@@ -1,10 +1,12 @@
 package handlers
 
 import (
+	"bytes"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"math"
+	"reflect"
 	"sort"
 	"strings"
 
@@ -12,6 +14,7 @@ import (
 	binarycodec "github.com/LeJamon/go-xrpl/codec/binarycodec"
 	"github.com/LeJamon/go-xrpl/crypto/ed25519"
 	"github.com/LeJamon/go-xrpl/crypto/secp256k1"
+	"github.com/LeJamon/go-xrpl/internal/ledger/state"
 	"github.com/LeJamon/go-xrpl/internal/rpc/types"
 )
 
@@ -46,28 +49,13 @@ func (m *SignForMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (a
 		return nil, types.RpcErrorMissingField("tx_json")
 	}
 
-	// signature_target directs the multi-signer into a nested inner object.
-	// Only CounterpartySignature is a valid target; any other name is rejected
-	// with the field name as the message, matching rippled TransactionSign.cpp.
-	if request.SignatureTarget != "" && request.SignatureTarget != counterpartySignatureField {
-		return nil, types.RpcErrorInvalidParams(request.SignatureTarget)
-	}
-
-	// Parse credentials and derive keypair using the shared helper
-	privateKey, publicKey, keyType, rpcErr := request.signCredentials.deriveKeypair(ctx.ApiVersion, params)
-	if rpcErr != nil {
-		return nil, rpcErr
-	}
-
-	// Parse the transaction JSON
+	signatureTargetPresent := jsonFieldPresent(params, "signature_target")
 	var txMap map[string]any
 	if err := json.Unmarshal(request.TxJson, &txMap); err != nil {
 		return nil, types.RpcErrorInvalidParams(fmt.Sprintf("Invalid tx_json: %v", err))
 	}
-
-	// Verify that Account field exists in transaction
-	if _, ok := txMap["Account"]; !ok {
-		return nil, types.RpcErrorMissingField("Account")
+	if txMap == nil {
+		return nil, types.RpcErrorExpectedField("tx_json", "object")
 	}
 
 	// On networks with ID > 1024, sign_for requires tx_json to carry a matching
@@ -87,42 +75,59 @@ func (m *SignForMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (a
 		}
 	}
 
-	// For multi-signing, the top-level SigningPubKey must be empty. With a
-	// signature_target the signature goes into a nested object, so an existing
-	// top-level SigningPubKey (the primary signer's) is preserved.
-	if request.SignatureTarget == "" {
+	// Supply the required key field when absent. A signature target preserves an
+	// existing primary key; ordinary multi-signing requires the field to be empty.
+	if _, ok := txMap["SigningPubKey"]; !ok {
 		txMap["SigningPubKey"] = ""
-	} else if _, ok := txMap["SigningPubKey"]; !ok {
-		txMap["SigningPubKey"] = ""
+	}
+	if _, ok := txMap["Sequence"]; !ok {
+		return nil, types.RpcErrorMissingField("tx_json.Sequence")
+	}
+	if !signatureTargetPresent {
+		signingPubKey, ok := txMap["SigningPubKey"].(string)
+		if !ok || signingPubKey != "" {
+			return nil, types.RpcErrorInvalidParams(
+				"When multi-signing 'tx_json.SigningPubKey' must be empty.")
+		}
+	}
+
+	privateKey, publicKey, keyType, rpcErr := request.signCredentials.deriveKeypair(ctx.ApiVersion, params)
+	if rpcErr != nil {
+		return nil, rpcErr
+	}
+	if signatureTargetPresent && request.SignatureTarget != counterpartySignatureField {
+		return nil, types.RpcErrorInvalidParams(request.SignatureTarget)
+	}
+	if rpcErr := validateSignForPreConflict(txMap, params); rpcErr != nil {
+		return nil, rpcErr
+	}
+	if _, ok := txMap["TxnSignature"]; ok {
+		return nil, rpcErrorAlreadySingleSigned()
 	}
 
 	// sigContainer holds the Signers array the new signature is appended to:
 	// the transaction itself, or the nested CounterpartySignature object.
 	sigContainer := txMap
-	if request.SignatureTarget != "" {
-		nested, _ := txMap[request.SignatureTarget].(map[string]any)
-		if nested == nil {
-			nested = map[string]any{"SigningPubKey": ""}
+	if signatureTargetPresent {
+		nested, targetErr := signatureTargetObject(txMap, request.SignatureTarget)
+		if targetErr != nil {
+			return nil, targetErr
 		}
-		txMap[request.SignatureTarget] = nested
+		nested["SigningPubKey"] = ""
 		sigContainer = nested
+	}
+	transaction, rpcErr := parseTransactionForSigning(txMap)
+	if rpcErr != nil {
+		return nil, rpcErr
 	}
 
 	// Get existing signers array or create new one
-	var signers []map[string]any
-	if existingSigners, ok := sigContainer["Signers"].([]any); ok {
-		for _, s := range existingSigners {
-			if signer, ok := s.(map[string]any); ok {
-				signers = append(signers, signer)
-			}
-		}
-	}
-
-	for _, signerWrapper := range signers {
-		if signer, ok := signerWrapper["Signer"].(map[string]any); ok {
-			if signer["Account"] == request.Account {
-				return nil, types.RpcErrorInvalidParams("Account has already signed this transaction")
-			}
+	signers := make([]map[string]any, 0, 1)
+	if existing, ok := sigContainer["Signers"]; ok {
+		var signerErr *types.RpcError
+		signers, signerErr = signerMaps(existing)
+		if signerErr != nil {
+			return nil, signerErr
 		}
 	}
 
@@ -134,7 +139,13 @@ func (m *SignForMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (a
 	}
 
 	// Encode for multisigning (adds the signer's account as suffix)
-	signingPayload, err := binarycodec.EncodeForMultisigning(txMapForSigning, request.Account)
+	var signingPayload string
+	var err error
+	if signatureTargetPresent {
+		signingPayload, err = binarycodec.EncodeForMultisigningTarget(txMapForSigning, request.Account)
+	} else {
+		signingPayload, err = binarycodec.EncodeForMultisigning(txMapForSigning, request.Account)
+	}
 	if err != nil {
 		return nil, rpcInternalError("sign_for: multisigning payload encoding failed", err)
 	}
@@ -154,19 +165,13 @@ func (m *SignForMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (a
 	}
 
 	signers = append(signers, newSigner)
-
-	// Sort signers by account (required by XRPL protocol)
-	sort.Slice(signers, func(i, j int) bool {
-		iAccount := ""
-		jAccount := ""
-		if s, ok := signers[i]["Signer"].(map[string]any); ok {
-			iAccount, _ = s["Account"].(string)
-		}
-		if s, ok := signers[j]["Signer"].(map[string]any); ok {
-			jAccount, _ = s["Account"].(string)
-		}
-		return iAccount < jAccount
-	})
+	feePayer := transaction.GetCommon().Account
+	if transaction.GetCommon().Delegate != "" {
+		feePayer = transaction.GetCommon().Delegate
+	}
+	if signerErr := sortAndValidateSignerMaps(signers, feePayer); signerErr != nil {
+		return nil, signerErr
+	}
 
 	sigContainer["Signers"] = signers
 
@@ -179,6 +184,131 @@ func (m *SignForMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (a
 	txMap["hash"] = txHash
 
 	return formatSignResult(signResult{TxMap: txMap, TxBlob: txBlob}, ctx.ApiVersion), nil
+}
+
+func validateSignForPreConflict(txMap map[string]any, params json.RawMessage) *types.RpcError {
+	transactionType, ok := txMap["TransactionType"]
+	if !ok {
+		return types.RpcErrorMissingField("tx_json.TransactionType")
+	}
+	account, ok := txMap["Account"].(string)
+	if !ok || !addresscodec.IsValidClassicAddress(account) {
+		if _, present := txMap["Account"]; !present {
+			return types.RpcErrorSrcActMissing("Missing field 'tx_json.Account'.")
+		}
+		return types.RpcErrorSrcActMalformed("Invalid field 'tx_json.Account'.")
+	}
+	if _, ok := txMap["Fee"]; !ok {
+		return types.RpcErrorMissingField("tx_json.Fee")
+	}
+	if transactionType != "Payment" {
+		return nil
+	}
+
+	if deliverMax, ok := txMap["DeliverMax"]; ok {
+		if amount, present := txMap["Amount"]; present && !reflect.DeepEqual(amount, deliverMax) {
+			return types.RpcErrorInvalidParams("Cannot specify differing 'Amount' and 'DeliverMax'")
+		}
+		if _, present := txMap["Amount"]; !present {
+			txMap["Amount"] = deliverMax
+		}
+		delete(txMap, "DeliverMax")
+	}
+	amount, ok := txMap["Amount"]
+	if !ok {
+		return types.RpcErrorMissingField("tx_json.Amount")
+	}
+	encodedAmount, err := json.Marshal(amount)
+	if err != nil {
+		return types.RpcErrorInvalidField("tx_json.Amount")
+	}
+	if _, err := state.AmountFromJSON(encodedAmount); err != nil {
+		return types.RpcErrorInvalidField("tx_json.Amount")
+	}
+	destination, ok := txMap["Destination"].(string)
+	if !ok || !addresscodec.IsValidClassicAddress(destination) {
+		if _, present := txMap["Destination"]; !present {
+			return types.RpcErrorMissingField("tx_json.Destination")
+		}
+		return types.RpcErrorInvalidField("tx_json.Destination")
+	}
+	if jsonFieldPresent(params, "build_path") {
+		return types.RpcErrorInvalidParams("Field 'build_path' not allowed in this context.")
+	}
+	if domain, ok := txMap["DomainID"]; ok {
+		domainString, ok := domain.(string)
+		decoded, err := hex.DecodeString(domainString)
+		if !ok || err != nil || len(decoded) != 32 {
+			return types.RpcErrorDomainMalformed("Unable to parse 'DomainID'.")
+		}
+	}
+	return nil
+}
+
+func signerMaps(value any) ([]map[string]any, *types.RpcError) {
+	switch signers := value.(type) {
+	case []any:
+		result := make([]map[string]any, 0, len(signers))
+		for _, value := range signers {
+			signer, ok := value.(map[string]any)
+			if !ok {
+				return nil, types.RpcErrorInvalidParams("Signers array may only contain Signer entries.")
+			}
+			result = append(result, signer)
+		}
+		return result, nil
+	case []map[string]any:
+		return append([]map[string]any(nil), signers...), nil
+	default:
+		return nil, types.RpcErrorInvalidParams("Signers array may only contain Signer entries.")
+	}
+}
+
+func sortAndValidateSignerMaps(signers []map[string]any, feePayer string) *types.RpcError {
+	type signerEntry struct {
+		wrapper map[string]any
+		account string
+		id      []byte
+	}
+	entries := make([]signerEntry, 0, len(signers))
+	for _, wrapper := range signers {
+		signer, ok := wrapper["Signer"].(map[string]any)
+		if !ok {
+			return types.RpcErrorInvalidParams("Signers array may only contain Signer entries.")
+		}
+		account, ok := signer["Account"].(string)
+		if !ok {
+			return types.RpcErrorInvalidParams("Signers array may only contain Signer entries.")
+		}
+		_, id, err := addresscodec.DecodeClassicAddressToAccountID(account)
+		if err != nil {
+			return types.RpcErrorInvalidParams("Signers array may only contain Signer entries.")
+		}
+		entries = append(entries, signerEntry{wrapper: wrapper, account: account, id: id})
+	}
+
+	sort.Slice(entries, func(i, j int) bool {
+		return bytes.Compare(entries[i].id, entries[j].id) < 0
+	})
+	for i := 1; i < len(entries); i++ {
+		if bytes.Equal(entries[i-1].id, entries[i].id) {
+			return types.RpcErrorInvalidParams(
+				"Duplicate Signers:Signer:Account entries (" + entries[i].account + ") are not allowed.")
+		}
+	}
+
+	_, feePayerID, err := addresscodec.DecodeClassicAddressToAccountID(feePayer)
+	if err != nil {
+		return types.RpcErrorInvalidParams("Invalid field 'tx_json.Account'.")
+	}
+	for i, entry := range entries {
+		if bytes.Equal(entry.id, feePayerID) {
+			return types.RpcErrorInvalidParams(
+				"A Signer may not be the transaction's Account (" + feePayer + ").")
+		}
+		signers[i] = entry.wrapper
+	}
+	return nil
 }
 
 // signPayload signs a hex-encoded payload with the given private key

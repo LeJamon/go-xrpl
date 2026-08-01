@@ -697,6 +697,34 @@ func TestEncodeForSigningClaim(t *testing.T) {
 	}
 }
 
+func TestEncodeForMultisigningTargetPreservesOuterSigningKey(t *testing.T) {
+	t.Parallel()
+	const publicKey = "03EE83BB432547885C219634A1BC407A9DB0474145D69737D09CCDC63E1DEE7FE3"
+	input := map[string]any{
+		"TransactionType":    "LoanSet",
+		"Account":            "rMBzp8CgpE441cp5PVyA9rpVV7oT8hP3ys",
+		"LoanBrokerID":       strings.Repeat("0", 64),
+		"PrincipalRequested": "1",
+		"Fee":                "10",
+		"Sequence":           uint32(1),
+		"SigningPubKey":      publicKey,
+		"CounterpartySignature": map[string]any{
+			"SigningPubKey": "",
+			"Signers":       []any{},
+		},
+	}
+
+	payload, err := EncodeForMultisigningTarget(input, "rMBzp8CgpE441cp5PVyA9rpVV7oT8hP3ys")
+	require.NoError(t, err)
+	require.True(t, strings.HasPrefix(payload, txMultiSigPrefix))
+
+	projection, err := Decode(payload[len(txMultiSigPrefix) : len(payload)-40])
+	require.NoError(t, err)
+	require.Equal(t, publicKey, projection["SigningPubKey"])
+	require.NotContains(t, projection, "CounterpartySignature")
+	require.Equal(t, publicKey, input["SigningPubKey"])
+}
+
 func TestEncodeForSigning(t *testing.T) {
 	t.Parallel()
 	tt := []struct {

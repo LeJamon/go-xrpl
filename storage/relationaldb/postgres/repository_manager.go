@@ -24,6 +24,8 @@ type RepositoryManager struct {
 	persistHook func(stage string, index int) error
 }
 
+const persistLedgerLockNamespace int64 = 0x5852504c // XRPL
+
 var _ relationaldb.RepositoryManager = (*RepositoryManager)(nil)
 
 // NewRepositoryManager opens and migrates a PostgreSQL repository.
@@ -150,6 +152,13 @@ func (rm *RepositoryManager) PersistValidatedLedger(ctx context.Context, value r
 			panic(recovered)
 		}
 	}()
+	lockKey := persistLedgerLockNamespace<<32 | int64(value.Ledger.Sequence)
+	if _, err := tx.ExecContext(ctx, `SELECT pg_advisory_xact_lock($1)`, lockKey); err != nil {
+		return errors.Join(
+			relationaldb.NewTransactionError("persist_validated_ledger", "acquire ledger persistence lock", err),
+			tx.Rollback(),
+		)
+	}
 	transactionRepo := newTransactionRepository(tx)
 	accountRepo := newAccountTransactionRepository(tx)
 	ledgerRepo := newLedgerRepository(tx)
