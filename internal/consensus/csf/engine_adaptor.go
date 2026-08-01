@@ -420,12 +420,6 @@ func (p *Peer) Stop() error {
 	return err
 }
 
-func (p *Peer) acceptingMessages() (*rcl.Engine, bool) {
-	p.lifecycleMu.Lock()
-	defer p.lifecycleMu.Unlock()
-	return p.engine, p.started && !p.stopped && p.engine != nil
-}
-
 func (p *Peer) withEngine(fn func(*rcl.Engine)) bool {
 	active := false
 	p.runEngineWork(func() {

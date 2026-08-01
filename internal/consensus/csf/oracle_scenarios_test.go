@@ -601,7 +601,6 @@ func TestPauseForLaggards(t *testing.T) {
 	start := sim.Now()
 	submitTo := [...]int{3, 1, 3, 4, 0, 2, 1, 0, 2, 1, 1, 2, 0, 2, 2, 4, 2, 2, 3, 1, 1}
 	for i := range submitTo {
-		i := i
 		sim.Scheduler.At(start+SimTime(time.Duration(i)*5*time.Second), func() {
 			all.Get(submitTo[i]).Submit(Tx{ID: uint32(i)})
 		})
