@@ -324,7 +324,6 @@ func TestArchive_SaveBatch_RetryOnceThenSucceed(t *testing.T) {
 
 func TestArchive_SaveBatch_PersistentFailureRemainsObservable(t *testing.T) {
 	base := &fakeRepo{}
-	// More failures than retries → batch is dropped after attempts.
 	repo := &flakyRepo{fakeRepo: base, failureLeft: 100}
 	a := New(repo, Config{BatchSize: 1, FlushInterval: time.Hour, DeleteBatch: 1}, nil)
 

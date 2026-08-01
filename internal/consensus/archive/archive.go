@@ -532,7 +532,6 @@ func (a *Archive) logDrop(lastLog *atomic.Int64, message string, attrs ...any) {
 	}
 }
 
-// Health returns cumulative counters and the most recent maintenance error.
 func (a *Archive) Health() Health {
 	if a == nil {
 		return Health{Healthy: true}
