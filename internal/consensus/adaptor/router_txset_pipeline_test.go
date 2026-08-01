@@ -203,12 +203,6 @@ func TestTxSetAcquire_PipelinesOnProgressAtRTT(t *testing.T) {
 	})
 }
 
-// TestTxSetAcquire_DormantRetainsMapAndResumes pins property (d): after
-// MaxStallTicks no-progress timer ticks the acquire goes dormant on the next
-// tick
-// but its partial map is RETAINED (not deleted), and a subsequent
-// MarkTxSetStillNeeded + progressing reply resumes it from that partial map.
-// Mirrors rippled keeping mMap across retries and stillNeed() re-arming.
 func TestTxSetAcquire_DormantRetainsMapAndResumes(t *testing.T) {
 	router, rs, _ := newPipelineRouter(t)
 	ld, txSetID := rootOnlyTxSetLedgerData(t, 8)
@@ -216,13 +210,9 @@ func TestTxSetAcquire_DormantRetainsMapAndResumes(t *testing.T) {
 
 	const maxStall = 3
 	withRetryKnobs(router, 0, maxStall, 1_000_000, func() {
-		// Progress reply creates the acquire (root only → incomplete) and
-		// pipelines one request.
 		router.handleTxSetData(ld, 1)
 		require.Equal(t, 1, rs.calledN())
 
-		// No inbound progress arrives; timer ticks accrue until the acquire
-		// exceeds MaxStallTicks and goes dormant.
 		for range maxStall + 1 {
 			router.retryStalledTxSetAcquires()
 		}
@@ -232,7 +222,6 @@ func TestTxSetAcquire_DormantRetainsMapAndResumes(t *testing.T) {
 		var dormant, resumable bool
 		if tracked {
 			dormant = state.dormant
-			// Root present, children still missing → a resumable partial map.
 			resumable = len(state.txMap.GetMissingNodes(256, nil)) > 0
 		}
 		router.txSetAcquireMu.Unlock()
@@ -240,14 +229,10 @@ func TestTxSetAcquire_DormantRetainsMapAndResumes(t *testing.T) {
 		require.True(t, dormant, "acquire must be dormant after exceeding MaxStallTicks")
 		require.True(t, resumable, "the partial SHAMap must be retained for resume")
 
-		// While dormant, further timer ticks must not re-request.
 		nAtDormant := rs.calledN()
 		router.retryStalledTxSetAcquires()
 		require.Equal(t, nAtDormant, rs.calledN(), "a dormant acquire must not re-request")
 
-		// Re-arm: consensus re-asks (MarkTxSetStillNeeded) AND a progressing
-		// reply arrives. Together they must wake the acquire and resume
-		// pipelining from the retained partial map.
 		router.MarkTxSetStillNeeded(txSetID)
 		router.handleTxSetData(ld, 1)
 		require.Greater(t, rs.calledN(), nAtDormant,

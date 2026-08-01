@@ -350,7 +350,6 @@ func SerializeSTValidation(v *consensus.Validation) []byte {
 
 	// --- UINT32 fields (type 2) ---
 
-	// sfFlags (field 2)
 	flags := v.Flags
 	buf = appendFieldHeader(buf, typeUINT32, fieldFlags)
 	buf = binary.BigEndian.AppendUint32(buf, flags)
@@ -589,7 +588,6 @@ func advanceFixed(data []byte, pos *int, n int) (int, error) {
 	return n, nil
 }
 
-// skipAmount determines the serialized length of an Amount field.
 func skipAmount(data []byte, pos *int) (int, error) {
 	if *pos+8 > len(data) {
 		return 0, errShortData

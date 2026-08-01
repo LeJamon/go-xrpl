@@ -322,8 +322,6 @@ func TestSTValidation_FlagsRoundTrip(t *testing.T) {
 		t.Error("Full bit derived from Flags should be true")
 	}
 
-	// Generic serialization preserves the stored flag word even when Full
-	// is inconsistent. Outbound constructors must stamp flags before signing.
 	legacy := buildTestValidation()
 	legacy.Flags = 0 // explicit
 	legacyBlob := SerializeSTValidation(legacy)

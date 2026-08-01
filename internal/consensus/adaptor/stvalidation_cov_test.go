@@ -131,7 +131,6 @@ func TestStvSkipFieldData_Amount_IOU_NonZero(t *testing.T) {
 }
 
 func TestStvSkipFieldData_Amount_IOU_CanonicalZero(t *testing.T) {
-	// Issued amounts always include the 20-byte currency and issuer.
 	data := make([]byte, 48)
 	data[0] = 0x80
 	pos := 0
@@ -501,7 +500,6 @@ func TestStvParseSTValidation_InvalidAmendmentsLength(t *testing.T) {
 }
 
 func TestStvParseSTValidation_ShortSigningPubKey(t *testing.T) {
-	// SigningPubKey VL field with length != 33 is malformed.
 	var buf []byte
 	buf = appendFieldHeader(buf, typeUINT32, fieldFlags)
 	buf = binary.BigEndian.AppendUint32(buf, vfFullValidation)
@@ -605,7 +603,6 @@ func TestStvParseSTValidation_FieldHeaderError(t *testing.T) {
 }
 
 func TestStvSerializeSTValidation_ZeroFlagsNotFull(t *testing.T) {
-	// Generic serialization preserves Flags verbatim.
 	orig := buildTestValidation()
 	orig.Flags = 0
 	orig.Full = false

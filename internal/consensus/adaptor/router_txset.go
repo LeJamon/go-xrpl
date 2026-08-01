@@ -37,7 +37,7 @@ type txSetAcquireState struct {
 	// (query_type=qtINDIRECT) so peers relay it on our behalf.
 	timedOut bool
 
-	// dormant latches once stallTicks reaches MaxStallTicks: the timer stops
+	// dormant latches once stallTicks exceeds MaxStallTicks: the timer stops
 	// actively re-requesting, but the partial SHAMap is RETAINED so a later
 	// MarkTxSetStillNeeded resumes the acquire from where it left off. The TTL
 	// sweep still reclaims a truly-abandoned entry.
@@ -54,11 +54,8 @@ type txSetAcquireState struct {
 	// set the acquire only requests the root and can never complete.
 	haveRoot bool
 
-	// done latches a terminal acquire: completed (set built and fed to the
-	// engine) or failed/given-up. A data reply for a
-	// done acquire is charged and dropped so a straggler can neither recreate
-	// a fresh empty map nor fan out re-requests; MarkTxSetStillNeeded clears it
-	// to revive a genuinely-needed set.
+	// done latches a terminal acquire. Straggling data is charged and dropped;
+	// only recoverable failures can be revived.
 	done bool
 }
 
@@ -599,17 +596,8 @@ func (r *Router) fillTxSetFromLocalPool(txMap *shamap.SHAMap, missing []shamap.M
 	return filled
 }
 
-// MarkTxSetStillNeeded records request intent before Adaptor.RequestTxSet emits
-// TMGetLedger. A new intent has no SHAMap until its first valid reply. A DORMANT
-// (retry-exhausted but still viable) acquire wakes: the consecutive-no-progress
-// counter resets and the initial request timestamp keeps maintenance from
-// immediately duplicating the wire request. An arriving data reply still resumes
-// from the retained partial map without waiting out the TTL.
-// haveRoot is preserved — a revived acquire keeps any root it already had. A
-// A completed acquire remains latched. Failed and retry-exhausted acquisitions
-// are revived, mirroring rippled's stillNeed clearing failed_ but never
-// complete_. The timeout count is clamped to the normal-retry threshold rather
-// than reset, matching TransactionAcquire::stillNeed.
+// MarkTxSetStillNeeded revives recoverable acquisitions while leaving completed
+// acquisitions latched. Timeout history is clamped rather than reset.
 func (r *Router) MarkTxSetStillNeeded(txSetID consensus.TxSetID) {
 	r.txSetAcquireMu.Lock()
 	defer r.txSetAcquireMu.Unlock()
@@ -778,7 +766,6 @@ func (r *Router) retryStalledTxSetAcquires() {
 			terminals = append(terminals, txSetTerminal{id: id, attempts: state.attempts, err: finishErr})
 			continue
 		}
-		// A firing timer on a stalled acquire is a no-progress tick.
 		// Past MaxStallTicks the acquire goes dormant: it RETAINS its partial
 		// map (only the TTL sweep or an explicit resume reclaims it) instead
 		// of being deleted, so consensus re-asking picks up where it left off.
@@ -859,9 +846,6 @@ func (r *Router) retryStalledTxSetAcquires() {
 	}
 }
 
-// finalizeCompletedTxSet feeds the engine a tx-set whose SHAMap the retry
-// timer found complete, mirroring the inbound completion path in
-// handleTxSetData. Runs on the Run() message-loop goroutine.
 func (r *Router) finalizeCompletedTxSet(txSetID consensus.TxSetID, txMap *shamap.SHAMap, filled int) {
 	blobs := make([][]byte, 0)
 	if err := txMap.ForEach(func(item *shamap.Item) bool {

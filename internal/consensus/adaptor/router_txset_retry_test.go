@@ -182,10 +182,6 @@ func TestTxSetRetry_NoProgressReplyDefersToTimer(t *testing.T) {
 	})
 }
 
-// TestTxSetRetry_InboundProgressNeverGivesUp pins that the inbound path
-// has NO give-up cap: give-up now lives solely on the stall timer, keyed
-// on timer ticks. Many progressing replies in a row each pipeline a fresh
-// request and never delete the acquire or erase accumulated timeout history.
 func TestTxSetRetry_InboundProgressNeverGivesUp(t *testing.T) {
 	router, rs := newRetryRouter(t)
 	// MaxStallTicks deliberately small: if the inbound path fed stall

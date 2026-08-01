@@ -38,7 +38,6 @@ func TestTxSetAcquire_RootlessReplyDoesNotCompleteEmpty(t *testing.T) {
 		txSetID := consensus.TxSetID(rawID)
 		router.MarkTxSetStillNeeded(txSetID)
 
-		// Feed ONLY the non-root nodes for the requested set from peer 7.
 		router.handleTxSetData(ldFromWire(rawID, wireNodes[1:]), 7)
 
 		// No completion: the engine must not have been fed an empty set.
@@ -129,9 +128,6 @@ func TestTxSetAcquire_StragglerAfterDoneIsDropped(t *testing.T) {
 	})
 }
 
-// TestTxSetAcquire_DuplicateOnlyReplyPipelinesMissingNodes pins rippled's
-// duplicate-is-good behavior: a valid reply that re-sends nodes already held
-// still triggers the current missing-node frontier and is not penalized.
 func TestTxSetAcquire_DuplicateOnlyReplyPipelinesMissingNodes(t *testing.T) {
 	router, rs, _ := newPipelineRouter(t)
 	withRetryKnobs(router, time.Hour, 1_000_000, 1_000_000, func() {
@@ -149,7 +145,6 @@ func TestTxSetAcquire_DuplicateOnlyReplyPipelinesMissingNodes(t *testing.T) {
 		router.handleTxSetData(ldFromWire(rawID, []shamap.WireNode{firstNonRoot}), 1)
 		require.Equal(t, 2, rs.calledN(), "a fresh non-root node pipelines one more request")
 
-		// Re-deliver the SAME non-root node (all NodeDuplicate, no root).
 		router.handleTxSetData(ldFromWire(rawID, []shamap.WireNode{firstNonRoot}), 1)
 		require.Equal(t, 3, rs.calledN(),
 			"a valid duplicate-only reply must pipeline the current frontier")
