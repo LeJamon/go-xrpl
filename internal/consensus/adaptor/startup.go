@@ -74,6 +74,7 @@ type Components struct {
 	started     bool
 	stopped     bool
 	stopOnce    sync.Once
+	stopErr     error
 	fatalOnce   sync.Once
 
 	overlayDone chan struct{}
@@ -265,10 +266,11 @@ func (c *Components) runValidatorListTick(ctx context.Context, interval time.Dur
 }
 
 // Stop gracefully shuts down all components.
-func (c *Components) Stop() {
+func (c *Components) Stop() error {
 	c.startStopMu.Lock()
 	defer c.startStopMu.Unlock()
 	c.stop()
+	return c.stopErr
 }
 
 func (c *Components) stop() {
@@ -312,7 +314,7 @@ func (c *Components) stop() {
 			c.Adaptor.StopConsensusPhaseDispatcher()
 		}
 		if c.Engine != nil {
-			_ = c.Engine.Stop()
+			c.stopErr = c.Engine.Stop()
 		}
 	})
 }
