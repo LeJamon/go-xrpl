@@ -3202,7 +3202,7 @@ func TestCheckConsensusState(t *testing.T) {
 		// past prevSeq so ProposersFinished returns 4 ≥ 80% of 4.
 		prev := &mockLedger{id: consensus.LedgerID{0x10}, seq: 100}
 		e.prevLedger = prev
-		vt := NewValidationTracker(3, e.timing.ValidationFreshness)
+		vt := NewValidationTracker(3)
 		for i := range 4 {
 			nodeID := consensus.NodeID{byte(0xA0 + i)}
 			vt.trusted[nodeID] = true

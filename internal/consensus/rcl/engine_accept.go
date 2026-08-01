@@ -105,10 +105,9 @@ func (e *Engine) acceptLedger(result consensus.Result) {
 	// clamp track convergence, not the apply.
 	roundTime := e.now().Sub(e.roundStartTime)
 	roundDuration := e.now().Sub(e.state.StartTime)
+	// DisputedNoTxs returns detached blobs; work keeps that snapshot while
+	// the ledger is built after e.mu is released.
 	disputedNoTxs := e.disputeTracker.DisputedNoTxs()
-	for i := range disputedNoTxs {
-		disputedNoTxs[i] = append([]byte(nil), disputedNoTxs[i]...)
-	}
 
 	// Apply the LCL off e.mu, mirroring rippled onAccept→addJob(jtACCEPT)
 	// ("no lock is held during this job"). Snapshot every build input and

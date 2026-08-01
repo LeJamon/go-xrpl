@@ -28,7 +28,7 @@ func TestEngine_UpdatePosition_FreshnessRepropose(t *testing.T) {
 
 	engine.mu.Lock()
 	engine.setMode(consensus.ModeProposing)
-	engine.disputeTracker = NewDisputeTracker()
+	engine.disputeTracker = newDisputeTracker()
 	set := buildMockTxSet(consensus.TxSetID{0x5E})
 	engine.ourTxSet = set
 	// Position last emitted well beyond ProposeInterval ago.
@@ -76,7 +76,7 @@ func TestEngine_UpdatePosition_FreshPositionNoRepropose(t *testing.T) {
 
 	engine.mu.Lock()
 	engine.setMode(consensus.ModeProposing)
-	engine.disputeTracker = NewDisputeTracker()
+	engine.disputeTracker = newDisputeTracker()
 	set := buildMockTxSet(consensus.TxSetID{0x5E})
 	engine.ourTxSet = set
 	engine.state.OurPosition = &consensus.Proposal{

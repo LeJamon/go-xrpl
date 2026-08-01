@@ -203,14 +203,14 @@ func TestStartRound_ClearsDeadNodes(t *testing.T) {
 }
 
 // alwaysTrusted is a trust predicate that accepts every node, used by the
-// ProposalTracker unit tests below.
+// proposalTracker unit tests below.
 func alwaysTrusted(consensus.NodeID) bool { return true }
 
 // TestProposalTracker_StoreMonotonic verifies Store keeps the position with
 // the highest ProposeSeq, drops stale (lower-seq) and same-seq ones, and
 // reports whether it stored.
 func TestProposalTracker_StoreMonotonic(t *testing.T) {
-	pt := NewProposalTracker()
+	pt := newProposalTracker()
 	node := consensus.NodeID{1}
 
 	if !pt.Store(&consensus.Proposal{NodeID: node, Position: 5, TxSet: consensus.TxSetID{5}}) {
@@ -331,7 +331,7 @@ func TestOnProposal_NonIncreasingSeqDropped(t *testing.T) {
 // TestProposalTracker_ReplayDropsNonIncreasing verifies Replay does not count
 // a close-time vote for a buffered duplicate at a non-increasing ProposeSeq.
 func TestProposalTracker_ReplayDropsNonIncreasing(t *testing.T) {
-	pt := NewProposalTracker()
+	pt := newProposalTracker()
 	node := consensus.NodeID{1}
 	prev := consensus.LedgerID{7}
 	ct1 := time.Unix(1000, 0)
@@ -360,7 +360,7 @@ func TestProposalTracker_ReplayDropsNonIncreasing(t *testing.T) {
 // TestProposalTracker_MarkDeadAndReset verifies MarkDead removes the node's
 // position and records it dead, and ResetRound clears both maps.
 func TestProposalTracker_MarkDeadAndReset(t *testing.T) {
-	pt := NewProposalTracker()
+	pt := newProposalTracker()
 	node := consensus.NodeID{1}
 	pt.Store(&consensus.Proposal{NodeID: node, Position: 0})
 
@@ -384,7 +384,7 @@ func TestProposalTracker_MarkDeadAndReset(t *testing.T) {
 // TestProposalTracker_BufferRecentCap verifies the per-node playback buffer
 // caps at recentProposalsPerNode and drops the oldest entry.
 func TestProposalTracker_BufferRecentCap(t *testing.T) {
-	pt := NewProposalTracker()
+	pt := newProposalTracker()
 	node := consensus.NodeID{1}
 	for i := 0; i < recentProposalsPerNode+3; i++ {
 		pt.BufferRecent(&consensus.Proposal{NodeID: node, Position: uint32(i)})
@@ -406,7 +406,7 @@ func TestProposalTracker_BufferRecentCap(t *testing.T) {
 // TestProposalTracker_Replay verifies Replay upserts buffered positions for
 // the target ledger and returns close-time votes and the trusted count.
 func TestProposalTracker_Replay(t *testing.T) {
-	pt := NewProposalTracker()
+	pt := newProposalTracker()
 	target := consensus.LedgerID{9}
 	other := consensus.LedgerID{8}
 	nodeA := consensus.NodeID{1}
@@ -445,7 +445,7 @@ func TestProposalTracker_Replay(t *testing.T) {
 // that loses to an existing higher one is not re-shared, mirroring rippled
 // sharing only when peerProposalInternal accepts the position.
 func TestProposalTracker_ReplayReshareOnlyStored(t *testing.T) {
-	pt := NewProposalTracker()
+	pt := newProposalTracker()
 	target := consensus.LedgerID{9}
 	node := consensus.NodeID{1}
 
@@ -462,7 +462,7 @@ func TestProposalTracker_ReplayReshareOnlyStored(t *testing.T) {
 // TestProposalTracker_PruneStale verifies PruneStale removes positions older
 // than the cutoff (with a non-zero timestamp) and keeps fresh / zero-ts ones.
 func TestProposalTracker_PruneStale(t *testing.T) {
-	pt := NewProposalTracker()
+	pt := newProposalTracker()
 	now := time.Unix(2000, 0)
 	cutoff := now.Add(-10 * time.Second)
 
@@ -491,7 +491,7 @@ func TestProposalTracker_PruneStale(t *testing.T) {
 // TestProposalTracker_LatestFresh verifies LatestFresh returns the newest
 // in-window position per trusted node and skips stale-only / untrusted ones.
 func TestProposalTracker_LatestFresh(t *testing.T) {
-	pt := NewProposalTracker()
+	pt := newProposalTracker()
 	now := time.Unix(3000, 0)
 	freshness := 10 * time.Second
 
@@ -523,7 +523,7 @@ func TestProposalTracker_LatestFresh(t *testing.T) {
 // TestProposalTracker_ValidationsForAndReset verifies round-validation
 // collection by ledger and reset on accept.
 func TestProposalTracker_ValidationsForAndReset(t *testing.T) {
-	pt := NewProposalTracker()
+	pt := newProposalTracker()
 	ledger := consensus.LedgerID{7}
 	other := consensus.LedgerID{8}
 
@@ -537,5 +537,47 @@ func TestProposalTracker_ValidationsForAndReset(t *testing.T) {
 	pt.ResetValidations()
 	if got := pt.ValidationsFor(ledger); len(got) != 0 {
 		t.Errorf("ResetValidations did not clear: %d entries remain", len(got))
+	}
+}
+
+func TestProposalTracker_ValidationSnapshotsOwnSignature(t *testing.T) {
+	pt := newProposalTracker()
+	ledger := consensus.LedgerID{7}
+	input := &consensus.Validation{
+		NodeID:    consensus.NodeID{1},
+		LedgerID:  ledger,
+		Signature: []byte{1, 2},
+	}
+	pt.SetValidation(input)
+
+	input.Signature[0] = 9
+	first := pt.ValidationsFor(ledger)
+	if len(first) != 1 || first[0].Signature[0] != 1 {
+		t.Fatalf("mutating input validation changed tracker state: %#v", first)
+	}
+
+	first[0].Signature[1] = 8
+	second := pt.ValidationsFor(ledger)
+	if len(second) != 1 || second[0].Signature[1] != 2 {
+		t.Fatalf("mutating returned validation snapshot changed tracker state: %#v", second)
+	}
+}
+
+func TestProposalTracker_AllReturnsDetachedSnapshot(t *testing.T) {
+	pt := newProposalTracker()
+	node := consensus.NodeID{1}
+	proposal := &consensus.Proposal{NodeID: node, Position: 3, Signature: []byte{1, 2}}
+	if !pt.Store(proposal) {
+		t.Fatal("Store rejected initial proposal")
+	}
+
+	snapshot := pt.All()
+	snapshot[node].Position = 99
+	snapshot[node].Signature[0] = 9
+	delete(snapshot, node)
+
+	stored := pt.proposals[node]
+	if stored.Position != 3 || stored.Signature[0] != 1 {
+		t.Fatalf("mutating proposal snapshot changed tracker state: %#v", stored)
 	}
 }

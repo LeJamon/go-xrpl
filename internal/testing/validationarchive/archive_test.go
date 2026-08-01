@@ -60,7 +60,7 @@ func TestValidationArchive_StaleValidationWrittenOnPrune(t *testing.T) {
 	}, nil)
 	defer a.Close(context.Background())
 
-	tracker := rcl.NewValidationTracker(1, 5*time.Minute)
+	tracker := rcl.NewValidationTracker(1)
 	tracker.SetOnStale(a.OnStale)
 
 	v := mkValidation(100, 0x01)
@@ -233,9 +233,9 @@ func TestValidationArchive_EngineDrivenFlow(t *testing.T) {
 	}, nil)
 	defer a.Close(context.Background())
 
-	tracker := rcl.NewValidationTracker(2, 5*time.Minute)
+	tracker := rcl.NewValidationTracker(2)
 	trustedNodes := []consensus.NodeID{{1}, {2}, {3}}
-	tracker.SetTrusted(trustedNodes)
+	tracker.SetTrustedAndQuorum(trustedNodes, 2)
 	tracker.SetOnStale(a.OnStale)
 
 	// Pretend the engine wired its fully-validated callback to drive

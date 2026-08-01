@@ -10,7 +10,7 @@ import (
 )
 
 func TestValidationTracker_Add(t *testing.T) {
-	vt := NewValidationTracker(3, 5*time.Minute)
+	vt := NewValidationTracker(3)
 
 	node1 := consensus.NodeID{1}
 	node2 := consensus.NodeID{2}
@@ -55,7 +55,7 @@ func TestValidationTracker_Add(t *testing.T) {
 
 func TestValidationTrackerUnreachableQuorumDoesNotFinalize(t *testing.T) {
 	nodes := []consensus.NodeID{{1}, {2}}
-	vt := NewValidationTracker(math.MaxInt, 5*time.Minute)
+	vt := NewValidationTracker(math.MaxInt)
 	vt.SetTrusted(nodes)
 
 	fired := false
@@ -77,7 +77,7 @@ func TestValidationTrackerUnreachableQuorumDoesNotFinalize(t *testing.T) {
 
 func TestValidationTrackerLiveQuorumUnavailableGate(t *testing.T) {
 	nodes := []consensus.NodeID{{1}, {2}, {3}}
-	vt := NewValidationTracker(2, 5*time.Minute)
+	vt := NewValidationTracker(2)
 	vt.SetTrusted(nodes)
 
 	unavailable := true
@@ -108,7 +108,7 @@ func TestValidationTrackerLiveQuorumUnavailableGate(t *testing.T) {
 }
 
 func TestValidationTracker_TrustedValidations(t *testing.T) {
-	vt := NewValidationTracker(2, 5*time.Minute)
+	vt := NewValidationTracker(2)
 
 	node1 := consensus.NodeID{1}
 	node2 := consensus.NodeID{2}
@@ -135,7 +135,7 @@ func TestValidationTracker_TrustedValidations(t *testing.T) {
 }
 
 func TestValidationTracker_RecheckFullyValidatedFiltersAndRearms(t *testing.T) {
-	vt := NewValidationTracker(2, 5*time.Minute)
+	vt := NewValidationTracker(2)
 	now := time.Date(2026, 7, 13, 12, 0, 0, 0, time.UTC)
 	vt.SetNow(func() time.Time { return now })
 
@@ -194,7 +194,7 @@ func TestValidationTracker_RecheckFullyValidatedFiltersAndRearms(t *testing.T) {
 
 func TestValidationTracker_FullyValidated(t *testing.T) {
 	quorum := 3
-	vt := NewValidationTracker(quorum, 5*time.Minute)
+	vt := NewValidationTracker(quorum)
 
 	nodes := []consensus.NodeID{{1}, {2}, {3}, {4}}
 	vt.SetTrusted(nodes)
@@ -261,7 +261,7 @@ func TestValidationTracker_FullyValidated(t *testing.T) {
 }
 
 func TestValidationTracker_NewerValidation(t *testing.T) {
-	vt := NewValidationTracker(2, 5*time.Minute)
+	vt := NewValidationTracker(2)
 
 	node1 := consensus.NodeID{1}
 	ledger1 := consensus.LedgerID{1}
@@ -314,7 +314,7 @@ func TestValidationTracker_NewerValidation(t *testing.T) {
 // SeqEnforcer, so the by-node guard enforces the same outcome with a
 // strictly-higher-seq supersede rule.
 func TestValidationTracker_SameSeqResignRejected(t *testing.T) {
-	vt := NewValidationTracker(2, 5*time.Minute)
+	vt := NewValidationTracker(2)
 
 	base := time.Unix(1_600_000_000, 0).UTC()
 	vt.SetNow(func() time.Time { return base })
@@ -391,7 +391,7 @@ func TestValidationTracker_SameSeqResignRejected(t *testing.T) {
 // would spuriously contribute to quorum.
 func TestValidationTracker_NegativeUNL_ExcludedFromQuorum(t *testing.T) {
 	nodes := []consensus.NodeID{{1}, {2}, {3}, {4}}
-	vt := NewValidationTracker(3, 5*time.Minute)
+	vt := NewValidationTracker(3)
 	vt.SetTrusted(nodes)
 	// Mark node 4 as negatively-UNL'd.
 	vt.SetNegativeUNL([]consensus.NodeID{nodes[3]})
@@ -451,7 +451,7 @@ func TestValidationTracker_NegativeUNL_ExcludedFromQuorum(t *testing.T) {
 // Filters: trusted only, not-negUNL, Full only.
 func TestValidationTracker_ProposersValidated(t *testing.T) {
 	nodes := []consensus.NodeID{{1}, {2}, {3}, {4}, {5}}
-	vt := NewValidationTracker(3, 5*time.Minute)
+	vt := NewValidationTracker(3)
 	vt.SetTrusted(nodes[:4])                        // 1-4 trusted; 5 is untrusted
 	vt.SetNegativeUNL([]consensus.NodeID{nodes[3]}) // node 4 on negUNL
 
@@ -582,7 +582,7 @@ func TestIsCurrent_WindowBoundaries(t *testing.T) {
 }
 
 func TestValidationTracker_Stats(t *testing.T) {
-	vt := NewValidationTracker(2, 5*time.Minute)
+	vt := NewValidationTracker(2)
 
 	nodes := []consensus.NodeID{{1}, {2}, {3}}
 	vt.SetTrusted(nodes[:2])
@@ -615,7 +615,7 @@ func TestValidationTracker_Stats(t *testing.T) {
 }
 
 func TestValidationTracker_ExpireOld_FiresOnStale(t *testing.T) {
-	vt := NewValidationTracker(1, 5*time.Minute)
+	vt := NewValidationTracker(1)
 
 	nodeA := consensus.NodeID{0xA}
 	nodeB := consensus.NodeID{0xB}
@@ -656,7 +656,7 @@ func TestValidationTracker_ExpireOld_FiresOnStale(t *testing.T) {
 }
 
 func TestValidationTracker_ExpireOld_ClearsByNode(t *testing.T) {
-	vt := NewValidationTracker(1, 5*time.Minute)
+	vt := NewValidationTracker(1)
 
 	nodeA := consensus.NodeID{0xA}
 	ledger := consensus.LedgerID{1}
@@ -677,7 +677,7 @@ func TestValidationTracker_ExpireOld_ClearsByNode(t *testing.T) {
 // ExpireOld's onStale hook runs outside the tracker mutex: a callback that
 // calls back into the tracker must not deadlock.
 func TestValidationTracker_ExpireOld_OnStaleRunsOutsideLock(t *testing.T) {
-	vt := NewValidationTracker(1, 5*time.Minute)
+	vt := NewValidationTracker(1)
 	vt.Add(&consensus.Validation{LedgerID: consensus.LedgerID{1}, LedgerSeq: 100, NodeID: consensus.NodeID{1}, SignTime: time.Now(), Full: true})
 
 	done := make(chan struct{})
@@ -703,7 +703,7 @@ func TestValidationTracker_ExpireOld_OnStaleRunsOutsideLock(t *testing.T) {
 // window keeps recently-used ledgers queryable regardless of how far
 // back their sequence is.
 func TestValidationTracker_ExpireOld_RetainsRecentlyAccessed(t *testing.T) {
-	vt := NewValidationTracker(1, 5*time.Minute)
+	vt := NewValidationTracker(1)
 	now := time.Now()
 	vt.SetNow(func() time.Time { return now })
 
@@ -739,7 +739,7 @@ func TestValidationTracker_ExpireOld_RetainsRecentlyAccessed(t *testing.T) {
 // fast-advancing tip. The pin is selective (sequences below its low still
 // evict) and clearing it restores normal expiry.
 func TestValidationTracker_ExpireOld_HonorsSeqToKeep(t *testing.T) {
-	vt := NewValidationTracker(1, 5*time.Minute)
+	vt := NewValidationTracker(1)
 	now := time.Now()
 	vt.SetNow(func() time.Time { return now })
 
@@ -775,7 +775,7 @@ func TestValidationTracker_ExpireOld_HonorsSeqToKeep(t *testing.T) {
 // keepLow (inclusive) survives. Mirrors rippled setSeqToKeep(C-1, C) dropping
 // the set at C (Validations_test.cpp).
 func TestValidationTracker_ExpireOld_SeqToKeepHighExclusive(t *testing.T) {
-	vt := NewValidationTracker(1, 5*time.Minute)
+	vt := NewValidationTracker(1)
 	now := time.Now()
 	vt.SetNow(func() time.Time { return now })
 
@@ -801,7 +801,7 @@ func TestValidationTracker_ExpireOld_SeqToKeepHighExclusive(t *testing.T) {
 // byLedger touch — so an actively-queried set keeps surviving ExpireOld
 // while an unqueried sibling at the same seq expires.
 func TestValidationTracker_ExpireOld_TouchOnReadExtends(t *testing.T) {
-	vt := NewValidationTracker(1, 5*time.Minute)
+	vt := NewValidationTracker(1)
 	now := time.Now()
 	vt.SetNow(func() time.Time { return now })
 
@@ -835,7 +835,7 @@ func TestValidationTracker_ExpireOld_TouchOnReadExtends(t *testing.T) {
 // validations still expires once its creation/read age passes the
 // window.
 func TestValidationTracker_ExpireOld_WriteDoesNotExtend(t *testing.T) {
-	vt := NewValidationTracker(1, 5*time.Minute)
+	vt := NewValidationTracker(1)
 	now := time.Now()
 	vt.SetNow(func() time.Time { return now })
 
@@ -862,7 +862,7 @@ func TestValidationTracker_ExpireOld_WriteDoesNotExtend(t *testing.T) {
 // Application.cpp:1612): all accumulated validation state is discarded
 // while configuration survives, so the tracker is reusable in-process.
 func TestValidationTracker_Flush(t *testing.T) {
-	vt := NewValidationTracker(2, 5*time.Minute)
+	vt := NewValidationTracker(2)
 	now := time.Now()
 	vt.SetNow(func() time.Time { return now })
 
@@ -922,7 +922,7 @@ func TestValidationTracker_Flush(t *testing.T) {
 // trusted or not, partial or full — excludes entries whose latest validation
 // has aged out, and does not mutate the tracker (FlushStale owns eviction).
 func TestValidationTracker_GetCurrentNodeIDs(t *testing.T) {
-	vt := NewValidationTracker(2, 5*time.Minute)
+	vt := NewValidationTracker(2)
 	t0 := time.Now()
 	vt.SetNow(func() time.Time { return t0 })
 
