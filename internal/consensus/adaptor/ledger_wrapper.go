@@ -45,6 +45,10 @@ func (w *LedgerWrapper) CloseAgree() bool {
 	return h.GetCloseAgree()
 }
 
+func (w *LedgerWrapper) CloseTimeResolution() time.Duration {
+	return time.Duration(w.ledger.CloseTimeResolution()) * time.Second
+}
+
 func (w *LedgerWrapper) ParentCloseTime() time.Time {
 	return w.ledger.ParentCloseTime()
 }

@@ -135,17 +135,13 @@ func (e *Engine) OnProposal(proposal *consensus.Proposal, originPeer uint64) err
 
 	// If we hold the peer's tx set, run create/update-disputes for this
 	// position (self-originated sets were already seeded in closeLedger).
-	if e.ourTxSet != nil && proposal.TxSet != e.ourTxSet.ID() {
+	if e.ourTxSet != nil {
 		if peerSet, ok := e.acquiredTxSets[proposal.TxSet]; ok {
 			e.createDisputesAgainst(peerSet)
 			if e.disputeTracker.UpdateDisputes(proposal.NodeID, peerSet) {
 				e.peerUnchangedCounter = 0
 			}
 		}
-	}
-
-	if e.phase == consensus.PhaseEstablish {
-		e.checkConvergence()
 	}
 
 	return nil
@@ -271,10 +267,6 @@ func (e *Engine) OnTxSet(id consensus.TxSetID, txs [][]byte) error {
 				}
 			}
 		}
-	}
-
-	if e.phase == consensus.PhaseEstablish {
-		e.checkConvergence()
 	}
 
 	return nil

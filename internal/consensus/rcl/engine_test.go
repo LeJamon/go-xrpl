@@ -1907,9 +1907,7 @@ func TestEngine_CheckLedger_CompletesHeldWrongLedgerSwitch(t *testing.T) {
 	targetID := consensus.LedgerID{0xAA}
 
 	// run wedges an engine in ModeWrongLedger targeting targetID: two
-	// trusted peers proposing targetID make getNetworkLedger() return it,
-	// and two trusted validations clear the support gate (targetID has
-	// strictly more support than our stale fork). available controls
+	// trusted validations make getNetworkLedger() prefer it. available controls
 	// whether the target ledger is held locally. The mutation, the
 	// checkLedger() call, and the result capture all happen under a single
 	// e.mu hold so a background round tick cannot race the assertion.
@@ -1954,17 +1952,17 @@ func TestEngine_CheckLedger_CompletesHeldWrongLedgerSwitch(t *testing.T) {
 		engine.prevLedger = staleLedger
 		engine.wrongLedgerID = targetID
 		engine.setMode(consensus.ModeWrongLedger)
-		if engine.state != nil {
-			engine.state.OurPosition = nil // no self-vote — let the peer majority decide
-		}
-		engine.proposalTracker.recentProposals = map[consensus.NodeID][]*consensus.Proposal{
-			peerA: {{NodeID: peerA, PreviousLedger: targetID, Timestamp: now}},
-			peerB: {{NodeID: peerB, PreviousLedger: targetID, Timestamp: now}},
-		}
 		if engine.validationTracker != nil {
 			engine.validationTracker.SetTrusted([]consensus.NodeID{adaptor.nodeID, peerA, peerB})
-			engine.validationTracker.Add(&consensus.Validation{NodeID: peerA, LedgerID: targetID, LedgerSeq: 101, Full: true, SignTime: now, SeenTime: now})
-			engine.validationTracker.Add(&consensus.Validation{NodeID: peerB, LedgerID: targetID, LedgerSeq: 101, Full: true, SignTime: now, SeenTime: now})
+			for _, nodeID := range []consensus.NodeID{peerA, peerB} {
+				if !engine.validationTracker.Add(&consensus.Validation{
+					NodeID: nodeID, LedgerID: targetID, LedgerSeq: 101,
+					Full: true, SignTime: now, SeenTime: now,
+				}) {
+					engine.mu.Unlock()
+					t.Fatalf("trusted validation from %x was rejected", nodeID[:4])
+				}
+			}
 		}
 		engine.checkLedger()
 		gotMode := engine.mode
@@ -1990,7 +1988,7 @@ func TestEngine_CheckLedger_CompletesHeldWrongLedgerSwitch(t *testing.T) {
 		}
 	})
 
-	t.Run("unavailable_stays_without_respam", func(t *testing.T) {
+	t.Run("unavailable_retries_through_adaptor_window", func(t *testing.T) {
 		gotMode, gotWrongID, reqs := run(t, false)
 		if gotMode != consensus.ModeWrongLedger {
 			t.Fatalf("unavailable target: checkLedger must stay in WrongLedger, got %v", gotMode)
@@ -1998,9 +1996,9 @@ func TestEngine_CheckLedger_CompletesHeldWrongLedgerSwitch(t *testing.T) {
 		if gotWrongID != targetID {
 			t.Fatalf("unavailable target: wrongLedgerID must remain the target, got %x want %x", gotWrongID[:8], targetID[:8])
 		}
-		if reqs != 0 {
-			t.Fatalf("unavailable target: checkLedger must not re-request the acquire "+
-				"while already targeting it (no-spam guard), got %d requests", reqs)
+		if reqs != 1 {
+			t.Fatalf("unavailable target: checkLedger must retry through the adaptor's "+
+				"duplicate-suppression window, got %d requests", reqs)
 		}
 	})
 }

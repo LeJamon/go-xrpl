@@ -39,9 +39,8 @@ type EngineLedgerSwitch interface {
 	// recovery target, the validated tip, or the current network preference.
 	TrySwitchToLedger(id LedgerID) (LedgerSwitchResult, error)
 
-	// OnLedgerAcquireFailed reports a clean inbound-acquire failure after the
-	// retry budget. Lets a node pinned in wrongLedger un-pin and drop to
-	// degraded resync rather than starving the stall watchdog into os.Exit.
+	// OnLedgerAcquireFailed reports that an in-flight acquisition was invalidated
+	// by a topology change, allowing wrong-ledger recovery to re-resolve its target.
 	OnLedgerAcquireFailed(id LedgerID)
 }
 
@@ -208,6 +207,16 @@ type TrustChangeNotifier interface {
 	OnTrustChanged(fn func(trusted []NodeID, quorum int))
 }
 
+// LedgerAcceptDeferrer is an optional Adaptor extension for environments that
+// must schedule ledger application on their own serialized driver. Returning
+// true transfers completion to the adaptor, which must invoke complete exactly
+// once and never inline, including when the scheduled work is canceled or the
+// environment shuts down. Returning false leaves acceptance synchronous and
+// must not retain complete.
+type LedgerAcceptDeferrer interface {
+	DeferLedgerAccept(complete func()) bool
+}
+
 // Adaptor is composed of the narrower per-subsystem interfaces below; depend
 // on the narrowest one that satisfies your needs.
 
@@ -241,6 +250,8 @@ type NetworkBroadcaster interface {
 
 	RequestTxSet(id TxSetID) error
 
+	// RequestLedger may be called repeatedly while a ledger remains unavailable;
+	// implementations must suppress duplicate work within their retry window.
 	RequestLedger(id LedgerID) error
 }
 
