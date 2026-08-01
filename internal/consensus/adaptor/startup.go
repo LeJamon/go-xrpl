@@ -292,9 +292,8 @@ func NewFromConfig(
 		// resyncs from validated ledgers, so operator veto/upvote ([amendments]
 		// config) drives consensus voting.
 		Table: ledgerSvc.Table(),
-		// The operator's [voting] stanza. Zero values mean unset —
-		// New() substitutes the network defaults.
-		FeeVote:          feeVoteFromConfig(appCfg.Voting),
+		// The operator's [voting] stanza.
+		FeeVote:          feeVoteFromConfig(appCfg.Voting, appCfg.FeeDefault),
 		RelayValidations: ParseRelayValidationsPolicy(appCfg.RelayValidations),
 	})
 
@@ -820,15 +819,22 @@ func peerLimits(maxPeers int, wantIncoming bool) (int, int, int) {
 	return maxPeers, maxPeers - maxOutbound, maxOutbound
 }
 
-// feeVoteFromConfig maps the operator's [voting] stanza onto the
-// adaptor's fee-vote stance. Zero values pass through — New()
-// substitutes the network defaults for unset fields.
-func feeVoteFromConfig(v config.VotingConfig) FeeVoteStance {
-	return FeeVoteStance{
-		BaseFee:          uint64(v.ReferenceFee),
-		ReserveBase:      uint32(v.AccountReserve),
-		ReserveIncrement: uint32(v.OwnerReserve),
+// feeVoteFromConfig maps the effective fee configuration onto the adaptor's
+// stance while retaining per-field presence.
+func feeVoteFromConfig(v config.VotingConfig, feeDefault *int) FeeVoteStance {
+	stance := FeeVoteStance{
+		BaseFee:             uint64(v.ReferenceFee),
+		ReserveBase:         uint32(v.AccountReserve),
+		ReserveIncrement:    uint32(v.OwnerReserve),
+		BaseFeeSet:          v.ReferenceFeeSet,
+		ReserveBaseSet:      v.AccountReserveSet,
+		ReserveIncrementSet: v.OwnerReserveSet,
 	}
+	if feeDefault != nil {
+		stance.BaseFee = uint64(*feeDefault)
+		stance.BaseFeeSet = true
+	}
+	return stance
 }
 
 // ParseValidatorListPublisherKeys decodes the `validator_list_keys`

@@ -3,11 +3,25 @@ package rcl
 import (
 	"fmt"
 	"log/slog"
+	"sync"
 	"time"
 
+	"github.com/LeJamon/go-xrpl/drops"
 	"github.com/LeJamon/go-xrpl/internal/consensus"
 	"github.com/LeJamon/go-xrpl/protocol"
 )
+
+type ledgerAcceptWork struct {
+	result           consensus.Result
+	prevLedger       consensus.Ledger
+	txSet            consensus.TxSet
+	closeTime        time.Time
+	closeTimeCorrect bool
+	resolution       time.Duration
+	disputedNoTxs    [][]byte
+	roundTime        time.Duration
+	roundDuration    time.Duration
+}
 
 // acceptLedger finalizes consensus and accepts the new ledger. Runs in
 // every mode; only validation emission is mode-gated via isCompatible.
@@ -20,13 +34,20 @@ func (e *Engine) acceptLedger(result consensus.Result) {
 	// deterministic parentClose+1s fallback (a local-clock fallback diverges
 	// across nodes — #401).
 	priorClose := e.prevLedger.CloseTime()
-	resolution := e.adaptor.CloseTimeResolution()
+	resolution := e.currentCloseTimeResolution()
 	var rawCloseTime, closeTime time.Time
+	closeTimeCorrect := false
 	var ctBranch string
 	if e.closeTime.haveConsensus {
 		rawCloseTime = e.determineCloseTime()
-		closeTime = effCloseTime(rawCloseTime, resolution, priorClose)
-		ctBranch = "consensus"
+		if rawCloseTime.IsZero() {
+			closeTime = priorClose.Add(time.Second)
+			ctBranch = "consensus-disagree"
+		} else {
+			closeTime = effCloseTime(rawCloseTime, resolution, priorClose)
+			closeTimeCorrect = true
+			ctBranch = "consensus"
+		}
 	} else {
 		closeTime = priorClose.Add(time.Second)
 		rawCloseTime = closeTime
@@ -84,6 +105,10 @@ func (e *Engine) acceptLedger(result consensus.Result) {
 	// clamp track convergence, not the apply.
 	roundTime := e.now().Sub(e.roundStartTime)
 	roundDuration := e.now().Sub(e.state.StartTime)
+	disputedNoTxs := e.disputeTracker.DisputedNoTxs()
+	for i := range disputedNoTxs {
+		disputedNoTxs[i] = append([]byte(nil), disputedNoTxs[i]...)
+	}
 
 	// Apply the LCL off e.mu, mirroring rippled onAccept→addJob(jtACCEPT)
 	// ("no lock is held during this job"). Snapshot every build input and
@@ -91,20 +116,69 @@ func (e *Engine) acceptLedger(result consensus.Result) {
 	// concurrent OnProposal/OnValidation/OnTxSet during the unlocked apply then
 	// buffer for the NEXT round instead of mutating this one, and the consensus
 	// goroutine parks its round-driving until the commit tail runs.
-	prevLedger := e.prevLedger
-	closeTimeCorrect := e.closeTime.haveConsensus
-	disputedNoTxs := e.disputeTracker.DisputedNoTxs()
+	work := ledgerAcceptWork{
+		result:           result,
+		prevLedger:       e.prevLedger,
+		txSet:            txSet,
+		closeTime:        closeTime,
+		closeTimeCorrect: closeTimeCorrect,
+		resolution:       resolution,
+		disputedNoTxs:    disputedNoTxs,
+		roundTime:        roundTime,
+		roundDuration:    roundDuration,
+	}
 	e.buildInProgress = true
 	e.setPhase(consensus.PhaseAccepted)
-
-	e.mu.Unlock()
-	newLedger, err := e.adaptor.BuildLedger(prevLedger, txSet, closeTime, closeTimeCorrect, disputedNoTxs)
-	if err == nil {
-		if err = e.adaptor.ValidateLedger(newLedger); err == nil {
-			err = e.adaptor.StoreLedger(newLedger)
+	if e.acceptDeferrer != nil {
+		complete := sync.OnceFunc(func() {
+			e.completeDeferredLedgerAccept(work)
+		})
+		if e.acceptDeferrer.DeferLedgerAccept(complete) {
+			return
 		}
 	}
+
+	e.mu.Unlock()
+	newLedger, err := e.buildAcceptedLedger(work)
 	e.mu.Lock()
+	e.commitAcceptedLedgerLocked(work, newLedger, err)
+}
+
+func (e *Engine) completeDeferredLedgerAccept(work ledgerAcceptWork) {
+	newLedger, err := e.buildAcceptedLedger(work)
+
+	e.mu.Lock()
+	e.deferBroadcasts++
+	e.commitAcceptedLedgerLocked(work, newLedger, err)
+	e.deferBroadcasts--
+	pending := e.takePendingBroadcastsLocked()
+	e.mu.Unlock()
+	flushBroadcasts(pending)
+}
+
+func (e *Engine) buildAcceptedLedger(work ledgerAcceptWork) (consensus.Ledger, error) {
+	newLedger, err := e.adaptor.BuildLedger(
+		work.prevLedger,
+		work.txSet,
+		work.closeTime,
+		work.closeTimeCorrect,
+		work.disputedNoTxs,
+	)
+	if err != nil {
+		return nil, err
+	}
+	if err := e.adaptor.ValidateLedger(newLedger); err != nil {
+		return nil, err
+	}
+	if err := e.adaptor.StoreLedger(newLedger); err != nil {
+		return nil, err
+	}
+	return newLedger, nil
+}
+
+// commitAcceptedLedgerLocked completes acceptance after the off-lock ledger
+// application. Caller must hold e.mu.
+func (e *Engine) commitAcceptedLedgerLocked(work ledgerAcceptWork, newLedger consensus.Ledger, err error) {
 	e.buildInProgress = false
 
 	if err != nil {
@@ -114,6 +188,14 @@ func (e *Engine) acceptLedger(result consensus.Result) {
 		e.processPendingRecoveryLedgerLocked()
 		return
 	}
+	result := work.result
+	prevLedger := work.prevLedger
+	txSet := work.txSet
+	closeTime := work.closeTime
+	closeTimeCorrect := work.closeTimeCorrect
+	resolution := work.resolution
+	roundTime := work.roundTime
+	roundDuration := work.roundDuration
 	parentID := prevLedger.ID()
 	parentClose := prevLedger.CloseTime()
 	newID := newLedger.ID()
@@ -174,21 +256,16 @@ func (e *Engine) acceptLedger(result consensus.Result) {
 	})
 
 	trustedProposers := e.proposalTracker.CountTrusted(e.adaptor.IsTrusted)
-	preferredLCL := e.isCurrentPreferredLCLLocked(newLedger)
 	isolated := trustedProposers == 0 && !e.adaptor.IsStandalone()
-	if isolated || !preferredLCL {
+	if isolated {
 		if e.adaptor.GetOperatingMode() == consensus.OpModeFull {
 			e.adaptor.SetOperatingMode(consensus.OpModeConnected)
-		}
-		if e.mode == consensus.ModeProposing {
-			e.setMode(consensus.ModeObserving)
 		}
 		slog.Info("leaving Full consensus participation",
 			"t", "consensus",
 			"event", "consensus-recovery",
 			"seq", newLedger.Seq(),
 			"trusted_proposers", trustedProposers,
-			"preferred_lcl", preferredLCL,
 		)
 	}
 
@@ -298,6 +375,7 @@ func (e *Engine) acceptLedger(result consensus.Result) {
 
 	// Update state for next round
 	e.prevLedger = newLedger
+	e.acceptedLCL = consensus.LedgerID{}
 	e.proposalTracker.ResetValidations()
 	e.consensusCount++
 	if e.processPendingRecoveryLedgerLocked() {
@@ -329,6 +407,7 @@ func (e *Engine) acceptLedger(result consensus.Result) {
 					)
 					nextPrev = cached
 					e.prevLedger = cached
+					e.acceptedLCL = newLedger.ID()
 				} else {
 					localBytes := localID
 					slog.Info("preferred LCL differs; routing through handleWrongLedger (acquire)",
@@ -357,7 +436,7 @@ func (e *Engine) acceptLedger(result consensus.Result) {
 // updateCloseTimePosition tallies close-time votes, applies avalanche
 // thresholds, and bumps our proposal's close time to consensus.
 func (e *Engine) updateCloseTimePosition() {
-	resolution := e.adaptor.CloseTimeResolution()
+	resolution := e.currentCloseTimeResolution()
 
 	// Tally close-time votes from trusted proposals, rounded via roundCloseTime.
 	closeTimeVotes := make(map[time.Time]int)
@@ -419,7 +498,7 @@ func (e *Engine) updateCloseTimePosition() {
 	)
 
 	// Update our proposal if close time changed
-	if e.mode == consensus.ModeProposing && e.state.OurPosition != nil && !consensusCloseTime.IsZero() {
+	if e.mode == consensus.ModeProposing && e.state.OurPosition != nil {
 		ourRounded := roundCloseTime(e.state.OurPosition.CloseTime, resolution)
 		if consensusCloseTime != ourRounded {
 			oldCT := e.state.OurPosition.CloseTime.Unix() - protocol.RippleEpochUnix
@@ -454,11 +533,11 @@ func (e *Engine) convergePercent() int {
 // resolution (observers).
 func (e *Engine) determineCloseTime() time.Time {
 	// Our position is already rounded by updateCloseTimePosition.
-	if e.state.OurPosition != nil && !e.state.OurPosition.CloseTime.IsZero() {
+	if e.state.OurPosition != nil {
 		return e.state.OurPosition.CloseTime
 	}
 
-	resolution := e.adaptor.CloseTimeResolution()
+	resolution := e.currentCloseTimeResolution()
 
 	// Observers: CloseTimes.Peers holds raw times; round before voting to
 	// match rippled's asCloseTime.
@@ -526,9 +605,7 @@ func (e *Engine) sendValidation(ledger consensus.Ledger) {
 		return
 	}
 
-	full := e.mode == consensus.ModeProposing &&
-		e.adaptor.GetOperatingMode() == consensus.OpModeFull &&
-		e.isCurrentPreferredLCLLocked(ledger)
+	full := e.mode == consensus.ModeProposing
 
 	// SignTime under a monotonic floor: a regressing adaptor clock would emit
 	// a stale SignTime peers reject, so bump to lastSignTime+1s. SeenTime
@@ -572,17 +649,27 @@ func (e *Engine) sendValidation(ledger consensus.Ledger) {
 	// Fee + amendment votes only on voting (flag) ledgers; emitting every
 	// ledger inflates bandwidth ~256× and confuses peer aggregators.
 	if protocol.IsVotingLedger(ledger.Seq()) {
-		// Fee vote: AMOUNT triple under post-XRPFees rules, legacy UINT triple
-		// otherwise (never both). Zero = no vote, serializer omits.
-		if fv := e.adaptor.GetFeeVote(); fv.BaseFee != 0 || fv.ReserveBase != 0 || fv.ReserveIncrement != 0 {
+		if fv := e.adaptor.GetFeeVote(ledger); fv.HasBaseFee() || fv.HasReserveBase() || fv.HasReserveIncrement() {
 			if fv.PostXRPFees {
-				validation.BaseFeeDrops = fv.BaseFee
-				validation.ReserveBaseDrops = fv.ReserveBase
-				validation.ReserveIncrementDrops = fv.ReserveIncrement
+				if fv.HasBaseFee() {
+					validation.SetBaseFeeDrops(drops.XRPAmount(fv.BaseFee))
+				}
+				if fv.HasReserveBase() {
+					validation.SetReserveBaseDrops(drops.XRPAmount(fv.ReserveBase))
+				}
+				if fv.HasReserveIncrement() {
+					validation.SetReserveIncrementDrops(drops.XRPAmount(fv.ReserveIncrement))
+				}
 			} else {
-				validation.BaseFee = fv.BaseFee
-				validation.ReserveBase = uint32(fv.ReserveBase)
-				validation.ReserveIncrement = uint32(fv.ReserveIncrement)
+				if fv.HasBaseFee() {
+					validation.SetBaseFee(fv.BaseFee)
+				}
+				if fv.HasReserveBase() {
+					validation.SetReserveBase(uint32(fv.ReserveBase))
+				}
+				if fv.HasReserveIncrement() {
+					validation.SetReserveIncrement(uint32(fv.ReserveIncrement))
+				}
 			}
 		}
 

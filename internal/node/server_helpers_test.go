@@ -10,6 +10,7 @@ import (
 
 	"github.com/LeJamon/go-xrpl/codec/binarycodec"
 	"github.com/LeJamon/go-xrpl/config"
+	"github.com/LeJamon/go-xrpl/drops"
 	"github.com/LeJamon/go-xrpl/internal/consensus"
 	"github.com/LeJamon/go-xrpl/internal/ledger/cleaner"
 	"github.com/LeJamon/go-xrpl/internal/ledger/service"
@@ -426,6 +427,95 @@ func TestBuildValidationEvent_LoadFeePresence(t *testing.T) {
 			}
 			if got := string(loadFee); got != test.wantJSON {
 				t.Fatalf("load_fee JSON = %s; want %s", got, test.wantJSON)
+			}
+		})
+	}
+}
+
+func TestBuildValidationEvent_FeeVotePresenceAndSign(t *testing.T) {
+	legacyZero := &consensus.Validation{}
+	legacyZero.SetBaseFee(0)
+	legacyZero.SetReserveBase(0)
+	legacyZero.SetReserveIncrement(0)
+
+	modern := &consensus.Validation{}
+	modern.SetBaseFeeDrops(drops.XRPAmount(-15))
+	modern.SetReserveBaseDrops(0)
+	modern.SetReserveIncrementDrops(20)
+
+	nonNative := &consensus.Validation{}
+	nonNative.SetBaseFeeDropsNonNative()
+
+	legacyWithNonNative := &consensus.Validation{}
+	legacyWithNonNative.SetBaseFee(10)
+	legacyWithNonNative.SetBaseFeeDropsNonNative()
+
+	both := &consensus.Validation{}
+	both.SetBaseFee(10)
+	both.SetReserveBase(11)
+	both.SetReserveIncrement(12)
+	both.SetBaseFeeDrops(-15)
+	both.SetReserveBaseDrops(0)
+	both.SetReserveIncrementDrops(20)
+
+	clipped := &consensus.Validation{}
+	clipped.SetBaseFeeDrops(-drops.MaxDrops)
+	clipped.SetReserveBaseDrops(drops.MaxDrops)
+
+	tests := []struct {
+		name       string
+		validation *consensus.Validation
+		want       map[string]string
+	}{
+		{name: "absent", validation: &consensus.Validation{}, want: map[string]string{}},
+		{
+			name:       "legacy explicit zero",
+			validation: legacyZero,
+			want:       map[string]string{"base_fee": "0", "reserve_base": "0", "reserve_inc": "0"},
+		},
+		{
+			name:       "modern signed and zero",
+			validation: modern,
+			want:       map[string]string{"base_fee": "-15", "reserve_base": "0", "reserve_inc": "20"},
+		},
+		{
+			name:       "modern fields override legacy",
+			validation: both,
+			want:       map[string]string{"base_fee": "-15", "reserve_base": "0", "reserve_inc": "20"},
+		},
+		{
+			name:       "modern values are clipped to JSON integers",
+			validation: clipped,
+			want:       map[string]string{"base_fee": "-2147483648", "reserve_base": "2147483647"},
+		},
+		{name: "non native omitted", validation: nonNative, want: map[string]string{}},
+		{
+			name:       "non native modern field does not replace legacy",
+			validation: legacyWithNonNative,
+			want:       map[string]string{"base_fee": "10"},
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			event := buildValidationEvent(&consensus.ValidationReceivedEvent{Validation: test.validation}, nil, 0)
+			encoded, err := json.Marshal(event)
+			if err != nil {
+				t.Fatalf("marshal validation event: %v", err)
+			}
+			var fields map[string]json.RawMessage
+			if err := json.Unmarshal(encoded, &fields); err != nil {
+				t.Fatalf("decode validation event: %v", err)
+			}
+			for _, field := range []string{"base_fee", "reserve_base", "reserve_inc"} {
+				got, present := fields[field]
+				want, expected := test.want[field]
+				if present != expected {
+					t.Fatalf("%s presence = %t, want %t: %s", field, present, expected, encoded)
+				}
+				if expected && string(got) != want {
+					t.Fatalf("%s = %s, want %s", field, got, want)
+				}
 			}
 		})
 	}

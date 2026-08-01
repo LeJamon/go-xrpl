@@ -60,7 +60,7 @@ func (m *SubmitMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (an
 	} else if hasSigningCreds {
 		// Sign-and-submit path: sign the transaction first, then submit the blob.
 		// This matches rippled's behavior in doSubmit() when tx_blob is absent.
-		signed, rpcErr := signTransactionJSON(ctx.Context, ctx.Services, request.TxJson, request.signCredentials, request.Offline, ctx.Unlimited, ctx.ApiVersion, params, request.SignatureTarget)
+		signed, rpcErr := signTransactionJSON(ctx, request.TxJson, request.signCredentials, request.Offline, params, request.SignatureTarget)
 		if rpcErr != nil {
 			return nil, rpcErr
 		}

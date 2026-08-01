@@ -2,7 +2,6 @@ package handlers
 
 import (
 	"bytes"
-	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -221,9 +220,11 @@ func submitWithFailHard(ledger types.LedgerService, txJSON []byte, txBlob string
 //
 // rawParams carries the caller's request so fee_mult_max / fee_div_max are
 // read only when Fee is actually autofilled — rippled's checkFee returns
-// before inspecting them when Fee is present or offline. unlimited mirrors
-// rippled's isUnlimited(role) load-scaling carve-out.
-func signTransactionJSON(ctx context.Context, services *types.ServiceContainer, txJSON json.RawMessage, creds signCredentials, offline bool, unlimited bool, apiVersion int, rawParams json.RawMessage, signatureTarget string) (*signResult, *types.RpcError) {
+// before inspecting them when Fee is present or offline.
+func signTransactionJSON(rpcCtx *types.RpcContext, txJSON json.RawMessage, creds signCredentials, offline bool, rawParams json.RawMessage, signatureTarget string) (*signResult, *types.RpcError) {
+	ctx := rpcCtx.Context
+	services := rpcCtx.Services
+	apiVersion := rpcCtx.ApiVersion
 	// Check if ledger service is available (needed for auto-filling fields)
 	if !offline && (services == nil || services.Ledger == nil) {
 		return nil, rpcInternalInvariantError("sign: ledger service unavailable")
@@ -246,6 +247,9 @@ func signTransactionJSON(ctx context.Context, services *types.ServiceContainer, 
 	if err := json.Unmarshal(txJSON, &txMap); err != nil {
 		return nil, types.RpcErrorInvalidParams(fmt.Sprintf("Invalid tx_json: %v", err))
 	}
+	if txMap == nil {
+		return nil, types.RpcErrorExpectedField("tx_json", "object")
+	}
 	// signature_target directs the signature into a nested inner object instead
 	// of the top level. Only CounterpartySignature is a valid target; any other
 	// field name is rejected with the field name as the message, matching
@@ -262,28 +266,28 @@ func signTransactionJSON(ctx context.Context, services *types.ServiceContainer, 
 	// belongs to the counterparty, so account and secret need not correspond:
 	// the caller's Account (the primary signer) is the source and its ownership
 	// is not checked.
-	srcAddress := address
-	if !signatureTargetPresent {
-		if txAccount, ok := txMap["Account"].(string); ok {
-			if !types.IsValidClassicAddress(txAccount) {
-				return nil, types.RpcErrorSrcActMalformed("Invalid field 'tx_json.Account'.")
-			}
-			if txAccount != address {
-				return nil, types.RpcErrorInvalidParams("Account in tx_json does not match signing key")
-			}
-		} else {
-			txMap["Account"] = address
-		}
-	} else {
-		txAccount, ok := txMap["Account"].(string)
-		if !ok || txAccount == "" {
-			return nil, types.RpcErrorMissingField("tx_json.Account")
-		}
-		if !types.IsValidClassicAddress(txAccount) {
-			return nil, types.RpcErrorSrcActMalformed("Invalid field 'tx_json.Account'.")
-		}
-		srcAddress = txAccount
+	if _, ok := txMap["TransactionType"]; !ok {
+		return nil, types.RpcErrorMissingField("tx_json.TransactionType")
 	}
+
+	txAccountValue, accountPresent := txMap["Account"]
+	if !accountPresent {
+		return nil, types.RpcErrorSrcActMissing("Missing field 'tx_json.Account'.")
+	}
+	txAccount, ok := txAccountValue.(string)
+	if !ok || !types.IsValidClassicAddress(txAccount) {
+		return nil, types.RpcErrorSrcActMalformed("Invalid field 'tx_json.Account'.")
+	}
+	if rpcErr := rejectOnlineSigningWithoutCurrentLedger(services, offline, apiVersion); rpcErr != nil {
+		return nil, rpcErr
+	}
+	if rpcErr := rejectSigningWhenLoaded(services, rpcCtx.Unlimited); rpcErr != nil {
+		return nil, rpcErr
+	}
+	if !signatureTargetPresent && txAccount != address {
+		return nil, types.RpcErrorInvalidParams("Account in tx_json does not match signing key")
+	}
+	srcAddress := txAccount
 
 	// Fill in missing fields if not offline. Order matches rippled's
 	// transactionPreProcessImpl (TransactionSign.cpp:454-505): source
@@ -342,7 +346,7 @@ func signTransactionJSON(ctx context.Context, services *types.ServiceContainer, 
 			if mErr != nil {
 				return nil, rpcInternalError("sign: fee probe marshaling failed", mErr)
 			}
-			fee, feeErr := services.Ledger.GetAutofillFee(probe, unlimited, feeOpts.Mult, feeOpts.Div)
+			fee, feeErr := services.Ledger.GetAutofillFee(probe, rpcCtx.Unlimited, feeOpts.Mult, feeOpts.Div)
 			if feeErr != nil {
 				var hfe *svcerr.HighFeeError
 				if errors.As(feeErr, &hfe) {
@@ -411,6 +415,24 @@ func signTransactionJSON(ctx context.Context, services *types.ServiceContainer, 
 		TxMap:  txMap,
 		TxBlob: txBlob,
 	}, nil
+}
+
+func rejectSigningWhenLoaded(services *types.ServiceContainer, unlimited bool) *types.RpcError {
+	if unlimited || services == nil || services.IsLoadedCluster == nil || !services.IsLoadedCluster() {
+		return nil
+	}
+	return types.RpcErrorTooBusy()
+}
+
+func rejectOnlineSigningWithoutCurrentLedger(services *types.ServiceContainer, offline bool, apiVersion int) *types.RpcError {
+	if offline || services == nil || services.Ledger == nil {
+		return nil
+	}
+	info := services.Ledger.GetServerInfo()
+	if info.Standalone || !types.ValidatedLedgerStale(info) {
+		return nil
+	}
+	return types.CurrentLedgerUnavailable(apiVersion)
 }
 
 func signatureTargetObject(txMap map[string]any, target string) (map[string]any, *types.RpcError) {

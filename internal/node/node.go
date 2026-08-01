@@ -445,6 +445,10 @@ func Run(ctx context.Context, appConfig *config.Config, configPath string, stand
 			Cluster: ft.ClusterFee(),
 		}
 	}
+	services.IsLoadedCluster = func() bool {
+		ft := ledgerSvcRef.FeeTrack()
+		return ft != nil && ft.IsLoadedCluster()
+	}
 
 	// Background ledger-integrity verification requires the same durable SHAMap
 	// family used by the ledger service. A private in-memory fallback cannot

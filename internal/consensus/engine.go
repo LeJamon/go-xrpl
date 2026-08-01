@@ -39,9 +39,8 @@ type EngineLedgerSwitch interface {
 	// recovery target, the validated tip, or the current network preference.
 	TrySwitchToLedger(id LedgerID) (LedgerSwitchResult, error)
 
-	// OnLedgerAcquireFailed reports a clean inbound-acquire failure after the
-	// retry budget. Lets a node pinned in wrongLedger un-pin and drop to
-	// degraded resync rather than starving the stall watchdog into os.Exit.
+	// OnLedgerAcquireFailed reports that an in-flight acquisition was invalidated
+	// by a topology change, allowing wrong-ledger recovery to re-resolve its target.
 	OnLedgerAcquireFailed(id LedgerID)
 }
 
@@ -208,6 +207,16 @@ type TrustChangeNotifier interface {
 	OnTrustChanged(fn func(trusted []NodeID, quorum int))
 }
 
+// LedgerAcceptDeferrer is an optional Adaptor extension for environments that
+// must schedule ledger application on their own serialized driver. Returning
+// true transfers completion to the adaptor, which must invoke complete exactly
+// once and never inline, including when the scheduled work is canceled or the
+// environment shuts down. Returning false leaves acceptance synchronous and
+// must not retain complete.
+type LedgerAcceptDeferrer interface {
+	DeferLedgerAccept(complete func()) bool
+}
+
 // Adaptor is composed of the narrower per-subsystem interfaces below; depend
 // on the narrowest one that satisfies your needs.
 
@@ -241,6 +250,8 @@ type NetworkBroadcaster interface {
 
 	RequestTxSet(id TxSetID) error
 
+	// RequestLedger may be called repeatedly while a ledger remains unavailable;
+	// implementations must suppress duplicate work within their retry window.
 	RequestLedger(id LedgerID) error
 }
 
@@ -328,14 +339,31 @@ type ValidatorIdentity interface {
 	VerifyValidation(validation *Validation) error
 }
 
-// FeeVoteResult is a validator's fee-vote stance emitted on every validation.
-// PostXRPFees selects the AMOUNT triple over the legacy UINT triple; zero
-// values mean "no vote" and are omitted.
+// FeeVoteResult is a validator's fee-vote stance emitted on flag-ledger
+// validations. The Set fields distinguish explicit zero from omission.
 type FeeVoteResult struct {
-	BaseFee          uint64
-	ReserveBase      uint64
-	ReserveIncrement uint64
-	PostXRPFees      bool
+	BaseFee             uint64
+	ReserveBase         uint64
+	ReserveIncrement    uint64
+	BaseFeeSet          bool
+	ReserveBaseSet      bool
+	ReserveIncrementSet bool
+	PostXRPFees         bool
+}
+
+// HasBaseFee reports whether the base-fee vote is present.
+func (f FeeVoteResult) HasBaseFee() bool {
+	return f.BaseFeeSet || f.BaseFee != 0
+}
+
+// HasReserveBase reports whether the reserve-base vote is present.
+func (f FeeVoteResult) HasReserveBase() bool {
+	return f.ReserveBaseSet || f.ReserveBase != 0
+}
+
+// HasReserveIncrement reports whether the reserve-increment vote is present.
+func (f FeeVoteResult) HasReserveIncrement() bool {
+	return f.ReserveIncrementSet || f.ReserveIncrement != 0
 }
 
 // TrustOracle exposes the UNL / negative-UNL / quorum state and the
@@ -393,7 +421,7 @@ type TrustOracle interface {
 	// GetLoadFee returns the advertised sfLoadFee; zero omits the field.
 	GetLoadFee() uint32
 
-	GetFeeVote() FeeVoteResult
+	GetFeeVote(Ledger) FeeVoteResult
 
 	// GetAmendmentVote returns the amendment IDs to vote for on the next flag ledger.
 	GetAmendmentVote() [][32]byte

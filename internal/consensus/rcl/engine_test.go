@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"log/slog"
 	"slices"
 	"strings"
@@ -12,6 +13,8 @@ import (
 	"time"
 
 	"github.com/LeJamon/go-xrpl/internal/consensus"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 type testEventSubscriberFunc func(consensus.Event)
@@ -152,10 +155,13 @@ type mockAdaptor struct {
 	// FeeVote stance for the R4.3 test. voteBaseFee/voteReserveBase/
 	// voteReserveIncrement are the triple values; votePostXRPFees
 	// controls which triple the engine emits (AMOUNT vs legacy UINT).
-	voteBaseFee          uint64
-	voteReserveBase      uint64
-	voteReserveIncrement uint64
-	votePostXRPFees      bool
+	voteBaseFee             uint64
+	voteReserveBase         uint64
+	voteReserveIncrement    uint64
+	voteBaseFeeSet          bool
+	voteReserveBaseSet      bool
+	voteReserveIncrementSet bool
+	votePostXRPFees         bool
 
 	// Override for GetValidatedLedgerHash. Zero by default; the
 	// R4.10 test sets this to a non-zero LedgerID to exercise the
@@ -599,14 +605,17 @@ func (a *mockAdaptor) GetLoadFee() uint32 {
 	return a.loadFee
 }
 
-func (a *mockAdaptor) GetFeeVote() consensus.FeeVoteResult {
+func (a *mockAdaptor) GetFeeVote(consensus.Ledger) consensus.FeeVoteResult {
 	a.mu.RLock()
 	defer a.mu.RUnlock()
 	return consensus.FeeVoteResult{
-		BaseFee:          a.voteBaseFee,
-		ReserveBase:      a.voteReserveBase,
-		ReserveIncrement: a.voteReserveIncrement,
-		PostXRPFees:      a.votePostXRPFees,
+		BaseFee:             a.voteBaseFee,
+		ReserveBase:         a.voteReserveBase,
+		ReserveIncrement:    a.voteReserveIncrement,
+		BaseFeeSet:          a.voteBaseFeeSet,
+		ReserveBaseSet:      a.voteReserveBaseSet,
+		ReserveIncrementSet: a.voteReserveIncrementSet,
+		PostXRPFees:         a.votePostXRPFees,
 	}
 }
 
@@ -1898,9 +1907,7 @@ func TestEngine_CheckLedger_CompletesHeldWrongLedgerSwitch(t *testing.T) {
 	targetID := consensus.LedgerID{0xAA}
 
 	// run wedges an engine in ModeWrongLedger targeting targetID: two
-	// trusted peers proposing targetID make getNetworkLedger() return it,
-	// and two trusted validations clear the support gate (targetID has
-	// strictly more support than our stale fork). available controls
+	// trusted validations make getNetworkLedger() prefer it. available controls
 	// whether the target ledger is held locally. The mutation, the
 	// checkLedger() call, and the result capture all happen under a single
 	// e.mu hold so a background round tick cannot race the assertion.
@@ -1945,17 +1952,17 @@ func TestEngine_CheckLedger_CompletesHeldWrongLedgerSwitch(t *testing.T) {
 		engine.prevLedger = staleLedger
 		engine.wrongLedgerID = targetID
 		engine.setMode(consensus.ModeWrongLedger)
-		if engine.state != nil {
-			engine.state.OurPosition = nil // no self-vote — let the peer majority decide
-		}
-		engine.proposalTracker.recentProposals = map[consensus.NodeID][]*consensus.Proposal{
-			peerA: {{NodeID: peerA, PreviousLedger: targetID, Timestamp: now}},
-			peerB: {{NodeID: peerB, PreviousLedger: targetID, Timestamp: now}},
-		}
 		if engine.validationTracker != nil {
 			engine.validationTracker.SetTrusted([]consensus.NodeID{adaptor.nodeID, peerA, peerB})
-			engine.validationTracker.Add(&consensus.Validation{NodeID: peerA, LedgerID: targetID, LedgerSeq: 101, Full: true, SignTime: now, SeenTime: now})
-			engine.validationTracker.Add(&consensus.Validation{NodeID: peerB, LedgerID: targetID, LedgerSeq: 101, Full: true, SignTime: now, SeenTime: now})
+			for _, nodeID := range []consensus.NodeID{peerA, peerB} {
+				if !engine.validationTracker.Add(&consensus.Validation{
+					NodeID: nodeID, LedgerID: targetID, LedgerSeq: 101,
+					Full: true, SignTime: now, SeenTime: now,
+				}) {
+					engine.mu.Unlock()
+					t.Fatalf("trusted validation from %x was rejected", nodeID[:4])
+				}
+			}
 		}
 		engine.checkLedger()
 		gotMode := engine.mode
@@ -1981,7 +1988,7 @@ func TestEngine_CheckLedger_CompletesHeldWrongLedgerSwitch(t *testing.T) {
 		}
 	})
 
-	t.Run("unavailable_stays_without_respam", func(t *testing.T) {
+	t.Run("unavailable_retries_through_adaptor_window", func(t *testing.T) {
 		gotMode, gotWrongID, reqs := run(t, false)
 		if gotMode != consensus.ModeWrongLedger {
 			t.Fatalf("unavailable target: checkLedger must stay in WrongLedger, got %v", gotMode)
@@ -1989,9 +1996,9 @@ func TestEngine_CheckLedger_CompletesHeldWrongLedgerSwitch(t *testing.T) {
 		if gotWrongID != targetID {
 			t.Fatalf("unavailable target: wrongLedgerID must remain the target, got %x want %x", gotWrongID[:8], targetID[:8])
 		}
-		if reqs != 0 {
-			t.Fatalf("unavailable target: checkLedger must not re-request the acquire "+
-				"while already targeting it (no-spam guard), got %d requests", reqs)
+		if reqs != 1 {
+			t.Fatalf("unavailable target: checkLedger must retry through the adaptor's "+
+				"duplicate-suppression window, got %d requests", reqs)
 		}
 	})
 }
@@ -2216,7 +2223,7 @@ func TestSendValidation_PopulatesCookieServerVersionFeeVote(t *testing.T) {
 	// AMOUNT triple populated, legacy UINT triple NOT populated.
 	if v.BaseFeeDrops != 10 || v.ReserveBaseDrops != 1_000_000 || v.ReserveIncrementDrops != 200_000 {
 		t.Errorf("AMOUNT fee-vote triple not populated correctly: got %+v",
-			[3]uint64{v.BaseFeeDrops, v.ReserveBaseDrops, v.ReserveIncrementDrops})
+			[3]int64{v.BaseFeeDrops.Drops(), v.ReserveBaseDrops.Drops(), v.ReserveIncrementDrops.Drops()})
 	}
 	if v.BaseFee != 0 || v.ReserveBase != 0 || v.ReserveIncrement != 0 {
 		t.Errorf("legacy UINT triple must stay zero under postXRPFees=true: got (%d, %d, %d)",
@@ -2314,7 +2321,51 @@ func TestSendValidation_LegacyFeeTriple(t *testing.T) {
 	}
 	if v.BaseFeeDrops != 0 || v.ReserveBaseDrops != 0 || v.ReserveIncrementDrops != 0 {
 		t.Errorf("AMOUNT triple must stay zero under postXRPFees=false: got %+v",
-			[3]uint64{v.BaseFeeDrops, v.ReserveBaseDrops, v.ReserveIncrementDrops})
+			[3]int64{v.BaseFeeDrops.Drops(), v.ReserveBaseDrops.Drops(), v.ReserveIncrementDrops.Drops()})
+	}
+}
+
+func TestSendValidation_ExplicitZeroFeeVotes(t *testing.T) {
+	for _, postXRPFees := range []bool{false, true} {
+		t.Run(fmt.Sprintf("post_xrp_fees_%t", postXRPFees), func(t *testing.T) {
+			adaptor := newMockAdaptor()
+			adaptor.validator = true
+			adaptor.opMode = consensus.OpModeFull
+			adaptor.voteBaseFeeSet = true
+			adaptor.voteReserveBaseSet = true
+			adaptor.voteReserveIncrementSet = true
+			adaptor.votePostXRPFees = postXRPFees
+
+			engine := NewEngine(adaptor, DefaultConfig())
+			require.NoError(t, engine.Start(t.Context()))
+			defer engine.Stop()
+			engine.StartRound(consensus.RoundID{Seq: 100, ParentHash: consensus.LedgerID{1}}, true)
+
+			engine.mu.Lock()
+			engine.sendValidation(&mockLedger{id: consensus.LedgerID{0x89}, seq: 255})
+			engine.mu.Unlock()
+
+			adaptor.mu.RLock()
+			require.Len(t, adaptor.validationsBroadcast, 1)
+			validation := adaptor.validationsBroadcast[0]
+			adaptor.mu.RUnlock()
+
+			if postXRPFees {
+				assert.True(t, validation.HasBaseFeeDrops())
+				assert.True(t, validation.HasReserveBaseDrops())
+				assert.True(t, validation.HasReserveIncrementDrops())
+				assert.False(t, validation.HasBaseFee())
+				assert.False(t, validation.HasReserveBase())
+				assert.False(t, validation.HasReserveIncrement())
+				return
+			}
+			assert.True(t, validation.HasBaseFee())
+			assert.True(t, validation.HasReserveBase())
+			assert.True(t, validation.HasReserveIncrement())
+			assert.False(t, validation.HasBaseFeeDrops())
+			assert.False(t, validation.HasReserveBaseDrops())
+			assert.False(t, validation.HasReserveIncrementDrops())
+		})
 	}
 }
 
@@ -2365,7 +2416,7 @@ func TestSendValidation_FeeVoteOnlyOnFlagLedger(t *testing.T) {
 
 	if nonFlag.BaseFeeDrops != 0 || nonFlag.ReserveBaseDrops != 0 || nonFlag.ReserveIncrementDrops != 0 {
 		t.Errorf("non-flag ledger must omit AMOUNT fee-vote triple: got %+v",
-			[3]uint64{nonFlag.BaseFeeDrops, nonFlag.ReserveBaseDrops, nonFlag.ReserveIncrementDrops})
+			[3]int64{nonFlag.BaseFeeDrops.Drops(), nonFlag.ReserveBaseDrops.Drops(), nonFlag.ReserveIncrementDrops.Drops()})
 	}
 	if len(nonFlag.Amendments) != 0 {
 		t.Errorf("non-flag ledger must omit Amendments: got %d IDs", len(nonFlag.Amendments))

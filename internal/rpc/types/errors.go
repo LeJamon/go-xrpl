@@ -1,5 +1,7 @@
 package types
 
+import "fmt"
+
 // XRPL RPC error codes.
 //
 // rippled serializes the numeric error_code field over the wire and documents
@@ -350,6 +352,17 @@ func RpcErrorInternal() *RpcError {
 
 func RpcErrorTransactionSubmission() *RpcError {
 	return NewRpcError(RpcINTERNAL, "internal", "internal", "Exception occurred during transaction submission.")
+}
+
+// RpcErrorInvalidTransactionType returns rippled's internal serialization
+// error for an unknown numeric transaction type.
+func RpcErrorInvalidTransactionType(transactionType uint16) *RpcError {
+	return NewRpcError(
+		RpcINTERNAL,
+		"internal",
+		"internal",
+		fmt.Sprintf("Exception while serializing transaction: Invalid transaction type %d", transactionType),
+	)
 }
 
 func RpcErrorDBDeserialization() *RpcError {

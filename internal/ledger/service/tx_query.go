@@ -113,7 +113,7 @@ func (s *Service) SubmitTransaction(transaction tx.Transaction, rawBlob []byte, 
 	// in the consensus-critical engine preflight. A relayed or consensus-applied
 	// transaction carrying an oversized/invalid memo still applies, so this
 	// refusal cannot fork the ledger.
-	if localResult := tx.PassesLocalChecks(ptx.Parsed.GetCommon()); localResult != ter.TesSUCCESS {
+	if localResult := tx.PassesTransactionLocalChecks(ptx.Parsed); localResult != ter.TesSUCCESS {
 		return &SubmitResult{
 			Result:        localResult,
 			Message:       localResult.Message(),

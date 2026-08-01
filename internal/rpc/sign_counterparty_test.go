@@ -173,6 +173,7 @@ func TestSignFor_SignatureTarget(t *testing.T) {
 	primary := signOffline(t, json.RawMessage(`{
 		"tx_json": {
 			"TransactionType": "LoanSet",
+			"Account": "rHSXa2gvfegaC7767QZGFZjebqkWKMCkTf",
 			"LoanBrokerID": "0000000000000000000000000000000000000000000000000000000000000000",
 			"PrincipalRequested": "1",
 			"Fee": "10",

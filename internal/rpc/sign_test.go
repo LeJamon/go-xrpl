@@ -1456,7 +1456,7 @@ func TestSubmitMultisigned_InvalidSignerFormat(t *testing.T) {
 	}`)
 	_, err := handler.Handle(ctx, params)
 	require.NotNil(t, err)
-	assert.Contains(t, err.Message, "Signer entr")
+	assert.Equal(t, "Field 'tx_json.Signers.InvalidField' is unknown.", err.Message)
 }
 
 func TestSubmitMultisigned_MissingSignerAccount(t *testing.T) {
@@ -1491,7 +1491,7 @@ func TestSubmitMultisigned_MissingSignerAccount(t *testing.T) {
 	}`)
 	_, err := handler.Handle(ctx, params)
 	require.NotNil(t, err)
-	assert.Equal(t, "Signers array may only contain Signer entries.", err.Message)
+	assert.Equal(t, "Error at 'tx_json.Signers.[0].Signer'. Object 'Signer' contents did not meet requirements for that type.", err.Message)
 }
 
 func TestSubmitMultisigned_MissingSigningPubKey(t *testing.T) {
@@ -1526,7 +1526,7 @@ func TestSubmitMultisigned_MissingSigningPubKey(t *testing.T) {
 	}`)
 	_, err := handler.Handle(ctx, params)
 	require.NotNil(t, err)
-	assert.Equal(t, "Signers array may only contain Signer entries.", err.Message)
+	assert.Equal(t, "Error at 'tx_json.Signers.[0].Signer'. Object 'Signer' contents did not meet requirements for that type.", err.Message)
 }
 
 func TestSubmitMultisigned_MissingTxnSignature(t *testing.T) {
@@ -1561,10 +1561,10 @@ func TestSubmitMultisigned_MissingTxnSignature(t *testing.T) {
 	}`)
 	_, err := handler.Handle(ctx, params)
 	require.NotNil(t, err)
-	assert.Equal(t, "Signers array may only contain Signer entries.", err.Message)
+	assert.Equal(t, "Error at 'tx_json.Signers.[0].Signer'. Object 'Signer' contents did not meet requirements for that type.", err.Message)
 }
 
-func TestSubmitMultisigned_SignersNotSorted(t *testing.T) {
+func TestSubmitMultisigned_SortsSigners(t *testing.T) {
 	mock := newMockLedgerServiceSubmit()
 	services := newSubmitTestServices(mock)
 
@@ -1575,7 +1575,6 @@ func TestSubmitMultisigned_SignersNotSorted(t *testing.T) {
 		Services:   services,
 	}
 
-	// Signers not sorted by account (rP... < rH... is false alphabetically)
 	params := json.RawMessage(`{
 		"tx_json": {
 			"TransactionType": "Payment",
@@ -1603,9 +1602,14 @@ func TestSubmitMultisigned_SignersNotSorted(t *testing.T) {
 			]
 		}
 	}`)
-	_, err := handler.Handle(ctx, params)
-	require.NotNil(t, err)
-	assert.Contains(t, err.Message, "sorted")
+	result, err := handler.Handle(ctx, params)
+	require.Nil(t, err)
+	signers := result.(map[string]any)["tx_json"].(map[string]any)["Signers"].([]any)
+	require.Len(t, signers, 2)
+	first := signers[0].(map[string]any)["Signer"].(map[string]any)["Account"]
+	second := signers[1].(map[string]any)["Signer"].(map[string]any)["Account"]
+	assert.Equal(t, "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh", first)
+	assert.Equal(t, "rPMh7Pi9ct699iZUTWaytJUoHcJ7cgyziK", second)
 }
 
 func TestSubmitMultisigned_LedgerServiceUnavailable(t *testing.T) {

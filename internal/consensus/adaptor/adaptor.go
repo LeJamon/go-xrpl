@@ -114,8 +114,7 @@ type Adaptor struct {
 	// (one-shot per boot), emitted via sfCookie on every validation.
 	cookie uint64
 
-	// feeVote is this validator's fee-vote stance, copied from Config
-	// at construction. Zero values mean "no vote".
+	// feeVote is this validator's fee-vote stance, copied from Config at construction.
 	feeVote FeeVoteStance
 
 	// amendmentStances is this validator's per-amendment voting stance,
@@ -223,25 +222,27 @@ type openLedgerTxLookup interface {
 // would be counted as a rippled instance in peer version statistics.
 const goxrplServerVersionTag uint64 = 0x4000_0000_0000_0000
 
-// FeeVoteStance is this validator's desired fee structure for the next flag
-// ledger, emitted on every validation (legacy UINT triple, or the post-XRPFees
-// AMOUNT triple under featureXRPFees). A zero field means "operator did not
-// set this field"; New() substitutes the default so an unconfigured validator
-// votes toward defaults rather than abstaining.
+// FeeVoteStance is this validator's desired fee structure. The Set fields
+// distinguish an explicit zero from an omitted configuration value.
 type FeeVoteStance struct {
-	BaseFee          uint64
-	ReserveBase      uint32
-	ReserveIncrement uint32
+	BaseFee             uint64
+	ReserveBase         uint32
+	ReserveIncrement    uint32
+	BaseFeeSet          bool
+	ReserveBaseSet      bool
+	ReserveIncrementSet bool
 }
 
 // defaultFeeVote returns the fee setup a validator votes toward with no
-// [voting] config (reference_fee=10, account_reserve=1 XRP, owner_reserve=0.2 XRP).
-// rippled 3.2.0 (#6382) lowered the default voted reserves from 10/2 XRP.
+// [voting] config.
 func defaultFeeVote() FeeVoteStance {
 	return FeeVoteStance{
-		BaseFee:          10,
-		ReserveBase:      1_000_000,
-		ReserveIncrement: 200_000,
+		BaseFee:             10,
+		ReserveBase:         10_000_000,
+		ReserveIncrement:    2_000_000,
+		BaseFeeSet:          true,
+		ReserveBaseSet:      true,
+		ReserveIncrementSet: true,
 	}
 }
 
@@ -287,7 +288,7 @@ type Config struct {
 	// Validators. Optional — required for NegativeUNL voting (which emits raw
 	// master pubkeys); nil skips NegativeUNL votes (bare-NodeID test fixtures).
 	ValidatorMasterKeys [][33]byte
-	// FeeVote is the validator's fee-vote stance; zero means no vote.
+	// FeeVote is the validator's fee-vote stance.
 	FeeVote FeeVoteStance
 	// AmendmentVote lists amendments (by registry name) to vote FOR on the next
 	// flag ledger. Unknown names are dropped at construction; already-enabled
@@ -373,19 +374,20 @@ func New(cfg Config) *Adaptor {
 	trustedVotes := NewTrustedVotes()
 	trustedVotes.TrustChanged(cfg.Validators)
 
-	// Substitute fee defaults per-field: an unset field falls back to the
-	// default rather than "abstain".
 	feeVote := cfg.FeeVote
 	defaults := defaultFeeVote()
-	if feeVote.BaseFee == 0 {
+	if !feeVote.BaseFeeSet && feeVote.BaseFee == 0 {
 		feeVote.BaseFee = defaults.BaseFee
 	}
-	if feeVote.ReserveBase == 0 {
+	if !feeVote.ReserveBaseSet && feeVote.ReserveBase == 0 {
 		feeVote.ReserveBase = defaults.ReserveBase
 	}
-	if feeVote.ReserveIncrement == 0 {
+	if !feeVote.ReserveIncrementSet && feeVote.ReserveIncrement == 0 {
 		feeVote.ReserveIncrement = defaults.ReserveIncrement
 	}
+	feeVote.BaseFeeSet = true
+	feeVote.ReserveBaseSet = true
+	feeVote.ReserveIncrementSet = true
 
 	// Non-validators never emit, so skip the floor read (see maxDisallowedSeq).
 	var maxDisallowedSeq uint32

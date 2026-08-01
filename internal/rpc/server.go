@@ -24,7 +24,6 @@ import (
 	"github.com/LeJamon/go-xrpl/internal/rpc/loadtrack"
 	"github.com/LeJamon/go-xrpl/internal/rpc/types"
 	xrpllog "github.com/LeJamon/go-xrpl/log"
-	"github.com/LeJamon/go-xrpl/protocol"
 )
 
 // MaxRequestBytes caps the size of a single JSON-RPC request body.
@@ -1092,11 +1091,6 @@ func handlerSupportsVersion(handler types.MethodHandler, version int) bool {
 	return len(supportedVersions) == 0 || slices.Contains(supportedVersions, version)
 }
 
-// maxValidatedLedgerAge mirrors rippled's Tuning::maxValidatedLedgerAge
-// (2 minutes): a non-standalone node whose validated ledger is older than this
-// is treated as out of sync.
-const maxValidatedLedgerAge = 120 * time.Second
-
 // conditionMet mirrors rippled's RPC::conditionMet (Handler.h:78-139). A method
 // whose RequiredCondition is NoCondition is always allowed. Otherwise the node
 // must be usable: not amendment-blocked, at least SYNCING, not lagging the
@@ -1133,7 +1127,7 @@ func conditionMet(cond types.Condition, ctx *types.RpcContext) *types.RpcError {
 	}
 
 	if !info.Standalone {
-		if validatedLedgerStale(info) || info.OpenLedgerSeq+10 < info.ValidatedLedgerSeq {
+		if types.ValidatedLedgerStale(info) || info.OpenLedgerSeq+10 < info.ValidatedLedgerSeq {
 			return notSyncedError(ctx.ApiVersion, syncFailureNoCurrent)
 		}
 	}
@@ -1175,18 +1169,6 @@ func serverStateRank(serverState string) int {
 	}
 }
 
-// validatedLedgerStale reports whether the node lacks a validated ledger or its
-// validated ledger is older than maxValidatedLedgerAge (rippled
-// getValidatedLedgerAge > Tuning::maxValidatedLedgerAge).
-func validatedLedgerStale(info types.LedgerServerInfo) bool {
-	if !info.HaveValidated || info.ValidatedLedgerCloseTime == 0 {
-		return true
-	}
-	nowRipple := time.Now().Unix() - protocol.RippleEpochUnix
-	age := nowRipple - info.ValidatedLedgerCloseTime
-	return age > int64(maxValidatedLedgerAge/time.Second)
-}
-
 type syncFailure uint8
 
 const (
@@ -1199,7 +1181,7 @@ func notSyncedError(apiVersion int, failure syncFailure) *types.RpcError {
 	if apiVersion == types.ApiVersion1 {
 		switch failure {
 		case syncFailureNoCurrent:
-			return types.NewRpcError(types.RpcNO_CURRENT, "noCurrent", "noCurrent", "Current ledger is unavailable.")
+			return types.CurrentLedgerUnavailable(apiVersion)
 		case syncFailureNoClosed:
 			return types.NewRpcError(types.RpcNO_CLOSED, "noClosed", "noClosed", "Closed ledger is unavailable.")
 		default:

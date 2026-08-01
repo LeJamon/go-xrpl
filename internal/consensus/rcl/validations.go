@@ -495,6 +495,14 @@ func (vt *ValidationTracker) AddStatus(validation *consensus.Validation) ValStat
 		}
 	}()
 
+	vt.mu.RLock()
+	nowFn := vt.now
+	vt.mu.RUnlock()
+	now := nowFn()
+	if !IsCurrent(now, validation.SignTime, validation.SeenTime) {
+		return ValStatusStale
+	}
+
 	vt.checkAcquired()
 
 	// Pre-resolve ancestry outside vt.mu — cold-LRU walks would otherwise
@@ -512,21 +520,6 @@ func (vt *ValidationTracker) AddStatus(validation *consensus.Validation) ValStat
 
 	vt.mu.Lock()
 	defer vt.mu.Unlock()
-
-	// Freshness window. Rejects validations signed too long ago or
-	// too far in the future (clock-skewed / forged) and validations
-	// delivered to us after too much local-clock drift. Without this
-	// gate a peer can keep year-old validations alive as long as the
-	// sequence number is in range — pointless memory + noise.
-	//
-	// Uses vt.now (wired to adaptor.Now by the engine) rather than
-	// raw time.Now so the check honors the network-adjusted close
-	// offset and doesn't reject our own just-signed validations on a
-	// clock-skewed node.
-	now := vt.now()
-	if !IsCurrent(now, validation.SignTime, validation.SeenTime) {
-		return ValStatusStale
-	}
 
 	// validation.NodeID is already master-shaped on entry — the
 	// consensus router resolved the ephemeral signing pubkey through

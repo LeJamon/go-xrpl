@@ -8,7 +8,9 @@ import (
 	"github.com/LeJamon/go-xrpl/amendment"
 	"github.com/LeJamon/go-xrpl/internal/consensus"
 	"github.com/LeJamon/go-xrpl/internal/consensus/amendmentvote"
+	"github.com/LeJamon/go-xrpl/internal/feetrack"
 	"github.com/LeJamon/go-xrpl/internal/ledger"
+	"github.com/LeJamon/go-xrpl/internal/ledger/state"
 	"github.com/LeJamon/go-xrpl/internal/tx/pseudo"
 	"github.com/LeJamon/go-xrpl/keylet"
 )
@@ -357,21 +359,51 @@ func (a *Adaptor) GetLoadFee() uint32 {
 	if c := ft.ClusterFee(); c > fee {
 		fee = c
 	}
-	if fee <= ft.LoadBase() {
+	if fee <= feetrack.LoadBase {
 		return 0
 	}
 	return fee
 }
 
-// GetFeeVote returns this validator's fee-vote stance and whether the
-// post-XRPFees rules apply (featureXRPFees enabled).
-func (a *Adaptor) GetFeeVote() consensus.FeeVoteResult {
-	return consensus.FeeVoteResult{
-		BaseFee:          a.feeVote.BaseFee,
-		ReserveBase:      uint64(a.feeVote.ReserveBase),
-		ReserveIncrement: uint64(a.feeVote.ReserveIncrement),
-		PostXRPFees:      a.IsFeatureEnabled("XRPFees"),
+// GetFeeVote returns the fee fields this validator should emit for ledger.
+func (a *Adaptor) GetFeeVote(current consensus.Ledger) consensus.FeeVoteResult {
+	result := consensus.FeeVoteResult{
+		BaseFee:             a.feeVote.BaseFee,
+		ReserveBase:         uint64(a.feeVote.ReserveBase),
+		ReserveIncrement:    uint64(a.feeVote.ReserveIncrement),
+		BaseFeeSet:          a.feeVote.BaseFeeSet,
+		ReserveBaseSet:      a.feeVote.ReserveBaseSet,
+		ReserveIncrementSet: a.feeVote.ReserveIncrementSet,
+		PostXRPFees:         a.IsFeatureEnabled("XRPFees"),
 	}
+
+	wrapped, ok := current.(*LedgerWrapper)
+	if !ok {
+		return result
+	}
+	result.PostXRPFees = a.IsFeatureEnabledOnLedger(current, "XRPFees")
+
+	data, err := wrapped.Unwrap().Read(keylet.Fees())
+	if err != nil || len(data) == 0 {
+		return result
+	}
+	fees, err := state.ParseFeeSettings(data)
+	if err != nil {
+		return result
+	}
+	result.BaseFeeSet = result.BaseFee != fees.GetBaseFee()
+	result.ReserveBaseSet = result.ReserveBase != fees.GetReserveBase()
+	result.ReserveIncrementSet = result.ReserveIncrement != fees.GetReserveIncrement()
+	if !result.BaseFeeSet {
+		result.BaseFee = 0
+	}
+	if !result.ReserveBaseSet {
+		result.ReserveBase = 0
+	}
+	if !result.ReserveIncrementSet {
+		result.ReserveIncrement = 0
+	}
+	return result
 }
 
 // currentAmendmentStances returns the validator's live per-amendment vote

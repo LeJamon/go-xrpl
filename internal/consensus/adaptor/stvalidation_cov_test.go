@@ -116,7 +116,8 @@ func TestStvSkipFieldData_AllFixedTypesTruncated(t *testing.T) {
 }
 
 func TestStvSkipFieldData_Amount_XRP(t *testing.T) {
-	data := make([]byte, 8) // XRP amount: high bit 0
+	data := make([]byte, 8)
+	data[0] = 0x40
 	pos := 0
 	n, err := skipFieldData(typeAmount, data, &pos)
 	require.NoError(t, err)
@@ -135,13 +136,28 @@ func TestStvSkipFieldData_Amount_IOU_NonZero(t *testing.T) {
 }
 
 func TestStvSkipFieldData_Amount_IOU_CanonicalZero(t *testing.T) {
-	// IOU canonical zero: 0x8000000000000000 → 8 bytes
-	data := make([]byte, 8)
+	data := make([]byte, 48)
 	data[0] = 0x80
 	pos := 0
 	n, err := skipFieldData(typeAmount, data, &pos)
 	require.NoError(t, err)
-	assert.Equal(t, 8, n)
+	assert.Equal(t, 48, n)
+}
+
+func TestStvSkipFieldData_Amount_MPT(t *testing.T) {
+	data := make([]byte, 33)
+	data[0] = 0x20
+	pos := 0
+	n, err := skipFieldData(typeAmount, data, &pos)
+	require.NoError(t, err)
+	assert.Equal(t, 33, n)
+}
+
+func TestStvSkipFieldData_Amount_NativeNegativeZero(t *testing.T) {
+	data := make([]byte, 8)
+	pos := 0
+	_, err := skipFieldData(typeAmount, data, &pos)
+	require.ErrorContains(t, err, "negative zero is not canonical")
 }
 
 func TestStvSkipFieldData_Amount_Truncated(t *testing.T) {
@@ -155,6 +171,14 @@ func TestStvSkipFieldData_Amount_IOUNonZero_Truncated(t *testing.T) {
 	data := make([]byte, 10)
 	data[0] = 0x80
 	data[1] = 0x01
+	pos := 0
+	_, err := skipFieldData(typeAmount, data, &pos)
+	assert.ErrorIs(t, err, errShortData)
+}
+
+func TestStvSkipFieldData_Amount_MPT_Truncated(t *testing.T) {
+	data := make([]byte, 32)
+	data[0] = 0x20
 	pos := 0
 	_, err := skipFieldData(typeAmount, data, &pos)
 	assert.ErrorIs(t, err, errShortData)
@@ -433,6 +457,11 @@ func TestStvParseXRPAmount_IOU(t *testing.T) {
 	assert.False(t, ok)
 }
 
+func TestStvParseXRPAmount_NativeNegativeZero(t *testing.T) {
+	_, ok := parseXRPAmount(make([]byte, 8))
+	assert.False(t, ok)
+}
+
 func TestStvParseXRPAmount_ValidXRP(t *testing.T) {
 	// 1000 drops: encode with sign bit (bit 62) set
 	drops := uint64(1000)
@@ -441,7 +470,7 @@ func TestStvParseXRPAmount_ValidXRP(t *testing.T) {
 	binary.BigEndian.PutUint64(data[:], encoded)
 	val, ok := parseXRPAmount(data[:])
 	require.True(t, ok)
-	assert.Equal(t, drops, val)
+	assert.EqualValues(t, drops, val)
 }
 
 func TestStvParseSTValidation_EndOfObjectMarker(t *testing.T) {

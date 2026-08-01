@@ -23,7 +23,7 @@ func TestSignFor_NetworkIDEnforcement(t *testing.T) {
 
 	ctxWith := func(networkID uint32) *types.RpcContext {
 		mock := newMockLedgerService()
-		mock.serverInfo = types.LedgerServerInfo{NetworkID: networkID}
+		mock.serverInfo.NetworkID = networkID
 		return &types.RpcContext{
 			Context:    context.Background(),
 			ApiVersion: types.ApiVersion1,
