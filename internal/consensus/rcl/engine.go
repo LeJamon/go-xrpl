@@ -4,6 +4,7 @@ package rcl
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"sync"
@@ -12,6 +13,11 @@ import (
 
 	"github.com/LeJamon/go-xrpl/internal/consensus"
 	"github.com/LeJamon/go-xrpl/protocol"
+)
+
+var (
+	errLedgerAcceptInProgress = errors.New("rcl: ledger acceptance in progress")
+	errNoLastClosedLedger     = errors.New("rcl: adaptor reported no last closed ledger")
 )
 
 type roundState struct {
@@ -587,6 +593,10 @@ func (e *Engine) Stop() error {
 
 func (e *Engine) StartRound(round consensus.RoundID, proposing bool) error {
 	e.mu.Lock()
+	if e.buildInProgress {
+		e.mu.Unlock()
+		return errLedgerAcceptInProgress
+	}
 	e.deferBroadcasts++
 	e.acceptedLCL = consensus.LedgerID{}
 	err := e.startRoundLocked(round, proposing, false)
@@ -602,10 +612,17 @@ func (e *Engine) StartRound(round consensus.RoundID, proposing bool) error {
 // driven consensus loops that stop their timer between bounded runs.
 func (e *Engine) RestartRound(proposing bool) error {
 	e.mu.Lock()
+	if e.buildInProgress {
+		e.mu.Unlock()
+		return errLedgerAcceptInProgress
+	}
 	e.deferBroadcasts++
 
 	working, err := e.adaptor.GetLastClosedLedger()
-	if err == nil && working != nil {
+	if err == nil && working == nil {
+		err = errNoLastClosedLedger
+	}
+	if err == nil {
 		preferred := working
 		if id, ok := e.validationPreferredForLedgerLocked(working); ok && id != working.ID() {
 			if cached, getErr := e.adaptor.GetLedger(id); getErr == nil && cached != nil {

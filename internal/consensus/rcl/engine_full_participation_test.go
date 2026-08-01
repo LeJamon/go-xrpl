@@ -37,7 +37,7 @@ func TestAcceptLedgerWithoutTrustedPositionsDemotesOperatingModeAfterFullValidat
 	adaptor.mu.RLock()
 	defer adaptor.mu.RUnlock()
 	if len(adaptor.validationsBroadcast) != 1 {
-		t.Fatalf("validations = %d, want one recovery validation", len(adaptor.validationsBroadcast))
+		t.Fatalf("validations = %d, want one full validation", len(adaptor.validationsBroadcast))
 	}
 	if !adaptor.validationsBroadcast[0].Full {
 		t.Fatal("validation must remain full for a round accepted while proposing")

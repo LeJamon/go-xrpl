@@ -7,6 +7,7 @@ import (
 	"encoding/binary"
 	"errors"
 	"fmt"
+	"io"
 	"sort"
 	"sync"
 	"time"
@@ -65,6 +66,11 @@ type collectorEvent struct {
 	event Event
 }
 
+type deferredLedgerAccept struct {
+	cancel   func()
+	complete func()
+}
+
 type Peer struct {
 	ID PeerID
 
@@ -84,7 +90,7 @@ type Peer struct {
 	ticking          bool
 	tickGen          uint64
 	cancelTick       func()
-	cancelAccept     func()
+	pendingAccept    *deferredLedgerAccept
 	validationGen    uint64
 	nextValidation   uint64
 	validationTimers map[uint64]func()
@@ -102,7 +108,6 @@ type Peer struct {
 	clockSkew         time.Duration
 	recvValDelay      SimDuration
 	ledgerAcceptDelay SimDuration
-	operatingMode     consensus.OperatingMode
 	ledgers           map[consensus.LedgerID]*Ledger
 	canonical         map[uint32]*Ledger
 	lcl               *Ledger
@@ -143,7 +148,6 @@ func newPeer(
 		timing:           consensus.DefaultTiming(),
 		validator:        true,
 		targetLedgers:    int(^uint(0) >> 1),
-		operatingMode:    consensus.OpModeFull,
 		ledgers:          map[consensus.LedgerID]*Ledger{genesis.ID(): genesis},
 		canonical:        map[uint32]*Ledger{0: genesis},
 		lcl:              genesis,
@@ -388,9 +392,10 @@ func (p *Peer) Stop() error {
 		p.cancelTick()
 		p.cancelTick = nil
 	}
-	if p.cancelAccept != nil {
-		p.cancelAccept()
-		p.cancelAccept = nil
+	pendingAccept := p.pendingAccept
+	if pendingAccept != nil {
+		pendingAccept.cancel()
+		p.pendingAccept = nil
 	}
 	p.validationGen++
 	for id, cancel := range p.validationTimers {
@@ -413,6 +418,9 @@ func (p *Peer) Stop() error {
 
 	var err error
 	p.runEngineWork(func() {
+		if pendingAccept != nil {
+			pendingAccept.complete()
+		}
 		if engine != nil {
 			err = engine.Stop()
 		}
@@ -490,23 +498,24 @@ func (p *Peer) DeferLedgerAccept(complete func()) bool {
 	}
 
 	p.lifecycleMu.Lock()
-	if p.stopped {
+	if p.stopped || p.pendingAccept != nil {
 		p.lifecycleMu.Unlock()
 		return false
 	}
-	p.cancelAccept = p.scheduler.In(delay, func() {
+	pending := &deferredLedgerAccept{complete: complete}
+	pending.cancel = p.scheduler.In(delay, func() {
 		p.runEngineWork(func() {
 			p.lifecycleMu.Lock()
-			if p.stopped {
-				p.cancelAccept = nil
+			if p.pendingAccept != pending {
 				p.lifecycleMu.Unlock()
 				return
 			}
-			p.cancelAccept = nil
+			p.pendingAccept = nil
 			p.lifecycleMu.Unlock()
-			complete()
+			pending.complete()
 		})
 	})
+	p.pendingAccept = pending
 	p.lifecycleMu.Unlock()
 	return true
 }
@@ -542,6 +551,7 @@ func (p *Peer) Submit(tx Tx) {
 	p.receiveTx(tx.Bytes(), nil)
 }
 
+// InjectTx adds tx when building the ledger whose parent has sequence seq.
 func (p *Peer) InjectTx(seq uint32, tx Tx) {
 	p.mu.Lock()
 	if p.injected[seq] == nil {
@@ -875,6 +885,8 @@ func (p *Peer) RequestTxSet(id consensus.TxSetID) error {
 	return errNotFound
 }
 
+// RequestLedger starts or joins acquisition of id; calls made before the
+// current retry deadline do not send another request.
 func (p *Peer) RequestLedger(id consensus.LedgerID) error {
 	if p.isStopped() {
 		return errors.New("csf: peer is stopped")
@@ -940,20 +952,22 @@ func (p *Peer) RequestLedger(id consensus.LedgerID) error {
 		}
 	}
 	if !sent {
-		p.mu.Lock()
-		delete(p.acquiringLedgers, id)
-		p.mu.Unlock()
+		p.clearLedgerAcquisition(id, deadline)
 		return errNotFound
 	}
 	if p.isStopped() {
-		p.mu.Lock()
-		if p.acquiringLedgers[id] == deadline {
-			delete(p.acquiringLedgers, id)
-		}
-		p.mu.Unlock()
+		p.clearLedgerAcquisition(id, deadline)
 		return errors.New("csf: peer is stopped")
 	}
 	return nil
+}
+
+func (p *Peer) clearLedgerAcquisition(id consensus.LedgerID, deadline SimTime) {
+	p.mu.Lock()
+	if p.acquiringLedgers[id] == deadline {
+		delete(p.acquiringLedgers, id)
+	}
+	p.mu.Unlock()
 }
 
 func (p *Peer) acquisitionWindow() ([]PeerID, SimDuration) {
@@ -1064,9 +1078,10 @@ func (p *Peer) BuildLedger(
 		closeTimeCorrect,
 		nextLedgerCloseTimeResolution(simParent),
 	)
+	cumulative := ledger.Transactions()
 	p.mu.Lock()
 	p.ledgers[ledger.ID()] = ledger
-	p.txSets[acceptedSet.ID()] = acceptedSet.Clone()
+	p.txSets[ledger.TxSetID()] = cumulative
 	p.mu.Unlock()
 	return ledger, nil
 }
@@ -1309,12 +1324,13 @@ func (p *Peer) PrevCloseTimeResolution() time.Duration {
 
 func (p *Peer) AdjustCloseTime(consensus.CloseTimes) {}
 
-func (p *Peer) GetOperatingMode() consensus.OperatingMode {
-	p.mu.Lock()
-	defer p.mu.Unlock()
-	return p.operatingMode
+func (*Peer) GetOperatingMode() consensus.OperatingMode {
+	return consensus.OpModeFull
 }
 
+// SetOperatingMode is intentionally inert: rippled CSF models validator
+// participation without the production network router that re-promotes server
+// operating modes, so simulated peers remain in Full mode.
 func (*Peer) SetOperatingMode(consensus.OperatingMode) {}
 
 func (p *Peer) OnConsensusReached(
@@ -1362,7 +1378,7 @@ func (p *Peer) promoteFullyValidated(ledger *Ledger, seq uint32) {
 	p.mu.Lock()
 	current := p.ledgers[p.validated]
 	if ledger.Seq() != seq ||
-		(current != nil && (seq <= current.Seq() || !ledger.IsAncestor(current, p.oracle))) {
+		(current != nil && (seq <= current.Seq() || !ledger.IsAncestor(current))) {
 		delete(p.pendingValidated, ledger.ID())
 		p.mu.Unlock()
 		return
@@ -1599,23 +1615,19 @@ func containsUint64(values []uint64, target uint64) bool {
 	return index < len(values) && values[index] == target
 }
 
-type hashWriter interface {
-	Write([]byte) (int, error)
-}
-
-func writeUint32(writer hashWriter, value uint32) {
+func writeUint32(writer io.Writer, value uint32) {
 	var blob [4]byte
 	binary.BigEndian.PutUint32(blob[:], value)
 	_, _ = writer.Write(blob[:])
 }
 
-func writeUint64(writer hashWriter, value uint64) {
+func writeUint64(writer io.Writer, value uint64) {
 	var blob [8]byte
 	binary.BigEndian.PutUint64(blob[:], value)
 	_, _ = writer.Write(blob[:])
 }
 
-func writeInt64(writer hashWriter, value int64) {
+func writeInt64(writer io.Writer, value int64) {
 	writeUint64(writer, uint64(value))
 }
 

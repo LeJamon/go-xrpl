@@ -606,7 +606,7 @@ func TestAcquisitionAndStorageFailures(t *testing.T) {
 	ledger := sim.Oracle.Accept(
 		sim.Oracle.Genesis(),
 		NewTxSetFrom([]Tx{{ID: 9}}),
-		time.Unix(1, 0),
+		sim.Oracle.Genesis().CloseTime().Add(time.Second),
 		true,
 		30*time.Second,
 	)

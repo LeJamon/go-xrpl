@@ -93,9 +93,14 @@ func TestDeferredLedgerAcceptCompletesExactlyOnceOffLock(t *testing.T) {
 
 	var builds atomic.Int32
 	var broadcasts atomic.Int32
-	var engine *Engine
+	var engineRef atomic.Pointer[Engine]
 	base.buildLedgerHook = func() {
 		builds.Add(1)
+		engine := engineRef.Load()
+		if engine == nil {
+			t.Error("BuildLedger called before the engine was available")
+			return
+		}
 		if !engine.mu.TryLock() {
 			t.Error("BuildLedger called with the engine lock held")
 			return
@@ -104,6 +109,11 @@ func TestDeferredLedgerAcceptCompletesExactlyOnceOffLock(t *testing.T) {
 	}
 	adaptor.broadcastHook = func() {
 		broadcasts.Add(1)
+		engine := engineRef.Load()
+		if engine == nil {
+			t.Error("broadcast called before the engine was available")
+			return
+		}
 		if !engine.mu.TryLock() {
 			t.Error("deferred acceptance flushed a broadcast with the engine lock held")
 			return
@@ -111,7 +121,8 @@ func TestDeferredLedgerAcceptCompletesExactlyOnceOffLock(t *testing.T) {
 		engine.mu.Unlock()
 	}
 
-	engine = startDeferredAccept(t, adaptor)
+	engine := startDeferredAccept(t, adaptor)
+	engineRef.Store(engine)
 	complete := adaptor.completion(t)
 	if got := adaptor.deferCalls(); got != 1 {
 		t.Fatalf("DeferLedgerAccept calls = %d, want 1", got)
@@ -149,6 +160,73 @@ func TestDeferredLedgerAcceptCompletesExactlyOnceOffLock(t *testing.T) {
 	}
 	if consensusCount != 1 {
 		t.Fatalf("consensus count = %d, want 1", consensusCount)
+	}
+}
+
+func TestDeferredLedgerAcceptRejectsRoundChangesUntilCompletion(t *testing.T) {
+	base := newMockAdaptor()
+	adaptor := &deferredAcceptAdaptor{mockAdaptor: base}
+	engine := startDeferredAccept(t, adaptor)
+
+	engine.mu.RLock()
+	roundBefore := engine.state.Round
+	prevBefore := engine.prevLedger
+	engine.mu.RUnlock()
+
+	attemptedRound := consensus.RoundID{Seq: 999, ParentHash: consensus.LedgerID{0x99}}
+	if err := engine.StartRound(attemptedRound, true); !errors.Is(err, errLedgerAcceptInProgress) {
+		t.Fatalf("StartRound error = %v, want %v", err, errLedgerAcceptInProgress)
+	}
+	if err := engine.RestartRound(true); !errors.Is(err, errLedgerAcceptInProgress) {
+		t.Fatalf("RestartRound error = %v, want %v", err, errLedgerAcceptInProgress)
+	}
+
+	engine.mu.RLock()
+	roundAfter := engine.state.Round
+	prevAfter := engine.prevLedger
+	building := engine.buildInProgress
+	engine.mu.RUnlock()
+	if roundAfter != roundBefore || prevAfter != prevBefore || !building {
+		t.Fatalf("rejected restart changed deferred round: round=%v prev=%v building=%t", roundAfter, prevAfter, building)
+	}
+	if got := base.lastLCL.Seq(); got != 100 {
+		t.Fatalf("rejected restart changed last closed ledger to seq %d", got)
+	}
+
+	adaptor.completion(t)()
+	if err := engine.RestartRound(true); err != nil {
+		t.Fatalf("RestartRound after completion: %v", err)
+	}
+	engine.mu.RLock()
+	restartedRound := engine.state.Round
+	engine.mu.RUnlock()
+	if restartedRound.Seq != 102 || restartedRound.ParentHash != base.lastLCL.ID() {
+		t.Fatalf("restarted round = %v, want seq 102 on accepted LCL", restartedRound)
+	}
+}
+
+func TestRestartRoundRejectsMissingLastClosedLedger(t *testing.T) {
+	base := newMockAdaptor()
+	config := DefaultConfig()
+	config.ManualTick = true
+	engine := NewEngine(base, config)
+	if err := engine.Start(t.Context()); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	t.Cleanup(func() {
+		if err := engine.Stop(); err != nil {
+			t.Errorf("Stop: %v", err)
+		}
+	})
+
+	base.mu.Lock()
+	base.lastLCL = nil
+	base.mu.Unlock()
+	if err := engine.RestartRound(true); !errors.Is(err, errNoLastClosedLedger) {
+		t.Fatalf("RestartRound error = %v, want %v", err, errNoLastClosedLedger)
+	}
+	if engine.state != nil {
+		t.Fatalf("missing-LCL restart created round state: %+v", engine.state)
 	}
 }
 

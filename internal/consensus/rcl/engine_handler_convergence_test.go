@@ -19,13 +19,25 @@ func timerDrivenConvergenceEngine(t *testing.T, txSet *mockTxSet) (*Engine, *moc
 	config := DefaultConfig()
 	config.ManualTick = true
 	engine := NewEngine(adaptor, config)
-	round := consensus.RoundID{Seq: adaptor.lastLCL.Seq() + 1, ParentHash: adaptor.lastLCL.ID()}
+	if err := engine.Start(t.Context()); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	t.Cleanup(func() {
+		if err := engine.Stop(); err != nil {
+			t.Errorf("Stop: %v", err)
+		}
+	})
+	lastLCL, err := adaptor.GetLastClosedLedger()
+	if err != nil {
+		t.Fatalf("GetLastClosedLedger: %v", err)
+	}
+	round := consensus.RoundID{Seq: lastLCL.Seq() + 1, ParentHash: lastLCL.ID()}
 	if err := engine.StartRound(round, true); err != nil {
 		t.Fatalf("StartRound: %v", err)
 	}
 
 	engine.mu.Lock()
-	engine.prevLedger = adaptor.lastLCL
+	engine.prevLedger = lastLCL
 	engine.roundStartTime = adaptor.Now().Add(-config.Timing.LedgerMinConsensus - time.Second)
 	engine.setMode(consensus.ModeProposing)
 	engine.setPhase(consensus.PhaseEstablish)
@@ -37,13 +49,22 @@ func timerDrivenConvergenceEngine(t *testing.T, txSet *mockTxSet) (*Engine, *moc
 		Round:          round,
 		NodeID:         adaptor.nodeID,
 		TxSet:          txSet.ID(),
-		PreviousLedger: adaptor.lastLCL.ID(),
+		PreviousLedger: lastLCL.ID(),
 		CloseTime:      adaptor.Now(),
 		Timestamp:      adaptor.Now(),
 	}
 	engine.mu.Unlock()
 
 	return engine, adaptor, peer
+}
+
+func adaptorLCLSeq(t *testing.T, adaptor *mockAdaptor) uint32 {
+	t.Helper()
+	ledger, err := adaptor.GetLastClosedLedger()
+	if err != nil {
+		t.Fatalf("GetLastClosedLedger: %v", err)
+	}
+	return ledger.Seq()
 }
 
 func TestEngine_OnProposalDoesNotConvergeBeforeTimer(t *testing.T) {
@@ -64,12 +85,12 @@ func TestEngine_OnProposalDoesNotConvergeBeforeTimer(t *testing.T) {
 	if got := engine.Phase(); got != consensus.PhaseEstablish {
 		t.Fatalf("phase after proposal = %v, want Establish until TimerEntry", got)
 	}
-	if got := adaptor.lastLCL.Seq(); got != 100 {
+	if got := adaptorLCLSeq(t, adaptor); got != 100 {
 		t.Fatalf("LCL sequence after proposal = %d, want 100 until TimerEntry", got)
 	}
 
 	engine.TimerEntry()
-	if got := adaptor.lastLCL.Seq(); got != 101 {
+	if got := adaptorLCLSeq(t, adaptor); got != 101 {
 		t.Fatalf("LCL sequence after TimerEntry = %d, want 101", got)
 	}
 }
@@ -89,7 +110,7 @@ func TestEngine_OnTxSetDoesNotConvergeBeforeTimer(t *testing.T) {
 		Round:          engine.state.Round,
 		NodeID:         peer,
 		TxSet:          txSet.ID(),
-		PreviousLedger: adaptor.lastLCL.ID(),
+		PreviousLedger: engine.prevLedger.ID(),
 	})
 	delete(engine.acquiredTxSets, txSet.ID())
 	engine.mu.Unlock()
@@ -100,12 +121,12 @@ func TestEngine_OnTxSetDoesNotConvergeBeforeTimer(t *testing.T) {
 	if got := engine.Phase(); got != consensus.PhaseEstablish {
 		t.Fatalf("phase after tx set = %v, want Establish until TimerEntry", got)
 	}
-	if got := adaptor.lastLCL.Seq(); got != 100 {
+	if got := adaptorLCLSeq(t, adaptor); got != 100 {
 		t.Fatalf("LCL sequence after tx set = %d, want 100 until TimerEntry", got)
 	}
 
 	engine.TimerEntry()
-	if got := adaptor.lastLCL.Seq(); got != 101 {
+	if got := adaptorLCLSeq(t, adaptor); got != 101 {
 		t.Fatalf("LCL sequence after TimerEntry = %d, want 101", got)
 	}
 }

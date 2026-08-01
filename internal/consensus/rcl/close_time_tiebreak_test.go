@@ -126,6 +126,8 @@ func TestUpdateCloseTimePositionProposesDisagreement(t *testing.T) {
 	adaptor := newMockAdaptor()
 	base := adaptor.now.Truncate(time.Second)
 	engine := NewEngine(adaptor, DefaultConfig())
+	engine.mu.Lock()
+	defer engine.mu.Unlock()
 	engine.mode = consensus.ModeProposing
 	engine.roundStartTime = adaptor.now
 	engine.prevRoundTime = 10 * time.Second

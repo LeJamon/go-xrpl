@@ -2,6 +2,7 @@ package csf
 
 import (
 	"errors"
+	"math"
 	"strings"
 	"testing"
 	"time"
@@ -40,6 +41,43 @@ func TestPeerInjectionMutatesAcceptedLedgerOnly(t *testing.T) {
 	}
 	if !peer.LastClosedLedger().Transactions().ContainsTx(injected) {
 		t.Fatal("injected transaction is missing from the accepted ledger")
+	}
+}
+
+func TestPeerInjectionSequenceNamesParentLedger(t *testing.T) {
+	sim := NewSim()
+	peer := sim.CreateGroup(1).Get(0)
+	genesis := sim.Oracle.Genesis()
+	parent := sim.Oracle.Accept(
+		genesis,
+		NewTxSet(),
+		genesis.CloseTime().Add(time.Second),
+		true,
+		30*time.Second,
+	)
+	next := Tx{ID: 92}
+	following := Tx{ID: 93}
+	peer.InjectTx(parent.Seq(), next)
+	peer.InjectTx(parent.Seq()+1, following)
+
+	child, err := peer.BuildLedger(parent, NewTxSet(), parent.CloseTime().Add(time.Second), true, nil)
+	if err != nil {
+		t.Fatalf("BuildLedger(child): %v", err)
+	}
+	childTxs := child.(*Ledger).Transactions()
+	if !childTxs.ContainsTx(next) {
+		t.Fatal("parent-sequence injection was not added to its child ledger")
+	}
+	if childTxs.ContainsTx(following) {
+		t.Fatal("child-sequence injection was added one ledger too early")
+	}
+
+	grandchild, err := peer.BuildLedger(child, NewTxSet(), child.CloseTime().Add(time.Second), true, nil)
+	if err != nil {
+		t.Fatalf("BuildLedger(grandchild): %v", err)
+	}
+	if !grandchild.(*Ledger).Transactions().ContainsTx(following) {
+		t.Fatal("child-sequence injection was not added to its child ledger")
 	}
 }
 
@@ -136,6 +174,24 @@ func TestPeerAcquisitionRetryWindowAndReconnect(t *testing.T) {
 	}
 	if err := target.RequestLedger(ledgerID); err != nil {
 		t.Fatalf("RequestLedger after reconnect: %v", err)
+	}
+}
+
+func TestPeerLedgerAcquisitionCleanupPreservesReplacement(t *testing.T) {
+	peer := NewSim().CreateGroup(1).Get(0)
+	id := consensus.LedgerID{0xA3}
+	requestDeadline := SimTime(time.Second)
+	replacementDeadline := 2 * requestDeadline
+
+	peer.acquiringLedgers[id] = replacementDeadline
+	peer.clearLedgerAcquisition(id, requestDeadline)
+	if got := peer.acquiringLedgers[id]; got != replacementDeadline {
+		t.Fatalf("replacement deadline = %v, want %v", got, replacementDeadline)
+	}
+
+	peer.clearLedgerAcquisition(id, replacementDeadline)
+	if _, ok := peer.acquiringLedgers[id]; ok {
+		t.Fatal("matching acquisition deadline was not cleared")
 	}
 }
 
@@ -396,7 +452,7 @@ func TestConcurrentConnectAndStopLeavesNoConnection(t *testing.T) {
 func TestPeerStartDefaultsAndStandaloneAreStable(t *testing.T) {
 	sim := NewSim()
 	isolated := sim.CreateGroup(1).Get(0)
-	if isolated.TargetLedgers() != int(^uint(0)>>1) {
+	if isolated.TargetLedgers() != math.MaxInt {
 		t.Fatalf("default target = %d", isolated.TargetLedgers())
 	}
 	if err := isolated.Start(); err != nil {
@@ -696,7 +752,7 @@ func TestPeerDelaysValidationProcessingAfterReceipt(t *testing.T) {
 	}
 }
 
-func TestPeerDefersLedgerAcceptAndStopCancelsCompletion(t *testing.T) {
+func TestPeerDefersLedgerAcceptAndStopCompletesAcceptance(t *testing.T) {
 	const delay = 5 * time.Millisecond
 
 	sim := NewSim()
@@ -725,16 +781,19 @@ func TestPeerDefersLedgerAcceptAndStopCancelsCompletion(t *testing.T) {
 	if err := stoppedPeer.SetLedgerAcceptDelay(delay); err != nil {
 		t.Fatalf("SetLedgerAcceptDelay before stop: %v", err)
 	}
-	completedAfterStop := false
-	if !stoppedPeer.DeferLedgerAccept(func() { completedAfterStop = true }) {
+	completedAfterStop := 0
+	if !stoppedPeer.DeferLedgerAccept(func() { completedAfterStop++ }) {
 		t.Fatal("ledger accept was not deferred before stop")
 	}
 	if err := stoppedPeer.Stop(); err != nil {
 		t.Fatalf("Stop: %v", err)
 	}
+	if completedAfterStop != 1 {
+		t.Fatalf("completion count after Stop = %d, want 1", completedAfterStop)
+	}
 	stoppedSim.Scheduler.Step()
-	if completedAfterStop {
-		t.Fatal("stopped peer completed a canceled ledger accept")
+	if completedAfterStop != 1 {
+		t.Fatalf("completion count after canceled timer = %d, want 1", completedAfterStop)
 	}
 }
 
@@ -762,6 +821,45 @@ func TestPeerSuppressesTransactionAlreadyInLCL(t *testing.T) {
 	peer.receiveTx(tx.Bytes(), nil)
 	if peer.HasTx(tx.TxID()) {
 		t.Fatal("transaction already in the LCL re-entered the open ledger")
+	}
+}
+
+func TestPeerBuildLedgerUsesCumulativeTxSetIdentity(t *testing.T) {
+	sim := NewSim()
+	peer := sim.CreateGroup(1).Get(0)
+	tx := Tx{ID: 74}
+	genesis := sim.Oracle.Genesis()
+	parent := sim.Oracle.Accept(
+		genesis,
+		NewTxSetFrom([]Tx{tx}),
+		genesis.CloseTime().Add(time.Second),
+		true,
+		30*time.Second,
+	)
+	closeTime := parent.CloseTime().Add(time.Second)
+
+	first, err := peer.BuildLedger(parent, NewTxSet(), closeTime, true, nil)
+	if err != nil {
+		t.Fatalf("BuildLedger(empty): %v", err)
+	}
+	second, err := peer.BuildLedger(parent, NewTxSetFrom([]Tx{tx}), closeTime, true, nil)
+	if err != nil {
+		t.Fatalf("BuildLedger(duplicate): %v", err)
+	}
+	if first != second {
+		t.Fatal("equivalent cumulative transaction sets did not intern to one ledger")
+	}
+	ledger := second.(*Ledger)
+	if got, want := ledger.TxSetID(), ledger.Transactions().ID(); got != want {
+		t.Fatalf("ledger transaction-set ID = %x, want cumulative ID %x", got, want)
+	}
+
+	peer.mu.Lock()
+	peer.openTxs[tx.TxID()] = tx.Bytes()
+	peer.mu.Unlock()
+	peer.OnConsensusReached(ledger, nil, 0)
+	if peer.HasTx(tx.TxID()) {
+		t.Fatal("accepted cumulative transaction remained in the open set")
 	}
 }
 

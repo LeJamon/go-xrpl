@@ -73,7 +73,7 @@ func TestCollectorLedgerSnapshots(t *testing.T) {
 				wantSeq-1,
 			)
 		}
-		if !transition.ledger.IsAncestor(transition.prior, sim.Oracle) {
+		if !transition.ledger.IsAncestor(transition.prior) {
 			t.Fatalf("fully validated transition %d changed branch", i)
 		}
 	}
@@ -655,7 +655,7 @@ func assertWrongLCLJumps(t *testing.T, sim *Sim, peer *Peer, jumps *ledgerJumps,
 		t.Fatalf("minority peer %d closed-ledger jumps = %d, want %d", peer.ID, got, wantClose)
 	}
 	for _, closed := range jumps.closed {
-		if closed.from.Seq() > closed.to.Seq() || closed.to.IsAncestor(closed.from, sim.Oracle) {
+		if closed.from.Seq() > closed.to.Seq() || closed.to.IsAncestor(closed.from) {
 			t.Fatalf("minority peer %d invalid cross-branch close jump %d -> %d", peer.ID, closed.from.Seq(), closed.to.Seq())
 		}
 	}
@@ -669,7 +669,7 @@ func assertWrongLCLJumps(t *testing.T, sim *Sim, peer *Peer, jumps *ledgerJumps,
 		t.Fatalf("minority peer %d validated-ledger jumps = %d, want at most 1", peer.ID, len(jumps.validated))
 	}
 	validated := jumps.validated[0]
-	if validated.from.Seq() >= validated.to.Seq() || !validated.to.IsAncestor(validated.from, sim.Oracle) {
+	if validated.from.Seq() >= validated.to.Seq() || !validated.to.IsAncestor(validated.from) {
 		t.Fatalf("minority peer %d invalid same-branch validation jump %d -> %d", peer.ID, validated.from.Seq(), validated.to.Seq())
 	}
 }

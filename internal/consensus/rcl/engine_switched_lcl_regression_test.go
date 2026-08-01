@@ -15,6 +15,7 @@ func TestStartRoundLocked_RecoveryPreservesPreviousCloseTime(t *testing.T) {
 		closeTime: adaptor.Now(),
 	}
 	engine := NewEngine(adaptor, DefaultConfig())
+	engine.mu.Lock()
 	engine.firstRound = false
 	engine.prevLedger = ledger
 	baseline := adaptor.Now().Add(-time.Second)
@@ -27,10 +28,12 @@ func TestStartRoundLocked_RecoveryPreservesPreviousCloseTime(t *testing.T) {
 		Seq:        ledger.Seq() + 1,
 		ParentHash: ledger.ID(),
 	}, true, true)
+	got := engine.prevCloseTime
+	engine.mu.Unlock()
 	if err != nil {
 		t.Fatalf("start recovery round: %v", err)
 	}
-	if got := engine.prevCloseTime; !got.Equal(baseline) {
+	if !got.Equal(baseline) {
 		t.Fatalf("previous close time = %v, want preserved baseline %v", got, baseline)
 	}
 }

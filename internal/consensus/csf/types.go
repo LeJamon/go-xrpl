@@ -264,18 +264,11 @@ func (l *Ledger) Bytes() []byte {
 	return append([]byte(nil), l.id[:]...)
 }
 
-func (l *Ledger) IsAncestor(other *Ledger, oracle *LedgerOracle) bool {
+func (l *Ledger) IsAncestor(other *Ledger) bool {
 	if other == nil || other.seq >= l.seq {
 		return false
 	}
-	current := l
-	for current.seq > other.seq {
-		current = oracle.Get(current.parentID)
-		if current == nil {
-			return false
-		}
-	}
-	return current.id == other.id
+	return l.Ancestor(other.seq) == other.id
 }
 
 type LedgerOracle struct {
@@ -360,7 +353,7 @@ func (o *LedgerOracle) Accept(
 		parentID:        parent.id,
 		parentCloseTime: parent.closeTime,
 		txs:             cumulative,
-		txSetID:         txs.ID(),
+		txSetID:         key.txSetID,
 		closeTime:       effective,
 		closeAgree:      closeAgree,
 		resolution:      resolution,
@@ -410,7 +403,7 @@ func (o *LedgerOracle) Branches(ledgers []*Ledger) int {
 			if tip.seq < ledger.seq {
 				earlier, later = tip, ledger
 			}
-			if later.id == earlier.id || later.IsAncestor(earlier, o) {
+			if later.id == earlier.id || later.IsAncestor(earlier) {
 				tips[i] = later
 				found = true
 				break

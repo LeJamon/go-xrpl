@@ -210,8 +210,9 @@ type TrustChangeNotifier interface {
 // LedgerAcceptDeferrer is an optional Adaptor extension for environments that
 // must schedule ledger application on their own serialized driver. Returning
 // true transfers completion to the adaptor, which must invoke complete exactly
-// once and never inline. Returning false leaves acceptance synchronous and must
-// not retain complete.
+// once and never inline, including when the scheduled work is canceled or the
+// environment shuts down. Returning false leaves acceptance synchronous and
+// must not retain complete.
 type LedgerAcceptDeferrer interface {
 	DeferLedgerAccept(complete func()) bool
 }
@@ -249,6 +250,8 @@ type NetworkBroadcaster interface {
 
 	RequestTxSet(id TxSetID) error
 
+	// RequestLedger may be called repeatedly while a ledger remains unavailable;
+	// implementations must suppress duplicate work within their retry window.
 	RequestLedger(id LedgerID) error
 }
 

@@ -1945,8 +1945,15 @@ func TestEngine_CheckLedger_CompletesHeldWrongLedgerSwitch(t *testing.T) {
 		engine.setMode(consensus.ModeWrongLedger)
 		if engine.validationTracker != nil {
 			engine.validationTracker.SetTrusted([]consensus.NodeID{adaptor.nodeID, peerA, peerB})
-			engine.validationTracker.Add(&consensus.Validation{NodeID: peerA, LedgerID: targetID, LedgerSeq: 101, Full: true, SignTime: now, SeenTime: now})
-			engine.validationTracker.Add(&consensus.Validation{NodeID: peerB, LedgerID: targetID, LedgerSeq: 101, Full: true, SignTime: now, SeenTime: now})
+			for _, nodeID := range []consensus.NodeID{peerA, peerB} {
+				if !engine.validationTracker.Add(&consensus.Validation{
+					NodeID: nodeID, LedgerID: targetID, LedgerSeq: 101,
+					Full: true, SignTime: now, SeenTime: now,
+				}) {
+					engine.mu.Unlock()
+					t.Fatalf("trusted validation from %x was rejected", nodeID[:4])
+				}
+			}
 		}
 		engine.checkLedger()
 		gotMode := engine.mode
