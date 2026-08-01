@@ -24,16 +24,13 @@ import (
 //   - prevLedger is not a *LedgerWrapper (test ledger types)
 //   - the skip-list contains fewer than FlagLedgerInterval ancestors
 //     (early ledgers near genesis)
-//   - local participation is below MinLocalValsToVote (230/256) —
+//   - local participation is below the strict voting threshold —
 //     local view too narrow to trust
 //   - no candidates qualify
 //
-// These normal zero-vote paths are silent — an operator on a
-// NegativeUNL-enabled network sees no errors or warnings when the round
-// simply has nothing to do. The sole exception is the impossible
-// above-window case (local count > FlagLedgerInterval), which DoVoting
-// surfaces as ErrLocalCountExceedsWindow and is logged at Error here as
-// a likely duplicate-validation bug.
+// These normal zero-vote paths are silent. Exact-threshold and above-window
+// counts are surfaced and logged because rippled treats both as error
+// diagnostics while producing no vote.
 func (a *Adaptor) GenerateNegativeUNLPseudoTx(prev consensus.Ledger) [][]byte {
 	a.trustUpdateMu.Lock()
 	a.mu.Lock()
@@ -80,20 +77,30 @@ func (a *Adaptor) GenerateNegativeUNLPseudoTx(prev consensus.Ledger) [][]byte {
 	// gate; don't duplicate either here.
 	blobs, err := voter.DoVoting(prevSeq, prevHash, unlKeys, state, scoreTable)
 	if err != nil {
-		if errors.Is(err, negativeunlvote.ErrLocalCountExceedsWindow) {
-			a.logger.Error("NegativeUNL: local validation count exceeds window — likely duplicate-validation bug",
-				"prev_seq", prevSeq,
-				"err", err,
-			)
-			return nil
-		}
+		a.logNegativeUNLVoteError(prevSeq, err)
+		return nil
+	}
+	return blobs
+}
+
+func (a *Adaptor) logNegativeUNLVoteError(prevSeq uint32, err error) {
+	switch {
+	case errors.Is(err, negativeunlvote.ErrLocalCountAtThreshold):
+		a.logger.Error("NegativeUNL: local validation count equals strict voting threshold; abstaining",
+			"prev_seq", prevSeq,
+			"err", err,
+		)
+	case errors.Is(err, negativeunlvote.ErrLocalCountExceedsWindow):
+		a.logger.Error("NegativeUNL: local validation count exceeds window — likely duplicate-validation bug",
+			"prev_seq", prevSeq,
+			"err", err,
+		)
+	default:
 		a.logger.Warn("NegativeUNL: DoVoting failed",
 			"prev_seq", prevSeq,
 			"err", err,
 		)
-		return nil
 	}
-	return blobs
 }
 
 // OnUNLChange registers validators newly added to the operator-trusted
@@ -171,11 +178,9 @@ func (a *Adaptor) negativeUNLState(l interface {
 //     it and increment a per-NodeID counter.
 //
 // Returns (nil, false) only when the parent's skip-list is shorter
-// than FlagLedgerInterval (early ledgers near genesis). The
-// local-participation gate ([MinLocalValsToVote, FlagLedgerInterval])
-// is NOT enforced here — it lives solely in DoVoting, which abstains on
-// low participation and surfaces ErrLocalCountExceedsWindow on the
-// impossible above-window case so the caller can log at error severity.
+// than FlagLedgerInterval (early ledgers near genesis).
+// The local-participation gate is enforced by DoVoting. It abstains on low
+// participation and surfaces exact-threshold and above-window diagnostics.
 // DoVoting also restricts this table to the UNL, so an over-populated
 // table (NodeIDs that have since left the UNL) is harmless.
 func (a *Adaptor) buildNegativeUNLScoreTable(
