@@ -272,6 +272,13 @@ func TestRotation_RealGenerationPreservesHigherExistingFloor(t *testing.T) {
 	}
 	db := testRotatingNodeDatabase(t, rotating, 32)
 	defer db.Close()
+	committed, err := db.RotateGeneration(ctx, 800, 501)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !committed {
+		t.Fatal("initial generation rotation did not commit")
+	}
 
 	state, err := shamapstore.New(false, "")
 	if err != nil {
@@ -295,11 +302,11 @@ func TestRotation_RealGenerationPreservesHigherExistingFloor(t *testing.T) {
 		nil,
 	)
 
-	rot.NotifyForTest(800)
+	rot.NotifyForTest(1100)
 
 	lastRotated, minimumOnline := db.GenerationState()
-	if lastRotated != 800 {
-		t.Fatalf("generation lastRotated = %d, want 800", lastRotated)
+	if lastRotated != 1100 {
+		t.Fatalf("generation lastRotated = %d, want 1100", lastRotated)
 	}
 	if minimumOnline != 900 {
 		t.Fatalf("generation minimumOnline = %d, want existing floor 900", minimumOnline)
