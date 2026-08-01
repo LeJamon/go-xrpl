@@ -263,6 +263,7 @@ func (vi *ValidatorIdentity) SignValidation(validation *consensus.Validation) er
 	}
 	validation.SigningPubKey = consensus.SigningPubKey(vi.SigningKey)
 	validation.NodeID = vi.NodeID
+	validation.Flags = localValidationFlags(validation.Full)
 	data := buildValidationSigningData(validation)
 	sig, err := vi.Sign(data)
 	if err != nil {
@@ -334,9 +335,9 @@ func buildValidationSigningData(v *consensus.Validation) []byte {
 	// standing fork hazard). SerializeSTValidation emits sfSignature only
 	// when v.Signature is non-empty and as a distinct field between
 	// sfSigningPubKey and sfAmendments, so clearing it yields exactly the
-	// non-signature preimage. Outbound validations carry Flags == 0 (only
-	// the inbound parser sets Flags), so SerializeSTValidation synthesizes
-	// the same vfFullyCanonicalSig|vfFullValidation pair this used to build.
+	// non-signature preimage. SignValidation normalizes outbound Flags before
+	// reaching this helper, and SerializeSTValidation uses the same helper for
+	// unsigned self-built validations.
 	unsigned := *v
 	unsigned.Signature = nil
 	hash := sha512half.Sum(protocol.HashPrefixValidation().Bytes(), SerializeSTValidation(&unsigned))

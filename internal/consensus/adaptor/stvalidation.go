@@ -278,13 +278,7 @@ func SerializeSTValidation(v *consensus.Validation) []byte {
 	// vfFullyCanonicalSig on every outbound validation so canonical-sig-
 	// strict peers don't need to special-case us, plus vfFullValidation
 	// when v.Full.
-	flags := v.Flags
-	if flags == 0 {
-		flags = vfFullyCanonicalSig
-		if v.Full {
-			flags |= vfFullValidation
-		}
-	}
+	flags := outboundValidationFlags(v)
 	buf = appendFieldHeader(buf, typeUINT32, fieldFlags)
 	buf = binary.BigEndian.AppendUint32(buf, flags)
 
@@ -414,6 +408,21 @@ func SerializeSTValidation(v *consensus.Validation) []byte {
 	}
 
 	return buf
+}
+
+func outboundValidationFlags(v *consensus.Validation) uint32 {
+	if v.Flags != 0 {
+		return v.Flags
+	}
+	return localValidationFlags(v.Full)
+}
+
+func localValidationFlags(full bool) uint32 {
+	flags := uint32(vfFullyCanonicalSig)
+	if full {
+		flags |= vfFullValidation
+	}
+	return flags
 }
 
 // readFieldHeader reads the XRPL field ID at data[*pos] and advances *pos.

@@ -6,27 +6,28 @@ import (
 
 	binarycodec "github.com/LeJamon/go-xrpl/codec/binarycodec"
 	"github.com/LeJamon/go-xrpl/internal/ledger/state"
+	"github.com/LeJamon/go-xrpl/ledger/entry"
 )
 
 // Threading types conditional on fixPreviousTxnID amendment
 // These types only support threading if the amendment is enabled
-var conditionalThreadingTypes = map[string]bool{
-	"DirectoryNode": true,
-	"Amendments":    true,
-	"FeeSettings":   true,
-	"NegativeUNL":   true,
-	"AMM":           true,
+var conditionalThreadingTypes = map[entry.Type]bool{
+	entry.TypeDirectoryNode: true,
+	entry.TypeAmendments:    true,
+	entry.TypeFeeSettings:   true,
+	entry.TypeNegativeUNL:   true,
+	entry.TypeAMM:           true,
 }
 
 // Types that do NOT support threading (no PreviousTxnID field)
-var nonThreadedTypes = map[string]bool{
-	"LedgerHashes": true,
+var nonThreadedTypes = map[entry.Type]bool{
+	entry.TypeLedgerHashes: true,
 }
 
 // isThreadedType determines if an entry type supports transaction threading
 // An entry is threaded if it has PreviousTxnID/PreviousTxnLgrSeq fields
 // Some types are conditional on the fixPreviousTxnID amendment
-func isThreadedType(entryType string, fixPreviousTxnIDEnabled bool) bool {
+func isThreadedType(entryType entry.Type, fixPreviousTxnIDEnabled bool) bool {
 	// Non-threaded types never support threading
 	if nonThreadedTypes[entryType] {
 		return false
@@ -93,7 +94,7 @@ func threadItem(data []byte, txHash [32]byte, ledgerSeq uint32) (prevTxnID [32]b
 // getOwnerAccounts returns the account IDs that own this ledger entry.
 // These accounts should have their PreviousTxnID/PreviousTxnLgrSeq updated.
 // Reference: rippled ApplyStateTable.cpp threadOwners() lines 659-695.
-func getOwnerAccounts(data []byte, entryType string) [][20]byte {
+func getOwnerAccounts(data []byte, entryType entry.Type) [][20]byte {
 	var owners [][20]byte
 
 	// Decode the entry
@@ -104,11 +105,11 @@ func getOwnerAccounts(data []byte, entryType string) [][20]byte {
 	}
 
 	switch entryType {
-	case "AccountRoot":
+	case entry.TypeAccountRoot:
 		// AccountRoot is the owner itself, no additional owners to thread
 		return owners
 
-	case "RippleState":
+	case entry.TypeRippleState:
 		// Thread to both accounts in the trust line
 		// LowLimit and HighLimit contain issuer (account) info
 		if lowLimit, ok := fields["LowLimit"].(map[string]any); ok {

@@ -5,35 +5,27 @@ import (
 	"database/sql"
 
 	"github.com/LeJamon/go-xrpl/storage/relationaldb"
+	"github.com/LeJamon/go-xrpl/storage/relationaldb/internal/sqlutil"
 )
 
 // validationRepository is the PostgreSQL-backed on-disk validation archive.
 // Mirrors the SQLite backend row-for-row so RPC/forensic code sees the same
 // shape regardless of deployment.
 type validationRepository struct {
-	db *sql.DB
-	tx *sql.Tx
+	db       *sqlutil.DB
+	executor executor
 }
 
 // Compile-time interface check.
 var _ relationaldb.ValidationRepository = (*validationRepository)(nil)
 
 // newValidationRepository creates a PostgreSQL validation repository.
-func newValidationRepository(db *sql.DB) *validationRepository {
-	return &validationRepository{db: db}
+func newValidationRepository(db *sqlutil.DB) *validationRepository {
+	return &validationRepository{db: db, executor: db}
 }
 
-// newValidationRepositoryWithTx creates a PostgreSQL validation repository bound
-// to an existing transaction.
-func newValidationRepositoryWithTx(tx *sql.Tx) *validationRepository {
-	return &validationRepository{tx: tx}
-}
-
-func (r *validationRepository) getExecutor() executor {
-	if r.tx != nil {
-		return r.tx
-	}
-	return r.db
+func newValidationRepositoryWithExecutor(exec executor) *validationRepository {
+	return &validationRepository{executor: exec}
 }
 
 const validationSelectCols = `ledger_seq, initial_seq, ledger_hash, node_pubkey,
@@ -44,7 +36,10 @@ func (r *validationRepository) Save(ctx context.Context, v *relationaldb.Validat
 	if v == nil {
 		return relationaldb.NewDataError("validation_save", "nil record", nil)
 	}
-	_, err := r.getExecutor().ExecContext(ctx, `
+	if len(v.NodePubKey) != 33 {
+		return relationaldb.NewDataError("validation_save", "node public key must be 33 bytes", relationaldb.ErrInvalidData)
+	}
+	_, err := r.executor.ExecContext(ctx, `
 		INSERT INTO validations (
 			ledger_seq, initial_seq, ledger_hash, node_pubkey,
 			sign_time, seen_time, flags, raw
@@ -66,7 +61,7 @@ func (r *validationRepository) SaveBatch(ctx context.Context, vs []*relationaldb
 	if len(vs) == 0 {
 		return nil
 	}
-	if r.tx != nil {
+	if r.db == nil {
 		for _, v := range vs {
 			if err := r.Save(ctx, v); err != nil {
 				return err
@@ -79,7 +74,7 @@ func (r *validationRepository) SaveBatch(ctx context.Context, vs []*relationaldb
 	if err != nil {
 		return relationaldb.NewTransactionError("validation_save_batch", "failed to begin transaction", err)
 	}
-	txRepo := newValidationRepositoryWithTx(tx)
+	txRepo := newValidationRepositoryWithExecutor(tx)
 	for _, v := range vs {
 		if err := txRepo.Save(ctx, v); err != nil {
 			_ = tx.Rollback()
@@ -94,7 +89,7 @@ func (r *validationRepository) SaveBatch(ctx context.Context, vs []*relationaldb
 
 // GetValidationsForLedger returns all validation records for the given ledger sequence.
 func (r *validationRepository) GetValidationsForLedger(ctx context.Context, seq relationaldb.LedgerIndex) ([]*relationaldb.ValidationRecord, error) {
-	rows, err := r.getExecutor().QueryContext(ctx,
+	rows, err := r.executor.QueryContext(ctx,
 		`SELECT `+validationSelectCols+` FROM validations WHERE ledger_seq = $1`, int64(seq))
 	if err != nil {
 		return nil, relationaldb.NewQueryError("validation_get_for_ledger", "failed to query validations", err)
@@ -118,6 +113,9 @@ func (r *validationRepository) GetValidationsForLedger(ctx context.Context, seq 
 // GetValidationsByValidator returns a validator's validation records newest-first,
 // capped at limit (0 means no limit).
 func (r *validationRepository) GetValidationsByValidator(ctx context.Context, nodeKey []byte, limit int) ([]*relationaldb.ValidationRecord, error) {
+	if len(nodeKey) != 33 {
+		return nil, relationaldb.NewDataError("validation_get_by_validator", "node public key must be 33 bytes", relationaldb.ErrInvalidData)
+	}
 	q := `SELECT ` + validationSelectCols + ` FROM validations WHERE node_pubkey = $1 ORDER BY ledger_seq DESC`
 	args := []any{nodeKey}
 	if limit > 0 {
@@ -125,7 +123,7 @@ func (r *validationRepository) GetValidationsByValidator(ctx context.Context, no
 		args = append(args, limit)
 	}
 
-	rows, err := r.getExecutor().QueryContext(ctx, q, args...)
+	rows, err := r.executor.QueryContext(ctx, q, args...)
 	if err != nil {
 		return nil, relationaldb.NewQueryError("validation_get_by_validator", "failed to query validations", err)
 	}
@@ -145,16 +143,6 @@ func (r *validationRepository) GetValidationsByValidator(ctx context.Context, no
 	return result, nil
 }
 
-// GetValidationCount returns the number of rows in the validations table.
-func (r *validationRepository) GetValidationCount(ctx context.Context) (int64, error) {
-	var count int64
-	err := r.getExecutor().QueryRowContext(ctx, `SELECT COUNT(*) FROM validations`).Scan(&count)
-	if err != nil {
-		return 0, relationaldb.NewQueryError("validation_count", "failed to count validations", err)
-	}
-	return count, nil
-}
-
 // DeleteOlderThanSeq removes up to batchSize rows with ledger_seq < maxSeq.
 // Uses a CTID-based bounded DELETE so a single retention sweep never blocks
 // the writer on an unbounded scan.
@@ -162,13 +150,13 @@ func (r *validationRepository) DeleteOlderThanSeq(ctx context.Context, maxSeq re
 	var res sql.Result
 	var err error
 	if batchSize > 0 {
-		res, err = r.getExecutor().ExecContext(ctx, `
+		res, err = r.executor.ExecContext(ctx, `
 			DELETE FROM validations WHERE ctid IN (
 				SELECT ctid FROM validations WHERE ledger_seq < $1 LIMIT $2
 			)
 		`, int64(maxSeq), batchSize)
 	} else {
-		res, err = r.getExecutor().ExecContext(ctx,
+		res, err = r.executor.ExecContext(ctx,
 			`DELETE FROM validations WHERE ledger_seq < $1`, int64(maxSeq))
 	}
 	if err != nil {

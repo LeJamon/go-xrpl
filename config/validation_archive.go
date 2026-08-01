@@ -4,8 +4,8 @@ import "fmt"
 
 // ValidationArchiveConfig controls the on-disk validation archive —
 // persistence of stale validations pruned from ValidationTracker to the
-// relational DB's validations table. Follows rippled's historical
-// onStale/doStaleWrite pattern with Go-native batching semantics.
+// relational DB's validations table. It is inspired by rippled's historical
+// validation database, which was removed before rippled v3.2.0.
 type ValidationArchiveConfig struct {
 	// Enabled flips the archive on. When false no writer goroutine runs
 	// and OnStale is a no-op, regardless of whether the relational DB
@@ -16,7 +16,7 @@ type ValidationArchiveConfig struct {
 	// RetentionLedgers is the number of fully-validated ledgers of
 	// history to keep in the archive. Rows with ledger_seq below
 	// (currentFullyValidatedSeq - RetentionLedgers) are deleted on
-	// each flush tick. 0 disables retention (keep forever).
+	// independent maintenance sweeps. 0 disables retention (keep forever).
 	RetentionLedgers uint32 `toml:"retention_ledgers" mapstructure:"retention_ledgers"`
 
 	// BatchSize caps how many stale validations the writer accumulates
@@ -30,8 +30,8 @@ type ValidationArchiveConfig struct {
 	// Must be >= 10.
 	FlushIntervalMs int `toml:"flush_interval_ms" mapstructure:"flush_interval_ms"`
 
-	// DeleteBatch caps how many rows a single retention sweep deletes.
-	// Bounded so the writer never blocks on a multi-second DELETE scan.
+	// DeleteBatch caps each retention DELETE. Maintenance may issue several
+	// bounded deletes per sweep to catch up without one unbounded query.
 	// Must be >= 1.
 	DeleteBatch int `toml:"delete_batch" mapstructure:"delete_batch"`
 

@@ -104,6 +104,42 @@ func TestParseFromBinary_DisallowedField(t *testing.T) {
 	}
 }
 
+func TestParseFromBinary_MissingRequiredField(t *testing.T) {
+	fields := baseCommon("Payment")
+	fields["Amount"] = "1000000"
+
+	_, err := ParseFromBinary(encodeTx(t, fields))
+	if err == nil {
+		t.Fatal("expected parse to reject Payment without Destination")
+	}
+	re, ok := ter.AsResultError(err)
+	if !ok {
+		t.Fatalf("expected a ResultError, got %T: %v", err, err)
+	}
+	if re.Code != ter.TemMALFORMED {
+		t.Fatalf("expected TemMALFORMED, got %v: %v", re.Code, err)
+	}
+}
+
+func TestParseFromBinary_RejectsInvalidLength(t *testing.T) {
+	for _, blob := range [][]byte{
+		make([]byte, 31),
+		make([]byte, (1<<20)+1),
+	} {
+		_, err := ParseFromBinary(blob)
+		if err == nil {
+			t.Fatalf("expected parse to reject %d-byte transaction", len(blob))
+		}
+		re, ok := ter.AsResultError(err)
+		if !ok {
+			t.Fatalf("expected a ResultError, got %T: %v", err, err)
+		}
+		if re.Code != ter.TemMALFORMED {
+			t.Fatalf("expected TemMALFORMED, got %v: %v", re.Code, err)
+		}
+	}
+}
+
 // TestParseFromBinary_AllowedFields verifies that transactions carrying only
 // their own template fields plus the common fields parse successfully.
 func TestParseFromBinary_AllowedFields(t *testing.T) {

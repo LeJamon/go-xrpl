@@ -211,8 +211,43 @@ func TestNewValidatorIdentityFromToken_SignVerifyValidation(t *testing.T) {
 	if len(v.Signature) == 0 {
 		t.Fatal("expected non-empty signature")
 	}
+	if want := uint32(vfFullyCanonicalSig | vfFullValidation); v.Flags != want {
+		t.Fatalf("signed validation flags = %#x, want %#x", v.Flags, want)
+	}
 	if err := VerifyValidation(v); err != nil {
 		t.Fatalf("VerifyValidation: %v", err)
+	}
+
+	partial := &consensus.Validation{
+		LedgerID:  consensus.LedgerID{0x03, 0x04},
+		LedgerSeq: 43,
+		SignTime:  time.Unix(protocol.RippleEpochUnix+1001, 0),
+	}
+	if err := id.SignValidation(partial); err != nil {
+		t.Fatalf("SignValidation partial: %v", err)
+	}
+	if want := uint32(vfFullyCanonicalSig); partial.Flags != want {
+		t.Fatalf("signed partial validation flags = %#x, want %#x", partial.Flags, want)
+	}
+	if err := VerifyValidation(partial); err != nil {
+		t.Fatalf("VerifyValidation partial: %v", err)
+	}
+
+	conflicting := &consensus.Validation{
+		Full:      true,
+		Flags:     vfFullyCanonicalSig,
+		LedgerID:  consensus.LedgerID{0x05, 0x06},
+		LedgerSeq: 44,
+		SignTime:  time.Unix(protocol.RippleEpochUnix+1002, 0),
+	}
+	if err := id.SignValidation(conflicting); err != nil {
+		t.Fatalf("SignValidation conflicting flags: %v", err)
+	}
+	if want := uint32(vfFullyCanonicalSig | vfFullValidation); conflicting.Flags != want {
+		t.Fatalf("normalized conflicting flags = %#x, want %#x", conflicting.Flags, want)
+	}
+	if err := VerifyValidation(conflicting); err != nil {
+		t.Fatalf("VerifyValidation conflicting flags: %v", err)
 	}
 }
 

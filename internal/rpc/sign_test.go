@@ -1178,7 +1178,9 @@ func TestSignFor_MissingCredentials(t *testing.T) {
 			"TransactionType": "Payment",
 			"Account": "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh",
 			"Destination": "rPMh7Pi9ct699iZUTWaytJUoHcJ7cgyziK",
-			"Amount": "1000000"
+			"Amount": "1000000",
+			"Fee": "10",
+			"Sequence": 1
 		}
 	}`)
 	_, err := handler.Handle(ctx, params)

@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/LeJamon/go-xrpl/internal/tx/ledgerfields"
+	ledgerfields "github.com/LeJamon/go-xrpl/ledger/entry"
 )
 
 // PermissionedDomainData holds the parsed fields of a PermissionedDomain ledger entry.

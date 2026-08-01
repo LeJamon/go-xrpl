@@ -1,6 +1,7 @@
 package ledger
 
 import (
+	"context"
 	"testing"
 	"time"
 
@@ -12,17 +13,18 @@ import (
 )
 
 func TestHeaderConstructorsPreserveValidationState(t *testing.T) {
-	closed, err := NewClosedFromHeader(
+	closed, err := NewClosedFromHeaderContext(
+		context.Background(),
 		header.LedgerHeader{},
 		shamap.New(shamap.TypeState),
 		shamap.New(shamap.TypeTransaction),
 		drops.Fees{},
 	)
 	if err != nil {
-		t.Fatalf("NewClosedFromHeader: %v", err)
+		t.Fatalf("NewClosedFromHeaderContext: %v", err)
 	}
-	if closed.State() != StateClosed || closed.IsValidated() {
-		t.Fatalf("unvalidated header created state %s", closed.State())
+	if !closed.IsClosed() || closed.IsValidated() {
+		t.Fatal("unvalidated header did not create a closed ledger")
 	}
 	if err = closed.SetValidated(); err != nil {
 		t.Fatalf("promote closed ledger: %v", err)
@@ -40,8 +42,8 @@ func TestHeaderConstructorsPreserveValidationState(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewFromHeader: %v", err)
 	}
-	if unvalidated.State() != StateClosed || unvalidated.IsValidated() || unvalidated.Header().Validated {
-		t.Fatalf("unvalidated header created state %s", unvalidated.State())
+	if !unvalidated.IsClosed() || unvalidated.IsValidated() || unvalidated.Header().Validated {
+		t.Fatal("unvalidated header did not create a closed ledger")
 	}
 
 	validated, err := NewFromHeader(
@@ -53,8 +55,8 @@ func TestHeaderConstructorsPreserveValidationState(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewFromHeader validated: %v", err)
 	}
-	if validated.State() != StateValidated || !validated.IsValidated() {
-		t.Fatalf("validated header created state %s", validated.State())
+	if !validated.IsValidated() {
+		t.Fatal("validated header did not create a validated ledger")
 	}
 }
 
@@ -93,7 +95,7 @@ func newParentAt(t *testing.T, parentSeq uint32, resolution uint32, closeAgree b
 	// specific resolution + closeAgree pair, and the bin-step
 	// algorithm would otherwise interfere.
 	h := parent.header
-	h.CloseTimeResolution = resolution
+	h.CloseTimeResolution = uint8(resolution)
 	if closeAgree {
 		h.CloseFlags &^= header.LCFNoConsensusTime
 	} else {

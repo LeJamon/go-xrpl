@@ -69,11 +69,12 @@ func (pf *Pathfinder) rankMinAmount(maxPaths int) tx.Amount {
 		}
 		return minAmount
 	}
-	if minAmount.IsMPT() {
-		return minAmount.Div(state.NewXRPAmountFromInt(divisor), false)
-	}
-	if f := minAmount.Float64(); f > 0 {
-		return state.NewIssuedAmountFromFloat64(f/float64(divisor), minAmount.Currency, minAmount.Issuer)
+	if !minAmount.IsZero() && !minAmount.IsNegative() {
+		return minAmount.DivWithNumberContext(
+			state.NewXRPAmountFromInt(divisor),
+			pf.calculation.numberContext,
+			false,
+		)
 	}
 	return minAmount
 }
@@ -149,7 +150,7 @@ func (pf *Pathfinder) getPathLiquidity(path []payment.PathStep, minAmount tx.Amo
 
 	// Calculate quality from actual amounts
 	// Reference: rippled getRate(actualAmountOut, actualAmountIn)
-	quality := computeQuality(rc.ActualOut, rc.ActualIn)
+	quality := computeQuality(rc.ActualOut, rc.ActualIn, pf.calculation.numberContext)
 	totalLiquidity := rc.ActualOut
 
 	// Second pass: test for full remaining liquidity (unless convertAll)
@@ -181,10 +182,10 @@ func (pf *Pathfinder) getPathLiquidity(path []payment.PathStep, minAmount tx.Amo
 // computeQuality calculates the quality ratio as out/in encoded as uint64.
 // Lower values represent better quality.
 // Reference: rippled getRate(actualAmountOut, actualAmountIn)
-func computeQuality(out, in payment.EitherAmount) uint64 {
+func computeQuality(out, in payment.EitherAmount, ctx state.NumberContext) uint64 {
 	outAmt := payment.FromEitherAmount(out)
 	inAmt := payment.FromEitherAmount(in)
-	return state.GetRate(outAmt, inAmt)
+	return state.GetRateWithNumberContext(outAmt, inAmt, ctx)
 }
 
 // largestAmount returns the largest possible amount for the given currency.
@@ -199,8 +200,12 @@ func largestAmount(amt tx.Amount) tx.Amount {
 	if amt.IsMPT() {
 		return state.NewMPTAmountWithIssuanceID(9_223_372_036_854_775_807, amt.Issuer, amt.MPTIssuanceID())
 	}
-	// Maximum IOU amount: 9999999999999999e80
-	return state.NewIssuedAmountFromFloat64(9999999999999999e80, amt.Currency, amt.Issuer)
+	return state.NewIssuedAmountFromValue(
+		state.MaxMantissa,
+		state.MaxExponent,
+		amt.Currency,
+		amt.Issuer,
+	)
 }
 
 // GetBestPaths selects the best paths from the ranked list.

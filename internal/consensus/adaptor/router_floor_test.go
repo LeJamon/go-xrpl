@@ -7,6 +7,7 @@ import (
 
 	"github.com/LeJamon/go-xrpl/crypto/sha512half"
 	"github.com/LeJamon/go-xrpl/internal/consensus"
+	"github.com/LeJamon/go-xrpl/internal/ledger/genesis"
 	"github.com/LeJamon/go-xrpl/internal/ledger/header"
 	"github.com/LeJamon/go-xrpl/internal/ledger/inbound"
 	"github.com/LeJamon/go-xrpl/internal/ledger/service"
@@ -209,7 +210,7 @@ func TestRouter_HandleGetLedger_Floor_ServesAtOrAboveBoundary(t *testing.T) {
 
 func newFetchDepthServeRouter(t *testing.T) (*Router, *querytypeRecorder, *service.Service) {
 	t.Helper()
-	cfg := service.DefaultConfig()
+	cfg := service.Config{Standalone: true, GenesisConfig: genesis.DefaultConfig()}
 	cfg.FetchDepth = 2
 	svc, err := service.New(cfg)
 	require.NoError(t, err)

@@ -1,10 +1,15 @@
 package ledgertrie
 
 import (
+	"maps"
+	"math"
 	"math/rand"
+	"slices"
+	"strings"
 	"testing"
 
 	"github.com/LeJamon/go-xrpl/internal/consensus"
+	"github.com/LeJamon/go-xrpl/internal/consensus/ledgertrietest"
 )
 
 // idGreater reports whether a > b in lexicographic byte order. Local
@@ -22,9 +27,49 @@ func idGreater(a, b consensus.LedgerID) bool {
 // newTestTrie constructs an empty trie paired with a fresh builder.
 // The genesis ledger for the trie is builder's genesis so ID matching
 // works naturally.
-func newTestTrie() (*Trie, *TestLedgerBuilder) {
-	b := NewTestLedgerBuilder()
+func newTestTrie() (*Trie, *ledgertrietest.TestLedgerBuilder) {
+	b := ledgertrietest.NewTestLedgerBuilder()
 	return New(b.Genesis()), b
+}
+
+func TestMismatch(t *testing.T) {
+	b := ledgertrietest.NewTestLedgerBuilder()
+	tests := []struct {
+		name string
+		a    Ledger
+		b    Ledger
+		want uint32
+	}{
+		{name: "GenesisOverlap", a: b.Build(""), b: b.Build("a"), want: 1},
+		{name: "SharedHistory", a: b.Build("abc"), b: b.Build("abcde"), want: 4},
+		{name: "DivergentAtFloor", a: b.Build("abc"), b: b.Build("xyz"), want: 1},
+		{name: "SameSequenceDivergence", a: b.Build("abc"), b: b.Build("abd"), want: 3},
+		{name: "DifferentSequenceDivergence", a: b.Build("abc"), b: b.Build("abdef"), want: 3},
+		{name: "NoKnownOverlap", a: limitedHistoryLedger{seq: 300}, b: limitedHistoryLedger{seq: 1}, want: 1},
+		{name: "SharedAtWindow", a: limitedHistoryLedger{seq: 300}, b: limitedHistoryLedger{seq: 299}, want: 300},
+		{
+			name: "DivergenceAtWindowFloor",
+			a:    limitedHistoryBranchLedger{seq: 300, fork: 44, branch: 1},
+			b:    limitedHistoryBranchLedger{seq: 300, fork: 44, branch: 2},
+			want: 1,
+		},
+		{
+			name: "DivergenceInsideWindow",
+			a:    limitedHistoryBranchLedger{seq: 300, fork: 100, branch: 1},
+			b:    limitedHistoryBranchLedger{seq: 300, fork: 100, branch: 2},
+			want: 100,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := mismatch(tt.a, tt.b); got != tt.want {
+				t.Fatalf("mismatch(a, b) = %d, want %d", got, tt.want)
+			}
+			if got := mismatch(tt.b, tt.a); got != tt.want {
+				t.Fatalf("mismatch(b, a) = %d, want %d", got, tt.want)
+			}
+		})
+	}
 }
 
 // --- TestLedgerTrie_ParityTable --------------------------------------
@@ -42,7 +87,7 @@ type trieAssertion struct {
 	branch uint32
 }
 
-func assertSupport(t *testing.T, trie *Trie, b *TestLedgerBuilder, a trieAssertion) {
+func assertSupport(t *testing.T, trie *Trie, b *ledgertrietest.TestLedgerBuilder, a trieAssertion) {
 	t.Helper()
 	l := b.Build(a.path)
 	if got := trie.TipSupport(l); got != a.tip {
@@ -322,29 +367,29 @@ func TestLedgerTrie_ParityTable(t *testing.T) {
 
 func TestLedgerTrie_Empty(t *testing.T) {
 	trie, b := newTestTrie()
-	if !trie.Empty() {
+	if !trie.empty() {
 		t.Fatal("new trie should be empty")
 	}
 
 	trie.Insert(b.Build(""), 1) // genesis
-	if trie.Empty() {
+	if trie.empty() {
 		t.Fatal("trie with genesis support should not be empty")
 	}
 	if !trie.Remove(b.Build(""), 1) {
 		t.Fatal("Remove(genesis) should return true")
 	}
-	if !trie.Empty() {
+	if !trie.empty() {
 		t.Fatal("trie should be empty after genesis removal")
 	}
 
 	trie.Insert(b.Build("abc"), 1)
-	if trie.Empty() {
+	if trie.empty() {
 		t.Fatal("trie with abc should not be empty")
 	}
 	if !trie.Remove(b.Build("abc"), 1) {
 		t.Fatal("Remove(abc) should return true")
 	}
-	if !trie.Empty() {
+	if !trie.empty() {
 		t.Fatal("trie should be empty after abc removal")
 	}
 }
@@ -352,7 +397,7 @@ func TestLedgerTrie_Empty(t *testing.T) {
 // --- getPreferred parity tests ---------------------------------------
 
 // idOf is a small convenience helper for the getPreferred tests below.
-func idOf(b *TestLedgerBuilder, path string) string { // returns hex-like
+func idOf(b *ledgertrietest.TestLedgerBuilder, path string) string { // returns hex-like
 	id := b.Build(path).ID()
 	return string(id[:])
 }
@@ -466,10 +511,6 @@ func TestLedgerTrie_GetPreferred_SingleLargerChildren(t *testing.T) {
 }
 
 func TestLedgerTrie_GetPreferred_TieBreakerByID(t *testing.T) {
-	// IDs in our TestLedgerBuilder are sha256-derived and thus
-	// unpredictable. We compute which sibling has the larger ID at
-	// seq 4 and steer assertions accordingly — mirroring rippled's
-	// test which does the same with an explicit `>` check.
 	trie, b := newTestTrie()
 	abcd := b.Build("abcd")
 	abce := b.Build("abce")
@@ -779,5 +820,365 @@ func TestLedgerTrie_Stress_InvariantsHold(t *testing.T) {
 		if !trie.CheckInvariants() {
 			t.Fatalf("invariants broken at iter %d after %s(%q)", i, "op", path)
 		}
+	}
+}
+
+type boundaryLedger struct {
+	id  consensus.LedgerID
+	seq uint32
+}
+
+func (l *boundaryLedger) ID() consensus.LedgerID { return l.id }
+func (l *boundaryLedger) Seq() uint32            { return l.seq }
+func (l *boundaryLedger) MinSeq() uint32         { return 0 }
+func (l *boundaryLedger) Ancestor(seq uint32) consensus.LedgerID {
+	if seq == 0 {
+		return consensus.LedgerID{}
+	}
+	if seq == l.seq {
+		return l.id
+	}
+	return consensus.LedgerID{}
+}
+
+type limitedHistoryLedger struct {
+	seq uint32
+}
+
+func (l limitedHistoryLedger) ID() consensus.LedgerID { return sequenceLedgerID(l.seq) }
+func (l limitedHistoryLedger) Seq() uint32            { return l.seq }
+func (l limitedHistoryLedger) MinSeq() uint32 {
+	if l.seq > 256 {
+		return l.seq - 256
+	}
+	return 0
+}
+func (l limitedHistoryLedger) Ancestor(seq uint32) consensus.LedgerID {
+	if seq < l.MinSeq() || seq > l.seq {
+		return consensus.LedgerID{}
+	}
+	return sequenceLedgerID(seq)
+}
+
+type limitedHistoryBranchLedger struct {
+	seq    uint32
+	fork   uint32
+	branch byte
+}
+
+func (l limitedHistoryBranchLedger) ID() consensus.LedgerID { return l.Ancestor(l.seq) }
+func (l limitedHistoryBranchLedger) Seq() uint32            { return l.seq }
+func (l limitedHistoryBranchLedger) MinSeq() uint32 {
+	if l.seq > 256 {
+		return l.seq - 256
+	}
+	return 0
+}
+func (l limitedHistoryBranchLedger) Ancestor(seq uint32) consensus.LedgerID {
+	if seq < l.MinSeq() || seq > l.seq {
+		return consensus.LedgerID{}
+	}
+	id := sequenceLedgerID(seq)
+	if seq >= l.fork {
+		id[0] = l.branch
+		id[1] = byte(l.fork >> 24)
+		id[2] = byte(l.fork >> 16)
+		id[3] = byte(l.fork >> 8)
+		id[4] = byte(l.fork)
+	}
+	return id
+}
+
+func sequenceLedgerID(seq uint32) consensus.LedgerID {
+	var id consensus.LedgerID
+	id[28] = byte(seq >> 24)
+	id[29] = byte(seq >> 16)
+	id[30] = byte(seq >> 8)
+	id[31] = byte(seq)
+	return id
+}
+
+func requirePanic(t *testing.T, fn func()) {
+	t.Helper()
+	defer func() {
+		if recover() == nil {
+			t.Fatal("expected panic")
+		}
+	}()
+	fn()
+}
+
+func TestLedgerTrie_RejectsInvalidBoundaries(t *testing.T) {
+	t.Run("NilGenesis", func(t *testing.T) {
+		requirePanic(t, func() { New(nil) })
+	})
+	t.Run("TypedNilGenesis", func(t *testing.T) {
+		var genesis *boundaryLedger
+		requirePanic(t, func() { New(genesis) })
+	})
+	t.Run("NonGenesisSequence", func(t *testing.T) {
+		requirePanic(t, func() { New(&boundaryLedger{seq: 1}) })
+	})
+	t.Run("NilInsert", func(t *testing.T) {
+		trie, _ := newTestTrie()
+		requirePanic(t, func() { trie.Insert(nil, 1) })
+		if !trie.CheckInvariants() {
+			t.Fatal("nil insert mutated the trie")
+		}
+	})
+	t.Run("MaximumSequence", func(t *testing.T) {
+		trie, _ := newTestTrie()
+		ledger := &boundaryLedger{seq: math.MaxUint32}
+		requirePanic(t, func() { trie.Insert(ledger, 1) })
+		if !trie.CheckInvariants() {
+			t.Fatal("maximum-sequence insert mutated the trie")
+		}
+	})
+}
+
+func TestLedgerTrie_SupportOverflowIsAtomic(t *testing.T) {
+	trie, b := newTestTrie()
+	first := b.Build("a")
+	second := b.Build("b")
+	trie.Insert(first, math.MaxUint32)
+
+	beforeDump := trie.String()
+	beforeKeys := slices.Clone(trie.seqKeys)
+	beforeSeqSupport := maps.Clone(trie.seqSupport)
+	beforePreferred, beforeOK := trie.GetPreferred(1)
+
+	requirePanic(t, func() { trie.Insert(second, 1) })
+	requirePanic(t, func() { trie.Insert(first, 1) })
+
+	if got := trie.String(); got != beforeDump {
+		t.Fatalf("trie shape changed after rejected insert:\n got %q\nwant %q", got, beforeDump)
+	}
+	if !slices.Equal(trie.seqKeys, beforeKeys) {
+		t.Fatalf("sequence keys changed after rejected insert: got %v, want %v", trie.seqKeys, beforeKeys)
+	}
+	if !maps.Equal(trie.seqSupport, beforeSeqSupport) {
+		t.Fatalf("sequence support changed after rejected insert: got %v, want %v", trie.seqSupport, beforeSeqSupport)
+	}
+	afterPreferred, afterOK := trie.GetPreferred(1)
+	if afterOK != beforeOK || afterPreferred != beforePreferred {
+		t.Fatalf("preferred tip changed after rejected insert: got (%v, %t), want (%v, %t)",
+			afterPreferred, afterOK, beforePreferred, beforeOK)
+	}
+	if !trie.CheckInvariants() {
+		t.Fatal("rejected insert broke invariants")
+	}
+}
+
+func TestLedgerTrie_RemoveSequenceMismatchIsAtomic(t *testing.T) {
+	trie, b := newTestTrie()
+	ledger := b.Build("a")
+	trie.Insert(ledger, 2)
+
+	mismatched := &boundaryLedger{id: ledger.ID(), seq: 2}
+	requirePanic(t, func() { trie.Remove(mismatched, 1) })
+
+	if got := trie.TipSupport(ledger); got != 2 {
+		t.Fatalf("tip support changed after rejected remove: got %d, want 2", got)
+	}
+	if !trie.CheckInvariants() {
+		t.Fatal("rejected remove broke invariants")
+	}
+}
+
+func TestLedgerTrie_CheckInvariantsRejectsWrappedSupport(t *testing.T) {
+	trie, b := newTestTrie()
+	first := b.Build("a")
+	second := b.Build("b")
+	trie.Insert(first, math.MaxUint32)
+
+	sibling := newNodeFromSpan(newSpanFromLedger(second))
+	sibling.parent = trie.root
+	sibling.tipSupport = 1
+	sibling.branchSupport = 1
+	trie.root.children = append(trie.root.children, sibling)
+	trie.root.branchSupport = 0
+
+	if trie.CheckInvariants() {
+		t.Fatal("wrapped support state passed invariants")
+	}
+}
+
+func TestLedgerTrie_CheckInvariantsRejectsNilChild(t *testing.T) {
+	trie, _ := newTestTrie()
+	trie.root.children = append(trie.root.children, nil)
+	if trie.CheckInvariants() {
+		t.Fatal("nil child passed invariants")
+	}
+}
+
+func TestLedgerTrie_CheckInvariantsRejectsSequenceKeyDrift(t *testing.T) {
+	tests := map[string]func(*Trie){
+		"Missing": func(trie *Trie) {
+			trie.seqKeys = trie.seqKeys[:1]
+		},
+		"Extra": func(trie *Trie) {
+			trie.seqKeys = append(trie.seqKeys, 3)
+		},
+		"Duplicate": func(trie *Trie) {
+			trie.seqKeys[1] = trie.seqKeys[0]
+		},
+		"Unsorted": func(trie *Trie) {
+			trie.seqKeys[0], trie.seqKeys[1] = trie.seqKeys[1], trie.seqKeys[0]
+		},
+		"Substituted": func(trie *Trie) {
+			trie.seqKeys[1] = 3
+		},
+	}
+	for name, corrupt := range tests {
+		t.Run(name, func(t *testing.T) {
+			trie, b := newTestTrie()
+			trie.Insert(b.Build("a"), 1)
+			trie.Insert(b.Build("ab"), 1)
+			corrupt(trie)
+			if trie.CheckInvariants() {
+				t.Fatal("corrupt sequence-key index passed invariants")
+			}
+		})
+	}
+}
+
+func TestLedgerTrie_GetPreferredOrdersTopTwoChildren(t *testing.T) {
+	trie, b := newTestTrie()
+	a := b.Build("a")
+	bLedger := b.Build("b")
+	c := b.Build("c")
+	trie.Insert(a, 1)
+	trie.Insert(bLedger, 2)
+	trie.Insert(c, 3)
+
+	preferred, ok := trie.GetPreferred(0)
+	if !ok || preferred.ID != c.ID() {
+		t.Fatalf("preferred ledger = (%x, %t), want %x", preferred.ID, ok, c.ID())
+	}
+	if got := trie.root.children[0].s.tip().ID; got != c.ID() {
+		t.Fatalf("first child = %x, want %x", got, c.ID())
+	}
+	if got := trie.root.children[1].s.tip().ID; got != bLedger.ID() {
+		t.Fatalf("second child = %x, want %x", got, bLedger.ID())
+	}
+}
+
+func TestLedgerTrie_LimitedHistoryExactRemoval(t *testing.T) {
+	trie := New(limitedHistoryLedger{})
+	ledger2 := limitedHistoryLedger{seq: 2}
+	ledger258 := limitedHistoryLedger{seq: 258}
+	ledger259 := limitedHistoryLedger{seq: 259}
+
+	trie.Insert(ledger2, 1)
+	trie.Insert(ledger258, 4)
+	if got := trie.TipSupport(ledger2); got != 1 {
+		t.Fatalf("ledger 2 tip support = %d, want 1", got)
+	}
+	if got := trie.BranchSupport(ledger2); got != 5 {
+		t.Fatalf("ledger 2 branch support = %d, want 5", got)
+	}
+	if got := trie.TipSupport(ledger258); got != 4 {
+		t.Fatalf("ledger 258 tip support = %d, want 4", got)
+	}
+
+	if !trie.Remove(ledger258, 3) {
+		t.Fatal("remove ledger 258 support")
+	}
+	trie.Insert(ledger259, 3)
+	if _, ok := trie.GetPreferred(1); !ok {
+		t.Fatal("expected preferred ledger")
+	}
+	if got := trie.BranchSupport(ledger2); got != 2 {
+		t.Fatalf("split ledger 2 branch support = %d, want 2", got)
+	}
+	if got := trie.TipSupport(ledger258); got != 1 {
+		t.Fatalf("split ledger 258 tip support = %d, want 1", got)
+	}
+	if got := trie.TipSupport(ledger259); got != 3 {
+		t.Fatalf("split ledger 259 tip support = %d, want 3", got)
+	}
+
+	if !trie.Remove(ledger258, 1) {
+		t.Fatal("remove exact ledger 258 support after preferred traversal")
+	}
+	trie.Insert(ledger259, 1)
+	if _, ok := trie.GetPreferred(1); !ok {
+		t.Fatal("expected preferred ledger after support move")
+	}
+	if got := trie.BranchSupport(ledger2); got != 1 {
+		t.Fatalf("final ledger 2 branch support = %d, want 1", got)
+	}
+	if got := trie.TipSupport(ledger258); got != 0 {
+		t.Fatalf("final ledger 258 tip support = %d, want 0", got)
+	}
+	if got := trie.BranchSupport(ledger258); got != 4 {
+		t.Fatalf("final ledger 258 branch support = %d, want 4\n%s", got, trie.String())
+	}
+	if got := trie.TipSupport(ledger259); got != 4 {
+		t.Fatalf("final ledger 259 tip support = %d, want 4", got)
+	}
+	if !trie.CheckInvariants() {
+		t.Fatal("limited-history support move broke invariants")
+	}
+}
+
+func TestLedgerTrie_LimitedHistoryPreferredOrderGuidesInsert(t *testing.T) {
+	trie := New(limitedHistoryLedger{})
+	ledger2 := limitedHistoryLedger{seq: 2}
+	ledger200 := limitedHistoryLedger{seq: 200}
+	ledger258 := limitedHistoryLedger{seq: 258}
+	ledger259 := limitedHistoryLedger{seq: 259}
+
+	trie.Insert(ledger2, 1)
+	trie.Insert(ledger258, 1)
+	trie.Insert(ledger259, 3)
+	if _, ok := trie.GetPreferred(1); !ok {
+		t.Fatal("expected preferred ledger for newer branch")
+	}
+
+	if !trie.Remove(ledger259, 2) {
+		t.Fatal("reduce newer branch support")
+	}
+	trie.Insert(ledger2, 2)
+	if got := trie.BranchSupport(ledger2); got != 4 {
+		t.Fatalf("older branch support = %d, want 4", got)
+	}
+	if _, ok := trie.GetPreferred(1); !ok {
+		t.Fatal("expected preferred ledger for older branch")
+	}
+
+	trie.Insert(ledger200, 1)
+	if got := trie.BranchSupport(ledger2); got != 5 {
+		t.Fatalf("intermediate support followed wrong limited-history branch: got %d, want 5", got)
+	}
+	if got := trie.BranchSupport(ledger259); got != 1 {
+		t.Fatalf("newer split branch support = %d, want 1", got)
+	}
+	if !trie.CheckInvariants() {
+		t.Fatal("preferred-order insertion broke invariants")
+	}
+}
+
+func TestLedgerTrie_TestLedgerPathValidation(t *testing.T) {
+	b := ledgertrietest.NewTestLedgerBuilder()
+	for name, path := range map[string]string{
+		"NUL":        "\x00",
+		"NonASCII":   "é",
+		"InvalidUTF": string([]byte{0xff}),
+		"TooLong":    strings.Repeat("a", 32),
+	} {
+		t.Run(name, func(t *testing.T) {
+			requirePanic(t, func() { b.Build(path) })
+		})
+	}
+
+	ledger := b.Build("abc")
+	wantID := consensus.LedgerID{'a', 'b', 'c'}
+	if ledger.ID() != wantID {
+		t.Fatalf("Build(abc) ID = %x, want %x", ledger.ID(), wantID)
+	}
+	wantAncestor := consensus.LedgerID{'a', 'b'}
+	if got := ledger.Ancestor(2); got != wantAncestor {
+		t.Fatalf("Build(abc).Ancestor(2) = %x, want %x", got, wantAncestor)
 	}
 }

@@ -378,9 +378,17 @@ func (c *Clawback) applyIOU(ctx *tx.ApplyContext) ter.Result {
 	// If holder is LOW: holder pays issuer (HIGH) → balance decreases
 	// If holder is HIGH: holder pays issuer (LOW) → balance increases
 	if holderIsLow {
-		rs.Balance, err = rs.Balance.Sub(actualAmount)
+		rs.Balance, err = rs.Balance.SubWithNumberContext(
+			actualAmount,
+			ctx.NumberContext(),
+			state.RoundToNearest,
+		)
 	} else {
-		rs.Balance, err = rs.Balance.Add(actualAmount)
+		rs.Balance, err = rs.Balance.AddWithNumberContext(
+			actualAmount,
+			ctx.NumberContext(),
+			state.RoundToNearest,
+		)
 	}
 	if err != nil {
 		return ter.TefINTERNAL

@@ -137,8 +137,8 @@ func (n *NFTokenCancelOffer) Apply(ctx *tx.ApplyContext) ter.Result {
 
 		// If the entry exists but is NOT an NFTokenOffer, return tecNO_PERMISSION.
 		// Reference: rippled preclaim() line 75: if (offer->getType() != ltNFTOKEN_OFFER) return true;
-		entryType, err := state.GetLedgerEntryType(offerData)
-		if err != nil || entry.Type(entryType) != entry.TypeNFTokenOffer {
+		entryType, err := state.DecodeType(offerData)
+		if err != nil || entryType != entry.TypeNFTokenOffer {
 			return ter.TecNO_PERMISSION
 		}
 

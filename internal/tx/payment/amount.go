@@ -1,8 +1,10 @@
 package payment
 
 import (
+	"fmt"
 	"math/big"
 
+	"github.com/LeJamon/go-xrpl/internal/ledger/state"
 	tx "github.com/LeJamon/go-xrpl/internal/tx"
 )
 
@@ -85,50 +87,82 @@ func (e EitherAmount) IsNegative() bool {
 
 // Add adds two EitherAmounts (must be same type - both XRP or both IOU)
 func (e EitherAmount) Add(other EitherAmount) EitherAmount {
+	return e.AddWithNumberContext(
+		other,
+		state.NewNumberContext(state.MantissaScaleSmall, false),
+	)
+}
+
+func (e EitherAmount) AddWithNumberContext(
+	other EitherAmount,
+	numberContext state.NumberContext,
+) EitherAmount {
 	if e.IsNative {
 		return NewXRPEitherAmount(e.XRP + other.XRP)
 	}
 	if e.IsMPT {
 		return NewMPTEitherAmount(e.MPT+other.MPT, e.MPTID)
 	}
-	result, _ := e.IOU.Add(other.IOU)
+	result, _ := e.IOU.AddWithNumberContext(other.IOU, numberContext, state.RoundToNearest)
 	return NewIOUEitherAmount(result)
 }
 
 // Sub subtracts other from e (must be same type)
 func (e EitherAmount) Sub(other EitherAmount) EitherAmount {
+	return e.SubWithNumberContext(
+		other,
+		state.NewNumberContext(state.MantissaScaleSmall, false),
+	)
+}
+
+func (e EitherAmount) SubWithNumberContext(
+	other EitherAmount,
+	numberContext state.NumberContext,
+) EitherAmount {
 	if e.IsNative {
 		return NewXRPEitherAmount(e.XRP - other.XRP)
 	}
 	if e.IsMPT {
 		return NewMPTEitherAmount(e.MPT-other.MPT, e.MPTID)
 	}
-	result, _ := e.IOU.Sub(other.IOU)
+	result, _ := e.IOU.SubWithNumberContext(other.IOU, numberContext, state.RoundToNearest)
 	return NewIOUEitherAmount(result)
 }
 
-// Compare compares two EitherAmounts
-// Returns -1 if e < other, 0 if equal, 1 if e > other
 func (e EitherAmount) Compare(other EitherAmount) int {
+	cmp, err := e.CompareChecked(other)
+	if err != nil {
+		panic(err)
+	}
+	return cmp
+}
+
+func (e EitherAmount) CompareChecked(other EitherAmount) (int, error) {
+	if e.IsNative != other.IsNative || e.IsMPT != other.IsMPT {
+		return 0, fmt.Errorf("temBAD_AMOUNT: cannot compare amounts with different assets")
+	}
 	if e.IsNative {
 		if e.XRP < other.XRP {
-			return -1
+			return -1, nil
 		}
 		if e.XRP > other.XRP {
-			return 1
+			return 1, nil
 		}
-		return 0
+		return 0, nil
 	}
 	if e.IsMPT {
+		if e.MPTID != other.MPTID {
+			return 0, fmt.Errorf("temBAD_AMOUNT: cannot compare different MPT issuances")
+		}
 		if e.MPT < other.MPT {
-			return -1
+			return -1, nil
 		}
 		if e.MPT > other.MPT {
-			return 1
+			return 1, nil
 		}
-		return 0
+		return 0, nil
 	}
-	return e.IOU.Compare(other.IOU)
+	return e.IOU.CompareChecked(other.IOU)
 }
 
 func (e EitherAmount) Min(other EitherAmount) EitherAmount {
@@ -171,6 +205,21 @@ func FromEitherAmount(e EitherAmount) tx.Amount {
 }
 
 func MulRatio(amt EitherAmount, num, den uint32, roundUp bool) EitherAmount {
+	return MulRatioWithNumberContext(
+		amt,
+		num,
+		den,
+		roundUp,
+		state.NewNumberContext(state.MantissaScaleSmall, false),
+	)
+}
+
+func MulRatioWithNumberContext(
+	amt EitherAmount,
+	num, den uint32,
+	roundUp bool,
+	numberContext state.NumberContext,
+) EitherAmount {
 	if den == 0 {
 		panic("division by zero")
 	}
@@ -184,7 +233,9 @@ func MulRatio(amt EitherAmount, num, den uint32, roundUp bool) EitherAmount {
 		return NewMPTEitherAmount(mptMulRatio(amt.MPT, num, den, roundUp), amt.MPTID)
 	}
 
-	return NewIOUEitherAmount(amt.IOU.MulRatio(num, den, roundUp))
+	return NewIOUEitherAmount(
+		amt.IOU.MulRatioWithNumberContext(num, den, roundUp, numberContext),
+	)
 }
 
 func mptMulRatio(amount int64, num, den uint32, roundUp bool) int64 {
@@ -220,5 +271,6 @@ func toNumberAmount(amt EitherAmount) tx.Amount {
 	if amt.IsMPT {
 		return tx.NewIssuedAmount(amt.MPT, 0, "", "")
 	}
-	return amt.IOU
+	value := amt.IOU.IOU()
+	return tx.NewIssuedAmount(value.Mantissa(), value.Exponent(), "", "")
 }

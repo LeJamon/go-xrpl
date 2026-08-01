@@ -97,7 +97,7 @@ func (o *OfferCreate) placeRemainingOffer(
 	// amounts and could land on a differently-keyed page due to rounding.
 	// Reference: lines 912-919, 944-954.
 	if bHybrid {
-		openRate := state.GetRate(saTakerGets, saTakerPays)
+		openRate := state.GetRateWithNumberContext(saTakerGets, saTakerPays, ctx.NumberContext())
 		if ctx.Rules().Enabled(amendment.FeatureFixCleanup3_2_0) {
 			openRate = uRate
 		}

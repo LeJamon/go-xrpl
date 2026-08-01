@@ -863,19 +863,18 @@ func TestOnLedgerFullyValidated_DemotesFullWhenNetworkAhead(t *testing.T) {
 func TestNew_SeedsRestartValidationFloor(t *testing.T) {
 	ctx := context.Background()
 
-	rm, err := sqlitedb.NewRepositoryManager(t.TempDir())
+	rm, err := sqlitedb.NewRepositoryManager(ctx, t.TempDir(), sqlitedb.Settings{})
 	require.NoError(t, err)
-	require.NoError(t, rm.Open(ctx))
-	t.Cleanup(func() { _ = rm.Close(ctx) })
+	t.Cleanup(func() { require.NoError(t, rm.Close()) })
 
 	// Persist ledgers up to seq 742 as a prior run would have.
 	for _, seq := range []relationaldb.LedgerIndex{740, 742, 741} {
-		info := &relationaldb.LedgerInfo{Sequence: seq}
+		info := relationaldb.LedgerInfo{Sequence: seq}
 		info.Hash[0] = byte(seq)
 		require.NoError(t, rm.Ledger().SaveValidatedLedger(ctx, info))
 	}
 
-	cfg := service.DefaultConfig()
+	cfg := service.Config{Standalone: true, GenesisConfig: genesis.DefaultConfig()}
 	cfg.Standalone = true
 	cfg.GenesisConfig = genesis.DefaultConfig()
 	cfg.RelationalDB = rm

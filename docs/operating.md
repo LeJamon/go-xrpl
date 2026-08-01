@@ -290,10 +290,13 @@ omit one to use rippled's `TxQ::Setup` default, or set it explicitly
 ### Optional sections
 
 - **`[validation_archive]`** — persist pruned validations to a `validations` table
-  for forensic queries. `enabled` (default false), `retention_ledgers`
+  for forensic queries, including partial validations. This go-xrpl extension is
+  inspired by rippled's historical validation database. `enabled` (default false), `retention_ledgers`
   (`0` = forever), `batch_size`, `flush_interval_ms`, `delete_batch`,
   `in_memory_ledgers`. Backed by SQLite (shares `ledger.db`); under sustained
-  write overload the archive drops rather than blocking consensus.
+  write overload the archive counts drops and rate-limits warnings rather than
+  blocking consensus. Independent maintenance drains expired rows in bounded
+  batches even while archive writes are idle.
 - **`[amendments]`** — operator amendment-vote preferences. `upvote` votes *for*
   an amendment (rippled's `[amendments]` stanza); `veto` refuses to vote for it
   (rippled's `[veto_amendments]`). Names match the amendment registry; an amendment

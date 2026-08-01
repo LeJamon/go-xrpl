@@ -7,7 +7,7 @@ import (
 	"slices"
 	"strings"
 
-	"github.com/LeJamon/go-xrpl/internal/tx/ledgerfields"
+	ledgerfields "github.com/LeJamon/go-xrpl/ledger/entry"
 )
 
 // AmendmentsSLE represents the parsed Amendments ledger entry.

@@ -46,16 +46,21 @@ func TestIssue950_MulRoundNativeNoRound(t *testing.T) {
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			prev := GetNumberSwitchover()
-			defer SetNumberSwitchover(prev)
-
-			SetNumberSwitchover(true)
-			if got := MulRoundNative(oneDrop, tc.v2, tc.roundUp); got != tc.wantNearest {
+			if got := MulRoundNativeWithNumberContext(
+				oneDrop,
+				tc.v2,
+				NewNumberContext(MantissaScaleSmall, true),
+				tc.roundUp,
+			); got != tc.wantNearest {
 				t.Errorf("switchover on: MulRoundNative = %d drops, want %d", got, tc.wantNearest)
 			}
 
-			SetNumberSwitchover(false)
-			if got := MulRoundNative(oneDrop, tc.v2, tc.roundUp); got != tc.wantTrunc {
+			if got := MulRoundNativeWithNumberContext(
+				oneDrop,
+				tc.v2,
+				NewNumberContext(MantissaScaleSmall, false),
+				tc.roundUp,
+			); got != tc.wantTrunc {
 				t.Errorf("switchover off: MulRoundNative = %d drops, want %d", got, tc.wantTrunc)
 			}
 		})
@@ -80,17 +85,23 @@ func TestIssue950_DivRoundNativeNoRound(t *testing.T) {
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			prev := GetNumberSwitchover()
-			defer SetNumberSwitchover(prev)
 			num := NewXRPAmountFromInt(tc.numDrops)
 
-			SetNumberSwitchover(true)
-			if got := DivRoundNative(num, tc.den, false); got != tc.wantNearest {
+			if got := DivRoundNativeWithNumberContext(
+				num,
+				tc.den,
+				NewNumberContext(MantissaScaleSmall, true),
+				false,
+			); got != tc.wantNearest {
 				t.Errorf("switchover on: DivRoundNative = %d drops, want %d", got, tc.wantNearest)
 			}
 
-			SetNumberSwitchover(false)
-			if got := DivRoundNative(num, tc.den, false); got != tc.wantTrunc {
+			if got := DivRoundNativeWithNumberContext(
+				num,
+				tc.den,
+				NewNumberContext(MantissaScaleSmall, false),
+				false,
+			); got != tc.wantTrunc {
 				t.Errorf("switchover off: DivRoundNative = %d drops, want %d", got, tc.wantTrunc)
 			}
 		})
@@ -132,18 +143,15 @@ func TestIssue950_MulRoundNativeNativeOverflow(t *testing.T) {
 // post-switchover. This is the path the fixReducedOffersV1 offer crossing relies
 // on; rounding it to-nearest produced offers with worsened rates.
 func TestIssue950_NativeRoundDropsStrictNoRoundTruncates(t *testing.T) {
-	prev := GetNumberSwitchover()
-	defer SetNumberSwitchover(prev)
-	SetNumberSwitchover(true)
-
 	const amount uint64 = 55_000_000_000_000_000 // 5.5e16, offset -16 → 5.5 drops
 	const offset = -16
+	ctx := NewNumberContext(MantissaScaleSmall, true)
 
 	// addSlop == false (no-round branch), positive result.
-	if got := NativeRoundDrops(amount, offset, false, false, false, true); got != 5 {
+	if got := NativeRoundDropsWithNumberContext(amount, offset, false, false, false, true, ctx); got != 5 {
 		t.Errorf("strict no-round: got %d, want 5 (truncation)", got)
 	}
-	if got := NativeRoundDrops(amount, offset, false, false, false, false); got != 6 {
+	if got := NativeRoundDropsWithNumberContext(amount, offset, false, false, false, false, ctx); got != 6 {
 		t.Errorf("non-strict no-round: got %d, want 6 (to-nearest)", got)
 	}
 }

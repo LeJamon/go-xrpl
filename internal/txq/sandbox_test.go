@@ -49,11 +49,15 @@ type mockClearCtx struct {
 	newErr  error
 }
 
-func (c *mockClearCtx) GetAccountSequence([20]byte) uint32 { return 0 }
+func (c *mockClearCtx) GetAccountSequence([20]byte) (uint32, error) {
+	return 0, nil
+}
 func (c *mockClearCtx) AccountExists([20]byte) bool        { return true }
 func (c *mockClearCtx) TicketExists([20]byte, uint32) bool { return true }
-func (c *mockClearCtx) GetAccountBalance([20]byte) uint64  { return 0 }
-func (c *mockClearCtx) GetAccountReserve(uint32) uint64    { return 0 }
+func (c *mockClearCtx) GetAccountBalance([20]byte) (uint64, error) {
+	return 0, nil
+}
+func (c *mockClearCtx) GetAccountReserve(uint32) uint64 { return 0 }
 func (c *mockClearCtx) GetBaseFees(tx.Transaction) (uint64, uint64) {
 	return 10, 10
 }

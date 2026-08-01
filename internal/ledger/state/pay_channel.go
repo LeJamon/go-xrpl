@@ -5,7 +5,7 @@ import (
 	"strings"
 
 	addresscodec "github.com/LeJamon/go-xrpl/codec/addresscodec"
-	"github.com/LeJamon/go-xrpl/internal/tx/ledgerfields"
+	ledgerfields "github.com/LeJamon/go-xrpl/ledger/entry"
 )
 
 // PayChannelData represents a PayChannel ledger entry
@@ -148,23 +148,21 @@ func ParsePayChannel(data []byte) (*PayChannelData, error) {
 		if err != nil {
 			return nil, err
 		}
-		channel.Amount = nativeMagnitude(amount)
+		channel.Amount, err = nonNegativeNativeDrops("PayChannel.Amount", amount)
+		if err != nil {
+			return nil, err
+		}
 	}
 	if fields["Balance"] != nil {
 		balance, err := decodeLedgerAmount("PayChannel.Balance", entry.Balance)
 		if err != nil {
 			return nil, err
 		}
-		channel.Balance = nativeMagnitude(balance)
+		channel.Balance, err = nonNegativeNativeDrops("PayChannel.Balance", balance)
+		if err != nil {
+			return nil, err
+		}
 	}
 
 	return channel, nil
-}
-
-func nativeMagnitude(amount Amount) uint64 {
-	drops := amount.Drops()
-	if drops < 0 {
-		drops = -drops
-	}
-	return uint64(drops)
 }

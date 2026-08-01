@@ -94,10 +94,7 @@ func TestValidationRepository_DuplicateIsNoop(t *testing.T) {
 		t.Fatalf("duplicate save errored: %v", err)
 	}
 
-	count, err := repo.GetValidationCount(ctx)
-	if err != nil {
-		t.Fatal(err)
-	}
+	count := validationCount(t, rm)
 	if count != 1 {
 		t.Fatalf("expected 1 row after duplicate save, got %d", count)
 	}
@@ -119,10 +116,7 @@ func TestValidationRepository_SaveBatch(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	count, err := repo.GetValidationCount(ctx)
-	if err != nil {
-		t.Fatal(err)
-	}
+	count := validationCount(t, rm)
 	if count != 3 {
 		t.Fatalf("expected 3 unique rows after batch, got %d", count)
 	}
@@ -187,10 +181,7 @@ func TestValidationRepository_DeleteOlderThanSeq_Bounded(t *testing.T) {
 	}
 
 	// Remaining: 20 - 5 = 15 rows.
-	count, err := repo.GetValidationCount(ctx)
-	if err != nil {
-		t.Fatal(err)
-	}
+	count := validationCount(t, rm)
 	if count != 15 {
 		t.Fatalf("expected 15 rows remaining, got %d", count)
 	}
@@ -205,11 +196,17 @@ func TestValidationRepository_DeleteOlderThanSeq_Bounded(t *testing.T) {
 	}
 
 	// All remaining rows should be seqs 15..20.
-	count, err = repo.GetValidationCount(ctx)
-	if err != nil {
-		t.Fatal(err)
-	}
+	count = validationCount(t, rm)
 	if count != 6 {
 		t.Fatalf("expected 6 rows after full sweep, got %d", count)
 	}
+}
+
+func validationCount(t *testing.T, rm *RepositoryManager) int64 {
+	t.Helper()
+	var count int64
+	if err := rm.ledgerDB.QueryRowContext(context.Background(), "SELECT COUNT(*) FROM validations").Scan(&count); err != nil {
+		t.Fatal(err)
+	}
+	return count
 }

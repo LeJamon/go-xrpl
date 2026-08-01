@@ -2,9 +2,11 @@ package skiplist
 
 import (
 	"encoding/binary"
+	"fmt"
 	"testing"
 
 	"github.com/LeJamon/go-xrpl/keylet"
+	ledgerfields "github.com/LeJamon/go-xrpl/ledger/entry"
 	"github.com/LeJamon/go-xrpl/shamap"
 )
 
@@ -70,6 +72,31 @@ func TestUpdateOnMap_RejectsCorruptedExistingSLE(t *testing.T) {
 		t.Fatalf("UpdateOnMap on corrupted SLE: want error, got nil")
 	} else {
 		t.Logf("got expected error: %v", err)
+	}
+}
+
+func TestUpdateOnMapIgnoresSequenceZero(t *testing.T) {
+	t.Parallel()
+	if err := UpdateOnMap(shamap.New(shamap.TypeState), 0, [32]byte{1}); err != nil {
+		t.Fatalf("UpdateOnMap sequence zero: %v", err)
+	}
+}
+
+func TestReadLedgerHashesRejectsMissingLastSequence(t *testing.T) {
+	t.Parallel()
+	sm := shamap.New(shamap.TypeState)
+	entry := &ledgerfields.LedgerHashes{}
+	entry.SetFlags(0)
+	entry.SetHashes([]string{fmt.Sprintf("%064X", [32]byte{1})})
+	data, err := entry.Encode()
+	if err != nil {
+		t.Fatalf("Encode: %v", err)
+	}
+	if err := sm.Put(keylet.LedgerHashes().Key, data); err != nil {
+		t.Fatalf("Put: %v", err)
+	}
+	if _, _, _, err := ReadLedgerHashesSLE(sm, keylet.LedgerHashes().Key); err == nil {
+		t.Fatal("expected missing LastLedgerSequence to be rejected")
 	}
 }
 

@@ -122,8 +122,20 @@ func offerIOUToAmount(offer *state.NFTokenOfferData) (tx.Amount, error) {
 // issuer's transfer rate to the sender's leg on a third-party transfer.
 //
 // Reference: rippled View.cpp accountSend → rippleSendIOU → rippleCreditIOU
-func accountSendIOU(view tx.LedgerView, from, to [20]byte, amount tx.Amount) ter.Result {
-	return tx.RippleSendIOU(view, from, to, amount, false)
+func accountSendIOU(
+	view tx.LedgerView,
+	from, to [20]byte,
+	amount tx.Amount,
+	numberContext state.NumberContext,
+) ter.Result {
+	return tx.RippleSendIOUWithNumberContext(
+		view,
+		from,
+		to,
+		amount,
+		false,
+		numberContext,
+	)
 }
 
 // payIOU wraps accountSendIOU with post-hoc balance validation: after the
@@ -135,7 +147,7 @@ func payIOU(ctx *tx.ApplyContext, from, to [20]byte, amount tx.Amount) ter.Resul
 		return ter.TesSUCCESS
 	}
 
-	result := accountSendIOU(ctx.View, from, to, amount)
+	result := accountSendIOU(ctx.View, from, to, amount, ctx.NumberContext())
 
 	if result != ter.TesSUCCESS {
 		return result

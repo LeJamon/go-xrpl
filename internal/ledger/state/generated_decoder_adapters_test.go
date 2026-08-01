@@ -6,8 +6,8 @@ import (
 	"testing"
 
 	"github.com/LeJamon/go-xrpl/codec/binarycodec"
-	"github.com/LeJamon/go-xrpl/internal/tx/ledgerfields"
 	"github.com/LeJamon/go-xrpl/keylet"
+	ledgerfields "github.com/LeJamon/go-xrpl/ledger/entry"
 )
 
 func badCurrencyRippleStateBlob(t *testing.T) []byte {

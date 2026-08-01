@@ -69,11 +69,16 @@ type flowCalculationSettings struct {
 	fixAMMOverflowOffer bool
 	openLedger          bool
 	domainID            *[32]byte
+	numberContext       state.NumberContext
 }
 
 func newFlowCalculationSettings(ledger tx.LedgerView, parentCloseTime uint32) flowCalculationSettings {
-	settings := flowCalculationSettings{parentCloseTime: parentCloseTime}
-	if rules := ledger.Rules(); rules != nil {
+	rules := ledger.Rules()
+	settings := flowCalculationSettings{
+		parentCloseTime: parentCloseTime,
+		numberContext:   tx.NumberContextForRules(nil),
+	}
+	if rules != nil {
 		settings.fixReducedOffersV2 = rules.Enabled(amendment.FeatureFixReducedOffersV2)
 		settings.fixAMMv1_1 = rules.Enabled(amendment.FeatureFixAMMv1_1)
 		settings.fixAMMv1_2 = rules.Enabled(amendment.FeatureFixAMMv1_2)

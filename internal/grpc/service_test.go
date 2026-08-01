@@ -163,14 +163,15 @@ func newClosedTestLedger(t *testing.T, parent *ledger.Ledger) *ledger.Ledger {
 		CloseTimeResolution: 10,
 		Accepted:            true,
 	}
-	l, err := ledger.NewClosedFromHeader(
+	l, err := ledger.NewClosedFromHeaderContext(
+		context.Background(),
 		hdr,
 		shamap.New(shamap.TypeState),
 		shamap.New(shamap.TypeTransaction),
 		drops.Fees{},
 	)
 	if err != nil {
-		t.Fatalf("NewClosedFromHeader: %v", err)
+		t.Fatalf("NewClosedFromHeaderContext: %v", err)
 	}
 	return l
 }

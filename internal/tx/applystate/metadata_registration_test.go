@@ -7,7 +7,7 @@ import (
 
 	"github.com/LeJamon/go-xrpl/internal/ledger/state"
 	"github.com/LeJamon/go-xrpl/internal/tx"
-	"github.com/LeJamon/go-xrpl/internal/tx/ledgerfields"
+	ledgerfields "github.com/LeJamon/go-xrpl/ledger/entry"
 )
 
 func TestMetadataBuildersRejectUnregisteredEntryType(t *testing.T) {
@@ -16,7 +16,7 @@ func TestMetadataBuildersRejectUnregisteredEntryType(t *testing.T) {
 	if entryType == "" {
 		t.Fatal("test data did not encode a ledger entry type")
 	}
-	if ledgerfields.HasTyped(entryType) {
+	if ledgerfields.HasTypedName(entryType) {
 		t.Fatalf("test ledger entry type %q is registered", entryType)
 	}
 

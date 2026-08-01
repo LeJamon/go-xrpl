@@ -663,7 +663,7 @@ func (r *replayRangeRunner) processBlock(
 		ParentHash:          preSnapshot.LedgerHash,
 		ParentCloseTime:     parentCloseTime,
 		CloseTime:           applicationCloseTime,
-		CloseTimeResolution: postSnapshot.CloseTimeResolution,
+		CloseTimeResolution: uint8(postSnapshot.CloseTimeResolution),
 		CloseFlags:          postSnapshot.CloseFlags,
 		Drops:               preSnapshot.TotalCoins, // Start with parent's total coins
 	}

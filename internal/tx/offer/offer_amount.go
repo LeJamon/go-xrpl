@@ -45,10 +45,8 @@ func zeroAmount(amt tx.Amount) tx.Amount {
 	return tx.NewIssuedAmount(0, -100, amt.Currency, amt.Issuer)
 }
 
-// subtractAmounts subtracts b from a.
-// a - b = result
-func subtractAmounts(a, b tx.Amount) tx.Amount {
-	result, err := a.Sub(b)
+func subtractAmountsWithNumberContext(a, b tx.Amount, numberContext state.NumberContext) tx.Amount {
+	result, err := a.SubWithNumberContext(b, numberContext, state.RoundToNearest)
 	if err != nil {
 		return zeroAmount(a)
 	}

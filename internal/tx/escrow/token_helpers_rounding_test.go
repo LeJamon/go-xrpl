@@ -14,14 +14,16 @@ import (
 func TestDivideAmountByRateUsesCanonicalIOURounding(t *testing.T) {
 	const issuer = "rDC7wGzpzUjS2qTASSzGWkUytS7FD9xyVK"
 	amount := state.NewIssuedAmountFromValue(1_000_000_000_000_000, -13, "USD", issuer)
+	numberContext := state.NewNumberContext(state.MantissaScaleLarge, true)
 
 	want := state.NewIssuedAmountFromValue(9_900_990_099_009_901, -14, "USD", issuer)
-	require.Equal(t, want, divideAmountByRate(amount, 1_010_000_000))
-	require.Equal(t, amount, divideAmountByRate(amount, parityRate))
+	require.Equal(t, want, divideAmountByRate(amount, 1_010_000_000, numberContext))
+	require.Equal(t, amount, divideAmountByRate(amount, parityRate, numberContext))
 }
 
 func TestComputeMPTTransferFeeUsesCanonicalRounding(t *testing.T) {
 	const originalAmount = uint64(10_000)
+	numberContext := state.NewNumberContext(state.MantissaScaleLarge, true)
 
 	var issuerID, senderID, receiverID [20]byte
 	issuerID[19] = 0xab
@@ -108,6 +110,7 @@ func TestComputeMPTTransferFeeUsesCanonicalRounding(t *testing.T) {
 				senderID,
 				destinationID,
 				originalAmount,
+				numberContext,
 			)
 			require.Equal(t, originalAmount, original)
 			require.Equal(t, tt.finalAmount, final)
@@ -132,6 +135,7 @@ func TestComputeMPTTransferFeeUsesCanonicalRounding(t *testing.T) {
 				senderID,
 				receiverID,
 				math.MaxInt64,
+				numberContext,
 			)
 		})
 	})

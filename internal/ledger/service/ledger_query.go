@@ -23,28 +23,16 @@ type LedgerRangeResult struct {
 
 // GetLedgerRange retrieves ledger hashes for a range of sequences.
 // The supplied ctx is forwarded to the relational DB lookup.
-func (s *Service) GetLedgerRange(ctx context.Context, minSeq, maxSeq uint32) (*LedgerRangeResult, error) {
+func (q *queryFacade) GetLedgerRange(ctx context.Context, minSeq, maxSeq uint32) (*LedgerRangeResult, error) {
 	result := &LedgerRangeResult{
 		LedgerFirst: minSeq,
 		LedgerLast:  maxSeq,
-		Hashes:      make(map[uint32][32]byte),
+		Hashes:      q.history.hashesByRange(minSeq, maxSeq),
 	}
-
-	// Fill from in-memory history under the lock, then release it before the
-	// DB gap-fill: result.Hashes is function-local, so the merge below needs no
-	// lock, and a slow DB page must not block consensus close.
-	s.mu.RLock()
-	for seq := minSeq; seq <= maxSeq; seq++ {
-		if l, ok := s.ledgerHistory[seq]; ok {
-			result.Hashes[seq] = l.Hash()
-		}
-	}
-	db := s.relationalDB
-	s.mu.RUnlock()
 
 	// If we have RelationalDB, fill in gaps
-	if db != nil && len(result.Hashes) < int(maxSeq-minSeq+1) {
-		hashPairs, err := db.Ledger().GetHashesByRange(ctx,
+	if q.relationalDB != nil && len(result.Hashes) < int(maxSeq-minSeq+1) {
+		hashPairs, err := q.relationalDB.Ledger().GetHashesByRange(ctx,
 			relationaldb.LedgerIndex(minSeq),
 			relationaldb.LedgerIndex(maxSeq))
 		if err == nil {
@@ -83,7 +71,8 @@ func (v contextLedgerView) Exists(k keylet.Keylet) (bool, error) {
 }
 
 // GetLedgerEntry retrieves a specific ledger entry by its index/key
-func (s *Service) GetLedgerEntry(ctx context.Context, entryKey [32]byte, ledgerIndex string) (*LedgerEntryResult, error) {
+func (q *queryFacade) GetLedgerEntry(ctx context.Context, entryKey [32]byte, ledgerIndex string) (*LedgerEntryResult, error) {
+	s := q.service
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
@@ -165,7 +154,8 @@ func formatCloseTimeHuman(t time.Time) string {
 }
 
 // GetLedgerData retrieves all ledger state entries with optional pagination
-func (s *Service) GetLedgerData(ctx context.Context, ledgerIndex string, limit uint32, marker string) (*LedgerDataResult, error) {
+func (q *queryFacade) GetLedgerData(ctx context.Context, ledgerIndex string, limit uint32, marker string) (*LedgerDataResult, error) {
+	s := q.service
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
@@ -204,7 +194,7 @@ func (s *Service) GetLedgerData(ctx context.Context, ledgerIndex string, limit u
 			CloseTime:           protocol.RippleSeconds(hdr.CloseTime),
 			CloseTimeHuman:      formatCloseTimeHuman(hdr.CloseTime),
 			CloseTimeISO:        protocol.FormatCloseTimeISO(hdr.CloseTime),
-			CloseTimeResolution: hdr.CloseTimeResolution,
+			CloseTimeResolution: uint32(hdr.CloseTimeResolution),
 			Closed:              targetLedger.IsClosed() || targetLedger.IsValidated(),
 			LedgerHash:          hdr.Hash,
 			LedgerIndex:         hdr.LedgerIndex,
@@ -242,11 +232,8 @@ func (s *Service) GetLedgerData(ctx context.Context, ledgerIndex string, limit u
 	return result, nil
 }
 
-func (s *Service) getLedgerForQuery(ledgerIndex string) (*ledger.Ledger, bool, error) {
-	return s.resolveLedgerForQuery(context.Background(), ledgerIndex)
-}
-
-func (s *Service) resolveLedgerForQuery(ctx context.Context, ledgerIndex string) (*ledger.Ledger, bool, error) {
+func (q *queryFacade) resolveLedgerForQuery(ctx context.Context, ledgerIndex string) (*ledger.Ledger, bool, error) {
+	s := q.service
 	selection, err := ledgerselector.Parse(ledgerIndex)
 	if err != nil {
 		return nil, false, serviceLedgerSelectorError(selection, err)
@@ -260,7 +247,7 @@ func (s *Service) resolveLedgerForQuery(ctx context.Context, ledgerIndex string)
 	}
 	if sequence, ok := selection.Sequence(); ok {
 		s.mu.RLock()
-		if s.ledgerHistory[sequence] == nil &&
+		if q.history.ledgerBySequence(sequence) == nil &&
 			s.openLedger != nil &&
 			s.openLedger.Sequence() == sequence {
 			snapshot, snapshotErr := s.openLedger.Snapshot()
@@ -302,7 +289,7 @@ func (s *Service) resolveLedgerForQuery(ctx context.Context, ledgerIndex string)
 			return l, l != nil, nil
 		},
 		BySequence: func(sequence uint32) (*ledger.Ledger, bool, error) {
-			if l := s.ledgerHistory[sequence]; l != nil {
+			if l := q.history.ledgerBySequence(sequence); l != nil {
 				return l, true, nil
 			}
 			if s.openLedger != nil && s.openLedger.Sequence() == sequence {
@@ -316,6 +303,46 @@ func (s *Service) resolveLedgerForQuery(ctx context.Context, ledgerIndex string)
 		return nil, false, serviceLedgerSelectorError(selection, err)
 	}
 	return result.Value, result.Validated, nil
+}
+
+func (s *Service) GetLedgerRange(ctx context.Context, minSeq, maxSeq uint32) (*LedgerRangeResult, error) {
+	query := s.queryFacade()
+	return query.GetLedgerRange(ctx, minSeq, maxSeq)
+}
+
+func (s *Service) GetLedgerEntry(
+	ctx context.Context,
+	entryKey [32]byte,
+	ledgerIndex string,
+) (*LedgerEntryResult, error) {
+	query := s.queryFacade()
+	return query.GetLedgerEntry(ctx, entryKey, ledgerIndex)
+}
+
+func (s *Service) GetLedgerData(
+	ctx context.Context,
+	ledgerIndex string,
+	limit uint32,
+	marker string,
+) (*LedgerDataResult, error) {
+	query := s.queryFacade()
+	return query.GetLedgerData(ctx, ledgerIndex, limit, marker)
+}
+
+func (s *Service) resolveLedgerForQuery(
+	ctx context.Context,
+	ledgerIndex string,
+) (*ledger.Ledger, bool, error) {
+	query := s.queryFacade()
+	return query.resolveLedgerForQuery(ctx, ledgerIndex)
+}
+
+func (s *Service) queryFacade() queryFacade {
+	return queryFacade{
+		service:      s,
+		history:      &s.historyComponent,
+		relationalDB: s.relationalDB,
+	}
 }
 
 func serviceLedgerSelectorError(selection ledgerselector.Selector, err error) error {

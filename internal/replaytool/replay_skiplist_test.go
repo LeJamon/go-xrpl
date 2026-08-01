@@ -138,7 +138,7 @@ func seedBlockHeader(parent *ledger.Ledger) header.LedgerHeader {
 		ParentHash:          parent.Hash(),
 		ParentCloseTime:     parent.CloseTime(),
 		CloseTime:           parent.CloseTime().Add(10 * time.Second),
-		CloseTimeResolution: parent.CloseTimeResolution(),
+		CloseTimeResolution: uint8(parent.CloseTimeResolution()),
 		Drops:               parent.TotalDrops(),
 	}
 }

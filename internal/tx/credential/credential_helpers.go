@@ -10,7 +10,6 @@ import (
 	"github.com/LeJamon/go-xrpl/amendment"
 	"github.com/LeJamon/go-xrpl/internal/ledger/state"
 	"github.com/LeJamon/go-xrpl/internal/tx"
-	"github.com/LeJamon/go-xrpl/internal/tx/ledgerfields"
 	"github.com/LeJamon/go-xrpl/internal/tx/ter"
 	"github.com/LeJamon/go-xrpl/keylet"
 	"github.com/LeJamon/go-xrpl/ledger/entry"
@@ -54,7 +53,7 @@ func (c *CredentialEntry) SetAccepted() {
 
 // ParseCredentialEntry parses a Credential ledger entry from binary data
 func ParseCredentialEntry(data []byte) (*CredentialEntry, error) {
-	var decoded ledgerfields.Credential
+	var decoded entry.Credential
 	if err := decoded.Decode(data); err != nil {
 		return nil, fmt.Errorf("parse credential: %w", err)
 	}
@@ -146,7 +145,7 @@ func serializeCredentialEntry(cred *CredentialEntry) ([]byte, error) {
 		return nil, errors.New("serialize credential: empty credential type")
 	}
 
-	var sle ledgerfields.Credential
+	var sle entry.Credential
 	sle.SetSubject(subjectStr)
 	sle.SetIssuer(issuerStr)
 	sle.SetCredentialType(hex.EncodeToString(cred.CredentialType))

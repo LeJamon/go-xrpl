@@ -164,8 +164,7 @@ func NewFromRootHashContext(ctx context.Context, mapType Type, rootHash [32]byte
 		return nil, fmt.Errorf("root node %x: %w", rootHash[:8], ErrNodeNotInStore)
 	}
 
-	// Deserialize — creates innerNode with hashes set, children nil
-	node, err := deserializeFromPrefix(data)
+	node, err := decodeAndVerifyPrefixNode(data, rootHash)
 	if err != nil {
 		return nil, fmt.Errorf("%w: failed to deserialize root node: %v", ErrInvalidNodeData, err)
 	}

@@ -12,6 +12,7 @@ import (
 	"github.com/LeJamon/go-xrpl/crypto/sha512half"
 	"github.com/LeJamon/go-xrpl/internal/rpc/types"
 	"github.com/LeJamon/go-xrpl/internal/tx"
+	"github.com/LeJamon/go-xrpl/ledger/entry/schema"
 )
 
 // ServerDefinitionsMethod handles the server_definitions RPC method.
@@ -135,15 +136,16 @@ func txFormatFieldsToJSON(fields []tx.FormatField) []any {
 // ledger-entry SOTemplate tables (rippled has ledger optionality in
 // LedgerFormats; go-xrpl carries it in ledger_formats_data.go).
 func buildLedgerFormatsSection() map[string]any {
-	out := make(map[string]any, len(ledgerFormatTemplates)+1)
-	out["common"] = ledgerFormatFieldsToJSON(ledgerCommonFields)
-	for name, fields := range ledgerFormatTemplates {
+	formats := schema.Formats()
+	out := make(map[string]any, len(formats)+1)
+	out["common"] = ledgerFormatFieldsToJSON(schema.CommonFields())
+	for name, fields := range formats {
 		out[name] = ledgerFormatFieldsToJSON(fields)
 	}
 	return out
 }
 
-func ledgerFormatFieldsToJSON(fields []ledgerFormatField) []any {
+func ledgerFormatFieldsToJSON(fields []schema.FormatField) []any {
 	arr := make([]any, 0, len(fields))
 	for _, f := range fields {
 		arr = append(arr, map[string]any{"name": f.Name, "optionality": f.Style})

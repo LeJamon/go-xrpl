@@ -59,6 +59,10 @@ var (
 	// This is a normal race (a stale or unsolicited reply) and should
 	// be dropped silently by the caller.
 	ErrNoMatchingAcquisition = errors.New("no in-flight replay delta acquisition matches this response hash")
+
+	// ErrUnexpectedReplayPeer signals that a response came from a peer other
+	// than the one currently authorized for the matching acquisition.
+	ErrUnexpectedReplayPeer = errors.New("replay delta response came from an unexpected peer")
 )
 
 // TimedOutEntry is a compact summary of a timed-out acquisition. Lets
@@ -162,6 +166,16 @@ func (r *Replayer) Acquire(hash [32]byte, peerID uint64, parent *ledger.Ledger) 
 // freed, making misbehavior attribution cleaner (a verification
 // failure leaves the slot occupied until we explicitly abandon).
 func (r *Replayer) HandleResponse(resp *message.ReplayDeltaResponse) (*ReplayDelta, error) {
+	return r.handleResponseFrom(0, false, resp)
+}
+
+// HandleResponseFrom routes and verifies a response only when it came from a
+// peer that was sent a request for the matching replay acquisition.
+func (r *Replayer) HandleResponseFrom(peerID uint64, resp *message.ReplayDeltaResponse) (*ReplayDelta, error) {
+	return r.handleResponseFrom(peerID, true, resp)
+}
+
+func (r *Replayer) handleResponseFrom(peerID uint64, enforcePeer bool, resp *message.ReplayDeltaResponse) (*ReplayDelta, error) {
 	if resp == nil {
 		return nil, ErrNoMatchingAcquisition
 	}
@@ -173,6 +187,9 @@ func (r *Replayer) HandleResponse(resp *message.ReplayDeltaResponse) (*ReplayDel
 	rd, exists := r.delta.get(hash)
 	if !exists {
 		return nil, ErrNoMatchingAcquisition
+	}
+	if enforcePeer && !rd.WasTried(peerID) {
+		return rd, ErrUnexpectedReplayPeer
 	}
 
 	if err := rd.GotResponse(resp); err != nil {

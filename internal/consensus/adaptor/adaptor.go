@@ -1003,7 +1003,7 @@ func (a *Adaptor) CloseTimeResolution() time.Duration {
 	if l != nil {
 		hdr := l.Header()
 		res := consensus.GetNextLedgerTimeResolution(
-			hdr.CloseTimeResolution,
+			uint32(hdr.CloseTimeResolution),
 			hdr.GetCloseAgree(),
 			hdr.LedgerIndex+1,
 		)

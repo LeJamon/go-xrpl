@@ -28,6 +28,7 @@ func TestPaymentMPTPathBinaryRoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Flatten: %v", err)
 	}
+	tx.PopulateRequiredWireFields(flat, p.GetCommon())
 	encoded, err := binarycodec.Encode(flat)
 	if err != nil {
 		t.Fatalf("Encode: %v", err)

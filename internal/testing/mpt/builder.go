@@ -17,6 +17,7 @@ import (
 	mpttx "github.com/LeJamon/go-xrpl/internal/tx/mpt"
 	"github.com/LeJamon/go-xrpl/internal/tx/payment"
 	"github.com/LeJamon/go-xrpl/keylet"
+	"github.com/LeJamon/go-xrpl/protocol"
 	"github.com/stretchr/testify/require"
 )
 
@@ -816,7 +817,7 @@ const (
 	TfPartialPayment = payment.PaymentFlagPartialPayment
 
 	// maxMPTokenAmount matches rippled's maxMPTokenAmount (63-bit max)
-	MaxMPTokenAmount uint64 = 0x7FFFFFFFFFFFFFFF
+	MaxMPTokenAmount = protocol.MaxMPTokenAmount
 )
 
 // Placeholder for unused imports

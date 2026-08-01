@@ -184,7 +184,13 @@ func (e *EscrowCreate) Preclaim(view tx.LedgerView, config tx.EngineConfig) ter.
 				return result
 			}
 		} else {
-			if result := escrowCreatePreclaimIOU(view, accountID, destID, e.Amount); result != ter.TesSUCCESS {
+			if result := escrowCreatePreclaimIOU(
+				view,
+				accountID,
+				destID,
+				e.Amount,
+				config.NumberContext(),
+			); result != ter.TesSUCCESS {
 				return result
 			}
 		}
@@ -453,7 +459,13 @@ func (e *EscrowCreate) Apply(ctx *tx.ApplyContext) ter.Result {
 		if issuerID == accountID {
 			return ter.TecINTERNAL
 		}
-		if lockResult := escrowLockIOU(ctx.View, accountID, issuerID, e.Amount); lockResult != ter.TesSUCCESS {
+		if lockResult := escrowLockIOU(
+			ctx.View,
+			accountID,
+			issuerID,
+			e.Amount,
+			ctx.NumberContext(),
+		); lockResult != ter.TesSUCCESS {
 			return lockResult
 		}
 	}
@@ -473,6 +485,19 @@ func (e *EscrowCreate) Apply(ctx *tx.ApplyContext) ter.Result {
 // missing line means there is no balance to escrow (tecNO_LINE). A genuine view
 // read error is the corrupt-ledger case (tecINTERNAL).
 // Reference: rippled Escrow.cpp:408-431
-func escrowLockIOU(view tx.LedgerView, senderID, issuerID [20]byte, amount tx.Amount) ter.Result {
-	return rippleCreditEscrow(view, senderID, issuerID, amount, ter.TecINTERNAL, ter.TecNO_LINE)
+func escrowLockIOU(
+	view tx.LedgerView,
+	senderID, issuerID [20]byte,
+	amount tx.Amount,
+	numberContext state.NumberContext,
+) ter.Result {
+	return rippleCreditEscrow(
+		view,
+		senderID,
+		issuerID,
+		amount,
+		ter.TecINTERNAL,
+		ter.TecNO_LINE,
+		numberContext,
+	)
 }

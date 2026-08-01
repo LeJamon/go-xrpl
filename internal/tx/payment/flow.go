@@ -78,6 +78,7 @@ func Flow(
 
 	// Create the main sandbox that accumulates all changes
 	accumSandbox := NewChildSandbox(baseView)
+	numberContext := accumSandbox.NumberContext()
 
 	allOfrsToRm := make(map[[32]byte]bool)
 
@@ -326,11 +327,11 @@ func Flow(
 			// terminate the loop and surfaces over-delivery via the final
 			// actualOut > outReq → tefEXCEPTION check.
 			// Reference: rippled StrandFlow.h lines 783-785.
-			totalOut = sumAmounts(savedOuts)
-			totalIn = sumAmounts(savedIns)
-			remainingOut = outReq.Sub(totalOut)
+			totalOut = sumAmountsWithNumberContext(savedOuts, numberContext)
+			totalIn = sumAmountsWithNumberContext(savedIns, numberContext)
+			remainingOut = outReq.SubWithNumberContext(totalOut, numberContext)
 			if sendMax != nil {
-				ri := sendMax.Sub(totalIn)
+				ri := sendMax.SubWithNumberContext(totalIn, numberContext)
 				remainingIn = &ri
 			}
 
@@ -514,10 +515,10 @@ func limitOut(v *PaymentSandbox, strand Strand, remainingOut EitherAmount, limit
 	return remainingOut
 }
 
-// sumAmounts sums a slice of EitherAmounts.
-// For better precision, sorts from smallest to largest before summing.
-// Reference: rippled uses flat_multiset which auto-sorts, then std::accumulate.
-func sumAmounts(amounts []EitherAmount) EitherAmount {
+func sumAmountsWithNumberContext(
+	amounts []EitherAmount,
+	numberContext state.NumberContext,
+) EitherAmount {
 	if len(amounts) == 0 {
 		return ZeroXRPEitherAmount()
 	}
@@ -532,7 +533,7 @@ func sumAmounts(amounts []EitherAmount) EitherAmount {
 	})
 	result := sorted[0]
 	for i := 1; i < len(sorted); i++ {
-		result = result.Add(sorted[i])
+		result = result.AddWithNumberContext(sorted[i], numberContext)
 	}
 	return result
 }

@@ -2,6 +2,7 @@ package rcl
 
 import (
 	"context"
+	"errors"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -19,6 +20,8 @@ type fakeArchive struct {
 	lastSeq atomic.Uint32
 
 	closeCalls atomic.Int32
+	closeErr   error
+	closeErrs  []error
 }
 
 func (f *fakeArchive) OnStale(v *consensus.Validation) {
@@ -40,8 +43,11 @@ func (f *fakeArchive) NoteFullyValidated(seq uint32) {
 }
 
 func (f *fakeArchive) Close(ctx context.Context) error {
-	f.closeCalls.Add(1)
-	return nil
+	call := int(f.closeCalls.Add(1))
+	if call <= len(f.closeErrs) {
+		return f.closeErrs[call-1]
+	}
+	return f.closeErr
 }
 
 func (f *fakeArchive) staleCount() int {
@@ -164,6 +170,45 @@ func TestEngine_Stop_ClosesArchive(t *testing.T) {
 
 	if arc.closeCalls.Load() != 1 {
 		t.Fatalf("Stop did not close the archive; closeCalls=%d", arc.closeCalls.Load())
+	}
+}
+
+func TestEngine_Stop_ReturnsArchiveError(t *testing.T) {
+	adaptor := newMockAdaptor()
+	engine := NewEngine(adaptor, DefaultConfig())
+	closeErr := errors.New("archive commit failed")
+	arc := &fakeArchive{closeErr: closeErr}
+	engine.SetArchive(arc)
+
+	if err := engine.Start(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if err := engine.Stop(); !errors.Is(err, closeErr) {
+		t.Fatalf("Stop returned %v, want archive error", err)
+	}
+	if arc.closeCalls.Load() != 1 {
+		t.Fatalf("archive close calls=%d, want 1", arc.closeCalls.Load())
+	}
+}
+
+func TestEngine_StopRetainsArchiveAfterCloseTimeout(t *testing.T) {
+	adaptor := newMockAdaptor()
+	engine := NewEngine(adaptor, DefaultConfig())
+	terminalErr := errors.New("archive terminal failure")
+	arc := &fakeArchive{closeErrs: []error{context.DeadlineExceeded, terminalErr}}
+	engine.SetArchive(arc)
+
+	if err := engine.Start(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if err := engine.Stop(); !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("first Stop returned %v, want deadline exceeded", err)
+	}
+	if err := engine.Stop(); !errors.Is(err, terminalErr) {
+		t.Fatalf("second Stop returned %v, want terminal archive error", err)
+	}
+	if arc.closeCalls.Load() != 2 {
+		t.Fatalf("archive close calls=%d, want 2", arc.closeCalls.Load())
 	}
 }
 

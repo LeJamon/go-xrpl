@@ -34,8 +34,22 @@ func TestCanonicalizeDropsMaxNative(t *testing.T) {
 		{"CanonicalizeDrops offset>17", func() int64 { return CanonicalizeDrops(1, 18) }},
 		{"CanonicalizeDropsStrict over ceiling", func() int64 { return CanonicalizeDropsStrict(10_000_000_000_000_001, 1, false) }},
 		{"CanonicalizeDropsStrict offset>17", func() int64 { return CanonicalizeDropsStrict(1, 18, true) }},
-		{"canonicalizeDropsNoRound truncate over ceiling", func() int64 { return canonicalizeDropsNoRound(20_000_000_000_000_000, 1, true) }},
-		{"canonicalizeDropsNoRound offset>17", func() int64 { return canonicalizeDropsNoRound(1, 18, true) }},
+		{"canonicalizeDropsNoRound truncate over ceiling", func() int64 {
+			return canonicalizeDropsNoRound(
+				20_000_000_000_000_000,
+				1,
+				true,
+				NewNumberContext(MantissaScaleSmall, false),
+			)
+		}},
+		{"canonicalizeDropsNoRound offset>17", func() int64 {
+			return canonicalizeDropsNoRound(
+				1,
+				18,
+				true,
+				NewNumberContext(MantissaScaleSmall, false),
+			)
+		}},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -61,6 +75,22 @@ func TestCanonicalizeDropsMaxNative(t *testing.T) {
 // returned unchanged.
 func TestNativeRoundDropsOutOfRange(t *testing.T) {
 	const iss = "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh"
+
+	for _, multiply := range []func(Amount, Amount, bool) int64{
+		MulRoundNative,
+		MulRoundNativeStrict,
+	} {
+		rec := recoverPanic(func() {
+			multiply(
+				NewXRPAmountFromInt(maxNativeDrops),
+				NewXRPAmountFromInt(2),
+				false,
+			)
+		})
+		if msg, _ := rec.(string); msg != outOfRangeMsg {
+			t.Fatalf("native fast-path out-of-range panic = %v, want %q", rec, outOfRangeMsg)
+		}
+	}
 
 	// IOU(10^15) * XRP(10^6): the native product is ~3.9e18 drops, far above
 	// cMaxNativeN. Both rounding directions must reject.

@@ -4,7 +4,6 @@ import (
 	"context"
 	"path/filepath"
 	"testing"
-	"time"
 
 	kvpebble "github.com/LeJamon/go-xrpl/storage/kvstore/pebble"
 	"github.com/stretchr/testify/require"
@@ -15,31 +14,31 @@ func TestRotatingKVDatabasePromotionBypassesDecodedCache(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "nodes")
 	store, err := kvpebble.NewRotating(path, kvpebble.Options{BlockCacheBytes: 16 << 20, MaxOpenFiles: 200})
 	require.NoError(t, err)
-	db := NewRotatingKVDatabase(store, "rotating", &DatabaseConfig{
-		CacheSize: 16,
-		CacheTTL:  time.Hour,
-	})
+	db, err := NewRotatingKVDatabase(store, positiveCacheConfig(16))
+	require.NoError(t, err)
 
 	node := &Node{
 		Type:      NodeAccount,
-		Hash:      ComputeHash256([]byte("live-node")),
+		Hash:      testHash([]byte("live-node")),
 		Data:      []byte("live-node"),
 		LedgerSeq: 10,
 	}
 	require.NoError(t, db.Store(ctx, node))
-	require.Equal(t, uint64(1), db.Stats().CacheSize)
+	_, cached := db.cache.Get(node.Hash)
+	require.True(t, cached)
 
 	committed, err := db.RotateGeneration(ctx, 11, 1)
 	require.True(t, committed)
 	require.NoError(t, err)
-	require.Zero(t, db.Stats().CacheSize)
+	_, cached = db.cache.Get(node.Hash)
+	require.False(t, cached)
 
 	promoted, err := db.FetchForPromotion(ctx, node.Hash)
 	require.NoError(t, err)
 	require.Equal(t, node.Data, promoted.Data)
-	stats := db.Stats()
-	require.Zero(t, stats.CacheSize)
-	require.Equal(t, uint64(1), stats.Writes)
+	_, cached = db.cache.Get(node.Hash)
+	require.False(t, cached)
+	require.Equal(t, uint64(1), db.Stats().Writes)
 
 	committed, err = db.RotateGeneration(ctx, 21, 12)
 	require.True(t, committed)
@@ -48,10 +47,8 @@ func TestRotatingKVDatabasePromotionBypassesDecodedCache(t *testing.T) {
 
 	reopenedStore, err := kvpebble.NewRotating(path, kvpebble.Options{BlockCacheBytes: 16 << 20, MaxOpenFiles: 200})
 	require.NoError(t, err)
-	reopened := NewRotatingKVDatabase(reopenedStore, "rotating", &DatabaseConfig{
-		CacheSize: 16,
-		CacheTTL:  time.Hour,
-	})
+	reopened, err := NewRotatingKVDatabase(reopenedStore, positiveCacheConfig(16))
+	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, reopened.Close()) })
 	fetched, err := reopened.Fetch(ctx, node.Hash)
 	require.NoError(t, err)
@@ -65,10 +62,8 @@ func TestRotatingKVDatabaseCanRotateWithoutRefresh(t *testing.T) {
 		kvpebble.Options{BlockCacheBytes: 16 << 20, MaxOpenFiles: 200},
 	)
 	require.NoError(t, err)
-	db := NewRotatingKVDatabase(store, "rotating", &DatabaseConfig{
-		CacheSize: 16,
-		CacheTTL:  time.Hour,
-	})
+	db, err := NewRotatingKVDatabase(store, positiveCacheConfig(16))
+	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, db.Close()) })
 
 	canSkip, err := db.CanRotateWithoutRefresh(ctx)
@@ -82,7 +77,7 @@ func TestRotatingKVDatabaseCanRotateWithoutRefresh(t *testing.T) {
 
 	node := &Node{
 		Type:      NodeAccount,
-		Hash:      ComputeHash256([]byte("live-node")),
+		Hash:      testHash([]byte("live-node")),
 		Data:      []byte("live-node"),
 		LedgerSeq: 10,
 	}

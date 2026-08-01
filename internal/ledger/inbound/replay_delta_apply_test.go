@@ -44,12 +44,12 @@ func buildEmptyClosedSuccessorResponse(t *testing.T, parent *ledger.Ledger) (*me
 }
 
 // armReplayDeltaWith verifies the response through GotResponse and
-// returns the armed ReplayDelta in StateComplete, ready for Apply().
+// returns the armed ReplayDelta in StateReplayReady, ready for Apply().
 func armReplayDeltaWith(t *testing.T, parent *ledger.Ledger, resp *message.ReplayDeltaResponse, hdr header.LedgerHeader) *ReplayDelta {
 	t.Helper()
 	rd := NewReplayDelta(hdr.Hash, 7, parent, nil)
 	require.NoError(t, rd.GotResponse(resp))
-	require.True(t, rd.IsComplete())
+	require.Equal(t, StateReplayReady, rd.State())
 	return rd
 }
 
@@ -148,7 +148,7 @@ func TestReplayDelta_Apply_OrderedByIndex(t *testing.T) {
 
 	rd := NewReplayDelta([32]byte{}, 7, parent, nil)
 	rd.mu.Lock()
-	rd.state = StateComplete
+	rd.state = StateReplayReady
 	stateMap, err := parent.StateMapSnapshot()
 	require.NoError(t, err)
 	txMap, err := parent.TxMapSnapshot()
@@ -224,7 +224,7 @@ func TestReplayDelta_Apply_RequiresExpectedBatchInnerLeaves(t *testing.T) {
 
 	rd := NewReplayDelta([32]byte{}, 7, parent, nil)
 	rd.mu.Lock()
-	rd.state = StateComplete
+	rd.state = StateReplayReady
 	rd.result, err = ledger.NewFromHeader(resHdr, stateMap, txMap, parent.GetFees())
 	require.NoError(t, err)
 	rd.txs = []DecodedTx{{

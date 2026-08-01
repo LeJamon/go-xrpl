@@ -2,6 +2,7 @@ package adaptor
 
 import (
 	"context"
+	"errors"
 	"log/slog"
 	"math"
 	"testing"
@@ -507,6 +508,19 @@ func TestStup_ComponentsStop_WithMockEngine(t *testing.T) {
 	eng := &mockEngine{}
 	c := &Components{Engine: eng}
 	assert.NotPanics(t, func() { c.Stop() })
+}
+
+type stupStopErrorEngine struct {
+	mockEngine
+	err error
+}
+
+func (e *stupStopErrorEngine) Stop() error { return e.err }
+
+func TestStup_ComponentsStop_ReturnsEngineError(t *testing.T) {
+	stopErr := errors.New("engine stop failed")
+	c := &Components{Engine: &stupStopErrorEngine{err: stopErr}}
+	require.ErrorIs(t, c.Stop(), stopErr)
 }
 
 func TestStup_ComponentsStart_AndStop(t *testing.T) {

@@ -11,6 +11,7 @@ import (
 	"github.com/LeJamon/go-xrpl/internal/ledger/state"
 	txcore "github.com/LeJamon/go-xrpl/internal/tx"
 	"github.com/LeJamon/go-xrpl/keylet"
+	"github.com/LeJamon/go-xrpl/ledger/entry"
 	"github.com/LeJamon/go-xrpl/protocol"
 )
 
@@ -23,7 +24,7 @@ const (
 
 // vvMaxMPTokenAmount is the default share-supply cap (2^63-1) when a share
 // issuance omits MaximumAmount.
-const vvMaxMPTokenAmount uint64 = 0x7FFFFFFFFFFFFFFF
+const vvMaxMPTokenAmount = protocol.MaxMPTokenAmount
 
 // vvAsset is a vault's underlying asset: native XRP, an MPT, or an IOU.
 type vvAsset struct {
@@ -213,21 +214,21 @@ func (c *vvChecker) visit(entries []InvariantEntry) {
 		if e.Before != nil {
 			if bf, err := decodeEntry(e.Before); err == nil {
 				switch e.EntryType {
-				case "Vault":
+				case entry.TypeVault:
 					if v, ok := vvMakeVault(bf, e.Key, c.numberScale); ok {
 						c.beforeVault = append(c.beforeVault, v)
 					}
-				case "MPTokenIssuance":
+				case entry.TypeMPTokenIssuance:
 					c.beforeShares = append(c.beforeShares, vvMakeShares(bf))
 					delta = vvNumFromU64(vvU64(bf, "OutstandingAmount"), c.numberScale)
 					scale, sign = 0, 1
-				case "MPToken":
+				case entry.TypeMPToken:
 					delta = vvNumFromU64(vvU64(bf, "MPTAmount"), c.numberScale)
 					scale, sign = 0, -1
-				case "AccountRoot":
+				case entry.TypeAccountRoot:
 					delta = vvNumFromI64(vvI64(bf, "Balance"), c.numberScale)
 					scale, sign = 0, -1
-				case "RippleState":
+				case entry.TypeRippleState:
 					amt := vvBalanceAmount(bf)
 					delta = vvNumFromAmount(amt, c.numberScale)
 					scale, sign = amt.Exponent(), -1
@@ -238,21 +239,21 @@ func (c *vvChecker) visit(entries []InvariantEntry) {
 		if !e.IsDelete && e.After != nil {
 			if af, err := decodeEntry(e.After); err == nil {
 				switch e.EntryType {
-				case "Vault":
+				case entry.TypeVault:
 					if v, ok := vvMakeVault(af, e.Key, c.numberScale); ok {
 						c.afterVault = append(c.afterVault, v)
 					}
-				case "MPTokenIssuance":
+				case entry.TypeMPTokenIssuance:
 					c.afterShares = append(c.afterShares, vvMakeShares(af))
 					delta = delta.Sub(vvNumFromU64(vvU64(af, "OutstandingAmount"), c.numberScale))
 					scale, sign = 0, 1
-				case "MPToken":
+				case entry.TypeMPToken:
 					delta = delta.Sub(vvNumFromU64(vvU64(af, "MPTAmount"), c.numberScale))
 					scale, sign = 0, -1
-				case "AccountRoot":
+				case entry.TypeAccountRoot:
 					delta = delta.Sub(vvNumFromI64(vvI64(af, "Balance"), c.numberScale))
 					scale, sign = 0, -1
-				case "RippleState":
+				case entry.TypeRippleState:
 					amt := vvBalanceAmount(af)
 					delta = delta.Sub(vvNumFromAmount(amt, c.numberScale))
 					if amt.Exponent() > scale {

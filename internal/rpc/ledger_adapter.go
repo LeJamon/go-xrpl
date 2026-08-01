@@ -168,7 +168,7 @@ func (a *ledgerReaderAdapter) CloseTime() int64 {
 }
 
 func (a *ledgerReaderAdapter) CloseTimeResolution() uint32 {
-	return a.l.Header().CloseTimeResolution
+	return uint32(a.l.Header().CloseTimeResolution)
 }
 
 func (a *ledgerReaderAdapter) CloseFlags() uint8 {

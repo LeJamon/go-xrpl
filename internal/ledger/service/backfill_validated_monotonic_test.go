@@ -36,13 +36,6 @@ func TestBackfill_BelowTipDrainDoesNotRewindValidated(t *testing.T) {
 	svc.ledgerHistory[tip.Sequence()] = tip
 	svc.closedLedger = tip
 	svc.validatedLedger = tip
-	// The skipped seq reached quorum while we were behind; its validation
-	// was stashed for the eventual adopt.
-	svc.pendingLedgerValidations[baseSeq] = pendingValidationEntry{
-		expectedHash: hashLow,
-		at:           time.Now(),
-	}
-	svc.pendingLedgerValidationsOrder = append(svc.pendingLedgerValidationsOrder, baseSeq)
 	svc.mu.Unlock()
 
 	stateMap := shamap.New(shamap.TypeState)
@@ -54,11 +47,19 @@ func TestBackfill_BelowTipDrainDoesNotRewindValidated(t *testing.T) {
 
 	hdr := &header.LedgerHeader{
 		LedgerIndex: baseSeq,
-		Hash:        hashLow,
 		ParentHash:  [32]byte{0x76},
 		TxHash:      txRoot,
 		AccountHash: stateRoot,
 	}
+	hdr.Hash = header.CalculateHash(*hdr)
+	hashLow = hdr.Hash
+	svc.mu.Lock()
+	svc.pendingLedgerValidations[baseSeq] = pendingValidationEntry{
+		expectedHash: hashLow,
+		at:           time.Now(),
+	}
+	svc.pendingLedgerValidationsOrder = append(svc.pendingLedgerValidationsOrder, baseSeq)
+	svc.mu.Unlock()
 	require.NoError(t, svc.AdoptLedgerWithState(context.TODO(), hdr, stateMap, txMap))
 	svc.FlushPersists()
 

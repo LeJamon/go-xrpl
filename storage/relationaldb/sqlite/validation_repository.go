@@ -2,9 +2,9 @@ package sqlite
 
 import (
 	"context"
-	"database/sql"
 
 	"github.com/LeJamon/go-xrpl/storage/relationaldb"
+	"github.com/LeJamon/go-xrpl/storage/relationaldb/internal/sqlutil"
 )
 
 // validationRepository is the SQLite-backed on-disk validation archive.
@@ -14,29 +14,20 @@ import (
 // single table would bloat the file layout without any write-concurrency
 // win (SQLite serializes writes across files in the same process).
 type validationRepository struct {
-	db *sql.DB
-	tx *sql.Tx
+	db       *sqlutil.DB
+	executor executor
 }
 
 // Compile-time interface check.
 var _ relationaldb.ValidationRepository = (*validationRepository)(nil)
 
 // newValidationRepository creates a SQLite validation repository.
-func newValidationRepository(db *sql.DB) *validationRepository {
-	return &validationRepository{db: db}
-}
-
-// newValidationRepositoryWithTx creates a SQLite validation repository bound to an
-// existing transaction.
-func newValidationRepositoryWithTx(tx *sql.Tx) *validationRepository {
-	return &validationRepository{tx: tx}
+func newValidationRepository(db *sqlutil.DB) *validationRepository {
+	return &validationRepository{db: db, executor: db}
 }
 
 func (r *validationRepository) getExecutor() executor {
-	if r.tx != nil {
-		return r.tx
-	}
-	return r.db
+	return r.executor
 }
 
 const validationSelectCols = `ledger_seq, initial_seq, ledger_hash, node_pubkey,
@@ -46,6 +37,9 @@ const validationSelectCols = `ledger_seq, initial_seq, ledger_hash, node_pubkey,
 func (r *validationRepository) Save(ctx context.Context, v *relationaldb.ValidationRecord) error {
 	if v == nil {
 		return relationaldb.NewDataError("validation_save", "nil record", nil)
+	}
+	if len(v.NodePubKey) != 33 {
+		return relationaldb.NewDataError("validation_save", "node public key must be 33 bytes", nil)
 	}
 	_, err := r.getExecutor().ExecContext(ctx, `
 		INSERT INTO validations (
@@ -69,23 +63,11 @@ func (r *validationRepository) SaveBatch(ctx context.Context, vs []*relationaldb
 	if len(vs) == 0 {
 		return nil
 	}
-	// Run as a single transaction when we're not already inside one —
-	// rippled's doStaleWrite batches a whole vector per commit for the
-	// same reason (amortize fsync).
-	if r.tx != nil {
-		for _, v := range vs {
-			if err := r.Save(ctx, v); err != nil {
-				return err
-			}
-		}
-		return nil
-	}
-
 	tx, err := r.db.BeginTx(ctx, nil)
 	if err != nil {
 		return relationaldb.NewTransactionError("validation_save_batch", "failed to begin transaction", err)
 	}
-	txRepo := newValidationRepositoryWithTx(tx)
+	txRepo := &validationRepository{executor: tx}
 	for _, v := range vs {
 		if err := txRepo.Save(ctx, v); err != nil {
 			_ = tx.Rollback()
@@ -124,6 +106,9 @@ func (r *validationRepository) GetValidationsForLedger(ctx context.Context, seq 
 // GetValidationsByValidator returns a validator's validation records newest-first,
 // capped at limit (0 means no limit).
 func (r *validationRepository) GetValidationsByValidator(ctx context.Context, nodeKey []byte, limit int) ([]*relationaldb.ValidationRecord, error) {
+	if len(nodeKey) != 33 {
+		return nil, relationaldb.NewDataError("validation_get_by_validator", "node public key must be 33 bytes", relationaldb.ErrInvalidData)
+	}
 	q := `SELECT ` + validationSelectCols + ` FROM validations WHERE node_pubkey = ? ORDER BY ledger_seq DESC`
 	args := []any{nodeKey}
 	if limit > 0 {
@@ -151,19 +136,9 @@ func (r *validationRepository) GetValidationsByValidator(ctx context.Context, no
 	return result, nil
 }
 
-// GetValidationCount returns the number of rows in the validations table.
-func (r *validationRepository) GetValidationCount(ctx context.Context) (int64, error) {
-	var count int64
-	err := r.getExecutor().QueryRowContext(ctx, `SELECT COUNT(*) FROM validations`).Scan(&count)
-	if err != nil {
-		return 0, relationaldb.NewQueryError("validation_count", "failed to count validations", err)
-	}
-	return count, nil
-}
-
 // DeleteOlderThanSeq removes up to batchSize rows with ledger_seq < maxSeq.
-// A bounded DELETE keeps the retention sweep from blocking the writer on
-// multi-second scans — the archive loop calls this once per flush tick.
+// A bounded DELETE keeps retention maintenance from blocking the writer on
+// one unbounded scan.
 func (r *validationRepository) DeleteOlderThanSeq(ctx context.Context, maxSeq relationaldb.LedgerIndex, batchSize int) (int64, error) {
 	q := `DELETE FROM validations WHERE rowid IN (
 		SELECT rowid FROM validations WHERE ledger_seq < ?`

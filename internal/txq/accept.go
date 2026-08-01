@@ -10,9 +10,6 @@ type AcceptContext interface {
 	// GetTxInLedger returns the number of transactions in the open ledger.
 	GetTxInLedger() uint32
 
-	// GetAccountSequence returns the current sequence number for an account.
-	GetAccountSequence(account [20]byte) uint32
-
 	// ApplyTransaction attempts to apply a transaction to the open ledger.
 	// Returns the result and whether the transaction was applied.
 	ApplyTransaction(txn tx.Transaction) (ter.Result, bool)

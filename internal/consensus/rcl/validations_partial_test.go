@@ -7,7 +7,7 @@ import (
 	"time"
 
 	"github.com/LeJamon/go-xrpl/internal/consensus"
-	"github.com/LeJamon/go-xrpl/internal/consensus/ledgertrie"
+	"github.com/LeJamon/go-xrpl/internal/consensus/ledgertrietest"
 )
 
 // TestValidationTracker_TrustedPartialSteersButNotQuorum pins the A1
@@ -20,7 +20,7 @@ func TestValidationTracker_TrustedPartialSteersButNotQuorum(t *testing.T) {
 	now := time.Now()
 	vt.SetNow(func() time.Time { return now })
 
-	b := ledgertrie.NewTestLedgerBuilder()
+	b := ledgertrietest.NewTestLedgerBuilder()
 	abc := b.Build("abc")
 	abcd := b.Build("abcd")
 	provider := newMapAncestryProvider()

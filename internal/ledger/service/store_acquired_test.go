@@ -19,13 +19,14 @@ func acquiredLedgerFixture(t *testing.T, seq uint32, tag byte) (*header.LedgerHe
 	txMap := shamap.New(shamap.TypeTransaction)
 	txRoot, err := txMap.Hash()
 	require.NoError(t, err)
-	hash := [32]byte{tag}
-	return &header.LedgerHeader{
+	h := &header.LedgerHeader{
 		LedgerIndex: seq,
-		Hash:        hash,
+		ParentHash:  [32]byte{tag},
 		AccountHash: stateRoot,
 		TxHash:      txRoot,
-	}, stateMap, txMap
+	}
+	h.Hash = header.CalculateHash(*h)
+	return h, stateMap, txMap
 }
 
 func TestStoreLedgerWithStateDoesNotMoveCanonicalFrontier(t *testing.T) {
@@ -153,9 +154,11 @@ func TestIngestHistoricalLedgerWithStatePreservesFrontiers(t *testing.T) {
 	txRoot, err := txMap.Hash()
 	require.NoError(t, err)
 	historical.TxHash = txRoot
+	historical.Hash = header.CalculateHash(*historical)
 
 	preferred, preferredState, preferredTx := acquiredLedgerFixture(t, historical.LedgerIndex+1, 0xC3)
 	preferred.ParentHash = historical.Hash
+	preferred.Hash = header.CalculateHash(*preferred)
 	require.NoError(t, svc.StoreLedgerWithState(t.Context(), preferred, preferredState, preferredTx))
 	storedPreferred, err := svc.GetLedgerByHash(preferred.Hash)
 	require.NoError(t, err)
@@ -203,6 +206,7 @@ func TestIngestHistoricalLedgerWithStateRejectsNonCanonicalHistory(t *testing.T)
 	historical, stateMap, txMap := acquiredLedgerFixture(t, svc.GetClosedLedgerIndex()+9, 0xC4)
 	preferred, preferredState, preferredTx := acquiredLedgerFixture(t, historical.LedgerIndex+1, 0xC5)
 	preferred.ParentHash = [32]byte{0xFF}
+	preferred.Hash = header.CalculateHash(*preferred)
 	require.NoError(t, svc.StoreLedgerWithState(t.Context(), preferred, preferredState, preferredTx))
 	storedPreferred, err := svc.GetLedgerByHash(preferred.Hash)
 	require.NoError(t, err)

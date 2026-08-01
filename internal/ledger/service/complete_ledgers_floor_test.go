@@ -10,8 +10,8 @@ func seedCompleteLedgers(t *testing.T, svc *Service, lo, hi uint32) {
 	svc.completeMu.Lock()
 	defer svc.completeMu.Unlock()
 	svc.ensureCompleteLedgerStateLocked()
-	svc.completedLedgers.Clear()
-	svc.completedLedgers.AddRange(lo, hi)
+	svc.completedLedgers = newCompleteLedgerSet()
+	svc.completedLedgers.addRange(lo, hi)
 }
 
 // TestGetServerInfo_CompleteLedgers_ClampedToFloor verifies that after a

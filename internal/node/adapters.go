@@ -1,11 +1,14 @@
 package node
 
 import (
+	"context"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"math"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/LeJamon/go-xrpl/codec/addresscodec"
@@ -27,29 +30,74 @@ import (
 type ledgerCleanerSource struct {
 	svc    *service.Service
 	family shamap.Family
+
+	mu        sync.RWMutex
+	reacquire func(context.Context, uint32) error
 }
 
 func (s *ledgerCleanerSource) AvailableRange() (uint32, uint32, bool) {
 	return s.svc.AvailableLedgerRange()
 }
 
-func (s *ledgerCleanerSource) LedgerRoots(seq uint32) (stateRoot, txRoot [32]byte, ok bool) {
-	l, err := s.svc.GetLedgerBySequence(seq)
+func (s *ledgerCleanerSource) Ledger(ctx context.Context, seq uint32) (cleaner.LedgerData, bool, error) {
+	l, err := s.svc.CleanerLedger(ctx, seq)
 	if err != nil || l == nil {
-		return [32]byte{}, [32]byte{}, false
+		return cleaner.LedgerData{}, false, err
 	}
 	sr, err := l.StateMapHash()
 	if err != nil {
-		return [32]byte{}, [32]byte{}, false
+		return cleaner.LedgerData{}, false, err
 	}
 	tr, err := l.TxMapHash()
 	if err != nil {
-		return [32]byte{}, [32]byte{}, false
+		return cleaner.LedgerData{}, false, err
 	}
-	return sr, tr, true
+	return cleaner.LedgerData{
+		Sequence:   l.Sequence(),
+		Hash:       l.Hash(),
+		ParentHash: l.ParentHash(),
+		StateRoot:  sr,
+		TxRoot:     tr,
+	}, true, nil
+}
+
+func (s *ledgerCleanerSource) CanonicalHash(
+	ctx context.Context,
+	seq uint32,
+) ([32]byte, bool, error) {
+	return s.svc.CanonicalLedgerHash(ctx, seq)
+}
+
+func (s *ledgerCleanerSource) RepairLedgerIndex(
+	ctx context.Context,
+	info cleaner.LedgerData,
+) (bool, error) {
+	return s.svc.RepairCleanerLedgerIndex(
+		ctx, info.Sequence, info.Hash, info.ParentHash,
+	)
 }
 
 func (s *ledgerCleanerSource) Family() shamap.Family { return s.family }
+
+func (s *ledgerCleanerSource) SetReacquire(fn func(context.Context, uint32) error) {
+	s.mu.Lock()
+	s.reacquire = fn
+	s.mu.Unlock()
+}
+
+func (s *ledgerCleanerSource) Reacquire(ctx context.Context, seq uint32) error {
+	s.mu.RLock()
+	fn := s.reacquire
+	s.mu.RUnlock()
+	if fn == nil {
+		return errors.New("ledger_cleaner: ledger acquisition unavailable")
+	}
+	return fn(ctx, seq)
+}
+
+func (s *ledgerCleanerSource) RepairTransactions(ctx context.Context, seq uint32) error {
+	return s.svc.RepairLedgerTransactions(ctx, seq)
+}
 
 // toCleanerStatus translates the cleaner package's status into the RPC-types
 // mirror struct (see ServiceContainer.LedgerCleanerConfigure for the layering
@@ -60,6 +108,7 @@ func toCleanerStatus(s cleaner.Status) types.LedgerCleanerStatus {
 		MinLedger:      s.MinLedger,
 		MaxLedger:      s.MaxLedger,
 		CheckNodes:     s.CheckNodes,
+		FixTxns:        s.FixTxns,
 		Failures:       s.Failures,
 		LedgersChecked: s.LedgersChecked,
 		NodesChecked:   s.NodesChecked,

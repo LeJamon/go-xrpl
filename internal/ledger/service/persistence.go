@@ -94,42 +94,43 @@ type persistJob struct {
 	completionToken uint64
 }
 
-func (s *Service) enqueuePersist(l *ledger.Ledger) {
-	s.enqueueLedgerPersist(l, true, true)
+func (p *persistenceWorker) enqueuePersist(l *ledger.Ledger) {
+	p.enqueueLedgerPersist(l, true, true)
 }
 
-func (s *Service) enqueueValidatedHistoryPersist(l *ledger.Ledger) {
-	s.enqueueLedgerPersist(l, true, false)
+func (p *persistenceWorker) enqueueValidatedHistoryPersist(l *ledger.Ledger) {
+	p.enqueueLedgerPersist(l, true, false)
 }
 
-func (s *Service) enqueueNodePersist(l *ledger.Ledger) {
-	s.enqueueLedgerPersist(l, false, false)
+func (p *persistenceWorker) enqueueNodePersist(l *ledger.Ledger) {
+	p.enqueueLedgerPersist(l, false, false)
 }
 
-func (s *Service) enqueueLedgerPersist(l *ledger.Ledger, validated, updatesTip bool) {
+func (p *persistenceWorker) enqueueLedgerPersist(l *ledger.Ledger, validated, updatesTip bool) {
 	if l == nil {
 		return
 	}
+	s := p.service
 	seq := l.Sequence()
-	s.persistMu.Lock()
+	p.persistMu.Lock()
 	if validated {
-		if existing := s.validatedPersistJobs[seq]; existing != nil {
+		if existing := p.validatedPersistJobs[seq]; existing != nil {
 			if existing.l != nil && existing.l.Hash() == l.Hash() {
 				if updatesTip {
 					existing.updatesTip.Store(true)
 				}
-				s.persistMu.Unlock()
+				p.persistMu.Unlock()
 				return
 			}
 			if !updatesTip && existing.updatesTip.Load() {
-				s.persistMu.Unlock()
+				p.persistMu.Unlock()
 				return
 			}
 			existing.canceled.Store(true)
-			delete(s.validatedPersistJobs, seq)
+			delete(p.validatedPersistJobs, seq)
 		}
 		if s.hasCompleteLedger(l) && !updatesTip {
-			s.persistMu.Unlock()
+			p.persistMu.Unlock()
 			return
 		}
 	}
@@ -144,34 +145,61 @@ func (s *Service) enqueueLedgerPersist(l *ledger.Ledger, validated, updatesTip b
 		} else if l.IsValidated() {
 			job.completionToken = s.beginValidatedPersistence(seq, l.Hash())
 		}
-		s.validatedPersistJobs[seq] = job
+		p.validatedPersistJobs[seq] = job
 	}
-	if !s.persistStarted {
-		s.persistMu.Unlock()
+	if !p.persistStarted {
+		p.persistMu.Unlock()
 		s.runPersistJob(job)
 		return
 	}
-	if s.persistStopping {
+	if p.persistStopping {
 		if validated {
 			job.canceled.Store(true)
-			delete(s.validatedPersistJobs, seq)
+			delete(p.validatedPersistJobs, seq)
 		}
-		s.persistMu.Unlock()
+		p.persistMu.Unlock()
 		if validated && !job.tipOnly {
 			s.invalidateCompleteLedger(seq)
 		}
 		s.logger.Warn("persist skipped: service stopping", "seq", seq)
 		return
 	}
-	s.persistQueue = append(s.persistQueue, job)
-	s.signalPersistLocked()
-	s.persistMu.Unlock()
+	p.persistQueue = append(p.persistQueue, job)
+	p.signalPersistLocked()
+	p.persistMu.Unlock()
 }
 
-func (s *Service) signalPersistLocked() {
+func (p *persistenceWorker) signalPersistLocked() {
 	select {
-	case s.persistWake <- struct{}{}:
+	case p.persistWake <- struct{}{}:
 	default:
+	}
+}
+
+func (p *persistenceWorker) start() {
+	p.persistMu.Lock()
+	if p.persistStarted || p.persistStopping {
+		p.persistMu.Unlock()
+		return
+	}
+	p.persistStarted = true
+	p.persistWG.Add(1)
+	p.persistMu.Unlock()
+	go p.runPersistWorker()
+}
+
+func (p *persistenceWorker) stop() {
+	p.persistMu.Lock()
+	started := p.persistStarted
+	if !p.persistStopping {
+		p.persistStopping = true
+		if started {
+			p.signalPersistLocked()
+		}
+	}
+	p.persistMu.Unlock()
+	if started {
+		p.persistWG.Wait()
 	}
 }
 
@@ -180,15 +208,19 @@ func (s *Service) FlushPersists() {
 }
 
 func (s *Service) flushPersists(ctx context.Context) error {
+	return s.persistenceWorker.flushPersists(ctx)
+}
+
+func (p *persistenceWorker) flushPersists(ctx context.Context) error {
 	done := make(chan struct{})
-	s.persistMu.Lock()
-	if !s.persistStarted || s.persistStopping {
-		s.persistMu.Unlock()
+	p.persistMu.Lock()
+	if !p.persistStarted || p.persistStopping {
+		p.persistMu.Unlock()
 		return nil
 	}
-	s.persistQueue = append(s.persistQueue, &persistJob{done: done})
-	s.signalPersistLocked()
-	s.persistMu.Unlock()
+	p.persistQueue = append(p.persistQueue, &persistJob{done: done})
+	p.signalPersistLocked()
+	p.persistMu.Unlock()
 	select {
 	case <-done:
 		return nil
@@ -202,50 +234,50 @@ func (s *Service) flushPersists(ctx context.Context) error {
 // closes the underlying node/relational stores. Idempotent and safe on a
 // never-started Service. Must be called before those stores are closed.
 func (s *Service) Stop() {
+	s.lifecycleMu.Lock()
+	switch s.lifecycleState {
+	case serviceStopping:
+		done := s.stopDone
+		s.lifecycleMu.Unlock()
+		<-done
+		return
+	case serviceStopped:
+		s.lifecycleMu.Unlock()
+		return
+	}
+	s.lifecycleState = serviceStopping
+	s.stopDone = make(chan struct{})
+	done := s.stopDone
+	s.lifecycleMu.Unlock()
+
 	s.stopNodeStoreSweeper()
+	s.persistenceWorker.stop()
+	s.eventPublisher.stop()
 
-	s.persistMu.Lock()
-	persistWasStarted := s.persistStarted
-	waitPersist := s.persistStarted && !s.persistStopping
-	if waitPersist {
-		s.persistStopping = true
-		s.signalPersistLocked()
-	}
-	s.persistMu.Unlock()
-
-	s.ledgerEventMu.Lock()
-	if s.ledgerEventStarted && !s.ledgerEventStopping {
-		s.ledgerEventStopping = true
-		select {
-		case s.ledgerEventWake <- struct{}{}:
-		default:
-		}
-	}
-	s.ledgerEventMu.Unlock()
-	if persistWasStarted {
-		s.persistWG.Wait()
-	}
-	s.ledgerEventWG.Wait()
+	s.lifecycleMu.Lock()
+	s.lifecycleState = serviceStopped
+	close(done)
+	s.lifecycleMu.Unlock()
 }
 
-func (s *Service) runPersistWorker() {
-	defer s.persistWG.Done()
+func (p *persistenceWorker) runPersistWorker() {
+	defer p.persistWG.Done()
 	for {
-		s.persistMu.Lock()
-		if len(s.persistQueue) > 0 {
-			job := s.persistQueue[0]
-			s.persistQueue[0] = nil
-			s.persistQueue = s.persistQueue[1:]
-			s.persistMu.Unlock()
-			s.runPersistJob(job)
+		p.persistMu.Lock()
+		if len(p.persistQueue) > 0 {
+			job := p.persistQueue[0]
+			p.persistQueue[0] = nil
+			p.persistQueue = p.persistQueue[1:]
+			p.persistMu.Unlock()
+			p.service.runPersistJob(job)
 			continue
 		}
-		stopping := s.persistStopping
-		s.persistMu.Unlock()
+		stopping := p.persistStopping
+		p.persistMu.Unlock()
 		if stopping {
 			return
 		}
-		<-s.persistWake
+		<-p.persistWake
 	}
 }
 
@@ -384,10 +416,6 @@ func (s *Service) persistToNodeStore(ctx context.Context, l *ledger.Ledger, seq 
 		return fmt.Errorf("sync ledger %d: %w", seq, err)
 	}
 	return nil
-}
-
-func (s *Service) persistValidatedTip(ctx context.Context, l *ledger.Ledger) error {
-	return s.persistValidatedTipJob(ctx, l, false, nil)
 }
 
 func (s *Service) persistValidatedTipJob(
@@ -606,23 +634,47 @@ func (s *Service) RefreshValidatedState(
 	return seq, nil
 }
 
-// persistToRelationalDB writes ledger metadata and transactions to the
-// relational database inside a single transaction so the per-tx index
-// entries either all commit or all roll back on cancel / DB error.
-//
-// WithTransaction is invoked directly on RepositoryManager, bypassing
-// Manager.ExecuteInTransaction's retry layer. The persist call site
-// in service.go logs and discards the error to match rippled's
-// fail-soft pendSaveValidated; retrying inside the transactional
-// scope would not help if the failure is the chain-advance ordering
-// itself, and would lengthen the time the Service mutex is held.
+// RepairLedgerTransactions rebuilds the relational ledger and transaction
+// indexes from the canonical ledger. Nodes without relational persistence have
+// nothing to repair.
+func (s *Service) RepairLedgerTransactions(ctx context.Context, seq uint32) error {
+	if s == nil || s.relationalDB == nil {
+		return nil
+	}
+	l, err := s.getLedgerBySequence(ctx, seq)
+	if err != nil {
+		return err
+	}
+	s.canonicalPersistMu.Lock()
+	defer s.canonicalPersistMu.Unlock()
+	return s.persistToRelationalDB(ctx, l)
+}
+
+// persistToRelationalDB materializes a validated ledger and all of its
+// transaction indexes before handing the immutable unit to the relational
+// backend. The backend owns commit ordering and retry safety.
 func (s *Service) persistToRelationalDB(ctx context.Context, l *ledger.Ledger) error {
 	h := l.Header()
 
-	stateHash, _ := l.StateMapHash()
-	txHash, _ := l.TxMapHash()
+	stateHash, err := l.StateMapHash()
+	if err != nil {
+		return fmt.Errorf("compute state map hash: %w", err)
+	}
+	if stateHash == ([32]byte{}) {
+		return errors.New("compute state map hash: empty state root")
+	}
+	if stateHash != h.AccountHash {
+		return fmt.Errorf("state map hash %x does not match ledger header %x", stateHash, h.AccountHash)
+	}
+	txHash, err := l.TxMapHash()
+	if err != nil {
+		return fmt.Errorf("compute transaction map hash: %w", err)
+	}
+	if txHash != h.TxHash {
+		return fmt.Errorf("transaction map hash %x does not match ledger header %x", txHash, h.TxHash)
+	}
 
-	ledgerInfo := &relationaldb.LedgerInfo{
+	ledgerInfo := relationaldb.LedgerInfo{
 		Hash:            relationaldb.Hash(l.Hash()),
 		Sequence:        relationaldb.LedgerIndex(h.LedgerIndex),
 		ParentHash:      relationaldb.Hash(h.ParentHash),
@@ -637,70 +689,63 @@ func (s *Service) persistToRelationalDB(ctx context.Context, l *ledger.Ledger) e
 
 	seq := relationaldb.LedgerIndex(l.Sequence())
 
-	return s.relationalDB.WithTransaction(ctx, func(txCtx relationaldb.TransactionContext) error {
-		if err := txCtx.Transaction().DeleteTransactionsByLedgerSeq(ctx, seq); err != nil {
-			return err
-		}
-		if err := txCtx.Ledger().SaveValidatedLedger(ctx, ledgerInfo); err != nil {
-			return err
+	indexed := make([]relationaldb.IndexedTransaction, 0)
+	var loopErr error
+	err = l.ForEachTransactionContext(ctx, func(txHashBytes [32]byte, txData []byte) bool {
+		txBlob, metaBlob, err := tx.SplitTxWithMetaBlob(txData)
+		if err != nil {
+			loopErr = fmt.Errorf("split transaction %x: %w", txHashBytes[:8], err)
+			return false
 		}
 
-		var loopErr error
-		_ = l.ForEachTransaction(func(txHashBytes [32]byte, txData []byte) bool {
-			if err := ctx.Err(); err != nil {
-				loopErr = err
+		var accountID relationaldb.AccountID
+		parsedTransaction, err := tx.ParseFromBinary(txBlob)
+		if err != nil {
+			loopErr = fmt.Errorf("decode transaction %x: %w", txHashBytes[:8], err)
+			return false
+		}
+		computedHash, err := tx.ComputeTransactionHash(parsedTransaction)
+		if err != nil {
+			loopErr = fmt.Errorf("hash transaction %x: %w", txHashBytes[:8], err)
+			return false
+		}
+		if computedHash != txHashBytes {
+			loopErr = fmt.Errorf("transaction hash %x does not match map key %x", computedHash, txHashBytes)
+			return false
+		}
+		account := parsedTransaction.GetCommon().Account
+		if account != "" {
+			_, accountBytes, err := addresscodec.DecodeClassicAddressToAccountID(account)
+			if err != nil || len(accountBytes) != len(accountID) {
+				loopErr = fmt.Errorf("decode transaction %x Account: %w", txHashBytes[:8], errors.Join(err, relationaldb.ErrInvalidData))
 				return false
 			}
+			copy(accountID[:], accountBytes)
+		}
 
-			txBlob, metaBlob, err := tx.SplitTxWithMetaBlob(txData)
-			if err != nil {
-				// Bad blob is a data issue, not a DB issue —
-				// skip this tx, keep the ledger persist alive.
-				s.logger.Warn("failed to split tx+meta blob", "tx", hex.EncodeToString(txHashBytes[:8]), "error", err)
-				return true
-			}
+		affected := map[relationaldb.AccountID]struct{}{}
 
-			var accountID relationaldb.AccountID
-			var destinationID relationaldb.AccountID
+		txnSeq, ok := tx.TransactionIndexFromMetadata(metaBlob)
+		if !ok {
+			loopErr = fmt.Errorf("decode transaction metadata %x: missing or invalid TransactionIndex", txHashBytes[:8])
+			return false
+		}
+		metaJSON, err := binarycodec.Decode(hex.EncodeToString(metaBlob))
+		if err != nil {
+			loopErr = fmt.Errorf("decode transaction metadata %x: %w", txHashBytes[:8], err)
+			return false
+		}
+		if result, ok := metaJSON["TransactionResult"].(string); !ok || result == "" {
+			loopErr = fmt.Errorf("decode transaction metadata %x: missing or invalid TransactionResult", txHashBytes[:8])
+			return false
+		}
+		if err := addMetaAffectedAccounts(metaJSON, affected); err != nil {
+			loopErr = fmt.Errorf("decode transaction metadata %x: %w", txHashBytes[:8], err)
+			return false
+		}
 
-			txBlobHex := hex.EncodeToString(txBlob)
-			if txJSON, decErr := binarycodec.Decode(txBlobHex); decErr == nil {
-				if accountStr, ok := txJSON["Account"].(string); ok {
-					if _, accountBytes, err := addresscodec.DecodeClassicAddressToAccountID(accountStr); err == nil && len(accountBytes) == 20 {
-						copy(accountID[:], accountBytes)
-					}
-				}
-				if destStr, ok := txJSON["Destination"].(string); ok {
-					if _, destBytes, err := addresscodec.DecodeClassicAddressToAccountID(destStr); err == nil && len(destBytes) == 20 {
-						copy(destinationID[:], destBytes)
-					}
-				}
-			}
-
-			// account_tx must be queryable by every account the transaction
-			// affected — not just Account/Destination but offer counterparties,
-			// trust-line issuers, and so on — mirroring rippled's
-			// TxMeta::getAffectedAccounts (AcceptedLedgerTx.cpp:35).
-			affected := map[relationaldb.AccountID]struct{}{}
-			if !accountID.IsZero() {
-				affected[accountID] = struct{}{}
-			}
-			if !destinationID.IsZero() {
-				affected[destinationID] = struct{}{}
-			}
-
-			txnSeq := invalidTransactionIndex
-			if len(metaBlob) > 0 {
-				if txIndex, ok := tx.TransactionIndexFromMetadata(metaBlob); ok {
-					txnSeq = txIndex
-				}
-				metaHex := hex.EncodeToString(metaBlob)
-				if metaJSON, err := binarycodec.Decode(metaHex); err == nil {
-					addMetaAffectedAccounts(metaJSON, affected)
-				}
-			}
-
-			txInfo := &relationaldb.TransactionInfo{
+		indexed = append(indexed, relationaldb.IndexedTransaction{
+			Transaction: relationaldb.TransactionInfo{
 				Hash:      relationaldb.Hash(txHashBytes),
 				LedgerSeq: seq,
 				TxnSeq:    txnSeq,
@@ -708,26 +753,20 @@ func (s *Service) persistToRelationalDB(ctx context.Context, l *ledger.Ledger) e
 				RawTxn:    txBlob,
 				TxnMeta:   metaBlob,
 				Account:   accountID,
-			}
-
-			// DB errors propagate so the whole ledger rolls back —
-			// partial tx index is worse than a retried persist.
-			if err := txCtx.Transaction().SaveTransaction(ctx, txInfo); err != nil {
-				loopErr = err
-				return false
-			}
-
-			for _, acc := range sortedAccountIDs(affected) {
-				if err := txCtx.AccountTransaction().SaveAccountTransaction(ctx, acc, txInfo); err != nil {
-					loopErr = err
-					return false
-				}
-			}
-
-			return true
+			},
+			Accounts: sortedAccountIDs(affected),
 		})
-
+		return true
+	})
+	if err != nil {
+		return fmt.Errorf("iterate transaction map: %w", err)
+	}
+	if loopErr != nil {
 		return loopErr
+	}
+	return s.relationalDB.PersistValidatedLedger(ctx, relationaldb.ValidatedLedger{
+		Ledger:       ledgerInfo,
+		Transactions: indexed,
 	})
 }
 
@@ -739,10 +778,14 @@ func (s *Service) persistToRelationalDB(ctx context.Context, l *ledger.Ledger) e
 // MPTokenIssuanceID. In decoded metadata JSON account fields are plain
 // classic-address strings and those amounts are objects, so a
 // string-decodes-as-address test isolates the account fields.
-func addMetaAffectedAccounts(metaJSON map[string]any, into map[relationaldb.AccountID]struct{}) {
-	nodes, ok := metaJSON["AffectedNodes"].([]any)
+func addMetaAffectedAccounts(metaJSON map[string]any, into map[relationaldb.AccountID]struct{}) error {
+	rawNodes, exists := metaJSON["AffectedNodes"]
+	if !exists {
+		return errors.New("missing AffectedNodes")
+	}
+	nodes, ok := rawNodes.([]any)
 	if !ok {
-		return
+		return errors.New("AffectedNodes is not an array")
 	}
 	addAddr := func(s string) {
 		if _, b, err := addresscodec.DecodeClassicAddressToAccountID(s); err == nil && len(b) == 20 {
@@ -756,40 +799,53 @@ func addMetaAffectedAccounts(metaJSON map[string]any, into map[relationaldb.Acco
 	// An MPTokenIssuanceID is the 24-byte (4-byte sequence ++ 20-byte issuer)
 	// hex of an MPT issuance; index its issuer so MPToken activity is queryable
 	// by the issuing account.
-	addMPTIssuer := func(hexID string) {
+	addMPTIssuer := func(hexID string) error {
 		raw, err := hex.DecodeString(hexID)
 		if err != nil || len(raw) != 24 {
-			return
+			return errors.New("invalid MPTokenIssuanceID")
 		}
 		var id relationaldb.AccountID
 		copy(id[:], raw[4:])
 		if !id.IsZero() {
 			into[id] = struct{}{}
 		}
+		return nil
 	}
 	for _, n := range nodes {
 		node, ok := n.(map[string]any)
 		if !ok {
-			continue
+			return errors.New("affected node is not an object")
 		}
-		for wrapper, inner := range node {
+		found := false
+		for _, wrapper := range []string{"CreatedNode", "ModifiedNode", "DeletedNode"} {
+			inner, exists := node[wrapper]
+			if !exists {
+				continue
+			}
+			found = true
 			im, ok := inner.(map[string]any)
 			if !ok {
-				continue
+				return fmt.Errorf("%s is not an object", wrapper)
 			}
 			fieldsKey := "FinalFields"
 			if wrapper == "CreatedNode" {
 				fieldsKey = "NewFields"
 			}
-			fields, ok := im[fieldsKey].(map[string]any)
-			if !ok {
+			rawFields, exists := im[fieldsKey]
+			if !exists {
 				continue
+			}
+			fields, ok := rawFields.(map[string]any)
+			if !ok {
+				return fmt.Errorf("%s %s is not an object", wrapper, fieldsKey)
 			}
 			for name, val := range fields {
 				switch v := val.(type) {
 				case string:
 					if name == "MPTokenIssuanceID" {
-						addMPTIssuer(v)
+						if err := addMPTIssuer(v); err != nil {
+							return err
+						}
 					} else {
 						addAddr(v)
 					}
@@ -802,8 +858,13 @@ func addMetaAffectedAccounts(metaJSON map[string]any, into map[relationaldb.Acco
 					}
 				}
 			}
+			break
+		}
+		if !found {
+			return errors.New("affected node has no recognized node type")
 		}
 	}
+	return nil
 }
 
 // sortedAccountIDs returns the set's account IDs in ascending byte order so

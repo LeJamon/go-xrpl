@@ -5,7 +5,7 @@ import (
 	"strings"
 
 	addresscodec "github.com/LeJamon/go-xrpl/codec/addresscodec"
-	"github.com/LeJamon/go-xrpl/internal/tx/ledgerfields"
+	ledgerfields "github.com/LeJamon/go-xrpl/ledger/entry"
 )
 
 // SerializeEscrow serializes an Escrow ledger entry from its creation inputs.
@@ -175,7 +175,10 @@ func ParseEscrow(data []byte) (*EscrowData, error) {
 		}
 		switch {
 		case amount.IsNative():
-			escrow.Amount = nativeMagnitude(amount)
+			escrow.Amount, err = nonNegativeNativeDrops("Escrow.Amount", amount)
+			if err != nil {
+				return nil, err
+			}
 			escrow.IsXRP = true
 		case amount.IsMPT():
 			escrow.IOUAmount = &amount

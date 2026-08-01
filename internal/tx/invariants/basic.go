@@ -17,7 +17,7 @@ import (
 // Reference: rippled InvariantCheck.cpp — XRPBalanceChecks (lines 178-201).
 func checkXRPBalances(entries []InvariantEntry) *InvariantViolation {
 	for _, e := range entries {
-		if e.EntryType != "AccountRoot" {
+		if e.EntryType != entry.TypeAccountRoot {
 			continue
 		}
 		// Inspect both images. For a delete, CollectEntries leaves After nil and
@@ -68,7 +68,7 @@ func checkXRPNotCreated(result Result, fee uint64, entries []InvariantEntry) *In
 
 	for _, e := range entries {
 		switch e.EntryType {
-		case "AccountRoot":
+		case entry.TypeAccountRoot:
 			var before, after uint64
 			if e.Before != nil {
 				acct, err := state.ParseAccountRoot(e.Before)
@@ -86,7 +86,7 @@ func checkXRPNotCreated(result Result, fee uint64, entries []InvariantEntry) *In
 			}
 			netChange += int64(after) - int64(before)
 
-		case "Escrow":
+		case entry.TypeEscrow:
 			// Escrow holds XRP in escrow — count as a balance change.
 			// IOU escrows (TokenEscrow amendment) are skipped because they
 			// don't hold XRP drops.
@@ -113,7 +113,7 @@ func checkXRPNotCreated(result Result, fee uint64, entries []InvariantEntry) *In
 			}
 			netChange += int64(after) - int64(before)
 
-		case "PayChannel":
+		case entry.TypePayChannel:
 			// PayChannel holds XRP as Amount - Balance (total minus claimed).
 			// Reference: rippled InvariantCheck.cpp:107-131
 			var before, after uint64
@@ -173,7 +173,7 @@ func xrpNotCreatedParseViolation(entryType string, err error) *InvariantViolatio
 func checkAccountRootsNotDeleted(txType string, result Result, entries []InvariantEntry) *InvariantViolation {
 	deletedCount := 0
 	for _, e := range entries {
-		if e.EntryType == "AccountRoot" && e.IsDelete {
+		if e.EntryType == entry.TypeAccountRoot && e.IsDelete {
 			deletedCount++
 		}
 	}
@@ -217,12 +217,9 @@ func checkAccountRootsNotDeleted(txType string, result Result, entries []Invaria
 //     must match.
 //  2. Any entry carrying an "after" image must be a known valid type.
 //
-// Every go-xrpl SLE is serialized with LedgerEntryType first (header byte 0x11),
-// so a missing type code (EntryTypeCode == 0) means the bytes are not a
-// well-formed SLE — including NFTokenPage entries, whose *ledger keys* are
-// unhashed but whose *serialized content* still leads with LedgerEntryType. A
-// code of 0 is therefore a hard failure, mirroring rippled where after->getType()
-// throwing is caught as tecINVARIANT_FAILED.
+// Every go-xrpl SLE is serialized with LedgerEntryType first (header byte 0x11).
+// A missing or unknown type is a hard failure, mirroring rippled where
+// after->getType() throwing is caught as tecINVARIANT_FAILED.
 // Reference: rippled InvariantCheck.cpp — LedgerEntryTypesMatch (lines 505-576).
 func checkLedgerEntryTypesMatch(entries []InvariantEntry) *InvariantViolation {
 	typeMismatch := false
@@ -231,30 +228,29 @@ func checkLedgerEntryTypesMatch(entries []InvariantEntry) *InvariantViolation {
 	for _, e := range entries {
 		// Check type mismatch between before and after.
 		if e.Before != nil && e.After != nil {
-			beforeCode := state.EntryTypeCode(e.Before)
-			afterCode := state.EntryTypeCode(e.After)
-			if beforeCode == 0 || afterCode == 0 {
+			beforeType, beforeErr := state.DecodeType(e.Before)
+			afterType, afterErr := state.DecodeType(e.After)
+			if beforeErr != nil || afterErr != nil {
 				return &InvariantViolation{
 					Name:    "LedgerEntryTypesMatch",
 					Message: "could not extract ledger entry type from SLE",
 				}
 			}
-			if beforeCode != afterCode {
+			if beforeType != afterType {
 				typeMismatch = true
 			}
 		}
 
 		// Check that any entry with an "after" is a valid type.
 		if e.After != nil {
-			afterCode := state.EntryTypeCode(e.After)
-			if afterCode == 0 {
+			afterType, err := state.DecodeType(e.After)
+			if err != nil {
 				return &InvariantViolation{
 					Name:    "LedgerEntryTypesMatch",
 					Message: "could not extract ledger entry type from created SLE",
 				}
 			}
-			afterName := state.EntryTypeName(afterCode)
-			if !validLedgerEntryTypes[afterName] {
+			if _, valid := validLedgerEntryTypes[afterType]; !valid {
 				invalidTypeAdded = true
 			}
 		}
@@ -286,7 +282,7 @@ func checkValidNewAccountRoot(txType string, result Result, entries []InvariantE
 	createdCount := 0
 	var newEntry []byte
 	for _, e := range entries {
-		if e.EntryType == "AccountRoot" && !e.IsDelete && e.Before == nil {
+		if e.EntryType == entry.TypeAccountRoot && !e.IsDelete && e.Before == nil {
 			createdCount++
 			newEntry = e.After
 		}

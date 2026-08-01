@@ -160,6 +160,34 @@ func (sm *SHAMap) PutItem(item *Item) error {
 	return sm.putItemUnsafe(item)
 }
 
+// PutItemsAtomically stages every item on a path-copy fork and publishes the
+// resulting root only after all mutations succeed.
+func (sm *SHAMap) PutItemsAtomically(items ...*Item) error {
+	sm.tree.mu.Lock()
+	defer sm.tree.mu.Unlock()
+	sm.backing.mu.RLock()
+	defer sm.backing.mu.RUnlock()
+
+	if sm.tree.state != stateModifying {
+		return ErrImmutable
+	}
+	staged, err := sm.snapshotLocked(true)
+	if err != nil {
+		return err
+	}
+	for _, item := range items {
+		if item == nil {
+			return ErrNilItem
+		}
+		if err := staged.putItemUnsafe(item); err != nil {
+			return err
+		}
+	}
+	sm.tree.root = staged.tree.root
+	sm.tree.cachedSize.Store(-1)
+	return nil
+}
+
 // putItemUnsafe adds an item without locking (caller must hold lock).
 // It delegates to putItemWithNodeTypeUnsafe using the default node type for the map.
 func (sm *SHAMap) putItemUnsafe(item *Item) error {

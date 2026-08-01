@@ -5,11 +5,8 @@ import (
 	"testing"
 )
 
-// TestSettingsReachPragmas verifies the [sqlite] tuning wiring: settings
-// passed to NewRepositoryManagerWithSettings must be observable as live
-// PRAGMA values on the opened databases.
 func TestSettingsReachPragmas(t *testing.T) {
-	rm, err := NewRepositoryManagerWithSettings(t.TempDir(), Settings{
+	rm, err := NewRepositoryManager(context.Background(), t.TempDir(), Settings{
 		JournalMode:      "truncate",
 		Synchronous:      "full",
 		TempStore:        "file",
@@ -20,10 +17,7 @@ func TestSettingsReachPragmas(t *testing.T) {
 		t.Fatal(err)
 	}
 	ctx := context.Background()
-	if err := rm.Open(ctx); err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { rm.Close(ctx) })
+	t.Cleanup(func() { _ = rm.Close() })
 
 	var journalMode string
 	if err := rm.ledgerDB.QueryRowContext(ctx, "PRAGMA journal_mode").Scan(&journalMode); err != nil {
@@ -63,6 +57,21 @@ func TestSettingsReachPragmas(t *testing.T) {
 	}
 	if journalSizeLimit != 65536 {
 		t.Errorf("journal_size_limit = %d, want 65536", journalSizeLimit)
+	}
+}
+
+func TestSettingsValidatedByConstructor(t *testing.T) {
+	for _, settings := range []Settings{
+		{JournalMode: "wal; DROP TABLE ledgers"},
+		{Synchronous: "sometimes"},
+		{TempStore: "disk"},
+		{PageSize: 513},
+		{JournalSizeLimit: -1},
+	} {
+		if rm, err := NewRepositoryManager(context.Background(), t.TempDir(), settings); err == nil {
+			_ = rm.Close()
+			t.Fatalf("accepted invalid settings: %+v", settings)
+		}
 	}
 }
 

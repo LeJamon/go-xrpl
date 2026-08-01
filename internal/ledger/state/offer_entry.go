@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/LeJamon/go-xrpl/internal/tx/ledgerfields"
+	ledgerfields "github.com/LeJamon/go-xrpl/ledger/entry"
 )
 
 // LedgerOffer represents an offer stored in the ledger
@@ -36,14 +36,6 @@ type offerBookLink struct {
 	directory [32]byte
 	node      uint64
 }
-
-// OfferCreate flags (kept here for backwards compatibility and external references)
-const (
-	OfferCreateFlagPassive           uint32 = 0x00010000
-	OfferCreateFlagImmediateOrCancel uint32 = 0x00020000
-	OfferCreateFlagFillOrKill        uint32 = 0x00040000
-	OfferCreateFlagSell              uint32 = 0x00080000
-)
 
 // SerializeLedgerOffer serializes a LedgerOffer to binary for storage
 func SerializeLedgerOffer(offer *LedgerOffer) ([]byte, error) {
