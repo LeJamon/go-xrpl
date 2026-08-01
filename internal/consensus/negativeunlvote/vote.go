@@ -1,15 +1,12 @@
-// Package negativeunlvote decides whether to inject a UNLModify pseudo-tx
-// into the consensus tx set at a flag-ledger boundary, scoring each
-// validator's participation over the last FlagLedgerInterval ledgers and
-// picking candidates deterministically. Mirrors rippled NegativeUNLVote.
+// Package negativeunlvote produces UNLModify pseudo-transactions for flag ledgers.
 package negativeunlvote
 
 import (
+	"bytes"
 	"encoding/hex"
 	"errors"
 	"fmt"
 	"maps"
-	"math"
 	"sync"
 
 	"github.com/LeJamon/go-xrpl/internal/consensus"
@@ -19,34 +16,26 @@ import (
 	"github.com/LeJamon/go-xrpl/protocol"
 )
 
-// ErrLocalCountExceedsWindow signals the local node's validation count
-// exceeded FlagLedgerInterval — an impossible state pointing to an upstream
-// bug. Callers treat it as a no-vote (nil blobs) and surface it for visibility.
-var ErrLocalCountExceedsWindow = errors.New("negativeunlvote: local validation count exceeds flag-ledger window")
-
-const (
-	// below this score a validator is unreliable → ToDisable candidate
-	LowWaterMark uint32 = protocol.FlagLedgerInterval * 50 / 100
-
-	// above this score a disabled validator → ToReEnable candidate
-	HighWaterMark uint32 = protocol.FlagLedgerInterval * 80 / 100
-
-	// minimum local validations to trust our own view; below it, abstain
-	MinLocalValsToVote uint32 = protocol.FlagLedgerInterval * 90 / 100
-
-	// ledgers a freshly-added validator is exempt from ToDisable voting
-	NewValidatorDisableSkip uint32 = protocol.FlagLedgerInterval * 2
-
-	// max fraction of the UNL that may be on the NegativeUNL at once
-	MaxListedFraction float64 = 0.25
+var (
+	// ErrLocalCountAtThreshold signals the strict voting threshold was met but
+	// not exceeded. The caller abstains and surfaces the diagnostic.
+	ErrLocalCountAtThreshold = errors.New("negativeunlvote: local validation count equals voting threshold")
+	// ErrLocalCountExceedsWindow signals an impossible validation count.
+	ErrLocalCountExceedsWindow = errors.New("negativeunlvote: local validation count exceeds flag-ledger window")
 )
 
-// Modify identifies the direction of a UNLModify pseudo-tx.
-type Modify uint8
+const (
+	lowWaterMark            uint32 = protocol.FlagLedgerInterval * 50 / 100
+	highWaterMark           uint32 = protocol.FlagLedgerInterval * 80 / 100
+	minLocalValsToVote      uint32 = protocol.FlagLedgerInterval * 90 / 100
+	newValidatorDisableSkip uint32 = protocol.FlagLedgerInterval * 2
+)
+
+type modify uint8
 
 const (
-	ToDisable  Modify = 1 // UNLModify with sfUNLModifyDisabling=1
-	ToReEnable Modify = 0 // UNLModify with sfUNLModifyDisabling=0
+	toReEnable modify = iota
+	toDisable
 )
 
 // State captures the parent ledger's NegativeUNL entry: the disabled set
@@ -80,19 +69,15 @@ func (s State) effectiveNegUNL() map[[33]byte]struct{} {
 	return out
 }
 
-// Voter is the producer state: the local node ID and the new-validator
-// skip table, which must persist across rounds (newly-trusted validators
-// are exempt from ToDisable for NewValidatorDisableSkip ledgers). The mutex
-// guards that table; methods are safe for concurrent use.
+// Voter retains the local identity and new-validator grace periods across rounds.
 type Voter struct {
 	myID consensus.NodeID
 
 	mu            sync.Mutex
-	newValidators map[consensus.NodeID]uint32 // ledger seq when added
+	newValidators map[consensus.NodeID]uint32
 }
 
-// NewVoter constructs a Voter; myID is the 20-byte NodeID that also keys
-// the score table.
+// NewVoter constructs a Voter for the local node.
 func NewVoter(myID consensus.NodeID) *Voter {
 	return &Voter{
 		myID:          myID,
@@ -100,14 +85,7 @@ func NewVoter(myID consensus.NodeID) *Voter {
 	}
 }
 
-// MyID returns the local NodeID, exposed so callers can look up their own
-// score before invoking DoVoting.
-func (v *Voter) MyID() consensus.NodeID {
-	return v.myID
-}
-
-// NewValidators registers newly-trusted validators at seq, exempting them
-// from ToDisable for the next NewValidatorDisableSkip ledgers.
+// NewValidators registers newly trusted validators for the disable grace period.
 func (v *Voter) NewValidators(seq uint32, nowTrusted []consensus.NodeID) {
 	v.mu.Lock()
 	defer v.mu.Unlock()
@@ -118,13 +96,11 @@ func (v *Voter) NewValidators(seq uint32, nowTrusted []consensus.NodeID) {
 	}
 }
 
-// PurgeNewValidators drops entries older than NewValidatorDisableSkip
-// ledgers relative to seq.
-func (v *Voter) PurgeNewValidators(seq uint32) {
+func (v *Voter) purgeNewValidators(seq uint32) {
 	v.mu.Lock()
 	defer v.mu.Unlock()
 	for n, addedSeq := range v.newValidators {
-		if seq-addedSeq > NewValidatorDisableSkip {
+		if seq-addedSeq > newValidatorDisableSkip {
 			delete(v.newValidators, n)
 		}
 	}
@@ -140,8 +116,8 @@ func keyToNodeID(k [33]byte) consensus.NodeID {
 // DoVoting runs the producer end-to-end and returns the UNLModify blobs to
 // inject (at most one ToDisable plus one ToReEnable). The upcoming ledger is
 // prevLedgerSeq + 1; prevLedgerHash is the deterministic pad for picking.
-// Returns nil when there's nothing to vote (insufficient local participation
-// or no candidates).
+// Counts below the participation threshold and rounds without candidates return
+// nil without an error. Rejected local counts return nil with a diagnostic error.
 //
 // scoreTable contract: callers may pass any table; DoVoting restricts it to
 // the UNL (missing UNL keys score 0, non-UNL keys dropped), so no pre-fill or
@@ -153,7 +129,6 @@ func (v *Voter) DoVoting(
 	state State,
 	scoreTable map[consensus.NodeID]uint32,
 ) ([][]byte, error) {
-	// Build the trusted-key index once.
 	unlNodeIDs := make(map[consensus.NodeID][33]byte, len(unlKeys))
 	for _, k := range unlKeys {
 		unlNodeIDs[keyToNodeID(k)] = k
@@ -167,20 +142,22 @@ func (v *Voter) DoVoting(
 		filledScoreTable[n] = scoreTable[n]
 	}
 
-	// Refuse to vote if local participation is insufficient. The <= gate is
-	// exact: == MinLocalValsToVote is also a no-vote (rippled's else-if uses
-	// strict >). A count above the window is impossible → surface the error.
+	// Counts below the threshold abstain normally. The exact threshold and an
+	// impossible above-window count retain rippled's error observability.
 	myCount := filledScoreTable[v.myID]
-	if myCount <= MinLocalValsToVote {
+	if myCount < minLocalValsToVote {
 		return nil, nil
+	}
+	if myCount == minLocalValsToVote {
+		return nil, fmt.Errorf("%w: %d", ErrLocalCountAtThreshold, myCount)
 	}
 	if myCount > protocol.FlagLedgerInterval {
 		return nil, fmt.Errorf("%w: %d > %d", ErrLocalCountExceedsWindow, myCount, protocol.FlagLedgerInterval)
 	}
 
-	// effective negUNL for the upcoming flag ledger (current ± pending)
 	negUnlKeys := state.effectiveNegUNL()
 	negUnlNodeIDs := make(map[consensus.NodeID]struct{}, len(negUnlKeys))
+	// Every candidate comes from the UNL or effective NegativeUNL, both indexed here.
 	keyByNode := make(map[consensus.NodeID][33]byte, len(unlKeys)+len(negUnlKeys))
 	maps.Copy(keyByNode, unlNodeIDs)
 	for k := range negUnlKeys {
@@ -192,30 +169,22 @@ func (v *Voter) DoVoting(
 	}
 
 	upcomingSeq := prevLedgerSeq + 1
-	v.PurgeNewValidators(upcomingSeq)
+	v.purgeNewValidators(upcomingSeq)
 
 	candidates := v.findAllCandidates(unlNodeIDs, negUnlNodeIDs, filledScoreTable)
 
 	var blobs [][]byte
 	if len(candidates.toDisable) > 0 {
-		picked := choose(prevLedgerHash, candidates.toDisable)
-		key, ok := keyByNode[picked]
-		if !ok {
-			return nil, fmt.Errorf("negativeunlvote: picked toDisable candidate has no master key in lookup table")
-		}
-		blob, err := buildUNLModifyTx(upcomingSeq, key, ToDisable)
+		key := keyByNode[choose(prevLedgerHash, candidates.toDisable)]
+		blob, err := buildUNLModifyTx(upcomingSeq, key, toDisable)
 		if err != nil {
 			return nil, fmt.Errorf("negativeunlvote: serialize toDisable: %w", err)
 		}
 		blobs = append(blobs, blob)
 	}
 	if len(candidates.toReEnable) > 0 {
-		picked := choose(prevLedgerHash, candidates.toReEnable)
-		key, ok := keyByNode[picked]
-		if !ok {
-			return nil, fmt.Errorf("negativeunlvote: picked toReEnable candidate has no master key in lookup table")
-		}
-		blob, err := buildUNLModifyTx(upcomingSeq, key, ToReEnable)
+		key := keyByNode[choose(prevLedgerHash, candidates.toReEnable)]
+		blob, err := buildUNLModifyTx(upcomingSeq, key, toReEnable)
 		if err != nil {
 			return nil, fmt.Errorf("negativeunlvote: serialize toReEnable: %w", err)
 		}
@@ -230,14 +199,12 @@ type candidateSet struct {
 	toReEnable []consensus.NodeID
 }
 
-// findAllCandidates turns the score table into candidates: 25% cap,
-// new-validator skip, and the left-the-UNL ToReEnable fallback.
 func (v *Voter) findAllCandidates(
 	unl map[consensus.NodeID][33]byte,
 	negUNL map[consensus.NodeID]struct{},
 	scoreTable map[consensus.NodeID]uint32,
 ) candidateSet {
-	maxListed := int(math.Ceil(float64(len(unl)) * MaxListedFraction))
+	maxListed := (len(unl) + 3) / 4
 	listed := 0
 	for n := range unl {
 		if _, ok := negUNL[n]; ok {
@@ -254,10 +221,10 @@ func (v *Voter) findAllCandidates(
 		_, isNegUNL := negUNL[nodeID]
 		_, isNew := v.newValidators[nodeID]
 
-		if canAdd && score < LowWaterMark && !isNegUNL && !isNew {
+		if canAdd && score < lowWaterMark && !isNegUNL && !isNew {
 			c.toDisable = append(c.toDisable, nodeID)
 		}
-		if score > HighWaterMark && isNegUNL {
+		if score > highWaterMark && isNegUNL {
 			c.toReEnable = append(c.toReEnable, nodeID)
 		}
 	}
@@ -280,15 +247,11 @@ func (v *Voter) findAllCandidates(
 // without coordination. NodeID is already rippled's 20-byte digest, so the
 // XOR is direct (no rehash) and matches rippled byte-for-byte.
 func choose(randomPad [32]byte, candidates []consensus.NodeID) consensus.NodeID {
-	if len(candidates) == 0 {
-		var zero consensus.NodeID
-		return zero
-	}
 	best := candidates[0]
 	bestKey := xorCalcNodeID(best, randomPad)
 	for i := 1; i < len(candidates); i++ {
 		k := xorCalcNodeID(candidates[i], randomPad)
-		if compareNodeID20(k, bestKey) < 0 {
+		if bytes.Compare(k[:], bestKey[:]) < 0 {
 			best = candidates[i]
 			bestKey = k
 		}
@@ -296,7 +259,6 @@ func choose(randomPad [32]byte, candidates []consensus.NodeID) consensus.NodeID 
 	return best
 }
 
-// xorCalcNodeID computes NodeID ^ randomPad[:20].
 func xorCalcNodeID(n consensus.NodeID, pad [32]byte) [20]byte {
 	var out [20]byte
 	for i := range 20 {
@@ -305,21 +267,7 @@ func xorCalcNodeID(n consensus.NodeID, pad [32]byte) [20]byte {
 	return out
 }
 
-func compareNodeID20(a, b [20]byte) int {
-	for i := range 20 {
-		switch {
-		case a[i] < b[i]:
-			return -1
-		case a[i] > b[i]:
-			return 1
-		}
-	}
-	return 0
-}
-
-// buildUNLModifyTx serializes a UNLModify pseudo-tx: zero account/fee/key,
-// sequence 0.
-func buildUNLModifyTx(seq uint32, validator [33]byte, modify Modify) ([]byte, error) {
+func buildUNLModifyTx(seq uint32, validator [33]byte, modify modify) ([]byte, error) {
 	disabling := uint8(modify)
 	return common.BuildPseudoTx(tx.TypeUNLModify, func(base tx.BaseTx) tx.Transaction {
 		return &pseudo.UNLModify{
