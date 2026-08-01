@@ -119,8 +119,8 @@ func TestBasicNetworkConnectionGeneration(t *testing.T) {
 	}
 
 	scheduler.Step()
-	if !slices.Equal(delivered, []string{"new"}) {
-		t.Fatalf("delivered = %v, want [new]", delivered)
+	if !slices.Equal(delivered, []string{"old", "new"}) {
+		t.Fatalf("delivered = %v, want [old new]", delivered)
 	}
 }
 
@@ -479,8 +479,6 @@ func TestPartitionHealingConverges(t *testing.T) {
 	peers := all.Peers()
 	groupA := NewPeerGroupFrom(peers[:3])
 	groupB := NewPeerGroupFrom(peers[3:])
-	groupA.Untrust(groupB)
-	groupB.Untrust(groupA)
 	sim.PartitionNetwork(groupA, groupB)
 	for _, peer := range groupA.Peers() {
 		peer.Submit(Tx{ID: uint32(peer.ID) + 1000})
@@ -495,8 +493,6 @@ func TestPartitionHealingConverges(t *testing.T) {
 		t.Fatal("partitioned groups did not create distinct branches")
 	}
 
-	groupA.Trust(groupB)
-	groupB.Trust(groupA)
 	sim.HealPartition(groupA, groupB, time.Millisecond)
 	if err := sim.Run(3); err != nil {
 		t.Fatalf("healed run: %v", err)

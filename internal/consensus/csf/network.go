@@ -10,7 +10,6 @@ type Link struct {
 	Inbound     bool
 	Delay       SimDuration
 	Established SimTime
-	pending     map[uint64]func()
 }
 
 // BasicNetwork simulates a peer-to-peer network with configurable delays.
@@ -19,6 +18,7 @@ type BasicNetwork struct {
 	mu        sync.RWMutex
 	scheduler *Scheduler
 	links     map[PeerID]map[PeerID]*Link
+	pending   map[uint64]func()
 	nextSend  uint64
 }
 
@@ -27,13 +27,14 @@ func NewBasicNetwork(scheduler *Scheduler) *BasicNetwork {
 	return &BasicNetwork{
 		scheduler: scheduler,
 		links:     make(map[PeerID]map[PeerID]*Link),
+		pending:   make(map[uint64]func()),
 	}
 }
 
 // Connect establishes a bidirectional connection between two peers.
 // Messages sent between them will be delayed by the given duration.
 func (n *BasicNetwork) Connect(from, to PeerID, delay SimDuration) bool {
-	if from == to {
+	if from == to || delay < 0 {
 		return false
 	}
 
@@ -55,7 +56,6 @@ func (n *BasicNetwork) Connect(from, to PeerID, delay SimDuration) bool {
 		Inbound:     false,
 		Delay:       delay,
 		Established: now,
-		pending:     make(map[uint64]func()),
 	}
 
 	// Create inbound link to -> from
@@ -66,7 +66,6 @@ func (n *BasicNetwork) Connect(from, to PeerID, delay SimDuration) bool {
 		Inbound:     true,
 		Delay:       delay,
 		Established: now,
-		pending:     make(map[uint64]func()),
 	}
 
 	return true
@@ -81,10 +80,8 @@ func (n *BasicNetwork) Disconnect(from, to PeerID) bool {
 		return false
 	}
 
-	n.cancelLinkLocked(n.links[from][to])
 	delete(n.links[from], to)
 	if n.links[to] != nil {
-		n.cancelLinkLocked(n.links[to][from])
 		delete(n.links[to], from)
 	}
 
@@ -94,22 +91,11 @@ func (n *BasicNetwork) Disconnect(from, to PeerID) bool {
 func (n *BasicNetwork) DisconnectAll() {
 	n.mu.Lock()
 	defer n.mu.Unlock()
-	for _, links := range n.links {
-		for _, link := range links {
-			n.cancelLinkLocked(link)
-		}
+	for id, cancel := range n.pending {
+		cancel()
+		delete(n.pending, id)
 	}
 	n.links = make(map[PeerID]map[PeerID]*Link)
-}
-
-func (n *BasicNetwork) cancelLinkLocked(link *Link) {
-	if link == nil {
-		return
-	}
-	for id, cancel := range link.pending {
-		cancel()
-		delete(link.pending, id)
-	}
 }
 
 // IsConnected checks if two peers are connected.
@@ -169,28 +155,26 @@ func (n *BasicNetwork) Peers(id PeerID) []PeerID {
 // Returns false if the peers are not connected.
 func (n *BasicNetwork) Send(from, to PeerID, handler func()) bool {
 	n.mu.Lock()
+	defer n.mu.Unlock()
 	link := n.links[from][to]
 	if link == nil {
-		n.mu.Unlock()
 		return false
 	}
 	delay := link.Delay
+	sent := n.scheduler.Now()
 	sendID := n.nextSend
 	n.nextSend++
 	cancel := n.scheduler.In(delay, func() {
 		n.mu.Lock()
+		delete(n.pending, sendID)
 		current := n.links[from][to]
-		sameLink := current == link
-		if sameLink {
-			delete(link.pending, sendID)
-		}
+		deliver := current != nil && current.Established <= sent
 		n.mu.Unlock()
-		if sameLink {
+		if deliver {
 			handler()
 		}
 	})
-	link.pending[sendID] = cancel
-	n.mu.Unlock()
+	n.pending[sendID] = cancel
 
 	return true
 }

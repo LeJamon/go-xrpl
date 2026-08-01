@@ -328,6 +328,7 @@ func (o *LedgerOracle) Accept(
 	if resolution < time.Second || resolution%time.Second != 0 {
 		panic("csf: close-time resolution must be a positive whole number of seconds")
 	}
+	closeAgree = closeAgree && !closeTime.IsZero()
 
 	effective := parent.closeTime.Add(time.Second)
 	if closeAgree {

@@ -17,13 +17,6 @@ func (e *Engine) phaseEstablish() {
 	e.currentRoundTime = roundTime
 	e.lastConvergePercent = e.convergePercent()
 
-	// Pause before the accept paths if we've run past validated and a
-	// quorum-blocking share of validators lags (#451); bounded inside
-	// shouldPause so a stuck round still abandons via the ceiling below.
-	if e.shouldPause(roundTime) {
-		return
-	}
-
 	e.establishCounter++
 	e.peerUnchangedCounter++
 
@@ -42,10 +35,15 @@ func (e *Engine) phaseEstablish() {
 	// not have its tally diluted forever by a silent peer's stale vote.
 	e.pruneStaleProposalsLocked()
 
-	if e.mode == consensus.ModeProposing && e.state.OurPosition != nil {
-		e.updatePosition()
-	}
+	e.updatePosition()
 	e.updateCloseTimePosition()
+
+	// Keep positions fresh while a quorum-blocking share of validators
+	// lags. The pause gates acceptance, not proposal maintenance.
+	if e.shouldPause(roundTime) {
+		return
+	}
+
 	e.checkConvergence()
 }
 
@@ -694,8 +692,7 @@ func (e *Engine) updatePosition() {
 		return
 	}
 
-	// Re-vote each dispute at the current converge percent. Observers run the
-	// bookkeeping (avalanche consistency) but only proposers flip positions.
+	// Re-vote each dispute at the current converge percent.
 	proposing := e.mode == consensus.ModeProposing
 	disputeCount := e.disputeTracker.Count()
 	changed := e.disputeTracker.UpdateOurVote(e.convergePercent(), proposing, e.parms)
@@ -722,17 +719,13 @@ func (e *Engine) updatePosition() {
 		)
 	}
 
-	if !proposing {
-		return
-	}
-
 	// Freshness re-proposal (rippled Consensus.h:1636-1642): when nothing
 	// flipped but our position has gone stale (older than ProposeInterval),
 	// re-emit it with a bumped seq and fresh timestamp so peers don't prune
 	// it at ProposeFreshness during a long round — losing it would drop our
 	// vote from every peer's tally exactly when convergence is hardest.
 	if len(changed) == 0 {
-		if e.state.OurPosition != nil && e.prevLedger != nil &&
+		if proposing && e.state.OurPosition != nil && e.prevLedger != nil &&
 			e.adaptor.Now().Sub(e.state.OurPosition.Timestamp) >= e.timing.ProposeInterval {
 			e.reproposeCurrentLocked()
 		}
@@ -805,7 +798,7 @@ func (e *Engine) updatePosition() {
 	// Emitting needs both OurPosition (for the seq bump) and prevLedger; a
 	// test harness without Start() has prevLedger nil — still update ourTxSet,
 	// just don't emit.
-	if e.state.OurPosition != nil && e.prevLedger != nil {
+	if proposing && e.state.OurPosition != nil && e.prevLedger != nil {
 		nodeID, _ := e.adaptor.GetValidatorKey()
 		proposal := &consensus.Proposal{
 			Round:          e.state.Round,

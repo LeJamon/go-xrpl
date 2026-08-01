@@ -26,12 +26,14 @@ func (CloseLedgerEvent) isEvent() {}
 
 type AcceptLedgerEvent struct {
 	Ledger *Ledger
+	Prior  *Ledger
 }
 
 func (AcceptLedgerEvent) isEvent() {}
 
 type FullyValidateLedgerEvent struct {
 	Ledger *Ledger
+	Prior  *Ledger
 }
 
 func (FullyValidateLedgerEvent) isEvent() {}

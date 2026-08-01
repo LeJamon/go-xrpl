@@ -7,7 +7,7 @@ import (
 	"github.com/LeJamon/go-xrpl/internal/consensus"
 )
 
-func TestAcceptLedgerWithoutTrustedPositionsLeavesFullAndEmitsPartial(t *testing.T) {
+func TestAcceptLedgerWithoutTrustedPositionsDemotesOperatingModeAfterFullValidation(t *testing.T) {
 	adaptor := newMockAdaptor()
 	config := DefaultConfig()
 	config.ManualTick = true
@@ -30,8 +30,8 @@ func TestAcceptLedgerWithoutTrustedPositionsLeavesFullAndEmitsPartial(t *testing
 	if got := adaptor.GetOperatingMode(); got != consensus.OpModeConnected {
 		t.Fatalf("operating mode = %v, want Connected after a round with no trusted positions", got)
 	}
-	if mode != consensus.ModeObserving {
-		t.Fatalf("consensus mode = %v, want Observing after losing network agreement", mode)
+	if mode != consensus.ModeProposing {
+		t.Fatalf("consensus mode = %v, want Proposing for the accepted round", mode)
 	}
 
 	adaptor.mu.RLock()
@@ -39,12 +39,12 @@ func TestAcceptLedgerWithoutTrustedPositionsLeavesFullAndEmitsPartial(t *testing
 	if len(adaptor.validationsBroadcast) != 1 {
 		t.Fatalf("validations = %d, want one recovery validation", len(adaptor.validationsBroadcast))
 	}
-	if adaptor.validationsBroadcast[0].Full {
-		t.Fatal("recovery validation must be partial")
+	if !adaptor.validationsBroadcast[0].Full {
+		t.Fatal("validation must remain full for a round accepted while proposing")
 	}
 }
 
-func TestPreferredFrontierAheadPreventsProposingAndFullValidation(t *testing.T) {
+func TestFullValidationReflectsRoundModeOnly(t *testing.T) {
 	adaptor := newMockAdaptor()
 	peerA := consensus.NodeID{2}
 	peerB := consensus.NodeID{3}
@@ -99,12 +99,12 @@ func TestPreferredFrontierAheadPreventsProposingAndFullValidation(t *testing.T) 
 	if len(adaptor.validationsBroadcast) != 1 {
 		t.Fatalf("validations = %d, want one", len(adaptor.validationsBroadcast))
 	}
-	if adaptor.validationsBroadcast[0].Full {
-		t.Fatal("validation must be partial when trusted validations prefer a later LCL")
+	if !adaptor.validationsBroadcast[0].Full {
+		t.Fatal("validation must be full when the accepted round is proposing")
 	}
 }
 
-func TestAcceptLedgerPreferredFrontierMovedAheadEmitsPartial(t *testing.T) {
+func TestAcceptLedgerPreferredFrontierMovedAheadUsesCapturedRoundMode(t *testing.T) {
 	adaptor := newMockAdaptor()
 	peerA := consensus.NodeID{2}
 	peerB := consensus.NodeID{3}
@@ -146,22 +146,18 @@ func TestAcceptLedgerPreferredFrontierMovedAheadEmitsPartial(t *testing.T) {
 		Timestamp:      now,
 	})
 	engine.acceptLedger(consensus.ResultSuccess)
-	mode := engine.mode
 	engine.mu.Unlock()
 
-	if got := adaptor.GetOperatingMode(); got != consensus.OpModeConnected {
-		t.Fatalf("operating mode = %v, want Connected after the preferred frontier moved ahead", got)
-	}
-	if mode != consensus.ModeObserving {
-		t.Fatalf("consensus mode = %v, want Observing after the preferred frontier moved ahead", mode)
+	if got := adaptor.GetOperatingMode(); got != consensus.OpModeFull {
+		t.Fatalf("operating mode = %v, want Full with trusted positions in the accepted round", got)
 	}
 	adaptor.mu.RLock()
 	defer adaptor.mu.RUnlock()
 	if len(adaptor.validationsBroadcast) != 1 {
 		t.Fatalf("validations = %d, want one", len(adaptor.validationsBroadcast))
 	}
-	if adaptor.validationsBroadcast[0].Full {
-		t.Fatal("an accepted ledger behind the trusted preferred frontier must emit only a partial validation")
+	if !adaptor.validationsBroadcast[0].Full {
+		t.Fatal("an accepted proposing round must emit a full validation")
 	}
 }
 

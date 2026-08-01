@@ -7,6 +7,74 @@ import (
 	"github.com/LeJamon/go-xrpl/internal/consensus"
 )
 
+func TestEngine_GetNetworkLedger_PeerLCLFallback(t *testing.T) {
+	ourID := consensus.LedgerID{0x10}
+	higherID := consensus.LedgerID{0x20}
+	lowerID := consensus.LedgerID{0x05}
+
+	tests := []struct {
+		name    string
+		mode    consensus.OperatingMode
+		reports []consensus.LedgerID
+		want    consensus.LedgerID
+	}{
+		{name: "no reports", mode: consensus.OpModeFull, want: ourID},
+		{name: "tracking self vote loses equal-count tie to larger ID", mode: consensus.OpModeFull, reports: []consensus.LedgerID{higherID}, want: higherID},
+		{name: "tracking self vote wins equal-count tie over smaller ID", mode: consensus.OpModeFull, reports: []consensus.LedgerID{lowerID}, want: ourID},
+		{name: "peer majority beats tracking self vote", mode: consensus.OpModeFull, reports: []consensus.LedgerID{lowerID, lowerID}, want: lowerID},
+		{name: "connected mode does not count self", mode: consensus.OpModeConnected, reports: []consensus.LedgerID{lowerID}, want: lowerID},
+		{name: "zero report is ignored", mode: consensus.OpModeConnected, reports: []consensus.LedgerID{{}}, want: ourID},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			adaptor := newMockAdaptor()
+			adaptor.opMode = tt.mode
+			adaptor.peerLCLs = tt.reports
+			engine := NewEngine(adaptor, DefaultConfig())
+			engine.prevLedger = &mockLedger{id: ourID, seq: 100}
+
+			if got := engine.getNetworkLedger(); got != tt.want {
+				t.Fatalf("getNetworkLedger() = %x, want %x", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestEngine_GetNetworkLedger_ProposalIsNotPeerLCLVote(t *testing.T) {
+	adaptor := newMockAdaptor()
+	adaptor.opMode = consensus.OpModeFull
+	ourID := consensus.LedgerID{0x10}
+	proposedID := consensus.LedgerID{0x20}
+	peer := consensus.NodeID{0x02}
+	adaptor.trusted[peer] = true
+
+	engine := NewEngine(adaptor, DefaultConfig())
+	engine.prevLedger = &mockLedger{id: ourID, seq: 100}
+	engine.proposalTracker.BufferRecent(&consensus.Proposal{
+		NodeID:         peer,
+		PreviousLedger: proposedID,
+		Timestamp:      adaptor.now,
+	})
+
+	if got := engine.getNetworkLedger(); got != ourID {
+		t.Fatalf("getNetworkLedger() = %x, want own LCL %x without a peer status report", got, ourID)
+	}
+}
+
+func TestEngine_GetNetworkLedger_StaysOnGenesis(t *testing.T) {
+	adaptor := newMockAdaptor()
+	target := consensus.LedgerID{0x20}
+	adaptor.peerLCLs = []consensus.LedgerID{target}
+
+	engine := NewEngine(adaptor, DefaultConfig())
+	engine.prevLedger = &mockLedger{id: consensus.LedgerID{0x10}, seq: 0}
+
+	if got := engine.getNetworkLedger(); got != engine.prevLedger.ID() {
+		t.Fatalf("getNetworkLedger() = %x, want genesis %x", got, engine.prevLedger.ID())
+	}
+}
+
 // The #1161 wedge: a fallen-behind node self-closes a minority ledger while
 // every peer reports LCL X via statusChange, but no trusted validation for X
 // is locally placeable. The old trusted-backing gate dropped every peer vote

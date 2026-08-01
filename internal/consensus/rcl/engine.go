@@ -30,8 +30,9 @@ type Engine struct {
 	// validation extensions, resolved once at construction. Nil when the
 	// adaptor doesn't implement them: nothing is listed, only trusted
 	// validations relay.
-	listedOracle consensus.ListedOracle
-	relayPolicy  consensus.ValidationRelayPolicy
+	listedOracle   consensus.ListedOracle
+	relayPolicy    consensus.ValidationRelayPolicy
+	acceptDeferrer consensus.LedgerAcceptDeferrer
 
 	// Current state
 	mode  consensus.Mode
@@ -54,6 +55,12 @@ type Engine struct {
 	validating atomic.Bool
 	state      *consensus.RoundState
 	prevLedger consensus.Ledger
+	// acceptedLCL records the adaptor's accepted ledger while consensus is
+	// intentionally working from a different validation-preferred ledger.
+	acceptedLCL consensus.LedgerID
+	// roundCloseResolution is derived from prevLedger at round start. It must
+	// not follow the adaptor's accepted LCL during a preferred-ledger switch.
+	roundCloseResolution time.Duration
 
 	// buildInProgress is set while acceptLedger applies the LCL off e.mu
 	// (rippled's jtACCEPT job window). While set, round-driving (timerEntry,
@@ -372,6 +379,7 @@ func NewEngine(adaptor consensus.Adaptor, config Config) *Engine {
 	}
 	e.listedOracle, _ = adaptor.(consensus.ListedOracle)
 	e.relayPolicy, _ = adaptor.(consensus.ValidationRelayPolicy)
+	e.acceptDeferrer, _ = adaptor.(consensus.LedgerAcceptDeferrer)
 	e.modeAtomic.Store(int32(e.mode))
 	return e
 }
@@ -540,7 +548,39 @@ func (e *Engine) Stop() error {
 func (e *Engine) StartRound(round consensus.RoundID, proposing bool) error {
 	e.mu.Lock()
 	e.deferBroadcasts++
+	e.acceptedLCL = consensus.LedgerID{}
 	err := e.startRoundLocked(round, proposing, false)
+	e.deferBroadcasts--
+	pending := e.takePendingBroadcastsLocked()
+	e.mu.Unlock()
+	flushBroadcasts(pending)
+	return err
+}
+
+// RestartRound starts a fresh round from the adaptor's current LCL after
+// re-evaluating the trusted-validation preference. It is used by externally
+// driven consensus loops that stop their timer between bounded runs.
+func (e *Engine) RestartRound(proposing bool) error {
+	e.mu.Lock()
+	e.deferBroadcasts++
+
+	working, err := e.adaptor.GetLastClosedLedger()
+	if err == nil && working != nil {
+		preferred := working
+		if id, ok := e.validationPreferredForLedgerLocked(working); ok && id != working.ID() {
+			if cached, getErr := e.adaptor.GetLedger(id); getErr == nil && cached != nil {
+				preferred = cached
+			}
+		}
+		e.acceptedLCL = consensus.LedgerID{}
+		if preferred.ID() != working.ID() {
+			e.acceptedLCL = working.ID()
+		}
+		e.prevLedger = preferred
+		round := consensus.RoundID{Seq: preferred.Seq() + 1, ParentHash: preferred.ID()}
+		err = e.startRoundLocked(round, proposing, false)
+	}
+
 	e.deferBroadcasts--
 	pending := e.takePendingBroadcastsLocked()
 	e.mu.Unlock()
@@ -574,16 +614,17 @@ func (e *Engine) startRoundLocked(round consensus.RoundID, proposing, recovering
 		}
 	}
 
-	// Carry our own observed close time across rounds. The first round seeds
-	// from the seed ledger; afterwards we take the self close time of the round
-	// that just ended, read from e.state before it is replaced below (this runs
-	// for every round-start path).
-	if e.state == nil {
-		if e.prevLedger != nil {
-			e.prevCloseTime = e.prevLedger.CloseTime()
+	// Carry our observed close time across normal round boundaries. A recovery
+	// switch restarts the current round internally and must retain the existing
+	// baseline rather than treating the abandoned round as completed.
+	if !recovering {
+		if e.state == nil {
+			if e.prevLedger != nil {
+				e.prevCloseTime = e.prevLedger.CloseTime()
+			}
+		} else {
+			e.prevCloseTime = e.state.CloseTimes.Self
 		}
-	} else {
-		e.prevCloseTime = e.state.CloseTimes.Self
 	}
 
 	// Kick off a trust-view refresh so the bow-out reacts to an expiring list
@@ -650,6 +691,7 @@ func (e *Engine) startRoundLocked(round consensus.RoundID, proposing, recovering
 	default:
 		e.setMode(consensus.ModeObserving)
 	}
+	e.roundCloseResolution = e.nextCloseTimeResolution()
 
 	// Init round state. StartTime uses e.now() (its consumers measure via
 	// e.now().Sub()); PhaseStart uses adaptor.Now() (checkConvergence reads
@@ -815,7 +857,7 @@ func (e *Engine) GetJSON(full bool) map[string]any {
 	defer e.mu.RUnlock()
 
 	mode := consensus.Mode(e.modeAtomic.Load())
-	closeRes := int64(e.adaptor.CloseTimeResolution() / time.Second)
+	closeRes := int64(e.currentCloseTimeResolution() / time.Second)
 
 	ret := map[string]any{
 		"proposing": mode == consensus.ModeProposing,
@@ -1106,6 +1148,48 @@ type closeAgreementReporter interface {
 	CloseAgree() bool
 }
 
+type closeTimingReporter interface {
+	CloseTimeResolution() time.Duration
+	CloseAgree() bool
+}
+
+func (e *Engine) nextCloseTimeResolution() time.Duration {
+	reporter, ok := e.prevLedger.(closeTimingReporter)
+	if !ok {
+		return e.adaptor.CloseTimeResolution()
+	}
+	parent := reporter.CloseTimeResolution()
+	seconds := parent / time.Second
+	if parent <= 0 || parent%time.Second != 0 || seconds > time.Duration(^uint32(0)) {
+		return e.adaptor.CloseTimeResolution()
+	}
+	next := consensus.GetNextLedgerTimeResolution(
+		uint32(seconds),
+		reporter.CloseAgree(),
+		e.prevLedger.Seq()+1,
+	)
+	if next == 0 {
+		return e.adaptor.CloseTimeResolution()
+	}
+	return time.Duration(next) * time.Second
+}
+
+func (e *Engine) currentCloseTimeResolution() time.Duration {
+	if e.roundCloseResolution > 0 {
+		return e.roundCloseResolution
+	}
+	return e.adaptor.CloseTimeResolution()
+}
+
+func (e *Engine) previousCloseTimeResolution() time.Duration {
+	if reporter, ok := e.prevLedger.(interface{ CloseTimeResolution() time.Duration }); ok {
+		if resolution := reporter.CloseTimeResolution(); resolution > 0 {
+			return resolution
+		}
+	}
+	return e.adaptor.PrevCloseTimeResolution()
+}
+
 // lastCloseBaseline returns the reference close time the idle/close timers
 // measure from. When the previous close was reached by consensus it's the
 // previous ledger's stored close time; otherwise it's our own observed close
@@ -1184,7 +1268,7 @@ func (e *Engine) closeOnTimers(openTime, timeSincePrevClose time.Duration) bool 
 	// let an empty ledger close before a full resolution step has elapsed.
 	if len(e.adaptor.GetPendingTxs()) == 0 {
 		idle := e.timing.LedgerIdleInterval
-		if twoRes := 2 * e.adaptor.PrevCloseTimeResolution(); twoRes > idle {
+		if twoRes := 2 * e.previousCloseTimeResolution(); twoRes > idle {
 			idle = twoRes
 		}
 		return timeSincePrevClose >= idle

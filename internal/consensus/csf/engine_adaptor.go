@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/LeJamon/go-xrpl/internal/consensus"
+	"github.com/LeJamon/go-xrpl/internal/consensus/ledgertrie"
 	"github.com/LeJamon/go-xrpl/internal/consensus/rcl"
 )
 
@@ -59,6 +60,11 @@ func wirePeerID(id PeerID) uint64 {
 	return uint64(id) + 1
 }
 
+type collectorEvent struct {
+	when  SimTime
+	event Event
+}
+
 type Peer struct {
 	ID PeerID
 
@@ -70,38 +76,49 @@ type Peer struct {
 	collectors *Collectors
 	registry   *peerRegistry
 
-	lifecycleMu sync.Mutex
-	engine      *rcl.Engine
-	started     bool
-	stopped     bool
-	ticking     bool
-	tickGen     uint64
-	cancelTick  func()
-	timing      consensus.Timing
+	lifecycleMu      sync.Mutex
+	workMu           sync.Mutex
+	engine           *rcl.Engine
+	started          bool
+	stopped          bool
+	ticking          bool
+	tickGen          uint64
+	cancelTick       func()
+	cancelAccept     func()
+	validationGen    uint64
+	nextValidation   uint64
+	validationTimers map[uint64]func()
+	timing           consensus.Timing
 
-	mu               sync.Mutex
-	validator        bool
-	targetLedgers    int
-	completed        int
-	clockSkew        time.Duration
-	operatingMode    consensus.OperatingMode
-	ledgers          map[consensus.LedgerID]*Ledger
-	canonical        map[uint32]*Ledger
-	lcl              *Ledger
-	validated        consensus.LedgerID
-	txSets           map[consensus.TxSetID]*TxSet
-	openTxs          map[consensus.TxID][]byte
-	injected         map[uint32]map[consensus.TxID][]byte
-	seenTxs          map[consensus.TxID]struct{}
-	seenProposals    map[[32]byte]struct{}
-	seenValidation   map[[32]byte]struct{}
-	relayHave        map[[32]byte]map[uint64]struct{}
-	reportedLedger   map[PeerID]consensus.LedgerID
-	pendingValidated map[consensus.LedgerID]uint32
-	acquiringLedgers map[consensus.LedgerID]SimTime
-	acquisitionTimer map[consensus.LedgerID]func()
-	asyncErrors      []error
-	trustChanged     func([]consensus.NodeID, int)
+	collectorMu       sync.Mutex
+	deferCollectors   int
+	pendingCollectors []collectorEvent
+
+	mu                sync.Mutex
+	validator         bool
+	standalone        bool
+	targetLedgers     int
+	completed         int
+	clockSkew         time.Duration
+	recvValDelay      SimDuration
+	ledgerAcceptDelay SimDuration
+	operatingMode     consensus.OperatingMode
+	ledgers           map[consensus.LedgerID]*Ledger
+	canonical         map[uint32]*Ledger
+	lcl               *Ledger
+	validated         consensus.LedgerID
+	txSets            map[consensus.TxSetID]*TxSet
+	openTxs           map[consensus.TxID][]byte
+	injected          map[uint32]map[consensus.TxID][]byte
+	seenTxs           map[consensus.TxID]struct{}
+	seenProposals     map[[32]byte]struct{}
+	seenValidation    map[[32]byte]struct{}
+	relayHave         map[[32]byte]map[uint64]struct{}
+	pendingValidated  map[consensus.LedgerID]uint32
+	acquiringLedgers  map[consensus.LedgerID]SimTime
+	acquiringTxSets   map[consensus.TxSetID]SimTime
+	asyncErrors       []error
+	trustChanged      func([]consensus.NodeID, int)
 }
 
 func newPeer(
@@ -125,6 +142,7 @@ func newPeer(
 		registry:         registry,
 		timing:           consensus.DefaultTiming(),
 		validator:        true,
+		targetLedgers:    int(^uint(0) >> 1),
 		operatingMode:    consensus.OpModeFull,
 		ledgers:          map[consensus.LedgerID]*Ledger{genesis.ID(): genesis},
 		canonical:        map[uint32]*Ledger{0: genesis},
@@ -137,10 +155,10 @@ func newPeer(
 		seenProposals:    make(map[[32]byte]struct{}),
 		seenValidation:   make(map[[32]byte]struct{}),
 		relayHave:        make(map[[32]byte]map[uint64]struct{}),
-		reportedLedger:   make(map[PeerID]consensus.LedgerID),
 		pendingValidated: make(map[consensus.LedgerID]uint32),
 		acquiringLedgers: make(map[consensus.LedgerID]SimTime),
-		acquisitionTimer: make(map[consensus.LedgerID]func()),
+		acquiringTxSets:  make(map[consensus.TxSetID]SimTime),
+		validationTimers: make(map[uint64]func()),
 	}
 	trustGraph.Trust(id, id)
 	return peer
@@ -169,6 +187,26 @@ func (p *Peer) SetRunAsValidator(validator bool) {
 	p.mu.Lock()
 	p.validator = validator
 	p.mu.Unlock()
+}
+
+func (p *Peer) SetValidationReceiveDelay(delay SimDuration) error {
+	if delay < 0 {
+		return errors.New("csf: validation receive delay must not be negative")
+	}
+	p.mu.Lock()
+	p.recvValDelay = delay
+	p.mu.Unlock()
+	return nil
+}
+
+func (p *Peer) SetLedgerAcceptDelay(delay SimDuration) error {
+	if delay < 0 {
+		return errors.New("csf: ledger accept delay must not be negative")
+	}
+	p.mu.Lock()
+	p.ledgerAcceptDelay = delay
+	p.mu.Unlock()
+	return nil
 }
 
 func (p *Peer) SetTargetLedgers(target int) {
@@ -210,13 +248,24 @@ func (p *Peer) Trusts(other *Peer) bool {
 }
 
 func (p *Peer) Connect(other *Peer, delay SimDuration) bool {
-	if !p.network.Connect(p.ID, other.ID, delay) {
+	if p == other {
 		return false
 	}
-	p.clearReportedLedger(other.ID)
-	other.clearReportedLedger(p.ID)
-	p.sendLedgerStatus(other.ID, p.LastClosedLedger().ID())
-	other.sendLedgerStatus(p.ID, other.LastClosedLedger().ID())
+	first, second := p, other
+	if first.ID > second.ID {
+		first, second = second, first
+	}
+	first.lifecycleMu.Lock()
+	second.lifecycleMu.Lock()
+	if p.stopped || other.stopped || !p.network.Connect(p.ID, other.ID, delay) {
+		second.lifecycleMu.Unlock()
+		first.lifecycleMu.Unlock()
+		return false
+	}
+	second.lifecycleMu.Unlock()
+	first.lifecycleMu.Unlock()
+	p.invalidateAcquisitions()
+	other.invalidateAcquisitions()
 	p.retryPendingValidated()
 	other.retryPendingValidated()
 	return true
@@ -226,18 +275,30 @@ func (p *Peer) Disconnect(other *Peer) bool {
 	if !p.network.Disconnect(p.ID, other.ID) {
 		return false
 	}
-	p.clearReportedLedger(other.ID)
-	other.clearReportedLedger(p.ID)
+	p.invalidateAcquisitions()
+	other.invalidateAcquisitions()
 	return true
 }
 
 func (p *Peer) Start() error {
+	p.workMu.Lock()
+	p.deferCollectorEvents()
+	defer func() {
+		events := p.releaseCollectorEvents()
+		p.workMu.Unlock()
+		p.dispatchCollectorEvents(events)
+	}()
+
 	p.lifecycleMu.Lock()
-	defer p.lifecycleMu.Unlock()
 	if p.stopped {
+		p.lifecycleMu.Unlock()
 		return errors.New("csf: peer is stopped")
 	}
+	restart := p.started && !p.ticking
 	if !p.started {
+		p.mu.Lock()
+		p.standalone = len(p.network.Peers(p.ID)) == 0
+		p.mu.Unlock()
 		cfg := rcl.Config{
 			Timing:     p.timing,
 			Thresholds: consensus.DefaultThresholds(),
@@ -245,9 +306,10 @@ func (p *Peer) Start() error {
 			ManualTick: true,
 		}
 		p.engine = rcl.NewEngine(p, cfg)
-		p.engine.SetLedgerAncestryProvider(p.oracle)
+		p.engine.SetLedgerAncestryProvider(p)
 		if err := p.engine.Start(context.Background()); err != nil {
 			p.engine = nil
+			p.lifecycleMu.Unlock()
 			return err
 		}
 		lcl := p.LastClosedLedger()
@@ -255,11 +317,26 @@ func (p *Peer) Start() error {
 		if err := p.engine.StartRound(round, p.IsValidator()); err != nil {
 			_ = p.engine.Stop()
 			p.engine = nil
+			p.lifecycleMu.Unlock()
 			return err
 		}
 		p.started = true
 	}
-	if !p.ticking && !p.targetReached() {
+	engine := p.engine
+	p.lifecycleMu.Unlock()
+
+	if restart {
+		if err := engine.RestartRound(p.IsValidator()); err != nil {
+			return err
+		}
+	}
+
+	p.lifecycleMu.Lock()
+	defer p.lifecycleMu.Unlock()
+	if p.stopped {
+		return errors.New("csf: peer is stopped")
+	}
+	if !p.ticking {
 		p.tickGen++
 		p.ticking = true
 		p.scheduleTickLocked(p.tickGen)
@@ -274,33 +351,28 @@ func (p *Peer) scheduleTickLocked(generation uint64) {
 }
 
 func (p *Peer) runTick(generation uint64) {
-	p.lifecycleMu.Lock()
-	if p.stopped || !p.ticking || generation != p.tickGen || p.engine == nil {
+	p.runEngineWork(func() {
+		p.lifecycleMu.Lock()
+		if p.stopped || !p.ticking || generation != p.tickGen || p.engine == nil {
+			p.lifecycleMu.Unlock()
+			return
+		}
+		engine := p.engine
 		p.lifecycleMu.Unlock()
-		return
-	}
-	if p.targetReached() {
-		p.ticking = false
-		p.cancelTick = nil
-		p.lifecycleMu.Unlock()
-		return
-	}
-	engine := p.engine
-	p.lifecycleMu.Unlock()
+		engine.TimerEntry()
 
-	engine.TimerEntry()
-
-	p.lifecycleMu.Lock()
-	defer p.lifecycleMu.Unlock()
-	if p.stopped || !p.ticking || generation != p.tickGen {
-		return
-	}
-	if p.targetReached() {
-		p.ticking = false
-		p.cancelTick = nil
-		return
-	}
-	p.scheduleTickLocked(generation)
+		p.lifecycleMu.Lock()
+		defer p.lifecycleMu.Unlock()
+		if p.stopped || !p.ticking || generation != p.tickGen {
+			return
+		}
+		if p.targetReached() {
+			p.ticking = false
+			p.cancelTick = nil
+			return
+		}
+		p.scheduleTickLocked(generation)
+	})
 }
 
 func (p *Peer) Stop() error {
@@ -316,25 +388,133 @@ func (p *Peer) Stop() error {
 		p.cancelTick()
 		p.cancelTick = nil
 	}
-	p.mu.Lock()
-	for id, cancel := range p.acquisitionTimer {
-		cancel()
-		delete(p.acquisitionTimer, id)
-		delete(p.acquiringLedgers, id)
+	if p.cancelAccept != nil {
+		p.cancelAccept()
+		p.cancelAccept = nil
 	}
+	p.validationGen++
+	for id, cancel := range p.validationTimers {
+		cancel()
+		delete(p.validationTimers, id)
+	}
+	p.mu.Lock()
+	clear(p.acquiringLedgers)
+	clear(p.acquiringTxSets)
 	p.mu.Unlock()
 	engine := p.engine
 	p.lifecycleMu.Unlock()
-	if engine == nil {
-		return nil
+
+	for _, other := range p.network.Peers(p.ID) {
+		p.network.Disconnect(p.ID, other)
+		if peer := p.registry.get(other); peer != nil {
+			peer.invalidateAcquisitions()
+		}
 	}
-	return engine.Stop()
+
+	var err error
+	p.runEngineWork(func() {
+		if engine != nil {
+			err = engine.Stop()
+		}
+	})
+	return err
 }
 
 func (p *Peer) acceptingMessages() (*rcl.Engine, bool) {
 	p.lifecycleMu.Lock()
 	defer p.lifecycleMu.Unlock()
 	return p.engine, p.started && !p.stopped && p.engine != nil
+}
+
+func (p *Peer) withEngine(fn func(*rcl.Engine)) bool {
+	active := false
+	p.runEngineWork(func() {
+		p.lifecycleMu.Lock()
+		engine := p.engine
+		active = p.started && !p.stopped && engine != nil
+		p.lifecycleMu.Unlock()
+		if active {
+			fn(engine)
+		}
+	})
+	return active
+}
+
+func (p *Peer) runEngineWork(fn func()) {
+	p.workMu.Lock()
+	p.deferCollectorEvents()
+	defer func() {
+		events := p.releaseCollectorEvents()
+		p.workMu.Unlock()
+		p.dispatchCollectorEvents(events)
+	}()
+	fn()
+}
+
+func (p *Peer) deferCollectorEvents() {
+	p.collectorMu.Lock()
+	p.deferCollectors++
+	p.collectorMu.Unlock()
+}
+
+func (p *Peer) releaseCollectorEvents() []collectorEvent {
+	p.collectorMu.Lock()
+	defer p.collectorMu.Unlock()
+	p.deferCollectors--
+	if p.deferCollectors != 0 || len(p.pendingCollectors) == 0 {
+		return nil
+	}
+	events := p.pendingCollectors
+	p.pendingCollectors = nil
+	return events
+}
+
+func (p *Peer) emitCollectorEvent(event Event) {
+	notice := collectorEvent{when: p.scheduler.Now(), event: event}
+	p.collectorMu.Lock()
+	if p.deferCollectors != 0 {
+		p.pendingCollectors = append(p.pendingCollectors, notice)
+		p.collectorMu.Unlock()
+		return
+	}
+	p.collectorMu.Unlock()
+	p.collectors.On(p.ID, notice.when, notice.event)
+}
+
+func (p *Peer) dispatchCollectorEvents(events []collectorEvent) {
+	for _, event := range events {
+		p.collectors.On(p.ID, event.when, event.event)
+	}
+}
+
+func (p *Peer) DeferLedgerAccept(complete func()) bool {
+	p.mu.Lock()
+	delay := p.ledgerAcceptDelay
+	p.mu.Unlock()
+	if delay == 0 {
+		return false
+	}
+
+	p.lifecycleMu.Lock()
+	if p.stopped {
+		p.lifecycleMu.Unlock()
+		return false
+	}
+	p.cancelAccept = p.scheduler.In(delay, func() {
+		p.runEngineWork(func() {
+			p.lifecycleMu.Lock()
+			if p.stopped {
+				p.cancelAccept = nil
+				p.lifecycleMu.Unlock()
+				return
+			}
+			p.cancelAccept = nil
+			p.lifecycleMu.Unlock()
+			complete()
+		})
+	})
+	p.lifecycleMu.Unlock()
+	return true
 }
 
 func (p *Peer) LastClosedLedger() *Ledger {
@@ -353,6 +533,14 @@ func (p *Peer) FullyValidatedLedger() *Ledger {
 }
 
 func (p *Peer) PrevLedgerID() consensus.LedgerID {
+	p.lifecycleMu.Lock()
+	engine := p.engine
+	p.lifecycleMu.Unlock()
+	if engine != nil {
+		if state := engine.State(); state != nil {
+			return state.Round.ParentHash
+		}
+	}
 	return p.LastClosedLedger().ID()
 }
 
@@ -370,11 +558,17 @@ func (p *Peer) InjectTx(seq uint32, tx Tx) {
 }
 
 func (p *Peer) receiveTx(blob []byte, from *PeerID) {
+	p.workMu.Lock()
+	defer p.workMu.Unlock()
 	if p.isStopped() {
 		return
 	}
 	id := txBlobID(blob)
 	p.mu.Lock()
+	if p.lcl.Transactions().Contains(id) {
+		p.mu.Unlock()
+		return
+	}
 	if _, seen := p.seenTxs[id]; seen {
 		p.mu.Unlock()
 		return
@@ -399,6 +593,9 @@ func (p *Peer) receiveTx(blob []byte, from *PeerID) {
 }
 
 func (p *Peer) BroadcastProposal(proposal *consensus.Proposal) error {
+	if p.isStopped() {
+		return nil
+	}
 	cp := cloneProposal(proposal)
 	p.markProposalSeen(proposalKey(cp), 0)
 	p.broadcastProposal(cp, 0)
@@ -406,11 +603,17 @@ func (p *Peer) BroadcastProposal(proposal *consensus.Proposal) error {
 }
 
 func (p *Peer) RelayProposal(proposal *consensus.Proposal, exceptPeer uint64) error {
+	if p.isStopped() {
+		return nil
+	}
 	p.broadcastProposal(cloneProposal(proposal), exceptPeer)
 	return nil
 }
 
 func (p *Peer) broadcastProposal(proposal *consensus.Proposal, exceptPeer uint64) {
+	if p.isStopped() {
+		return
+	}
 	key := proposalKey(proposal)
 	have := p.PeersThatHave(key)
 	for _, to := range p.network.Peers(p.ID) {
@@ -428,21 +631,22 @@ func (p *Peer) broadcastProposal(proposal *consensus.Proposal, exceptPeer uint64
 }
 
 func (p *Peer) receiveProposal(proposal *consensus.Proposal, from PeerID) {
-	engine, ok := p.acceptingMessages()
-	if !ok || p.targetReached() {
-		return
-	}
-	key := proposalKey(proposal)
-	if !p.markProposalSeen(key, wirePeerID(from)) {
-		return
-	}
-	p.collectors.On(p.ID, p.scheduler.Now(), ReceiveProposalEvent{Proposal: cloneProposal(proposal)})
-	if err := engine.OnProposal(proposal, wirePeerID(from)); err != nil {
-		p.recordAsyncError(fmt.Errorf("proposal from peer %d: %w", from, err))
-	}
+	p.withEngine(func(engine *rcl.Engine) {
+		key := proposalKey(proposal)
+		if !p.markProposalSeen(key, wirePeerID(from)) {
+			return
+		}
+		p.emitCollectorEvent(ReceiveProposalEvent{Proposal: cloneProposal(proposal)})
+		if err := engine.OnProposal(proposal, wirePeerID(from)); err != nil {
+			p.recordAsyncError(fmt.Errorf("proposal from peer %d: %w", from, err))
+		}
+	})
 }
 
 func (p *Peer) BroadcastValidation(validation *consensus.Validation) error {
+	if p.isStopped() {
+		return nil
+	}
 	cp := cloneValidation(validation)
 	p.markValidationSeen(validationKey(cp), 0)
 	p.broadcastValidation(cp, 0)
@@ -450,11 +654,17 @@ func (p *Peer) BroadcastValidation(validation *consensus.Validation) error {
 }
 
 func (p *Peer) RelayValidation(validation *consensus.Validation, exceptPeer uint64) error {
+	if p.isStopped() {
+		return nil
+	}
 	p.broadcastValidation(cloneValidation(validation), exceptPeer)
 	return nil
 }
 
 func (p *Peer) broadcastValidation(validation *consensus.Validation, exceptPeer uint64) {
+	if p.isStopped() {
+		return
+	}
 	key := validationKey(validation)
 	have := p.PeersThatHave(key)
 	for _, to := range p.network.Peers(p.ID) {
@@ -472,19 +682,78 @@ func (p *Peer) broadcastValidation(validation *consensus.Validation, exceptPeer 
 }
 
 func (p *Peer) receiveValidation(validation *consensus.Validation, from PeerID) {
-	engine, ok := p.acceptingMessages()
-	if !ok {
-		return
-	}
-	key := validationKey(validation)
-	if !p.markValidationSeen(key, wirePeerID(from)) {
-		return
-	}
-	p.collectors.On(p.ID, p.scheduler.Now(), ReceiveValidationEvent{
-		Validation: cloneValidation(validation),
+	p.withEngine(func(engine *rcl.Engine) {
+		key := validationKey(validation)
+		if !p.markValidationSeen(key, wirePeerID(from)) {
+			return
+		}
+		p.emitCollectorEvent(ReceiveValidationEvent{
+			Validation: cloneValidation(validation),
+		})
+		p.mu.Lock()
+		delay := p.recvValDelay
+		p.mu.Unlock()
+		if delay == 0 {
+			p.handleReceivedValidationLocked(engine, validation, from)
+			return
+		}
+
+		cp := cloneValidation(validation)
+		p.lifecycleMu.Lock()
+		if p.stopped {
+			p.lifecycleMu.Unlock()
+			return
+		}
+		generation := p.validationGen
+		timerID := p.nextValidation
+		p.nextValidation++
+		cancel := p.scheduler.In(delay, func() {
+			p.lifecycleMu.Lock()
+			delete(p.validationTimers, timerID)
+			valid := !p.stopped && p.validationGen == generation
+			p.lifecycleMu.Unlock()
+			if valid {
+				p.withEngine(func(engine *rcl.Engine) {
+					p.handleReceivedValidationLocked(engine, cp, from)
+				})
+			}
+		})
+		p.validationTimers[timerID] = cancel
+		p.lifecycleMu.Unlock()
 	})
-	if err := engine.OnValidation(validation, wirePeerID(from)); err != nil {
+}
+
+func (p *Peer) handleReceivedValidationLocked(
+	engine *rcl.Engine,
+	validation *consensus.Validation,
+	from PeerID,
+) {
+	if err := p.VerifyValidation(validation); err != nil {
 		p.recordAsyncError(fmt.Errorf("validation from peer %d: %w", from, err))
+		return
+	}
+	disposition, err := engine.ProcessVerifiedValidation(
+		validation,
+		consensus.ValidationOrigin{PeerID: wirePeerID(from)},
+	)
+	if err != nil {
+		p.recordAsyncError(fmt.Errorf("validation from peer %d: %w", from, err))
+		return
+	}
+	if disposition.Relay {
+		_ = p.RelayValidation(validation, wirePeerID(from))
+	}
+	if disposition.Status == consensus.ValidationMultiple ||
+		disposition.Status == consensus.ValidationConflicting {
+		p.recordAsyncError(fmt.Errorf("validation from peer %d: %w", from, &consensus.ByzantineValidationError{
+			NodeID:  validation.NodeID,
+			Reason:  disposition.Status.String(),
+			Trusted: disposition.Trusted,
+		}))
+		return
+	}
+	if disposition.AcquireEligible() {
+		_ = p.RequestLedger(validation.LedgerID)
 	}
 }
 
@@ -535,8 +804,29 @@ func (p *Peer) PeersThatHave(key [32]byte) []uint64 {
 }
 
 func (p *Peer) RequestTxSet(id consensus.TxSetID) error {
+	if p.isStopped() {
+		return errors.New("csf: peer is stopped")
+	}
+	peers, retryAfter := p.acquisitionWindow()
+	if len(peers) == 0 {
+		return errNotFound
+	}
+	now := p.scheduler.Now()
+	deadline := now + SimTime(retryAfter)
+	p.mu.Lock()
+	if _, ok := p.txSets[id]; ok {
+		p.mu.Unlock()
+		return nil
+	}
+	if existing := p.acquiringTxSets[id]; existing > now {
+		p.mu.Unlock()
+		return nil
+	}
+	p.acquiringTxSets[id] = deadline
+	p.mu.Unlock()
+
 	sent := false
-	for _, sourceID := range p.network.Peers(p.ID) {
+	for _, sourceID := range peers {
 		source := p.registry.get(sourceID)
 		if source == nil {
 			continue
@@ -555,32 +845,52 @@ func (p *Peer) RequestTxSet(id consensus.TxSetID) error {
 			if set == nil {
 				return
 			}
+			if source.isStopped() {
+				return
+			}
 			source.network.Send(sourceID, requesterID, func() {
-				engine, ok := p.acceptingMessages()
-				if ok {
+				p.withEngine(func(engine *rcl.Engine) {
+					p.mu.Lock()
+					delete(p.acquiringTxSets, id)
+					p.mu.Unlock()
 					if err := engine.OnTxSet(id, set.Txs()); err != nil {
 						p.recordAsyncError(fmt.Errorf("transaction set %x: %w", id, err))
 					}
-				}
+				})
 			})
 		}) {
 			sent = true
 		}
 	}
 	if sent {
+		if p.isStopped() {
+			p.mu.Lock()
+			if p.acquiringTxSets[id] == deadline {
+				delete(p.acquiringTxSets, id)
+			}
+			p.mu.Unlock()
+			return errors.New("csf: peer is stopped")
+		}
 		return nil
 	}
+	p.mu.Lock()
+	if p.acquiringTxSets[id] == deadline {
+		delete(p.acquiringTxSets, id)
+	}
+	p.mu.Unlock()
 	return errNotFound
 }
 
 func (p *Peer) RequestLedger(id consensus.LedgerID) error {
-	peers := p.network.Peers(p.ID)
+	if p.isStopped() {
+		return errors.New("csf: peer is stopped")
+	}
+	peers, retryAfter := p.acquisitionWindow()
 	if len(peers) == 0 {
 		return errNotFound
 	}
-	const acquisitionTimeout = 20 * time.Second
 	now := p.scheduler.Now()
-	deadline := now + SimTime(acquisitionTimeout)
+	deadline := now + SimTime(retryAfter)
 	p.mu.Lock()
 	if _, ok := p.ledgers[id]; ok {
 		p.mu.Unlock()
@@ -617,9 +927,11 @@ func (p *Peer) RequestLedger(id consensus.LedgerID) error {
 			if ledger == nil {
 				return
 			}
+			if source.isStopped() {
+				return
+			}
 			source.network.Send(sourceID, requesterID, func() {
-				engine, ok := p.acceptingMessages()
-				if !ok {
+				if p.isStopped() {
 					return
 				}
 				p.mu.Lock()
@@ -627,16 +939,7 @@ func (p *Peer) RequestLedger(id consensus.LedgerID) error {
 					p.ledgers[acquired.ID()] = acquired
 				}
 				delete(p.acquiringLedgers, id)
-				cancel := p.acquisitionTimer[id]
-				delete(p.acquisitionTimer, id)
 				p.mu.Unlock()
-				if cancel != nil {
-					cancel()
-				}
-				p.promotePendingValidated(id)
-				if err := engine.OnLedger(id, ledger.Bytes()); err != nil {
-					p.recordAsyncError(fmt.Errorf("ledger %x: %w", id, err))
-				}
 			})
 		}) {
 			sent = true
@@ -648,35 +951,46 @@ func (p *Peer) RequestLedger(id consensus.LedgerID) error {
 		p.mu.Unlock()
 		return errNotFound
 	}
-	cancel := p.scheduler.In(acquisitionTimeout, func() {
-		engine, ok := p.acceptingMessages()
-		if !ok {
-			return
-		}
+	if p.isStopped() {
 		p.mu.Lock()
-		if p.acquiringLedgers[id] != deadline {
-			p.mu.Unlock()
-			return
+		if p.acquiringLedgers[id] == deadline {
+			delete(p.acquiringLedgers, id)
 		}
-		delete(p.acquiringLedgers, id)
-		delete(p.acquisitionTimer, id)
-		p.mu.Unlock()
-		engine.OnLedgerAcquireFailed(id)
-	})
-	p.lifecycleMu.Lock()
-	if p.stopped {
-		p.lifecycleMu.Unlock()
-		cancel()
-		p.mu.Lock()
-		delete(p.acquiringLedgers, id)
 		p.mu.Unlock()
 		return errors.New("csf: peer is stopped")
 	}
-	p.mu.Lock()
-	p.acquisitionTimer[id] = cancel
-	p.mu.Unlock()
-	p.lifecycleMu.Unlock()
 	return nil
+}
+
+func (p *Peer) acquisitionWindow() ([]PeerID, SimDuration) {
+	peers := p.network.Peers(p.ID)
+	minimum := 10 * time.Second
+	for _, peer := range peers {
+		if delay, ok := p.network.Delay(p.ID, peer); ok && delay < minimum {
+			minimum = delay
+		}
+	}
+	return peers, 2 * minimum
+}
+
+func (p *Peer) invalidateAcquisitions() {
+	p.mu.Lock()
+	ids := make([]consensus.LedgerID, 0, len(p.acquiringLedgers))
+	for id := range p.acquiringLedgers {
+		ids = append(ids, id)
+	}
+	clear(p.acquiringLedgers)
+	clear(p.acquiringTxSets)
+	p.mu.Unlock()
+	sort.Slice(ids, func(i, j int) bool {
+		return bytes.Compare(ids[i][:], ids[j][:]) < 0
+	})
+
+	for _, id := range ids {
+		p.withEngine(func(engine *rcl.Engine) {
+			engine.OnLedgerAcquireFailed(id)
+		})
+	}
 }
 
 func (p *Peer) GetLedger(id consensus.LedgerID) (consensus.Ledger, error) {
@@ -686,6 +1000,17 @@ func (p *Peer) GetLedger(id consensus.LedgerID) (consensus.Ledger, error) {
 		return ledger, nil
 	}
 	return nil, errNotFound
+}
+
+func (p *Peer) LedgerByID(id consensus.LedgerID) (ledgertrie.Ledger, bool) {
+	p.mu.Lock()
+	ledger := p.ledgers[id]
+	p.mu.Unlock()
+	if ledger != nil {
+		return ledger, true
+	}
+	_ = p.RequestLedger(id)
+	return nil, false
 }
 
 func (p *Peer) GetLedgerBySeq(seq uint32) (consensus.Ledger, error) {
@@ -726,16 +1051,28 @@ func (p *Peer) BuildLedger(
 	if !ok {
 		return nil, fmt.Errorf("csf: unexpected transaction set type %T", txSet)
 	}
+	acceptedSet := simSet
+	p.mu.Lock()
+	injected := cloneBlobs(sortedTxBlobs(p.injected[simParent.Seq()]))
+	p.mu.Unlock()
+	if len(injected) != 0 {
+		acceptedSet = simSet.Clone()
+		for _, blob := range injected {
+			if err := acceptedSet.Add(blob); err != nil {
+				return nil, fmt.Errorf("csf: add injected transaction: %w", err)
+			}
+		}
+	}
 	ledger := p.oracle.Accept(
 		simParent,
-		simSet,
+		acceptedSet,
 		closeTime,
 		closeTimeCorrect,
-		p.CloseTimeResolution(),
+		nextLedgerCloseTimeResolution(simParent),
 	)
 	p.mu.Lock()
 	p.ledgers[ledger.ID()] = ledger
-	p.txSets[simSet.ID()] = simSet.Clone()
+	p.txSets[acceptedSet.ID()] = acceptedSet.Clone()
 	p.mu.Unlock()
 	return ledger, nil
 }
@@ -768,16 +1105,10 @@ func (p *Peer) GetPendingTxs() [][]byte {
 	return sortedTxBlobs(p.openTxs)
 }
 
-func (p *Peer) GetProposableTxs(parent consensus.Ledger) [][]byte {
+func (p *Peer) GetProposableTxs(consensus.Ledger) [][]byte {
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	result := cloneBlobs(sortedTxBlobs(p.openTxs))
-	if parent != nil {
-		for _, blob := range sortedTxBlobs(p.injected[parent.Seq()+1]) {
-			result = append(result, blob)
-		}
-	}
-	return result
+	return cloneBlobs(sortedTxBlobs(p.openTxs))
 }
 
 func (p *Peer) GenerateFlagLedgerPseudoTxs(consensus.Ledger, []*consensus.Validation) [][]byte {
@@ -920,7 +1251,9 @@ func (p *Peer) IsFeatureEnabledOnLedger(consensus.Ledger, string) bool {
 }
 
 func (p *Peer) IsStandalone() bool {
-	return len(p.network.Peers(p.ID)) == 0
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.standalone
 }
 
 func (p *Peer) IsUNLBlocked() bool {
@@ -950,58 +1283,24 @@ func (p *Peer) GetAmendmentVote() [][32]byte {
 }
 
 func (p *Peer) PeerReportedLedgers() []consensus.LedgerID {
-	peers := p.network.Peers(p.ID)
-	p.mu.Lock()
-	defer p.mu.Unlock()
-	result := make([]consensus.LedgerID, 0, len(peers))
-	for _, peer := range peers {
-		if id, ok := p.reportedLedger[peer]; ok {
-			result = append(result, id)
-		}
-	}
-	return result
-}
-
-func (p *Peer) broadcastLedgerStatus(id consensus.LedgerID) {
-	for _, peer := range p.network.Peers(p.ID) {
-		p.sendLedgerStatus(peer, id)
-	}
-}
-
-func (p *Peer) sendLedgerStatus(peer PeerID, id consensus.LedgerID) {
-	p.network.Send(p.ID, peer, func() {
-		if dst := p.registry.get(peer); dst != nil {
-			dst.receiveLedgerStatus(p.ID, id)
-		}
-	})
-}
-
-func (p *Peer) receiveLedgerStatus(from PeerID, id consensus.LedgerID) {
-	if _, ok := p.acceptingMessages(); !ok {
-		return
-	}
-	p.mu.Lock()
-	p.reportedLedger[from] = id
-	p.mu.Unlock()
-}
-
-func (p *Peer) clearReportedLedger(peer PeerID) {
-	p.mu.Lock()
-	delete(p.reportedLedger, peer)
-	p.mu.Unlock()
+	return nil
 }
 
 func (p *Peer) Now() time.Time {
 	p.mu.Lock()
 	skew := p.clockSkew
 	p.mu.Unlock()
-	return p.scheduler.NowTime().Add(skew)
+	return p.scheduler.networkTime(skew)
 }
 
 func (p *Peer) CloseTimeResolution() time.Duration {
 	p.mu.Lock()
 	ledger := p.lcl
 	p.mu.Unlock()
+	return nextLedgerCloseTimeResolution(ledger)
+}
+
+func nextLedgerCloseTimeResolution(ledger *Ledger) time.Duration {
 	seconds := consensus.GetNextLedgerTimeResolution(
 		uint32(ledger.CloseTimeResolution()/time.Second),
 		ledger.CloseAgree(),
@@ -1022,11 +1321,7 @@ func (p *Peer) GetOperatingMode() consensus.OperatingMode {
 	return p.operatingMode
 }
 
-func (p *Peer) SetOperatingMode(mode consensus.OperatingMode) {
-	p.mu.Lock()
-	p.operatingMode = mode
-	p.mu.Unlock()
-}
+func (*Peer) SetOperatingMode(consensus.OperatingMode) {}
 
 func (p *Peer) OnConsensusReached(
 	ledger consensus.Ledger,
@@ -1038,6 +1333,11 @@ func (p *Peer) OnConsensusReached(
 		return
 	}
 	p.mu.Lock()
+	if p.completed >= p.targetLedgers {
+		p.mu.Unlock()
+		return
+	}
+	prior := p.lcl
 	p.ledgers[simLedger.ID()] = simLedger
 	p.adoptCanonicalLocked(simLedger)
 	p.completed++
@@ -1046,10 +1346,9 @@ func (p *Peer) OnConsensusReached(
 			delete(p.openTxs, id)
 		}
 	}
-	delete(p.injected, simLedger.Seq())
 	p.mu.Unlock()
-	p.collectors.On(p.ID, p.scheduler.Now(), AcceptLedgerEvent{Ledger: simLedger})
-	p.broadcastLedgerStatus(simLedger.ID())
+	p.emitCollectorEvent(AcceptLedgerEvent{Ledger: simLedger, Prior: prior})
+	p.promotePendingValidated(simLedger.ID())
 }
 
 func (p *Peer) OnLedgerFullyValidated(id consensus.LedgerID, seq uint32) {
@@ -1074,10 +1373,11 @@ func (p *Peer) promoteFullyValidated(ledger *Ledger, seq uint32) {
 		p.mu.Unlock()
 		return
 	}
+	prior := current
 	p.validated = ledger.ID()
 	delete(p.pendingValidated, ledger.ID())
 	p.mu.Unlock()
-	p.collectors.On(p.ID, p.scheduler.Now(), FullyValidateLedgerEvent{Ledger: ledger})
+	p.emitCollectorEvent(FullyValidateLedgerEvent{Ledger: ledger, Prior: prior})
 }
 
 func (p *Peer) promotePendingValidated(id consensus.LedgerID) {
@@ -1110,13 +1410,13 @@ func (p *Peer) OnModeChange(consensus.Mode, consensus.Mode) {}
 func (p *Peer) OnPhaseChange(_, next consensus.Phase) {
 	switch next {
 	case consensus.PhaseOpen:
-		p.collectors.On(p.ID, p.scheduler.Now(), StartRoundEvent{
+		p.emitCollectorEvent(StartRoundEvent{
 			Ledger:   p.LastClosedLedger(),
 			Proposer: p.IsValidator(),
 		})
 	case consensus.PhaseEstablish:
 		set := newTxSetFromBlobs(p.GetProposableTxs(p.LastClosedLedger()))
-		p.collectors.On(p.ID, p.scheduler.Now(), CloseLedgerEvent{
+		p.emitCollectorEvent(CloseLedgerEvent{
 			TxSet:     set,
 			CloseTime: p.scheduler.Now(),
 		})
@@ -1129,15 +1429,17 @@ func (p *Peer) OnLedgerSwitched(ledger consensus.Ledger) error {
 		return fmt.Errorf("csf: unexpected switched ledger type %T", ledger)
 	}
 	p.mu.Lock()
+	if p.completed >= p.targetLedgers {
+		p.mu.Unlock()
+		return nil
+	}
 	previous := p.lcl.ID()
 	p.ledgers[simLedger.ID()] = simLedger
-	p.adoptCanonicalLocked(simLedger)
 	p.mu.Unlock()
-	p.collectors.On(p.ID, p.scheduler.Now(), WrongPrevLedgerEvent{
+	p.emitCollectorEvent(WrongPrevLedgerEvent{
 		Expected: previous,
 		Received: simLedger.ID(),
 	})
-	p.broadcastLedgerStatus(simLedger.ID())
 	return nil
 }
 

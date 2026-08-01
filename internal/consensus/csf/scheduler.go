@@ -90,9 +90,14 @@ func (s *Scheduler) Now() SimTime {
 
 // NowTime returns the simulated network time used by rippled's CSF peers.
 func (s *Scheduler) NowTime() time.Time {
+	return s.networkTime(0)
+}
+
+func (s *Scheduler) networkTime(offset time.Duration) time.Time {
+	seconds := (24*time.Hour + time.Duration(s.Now()) + offset) / time.Second
 	return time.Unix(
-		protocol.RippleEpochUnix,
-		int64(24*time.Hour)+int64(s.Now()),
+		protocol.RippleEpochUnix+int64(seconds),
+		0,
 	).UTC()
 }
 

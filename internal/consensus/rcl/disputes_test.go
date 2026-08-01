@@ -2,6 +2,7 @@ package rcl
 
 import (
 	"testing"
+	"time"
 
 	"github.com/LeJamon/go-xrpl/internal/consensus"
 )
@@ -318,6 +319,94 @@ func TestConsensus_OverlappingDisjointProposals_Converges(t *testing.T) {
 		t.Errorf("final tx set should include A,B,C,D; got A=%v B=%v C=%v D=%v",
 			outSet.Contains(txA), outSet.Contains(txB),
 			outSet.Contains(txC), outSet.Contains(txD))
+	}
+}
+
+func TestEngine_UpdatePosition_ObserverAdoptsPeerMajority(t *testing.T) {
+	adaptor := newMockAdaptor()
+	engine := NewEngine(adaptor, DefaultConfig())
+	txID := makeTxID(0xC)
+	empty := buildMockTxSet(makeTxSetID(0x30))
+	round := consensus.RoundID{Seq: 101, ParentHash: consensus.LedgerID{1}}
+	if err := engine.StartRound(round, false); err != nil {
+		t.Fatalf("StartRound: %v", err)
+	}
+
+	engine.mu.Lock()
+	engine.setMode(consensus.ModeObserving)
+	engine.ourTxSet = empty
+	engine.disputeTracker.CreateDispute(txID, txID[:], false)
+	for i := byte(1); i <= 3; i++ {
+		engine.disputeTracker.SetVote(txID, consensus.NodeID{i}, true)
+	}
+	engine.disputeTracker.SetVote(txID, consensus.NodeID{4}, false)
+	engine.updatePosition()
+	got := engine.ourTxSet
+	engine.mu.Unlock()
+
+	if !got.Contains(txID) {
+		t.Fatal("observing node did not adopt the peer-majority transaction")
+	}
+	adaptor.mu.RLock()
+	broadcasts := len(adaptor.proposalsBroadcast)
+	adaptor.mu.RUnlock()
+	if broadcasts != 0 {
+		t.Fatalf("observing node broadcast %d proposals, want 0", broadcasts)
+	}
+}
+
+func TestEngine_OnProposalRefreshesDisputeVoteWhenPeerMatchesOurSet(t *testing.T) {
+	adaptor := newMockAdaptor()
+	peerNode := consensus.NodeID{0xA1}
+	adaptor.setTrusted([]consensus.NodeID{adaptor.nodeID, peerNode})
+
+	txID := makeTxID(0xC)
+	ourSet := buildMockTxSet(makeTxSetID(0x31), txID)
+	emptySet := buildMockTxSet(makeTxSetID(0x32))
+	adaptor.txSets[ourSet.ID()] = ourSet
+	adaptor.txSets[emptySet.ID()] = emptySet
+
+	engine := NewEngine(adaptor, DefaultConfig())
+	round := consensus.RoundID{Seq: 101, ParentHash: consensus.LedgerID{1}}
+	if err := engine.StartRound(round, true); err != nil {
+		t.Fatalf("StartRound: %v", err)
+	}
+
+	engine.mu.Lock()
+	engine.ourTxSet = ourSet
+	engine.acquiredTxSets[ourSet.ID()] = ourSet
+	engine.acquiredTxSets[emptySet.ID()] = emptySet
+	engine.state.OurPosition = &consensus.Proposal{
+		Round: round, NodeID: adaptor.nodeID, TxSet: ourSet.ID(),
+	}
+	engine.setPhase(consensus.PhaseEstablish)
+	engine.mu.Unlock()
+
+	now := adaptor.Now()
+	proposal := &consensus.Proposal{
+		Round: round, NodeID: peerNode, Position: 0,
+		TxSet: emptySet.ID(), CloseTime: now,
+		PreviousLedger: round.ParentHash, Timestamp: now,
+	}
+	if err := engine.OnProposal(proposal, 1); err != nil {
+		t.Fatalf("OnProposal(empty): %v", err)
+	}
+	dispute := engine.disputeTracker.Dispute(txID)
+	if dispute == nil || dispute.Yays != 0 || dispute.Nays != 1 {
+		t.Fatalf("empty-set vote = %#v, want 0 yes/1 no", dispute)
+	}
+
+	matching := &consensus.Proposal{
+		Round: round, NodeID: peerNode, Position: 1,
+		TxSet: ourSet.ID(), CloseTime: now,
+		PreviousLedger: round.ParentHash, Timestamp: now.Add(time.Second),
+	}
+	if err := engine.OnProposal(matching, 1); err != nil {
+		t.Fatalf("OnProposal(matching): %v", err)
+	}
+	if dispute.Yays != 1 || dispute.Nays != 0 || !dispute.Votes[peerNode] {
+		t.Fatalf("matching-set vote = %d yes/%d no (%v), want 1 yes/0 no",
+			dispute.Yays, dispute.Nays, dispute.Votes[peerNode])
 	}
 }
 

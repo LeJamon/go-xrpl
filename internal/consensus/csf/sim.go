@@ -78,9 +78,6 @@ func (s *Sim) Run(ledgers int) error {
 	if ledgers < 0 {
 		return errors.New("csf: ledger count must not be negative")
 	}
-	if ledgers == 0 {
-		return nil
-	}
 	for _, peer := range s.peers {
 		completed := peer.CompletedLedgers()
 		if ledgers > math.MaxInt-completed {
@@ -109,15 +106,19 @@ func (s *Sim) Run(ledgers int) error {
 	if runErr != nil {
 		return errors.Join(runErr, s.Stop())
 	}
+	s.Scheduler.Step()
 	for _, peer := range s.peers {
 		if err := peer.asyncError(); err != nil {
-			return fmt.Errorf("peer %d: %w", peer.ID, err)
+			return errors.Join(fmt.Errorf("peer %d: %w", peer.ID, err), s.Stop())
 		}
 		if !peer.targetReached() {
-			return fmt.Errorf(
-				"csf: scheduler became idle before peer %d reached completion target %d",
-				peer.ID,
-				peer.TargetLedgers(),
+			return errors.Join(
+				fmt.Errorf(
+					"csf: scheduler became idle before peer %d reached completion target %d",
+					peer.ID,
+					peer.TargetLedgers(),
+				),
+				s.Stop(),
 			)
 		}
 	}
