@@ -55,7 +55,7 @@ type peerBootstrapAcknowledger interface {
 // Router reads inbound messages from the P2P overlay and dispatches
 // them to the consensus engine and adaptor.
 type Router struct {
-	engine  consensus.Engine
+	engine  consensus.RouterEngine
 	adaptor *Adaptor
 	// inbox is the overlay's bounded, backpressured consensus lane.
 	inbox <-chan *peermanagement.InboundMessage
@@ -345,7 +345,7 @@ const messageDedupTTL = 300 * time.Second
 const messageDedupSweepThreshold = 4096
 
 // NewRouter creates a new Router.
-func NewRouter(engine consensus.Engine, adaptor *Adaptor, inbox <-chan *peermanagement.InboundMessage) *Router {
+func NewRouter(engine consensus.RouterEngine, adaptor *Adaptor, inbox <-chan *peermanagement.InboundMessage) *Router {
 	logger := slog.Default().With("component", "consensus-router")
 	r := &Router{
 		engine:             engine,

@@ -26,11 +26,10 @@ import (
 
 // Components holds all the consensus/networking components created by NewFromConfig.
 type Components struct {
-	Overlay     *peermanagement.Overlay
-	Engine      consensus.Engine
-	Adaptor     *Adaptor
-	Router      *Router
-	ModeManager *ModeManager
+	Overlay *peermanagement.Overlay
+	Engine  consensus.Engine
+	Adaptor *Adaptor
+	Router  *Router
 
 	// Manifests is the validator-manifest cache shared by the router
 	// (wire ingest), the consensus engine (ephemeral→master
@@ -298,8 +297,6 @@ func NewFromConfig(
 		RelayValidations: ParseRelayValidationsPolicy(appCfg.RelayValidations),
 	})
 
-	modeManager := NewModeManager(adaptor)
-
 	// Validator manifest cache. Shared across the engine (for
 	// ephemeral→master translation in ValidationTracker), the router
 	// (for ingesting + relaying TMManifests), and the RPC layer (for
@@ -343,10 +340,6 @@ func NewFromConfig(
 	}
 
 	engine.SetLedgerAncestryProvider(rcl.NewAncestryProvider(ledgerSvc))
-
-	// Track engine ModeChangedEvent — Full gates startRoundLocked into
-	// proposing, so wrongLedger needs to demote opMode.
-	engine.Subscribe(modeManager)
 
 	router := NewRouter(engine, adaptor, overlay.ConsensusMessages())
 	router.SetConsensusControlInbox(overlay.ConsensusControlMessages())
@@ -460,7 +453,6 @@ func NewFromConfig(
 		Engine:                       engine,
 		Adaptor:                      adaptor,
 		Router:                       router,
-		ModeManager:                  modeManager,
 		Manifests:                    manifestCache,
 		ValidatorList:                vlAgg,
 		ValidatorListPoller:          vlPoller,
