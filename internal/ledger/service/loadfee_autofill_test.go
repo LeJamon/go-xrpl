@@ -13,7 +13,7 @@ import (
 // the per-tx-type feeDefault unchanged. Mirrors rippled getCurrentNetworkFee
 // (TransactionSign.cpp:849-861) when isLoadedLocal() is false.
 func TestGetAutofillFee_NoLoad(t *testing.T) {
-	svc, err := service.New(service.DefaultConfig())
+	svc, err := service.New(defaultServiceConfig())
 	if err != nil {
 		t.Fatalf("service.New: %v", err)
 	}
@@ -41,7 +41,7 @@ func TestGetAutofillFee_NoLoad(t *testing.T) {
 // raising the local factor inflates the autofilled fee by exactly
 // localFee/LoadBase, matching rippled scaleFeeLoad (LoadFeeTrack.cpp:106-110).
 func TestGetAutofillFee_LoadedLocal(t *testing.T) {
-	svc, err := service.New(service.DefaultConfig())
+	svc, err := service.New(defaultServiceConfig())
 	if err != nil {
 		t.Fatalf("service.New: %v", err)
 	}
@@ -80,7 +80,7 @@ func TestGetAutofillFee_LoadedLocal(t *testing.T) {
 // when only the local factor is elevated and stays under 4x remote, an
 // unlimited caller pays the remote-rate factor. Mirrors LoadFeeTrack.cpp:97-100.
 func TestGetAutofillFee_Unlimited(t *testing.T) {
-	svc, err := service.New(service.DefaultConfig())
+	svc, err := service.New(defaultServiceConfig())
 	if err != nil {
 		t.Fatalf("service.New: %v", err)
 	}
@@ -112,7 +112,7 @@ func TestGetAutofillFee_Unlimited(t *testing.T) {
 // exceeds feeDefault * mult/div, and assert that *svcerr.HighFeeError
 // surfaces regardless of the unlimited flag.
 func TestGetAutofillFee_Unlimited_HitsCeiling(t *testing.T) {
-	svc, err := service.New(service.DefaultConfig())
+	svc, err := service.New(defaultServiceConfig())
 	if err != nil {
 		t.Fatalf("service.New: %v", err)
 	}

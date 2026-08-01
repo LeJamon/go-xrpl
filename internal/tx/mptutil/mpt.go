@@ -11,10 +11,10 @@ import (
 	"github.com/LeJamon/go-xrpl/internal/ledger/state"
 	tx "github.com/LeJamon/go-xrpl/internal/tx"
 	"github.com/LeJamon/go-xrpl/internal/tx/credential"
-	"github.com/LeJamon/go-xrpl/internal/tx/ledgerfields"
 	"github.com/LeJamon/go-xrpl/internal/tx/ter"
 	"github.com/LeJamon/go-xrpl/keylet"
 	"github.com/LeJamon/go-xrpl/ledger/entry"
+	"github.com/LeJamon/go-xrpl/protocol"
 )
 
 const RateOne uint32 = 1_000_000_000
@@ -112,7 +112,7 @@ func MaximumAmount(issuance *state.MPTokenIssuanceData) uint64 {
 	if issuance.MaximumAmount != nil {
 		return *issuance.MaximumAmount
 	}
-	return entry.MaxMPTokenAmount
+	return protocol.MaxMPTokenAmount
 }
 
 func AvailableAmount(issuance *state.MPTokenIssuanceData) uint64 {
@@ -618,11 +618,11 @@ func referencedAsset(view state.LedgerView, issuance *state.MPTokenIssuanceData)
 	if err != nil || raw == nil {
 		return tx.Asset{}, ter.TefINTERNAL
 	}
-	typeCode, err := state.GetLedgerEntryType(raw)
+	entryType, err := state.DecodeType(raw)
 	if err != nil {
 		return tx.Asset{}, ter.TefINTERNAL
 	}
-	switch entry.Type(typeCode) {
+	switch entryType {
 	case entry.TypeMPToken:
 		holding, err := state.ParseMPToken(raw)
 		if err != nil {
@@ -650,7 +650,7 @@ func vaultAsset(view state.LedgerView, vaultID [32]byte) (tx.Asset, ter.Result) 
 	if err != nil || raw == nil {
 		return tx.Asset{}, ter.TefINTERNAL
 	}
-	decoded := new(ledgerfields.Vault)
+	decoded := new(entry.Vault)
 	if err := decoded.Decode(raw); err != nil {
 		return tx.Asset{}, ter.TefINTERNAL
 	}

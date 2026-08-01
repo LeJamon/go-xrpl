@@ -15,10 +15,21 @@ const (
 	maxTickSize uint8 = 16
 )
 
-// offerNativeDrops finalizes a muldiv-round magnitude as an XRP-drops Amount,
-// delegating to the shared state native-round tail.
-func offerNativeDrops(amount uint64, offset int, resultNegative, roundUp, addSlop, strict bool) tx.Amount {
-	return tx.NewXRPAmount(state.NativeRoundDrops(amount, offset, resultNegative, roundUp, addSlop, strict))
+func offerNativeDropsWithNumberContext(
+	amount uint64,
+	offset int,
+	resultNegative, roundUp, addSlop, strict bool,
+	numberContext state.NumberContext,
+) tx.Amount {
+	return tx.NewXRPAmount(state.NativeRoundDropsWithNumberContext(
+		amount,
+		offset,
+		resultNegative,
+		roundUp,
+		addSlop,
+		strict,
+		numberContext,
+	))
 }
 
 // offerDivRound divides num by den using rippled's divRound (non-strict)
@@ -26,6 +37,24 @@ func offerNativeDrops(amount uint64, offset int, resultNegative, roundUp, addSlo
 // canonicalize core is shared with the state package; the native (XRP-drops)
 // path and the zero-returns-zero contract are offer-layer specifics.
 func offerDivRound(num, den tx.Amount, native bool, currency, issuer string, roundUp bool) tx.Amount {
+	return offerDivRoundWithNumberContext(
+		num,
+		den,
+		native,
+		currency,
+		issuer,
+		roundUp,
+		state.NewNumberContext(state.MantissaScaleSmall, false),
+	)
+}
+
+func offerDivRoundWithNumberContext(
+	num, den tx.Amount,
+	native bool,
+	currency, issuer string,
+	roundUp bool,
+	numberContext state.NumberContext,
+) tx.Amount {
 	if den.IsZero() || num.IsZero() {
 		if native {
 			return tx.NewXRPAmount(0)
@@ -40,17 +69,45 @@ func offerDivRound(num, den tx.Amount, native bool, currency, issuer string, rou
 	amount := state.DivMantissas(numVal, denVal, addSlop)
 	offset := numOff - denOff - 17
 	if native {
-		return offerNativeDrops(amount, offset, resultNegative, roundUp, addSlop, false)
+		return offerNativeDropsWithNumberContext(amount, offset, resultNegative, roundUp, addSlop, false, numberContext)
 	}
 	if addSlop {
 		amount, offset = state.CanonicalizeRoundIOUOverflow(amount, offset)
 	}
-	return state.FinalizeRoundIOU(amount, offset, resultNegative, roundUp, currency, issuer, 0, false)
+	return state.FinalizeRoundIOUWithNumberContext(
+		amount,
+		offset,
+		resultNegative,
+		roundUp,
+		currency,
+		issuer,
+		0,
+		false,
+		numberContext,
+	)
 }
 
 // offerDivRoundStrict divides num by den using rippled's divRoundStrict
 // algorithm with native-aware canonicalization.
 func offerDivRoundStrict(num, den tx.Amount, native bool, currency, issuer string, roundUp bool) tx.Amount {
+	return offerDivRoundStrictWithNumberContext(
+		num,
+		den,
+		native,
+		currency,
+		issuer,
+		roundUp,
+		state.NewNumberContext(state.MantissaScaleSmall, false),
+	)
+}
+
+func offerDivRoundStrictWithNumberContext(
+	num, den tx.Amount,
+	native bool,
+	currency, issuer string,
+	roundUp bool,
+	numberContext state.NumberContext,
+) tx.Amount {
 	if den.IsZero() || num.IsZero() {
 		if native {
 			return tx.NewXRPAmount(0)
@@ -65,7 +122,7 @@ func offerDivRoundStrict(num, den tx.Amount, native bool, currency, issuer strin
 	amount := state.DivMantissas(numVal, denVal, addSlop)
 	offset := numOff - denOff - 17
 	if native {
-		return offerNativeDrops(amount, offset, resultNegative, roundUp, addSlop, true)
+		return offerNativeDropsWithNumberContext(amount, offset, resultNegative, roundUp, addSlop, true, numberContext)
 	}
 	if addSlop {
 		amount, offset = state.CanonicalizeRoundIOUOverflow(amount, offset)
@@ -74,12 +131,40 @@ func offerDivRoundStrict(num, den tx.Amount, native bool, currency, issuer strin
 	if roundUp != resultNegative {
 		mode = state.RoundUpward
 	}
-	return state.FinalizeRoundIOU(amount, offset, resultNegative, roundUp, currency, issuer, mode, true)
+	return state.FinalizeRoundIOUWithNumberContext(
+		amount,
+		offset,
+		resultNegative,
+		roundUp,
+		currency,
+		issuer,
+		mode,
+		true,
+		numberContext,
+	)
 }
 
 // offerMulRound multiplies v1 by v2 using rippled's mulRound (non-strict)
 // algorithm with native-aware canonicalization.
 func offerMulRound(v1, v2 tx.Amount, native bool, currency, issuer string, roundUp bool) tx.Amount {
+	return offerMulRoundWithNumberContext(
+		v1,
+		v2,
+		native,
+		currency,
+		issuer,
+		roundUp,
+		state.NewNumberContext(state.MantissaScaleSmall, false),
+	)
+}
+
+func offerMulRoundWithNumberContext(
+	v1, v2 tx.Amount,
+	native bool,
+	currency, issuer string,
+	roundUp bool,
+	numberContext state.NumberContext,
+) tx.Amount {
 	if v1.IsZero() || v2.IsZero() {
 		if native {
 			return tx.NewXRPAmount(0)
@@ -94,31 +179,89 @@ func offerMulRound(v1, v2 tx.Amount, native bool, currency, issuer string, round
 	amount := state.MulMantissas(value1, value2, addSlop)
 	offset := offset1 + offset2 + 14
 	if native {
-		return offerNativeDrops(amount, offset, resultNegative, roundUp, addSlop, false)
+		return offerNativeDropsWithNumberContext(amount, offset, resultNegative, roundUp, addSlop, false, numberContext)
 	}
 	if addSlop {
 		amount, offset = state.CanonicalizeRoundIOUOverflow(amount, offset)
 	}
-	return state.FinalizeRoundIOU(amount, offset, resultNegative, roundUp, currency, issuer, 0, false)
+	return state.FinalizeRoundIOUWithNumberContext(
+		amount,
+		offset,
+		resultNegative,
+		roundUp,
+		currency,
+		issuer,
+		0,
+		false,
+		numberContext,
+	)
 }
 
 func offerMulRoundLike(v1, v2, resultAsset tx.Amount, roundUp bool) tx.Amount {
+	return offerMulRoundLikeWithNumberContext(
+		v1,
+		v2,
+		resultAsset,
+		roundUp,
+		state.NewNumberContext(state.MantissaScaleSmall, false),
+	)
+}
+
+func offerMulRoundLikeWithNumberContext(
+	v1, v2, resultAsset tx.Amount,
+	roundUp bool,
+	numberContext state.NumberContext,
+) tx.Amount {
 	if !resultAsset.IsMPT() {
-		return offerMulRound(v1, v2, resultAsset.IsNative(), resultAsset.Currency, resultAsset.Issuer, roundUp)
+		return offerMulRoundWithNumberContext(
+			v1,
+			v2,
+			resultAsset.IsNative(),
+			resultAsset.Currency,
+			resultAsset.Issuer,
+			roundUp,
+			numberContext,
+		)
 	}
-	return newMPTAmountLike(resultAsset, state.MulRoundMPT(v1, v2, roundUp))
+	return newMPTAmountLike(resultAsset, state.MulRoundMPTWithNumberContext(v1, v2, numberContext, roundUp))
 }
 
 func offerDivRoundStrictLike(num, den, resultAsset tx.Amount, roundUp bool) tx.Amount {
+	return offerDivRoundStrictLikeWithNumberContext(
+		num,
+		den,
+		resultAsset,
+		roundUp,
+		state.NewNumberContext(state.MantissaScaleSmall, false),
+	)
+}
+
+func offerDivRoundStrictLikeWithNumberContext(
+	num, den, resultAsset tx.Amount,
+	roundUp bool,
+	numberContext state.NumberContext,
+) tx.Amount {
 	if !resultAsset.IsMPT() {
-		return offerDivRoundStrict(num, den, resultAsset.IsNative(), resultAsset.Currency, resultAsset.Issuer, roundUp)
+		return offerDivRoundStrictWithNumberContext(
+			num,
+			den,
+			resultAsset.IsNative(),
+			resultAsset.Currency,
+			resultAsset.Issuer,
+			roundUp,
+			numberContext,
+		)
 	}
-	return newMPTAmountLike(resultAsset, state.DivRoundMPTStrict(num, den, roundUp))
+	return newMPTAmountLike(resultAsset, state.DivRoundMPTStrictWithNumberContext(num, den, numberContext, roundUp))
 }
 
 // applyTickSize applies tick size rounding to offer amounts.
 // Reference: rippled CreateOffer.cpp lines 643-685
 func applyTickSize(view tx.LedgerView, takerPays, takerGets tx.Amount, bSell bool, rules *amendment.Rules, numberContexts ...state.NumberContext) (tx.Amount, tx.Amount) {
+	numberContext := tx.NumberContextForRules(rules)
+	if len(numberContexts) > 0 {
+		numberContext = numberContexts[0]
+	}
 	tickSize := maxTickSize
 
 	if !takerPays.IsNative() && !takerPays.IsMPT() {
@@ -142,17 +285,23 @@ func applyTickSize(view tx.LedgerView, takerPays, takerGets tx.Amount, bSell boo
 
 	// Apply tick size rounding
 	// Reference: lines 660-685
-	quality := state.CalculateQuality(takerGets, takerPays)
+	quality := state.CalculateQualityWithNumberContext(takerGets, takerPays, numberContext)
 	roundedQuality := roundToTickSize(quality, tickSize)
 
 	if bSell {
 		// Round TakerPays
 		if !takerPays.IsMPT() {
-			takerPays = multiplyByQuality(takerGets, roundedQuality, takerPays.Currency, takerPays.Issuer, rules, numberContexts...)
+			takerPays = multiplyByQuality(takerGets, roundedQuality, takerPays.Currency, takerPays.Issuer, rules, numberContext)
 		}
 	} else if !takerGets.IsMPT() {
 		// Round TakerGets
-		takerGets = divideByQuality(takerPays, roundedQuality, takerGets.Currency, takerGets.Issuer)
+		takerGets = divideByQualityWithNumberContext(
+			takerPays,
+			roundedQuality,
+			takerGets.Currency,
+			takerGets.Issuer,
+			numberContext,
+		)
 	}
 
 	return takerPays, takerGets
@@ -240,6 +389,10 @@ func rateAmountFromQuality(quality uint64) tx.Amount {
 // multiply(amount, rate, asset). The result type is determined by currency/issuer
 // parameters.
 func multiplyByQuality(amount tx.Amount, quality uint64, currency, issuer string, rules *amendment.Rules, numberContexts ...state.NumberContext) tx.Amount {
+	numberContext := tx.NumberContextForRules(rules)
+	if len(numberContexts) > 0 {
+		numberContext = numberContexts[0]
+	}
 	native := currency == "" || currency == "XRP"
 	if quality == 0 || amount.IsZero() {
 		if native {
@@ -250,10 +403,6 @@ func multiplyByQuality(amount tx.Amount, quality uint64, currency, issuer string
 
 	if rules != nil && rules.Enabled(amendment.FeatureFixUniversalNumber) {
 		rate := rateAmountFromQuality(quality)
-		numberContext := tx.NumberContextForRules(rules)
-		if len(numberContexts) > 0 {
-			numberContext = numberContexts[0]
-		}
 		prod := numberContext.FromAmount(amount, state.RoundToNearest).
 			Mul(numberContext.FromAmount(rate, state.RoundToNearest))
 		prototype := tx.NewIssuedAmount(0, -100, currency, issuer)
@@ -270,9 +419,9 @@ func multiplyByQuality(amount tx.Amount, quality uint64, currency, issuer string
 	mantissa := state.MulMantissas(value1, value2, false) + 7
 	offset := offset1 + offset2 + 14
 	if native {
-		return offerNativeDrops(mantissa, offset, resultNegative, false, false, false)
+		return offerNativeDropsWithNumberContext(mantissa, offset, resultNegative, false, false, false, numberContext)
 	}
-	return state.FinalizeRoundIOU(
+	return state.FinalizeRoundIOUWithNumberContext(
 		mantissa,
 		offset,
 		resultNegative,
@@ -281,6 +430,7 @@ func multiplyByQuality(amount tx.Amount, quality uint64, currency, issuer string
 		issuer,
 		state.RoundToNearest,
 		true,
+		numberContext,
 	)
 }
 
@@ -289,7 +439,12 @@ func multiplyByQuality(amount tx.Amount, quality uint64, currency, issuer string
 // nearest (ties to even). This is the same core GetRate uses, so the offer's
 // tick-rounded amount and the quality recomputed from it stay consistent.
 // The result type is determined by currency/issuer parameters.
-func divideByQuality(amount tx.Amount, quality uint64, currency, issuer string) tx.Amount {
+func divideByQualityWithNumberContext(
+	amount tx.Amount,
+	quality uint64,
+	currency, issuer string,
+	numberContext state.NumberContext,
+) tx.Amount {
 	native := currency == "" || currency == "XRP"
 	if quality == 0 || amount.IsZero() {
 		if native {
@@ -306,7 +461,17 @@ func divideByQuality(amount tx.Amount, quality uint64, currency, issuer string) 
 	mantissa := state.DivMantissas(numVal, denVal, false) + 5
 	offset := numOff - denOff - 17
 	if native {
-		return offerNativeDrops(mantissa, offset, resultNegative, false, false, false)
+		return offerNativeDropsWithNumberContext(mantissa, offset, resultNegative, false, false, false, numberContext)
 	}
-	return state.FinalizeRoundIOU(mantissa, offset, resultNegative, false, currency, issuer, state.RoundToNearest, true)
+	return state.FinalizeRoundIOUWithNumberContext(
+		mantissa,
+		offset,
+		resultNegative,
+		false,
+		currency,
+		issuer,
+		state.RoundToNearest,
+		true,
+		numberContext,
+	)
 }

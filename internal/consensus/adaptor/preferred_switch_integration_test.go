@@ -164,13 +164,13 @@ func TestAcquiredValidatedTipSurvivesRecoveryTimerTick(t *testing.T) {
 	targetHeader := stale.Header()
 	targetHeader.LedgerIndex = stale.Sequence() + 5
 	targetHeader.ParentHash = [32]byte{0xA4}
-	targetHeader.Hash = [32]byte{0xA5}
 	targetHeader.AccountHash = stateRoot
 	targetHeader.TxHash = txRoot
 	targetHeader.ParentCloseTime = time.Now().Add(-4 * time.Second)
 	targetHeader.CloseTime = time.Now().Add(-2 * time.Second)
 	targetHeader.CloseTimeResolution = 10
 	targetHeader.Validated = false
+	targetHeader.Hash = header.CalculateHash(targetHeader)
 
 	require.NoError(t, svc.StoreLedgerWithState(t.Context(), &targetHeader, stateMap, txMap))
 	validation := &consensus.Validation{
@@ -228,13 +228,13 @@ func TestAcquiredValidatedTipSurvivesMovingRecoveryTarget(t *testing.T) {
 	targetHeader := stale.Header()
 	targetHeader.LedgerIndex = stale.Sequence() + 5
 	targetHeader.ParentHash = [32]byte{0xB4}
-	targetHeader.Hash = [32]byte{0xB5}
 	targetHeader.AccountHash = stateRoot
 	targetHeader.TxHash = txRoot
 	targetHeader.ParentCloseTime = time.Now().Add(-4 * time.Second)
 	targetHeader.CloseTime = time.Now().Add(-2 * time.Second)
 	targetHeader.CloseTimeResolution = 10
 	targetHeader.Validated = false
+	targetHeader.Hash = header.CalculateHash(targetHeader)
 
 	require.NoError(t, svc.StoreLedgerWithState(t.Context(), &targetHeader, stateMap, txMap))
 	validation := &consensus.Validation{

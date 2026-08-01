@@ -222,7 +222,7 @@ func TestLedger_MutatorsRejectedWhenImmutable(t *testing.T) {
 	if err := l.Close(l.CloseTime(), 0); err != nil {
 		t.Fatalf("Close: %v", err)
 	}
-	if l.State() == StateOpen {
+	if l.IsOpen() {
 		t.Fatalf("ledger still StateOpen after Close")
 	}
 

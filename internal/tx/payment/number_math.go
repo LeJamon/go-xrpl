@@ -15,7 +15,7 @@ func numberMathForRules(rules *amendment.Rules) numberMath {
 }
 
 func legacyNumberMath() numberMath {
-	return numberMath{ctx: state.NewNumberContext(state.MantissaScaleSmall)}
+	return numberMath{ctx: state.NewNumberContext(state.MantissaScaleSmall, false)}
 }
 
 func (m numberMath) int(value int64) state.XRPLNumber {

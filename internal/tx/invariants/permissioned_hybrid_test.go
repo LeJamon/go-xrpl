@@ -7,7 +7,7 @@ import (
 
 	"github.com/LeJamon/go-xrpl/amendment"
 	"github.com/LeJamon/go-xrpl/internal/ledger/state"
-	"github.com/LeJamon/go-xrpl/internal/tx/ledgerfields"
+	"github.com/LeJamon/go-xrpl/ledger/entry"
 )
 
 // cleanup313Rules returns a Rules with only fixCleanup3_1_3 enabled, for
@@ -59,7 +59,7 @@ func makeRawHybridOfferBlob(t *testing.T, domainID *[32]byte, additionalBooks *[
 	t.Helper()
 
 	zeroHash := strings.Repeat("0", 64)
-	offer := &ledgerfields.Offer{}
+	offer := &entry.Offer{}
 	offer.SetAccount("rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh")
 	offer.SetSequence(7)
 	offer.SetTakerPays(map[string]any{
@@ -136,7 +136,7 @@ func TestValidPermissionedDEX_HybridDegenerateShapes(t *testing.T) {
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			blob := makeRawHybridOfferBlob(t, tc.domainID, tc.books)
-			entries := []InvariantEntry{{EntryType: "Offer", After: blob}}
+			entries := []InvariantEntry{{EntryType: entry.TypeOffer, After: blob}}
 
 			if v := checkValidPermissionedDEX(tx, TesSUCCESS, entries, nil, nil); (v != nil) != tc.wantOld {
 				t.Fatalf("pre-amendment: got violation=%v, want %v (%v)", v != nil, tc.wantOld, v)
@@ -169,7 +169,7 @@ func TestValidPermissionedDEX_HybridAdditionalBooks(t *testing.T) {
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			blob := makeHybridOfferBlob(t, tc.withDomain, tc.withAddlBooks)
-			entries := []InvariantEntry{{EntryType: "Offer", After: blob}}
+			entries := []InvariantEntry{{EntryType: entry.TypeOffer, After: blob}}
 			// The serializer emits at most one AdditionalBooks entry, so a
 			// well-formed hybrid holds exactly one book: both eras agree.
 			for _, rules := range []*amendment.Rules{nil, cleanup313Rules()} {

@@ -10,7 +10,7 @@ import (
 func TestMigrateRotationStateRequiresOwnershipConfirmation(t *testing.T) {
 	cfg := &config.Config{}
 	cfg.NodeDB.Path = t.TempDir()
-	command := newMigrateRotationStateCommand()
+	command := (&application{}).newMigrateRotationStateCommand()
 	err := runMigrateRotationState(command, cfg, false)
 	require.ErrorContains(t, err, "--confirm-generation-ownership")
 }

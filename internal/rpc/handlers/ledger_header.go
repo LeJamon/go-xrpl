@@ -64,7 +64,7 @@ func (m *LedgerHeaderMethod) Handle(ctx *types.RpcContext, params json.RawMessag
 		AccountHash:         targetLedger.StateMapHash(),
 		Drops:               targetLedger.TotalDrops(),
 		CloseFlags:          targetLedger.CloseFlags(),
-		CloseTimeResolution: targetLedger.CloseTimeResolution(),
+		CloseTimeResolution: uint8(targetLedger.CloseTimeResolution()),
 		CloseTime:           protocol.FromRippleTime(uint32(max(targetLedger.CloseTime(), 0))),
 	}, false)
 	response["ledger_data"] = strings.ToUpper(hex.EncodeToString(ledgerData))

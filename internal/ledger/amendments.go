@@ -6,7 +6,6 @@ package ledger
 
 import (
 	"context"
-	"encoding/hex"
 	"fmt"
 
 	"github.com/LeJamon/go-xrpl/amendment"
@@ -250,13 +249,4 @@ func LoadAmendmentsFromLedgerEntry(data []byte) (*amendment.Rules, error) {
 	// Retired amendments are enabled independently of their serialized presence.
 	enabledIDs = append(enabledIDs, amendment.PermanentlyEnabledIDs()...)
 	return amendment.NewRules(enabledIDs), nil
-}
-
-// LoadAmendmentsFromHex parses a hex-encoded Amendments ledger entry.
-func LoadAmendmentsFromHex(hexData string) (*amendment.Rules, error) {
-	data, err := hex.DecodeString(hexData)
-	if err != nil {
-		return nil, fmt.Errorf("failed to decode hex: %w", err)
-	}
-	return LoadAmendmentsFromLedgerEntry(data)
 }

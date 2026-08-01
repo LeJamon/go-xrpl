@@ -41,7 +41,11 @@ func TestGetLedgerForQuerySelectors(t *testing.T) {
 				if got == test.want {
 					t.Fatalf("getLedgerForQuery(%q) returned the mutable open ledger", test.selection)
 				}
-				if got.Sequence() != test.want.Sequence() || got.Hash() != test.want.Hash() || got.State() != test.want.State() {
+				if got.Sequence() != test.want.Sequence() ||
+					got.Hash() != test.want.Hash() ||
+					got.IsOpen() != test.want.IsOpen() ||
+					got.IsClosed() != test.want.IsClosed() ||
+					got.IsValidated() != test.want.IsValidated() {
 					t.Fatalf("getLedgerForQuery(%q) snapshot does not match the selected open ledger", test.selection)
 				}
 			} else if got != test.want {
@@ -86,8 +90,10 @@ func TestGetLedgerForQueryInvalidSelectors(t *testing.T) {
 
 func TestGetLedgerForQueryMissingTargets(t *testing.T) {
 	svc := &Service{
-		ledgerHistory: make(map[uint32]*ledger.Ledger),
-		ledgerByHash:  make(map[[32]byte]uint32),
+		historyComponent: historyComponent{
+			ledgerHistory: make(map[uint32]*ledger.Ledger),
+			ledgerByHash:  make(map[[32]byte]uint32),
+		},
 	}
 	missingHash := [32]byte{0xff}
 	tests := []struct {

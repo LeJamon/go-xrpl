@@ -10,7 +10,6 @@ import (
 	"github.com/LeJamon/go-xrpl/internal/tx/payment"
 	"github.com/LeJamon/go-xrpl/internal/tx/ter"
 	"github.com/LeJamon/go-xrpl/keylet"
-	"github.com/LeJamon/go-xrpl/ledger/entry"
 	"github.com/LeJamon/go-xrpl/protocol"
 )
 
@@ -209,7 +208,7 @@ func (pr *PathRequest) Execute(ledger tx.LedgerView) *PathRequestResult {
 			srcAmount = state.NewXRPAmountFromInt(int64(99999999999)) // Max XRP
 		} else if srcIssue.IsMPT {
 			srcAmount = state.NewMPTAmountWithIssuanceID(
-				int64(entry.MaxMPTokenAmount),
+				int64(protocol.MaxMPTokenAmount),
 				state.EncodeAccountIDSafe(srcIssue.Issuer),
 				mptutil.EncodeID(srcIssue.MPTID),
 			)

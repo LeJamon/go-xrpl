@@ -462,7 +462,8 @@ func TestAdaptor_FastLoadedLedgerIsReplacedBySameHeightQuorum(t *testing.T) {
 	require.NoError(t, err)
 	replacementHeader := loaded.Header()
 	replacementHeader.Validated = false
-	replacementHeader.Hash[0] ^= 0xFF
+	replacementHeader.CloseTime = replacementHeader.CloseTime.Add(time.Second)
+	replacementHeader.Hash = header.CalculateHash(replacementHeader)
 	replacementHash := replacementHeader.Hash
 	initialCandidate, err := svc.BootstrapLedgerWithState(
 		context.Background(),

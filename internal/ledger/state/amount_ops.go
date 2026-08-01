@@ -22,3 +22,10 @@ func EncodeAccountIDSafe(accountID [20]byte) string {
 func CalculateQuality(takerPays, takerGets Amount) uint64 {
 	return GetRate(takerPays, takerGets)
 }
+
+func CalculateQualityWithNumberContext(
+	takerPays, takerGets Amount,
+	ctx NumberContext,
+) uint64 {
+	return GetRateWithNumberContext(takerPays, takerGets, ctx)
+}

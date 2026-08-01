@@ -216,25 +216,25 @@ func isOnlyLiquidityProvider(view tx.LedgerView, lptCurrency string, ammAccountI
 			if err != nil || itemData == nil {
 				return false, ter.TecINTERNAL
 			}
-			entryType, err := state.GetLedgerEntryType(itemData)
+			entryType, err := state.DecodeType(itemData)
 			if err != nil {
 				return false, ter.TecINTERNAL
 			}
 
-			if entry.Type(entryType) == entry.TypeAMM {
+			if entryType == entry.TypeAMM {
 				if hasAMM {
 					return false, ter.TecINTERNAL
 				}
 				hasAMM = true
 				continue
 			}
-			if entry.Type(entryType) == entry.TypeMPToken {
+			if entryType == entry.TypeMPToken {
 				if nMPT++; nMPT > 2 {
 					return false, ter.TecINTERNAL
 				}
 				continue
 			}
-			if entry.Type(entryType) != entry.TypeRippleState {
+			if entryType != entry.TypeRippleState {
 				return false, ter.TecINTERNAL
 			}
 

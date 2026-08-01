@@ -21,6 +21,35 @@ var (
 	ErrManifestFrameMaterialized = errors.New("manifest frame already materialized")
 )
 
+type manifestSpoolLocalError struct {
+	operation string
+	err       error
+}
+
+func (e *manifestSpoolLocalError) Error() string {
+	return fmt.Sprintf("%s: %v", e.operation, e.err)
+}
+
+func (e *manifestSpoolLocalError) Unwrap() error {
+	return e.err
+}
+
+type manifestSpoolWriter struct {
+	writer io.Writer
+	err    error
+}
+
+func (w *manifestSpoolWriter) Write(p []byte) (int, error) {
+	n, err := w.writer.Write(p)
+	if err == nil && n != len(p) {
+		err = io.ErrShortWrite
+	}
+	if err != nil && w.err == nil {
+		w.err = err
+	}
+	return n, err
+}
+
 // ManifestFrame is a disk-backed inbound manifest payload.
 type ManifestFrame struct {
 	mu sync.Mutex
@@ -155,7 +184,7 @@ func spoolManifestFrame(
 ) (*ManifestFrame, error) {
 	file, err := os.CreateTemp(dir, "goxrpl-manifests-*")
 	if err != nil {
-		return nil, fmt.Errorf("create manifest spool: %w", err)
+		return nil, &manifestSpoolLocalError{operation: "create manifest spool", err: err}
 	}
 	path := file.Name()
 	cleanup := func() {
@@ -163,26 +192,37 @@ func spoolManifestFrame(
 		_ = os.Remove(path)
 	}
 
-	n, copyErr := io.CopyBuffer(
-		file,
-		io.LimitReader(r, int64(header.PayloadSize)),
-		make([]byte, manifestSpoolBufferSize),
-	)
+	copyErr := copyManifestPayload(file, r, header.PayloadSize)
 	closeErr := file.Close()
 	if copyErr != nil {
 		cleanup()
-		return nil, fmt.Errorf("spool manifest payload: %w", copyErr)
-	}
-	if n != int64(header.PayloadSize) {
-		cleanup()
-		return nil, fmt.Errorf("spool manifest payload: copied %d of %d bytes: %w",
-			n, header.PayloadSize, io.ErrUnexpectedEOF)
+		return nil, copyErr
 	}
 	if closeErr != nil {
 		cleanup()
-		return nil, fmt.Errorf("close manifest spool: %w", closeErr)
+		return nil, &manifestSpoolLocalError{operation: "close manifest spool", err: closeErr}
 	}
 	return newManifestFrame(path, header, budget), nil
+}
+
+func copyManifestPayload(dst io.Writer, src io.Reader, size uint32) error {
+	writer := &manifestSpoolWriter{writer: dst}
+	n, err := io.CopyBuffer(
+		writer,
+		io.LimitReader(src, int64(size)),
+		make([]byte, manifestSpoolBufferSize),
+	)
+	if writer.err != nil {
+		return &manifestSpoolLocalError{operation: "spool manifest payload", err: writer.err}
+	}
+	if err != nil {
+		return fmt.Errorf("spool manifest payload: %w", err)
+	}
+	if n != int64(size) {
+		return fmt.Errorf("spool manifest payload: copied %d of %d bytes: %w",
+			n, size, io.ErrUnexpectedEOF)
+	}
+	return nil
 }
 
 func prepareManifestSpoolDir(dataDir string) (string, error) {

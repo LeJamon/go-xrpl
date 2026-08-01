@@ -44,7 +44,11 @@ func TestGetOwnerNode_TicketSequenceWith0x34(t *testing.T) {
 		t.Fatal("expected a 0x34 byte in the serialized ticket to exercise the byte-scan hazard")
 	}
 
-	if got := GetOwnerNode(data); got != wantOwnerNode {
+	got, err := GetOwnerNode(data)
+	if err != nil {
+		t.Fatalf("GetOwnerNode: %v", err)
+	}
+	if got != wantOwnerNode {
 		t.Fatalf("GetOwnerNode = %#016x, want %#016x", got, wantOwnerNode)
 	}
 }
@@ -55,9 +59,7 @@ func TestGetOwnerNode_TicketSequenceWith0x34(t *testing.T) {
 // from rippled's divide(offerIn, offerOut) = muldiv(num, 10^17, den) + 5,
 // canonicalized into the [10^15, 10^16) mantissa band.
 func TestGetRate_RoundToNearest(t *testing.T) {
-	prev := GetNumberSwitchover()
-	SetNumberSwitchover(true)
-	defer SetNumberSwitchover(prev)
+	ctx := NewNumberContext(MantissaScaleSmall, true)
 
 	rate := func(exp int, mantissa uint64) uint64 {
 		return uint64(exp+100)<<56 | mantissa
@@ -90,14 +92,18 @@ func TestGetRate_RoundToNearest(t *testing.T) {
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			if got := GetRate(tc.offerOut, tc.offerIn); got != tc.want {
+			if got := GetRateWithNumberContext(tc.offerOut, tc.offerIn, ctx); got != tc.want {
 				t.Fatalf("GetRate = %#x, want %#x", got, tc.want)
 			}
 		})
 	}
 
 	// A zero operand yields a zero rate ("offer too good" / undefined).
-	if got := GetRate(NewXRPAmountFromInt(0), NewXRPAmountFromInt(1)); got != 0 {
+	if got := GetRateWithNumberContext(
+		NewXRPAmountFromInt(0),
+		NewXRPAmountFromInt(1),
+		ctx,
+	); got != 0 {
 		t.Fatalf("GetRate(0, 1) = %#x, want 0", got)
 	}
 }

@@ -8,14 +8,14 @@ import (
 	"github.com/spf13/cobra"
 )
 
-func newMigrateRotationStateCommand() *cobra.Command {
+func (a *application) newMigrateRotationStateCommand() *cobra.Command {
 	var confirmOwnership bool
 	command := &cobra.Command{
 		Use:   "migrate-rotation-state",
 		Short: "Migrate an offline version-1 rotating-store manifest",
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			cfg, err := requireConfig()
+			cfg, err := a.requireConfig(true)
 			if err != nil {
 				return err
 			}
@@ -46,8 +46,4 @@ func runMigrateRotationState(cmd *cobra.Command, cfg *config.Config, confirmOwne
 	}
 	fmt.Fprintln(cmd.OutOrStdout(), "Rotation state migration completed.")
 	return nil
-}
-
-func init() {
-	rootCmd.AddCommand(newMigrateRotationStateCommand())
 }

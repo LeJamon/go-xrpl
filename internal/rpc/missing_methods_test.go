@@ -416,6 +416,7 @@ func TestLedgerCleanerMethod(t *testing.T) {
 				MinLedger:    5,
 				MaxLedger:    9,
 				CheckNodes:   true,
+				FixTxns:      true,
 				MissingNodes: 2,
 				Failures:     1,
 			}
@@ -433,12 +434,37 @@ func TestLedgerCleanerMethod(t *testing.T) {
 		require.True(t, ok)
 		assert.Equal(t, "running", resp["status"])
 		assert.Equal(t, true, resp["check_nodes"])
+		assert.Equal(t, true, resp["fix_txns"])
 		assert.Equal(t, uint64(2), resp["missing_nodes"])
 		assert.Equal(t, 1, resp["fail_counts"])
 		assert.Equal(t, "Ledger cleaner configured", resp["message"])
-		assert.True(t, gotParams.Full)
+		require.NotNil(t, gotParams.Full)
+		assert.True(t, *gotParams.Full)
 		require.NotNil(t, gotParams.MinLedger)
 		assert.Equal(t, uint32(5), *gotParams.MinLedger)
+	})
+
+	t.Run("Preserves explicit false overrides", func(t *testing.T) {
+		var gotParams types.LedgerCleanerParams
+		services.LedgerCleanerConfigure = func(p types.LedgerCleanerParams) types.LedgerCleanerStatus {
+			gotParams = p
+			return types.LedgerCleanerStatus{State: "running"}
+		}
+		ctx := &types.RpcContext{
+			Context:    context.Background(),
+			Role:       types.RoleAdmin,
+			ApiVersion: types.ApiVersion1,
+			Services:   services,
+		}
+
+		_, rpcErr := method.Handle(ctx, json.RawMessage(
+			`{"ledger":7,"full":true,"fix_txns":false,"check_nodes":false}`,
+		))
+		require.Nil(t, rpcErr)
+		require.NotNil(t, gotParams.FixTxns)
+		require.NotNil(t, gotParams.CheckNodes)
+		assert.False(t, *gotParams.FixTxns)
+		assert.False(t, *gotParams.CheckNodes)
 	})
 
 	t.Run("RequiredCondition is NeedsNetworkConnection", func(t *testing.T) {

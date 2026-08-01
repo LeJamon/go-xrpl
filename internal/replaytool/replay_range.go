@@ -12,7 +12,6 @@ import (
 	"time"
 
 	"github.com/LeJamon/go-xrpl/amendment"
-	"github.com/LeJamon/go-xrpl/internal/observability"
 	txengine "github.com/LeJamon/go-xrpl/internal/tx/engine"
 
 	"github.com/spf13/cobra"
@@ -57,6 +56,12 @@ type replayRangeRunner struct {
 
 // newReplayRangeCmd builds the `replay-range` command and its flags.
 func newReplayRangeCmd() *cobra.Command {
+	return newReplayRangeCmdWithRun(func(ctx context.Context, runner *replayRangeRunner) error {
+		return runner.run(ctx)
+	})
+}
+
+func newReplayRangeCmdWithRun(run func(context.Context, *replayRangeRunner) error) *cobra.Command {
 	r := &replayRangeRunner{}
 	cmd := &cobra.Command{
 		Use:   "replay-range",
@@ -123,9 +128,9 @@ Example:
     xrpld replay-range --from 3275000 --to 3285000 --legacy-paychan-owner-dir-gate --paychan-owner-dir-first-fixed-ledger 3280000
     xrpld replay-range --from 99226370 --to 99236370 --checkpoint-dir ./ckpt
     xrpld replay-range --from 99226370 --to 99236370 --checkpoint-dir ./ckpt --resume-from 99230000`,
-		RunE: func(cmd *cobra.Command, args []string) error {
+		RunE: func(cmd *cobra.Command, _ []string) error {
 			r.out = cmd.OutOrStdout()
-			return r.run()
+			return run(cmd.Context(), r)
 		},
 	}
 
@@ -169,7 +174,7 @@ type RangeReplayStats struct {
 	FailureReason     string
 }
 
-func (r *replayRangeRunner) run() error {
+func (r *replayRangeRunner) run(parentCtx context.Context) (runErr error) {
 	if err := r.validateFlags(); err != nil {
 		return err
 	}
@@ -190,19 +195,24 @@ func (r *replayRangeRunner) run() error {
 		startLedger = r.resumeFrom
 	}
 
-	ctx := context.Background()
-	startTime := time.Now()
-
-	// Opt-in profiling: GOXRPL_PPROF=:6060 exposes pprof for this run so the
-	// CPU-vs-IO split of a replay can be measured. Off by default.
-	if addr := os.Getenv("GOXRPL_PPROF"); addr != "" {
-		go func() {
-			if err := observability.StartPProf(addr); err != nil {
-				fmt.Fprintf(r.out, "      WARNING: pprof server failed on %s: %v\n", addr, err)
-			}
-		}()
-		fmt.Fprintf(r.out, "pprof enabled on %s\n", addr)
+	ctx, cancel := context.WithCancelCause(parentCtx)
+	defer cancel(nil)
+	if cause := context.Cause(ctx); cause != nil {
+		return cause
 	}
+
+	profiler, err := startReplayPProf(ctx, cancel)
+	if err != nil {
+		return err
+	}
+	if profiler != nil {
+		fmt.Fprintf(r.out, "pprof enabled on %s\n", profiler.Addr())
+		defer func() {
+			runErr = errors.Join(runErr, profiler.Shutdown())
+		}()
+	}
+
+	startTime := time.Now()
 
 	// The default in-memory state path keeps the whole tree live for the run, so
 	// a higher GC trigger trades RAM for fewer full marks of a mostly-static set.
@@ -297,6 +307,9 @@ func (r *replayRangeRunner) run() error {
 		// Process this block
 		result, newStateMap, err := r.processBlock(ctx, client, currentStateMap, previousSnapshot, targetLedger, fees)
 		if err != nil {
+			if cause := context.Cause(ctx); cause != nil {
+				return cause
+			}
 			stats.FailedAtBlock = targetLedger
 			stats.FailureReason = err.Error()
 			fmt.Fprintf(r.out, "[%d] ERROR: %v\n", targetLedger, err)
@@ -650,7 +663,7 @@ func (r *replayRangeRunner) processBlock(
 		ParentHash:          preSnapshot.LedgerHash,
 		ParentCloseTime:     parentCloseTime,
 		CloseTime:           applicationCloseTime,
-		CloseTimeResolution: postSnapshot.CloseTimeResolution,
+		CloseTimeResolution: uint8(postSnapshot.CloseTimeResolution),
 		CloseFlags:          postSnapshot.CloseFlags,
 		Drops:               preSnapshot.TotalCoins, // Start with parent's total coins
 	}

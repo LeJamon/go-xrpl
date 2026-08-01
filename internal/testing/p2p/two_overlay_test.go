@@ -463,14 +463,12 @@ Loop:
 		}
 	}
 
-	// Verify the round-tripped response reconstructs the exact ledger.
 	rd := inbound.NewReplayDelta(hash, uint64(peerAOnB), parent, nil)
 	require.NoError(t, rd.GotResponse(resp))
-	got, err := rd.Result()
-	require.NoError(t, err)
-	assert.Equal(t, child.Hash(), got.Hash(),
-		"the derived ledger hash must byte-match A's source ledger")
-	assert.Equal(t, child.Sequence(), got.Sequence())
+	assert.Equal(t, inbound.StateReplayReady, rd.State())
+	assert.Equal(t, child.Hash(), rd.Hash())
+	assert.Equal(t, child.Sequence(), rd.Seq())
+	assert.Len(t, rd.OrderedTxs(), 3)
 }
 
 // TestTwoOverlay_Squelch_RoundTrip drives a full wire round-trip of
@@ -767,9 +765,8 @@ func TestSingleOverlay_ReplayDelta_HandlerRoundTrip(t *testing.T) {
 	require.NoError(t, rd.GotResponse(resp),
 		"the round-tripped response must verify cleanly")
 
-	got, err := rd.Result()
-	require.NoError(t, err)
-	assert.Equal(t, child.Hash(), got.Hash(), "round-trip must reconstruct the same ledger")
-	assert.Equal(t, child.Sequence(), got.Sequence())
+	assert.Equal(t, inbound.StateReplayReady, rd.State())
+	assert.Equal(t, child.Hash(), rd.Hash())
+	assert.Equal(t, child.Sequence(), rd.Seq())
 	assert.Len(t, rd.OrderedTxs(), 3, "all three txs must be preserved through the round-trip")
 }

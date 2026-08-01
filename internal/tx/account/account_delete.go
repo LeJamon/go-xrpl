@@ -180,15 +180,14 @@ func (a *AccountDelete) Apply(ctx *tx.ApplyContext) ter.Result {
 		if err != nil || data == nil {
 			return ter.TefBAD_LEDGER
 		}
-		etRaw, err := state.GetLedgerEntryType(data)
+		et, err := state.DecodeType(data)
 		if err != nil {
 			return ter.TecHAS_OBLIGATIONS
 		}
-		et := entry.Type(etRaw)
 		deleter := nonObligationDeleter(et)
 		if deleter == nil {
 			ctx.Log.Error("account delete: undeletable item in owner directory",
-				"entryType", etRaw,
+				"entryType", et,
 			)
 			return ter.TecHAS_OBLIGATIONS
 		}
@@ -295,7 +294,11 @@ func deleteOffer(ctx *tx.ApplyContext, _ keylet.Keylet, ik keylet.Keylet, data [
 }
 
 func deleteTicket(ctx *tx.ApplyContext, ownerDirKey, ik keylet.Keylet, data []byte) ter.Result {
-	if !removeFromDir(ctx, ownerDirKey, state.GetOwnerNode(data), ik.Key, true) {
+	ownerNode, err := state.GetOwnerNode(data)
+	if err != nil {
+		return ter.TefBAD_LEDGER
+	}
+	if !removeFromDir(ctx, ownerDirKey, ownerNode, ik.Key, true) {
 		return ter.TefBAD_LEDGER
 	}
 	if err := ctx.View.Erase(ik); err != nil {

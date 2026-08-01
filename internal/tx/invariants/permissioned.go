@@ -45,7 +45,8 @@ func checkValidPermissionedDomain(tx Transaction, result Result, entries []Invar
 		if afterImage == nil {
 			afterImage = e.Before
 		}
-		if afterImage == nil || state.EntryType(afterImage) != "PermissionedDomain" {
+		afterType, err := state.DecodeType(afterImage)
+		if afterImage == nil || err != nil || afterType != entry.TypePermissionedDomain {
 			continue
 		}
 		pd, err := state.ParsePermissionedDomain(afterImage)
@@ -253,15 +254,19 @@ func checkValidPermissionedDEX(tx Transaction, result Result, entries []Invarian
 			continue
 		}
 
-		switch state.EntryType(image) {
-		case "DirectoryNode":
+		imageType, err := state.DecodeType(image)
+		if err != nil {
+			continue
+		}
+		switch imageType {
+		case entry.TypeDirectoryNode:
 			// Check if the DirNode has a DomainID field.
 			// Reference: rippled lines 1643-1647
 			if domainID, present := extractDomainIDFromBinary(image); present {
 				domains[domainID] = true
 			}
 
-		case "Offer":
+		case entry.TypeOffer:
 			offer, err := state.ParseLedgerOffer(image)
 			if err != nil {
 				return &InvariantViolation{

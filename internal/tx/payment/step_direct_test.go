@@ -114,7 +114,13 @@ func TestSetCacheLimiting_LargeDiffReplacesCache(t *testing.T) {
 				srcDebtDir: DebtDirectionIssues,
 			}
 
-			s.setCacheLimiting(tt.fwdIn, tt.fwdSrcToDst, tt.fwdOut, DebtDirectionRedeems)
+			s.setCacheLimiting(
+				tt.fwdIn,
+				tt.fwdSrcToDst,
+				tt.fwdOut,
+				DebtDirectionRedeems,
+				state.NewNumberContext(state.MantissaScaleSmall, true),
+			)
 
 			if s.cache.in.Compare(tt.wantIn) != 0 {
 				t.Errorf("in: got mant=%d exp=%d, want mant=%d exp=%d",

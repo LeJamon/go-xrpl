@@ -2,7 +2,9 @@ package cleaner
 
 import (
 	"context"
+	"errors"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -61,17 +63,62 @@ func (f *fakeFamily) deleteOneNonRoot(root [32]byte) (deleted [32]byte) {
 
 // fakeSource implements LedgerSource over a fakeFamily and a per-seq root table.
 type fakeSource struct {
-	family   *fakeFamily
-	roots    map[uint32][2][32]byte // seq -> {stateRoot, txRoot}
-	min, max uint32
-	hasRange bool
+	family      *fakeFamily
+	roots       map[uint32][2][32]byte // seq -> {stateRoot, txRoot}
+	min, max    uint32
+	hasRange    bool
+	reacquire   func(context.Context, uint32) error
+	repair      func(context.Context, uint32) error
+	canonical   func(context.Context, uint32) ([32]byte, bool, error)
+	repairIndex func(context.Context, LedgerData) (bool, error)
+	ledger      func(context.Context, uint32) (LedgerData, bool, error)
 }
 
 func (s *fakeSource) AvailableRange() (uint32, uint32, bool) { return s.min, s.max, s.hasRange }
 func (s *fakeSource) Family() shamap.Family                  { return s.family }
-func (s *fakeSource) LedgerRoots(seq uint32) ([32]byte, [32]byte, bool) {
+func (s *fakeSource) Ledger(ctx context.Context, seq uint32) (LedgerData, bool, error) {
+	if s.ledger != nil {
+		return s.ledger(ctx, seq)
+	}
 	r, ok := s.roots[seq]
-	return r[0], r[1], ok
+	if !ok {
+		return LedgerData{}, false, nil
+	}
+	parent := [32]byte{}
+	if seq > 1 {
+		parent[0] = byte(seq - 1)
+	}
+	return LedgerData{
+		Sequence:   seq,
+		Hash:       [32]byte{byte(seq)},
+		ParentHash: parent,
+		StateRoot:  r[0],
+		TxRoot:     r[1],
+	}, true, nil
+}
+func (s *fakeSource) CanonicalHash(ctx context.Context, seq uint32) ([32]byte, bool, error) {
+	if s.canonical != nil {
+		return s.canonical(ctx, seq)
+	}
+	return [32]byte{byte(seq)}, true, nil
+}
+func (s *fakeSource) RepairLedgerIndex(ctx context.Context, info LedgerData) (bool, error) {
+	if s.repairIndex == nil {
+		return false, nil
+	}
+	return s.repairIndex(ctx, info)
+}
+func (s *fakeSource) Reacquire(ctx context.Context, seq uint32) error {
+	if s.reacquire == nil {
+		return nil
+	}
+	return s.reacquire(ctx, seq)
+}
+func (s *fakeSource) RepairTransactions(ctx context.Context, seq uint32) error {
+	if s.repair == nil {
+		return nil
+	}
+	return s.repair(ctx, seq)
 }
 
 // putStateTree builds a state map from keys, flushes it into family, and
@@ -129,6 +176,10 @@ var sampleKeys = []string{
 	"b92891fe4ef6cee585fdc6fda1e09eb4d386363158ec3321b8123e5a772c6ca8",
 }
 
+func boolPtr(v bool) *bool { return &v }
+
+func uint32Ptr(v uint32) *uint32 { return &v }
+
 // waitIdle polls until the cleaner reports idle or the deadline passes.
 func waitIdle(t *testing.T, c *Cleaner) Status {
 	t.Helper()
@@ -140,6 +191,66 @@ func waitIdle(t *testing.T, c *Cleaner) Status {
 		time.Sleep(10 * time.Millisecond)
 	}
 	t.Fatalf("cleaner did not reach idle in time; status=%+v", c.Status())
+	return Status{}
+}
+
+func TestCleaner_ZeroRangeStopsWithoutLedgerAccess(t *testing.T) {
+	tests := []struct {
+		name   string
+		params Params
+	}{
+		{name: "ledger", params: Params{Ledger: uint32Ptr(0)}},
+		{name: "minimum", params: Params{MinLedger: uint32Ptr(0)}},
+		{name: "maximum", params: Params{MaxLedger: uint32Ptr(0)}},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			var ledgerCalls atomic.Int32
+			src := &fakeSource{
+				family:   newFakeFamily(),
+				min:      1,
+				max:      10,
+				hasRange: true,
+				ledger: func(context.Context, uint32) (LedgerData, bool, error) {
+					ledgerCalls.Add(1)
+					return LedgerData{}, false, nil
+				},
+			}
+			c := New(src, nil)
+			c.Start()
+			defer c.Stop()
+
+			c.Clean(test.params)
+			deadline := time.Now().Add(time.Second)
+			for time.Now().Before(deadline) {
+				status := c.Status()
+				if status.State == "idle" {
+					if status.MinLedger != 0 || status.MaxLedger != 0 {
+						t.Fatalf("zero range not cleared: %+v", status)
+					}
+					if calls := ledgerCalls.Load(); calls != 0 {
+						t.Fatalf("ledger calls = %d, want 0", calls)
+					}
+					return
+				}
+				time.Sleep(time.Millisecond)
+			}
+			t.Fatalf("cleaner did not stop zero range: %+v", c.Status())
+		})
+	}
+}
+
+func waitFailure(t *testing.T, c *Cleaner) Status {
+	t.Helper()
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		if s := c.Status(); s.Failures > 0 {
+			return s
+		}
+		time.Sleep(time.Millisecond)
+	}
+	t.Fatalf("cleaner did not report a failure in time; status=%+v", c.Status())
 	return Status{}
 }
 
@@ -158,7 +269,7 @@ func TestCleaner_VerifiesCompleteRange(t *testing.T) {
 	c.Start()
 	defer c.Stop()
 
-	st := c.Clean(Params{Full: true})
+	st := c.Clean(Params{Full: boolPtr(true)})
 	if st.State != "running" {
 		t.Fatalf("expected running after Clean, got %q", st.State)
 	}
@@ -193,17 +304,22 @@ func TestCleaner_DetectsMissingNode(t *testing.T) {
 		hasRange: true,
 	}
 	c := New(src, nil)
+	c.retryDelay = time.Millisecond
 	c.Start()
 	defer c.Stop()
 
-	c.Clean(Params{Full: true})
-	final := waitIdle(t, c)
+	c.Clean(Params{Full: boolPtr(true)})
+	final := waitFailure(t, c)
 	if final.MissingNodes == 0 {
 		t.Errorf("expected missing nodes after deleting one, got 0")
 	}
 	if final.Failures == 0 {
 		t.Errorf("expected failures recorded for an incomplete ledger")
 	}
+	if final.MinLedger != 10 || final.MaxLedger != 10 {
+		t.Fatalf("failed ledger advanced out of range: %+v", final)
+	}
+	c.Clean(Params{Stop: true})
 }
 
 func TestCleaner_ShallowSkipsDeepWalk(t *testing.T) {
@@ -224,7 +340,8 @@ func TestCleaner_ShallowSkipsDeepWalk(t *testing.T) {
 	c.Start()
 	defer c.Stop()
 
-	c.Clean(Params{CheckNodes: false}) // shallow
+	checkNodes := false
+	c.Clean(Params{CheckNodes: &checkNodes}) // shallow
 	final := waitIdle(t, c)
 	if final.MissingNodes != 0 {
 		t.Errorf("shallow check should not walk into the deleted node; missing=%d", final.MissingNodes)
@@ -247,14 +364,17 @@ func TestCleaner_ShallowDetectsMissingRoot(t *testing.T) {
 		hasRange: true,
 	}
 	c := New(src, nil)
+	c.retryDelay = time.Millisecond
 	c.Start()
 	defer c.Stop()
 
-	c.Clean(Params{CheckNodes: false})
-	final := waitIdle(t, c)
+	checkNodes := false
+	c.Clean(Params{CheckNodes: &checkNodes})
+	final := waitFailure(t, c)
 	if final.MissingNodes == 0 {
 		t.Errorf("shallow check must detect a missing root")
 	}
+	c.Clean(Params{Stop: true})
 }
 
 func TestCleaner_RangeDrainsAcrossLedgers(t *testing.T) {
@@ -269,7 +389,7 @@ func TestCleaner_RangeDrainsAcrossLedgers(t *testing.T) {
 	c.Start()
 	defer c.Stop()
 
-	c.Clean(Params{Full: true})
+	c.Clean(Params{Full: boolPtr(true)})
 	final := waitIdle(t, c)
 	if final.LedgersChecked != 4 {
 		t.Errorf("expected 4 ledgers checked across the range, got %d", final.LedgersChecked)
@@ -283,7 +403,7 @@ func TestCleaner_StopHaltsRun(t *testing.T) {
 	src := &fakeSource{family: newFakeFamily(), roots: map[uint32][2][32]byte{}, min: 1, max: 100, hasRange: true}
 	c := New(src, nil)
 	c.Start()
-	c.Clean(Params{Full: true})
+	c.Clean(Params{Full: boolPtr(true)})
 	st := c.Clean(Params{Stop: true})
 	if st.State != "idle" {
 		t.Errorf("expected idle after Stop param, got %q", st.State)
@@ -296,11 +416,393 @@ func TestCleaner_NoRangeAvailable(t *testing.T) {
 	c := New(src, nil)
 	c.Start()
 	defer c.Stop()
-	st := c.Clean(Params{Full: true})
+	st := c.Clean(Params{Full: boolPtr(true)})
 	if st.State != "idle" {
 		t.Errorf("expected idle when no range available, got %q", st.State)
 	}
 	if st.LastError == "" {
 		t.Errorf("expected a LastError explaining nothing to verify")
+	}
+}
+
+func TestCleaner_ReacquiresAndRetriesSameSequence(t *testing.T) {
+	family := newFakeFamily()
+	root := putStateTree(t, family, sampleKeys)
+	src := &fakeSource{
+		family:   family,
+		roots:    map[uint32][2][32]byte{},
+		min:      10,
+		max:      10,
+		hasRange: true,
+	}
+	var mu sync.Mutex
+	var reacquired []uint32
+	src.reacquire = func(_ context.Context, seq uint32) error {
+		mu.Lock()
+		reacquired = append(reacquired, seq)
+		mu.Unlock()
+		src.roots[seq] = [2][32]byte{root, {}}
+		return nil
+	}
+
+	c := New(src, nil)
+	c.retryDelay = time.Millisecond
+	c.Start()
+	defer c.Stop()
+	c.Clean(Params{Full: boolPtr(true)})
+	final := waitIdle(t, c)
+
+	mu.Lock()
+	defer mu.Unlock()
+	if len(reacquired) == 0 {
+		t.Fatal("incomplete ledger was not reacquired")
+	}
+	for _, seq := range reacquired {
+		if seq != 10 {
+			t.Fatalf("reacquired sequence %d, want 10", seq)
+		}
+	}
+	if final.Failures != 0 {
+		t.Fatalf("failures after successful retry = %d, want 0", final.Failures)
+	}
+	if final.LedgersChecked != 1 {
+		t.Fatalf("ledgers checked = %d, want 1 successful ledger", final.LedgersChecked)
+	}
+}
+
+func TestCleaner_ExplicitFlagsOverrideForcedDefaults(t *testing.T) {
+	family := newFakeFamily()
+	root := putStateTree(t, family, sampleKeys)
+	var repairs int
+	src := &fakeSource{
+		family:   family,
+		roots:    map[uint32][2][32]byte{10: {root, {}}},
+		min:      10,
+		max:      10,
+		hasRange: true,
+		repair: func(context.Context, uint32) error {
+			repairs++
+			return nil
+		},
+	}
+	c := New(src, nil)
+	c.Start()
+	defer c.Stop()
+
+	ledger := uint32(10)
+	disabled := false
+	st := c.Clean(Params{
+		Ledger:     &ledger,
+		Full:       boolPtr(true),
+		FixTxns:    &disabled,
+		CheckNodes: &disabled,
+	})
+	if st.FixTxns || st.CheckNodes {
+		t.Fatalf("explicit false did not override forced defaults: %+v", st)
+	}
+	waitIdle(t, c)
+	if repairs != 0 {
+		t.Fatalf("repair calls = %d, want 0", repairs)
+	}
+}
+
+func TestCleaner_TransactionRepairFailureRetriesWithoutReacquiring(t *testing.T) {
+	family := newFakeFamily()
+	root := putStateTree(t, family, sampleKeys)
+	var mu sync.Mutex
+	var repairs, reacquires int
+	src := &fakeSource{
+		family:   family,
+		roots:    map[uint32][2][32]byte{10: {root, {}}},
+		min:      10,
+		max:      10,
+		hasRange: true,
+		repair: func(context.Context, uint32) error {
+			mu.Lock()
+			defer mu.Unlock()
+			repairs++
+			if repairs == 1 {
+				return errors.New("repair failed")
+			}
+			return nil
+		},
+		reacquire: func(context.Context, uint32) error {
+			mu.Lock()
+			reacquires++
+			mu.Unlock()
+			return nil
+		},
+	}
+	c := New(src, nil)
+	c.retryDelay = time.Millisecond
+	c.Start()
+	defer c.Stop()
+
+	fix := true
+	c.Clean(Params{FixTxns: &fix})
+	final := waitIdle(t, c)
+
+	mu.Lock()
+	defer mu.Unlock()
+	if repairs != 2 {
+		t.Fatalf("repair attempts = %d, want 2", repairs)
+	}
+	if reacquires != 0 {
+		t.Fatalf("reacquire calls = %d, want 0", reacquires)
+	}
+	if final.Failures != 0 {
+		t.Fatalf("failures after successful repair retry = %d, want 0", final.Failures)
+	}
+}
+
+func TestCleaner_IndexRepairFailureRetriesWithoutReacquiring(t *testing.T) {
+	family := newFakeFamily()
+	root := putStateTree(t, family, sampleKeys)
+	var repairs, reacquires atomic.Int32
+	src := &fakeSource{
+		family:   family,
+		roots:    map[uint32][2][32]byte{10: {root, {}}},
+		min:      10,
+		max:      10,
+		hasRange: true,
+		repairIndex: func(context.Context, LedgerData) (bool, error) {
+			if repairs.Add(1) == 1 {
+				return false, errors.New("index repair failed")
+			}
+			return false, nil
+		},
+		reacquire: func(context.Context, uint32) error {
+			reacquires.Add(1)
+			return nil
+		},
+	}
+	c := New(src, nil)
+	c.retryDelay = time.Millisecond
+	c.Start()
+	defer c.Stop()
+
+	c.Clean(Params{})
+	final := waitIdle(t, c)
+
+	if got := repairs.Load(); got != 2 {
+		t.Fatalf("index repair attempts = %d, want 2", got)
+	}
+	if got := reacquires.Load(); got != 0 {
+		t.Fatalf("reacquire calls = %d, want 0", got)
+	}
+	if final.Failures != 0 {
+		t.Fatalf("failures after successful index repair retry = %d, want 0", final.Failures)
+	}
+}
+
+func TestCleaner_ReconfigureDiscardsCanceledRunResult(t *testing.T) {
+	family := newFakeFamily()
+	root := putStateTree(t, family, sampleKeys)
+	entered := make(chan struct{})
+	var once sync.Once
+	var repairedMu sync.Mutex
+	var repaired []uint32
+	src := &fakeSource{
+		family: family,
+		roots: map[uint32][2][32]byte{
+			10: {root, {}},
+			20: {root, {}},
+		},
+		min:      10,
+		max:      20,
+		hasRange: true,
+		repair: func(ctx context.Context, seq uint32) error {
+			if seq == 10 {
+				once.Do(func() { close(entered) })
+				<-ctx.Done()
+				return ctx.Err()
+			}
+			repairedMu.Lock()
+			repaired = append(repaired, seq)
+			repairedMu.Unlock()
+			return nil
+		},
+	}
+	c := New(src, nil)
+	c.Start()
+	defer c.Stop()
+
+	fix := true
+	first := uint32(10)
+	c.Clean(Params{Ledger: &first, FixTxns: &fix})
+	<-entered
+	second := uint32(20)
+	c.Clean(Params{Ledger: &second, FixTxns: &fix})
+	final := waitIdle(t, c)
+
+	if final.LedgersChecked != 1 || final.Failures != 0 {
+		t.Fatalf("stale run changed replacement progress: %+v", final)
+	}
+	repairedMu.Lock()
+	defer repairedMu.Unlock()
+	if len(repaired) != 1 || repaired[0] != 20 {
+		t.Fatalf("successful repairs = %v, want [20]", repaired)
+	}
+}
+
+func TestCleaner_StopCommandCancelsBlockingWork(t *testing.T) {
+	family := newFakeFamily()
+	root := putStateTree(t, family, sampleKeys)
+	entered := make(chan struct{})
+	canceled := make(chan struct{})
+	var once sync.Once
+	src := &fakeSource{
+		family:   family,
+		roots:    map[uint32][2][32]byte{10: {root, {}}},
+		min:      10,
+		max:      10,
+		hasRange: true,
+		repair: func(ctx context.Context, _ uint32) error {
+			once.Do(func() { close(entered) })
+			<-ctx.Done()
+			close(canceled)
+			return ctx.Err()
+		},
+	}
+	c := New(src, nil)
+	c.Start()
+	defer c.Stop()
+	fix := true
+	c.Clean(Params{FixTxns: &fix})
+	<-entered
+
+	if st := c.Clean(Params{Stop: true}); st.State != "idle" {
+		t.Fatalf("status after stop command = %+v", st)
+	}
+	select {
+	case <-canceled:
+	case <-time.After(time.Second):
+		t.Fatal("stop command did not cancel blocking repair")
+	}
+}
+
+func TestCleaner_RejectsCanonicalHeaderMismatchBeforeNodeWalk(t *testing.T) {
+	for _, test := range []struct {
+		name   string
+		mutate func(*LedgerData)
+	}{
+		{
+			name: "hash",
+			mutate: func(info *LedgerData) {
+				info.Hash = [32]byte{0xEE}
+			},
+		},
+		{
+			name: "parent",
+			mutate: func(info *LedgerData) {
+				info.ParentHash = [32]byte{0xEE}
+			},
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			family := newFakeFamily()
+			root := putStateTree(t, family, sampleKeys)
+			var reacquires atomic.Int32
+			src := &fakeSource{
+				family:   family,
+				roots:    map[uint32][2][32]byte{10: {root, {}}},
+				min:      10,
+				max:      10,
+				hasRange: true,
+				reacquire: func(context.Context, uint32) error {
+					reacquires.Add(1)
+					return nil
+				},
+			}
+			src.ledger = func(_ context.Context, seq uint32) (LedgerData, bool, error) {
+				info := LedgerData{
+					Sequence:   seq,
+					Hash:       [32]byte{byte(seq)},
+					ParentHash: [32]byte{byte(seq - 1)},
+					StateRoot:  root,
+				}
+				test.mutate(&info)
+				return info, true, nil
+			}
+
+			c := New(src, nil)
+			c.retryDelay = time.Millisecond
+			c.Start()
+			defer c.Stop()
+			c.Clean(Params{Full: boolPtr(true)})
+			final := waitFailure(t, c)
+			c.Clean(Params{Stop: true})
+
+			if reacquires.Load() == 0 {
+				t.Fatal("canonical header mismatch did not trigger reacquisition")
+			}
+			if final.NodesChecked != 0 {
+				t.Fatalf("nodes checked before canonical header validation: %d", final.NodesChecked)
+			}
+			if final.MinLedger != 10 || final.MaxLedger != 10 {
+				t.Fatalf("mismatched ledger advanced: %+v", final)
+			}
+		})
+	}
+}
+
+func TestCleaner_IndexRepairForcesTransactionRewrite(t *testing.T) {
+	family := newFakeFamily()
+	root := putStateTree(t, family, sampleKeys)
+	var indexRepairs, transactionRepairs int
+	src := &fakeSource{
+		family:   family,
+		roots:    map[uint32][2][32]byte{10: {root, {}}},
+		min:      10,
+		max:      10,
+		hasRange: true,
+		repairIndex: func(context.Context, LedgerData) (bool, error) {
+			indexRepairs++
+			return true, nil
+		},
+		repair: func(context.Context, uint32) error {
+			transactionRepairs++
+			return nil
+		},
+	}
+	c := New(src, nil)
+	c.Start()
+	defer c.Stop()
+
+	c.Clean(Params{})
+	final := waitIdle(t, c)
+	if indexRepairs != 1 {
+		t.Fatalf("index repair calls = %d, want 1", indexRepairs)
+	}
+	if transactionRepairs != 1 {
+		t.Fatalf("transaction repair calls = %d, want forced rewrite", transactionRepairs)
+	}
+	if final.Failures != 0 {
+		t.Fatalf("unexpected failures: %+v", final)
+	}
+}
+
+func TestCleaner_CleanAfterStopIsRejected(t *testing.T) {
+	src := &fakeSource{
+		family:   newFakeFamily(),
+		roots:    map[uint32][2][32]byte{},
+		min:      1,
+		max:      1,
+		hasRange: true,
+	}
+	c := New(src, nil)
+	c.Start()
+	c.Stop()
+
+	st := c.Clean(Params{Full: boolPtr(true)})
+	if st.State != "stopped" {
+		t.Fatalf("state after Clean on stopped cleaner = %q, want stopped", st.State)
+	}
+	if st.LastError != "ledger_cleaner: cleaner stopped" {
+		t.Fatalf("last error = %q", st.LastError)
+	}
+	c.Start()
+	if st := c.Status(); st.State != "stopped" {
+		t.Fatalf("Start revived stopped cleaner: %+v", st)
 	}
 }

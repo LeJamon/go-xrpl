@@ -7,38 +7,27 @@ import (
 	"strings"
 
 	addresscodec "github.com/LeJamon/go-xrpl/codec/addresscodec"
-	"github.com/LeJamon/go-xrpl/internal/tx/ledgerfields"
 	"github.com/LeJamon/go-xrpl/keylet"
 	"github.com/LeJamon/go-xrpl/ledger/entry"
 )
 
-// accountRootReader is the minimal read surface ReadAccountRoot needs:
-// entry existence plus a raw read by keylet. Both *ledger.Ledger and the
-// full LedgerView satisfy it.
+// accountRootReader is the minimal read surface ReadAccountRoot needs.
 type accountRootReader interface {
-	Exists(k keylet.Keylet) (bool, error)
 	Read(k keylet.Keylet) ([]byte, error)
 }
 
 // ReadAccountRoot reads and parses the AccountRoot for accountID from view.
-// Returns (nil, false) when the account is absent or cannot be read or
-// parsed — the "look up an account, skip if it isn't there" idiom shared by
-// the held-tx sweep and the TxQ preclaim path.
-func ReadAccountRoot(view accountRootReader, accountID [20]byte) (*AccountRoot, bool) {
-	k := keylet.Account(accountID)
-	exists, err := view.Exists(k)
-	if err != nil || !exists {
-		return nil, false
-	}
-	data, err := view.Read(k)
+// An absent account returns (nil, nil); storage and parse failures are
+// preserved so protocol callers can distinguish corruption from absence.
+func ReadAccountRoot(view accountRootReader, accountID [20]byte) (*AccountRoot, error) {
+	data, err := view.Read(keylet.Account(accountID))
 	if err != nil {
-		return nil, false
+		return nil, err
 	}
-	ar, err := ParseAccountRoot(data)
-	if err != nil || ar == nil {
-		return nil, false
+	if data == nil {
+		return nil, nil
 	}
-	return ar, true
+	return ParseAccountRoot(data)
 }
 
 // AccountRoot represents an account in the ledger
@@ -166,7 +155,7 @@ func encodeAccountID(accountID [20]byte) (string, error) {
 
 // ParseAccountRoot parses account data from binary format
 func ParseAccountRoot(data []byte) (*AccountRoot, error) {
-	var decoded ledgerfields.AccountRoot
+	var decoded entry.AccountRoot
 	if err := decoded.Decode(data); err != nil {
 		return nil, fmt.Errorf("failed to decode AccountRoot: %w", err)
 	}
@@ -258,7 +247,7 @@ func SerializeAccountRoot(account *AccountRoot) ([]byte, error) {
 		return nil, errors.New("failed to encode AccountRoot: nil entry")
 	}
 
-	var sle ledgerfields.AccountRoot
+	var sle entry.AccountRoot
 	sle.SetBalance(fmt.Sprintf("%d", account.Balance))
 	sle.SetSequence(account.Sequence)
 	sle.SetOwnerCount(account.OwnerCount)

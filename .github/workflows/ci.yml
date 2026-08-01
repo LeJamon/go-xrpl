@@ -48,23 +48,23 @@ jobs:
           args: --config .golangci-warnings.yml
 
   generate:
-    name: Generate (ledgerfields drift check)
+    name: Generate (ledger-entry drift check)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
       - uses: ./.github/actions/setup
         with:
           cgo: "false"
-      # Re-run the ledgerfields generator and fail if any *_gen.go file
+      # Re-run the ledger-entry generator and fail if any *_gen.go file
       # changes — a spec edit without `go generate` would otherwise silently
       # ship a stale typed decoder.
       - name: Re-run go generate
-        run: go generate ./internal/tx/ledgerfields/...
+        run: go generate ./ledger/entry/...
       - name: Fail on tree diff
         run: |
-          if ! git diff --exit-code -- internal/tx/ledgerfields; then
-            echo "::error::ledgerfields generated files are out of date."
-            echo "Run: go generate ./internal/tx/ledgerfields/..."
+          if ! git diff --exit-code -- ledger/entry; then
+            echo "::error::ledger-entry generated files are out of date."
+            echo "Run: go generate ./ledger/entry/..."
             echo "Then commit the regenerated *_gen.go files."
             exit 1
           fi
@@ -162,6 +162,13 @@ jobs:
             race: "-race"
     steps:
       - uses: actions/checkout@v5
+      - name: Check out rippled v3.2.0 oracle
+        if: matrix.group == 'libs'
+        uses: actions/checkout@v5
+        with:
+          repository: XRPLF/rippled
+          ref: 3c43f4614f87965298773279ff5b85d4c56c637b
+          path: rippled-worktrees/v3.2.0-oracle
       - uses: ./.github/actions/setup
       - run: go test ${{ matrix.race }} -count=1 -timeout 15m ${{ matrix.packages }}
 

@@ -13,6 +13,7 @@ import (
 	"github.com/LeJamon/go-xrpl/amendment"
 	"github.com/LeJamon/go-xrpl/internal/ledger/state"
 	"github.com/LeJamon/go-xrpl/keylet"
+	"github.com/LeJamon/go-xrpl/ledger/entry"
 	"github.com/LeJamon/go-xrpl/protocol"
 )
 
@@ -23,10 +24,10 @@ const InitialXRP uint64 = 100_000_000_000_000_000
 // Before is nil for newly created entries; After is nil for deleted entries.
 type InvariantEntry struct {
 	Key       [32]byte // ledger key of the entry (for invariants like ValidNFTokenPage that need to inspect the key)
-	EntryType string   // e.g. "AccountRoot", "RippleState", "Offer", "Escrow", "PayChannel"
-	Before    []byte   // serialized SLE before the transaction (nil for inserts)
-	After     []byte   // serialized SLE after the transaction (nil for deletes)
-	IsDelete  bool     // true if the entry was deleted
+	EntryType entry.Type
+	Before    []byte // serialized SLE before the transaction (nil for inserts)
+	After     []byte // serialized SLE after the transaction (nil for deletes)
+	IsDelete  bool   // true if the entry was deleted
 }
 
 // InvariantViolation holds the name and description of a detected invariant violation.
@@ -131,41 +132,15 @@ func (a Asset) IsNative() bool {
 	return !a.IsMPT() && a.Issuer == "" && (a.Currency == "" || a.Currency == "XRP")
 }
 
-// validLedgerEntryTypes is the set of valid ledger entry type names that may be
-// created in the ledger. Matches rippled's LedgerEntryTypesMatch whitelist.
-// Reference: rippled InvariantCheck.cpp lines 517-546
-var validLedgerEntryTypes = map[string]bool{
-	"AccountRoot":                     true,
-	"Delegate":                        true,
-	"DirectoryNode":                   true,
-	"RippleState":                     true,
-	"Ticket":                          true,
-	"SignerList":                      true,
-	"Offer":                           true,
-	"LedgerHashes":                    true,
-	"Amendments":                      true,
-	"FeeSettings":                     true,
-	"Escrow":                          true,
-	"PayChannel":                      true,
-	"Check":                           true,
-	"DepositPreauth":                  true,
-	"NegativeUNL":                     true,
-	"NFTokenPage":                     true,
-	"NFTokenOffer":                    true,
-	"AMM":                             true,
-	"Bridge":                          true,
-	"XChainOwnedClaimID":              true,
-	"XChainOwnedCreateAccountClaimID": true,
-	"DID":                             true,
-	"Oracle":                          true,
-	"MPTokenIssuance":                 true,
-	"MPToken":                         true,
-	"Credential":                      true,
-	"PermissionedDomain":              true,
-	"Vault":                           true,
-	"LoanBroker":                      true,
-	"Loan":                            true,
-}
+var validLedgerEntryTypes = func() map[entry.Type]struct{} {
+	types := make(map[entry.Type]struct{})
+	for _, info := range protocol.LedgerEntryTypes() {
+		if !info.Deprecated {
+			types[info.Type] = struct{}{}
+		}
+	}
+	return types
+}()
 
 // maxPermissionedDomainCredentials is the maximum number of credentials in a
 // PermissionedDomain's AcceptedCredentials array.
@@ -196,7 +171,7 @@ func CheckInvariants(tx Transaction, result Result, fee uint64, txDeclaredFee ui
 			return checkNoDeepFreezeTrustLinesWithoutFreeze(entries)
 		},
 		func() *InvariantViolation {
-			return checkTransfersNotFrozen(tx, entries, view, rules)
+			return checkTransfersNotFrozen(tx, entries, view, rules, numberContext...)
 		},
 		func() *InvariantViolation { return checkNoBadOffers(entries) },
 		func() *InvariantViolation { return checkNoZeroEscrow(entries) },

@@ -4,10 +4,12 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"errors"
 	"io"
 	"os"
 	"path/filepath"
 	"sync/atomic"
+	"syscall"
 	"testing"
 	"time"
 
@@ -21,6 +23,49 @@ func manifestAndLedgerFrames(t *testing.T, manifest, ledger []byte) []byte {
 	require.NoError(t, message.WriteMessage(&wire, message.TypeManifests, manifest))
 	require.NoError(t, message.WriteMessage(&wire, message.TypeLedgerData, ledger))
 	return wire.Bytes()
+}
+
+type failingManifestSpoolWriter struct {
+	err error
+}
+
+func (w failingManifestSpoolWriter) Write([]byte) (int, error) {
+	return 0, w.err
+}
+
+type failingManifestSpoolReader struct {
+	err error
+}
+
+func (r failingManifestSpoolReader) Read([]byte) (int, error) {
+	return 0, r.err
+}
+
+func TestCopyManifestPayloadClassifiesLocalTimeoutWriteFailure(t *testing.T) {
+	writeErr := &os.PathError{Op: "write", Path: "manifest-spool", Err: syscall.ETIMEDOUT}
+	err := copyManifestPayload(
+		failingManifestSpoolWriter{err: writeErr},
+		bytes.NewReader([]byte("manifest")),
+		uint32(len("manifest")),
+	)
+
+	var localErr *manifestSpoolLocalError
+	require.ErrorAs(t, err, &localErr)
+	require.ErrorIs(t, err, writeErr)
+	require.Equal(t, err, normalizeManifestSpoolReadError(err, true))
+}
+
+func TestCopyManifestPayloadKeepsSourceFailuresRemote(t *testing.T) {
+	readErr := errors.New("connection reset")
+	err := copyManifestPayload(
+		&bytes.Buffer{},
+		failingManifestSpoolReader{err: readErr},
+		1,
+	)
+
+	var localErr *manifestSpoolLocalError
+	require.NotErrorAs(t, err, &localErr)
+	require.ErrorIs(t, err, readErr)
 }
 
 func TestOversizedManifestPeersDoNotBlockLedgerFrames(t *testing.T) {

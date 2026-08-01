@@ -240,10 +240,11 @@ func TestGetOwnerNode_TicketSeqContainsHeaderByte(t *testing.T) {
 		0x20, 0x29, 0x00, 0x00, 0x00, 0x34, // TicketSequence = 52
 		0x34, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x02, // OwnerNode = 2
 	}
-	assert.Equal(t, uint64(2), GetOwnerNode(data))
+	got, err := GetOwnerNode(data)
+	require.NoError(t, err)
+	assert.Equal(t, uint64(2), got)
 }
 
-// TestGetOwnerNode_Absent returns 0 when the SLE has no OwnerNode field.
 func TestGetOwnerNode_Absent(t *testing.T) {
 	t.Parallel()
 
@@ -251,5 +252,6 @@ func TestGetOwnerNode_Absent(t *testing.T) {
 		0x11, 0x00, 0x54, // LedgerEntryType = Ticket
 		0x22, 0x00, 0x00, 0x00, 0x00, // Flags = 0
 	}
-	assert.Equal(t, uint64(0), GetOwnerNode(data))
+	_, err := GetOwnerNode(data)
+	require.ErrorContains(t, err, "OwnerNode field is missing")
 }

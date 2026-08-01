@@ -94,42 +94,43 @@ type persistJob struct {
 	completionToken uint64
 }
 
-func (s *Service) enqueuePersist(l *ledger.Ledger) {
-	s.enqueueLedgerPersist(l, true, true)
+func (p *persistenceWorker) enqueuePersist(l *ledger.Ledger) {
+	p.enqueueLedgerPersist(l, true, true)
 }
 
-func (s *Service) enqueueValidatedHistoryPersist(l *ledger.Ledger) {
-	s.enqueueLedgerPersist(l, true, false)
+func (p *persistenceWorker) enqueueValidatedHistoryPersist(l *ledger.Ledger) {
+	p.enqueueLedgerPersist(l, true, false)
 }
 
-func (s *Service) enqueueNodePersist(l *ledger.Ledger) {
-	s.enqueueLedgerPersist(l, false, false)
+func (p *persistenceWorker) enqueueNodePersist(l *ledger.Ledger) {
+	p.enqueueLedgerPersist(l, false, false)
 }
 
-func (s *Service) enqueueLedgerPersist(l *ledger.Ledger, validated, updatesTip bool) {
+func (p *persistenceWorker) enqueueLedgerPersist(l *ledger.Ledger, validated, updatesTip bool) {
 	if l == nil {
 		return
 	}
+	s := p.service
 	seq := l.Sequence()
-	s.persistMu.Lock()
+	p.persistMu.Lock()
 	if validated {
-		if existing := s.validatedPersistJobs[seq]; existing != nil {
+		if existing := p.validatedPersistJobs[seq]; existing != nil {
 			if existing.l != nil && existing.l.Hash() == l.Hash() {
 				if updatesTip {
 					existing.updatesTip.Store(true)
 				}
-				s.persistMu.Unlock()
+				p.persistMu.Unlock()
 				return
 			}
 			if !updatesTip && existing.updatesTip.Load() {
-				s.persistMu.Unlock()
+				p.persistMu.Unlock()
 				return
 			}
 			existing.canceled.Store(true)
-			delete(s.validatedPersistJobs, seq)
+			delete(p.validatedPersistJobs, seq)
 		}
 		if s.hasCompleteLedger(l) && !updatesTip {
-			s.persistMu.Unlock()
+			p.persistMu.Unlock()
 			return
 		}
 	}
@@ -144,34 +145,61 @@ func (s *Service) enqueueLedgerPersist(l *ledger.Ledger, validated, updatesTip b
 		} else if l.IsValidated() {
 			job.completionToken = s.beginValidatedPersistence(seq, l.Hash())
 		}
-		s.validatedPersistJobs[seq] = job
+		p.validatedPersistJobs[seq] = job
 	}
-	if !s.persistStarted {
-		s.persistMu.Unlock()
+	if !p.persistStarted {
+		p.persistMu.Unlock()
 		s.runPersistJob(job)
 		return
 	}
-	if s.persistStopping {
+	if p.persistStopping {
 		if validated {
 			job.canceled.Store(true)
-			delete(s.validatedPersistJobs, seq)
+			delete(p.validatedPersistJobs, seq)
 		}
-		s.persistMu.Unlock()
+		p.persistMu.Unlock()
 		if validated && !job.tipOnly {
 			s.invalidateCompleteLedger(seq)
 		}
 		s.logger.Warn("persist skipped: service stopping", "seq", seq)
 		return
 	}
-	s.persistQueue = append(s.persistQueue, job)
-	s.signalPersistLocked()
-	s.persistMu.Unlock()
+	p.persistQueue = append(p.persistQueue, job)
+	p.signalPersistLocked()
+	p.persistMu.Unlock()
 }
 
-func (s *Service) signalPersistLocked() {
+func (p *persistenceWorker) signalPersistLocked() {
 	select {
-	case s.persistWake <- struct{}{}:
+	case p.persistWake <- struct{}{}:
 	default:
+	}
+}
+
+func (p *persistenceWorker) start() {
+	p.persistMu.Lock()
+	if p.persistStarted || p.persistStopping {
+		p.persistMu.Unlock()
+		return
+	}
+	p.persistStarted = true
+	p.persistWG.Add(1)
+	p.persistMu.Unlock()
+	go p.runPersistWorker()
+}
+
+func (p *persistenceWorker) stop() {
+	p.persistMu.Lock()
+	started := p.persistStarted
+	if !p.persistStopping {
+		p.persistStopping = true
+		if started {
+			p.signalPersistLocked()
+		}
+	}
+	p.persistMu.Unlock()
+	if started {
+		p.persistWG.Wait()
 	}
 }
 
@@ -180,15 +208,19 @@ func (s *Service) FlushPersists() {
 }
 
 func (s *Service) flushPersists(ctx context.Context) error {
+	return s.persistenceWorker.flushPersists(ctx)
+}
+
+func (p *persistenceWorker) flushPersists(ctx context.Context) error {
 	done := make(chan struct{})
-	s.persistMu.Lock()
-	if !s.persistStarted || s.persistStopping {
-		s.persistMu.Unlock()
+	p.persistMu.Lock()
+	if !p.persistStarted || p.persistStopping {
+		p.persistMu.Unlock()
 		return nil
 	}
-	s.persistQueue = append(s.persistQueue, &persistJob{done: done})
-	s.signalPersistLocked()
-	s.persistMu.Unlock()
+	p.persistQueue = append(p.persistQueue, &persistJob{done: done})
+	p.signalPersistLocked()
+	p.persistMu.Unlock()
 	select {
 	case <-done:
 		return nil
@@ -202,50 +234,50 @@ func (s *Service) flushPersists(ctx context.Context) error {
 // closes the underlying node/relational stores. Idempotent and safe on a
 // never-started Service. Must be called before those stores are closed.
 func (s *Service) Stop() {
+	s.lifecycleMu.Lock()
+	switch s.lifecycleState {
+	case serviceStopping:
+		done := s.stopDone
+		s.lifecycleMu.Unlock()
+		<-done
+		return
+	case serviceStopped:
+		s.lifecycleMu.Unlock()
+		return
+	}
+	s.lifecycleState = serviceStopping
+	s.stopDone = make(chan struct{})
+	done := s.stopDone
+	s.lifecycleMu.Unlock()
+
 	s.stopNodeStoreSweeper()
+	s.persistenceWorker.stop()
+	s.eventPublisher.stop()
 
-	s.persistMu.Lock()
-	persistWasStarted := s.persistStarted
-	waitPersist := s.persistStarted && !s.persistStopping
-	if waitPersist {
-		s.persistStopping = true
-		s.signalPersistLocked()
-	}
-	s.persistMu.Unlock()
-
-	s.ledgerEventMu.Lock()
-	if s.ledgerEventStarted && !s.ledgerEventStopping {
-		s.ledgerEventStopping = true
-		select {
-		case s.ledgerEventWake <- struct{}{}:
-		default:
-		}
-	}
-	s.ledgerEventMu.Unlock()
-	if persistWasStarted {
-		s.persistWG.Wait()
-	}
-	s.ledgerEventWG.Wait()
+	s.lifecycleMu.Lock()
+	s.lifecycleState = serviceStopped
+	close(done)
+	s.lifecycleMu.Unlock()
 }
 
-func (s *Service) runPersistWorker() {
-	defer s.persistWG.Done()
+func (p *persistenceWorker) runPersistWorker() {
+	defer p.persistWG.Done()
 	for {
-		s.persistMu.Lock()
-		if len(s.persistQueue) > 0 {
-			job := s.persistQueue[0]
-			s.persistQueue[0] = nil
-			s.persistQueue = s.persistQueue[1:]
-			s.persistMu.Unlock()
-			s.runPersistJob(job)
+		p.persistMu.Lock()
+		if len(p.persistQueue) > 0 {
+			job := p.persistQueue[0]
+			p.persistQueue[0] = nil
+			p.persistQueue = p.persistQueue[1:]
+			p.persistMu.Unlock()
+			p.service.runPersistJob(job)
 			continue
 		}
-		stopping := s.persistStopping
-		s.persistMu.Unlock()
+		stopping := p.persistStopping
+		p.persistMu.Unlock()
 		if stopping {
 			return
 		}
-		<-s.persistWake
+		<-p.persistWake
 	}
 }
 
@@ -384,10 +416,6 @@ func (s *Service) persistToNodeStore(ctx context.Context, l *ledger.Ledger, seq 
 		return fmt.Errorf("sync ledger %d: %w", seq, err)
 	}
 	return nil
-}
-
-func (s *Service) persistValidatedTip(ctx context.Context, l *ledger.Ledger) error {
-	return s.persistValidatedTipJob(ctx, l, false, nil)
 }
 
 func (s *Service) persistValidatedTipJob(
@@ -606,6 +634,22 @@ func (s *Service) RefreshValidatedState(
 	return seq, nil
 }
 
+// RepairLedgerTransactions rebuilds the relational ledger and transaction
+// indexes from the canonical ledger. Nodes without relational persistence have
+// nothing to repair.
+func (s *Service) RepairLedgerTransactions(ctx context.Context, seq uint32) error {
+	if s == nil || s.relationalDB == nil {
+		return nil
+	}
+	l, err := s.getLedgerBySequence(ctx, seq)
+	if err != nil {
+		return err
+	}
+	s.canonicalPersistMu.Lock()
+	defer s.canonicalPersistMu.Unlock()
+	return s.persistToRelationalDB(ctx, l)
+}
+
 // persistToRelationalDB materializes a validated ledger and all of its
 // transaction indexes before handing the immutable unit to the relational
 // backend. The backend owns commit ordering and retry safety.
@@ -712,7 +756,6 @@ func (s *Service) persistToRelationalDB(ctx context.Context, l *ledger.Ledger) e
 			},
 			Accounts: sortedAccountIDs(affected),
 		})
-
 		return true
 	})
 	if err != nil {

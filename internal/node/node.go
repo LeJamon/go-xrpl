@@ -37,7 +37,6 @@ import (
 	"github.com/LeJamon/go-xrpl/internal/watchdog"
 	xrpllog "github.com/LeJamon/go-xrpl/log"
 	"github.com/LeJamon/go-xrpl/protocol"
-	"github.com/LeJamon/go-xrpl/shamap"
 	"github.com/LeJamon/go-xrpl/shamap/backend"
 	kvpebble "github.com/LeJamon/go-xrpl/storage/kvstore/pebble"
 	"github.com/LeJamon/go-xrpl/storage/nodestore"
@@ -133,7 +132,10 @@ func isFullGitHash(value string) bool {
 // Run assembles and starts every node subsystem from the parsed config, then
 // blocks until a terminating signal or fatal error. It is the composition root
 // extracted from the CLI so flag parsing and node wiring stay separable.
-func Run(appConfig *config.Config, configPath string, standalone bool, startup service.StartupConfig, rootLogger, serverLog xrpllog.Logger) error {
+func Run(ctx context.Context, appConfig *config.Config, configPath string, standalone bool, startup service.StartupConfig, rootLogger, serverLog xrpllog.Logger) error {
+	if err := context.Cause(ctx); err != nil {
+		return err
+	}
 	if err := validateTrustedValidatorConfig(appConfig, standalone); err != nil {
 		return err
 	}
@@ -160,6 +162,9 @@ func Run(appConfig *config.Config, configPath string, standalone bool, startup s
 
 	db, repoManager, err = setupStorage(appConfig, serverLog)
 	if err != nil {
+		return err
+	}
+	if err := context.Cause(ctx); err != nil {
 		return err
 	}
 	var nodeFamily *backend.NodeStore
@@ -256,6 +261,9 @@ func Run(appConfig *config.Config, configPath string, standalone bool, startup s
 	if err := ledgerService.Start(); err != nil {
 		return fmt.Errorf("start ledger service: %w", err)
 	}
+	if err := context.Cause(ctx); err != nil {
+		return err
+	}
 
 	// Start the goroutine-scheduling-latency sampler. Runs in both
 	// standalone and consensus modes; cancelled when runServer returns.
@@ -278,7 +286,7 @@ func Run(appConfig *config.Config, configPath string, standalone bool, startup s
 	// consensus modes; gated by node_db advisory_delete and persisted under
 	// database_path. Mirrors rippled's SHAMapStore advisory-delete state.
 	if advisoryStore, asErr := shamapstore.New(
-		appConfig.NodeDB.IsAdvisoryDeleteEnabled(),
+		appConfig.NodeDB.IsOnlineDeleteEnabled() && appConfig.NodeDB.IsAdvisoryDeleteEnabled(),
 		appConfig.LocalStateDir(),
 	); asErr != nil {
 		if appConfig.NodeDB.IsOnlineDeleteEnabled() {
@@ -333,6 +341,9 @@ func Run(appConfig *config.Config, configPath string, standalone bool, startup s
 					nodeFamily.SetMinimumLedgerSeq,
 					nodeFamily.BeginPrune,
 				)
+				if err := context.Cause(ctx); err != nil {
+					return err
+				}
 				rotator.Start()
 				serverLog.Info("Online delete enabled",
 					"online_delete", appConfig.NodeDB.OnlineDelete,
@@ -435,35 +446,33 @@ func Run(appConfig *config.Config, configPath string, standalone bool, startup s
 		}
 	}
 
-	// Background ledger-integrity verifier (admin ledger_cleaner). rippled keeps
-	// this subsystem present in every instance (Application always constructs
-	// and starts its LedgerCleaner); mirror that by always wiring it, falling
-	// back to an in-memory content-addressed family when no persistent node
-	// store is configured (standalone / RPC-only). The RPC's own availability
-	// is then gated on network/sync state, as in rippled, not on storage.
-	var cleanerFamily shamap.Family
+	// Background ledger-integrity verification requires the same durable SHAMap
+	// family used by the ledger service. A private in-memory fallback cannot
+	// verify persisted ledger contents and would report misleading failures.
+	var cleanerSource *ledgerCleanerSource
 	if nodeFamily != nil {
-		cleanerFamily = nodeFamily
-	} else {
-		memFamily := backend.NewMemory()
-		cleanerFamily = memFamily
-	}
-	ledgerCleaner = cleaner.New(&ledgerCleanerSource{svc: ledgerSvcRef, family: cleanerFamily}, rootLogger)
-	ledgerCleaner.Start()
+		cleanerSource = &ledgerCleanerSource{svc: ledgerSvcRef, family: nodeFamily}
+		ledgerCleaner = cleaner.New(cleanerSource, rootLogger)
+		if err := context.Cause(ctx); err != nil {
+			return err
+		}
+		ledgerCleaner.Start()
 
-	cleanerRef := ledgerCleaner
-	services.LedgerCleanerConfigure = func(p types.LedgerCleanerParams) types.LedgerCleanerStatus {
-		return toCleanerStatus(cleanerRef.Clean(cleaner.Params{
-			Ledger:     p.Ledger,
-			MinLedger:  p.MinLedger,
-			MaxLedger:  p.MaxLedger,
-			Full:       p.Full,
-			CheckNodes: p.CheckNodes,
-			Stop:       p.Stop,
-		}))
-	}
-	services.LedgerCleanerStatusFn = func() types.LedgerCleanerStatus {
-		return toCleanerStatus(cleanerRef.Status())
+		cleanerRef := ledgerCleaner
+		services.LedgerCleanerConfigure = func(p types.LedgerCleanerParams) types.LedgerCleanerStatus {
+			return toCleanerStatus(cleanerRef.Clean(cleaner.Params{
+				Ledger:     p.Ledger,
+				MinLedger:  p.MinLedger,
+				MaxLedger:  p.MaxLedger,
+				Full:       p.Full,
+				CheckNodes: p.CheckNodes,
+				FixTxns:    p.FixTxns,
+				Stop:       p.Stop,
+			}))
+		}
+		services.LedgerCleanerStatusFn = func() types.LedgerCleanerStatus {
+			return toCleanerStatus(cleanerRef.Status())
+		}
 	}
 
 	// Start consensus/networking if not in standalone mode
@@ -512,8 +521,23 @@ func Run(appConfig *config.Config, configPath string, standalone bool, startup s
 			}
 		}
 
+		if err := context.Cause(ctx); err != nil {
+			return err
+		}
 		if err := consensusComponents.Start(); err != nil {
 			return fmt.Errorf("start consensus components: %w", err)
+		}
+		if router := consensusComponents.Router; router != nil && cleanerSource != nil {
+			cleanerSource.SetReacquire(func(ctx context.Context, seq uint32) error {
+				if err := ctx.Err(); err != nil {
+					return err
+				}
+				_, started, _ := router.RequestLedger([32]byte{}, seq)
+				if !started {
+					return fmt.Errorf("ledger_cleaner: unable to acquire ledger %d", seq)
+				}
+				return nil
+			})
 		}
 
 		// Wire transaction relay: when a tx is submitted via RPC,
@@ -919,7 +943,7 @@ func Run(appConfig *config.Config, configPath string, standalone bool, startup s
 	var lastServerSnapshot serverStatusSnapshot
 
 	// Wire up ledger service events to WebSocket broadcasts
-	ledgerService.SetEventCallback(func(event *service.LedgerAcceptedEvent) {
+	ledgerService.SetEventSink(service.EventSinkFunc(func(event *service.LedgerAcceptedEvent) {
 		if event == nil || event.LedgerInfo == nil {
 			return
 		}
@@ -1030,8 +1054,11 @@ func Run(appConfig *config.Config, configPath string, standalone bool, startup s
 			"sequence", event.LedgerInfo.Sequence,
 			"txs", len(event.TransactionResults),
 		)
-	})
+	}))
 
+	if err := context.Cause(ctx); err != nil {
+		return err
+	}
 	var listenerErrCh chan error
 	if httpSrvs, wsSrvs, listenerErrCh, err = startListeners(serverLog, appConfig, httpServer, wsServer); err != nil {
 		return err
@@ -1086,6 +1113,7 @@ func Run(appConfig *config.Config, configPath string, standalone bool, startup s
 
 	sigCh := make(chan os.Signal, 1)
 	signal.Notify(sigCh, syscall.SIGTERM, syscall.SIGINT)
+	defer signal.Stop(sigCh)
 
 	// SIGHUP triggers a UNL reload: re-read the config from --conf and
 	// replace the adaptor's trusted validator set. Per-round delta
@@ -1096,6 +1124,7 @@ func Run(appConfig *config.Config, configPath string, standalone bool, startup s
 	// subsystem. Buffered so a flurry of HUPs coalesces.
 	reloadCh := make(chan os.Signal, 1)
 	signal.Notify(reloadCh, syscall.SIGHUP)
+	defer signal.Stop(reloadCh)
 
 	// shutdownCh lets the RPC stop command trigger the same path
 	shutdownCh := make(chan struct{}, 1)
@@ -1110,7 +1139,7 @@ func Run(appConfig *config.Config, configPath string, standalone bool, startup s
 		}
 	})
 
-	return waitForShutdown(serverLog, sigCh, reloadCh, shutdownCh, listenerErrCh, consensusComponents, configPath)
+	return waitForShutdown(ctx, serverLog, sigCh, reloadCh, shutdownCh, listenerErrCh, consensusComponents, configPath)
 }
 
 func configuredLedgerLoadFees(appConfig *config.Config) drops.Fees {
@@ -1148,6 +1177,7 @@ func validateTrustedValidatorConfig(appConfig *config.Config, standalone bool) e
 // listener error (if any) so the caller's deferred cleanup runs.
 
 func waitForShutdown(
+	ctx context.Context,
 	log xrpllog.Logger,
 	sigCh, reloadCh chan os.Signal,
 	shutdownCh chan struct{},
@@ -1157,6 +1187,8 @@ func waitForShutdown(
 ) error {
 	for {
 		select {
+		case <-ctx.Done():
+			return context.Cause(ctx)
 		case sig := <-sigCh:
 			log.Info("Received signal, shutting down", "signal", sig)
 			return nil

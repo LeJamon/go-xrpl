@@ -165,7 +165,7 @@ func storedHeaderMatchesInfo(h header.LedgerHeader, info *relationaldb.LedgerInf
 		h.AccountHash == [32]byte(info.AccountHash) && h.TxHash == [32]byte(info.TransactionHash) &&
 		h.ParentHash == [32]byte(info.ParentHash) && h.Drops == uint64(info.TotalCoins) &&
 		h.CloseTime.Equal(info.CloseTime) && h.ParentCloseTime.Equal(info.ParentCloseTime) &&
-		h.CloseTimeResolution == uint32(info.CloseTimeRes) && h.CloseFlags == uint8(info.CloseFlags) &&
+		uint32(h.CloseTimeResolution) == uint32(info.CloseTimeRes) && h.CloseFlags == uint8(info.CloseFlags) &&
 		header.CalculateHash(h) == h.Hash
 }
 

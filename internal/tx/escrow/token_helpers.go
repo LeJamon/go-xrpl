@@ -24,7 +24,12 @@ const parityRate uint32 = 1_000_000_000
 
 // escrowCreatePreclaimIOU validates IOU escrow creation preconditions.
 // Reference: rippled Escrow.cpp escrowCreatePreclaimHelper<Issue> lines 204-279
-func escrowCreatePreclaimIOU(view tx.LedgerView, accountID, destID [20]byte, amount tx.Amount) ter.Result {
+func escrowCreatePreclaimIOU(
+	view tx.LedgerView,
+	accountID, destID [20]byte,
+	amount tx.Amount,
+	numberContext state.NumberContext,
+) ter.Result {
 	issuerID, err := state.DecodeAccountID(amount.Issuer)
 	if err != nil {
 		return ter.TefINTERNAL
@@ -98,7 +103,7 @@ func escrowCreatePreclaimIOU(view tx.LedgerView, accountID, destID [20]byte, amo
 	// Precision loss check: if the spendable amount and escrow amount differ
 	// so much in magnitude that IOU addition loses the smaller value, reject.
 	// Reference: rippled Escrow.cpp line 275: if (!canAdd(spendableAmount, amount))
-	if !canAddIOUAmounts(spendable, amount) {
+	if !canAddIOUAmounts(spendable, amount, numberContext) {
 		return ter.TecPRECISION_LOSS
 	}
 
@@ -438,6 +443,7 @@ func escrowUnlockIOU(
 	createAsset bool,
 	bumpDestOwnerCount bool,
 	reserveBase, reserveIncrement uint64,
+	numberContext state.NumberContext,
 ) ter.Result {
 	issuerID, err := state.DecodeAccountID(amount.Issuer)
 	if err != nil {
@@ -511,20 +517,34 @@ func escrowUnlockIOU(
 	if !senderIsIssuer && !receiverIsIssuer && effectiveRate != parityRate {
 		// fee = amount - divideRound(amount, rate, issue, true)
 		// finalAmt = amount - fee = divideRound(amount, rate, issue, true)
-		finalAmt = divideAmountByRate(amount, effectiveRate)
+		finalAmt = divideAmountByRate(amount, effectiveRate, numberContext)
 	}
 
 	// Validate the line limit if the receiver is not creating a new trust line
 	// (createAsset = false means receiver already submitted the finish tx)
 	if !createAsset {
-		if tr := checkTrustLineLimit(view, receiverID, issuerID, amount.Currency, finalAmt, issuerHigh); tr != ter.TesSUCCESS {
+		if tr := checkTrustLineLimit(
+			view,
+			receiverID,
+			issuerID,
+			amount.Currency,
+			finalAmt,
+			issuerHigh,
+			numberContext,
+		); tr != ter.TesSUCCESS {
 			return tr
 		}
 	}
 
 	// Credit the receiver via rippleCredit (issuer -> receiver)
 	if !receiverIsIssuer {
-		if tr := rippleCreditForEscrow(view, issuerID, receiverID, finalAmt); tr != ter.TesSUCCESS {
+		if tr := rippleCreditForEscrow(
+			view,
+			issuerID,
+			receiverID,
+			finalAmt,
+			numberContext,
+		); tr != ter.TesSUCCESS {
 			return tr
 		}
 	}
@@ -989,8 +1009,21 @@ func createTrustLineForEscrow(
 // rippleCreditForEscrow credits IOU from issuer to receiver by modifying the
 // trust line balance. This is the unlock-side direction of rippleCreditEscrow.
 // Reference: rippled View.cpp rippleCredit(issuer, receiver, amount)
-func rippleCreditForEscrow(view tx.LedgerView, issuerID, receiverID [20]byte, amount tx.Amount) ter.Result {
-	return rippleCreditEscrow(view, issuerID, receiverID, amount, ter.TecNO_LINE, ter.TecNO_LINE)
+func rippleCreditForEscrow(
+	view tx.LedgerView,
+	issuerID, receiverID [20]byte,
+	amount tx.Amount,
+	numberContext state.NumberContext,
+) ter.Result {
+	return rippleCreditEscrow(
+		view,
+		issuerID,
+		receiverID,
+		amount,
+		ter.TecNO_LINE,
+		ter.TecNO_LINE,
+		numberContext,
+	)
 }
 
 // rippleCreditEscrow moves an IOU amount from payerID to payeeID along their
@@ -1003,7 +1036,13 @@ func rippleCreditForEscrow(view tx.LedgerView, issuerID, receiverID [20]byte, am
 // the line is absent; the lock and unlock sites differ only in the read-error
 // mapping (tecINTERNAL vs tecNO_LINE), so each passes its own.
 // Reference: rippled View.cpp rippleCredit(sender, receiver, amount).
-func rippleCreditEscrow(view tx.LedgerView, payerID, payeeID [20]byte, amount tx.Amount, readErrResult, missingResult ter.Result) ter.Result {
+func rippleCreditEscrow(
+	view tx.LedgerView,
+	payerID, payeeID [20]byte,
+	amount tx.Amount,
+	readErrResult, missingResult ter.Result,
+	numberContext state.NumberContext,
+) ter.Result {
 	if amount.IsZero() {
 		return ter.TesSUCCESS
 	}
@@ -1024,13 +1063,21 @@ func rippleCreditEscrow(view tx.LedgerView, payerID, payeeID [20]byte, amount tx
 
 	payerIsLow := state.CompareAccountIDs(payerID, payeeID) < 0
 	if payerIsLow {
-		newBalance, err := rs.Balance.Sub(amount)
+		newBalance, err := rs.Balance.SubWithNumberContext(
+			amount,
+			numberContext,
+			state.RoundToNearest,
+		)
 		if err != nil {
 			return ter.TefINTERNAL
 		}
 		rs.Balance = newBalance
 	} else {
-		newBalance, err := rs.Balance.Add(amount)
+		newBalance, err := rs.Balance.AddWithNumberContext(
+			amount,
+			numberContext,
+			state.RoundToNearest,
+		)
 		if err != nil {
 			return ter.TefINTERNAL
 		}
@@ -1050,7 +1097,14 @@ func rippleCreditEscrow(view tx.LedgerView, payerID, payeeID [20]byte, amount tx
 
 // checkTrustLineLimit verifies the trust line limit isn't exceeded by the unlock.
 // Reference: rippled Escrow.cpp lines 908-931
-func checkTrustLineLimit(view tx.LedgerView, receiverID, issuerID [20]byte, currency string, finalAmount tx.Amount, issuerHigh bool) ter.Result {
+func checkTrustLineLimit(
+	view tx.LedgerView,
+	receiverID, issuerID [20]byte,
+	currency string,
+	finalAmount tx.Amount,
+	issuerHigh bool,
+	numberContext state.NumberContext,
+) ter.Result {
 	trustLineKey := keylet.Line(receiverID, issuerID, currency)
 	trustLineData, err := view.Read(trustLineKey)
 	if err != nil || trustLineData == nil {
@@ -1077,7 +1131,11 @@ func checkTrustLineLimit(view tx.LedgerView, receiverID, issuerID [20]byte, curr
 		lineBalance = lineBalance.Negate()
 	}
 
-	newBalance, err := lineBalance.Add(finalAmount)
+	newBalance, err := lineBalance.AddWithNumberContext(
+		finalAmount,
+		numberContext,
+		state.RoundToNearest,
+	)
 	if err != nil {
 		return ter.TefINTERNAL
 	}
@@ -1093,13 +1151,24 @@ func checkTrustLineLimit(view tx.LedgerView, receiverID, issuerID [20]byte, curr
 // divideAmountByRate computes amount * QUALITY_ONE / rate for IOU amounts.
 // This implements rippled's divideRound(amount, rate, issue, true) for escrow.
 // Reference: rippled Rate2.cpp divideRound → divRound
-func divideAmountByRate(amount tx.Amount, rate uint32) tx.Amount {
+func divideAmountByRate(
+	amount tx.Amount,
+	rate uint32,
+	numberContext state.NumberContext,
+) tx.Amount {
 	if rate == parityRate {
 		return amount
 	}
 
 	rateAmount := state.NewIssuedAmountFromValue(int64(rate), -9, "", "")
-	return state.DivRound(amount, rateAmount, amount.Currency, amount.Issuer, true)
+	return state.DivRoundWithNumberContext(
+		amount,
+		rateAmount,
+		amount.Currency,
+		amount.Issuer,
+		numberContext,
+		true,
+	)
 }
 
 // createMPTokenForEscrow creates a new MPToken SLE for holderID during escrow unlock.
@@ -1231,6 +1300,7 @@ func computeMPTTransferFee(
 	mptHexID string,
 	senderID, receiverID [20]byte,
 	originalAmount uint64,
+	numberContext state.NumberContext,
 ) (uint64, uint64) {
 	issuanceKey, err := mptIssuanceKeyFromHex(mptHexID)
 	if err != nil {
@@ -1286,7 +1356,12 @@ func computeMPTTransferFee(
 			panic("MPT divRound overflow")
 		}
 
-		finalAmount := uint64(state.DivRoundMPT(amount, rate, true))
+		finalAmount := uint64(state.DivRoundMPTWithNumberContext(
+			amount,
+			rate,
+			numberContext,
+			true,
+		))
 		return originalAmount, finalAmount
 	}
 
@@ -1303,19 +1378,27 @@ func computeMPTTransferFee(
 //	lhs = ((a - b) + b) / a - 1
 //	rhs = ((b - a) + a) / b - 1
 //	return |lhs| + |rhs| <= 1e-4
-func canAddIOUAmounts(a, b tx.Amount) bool {
+func canAddIOUAmounts(a, b tx.Amount, numberContext state.NumberContext) bool {
 	// If either is zero, addition is always safe
 	if a.IsZero() || b.IsZero() {
 		return true
 	}
 
 	// Perform (a - b) + b using IOU precision (this is where precision loss occurs)
-	aMinusB, _ := a.Sub(b)
-	roundTripA, _ := aMinusB.Add(b)
+	aMinusB, _ := a.SubWithNumberContext(b, numberContext, state.RoundToNearest)
+	roundTripA, _ := aMinusB.AddWithNumberContext(
+		b,
+		numberContext,
+		state.RoundToNearest,
+	)
 
 	// Perform (b - a) + a using IOU precision
-	bMinusA, _ := b.Sub(a)
-	roundTripB, _ := bMinusA.Add(a)
+	bMinusA, _ := b.SubWithNumberContext(a, numberContext, state.RoundToNearest)
+	roundTripB, _ := bMinusA.AddWithNumberContext(
+		a,
+		numberContext,
+		state.RoundToNearest,
+	)
 
 	// Convert to big.Rat for exact division and comparison
 	ratA := iouAmountToRat(a)

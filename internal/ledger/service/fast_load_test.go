@@ -15,6 +15,7 @@ import (
 	"github.com/LeJamon/go-xrpl/crypto/sha512half"
 	"github.com/LeJamon/go-xrpl/drops"
 	"github.com/LeJamon/go-xrpl/internal/ledger/genesis"
+	"github.com/LeJamon/go-xrpl/internal/ledger/header"
 	"github.com/LeJamon/go-xrpl/keylet"
 	xrpllog "github.com/LeJamon/go-xrpl/log"
 	"github.com/LeJamon/go-xrpl/protocol"
@@ -609,7 +610,7 @@ func TestService_FastLoadReplacesSameHeightOnlyAfterTrustedQuorum(t *testing.T) 
 	require.False(t, svc.NeedsInitialSync())
 
 	events := make(chan *LedgerAcceptedEvent, 4)
-	svc.SetEventCallback(func(event *LedgerAcceptedEvent) {
+	setEventSinkFunc(svc, func(event *LedgerAcceptedEvent) {
 		events <- event
 	})
 
@@ -619,7 +620,8 @@ func TestService_FastLoadReplacesSameHeightOnlyAfterTrustedQuorum(t *testing.T) 
 	require.NoError(t, err)
 	replacementHeader := loaded.Header()
 	replacementHeader.Validated = false
-	replacementHeader.Hash[0] ^= 0xFF
+	replacementHeader.CloseFlags ^= header.LCFNoConsensusTime
+	replacementHeader.Hash = header.CalculateHash(replacementHeader)
 	replacementHash := replacementHeader.Hash
 
 	initialCandidate, err := svc.BootstrapLedgerWithState(

@@ -396,8 +396,10 @@ func (r *ledgerReaderAdapter) CloseTime() int64 {
 	return protocol.RippleSeconds(r.l.CloseTime())
 }
 
-func (r *ledgerReaderAdapter) CloseTimeResolution() uint32 { return r.l.Header().CloseTimeResolution }
-func (r *ledgerReaderAdapter) CloseFlags() uint8           { return r.l.Header().CloseFlags }
+func (r *ledgerReaderAdapter) CloseTimeResolution() uint32 {
+	return uint32(r.l.Header().CloseTimeResolution)
+}
+func (r *ledgerReaderAdapter) CloseFlags() uint8 { return r.l.Header().CloseFlags }
 
 func (r *ledgerReaderAdapter) ParentCloseTime() int64 {
 	return protocol.RippleSeconds(r.l.ParentCloseTime())
