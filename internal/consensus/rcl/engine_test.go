@@ -79,14 +79,6 @@ func (ts *mockTxSet) Contains(id consensus.TxID) bool {
 	}
 	return false
 }
-func (ts *mockTxSet) Add(tx []byte) error { ts.txs = append(ts.txs, tx); return nil }
-func (ts *mockTxSet) Remove(id consensus.TxID) error {
-	if ts.containsTxs != nil {
-		delete(ts.containsTxs, id)
-	}
-	return nil
-}
-func (ts *mockTxSet) Bytes() []byte { return nil }
 
 // mockAdaptor implements consensus.Adaptor for testing
 type mockAdaptor struct {

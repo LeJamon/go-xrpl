@@ -186,7 +186,8 @@ func (r *Router) handleProposal(msg *peermanagement.InboundMessage) {
 	r.resolveMasterNodeID(&proposal.NodeID, proposal.SigningPubKey)
 	originPeer := uint64(msg.PeerID)
 
-	// Record duplicate-status + last-sighting BEFORE OnProposal.
+	// Check duplicate-status before OnProposal, but do not admit a new hash to
+	// durable suppression until signature verification and engine acceptance.
 	// Hash the DECODED fields via hashProposalSuppression. Hashing
 	// the raw protobuf envelope would desync dedup from peers
 	// that see the same message with different optional-field framing
@@ -198,8 +199,6 @@ func (r *Router) handleProposal(msg *peermanagement.InboundMessage) {
 	suppressionHash := hashProposalSuppression(proposal)
 	proposal.SuppressionHash = suppressionHash
 	r.adaptor.RecordMessageSource(suppressionHash, originPeer)
-	firstSeen, _ := r.messageSeen.observe(suppressionHash)
-
 	// Drop duplicates before the engine path (re-running OnProposal
 	// just re-verifies ECDSA). Still feed the IDLED-gated relay slot
 	// on dupes for squelch accounting.
@@ -207,7 +206,7 @@ func (r *Router) handleProposal(msg *peermanagement.InboundMessage) {
 	// Rippled counts a duplicate for reduce-relay only after the first copy
 	// was relayed. Sources received before that point are accumulated and
 	// counted atomically by RelayFromValidator.
-	if !firstSeen {
+	if r.messageSeen.seenRecently(suppressionHash) {
 		if r.adaptor.MessageRelayedRecently(suppressionHash) {
 			r.adaptor.UpdateRelaySlot(proposal.SigningPubKey[:], originPeer, nil)
 		}
@@ -218,6 +217,7 @@ func (r *Router) handleProposal(msg *peermanagement.InboundMessage) {
 		r.logger.Debug("engine rejected proposal", "error", err, "peer", msg.PeerID)
 		return
 	}
+	r.messageSeen.observe(suppressionHash)
 }
 
 func (r *Router) handleValidation(msg *peermanagement.InboundMessage) {

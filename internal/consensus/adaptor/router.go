@@ -346,7 +346,7 @@ const serveQueueDepth = 256
 // messageDedupTTL matches rippled's five-minute suppression hold.
 const messageDedupTTL = 300 * time.Second
 
-const messageDedupSweepThreshold = 4096
+const messageDedupMaxEntries = 4096
 
 // NewRouter creates a new Router.
 func NewRouter(engine consensus.RouterEngine, adaptor *Adaptor, inbox <-chan *peermanagement.InboundMessage) *Router {
@@ -362,7 +362,7 @@ func NewRouter(engine consensus.RouterEngine, adaptor *Adaptor, inbox <-chan *pe
 		replayer:           inbound.NewReplayer(logger, inbound.SystemClock, inbound.DefaultMaxInFlightReplays),
 		fetchTracker:       inbound.NewTracker(),
 		fetchPacks:         newFetchPackCache(),
-		messageSeen:        newMessageSuppression(messageDedupTTL, messageDedupSweepThreshold),
+		messageSeen:        newMessageSuppression(messageDedupTTL, messageDedupMaxEntries),
 		txSetAcquire:       make(map[consensus.TxSetID]*txSetAcquireState),
 		txSetRetryKnobs:    defaultTxSetRetryKnobs(),
 		seqHash:            make(map[uint32]ledgerHashEntry),

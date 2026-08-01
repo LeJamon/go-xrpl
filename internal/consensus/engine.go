@@ -514,13 +514,7 @@ type TxSet interface {
 
 	Contains(id TxID) bool
 
-	Add(tx []byte) error
-
-	Remove(id TxID) error
-
 	Size() int
-
-	Bytes() []byte
 }
 
 // OperatingMode represents the node's overall operating state.
