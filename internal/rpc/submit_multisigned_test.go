@@ -81,8 +81,6 @@ func TestSubmitMultisigned_InvalidSequenceType(t *testing.T) {
 	assert.Contains(t, rpcErr.Message, "tx_json.Sequence")
 }
 
-// TestSubmitMultisigned_FeeNotPresent verifies that missing Fee is rejected.
-// Matches rippled: "Invalid Fee field.  Fees must be specified in XRP."
 func TestSubmitMultisigned_FeeNotPresent(t *testing.T) {
 	mock := newMockLedgerServiceSubmit()
 	services := newSubmitTestServices(mock)
@@ -96,7 +94,7 @@ func TestSubmitMultisigned_FeeNotPresent(t *testing.T) {
 	_, rpcErr := handler.Handle(ctx, makeSubmitMultisignedParams(t, txJSON))
 	require.NotNil(t, rpcErr)
 	assert.Equal(t, types.RpcINVALID_PARAMS, rpcErr.Code)
-	assert.Equal(t, "Invalid Fee field.  Fees must be specified in XRP.", rpcErr.Message)
+	assert.Equal(t, "Missing field 'tx_json.Fee'.", rpcErr.Message)
 }
 
 // TestSubmitMultisigned_FeeNumeric verifies that a JSON integer Fee is
