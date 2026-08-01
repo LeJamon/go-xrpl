@@ -155,6 +155,7 @@ func Run(ctx context.Context, appConfig *config.Config, configPath string, stand
 		wsSrvs              []*http.Server
 		wsServer            *rpc.WebSocketServer
 		grpcSrv             *googlegrpc.Server
+		stallWatchdog       *watchdog.Watchdog
 	)
 	defer func() {
 		doShutdown(httpSrvs, wsSrvs, wsServer, grpcSrv, ledgerService, ledgerCleaner, consensusComponents, rotator, db, repoManager, serverLog)
@@ -525,12 +526,6 @@ func Run(ctx context.Context, appConfig *config.Config, configPath string, stand
 			}
 		}
 
-		if err := context.Cause(ctx); err != nil {
-			return err
-		}
-		if err := consensusComponents.Start(); err != nil {
-			return fmt.Errorf("start consensus components: %w", err)
-		}
 		if router := consensusComponents.Router; router != nil && cleanerSource != nil {
 			cleanerSource.SetReacquire(func(ctx context.Context, seq uint32) error {
 				if err := ctx.Err(); err != nil {
@@ -571,15 +566,6 @@ func Run(ctx context.Context, appConfig *config.Config, configPath string, stand
 		// Wire OpenLedger.Accept's relay callback so recovered txs are
 		// re-broadcast post-LCL (rippled OpenLedger.cpp:120-150).
 		ledgerService.SetTxRelay(broadcastTx)
-
-		// Wire the tx-set "we have this" announce: BuildTxSet fires
-		// onTxSetBuilt → overlay broadcasts TMHaveTransactionSet{tsHAVE}.
-		// Mirrors rippled's post-consensus mtHAVE_SET emission so peers
-		// acquiring the same set via mtHAVE_SET{tsNEED} can find a
-		// source without polling.
-		consensusComponents.Adaptor.SetOnTxSetBuilt(func(id consensus.TxSetID) {
-			overlay.BroadcastHaveTxSet([32]byte(id))
-		})
 
 		// Wire the open-ledger tx lookup used by the tx-reduce-relay
 		// reply path (TMGetObjectByHash{otTRANSACTIONS} → TMTransactions
@@ -1060,6 +1046,37 @@ func Run(ctx context.Context, appConfig *config.Config, configPath string, stand
 		)
 	}))
 
+	if !standalone && appConfig.Watchdog.IsEnabled() {
+		wdCfg := watchdog.ConfigFromSeconds(
+			appConfig.Watchdog.WarnSecondsResolved(),
+			appConfig.Watchdog.FatalSecondsResolved(),
+			appConfig.Watchdog.AbortSecondsResolved(),
+		)
+		stallWatchdog = watchdog.New(wdCfg, nil)
+		if consensusComponents != nil {
+			if sp, ok := consensusComponents.Engine.(stallPinger); ok {
+				sp.SetStallPing(stallWatchdog.Register("consensus"))
+			}
+		}
+	}
+
+	shutdownCh := make(chan struct{}, 1)
+	services.SetShutdownFunc(func() {
+		serverLog.Info("Shutdown requested via RPC stop command")
+		select {
+		case shutdownCh <- struct{}{}:
+		default:
+		}
+	})
+
+	if err := context.Cause(ctx); err != nil {
+		return err
+	}
+	if consensusComponents != nil {
+		if err := consensusComponents.Start(ctx); err != nil {
+			return fmt.Errorf("start consensus components: %w", err)
+		}
+	}
 	if err := context.Cause(ctx); err != nil {
 		return err
 	}
@@ -1090,24 +1107,10 @@ func Run(ctx context.Context, appConfig *config.Config, configPath string, stand
 	// watchdog runs on its own goroutine and aborts the process if a monitored
 	// loop wedges, so a deadlocked node screams and can be restarted instead of
 	// going quiet.
-	if !standalone && appConfig.Watchdog.IsEnabled() {
-		wdCfg := watchdog.ConfigFromSeconds(
-			appConfig.Watchdog.WarnSecondsResolved(),
-			appConfig.Watchdog.FatalSecondsResolved(),
-			appConfig.Watchdog.AbortSecondsResolved(),
-		)
-		wd := watchdog.New(wdCfg, nil)
-		// Monitor only the tick-driven consensus loop: rippled's LoadManager
-		// watches loop liveness, never ledger-close progress, so a catching-up
-		// node self-heals via checkLedger rather than aborting.
-		if consensusComponents != nil {
-			if sp, ok := consensusComponents.Engine.(stallPinger); ok {
-				sp.SetStallPing(wd.Register("consensus"))
-			}
-		}
+	if stallWatchdog != nil {
 		wdCtx, cancelWatchdog := context.WithCancel(context.Background())
 		defer cancelWatchdog()
-		go wd.Run(wdCtx)
+		go stallWatchdog.Run(wdCtx)
 		serverLog.Info("Stall watchdog armed",
 			"warn_s", appConfig.Watchdog.WarnSecondsResolved(),
 			"fatal_s", appConfig.Watchdog.FatalSecondsResolved(),
@@ -1130,20 +1133,21 @@ func Run(ctx context.Context, appConfig *config.Config, configPath string, stand
 	signal.Notify(reloadCh, syscall.SIGHUP)
 	defer signal.Stop(reloadCh)
 
-	// shutdownCh lets the RPC stop command trigger the same path
-	shutdownCh := make(chan struct{}, 1)
-
-	services.SetShutdownFunc(func() {
-		serverLog.Info("Shutdown requested via RPC stop command")
-		// Non-blocking: the main loop drains one value and returns, so a
-		// second concurrent stop must not park its handler goroutine forever.
-		select {
-		case shutdownCh <- struct{}{}:
-		default:
-		}
-	})
-
-	return waitForShutdown(ctx, serverLog, sigCh, reloadCh, shutdownCh, listenerErrCh, consensusComponents, configPath)
+	var componentErrCh <-chan error
+	if consensusComponents != nil {
+		componentErrCh = consensusComponents.Errors()
+	}
+	return waitForShutdown(
+		ctx,
+		serverLog,
+		sigCh,
+		reloadCh,
+		shutdownCh,
+		listenerErrCh,
+		componentErrCh,
+		consensusComponents,
+		configPath,
+	)
 }
 
 func configuredLedgerLoadFees(appConfig *config.Config) drops.Fees {
@@ -1176,9 +1180,10 @@ func validateTrustedValidatorConfig(appConfig *config.Config, standalone bool) e
 }
 
 // waitForShutdown blocks until a terminating event arrives: an OS signal, an
-// RPC stop, or a listener goroutine failure. SIGHUP is non-terminating — it
-// reloads the trusted validator set in place and keeps waiting. It returns the
-// listener error (if any) so the caller's deferred cleanup runs.
+// RPC stop, or a listener or consensus-component failure. SIGHUP is
+// non-terminating — it reloads the trusted validator set in place and keeps
+// waiting. It returns the fatal error (if any) so the caller's deferred cleanup
+// runs.
 
 func waitForShutdown(
 	ctx context.Context,
@@ -1186,6 +1191,7 @@ func waitForShutdown(
 	sigCh, reloadCh chan os.Signal,
 	shutdownCh chan struct{},
 	listenerErrCh chan error,
+	componentErrCh <-chan error,
 	consensusComponents *adaptor.Components,
 	configPath string,
 ) error {
@@ -1200,6 +1206,16 @@ func waitForShutdown(
 			return nil
 		case err := <-listenerErrCh:
 			log.Error("Listener failed — initiating shutdown", "err", err)
+			return err
+		case err, ok := <-componentErrCh:
+			if !ok {
+				componentErrCh = nil
+				continue
+			}
+			if err == nil {
+				err = errors.New("consensus component stopped unexpectedly")
+			}
+			log.Error("Consensus component failed — initiating shutdown", "err", err)
 			return err
 		case <-reloadCh:
 			reloadTrustedValidators(log, consensusComponents, configPath)

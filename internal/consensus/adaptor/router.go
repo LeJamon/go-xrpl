@@ -55,8 +55,12 @@ type peerBootstrapAcknowledger interface {
 // Router reads inbound messages from the P2P overlay and dispatches
 // them to the consensus engine and adaptor.
 type Router struct {
-	engine  consensus.RouterEngine
-	adaptor *Adaptor
+	engine      consensus.RouterEngine
+	adaptor     *Adaptor
+	gossip      gossipNetwork
+	txSetNet    txSetNetwork
+	acquisition ledgerAcquisitionNetwork
+	serve       ledgerServeNetwork
 	// inbox is the overlay's bounded, backpressured consensus lane.
 	inbox <-chan *peermanagement.InboundMessage
 	// serviceInbox carries best-effort, recoverable peer traffic. Keeping it
@@ -186,7 +190,7 @@ type Router struct {
 	txSetAcquire   map[consensus.TxSetID]*txSetAcquireState
 
 	// Retry-loop knobs for tx-set acquisition. Set to production defaults by
-	// NewRouter; tests inject smaller values via SetTxSetRetryKnobsForTest so
+	// newRouter; tests inject smaller values via setTxSetRetryKnobsForTest so
 	// they don't sleep for the production 250ms throttle window. See
 	// txSetRetryKnobs for the meaning of each field.
 	txSetRetryKnobs txSetRetryKnobs
@@ -198,11 +202,18 @@ type Router struct {
 	// Nil when online-delete is off, leaving acquisition/serving unrestricted.
 	floor MinimumOnlineFloor
 
+	lifecycleMu     sync.RWMutex
+	lifecycleState  routerLifecycleState
+	lifecycleCtx    context.Context
+	lifecycleCancel context.CancelFunc
+	lifecycleWG     sync.WaitGroup
+	lifecycleReady  chan struct{}
+
+	prewarmSignatures func(context.Context, [][]byte)
+
 	// txJobs is the bounded queue draining inbound peer transactions off the
-	// Run message loop, mirroring rippled's jtTRANSACTION job queue. Created
-	// and drained by startTxWorkers from Run; nil until then, in which case
-	// submitTxJob runs the handler inline (tests that drive handleMessage
-	// synchronously). Only written on the Run goroutine.
+	// Run message loop, mirroring rippled's jtTRANSACTION job queue. It is nil
+	// before Run and after shutdown.
 	txJobs chan *peermanagement.InboundMessage
 
 	// droppedTxJobs counts inbound transactions shed because the worker pool
@@ -213,10 +224,7 @@ type Router struct {
 	// serveJobs is the bounded queue draining inbound mtGET_LEDGER serve work
 	// (handleGetLedger / serveTxSet, which builds the largest map — the
 	// 15k-tx tx-set — inline) off the Run message loop onto a small worker
-	// pool. Created and drained by startServeWorkers from Run; nil until
-	// then, in which case submitServeJob runs handleGetLedger inline (tests
-	// that drive handleMessage synchronously). Only written on the Run
-	// goroutine.
+	// pool. It is nil before Run and after shutdown.
 	serveJobs chan *peermanagement.InboundMessage
 
 	// droppedServeJobs counts inbound get_ledger requests shed because the
@@ -260,6 +268,13 @@ type Router struct {
 	seqHashMu  sync.Mutex
 	seqHash    map[uint32]ledgerHashEntry
 	seqHashMax uint32
+}
+
+type routerNetworkConfig struct {
+	gossip      gossipNetwork
+	txSet       txSetNetwork
+	acquisition ledgerAcquisitionNetwork
+	serve       ledgerServeNetwork
 }
 
 // catchupTarget is the highest (seq,hash) the router is driving a bounded
@@ -342,14 +357,42 @@ const serveQueueDepth = 256
 // messageDedupTTL matches rippled's five-minute suppression hold.
 const messageDedupTTL = 300 * time.Second
 
-const messageDedupSweepThreshold = 4096
+const messageDedupMaxEntries = 4096
 
 // NewRouter creates a new Router.
 func NewRouter(engine consensus.RouterEngine, adaptor *Adaptor, inbox <-chan *peermanagement.InboundMessage) *Router {
+	network := routerNetworkConfig{}
+	if adaptor != nil {
+		network.gossip, _ = adaptor.sender.(gossipNetwork)
+		network.txSet, _ = adaptor.sender.(txSetNetwork)
+		network.acquisition, _ = adaptor.sender.(ledgerAcquisitionNetwork)
+		network.serve, _ = adaptor.sender.(ledgerServeNetwork)
+	}
+	return newRouter(engine, adaptor, inbox, network)
+}
+
+func newRouter(engine consensus.RouterEngine, adaptor *Adaptor, inbox <-chan *peermanagement.InboundMessage, network routerNetworkConfig) *Router {
 	logger := slog.Default().With("component", "consensus-router")
+	noop := &noopSender{}
+	if network.gossip == nil {
+		network.gossip = noop
+	}
+	if network.txSet == nil {
+		network.txSet = noop
+	}
+	if network.acquisition == nil {
+		network.acquisition = noop
+	}
+	if network.serve == nil {
+		network.serve = noop
+	}
 	r := &Router{
 		engine:             engine,
 		adaptor:            adaptor,
+		gossip:             network.gossip,
+		txSetNet:           network.txSet,
+		acquisition:        network.acquisition,
+		serve:              network.serve,
 		inbox:              inbox,
 		logger:             logger,
 		peerStates:         make(map[peermanagement.PeerID]*peerLedgerState),
@@ -358,10 +401,11 @@ func NewRouter(engine consensus.RouterEngine, adaptor *Adaptor, inbox <-chan *pe
 		replayer:           inbound.NewReplayer(logger, inbound.SystemClock, inbound.DefaultMaxInFlightReplays),
 		fetchTracker:       inbound.NewTracker(),
 		fetchPacks:         newFetchPackCache(),
-		messageSeen:        newMessageSuppression(messageDedupTTL, messageDedupSweepThreshold),
+		messageSeen:        newMessageSuppression(messageDedupTTL, messageDedupMaxEntries),
 		txSetAcquire:       make(map[consensus.TxSetID]*txSetAcquireState),
 		txSetRetryKnobs:    defaultTxSetRetryKnobs(),
 		seqHash:            make(map[uint32]ledgerHashEntry),
+		lifecycleCtx:       context.Background(),
 	}
 	// Wire the stash → acquisition hook so quorum decisions on unknown
 	// ledgers don't sit silently in pendingLedgerValidations.
@@ -383,6 +427,7 @@ func NewRouter(engine consensus.RouterEngine, adaptor *Adaptor, inbox <-chan *pe
 		}
 		if svc := adaptor.LedgerService(); svc != nil {
 			svc.SetOnPendingValidationStashed(r.armValidationStashAcquisition)
+			r.prewarmSignatures = svc.PrewarmSignaturesContext
 		}
 		// Wire the still-needed re-arm so every consensus re-ask of an
 		// in-flight tx-set clears the per-acquisition throttle and
@@ -653,8 +698,12 @@ func (r *Router) removePeerFromAcquisitions(peerID uint64) {
 // also runs in this loop to time out stuck inbound replay-delta
 // acquisitions and fall back to the legacy mtGET_LEDGER path.
 func (r *Router) Run(ctx context.Context) {
+	runCtx, ok := r.startLifecycle(ctx)
+	if !ok {
+		return
+	}
 	if r.acquisitionStore != nil {
-		r.acquisitionStore.start(ctx)
+		r.acquisitionStore.start(runCtx)
 		defer r.acquisitionStore.stopDrain()
 	}
 	r.acquisitionWorkMu.Lock()
@@ -665,7 +714,7 @@ func (r *Router) Run(ctx context.Context) {
 	}
 	r.acquisitionWorkMu.Unlock()
 	workLane.flush = r.flushAcquisitionStore
-	workLane.start(ctx)
+	workLane.start(runCtx)
 	defer func() {
 		workLane.stop()
 		r.acquisitionWorkMu.Lock()
@@ -675,7 +724,7 @@ func (r *Router) Run(ctx context.Context) {
 		r.acquisitionWorkMu.Unlock()
 	}()
 
-	disconnectCtx, stopDisconnectCleanup := context.WithCancel(ctx)
+	disconnectCtx, stopDisconnectCleanup := context.WithCancel(runCtx)
 	disconnectCleanupDone := make(chan struct{})
 	go func() {
 		defer close(disconnectCleanupDone)
@@ -686,22 +735,21 @@ func (r *Router) Run(ctx context.Context) {
 		<-disconnectCleanupDone
 	}()
 
-	r.startTxWorkers(ctx)
-	r.startServeWorkers(ctx)
-	r.startManifestWorker(ctx)
+	r.startManifestWorker(runCtx)
 	defer r.stopManifestWorker()
 	if r.validationWork != nil {
-		r.validationWork.start(ctx)
+		r.validationWork.start(runCtx)
 		defer r.validationWork.stop()
 	}
 	ticker := time.NewTicker(inboundReplayDeltaTickInterval)
 	defer ticker.Stop()
+	defer r.stopLifecycle()
 	r.drainPeerConnects()
 	for {
-		if !r.drainTrustedValidationResults(ctx) {
+		if !r.drainTrustedValidationResults(runCtx) {
 			return
 		}
-		if !r.drainConsensusInbox(ctx) {
+		if !r.drainConsensusInbox(runCtx) {
 			return
 		}
 		acqInbox := r.acqInbox
@@ -709,7 +757,7 @@ func (r *Router) Run(ctx context.Context) {
 			acqInbox = nil
 		}
 		select {
-		case <-ctx.Done():
+		case <-runCtx.Done():
 			return
 		case msg, ok := <-r.inbox:
 			if !ok {
@@ -755,7 +803,7 @@ func (r *Router) Run(ctx context.Context) {
 		case result := <-r.trustedValidationWorkResults():
 			r.handleValidationWorkResult(result)
 		case result := <-r.untrustedValidationWorkResults():
-			if !r.drainTrustedValidationResults(ctx) {
+			if !r.drainTrustedValidationResults(runCtx) {
 				return
 			}
 			r.handleValidationWorkResult(result)
@@ -818,45 +866,31 @@ func (r *Router) drainAcquisitionInboxBeforeMaintenance(workLane *acquisitionWor
 	return drained
 }
 
-// startTxWorkers builds the bounded inbound-transaction queue and launches its
-// drainers. Called once at the top of Run, before the message loop, so the
-// first dispatched transaction sees a live pool. Workers exit on ctx.Done.
-func (r *Router) startTxWorkers(ctx context.Context) {
-	r.txJobs = make(chan *peermanagement.InboundMessage, txQueueDepth)
-	jobs := r.txJobs
-	for range txWorkerCount {
-		go func() {
-			for {
-				select {
-				case <-ctx.Done():
-					return
-				case msg := <-jobs:
-					r.handleTransaction(msg)
-				}
-			}
-		}()
-	}
-}
-
 // submitTxJob hands an inbound transaction to the worker pool, off the Run
-// message loop. When the pool isn't running (tests that drive handleMessage
-// synchronously without Run), it runs the handler inline to preserve the
-// synchronous contract. On a saturated queue it sheds the frame and bumps
-// droppedTxJobs — the originating peer resends and reduce-relay means other
-// peers relay it too, so a dropped relay frame is recoverable. Mirrors
-// rippled's "Transaction queue is full" overflow drop.
+// message loop. Before the first Run it handles synchronously for direct
+// dispatch tests. Once shutdown begins, admission remains closed.
 func (r *Router) submitTxJob(msg *peermanagement.InboundMessage) {
-	if r.txJobs == nil {
+	r.lifecycleMu.RLock()
+	state := r.lifecycleState
+	jobs := r.txJobs
+	if state == routerLifecycleInitial {
+		r.lifecycleMu.RUnlock()
 		r.handleTransaction(msg)
 		return
 	}
+	if state != routerLifecycleRunning || jobs == nil {
+		r.lifecycleMu.RUnlock()
+		r.droppedTxJobs.Add(1)
+		return
+	}
 	select {
-	case r.txJobs <- msg:
+	case jobs <- msg:
 	default:
 		r.droppedTxJobs.Add(1)
 		r.logger.Debug("inbound tx dropped: worker pool saturated",
 			"t", "consensus", "event", "tx-shed", "peer", msg.PeerID)
 	}
+	r.lifecycleMu.RUnlock()
 }
 
 // DroppedTxJobs returns the cumulative count of inbound transactions shed
@@ -865,44 +899,31 @@ func (r *Router) DroppedTxJobs() uint64 {
 	return r.droppedTxJobs.Load()
 }
 
-// startServeWorkers builds the bounded get_ledger serve queue and launches
-// its drainers. Called once at the top of Run, before the message loop, so
-// the first dispatched request sees a live pool. Workers exit on ctx.Done.
-func (r *Router) startServeWorkers(ctx context.Context) {
-	r.serveJobs = make(chan *peermanagement.InboundMessage, serveQueueDepth)
-	jobs := r.serveJobs
-	for range serveWorkerCount {
-		go func() {
-			for {
-				select {
-				case <-ctx.Done():
-					return
-				case msg := <-jobs:
-					r.handleGetLedger(msg)
-				}
-			}
-		}()
-	}
-}
-
 // submitServeJob hands an inbound get_ledger request to the serve pool, off
-// the Run message loop. When the pool isn't running (tests that drive
-// handleMessage synchronously without Run), it runs the handler inline to
-// preserve the synchronous contract. On a saturated queue it sheds the
-// request and bumps droppedServeJobs — the requesting peer retries elsewhere,
-// so a dropped serve is recoverable load-shedding.
+// the Run message loop. Before the first Run it handles synchronously for
+// direct dispatch tests. Once shutdown begins, admission remains closed.
 func (r *Router) submitServeJob(msg *peermanagement.InboundMessage) {
-	if r.serveJobs == nil {
+	r.lifecycleMu.RLock()
+	state := r.lifecycleState
+	jobs := r.serveJobs
+	if state == routerLifecycleInitial {
+		r.lifecycleMu.RUnlock()
 		r.handleGetLedger(msg)
 		return
 	}
+	if state != routerLifecycleRunning || jobs == nil {
+		r.lifecycleMu.RUnlock()
+		r.droppedServeJobs.Add(1)
+		return
+	}
 	select {
-	case r.serveJobs <- msg:
+	case jobs <- msg:
 	default:
 		r.droppedServeJobs.Add(1)
 		r.logger.Debug("inbound get_ledger dropped: serve pool saturated",
 			"t", "consensus", "event", "serve-shed", "peer", msg.PeerID)
 	}
+	r.lifecycleMu.RUnlock()
 }
 
 // DroppedServeJobs returns the cumulative count of inbound get_ledger
@@ -1009,7 +1030,7 @@ func (r *Router) maintenanceTick() {
 		tried := rd.TriedPeers()
 		// Ask the overlay for a fresh replay-capable peer, excluding
 		// every peer we've already tried for this hash.
-		candidates := r.adaptor.ReplayCapablePeersExcluding(tried, 1)
+		candidates := r.acquisition.ReplayCapablePeersExcluding(tried, 1)
 		if len(candidates) == 0 {
 			// No fresh peer available — can't rotate; the outer
 			// budget below will eventually time this out and fall
@@ -1033,8 +1054,8 @@ func (r *Router) maintenanceTick() {
 		// continues to run).
 		seq := rd.Seq()
 		hash := rd.Hash()
-		go func() {
-			if err := r.adaptor.RequestReplayDelta(newPeer, hash); err != nil {
+		r.runLifecycleTask(func(context.Context) {
+			if err := r.acquisition.RequestReplayDelta(newPeer, hash); err != nil {
 				r.logger.Debug("replay-delta retry request failed",
 					"seq", seq,
 					"hash", fmt.Sprintf("%x", hash),
@@ -1042,7 +1063,7 @@ func (r *Router) maintenanceTick() {
 					"err", err,
 				)
 			}
-		}()
+		})
 	}
 
 	// Reap acquisitions that exceeded the OUTER budget. At this point

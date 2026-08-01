@@ -4,6 +4,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/LeJamon/go-xrpl/internal/consensus"
 	"github.com/stretchr/testify/require"
 )
 
@@ -48,4 +49,31 @@ func TestTxSetCache_Remove(t *testing.T) {
 	if _, ok := c.Get(ts.ID()); ok {
 		t.Error("entry should be gone after Remove")
 	}
+}
+
+func TestTxSetCache_ZeroSetIsPermanent(t *testing.T) {
+	c := NewTxSetCache()
+	zeroID := consensus.TxSetID{}
+
+	zero, ok := c.Get(zeroID)
+	require.True(t, ok)
+	require.NotNil(t, zero)
+	require.Equal(t, zeroID, zero.ID())
+	require.Zero(t, zero.Size())
+
+	c.Remove(zeroID)
+	clock := time.Unix(1_700_000_000, 0)
+	c.now = func() time.Time { return clock }
+	fresh, err := NewTxSet([][]byte{makeBlob(4)})
+	require.NoError(t, err)
+	c.Put(fresh)
+	clock = clock.Add(txSetCacheTTL + time.Second)
+	next, err := NewTxSet([][]byte{makeBlob(5)})
+	require.NoError(t, err)
+	c.Put(next)
+
+	zeroAfterSweep, ok := c.Get(zeroID)
+	require.True(t, ok)
+	require.Same(t, zero, zeroAfterSweep)
+	require.Zero(t, zeroAfterSweep.Size())
 }

@@ -35,10 +35,8 @@ type eventPublisher struct {
 	ledgerEventStarted      bool
 	ledgerEventStopping     bool
 	ledgerEventWG           sync.WaitGroup
-	// subscriberMu owns the ledger sink and the separate consensus-phase callback.
-	subscriberMu           sync.RWMutex
-	eventSink              EventSink
-	consensusPhaseCallback func(string)
+	subscriberMu            sync.RWMutex
+	eventSink               EventSink
 }
 
 type historyComponent struct {

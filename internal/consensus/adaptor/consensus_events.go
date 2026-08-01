@@ -70,8 +70,8 @@ func (a *Adaptor) StateAccounting() StateAccountingSnapshot {
 	return a.stateAcct.snapshot()
 }
 
-// OnConsensusReached logs the close and fires the consensus-phase hook; the
-// open-ledger view is already advanced by AcceptConsensusResult.
+// OnConsensusReached logs the close; the open-ledger view is already advanced
+// by AcceptConsensusResult.
 //
 // Does NOT mark the ledger validated — that only happens at trusted-validation
 // quorum (OnLedgerFullyValidated). Local consensus != network agreement.
@@ -86,74 +86,11 @@ func (a *Adaptor) OnConsensusReached(ledger consensus.Ledger, validations []*con
 		// Feed round duration to the service so TxQ sees the timeLeap flag when
 		// consensus crossed the 5s slow-consensus threshold.
 		a.ledgerService.SetLastConsensusRoundTime(roundTime)
-
-		a.emitConsensusPhase("accepted")
 	}
 
 	a.maybePromoteAfterConsensus(ledger)
 	if a.onLedgerBuilt != nil {
 		a.onLedgerBuilt(ledger.Seq(), [32]byte(ledger.ID()))
-	}
-}
-
-// emitConsensusPhase delivers a consensus-phase notification through a single
-// ordered dispatcher (started on first use). Enqueue is non-blocking: a slow
-// hook drops the (advisory) notification rather than stalling consensus.
-func (a *Adaptor) emitConsensusPhase(phase string) {
-	if a.ledgerService == nil {
-		return
-	}
-	a.consensusPhaseMu.Lock()
-	if a.consensusPhaseStop {
-		a.consensusPhaseMu.Unlock()
-		return
-	}
-	if a.consensusPhaseCh == nil {
-		a.consensusPhaseCh = make(chan string, 64)
-		a.consensusPhaseQuit = make(chan struct{})
-		a.consensusPhaseWG.Add(1)
-		go a.runConsensusPhaseDispatcher()
-	}
-	ch := a.consensusPhaseCh
-	a.consensusPhaseMu.Unlock()
-	select {
-	case ch <- phase:
-	default:
-		slog.Warn("consensus phase hook buffer full; dropping notification",
-			"t", "adaptor.emitConsensusPhase", "phase", phase)
-	}
-}
-
-// runConsensusPhaseDispatcher drains consensus-phase notifications in order
-// until StopConsensusPhaseDispatcher signals quit. The notifications are
-// advisory, so a shutdown abandons any still buffered rather than draining them.
-func (a *Adaptor) runConsensusPhaseDispatcher() {
-	defer a.consensusPhaseWG.Done()
-	for {
-		select {
-		case p := <-a.consensusPhaseCh:
-			a.ledgerService.NotifyConsensusPhase(p)
-		case <-a.consensusPhaseQuit:
-			return
-		}
-	}
-}
-
-// StopConsensusPhaseDispatcher stops the consensus-phase dispatcher goroutine and
-// joins it, so an in-process restart cycle doesn't leak one per cycle. Idempotent
-// and safe if the dispatcher was never started.
-func (a *Adaptor) StopConsensusPhaseDispatcher() {
-	a.consensusPhaseMu.Lock()
-	if a.consensusPhaseStop {
-		a.consensusPhaseMu.Unlock()
-		return
-	}
-	a.consensusPhaseStop = true
-	quit := a.consensusPhaseQuit
-	a.consensusPhaseMu.Unlock()
-	if quit != nil {
-		close(quit)
-		a.consensusPhaseWG.Wait()
 	}
 }
 
@@ -494,10 +431,6 @@ func (a *Adaptor) OnPhaseChange(oldPhase, newPhase consensus.Phase) {
 	case consensus.PhaseAccepted:
 		a.broadcastStatus(message.NodeEventAcceptedLedger)
 	}
-
-	// Notify via the ordered dispatcher for WebSocket subscription
-	// broadcasting.
-	a.emitConsensusPhase(newPhase.String())
 }
 
 // OnLedgerSwitched tells peers we abandoned our previous LCL for ledger.

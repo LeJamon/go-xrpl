@@ -1,11 +1,27 @@
 package adaptor
 
 import (
+	"errors"
 	"testing"
 	"time"
 
+	"github.com/LeJamon/go-xrpl/internal/consensus"
+	"github.com/LeJamon/go-xrpl/internal/peermanagement"
+	"github.com/LeJamon/go-xrpl/internal/peermanagement/message"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
+
+type proposalAdmissionEngine struct {
+	mockEngine
+	err   error
+	calls int
+}
+
+func (e *proposalAdmissionEngine) OnProposal(*consensus.Proposal, uint64) error {
+	e.calls++
+	return e.err
+}
 
 // TestMessageSuppression_ObserveReturnsLastSeen pins R5.7: observe()
 // must return both first-seen and the prior observation time so the
@@ -94,19 +110,110 @@ func TestMessageSuppression_RecordPeerAndHasHash(t *testing.T) {
 		"peer-set must be scoped per hash")
 }
 
-func TestMessageSuppression_DoesNotEvictLiveEntriesAtSweepThreshold(t *testing.T) {
+func TestMessageSuppression_EvictsLeastRecentlyUsedAtCapacity(t *testing.T) {
 	now := time.Unix(1_700_000_000, 0)
-	s := newMessageSuppression(5*time.Minute, 4)
+	s := newMessageSuppression(5*time.Minute, 3)
 	s.now = func() time.Time { return now }
 
 	first := [32]byte{1}
-	firstSeen, _ := s.observe(first)
-	assert.True(t, firstSeen)
-	for i := byte(2); i <= 8; i++ {
-		hash := [32]byte{i}
-		s.observe(hash)
+	second := [32]byte{2}
+	third := [32]byte{3}
+	fourth := [32]byte{4}
+	s.observe(first)
+	s.observe(second)
+	s.observe(third)
+	s.observe(first)
+	s.observe(fourth)
+
+	assert.Contains(t, s.entries, first)
+	assert.NotContains(t, s.entries, second)
+	assert.Contains(t, s.entries, third)
+	assert.Contains(t, s.entries, fourth)
+	assert.Len(t, s.entries, 3)
+}
+
+func TestMessageSuppression_RecordPeerUsesSharedCapacity(t *testing.T) {
+	s := newMessageSuppression(5*time.Minute, 2)
+	first := [32]byte{1}
+	second := [32]byte{2}
+	third := [32]byte{3}
+
+	assert.True(t, s.recordPeer(first, 11))
+	assert.True(t, s.recordPeer(second, 22))
+	assert.False(t, s.recordPeer(first, 11))
+	assert.True(t, s.recordPeer(third, 33))
+
+	assert.True(t, s.peerHasHash(first, 11))
+	assert.False(t, s.peerHasHash(second, 22))
+	assert.True(t, s.peerHasHash(third, 33))
+	assert.Len(t, s.entries, 2)
+}
+
+func TestMessageSuppression_PeerAssociationsExpireAsOneEntry(t *testing.T) {
+	now := time.Unix(1_700_000_000, 0)
+	const ttl = 30 * time.Second
+	s := newMessageSuppression(ttl, 4)
+	s.now = func() time.Time { return now }
+	hash := [32]byte{1}
+
+	assert.True(t, s.recordPeer(hash, 11))
+	now = now.Add(ttl)
+	assert.False(t, s.peerHasHash(hash, 11))
+	assert.NotContains(t, s.entries, hash)
+
+	assert.True(t, s.recordPeer(hash, 22))
+	assert.False(t, s.peerHasHash(hash, 11))
+	assert.True(t, s.peerHasHash(hash, 22))
+}
+
+func TestMessageSuppression_AllowRetryRemovesWholeEntry(t *testing.T) {
+	s := newMessageSuppression(time.Minute, 4)
+	hash := [32]byte{1}
+	s.recordPeer(hash, 11)
+
+	s.allowRetry(hash)
+
+	assert.NotContains(t, s.entries, hash)
+	assert.False(t, s.peerHasHash(hash, 11))
+}
+
+func TestProposalSuppression_AdmitsOnlyAfterEngineAcceptance(t *testing.T) {
+	router, _ := newRetryRouter(t)
+	engine := &proposalAdmissionEngine{err: errors.New("invalid proposal")}
+	router.engine = engine
+	router.messageSeen = newMessageSuppression(time.Minute, 2)
+
+	first := [32]byte{1}
+	second := [32]byte{2}
+	router.messageSeen.observe(first)
+	router.messageSeen.observe(second)
+
+	proposal := &message.ProposeSet{
+		ProposeSeq:     1,
+		CurrentTxHash:  make([]byte, 32),
+		NodePubKey:     make([]byte, 33),
+		CloseTime:      timeToXrplEpoch(time.Unix(1_700_000_000, 0)),
+		Signature:      make([]byte, signatureMinLen),
+		PreviousLedger: make([]byte, 32),
+	}
+	proposal.NodePubKey[0] = 0x02
+	hash := hashProposalSuppression(ProposalFromMessage(proposal))
+	inbound := &peermanagement.InboundMessage{
+		PeerID:  7,
+		Type:    uint16(message.TypeProposeLedger),
+		Payload: encodePayload(t, proposal),
 	}
 
-	firstSeen, _ = s.observe(first)
-	assert.False(t, firstSeen)
+	router.handleProposal(inbound)
+	assert.NotContains(t, router.messageSeen.entries, hash)
+	assert.Contains(t, router.messageSeen.entries, first)
+	assert.Contains(t, router.messageSeen.entries, second)
+
+	engine.err = nil
+	router.handleProposal(inbound)
+	require.Contains(t, router.messageSeen.entries, hash)
+	assert.Equal(t, 2, engine.calls)
+
+	router.handleProposal(inbound)
+	assert.Equal(t, 2, engine.calls, "accepted duplicate must bypass the engine")
 }

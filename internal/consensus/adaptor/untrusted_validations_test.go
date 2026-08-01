@@ -107,7 +107,7 @@ func TestRouter_DropUntrustedValidations(t *testing.T) {
 	a := newTestAdaptor(t)
 	a.relayValidations = RelayValidationsDropUntrusted
 
-	router := NewRouter(engine, a, make(chan *peermanagement.InboundMessage))
+	router := newTestRouter(engine, a, make(chan *peermanagement.InboundMessage))
 
 	build := func(node consensus.NodeID, signingKey [33]byte) *peermanagement.InboundMessage {
 		v := &consensus.Validation{

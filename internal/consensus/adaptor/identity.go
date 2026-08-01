@@ -207,6 +207,10 @@ func (vi *ValidatorIdentity) Sign(data []byte) ([]byte, error) {
 // secp256k1 verifies the digest natively, and ed25519 verifies the
 // digest as a 32-byte message (no internal re-hash).
 func Verify(pubKey []byte, data []byte, signature []byte) bool {
+	return verifyWithCanonicality(pubKey, data, signature, false)
+}
+
+func verifyWithCanonicality(pubKey []byte, data []byte, signature []byte, mustBeFullyCanonical bool) bool {
 	if len(pubKey) != 33 {
 		return false
 	}
@@ -220,7 +224,7 @@ func Verify(pubKey []byte, data []byte, signature []byte) bool {
 		algo := secp256k1.Algorithm{}
 		var digest [32]byte
 		copy(digest[:], data)
-		return algo.ValidateDigest(digest, pubKey, signature)
+		return algo.ValidateDigestWithCanonicality(digest, pubKey, signature, mustBeFullyCanonical)
 	default:
 		return false
 	}
@@ -263,7 +267,10 @@ func (vi *ValidatorIdentity) SignValidation(validation *consensus.Validation) er
 	}
 	validation.SigningPubKey = consensus.SigningPubKey(vi.SigningKey)
 	validation.NodeID = vi.NodeID
-	validation.Flags = localValidationFlags(validation.Full)
+	validation.Flags |= vfFullyCanonicalSig
+	if validation.Full {
+		validation.Flags |= vfFullValidation
+	}
 	data := buildValidationSigningData(validation)
 	sig, err := vi.Sign(data)
 	if err != nil {
@@ -280,7 +287,8 @@ func (vi *ValidatorIdentity) SignValidation(validation *consensus.Validation) er
 // with.
 func VerifyValidation(validation *consensus.Validation) error {
 	data := buildValidationSigningData(validation)
-	if !Verify(validation.SigningPubKey[:], data, validation.Signature) {
+	mustBeFullyCanonical := validation.Flags&vfFullyCanonicalSig != 0
+	if !verifyWithCanonicality(validation.SigningPubKey[:], data, validation.Signature, mustBeFullyCanonical) {
 		return errors.New("invalid validation signature")
 	}
 	return nil
@@ -335,9 +343,8 @@ func buildValidationSigningData(v *consensus.Validation) []byte {
 	// standing fork hazard). SerializeSTValidation emits sfSignature only
 	// when v.Signature is non-empty and as a distinct field between
 	// sfSigningPubKey and sfAmendments, so clearing it yields exactly the
-	// non-signature preimage. SignValidation normalizes outbound Flags before
-	// reaching this helper, and SerializeSTValidation uses the same helper for
-	// unsigned self-built validations.
+	// non-signature preimage. SignValidation stamps outbound flags before
+	// this function is called.
 	unsigned := *v
 	unsigned.Signature = nil
 	hash := sha512half.Sum(protocol.HashPrefixValidation().Bytes(), SerializeSTValidation(&unsigned))

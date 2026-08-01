@@ -12,6 +12,14 @@ import (
 	"github.com/LeJamon/go-xrpl/shamap"
 )
 
+type ledgerServeNetwork interface {
+	SendToPeer(peerID uint64, frame []byte) error
+	ShouldShedLedgerRequest(peerID uint64, loadedLocal bool) bool
+	PeerWithLedger(target [32]byte, seq uint32, exclude uint64) (uint64, bool)
+	PeerLatency(peerID uint64) (time.Duration, bool)
+	IncPeerBadData(peerID uint64, reason string)
+}
+
 func (r *Router) invalidFutureLedgerSequence(seq uint32) bool {
 	svc := r.adaptor.LedgerService()
 	if svc == nil || svc.GetValidatedLedgerAge() > 10*time.Second {
@@ -34,38 +42,38 @@ func (r *Router) handleGetLedger(msg *peermanagement.InboundMessage) {
 		return
 	}
 	if req.InfoType < message.LedgerInfoBase || req.InfoType > message.LedgerInfoTsCandidate {
-		r.adaptor.IncPeerBadData(uint64(msg.PeerID), "get-ledger-invalid-itype")
+		r.serve.IncPeerBadData(uint64(msg.PeerID), "get-ledger-invalid-itype")
 		return
 	}
 	if req.InfoType == message.LedgerInfoTsCandidate && len(req.LedgerHash) == 0 {
-		r.adaptor.IncPeerBadData(uint64(msg.PeerID), "get-ledger-missing-txset-hash")
+		r.serve.IncPeerBadData(uint64(msg.PeerID), "get-ledger-missing-txset-hash")
 		return
 	}
 	if req.InfoType != message.LedgerInfoTsCandidate &&
 		len(req.LedgerHash) == 0 && !req.HasLedgerSeq() && req.LType != message.LedgerTypeClosed {
-		r.adaptor.IncPeerBadData(uint64(msg.PeerID), "get-ledger-invalid-request")
+		r.serve.IncPeerBadData(uint64(msg.PeerID), "get-ledger-invalid-request")
 		return
 	}
 	if req.LType < message.LedgerTypeAccepted || req.LType > message.LedgerTypeClosed {
-		r.adaptor.IncPeerBadData(uint64(msg.PeerID), "get-ledger-invalid-ltype")
+		r.serve.IncPeerBadData(uint64(msg.PeerID), "get-ledger-invalid-ltype")
 		return
 	}
 	if len(req.LedgerHash) != 0 && len(req.LedgerHash) != 32 {
-		r.adaptor.IncPeerBadData(uint64(msg.PeerID), "get-ledger-invalid-hash")
+		r.serve.IncPeerBadData(uint64(msg.PeerID), "get-ledger-invalid-hash")
 		return
 	}
 	if req.HasLedgerSeq() && r.invalidFutureLedgerSequence(req.LedgerSeq) {
-		r.adaptor.IncPeerBadData(uint64(msg.PeerID), "get-ledger-invalid-sequence")
+		r.serve.IncPeerBadData(uint64(msg.PeerID), "get-ledger-invalid-sequence")
 		return
 	}
 	if req.InfoType != message.LedgerInfoBase {
 		if len(req.NodeIDs) == 0 {
-			r.adaptor.IncPeerBadData(uint64(msg.PeerID), "get-ledger-invalid-nodeids")
+			r.serve.IncPeerBadData(uint64(msg.PeerID), "get-ledger-invalid-nodeids")
 			return
 		}
 		for _, rawID := range req.NodeIDs {
 			if _, _, valid := parseSHAMapNodeID(rawID); !valid {
-				r.adaptor.IncPeerBadData(uint64(msg.PeerID), "get-ledger-invalid-nodeid")
+				r.serve.IncPeerBadData(uint64(msg.PeerID), "get-ledger-invalid-nodeid")
 				return
 			}
 		}
@@ -78,13 +86,13 @@ func (r *Router) handleGetLedger(msg *peermanagement.InboundMessage) {
 	if req.QueryType != nil && *req.QueryType != message.QueryTypeIndirect {
 		r.logger.Debug("get_ledger rejected: invalid query_type",
 			"peer", msg.PeerID, "query_type", int32(*req.QueryType))
-		r.adaptor.IncPeerBadData(uint64(msg.PeerID), "get-ledger-bad-querytype")
+		r.serve.IncPeerBadData(uint64(msg.PeerID), "get-ledger-bad-querytype")
 		return
 	}
 	if req.HasQueryDepth() && (req.InfoType == message.LedgerInfoBase || req.QueryDepth > maxQueryDepth) {
 		r.logger.Debug("get_ledger rejected: invalid query_depth",
 			"peer", msg.PeerID, "itype", req.InfoType, "query_depth", req.QueryDepth)
-		r.adaptor.IncPeerBadData(uint64(msg.PeerID), "get-ledger-bad-querydepth")
+		r.serve.IncPeerBadData(uint64(msg.PeerID), "get-ledger-bad-querydepth")
 		return
 	}
 
@@ -117,7 +125,7 @@ func (r *Router) handleGetLedger(msg *peermanagement.InboundMessage) {
 	if ft := svc.FeeTrack(); ft != nil {
 		loadedLocal = ft.IsLoadedLocal()
 	}
-	if r.adaptor.ShouldShedLedgerRequest(uint64(msg.PeerID), loadedLocal) {
+	if r.serve.ShouldShedLedgerRequest(uint64(msg.PeerID), loadedLocal) {
 		r.logger.Debug("get_ledger shed under load",
 			"peer", msg.PeerID, "itype", req.InfoType)
 		return
@@ -146,7 +154,7 @@ func (r *Router) handleGetLedger(msg *peermanagement.InboundMessage) {
 	if req.HasLedgerSeq() {
 		if l.Sequence() != req.LedgerSeq {
 			if !req.HasRequestCookie() {
-				r.adaptor.IncPeerBadData(uint64(msg.PeerID), "get-ledger-sequence-mismatch")
+				r.serve.IncPeerBadData(uint64(msg.PeerID), "get-ledger-sequence-mismatch")
 			}
 			return
 		}
@@ -193,7 +201,7 @@ func (r *Router) handleGetLedger(msg *peermanagement.InboundMessage) {
 		return
 	}
 
-	if err := r.adaptor.SendToPeer(uint64(msg.PeerID), frame); err != nil {
+	if err := r.serve.SendToPeer(uint64(msg.PeerID), frame); err != nil {
 		r.logger.Debug("failed to send ledger_data to peer", "error", err, "peer", msg.PeerID)
 	}
 }
@@ -307,7 +315,7 @@ func (r *Router) serveTxSet(peerID peermanagement.PeerID, req *message.GetLedger
 		return
 	}
 
-	if err := r.adaptor.SendToPeer(uint64(peerID), frame); err != nil {
+	if err := r.serve.SendToPeer(uint64(peerID), frame); err != nil {
 		r.logger.Debug("failed to send tx-set response", "error", err, "peer", peerID)
 		return
 	}
@@ -324,7 +332,7 @@ func (r *Router) ledgerQueryDepth(peerID peermanagement.PeerID, req *message.Get
 	if req != nil && req.HasQueryDepth() {
 		return int(req.QueryDepth)
 	}
-	if latency, ok := r.adaptor.PeerLatency(uint64(peerID)); ok && latency >= 300*time.Millisecond {
+	if latency, ok := r.serve.PeerLatency(uint64(peerID)); ok && latency >= 300*time.Millisecond {
 		return 2
 	}
 	return 1

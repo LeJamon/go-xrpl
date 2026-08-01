@@ -270,7 +270,13 @@ func (c Algorithm) validateBytes(msg, pubkey, sig []byte, mustBeFullyCanonical, 
 // Matches rippled's verifyDigest() which passes the SHA-512Half hash directly
 // to secp256k1_ecdsa_verify.
 func (c Algorithm) ValidateDigest(digest [32]byte, pubkeyBytes []byte, sigBytes []byte) bool {
-	return c.validateBytes(digest[:], pubkeyBytes, sigBytes, false, false)
+	return c.ValidateDigestWithCanonicality(digest, pubkeyBytes, sigBytes, false)
+}
+
+// ValidateDigestWithCanonicality verifies a pre-computed digest and optionally
+// requires a fully canonical low-S signature.
+func (c Algorithm) ValidateDigestWithCanonicality(digest [32]byte, pubkeyBytes []byte, sigBytes []byte, mustBeFullyCanonical bool) bool {
+	return c.validateBytes(digest[:], pubkeyBytes, sigBytes, mustBeFullyCanonical, false)
 }
 
 // DerivePublicKeyFromPublicGenerator derives a public key from a public generator.

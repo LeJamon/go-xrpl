@@ -41,12 +41,6 @@ func (f *fakeLookup) GetLedgerByHash(hash [32]byte) (*ledger.Ledger, error) {
 	return l, nil
 }
 
-func (f *fakeLookup) GetLedgerBySequence(_ uint32) (*ledger.Ledger, error) {
-	// Not exercised by these tests — returning an error matches the
-	// service's ErrLedgerNotFound contract closely enough for safety.
-	return nil, errors.New("not found")
-}
-
 func (f *fakeLookup) EarliestFetch() uint32 { return f.earliestFetch }
 
 // makeGenesisLedger returns a genesis-derived, validated (and therefore

@@ -349,21 +349,6 @@ func (n validatedLedgerNotification) notify() {
 	}
 }
 
-func (s *Service) SetConsensusPhaseCallback(callback func(string)) {
-	s.subscriberMu.Lock()
-	defer s.subscriberMu.Unlock()
-	s.consensusPhaseCallback = callback
-}
-
-func (s *Service) NotifyConsensusPhase(phase string) {
-	s.subscriberMu.RLock()
-	callback := s.consensusPhaseCallback
-	s.subscriberMu.RUnlock()
-	if callback != nil {
-		callback(phase)
-	}
-}
-
 type transactionResultSource interface {
 	IsValidated() bool
 	ForEachTransaction(func(txHash [32]byte, txData []byte) bool) error

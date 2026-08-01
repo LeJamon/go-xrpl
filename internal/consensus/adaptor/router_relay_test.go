@@ -11,7 +11,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// relayRecorder is a NetworkSender that records SendToPeer / NotePeerHasTxSet
+// relayRecorder records SendToPeer / NotePeerHasTxSet
 // and serves configurable PeerWithLedger / PeerWithTxSet answers, so the
 // GetLedger relay path can be exercised without a real overlay.
 type relayRecorder struct {
@@ -54,10 +54,16 @@ func (s *relayRecorder) PeerWithTxSet(_ [32]byte, exclude uint64) (uint64, bool)
 	return s.txsetPeer, s.txsetOK
 }
 
-func (s *relayRecorder) NotePeerHasTxSet(peerID uint64, hash [32]byte) {
+func (s *relayRecorder) NotePeerHasTxSet(peerID uint64, hash [32]byte) bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	for _, noted := range s.noted {
+		if noted.peerID == peerID && noted.hash == hash {
+			return false
+		}
+	}
 	s.noted = append(s.noted, notedTxSet{peerID: peerID, hash: hash})
+	return true
 }
 
 func (s *relayRecorder) IncPeerBadData(peerID uint64, reason string) {
@@ -102,7 +108,7 @@ func makeRouterWithRelayRecorder(t *testing.T) (*Router, *relayRecorder) {
 		Identity:      identity,
 	})
 	inbox := make(chan *peermanagement.InboundMessage, 8)
-	r := NewRouter(nil, a, inbox)
+	r := newTestRouter(nil, a, inbox)
 	return r, rs
 }
 

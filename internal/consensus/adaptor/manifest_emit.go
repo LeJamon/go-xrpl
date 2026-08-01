@@ -22,6 +22,8 @@ type manifestSender interface {
 	Peers() []peermanagement.PeerInfo
 }
 
+var _ manifestSender = (*peermanagement.Overlay)(nil)
+
 const (
 	manifestFrameTargetSize = 1 << 20
 	manifestFrameMaxEntries = 100

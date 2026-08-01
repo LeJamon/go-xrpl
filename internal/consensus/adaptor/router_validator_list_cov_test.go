@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/LeJamon/go-xrpl/internal/peermanagement"
 	"github.com/LeJamon/go-xrpl/internal/peermanagement/message"
@@ -485,6 +486,8 @@ func TestRvl_SendList_SuppressionDedup(t *testing.T) {
 	ts := &rvl_trackingSender{}
 	r, _ := makeRouterWithBadDataRecorder(t)
 	b := r.NewValidatorListBroadcaster(nil, ts)
+	now := time.Unix(1_700_000_000, 0)
+	r.messageSeen.now = func() time.Time { return now }
 
 	manifest := []byte("manifest")
 	blob := []byte("blob")
@@ -496,6 +499,10 @@ func TestRvl_SendList_SuppressionDedup(t *testing.T) {
 
 	require.NoError(t, b.SendList(10, manifest, blob, sig, version))
 	assert.Len(t, ts.getCalls(), 1, "second send to already-seen peer must be suppressed")
+
+	now = now.Add(messageDedupTTL)
+	require.NoError(t, b.SendList(10, manifest, blob, sig, version))
+	assert.Len(t, ts.getCalls(), 2, "expired peer association must not suppress a send")
 }
 
 func TestRvl_SendList_DifferentPeers(t *testing.T) {
@@ -548,12 +555,18 @@ func TestRvl_SendCollection_SuppressionDedup(t *testing.T) {
 	ts := &rvl_trackingSender{}
 	r, _ := makeRouterWithBadDataRecorder(t)
 	b := r.NewValidatorListBroadcaster(nil, ts)
+	now := time.Unix(1_700_000_000, 0)
+	r.messageSeen.now = func() time.Time { return now }
 
 	blobs := []validatorlist.BroadcastBlob{{Blob: []byte("b"), Signature: []byte("s")}}
 	require.NoError(t, b.SendCollection(77, []byte("m"), blobs, 2))
 	require.NoError(t, b.SendCollection(77, []byte("m"), blobs, 2))
 
 	assert.Len(t, ts.getCalls(), 1, "second send to same peer must be suppressed")
+
+	now = now.Add(messageDedupTTL)
+	require.NoError(t, b.SendCollection(77, []byte("m"), blobs, 2))
+	assert.Len(t, ts.getCalls(), 2, "expired peer association must not suppress a send")
 }
 
 func TestRvl_SendCollection_SendError(t *testing.T) {

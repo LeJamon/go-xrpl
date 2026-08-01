@@ -492,7 +492,7 @@ func TestRouterAcquisitionOptionsUseScopedDurableStore(t *testing.T) {
 	require.NoError(t, base.StoreBatch(t.Context(), entries))
 	base.clearCached()
 
-	router := NewRouter(nil, nil, nil)
+	router := newTestRouter(nil, nil, nil)
 	router.SetAcquisitionFamily(base)
 	headerData := header.AddRaw(header.LedgerHeader{LedgerIndex: 88, AccountHash: rootHash}, false)
 	ledgerHash := sha512half.Sum(protocol.HashPrefixLedgerMaster().Bytes(), headerData)
@@ -936,7 +936,7 @@ func TestAcquisitionStoreLaneStopDrainsQueuedWrites(t *testing.T) {
 
 func TestRouterAcquisitionStoreLifecycle(t *testing.T) {
 	inbox := make(chan *peermanagement.InboundMessage)
-	router := NewRouter(nil, nil, inbox)
+	router := newTestRouter(nil, nil, inbox)
 	base := newAcquisitionStoreTestFamily()
 	router.SetAcquisitionFamily(base)
 	require.Same(t, router.acquisitionStore, router.acquisitionFamily)
@@ -967,7 +967,7 @@ func TestRouterAcquisitionStoreLifecycle(t *testing.T) {
 func TestCompleteInboundLedgerDiscardsItsOwnPersistenceFailure(t *testing.T) {
 	base := newAcquisitionStoreTestFamily()
 	base.failFirst = true
-	router := NewRouter(nil, nil, make(chan *peermanagement.InboundMessage))
+	router := newTestRouter(nil, nil, make(chan *peermanagement.InboundMessage))
 	router.SetAcquisitionFamily(base)
 	router.acquisitionStore.start(t.Context())
 	defer router.acquisitionStore.stopDrain()
@@ -985,7 +985,7 @@ func TestCompleteInboundLedgerDiscardsItsOwnPersistenceFailure(t *testing.T) {
 
 func TestCompleteInboundLedgerPromotesResultMapPersistence(t *testing.T) {
 	base := newAcquisitionStoreTestFamily()
-	router := NewRouter(nil, newTestAdaptor(t), make(chan *peermanagement.InboundMessage))
+	router := newTestRouter(nil, newTestAdaptor(t), make(chan *peermanagement.InboundMessage))
 	router.SetAcquisitionFamily(base)
 	router.acquisitionStore.start(t.Context())
 	defer router.acquisitionStore.stopDrain()
@@ -1038,7 +1038,7 @@ func TestCompleteInboundLedgerPromotesResultMapPersistence(t *testing.T) {
 func TestCompleteInboundLedgerReadyReleasesUnconsumedScopes(t *testing.T) {
 	t.Run("result error", func(t *testing.T) {
 		base := newAcquisitionStoreTestFamily()
-		router := NewRouter(nil, &Adaptor{}, make(chan *peermanagement.InboundMessage))
+		router := newTestRouter(nil, &Adaptor{}, make(chan *peermanagement.InboundMessage))
 		router.SetAcquisitionFamily(base)
 		router.acquisitionStore.start(t.Context())
 		defer router.acquisitionStore.stopDrain()
@@ -1054,7 +1054,7 @@ func TestCompleteInboundLedgerReadyReleasesUnconsumedScopes(t *testing.T) {
 
 	t.Run("nil service", func(t *testing.T) {
 		base := newAcquisitionStoreTestFamily()
-		router := NewRouter(nil, &Adaptor{}, make(chan *peermanagement.InboundMessage))
+		router := newTestRouter(nil, &Adaptor{}, make(chan *peermanagement.InboundMessage))
 		router.SetAcquisitionFamily(base)
 		router.acquisitionStore.start(t.Context())
 		defer router.acquisitionStore.stopDrain()
@@ -1069,7 +1069,7 @@ func TestCompleteInboundLedgerReadyReleasesUnconsumedScopes(t *testing.T) {
 
 	t.Run("nil adaptor", func(t *testing.T) {
 		base := newAcquisitionStoreTestFamily()
-		router := NewRouter(nil, nil, make(chan *peermanagement.InboundMessage))
+		router := newTestRouter(nil, nil, make(chan *peermanagement.InboundMessage))
 		router.SetAcquisitionFamily(base)
 		router.acquisitionStore.start(t.Context())
 		defer router.acquisitionStore.stopDrain()
@@ -1157,7 +1157,7 @@ func TestRouterRetiresPersistenceOnAbandonedAcquisitionPaths(t *testing.T) {
 		t.Run(test.name, func(t *testing.T) {
 			base := newAcquisitionStoreTestFamily()
 			base.failFirst = true
-			router := NewRouter(nil, nil, make(chan *peermanagement.InboundMessage))
+			router := newTestRouter(nil, nil, make(chan *peermanagement.InboundMessage))
 			router.SetAcquisitionFamily(base)
 			router.acquisitionStore.start(t.Context())
 			defer router.acquisitionStore.stopDrain()
@@ -1179,7 +1179,7 @@ func TestClearThenStaleResultRetiresLaterPersistenceFailure(t *testing.T) {
 	base := newAcquisitionStoreTestFamily()
 	base.blockFirst = make(chan struct{})
 	base.failFirst = true
-	router := NewRouter(nil, nil, make(chan *peermanagement.InboundMessage))
+	router := newTestRouter(nil, nil, make(chan *peermanagement.InboundMessage))
 	router.SetAcquisitionFamily(base)
 	router.acquisitionStore.start(t.Context())
 	defer router.acquisitionStore.stopDrain()

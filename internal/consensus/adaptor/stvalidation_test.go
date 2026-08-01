@@ -19,6 +19,7 @@ import (
 func buildTestValidation() *consensus.Validation {
 	v := &consensus.Validation{
 		Full:      true,
+		Flags:     vfFullyCanonicalSig | vfFullValidation,
 		LedgerSeq: 100,
 		SignTime:  time.Unix(protocol.RippleEpochUnix+828618000, 0),
 		Cookie:    12345,
@@ -321,16 +322,16 @@ func TestSTValidation_FlagsRoundTrip(t *testing.T) {
 		t.Error("Full bit derived from Flags should be true")
 	}
 
-	// Backward-compat: a Validation with Flags=0 still serializes to the
-	// canonical pair when Full=true (older constructors didn't know
-	// about Flags).
 	legacy := buildTestValidation()
 	legacy.Flags = 0 // explicit
 	legacyBlob := SerializeSTValidation(legacy)
 	legacyParsed, err := parseSTValidation(legacyBlob)
 	require.NoError(t, err)
-	if legacyParsed.Flags != (vfFullyCanonicalSig | vfFullValidation) {
-		t.Fatalf("legacy Flags=0 should synthesize canonical pair; got 0x%08x", legacyParsed.Flags)
+	if legacyParsed.Flags != 0 {
+		t.Fatalf("Flags=0 should be preserved; got 0x%08x", legacyParsed.Flags)
+	}
+	if legacyParsed.Full {
+		t.Fatal("Full must be derived from the preserved flag word")
 	}
 }
 
@@ -417,7 +418,7 @@ func TestParseSTValidation_MissingRequiredFields(t *testing.T) {
 	assert.Error(t, err)
 }
 
-func TestParseSTValidation_UnknownFieldsSkipped(t *testing.T) {
+func TestParseSTValidation_UnknownFieldsRejected(t *testing.T) {
 	orig := buildTestValidation()
 	blob := SerializeSTValidation(orig)
 
@@ -452,12 +453,8 @@ func TestParseSTValidation_UnknownFieldsSkipped(t *testing.T) {
 	modified = append(modified, make([]byte, 32)...)
 	modified = append(modified, blob[insertPos:]...)
 
-	parsed, err := parseSTValidation(modified)
-	require.NoError(t, err)
-
-	assert.Equal(t, orig.LedgerSeq, parsed.LedgerSeq)
-	assert.Equal(t, orig.LedgerID, parsed.LedgerID)
-	assert.Equal(t, orig.NodeID, parsed.NodeID)
+	_, err := parseSTValidation(modified)
+	assert.ErrorIs(t, err, errUnexpectedField)
 }
 
 func TestSerializeSTValidation_CanonicalOrder(t *testing.T) {

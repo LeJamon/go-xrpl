@@ -48,7 +48,7 @@ type Adaptor struct {
 
 	ledgerService *service.Service
 	txLookup      openLedgerTxLookup
-	sender        NetworkSender
+	sender        consensusNetwork
 	identity      *ValidatorIdentity
 
 	// UNL: trusted validator public keys
@@ -74,19 +74,6 @@ type Adaptor struct {
 	// broadcastStatus reads it to substitute LOST_SYNC while building on
 	// the wrong LCL.
 	consensusMode atomic.Int32
-
-	// consensusPhaseCh serializes consensus-phase notifications to the ledger
-	// service's OnConsensusPhase hook: a single dispatcher goroutine drains it
-	// in order (preventing out-of-order delivery). Enqueue is non-blocking, so
-	// a slow hook can't stall the consensus path. The dispatcher is started
-	// lazily on first emit and stopped by StopConsensusPhaseDispatcher; the
-	// channel is never closed, so a concurrent emit can't send on a closed
-	// channel. consensusPhaseMu guards the lazy-start / stopped transition.
-	consensusPhaseMu   sync.Mutex
-	consensusPhaseCh   chan string
-	consensusPhaseQuit chan struct{}
-	consensusPhaseWG   sync.WaitGroup
-	consensusPhaseStop bool
 
 	// negUNLVoter produces the UNLModify pseudo-tx each voting ledger (at most
 	// one ToDisable + one ToReEnable). nil for non-validating adaptors.
@@ -141,9 +128,9 @@ type Adaptor struct {
 	// by standalone adaptors and focused tests.
 	onLedgerRequested func(consensus.LedgerID) error
 
-	// Set once by NewRouter before the engine starts.
+	// Set once by newRouter before the engine starts.
 	onLedgerSwitched func(seq uint32, hash, parentHash [32]byte, historyFloor uint32)
-	// Set once by NewRouter before validation processing starts.
+	// Set once by newRouter before validation processing starts.
 	onLedgerFullyValidated func(seq uint32, hash [32]byte)
 	onLedgerBuilt          func(seq uint32, hash [32]byte)
 
@@ -281,7 +268,8 @@ func ParseRelayValidationsPolicy(s string) RelayValidationsPolicy {
 
 type Config struct {
 	LedgerService *service.Service
-	Sender        NetworkSender
+	Sender        consensusNetwork
+	OnTxSetBuilt  func(consensus.TxSetID)
 	Identity      *ValidatorIdentity
 	Validators    []consensus.NodeID // UNL
 	// ValidatorMasterKeys are the 33-byte master pubkeys index-aligned with
@@ -430,6 +418,7 @@ func New(cfg Config) *Adaptor {
 		peerLCLs:          make(map[uint64]consensus.LedgerID),
 		reqLedgerLast:     make(map[consensus.LedgerID]time.Time),
 		announcedSets:     make(map[consensus.TxSetID]struct{}),
+		onTxSetBuilt:      cfg.OnTxSetBuilt,
 		maxDisallowedSeq:  maxDisallowedSeq,
 		cookie:            cookie,
 		feeVote:           feeVote,
@@ -528,23 +517,8 @@ func (a *Adaptor) BroadcastValidation(validation *consensus.Validation) error {
 	return a.sender.BroadcastValidation(validation)
 }
 
-func (a *Adaptor) RecordMessageSource(suppressionHash [32]byte, peerID uint64) {
-	a.sender.RecordMessageSource(suppressionHash, peerID)
-}
-
-func (a *Adaptor) PeersThatHave(suppressionHash [32]byte) []uint64 {
-	return a.sender.PeersThatHave(suppressionHash)
-}
-
-func (a *Adaptor) MessageRelayedRecently(suppressionHash [32]byte) bool {
-	view, ok := a.sender.(interface {
-		MessageRelayedRecently([32]byte) bool
-	})
-	return ok && view.MessageRelayedRecently(suppressionHash)
-}
-
 // RelayProposal forwards a peer-originated proposal, excluding exceptPeer
-// (0 = everyone). See NetworkSender.RelayProposal.
+// (0 = everyone).
 func (a *Adaptor) RelayProposal(proposal *consensus.Proposal, exceptPeer uint64) error {
 	return a.sender.RelayProposal(proposal, exceptPeer)
 }
@@ -556,7 +530,7 @@ func (a *Adaptor) RelayValidation(validation *consensus.Validation, exceptPeer u
 }
 
 // UpdateRelaySlot feeds the reduce-relay slot for validatorKey with originPeer
-// and seenPeers (known-havers). See NetworkSender.UpdateRelaySlot.
+// and seenPeers (known-havers).
 func (a *Adaptor) UpdateRelaySlot(validatorKey []byte, originPeer uint64, seenPeers []uint64) {
 	a.sender.UpdateRelaySlot(validatorKey, originPeer, seenPeers)
 }
@@ -585,18 +559,13 @@ func (a *Adaptor) setOnLedgerBuilt(cb func(uint32, [32]byte)) {
 }
 
 func (a *Adaptor) RequestTxSet(id consensus.TxSetID) error {
+	if id == (consensus.TxSetID{}) {
+		return nil
+	}
 	if a.onTxSetRequested != nil {
 		a.onTxSetRequested(id)
 	}
 	return a.sender.RequestTxSet(id)
-}
-
-func (a *Adaptor) RequestTxSetMissingNodes(id consensus.TxSetID, nodeIDs [][]byte, excluded map[uint64]bool, indirect bool) error {
-	return a.sender.RequestTxSetMissingNodes(id, nodeIDs, excluded, indirect)
-}
-
-func (a *Adaptor) RequestTxSetMissingNodesFromPeer(id consensus.TxSetID, nodeIDs [][]byte, peerID uint64, indirect bool) error {
-	return a.sender.RequestTxSetMissingNodesFromPeer(id, nodeIDs, peerID, indirect)
 }
 
 func (a *Adaptor) RequestLedger(id consensus.LedgerID) error {
@@ -621,38 +590,6 @@ func (a *Adaptor) RequestLedger(id consensus.LedgerID) error {
 	return a.sender.RequestLedger(id)
 }
 
-func (a *Adaptor) RequestLedgerByHashAndSeq(hash [32]byte, seq uint32) error {
-	return a.sender.RequestLedgerByHashAndSeq(hash, seq)
-}
-
-func (a *Adaptor) RequestLedgerBaseFromPeer(peerID uint64, hash [32]byte, seq uint32, indirect bool) error {
-	return a.sender.RequestLedgerBaseFromPeer(peerID, hash, seq, indirect)
-}
-
-// RequestReplayDelta delegates to the network sender, sending a single
-// TMReplayDeltaRequest and awaiting one TMReplayDeltaResponse.
-func (a *Adaptor) RequestReplayDelta(peerID uint64, hash [32]byte) error {
-	return a.sender.RequestReplayDelta(peerID, hash)
-}
-
-func (a *Adaptor) RequestStateNodes(peerID uint64, ledgerHash [32]byte, nodeIDs [][]byte, queryDepth uint32, indirect bool) error {
-	return a.sender.RequestStateNodes(peerID, ledgerHash, nodeIDs, queryDepth, indirect)
-}
-
-func (a *Adaptor) RequestTransactionNodes(peerID uint64, ledgerHash [32]byte, nodeIDs [][]byte, queryDepth uint32, indirect bool) error {
-	return a.sender.RequestTransactionNodes(peerID, ledgerHash, nodeIDs, queryDepth, indirect)
-}
-
-func (a *Adaptor) PeerLatency(peerID uint64) (time.Duration, bool) {
-	sender, ok := a.sender.(interface {
-		PeerLatency(uint64) (time.Duration, bool)
-	})
-	if !ok {
-		return 0, false
-	}
-	return sender.PeerLatency(peerID)
-}
-
 // EngineConfigForReplay returns the shared (non-per-ledger) tx.EngineConfig
 // for replaying a ledger anchored on parent (fees from parent's FeeSettings
 // SLE). The caller overrides the per-ledger fields from the target header.
@@ -661,24 +598,6 @@ func (a *Adaptor) EngineConfigForReplay(parent *ledger.Ledger) tx.EngineConfig {
 		return tx.EngineConfig{}
 	}
 	return a.ledgerService.EngineConfigForReplay(parent)
-}
-
-// PeerSupportsReplay reports whether the peer advertised ledger-replay during
-// handshake. Delegates to NetworkSender.
-func (a *Adaptor) PeerSupportsReplay(peerID uint64) bool {
-	return a.sender.PeerSupportsReplay(peerID)
-}
-
-// ReplayCapablePeersExcluding returns up to max ledger-replay peers, omitting
-// excluded. See NetworkSender.ReplayCapablePeersExcluding.
-func (a *Adaptor) ReplayCapablePeersExcluding(excluded []uint64, max int) []uint64 {
-	return a.sender.ReplayCapablePeersExcluding(excluded, max)
-}
-
-// IncPeerBadData delegates to NetworkSender so Router can charge a peer through
-// the adaptor. See NetworkSender.IncPeerBadData.
-func (a *Adaptor) IncPeerBadData(peerID uint64, reason string) {
-	a.sender.IncPeerBadData(peerID, reason)
 }
 
 // GetParentLedgerForReplay returns the closed ledger at seq-1 (the anchor for
@@ -697,44 +616,6 @@ func (a *Adaptor) GetParentLedgerForReplay(seq uint32) *ledger.Ledger {
 		return nil
 	}
 	return parent
-}
-
-func (a *Adaptor) SendToPeer(peerID uint64, frame []byte) error {
-	return a.sender.SendToPeer(peerID, frame)
-}
-
-func (a *Adaptor) SendPriorityToPeer(peerID uint64, frame []byte) error {
-	return a.sender.SendPriorityToPeer(peerID, frame)
-}
-
-// ShouldShedLedgerRequest delegates to NetworkSender so Router can gate
-// ledger-body serving through the adaptor.
-func (a *Adaptor) ShouldShedLedgerRequest(peerID uint64, loadedLocal bool) bool {
-	return a.sender.ShouldShedLedgerRequest(peerID, loadedLocal)
-}
-
-// PeerWithLedger delegates to NetworkSender; the Router uses it to relay an
-// unsatisfiable GetLedger to a peer that can serve the ledger.
-func (a *Adaptor) PeerWithLedger(target [32]byte, seq uint32, exclude uint64) (uint64, bool) {
-	return a.sender.PeerWithLedger(target, seq, exclude)
-}
-
-func (a *Adaptor) SelectLedgerPeers(target [32]byte, seq uint32, excluded []uint64, max int) []uint64 {
-	return a.sender.SelectLedgerPeers(target, seq, excluded, max)
-}
-
-// PeerWithTxSet delegates to NetworkSender; the Router uses it to relay an
-// unsatisfiable liTS_CANDIDATE GetLedger to a peer that advertised the
-// tx-set.
-func (a *Adaptor) PeerWithTxSet(target [32]byte, exclude uint64) (uint64, bool) {
-	return a.sender.PeerWithTxSet(target, exclude)
-}
-
-// NotePeerHasTxSet delegates to NetworkSender; the Router calls it on
-// inbound mtHAVE_TRANSACTION_SET{tsHAVE} so PeerWithTxSet can later find
-// the advertising peer.
-func (a *Adaptor) NotePeerHasTxSet(peerID uint64, hash [32]byte) {
-	a.sender.NotePeerHasTxSet(peerID, hash)
 }
 
 // LedgerService returns the underlying ledger service for direct queries.
@@ -940,12 +821,6 @@ func (a *Adaptor) BuildTxSet(txs [][]byte) (consensus.TxSet, error) {
 		}
 	}
 	return ts, nil
-}
-
-// SetOnTxSetBuilt installs a callback invoked once per BuildTxSet (after
-// caching); the CLI wires it to Overlay.BroadcastHaveTxSet. nil clears.
-func (a *Adaptor) SetOnTxSetBuilt(cb func(consensus.TxSetID)) {
-	a.onTxSetBuilt = cb
 }
 
 // HasTx reports whether the persistent open view contains this tx.

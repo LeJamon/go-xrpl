@@ -55,7 +55,7 @@ func makeRouterWithQueryTypeRecorder(t *testing.T) (*Router, *querytypeRecorder)
 		Identity:      identity,
 	})
 	inbox := make(chan *peermanagement.InboundMessage, 8)
-	r := NewRouter(nil, a, inbox)
+	r := newTestRouter(nil, a, inbox)
 	return r, rs
 }
 

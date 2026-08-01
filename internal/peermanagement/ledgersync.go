@@ -51,12 +51,6 @@ const (
 
 // LedgerProvider is called to retrieve ledger data for responses.
 type LedgerProvider interface {
-	// GetLedgerHeader returns the header for a ledger.
-	GetLedgerHeader(hash []byte, seq uint32) ([]byte, error)
-	// GetAccountStateNode returns an account state node.
-	GetAccountStateNode(ledgerHash []byte, nodeID []byte) ([]byte, error)
-	// GetTransactionNode returns a transaction tree node.
-	GetTransactionNode(ledgerHash []byte, nodeID []byte) ([]byte, error)
 	// GetReplayDelta returns the serialized ledger header and every
 	// transaction leaf blob (in tx-map order) for the given ledger hash.
 	// Implementations must only return data for closed/immutable ledgers

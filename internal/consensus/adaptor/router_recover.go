@@ -26,5 +26,5 @@ func (r *Router) recoverFrame(msg *peermanagement.InboundMessage, stage string) 
 		"t", "consensus", "stage", stage,
 		"peer", msg.PeerID, "msgType", message.MessageType(msg.Type),
 		"panic", rec, "stack", string(debug.Stack()))
-	r.adaptor.IncPeerBadData(uint64(msg.PeerID), "panic-"+stage)
+	r.gossip.IncPeerBadData(uint64(msg.PeerID), "panic-"+stage)
 }

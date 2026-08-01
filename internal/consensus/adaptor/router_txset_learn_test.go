@@ -37,7 +37,7 @@ func TestRouter_TxSetAcquire_LearnsTransaction(t *testing.T) {
 	a := newTestAdaptor(t)
 	inbox := make(chan *peermanagement.InboundMessage, 10)
 
-	router := NewRouter(engine, a, inbox)
+	router := newTestRouter(engine, a, inbox)
 	ctx := t.Context()
 	go router.Run(ctx)
 
@@ -81,6 +81,7 @@ func TestRouter_TxSetAcquire_LearnsTransaction(t *testing.T) {
 		InfoType:   message.LedgerInfoTsCandidate,
 		Nodes:      ldNodes,
 	}
+	router.MarkTxSetStillNeeded(consensus.TxSetID(setID))
 	inbox <- &peermanagement.InboundMessage{
 		PeerID:  5,
 		Type:    uint16(message.TypeLedgerData),

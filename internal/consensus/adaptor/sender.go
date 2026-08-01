@@ -9,10 +9,18 @@ import (
 	"github.com/LeJamon/go-xrpl/internal/peermanagement/message"
 )
 
-// OverlaySender implements NetworkSender using the P2P overlay.
 type OverlaySender struct {
 	overlay *peermanagement.Overlay
 }
+
+var (
+	_ consensusNetwork         = (*OverlaySender)(nil)
+	_ gossipNetwork            = (*OverlaySender)(nil)
+	_ txSetNetwork             = (*OverlaySender)(nil)
+	_ ledgerAcquisitionNetwork = (*OverlaySender)(nil)
+	_ ledgerServeNetwork       = (*OverlaySender)(nil)
+	_ peerFrameSender          = (*OverlaySender)(nil)
+)
 
 func (s *OverlaySender) PeerLatency(peerID uint64) (time.Duration, bool) {
 	return s.overlay.PeerLatency(peermanagement.PeerID(peerID))
@@ -152,7 +160,7 @@ func (s *OverlaySender) RequestTxSetMissingNodes(id consensus.TxSetID, nodeIDs [
 }
 
 // RequestTxSetMissingNodesFromPeer unicasts the missing-nodes request to the
-// single replying peer (see the NetworkSender interface doc). indirect sets
+// single replying peer. indirect sets
 // query_type=qtINDIRECT.
 func (s *OverlaySender) RequestTxSetMissingNodesFromPeer(id consensus.TxSetID, nodeIDs [][]byte, peerID uint64, indirect bool) error {
 	if len(nodeIDs) == 0 {
@@ -192,20 +200,6 @@ func (s *OverlaySender) RequestLedger(id consensus.LedgerID) error {
 	return s.overlay.BroadcastPriority(frame)
 }
 
-func (s *OverlaySender) RequestLedgerByHashAndSeq(hash [32]byte, seq uint32) error {
-	msg := &message.GetLedger{
-		InfoType:   message.LedgerInfoBase,
-		LType:      message.LedgerTypeClosed,
-		LedgerHash: hash[:],
-		LedgerSeq:  seq,
-	}
-	frame, err := message.EncodeFrame(msg)
-	if err != nil {
-		return fmt.Errorf("encode get_ledger: %w", err)
-	}
-	return s.overlay.BroadcastPriority(frame)
-}
-
 func (s *OverlaySender) SendToPeer(peerID uint64, frame []byte) error {
 	return s.overlay.Send(peermanagement.PeerID(peerID), frame)
 }
@@ -214,8 +208,6 @@ func (s *OverlaySender) SendPriorityToPeer(peerID uint64, frame []byte) error {
 	return s.overlay.SendPriority(peermanagement.PeerID(peerID), frame)
 }
 
-// ShouldShedLedgerRequest forwards to the overlay's load gate. See
-// NetworkSender.ShouldShedLedgerRequest.
 func (s *OverlaySender) ShouldShedLedgerRequest(peerID uint64, loadedLocal bool) bool {
 	return s.overlay.ShouldShedLedgerRequest(peermanagement.PeerID(peerID), loadedLocal)
 }
@@ -316,33 +308,16 @@ func (s *OverlaySender) PeerWithTxSet(target [32]byte, exclude uint64) (uint64, 
 
 // NotePeerHasTxSet forwards to Overlay.NotePeerHasTxSet, recording a
 // peer's tsHAVE tx-set advertisement for later relay selection.
-func (s *OverlaySender) NotePeerHasTxSet(peerID uint64, hash [32]byte) {
-	s.overlay.NotePeerHasTxSet(peermanagement.PeerID(peerID), hash)
+func (s *OverlaySender) NotePeerHasTxSet(peerID uint64, hash [32]byte) bool {
+	return s.overlay.NotePeerHasTxSet(peermanagement.PeerID(peerID), hash)
 }
 
-// IncPeerBadData forwards to Overlay.IncPeerBadData. Called by the
-// consensus router via Adaptor.IncPeerBadData when it detects malformed
-// or invalid data from a peer (e.g., replay-delta verification
-// failures, ledger-data hash/root mismatches). Safe no-op for unknown
-// peers.
 func (s *OverlaySender) IncPeerBadData(peerID uint64, reason string) {
 	s.overlay.IncPeerBadData(peermanagement.PeerID(peerID), reason)
 }
 
 func (s *OverlaySender) RecordMessageSource(suppressionHash [32]byte, peerID uint64) {
 	s.overlay.RecordMessageSource(suppressionHash, peermanagement.PeerID(peerID))
-}
-
-func (s *OverlaySender) PeersThatHave(suppressionHash [32]byte) []uint64 {
-	raw := s.overlay.PeersThatHave(suppressionHash)
-	if len(raw) == 0 {
-		return nil
-	}
-	out := make([]uint64, len(raw))
-	for i, p := range raw {
-		out[i] = uint64(p)
-	}
-	return out
 }
 
 func (s *OverlaySender) MessageRelayedRecently(suppressionHash [32]byte) bool {

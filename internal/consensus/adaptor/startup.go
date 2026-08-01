@@ -67,17 +67,19 @@ type Components struct {
 	// without re-resolving from config.
 	Archive *archive.Archive
 
-	// cancel functions for background goroutines
-	overlayCancel    context.CancelFunc
-	routerCancel     context.CancelFunc
-	sitePollerCancel context.CancelFunc
-	vlTickCancel     context.CancelFunc
+	startStopMu sync.Mutex
+	lifecycleMu sync.Mutex
+	runCancel   context.CancelFunc
+	errors      chan error
+	started     bool
+	stopped     bool
+	stopOnce    sync.Once
+	stopErr     error
+	fatalOnce   sync.Once
 
-	// routerDone is closed when the Router.Run loop returns, so Stop can join it
-	// rather than fire-and-forgetting: an in-process restart cycle would
-	// otherwise double-start Run loops, and a still-running loop could touch the
-	// engine Stop has already torn down.
-	routerDone chan struct{}
+	overlayDone chan struct{}
+	routerDone  chan struct{}
+	vlTickDone  chan struct{}
 }
 
 // validatorListTickInterval is how often Components.Start fires
@@ -87,72 +89,164 @@ type Components struct {
 // minute in the worst case.
 const validatorListTickInterval = 30 * time.Second
 
-// Start launches all background goroutines (overlay, engine, router).
-func (c *Components) Start() error {
-	// Start overlay. Capture Run's error so a listener bind failure (a stale
-	// process on the peer port, EACCES on a privileged port, a bad [port_peer]
-	// address) is loud and fatal at boot instead of leaving the node running
-	// deaf with no diagnostics. Run binds the listener before signalling
-	// ListenerReady, so a bind failure returns before that signal fires; wait
-	// for whichever happens first. A later (post-ready) exit is logged by the
-	// goroutine and left buffered so it never blocks.
-	overlayCtx, overlayCancel := context.WithCancel(context.Background())
-	c.overlayCancel = overlayCancel
-	overlayErr := make(chan error, 1)
-	go func() {
-		err := c.Overlay.Run(overlayCtx)
-		if err != nil && overlayCtx.Err() == nil {
-			slog.Error("overlay Run exited with error", "t", "consensus", "err", err)
+// Errors reports an unexpected exit from a component background loop.
+func (c *Components) Errors() <-chan error {
+	c.lifecycleMu.Lock()
+	defer c.lifecycleMu.Unlock()
+	if c.errors == nil {
+		c.errors = make(chan error, 1)
+	}
+	return c.errors
+}
+
+func (c *Components) reportFatal(err error) {
+	if err == nil {
+		return
+	}
+	c.fatalOnce.Do(func() {
+		c.lifecycleMu.Lock()
+		if c.errors == nil {
+			c.errors = make(chan error, 1)
 		}
-		overlayErr <- err
+		errors := c.errors
+		cancel := c.runCancel
+		c.lifecycleMu.Unlock()
+
+		errors <- err
+		if cancel != nil {
+			cancel()
+		}
+	})
+}
+
+func (c *Components) startupError(ctx context.Context) error {
+	select {
+	case err := <-c.Errors():
+		return err
+	default:
+		return context.Cause(ctx)
+	}
+}
+
+// Start launches all background goroutines (overlay, engine, router).
+func (c *Components) Start(ctx context.Context) error {
+	c.startStopMu.Lock()
+	defer c.startStopMu.Unlock()
+
+	if err := context.Cause(ctx); err != nil {
+		return fmt.Errorf("start consensus components: %w", err)
+	}
+	if c.Overlay == nil {
+		return fmt.Errorf("start consensus components: overlay is nil")
+	}
+	if c.Engine == nil {
+		return fmt.Errorf("start consensus components: engine is nil")
+	}
+	if c.Router == nil {
+		return fmt.Errorf("start consensus components: router is nil")
+	}
+
+	c.lifecycleMu.Lock()
+	if c.started {
+		c.lifecycleMu.Unlock()
+		return fmt.Errorf("start consensus components: already started")
+	}
+	if c.stopped {
+		c.lifecycleMu.Unlock()
+		return fmt.Errorf("start consensus components: already stopped")
+	}
+	runCtx, cancel := context.WithCancel(ctx) //nolint:gosec // G118: cancel is stored and called by Stop
+	c.runCancel = cancel
+	if c.errors == nil {
+		c.errors = make(chan error, 1)
+	}
+	c.started = true
+	c.overlayDone = make(chan struct{})
+	c.lifecycleMu.Unlock()
+
+	overlayResult := make(chan error, 1)
+	go func() {
+		err := c.Overlay.Run(runCtx)
+		overlayResult <- err
+		close(c.overlayDone)
 	}()
 
 	select {
 	case <-c.Overlay.ListenerReady():
-		// Listener bound (or none configured) — boot can proceed.
-	case err := <-overlayErr:
-		overlayCancel()
+	case err := <-overlayResult:
 		if err == nil {
 			err = fmt.Errorf("overlay exited before the listener was ready")
 		}
+		c.stop()
 		return fmt.Errorf("start overlay: %w", err)
+	case <-ctx.Done():
+		c.stop()
+		return fmt.Errorf("start overlay: %w", context.Cause(ctx))
 	}
 
-	// Start consensus engine
-	if err := c.Engine.Start(context.Background()); err != nil {
-		overlayCancel()
+	go func() {
+		err := <-overlayResult
+		if runCtx.Err() == nil {
+			if err == nil {
+				err = fmt.Errorf("overlay exited unexpectedly")
+			}
+			c.reportFatal(fmt.Errorf("overlay stopped: %w", err))
+		}
+	}()
+
+	if err := c.Engine.Start(runCtx); err != nil {
+		c.stop()
 		return fmt.Errorf("start consensus engine: %w", err)
 	}
 
-	// Start message router
-	routerCtx, routerCancel := context.WithCancel(context.Background())
-	c.routerCancel = routerCancel
+	c.lifecycleMu.Lock()
 	c.routerDone = make(chan struct{})
+	routerDone := c.routerDone
+	c.lifecycleMu.Unlock()
+	routerReady := c.Router.lifecycleReadyChannel()
 	go func() {
-		defer close(c.routerDone)
-		c.Router.Run(routerCtx)
+		c.Router.Run(runCtx)
+		close(routerDone)
+		if runCtx.Err() == nil {
+			c.reportFatal(fmt.Errorf("consensus router stopped unexpectedly"))
+		}
 	}()
+	select {
+	case <-routerReady:
+	case err := <-c.Errors():
+		c.stop()
+		return fmt.Errorf("start consensus components: %w", err)
+	case <-runCtx.Done():
+		c.stop()
+		return fmt.Errorf("start consensus router: %w", c.startupError(runCtx))
+	}
 
-	// Start the publisher-list HTTP poller. Cancellation propagates to
-	// per-URL goroutines via the poller's own stop channel.
 	if c.ValidatorListPoller != nil {
-		pollerCtx, pollerCancel := context.WithCancel(context.Background())
-		c.sitePollerCancel = pollerCancel
-		c.ValidatorListPoller.Start(pollerCtx)
+		c.ValidatorListPoller.Start(runCtx)
 	}
 
-	// Periodic ValidatorList.Tick promotes future-dated remaining
-	// rotations and emits OnChange when the trusted union changes.
-	// Without this, a rotation announced during a quiet period (no
-	// peer gossip, no site polls) would only land when the next
-	// ingest happens.
 	if c.ValidatorList != nil {
-		tickCtx, tickCancel := context.WithCancel(context.Background())
-		c.vlTickCancel = tickCancel
-		go c.runValidatorListTick(tickCtx, validatorListTickInterval)
+		c.lifecycleMu.Lock()
+		c.vlTickDone = make(chan struct{})
+		vlTickDone := c.vlTickDone
+		c.lifecycleMu.Unlock()
+		go func() {
+			defer close(vlTickDone)
+			c.runValidatorListTick(runCtx, validatorListTickInterval)
+		}()
 	}
 
-	return nil
+	if err := context.Cause(ctx); err != nil {
+		c.stop()
+		return fmt.Errorf("start consensus components: %w", err)
+	}
+	select {
+	case err := <-c.Errors():
+		c.stop()
+		return fmt.Errorf("start consensus components: %w", err)
+	default:
+		return nil
+	}
 }
 
 func (c *Components) runValidatorListTick(ctx context.Context, interval time.Duration) {
@@ -173,53 +267,53 @@ func (c *Components) runValidatorListTick(ctx context.Context, interval time.Dur
 
 // Stop gracefully shuts down all components.
 func (c *Components) Stop() error {
-	var engineErr error
-	if c.vlTickCancel != nil {
-		c.vlTickCancel()
-	}
-	if c.sitePollerCancel != nil {
-		c.sitePollerCancel()
-	}
-	if c.ValidatorListPoller != nil {
-		c.ValidatorListPoller.Stop()
-	}
-	if c.routerCancel != nil {
-		c.routerCancel()
-	}
-	// Join the router loop before tearing down the engine, so it can't be
-	// mid-handleMessage touching an already-stopped engine. Bounded so a wedged
-	// handler can't hang shutdown.
-	if c.routerDone != nil {
-		select {
-		case <-c.routerDone:
-		case <-time.After(5 * time.Second):
-			slog.Warn("router loop did not exit within shutdown budget", "t", "Components.Stop")
+	c.startStopMu.Lock()
+	defer c.startStopMu.Unlock()
+	c.stop()
+	return c.stopErr
+}
+
+func (c *Components) stop() {
+	c.stopOnce.Do(func() {
+		c.lifecycleMu.Lock()
+		c.stopped = true
+		cancel := c.runCancel
+		routerDone := c.routerDone
+		vlTickDone := c.vlTickDone
+		overlayDone := c.overlayDone
+		c.lifecycleMu.Unlock()
+
+		if cancel != nil {
+			cancel()
 		}
-	}
-	if c.Adaptor != nil {
-		c.Adaptor.StopConsensusPhaseDispatcher()
-	}
-	if c.Engine != nil {
-		engineErr = c.Engine.Stop()
-	}
-	// Drain both acquisition paths after the router loop has stopped. Components
-	// are one-shot; a process restart constructs a fresh Router.
-	if c.Router != nil {
-		legacy, replay := c.Router.StopAcquisitions()
-		if legacy > 0 || replay > 0 {
-			slog.Info("ledger acquisitions drained at shutdown",
-				"t", "Components.Stop",
-				"legacy_in_flight_at_stop", legacy,
-				"replay_in_flight_at_stop", replay)
+		if c.ValidatorListPoller != nil {
+			c.ValidatorListPoller.Stop()
 		}
-	}
-	if c.overlayCancel != nil {
-		c.overlayCancel()
-	}
-	if c.Overlay != nil {
-		_ = c.Overlay.Stop()
-	}
-	return engineErr
+		if c.Overlay != nil {
+			_ = c.Overlay.Stop()
+		}
+		if routerDone != nil {
+			<-routerDone
+		}
+		if vlTickDone != nil {
+			<-vlTickDone
+		}
+		if overlayDone != nil {
+			<-overlayDone
+		}
+		if c.Router != nil {
+			legacy, replay := c.Router.StopAcquisitions()
+			if legacy > 0 || replay > 0 {
+				slog.Info("ledger acquisitions drained at shutdown",
+					"t", "Components.Stop",
+					"legacy_in_flight_at_stop", legacy,
+					"replay_in_flight_at_stop", replay)
+			}
+		}
+		if c.Engine != nil {
+			c.stopErr = c.Engine.Stop()
+		}
+	})
 }
 
 // NewFromConfig creates and wires all consensus/networking components from the app config.
@@ -288,6 +382,9 @@ func NewFromConfig(
 		Identity:            identity,
 		Validators:          validators,
 		ValidatorMasterKeys: masterKeys,
+		OnTxSetBuilt: func(id consensus.TxSetID) {
+			overlay.BroadcastHaveTxSet([32]byte(id))
+		},
 		// Source vote stances from the same amendment table the ledger service
 		// resyncs from validated ledgers, so operator veto/upvote ([amendments]
 		// config) drives consensus voting.
@@ -321,27 +418,14 @@ func NewFromConfig(
 
 	engine := rcl.NewEngine(adaptor, rcl.DefaultConfig())
 
-	// On-disk validation archive. Skipped when the relational DB is
-	// unavailable or the operator has disabled the section in TOML —
-	// either way the engine runs unchanged with the tracker in pure
-	// in-memory mode. When enabled, ExpireOld in the fully-validated
-	// callback streams pruned validations into the writer goroutine.
-	var validationArchive *archive.Archive
-	if validationRepo != nil && appCfg.ValidationArchive.Enabled {
-		archCfg := appCfg.ValidationArchive.WithDefaults()
-		validationArchive = archive.New(validationRepo, archive.Config{
-			RetentionLedgers: archCfg.RetentionLedgers,
-			BatchSize:        archCfg.BatchSize,
-			FlushInterval:    time.Duration(archCfg.FlushIntervalMs) * time.Millisecond,
-			DeleteBatch:      archCfg.DeleteBatch,
-		}, slog.Default().With("component", "validation_archive"))
-		engine.SetArchive(validationArchive)
-		engine.SetInMemoryLedgers(archCfg.InMemoryLedgers)
-	}
-
 	engine.SetLedgerAncestryProvider(rcl.NewAncestryProvider(ledgerSvc))
 
-	router := NewRouter(engine, adaptor, overlay.ConsensusMessages())
+	router := newRouter(engine, adaptor, overlay.ConsensusMessages(), routerNetworkConfig{
+		gossip:      sender,
+		txSet:       sender,
+		acquisition: sender,
+		serve:       sender,
+	})
 	router.SetConsensusControlInbox(overlay.ConsensusControlMessages())
 	router.SetServiceInbox(overlay.Messages())
 	router.SetTxInbox(overlay.TxMessages())
@@ -426,6 +510,22 @@ func NewFromConfig(
 		}
 	}
 
+	// Create resources with active workers only after all fallible
+	// validator-list construction has completed. From here to the returned
+	// Components, startup performs wiring only and cannot strand the archive.
+	var validationArchive *archive.Archive
+	if validationRepo != nil && appCfg.ValidationArchive.Enabled {
+		archCfg := appCfg.ValidationArchive.WithDefaults()
+		validationArchive = archive.New(validationRepo, archive.Config{
+			RetentionLedgers: archCfg.RetentionLedgers,
+			BatchSize:        archCfg.BatchSize,
+			FlushInterval:    time.Duration(archCfg.FlushIntervalMs) * time.Millisecond,
+			DeleteBatch:      archCfg.DeleteBatch,
+		}, slog.Default().With("component", "validation_archive"))
+		engine.SetArchive(validationArchive)
+		engine.SetInMemoryLedgers(archCfg.InMemoryLedgers)
+	}
+
 	// Queue peer disconnect notifications for router-owned cleanup so
 	// per-peer state (peerStates for catch-up, peerLCLs for the
 	// getNetworkLedger vote) is cleaned without blocking the overlay event loop.
@@ -506,14 +606,6 @@ func (c *Components) snapshotStatic() ([]consensus.NodeID, [][33]byte) {
 	v := append([]consensus.NodeID(nil), c.staticValidators...)
 	m := append([][33]byte(nil), c.staticMasterKeys...)
 	return v, m
-}
-
-func (c *Components) snapshotEffectiveStatic() ([]consensus.NodeID, [][33]byte) {
-	validators, masterKeys := c.snapshotStatic()
-	if c.Adaptor == nil {
-		return validators, masterKeys
-	}
-	return includeLocalValidator(validators, masterKeys, c.Adaptor.identity)
 }
 
 // StaticTrustedMasterKeys returns a snapshot of the operator's static
