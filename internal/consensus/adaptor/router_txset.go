@@ -197,7 +197,29 @@ func (r *Router) makeTxSetAcquireRoomLocked() bool {
 			return true
 		}
 	}
-	return false
+
+	// Every entry is active. A newly requested consensus position must not be
+	// suppressed by older work, so replace the least-recently-updated acquire.
+	// The ID tie-break keeps admission deterministic when timestamps match.
+	var oldestID consensus.TxSetID
+	var oldestUpdate time.Time
+	found := false
+	for id, state := range r.txSetAcquire {
+		if state.done {
+			continue
+		}
+		if !found || state.lastUpdate.Before(oldestUpdate) ||
+			(state.lastUpdate.Equal(oldestUpdate) && txSetIDLess(id, oldestID)) {
+			oldestID = id
+			oldestUpdate = state.lastUpdate
+			found = true
+		}
+	}
+	if !found {
+		return false
+	}
+	r.deleteTxSetAcquireLocked(oldestID)
+	return true
 }
 
 // txSetRetryKnobs collects the tunable parameters of the tx-set acquire
@@ -332,6 +354,9 @@ func (r *Router) handleTxSetData(ld *message.LedgerData, originPeer uint64) {
 		r.logger.Info("tx-set sync: reply exceeds resource limit",
 			"t", "consensus", "event", "txset-resource-limit",
 			"node_count", len(ld.Nodes))
+		if originPeer != 0 {
+			r.adaptor.IncPeerBadData(originPeer, "txset-resource-limit")
+		}
 		return
 	}
 	var txSetID consensus.TxSetID
@@ -796,7 +821,10 @@ func (r *Router) fillTxSetFromLocalPool(txSetID consensus.TxSetID, state *txSetA
 
 // MarkTxSetStillNeeded revives recoverable acquisitions while leaving completed
 // acquisitions latched. Timeout history is clamped rather than reset.
-func (r *Router) MarkTxSetStillNeeded(txSetID consensus.TxSetID) {
+func (r *Router) admitTxSetStillNeeded(txSetID consensus.TxSetID) bool {
+	if txSetID == (consensus.TxSetID{}) {
+		return false
+	}
 	r.txSetAcquireMu.Lock()
 	defer r.txSetAcquireMu.Unlock()
 	r.sweepStaleTxSetAcquireLocked()
@@ -804,7 +832,7 @@ func (r *Router) MarkTxSetStillNeeded(txSetID consensus.TxSetID) {
 	state, ok := r.txSetAcquire[txSetID]
 	if !ok {
 		if !r.makeTxSetAcquireRoomLocked() {
-			return
+			return false
 		}
 		r.txSetAcquire[txSetID] = &txSetAcquireState{
 			startedAt:       now,
@@ -812,17 +840,22 @@ func (r *Router) MarkTxSetStillNeeded(txSetID consensus.TxSetID) {
 			lastRequest:     now,
 			peerNonProgress: make(map[uint64]int),
 		}
-		return
+		return true
 	}
 	state.lastUpdate = now
 	if state.done && state.completed {
-		return
+		return true
 	}
 	state.done = false
 	state.dormant = false
 	state.stallTicks = min(state.stallTicks, r.txSetRetryKnobs.NormalTimeouts)
 	state.attempts = 0
 	state.lastRequest = now
+	return true
+}
+
+func (r *Router) MarkTxSetStillNeeded(txSetID consensus.TxSetID) {
+	_ = r.admitTxSetStillNeeded(txSetID)
 }
 
 // sweepStaleTxSetAcquireLocked drops entries older than txSetAcquireTTL.

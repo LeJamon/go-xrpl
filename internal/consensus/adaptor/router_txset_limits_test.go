@@ -2,6 +2,7 @@ package adaptor
 
 import (
 	"bytes"
+	"sync"
 	"testing"
 	"time"
 
@@ -11,6 +12,29 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+type txSetResourceRecordingSender struct {
+	retryRecordingSender
+	mu      sync.Mutex
+	charges []txSetResourceCharge
+}
+
+type txSetResourceCharge struct {
+	peerID uint64
+	reason string
+}
+
+func (s *txSetResourceRecordingSender) IncPeerBadData(peerID uint64, reason string) {
+	s.mu.Lock()
+	s.charges = append(s.charges, txSetResourceCharge{peerID: peerID, reason: reason})
+	s.mu.Unlock()
+}
+
+func (s *txSetResourceRecordingSender) badDataCharges() []txSetResourceCharge {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return append([]txSetResourceCharge(nil), s.charges...)
+}
 
 func resourceTxSetID(value byte) consensus.TxSetID {
 	var id consensus.TxSetID
@@ -43,18 +67,30 @@ func TestTxSetAcquire_ActiveCountBound(t *testing.T) {
 
 	for i := 0; i < txSetAcquireMaxActive; i++ {
 		id := resourceTxSetID(byte(i + 1))
-		router.MarkTxSetStillNeeded(id)
-		router.handleTxSetData(resourceLedgerData(id, nil), 1)
+		state := resourceAcquireState(t, int64(i+1))
+		state.lastUpdate = time.Unix(int64(i+1), 0)
+		router.txSetAcquire[id] = state
 	}
 
-	rejectedID := resourceTxSetID(0xff)
-	router.MarkTxSetStillNeeded(rejectedID)
-	router.handleTxSetData(resourceLedgerData(rejectedID, nil), 1)
+	oldestID := resourceTxSetID(1)
+	oldest := router.txSetAcquire[oldestID]
+	admittedID := resourceTxSetID(0xff)
+	assert.True(t, router.admitTxSetStillNeeded(admittedID))
 
 	router.txSetAcquireMu.Lock()
 	defer router.txSetAcquireMu.Unlock()
 	assert.Len(t, router.txSetAcquire, txSetAcquireMaxActive)
-	assert.NotContains(t, router.txSetAcquire, rejectedID)
+	assert.NotContains(t, router.txSetAcquire, oldestID)
+	assert.Contains(t, router.txSetAcquire, admittedID)
+	assert.Nil(t, oldest.txMap)
+	assert.Zero(t, oldest.retainedBytes)
+}
+
+func TestTxSetAcquire_AdmissionRejectsZeroID(t *testing.T) {
+	router, _ := newRetryRouter(t)
+
+	assert.False(t, router.admitTxSetStillNeeded(consensus.TxSetID{}))
+	assert.Empty(t, router.txSetAcquire)
 }
 
 func TestTxSetAcquire_ActiveCountReclaimsDormantState(t *testing.T) {
@@ -106,12 +142,18 @@ func TestTxSetAcquire_ReplyWorkBound(t *testing.T) {
 	for i, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			router, _ := newRetryRouter(t)
+			sender := &txSetResourceRecordingSender{}
+			router.adaptor.sender = sender
 			id := resourceTxSetID(byte(i + 1))
-			router.handleTxSetData(resourceLedgerData(id, tt.nodes), 1)
+			router.handleTxSetData(resourceLedgerData(id, tt.nodes), 7)
 
 			router.txSetAcquireMu.Lock()
-			defer router.txSetAcquireMu.Unlock()
 			assert.NotContains(t, router.txSetAcquire, id)
+			router.txSetAcquireMu.Unlock()
+			assert.Equal(t,
+				[]txSetResourceCharge{{peerID: 7, reason: "txset-resource-limit"}},
+				sender.badDataCharges(),
+			)
 		})
 	}
 }

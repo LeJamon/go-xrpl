@@ -38,6 +38,7 @@ func TestTxSetCache_TTLEviction(t *testing.T) {
 		t.Error("fresh entry should remain after the sweep")
 	}
 }
+
 // TestTxSetCache_Remove covers explicit removal.
 func TestTxSetCache_Remove(t *testing.T) {
 	c := NewTxSetCache()

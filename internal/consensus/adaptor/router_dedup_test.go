@@ -1,11 +1,27 @@
 package adaptor
 
 import (
+	"errors"
 	"testing"
 	"time"
 
+	"github.com/LeJamon/go-xrpl/internal/consensus"
+	"github.com/LeJamon/go-xrpl/internal/peermanagement"
+	"github.com/LeJamon/go-xrpl/internal/peermanagement/message"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
+
+type proposalAdmissionEngine struct {
+	mockEngine
+	err   error
+	calls int
+}
+
+func (e *proposalAdmissionEngine) OnProposal(*consensus.Proposal, uint64) error {
+	e.calls++
+	return e.err
+}
 
 // TestMessageSuppression_ObserveReturnsLastSeen pins R5.7: observe()
 // must return both first-seen and the prior observation time so the
@@ -159,4 +175,45 @@ func TestMessageSuppression_AllowRetryRemovesWholeEntry(t *testing.T) {
 
 	assert.NotContains(t, s.entries, hash)
 	assert.False(t, s.peerHasHash(hash, 11))
+}
+
+func TestProposalSuppression_AdmitsOnlyAfterEngineAcceptance(t *testing.T) {
+	router, _ := newRetryRouter(t)
+	engine := &proposalAdmissionEngine{err: errors.New("invalid proposal")}
+	router.engine = engine
+	router.messageSeen = newMessageSuppression(time.Minute, 2)
+
+	first := [32]byte{1}
+	second := [32]byte{2}
+	router.messageSeen.observe(first)
+	router.messageSeen.observe(second)
+
+	proposal := &message.ProposeSet{
+		ProposeSeq:     1,
+		CurrentTxHash:  make([]byte, 32),
+		NodePubKey:     make([]byte, 33),
+		CloseTime:      timeToXrplEpoch(time.Unix(1_700_000_000, 0)),
+		Signature:      make([]byte, signatureMinLen),
+		PreviousLedger: make([]byte, 32),
+	}
+	proposal.NodePubKey[0] = 0x02
+	hash := hashProposalSuppression(ProposalFromMessage(proposal))
+	inbound := &peermanagement.InboundMessage{
+		PeerID:  7,
+		Type:    uint16(message.TypeProposeLedger),
+		Payload: encodePayload(t, proposal),
+	}
+
+	router.handleProposal(inbound)
+	assert.NotContains(t, router.messageSeen.entries, hash)
+	assert.Contains(t, router.messageSeen.entries, first)
+	assert.Contains(t, router.messageSeen.entries, second)
+
+	engine.err = nil
+	router.handleProposal(inbound)
+	require.Contains(t, router.messageSeen.entries, hash)
+	assert.Equal(t, 2, engine.calls)
+
+	router.handleProposal(inbound)
+	assert.Equal(t, 2, engine.calls, "accepted duplicate must bypass the engine")
 }

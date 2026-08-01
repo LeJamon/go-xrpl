@@ -172,6 +172,7 @@ func (c *TxSetCache) Remove(id consensus.TxSetID) {
 	delete(c.cache, id)
 	delete(c.added, id)
 }
+
 // sweepLocked evicts entries older than txSetCacheTTL. Runs opportunistically
 // on Put — frequent enough at round cadence to keep the map bounded without a
 // dedicated timer. Caller holds c.mu.
