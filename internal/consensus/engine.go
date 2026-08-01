@@ -5,20 +5,17 @@ import (
 	"time"
 )
 
-// EngineLifecycle owns consensus background resources.
 type EngineLifecycle interface {
 	Start(ctx context.Context) error
 
 	Stop() error
 }
 
-// EngineRoundDriver starts consensus rounds.
 type EngineRoundDriver interface {
 	// StartRound begins a round; proposing enables this node's proposal.
 	StartRound(round RoundID, proposing bool) error
 }
 
-// EngineInbound accepts network consensus messages.
 type EngineInbound interface {
 	// OnProposal handles an incoming proposal. originPeer is the overlay peer
 	// ID that delivered it (0 for self-originated); passed to the relay path
@@ -32,12 +29,10 @@ type EngineInbound interface {
 	OnTxSet(id TxSetID, txs [][]byte) error
 }
 
-// EngineLedgerReceiver accepts an acquired ledger from an external driver.
 type EngineLedgerReceiver interface {
 	OnLedger(id LedgerID, ledger []byte) error
 }
 
-// EngineLedgerSwitch drives wrong-ledger recovery.
 type EngineLedgerSwitch interface {
 	// TrySwitchToLedger synchronously attempts to make a locally-held ledger
 	// the consensus parent. The candidate must be the exact wrong-ledger
@@ -50,7 +45,6 @@ type EngineLedgerSwitch interface {
 	OnLedgerAcquireFailed(id LedgerID)
 }
 
-// EngineObservability exposes immutable consensus status.
 type EngineObservability interface {
 	Mode() Mode
 
@@ -65,20 +59,17 @@ type EngineObservability interface {
 	GetJSON(full bool) map[string]any
 }
 
-// EngineEvents registers observational event subscribers.
 type EngineEvents interface {
 	// Subscribe registers a sink for the engine's typed event bus. The engine
 	// fires events on its own goroutine, so OnEvent must not block.
 	Subscribe(sub EventSubscriber)
 }
 
-// RouterEngine is the consensus surface used by the message router.
 type RouterEngine interface {
 	EngineInbound
 	EngineLedgerSwitch
 }
 
-// Engine is the complete consensus surface used by node wiring.
 type Engine interface {
 	EngineLifecycle
 	EngineRoundDriver

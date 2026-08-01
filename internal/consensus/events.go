@@ -204,10 +204,7 @@ func (eb *EventBus) Subscribe(sub EventSubscriber) {
 
 // Publish queues an event on a running bus and reports whether it was accepted.
 // Calls before Start or after Stop are rejected. On a full buffer the event is
-// dropped, counted, and logged with rate limiting, so an operator debugging
-// "missing validations on the stream" has a signal instead of silence. This is
-// the one lossy consensus channel; every other shed in the tree is counted, and
-// now so is this one.
+// dropped, counted, and logged with rate limiting.
 func (eb *EventBus) Publish(event Event) bool {
 	eb.mu.RLock()
 	defer eb.mu.RUnlock()
