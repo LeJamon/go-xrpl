@@ -78,6 +78,7 @@ func TestDelegateSet_UnknownPermissionValueRoundTrips(t *testing.T) {
 
 	flat, err := ds.Flatten()
 	require.NoError(t, err)
+	txcore.PopulateRequiredWireFields(flat, ds.GetCommon())
 	blobHex, err := binarycodec.Encode(flat)
 	require.NoError(t, err)
 	blob, err := hex.DecodeString(blobHex)

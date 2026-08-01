@@ -82,7 +82,7 @@ func (s *Service) loadStoredLedgerByHash(ctx context.Context, hash [32]byte) (*l
 		return nil, nil
 	}
 	if stored.Type != nodestore.NodeLedger {
-		return nil, fmt.Errorf("%w: stored object is %s, not a ledger header", errStoredLedgerUnavailable, stored.Type)
+		return nil, fmt.Errorf("%w: stored object has type %d, not a ledger header", errStoredLedgerUnavailable, stored.Type)
 	}
 	h, err := header.DeserializeHeader(stored.Data, true)
 	if err != nil {

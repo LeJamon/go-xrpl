@@ -22,7 +22,6 @@ import (
 	"github.com/LeJamon/go-xrpl/keylet"
 	"github.com/LeJamon/go-xrpl/protocol"
 	"github.com/LeJamon/go-xrpl/shamap/backend"
-	"github.com/LeJamon/go-xrpl/storage/kvstore/memorydb"
 	"github.com/LeJamon/go-xrpl/storage/nodestore"
 	sqlitedb "github.com/LeJamon/go-xrpl/storage/relationaldb/sqlite"
 	"github.com/stretchr/testify/require"
@@ -77,7 +76,7 @@ func TestService_StartupFreshAndNetworkAreDistinct(t *testing.T) {
 
 func TestService_StartupFreshDurablyStoresGenesisAndInitialLedger(t *testing.T) {
 	t.Parallel()
-	db := nodestore.NewKVDatabase(memorydb.New(), "startup-fresh-durable", 1_000, time.Hour)
+	db := newTestNodeStore(t, 1_000)
 	t.Cleanup(func() { require.NoError(t, db.Close()) })
 	svc, err := New(Config{
 		Standalone:    true,
@@ -99,7 +98,7 @@ func TestService_StartupFreshDurablyStoresGenesisAndInitialLedger(t *testing.T) 
 
 func TestService_StartupFreshFailsWhenDurableStoreFails(t *testing.T) {
 	t.Parallel()
-	base := nodestore.NewKVDatabase(memorydb.New(), "startup-fresh-failure", 1_000, time.Hour)
+	base := newTestNodeStore(t, 1_000)
 	t.Cleanup(func() { require.NoError(t, base.Close()) })
 	sentinel := errors.New("store failed")
 	db := &failingStartupStore{Database: base, err: sentinel}
@@ -422,12 +421,9 @@ func TestService_StartupReplayCancelsAfterPreferredLedgerSwitch(t *testing.T) {
 
 func newStartupTestStorage(t *testing.T, ctx context.Context) (nodestore.Database, *sqlitedb.RepositoryManager) {
 	t.Helper()
-	db := nodestore.NewKVDatabase(memorydb.New(), "startup-test", 10_000, time.Hour)
+	db := newTestNodeStore(t, 10_000)
 	t.Cleanup(func() { require.NoError(t, db.Close()) })
-	rm, err := sqlitedb.NewRepositoryManager(t.TempDir())
-	require.NoError(t, err)
-	require.NoError(t, rm.Open(ctx))
-	t.Cleanup(func() { require.NoError(t, rm.Close(ctx)) })
+	rm := newTestRepositories(t, ctx)
 	return db, rm
 }
 

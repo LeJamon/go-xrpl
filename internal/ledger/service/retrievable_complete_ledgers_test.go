@@ -3,17 +3,14 @@ package service
 import (
 	"strconv"
 	"testing"
-	"time"
 
 	"github.com/LeJamon/go-xrpl/internal/ledger"
 	"github.com/LeJamon/go-xrpl/shamap/backend"
-	"github.com/LeJamon/go-xrpl/storage/kvstore/memorydb"
-	"github.com/LeJamon/go-xrpl/storage/nodestore"
 	"github.com/stretchr/testify/require"
 )
 
 func TestCompleteLedgers_EvictedSequenceLoadsFromNodeStore(t *testing.T) {
-	db := nodestore.NewKVDatabase(memorydb.New(), "complete-ledger-sequence", 10_000, time.Hour)
+	db := newTestNodeStore(t, 10_000)
 	t.Cleanup(func() { require.NoError(t, db.Close()) })
 
 	cfg := DefaultConfig()

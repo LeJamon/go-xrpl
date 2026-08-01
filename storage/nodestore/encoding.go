@@ -74,6 +74,31 @@ func encodeNodeData(n *Node) []byte {
 	return buf
 }
 
+func validateNode(node *Node) error {
+	if node == nil {
+		return fmt.Errorf("%w: nil", ErrInvalidNode)
+	}
+	if !isSupportedNodeType(node.Type) {
+		return fmt.Errorf("%w: unsupported type %d", ErrInvalidNode, node.Type)
+	}
+	if node.Hash == (Hash256{}) {
+		return fmt.Errorf("%w: zero hash", ErrInvalidNode)
+	}
+	if len(node.Data) == 0 {
+		return fmt.Errorf("%w: empty payload", ErrInvalidNode)
+	}
+	return nil
+}
+
+func isSupportedNodeType(nodeType NodeType) bool {
+	switch nodeType {
+	case NodeLedger, NodeAccount, NodeTransaction:
+		return true
+	default:
+		return false
+	}
+}
+
 // decodeNodeData deserializes a node and takes ownership of data. Key-value
 // stores return caller-owned values, so the payload can back the immutable
 // node directly instead of being copied again.
@@ -84,10 +109,14 @@ func decodeNodeData(hash Hash256, data []byte) (*Node, error) {
 	nodeType := NodeType(data[0])
 	ledgerSeq := binary.BigEndian.Uint32(data[1:5])
 	nodeData := data[nodeEncodingHeaderSize:len(data):len(data)]
-	return &Node{
+	node := &Node{
 		Type:      nodeType,
 		Hash:      hash,
 		Data:      nodeData,
 		LedgerSeq: ledgerSeq,
-	}, nil
+	}
+	if err := validateNode(node); err != nil {
+		return nil, fmt.Errorf("%w: %v", ErrDataCorrupt, err)
+	}
+	return node, nil
 }

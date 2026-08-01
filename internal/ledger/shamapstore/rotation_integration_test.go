@@ -2,6 +2,7 @@ package shamapstore_test
 
 import (
 	"context"
+	"crypto/sha256"
 	"errors"
 	"fmt"
 	"path/filepath"
@@ -16,13 +17,51 @@ import (
 	"github.com/LeJamon/go-xrpl/storage/nodestore"
 )
 
+func testNodeHash(data []byte) nodestore.Hash256 {
+	return nodestore.Hash256(sha256.Sum256(data))
+}
+
+func testNodeDatabase(t *testing.T, cacheSize int) *nodestore.KVDatabase {
+	t.Helper()
+	database, err := nodestore.NewKVDatabase(memorydb.New(), nodestore.DatabaseConfig{
+		PositiveCache: nodestore.CacheConfig{
+			Enabled:    true,
+			MaxEntries: cacheSize,
+			TTL:        time.Hour,
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return database
+}
+
+func testRotatingNodeDatabase(
+	t *testing.T,
+	store *kvpebble.RotatingStore,
+	cacheSize int,
+) *nodestore.RotatingKVDatabase {
+	t.Helper()
+	database, err := nodestore.NewRotatingKVDatabase(store, nodestore.DatabaseConfig{
+		PositiveCache: nodestore.CacheConfig{
+			Enabled:    true,
+			MaxEntries: cacheSize,
+			TTL:        time.Hour,
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return database
+}
+
 // TestRotation_ReclaimsNodeStoreSpace drives a Rotator against a real
 // nodestore. Each synthetic ledger re-stamps live state at its current sequence
 // while leaving churned state at its original sequence, allowing rotation to
 // reclaim old records without removing the live state.
 func TestRotation_ReclaimsNodeStoreSpace(t *testing.T) {
 	ctx := context.Background()
-	db := nodestore.NewKVDatabase(memorydb.New(), "mem", 10000, time.Hour)
+	db := testNodeDatabase(t, 10000)
 	defer db.Close()
 
 	store, err := shamapstore.New(false, "")
@@ -32,8 +71,8 @@ func TestRotation_ReclaimsNodeStoreSpace(t *testing.T) {
 
 	// One shared "live account state" leaf, re-persisted every ledger at the
 	// current sequence (mirrors persistToNodeStore walking the full state map).
-	liveData := nodestore.Blob("live-account-root")
-	liveKey := nodestore.ComputeHash256(liveData)
+	liveData := []byte("live-account-root")
+	liveKey := testNodeHash(liveData)
 
 	headerKeys := make(map[uint32]nodestore.Hash256)
 	churnedKeys := make(map[uint32]nodestore.Hash256)
@@ -44,8 +83,8 @@ func TestRotation_ReclaimsNodeStoreSpace(t *testing.T) {
 		}); err != nil {
 			t.Fatalf("store live: %v", err)
 		}
-		hData := nodestore.Blob(fmt.Sprintf("header-%d", seq))
-		hKey := nodestore.ComputeHash256(hData)
+		hData := []byte(fmt.Sprintf("header-%d", seq))
+		hKey := testNodeHash(hData)
 		headerKeys[seq] = hKey
 		if err := db.Store(ctx, &nodestore.Node{
 			Type: nodestore.NodeLedger, Hash: hKey, Data: hData, LedgerSeq: seq,
@@ -55,8 +94,8 @@ func TestRotation_ReclaimsNodeStoreSpace(t *testing.T) {
 		// A state leaf touched only at this ledger: never re-written, so it
 		// keeps its original LedgerSeq and becomes superseded once the account
 		// changes again — exactly what online-delete reclaims.
-		churnData := nodestore.Blob(fmt.Sprintf("churned-state-%d", seq))
-		churnKey := nodestore.ComputeHash256(churnData)
+		churnData := []byte(fmt.Sprintf("churned-state-%d", seq))
+		churnKey := testNodeHash(churnData)
 		churnedKeys[seq] = churnKey
 		if err := db.Store(ctx, &nodestore.Node{
 			Type: nodestore.NodeAccount, Hash: churnKey, Data: churnData, LedgerSeq: seq,
@@ -129,17 +168,14 @@ func TestRotation_RotatingPebblePromotesLiveStateAndRetiresHistory(t *testing.T)
 	if err != nil {
 		t.Fatal(err)
 	}
-	db := nodestore.NewRotatingKVDatabase(backend, "rotating", &nodestore.DatabaseConfig{
-		CacheSize: 32,
-		CacheTTL:  time.Hour,
-	})
+	db := testRotatingNodeDatabase(t, backend, 32)
 
 	live := &nodestore.Node{
-		Type: nodestore.NodeAccount, Hash: nodestore.ComputeHash256([]byte("live")),
+		Type: nodestore.NodeAccount, Hash: testNodeHash([]byte("live")),
 		Data: []byte("live"), LedgerSeq: 1,
 	}
 	historical := &nodestore.Node{
-		Type: nodestore.NodeAccount, Hash: nodestore.ComputeHash256([]byte("historical")),
+		Type: nodestore.NodeAccount, Hash: testNodeHash([]byte("historical")),
 		Data: []byte("historical"), LedgerSeq: 1,
 	}
 	for _, node := range []*nodestore.Node{live, historical} {
@@ -178,7 +214,7 @@ func TestRotation_RotatingPebblePromotesLiveStateAndRetiresHistory(t *testing.T)
 	rot.NotifyForTest(11)
 
 	newLive := &nodestore.Node{
-		Type: nodestore.NodeAccount, Hash: nodestore.ComputeHash256([]byte("new-live")),
+		Type: nodestore.NodeAccount, Hash: testNodeHash([]byte("new-live")),
 		Data: []byte("new-live"), LedgerSeq: 12,
 	}
 	if err := db.Store(ctx, newLive); err != nil {
@@ -215,11 +251,7 @@ func TestRotation_RotatingPebblePromotesLiveStateAndRetiresHistory(t *testing.T)
 	if err != nil {
 		t.Fatal(err)
 	}
-	reopened := nodestore.NewRotatingKVDatabase(
-		reopenedBackend,
-		"rotating",
-		&nodestore.DatabaseConfig{CacheSize: 32, CacheTTL: time.Hour},
-	)
+	reopened := testRotatingNodeDatabase(t, reopenedBackend, 32)
 	defer reopened.Close()
 	for _, want := range []*nodestore.Node{live, newLive} {
 		node, err := reopened.Fetch(ctx, want.Hash)
@@ -238,12 +270,15 @@ func TestRotation_RealGenerationPreservesHigherExistingFloor(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	db := nodestore.NewRotatingKVDatabase(
-		rotating,
-		"rotating-floor",
-		&nodestore.DatabaseConfig{CacheSize: 32, CacheTTL: time.Hour},
-	)
+	db := testRotatingNodeDatabase(t, rotating, 32)
 	defer db.Close()
+	committed, err := db.RotateGeneration(ctx, 800, 501)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !committed {
+		t.Fatal("initial generation rotation did not commit")
+	}
 
 	state, err := shamapstore.New(false, "")
 	if err != nil {
@@ -267,11 +302,11 @@ func TestRotation_RealGenerationPreservesHigherExistingFloor(t *testing.T) {
 		nil,
 	)
 
-	rot.NotifyForTest(800)
+	rot.NotifyForTest(1100)
 
 	lastRotated, minimumOnline := db.GenerationState()
-	if lastRotated != 800 {
-		t.Fatalf("generation lastRotated = %d, want 800", lastRotated)
+	if lastRotated != 1100 {
+		t.Fatalf("generation lastRotated = %d, want 1100", lastRotated)
 	}
 	if minimumOnline != 900 {
 		t.Fatalf("generation minimumOnline = %d, want existing floor 900", minimumOnline)
@@ -283,11 +318,11 @@ func TestRotation_RealGenerationPreservesHigherExistingFloor(t *testing.T) {
 
 func TestRotation_AdvancesAcquisitionFloorBeforeLiveStateRefresh(t *testing.T) {
 	ctx := context.Background()
-	db := nodestore.NewKVDatabase(memorydb.New(), "mem", 100, time.Hour)
+	db := testNodeDatabase(t, 100)
 	defer db.Close()
 	family := backend.New(db)
 	data := []byte("shared-live-node")
-	hash := [32]byte(nodestore.ComputeHash256(data))
+	hash := [32]byte(testNodeHash(data))
 	if err := family.StoreBatch(ctx, []shamap.FlushEntry{{
 		Hash: hash, Data: data, LedgerSeq: 100, MapType: shamap.TypeState,
 	}}); err != nil {

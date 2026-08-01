@@ -21,9 +21,7 @@ import (
 	"github.com/LeJamon/go-xrpl/protocol"
 	"github.com/LeJamon/go-xrpl/shamap"
 	"github.com/LeJamon/go-xrpl/shamap/backend"
-	"github.com/LeJamon/go-xrpl/storage/kvstore/memorydb"
 	"github.com/LeJamon/go-xrpl/storage/nodestore"
-	sqlitedb "github.com/LeJamon/go-xrpl/storage/relationaldb/sqlite"
 	"github.com/stretchr/testify/require"
 )
 
@@ -332,7 +330,7 @@ func newStoredVerificationFixture(
 ) (*Service, nodestore.Database, [32]byte, uint64, uint32) {
 	t.Helper()
 	ctx := context.Background()
-	db := nodestore.NewKVDatabase(memorydb.New(), "verification-progress", 10_000, time.Hour)
+	db := newTestNodeStore(t, 10_000)
 	t.Cleanup(func() { require.NoError(t, db.Close()) })
 	svc, err := New(Config{
 		Standalone:    true,
@@ -382,7 +380,7 @@ func newParallelStoredVerificationFixture(
 	t *testing.T,
 ) (*Service, nodestore.Database, [32]byte, []nodestore.Hash256) {
 	t.Helper()
-	db := nodestore.NewKVDatabase(memorydb.New(), "parallel-verification", 10_000, time.Hour)
+	db := newTestNodeStore(t, 10_000)
 	t.Cleanup(func() { require.NoError(t, db.Close()) })
 	svc, err := New(Config{NodeStore: db})
 	require.NoError(t, err)
@@ -507,12 +505,9 @@ func TestStoredLedgerFeesPreservesDefaultsForAbsentFields(t *testing.T) {
 
 func TestService_FastLoadRestoresPersistedValidatedLedger(t *testing.T) {
 	ctx := context.Background()
-	db := nodestore.NewKVDatabase(memorydb.New(), "fast-load", 10_000, time.Hour)
+	db := newTestNodeStore(t, 10_000)
 	t.Cleanup(func() { require.NoError(t, db.Close()) })
-	rm, err := sqlitedb.NewRepositoryManager(t.TempDir())
-	require.NoError(t, err)
-	require.NoError(t, rm.Open(ctx))
-	t.Cleanup(func() { require.NoError(t, rm.Close(ctx)) })
+	rm := newTestRepositories(t, ctx)
 
 	first, err := New(Config{
 		Standalone:    true,
@@ -523,7 +518,8 @@ func TestService_FastLoadRestoresPersistedValidatedLedger(t *testing.T) {
 	})
 	require.NoError(t, err)
 	require.NoError(t, first.Start())
-	txBlob, txHash := makeTxMetaBlobForTest(t, []byte("synthetic-tx"), 0)
+	rawTx, _ := validRelationalTestTransaction(t, 1)
+	txBlob, txHash := makeTxMetaBlobForTest(t, rawTx, 0)
 	require.NoError(t, first.openLedger.AddTransactionWithMeta(txHash, txBlob))
 	seq, err := first.AcceptLedger(ctx)
 	require.NoError(t, err)
@@ -577,12 +573,9 @@ func TestService_FastLoadRestoresPersistedValidatedLedger(t *testing.T) {
 
 func TestService_FastLoadReplacesSameHeightOnlyAfterTrustedQuorum(t *testing.T) {
 	ctx := context.Background()
-	db := nodestore.NewKVDatabase(memorydb.New(), "fast-load-replacement", 10_000, time.Hour)
+	db := newTestNodeStore(t, 10_000)
 	t.Cleanup(func() { require.NoError(t, db.Close()) })
-	rm, err := sqlitedb.NewRepositoryManager(t.TempDir())
-	require.NoError(t, err)
-	require.NoError(t, rm.Open(ctx))
-	t.Cleanup(func() { require.NoError(t, rm.Close(ctx)) })
+	rm := newTestRepositories(t, ctx)
 
 	writer, err := New(Config{
 		Standalone:    true,
@@ -727,7 +720,7 @@ func TestService_FastLoadReplacesSameHeightOnlyAfterTrustedQuorum(t *testing.T) 
 
 func TestService_VerifyStoredSHAMapRebalancesBelowRoot(t *testing.T) {
 	ctx := context.Background()
-	db := nodestore.NewKVDatabase(memorydb.New(), "parallel-fast-load", 10_000, time.Hour)
+	db := newTestNodeStore(t, 10_000)
 	t.Cleanup(func() { require.NoError(t, db.Close()) })
 	svc, err := New(Config{
 		NodeStore:       db,
@@ -868,7 +861,7 @@ func TestService_VerifyStoredSHAMapUncachedReadsPreserveIntegrityChecks(t *testi
 
 func TestService_VerifyStoredSHAMapPreservesLeafAndDepthChecks(t *testing.T) {
 	t.Run("wrong leaf type", func(t *testing.T) {
-		db := nodestore.NewKVDatabase(memorydb.New(), "wrong-leaf", 32, time.Hour)
+		db := newTestNodeStore(t, 32)
 		t.Cleanup(func() { require.NoError(t, db.Close()) })
 		txData := append(protocol.HashPrefixTransactionID().Bytes(), []byte("transaction!")...)
 		txHash := storePrefixedVerificationNode(t, db, txData)
@@ -885,7 +878,7 @@ func TestService_VerifyStoredSHAMapPreservesLeafAndDepthChecks(t *testing.T) {
 	})
 
 	t.Run("excessive depth", func(t *testing.T) {
-		db := nodestore.NewKVDatabase(memorydb.New(), "excessive-depth", 128, time.Hour)
+		db := newTestNodeStore(t, 128)
 		t.Cleanup(func() { require.NoError(t, db.Close()) })
 		leafData := make([]byte, 4+12+32)
 		copy(leafData, protocol.HashPrefixLeafNode().Bytes())
@@ -977,7 +970,7 @@ func TestService_VerifyStoredSHAMapCancelsSaturatedWorkers(t *testing.T) {
 
 func TestService_StoredSHAMapFrontierIsBounded(t *testing.T) {
 	ctx := t.Context()
-	db := nodestore.NewKVDatabase(memorydb.New(), "bounded-frontier", 10_000, time.Hour)
+	db := newTestNodeStore(t, 10_000)
 	t.Cleanup(func() { require.NoError(t, db.Close()) })
 	svc, err := New(Config{
 		Standalone:    true,
@@ -1032,7 +1025,7 @@ func TestService_StoredSHAMapFrontierIsBounded(t *testing.T) {
 }
 
 func TestService_StoredSHAMapFrontierSplitsEveryRootBranch(t *testing.T) {
-	db := nodestore.NewKVDatabase(memorydb.New(), "fair-frontier", 256, time.Hour)
+	db := newTestNodeStore(t, 256)
 	t.Cleanup(func() { require.NoError(t, db.Close()) })
 	svc, err := New(Config{NodeStore: db})
 	require.NoError(t, err)
@@ -1079,7 +1072,7 @@ func TestService_StoredSHAMapFrontierSplitsEveryRootBranch(t *testing.T) {
 }
 
 func TestService_StoredSHAMapFrontierRedistributesUnusedCapacity(t *testing.T) {
-	db := nodestore.NewKVDatabase(memorydb.New(), "imbalanced-frontier", 2_048, time.Hour)
+	db := newTestNodeStore(t, 2_048)
 	t.Cleanup(func() { require.NoError(t, db.Close()) })
 	svc, err := New(Config{NodeStore: db})
 	require.NoError(t, err)
@@ -1138,7 +1131,7 @@ func TestService_StoredSHAMapFrontierRedistributesUnusedCapacity(t *testing.T) {
 
 func BenchmarkService_VerifyStoredSHAMapWorkers(b *testing.B) {
 	ctx := b.Context()
-	db := nodestore.NewKVDatabase(memorydb.New(), "verification-benchmark", 32_768, time.Hour)
+	db := newTestNodeStore(b, 32_768)
 	b.Cleanup(func() { require.NoError(b, db.Close()) })
 	svc, err := New(Config{
 		Standalone:    true,
@@ -1379,12 +1372,9 @@ func TestService_VerifyStoredSHAMapReportsTraversalFailure(t *testing.T) {
 
 func TestService_FastLoadFallsBackWhenStorageIsEmpty(t *testing.T) {
 	ctx := context.Background()
-	db := nodestore.NewKVDatabase(memorydb.New(), "fast-load-empty", 100, time.Hour)
+	db := newTestNodeStore(t, 100)
 	t.Cleanup(func() { require.NoError(t, db.Close()) })
-	rm, err := sqlitedb.NewRepositoryManager(t.TempDir())
-	require.NoError(t, err)
-	require.NoError(t, rm.Open(ctx))
-	t.Cleanup(func() { require.NoError(t, rm.Close(ctx)) })
+	rm := newTestRepositories(t, ctx)
 
 	svc, err := New(Config{
 		Standalone:    false,
@@ -1406,12 +1396,9 @@ func TestService_FastLoadFallsBackWhenStorageIsEmpty(t *testing.T) {
 
 func TestService_FastLoadRejectsRelationalLedgerWithoutValidatedTip(t *testing.T) {
 	ctx := context.Background()
-	db := nodestore.NewKVDatabase(memorydb.New(), "fast-load-unvalidated", 10_000, time.Hour)
+	db := newTestNodeStore(t, 10_000)
 	t.Cleanup(func() { require.NoError(t, db.Close()) })
-	rm, err := sqlitedb.NewRepositoryManager(t.TempDir())
-	require.NoError(t, err)
-	require.NoError(t, rm.Open(ctx))
-	t.Cleanup(func() { require.NoError(t, rm.Close(ctx)) })
+	rm := newTestRepositories(t, ctx)
 
 	writer, err := New(Config{
 		Standalone:    false,
@@ -1444,12 +1431,9 @@ func TestService_FastLoadRejectsRelationalLedgerWithoutValidatedTip(t *testing.T
 
 func TestService_FastLoadFallsBackWhenTreeIsCorrupt(t *testing.T) {
 	ctx := context.Background()
-	db := nodestore.NewKVDatabase(memorydb.New(), "fast-load-corrupt", 10_000, time.Hour)
+	db := newTestNodeStore(t, 10_000)
 	t.Cleanup(func() { require.NoError(t, db.Close()) })
-	rm, err := sqlitedb.NewRepositoryManager(t.TempDir())
-	require.NoError(t, err)
-	require.NoError(t, rm.Open(ctx))
-	t.Cleanup(func() { require.NoError(t, rm.Close(ctx)) })
+	rm := newTestRepositories(t, ctx)
 
 	first, err := New(Config{
 		Standalone:    true,
@@ -1496,12 +1480,9 @@ func TestService_FastLoadFallsBackWhenTreeIsCorrupt(t *testing.T) {
 
 func TestService_GetLedgerByHashTreatsCorruptDescendantAsNotFound(t *testing.T) {
 	ctx := context.Background()
-	db := nodestore.NewKVDatabase(memorydb.New(), "fast-load-corrupt-descendant", 10_000, time.Hour)
+	db := newTestNodeStore(t, 10_000)
 	t.Cleanup(func() { require.NoError(t, db.Close()) })
-	rm, err := sqlitedb.NewRepositoryManager(t.TempDir())
-	require.NoError(t, err)
-	require.NoError(t, rm.Open(ctx))
-	t.Cleanup(func() { require.NoError(t, rm.Close(ctx)) })
+	rm := newTestRepositories(t, ctx)
 
 	family := backend.New(db)
 	writer, err := New(Config{

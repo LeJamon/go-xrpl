@@ -12,8 +12,8 @@ import (
 )
 
 func TestCachePutKeepsCallerOwnership(t *testing.T) {
-	cache := NewCache(1, time.Hour)
-	node := NewNode(NodeTransaction, Blob("immutable payload"))
+	cache := newNodeCache(1, time.Hour)
+	node := testNode(NodeTransaction, []byte("immutable payload"), 0)
 	want := append([]byte(nil), node.Data...)
 
 	cache.Put(node)
@@ -33,7 +33,7 @@ func TestCachePutKeepsCallerOwnership(t *testing.T) {
 
 func TestFetchTransfersDecodedNodeToCache(t *testing.T) {
 	backend := memorydb.New()
-	want := NewNode(NodeTransaction, Blob("stored payload"))
+	want := testNode(NodeTransaction, []byte("stored payload"), 0)
 	encoded := encodeNodeData(want)
 	if err := backend.Put(want.Hash[:], encoded); err != nil {
 		releaseEncodeBuf(encoded)
@@ -41,11 +41,7 @@ func TestFetchTransfersDecodedNodeToCache(t *testing.T) {
 	}
 	releaseEncodeBuf(encoded)
 
-	db := NewKVDatabaseWithConfig(backend, "test", &DatabaseConfig{
-		CacheSize: 1,
-		CacheTTL:  time.Hour,
-	})
-	t.Cleanup(func() { _ = db.Close() })
+	db := testDatabase(t, backend, positiveCacheConfig(1))
 
 	first, err := db.Fetch(context.Background(), want.Hash)
 	if err != nil {
@@ -65,7 +61,7 @@ func TestFetchTransfersDecodedNodeToCache(t *testing.T) {
 
 func TestFetchDataUncachedDoesNotPopulateNodeCache(t *testing.T) {
 	backend := memorydb.New()
-	want := NewNode(NodeTransaction, Blob("uncached traversal payload"))
+	want := testNode(NodeTransaction, []byte("uncached traversal payload"), 0)
 	encoded := encodeNodeData(want)
 	if err := backend.Put(want.Hash[:], encoded); err != nil {
 		releaseEncodeBuf(encoded)
@@ -73,11 +69,7 @@ func TestFetchDataUncachedDoesNotPopulateNodeCache(t *testing.T) {
 	}
 	releaseEncodeBuf(encoded)
 
-	db := NewKVDatabaseWithConfig(backend, "test", &DatabaseConfig{
-		CacheSize: 1,
-		CacheTTL:  time.Hour,
-	})
-	t.Cleanup(func() { _ = db.Close() })
+	db := testDatabase(t, backend, positiveCacheConfig(1))
 
 	got, err := db.FetchDataUncached(context.Background(), want.Hash)
 	if err != nil {
@@ -86,14 +78,16 @@ func TestFetchDataUncachedDoesNotPopulateNodeCache(t *testing.T) {
 	if !bytes.Equal(got, want.Data) {
 		t.Fatalf("data = %x, want %x", got, want.Data)
 	}
-	if size := db.Stats().CacheSize; size != 0 {
-		t.Fatalf("cache size = %d, want 0", size)
+	for _, shard := range db.cache.(*nodeCache).shards {
+		if shard.currentSize != 0 {
+			t.Fatalf("cache shard size = %d, want 0", shard.currentSize)
+		}
 	}
 }
 
 func TestFetchCachedNeverFallsThroughToBackend(t *testing.T) {
 	backend := memorydb.New()
-	want := NewNode(NodeTransaction, Blob("cache-only payload"))
+	want := testNode(NodeTransaction, []byte("cache-only payload"), 0)
 	encoded := encodeNodeData(want)
 	if err := backend.Put(want.Hash[:], encoded); err != nil {
 		releaseEncodeBuf(encoded)
@@ -101,11 +95,7 @@ func TestFetchCachedNeverFallsThroughToBackend(t *testing.T) {
 	}
 	releaseEncodeBuf(encoded)
 
-	db := NewKVDatabaseWithConfig(backend, "test", &DatabaseConfig{
-		CacheSize: 1,
-		CacheTTL:  time.Hour,
-	})
-	t.Cleanup(func() { _ = db.Close() })
+	db := testDatabase(t, backend, positiveCacheConfig(1))
 
 	got, err := db.FetchCached(t.Context(), want.Hash)
 	if err != nil {
@@ -128,9 +118,9 @@ func TestFetchCachedNeverFallsThroughToBackend(t *testing.T) {
 }
 
 func TestCacheSweepRemovesExpiredEntryAheadOfFreshTail(t *testing.T) {
-	cache := NewCache(32, time.Hour)
-	expired := &Node{Hash: Hash256{0x10}, Type: NodeTransaction, Data: Blob("expired")}
-	fresh := &Node{Hash: Hash256{0x20}, Type: NodeTransaction, Data: Blob("fresh")}
+	cache := newNodeCache(32, time.Hour)
+	expired := &Node{Hash: Hash256{0x10}, Type: NodeTransaction, Data: []byte("expired")}
+	fresh := &Node{Hash: Hash256{0x20}, Type: NodeTransaction, Data: []byte("fresh")}
 	cache.putOwned(expired)
 	cache.putOwned(fresh)
 	if _, ok := cache.Get(expired.Hash); !ok {
@@ -156,10 +146,10 @@ func TestCacheSweepRemovesExpiredEntryAheadOfFreshTail(t *testing.T) {
 }
 
 func TestCacheCapacityPrefersExpiredEntryOverFreshLRU(t *testing.T) {
-	cache := NewCache(32, time.Hour)
-	expired := &Node{Hash: Hash256{0x10}, Type: NodeTransaction, Data: Blob("expired")}
-	fresh := &Node{Hash: Hash256{0x20}, Type: NodeTransaction, Data: Blob("fresh")}
-	newest := &Node{Hash: Hash256{0x30}, Type: NodeTransaction, Data: Blob("newest")}
+	cache := newNodeCache(32, time.Hour)
+	expired := &Node{Hash: Hash256{0x10}, Type: NodeTransaction, Data: []byte("expired")}
+	fresh := &Node{Hash: Hash256{0x20}, Type: NodeTransaction, Data: []byte("fresh")}
+	newest := &Node{Hash: Hash256{0x30}, Type: NodeTransaction, Data: []byte("newest")}
 	cache.putOwned(expired)
 	cache.putOwned(fresh)
 	if _, ok := cache.Get(expired.Hash); !ok {
@@ -181,27 +171,26 @@ func TestCacheCapacityPrefersExpiredEntryOverFreshLRU(t *testing.T) {
 	if hasExpired || !hasFresh || !hasNewest {
 		t.Fatalf("cache entries after capacity insert: expired=%t fresh=%t newest=%t", hasExpired, hasFresh, hasNewest)
 	}
-	stats := cache.Stats()
-	if stats.Expirations != 1 || stats.Evictions != 0 {
-		t.Fatalf("cache stats = expirations %d, evictions %d; want 1, 0", stats.Expirations, stats.Evictions)
-	}
 }
 
 func TestCacheReplacementReordersExpiration(t *testing.T) {
-	cache := NewCache(32, time.Hour)
-	fresh := &Node{Hash: Hash256{0x10}, Type: NodeTransaction, Data: Blob("fresh")}
-	replaced := &Node{Hash: Hash256{0x20}, Type: NodeTransaction, Data: Blob("replaced")}
+	cache := newNodeCache(32, time.Hour)
+	fresh := &Node{Hash: Hash256{0x10}, Type: NodeTransaction, Data: []byte("fresh")}
+	replaced := &Node{Hash: Hash256{0x20}, Type: NodeTransaction, Data: []byte("replaced")}
 	cache.putOwned(fresh)
 	cache.putOwned(replaced)
 
-	cache.SetTTL(-time.Hour)
+	shard := cache.shardFor(replaced.Hash)
+	shard.mu.Lock()
+	setCacheEntryExpiryLocked(shard, replaced.Hash, time.Now().Add(-time.Hour))
+	shard.mu.Unlock()
 	cache.putOwned(replaced)
 
-	if removed := cache.Sweep(); removed != 1 {
-		t.Fatalf("Sweep removed %d entries, want 1", removed)
+	if removed := cache.Sweep(); removed != 0 {
+		t.Fatalf("Sweep removed %d entries, want 0", removed)
 	}
-	if _, ok := cache.Get(replaced.Hash); ok {
-		t.Fatal("replacement with elapsed TTL remained cached")
+	if _, ok := cache.Get(replaced.Hash); !ok {
+		t.Fatal("replacement did not receive a fresh expiration")
 	}
 	if _, ok := cache.Get(fresh.Hash); !ok {
 		t.Fatal("fresh entry expired with replaced entry")
@@ -209,7 +198,7 @@ func TestCacheReplacementReordersExpiration(t *testing.T) {
 }
 
 func TestCacheConcurrentMutationPreservesIndexes(t *testing.T) {
-	cache := NewCache(256, time.Hour)
+	cache := newNodeCache(256, time.Hour)
 	const workers = 8
 	const operations = 500
 
@@ -223,7 +212,7 @@ func TestCacheConcurrentMutationPreservesIndexes(t *testing.T) {
 				hash[0] = byte((worker + operation) % cacheShardCount)
 				hash[1] = byte(worker)
 				hash[2] = byte(operation)
-				node := &Node{Hash: hash, Type: NodeTransaction, Data: Blob{byte(operation)}}
+				node := &Node{Hash: hash, Type: NodeTransaction, Data: []byte{byte(operation)}}
 				cache.putOwned(node)
 				if operation%3 == 0 {
 					cache.Get(hash)
@@ -264,7 +253,7 @@ func setCacheEntryExpiryLocked(shard *cacheShard, hash Hash256, expiresAt time.T
 }
 
 func TestDecodeNodeDataTakesOwnership(t *testing.T) {
-	want := NewNode(NodeTransaction, Blob("owned payload"))
+	want := testNode(NodeTransaction, []byte("owned payload"), 0)
 	borrowed := encodeNodeData(want)
 	encoded := append([]byte(nil), borrowed...)
 	releaseEncodeBuf(borrowed)
@@ -280,10 +269,10 @@ func TestDecodeNodeDataTakesOwnership(t *testing.T) {
 }
 
 func BenchmarkCacheInsertion(b *testing.B) {
-	node := NewNode(NodeTransaction, make(Blob, 512))
+	node := testNode(NodeTransaction, make([]byte, 512), 0)
 
 	b.Run("DefensiveCopy", func(b *testing.B) {
-		cache := NewCache(1, time.Hour)
+		cache := newNodeCache(1, time.Hour)
 		cache.Put(node)
 		b.ReportAllocs()
 		b.ResetTimer()
@@ -293,7 +282,7 @@ func BenchmarkCacheInsertion(b *testing.B) {
 	})
 
 	b.Run("OwnershipTransfer", func(b *testing.B) {
-		cache := NewCache(1, time.Hour)
+		cache := newNodeCache(1, time.Hour)
 		cache.putOwned(node)
 		b.ReportAllocs()
 		b.ResetTimer()

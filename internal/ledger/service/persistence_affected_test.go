@@ -52,7 +52,9 @@ func TestAddMetaAffectedAccounts(t *testing.T) {
 	}
 
 	got := map[relationaldb.AccountID]struct{}{}
-	addMetaAffectedAccounts(meta, got)
+	if err := addMetaAffectedAccounts(meta, got); err != nil {
+		t.Fatal(err)
+	}
 
 	want := []relationaldb.AccountID{
 		relationaldb.AccountID(senderID),
@@ -72,5 +74,24 @@ func TestAddMetaAffectedAccounts(t *testing.T) {
 	}
 	if len(got) != len(want) {
 		t.Errorf("got %d affected accounts, want %d", len(got), len(want))
+	}
+}
+
+func TestAddMetaAffectedAccountsAllowsBareModifiedNode(t *testing.T) {
+	meta := map[string]any{
+		"AffectedNodes": []any{
+			map[string]any{"ModifiedNode": map[string]any{
+				"LedgerEntryType": "DirectoryNode",
+				"LedgerIndex":     "E8D6E0FB6A3F7D12F3A7A1648661FD2E39C10161755816AAB198A530DB4BC23B",
+			}},
+		},
+	}
+	got := map[relationaldb.AccountID]struct{}{}
+
+	if err := addMetaAffectedAccounts(meta, got); err != nil {
+		t.Fatalf("addMetaAffectedAccounts: %v", err)
+	}
+	if len(got) != 0 {
+		t.Fatalf("affected accounts = %d, want 0", len(got))
 	}
 }

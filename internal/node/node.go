@@ -1212,6 +1212,13 @@ func setupStorage(cfg *config.Config, log xrpllog.Logger) (nodestore.Database, r
 	nodestorePath := cfg.NodeDB.Path
 	if nodestorePath != "" {
 		cacheSize, cacheTTL := nodeStoreCacheParams(cfg.NodeDB, cfg.NodeSize)
+		databaseConfig := nodestore.DefaultDatabaseConfig()
+		if cacheSize > 0 {
+			databaseConfig.PositiveCache.MaxEntries = cacheSize
+			databaseConfig.PositiveCache.TTL = cacheTTL
+		} else {
+			databaseConfig.PositiveCache = nodestore.CacheConfig{}
+		}
 		pebbleOptions, err := pebbleStoreOptions(cfg.NodeDB)
 		if err != nil {
 			return nil, nil, err
@@ -1225,17 +1232,19 @@ func setupStorage(cfg *config.Config, log xrpllog.Logger) (nodestore.Database, r
 			if err != nil {
 				return nil, nil, fmt.Errorf("rotating storage backend: %w", err)
 			}
-			db = nodestore.NewRotatingKVDatabase(
-				store,
-				"pebble("+nodestorePath+")",
-				&nodestore.DatabaseConfig{CacheSize: cacheSize, CacheTTL: cacheTTL},
-			)
+			db, err = nodestore.NewRotatingKVDatabase(store, databaseConfig)
+			if err != nil {
+				return nil, nil, errors.Join(err, store.Close())
+			}
 		} else {
-			store, err := kvpebble.New(nodestorePath, pebbleOptions, false)
+			store, err := kvpebble.New(nodestorePath, pebbleOptions)
 			if err != nil {
 				return nil, nil, fmt.Errorf("storage backend: %w", err)
 			}
-			db = nodestore.NewKVDatabase(store, "pebble("+nodestorePath+")", cacheSize, cacheTTL)
+			db, err = nodestore.NewKVDatabase(store, databaseConfig)
+			if err != nil {
+				return nil, nil, errors.Join(err, store.Close())
+			}
 		}
 		log.Info("Storage initialized", "backend", "pebble", "path", nodestorePath,
 			"cache_size", cacheSize, "cache_age", cacheTTL,
@@ -1252,23 +1261,19 @@ func setupStorage(cfg *config.Config, log xrpllog.Logger) (nodestore.Database, r
 		pgConfig.ConnectionString = dbPath
 
 		var err error
-		repoManager, err = postgres.NewRepositoryManager(pgConfig)
+		repoManager, err = postgres.NewRepositoryManager(context.Background(), pgConfig)
 		if err != nil {
-			log.Warn("PostgreSQL not available", "err", err)
+			log.Warn("PostgreSQL connection failed", "err", err)
+			repoManager = nil
 		} else {
-			if err := repoManager.Open(context.Background()); err != nil {
-				log.Warn("PostgreSQL connection failed", "err", err)
-				repoManager = nil
-			} else {
-				log.Info("PostgreSQL connected", "purpose", "transaction indexing")
-			}
+			log.Info("PostgreSQL connected", "purpose", "transaction indexing")
 		}
 	} else if dbPath != "" {
 		// Default: auto-create SQLite databases at the given directory
 		// path, applying the operator's [sqlite] tuning.
 		journalMode, synchronous, tempStore := cfg.SQLite.EffectiveSettings()
 		var err error
-		repoManager, err = sqlitedb.NewRepositoryManagerWithSettings(dbPath, sqlitedb.Settings{
+		repoManager, err = sqlitedb.NewRepositoryManager(context.Background(), dbPath, sqlitedb.Settings{
 			JournalMode:      journalMode,
 			Synchronous:      synchronous,
 			TempStore:        tempStore,
@@ -1277,13 +1282,9 @@ func setupStorage(cfg *config.Config, log xrpllog.Logger) (nodestore.Database, r
 		})
 		if err != nil {
 			log.Warn("SQLite failed to initialize", "path", dbPath, "err", err)
+			repoManager = nil
 		} else {
-			if err := repoManager.Open(context.Background()); err != nil {
-				log.Warn("SQLite failed to open", "path", dbPath, "err", err)
-				repoManager = nil
-			} else {
-				log.Info("SQLite connected", "path", dbPath, "purpose", "transaction indexing")
-			}
+			log.Info("SQLite connected", "path", dbPath, "purpose", "transaction indexing")
 		}
 	}
 
@@ -1691,7 +1692,7 @@ func doShutdown(
 		}
 	}
 	if repoManager != nil {
-		if err := repoManager.Close(context.Background()); err != nil {
+		if err := repoManager.Close(); err != nil {
 			logger.Warn("Relational DB close failed", "err", err)
 		}
 	}

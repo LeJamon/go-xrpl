@@ -7,33 +7,32 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
+	"strings"
+	"sync"
 
 	"github.com/LeJamon/go-xrpl/storage/relationaldb"
-	_ "modernc.org/sqlite" // Pure-Go SQLite driver
+	"github.com/LeJamon/go-xrpl/storage/relationaldb/internal/sqlutil"
+	_ "modernc.org/sqlite"
 )
 
-// RepositoryManager implements the RepositoryManager interface for SQLite.
-// It uses two separate database files matching rippled's layout:
-//   - ledger.db: Ledgers table
-//   - transaction.db: Transactions + AccountTransactions tables
+// RepositoryManager owns SQLite relational repositories and their lifecycle.
 type RepositoryManager struct {
-	dbDir    string
-	settings Settings
-	ledgerDB *sql.DB
-	txDB     *sql.DB
+	ledgerDB *sqlutil.DB
+	txDB     *sqlutil.DB
+	gate     sqlutil.OperationGate
 
 	ledgerRepo             *ledgerRepository
 	transactionRepo        *transactionRepository
 	accountTransactionRepo *accountTransactionRepository
-	systemRepo             *systemRepository
-	validationRepo         *validationRepository
+	validationRepo         relationaldb.ValidationRepository
 	amendmentVoteRepo      *amendmentVoteRepository
+
+	persistMu   sync.Mutex
+	persistHook func(stage string, index int) error
 }
 
-// Settings carries the operator's [sqlite] tuning. Zero values mean
-// "not configured" and fall back to the built-in defaults
-// (journal_mode=wal, synchronous=normal, temp_store=file), matching
-// rippled's DatabaseCon defaults.
+// Settings controls SQLite connection pragmas.
 type Settings struct {
 	JournalMode      string
 	Synchronous      string
@@ -42,123 +41,123 @@ type Settings struct {
 	JournalSizeLimit int
 }
 
-// Compile-time interface check
 var _ relationaldb.RepositoryManager = (*RepositoryManager)(nil)
 
-// NewRepositoryManager creates a new SQLite repository manager with
-// default tuning. dbDir is the directory where ledger.db and
-// transaction.db will be created.
-func NewRepositoryManager(dbDir string) (*RepositoryManager, error) {
-	return NewRepositoryManagerWithSettings(dbDir, Settings{})
-}
-
-// NewRepositoryManagerWithSettings creates a new SQLite repository
-// manager applying the operator's [sqlite] tuning to both databases.
-func NewRepositoryManagerWithSettings(dbDir string, settings Settings) (*RepositoryManager, error) {
+// NewRepositoryManager opens and migrates SQLite repositories in dbDir.
+func NewRepositoryManager(ctx context.Context, dbDir string, settings Settings) (*RepositoryManager, error) {
 	if dbDir == "" {
 		return nil, relationaldb.NewConfigurationError("new_repository_manager", "database directory is required", nil)
 	}
-	return &RepositoryManager{dbDir: dbDir, settings: settings}, nil
-}
-
-// Open creates the database directory, opens the ledger and transaction
-// databases, applies PRAGMAs, initializes the schemas, and wires up the repositories.
-func (rm *RepositoryManager) Open(ctx context.Context) error {
-	if err := os.MkdirAll(rm.dbDir, 0700); err != nil {
-		return relationaldb.NewConnectionError("open", "failed to create database directory", err)
-	}
-
-	var err error
-
-	// Open ledger database
-	ledgerPath := filepath.Join(rm.dbDir, "ledger.db")
-	rm.ledgerDB, err = sql.Open("sqlite", ledgerPath)
+	normalized, err := settings.normalized()
 	if err != nil {
-		return relationaldb.NewConnectionError("open", "failed to open ledger database", err)
+		return nil, relationaldb.NewConfigurationError("new_repository_manager", "invalid SQLite settings", err)
+	}
+	if err := os.MkdirAll(dbDir, 0o700); err != nil {
+		return nil, relationaldb.NewConnectionError("new_repository_manager", "create database directory", err)
 	}
 
-	// Open transaction database
-	txPath := filepath.Join(rm.dbDir, "transaction.db")
-	rm.txDB, err = sql.Open("sqlite", txPath)
+	ledgerRaw, err := sql.Open("sqlite", filepath.Join(dbDir, "ledger.db"))
 	if err != nil {
-		rm.ledgerDB.Close()
-		rm.ledgerDB = nil
-		return relationaldb.NewConnectionError("open", "failed to open transaction database", err)
+		return nil, relationaldb.NewConnectionError("new_repository_manager", "open ledger database", err)
 	}
-
-	// Configure both connections for SQLite
-	for _, db := range []*sql.DB{rm.ledgerDB, rm.txDB} {
-		db.SetMaxOpenConns(1) // SQLite write concurrency limitation
+	txRaw, err := sql.Open("sqlite", filepath.Join(dbDir, "transaction.db"))
+	if err != nil {
+		_ = ledgerRaw.Close()
+		return nil, relationaldb.NewConnectionError("new_repository_manager", "open transaction database", err)
+	}
+	cleanup := func() {
+		_ = ledgerRaw.Close()
+		_ = txRaw.Close()
+	}
+	for _, db := range []*sql.DB{ledgerRaw, txRaw} {
+		db.SetMaxOpenConns(1)
 		db.SetMaxIdleConns(1)
+		if err := applyPragmas(ctx, db, normalized); err != nil {
+			cleanup()
+			return nil, relationaldb.NewConnectionError("new_repository_manager", "apply SQLite pragmas", err)
+		}
+	}
+	if err := migrate(ctx, ledgerRaw, ledgerMigrations); err != nil {
+		cleanup()
+		return nil, relationaldb.NewSchemaError("new_repository_manager", "migrate ledger database", err)
+	}
+	if err := migrate(ctx, txRaw, transactionMigrations); err != nil {
+		cleanup()
+		return nil, relationaldb.NewSchemaError("new_repository_manager", "migrate transaction database", err)
 	}
 
-	// Apply PRAGMAs
-	if err := rm.applyPragmas(ctx, rm.ledgerDB); err != nil {
-		rm.close()
-		return relationaldb.NewConnectionError("open", "failed to apply ledger DB pragmas", err)
+	rm := &RepositoryManager{
+		ledgerDB: sqlutil.NewDB(ledgerRaw),
+		txDB:     sqlutil.NewDB(txRaw),
 	}
-	if err := rm.applyPragmas(ctx, rm.txDB); err != nil {
-		rm.close()
-		return relationaldb.NewConnectionError("open", "failed to apply transaction DB pragmas", err)
-	}
-
-	if err := rm.initLedgerSchema(ctx); err != nil {
-		rm.close()
-		return relationaldb.NewSchemaError("open", "failed to initialize ledger schema", err)
-	}
-	if err := rm.initValidationSchema(ctx); err != nil {
-		rm.close()
-		return relationaldb.NewSchemaError("open", "failed to initialize validation schema", err)
-	}
-	if err := rm.initAmendmentVoteSchema(ctx); err != nil {
-		rm.close()
-		return relationaldb.NewSchemaError("open", "failed to initialize amendment-vote schema", err)
-	}
-	if err := rm.initTxSchema(ctx); err != nil {
-		rm.close()
-		return relationaldb.NewSchemaError("open", "failed to initialize transaction schema", err)
-	}
-
 	rm.ledgerRepo = newLedgerRepository(rm.ledgerDB)
 	rm.transactionRepo = newTransactionRepository(rm.txDB)
 	rm.accountTransactionRepo = newAccountTransactionRepository(rm.txDB)
-	rm.systemRepo = newSystemRepository(rm.ledgerDB, rm.txDB)
-	rm.validationRepo = newValidationRepository(rm.ledgerDB)
+	rm.validationRepo = sqlutil.NewGatedValidationRepository(&rm.gate, newValidationRepository(rm.ledgerDB))
 	rm.amendmentVoteRepo = newAmendmentVoteRepository(rm.ledgerDB)
+	return rm, nil
+}
 
+func (s Settings) normalized() (Settings, error) {
+	s.JournalMode = strings.ToLower(defaultString(s.JournalMode, "wal"))
+	s.Synchronous = strings.ToLower(defaultString(s.Synchronous, "normal"))
+	s.TempStore = strings.ToLower(defaultString(s.TempStore, "file"))
+	if !slices.Contains([]string{"delete", "truncate", "persist", "memory", "wal", "off"}, s.JournalMode) {
+		return Settings{}, fmt.Errorf("invalid journal mode %q", s.JournalMode)
+	}
+	if !slices.Contains([]string{"off", "normal", "full", "extra"}, s.Synchronous) {
+		return Settings{}, fmt.Errorf("invalid synchronous mode %q", s.Synchronous)
+	}
+	if !slices.Contains([]string{"default", "file", "memory"}, s.TempStore) {
+		return Settings{}, fmt.Errorf("invalid temp store %q", s.TempStore)
+	}
+	if s.PageSize != 0 && (s.PageSize < 512 || s.PageSize > 65536 || s.PageSize&(s.PageSize-1) != 0) {
+		return Settings{}, fmt.Errorf("page size must be a power of two between 512 and 65536")
+	}
+	if s.JournalSizeLimit < 0 {
+		return Settings{}, fmt.Errorf("journal size limit must be non-negative")
+	}
+	return s, nil
+}
+
+func applyPragmas(ctx context.Context, db *sql.DB, settings Settings) error {
+	statements := []string{}
+	if settings.PageSize > 0 {
+		statements = append(statements, fmt.Sprintf("PRAGMA page_size = %d", settings.PageSize))
+	}
+	statements = append(statements,
+		"PRAGMA journal_mode = "+settings.JournalMode,
+		"PRAGMA synchronous = "+settings.Synchronous,
+		"PRAGMA cache_size = -64000",
+		"PRAGMA temp_store = "+settings.TempStore,
+		"PRAGMA foreign_keys = ON",
+	)
+	if settings.JournalSizeLimit > 0 {
+		statements = append(statements, fmt.Sprintf("PRAGMA journal_size_limit = %d", settings.JournalSizeLimit))
+	}
+	for _, statement := range statements {
+		if _, err := db.ExecContext(ctx, statement); err != nil {
+			return err
+		}
+	}
 	return nil
 }
 
-// Close closes both databases and clears the repository instances.
-func (rm *RepositoryManager) Close(ctx context.Context) error {
-	return rm.close()
+func defaultString(value, fallback string) string {
+	if value == "" {
+		return fallback
+	}
+	return value
 }
 
-func (rm *RepositoryManager) close() error {
-	var firstErr error
-	if rm.ledgerDB != nil {
-		if err := rm.ledgerDB.Close(); err != nil && firstErr == nil {
-			firstErr = err
-		}
-		rm.ledgerDB = nil
+// Close waits for active operations and closes both databases.
+func (rm *RepositoryManager) Close() error {
+	if rm == nil {
+		return nil
 	}
-	if rm.txDB != nil {
-		if err := rm.txDB.Close(); err != nil && firstErr == nil {
-			firstErr = err
-		}
-		rm.txDB = nil
-	}
-	rm.ledgerRepo = nil
-	rm.transactionRepo = nil
-	rm.accountTransactionRepo = nil
-	rm.systemRepo = nil
-	rm.validationRepo = nil
-	rm.amendmentVoteRepo = nil
-
-	if firstErr != nil {
-		return relationaldb.NewConnectionError("close", "failed to close database", firstErr)
-	}
-	return nil
+	return rm.gate.Close(func() error {
+		return errors.Join(rm.ledgerDB.Close(), rm.txDB.Close())
+	})
 }
 
 // Ledger returns the ledger repository.
@@ -171,189 +170,110 @@ func (rm *RepositoryManager) Transaction() relationaldb.TransactionRepository {
 	return rm.transactionRepo
 }
 
-// AccountTransaction returns the account-transaction repository.
+// AccountTransaction returns the account transaction repository.
 func (rm *RepositoryManager) AccountTransaction() relationaldb.AccountTransactionRepository {
 	return rm.accountTransactionRepo
 }
 
-// System returns the system repository.
-func (rm *RepositoryManager) System() relationaldb.SystemRepository {
-	return rm.systemRepo
-}
-
-// Validation returns the validation repository.
+// Validation returns the validation archive repository.
 func (rm *RepositoryManager) Validation() relationaldb.ValidationRepository {
 	return rm.validationRepo
 }
 
-// Amendment returns the amendment-vote repository.
+// Amendment returns the amendment vote repository.
 func (rm *RepositoryManager) Amendment() relationaldb.AmendmentVoteRepository {
 	return rm.amendmentVoteRepo
 }
 
-// WithTransaction runs fn inside a transaction-database transaction, committing
-// on success and rolling back on error. Only the Transaction and
-// AccountTransaction repositories are transactional: the ledger repository
-// operates on the separate ledger.db outside the transaction (SQLite has no
-// cross-database transactions), so ledger writes made through the context are
-// applied immediately and are not rolled back. See
-// relationaldb.TransactionContext for the contract.
-func (rm *RepositoryManager) WithTransaction(ctx context.Context, fn func(relationaldb.TransactionContext) error) error {
+// WithTransaction invokes fn with transaction-bound repositories.
+func (rm *RepositoryManager) WithTransaction(ctx context.Context, fn func(relationaldb.TransactionRepositories) error) (err error) {
+	end, err := rm.gate.Begin()
+	if err != nil {
+		return err
+	}
+	defer end()
+	return rm.withTransaction(ctx, fn)
+}
+
+func (rm *RepositoryManager) withTransaction(ctx context.Context, fn func(relationaldb.TransactionRepositories) error) (err error) {
 	tx, err := rm.txDB.BeginTx(ctx, nil)
 	if err != nil {
-		return relationaldb.NewTransactionError("begin", "failed to begin transaction", err)
+		return relationaldb.NewTransactionError("begin", "begin transaction", err)
 	}
-
-	tc := newTransactionContext(tx, rm.ledgerDB)
-
+	scoped := newTransactionRepositories(tx)
 	defer func() {
-		if p := recover(); p != nil {
-			tx.Rollback()
-			panic(p)
+		if recovered := recover(); recovered != nil {
+			_ = tx.Rollback()
+			panic(recovered)
 		}
 	}()
+	if err := fn(scoped); err != nil {
+		return errors.Join(err, tx.Rollback())
+	}
+	if err := tx.Commit(); err != nil {
+		return relationaldb.NewTransactionError("commit", "commit transaction", err)
+	}
+	return nil
+}
 
-	if err := fn(tc); err != nil {
-		if rbErr := tc.Rollback(ctx); rbErr != nil {
-			return errors.Join(err, rbErr)
-		}
+// PersistValidatedLedger stores complete indexes before publishing the header.
+func (rm *RepositoryManager) PersistValidatedLedger(ctx context.Context, value relationaldb.ValidatedLedger) error {
+	if err := value.Validate(); err != nil {
 		return err
 	}
-
-	return tc.Commit(ctx)
-}
-
-func (rm *RepositoryManager) applyPragmas(ctx context.Context, db *sql.DB) error {
-	journalMode := defaultString(rm.settings.JournalMode, "wal")
-	synchronous := defaultString(rm.settings.Synchronous, "normal")
-	tempStore := defaultString(rm.settings.TempStore, "file")
-
-	var pragmas []string
-	// page_size must be applied before the database is populated (it is
-	// a no-op on non-empty databases) and before switching to WAL.
-	if rm.settings.PageSize > 0 {
-		pragmas = append(pragmas, fmt.Sprintf("PRAGMA page_size = %d", rm.settings.PageSize))
-	}
-	pragmas = append(pragmas,
-		"PRAGMA journal_mode = "+journalMode,
-		"PRAGMA synchronous = "+synchronous,
-		"PRAGMA cache_size = -64000", // 64MB
-		"PRAGMA temp_store = "+tempStore,
-		"PRAGMA foreign_keys = ON",
-	)
-	if rm.settings.JournalSizeLimit > 0 {
-		pragmas = append(pragmas, fmt.Sprintf("PRAGMA journal_size_limit = %d", rm.settings.JournalSizeLimit))
-	}
-	for _, p := range pragmas {
-		if _, err := db.ExecContext(ctx, p); err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
-func defaultString(v, def string) string {
-	if v == "" {
-		return def
-	}
-	return v
-}
-
-func (rm *RepositoryManager) initLedgerSchema(ctx context.Context) error {
-	queries := []string{
-		`CREATE TABLE IF NOT EXISTS ledgers (
-			ledger_hash BLOB PRIMARY KEY,
-			ledger_seq INTEGER UNIQUE NOT NULL,
-			prev_hash BLOB NOT NULL,
-			total_coins INTEGER NOT NULL,
-			closing_time INTEGER NOT NULL,
-			prev_closing_time INTEGER NOT NULL,
-			close_time_res INTEGER NOT NULL,
-			close_flags INTEGER NOT NULL,
-			account_set_hash BLOB NOT NULL,
-			trans_set_hash BLOB NOT NULL
-		)`,
-		`CREATE INDEX IF NOT EXISTS idx_ledgers_seq ON ledgers(ledger_seq)`,
-	}
-	for _, q := range queries {
-		if _, err := rm.ledgerDB.ExecContext(ctx, q); err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
-// initValidationSchema installs the on-disk validation archive table.
-// Cohabits ledger.db — see validationRepository for the rationale.
-// Columns mirror rippled's historical Validations DDL (DBInit.h,
-// pre-May-2019) with SeenTime + Flags added for receive-side forensics.
-func (rm *RepositoryManager) initValidationSchema(ctx context.Context) error {
-	queries := []string{
-		`CREATE TABLE IF NOT EXISTS validations (
-			ledger_seq   INTEGER NOT NULL,
-			initial_seq  INTEGER NOT NULL,
-			ledger_hash  BLOB NOT NULL,
-			node_pubkey  BLOB NOT NULL,
-			sign_time    INTEGER NOT NULL,
-			seen_time    INTEGER NOT NULL,
-			flags        INTEGER NOT NULL,
-			raw          BLOB NOT NULL,
-			PRIMARY KEY (ledger_hash, node_pubkey)
-		)`,
-		`CREATE INDEX IF NOT EXISTS idx_validations_seq       ON validations(ledger_seq)`,
-		`CREATE INDEX IF NOT EXISTS idx_validations_node      ON validations(node_pubkey, ledger_seq)`,
-		`CREATE INDEX IF NOT EXISTS idx_validations_sign_time ON validations(sign_time)`,
-		`CREATE INDEX IF NOT EXISTS idx_validations_initial   ON validations(initial_seq, ledger_seq)`,
-	}
-	for _, q := range queries {
-		if _, err := rm.ledgerDB.ExecContext(ctx, q); err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
-// initAmendmentVoteSchema installs the operator amendment-vote preference table
-// (cohabits ledger.db). One row per amendment the operator has explicitly
-// upvoted or vetoed. Mirrors rippled's wallet.db FeatureVotes.
-func (rm *RepositoryManager) initAmendmentVoteSchema(ctx context.Context) error {
-	q := `CREATE TABLE IF NOT EXISTS feature_votes (
-		amendment TEXT PRIMARY KEY,
-		name      TEXT NOT NULL,
-		vetoed    INTEGER NOT NULL
-	)`
-	if _, err := rm.ledgerDB.ExecContext(ctx, q); err != nil {
+	end, err := rm.gate.Begin()
+	if err != nil {
 		return err
 	}
-	return nil
-}
+	defer end()
+	rm.persistMu.Lock()
+	defer rm.persistMu.Unlock()
 
-func (rm *RepositoryManager) initTxSchema(ctx context.Context) error {
-	queries := []string{
-		`CREATE TABLE IF NOT EXISTS transactions (
-			trans_id BLOB PRIMARY KEY,
-			ledger_seq INTEGER NOT NULL,
-			status TEXT NOT NULL,
-			raw_txn BLOB NOT NULL,
-			txn_meta BLOB
-		)`,
-		`CREATE INDEX IF NOT EXISTS idx_transactions_ledger_seq ON transactions(ledger_seq)`,
-
-		`CREATE TABLE IF NOT EXISTS account_transactions (
-			trans_id BLOB NOT NULL,
-			account TEXT NOT NULL,
-			ledger_seq INTEGER NOT NULL,
-			txn_seq INTEGER NOT NULL,
-			PRIMARY KEY (trans_id, account)
-		)`,
-		`CREATE INDEX IF NOT EXISTS idx_acct_tx_id ON account_transactions(trans_id)`,
-		`CREATE INDEX IF NOT EXISTS idx_acct_tx ON account_transactions(account, ledger_seq, txn_seq, trans_id)`,
-		`CREATE INDEX IF NOT EXISTS idx_acct_lgr ON account_transactions(ledger_seq, account, trans_id)`,
+	if err := rm.ledgerRepo.deleteLedgerBySequence(ctx, value.Ledger.Sequence); err != nil {
+		return err
 	}
-	for _, q := range queries {
-		if _, err := rm.txDB.ExecContext(ctx, q); err != nil {
+	if err := rm.withTransaction(ctx, func(repos relationaldb.TransactionRepositories) error {
+		scoped := repos.(*transactionRepositories)
+		if err := scoped.accountTransaction.deleteByLedgerSequence(ctx, value.Ledger.Sequence); err != nil {
+			return err
+		}
+		if err := repos.Transaction().DeleteTransactionsByLedgerSeq(ctx, value.Ledger.Sequence); err != nil {
+			return err
+		}
+		index := 0
+		for _, indexed := range value.Transactions {
+			if err := scoped.accountTransaction.deleteByTransactionID(ctx, indexed.Transaction.Hash); err != nil {
+				return err
+			}
+			if err := repos.Transaction().SaveTransaction(ctx, indexed.Transaction); err != nil {
+				return err
+			}
+			index++
+			if rm.persistHook != nil {
+				if err := rm.persistHook("index", index); err != nil {
+					return err
+				}
+			}
+			for _, account := range indexed.Accounts {
+				if err := repos.AccountTransaction().SaveAccountTransaction(ctx, account, indexed.Transaction); err != nil {
+					return err
+				}
+				index++
+				if rm.persistHook != nil {
+					if err := rm.persistHook("index", index); err != nil {
+						return err
+					}
+				}
+			}
+		}
+		return nil
+	}); err != nil {
+		return err
+	}
+	if rm.persistHook != nil {
+		if err := rm.persistHook("ledger", len(value.Transactions)); err != nil {
 			return err
 		}
 	}
-	return nil
+	return rm.ledgerRepo.SaveValidatedLedger(ctx, value.Ledger)
 }

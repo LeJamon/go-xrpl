@@ -1,59 +1,41 @@
 package kvstore
 
-// KeyValueReader wraps the Has and Get methods of a key-value store.
-type KeyValueReader interface {
-	Has(key []byte) (bool, error)
-	// Get returns a caller-owned value. Mutating the returned slice must not
-	// alter the stored value or any slice returned by a later Get.
-	Get(key []byte) ([]byte, error)
-}
-
-// KeyValueWriter wraps the Put and Delete methods of a key-value store.
-type KeyValueWriter interface {
+// Batch is a write-only key-value store that accumulates changes to be flushed.
+// A batch owns all key and value data passed to Put and Delete after those
+// methods return. Close must be called to release its resources.
+type Batch interface {
 	Put(key []byte, value []byte) error
 	Delete(key []byte) error
-}
-
-// Batcher wraps the NewBatch method of a key-value store.
-type Batcher interface {
-	NewBatch() Batch
-}
-
-// Batch is a write-only key-value store that accumulates changes to be flushed.
-type Batch interface {
-	KeyValueWriter
 	// ValueSize returns an estimate of the in-memory data size of all accumulated writes.
 	ValueSize() int
 	// Write flushes accumulated writes to the underlying store.
 	Write() error
 	// Reset clears accumulated writes.
 	Reset()
-}
-
-// Iteratee wraps the NewIterator method of a key-value store.
-type Iteratee interface {
-	NewIterator(prefix []byte, start []byte) Iterator
+	Close() error
 }
 
 // Iterator iterates over a key-value store's key/value pairs.
-// The iterator must be released after use.
+// Key and Value are valid until the next call to Next or Close. Close must be
+// called to release the iterator and any store resources it pins.
 type Iterator interface {
 	Next() bool
 	Key() []byte
 	Value() []byte
 	Error() error
-	Release()
+	Close() error
 }
 
 // KeyValueStore contains all the methods required to allow handling different
-// key-value data stores in a high level manner.
+// key-value data stores. Input slices are borrowed only for the duration of a
+// method call and may be mutated by the caller after the method returns.
 type KeyValueStore interface {
-	KeyValueReader
-	KeyValueWriter
-	Batcher
-	Iteratee
-	Stat() (string, error)
-	Compact(start []byte, limit []byte) error
+	// Get returns a caller-owned value. Mutating the returned slice must not
+	// alter the stored value or any slice returned by a later Get.
+	Get(key []byte) ([]byte, error)
+	Put(key []byte, value []byte) error
+	NewBatch() (Batch, error)
+	NewIterator(prefix []byte, start []byte) (Iterator, error)
 	// Sync makes all previously written data durable. Backends whose writes
 	// are already durable (or that have no durable medium, like an in-memory
 	// store) return nil.

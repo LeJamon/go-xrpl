@@ -114,16 +114,25 @@ func Encode(json map[string]any) (string, error) {
 // signature towards a multi-signed transaction. Only signing fields are
 // encoded. The caller's map is never mutated.
 func EncodeForMultisigning(json map[string]any, xrpAccountID string) (string, error) {
-	st := &types.AccountID{}
+	signing := removeNonSigningFields(json)
+	signing["SigningPubKey"] = ""
+	return encodeForMultisigning(signing, xrpAccountID)
+}
 
+// EncodeForMultisigningTarget encodes a transaction for a multi-signature held
+// in a nested signing object. The outer SigningPubKey remains part of the
+// payload while the non-signing target object is excluded.
+func EncodeForMultisigningTarget(json map[string]any, xrpAccountID string) (string, error) {
+	signing := removeNonSigningFields(json)
+	return encodeForMultisigning(signing, xrpAccountID)
+}
+
+func encodeForMultisigning(signing map[string]any, xrpAccountID string) (string, error) {
+	st := &types.AccountID{}
 	suffix, err := st.FromJSON(xrpAccountID)
 	if err != nil {
 		return "", err
 	}
-
-	// Build the signing-field projection with SigningPubKey overridden to "".
-	signing := removeNonSigningFields(json)
-	signing["SigningPubKey"] = ""
 
 	encoded, err := Encode(signing)
 	if err != nil {

@@ -18,9 +18,7 @@ const (
 	defaultBackOff     = 100 * time.Millisecond
 )
 
-// NodePruner deletes stored nodes below a retention boundary. It is satisfied
-// by the nodestore's PrunableDatabase. boundary is exclusive: nodes with a
-// ledger sequence strictly below it are removed.
+// NodePruner deletes stored nodes below an exclusive retention boundary.
 type NodePruner interface {
 	DeleteBefore(ctx context.Context, boundary uint32, batchSize int) (deleted uint64, err error)
 }

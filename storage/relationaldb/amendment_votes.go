@@ -1,6 +1,9 @@
 package relationaldb
 
-import "context"
+import (
+	"context"
+	"fmt"
+)
 
 // AmendmentVoteRecord is one operator amendment-vote preference: the node's
 // persisted decision to upvote or veto a single amendment. Mirrors a row of
@@ -16,6 +19,19 @@ type AmendmentVoteRecord struct {
 	Vetoed bool
 }
 
+// Validate checks that Amendment is a canonical amendment identifier.
+func (r AmendmentVoteRecord) Validate() error {
+	if len(r.Amendment) != 64 {
+		return fmt.Errorf("%w: amendment ID has length %d, want 64", ErrInvalidData, len(r.Amendment))
+	}
+	for _, c := range r.Amendment {
+		if (c < '0' || c > '9') && (c < 'A' || c > 'F') {
+			return fmt.Errorf("%w: amendment ID must be uppercase hexadecimal", ErrInvalidData)
+		}
+	}
+	return nil
+}
+
 // AmendmentVoteRepository persists operator amendment-vote preferences. Writes
 // are keyed by amendment ID (one preference per amendment); Save upserts the
 // latest preference. Backends guarantee idempotent writes.
@@ -24,7 +40,7 @@ type AmendmentVoteRepository interface {
 	LoadAmendmentVotes(ctx context.Context) ([]*AmendmentVoteRecord, error)
 
 	// SaveAmendmentVote upserts one operator preference (keyed by Amendment).
-	SaveAmendmentVote(ctx context.Context, rec *AmendmentVoteRecord) error
+	SaveAmendmentVote(ctx context.Context, rec AmendmentVoteRecord) error
 
 	// DeleteAmendmentVote removes the preference for the given amendment ID,
 	// returning it to the registry default. No-op when absent.

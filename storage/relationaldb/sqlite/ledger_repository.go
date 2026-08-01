@@ -8,17 +8,15 @@ import (
 
 	"github.com/LeJamon/go-xrpl/protocol"
 	"github.com/LeJamon/go-xrpl/storage/relationaldb"
+	"github.com/LeJamon/go-xrpl/storage/relationaldb/internal/sqlutil"
 )
 
-// ledgerRepository is the SQLite-backed ledger repository. It always operates
-// directly on ledger.db: SQLite has no cross-database transactions, so there
-// is no transaction-bound variant (see relationaldb.TransactionContext).
 type ledgerRepository struct {
-	db *sql.DB
+	db executor
 }
 
 // newLedgerRepository creates a SQLite ledger repository.
-func newLedgerRepository(db *sql.DB) *ledgerRepository {
+func newLedgerRepository(db executor) *ledgerRepository {
 	return &ledgerRepository{db: db}
 }
 
@@ -63,10 +61,18 @@ func (r *ledgerRepository) scanLedgerInfo(row relationaldb.RowScanner) (*relatio
 		return nil, err
 	}
 
-	copy(info.Hash[:], hashBytes)
-	copy(info.ParentHash[:], parentHashBytes)
-	copy(info.AccountHash[:], accountHashBytes)
-	copy(info.TransactionHash[:], txHashBytes)
+	if err := sqlutil.CopyExact(info.Hash[:], hashBytes, "ledger_hash"); err != nil {
+		return nil, err
+	}
+	if err := sqlutil.CopyExact(info.ParentHash[:], parentHashBytes, "prev_hash"); err != nil {
+		return nil, err
+	}
+	if err := sqlutil.CopyExact(info.AccountHash[:], accountHashBytes, "account_set_hash"); err != nil {
+		return nil, err
+	}
+	if err := sqlutil.CopyExact(info.TransactionHash[:], txHashBytes, "trans_set_hash"); err != nil {
+		return nil, err
+	}
 	info.TotalCoins = relationaldb.Amount(totalCoins)
 	info.CloseTime = time.Unix(closingTime+protocol.RippleEpochUnix, 0).UTC()
 	info.ParentCloseTime = time.Unix(prevClosingTime+protocol.RippleEpochUnix, 0).UTC()
@@ -119,66 +125,6 @@ func (r *ledgerRepository) GetNewestLedgerInfo(ctx context.Context) (*relational
 	return info, nil
 }
 
-// GetLimitedOldestLedgerInfo returns the oldest ledger header at or above minSeq.
-func (r *ledgerRepository) GetLimitedOldestLedgerInfo(ctx context.Context, minSeq relationaldb.LedgerIndex) (*relationaldb.LedgerInfo, error) {
-	query := `SELECT ` + ledgerSelectCols + ` FROM ledgers WHERE ledger_seq >= ? ORDER BY ledger_seq ASC LIMIT 1`
-	row := r.db.QueryRowContext(ctx, query, minSeq)
-	info, err := r.scanLedgerInfo(row)
-	if errors.Is(err, sql.ErrNoRows) {
-		return nil, nil
-	}
-	if err != nil {
-		return nil, relationaldb.NewQueryError("get_limited_oldest_ledger_info", "failed to query oldest ledger with limit", err)
-	}
-	return info, nil
-}
-
-// GetLimitedNewestLedgerInfo returns the newest ledger header at or above minSeq.
-func (r *ledgerRepository) GetLimitedNewestLedgerInfo(ctx context.Context, minSeq relationaldb.LedgerIndex) (*relationaldb.LedgerInfo, error) {
-	query := `SELECT ` + ledgerSelectCols + ` FROM ledgers WHERE ledger_seq >= ? ORDER BY ledger_seq DESC LIMIT 1`
-	row := r.db.QueryRowContext(ctx, query, minSeq)
-	info, err := r.scanLedgerInfo(row)
-	if errors.Is(err, sql.ErrNoRows) {
-		return nil, nil
-	}
-	if err != nil {
-		return nil, relationaldb.NewQueryError("get_limited_newest_ledger_info", "failed to query newest ledger with limit", err)
-	}
-	return info, nil
-}
-
-// GetHashByIndex returns the ledger hash at the given sequence.
-func (r *ledgerRepository) GetHashByIndex(ctx context.Context, seq relationaldb.LedgerIndex) (*relationaldb.Hash, error) {
-	var hashBytes []byte
-	err := r.db.QueryRowContext(ctx, "SELECT ledger_hash FROM ledgers WHERE ledger_seq = ?", seq).Scan(&hashBytes)
-	if errors.Is(err, sql.ErrNoRows) {
-		return nil, relationaldb.NewDataError("get_hash_by_index", "ledger not found", relationaldb.ErrLedgerNotFound)
-	}
-	if err != nil {
-		return nil, relationaldb.NewQueryError("get_hash_by_index", "failed to query ledger hash", err)
-	}
-	var hash relationaldb.Hash
-	copy(hash[:], hashBytes)
-	return &hash, nil
-}
-
-// GetHashesByIndex returns the ledger hash and its parent hash at the given sequence.
-func (r *ledgerRepository) GetHashesByIndex(ctx context.Context, seq relationaldb.LedgerIndex) (*relationaldb.LedgerHashPair, error) {
-	var ledgerHashBytes, parentHashBytes []byte
-	err := r.db.QueryRowContext(ctx,
-		"SELECT ledger_hash, prev_hash FROM ledgers WHERE ledger_seq = ?", seq).Scan(&ledgerHashBytes, &parentHashBytes)
-	if errors.Is(err, sql.ErrNoRows) {
-		return nil, relationaldb.NewDataError("get_hashes_by_index", "ledger not found", relationaldb.ErrLedgerNotFound)
-	}
-	if err != nil {
-		return nil, relationaldb.NewQueryError("get_hashes_by_index", "failed to query ledger hashes", err)
-	}
-	var pair relationaldb.LedgerHashPair
-	copy(pair.LedgerHash[:], ledgerHashBytes)
-	copy(pair.ParentHash[:], parentHashBytes)
-	return &pair, nil
-}
-
 // GetHashesByRange returns the ledger and parent hashes for every sequence in
 // [minSeq, maxSeq], keyed by sequence.
 func (r *ledgerRepository) GetHashesByRange(ctx context.Context, minSeq, maxSeq relationaldb.LedgerIndex) (map[relationaldb.LedgerIndex]relationaldb.LedgerHashPair, error) {
@@ -199,8 +145,12 @@ func (r *ledgerRepository) GetHashesByRange(ctx context.Context, minSeq, maxSeq 
 			return nil, relationaldb.NewQueryError("get_hashes_by_range", "failed to scan row", err)
 		}
 		var pair relationaldb.LedgerHashPair
-		copy(pair.LedgerHash[:], ledgerHashBytes)
-		copy(pair.ParentHash[:], parentHashBytes)
+		if err := sqlutil.CopyExact(pair.LedgerHash[:], ledgerHashBytes, "ledger_hash"); err != nil {
+			return nil, relationaldb.NewDataError("get_hashes_by_range", "malformed ledger hash", err)
+		}
+		if err := sqlutil.CopyExact(pair.ParentHash[:], parentHashBytes, "prev_hash"); err != nil {
+			return nil, relationaldb.NewDataError("get_hashes_by_range", "malformed parent hash", err)
+		}
 		result[seq] = pair
 	}
 	if err := rows.Err(); err != nil {
@@ -210,7 +160,7 @@ func (r *ledgerRepository) GetHashesByRange(ctx context.Context, minSeq, maxSeq 
 }
 
 // SaveValidatedLedger inserts or updates a validated ledger header (upsert on ledger_seq).
-func (r *ledgerRepository) SaveValidatedLedger(ctx context.Context, ledger *relationaldb.LedgerInfo) error {
+func (r *ledgerRepository) SaveValidatedLedger(ctx context.Context, ledger relationaldb.LedgerInfo) error {
 	closingTime := protocol.RippleSeconds(ledger.CloseTime)
 	prevClosingTime := protocol.RippleSeconds(ledger.ParentCloseTime)
 
@@ -237,6 +187,13 @@ func (r *ledgerRepository) SaveValidatedLedger(ctx context.Context, ledger *rela
 	return nil
 }
 
+func (r *ledgerRepository) deleteLedgerBySequence(ctx context.Context, seq relationaldb.LedgerIndex) error {
+	if _, err := r.db.ExecContext(ctx, "DELETE FROM ledgers WHERE ledger_seq = ?", seq); err != nil {
+		return relationaldb.NewQueryError("unpublish_ledger", "failed to unpublish ledger", err)
+	}
+	return nil
+}
+
 // DeleteLedgersBySeq deletes all ledgers at or below maxSeq.
 func (r *ledgerRepository) DeleteLedgersBySeq(ctx context.Context, maxSeq relationaldb.LedgerIndex) error {
 	_, err := r.db.ExecContext(ctx, "DELETE FROM ledgers WHERE ledger_seq <= ?", maxSeq)
@@ -244,37 +201,4 @@ func (r *ledgerRepository) DeleteLedgersBySeq(ctx context.Context, maxSeq relati
 		return relationaldb.NewQueryError("delete_ledgers_by_seq", "failed to delete ledgers", err)
 	}
 	return nil
-}
-
-// GetLedgerCountMinMax returns the count of stored ledgers and their min/max sequence.
-func (r *ledgerRepository) GetLedgerCountMinMax(ctx context.Context) (*relationaldb.CountMinMax, error) {
-	var count int64
-	var minSeq, maxSeq sql.NullInt64
-
-	err := r.db.QueryRowContext(ctx,
-		`SELECT COUNT(*), MIN(ledger_seq), MAX(ledger_seq) FROM ledgers`).Scan(&count, &minSeq, &maxSeq)
-	if err != nil {
-		return nil, relationaldb.NewQueryError("get_ledger_count_min_max", "failed to query ledger statistics", err)
-	}
-
-	result := &relationaldb.CountMinMax{Count: count}
-	if minSeq.Valid {
-		result.MinLedgerSeq = relationaldb.LedgerIndex(minSeq.Int64)
-	}
-	if maxSeq.Valid {
-		result.MaxLedgerSeq = relationaldb.LedgerIndex(maxSeq.Int64)
-	}
-	return result, nil
-}
-
-// GetKBUsedLedger returns the on-disk size of the ledger database in KB.
-func (r *ledgerRepository) GetKBUsedLedger(ctx context.Context) (uint32, error) {
-	var pageCount, pageSize int64
-	if err := r.db.QueryRowContext(ctx, "PRAGMA page_count").Scan(&pageCount); err != nil {
-		return 0, relationaldb.NewQueryError("get_kb_used_ledger", "failed to get page count", err)
-	}
-	if err := r.db.QueryRowContext(ctx, "PRAGMA page_size").Scan(&pageSize); err != nil {
-		return 0, relationaldb.NewQueryError("get_kb_used_ledger", "failed to get page size", err)
-	}
-	return uint32(pageCount * pageSize / 1024), nil
 }
