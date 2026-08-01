@@ -228,20 +228,50 @@ func startBootstrapFallbackOverlay(t *testing.T, opts ...peermanagement.Option) 
 	return overlay
 }
 
-// TestFeeVoteFromConfig guards the [voting] → FeeVoteStance wiring:
-// configured values land on the stance, zero values pass through so
-// New() substitutes the defaults.
 func TestFeeVoteFromConfig(t *testing.T) {
 	got := feeVoteFromConfig(config.VotingConfig{
-		ReferenceFee:   12,
-		AccountReserve: 25_000_000,
-		OwnerReserve:   5_000_000,
-	})
+		ReferenceFee:      12,
+		AccountReserve:    25_000_000,
+		OwnerReserve:      5_000_000,
+		ReferenceFeeSet:   true,
+		AccountReserveSet: true,
+		OwnerReserveSet:   true,
+	}, nil)
 	assert.Equal(t, FeeVoteStance{
-		BaseFee:          12,
-		ReserveBase:      25_000_000,
-		ReserveIncrement: 5_000_000,
+		BaseFee:             12,
+		ReserveBase:         25_000_000,
+		ReserveIncrement:    5_000_000,
+		BaseFeeSet:          true,
+		ReserveBaseSet:      true,
+		ReserveIncrementSet: true,
 	}, got)
 
-	assert.Equal(t, FeeVoteStance{}, feeVoteFromConfig(config.VotingConfig{}))
+	assert.Equal(t, FeeVoteStance{}, feeVoteFromConfig(config.VotingConfig{}, nil))
+
+	explicitZero := feeVoteFromConfig(config.VotingConfig{
+		ReferenceFeeSet:   true,
+		AccountReserveSet: true,
+		OwnerReserveSet:   true,
+	}, nil)
+	assert.Zero(t, explicitZero.BaseFee)
+	assert.Zero(t, explicitZero.ReserveBase)
+	assert.Zero(t, explicitZero.ReserveIncrement)
+	assert.True(t, explicitZero.BaseFeeSet)
+	assert.True(t, explicitZero.ReserveBaseSet)
+	assert.True(t, explicitZero.ReserveIncrementSet)
+
+	mixed := New(Config{FeeVote: feeVoteFromConfig(config.VotingConfig{
+		ReferenceFeeSet: true,
+	}, nil)}).feeVote
+	assert.Zero(t, mixed.BaseFee)
+	assert.EqualValues(t, 10_000_000, mixed.ReserveBase)
+	assert.EqualValues(t, 2_000_000, mixed.ReserveIncrement)
+
+	feeDefault := 0
+	overridden := feeVoteFromConfig(config.VotingConfig{
+		ReferenceFee:    12,
+		ReferenceFeeSet: true,
+	}, &feeDefault)
+	assert.Zero(t, overridden.BaseFee)
+	assert.True(t, overridden.BaseFeeSet)
 }
