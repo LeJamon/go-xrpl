@@ -102,12 +102,7 @@ func (m *SubmitMultisignedMethod) Handle(ctx *types.RpcContext, params json.RawM
 	}
 	transactionTypeName, err := definitions.TransactionTypeName(int32(transactionTypeCode))
 	if err != nil {
-		return nil, types.NewRpcError(
-			types.RpcINTERNAL,
-			"internal",
-			"internal",
-			fmt.Sprintf("Exception while serializing transaction: Invalid transaction type %d", transactionTypeCode),
-		)
+		return nil, types.RpcErrorInvalidTransactionType(transactionTypeCode)
 	}
 	txMap["TransactionType"] = transactionTypeName
 	transactionType, _ := tx.TypeFromName(transactionTypeName)
