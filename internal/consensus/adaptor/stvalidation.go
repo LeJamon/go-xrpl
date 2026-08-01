@@ -587,7 +587,7 @@ func skipAmount(data []byte, pos *int) (int, error) {
 		length = 33
 	}
 	if length == 8 && raw == 0 {
-		return 0, errors.New("negative zero is not canonical")
+		return 0, fmt.Errorf("%w: negative zero is not canonical", errInvalidFieldValue)
 	}
 	if *pos+length > len(data) {
 		return 0, errShortData
