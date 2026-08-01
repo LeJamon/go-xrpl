@@ -5,7 +5,6 @@ import (
 	"time"
 
 	consensus "github.com/LeJamon/go-xrpl/internal/consensus"
-	"github.com/LeJamon/go-xrpl/internal/consensus/adaptor"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -148,27 +147,13 @@ func TestClusterTxSetSharing(t *testing.T) {
 	assert.Equal(t, ts.ID(), ts2.ID(), "same blobs should produce same tx set ID")
 }
 
-func TestModeManagerIntegration(t *testing.T) {
+func TestWrongLedgerModeDemotion(t *testing.T) {
 	cluster := NewTestCluster(t, 3)
 	defer cluster.Stop()
 
-	// Create a mode manager for node 0
-	mm := adaptor.NewModeManager(cluster.Nodes[0].Adaptor)
-
-	// Initially disconnected
-	assert.Equal(t, consensus.OpModeDisconnected, mm.Mode())
-
-	// SetMode drives the node's adaptor operating mode.
-	mm.SetMode(consensus.OpModeFull)
-	assert.Equal(t, consensus.OpModeFull, mm.Mode())
+	cluster.Nodes[0].Adaptor.SetOperatingMode(consensus.OpModeFull)
 	assert.Equal(t, consensus.OpModeFull, cluster.Nodes[0].Adaptor.GetOperatingMode())
 
-	// A wrongLedger ModeChangedEvent demotes Full → Connected (the live
-	// OnEvent wiring), and the adaptor reflects it.
-	mm.OnEvent(&consensus.ModeChangedEvent{
-		OldMode: consensus.ModeProposing,
-		NewMode: consensus.ModeWrongLedger,
-	})
-	assert.Equal(t, consensus.OpModeConnected, mm.Mode())
+	cluster.Nodes[0].Adaptor.OnModeChange(consensus.ModeProposing, consensus.ModeWrongLedger)
 	assert.Equal(t, consensus.OpModeConnected, cluster.Nodes[0].Adaptor.GetOperatingMode())
 }

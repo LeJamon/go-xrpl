@@ -101,7 +101,7 @@ func TestEngine_GetJSON_WrongLedger(t *testing.T) {
 // to_string(closeTime().time_since_epoch().count()) (ConsensusProposal.h:228).
 func TestEngine_GetJSON_CloseTimeIsString(t *testing.T) {
 	engine := NewEngine(newMockAdaptor(), DefaultConfig())
-	engine.state = &consensus.RoundState{
+	engine.state = &roundState{
 		OurPosition: &consensus.Proposal{
 			PreviousLedger: consensus.LedgerID{2},
 			TxSet:          consensus.TxSetID{3},
@@ -163,7 +163,7 @@ func TestEngine_GetJSON_ObserverPosition(t *testing.T) {
 	engine.prevLedger = &mockLedger{id: consensus.LedgerID{5}, seq: 200}
 	txSet := &mockTxSet{id: consensus.TxSetID{7}}
 	engine.ourTxSet = txSet
-	engine.state = &consensus.RoundState{
+	engine.state = &roundState{
 		CloseTimes: consensus.CloseTimes{Self: time.Now()},
 	}
 

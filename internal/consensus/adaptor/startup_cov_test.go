@@ -526,7 +526,6 @@ func TestStup_ComponentsStop_ReturnsEngineError(t *testing.T) {
 func TestStup_ComponentsStart_AndStop(t *testing.T) {
 	svc := newTestLedgerService(t)
 	ad := newTestAdaptor(t)
-	mm := NewModeManager(ad)
 
 	overlay, err := peermanagement.New(peermanagement.WithListenAddr("127.0.0.1:0"))
 	require.NoError(t, err)
@@ -540,7 +539,6 @@ func TestStup_ComponentsStart_AndStop(t *testing.T) {
 		Engine:              eng,
 		Adaptor:             ad,
 		Router:              router,
-		ModeManager:         mm,
 		ValidatorList:       nil,
 		ValidatorListPoller: nil,
 	}

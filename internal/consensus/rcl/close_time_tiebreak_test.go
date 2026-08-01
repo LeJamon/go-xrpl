@@ -102,7 +102,7 @@ func TestDetermineCloseTime_ObserverTieBreakDeterministic(t *testing.T) {
 
 	eng := &Engine{
 		adaptor: adaptor,
-		state: &consensus.RoundState{
+		state: &roundState{
 			OurPosition: nil, // observer: forces the fallback path
 			CloseTimes: consensus.CloseTimes{
 				Peers: map[time.Time]int{smaller: 3, larger: 3},
