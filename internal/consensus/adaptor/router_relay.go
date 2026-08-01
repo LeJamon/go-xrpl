@@ -36,7 +36,7 @@ func (r *Router) maybeRelayGetLedger(from peermanagement.PeerID, req *message.Ge
 		if !hasHash {
 			return false
 		}
-		peer, ok = r.adaptor.PeerWithTxSet(target, uint64(from))
+		peer, ok = r.txSetNet.PeerWithTxSet(target, uint64(from))
 	} else {
 		// rippled relays a ledger request only from its has_ledgerhash()
 		// branch (getLedger, PeerImp.cpp:3165/3175); a seq-only miss is
@@ -45,7 +45,7 @@ func (r *Router) maybeRelayGetLedger(from peermanagement.PeerID, req *message.Ge
 		if !hasHash {
 			return false
 		}
-		peer, ok = r.adaptor.PeerWithLedger(target, req.LedgerSeq, uint64(from))
+		peer, ok = r.serve.PeerWithLedger(target, req.LedgerSeq, uint64(from))
 	}
 	if !ok {
 		return false
@@ -58,7 +58,7 @@ func (r *Router) maybeRelayGetLedger(from peermanagement.PeerID, req *message.Ge
 		r.logger.Warn("failed to encode relayed get_ledger", "error", err)
 		return false
 	}
-	if err := r.adaptor.SendToPeer(peer, frame); err != nil {
+	if err := r.serve.SendToPeer(peer, frame); err != nil {
 		r.logger.Debug("failed to relay get_ledger",
 			"error", err, "to", peer, "from", from)
 		return false
@@ -83,7 +83,7 @@ func (r *Router) routeRelayedLedgerData(ld *message.LedgerData, from peermanagem
 		r.logger.Warn("failed to encode relayed ledger_data", "error", err)
 		return
 	}
-	if err := r.adaptor.SendToPeer(target, frame); err != nil {
+	if err := r.serve.SendToPeer(target, frame); err != nil {
 		r.logger.Info("unable to route ledger_data reply to original requester",
 			"error", err, "cookie", target, "from", from)
 	}

@@ -11,9 +11,6 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// fakeProofPathProvider is a minimal LedgerProvider double used by the
-// proof-path tests. Only GetProofPath is exercised; the rest of the
-// interface is no-op.
 type fakeProofPathProvider struct {
 	header []byte
 	path   [][]byte
@@ -26,15 +23,6 @@ type fakeProofPathProvider struct {
 	gotMapType    message.LedgerMapType
 }
 
-func (f *fakeProofPathProvider) GetLedgerHeader(_ []byte, _ uint32) ([]byte, error) {
-	return nil, nil
-}
-func (f *fakeProofPathProvider) GetAccountStateNode(_ []byte, _ []byte) ([]byte, error) {
-	return nil, nil
-}
-func (f *fakeProofPathProvider) GetTransactionNode(_ []byte, _ []byte) ([]byte, error) {
-	return nil, nil
-}
 func (f *fakeProofPathProvider) GetReplayDelta(_ []byte) ([]byte, [][]byte, error) {
 	return nil, nil, nil
 }

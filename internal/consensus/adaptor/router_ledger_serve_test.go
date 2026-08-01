@@ -25,7 +25,7 @@ func serveTestLogger() *slog.Logger {
 func TestServeLedger_BaseAndStateRoundTripToAcquisition(t *testing.T) {
 	t.Parallel()
 	adaptor, _ := newTxSetWireAdaptor(t)
-	router := NewRouter(&mockEngine{}, adaptor, nil)
+	router := newTestRouter(&mockEngine{}, adaptor, nil)
 
 	l := adaptor.LedgerService().GetClosedLedger()
 	require.NotNil(t, l)
@@ -83,7 +83,7 @@ func TestServeLedger_BaseAndStateRoundTripToAcquisition(t *testing.T) {
 func TestBuildLedgerBaseNodes_EmptyTxTreeOmitsTxRoot(t *testing.T) {
 	t.Parallel()
 	adaptor, _ := newTxSetWireAdaptor(t)
-	router := NewRouter(&mockEngine{}, adaptor, nil)
+	router := newTestRouter(&mockEngine{}, adaptor, nil)
 
 	l := adaptor.LedgerService().GetClosedLedger()
 	require.NotNil(t, l)

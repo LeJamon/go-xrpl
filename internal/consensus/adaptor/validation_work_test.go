@@ -179,7 +179,7 @@ func TestRouterTrustedValidationQueueFullShedsWithoutCrypto(t *testing.T) {
 			Trusted: true,
 		},
 	}
-	router := NewRouter(engine, adaptor, nil)
+	router := newTestRouter(engine, adaptor, nil)
 	verifyCalls := 0
 	lane := newValidationWorkLane(func(*consensus.Validation) error {
 		verifyCalls++
@@ -255,7 +255,7 @@ func TestRouterValidationAdmissionFailureAllowsDuplicateRetry(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			adaptor := newTestAdaptor(t)
-			router := NewRouter(&validationProcessorEngine{mockEngine: &mockEngine{}}, adaptor, nil)
+			router := newTestRouter(&validationProcessorEngine{mockEngine: &mockEngine{}}, adaptor, nil)
 			lane := router.validationWork
 			lane.workers = 0
 			lane.start(t.Context())
@@ -286,7 +286,7 @@ func TestRouterValidationAdmissionFailureAllowsDuplicateRetry(t *testing.T) {
 func TestRouterUntrustedValidationQueueSaturationRateLimited(t *testing.T) {
 	adaptor := newTestAdaptor(t)
 	engine := &validationProcessorEngine{mockEngine: &mockEngine{}}
-	router := NewRouter(engine, adaptor, nil)
+	router := newTestRouter(engine, adaptor, nil)
 	var logs bytes.Buffer
 	router.logger = slog.New(slog.NewTextHandler(&logs, nil))
 	lane := router.validationWork
@@ -315,7 +315,7 @@ func TestRouterUntrustedValidationQueueSaturationRateLimited(t *testing.T) {
 func TestValidationResultCapacityIsolatedAndRateLimited(t *testing.T) {
 	adaptor := newTestAdaptor(t)
 	engine := &validationProcessorEngine{mockEngine: &mockEngine{}}
-	router := NewRouter(engine, adaptor, nil)
+	router := newTestRouter(engine, adaptor, nil)
 	var logs bytes.Buffer
 	router.logger = slog.New(slog.NewTextHandler(&logs, nil))
 	lane := router.validationWork
@@ -434,7 +434,7 @@ func TestValidationWorkLanePromotesQueuedResultAfterTrustChange(t *testing.T) {
 func TestRouterDrainsTrustedValidationResultsBeforeUntrusted(t *testing.T) {
 	adaptor := newTestAdaptor(t)
 	engine := &validationProcessorEngine{mockEngine: &mockEngine{}}
-	router := NewRouter(engine, adaptor, nil)
+	router := newTestRouter(engine, adaptor, nil)
 	lane := router.validationWork
 	require.NotNil(t, lane)
 
@@ -463,7 +463,7 @@ func TestRouterValidationResultChargesOnlyInvalidSignature(t *testing.T) {
 		mockEngine:  &mockEngine{},
 		disposition: consensus.ValidationDisposition{Relay: true},
 	}
-	router := NewRouter(engine, adaptor, nil)
+	router := newTestRouter(engine, adaptor, nil)
 	validation := &consensus.Validation{LedgerID: consensus.LedgerID{1}}
 
 	router.handleValidationWorkResult(validationWorkResult{
@@ -490,7 +490,7 @@ func TestRouterValidationResultUsesDispositionForAcquireAndRelay(t *testing.T) {
 			Relay:   true,
 		},
 	}
-	router := NewRouter(engine, adaptor, nil)
+	router := newTestRouter(engine, adaptor, nil)
 	validation := &consensus.Validation{
 		LedgerID:  consensus.LedgerID{0xAA},
 		LedgerSeq: 77,
@@ -546,7 +546,7 @@ func TestRouterValidationAdmissionDropsUntrustedUnderLoadOrDivergence(t *testing
 				mockEngine:  &mockEngine{},
 				disposition: consensus.ValidationDisposition{Relay: true},
 			}
-			router := NewRouter(engine, adaptor, nil)
+			router := newTestRouter(engine, adaptor, nil)
 			router.setPeerSessionView(&validationPeerSessions{
 				peers: []peermanagement.PeerInfo{{
 					ID:       12,
@@ -599,7 +599,7 @@ func TestRouterValidationAdmissionKeepsTrustedUnderLocalLoad(t *testing.T) {
 			Trusted: true,
 		},
 	}
-	router := NewRouter(engine, adaptor, nil)
+	router := newTestRouter(engine, adaptor, nil)
 	validation := &consensus.Validation{
 		Full:      true,
 		LedgerSeq: 42,

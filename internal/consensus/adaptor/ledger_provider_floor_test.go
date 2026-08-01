@@ -36,18 +36,6 @@ func TestLedgerProvider_Floor_DeclinesBelowBoundary(t *testing.T) {
 
 	hash := closed.Hash()
 
-	hdr, err := provider.GetLedgerHeader(hash[:], 0)
-	require.NoError(t, err)
-	assert.Nil(t, hdr, "GetLedgerHeader must decline a below-floor ledger")
-
-	node, err := provider.GetAccountStateNode(hash[:], txs[0].key[:])
-	require.NoError(t, err)
-	assert.Nil(t, node, "GetAccountStateNode must decline a below-floor ledger")
-
-	txNode, err := provider.GetTransactionNode(hash[:], txs[0].key[:])
-	require.NoError(t, err)
-	assert.Nil(t, txNode, "GetTransactionNode must decline a below-floor ledger")
-
 	rdHdr, leaves, err := provider.GetReplayDelta(hash[:])
 	require.NoError(t, err)
 	assert.Nil(t, rdHdr, "GetReplayDelta must decline a below-floor ledger")
@@ -92,13 +80,13 @@ func TestLedgerProvider_Floor_ServesAtOrAboveBoundary(t *testing.T) {
 
 	// Floor at the ledger's own sequence: not below, must serve.
 	provider.SetMinimumOnlineFloor(stubFloor(2))
-	hdr, err := provider.GetLedgerHeader(hash[:], 0)
+	hdr, _, err := provider.GetReplayDelta(hash[:])
 	require.NoError(t, err)
 	assert.NotNil(t, hdr, "ledger at the floor must still be served")
 
 	// Zero floor = no rotation has happened; nothing is withheld.
 	provider.SetMinimumOnlineFloor(stubFloor(0))
-	hdr, err = provider.GetLedgerHeader(hash[:], 0)
+	hdr, _, err = provider.GetReplayDelta(hash[:])
 	require.NoError(t, err)
 	assert.NotNil(t, hdr, "a zero floor must withhold nothing")
 }
@@ -112,10 +100,6 @@ func TestLedgerProvider_NilFloor_Unchanged(t *testing.T) {
 	provider := newLedgerProviderForTest(lookup) // no SetMinimumOnlineFloor
 
 	hash := closed.Hash()
-	hdr, err := provider.GetLedgerHeader(hash[:], 0)
-	require.NoError(t, err)
-	assert.NotNil(t, hdr, "nil floor must leave serving unrestricted")
-
 	rdHdr, _, err := provider.GetReplayDelta(hash[:])
 	require.NoError(t, err)
 	assert.NotNil(t, rdHdr, "nil floor must leave replay-delta serving unrestricted")

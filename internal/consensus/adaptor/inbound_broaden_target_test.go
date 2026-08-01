@@ -13,7 +13,7 @@ import (
 
 // peerTargetSender records the peer id of each legacy node-fetch and serves a
 // configurable SelectLedgerPeers answer, so the broaden (issue #985 M2) and
-// reply-targeting (M3) paths can be pinned. Other NetworkSender methods inherit
+// reply-targeting (M3) paths can be pinned. Other acquisition methods inherit
 // from noopSender.
 type peerTargetSender struct {
 	noopSender
@@ -72,7 +72,7 @@ func newPeerTargetRouter(t *testing.T, rs *peerTargetSender) (*Router, *service.
 		Identity:      identity,
 		Validators:    []consensus.NodeID{identity.NodeID},
 	})
-	return NewRouter(&mockEngine{}, a, nil), svc
+	return newTestRouter(&mockEngine{}, a, nil), svc
 }
 
 // TestBroadenAcquisitionPeers_AddsMultiple pins issue #985 M2: a no-progress

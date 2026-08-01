@@ -104,23 +104,6 @@ type lookupProvider struct {
 	lookup *inMemoryLookup
 }
 
-func (p *lookupProvider) GetLedgerHeader(hash []byte, _ uint32) ([]byte, error) {
-	if h, ok := to32(hash); ok {
-		if l := p.lookup.byHash[h]; l != nil {
-			return l.SerializeHeader(), nil
-		}
-	}
-	return nil, nil
-}
-
-func (p *lookupProvider) GetAccountStateNode(_ []byte, _ []byte) ([]byte, error) {
-	return nil, nil
-}
-
-func (p *lookupProvider) GetTransactionNode(_ []byte, _ []byte) ([]byte, error) {
-	return nil, nil
-}
-
 func (p *lookupProvider) GetReplayDelta(hash []byte) ([]byte, [][]byte, error) {
 	h, ok := to32(hash)
 	if !ok {
@@ -666,15 +649,6 @@ type proofPathLookupProvider struct {
 	tx   func(hash, key []byte) ([]byte, [][]byte, error)
 }
 
-func (p *proofPathLookupProvider) GetLedgerHeader(hash []byte, seq uint32) ([]byte, error) {
-	return p.base.GetLedgerHeader(hash, seq)
-}
-func (p *proofPathLookupProvider) GetAccountStateNode(h, n []byte) ([]byte, error) {
-	return p.base.GetAccountStateNode(h, n)
-}
-func (p *proofPathLookupProvider) GetTransactionNode(h, n []byte) ([]byte, error) {
-	return p.base.GetTransactionNode(h, n)
-}
 func (p *proofPathLookupProvider) GetReplayDelta(h []byte) ([]byte, [][]byte, error) {
 	return p.base.GetReplayDelta(h)
 }

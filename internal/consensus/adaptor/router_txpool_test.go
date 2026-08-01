@@ -43,7 +43,7 @@ func signedPaymentFrame(t *testing.T, env *jtx.TestEnv, seq uint32) ([]byte, con
 // a depth-1 queue is pre-filled and no worker drains it, so the non-blocking
 // send sheds on every call.
 func TestSubmitTxJobShedsWhenPoolSaturated(t *testing.T) {
-	r := NewRouter(&mockEngine{}, newTestAdaptor(t), make(chan *peermanagement.InboundMessage, 1))
+	r := newTestRouter(&mockEngine{}, newTestAdaptor(t), make(chan *peermanagement.InboundMessage, 1))
 
 	// Install a full queue with no drainers so every submit sheds.
 	r.lifecycleState = routerLifecycleRunning
@@ -70,7 +70,7 @@ func TestSubmitTxJobShedsWhenPoolSaturated(t *testing.T) {
 // sleep — that absence of a sleep is the assertion that the path is synchronous.
 func TestSubmitTxJobInlineFallback(t *testing.T) {
 	a := newTestAdaptor(t)
-	r := NewRouter(&mockEngine{}, a, make(chan *peermanagement.InboundMessage, 1))
+	r := newTestRouter(&mockEngine{}, a, make(chan *peermanagement.InboundMessage, 1))
 	require.Nil(t, r.txJobs, "pool must be unstarted so submitTxJob takes the inline path")
 
 	env := jtx.NewTestEnv(t)
@@ -94,7 +94,7 @@ func TestRunDrainsTxLane(t *testing.T) {
 	a := newTestAdaptor(t)
 	// nil consensus inbox: that select case is never ready, so Run is
 	// driven solely by the tx lane and the maintenance ticker.
-	r := NewRouter(&mockEngine{}, a, nil)
+	r := newTestRouter(&mockEngine{}, a, nil)
 
 	txLane := make(chan *peermanagement.InboundMessage, 4)
 	r.SetTxInbox(txLane)

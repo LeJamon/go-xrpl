@@ -40,7 +40,7 @@ func (s *badDataRecordingSender) getBadDataCalls() []badDataCall {
 	return out
 }
 
-// makeRouterWithBadDataRecorder wires a router whose NetworkSender both
+// makeRouterWithBadDataRecorder wires a router whose network sender both
 // records replay/legacy calls (inherited from recordingSender) AND
 // captures IncPeerBadData calls — the only surface the router touches
 // to charge a peer for misbehavior.
@@ -58,7 +58,7 @@ func makeRouterWithBadDataRecorder(t *testing.T) (*Router, *badDataRecordingSend
 		Identity:      identity,
 	})
 	inbox := make(chan *peermanagement.InboundMessage, 8)
-	r := NewRouter(nil, a, inbox)
+	r := newTestRouter(nil, a, inbox)
 	return r, rs
 }
 

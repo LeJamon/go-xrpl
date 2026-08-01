@@ -68,7 +68,7 @@ func makeProvisionalWarmRouter(t *testing.T) (*Router, *recordingSender, *servic
 	require.False(t, svc.NeedsInitialSync())
 	require.True(t, svc.IsFastLoadProvisional())
 	a, sender := newRecordingAdaptor(t, svc)
-	return NewRouter(nil, a, make(chan *peermanagement.InboundMessage, 1)), sender, svc
+	return newTestRouter(nil, a, make(chan *peermanagement.InboundMessage, 1)), sender, svc
 }
 
 func statusChangeWithParent(

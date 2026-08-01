@@ -255,10 +255,6 @@ func (a *mockAdaptor) RelayValidation(validation *consensus.Validation, _ uint64
 
 func (a *mockAdaptor) UpdateRelaySlot(_ []byte, _ uint64, _ []uint64) {}
 
-// PeersThatHave returns nil — the rcl engine tests never query the
-// overlay's reverse index since they go through a mockAdaptor.
-func (a *mockAdaptor) PeersThatHave(_ [32]byte) []uint64 { return nil }
-
 func (a *mockAdaptor) GetMaxDisallowedLedgerSeq() uint32 {
 	a.mu.RLock()
 	defer a.mu.RUnlock()

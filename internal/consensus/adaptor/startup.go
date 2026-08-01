@@ -310,9 +310,6 @@ func (c *Components) stop() {
 					"replay_in_flight_at_stop", replay)
 			}
 		}
-		if c.Adaptor != nil {
-			c.Adaptor.StopConsensusPhaseDispatcher()
-		}
 		if c.Engine != nil {
 			c.stopErr = c.Engine.Stop()
 		}
@@ -423,7 +420,12 @@ func NewFromConfig(
 
 	engine.SetLedgerAncestryProvider(rcl.NewAncestryProvider(ledgerSvc))
 
-	router := NewRouter(engine, adaptor, overlay.ConsensusMessages())
+	router := newRouter(engine, adaptor, overlay.ConsensusMessages(), routerNetworkConfig{
+		gossip:      sender,
+		txSet:       sender,
+		acquisition: sender,
+		serve:       sender,
+	})
 	router.SetConsensusControlInbox(overlay.ConsensusControlMessages())
 	router.SetServiceInbox(overlay.Messages())
 	router.SetTxInbox(overlay.TxMessages())
@@ -604,14 +606,6 @@ func (c *Components) snapshotStatic() ([]consensus.NodeID, [][33]byte) {
 	v := append([]consensus.NodeID(nil), c.staticValidators...)
 	m := append([][33]byte(nil), c.staticMasterKeys...)
 	return v, m
-}
-
-func (c *Components) snapshotEffectiveStatic() ([]consensus.NodeID, [][33]byte) {
-	validators, masterKeys := c.snapshotStatic()
-	if c.Adaptor == nil {
-		return validators, masterKeys
-	}
-	return includeLocalValidator(validators, masterKeys, c.Adaptor.identity)
 }
 
 // StaticTrustedMasterKeys returns a snapshot of the operator's static

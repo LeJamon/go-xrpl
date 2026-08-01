@@ -245,6 +245,13 @@ type txSetRetryKnobs struct {
 	PeerNonProgressThreshold int
 }
 
+type txSetNetwork interface {
+	RequestTxSetMissingNodes(id consensus.TxSetID, nodeIDs [][]byte, excluded map[uint64]bool, indirect bool) error
+	RequestTxSetMissingNodesFromPeer(id consensus.TxSetID, nodeIDs [][]byte, peerID uint64, indirect bool) error
+	PeerWithTxSet(target [32]byte, exclude uint64) (uint64, bool)
+	NotePeerHasTxSet(peerID uint64, hash [32]byte) bool
+}
+
 func defaultTxSetRetryKnobs() txSetRetryKnobs {
 	return txSetRetryKnobs{
 		MinInterval:              250 * time.Millisecond,
@@ -254,12 +261,12 @@ func defaultTxSetRetryKnobs() txSetRetryKnobs {
 	}
 }
 
-// SetTxSetRetryKnobsForTest overrides the tx-set retry knobs on this
+// setTxSetRetryKnobsForTest overrides the tx-set retry knobs on this
 // Router. Tests use it to dial timings down so they don't sleep for the
 // production throttle window. The lock matches the read in handleTxSetData
 // so racing this against an active inbox goroutine is safe under -race;
 // production is not expected to call this.
-func (r *Router) SetTxSetRetryKnobsForTest(knobs txSetRetryKnobs) {
+func (r *Router) setTxSetRetryKnobsForTest(knobs txSetRetryKnobs) {
 	r.txSetAcquireMu.Lock()
 	defer r.txSetAcquireMu.Unlock()
 	r.txSetRetryKnobs = knobs
@@ -355,7 +362,7 @@ func (r *Router) handleTxSetData(ld *message.LedgerData, originPeer uint64) {
 			"t", "consensus", "event", "txset-resource-limit",
 			"node_count", len(ld.Nodes))
 		if originPeer != 0 {
-			r.adaptor.IncPeerBadData(originPeer, "txset-resource-limit")
+			r.gossip.IncPeerBadData(originPeer, "txset-resource-limit")
 		}
 		return
 	}
@@ -368,14 +375,14 @@ func (r *Router) handleTxSetData(ld *message.LedgerData, originPeer uint64) {
 	if !exists {
 		r.txSetAcquireMu.Unlock()
 		if originPeer != 0 {
-			r.adaptor.IncPeerBadData(originPeer, "txset-useless-unneeded")
+			r.gossip.IncPeerBadData(originPeer, "txset-useless-unneeded")
 		}
 		return
 	}
 	if state.done {
 		r.txSetAcquireMu.Unlock()
 		if originPeer != 0 {
-			r.adaptor.IncPeerBadData(originPeer, "txset-useless-unneeded")
+			r.gossip.IncPeerBadData(originPeer, "txset-useless-unneeded")
 		}
 		return
 	}
@@ -384,7 +391,7 @@ func (r *Router) handleTxSetData(ld *message.LedgerData, originPeer uint64) {
 		state.peerNonProgress[originPeer]++
 		r.txSetAcquireMu.Unlock()
 		if originPeer != 0 {
-			r.adaptor.IncPeerBadData(originPeer, "txset-useless-nonprogress")
+			r.gossip.IncPeerBadData(originPeer, "txset-useless-nonprogress")
 		}
 		return
 	}
@@ -392,14 +399,14 @@ func (r *Router) handleTxSetData(ld *message.LedgerData, originPeer uint64) {
 		if len(node.NodeID) == 0 || len(node.NodeData) == 0 {
 			r.txSetAcquireMu.Unlock()
 			if originPeer != 0 {
-				r.adaptor.IncPeerBadData(originPeer, "ledger-data-decode")
+				r.gossip.IncPeerBadData(originPeer, "ledger-data-decode")
 			}
 			return
 		}
 		if _, err := shamap.ParseNodeID(node.NodeID); err != nil {
 			r.txSetAcquireMu.Unlock()
 			if originPeer != 0 {
-				r.adaptor.IncPeerBadData(originPeer, "txset-baddata-nodeid")
+				r.gossip.IncPeerBadData(originPeer, "txset-baddata-nodeid")
 			}
 			return
 		}
@@ -537,7 +544,7 @@ func (r *Router) handleTxSetData(ld *message.LedgerData, originPeer uint64) {
 		}
 		r.txSetAcquireMu.Unlock()
 		if originPeer != 0 {
-			r.adaptor.IncPeerBadData(originPeer, "txset-useless-nonprogress")
+			r.gossip.IncPeerBadData(originPeer, "txset-useless-nonprogress")
 		}
 		if !haveRoot {
 			r.txSetAcquireMu.Lock()
@@ -572,7 +579,7 @@ func (r *Router) handleTxSetData(ld *message.LedgerData, originPeer uint64) {
 		indirect := state.timedOut
 		r.txSetAcquireMu.Unlock()
 		if originPeer != 0 && !badRootProvided {
-			r.adaptor.IncPeerBadData(originPeer, "txset-useless-nonprogress")
+			r.gossip.IncPeerBadData(originPeer, "txset-useless-nonprogress")
 		}
 		if err := r.requestTxSetRoot(txSetID, originPeer, indirect); err != nil {
 			r.logger.Info("tx-set sync: root request failed",
@@ -631,7 +638,7 @@ func (r *Router) handleTxSetData(ld *message.LedgerData, originPeer uint64) {
 			validAllDuplicate := duplicates > 0 && added == 0 && !rootAccepted
 			r.txSetAcquireMu.Lock()
 			// Knobs are read under txSetAcquireMu so a concurrent
-			// SetTxSetRetryKnobsForTest (test-only API) can't tear a
+			// setTxSetRetryKnobsForTest (test-only API) can't tear a
 			// half-updated struct into the hot path.
 			knobs := r.txSetRetryKnobs
 			if !madeProgress && !validAllDuplicate {
@@ -643,7 +650,7 @@ func (r *Router) handleTxSetData(ld *message.LedgerData, originPeer uint64) {
 				}
 				r.txSetAcquireMu.Unlock()
 				if originPeer != 0 {
-					r.adaptor.IncPeerBadData(originPeer, "txset-useless-nonprogress")
+					r.gossip.IncPeerBadData(originPeer, "txset-useless-nonprogress")
 				}
 				r.logger.Debug("tx-set sync: no-progress reply, deferring to timer",
 					"t", "consensus", "event", "txset-retry-defer",
@@ -753,9 +760,9 @@ func (r *Router) markTxSetFailed(txSetID consensus.TxSetID) {
 func (r *Router) requestTxSetRoot(txSetID consensus.TxSetID, originPeer uint64, indirect bool) error {
 	rootID := [][]byte{make([]byte, shamap.NodeIDSize)}
 	if originPeer != 0 {
-		return r.adaptor.RequestTxSetMissingNodesFromPeer(txSetID, rootID, originPeer, indirect)
+		return r.txSetNet.RequestTxSetMissingNodesFromPeer(txSetID, rootID, originPeer, indirect)
 	}
-	return r.adaptor.RequestTxSetMissingNodes(txSetID, rootID, nil, indirect)
+	return r.txSetNet.RequestTxSetMissingNodes(txSetID, rootID, nil, indirect)
 }
 
 // requestTxSetMissingNodesUnicast pipelines the next missing-nodes request to
@@ -764,9 +771,9 @@ func (r *Router) requestTxSetRoot(txSetID consensus.TxSetID, originPeer uint64, 
 // that fallback, being irrelevant to a unicast.
 func (r *Router) requestTxSetMissingNodesUnicast(txSetID consensus.TxSetID, nodeIDs [][]byte, originPeer uint64, excluded map[uint64]bool, indirect bool) error {
 	if originPeer != 0 {
-		return r.adaptor.RequestTxSetMissingNodesFromPeer(txSetID, nodeIDs, originPeer, indirect)
+		return r.txSetNet.RequestTxSetMissingNodesFromPeer(txSetID, nodeIDs, originPeer, indirect)
 	}
-	return r.adaptor.RequestTxSetMissingNodes(txSetID, nodeIDs, excluded, indirect)
+	return r.txSetNet.RequestTxSetMissingNodes(txSetID, nodeIDs, excluded, indirect)
 }
 
 // submitTxSetToEngine feeds a completed tx-set's blobs to the engine. An
@@ -1071,7 +1078,7 @@ func (r *Router) retryStalledTxSetAcquires() {
 			"excluded_peers", len(k.excluded),
 		)
 		// Timer re-triggers are always post-stall, so always indirect.
-		if err := r.adaptor.RequestTxSetMissingNodes(k.id, k.nodeIDs, k.excluded, true); err != nil {
+		if err := r.txSetNet.RequestTxSetMissingNodes(k.id, k.nodeIDs, k.excluded, true); err != nil {
 			r.logger.Info("tx-set sync: timer missing-nodes request failed",
 				"t", "consensus", "event", "txset-reject",
 				"txset", fmt.Sprintf("%x", k.id[:8]),

@@ -55,8 +55,12 @@ type peerBootstrapAcknowledger interface {
 // Router reads inbound messages from the P2P overlay and dispatches
 // them to the consensus engine and adaptor.
 type Router struct {
-	engine  consensus.RouterEngine
-	adaptor *Adaptor
+	engine      consensus.RouterEngine
+	adaptor     *Adaptor
+	gossip      gossipNetwork
+	txSetNet    txSetNetwork
+	acquisition ledgerAcquisitionNetwork
+	serve       ledgerServeNetwork
 	// inbox is the overlay's bounded, backpressured consensus lane.
 	inbox <-chan *peermanagement.InboundMessage
 	// serviceInbox carries best-effort, recoverable peer traffic. Keeping it
@@ -186,7 +190,7 @@ type Router struct {
 	txSetAcquire   map[consensus.TxSetID]*txSetAcquireState
 
 	// Retry-loop knobs for tx-set acquisition. Set to production defaults by
-	// NewRouter; tests inject smaller values via SetTxSetRetryKnobsForTest so
+	// newRouter; tests inject smaller values via setTxSetRetryKnobsForTest so
 	// they don't sleep for the production 250ms throttle window. See
 	// txSetRetryKnobs for the meaning of each field.
 	txSetRetryKnobs txSetRetryKnobs
@@ -264,6 +268,13 @@ type Router struct {
 	seqHashMu  sync.Mutex
 	seqHash    map[uint32]ledgerHashEntry
 	seqHashMax uint32
+}
+
+type routerNetworkConfig struct {
+	gossip      gossipNetwork
+	txSet       txSetNetwork
+	acquisition ledgerAcquisitionNetwork
+	serve       ledgerServeNetwork
 }
 
 // catchupTarget is the highest (seq,hash) the router is driving a bounded
@@ -350,10 +361,38 @@ const messageDedupMaxEntries = 4096
 
 // NewRouter creates a new Router.
 func NewRouter(engine consensus.RouterEngine, adaptor *Adaptor, inbox <-chan *peermanagement.InboundMessage) *Router {
+	network := routerNetworkConfig{}
+	if adaptor != nil {
+		network.gossip, _ = adaptor.sender.(gossipNetwork)
+		network.txSet, _ = adaptor.sender.(txSetNetwork)
+		network.acquisition, _ = adaptor.sender.(ledgerAcquisitionNetwork)
+		network.serve, _ = adaptor.sender.(ledgerServeNetwork)
+	}
+	return newRouter(engine, adaptor, inbox, network)
+}
+
+func newRouter(engine consensus.RouterEngine, adaptor *Adaptor, inbox <-chan *peermanagement.InboundMessage, network routerNetworkConfig) *Router {
 	logger := slog.Default().With("component", "consensus-router")
+	noop := &noopSender{}
+	if network.gossip == nil {
+		network.gossip = noop
+	}
+	if network.txSet == nil {
+		network.txSet = noop
+	}
+	if network.acquisition == nil {
+		network.acquisition = noop
+	}
+	if network.serve == nil {
+		network.serve = noop
+	}
 	r := &Router{
 		engine:             engine,
 		adaptor:            adaptor,
+		gossip:             network.gossip,
+		txSetNet:           network.txSet,
+		acquisition:        network.acquisition,
+		serve:              network.serve,
 		inbox:              inbox,
 		logger:             logger,
 		peerStates:         make(map[peermanagement.PeerID]*peerLedgerState),
@@ -991,7 +1030,7 @@ func (r *Router) maintenanceTick() {
 		tried := rd.TriedPeers()
 		// Ask the overlay for a fresh replay-capable peer, excluding
 		// every peer we've already tried for this hash.
-		candidates := r.adaptor.ReplayCapablePeersExcluding(tried, 1)
+		candidates := r.acquisition.ReplayCapablePeersExcluding(tried, 1)
 		if len(candidates) == 0 {
 			// No fresh peer available — can't rotate; the outer
 			// budget below will eventually time this out and fall
@@ -1016,7 +1055,7 @@ func (r *Router) maintenanceTick() {
 		seq := rd.Seq()
 		hash := rd.Hash()
 		r.runLifecycleTask(func(context.Context) {
-			if err := r.adaptor.RequestReplayDelta(newPeer, hash); err != nil {
+			if err := r.acquisition.RequestReplayDelta(newPeer, hash); err != nil {
 				r.logger.Debug("replay-delta retry request failed",
 					"seq", seq,
 					"hash", fmt.Sprintf("%x", hash),

@@ -143,7 +143,7 @@ func TestRouter_HandleGetLedger_Floor_DeclinesBelowBoundary(t *testing.T) {
 	engine := &mockEngine{}
 	adaptor, rs := newTxSetWireAdaptor(t)
 	inbox := make(chan *peermanagement.InboundMessage, 4)
-	router := NewRouter(engine, adaptor, inbox)
+	router := newTestRouter(engine, adaptor, inbox)
 
 	l := adaptor.LedgerService().GetClosedLedger()
 	require.NotNil(t, l)
@@ -179,7 +179,7 @@ func TestRouter_HandleGetLedger_Floor_ServesAtOrAboveBoundary(t *testing.T) {
 	engine := &mockEngine{}
 	adaptor, rs := newTxSetWireAdaptor(t)
 	inbox := make(chan *peermanagement.InboundMessage, 4)
-	router := NewRouter(engine, adaptor, inbox)
+	router := newTestRouter(engine, adaptor, inbox)
 
 	l := adaptor.LedgerService().GetClosedLedger()
 	require.NotNil(t, l)
@@ -229,7 +229,7 @@ func newFetchDepthServeRouter(t *testing.T) (*Router, *querytypeRecorder, *servi
 		Identity:      identity,
 		Validators:    []consensus.NodeID{identity.NodeID},
 	})
-	return NewRouter(&mockEngine{}, a, nil), sender, svc
+	return newTestRouter(&mockEngine{}, a, nil), sender, svc
 }
 
 func TestRouter_HandleGetLedger_RespectsConfiguredFetchDepth(t *testing.T) {

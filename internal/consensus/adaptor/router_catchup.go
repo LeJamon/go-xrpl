@@ -494,10 +494,10 @@ func (r *Router) armPendingConsensusLedger() bool {
 }
 
 func (r *Router) resolveReplayPeer(seq uint32, preferred uint64) (uint64, bool) {
-	if peer, ok := r.resolveAcquisitionPeer(seq, preferred); ok && r.adaptor.PeerSupportsReplay(peer) {
+	if peer, ok := r.resolveAcquisitionPeer(seq, preferred); ok && r.acquisition.PeerSupportsReplay(peer) {
 		return peer, true
 	}
-	peers := r.adaptor.ReplayCapablePeersExcluding(nil, 1)
+	peers := r.acquisition.ReplayCapablePeersExcluding(nil, 1)
 	if len(peers) == 0 {
 		return 0, false
 	}
@@ -832,7 +832,7 @@ func (r *Router) startLedgerAcquisitionLocked(seq uint32, hash [32]byte, peerID 
 	}
 
 	parent := r.adaptor.GetParentLedgerForReplay(seq)
-	if parent != nil && r.adaptor.PeerSupportsReplay(peerID) {
+	if parent != nil && r.acquisition.PeerSupportsReplay(peerID) {
 		if err := r.startReplayDeltaAcquisition(seq, hash, peerID, parent); err == nil {
 			return
 		}
@@ -875,7 +875,7 @@ func (r *Router) startReplayDeltaAcquisition(seq uint32, hash [32]byte, peerID u
 		"hash", fmt.Sprintf("%x", hash[:8]),
 		"peer", peerID,
 	)
-	if err := r.adaptor.RequestReplayDelta(peerID, hash); err != nil {
+	if err := r.acquisition.RequestReplayDelta(peerID, hash); err != nil {
 		r.logger.Warn("failed to request replay delta from peer", "error", err)
 		r.replayer.Abandon(hash)
 		return err
@@ -988,7 +988,7 @@ func (r *Router) seedAcquisitionPeers(il *inbound.Ledger) {
 	if remaining <= 0 {
 		return
 	}
-	for _, peerID := range r.adaptor.SelectLedgerPeers(il.Hash(), il.Seq(), peers, remaining) {
+	for _, peerID := range r.acquisition.SelectLedgerPeers(il.Hash(), il.Seq(), peers, remaining) {
 		il.AddPeerBounded(peerID, acquisitionPeerStart)
 	}
 }
@@ -1014,7 +1014,7 @@ func (r *Router) requestLedgerBase(il *inbound.Ledger, peerID uint64, logMessage
 
 func (r *Router) requestLedgerBaseFromPeer(il *inbound.Ledger, peerID uint64, logMessage string) bool {
 	il.AddPeer(peerID)
-	err := r.adaptor.RequestLedgerBaseFromPeer(peerID, il.Hash(), il.Seq(), il.Timeouts() > 0)
+	err := r.acquisition.RequestLedgerBaseFromPeer(peerID, il.Hash(), il.Seq(), il.Timeouts() > 0)
 	if err == nil {
 		return true
 	}
@@ -1431,7 +1431,7 @@ func (r *Router) handleReplayDeltaResponse(msg *peermanagement.InboundMessage) {
 	decoded, err := message.Decode(message.TypeReplayDeltaResponse, msg.Payload)
 	if err != nil {
 		r.logger.Debug("failed to decode replay delta response", "error", err, "peer", msg.PeerID)
-		r.adaptor.IncPeerBadData(uint64(msg.PeerID), "replay-delta-resp-decode")
+		r.acquisition.IncPeerBadData(uint64(msg.PeerID), "replay-delta-resp-decode")
 		return
 	}
 	resp, ok := decoded.(*message.ReplayDeltaResponse)
@@ -1456,7 +1456,7 @@ func (r *Router) handleReplayDeltaResponse(msg *peermanagement.InboundMessage) {
 			"expected_peer", rd.PeerID(),
 			"hash", fmt.Sprintf("%x", hash[:8]),
 		)
-		r.adaptor.IncPeerBadData(uint64(msg.PeerID), "replay-delta-peer")
+		r.acquisition.IncPeerBadData(uint64(msg.PeerID), "replay-delta-peer")
 		return
 	}
 	if err != nil {
@@ -1475,7 +1475,7 @@ func (r *Router) handleReplayDeltaResponse(msg *peermanagement.InboundMessage) {
 		routeMismatch := errors.Is(err, inbound.ErrReplayParentMismatch) ||
 			errors.Is(err, inbound.ErrReplaySequenceMismatch)
 		if !routeMismatch {
-			r.adaptor.IncPeerBadData(peerID, "replay-delta-verify")
+			r.acquisition.IncPeerBadData(peerID, "replay-delta-verify")
 		}
 		r.fallbackReplayAcquisition(seq, hash, peerID)
 		return
@@ -2075,7 +2075,7 @@ func (r *Router) handleLedgerData(msg *peermanagement.InboundMessage) {
 	decoded, err := message.Decode(message.TypeLedgerData, msg.Payload)
 	if err != nil {
 		r.logger.Warn("failed to decode ledger_data", "error", err, "peer", msg.PeerID)
-		r.adaptor.IncPeerBadData(uint64(msg.PeerID), "ledger-data-decode")
+		r.acquisition.IncPeerBadData(uint64(msg.PeerID), "ledger-data-decode")
 		return
 	}
 	ld, ok := decoded.(*message.LedgerData)
@@ -2084,24 +2084,24 @@ func (r *Router) handleLedgerData(msg *peermanagement.InboundMessage) {
 	}
 	if len(ld.LedgerHash) != 32 {
 		r.logger.Warn("invalid ledger_data ledger hash", "peer", msg.PeerID, "length", len(ld.LedgerHash))
-		r.adaptor.IncPeerBadData(uint64(msg.PeerID), "ledger-data-hash")
+		r.acquisition.IncPeerBadData(uint64(msg.PeerID), "ledger-data-hash")
 		return
 	}
 	if ld.InfoType < message.LedgerInfoBase || ld.InfoType > message.LedgerInfoTsCandidate {
 		r.logger.Warn("invalid ledger_data info type", "peer", msg.PeerID, "info_type", ld.InfoType)
-		r.adaptor.IncPeerBadData(uint64(msg.PeerID), "ledger-data-type")
+		r.acquisition.IncPeerBadData(uint64(msg.PeerID), "ledger-data-type")
 		return
 	}
 	if (ld.InfoType == message.LedgerInfoTsCandidate && ld.LedgerSeq != 0) ||
 		(ld.InfoType != message.LedgerInfoTsCandidate && r.invalidFutureLedgerSequence(ld.LedgerSeq)) {
 		r.logger.Warn("invalid ledger_data ledger sequence", "peer", msg.PeerID, "seq", ld.LedgerSeq)
-		r.adaptor.IncPeerBadData(uint64(msg.PeerID), "ledger-data-sequence")
+		r.acquisition.IncPeerBadData(uint64(msg.PeerID), "ledger-data-sequence")
 		return
 	}
 	if ld.Error != message.ReplyErrorNone &&
 		(ld.Error < message.ReplyErrorNoLedger || ld.Error > message.ReplyErrorBadRequest) {
 		r.logger.Warn("invalid ledger_data reply error", "peer", msg.PeerID, "error", ld.Error)
-		r.adaptor.IncPeerBadData(uint64(msg.PeerID), "ledger-data-error")
+		r.acquisition.IncPeerBadData(uint64(msg.PeerID), "ledger-data-error")
 		return
 	}
 	if ld.Error != message.ReplyErrorNone {
@@ -2122,17 +2122,17 @@ func (r *Router) handleLedgerData(msg *peermanagement.InboundMessage) {
 			"reply_error", ld.Error,
 			"nodes", len(ld.Nodes),
 		)
-		r.adaptor.IncPeerBadData(uint64(msg.PeerID), "ledger-data-count")
+		r.acquisition.IncPeerBadData(uint64(msg.PeerID), "ledger-data-count")
 		return
 	}
 	if ld.InfoType == message.LedgerInfoAsNode || ld.InfoType == message.LedgerInfoTxNode {
 		for _, node := range ld.Nodes {
 			if len(node.NodeData) == 0 {
-				r.adaptor.IncPeerBadData(uint64(msg.PeerID), "ledger-data-node")
+				r.acquisition.IncPeerBadData(uint64(msg.PeerID), "ledger-data-node")
 				return
 			}
 			if _, err := shamap.ParseNodeID(node.NodeID); err != nil {
-				r.adaptor.IncPeerBadData(uint64(msg.PeerID), "ledger-data-node")
+				r.acquisition.IncPeerBadData(uint64(msg.PeerID), "ledger-data-node")
 				return
 			}
 		}
@@ -2228,7 +2228,7 @@ func (r *Router) handleInboundLedgerData(il *inbound.Ledger, ld *message.LedgerD
 			if errors.Is(err, inbound.ErrHeaderRejected) {
 				r.failInboundAcquisition(il)
 			} else {
-				r.adaptor.IncPeerBadData(peerID, "ledger-data-base")
+				r.acquisition.IncPeerBadData(peerID, "ledger-data-base")
 				if r.fetchTracker.RemoveExpectedWithSnapshot(il, il.Snapshot(), false) {
 					r.retireAcquisitionStore(r.lifecycleContext(), il)
 				}
@@ -2251,7 +2251,7 @@ func (r *Router) handleInboundLedgerData(il *inbound.Ledger, ld *message.LedgerD
 		useful, err := il.GotStateNodesUseful(ld.Nodes)
 		if err != nil {
 			r.logger.Warn("inbound ledger: GotStateNodes failed", "error", err)
-			r.adaptor.IncPeerBadData(peerID, "ledger-data-state")
+			r.acquisition.IncPeerBadData(peerID, "ledger-data-state")
 			return true
 		}
 
@@ -2270,7 +2270,7 @@ func (r *Router) handleInboundLedgerData(il *inbound.Ledger, ld *message.LedgerD
 		useful, err := il.GotTransactionNodesUseful(ld.Nodes)
 		if err != nil {
 			r.logger.Warn("inbound ledger: GotTransactionNodes failed", "error", err)
-			r.adaptor.IncPeerBadData(peerID, "ledger-data-tx")
+			r.acquisition.IncPeerBadData(peerID, "ledger-data-tx")
 			return true
 		}
 
@@ -2395,7 +2395,7 @@ func (r *Router) retryMissingAcquisitionNodes(
 	}
 	replacements = min(max(replacements, 1), acquisitionMaxUsefulPeers)
 	added := make([]uint64, 0, replacements)
-	for _, peerID := range r.adaptor.SelectLedgerPeers(il.Hash(), il.Seq(), peers, replacements) {
+	for _, peerID := range r.acquisition.SelectLedgerPeers(il.Hash(), il.Seq(), peers, replacements) {
 		if il.AddPeer(peerID) {
 			added = append(added, peerID)
 		}
@@ -2498,7 +2498,7 @@ func (r *Router) broadenAcquisitionPeers(il *inbound.Ledger) []uint64 {
 		limit = acquisitionPeerStart
 	}
 	var added []uint64
-	for _, peerID := range r.adaptor.SelectLedgerPeers(il.Hash(), il.Seq(), peers, limit) {
+	for _, peerID := range r.acquisition.SelectLedgerPeers(il.Hash(), il.Seq(), peers, limit) {
 		if il.AddPeer(peerID) {
 			added = append(added, peerID)
 		}
@@ -2586,7 +2586,7 @@ func (r *Router) sendNodesByHash(peers []uint64, ledgerHash [32]byte, seq uint32
 		return
 	}
 	for _, peerID := range peers {
-		if err := r.adaptor.SendPriorityToPeer(peerID, frame); err != nil {
+		if err := r.acquisition.SendPriorityToPeer(peerID, frame); err != nil {
 			r.logger.Debug("inbound ledger: by-hash request send failed", "peer", peerID, "error", err)
 		}
 	}

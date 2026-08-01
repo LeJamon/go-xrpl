@@ -35,12 +35,23 @@ func newLedgerProviderForTest(lookup ledgerLookup) *LedgerProvider {
 	return &LedgerProvider{svc: lookup}
 }
 
+func newTestRouter(engine consensus.Engine, adaptor *Adaptor, inbox <-chan *peermanagement.InboundMessage) *Router {
+	network := routerNetworkConfig{}
+	if adaptor != nil && adaptor.sender != nil {
+		network.gossip, _ = adaptor.sender.(gossipNetwork)
+		network.txSet, _ = adaptor.sender.(txSetNetwork)
+		network.acquisition, _ = adaptor.sender.(ledgerAcquisitionNetwork)
+		network.serve, _ = adaptor.sender.(ledgerServeNetwork)
+	}
+	return newRouter(engine, adaptor, inbox, network)
+}
+
 // NewRouterBroadcaster wires the overlay (for peer enumeration + feature
 // lookup) and the sender (for per-peer SendToPeer). Passing nil for either
 // degrades the broadcaster to a silent no-op so tests without an overlay
 // don't crash. Broadcasters built this way carry no hash-suppression
 // registry; production routes through Router.NewValidatorListBroadcaster.
-func NewRouterBroadcaster(overlay *peermanagement.Overlay, sender NetworkSender) *RouterBroadcaster {
+func NewRouterBroadcaster(overlay *peermanagement.Overlay, sender peerFrameSender) *RouterBroadcaster {
 	return &RouterBroadcaster{overlay: overlay, sender: sender}
 }
 

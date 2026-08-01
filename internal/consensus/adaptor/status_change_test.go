@@ -13,9 +13,9 @@ import (
 )
 
 // scRecordingSender records broadcast status changes; any other
-// NetworkSender method panics via the nil embedded interface.
+// consensusNetwork method panics via the nil embedded interface.
 type scRecordingSender struct {
-	NetworkSender
+	consensusNetwork
 	mu  sync.Mutex
 	scs []*message.StatusChange
 }

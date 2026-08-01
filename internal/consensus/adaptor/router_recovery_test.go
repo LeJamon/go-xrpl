@@ -20,7 +20,7 @@ func makeRouterWithEngine(t *testing.T) (*Router, *mockEngine, *service.Service)
 	a, _ := newRecordingAdaptor(t, svc)
 	inbox := make(chan *peermanagement.InboundMessage, 8)
 	engine := &mockEngine{switchResult: consensus.LedgerSwitchAccepted}
-	r := NewRouter(engine, a, inbox)
+	r := newTestRouter(engine, a, inbox)
 	return r, engine, svc
 }
 

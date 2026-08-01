@@ -29,19 +29,19 @@ func (r *Router) handleValidatorList(msg *peermanagement.InboundMessage) {
 	// Peer-feature gate: peers that did not negotiate
 	// ValidatorListPropagation should not be pushing these frames.
 	if !r.peerSupportsValidatorListFeature(msg.PeerID) {
-		r.adaptor.IncPeerBadData(uint64(msg.PeerID), "vl-unsupported-peer")
+		r.gossip.IncPeerBadData(uint64(msg.PeerID), "vl-unsupported-peer")
 		return
 	}
 
 	decoded, err := message.Decode(message.TypeValidatorList, msg.Payload)
 	if err != nil {
 		r.logger.Warn("failed to decode TMValidatorList", "error", err, "peer", msg.PeerID)
-		r.adaptor.IncPeerBadData(uint64(msg.PeerID), "vl-decode")
+		r.gossip.IncPeerBadData(uint64(msg.PeerID), "vl-decode")
 		return
 	}
 	vl, ok := decoded.(*message.ValidatorList)
 	if !ok || vl == nil {
-		r.adaptor.IncPeerBadData(uint64(msg.PeerID), "vl-decode")
+		r.gossip.IncPeerBadData(uint64(msg.PeerID), "vl-decode")
 		return
 	}
 
@@ -55,7 +55,7 @@ func (r *Router) handleValidatorList(msg *peermanagement.InboundMessage) {
 			// Stamp the sender on the existing hash entry so downstream
 			// rebroadcast paths skip them.
 			r.messageSeen.recordPeer(hash, uint64(msg.PeerID))
-			r.adaptor.IncPeerBadData(uint64(msg.PeerID), "vl-duplicate")
+			r.gossip.IncPeerBadData(uint64(msg.PeerID), "vl-duplicate")
 			return
 		}
 		r.messageSeen.recordPeer(hash, uint64(msg.PeerID))
@@ -103,26 +103,26 @@ func (r *Router) handleValidatorListCollection(msg *peermanagement.InboundMessag
 	// at peer protocol >= 2.2. A peer that only negotiated v2.1 may send
 	// TMValidatorList (v1) but MUST NOT send the collection frame.
 	if !r.peerSupportsValidatorList2(msg.PeerID) {
-		r.adaptor.IncPeerBadData(uint64(msg.PeerID), "vl-coll-unsupported-peer")
+		r.gossip.IncPeerBadData(uint64(msg.PeerID), "vl-coll-unsupported-peer")
 		return
 	}
 
 	decoded, err := message.Decode(message.TypeValidatorListCollection, msg.Payload)
 	if err != nil {
 		r.logger.Warn("failed to decode TMValidatorListCollection", "error", err, "peer", msg.PeerID)
-		r.adaptor.IncPeerBadData(uint64(msg.PeerID), "vl-coll-decode")
+		r.gossip.IncPeerBadData(uint64(msg.PeerID), "vl-coll-decode")
 		return
 	}
 	coll, ok := decoded.(*message.ValidatorListCollection)
 	if !ok || coll == nil {
-		r.adaptor.IncPeerBadData(uint64(msg.PeerID), "vl-coll-decode")
+		r.gossip.IncPeerBadData(uint64(msg.PeerID), "vl-coll-decode")
 		return
 	}
 
 	// Reject v1 collections upfront ("wrong version"). Decoding once and
 	// inspecting the version on the decoded message avoids a double-decode.
 	if coll.Version < 2 {
-		r.adaptor.IncPeerBadData(uint64(msg.PeerID), "vl-coll-wrong-version")
+		r.gossip.IncPeerBadData(uint64(msg.PeerID), "vl-coll-wrong-version")
 		return
 	}
 
@@ -138,8 +138,8 @@ func (r *Router) handleValidatorListCollection(msg *peermanagement.InboundMessag
 	//   - "vl-coll-no-blobs"          → general counter retained for
 	//                                   backwards-compatible dashboards
 	if len(coll.Blobs) == 0 {
-		r.adaptor.IncPeerBadData(uint64(msg.PeerID), "vl-coll-heavy-no-blobs")
-		r.adaptor.IncPeerBadData(uint64(msg.PeerID), "vl-coll-no-blobs")
+		r.gossip.IncPeerBadData(uint64(msg.PeerID), "vl-coll-heavy-no-blobs")
+		r.gossip.IncPeerBadData(uint64(msg.PeerID), "vl-coll-no-blobs")
 		return
 	}
 
@@ -147,7 +147,7 @@ func (r *Router) handleValidatorListCollection(msg *peermanagement.InboundMessag
 		hash := sha512half.Sum(validatorListCollectionSemanticHash(coll))
 		if firstSeen, _ := r.messageSeen.observe(hash); !firstSeen {
 			r.messageSeen.recordPeer(hash, uint64(msg.PeerID))
-			r.adaptor.IncPeerBadData(uint64(msg.PeerID), "vl-coll-duplicate")
+			r.gossip.IncPeerBadData(uint64(msg.PeerID), "vl-coll-duplicate")
 			return
 		}
 		r.messageSeen.recordPeer(hash, uint64(msg.PeerID))
@@ -281,7 +281,7 @@ func chargePeerForDisposition(r *Router, peer peermanagement.PeerID, prefix stri
 	default:
 		return
 	}
-	r.adaptor.IncPeerBadData(uint64(peer), prefix+"-"+tag+"-"+d.String())
+	r.gossip.IncPeerBadData(uint64(peer), prefix+"-"+tag+"-"+d.String())
 }
 
 // peerSite formats a peer-sourced site URI for the aggregator's
@@ -302,13 +302,17 @@ func (r *Router) peerSite(peerID peermanagement.PeerID) string {
 // One instance lives for the lifetime of the router; the aggregator
 // holds a reference (set via SetBroadcaster in Components bootstrap).
 //
-// All three methods are safe for concurrent use: ActivePeers and
+// All methods are safe for concurrent use: ActivePeers and
 // PeerSupportsVL take the overlay's read-side locks; SendList encodes
 // fresh bytes per call. Returns are non-fatal — the aggregator logs
 // and continues with the next peer.
+type peerFrameSender interface {
+	SendToPeer(peerID uint64, frame []byte) error
+}
+
 type RouterBroadcaster struct {
 	overlay *peermanagement.Overlay
-	sender  NetworkSender
+	sender  peerFrameSender
 	// suppression is the optional shared hash registry. When wired,
 	// SendList / SendCollection record each (hash, peer) pair after a
 	// successful send so future inbound from that peer with the same
@@ -317,10 +321,12 @@ type RouterBroadcaster struct {
 	suppression *messageSuppression
 }
 
+var _ validatorlist.PeerBroadcaster = (*RouterBroadcaster)(nil)
+
 // NewValidatorListBroadcaster constructs a RouterBroadcaster bound to
 // the Router's suppression registry so SendList / SendCollection stamp
 // the hash→peer association.
-func (r *Router) NewValidatorListBroadcaster(overlay *peermanagement.Overlay, sender NetworkSender) *RouterBroadcaster {
+func (r *Router) NewValidatorListBroadcaster(overlay *peermanagement.Overlay, sender peerFrameSender) *RouterBroadcaster {
 	return &RouterBroadcaster{overlay: overlay, sender: sender, suppression: r.messageSeen}
 }
 

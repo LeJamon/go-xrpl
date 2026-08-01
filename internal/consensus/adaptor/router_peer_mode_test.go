@@ -28,7 +28,7 @@ func (s *peerAvailabilitySessions) PeerCount() int {
 
 func TestRouterPeerAvailabilityReconcilesOperatingMode(t *testing.T) {
 	a := New(Config{})
-	r := NewRouter(nil, a, nil)
+	r := newTestRouter(nil, a, nil)
 	sessions := &peerAvailabilitySessions{connected: make(map[peermanagement.PeerID]bool)}
 	r.setPeerSessionView(sessions)
 
@@ -52,7 +52,7 @@ func TestRouterPeerAvailabilityReconcilesOperatingMode(t *testing.T) {
 
 func TestRouterPeerAvailabilityMaintenanceRepairsMissedLifecycleEvent(t *testing.T) {
 	a := New(Config{})
-	r := NewRouter(nil, a, nil)
+	r := newTestRouter(nil, a, nil)
 	sessions := &peerAvailabilitySessions{connected: map[peermanagement.PeerID]bool{1: true}}
 	r.setPeerSessionView(sessions)
 

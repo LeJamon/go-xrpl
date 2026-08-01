@@ -146,7 +146,7 @@ func (r *Router) handleFetchPackReply(msg *peermanagement.InboundMessage) {
 	}
 	decoded, err := message.Decode(message.TypeGetObjects, msg.Payload)
 	if err != nil {
-		r.adaptor.IncPeerBadData(uint64(msg.PeerID), "fetch-pack-decode")
+		r.acquisition.IncPeerBadData(uint64(msg.PeerID), "fetch-pack-decode")
 		return
 	}
 	gob, ok := decoded.(*message.GetObjectByHash)
@@ -210,7 +210,7 @@ func (r *Router) handleFetchPackReply(msg *peermanagement.InboundMessage) {
 		stored++
 	}
 	if poisoned > 0 {
-		r.adaptor.IncPeerBadData(uint64(msg.PeerID), "fetch-pack-poison")
+		r.acquisition.IncPeerBadData(uint64(msg.PeerID), "fetch-pack-poison")
 	}
 	if stored == 0 {
 		return
@@ -304,7 +304,7 @@ func (r *Router) tryFetchPackEscalation(il *inbound.Ledger) bool {
 	if err != nil {
 		return false
 	}
-	if err := r.adaptor.SendPriorityToPeer(peerID, frame); err != nil {
+	if err := r.acquisition.SendPriorityToPeer(peerID, frame); err != nil {
 		r.logger.Debug("fetch-pack request send failed",
 			"seq", il.Seq(), "err", err)
 		return false

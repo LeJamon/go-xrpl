@@ -144,7 +144,7 @@ func TestTxSetAcquire_ReplyWorkBound(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			router, _ := newRetryRouter(t)
 			sender := &txSetResourceRecordingSender{}
-			router.adaptor.sender = sender
+			router.gossip = sender
 			id := resourceTxSetID(byte(i + 1))
 			router.handleTxSetData(resourceLedgerData(id, tt.nodes), 7)
 
