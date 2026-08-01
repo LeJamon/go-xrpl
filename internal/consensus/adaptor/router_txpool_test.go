@@ -122,11 +122,14 @@ func TestRunDrainsTxLane(t *testing.T) {
 // `go test -race` is what makes this test meaningful — it verifies the
 // channel / atomic-counter / worker handoff is free of data races.
 func TestSubmitTxJobConcurrent(t *testing.T) {
-	r := newTestRouter(&mockEngine{}, newTestAdaptor(t), make(chan *peermanagement.InboundMessage, 1))
-
-	// Workers exit when t.Context() is canceled at test cleanup, so they
-	// don't leak across tests.
-	r.startTxWorkers(t.Context())
+	inbox := make(chan *peermanagement.InboundMessage)
+	r := NewRouter(&mockEngine{}, newTestAdaptor(t), inbox)
+	done := make(chan struct{})
+	go func() {
+		r.Run(t.Context())
+		close(done)
+	}()
+	inbox <- &peermanagement.InboundMessage{}
 
 	const n = 500 // < txQueueDepth (1024): the buffer absorbs all, so 0 sheds
 	var wg sync.WaitGroup
@@ -143,4 +146,6 @@ func TestSubmitTxJobConcurrent(t *testing.T) {
 	wg.Wait()
 
 	require.Equal(t, uint64(0), r.DroppedTxJobs())
+	close(inbox)
+	<-done
 }

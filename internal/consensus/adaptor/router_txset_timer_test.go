@@ -177,7 +177,7 @@ func TestTxSetAcquire_TimerMatchesRippledTimeoutCadence(t *testing.T) {
 	router, sender := newRetryRouter(t)
 	ld, id := rootOnlyTxSetLedgerData(t, 8)
 	router.MarkTxSetStillNeeded(id)
-	router.SetTxSetRetryKnobsForTest(txSetRetryKnobs{
+	router.setTxSetRetryKnobsForTest(txSetRetryKnobs{
 		MinInterval:              0,
 		NormalTimeouts:           4,
 		MaxStallTicks:            20,
