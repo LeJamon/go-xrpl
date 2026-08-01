@@ -14,7 +14,6 @@ import (
 
 func ptr(x drops.XRPAmount) *drops.XRPAmount { return &x }
 
-// No SetFee transaction is emitted when every chosen value matches current.
 func TestDoVoting_NoChangeNoTx(t *testing.T) {
 	current := Stance{BaseFee: 10, ReserveBase: 10_000_000, ReserveIncrement: 2_000_000}
 	target := current // unchanged → no votes for anything outside current
@@ -24,7 +23,6 @@ func TestDoVoting_NoChangeNoTx(t *testing.T) {
 	assert.Nil(t, blob, "no change → no SetFee tx")
 }
 
-// The local target contributes one vote before trusted validations are tallied.
 func TestDoVoting_TargetSeededAsInitialVote(t *testing.T) {
 	current := Stance{BaseFee: 10, ReserveBase: 10_000_000, ReserveIncrement: 2_000_000}
 	target := Stance{BaseFee: 12, ReserveBase: 15_000_000, ReserveIncrement: 3_000_000}
@@ -40,7 +38,6 @@ func TestDoVoting_TargetSeededAsInitialVote(t *testing.T) {
 	assert.Equal(t, "3000000", stx["ReserveIncrementDrops"])
 }
 
-// Votes outside the inclusive current-to-target window cannot be selected.
 func TestDoVoting_VoteOutsideWindowIgnored(t *testing.T) {
 	current := Stance{BaseFee: 10, ReserveBase: 10_000_000, ReserveIncrement: 2_000_000}
 	target := Stance{BaseFee: 12, ReserveBase: 11_000_000, ReserveIncrement: 2_500_000}
@@ -86,7 +83,6 @@ func TestDoVoting_DescendingWindow(t *testing.T) {
 	assert.Equal(t, "15", decodeTx(t, blob)["BaseFeeDrops"])
 }
 
-// An absent field counts toward current without affecting the other fields.
 func TestDoVoting_NoVoteCountsAsCurrent(t *testing.T) {
 	current := Stance{BaseFee: 10, ReserveBase: 10_000_000, ReserveIncrement: 2_000_000}
 	target := Stance{BaseFee: 12, ReserveBase: 11_000_000, ReserveIncrement: 2_500_000}
@@ -112,7 +108,6 @@ func TestDoVoting_NoVoteCountsAsCurrent(t *testing.T) {
 	assert.Equal(t, "2500000", stx["ReserveIncrementDrops"])
 }
 
-// Values outside the legal signed XRP range count toward current.
 func TestDoVoting_OutOfRangeIsNoVote(t *testing.T) {
 	current := Stance{BaseFee: 10, ReserveBase: 10_000_000, ReserveIncrement: 2_000_000}
 	target := Stance{BaseFee: 12, ReserveBase: 11_000_000, ReserveIncrement: 2_500_000}
@@ -153,7 +148,6 @@ func TestApplyVote_SignedBoundaries(t *testing.T) {
 	assert.Equal(t, 2, v.noVotes)
 }
 
-// The legacy SetFee form carries the unsigned fields and reference fee units.
 func TestDoVoting_PreXRPFeesWireFormat(t *testing.T) {
 	current := Stance{BaseFee: 10, ReserveBase: 10_000_000, ReserveIncrement: 2_000_000}
 	target := Stance{BaseFee: 16, ReserveBase: 12_000_000, ReserveIncrement: 3_000_000}
@@ -177,7 +171,6 @@ func TestDoVoting_PreXRPFeesWireFormat(t *testing.T) {
 	assert.False(t, hasModern, "pre-XRPFees must not carry sfBaseFeeDrops")
 }
 
-// A SetFee transaction carries all three values when any one changes.
 func TestDoVoting_TxCarriesAllThreeOnPartialChange(t *testing.T) {
 	current := Stance{BaseFee: 10, ReserveBase: 10_000_000, ReserveIncrement: 2_000_000}
 	target := Stance{
@@ -197,7 +190,6 @@ func TestDoVoting_TxCarriesAllThreeOnPartialChange(t *testing.T) {
 	assert.Equal(t, strconv.FormatUint(current.ReserveIncrement, 10), stx["ReserveIncrementDrops"])
 }
 
-// The SetFee transaction carries the upcoming flag-ledger sequence.
 func TestDoVoting_LedgerSequenceIsUpcoming(t *testing.T) {
 	current := Stance{BaseFee: 10}
 	target := Stance{BaseFee: 12}
@@ -209,7 +201,6 @@ func TestDoVoting_LedgerSequenceIsUpcoming(t *testing.T) {
 	assert.EqualValues(t, 99999, asUint(stx["LedgerSequence"]))
 }
 
-// The most-voted value inside the window wins.
 func TestVotableValue_PicksHighestCountWithinWindow(t *testing.T) {
 	v := newVotableValue(10, 14) // window = [10, 14]
 	v.addVote(11)
@@ -220,7 +211,6 @@ func TestVotableValue_PicksHighestCountWithinWindow(t *testing.T) {
 	assert.EqualValues(t, 11, chosen, "11 has 2 votes, beats 13 (1) and seed-target 14 (1)")
 }
 
-// Equal-weight values use the lowest numeric value deterministically.
 func TestVotableValue_TieBreakLowestKeyWins(t *testing.T) {
 	for i := range 64 {
 		v := newVotableValue(10, 14) // window = [10, 14], seeds voteMap[14]=1
@@ -253,7 +243,6 @@ func TestVotableValue_SignedTieBreak(t *testing.T) {
 	assert.EqualValues(t, 12, chosen)
 }
 
-// Pseudo-transactions require an explicitly empty SigningPubKey field.
 func TestBuildSetFeeTx_EmitsEmptySigningPubKey(t *testing.T) {
 	current := Stance{BaseFee: 10, ReserveBase: 10_000_000, ReserveIncrement: 2_000_000}
 	target := Stance{BaseFee: 12, ReserveBase: 11_000_000, ReserveIncrement: 2_500_000}
@@ -279,7 +268,6 @@ func TestBuildSetFeeTx_EmitsEmptySigningPubKey(t *testing.T) {
 	}
 }
 
-// Pseudo-transactions omit the optional Flags field instead of encoding zero.
 func TestBuildSetFeeTx_OmitsFlags(t *testing.T) {
 	current := Stance{BaseFee: 10, ReserveBase: 10_000_000, ReserveIncrement: 2_000_000}
 	target := Stance{BaseFee: 12, ReserveBase: 11_000_000, ReserveIncrement: 2_500_000}
@@ -300,7 +288,6 @@ func TestBuildSetFeeTx_OmitsFlags(t *testing.T) {
 	}
 }
 
-// An overflowing chosen legacy reserve falls back to the current value.
 func TestBuildSetFeeTx_PreXRPFeesReserveOverflowFallsBackToCurrent(t *testing.T) {
 	overflow := uint64(1) << 33 // > UINT32_MAX
 	current := Stance{BaseFee: 10, ReserveBase: 10_000_000, ReserveIncrement: 2_000_000}
