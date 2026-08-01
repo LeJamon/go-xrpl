@@ -779,6 +779,48 @@ func TestSimulationSignaturesRejectMutation(t *testing.T) {
 	if err := target.VerifyValidation(validation); err == nil {
 		t.Fatal("mutated validation signature verified")
 	}
+
+	feeVoteMutations := []struct {
+		name   string
+		mutate func(*consensus.Validation)
+	}{
+		{
+			name: "legacy explicit zero",
+			mutate: func(validation *consensus.Validation) {
+				validation.SetBaseFee(0)
+			},
+		},
+		{
+			name: "native explicit zero",
+			mutate: func(validation *consensus.Validation) {
+				validation.SetBaseFeeDrops(0)
+			},
+		},
+		{
+			name: "non-native amount",
+			mutate: func(validation *consensus.Validation) {
+				validation.SetBaseFeeDropsNonNative()
+			},
+		},
+	}
+	for _, test := range feeVoteMutations {
+		t.Run(test.name, func(t *testing.T) {
+			validation := &consensus.Validation{
+				LedgerID:  source.PrevLedgerID(),
+				LedgerSeq: 1,
+				SignTime:  time.Unix(1, 0),
+				SeenTime:  time.Unix(1, 0),
+				Full:      true,
+			}
+			if err := source.SignValidation(validation); err != nil {
+				t.Fatalf("sign validation: %v", err)
+			}
+			test.mutate(validation)
+			if err := target.VerifyValidation(validation); err == nil {
+				t.Fatal("mutated fee vote signature verified")
+			}
+		})
+	}
 }
 
 func TestSimDeterministic(t *testing.T) {

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 
+	"github.com/LeJamon/go-xrpl/drops"
 	"github.com/LeJamon/go-xrpl/internal/consensus"
 )
 
@@ -160,13 +161,13 @@ func parseSTValidation(data []byte) (*consensus.Validation, error) {
 			v.SetLoadFee(binary.BigEndian.Uint32(fieldData))
 
 		case typeCode == typeUINT32 && fieldCode == fieldReserveBase:
-			v.ReserveBase = binary.BigEndian.Uint32(fieldData)
+			v.SetReserveBase(binary.BigEndian.Uint32(fieldData))
 
 		case typeCode == typeUINT32 && fieldCode == fieldReserveInc:
-			v.ReserveIncrement = binary.BigEndian.Uint32(fieldData)
+			v.SetReserveIncrement(binary.BigEndian.Uint32(fieldData))
 
 		case typeCode == typeUINT64 && fieldCode == fieldBaseFee:
-			v.BaseFee = binary.BigEndian.Uint64(fieldData)
+			v.SetBaseFee(binary.BigEndian.Uint64(fieldData))
 
 		case typeCode == typeUINT64 && fieldCode == fieldCookie:
 			v.Cookie = binary.BigEndian.Uint64(fieldData)
@@ -176,17 +177,23 @@ func parseSTValidation(data []byte) (*consensus.Validation, error) {
 
 		case typeCode == typeAmount && fieldCode == fieldBaseFeeDrops:
 			if amt, ok := parseXRPAmount(fieldData); ok {
-				v.BaseFeeDrops = amt
+				v.SetBaseFeeDrops(amt)
+			} else {
+				v.SetBaseFeeDropsNonNative()
 			}
 
 		case typeCode == typeAmount && fieldCode == fieldReserveBaseDrops:
 			if amt, ok := parseXRPAmount(fieldData); ok {
-				v.ReserveBaseDrops = amt
+				v.SetReserveBaseDrops(amt)
+			} else {
+				v.SetReserveBaseDropsNonNative()
 			}
 
 		case typeCode == typeAmount && fieldCode == fieldReserveIncrementDrops:
 			if amt, ok := parseXRPAmount(fieldData); ok {
-				v.ReserveIncrementDrops = amt
+				v.SetReserveIncrementDrops(amt)
+			} else {
+				v.SetReserveIncrementDropsNonNative()
 			}
 
 		case typeCode == typeHash256 && fieldCode == fieldLedgerHash:
@@ -291,13 +298,13 @@ func SerializeSTValidation(v *consensus.Validation) []byte {
 
 	// sfReserveBase (field 31) — optional flag-ledger fee vote (legacy
 	// pre-XRPFees form).
-	if v.ReserveBase != 0 {
+	if v.HasReserveBase() {
 		buf = appendFieldHeader(buf, typeUINT32, fieldReserveBase)
 		buf = binary.BigEndian.AppendUint32(buf, v.ReserveBase)
 	}
 
 	// sfReserveIncrement (field 32) — optional flag-ledger fee vote.
-	if v.ReserveIncrement != 0 {
+	if v.HasReserveIncrement() {
 		buf = appendFieldHeader(buf, typeUINT32, fieldReserveInc)
 		buf = binary.BigEndian.AppendUint32(buf, v.ReserveIncrement)
 	}
@@ -306,7 +313,7 @@ func SerializeSTValidation(v *consensus.Validation) []byte {
 
 	// sfBaseFee (field 5) — optional flag-ledger fee vote (legacy
 	// pre-XRPFees form).
-	if v.BaseFee != 0 {
+	if v.HasBaseFee() {
 		buf = appendFieldHeader(buf, typeUINT64, fieldBaseFee)
 		buf = binary.BigEndian.AppendUint64(buf, v.BaseFee)
 	}
@@ -356,26 +363,17 @@ func SerializeSTValidation(v *consensus.Validation) []byte {
 	// --- Amount fields (type 6) ---
 	// Emitted AFTER Hash256 per canonical ordering. See note above.
 
-	// Post-featureXRPFees fee-voting fields, used once featureXRPFees is
-	// enabled. Encoded as 8-byte XRP amounts with the native
-	// (high-bit-clear) flag. The adaptor is responsible for populating
-	// these mutually-exclusively with the legacy
-	// sfBaseFee/sfReserveBase/sfReserveIncrement triple based on whether
-	// the parent ledger enables featureXRPFees. The non-zero gate here
-	// is defense-in-depth: a bug in the population layer produces a
-	// MISSING field (rejected by the parser's field presence check),
-	// not a DOUBLE field (which would parse but diverge semantically).
-	if v.BaseFeeDrops != 0 {
+	if amount, ok := v.BaseFeeDropsVote(); ok {
 		buf = appendFieldHeader(buf, typeAmount, fieldBaseFeeDrops)
-		buf = appendXRPAmount(buf, v.BaseFeeDrops)
+		buf = appendXRPAmount(buf, amount)
 	}
-	if v.ReserveBaseDrops != 0 {
+	if amount, ok := v.ReserveBaseDropsVote(); ok {
 		buf = appendFieldHeader(buf, typeAmount, fieldReserveBaseDrops)
-		buf = appendXRPAmount(buf, v.ReserveBaseDrops)
+		buf = appendXRPAmount(buf, amount)
 	}
-	if v.ReserveIncrementDrops != 0 {
+	if amount, ok := v.ReserveIncrementDropsVote(); ok {
 		buf = appendFieldHeader(buf, typeAmount, fieldReserveIncrementDrops)
-		buf = appendXRPAmount(buf, v.ReserveIncrementDrops)
+		buf = appendXRPAmount(buf, amount)
 	}
 
 	// --- Blob/VL fields (type 7) ---
@@ -508,40 +506,22 @@ func advanceFixed(data []byte, pos *int, n int) (int, error) {
 }
 
 // skipAmount determines the length of an Amount field.
-// Bit 63 (0x80 in byte 0) is the "not XRP" flag:
-//   - Clear: XRP amount, always 8 bytes.
-//   - Set:   IOU amount — 48 bytes (8 value + 20 currency + 20 issuer),
-//     UNLESS it's the canonical zero IOU (0x8000000000000000), which is 8 bytes.
 func skipAmount(data []byte, pos *int) (int, error) {
 	if *pos+8 > len(data) {
 		return 0, errShortData
 	}
-	isNotXRP := (data[*pos] & 0x80) != 0
-	if !isNotXRP {
-		// XRP amount: always 8 bytes.
-		*pos += 8
-		return 8, nil
+
+	if data[*pos]&0x80 != 0 {
+		return advanceFixed(data, pos, 48)
 	}
-	// IOU: check for canonical zero (exactly 0x8000000000000000).
-	isZero := data[*pos] == 0x80
-	if isZero {
-		for i := 1; i < 8; i++ {
-			if data[*pos+i] != 0 {
-				isZero = false
-				break
-			}
-		}
+	if data[*pos]&0x20 != 0 {
+		return advanceFixed(data, pos, 33)
 	}
-	if isZero {
-		*pos += 8
-		return 8, nil
+
+	if binary.BigEndian.Uint64(data[*pos:*pos+8]) == 0 {
+		return 0, errors.New("negative zero is not canonical")
 	}
-	// Non-zero IOU: 8 (value) + 20 (currency) + 20 (issuer).
-	if *pos+48 > len(data) {
-		return 0, errShortData
-	}
-	*pos += 48
-	return 48, nil
+	return advanceFixed(data, pos, 8)
 }
 
 // skipVL reads a variable-length prefix and advances past the data.
@@ -622,34 +602,34 @@ func appendFieldHeader(buf []byte, typeCode, fieldCode int) []byte {
 	return append(buf, 0, byte(typeCode), byte(fieldCode))
 }
 
-// parseXRPAmount decodes an 8-byte native XRPL Amount into a drops
-// value. Returns (_, false) if the "not XRP" flag is set (i.e. an IOU)
-// — fee-vote fields are always native, so an IOU here indicates a
-// malformed validation and is dropped silently.
-func parseXRPAmount(data []byte) (uint64, bool) {
+// parseXRPAmount decodes an 8-byte native XRPL Amount.
+func parseXRPAmount(data []byte) (drops.XRPAmount, bool) {
 	if len(data) != 8 {
 		return 0, false
 	}
 	raw := binary.BigEndian.Uint64(data)
-	if raw&(1<<63) != 0 {
-		return 0, false // IOU form — not expected for fee-vote fields.
+	if raw == 0 || raw&(1<<63) != 0 || raw&(1<<61) != 0 {
+		return 0, false
 	}
-	// Strip the positive-sign bit; remaining 62 bits carry drops.
-	return raw &^ (1 << 62), true
+	magnitude := int64(raw &^ (1 << 62))
+	if raw&(1<<62) == 0 {
+		magnitude = -magnitude
+	}
+	return drops.XRPAmount(magnitude), true
 }
 
-// appendXRPAmount appends an XRPL-encoded native Amount (8 bytes).
-// Encoding: bit 63 = "not XRP" flag (clear for XRP), bit 62 = sign bit
-// (always set for positive / non-negative), lower bits carry the drops
-// value. Used to emit the post-featureXRPFees fee-vote fields
-// (sfBaseFeeDrops, sfReserveBaseDrops, sfReserveIncrementDrops) which
-// are AMOUNT-typed.
-func appendXRPAmount(buf []byte, drops uint64) []byte {
-	// High bit clear = XRP; second-highest bit set = positive.
-	// drops must fit in 62 bits, which is enforced by the XRPL total
-	// drops invariant (< 100 billion XRP × 10^6 drops/XRP).
+// appendXRPAmount appends an XRPL-encoded native Amount.
+func appendXRPAmount(buf []byte, amount drops.XRPAmount) []byte {
+	value := amount.Drops()
+	var magnitude uint64
+	if value < 0 {
+		magnitude = uint64(-(value + 1))
+		magnitude++
+	} else {
+		magnitude = uint64(value) | 1<<62
+	}
 	var encoded [8]byte
-	binary.BigEndian.PutUint64(encoded[:], drops|(1<<62))
+	binary.BigEndian.PutUint64(encoded[:], magnitude)
 	return append(buf, encoded[:]...)
 }
 

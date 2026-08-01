@@ -194,18 +194,38 @@ func TestAdg_GetFeeVote(t *testing.T) {
 		ReserveIncrement: 500_000,
 	}, nil)
 
-	fv := a.GetFeeVote()
+	fv := a.GetFeeVote(nil)
 	assert.Equal(t, uint64(42), fv.BaseFee)
 	assert.Equal(t, uint64(1_000_000), fv.ReserveBase)
 	assert.Equal(t, uint64(500_000), fv.ReserveIncrement)
+	assert.True(t, fv.HasBaseFee())
+	assert.True(t, fv.HasReserveBase())
+	assert.True(t, fv.HasReserveIncrement())
 
 	// Default zero config falls back to rippled defaults.
 	a2 := newTestAdaptorWithConfig(t, FeeVoteStance{}, nil)
-	fv2 := a2.GetFeeVote()
+	fv2 := a2.GetFeeVote(nil)
 	d := defaultFeeVote()
 	assert.Equal(t, d.BaseFee, fv2.BaseFee)
 	assert.Equal(t, uint64(d.ReserveBase), fv2.ReserveBase)
 	assert.Equal(t, uint64(d.ReserveIncrement), fv2.ReserveIncrement)
+
+	explicitZero := newTestAdaptorWithConfig(t, FeeVoteStance{
+		BaseFeeSet:          true,
+		ReserveBaseSet:      true,
+		ReserveIncrementSet: true,
+	}, nil).GetFeeVote(nil)
+	assert.Zero(t, explicitZero.BaseFee)
+	assert.Zero(t, explicitZero.ReserveBase)
+	assert.Zero(t, explicitZero.ReserveIncrement)
+	assert.True(t, explicitZero.HasBaseFee())
+	assert.True(t, explicitZero.HasReserveBase())
+	assert.True(t, explicitZero.HasReserveIncrement())
+
+	current := a2.GetFeeVote(WrapLedger(a2.ledgerService.GetClosedLedger()))
+	assert.False(t, current.HasBaseFee())
+	assert.False(t, current.HasReserveBase())
+	assert.False(t, current.HasReserveIncrement())
 }
 
 func TestAdg_GetAmendmentVote(t *testing.T) {

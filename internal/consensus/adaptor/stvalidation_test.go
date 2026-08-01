@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/LeJamon/go-xrpl/drops"
 	"github.com/LeJamon/go-xrpl/internal/consensus"
 	"github.com/LeJamon/go-xrpl/internal/peermanagement/message"
 	"github.com/LeJamon/go-xrpl/protocol"
@@ -94,6 +95,189 @@ func TestSTValidation_LoadFeePresenceRoundTrip(t *testing.T) {
 			assert.Equal(t, test.wantFee, parsed.LoadFee)
 		})
 	}
+}
+
+func TestSTValidation_LegacyExplicitZeroFeeVotesRoundTrip(t *testing.T) {
+	tests := []struct {
+		name string
+		set  func(*consensus.Validation)
+		has  func(*consensus.Validation) bool
+		get  func(*consensus.Validation) uint64
+	}{
+		{
+			name: "BaseFee",
+			set:  func(v *consensus.Validation) { v.SetBaseFee(0) },
+			has:  (*consensus.Validation).HasBaseFee,
+			get:  func(v *consensus.Validation) uint64 { return v.BaseFee },
+		},
+		{
+			name: "ReserveBase",
+			set:  func(v *consensus.Validation) { v.SetReserveBase(0) },
+			has:  (*consensus.Validation).HasReserveBase,
+			get:  func(v *consensus.Validation) uint64 { return uint64(v.ReserveBase) },
+		},
+		{
+			name: "ReserveIncrement",
+			set:  func(v *consensus.Validation) { v.SetReserveIncrement(0) },
+			has:  (*consensus.Validation).HasReserveIncrement,
+			get:  func(v *consensus.Validation) uint64 { return uint64(v.ReserveIncrement) },
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			validation := buildTestValidation()
+			test.set(validation)
+
+			parsed, err := parseSTValidation(SerializeSTValidation(validation))
+			require.NoError(t, err)
+			assert.True(t, test.has(parsed))
+			assert.Zero(t, test.get(parsed))
+		})
+	}
+}
+
+func TestSTValidation_ModernExplicitZeroFeeVotesRoundTrip(t *testing.T) {
+	tests := []struct {
+		name string
+		set  func(*consensus.Validation)
+		has  func(*consensus.Validation) bool
+		vote func(*consensus.Validation) (drops.XRPAmount, bool)
+	}{
+		{
+			name: "BaseFeeDrops",
+			set:  func(v *consensus.Validation) { v.SetBaseFeeDrops(0) },
+			has:  (*consensus.Validation).HasBaseFeeDrops,
+			vote: (*consensus.Validation).BaseFeeDropsVote,
+		},
+		{
+			name: "ReserveBaseDrops",
+			set:  func(v *consensus.Validation) { v.SetReserveBaseDrops(0) },
+			has:  (*consensus.Validation).HasReserveBaseDrops,
+			vote: (*consensus.Validation).ReserveBaseDropsVote,
+		},
+		{
+			name: "ReserveIncrementDrops",
+			set:  func(v *consensus.Validation) { v.SetReserveIncrementDrops(0) },
+			has:  (*consensus.Validation).HasReserveIncrementDrops,
+			vote: (*consensus.Validation).ReserveIncrementDropsVote,
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			validation := buildTestValidation()
+			test.set(validation)
+
+			parsed, err := parseSTValidation(SerializeSTValidation(validation))
+			require.NoError(t, err)
+			assert.True(t, test.has(parsed))
+			value, ok := test.vote(parsed)
+			assert.True(t, ok)
+			assert.Zero(t, value)
+		})
+	}
+}
+
+func TestXRPAmount_SignedFeeVoteRoundTrip(t *testing.T) {
+	for _, value := range []drops.XRPAmount{-drops.MaxDrops, 0, drops.MaxDrops} {
+		t.Run(value.String(), func(t *testing.T) {
+			validation := buildTestValidation()
+			validation.SetBaseFeeDrops(value)
+
+			parsed, err := parseSTValidation(SerializeSTValidation(validation))
+			require.NoError(t, err)
+			require.True(t, parsed.HasBaseFeeDrops())
+			got, ok := parsed.BaseFeeDropsVote()
+			require.True(t, ok)
+			assert.Equal(t, value, got)
+		})
+	}
+}
+
+func TestSTValidation_NonNativeFeeVotePresence(t *testing.T) {
+	absent, err := parseSTValidation(SerializeSTValidation(buildTestValidation()))
+	require.NoError(t, err)
+
+	assert.False(t, absent.HasBaseFeeDrops())
+	_, absentNative := absent.BaseFeeDropsVote()
+	assert.False(t, absentNative)
+
+	tests := []struct {
+		name   string
+		amount []byte
+	}{
+		{name: "issued zero", amount: testIssuedZeroAmount()},
+		{name: "MPT", amount: testMPTAmount()},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			nonNative, err := parseValidationWithBaseFeeDropsAmount(t, test.amount)
+			require.NoError(t, err)
+			assert.True(t, nonNative.HasBaseFeeDrops())
+			_, native := nonNative.BaseFeeDropsVote()
+			assert.False(t, native)
+		})
+	}
+}
+
+func TestSTValidation_NativeNegativeZeroRejected(t *testing.T) {
+	_, err := parseValidationWithBaseFeeDropsAmount(t, make([]byte, 8))
+	require.ErrorContains(t, err, "negative zero is not canonical")
+}
+
+func parseValidationWithBaseFeeDropsIOU(t *testing.T) *consensus.Validation {
+	t.Helper()
+
+	parsed, err := parseValidationWithBaseFeeDropsAmount(t, testIssuedZeroAmount())
+	require.NoError(t, err)
+	return parsed
+}
+
+func parseValidationWithBaseFeeDropsAmount(
+	t *testing.T,
+	amount []byte,
+) (*consensus.Validation, error) {
+	t.Helper()
+
+	blob := SerializeSTValidation(buildTestValidation())
+	insertPos := len(blob)
+	for pos := 0; pos < len(blob); {
+		fieldStart := pos
+		typeCode, fieldCode, err := readFieldHeader(blob, &pos)
+		require.NoError(t, err)
+		if typeCode > typeAmount || (typeCode == typeAmount && fieldCode > fieldBaseFeeDrops) {
+			insertPos = fieldStart
+			break
+		}
+		_, err = skipFieldData(typeCode, blob, &pos)
+		require.NoError(t, err)
+	}
+
+	field := appendFieldHeader(nil, typeAmount, fieldBaseFeeDrops)
+	field = append(field, amount...)
+	wire := make([]byte, 0, len(blob)+len(field))
+	wire = append(wire, blob[:insertPos]...)
+	wire = append(wire, field...)
+	wire = append(wire, blob[insertPos:]...)
+
+	return parseSTValidation(wire)
+}
+
+func testIssuedZeroAmount() []byte {
+	amount := make([]byte, 48)
+	amount[0] = 0x80
+	copy(amount[20:23], "USD")
+	amount[47] = 1
+	return amount
+}
+
+func testMPTAmount() []byte {
+	amount := make([]byte, 33)
+	amount[0] = 0x60
+	amount[8] = 1
+	amount[32] = 1
+	return amount
 }
 
 func TestParseSTValidation_PopulatesRaw(t *testing.T) {

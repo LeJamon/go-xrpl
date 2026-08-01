@@ -5,6 +5,8 @@ package consensus
 
 import (
 	"time"
+
+	"github.com/LeJamon/go-xrpl/drops"
 )
 
 // Mode represents the current consensus operating mode.
@@ -284,12 +286,8 @@ type Validation struct {
 	// on.
 	Amendments [][32]byte
 
-	// Fee-voting fields. Rippled emits these on flag ledgers via
-	// FeeVote::doValidation (RCLConsensus.cpp:882-883). Pre-XRPFees
-	// amendment nodes emit the UINT32/UINT64 legacy forms; post-
-	// XRPFees they emit the AMOUNT "Drops" variants. We model both
-	// sets; the adaptor populates whichever is appropriate for the
-	// parent ledger's amendment set. Zero values mean "not emitted".
+	// Fee-voting fields. Pre-XRPFees validations use the unsigned legacy
+	// forms; post-XRPFees validations use signed native Amounts.
 
 	// BaseFee is sfBaseFee (UINT64 field 5, legacy drops).
 	BaseFee uint64
@@ -300,12 +298,14 @@ type Validation struct {
 	ReserveIncrement uint32
 
 	// BaseFeeDrops is sfBaseFeeDrops (AMOUNT field 22, post-XRPFees).
-	// XRP-denominated drops amount encoded as an Amount.
-	BaseFeeDrops uint64
+	BaseFeeDrops drops.XRPAmount
 	// ReserveBaseDrops is sfReserveBaseDrops (AMOUNT field 23).
-	ReserveBaseDrops uint64
+	ReserveBaseDrops drops.XRPAmount
 	// ReserveIncrementDrops is sfReserveIncrementDrops (AMOUNT field 24).
-	ReserveIncrementDrops uint64
+	ReserveIncrementDrops drops.XRPAmount
+
+	feeVotePresent uint8
+	feeVoteNative  uint8
 
 	// SigningData holds the canonical serialized fields (excluding
 	// sfSignature, but INCLUDING sfSigningPubKey) for signature
@@ -341,6 +341,134 @@ func (v *Validation) SetLoadFee(fee uint32) {
 // a legacy non-zero struct literal.
 func (v *Validation) HasLoadFee() bool {
 	return v != nil && (v.loadFeePresent || v.LoadFee != 0)
+}
+
+const (
+	feeVoteBase uint8 = 1 << iota
+	feeVoteReserveBase
+	feeVoteReserveIncrement
+	feeVoteBaseDrops
+	feeVoteReserveBaseDrops
+	feeVoteReserveIncrementDrops
+)
+
+// SetBaseFee records sfBaseFee as present, including when it is zero.
+func (v *Validation) SetBaseFee(value uint64) {
+	v.BaseFee = value
+	v.feeVotePresent |= feeVoteBase
+}
+
+// HasBaseFee reports whether sfBaseFee is present.
+func (v *Validation) HasBaseFee() bool {
+	return v != nil && (v.feeVotePresent&feeVoteBase != 0 || v.BaseFee != 0)
+}
+
+// SetReserveBase records sfReserveBase as present, including when it is zero.
+func (v *Validation) SetReserveBase(value uint32) {
+	v.ReserveBase = value
+	v.feeVotePresent |= feeVoteReserveBase
+}
+
+// HasReserveBase reports whether sfReserveBase is present.
+func (v *Validation) HasReserveBase() bool {
+	return v != nil && (v.feeVotePresent&feeVoteReserveBase != 0 || v.ReserveBase != 0)
+}
+
+// SetReserveIncrement records sfReserveIncrement as present, including when it is zero.
+func (v *Validation) SetReserveIncrement(value uint32) {
+	v.ReserveIncrement = value
+	v.feeVotePresent |= feeVoteReserveIncrement
+}
+
+// HasReserveIncrement reports whether sfReserveIncrement is present.
+func (v *Validation) HasReserveIncrement() bool {
+	return v != nil && (v.feeVotePresent&feeVoteReserveIncrement != 0 || v.ReserveIncrement != 0)
+}
+
+// SetBaseFeeDrops records a native sfBaseFeeDrops value as present.
+func (v *Validation) SetBaseFeeDrops(value drops.XRPAmount) {
+	v.BaseFeeDrops = value
+	v.feeVotePresent |= feeVoteBaseDrops
+	v.feeVoteNative |= feeVoteBaseDrops
+}
+
+// SetBaseFeeDropsNonNative records a present non-native sfBaseFeeDrops value.
+func (v *Validation) SetBaseFeeDropsNonNative() {
+	v.BaseFeeDrops = 0
+	v.feeVotePresent |= feeVoteBaseDrops
+	v.feeVoteNative &^= feeVoteBaseDrops
+}
+
+// BaseFeeDropsVote returns the native vote and whether the field is present and native.
+func (v *Validation) BaseFeeDropsVote() (drops.XRPAmount, bool) {
+	return v.nativeFeeVote(feeVoteBaseDrops, v.BaseFeeDrops)
+}
+
+// HasBaseFeeDrops reports whether sfBaseFeeDrops is present.
+func (v *Validation) HasBaseFeeDrops() bool {
+	return v != nil && (v.feeVotePresent&feeVoteBaseDrops != 0 || v.BaseFeeDrops != 0)
+}
+
+// SetReserveBaseDrops records a native sfReserveBaseDrops value as present.
+func (v *Validation) SetReserveBaseDrops(value drops.XRPAmount) {
+	v.ReserveBaseDrops = value
+	v.feeVotePresent |= feeVoteReserveBaseDrops
+	v.feeVoteNative |= feeVoteReserveBaseDrops
+}
+
+// SetReserveBaseDropsNonNative records a present non-native sfReserveBaseDrops value.
+func (v *Validation) SetReserveBaseDropsNonNative() {
+	v.ReserveBaseDrops = 0
+	v.feeVotePresent |= feeVoteReserveBaseDrops
+	v.feeVoteNative &^= feeVoteReserveBaseDrops
+}
+
+// ReserveBaseDropsVote returns the native vote and whether the field is present and native.
+func (v *Validation) ReserveBaseDropsVote() (drops.XRPAmount, bool) {
+	return v.nativeFeeVote(feeVoteReserveBaseDrops, v.ReserveBaseDrops)
+}
+
+// HasReserveBaseDrops reports whether sfReserveBaseDrops is present.
+func (v *Validation) HasReserveBaseDrops() bool {
+	return v != nil && (v.feeVotePresent&feeVoteReserveBaseDrops != 0 || v.ReserveBaseDrops != 0)
+}
+
+// SetReserveIncrementDrops records a native sfReserveIncrementDrops value as present.
+func (v *Validation) SetReserveIncrementDrops(value drops.XRPAmount) {
+	v.ReserveIncrementDrops = value
+	v.feeVotePresent |= feeVoteReserveIncrementDrops
+	v.feeVoteNative |= feeVoteReserveIncrementDrops
+}
+
+// SetReserveIncrementDropsNonNative records a present non-native sfReserveIncrementDrops value.
+func (v *Validation) SetReserveIncrementDropsNonNative() {
+	v.ReserveIncrementDrops = 0
+	v.feeVotePresent |= feeVoteReserveIncrementDrops
+	v.feeVoteNative &^= feeVoteReserveIncrementDrops
+}
+
+// ReserveIncrementDropsVote returns the native vote and whether the field is present and native.
+func (v *Validation) ReserveIncrementDropsVote() (drops.XRPAmount, bool) {
+	return v.nativeFeeVote(feeVoteReserveIncrementDrops, v.ReserveIncrementDrops)
+}
+
+// HasReserveIncrementDrops reports whether sfReserveIncrementDrops is present.
+func (v *Validation) HasReserveIncrementDrops() bool {
+	return v != nil && (v.feeVotePresent&feeVoteReserveIncrementDrops != 0 || v.ReserveIncrementDrops != 0)
+}
+
+func (v *Validation) nativeFeeVote(field uint8, value drops.XRPAmount) (drops.XRPAmount, bool) {
+	if v == nil || !v.hasNativeFeeVote(field, value) {
+		return 0, false
+	}
+	return value, true
+}
+
+func (v *Validation) hasNativeFeeVote(field uint8, value drops.XRPAmount) bool {
+	if v.feeVotePresent&field == 0 {
+		return value != 0
+	}
+	return v.feeVoteNative&field != 0
 }
 
 // ByzantineValidationError reports a validation that conflicts with one

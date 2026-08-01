@@ -6,6 +6,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/LeJamon/go-xrpl/drops"
 	"github.com/LeJamon/go-xrpl/internal/consensus"
 	"github.com/LeJamon/go-xrpl/protocol"
 )
@@ -648,17 +649,27 @@ func (e *Engine) sendValidation(ledger consensus.Ledger) {
 	// Fee + amendment votes only on voting (flag) ledgers; emitting every
 	// ledger inflates bandwidth ~256× and confuses peer aggregators.
 	if protocol.IsVotingLedger(ledger.Seq()) {
-		// Fee vote: AMOUNT triple under post-XRPFees rules, legacy UINT triple
-		// otherwise (never both). Zero = no vote, serializer omits.
-		if fv := e.adaptor.GetFeeVote(); fv.BaseFee != 0 || fv.ReserveBase != 0 || fv.ReserveIncrement != 0 {
+		if fv := e.adaptor.GetFeeVote(ledger); fv.HasBaseFee() || fv.HasReserveBase() || fv.HasReserveIncrement() {
 			if fv.PostXRPFees {
-				validation.BaseFeeDrops = fv.BaseFee
-				validation.ReserveBaseDrops = fv.ReserveBase
-				validation.ReserveIncrementDrops = fv.ReserveIncrement
+				if fv.HasBaseFee() {
+					validation.SetBaseFeeDrops(drops.XRPAmount(fv.BaseFee))
+				}
+				if fv.HasReserveBase() {
+					validation.SetReserveBaseDrops(drops.XRPAmount(fv.ReserveBase))
+				}
+				if fv.HasReserveIncrement() {
+					validation.SetReserveIncrementDrops(drops.XRPAmount(fv.ReserveIncrement))
+				}
 			} else {
-				validation.BaseFee = fv.BaseFee
-				validation.ReserveBase = uint32(fv.ReserveBase)
-				validation.ReserveIncrement = uint32(fv.ReserveIncrement)
+				if fv.HasBaseFee() {
+					validation.SetBaseFee(fv.BaseFee)
+				}
+				if fv.HasReserveBase() {
+					validation.SetReserveBase(uint32(fv.ReserveBase))
+				}
+				if fv.HasReserveIncrement() {
+					validation.SetReserveIncrement(uint32(fv.ReserveIncrement))
+				}
 			}
 		}
 

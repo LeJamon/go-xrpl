@@ -2,9 +2,11 @@ package adaptor
 
 import (
 	"maps"
+	"math"
 	"time"
 
 	"github.com/LeJamon/go-xrpl/amendment"
+	"github.com/LeJamon/go-xrpl/drops"
 	"github.com/LeJamon/go-xrpl/internal/consensus"
 	"github.com/LeJamon/go-xrpl/internal/consensus/amendmentvote"
 	"github.com/LeJamon/go-xrpl/internal/consensus/feevote"
@@ -130,14 +132,6 @@ func (a *Adaptor) runFeeVote(
 		}
 	}
 
-	// Local target stance from the operator config. Each field is
-	// guaranteed non-zero here — adaptor.New() substituted the
-	// default fee setup for any field the operator left unset. We
-	// deliberately do NOT fall back to `current` for zero fields: the
-	// supplied fee setup is taken verbatim and never re-defaulted at
-	// voting time, so an operator who somehow supplied a zero (e.g.
-	// via a bug elsewhere) should produce a zero vote, not silently
-	// inherit the parent ledger's setting.
 	target := feevote.Stance{
 		BaseFee:          a.feeVote.BaseFee,
 		ReserveBase:      uint64(a.feeVote.ReserveBase),
@@ -161,44 +155,35 @@ func (a *Adaptor) runFeeVote(
 	return [][]byte{blob}
 }
 
-// extractFeeVote pulls the relevant fee fields off a validation
-// into a feevote.Vote. The field set depends on whether the
-// XRPFees amendment is enabled on the parent ledger — pre-XRPFees
-// uses sfBaseFee / sfReserveBase / sfReserveIncrement; post-XRPFees
-// uses the *Drops variants. A zero value on the wire means "field
-// not present" (a validation never carries an explicit zero for
-// these fields), which extractFeeVote translates into a nil pointer
-// — feevote.applyVote then routes that to noVote.
+// extractFeeVote reads only the field family active on the parent ledger.
 func extractFeeVote(v *consensus.Validation, xrpFeesEnabled bool) feevote.Vote {
 	var out feevote.Vote
 	if xrpFeesEnabled {
-		if v.BaseFeeDrops != 0 {
-			x := v.BaseFeeDrops
-			out.BaseFee = &x
+		if value, ok := v.BaseFeeDropsVote(); ok {
+			out.BaseFee = voteAmount(value)
 		}
-		if v.ReserveBaseDrops != 0 {
-			x := v.ReserveBaseDrops
-			out.ReserveBase = &x
+		if value, ok := v.ReserveBaseDropsVote(); ok {
+			out.ReserveBase = voteAmount(value)
 		}
-		if v.ReserveIncrementDrops != 0 {
-			x := v.ReserveIncrementDrops
-			out.ReserveIncrement = &x
+		if value, ok := v.ReserveIncrementDropsVote(); ok {
+			out.ReserveIncrement = voteAmount(value)
 		}
 		return out
 	}
-	if v.BaseFee != 0 {
-		x := v.BaseFee
-		out.BaseFee = &x
+	if v.HasBaseFee() && v.BaseFee <= math.MaxInt64 {
+		out.BaseFee = voteAmount(drops.XRPAmount(v.BaseFee))
 	}
-	if v.ReserveBase != 0 {
-		x := uint64(v.ReserveBase)
-		out.ReserveBase = &x
+	if v.HasReserveBase() {
+		out.ReserveBase = voteAmount(drops.XRPAmount(v.ReserveBase))
 	}
-	if v.ReserveIncrement != 0 {
-		x := uint64(v.ReserveIncrement)
-		out.ReserveIncrement = &x
+	if v.HasReserveIncrement() {
+		out.ReserveIncrement = voteAmount(drops.XRPAmount(v.ReserveIncrement))
 	}
 	return out
+}
+
+func voteAmount(value drops.XRPAmount) *drops.XRPAmount {
+	return &value
 }
 
 // runAmendmentVote runs the Table producer against the

@@ -1,5 +1,12 @@
 package config
 
+import (
+	"fmt"
+	"math"
+
+	"github.com/LeJamon/go-xrpl/drops"
+)
+
 // VotingConfig represents the [voting] section: the fee/reserve values
 // this validator votes toward on flag ledgers. The Set fields distinguish an
 // omitted value from an explicitly configured zero.
@@ -14,11 +21,21 @@ type VotingConfig struct {
 
 // Validate performs validation on the voting configuration
 func (v *VotingConfig) Validate() error {
-	if err := validateNonNegative("reference_fee", v.ReferenceFee); err != nil {
+	if err := validateVotingValue("reference_fee", v.ReferenceFee, uint64(drops.MaxDrops)); err != nil {
 		return err
 	}
-	if err := validateNonNegative("account_reserve", v.AccountReserve); err != nil {
+	if err := validateVotingValue("account_reserve", v.AccountReserve, math.MaxUint32); err != nil {
 		return err
 	}
-	return validateNonNegative("owner_reserve", v.OwnerReserve)
+	return validateVotingValue("owner_reserve", v.OwnerReserve, math.MaxUint32)
+}
+
+func validateVotingValue(name string, value int, max uint64) error {
+	if err := validateNonNegative(name, value); err != nil {
+		return err
+	}
+	if uint64(value) > max {
+		return fmt.Errorf("%s must be at most %d, got %d", name, max, value)
+	}
+	return nil
 }

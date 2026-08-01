@@ -1285,7 +1285,7 @@ func (p *Peer) GetLoadFee() uint32 {
 	return 0
 }
 
-func (p *Peer) GetFeeVote() consensus.FeeVoteResult {
+func (p *Peer) GetFeeVote(consensus.Ledger) consensus.FeeVoteResult {
 	return consensus.FeeVoteResult{}
 }
 
@@ -1557,12 +1557,24 @@ func validationSignature(validation *consensus.Validation) []byte {
 	for _, amendment := range validation.Amendments {
 		_, _ = h.Write(amendment[:])
 	}
+	writeBool(h, validation.HasBaseFee())
+	writeBool(h, validation.HasReserveBase())
+	writeBool(h, validation.HasReserveIncrement())
+	_, baseFeeDropsNative := validation.BaseFeeDropsVote()
+	writeBool(h, validation.HasBaseFeeDrops())
+	writeBool(h, baseFeeDropsNative)
+	_, reserveBaseDropsNative := validation.ReserveBaseDropsVote()
+	writeBool(h, validation.HasReserveBaseDrops())
+	writeBool(h, reserveBaseDropsNative)
+	_, reserveIncrementDropsNative := validation.ReserveIncrementDropsVote()
+	writeBool(h, validation.HasReserveIncrementDrops())
+	writeBool(h, reserveIncrementDropsNative)
 	writeUint64(h, validation.BaseFee)
 	writeUint32(h, validation.ReserveBase)
 	writeUint32(h, validation.ReserveIncrement)
-	writeUint64(h, validation.BaseFeeDrops)
-	writeUint64(h, validation.ReserveBaseDrops)
-	writeUint64(h, validation.ReserveIncrementDrops)
+	writeInt64(h, int64(validation.BaseFeeDrops))
+	writeInt64(h, int64(validation.ReserveBaseDrops))
+	writeInt64(h, int64(validation.ReserveIncrementDrops))
 	return h.Sum(nil)
 }
 
@@ -1637,6 +1649,14 @@ func writeUint64(writer io.Writer, value uint64) {
 
 func writeInt64(writer io.Writer, value int64) {
 	writeUint64(writer, uint64(value))
+}
+
+func writeBool(writer io.Writer, value bool) {
+	var blob [1]byte
+	if value {
+		blob[0] = 1
+	}
+	_, _ = writer.Write(blob[:])
 }
 
 var _ consensus.Adaptor = (*Peer)(nil)
