@@ -337,19 +337,21 @@ func TestTxSetAcquire_CleanupReleasesRetainedBytes(t *testing.T) {
 		assert.Zero(t, router.txSetRetainedBytesLocked())
 	})
 
-	t.Run("terminal failure", func(t *testing.T) {
+	t.Run("recoverable failure", func(t *testing.T) {
 		router, _ := newRetryRouter(t)
 		id := resourceTxSetID(1)
 		state := resourceAcquireState(t, 1024)
 		router.txSetAcquire[id] = state
 
-		router.markTxSetDone(id)
+		router.markTxSetFailed(id)
 
 		router.txSetAcquireMu.Lock()
 		defer router.txSetAcquireMu.Unlock()
 		assert.True(t, state.done)
-		assert.Nil(t, state.txMap)
-		assert.Zero(t, router.txSetRetainedBytesLocked())
+		assert.True(t, state.dormant)
+		assert.False(t, state.completed)
+		assert.NotNil(t, state.txMap)
+		assert.Equal(t, int64(1024), router.txSetRetainedBytesLocked())
 	})
 
 	t.Run("ttl sweep", func(t *testing.T) {
