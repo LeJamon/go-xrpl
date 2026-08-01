@@ -487,21 +487,6 @@ func SerializeSTValidation(v *consensus.Validation) []byte {
 	return buf
 }
 
-func outboundValidationFlags(v *consensus.Validation) uint32 {
-	if v.Flags != 0 {
-		return v.Flags
-	}
-	return localValidationFlags(v.Full)
-}
-
-func localValidationFlags(full bool) uint32 {
-	flags := uint32(vfFullyCanonicalSig)
-	if full {
-		flags |= vfFullValidation
-	}
-	return flags
-}
-
 // readFieldHeader reads the XRPL field ID at data[*pos] and advances *pos.
 // Returns (typeCode, fieldCode).
 func readFieldHeader(data []byte, pos *int) (int, int, error) {
