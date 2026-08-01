@@ -6,7 +6,6 @@ import (
 	"github.com/LeJamon/go-xrpl/shamap"
 )
 
-// Snapshot creates an immutable copy of this ledger
 func (l *Ledger) Snapshot() (*Ledger, error) {
 	l.mu.RLock()
 	defer l.mu.RUnlock()

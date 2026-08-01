@@ -52,7 +52,6 @@ func (l *Ledger) GetTransactionContext(ctx context.Context, txHash [32]byte) ([]
 	return item.Data(), true, nil
 }
 
-// TxExists reports whether a tx with the given hash is already in this ledger.
 func (l *Ledger) TxExists(txHash [32]byte) (bool, error) {
 	l.mu.RLock()
 	defer l.mu.RUnlock()

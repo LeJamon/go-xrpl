@@ -9,7 +9,6 @@ import (
 	"github.com/LeJamon/go-xrpl/internal/ledger/skiplist"
 )
 
-// Close closes the ledger, making it immutable
 func (l *Ledger) Close(closeTime time.Time, closeFlags uint8) error {
 	l.mu.Lock()
 	defer l.mu.Unlock()

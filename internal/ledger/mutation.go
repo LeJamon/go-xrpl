@@ -129,8 +129,7 @@ func (l *Ledger) ApplyAtomically(apply func(Writer) error) error {
 }
 
 // AdoptState replaces this ledger's state map, tx map, and destroyed-drops tally
-// with src's — committing a mutated MutableSnapshot back into the parent in one
-// shot (rippled OpenView::apply). Header and fees are unchanged.
+// with src's in one shot. Header and fees are unchanged.
 func (l *Ledger) AdoptState(src *Ledger) error {
 	if src == nil {
 		return errors.New("ledger: AdoptState from nil source")

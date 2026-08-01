@@ -13,7 +13,6 @@ import (
 	"github.com/LeJamon/go-xrpl/shamap"
 )
 
-// NewOpen creates a new open ledger based on a parent ledger
 func NewOpen(parent *Ledger, closeTime time.Time) (*Ledger, error) {
 	return newOpen(parent, closeTime, false)
 }
@@ -91,7 +90,6 @@ func newOpen(parent *Ledger, closeTime time.Time, building bool) (*Ledger, error
 		CloseTime:           closeTime,
 		CloseTimeResolution: uint8(newResolution),
 		Drops:               parentHeader.Drops,
-		// Hash, TxHash, AccountHash will be set when closed
 	}
 	stateMap.SetLedgerSeq(newLedgerSeq)
 	txMap.SetLedgerSeq(newLedgerSeq)
@@ -108,7 +106,6 @@ func newOpen(parent *Ledger, closeTime time.Time, building bool) (*Ledger, error
 	}, nil
 }
 
-// FromGenesis creates a Ledger from a genesis creation result
 func FromGenesis(
 	hdr header.LedgerHeader,
 	stateMap *shamap.SHAMap,
