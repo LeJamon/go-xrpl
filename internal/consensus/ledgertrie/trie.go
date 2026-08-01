@@ -246,9 +246,16 @@ func (t *Trie) Remove(l Ledger, count uint32) bool {
 	if count > loc.tipSupport {
 		count = loc.tipSupport
 	}
+	seq := l.Seq()
+	if seq != loc.s.end-1 {
+		panic("ledgertrie: ledger sequence mismatch")
+	}
+	if support, ok := t.seqSupport[seq]; !ok || support < count {
+		panic("ledgertrie: seqSupport invariant violation")
+	}
 
 	loc.tipSupport -= count
-	t.seqSupportSub(l.Seq(), count)
+	t.seqSupportSub(seq, count)
 
 	for cur := loc; cur != nil; cur = cur.parent {
 		cur.branchSupport -= count
@@ -441,6 +448,9 @@ func (t *Trie) CheckInvariants() bool {
 			}
 		}
 		for _, c := range curr.children {
+			if c == nil {
+				return false
+			}
 			if c.parent != curr {
 				return false
 			}

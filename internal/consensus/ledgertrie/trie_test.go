@@ -32,6 +32,32 @@ func newTestTrie() (*Trie, *ledgertrietest.TestLedgerBuilder) {
 	return New(b.Genesis()), b
 }
 
+func TestMismatch(t *testing.T) {
+	b := ledgertrietest.NewTestLedgerBuilder()
+	tests := []struct {
+		name string
+		a    Ledger
+		b    Ledger
+		want uint32
+	}{
+		{name: "EmptyOverlap", a: b.Build(""), b: b.Build("a"), want: 1},
+		{name: "SharedHistory", a: b.Build("abc"), b: b.Build("abcde"), want: 4},
+		{name: "DivergentAtFloor", a: b.Build("abc"), b: b.Build("xyz"), want: 1},
+		{name: "SameSequenceDivergence", a: b.Build("abc"), b: b.Build("abd"), want: 3},
+		{name: "DifferentSequenceDivergence", a: b.Build("abc"), b: b.Build("abdef"), want: 3},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := mismatch(tt.a, tt.b); got != tt.want {
+				t.Fatalf("mismatch(a, b) = %d, want %d", got, tt.want)
+			}
+			if got := mismatch(tt.b, tt.a); got != tt.want {
+				t.Fatalf("mismatch(b, a) = %d, want %d", got, tt.want)
+			}
+		})
+	}
+}
+
 // --- TestLedgerTrie_ParityTable --------------------------------------
 //
 // Ports the state-assertion tests from rippled's
@@ -902,6 +928,22 @@ func TestLedgerTrie_SupportOverflowIsAtomic(t *testing.T) {
 	}
 }
 
+func TestLedgerTrie_RemoveSequenceMismatchIsAtomic(t *testing.T) {
+	trie, b := newTestTrie()
+	ledger := b.Build("a")
+	trie.Insert(ledger, 2)
+
+	mismatched := &boundaryLedger{id: ledger.ID(), seq: 2}
+	requirePanic(t, func() { trie.Remove(mismatched, 1) })
+
+	if got := trie.TipSupport(ledger); got != 2 {
+		t.Fatalf("tip support changed after rejected remove: got %d, want 2", got)
+	}
+	if !trie.CheckInvariants() {
+		t.Fatal("rejected remove broke invariants")
+	}
+}
+
 func TestLedgerTrie_CheckInvariantsRejectsWrappedSupport(t *testing.T) {
 	trie, b := newTestTrie()
 	first := b.Build("a")
@@ -914,10 +956,17 @@ func TestLedgerTrie_CheckInvariantsRejectsWrappedSupport(t *testing.T) {
 	sibling.branchSupport = 1
 	trie.root.children = append(trie.root.children, sibling)
 	trie.root.branchSupport = 0
-	trie.seqSupport[1] = 0
 
 	if trie.CheckInvariants() {
 		t.Fatal("wrapped support state passed invariants")
+	}
+}
+
+func TestLedgerTrie_CheckInvariantsRejectsNilChild(t *testing.T) {
+	trie, _ := newTestTrie()
+	trie.root.children = append(trie.root.children, nil)
+	if trie.CheckInvariants() {
+		t.Fatal("nil child passed invariants")
 	}
 }
 
@@ -935,6 +984,9 @@ func TestLedgerTrie_CheckInvariantsRejectsSequenceKeyDrift(t *testing.T) {
 		"Unsorted": func(trie *Trie) {
 			trie.seqKeys[0], trie.seqKeys[1] = trie.seqKeys[1], trie.seqKeys[0]
 		},
+		"Substituted": func(trie *Trie) {
+			trie.seqKeys[1] = 3
+		},
 	}
 	for name, corrupt := range tests {
 		t.Run(name, func(t *testing.T) {
@@ -946,6 +998,27 @@ func TestLedgerTrie_CheckInvariantsRejectsSequenceKeyDrift(t *testing.T) {
 				t.Fatal("corrupt sequence-key index passed invariants")
 			}
 		})
+	}
+}
+
+func TestLedgerTrie_GetPreferredOrdersTopTwoChildren(t *testing.T) {
+	trie, b := newTestTrie()
+	a := b.Build("a")
+	bLedger := b.Build("b")
+	c := b.Build("c")
+	trie.Insert(a, 1)
+	trie.Insert(bLedger, 2)
+	trie.Insert(c, 3)
+
+	preferred, ok := trie.GetPreferred(0)
+	if !ok || preferred.ID != c.ID() {
+		t.Fatalf("preferred ledger = (%x, %t), want %x", preferred.ID, ok, c.ID())
+	}
+	if got := trie.root.children[0].s.tip().ID; got != c.ID() {
+		t.Fatalf("first child = %x, want %x", got, c.ID())
+	}
+	if got := trie.root.children[1].s.tip().ID; got != bLedger.ID() {
+		t.Fatalf("second child = %x, want %x", got, bLedger.ID())
 	}
 }
 
