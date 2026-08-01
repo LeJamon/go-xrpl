@@ -80,7 +80,6 @@ func (s *Store) Put(key []byte, value []byte) error {
 	return s.db.Set(key, value, pebble.NoSync)
 }
 
-// NewBatch returns a new batch for accumulating writes.
 func (s *Store) NewBatch() (kvstore.Batch, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()

@@ -166,9 +166,6 @@ func TestSign_SignatureTarget_DisallowedForTransaction(t *testing.T) {
 	assert.Contains(t, err.Message, "disallowed location")
 }
 
-// TestSignFor_SignatureTarget attaches a multi-signer into an allowed nested
-// CounterpartySignature object without clearing the primary signing key from
-// the multisigning payload.
 func TestSignFor_SignatureTarget(t *testing.T) {
 	handler := &handlers.SignForMethod{}
 	ctx := &types.RpcContext{Context: context.Background(), ApiVersion: types.ApiVersion1}
@@ -252,7 +249,6 @@ func TestSignFor_SignatureTarget_DisallowedForTransaction(t *testing.T) {
 	assert.Contains(t, err.Message, "disallowed location")
 }
 
-// TestSignFor_SignatureTarget_Invalid rejects an unknown signature_target.
 func TestSignFor_SignatureTarget_Invalid(t *testing.T) {
 	handler := &handlers.SignForMethod{}
 	ctx := &types.RpcContext{Context: context.Background(), ApiVersion: types.ApiVersion1}

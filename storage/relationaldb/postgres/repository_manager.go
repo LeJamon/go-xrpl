@@ -86,17 +86,14 @@ func (rm *RepositoryManager) Transaction() relationaldb.TransactionRepository {
 	return rm.transactionRepo
 }
 
-// AccountTransaction returns the account transaction repository.
 func (rm *RepositoryManager) AccountTransaction() relationaldb.AccountTransactionRepository {
 	return rm.accountTransactionRepo
 }
 
-// Validation returns the validation archive repository.
 func (rm *RepositoryManager) Validation() relationaldb.ValidationRepository {
 	return rm.validationRepo
 }
 
-// Amendment returns the amendment vote repository.
 func (rm *RepositoryManager) Amendment() relationaldb.AmendmentVoteRepository {
 	return rm.amendmentVoteRepo
 }

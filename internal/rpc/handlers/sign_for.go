@@ -121,7 +121,6 @@ func (m *SignForMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (a
 		return nil, rpcErr
 	}
 
-	// Get existing signers array or create new one
 	signers := make([]map[string]any, 0, 1)
 	if existing, ok := sigContainer["Signers"]; ok {
 		var signerErr *types.RpcError

@@ -16,8 +16,6 @@ type RotatingKVDatabase struct {
 	rotating kvstore.RotatingStore
 }
 
-// NewRotatingKVDatabase constructs one logical NodeStore cache over a rotating
-// key-value backend.
 func NewRotatingKVDatabase(
 	store kvstore.RotatingStore,
 	config DatabaseConfig,
@@ -70,7 +68,6 @@ func (d *RotatingKVDatabase) FetchForPromotion(ctx context.Context, hash Hash256
 	return node, nil
 }
 
-// CanRotateWithoutRefresh reports whether the archive generation is empty.
 func (d *RotatingKVDatabase) CanRotateWithoutRefresh(ctx context.Context) (bool, error) {
 	if err := d.begin(ctx); err != nil {
 		return false, err
@@ -108,8 +105,6 @@ func (d *RotatingKVDatabase) RotateGeneration(
 	return committed, nil
 }
 
-// GenerationState returns the boundary committed with the backend generation
-// manifest.
 func (d *RotatingKVDatabase) GenerationState() (uint32, uint32) {
 	return d.rotating.RotationState()
 }

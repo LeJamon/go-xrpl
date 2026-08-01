@@ -311,7 +311,6 @@ func (t *Trie) GetPreferred(largestIssued uint32) (SpanTip, bool) {
 			best = curr.children[0]
 			margin = best.branchSupport
 		default:
-			// Inline top-2 by (branchSupport, startID) desc.
 			var second *node
 			for _, c := range curr.children {
 				if best == nil || nodeOutranks(c, best) {
