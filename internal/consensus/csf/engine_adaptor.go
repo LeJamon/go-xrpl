@@ -105,6 +105,7 @@ type Peer struct {
 	standalone        bool
 	targetLedgers     int
 	completed         int
+	operatingMode     consensus.OperatingMode
 	clockSkew         time.Duration
 	recvValDelay      SimDuration
 	ledgerAcceptDelay SimDuration
@@ -148,6 +149,7 @@ func newPeer(
 		timing:           consensus.DefaultTiming(),
 		validator:        true,
 		targetLedgers:    int(^uint(0) >> 1),
+		operatingMode:    consensus.OpModeFull,
 		ledgers:          map[consensus.LedgerID]*Ledger{genesis.ID(): genesis},
 		canonical:        map[uint32]*Ledger{0: genesis},
 		lcl:              genesis,
@@ -1324,14 +1326,17 @@ func (p *Peer) PrevCloseTimeResolution() time.Duration {
 
 func (p *Peer) AdjustCloseTime(consensus.CloseTimes) {}
 
-func (*Peer) GetOperatingMode() consensus.OperatingMode {
-	return consensus.OpModeFull
+func (p *Peer) GetOperatingMode() consensus.OperatingMode {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.operatingMode
 }
 
-// SetOperatingMode is intentionally inert: rippled CSF models validator
-// participation without the production network router that re-promotes server
-// operating modes, so simulated peers remain in Full mode.
-func (*Peer) SetOperatingMode(consensus.OperatingMode) {}
+func (p *Peer) SetOperatingMode(mode consensus.OperatingMode) {
+	p.mu.Lock()
+	p.operatingMode = mode
+	p.mu.Unlock()
+}
 
 func (p *Peer) OnConsensusReached(
 	ledger consensus.Ledger,
@@ -1350,6 +1355,9 @@ func (p *Peer) OnConsensusReached(
 	prior := p.lcl
 	p.ledgers[simLedger.ID()] = simLedger
 	p.adoptCanonicalLocked(simLedger)
+	// The production router re-promotes after adopting a current accepted
+	// ledger. CSF has no router, so complete that handoff before auto-advance.
+	p.operatingMode = consensus.OpModeFull
 	p.completed++
 	if set := p.txSets[simLedger.TxSetID()]; set != nil {
 		for _, id := range set.TxIDs() {

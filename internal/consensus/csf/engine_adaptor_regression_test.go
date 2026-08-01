@@ -886,11 +886,25 @@ func TestConsensusCommitPromotesPendingFullyValidatedLedger(t *testing.T) {
 	}
 }
 
-func TestPeerOperatingModeRemainsFull(t *testing.T) {
-	peer := NewSim().CreateGroup(1).Get(0)
+func TestPeerOperatingModeRecoversAfterAcceptedLedger(t *testing.T) {
+	sim := NewSim()
+	peer := sim.CreateGroup(1).Get(0)
 	peer.SetOperatingMode(consensus.OpModeConnected)
+	if got := peer.GetOperatingMode(); got != consensus.OpModeConnected {
+		t.Fatalf("operating mode after demotion = %v, want Connected", got)
+	}
+
+	genesis := sim.Oracle.Genesis()
+	ledger := sim.Oracle.Accept(
+		genesis,
+		NewTxSet(),
+		genesis.CloseTime().Add(time.Second),
+		true,
+		30*time.Second,
+	)
+	peer.OnConsensusReached(ledger, nil, 0)
 	if got := peer.GetOperatingMode(); got != consensus.OpModeFull {
-		t.Fatalf("operating mode = %v, want Full", got)
+		t.Fatalf("operating mode after accepted ledger = %v, want Full", got)
 	}
 }
 
