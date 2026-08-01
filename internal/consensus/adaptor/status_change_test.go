@@ -99,6 +99,28 @@ func TestStatusChange_WrongLedgerDemotionPolicy(t *testing.T) {
 	}
 }
 
+func TestStatusChange_WrongLedgerBlocksStaleOperatingModePromotion(t *testing.T) {
+	svc := newTestLedgerService(t)
+	a := New(Config{LedgerService: svc, Sender: &scRecordingSender{}})
+	a.SetOperatingMode(consensus.OpModeFull)
+	a.OnModeChange(consensus.ModeProposing, consensus.ModeWrongLedger)
+
+	a.SetOperatingMode(consensus.OpModeTracking)
+	require.Equal(t, consensus.OpModeConnected, a.GetOperatingMode())
+	a.SetOperatingMode(consensus.OpModeFull)
+	require.Equal(t, consensus.OpModeConnected, a.GetOperatingMode())
+
+	a.OnModeChange(consensus.ModeWrongLedger, consensus.ModeObserving)
+	a.SetOperatingMode(consensus.OpModeSyncing)
+	a.OnModeChange(consensus.ModeObserving, consensus.ModeWrongLedger)
+	a.SetOperatingMode(consensus.OpModeFull)
+	require.Equal(t, consensus.OpModeSyncing, a.GetOperatingMode())
+
+	a.OnModeChange(consensus.ModeWrongLedger, consensus.ModeSwitchedLedger)
+	a.SetOperatingMode(consensus.OpModeTracking)
+	require.Equal(t, consensus.OpModeTracking, a.GetOperatingMode())
+}
+
 // The SWITCHED_LEDGER broadcast carries the adopted ledger's identity and,
 // like rippled's switchLastClosedLedger message, no status or validated-range
 // fields.

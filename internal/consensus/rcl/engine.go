@@ -26,6 +26,8 @@ type roundState struct {
 // Engine implements the RCL consensus algorithm.
 type Engine struct {
 	lifecycleMu sync.Mutex
+	started     bool
+	stopped     bool
 	mu          sync.RWMutex
 
 	// Configuration
@@ -445,6 +447,12 @@ func (e *Engine) SetStallPing(ping func()) {
 func (e *Engine) Start(ctx context.Context) error {
 	e.lifecycleMu.Lock()
 	defer e.lifecycleMu.Unlock()
+	if e.stopped {
+		return fmt.Errorf("start event bus: %w", consensus.ErrEventBusStopped)
+	}
+	if e.started {
+		return fmt.Errorf("start event bus: %w", consensus.ErrEventBusStarted)
+	}
 
 	e.mu.Lock()
 	defer e.mu.Unlock()
@@ -456,6 +464,7 @@ func (e *Engine) Start(ctx context.Context) error {
 	if err := e.eventBus.Start(); err != nil {
 		return fmt.Errorf("start event bus: %w", err)
 	}
+	e.started = true
 	if ctx == nil {
 		ctx = context.Background()
 	}
@@ -531,6 +540,7 @@ func (e *Engine) Start(ctx context.Context) error {
 func (e *Engine) Stop() error {
 	e.lifecycleMu.Lock()
 	defer e.lifecycleMu.Unlock()
+	e.stopped = true
 
 	// Guard against Stop before Start: e.cancel is nil until Start runs, and a
 	// defensive doShutdown / error-path stop must not nil-panic (same class as

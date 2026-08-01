@@ -815,11 +815,13 @@ func TestEngine_StartFailureCanRetry(t *testing.T) {
 func TestEngine_StartTwicePreservesContext(t *testing.T) {
 	config := DefaultConfig()
 	config.ManualTick = true
-	engine := NewEngine(newMockAdaptor(), config)
+	adaptor := newMockAdaptor()
+	engine := NewEngine(adaptor, config)
 	if err := engine.Start(t.Context()); err != nil {
 		t.Fatalf("Start: %v", err)
 	}
 	firstCtx := engine.ctx
+	adaptor.lastLCLErr = errors.New("last closed ledger should not be read")
 	if err := engine.Start(t.Context()); !errors.Is(err, consensus.ErrEventBusStarted) {
 		t.Fatalf("second Start error = %v, want %v", err, consensus.ErrEventBusStarted)
 	}

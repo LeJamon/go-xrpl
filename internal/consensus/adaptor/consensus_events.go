@@ -30,6 +30,13 @@ func (a *Adaptor) SetOperatingMode(mode consensus.OperatingMode) {
 	if mode > consensus.OpModeConnected && (a.IsAmendmentBlocked() || a.IsUNLBlocked()) {
 		mode = consensus.OpModeConnected
 	}
+	if mode >= consensus.OpModeTracking && consensus.Mode(a.consensusMode.Load()) == consensus.ModeWrongLedger {
+		if a.operatingMode < consensus.OpModeTracking {
+			mode = a.operatingMode
+		} else {
+			mode = consensus.OpModeConnected
+		}
+	}
 	a.operatingMode = mode
 	if a.stateAcct != nil {
 		// Held under a.mu so the field and the accounting transition share one
