@@ -271,8 +271,6 @@ func newOpenChild(t *testing.T) *Ledger {
 	return child
 }
 
-// TestLedger_Close_DropsUnderflow_Wrap verifies that destroyed drops cannot
-// underflow the unsigned total supply during close.
 func TestLedger_Close_DropsUnderflow_Wrap(t *testing.T) {
 	child := newOpenChild(t)
 	child.header.Drops = 100

@@ -185,7 +185,6 @@ func (l *Ledger) IsClosed() bool {
 	return l.state == StateClosed || l.state == StateValidated
 }
 
-// IsImmutable reports whether the ledger is read-only.
 func (l *Ledger) IsImmutable() bool {
 	l.mu.RLock()
 	defer l.mu.RUnlock()
@@ -301,7 +300,6 @@ func (l *Ledger) HashOfSeqContext(ctx context.Context, seq uint32) ([32]byte, bo
 	return [32]byte{}, false, nil
 }
 
-// Rules returns the transaction rules fixed for this ledger.
 func (l *Ledger) Rules() *amendment.Rules {
 	l.mu.RLock()
 	defer l.mu.RUnlock()

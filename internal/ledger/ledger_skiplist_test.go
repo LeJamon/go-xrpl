@@ -55,8 +55,6 @@ func decodeRollingLedgerHashesForTest(t *testing.T, l *Ledger) (uint32, []string
 	return lastSeq, hashes
 }
 
-// TestLedger_Close_LedgerHashes_NoSelfInclusion verifies that a closed
-// ledger records only ancestor hashes and stamps its parent sequence.
 func TestLedger_Close_LedgerHashes_NoSelfInclusion(t *testing.T) {
 	res, err := genesis.Create(genesis.DefaultConfig())
 	if err != nil {
