@@ -37,11 +37,24 @@ func (a *Adaptor) SetOperatingMode(mode consensus.OperatingMode) {
 			mode = consensus.OpModeConnected
 		}
 	}
+	a.setOperatingModeLocked(mode)
+}
+
+func (a *Adaptor) setOperatingModeLocked(mode consensus.OperatingMode) {
 	a.operatingMode = mode
 	if a.stateAcct != nil {
 		// Held under a.mu so the field and the accounting transition share one
 		// serialization order; the tracker's own mutex never re-enters a.mu.
 		a.stateAcct.transition(mode)
+	}
+}
+
+func (a *Adaptor) demoteOperatingModeForWrongLedger() {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+
+	if a.operatingMode == consensus.OpModeFull || a.operatingMode == consensus.OpModeTracking {
+		a.setOperatingModeLocked(consensus.OpModeConnected)
 	}
 }
 
@@ -443,10 +456,7 @@ func collectValidationFees(historian consensus.ValidationHistorian, ledgerID con
 func (a *Adaptor) OnModeChange(oldMode, newMode consensus.Mode) {
 	a.consensusMode.Store(int32(newMode))
 	if newMode == consensus.ModeWrongLedger {
-		current := a.GetOperatingMode()
-		if current == consensus.OpModeFull || current == consensus.OpModeTracking {
-			a.SetOperatingMode(consensus.OpModeConnected)
-		}
+		a.demoteOperatingModeForWrongLedger()
 	}
 	a.logger.Info("Consensus mode changed",
 		"from", oldMode.String(),

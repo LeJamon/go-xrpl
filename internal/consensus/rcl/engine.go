@@ -448,10 +448,10 @@ func (e *Engine) Start(ctx context.Context) error {
 	e.lifecycleMu.Lock()
 	defer e.lifecycleMu.Unlock()
 	if e.stopped {
-		return fmt.Errorf("start event bus: %w", consensus.ErrEventBusStopped)
+		return fmt.Errorf("start engine: %w", consensus.ErrEventBusStopped)
 	}
 	if e.started {
-		return fmt.Errorf("start event bus: %w", consensus.ErrEventBusStarted)
+		return fmt.Errorf("start engine: %w", consensus.ErrEventBusStarted)
 	}
 
 	e.mu.Lock()

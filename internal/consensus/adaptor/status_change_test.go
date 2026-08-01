@@ -121,6 +121,39 @@ func TestStatusChange_WrongLedgerBlocksStaleOperatingModePromotion(t *testing.T)
 	require.Equal(t, consensus.OpModeTracking, a.GetOperatingMode())
 }
 
+func TestStatusChange_WrongLedgerDoesNotOverwriteConcurrentDisconnect(t *testing.T) {
+	svc := newTestLedgerService(t)
+	a := New(Config{LedgerService: svc, Sender: &scRecordingSender{}})
+	a.SetOperatingMode(consensus.OpModeFull)
+
+	a.mu.Lock()
+	locked := true
+	defer func() {
+		if locked {
+			a.mu.Unlock()
+		}
+	}()
+	done := make(chan struct{})
+	go func() {
+		a.OnModeChange(consensus.ModeProposing, consensus.ModeWrongLedger)
+		close(done)
+	}()
+	require.Eventually(t, func() bool {
+		return consensus.Mode(a.consensusMode.Load()) == consensus.ModeWrongLedger
+	}, time.Second, time.Millisecond)
+
+	a.setOperatingModeLocked(consensus.OpModeDisconnected)
+	a.mu.Unlock()
+	locked = false
+
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("OnModeChange did not complete")
+	}
+	require.Equal(t, consensus.OpModeDisconnected, a.GetOperatingMode())
+}
+
 // The SWITCHED_LEDGER broadcast carries the adopted ledger's identity and,
 // like rippled's switchLastClosedLedger message, no status or validated-range
 // fields.
