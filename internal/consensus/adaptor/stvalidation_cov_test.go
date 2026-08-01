@@ -605,7 +605,7 @@ func TestStvParseSTValidation_FieldHeaderError(t *testing.T) {
 }
 
 func TestStvSerializeSTValidation_ZeroFlagsNotFull(t *testing.T) {
-	// Flags=0, Full=false → synthesize only vfFullyCanonicalSig
+	// Generic serialization preserves Flags verbatim.
 	orig := buildTestValidation()
 	orig.Flags = 0
 	orig.Full = false
@@ -614,7 +614,7 @@ func TestStvSerializeSTValidation_ZeroFlagsNotFull(t *testing.T) {
 	parsed, err := parseSTValidation(blob)
 	require.NoError(t, err)
 
-	assert.Equal(t, uint32(vfFullyCanonicalSig), parsed.Flags)
+	assert.Zero(t, parsed.Flags)
 	assert.False(t, parsed.Full)
 }
 
