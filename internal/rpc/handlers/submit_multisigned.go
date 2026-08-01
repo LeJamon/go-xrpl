@@ -1,14 +1,17 @@
 package handlers
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"strconv"
 
 	binarycodec "github.com/LeJamon/go-xrpl/codec/binarycodec"
+	binarycodecdefs "github.com/LeJamon/go-xrpl/codec/binarycodec/definitions"
 	"github.com/LeJamon/go-xrpl/internal/ledger/service/svcerr"
 	"github.com/LeJamon/go-xrpl/internal/rpc/types"
+	"github.com/LeJamon/go-xrpl/internal/tx"
 )
 
 // SubmitMultisignedMethod handles the submit_multisigned RPC method
@@ -36,7 +39,9 @@ func (m *SubmitMultisignedMethod) Handle(ctx *types.RpcContext, params json.RawM
 
 	// Parse the transaction JSON
 	var txMap map[string]any
-	if err := json.Unmarshal(request.TxJson, &txMap); err != nil {
+	decoder := json.NewDecoder(bytes.NewReader(request.TxJson))
+	decoder.UseNumber()
+	if err := decoder.Decode(&txMap); err != nil {
 		return nil, types.RpcErrorInvalidParams(fmt.Sprintf("Invalid tx_json: %v", err))
 	}
 
@@ -83,7 +88,42 @@ func (m *SubmitMultisignedMethod) Handle(ctx *types.RpcContext, params json.RawM
 		return nil, rpcInternalError("submit_multisigned: source account lookup failed", err)
 	}
 
-	// --- Post-serialization validation (rippled TransactionSign.cpp:1325-1391) ---
+	if rpcErr := validateSignForPreConflict(txMap, params); rpcErr != nil {
+		return nil, rpcErr
+	}
+
+	definitions := binarycodecdefs.Get()
+	if parseMessage := serializedFieldParseMessage(txMap, "tx_json", definitions); parseMessage != "" {
+		return nil, types.RpcErrorInvalidParams(parseMessage)
+	}
+	transactionTypeCode, ok := txMap["TransactionType"].(uint16)
+	if !ok {
+		return nil, types.RpcErrorInvalidParams("Field 'tx_json.TransactionType' has invalid data.")
+	}
+	transactionTypeName, err := definitions.TransactionTypeName(int32(transactionTypeCode))
+	if err != nil {
+		return nil, types.NewRpcError(
+			types.RpcINTERNAL,
+			"internal",
+			"internal",
+			fmt.Sprintf("Exception while serializing transaction: Invalid transaction type %d", transactionTypeCode),
+		)
+	}
+	txMap["TransactionType"] = transactionTypeName
+	transactionType, _ := tx.TypeFromName(transactionTypeName)
+	if err := tx.ValidateTemplateFields(transactionType, txMap); err != nil {
+		return nil, types.RpcErrorInvalidParams(err.Error())
+	}
+	if reason := tx.TransactionMapLocalChecksFailureReason(transactionType, txMap); reason != "" {
+		return nil, types.RpcErrorInvalidParams(reason)
+	}
+	if _, ok := txMap["Fee"].(string); !ok {
+		return nil, types.RpcErrorInvalidParams("Invalid Fee field.  Fees must be specified in XRP.")
+	}
+	_, rpcErr := parseTransactionForSigning(txMap)
+	if rpcErr != nil {
+		return nil, rpcErr
+	}
 
 	// TxnSignature must NOT be present on a multi-signed transaction.
 	// Matches rippled: rpcError(rpcSIGNING_MALFORMED) -> code 63, "signingMalformed"
@@ -91,13 +131,10 @@ func (m *SubmitMultisignedMethod) Handle(ctx *types.RpcContext, params json.RawM
 		return nil, types.RpcErrorSigningMalformed()
 	}
 
-	// Fee must be present, must be XRP drops (string of digits), and must be > 0.
+	// Fee must be XRP drops and must be > 0.
 	// Matches rippled: "Invalid Fee field.  Fees must be specified in XRP." /
 	// "Invalid Fee field.  Fees must be greater than zero."
-	feeVal, feePresent := txMap["Fee"]
-	if !feePresent {
-		return nil, types.RpcErrorInvalidParams("Invalid Fee field.  Fees must be specified in XRP.")
-	}
+	feeVal := txMap["Fee"]
 	feeStr, ok := feeVal.(string)
 	if !ok {
 		return nil, types.RpcErrorInvalidParams("Invalid Fee field.  Fees must be specified in XRP.")
@@ -110,71 +147,29 @@ func (m *SubmitMultisignedMethod) Handle(ctx *types.RpcContext, params json.RawM
 		return nil, types.RpcErrorInvalidParams("Invalid Fee field.  Fees must be greater than zero.")
 	}
 
-	// Sequence value parsing occurs after load admission and account lookup.
-	switch seq := txMap["Sequence"].(type) {
-	case float64:
-		if seq < 0 || seq != float64(int64(seq)) {
-			return nil, types.RpcErrorInvalidField("tx_json.Sequence")
-		}
-	case json.Number:
-		if _, err := seq.Int64(); err != nil {
-			return nil, types.RpcErrorInvalidField("tx_json.Sequence")
-		}
-	default:
-		return nil, types.RpcErrorInvalidField("tx_json.Sequence")
-	}
-
 	// Check that Signers array exists and is not empty
-	signers, ok := txMap["Signers"].([]any)
+	signersValue, signersPresent := txMap["Signers"]
+	if !signersPresent {
+		return nil, types.RpcErrorMissingField("tx_json.Signers")
+	}
+	signers, ok := signersValue.([]any)
 	if !ok || len(signers) == 0 {
 		return nil, types.RpcErrorInvalidParams("tx_json.Signers array may not be empty.")
 	}
 
-	// Validate signer entries and collect accounts for duplicate/self-sign checks
-	seenAccounts := make(map[string]bool, len(signers))
-	var prevAccount string
-	for i, signerEntry := range signers {
-		signerWrapper, ok := signerEntry.(map[string]any)
-		if !ok {
-			return nil, types.RpcErrorInvalidParams("Signers array may only contain Signer entries.")
-		}
-
-		signer, ok := signerWrapper["Signer"].(map[string]any)
-		if !ok {
-			return nil, types.RpcErrorInvalidParams("Signers array may only contain Signer entries.")
-		}
-
-		// A Signer object always contains exactly Account, SigningPubKey,
-		// and TxnSignature; rippled reports one combined error for any
-		// missing or extra field (getCount() == 3).
-		account, hasAccount := signer["Account"].(string)
-		_, hasPubKey := signer["SigningPubKey"].(string)
-		_, hasSig := signer["TxnSignature"].(string)
-		if !hasAccount || account == "" || !hasPubKey || !hasSig || len(signer) != 3 {
-			return nil, types.RpcErrorInvalidParams("Signers array may only contain Signer entries.")
-		}
-
-		// Check signers are sorted by account (XRPL protocol requirement)
-		if i > 0 && account < prevAccount {
-			return nil, types.RpcErrorInvalidParams("Signers must be sorted by Account")
-		}
-
-		// Duplicate signer detection.
-		// Matches rippled sortAndValidateSigners: "Duplicate Signers:Signer:Account entries (<addr>) are not allowed."
-		if seenAccounts[account] {
-			return nil, types.RpcErrorInvalidParams(
-				"Duplicate Signers:Signer:Account entries (" + account + ") are not allowed.")
-		}
-		seenAccounts[account] = true
-
-		// Self-signing detection: a signer may not be the transaction's Account.
-		// Matches rippled sortAndValidateSigners: "A Signer may not be the transaction's Account (<addr>)."
-		if account == txAccount {
-			return nil, types.RpcErrorInvalidParams(
-				"A Signer may not be the transaction's Account (" + txAccount + ").")
-		}
-
-		prevAccount = account
+	signerMapList, rpcErr := signerMaps(signers)
+	if rpcErr != nil {
+		return nil, rpcErr
+	}
+	feePayer := txAccount
+	if delegate, ok := txMap["Delegate"].(string); ok {
+		feePayer = delegate
+	}
+	if rpcErr := sortAndValidateSignerMaps(signerMapList, feePayer); rpcErr != nil {
+		return nil, rpcErr
+	}
+	for i := range signerMapList {
+		signers[i] = signerMapList[i]
 	}
 
 	// Encode the transaction to binary

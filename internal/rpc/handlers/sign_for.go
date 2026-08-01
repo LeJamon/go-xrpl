@@ -101,6 +101,9 @@ func (m *SignForMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (a
 	if rpcErr := validateSigningTxJSONShape(txMap); rpcErr != nil {
 		return nil, rpcErr
 	}
+	if rpcErr := rejectOnlineSigningWithoutCurrentLedger(ctx.Services, request.Offline, ctx.ApiVersion); rpcErr != nil {
+		return nil, rpcErr
+	}
 	if rpcErr := rejectSigningWhenLoaded(ctx.Services, ctx.Unlimited); rpcErr != nil {
 		return nil, rpcErr
 	}

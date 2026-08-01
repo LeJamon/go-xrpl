@@ -1,9 +1,14 @@
 package tx
 
 import (
+	"bytes"
 	"encoding/hex"
+	"encoding/json"
+	"fmt"
 
+	addresscodec "github.com/LeJamon/go-xrpl/codec/addresscodec"
 	"github.com/LeJamon/go-xrpl/codec/binarycodec"
+	"github.com/LeJamon/go-xrpl/codec/binarycodec/definitions"
 	"github.com/LeJamon/go-xrpl/internal/tx/ter"
 )
 
@@ -13,66 +18,288 @@ import (
 // per-field size caps. Reference: rippled STTx.cpp isMemoOkay.
 const MaxSerializedMemosSize = 1024
 
-// PassesLocalChecks runs the submission-only validation rippled performs in
-// STTx::passesLocalChecks (invoked from NetworkOPs at the ingress), NOT in the
-// consensus-critical preflight. It must be applied only on the local submission
-// path: a relayed or consensus-applied transaction carrying the same memo still
-// applies, because rippled treats a memo violation as a local, non-TER refusal
-// (Validity::SigGoodOnly), which the engine preflight accepts. Applying it in
-// preflight would exclude a memo-violating transaction from an agreed tx set
-// that rippled applies with tesSUCCESS — a ledger fork.
-//
-// It returns TemMALFORMED on any violation, matching rippled's rejection of a
-// locally-submitted transaction that fails passesLocalChecks.
+// PassesLocalChecks preserves the common-field memo check for callers that do
+// not have a parsed transaction. Submission paths should use
+// PassesTransactionLocalChecks so the transaction-specific checks also run.
 func PassesLocalChecks(common *Common) ter.Result {
-	return validateMemosLocal(common)
+	if LocalChecksFailureReason(common) != "" {
+		return ter.TemMALFORMED
+	}
+	return ter.TesSUCCESS
 }
 
-// validateMemosLocal mirrors rippled isMemoOkay: the whole Memos array must
-// serialize to at most 1024 bytes (field headers included), every present
-// MemoType/MemoData/MemoFormat field must be valid hex, and the decoded
-// MemoType/MemoFormat bytes may contain only RFC 3986 URL characters (MemoData
-// is unrestricted). There are no per-field size caps.
-func validateMemosLocal(common *Common) ter.Result {
+// PassesTransactionLocalChecks runs the non-consensus checks applied only at
+// local transaction-submission ingress.
+func PassesTransactionLocalChecks(transaction Transaction) ter.Result {
+	if TransactionLocalChecksFailureReason(transaction) != "" {
+		return ter.TemMALFORMED
+	}
+	return ter.TesSUCCESS
+}
+
+// TransactionLocalChecksFailureReason returns the first local-submission
+// rejection reason in protocol order.
+func TransactionLocalChecksFailureReason(transaction Transaction) string {
+	if raw := transaction.GetRawBytes(); len(raw) != 0 {
+		if fields, err := binarycodec.DecodeBytes(raw); err == nil {
+			return TransactionMapLocalChecksFailureReason(transaction.TxType(), fields)
+		}
+	}
+	if reason := LocalChecksFailureReason(transaction.GetCommon()); reason != "" {
+		return reason
+	}
+
+	fields, err := transaction.Flatten()
+	if err != nil {
+		return err.Error()
+	}
+	if reason := transactionFieldsLocalChecksFailureReason(transaction.TxType(), fields); reason != "" {
+		return reason
+	}
+	if transaction.TxType() == TypeBatch {
+		if signers, ok := transaction.(BatchSignerProvider); ok && len(signers.GetBatchSigners()) > 8 {
+			return "Batch Signers array exceeds max entries."
+		}
+		if outer, ok := transaction.(interface{ InnerTransactions() []Transaction }); ok {
+			inners := outer.InnerTransactions()
+			if len(inners) > 8 {
+				return "Raw Transactions array exceeds max entries."
+			}
+			for _, inner := range inners {
+				if inner != nil && inner.TxType() == TypeBatch {
+					return "Raw Transactions may not contain batch transactions."
+				}
+			}
+		}
+	}
+
+	return ""
+}
+
+// TransactionMapLocalChecksFailureReason applies local-submission checks to a
+// canonically parsed transaction map before it is converted to a Go transaction.
+func TransactionMapLocalChecksFailureReason(txType Type, fields map[string]any) string {
+	if memos, ok := fields["Memos"]; ok {
+		if reason := localChecksMemosFromMap(memos); reason != "" {
+			return reason
+		}
+	}
+	if reason := transactionFieldsLocalChecksFailureReason(txType, fields); reason != "" {
+		return reason
+	}
+	if txType == TypeBatch {
+		if batchSigners, ok := fields["BatchSigners"].([]any); ok && len(batchSigners) > 8 {
+			return "Batch Signers array exceeds max entries."
+		}
+		rawTransactions, ok := fields["RawTransactions"].([]any)
+		if !ok {
+			return ""
+		}
+		if len(rawTransactions) > 8 {
+			return "Raw Transactions array exceeds max entries."
+		}
+		for _, raw := range rawTransactions {
+			wrapper, ok := raw.(map[string]any)
+			if !ok {
+				continue
+			}
+			inner, ok := wrapper["RawTransaction"].(map[string]any)
+			if !ok {
+				continue
+			}
+			innerTypeValue, present := inner["TransactionType"]
+			if !present {
+				return "Field not found: TransactionType"
+			}
+			innerType, ok := transactionTypeFromCanonicalMap(inner)
+			if !ok {
+				if code, numeric := innerTypeValue.(uint16); numeric {
+					return fmt.Sprintf("Invalid transaction type %d", code)
+				}
+				return "Field 'TransactionType' has invalid data."
+			}
+			if innerType == TypeBatch {
+				return "Raw Transactions may not contain batch transactions."
+			}
+			inner["TransactionType"] = innerType.String()
+			if err := ValidateTemplateFields(innerType, inner); err != nil {
+				return err.Error()
+			}
+		}
+	}
+	return ""
+}
+
+func localChecksMemosFromMap(memos any) string {
+	full, err := binarycodec.EncodeBytes(map[string]any{"Memos": memos})
+	if err != nil {
+		return "The MemoType, MemoData and MemoFormat fields may only contain hex-encoded data."
+	}
+	overhead, err := binarycodec.EncodeBytes(map[string]any{"Memos": []map[string]any{}})
+	if err != nil {
+		return "The MemoType, MemoData and MemoFormat fields may only contain hex-encoded data."
+	}
+	if len(full)-len(overhead) > MaxSerializedMemosSize {
+		return "The memo exceeds the maximum allowed size."
+	}
+
+	raw, err := json.Marshal(memos)
+	if err != nil {
+		return "The MemoType, MemoData and MemoFormat fields may only contain hex-encoded data."
+	}
+	var entries []map[string]map[string]any
+	if err := json.Unmarshal(raw, &entries); err != nil {
+		return "The MemoType, MemoData and MemoFormat fields may only contain hex-encoded data."
+	}
+	for _, wrapper := range entries {
+		memo := wrapper["Memo"]
+		for _, name := range []string{"MemoType", "MemoData", "MemoFormat"} {
+			value, present := memo[name]
+			if !present {
+				continue
+			}
+			text, ok := value.(string)
+			if !ok {
+				return "The MemoType, MemoData and MemoFormat fields may only contain hex-encoded data."
+			}
+			decoded, err := hex.DecodeString(text)
+			if err != nil {
+				return "The MemoType, MemoData and MemoFormat fields may only contain hex-encoded data."
+			}
+			if name != "MemoData" && !isValidURLBytes(decoded) {
+				return "The MemoType and MemoFormat fields may only contain characters that are allowed in URLs under RFC 3986."
+			}
+		}
+	}
+	return ""
+}
+
+func transactionFieldsLocalChecksFailureReason(txType Type, fields map[string]any) string {
+	if hasDefaultAccountField(fields) {
+		return "An account field is invalid."
+	}
+	if txType.IsPseudoTransaction() {
+		return "Cannot submit pseudo transactions."
+	}
+	if hasUnsupportedMPTField(txType, fields) {
+		return "Amount can not be MPT."
+	}
+	return ""
+}
+
+func transactionTypeFromCanonicalMap(fields map[string]any) (Type, bool) {
+	switch value := fields["TransactionType"].(type) {
+	case uint16:
+		txType := Type(value)
+		_, known := TypeFromName(txType.String())
+		return txType, known
+	case string:
+		return TypeFromName(value)
+	default:
+		return 0, false
+	}
+}
+
+func hasDefaultAccountField(fields map[string]any) bool {
+	defs := definitions.Get()
+	for name, value := range fields {
+		field, err := defs.FieldInstanceByName(name)
+		if err != nil || field.Type != "AccountID" {
+			continue
+		}
+		account, ok := value.(string)
+		if !ok {
+			continue
+		}
+		if account == "" {
+			return true
+		}
+		if decoded, err := hex.DecodeString(account); err == nil && len(decoded) == 20 {
+			if bytes.Equal(decoded, make([]byte, 20)) {
+				return true
+			}
+			continue
+		}
+		_, decoded, err := addresscodec.DecodeClassicAddressToAccountID(account)
+		if err == nil && bytes.Equal(decoded, make([]byte, 20)) {
+			return true
+		}
+	}
+	return false
+}
+
+func hasUnsupportedMPTField(txType Type, fields map[string]any) bool {
+	for name, value := range fields {
+		object, ok := value.(map[string]any)
+		if !ok {
+			continue
+		}
+		if _, isMPT := object["mpt_issuance_id"]; !isMPT {
+			continue
+		}
+		if !mptSupportedFields[txType][name] {
+			return true
+		}
+	}
+	return false
+}
+
+var mptSupportedFields = map[Type]map[string]bool{
+	TypePayment:                 {"Amount": true, "SendMax": true, "DeliverMin": true},
+	TypeEscrowCreate:            {"Amount": true},
+	TypeOfferCreate:             {"TakerPays": true, "TakerGets": true},
+	TypeCheckCreate:             {"SendMax": true},
+	TypeCheckCash:               {"Amount": true, "DeliverMin": true},
+	TypeClawback:                {"Amount": true},
+	TypeAMMClawback:             {"Asset": true, "Asset2": true, "Amount": true},
+	TypeAMMCreate:               {"Amount": true, "Amount2": true},
+	TypeAMMDeposit:              {"Asset": true, "Asset2": true, "Amount": true, "Amount2": true},
+	TypeAMMWithdraw:             {"Asset": true, "Asset2": true, "Amount": true, "Amount2": true},
+	TypeAMMVote:                 {"Asset": true, "Asset2": true},
+	TypeAMMBid:                  {"Asset": true, "Asset2": true},
+	TypeAMMDelete:               {"Asset": true, "Asset2": true},
+	TypeVaultCreate:             {"Asset": true},
+	TypeVaultDeposit:            {"Amount": true},
+	TypeVaultWithdraw:           {"Amount": true},
+	TypeVaultClawback:           {"Amount": true},
+	TypeLoanBrokerCoverDeposit:  {"Amount": true},
+	TypeLoanBrokerCoverWithdraw: {"Amount": true},
+	TypeLoanBrokerCoverClawback: {"Amount": true},
+	TypeLoanPay:                 {"Amount": true},
+}
+
+func LocalChecksFailureReason(common *Common) string {
 	if len(common.Memos) == 0 {
-		return ter.TesSUCCESS
+		return ""
 	}
 
 	serializedLen, err := serializedMemosLength(common.Memos)
 	if err != nil {
-		return ter.TemMALFORMED
+		return "The MemoType, MemoData and MemoFormat fields may only contain hex-encoded data."
 	}
 	if serializedLen > MaxSerializedMemosSize {
-		return ter.TemMALFORMED
+		return "The memo exceeds the maximum allowed size."
 	}
 
 	for _, memoWrapper := range common.Memos {
 		memo := memoWrapper.Memo
-		// MemoType and MemoFormat are URL-charset-restricted; MemoData is not.
-		if !memoHexFieldOkay(memo.MemoType, true) ||
-			!memoHexFieldOkay(memo.MemoData, false) ||
-			!memoHexFieldOkay(memo.MemoFormat, true) {
-			return ter.TemMALFORMED
+		for _, value := range []string{memo.MemoType, memo.MemoData, memo.MemoFormat} {
+			if value == "" {
+				continue
+			}
+			if _, err := hex.DecodeString(value); err != nil {
+				return "The MemoType, MemoData and MemoFormat fields may only contain hex-encoded data."
+			}
+		}
+		for _, value := range []string{memo.MemoType, memo.MemoFormat} {
+			decoded, _ := hex.DecodeString(value)
+			if !isValidURLBytes(decoded) {
+				return "The MemoType and MemoFormat fields may only contain characters that are allowed in URLs under RFC 3986."
+			}
 		}
 	}
 
-	return ter.TesSUCCESS
-}
-
-// memoHexFieldOkay reports whether a memo field is absent, or is valid hex whose
-// decoded bytes satisfy the RFC 3986 URL charset when urlRestricted is set.
-func memoHexFieldOkay(value string, urlRestricted bool) bool {
-	if value == "" {
-		return true
-	}
-	decoded, err := hex.DecodeString(value)
-	if err != nil {
-		return false
-	}
-	if urlRestricted && !isValidURLBytes(decoded) {
-		return false
-	}
-	return true
+	return ""
 }
 
 // serializedMemosLength returns the serialized length of the Memos array

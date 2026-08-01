@@ -2,7 +2,6 @@ package handlers
 
 import (
 	"bytes"
-	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -221,9 +220,11 @@ func submitWithFailHard(ledger types.LedgerService, txJSON []byte, txBlob string
 //
 // rawParams carries the caller's request so fee_mult_max / fee_div_max are
 // read only when Fee is actually autofilled — rippled's checkFee returns
-// before inspecting them when Fee is present or offline. unlimited mirrors
-// rippled's isUnlimited(role) load-scaling carve-out.
-func signTransactionJSON(ctx context.Context, services *types.ServiceContainer, txJSON json.RawMessage, creds signCredentials, offline bool, unlimited bool, apiVersion int, rawParams json.RawMessage, signatureTarget string) (*signResult, *types.RpcError) {
+// before inspecting them when Fee is present or offline.
+func signTransactionJSON(rpcCtx *types.RpcContext, txJSON json.RawMessage, creds signCredentials, offline bool, rawParams json.RawMessage, signatureTarget string) (*signResult, *types.RpcError) {
+	ctx := rpcCtx.Context
+	services := rpcCtx.Services
+	apiVersion := rpcCtx.ApiVersion
 	// Check if ledger service is available (needed for auto-filling fields)
 	if !offline && (services == nil || services.Ledger == nil) {
 		return nil, rpcInternalInvariantError("sign: ledger service unavailable")
@@ -277,7 +278,10 @@ func signTransactionJSON(ctx context.Context, services *types.ServiceContainer, 
 	if !ok || !types.IsValidClassicAddress(txAccount) {
 		return nil, types.RpcErrorSrcActMalformed("Invalid field 'tx_json.Account'.")
 	}
-	if rpcErr := rejectSigningWhenLoaded(services, unlimited); rpcErr != nil {
+	if rpcErr := rejectOnlineSigningWithoutCurrentLedger(services, offline, apiVersion); rpcErr != nil {
+		return nil, rpcErr
+	}
+	if rpcErr := rejectSigningWhenLoaded(services, rpcCtx.Unlimited); rpcErr != nil {
 		return nil, rpcErr
 	}
 	if !signatureTargetPresent && txAccount != address {
@@ -342,7 +346,7 @@ func signTransactionJSON(ctx context.Context, services *types.ServiceContainer, 
 			if mErr != nil {
 				return nil, rpcInternalError("sign: fee probe marshaling failed", mErr)
 			}
-			fee, feeErr := services.Ledger.GetAutofillFee(probe, unlimited, feeOpts.Mult, feeOpts.Div)
+			fee, feeErr := services.Ledger.GetAutofillFee(probe, rpcCtx.Unlimited, feeOpts.Mult, feeOpts.Div)
 			if feeErr != nil {
 				var hfe *svcerr.HighFeeError
 				if errors.As(feeErr, &hfe) {
@@ -418,6 +422,17 @@ func rejectSigningWhenLoaded(services *types.ServiceContainer, unlimited bool) *
 		return nil
 	}
 	return types.RpcErrorTooBusy()
+}
+
+func rejectOnlineSigningWithoutCurrentLedger(services *types.ServiceContainer, offline bool, apiVersion int) *types.RpcError {
+	if offline || services == nil || services.Ledger == nil {
+		return nil
+	}
+	info := services.Ledger.GetServerInfo()
+	if info.Standalone || !types.ValidatedLedgerStale(info) {
+		return nil
+	}
+	return types.CurrentLedgerUnavailable(apiVersion)
 }
 
 func signatureTargetObject(txMap map[string]any, target string) (map[string]any, *types.RpcError) {

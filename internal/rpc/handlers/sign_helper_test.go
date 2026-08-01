@@ -120,7 +120,7 @@ func TestSignTransactionJSONPreservesExplicitEmptyFields(t *testing.T) {
 
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			result, rpcErr := signTransactionJSON(context.Background(), nil, test.txJSON, signCredentials{}, true, false, 2, params, "")
+			result, rpcErr := signTransactionJSON(&types.RpcContext{Context: context.Background(), ApiVersion: 2}, test.txJSON, signCredentials{}, true, params, "")
 			if rpcErr != nil {
 				t.Fatalf("sign transaction: %v", rpcErr)
 			}

@@ -1,10 +1,13 @@
 package handlers
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
+	"strings"
 	"testing"
 
+	addresscodec "github.com/LeJamon/go-xrpl/codec/addresscodec"
 	"github.com/LeJamon/go-xrpl/internal/feetrack"
 	"github.com/LeJamon/go-xrpl/internal/rpc/types"
 )
@@ -22,6 +25,7 @@ type loadAdmissionLedger struct {
 	sequenceFills    int
 	feeFills         int
 	transactionSends int
+	serverInfo       *types.LedgerServerInfo
 }
 
 func (l *loadAdmissionLedger) GetAccountInfo(context.Context, string, string) (*types.AccountInfo, error) {
@@ -46,6 +50,13 @@ func (l *loadAdmissionLedger) SubmitTransaction([]byte, ...string) (*types.Submi
 
 func (l *loadAdmissionLedger) GetCurrentFees() (uint64, uint64, uint64) {
 	return 10, 0, 0
+}
+
+func (l *loadAdmissionLedger) GetServerInfo() types.LedgerServerInfo {
+	if l.serverInfo != nil {
+		return *l.serverInfo
+	}
+	return types.LedgerServerInfo{Standalone: true}
 }
 
 func signingLoadParams(offline bool) json.RawMessage {
@@ -144,6 +155,69 @@ func TestSignRejectsLoadedOnlineAndOfflineBeforeLedgerWork(t *testing.T) {
 				t.Fatalf("downstream calls = lookup:%d sequence:%d fee:%d submit:%d", ledger.accountLookups, ledger.sequenceFills, ledger.feeFills, ledger.transactionSends)
 			}
 		})
+	}
+}
+
+func TestOnlineSigningRejectsStaleLedgerBeforeLoad(t *testing.T) {
+	methods := []struct {
+		name   string
+		params json.RawMessage
+		handle func(*types.RpcContext, json.RawMessage) (any, *types.RpcError)
+	}{
+		{
+			name:   "sign",
+			params: signingLoadParams(false),
+			handle: (&SignMethod{}).Handle,
+		},
+		{
+			name:   "sign for",
+			params: json.RawMessage(`{"account":"` + loadAdmissionSigner + `","seed_hex":"` + loadAdmissionSeedHex + `","key_type":"ed25519","tx_json":{"TransactionType":"AccountSet","Account":"` + loadAdmissionAccount + `","Sequence":1,"Fee":"10","SigningPubKey":""}}`),
+			handle: (&SignForMethod{}).Handle,
+		},
+	}
+
+	apiVersions := []struct {
+		name    string
+		version int
+	}{
+		{name: "api v1", version: types.ApiVersion1},
+		{name: "api v2", version: types.ApiVersion2},
+	}
+	for _, method := range methods {
+		for _, api := range apiVersions {
+			t.Run(method.name+" "+api.name, func(t *testing.T) {
+				ledger := &loadAdmissionLedger{serverInfo: &types.LedgerServerInfo{}}
+				loadChecks := 0
+				ctx := &types.RpcContext{
+					Context:    context.Background(),
+					ApiVersion: api.version,
+					Services: &types.ServiceContainer{
+						Ledger: ledger,
+						IsLoadedCluster: func() bool {
+							loadChecks++
+							return true
+						},
+					},
+				}
+
+				_, rpcErr := method.handle(ctx, method.params)
+				if rpcErr == nil {
+					t.Fatal("expected stale-ledger error")
+				}
+				wantCode := types.RpcNOT_SYNCED
+				wantToken := "notSynced"
+				if api.version == types.ApiVersion1 {
+					wantCode = types.RpcNO_CURRENT
+					wantToken = "noCurrent"
+				}
+				if rpcErr.Code != wantCode || rpcErr.ErrorString != wantToken {
+					t.Fatalf("error = %#v, want %s (%d)", rpcErr, wantToken, wantCode)
+				}
+				if loadChecks != 0 || ledger.accountLookups != 0 {
+					t.Fatalf("load checks = %d, account lookups = %d", loadChecks, ledger.accountLookups)
+				}
+			})
+		}
 	}
 }
 
@@ -382,6 +456,233 @@ func TestMultisignLoadAdmissionValidationPrecedence(t *testing.T) {
 		assertTooBusy(t, rpcErr)
 		if ledger.accountLookups != 0 {
 			t.Fatalf("account lookups = %d, want 0", ledger.accountLookups)
+		}
+	})
+}
+
+func TestSubmitMultisignedUsesCanonicalFieldParsingAfterAdmission(t *testing.T) {
+	t.Run("numeric string sequence and numeric fee", func(t *testing.T) {
+		ledger := &loadAdmissionLedger{}
+		params := json.RawMessage(`{"tx_json":{"TransactionType":"AccountSet","Account":"` + loadAdmissionAccount + `","Sequence":"1","Fee":50,"SigningPubKey":""}}`)
+		ctx := &types.RpcContext{
+			Context:  context.Background(),
+			Services: &types.ServiceContainer{Ledger: ledger},
+		}
+
+		_, rpcErr := (&SubmitMultisignedMethod{}).Handle(ctx, params)
+		if rpcErr == nil || rpcErr.Message != "Missing field 'tx_json.Signers'." {
+			t.Fatalf("error = %#v, want missing Signers after canonical parsing", rpcErr)
+		}
+	})
+
+	t.Run("sequence parse precedes transaction signature", func(t *testing.T) {
+		ledger := &loadAdmissionLedger{}
+		params := json.RawMessage(`{"tx_json":{"TransactionType":"AccountSet","Account":"` + loadAdmissionAccount + `","Sequence":"4294967296","Fee":"10","SigningPubKey":"","TxnSignature":""}}`)
+		ctx := &types.RpcContext{
+			Context:  context.Background(),
+			Services: &types.ServiceContainer{Ledger: ledger},
+		}
+
+		_, rpcErr := (&SubmitMultisignedMethod{}).Handle(ctx, params)
+		if rpcErr == nil || rpcErr.ErrorString != "invalidParams" || rpcErr.Message != "Field 'tx_json.Sequence' has invalid data." {
+			t.Fatalf("error = %#v, want Sequence parse failure", rpcErr)
+		}
+	})
+
+	t.Run("numeric transaction type", func(t *testing.T) {
+		ledger := &loadAdmissionLedger{}
+		params := json.RawMessage(`{"tx_json":{"TransactionType":3,"Account":"` + loadAdmissionAccount + `","Sequence":1,"Fee":"10","SigningPubKey":""}}`)
+		ctx := &types.RpcContext{
+			Context:  context.Background(),
+			Services: &types.ServiceContainer{Ledger: ledger},
+		}
+
+		_, rpcErr := (&SubmitMultisignedMethod{}).Handle(ctx, params)
+		if rpcErr == nil || rpcErr.Message != "Missing field 'tx_json.Signers'." {
+			t.Fatalf("error = %#v, want missing Signers after numeric TransactionType", rpcErr)
+		}
+	})
+
+	t.Run("numeric string transaction type", func(t *testing.T) {
+		ledger := &loadAdmissionLedger{}
+		params := json.RawMessage(`{"tx_json":{"TransactionType":"3","Account":"` + loadAdmissionAccount + `","Sequence":1,"Fee":"10","SigningPubKey":""}}`)
+		ctx := &types.RpcContext{
+			Context:  context.Background(),
+			Services: &types.ServiceContainer{Ledger: ledger},
+		}
+
+		_, rpcErr := (&SubmitMultisignedMethod{}).Handle(ctx, params)
+		if rpcErr == nil || rpcErr.Message != "Missing field 'tx_json.Signers'." {
+			t.Fatalf("error = %#v, want missing Signers after numeric-string TransactionType", rpcErr)
+		}
+	})
+
+	t.Run("local checks precede transaction signature", func(t *testing.T) {
+		ledger := &loadAdmissionLedger{}
+		params, err := json.Marshal(map[string]any{"tx_json": map[string]any{
+			"TransactionType": "AccountSet",
+			"Account":         loadAdmissionAccount,
+			"Sequence":        1,
+			"Fee":             "10",
+			"SigningPubKey":   "",
+			"TxnSignature":    "",
+			"Memos": []any{map[string]any{"Memo": map[string]any{
+				"MemoData": strings.Repeat("AA", 1020),
+			}}},
+		}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		ctx := &types.RpcContext{
+			Context:  context.Background(),
+			Services: &types.ServiceContainer{Ledger: ledger},
+		}
+
+		_, rpcErr := (&SubmitMultisignedMethod{}).Handle(ctx, params)
+		if rpcErr == nil || rpcErr.ErrorString != "invalidParams" || rpcErr.Message != "The memo exceeds the maximum allowed size." {
+			t.Fatalf("error = %#v, want local-check failure", rpcErr)
+		}
+	})
+
+	t.Run("template errors are returned verbatim before transaction signature", func(t *testing.T) {
+		ledger := &loadAdmissionLedger{}
+		params := json.RawMessage(`{"tx_json":{"TransactionType":"AccountSet","Account":"` + loadAdmissionAccount + `","Destination":"` + loadAdmissionSigner + `","Sequence":1,"Fee":"10","SigningPubKey":"","TxnSignature":""}}`)
+		ctx := &types.RpcContext{
+			Context:  context.Background(),
+			Services: &types.ServiceContainer{Ledger: ledger},
+		}
+
+		_, rpcErr := (&SubmitMultisignedMethod{}).Handle(ctx, params)
+		if rpcErr == nil || rpcErr.ErrorString != "invalidParams" || rpcErr.Message != "Field 'Destination' found in disallowed location." {
+			t.Fatalf("error = %#v, want verbatim template failure", rpcErr)
+		}
+	})
+
+	t.Run("local MPT fee rejection precedes transaction signature", func(t *testing.T) {
+		ledger := &loadAdmissionLedger{}
+		params, err := json.Marshal(map[string]any{"tx_json": map[string]any{
+			"TransactionType": "AccountSet",
+			"Account":         loadAdmissionAccount,
+			"Sequence":        1,
+			"Fee": map[string]any{
+				"value":           "10",
+				"mpt_issuance_id": strings.Repeat("A", 48),
+			},
+			"SigningPubKey": "",
+			"TxnSignature":  "",
+		}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		ctx := &types.RpcContext{
+			Context:  context.Background(),
+			Services: &types.ServiceContainer{Ledger: ledger},
+		}
+
+		_, rpcErr := (&SubmitMultisignedMethod{}).Handle(ctx, params)
+		if rpcErr == nil || rpcErr.ErrorString != "invalidParams" || rpcErr.Message != "Amount can not be MPT." {
+			t.Fatalf("error = %#v, want local MPT rejection", rpcErr)
+		}
+	})
+
+	t.Run("issued fee uses the XRP fee error", func(t *testing.T) {
+		ledger := &loadAdmissionLedger{}
+		params := json.RawMessage(`{"tx_json":{"TransactionType":"AccountSet","Account":"` + loadAdmissionAccount + `","Sequence":1,"Fee":"1/USD/` + loadAdmissionSigner + `","SigningPubKey":"","TxnSignature":""}}`)
+		ctx := &types.RpcContext{
+			Context:  context.Background(),
+			Services: &types.ServiceContainer{Ledger: ledger},
+		}
+
+		_, rpcErr := (&SubmitMultisignedMethod{}).Handle(ctx, params)
+		if rpcErr == nil || rpcErr.ErrorString != "invalidParams" || rpcErr.Message != "Invalid Fee field.  Fees must be specified in XRP." {
+			t.Fatalf("error = %#v, want XRP fee rejection", rpcErr)
+		}
+	})
+
+	t.Run("sorts signers by account ID", func(t *testing.T) {
+		accounts := []string{loadAdmissionSigner, loadAdmissionSigningAccount}
+		_, firstID, err := addresscodec.DecodeClassicAddressToAccountID(accounts[0])
+		if err != nil {
+			t.Fatal(err)
+		}
+		_, secondID, err := addresscodec.DecodeClassicAddressToAccountID(accounts[1])
+		if err != nil {
+			t.Fatal(err)
+		}
+		if bytes.Compare(firstID, secondID) < 0 {
+			accounts[0], accounts[1] = accounts[1], accounts[0]
+		}
+		signers := make([]any, len(accounts))
+		for i, account := range accounts {
+			signers[i] = map[string]any{"Signer": map[string]any{
+				"Account":       account,
+				"SigningPubKey": "",
+				"TxnSignature":  "",
+			}}
+		}
+		params, err := json.Marshal(map[string]any{"tx_json": map[string]any{
+			"TransactionType": "AccountSet",
+			"Account":         loadAdmissionAccount,
+			"Sequence":        1,
+			"Fee":             "10",
+			"SigningPubKey":   "",
+			"Signers":         signers,
+		}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		ctx := &types.RpcContext{
+			Context:  context.Background(),
+			Services: &types.ServiceContainer{Ledger: &loadAdmissionLedger{}},
+		}
+
+		result, rpcErr := (&SubmitMultisignedMethod{}).Handle(ctx, params)
+		if rpcErr != nil {
+			t.Fatalf("submit_multisigned: %#v", rpcErr)
+		}
+		response := result.(map[string]any)
+		txJSON := response["tx_json"].(map[string]any)
+		gotSigners := txJSON["Signers"].([]any)
+		previousID := []byte(nil)
+		for _, wrapped := range gotSigners {
+			account := wrapped.(map[string]any)["Signer"].(map[string]any)["Account"].(string)
+			_, accountID, err := addresscodec.DecodeClassicAddressToAccountID(account)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if previousID != nil && bytes.Compare(previousID, accountID) >= 0 {
+				t.Fatalf("Signers not sorted by AccountID: %v", gotSigners)
+			}
+			previousID = accountID
+		}
+	})
+
+	t.Run("delegate is the fee payer", func(t *testing.T) {
+		ledger := &loadAdmissionLedger{}
+		params, err := json.Marshal(map[string]any{"tx_json": map[string]any{
+			"TransactionType": "AccountSet",
+			"Account":         loadAdmissionAccount,
+			"Delegate":        loadAdmissionSigner,
+			"Sequence":        1,
+			"Fee":             "10",
+			"SigningPubKey":   "",
+			"Signers": []any{map[string]any{"Signer": map[string]any{
+				"Account":       loadAdmissionSigner,
+				"SigningPubKey": "",
+				"TxnSignature":  "",
+			}}},
+		}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		ctx := &types.RpcContext{
+			Context:  context.Background(),
+			Services: &types.ServiceContainer{Ledger: ledger},
+		}
+
+		_, rpcErr := (&SubmitMultisignedMethod{}).Handle(ctx, params)
+		if rpcErr == nil || rpcErr.Message != "A Signer may not be the transaction's Account ("+loadAdmissionSigner+")." {
+			t.Fatalf("error = %#v, want delegated fee-payer rejection", rpcErr)
 		}
 	})
 }
