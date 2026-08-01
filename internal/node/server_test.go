@@ -284,7 +284,7 @@ func TestDoShutdown_ToleratesNilComponents(t *testing.T) {
 	// criterion is "doesn't crash": WebSocketServer.Close dereferences its
 	// receiver on the first line (connectionsMutex.Lock), so a nil wsServer
 	// would panic without the guard this test pins.
-	if err := doShutdown(nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, xrpllog.Discard()); err != nil {
+	if err := doShutdown(nil, nil, nil, nil, nil, nil, nil, nil, xrpllog.Discard()); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -292,7 +292,7 @@ func TestDoShutdown_ToleratesNilComponents(t *testing.T) {
 func TestDoShutdownReturnsConsensusPersistenceFailure(t *testing.T) {
 	want := errors.New("manifest persistence failed")
 	components := &adaptor.Components{Engine: &shutdownErrorEngine{err: want}}
-	err := doShutdown(nil, nil, nil, nil, nil, nil, components, nil, nil, nil, xrpllog.Discard())
+	err := doShutdown(nil, nil, nil, nil, components, nil, nil, nil, xrpllog.Discard())
 	if !errors.Is(err, want) {
 		t.Fatalf("doShutdown error = %v, want %v", err, want)
 	}
@@ -302,8 +302,6 @@ func TestDoShutdownReturnsStorageCloseFailures(t *testing.T) {
 	nodeStoreErr := errors.New("node store close failed")
 	repositoryErr := errors.New("repository close failed")
 	err := doShutdown(
-		nil,
-		nil,
 		nil,
 		nil,
 		nil,

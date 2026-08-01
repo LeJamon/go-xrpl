@@ -129,6 +129,43 @@ func TestStartAuxiliaryServersBindsAllBeforeServing(t *testing.T) {
 	}
 }
 
+func TestBindAuxiliaryServersWaitsForStart(t *testing.T) {
+	t.Parallel()
+
+	ctx, cancel := context.WithCancelCause(context.Background())
+	defer cancel(nil)
+	serveErr := errors.New("listener failed")
+	var acceptCalled atomic.Bool
+	listener := &testListener{
+		addr: testAddr("127.0.0.1:9100"),
+		accept: func() (net.Conn, error) {
+			acceptCalled.Store(true)
+			return nil, serveErr
+		},
+	}
+	aux, err := bindAuxiliaryServers(
+		envValues(map[string]string{"GOXRPL_METRICS": "127.0.0.1:9100"}),
+		func(_, _ string) (net.Listener, error) { return listener, nil },
+	)
+	if err != nil {
+		t.Fatalf("bindAuxiliaryServers() error = %v", err)
+	}
+	defer aux.Shutdown()
+	if acceptCalled.Load() {
+		t.Fatal("auxiliary server began serving before Start")
+	}
+
+	aux.Start(ctx, cancel)
+	select {
+	case <-ctx.Done():
+	case <-time.After(time.Second):
+		t.Fatal("auxiliary server did not begin serving after Start")
+	}
+	if !acceptCalled.Load() {
+		t.Fatal("auxiliary listener was not accepted after Start")
+	}
+}
+
 func TestStartAuxiliaryServersServeFailureCancelsContext(t *testing.T) {
 	t.Parallel()
 

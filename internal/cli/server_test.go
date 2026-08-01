@@ -257,6 +257,7 @@ func TestExplicitServerUsesFlagsBeforeOrAfterSubcommand(t *testing.T) {
 					standalone bool,
 					startup service.StartupConfig,
 					_, _ xrpllog.Logger,
+					_ func(),
 				) error {
 					gotStandalone = standalone
 					gotStartup = startup
@@ -296,6 +297,7 @@ func TestServerBindFailurePreventsNodeStart(t *testing.T) {
 		service.StartupConfig,
 		xrpllog.Logger,
 		xrpllog.Logger,
+		func(),
 	) error {
 		nodeStarted.Store(true)
 		return nil
@@ -324,7 +326,9 @@ func TestServerCancellationShutsDownAuxiliaryListeners(t *testing.T) {
 		_ service.StartupConfig,
 		_,
 		_ xrpllog.Logger,
+		ready func(),
 	) error {
+		ready()
 		close(started)
 		<-ctx.Done()
 		return context.Cause(ctx)
