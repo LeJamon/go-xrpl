@@ -16,8 +16,8 @@ import (
 	"github.com/LeJamon/go-xrpl/codec/binarycodec"
 	"github.com/LeJamon/go-xrpl/internal/ledger"
 	"github.com/LeJamon/go-xrpl/internal/ledger/header"
-	"github.com/LeJamon/go-xrpl/internal/tx/ledgerfields"
 	"github.com/LeJamon/go-xrpl/keylet"
+	ledgerfields "github.com/LeJamon/go-xrpl/ledger/entry"
 	"github.com/LeJamon/go-xrpl/protocol"
 	"github.com/LeJamon/go-xrpl/shamap"
 )
@@ -172,7 +172,7 @@ func (s *Service) loadLedgerJSON(
 			delete(object, "mpt_issuance_id")
 		}
 
-		typed := ledgerfields.New(entryType)
+		typed := ledgerfields.NewByName(entryType)
 		if typed == nil {
 			return nil, fmt.Errorf("accountState[%d] has unknown LedgerEntryType %q", i, entryType)
 		}
@@ -231,7 +231,7 @@ func (s *Service) loadLedgerJSON(
 		Drops:               totalDrops,
 		Accepted:            true,
 		CloseFlags:          closeFlags,
-		CloseTimeResolution: closeTimeResolution,
+		CloseTimeResolution: uint8(closeTimeResolution),
 		CloseTime:           closeTime,
 	}
 	hdr.Hash = header.CalculateHash(hdr)

@@ -159,4 +159,4 @@ docs-gen-fast:
 # conformance-status.md, whose counts change with the full suite and which is
 # refreshed only via `just docs-gen`.
 docs-check: docs-gen-fast
-    git diff --exit-code -- docs/rpc-methods.md docs/supported-transactions.md docs/amendments.md
+    git diff --exit-code -- docs/rpc-methods.md docs/supported-transactions.md docs/amendments.md docs/ledger-entries.md

@@ -9,8 +9,8 @@ import (
 	"github.com/LeJamon/go-xrpl/amendment"
 	"github.com/LeJamon/go-xrpl/internal/ledger/state"
 	"github.com/LeJamon/go-xrpl/internal/tx"
-	"github.com/LeJamon/go-xrpl/internal/tx/ledgerfields"
 	"github.com/LeJamon/go-xrpl/internal/tx/lending/lmath"
+	ledgerfields "github.com/LeJamon/go-xrpl/ledger/entry"
 )
 
 // The lending ledger objects carry their NUMBER fields (DebtTotal, CoverAvailable,

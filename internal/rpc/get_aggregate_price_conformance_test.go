@@ -229,7 +229,7 @@ func aggregateOracleNode(
 			AssetPrice: assetPrice,
 			Scale:      scale,
 			HasPrice:   true,
-			HasScale:   true,
+			HasScale:   scale != 0,
 		}},
 		PreviousTxnLgrSeq: previousSequence,
 	}

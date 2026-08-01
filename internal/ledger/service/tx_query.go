@@ -494,8 +494,8 @@ type LedgerContext struct {
 
 // GetTransaction retrieves a transaction by its hash
 func (s *Service) GetTransaction(txHash [32]byte) (*TransactionResult, error) {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
+	s.historyComponent.mu.RLock()
+	defer s.historyComponent.mu.RUnlock()
 
 	// Look up which ledger contains this transaction
 	ledgerSeq, found := s.txIndex[txHash]
@@ -684,6 +684,8 @@ func (s *Service) GetTransactionWithRange(ctx context.Context, txHash [32]byte, 
 func (s *Service) StoreTransaction(txHash [32]byte, txData []byte) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	s.historyComponent.mu.Lock()
+	defer s.historyComponent.mu.Unlock()
 
 	if s.openLedger == nil {
 		return ErrNoOpenLedger

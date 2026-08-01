@@ -1,170 +1,205 @@
-package nodestore_test
+package nodestore
 
 import (
-	"math/rand"
-	"reflect"
-	"sort"
+	"bytes"
+	"context"
+	"errors"
 	"testing"
 
-	"github.com/LeJamon/go-xrpl/storage/nodestore"
+	"github.com/LeJamon/go-xrpl/storage/kvstore"
+	"github.com/LeJamon/go-xrpl/storage/kvstore/memorydb"
 )
 
-const (
-	minPayloadBytes  = 1
-	maxPayloadBytes  = 2000
-	numObjectsToTest = 100 // Reduced for faster tests
-)
-
-// Test helpers
-
-func createPredictableBatch(t *testing.T, numObjects int, seed int64) []*nodestore.Node {
-	t.Helper()
-
-	rng := rand.New(rand.NewSource(seed))
-	batch := make([]*nodestore.Node, numObjects)
-
-	for i := range numObjects {
-		// Generate node type
-		nodeType := nodestore.NodeType(rng.Intn(4) + 1)
-		if nodeType == 2 { // Skip removed transaction type
-			nodeType = nodestore.NodeTransaction
-		}
-
-		// Generate random data
-		dataSize := rng.Intn(maxPayloadBytes-minPayloadBytes) + minPayloadBytes
-		data := make(nodestore.Blob, dataSize)
-
-		for j := range data {
-			data[j] = byte(rng.Intn(256))
-		}
-
-		// Create node
-		batch[i] = nodestore.NewNode(nodeType, data)
+func TestStoreBatchPersistsNodes(t *testing.T) {
+	database := testDatabase(t, memorydb.New(), noCacheConfig())
+	nodes := []*Node{
+		testNode(NodeLedger, []byte("ledger"), 10),
+		testNode(NodeAccount, []byte("account"), 11),
+		testNode(NodeTransaction, []byte("transaction"), 12),
 	}
-
-	return batch
-}
-
-func areBatchesEqual(t *testing.T, lhs, rhs []*nodestore.Node) bool {
-	t.Helper()
-
-	if len(lhs) != len(rhs) {
-		return false
+	if err := database.StoreBatch(t.Context(), nodes); err != nil {
+		t.Fatalf("StoreBatch: %v", err)
 	}
-
-	for i := range lhs {
-		if !nodesEqual(lhs[i], rhs[i]) {
-			return false
+	for _, want := range nodes {
+		got, err := database.Fetch(t.Context(), want.Hash)
+		if err != nil {
+			t.Fatalf("Fetch(%x): %v", want.Hash[:4], err)
+		}
+		if got == nil || got.Type != want.Type || got.Hash != want.Hash ||
+			got.LedgerSeq != want.LedgerSeq || !bytes.Equal(got.Data, want.Data) {
+			t.Fatalf("Fetch(%x) = %#v, want %#v", want.Hash[:4], got, want)
 		}
 	}
-	return true
 }
 
-func nodesEqual(lhs, rhs *nodestore.Node) bool {
-	if lhs.Type != rhs.Type {
-		return false
+func TestStoreRejectsInvalidNodes(t *testing.T) {
+	valid := testNode(NodeAccount, []byte("valid"), 1)
+	tests := []struct {
+		name string
+		node *Node
+	}{
+		{name: "nil"},
+		{name: "unknown type", node: &Node{Type: NodeUnknown, Hash: valid.Hash, Data: valid.Data}},
+		{name: "unsupported type", node: &Node{Type: 2, Hash: valid.Hash, Data: valid.Data}},
+		{name: "out of range type", node: &Node{Type: 257, Hash: valid.Hash, Data: valid.Data}},
+		{name: "zero hash", node: &Node{Type: NodeAccount, Data: valid.Data}},
+		{name: "empty payload", node: &Node{Type: NodeAccount, Hash: valid.Hash}},
 	}
-	if lhs.Hash != rhs.Hash {
-		return false
-	}
-	return reflect.DeepEqual(lhs.Data, rhs.Data)
-}
-
-func sortBatch(batch []*nodestore.Node) {
-	sort.Slice(batch, func(i, j int) bool {
-		for k := range 32 {
-			if batch[i].Hash[k] < batch[j].Hash[k] {
-				return true
-			} else if batch[i].Hash[k] > batch[j].Hash[k] {
-				return false
-			}
-		}
-		return false
-	})
-}
-
-// Basic tests (equivalent to Basics_test.cpp)
-
-func TestNode(t *testing.T) {
-	t.Run("Creation", func(t *testing.T) {
-		data := nodestore.Blob("test data")
-		node := nodestore.NewNode(nodestore.NodeTransaction, data)
-
-		if !node.IsValid() {
-			t.Error("node should be valid")
-		}
-
-		if node.Size() != len(data) {
-			t.Errorf("expected size %d, got %d", len(data), node.Size())
-		}
-
-		expectedHash := nodestore.ComputeHash256(data)
-		if node.Hash != expectedHash {
-			t.Error("hash mismatch")
-		}
-	})
-
-	t.Run("InvalidNode", func(t *testing.T) {
-		node := &nodestore.Node{
-			Type: nodestore.NodeUnknown,
-			Data: nil,
-		}
-
-		if node.IsValid() {
-			t.Error("node should be invalid")
-		}
-	})
-
-	t.Run("EmptyData", func(t *testing.T) {
-		node := &nodestore.Node{
-			Type: nodestore.NodeTransaction,
-			Data: nodestore.Blob{},
-		}
-
-		if node.IsValid() {
-			t.Error("node with empty data should be invalid")
-		}
-	})
-}
-
-func TestBatches(t *testing.T) {
-	const seedValue = 50
-
-	t.Run("Deterministic", func(t *testing.T) {
-		batch1 := createPredictableBatch(t, numObjectsToTest, seedValue)
-		batch2 := createPredictableBatch(t, numObjectsToTest, seedValue)
-
-		if !areBatchesEqual(t, batch1, batch2) {
-			t.Error("batches with same seed should be equal")
-		}
-	})
-
-	t.Run("DifferentSeed", func(t *testing.T) {
-		batch1 := createPredictableBatch(t, numObjectsToTest, seedValue)
-		batch2 := createPredictableBatch(t, numObjectsToTest, seedValue+1)
-
-		if areBatchesEqual(t, batch1, batch2) {
-			t.Error("batches with different seeds should not be equal")
-		}
-	})
-
-	t.Run("Sorting", func(t *testing.T) {
-		batch := createPredictableBatch(t, 10, seedValue)
-		original := make([]*nodestore.Node, len(batch))
-		copy(original, batch)
-
-		sortBatch(batch)
-
-		// Verify it's actually sorted
-		for i := 1; i < len(batch); i++ {
-			for k := range 32 {
-				if batch[i-1].Hash[k] < batch[i].Hash[k] {
-					break
-				} else if batch[i-1].Hash[k] > batch[i].Hash[k] {
-					t.Error("batch is not properly sorted")
-					return
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			for _, store := range []func(*KVDatabase) error{
+				func(database *KVDatabase) error {
+					return database.Store(context.Background(), test.node)
+				},
+				func(database *KVDatabase) error {
+					return database.StoreBatch(context.Background(), []*Node{test.node})
+				},
+			} {
+				backend := memorydb.New()
+				database := testDatabase(t, backend, noCacheConfig())
+				if err := store(database); !errors.Is(err, ErrInvalidNode) {
+					t.Fatalf("error = %v, want ErrInvalidNode", err)
 				}
 			}
+		})
+	}
+}
+
+func TestStoreBatchValidationIsAtomic(t *testing.T) {
+	backend := memorydb.New()
+	database := testDatabase(t, backend, noCacheConfig())
+	valid := testNode(NodeAccount, []byte("valid"), 1)
+	invalid := &Node{Type: NodeAccount, Data: []byte("invalid")}
+	if err := database.StoreBatch(t.Context(), []*Node{valid, invalid}); !errors.Is(err, ErrInvalidNode) {
+		t.Fatalf("StoreBatch error = %v, want ErrInvalidNode", err)
+	}
+	if _, err := backend.Get(valid.Hash[:]); !errors.Is(err, kvstore.ErrNotFound) {
+		t.Fatalf("valid prefix persisted after invalid batch: %v", err)
+	}
+}
+
+func TestFetchRejectsMalformedRecords(t *testing.T) {
+	tests := []struct {
+		name string
+		data []byte
+	}{
+		{name: "empty"},
+		{name: "short header", data: []byte{byte(NodeAccount), 0, 0, 0}},
+		{name: "unknown type", data: []byte{0, 0, 0, 0, 1, 1}},
+		{name: "unsupported type", data: []byte{2, 0, 0, 0, 1, 1}},
+		{name: "empty payload", data: []byte{byte(NodeAccount), 0, 0, 0, 1}},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			backend := memorydb.New()
+			database := testDatabase(t, backend, noCacheConfig())
+			hash := testHash([]byte(test.name))
+			if err := backend.Put(hash[:], test.data); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := database.Fetch(t.Context(), hash); !errors.Is(err, ErrDataCorrupt) {
+				t.Fatalf("Fetch error = %v, want ErrDataCorrupt", err)
+			}
+			if _, err := database.FetchDataUncached(t.Context(), hash); !errors.Is(err, ErrDataCorrupt) {
+				t.Fatalf("FetchDataUncached error = %v, want ErrDataCorrupt", err)
+			}
+		})
+	}
+}
+
+type databaseErrorStore struct {
+	kvstore.KeyValueStore
+	getErr      error
+	putErr      error
+	newBatchErr error
+}
+
+func (s *databaseErrorStore) Get([]byte) ([]byte, error) {
+	return nil, s.getErr
+}
+
+func (s *databaseErrorStore) Put([]byte, []byte) error {
+	return s.putErr
+}
+
+func (s *databaseErrorStore) NewBatch() (kvstore.Batch, error) {
+	if s.newBatchErr != nil {
+		return nil, s.newBatchErr
+	}
+	return s.KeyValueStore.NewBatch()
+}
+
+func TestDatabasePropagatesBackendErrors(t *testing.T) {
+	backend := &databaseErrorStore{KeyValueStore: memorydb.New()}
+	database := testDatabase(t, backend, noCacheConfig())
+	node := testNode(NodeAccount, []byte("node"), 1)
+
+	backend.putErr = errors.New("put failed")
+	if err := database.Store(t.Context(), node); !errors.Is(err, backend.putErr) {
+		t.Fatalf("Store error = %v, want put error", err)
+	}
+	backend.putErr = nil
+	backend.getErr = errors.New("get failed")
+	if _, err := database.Fetch(t.Context(), node.Hash); !errors.Is(err, backend.getErr) {
+		t.Fatalf("Fetch error = %v, want get error", err)
+	}
+	backend.getErr = nil
+	backend.newBatchErr = errors.New("batch failed")
+	if err := database.StoreBatch(t.Context(), []*Node{node}); !errors.Is(err, backend.newBatchErr) {
+		t.Fatalf("StoreBatch error = %v, want batch error", err)
+	}
+}
+
+func TestStoreBatchAlwaysClosesBatch(t *testing.T) {
+	putErr := errors.New("put failed")
+	writeErr := errors.New("write failed")
+	closeErr := errors.New("close failed")
+	tests := []struct {
+		name    string
+		batch   *pruneFaultBatch
+		wantErr error
+	}{
+		{name: "put error", batch: &pruneFaultBatch{putErr: putErr}, wantErr: putErr},
+		{name: "write error", batch: &pruneFaultBatch{writeErr: writeErr}, wantErr: writeErr},
+		{name: "close error", batch: &pruneFaultBatch{closeErr: closeErr}, wantErr: closeErr},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			store := &pruneFaultStore{
+				KeyValueStore: memorydb.New(),
+				batch:         test.batch,
+			}
+			database := testDatabase(t, store, noCacheConfig())
+			err := database.StoreBatch(t.Context(), []*Node{
+				testNode(NodeAccount, []byte(test.name), 1),
+			})
+			if !errors.Is(err, test.wantErr) {
+				t.Fatalf("StoreBatch error = %v, want %v", err, test.wantErr)
+			}
+			if test.batch.closes != 1 {
+				t.Fatalf("batch Close calls = %d, want 1", test.batch.closes)
+			}
+		})
+	}
+}
+
+func TestDatabaseConfigValidation(t *testing.T) {
+	if _, err := NewKVDatabase(nil, DatabaseConfig{}); !errors.Is(err, ErrInvalidConfig) {
+		t.Fatalf("nil store error = %v, want ErrInvalidConfig", err)
+	}
+	for _, config := range []DatabaseConfig{
+		{PositiveCache: CacheConfig{MaxEntries: 1, TTL: testCacheTTL}},
+		{PositiveCache: CacheConfig{Enabled: true, TTL: testCacheTTL}},
+		{PositiveCache: CacheConfig{Enabled: true, MaxEntries: 1}},
+		{NegativeCache: CacheConfig{Enabled: true, MaxEntries: -1, TTL: testCacheTTL}},
+	} {
+		store := memorydb.New()
+		_, err := NewKVDatabase(store, config)
+		if !errors.Is(err, ErrInvalidConfig) {
+			t.Errorf("config %#v error = %v, want ErrInvalidConfig", config, err)
 		}
-	})
+		if closeErr := store.Close(); closeErr != nil {
+			t.Fatal(closeErr)
+		}
+	}
 }

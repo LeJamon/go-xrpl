@@ -38,6 +38,8 @@ type Store struct {
 	lastRotated    uint32
 	minimumOnline  uint32
 	filePath       string
+	persist        func(persistedState) (bool, error)
+	fileOps        stateFileOps
 }
 
 type persistedState struct {
@@ -46,18 +48,56 @@ type persistedState struct {
 	MinimumOnline uint32 `json:"minimum_online,omitempty"`
 }
 
+type persistedFile interface {
+	Write([]byte) (int, error)
+	Sync() error
+	Close() error
+	Name() string
+}
+
+type stateDirectory interface {
+	Sync() error
+	Close() error
+}
+
+type stateFileOps struct {
+	mkdirAll  func(string, os.FileMode) error
+	createTmp func(string, string) (persistedFile, error)
+	rename    func(string, string) error
+	openDir   func(string) (stateDirectory, error)
+	remove    func(string) error
+}
+
+func defaultStateFileOps() stateFileOps {
+	return stateFileOps{
+		mkdirAll: os.MkdirAll,
+		createTmp: func(dir, pattern string) (persistedFile, error) {
+			return os.CreateTemp(dir, pattern)
+		},
+		rename: os.Rename,
+		openDir: func(path string) (stateDirectory, error) {
+			return os.Open(path)
+		},
+		remove: os.Remove,
+	}
+}
+
 // New constructs the advisory-delete state store. advisoryDelete reflects the
 // node_db advisory_delete config flag. dataDir is the filesystem directory
 // used for persistence; an empty dataDir disables persistence (in-memory only, e.g.
 // standalone / tests). Any previously persisted state is loaded immediately.
 func New(advisoryDelete bool, dataDir string) (*Store, error) {
-	s := &Store{advisoryDelete: advisoryDelete}
+	s := &Store{
+		advisoryDelete: advisoryDelete,
+		fileOps:        defaultStateFileOps(),
+	}
 	if dataDir != "" {
 		s.filePath = filepath.Join(dataDir, stateFile)
 	}
 	if err := s.load(); err != nil {
 		return nil, err
 	}
+	s.persist = s.persistState
 	return s, nil
 }
 
@@ -77,16 +117,17 @@ func (s *Store) GetCanDelete() uint32 {
 // returns the stored value. Mirrors SHAMapStore::setCanDelete() — the value is
 // only retained while advisory delete is enabled.
 func (s *Store) SetCanDelete(seq uint32) (uint32, error) {
-	s.mu.Lock()
-	if s.advisoryDelete {
-		s.canDelete = seq
+	var stored uint32
+	err := s.update(func(next *persistedState) {
+		if s.advisoryDelete {
+			next.CanDelete = seq
+		}
+		stored = next.CanDelete
+	})
+	if err != nil {
+		stored = s.GetCanDelete()
 	}
-	stored := s.canDelete
-	s.mu.Unlock()
-	if err := s.save(); err != nil {
-		return stored, err
-	}
-	return stored, nil
+	return stored, err
 }
 
 // GetLastRotated returns the most recently rotated ledger sequence (0 until
@@ -101,10 +142,11 @@ func (s *Store) GetLastRotated() uint32 {
 // the online-delete rotation subsystem (see Rotator); can_delete never advances
 // lastRotated.
 func (s *Store) SetLastRotated(seq uint32) error {
-	s.mu.Lock()
-	s.lastRotated = seq
-	s.mu.Unlock()
-	return s.save()
+	return s.update(func(next *persistedState) {
+		if seq > next.LastRotated {
+			next.LastRotated = seq
+		}
+	})
 }
 
 func (s *Store) GetMinimumOnline() uint32 {
@@ -116,20 +158,32 @@ func (s *Store) GetMinimumOnline() uint32 {
 // SetMinimumOnline durably advances the lowest retained ledger before online
 // deletion starts removing records below it.
 func (s *Store) SetMinimumOnline(seq uint32) error {
-	s.mu.Lock()
-	if seq > s.minimumOnline {
-		s.minimumOnline = seq
-	}
-	s.mu.Unlock()
-	return s.save()
+	return s.update(func(next *persistedState) {
+		if seq > next.MinimumOnline {
+			next.MinimumOnline = seq
+		}
+	})
 }
 
 func (s *Store) SetRotation(lastRotated, minimumOnline uint32) error {
-	s.mu.Lock()
-	s.lastRotated = lastRotated
-	s.minimumOnline = minimumOnline
-	s.mu.Unlock()
-	return s.save()
+	return s.update(func(next *persistedState) {
+		if lastRotated > next.LastRotated {
+			next.LastRotated = lastRotated
+		}
+		if minimumOnline > next.MinimumOnline {
+			next.MinimumOnline = minimumOnline
+		}
+	})
+}
+
+func rotationMinimum(lastRotated uint32) uint32 {
+	if lastRotated == 0 {
+		return 0
+	}
+	if lastRotated == ^uint32(0) {
+		return lastRotated
+	}
+	return lastRotated + 1
 }
 
 func (s *Store) load() error {
@@ -160,52 +214,67 @@ func (s *Store) load() error {
 	return nil
 }
 
-func (s *Store) save() error {
+func (s *Store) update(change func(*persistedState)) error {
 	s.saveMu.Lock()
 	defer s.saveMu.Unlock()
-	if s.filePath == "" {
-		return nil
-	}
+
 	s.mu.RLock()
-	ps := persistedState{
+	next := persistedState{
 		CanDelete:     s.canDelete,
 		LastRotated:   s.lastRotated,
 		MinimumOnline: s.minimumOnline,
 	}
 	s.mu.RUnlock()
+	change(&next)
 
-	data, err := json.MarshalIndent(ps, "", "  ")
-	if err != nil {
+	committed, err := s.persist(next)
+	if !committed {
 		return err
 	}
-	if err := os.MkdirAll(filepath.Dir(s.filePath), 0o755); err != nil {
-		return err
+	s.mu.Lock()
+	s.canDelete = next.CanDelete
+	s.lastRotated = next.LastRotated
+	s.minimumOnline = next.MinimumOnline
+	s.mu.Unlock()
+	return err
+}
+
+func (s *Store) persistState(next persistedState) (bool, error) {
+	if s.filePath == "" {
+		return true, nil
+	}
+	data, err := json.MarshalIndent(next, "", "  ")
+	if err != nil {
+		return false, err
+	}
+	if err := s.fileOps.mkdirAll(filepath.Dir(s.filePath), 0o755); err != nil {
+		return false, err
 	}
 	dir := filepath.Dir(s.filePath)
-	tmp, err := os.CreateTemp(dir, ".advisory-delete-*")
+	tmp, err := s.fileOps.createTmp(dir, ".advisory-delete-*")
 	if err != nil {
-		return err
+		return false, err
 	}
 	tmpPath := tmp.Name()
-	defer os.Remove(tmpPath)
+	defer s.fileOps.remove(tmpPath)
 	if _, err := tmp.Write(data); err != nil {
 		tmp.Close()
-		return err
+		return false, err
 	}
 	if err := tmp.Sync(); err != nil {
 		tmp.Close()
-		return err
+		return false, err
 	}
 	if err := tmp.Close(); err != nil {
-		return err
+		return false, err
 	}
-	if err := os.Rename(tmpPath, s.filePath); err != nil {
-		return err
+	if err := s.fileOps.rename(tmpPath, s.filePath); err != nil {
+		return false, err
 	}
-	dirFile, err := os.Open(dir)
+	dirFile, err := s.fileOps.openDir(dir)
 	if err != nil {
-		return err
+		return true, err
 	}
 	defer dirFile.Close()
-	return dirFile.Sync()
+	return true, dirFile.Sync()
 }

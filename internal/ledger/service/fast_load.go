@@ -82,7 +82,7 @@ func (s *Service) loadStoredLedgerByHash(ctx context.Context, hash [32]byte) (*l
 		return nil, nil
 	}
 	if stored.Type != nodestore.NodeLedger {
-		return nil, fmt.Errorf("%w: stored object is %s, not a ledger header", errStoredLedgerUnavailable, stored.Type)
+		return nil, fmt.Errorf("%w: stored object has type %d, not a ledger header", errStoredLedgerUnavailable, stored.Type)
 	}
 	h, err := header.DeserializeHeader(stored.Data, true)
 	if err != nil {
@@ -165,7 +165,7 @@ func storedHeaderMatchesInfo(h header.LedgerHeader, info *relationaldb.LedgerInf
 		h.AccountHash == [32]byte(info.AccountHash) && h.TxHash == [32]byte(info.TransactionHash) &&
 		h.ParentHash == [32]byte(info.ParentHash) && h.Drops == uint64(info.TotalCoins) &&
 		h.CloseTime.Equal(info.CloseTime) && h.ParentCloseTime.Equal(info.ParentCloseTime) &&
-		h.CloseTimeResolution == uint32(info.CloseTimeRes) && h.CloseFlags == uint8(info.CloseFlags) &&
+		uint32(h.CloseTimeResolution) == uint32(info.CloseTimeRes) && h.CloseFlags == uint8(info.CloseFlags) &&
 		header.CalculateHash(h) == h.Hash
 }
 

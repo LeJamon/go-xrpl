@@ -62,7 +62,8 @@ func checkValidBookDirectory(entries []InvariantEntry, view ReadView, rules *ame
 	rootIndexes := make(map[[32]byte]bool)
 
 	for _, e := range entries {
-		if e.IsDelete || e.After == nil || state.EntryType(e.After) != "DirectoryNode" {
+		afterType, err := state.DecodeType(e.After)
+		if e.IsDelete || e.After == nil || err != nil || afterType != entry.TypeDirectoryNode {
 			continue
 		}
 

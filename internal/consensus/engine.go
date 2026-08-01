@@ -5,15 +5,18 @@ import (
 	"time"
 )
 
-// Engine is the consensus algorithm interface that node implementations plug into.
-type Engine interface {
+type EngineLifecycle interface {
 	Start(ctx context.Context) error
 
 	Stop() error
+}
 
+type EngineRoundDriver interface {
 	// StartRound begins a round; proposing enables this node's proposal.
 	StartRound(round RoundID, proposing bool) error
+}
 
+type EngineInbound interface {
 	// OnProposal handles an incoming proposal. originPeer is the overlay peer
 	// ID that delivered it (0 for self-originated); passed to the relay path
 	// so gossip forwards exclude the originator.
@@ -24,9 +27,13 @@ type Engine interface {
 	OnValidation(validation *Validation, originPeer uint64) error
 
 	OnTxSet(id TxSetID, txs [][]byte) error
+}
 
+type EngineLedgerReceiver interface {
 	OnLedger(id LedgerID, ledger []byte) error
+}
 
+type EngineLedgerSwitch interface {
 	// TrySwitchToLedger synchronously attempts to make a locally-held ledger
 	// the consensus parent. The candidate must be the exact wrong-ledger
 	// recovery target, the validated tip, or the current network preference.
@@ -35,26 +42,40 @@ type Engine interface {
 	// OnLedgerAcquireFailed reports that an in-flight acquisition was invalidated
 	// by a topology change, allowing wrong-ledger recovery to re-resolve its target.
 	OnLedgerAcquireFailed(id LedgerID)
+}
 
-	State() *RoundState
-
+type EngineObservability interface {
 	Mode() Mode
 
 	Phase() Phase
 
 	IsProposing() bool
 
-	Timing() Timing
-
 	GetLastCloseInfo() (proposers int, convergeTime time.Duration)
 
 	// GetJSON returns the consensus-round state as a JSON map backing the
 	// consensus_info RPC; full requests the detailed view.
 	GetJSON(full bool) map[string]any
+}
 
+type EngineEvents interface {
 	// Subscribe registers a sink for the engine's typed event bus. The engine
 	// fires events on its own goroutine, so OnEvent must not block.
 	Subscribe(sub EventSubscriber)
+}
+
+type RouterEngine interface {
+	EngineInbound
+	EngineLedgerSwitch
+}
+
+type Engine interface {
+	EngineLifecycle
+	EngineRoundDriver
+	RouterEngine
+	EngineLedgerReceiver
+	EngineObservability
+	EngineEvents
 }
 
 // VerifiedValidationProcessor is implemented by engines that separate

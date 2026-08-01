@@ -129,7 +129,8 @@ func (a *AMMVote) Apply(ctx *tx.ApplyContext) ter.Result {
 	feeNew := a.TradingFee
 
 	// Track minimum token holder for potential replacement
-	var minTokens tx.Amount = state.NewIssuedAmountFromValue(9999999999999999, 80, "", "") // Max amount
+	var minTokens tx.Amount
+	minTokensSet := false
 	var minPos int = -1
 	var minAccount [20]byte
 	var minFee uint16
@@ -171,10 +172,16 @@ func (a *AMMVote) Apply(ctx *tx.ApplyContext) ter.Result {
 		num = num.AddRounded(math.int(int64(feeVal)).MulRounded(lpTokensNumber, state.RoundToNearest), state.RoundToNearest)
 		den = den.AddRounded(lpTokensNumber, state.RoundToNearest)
 
-		if lpTokens.Compare(minTokens) < 0 ||
-			(lpTokens.Compare(minTokens) == 0 && feeVal < minFee) ||
-			(lpTokens.Compare(minTokens) == 0 && feeVal == minFee && compareAccountIDs(slot.Account, minAccount) < 0) {
+		minComparison := 0
+		if minTokensSet {
+			minComparison = lpTokens.Compare(minTokens)
+		}
+		if !minTokensSet ||
+			minComparison < 0 ||
+			(minComparison == 0 && feeVal < minFee) ||
+			(minComparison == 0 && feeVal == minFee && compareAccountIDs(slot.Account, minAccount) < 0) {
 			minTokens = lpTokens
+			minTokensSet = true
 			// Index into the OUTPUT slice (where this entry will be appended),
 			// matching rippled's minPos = updatedVoteSlots.size() before push_back.
 			// Using the source index diverges when zero-balance voters are skipped.
@@ -205,7 +212,8 @@ func (a *AMMVote) Apply(ctx *tx.ApplyContext) ter.Result {
 			})
 			num = num.AddRounded(math.int(int64(feeNew)).MulRounded(lpTokensNewNumber, state.RoundToNearest), state.RoundToNearest)
 			den = den.AddRounded(lpTokensNewNumber, state.RoundToNearest)
-		} else if isGreater(lpTokensNew, minTokens) || (lpTokensNew.Compare(minTokens) == 0 && feeNew > minFee) {
+		} else if minTokensSet &&
+			(isGreater(lpTokensNew, minTokens) || (lpTokensNew.Compare(minTokens) == 0 && feeNew > minFee)) {
 			// Replace minimum token holder if new account has more tokens
 			if minPos >= 0 && minPos < len(updatedVoteSlots) {
 				// Remove min holder's contribution from totals

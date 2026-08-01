@@ -267,8 +267,8 @@ func (dt *DisputeTracker) AllStalled(parms consensus.ConsensusParms, proposing b
 //   - the tally is >MinConsensusPct one-sided (overwhelming yes or no
 //     support), so further flipping is unlikely.
 func disputeStalled(d *consensus.DisputedTx, parms consensus.ConsensusParms, proposing bool, peersUnchanged int) bool {
-	currentCutoff := parms.AvalancheCutoffs[d.AvalancheState]
-	nextCutoff := parms.AvalancheCutoffs[currentCutoff.Next]
+	currentCutoff := parms.AvalancheCutoff(d.AvalancheState)
+	nextCutoff := parms.AvalancheCutoff(currentCutoff.Next)
 
 	if nextCutoff.ConsensusTime > currentCutoff.ConsensusTime ||
 		d.AvalancheCounter < parms.MinRounds {

@@ -102,7 +102,7 @@ func TestDiscoveryBootstrapPartialFailureExtendsCooldown(t *testing.T) {
 	observeBootstrapRate(t, d, address, 360_735)
 
 	now = now.Add(9 * time.Minute)
-	d.delayBootstrapRetry(address, bootstrapPartialRetry)
+	d.delayConnectRetry(address, bootstrapPartialRetry)
 	now = now.Add(time.Minute)
 	assert.Empty(t, d.selectPeersToConnect(1, true), "the original cooldown expired but the partial failure extended it")
 	assert.True(t, d.bootstrapSourceSummary().allUnviable())

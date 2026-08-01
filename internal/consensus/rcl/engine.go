@@ -14,9 +14,21 @@ import (
 	"github.com/LeJamon/go-xrpl/protocol"
 )
 
+type roundState struct {
+	Round          consensus.RoundID
+	CloseTimes     consensus.CloseTimes
+	OurPosition    *consensus.Proposal
+	StartTime      time.Time
+	PhaseStart     time.Time
+	HaveCorrectLCL bool
+}
+
 // Engine implements the RCL consensus algorithm.
 type Engine struct {
-	mu sync.RWMutex
+	lifecycleMu sync.Mutex
+	started     bool
+	stopped     bool
+	mu          sync.RWMutex
 
 	// Configuration
 	timing     consensus.Timing
@@ -53,7 +65,7 @@ type Engine struct {
 	// independent of sync state: observing validators may emit partial
 	// validations. Written at round start under e.mu and read lock-free by RPC.
 	validating atomic.Bool
-	state      *consensus.RoundState
+	state      *roundState
 	prevLedger consensus.Ledger
 	// acceptedLCL records the adaptor's accepted ledger while consensus is
 	// intentionally working from a different validation-preferred ledger.
@@ -70,8 +82,7 @@ type Engine struct {
 	buildingLedgerSeq     atomic.Uint32
 	pendingRecoveryLedger consensus.Ledger
 
-	ourTxSet  consensus.TxSet
-	converged bool
+	ourTxSet consensus.TxSet
 
 	// censorship tracks txs we propose but that never get included, warning
 	// on persistent exclusion. Observational only; touched solely from the
@@ -392,8 +403,8 @@ func (e *Engine) TimerEntry() {
 
 // SetArchive wires (or, with nil, detaches) the validation archive.
 // Detach clears the onStale callback so the archive can be Close()d
-// without a use-after-close send. Safe before/after Start and with Stop,
-// not with Start.
+// without a use-after-close send. Safe before or after Start; callers must
+// not replace the owned archive concurrently with Start or Stop.
 func (e *Engine) SetArchive(a ValidationArchive) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
@@ -442,16 +453,30 @@ func (e *Engine) SetStallPing(ping func()) {
 }
 
 func (e *Engine) Start(ctx context.Context) error {
+	e.lifecycleMu.Lock()
+	defer e.lifecycleMu.Unlock()
+	if e.stopped {
+		return fmt.Errorf("start engine: %w", consensus.ErrEventBusStopped)
+	}
+	if e.started {
+		return fmt.Errorf("start engine: %w", consensus.ErrEventBusStarted)
+	}
+
 	e.mu.Lock()
 	defer e.mu.Unlock()
-
-	e.ctx, e.cancel = context.WithCancel(ctx)
-	e.eventBus.Start()
 
 	ledger, err := e.adaptor.GetLastClosedLedger()
 	if err != nil {
 		return fmt.Errorf("failed to get last closed ledger: %w", err)
 	}
+	if err := e.eventBus.Start(); err != nil {
+		return fmt.Errorf("start event bus: %w", err)
+	}
+	e.started = true
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	e.ctx, e.cancel = context.WithCancel(ctx)
 	e.prevLedger = ledger
 
 	// Wire the validation tracker: trusted set + quorum from the adaptor;
@@ -518,9 +543,12 @@ func (e *Engine) Start(ctx context.Context) error {
 }
 
 // Stop shuts down the engine. A wired archive is drained and committed
-// before return so no stale validations are lost (modulo SaveBatch
-// failures, which the writer re-queues).
+// before return, and any terminal durability failure is returned.
 func (e *Engine) Stop() error {
+	e.lifecycleMu.Lock()
+	defer e.lifecycleMu.Unlock()
+	e.stopped = true
+
 	// Guard against Stop before Start: e.cancel is nil until Start runs, and a
 	// defensive doShutdown / error-path stop must not nil-panic (same class as
 	// the fuzz-found doShutdown nil-panic).
@@ -530,17 +558,29 @@ func (e *Engine) Stop() error {
 	e.wg.Wait()
 	e.eventBus.Stop()
 
-	// Flush has no archive interaction, so its ordering relative to the
-	// archive close below is irrelevant.
+	arc := e.loadArchive()
+	if arc != nil {
+		// Stop new stale deliveries, but retain the owned archive so a later
+		// Stop can observe terminal completion after a bounded Close times out.
+		e.mu.Lock()
+		if e.validationTracker != nil {
+			e.validationTracker.SetOnStale(nil)
+		}
+		e.mu.Unlock()
+	}
+
 	if e.validationTracker != nil {
 		e.validationTracker.Flush()
 	}
 
-	if arc := e.loadArchive(); arc != nil {
+	if arc != nil {
 		// Bounded close — a stuck archive must not hang shutdown.
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-		_ = arc.Close(ctx)
+		err := arc.Close(ctx)
 		cancel()
+		if err != nil {
+			return fmt.Errorf("close validation archive: %w", err)
+		}
 	}
 	return nil
 }
@@ -696,12 +736,8 @@ func (e *Engine) startRoundLocked(round consensus.RoundID, proposing, recovering
 	// Init round state. StartTime uses e.now() (its consumers measure via
 	// e.now().Sub()); PhaseStart uses adaptor.Now() (checkConvergence reads
 	// it via adaptor.Now().Sub()) — each clock paired with its reader.
-	e.state = &consensus.RoundState{
+	e.state = &roundState{
 		Round:          round,
-		Mode:           e.mode,
-		Phase:          consensus.PhaseOpen,
-		Proposals:      make(map[consensus.NodeID]*consensus.Proposal),
-		Disputed:       make(map[consensus.TxID]*consensus.DisputedTx),
 		CloseTimes:     consensus.CloseTimes{Peers: make(map[time.Time]int)},
 		StartTime:      e.now(),
 		PhaseStart:     e.adaptor.Now(),
@@ -716,7 +752,6 @@ func (e *Engine) startRoundLocked(round consensus.RoundID, proposing, recovering
 	e.comparesTxSets = make(map[consensus.TxSetID]struct{})
 	e.peerUnchangedCounter = 0
 	e.establishCounter = 0
-	e.converged = false
 	e.ourTxSet = nil
 	e.lastConvergePercent = 0
 	e.currentRoundTime = 0
@@ -806,12 +841,6 @@ func (e *Engine) driveNegativeUNLNewValidatorsLocked() {
 	e.previousTrustedSet = next
 }
 
-func (e *Engine) State() *consensus.RoundState {
-	e.mu.RLock()
-	defer e.mu.RUnlock()
-	return e.state
-}
-
 // Mode returns the current consensus mode via the lock-free atomic mirror
 // (see modeAtomic).
 func (e *Engine) Mode() consensus.Mode {
@@ -841,9 +870,6 @@ func (e *Engine) IsProposing() bool {
 // partial. Takes no engine lock, safe on the server_info hot path.
 func (e *Engine) IsValidating() bool {
 	return e.validating.Load()
-}
-func (e *Engine) Timing() consensus.Timing {
-	return e.timing
 }
 
 // avMinConsensusTime floors the convergePercent divisor so a short prior
@@ -1037,10 +1063,6 @@ func (e *Engine) Subscribe(sub consensus.EventSubscriber) {
 	e.eventBus.Subscribe(sub)
 }
 
-func (e *Engine) Events() <-chan consensus.Event {
-	return e.eventBus.Events()
-}
-
 // setMode changes the consensus mode. Caller must hold e.mu.
 func (e *Engine) setMode(newMode consensus.Mode) {
 	if e.mode == newMode {
@@ -1054,13 +1076,13 @@ func (e *Engine) setMode(newMode consensus.Mode) {
 	// old or new — fine for the snapshot.
 	e.modeAtomic.Store(int32(newMode))
 
+	e.adaptor.OnModeChange(oldMode, newMode)
+
 	e.eventBus.Publish(&consensus.ModeChangedEvent{
 		OldMode:   oldMode,
 		NewMode:   newMode,
 		Timestamp: e.adaptor.Now(),
 	})
-
-	e.adaptor.OnModeChange(oldMode, newMode)
 
 	// Leaving proposing/observing resets censorship tracking: entries recorded
 	// under the old mode no longer reflect a set we keep proposing, so warning
@@ -1091,7 +1113,6 @@ func (e *Engine) setPhase(newPhase consensus.Phase) {
 
 	e.phase = newPhase
 	if e.state != nil {
-		e.state.Phase = newPhase
 		e.state.PhaseStart = e.adaptor.Now()
 	}
 

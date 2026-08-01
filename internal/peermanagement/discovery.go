@@ -871,7 +871,11 @@ func (d *Discovery) selectPeersToConnect(count int, bootstrap bool) []string {
 	seenHosts := make(map[string]struct{})
 	for _, peer := range d.peers {
 		if peer.Connected {
-			seenHosts[connectAttemptHost(peer.Address)] = struct{}{}
+			host := connectAttemptHost(peer.Address)
+			seenHosts[host] = struct{}{}
+			if !bootstrap && count > 0 {
+				d.recentAttempts[host] = now.Add(recentConnectAttempt)
+			}
 		}
 	}
 	eligible := func(address string) bool {
@@ -1084,7 +1088,7 @@ func (d *Discovery) markNegotiatedCompression(address string, enabled bool) {
 	peer.supportsCompression = enabled
 }
 
-func (d *Discovery) delayBootstrapRetry(address string, delay time.Duration) {
+func (d *Discovery) delayConnectRetry(address string, delay time.Duration) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	host := connectAttemptHost(address)
@@ -1137,10 +1141,6 @@ func (d *Discovery) finishConnectAttempt(address string, result connectAttemptRe
 }
 
 func (d *Discovery) markConnectSucceededLocked(address string) {
-	if d.recentAttempts == nil {
-		d.recentAttempts = make(map[string]time.Time)
-	}
-	d.recentAttempts[connectAttemptHost(address)] = d.now().Add(recentConnectAttempt)
 	if !d.fixedPeers[address] {
 		delete(d.connectAttempts, address)
 		return

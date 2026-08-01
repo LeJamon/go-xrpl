@@ -1,42 +1,9 @@
-// Package nodestore provides persistent key-value storage optimized for XRPL ledger objects.
-// It offers content-addressable storage with features like caching and asynchronous I/O.
-//
-// Keys are SHA-512Half hashes computed by callers (the SHAMap and ledger layers)
-// over object-type-specific hash prefixes — see crypto/sha512half and the HashPrefix
-// constants in protocol. The nodestore stores both the key and the serialized
-// payload verbatim and treats the payload as opaque: it never recomputes a key
-// from the payload, because the preimage (hash prefix plus field layout) is not
-// recoverable from the stored bytes alone and differs per object type.
 package nodestore
 
-import (
-	"context"
-	"crypto/sha256"
-	"fmt"
-	"time"
-)
+import "context"
 
 // Hash256 is a 32-byte content key — an XRPL SHA-512Half digest.
 type Hash256 [32]byte
-
-// Blob is a serialized ledger-object payload.
-type Blob []byte
-
-// IsZero reports whether h is the zero hash.
-func IsZero(h Hash256) bool {
-	return h == [32]byte{}
-}
-
-// ComputeHash256 derives a 32-byte content key from data with a plain SHA-256.
-//
-// This is NOT the XRPL node hash. Production keys are SHA-512Half computed by the
-// SHAMap and ledger layers over object-type-specific hash prefixes and are stored
-// verbatim (see the package doc and NewNode). ComputeHash256 is a convenience for
-// deriving a deterministic, self-consistent key from arbitrary bytes — used by
-// NewNode and by tests that need a synthetic key without an XRPL preimage.
-func ComputeHash256(data Blob) Hash256 {
-	return Hash256(sha256.Sum256(data))
-}
 
 // NodeType represents the type of ledger object stored in the nodestore.
 type NodeType uint32
@@ -52,58 +19,18 @@ const (
 	NodeTransaction NodeType = 4
 )
 
-// String returns the string representation of the NodeType.
-func (nt NodeType) String() string {
-	switch nt {
-	case NodeUnknown:
-		return "NodeUnknown"
-	case NodeLedger:
-		return "NodeLedger"
-	case NodeAccount:
-		return "NodeAccount"
-	case NodeTransaction:
-		return "NodeTransaction"
-	default:
-		return fmt.Sprintf("NodeType(%d)", uint32(nt))
-	}
-}
-
 // Node represents a stored ledger object with its metadata.
 //
 // Nodes are immutable once stored, cached, or returned from
 // Database.Fetch — mutating Data after that point corrupts every other
-// holder of the same pointer. Cache.Put deep-copies on insert so a
+// holder of the same pointer. The node cache deep-copies on insert so a
 // caller may construct, Store, and continue using its local pointer;
 // downstream readers see an isolated copy.
 type Node struct {
-	Type      NodeType  // Type of the ledger object
-	Hash      Hash256   // Content key (caller-supplied SHA-512Half for production nodes); stored verbatim
-	Data      Blob      // Serialized ledger object data
-	LedgerSeq uint32    // Optional ledger sequence number
-	CreatedAt time.Time // Timestamp when the node was created
-}
-
-// NewNode creates a new Node with the specified type and data, deriving a
-// synthetic key via ComputeHash256. Production callers do not use NewNode; they
-// set Hash directly to the XRPL SHA-512Half key (see backend.NodeStore.StoreBatch
-// and the ledger persistence path). NewNode exists for tests and standalone uses
-// that just need a deterministic key for a blob.
-func NewNode(nodeType NodeType, data Blob) *Node {
-	hash := ComputeHash256(data)
-	return &Node{
-		Type:      nodeType,
-		Hash:      hash,
-		Data:      append(Blob(nil), data...), // defensive copy
-		CreatedAt: time.Now(),
-	}
-}
-
-// Size returns the size of the node's data in bytes.
-func (n *Node) Size() int {
-	if n == nil {
-		return 0
-	}
-	return len(n.Data)
+	Type      NodeType // Type of the ledger object
+	Hash      Hash256  // Content key (caller-supplied SHA-512Half for production nodes); stored verbatim
+	Data      []byte   // Serialized ledger object data
+	LedgerSeq uint32   // Optional ledger sequence number
 }
 
 // Clone returns a deep copy of the node with its own Data buffer,
@@ -112,36 +39,14 @@ func (n *Node) Clone() *Node {
 	if n == nil {
 		return nil
 	}
-	data := make(Blob, len(n.Data))
+	data := make([]byte, len(n.Data))
 	copy(data, n.Data)
 	return &Node{
 		Type:      n.Type,
 		Hash:      n.Hash,
 		Data:      data,
 		LedgerSeq: n.LedgerSeq,
-		CreatedAt: n.CreatedAt,
 	}
-}
-
-// IsValid reports whether the node is structurally usable: non-nil, a real
-// object type, a non-empty payload, and a non-zero key.
-//
-// It deliberately does NOT recompute the content hash from Data. Keys are
-// caller-supplied SHA-512Half values over object-type-specific hash prefixes
-// (see the package doc); the preimage is not recoverable from the stored bytes,
-// so the nodestore cannot recompute the key. Content-hash integrity is the
-// responsibility of the SHAMap and ledger layers that own the preimage.
-func (n *Node) IsValid() bool {
-	if n == nil {
-		return false
-	}
-	if n.Type == NodeUnknown {
-		return false
-	}
-	if len(n.Data) == 0 {
-		return false
-	}
-	return !IsZero(n.Hash)
 }
 
 // Database defines the main interface for the NodeStore.
@@ -172,13 +77,8 @@ type Database interface {
 	// underlying backend flush is uninterruptible and continues
 	// running so partial fsync state is never observed.
 	//
-	// Concurrency contract: callers MUST serialise Sync invocations.
-	// On ctx cancellation Sync returns to the caller while the
-	// in-flight backend flush is still running; a subsequent Sync
-	// would invoke the backend concurrently with that flush, and
-	// not all backends are required to be re-entrant. The current
-	// in-tree caller (Service.persistLedger) is serialised by the
-	// Service mutex.
+	// Sync calls are serialized. Cancellation unblocks the caller without
+	// allowing a later Sync or Close to overlap the backend flush.
 	Sync(ctx context.Context) error
 }
 
@@ -195,46 +95,12 @@ type GenerationDatabase interface {
 
 // Statistics holds performance metrics for the NodeStore.
 type Statistics struct {
-	// Read metrics
-	Reads             uint64 // Total number of read operations
-	FetchHits         uint64 // Reads that returned a found object (cache or backend)
-	CacheHits         uint64 // Number of successful in-memory cache hits
-	CacheMisses       uint64 // Number of cache misses
-	NegativeCacheHits uint64 // Reads short-circuited by the negative cache
-	ReadBytes         uint64 // Total bytes of found objects (cache or backend)
-
-	// Write metrics
-	Writes     uint64 // Total number of write operations
-	WriteBytes uint64 // Total bytes written
-
-	// Cache metrics
-	CacheSize    uint64 // Current number of items in cache
-	CacheMaxSize uint64 // Maximum cache size
-
-	// Backend metrics
-	BackendName string // Name of the storage backend
-}
-
-// String returns a formatted string representation of the statistics.
-func (s Statistics) String() string {
-	cacheHitRate := float64(0)
-	if s.Reads > 0 {
-		cacheHitRate = float64(s.CacheHits) / float64(s.Reads) * 100
-	}
-
-	return fmt.Sprintf(`NodeStore Statistics:
-  Backend: %s
-  Reads: %d (%.2f%% cache hit rate)
-  Cache: %d/%d items
-  Negative Cache Hits: %d
-  Writes: %d
-  Read Bytes: %d
-  Write Bytes: %d`,
-		s.BackendName,
-		s.Reads, cacheHitRate,
-		s.CacheSize, s.CacheMaxSize,
-		s.NegativeCacheHits,
-		s.Writes,
-		s.ReadBytes,
-		s.WriteBytes)
+	Reads       uint64
+	FetchHits   uint64
+	CacheHits   uint64
+	CacheMisses uint64
+	CacheSize   uint64
+	ReadBytes   uint64
+	Writes      uint64
+	WriteBytes  uint64
 }

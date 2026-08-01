@@ -13,14 +13,11 @@ import (
 
 func TestGetTransactionWithRangeRelationalFallback(t *testing.T) {
 	ctx := context.Background()
-	repositories, err := sqlitedb.NewRepositoryManager(t.TempDir())
+	repositories, err := sqlitedb.NewRepositoryManager(ctx, t.TempDir(), sqlitedb.Settings{})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := repositories.Open(ctx); err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = repositories.Close(context.Background()) })
+	t.Cleanup(func() { _ = repositories.Close() })
 
 	cfg := DefaultConfig()
 	cfg.RelationalDB = repositories
@@ -44,7 +41,7 @@ func TestGetTransactionWithRangeRelationalFallback(t *testing.T) {
 
 	var ledgerHash relationaldb.Hash
 	ledgerHash[0] = 0xA5
-	if err := repositories.Ledger().SaveValidatedLedger(ctx, &relationaldb.LedgerInfo{
+	if err := repositories.Ledger().SaveValidatedLedger(ctx, relationaldb.LedgerInfo{
 		Hash:     ledgerHash,
 		Sequence: 5,
 	}); err != nil {
@@ -54,7 +51,7 @@ func TestGetTransactionWithRangeRelationalFallback(t *testing.T) {
 	for sequence := relationaldb.LedgerIndex(1); sequence <= 3; sequence++ {
 		var hash relationaldb.Hash
 		hash[0] = byte(sequence)
-		if err := repositories.Transaction().SaveTransaction(ctx, &relationaldb.TransactionInfo{
+		if err := repositories.Transaction().SaveTransaction(ctx, relationaldb.TransactionInfo{
 			Hash:      hash,
 			LedgerSeq: sequence,
 			Status:    "validated",
@@ -67,7 +64,7 @@ func TestGetTransactionWithRangeRelationalFallback(t *testing.T) {
 	var foundHash relationaldb.Hash
 	foundHash[0] = 0xF0
 	rawTxn := []byte{0x12, 0x34}
-	if err := repositories.Transaction().SaveTransaction(ctx, &relationaldb.TransactionInfo{
+	if err := repositories.Transaction().SaveTransaction(ctx, relationaldb.TransactionInfo{
 		Hash:      foundHash,
 		LedgerSeq: 5,
 		Status:    "validated",

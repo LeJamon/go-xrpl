@@ -56,7 +56,7 @@ func buildSignedPaymentBlob(t *testing.T, env *jtx.TestEnv, sender, receiver *jt
 // TestService_* cases.
 func newServiceForOpenLedgerTest(t *testing.T) *service.Service {
 	t.Helper()
-	cfg := service.DefaultConfig()
+	cfg := defaultServiceConfig()
 	svc, err := service.New(cfg)
 	if err != nil {
 		t.Fatalf("service.New: %v", err)

@@ -52,10 +52,8 @@ func TestFreshNodeSwitchesToNetworkLedgerTwoBeforeFirstValidation(t *testing.T) 
 
 	require.False(t, svc.NeedsInitialSync())
 	require.Equal(t, consensus.ModeSwitchedLedger, engine.Mode())
-	state := engine.State()
-	require.NotNil(t, state)
-	require.Equal(t, uint32(3), state.Round.Seq)
-	require.Equal(t, networkHeader.Hash, state.Round.ParentHash)
+	require.Equal(t, networkHeader.Hash, svc.GetClosedLedger().Hash())
+	require.Equal(t, networkHeader.LedgerIndex+1, svc.GetCurrentLedgerIndex())
 }
 
 func TestSlowInitialAcquisitionWaitsForCurrentConsensusSwitch(t *testing.T) {
@@ -103,9 +101,6 @@ func TestSlowInitialAcquisitionWaitsForCurrentConsensusSwitch(t *testing.T) {
 	require.Equal(t, consensus.OpModeConnected, a.GetOperatingMode())
 	require.Equal(t, consensus.ModeWrongLedger, engine.Mode())
 	require.False(t, engine.IsProposing())
-	state := engine.State()
-	require.NotNil(t, state)
-	require.Equal(t, local.Hash(), state.Round.ParentHash)
 
 	fresh := completedCatchUpAcquisitionWithHeader(t, header.LedgerHeader{
 		LedgerIndex:         stale.Seq() + 1,
@@ -127,10 +122,7 @@ func TestSlowInitialAcquisitionWaitsForCurrentConsensusSwitch(t *testing.T) {
 	require.Equal(t, consensus.OpModeTracking, a.GetOperatingMode())
 	require.Equal(t, consensus.ModeSwitchedLedger, engine.Mode())
 	require.False(t, engine.IsProposing())
-	state = engine.State()
-	require.NotNil(t, state)
-	require.Equal(t, fresh.Seq()+1, state.Round.Seq)
-	require.Equal(t, fresh.Hash(), state.Round.ParentHash)
+	require.Equal(t, fresh.Seq()+1, svc.GetCurrentLedgerIndex())
 
 	svc.SetValidatedLedger(fresh.Seq(), fresh.Hash())
 	router.maintenanceTick()
@@ -164,13 +156,13 @@ func TestAcquiredValidatedTipSurvivesRecoveryTimerTick(t *testing.T) {
 	targetHeader := stale.Header()
 	targetHeader.LedgerIndex = stale.Sequence() + 5
 	targetHeader.ParentHash = [32]byte{0xA4}
-	targetHeader.Hash = [32]byte{0xA5}
 	targetHeader.AccountHash = stateRoot
 	targetHeader.TxHash = txRoot
 	targetHeader.ParentCloseTime = time.Now().Add(-4 * time.Second)
 	targetHeader.CloseTime = time.Now().Add(-2 * time.Second)
 	targetHeader.CloseTimeResolution = 10
 	targetHeader.Validated = false
+	targetHeader.Hash = header.CalculateHash(targetHeader)
 
 	require.NoError(t, svc.StoreLedgerWithState(t.Context(), &targetHeader, stateMap, txMap))
 	validation := &consensus.Validation{
@@ -199,10 +191,6 @@ func TestAcquiredValidatedTipSurvivesRecoveryTimerTick(t *testing.T) {
 
 	require.Equal(t, targetHeader.Hash, svc.GetClosedLedger().Hash())
 	require.NotEqual(t, consensus.ModeWrongLedger, engine.Mode())
-	state := engine.State()
-	require.NotNil(t, state)
-	require.Equal(t, targetHeader.LedgerIndex+1, state.Round.Seq)
-	require.Equal(t, targetHeader.Hash, state.Round.ParentHash)
 }
 
 func TestAcquiredValidatedTipSurvivesMovingRecoveryTarget(t *testing.T) {
@@ -228,13 +216,13 @@ func TestAcquiredValidatedTipSurvivesMovingRecoveryTarget(t *testing.T) {
 	targetHeader := stale.Header()
 	targetHeader.LedgerIndex = stale.Sequence() + 5
 	targetHeader.ParentHash = [32]byte{0xB4}
-	targetHeader.Hash = [32]byte{0xB5}
 	targetHeader.AccountHash = stateRoot
 	targetHeader.TxHash = txRoot
 	targetHeader.ParentCloseTime = time.Now().Add(-4 * time.Second)
 	targetHeader.CloseTime = time.Now().Add(-2 * time.Second)
 	targetHeader.CloseTimeResolution = 10
 	targetHeader.Validated = false
+	targetHeader.Hash = header.CalculateHash(targetHeader)
 
 	require.NoError(t, svc.StoreLedgerWithState(t.Context(), &targetHeader, stateMap, txMap))
 	validation := &consensus.Validation{
@@ -273,8 +261,4 @@ func TestAcquiredValidatedTipSurvivesMovingRecoveryTarget(t *testing.T) {
 
 	require.Equal(t, targetHeader.Hash, svc.GetClosedLedger().Hash())
 	require.NotEqual(t, consensus.ModeWrongLedger, engine.Mode())
-	state := engine.State()
-	require.NotNil(t, state)
-	require.Equal(t, targetHeader.LedgerIndex+1, state.Round.Seq)
-	require.Equal(t, targetHeader.Hash, state.Round.ParentHash)
 }

@@ -16,10 +16,8 @@ import (
 	"github.com/LeJamon/go-xrpl/internal/ledger"
 	"github.com/LeJamon/go-xrpl/shamap"
 	"github.com/LeJamon/go-xrpl/shamap/backend"
-	"github.com/LeJamon/go-xrpl/storage/kvstore/memorydb"
 	"github.com/LeJamon/go-xrpl/storage/nodestore"
 	"github.com/LeJamon/go-xrpl/storage/relationaldb"
-	sqlitedb "github.com/LeJamon/go-xrpl/storage/relationaldb/sqlite"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -67,11 +65,12 @@ func makeStubLedgerWithTransaction(
 		"Account":         account,
 		"Fee":             "10",
 		"Sequence":        accountSequence,
+		"SigningPubKey":   "",
 	})
 	require.NoError(t, err)
 	txBytes, err := hex.DecodeString(txHex)
 	require.NoError(t, err)
-	txBlob, txID := makeTxMetaBlobForTest(t, txBytes, 0)
+	txBlob, txID := makeTxMetaBlobForTest(t, txBytes, 0, account)
 
 	txMap := shamap.New(shamap.TypeTransaction)
 	require.NoError(t, txMap.PutWithNodeType(txID, txBlob, shamap.NodeTypeTransactionWithMeta))
@@ -80,7 +79,9 @@ func makeStubLedgerWithTransaction(
 
 	hdr := makeStubLedger(t, seq, hash, parentHash).Header()
 	hdr.TxHash = txRoot
-	l, err := ledger.NewFromHeader(hdr, shamap.New(shamap.TypeState), txMap, drops.Fees{})
+	stateMap, stateRoot := makeStubStateMap(t, seq)
+	hdr.AccountHash = stateRoot
+	l, err := ledger.NewFromHeader(hdr, stateMap, txMap, drops.Fees{})
 	require.NoError(t, err)
 	return l, txID
 }
@@ -123,7 +124,7 @@ func TestCompleteLedgers_PreservesHoles(t *testing.T) {
 }
 
 func TestCompleteLedgers_FailedValidatedPersistenceRemovesSequence(t *testing.T) {
-	base := nodestore.NewKVDatabase(memorydb.New(), "complete-ledgers-failure", 100, time.Hour)
+	base := newTestNodeStore(t, 100)
 	t.Cleanup(func() { require.NoError(t, base.Close()) })
 	db := &controlledSyncDatabase{Database: base}
 
@@ -185,12 +186,9 @@ func TestCompleteLedgers_HistoryPersistenceDoesNotDisplaceCanonicalJob(t *testin
 
 func TestCompleteLedgers_InvalidatedQueuedPersistenceSkipsAbandonedFork(t *testing.T) {
 	ctx := context.Background()
-	db := nodestore.NewKVDatabase(memorydb.New(), "complete-ledgers-replacement", 100, time.Hour)
+	db := newTestNodeStore(t, 100)
 	t.Cleanup(func() { require.NoError(t, db.Close()) })
-	repositories, err := sqlitedb.NewRepositoryManager(t.TempDir())
-	require.NoError(t, err)
-	require.NoError(t, repositories.Open(ctx))
-	t.Cleanup(func() { require.NoError(t, repositories.Close(ctx)) })
+	repositories := newTestRepositories(t, ctx)
 
 	svc, err := New(Config{
 		NodeStore:    db,
@@ -223,22 +221,22 @@ func TestCompleteLedgers_InvalidatedQueuedPersistenceSkipsAbandonedFork(t *testi
 	require.NoError(t, err)
 	require.NotNil(t, tip)
 	replacementHash := replacement.Hash()
-	assert.Equal(t, replacementHash[:], []byte(tip.Data))
-	pair, err := repositories.Ledger().GetHashesByIndex(ctx, relationaldb.LedgerIndex(seq))
+	assert.Equal(t, replacementHash[:], tip.Data)
+	pairs, err := repositories.Ledger().GetHashesByRange(
+		ctx, relationaldb.LedgerIndex(seq), relationaldb.LedgerIndex(seq),
+	)
 	require.NoError(t, err)
-	require.NotNil(t, pair)
+	pair, ok := pairs[relationaldb.LedgerIndex(seq)]
+	require.True(t, ok)
 	assert.Equal(t, replacementHash, [32]byte(pair.LedgerHash))
 	assert.Equal(t, "26", svc.completeLedgersString())
 }
 
 func TestCompleteLedgers_SameSequenceSwitchKeepsPreferredPersistence(t *testing.T) {
 	ctx := context.Background()
-	db := nodestore.NewKVDatabase(memorydb.New(), "complete-ledgers-sibling-switch", 100, time.Hour)
+	db := newTestNodeStore(t, 100)
 	t.Cleanup(func() { require.NoError(t, db.Close()) })
-	repositories, err := sqlitedb.NewRepositoryManager(t.TempDir())
-	require.NoError(t, err)
-	require.NoError(t, repositories.Open(ctx))
-	t.Cleanup(func() { require.NoError(t, repositories.Close(ctx)) })
+	repositories := newTestRepositories(t, ctx)
 
 	cfg := DefaultConfig()
 	cfg.Standalone = false
@@ -292,20 +290,20 @@ func TestCompleteLedgers_SameSequenceSwitchKeepsPreferredPersistence(t *testing.
 	require.NoError(t, err)
 	require.NotNil(t, tip)
 	preferredHash := preferred.Hash()
-	assert.Equal(t, preferredHash[:], []byte(tip.Data))
-	pair, err := repositories.Ledger().GetHashesByIndex(ctx, relationaldb.LedgerIndex(seq))
+	assert.Equal(t, preferredHash[:], tip.Data)
+	pairs, err := repositories.Ledger().GetHashesByRange(
+		ctx, relationaldb.LedgerIndex(seq), relationaldb.LedgerIndex(seq),
+	)
 	require.NoError(t, err)
-	require.NotNil(t, pair)
+	pair, ok := pairs[relationaldb.LedgerIndex(seq)]
+	require.True(t, ok)
 	assert.Equal(t, preferredHash, [32]byte(pair.LedgerHash))
 	assert.Equal(t, fmt.Sprint(seq), svc.completeLedgersString())
 }
 
 func TestCompleteLedgers_SameSequenceReplacementRebuildsTransactionIndexes(t *testing.T) {
 	ctx := context.Background()
-	repositories, err := sqlitedb.NewRepositoryManager(t.TempDir())
-	require.NoError(t, err)
-	require.NoError(t, repositories.Open(ctx))
-	t.Cleanup(func() { require.NoError(t, repositories.Close(ctx)) })
+	repositories := newTestRepositories(t, ctx)
 
 	cfg := DefaultConfig()
 	cfg.RelationalDB = repositories
@@ -327,14 +325,14 @@ func TestCompleteLedgers_SameSequenceReplacementRebuildsTransactionIndexes(t *te
 
 	queryAccount := func(address string) []relationaldb.TransactionInfo {
 		t.Helper()
-		txs, err := repositories.AccountTransaction().GetOldestAccountTxs(ctx, relationaldb.AccountTxOptions{
+		result, err := repositories.AccountTransaction().GetOldestAccountTxsPage(ctx, relationaldb.AccountTxPageOptions{
 			Account:   accountIDFromAddress(t, address),
 			MinLedger: relationaldb.LedgerIndex(seq),
 			MaxLedger: relationaldb.LedgerIndex(seq),
-			Unlimited: true,
+			Limit:     100,
 		})
 		require.NoError(t, err)
-		return txs
+		return result.Transactions
 	}
 
 	require.NoError(t, svc.persistValidatedLedger(ctx, abandoned, false))
@@ -373,17 +371,14 @@ func TestCompleteLedgers_SameSequenceReplacementRebuildsTransactionIndexes(t *te
 
 func TestCompleteLedgers_InvalidationRepairsInFlightValidatedTip(t *testing.T) {
 	ctx := context.Background()
-	base := nodestore.NewKVDatabase(memorydb.New(), "complete-ledgers-inflight", 100, time.Hour)
+	base := newTestNodeStore(t, 100)
 	t.Cleanup(func() { require.NoError(t, base.Close()) })
 	db := &gatedTipDatabase{
 		Database: base,
 		entered:  make(chan struct{}),
 		release:  make(chan struct{}),
 	}
-	repositories, err := sqlitedb.NewRepositoryManager(t.TempDir())
-	require.NoError(t, err)
-	require.NoError(t, repositories.Open(ctx))
-	t.Cleanup(func() { require.NoError(t, repositories.Close(ctx)) })
+	repositories := newTestRepositories(t, ctx)
 
 	svc, err := New(Config{
 		NodeStore:    db,
@@ -451,10 +446,13 @@ func TestCompleteLedgers_InvalidationRepairsInFlightValidatedTip(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, tip)
 	replacementHash := replacement.Hash()
-	assert.Equal(t, replacementHash[:], []byte(tip.Data))
-	pair, err := repositories.Ledger().GetHashesByIndex(ctx, relationaldb.LedgerIndex(seq))
+	assert.Equal(t, replacementHash[:], tip.Data)
+	pairs, err := repositories.Ledger().GetHashesByRange(
+		ctx, relationaldb.LedgerIndex(seq), relationaldb.LedgerIndex(seq),
+	)
 	require.NoError(t, err)
-	require.NotNil(t, pair)
+	pair, ok := pairs[relationaldb.LedgerIndex(seq)]
+	require.True(t, ok)
 	assert.Equal(t, replacementHash, [32]byte(pair.LedgerHash))
 	assert.Equal(t, "27", svc.completeLedgersString())
 }

@@ -55,6 +55,14 @@ func ParseHash256NonZero(s string) ([32]byte, error) {
 
 // ParseFromBinary parses a binary transaction blob into a Transaction
 func ParseFromBinary(blob []byte) (Transaction, error) {
+	const (
+		minTransactionBytes = 32
+		maxTransactionBytes = 1 << 20
+	)
+	if len(blob) < minTransactionBytes || len(blob) > maxTransactionBytes {
+		return nil, ter.Errorf(ter.TemMALFORMED, "transaction length invalid")
+	}
+
 	// Decode the canonical binary directly; the blob is already bytes, so
 	// going through a hex string round-trip would only churn allocations on
 	// this per-transaction hot path.
@@ -72,16 +80,11 @@ func ParseFromBinary(blob []byte) (Transaction, error) {
 
 	typeName, _ := jsonMap["TransactionType"].(string)
 	txType, knownType := TypeFromName(typeName)
-
-	// Reject any codec-known field that is not allowed for this transaction
-	// type before the transaction can be applied, mirroring rippled's STTx
-	// template application. Without this a tx carrying a field disallowed for
-	// its type would be silently applied while rippled rejects it at
-	// deserialization, forking the ledger.
-	if knownType {
-		if err := checkTemplate(txType, presentFields); err != nil {
-			return nil, err
-		}
+	if _, hasTemplate := txTemplates[txType]; !knownType || !hasTemplate {
+		return nil, ter.Errorf(ter.TemMALFORMED, "invalid transaction type %q", typeName)
+	}
+	if err := ValidateTemplateFields(txType, jsonMap); err != nil {
+		return nil, ter.Errorf(ter.TemMALFORMED, "%s", err)
 	}
 
 	// Convert map to JSON bytes

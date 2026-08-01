@@ -19,6 +19,7 @@ import (
 func TestSignFor_NetworkIDEnforcement(t *testing.T) {
 	method := &handlers.SignForMethod{}
 	const signer = "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh" // masterpassphrase
+	const txAccount = "rPMh7Pi9ct699iZUTWaytJUoHcJ7cgyziK"
 
 	ctxWith := func(networkID uint32) *types.RpcContext {
 		mock := newMockLedgerService()
@@ -33,8 +34,8 @@ func TestSignFor_NetworkIDEnforcement(t *testing.T) {
 	params := func(networkID *int) json.RawMessage {
 		txJSON := map[string]any{
 			"TransactionType": "Payment",
-			"Account":         signer,
-			"Destination":     "rPMh7Pi9ct699iZUTWaytJUoHcJ7cgyziK",
+			"Account":         txAccount,
+			"Destination":     signer,
 			"Amount":          "1000000",
 			"Fee":             "10",
 			"Sequence":        1,

@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/binary"
 	"errors"
+	"fmt"
 	"time"
 
 	"github.com/LeJamon/go-xrpl/crypto/sha512half"
@@ -52,7 +53,7 @@ type LedgerHeader struct {
 	CloseFlags uint8
 
 	// the resolution for this ledger close time (2-120 seconds)
-	CloseTimeResolution uint32
+	CloseTimeResolution uint8
 
 	// For closed ledgers, the time the ledger
 	// closed. For open ledgers, the time the ledger
@@ -83,7 +84,7 @@ func appendRawBody(out []byte, h LedgerHeader) []byte {
 	out = append(out, h.AccountHash[:]...)
 	out = binary.BigEndian.AppendUint32(out, protocol.ToRippleTime(h.ParentCloseTime))
 	out = binary.BigEndian.AppendUint32(out, protocol.ToRippleTime(h.CloseTime))
-	out = append(out, uint8(h.CloseTimeResolution))
+	out = append(out, h.CloseTimeResolution)
 	return append(out, h.CloseFlags)
 }
 
@@ -109,8 +110,8 @@ func DeserializeHeader(data []byte, hasHash bool) (*LedgerHeader, error) {
 		minSize = SizeWithHash
 	}
 
-	if len(data) < minSize {
-		return nil, errors.New("data too short for ledger header")
+	if len(data) != minSize {
+		return nil, fmt.Errorf("invalid ledger header size: got %d, want %d", len(data), minSize)
 	}
 
 	reader := bytes.NewReader(data)
@@ -156,7 +157,7 @@ func DeserializeHeader(data []byte, hasHash bool) (*LedgerHeader, error) {
 	if err := binary.Read(reader, binary.BigEndian, &closeTimeResolution); err != nil {
 		return nil, err
 	}
-	header.CloseTimeResolution = uint32(closeTimeResolution)
+	header.CloseTimeResolution = closeTimeResolution
 
 	// Read close flags (uint8)
 	if err := binary.Read(reader, binary.BigEndian, &header.CloseFlags); err != nil {
@@ -176,8 +177,18 @@ func DeserializeHeader(data []byte, hasHash bool) (*LedgerHeader, error) {
 // DeserializePrefixedHeader deserializes a ledger header prefixed with 4 bytes
 func DeserializePrefixedHeader(data []byte, hasHash bool) (*LedgerHeader, error) {
 	if len(data) < 4 {
-		return nil, errors.New("data too short for prefixed header")
+		return nil, fmt.Errorf("invalid prefixed ledger header size: got %d, want at least 4", len(data))
 	}
-	// Skip the first 4 bytes (prefix) and deserialize the rest
+	bodySize := SizeBase
+	if hasHash {
+		bodySize = SizeWithHash
+	}
+	if len(data) != 4+bodySize {
+		return nil, fmt.Errorf("invalid prefixed ledger header size: got %d, want %d", len(data), 4+bodySize)
+	}
+	prefix := protocol.HashPrefixLedgerMaster().Bytes()
+	if !bytes.Equal(data[:4], prefix) {
+		return nil, errors.New("invalid ledger-master prefix")
+	}
 	return DeserializeHeader(data[4:], hasHash)
 }

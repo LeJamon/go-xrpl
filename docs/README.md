@@ -28,6 +28,7 @@ the generator, not the Markdown. `just docs-check` fails CI if they drift.
 |----------|----------------|
 | [rpc-methods.md](rpc-methods.md) | The RPC method registry |
 | [supported-transactions.md](supported-transactions.md) | The `tx.Register` transaction registry |
+| [ledger-entries.md](ledger-entries.md) | The protocol ledger-entry registry |
 | [amendments.md](amendments.md) | The amendment registry |
 | [conformance-status.md](conformance-status.md) | The conformance suite summary |
 

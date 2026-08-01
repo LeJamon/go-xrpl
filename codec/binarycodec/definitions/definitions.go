@@ -6,6 +6,9 @@ import (
 	"encoding/json"
 	"fmt"
 	"maps"
+	"sync"
+
+	"github.com/LeJamon/go-xrpl/protocol"
 )
 
 var (
@@ -14,6 +17,7 @@ var (
 
 	// definitions is the singleton instance of the Definitions struct.
 	definitions *Definitions
+	loadOnce    sync.Once
 )
 
 // Definitions holds the binary serialization definitions for the XRP Ledger,
@@ -42,14 +46,23 @@ type Definitions struct {
 
 // Get returns the singleton instance of Definitions.
 func Get() *Definitions {
+	loadOnce.Do(loadDefinitions)
 	return definitions
 }
 
 // Types returns a copy of the type-name -> type-code map.
 func (d *Definitions) Types() map[string]int32 { return maps.Clone(d.types) }
 
-// LedgerEntryTypes returns a copy of the ledger-entry-type-name -> code map.
-func (d *Definitions) LedgerEntryTypes() map[string]int32 { return maps.Clone(d.ledgerEntryTypes) }
+// LedgerEntryTypes returns the canonical ledger-entry-type-name -> code map.
+func (d *Definitions) LedgerEntryTypes() map[string]int32 {
+	out := map[string]int32{"Invalid": -1}
+	for _, info := range protocol.LedgerEntryTypes() {
+		if !info.Deprecated {
+			out[info.Name] = int32(info.Type)
+		}
+	}
+	return out
+}
 
 // TransactionTypes returns a copy of the transaction-type-name -> code map.
 func (d *Definitions) TransactionTypes() map[string]int32 { return maps.Clone(d.transactionTypes) }
@@ -94,6 +107,9 @@ func loadDefinitions() {
 	if err := json.Unmarshal(docBytes, &data); err != nil {
 		panic(fmt.Errorf("definitions: decode embedded JSON: %w", err))
 	}
+	if err := validateEmbeddedLedgerEntryTypes(data.LedgerEntryTypes); err != nil {
+		panic(err)
+	}
 
 	definitions = &Definitions{
 		types:              data.Types,
@@ -107,6 +123,39 @@ func loadDefinitions() {
 	createFieldIDNameMap()
 	initializePermissions()
 	buildReverseMaps()
+}
+
+func validateEmbeddedLedgerEntryTypes(embedded map[string]int32) error {
+	if invalid, ok := embedded["Invalid"]; !ok || invalid != -1 {
+		return fmt.Errorf("definitions: LEDGER_ENTRY_TYPES Invalid=%d, want -1", invalid)
+	}
+	canonical := 0
+	for _, info := range protocol.LedgerEntryTypes() {
+		if info.Deprecated {
+			continue
+		}
+		canonical++
+		code, ok := embedded[info.Name]
+		if !ok {
+			return fmt.Errorf("definitions: LEDGER_ENTRY_TYPES missing %s", info.Name)
+		}
+		if code != int32(info.Type) {
+			return fmt.Errorf("definitions: LEDGER_ENTRY_TYPES %s=%d, registry=%d", info.Name, code, info.Type)
+		}
+	}
+	if len(embedded) != canonical+1 {
+		for name := range embedded {
+			if name == "Invalid" {
+				continue
+			}
+			info, ok := protocol.LedgerEntryTypeByName(name)
+			if !ok || info.Deprecated {
+				return fmt.Errorf("definitions: LEDGER_ENTRY_TYPES contains unregistered %s", name)
+			}
+		}
+		return fmt.Errorf("definitions: LEDGER_ENTRY_TYPES has %d entries, registry and Invalid sentinel have %d", len(embedded), canonical+1)
+	}
+	return nil
 }
 
 func addFieldHeadersAndOrdinals() {

@@ -2,16 +2,15 @@ package rcl
 
 import (
 	"encoding/json"
+	"math"
 	"testing"
 	"time"
 
 	"github.com/LeJamon/go-xrpl/internal/consensus"
 	"github.com/LeJamon/go-xrpl/internal/consensus/ledgertrie"
+	"github.com/LeJamon/go-xrpl/internal/consensus/ledgertrietest"
 )
 
-// mapAncestryProvider is a tiny LedgerAncestryProvider backed by a
-// map, used to wire ledgertrie.TestLedger instances into the
-// ValidationTracker for these tests.
 type mapAncestryProvider struct {
 	byID map[consensus.LedgerID]ledgertrie.Ledger
 }
@@ -27,6 +26,13 @@ func (m *mapAncestryProvider) LedgerByID(id consensus.LedgerID) (ledgertrie.Ledg
 	return l, ok
 }
 
+type maxSequenceLedger struct{}
+
+func (maxSequenceLedger) ID() consensus.LedgerID             { return consensus.LedgerID{1} }
+func (maxSequenceLedger) Seq() uint32                        { return math.MaxUint32 }
+func (maxSequenceLedger) MinSeq() uint32                     { return 0 }
+func (maxSequenceLedger) Ancestor(uint32) consensus.LedgerID { return consensus.LedgerID{} }
+
 // makeTrustedValidation constructs a trusted validation at the given
 // seq from nodeID pointing at ledgerID. Close enough to the isCurrent
 // window that Add() will accept it with SetNow(time.Now).
@@ -38,6 +44,30 @@ func makeTrustedValidation(nodeID consensus.NodeID, ledgerID consensus.LedgerID,
 		SignTime:  now,
 		SeenTime:  now,
 		Full:      true,
+	}
+}
+
+func TestValidationTracker_InsertTipDoesNotRecordRejectedLedger(t *testing.T) {
+	vt := NewValidationTracker(1, 5*time.Minute)
+	vt.trie = ledgertrie.New(genesisLedger{})
+	vt.trieTips = make(map[consensus.NodeID]ledgertrie.Ledger)
+
+	nodeID := consensus.NodeID{1}
+	valid := ledgertrietest.NewTestLedgerBuilder().Build("a")
+	vt.insertTipLocked(nodeID, valid)
+	if vt.trieTips[nodeID] != valid {
+		t.Fatal("valid ledger was not recorded")
+	}
+
+	vt.insertTipLocked(nodeID, maxSequenceLedger{})
+	if _, ok := vt.trieTips[nodeID]; ok {
+		t.Fatal("rejected ledger was recorded as the node tip")
+	}
+	if vt.trie.TipSupport(valid) != 0 {
+		t.Fatal("replaced ledger retained support after the new ledger was rejected")
+	}
+	if _, ok := vt.trie.GetPreferred(0); ok {
+		t.Fatal("rejected ledger left support in the trie")
 	}
 }
 
@@ -61,7 +91,7 @@ func TestValidationTracker_TrieDeepestSharedAncestor(t *testing.T) {
 	now := time.Now()
 	vt.SetNow(func() time.Time { return now })
 
-	b := ledgertrie.NewTestLedgerBuilder()
+	b := ledgertrietest.NewTestLedgerBuilder()
 	ab := b.Build("ab")
 	abc := b.Build("abc")
 	abd := b.Build("abd")
@@ -119,7 +149,7 @@ func TestValidationTracker_TrieNewerValidationReplacesOld(t *testing.T) {
 	now := time.Now()
 	vt.SetNow(func() time.Time { return now })
 
-	b := ledgertrie.NewTestLedgerBuilder()
+	b := ledgertrietest.NewTestLedgerBuilder()
 	abc := b.Build("abc")
 	abde := b.Build("abde")
 
@@ -161,7 +191,7 @@ func TestValidationTracker_TrieNegUNLExcluded(t *testing.T) {
 	now := time.Now()
 	vt.SetNow(func() time.Time { return now })
 
-	b := ledgertrie.NewTestLedgerBuilder()
+	b := ledgertrietest.NewTestLedgerBuilder()
 	abc := b.Build("abc")
 	provider := newMapAncestryProvider()
 	provider.add(abc)
@@ -201,7 +231,7 @@ func TestValidationTracker_TrieNegUNLSteersButExcludedFromQuorum(t *testing.T) {
 	now := time.Now()
 	vt.SetNow(func() time.Time { return now })
 
-	b := ledgertrie.NewTestLedgerBuilder()
+	b := ledgertrietest.NewTestLedgerBuilder()
 	a := b.Build("a")
 	ab := b.Build("ab")
 	ac := b.Build("ac")
@@ -253,7 +283,7 @@ func TestValidationTracker_TrieGetPreferred(t *testing.T) {
 	now := time.Now()
 	vt.SetNow(func() time.Time { return now })
 
-	b := ledgertrie.NewTestLedgerBuilder()
+	b := ledgertrietest.NewTestLedgerBuilder()
 	abc := b.Build("abc")
 	abde := b.Build("abde")
 	provider := newMapAncestryProvider()
@@ -304,7 +334,7 @@ func TestValidationTracker_TrieGetPreferred_LargestIssuedAffectsDescent(t *testi
 	now := time.Now()
 	vt.SetNow(func() time.Time { return now })
 
-	b := ledgertrie.NewTestLedgerBuilder()
+	b := ledgertrietest.NewTestLedgerBuilder()
 	a := b.Build("a")
 	ab := b.Build("ab")
 	ac := b.Build("ac")
@@ -359,7 +389,7 @@ func TestValidationTracker_TrieDisabled_FallsBack(t *testing.T) {
 	now := time.Now()
 	vt.SetNow(func() time.Time { return now })
 
-	b := ledgertrie.NewTestLedgerBuilder()
+	b := ledgertrietest.NewTestLedgerBuilder()
 	abc := b.Build("abc")
 
 	n1 := consensus.NodeID{1}
@@ -390,7 +420,7 @@ func TestValidationTracker_ExpireOldDropsTrieTip(t *testing.T) {
 	now := time.Now()
 	vt.SetNow(func() time.Time { return now })
 
-	b := ledgertrie.NewTestLedgerBuilder()
+	b := ledgertrietest.NewTestLedgerBuilder()
 	ab := b.Build("ab")   // seq 2 — common ancestor
 	abc := b.Build("abc") // seq 3
 	abd := b.Build("abd") // seq 3
@@ -466,7 +496,7 @@ func TestValidationTracker_GetJSONTrie(t *testing.T) {
 	now := time.Now()
 	vt.SetNow(func() time.Time { return now })
 
-	b := ledgertrie.NewTestLedgerBuilder()
+	b := ledgertrietest.NewTestLedgerBuilder()
 	abc := b.Build("abc")
 	provider := newMapAncestryProvider()
 	provider.add(abc)

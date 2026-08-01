@@ -444,42 +444,6 @@ type CloseTimes struct {
 	Self time.Time
 }
 
-// RoundState represents the current state of a consensus round.
-type RoundState struct {
-	// Round identifies this consensus round.
-	Round RoundID
-
-	// Mode is the current operating mode.
-	Mode Mode
-
-	// Phase is the current consensus phase.
-	Phase Phase
-
-	// Proposals is the set of proposals received this round.
-	Proposals map[NodeID]*Proposal
-
-	// Disputed tracks transactions with disagreement.
-	Disputed map[TxID]*DisputedTx
-
-	// CloseTimes tracks proposed close times.
-	CloseTimes CloseTimes
-
-	// OurPosition is our current proposal (if proposing).
-	OurPosition *Proposal
-
-	// StartTime is when this round started.
-	StartTime time.Time
-
-	// PhaseStart is when the current phase started.
-	PhaseStart time.Time
-
-	// Converged indicates if proposals have converged.
-	Converged bool
-
-	// HaveCorrectLCL indicates if we have the correct last closed ledger.
-	HaveCorrectLCL bool
-}
-
 // Timing holds consensus timing parameters.
 type Timing struct {
 	// LedgerMinClose is minimum time a ledger stays open.
@@ -554,22 +518,7 @@ func DefaultTiming() Timing {
 }
 
 // Thresholds holds consensus threshold parameters.
-//
-// Note on terminology: rippled defines a single consensus percentage,
-// minCONSENSUS_PCT = 80 (see rippled/src/xrpld/consensus/ConsensusParms.h:79),
-// which is the threshold above which consensus may be declared. go-xrpl
-// layers an additional lower gate (EarlyConvergencePct) used to mark a
-// round as "converged" earlier than the accept threshold — this is a
-// go-xrpl-local construct and has no direct rippled counterpart. The
-// accept threshold itself (MinConsensusPct below) is arithmetically
-// identical to rippled's minCONSENSUS_PCT.
 type Thresholds struct {
-	// EarlyConvergencePct is the percentage of trusted proposals that must
-	// agree on a tx set for a round to be marked "converged" (but not yet
-	// accepted). This is a go-xrpl-local early-convergence gate and has no
-	// direct equivalent in rippled.
-	EarlyConvergencePct int
-
 	// MinConsensusPct is the minimum percentage of trusted proposals that
 	// must agree on a tx set before consensus may be declared. This
 	// corresponds directly to rippled's minCONSENSUS_PCT = 80 (see
@@ -580,12 +529,10 @@ type Thresholds struct {
 // DefaultThresholds returns the default consensus thresholds.
 //
 // MinConsensusPct = 80 matches rippled's minCONSENSUS_PCT
-// (rippled/src/xrpld/consensus/ConsensusParms.h:79). EarlyConvergencePct
-// is a go-xrpl-local earlier gate used to flag convergence before accept.
+// (rippled/src/xrpld/consensus/ConsensusParms.h:79).
 func DefaultThresholds() Thresholds {
 	return Thresholds{
-		EarlyConvergencePct: 50,
-		MinConsensusPct:     80,
+		MinConsensusPct: 80,
 	}
 }
 
@@ -611,12 +558,6 @@ type AvalancheCutoff struct {
 // Matches rippled's ConsensusParms (ConsensusParms.h:38-170) for the
 // subset used by DisputedTx::updateVote.
 type ConsensusParms struct {
-	// AvalancheCutoffs maps each state to its activation time,
-	// required agreement percentage, and next state. Rippled uses
-	// {init:(0,50,mid), mid:(50,65,late), late:(85,70,stuck),
-	//  stuck:(200,95,stuck)}.
-	AvalancheCutoffs map[AvalancheState]AvalancheCutoff
-
 	// MinRounds is the minimum number of phaseEstablish ticks that
 	// must be spent in a given avalanche state before advancing.
 	// Matches rippled's avMIN_ROUNDS = 2.
@@ -637,16 +578,31 @@ type ConsensusParms struct {
 // rippled's defaults (ConsensusParms.h:146-157,165,169).
 func DefaultConsensusParms() ConsensusParms {
 	return ConsensusParms{
-		AvalancheCutoffs: map[AvalancheState]AvalancheCutoff{
-			AvalancheInit:  {ConsensusTime: 0, ConsensusPct: 50, Next: AvalancheMid},
-			AvalancheMid:   {ConsensusTime: 50, ConsensusPct: 65, Next: AvalancheLate},
-			AvalancheLate:  {ConsensusTime: 85, ConsensusPct: 70, Next: AvalancheStuck},
-			AvalancheStuck: {ConsensusTime: 200, ConsensusPct: 95, Next: AvalancheStuck},
-		},
 		MinRounds:       2,
 		StalledRounds:   4,
 		MinConsensusPct: 80,
 	}
+}
+
+// AvalancheCutoff returns the fixed protocol cutoff for state.
+func (ConsensusParms) AvalancheCutoff(state AvalancheState) AvalancheCutoff {
+	switch state {
+	case AvalancheInit:
+		return AvalancheCutoff{ConsensusTime: 0, ConsensusPct: 50, Next: AvalancheMid}
+	case AvalancheMid:
+		return AvalancheCutoff{ConsensusTime: 50, ConsensusPct: 65, Next: AvalancheLate}
+	case AvalancheLate:
+		return AvalancheCutoff{ConsensusTime: 85, ConsensusPct: 70, Next: AvalancheStuck}
+	case AvalancheStuck:
+		return AvalancheCutoff{ConsensusTime: 200, ConsensusPct: 95, Next: AvalancheStuck}
+	default:
+		panic("invalid avalanche state")
+	}
+}
+
+// AvalancheCutoffCount returns the number of fixed avalanche states.
+func (ConsensusParms) AvalancheCutoffCount() int {
+	return int(AvalancheStuck-AvalancheInit) + 1
 }
 
 // NeededWeight computes the agreement percentage required for a
@@ -664,9 +620,12 @@ func (p ConsensusParms) NeededWeight(
 	currentRounds int,
 	minimumRounds int,
 ) (int, *AvalancheState) {
-	current := p.AvalancheCutoffs[state]
+	current := p.AvalancheCutoff(state)
 	if current.Next != state && currentRounds >= minimumRounds {
-		next := p.AvalancheCutoffs[current.Next]
+		next := p.AvalancheCutoff(current.Next)
+		if next.ConsensusTime < current.ConsensusTime {
+			panic("avalanche cutoff time decreased")
+		}
 		if percentTime >= next.ConsensusTime {
 			advanced := current.Next
 			return next.ConsensusPct, &advanced

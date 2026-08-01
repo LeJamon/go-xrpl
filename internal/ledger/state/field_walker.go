@@ -270,6 +270,8 @@ func nestedEnd(data []byte, start int, endMarker byte) (int, error) {
 // from a serialized SLE. XRPL serialization always places LedgerEntryType first
 // with header byte 0x11, so this reads it directly. Returns 0 when the data is
 // too short or does not begin with the expected header.
+//
+// Deprecated: use DecodeType.
 func EntryTypeCode(data []byte) uint16 {
 	if len(data) < 3 || data[0] != 0x11 {
 		return 0
@@ -279,6 +281,8 @@ func EntryTypeCode(data []byte) uint16 {
 
 // EntryTypeName returns the name of the ledger entry type for the given type
 // code, or "Unknown(0x....)" if the code is not a known ledger entry type.
+//
+// Deprecated: use entry.Type.String.
 func EntryTypeName(code uint16) string {
 	return entry.Type(code).String()
 }
@@ -286,6 +290,8 @@ func EntryTypeName(code uint16) string {
 // EntryType extracts the ledger entry type name from a serialized SLE. Returns
 // "" when the type code cannot be extracted (data too short or missing the
 // standard 0x11 LedgerEntryType header).
+//
+// Deprecated: use DecodeType.
 func EntryType(data []byte) string {
 	code := EntryTypeCode(data)
 	if code == 0 {

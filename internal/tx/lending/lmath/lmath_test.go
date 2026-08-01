@@ -7,8 +7,6 @@ import (
 	"github.com/LeJamon/go-xrpl/internal/tx/ter"
 )
 
-func init() { state.SetNumberSwitchover(true) }
-
 // month is the 30-day payment interval used across the rippled golden vectors.
 const month uint32 = 30 * 24 * 60 * 60
 

@@ -60,17 +60,41 @@ func (f *ctrlFamily) deleteOneNonRoot(root [32]byte) (deleted [32]byte) {
 type integrationSource struct {
 	family    shamap.Family
 	seq       uint32
+	hash      [32]byte
+	parent    [32]byte
 	stateRoot [32]byte
 }
 
+func boolPtr(v bool) *bool { return &v }
+
 func (s *integrationSource) AvailableRange() (uint32, uint32, bool) { return s.seq, s.seq, true }
 func (s *integrationSource) Family() shamap.Family                  { return s.family }
-func (s *integrationSource) LedgerRoots(seq uint32) ([32]byte, [32]byte, bool) {
+func (s *integrationSource) Ledger(_ context.Context, seq uint32) (cleaner.LedgerData, bool, error) {
 	if seq != s.seq {
-		return [32]byte{}, [32]byte{}, false
+		return cleaner.LedgerData{}, false, nil
 	}
-	return s.stateRoot, [32]byte{}, true // tx tree empty for this fixture
+	return cleaner.LedgerData{
+		Sequence:   s.seq,
+		Hash:       s.hash,
+		ParentHash: s.parent,
+		StateRoot:  s.stateRoot,
+	}, true, nil
 }
+func (s *integrationSource) CanonicalHash(_ context.Context, seq uint32) ([32]byte, bool, error) {
+	switch seq {
+	case s.seq:
+		return s.hash, true, nil
+	case s.seq - 1:
+		return s.parent, true, nil
+	default:
+		return [32]byte{}, false, nil
+	}
+}
+func (s *integrationSource) RepairLedgerIndex(context.Context, cleaner.LedgerData) (bool, error) {
+	return false, nil
+}
+func (s *integrationSource) Reacquire(context.Context, uint32) error          { return nil }
+func (s *integrationSource) RepairTransactions(context.Context, uint32) error { return nil }
 
 // materializeState rebuilds the closed ledger's state tree into a fresh
 // content-addressed family — exactly what the content-addressed persistence
@@ -135,6 +159,19 @@ func runToIdle(t *testing.T, c *cleaner.Cleaner) cleaner.Status {
 	return cleaner.Status{}
 }
 
+func runToFailure(t *testing.T, c *cleaner.Cleaner) cleaner.Status {
+	t.Helper()
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		if s := c.Status(); s.Failures > 0 {
+			return s
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatalf("cleaner did not report failure; status=%+v", c.Status())
+	return cleaner.Status{}
+}
+
 // TestLedgerCleaner_VerifiesRealLedger builds a real ledger with funded
 // accounts, materialises its state tree into a content-addressed store, and
 // confirms the verifier walks it complete.
@@ -147,13 +184,17 @@ func TestLedgerCleaner_VerifiesRealLedger(t *testing.T) {
 	env.Close()
 
 	family, root := materializeState(t, env)
-	src := &integrationSource{family: family, seq: env.LedgerSeq(), stateRoot: root}
+	closed := env.LastClosedLedger()
+	src := &integrationSource{
+		family: family, seq: closed.Sequence(), hash: closed.Hash(),
+		parent: closed.ParentHash(), stateRoot: root,
+	}
 
 	c := cleaner.New(src, nil)
 	c.Start()
 	defer c.Stop()
 
-	c.Clean(cleaner.Params{Full: true})
+	c.Clean(cleaner.Params{Full: boolPtr(true)})
 	final := runToIdle(t, c)
 
 	if final.MissingNodes != 0 {
@@ -181,13 +222,18 @@ func TestLedgerCleaner_DetectsInducedMissingNode(t *testing.T) {
 		t.Fatal("could not induce a missing node (no non-root node stored)")
 	}
 
-	src := &integrationSource{family: family, seq: env.LedgerSeq(), stateRoot: root}
+	closed := env.LastClosedLedger()
+	src := &integrationSource{
+		family: family, seq: closed.Sequence(), hash: closed.Hash(),
+		parent: closed.ParentHash(), stateRoot: root,
+	}
 	c := cleaner.New(src, nil)
 	c.Start()
 	defer c.Stop()
 
-	c.Clean(cleaner.Params{Full: true})
-	final := runToIdle(t, c)
+	c.Clean(cleaner.Params{Full: boolPtr(true)})
+	final := runToFailure(t, c)
+	c.Clean(cleaner.Params{Stop: true})
 
 	if final.MissingNodes == 0 {
 		t.Errorf("expected the verifier to detect the induced missing node")

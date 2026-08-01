@@ -25,8 +25,8 @@ type ApplyResult struct {
 // This decouples TxQ from the specific ledger implementation.
 type ApplyContext interface {
 	// GetAccountSequence returns the current sequence number for an account.
-	// Returns 0 if the account doesn't exist.
-	GetAccountSequence(account [20]byte) uint32
+	// It returns 0 without an error if the account doesn't exist.
+	GetAccountSequence(account [20]byte) (uint32, error)
 
 	// AccountExists returns true if the account exists in the ledger.
 	AccountExists(account [20]byte) bool
@@ -35,7 +35,8 @@ type ApplyContext interface {
 	TicketExists(account [20]byte, ticketSeq uint32) bool
 
 	// GetAccountBalance returns the XRP balance in drops.
-	GetAccountBalance(account [20]byte) uint64
+	// It returns 0 without an error if the account doesn't exist.
+	GetAccountBalance(account [20]byte) (uint64, error)
 
 	// GetAccountReserve returns the reserve requirement for an account.
 	GetAccountReserve(ownerCount uint32) uint64
@@ -132,7 +133,10 @@ func (q *TxQ) Apply(ctx ApplyContext, txn tx.Transaction, txID [32]byte, account
 	}
 	feeLevel := ToFeeLevelWithDefaultBaseFee(feePaid, baseFee, defaultBaseFee)
 
-	acctSeq := ctx.GetAccountSequence(account)
+	acctSeq, err := ctx.GetAccountSequence(account)
+	if err != nil {
+		return ApplyResult{Result: ter.TefINTERNAL, Applied: false}
+	}
 	txInLedger := ctx.GetTxInLedger()
 	ledgerSeq := ctx.GetLedgerSequence()
 
@@ -284,7 +288,10 @@ func (q *TxQ) Apply(ctx ApplyContext, txn tx.Transaction, txID [32]byte, account
 	// View the unconditional preclaim (below) runs against. Defaults to the
 	// account's actual balance and sequence — the plain open view; the multiTxn
 	// path overrides these with the in-flight-adjusted values (TxQ.cpp:1137-1170).
-	balance := ctx.GetAccountBalance(account)
+	balance, err := ctx.GetAccountBalance(account)
+	if err != nil {
+		return ApplyResult{Result: ter.TefINTERNAL, Applied: false}
+	}
 	preclaimBalance := balance
 	preclaimSeq := acctSeq
 

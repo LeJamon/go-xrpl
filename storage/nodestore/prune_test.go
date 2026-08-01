@@ -2,216 +2,382 @@ package nodestore
 
 import (
 	"context"
+	"errors"
 	"sync"
 	"testing"
-	"time"
 
 	"github.com/LeJamon/go-xrpl/storage/kvstore"
 	"github.com/LeJamon/go-xrpl/storage/kvstore/memorydb"
 )
 
-// resurrectOnIterate wraps a store and fires a one-shot callback immediately
-// after the prune iterator has snapshotted the keyspace, before the flush runs.
-// It reproduces the online-delete race: a key present below the boundary in the
-// frozen snapshot is re-created live (at seq >= boundary) during the scan window.
 type resurrectOnIterate struct {
 	*memorydb.MemDatabase
 	once sync.Once
 	fn   func()
 }
 
-func (r *resurrectOnIterate) NewIterator(prefix, start []byte) kvstore.Iterator {
-	it := r.MemDatabase.NewIterator(prefix, start)
-	if r.fn != nil {
-		r.once.Do(r.fn)
+func (s *resurrectOnIterate) NewIterator(prefix, start []byte) (kvstore.Iterator, error) {
+	iterator, err := s.MemDatabase.NewIterator(prefix, start)
+	if err == nil && s.fn != nil {
+		s.once.Do(s.fn)
 	}
-	return it
+	return iterator, err
 }
 
-// storeNodeAt persists a node carrying an explicit ledger sequence so the
-// prune scanner can classify it. The key is derived from the data plus seq so
-// nodes at different sequences never collide.
-func storeNodeAt(t *testing.T, db *KVDatabaseImpl, seq uint32, tag byte) Hash256 {
+func storeNodeAt(t *testing.T, database *KVDatabase, seq uint32, tag byte) Hash256 {
 	t.Helper()
-	data := Blob{tag, byte(seq), byte(seq >> 8), byte(seq >> 16), byte(seq >> 24)}
-	h := ComputeHash256(data)
-	node := &Node{Type: NodeAccount, Hash: h, Data: data, LedgerSeq: seq}
-	if err := db.Store(context.Background(), node); err != nil {
+	node := testNode(NodeAccount, []byte{tag, byte(seq), byte(seq >> 8), byte(seq >> 16), byte(seq >> 24)}, seq)
+	if err := database.Store(t.Context(), node); err != nil {
 		t.Fatalf("Store(seq=%d): %v", seq, err)
 	}
-	return h
+	return node.Hash
 }
 
-func present(t *testing.T, db *KVDatabaseImpl, h Hash256) bool {
+func fetchPresent(t *testing.T, database *KVDatabase, hash Hash256) bool {
 	t.Helper()
-	n, err := db.Fetch(context.Background(), h)
+	node, err := database.Fetch(t.Context(), hash)
 	if err != nil {
 		t.Fatalf("Fetch: %v", err)
 	}
-	return n != nil
+	return node != nil
 }
 
-func TestDeleteBefore_RemovesBelowBoundaryKeepsAtOrAbove(t *testing.T) {
-	db := NewKVDatabase(memorydb.New(), "mem", 1000, time.Hour)
-	defer db.Close()
-
+func TestDeleteBeforeRemovesOnlyOlderNodes(t *testing.T) {
+	database := testDatabase(t, memorydb.New(), positiveCacheConfig(100))
 	keys := make(map[uint32]Hash256)
 	for seq := uint32(1); seq <= 10; seq++ {
-		keys[seq] = storeNodeAt(t, db, seq, 0xAA)
+		keys[seq] = storeNodeAt(t, database, seq, 0xaa)
 	}
-
-	const boundary = 6
-	deleted, err := db.DeleteBefore(context.Background(), boundary, 0)
+	deleted, err := database.DeleteBefore(t.Context(), 6, 2)
 	if err != nil {
 		t.Fatalf("DeleteBefore: %v", err)
 	}
-	// Sequences 1..5 are below the boundary → 5 nodes deleted.
 	if deleted != 5 {
-		t.Fatalf("deleted = %d, want 5", deleted)
+		t.Fatalf("deleted=%d, want 5", deleted)
 	}
-
-	for seq := uint32(1); seq < boundary; seq++ {
-		if present(t, db, keys[seq]) {
-			t.Errorf("seq %d should have been deleted", seq)
-		}
-	}
-	for seq := uint32(boundary); seq <= 10; seq++ {
-		if !present(t, db, keys[seq]) {
-			t.Errorf("seq %d should have been retained", seq)
+	for seq, hash := range keys {
+		if got, want := fetchPresent(t, database, hash), seq >= 6; got != want {
+			t.Errorf("sequence %d present=%t, want %t", seq, got, want)
 		}
 	}
 }
 
-func TestDeleteBefore_LiveNodeReWrittenAtLatestSeqSurvives(t *testing.T) {
-	// Models the persistence contract: a state node still live in recent
-	// ledgers is re-persisted every ledger at the current sequence, so its
-	// stored LedgerSeq is the latest, not the one it first appeared at.
-	db := NewKVDatabase(memorydb.New(), "mem", 1000, time.Hour)
-	defer db.Close()
-
-	data := Blob("live-account-state")
-	h := ComputeHash256(data)
-	// First written at seq 3, then re-written (same key) at seq 50.
-	for _, seq := range []uint32{3, 50} {
-		node := &Node{Type: NodeAccount, Hash: h, Data: data, LedgerSeq: seq}
-		if err := db.Store(context.Background(), node); err != nil {
-			t.Fatalf("Store(seq=%d): %v", seq, err)
+func TestDeleteBeforeResurrectedNodeSurvives(t *testing.T) {
+	store := &resurrectOnIterate{MemDatabase: memorydb.New()}
+	database := testDatabase(t, store, noCacheConfig())
+	node := testNode(NodeAccount, []byte("resurrected"), 3)
+	if err := database.Store(t.Context(), node); err != nil {
+		t.Fatal(err)
+	}
+	store.fn = func() {
+		live := node.Clone()
+		live.LedgerSeq = 50
+		if err := database.Store(context.Background(), live); err != nil {
+			t.Errorf("resurrect Store: %v", err)
 		}
 	}
-
-	if _, err := db.DeleteBefore(context.Background(), 40, 0); err != nil {
-		t.Fatalf("DeleteBefore: %v", err)
-	}
-	if !present(t, db, h) {
-		t.Fatal("live node re-written at seq 50 must survive a prune below 40")
-	}
-}
-
-func TestDeleteBefore_Batched(t *testing.T) {
-	db := NewKVDatabase(memorydb.New(), "mem", 1000, time.Hour)
-	defer db.Close()
-
-	for seq := uint32(1); seq <= 200; seq++ {
-		storeNodeAt(t, db, seq, 0xBB)
-	}
-	// Tiny batch forces multiple flush cycles.
-	deleted, err := db.DeleteBefore(context.Background(), 150, 7)
-	if err != nil {
-		t.Fatalf("DeleteBefore: %v", err)
-	}
-	if deleted != 149 {
-		t.Fatalf("deleted = %d, want 149", deleted)
-	}
-}
-
-func TestDeleteBefore_ZeroBoundaryNoOp(t *testing.T) {
-	db := NewKVDatabase(memorydb.New(), "mem", 1000, time.Hour)
-	defer db.Close()
-
-	k := storeNodeAt(t, db, 5, 0xCC)
-	deleted, err := db.DeleteBefore(context.Background(), 0, 0)
+	deleted, err := database.DeleteBefore(t.Context(), 40, 10)
 	if err != nil {
 		t.Fatalf("DeleteBefore: %v", err)
 	}
 	if deleted != 0 {
-		t.Fatalf("deleted = %d, want 0", deleted)
+		t.Fatalf("deleted=%d, want 0", deleted)
 	}
-	if !present(t, db, k) {
-		t.Fatal("zero-boundary prune must delete nothing")
-	}
-}
-
-func TestDeleteBefore_EvictsPositiveCache(t *testing.T) {
-	db := NewKVDatabase(memorydb.New(), "mem", 1000, time.Hour)
-	defer db.Close()
-
-	h := storeNodeAt(t, db, 3, 0xDD)
-	// Warm the positive cache.
-	if _, err := db.Fetch(context.Background(), h); err != nil {
-		t.Fatalf("warm Fetch: %v", err)
-	}
-	if _, ok := db.cache.Get(h); !ok {
-		t.Fatal("expected node cached before prune")
-	}
-
-	if _, err := db.DeleteBefore(context.Background(), 10, 0); err != nil {
-		t.Fatalf("DeleteBefore: %v", err)
-	}
-	if _, ok := db.cache.Get(h); ok {
-		t.Fatal("pruned node must be evicted from the positive cache")
-	}
-	if present(t, db, h) {
-		t.Fatal("pruned node must not be fetchable after cache eviction")
+	got, err := database.Fetch(t.Context(), node.Hash)
+	if err != nil || got == nil || got.LedgerSeq != 50 {
+		t.Fatalf("resurrected node=%#v, err=%v", got, err)
 	}
 }
 
-func TestDeleteBefore_ResurrectedDuringScanSurvives(t *testing.T) {
-	// A key whose snapshot copy is below the boundary is re-created live at
-	// seq >= boundary after the prune iterator snapshots but before the flush
-	// (e.g. AccountDelete then re-funding the same deterministic keylet). The
-	// flush must observe the live value and leave the resurrected node alone.
-	store := &resurrectOnIterate{MemDatabase: memorydb.New()}
-	db := NewKVDatabase(store, "mem", 1000, time.Hour)
-	defer db.Close()
+type pruneFaultStore struct {
+	kvstore.KeyValueStore
+	iterator       kvstore.Iterator
+	newIteratorErr error
+	getErr         error
+	batch          kvstore.Batch
+	newBatchErr    error
+}
 
-	data := Blob("resurrected-account-state")
-	h := ComputeHash256(data)
-	writeAt := func(seq uint32) {
-		node := &Node{Type: NodeAccount, Hash: h, Data: data, LedgerSeq: seq}
-		if err := db.Store(context.Background(), node); err != nil {
-			t.Fatalf("Store(seq=%d): %v", seq, err)
-		}
+func (s *pruneFaultStore) Get(key []byte) ([]byte, error) {
+	if s.getErr != nil {
+		return nil, s.getErr
 	}
+	return s.KeyValueStore.Get(key)
+}
 
-	// Snapshot copy: a superseded (below-boundary) sequence.
-	writeAt(3)
-	// Live resurrection at a retained sequence, injected after the snapshot.
-	store.fn = func() { writeAt(50) }
+func (s *pruneFaultStore) NewIterator(prefix, start []byte) (kvstore.Iterator, error) {
+	if s.newIteratorErr != nil {
+		return nil, s.newIteratorErr
+	}
+	if s.iterator != nil {
+		return s.iterator, nil
+	}
+	return s.KeyValueStore.NewIterator(prefix, start)
+}
 
-	if _, err := db.DeleteBefore(context.Background(), 40, 0); err != nil {
-		t.Fatalf("DeleteBefore: %v", err)
+func (s *pruneFaultStore) NewBatch() (kvstore.Batch, error) {
+	if s.newBatchErr != nil {
+		return nil, s.newBatchErr
 	}
-	if !present(t, db, h) {
-		t.Fatal("node re-created live during the scan window must not be pruned")
+	if s.batch != nil {
+		return s.batch, nil
 	}
-	// The live value must also be intact, not a stale below-boundary copy.
-	n, err := db.Fetch(context.Background(), h)
-	if err != nil {
-		t.Fatalf("Fetch: %v", err)
+	return s.KeyValueStore.NewBatch()
+}
+
+type pruneFaultBatch struct {
+	putErr    error
+	deleteErr error
+	writeErr  error
+	closeErr  error
+	deletes   int
+	writes    int
+	closes    int
+}
+
+func (b *pruneFaultBatch) Put([]byte, []byte) error { return b.putErr }
+func (b *pruneFaultBatch) Delete([]byte) error {
+	b.deletes++
+	return b.deleteErr
+}
+func (b *pruneFaultBatch) ValueSize() int { return 0 }
+func (b *pruneFaultBatch) Write() error {
+	b.writes++
+	return b.writeErr
+}
+func (b *pruneFaultBatch) Reset() {}
+func (b *pruneFaultBatch) Close() error {
+	b.closes++
+	return b.closeErr
+}
+
+type iteratorPair struct {
+	key   []byte
+	value []byte
+}
+
+type pruneFaultIterator struct {
+	pairs    []iteratorPair
+	position int
+	next     int
+	onNext   func(int)
+	err      error
+	closeErr error
+}
+
+func (i *pruneFaultIterator) Next() bool {
+	i.next++
+	if i.onNext != nil {
+		i.onNext(i.next)
 	}
-	if n == nil || n.LedgerSeq != 50 {
-		t.Fatalf("resurrected node LedgerSeq = %v, want 50", n)
+	if i.position >= len(i.pairs) {
+		return false
+	}
+	i.position++
+	return true
+}
+func (i *pruneFaultIterator) Key() []byte   { return i.pairs[i.position-1].key }
+func (i *pruneFaultIterator) Value() []byte { return i.pairs[i.position-1].value }
+func (i *pruneFaultIterator) Error() error  { return i.err }
+func (i *pruneFaultIterator) Close() error  { return i.closeErr }
+
+func encodedPair(node *Node) iteratorPair {
+	encoded := encodeNodeData(node)
+	value := append([]byte(nil), encoded...)
+	releaseEncodeBuf(encoded)
+	return iteratorPair{key: append([]byte(nil), node.Hash[:]...), value: value}
+}
+
+func TestDeleteBeforeFaults(t *testing.T) {
+	readErr := errors.New("read failed")
+	deleteErr := errors.New("delete failed")
+	writeErr := errors.New("write failed")
+	batchErr := errors.New("batch failed")
+	iteratorErr := errors.New("iterator failed")
+	tests := []struct {
+		name       string
+		configure  func(*pruneFaultStore, *pruneFaultBatch)
+		wantErr    error
+		wantDelete int
+		wantWrite  int
+	}{
+		{
+			name: "iterator construction",
+			configure: func(store *pruneFaultStore, _ *pruneFaultBatch) {
+				store.newIteratorErr = iteratorErr
+			},
+			wantErr: iteratorErr,
+		},
+		{
+			name: "current value disappeared",
+			configure: func(store *pruneFaultStore, _ *pruneFaultBatch) {
+				store.getErr = kvstore.ErrNotFound
+			},
+		},
+		{
+			name: "current read",
+			configure: func(store *pruneFaultStore, _ *pruneFaultBatch) {
+				store.getErr = readErr
+			},
+			wantErr: readErr,
+		},
+		{
+			name: "batch construction",
+			configure: func(store *pruneFaultStore, _ *pruneFaultBatch) {
+				store.newBatchErr = batchErr
+			},
+			wantErr: batchErr,
+		},
+		{
+			name: "batch delete",
+			configure: func(_ *pruneFaultStore, batch *pruneFaultBatch) {
+				batch.deleteErr = deleteErr
+			},
+			wantErr:    deleteErr,
+			wantDelete: 1,
+		},
+		{
+			name: "batch write",
+			configure: func(_ *pruneFaultStore, batch *pruneFaultBatch) {
+				batch.writeErr = writeErr
+			},
+			wantErr:    writeErr,
+			wantDelete: 1,
+			wantWrite:  1,
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			base := memorydb.New()
+			store := &pruneFaultStore{KeyValueStore: base}
+			database := testDatabase(t, store, noCacheConfig())
+			node := testNode(NodeAccount, []byte(test.name), 1)
+			if err := database.Store(t.Context(), node); err != nil {
+				t.Fatal(err)
+			}
+			batch := &pruneFaultBatch{}
+			store.batch = batch
+			test.configure(store, batch)
+
+			deleted, err := database.DeleteBefore(t.Context(), 10, 10)
+			if test.wantErr == nil {
+				if err != nil {
+					t.Fatalf("DeleteBefore: %v", err)
+				}
+			} else if !errors.Is(err, test.wantErr) {
+				t.Fatalf("DeleteBefore error=%v, want %v", err, test.wantErr)
+			}
+			if deleted != 0 {
+				t.Fatalf("deleted=%d, want 0", deleted)
+			}
+			if batch.deletes != test.wantDelete || batch.writes != test.wantWrite {
+				t.Fatalf("batch deletes=%d writes=%d, want %d/%d",
+					batch.deletes, batch.writes, test.wantDelete, test.wantWrite)
+			}
+		})
 	}
 }
 
-func TestDeleteBefore_ContextCancelled(t *testing.T) {
-	db := NewKVDatabase(memorydb.New(), "mem", 1000, time.Hour)
-	defer db.Close()
+func TestDeleteBeforeJoinsScanAndFlushErrors(t *testing.T) {
+	scanErr := errors.New("scan failed")
+	writeErr := errors.New("write failed")
+	node := testNode(NodeAccount, []byte("pending"), 1)
+	base := memorydb.New()
+	if err := base.Put(node.Hash[:], encodedPair(node).value); err != nil {
+		t.Fatal(err)
+	}
+	batch := &pruneFaultBatch{writeErr: writeErr}
+	store := &pruneFaultStore{
+		KeyValueStore: base,
+		iterator: &pruneFaultIterator{
+			pairs: []iteratorPair{encodedPair(node)},
+			err:   scanErr,
+		},
+		batch: batch,
+	}
+	database := testDatabase(t, store, noCacheConfig())
+	deleted, err := database.DeleteBefore(t.Context(), 10, 10)
+	if deleted != 0 || !errors.Is(err, scanErr) || !errors.Is(err, writeErr) {
+		t.Fatalf("deleted=%d error=%v, want joined scan/write errors", deleted, err)
+	}
+}
 
-	storeNodeAt(t, db, 1, 0xEE)
+func TestDeleteBeforeJoinsCancellationAndFlushErrors(t *testing.T) {
+	writeErr := errors.New("write failed")
+	node := testNode(NodeAccount, []byte("pending"), 1)
+	base := memorydb.New()
+	encoded := encodedPair(node)
+	if err := base.Put(node.Hash[:], encoded.value); err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	iterator := &pruneFaultIterator{
+		pairs: []iteratorPair{encoded, encoded},
+		onNext: func(call int) {
+			if call == 2 {
+				cancel()
+			}
+		},
+	}
+	store := &pruneFaultStore{
+		KeyValueStore: base,
+		iterator:      iterator,
+		batch:         &pruneFaultBatch{writeErr: writeErr},
+	}
+	database := testDatabase(t, store, noCacheConfig())
+	deleted, err := database.DeleteBefore(ctx, 10, 10)
+	if deleted != 0 || !errors.Is(err, context.Canceled) || !errors.Is(err, writeErr) {
+		t.Fatalf("deleted=%d error=%v, want joined cancellation/write errors", deleted, err)
+	}
+}
+
+func TestDeleteBeforeReturnsCleanupErrors(t *testing.T) {
+	batchCloseErr := errors.New("batch close failed")
+	iteratorCloseErr := errors.New("iterator close failed")
+	node := testNode(NodeAccount, []byte("pending"), 1)
+	base := memorydb.New()
+	encoded := encodedPair(node)
+	if err := base.Put(node.Hash[:], encoded.value); err != nil {
+		t.Fatal(err)
+	}
+	store := &pruneFaultStore{
+		KeyValueStore: base,
+		iterator: &pruneFaultIterator{
+			pairs:    []iteratorPair{encoded},
+			closeErr: iteratorCloseErr,
+		},
+		batch: &pruneFaultBatch{closeErr: batchCloseErr},
+	}
+	database := testDatabase(t, store, noCacheConfig())
+	deleted, err := database.DeleteBefore(t.Context(), 10, 10)
+	if deleted != 1 || !errors.Is(err, batchCloseErr) || !errors.Is(err, iteratorCloseErr) {
+		t.Fatalf("deleted=%d error=%v, want committed delete and joined cleanup errors", deleted, err)
+	}
+}
+
+func TestDeleteBeforeRejectsCorruptCurrentRecord(t *testing.T) {
+	base := memorydb.New()
+	store := &pruneFaultStore{KeyValueStore: base}
+	database := testDatabase(t, store, noCacheConfig())
+	node := testNode(NodeAccount, []byte("corrupt"), 1)
+	if err := database.Store(t.Context(), node); err != nil {
+		t.Fatal(err)
+	}
+	store.iterator = &pruneFaultIterator{pairs: []iteratorPair{encodedPair(node)}}
+	if err := base.Put(node.Hash[:], []byte{byte(NodeAccount)}); err != nil {
+		t.Fatal(err)
+	}
+	deleted, err := database.DeleteBefore(t.Context(), 10, 10)
+	if deleted != 0 || !errors.Is(err, ErrDataCorrupt) {
+		t.Fatalf("deleted=%d error=%v, want ErrDataCorrupt", deleted, err)
+	}
+}
+
+func TestDeleteBeforeCanceledBeforeStart(t *testing.T) {
+	database := testDatabase(t, memorydb.New(), noCacheConfig())
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
-	if _, err := db.DeleteBefore(ctx, 10, 0); err != context.Canceled {
-		t.Fatalf("DeleteBefore on cancelled ctx = %v, want context.Canceled", err)
+	if _, err := database.DeleteBefore(ctx, 10, 10); !errors.Is(err, context.Canceled) {
+		t.Fatalf("DeleteBefore error=%v, want context.Canceled", err)
 	}
 }

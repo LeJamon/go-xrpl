@@ -8,6 +8,7 @@ import (
 	"github.com/LeJamon/go-xrpl/amendment"
 	"github.com/LeJamon/go-xrpl/codec/binarycodec/definitions"
 	"github.com/LeJamon/go-xrpl/internal/ledger/state"
+	"github.com/LeJamon/go-xrpl/protocol"
 )
 
 // ---------------------------------------------------------------------------
@@ -38,7 +39,7 @@ const (
 	maxNativeN uint64 = 100_000_000_000_000_000
 	// maxMPTAmount is rippled kMaxMpTokenAmount — the isLegalMPT ceiling on an
 	// MPT amount's magnitude (2^63 - 1).
-	maxMPTAmount uint64 = 0x7FFF_FFFF_FFFF_FFFF
+	maxMPTAmount uint64 = protocol.MaxMPTokenAmount
 )
 
 var (

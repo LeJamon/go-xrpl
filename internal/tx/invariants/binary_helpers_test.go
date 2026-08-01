@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/LeJamon/go-xrpl/codec/binarycodec"
+	"github.com/LeJamon/go-xrpl/ledger/entry"
 )
 
 // TestIsNativeXRPCurrency pins the renderings of the all-zero (native XRP)
@@ -112,7 +113,7 @@ func encodeTrustLine(t *testing.T) []byte {
 // Invariants_test.cpp testNoXRPTrustLine.
 func TestNoXRPTrustLines_BadCurrencyBoundary(t *testing.T) {
 	good := encodeTrustLine(t)
-	if v := checkNoXRPTrustLines([]InvariantEntry{{EntryType: "RippleState", After: good}}); v != nil {
+	if v := checkNoXRPTrustLines([]InvariantEntry{{EntryType: entry.TypeRippleState, After: good}}); v != nil {
 		t.Fatalf("IOU trust line: unexpected violation %v", v)
 	}
 
@@ -124,14 +125,14 @@ func TestNoXRPTrustLines_BadCurrencyBoundary(t *testing.T) {
 	badCur := make([]byte, len(good))
 	copy(badCur, good)
 	copy(badCur[idx:idx+3], "XRP")
-	if v := checkNoXRPTrustLines([]InvariantEntry{{EntryType: "RippleState", After: badCur}}); v != nil {
+	if v := checkNoXRPTrustLines([]InvariantEntry{{EntryType: entry.TypeRippleState, After: badCur}}); v != nil {
 		t.Fatalf("badCurrency limit must not fire NoXRPTrustLines: %v", v)
 	}
 
 	zeroCur := make([]byte, len(good))
 	copy(zeroCur, good)
 	copy(zeroCur[idx:idx+3], []byte{0, 0, 0})
-	if v := checkNoXRPTrustLines([]InvariantEntry{{EntryType: "RippleState", After: zeroCur}}); v == nil {
+	if v := checkNoXRPTrustLines([]InvariantEntry{{EntryType: entry.TypeRippleState, After: zeroCur}}); v == nil {
 		t.Fatal("expected violation: trust line limit with the zero (XRP) currency")
 	}
 }

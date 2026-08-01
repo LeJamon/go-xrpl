@@ -1,6 +1,9 @@
 package lending
 
-import "github.com/LeJamon/go-xrpl/internal/tx"
+import (
+	"github.com/LeJamon/go-xrpl/internal/tx"
+	"github.com/LeJamon/go-xrpl/ledger/entry"
+)
 
 // Transaction flags for the LendingProtocol transaction types, matching
 // rippled TxFlags.h at tag 3.0.0. LoanSet and LoanPay share tfLoanOverpayment
@@ -31,7 +34,7 @@ const (
 
 // Loan ledger-object (lsf) flags (rippled LedgerFormats.h).
 const (
-	LsfLoanDefault     uint32 = 0x00010000
-	LsfLoanImpaired    uint32 = 0x00020000
-	LsfLoanOverpayment uint32 = 0x00040000
+	LsfLoanDefault     = entry.LsfLoanDefault
+	LsfLoanImpaired    = entry.LsfLoanImpaired
+	LsfLoanOverpayment = entry.LsfLoanOverpayment
 )

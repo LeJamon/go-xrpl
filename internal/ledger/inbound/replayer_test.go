@@ -177,7 +177,7 @@ func TestReplayer_HandleResponse_RoutesByHash(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, rd)
 	assert.Equal(t, expectedHash, rd.Hash())
-	assert.Equal(t, StateComplete, rd.State())
+	assert.Equal(t, StateReplayReady, rd.State())
 
 	// The untouched acquisition must still be in StateWantBase.
 	otherRD, _ := rep.delta.get(otherHash)
@@ -204,6 +204,40 @@ func TestReplayer_HandleResponse_NoMatch(t *testing.T) {
 	assert.Nil(t, rd)
 	assert.ErrorIs(t, err, ErrNoMatchingAcquisition)
 	assert.Equal(t, 1, rep.Count(), "unmatched response must not touch state")
+}
+
+func TestReplayer_HandleResponseFromRejectsUnexpectedPeer(t *testing.T) {
+	t.Parallel()
+	parent := makeGenesisLedger(t)
+	blob, id := makeTxWithMetaBlob(t, []byte("unexpected-peer-padding-padding"), 0)
+	resp, expectedHash := buildDeltaResponse(t, parent, [][]byte{blob}, [][32]byte{id})
+
+	rep := NewReplayer(nil, nil, 2)
+	rd, err := rep.Acquire(expectedHash, 7, parent)
+	require.NoError(t, err)
+
+	got, err := rep.HandleResponseFrom(9, resp)
+	require.ErrorIs(t, err, ErrUnexpectedReplayPeer)
+	assert.Same(t, rd, got)
+	assert.Equal(t, StateWantBase, rd.State())
+	assert.Equal(t, 1, rep.Count())
+}
+
+func TestReplayer_HandleResponseFromAcceptsLateTriedPeer(t *testing.T) {
+	t.Parallel()
+	parent := makeGenesisLedger(t)
+	blob, id := makeTxWithMetaBlob(t, []byte("late-tried-peer-padding-padding"), 0)
+	resp, expectedHash := buildDeltaResponse(t, parent, [][]byte{blob}, [][32]byte{id})
+
+	rep := NewReplayer(nil, nil, 2)
+	rd, err := rep.Acquire(expectedHash, 7, parent)
+	require.NoError(t, err)
+	rd.NoteSubTaskRetry(9)
+
+	got, err := rep.HandleResponseFrom(7, resp)
+	require.NoError(t, err)
+	assert.Same(t, rd, got)
+	assert.Equal(t, StateReplayReady, rd.State())
 }
 
 // TestReplayer_HandleResponse_NilAndBadHash covers the defensive edge

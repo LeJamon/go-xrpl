@@ -27,7 +27,7 @@ func TestLedgerEventDispatch_FIFOAndSingleThreaded(t *testing.T) {
 		inFlight int
 		done     = make(chan struct{})
 	)
-	svc.SetEventCallback(func(event *LedgerAcceptedEvent) {
+	setEventSinkFunc(svc, func(event *LedgerAcceptedEvent) {
 		mu.Lock()
 		inFlight++
 		if inFlight != 1 {

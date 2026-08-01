@@ -173,20 +173,22 @@ func TestXRPLNumber_ToIOUAmountValue_Underflow(t *testing.T) {
 	require.True(t, iou.IsZero())
 }
 
-// TestAddIOUValues_WithSwitchover tests that addIOUValues produces sensible
-// results with the switchover enabled vs disabled. Mutates the package-level
-// numberSwitchoverEnabled — must not run in parallel.
-func TestAddIOUValues_WithSwitchover(t *testing.T) {
+func TestAddIOUValues_WithNumberContext(t *testing.T) {
 	a := IOUAmountValue{mantissa: -1000000000000000, exponent: -15} // -1.0
 	b := IOUAmountValue{mantissa: 3350000000000000, exponent: -17}  // 0.0335
 
-	SetNumberSwitchover(false)
-	resultOff := addIOUValues(a, b)
-
-	SetNumberSwitchover(true)
-	resultOn := addIOUValues(a, b)
-
-	SetNumberSwitchover(false)
+	resultOff := addIOUValuesRoundedWithContext(
+		a,
+		b,
+		RoundToNearest,
+		NewNumberContext(MantissaScaleSmall, false),
+	)
+	resultOn := addIOUValuesRoundedWithContext(
+		a,
+		b,
+		RoundToNearest,
+		NewNumberContext(MantissaScaleSmall, true),
+	)
 
 	require.False(t, resultOff.IsZero())
 	require.False(t, resultOn.IsZero())

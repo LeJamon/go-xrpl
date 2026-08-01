@@ -317,7 +317,11 @@ func (n *NFTokenAcceptOffer) Apply(ctx *tx.ApplyContext) ter.Result {
 				if brokerFeeIOU.Compare(buyAmount) >= 0 {
 					return ter.TecINSUFFICIENT_PAYMENT
 				}
-				remainder, _ := buyAmount.Sub(brokerFeeIOU)
+				remainder, _ := buyAmount.SubWithNumberContext(
+					brokerFeeIOU,
+					ctx.NumberContext(),
+					state.RoundToNearest,
+				)
 				if sellAmount.Compare(remainder) > 0 {
 					return ter.TecINSUFFICIENT_PAYMENT
 				}

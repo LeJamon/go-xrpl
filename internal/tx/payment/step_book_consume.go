@@ -75,8 +75,8 @@ func (s *BookStep) consumeOffer(sb *PaymentSandbox, offer *state.LedgerOffer, co
 
 	origPays := s.offerTakerPays(offer)
 	origGets := s.offerTakerGets(offer)
-	newTakerPays := s.subtractFromAmount(origPays, netIn)
-	newTakerGets := s.subtractFromAmount(origGets, consumedOut)
+	newTakerPays := s.subtractFromAmount(origPays, netIn, sb.NumberContext())
+	newTakerGets := s.subtractFromAmount(origGets, consumedOut, sb.NumberContext())
 
 	// Update offer's remaining amounts.
 	// Reference: rippled Offer.h consume() — just subtracts consumed amounts
@@ -156,8 +156,11 @@ func (s *BookStep) deleteOffer(sb *PaymentSandbox, offer *state.LedgerOffer, own
 	return nil
 }
 
-func (s *BookStep) subtractFromAmount(original, consumed EitherAmount) EitherAmount {
-	return original.Sub(consumed)
+func (s *BookStep) subtractFromAmount(
+	original, consumed EitherAmount,
+	numberContext state.NumberContext,
+) EitherAmount {
+	return original.SubWithNumberContext(consumed, numberContext)
 }
 
 // eitherAmountToTxAmount converts EitherAmount to tx.Amount

@@ -442,7 +442,8 @@ func verifyCounterpartyMultiSign(tx txcore.Transaction, cp *txcore.CounterpartyS
 		}
 		lastAccountID = accountID
 
-		payload, encErr := binarycodec.EncodeForMultisigning(copyMap(txMap), signer.Account)
+		payload, encErr := binarycodec.EncodeForMultisigningTarget(
+			copyMap(txMap), signer.Account)
 		if encErr != nil {
 			return fmt.Errorf("%sInvalid signature on account %s.", counterpartyPrefix, signer.Account)
 		}
@@ -634,6 +635,16 @@ func CalculateBaseFee(transaction txcore.Transaction, view txcore.LedgerView, co
 // Each signer signs a message that includes their account ID as a suffix
 // Returns the signature as a hex string
 func SignTransactionForMultiSign(tx txcore.Transaction, signerAccount string, privateKeyHex string) (string, error) {
+	return signTransactionForMultiSign(tx, signerAccount, privateKeyHex, false)
+}
+
+// SignTransactionForMultiSignTarget signs for a nested signature object while
+// retaining the transaction's outer SigningPubKey in the payload.
+func SignTransactionForMultiSignTarget(tx txcore.Transaction, signerAccount string, privateKeyHex string) (string, error) {
+	return signTransactionForMultiSign(tx, signerAccount, privateKeyHex, true)
+}
+
+func signTransactionForMultiSign(tx txcore.Transaction, signerAccount string, privateKeyHex string, target bool) (string, error) {
 	// Flatten the transaction to a map
 	txMap, err := flattenForSigning(tx)
 	if err != nil {
@@ -641,7 +652,12 @@ func SignTransactionForMultiSign(tx txcore.Transaction, signerAccount string, pr
 	}
 
 	// Get the multi-signing payload for this specific signer
-	signingPayload, err := binarycodec.EncodeForMultisigning(txMap, signerAccount)
+	var signingPayload string
+	if target {
+		signingPayload, err = binarycodec.EncodeForMultisigningTarget(txMap, signerAccount)
+	} else {
+		signingPayload, err = binarycodec.EncodeForMultisigning(txMap, signerAccount)
+	}
 	if err != nil {
 		return "", fmt.Errorf("failed to encode for multi-signing: %w", err)
 	}

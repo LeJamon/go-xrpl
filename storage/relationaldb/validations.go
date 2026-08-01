@@ -2,6 +2,8 @@ package relationaldb
 
 import (
 	"context"
+	"fmt"
+	"math"
 	"time"
 
 	"github.com/LeJamon/go-xrpl/protocol"
@@ -46,9 +48,6 @@ type ValidationRepository interface {
 	// archived validations signed by nodeKey (ordered by LedgerSeq
 	// descending). limit <= 0 applies no bound.
 	GetValidationsByValidator(ctx context.Context, nodeKey []byte, limit int) ([]*ValidationRecord, error)
-
-	// GetValidationCount returns the total number of archived rows.
-	GetValidationCount(ctx context.Context) (int64, error)
 
 	// DeleteOlderThanSeq drops rows with LedgerSeq < maxSeq, bounded to
 	// at most `batchSize` rows per call so long retention sweeps never
@@ -95,6 +94,21 @@ func ScanValidationRecord(row RowScanner) (*ValidationRecord, error) {
 		return nil, err
 	}
 
+	if ledgerSeq < 0 || ledgerSeq > math.MaxUint32 {
+		return nil, fmt.Errorf("%w: ledger_seq %d is outside uint32 range", ErrInvalidData, ledgerSeq)
+	}
+	if initialSeq < 0 || initialSeq > math.MaxUint32 {
+		return nil, fmt.Errorf("%w: initial_seq %d is outside uint32 range", ErrInvalidData, initialSeq)
+	}
+	if flags < 0 || flags > math.MaxUint32 {
+		return nil, fmt.Errorf("%w: flags %d is outside uint32 range", ErrInvalidData, flags)
+	}
+	if len(ledgerHash) != len(rec.LedgerHash) {
+		return nil, fmt.Errorf("%w: ledger_hash has width %d, want %d", ErrInvalidData, len(ledgerHash), len(rec.LedgerHash))
+	}
+	if len(rec.NodePubKey) != 33 {
+		return nil, fmt.Errorf("%w: node_pubkey has width %d, want 33", ErrInvalidData, len(rec.NodePubKey))
+	}
 	rec.LedgerSeq = LedgerIndex(ledgerSeq)
 	rec.InitialSeq = LedgerIndex(initialSeq)
 	copy(rec.LedgerHash[:], ledgerHash)

@@ -14,6 +14,7 @@ import (
 	binarycodec "github.com/LeJamon/go-xrpl/codec/binarycodec"
 	"github.com/LeJamon/go-xrpl/internal/ledger/state"
 	"github.com/LeJamon/go-xrpl/keylet"
+	"github.com/LeJamon/go-xrpl/ledger/entry"
 )
 
 func offerSLE(t *testing.T, takerPays, takerGets any) []byte {
@@ -58,7 +59,7 @@ func mptOfferAmount(value string) map[string]any {
 // Reference: rippled InvariantCheck.cpp:228-245.
 func TestNoBadOffers_ZeroAmountsAccepted(t *testing.T) {
 	entries := []InvariantEntry{{
-		EntryType: "Offer",
+		EntryType: entry.TypeOffer,
 		After:     offerSLE(t, "0", usdAmount("5")),
 	}}
 	if v := checkNoBadOffers(entries); v != nil {
@@ -67,7 +68,7 @@ func TestNoBadOffers_ZeroAmountsAccepted(t *testing.T) {
 
 	// Zero on the IOU side is equally acceptable.
 	entries = []InvariantEntry{{
-		EntryType: "Offer",
+		EntryType: entry.TypeOffer,
 		After:     offerSLE(t, "1000000", usdAmount("0")),
 	}}
 	if v := checkNoBadOffers(entries); v != nil {
@@ -83,7 +84,7 @@ func TestNoBadOffers_NegativeXRP(t *testing.T) {
 	blob := offerSLE(t, usdAmount("5"), "1000000")
 	negateNativeAmount(t, blob)
 
-	entries := []InvariantEntry{{EntryType: "Offer", After: blob}}
+	entries := []InvariantEntry{{EntryType: entry.TypeOffer, After: blob}}
 	if v := checkNoBadOffers(entries); v == nil {
 		t.Fatal("expected NoBadOffers violation for negative XRP TakerGets")
 	} else if v.Name != "NoBadOffers" {
@@ -96,7 +97,7 @@ func TestNoBadOffers_NegativeXRP(t *testing.T) {
 // Reference: rippled InvariantCheck.cpp:230-234.
 func TestNoBadOffers_NegativeIOU(t *testing.T) {
 	entries := []InvariantEntry{{
-		EntryType: "Offer",
+		EntryType: entry.TypeOffer,
 		After:     offerSLE(t, usdAmount("-5"), "1000000"),
 	}}
 	if v := checkNoBadOffers(entries); v == nil {
@@ -111,7 +112,7 @@ func TestNoBadOffers_NegativeIOU(t *testing.T) {
 // Reference: rippled InvariantCheck.cpp:237.
 func TestNoBadOffers_XRPForXRP(t *testing.T) {
 	entries := []InvariantEntry{{
-		EntryType: "Offer",
+		EntryType: entry.TypeOffer,
 		After:     offerSLE(t, "1000000", "2000000"),
 	}}
 	if v := checkNoBadOffers(entries); v == nil {
@@ -121,7 +122,7 @@ func TestNoBadOffers_XRPForXRP(t *testing.T) {
 
 func TestNoBadOffers_MPTIsNotXRP(t *testing.T) {
 	entries := []InvariantEntry{{
-		EntryType: "Offer",
+		EntryType: entry.TypeOffer,
 		After:     offerSLE(t, "1000000", mptOfferAmount("5")),
 	}}
 	if v := checkNoBadOffers(entries); v != nil {
@@ -137,7 +138,7 @@ func TestNoBadOffers_MPTIsNotXRP(t *testing.T) {
 // TestNoBadOffers_ParseFailure: a corrupt Offer SLE must fail the invariant
 // rather than silently continuing.
 func TestNoBadOffers_ParseFailure(t *testing.T) {
-	entries := []InvariantEntry{{EntryType: "Offer", After: []byte{0x01}}}
+	entries := []InvariantEntry{{EntryType: entry.TypeOffer, After: []byte{0x01}}}
 	if v := checkNoBadOffers(entries); v == nil {
 		t.Fatal("expected NoBadOffers violation for unparseable Offer SLE")
 	} else if v.Name != "NoBadOffers" {
@@ -193,7 +194,7 @@ func TestTransfersNotFrozen_ParseFailure(t *testing.T) {
 	tx := stubTx{txType: TypePayment}
 	corrupt := mustEncode(t, map[string]any{"LedgerEntryType": "RippleState"})
 	corrupt = append(corrupt, 0xFF) // trailing junk → ParseRippleState fails
-	entries := []InvariantEntry{{EntryType: "RippleState", After: corrupt}}
+	entries := []InvariantEntry{{EntryType: entry.TypeRippleState, After: corrupt}}
 
 	if v := checkTransfersNotFrozen(tx, entries, stubView{}, amendment.AllSupportedRules()); v == nil {
 		t.Fatal("expected TransfersNotFrozen violation for unparseable RippleState (enforcing)")
@@ -265,17 +266,17 @@ func TestValidAMM_CreateRequiresExactLPTokenBalance(t *testing.T) {
 		keylet.Line(ammID, issuerID, "USD").Key: rsBlob,
 	}}
 
-	exact := []InvariantEntry{{EntryType: "AMM", After: ammSLE(t, addrHolderA, "79056941.50420948")}}
+	exact := []InvariantEntry{{EntryType: entry.TypeAMM, After: ammSLE(t, addrHolderA, "79056941.50420948")}}
 	if v := checkValidAMM(tx, TesSUCCESS, exact, view, rules); v != nil {
 		t.Fatalf("exact LP token balance rejected: %v", v)
 	}
 
-	ulpDrift := []InvariantEntry{{EntryType: "AMM", After: ammSLE(t, addrHolderA, "79056941.50420947")}}
+	ulpDrift := []InvariantEntry{{EntryType: entry.TypeAMM, After: ammSLE(t, addrHolderA, "79056941.50420947")}}
 	if v := checkValidAMM(tx, TesSUCCESS, ulpDrift, view, rules); v == nil {
 		t.Fatal("expected ValidAMM violation for one-ULP LP-token mismatch")
 	}
 
-	gross := []InvariantEntry{{EntryType: "AMM", After: ammSLE(t, addrHolderA, "80000000")}}
+	gross := []InvariantEntry{{EntryType: entry.TypeAMM, After: ammSLE(t, addrHolderA, "80000000")}}
 	if v := checkValidAMM(tx, TesSUCCESS, gross, view, rules); v == nil {
 		t.Fatal("expected ValidAMM violation for a gross LP-token mismatch")
 	} else if v.Name != "ValidAMM" {
@@ -299,21 +300,21 @@ func TestParseError_HardFails(t *testing.T) {
 	acctBad := []byte{0x01} // too short for ParseAccountRoot
 
 	t.Run("NoXRPTrustLines", func(t *testing.T) {
-		entries := []InvariantEntry{{EntryType: "RippleState", After: rsBad}}
+		entries := []InvariantEntry{{EntryType: entry.TypeRippleState, After: rsBad}}
 		if v := checkNoXRPTrustLines(entries); v == nil {
 			t.Fatal("expected NoXRPTrustLines violation for unparseable RippleState")
 		}
 	})
 
 	t.Run("NoDeepFreeze", func(t *testing.T) {
-		entries := []InvariantEntry{{EntryType: "RippleState", After: rsBad}}
+		entries := []InvariantEntry{{EntryType: entry.TypeRippleState, After: rsBad}}
 		if v := checkNoDeepFreezeTrustLinesWithoutFreeze(entries); v == nil {
 			t.Fatal("expected NoDeepFreezeTrustLinesWithoutFreeze violation for unparseable RippleState")
 		}
 	})
 
 	t.Run("NFTokenCountTracking", func(t *testing.T) {
-		entries := []InvariantEntry{{EntryType: "AccountRoot", After: acctBad}}
+		entries := []InvariantEntry{{EntryType: entry.TypeAccountRoot, After: acctBad}}
 		if v := checkNFTokenCountTracking("Payment", TesSUCCESS, entries); v == nil {
 			t.Fatal("expected NFTokenCountTracking violation for unparseable AccountRoot")
 		}
@@ -325,7 +326,7 @@ func TestParseError_HardFails(t *testing.T) {
 			account: addrIssuer,
 			amount:  amount,
 		}
-		entries := []InvariantEntry{{EntryType: "RippleState", Before: rsBad, After: rsBad}}
+		entries := []InvariantEntry{{EntryType: entry.TypeRippleState, Before: rsBad, After: rsBad}}
 		if v := checkValidClawback(tx, TesSUCCESS, entries, lineView{line: rsBad}); v == nil {
 			t.Fatal("expected ValidClawback violation for unparseable trust line")
 		}
@@ -333,7 +334,7 @@ func TestParseError_HardFails(t *testing.T) {
 
 	t.Run("ValidPermissionedDomain", func(t *testing.T) {
 		pdBad := append(mustEncode(t, map[string]any{"LedgerEntryType": "PermissionedDomain"}), 0xFF)
-		entries := []InvariantEntry{{EntryType: "PermissionedDomain", After: pdBad}}
+		entries := []InvariantEntry{{EntryType: entry.TypePermissionedDomain, After: pdBad}}
 		if v := checkValidPermissionedDomain(stubTx{txType: TypePermissionedDomainSet}, TesSUCCESS, entries, nil); v == nil {
 			t.Fatal("expected ValidPermissionedDomain violation for unparseable PermissionedDomain")
 		}
@@ -341,7 +342,7 @@ func TestParseError_HardFails(t *testing.T) {
 
 	t.Run("ValidPermissionedDEX", func(t *testing.T) {
 		offerBad := append(mustEncode(t, map[string]any{"LedgerEntryType": "Offer"}), 0xFF)
-		entries := []InvariantEntry{{EntryType: "Offer", After: offerBad}}
+		entries := []InvariantEntry{{EntryType: entry.TypeOffer, After: offerBad}}
 		tx := domainTx{stubTx: stubTx{txType: TypeOfferCreate}}
 		if v := checkValidPermissionedDEX(tx, TesSUCCESS, entries, existsView{exists: true}, nil); v == nil {
 			t.Fatal("expected ValidPermissionedDEX violation for unparseable Offer")

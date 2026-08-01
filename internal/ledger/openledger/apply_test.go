@@ -2,6 +2,7 @@ package openledger_test
 
 import (
 	"encoding/hex"
+	"fmt"
 	"testing"
 	"time"
 
@@ -316,4 +317,323 @@ func TestApplyTxs_BuildLedgerMode_TecRetriesThenCommits(t *testing.T) {
 	if !view.TxExists(pt.Hash) {
 		t.Errorf("BuildLedgerMode: tec tx missing from view — final non-retry pass should have committed")
 	}
+}
+
+func TestApplyTxs_BuildLedgerModeUsesThreeTotalPasses(t *testing.T) {
+	env := jtx.NewTestEnv(t)
+	env.SetVerifySignatures(true)
+
+	alice := jtx.NewAccount("three-pass-alice")
+	bob := jtx.NewAccount("three-pass-bob")
+	carol := jtx.NewAccount("three-pass-carol")
+	dave := jtx.NewAccount("three-pass-dave")
+	erin := jtx.NewAccount("three-pass-erin")
+	env.FundAmount(alice, 3_000_000_000)
+
+	view := freshView(t, env)
+	newAccountSequence := view.Sequence()
+	buildPending := func(builder *payment.PaymentBuilder, signer *jtx.Account) openledger.PendingTx {
+		t.Helper()
+		blob := buildSignedBlob(t, env, builder.Build(), signer)
+		ptx, err := openledger.ParsePendingTx(blob)
+		if err != nil {
+			t.Fatalf("ParsePendingTx: %v", err)
+		}
+		return ptx
+	}
+
+	aliceToBob := buildPending(
+		payment.Pay(alice, bob, 1_500_000_000).Sequence(env.Seq(alice)),
+		alice,
+	)
+	bobToCarol := buildPending(
+		payment.Pay(bob, carol, 1_000_000_000).Sequence(newAccountSequence),
+		bob,
+	)
+	carolToDave := buildPending(
+		payment.Pay(carol, dave, 600_000_000).Sequence(newAccountSequence),
+		carol,
+	)
+	daveToErin := buildPending(
+		payment.Pay(dave, erin, 300_000_000).Sequence(newAccountSequence),
+		dave,
+	)
+
+	pending := []openledger.PendingTx{
+		daveToErin,
+		carolToDave,
+		bobToCarol,
+		aliceToBob,
+	}
+	var retries []openledger.PendingTx
+	err := openledger.ApplyTxs(
+		view,
+		pending,
+		&retries,
+		openledger.ApplyConfig{
+			BaseFee:          10,
+			ReserveBase:      200_000_000,
+			ReserveIncrement: 50_000_000,
+			LedgerSequence:   view.Sequence(),
+			Rules:            amendment.AllSupportedRules(),
+			Mode:             openledger.BuildLedgerMode,
+		},
+	)
+	if err != nil {
+		t.Fatalf("ApplyTxs: %v", err)
+	}
+
+	for _, ptx := range []openledger.PendingTx{aliceToBob, bobToCarol, carolToDave} {
+		if !view.TxExists(ptx.Hash) {
+			t.Fatalf("transaction %x did not settle within three passes", ptx.Hash)
+		}
+	}
+	if view.TxExists(daveToErin.Hash) {
+		t.Fatal("fourth dependency settled; BuildLedgerMode performed more than three total passes")
+	}
+	if len(retries) != 1 || retries[0].Hash != daveToErin.Hash {
+		t.Fatalf("retries = %#v, want only the fourth dependency", retries)
+	}
+}
+
+func TestApplyTxsResultDrivenFinalPassSettlesPostFinalDependency(t *testing.T) {
+	for _, mode := range []openledger.Mode{
+		openledger.OpenLedgerMode,
+		openledger.BuildLedgerMode,
+	} {
+		t.Run(fmt.Sprintf("mode_%d", mode), func(t *testing.T) {
+			env := jtx.NewTestEnv(t)
+			env.SetVerifySignatures(true)
+			alice := jtx.NewAccount(fmt.Sprintf("final-alice-%d", mode))
+			bob := jtx.NewAccount(fmt.Sprintf("final-bob-%d", mode))
+			tooSmall := jtx.NewAccount(fmt.Sprintf("final-small-%d", mode))
+			env.Fund(alice, bob)
+			view := freshView(t, env)
+
+			sequence := env.Seq(alice)
+			tecTx := pendingPayment(
+				t,
+				env,
+				payment.Pay(alice, tooSmall, 100_000_000).Sequence(sequence),
+				alice,
+			)
+			dependent := pendingPayment(
+				t,
+				env,
+				payment.Pay(alice, bob, 1_000_000).Sequence(sequence+1),
+				alice,
+			)
+
+			var retries []openledger.PendingTx
+			err := openledger.ApplyTxs(
+				view,
+				[]openledger.PendingTx{dependent, tecTx},
+				&retries,
+				openledger.ApplyConfig{
+					BaseFee:          10,
+					ReserveBase:      200_000_000,
+					ReserveIncrement: 50_000_000,
+					LedgerSequence:   view.Sequence(),
+					Rules:            amendment.AllSupportedRules(),
+					Mode:             mode,
+				},
+			)
+			if err != nil {
+				t.Fatalf("ApplyTxs: %v", err)
+			}
+			if !view.TxExists(tecTx.Hash) || !view.TxExists(dependent.Hash) {
+				t.Fatalf(
+					"post-final dependency did not settle: tec=%t dependent=%t",
+					view.TxExists(tecTx.Hash),
+					view.TxExists(dependent.Hash),
+				)
+			}
+			if len(retries) != 0 {
+				t.Fatalf("retries = %#v, want none", retries)
+			}
+		})
+	}
+}
+
+func TestApplyTxsResultDrivenRetryPasses(t *testing.T) {
+	for _, mode := range []openledger.Mode{
+		openledger.OpenLedgerMode,
+		openledger.BuildLedgerMode,
+	} {
+		t.Run(fmt.Sprintf("mode_%d", mode), func(t *testing.T) {
+			env := jtx.NewTestEnv(t)
+			env.SetVerifySignatures(true)
+			alice := jtx.NewAccount(fmt.Sprintf("retry-alice-%d", mode))
+			sink := jtx.NewAccount(fmt.Sprintf("retry-sink-%d", mode))
+			funder := jtx.NewAccount(fmt.Sprintf("retry-funder-%d", mode))
+			bob := jtx.NewAccount(fmt.Sprintf("retry-bob-%d", mode))
+			carol := jtx.NewAccount(fmt.Sprintf("retry-carol-%d", mode))
+			tooSmall := jtx.NewAccount(fmt.Sprintf("retry-small-%d", mode))
+			env.Fund(alice, sink, funder)
+			view := freshView(t, env)
+
+			aliceSequence := env.Seq(alice)
+			tecTx := pendingPayment(
+				t,
+				env,
+				payment.Pay(alice, tooSmall, 100_000_000).Sequence(aliceSequence),
+				alice,
+			)
+			dependent := pendingPayment(
+				t,
+				env,
+				payment.Pay(alice, sink, 1_000_000).Sequence(aliceSequence+1),
+				alice,
+			)
+			bobToCarol := pendingPayment(
+				t,
+				env,
+				payment.Pay(bob, carol, 300_000_000).Sequence(view.Sequence()),
+				bob,
+			)
+			fundBob := pendingPayment(
+				t,
+				env,
+				payment.Pay(funder, bob, 600_000_000).Sequence(env.Seq(funder)),
+				funder,
+			)
+
+			var retries []openledger.PendingTx
+			err := openledger.ApplyTxs(
+				view,
+				[]openledger.PendingTx{dependent, tecTx, bobToCarol, fundBob},
+				&retries,
+				openledger.ApplyConfig{
+					BaseFee:          10,
+					ReserveBase:      200_000_000,
+					ReserveIncrement: 50_000_000,
+					LedgerSequence:   view.Sequence(),
+					Rules:            amendment.AllSupportedRules(),
+					Mode:             mode,
+				},
+			)
+			if err != nil {
+				t.Fatalf("ApplyTxs: %v", err)
+			}
+			for _, ptx := range []openledger.PendingTx{tecTx, bobToCarol, fundBob} {
+				if !view.TxExists(ptx.Hash) {
+					t.Fatalf("transaction %x did not settle", ptx.Hash)
+				}
+			}
+			if view.TxExists(dependent.Hash) {
+				t.Fatal("dependency settled after the last available final pass")
+			}
+			if len(retries) != 1 || retries[0].Hash != dependent.Hash {
+				t.Fatalf("retries = %#v, want only the post-final dependency", retries)
+			}
+		})
+	}
+}
+
+func TestApplyTxsRejectsNilView(t *testing.T) {
+	err := openledger.ApplyTxs(nil, nil, nil, openledger.ApplyConfig{})
+	if err == nil {
+		t.Fatal("ApplyTxs(nil) succeeded")
+	}
+}
+
+func TestApplyTxsRejectsMissingRules(t *testing.T) {
+	env := jtx.NewTestEnv(t)
+	view := freshView(t, env)
+	err := openledger.ApplyTxs(
+		view,
+		[]openledger.PendingTx{{Blob: []byte{0xff}}},
+		nil,
+		openledger.ApplyConfig{},
+	)
+	if err == nil {
+		t.Fatal("ApplyTxs without amendment rules succeeded")
+	}
+}
+
+func TestApplyTxsReturnsMalformedTransactionError(t *testing.T) {
+	env := jtx.NewTestEnv(t)
+	view := freshView(t, env)
+	err := openledger.ApplyTxs(
+		view,
+		[]openledger.PendingTx{{Blob: []byte{0xff}}},
+		nil,
+		openledger.ApplyConfig{Rules: amendment.AllSupportedRules()},
+	)
+	if err == nil {
+		t.Fatal("ApplyTxs with malformed transaction succeeded")
+	}
+}
+
+func TestApplyTxsPreservesApplyFlagsAcrossPasses(t *testing.T) {
+	env := jtx.NewTestEnv(t)
+	env.SetVerifySignatures(true)
+	pt, _ := buildTecPayment(t, env)
+	view := freshView(t, env)
+
+	var retries []openledger.PendingTx
+	err := openledger.ApplyTxs(
+		view,
+		[]openledger.PendingTx{pt},
+		&retries,
+		openledger.ApplyConfig{
+			BaseFee:          10,
+			ReserveBase:      200_000_000,
+			ReserveIncrement: 50_000_000,
+			LedgerSequence:   view.Sequence(),
+			Rules:            amendment.AllSupportedRules(),
+			ApplyFlags:       tx.TapFAIL_HARD,
+		},
+	)
+	if err != nil {
+		t.Fatalf("ApplyTxs: %v", err)
+	}
+	if view.TxExists(pt.Hash) {
+		t.Fatal("fail-hard tec transaction committed")
+	}
+	if len(retries) != 1 || retries[0].Hash != pt.Hash {
+		t.Fatalf("retries = %#v, want the fail-hard transaction", retries)
+	}
+}
+
+func TestTxqAdapterDirectApplyPreservesApplyFlags(t *testing.T) {
+	env := jtx.NewTestEnv(t)
+	env.SetVerifySignatures(true)
+	ptx, _ := buildTecPayment(t, env)
+	view := freshView(t, env)
+	parsed, err := tx.ParseFromBinary(ptx.Blob)
+	if err != nil {
+		t.Fatalf("ParseFromBinary: %v", err)
+	}
+	parsed.SetRawBytes(ptx.Blob)
+
+	adapter := openledger.NewTxqAdapter(view, openledger.ApplyConfig{
+		BaseFee:          10,
+		ReserveBase:      200_000_000,
+		ReserveIncrement: 50_000_000,
+		Rules:            amendment.AllSupportedRules(),
+		ApplyFlags:       tx.TapFAIL_HARD,
+	})
+	_, applied := adapter.ApplyTransaction(parsed)
+	if applied {
+		t.Fatal("TxQ direct apply committed a fail-hard tec transaction")
+	}
+	if view.TxExists(ptx.Hash) {
+		t.Fatal("fail-hard TxQ transaction was added to the view")
+	}
+}
+
+func pendingPayment(
+	t *testing.T,
+	env *jtx.TestEnv,
+	builder *payment.PaymentBuilder,
+	signer *jtx.Account,
+) openledger.PendingTx {
+	t.Helper()
+	blob := buildSignedBlob(t, env, builder.Build(), signer)
+	ptx, err := openledger.ParsePendingTx(blob)
+	if err != nil {
+		t.Fatalf("ParsePendingTx: %v", err)
+	}
+	return ptx
 }

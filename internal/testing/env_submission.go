@@ -1322,17 +1322,12 @@ func (c *testTxQApplyContext) applyView() *ledger.Ledger {
 	return c.env.ledger
 }
 
-func (c *testTxQApplyContext) GetAccountSequence(account [20]byte) uint32 {
-	accountKey := keylet.Account(account)
-	data, err := c.env.ledger.Read(accountKey)
-	if err != nil || data == nil {
-		return 0
+func (c *testTxQApplyContext) GetAccountSequence(account [20]byte) (uint32, error) {
+	accountRoot, err := state.ReadAccountRoot(c.env.ledger, account)
+	if err != nil || accountRoot == nil {
+		return 0, err
 	}
-	accountRoot, err := state.ParseAccountRoot(data)
-	if err != nil {
-		return 0
-	}
-	return accountRoot.Sequence
+	return accountRoot.Sequence, nil
 }
 
 func (c *testTxQApplyContext) AccountExists(account [20]byte) bool {
@@ -1347,17 +1342,12 @@ func (c *testTxQApplyContext) TicketExists(account [20]byte, ticketSeq uint32) b
 	return err == nil && exists
 }
 
-func (c *testTxQApplyContext) GetAccountBalance(account [20]byte) uint64 {
-	accountKey := keylet.Account(account)
-	data, err := c.env.ledger.Read(accountKey)
-	if err != nil || data == nil {
-		return 0
+func (c *testTxQApplyContext) GetAccountBalance(account [20]byte) (uint64, error) {
+	accountRoot, err := state.ReadAccountRoot(c.env.ledger, account)
+	if err != nil || accountRoot == nil {
+		return 0, err
 	}
-	accountRoot, err := state.ParseAccountRoot(data)
-	if err != nil {
-		return 0
-	}
-	return accountRoot.Balance
+	return accountRoot.Balance, nil
 }
 
 func (c *testTxQApplyContext) GetAccountReserve(ownerCount uint32) uint64 {

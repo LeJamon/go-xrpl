@@ -72,7 +72,7 @@ func TestService_SimulateTransaction_AMMCreateUsesParentHash(t *testing.T) {
 	// AMMCreate requires AMM + fixUniversalNumber, both VoteDefaultNo and so
 	// absent from the default genesis set — enable them explicitly, else the
 	// AMMCreate is temDISABLED.
-	cfg := service.DefaultConfig()
+	cfg := defaultServiceConfig()
 	cfg.Startup = service.StartupConfig{Mode: service.StartupFresh}
 	cfg.GenesisConfig.Amendments = append(cfg.GenesisConfig.Amendments,
 		amendment.FeatureAMM, amendment.FeatureFixUniversalNumber)

@@ -37,7 +37,6 @@ import (
 	"github.com/LeJamon/go-xrpl/internal/watchdog"
 	xrpllog "github.com/LeJamon/go-xrpl/log"
 	"github.com/LeJamon/go-xrpl/protocol"
-	"github.com/LeJamon/go-xrpl/shamap"
 	"github.com/LeJamon/go-xrpl/shamap/backend"
 	kvpebble "github.com/LeJamon/go-xrpl/storage/kvstore/pebble"
 	"github.com/LeJamon/go-xrpl/storage/nodestore"
@@ -287,7 +286,7 @@ func Run(ctx context.Context, appConfig *config.Config, configPath string, stand
 	// consensus modes; gated by node_db advisory_delete and persisted under
 	// database_path. Mirrors rippled's SHAMapStore advisory-delete state.
 	if advisoryStore, asErr := shamapstore.New(
-		appConfig.NodeDB.IsAdvisoryDeleteEnabled(),
+		appConfig.NodeDB.IsOnlineDeleteEnabled() && appConfig.NodeDB.IsAdvisoryDeleteEnabled(),
 		appConfig.LocalStateDir(),
 	); asErr != nil {
 		if appConfig.NodeDB.IsOnlineDeleteEnabled() {
@@ -447,38 +446,33 @@ func Run(ctx context.Context, appConfig *config.Config, configPath string, stand
 		}
 	}
 
-	// Background ledger-integrity verifier (admin ledger_cleaner). rippled keeps
-	// this subsystem present in every instance (Application always constructs
-	// and starts its LedgerCleaner); mirror that by always wiring it, falling
-	// back to an in-memory content-addressed family when no persistent node
-	// store is configured (standalone / RPC-only). The RPC's own availability
-	// is then gated on network/sync state, as in rippled, not on storage.
-	var cleanerFamily shamap.Family
+	// Background ledger-integrity verification requires the same durable SHAMap
+	// family used by the ledger service. A private in-memory fallback cannot
+	// verify persisted ledger contents and would report misleading failures.
+	var cleanerSource *ledgerCleanerSource
 	if nodeFamily != nil {
-		cleanerFamily = nodeFamily
-	} else {
-		memFamily := backend.NewMemory()
-		cleanerFamily = memFamily
-	}
-	ledgerCleaner = cleaner.New(&ledgerCleanerSource{svc: ledgerSvcRef, family: cleanerFamily}, rootLogger)
-	if err := context.Cause(ctx); err != nil {
-		return err
-	}
-	ledgerCleaner.Start()
+		cleanerSource = &ledgerCleanerSource{svc: ledgerSvcRef, family: nodeFamily}
+		ledgerCleaner = cleaner.New(cleanerSource, rootLogger)
+		if err := context.Cause(ctx); err != nil {
+			return err
+		}
+		ledgerCleaner.Start()
 
-	cleanerRef := ledgerCleaner
-	services.LedgerCleanerConfigure = func(p types.LedgerCleanerParams) types.LedgerCleanerStatus {
-		return toCleanerStatus(cleanerRef.Clean(cleaner.Params{
-			Ledger:     p.Ledger,
-			MinLedger:  p.MinLedger,
-			MaxLedger:  p.MaxLedger,
-			Full:       p.Full,
-			CheckNodes: p.CheckNodes,
-			Stop:       p.Stop,
-		}))
-	}
-	services.LedgerCleanerStatusFn = func() types.LedgerCleanerStatus {
-		return toCleanerStatus(cleanerRef.Status())
+		cleanerRef := ledgerCleaner
+		services.LedgerCleanerConfigure = func(p types.LedgerCleanerParams) types.LedgerCleanerStatus {
+			return toCleanerStatus(cleanerRef.Clean(cleaner.Params{
+				Ledger:     p.Ledger,
+				MinLedger:  p.MinLedger,
+				MaxLedger:  p.MaxLedger,
+				Full:       p.Full,
+				CheckNodes: p.CheckNodes,
+				FixTxns:    p.FixTxns,
+				Stop:       p.Stop,
+			}))
+		}
+		services.LedgerCleanerStatusFn = func() types.LedgerCleanerStatus {
+			return toCleanerStatus(cleanerRef.Status())
+		}
 	}
 
 	// Start consensus/networking if not in standalone mode
@@ -532,6 +526,18 @@ func Run(ctx context.Context, appConfig *config.Config, configPath string, stand
 		}
 		if err := consensusComponents.Start(); err != nil {
 			return fmt.Errorf("start consensus components: %w", err)
+		}
+		if router := consensusComponents.Router; router != nil && cleanerSource != nil {
+			cleanerSource.SetReacquire(func(ctx context.Context, seq uint32) error {
+				if err := ctx.Err(); err != nil {
+					return err
+				}
+				_, started, _ := router.RequestLedger([32]byte{}, seq)
+				if !started {
+					return fmt.Errorf("ledger_cleaner: unable to acquire ledger %d", seq)
+				}
+				return nil
+			})
 		}
 
 		// Wire transaction relay: when a tx is submitted via RPC,
@@ -937,7 +943,7 @@ func Run(ctx context.Context, appConfig *config.Config, configPath string, stand
 	var lastServerSnapshot serverStatusSnapshot
 
 	// Wire up ledger service events to WebSocket broadcasts
-	ledgerService.SetEventCallback(func(event *service.LedgerAcceptedEvent) {
+	ledgerService.SetEventSink(service.EventSinkFunc(func(event *service.LedgerAcceptedEvent) {
 		if event == nil || event.LedgerInfo == nil {
 			return
 		}
@@ -1048,7 +1054,7 @@ func Run(ctx context.Context, appConfig *config.Config, configPath string, stand
 			"sequence", event.LedgerInfo.Sequence,
 			"txs", len(event.TransactionResults),
 		)
-	})
+	}))
 
 	if err := context.Cause(ctx); err != nil {
 		return err
@@ -1206,6 +1212,13 @@ func setupStorage(cfg *config.Config, log xrpllog.Logger) (nodestore.Database, r
 	nodestorePath := cfg.NodeDB.Path
 	if nodestorePath != "" {
 		cacheSize, cacheTTL := nodeStoreCacheParams(cfg.NodeDB, cfg.NodeSize)
+		databaseConfig := nodestore.DefaultDatabaseConfig()
+		if cacheSize > 0 {
+			databaseConfig.PositiveCache.MaxEntries = cacheSize
+			databaseConfig.PositiveCache.TTL = cacheTTL
+		} else {
+			databaseConfig.PositiveCache = nodestore.CacheConfig{}
+		}
 		pebbleOptions, err := pebbleStoreOptions(cfg.NodeDB)
 		if err != nil {
 			return nil, nil, err
@@ -1219,17 +1232,19 @@ func setupStorage(cfg *config.Config, log xrpllog.Logger) (nodestore.Database, r
 			if err != nil {
 				return nil, nil, fmt.Errorf("rotating storage backend: %w", err)
 			}
-			db = nodestore.NewRotatingKVDatabase(
-				store,
-				"pebble("+nodestorePath+")",
-				&nodestore.DatabaseConfig{CacheSize: cacheSize, CacheTTL: cacheTTL},
-			)
+			db, err = nodestore.NewRotatingKVDatabase(store, databaseConfig)
+			if err != nil {
+				return nil, nil, errors.Join(err, store.Close())
+			}
 		} else {
-			store, err := kvpebble.New(nodestorePath, pebbleOptions, false)
+			store, err := kvpebble.New(nodestorePath, pebbleOptions)
 			if err != nil {
 				return nil, nil, fmt.Errorf("storage backend: %w", err)
 			}
-			db = nodestore.NewKVDatabase(store, "pebble("+nodestorePath+")", cacheSize, cacheTTL)
+			db, err = nodestore.NewKVDatabase(store, databaseConfig)
+			if err != nil {
+				return nil, nil, errors.Join(err, store.Close())
+			}
 		}
 		log.Info("Storage initialized", "backend", "pebble", "path", nodestorePath,
 			"cache_size", cacheSize, "cache_age", cacheTTL,
@@ -1246,23 +1261,19 @@ func setupStorage(cfg *config.Config, log xrpllog.Logger) (nodestore.Database, r
 		pgConfig.ConnectionString = dbPath
 
 		var err error
-		repoManager, err = postgres.NewRepositoryManager(pgConfig)
+		repoManager, err = postgres.NewRepositoryManager(context.Background(), pgConfig)
 		if err != nil {
-			log.Warn("PostgreSQL not available", "err", err)
+			log.Warn("PostgreSQL connection failed", "err", err)
+			repoManager = nil
 		} else {
-			if err := repoManager.Open(context.Background()); err != nil {
-				log.Warn("PostgreSQL connection failed", "err", err)
-				repoManager = nil
-			} else {
-				log.Info("PostgreSQL connected", "purpose", "transaction indexing")
-			}
+			log.Info("PostgreSQL connected", "purpose", "transaction indexing")
 		}
 	} else if dbPath != "" {
 		// Default: auto-create SQLite databases at the given directory
 		// path, applying the operator's [sqlite] tuning.
 		journalMode, synchronous, tempStore := cfg.SQLite.EffectiveSettings()
 		var err error
-		repoManager, err = sqlitedb.NewRepositoryManagerWithSettings(dbPath, sqlitedb.Settings{
+		repoManager, err = sqlitedb.NewRepositoryManager(context.Background(), dbPath, sqlitedb.Settings{
 			JournalMode:      journalMode,
 			Synchronous:      synchronous,
 			TempStore:        tempStore,
@@ -1271,13 +1282,9 @@ func setupStorage(cfg *config.Config, log xrpllog.Logger) (nodestore.Database, r
 		})
 		if err != nil {
 			log.Warn("SQLite failed to initialize", "path", dbPath, "err", err)
+			repoManager = nil
 		} else {
-			if err := repoManager.Open(context.Background()); err != nil {
-				log.Warn("SQLite failed to open", "path", dbPath, "err", err)
-				repoManager = nil
-			} else {
-				log.Info("SQLite connected", "path", dbPath, "purpose", "transaction indexing")
-			}
+			log.Info("SQLite connected", "path", dbPath, "purpose", "transaction indexing")
 		}
 	}
 
@@ -1641,7 +1648,33 @@ func doShutdown(
 	}
 
 	if consensusComponents != nil {
-		consensusComponents.Stop()
+		stopErr := consensusComponents.Stop()
+		if stopErr != nil {
+			logger.Warn("Consensus component shutdown failed", "err", stopErr)
+			if consensusComponents.Archive != nil {
+				waitCtx, waitCancel := context.WithTimeout(context.Background(), 5*time.Second)
+				terminalErr := consensusComponents.Archive.Close(waitCtx)
+				waitCancel()
+				if terminalErr != nil && !errors.Is(stopErr, terminalErr) {
+					logger.Warn("Validation archive terminal shutdown failed", "err", terminalErr)
+				}
+			}
+		}
+		if consensusComponents.Archive != nil {
+			health := consensusComponents.Archive.Health()
+			if !health.Healthy {
+				logger.Warn("Validation archive unhealthy at shutdown",
+					"enqueued", health.Enqueued,
+					"overload_dropped", health.OverloadDropped,
+					"closed_dropped", health.ClosedDropped,
+					"malformed_dropped", health.MalformedDropped,
+					"persistence_dropped", health.PersistenceDropped,
+					"write_failures", health.WriteFailures,
+					"retention_failures", health.RetentionFailures,
+					"last_error", health.LastError,
+				)
+			}
+		}
 		logger.Info("Consensus components stopped")
 	}
 
@@ -1659,7 +1692,7 @@ func doShutdown(
 		}
 	}
 	if repoManager != nil {
-		if err := repoManager.Close(context.Background()); err != nil {
+		if err := repoManager.Close(); err != nil {
 			logger.Warn("Relational DB close failed", "err", err)
 		}
 	}

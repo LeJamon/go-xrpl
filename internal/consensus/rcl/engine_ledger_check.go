@@ -434,7 +434,6 @@ func (e *Engine) handleWrongLedger(netLedgerID consensus.LedgerID, target consen
 		e.comparesTxSets = make(map[consensus.TxSetID]struct{})
 		e.peerUnchangedCounter = 0
 		e.establishCounter = 0
-		e.converged = false
 		e.closeTime.haveConsensus = false
 		if e.state != nil {
 			e.state.CloseTimes.Peers = make(map[time.Time]int)

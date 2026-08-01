@@ -38,6 +38,12 @@ jobs:
     runs-on: macos-latest
     steps:
       - uses: actions/checkout@v5
+      - name: Check out rippled v3.2.0 oracle
+        uses: actions/checkout@v5
+        with:
+          repository: XRPLF/rippled
+          ref: 3c43f4614f87965298773279ff5b85d4c56c637b
+          path: rippled-worktrees/v3.2.0-oracle
       - uses: ./.github/actions/setup
       - run: go test -count=1 -timeout 30m ./codec/... ./crypto/... ./shamap/... ./ledger/... ./keylet/... ./drops/... ./internal/tx/...
 
@@ -52,6 +58,12 @@ jobs:
       CGO_ENABLED: "0"
     steps:
       - uses: actions/checkout@v5
+      - name: Check out rippled v3.2.0 oracle
+        uses: actions/checkout@v5
+        with:
+          repository: XRPLF/rippled
+          ref: 3c43f4614f87965298773279ff5b85d4c56c637b
+          path: rippled-worktrees/v3.2.0-oracle
       - uses: ./.github/actions/setup
         with:
           cgo: "false"
@@ -91,6 +103,12 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
+      - name: Check out rippled v3.2.0 oracle
+        uses: actions/checkout@v5
+        with:
+          repository: XRPLF/rippled
+          ref: 3c43f4614f87965298773279ff5b85d4c56c637b
+          path: rippled-worktrees/v3.2.0-oracle
       - uses: ./.github/actions/setup
       - name: Run tests with coverage
         run: >

@@ -1,42 +1,12 @@
-// Package archive persists stale validations to the relational DB via a
-// batched async writer hooked into ValidationTracker.SetOnStale.
-//
-// Matches rippled's onStale / doStaleWrite contract (RCLValidations.cpp)
-// in semantics: OnStale returns in O(1) — it only enqueues to a channel —
-// so the consensus receive path is never gated on DB I/O.
-//
-// # Eviction trigger: ledger-seq, not freshness (intentional divergence)
-//
-// Rippled (pre-2019) fired onStale from Validations<>::current() when
-// isCurrent() returned false — i.e. on time-window violations
-// (SignTime/SeenTime drifted outside the wall/local windows). go-xrpl
-// fires onStale only from ExpireOld(seq - inMemoryLedgers), which is
-// driven by ledger-seq retention from the fully-validated callback —
-// a per-ledger set accessed within validationSET_EXPIRES is held past
-// the window and archived on the first sweep after it goes cold.
-//
-// Practical consequence: time-stale validations that never reach a
-// fully-validated ledger (e.g. orphaned validations on losing forks)
-// are rejected at ValidationTracker.Add (isCurrent check at
-// validations.go:291) but are NOT archived. Rippled would have archived
-// them.
-//
-// Trade-off:
-//   - Forensic completeness for finalized network state: same as rippled.
-//   - Forensic completeness for "what did the network consider but
-//     discard": slightly lower — losing-fork validations are visible
-//     only in logs, not in the archive.
-//
-// Defensible because the dominant use case is replaying finalized state,
-// and the divergence avoids archiving orphans we'd just delete on the
-// next retention sweep. If "considered but discarded" forensics ever
-// becomes a requirement, hooking a second OnStale call from Add's
-// isCurrent reject path is straightforward.
+// Package archive persists validations evicted from the in-memory tracker.
+// It is a go-xrpl operational extension inspired by rippled's historical
+// validation database, which was removed before rippled v3.2.0.
 package archive
 
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log/slog"
 	"sync"
 	"sync/atomic"
@@ -59,28 +29,86 @@ type Config struct {
 	DeleteBatch int
 }
 
-// Archive is the async writer. Safe for concurrent OnStale from any
-// goroutine once New has returned.
+type archiveState uint8
+
+const (
+	archiveRunning archiveState = iota
+	archiveClosing
+	archiveClosed
+)
+
+type flushRequest struct {
+	result chan error
+}
+
+type errorState struct {
+	err error
+}
+
+// Health is a cumulative snapshot of archive admission and maintenance.
+type Health struct {
+	Enqueued           uint64
+	OverloadDropped    uint64
+	ClosedDropped      uint64
+	MalformedDropped   uint64
+	PersistenceDropped uint64
+	WriteFailures      uint64
+	RetentionFailures  uint64
+	LastError          string
+	Healthy            bool
+}
+
+// Archive is the async writer. Safe for concurrent use.
 type Archive struct {
 	repo   relationaldb.ValidationRepository
 	cfg    Config
 	logger *slog.Logger
 
-	ch       chan *consensus.Validation
-	flushReq chan chan struct{} // ack channel per flush request
-	stop     chan struct{}
-	wg       sync.WaitGroup
-	flushed  chan struct{} // closed when the writer goroutine exits
+	ch                chan *consensus.Validation
+	flushWake         chan struct{}
+	retentionWake     chan struct{}
+	retentionTick     <-chan time.Time
+	retentionTimeout  time.Duration
+	stopTicker        func()
+	stop              chan struct{}
+	done              chan struct{}
+	runCtx            context.Context
+	cancelRun         context.CancelCauseFunc
+	maintenanceCtx    context.Context
+	cancelMaintenance context.CancelFunc
+
+	stateMu     sync.Mutex
+	state       archiveState
+	flushes     []*flushRequest
+	terminalErr error
 
 	lastSeq atomic.Uint32 // most-recent fully-validated seq, used as retention pivot
 
-	closed atomic.Bool
+	enqueued           atomic.Uint64
+	overloadDropped    atomic.Uint64
+	closedDropped      atomic.Uint64
+	malformedDropped   atomic.Uint64
+	persistenceDropped atomic.Uint64
+	writeFailures      atomic.Uint64
+	retentionFailures  atomic.Uint64
+	lastError          atomic.Pointer[errorState]
+	lastOverloadLog    atomic.Int64
+	lastMalformedLog   atomic.Int64
 }
 
 // New creates a running archive. repo may be nil — that turns OnStale into
-// a no-op and nothing is ever written. ch buffer is BatchSize*8 so a
-// moderate burst of stale validations never blocks the caller.
+// a no-op and nothing is ever written. The channel holds at least 64 rows and
+// otherwise scales with BatchSize so moderate bursts do not immediately shed.
 func New(repo relationaldb.ValidationRepository, cfg Config, logger *slog.Logger) *Archive {
+	return newArchive(repo, cfg, logger, nil)
+}
+
+func newArchive(
+	repo relationaldb.ValidationRepository,
+	cfg Config,
+	logger *slog.Logger,
+	retentionTick <-chan time.Time,
+) *Archive {
 	if logger == nil {
 		logger = slog.Default()
 	}
@@ -93,49 +121,69 @@ func New(repo relationaldb.ValidationRepository, cfg Config, logger *slog.Logger
 	if cfg.DeleteBatch < 1 {
 		cfg.DeleteBatch = 1000
 	}
+	channelCapacity := cfg.BatchSize * 8
+	if channelCapacity < 64 {
+		channelCapacity = 64
+	}
 
+	runCtx, cancelRun := context.WithCancelCause(context.Background())
+	maintenanceCtx, cancelMaintenance := context.WithCancel(context.Background())
 	a := &Archive{
-		repo:     repo,
-		cfg:      cfg,
-		logger:   logger,
-		ch:       make(chan *consensus.Validation, cfg.BatchSize*8),
-		flushReq: make(chan chan struct{}, 4),
-		stop:     make(chan struct{}),
-		flushed:  make(chan struct{}),
+		repo:              repo,
+		cfg:               cfg,
+		logger:            logger,
+		ch:                make(chan *consensus.Validation, channelCapacity),
+		flushWake:         make(chan struct{}, 1),
+		retentionWake:     make(chan struct{}, 1),
+		retentionTick:     retentionTick,
+		retentionTimeout:  retentionSweepTimeout,
+		stop:              make(chan struct{}),
+		done:              make(chan struct{}),
+		runCtx:            runCtx,
+		cancelRun:         cancelRun,
+		maintenanceCtx:    maintenanceCtx,
+		cancelMaintenance: cancelMaintenance,
 	}
-	if repo != nil {
-		a.wg.Add(1)
-		go a.run()
-	} else {
-		close(a.flushed)
+	if repo == nil {
+		a.state = archiveClosed
+		cancelMaintenance()
+		cancelRun(nil)
+		close(a.done)
+		return a
 	}
+	if cfg.RetentionLedgers > 0 && retentionTick == nil {
+		ticker := time.NewTicker(retentionMinInterval)
+		a.retentionTick = ticker.C
+		a.stopTicker = ticker.Stop
+	}
+	go a.run()
 	return a
 }
 
-// OnStale is the ValidationTracker.SetOnStale callback. Non-blocking when
-// the channel has space; falls through a small bounded blocking wait
-// (matches rippled's vector-append semantics) so under sustained overload
-// we apply back-pressure instead of silently dropping validations.
+// OnStale is the ValidationTracker.SetOnStale callback. It never waits for
+// channel capacity or database I/O.
 func (a *Archive) OnStale(v *consensus.Validation) {
-	if a == nil || a.repo == nil || v == nil || a.closed.Load() {
+	if a == nil || a.repo == nil || v == nil {
+		return
+	}
+
+	a.stateMu.Lock()
+	defer a.stateMu.Unlock()
+	if a.state != archiveRunning {
+		a.closedDropped.Add(1)
 		return
 	}
 	select {
 	case a.ch <- v:
-		return
+		a.enqueued.Add(1)
 	default:
-	}
-	// Fall back to a bounded blocking send — 100ms is an eternity at
-	// consensus-message timescales but still lets the caller progress if
-	// the writer goroutine is wedged.
-	t := time.NewTimer(100 * time.Millisecond)
-	defer t.Stop()
-	select {
-	case a.ch <- v:
-	case <-t.C:
-		a.logger.Warn("validation archive channel full; dropping stale validation",
-			slog.Uint64("ledger_seq", uint64(v.LedgerSeq)))
-	case <-a.stop:
+		n := a.overloadDropped.Add(1)
+		a.logDrop(
+			&a.lastOverloadLog,
+			"validation archive channel full; dropping stale validations",
+			slog.Uint64("ledger_seq", uint64(v.LedgerSeq)),
+			slog.Uint64("dropped_total", n),
+		)
 	}
 }
 
@@ -157,45 +205,38 @@ func (a *Archive) NoteFullyValidated(seq uint32) {
 	}
 }
 
-// Flush blocks until every stale validation enqueued before the call has
-// been committed. Returns ErrClosed if called after Close so callers
-// notice attempts to flush a stopped archive (the previous silent-nil
-// behaviour hid bugs); returns nil for a nil receiver or a nil-repo
-// archive (those are configured no-ops, not error states).
-//
-// Implemented as an ack-channel barrier: we send an ack channel on
-// flushReq AFTER every previously-enqueued OnStale has landed in ch
-// (FIFO on the same goroutine ordering), and the writer loop closes the
-// ack only after it has fully drained ch up to that point and committed
-// the resulting batch.
+// Flush waits until every validation admitted before its barrier has been
+// processed. A persistence failure remains sticky because a later successful
+// write cannot restore rows that were already lost.
 func (a *Archive) Flush(ctx context.Context) error {
 	if a == nil || a.repo == nil {
 		return nil
 	}
-	if a.closed.Load() {
+
+	req := &flushRequest{result: make(chan error, 1)}
+	a.stateMu.Lock()
+	if a.state != archiveRunning {
+		a.stateMu.Unlock()
 		return ErrClosed
 	}
-	ack := make(chan struct{})
+	a.flushes = append(a.flushes, req)
 	select {
-	case a.flushReq <- ack:
-	case <-ctx.Done():
-		return ctx.Err()
-	case <-a.stop:
-		return nil
+	case a.flushWake <- struct{}{}:
+	default:
 	}
+	a.stateMu.Unlock()
+
 	select {
-	case <-ack:
-		return nil
+	case err := <-req.result:
+		return err
 	case <-ctx.Done():
 		return ctx.Err()
-	case <-a.stop:
-		return nil
 	}
 }
 
-// ApplyRetention performs a one-shot retention sweep against the current
-// NotedFullyValidated seq. Intended for tests and manual admin flushes;
-// the writer loop calls it implicitly after each batch commit.
+// ApplyRetention performs one bounded retention delete. Automatic maintenance
+// calls it repeatedly within a work budget; callers may use it for a
+// synchronous administrative sweep.
 func (a *Archive) ApplyRetention(ctx context.Context) (int64, error) {
 	if a == nil || a.repo == nil || a.cfg.RetentionLedgers == 0 {
 		return 0, nil
@@ -208,68 +249,105 @@ func (a *Archive) ApplyRetention(ctx context.Context) (int64, error) {
 	return a.repo.DeleteOlderThanSeq(ctx, relationaldb.LedgerIndex(cutoff), a.cfg.DeleteBatch)
 }
 
-// Close drains pending validations, commits the final batch, and stops
-// the writer goroutine. Safe to call multiple times; subsequent calls
-// return nil immediately.
+// Close drains accepted validations and waits for the shared terminal result.
+// If the initiating context expires, it cancels writer I/O; later callers can
+// still wait for and observe the eventual terminal error.
 func (a *Archive) Close(ctx context.Context) error {
-	if a == nil {
+	if a == nil || a.repo == nil {
 		return nil
 	}
-	if !a.closed.CompareAndSwap(false, true) {
-		return nil
+
+	a.stateMu.Lock()
+	if a.state == archiveClosed {
+		err := a.terminalErr
+		a.stateMu.Unlock()
+		return err
 	}
-	close(a.stop)
+	first := a.state == archiveRunning
+	if first {
+		a.state = archiveClosing
+		a.cancelMaintenance()
+		close(a.stop)
+	}
+	a.stateMu.Unlock()
+
+	var stopCancel func() bool
+	if first {
+		stopCancel = context.AfterFunc(ctx, func() {
+			a.cancelRun(ctx.Err())
+		})
+	}
+
 	select {
-	case <-a.flushed:
+	case <-a.done:
+		if stopCancel != nil {
+			stopCancel()
+		}
+		return a.terminalResult()
 	case <-ctx.Done():
-		return ctx.Err()
+		select {
+		case <-a.done:
+			if stopCancel != nil {
+				stopCancel()
+			}
+			return a.terminalResult()
+		default:
+			if first {
+				a.cancelRun(ctx.Err())
+			}
+			return ctx.Err()
+		}
 	}
-	a.wg.Wait()
-	return nil
 }
 
-// retentionMinInterval is the minimum wall-clock gap between two
-// retention sweeps. Decoupling retention from the per-batch flush rate
-// caps DELETE pressure under sustained load: with BatchSize=128 and
-// FlushInterval=1s the writer can commit every second, but retention
-// only runs ~once per minute. The bounded DeleteBatch keeps each sweep
-// cheap, so the archive size still tracks RetentionLedgers within a
-// minute of any seq advance.
-const retentionMinInterval = time.Minute
+const (
+	retentionMinInterval  = time.Minute
+	retentionSweepTimeout = 5 * time.Second
+	retentionBatchBudget  = 8
+	dropLogInterval       = time.Second
+	writeTimeout          = 30 * time.Second
+	writeRetryDelay       = 50 * time.Millisecond
+)
 
-// saveBatchMaxAttempts is how many times the writer retries a failed
+// saveBatchMaxAttempts is the maximum number of write attempts for a failed
 // SaveBatch before logging and dropping the batch. One retry catches
 // transient lock contention / connection blips; persistent failure
 // (disk full, schema drift) gets logged at Error level so the operator
 // notices, then dropped to avoid unbounded memory growth.
 const saveBatchMaxAttempts = 2
 
-// run is the writer goroutine. It accumulates up to BatchSize rows or
-// waits FlushInterval, whichever comes first, then commits. Retention
-// runs after every non-empty commit BUT only if at least
-// retentionMinInterval has elapsed since the last sweep — see comment
-// on retentionMinInterval for why per-flush retention is too aggressive.
 func (a *Archive) run() {
-	defer a.wg.Done()
-	defer close(a.flushed)
-
 	ticker := time.NewTicker(a.cfg.FlushInterval)
 	defer ticker.Stop()
-
-	var lastRetention time.Time
+	if a.stopTicker != nil {
+		defer a.stopTicker()
+	}
 
 	batch := make([]*relationaldb.ValidationRecord, 0, a.cfg.BatchSize)
-	flush := func(reason string) {
-		if len(batch) == 0 {
+	var durabilityErr error
+
+	noteDurabilityFailure := func(err error, rows int) {
+		if err == nil {
 			return
 		}
+		wrapped := fmt.Errorf("%w: %w", ErrDurability, err)
+		if durabilityErr == nil {
+			durabilityErr = wrapped
+		}
+		a.lastError.Store(&errorState{err: wrapped})
+		a.writeFailures.Add(1)
+		a.persistenceDropped.Add(uint64(rows))
+	}
 
-		// Retry-once on SaveBatch error. Most failures are transient
-		// (SQLite SQLITE_BUSY under contention, brief Postgres
-		// disconnects) and a single 50ms backoff clears them.
+	flush := func(reason string) error {
+		if len(batch) == 0 {
+			return nil
+		}
+
+		rows := len(batch)
 		var err error
 		for attempt := 1; attempt <= saveBatchMaxAttempts; attempt++ {
-			ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+			ctx, cancel := context.WithTimeout(a.runCtx, writeTimeout)
 			err = a.repo.SaveBatch(ctx, batch)
 			cancel()
 			if err == nil {
@@ -278,39 +356,29 @@ func (a *Archive) run() {
 			if attempt < saveBatchMaxAttempts {
 				a.logger.Warn("validation archive: batch write failed; retrying",
 					slog.Int("rows", len(batch)), slog.Int("attempt", attempt), slog.String("err", err.Error()))
-				time.Sleep(50 * time.Millisecond)
+				timer := time.NewTimer(writeRetryDelay)
+				select {
+				case <-timer.C:
+				case <-a.runCtx.Done():
+					timer.Stop()
+					err = context.Cause(a.runCtx)
+					attempt = saveBatchMaxAttempts
+				}
 			}
 		}
 		if err != nil {
-			// Persistent failure: log at Error so operators notice, then
-			// drop the batch. Re-queueing indefinitely would let memory
-			// grow without bound on a permanently broken backend, which
-			// is strictly worse than visible data loss with a paper
-			// trail.
 			a.logger.Error("validation archive: batch write failed permanently; dropping rows",
 				slog.Int("rows", len(batch)),
 				slog.Int("attempts", saveBatchMaxAttempts),
 				slog.String("reason", reason),
 				slog.String("err", err.Error()))
+			noteDurabilityFailure(err, rows)
 		} else {
 			a.logger.Debug("validation archive: batch committed",
 				slog.Int("rows", len(batch)), slog.String("reason", reason))
 		}
 		batch = batch[:0]
-
-		// Retention sweep — gated on retentionMinInterval to keep
-		// DELETE pressure off the hot path under sustained flush
-		// activity. Errors are logged but don't stop the writer.
-		if a.cfg.RetentionLedgers > 0 && time.Since(lastRetention) >= retentionMinInterval {
-			ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-			_, rerr := a.ApplyRetention(ctx)
-			cancel()
-			lastRetention = time.Now()
-			if rerr != nil {
-				a.logger.Warn("validation archive: retention sweep failed",
-					slog.String("err", rerr.Error()))
-			}
-		}
+		return err
 	}
 
 	drainPending := func() {
@@ -320,26 +388,20 @@ func (a *Archive) run() {
 				if v == nil {
 					continue
 				}
-				rec := toRecord(v, a.lastSeq.Load())
-				if rec == nil {
-					continue
-				}
-				batch = append(batch, rec)
+				a.appendRecord(&batch, v)
 			default:
 				return
 			}
 		}
 	}
 
-	handleFlushReq := func(ack chan struct{}) {
-		// Drain everything enqueued before flush was requested. Flush
-		// is called from outside run, so anything a caller enqueued
-		// BEFORE sending the flushReq is already on ch by the time
-		// flushReq arrives (Go channel operations are happens-before
-		// synchronized). Drain to empty to pick it all up.
+	handleFlushes := func() {
+		requests := a.takeFlushes()
 		drainPending()
-		flush("flush-request")
-		close(ack)
+		_ = flush("flush-request")
+		for _, req := range requests {
+			req.result <- durabilityErr
+		}
 	}
 
 	for {
@@ -348,34 +410,151 @@ func (a *Archive) run() {
 			if v == nil {
 				continue
 			}
-			rec := toRecord(v, a.lastSeq.Load())
-			if rec == nil {
-				continue
-			}
-			batch = append(batch, rec)
+			a.appendRecord(&batch, v)
 			if len(batch) >= a.cfg.BatchSize {
-				flush("full")
+				_ = flush("full")
 			}
-		case ack := <-a.flushReq:
-			handleFlushReq(ack)
+		case <-a.flushWake:
+			handleFlushes()
 		case <-ticker.C:
-			flush("tick")
+			_ = flush("tick")
+		case <-a.retentionTick:
+			a.applyRetentionBudget()
+		case <-a.retentionWake:
+			a.applyRetentionBudget()
 		case <-a.stop:
-			// Commit everything already enqueued BEFORE acking any
-			// pending flush requests: Flush's contract (data committed on
-			// return) must hold even when a Flush races Close.
 			drainPending()
-			flush("close")
-			for {
-				select {
-				case ack := <-a.flushReq:
-					close(ack)
-				default:
-					return
-				}
+			_ = flush("close")
+			for _, req := range a.takeFlushes() {
+				req.result <- durabilityErr
 			}
+			a.finish(durabilityErr)
+			return
+		case <-a.runCtx.Done():
+			drainPending()
+			_ = flush("close-canceled")
+			for _, req := range a.takeFlushes() {
+				req.result <- durabilityErr
+			}
+			a.finish(durabilityErr)
+			return
 		}
 	}
+}
+
+func (a *Archive) appendRecord(
+	batch *[]*relationaldb.ValidationRecord,
+	v *consensus.Validation,
+) {
+	rec := toRecord(v, a.lastSeq.Load())
+	if rec != nil {
+		*batch = append(*batch, rec)
+		return
+	}
+	n := a.malformedDropped.Add(1)
+	a.logDrop(
+		&a.lastMalformedLog,
+		"validation archive received validation without canonical raw bytes; dropping",
+		slog.Uint64("ledger_seq", uint64(v.LedgerSeq)),
+		slog.Uint64("dropped_total", n),
+	)
+}
+
+func (a *Archive) takeFlushes() []*flushRequest {
+	a.stateMu.Lock()
+	defer a.stateMu.Unlock()
+	requests := a.flushes
+	a.flushes = nil
+	return requests
+}
+
+func (a *Archive) finish(err error) {
+	a.stateMu.Lock()
+	a.state = archiveClosed
+	a.terminalErr = err
+	a.stateMu.Unlock()
+	a.cancelMaintenance()
+	a.cancelRun(err)
+	close(a.done)
+}
+
+func (a *Archive) terminalResult() error {
+	a.stateMu.Lock()
+	defer a.stateMu.Unlock()
+	return a.terminalErr
+}
+
+func (a *Archive) applyRetentionBudget() {
+	if a.cfg.RetentionLedgers == 0 {
+		return
+	}
+	ctx, cancel := context.WithTimeout(a.maintenanceCtx, a.retentionTimeout)
+	defer cancel()
+
+	backlog := false
+	for range retentionBatchBudget {
+		n, err := a.ApplyRetention(ctx)
+		if err != nil {
+			if a.maintenanceCtx.Err() != nil {
+				return
+			}
+			if backlog && errors.Is(ctx.Err(), context.DeadlineExceeded) {
+				a.wakeRetention()
+				return
+			}
+			a.retentionFailures.Add(1)
+			a.lastError.Store(&errorState{err: err})
+			a.logger.Warn("validation archive: retention sweep failed", slog.String("err", err.Error()))
+			return
+		}
+		backlog = n == int64(a.cfg.DeleteBatch)
+		if !backlog {
+			return
+		}
+	}
+	if backlog {
+		a.wakeRetention()
+	}
+}
+
+func (a *Archive) wakeRetention() {
+	select {
+	case a.retentionWake <- struct{}{}:
+	default:
+	}
+}
+
+func (a *Archive) logDrop(lastLog *atomic.Int64, message string, attrs ...any) {
+	now := time.Now().UnixNano()
+	last := lastLog.Load()
+	if now-last >= int64(dropLogInterval) && lastLog.CompareAndSwap(last, now) {
+		a.logger.Warn(message, attrs...)
+	}
+}
+
+func (a *Archive) Health() Health {
+	if a == nil {
+		return Health{Healthy: true}
+	}
+	health := Health{
+		Enqueued:           a.enqueued.Load(),
+		OverloadDropped:    a.overloadDropped.Load(),
+		ClosedDropped:      a.closedDropped.Load(),
+		MalformedDropped:   a.malformedDropped.Load(),
+		PersistenceDropped: a.persistenceDropped.Load(),
+		WriteFailures:      a.writeFailures.Load(),
+		RetentionFailures:  a.retentionFailures.Load(),
+	}
+	if state := a.lastError.Load(); state != nil && state.err != nil {
+		health.LastError = state.err.Error()
+	}
+	health.Healthy = health.OverloadDropped == 0 &&
+		health.ClosedDropped == 0 &&
+		health.MalformedDropped == 0 &&
+		health.PersistenceDropped == 0 &&
+		health.WriteFailures == 0 &&
+		health.RetentionFailures == 0
+	return health
 }
 
 // toRecord marshals a Validation into the archive row shape. Returns nil
@@ -387,10 +566,8 @@ func (a *Archive) run() {
 // delete"). Pass 0 if no fully-validated pivot has been observed yet;
 // the column then degenerates to LedgerSeq, which is harmless.
 //
-// Non-Full validations are filtered upstream at ValidationTracker.Add
-// (validations.go:297) — they never enter the tracker, so the OnStale
-// stream never carries them. We don't re-filter here; rippled's
-// historical doStaleWrite filter is therefore moot for go-xrpl.
+// Full and partial validations are both retained. The archive is forensic,
+// and Flags preserves the distinction for readers.
 func toRecord(v *consensus.Validation, initialSeq uint32) *relationaldb.ValidationRecord {
 	if v == nil {
 		return nil
@@ -432,5 +609,9 @@ func toRecord(v *consensus.Validation, initialSeq uint32) *relationaldb.Validati
 	return rec
 }
 
-// ErrClosed is returned by callers that try to use an Archive after Close.
-var ErrClosed = errors.New("archive: closed")
+var (
+	// ErrClosed is returned by callers that try to flush a closing archive.
+	ErrClosed = errors.New("archive: closed")
+	// ErrDurability marks permanent loss of one or more admitted validations.
+	ErrDurability = errors.New("archive: durability failure")
+)

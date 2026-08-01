@@ -84,9 +84,10 @@ func TestLoanBinaryRoundTripAndTemplate(t *testing.T) {
 
 	base := func(extra map[string]any) []byte {
 		m := map[string]any{
-			"Account":  testAccount,
-			"Fee":      "10",
-			"Sequence": uint32(1),
+			"Account":       testAccount,
+			"Fee":           "10",
+			"Sequence":      uint32(1),
+			"SigningPubKey": "",
 		}
 		for k, v := range extra {
 			m[k] = v

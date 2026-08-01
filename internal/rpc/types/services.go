@@ -519,18 +519,20 @@ type LedgerCleanerParams struct {
 	Ledger     *uint32
 	MinLedger  *uint32
 	MaxLedger  *uint32
-	Full       bool
-	CheckNodes bool
+	Full       *bool
+	CheckNodes *bool
+	FixTxns    *bool
 	Stop       bool
 }
 
 // LedgerCleanerStatus mirrors internal/ledger/cleaner.Status (layering
-// boundary). State is "idle" or "running".
+// boundary). State is "idle", "running", or "stopped".
 type LedgerCleanerStatus struct {
 	State          string
 	MinLedger      uint32
 	MaxLedger      uint32
 	CheckNodes     bool
+	FixTxns        bool
 	Failures       int
 	LedgersChecked uint64
 	NodesChecked   uint64

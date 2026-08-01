@@ -228,8 +228,8 @@ func TestCounterpartySignature_MultiSignValid(t *testing.T) {
 
 	s1Priv, s1Pub, s1Addr := cpKeypair(t, 0x44)
 	s2Priv, s2Pub, s2Addr := cpKeypair(t, 0x55)
-	sig1, _ := SignTransactionForMultiSign(transaction, s1Addr, s1Priv)
-	sig2, _ := SignTransactionForMultiSign(transaction, s2Addr, s2Priv)
+	sig1, _ := SignTransactionForMultiSignTarget(transaction, s1Addr, s1Priv)
+	sig2, _ := SignTransactionForMultiSignTarget(transaction, s2Addr, s2Priv)
 
 	signers := []txcore.SignerWrapper{
 		{Signer: txcore.Signer{Account: s1Addr, SigningPubKey: s1Pub, TxnSignature: sig1}},
@@ -250,7 +250,7 @@ func TestCounterpartySignature_MultiSignWrongKey(t *testing.T) {
 
 	s1Priv, _, s1Addr := cpKeypair(t, 0x44)
 	_, wrongPub, _ := cpKeypair(t, 0x66)
-	sig1, _ := SignTransactionForMultiSign(transaction, s1Addr, s1Priv)
+	sig1, _ := SignTransactionForMultiSignTarget(transaction, s1Addr, s1Priv)
 
 	cp := &txcore.CounterpartySignature{
 		Signers: []txcore.SignerWrapper{
@@ -273,8 +273,8 @@ func TestCounterpartySignature_MultiSignUnsorted(t *testing.T) {
 
 	s1Priv, s1Pub, s1Addr := cpKeypair(t, 0x44)
 	s2Priv, s2Pub, s2Addr := cpKeypair(t, 0x55)
-	sig1, _ := SignTransactionForMultiSign(transaction, s1Addr, s1Priv)
-	sig2, _ := SignTransactionForMultiSign(transaction, s2Addr, s2Priv)
+	sig1, _ := SignTransactionForMultiSignTarget(transaction, s1Addr, s1Priv)
+	sig2, _ := SignTransactionForMultiSignTarget(transaction, s2Addr, s2Priv)
 
 	signers := []txcore.SignerWrapper{
 		{Signer: txcore.Signer{Account: s1Addr, SigningPubKey: s1Pub, TxnSignature: sig1}},
@@ -301,7 +301,7 @@ func TestCounterpartySignature_MultiSignSelfSignAllowed(t *testing.T) {
 	// the primary key material (the account signing for itself).
 	priv := mustPrivFor(t, 0x11)
 	_, pub, _ := cpKeypair(t, 0x11)
-	sig, _ := SignTransactionForMultiSign(transaction, txAccount, priv)
+	sig, _ := SignTransactionForMultiSignTarget(transaction, txAccount, priv)
 
 	cp := &txcore.CounterpartySignature{
 		Signers: []txcore.SignerWrapper{

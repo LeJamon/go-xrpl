@@ -308,8 +308,11 @@ func equalTokens(src, dst tx.Amount) bool {
 func (p *Payment) Preclaim(view tx.LedgerView, config tx.EngineConfig) ter.Result {
 	// Reference: rippled Payment.cpp:296-346
 	if destID, err := state.DecodeAccountID(p.Destination); err == nil {
-		destAccount, destExists := state.ReadAccountRoot(view, destID)
-		if !destExists {
+		destAccount, readErr := state.ReadAccountRoot(view, destID)
+		if readErr != nil {
+			return ter.TefINTERNAL
+		}
+		if destAccount == nil {
 			// A non-native delivered amount cannot create the account.
 			if !p.Amount.IsNative() {
 				return ter.TecNO_DST

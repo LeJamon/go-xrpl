@@ -92,6 +92,7 @@ Go conventions and patterns while maintaining protocol compatibility.`,
 		app.newServerCommand(defaultServerOptions),
 		newCompareCommand(),
 		newGenerateConfigCommand(),
+		app.newMigrateRotationStateCommand(),
 		app.newRPCCommand(),
 		newVersionCommand(),
 	)
