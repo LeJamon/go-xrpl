@@ -77,7 +77,6 @@ type Voter struct {
 	newValidators map[consensus.NodeID]uint32
 }
 
-// NewVoter constructs a Voter for the local node.
 func NewVoter(myID consensus.NodeID) *Voter {
 	return &Voter{
 		myID:          myID,

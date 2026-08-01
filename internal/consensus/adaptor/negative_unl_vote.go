@@ -178,7 +178,7 @@ func (a *Adaptor) negativeUNLState(l interface {
 //     it and increment a per-NodeID counter.
 //
 // Returns (nil, false) only when the parent's skip-list is shorter
-// than FlagLedgerInterval (early ledgers near genesis). The
+// than FlagLedgerInterval (early ledgers near genesis).
 // The local-participation gate is enforced by DoVoting. It abstains on low
 // participation and surfaces exact-threshold and above-window diagnostics.
 // DoVoting also restricts this table to the UNL, so an over-populated
