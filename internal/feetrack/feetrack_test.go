@@ -1,12 +1,11 @@
 package feetrack
 
 import (
+	"errors"
+	"math"
 	"testing"
 )
 
-// TestScaleFeeLoad_Identity: with a fresh tracker the factor is LoadBase,
-// so ScaleFeeLoad returns the input fee unchanged (including the 0
-// short-circuit).
 func TestScaleFeeLoad_Identity(t *testing.T) {
 	tr := New()
 	cases := []uint64{0, 1, 10, 10000, 1<<32 + 7}
@@ -21,12 +20,13 @@ func TestScaleFeeLoad_Identity(t *testing.T) {
 	}
 }
 
-// TestScaleFeeLoad_NilTracker keeps fee handling safe when no tracker
-// is wired (services starting up, simulate paths during construction).
 func TestScaleFeeLoad_NilTracker(t *testing.T) {
 	got, err := ScaleFeeLoad(123, nil, false)
 	if err != nil || got != 123 {
 		t.Fatalf("nil tracker = (%d,%v); want (123,nil)", got, err)
+	}
+	if _, err := ScaleFeeLoad(uint64(math.MaxInt64)+1, nil, false); !errors.Is(err, ErrOverflow) {
+		t.Fatalf("nil tracker MaxInt64+1 error = %v, want ErrOverflow", err)
 	}
 }
 
@@ -44,7 +44,7 @@ func TestRaiseLowerLocalFee(t *testing.T) {
 	if changed := tr.RaiseLocalFee(); !changed {
 		t.Fatal("second raise must lift local fee above LoadBase")
 	}
-	want := LoadBase + LoadBase/FeeIncFraction
+	want := LoadBase + LoadBase/feeIncFraction
 	if tr.LocalFee() != want {
 		t.Fatalf("local fee after second raise = %d; want %d", tr.LocalFee(), want)
 	}
@@ -52,9 +52,7 @@ func TestRaiseLowerLocalFee(t *testing.T) {
 		t.Fatal("IsLoadedLocal must be true once localFee != LoadBase")
 	}
 
-	// Drive it back down. LowerLocalFee should clear the raise count
-	// and decay; running enough cycles must clamp at LoadBase, not
-	// below it.
+	// Repeated decay must clamp at LoadBase.
 	for range 10 {
 		tr.LowerLocalFee()
 	}
@@ -66,9 +64,6 @@ func TestRaiseLowerLocalFee(t *testing.T) {
 	}
 }
 
-// TestScaleFeeLoad_Loaded checks scaling under a raised local fee.
-// After two raises, local = LoadBase + LoadBase/4 = 320; ScaleFeeLoad
-// applies fee * 320 / 256 = fee * 5/4.
 func TestScaleFeeLoad_Loaded(t *testing.T) {
 	tr := New()
 	tr.RaiseLocalFee()
@@ -80,11 +75,15 @@ func TestScaleFeeLoad_Loaded(t *testing.T) {
 	if got != 1250 {
 		t.Fatalf("ScaleFeeLoad(1000) under 5/4 load = %d; want 1250", got)
 	}
+	got, err = ScaleFeeLoad(1, tr, false)
+	if err != nil {
+		t.Fatalf("ScaleFeeLoad truncation: %v", err)
+	}
+	if got != 1 {
+		t.Fatalf("truncated scaled fee = %d; want 1", got)
+	}
 }
 
-// TestScaleFeeLoad_UnlimitedBranch pins the unlimited carve-out: when
-// only local load is elevated and stays under 4x remote, an unlimited
-// caller pays the remote-rate factor.
 func TestScaleFeeLoad_UnlimitedBranch(t *testing.T) {
 	tr := New()
 	tr.RaiseLocalFee()
@@ -97,9 +96,7 @@ func TestScaleFeeLoad_UnlimitedBranch(t *testing.T) {
 		t.Fatalf("unlimited caller under moderate local load = %d; want identity 1000", got)
 	}
 
-	// Drive local above 4x remote. Each raise multiplies by 5/4, so
-	// after >=7 raises beyond the latch local >= 4*remote and the
-	// privileged carve-out drops away.
+	// The privileged carve-out ends at four times the remote factor.
 	for range 8 {
 		tr.RaiseLocalFee()
 	}
@@ -115,22 +112,98 @@ func TestScaleFeeLoad_UnlimitedBranch(t *testing.T) {
 	}
 }
 
-// TestScaleFeeLoad_Overflow protects the multiplication: a huge fee
-// times a large factor must surface ErrOverflow rather than silently
-// truncate.
 func TestScaleFeeLoad_Overflow(t *testing.T) {
 	tr := New()
 	for range 80 {
 		tr.RaiseLocalFee()
 	}
 	_, err := ScaleFeeLoad(^uint64(0), tr, false)
-	if err == nil {
-		t.Fatal("expected ErrOverflow on max-fee max-factor; got nil")
+	if !errors.Is(err, ErrOverflow) {
+		t.Fatalf("max-fee max-factor error = %v, want ErrOverflow", err)
 	}
 }
 
-// TestLoadFactorAggregates pins max(cluster, local, remote) and the
-// (max(local,remote), max(remote,cluster)) pair consumed by ScaleFeeLoad.
+func TestScaleFeeLoadSignedBoundary(t *testing.T) {
+	tr := New()
+
+	got, err := ScaleFeeLoad(math.MaxInt64, tr, false)
+	if err != nil || got != math.MaxInt64 {
+		t.Fatalf("MaxInt64 scale = (%d, %v), want (%d, nil)", got, err, uint64(math.MaxInt64))
+	}
+	if _, err := ScaleFeeLoad(uint64(math.MaxInt64)+1, tr, false); !errors.Is(err, ErrOverflow) {
+		t.Fatalf("MaxInt64+1 error = %v, want ErrOverflow", err)
+	}
+
+	tr.SetRemoteFee(512)
+	fee := uint64(math.MaxInt64 / 2)
+	got, err = ScaleFeeLoad(fee, tr, false)
+	if err != nil || got != uint64(math.MaxInt64)-1 {
+		t.Fatalf("wide product scale = (%d, %v), want (%d, nil)", got, err, uint64(math.MaxInt64)-1)
+	}
+
+	tr.SetRemoteFee(feeMax)
+	if _, err := ScaleFeeLoad(10_000_000_000_000, tr, false); !errors.Is(err, ErrOverflow) {
+		t.Fatalf("signed XRP overflow error = %v, want ErrOverflow", err)
+	}
+}
+
+func TestScaleFeeLoadAllocations(t *testing.T) {
+	tr := New()
+	tr.SetRemoteFee(512)
+	var (
+		got uint64
+		err error
+	)
+	allocs := testing.AllocsPerRun(1000, func() {
+		got, err = ScaleFeeLoad(1_000_000, tr, false)
+	})
+	if err != nil || got != 2_000_000 {
+		t.Fatalf("scale = (%d, %v), want (2000000, nil)", got, err)
+	}
+	if allocs != 0 {
+		t.Fatalf("ScaleFeeLoad allocations = %v, want 0", allocs)
+	}
+}
+
+func TestIsLoadedCluster(t *testing.T) {
+	tr := New()
+	if tr.IsLoadedCluster() {
+		t.Fatal("fresh tracker must not be cluster-loaded")
+	}
+
+	tr.RaiseLocalFee()
+	if !tr.IsLoadedCluster() {
+		t.Fatal("armed first raise must report cluster load")
+	}
+	tr.LowerLocalFee()
+	if tr.IsLoadedCluster() {
+		t.Fatal("lowering the armed tracker must clear cluster load")
+	}
+
+	tr.SetClusterFee(LoadBase + 1)
+	if !tr.IsLoadedCluster() {
+		t.Fatal("cluster-only fee divergence must report cluster load")
+	}
+	tr.SetClusterFee(LoadBase)
+	if tr.IsLoadedCluster() {
+		t.Fatal("normal cluster fee must clear cluster load")
+	}
+	tr.SetClusterFee(0)
+	if !tr.IsLoadedCluster() {
+		t.Fatal("zero cluster fee is distinct from the normal factor")
+	}
+}
+
+func TestRaiseLocalFeeClampsRemoteOverflow(t *testing.T) {
+	tr := New()
+	tr.SetRemoteFee(3_435_973_837)
+	tr.RaiseLocalFee()
+	tr.RaiseLocalFee()
+	if got := tr.LocalFee(); got != feeMax {
+		t.Fatalf("local fee after overflowing remote raise = %d, want %d", got, feeMax)
+	}
+}
+
 func TestLoadFactorAggregates(t *testing.T) {
 	tr := New()
 	tr.SetRemoteFee(400)
@@ -144,7 +217,7 @@ func TestLoadFactorAggregates(t *testing.T) {
 	if lf := tr.LoadFactor(); lf != 500 {
 		t.Fatalf("load factor = %d; want max(cluster=300, local=500, remote=400) = 500", lf)
 	}
-	feeFactor, remFee := tr.ScalingFactors()
+	feeFactor, remFee := tr.scalingFactors()
 	if feeFactor != 500 || remFee != 400 {
 		t.Fatalf("scaling factors = (%d,%d); want (500,400)", feeFactor, remFee)
 	}

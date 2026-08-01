@@ -126,6 +126,42 @@ func TestHandleClusterMessage_FiresClusterFeeSink(t *testing.T) {
 	assert.Equal(t, uint32(400), sinkCalls[0])
 }
 
+func TestHandleClusterMessage_ClearsStaleClusterFee(t *testing.T) {
+	id, err := NewIdentity()
+	require.NoError(t, err)
+	peerIdentity, err := NewIdentity()
+	require.NoError(t, err)
+	peerToken := NewPublicKeyTokenFromBtcec(peerIdentity.BtcecPublicKey())
+	peerNodePubEncoded, err := addresscodec.EncodeNodePublicKey(peerToken.Bytes())
+	require.NoError(t, err)
+
+	clusterReg := cluster.New()
+	require.NoError(t, clusterReg.Load([]string{peerNodePubEncoded + " peer"}))
+	clusterFee := uint32(777)
+	o := &Overlay{
+		peers:   make(map[PeerID]*Peer),
+		events:  make(chan Event, 8),
+		cluster: clusterReg,
+		clusterFeeSink: func(fee uint32) {
+			clusterFee = fee
+		},
+	}
+
+	peer := NewPeer(PeerID(34), Endpoint{Host: "127.0.0.1", Port: 51235}, false, id, make(chan Event, 1))
+	peer.remotePubKey = peerToken
+	o.peers[peer.ID()] = peer
+	payload, err := message.Encode(&message.Cluster{})
+	require.NoError(t, err)
+
+	o.onMessageReceived(Event{
+		PeerID:      peer.ID(),
+		MessageType: uint16(message.TypeCluster),
+		Payload:     payload,
+	})
+
+	assert.Zero(t, clusterFee)
+}
+
 // TestHandleClusterMessage_ImportsLoadSourceGossip pins issue #765: a
 // TMCluster frame from a registered cluster peer must fold its
 // TMLoadSource entries into the resource manager (importConsumers),

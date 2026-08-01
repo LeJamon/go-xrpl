@@ -985,12 +985,14 @@ func TestSubmitMethodSigningCredentials(t *testing.T) {
 		signingParam string
 		signingValue string
 		keyType      string
+		account      string
 		description  string
 	}{
 		{
 			name:         "secret parameter",
 			signingParam: "secret",
 			signingValue: "sn3nxiW7v8KXzPzAqzyHXbSSKNuN9",
+			account:      "rMCcNuTcajgw7YTgBy1sys3b89QqjUrMpH",
 			description:  "Traditional secret format for signing",
 		},
 		{
@@ -998,6 +1000,7 @@ func TestSubmitMethodSigningCredentials(t *testing.T) {
 			signingParam: "seed",
 			signingValue: "sn3nxiW7v8KXzPzAqzyHXbSSKNuN9",
 			keyType:      "secp256k1",
+			account:      "rMCcNuTcajgw7YTgBy1sys3b89QqjUrMpH",
 			description:  "Seed format for signing",
 		},
 		{
@@ -1005,6 +1008,7 @@ func TestSubmitMethodSigningCredentials(t *testing.T) {
 			signingParam: "seed_hex",
 			signingValue: "DEDCE9CE67B451D852FD4E846FCDE31C",
 			keyType:      "secp256k1",
+			account:      "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh",
 			description:  "Hex-encoded seed for signing",
 		},
 		{
@@ -1012,6 +1016,7 @@ func TestSubmitMethodSigningCredentials(t *testing.T) {
 			signingParam: "passphrase",
 			signingValue: "masterpassphrase",
 			keyType:      "secp256k1",
+			account:      "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh",
 			description:  "Passphrase-based key derivation",
 		},
 	}
@@ -1020,11 +1025,10 @@ func TestSubmitMethodSigningCredentials(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Logf("Parameter: %s, Description: %s", tc.signingParam, tc.description)
 
-			// Omit Account so the signing helper auto-fills it from the
-			// derived key. This avoids account mismatch errors.
 			params := map[string]any{
 				"tx_json": map[string]any{
 					"TransactionType": "Payment",
+					"Account":         tc.account,
 					"Destination":     "rPMh7Pi9ct699iZUTWaytJUoHcJ7cgyziK",
 					"Amount":          "1000000",
 				},

@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/LeJamon/go-xrpl/internal/consensus"
+	"github.com/LeJamon/go-xrpl/internal/feetrack"
 	"github.com/LeJamon/go-xrpl/internal/ledger"
 	"github.com/LeJamon/go-xrpl/internal/peermanagement/message"
 	"github.com/LeJamon/go-xrpl/protocol"
@@ -402,7 +403,7 @@ func (a *Adaptor) refreshRemoteFee(seq uint32, ledgerID, parentID consensus.Ledg
 	if ft == nil {
 		return
 	}
-	base := ft.LoadBase()
+	base := feetrack.LoadBase
 
 	fees := collectValidationFees(historian, ledgerID, base)
 	fees = append(fees, collectValidationFees(historian, parentID, base)...)

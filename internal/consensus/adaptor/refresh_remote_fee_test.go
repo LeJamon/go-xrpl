@@ -118,8 +118,8 @@ func TestRefreshRemoteFee_EmptyValidations(t *testing.T) {
 		byLedger: map[consensus.LedgerID][]*consensus.Validation{},
 	})
 	a.OnLedgerFullyValidated(consensus.LedgerID(closed.Hash()), seq)
-	if got := ft.RemoteFee(); got != ft.LoadBase() {
-		t.Fatalf("RemoteFee = %d on empty validations; want LoadBase %d", got, ft.LoadBase())
+	if got := ft.RemoteFee(); got != feetrack.LoadBase {
+		t.Fatalf("RemoteFee = %d on empty validations; want LoadBase %d", got, feetrack.LoadBase)
 	}
 }
 

@@ -48,20 +48,6 @@ func (m *SubmitMultisignedMethod) Handle(ctx *types.RpcContext, params json.RawM
 		return nil, types.RpcErrorMissingField("tx_json.Sequence")
 	}
 
-	// Validate that Sequence is a valid number (JSON numbers unmarshal as float64).
-	switch seq := txMap["Sequence"].(type) {
-	case float64:
-		if seq < 0 || seq != float64(int64(seq)) {
-			return nil, types.RpcErrorInvalidField("tx_json.Sequence")
-		}
-	case json.Number:
-		if _, err := seq.Int64(); err != nil {
-			return nil, types.RpcErrorInvalidField("tx_json.Sequence")
-		}
-	default:
-		return nil, types.RpcErrorInvalidField("tx_json.Sequence")
-	}
-
 	// SigningPubKey must be present and empty.
 	// Matches rippled: missing_field_error("tx_json.SigningPubKey") /
 	// "When multi-signing 'tx_json.SigningPubKey' must be empty."
@@ -75,19 +61,15 @@ func (m *SubmitMultisignedMethod) Handle(ctx *types.RpcContext, params json.RawM
 
 	// --- checkTxJsonFields (rippled TransactionSign.cpp:315-375) ---
 
-	// Validate required fields for multi-signed transaction
-	if _, ok := txMap["Account"]; !ok {
-		return nil, types.RpcErrorMissingField("tx_json.Account")
+	if rpcErr := validateSigningTxJSONShape(txMap); rpcErr != nil {
+		return nil, rpcErr
+	}
+	if rpcErr := rejectSigningWhenLoaded(ctx.Services, ctx.Unlimited); rpcErr != nil {
+		return nil, rpcErr
 	}
 
 	// Get the source account address for self-signing detection later.
-	txAccount, _ := txMap["Account"].(string)
-
-	// rippled checkTxJsonFields: an Account that parseBase58<AccountID>
-	// rejects is rpcSRC_ACT_MALFORMED (TransactionSign.cpp:345-354).
-	if !types.IsValidClassicAddress(txAccount) {
-		return nil, types.RpcErrorSrcActMalformed("Invalid field 'tx_json.Account'.")
-	}
+	txAccount := txMap["Account"].(string)
 
 	// The source account must exist in the current ledger
 	// (TransactionSign.cpp:1259-1270 → rpcSRC_ACT_NOT_FOUND). Signer-list
@@ -126,6 +108,20 @@ func (m *SubmitMultisignedMethod) Handle(ctx *types.RpcContext, params json.RawM
 	}
 	if feeDrops <= 0 {
 		return nil, types.RpcErrorInvalidParams("Invalid Fee field.  Fees must be greater than zero.")
+	}
+
+	// Sequence value parsing occurs after load admission and account lookup.
+	switch seq := txMap["Sequence"].(type) {
+	case float64:
+		if seq < 0 || seq != float64(int64(seq)) {
+			return nil, types.RpcErrorInvalidField("tx_json.Sequence")
+		}
+	case json.Number:
+		if _, err := seq.Int64(); err != nil {
+			return nil, types.RpcErrorInvalidField("tx_json.Sequence")
+		}
+	default:
+		return nil, types.RpcErrorInvalidField("tx_json.Sequence")
 	}
 
 	// Check that Signers array exists and is not empty

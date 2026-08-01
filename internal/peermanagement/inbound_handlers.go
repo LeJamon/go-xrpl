@@ -91,17 +91,10 @@ func (o *Overlay) handleClusterMessage(evt Event) {
 	}
 
 	// Recompute the cluster-fee median and forward it through the
-	// LoadFeeTrack sink. Mirrors rippled PeerImp.cpp:1175-1193: take
-	// the median of cluster-member LoadFees reported within the last
-	// clusterFeeWindow, then setClusterFee. An empty set (no fresh
-	// reports) yields no setClusterFee call — rippled also falls
-	// through with clusterFee=0 in that case but we leave the prior
-	// value intact, mirroring the more general "no signal → no
-	// change" pattern.
+	// LoadFeeTrack sink. An empty fresh set publishes zero.
 	if sink := o.clusterFeeSinkSnapshot(); sink != nil {
-		if fee, ok := o.cluster.MedianFee(time.Now().Add(-clusterFeeWindow)); ok {
-			sink(fee)
-		}
+		fee, _ := o.cluster.MedianFee(time.Now().Add(-clusterFeeWindow))
+		sink(fee)
 	}
 
 	// LoadSource gossip → resource manager. Mirrors rippled

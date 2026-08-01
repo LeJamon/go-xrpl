@@ -246,6 +246,9 @@ func signTransactionJSON(ctx context.Context, services *types.ServiceContainer, 
 	if err := json.Unmarshal(txJSON, &txMap); err != nil {
 		return nil, types.RpcErrorInvalidParams(fmt.Sprintf("Invalid tx_json: %v", err))
 	}
+	if txMap == nil {
+		return nil, types.RpcErrorExpectedField("tx_json", "object")
+	}
 	// signature_target directs the signature into a nested inner object instead
 	// of the top level. Only CounterpartySignature is a valid target; any other
 	// field name is rejected with the field name as the message, matching
@@ -262,28 +265,25 @@ func signTransactionJSON(ctx context.Context, services *types.ServiceContainer, 
 	// belongs to the counterparty, so account and secret need not correspond:
 	// the caller's Account (the primary signer) is the source and its ownership
 	// is not checked.
-	srcAddress := address
-	if !signatureTargetPresent {
-		if txAccount, ok := txMap["Account"].(string); ok {
-			if !types.IsValidClassicAddress(txAccount) {
-				return nil, types.RpcErrorSrcActMalformed("Invalid field 'tx_json.Account'.")
-			}
-			if txAccount != address {
-				return nil, types.RpcErrorInvalidParams("Account in tx_json does not match signing key")
-			}
-		} else {
-			txMap["Account"] = address
-		}
-	} else {
-		txAccount, ok := txMap["Account"].(string)
-		if !ok || txAccount == "" {
-			return nil, types.RpcErrorMissingField("tx_json.Account")
-		}
-		if !types.IsValidClassicAddress(txAccount) {
-			return nil, types.RpcErrorSrcActMalformed("Invalid field 'tx_json.Account'.")
-		}
-		srcAddress = txAccount
+	if _, ok := txMap["TransactionType"]; !ok {
+		return nil, types.RpcErrorMissingField("tx_json.TransactionType")
 	}
+
+	txAccountValue, accountPresent := txMap["Account"]
+	if !accountPresent {
+		return nil, types.RpcErrorSrcActMissing("Missing field 'tx_json.Account'.")
+	}
+	txAccount, ok := txAccountValue.(string)
+	if !ok || !types.IsValidClassicAddress(txAccount) {
+		return nil, types.RpcErrorSrcActMalformed("Invalid field 'tx_json.Account'.")
+	}
+	if rpcErr := rejectSigningWhenLoaded(services, unlimited); rpcErr != nil {
+		return nil, rpcErr
+	}
+	if !signatureTargetPresent && txAccount != address {
+		return nil, types.RpcErrorInvalidParams("Account in tx_json does not match signing key")
+	}
+	srcAddress := txAccount
 
 	// Fill in missing fields if not offline. Order matches rippled's
 	// transactionPreProcessImpl (TransactionSign.cpp:454-505): source
@@ -411,6 +411,13 @@ func signTransactionJSON(ctx context.Context, services *types.ServiceContainer, 
 		TxMap:  txMap,
 		TxBlob: txBlob,
 	}, nil
+}
+
+func rejectSigningWhenLoaded(services *types.ServiceContainer, unlimited bool) *types.RpcError {
+	if unlimited || services == nil || services.IsLoadedCluster == nil || !services.IsLoadedCluster() {
+		return nil
+	}
+	return types.RpcErrorTooBusy()
 }
 
 func signatureTargetObject(txMap map[string]any, target string) (map[string]any, *types.RpcError) {
