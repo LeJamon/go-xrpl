@@ -1155,7 +1155,7 @@ func (s *Service) GetAccountNFTs(ctx context.Context, account string, ledgerInde
 		}
 		pages := make(map[[32]byte]*state.NFTokenPageData)
 		pageKeys := make([][32]byte, 0)
-		if err := targetLedger.ForEachCtx(ctx, func(key [32]byte, data []byte) bool {
+		if err := targetLedger.ForEachContext(ctx, func(key [32]byte, data []byte) bool {
 			if ctx.Err() != nil {
 				return false
 			}

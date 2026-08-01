@@ -103,12 +103,13 @@ func (m *paymentMockLedgerView) Erase(key keylet.Keylet) error {
 	return nil
 }
 
-func (m *paymentMockLedgerView) AdjustDropsDestroyed(drops drops.XRPAmount) {
+func (m *paymentMockLedgerView) AdjustDropsDestroyed(drops drops.XRPAmount) error {
 	// No-op for testing
+	return nil
 }
 
-func (m *paymentMockLedgerView) TxExists(txID [32]byte) bool {
-	return false
+func (m *paymentMockLedgerView) TxExists(txID [32]byte) (bool, error) {
+	return false, nil
 }
 
 func (m *paymentMockLedgerView) Rules() *amendment.Rules {

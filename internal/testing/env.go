@@ -209,12 +209,15 @@ func NewTestEnv(t testing.TB) *TestEnv {
 
 	// Note: drops.Fees has unexported fields, so we use a zero value
 	var fees drops.Fees
-	genesisLedger := ledger.FromGenesis(
+	genesisLedger, err := ledger.FromGenesis(
 		genesisResult.Header,
 		genesisResult.StateMap,
 		genesisResult.TxMap,
 		fees,
 	)
+	if err != nil {
+		t.Fatalf("Failed to construct genesis ledger: %v", err)
+	}
 
 	clock := NewManualClock()
 	openLedger, err := ledger.NewOpen(genesisLedger, clock.Now())
@@ -310,12 +313,15 @@ func NewTestEnvWithConfig(t testing.TB, cfg genesis.Config) *TestEnv {
 
 	// Note: drops.Fees has unexported fields, so we use a zero value
 	var fees drops.Fees
-	genesisLedger := ledger.FromGenesis(
+	genesisLedger, err := ledger.FromGenesis(
 		genesisResult.Header,
 		genesisResult.StateMap,
 		genesisResult.TxMap,
 		fees,
 	)
+	if err != nil {
+		t.Fatalf("Failed to construct genesis ledger: %v", err)
+	}
 
 	clock := NewManualClock()
 	openLedger, err := ledger.NewOpen(genesisLedger, clock.Now())

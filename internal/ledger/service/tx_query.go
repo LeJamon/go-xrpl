@@ -218,7 +218,7 @@ func readFeesFromLedger(l *ledger.Ledger) (baseFee, reserveBase, reserveIncremen
 	}
 	fees := drops.DefaultFees()
 	if l != nil {
-		fees = l.GetFees()
+		fees = l.Fees()
 	}
 	return uint64(fees.Base), uint64(fees.Reserve), uint64(fees.Increment)
 }
@@ -228,7 +228,7 @@ func readFeesFromLedgerContext(ctx context.Context, l *ledger.Ledger) (baseFee, 
 	if l == nil {
 		return uint64(fees.Base), uint64(fees.Reserve), uint64(fees.Increment), nil
 	}
-	fees = l.GetFees()
+	fees = l.Fees()
 
 	data, err := l.ReadContext(ctx, keylet.Fees())
 	if err != nil {

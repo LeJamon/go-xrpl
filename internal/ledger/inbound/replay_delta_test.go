@@ -24,7 +24,9 @@ func makeGenesisLedger(t *testing.T) *ledger.Ledger {
 	t.Helper()
 	res, err := genesis.Create(genesis.DefaultConfig())
 	require.NoError(t, err)
-	return ledger.FromGenesis(res.Header, res.StateMap, res.TxMap, drops.Fees{})
+	l, err := ledger.FromGenesis(res.Header, res.StateMap, res.TxMap, drops.Fees{})
+	require.NoError(t, err)
+	return l
 }
 
 // encodeVL returns the XRPL VL prefix for the given length. Mirrors

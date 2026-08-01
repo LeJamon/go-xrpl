@@ -16,12 +16,24 @@ import (
 	"github.com/LeJamon/go-xrpl/shamap/backend"
 )
 
+func blockProcessorTxExists(t *testing.T, view *ledger.Ledger, hash [32]byte) bool {
+	t.Helper()
+	exists, err := view.TxExists(hash)
+	if err != nil {
+		t.Fatalf("TxExists(%x): %v", hash, err)
+	}
+	return exists
+}
+
 func TestBlockProcessor_MetadataSerializationFailureIsAtomic(t *testing.T) {
 	genesisResult, err := genesis.Create(genesis.DefaultConfig())
 	if err != nil {
 		t.Fatalf("create genesis: %v", err)
 	}
-	parent := ledger.FromGenesis(genesisResult.Header, genesisResult.StateMap, genesisResult.TxMap, drops.Fees{})
+	parent, err := ledger.FromGenesis(genesisResult.Header, genesisResult.StateMap, genesisResult.TxMap, drops.Fees{})
+	if err != nil {
+		t.Fatalf("create genesis ledger: %v", err)
+	}
 	view, err := ledger.NewOpen(parent, time.Unix(0, 0))
 	if err != nil {
 		t.Fatalf("create open ledger: %v", err)
@@ -65,7 +77,7 @@ func TestBlockProcessor_MetadataSerializationFailureIsAtomic(t *testing.T) {
 	if failed.Index != 0 {
 		t.Fatalf("failed transaction index = %d, want 0", failed.Index)
 	}
-	if view.TxExists(failed.Hash) {
+	if blockProcessorTxExists(t, view, failed.Hash) {
 		t.Fatal("metadata serialization failure committed a transaction leaf")
 	}
 
@@ -84,7 +96,7 @@ func TestBlockProcessor_MetadataSerializationFailureIsAtomic(t *testing.T) {
 	if view.TxCount() != 1 || engine.TxCount() != 1 {
 		t.Fatalf("transaction counts = ledger %d engine %d, want 1/1", view.TxCount(), engine.TxCount())
 	}
-	if !view.TxExists(succeeded.Hash) {
+	if !blockProcessorTxExists(t, view, succeeded.Hash) {
 		t.Fatal("successful transaction state was published without its transaction leaf")
 	}
 }
@@ -94,7 +106,10 @@ func TestBlockProcessor_StagingDoesNotFlushBackedSHAMaps(t *testing.T) {
 	if err != nil {
 		t.Fatalf("create genesis: %v", err)
 	}
-	parent := ledger.FromGenesis(genesisResult.Header, genesisResult.StateMap, genesisResult.TxMap, drops.Fees{})
+	parent, err := ledger.FromGenesis(genesisResult.Header, genesisResult.StateMap, genesisResult.TxMap, drops.Fees{})
+	if err != nil {
+		t.Fatalf("create genesis ledger: %v", err)
+	}
 	view, err := ledger.NewOpen(parent, time.Unix(0, 0))
 	if err != nil {
 		t.Fatalf("create open ledger: %v", err)
@@ -114,7 +129,7 @@ func TestBlockProcessor_StagingDoesNotFlushBackedSHAMaps(t *testing.T) {
 	if !result.ApplyResult.Applied {
 		t.Fatalf("transaction result = %s, want applied", result.ApplyResult.Result)
 	}
-	if view.TxCount() != 1 || !view.TxExists(result.Hash) {
+	if view.TxCount() != 1 || !blockProcessorTxExists(t, view, result.Hash) {
 		t.Fatal("applied transaction was not committed atomically")
 	}
 }
@@ -146,7 +161,10 @@ func TestBlockProcessor_ApplyTransactionCommitsOnlyBatchOuter(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	parent := ledger.FromGenesis(genesisResult.Header, genesisResult.StateMap, genesisResult.TxMap, drops.Fees{})
+	parent, err := ledger.FromGenesis(genesisResult.Header, genesisResult.StateMap, genesisResult.TxMap, drops.Fees{})
+	if err != nil {
+		t.Fatal(err)
+	}
 	view, err := ledger.NewOpen(parent, time.Unix(0, 0))
 	if err != nil {
 		t.Fatal(err)
@@ -169,7 +187,7 @@ func TestBlockProcessor_ApplyTransactionCommitsOnlyBatchOuter(t *testing.T) {
 	if view.TxCount() != 1 || engine.TxCount() != 1 {
 		t.Fatalf("transaction counts = ledger %d engine %d, want 1/1", view.TxCount(), engine.TxCount())
 	}
-	if !view.TxExists(result.Hash) {
+	if !blockProcessorTxExists(t, view, result.Hash) {
 		t.Fatal("outer transaction leaf missing")
 	}
 	for _, inner := range outer.inners {
@@ -177,7 +195,7 @@ func TestBlockProcessor_ApplyTransactionCommitsOnlyBatchOuter(t *testing.T) {
 		if hashErr != nil {
 			t.Fatalf("compute inner transaction hash: %v", hashErr)
 		}
-		if view.TxExists(hash) {
+		if blockProcessorTxExists(t, view, hash) {
 			t.Fatalf("open-ledger apply committed inner transaction leaf %x", hash)
 		}
 	}
@@ -188,7 +206,10 @@ func TestBlockProcessor_CommitsBatchInnerLeavesAtomically(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	parent := ledger.FromGenesis(genesisResult.Header, genesisResult.StateMap, genesisResult.TxMap, drops.Fees{})
+	parent, err := ledger.FromGenesis(genesisResult.Header, genesisResult.StateMap, genesisResult.TxMap, drops.Fees{})
+	if err != nil {
+		t.Fatal(err)
+	}
 	view, err := ledger.NewOpen(parent, time.Unix(0, 0))
 	if err != nil {
 		t.Fatal(err)
@@ -213,7 +234,7 @@ func TestBlockProcessor_CommitsBatchInnerLeavesAtomically(t *testing.T) {
 	}
 	for _, inner := range result.ApplyResult.AppliedInnerTransactions {
 		hash, hashErr := txcore.ComputeTransactionHash(inner.Transaction)
-		if hashErr != nil || !view.TxExists(hash) {
+		if hashErr != nil || !blockProcessorTxExists(t, view, hash) {
 			t.Fatalf("committed inner leaf missing: hash=%x err=%v", hash, hashErr)
 		}
 	}
@@ -224,7 +245,10 @@ func TestBlockProcessor_InnerMetadataSerializationFailureIsAtomic(t *testing.T) 
 	if err != nil {
 		t.Fatalf("create genesis: %v", err)
 	}
-	parent := ledger.FromGenesis(genesisResult.Header, genesisResult.StateMap, genesisResult.TxMap, drops.Fees{})
+	parent, err := ledger.FromGenesis(genesisResult.Header, genesisResult.StateMap, genesisResult.TxMap, drops.Fees{})
+	if err != nil {
+		t.Fatalf("create genesis ledger: %v", err)
+	}
 	view, err := ledger.NewOpen(parent, time.Unix(0, 0))
 	if err != nil {
 		t.Fatalf("create open ledger: %v", err)
@@ -282,7 +306,7 @@ func TestBlockProcessor_InnerMetadataSerializationFailureIsAtomic(t *testing.T) 
 	if failed.Index != 0 {
 		t.Fatalf("failed transaction index = %d, want 0", failed.Index)
 	}
-	if view.TxExists(failed.Hash) {
+	if blockProcessorTxExists(t, view, failed.Hash) {
 		t.Fatal("inner metadata serialization failure committed the outer transaction leaf")
 	}
 	for _, inner := range failed.ApplyResult.AppliedInnerTransactions {
@@ -290,7 +314,7 @@ func TestBlockProcessor_InnerMetadataSerializationFailureIsAtomic(t *testing.T) 
 		if hashErr != nil {
 			t.Fatalf("compute inner transaction hash: %v", hashErr)
 		}
-		if view.TxExists(hash) {
+		if blockProcessorTxExists(t, view, hash) {
 			t.Fatalf("inner metadata serialization failure committed inner transaction leaf %x", hash)
 		}
 	}

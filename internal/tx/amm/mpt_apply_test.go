@@ -47,7 +47,7 @@ func (v *ammMPTView) Erase(k keylet.Keylet) error {
 	delete(v.data, k.Key)
 	return nil
 }
-func (v *ammMPTView) AdjustDropsDestroyed(drops.XRPAmount) {}
+func (v *ammMPTView) AdjustDropsDestroyed(drops.XRPAmount) error { return nil }
 func (v *ammMPTView) ForEach(fn func([32]byte, []byte) bool) error {
 	for k, data := range v.data {
 		if !fn(k, data) {
@@ -59,7 +59,7 @@ func (v *ammMPTView) ForEach(fn func([32]byte, []byte) bool) error {
 func (v *ammMPTView) Succ([32]byte) ([32]byte, []byte, bool, error) {
 	return [32]byte{}, nil, false, nil
 }
-func (v *ammMPTView) TxExists([32]byte) bool                    { return false }
+func (v *ammMPTView) TxExists([32]byte) (bool, error)           { return false, nil }
 func (v *ammMPTView) Rules() *amendment.Rules                   { return v.rules }
 func (v *ammMPTView) LedgerSeq() uint32                         { return 1 }
 func (v *ammMPTView) AdjustOwnerCount([20]byte, uint32, uint32) {}

@@ -20,21 +20,21 @@ type roView struct {
 	rules *amendment.Rules
 }
 
-func (v roView) Read(k keylet.Keylet) ([]byte, error)      { return v.data[k.Key], nil }
-func (v roView) Exists(k keylet.Keylet) (bool, error)      { _, ok := v.data[k.Key]; return ok, nil }
-func (v roView) Insert(k keylet.Keylet, data []byte) error { return nil }
-func (v roView) Update(k keylet.Keylet, data []byte) error { return nil }
-func (v roView) Erase(k keylet.Keylet) error               { return nil }
-func (v roView) AdjustDropsDestroyed(drops.XRPAmount)      {}
+func (v roView) Read(k keylet.Keylet) ([]byte, error)       { return v.data[k.Key], nil }
+func (v roView) Exists(k keylet.Keylet) (bool, error)       { _, ok := v.data[k.Key]; return ok, nil }
+func (v roView) Insert(k keylet.Keylet, data []byte) error  { return nil }
+func (v roView) Update(k keylet.Keylet, data []byte) error  { return nil }
+func (v roView) Erase(k keylet.Keylet) error                { return nil }
+func (v roView) AdjustDropsDestroyed(drops.XRPAmount) error { return nil }
 func (v roView) ForEach(fn func(key [32]byte, data []byte) bool) error {
 	return nil
 }
 func (v roView) Succ(key [32]byte) ([32]byte, []byte, bool, error) {
 	return [32]byte{}, nil, false, nil
 }
-func (v roView) TxExists(txID [32]byte) bool { return false }
-func (v roView) Rules() *amendment.Rules     { return v.rules }
-func (v roView) LedgerSeq() uint32           { return 0 }
+func (v roView) TxExists(txID [32]byte) (bool, error) { return false, nil }
+func (v roView) Rules() *amendment.Rules              { return v.rules }
+func (v roView) LedgerSeq() uint32                    { return 0 }
 
 func fill20(b byte) [20]byte {
 	var id [20]byte

@@ -199,7 +199,9 @@ func (e *Engine) doApply(ctx context.Context, tx txcore.Transaction, metadata *t
 	}
 
 	// Apply all tracked changes to the base view and generate metadata automatically
-	table.AdjustDropsDestroyed(drops.XRPAmount(st.chargedFee))
+	if err := table.AdjustDropsDestroyed(drops.XRPAmount(st.chargedFee)); err != nil {
+		return ter.TefINTERNAL, 0
+	}
 	generatedMeta, err := table.Apply()
 	if err != nil {
 		return ter.TefINTERNAL, 0
@@ -446,7 +448,9 @@ func (e *Engine) applyTecRecovery(st *applyState, result ter.Result) ter.Result 
 	}
 
 	// Apply all tracked changes and generate proper metadata
-	tecTable.AdjustDropsDestroyed(drops.XRPAmount(st.chargedFee))
+	if err := tecTable.AdjustDropsDestroyed(drops.XRPAmount(st.chargedFee)); err != nil {
+		return ter.TefINTERNAL
+	}
 	generatedMeta, applyErr := tecTable.Apply()
 	if applyErr != nil {
 		return ter.TefINTERNAL
@@ -865,7 +869,9 @@ func (e *Engine) applyInvariantViolation(st *applyState, txDeclaredFee uint64) (
 		return ter.TefINVARIANT_FAILED
 	}
 
-	invTecTable.AdjustDropsDestroyed(drops.XRPAmount(st.chargedFee))
+	if err := invTecTable.AdjustDropsDestroyed(drops.XRPAmount(st.chargedFee)); err != nil {
+		return ter.TefINTERNAL
+	}
 	generatedMeta, applyErr := invTecTable.Apply()
 	if applyErr != nil {
 		return ter.TefINTERNAL

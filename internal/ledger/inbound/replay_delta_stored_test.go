@@ -57,7 +57,7 @@ func makeStoredReplayTarget(
 	}
 	hdr.Hash = header.CalculateHash(hdr)
 
-	target, err := ledger.NewFromHeader(hdr, stateMap, txMap, parent.GetFees())
+	target, err := ledger.NewFromHeader(hdr, stateMap, txMap, parent.Fees())
 	require.NoError(t, err)
 	return target
 }
@@ -260,7 +260,7 @@ func TestNewStoredLedgerReplayRejectsInvalidHeaderHash(t *testing.T) {
 	require.NoError(t, err)
 	txMap, err := target.TxMapSnapshot()
 	require.NoError(t, err)
-	target, err = ledger.NewFromHeader(hdr, stateMap, txMap, target.GetFees())
+	target, err = ledger.NewFromHeader(hdr, stateMap, txMap, target.Fees())
 	require.NoError(t, err)
 
 	_, err = NewStoredLedgerReplay(parent, target, nil)

@@ -39,7 +39,7 @@ func (v *coverClawbackView) Erase(k keylet.Keylet) error {
 	delete(v.data, k.Key)
 	return nil
 }
-func (v *coverClawbackView) AdjustDropsDestroyed(drops.XRPAmount) {}
+func (v *coverClawbackView) AdjustDropsDestroyed(drops.XRPAmount) error { return nil }
 func (v *coverClawbackView) ForEach(fn func(key [32]byte, data []byte) bool) error {
 	for key, data := range v.data {
 		if !fn(key, data) {
@@ -51,9 +51,9 @@ func (v *coverClawbackView) ForEach(fn func(key [32]byte, data []byte) bool) err
 func (v *coverClawbackView) Succ(key [32]byte) ([32]byte, []byte, bool, error) {
 	return [32]byte{}, nil, false, nil
 }
-func (v *coverClawbackView) TxExists([32]byte) bool  { return false }
-func (v *coverClawbackView) Rules() *amendment.Rules { return v.rules }
-func (v *coverClawbackView) LedgerSeq() uint32       { return 1 }
+func (v *coverClawbackView) TxExists([32]byte) (bool, error) { return false, nil }
+func (v *coverClawbackView) Rules() *amendment.Rules         { return v.rules }
+func (v *coverClawbackView) LedgerSeq() uint32               { return 1 }
 
 type coverClawbackFixture struct {
 	view       *coverClawbackView

@@ -55,24 +55,18 @@ func decodeRollingLedgerHashesForTest(t *testing.T, l *Ledger) (uint32, []string
 	return lastSeq, hashes
 }
 
-// TestLedger_Close_LedgerHashes_NoSelfInclusion verifies the
-// invariant from issue #470: the LedgerHashes object inside a freshly
-// closed ledger N must record hashes for ledgers 1..N-1 — never N
-// itself. Self-inclusion is structurally impossible (the hash is not
-// known until the state, which contains LedgerHashes, is finalized)
-// and produces an immediate fork against rippled.
-//
-// Reference: rippled Ledger::updateSkipList (Ledger.cpp:878-943) —
-// the skip-list update appends info_.parentHash and stamps
-// LastLedgerSequence to prevIndex = info_.seq - 1.
+// TestLedger_Close_LedgerHashes_NoSelfInclusion verifies that a closed
+// ledger records only ancestor hashes and stamps its parent sequence.
 func TestLedger_Close_LedgerHashes_NoSelfInclusion(t *testing.T) {
 	res, err := genesis.Create(genesis.DefaultConfig())
 	if err != nil {
 		t.Fatalf("genesis.Create: %v", err)
 	}
-	parent := FromGenesis(res.Header, res.StateMap, res.TxMap, drops.Fees{})
+	parent, err := FromGenesis(res.Header, res.StateMap, res.TxMap, drops.Fees{})
+	if err != nil {
+		t.Fatalf("FromGenesis: %v", err)
+	}
 
-	// Walk 1 -> 17 (the exact failure point from issue #470).
 	hashes := map[uint32][32]byte{parent.Sequence(): parent.Hash()}
 	const target = uint32(17)
 	for parent.Sequence() < target {
@@ -92,7 +86,7 @@ func TestLedger_Close_LedgerHashes_NoSelfInclusion(t *testing.T) {
 		selfHashHex := fmt.Sprintf("%064X", child.Hash())
 		for i, h := range hashStrs {
 			if h == selfHashHex {
-				t.Fatalf("ledger %d: LedgerHashes contains own hash at index %d (%s) — self-inclusion bug from issue #470", seq, i, h)
+				t.Fatalf("ledger %d: LedgerHashes contains own hash at index %d (%s)", seq, i, h)
 			}
 		}
 

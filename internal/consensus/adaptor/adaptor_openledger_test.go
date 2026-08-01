@@ -36,6 +36,24 @@ func newOpenLedgerTestService(t *testing.T) *service.Service {
 	return svc
 }
 
+func serviceHasTx(t *testing.T, svc *service.Service, hash [32]byte) bool {
+	t.Helper()
+	exists, err := svc.OpenLedgerHasTx(hash)
+	if err != nil {
+		t.Fatalf("OpenLedgerHasTx(%x): %v", hash, err)
+	}
+	return exists
+}
+
+func adaptorOpenLedgerHasTx(t *testing.T, a *adaptor.Adaptor, id consensus.TxID) bool {
+	t.Helper()
+	exists, err := a.HasTx(id)
+	if err != nil {
+		t.Fatalf("HasTx(%x): %v", id, err)
+	}
+	return exists
+}
+
 // newAdaptorWithService wraps svc in an Adaptor with a known validator
 // identity. The exact identity does not matter for tx-ingress tests —
 // we only care about the open-ledger plumbing.
@@ -98,10 +116,10 @@ func TestAdaptor_AddPendingTx_RoutesToOpenLedger(t *testing.T) {
 
 	a.AddPendingTx(blob, true)
 
-	if !svc.OpenLedgerHasTx(hash) {
+	if !serviceHasTx(t, svc, hash) {
 		t.Errorf("service.OpenLedgerHasTx(hash) = false; AddPendingTx did not land blob in open view")
 	}
-	if !a.HasTx(consensus.TxID(hash)) {
+	if !adaptorOpenLedgerHasTx(t, a, consensus.TxID(hash)) {
 		t.Errorf("adaptor.HasTx = false; HasTx must resolve through the persistent open view")
 	}
 }
@@ -180,10 +198,10 @@ func TestAdaptor_AddPendingTx_FailureNotInPool(t *testing.T) {
 
 	a.AddPendingTx(corrupted, true)
 
-	if svc.OpenLedgerHasTx(corruptedHash) {
+	if serviceHasTx(t, svc, corruptedHash) {
 		t.Errorf("service.OpenLedgerHasTx(corrupted) = true; failed tx leaked into open view")
 	}
-	if a.HasTx(consensus.TxID(corruptedHash)) {
+	if adaptorOpenLedgerHasTx(t, a, consensus.TxID(corruptedHash)) {
 		t.Errorf("adaptor.HasTx(corrupted) = true; failed tx leaked into open view (spec says drop on ResultFailure)")
 	}
 }

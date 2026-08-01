@@ -132,7 +132,7 @@ func TestService_SubmitTransaction_AppliesAtOrAboveFeeLevel(t *testing.T) {
 	if res.Result != ter.TesSUCCESS {
 		t.Fatalf("Result = %s, want tesSUCCESS", res.Result)
 	}
-	if !svc.OpenLedgerHasTx(hash) {
+	if !openLedgerHasTx(t, svc, hash) {
 		t.Errorf("applied tx not present in open view")
 	}
 }
@@ -161,7 +161,7 @@ func TestService_SubmitTransaction_QueuesBelowFeeLevel(t *testing.T) {
 	if res.Applied {
 		t.Errorf("Applied = true, want false for a queued tx")
 	}
-	if svc.OpenLedgerHasTx(hash) {
+	if openLedgerHasTx(t, svc, hash) {
 		t.Errorf("queued tx must not be present in the open view")
 	}
 }
@@ -187,7 +187,7 @@ func TestService_SubmitTransaction_FailHardNotQueued(t *testing.T) {
 	if res.Result == ter.TerQUEUED {
 		t.Errorf("Result = terQUEUED, want a rejection under fail_hard")
 	}
-	if svc.OpenLedgerHasTx(hash) {
+	if openLedgerHasTx(t, svc, hash) {
 		t.Errorf("fail_hard rejected tx must not be in the open view")
 	}
 }

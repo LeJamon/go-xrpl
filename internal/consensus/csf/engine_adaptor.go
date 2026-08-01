@@ -465,15 +465,15 @@ func (p *EnginePeer) BuildTxSet(txs [][]byte) (consensus.TxSet, error) {
 	return ts, nil
 }
 
-func (p *EnginePeer) HasTx(id consensus.TxID) bool {
+func (p *EnginePeer) HasTx(id consensus.TxID) (bool, error) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	for _, b := range p.openTxs {
 		if txBlobID(b) == id {
-			return true
+			return true, nil
 		}
 	}
-	return false
+	return false, nil
 }
 
 func (p *EnginePeer) GetTx(id consensus.TxID) ([]byte, error) {

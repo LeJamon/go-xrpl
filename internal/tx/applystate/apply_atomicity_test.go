@@ -27,6 +27,7 @@ type recordingBaseView struct {
 	mutations []recordedMutation
 	reads     [][32]byte
 	destroyed drops.XRPAmount
+	adjustErr error
 	attempts  int
 	failAt    int
 }
@@ -67,8 +68,12 @@ func (m *recordingBaseView) Erase(k keylet.Keylet) error {
 	return m.mockBaseView.Erase(k)
 }
 
-func (m *recordingBaseView) AdjustDropsDestroyed(amount drops.XRPAmount) {
+func (m *recordingBaseView) AdjustDropsDestroyed(amount drops.XRPAmount) error {
+	if m.adjustErr != nil {
+		return m.adjustErr
+	}
 	m.destroyed = m.destroyed.Add(amount)
+	return nil
 }
 
 func (m *recordingBaseView) ApplyAtomically(apply func(ledgercore.Writer) error) error {
@@ -79,6 +84,7 @@ func (m *recordingBaseView) ApplyAtomically(apply func(ledgercore.Writer) error)
 	staged.mutations = append(staged.mutations, m.mutations...)
 	staged.reads = append(staged.reads, m.reads...)
 	staged.destroyed = m.destroyed
+	staged.adjustErr = m.adjustErr
 	staged.attempts = m.attempts
 	staged.failAt = m.failAt
 
@@ -132,7 +138,9 @@ func TestApplyMetadataBuildErrorDoesNotMutateBase(t *testing.T) {
 	if err := table.Insert(kl(255), invalid); err != nil {
 		t.Fatalf("insert invalid entry: %v", err)
 	}
-	table.AdjustDropsDestroyed(drops.NewXRPAmount(1))
+	if err := table.AdjustDropsDestroyed(drops.NewXRPAmount(1)); err != nil {
+		t.Fatal(err)
+	}
 	metadata, err := table.Apply()
 	if err == nil {
 		t.Fatal("Apply succeeded with a metadata field invalid for AccountRoot")
@@ -178,7 +186,9 @@ func TestApplyBaseWriteErrorRollsBackAndCanRetry(t *testing.T) {
 	if err := table.Insert(kl(2), entry); err != nil {
 		t.Fatalf("insert second entry: %v", err)
 	}
-	table.AdjustDropsDestroyed(drops.NewXRPAmount(1))
+	if err := table.AdjustDropsDestroyed(drops.NewXRPAmount(1)); err != nil {
+		t.Fatal(err)
+	}
 
 	metadata, err := table.Apply()
 	if !errors.Is(err, errInjectedMutation) {
@@ -228,6 +238,38 @@ func TestApplyBaseWriteErrorRollsBackAndCanRetry(t *testing.T) {
 	}
 }
 
+func TestApplyDestroyedDropsErrorRollsBackAndCanRetry(t *testing.T) {
+	entry := encodeApplyTestEntry(t, applyTestAccountRootFields())
+	base := newRecordingBaseView()
+	base.adjustErr = errors.New("destroyed drops commit failed")
+	table := NewApplyStateTable(base, [32]byte{1}, 2, amendment.AllSupportedRules())
+	if err := table.Insert(kl(1), entry); err != nil {
+		t.Fatalf("insert entry: %v", err)
+	}
+	if err := table.AdjustDropsDestroyed(drops.NewXRPAmount(1)); err != nil {
+		t.Fatalf("adjust staged drops: %v", err)
+	}
+
+	metadata, err := table.Apply()
+	if !errors.Is(err, base.adjustErr) {
+		t.Fatalf("Apply error = %v, want %v", err, base.adjustErr)
+	}
+	if metadata != nil {
+		t.Fatalf("Apply metadata = %+v, want nil", metadata)
+	}
+	if len(base.data) != 0 || len(base.mutations) != 0 || !base.destroyed.IsZero() {
+		t.Fatalf("failed commit mutated base: entries=%d mutations=%d destroyed=%s", len(base.data), len(base.mutations), base.destroyed)
+	}
+
+	base.adjustErr = nil
+	if _, err := table.Apply(); err != nil {
+		t.Fatalf("retry Apply: %v", err)
+	}
+	if len(base.data) != 1 || len(base.mutations) != 1 || base.destroyed != drops.NewXRPAmount(1) {
+		t.Fatalf("retry did not commit atomically: entries=%d mutations=%d destroyed=%s", len(base.data), len(base.mutations), base.destroyed)
+	}
+}
+
 func TestApplyStateTableAtomicFailureDoesNotMutateTable(t *testing.T) {
 	base := newMockBaseView()
 	table := NewApplyStateTable(base, [32]byte{1}, 2, amendment.AllSupportedRules())
@@ -246,7 +288,9 @@ func TestApplyStateTableAtomicFailureDoesNotMutateTable(t *testing.T) {
 		if err := view.Insert(kl(2), []byte{2}); err != nil {
 			return err
 		}
-		view.AdjustDropsDestroyed(drops.NewXRPAmount(1))
+		if err := view.AdjustDropsDestroyed(drops.NewXRPAmount(1)); err != nil {
+			return err
+		}
 		return injected
 	})
 	if !errors.Is(err, injected) {

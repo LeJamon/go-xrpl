@@ -58,8 +58,9 @@ func (v *snapshotView) Erase(k keylet.Keylet) error {
 	return v.stateMap.Delete(k.Key)
 }
 
-func (v *snapshotView) AdjustDropsDestroyed(d drops.XRPAmount) {
+func (v *snapshotView) AdjustDropsDestroyed(d drops.XRPAmount) error {
 	// No-op for simulation — drops destroyed are discarded
+	return nil
 }
 
 func (v *snapshotView) ApplyAtomically(apply func(ledger.Writer) error) error {
@@ -92,7 +93,7 @@ func (v *snapshotView) Succ(key [32]byte) ([32]byte, []byte, bool, error) {
 	return [32]byte{}, nil, false, nil
 }
 
-func (v *snapshotView) TxExists(txID [32]byte) bool {
+func (v *snapshotView) TxExists(txID [32]byte) (bool, error) {
 	return v.ledger.TxExists(txID)
 }
 

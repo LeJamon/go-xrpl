@@ -59,7 +59,7 @@ func (m *mockLedgerView) Erase(k keylet.Keylet) error {
 	return nil
 }
 
-func (m *mockLedgerView) AdjustDropsDestroyed(_ drops.XRPAmount) {}
+func (m *mockLedgerView) AdjustDropsDestroyed(_ drops.XRPAmount) error { return nil }
 
 func (m *mockLedgerView) ForEach(fn func(key [32]byte, data []byte) bool) error {
 	for k, v := range m.entries {
@@ -87,7 +87,7 @@ func (m *mockLedgerView) Succ(key [32]byte) ([32]byte, []byte, bool, error) {
 	return best, bestData, found, nil
 }
 
-func (m *mockLedgerView) TxExists(_ [32]byte) bool { return false }
+func (m *mockLedgerView) TxExists(_ [32]byte) (bool, error) { return false, nil }
 
 func (m *mockLedgerView) Rules() *amendment.Rules { return nil }
 

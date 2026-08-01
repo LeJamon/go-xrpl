@@ -130,7 +130,8 @@ func (r *Router) learnTxFromLeaf(originPeer uint64, wire []byte) {
 	if item == nil {
 		return
 	}
-	if r.adaptor.HasTx(consensus.TxID(item.Key())) {
+	exists, err := r.adaptor.HasTx(consensus.TxID(item.Key()))
+	if err != nil || exists {
 		return
 	}
 	if res, err := r.adaptor.SubmitPendingTx(item.Data(), false); err == nil && res == openledger.ResultSuccess {

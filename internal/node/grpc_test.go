@@ -59,7 +59,11 @@ func newStubLedger(t *testing.T) *ledger.Ledger {
 		Accepted:            true,
 	}
 	hdr.Hash = [32]byte{0x7B, 0xAB}
-	return ledger.FromGenesis(hdr, stateMap, txMap, drops.Fees{})
+	l, err := ledger.FromGenesis(hdr, stateMap, txMap, drops.Fees{})
+	if err != nil {
+		t.Fatalf("ledger.FromGenesis: %v", err)
+	}
+	return l
 }
 
 // TestGRPCServer_RoundTrip boots the gRPC listener on an ephemeral port

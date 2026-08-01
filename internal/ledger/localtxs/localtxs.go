@@ -39,7 +39,7 @@ type LocalTxs struct {
 
 type sweepView interface {
 	Sequence() uint32
-	TxExists([32]byte) bool
+	TxExists([32]byte) (bool, error)
 	Read(keylet.Keylet) ([]byte, error)
 	Exists(keylet.Keylet) (bool, error)
 }
@@ -101,7 +101,11 @@ func (l *LocalTxs) Sweep(view sweepView) error {
 		if currentSeq > lt.ExpireLedgerSeq {
 			continue
 		}
-		if view.TxExists(lt.Ptx.Hash) {
+		exists, err := view.TxExists(lt.Ptx.Hash)
+		if err != nil {
+			return fmt.Errorf("localtxs.Sweep: inspect transaction %x: %w", hash, err)
+		}
+		if exists {
 			continue
 		}
 		if lt.Ptx.IsTicket {

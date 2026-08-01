@@ -237,7 +237,7 @@ type LedgerView interface {
 	Erase(k keylet.Keylet) error
 
 	// AdjustDropsDestroyed records destroyed XRP
-	AdjustDropsDestroyed(drops drops.XRPAmount)
+	AdjustDropsDestroyed(drops drops.XRPAmount) error
 
 	// ForEach iterates over all state entries
 	// If fn returns false, iteration stops early
@@ -252,7 +252,7 @@ type LedgerView interface {
 	// applied to the current open ledger. Used by invariant checkers and duplicate
 	// transaction detection.
 	// Reference: rippled ReadView::txExists()
-	TxExists(txID [32]byte) bool
+	TxExists(txID [32]byte) (bool, error)
 
 	// Rules returns the amendment rules for this view.
 	// Returns nil if rules are not available.

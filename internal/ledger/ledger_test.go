@@ -76,7 +76,10 @@ func newParentAt(t *testing.T, parentSeq uint32, resolution uint32, closeAgree b
 	if err != nil {
 		t.Fatalf("genesis.Create: %v", err)
 	}
-	parent := FromGenesis(res.Header, res.StateMap, res.TxMap, drops.Fees{})
+	parent, err := FromGenesis(res.Header, res.StateMap, res.TxMap, drops.Fees{})
+	if err != nil {
+		t.Fatalf("FromGenesis: %v", err)
+	}
 
 	// Walk forward until we hit parentSeq. Genesis is seq 1.
 	for parent.Sequence() < parentSeq {
@@ -175,7 +178,10 @@ func TestNewOpenRejectsParentWithoutSuccessor(t *testing.T) {
 	if err != nil {
 		t.Fatalf("genesis.Create: %v", err)
 	}
-	parent := FromGenesis(result.Header, result.StateMap, result.TxMap, drops.Fees{})
+	parent, err := FromGenesis(result.Header, result.StateMap, result.TxMap, drops.Fees{})
+	if err != nil {
+		t.Fatalf("FromGenesis: %v", err)
+	}
 	parent.header.LedgerIndex = ^uint32(0)
 
 	if _, err = NewOpen(parent, time.Now()); err == nil {
@@ -265,10 +271,8 @@ func newOpenChild(t *testing.T) *Ledger {
 	return child
 }
 
-// TestLedger_Close_DropsUnderflow_Wrap guards issue #605: when
-// destroyed drops exceed the header total, Close must hard-stop
-// instead of letting the uint64 subtraction wrap to a huge value
-// that silently forks the chain.
+// TestLedger_Close_DropsUnderflow_Wrap verifies that destroyed drops cannot
+// underflow the unsigned total supply during close.
 func TestLedger_Close_DropsUnderflow_Wrap(t *testing.T) {
 	child := newOpenChild(t)
 	child.header.Drops = 100

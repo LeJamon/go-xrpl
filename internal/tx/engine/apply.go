@@ -582,7 +582,9 @@ func (e *Engine) commitPreclaimTec(ctx context.Context, tx txcore.Transaction, t
 		return r, st.chargedFee
 	}
 
-	tecTable.AdjustDropsDestroyed(drops.XRPAmount(st.chargedFee))
+	if err := tecTable.AdjustDropsDestroyed(drops.XRPAmount(st.chargedFee)); err != nil {
+		return ter.TefINTERNAL, 0
+	}
 	generatedMeta, applyErr := tecTable.Apply()
 	if applyErr != nil {
 		return ter.TefINTERNAL, 0

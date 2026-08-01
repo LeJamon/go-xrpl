@@ -302,7 +302,7 @@ type TxPool interface {
 
 	BuildTxSet(txs [][]byte) (TxSet, error)
 
-	HasTx(id TxID) bool
+	HasTx(id TxID) (bool, error)
 
 	GetTx(id TxID) ([]byte, error)
 }

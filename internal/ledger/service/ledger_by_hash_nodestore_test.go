@@ -104,7 +104,7 @@ func TestService_GetLedgerByHashLoadsEvictedLedgerFromNodeStore(t *testing.T) {
 		Base:      drops.XRPAmount(baseFee),
 		Reserve:   drops.XRPAmount(reserveBase),
 		Increment: drops.XRPAmount(reserveIncrement),
-	}, got.GetFees())
+	}, got.Fees())
 
 	gotStateHash, err := got.StateMapHash()
 	require.NoError(t, err)

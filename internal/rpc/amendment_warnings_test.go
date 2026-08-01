@@ -43,10 +43,10 @@ func (v *stubAmendmentsView) ForEach(func(key [32]byte, data []byte) bool) error
 func (v *stubAmendmentsView) Succ([32]byte) ([32]byte, []byte, bool, error) {
 	return [32]byte{}, nil, false, nil
 }
-func (v *stubAmendmentsView) AdjustDropsDestroyed(drops.XRPAmount) {}
-func (v *stubAmendmentsView) TxExists([32]byte) bool               { return false }
-func (v *stubAmendmentsView) Rules() *amendment.Rules              { return nil }
-func (v *stubAmendmentsView) LedgerSeq() uint32                    { return 0 }
+func (v *stubAmendmentsView) AdjustDropsDestroyed(drops.XRPAmount) error { return nil }
+func (v *stubAmendmentsView) TxExists([32]byte) (bool, error)            { return false, nil }
+func (v *stubAmendmentsView) Rules() *amendment.Rules                    { return nil }
+func (v *stubAmendmentsView) LedgerSeq() uint32                          { return 0 }
 
 // mockServerInfoWarnings adds a live amendment table to the server_info mock so
 // buildAmendmentWarnings can read firstUnsupportedExpected.

@@ -481,12 +481,15 @@ func (s *Service) Start() (err error) {
 	}
 
 	// Fees are read dynamically from the FeeSettings SLE by readFeesFromLedger.
-	genesisLedger := ledger.FromGenesis(
+	genesisLedger, err := ledger.FromGenesis(
 		genesisResult.Header,
 		genesisResult.StateMap,
 		genesisResult.TxMap,
 		drops.Fees{},
 	)
+	if err != nil {
+		return fmt.Errorf("failed to construct genesis ledger: %w", err)
+	}
 	if s.shamapFamily != nil {
 		genesisLedger.SetSHAMapFamily(s.shamapFamily)
 	}
@@ -947,12 +950,12 @@ func (s *Service) OpenLedgerTxHashes() [][32]byte {
 
 // OpenLedgerHasTx reports whether the persistent open view contains
 // the tx hash. Used by peer-protocol HasTx replies.
-func (s *Service) OpenLedgerHasTx(hash [32]byte) bool {
+func (s *Service) OpenLedgerHasTx(hash [32]byte) (bool, error) {
 	s.mu.RLock()
 	ov := s.openLedgerView
 	s.mu.RUnlock()
 	if ov == nil {
-		return false
+		return false, nil
 	}
 	return ov.Current().TxExists(hash)
 }

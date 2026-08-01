@@ -424,8 +424,9 @@ func (s *PaymentSandbox) getDeletedFinalState(key [32]byte) []byte {
 }
 
 // AdjustDropsDestroyed records XRP that has been destroyed
-func (s *PaymentSandbox) AdjustDropsDestroyed(drops drops.XRPAmount) {
+func (s *PaymentSandbox) AdjustDropsDestroyed(drops drops.XRPAmount) error {
 	s.dropsDestroyed = s.dropsDestroyed.Add(drops)
+	return nil
 }
 
 func (s *PaymentSandbox) ApplyAtomically(apply func(ledgercore.Writer) error) error {
@@ -438,14 +439,14 @@ func (s *PaymentSandbox) ApplyAtomically(apply func(ledgercore.Writer) error) er
 
 // TxExists delegates to the parent sandbox or underlying view.
 // Reference: rippled ReadView::txExists()
-func (s *PaymentSandbox) TxExists(txID [32]byte) bool {
+func (s *PaymentSandbox) TxExists(txID [32]byte) (bool, error) {
 	if s.parent != nil {
 		return s.parent.TxExists(txID)
 	}
 	if s.view != nil {
 		return s.view.TxExists(txID)
 	}
-	return false
+	return false, nil
 }
 
 // Rules returns the amendment rules, delegating to parent or view.
@@ -1104,7 +1105,9 @@ func (s *PaymentSandbox) ApplyToView(view tx.LedgerView) error {
 
 	// Apply drops destroyed
 	if s.dropsDestroyed.Drops() != 0 {
-		view.AdjustDropsDestroyed(s.dropsDestroyed)
+		if err := view.AdjustDropsDestroyed(s.dropsDestroyed); err != nil {
+			return err
+		}
 	}
 
 	return nil
