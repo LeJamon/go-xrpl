@@ -18,12 +18,12 @@ type mptArmsView struct{ data map[[32]byte][]byte }
 
 func newMPTArmsView() *mptArmsView { return &mptArmsView{data: make(map[[32]byte][]byte)} }
 
-func (m *mptArmsView) Read(k keylet.Keylet) ([]byte, error)      { return m.data[k.Key], nil }
-func (m *mptArmsView) Exists(k keylet.Keylet) (bool, error)      { _, ok := m.data[k.Key]; return ok, nil }
-func (m *mptArmsView) Insert(k keylet.Keylet, data []byte) error { m.data[k.Key] = data; return nil }
-func (m *mptArmsView) Update(k keylet.Keylet, data []byte) error { m.data[k.Key] = data; return nil }
-func (m *mptArmsView) Erase(k keylet.Keylet) error               { delete(m.data, k.Key); return nil }
-func (m *mptArmsView) AdjustDropsDestroyed(drops.XRPAmount)      {}
+func (m *mptArmsView) Read(k keylet.Keylet) ([]byte, error)       { return m.data[k.Key], nil }
+func (m *mptArmsView) Exists(k keylet.Keylet) (bool, error)       { _, ok := m.data[k.Key]; return ok, nil }
+func (m *mptArmsView) Insert(k keylet.Keylet, data []byte) error  { m.data[k.Key] = data; return nil }
+func (m *mptArmsView) Update(k keylet.Keylet, data []byte) error  { m.data[k.Key] = data; return nil }
+func (m *mptArmsView) Erase(k keylet.Keylet) error                { delete(m.data, k.Key); return nil }
+func (m *mptArmsView) AdjustDropsDestroyed(drops.XRPAmount) error { return nil }
 func (m *mptArmsView) ForEach(fn func(key [32]byte, data []byte) bool) error {
 	for k, v := range m.data {
 		if !fn(k, v) {
@@ -35,9 +35,9 @@ func (m *mptArmsView) ForEach(fn func(key [32]byte, data []byte) bool) error {
 func (m *mptArmsView) Succ([32]byte) ([32]byte, []byte, bool, error) {
 	return [32]byte{}, nil, false, nil
 }
-func (m *mptArmsView) TxExists([32]byte) bool  { return false }
-func (m *mptArmsView) Rules() *amendment.Rules { return nil }
-func (m *mptArmsView) LedgerSeq() uint32       { return 0 }
+func (m *mptArmsView) TxExists([32]byte) (bool, error) { return false, nil }
+func (m *mptArmsView) Rules() *amendment.Rules         { return nil }
+func (m *mptArmsView) LedgerSeq() uint32               { return 0 }
 
 func rulesWithFix(on bool) *amendment.Rules {
 	b := amendment.NewRulesBuilder().FromPreset(amendment.PresetAllSupported)

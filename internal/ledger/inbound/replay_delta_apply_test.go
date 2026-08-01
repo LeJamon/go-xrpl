@@ -153,7 +153,7 @@ func TestReplayDelta_Apply_OrderedByIndex(t *testing.T) {
 	require.NoError(t, err)
 	txMap, err := parent.TxMapSnapshot()
 	require.NoError(t, err)
-	rd.result, err = ledger.NewFromHeader(resHdr, stateMap, txMap, parent.GetFees())
+	rd.result, err = ledger.NewFromHeader(resHdr, stateMap, txMap, parent.Fees())
 	require.NoError(t, err)
 	// Purposely-malformed TxBytes — distinguishable per index so the
 	// returned error tells us which tx Apply tried first.
@@ -225,7 +225,7 @@ func TestReplayDelta_Apply_RequiresExpectedBatchInnerLeaves(t *testing.T) {
 	rd := NewReplayDelta([32]byte{}, 7, parent, nil)
 	rd.mu.Lock()
 	rd.state = StateReplayReady
-	rd.result, err = ledger.NewFromHeader(resHdr, stateMap, txMap, parent.GetFees())
+	rd.result, err = ledger.NewFromHeader(resHdr, stateMap, txMap, parent.Fees())
 	require.NoError(t, err)
 	rd.txs = []DecodedTx{{
 		Index:     0,

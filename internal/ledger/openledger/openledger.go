@@ -151,12 +151,18 @@ func (o *OpenLedger) Accept(
 	}
 	// Force OpenLedger mode so we don't inherit a stray BuildLedgerMode from cfg.
 	applyCfg.Mode = OpenLedgerMode
+	var stagedRetries []PendingTx
+	retryTarget := retries
+	if retries != nil {
+		stagedRetries = append([]PendingTx(nil), (*retries)...)
+		retryTarget = &stagedRetries
+	}
 
 	// 1. retriesFirst — replay disputed/held txs first, OUTSIDE modifyMu.
-	if retriesFirst && retries != nil && len(*retries) > 0 {
-		held := append([]PendingTx(nil), (*retries)...)
-		*retries = (*retries)[:0]
-		if err := ApplyTxs(next, held, retries, applyCfg); err != nil {
+	if retriesFirst && retryTarget != nil && len(*retryTarget) > 0 {
+		held := append([]PendingTx(nil), (*retryTarget)...)
+		*retryTarget = (*retryTarget)[:0]
+		if err := ApplyTxs(next, held, retryTarget, applyCfg); err != nil {
 			return err
 		}
 	}
@@ -170,8 +176,21 @@ func (o *OpenLedger) Accept(
 	curTxs := collectTxs(o.current, o.logger)
 	o.currentMu.RUnlock()
 	if len(curTxs) > 0 {
-		if err := ApplyTxs(next, curTxs, retries, applyCfg); err != nil {
+		if err := ApplyTxs(next, curTxs, retryTarget, applyCfg); err != nil {
 			return err
+		}
+	}
+	eligibleLocals := locals
+	if len(locals) > 0 {
+		eligibleLocals = make([]PendingTx, 0, len(locals))
+		for _, lt := range locals {
+			exists, err := next.TxExists(lt.Hash)
+			if err != nil {
+				return err
+			}
+			if !exists {
+				eligibleLocals = append(eligibleLocals, lt)
+			}
 		}
 	}
 
@@ -182,14 +201,11 @@ func (o *OpenLedger) Accept(
 	}
 
 	// 4. Replay locals via TxQ.Apply so an under-fee local lands in the queue.
-	if len(locals) > 0 {
+	if len(eligibleLocals) > 0 {
 		if queue != nil {
 			viewCfg := applyCfg
 			adapter := NewTxqAdapter(next, viewCfg)
-			for _, lt := range locals {
-				if next.TxExists(lt.Hash) {
-					continue
-				}
+			for _, lt := range eligibleLocals {
 				parsed, perr := tx.ParseFromBinary(lt.Blob)
 				if perr != nil {
 					if o.logger != nil {
@@ -200,7 +216,7 @@ func (o *OpenLedger) Accept(
 				parsed.SetRawBytes(lt.Blob)
 				_ = queue.Apply(adapter, parsed, lt.Hash, lt.Account)
 			}
-		} else if err := ApplyTxs(next, locals, retries, applyCfg); err != nil {
+		} else if err := applyTxs(next, eligibleLocals, retryTarget, applyCfg, false); err != nil {
 			return err
 		}
 	}
@@ -230,6 +246,9 @@ func (o *OpenLedger) Accept(
 	o.current = next
 	o.cachedTxs = nil
 	o.currentMu.Unlock()
+	if retries != nil {
+		*retries = stagedRetries
+	}
 	return nil
 }
 
@@ -366,7 +385,13 @@ func (o *OpenLedger) SubmitDetailed(ptx PendingTx, cfg ApplyConfig, queue *txq.T
 	out.Changed = o.Modify(func(view *ledger.Ledger) bool {
 		// Pre-filter: tx already in view → tefALREADY, so callers can report
 		// the duplicate distinctly from a generic failure.
-		if view.TxExists(ptx.Hash) {
+		exists, err := view.TxExists(ptx.Hash)
+		if err != nil {
+			out.Result = ter.TefEXCEPTION
+			out.Message = ter.TefEXCEPTION.Message()
+			return false
+		}
+		if exists {
 			out.Class = ResultFailure
 			out.Result = ter.TefALREADY
 			out.Message = ter.TefALREADY.Message()

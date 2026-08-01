@@ -52,6 +52,13 @@ func TestAdg_GetValidatedLedgerHash(t *testing.T) {
 	assert.NotEqual(t, consensus.LedgerID{}, h)
 }
 
+func TestAdaptorHasTxWithoutLedgerService(t *testing.T) {
+	a := New(Config{})
+	exists, err := a.HasTx(consensus.TxID{0x01})
+	require.NoError(t, err)
+	assert.False(t, exists)
+}
+
 func TestAdg_BuildLedger(t *testing.T) {
 	a := newTestAdaptor(t)
 	svc := a.ledgerService

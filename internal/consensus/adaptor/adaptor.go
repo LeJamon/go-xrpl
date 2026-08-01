@@ -47,6 +47,7 @@ type Adaptor struct {
 	mu sync.Mutex
 
 	ledgerService *service.Service
+	txLookup      openLedgerTxLookup
 	sender        consensusNetwork
 	identity      *ValidatorIdentity
 
@@ -197,6 +198,10 @@ type Adaptor struct {
 	announcedSets   map[consensus.TxSetID]struct{}
 
 	logger *slog.Logger
+}
+
+type openLedgerTxLookup interface {
+	OpenLedgerHasTx([32]byte) (bool, error)
 }
 
 // goxrplServerVersionTag identifies go-xrpl in the sfServerVersion field.
@@ -393,9 +398,14 @@ func New(cfg Config) *Adaptor {
 	if cfg.Identity != nil && len(trustedMasterKeys) > 0 {
 		negUNLVoter = negativeunlvote.NewVoter(cfg.Identity.NodeID)
 	}
+	var txLookup openLedgerTxLookup
+	if cfg.LedgerService != nil {
+		txLookup = cfg.LedgerService
+	}
 
 	a := &Adaptor{
 		ledgerService:     cfg.LedgerService,
+		txLookup:          txLookup,
 		sender:            sender,
 		identity:          cfg.Identity,
 		trustedValidators: cfg.Validators,
@@ -815,11 +825,11 @@ func (a *Adaptor) BuildTxSet(txs [][]byte) (consensus.TxSet, error) {
 
 // HasTx reports whether the persistent open view contains this tx.
 // Used by the peer protocol for HaveSet / txSet-acquire negotiation.
-func (a *Adaptor) HasTx(id consensus.TxID) bool {
-	if a.ledgerService == nil {
-		return false
+func (a *Adaptor) HasTx(id consensus.TxID) (bool, error) {
+	if a.txLookup == nil {
+		return false, nil
 	}
-	return a.ledgerService.OpenLedgerHasTx([32]byte(id))
+	return a.txLookup.OpenLedgerHasTx([32]byte(id))
 }
 
 // GetTx returns the raw tx blob if it is in the persistent open view.

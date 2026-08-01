@@ -762,7 +762,7 @@ func (r *ReplayDelta) Apply(engineCfg tx.EngineConfig) (derived *ledger.Ledger, 
 		// subtracts dropsDestroyed accumulated during apply.
 		Drops: r.parent.TotalDrops(),
 	}
-	child, err := ledger.NewOpenWithHeader(openHdr, stateMap, txMap, r.parent.GetFees())
+	child, err := ledger.NewOpenWithHeader(openHdr, stateMap, txMap, r.parent.Fees())
 	if err != nil {
 		return nil, fmt.Errorf("construct replay ledger: %w", err)
 	}

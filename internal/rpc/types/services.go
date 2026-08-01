@@ -914,8 +914,8 @@ type LedgerStateView interface {
 	Erase(k keylet.Keylet) error
 	ForEach(fn func(key [32]byte, data []byte) bool) error
 	Succ(key [32]byte) ([32]byte, []byte, bool, error)
-	AdjustDropsDestroyed(d drops.XRPAmount)
-	TxExists(txID [32]byte) bool
+	AdjustDropsDestroyed(d drops.XRPAmount) error
+	TxExists(txID [32]byte) (bool, error)
 	Rules() *amendment.Rules
 	LedgerSeq() uint32
 }

@@ -50,7 +50,9 @@ func makeGenesisLedger(t *testing.T) *ledger.Ledger {
 	t.Helper()
 	res, err := genesis.Create(genesis.DefaultConfig())
 	require.NoError(t, err)
-	return ledger.FromGenesis(res.Header, res.StateMap, res.TxMap, drops.Fees{})
+	l, err := ledger.FromGenesis(res.Header, res.StateMap, res.TxMap, drops.Fees{})
+	require.NoError(t, err)
+	return l
 }
 
 // makeClosedLedgerWithTxs builds a fresh open ledger on top of genesis,

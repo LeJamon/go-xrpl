@@ -445,8 +445,8 @@ func (a *mockAdaptor) OnUNLChange(upcomingSeq uint32, nowTrusted []consensus.Nod
 	})
 }
 
-func (a *mockAdaptor) HasTx(id consensus.TxID) bool {
-	return false
+func (a *mockAdaptor) HasTx(id consensus.TxID) (bool, error) {
+	return false, nil
 }
 
 func (a *mockAdaptor) GetTx(id consensus.TxID) ([]byte, error) {

@@ -2,19 +2,38 @@ package shamap
 
 import (
 	"context"
+	"errors"
 	"fmt"
 )
 
 // SnapshotMutable returns a structurally-shared copy that may be modified.
 // See snapshot for the sharing and flushing semantics.
 func (sm *SHAMap) SnapshotMutable() (*SHAMap, error) {
-	return sm.snapshot(true)
+	return sm.snapshot(context.Background(), true, nil)
 }
 
 // SnapshotImmutable returns a read-only structurally-shared copy.
 // See snapshot for the sharing and flushing semantics.
 func (sm *SHAMap) SnapshotImmutable() (*SHAMap, error) {
-	return sm.snapshot(false)
+	return sm.SnapshotImmutableContext(context.Background())
+}
+
+// SnapshotImmutableContext is SnapshotImmutable with caller-controlled
+// cancellation for dirty-node persistence.
+func (sm *SHAMap) SnapshotImmutableContext(ctx context.Context) (*SHAMap, error) {
+	return sm.snapshot(ctx, false, nil)
+}
+
+// SnapshotMutableWithLedgerSeq returns a mutable snapshot stamped with
+// ledgerSeq without changing the source map's sequence metadata.
+func (sm *SHAMap) SnapshotMutableWithLedgerSeq(ledgerSeq uint32) (*SHAMap, error) {
+	return sm.snapshot(context.Background(), true, &ledgerSeq)
+}
+
+// SnapshotImmutableWithLedgerSeqContext returns an immutable snapshot stamped
+// with ledgerSeq without changing the source map's sequence metadata.
+func (sm *SHAMap) SnapshotImmutableWithLedgerSeqContext(ctx context.Context, ledgerSeq uint32) (*SHAMap, error) {
+	return sm.snapshot(ctx, false, &ledgerSeq)
 }
 
 // snapshot returns a structurally-shared copy of the SHAMap in O(1).
@@ -30,15 +49,20 @@ func (sm *SHAMap) SnapshotImmutable() (*SHAMap, error) {
 // Flushing a structurally-shared subtree from either map is safe: the
 // dirty flag is atomic and node hashes are read and written under each
 // node's own lock.
-func (sm *SHAMap) snapshot(mutable bool) (*SHAMap, error) {
+func (sm *SHAMap) snapshot(ctx context.Context, mutable bool, ledgerSeq *uint32) (*SHAMap, error) {
 	sm.tree.mu.Lock()
 	defer sm.tree.mu.Unlock()
 	sm.backing.mu.RLock()
 	defer sm.backing.mu.RUnlock()
+	if ledgerSeq != nil {
+		sourceLedgerSeq := sm.tree.ledgerSeq
+		sm.tree.ledgerSeq = *ledgerSeq
+		defer func() { sm.tree.ledgerSeq = sourceLedgerSeq }()
+	}
 
 	if sm.backing.access.available() {
 		if err := sm.storeDirtyLocked(func(entries []FlushEntry) error {
-			return sm.backing.access.storeBatch(context.Background(), entries)
+			return sm.backing.access.storeBatch(ctx, entries)
 		}); err != nil {
 			return nil, fmt.Errorf("failed to store dirty nodes: %w", err)
 		}
@@ -56,6 +80,92 @@ func (sm *SHAMap) MutableFork() (*SHAMap, error) {
 	sm.backing.mu.RLock()
 	defer sm.backing.mu.RUnlock()
 	return sm.snapshotLocked(true)
+}
+
+// DetachedMutable returns a mutable copy with an independent in-memory tree.
+// Every loaded node and item is deep-cloned, while unloaded backed branches
+// remain represented by their stored hashes. The operation does not flush the
+// source, and either map may subsequently be mutated or persisted through the
+// retained backing independently.
+func (sm *SHAMap) DetachedMutable() (*SHAMap, error) {
+	sm.tree.mu.RLock()
+	defer sm.tree.mu.RUnlock()
+	sm.backing.mu.RLock()
+	defer sm.backing.mu.RUnlock()
+
+	if sm.tree.state == stateInvalid {
+		return nil, fmt.Errorf("%w: cannot detach invalid map", ErrInvalidState)
+	}
+
+	root, err := cloneLoadedInner(sm.tree.root)
+	if err != nil {
+		return nil, fmt.Errorf("clone loaded tree: %w", err)
+	}
+
+	out := &SHAMap{
+		tree: treeState{
+			root:      root,
+			mapType:   sm.tree.mapType,
+			state:     stateModifying,
+			ledgerSeq: sm.tree.ledgerSeq,
+			full:      sm.tree.full,
+		},
+		backing: backingState{
+			access:    sm.backing.access,
+			fullBelow: sm.backing.fullBelow,
+		},
+	}
+	out.tree.cachedSize.Store(-1)
+	return out, nil
+}
+
+func cloneLoadedInner(source *innerNode) (*innerNode, error) {
+	if source == nil {
+		return nil, errors.New("nil inner node")
+	}
+
+	source.mu.RLock()
+	children := source.children
+	clone := &innerNode{
+		hashes:       source.hashes,
+		isBranch:     source.isBranch,
+		fullBelowGen: source.fullBelowGen,
+	}
+	clone.hash = source.hash
+	clone.SetDirty(source.IsDirty())
+	source.mu.RUnlock()
+
+	for branch, child := range children {
+		if child == nil {
+			continue
+		}
+		childClone, err := cloneLoadedNode(child)
+		if err != nil {
+			return nil, fmt.Errorf("branch %d: %w", branch, err)
+		}
+		clone.children[branch] = childClone
+	}
+	return clone, nil
+}
+
+func cloneLoadedNode(source mapNode) (mapNode, error) {
+	switch node := source.(type) {
+	case *innerNode:
+		return cloneLoadedInner(node)
+	case *leafNode:
+		node.mu.RLock()
+		defer node.mu.RUnlock()
+		item, err := node.item.Clone()
+		if err != nil {
+			return nil, fmt.Errorf("clone leaf item: %w", err)
+		}
+		clone := &leafNode{item: item, kind: node.kind}
+		clone.hash = node.hash
+		clone.SetDirty(node.IsDirty())
+		return clone, nil
+	default:
+		return nil, fmt.Errorf("unsupported loaded node type %T", source)
+	}
 }
 
 // snapshotLocked returns a shared snapshot while the caller holds the tree and

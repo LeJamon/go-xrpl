@@ -632,7 +632,7 @@ func TestStoppedPeerRejectsInboundAndOutboundWork(t *testing.T) {
 	}
 	peer.receiveProposal(proposal, other.ID)
 	peer.receiveTx(Tx{ID: 44}.Bytes(), nil)
-	if len(peer.seenProposals) != 0 || peer.HasTx(Tx{ID: 44}.TxID()) {
+	if len(peer.seenProposals) != 0 || peerHasTx(t, peer, Tx{ID: 44}.TxID()) {
 		t.Fatal("stopped peer accepted inbound work")
 	}
 	if err := sim.Stop(); err != nil {
@@ -819,7 +819,7 @@ func TestPeerSuppressesTransactionAlreadyInLCL(t *testing.T) {
 	}
 	peer.OnConsensusReached(ledger, nil, 0)
 	peer.receiveTx(tx.Bytes(), nil)
-	if peer.HasTx(tx.TxID()) {
+	if peerHasTx(t, peer, tx.TxID()) {
 		t.Fatal("transaction already in the LCL re-entered the open ledger")
 	}
 }
@@ -858,7 +858,7 @@ func TestPeerBuildLedgerUsesCumulativeTxSetIdentity(t *testing.T) {
 	peer.openTxs[tx.TxID()] = tx.Bytes()
 	peer.mu.Unlock()
 	peer.OnConsensusReached(ledger, nil, 0)
-	if peer.HasTx(tx.TxID()) {
+	if peerHasTx(t, peer, tx.TxID()) {
 		t.Fatal("accepted cumulative transaction remained in the open set")
 	}
 }
@@ -937,4 +937,13 @@ func startIdlePeers(t *testing.T, peers ...*Peer) {
 			t.Fatalf("start peer %d: %v", peer.ID, err)
 		}
 	}
+}
+
+func peerHasTx(t *testing.T, peer *Peer, id consensus.TxID) bool {
+	t.Helper()
+	exists, err := peer.HasTx(id)
+	if err != nil {
+		t.Fatalf("HasTx(%x): %v", id, err)
+	}
+	return exists
 }

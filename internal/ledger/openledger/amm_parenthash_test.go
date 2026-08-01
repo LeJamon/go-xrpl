@@ -80,7 +80,7 @@ func TestApplyTxs_BuildLedgerMode_AMMCreateUsesParentHash(t *testing.T) {
 		t.Fatalf("ApplyTxs: %v", err)
 	}
 
-	if !view.TxExists(pt.Hash) {
+	if !ledgerTxExists(t, view, pt.Hash) {
 		t.Fatal("AMMCreate did not commit to the view")
 	}
 	if ok, _ := view.Exists(ammKeylet); !ok {

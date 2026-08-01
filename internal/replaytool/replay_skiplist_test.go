@@ -115,7 +115,10 @@ func walkGenesisTo(t *testing.T, target uint32) *ledger.Ledger {
 	if err != nil {
 		t.Fatalf("genesis.Create: %v", err)
 	}
-	parent := ledger.FromGenesis(res.Header, res.StateMap, res.TxMap, drops.Fees{})
+	parent, err := ledger.FromGenesis(res.Header, res.StateMap, res.TxMap, drops.Fees{})
+	if err != nil {
+		t.Fatalf("ledger.FromGenesis: %v", err)
+	}
 	for parent.Sequence() < target {
 		closeTime := parent.CloseTime().Add(10 * time.Second)
 		child, err := ledger.NewOpen(parent, closeTime)

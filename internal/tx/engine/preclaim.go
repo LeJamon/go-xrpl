@@ -214,7 +214,11 @@ func (e *Engine) checkPriorTxAndLastLedger(common *txcore.Common, account *state
 	// Duplicate transaction detection — if this transaction hash already exists in the
 	// view (already applied to this ledger), return tefALREADY.
 	// Reference: rippled Transactor::checkPriorTxAndLastLedger — ctx.view.txExists()
-	if e.view.TxExists(txHash) {
+	exists, err := e.view.TxExists(txHash)
+	if err != nil {
+		return ter.TefEXCEPTION
+	}
+	if exists {
 		return ter.TefALREADY
 	}
 	return ter.TesSUCCESS

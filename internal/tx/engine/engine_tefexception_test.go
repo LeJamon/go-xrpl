@@ -1,6 +1,7 @@
 package engine
 
 import (
+	"errors"
 	"testing"
 	"time"
 
@@ -104,7 +105,10 @@ func TestBlockProcessor_ApplyPanic_BecomesErrorAndContinues(t *testing.T) {
 	if err != nil {
 		t.Fatalf("create genesis: %v", err)
 	}
-	parent := ledger.FromGenesis(genesisResult.Header, genesisResult.StateMap, genesisResult.TxMap, drops.Fees{})
+	parent, err := ledger.FromGenesis(genesisResult.Header, genesisResult.StateMap, genesisResult.TxMap, drops.Fees{})
+	if err != nil {
+		t.Fatalf("create genesis ledger: %v", err)
+	}
 	view, err := ledger.NewOpen(parent, time.Unix(0, 0))
 	if err != nil {
 		t.Fatalf("create open ledger: %v", err)
@@ -136,9 +140,10 @@ func TestBlockProcessor_ApplyPanic_BecomesErrorAndContinues(t *testing.T) {
 type txExistsView struct {
 	*mockBaseView
 	existing [32]byte
+	err      error
 }
 
-func (v txExistsView) TxExists(h [32]byte) bool { return h == v.existing }
+func (v txExistsView) TxExists(h [32]byte) (bool, error) { return h == v.existing, v.err }
 
 // TestApply_DuplicateTxId_YieldsTefAlready: inserting a tx id already present in
 // the view fails that one tx with tefALREADY (not applied, no crash), leaving the
@@ -170,5 +175,27 @@ func TestApply_DuplicateTxId_YieldsTefAlready(t *testing.T) {
 	}
 	if res.Applied {
 		t.Fatalf("a duplicate tx must not be applied")
+	}
+}
+
+func TestApply_TxMembershipErrorYieldsTefException(t *testing.T) {
+	base := newMockBaseView()
+	fundRecoveryAccount(t, base, 1_000_000, 1)
+
+	lookupErr := errors.New("transaction membership failed")
+	view := txExistsView{mockBaseView: base, err: lookupErr}
+	e := NewEngine(view, txcore.EngineConfig{
+		BaseFee:                   10,
+		LedgerSequence:            100,
+		Rules:                     amendment.AllSupportedRules(),
+		SkipSignatureVerification: true,
+	})
+
+	res := e.Apply(recoveryTx(10, 1))
+	if res.Result != ter.TefEXCEPTION {
+		t.Fatalf("result = %s, want tefEXCEPTION", res.Result)
+	}
+	if res.Applied {
+		t.Fatal("transaction with a failed membership lookup was applied")
 	}
 }

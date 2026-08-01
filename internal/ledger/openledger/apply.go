@@ -199,6 +199,10 @@ func applyOneSingle(view *ledger.Ledger, transaction tx.Transaction, blob []byte
 }
 
 func ApplyTxs(view *ledger.Ledger, txs []PendingTx, retries *[]PendingTx, cfg ApplyConfig) error {
+	return applyTxs(view, txs, retries, cfg, true)
+}
+
+func applyTxs(view *ledger.Ledger, txs []PendingTx, retries *[]PendingTx, cfg ApplyConfig, checkMembership bool) error {
 	if view == nil {
 		return errors.New("openledger.ApplyTxs: view is nil")
 	}
@@ -218,6 +222,7 @@ func ApplyTxs(view *ledger.Ledger, txs []PendingTx, retries *[]PendingTx, cfg Ap
 	}
 
 	parsed := make([]tx.Transaction, len(txs))
+	eligible := make([]bool, len(txs))
 	for i, ptx := range txs {
 		t, err := tx.ParseFromBinary(ptx.Blob)
 		if err != nil {
@@ -225,6 +230,15 @@ func ApplyTxs(view *ledger.Ledger, txs []PendingTx, retries *[]PendingTx, cfg Ap
 		}
 		t.SetRawBytes(ptx.Blob)
 		parsed[i] = t
+		if checkMembership {
+			exists, err := view.TxExists(ptx.Hash)
+			if err != nil {
+				return fmt.Errorf("openledger.ApplyTxs: check transaction %x: %w", ptx.Hash, err)
+			}
+			eligible[i] = !exists
+		} else {
+			eligible[i] = true
+		}
 	}
 
 	// retrySet tracks the canonical retry queue (rippled's `OrderedTxs
@@ -274,10 +288,7 @@ func ApplyTxs(view *ledger.Ledger, txs []PendingTx, retries *[]PendingTx, cfg Ap
 	bp := buildEngine(true, cfg.SkipSignatureVerification)
 	initialChanges := 0
 	for i, ptx := range txs {
-		if parsed[i] == nil {
-			continue
-		}
-		if view.TxExists(ptx.Hash) {
+		if parsed[i] == nil || !eligible[i] {
 			continue
 		}
 		class, err := applyAndClassify(bp, parsed[i], ptx.Blob, cfg.Mode, logger)

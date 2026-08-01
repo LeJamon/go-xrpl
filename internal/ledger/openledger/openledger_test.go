@@ -129,7 +129,7 @@ func TestOpenLedger_Submit_AppliesAndPublishes(t *testing.T) {
 	if post == pre {
 		t.Errorf("Current() pointer unchanged after successful Submit")
 	}
-	if !post.TxExists(pt.Hash) {
+	if !ledgerTxExists(t, post, pt.Hash) {
 		t.Errorf("published view missing submitted tx")
 	}
 	postStateHash, err := post.StateMapHash()
@@ -141,7 +141,7 @@ func TestOpenLedger_Submit_AppliesAndPublishes(t *testing.T) {
 	}
 	// The pre-Submit Current() must not have been mutated (snapshot
 	// isolation — readers of the old pointer keep their view).
-	if pre.TxExists(pt.Hash) {
+	if ledgerTxExists(t, pre, pt.Hash) {
 		t.Errorf("old Current() pointer was mutated — snapshot isolation broken")
 	}
 }
@@ -319,19 +319,6 @@ func itoa(i int) string {
 	return string(b[pos:])
 }
 
-// newClosedFrom returns a fresh closed-shaped Ledger derived from parent
-// via MutableSnapshot, used as the "newLCL" argument to Accept. The
-// state is identical to parent so any tx submitted to the prior open
-// view is still applicable against this new closed ledger.
-func newClosedFrom(t *testing.T, parent *ledger.Ledger) *ledger.Ledger {
-	t.Helper()
-	snap, err := parent.MutableSnapshot()
-	if err != nil {
-		t.Fatalf("MutableSnapshot: %v", err)
-	}
-	return snap
-}
-
 // TestOpenLedger_Accept_ReplaysCurrentTxs verifies that Accept replays
 // the prior current view's transactions onto the new working view.
 // Mirrors OpenLedger::accept (OpenLedger.cpp:96-112).
@@ -381,7 +368,7 @@ func TestOpenLedger_Accept_ReplaysCurrentTxs(t *testing.T) {
 	}
 
 	// New closed ledger sharing state with parent (no tx in its tx map).
-	newClosed := newClosedFrom(t, parent)
+	newClosed := parent
 	var retries []openledger.PendingTx
 
 	if err := ol.Accept(newClosed, nil, false, &retries, cfg, nil, nil, nil); err != nil {
@@ -391,10 +378,10 @@ func TestOpenLedger_Accept_ReplaysCurrentTxs(t *testing.T) {
 		t.Errorf("retries: got %d, want 0", len(retries))
 	}
 	cur := ol.Current()
-	if !cur.TxExists(pt1.Hash) {
+	if !ledgerTxExists(t, cur, pt1.Hash) {
 		t.Errorf("post-Accept Current() missing pay1")
 	}
-	if !cur.TxExists(pt2.Hash) {
+	if !ledgerTxExists(t, cur, pt2.Hash) {
 		t.Errorf("post-Accept Current() missing pay2")
 	}
 	if got, want := cur.Sequence(), newClosed.Sequence()+1; got != want {
@@ -446,7 +433,7 @@ func TestOpenLedger_Accept_NoDoubleApply(t *testing.T) {
 		t.Fatalf("Submit: changed=%v result=%v", changed, result)
 	}
 
-	newClosed := newClosedFrom(t, parent)
+	newClosed := parent
 	var retries []openledger.PendingTx
 
 	// Pass the same pt in `locals` — current replay will commit it to
@@ -463,7 +450,7 @@ func TestOpenLedger_Accept_NoDoubleApply(t *testing.T) {
 	// committed during current-replay) — locals replay must skip the
 	// duplicate.
 	cur := ol.Current()
-	if !cur.TxExists(pt.Hash) {
+	if !ledgerTxExists(t, cur, pt.Hash) {
 		t.Errorf("working view missing txA after Accept")
 	}
 	count := 0
@@ -508,7 +495,7 @@ func TestOpenLedger_Accept_LocalsApplied(t *testing.T) {
 		t.Fatalf("ParsePendingTx: %v", err)
 	}
 
-	newClosed := newClosedFrom(t, parent)
+	newClosed := parent
 	var retries []openledger.PendingTx
 
 	if err := ol.Accept(newClosed, []openledger.PendingTx{ptL}, false, &retries, cfg, nil, nil, nil); err != nil {
@@ -517,7 +504,7 @@ func TestOpenLedger_Accept_LocalsApplied(t *testing.T) {
 	if len(retries) != 0 {
 		t.Errorf("retries: got %d, want 0", len(retries))
 	}
-	if !ol.Current().TxExists(ptL.Hash) {
+	if !ledgerTxExists(t, ol.Current(), ptL.Hash) {
 		t.Errorf("local tx missing from new Current()")
 	}
 }
@@ -566,7 +553,7 @@ func TestOpenLedger_Submit_TecCommits(t *testing.T) {
 	if result != openledger.ResultSuccess {
 		t.Fatalf("Submit result=%v, want ResultSuccess (tec is Success in OpenLedger semantics)", result)
 	}
-	if !ol.Current().TxExists(pt.Hash) {
+	if !ledgerTxExists(t, ol.Current(), pt.Hash) {
 		t.Errorf("Current() missing tec-committed tx after Submit")
 	}
 }
@@ -607,13 +594,13 @@ func TestOpenLedger_Accept_RetriesFirst_ReplaysHeldTx(t *testing.T) {
 		t.Fatalf("ParsePendingTx: %v", err)
 	}
 
-	newClosed := newClosedFrom(t, parent)
+	newClosed := parent
 	retries := []openledger.PendingTx{held}
 
 	if err := ol.Accept(newClosed, nil, true, &retries, cfg, nil, nil, nil); err != nil {
 		t.Fatalf("Accept: %v", err)
 	}
-	if !ol.Current().TxExists(held.Hash) {
+	if !ledgerTxExists(t, ol.Current(), held.Hash) {
 		t.Errorf("held retry tx missing from new Current()")
 	}
 	if len(retries) != 0 {

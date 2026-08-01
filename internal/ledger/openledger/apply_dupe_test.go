@@ -64,10 +64,10 @@ func TestApplyTxs_DuplicateTxId_DroppedThenBuildContinues(t *testing.T) {
 	if len(retries) != 0 {
 		t.Errorf("expected 0 retries, got %d", len(retries))
 	}
-	if !view.TxExists(pt1.Hash) {
+	if !ledgerTxExists(t, view, pt1.Hash) {
 		t.Errorf("pay1 missing from view — build did not commit it")
 	}
-	if !view.TxExists(pt2.Hash) {
+	if !ledgerTxExists(t, view, pt2.Hash) {
 		t.Errorf("pay2 missing from view — build did not continue past the duplicate")
 	}
 	if got := view.TxCount(); got != 2 {

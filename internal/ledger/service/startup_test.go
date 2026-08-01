@@ -246,7 +246,7 @@ func TestService_StartupLoadRejectsLedgerWithoutSuccessor(t *testing.T) {
 	hdr := source.Header()
 	hdr.LedgerIndex = ^uint32(0)
 	hdr.Hash = header.CalculateHash(hdr)
-	maxLedger, err := ledger.NewFromHeader(hdr, stateMap, txMap, source.GetFees())
+	maxLedger, err := ledger.NewFromHeader(hdr, stateMap, txMap, source.Fees())
 	require.NoError(t, err)
 
 	persister, err := New(Config{
@@ -331,7 +331,7 @@ func TestService_StartupReplayStagesParentAndRebuildsTarget(t *testing.T) {
 	openStateRoot, err := svc.GetOpenLedger().StateMapHash()
 	require.NoError(t, err)
 	require.Equal(t, parent.Header().AccountHash, openStateRoot)
-	hasTx, err := svc.GetOpenLedger().HasTransaction(txHash)
+	hasTx, err := svc.GetOpenLedger().TxExists(txHash)
 	require.NoError(t, err)
 	require.True(t, hasTx)
 
@@ -378,7 +378,9 @@ func TestService_StartupReplayOverridesFirstConsensusBuildOnly(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, target.Sequence(), seq)
 	require.Equal(t, targetHash, svc.GetClosedLedger().Hash())
-	require.True(t, svc.OpenLedgerHasTx(extraHash))
+	hasExtra, err := svc.OpenLedgerHasTx(extraHash)
+	require.NoError(t, err)
+	require.True(t, hasExtra)
 
 	parent = svc.GetClosedLedger()
 	seq, err = svc.AcceptConsensusResult(ctx, parent, nil, nil, target.CloseTime().Add(time.Minute), true)

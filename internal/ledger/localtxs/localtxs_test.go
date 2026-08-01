@@ -332,16 +332,35 @@ func TestLocalTxs_SweepReturnsStateReadErrorWithoutMutation(t *testing.T) {
 	}
 }
 
+func TestLocalTxs_SweepReturnsMembershipErrorWithoutMutation(t *testing.T) {
+	pool := localtxs.New()
+	pool.PushBack(10, openledger.PendingTx{
+		Blob:     []byte{1},
+		Hash:     [32]byte{1},
+		Account:  [20]byte{2},
+		Sequence: 1,
+	})
+	wantErr := errors.New("transaction membership failed")
+	err := pool.Sweep(errorSweepView{txErr: wantErr})
+	if !errors.Is(err, wantErr) {
+		t.Fatalf("Sweep error = %v, want %v", err, wantErr)
+	}
+	if got := pool.Size(); got != 1 {
+		t.Fatalf("Size after failed Sweep = %d, want 1", got)
+	}
+}
+
 type errorSweepView struct {
-	err error
+	err   error
+	txErr error
 }
 
 func (v errorSweepView) Sequence() uint32 {
 	return 10
 }
 
-func (v errorSweepView) TxExists([32]byte) bool {
-	return false
+func (v errorSweepView) TxExists([32]byte) (bool, error) {
+	return false, v.txErr
 }
 
 func (v errorSweepView) Read(keylet.Keylet) ([]byte, error) {

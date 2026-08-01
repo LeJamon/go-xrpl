@@ -33,11 +33,12 @@ func newRecordingBaseView() *recordingBaseView {
 	return &recordingBaseView{mockBaseView: newMockBaseView()}
 }
 
-func (r *recordingBaseView) AdjustDropsDestroyed(d drops.XRPAmount) {
+func (r *recordingBaseView) AdjustDropsDestroyed(d drops.XRPAmount) error {
 	if !r.insideAtomic {
 		r.outsideAdjustments++
 	}
 	r.destroyed += d
+	return nil
 }
 
 func (r *recordingBaseView) ApplyAtomically(apply func(ledgercore.Writer) error) error {

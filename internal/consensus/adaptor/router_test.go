@@ -31,6 +31,13 @@ type mockEngine struct {
 	buildingSeq   uint32
 }
 
+func adaptorHasTx(t *testing.T, a *Adaptor, id consensus.TxID) bool {
+	t.Helper()
+	exists, err := a.HasTx(id)
+	require.NoError(t, err)
+	return exists
+}
+
 func (m *mockEngine) Start(context.Context) error              { return nil }
 func (m *mockEngine) Stop() error                              { return nil }
 func (m *mockEngine) StartRound(consensus.RoundID, bool) error { return nil }
@@ -238,7 +245,7 @@ func TestRouterDispatchesTransaction(t *testing.T) {
 	// Transaction should be visible via HasTx now that AddPendingTx
 	// routed it through service.SubmitOpenLedgerTx into the persistent
 	// open view.
-	assert.True(t, a.HasTx(consensus.TxID(txHash)))
+	assert.True(t, adaptorHasTx(t, a, consensus.TxID(txHash)))
 }
 
 // TestRouterDispatchesPreDecodedTransaction covers the path taken by
@@ -283,7 +290,7 @@ func TestRouterDispatchesPreDecodedTransaction(t *testing.T) {
 
 	time.Sleep(50 * time.Millisecond)
 
-	assert.True(t, a.HasTx(consensus.TxID(txHash)),
+	assert.True(t, adaptorHasTx(t, a, consensus.TxID(txHash)),
 		"router must accept a pre-decoded (batch-fanned) transaction")
 }
 

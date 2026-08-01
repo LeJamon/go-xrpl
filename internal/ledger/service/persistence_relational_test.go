@@ -99,7 +99,10 @@ func relationalTestLedger(t *testing.T, hash [32]byte, combined []byte) *ledger.
 	if err != nil {
 		t.Fatalf("genesis.Create: %v", err)
 	}
-	parent := ledger.FromGenesis(g.Header, g.StateMap, g.TxMap, drops.DefaultFees())
+	parent, err := ledger.FromGenesis(g.Header, g.StateMap, g.TxMap, drops.DefaultFees())
+	if err != nil {
+		t.Fatalf("ledger.FromGenesis: %v", err)
+	}
 	l, err := ledger.NewOpen(parent, g.Header.CloseTime.Add(time.Second))
 	if err != nil {
 		t.Fatalf("ledger.NewOpen: %v", err)

@@ -15,6 +15,15 @@ import (
 	"github.com/LeJamon/go-xrpl/internal/tx"
 )
 
+func ledgerTxExists(t *testing.T, view *ledger.Ledger, hash [32]byte) bool {
+	t.Helper()
+	exists, err := view.TxExists(hash)
+	if err != nil {
+		t.Fatalf("TxExists(%x): %v", hash, err)
+	}
+	return exists
+}
+
 // buildSignedBlob constructs a transaction, signs it with the sender's key,
 // and returns the binary blob ready to feed into openledger.ApplyTxs.
 //
@@ -165,10 +174,10 @@ func TestApplyTxs_RetrySettles(t *testing.T) {
 	if len(retries) != 0 {
 		t.Errorf("expected 0 retries, got %d", len(retries))
 	}
-	if !view.TxExists(pt1.Hash) {
+	if !ledgerTxExists(t, view, pt1.Hash) {
 		t.Errorf("pay1 (alice->bob) missing from view after ApplyTxs")
 	}
-	if !view.TxExists(pt2.Hash) {
+	if !ledgerTxExists(t, view, pt2.Hash) {
 		t.Errorf("pay2 (bob->carol) missing from view after ApplyTxs — retry did not settle")
 	}
 }
@@ -227,7 +236,7 @@ func TestApplyTxs_TemMalformed_DroppedNotRetried(t *testing.T) {
 	if len(retries) != 0 {
 		t.Errorf("expected 0 retries for tem/tef-class failure, got %d", len(retries))
 	}
-	if view.TxExists(pt.Hash) {
+	if ledgerTxExists(t, view, pt.Hash) {
 		t.Errorf("malformed tx leaked into view")
 	}
 }
@@ -280,7 +289,7 @@ func TestApplyTxs_OpenLedgerMode_TecCommits(t *testing.T) {
 	if len(retries) != 0 {
 		t.Errorf("OpenLedgerMode: expected 0 retries (tec is Success), got %d", len(retries))
 	}
-	if !view.TxExists(pt.Hash) {
+	if !ledgerTxExists(t, view, pt.Hash) {
 		t.Errorf("OpenLedgerMode: tec tx missing from view — should have committed with metadata")
 	}
 }
@@ -314,7 +323,7 @@ func TestApplyTxs_BuildLedgerMode_TecRetriesThenCommits(t *testing.T) {
 	if len(retries) != 0 {
 		t.Errorf("BuildLedgerMode: expected 0 leftover retries (tec commits on final pass), got %d", len(retries))
 	}
-	if !view.TxExists(pt.Hash) {
+	if !ledgerTxExists(t, view, pt.Hash) {
 		t.Errorf("BuildLedgerMode: tec tx missing from view — final non-retry pass should have committed")
 	}
 }
@@ -384,11 +393,11 @@ func TestApplyTxs_BuildLedgerModeUsesThreeTotalPasses(t *testing.T) {
 	}
 
 	for _, ptx := range []openledger.PendingTx{aliceToBob, bobToCarol, carolToDave} {
-		if !view.TxExists(ptx.Hash) {
+		if !ledgerTxExists(t, view, ptx.Hash) {
 			t.Fatalf("transaction %x did not settle within three passes", ptx.Hash)
 		}
 	}
-	if view.TxExists(daveToErin.Hash) {
+	if ledgerTxExists(t, view, daveToErin.Hash) {
 		t.Fatal("fourth dependency settled; BuildLedgerMode performed more than three total passes")
 	}
 	if len(retries) != 1 || retries[0].Hash != daveToErin.Hash {
@@ -441,11 +450,11 @@ func TestApplyTxsResultDrivenFinalPassSettlesPostFinalDependency(t *testing.T) {
 			if err != nil {
 				t.Fatalf("ApplyTxs: %v", err)
 			}
-			if !view.TxExists(tecTx.Hash) || !view.TxExists(dependent.Hash) {
+			if !ledgerTxExists(t, view, tecTx.Hash) || !ledgerTxExists(t, view, dependent.Hash) {
 				t.Fatalf(
 					"post-final dependency did not settle: tec=%t dependent=%t",
-					view.TxExists(tecTx.Hash),
-					view.TxExists(dependent.Hash),
+					ledgerTxExists(t, view, tecTx.Hash),
+					ledgerTxExists(t, view, dependent.Hash),
 				)
 			}
 			if len(retries) != 0 {
@@ -516,11 +525,11 @@ func TestApplyTxsResultDrivenRetryPasses(t *testing.T) {
 				t.Fatalf("ApplyTxs: %v", err)
 			}
 			for _, ptx := range []openledger.PendingTx{tecTx, bobToCarol, fundBob} {
-				if !view.TxExists(ptx.Hash) {
+				if !ledgerTxExists(t, view, ptx.Hash) {
 					t.Fatalf("transaction %x did not settle", ptx.Hash)
 				}
 			}
-			if view.TxExists(dependent.Hash) {
+			if ledgerTxExists(t, view, dependent.Hash) {
 				t.Fatal("dependency settled after the last available final pass")
 			}
 			if len(retries) != 1 || retries[0].Hash != dependent.Hash {
@@ -588,7 +597,7 @@ func TestApplyTxsPreservesApplyFlagsAcrossPasses(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ApplyTxs: %v", err)
 	}
-	if view.TxExists(pt.Hash) {
+	if ledgerTxExists(t, view, pt.Hash) {
 		t.Fatal("fail-hard tec transaction committed")
 	}
 	if len(retries) != 1 || retries[0].Hash != pt.Hash {
@@ -618,7 +627,7 @@ func TestTxqAdapterDirectApplyPreservesApplyFlags(t *testing.T) {
 	if applied {
 		t.Fatal("TxQ direct apply committed a fail-hard tec transaction")
 	}
-	if view.TxExists(ptx.Hash) {
+	if ledgerTxExists(t, view, ptx.Hash) {
 		t.Fatal("fail-hard TxQ transaction was added to the view")
 	}
 }

@@ -38,10 +38,10 @@ func (v *ownerFundsView) ForEach(func(key [32]byte, data []byte) bool) error { r
 func (v *ownerFundsView) Succ([32]byte) ([32]byte, []byte, bool, error) {
 	return [32]byte{}, nil, false, nil
 }
-func (v *ownerFundsView) AdjustDropsDestroyed(drops.XRPAmount) {}
-func (v *ownerFundsView) TxExists([32]byte) bool               { return false }
-func (v *ownerFundsView) Rules() *amendment.Rules              { return nil }
-func (v *ownerFundsView) LedgerSeq() uint32                    { return 0 }
+func (v *ownerFundsView) AdjustDropsDestroyed(drops.XRPAmount) error { return nil }
+func (v *ownerFundsView) TxExists([32]byte) (bool, error)            { return false, nil }
+func (v *ownerFundsView) Rules() *amendment.Rules                    { return nil }
+func (v *ownerFundsView) LedgerSeq() uint32                          { return 0 }
 
 // ownerFundsLedgerMock adds LedgerViewSource + a JSON-stored OfferCreate to the
 // ledger mock so the ledger method can annotate owner_funds.

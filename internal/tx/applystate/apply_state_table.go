@@ -306,8 +306,9 @@ func (t *ApplyStateTable) IsErased(k keylet.Keylet) bool {
 }
 
 // AdjustDropsDestroyed records destroyed XRP
-func (t *ApplyStateTable) AdjustDropsDestroyed(drops drops.XRPAmount) {
+func (t *ApplyStateTable) AdjustDropsDestroyed(drops drops.XRPAmount) error {
 	t.drops = t.drops.Add(drops)
+	return nil
 }
 
 // ForEach iterates over all state entries, reflecting local modifications.
@@ -552,7 +553,9 @@ func (t *ApplyStateTable) applyOrdered(
 		}
 
 		if t.drops.IsPositive() {
-			base.AdjustDropsDestroyed(t.drops)
+			if err := base.AdjustDropsDestroyed(t.drops); err != nil {
+				return err
+			}
 		}
 		return nil
 	})
@@ -767,7 +770,7 @@ func (t *ApplyStateTable) threadOwners(sourceKey [32]byte, data []byte, entryTyp
 
 // TxExists delegates to the base view to check if a transaction exists.
 // Reference: rippled ReadView::txExists()
-func (t *ApplyStateTable) TxExists(txID [32]byte) bool {
+func (t *ApplyStateTable) TxExists(txID [32]byte) (bool, error) {
 	return t.base.TxExists(txID)
 }
 

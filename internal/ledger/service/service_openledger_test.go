@@ -19,6 +19,15 @@ import (
 	"github.com/LeJamon/go-xrpl/internal/tx/pseudo"
 )
 
+func openLedgerHasTx(t *testing.T, svc *service.Service, hash [32]byte) bool {
+	t.Helper()
+	exists, err := svc.OpenLedgerHasTx(hash)
+	if err != nil {
+		t.Fatalf("OpenLedgerHasTx(%x): %v", hash, err)
+	}
+	return exists
+}
+
 // buildSignedPaymentBlob constructs a signed Payment binary blob from sender
 // to receiver for the given drops amount. The sender's sequence is fixed at
 // 1, matching the master-account sequence on a freshly-started service. The
@@ -95,7 +104,7 @@ func TestService_OpenLedgerSubmit_Roundtrip(t *testing.T) {
 		t.Errorf("OpenLedgerTxs[0] != original blob")
 	}
 
-	if !svc.OpenLedgerHasTx(hash) {
+	if !openLedgerHasTx(t, svc, hash) {
 		t.Errorf("OpenLedgerHasTx(hash) = false, want true")
 	}
 
@@ -145,10 +154,10 @@ func TestService_AcceptConsensusResult_RebuildsOpenView(t *testing.T) {
 		t.Fatalf("AcceptConsensusResult: %v", err)
 	}
 
-	if !svc.OpenLedgerHasTx(hash1) {
+	if !openLedgerHasTx(t, svc, hash1) {
 		t.Errorf("post-Accept OpenLedgerHasTx(hash1) = false; replay dropped tx1")
 	}
-	if !svc.OpenLedgerHasTx(hash2) {
+	if !openLedgerHasTx(t, svc, hash2) {
 		t.Errorf("post-Accept OpenLedgerHasTx(hash2) = false; replay dropped tx2")
 	}
 }
@@ -187,7 +196,7 @@ func TestService_SwitchToPreferredLedgerReplaysOpenTransactions(t *testing.T) {
 	if got := svc.GetClosedLedger(); got.Hash() != preferred.Hash() {
 		t.Fatalf("closed ledger = %x, want %x", got.Hash(), preferred.Hash())
 	}
-	if !svc.OpenLedgerHasTx(hash) {
+	if !openLedgerHasTx(t, svc, hash) {
 		t.Fatal("preferred-ledger switch dropped a transaction from the open view")
 	}
 }
@@ -226,10 +235,14 @@ func TestService_AcceptConsensusResult_IncludedTxsNotDuplicated(t *testing.T) {
 	if closed == nil {
 		t.Fatal("GetClosedLedger nil after AcceptConsensusResult")
 	}
-	if !closed.TxExists(hash1) {
+	closedHasHash1, err := closed.TxExists(hash1)
+	if err != nil {
+		t.Fatalf("closed.TxExists(hash1): %v", err)
+	}
+	if !closedHasHash1 {
 		t.Errorf("closed ledger missing tx1 after consensus close")
 	}
-	if svc.OpenLedgerHasTx(hash1) {
+	if openLedgerHasTx(t, svc, hash1) {
 		t.Errorf("post-Accept open view still contains tx1 (already in closed ledger)")
 	}
 	if got := svc.OpenLedgerTxs(); len(got) != 0 {
@@ -262,10 +275,14 @@ func TestService_AcceptConsensusResult_DisputedTxsFirstCrack(t *testing.T) {
 	if closed == nil {
 		t.Fatal("GetClosedLedger nil after AcceptConsensusResult")
 	}
-	if closed.TxExists(disputedHash) {
+	closedHasDisputed, err := closed.TxExists(disputedHash)
+	if err != nil {
+		t.Fatalf("closed.TxExists(disputedHash): %v", err)
+	}
+	if closedHasDisputed {
 		t.Errorf("disputed tx landed in the closed ledger; must only reach the open view")
 	}
-	if !svc.OpenLedgerHasTx(disputedHash) {
+	if !openLedgerHasTx(t, svc, disputedHash) {
 		t.Errorf("post-Accept open view missing the disputed we-voted-NO tx")
 	}
 }
@@ -300,7 +317,7 @@ func TestService_AcceptConsensusResult_DisputedPseudoTxSkipped(t *testing.T) {
 		t.Fatalf("AcceptConsensusResult: %v", err)
 	}
 
-	if svc.OpenLedgerHasTx(pseudoTx.Hash) {
+	if openLedgerHasTx(t, svc, pseudoTx.Hash) {
 		t.Errorf("post-Accept open view contains a disputed pseudo-tx; pseudo-txs must be skipped")
 	}
 	if got := svc.OpenLedgerTxs(); len(got) != 0 {

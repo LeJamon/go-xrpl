@@ -206,7 +206,7 @@ func (a *ledgerReaderAdapter) GetLedgerTransactionContext(ctx context.Context, t
 }
 
 func (a *ledgerReaderAdapter) ForEachLedgerStateContext(ctx context.Context, fn func(key [32]byte, data []byte) bool) error {
-	return a.l.ForEachCtx(ctx, fn)
+	return a.l.ForEachContext(ctx, fn)
 }
 
 func (a *ledgerReaderAdapter) LedgerAmendmentRules() *amendment.Rules {

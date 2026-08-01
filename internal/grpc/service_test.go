@@ -147,7 +147,11 @@ func newTestLedger(t *testing.T, seq uint32, state map[[32]byte][]byte, txs map[
 		hdr.ParentHash = [32]byte{byte(seq - 1), 0xAB}
 	}
 	hdr.Hash = [32]byte{byte(seq), 0xAB}
-	return ledger.FromGenesis(hdr, stateMap, txMap, drops.Fees{})
+	l, err := ledger.FromGenesis(hdr, stateMap, txMap, drops.Fees{})
+	if err != nil {
+		t.Fatalf("ledger.FromGenesis: %v", err)
+	}
+	return l
 }
 
 func newClosedTestLedger(t *testing.T, parent *ledger.Ledger) *ledger.Ledger {

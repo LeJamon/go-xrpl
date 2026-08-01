@@ -1149,11 +1149,11 @@ func (p *Peer) BuildTxSet(txs [][]byte) (consensus.TxSet, error) {
 	return set, nil
 }
 
-func (p *Peer) HasTx(id consensus.TxID) bool {
+func (p *Peer) HasTx(id consensus.TxID) (bool, error) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	_, ok := p.openTxs[id]
-	return ok
+	return ok, nil
 }
 
 func (p *Peer) GetTx(id consensus.TxID) ([]byte, error) {

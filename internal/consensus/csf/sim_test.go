@@ -570,7 +570,7 @@ func TestPeerTrafficDoesNotCrossDisconnect(t *testing.T) {
 	if proposals != 0 || validations != 0 {
 		t.Fatalf("delivered proposals=%d validations=%d across disconnect", proposals, validations)
 	}
-	if target.HasTx(Tx{ID: 77}.TxID()) {
+	if peerHasTx(t, target, Tx{ID: 77}.TxID()) {
 		t.Fatal("transaction crossed disconnect")
 	}
 	if _, err := target.GetTxSet(set.ID()); !errors.Is(err, errNotFound) {

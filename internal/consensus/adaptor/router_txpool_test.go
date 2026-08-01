@@ -82,7 +82,7 @@ func TestSubmitTxJobInlineFallback(t *testing.T) {
 		Tx:     &message.Transaction{RawTransaction: blob, Status: message.TxStatusNew},
 	})
 
-	require.True(t, a.HasTx(txID),
+	require.True(t, adaptorHasTx(t, a, txID),
 		"inline path must apply the tx synchronously before submitTxJob returns")
 }
 
@@ -110,7 +110,7 @@ func TestRunDrainsTxLane(t *testing.T) {
 		Tx:     &message.Transaction{RawTransaction: blob, Status: message.TxStatusNew},
 	}
 
-	require.Eventually(t, func() bool { return a.HasTx(txID) },
+	require.Eventually(t, func() bool { return adaptorHasTx(t, a, txID) },
 		2*time.Second, 5*time.Millisecond,
 		"Run must drain the tx lane and apply the transaction")
 }

@@ -46,7 +46,7 @@ func (v *vaultDepositView) Erase(k keylet.Keylet) error {
 	delete(v.data, k.Key)
 	return nil
 }
-func (v *vaultDepositView) AdjustDropsDestroyed(drops.XRPAmount) {}
+func (v *vaultDepositView) AdjustDropsDestroyed(drops.XRPAmount) error { return nil }
 func (v *vaultDepositView) ForEach(fn func(key [32]byte, data []byte) bool) error {
 	for key, data := range v.data {
 		if !fn(key, data) {
@@ -58,10 +58,10 @@ func (v *vaultDepositView) ForEach(fn func(key [32]byte, data []byte) bool) erro
 func (v *vaultDepositView) Succ([32]byte) ([32]byte, []byte, bool, error) {
 	return [32]byte{}, nil, false, nil
 }
-func (v *vaultDepositView) TxExists([32]byte) bool  { return false }
-func (v *vaultDepositView) Rules() *amendment.Rules { return v.rules }
-func (v *vaultDepositView) LedgerSeq() uint32       { return 1 }
-func vaultDepositTestID(fill byte, size int) []byte { return makeFilledBytes(fill, size) }
+func (v *vaultDepositView) TxExists([32]byte) (bool, error) { return false, nil }
+func (v *vaultDepositView) Rules() *amendment.Rules         { return v.rules }
+func (v *vaultDepositView) LedgerSeq() uint32               { return 1 }
+func vaultDepositTestID(fill byte, size int) []byte         { return makeFilledBytes(fill, size) }
 func makeFilledBytes(fill byte, size int) []byte {
 	b := make([]byte, size)
 	for i := range b {

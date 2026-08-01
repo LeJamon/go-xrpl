@@ -69,7 +69,11 @@ func buildLedgerWithState(t *testing.T, seq uint32) *ledger.Ledger {
 		Accepted:            true,
 	}
 	hdr.Hash = [32]byte{0xED, byte(seq), byte(seq >> 8)}
-	return ledger.FromGenesis(hdr, stateMap, txMap, drops.Fees{})
+	l, err := ledger.FromGenesis(hdr, stateMap, txMap, drops.Fees{})
+	if err != nil {
+		t.Fatalf("ledger.FromGenesis: %v", err)
+	}
+	return l
 }
 
 // TestService_Stop_DrainsQueuedPersists proves the shutdown contract: ledgers

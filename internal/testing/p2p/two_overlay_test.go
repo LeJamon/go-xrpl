@@ -79,7 +79,8 @@ func makeImmutableLedger(t *testing.T, txCount int) (parent, child *ledger.Ledge
 	t.Helper()
 	res, err := genesis.Create(genesis.DefaultConfig())
 	require.NoError(t, err)
-	parent = ledger.FromGenesis(res.Header, res.StateMap, res.TxMap, drops.Fees{})
+	parent, err = ledger.FromGenesis(res.Header, res.StateMap, res.TxMap, drops.Fees{})
+	require.NoError(t, err)
 
 	open, err := ledger.NewOpen(parent, time.Date(2025, 1, 2, 3, 4, 5, 0, time.UTC))
 	require.NoError(t, err)
