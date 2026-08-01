@@ -11,9 +11,6 @@ import (
 	"github.com/LeJamon/go-xrpl/internal/consensus/ledgertrietest"
 )
 
-// mapAncestryProvider is a tiny LedgerAncestryProvider backed by a
-// map, used to wire test ledgers into the
-// ValidationTracker for these tests.
 type mapAncestryProvider struct {
 	byID map[consensus.LedgerID]ledgertrie.Ledger
 }

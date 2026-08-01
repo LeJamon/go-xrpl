@@ -511,8 +511,6 @@ func TestLedgerTrie_GetPreferred_SingleLargerChildren(t *testing.T) {
 }
 
 func TestLedgerTrie_GetPreferred_TieBreakerByID(t *testing.T) {
-	// Compute which sibling has the larger ID at seq 4 and steer the
-	// assertions accordingly.
 	trie, b := newTestTrie()
 	abcd := b.Build("abcd")
 	abce := b.Build("abce")
