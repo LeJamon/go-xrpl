@@ -1,6 +1,7 @@
 package node
 
 import (
+	"math"
 	"sync"
 	"testing"
 	"time"
@@ -131,5 +132,34 @@ func TestServerStatusPublisherSuppressesUnchangedSnapshot(t *testing.T) {
 	status.publish(nil)
 	if got := recorder.count(); got != 1 {
 		t.Fatalf("unchanged snapshot published %d events, want 1", got)
+	}
+}
+
+func TestServerStatusPublisherClipsSaturatedTxQLoad(t *testing.T) {
+	svc, err := service.New(service.Config{Standalone: true})
+	if err != nil {
+		t.Fatalf("New service: %v", err)
+	}
+	if err := svc.Start(); err != nil {
+		t.Fatalf("Start service: %v", err)
+	}
+	t.Cleanup(svc.Stop)
+	services := serverStatusTestServices(svc)
+	services.TxQMetrics = func() types.TxQServerMetrics {
+		return types.TxQServerMetrics{
+			ReferenceFeeLevel:     256,
+			MinProcessingFeeLevel: math.MaxUint64,
+			OpenLedgerFeeLevel:    math.MaxUint64,
+		}
+	}
+	recorder := newServerStatusRecorder()
+	status := newServerStatusPublisher(services, recorder)
+	status.publish(nil)
+
+	event := waitForServerStatus(t, recorder)
+	if event.LoadFactor != math.MaxUint32 ||
+		event.LoadFactorFeeEscalation != math.MaxUint32 ||
+		event.LoadFactorFeeQueue != math.MaxUint32 {
+		t.Fatalf("saturated load event = %+v", event)
 	}
 }

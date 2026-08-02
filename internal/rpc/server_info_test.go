@@ -1438,6 +1438,29 @@ func TestServerInfo_MachineMode_LoadFactorFees(t *testing.T) {
 	assert.EqualValues(t, 256, state["load_base"])
 }
 
+func TestServerInfo_LoadFactorEscalationAvoidsIntermediateOverflow(t *testing.T) {
+	mock := newMockLedgerServiceServerInfo()
+	services := servicesForServerInfo(mock)
+	services.TxQMetrics = func() types.TxQServerMetrics {
+		return types.TxQServerMetrics{
+			ReferenceFeeLevel:  256,
+			OpenLedgerFeeLevel: 1 << 56,
+		}
+	}
+	ctx := &types.RpcContext{
+		Context:    context.Background(),
+		Role:       types.RoleGuest,
+		ApiVersion: types.ApiVersion1,
+		Services:   services,
+	}
+
+	machine := callServerStatus(t, ctx, false)
+	assert.EqualValues(t, math.MaxUint32, machine["load_factor"])
+
+	human := callServerStatus(t, ctx, true)
+	assert.Equal(t, float64(uint64(1)<<48), human["load_factor"])
+}
+
 // TestServerInfo_ValidatedLedgerAge_HighAgeThreshold guards against
 // regressing the threshold below rippled's 1,000,000-second limit
 // (NetworkOPs.cpp:2951). A 1-hour-old ledger must report an actual

@@ -7,6 +7,7 @@ import (
 	"sync"
 
 	addresscodec "github.com/LeJamon/go-xrpl/codec/addresscodec"
+	"github.com/LeJamon/go-xrpl/drops"
 	"github.com/LeJamon/go-xrpl/internal/rpc/types"
 	"github.com/LeJamon/go-xrpl/keylet"
 )
@@ -954,8 +955,8 @@ func (sm *Manager) SubscribeResponse(ledgerIndex uint32, ledgerHash string, ledg
 		LedgerIndex: ledgerIndex,
 		LedgerHash:  ledgerHash,
 		LedgerTime:  ledgerTime,
-		FeeBase:     feeBase,
-		ReserveBase: reserveBase,
-		ReserveInc:  reserveInc,
+		FeeBase:     drops.XRPAmount(int64(feeBase)).JSONClipped(),
+		ReserveBase: drops.XRPAmount(int64(reserveBase)).JSONClipped(),
+		ReserveInc:  drops.XRPAmount(int64(reserveInc)).JSONClipped(),
 	}
 }

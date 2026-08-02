@@ -15,6 +15,7 @@ import (
 	"github.com/LeJamon/go-xrpl/codec/addresscodec"
 	binarycodec "github.com/LeJamon/go-xrpl/codec/binarycodec"
 	"github.com/LeJamon/go-xrpl/codec/binarycodec/definitions"
+	"github.com/LeJamon/go-xrpl/drops"
 	"github.com/LeJamon/go-xrpl/internal/consensus"
 	consensusadaptor "github.com/LeJamon/go-xrpl/internal/consensus/adaptor"
 	"github.com/LeJamon/go-xrpl/internal/ledger/cleaner"
@@ -152,10 +153,10 @@ func (a *ledgerInfoAdapter) GetCurrentLedgerInfo() *types.LedgerSubscribeInfo {
 		LedgerIndex:      validatedLedger.Sequence(),
 		LedgerHash:       upperHex(hash[:]),
 		LedgerTime:       ledgerTime,
-		FeeBase:          baseFee,
+		FeeBase:          jsonClippedXRPAmount(int64(baseFee)),
 		FeeRef:           deprecatedFeeReferenceUnits,
-		ReserveBase:      reserveBase,
-		ReserveInc:       reserveInc,
+		ReserveBase:      jsonClippedXRPAmount(int64(reserveBase)),
+		ReserveInc:       jsonClippedXRPAmount(int64(reserveInc)),
 		ValidatedLedgers: validatedLedgers,
 		NetworkID:        serverInfo.NetworkID,
 		XRPFeesEnabled:   xrpFeesEnabled,
@@ -192,11 +193,11 @@ func buildLedgerCloseEvent(event *service.LedgerAcceptedEvent, serverInfo servic
 		LedgerIndex:      event.LedgerInfo.Sequence,
 		LedgerHash:       upperHex(event.LedgerInfo.Hash[:]),
 		LedgerTime:       protocol.ToRippleTime(event.LedgerInfo.CloseTime),
-		FeeBase:          baseFee,
+		FeeBase:          jsonClippedXRPAmount(int64(baseFee)),
 		FeeRef:           feeRef,
 		NetworkID:        serverInfo.NetworkID,
-		ReserveBase:      reserveBase,
-		ReserveInc:       reserveInc,
+		ReserveBase:      jsonClippedXRPAmount(int64(reserveBase)),
+		ReserveInc:       jsonClippedXRPAmount(int64(reserveInc)),
 		TxnCount:         len(event.TransactionResults),
 		ValidatedLedgers: validatedLedgers,
 	}
@@ -412,13 +413,7 @@ func buildValidationEvent(e *consensus.ValidationReceivedEvent, manifests *manif
 }
 
 func jsonClippedXRPAmount(value int64) int32 {
-	if value < math.MinInt32 {
-		return math.MinInt32
-	}
-	if value > math.MaxInt32 {
-		return math.MaxInt32
-	}
-	return int32(value)
+	return drops.XRPAmount(value).JSONClipped()
 }
 
 func extractBookPairsFromMetadata(metaJSON []byte) []types.OrderBookSpec {
@@ -611,6 +606,13 @@ func (p *serverStatusPublisher) publish(mode *string) {
 		p.mode = serverStatus
 		p.haveMode = true
 	}
+	baseFeeClipped := jsonClippedXRPAmount(int64(baseFee))
+	loadBase := clipServerLoad(load.LoadBase)
+	loadFactor := clipServerLoad(load.LoadFactor)
+	loadFactorFeeEscalation := clipServerLoad(load.LoadFactorFeeEscalation)
+	loadFactorFeeQueue := clipServerLoad(load.LoadFactorFeeQueue)
+	loadFactorFeeReference := clipServerLoad(load.LoadFactorFeeReference)
+	loadFactorServer := clipServerLoad(load.LoadFactorServer)
 	snapshot := serverStatusSnapshot{
 		baseFee:                 baseFee,
 		loadBase:                load.LoadBase,
@@ -632,15 +634,22 @@ func (p *serverStatusPublisher) publish(mode *string) {
 
 	p.publisher.PublishServerStatus(&rpc.ServerStatusEvent{
 		Type:                    "serverStatus",
-		BaseFee:                 baseFee,
-		LoadBase:                int(load.LoadBase),
-		LoadFactor:              int(load.LoadFactor),
-		LoadFactorFeeEscalation: int(load.LoadFactorFeeEscalation),
-		LoadFactorFeeQueue:      int(load.LoadFactorFeeQueue),
-		LoadFactorFeeReference:  int(load.LoadFactorFeeReference),
-		LoadFactorServer:        int(load.LoadFactorServer),
+		BaseFee:                 baseFeeClipped,
+		LoadBase:                loadBase,
+		LoadFactor:              loadFactor,
+		LoadFactorFeeEscalation: loadFactorFeeEscalation,
+		LoadFactorFeeQueue:      loadFactorFeeQueue,
+		LoadFactorFeeReference:  loadFactorFeeReference,
+		LoadFactorServer:        loadFactorServer,
 		ServerStatus:            serverStatus,
 	})
+}
+
+func clipServerLoad(value uint64) uint32 {
+	if value > math.MaxUint32 {
+		return math.MaxUint32
+	}
+	return uint32(value)
 }
 
 // acceptedLedgerView adapts a LedgerAcceptedEvent to the

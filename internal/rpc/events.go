@@ -10,14 +10,14 @@ import (
 // This matches the rippled ledgerClosed stream message format
 type LedgerCloseEvent struct {
 	Type             string  `json:"type"`                        // Always "ledgerClosed"
-	FeeBase          uint64  `json:"fee_base"`                    // Transaction cost in fee units
+	FeeBase          int32   `json:"fee_base"`                    // Transaction cost in fee units
 	FeeRef           *uint64 `json:"fee_ref,omitempty"`           // Deprecated reference fee units, before XRPFees
 	LedgerHash       string  `json:"ledger_hash"`                 // Hash of the ledger that closed
 	LedgerIndex      uint32  `json:"ledger_index"`                // Sequence number of the ledger
 	LedgerTime       uint32  `json:"ledger_time"`                 // Close time in seconds since Ripple epoch
 	NetworkID        uint32  `json:"network_id"`                  // Network identifier, including network 0
-	ReserveBase      uint64  `json:"reserve_base"`                // Minimum reserve requirement in drops
-	ReserveInc       uint64  `json:"reserve_inc"`                 // Owner reserve increment in drops
+	ReserveBase      int32   `json:"reserve_base"`                // Minimum reserve requirement in drops
+	ReserveInc       int32   `json:"reserve_inc"`                 // Owner reserve increment in drops
 	TxnCount         int     `json:"txn_count"`                   // Number of transactions in the ledger
 	ValidatedLedgers string  `json:"validated_ledgers,omitempty"` // Range of validated ledgers (e.g., "1-100")
 }
@@ -97,14 +97,14 @@ func NewValidationEvent(
 // Mirrors rippled NetworkOPs.cpp:2308-2373 (pubServer).
 type ServerStatusEvent struct {
 	Type                    string `json:"type"`                                 // Always "serverStatus"
-	BaseFee                 uint64 `json:"base_fee,omitempty"`                   // Base fee
-	LoadBase                int    `json:"load_base"`                            // Load base (256 = normal)
-	LoadFactor              int    `json:"load_factor"`                          // Current load factor
-	LoadFactorFeeEscalation int    `json:"load_factor_fee_escalation,omitempty"` // Fee escalation load factor
-	LoadFactorFeeQueue      int    `json:"load_factor_fee_queue,omitempty"`      // Fee queue load factor
-	LoadFactorFeeReference  int    `json:"load_factor_fee_reference,omitempty"`  // TxQ reference fee level (NetworkOPs.cpp:2345)
-	LoadFactorServer        int    `json:"load_factor_server,omitempty"`         // Server load factor
-	ServerStatus            string `json:"server_status,omitempty"`              // Operating mode (disconnected/connected/syncing/tracking/full)
+	BaseFee                 int32  `json:"base_fee"`                             // Base fee
+	LoadBase                uint32 `json:"load_base"`                            // Load base (256 = normal)
+	LoadFactor              uint32 `json:"load_factor"`                          // Current load factor
+	LoadFactorFeeEscalation uint32 `json:"load_factor_fee_escalation,omitempty"` // Fee escalation load factor
+	LoadFactorFeeQueue      uint32 `json:"load_factor_fee_queue,omitempty"`      // Fee queue load factor
+	LoadFactorFeeReference  uint32 `json:"load_factor_fee_reference,omitempty"`  // TxQ reference fee level (NetworkOPs.cpp:2345)
+	LoadFactorServer        uint32 `json:"load_factor_server"`                   // Server load factor
+	ServerStatus            string `json:"server_status"`                        // Operating mode (disconnected/connected/syncing/tracking/full)
 }
 
 // ConsensusEvent represents consensus phase changes

@@ -95,7 +95,10 @@ func TestBuildLedgerCloseEventUsesSourceLedgerAndWirePresence(t *testing.T) {
 				t.Fatal("nil ledger event")
 			}
 			base, reserve, increment := service.FeesFromLedger(source)
-			if got.FeeBase != base || got.ReserveBase != reserve || got.ReserveInc != increment {
+			wantBase := jsonClippedXRPAmount(int64(base))
+			wantReserve := jsonClippedXRPAmount(int64(reserve))
+			wantIncrement := jsonClippedXRPAmount(int64(increment))
+			if got.FeeBase != wantBase || got.ReserveBase != wantReserve || got.ReserveInc != wantIncrement {
 				t.Fatalf("fees = (%d,%d,%d), want source ledger (%d,%d,%d)", got.FeeBase, got.ReserveBase, got.ReserveInc, base, reserve, increment)
 			}
 			if (got.FeeRef != nil) != test.wantFeeRef {
@@ -112,7 +115,7 @@ func TestBuildLedgerCloseEventUsesSourceLedgerAndWirePresence(t *testing.T) {
 			if subscribeInfo == nil {
 				t.Fatal("nil ledger subscribe info")
 			}
-			if subscribeInfo.FeeBase != base || subscribeInfo.ReserveBase != reserve || subscribeInfo.ReserveInc != increment {
+			if subscribeInfo.FeeBase != wantBase || subscribeInfo.ReserveBase != wantReserve || subscribeInfo.ReserveInc != wantIncrement {
 				t.Fatalf("subscribe fees = (%d,%d,%d), want validated ledger (%d,%d,%d)", subscribeInfo.FeeBase, subscribeInfo.ReserveBase, subscribeInfo.ReserveInc, base, reserve, increment)
 			}
 			if subscribeInfo.FeeRef != deprecatedFeeReferenceUnits || subscribeInfo.XRPFeesEnabled != test.xrpFees {

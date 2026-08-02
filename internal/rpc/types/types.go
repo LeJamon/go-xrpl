@@ -611,9 +611,9 @@ type SubscribeResponse struct {
 	LedgerIndex uint32 `json:"ledger_index"`
 	LedgerHash  string `json:"ledger_hash"`
 	LedgerTime  uint32 `json:"ledger_time"`
-	FeeBase     uint64 `json:"fee_base"`
-	ReserveBase uint64 `json:"reserve_base"`
-	ReserveInc  uint64 `json:"reserve_inc"`
+	FeeBase     int32  `json:"fee_base"`
+	ReserveBase int32  `json:"reserve_base"`
+	ReserveInc  int32  `json:"reserve_inc"`
 }
 
 // IsValidXRPLAddress validates an XRPL address using the address codec
@@ -684,10 +684,10 @@ type LedgerSubscribeInfo struct {
 	LedgerIndex      uint32 `json:"ledger_index"`
 	LedgerHash       string `json:"ledger_hash"`
 	LedgerTime       uint32 `json:"ledger_time"`
-	FeeBase          uint64 `json:"fee_base"`
+	FeeBase          int32  `json:"fee_base"`
 	FeeRef           uint64 `json:"fee_ref"`
-	ReserveBase      uint64 `json:"reserve_base"`
-	ReserveInc       uint64 `json:"reserve_inc"`
+	ReserveBase      int32  `json:"reserve_base"`
+	ReserveInc       int32  `json:"reserve_inc"`
 	ValidatedLedgers string `json:"validated_ledgers,omitempty"`
 	NetworkID        uint32 `json:"network_id"`
 	// XRPFeesEnabled gates fee_ref: rippled emits the deprecated fee_ref

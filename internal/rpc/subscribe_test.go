@@ -1302,9 +1302,9 @@ func TestGetSubscribeResponse(t *testing.T) {
 	assert.Equal(t, uint32(100), response.LedgerIndex)
 	assert.Equal(t, "4BC50C9B0D8515D3EAAE1E74B29A95804346C491EE1A95BF25E4AAB854A6A652", response.LedgerHash)
 	assert.Equal(t, uint32(735000000), response.LedgerTime)
-	assert.Equal(t, uint64(10), response.FeeBase)
-	assert.Equal(t, uint64(10000000), response.ReserveBase)
-	assert.Equal(t, uint64(2000000), response.ReserveInc)
+	assert.Equal(t, int32(10), response.FeeBase)
+	assert.Equal(t, int32(10000000), response.ReserveBase)
+	assert.Equal(t, int32(2000000), response.ReserveInc)
 }
 
 // Subscribe/Unsubscribe Method Tests (RPC Handler level)

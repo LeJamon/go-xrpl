@@ -361,7 +361,7 @@ func TestRPCSub_SubscribeAckCarriesLedgerInfo(t *testing.T) {
 	require.True(t, ok)
 	assert.Equal(t, uint32(42), ack["ledger_index"])
 	assert.Equal(t, "ABCD", ack["ledger_hash"])
-	assert.Equal(t, uint64(10), ack["fee_base"])
+	assert.Equal(t, int32(10), ack["fee_base"])
 	// network_id is emitted unconditionally, even when zero.
 	require.Contains(t, ack, "network_id")
 	assert.Equal(t, uint32(0), ack["network_id"])
