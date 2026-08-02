@@ -68,6 +68,7 @@ func (q *TxQ) Clear() {
 	defer q.mu.Unlock()
 
 	q.byFee = make([]*Candidate, 0)
+	q.byID = make(map[[32]byte]*Candidate)
 	q.byAccount = make(map[[20]byte]*AccountQueue)
 }
 

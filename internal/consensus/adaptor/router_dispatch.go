@@ -14,7 +14,6 @@ import (
 	"github.com/LeJamon/go-xrpl/internal/manifest"
 	"github.com/LeJamon/go-xrpl/internal/peermanagement"
 	"github.com/LeJamon/go-xrpl/internal/peermanagement/message"
-	"github.com/LeJamon/go-xrpl/internal/tx"
 	"github.com/LeJamon/go-xrpl/protocol"
 )
 
@@ -680,15 +679,10 @@ func (r *Router) relayTransaction(except peermanagement.PeerID, blob []byte) {
 		r.logger.Warn("relay transaction encode failed", "error", err)
 		return
 	}
-	// Reduce-relay peer selection: relays the full frame to a subset of
-	// peers and lets the rest learn via the TMHaveTransactions announce.
-	var txHash [32]byte
-	if parsed, parseErr := tx.ParseFromBinary(blob); parseErr == nil {
-		if hash, hashErr := tx.ComputeTransactionHash(parsed); hashErr == nil {
-			txHash = hash
-		}
-	}
-	r.overlay.RelayTransactionWithHash(except, txHash, frame)
+	// Reduce-relay peer selection derives the transaction ID from the wire
+	// frame itself. If the frame cannot be decoded, the overlay falls back to
+	// full relay rather than announcing an unfulfillable hash.
+	r.overlay.RelayTransaction(except, frame)
 }
 
 func (r *Router) handleHaveSet(msg *peermanagement.InboundMessage) {

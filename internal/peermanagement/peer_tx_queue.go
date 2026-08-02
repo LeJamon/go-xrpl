@@ -10,10 +10,11 @@ const peerTxQueueMax = 10_000
 // addTxQueue records a transaction for the next reduce-relay announcement.
 // Hashes are de-duplicated per peer. When the cap is reached, one frame is
 // drained before admitting the new hash, matching rippled's addTxQueue
-// behaviour.
-func (p *Peer) addTxQueue(hash [32]byte) {
+// behaviour. A false return means the hash was not retained and the caller
+// must use a full-transaction fallback.
+func (p *Peer) addTxQueue(hash [32]byte) bool {
 	if hash == ([32]byte{}) {
-		return
+		return false
 	}
 	for {
 		p.txQueueMu.Lock()
@@ -22,13 +23,13 @@ func (p *Peer) addTxQueue(hash [32]byte) {
 		}
 		if _, exists := p.txQueueSet[hash]; exists {
 			p.txQueueMu.Unlock()
-			return
+			return true
 		}
 		if len(p.txQueue) < peerTxQueueMax {
 			p.txQueue = append(p.txQueue, hash)
 			p.txQueueSet[hash] = struct{}{}
 			p.txQueueMu.Unlock()
-			return
+			return true
 		}
 		p.txQueueMu.Unlock()
 
@@ -36,7 +37,7 @@ func (p *Peer) addTxQueue(hash [32]byte) {
 		// frame. If admission fails, retaining the full queue is safer than
 		// evicting a transaction that has not yet been announced.
 		if err := p.sendTxQueue(); err != nil {
-			return
+			return false
 		}
 	}
 }

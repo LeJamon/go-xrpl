@@ -690,7 +690,7 @@ func (o *Overlay) serveDoTransactionsContext(ctx context.Context, peerID PeerID,
 		return
 	}
 	if len(req.Objects) > maxQueueSize {
-		o.IncPeerBadData(peerID, "get-objects-txn-too-big")
+		o.chargeMalformedTransactionRequest(peerID, "get-objects-txn-too-big")
 		return
 	}
 	if o.txRecordProviderSnapshot() == nil && o.txProviderSnapshot() == nil {
@@ -709,14 +709,14 @@ func (o *Overlay) serveDoTransactionsContext(ctx context.Context, peerID PeerID,
 			return
 		}
 		if len(obj.Hash) != 32 {
-			o.IncPeerBadData(peerID, "get-objects-txn-hashsize")
+			o.chargeMalformedTransactionRequest(peerID, "get-objects-txn-hashsize")
 			return
 		}
 		var hash [32]byte
 		copy(hash[:], obj.Hash)
 		record, ok := o.lookupTxRecord(hash)
 		if !ok {
-			o.IncPeerBadData(peerID, "get-objects-txn-missing")
+			o.chargeMalformedTransactionRequest(peerID, "get-objects-txn-missing")
 			return
 		}
 		if !budget.reserve(serveReplyTransactionOverhead, record.RawTransaction) {
@@ -743,6 +743,13 @@ func (o *Overlay) serveDoTransactionsContext(ctx context.Context, peerID PeerID,
 		return
 	}
 	encodeAndSendPriority(peer, reply, "TMTransactions reply")
+}
+
+func (o *Overlay) chargeMalformedTransactionRequest(peerID PeerID, reason string) {
+	peer, ok := o.getPeer(peerID)
+	if ok {
+		peer.Charge(resource.FeeMalformedRequest, reason)
+	}
 }
 
 func (o *Overlay) lookupTxRecord(hash [32]byte) (TxRecord, bool) {

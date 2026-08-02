@@ -141,6 +141,9 @@ func (s *Service) SubmitTransaction(transaction tx.Transaction, rawBlob []byte, 
 	if s.validatedLedger != nil {
 		result.ValidatedLedger = s.validatedLedger.Sequence()
 	}
+	if outcome.Class == openledger.ResultSuccess {
+		s.rememberRelayTransaction(ptx.Hash, ptx.Blob, outcome.Queued)
+	}
 
 	// LocalTxs push: rippled NetworkOPs.cpp:1674-1683 holds a locally-
 	// submitted tx whenever addLocal && !enforceFailHard, where

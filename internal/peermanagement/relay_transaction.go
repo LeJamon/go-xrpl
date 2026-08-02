@@ -1,7 +1,12 @@
 package peermanagement
 
 import (
+	"bytes"
 	"math/rand/v2"
+
+	"github.com/LeJamon/go-xrpl/crypto/sha512half"
+	"github.com/LeJamon/go-xrpl/internal/peermanagement/message"
+	"github.com/LeJamon/go-xrpl/protocol"
 )
 
 // peerTxReduceRelayEnabled reports whether a peer negotiated the
@@ -28,16 +33,31 @@ func peerTxReduceRelayEnabled(p *Peer) bool {
 // not track (see router.relayTransaction); suppressed is therefore reported as
 // the single origin peer.
 func (o *Overlay) RelayTransaction(except PeerID, frame []byte) {
-	o.relayTransaction(except, [32]byte{}, frame)
+	hash, ok := transactionHashFromFrame(frame)
+	o.relayTransaction(except, hash, ok, frame)
 }
 
-// RelayTransactionWithHash is RelayTransaction with the transaction ID used
-// to populate suppressed peers' lossless reduce-relay queues.
-func (o *Overlay) RelayTransactionWithHash(except PeerID, hash [32]byte, frame []byte) {
-	o.relayTransaction(except, hash, frame)
+// transactionHashFromFrame extracts the canonical transaction blob from a
+// wire TMTransaction frame and derives the XRPL transaction ID. A false
+// result means the caller must not suppress the full transaction: without a
+// usable hash a HAVE_TRANSACTIONS announcement could never be fulfilled.
+func transactionHashFromFrame(frame []byte) ([32]byte, bool) {
+	header, payload, err := message.ReadMessage(bytes.NewReader(frame))
+	if err != nil || header.MessageType != message.TypeTransaction {
+		return [32]byte{}, false
+	}
+	decoded, err := message.Decode(message.TypeTransaction, payload)
+	if err != nil {
+		return [32]byte{}, false
+	}
+	txn, ok := decoded.(*message.Transaction)
+	if !ok || len(txn.RawTransaction) == 0 {
+		return [32]byte{}, false
+	}
+	return sha512half.Sum(protocol.HashPrefixTransactionID().Bytes(), txn.RawTransaction), true
 }
 
-func (o *Overlay) relayTransaction(except PeerID, hash [32]byte, frame []byte) {
+func (o *Overlay) relayTransaction(except PeerID, hash [32]byte, hashOK bool, frame []byte) {
 	// getActivePeers (OverlayImpl.cpp:1062-1094): total counts every active
 	// peer; disabled counts peers without the feature; candidates are the
 	// peers not in toSkip; enabledInSkip counts skipped peers that have the
@@ -112,10 +132,8 @@ func (o *Overlay) relayTransaction(except PeerID, hash [32]byte, frame []byte) {
 
 	enabledAndRelayed := enabledInSkip
 	relayTransactionCandidates(candidates, enabledAndRelayed, enabledTarget, sendFull,
-		func(peer *Peer) {
-			if hash != ([32]byte{}) {
-				peer.addTxQueue(hash)
-			}
+		func(peer *Peer) bool {
+			return hashOK && peer.addTxQueue(hash)
 		})
 }
 
@@ -124,7 +142,7 @@ func relayTransactionCandidates(
 	enabledAndRelayed uint64,
 	enabledTarget uint64,
 	sendFull func(*Peer) bool,
-	queue ...func(*Peer),
+	queue ...func(*Peer) bool,
 ) {
 	for _, p := range candidates {
 		switch {
@@ -138,7 +156,16 @@ func relayTransactionCandidates(
 			// Remaining enabled peers learn of the tx via their per-peer
 			// TMHaveTransactions queue.
 			if len(queue) > 0 && queue[0] != nil {
-				queue[0](p)
+				if !queue[0](p) {
+					// A suppressed announcement is only safe when the hash was
+					// retained. Fall back to the full frame if queue admission
+					// fails or the frame did not contain a usable transaction ID.
+					sendFull(p)
+				}
+			} else {
+				// Keep the helper's standalone behaviour lossless for callers that
+				// do not provide a queue implementation.
+				sendFull(p)
 			}
 		}
 	}

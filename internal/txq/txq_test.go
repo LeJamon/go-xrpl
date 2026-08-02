@@ -78,6 +78,26 @@ func TestTxQ_InsertByFee(t *testing.T) {
 	}
 }
 
+func TestTxQ_GetTxBlobUsesByIDIndex(t *testing.T) {
+	q := New(DefaultConfig())
+	hash := [32]byte{0xA1}
+	candidate := &Candidate{
+		TxID:     hash,
+		Txn:      &mockTx{id: 7},
+		FeeLevel: FeeLevel(BaseLevel),
+	}
+	q.insertByFee(candidate)
+
+	blob, ok := q.GetTxBlob(hash)
+	if !ok || len(blob) != 1 || blob[0] != 7 {
+		t.Fatalf("GetTxBlob() = (%x, %v), want (07, true)", blob, ok)
+	}
+	q.removeByFee(candidate)
+	if _, ok := q.GetTxBlob(hash); ok {
+		t.Fatal("GetTxBlob returned a candidate after removeByFee")
+	}
+}
+
 // TestTxQ_GetMetrics tests metrics retrieval
 func TestTxQ_GetMetrics(t *testing.T) {
 	cfg := DefaultConfig()

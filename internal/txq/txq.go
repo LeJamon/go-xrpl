@@ -23,6 +23,11 @@ type TxQ struct {
 	// transactions into the open ledger.
 	byFee []*Candidate
 
+	// byID is the authoritative transaction lookup used by reduce-relay
+	// backfill. It is maintained alongside byFee so a request for many hashes
+	// does not rescan the fee-ordered queue for every object.
+	byID map[[32]byte]*Candidate
+
 	// byAccount maps account ID to their AccountQueue.
 	// This allows efficient lookup and enforcement of per-account limits.
 	byAccount map[[20]byte]*AccountQueue
@@ -52,6 +57,7 @@ func New(config Config) *TxQ {
 		config:     config,
 		feeMetrics: NewFeeMetrics(config),
 		byFee:      make([]*Candidate, 0),
+		byID:       make(map[[32]byte]*Candidate),
 		byAccount:  make(map[[20]byte]*AccountQueue),
 		// maxSize starts as nil (no limit) matching rippled's std::optional nullopt.
 		// It gets set on the first processClosedLedger call.
@@ -144,17 +150,18 @@ func (q *TxQ) Size() int {
 func (q *TxQ) GetTxBlob(txID [32]byte) ([]byte, bool) {
 	q.mu.Lock()
 	defer q.mu.Unlock()
-	for _, candidate := range q.byFee {
-		if candidate == nil || candidate.TxID != txID || candidate.Txn == nil {
-			continue
-		}
-		raw := candidate.Txn.GetRawBytes()
-		if len(raw) == 0 {
-			return nil, false
-		}
-		return append([]byte(nil), raw...), true
+	if q.byID == nil {
+		q.rebuildByID()
 	}
-	return nil, false
+	candidate := q.byID[txID]
+	if candidate == nil || candidate.Txn == nil {
+		return nil, false
+	}
+	raw := candidate.Txn.GetRawBytes()
+	if len(raw) == 0 {
+		return nil, false
+	}
+	return append([]byte(nil), raw...), true
 }
 
 // RequiredFeeLevel returns the fee level required to bypass the queue
@@ -171,10 +178,17 @@ func (q *TxQ) RequiredFeeLevel(txInLedger uint32) FeeLevel {
 // Candidates with the same fee are ordered by txID XOR parentHash for deterministic ordering.
 // Caller must hold the lock.
 func (q *TxQ) insertByFee(c *Candidate) {
+	if c == nil {
+		return
+	}
+	if q.byID == nil {
+		q.byID = make(map[[32]byte]*Candidate)
+	}
 	pos := q.findInsertPosition(c)
 	q.byFee = append(q.byFee, nil)
 	copy(q.byFee[pos+1:], q.byFee[pos:])
 	q.byFee[pos] = c
+	q.byID[c.TxID] = c
 }
 
 // findInsertPosition finds where to insert a candidate to maintain order.
@@ -221,6 +235,9 @@ func (q *TxQ) removeByFee(c *Candidate) {
 	for i, candidate := range q.byFee {
 		if candidate == c {
 			q.byFee = append(q.byFee[:i], q.byFee[i+1:]...)
+			if q.byID != nil && q.byID[c.TxID] == c {
+				delete(q.byID, c.TxID)
+			}
 			return
 		}
 	}
@@ -244,7 +261,9 @@ func (q *TxQ) erase(c *Candidate) {
 // Walks accounts in sorted order and candidates via GetSortedCandidates
 // so the rebuilt byFee slice is bit-identical across validators.
 func (q *TxQ) rebuildByFee() {
-	q.byFee = make([]*Candidate, 0, len(q.byFee))
+	capacity := len(q.byFee)
+	q.byFee = make([]*Candidate, 0, capacity)
+	q.byID = make(map[[32]byte]*Candidate, capacity)
 
 	accounts := make([][20]byte, 0, len(q.byAccount))
 	for a := range q.byAccount {
@@ -257,6 +276,18 @@ func (q *TxQ) rebuildByFee() {
 	for _, a := range accounts {
 		for _, c := range q.byAccount[a].SortedCandidates() {
 			q.insertByFee(c)
+		}
+	}
+}
+
+// rebuildByID reconstructs the transaction lookup from byFee. It is used only
+// for zero-value/test queues; production queues maintain the index on every
+// insertion and removal.
+func (q *TxQ) rebuildByID() {
+	q.byID = make(map[[32]byte]*Candidate, len(q.byFee))
+	for _, candidate := range q.byFee {
+		if candidate != nil {
+			q.byID[candidate.TxID] = candidate
 		}
 	}
 }

@@ -266,10 +266,10 @@ func TestBroadcastHaveTxSet_BuildsValidFrame(t *testing.T) {
 // TestServeDoTransactions_FetchesViaProvider verifies the
 // TMGetObjectByHash{otTRANSACTIONS} reply path: requested hashes are
 // looked up via the configured txProvider, found blobs are packed
-// into a TMTransactions reply, missing hashes are silently skipped.
+// into a TMTransactions reply, and a missing hash aborts with a malformed
+// request charge.
 // Mirrors rippled's PeerImp::doTransactions
-// (PeerImp.cpp:2787-2839) for the go-xrpl-permissive variant
-// (skip-on-miss instead of charge-on-miss).
+// (PeerImp.cpp:2787-2839).
 func TestServeDoTransactions_FetchesViaProvider(t *testing.T) {
 	id, err := NewIdentity()
 	require.NoError(t, err)
