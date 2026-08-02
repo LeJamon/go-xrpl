@@ -11,7 +11,6 @@ import (
 	"time"
 )
 
-// CachedEndpoint represents a cached peer endpoint.
 type CachedEndpoint struct {
 	Address    string    `json:"address"`
 	Port       uint16    `json:"port"`
@@ -30,7 +29,6 @@ type BootCache struct {
 	writeFile atomicFileWriter
 }
 
-// NewBootCache creates a new boot cache.
 func NewBootCache(dataDir string) *BootCache {
 	var filePath string
 	if dataDir != "" {
@@ -42,7 +40,6 @@ func NewBootCache(dataDir string) *BootCache {
 	}
 }
 
-// Load loads the cache from disk.
 func (bc *BootCache) Load() error {
 	if bc == nil || bc.filePath == "" {
 		return nil
@@ -124,7 +121,6 @@ func (bc *BootCache) Save() error {
 	return err
 }
 
-// Insert adds or updates an endpoint in the cache.
 func (bc *BootCache) Insert(address string, port uint16) {
 	if bc == nil || strings.TrimSpace(address) == "" || port == 0 {
 		return
@@ -146,7 +142,6 @@ func (bc *BootCache) Insert(address string, port uint16) {
 	bc.dirty = true
 }
 
-// MarkFailed records a connection failure.
 func (bc *BootCache) MarkFailed(address string) {
 	bc.mu.Lock()
 	defer bc.mu.Unlock()
@@ -162,7 +157,6 @@ func (bc *BootCache) MarkFailed(address string) {
 	}
 }
 
-// MarkSuccess records a successful connection.
 func (bc *BootCache) MarkSuccess(address string) {
 	bc.mu.Lock()
 	defer bc.mu.Unlock()

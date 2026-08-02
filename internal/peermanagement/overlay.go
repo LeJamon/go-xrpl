@@ -983,7 +983,6 @@ func (o *Overlay) Run(ctx context.Context) error {
 	o.lifecycleMu.Unlock()
 	g.Go(func() error { return scheduler.Run(gCtx) })
 
-	// Accept incoming connections.
 	o.listenerMu.RLock()
 	hasListener := o.listener != nil
 	o.listenerMu.RUnlock()
@@ -991,18 +990,15 @@ func (o *Overlay) Run(ctx context.Context) error {
 		g.Go(func() error { return o.acceptLoop(gCtx) })
 	}
 
-	// Event processing loops.
 	g.Go(func() error { return o.eventLoop(gCtx) })
 	g.Go(func() error { return o.consensusEventLoop(gCtx) })
 	g.Go(func() error { return o.consensusControlEventLoop(gCtx) })
 	g.Go(func() error { return o.acquisitionEventLoop(gCtx) })
 
-	// Discovery/autoconnect loop.
 	if o.discovery != nil {
 		g.Go(func() error { return o.discoveryLoop(gCtx) })
 	}
 
-	// Maintenance loop (cleanup, ping, etc.).
 	g.Go(func() error { return o.maintenanceLoop(gCtx) })
 
 	err := g.Wait()

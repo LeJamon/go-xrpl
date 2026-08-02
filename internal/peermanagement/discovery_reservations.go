@@ -12,13 +12,11 @@ import (
 	addresscodec "github.com/LeJamon/go-xrpl/codec/addresscodec"
 )
 
-// PeerReservation represents a reserved peer slot.
 type PeerReservation struct {
 	NodeID      string `json:"node_id"`
 	Description string `json:"description,omitempty"`
 }
 
-// ReservationTable manages peer reservations.
 type ReservationTable struct {
 	mu           sync.RWMutex
 	reservations map[string]*PeerReservation
@@ -26,7 +24,6 @@ type ReservationTable struct {
 	writeFile    atomicFileWriter
 }
 
-// NewReservationTable creates a new reservation table.
 func NewReservationTable(dataDir string) *ReservationTable {
 	var filePath string
 	if dataDir != "" {
@@ -38,7 +35,6 @@ func NewReservationTable(dataDir string) *ReservationTable {
 	}
 }
 
-// Contains returns true if the node has a reservation.
 func (t *ReservationTable) Contains(nodeID string) bool {
 	if t == nil {
 		return false

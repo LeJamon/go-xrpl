@@ -127,9 +127,6 @@ func TestSendTxQueueAnnounce_FeatureDisabled_NoEmit(t *testing.T) {
 		"sendTxQueueAnnounce must skip the provider call when EnableTxReduceRelay=false")
 }
 
-// TestSendTxQueueAnnounce_NoProvider_NoOp covers an opted-in overlay with no
-// connected peers carrying deferred transaction hashes. The emitter must
-// silently no-op when there is no per-peer queue to drain.
 func TestSendTxQueueAnnounce_NoProvider_NoOp(t *testing.T) {
 	o := &Overlay{
 		cfg:     Config{EnableTxReduceRelay: true},
@@ -138,7 +135,6 @@ func TestSendTxQueueAnnounce_NoProvider_NoOp(t *testing.T) {
 		cluster: cluster.New(),
 	}
 	o.sendTxQueueAnnounce()
-	// No panic == pass; an empty overlay has no outbound frame.
 }
 
 func TestSendTxQueueAnnounce_DrainsPerPeerQueueWithoutStarvation(t *testing.T) {

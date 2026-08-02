@@ -2,7 +2,6 @@ package peermanagement
 
 import "sync"
 
-// FeatureSet represents a set of supported features.
 type FeatureSet struct {
 	mu       sync.RWMutex
 	features map[Feature]bool
