@@ -167,15 +167,15 @@ type Overlay struct {
 	// block. Guarded by providersMu.
 	onPeerConnect func(PeerID)
 
-	// txProvider returns the raw tx blob for hash if it is in the
-	// open-ledger view. Wired by the consensus adaptor at startup so
-	// the tx-reduce-relay reply path (handleGetObjectsMessage,
-	// otTRANSACTIONS branch) can answer a peer's TMGetObjectByHash
-	// query without importing internal/ledger/service into this
-	// package. nil-safe — the reply path drops without charging when
-	// the provider isn't wired (tests, or operators running the
-	// overlay without a ledger backend). Guarded by providersMu.
+	// txProvider is the legacy open-ledger-only lookup retained for embedded
+	// callers. Production wiring uses txRecordProvider so queued transactions
+	// are included in reduce-relay replies. Guarded by providersMu.
 	txProvider func(hash [32]byte) ([]byte, bool)
+
+	// txRecordProvider is the authoritative transaction-cache lookup used by
+	// reduce-relay replies. It includes queued transactions, which are not part
+	// of the open-ledger view exposed by txProvider.
+	txRecordProvider func(hash [32]byte) (TxRecord, bool)
 
 	// nodeObjectProvider returns the raw node-store blob for a content
 	// hash. Wired by the server at startup so the generic TMGetObjectByHash serve
@@ -186,10 +186,9 @@ type Overlay struct {
 	// store, or tests). Guarded by providersMu.
 	nodeObjectProvider func(hash [32]byte) ([]byte, bool)
 
-	// openLedgerHashesProvider returns the set of tx hashes currently
-	// in the open-ledger view. Drives the periodic tx-reduce-relay
-	// TMHaveTransactions emission in sendTxQueueAnnounce. nil-safe —
-	// the emitter skips when unwired. Guarded by providersMu.
+	// openLedgerHashesProvider is retained for compatibility with older
+	// embedded callers; per-peer deferred queues now drive
+	// TMHaveTransactions emission. Guarded by providersMu.
 	openLedgerHashesProvider func() [][32]byte
 
 	// clusterFeeSink is invoked by handleClusterMessage after the
@@ -301,6 +300,16 @@ const (
 	overlayLifecycleStopping
 	overlayLifecycleStopped
 )
+
+// TxRecord is the transaction-cache state needed to build a rippled-compatible
+// TMTransactions reply. Status is normally TxStatusCurrent for an open-ledger
+// transaction and TxStatusNew for a queued transaction; Deferred identifies a
+// transaction held by the transaction queue.
+type TxRecord struct {
+	RawTransaction []byte
+	Status         message.TransactionStatus
+	Deferred       bool
+}
 
 // LedgerSync returns the overlay's ledger-sync handler so callers in a
 // higher layer (e.g., consensus startup) can wire a LedgerProvider that

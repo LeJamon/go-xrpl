@@ -198,6 +198,13 @@ type Peer struct {
 	// past the cap, and the ring is never cleared (not even on LostSync).
 	recentLedgers [][32]byte
 
+	// txQueue holds transaction hashes deferred by reduce-relay. It mirrors
+	// rippled PeerImp::txQueue_: hashes remain queued until a HaveTransactions
+	// frame is successfully admitted to this peer's outbound queue.
+	txQueueMu  sync.Mutex
+	txQueue    [][32]byte
+	txQueueSet map[[32]byte]struct{}
+
 	// protocolVersion: negotiated peer-protocol token (e.g. "XRPL/2.2").
 	// Mirrors rippled PeerImp::protocol_, surfaced via `protocol` in the
 	// peers RPC (PeerImp.cpp:419). Rippled constructs PeerImp only after
@@ -264,6 +271,7 @@ func NewPeer(id PeerID, endpoint Endpoint, inbound bool, identity *Identity, eve
 		traffic:       NewTrafficCounter(),
 		metrics:       newPeerMetrics(nil),
 		squelchMap:    make(map[string]time.Time),
+		txQueueSet:    make(map[[32]byte]struct{}),
 		pingsInFlight: make(map[uint32]pingInFlight),
 		readPolicy: peerReadPolicy{
 			now:               time.Now,

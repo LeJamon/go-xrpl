@@ -470,8 +470,7 @@ func (o *Overlay) handleHaveTransactionsMessage(evt Event) {
 	// hash would amplify network load for a load-reduction feature.
 	// Drop the announcement silently in that case (the peer that
 	// negotiated tx-reduce-relay isn't malformed).
-	txProvider := o.txProviderSnapshot()
-	if txProvider == nil {
+	if o.txRecordProviderSnapshot() == nil && o.txProviderSnapshot() == nil {
 		return
 	}
 
@@ -483,7 +482,12 @@ func (o *Overlay) handleHaveTransactionsMessage(evt Event) {
 		}
 		var hash [32]byte
 		copy(hash[:], h)
-		if _, present := txProvider(hash); present {
+		if _, present := o.lookupTxRecord(hash); present {
+			// Rippled removes this hash from the peer's deferred queue when the
+			// peer confirms it already has the transaction.
+			if peer, exists := o.getPeer(evt.PeerID); exists {
+				peer.removeTxQueue(hash)
+			}
 			continue
 		}
 		missing = append(missing, message.IndexedObject{
@@ -671,9 +675,8 @@ func (o *Overlay) handleEndpointsMessage(evt Event) {
 // type is otTRANSACTIONS. Mirrors rippled PeerImp::doTransactions
 // (PeerImp.cpp:2787-2839): walk the requested hashes, look each up,
 // build a TMTransactions reply containing the blobs we have, and
-// emit it. Hashes we don't have are charged feeMalformedRequest in
-// rippled — we treat them as "skip", matching the more permissive
-// go-xrpl stance that the peer may legitimately be a hop ahead.
+// emit it. Hashes we don't have are charged feeMalformedRequest and
+// abort the reply, matching rippled's doTransactions path.
 func (o *Overlay) serveDoTransactions(peerID PeerID, req *message.GetObjectByHash) {
 	o.serveDoTransactionsContext(context.Background(), peerID, req)
 }
@@ -682,7 +685,7 @@ func (o *Overlay) serveDoTransactionsContext(ctx context.Context, peerID PeerID,
 	if err := ctx.Err(); err != nil {
 		return
 	}
-	const maxQueueSize = 64 // matches rippled reduce_relay::MAX_TX_QUEUE_SIZE
+	const maxQueueSize = peerTxQueueMax
 	if len(req.Objects) == 0 {
 		return
 	}
@@ -690,11 +693,10 @@ func (o *Overlay) serveDoTransactionsContext(ctx context.Context, peerID PeerID,
 		o.IncPeerBadData(peerID, "get-objects-txn-too-big")
 		return
 	}
-	txProvider := o.txProviderSnapshot()
-	if txProvider == nil {
+	if o.txRecordProviderSnapshot() == nil && o.txProviderSnapshot() == nil {
 		// Negotiated tx-reduce-relay but no lookup wired — silently
 		// drop. An operator who flipped EnableTxReduceRelay but
-		// hasn't wired SetTxProvider would otherwise spam this log.
+		// hasn't wired a transaction provider would otherwise spam this log.
 		return
 	}
 
@@ -712,17 +714,24 @@ func (o *Overlay) serveDoTransactionsContext(ctx context.Context, peerID PeerID,
 		}
 		var hash [32]byte
 		copy(hash[:], obj.Hash)
-		blob, ok := txProvider(hash)
+		record, ok := o.lookupTxRecord(hash)
 		if !ok {
-			continue
+			o.IncPeerBadData(peerID, "get-objects-txn-missing")
+			return
 		}
-		if !budget.reserve(serveReplyTransactionOverhead, blob) {
+		if !budget.reserve(serveReplyTransactionOverhead, record.RawTransaction) {
 			break
 		}
+		status := record.Status
+		if status == 0 {
+			status = message.TxStatusCurrent
+		}
+		receiveTimestamp := uint64(protocol.RippleSeconds(time.Now()))
 		reply.Transactions = append(reply.Transactions, message.Transaction{
-			RawTransaction:   blob,
-			Status:           message.TxStatusCurrent,
-			ReceiveTimestamp: uint64(protocol.RippleSeconds(time.Now())),
+			RawTransaction:   append([]byte(nil), record.RawTransaction...),
+			Status:           status,
+			ReceiveTimestamp: receiveTimestamp,
+			Deferred:         record.Deferred,
 		})
 	}
 	if len(reply.Transactions) == 0 {
@@ -734,6 +743,28 @@ func (o *Overlay) serveDoTransactionsContext(ctx context.Context, peerID PeerID,
 		return
 	}
 	encodeAndSendPriority(peer, reply, "TMTransactions reply")
+}
+
+func (o *Overlay) lookupTxRecord(hash [32]byte) (TxRecord, bool) {
+	if provider := o.txRecordProviderSnapshot(); provider != nil {
+		record, ok := provider(hash)
+		if ok {
+			record.RawTransaction = append([]byte(nil), record.RawTransaction...)
+		}
+		return record, ok
+	}
+	provider := o.txProviderSnapshot()
+	if provider == nil {
+		return TxRecord{}, false
+	}
+	blob, ok := provider(hash)
+	if !ok {
+		return TxRecord{}, false
+	}
+	return TxRecord{
+		RawTransaction: append([]byte(nil), blob...),
+		Status:         message.TxStatusCurrent,
+	}, true
 }
 
 // hardMaxReplyNodes bounds a single generic by-hash request. Mirrors
@@ -929,9 +960,9 @@ func (o *Overlay) serveGetObjectsContext(ctx context.Context, peerID PeerID, req
 // TMTransaction frame. Like rippled, which
 // hands the decoded inner straight to handleTransaction, we never
 // re-serialize: the decode happened once when the batch was parsed.
-// The only behavioural difference rippled draws between batched and
-// unbatched is the eraseTxQueue path on a duplicate hit, which go-xrpl
-// doesn't implement (no tx-reduce-relay outbound queue to erase from).
+// The batched path shares the same per-peer deferred queue as the unbatched
+// path; HAVE_TRANSACTIONS acknowledgements remove queued hashes before this
+// handler forwards the batch to the transaction router.
 func (o *Overlay) handleTransactionsBatchMessage(evt Event) {
 	if !o.cfg.EnableTxReduceRelay || !o.PeerSupports(evt.PeerID, FeatureTxReduceRelay) {
 		slog.Debug("TMTransactions batch without negotiated tx-reduce-relay; dropping",

@@ -20,16 +20,24 @@ func peerTxReduceRelayEnabled(p *Peer) bool {
 // minimum (TxReduceRelayMinPeers + peers without the feature), the full frame
 // is sent to every candidate peer. Otherwise it is sent to all peers without
 // the feature plus a TxRelayPercentage share of the enabled peers; the
-// remaining enabled peers learn of the transaction via the periodic
-// TMHaveTransactions announce (sendTxQueueAnnounce) — go-xrpl's analogue of
-// rippled's per-peer addTxQueue, since that announce already gossips the
-// open-ledger tx hashes to every tx-reduce-relay peer each second.
+// remaining enabled peers learn of the transaction via their per-peer
+// TMHaveTransactions queue, drained by the periodic sendTxQueueAnnounce tick.
 //
 // except is the originating peer: go-xrpl's single-element toSkip. rippled also
 // skips peers a HashRouter marks as already holding the tx, which go-xrpl does
 // not track (see router.relayTransaction); suppressed is therefore reported as
 // the single origin peer.
 func (o *Overlay) RelayTransaction(except PeerID, frame []byte) {
+	o.relayTransaction(except, [32]byte{}, frame)
+}
+
+// RelayTransactionWithHash is RelayTransaction with the transaction ID used
+// to populate suppressed peers' lossless reduce-relay queues.
+func (o *Overlay) RelayTransactionWithHash(except PeerID, hash [32]byte, frame []byte) {
+	o.relayTransaction(except, hash, frame)
+}
+
+func (o *Overlay) relayTransaction(except PeerID, hash [32]byte, frame []byte) {
 	// getActivePeers (OverlayImpl.cpp:1062-1094): total counts every active
 	// peer; disabled counts peers without the feature; candidates are the
 	// peers not in toSkip; enabledInSkip counts skipped peers that have the
@@ -103,7 +111,12 @@ func (o *Overlay) RelayTransaction(except PeerID, frame []byte) {
 	}
 
 	enabledAndRelayed := enabledInSkip
-	relayTransactionCandidates(candidates, enabledAndRelayed, enabledTarget, sendFull)
+	relayTransactionCandidates(candidates, enabledAndRelayed, enabledTarget, sendFull,
+		func(peer *Peer) {
+			if hash != ([32]byte{}) {
+				peer.addTxQueue(hash)
+			}
+		})
 }
 
 func relayTransactionCandidates(
@@ -111,6 +124,7 @@ func relayTransactionCandidates(
 	enabledAndRelayed uint64,
 	enabledTarget uint64,
 	sendFull func(*Peer) bool,
+	queue ...func(*Peer),
 ) {
 	for _, p := range candidates {
 		switch {
@@ -121,8 +135,11 @@ func relayTransactionCandidates(
 				enabledAndRelayed++
 			}
 		default:
-			// Remaining enabled peers learn of the tx via the periodic
-			// TMHaveTransactions announce (rippled's addTxQueue analogue).
+			// Remaining enabled peers learn of the tx via their per-peer
+			// TMHaveTransactions queue.
+			if len(queue) > 0 && queue[0] != nil {
+				queue[0](p)
+			}
 		}
 	}
 }

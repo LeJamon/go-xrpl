@@ -1014,6 +1014,24 @@ func (s *Service) OpenLedgerGetTx(hash [32]byte) ([]byte, bool) {
 	return raw, true
 }
 
+// TransactionForRelay looks up a transaction in the authoritative local
+// transaction cache used by reduce-relay replies. Open-ledger transactions
+// are current; transactions retained by TxQ are new and deferred until a
+// later ledger. The returned blob is a private copy.
+func (s *Service) TransactionForRelay(hash [32]byte) (blob []byte, included, deferred, ok bool) {
+	if blob, ok = s.OpenLedgerGetTx(hash); ok {
+		return append([]byte(nil), blob...), true, false, true
+	}
+	s.mu.RLock()
+	queue := s.txQueue
+	s.mu.RUnlock()
+	if queue == nil {
+		return nil, false, false, false
+	}
+	blob, ok = queue.GetTxBlob(hash)
+	return blob, false, ok, ok
+}
+
 // GetOpenLedger returns the current open ledger
 func (s *Service) GetOpenLedger() *ledger.Ledger {
 	s.mu.RLock()

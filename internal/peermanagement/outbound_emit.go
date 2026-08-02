@@ -29,19 +29,14 @@ import (
 // us within the first close-cycle they participate in.
 const clusterBroadcastInterval = 10 * time.Second
 
-// txQueueBroadcastInterval drives the periodic tx-reduce-relay
-// outbound emission. Matches rippled's OverlayImpl::Timer::on_timer
-// at 1s (OverlayImpl.cpp:104-108). Rippled only emits when the
-// per-peer txQueue_ has at least one entry; go-xrpl doesn't maintain
-// per-peer queues, so the emit body itself early-returns on an empty
-// open-ledger hashes snapshot (see sendTxQueueAnnounce) — same effect
-// for the (common) empty-mempool case.
+// txQueueBroadcastInterval drives the periodic tx-reduce-relay outbound
+// emission. Matches rippled's OverlayImpl::Timer::on_timer at 1s
+// (OverlayImpl.cpp:104-108).
 const txQueueBroadcastInterval = 1 * time.Second
 
 // txQueueMaxEntriesPerFrame caps a single outbound TMHaveTransactions
-// frame. Matches rippled reduce_relay::MAX_TX_QUEUE_SIZE (64). Beyond
-// that, rippled rotates to a fresh frame; we drop the tail since
-// go-xrpl has no per-peer cursor state.
+// frame. Matches rippled reduce_relay::kMaxTxQueueSize (64). A peer's
+// deferred queue retains the remainder for the next timer tick.
 const txQueueMaxEntriesPerFrame = 64
 
 func buildFrame(msg message.Message, opName string, logAttrs ...any) []byte {
@@ -193,40 +188,22 @@ func (o *Overlay) sendClusterUpdate() {
 // every tx-reduce-relay-negotiated peer. Mirrors rippled's
 // OverlayImpl::sendTxQueue at OverlayImpl.cpp:1366-1373 except that
 // rippled maintains per-peer txQueue_ accumulators (PeerImp.cpp:303-
-// 320) while go-xrpl announces the open-ledger snapshot.
+// 320), which go-xrpl also retains until each frame is admitted.
 //
 // Skipped entirely when EnableTxReduceRelay is off — that's the
 // operator opt-in that gates whether we advertise the feature in
 // handshake at all. Without the advertisement no peer will negotiate,
 // so the gossip would land on deaf ears.
 func (o *Overlay) sendTxQueueAnnounce() {
+	o.sendTxQueueAnnounceWith(func(peer *Peer) error {
+		return peer.sendTxQueue()
+	})
+}
+
+func (o *Overlay) sendTxQueueAnnounceWith(send func(*Peer) error) {
 	if !o.cfg.EnableTxReduceRelay {
 		return
 	}
-	provider := o.openLedgerHashesProviderSnapshot()
-	if provider == nil {
-		return
-	}
-
-	hashes := provider()
-	if len(hashes) == 0 {
-		return
-	}
-	if len(hashes) > txQueueMaxEntriesPerFrame {
-		hashes = hashes[:txQueueMaxEntriesPerFrame]
-	}
-
-	wire := make([][]byte, 0, len(hashes))
-	for _, h := range hashes {
-		hh := h
-		wire = append(wire, hh[:])
-	}
-	msg := &message.HaveTransactions{Hashes: wire}
-	frame := buildFrame(msg, "HaveTransactions")
-	if frame == nil {
-		return
-	}
-
 	// Resolve the peer set and negotiated capabilities while holding peersMu,
 	// then release it before enqueueing. PeerSupports performs its own peer-map
 	// lookup, so calling it while this read lock is held can deadlock when a
@@ -252,7 +229,7 @@ func (o *Overlay) sendTxQueueAnnounce() {
 	o.peersMu.RUnlock()
 
 	for _, target := range targets {
-		if err := target.peer.Send(frame); err != nil {
+		if err := send(target.peer); err != nil {
 			slog.Debug("HaveTransactions send failed",
 				"t", "Overlay", "peer", target.id, "err", err)
 		}

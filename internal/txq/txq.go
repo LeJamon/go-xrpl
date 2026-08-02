@@ -137,6 +137,26 @@ func (q *TxQ) Size() int {
 	return len(q.byFee)
 }
 
+// GetTxBlob returns a copy of the raw transaction held by the queue. The
+// transaction queue is an authoritative cache for reduce-relay replies: a
+// terQUEUED transaction is not present in the open-ledger view yet, but peers
+// must still be able to fetch it by hash.
+func (q *TxQ) GetTxBlob(txID [32]byte) ([]byte, bool) {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	for _, candidate := range q.byFee {
+		if candidate == nil || candidate.TxID != txID || candidate.Txn == nil {
+			continue
+		}
+		raw := candidate.Txn.GetRawBytes()
+		if len(raw) == 0 {
+			return nil, false
+		}
+		return append([]byte(nil), raw...), true
+	}
+	return nil, false
+}
+
 // RequiredFeeLevel returns the fee level required to bypass the queue
 // and get directly into the open ledger.
 func (q *TxQ) RequiredFeeLevel(txInLedger uint32) FeeLevel {
