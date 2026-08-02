@@ -115,7 +115,7 @@ func TestProposalTracker_ReplayPurgesUntrustedBeforeRetrust(t *testing.T) {
 	}
 }
 
-func TestProposalTracker_ReplaySeqLeaveUnvotesAndAllowsFreshRejoin(t *testing.T) {
+func TestProposalTracker_ReplaySeqLeavePersistsForLedgerAndAllowsNextLedgerRejoin(t *testing.T) {
 	pt := newProposalTracker()
 	prev := consensus.LedgerID{0xA6}
 	node := consensus.NodeID{0x05}
@@ -136,17 +136,32 @@ func TestProposalTracker_ReplaySeqLeaveUnvotesAndAllowsFreshRejoin(t *testing.T)
 		t.Fatal("replayed seqLeave left a current position")
 	}
 
-	// Dead markers are round-scoped. The consumed bow-out history must not
-	// replay again and prevent a fresh position in the next round.
+	// Replaying the same ledger after a round reset must restore the terminal
+	// bow-out before considering a later buffered position for that ledger.
 	pt.ResetRound()
-	fresh := &consensus.Proposal{NodeID: node, PreviousLedger: prev, Position: 0, TxSet: txID}
-	pt.BufferRecent(fresh)
+	sameLedger := &consensus.Proposal{NodeID: node, PreviousLedger: prev, Position: 4, TxSet: txID}
+	pt.BufferRecent(sameLedger)
 	_, replayed, relay = pt.Replay(prev, func(consensus.NodeID) bool { return true })
-	if replayed != 1 || len(relay) != 1 || !reflect.DeepEqual(relay[0], fresh) {
-		t.Fatalf("fresh rejoin replayed=%d relay=%d; want 1/1", replayed, len(relay))
+	if replayed != 0 || len(relay) != 1 || !reflect.DeepEqual(relay[0], bowOut) {
+		t.Fatalf("same-ledger replay = replayed %d relay %d; want bow-out 0/1", replayed, len(relay))
 	}
-	if got := pt.proposals[node]; !reflect.DeepEqual(got, fresh) {
-		t.Fatal("fresh proposal did not rejoin after round reset")
+	if !pt.IsDead(node) {
+		t.Fatal("same-ledger replay did not restore dead marker")
+	}
+	if _, ok := pt.proposals[node]; ok {
+		t.Fatal("same-ledger proposal rejoined after bow-out")
+	}
+
+	pt.ResetRound()
+	nextPrev := consensus.LedgerID{0xA7}
+	nextLedger := &consensus.Proposal{NodeID: node, PreviousLedger: nextPrev, Position: 0, TxSet: txID}
+	pt.BufferRecent(nextLedger)
+	_, replayed, relay = pt.Replay(nextPrev, func(consensus.NodeID) bool { return true })
+	if replayed != 1 || len(relay) != 1 || !reflect.DeepEqual(relay[0], nextLedger) {
+		t.Fatalf("next-ledger rejoin replayed=%d relay=%d; want 1/1", replayed, len(relay))
+	}
+	if got := pt.proposals[node]; !reflect.DeepEqual(got, nextLedger) {
+		t.Fatal("fresh proposal did not rejoin on the next ledger")
 	}
 }
 

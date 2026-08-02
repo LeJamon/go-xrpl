@@ -119,25 +119,6 @@ func (pt *proposalTracker) PurgeNode(nodeID consensus.NodeID) {
 	delete(pt.recentProposals, nodeID)
 }
 
-// dropBufferedThrough removes a node's replay history through p, including p.
-// A bow-out is terminal for the current round; retaining older positions would
-// replay the same dead marker on the next round and block a fresh rejoin.
-func (pt *proposalTracker) dropBufferedThrough(nodeID consensus.NodeID, p *consensus.Proposal) {
-	positions := pt.recentProposals[nodeID]
-	for i, buffered := range positions {
-		if buffered != p {
-			continue
-		}
-		positions = positions[i+1:]
-		if len(positions) == 0 {
-			delete(pt.recentProposals, nodeID)
-		} else {
-			pt.recentProposals[nodeID] = positions
-		}
-		return
-	}
-}
-
 // MarkDead removes a node's position and records it as bowed out for the round.
 func (pt *proposalTracker) MarkDead(nodeID consensus.NodeID) {
 	delete(pt.proposals, nodeID)
@@ -255,8 +236,8 @@ func (pt *proposalTracker) Replay(prevID consensus.LedgerID, trusted func(consen
 				break
 			}
 			// Replay a bow-out through the same current/dead/unvote state
-			// transition as a live proposal. A later position in the same
-			// replay remains blocked by IsDead until the next round resets it.
+			// transition as a live proposal. Preserve it in recent history so
+			// repeated playback for this ledger remains terminal.
 			const seqLeave = uint32(0xFFFFFFFF)
 			if p.Position == seqLeave {
 				if pt.IsDead(nodeID) {
@@ -268,7 +249,6 @@ func (pt *proposalTracker) Replay(prevID consensus.LedgerID, trusted func(consen
 					break
 				}
 				relay = append(relay, cloneProposal(p))
-				pt.dropBufferedThrough(nodeID, p)
 				break
 			}
 			if pt.IsDead(nodeID) {
