@@ -3,12 +3,19 @@ package node
 import (
 	"context"
 	"errors"
+	"net/http"
 	"os"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
+	"github.com/LeJamon/go-xrpl/config"
 	"github.com/LeJamon/go-xrpl/internal/ledger/service"
+	"github.com/LeJamon/go-xrpl/internal/rpc"
 	xrpllog "github.com/LeJamon/go-xrpl/log"
+	"github.com/LeJamon/go-xrpl/storage/nodestore"
+	"github.com/LeJamon/go-xrpl/storage/relationaldb"
 )
 
 func TestRunReturnsCanceledContextBeforeStartup(t *testing.T) {
@@ -34,7 +41,6 @@ func TestWaitForShutdownReturnsContextCause(t *testing.T) {
 		result <- waitForShutdown(
 			ctx,
 			xrpllog.Discard(),
-			make(chan os.Signal),
 			make(chan os.Signal),
 			make(chan struct{}),
 			make(chan error),
@@ -66,7 +72,6 @@ func TestWaitForShutdownReturnsComponentError(t *testing.T) {
 		context.Background(),
 		xrpllog.Discard(),
 		make(chan os.Signal),
-		make(chan os.Signal),
 		make(chan struct{}),
 		make(chan error),
 		componentErrCh,
@@ -75,5 +80,281 @@ func TestWaitForShutdownReturnsComponentError(t *testing.T) {
 	)
 	if !errors.Is(err, componentErr) {
 		t.Fatalf("waitForShutdown() error = %v, want %v", err, componentErr)
+	}
+}
+
+func TestValidatorReloadLoopCancellationDoesNotWaitForLoader(t *testing.T) {
+	t.Parallel()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	requests := make(chan os.Signal, 1)
+	started := make(chan struct{})
+	release := make(chan struct{})
+	done := make(chan struct{})
+	sink := &recordingSink{}
+	go func() {
+		defer close(done)
+		runValidatorReloadLoop(
+			ctx,
+			xrpllog.Discard(),
+			sink,
+			"blocked.toml",
+			requests,
+			func(config.Paths) (*config.Config, error) {
+				close(started)
+				<-release
+				return nil, errors.New("released")
+			},
+		)
+	}()
+	requests <- os.Interrupt
+	<-started
+	cancel()
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("reload loop did not stop after cancellation")
+	}
+	close(release)
+	sink.mu.Lock()
+	defer sink.mu.Unlock()
+	if len(sink.calls) != 0 {
+		t.Fatal("canceled reload mutated the trusted validator set")
+	}
+}
+
+func TestValidatorReloadLoaderDoesNotAccumulateAfterTimeout(t *testing.T) {
+	t.Parallel()
+
+	loadGate := make(chan struct{}, 1)
+	release := make(chan struct{})
+	var calls atomic.Int32
+	load := func(config.Paths) (*config.Config, error) {
+		calls.Add(1)
+		<-release
+		return nil, errors.New("released")
+	}
+	for range 2 {
+		ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
+		applyValidatorReloadContextWithGate(
+			ctx,
+			xrpllog.Discard(),
+			&recordingSink{},
+			"blocked.toml",
+			load,
+			loadGate,
+		)
+		cancel()
+	}
+	if got := calls.Load(); got != 1 {
+		t.Fatalf("blocked loader goroutines = %d, want 1", got)
+	}
+	close(release)
+}
+
+func TestValidatorReloadLoopSerializesAndCoalescesRequests(t *testing.T) {
+	t.Parallel()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	requests := make(chan os.Signal, 1)
+	started := make(chan int, 2)
+	releaseFirst := make(chan struct{})
+	done := make(chan struct{})
+	var calls atomic.Int32
+	var active atomic.Int32
+	var maxActive atomic.Int32
+	go func() {
+		defer close(done)
+		runValidatorReloadLoop(
+			ctx,
+			xrpllog.Discard(),
+			&recordingSink{},
+			"reload.toml",
+			requests,
+			func(config.Paths) (*config.Config, error) {
+				call := int(calls.Add(1))
+				current := active.Add(1)
+				for {
+					previous := maxActive.Load()
+					if current <= previous || maxActive.CompareAndSwap(previous, current) {
+						break
+					}
+				}
+				started <- call
+				if call == 1 {
+					<-releaseFirst
+				}
+				active.Add(-1)
+				return nil, errors.New("test reload")
+			},
+		)
+	}()
+
+	requests <- os.Interrupt
+	if call := <-started; call != 1 {
+		t.Fatalf("first reload call = %d", call)
+	}
+	for range 100 {
+		select {
+		case requests <- os.Interrupt:
+		default:
+		}
+	}
+	close(releaseFirst)
+	select {
+	case call := <-started:
+		if call != 2 {
+			t.Fatalf("pending reload call = %d, want 2", call)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("coalesced pending reload was not processed")
+	}
+	cancel()
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("reload loop did not stop")
+	}
+	if got := calls.Load(); got != 2 {
+		t.Fatalf("reload calls = %d, want 2", got)
+	}
+	if got := maxActive.Load(); got != 1 {
+		t.Fatalf("concurrent reloads = %d, want 1", got)
+	}
+}
+
+type shutdownProbeDB struct {
+	nodestore.Database
+	close func() error
+}
+
+func (d *shutdownProbeDB) Close() error { return d.close() }
+
+type shutdownProbeRepository struct {
+	relationaldb.RepositoryManager
+	close func() error
+}
+
+func (r *shutdownProbeRepository) Close() error { return r.close() }
+
+func TestDoShutdownReportsCloseErrorsInDependencyOrder(t *testing.T) {
+	t.Parallel()
+
+	dbErr := errors.New("node store close failed")
+	repoErr := errors.New("repository close failed")
+	var mu sync.Mutex
+	var order []string
+	db := &shutdownProbeDB{close: func() error {
+		mu.Lock()
+		order = append(order, "node-store")
+		mu.Unlock()
+		return dbErr
+	}}
+	repo := &shutdownProbeRepository{close: func() error {
+		mu.Lock()
+		order = append(order, "repository")
+		mu.Unlock()
+		return repoErr
+	}}
+
+	err := doShutdownWithin(time.Second, nil, nil, nil, nil, nil, nil, db, repo, xrpllog.Discard())
+	if !errors.Is(err, dbErr) || !errors.Is(err, repoErr) {
+		t.Fatalf("shutdown error = %v, want both close errors", err)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if len(order) != 2 || order[0] != "node-store" || order[1] != "repository" {
+		t.Fatalf("close order = %v, want node-store then repository", order)
+	}
+}
+
+func TestDoShutdownBoundsBlockingStoreClose(t *testing.T) {
+	t.Parallel()
+
+	started := make(chan struct{})
+	release := make(chan struct{})
+	repo := &shutdownProbeRepository{close: func() error {
+		close(started)
+		<-release
+		return nil
+	}}
+	result := make(chan error, 1)
+	go func() {
+		result <- doShutdownWithin(50*time.Millisecond, nil, nil, nil, nil, nil, nil, nil, repo, xrpllog.Discard())
+	}()
+	<-started
+	select {
+	case err := <-result:
+		if !errors.Is(err, context.DeadlineExceeded) {
+			t.Fatalf("shutdown error = %v, want deadline exceeded", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("shutdown exceeded its total budget")
+	}
+	close(release)
+}
+
+func TestDoShutdownLeavesStoresOpenWhileTransportHandlerIsRunning(t *testing.T) {
+	runtimeCtx, cancelRuntime := context.WithCancel(context.Background())
+	defer cancelRuntime()
+	started := make(chan struct{})
+	release := make(chan struct{})
+	bound, err := bindRPCTransports(
+		runtimeCtx,
+		xrpllog.Discard(),
+		&config.Config{Ports: map[string]config.PortConfig{
+			"http": {IP: "127.0.0.1", Port: 0, Protocol: "http"},
+		}},
+		http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
+			close(started)
+			<-release
+		}),
+		rpc.NewWebSocketServer(time.Second, nil),
+		nil,
+		systemListen,
+	)
+	if err != nil {
+		t.Fatalf("bind transports: %v", err)
+	}
+	if err := bound.serve(xrpllog.Discard()); err != nil {
+		t.Fatalf("serve transports: %v", err)
+	}
+	requestDone := make(chan struct{})
+	go func() {
+		defer close(requestDone)
+		response, _ := http.Get("http://" + bound.http[0].address + "/")
+		if response != nil {
+			_ = response.Body.Close()
+		}
+	}()
+	select {
+	case <-started:
+	case <-time.After(time.Second):
+		t.Fatal("HTTP handler did not start")
+	}
+
+	var storeClosed atomic.Bool
+	db := &shutdownProbeDB{close: func() error {
+		storeClosed.Store(true)
+		return nil
+	}}
+	startedAt := time.Now()
+	err = doShutdownWithin(50*time.Millisecond, bound, nil, nil, nil, nil, nil, db, nil, xrpllog.Discard())
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("shutdown error = %v, want deadline exceeded", err)
+	}
+	if time.Since(startedAt) >= time.Second {
+		t.Fatal("shutdown exceeded its total budget")
+	}
+	if storeClosed.Load() {
+		t.Fatal("node store closed while a transport handler was still running")
+	}
+
+	close(release)
+	select {
+	case <-requestDone:
+	case <-time.After(time.Second):
+		t.Fatal("transport handler did not exit after release")
 	}
 }

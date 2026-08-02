@@ -134,9 +134,11 @@ type Engine struct {
 	heartbeat *time.Ticker
 
 	// Lifecycle
-	ctx    context.Context
-	cancel context.CancelFunc
-	wg     sync.WaitGroup
+	ctx      context.Context
+	cancel   context.CancelFunc
+	wg       sync.WaitGroup
+	done     chan error
+	doneOnce sync.Once
 
 	// now is the wall-clock source for round/phase DURATION metrics
 	// (time.Now in prod, a csf virtual clock under simulation). Distinct
@@ -306,6 +308,8 @@ func (e *Engine) refreshValidationConfig() int {
 	tracker.checkAcquired()
 	return quorum
 }
+
+var _ consensus.EngineTerminal = (*Engine)(nil)
 
 // ValidationArchive is the archive API subset the engine consumes,
 // decoupling rcl from the concrete archive type.
@@ -631,6 +635,7 @@ func (e *Engine) Start(ctx context.Context) error {
 		ctx = context.Background()
 	}
 	e.ctx, e.cancel = context.WithCancel(ctx)
+	e.done = make(chan error, 1)
 	e.prevLedger = ledger
 
 	trusted, quorum, negativeUNL := validationConfig(e.adaptor)
@@ -716,10 +721,29 @@ func (e *Engine) Start(ctx context.Context) error {
 	// Start the main loop, unless an external driver advances ticks.
 	if !e.manualTick {
 		e.wg.Add(1)
-		go e.run()
+		go func() {
+			e.run()
+			e.finish(context.Cause(e.ctx))
+		}()
 	}
 
 	return nil
+}
+
+// Done reports termination of the engine-owned background loop.
+func (e *Engine) Done() <-chan error {
+	e.lifecycleMu.Lock()
+	defer e.lifecycleMu.Unlock()
+	return e.done
+}
+
+func (e *Engine) finish(err error) {
+	e.doneOnce.Do(func() {
+		if e.done != nil {
+			e.done <- err
+			close(e.done)
+		}
+	})
 }
 
 // Stop shuts down the engine. A wired archive is drained and committed
@@ -736,6 +760,11 @@ func (e *Engine) Stop() error {
 		e.cancel()
 	}
 	e.wg.Wait()
+	var cause error
+	if e.ctx != nil {
+		cause = context.Cause(e.ctx)
+	}
+	e.finish(cause)
 	e.eventBus.Stop()
 
 	arc := e.loadArchive()

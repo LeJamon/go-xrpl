@@ -36,6 +36,8 @@ type nodeRunFunc func(
 	xrpllog.Logger,
 	xrpllog.Logger,
 	func(),
+	func(),
+	<-chan os.Signal,
 ) error
 
 func runNode(
@@ -47,8 +49,14 @@ func runNode(
 	rootLogger,
 	serverLog xrpllog.Logger,
 	ready func(),
+	stopping func(),
+	reload <-chan os.Signal,
 ) error {
-	return node.RunWithReady(ctx, cfg, configPath, standalone, startup, rootLogger, serverLog, ready)
+	return node.RunWithOptions(ctx, cfg, configPath, standalone, startup, rootLogger, serverLog, node.RunOptions{
+		Ready:    ready,
+		Stopping: stopping,
+		Reload:   reload,
+	})
 }
 
 func (a *application) newServerCommand(options *serverOptions) *cobra.Command {
@@ -85,13 +93,28 @@ func (a *application) serverRunner(options *serverOptions) func(*cobra.Command, 
 	}
 }
 
-func (a *application) runServer(cmd *cobra.Command, options *serverOptions) error {
+func (a *application) runServer(cmd *cobra.Command, options *serverOptions) (resultErr error) {
+	runCtx, cancel := context.WithCancelCause(cmd.Context())
+	defer cancel(nil)
+	defer func() {
+		cause := context.Cause(runCtx)
+		if isProcessSignal(cause) && wrapsOnly(resultErr, cause) {
+			resultErr = nil
+		}
+	}()
+	if cause := context.Cause(runCtx); cause != nil {
+		return cause
+	}
+
 	cfg, err := a.requireConfig(options.standalone)
 	if err != nil {
 		// Fold the guidance into the error so Execute() prints it once. A bare
 		// pre-print here would duplicate the message Execute() emits.
 		return fmt.Errorf("%w\n  Use 'xrpld generate-config' to create an initial configuration file."+
 			"\n  Example: xrpld server --conf /path/to/xrpld.toml", err)
+	}
+	if cause := context.Cause(runCtx); cause != nil {
+		return cause
 	}
 
 	startup, err := startupConfig(
@@ -124,8 +147,6 @@ func (a *application) runServer(cmd *cobra.Command, options *serverOptions) erro
 
 	serverLog.Info("Starting go-xrpl", "version", version.Version)
 
-	runCtx, cancel := context.WithCancelCause(cmd.Context())
-	defer cancel(nil)
 	auxiliary, err := bindAuxiliaryServers(os.Getenv, net.Listen)
 	if err != nil {
 		return err
@@ -145,6 +166,8 @@ func (a *application) runServer(cmd *cobra.Command, options *serverOptions) erro
 		rootLogger,
 		serverLog,
 		ready,
+		func() { cancel(nil) },
+		a.deps.reload,
 	)
 	cancel(nil)
 	return errors.Join(nodeErr, auxiliary.Shutdown())

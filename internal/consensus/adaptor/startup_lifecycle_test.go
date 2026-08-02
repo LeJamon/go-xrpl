@@ -17,6 +17,7 @@ type lifecycleTestEngine struct {
 	startErr  error
 	stopCount atomic.Int32
 	stopCheck func()
+	terminal  <-chan error
 }
 
 func (e *lifecycleTestEngine) Start(context.Context) error {
@@ -29,6 +30,10 @@ func (e *lifecycleTestEngine) Stop() error {
 	}
 	e.stopCount.Add(1)
 	return nil
+}
+
+func (e *lifecycleTestEngine) Done() <-chan error {
+	return e.terminal
 }
 
 func newLifecycleTestComponents(
@@ -112,6 +117,37 @@ func TestComponentsReportsRouterExit(t *testing.T) {
 	case <-components.overlayDone:
 	default:
 		t.Fatal("Stop returned before the overlay stopped")
+	}
+}
+
+func TestComponentsReportsEngineExit(t *testing.T) {
+	terminal := make(chan error, 1)
+	engine := &lifecycleTestEngine{terminal: terminal}
+	components := newLifecycleTestComponents(t, engine, nil)
+	require.NoError(t, components.Start(t.Context()))
+
+	terminalErr := errors.New("engine loop failed")
+	terminal <- terminalErr
+	select {
+	case err := <-components.Errors():
+		require.ErrorIs(t, err, terminalErr)
+		require.Contains(t, err.Error(), "consensus engine stopped")
+	case <-time.After(2 * time.Second):
+		t.Fatal("unexpected engine exit was not reported")
+	}
+	require.NoError(t, components.Stop())
+}
+
+func TestComponentsNormalStopDoesNotReportEngineFailure(t *testing.T) {
+	terminal := make(chan error)
+	engine := &lifecycleTestEngine{terminal: terminal}
+	components := newLifecycleTestComponents(t, engine, nil)
+	require.NoError(t, components.Start(t.Context()))
+	require.NoError(t, components.Stop())
+	select {
+	case err := <-components.Errors():
+		t.Fatalf("normal stop reported engine failure: %v", err)
+	default:
 	}
 }
 

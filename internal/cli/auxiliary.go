@@ -135,6 +135,7 @@ func (a *auxiliaryServers) Start(ctx context.Context, cancel context.CancelCause
 
 		for i := range a.servers {
 			entry := &a.servers[i]
+			entry.server.BaseContext = func(net.Listener) context.Context { return ctx }
 			a.serveWG.Add(1)
 			go func() {
 				defer a.serveWG.Done()

@@ -11,6 +11,11 @@ type EngineLifecycle interface {
 	Stop() error
 }
 
+// EngineTerminal is implemented by engines that expose background-loop exit.
+type EngineTerminal interface {
+	Done() <-chan error
+}
+
 type EngineRoundDriver interface {
 	// StartRound begins a round; proposing enables this node's proposal.
 	StartRound(round RoundID, proposing bool) error

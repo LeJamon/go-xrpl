@@ -258,6 +258,8 @@ func TestExplicitServerUsesFlagsBeforeOrAfterSubcommand(t *testing.T) {
 					startup service.StartupConfig,
 					_, _ xrpllog.Logger,
 					_ func(),
+					_ func(),
+					_ <-chan os.Signal,
 				) error {
 					gotStandalone = standalone
 					gotStartup = startup
@@ -298,6 +300,8 @@ func TestServerBindFailurePreventsNodeStart(t *testing.T) {
 		xrpllog.Logger,
 		xrpllog.Logger,
 		func(),
+		func(),
+		<-chan os.Signal,
 	) error {
 		nodeStarted.Store(true)
 		return nil
@@ -327,6 +331,8 @@ func TestServerCancellationShutsDownAuxiliaryListeners(t *testing.T) {
 		_,
 		_ xrpllog.Logger,
 		ready func(),
+		_ func(),
+		_ <-chan os.Signal,
 	) error {
 		ready()
 		close(started)
@@ -360,6 +366,51 @@ func TestServerCancellationShutsDownAuxiliaryListeners(t *testing.T) {
 	listener, err := net.Listen("tcp", address)
 	require.NoError(t, err, "auxiliary listener was not released")
 	require.NoError(t, listener.Close())
+}
+
+func TestServerProcessSignalCancelsNodeBeforeReady(t *testing.T) {
+	configPath := writeServerTestConfig(t)
+	address := availableLoopbackAddress(t)
+	t.Setenv("GOXRPL_PPROF", "")
+	t.Setenv("GOXRPL_METRICS", address)
+	t.Setenv("GOXRPL_PPROF_ALLOW_UNSAFE", "")
+
+	nodeStarted := make(chan struct{})
+	deps := defaultCommandDependencies()
+	deps.runNode = func(
+		ctx context.Context,
+		_ *config.Config,
+		_ string,
+		_ bool,
+		_ service.StartupConfig,
+		_, _ xrpllog.Logger,
+		_ func(),
+		_ func(),
+		_ <-chan os.Signal,
+	) error {
+		close(nodeStarted)
+		<-ctx.Done()
+		return context.Cause(ctx)
+	}
+	root := newRootCommand(IOStreams{Out: bytes.NewBuffer(nil), ErrOut: bytes.NewBuffer(nil)}, deps)
+	root.SetArgs([]string{"--conf", configPath, "server", "--standalone"})
+	ctx, cancel := context.WithCancelCause(context.Background())
+	result := make(chan error, 1)
+	go func() {
+		_, err := root.ExecuteContextC(ctx)
+		result <- err
+	}()
+	<-nodeStarted
+	cancel(&processSignalError{signal: os.Interrupt})
+	select {
+	case err := <-result:
+		require.NoError(t, err)
+	case <-time.After(time.Second):
+		t.Fatal("server did not stop after process signal")
+	}
+	rebound, err := net.Listen("tcp", address)
+	require.NoError(t, err)
+	require.NoError(t, rebound.Close())
 }
 
 func writeServerTestConfig(t *testing.T) string {
