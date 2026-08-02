@@ -25,7 +25,7 @@ func TestExtractAffectedAccountsUsesMetadataNodes(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	accounts := extractAffectedAccounts(blob)
+	accounts := ParseAcceptedTransaction(blob).AffectedAccounts()
 	if len(accounts) != 1 || accounts[0] != account {
 		t.Fatalf("affected accounts = %v, want [%s]", accounts, account)
 	}

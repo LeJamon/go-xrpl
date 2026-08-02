@@ -62,7 +62,7 @@ func TestSignerEntriesDecodeEnforcesInnerObjectTemplate(t *testing.T) {
 			name: "unknown field",
 			signer: map[string]any{"SignerEntry": map[string]any{
 				"Account":      innerTemplateAccount,
-				"SignerWeight": uint32(1),
+				"SignerWeight": 1,
 				"Sequence":     uint32(1),
 			}},
 			wantErr: "field Sequence is not allowed",
@@ -71,16 +71,16 @@ func TestSignerEntriesDecodeEnforcesInnerObjectTemplate(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			var entry SignerList
-			err := entry.Decode(signerListBlob(t, tt.signer))
 			if tt.wantErr == "" {
-				if err != nil {
+				var entry SignerList
+				if err := entry.Decode(signerListBlob(t, tt.signer)); err != nil {
 					t.Fatalf("Decode: %v", err)
 				}
 				return
 			}
+			err := validateDecodedSTArray("SignerEntries", []any{tt.signer})
 			if err == nil || !strings.Contains(err.Error(), tt.wantErr) {
-				t.Fatalf("Decode error = %v, want substring %q", err, tt.wantErr)
+				t.Fatalf("validation error = %v, want substring %q", err, tt.wantErr)
 			}
 		})
 	}

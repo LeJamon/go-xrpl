@@ -17,7 +17,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestDecodeTxWithMetaToJSONInjectsSyntheticFields(t *testing.T) {
+func TestProjectAcceptedTransactionInjectsSyntheticFields(t *testing.T) {
 	const issuer = "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh"
 	const sequence = uint32(42)
 	txJSON := map[string]any{
@@ -56,10 +56,12 @@ func TestDecodeTxWithMetaToJSONInjectsSyntheticFields(t *testing.T) {
 	data = append(data, byte(len(metaBlob)))
 	data = append(data, metaBlob...)
 
-	_, metaRaw, err := decodeTxWithMetaToJSONAt(data, handlers.SyntheticMetadataContext{LedgerSequence: 4_594_095})
+	projection, err := projectAcceptedTransaction(
+		service.ParseAcceptedTransaction(data),
+		handlers.SyntheticMetadataContext{LedgerSequence: 4_594_095},
+	)
 	require.NoError(t, err)
-	var decodedMeta map[string]any
-	require.NoError(t, json.Unmarshal(metaRaw, &decodedMeta))
+	decodedMeta := projection.metadata
 
 	_, accountBytes, err := addresscodec.DecodeClassicAddressToAccountID(issuer)
 	require.NoError(t, err)
@@ -150,22 +152,43 @@ func TestBuildValidatedTransactionEventRejectsCorruptLeaf(t *testing.T) {
 	}
 }
 
-func TestBuildValidatedTransactionPublicationsRejectsWholeLedger(t *testing.T) {
-	ledgerEvent := &service.LedgerAcceptedEvent{LedgerInfo: &service.LedgerInfo{
-		Sequence:  1,
-		Validated: true,
-		Closed:    true,
-	}}
-	publications, err := buildValidatedTransactionPublications(
-		[]service.TransactionResultEvent{
-			{TxHash: [32]byte{1}, TxData: validatedPaymentData(t, 0, 0), Validated: true, LedgerIndex: 1},
-			{TxHash: [32]byte{2}, TxData: []byte{0xff}, Validated: true, LedgerIndex: 1},
+func TestPrepareAcceptedPublicationsRejectsWholeLedger(t *testing.T) {
+	ledgerHash := [32]byte{0xAB}
+	goodAccepted := service.ParseAcceptedTransaction(validatedPaymentData(t, 0, 4))
+	require.NoError(t, goodAccepted.ParseError())
+	corruptAccepted := service.ParseAcceptedTransaction([]byte("corrupt"))
+	require.Error(t, corruptAccepted.ParseError())
+
+	event := &service.LedgerAcceptedEvent{
+		LedgerInfo: &service.LedgerInfo{
+			Sequence:  9,
+			Hash:      ledgerHash,
+			Validated: true,
+			Closed:    true,
 		},
-		ledgerEvent,
-		0,
-	)
+		TransactionResults: []service.TransactionResultEvent{
+			{
+				TxHash:      [32]byte{1},
+				TxData:      []byte("must not be decoded again"),
+				Accepted:    goodAccepted,
+				Validated:   true,
+				LedgerIndex: 9,
+				LedgerHash:  ledgerHash,
+			},
+			{
+				TxHash:      [32]byte{2},
+				Accepted:    corruptAccepted,
+				Validated:   true,
+				LedgerIndex: 9,
+				LedgerHash:  ledgerHash,
+			},
+		},
+	}
+
+	publications, bookTransactions, err := prepareAcceptedPublications(event, 0)
 	require.Error(t, err)
 	require.Nil(t, publications)
+	require.Nil(t, bookTransactions)
 }
 
 func validatedPaymentData(t *testing.T, networkID, transactionIndex uint32) []byte {

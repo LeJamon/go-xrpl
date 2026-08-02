@@ -616,6 +616,7 @@ func TestSubmitMultisignedUsesCanonicalFieldParsingAfterAdmission(t *testing.T) 
 		for i, account := range accounts {
 			signers[i] = map[string]any{"Signer": map[string]any{
 				"Account":       account,
+				"hash":          strings.Repeat("0", 64),
 				"SigningPubKey": "",
 				"TxnSignature":  "",
 			}}
@@ -645,7 +646,11 @@ func TestSubmitMultisignedUsesCanonicalFieldParsingAfterAdmission(t *testing.T) 
 		gotSigners := txJSON["Signers"].([]any)
 		previousID := []byte(nil)
 		for _, wrapped := range gotSigners {
-			account := wrapped.(map[string]any)["Signer"].(map[string]any)["Account"].(string)
+			signer := wrapped.(map[string]any)["Signer"].(map[string]any)
+			if _, ok := signer["hash"]; ok {
+				t.Fatal("submit_multisigned echoed discardable inner hash")
+			}
+			account := signer["Account"].(string)
 			_, accountID, err := addresscodec.DecodeClassicAddressToAccountID(account)
 			if err != nil {
 				t.Fatal(err)

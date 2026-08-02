@@ -118,4 +118,9 @@ func TestStageTransactionResultsSortsByTransactionIndex(t *testing.T) {
 		staged.results[2].TxHash,
 		staged.results[3].TxHash,
 	})
+	for _, result := range staged.results[:3] {
+		require.Error(t, result.Accepted.ParseError())
+		_, hasIndex := result.Accepted.TransactionIndex()
+		require.True(t, hasIndex)
+	}
 }

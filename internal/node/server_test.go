@@ -13,8 +13,6 @@ import (
 	"github.com/LeJamon/go-xrpl/internal/consensus/adaptor"
 	"github.com/LeJamon/go-xrpl/internal/rpc/types"
 	xrpllog "github.com/LeJamon/go-xrpl/log"
-	"github.com/LeJamon/go-xrpl/storage/nodestore"
-	"github.com/LeJamon/go-xrpl/storage/relationaldb"
 	"github.com/stretchr/testify/assert"
 )
 
@@ -36,27 +34,6 @@ type recordingSinkCall struct {
 	validators []consensus.NodeID
 	masterKeys [][33]byte
 }
-
-type shutdownErrorEngine struct {
-	consensus.Engine
-	err error
-}
-
-func (e *shutdownErrorEngine) Stop() error { return e.err }
-
-type shutdownErrorNodeStore struct {
-	nodestore.Database
-	err error
-}
-
-func (s *shutdownErrorNodeStore) Close() error { return s.err }
-
-type shutdownErrorRepositoryManager struct {
-	relationaldb.RepositoryManager
-	err error
-}
-
-func (m *shutdownErrorRepositoryManager) Close() error { return m.err }
 
 func TestEffectivePeerFetchDepth(t *testing.T) {
 	tests := []struct {
@@ -272,50 +249,24 @@ func TestReloadTrustedValidators_NilComponentsIsNoOp(t *testing.T) {
 	reloadTrustedValidators(xrpllog.Discard(), nil, "")
 }
 
-// TestDoShutdown_ToleratesNilComponents pins the partial-init teardown
-// contract: the deferred shutdown installed in runServer fires for whatever
-// the init path managed to populate, so any component — including wsServer —
-// may be nil when an early error return triggers it. doShutdown must drain
-// and log without dereferencing a nil component. Before the wsServer guard, a
-// startup that failed before the WebSocket server was constructed crashed
-// here on wsServer.Close(), masking the real startup error with a panic.
-func TestDoShutdown_ToleratesNilComponents(t *testing.T) {
-	// All components nil reproduces the earliest failure path. The success
-	// criterion is "doesn't crash": WebSocketServer.Close dereferences its
-	// receiver on the first line (connectionsMutex.Lock), so a nil wsServer
-	// would panic without the guard this test pins.
-	if err := doShutdown(nil, nil, nil, nil, nil, nil, nil, nil, xrpllog.Discard()); err != nil {
-		t.Fatal(err)
-	}
+func TestNodeRuntimeShutdownToleratesUnconfiguredComponents(t *testing.T) {
+	_ = (&nodeRuntime{serverLog: xrpllog.Discard()}).shutdown()
 }
 
-func TestDoShutdownReturnsConsensusPersistenceFailure(t *testing.T) {
+type shutdownErrorEngine struct {
+	consensus.Engine
+	err error
+}
+
+func (e *shutdownErrorEngine) Stop() error { return e.err }
+
+func TestNodeRuntimeShutdownReturnsConsensusPersistenceFailure(t *testing.T) {
 	want := errors.New("manifest persistence failed")
-	components := &adaptor.Components{Engine: &shutdownErrorEngine{err: want}}
-	err := doShutdown(nil, nil, nil, nil, components, nil, nil, nil, xrpllog.Discard())
-	if !errors.Is(err, want) {
-		t.Fatalf("doShutdown error = %v, want %v", err, want)
+	runtime := &nodeRuntime{
+		consensus: &adaptor.Components{Engine: &shutdownErrorEngine{err: want}},
+		serverLog: xrpllog.Discard(),
 	}
-}
-
-func TestDoShutdownReturnsStorageCloseFailures(t *testing.T) {
-	nodeStoreErr := errors.New("node store close failed")
-	repositoryErr := errors.New("repository close failed")
-	err := doShutdown(
-		nil,
-		nil,
-		nil,
-		nil,
-		nil,
-		nil,
-		&shutdownErrorNodeStore{err: nodeStoreErr},
-		&shutdownErrorRepositoryManager{err: repositoryErr},
-		xrpllog.Discard(),
-	)
-	if !errors.Is(err, nodeStoreErr) {
-		t.Fatalf("doShutdown error = %v, want %v", err, nodeStoreErr)
-	}
-	if !errors.Is(err, repositoryErr) {
-		t.Fatalf("doShutdown error = %v, want %v", err, repositoryErr)
+	if err := runtime.shutdown(); !errors.Is(err, want) {
+		t.Fatalf("shutdown error = %v, want %v", err, want)
 	}
 }

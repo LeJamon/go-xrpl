@@ -1,7 +1,6 @@
 package node
 
 import (
-	"bytes"
 	"encoding/hex"
 	"encoding/json"
 	"math"
@@ -20,8 +19,6 @@ import (
 	"github.com/LeJamon/go-xrpl/internal/manifest"
 	"github.com/LeJamon/go-xrpl/internal/rpc"
 	"github.com/LeJamon/go-xrpl/internal/rpc/types"
-	txcore "github.com/LeJamon/go-xrpl/internal/tx"
-	"github.com/LeJamon/go-xrpl/internal/tx/ter"
 	"github.com/LeJamon/go-xrpl/protocol"
 	kvpebble "github.com/LeJamon/go-xrpl/storage/kvstore/pebble"
 )
@@ -155,106 +152,6 @@ func TestCurrencySpecFromAmount(t *testing.T) {
 	// Anything else is empty.
 	if got := currencySpecFromAmount(nil); got.Currency != "" || got.Issuer != "" {
 		t.Errorf("nil amount = %+v, want empty", got)
-	}
-}
-
-func TestDecodeTxWithMetaToJSON(t *testing.T) {
-	data := validatedPaymentData(t, 2_048, 7)
-	txJSON, metaJSON, err := decodeTxWithMetaToJSON(data)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !strings.Contains(string(txJSON), `"TransactionType":"Payment"`) {
-		t.Fatalf("transaction not decoded: %s", txJSON)
-	}
-	if !strings.Contains(string(metaJSON), `"TransactionResult":"tecUNFUNDED_PAYMENT"`) {
-		t.Fatalf("metadata not decoded: %s", metaJSON)
-	}
-
-	txBlob, metaBlob, err := txcore.SplitTxWithMetaBlobStrict(data)
-	if err != nil {
-		t.Fatal(err)
-	}
-	txField, err := txcore.EncodeWithVL(txBlob)
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	unknownResult := append([]byte(nil), metaBlob...)
-	if len(unknownResult) < 3 || !bytes.Equal(unknownResult[len(unknownResult)-3:len(unknownResult)-1], []byte{0x03, 0x10}) {
-		t.Fatalf("unexpected TransactionResult encoding: %X", unknownResult)
-	}
-	unknownResult[len(unknownResult)-1] = 106
-	unknownResultField, err := txcore.EncodeWithVL(unknownResult)
-	if err != nil {
-		t.Fatal(err)
-	}
-	leafWithMeta := func(meta map[string]any) []byte {
-		metaHex, err := binarycodec.Encode(meta)
-		if err != nil {
-			t.Fatal(err)
-		}
-		metaBlob, err := hex.DecodeString(metaHex)
-		if err != nil {
-			t.Fatal(err)
-		}
-		metaField, err := txcore.EncodeWithVL(metaBlob)
-		if err != nil {
-			t.Fatal(err)
-		}
-		return append(append([]byte(nil), txField...), metaField...)
-	}
-
-	tests := []struct {
-		name string
-		data []byte
-	}{
-		{name: "nil"},
-		{name: "reserved variable length", data: []byte{0xff}},
-		{name: "truncated transaction", data: []byte{2, 0x12}},
-		{name: "missing metadata", data: txField},
-		{name: "empty metadata", data: append(append([]byte(nil), txField...), 0)},
-		{name: "truncated metadata", data: append(append([]byte(nil), txField...), 2, 0x12)},
-		{name: "trailing data", data: append(append([]byte(nil), data...), 0)},
-		{name: "invalid transaction", data: []byte{1, 0, 1, 0}},
-		{name: "invalid metadata", data: append(append([]byte(nil), txField...), 1, 0)},
-		{name: "missing affected nodes", data: leafWithMeta(map[string]any{"TransactionIndex": uint32(7), "TransactionResult": "tesSUCCESS"})},
-		{name: "missing transaction index", data: leafWithMeta(map[string]any{"AffectedNodes": []any{}, "TransactionResult": "tesSUCCESS"})},
-		{name: "missing transaction result", data: leafWithMeta(map[string]any{"AffectedNodes": []any{}, "TransactionIndex": uint32(7)})},
-		{name: "unknown transaction result", data: append(append([]byte(nil), txField...), unknownResultField...)},
-	}
-	for _, tc := range tests {
-		t.Run(tc.name, func(t *testing.T) {
-			txJSON, metaJSON, err := decodeTxWithMetaToJSON(tc.data)
-			if err == nil {
-				t.Fatalf("decode succeeded: tx=%s meta=%s", txJSON, metaJSON)
-			}
-			if txJSON != nil || metaJSON != nil {
-				t.Fatalf("corrupt leaf returned JSON: tx=%s meta=%s", txJSON, metaJSON)
-			}
-		})
-	}
-}
-
-func TestMetaTransactionResultRejectsInvalidMetadata(t *testing.T) {
-	tests := []json.RawMessage{
-		nil,
-		json.RawMessage(`not json`),
-		json.RawMessage(`{}`),
-		json.RawMessage(`{"TransactionResult":""}`),
-		json.RawMessage(`{"TransactionResult":"tecFUTURE"}`),
-	}
-	for _, metadata := range tests {
-		if result, err := metaTransactionResult(metadata); err == nil {
-			t.Fatalf("metadata %s returned %s", metadata, result)
-		}
-	}
-	result, err := metaTransactionResult(json.RawMessage(`{"TransactionResult":"tecUNFUNDED_PAYMENT"}`))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if result != ter.TecUNFUNDED_PAYMENT {
-		t.Fatalf("result = %s", result)
 	}
 }
 
@@ -708,32 +605,14 @@ func TestBuildValidationEvent_FeeVotePresenceAndSign(t *testing.T) {
 	}
 }
 
-func TestAcceptedLedgerView_Nil(t *testing.T) {
-	v := newAcceptedLedgerView(nil, nil)
-	if v.Sequence() != 0 || v.Hash() != ([32]byte{}) || v.CloseTime() != 0 || v.IsValidated() {
-		t.Error("nil view should return zero values")
-	}
-	// ForEachTransaction must not panic and must visit nothing.
-	if err := v.ForEachTransaction(func([32]byte, []byte) bool { t.Fatal("callback ran on nil view"); return true }); err != nil {
-		t.Errorf("ForEachTransaction on nil view: %v", err)
-	}
-}
-
 func TestAcceptedLedgerView_Populated(t *testing.T) {
 	closeTime := time.Unix(protocol.RippleEpochUnix+1000, 0).UTC()
-	event := &service.LedgerAcceptedEvent{
-		LedgerInfo: &service.LedgerInfo{
-			Sequence:  42,
-			Hash:      [32]byte{0xAB},
-			CloseTime: closeTime,
-			Validated: true,
-		},
-		TransactionResults: []service.TransactionResultEvent{
-			{TxHash: [32]byte{0x01}, TxData: []byte{0xDE, 0xAD}},
-			{TxHash: [32]byte{0x02}, TxData: []byte{0xBE, 0xEF}},
-		},
-	}
-	v := newAcceptedLedgerView(event, event.TransactionResults)
+	v := newAcceptedLedgerView(service.LedgerInfo{
+		Sequence:  42,
+		Hash:      [32]byte{0xAB},
+		CloseTime: closeTime,
+		Validated: true,
+	})
 	if v.Sequence() != 42 {
 		t.Errorf("Sequence = %d", v.Sequence())
 	}
@@ -746,41 +625,24 @@ func TestAcceptedLedgerView_Populated(t *testing.T) {
 	if !v.IsValidated() {
 		t.Error("IsValidated = false")
 	}
-
-	var visited int
-	if err := v.ForEachTransaction(func(h [32]byte, d []byte) bool { visited++; return true }); err != nil {
-		t.Fatalf("ForEachTransaction: %v", err)
-	}
-	if visited != 2 {
-		t.Errorf("visited %d transactions, want 2", visited)
-	}
-
-	// Returning false from the callback stops iteration early.
-	visited = 0
-	_ = v.ForEachTransaction(func(h [32]byte, d []byte) bool { visited++; return false })
-	if visited != 1 {
-		t.Errorf("early-stop visited %d, want 1", visited)
-	}
 }
 
-func TestAcceptedLedgerViewUsesPublishableTransactions(t *testing.T) {
-	event := &service.LedgerAcceptedEvent{
-		LedgerInfo: &service.LedgerInfo{Sequence: 42},
-		TransactionResults: []service.TransactionResultEvent{
-			{TxHash: [32]byte{1}, TxData: []byte("corrupt")},
-			{TxHash: [32]byte{2}, TxData: []byte("valid")},
-		},
+func TestAcceptedLedgerViewUsesPublicationHeaderCopy(t *testing.T) {
+	info := service.LedgerInfo{
+		Sequence:  42,
+		Hash:      [32]byte{0xAB},
+		CloseTime: time.Unix(protocol.RippleEpochUnix+1000, 0).UTC(),
+		Validated: true,
 	}
-	v := newAcceptedLedgerView(event, event.TransactionResults[1:])
-	var hashes [][32]byte
-	if err := v.ForEachTransaction(func(hash [32]byte, _ []byte) bool {
-		hashes = append(hashes, hash)
-		return true
-	}); err != nil {
-		t.Fatal(err)
-	}
-	if len(hashes) != 1 || hashes[0] != ([32]byte{2}) {
-		t.Fatalf("visited hashes = %v, want only publishable transaction", hashes)
+	v := newAcceptedLedgerView(info)
+	info.Sequence = 99
+	info.Hash = [32]byte{0xCD}
+	info.CloseTime = time.Unix(protocol.RippleEpochUnix+2000, 0).UTC()
+	info.Validated = false
+
+	if v.Sequence() != 42 || v.Hash() != ([32]byte{0xAB}) || v.CloseTime() != 1000 || !v.IsValidated() {
+		t.Fatalf("publication header changed after source mutation: sequence=%d hash=%x close=%d validated=%t",
+			v.Sequence(), v.Hash(), v.CloseTime(), v.IsValidated())
 	}
 }
 

@@ -3,6 +3,7 @@ package types
 
 import (
 	"fmt"
+	"math"
 
 	"github.com/LeJamon/go-xrpl/codec/binarycodec/definitions"
 	"github.com/LeJamon/go-xrpl/codec/binarycodec/serdes"
@@ -23,26 +24,40 @@ func (u *UInt8) FromJSON(value any) ([]byte, error) {
 		value = tc
 	}
 
-	var intValue int
+	var intValue uint64
 	switch v := value.(type) {
 	case int:
-		intValue = v
+		if v < 0 {
+			return nil, fmt.Errorf("value %d out of range for UInt8", v)
+		}
+		intValue = uint64(v)
 	case int32:
-		intValue = int(v)
+		if v < 0 {
+			return nil, fmt.Errorf("value %d out of range for UInt8", v)
+		}
+		intValue = uint64(v)
 	case int64:
-		intValue = int(v)
+		if v < 0 {
+			return nil, fmt.Errorf("value %d out of range for UInt8", v)
+		}
+		intValue = uint64(v)
 	case uint8:
-		intValue = int(v)
+		intValue = uint64(v)
 	case uint16:
-		intValue = int(v)
+		intValue = uint64(v)
 	case uint32:
-		intValue = int(v)
+		intValue = uint64(v)
 	case float64:
-		intValue = int(v)
+		if math.IsNaN(v) || math.IsInf(v, 0) || v < 0 || v > math.MaxUint8 || math.Trunc(v) != v {
+			return nil, fmt.Errorf("value %v out of range for UInt8", v)
+		}
+		intValue = uint64(v)
 	default:
 		return nil, fmt.Errorf("unsupported type %T for UInt8", value)
 	}
-
+	if intValue > math.MaxUint8 {
+		return nil, fmt.Errorf("value %d out of range for UInt8", intValue)
+	}
 	return []byte{byte(intValue)}, nil
 }
 
