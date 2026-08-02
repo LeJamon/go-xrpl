@@ -926,7 +926,7 @@ func (r *nodeRuntime) bindStreams() error {
 		}
 		r.publisher.PublishLedgerClosed(ledgerCloseEvent)
 
-		publications, bookTransactions, failures := prepareAcceptedPublications(event, uint32(r.networkID))
+		publications, bookTransactions, failures := prepareAcceptedPublications(event, r.networkID)
 		for _, failure := range failures {
 			r.serverLog.Error("Skipping corrupt accepted transaction", "hash", upperHex(failure.hash[:]), "err", failure.err)
 		}
