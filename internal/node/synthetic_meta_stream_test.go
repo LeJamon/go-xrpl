@@ -17,7 +17,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestDecodeTxWithMetaToJSONInjectsSyntheticFields(t *testing.T) {
+func TestProjectAcceptedTransactionInjectsSyntheticFields(t *testing.T) {
 	const issuer = "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh"
 	const sequence = uint32(42)
 	txJSON := map[string]any{
@@ -56,10 +56,12 @@ func TestDecodeTxWithMetaToJSONInjectsSyntheticFields(t *testing.T) {
 	data = append(data, byte(len(metaBlob)))
 	data = append(data, metaBlob...)
 
-	_, metaRaw, err := decodeTxWithMetaToJSONAt(data, handlers.SyntheticMetadataContext{LedgerSequence: 4_594_095})
+	projection, err := projectAcceptedTransaction(
+		service.ParseAcceptedTransaction(data),
+		handlers.SyntheticMetadataContext{LedgerSequence: 4_594_095},
+	)
 	require.NoError(t, err)
-	var decodedMeta map[string]any
-	require.NoError(t, json.Unmarshal(metaRaw, &decodedMeta))
+	decodedMeta := projection.metadata
 
 	_, accountBytes, err := addresscodec.DecodeClassicAddressToAccountID(issuer)
 	require.NoError(t, err)

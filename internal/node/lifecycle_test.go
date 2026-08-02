@@ -5,6 +5,7 @@ import (
 	"errors"
 	"net/http"
 	"os"
+	"slices"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -263,7 +264,7 @@ type shutdownProbeRepository struct {
 
 func (r *shutdownProbeRepository) Close() error { return r.close() }
 
-func TestDoShutdownReportsCloseErrorsInDependencyOrder(t *testing.T) {
+func TestNodeRuntimeShutdownReportsCloseErrorsInDependencyOrder(t *testing.T) {
 	t.Parallel()
 
 	dbErr := errors.New("node store close failed")
@@ -283,7 +284,8 @@ func TestDoShutdownReportsCloseErrorsInDependencyOrder(t *testing.T) {
 		return repoErr
 	}}
 
-	err := doShutdownWithin(time.Second, nil, nil, nil, nil, nil, nil, db, repo, xrpllog.Discard())
+	runtime := &nodeRuntime{nodeStore: db, repo: repo, serverLog: xrpllog.Discard()}
+	err := runtime.shutdownWithin(time.Second)
 	if !errors.Is(err, dbErr) || !errors.Is(err, repoErr) {
 		t.Fatalf("shutdown error = %v, want both close errors", err)
 	}
@@ -294,7 +296,7 @@ func TestDoShutdownReportsCloseErrorsInDependencyOrder(t *testing.T) {
 	}
 }
 
-func TestDoShutdownBoundsBlockingStoreClose(t *testing.T) {
+func TestNodeRuntimeShutdownBoundsBlockingStoreClose(t *testing.T) {
 	t.Parallel()
 
 	started := make(chan struct{})
@@ -306,7 +308,8 @@ func TestDoShutdownBoundsBlockingStoreClose(t *testing.T) {
 	}}
 	result := make(chan error, 1)
 	go func() {
-		result <- doShutdownWithin(50*time.Millisecond, nil, nil, nil, nil, nil, nil, nil, repo, xrpllog.Discard())
+		runtime := &nodeRuntime{repo: repo, serverLog: xrpllog.Discard()}
+		result <- runtime.shutdownWithin(50 * time.Millisecond)
 	}()
 	<-started
 	select {
@@ -320,7 +323,7 @@ func TestDoShutdownBoundsBlockingStoreClose(t *testing.T) {
 	close(release)
 }
 
-func TestDoShutdownLeavesStoresOpenWhileTransportHandlerIsRunning(t *testing.T) {
+func TestNodeRuntimeShutdownLeavesStoresOpenWhileTransportHandlerIsRunning(t *testing.T) {
 	runtimeCtx, cancelRuntime := context.WithCancel(context.Background())
 	defer cancelRuntime()
 	started := make(chan struct{})
@@ -365,7 +368,8 @@ func TestDoShutdownLeavesStoresOpenWhileTransportHandlerIsRunning(t *testing.T) 
 		return nil
 	}}
 	startedAt := time.Now()
-	err = doShutdownWithin(50*time.Millisecond, bound, nil, nil, nil, nil, nil, db, nil, xrpllog.Discard())
+	runtime := &nodeRuntime{transports: bound, nodeStore: db, serverLog: xrpllog.Discard()}
+	err = runtime.shutdownWithin(50 * time.Millisecond)
 	if !errors.Is(err, context.DeadlineExceeded) {
 		t.Fatalf("shutdown error = %v, want deadline exceeded", err)
 	}
@@ -381,5 +385,31 @@ func TestDoShutdownLeavesStoresOpenWhileTransportHandlerIsRunning(t *testing.T) 
 	case <-requestDone:
 	case <-time.After(time.Second):
 		t.Fatal("transport handler did not exit after release")
+	}
+}
+
+func TestNodeRuntimeStopOrder(t *testing.T) {
+	ctx, cancel := context.WithCancelCause(context.Background())
+	var order []string
+	runtime := &nodeRuntime{
+		ctx:    ctx,
+		cancel: cancel,
+		cancelWatchdog: func() {
+			order = append(order, "watchdog")
+		},
+		stopSampler: func() {
+			order = append(order, "sampler")
+		},
+		options: RunOptions{Stopping: func() {
+			if context.Cause(ctx) != context.Canceled {
+				t.Fatalf("runtime context cause = %v, want canceled", context.Cause(ctx))
+			}
+			order = append(order, "stopping")
+		}},
+	}
+
+	runtime.stopRuntime()
+	if want := []string{"watchdog", "sampler", "stopping"}; !slices.Equal(order, want) {
+		t.Fatalf("stop order = %v, want %v", order, want)
 	}
 }
