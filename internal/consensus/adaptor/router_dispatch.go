@@ -122,7 +122,7 @@ func (r *Router) handleManifests(msg *peermanagement.InboundMessage) bool {
 			badManifest = true
 			return
 		}
-		if r.manifestAdmission != nil && !r.manifestAdmission(parsed.MasterKey) {
+		if r.manifestAdmission != nil && !r.manifestAdmission(parsed.MasterKey()) {
 			valid = true
 			return
 		}

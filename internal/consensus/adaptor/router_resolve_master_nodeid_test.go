@@ -57,7 +57,7 @@ func installManifest(t *testing.T, cache *manifest.Cache, masterSeed, ephSeed by
 	if disp := cache.ApplyManifest(parsed); disp != manifest.Accepted {
 		t.Fatalf("ApplyManifest disposition: got %v want Accepted", disp)
 	}
-	return parsed.MasterKey, parsed.SigningKey
+	return parsed.MasterKey(), parsed.SigningKey()
 }
 
 // TestRouter_ResolveMasterNodeID_Validation_RewritesToMaster is the

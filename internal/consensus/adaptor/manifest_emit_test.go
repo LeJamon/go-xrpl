@@ -264,11 +264,11 @@ func TestRouter_SendLocalManifestTo_EmitsExpectedFrame(t *testing.T) {
 	if err != nil {
 		t.Fatalf("emitted manifest fails Deserialize: %v", err)
 	}
-	if parsed.MasterKey != id.MasterKey {
+	if parsed.MasterKey() != id.MasterKey {
 		t.Errorf("emitted manifest master key mismatch")
 	}
-	if parsed.Sequence != id.Manifest.Sequence {
-		t.Errorf("emitted manifest sequence: got %d want %d", parsed.Sequence, id.Manifest.Sequence)
+	if parsed.Sequence() != id.Manifest.Sequence() {
+		t.Errorf("emitted manifest sequence: got %d want %d", parsed.Sequence(), id.Manifest.Sequence())
 	}
 }
 
@@ -620,13 +620,9 @@ func TestRouter_CachedManifestFrame_RebuiltOnSequenceAdvance(t *testing.T) {
 	router.SendLocalManifestTo(peermanagement.PeerID(1))
 	first := router.manifestFrames[0]
 
-	// Mint a higher-sequence manifest under the SAME master+ephemeral
-	// keypair (newTokenFixture is seed-deterministic — same seed byte
-	// = same keys; only the sequence differs). This hits the update
-	// branch in cache.ApplyManifest. Every accept bumps Sequence in
-	// rippled 3.2.0 (#6059), so after the setup first-insert (=1) this
-	// update takes it to 2.
-	rotated := newTokenFixture(t, 0xC2, 7)
+	// Mint a higher-sequence manifest under the same master with a new
+	// ephemeral key. Reusing the current ephemeral is a cache collision.
+	rotated := newTokenFixtureWithSeeds(t, 0xC2, 0xC3, 7)
 	rotatedID, err := NewValidatorIdentityFromToken(rotated.tokenBlock)
 	if err != nil {
 		t.Fatalf("rotated identity: %v", err)

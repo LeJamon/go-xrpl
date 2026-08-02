@@ -21,10 +21,11 @@ func TestAggregator_Cache_WriteThenRoundTripLoad(t *testing.T) {
 
 	// First aggregator: write the cache by applying an accepted list.
 	src, err := list.New(list.Config{
-		PublisherKeys: []list.PublisherKey{pubKey},
-		Threshold:     1,
-		Manifests:     manifest.NewCache(),
-		Clock:         fixedClock(),
+		PublisherKeys:      []list.PublisherKey{pubKey},
+		Threshold:          1,
+		ValidatorManifests: manifest.NewCache(),
+		PublisherManifests: manifest.NewCache(),
+		Clock:              fixedClock(),
 	})
 	if err != nil {
 		t.Fatalf("New src: %v", err)
@@ -72,10 +73,11 @@ func TestAggregator_Cache_WriteThenRoundTripLoad(t *testing.T) {
 	// Second aggregator: hydrate from the same directory and check
 	// the publisher reached StatusAvailable at the expected sequence.
 	dst, err := list.New(list.Config{
-		PublisherKeys: []list.PublisherKey{pubKey},
-		Threshold:     1,
-		Manifests:     manifest.NewCache(),
-		Clock:         fixedClock(),
+		PublisherKeys:      []list.PublisherKey{pubKey},
+		Threshold:          1,
+		ValidatorManifests: manifest.NewCache(),
+		PublisherManifests: manifest.NewCache(),
+		Clock:              fixedClock(),
 	})
 	if err != nil {
 		t.Fatalf("New dst: %v", err)
@@ -108,10 +110,11 @@ func TestAggregator_Cache_LoadSkipsAlreadyAvailable(t *testing.T) {
 	pubKey := list.PublisherKey(pub.masterPub)
 
 	agg, err := list.New(list.Config{
-		PublisherKeys: []list.PublisherKey{pubKey},
-		Threshold:     1,
-		Manifests:     manifest.NewCache(),
-		Clock:         fixedClock(),
+		PublisherKeys:      []list.PublisherKey{pubKey},
+		Threshold:          1,
+		ValidatorManifests: manifest.NewCache(),
+		PublisherManifests: manifest.NewCache(),
+		Clock:              fixedClock(),
 	})
 	if err != nil {
 		t.Fatalf("New: %v", err)
@@ -155,10 +158,11 @@ func TestAggregator_Cache_DisabledDirNoFile(t *testing.T) {
 	dir := t.TempDir()
 
 	agg, err := list.New(list.Config{
-		PublisherKeys: []list.PublisherKey{list.PublisherKey(pub.masterPub)},
-		Threshold:     1,
-		Manifests:     manifest.NewCache(),
-		Clock:         fixedClock(),
+		PublisherKeys:      []list.PublisherKey{list.PublisherKey(pub.masterPub)},
+		Threshold:          1,
+		ValidatorManifests: manifest.NewCache(),
+		PublisherManifests: manifest.NewCache(),
+		Clock:              fixedClock(),
 	})
 	if err != nil {
 		t.Fatalf("New: %v", err)

@@ -65,10 +65,11 @@ func TestSitePoller_DoubleStartSingleLoop(t *testing.T) {
 	defer srv.Close()
 
 	agg, err := list.New(list.Config{
-		PublisherKeys: []list.PublisherKey{list.PublisherKey(pub.masterPub)},
-		SiteURIs:      []string{srv.URL},
-		Threshold:     1,
-		Manifests:     manifest.NewCache(),
+		PublisherKeys:      []list.PublisherKey{list.PublisherKey(pub.masterPub)},
+		SiteURIs:           []string{srv.URL},
+		Threshold:          1,
+		ValidatorManifests: manifest.NewCache(),
+		PublisherManifests: manifest.NewCache(),
 	})
 	if err != nil {
 		t.Fatalf("New: %v", err)
@@ -121,10 +122,11 @@ func TestSitePoller_RefreshesNextRefreshBeforeFetch(t *testing.T) {
 	defer srv.Close()
 
 	a, err := list.New(list.Config{
-		PublisherKeys: []list.PublisherKey{list.PublisherKey(pub.masterPub)},
-		SiteURIs:      []string{srv.URL},
-		Threshold:     1,
-		Manifests:     manifest.NewCache(),
+		PublisherKeys:      []list.PublisherKey{list.PublisherKey(pub.masterPub)},
+		SiteURIs:           []string{srv.URL},
+		Threshold:          1,
+		ValidatorManifests: manifest.NewCache(),
+		PublisherManifests: manifest.NewCache(),
 	})
 	if err != nil {
 		t.Fatalf("New: %v", err)
@@ -169,10 +171,11 @@ func TestAggregator_CacheWriteFailureDoesNotBlockIngest(t *testing.T) {
 	}
 
 	agg, err := list.New(list.Config{
-		PublisherKeys: []list.PublisherKey{list.PublisherKey(pub.masterPub)},
-		Threshold:     1,
-		Manifests:     manifest.NewCache(),
-		Clock:         fixedClock(),
+		PublisherKeys:      []list.PublisherKey{list.PublisherKey(pub.masterPub)},
+		Threshold:          1,
+		ValidatorManifests: manifest.NewCache(),
+		PublisherManifests: manifest.NewCache(),
+		Clock:              fixedClock(),
 	})
 	if err != nil {
 		t.Fatalf("New: %v", err)
@@ -219,10 +222,11 @@ func TestSitePoller_RestartAfterStop(t *testing.T) {
 	defer srv.Close()
 
 	agg, err := list.New(list.Config{
-		PublisherKeys: []list.PublisherKey{list.PublisherKey(pub.masterPub)},
-		SiteURIs:      []string{srv.URL},
-		Threshold:     1,
-		Manifests:     manifest.NewCache(),
+		PublisherKeys:      []list.PublisherKey{list.PublisherKey(pub.masterPub)},
+		SiteURIs:           []string{srv.URL},
+		Threshold:          1,
+		ValidatorManifests: manifest.NewCache(),
+		PublisherManifests: manifest.NewCache(),
 	})
 	if err != nil {
 		t.Fatalf("New: %v", err)
