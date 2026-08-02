@@ -284,6 +284,13 @@ func (a *Adaptor) OnLedgerFullyValidated(ledgerID consensus.LedgerID, seq uint32
 
 	var hash [32]byte
 	copy(hash[:], ledgerID[:])
+	if validated := a.ledgerService.GetValidatedLedger(); validated != nil {
+		tipSeq, tipHash := validated.Sequence(), validated.Hash()
+		provisionalConfirmation := a.ledgerService.IsFastLoadProvisional() && seq == tipSeq && hash == tipHash
+		if seq <= tipSeq && (seq < tipSeq || hash == tipHash) && !provisionalConfirmation {
+			return
+		}
+	}
 	if a.onLedgerFullyValidated != nil {
 		a.onLedgerFullyValidated(seq, hash)
 	}

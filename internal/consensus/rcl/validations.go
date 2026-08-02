@@ -300,6 +300,31 @@ func (vt *ValidationTracker) SetTrustedAndQuorum(nodes []consensus.NodeID, quoru
 	vt.checkAcquired()
 }
 
+// SetTrustedQuorumAndNegativeUNL replaces every input to finality accounting
+// under one lock so no intermediate configuration can promote a ledger.
+func (vt *ValidationTracker) SetTrustedQuorumAndNegativeUNL(
+	nodes []consensus.NodeID,
+	quorum int,
+	negativeUNL []consensus.NodeID,
+) {
+	vt.updateTrustedQuorumAndNegativeUNL(nodes, quorum, negativeUNL)
+	vt.drainFinality()
+	vt.checkAcquired()
+}
+
+func (vt *ValidationTracker) updateTrustedQuorumAndNegativeUNL(
+	nodes []consensus.NodeID,
+	quorum int,
+	negativeUNL []consensus.NodeID,
+) {
+	vt.mu.Lock()
+	vt.setTrustedLocked(nodes)
+	vt.quorum = quorum
+	vt.setNegativeUNLLocked(negativeUNL)
+	vt.recheckFinalityLocked()
+	vt.mu.Unlock()
+}
+
 func (vt *ValidationTracker) setTrustedLocked(nodes []consensus.NodeID) {
 	vt.trusted = make(map[consensus.NodeID]bool)
 	for _, node := range nodes {
@@ -355,16 +380,20 @@ func (vt *ValidationTracker) SetSeqToKeep(low, high uint32) {
 // empty slice to clear the negUNL.
 func (vt *ValidationTracker) SetNegativeUNL(nodes []consensus.NodeID) {
 	vt.mu.Lock()
-	vt.negUNL = make(map[consensus.NodeID]bool, len(nodes))
-	for _, n := range nodes {
-		vt.negUNL[n] = true
-	}
+	vt.setNegativeUNLLocked(nodes)
 	// Negative-UNL membership only changes quorum accounting. Trusted
 	// validators remain in the trie so preferred-ledger steering and any
 	// in-flight acquisition state are preserved.
 	vt.recheckFinalityLocked()
 	vt.mu.Unlock()
 	vt.drainFinality()
+}
+
+func (vt *ValidationTracker) setNegativeUNLLocked(nodes []consensus.NodeID) {
+	vt.negUNL = make(map[consensus.NodeID]bool, len(nodes))
+	for _, n := range nodes {
+		vt.negUNL[n] = true
+	}
 }
 
 // SetMinSeq advances the sequence floor below which incoming

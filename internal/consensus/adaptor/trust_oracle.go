@@ -132,6 +132,14 @@ func (a *Adaptor) OnTrustSettled(fn func()) {
 	}
 }
 
+// OnValidationConfigChanged registers the callback fired after validated-ledger
+// advancement changes the negative-UNL source.
+func (a *Adaptor) OnValidationConfigChanged(fn func()) {
+	a.mu.Lock()
+	a.onValidationConfigChanged = fn
+	a.mu.Unlock()
+}
+
 func (a *Adaptor) GetTrustedValidators() []consensus.NodeID {
 	a.trustUpdateMu.Lock()
 	defer a.trustUpdateMu.Unlock()
@@ -146,6 +154,13 @@ func (a *Adaptor) GetTrustedValidatorsAndQuorum() ([]consensus.NodeID, int) {
 	a.trustUpdateMu.Lock()
 	defer a.trustUpdateMu.Unlock()
 	return a.trustedValidatorsAndQuorum()
+}
+
+// GetValidationConfig returns one consistent finality configuration snapshot.
+func (a *Adaptor) GetValidationConfig() ([]consensus.NodeID, int, []consensus.NodeID) {
+	a.trustUpdateMu.Lock()
+	defer a.trustUpdateMu.Unlock()
+	return a.validationConfig()
 }
 
 func (a *Adaptor) GetTrustedMasterKeys() [][33]byte {
@@ -267,6 +282,11 @@ func (a *Adaptor) IsQuorumUnavailable() bool {
 }
 
 func (a *Adaptor) trustedValidatorsAndQuorum() ([]consensus.NodeID, int) {
+	trusted, quorum, _ := a.validationConfig()
+	return trusted, quorum
+}
+
+func (a *Adaptor) validationConfig() ([]consensus.NodeID, int, []consensus.NodeID) {
 	negUNL := a.GetNegativeUNL()
 	unavailable := a.publisherQuorumUnavailable()
 
@@ -279,7 +299,7 @@ func (a *Adaptor) trustedValidatorsAndQuorum() ([]consensus.NodeID, int) {
 	if unavailable {
 		quorum = math.MaxInt
 	}
-	return trusted, quorum
+	return trusted, quorum, negUNL
 }
 
 func quorumForTrustedSet(trustedSet map[consensus.NodeID]struct{}, trusted int, negUNL []consensus.NodeID) int {

@@ -180,6 +180,8 @@ type Adaptor struct {
 	// onTrustSettled runs after the trust-change callback returns and the
 	// transition gate reopens. nil-safe.
 	onTrustSettled func()
+	// onValidationConfigChanged runs after the validated ledger advances.
+	onValidationConfigChanged func()
 
 	// lastIssuedValidationSeq is the highest ledger seq this node has
 	// broadcast a validation for — rippled's localSeqEnforcer_.largest(),
@@ -444,6 +446,12 @@ func New(cfg Config) *Adaptor {
 }
 
 func (a *Adaptor) onValidatedLedger(seq uint32, hash, parentHash [32]byte) {
+	a.mu.Lock()
+	onValidationConfigChanged := a.onValidationConfigChanged
+	a.mu.Unlock()
+	if onValidationConfigChanged != nil {
+		onValidationConfigChanged()
+	}
 	a.refreshRemoteFee(seq, consensus.LedgerID(hash), consensus.LedgerID(parentHash))
 	a.logger.Info("Ledger fully validated",
 		"seq", seq,

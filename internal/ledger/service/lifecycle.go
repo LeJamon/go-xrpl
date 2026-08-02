@@ -410,11 +410,11 @@ func (s *Service) AcceptConsensusResult(ctx context.Context, parent *ledger.Ledg
 func (s *Service) SwitchToPreferredLedger(parent *ledger.Ledger) error {
 	s.mu.Lock()
 	s.historyComponent.mu.Lock()
-	previousValidatedSeq := s.validatedLedgerSeqLocked()
+	previousValidated := s.validatedLedger
 	pool := s.localTxs
 	var promotedLedger *ledger.Ledger
 	defer func() {
-		notification := s.validatedLedgerNotificationLocked(previousValidatedSeq)
+		notification := s.validatedLedgerNotificationLocked(previousValidated)
 		s.historyComponent.mu.Unlock()
 		s.mu.Unlock()
 		if promotedLedger != nil {
@@ -549,8 +549,8 @@ func (s *Service) acceptConsensusResult(
 	closeTimeCorrect bool,
 ) (uint32, error) {
 	s.mu.Lock()
-	previousValidatedSeq := s.validatedLedgerSeqLocked()
-	defer s.unlockAndNotifyValidatedLedger(previousValidatedSeq)
+	previousValidated := s.validatedLedger
+	defer s.unlockAndNotifyValidatedLedger(previousValidated)
 	s.historyComponent.mu.Lock()
 	defer s.historyComponent.mu.Unlock()
 
@@ -786,7 +786,7 @@ func (s *Service) validatedLedgerEventLocked(l *ledger.Ledger) *LedgerAcceptedEv
 func (s *Service) SetValidatedLedgerAt(seq uint32, expectedHash [32]byte, signTime time.Time) {
 	s.mu.Lock()
 	s.historyComponent.mu.Lock()
-	previousValidatedSeq := s.validatedLedgerSeqLocked()
+	previousValidated := s.validatedLedger
 	l, ok := s.ledgerHistory[seq]
 	// rippled checkAccept is hash-keyed; our seq-keyed map splits into "no entry"
 	// or "different-hash" (same-height fork) — both stash and arm acquisition.
@@ -844,7 +844,7 @@ func (s *Service) SetValidatedLedgerAt(seq uint32, expectedHash [32]byte, signTi
 	pool := s.localTxs
 	event := s.validatedLedgerEventLocked(l)
 	s.enqueuePersist(l)
-	notification := s.validatedLedgerNotificationLocked(previousValidatedSeq)
+	notification := s.validatedLedgerNotificationLocked(previousValidated)
 	s.dispatchLedgerEvent(event)
 	s.historyComponent.mu.Unlock()
 	s.mu.Unlock()
@@ -897,8 +897,8 @@ func (s *Service) SubmitHeldAdoption(ctx context.Context, h *header.LedgerHeader
 	}
 
 	s.mu.Lock()
-	previousValidatedSeq := s.validatedLedgerSeqLocked()
-	defer s.unlockAndNotifyValidatedLedger(previousValidatedSeq)
+	previousValidated := s.validatedLedger
+	defer s.unlockAndNotifyValidatedLedger(previousValidated)
 	s.historyComponent.mu.Lock()
 	defer s.historyComponent.mu.Unlock()
 
@@ -1136,8 +1136,8 @@ func (s *Service) IngestHistoricalLedgerWithState(ctx context.Context, h *header
 // state-only catchup of a ledger whose transaction root is empty.
 func (s *Service) AdoptLedgerWithState(ctx context.Context, h *header.LedgerHeader, stateMap *shamap.SHAMap, txMap *shamap.SHAMap) error {
 	s.mu.Lock()
-	previousValidatedSeq := s.validatedLedgerSeqLocked()
-	defer s.unlockAndNotifyValidatedLedger(previousValidatedSeq)
+	previousValidated := s.validatedLedger
+	defer s.unlockAndNotifyValidatedLedger(previousValidated)
 	s.historyComponent.mu.Lock()
 	defer s.historyComponent.mu.Unlock()
 	return s.adoptLedgerWithStateLocked(ctx, h, stateMap, txMap, 0)

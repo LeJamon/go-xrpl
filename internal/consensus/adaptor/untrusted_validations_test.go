@@ -76,6 +76,7 @@ func TestAdaptor_SetTrustedValidatorsFiresTrustChange(t *testing.T) {
 	var callbackQuorum int
 	var sawSettledGate bool
 	fired := 0
+	settledFired := 0
 	a.OnTrustChanged(func(trusted []consensus.NodeID, quorum int) {
 		fired++
 		sawTransitionGate = a.IsQuorumUnavailable()
@@ -83,13 +84,16 @@ func TestAdaptor_SetTrustedValidatorsFiresTrustChange(t *testing.T) {
 		callbackQuorum = quorum
 	})
 	a.OnTrustSettled(func() {
+		settledFired++
 		sawSettledGate = a.IsQuorumUnavailable()
 	})
 	fired = 0
+	settledFired = 0
 	sawTransitionGate = false
 
 	a.SetTrustedValidators([]consensus.NodeID{n}, [][33]byte{{1}})
 	require.Equal(t, 1, fired, "callback must fire once per swap")
+	require.Equal(t, 1, settledFired, "settled callback must fire once per swap")
 	assert.True(t, sawTransitionGate, "finality gate must remain closed through callback installation")
 	assert.Equal(t, []consensus.NodeID{n}, callbackTrusted)
 	assert.Equal(t, 1, callbackQuorum)
@@ -99,6 +103,7 @@ func TestAdaptor_SetTrustedValidatorsFiresTrustChange(t *testing.T) {
 
 	a.SetTrustedValidators(nil, nil)
 	assert.Equal(t, 2, fired)
+	assert.Equal(t, 2, settledFired)
 }
 
 // TestRouter_DropUntrustedValidations: under [relay_validations] =

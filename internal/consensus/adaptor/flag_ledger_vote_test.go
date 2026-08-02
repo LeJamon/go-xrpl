@@ -107,11 +107,18 @@ func TestGenerateFlagLedgerPseudoTxs_ExcludesPartialAndWrongSequence(t *testing.
 	wrapped := WrapLedger(prev)
 	parentSeq := wrapped.Seq() - 1
 	parentID := wrapped.ParentID()
+	vote := func(node consensus.NodeID, seq uint32, full bool) *consensus.Validation {
+		return &consensus.Validation{
+			LedgerID: parentID, LedgerSeq: seq, NodeID: node, SignTime: time.Now(), Full: full,
+			BaseFee: 100, ReserveBase: 50_000_000, ReserveIncrement: 5_000_000,
+			BaseFeeDrops: 100, ReserveBaseDrops: 50_000_000, ReserveIncrementDrops: 5_000_000,
+		}
+	}
 
 	vals := []*consensus.Validation{
-		{LedgerID: parentID, LedgerSeq: parentSeq, NodeID: a.identity.NodeID, SignTime: time.Now()},
-		{LedgerID: parentID, LedgerSeq: parentSeq + 1, NodeID: consensus.NodeID{2}, SignTime: time.Now(), Full: true},
-		{LedgerID: parentID, LedgerSeq: parentSeq, NodeID: consensus.NodeID{3}, SignTime: time.Now(), Full: true},
+		vote(a.identity.NodeID, parentSeq, false),
+		vote(a.identity.NodeID, parentSeq+1, true),
+		vote(consensus.NodeID{3}, parentSeq, true),
 	}
 	if blobs := a.GenerateFlagLedgerPseudoTxs(wrapped, vals); len(blobs) != 0 {
 		t.Fatalf("partial/wrong-sequence validations influenced flag-ledger votes: %d blobs", len(blobs))

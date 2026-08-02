@@ -15,7 +15,7 @@ func TestValidationTrackerIssue1463_ExactHashAndSequenceFinality(t *testing.T) {
 	vt := NewValidationTracker(2)
 	vt.SetNow(func() time.Time { return now })
 	nodes := []consensus.NodeID{{1}, {2}, {3}, {4}}
-	vt.SetTrusted(nodes)
+	vt.SetTrustedAndQuorum(nodes, 2)
 
 	type notification struct {
 		id  consensus.LedgerID
@@ -88,7 +88,7 @@ func TestValidationTrackerIssue1463_TrustQuorumNegativeUNLRecheck(t *testing.T) 
 		t.Fatalf("untrusted evidence fired %d callbacks", fires)
 	}
 
-	vt.SetTrusted(nodes)
+	vt.SetTrustedAndQuorum(nodes, 2)
 	if fires != 1 {
 		t.Fatalf("trust promotion fired %d callbacks, want 1", fires)
 	}
@@ -100,13 +100,43 @@ func TestValidationTrackerIssue1463_TrustQuorumNegativeUNLRecheck(t *testing.T) 
 	if fires != 2 {
 		t.Fatalf("negative-UNL re-enable fired %d callbacks, want 2", fires)
 	}
-	vt.SetQuorum(3)
+	vt.SetTrustedAndQuorum(nodes, 3)
 	if fires != 2 {
 		t.Fatalf("unreachable quorum fired %d callbacks", fires)
 	}
-	vt.SetQuorum(2)
+	vt.SetTrustedAndQuorum(nodes, 2)
 	if fires != 3 {
 		t.Fatalf("quorum re-enable fired %d callbacks, want 3", fires)
+	}
+}
+
+func TestValidationTrackerIssue1463_AtomicNegativeUNLTransition(t *testing.T) {
+	now := time.Date(2026, 7, 31, 12, 0, 0, 0, time.UTC)
+	nodes := []consensus.NodeID{{1}, {2}, {3}}
+	ledger := consensus.LedgerID{0xB1}
+	vt := NewValidationTracker(3)
+	vt.SetNow(func() time.Time { return now })
+	vt.SetTrustedAndQuorum(nodes, 3)
+	fires := 0
+	vt.SetFullyValidatedCallback(func(consensus.LedgerID, uint32) { fires++ })
+
+	for _, node := range nodes[:2] {
+		if status := vt.AddStatus(&consensus.Validation{
+			LedgerID: ledger, LedgerSeq: 8, NodeID: node,
+			SignTime: now, SeenTime: now, Full: true,
+		}); status != ValStatusCurrent {
+			t.Fatalf("validation status=%s, want current", status)
+		}
+	}
+
+	vt.SetTrustedQuorumAndNegativeUNL(nodes, 2, []consensus.NodeID{nodes[1]})
+	if fires != 0 {
+		t.Fatalf("atomic negative-UNL transition fired %d callbacks", fires)
+	}
+
+	vt.SetTrustedQuorumAndNegativeUNL(nodes, 2, nil)
+	if fires != 1 {
+		t.Fatalf("negative-UNL re-enable fired %d callbacks, want 1", fires)
 	}
 }
 
@@ -116,7 +146,7 @@ func TestValidationTrackerIssue1463_ZeroQuorumNeedsTrustedFullEvidence(t *testin
 	ledger := consensus.LedgerID{0xC}
 	vt := NewValidationTracker(0)
 	vt.SetNow(func() time.Time { return now })
-	vt.SetTrusted([]consensus.NodeID{n1})
+	vt.SetTrustedAndQuorum([]consensus.NodeID{n1}, 0)
 	fires := 0
 	vt.SetFullyValidatedCallback(func(consensus.LedgerID, uint32) { fires++ })
 
@@ -135,7 +165,7 @@ func TestValidationTrackerIssue1463_ZeroQuorumNeedsTrustedFullEvidence(t *testin
 	if fires != 0 {
 		t.Fatalf("zero quorum promoted without trusted full evidence: fires=%d", fires)
 	}
-	vt.SetTrusted([]consensus.NodeID{n2})
+	vt.SetTrustedAndQuorum([]consensus.NodeID{n2}, 0)
 	if fires != 1 {
 		t.Fatalf("zero quorum trusted full evidence fired %d callbacks, want 1", fires)
 	}
@@ -237,15 +267,24 @@ func TestValidationTrackerIssue1463_DemotionCancelsQueuedFinality(t *testing.T) 
 		add(n2, first, 20, now)
 		close(firstDone)
 	}()
-	<-entered
+	select {
+	case <-entered:
+	case <-time.After(time.Second):
+		close(release)
+		t.Fatal("timed out waiting for first finality callback")
+	}
 
 	// The active callback owns the drainer. These two additions enqueue the
 	// second ledger but cannot invoke it until the first callback returns.
 	add(n1, second, 21, now.Add(time.Second))
 	add(n2, second, 21, now.Add(time.Second))
-	vt.SetTrusted([]consensus.NodeID{n1})
+	vt.SetTrustedAndQuorum([]consensus.NodeID{n1}, 2)
 	close(release)
-	<-firstDone
+	select {
+	case <-firstDone:
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for finality drainer")
+	}
 
 	mu.Lock()
 	defer mu.Unlock()
@@ -308,11 +347,11 @@ func TestValidationTrackerIssue1463_TrustedRemovalRearmsEvidence(t *testing.T) {
 	if fires != 1 {
 		t.Fatalf("initial finality callback count=%d, want 1", fires)
 	}
-	vt.SetTrusted(nil)
+	vt.SetTrustedAndQuorum(nil, 1)
 	if fires != 1 || vt.TrustedValidationCount(ledger) != 0 {
 		t.Fatalf("trusted removal changed callback/count unexpectedly: fires=%d count=%d", fires, vt.TrustedValidationCount(ledger))
 	}
-	vt.SetTrusted([]consensus.NodeID{node})
+	vt.SetTrustedAndQuorum([]consensus.NodeID{node}, 1)
 	if fires != 2 {
 		t.Fatalf("trusted re-add did not rearm stored evidence: fires=%d, want 2", fires)
 	}
@@ -361,6 +400,16 @@ func TestValidationTrackerIssue1463_ValidationDeepClone(t *testing.T) {
 		retrieved[0].Amendments[0][0] != 2 || !bytes.Equal(retrieved[0].SigningData, []byte{3, 4}) ||
 		!bytes.Equal(retrieved[0].Raw, []byte{5, 6}) {
 		t.Fatal("mutating a returned validation changed tracker state")
+	}
+	retrieved[0].Signature[0] = 7
+	retrieved[0].Amendments[0][0] = 7
+	retrieved[0].SigningData[0] = 7
+	retrieved[0].Raw[0] = 7
+	retrieved = vt.GetTrustedFullValidations(ledger, 9)
+	if len(retrieved) != 1 || !bytes.Equal(retrieved[0].Signature, []byte{1, 2}) ||
+		retrieved[0].Amendments[0][0] != 2 || !bytes.Equal(retrieved[0].SigningData, []byte{3, 4}) ||
+		!bytes.Equal(retrieved[0].Raw, []byte{5, 6}) {
+		t.Fatal("mutating a trusted-validation snapshot changed tracker state")
 	}
 }
 
@@ -424,6 +473,9 @@ func TestValidationTrackerIssue1463_NegativeUNLPreservesAcquiring(t *testing.T) 
 	if before != 1 {
 		t.Fatalf("missing ledger acquisition entries=%d, want 1", before)
 	}
+	if id, seq, ok := vt.GetPreferred(0); !ok || id != held.ID() || seq != held.Seq() {
+		t.Fatalf("preferred ledger before negative-UNL update = (%x, %d, %t), want held tip", id, seq, ok)
+	}
 
 	vt.SetNegativeUNL([]consensus.NodeID{node})
 	vt.mu.RLock()
@@ -431,6 +483,9 @@ func TestValidationTrackerIssue1463_NegativeUNLPreservesAcquiring(t *testing.T) 
 	vt.mu.RUnlock()
 	if after != before {
 		t.Fatalf("negative-UNL update rebuilt/dropped acquisition state: before=%d after=%d", before, after)
+	}
+	if id, seq, ok := vt.GetPreferred(0); !ok || id != held.ID() || seq != held.Seq() {
+		t.Fatalf("preferred ledger after negative-UNL update = (%x, %d, %t), want held tip", id, seq, ok)
 	}
 	provider.add(missing)
 	if id, seq, ok := vt.GetPreferred(0); !ok || id != missing.ID() || seq != missing.Seq() {
