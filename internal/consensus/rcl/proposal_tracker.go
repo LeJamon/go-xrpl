@@ -197,14 +197,14 @@ func (pt *proposalTracker) Replay(prevID consensus.LedgerID, trusted func(consen
 }
 
 func (pt *proposalTracker) SetValidation(v *consensus.Validation) {
-	pt.validations[v.NodeID] = cloneValidation(v)
+	pt.validations[v.NodeID] = cloneProposalValidation(v)
 }
 
 func (pt *proposalTracker) ValidationsFor(ledgerID consensus.LedgerID) []*consensus.Validation {
 	var out []*consensus.Validation
 	for _, v := range pt.validations {
 		if v.LedgerID == ledgerID {
-			out = append(out, cloneValidation(v))
+			out = append(out, cloneProposalValidation(v))
 		}
 	}
 	return out
@@ -223,7 +223,7 @@ func cloneProposal(p *consensus.Proposal) *consensus.Proposal {
 	return &copy
 }
 
-func cloneValidation(v *consensus.Validation) *consensus.Validation {
+func cloneProposalValidation(v *consensus.Validation) *consensus.Validation {
 	if v == nil {
 		return nil
 	}
