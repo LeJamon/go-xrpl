@@ -500,6 +500,15 @@ func TestHandleFetchPackReply_VerifiesAndCaches(t *testing.T) {
 	}
 }
 
+func TestHaveLedgerSeqRequiresCompleteLedger(t *testing.T) {
+	adaptor := newTestAdaptor(t)
+	r := newTestRouter(nil, adaptor, make(chan *peermanagement.InboundMessage, 1))
+	open := adaptor.LedgerService().GetOpenLedger()
+	require.NotNil(t, open)
+
+	assert.False(t, r.haveLedgerSeq(open.Sequence()))
+}
+
 // TestTryFetchPackEscalation_NoChildIsNoOp confirms the escalation is a no-op
 // (and does not consume its one-shot flag) when no child ledger is known to key
 // the pack request on — the common forward-tip case.

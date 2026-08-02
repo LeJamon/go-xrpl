@@ -312,8 +312,7 @@ func (r *Router) haveLedgerSeq(seq uint32) bool {
 	if svc == nil {
 		return false
 	}
-	l, err := svc.GetLedgerBySequence(seq)
-	return err == nil && l != nil
+	return svc.HasCompleteLedger(seq)
 }
 
 // tryCompleteFromFetchPack runs CheckLocal against the fetch-pack cache for
