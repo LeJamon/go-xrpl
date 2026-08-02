@@ -147,7 +147,6 @@ func (c *Cache) ApplyManifest(m *Manifest) Disposition {
 	return disp
 }
 
-// applyLocked performs the write-locked half of ApplyManifest.
 func (c *Cache) applyLocked(m *Manifest) Disposition {
 	c.mu.Lock()
 	defer c.mu.Unlock()

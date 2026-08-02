@@ -14,7 +14,6 @@ import (
 
 const storeFilename = "manifests.db"
 
-// StoredManifests contains the raw validator and publisher manifest rows.
 type StoredManifests struct {
 	Validators [][]byte
 	Publishers [][]byte
@@ -39,7 +38,6 @@ const (
 	publisherNamespace
 )
 
-// OpenSQLiteStore opens the node-local manifest database in dir.
 func OpenSQLiteStore(ctx context.Context, dir string) (Store, error) {
 	if dir == "" {
 		return nil, errors.New("manifest store: empty directory")

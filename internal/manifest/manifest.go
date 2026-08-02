@@ -77,7 +77,6 @@ func (m *Manifest) SigningKey() [33]byte {
 	return m.signingKey
 }
 
-// Sequence returns the manifest sequence number.
 func (m *Manifest) Sequence() uint32 {
 	if m == nil {
 		return 0
