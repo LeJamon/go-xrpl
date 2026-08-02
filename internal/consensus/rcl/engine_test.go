@@ -90,9 +90,13 @@ type mockAdaptor struct {
 	amendmentBlocked bool
 
 	// Validator info
-	nodeID  consensus.NodeID
-	trusted map[consensus.NodeID]bool
-	quorum  int
+	nodeID                    consensus.NodeID
+	trusted                   map[consensus.NodeID]bool
+	quorum                    int
+	negativeUNL               []consensus.NodeID
+	fullyValidatedCalls       []finalityKey
+	onFullyValidated          func(consensus.LedgerID, uint32)
+	onValidationConfigChanged func()
 
 	// listed backs the optional ListedOracle; nil/empty = nothing listed.
 	listed map[consensus.NodeID]bool
@@ -507,11 +511,9 @@ func (a *mockAdaptor) IsQuorumUnavailable() bool {
 }
 
 func (a *mockAdaptor) GetNegativeUNL() []consensus.NodeID {
-	// Test mock: no negative-UNL tracking. Returning nil makes the
-	// tracker treat all trusted validators as contributors to quorum,
-	// which matches the pre-P2.5 behavior and keeps existing tests
-	// unaffected by the new interface.
-	return nil
+	a.mu.RLock()
+	defer a.mu.RUnlock()
+	return append([]consensus.NodeID(nil), a.negativeUNL...)
 }
 
 func (a *mockAdaptor) PeerReportedLedgers() []consensus.LedgerID {
@@ -666,6 +668,25 @@ func (a *mockAdaptor) OnConsensusReached(ledger consensus.Ledger, validations []
 }
 
 func (a *mockAdaptor) OnLedgerFullyValidated(ledgerID consensus.LedgerID, seq uint32) {
+	a.mu.Lock()
+	a.fullyValidatedCalls = append(a.fullyValidatedCalls, finalityKey{ledgerID: ledgerID, ledgerSeq: seq})
+	hook := a.onFullyValidated
+	a.mu.Unlock()
+	if hook != nil {
+		hook(ledgerID, seq)
+	}
+	a.mu.RLock()
+	configChanged := a.onValidationConfigChanged
+	a.mu.RUnlock()
+	if configChanged != nil {
+		configChanged()
+	}
+}
+
+func (a *mockAdaptor) OnValidationConfigChanged(fn func()) {
+	a.mu.Lock()
+	a.onValidationConfigChanged = fn
+	a.mu.Unlock()
 }
 
 func (a *mockAdaptor) OnModeChange(oldMode, newMode consensus.Mode) {
@@ -783,6 +804,87 @@ func TestEngine_StartStop(t *testing.T) {
 
 	if err := engine.Stop(); err != nil {
 		t.Fatalf("Failed to stop engine: %v", err)
+	}
+}
+
+func TestEngine_StartSeedsNegativeUNL(t *testing.T) {
+	adaptor := newMockAdaptor()
+	nodes := []consensus.NodeID{{2}, {3}, {4}, {5}, {6}}
+	adaptor.setTrusted(nodes)
+	adaptor.quorum = 4
+	adaptor.negativeUNL = []consensus.NodeID{nodes[0]}
+	adaptor.now = time.Now()
+	config := DefaultConfig()
+	config.ManualTick = true
+	engine := NewEngine(adaptor, config)
+
+	if err := engine.Start(t.Context()); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	defer engine.Stop()
+
+	for _, node := range nodes[:4] {
+		if status := engine.validationTracker.AddStatus(&consensus.Validation{
+			LedgerID:  consensus.LedgerID{0xA1},
+			LedgerSeq: 101,
+			NodeID:    node,
+			SignTime:  adaptor.now,
+			SeenTime:  adaptor.now,
+			Full:      true,
+		}); status != ValStatusCurrent {
+			t.Fatalf("validation status=%s, want current", status)
+		}
+	}
+	engine.validationTracker.mu.RLock()
+	fired := len(engine.validationTracker.fired)
+	engine.validationTracker.mu.RUnlock()
+	if fired != 0 {
+		t.Fatalf("startup negative-UNL validator finalized %d ledgers", fired)
+	}
+}
+
+func TestEngine_FullyValidatedLedgerRefreshesNegativeUNL(t *testing.T) {
+	adaptor := newMockAdaptor()
+	nodes := []consensus.NodeID{{2}, {3}, {4}, {5}, {6}}
+	adaptor.setTrusted(nodes)
+	adaptor.quorum = 4
+	adaptor.now = time.Now()
+	adaptor.onFullyValidated = func(consensus.LedgerID, uint32) {
+		adaptor.mu.Lock()
+		adaptor.negativeUNL = []consensus.NodeID{nodes[0]}
+		adaptor.mu.Unlock()
+	}
+	config := DefaultConfig()
+	config.ManualTick = true
+	engine := NewEngine(adaptor, config)
+	if err := engine.Start(t.Context()); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	defer engine.Stop()
+
+	add := func(ledgerID consensus.LedgerID, seq uint32) {
+		t.Helper()
+		now := adaptor.Now()
+		for _, node := range nodes[:4] {
+			if status := engine.validationTracker.AddStatus(&consensus.Validation{
+				LedgerID: ledgerID, LedgerSeq: seq, NodeID: node,
+				SignTime: now, SeenTime: now, Full: true,
+			}); status != ValStatusCurrent {
+				t.Fatalf("validation status=%s, want current", status)
+			}
+		}
+	}
+	add(consensus.LedgerID{0xA2}, 101)
+	adaptor.mu.Lock()
+	adaptor.now = adaptor.now.Add(time.Second)
+	adaptor.mu.Unlock()
+	add(consensus.LedgerID{0xA3}, 102)
+
+	adaptor.mu.RLock()
+	calls := len(adaptor.fullyValidatedCalls)
+	adaptor.mu.RUnlock()
+	if calls != 1 {
+		t.Fatalf("fully validated callbacks=%d, want 1 after negative-UNL refresh", calls)
 	}
 }
 
@@ -3204,7 +3306,7 @@ func TestCheckConsensusState(t *testing.T) {
 		// past prevSeq so ProposersFinished returns 4 ≥ 80% of 4.
 		prev := &mockLedger{id: consensus.LedgerID{0x10}, seq: 100}
 		e.prevLedger = prev
-		vt := NewValidationTracker(3, e.timing.ValidationFreshness)
+		vt := NewValidationTracker(3)
 		for i := range 4 {
 			nodeID := consensus.NodeID{byte(0xA0 + i)}
 			vt.trusted[nodeID] = true
@@ -4564,8 +4666,8 @@ func TestPhaseEstablish_PauseAndRecover(t *testing.T) {
 	// validations via Add with the higher seq — strict-less-than
 	// rule (seq < prev) means seq==12 makes them non-laggards.
 	if engine.validationTracker != nil {
-		engine.validationTracker.Add(&consensus.Validation{NodeID: peerA, LedgerID: consensus.LedgerID{0x0c}, LedgerSeq: 12, Full: true, SignTime: now, SeenTime: now})
-		engine.validationTracker.Add(&consensus.Validation{NodeID: peerB, LedgerID: consensus.LedgerID{0x0c}, LedgerSeq: 12, Full: true, SignTime: now, SeenTime: now})
+		engine.validationTracker.Add(&consensus.Validation{NodeID: peerA, LedgerID: consensus.LedgerID{0x0c}, LedgerSeq: 12, Full: true, SignTime: now.Add(time.Nanosecond), SeenTime: now})
+		engine.validationTracker.Add(&consensus.Validation{NodeID: peerB, LedgerID: consensus.LedgerID{0x0c}, LedgerSeq: 12, Full: true, SignTime: now.Add(time.Nanosecond), SeenTime: now})
 	}
 
 	// shouldPause now returns false — the round is free to progress.

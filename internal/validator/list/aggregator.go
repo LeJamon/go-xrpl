@@ -220,15 +220,8 @@ type Aggregator struct {
 	// validator_list_sites. Updated by the HTTP poller; read by RPC.
 	sites []*SiteState
 
-	// manifests is the validator manifest cache. Used to:
-	//   1. Apply incoming publisher manifests (verify + cache the
-	//      ephemeral signing key for blob verification).
-	//   2. Resolve ephemeral validator signing keys back to master keys
-	//      when emitting the trusted set for consensus.
-	//
-	// Shared with the consensus engine and the TMManifests gossip path
-	// so the same manifest seen via a VL applies everywhere.
-	manifests *manifest.Cache
+	validatorManifests *manifest.Cache
+	publisherManifests *manifest.Cache
 
 	// threshold is the minimum number of publishers from `publishers`
 	// that must list a validator before that validator is admitted to
@@ -265,7 +258,8 @@ type Aggregator struct {
 	// the consensus validation path, which runs under the engine's lock
 	// while the OnChange → SetTrustedValidators → engine trust-refresh
 	// chain runs under a.mu — reading a.mu here would be an ABBA deadlock.
-	listed atomic.Pointer[map[consensus.NodeID]struct{}]
+	listed        atomic.Pointer[map[consensus.NodeID]struct{}]
+	listedMasters atomic.Pointer[map[[33]byte]struct{}]
 
 	// unlBlocked mirrors rippled's NetworkOPs unlBlocked_ (NetworkOPs.cpp:750):
 	// the sticky UNL lock-down. Written under a.mu by recomputeAndEmitLocked
@@ -334,14 +328,15 @@ type Aggregator struct {
 }
 
 // Config carries Aggregator construction parameters. All fields are
-// optional; Defaults handle nil Logger / Clock / Manifests so the type
+// optional; defaults handle nil logger, clock, and manifest caches so the type
 // is usable in narrowly-scoped tests.
 type Config struct {
 	PublisherKeys        []PublisherKey
 	SiteURIs             []string
 	Threshold            int
 	StaticValidatorCount int
-	Manifests            *manifest.Cache
+	ValidatorManifests   *manifest.Cache
+	PublisherManifests   *manifest.Cache
 	Clock                func() time.Time
 	Logger               *slog.Logger
 }
@@ -405,11 +400,25 @@ func New(cfg Config) (*Aggregator, error) {
 	if threshold > len(publishers) {
 		return nil, fmt.Errorf("threshold %d exceeds publisher count %d", threshold, len(publishers))
 	}
+	validatorManifests := cfg.ValidatorManifests
+	publisherManifests := cfg.PublisherManifests
+	if validatorManifests == nil {
+		validatorManifests = manifest.NewCache()
+	}
+	if publisherManifests == nil {
+		publisherManifests = manifest.NewCache()
+	}
+	for key := range publishers {
+		if publisherManifests.Revoked([33]byte(key)) {
+			state[key].Status = StatusRevoked
+		}
+	}
 	return &Aggregator{
 		publishers:           publishers,
 		state:                state,
 		sites:                sites,
-		manifests:            cfg.Manifests,
+		validatorManifests:   validatorManifests,
+		publisherManifests:   publisherManifests,
 		threshold:            threshold,
 		staticValidatorCount: cfg.StaticValidatorCount,
 		clock:                clock,
@@ -664,7 +673,8 @@ func (a *Aggregator) ApplyList(manifestBytes, blob, signature []byte, version ui
 		a.logger.Debug("validator list: manifest deserialize failed", "error", err, "site", siteURI)
 		return Untrusted, PublisherKey{}, 0
 	}
-	pubKey := PublisherKey(parsed.MasterKey)
+	masterKey := parsed.MasterKey()
+	pubKey := PublisherKey(masterKey)
 
 	// Reject lists from publishers we don't trust. Per rippled this is
 	// a silent drop — gossip carries lists from many publishers and we
@@ -689,8 +699,8 @@ func (a *Aggregator) ApplyList(manifestBytes, blob, signature []byte, version ui
 	// a stale revocation (cache already holds a higher-sequence
 	// non-revoked manifest) returns untrusted without clearing state.
 	manifestAccepted := false
-	if a.manifests != nil {
-		switch d := a.manifests.ApplyManifest(parsed); d {
+	if a.publisherManifests != nil {
+		switch d := a.publisherManifests.ApplyManifest(parsed); d {
 		case manifest.Accepted:
 			manifestAccepted = true
 		case manifest.Stale:
@@ -749,9 +759,9 @@ func (a *Aggregator) ApplyList(manifestBytes, blob, signature []byte, version ui
 	// later manifest arrived first via gossip. Rippled also uses
 	// publisherManifests_.getSigningKey here, which is the latest
 	// cached key, not the one in `manifestBytes`.
-	signingKey := parsed.SigningKey
-	if a.manifests != nil {
-		if k, ok := a.manifests.GetSigningKey(parsed.MasterKey); ok {
+	signingKey := parsed.SigningKey()
+	if a.publisherManifests != nil {
+		if k, ok := a.publisherManifests.GetSigningKey(masterKey); ok {
 			signingKey = k
 		} else {
 			// Cache says the master is unknown or revoked. If revoked
@@ -920,7 +930,7 @@ func (a *Aggregator) applyAcceptedLocked(s *PublisherState, blob *blobJSON, sign
 	// above via `keys`). Manifests for unlisted validators are dropped:
 	// a malicious publisher must not be able to pollute the cache with
 	// manifests for validators they don't actually attest to.
-	if a.manifests != nil {
+	if a.validatorManifests != nil {
 		listed := make(map[[33]byte]struct{}, len(keys)+8)
 		for _, k := range keys {
 			listed[k] = struct{}{}
@@ -945,12 +955,13 @@ func (a *Aggregator) applyAcceptedLocked(s *PublisherState, blob *blobJSON, sign
 			if err != nil {
 				continue
 			}
-			if _, ok := listed[parsed.MasterKey]; !ok {
+			masterKey := parsed.MasterKey()
+			if _, ok := listed[masterKey]; !ok {
 				a.logger.Debug("validator list: dropping embedded manifest for unlisted master",
-					"master", hex.EncodeToString(parsed.MasterKey[:]))
+					"master", hex.EncodeToString(masterKey[:]))
 				continue
 			}
-			_ = a.manifests.ApplyManifest(parsed)
+			_ = a.validatorManifests.ApplyManifest(parsed)
 		}
 	}
 
@@ -1156,10 +1167,13 @@ func (a *Aggregator) computeValidatorCountsLocked(now time.Time) map[[33]byte]in
 		}
 	}
 	listed := make(map[consensus.NodeID]struct{}, len(counts))
+	listedMasters := make(map[[33]byte]struct{}, len(counts))
 	for k := range counts {
 		listed[consensus.CalcNodeID(k)] = struct{}{}
+		listedMasters[k] = struct{}{}
 	}
 	a.listed.Store(&listed)
+	a.listedMasters.Store(&listedMasters)
 	return counts
 }
 
@@ -1173,6 +1187,17 @@ func (a *Aggregator) IsListed(node consensus.NodeID) bool {
 		return false
 	}
 	_, ok := (*listed)[node]
+	return ok
+}
+
+// IsMasterListed reports whether a validator master key appears in a live
+// configured publisher list.
+func (a *Aggregator) IsMasterListed(master [33]byte) bool {
+	listed := a.listedMasters.Load()
+	if listed == nil {
+		return false
+	}
+	_, ok := (*listed)[master]
 	return ok
 }
 

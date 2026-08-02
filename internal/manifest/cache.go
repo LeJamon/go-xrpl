@@ -1,11 +1,12 @@
 package manifest
 
 import (
+	"log/slog"
+	"sort"
 	"sync"
 )
 
-// Disposition reports the outcome of ApplyManifest. Matches rippled's
-// ManifestDisposition enum in Manifest.h.
+// Disposition reports the outcome of ApplyManifest.
 type Disposition int
 
 const (
@@ -24,13 +25,11 @@ const (
 
 	// BadMasterKey: the incoming manifest's master key is already
 	// recorded as another manifest's ephemeral key — a key-reuse
-	// contradiction. Rejecting prevents a confusing ambiguity in
-	// signingToMasterKeys. Rippled Manifest.cpp:436-444.
+	// contradiction. Rejecting prevents an ambiguous inverse lookup.
 	BadMasterKey
 
-	// BadEphemeralKey: the incoming manifest's ephemeral key collides
-	// with either an ephemeral or master key that the cache already
-	// knows for a different master. Rippled Manifest.cpp:459-477.
+	// BadEphemeralKey: the incoming manifest's ephemeral key is already
+	// known as either an ephemeral or master key in this cache.
 	BadEphemeralKey
 )
 
@@ -72,7 +71,7 @@ type Cache struct {
 	// Entries persist across revocations: a revoked manifest is kept so
 	// lookups see Revoked==true and can refuse to treat the master as
 	// trusted.
-	byMaster map[[33]byte]*Manifest
+	byMaster map[[33]byte]Manifest
 
 	// signingToMaster maps ephemeral signing key → master key. Cleared
 	// when the master rotates (old ephemeral removed) or revokes
@@ -81,30 +80,27 @@ type Cache struct {
 
 	// seq advances on every accepted manifest — both a first-insert for
 	// a newly-seen master key and a replacement with a higher-sequence
-	// manifest. Mirrors rippled 3.2.0's ManifestCache::seq_ (#6059): the
-	// counter is the "something has changed" signal a downstream emitter
-	// (here, the Router's TMManifests frame cache) consults to decide
-	// whether the previously-encoded frame is still current. Before #6059
-	// first-inserts did not bump the counter, so a freshly-seen
-	// validator's manifest could fail to trigger list publication/relay.
+	// manifest. Downstream emitters use it to invalidate encoded frames.
 	seq uint64
 
-	// onAccepted is invoked from ApplyManifest after a manifest has
-	// been verified and stored. nil-safe. The callback runs while
-	// applyMu is held but AFTER the c.mu write lock has been released,
-	// so subscribers may freely call any of the Cache's read methods.
-	// The callback must not block — long work belongs in a worker
-	// goroutine the subscriber owns. Mirrors rippled's pubManifest
-	// fan-out (NetworkOPs.cpp:2234-2261) which feeds the manifests
-	// WebSocket stream.
-	onAccepted func(*Manifest)
+	eventMu        sync.Mutex
+	subscribers    map[uint64]func(*Manifest)
+	nextSubscriber uint64
+	events         []acceptedEvent
+	dispatching    bool
+}
+
+type acceptedEvent struct {
+	manifest    *Manifest
+	subscribers []uint64
 }
 
 // NewCache returns an empty Cache.
 func NewCache() *Cache {
 	return &Cache{
-		byMaster:        make(map[[33]byte]*Manifest),
+		byMaster:        make(map[[33]byte]Manifest),
 		signingToMaster: make(map[[33]byte][33]byte),
+		subscribers:     make(map[uint64]func(*Manifest)),
 	}
 }
 
@@ -112,21 +108,21 @@ func NewCache() *Cache {
 // checks pass — stores it atomically. Returns the disposition so the
 // caller can decide whether to relay (Accepted) or charge the sender
 // (Invalid / BadMasterKey / BadEphemeralKey). Stale is a no-op.
-//
-// Mirrors ManifestCache::applyManifest at rippled Manifest.cpp:382-580,
-// including the two-phase shared→unique pattern that keeps lookups
-// unblocked across the expensive signature verify.
 func (c *Cache) ApplyManifest(m *Manifest) Disposition {
 	if m == nil {
 		return Invalid
 	}
+	owned, err := Deserialize(m.serialized)
+	if err != nil {
+		return Invalid
+	}
 
 	c.applyMu.Lock()
-	defer c.applyMu.Unlock()
 
 	c.mu.RLock()
-	if existing, ok := c.byMaster[m.MasterKey]; ok && m.Sequence <= existing.Sequence {
+	if existing, ok := c.byMaster[owned.masterKey]; ok && owned.sequence <= existing.sequence {
 		c.mu.RUnlock()
+		c.applyMu.Unlock()
 		return Stale
 	}
 	c.mu.RUnlock()
@@ -134,89 +130,143 @@ func (c *Cache) ApplyManifest(m *Manifest) Disposition {
 	// Verify outside any map lock — GetMasterKey / GetSigningKey
 	// lookups proceed unblocked through the (potentially) expensive
 	// secp256k1 verify.
-	if err := m.Verify(); err != nil {
+	if err := owned.Verify(); err != nil {
+		c.applyMu.Unlock()
 		return Invalid
 	}
 
-	disp, cb := c.applyLocked(m)
-	if disp == Accepted && cb != nil {
-		cb(m)
+	disp := c.applyLocked(owned)
+	drain := false
+	if disp == Accepted {
+		drain = c.enqueueAccepted(owned)
+	}
+	c.applyMu.Unlock()
+	if drain {
+		c.drainAccepted()
 	}
 	return disp
 }
 
-// applyLocked performs the write-locked half of ApplyManifest and
-// returns both the resulting disposition and (for Accepted) the
-// snapshot of the onAccepted callback. The callback is fired by the
-// caller after c.mu is released so subscribers may read the cache from
-// inside the callback without recursion.
-func (c *Cache) applyLocked(m *Manifest) (Disposition, func(*Manifest)) {
+func (c *Cache) applyLocked(m *Manifest) Disposition {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
 	// Re-check Stale under the write lock against any direct map
 	// writer that bypassed applyMu.
-	if existing, ok := c.byMaster[m.MasterKey]; ok && m.Sequence <= existing.Sequence {
-		return Stale, nil
+	if existing, ok := c.byMaster[m.masterKey]; ok && m.sequence <= existing.sequence {
+		return Stale
 	}
 
 	// The manifest's master key must not already be recorded as
 	// another manifest's ephemeral key — otherwise a subsequent
-	// getMasterKey(m.MasterKey) would be ambiguous.
-	if other, ok := c.signingToMaster[m.MasterKey]; ok && other != m.MasterKey {
-		return BadMasterKey, nil
+	// GetMasterKey(m.masterKey) would be ambiguous.
+	if _, ok := c.signingToMaster[m.masterKey]; ok {
+		return BadMasterKey
 	}
 
 	if !m.Revoked() {
-		// The ephemeral key must not already be used as ANOTHER
-		// master's ephemeral key (rippled Manifest.cpp:459-468).
-		if other, ok := c.signingToMaster[m.SigningKey]; ok && other != m.MasterKey {
-			return BadEphemeralKey, nil
+		if _, ok := c.signingToMaster[m.signingKey]; ok {
+			return BadEphemeralKey
 		}
-		// Nor may it collide with a known master key (rippled
-		// Manifest.cpp:470-477).
-		if _, ok := c.byMaster[m.SigningKey]; ok {
-			return BadEphemeralKey, nil
+		if _, ok := c.byMaster[m.signingKey]; ok {
+			return BadEphemeralKey
 		}
 	}
 
 	// Drop the previous ephemeral mapping (if any) before installing
 	// the new one; otherwise a validation signed with the OLD
 	// ephemeral would still resolve to the master after rotation.
-	prev, isUpdate := c.byMaster[m.MasterKey]
+	prev, isUpdate := c.byMaster[m.masterKey]
 	if isUpdate && !prev.Revoked() {
-		delete(c.signingToMaster, prev.SigningKey)
+		delete(c.signingToMaster, prev.signingKey)
 	}
 
-	c.byMaster[m.MasterKey] = m
+	c.byMaster[m.masterKey] = *cloneManifest(m)
 	if !m.Revoked() {
-		c.signingToMaster[m.SigningKey] = m.MasterKey
+		c.signingToMaster[m.signingKey] = m.masterKey
 	}
-	// Something has changed. Advance the counter so downstream emitters
-	// re-encode. rippled 3.2.0 (#6059) bumps on first-insert too, not
-	// just replacement (isUpdate), so a freshly-seen validator's manifest
-	// triggers list publication/relay.
+	// Advance on insert, rotation, and revocation so emitters re-encode.
 	c.seq++
-	return Accepted, c.onAccepted
+	return Accepted
 }
 
-// SetOnAccepted installs a callback invoked from ApplyManifest after
-// every Accepted disposition. Passing nil detaches the callback. Safe
-// to call concurrently with ApplyManifest — the assignment runs under
-// c.mu so apply's snapshot read sees a coherent value.
-func (c *Cache) SetOnAccepted(fn func(*Manifest)) {
-	c.mu.Lock()
-	c.onAccepted = fn
-	c.mu.Unlock()
+// SubscribeAccepted registers a subscriber for newly accepted manifests and
+// returns an idempotent unsubscribe function. Delivery preserves acceptance
+// order, runs after cache locks are released, and isolates subscriber panics.
+func (c *Cache) SubscribeAccepted(fn func(*Manifest)) func() {
+	if fn == nil {
+		return func() {}
+	}
+	c.eventMu.Lock()
+	c.nextSubscriber++
+	id := c.nextSubscriber
+	c.subscribers[id] = fn
+	c.eventMu.Unlock()
+
+	var once sync.Once
+	return func() {
+		once.Do(func() {
+			c.eventMu.Lock()
+			delete(c.subscribers, id)
+			c.eventMu.Unlock()
+		})
+	}
+}
+
+func (c *Cache) enqueueAccepted(m *Manifest) bool {
+	c.eventMu.Lock()
+	defer c.eventMu.Unlock()
+	if len(c.subscribers) == 0 {
+		return false
+	}
+	ids := make([]uint64, 0, len(c.subscribers))
+	for id := range c.subscribers {
+		ids = append(ids, id)
+	}
+	sort.Slice(ids, func(i, j int) bool { return ids[i] < ids[j] })
+	c.events = append(c.events, acceptedEvent{manifest: cloneManifest(m), subscribers: ids})
+	if c.dispatching {
+		return false
+	}
+	c.dispatching = true
+	return true
+}
+
+func (c *Cache) drainAccepted() {
+	for {
+		c.eventMu.Lock()
+		if len(c.events) == 0 {
+			c.dispatching = false
+			c.eventMu.Unlock()
+			return
+		}
+		event := c.events[0]
+		c.events[0] = acceptedEvent{}
+		c.events = c.events[1:]
+		c.eventMu.Unlock()
+
+		for _, id := range event.subscribers {
+			c.eventMu.Lock()
+			fn := c.subscribers[id]
+			c.eventMu.Unlock()
+			if fn != nil {
+				invokeAccepted(fn, cloneManifest(event.manifest))
+			}
+		}
+	}
+}
+
+func invokeAccepted(fn func(*Manifest), m *Manifest) {
+	defer func() {
+		if recovered := recover(); recovered != nil {
+			slog.Error("manifest subscriber panicked", "panic", recovered)
+		}
+	}()
+	fn(m)
 }
 
 // Sequence returns the cache's "something has changed" counter.
-// Increments every time an existing master's manifest is replaced with
-// a higher-sequence one (key rotation or revocation). First-inserts
-// don't advance it — see ApplyManifest. Mirrors rippled
-// ManifestCache::sequence() at Manifest.h:278-281, used by emitters to
-// short-circuit re-encoding the TMManifests frame when nothing has
-// changed since the last build.
+// It increments for every accepted insertion, rotation, and revocation.
 func (c *Cache) Sequence() uint64 {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
@@ -225,9 +275,7 @@ func (c *Cache) Sequence() uint64 {
 
 // GetMasterKey returns the master key associated with a signing key.
 // If the signing key is not recorded in any manifest, returns the input
-// unchanged — matching rippled's ManifestCache::getMasterKey
-// (Manifest.cpp:322-332), which lets callers use the return value
-// directly in UNL lookups: a non-validator peer's pubkey maps to itself.
+// unchanged so callers can use the result directly in UNL lookups.
 func (c *Cache) GetMasterKey(signingKey [33]byte) [33]byte {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
@@ -239,10 +287,7 @@ func (c *Cache) GetMasterKey(signingKey [33]byte) [33]byte {
 
 // GetSigningKey returns the current ephemeral signing key for a master
 // key. The second return is false when the master is unknown or
-// revoked — callers should treat "revoked or unknown" identically
-// (rippled Manifest.cpp:310-320 returns the input key itself in that
-// case, but the caller contexts here — RPC and consensus — want to
-// distinguish "have a valid mapping" from "don't").
+// revoked — callers should treat "revoked or unknown" identically.
 func (c *Cache) GetSigningKey(masterKey [33]byte) ([33]byte, bool) {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
@@ -250,7 +295,7 @@ func (c *Cache) GetSigningKey(masterKey [33]byte) ([33]byte, bool) {
 	if !ok || m.Revoked() {
 		return [33]byte{}, false
 	}
-	return m.SigningKey, true
+	return m.signingKey, true
 }
 
 // GetManifest returns the raw serialized manifest bytes for a master
@@ -262,7 +307,7 @@ func (c *Cache) GetManifest(masterKey [33]byte) ([]byte, bool) {
 	if !ok || m.Revoked() {
 		return nil, false
 	}
-	return append([]byte(nil), m.Serialized...), true
+	return append([]byte(nil), m.serialized...), true
 }
 
 // GetSequence returns the stored manifest's sequence number. Second
@@ -274,7 +319,7 @@ func (c *Cache) GetSequence(masterKey [33]byte) (uint32, bool) {
 	if !ok || m.Revoked() {
 		return 0, false
 	}
-	return m.Sequence, true
+	return m.sequence, true
 }
 
 // GetDomain returns the stored manifest's domain string. Second return
@@ -283,10 +328,10 @@ func (c *Cache) GetDomain(masterKey [33]byte) (string, bool) {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
 	m, ok := c.byMaster[masterKey]
-	if !ok || m.Revoked() || m.Domain == "" {
+	if !ok || m.Revoked() || m.domain == "" {
 		return "", false
 	}
-	return m.Domain, true
+	return m.domain, true
 }
 
 // Revoked reports whether the cached manifest for masterKey is a
@@ -303,10 +348,7 @@ func (c *Cache) Revoked(masterKey [33]byte) bool {
 }
 
 // MasterToSigning returns a snapshot of the master→signing key map for
-// every cached (non-revoked) manifest. Used by the `validators` RPC to
-// emit the `signing_keys` object, mirroring rippled's
-// ValidatorManifests::for_each_manifest walk in getJson at
-// ValidatorList.cpp:1725-1734.
+// every cached non-revoked manifest.
 func (c *Cache) MasterToSigning() map[[33]byte][33]byte {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
@@ -315,20 +357,35 @@ func (c *Cache) MasterToSigning() map[[33]byte][33]byte {
 	}
 	out := make(map[[33]byte][33]byte, len(c.byMaster))
 	for master, m := range c.byMaster {
-		if m == nil || m.Revoked() {
+		if m.Revoked() {
 			continue
 		}
-		out[master] = m.SigningKey
+		out[master] = m.signingKey
 	}
 	return out
 }
 
+// Snapshot returns independent copies of all cached manifests, including
+// revocations.
+func (c *Cache) Snapshot() []*Manifest {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	if len(c.byMaster) == 0 {
+		return nil
+	}
+	out := make([]*Manifest, 0, len(c.byMaster))
+	for _, m := range c.byMaster {
+		manifest := m
+		out = append(out, cloneManifest(&manifest))
+	}
+	sort.Slice(out, func(i, j int) bool {
+		return string(out[i].masterKey[:]) < string(out[j].masterKey[:])
+	})
+	return out
+}
+
 // SerializedAll returns the wire bytes of every cached manifest in
-// arbitrary order, with each entry defensively copied. Used by the
-// post-handshake TMManifests emission to gossip the entire aggregated
-// cache to a freshly-connected peer, mirroring rippled's
-// OverlayImpl::getManifestsMessage which calls
-// ValidatorManifests::for_each_manifest (Manifest.cpp:1184-1212).
+// arbitrary order, with each entry defensively copied.
 func (c *Cache) SerializedAll() [][]byte {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
@@ -337,10 +394,10 @@ func (c *Cache) SerializedAll() [][]byte {
 	}
 	out := make([][]byte, 0, len(c.byMaster))
 	for _, m := range c.byMaster {
-		if len(m.Serialized) == 0 {
+		if len(m.serialized) == 0 {
 			continue
 		}
-		out = append(out, append([]byte(nil), m.Serialized...))
+		out = append(out, append([]byte(nil), m.serialized...))
 	}
 	return out
 }

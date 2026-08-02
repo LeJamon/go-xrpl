@@ -43,7 +43,7 @@ func TestPhaseEstablish_PauseStillRefreshesProposal(t *testing.T) {
 	engine.roundStartTime = now.Add(-500 * time.Millisecond)
 	engine.setMode(consensus.ModeProposing)
 	engine.setPhase(consensus.PhaseEstablish)
-	engine.disputeTracker = NewDisputeTracker()
+	engine.disputeTracker = newDisputeTracker()
 	engine.ourTxSet = buildMockTxSet(consensus.TxSetID{0xA1})
 	engine.state.OurPosition = &consensus.Proposal{
 		Round:          round,

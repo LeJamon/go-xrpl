@@ -534,12 +534,12 @@ func (e *Engine) processPendingRecoveryLedgerLocked() bool {
 	return e.switchToAcquiredLedgerLocked(l.ID(), l)
 }
 
-// parentValidations returns the trusted validations recorded for id, fed
-// to GenerateFlagLedgerPseudoTxs for fee/amendment vote tallying. Callers
-// pass prevLedger.ParentID(). Nil when the tracker isn't wired.
-func (e *Engine) parentValidations(id consensus.LedgerID) []*consensus.Validation {
+// parentValidations returns the trusted full validations recorded for the
+// exact parent hash/sequence, fed to GenerateFlagLedgerPseudoTxs for
+// fee/amendment vote tallying. Nil when the tracker isn't wired.
+func (e *Engine) parentValidations(id consensus.LedgerID, seq uint32) []*consensus.Validation {
 	if e.validationTracker == nil {
 		return nil
 	}
-	return e.validationTracker.GetTrustedValidations(id)
+	return e.validationTracker.GetTrustedFullValidations(id, seq)
 }

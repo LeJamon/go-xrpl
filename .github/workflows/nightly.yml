@@ -67,7 +67,7 @@ jobs:
       - uses: ./.github/actions/setup
         with:
           cgo: "false"
-      - run: go test -count=1 -timeout 20m ./codec/... ./shamap/... ./ledger/... ./keylet/... ./drops/... ./protocol/... ./crypto/... ./amendment/...
+      - run: go test -count=1 -timeout 20m ./codec/... ./shamap/... ./ledger/... ./keylet/... ./drops/... ./protocol/... ./crypto/... ./amendment/... ./internal/observability/...
 
   consensus-soak:
     name: Consensus soak (longer)

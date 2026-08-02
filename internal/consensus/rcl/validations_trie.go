@@ -1,6 +1,9 @@
 package rcl
 
 import (
+	"log/slog"
+	"reflect"
+
 	"github.com/LeJamon/go-xrpl/internal/consensus"
 	"github.com/LeJamon/go-xrpl/internal/consensus/ledgertrie"
 )
@@ -10,6 +13,97 @@ import (
 // history is not locally known.
 type LedgerAncestryProvider interface {
 	LedgerByID(id consensus.LedgerID) (ledgertrie.Ledger, bool)
+}
+
+type retryableAncestryLedger interface {
+	retryable() bool
+}
+
+// ancestryResolution is the provider result plus metadata captured while the
+// provider boundary is outside ValidationTracker.mu. Callers holding the
+// tracker lock must use these values instead of invoking methods on the
+// provider-owned ledger again.
+type ancestryResolution struct {
+	ledger    ledgertrie.Ledger
+	id        consensus.LedgerID
+	seq       uint32
+	retryable bool
+}
+
+// safeAncestryCall contains panics from provider code and custom ledger
+// metadata methods. Provider and ledger objects are external to the tracker,
+// so a malformed implementation must degrade to an unresolved result rather
+// than unwind a consensus goroutine.
+func safeAncestryCall(fn string, op func()) (panicked bool) {
+	defer func() {
+		if r := recover(); r != nil {
+			panicked = true
+			slog.Error("ancestry provider panic recovered",
+				"t", "consensus",
+				"event", "ancestry-provider-panic",
+				"fn", fn,
+				"err", r,
+			)
+		}
+	}()
+	op()
+	return false
+}
+
+// resolveAncestry performs a provider lookup and captures retryable/ID/Seq
+// metadata without holding ValidationTracker.mu. A result is usable only when
+// the provider returned the requested ID and, when expectedSeq is non-nil, the
+// exact requested sequence. Nil, typed-nil, panicking, and mismatched results
+// are all treated as unresolved so callers park or use their flat fallback.
+func resolveAncestry(
+	provider LedgerAncestryProvider,
+	expectedID consensus.LedgerID,
+	expectedSeq *uint32,
+) (resolved ancestryResolution, ok bool) {
+	if isNilInterface(provider) {
+		return ancestryResolution{}, false
+	}
+	var ledger ledgertrie.Ledger
+	var found bool
+	if safeAncestryCall("LedgerByID", func() {
+		ledger, found = provider.LedgerByID(expectedID)
+	}) || !found || !isValidAncestryLedger(ledger) {
+		return ancestryResolution{}, false
+	}
+	resolved.ledger = ledger
+	if safeAncestryCall("LedgerMetadata", func() {
+		resolved.id = ledger.ID()
+		resolved.seq = ledger.Seq()
+		if partial, hasRetry := ledger.(retryableAncestryLedger); hasRetry {
+			resolved.retryable = partial.retryable()
+		}
+	}) {
+		return ancestryResolution{}, false
+	}
+	if resolved.id != expectedID || expectedSeq != nil && resolved.seq != *expectedSeq {
+		return ancestryResolution{}, false
+	}
+	return resolved, true
+}
+
+// isNilInterface catches both a nil interface and an interface containing a
+// typed nil pointer. Providers are external to the tracker and must not be
+// able to make an ok=true result panic a read path.
+func isNilInterface(value any) bool {
+	if value == nil {
+		return true
+	}
+	rv := reflect.ValueOf(value)
+	switch rv.Kind() {
+	case reflect.Chan, reflect.Func, reflect.Interface, reflect.Map, reflect.Pointer, reflect.Slice:
+		return rv.IsNil()
+	default:
+		return false
+	}
+}
+
+func isValidAncestryLedger(lgr ledgertrie.Ledger) bool {
+	return !isNilInterface(lgr)
 }
 
 // acquiringKey identifies a ledger referenced by trusted validations but
@@ -24,7 +118,7 @@ type acquiringKey struct {
 // The trie is rebuilt from the current byNode / trusted / negUNL state.
 func (vt *ValidationTracker) SetLedgerAncestryProvider(p LedgerAncestryProvider) {
 	vt.mu.Lock()
-	if p == nil {
+	if isNilInterface(p) {
 		vt.ancestry = nil
 		vt.trie = nil
 		vt.trieTips = nil
@@ -76,7 +170,7 @@ func (vt *ValidationTracker) rebuildTrieLocked() {
 func (vt *ValidationTracker) updateTrieLocked(
 	nodeID consensus.NodeID,
 	validation *consensus.Validation,
-	preResolved ledgertrie.Ledger,
+	preResolved ancestryResolution,
 	preResolvedTrie *ledgertrie.Trie,
 	prior *acquiringKey,
 ) {
@@ -88,8 +182,9 @@ func (vt *ValidationTracker) updateTrieLocked(
 		vt.unparkLocked(*prior, nodeID)
 	}
 	key := acquiringKey{seq: validation.LedgerSeq, id: validation.LedgerID}
-	if preResolved != nil && preResolved.ID() == validation.LedgerID &&
-		preResolved.Seq() == validation.LedgerSeq && vt.trie == preResolvedTrie {
+	if preResolved.ledger != nil && !preResolved.retryable &&
+		preResolved.id == validation.LedgerID &&
+		preResolved.seq == validation.LedgerSeq && vt.trie == preResolvedTrie {
 		if parked, ok := vt.acquiring[key]; ok {
 			parked[nodeID] = struct{}{}
 			for parkedNode := range parked {
@@ -97,12 +192,14 @@ func (vt *ValidationTracker) updateTrieLocked(
 				if current == nil || current.LedgerSeq != key.seq || current.LedgerID != key.id || !vt.trusted[parkedNode] {
 					continue
 				}
-				vt.insertTipLocked(parkedNode, preResolved)
+				if !vt.insertTipLocked(parkedNode, preResolved.ledger) {
+					return
+				}
 			}
 			delete(vt.acquiring, key)
 			return
 		}
-		vt.insertTipLocked(nodeID, preResolved)
+		vt.insertTipLocked(nodeID, preResolved.ledger)
 		return
 	}
 	vt.parkLocked(key, nodeID)
@@ -125,9 +222,9 @@ func (vt *ValidationTracker) checkAcquired() {
 	}
 	vt.mu.RUnlock()
 
-	resolved := make(map[acquiringKey]ledgertrie.Ledger, len(keys))
+	resolved := make(map[acquiringKey]ancestryResolution, len(keys))
 	for _, key := range keys {
-		if lgr, ok := ancestry.LedgerByID(key.id); ok && lgr.ID() == key.id && lgr.Seq() == key.seq {
+		if lgr, ok := resolveAncestry(ancestry, key.id, &key.seq); ok && !lgr.retryable {
 			resolved[key] = lgr
 		}
 	}
@@ -150,7 +247,9 @@ func (vt *ValidationTracker) checkAcquired() {
 			if current == nil || current.LedgerSeq != key.seq || current.LedgerID != key.id || !vt.trusted[nodeID] {
 				continue
 			}
-			vt.insertTipLocked(nodeID, lgr)
+			if !vt.insertTipLocked(nodeID, lgr.ledger) {
+				return
+			}
 		}
 		delete(vt.acquiring, key)
 	}
@@ -183,17 +282,62 @@ func (vt *ValidationTracker) unparkLocked(key acquiringKey, nodeID consensus.Nod
 
 // insertTipLocked replaces nodeID's previous trie tip (if any) with lgr.
 // Caller must hold vt.mu (write).
-func (vt *ValidationTracker) insertTipLocked(nodeID consensus.NodeID, lgr ledgertrie.Ledger) {
+func (vt *ValidationTracker) insertTipLocked(nodeID consensus.NodeID, lgr ledgertrie.Ledger) bool {
+	if vt.trie == nil || lgr == nil {
+		return false
+	}
 	if prev, existed := vt.trieTips[nodeID]; existed {
 		if safeTrieCall("Remove", func() { vt.trie.Remove(prev, 1) }) {
-			return
+			vt.resetTrieLocked()
+			return false
 		}
 		delete(vt.trieTips, nodeID)
 	}
 	if safeTrieCall("Insert", func() { vt.trie.Insert(lgr, 1) }) {
-		return
+		vt.resetTrieLocked()
+		return false
 	}
 	vt.trieTips[nodeID] = lgr
+	return true
+}
+
+// resetTrieLocked discards all derived trie state after a mutation panic.
+// The tracked validation maps are authoritative, so rebuildTrieLocked can
+// safely re-park every trusted latest validation. The next checkAcquired poll
+// resolves available ledgers and repopulates the replacement trie.
+// Caller must hold vt.mu.
+func (vt *ValidationTracker) resetTrieLocked() {
+	if vt.ancestry == nil {
+		if vt.trie != nil {
+			vt.trie = ledgertrie.New(genesisLedger{})
+		}
+		vt.trieTips = make(map[consensus.NodeID]ledgertrie.Ledger)
+		vt.acquiring = make(map[acquiringKey]map[consensus.NodeID]struct{})
+		return
+	}
+	vt.rebuildTrieLocked()
+}
+
+// removeTipLocked removes a validator's derived trie tip while keeping the
+// trieTips index coupled to the trie. A panic can leave ledgertrie partially
+// mutated, so discard and rebuild the entire derived state instead of
+// continuing against a corrupted instance.
+// Caller must hold vt.mu.
+func (vt *ValidationTracker) removeTipLocked(nodeID consensus.NodeID) bool {
+	if vt.trie == nil {
+		delete(vt.trieTips, nodeID)
+		return true
+	}
+	prev, ok := vt.trieTips[nodeID]
+	if !ok {
+		return true
+	}
+	if safeTrieCall("Remove", func() { vt.trie.Remove(prev, 1) }) {
+		vt.resetTrieLocked()
+		return false
+	}
+	delete(vt.trieTips, nodeID)
+	return true
 }
 
 // GetJSONTrie returns a JSON-serializable snapshot of the ancestry trie's
@@ -201,13 +345,14 @@ func (vt *ValidationTracker) insertTipLocked(nodeID consensus.NodeID, lgr ledger
 // the trie is disabled (no ancestry provider wired) or a serialization panic
 // is trapped. Guarded by vt.mu.
 func (vt *ValidationTracker) GetJSONTrie() map[string]any {
-	vt.mu.RLock()
-	defer vt.mu.RUnlock()
+	vt.mu.Lock()
+	defer vt.mu.Unlock()
 	if vt.trie == nil {
 		return nil
 	}
 	var res map[string]any
 	if safeTrieCall("GetJSON", func() { res = vt.trie.GetJSON() }) {
+		vt.resetTrieLocked()
 		return nil
 	}
 	return res

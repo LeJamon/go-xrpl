@@ -118,10 +118,9 @@ func (e *Engine) acceptLedger(result consensus.Result) {
 	// clamp track convergence, not the apply.
 	roundTime := e.now().Sub(e.roundStartTime)
 	roundDuration := e.now().Sub(e.state.StartTime)
+	// DisputedNoTxs returns detached blobs; work keeps that snapshot while
+	// the ledger is built after e.mu is released.
 	disputedNoTxs := e.disputeTracker.DisputedNoTxs()
-	for i := range disputedNoTxs {
-		disputedNoTxs[i] = append([]byte(nil), disputedNoTxs[i]...)
-	}
 
 	// Apply the LCL off e.mu, mirroring rippled onAccept→addJob(jtACCEPT)
 	// ("no lock is held during this job"). Snapshot every build input and
@@ -357,15 +356,10 @@ func (e *Engine) commitAcceptedLedgerLocked(work ledgerAcceptWork, newLedger con
 		e.adaptor.AdjustCloseTime(e.state.CloseTimes)
 	}
 
-	// Refresh the tracker's trusted set + quorum each accept (amendments /
-	// neg-UNL can mutate the UNL across boundaries), and advance the minSeq
-	// floor so far-stale validations are rejected at Add() not every pass.
+	// Refresh the tracker's trusted set, quorum, and negative UNL each accept,
+	// and advance the minSeq floor so far-stale validations are rejected at Add().
 	if e.validationTracker != nil {
-		trusted, quorum := e.adaptor.GetTrustedValidatorsAndQuorum()
-		e.validationTracker.SetTrustedAndQuorum(trusted, quorum)
-		// Pull the negative-UNL from the accepted ledger so disabled
-		// validators are excluded from quorum.
-		e.validationTracker.SetNegativeUNL(e.adaptor.GetNegativeUNL())
+		quorum := e.refreshValidationConfig()
 		if newLedger.Seq() > 128 {
 			// Keep a small history window so late validations for the
 			// just-accepted ledger still count.

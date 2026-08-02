@@ -95,10 +95,11 @@ func TestBroadcastLatest_V2PeerGetsCollection_NoRemaining(t *testing.T) {
 	v1 := derivedValidatorKey(0x60)
 
 	agg, err := list.New(list.Config{
-		PublisherKeys: []list.PublisherKey{list.PublisherKey(pub.masterPub)},
-		Threshold:     1,
-		Manifests:     manifest.NewCache(),
-		Clock:         fixedClock(),
+		PublisherKeys:      []list.PublisherKey{list.PublisherKey(pub.masterPub)},
+		Threshold:          1,
+		ValidatorManifests: manifest.NewCache(),
+		PublisherManifests: manifest.NewCache(),
+		Clock:              fixedClock(),
 	})
 	if err != nil {
 		t.Fatalf("New: %v", err)
@@ -146,10 +147,11 @@ func TestBroadcastLatest_V2PeerSkippedWhenAtMaxSeq(t *testing.T) {
 	v1 := derivedValidatorKey(0x61)
 
 	agg, err := list.New(list.Config{
-		PublisherKeys: []list.PublisherKey{list.PublisherKey(pub.masterPub)},
-		Threshold:     1,
-		Manifests:     manifest.NewCache(),
-		Clock:         fixedClock(),
+		PublisherKeys:      []list.PublisherKey{list.PublisherKey(pub.masterPub)},
+		Threshold:          1,
+		ValidatorManifests: manifest.NewCache(),
+		PublisherManifests: manifest.NewCache(),
+		Clock:              fixedClock(),
 	})
 	if err != nil {
 		t.Fatalf("New: %v", err)

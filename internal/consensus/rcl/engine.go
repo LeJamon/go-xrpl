@@ -96,18 +96,19 @@ type Engine struct {
 	censorship censorshipDetector
 
 	// proposalTracker owns the round-scoped peer-signal maps. Accessed only
-	// under e.mu (see ProposalTracker).
-	proposalTracker *ProposalTracker
+	// under e.mu (see proposalTracker).
+	proposalTracker *proposalTracker
 
 	// validationTracker accumulates trusted validations across ledgers and
 	// fires the fully-validated callback at quorum, driving
 	// server_info.validated_ledger forward.
-	validationTracker *ValidationTracker
+	validationTracker  *ValidationTracker
+	validationConfigMu sync.Mutex
 
 	// disputeTracker owns the per-tx DisputedTx entries and per-peer vote
 	// map. Written by createDisputesAgainst / OnProposal / OnTxSet /
 	// UpdateOurPositions, read during checkConvergence.
-	disputeTracker *DisputeTracker
+	disputeTracker *disputeTracker
 
 	// acquiredTxSets caches peer tx sets in memory by TxSetID, populated by
 	// our BuildTxSet output and OnTxSet. Dispute wiring reads it to learn
@@ -203,7 +204,6 @@ type Engine struct {
 	ourLastValidatedTime time.Time
 
 	// Stats
-	roundCount     uint64
 	consensusCount uint64
 
 	// archive persists stale validations dropped by the tracker (optional;
@@ -261,6 +261,50 @@ type Engine struct {
 	trustedSnapshot    map[consensus.NodeID]struct{}
 	pendingTrustPurge  map[consensus.NodeID]struct{}
 	trustSnapshotReady bool
+}
+
+type validationConfigProvider interface {
+	GetValidationConfig() ([]consensus.NodeID, int, []consensus.NodeID)
+}
+
+type validationConfigChangeNotifier interface {
+	OnValidationConfigChanged(func())
+}
+
+func validationConfig(adaptor consensus.Adaptor) ([]consensus.NodeID, int, []consensus.NodeID) {
+	if provider, ok := adaptor.(validationConfigProvider); ok {
+		return provider.GetValidationConfig()
+	}
+	trusted, quorum := adaptor.GetTrustedValidatorsAndQuorum()
+	return trusted, quorum, adaptor.GetNegativeUNL()
+}
+
+func (e *Engine) setValidationConfig(trusted []consensus.NodeID, quorum int, negativeUNL []consensus.NodeID) {
+	e.validationConfigMu.Lock()
+	tracker := e.validationTracker
+	if tracker != nil {
+		tracker.updateTrustedQuorumAndNegativeUNL(trusted, quorum, negativeUNL)
+	}
+	e.validationConfigMu.Unlock()
+	if tracker != nil {
+		tracker.drainFinality()
+		tracker.checkAcquired()
+	}
+}
+
+func (e *Engine) refreshValidationConfig() int {
+	e.validationConfigMu.Lock()
+	tracker := e.validationTracker
+	if tracker == nil {
+		e.validationConfigMu.Unlock()
+		return 0
+	}
+	trusted, quorum, negativeUNL := validationConfig(e.adaptor)
+	tracker.updateTrustedQuorumAndNegativeUNL(trusted, quorum, negativeUNL)
+	e.validationConfigMu.Unlock()
+	tracker.drainFinality()
+	tracker.checkAcquired()
+	return quorum
 }
 
 // ValidationArchive is the archive API subset the engine consumes,
@@ -390,9 +434,9 @@ func NewEngine(adaptor consensus.Adaptor, config Config) *Engine {
 		eventBus:          consensus.NewEventBus(100),
 		mode:              consensus.ModeObserving,
 		phase:             consensus.PhaseAccepted,
-		proposalTracker:   NewProposalTracker(),
+		proposalTracker:   newProposalTracker(),
 		closeTime:         newCloseTimeTracker(),
-		disputeTracker:    NewDisputeTracker(),
+		disputeTracker:    newDisputeTracker(),
 		acquiredTxSets:    make(map[consensus.TxSetID]consensus.TxSet),
 		comparesTxSets:    make(map[consensus.TxSetID]struct{}),
 		parms:             consensus.DefaultConsensusParms(),
@@ -589,11 +633,9 @@ func (e *Engine) Start(ctx context.Context) error {
 	e.ctx, e.cancel = context.WithCancel(ctx)
 	e.prevLedger = ledger
 
-	// Wire the validation tracker: trusted set + quorum from the adaptor;
-	// its callback flips the ledger service's validated_ledger pointer.
-	trusted, quorum := e.adaptor.GetTrustedValidatorsAndQuorum()
-	e.validationTracker = NewValidationTracker(quorum, 5*time.Minute)
-	e.validationTracker.SetTrustedAndQuorum(trusted, quorum)
+	trusted, quorum, negativeUNL := validationConfig(e.adaptor)
+	e.validationTracker = NewValidationTracker(quorum)
+	e.setValidationConfig(trusted, quorum, negativeUNL)
 	e.validationTracker.SetQuorumUnavailableFunc(e.adaptor.IsQuorumUnavailable)
 	e.trustMu.Lock()
 	e.trustedSnapshot = make(map[consensus.NodeID]struct{}, len(trusted))
@@ -614,10 +656,22 @@ func (e *Engine) Start(ctx context.Context) error {
 		e.trustMu.Lock()
 		e.trustSnapshotReady = true
 		e.trustMu.Unlock()
-		notifier.OnTrustChanged(func(nodes []consensus.NodeID, quorum int) {
-			tracker.SetTrustedAndQuorum(nodes, quorum)
-			e.recordTrustTransition(nodes)
+		notifier.OnTrustChanged(func(trusted []consensus.NodeID, quorum int) {
+			if _, ok := e.adaptor.(validationConfigProvider); ok {
+				e.refreshValidationConfig()
+			} else {
+				e.setValidationConfig(trusted, quorum, e.adaptor.GetNegativeUNL())
+			}
+			e.recordTrustTransition(trusted)
 		})
+		if settled, ok := e.adaptor.(consensus.TrustChangeSettledNotifier); ok {
+			settled.OnTrustSettled(tracker.RecheckFinality)
+		}
+	}
+	_, validationConfigNotified := e.adaptor.(validationConfigChangeNotifier)
+	if notifier, ok := e.adaptor.(validationConfigChangeNotifier); ok {
+		notifier.OnValidationConfigChanged(func() { e.refreshValidationConfig() })
+		e.refreshValidationConfig()
 	}
 	if e.ledgerAncestry != nil {
 		e.validationTracker.SetLedgerAncestryProvider(e.ledgerAncestry)
@@ -636,6 +690,9 @@ func (e *Engine) Start(ctx context.Context) error {
 		// e.archive / e.inMemoryLedgers are read via atomics to stay
 		// race-free against SetArchive.
 		e.adaptor.OnLedgerFullyValidated(ledgerID, seq)
+		if !validationConfigNotified {
+			e.refreshValidationConfig()
+		}
 
 		arc := e.loadArchive()
 		inMem := e.inMemoryLedgers.Load()
@@ -885,7 +942,7 @@ func (e *Engine) startRoundLocked(round consensus.RoundID, proposing, recovering
 	// Reset tracking maps. Dead-node set is round-scoped, so a validator that
 	// bowed out last round can rejoin.
 	e.proposalTracker.ResetRound()
-	e.disputeTracker = NewDisputeTracker()
+	e.disputeTracker = newDisputeTracker()
 	e.acquiredTxSets = make(map[consensus.TxSetID]consensus.TxSet)
 	e.comparesTxSets = make(map[consensus.TxSetID]struct{})
 	e.peerUnchangedCounter = 0
@@ -942,7 +999,6 @@ func (e *Engine) startRoundLocked(round consensus.RoundID, proposing, recovering
 		}
 	}
 
-	e.roundCount++
 	return nil
 }
 
@@ -1531,7 +1587,11 @@ func (e *Engine) closeLedger() {
 		prev := e.prevLedger
 		switch {
 		case protocol.IsFlagLedger(prev.Seq()):
-			parentVals := e.parentValidations(prev.ParentID())
+			var parentSeq uint32
+			if prev.Seq() > 0 {
+				parentSeq = prev.Seq() - 1
+			}
+			parentVals := e.parentValidations(prev.ParentID(), parentSeq)
 			if extra := e.adaptor.GenerateFlagLedgerPseudoTxs(prev, parentVals); len(extra) > 0 {
 				txs = append(txs, extra...)
 			}

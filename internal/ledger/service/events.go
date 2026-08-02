@@ -317,16 +317,13 @@ type validatedLedgerNotification struct {
 	parentHash [32]byte
 }
 
-func (s *Service) validatedLedgerSeqLocked() uint32 {
-	if s.validatedLedger == nil {
-		return 0
-	}
-	return s.validatedLedger.Sequence()
-}
-
 // Caller must hold s.mu for writing and invoke notify only after unlocking.
-func (s *Service) validatedLedgerNotificationLocked(previousSeq uint32) validatedLedgerNotification {
-	if s.onValidatedLedger == nil || s.validatedLedger == nil || s.validatedLedger.Sequence() <= previousSeq {
+func (s *Service) validatedLedgerNotificationLocked(previous *ledger.Ledger) validatedLedgerNotification {
+	if s.onValidatedLedger == nil || s.validatedLedger == nil {
+		return validatedLedgerNotification{}
+	}
+	if previous != nil && (s.validatedLedger.Sequence() < previous.Sequence() ||
+		(s.validatedLedger.Sequence() == previous.Sequence() && s.validatedLedger.Hash() == previous.Hash())) {
 		return validatedLedgerNotification{}
 	}
 	return validatedLedgerNotification{
@@ -337,8 +334,8 @@ func (s *Service) validatedLedgerNotificationLocked(previousSeq uint32) validate
 	}
 }
 
-func (s *Service) unlockAndNotifyValidatedLedger(previousSeq uint32) {
-	notification := s.validatedLedgerNotificationLocked(previousSeq)
+func (s *Service) unlockAndNotifyValidatedLedger(previous *ledger.Ledger) {
+	notification := s.validatedLedgerNotificationLocked(previous)
 	s.mu.Unlock()
 	notification.notify()
 }

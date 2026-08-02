@@ -16,7 +16,7 @@ import (
 // but is excluded from the full-validation quorum count, so it cannot by
 // itself fire the fully-validated callback. A later FULL validation does.
 func TestValidationTracker_TrustedPartialSteersButNotQuorum(t *testing.T) {
-	vt := NewValidationTracker(1, 5*time.Minute) // quorum = 1
+	vt := NewValidationTracker(1) // quorum = 1
 	now := time.Now()
 	vt.SetNow(func() time.Time { return now })
 
@@ -80,7 +80,7 @@ func TestValidationTracker_TrustedPartialSteersButNotQuorum(t *testing.T) {
 func TestValidationTracker_AddStatus_Classification(t *testing.T) {
 	base := time.Unix(1_700_000_000, 0)
 	now := base
-	vt := NewValidationTracker(10, 5*time.Minute)
+	vt := NewValidationTracker(10)
 	vt.SetNow(func() time.Time { return now })
 
 	node := consensus.NodeID{0x9}
@@ -110,7 +110,7 @@ func TestValidationTracker_AddStatus_Classification(t *testing.T) {
 		{name: "same seq different ledger", v: mk(100, ledgerB, base, 1), want: ValStatusConflicting},
 		{name: "same seq same ledger different signtime", v: mk(100, ledgerA, base.Add(time.Second), 1), want: ValStatusConflicting},
 		{name: "same seq same ledger different cookie", v: mk(100, ledgerA, base, 2), want: ValStatusMultiple},
-		{name: "tip advances", v: mk(101, ledgerC, base, 1), want: ValStatusCurrent},
+		{name: "tip advances", v: mk(101, ledgerC, base.Add(time.Nanosecond), 1), want: ValStatusCurrent},
 		// The deep-detector case: the tip is at 101, yet the double-sign
 		// at the superseded seq 100 is still flagged.
 		{name: "conflict at superseded seq", v: mk(100, ledgerB, base, 1), want: ValStatusConflicting},
@@ -141,7 +141,7 @@ func TestValidationTracker_AddStatus_Classification(t *testing.T) {
 // branch, so a partial equivocation is flagged just like a full one.
 func TestValidationTracker_AddStatus_PartialDoubleSign(t *testing.T) {
 	base := time.Unix(1_700_000_000, 0)
-	vt := NewValidationTracker(10, 5*time.Minute)
+	vt := NewValidationTracker(10)
 	vt.SetNow(func() time.Time { return base })
 
 	node := consensus.NodeID{0x7}
@@ -268,7 +268,7 @@ func TestEngine_OnValidation_SupersededSeqDoubleSign(t *testing.T) {
 	if err := engine.OnValidation(v1, 7); err != nil {
 		t.Fatalf("seq-100 validation rejected: %v", err)
 	}
-	v2 := &consensus.Validation{LedgerSeq: 101, LedgerID: consensus.LedgerID{0xC}, NodeID: n, SignTime: now, SeenTime: now, Full: true}
+	v2 := &consensus.Validation{LedgerSeq: 101, LedgerID: consensus.LedgerID{0xC}, NodeID: n, SignTime: now.Add(time.Nanosecond), SeenTime: now, Full: true}
 	if err := engine.OnValidation(v2, 7); err != nil {
 		t.Fatalf("seq-101 validation rejected: %v", err)
 	}

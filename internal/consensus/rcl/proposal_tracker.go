@@ -10,11 +10,11 @@ import (
 // recent positions kept for replay, bounded against gossip floods.
 const recentProposalsPerNode = 10
 
-// ProposalTracker owns a round's peer-signal state: each trusted node's
+// proposalTracker owns a round's peer-signal state: each trusted node's
 // current position, the nodes that bowed out, the cross-round playback
 // buffer, and the validations gathered for the accepted ledger. Not
 // independently synchronized: every method runs under the Engine's e.mu.
-type ProposalTracker struct {
+type proposalTracker struct {
 	// each trusted node's current-round position; reset at round start, removed on bow-out
 	proposals map[consensus.NodeID]*consensus.Proposal
 
@@ -28,8 +28,8 @@ type ProposalTracker struct {
 	validations map[consensus.NodeID]*consensus.Validation
 }
 
-func NewProposalTracker() *ProposalTracker {
-	return &ProposalTracker{
+func newProposalTracker() *proposalTracker {
+	return &proposalTracker{
 		proposals:       make(map[consensus.NodeID]*consensus.Proposal),
 		deadNodes:       make(map[consensus.NodeID]struct{}),
 		recentProposals: make(map[consensus.NodeID][]*consensus.Proposal),
@@ -39,41 +39,46 @@ func NewProposalTracker() *ProposalTracker {
 
 // ResetRound clears per-round positions and dead nodes at round start; it
 // leaves recentProposals and validations (different lifecycles).
-func (pt *ProposalTracker) ResetRound() {
+func (pt *proposalTracker) ResetRound() {
 	pt.proposals = make(map[consensus.NodeID]*consensus.Proposal)
 	pt.deadNodes = make(map[consensus.NodeID]struct{})
 }
 
 // ResetProposals clears current-round positions only (wrong-ledger switch
 // keeps the dead-node set).
-func (pt *ProposalTracker) ResetProposals() {
+func (pt *proposalTracker) ResetProposals() {
 	pt.proposals = make(map[consensus.NodeID]*consensus.Proposal)
 }
 
 // Count returns the number of current-round positions.
-func (pt *ProposalTracker) Count() int {
+func (pt *proposalTracker) Count() int {
 	return len(pt.proposals)
 }
 
-// All returns the current-round positions for read-only iteration; mutate via
-// Store/MarkDead/PruneStale.
-func (pt *ProposalTracker) All() map[consensus.NodeID]*consensus.Proposal {
-	return pt.proposals
+// All returns a detached snapshot of the current-round positions. Callers may
+// inspect or mutate the returned map and proposals without changing tracker
+// state.
+func (pt *proposalTracker) All() map[consensus.NodeID]*consensus.Proposal {
+	out := make(map[consensus.NodeID]*consensus.Proposal, len(pt.proposals))
+	for nodeID, proposal := range pt.proposals {
+		out[nodeID] = cloneProposal(proposal)
+	}
+	return out
 }
 
 // Store records a proposal as its node's position and reports whether it did.
 // A proposal that does not advance the node's ProposeSeq — a re-send or a
 // same-seq equivocation — is dropped.
-func (pt *ProposalTracker) Store(p *consensus.Proposal) bool {
+func (pt *proposalTracker) Store(p *consensus.Proposal) bool {
 	existing, exists := pt.proposals[p.NodeID]
 	if exists && p.Position <= existing.Position {
 		return false
 	}
-	pt.proposals[p.NodeID] = p
+	pt.proposals[p.NodeID] = cloneProposal(p)
 	return true
 }
 
-func (pt *ProposalTracker) CountTrusted(trusted func(consensus.NodeID) bool) int {
+func (pt *proposalTracker) CountTrusted(trusted func(consensus.NodeID) bool) int {
 	n := 0
 	for nodeID := range pt.proposals {
 		if trusted(nodeID) {
@@ -88,7 +93,7 @@ func (pt *ProposalTracker) CountTrusted(trusted func(consensus.NodeID) bool) int
 // node IDs. Replay and consensus callers invoke this immediately before using
 // the current position set so a trust change cannot leave a stale vote in
 // close-time or dispute tallies, then resurrect it if trust is restored.
-func (pt *ProposalTracker) PruneUntrusted(trusted func(consensus.NodeID) bool) []consensus.NodeID {
+func (pt *proposalTracker) PruneUntrusted(trusted func(consensus.NodeID) bool) []consensus.NodeID {
 	var removed []consensus.NodeID
 	for nodeID := range pt.proposals {
 		if trusted(nodeID) {
@@ -109,7 +114,7 @@ func (pt *ProposalTracker) PruneUntrusted(trusted func(consensus.NodeID) bool) [
 // It intentionally leaves the round's dead-node marker untouched: a replayed
 // bow-out still has live-equivalent dead semantics even if its position data
 // is later purged.
-func (pt *ProposalTracker) PurgeNode(nodeID consensus.NodeID) {
+func (pt *proposalTracker) PurgeNode(nodeID consensus.NodeID) {
 	delete(pt.proposals, nodeID)
 	delete(pt.recentProposals, nodeID)
 }
@@ -117,7 +122,7 @@ func (pt *ProposalTracker) PurgeNode(nodeID consensus.NodeID) {
 // dropBufferedThrough removes a node's replay history through p, including p.
 // A bow-out is terminal for the current round; retaining older positions would
 // replay the same dead marker on the next round and block a fresh rejoin.
-func (pt *ProposalTracker) dropBufferedThrough(nodeID consensus.NodeID, p *consensus.Proposal) {
+func (pt *proposalTracker) dropBufferedThrough(nodeID consensus.NodeID, p *consensus.Proposal) {
 	positions := pt.recentProposals[nodeID]
 	for i, buffered := range positions {
 		if buffered != p {
@@ -134,22 +139,22 @@ func (pt *ProposalTracker) dropBufferedThrough(nodeID consensus.NodeID, p *conse
 }
 
 // MarkDead removes a node's position and records it as bowed out for the round.
-func (pt *ProposalTracker) MarkDead(nodeID consensus.NodeID) {
+func (pt *proposalTracker) MarkDead(nodeID consensus.NodeID) {
 	delete(pt.proposals, nodeID)
 	pt.deadNodes[nodeID] = struct{}{}
 }
 
-func (pt *ProposalTracker) IsDead(nodeID consensus.NodeID) bool {
+func (pt *proposalTracker) IsDead(nodeID consensus.NodeID) bool {
 	_, dead := pt.deadNodes[nodeID]
 	return dead
 }
 
-func (pt *ProposalTracker) DeadNodeCount() int {
+func (pt *proposalTracker) DeadNodeCount() int {
 	return len(pt.deadNodes)
 }
 
 // DeadNodeIDs returns the bowed-out node IDs in map order.
-func (pt *ProposalTracker) DeadNodeIDs() []consensus.NodeID {
+func (pt *proposalTracker) DeadNodeIDs() []consensus.NodeID {
 	ids := make([]consensus.NodeID, 0, len(pt.deadNodes))
 	for nodeID := range pt.deadNodes {
 		ids = append(ids, nodeID)
@@ -159,7 +164,7 @@ func (pt *ProposalTracker) DeadNodeIDs() []consensus.NodeID {
 
 // PruneStale removes positions older than cutoff and returns their node IDs so
 // the caller can unvote them from disputes. Zero-timestamp positions are kept.
-func (pt *ProposalTracker) PruneStale(cutoff time.Time) []consensus.NodeID {
+func (pt *proposalTracker) PruneStale(cutoff time.Time) []consensus.NodeID {
 	var removed []consensus.NodeID
 	for nodeID, p := range pt.proposals {
 		if p.Timestamp.IsZero() {
@@ -174,16 +179,16 @@ func (pt *ProposalTracker) PruneStale(cutoff time.Time) []consensus.NodeID {
 }
 
 // BufferRecent appends to the node's playback buffer, capped at recentProposalsPerNode (oldest dropped).
-func (pt *ProposalTracker) BufferRecent(p *consensus.Proposal) {
+func (pt *proposalTracker) BufferRecent(p *consensus.Proposal) {
 	positions := pt.recentProposals[p.NodeID]
 	if len(positions) >= recentProposalsPerNode {
 		positions = positions[1:]
 	}
-	pt.recentProposals[p.NodeID] = append(positions, p)
+	pt.recentProposals[p.NodeID] = append(positions, cloneProposal(p))
 }
 
 // HasBufferedFor reports whether any buffered proposal has prevID as its previous ledger.
-func (pt *ProposalTracker) HasBufferedFor(prevID consensus.LedgerID) bool {
+func (pt *proposalTracker) HasBufferedFor(prevID consensus.LedgerID) bool {
 	for _, positions := range pt.recentProposals {
 		for _, p := range positions {
 			if p.PreviousLedger == prevID {
@@ -196,7 +201,7 @@ func (pt *ProposalTracker) HasBufferedFor(prevID consensus.LedgerID) bool {
 
 // LatestFresh returns each trusted node's newest buffered proposal timestamped
 // within freshness of now. Buffers are in arrival order, so it scans newest-first.
-func (pt *ProposalTracker) LatestFresh(trusted func(consensus.NodeID) bool, now time.Time, freshness time.Duration) map[consensus.NodeID]*consensus.Proposal {
+func (pt *proposalTracker) LatestFresh(trusted func(consensus.NodeID) bool, now time.Time, freshness time.Duration) map[consensus.NodeID]*consensus.Proposal {
 	out := make(map[consensus.NodeID]*consensus.Proposal)
 	for nodeID, positions := range pt.recentProposals {
 		if !trusted(nodeID) {
@@ -206,7 +211,7 @@ func (pt *ProposalTracker) LatestFresh(trusted func(consensus.NodeID) bool, now 
 			if now.Sub(positions[i].Timestamp) > freshness {
 				continue
 			}
-			out[nodeID] = positions[i]
+			out[nodeID] = cloneProposal(positions[i])
 			break
 		}
 	}
@@ -229,12 +234,11 @@ type ReplayCloseTime struct {
 // removes the current position, marks the node dead, and is returned for relay
 // without counting as a proposer. Buffered duplicates at a non-increasing
 // ProposeSeq are dropped: not counted, not relayed.
-func (pt *ProposalTracker) Replay(prevID consensus.LedgerID, trusted func(consensus.NodeID) bool) (closeTimes []ReplayCloseTime, trustedReplayed int, relay []*consensus.Proposal) {
+func (pt *proposalTracker) Replay(prevID consensus.LedgerID, trusted func(consensus.NodeID) bool) (closeTimes []ReplayCloseTime, trustedReplayed int, relay []*consensus.Proposal) {
 	// A trust transition can occur between rounds, leaving an old current
 	// position behind while its validator's buffered entries are replayed.
 	// Remove it before replay can expose the current set to callers.
 	pt.PruneUntrusted(trusted)
-
 	for nodeID, positions := range pt.recentProposals {
 		if !trusted(nodeID) {
 			pt.PurgeNode(nodeID)
@@ -263,7 +267,7 @@ func (pt *ProposalTracker) Replay(prevID consensus.LedgerID, trusted func(consen
 					pt.PurgeNode(nodeID)
 					break
 				}
-				relay = append(relay, p)
+				relay = append(relay, cloneProposal(p))
 				pt.dropBufferedThrough(nodeID, p)
 				break
 			}
@@ -279,7 +283,7 @@ func (pt *ProposalTracker) Replay(prevID consensus.LedgerID, trusted func(consen
 				pt.PurgeNode(nodeID)
 				break
 			}
-			relay = append(relay, p)
+			relay = append(relay, cloneProposal(p))
 			if p.Position == 0 {
 				closeTimes = append(closeTimes, ReplayCloseTime{NodeID: nodeID, CloseTime: p.CloseTime})
 			}
@@ -289,20 +293,41 @@ func (pt *ProposalTracker) Replay(prevID consensus.LedgerID, trusted func(consen
 	return closeTimes, trustedReplayed, relay
 }
 
-func (pt *ProposalTracker) SetValidation(v *consensus.Validation) {
-	pt.validations[v.NodeID] = v
+func (pt *proposalTracker) SetValidation(v *consensus.Validation) {
+	pt.validations[v.NodeID] = cloneProposalValidation(v)
 }
 
-func (pt *ProposalTracker) ValidationsFor(ledgerID consensus.LedgerID) []*consensus.Validation {
+func (pt *proposalTracker) ValidationsFor(ledgerID consensus.LedgerID) []*consensus.Validation {
 	var out []*consensus.Validation
 	for _, v := range pt.validations {
 		if v.LedgerID == ledgerID {
-			out = append(out, v)
+			out = append(out, cloneProposalValidation(v))
 		}
 	}
 	return out
 }
 
-func (pt *ProposalTracker) ResetValidations() {
+func (pt *proposalTracker) ResetValidations() {
 	pt.validations = make(map[consensus.NodeID]*consensus.Validation)
+}
+
+func cloneProposal(p *consensus.Proposal) *consensus.Proposal {
+	if p == nil {
+		return nil
+	}
+	copy := *p
+	copy.Signature = append([]byte(nil), p.Signature...)
+	return &copy
+}
+
+func cloneProposalValidation(v *consensus.Validation) *consensus.Validation {
+	if v == nil {
+		return nil
+	}
+	copy := *v
+	copy.Signature = append([]byte(nil), v.Signature...)
+	copy.Amendments = append([][32]byte(nil), v.Amendments...)
+	copy.SigningData = append([]byte(nil), v.SigningData...)
+	copy.Raw = append([]byte(nil), v.Raw...)
+	return &copy
 }

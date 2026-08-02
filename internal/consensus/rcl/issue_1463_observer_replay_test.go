@@ -2,6 +2,7 @@ package rcl
 
 import (
 	"context"
+	"reflect"
 	"testing"
 	"time"
 
@@ -45,7 +46,7 @@ func (a *replayCloseTimeAdaptor) AdjustCloseTime(closeTimes consensus.CloseTimes
 }
 
 func TestProposalTracker_ReplayFiltersUntrustedBeforeStore(t *testing.T) {
-	pt := NewProposalTracker()
+	pt := newProposalTracker()
 	prev := consensus.LedgerID{0xA1}
 	trusted := consensus.NodeID{0x01}
 	untrusted := consensus.NodeID{0x02}
@@ -66,7 +67,7 @@ func TestProposalTracker_ReplayFiltersUntrustedBeforeStore(t *testing.T) {
 }
 
 func TestProposalTracker_ReplayRechecksTrustDuringStore(t *testing.T) {
-	pt := NewProposalTracker()
+	pt := newProposalTracker()
 	prev := consensus.LedgerID{0xA2}
 	node := consensus.NodeID{0x03}
 	pt.BufferRecent(&consensus.Proposal{NodeID: node, PreviousLedger: prev, Position: 0})
@@ -96,7 +97,7 @@ func TestProposalTracker_ReplayRechecksTrustDuringStore(t *testing.T) {
 }
 
 func TestProposalTracker_ReplayPurgesUntrustedBeforeRetrust(t *testing.T) {
-	pt := NewProposalTracker()
+	pt := newProposalTracker()
 	prev := consensus.LedgerID{0xA5}
 	node := consensus.NodeID{0x04}
 	proposal := &consensus.Proposal{NodeID: node, PreviousLedger: prev, Position: 0}
@@ -115,7 +116,7 @@ func TestProposalTracker_ReplayPurgesUntrustedBeforeRetrust(t *testing.T) {
 }
 
 func TestProposalTracker_ReplaySeqLeaveUnvotesAndAllowsFreshRejoin(t *testing.T) {
-	pt := NewProposalTracker()
+	pt := newProposalTracker()
 	prev := consensus.LedgerID{0xA6}
 	node := consensus.NodeID{0x05}
 	txID := consensus.TxSetID{0x06}
@@ -125,7 +126,7 @@ func TestProposalTracker_ReplaySeqLeaveUnvotesAndAllowsFreshRejoin(t *testing.T)
 	pt.BufferRecent(bowOut)
 
 	closeTimes, replayed, relay := pt.Replay(prev, func(consensus.NodeID) bool { return true })
-	if len(closeTimes) != 0 || replayed != 0 || len(relay) != 1 || relay[0] != bowOut {
+	if len(closeTimes) != 0 || replayed != 0 || len(relay) != 1 || !reflect.DeepEqual(relay[0], bowOut) {
 		t.Fatalf("seqLeave replay = closeTimes %d replayed %d relay %d; want 0/0/1", len(closeTimes), replayed, len(relay))
 	}
 	if !pt.IsDead(node) {
@@ -141,10 +142,10 @@ func TestProposalTracker_ReplaySeqLeaveUnvotesAndAllowsFreshRejoin(t *testing.T)
 	fresh := &consensus.Proposal{NodeID: node, PreviousLedger: prev, Position: 0, TxSet: txID}
 	pt.BufferRecent(fresh)
 	_, replayed, relay = pt.Replay(prev, func(consensus.NodeID) bool { return true })
-	if replayed != 1 || len(relay) != 1 || relay[0] != fresh {
+	if replayed != 1 || len(relay) != 1 || !reflect.DeepEqual(relay[0], fresh) {
 		t.Fatalf("fresh rejoin replayed=%d relay=%d; want 1/1", replayed, len(relay))
 	}
-	if got := pt.proposals[node]; got != fresh {
+	if got := pt.proposals[node]; !reflect.DeepEqual(got, fresh) {
 		t.Fatal("fresh proposal did not rejoin after round reset")
 	}
 }
@@ -191,7 +192,7 @@ func TestEngine_OnProposalSeqLeaveRelaysAndUnvotes(t *testing.T) {
 	a.mu.RLock()
 	relayed := append([]*consensus.Proposal(nil), a.proposalsRelayed...)
 	a.mu.RUnlock()
-	if len(relayed) != 1 || relayed[0] != bowOut {
+	if len(relayed) != 1 || !reflect.DeepEqual(relayed[0], bowOut) {
 		t.Fatalf("seqLeave relay = %v, want exactly bow-out proposal", relayed)
 	}
 	if !e.proposalTracker.IsDead(node) {
@@ -247,10 +248,10 @@ func TestEngine_TrustCallbackPurgesBeforeRetrustedProposal(t *testing.T) {
 	recent := e.proposalTracker.recentProposals[node]
 	votes := e.disputeTracker.Dispute(txID).Votes
 	e.mu.RUnlock()
-	if current != fresh {
-		t.Fatalf("current proposal = %p, want fresh %p", current, fresh)
+	if !reflect.DeepEqual(current, fresh) {
+		t.Fatalf("current proposal = %#v, want fresh %#v", current, fresh)
 	}
-	if len(recent) != 1 || recent[0] != fresh {
+	if len(recent) != 1 || !reflect.DeepEqual(recent[0], fresh) {
 		t.Fatalf("recent proposals after re-trust = %v, want only fresh proposal", recent)
 	}
 	if len(votes) != 0 {
@@ -727,7 +728,7 @@ func TestAcceptLedgerManualConsensusFallsBackToDetermineCloseTime(t *testing.T) 
 }
 
 func TestProposalTracker_PruneUntrustedRevokesCurrentPosition(t *testing.T) {
-	pt := NewProposalTracker()
+	pt := newProposalTracker()
 	trusted := consensus.NodeID{0x21}
 	untrusted := consensus.NodeID{0x22}
 	pt.Store(&consensus.Proposal{NodeID: trusted})
