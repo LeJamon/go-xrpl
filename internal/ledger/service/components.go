@@ -26,7 +26,10 @@ type eventPublisher struct {
 	service *Service
 	// ledgerEventMu owns dispatcher lifecycle, ordering, and queue state.
 	ledgerEventMu           sync.Mutex
-	ledgerEventQueue        []*LedgerAcceptedEvent
+	publicationQueue        []publicationEvent
+	publicationLimit        int
+	publicationFailed       bool
+	publicationErrors       chan error
 	ledgerEventCandidates   map[uint32]*LedgerAcceptedEvent
 	ledgerEventFrontierSeq  uint32
 	ledgerEventFrontierHash [32]byte
@@ -35,8 +38,10 @@ type eventPublisher struct {
 	ledgerEventStarted      bool
 	ledgerEventStopping     bool
 	ledgerEventWG           sync.WaitGroup
+	publicationFailureOnce  sync.Once
 	subscriberMu            sync.RWMutex
 	eventSink               EventSink
+	submittedTxCallback     SubmittedTxCallback
 }
 
 type historyComponent struct {

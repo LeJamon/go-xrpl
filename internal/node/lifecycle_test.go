@@ -46,6 +46,7 @@ func TestWaitForShutdownReturnsContextCause(t *testing.T) {
 			make(chan error),
 			nil,
 			nil,
+			nil,
 			"",
 		)
 	}()
@@ -76,10 +77,34 @@ func TestWaitForShutdownReturnsComponentError(t *testing.T) {
 		make(chan error),
 		componentErrCh,
 		nil,
+		nil,
 		"",
 	)
 	if !errors.Is(err, componentErr) {
 		t.Fatalf("waitForShutdown() error = %v, want %v", err, componentErr)
+	}
+}
+
+func TestWaitForShutdownReturnsLedgerServiceError(t *testing.T) {
+	t.Parallel()
+
+	serviceErr := errors.New("publication queue exceeded capacity")
+	serviceErrCh := make(chan error, 1)
+	serviceErrCh <- serviceErr
+
+	err := waitForShutdown(
+		context.Background(),
+		xrpllog.Discard(),
+		make(chan os.Signal),
+		make(chan struct{}),
+		make(chan error),
+		nil,
+		serviceErrCh,
+		nil,
+		"",
+	)
+	if !errors.Is(err, serviceErr) {
+		t.Fatalf("waitForShutdown() error = %v, want %v", err, serviceErr)
 	}
 }
 

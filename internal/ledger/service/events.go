@@ -20,6 +20,8 @@ const invalidTransactionIndex = ^uint32(0)
 
 const maxLedgerPublicationGap uint32 = 100
 
+const maxPublicationQueue = 1024
+
 // LedgerAcceptedEvent contains information about an accepted ledger and its transactions
 type LedgerAcceptedEvent struct {
 	LedgerInfo         *LedgerInfo
@@ -76,7 +78,19 @@ type Result struct {
 	Applied bool
 }
 
+// SubmittedTxCallback runs on the publication worker. It must return promptly
+// and must not call Service.Stop synchronously.
 type SubmittedTxCallback func(SubmittedTxEvent)
+
+type publicationEvent struct {
+	ledger    *LedgerAcceptedEvent
+	submitted *SubmittedTxEvent
+}
+
+// Errors reports fatal publication failures that require runtime shutdown.
+func (s *Service) Errors() <-chan error {
+	return s.eventPublisher.publicationErrors
+}
 
 func (s *Service) SetEventSink(sink EventSink) {
 	s.mu.Lock()
@@ -96,9 +110,20 @@ func (p *eventPublisher) hasEventSink() bool {
 	return p.eventSink != nil
 }
 
+func (p *eventPublisher) setSubmittedTxCallback(fn SubmittedTxCallback) {
+	p.subscriberMu.Lock()
+	defer p.subscriberMu.Unlock()
+	p.submittedTxCallback = fn
+}
+
+func (p *eventPublisher) hasSubmittedTxCallback() bool {
+	p.subscriberMu.RLock()
+	defer p.subscriberMu.RUnlock()
+	return p.submittedTxCallback != nil
+}
+
 // dispatchLedgerEvent enqueues accepted ledgers for FIFO, single-threaded
-// delivery. Enqueue is non-blocking and lossless: a lagging subscriber grows
-// the queue without stalling ledger close or dropping publication state.
+// delivery. Admission is bounded and fails closed on overload.
 func (s *Service) dispatchLedgerEvent(event *LedgerAcceptedEvent) {
 	s.eventPublisher.dispatchLedgerEvent(event)
 }
@@ -113,22 +138,62 @@ func (p *eventPublisher) dispatchLedgerEvent(event *LedgerAcceptedEvent) {
 		return
 	}
 	startDispatcher := p.startLedgerEventDispatcherLocked()
+	if startDispatcher {
+		go p.runLedgerEventDispatcher()
+	}
 	ready := p.ledgerEventsReadyToQueueLocked(event)
-	if len(ready) == 0 {
-		p.ledgerEventMu.Unlock()
-		if startDispatcher {
-			go p.runLedgerEventDispatcher()
+	for _, ledgerEvent := range ready {
+		if !p.enqueuePublicationLocked(publicationEvent{ledger: ledgerEvent}) {
+			break
 		}
+	}
+	p.ledgerEventMu.Unlock()
+}
+
+func (p *eventPublisher) dispatchSubmittedTxEvent(event SubmittedTxEvent) {
+	p.ledgerEventMu.Lock()
+	if p.ledgerEventStopping {
+		p.ledgerEventMu.Unlock()
 		return
 	}
-	p.ledgerEventQueue = append(p.ledgerEventQueue, ready...)
+	startDispatcher := p.startLedgerEventDispatcherLocked()
+	if startDispatcher {
+		go p.runLedgerEventDispatcher()
+	}
+	copy := event
+	p.enqueuePublicationLocked(publicationEvent{submitted: &copy})
+	p.ledgerEventMu.Unlock()
+}
+
+func (p *eventPublisher) enqueuePublicationLocked(event publicationEvent) bool {
+	p.ensurePublicationQueueLocked()
+	if p.ledgerEventStopping || p.publicationFailed {
+		return false
+	}
+	if len(p.publicationQueue) >= p.publicationLimit {
+		p.publicationFailed = true
+		p.publicationFailureOnce.Do(func() {
+			select {
+			case p.publicationErrors <- fmt.Errorf("publication queue exceeded capacity %d", p.publicationLimit):
+			default:
+			}
+		})
+		return false
+	}
+	p.publicationQueue = append(p.publicationQueue, event)
 	select {
 	case p.ledgerEventWake <- struct{}{}:
 	default:
 	}
-	p.ledgerEventMu.Unlock()
-	if startDispatcher {
-		go p.runLedgerEventDispatcher()
+	return true
+}
+
+func (p *eventPublisher) ensurePublicationQueueLocked() {
+	if p.publicationLimit <= 0 {
+		p.publicationLimit = maxPublicationQueue
+	}
+	if p.publicationErrors == nil {
+		p.publicationErrors = make(chan error, 1)
 	}
 }
 
@@ -137,6 +202,7 @@ func (p *eventPublisher) startLedgerEventDispatcherLocked() bool {
 		return false
 	}
 	p.ledgerEventWake = make(chan struct{}, 1)
+	p.ensurePublicationQueueLocked()
 	p.ledgerEventStarted = true
 	p.ledgerEventWG.Add(1)
 	return true
@@ -226,12 +292,12 @@ func (p *eventPublisher) runLedgerEventDispatcher() {
 		<-p.ledgerEventWake
 		for {
 			p.ledgerEventMu.Lock()
-			if len(p.ledgerEventQueue) != 0 {
-				ev := p.ledgerEventQueue[0]
-				p.ledgerEventQueue[0] = nil
-				p.ledgerEventQueue = p.ledgerEventQueue[1:]
+			if len(p.publicationQueue) != 0 {
+				ev := p.publicationQueue[0]
+				p.publicationQueue[0] = publicationEvent{}
+				p.publicationQueue = p.publicationQueue[1:]
 				p.ledgerEventMu.Unlock()
-				p.deliverLedgerEvent(ev)
+				p.deliverPublication(ev)
 				continue
 			}
 			stopping := p.ledgerEventStopping
@@ -241,6 +307,21 @@ func (p *eventPublisher) runLedgerEventDispatcher() {
 			}
 			break
 		}
+	}
+}
+
+func (p *eventPublisher) deliverPublication(event publicationEvent) {
+	if event.submitted != nil {
+		p.subscriberMu.RLock()
+		callback := p.submittedTxCallback
+		p.subscriberMu.RUnlock()
+		if callback != nil {
+			callback(*event.submitted)
+		}
+		return
+	}
+	if event.ledger != nil {
+		p.deliverLedgerEvent(event.ledger)
 	}
 }
 
@@ -265,12 +346,10 @@ func (p *eventPublisher) deliverLedgerEvent(event *LedgerAcceptedEvent) {
 	}
 }
 
-// SetSubmittedTxCallback registers a sink fired from SubmitTransaction after
-// every apply attempt. Pass nil to unwire.
+// SetSubmittedTxCallback registers the proposed-transaction sink. Pass nil to
+// unwire. The callback contract is documented on SubmittedTxCallback.
 func (s *Service) SetSubmittedTxCallback(fn SubmittedTxCallback) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	s.submittedTxCallback = fn
+	s.eventPublisher.setSubmittedTxCallback(fn)
 }
 
 // SetTxRelay registers the per-tx broadcast handler invoked by
@@ -411,6 +490,18 @@ func stageTransactionResults(l transactionResultSource, ledgerSeq uint32, ledger
 	}); err != nil {
 		return nil, fmt.Errorf("walk ledger transactions: %w", err)
 	}
+	sort.SliceStable(results, func(i, j int) bool {
+		left, leftOK := staged.positions[results[i].TxHash]
+		right, rightOK := staged.positions[results[j].TxHash]
+		switch {
+		case leftOK && rightOK:
+			return left < right
+		case leftOK:
+			return true
+		default:
+			return false
+		}
+	})
 	staged.results = results
 	return staged, nil
 }

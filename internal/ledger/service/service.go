@@ -240,11 +240,6 @@ type Service struct {
 	// Nil when overlay broadcast is unwired (tests).
 	txRelay func(blob []byte)
 
-	// submittedTxCallback fires from SubmitTransaction only when the tx applied
-	// to the open ledger, feeding the transactions_proposed/accounts_proposed
-	// WebSocket streams.
-	submittedTxCallback SubmittedTxCallback
-
 	// feeTrack is the local LoadFeeTrack mirror, always non-nil. Drivers:
 	//   - Raise/LowerLocalFee: per ledger close via tickLoadFeeLocked.
 	//   - SetRemoteFee: after validated-ledger promotion, median of trusted LoadFees.
@@ -320,6 +315,7 @@ func New(cfg Config) (*Service, error) {
 		},
 		eventPublisher: eventPublisher{
 			ledgerEventCandidates: make(map[uint32]*LedgerAcceptedEvent),
+			publicationErrors:     make(chan error, 1),
 		},
 		historyComponent: historyComponent{
 			ledgerHistory:        make(map[uint32]*ledger.Ledger),
@@ -342,6 +338,7 @@ func New(cfg Config) (*Service, error) {
 	}
 	s.persistenceWorker.service = s
 	s.eventPublisher.service = s
+	s.eventPublisher.publicationLimit = maxPublicationQueue
 	s.queries.service = s
 	s.queries.history = &s.historyComponent
 	s.queries.relationalDB = s.relationalDB
@@ -836,13 +833,11 @@ func (s *Service) TransactionRules() *amendment.Rules {
 // manages its own resends.
 func (s *Service) SubmitOpenLedgerTx(blob []byte, local bool) (openledger.Result, error) {
 	s.mu.RLock()
-	ov := s.openLedgerView
-	queue := s.txQueue
-	pool := s.localTxs
 	cfg, cfgErr := s.applyConfigLocked()
+	haveOpenLedger := s.openLedgerView != nil
 	s.mu.RUnlock()
 
-	if ov == nil {
+	if !haveOpenLedger {
 		return openledger.ResultFailure, errors.New("openLedgerView not initialised")
 	}
 	if cfgErr != nil {
@@ -858,12 +853,23 @@ func (s *Service) SubmitOpenLedgerTx(blob []byte, local bool) (openledger.Result
 	if !cfg.SkipSignatureVerification {
 		txengine.PrewarmSignature(ptx.Parsed)
 	}
-	_, res := ov.Submit(ptx, cfg, queue)
 
-	if local && pool != nil && res != openledger.ResultFailure {
-		pool.PushBack(ov.Current().Sequence(), ptx)
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.openLedgerView == nil {
+		return openledger.ResultFailure, errors.New("openLedgerView not initialised")
 	}
-	return res, nil
+	cfg, cfgErr = s.applyConfigLocked()
+	if cfgErr != nil {
+		return openledger.ResultFailure, cfgErr
+	}
+	outcome := s.openLedgerView.SubmitDetailed(ptx, cfg, s.txQueue)
+	current := s.openLedgerView.Current()
+	if local && s.localTxs != nil && outcome.Class != openledger.ResultFailure {
+		s.localTxs.PushBack(current.Sequence(), ptx)
+	}
+	s.dispatchProposedTransaction(ptx, blob, outcome, current)
+	return outcome.Class, nil
 }
 
 // PrewarmSignatures verifies the outer signatures of raw tx blobs in parallel

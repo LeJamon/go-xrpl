@@ -117,6 +117,39 @@ func TestService_OpenLedgerSubmit_Roundtrip(t *testing.T) {
 	}
 }
 
+func TestService_OpenLedgerPeerSubmitPublishesProposal(t *testing.T) {
+	svc := newServiceForOpenLedgerTest(t)
+	t.Cleanup(svc.Stop)
+
+	env := jtx.NewTestEnv(t)
+	blob, hash := buildSignedPaymentBlob(
+		t,
+		env,
+		jtx.MasterAccount(),
+		jtx.NewAccount("peer-proposal-destination"),
+		100_000_000,
+		1,
+	)
+	published := make(chan service.SubmittedTxEvent, 1)
+	svc.SetSubmittedTxCallback(func(event service.SubmittedTxEvent) { published <- event })
+
+	res, err := svc.SubmitOpenLedgerTx(blob, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res != openledger.ResultSuccess {
+		t.Fatalf("SubmitOpenLedgerTx result = %v, want ResultSuccess", res)
+	}
+	select {
+	case event := <-published:
+		if event.TxHash != hash || !bytes.Equal(event.RawBlob, blob) || !event.Result.Applied {
+			t.Fatalf("published proposal = %+v", event)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("peer-applied transaction was not published")
+	}
+}
+
 // TestService_AcceptConsensusResult_RebuildsOpenView verifies that on an
 // LCL transition with an empty agreed-set, the persistent open view
 // replays the prior current view's txs onto the new closed ledger.
