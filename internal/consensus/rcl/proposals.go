@@ -35,8 +35,8 @@ type disputeTracker struct {
 	disputes map[consensus.TxID]*consensus.DisputedTx
 }
 
-// newDisputeTracker creates a new dispute tracker. The owning Engine protects
-// all access with e.mu; the tracker deliberately has no second lock.
+// The owning Engine protects all access with e.mu; the tracker deliberately
+// has no second lock.
 func newDisputeTracker() *disputeTracker {
 	return &disputeTracker{
 		disputes: make(map[consensus.TxID]*consensus.DisputedTx),

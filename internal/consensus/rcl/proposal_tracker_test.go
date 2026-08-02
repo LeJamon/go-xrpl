@@ -202,8 +202,6 @@ func TestStartRound_ClearsDeadNodes(t *testing.T) {
 	}
 }
 
-// alwaysTrusted is a trust predicate that accepts every node, used by the
-// proposalTracker unit tests below.
 func alwaysTrusted(consensus.NodeID) bool { return true }
 
 // TestProposalTracker_StoreMonotonic verifies Store keeps the position with
