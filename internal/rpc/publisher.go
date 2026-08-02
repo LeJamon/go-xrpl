@@ -2,6 +2,7 @@ package rpc
 
 import (
 	"encoding/json"
+	"strconv"
 
 	"github.com/LeJamon/go-xrpl/internal/rpc/handlers"
 	"github.com/LeJamon/go-xrpl/internal/rpc/subscription"
@@ -121,13 +122,32 @@ func (p *Publisher) PublishValidation(event *ValidationEvent) {
 		return
 	}
 
-	data, err := json.Marshal(event)
+	v1, err := marshalValidationEvent(event, types.ApiVersion1)
+	if err != nil {
+		xrpllog.Named(xrpllog.PartitionRPC).Error("Failed to marshal ValidationEvent", "err", err)
+		return
+	}
+	v2, err := marshalValidationEvent(event, types.ApiVersion2)
 	if err != nil {
 		xrpllog.Named(xrpllog.PartitionRPC).Error("Failed to marshal ValidationEvent", "err", err)
 		return
 	}
 
-	p.manager.BroadcastToStream(types.SubValidations, data, nil)
+	p.manager.BroadcastToStreamVersioned(types.SubValidations, v1, v2)
+}
+
+func marshalValidationEvent(event *ValidationEvent, apiVersion int) ([]byte, error) {
+	if apiVersion != types.ApiVersion1 {
+		return json.Marshal(event)
+	}
+	type validationEvent ValidationEvent
+	return json.Marshal(struct {
+		*validationEvent
+		LedgerIndex string `json:"ledger_index"`
+	}{
+		validationEvent: (*validationEvent)(event),
+		LedgerIndex:     strconv.FormatUint(uint64(event.LedgerIndex), 10),
+	})
 }
 
 // PublishServerStatus broadcasts a server status event to server stream subscribers

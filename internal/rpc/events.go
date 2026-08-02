@@ -9,19 +9,17 @@ import (
 // LedgerCloseEvent represents a ledger close notification sent to subscribers
 // This matches the rippled ledgerClosed stream message format
 type LedgerCloseEvent struct {
-	Type             string `json:"type"`              // Always "ledgerClosed"
-	FeeBase          uint64 `json:"fee_base"`          // Transaction cost in fee units
-	FeeRef           uint64 `json:"fee_ref"`           // Transaction cost in fee units for reference tx
-	LedgerHash       string `json:"ledger_hash"`       // Hash of the ledger that closed
-	LedgerIndex      uint32 `json:"ledger_index"`      // Sequence number of the ledger
-	LedgerTime       uint32 `json:"ledger_time"`       // Close time in seconds since Ripple epoch
-	ReserveBase      uint64 `json:"reserve_base"`      // Minimum reserve requirement in drops
-	ReserveInc       uint64 `json:"reserve_inc"`       // Owner reserve increment in drops
-	TxnCount         int    `json:"txn_count"`         // Number of transactions in the ledger
-	ValidatedLedgers string `json:"validated_ledgers"` // Range of validated ledgers (e.g., "1-100")
-	// Optional fields for API v2+
-	ValidatedHash string `json:"validated_hash,omitempty"` // Hash of the validated ledger (API v2)
-	Validated     bool   `json:"validated,omitempty"`      // Whether this ledger is validated
+	Type             string  `json:"type"`                        // Always "ledgerClosed"
+	FeeBase          uint64  `json:"fee_base"`                    // Transaction cost in fee units
+	FeeRef           *uint64 `json:"fee_ref,omitempty"`           // Deprecated reference fee units, before XRPFees
+	LedgerHash       string  `json:"ledger_hash"`                 // Hash of the ledger that closed
+	LedgerIndex      uint32  `json:"ledger_index"`                // Sequence number of the ledger
+	LedgerTime       uint32  `json:"ledger_time"`                 // Close time in seconds since Ripple epoch
+	NetworkID        uint32  `json:"network_id"`                  // Network identifier, including network 0
+	ReserveBase      uint64  `json:"reserve_base"`                // Minimum reserve requirement in drops
+	ReserveInc       uint64  `json:"reserve_inc"`                 // Owner reserve increment in drops
+	TxnCount         int     `json:"txn_count"`                   // Number of transactions in the ledger
+	ValidatedLedgers string  `json:"validated_ledgers,omitempty"` // Range of validated ledgers (e.g., "1-100")
 }
 
 // TransactionEvent represents a transaction notification sent to subscribers
@@ -54,14 +52,15 @@ type ValidationEvent struct {
 	Amendments          []string `json:"amendments,omitempty"`     // Amendments this validator is voting for
 	BaseFee             any      `json:"base_fee,omitempty"`       // Unscaled transaction cost
 	Cookie              string   `json:"cookie,omitempty"`         // Unique cookie value (if any)
-	Data                string   `json:"data,omitempty"`           // Raw STValidation wire bytes, hex-encoded (NetworkOPs.cpp:2422)
+	Data                string   `json:"data"`                     // Canonical STValidation wire bytes, hex-encoded
 	Flags               uint32   `json:"flags"`                    // Validation flags
 	Full                bool     `json:"full"`                     // Whether this is a full validation
 	LedgerHash          string   `json:"ledger_hash"`              // Hash of proposed ledger
-	LedgerIndex         string   `json:"ledger_index"`             // Index of proposed ledger (as string)
+	LedgerIndex         uint32   `json:"ledger_index"`             // Index of proposed ledger (string in API v1)
+	CloseTime           *uint32  `json:"close_time,omitempty"`     // Optional validation close time
 	LoadFee             *uint32  `json:"load_fee,omitempty"`       // Local load-scaled transaction cost
 	MasterKey           string   `json:"master_key,omitempty"`     // Master public key — emitted only when the manifest cache resolves a master distinct from the signing key (NetworkOPs.cpp:2434-2438)
-	NetworkID           uint32   `json:"network_id,omitempty"`     // Network identifier (NetworkOPs.cpp:2423)
+	NetworkID           uint32   `json:"network_id"`               // Network identifier, including network 0
 	ReserveBase         any      `json:"reserve_base,omitempty"`   // Minimum reserve
 	ReserveInc          any      `json:"reserve_inc,omitempty"`    // Owner reserve increment
 	ServerVersion       string   `json:"server_version,omitempty"` // Version of rippled
@@ -74,7 +73,7 @@ type ValidationEvent struct {
 // NewValidationEvent creates a new ValidationEvent
 func NewValidationEvent(
 	ledgerHash string,
-	ledgerIndex string,
+	ledgerIndex uint32,
 	validationPublicKey string,
 	signature string,
 	signingTime uint32,

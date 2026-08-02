@@ -1,6 +1,7 @@
 package adaptor
 
 import (
+	"bytes"
 	"encoding/binary"
 	"sort"
 	"testing"
@@ -176,6 +177,17 @@ func TestParseSTValidation_TemplateShape(t *testing.T) {
 		validation, err := parseSTValidation(blob)
 		require.NoError(t, err)
 		assert.NoError(t, VerifyValidation(validation))
+
+		canonical, err := CanonicalSTValidation(validation)
+		require.NoError(t, err)
+		assert.False(t, bytes.Equal(blob, canonical))
+		canonicalFields := decodeValidationWireFields(t, canonical)
+		assert.True(t, sort.SliceIsSorted(canonicalFields, func(i, j int) bool {
+			return canonicalFields[i].key < canonicalFields[j].key
+		}))
+		reparsed, err := parseSTValidation(canonical)
+		require.NoError(t, err)
+		assert.NoError(t, VerifyValidation(reparsed))
 	})
 
 	t.Run("unexpected field", func(t *testing.T) {

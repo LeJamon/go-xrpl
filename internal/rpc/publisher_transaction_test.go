@@ -113,6 +113,88 @@ func TestPublishOrderBookChangeUsesSubscriberAPIVersion(t *testing.T) {
 	assertPublishedTransactionVersion(t, readPublisherTestEvent(t, bookV2), types.ApiVersion2)
 }
 
+func TestPublishValidationUsesSubscriberAPIVersion(t *testing.T) {
+	manager := subscription.NewManager()
+	v1 := addPublisherTestConnection(manager, "validation-v1")
+	v2 := addPublisherTestConnection(manager, "validation-v2")
+	v3 := addPublisherTestConnection(manager, "validation-v3")
+	none := addPublisherTestConnection(manager, "validation-none")
+	for _, test := range []struct {
+		conn    *types.Connection
+		version int
+	}{
+		{v1, types.ApiVersion1},
+		{v2, types.ApiVersion2},
+		{v3, types.ApiVersion3},
+	} {
+		test.conn.Subscriptions[types.SubValidations] = types.SubscriptionConfig{}
+		test.conn.SetAPIVersion(test.version)
+	}
+
+	closeTime := uint32(0)
+	event := &ValidationEvent{
+		Type:                "validationReceived",
+		Data:                "ABCD",
+		Flags:               1,
+		Full:                true,
+		LedgerHash:          strings.Repeat("A", 64),
+		LedgerIndex:         42,
+		CloseTime:           &closeTime,
+		NetworkID:           0,
+		Signature:           "CAFE",
+		SigningTime:         800000000,
+		ValidationPublicKey: "n9Example",
+	}
+	NewPublisher(manager).PublishValidation(event)
+
+	for _, test := range []struct {
+		conn       *types.Connection
+		wantLedger string
+	}{
+		{v1, `"42"`},
+		{v2, "42"},
+		{v3, "42"},
+	} {
+		var payload map[string]json.RawMessage
+		require.NoError(t, json.Unmarshal(readPublisherTestEvent(t, test.conn), &payload))
+		require.Equal(t, test.wantLedger, string(payload["ledger_index"]))
+		require.Equal(t, "0", string(payload["network_id"]))
+		require.Equal(t, "0", string(payload["close_time"]))
+		require.Equal(t, `"ABCD"`, string(payload["data"]))
+	}
+	select {
+	case <-none.SendChannel:
+		t.Fatal("non-subscriber received validation")
+	default:
+	}
+}
+
+func TestPublishLedgerClosedFieldPresence(t *testing.T) {
+	manager := subscription.NewManager()
+	conn := addPublisherTestConnection(manager, "ledger")
+	conn.Subscriptions[types.SubLedger] = types.SubscriptionConfig{}
+	publisher := NewPublisher(manager)
+	event := &LedgerCloseEvent{
+		Type:        "ledgerClosed",
+		LedgerIndex: 42,
+		NetworkID:   0,
+	}
+	publisher.PublishLedgerClosed(event)
+	var payload map[string]json.RawMessage
+	require.NoError(t, json.Unmarshal(readPublisherTestEvent(t, conn), &payload))
+	require.Equal(t, "0", string(payload["network_id"]))
+	require.NotContains(t, payload, "fee_ref")
+	require.NotContains(t, payload, "validated_ledgers")
+
+	feeRef := uint64(10)
+	event.FeeRef = &feeRef
+	event.ValidatedLedgers = "1-42"
+	publisher.PublishLedgerClosed(event)
+	require.NoError(t, json.Unmarshal(readPublisherTestEvent(t, conn), &payload))
+	require.Equal(t, "10", string(payload["fee_ref"]))
+	require.Equal(t, `"1-42"`, string(payload["validated_ledgers"]))
+}
+
 func TestPublishOrderBookChangeDeduplicatesAcrossAffectedBooks(t *testing.T) {
 	const (
 		issuer = "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh"

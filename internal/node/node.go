@@ -35,7 +35,6 @@ import (
 	validatorlist "github.com/LeJamon/go-xrpl/internal/validator/list"
 	"github.com/LeJamon/go-xrpl/internal/watchdog"
 	xrpllog "github.com/LeJamon/go-xrpl/log"
-	"github.com/LeJamon/go-xrpl/protocol"
 	"github.com/LeJamon/go-xrpl/shamap/backend"
 	kvpebble "github.com/LeJamon/go-xrpl/storage/kvstore/pebble"
 	"github.com/LeJamon/go-xrpl/storage/nodestore"
@@ -1004,44 +1003,13 @@ func run(
 			rotator.Notify(event.LedgerInfo.Sequence)
 		}
 
-		baseFee, reserveBase, reserveInc := ledgerService.GetCurrentFees()
-
-		ledgerTime := protocol.ToRippleTime(event.LedgerInfo.CloseTime)
-
-		ledgerCloseEvent := &rpc.LedgerCloseEvent{
-			Type:             "ledgerClosed",
-			LedgerIndex:      event.LedgerInfo.Sequence,
-			LedgerHash:       upperHex(event.LedgerInfo.Hash[:]),
-			LedgerTime:       ledgerTime,
-			FeeBase:          baseFee,
-			FeeRef:           baseFee,
-			ReserveBase:      reserveBase,
-			ReserveInc:       reserveInc,
-			TxnCount:         len(event.TransactionResults),
-			ValidatedLedgers: "",
+		serverInfo := ledgerService.GetServerInfo()
+		ledgerCloseEvent := buildLedgerCloseEvent(event, serverInfo)
+		if ledgerCloseEvent == nil {
+			return fmt.Errorf("accepted ledger event %d has no source ledger", event.LedgerInfo.Sequence)
 		}
 		publisher.PublishLedgerClosed(ledgerCloseEvent)
 
-		for _, publication := range transactions {
-			txResult := publication.result
-			txEvent := publication.event
-			engineResult := publication.engineResult
-			publisher.PublishTransaction(txEvent, txResult.AffectedAccounts)
-
-			// Per-book delivery is tesSUCCESS-only — rippled gates
-			// getOrderBookDB().processTxn on the engine result
-			// (NetworkOPs.cpp:3409-3410). Subscribers receive the
-			// full tx + meta JSON, matching the transactions-stream
-			// payload (rippled fans the same MultiApiJson into both).
-			if engineResult != ter.TesSUCCESS {
-				continue
-			}
-			pairs := extractBookPairsFromMetadata(txEvent.Meta)
-			if len(pairs) == 0 {
-				continue
-			}
-			publisher.PublishOrderBookChange(txEvent, pairs)
-		}
 
 		// pubBookChanges → book_changes aggregate stream
 		// (Subscribe.cpp:139-142 + NetworkOPs.cpp:3160-3174). Feed the
@@ -1052,6 +1020,17 @@ func run(
 		payload := handlers.ComputeBookChanges(bookView)
 		if data, err := json.Marshal(payload); err == nil {
 			wsServer.SubscriptionManager().BroadcastToStream(types.SubBookChanges, data, nil)
+		}
+
+		for _, publication := range transactions {
+			publisher.PublishTransaction(publication.event, publication.result.AffectedAccounts)
+			if publication.engineResult != ter.TesSUCCESS {
+				continue
+			}
+			pairs := extractBookPairsFromMetadata(publication.event.Meta)
+			if len(pairs) != 0 {
+				publisher.PublishOrderBookChange(publication.event, pairs)
+			}
 		}
 
 		// pubServer → server stream (NetworkOPs.cpp:2308-2373 +
@@ -1065,7 +1044,7 @@ func run(
 			serverStatus = info.ServerState
 		}
 		nextSnap := serverStatusSnapshot{
-			baseFee:                 baseFee,
+			baseFee:                 ledgerCloseEvent.FeeBase,
 			loadBase:                load.LoadBase,
 			loadFactor:              load.LoadFactor,
 			loadFactorLocal:         load.LoadFactorLocal,
@@ -1081,7 +1060,7 @@ func run(
 			lastServerSnapshot = nextSnap
 			publisher.PublishServerStatus(&rpc.ServerStatusEvent{
 				Type:                    "serverStatus",
-				BaseFee:                 baseFee,
+				BaseFee:                 ledgerCloseEvent.FeeBase,
 				LoadBase:                int(load.LoadBase),
 				LoadFactor:              int(load.LoadFactor),
 				LoadFactorLocal:         int(load.LoadFactorLocal),
