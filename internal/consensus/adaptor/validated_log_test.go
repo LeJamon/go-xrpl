@@ -39,6 +39,9 @@ func TestOnLedgerFullyValidatedIgnoresCurrentTip(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, svc.Start())
 	t.Cleanup(svc.Stop)
+	closed := svc.GetClosedLedger()
+	require.NotNil(t, closed)
+	svc.SetValidatedLedger(closed.Sequence(), closed.Hash())
 
 	a := New(Config{LedgerService: svc})
 	calls := 0
@@ -56,6 +59,9 @@ func TestValidatedLedgerNotifiesValidationConfigChange(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, svc.Start())
 	t.Cleanup(svc.Stop)
+	closed := svc.GetClosedLedger()
+	require.NotNil(t, closed)
+	svc.SetValidatedLedger(closed.Sequence(), closed.Hash())
 
 	a := New(Config{LedgerService: svc})
 	calls := 0
