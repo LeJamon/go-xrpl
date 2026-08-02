@@ -163,6 +163,33 @@ func TestAcceptedTransactionValidatesRequiredFieldsWithoutLosingMetadataIndex(t 
 	require.NotEqual(t, ter.TesSUCCESS, accepted.Result())
 }
 
+func TestAcceptedTransactionRejectsMalformedInnerObjectTemplate(t *testing.T) {
+	transaction := map[string]any{
+		"Account":  "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh",
+		"Fee":      "10",
+		"Sequence": uint32(1),
+		"SignerEntries": []any{map[string]any{
+			"SignerEntry": map[string]any{
+				"Account": "r4bbzCamAis69rNoRdSaMSmPb1kDUHXcAL",
+			},
+		}},
+		"SignerQuorum":    uint32(1),
+		"SigningPubKey":   "",
+		"TransactionType": "SignerListSet",
+	}
+	metadata := map[string]any{
+		"AffectedNodes":     []any{},
+		"TransactionIndex":  uint32(12),
+		"TransactionResult": "tesSUCCESS",
+	}
+
+	accepted := ParseAcceptedTransaction(acceptedLeaf(t, transaction, metadata))
+	require.ErrorContains(t, accepted.ParseError(), "Field 'SignerWeight' is required but missing.")
+	require.Equal(t, uint32(12), mustAcceptedIndex(t, accepted))
+	require.Equal(t, ter.TemMALFORMED, accepted.Result())
+	require.Nil(t, accepted.Transaction())
+}
+
 func TestValidateAcceptedMetadataRejectsWrongRequiredFieldTypes(t *testing.T) {
 	valid := map[string]any{
 		"AffectedNodes":     []any{},

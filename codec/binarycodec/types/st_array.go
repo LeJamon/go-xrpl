@@ -97,9 +97,12 @@ func (t *STArray) ToJSON(p *serdes.BinaryParser, opts ...int) (any, error) {
 			return nil, errMaxNestingDepth
 		}
 
-		st := SerializedTypeFor(fi.Type)
-		res, err := st.ToJSON(p, childDepth)
+		st := NewSTObject(serdes.NewBinarySerializer(serdes.DefaultFieldIDCodec()))
+		res, fieldOrder, _, err := st.toJSON(p, childDepth)
 		if err != nil {
+			return nil, err
+		}
+		if err := validateInnerObject(fi.FieldName, res, fieldOrder); err != nil {
 			return nil, err
 		}
 

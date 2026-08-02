@@ -15,122 +15,6 @@ import (
 	"github.com/LeJamon/go-xrpl/internal/rpc/types"
 )
 
-type innerFieldStyle uint8
-
-const (
-	innerRequired innerFieldStyle = iota
-	innerOptional
-	innerDefault
-)
-
-var innerObjectTemplates = map[string]map[string]innerFieldStyle{
-	"SignerEntry": {
-		"Account":       innerRequired,
-		"SignerWeight":  innerRequired,
-		"WalletLocator": innerOptional,
-	},
-	"Signer": {
-		"Account":       innerRequired,
-		"SigningPubKey": innerRequired,
-		"TxnSignature":  innerRequired,
-	},
-	"Majority": {
-		"Amendment": innerRequired,
-		"CloseTime": innerRequired,
-	},
-	"DisabledValidator": {
-		"PublicKey":           innerRequired,
-		"FirstLedgerSequence": innerRequired,
-	},
-	"NFToken": {
-		"NFTokenID": innerRequired,
-		"URI":       innerOptional,
-	},
-	"VoteEntry": {
-		"Account":    innerRequired,
-		"TradingFee": innerDefault,
-		"VoteWeight": innerRequired,
-	},
-	"AuctionSlot": {
-		"Account":       innerRequired,
-		"Expiration":    innerRequired,
-		"DiscountedFee": innerDefault,
-		"Price":         innerRequired,
-		"AuthAccounts":  innerOptional,
-	},
-	"XChainClaimAttestationCollectionElement": {
-		"AttestationSignerAccount": innerRequired,
-		"PublicKey":                innerRequired,
-		"Signature":                innerRequired,
-		"Amount":                   innerRequired,
-		"Account":                  innerRequired,
-		"AttestationRewardAccount": innerRequired,
-		"WasLockingChainSend":      innerRequired,
-		"XChainClaimID":            innerRequired,
-		"Destination":              innerOptional,
-	},
-	"XChainCreateAccountAttestationCollectionElement": {
-		"AttestationSignerAccount": innerRequired,
-		"PublicKey":                innerRequired,
-		"Signature":                innerRequired,
-		"Amount":                   innerRequired,
-		"Account":                  innerRequired,
-		"AttestationRewardAccount": innerRequired,
-		"WasLockingChainSend":      innerRequired,
-		"XChainAccountCreateCount": innerRequired,
-		"Destination":              innerRequired,
-		"SignatureReward":          innerRequired,
-	},
-	"XChainClaimProofSig": {
-		"AttestationSignerAccount": innerRequired,
-		"PublicKey":                innerRequired,
-		"Amount":                   innerRequired,
-		"AttestationRewardAccount": innerRequired,
-		"WasLockingChainSend":      innerRequired,
-		"Destination":              innerOptional,
-	},
-	"XChainCreateAccountProofSig": {
-		"AttestationSignerAccount": innerRequired,
-		"PublicKey":                innerRequired,
-		"Amount":                   innerRequired,
-		"SignatureReward":          innerRequired,
-		"AttestationRewardAccount": innerRequired,
-		"WasLockingChainSend":      innerRequired,
-		"Destination":              innerRequired,
-	},
-	"AuthAccount": {
-		"Account": innerRequired,
-	},
-	"PriceData": {
-		"BaseAsset":  innerRequired,
-		"QuoteAsset": innerRequired,
-		"AssetPrice": innerOptional,
-		"Scale":      innerDefault,
-	},
-	"Credential": {
-		"Issuer":         innerRequired,
-		"CredentialType": innerRequired,
-	},
-	"Permission": {
-		"PermissionValue": innerRequired,
-	},
-	"BatchSigner": {
-		"Account":       innerRequired,
-		"SigningPubKey": innerOptional,
-		"TxnSignature":  innerOptional,
-		"Signers":       innerOptional,
-	},
-	"Book": {
-		"BookDirectory": innerRequired,
-		"BookNode":      innerRequired,
-	},
-	"CounterpartySignature": {
-		"SigningPubKey": innerOptional,
-		"TxnSignature":  innerOptional,
-		"Signers":       innerOptional,
-	},
-}
-
 func serializedFieldParseMessage(value any, path string, defs *binarycodecdefs.Definitions) string {
 	object, ok := value.(map[string]any)
 	if !ok {
@@ -160,7 +44,7 @@ func serializedFieldParseMessage(value any, path string, defs *binarycodecdefs.D
 			if message := serializedFieldParseMessage(child, fieldPath, defs); message != "" {
 				return message
 			}
-			if !meetsInnerObjectTemplate(name, child) {
+			if !binarycodectypes.MeetsInnerObjectTemplate(name, child) {
 				return fmt.Sprintf("Object '%s' contents did not meet requirements for that type.", name)
 			}
 		case "STArray":
@@ -195,7 +79,7 @@ func serializedFieldParseMessage(value any, path string, defs *binarycodecdefs.D
 				if message := serializedFieldParseMessage(wrapperObject, itemPath, defs); message != "" {
 					return fmt.Sprintf("Error at '%s'. %s", itemPath, message)
 				}
-				if !meetsInnerObjectTemplate(wrapperName, wrapperObject) {
+				if !binarycodectypes.MeetsInnerObjectTemplate(wrapperName, wrapperObject) {
 					return fmt.Sprintf(
 						"Error at '%s'. Object '%s' contents did not meet requirements for that type.",
 						itemPath, wrapperName)
@@ -520,44 +404,4 @@ func isUnsignedDecimal(value string) bool {
 		}
 	}
 	return true
-}
-
-func meetsInnerObjectTemplate(name string, object map[string]any) bool {
-	template, ok := innerObjectTemplates[name]
-	if !ok {
-		return true
-	}
-	for fieldName, style := range template {
-		value, present := object[fieldName]
-		if style == innerRequired && !present {
-			return false
-		}
-		if style == innerDefault && present && isDefaultSerializedValue(value) {
-			return false
-		}
-	}
-	for fieldName := range object {
-		if _, ok := template[fieldName]; !ok {
-			return false
-		}
-	}
-	return true
-}
-
-func isDefaultSerializedValue(value any) bool {
-	if value == nil {
-		return true
-	}
-	switch typed := value.(type) {
-	case string:
-		return typed == "" || typed == "0"
-	case []any:
-		return len(typed) == 0
-	case map[string]any:
-		return len(typed) == 0
-	}
-	if _, magnitude, ok := integerNumericValue(value); ok {
-		return magnitude == 0
-	}
-	return false
 }
