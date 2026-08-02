@@ -14,9 +14,9 @@ import (
 // invariant panic (LedgerTrie.h:553-style XRPL_ASSERT or our equivalent
 // at trie.go:143/173/306) does not fail-stop the consensus goroutine.
 // rippled responds to these with a process abort; in Go we'd rather
-// log + continue and let the next operation rebuild the trie on its
-// own. Returns true if the call panicked. Caller must already hold the
-// lock that protects the trie state.
+// log + continue and let the caller replace the derived state from tracked
+// validations. Returns true if the call panicked. Caller must already hold
+// the lock that protects the trie state.
 func safeTrieCall(fn string, op func()) (panicked bool) {
 	defer func() {
 		if r := recover(); r != nil {
@@ -484,11 +484,9 @@ func (vt *ValidationTracker) AddStatus(validation *consensus.Validation) ValStat
 	ancestrySnap := vt.ancestry
 	trieSnap := vt.trie
 	vt.mu.RUnlock()
-	var preResolvedLedger ledgertrie.Ledger
+	var preResolvedLedger ancestryResolution
 	if trieSnap != nil && ancestrySnap != nil {
-		if l, ok := ancestrySnap.LedgerByID(validation.LedgerID); ok {
-			preResolvedLedger = l
-		}
+		preResolvedLedger, _ = resolveAncestry(ancestrySnap, validation.LedgerID, &validation.LedgerSeq)
 	}
 
 	vt.mu.Lock()
@@ -765,6 +763,7 @@ func (vt *ValidationTracker) GetPreferred(largestIssued uint32) (consensus.Ledge
 	if safeTrieCall("GetPreferred", func() {
 		tip, ok = vt.trie.GetPreferred(largestIssued)
 	}) {
+		vt.resetTrieLocked()
 		return consensus.LedgerID{}, 0, false
 	}
 	if !ok {
@@ -838,22 +837,40 @@ func (vt *ValidationTracker) ProposersFinished(prev consensus.Ledger) int {
 	if prev == nil {
 		return 0
 	}
-	vt.checkAcquired()
+	prevID := prev.ID()
+	prevSeq := prev.Seq()
+	for attempt := 0; attempt < 2; attempt++ {
+		vt.checkAcquired()
 
-	// Trie fast path — getNodesAfter at Validations.h:973-993:
-	// branchSupport(ledger) - tipSupport(ledger).
-	vt.mu.RLock()
-	trie := vt.trie
-	ancestry := vt.ancestry
-	vt.mu.RUnlock()
-	if trie != nil && ancestry != nil {
-		if lgr, ok := ancestry.LedgerByID(prev.ID()); ok {
+		// Trie fast path — getNodesAfter at Validations.h:973-993:
+		// branchSupport(ledger) - tipSupport(ledger).
+		vt.mu.RLock()
+		trie := vt.trie
+		ancestry := vt.ancestry
+		vt.mu.RUnlock()
+		if trie == nil || ancestry == nil {
+			break
+		}
+		if resolved, ok := resolveAncestry(ancestry, prevID, &prevSeq); ok && !resolved.retryable {
 			vt.mu.Lock()
 			current := vt.trie == trie
 			var branch, tip uint32
+			panicked := false
 			if current {
-				branch = trie.BranchSupport(lgr)
-				tip = trie.TipSupport(lgr)
+				if safeTrieCall("BranchSupport", func() {
+					branch = trie.BranchSupport(resolved.ledger)
+				}) {
+					panicked = true
+				} else if safeTrieCall("TipSupport", func() {
+					tip = trie.TipSupport(resolved.ledger)
+				}) {
+					panicked = true
+				}
+			}
+			if panicked {
+				vt.resetTrieLocked()
+				vt.mu.Unlock()
+				continue
 			}
 			vt.mu.Unlock()
 			if current {
@@ -863,6 +880,7 @@ func (vt *ValidationTracker) ProposersFinished(prev consensus.Ledger) int {
 				return int(branch - tip)
 			}
 		}
+		break
 	}
 
 	// Seq-only fallback when trie/ancestry isn't wired for prev (boot or
@@ -874,7 +892,6 @@ func (vt *ValidationTracker) ProposersFinished(prev consensus.Ledger) int {
 	vt.mu.RLock()
 	defer vt.mu.RUnlock()
 	count := 0
-	prevSeq := prev.Seq()
 	for nodeID, v := range vt.byNode {
 		if !vt.trusted[nodeID] {
 			continue
@@ -988,10 +1005,7 @@ func (vt *ValidationTracker) FlushStale() {
 		}
 		delete(vt.byNode, nodeID)
 		vt.unparkLocked(acquiringKey{seq: v.LedgerSeq, id: v.LedgerID}, nodeID)
-		if prev, ok := vt.trieTips[nodeID]; ok {
-			safeTrieCall("Remove", func() { vt.trie.Remove(prev, 1) })
-			delete(vt.trieTips, nodeID)
-		}
+		vt.removeTipLocked(nodeID)
 	}
 
 	// Age out by-seq evidence and idle enforcer floors — rippled's
@@ -1051,14 +1065,7 @@ func (vt *ValidationTracker) ExpireOld(minSeq uint32) {
 			if latest, ok := vt.byNode[nodeID]; ok && latest == v {
 				delete(vt.byNode, nodeID)
 				vt.unparkLocked(acquiringKey{seq: v.LedgerSeq, id: v.LedgerID}, nodeID)
-				if vt.trie != nil {
-					if prev, ok := vt.trieTips[nodeID]; ok {
-						safeTrieCall("Remove", func() {
-							vt.trie.Remove(prev, 1)
-						})
-						delete(vt.trieTips, nodeID)
-					}
-				}
+				vt.removeTipLocked(nodeID)
 			}
 		}
 		delete(vt.validations, ledgerID)

@@ -31,42 +31,62 @@ func (vt *ValidationTracker) SetQuorum(quorum int) {
 // ledger or one of its descendants. It mirrors the old test-facing query;
 // production callers use the finality and preferred-ledger APIs directly.
 func (vt *ValidationTracker) TrustedSupport(ledgerID consensus.LedgerID) int {
-	vt.checkAcquired()
+	for attempt := 0; attempt < 2; attempt++ {
+		vt.checkAcquired()
 
-	vt.mu.RLock()
-	trie := vt.trie
-	ancestry := vt.ancestry
-	vt.mu.RUnlock()
+		vt.mu.RLock()
+		trie := vt.trie
+		ancestry := vt.ancestry
+		vt.mu.RUnlock()
 
-	if trie == nil || ancestry == nil {
-		return vt.TrustedValidationCount(ledgerID)
-	}
-
-	lgr, ok := ancestry.LedgerByID(ledgerID)
-	if !ok {
-		return vt.TrustedValidationCount(ledgerID)
-	}
-
-	vt.mu.Lock()
-	defer vt.mu.Unlock()
-	if vt.trie != trie {
-		ledgerVals, exists := vt.validations[ledgerID]
-		if !exists {
-			return 0
+		if trie == nil || ancestry == nil {
+			return vt.TrustedValidationCount(ledgerID)
 		}
-		ledgerVals.touch(vt.now())
-		return vt.countTrustedExcludingNegUNLLocked(ledgerVals.vals)
+
+		resolved, ok := resolveAncestry(ancestry, ledgerID, nil)
+		if !ok || resolved.retryable {
+			return vt.TrustedValidationCount(ledgerID)
+		}
+
+		vt.mu.Lock()
+		if vt.trie != trie {
+			ledgerVals, exists := vt.validations[ledgerID]
+			if !exists {
+				vt.mu.Unlock()
+				return 0
+			}
+			ledgerVals.touch(vt.now())
+			count := vt.countTrustedExcludingNegUNLLocked(ledgerVals.vals)
+			vt.mu.Unlock()
+			return count
+		}
+		var support int
+		if safeTrieCall("BranchSupport", func() {
+			support = vt.branchSupportExcludingNegUNLLocked(resolved.ledger)
+		}) {
+			vt.resetTrieLocked()
+			vt.mu.Unlock()
+			continue
+		}
+		vt.mu.Unlock()
+		return support
 	}
-	return vt.branchSupportExcludingNegUNLLocked(lgr)
+	return vt.TrustedValidationCount(ledgerID)
 }
 
 func (vt *ValidationTracker) branchSupportExcludingNegUNLLocked(lgr ledgertrie.Ledger) int {
+	if !isValidAncestryLedger(lgr) {
+		panic("invalid target ledger")
+	}
 	targetSeq := lgr.Seq()
 	targetID := lgr.ID()
 	count := 0
 	for nodeID, tip := range vt.trieTips {
 		if vt.negUNL[nodeID] {
 			continue
+		}
+		if !isValidAncestryLedger(tip) {
+			panic("invalid trie tip")
 		}
 		if tip.Seq() >= targetSeq && tip.Ancestor(targetSeq) == targetID {
 			count++
