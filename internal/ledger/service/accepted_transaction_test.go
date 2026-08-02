@@ -2,6 +2,7 @@ package service
 
 import (
 	"bytes"
+	"errors"
 	"testing"
 
 	"github.com/LeJamon/go-xrpl/codec/binarycodec"
@@ -80,6 +81,50 @@ func TestAcceptedTransactionOwnsAndProtectsDecodedState(t *testing.T) {
 	freshNodes := freshProjection.Metadata["AffectedNodes"].([]any)
 	require.Equal(t, account, freshNodes[0].(map[string]any)["ModifiedNode"].(map[string]any)["FinalFields"].(map[string]any)["Account"])
 	require.Equal(t, []string{account}, freshProjection.AffectedAccounts)
+}
+
+func TestAcceptedTransactionOwnsVector256Fields(t *testing.T) {
+	const offerID = "73734B611DDA23D3F5F62E20A173B78AB8406AC5015094DA53F53D39B9EDB06C"
+	transaction := map[string]any{
+		"Account":         "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh",
+		"Fee":             "10",
+		"NFTokenOffers":   []string{offerID},
+		"Sequence":        uint32(1),
+		"SigningPubKey":   "",
+		"TransactionType": "NFTokenCancelOffer",
+	}
+	metadata := map[string]any{
+		"AffectedNodes":     []any{},
+		"TransactionIndex":  uint32(0),
+		"TransactionResult": "tesSUCCESS",
+	}
+	accepted := ParseAcceptedTransaction(acceptedLeaf(t, transaction, metadata))
+	require.NoError(t, accepted.ParseError())
+
+	returned := accepted.Transaction()["NFTokenOffers"].([]string)
+	returned[0] = "changed"
+	projection, err := accepted.Projection()
+	require.NoError(t, err)
+	projection.Transaction["NFTokenOffers"].([]string)[0] = "changed"
+
+	require.Equal(t, []string{offerID}, accepted.Transaction()["NFTokenOffers"])
+	fresh, err := accepted.Projection()
+	require.NoError(t, err)
+	require.Equal(t, []string{offerID}, fresh.Transaction["NFTokenOffers"])
+}
+
+func TestAcceptedTransactionParseErrorDoesNotExposeRetainedJoin(t *testing.T) {
+	accepted := &AcceptedTransaction{parseErr: errors.Join(errors.New("first"), errors.New("second"))}
+	returned := accepted.ParseError()
+	require.EqualError(t, returned, "first\nsecond")
+
+	multi, ok := returned.(interface{ Unwrap() []error })
+	if ok {
+		unwrapped := multi.Unwrap()
+		unwrapped[0] = nil
+	}
+
+	require.EqualError(t, accepted.ParseError(), "first\nsecond")
 }
 
 func TestAcceptedTransactionMalformedStateNeverReportsSuccess(t *testing.T) {

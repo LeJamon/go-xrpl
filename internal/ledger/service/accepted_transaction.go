@@ -195,12 +195,14 @@ func (a *AcceptedTransaction) ParseError() error {
 	if a.parseErr == nil && (a.transaction == nil || a.metadata == nil) {
 		return errors.New("uninitialized accepted transaction")
 	}
-	return a.parseErr
+	if a.parseErr == nil {
+		return nil
+	}
+	return errors.New(a.parseErr.Error())
 }
 
-// Projection returns one deep-owned publication snapshot. Invalid values return
-// the same parse error retained by the accepted transaction and never expose a
-// successful result.
+// Projection returns one deep-owned publication snapshot. Invalid values never
+// expose a successful result.
 func (a *AcceptedTransaction) Projection() (AcceptedTransactionProjection, error) {
 	projection := AcceptedTransactionProjection{Result: ter.TemMALFORMED}
 	if err := a.ParseError(); err != nil {
@@ -237,6 +239,8 @@ func cloneAcceptedValue(value any) any {
 		return cloned
 	case []byte:
 		return append([]byte(nil), value...)
+	case []string:
+		return append([]string(nil), value...)
 	default:
 		return value
 	}
