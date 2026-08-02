@@ -546,13 +546,7 @@ func (e *Engine) convergePercent() int {
 	return int(elapsed * 100 / prevRound)
 }
 
-// determineCloseTime returns the consensus close time: our converged
-// position if set, else the most popular peer close time rounded to
-// resolution (observers).
 func (e *Engine) determineCloseTime() time.Time {
-	// In production this snapshot is populated by updateCloseTimePosition and
-	// consumed directly by acceptLedger. Keep the helper's historical fallback
-	// for diagnostics and focused callers that construct a round by hand.
 	if e.closeTime != nil && e.closeTime.consensusCloseTimeSet {
 		return e.closeTime.consensusCloseTime
 	}

@@ -27,9 +27,6 @@ type closeTimeTracker struct {
 	// close-time consensus reached this round
 	haveConsensus bool
 
-	// consensusCloseTime is the winner selected by the close-time gate from
-	// the current trusted peer positions. It is retained through acceptance;
-	// acceptance must not re-tally the append-only initial-vote history.
 	consensusCloseTime    time.Time
 	consensusCloseTimeSet bool
 

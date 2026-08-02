@@ -727,7 +727,6 @@ func TestAcceptLedgerManualConsensusFallsBackToDetermineCloseTime(t *testing.T) 
 	chosen := parentClose.Add(5 * time.Second)
 	e.state.CloseTimes.Peers[chosen] = 1
 	e.closeTime.haveConsensus = true
-	// Simulate a manually-forced consensus flag without a stored gate winner.
 	e.closeTime.consensusCloseTime = time.Time{}
 	e.closeTime.consensusCloseTimeSet = false
 
