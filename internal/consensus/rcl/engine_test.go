@@ -864,16 +864,20 @@ func TestEngine_FullyValidatedLedgerRefreshesNegativeUNL(t *testing.T) {
 
 	add := func(ledgerID consensus.LedgerID, seq uint32) {
 		t.Helper()
+		now := adaptor.Now()
 		for _, node := range nodes[:4] {
 			if status := engine.validationTracker.AddStatus(&consensus.Validation{
 				LedgerID: ledgerID, LedgerSeq: seq, NodeID: node,
-				SignTime: adaptor.now, SeenTime: adaptor.now, Full: true,
+				SignTime: now, SeenTime: now, Full: true,
 			}); status != ValStatusCurrent {
 				t.Fatalf("validation status=%s, want current", status)
 			}
 		}
 	}
 	add(consensus.LedgerID{0xA2}, 101)
+	adaptor.mu.Lock()
+	adaptor.now = adaptor.now.Add(time.Second)
+	adaptor.mu.Unlock()
 	add(consensus.LedgerID{0xA3}, 102)
 
 	adaptor.mu.RLock()
