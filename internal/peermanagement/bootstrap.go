@@ -1,11 +1,11 @@
 package peermanagement
 
-import "github.com/LeJamon/go-xrpl/internal/peermanagement/message"
-
 import (
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"github.com/LeJamon/go-xrpl/internal/peermanagement/message"
 )
 
 const (

@@ -435,7 +435,7 @@ Loop:
 	for {
 		select {
 		case msg := <-b.LedgerDataMessages():
-			if message.MessageType(msg.Type) != message.TypeReplayDeltaResponse {
+			if msg.Type != message.TypeReplayDeltaResponse {
 				continue
 			}
 			decoded, err := message.Decode(message.TypeReplayDeltaResponse, msg.Payload)
@@ -617,7 +617,7 @@ Loop:
 	for {
 		select {
 		case msg := <-b.LedgerDataMessages():
-			if message.MessageType(msg.Type) != message.TypeProofPathResponse {
+			if msg.Type != message.TypeProofPathResponse {
 				continue
 			}
 			decoded, err := message.Decode(message.TypeProofPathResponse, msg.Payload)
