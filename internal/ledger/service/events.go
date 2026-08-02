@@ -31,8 +31,9 @@ type LedgerAcceptedEvent struct {
 
 // TransactionResultEvent contains transaction details for event broadcasting
 type TransactionResultEvent struct {
-	TxHash [32]byte
-	TxData []byte
+	TxHash   [32]byte
+	TxData   []byte
+	Accepted *AcceptedTransaction
 
 	// MetaData is the transaction metadata (nil if not available)
 	MetaData []byte
@@ -589,16 +590,18 @@ func stageTransactionResults(l transactionResultSource, ledgerSeq uint32, ledger
 	validated := l.IsValidated()
 
 	if err := l.ForEachTransaction(func(txHash [32]byte, txData []byte) bool {
+		accepted := ParseAcceptedTransaction(txData)
 		result := TransactionResultEvent{
 			TxHash:      txHash,
-			TxData:      txData,
+			TxData:      accepted.Raw(),
+			Accepted:    accepted,
 			Validated:   validated,
 			LedgerIndex: ledgerSeq,
 			LedgerHash:  ledgerHash,
 		}
-		result.AffectedAccounts = extractAffectedAccounts(txData)
+		result.AffectedAccounts = accepted.AffectedAccounts()
 
-		if txIndex, ok := txcore.TransactionIndexFromTxWithMetaBlob(txData); ok {
+		if txIndex, ok := accepted.TransactionIndex(); ok {
 			staged.positions[txHash] = txIndex
 		} else {
 			staged.missingPositions = append(staged.missingPositions, txHash)
@@ -642,20 +645,7 @@ func (s *Service) commitTransactionResultsLocked(staged *stagedTransactionResult
 
 // extractAffectedAccounts returns the accounts named by the final state of each
 // affected ledger node.
-func extractAffectedAccounts(txWithMeta []byte) []string {
-	if len(txWithMeta) == 0 {
-		return nil
-	}
-
-	_, metaData, err := txcore.SplitTxWithMetaBlob(txWithMeta)
-	if err != nil || len(metaData) == 0 {
-		return nil
-	}
-	metaJSON, err := binarycodec.Decode(hex.EncodeToString(metaData))
-	if err != nil {
-		return nil
-	}
-
+func affectedAccountsFromMetadata(metaJSON map[string]any) []string {
 	seen := make(map[string]struct{})
 	add := func(account string) {
 		if account != "" {

@@ -31,7 +31,6 @@ import (
 	"github.com/LeJamon/go-xrpl/internal/rpc/handlers"
 	"github.com/LeJamon/go-xrpl/internal/rpc/loadtrack"
 	"github.com/LeJamon/go-xrpl/internal/rpc/types"
-	"github.com/LeJamon/go-xrpl/internal/tx/ter"
 	validatorlist "github.com/LeJamon/go-xrpl/internal/validator/list"
 	"github.com/LeJamon/go-xrpl/internal/watchdog"
 	xrpllog "github.com/LeJamon/go-xrpl/log"
@@ -1016,23 +1015,24 @@ func run(
 		}
 		publisher.PublishLedgerClosed(ledgerCloseEvent)
 
+		publications, bookTransactions, failures := prepareAcceptedPublications(event, uint32(networkID))
+		for _, failure := range failures {
+			serverLog.Error("Skipping corrupt accepted transaction", "hash", upperHex(failure.hash[:]), "err", failure.err)
+		}
 		// pubBookChanges → book_changes aggregate stream
 		// (Subscribe.cpp:139-142 + NetworkOPs.cpp:3160-3174). Feed the
 		// already-closed ledger view directly from the event so a slow
 		// adapter store cannot drop the announce when the ledger isn't
 		// yet visible to GetLedgerBySequence.
-		bookView := newAcceptedLedgerView(event, event.TransactionResults)
-		payload := handlers.ComputeBookChanges(bookView)
+		bookView := newAcceptedLedgerView(event, nil)
+		payload := handlers.ComputeBookChangesFromTransactions(bookView, bookTransactions)
 		if data, err := json.Marshal(payload); err == nil {
 			wsServer.SubscriptionManager().BroadcastToStream(types.SubBookChanges, data, nil)
 		}
 
-		for _, publication := range transactions {
-			publisher.PublishTransaction(publication.event, publication.result.AffectedAccounts)
-			if publication.engineResult != ter.TesSUCCESS {
-				continue
-			}
-			pairs := extractBookPairsFromMetadata(publication.event.Meta)
+		for _, publication := range publications {
+			publisher.PublishTransaction(publication.event, publication.projection.affectedAccounts)
+			pairs := acceptedOrderBookPairs(publication)
 			if len(pairs) != 0 {
 				publisher.PublishOrderBookChange(publication.event, pairs)
 			}

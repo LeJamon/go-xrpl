@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
 	"math"
 	"strconv"
 	"strings"
@@ -24,7 +25,6 @@ import (
 	"github.com/LeJamon/go-xrpl/internal/rpc"
 	"github.com/LeJamon/go-xrpl/internal/rpc/handlers"
 	"github.com/LeJamon/go-xrpl/internal/rpc/types"
-	txcore "github.com/LeJamon/go-xrpl/internal/tx"
 	"github.com/LeJamon/go-xrpl/internal/tx/ter"
 	"github.com/LeJamon/go-xrpl/internal/txq"
 	xrpllog "github.com/LeJamon/go-xrpl/log"
@@ -251,35 +251,16 @@ func decodeTxWithMetaToJSONAt(
 	data []byte,
 	ctx handlers.SyntheticMetadataContext,
 ) (json.RawMessage, json.RawMessage, error) {
-	txBlob, metaBlob, err := txcore.SplitTxWithMetaBlobStrict(data)
+	projection, err := projectAcceptedTransaction(service.ParseAcceptedTransaction(data), ctx)
 	if err != nil {
-		return nil, nil, fmt.Errorf("split accepted transaction: %w", err)
+		return nil, nil, err
 	}
 
-	txMap, err := binarycodec.DecodeBytes(txBlob)
-	if err != nil {
-		return nil, nil, fmt.Errorf("decode accepted transaction: %w", err)
-	}
-	txMap, err = txcore.CanonicalizeSerializedTransaction(txMap)
-	if err != nil {
-		return nil, nil, fmt.Errorf("validate accepted transaction: %w", err)
-	}
-
-	metaMap, err := binarycodec.DecodeBytes(metaBlob)
-	if err != nil {
-		return nil, nil, fmt.Errorf("decode accepted metadata: %w", err)
-	}
-	metaMap, err = txcore.CanonicalizeSerializedMetadata(metaMap)
-	if err != nil {
-		return nil, nil, fmt.Errorf("validate accepted metadata: %w", err)
-	}
-	handlers.InjectSyntheticFields(txMap, metaMap, ctx)
-
-	txJSON, err := json.Marshal(txMap)
+	txJSON, err := json.Marshal(projection.transaction)
 	if err != nil {
 		return nil, nil, fmt.Errorf("marshal accepted transaction: %w", err)
 	}
-	metaJSON, err := json.Marshal(metaMap)
+	metaJSON, err := json.Marshal(projection.metadata)
 	if err != nil {
 		return nil, nil, fmt.Errorf("marshal accepted metadata: %w", err)
 	}
@@ -417,41 +398,39 @@ func jsonClippedXRPAmount(value int64) int32 {
 }
 
 func extractBookPairsFromMetadata(metaJSON []byte) []types.OrderBookSpec {
-	var meta struct {
-		AffectedNodes []map[string]json.RawMessage `json:"AffectedNodes"`
-	}
-	if err := json.Unmarshal(metaJSON, &meta); err != nil {
+	var metadata map[string]any
+	if err := json.Unmarshal(metaJSON, &metadata); err != nil {
 		return nil
 	}
+	return extractBookPairsFromMetadataMap(metadata)
+}
+
+func extractBookPairsFromMetadataMap(metadata map[string]any) []types.OrderBookSpec {
 	seen := make(map[string]struct{})
 	var out []types.OrderBookSpec
-	for _, node := range meta.AffectedNodes {
-		var raw json.RawMessage
+	nodes, _ := metadata["AffectedNodes"].([]any)
+	for _, rawNode := range nodes {
+		node, _ := rawNode.(map[string]any)
+		var raw map[string]any
 		var fieldName string
 		switch {
 		case node["ModifiedNode"] != nil:
-			raw = node["ModifiedNode"]
+			raw, _ = node["ModifiedNode"].(map[string]any)
 			fieldName = "PreviousFields"
 		case node["CreatedNode"] != nil:
-			raw = node["CreatedNode"]
+			raw, _ = node["CreatedNode"].(map[string]any)
 			fieldName = "NewFields"
 		case node["DeletedNode"] != nil:
-			raw = node["DeletedNode"]
+			raw, _ = node["DeletedNode"].(map[string]any)
 			fieldName = "FinalFields"
 		default:
 			continue
 		}
-
-		var fieldsByName map[string]json.RawMessage
-		if err := json.Unmarshal(raw, &fieldsByName); err != nil {
+		if raw == nil || raw["LedgerEntryType"] != "Offer" {
 			continue
 		}
-		var ledgerEntryType string
-		if err := json.Unmarshal(fieldsByName["LedgerEntryType"], &ledgerEntryType); err != nil || ledgerEntryType != "Offer" {
-			continue
-		}
-		var fields map[string]any
-		if err := json.Unmarshal(fieldsByName[fieldName], &fields); err != nil {
+		fields, _ := raw[fieldName].(map[string]any)
+		if fields == nil {
 			continue
 		}
 		gets := currencySpecFromAmount(fields["TakerGets"])
@@ -746,24 +725,132 @@ func metaTransactionResult(metaJSON json.RawMessage) (ter.Result, error) {
 	return ter.Result(code), nil
 }
 
+type acceptedTransactionProjection struct {
+	transaction      map[string]any
+	metadata         map[string]any
+	result           ter.Result
+	transactionIndex uint32
+	affectedAccounts []string
+}
+
+type acceptedPublication struct {
+	projection   *acceptedTransactionProjection
+	event        *rpc.TransactionEvent
+	engineResult ter.Result
+}
+
+type acceptedProjectionFailure struct {
+	hash [32]byte
+	err  error
+}
+
+func projectAcceptedTransaction(
+	accepted *service.AcceptedTransaction,
+	ctx handlers.SyntheticMetadataContext,
+) (*acceptedTransactionProjection, error) {
+	snapshot, err := accepted.Projection()
+	if err != nil {
+		return nil, err
+	}
+	transaction := snapshot.Transaction
+	metadata := snapshot.Metadata
+	if transaction == nil || metadata == nil {
+		return nil, errors.New("accepted transaction projection is incomplete")
+	}
+	handlers.InjectSyntheticFields(transaction, metadata, ctx)
+	return &acceptedTransactionProjection{
+		transaction:      transaction,
+		metadata:         metadata,
+		result:           snapshot.Result,
+		transactionIndex: snapshot.TransactionIndex,
+		affectedAccounts: snapshot.AffectedAccounts,
+	}, nil
+}
+
+func projectTransactionResult(
+	txResult service.TransactionResultEvent,
+	ctx handlers.SyntheticMetadataContext,
+) (*acceptedTransactionProjection, error) {
+	accepted := txResult.Accepted
+	if accepted == nil {
+		accepted = service.ParseAcceptedTransaction(txResult.TxData)
+	}
+	return projectAcceptedTransaction(accepted, ctx)
+}
+
+func prepareAcceptedPublications(
+	event *service.LedgerAcceptedEvent,
+	defaultNetworkID uint32,
+) ([]acceptedPublication, []handlers.BookChangesTransaction, []acceptedProjectionFailure) {
+	if event == nil || event.LedgerInfo == nil {
+		return nil, nil, nil
+	}
+	publications := make([]acceptedPublication, 0, len(event.TransactionResults))
+	bookTransactions := make([]handlers.BookChangesTransaction, 0, len(event.TransactionResults))
+	var failures []acceptedProjectionFailure
+	for _, txResult := range event.TransactionResults {
+		projection, err := projectTransactionResult(txResult, handlers.SyntheticMetadataContext{
+			LedgerSequence: txResult.LedgerIndex,
+			CloseTime:      rippleEpochSeconds(event.LedgerInfo.CloseTime),
+		})
+		if err != nil {
+			failures = append(failures, acceptedProjectionFailure{hash: txResult.TxHash, err: err})
+			continue
+		}
+		txEvent, engineResult, err := buildProjectedValidatedTransactionEvent(txResult, projection, event, defaultNetworkID)
+		if err != nil {
+			failures = append(failures, acceptedProjectionFailure{hash: txResult.TxHash, err: err})
+			continue
+		}
+		bookTransactions = append(bookTransactions, handlers.BookChangesTransaction{
+			Transaction: projection.transaction,
+			Metadata:    projection.metadata,
+		})
+		publications = append(publications, acceptedPublication{
+			projection:   projection,
+			event:        txEvent,
+			engineResult: engineResult,
+		})
+	}
+	return publications, bookTransactions, failures
+}
+
+func acceptedOrderBookPairs(publication acceptedPublication) []types.OrderBookSpec {
+	if publication.engineResult != ter.TesSUCCESS || publication.projection == nil {
+		return nil
+	}
+	return extractBookPairsFromMetadataMap(publication.projection.metadata)
+}
+
 func buildValidatedTransactionEvent(
 	txResult service.TransactionResultEvent,
 	event *service.LedgerAcceptedEvent,
 	defaultNetworkID uint32,
 ) (*rpc.TransactionEvent, ter.Result, error) {
-	info := event.LedgerInfo
-	closeTime := rippleEpochSeconds(info.CloseTime)
-	txJSON, metaJSON, err := decodeTxWithMetaToJSONAt(txResult.TxData, handlers.SyntheticMetadataContext{
+	projection, err := projectTransactionResult(txResult, handlers.SyntheticMetadataContext{
 		LedgerSequence: txResult.LedgerIndex,
-		CloseTime:      closeTime,
+		CloseTime:      rippleEpochSeconds(event.LedgerInfo.CloseTime),
 	})
 	if err != nil {
-		return nil, 0, err
+		return nil, ter.TemMALFORMED, err
 	}
-	engineResult, err := metaTransactionResult(metaJSON)
+	return buildProjectedValidatedTransactionEvent(txResult, projection, event, defaultNetworkID)
+}
+
+func buildProjectedValidatedTransactionEvent(
+	txResult service.TransactionResultEvent,
+	projection *acceptedTransactionProjection,
+	event *service.LedgerAcceptedEvent,
+	defaultNetworkID uint32,
+) (*rpc.TransactionEvent, ter.Result, error) {
+	info := event.LedgerInfo
+	closeTime := rippleEpochSeconds(info.CloseTime)
+	engineResult := projection.result
+	metaJSON, err := json.Marshal(projection.metadata)
 	if err != nil {
-		return nil, 0, err
+		return nil, ter.TemMALFORMED, fmt.Errorf("marshal accepted metadata: %w", err)
 	}
+	txFields := maps.Clone(projection.transaction)
 
 	streamEvent := &rpc.TransactionEvent{
 		Type:                "transaction",
@@ -772,13 +859,17 @@ func buildValidatedTransactionEvent(
 		EngineResultMessage: engineResult.Message(),
 		LedgerIndex:         txResult.LedgerIndex,
 		LedgerHash:          upperHex(info.Hash[:]),
-		Transaction:         txJSON,
 		Meta:                metaJSON,
 		Hash:                upperHex(txResult.TxHash[:]),
 		Validated:           txResult.Validated,
 		Status:              "closed",
 	}
 	if !txResult.Validated {
+		txJSON, err := json.Marshal(txFields)
+		if err != nil {
+			return nil, ter.TemMALFORMED, fmt.Errorf("marshal accepted transaction: %w", err)
+		}
+		streamEvent.Transaction = txJSON
 		return streamEvent, engineResult, nil
 	}
 
@@ -786,13 +877,6 @@ func buildValidatedTransactionEvent(
 		streamEvent.CloseTimeISO = info.CloseTime.UTC().Format(time.RFC3339)
 	}
 
-	var txFields map[string]any
-	if err := json.Unmarshal(txJSON, &txFields); err != nil {
-		return nil, 0, fmt.Errorf("decode projected transaction: %w", err)
-	}
-	if txFields == nil {
-		return nil, 0, errors.New("decoded projected transaction is null")
-	}
 	if closeTime >= 0 && closeTime <= int64(^uint32(0)) {
 		txFields["date"] = uint32(closeTime)
 	}
@@ -804,21 +888,17 @@ func buildValidatedTransactionEvent(
 	}
 	encoded, err := json.Marshal(txFields)
 	if err != nil {
-		return nil, 0, fmt.Errorf("marshal projected transaction: %w", err)
+		return nil, ter.TemMALFORMED, fmt.Errorf("marshal projected transaction: %w", err)
 	}
 	streamEvent.Transaction = encoded
 
-	transactionIndex, ok := metadataTransactionIndex(metaJSON)
-	if !ok {
-		return nil, 0, errors.New("metadata is missing TransactionIndex")
-	}
 	networkID := defaultNetworkID
 	if raw, exists := txFields["NetworkID"]; exists {
 		if override, valid := uint32JSONValue(raw); valid {
 			networkID = override
 		}
 	}
-	if ctid, ok := handlers.EncodeCTID(txResult.LedgerIndex, transactionIndex, networkID); ok {
+	if ctid, ok := handlers.EncodeCTID(txResult.LedgerIndex, projection.transactionIndex, networkID); ok {
 		streamEvent.CTID = ctid
 	}
 	return streamEvent, engineResult, nil
@@ -859,16 +939,6 @@ func rippleEpochSeconds(t time.Time) int64 {
 		return 0
 	}
 	return seconds
-}
-
-func metadataTransactionIndex(metaJSON json.RawMessage) (uint32, bool) {
-	var metadata struct {
-		TransactionIndex *uint32 `json:"TransactionIndex"`
-	}
-	if err := json.Unmarshal(metaJSON, &metadata); err != nil || metadata.TransactionIndex == nil {
-		return 0, false
-	}
-	return *metadata.TransactionIndex, true
 }
 
 func uint32JSONValue(value any) (uint32, bool) {

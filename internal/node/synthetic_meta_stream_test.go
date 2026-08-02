@@ -150,22 +150,50 @@ func TestBuildValidatedTransactionEventRejectsCorruptLeaf(t *testing.T) {
 	}
 }
 
-func TestBuildValidatedTransactionPublicationsRejectsWholeLedger(t *testing.T) {
-	ledgerEvent := &service.LedgerAcceptedEvent{LedgerInfo: &service.LedgerInfo{
-		Sequence:  1,
-		Validated: true,
-		Closed:    true,
-	}}
-	publications, err := buildValidatedTransactionPublications(
-		[]service.TransactionResultEvent{
-			{TxHash: [32]byte{1}, TxData: validatedPaymentData(t, 0, 0), Validated: true, LedgerIndex: 1},
-			{TxHash: [32]byte{2}, TxData: []byte{0xff}, Validated: true, LedgerIndex: 1},
+func TestPrepareAcceptedPublicationsSkipsOnlyCorruptRecords(t *testing.T) {
+	ledgerHash := [32]byte{0xAB}
+	goodData := validatedPaymentData(t, 0, 4)
+	goodAccepted := service.ParseAcceptedTransaction(goodData)
+	require.NoError(t, goodAccepted.ParseError())
+	corruptAccepted := service.ParseAcceptedTransaction([]byte("corrupt"))
+	require.Error(t, corruptAccepted.ParseError())
+
+	event := &service.LedgerAcceptedEvent{
+		LedgerInfo: &service.LedgerInfo{
+			Sequence:  9,
+			Hash:      ledgerHash,
+			Validated: true,
+			Closed:    true,
 		},
-		ledgerEvent,
-		0,
-	)
-	require.Error(t, err)
-	require.Nil(t, publications)
+		TransactionResults: []service.TransactionResultEvent{
+			{
+				TxHash:      [32]byte{1},
+				TxData:      goodData,
+				Accepted:    corruptAccepted,
+				Validated:   true,
+				LedgerIndex: 9,
+				LedgerHash:  ledgerHash,
+			},
+			{
+				TxHash:      [32]byte{2},
+				TxData:      []byte("must not be decoded again"),
+				Accepted:    goodAccepted,
+				Validated:   true,
+				LedgerIndex: 9,
+				LedgerHash:  ledgerHash,
+			},
+		},
+	}
+
+	publications, bookTransactions, failures := prepareAcceptedPublications(event, 0)
+	require.Len(t, failures, 1)
+	require.Equal(t, [32]byte{1}, failures[0].hash)
+	require.Len(t, publications, 1)
+	wantHash := [32]byte{2}
+	require.Equal(t, upperHex(wantHash[:]), publications[0].event.Hash)
+	require.Equal(t, ter.TecUNFUNDED_PAYMENT, publications[0].engineResult)
+	require.Len(t, bookTransactions, 1)
+	require.Empty(t, acceptedOrderBookPairs(publications[0]))
 }
 
 func validatedPaymentData(t *testing.T, networkID, transactionIndex uint32) []byte {
