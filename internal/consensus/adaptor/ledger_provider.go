@@ -9,6 +9,8 @@
 package adaptor
 
 import (
+	"context"
+	"errors"
 	"fmt"
 
 	"github.com/LeJamon/go-xrpl/internal/ledger"
@@ -28,6 +30,10 @@ import (
 type ledgerLookup interface {
 	GetLedgerByHash(hash [32]byte) (*ledger.Ledger, error)
 	EarliestFetch() uint32
+}
+
+type ledgerLookupContext interface {
+	GetLedgerByHashContext(ctx context.Context, hash [32]byte) (*ledger.Ledger, error)
 }
 
 // MinimumOnlineFloor reports the lowest ledger sequence the node still retains
@@ -88,19 +94,32 @@ func (p *LedgerProvider) belowFloor(seq uint32) bool {
 //   - Look up the ledger by hash.
 //   - Reject if it is unknown OR not yet immutable. Returning
 //     (nil, nil, nil) is the LedgerProvider contract for
-//     "unknown / not immutable", which the handler maps to reNO_LEDGER.
+//     "unknown / not immutable", which the handler charges and drops.
 //   - Otherwise return the serialized header and every tx leaf blob in
 //     tx-map iteration order. Each leaf blob is a fresh copy: although
 //     shamap.Item.Data() already copies, we double-copy via append so
 //     the contract stays correct even if Item ever switches to returning
 //     its internal slice.
 func (p *LedgerProvider) GetReplayDelta(ledgerHash []byte) ([]byte, [][]byte, error) {
+	return p.GetReplayDeltaContext(context.Background(), ledgerHash)
+}
+
+func (p *LedgerProvider) GetReplayDeltaContext(ctx context.Context, ledgerHash []byte) ([]byte, [][]byte, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, nil, err
+	}
 	hash, ok := inbound.ToHash32(ledgerHash)
 	if !ok {
 		// Bad-length hash never matches a real ledger; treat as unknown.
 		return nil, nil, nil
 	}
-	l, err := p.svc.GetLedgerByHash(hash)
+	l, err := p.getLedgerContext(ctx, hash)
+	if ctxErr := ctx.Err(); ctxErr != nil {
+		return nil, nil, ctxErr
+	}
+	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+		return nil, nil, err
+	}
 	if err != nil || l == nil || !l.IsImmutable() || p.belowFloor(l.Sequence()) {
 		return nil, nil, nil
 	}
@@ -118,12 +137,21 @@ func (p *LedgerProvider) GetReplayDelta(ledgerHash []byte) ([]byte, [][]byte, er
 	}
 
 	var leaves [][]byte
-	if err := txMap.ForEach(func(item *shamap.Item) bool {
+	if err := txMap.ForEachCtx(ctx, func(item *shamap.Item) bool {
+		if ctx.Err() != nil {
+			return false
+		}
 		raw := item.Data()
 		leaves = append(leaves, append([]byte(nil), raw...))
 		return true
 	}); err != nil {
+		if ctx.Err() != nil {
+			return nil, nil, ctx.Err()
+		}
 		return nil, nil, fmt.Errorf("iterate tx map: %w", err)
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, nil, err
 	}
 
 	return headerBytes, leaves, nil
@@ -228,10 +256,10 @@ func appendFetchPackNodes(objects []message.IndexedObject, m *shamap.SHAMap, max
 //     (only mtREPLAY_DELTA_REQ does). Missing →
 //     peermanagement.ErrLedgerNotFound.
 //   - mapType selects the source SHAMap; an unsupported value yields a
-//     generic error so the handler emits reBAD_REQUEST. Defense in depth —
+//     generic error so the handler charges and drops. Defense in depth —
 //     the handler itself rejects bad map types up front.
 //   - Missing leaf → peermanagement.ErrKeyNotFound (the handler then
-//     returns reNO_NODE without serializing a header).
+//     charges and drops without serializing a header).
 //
 // Path orientation is leaf-to-root, matching shamap.GetProofPath's wire
 // ordering.
@@ -240,6 +268,18 @@ func (p *LedgerProvider) GetProofPath(
 	key []byte,
 	mapType message.LedgerMapType,
 ) ([]byte, [][]byte, error) {
+	return p.GetProofPathContext(context.Background(), ledgerHash, key, mapType)
+}
+
+func (p *LedgerProvider) GetProofPathContext(
+	ctx context.Context,
+	ledgerHash []byte,
+	key []byte,
+	mapType message.LedgerMapType,
+) ([]byte, [][]byte, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, nil, err
+	}
 	hash, ok := inbound.ToHash32(ledgerHash)
 	if !ok {
 		return nil, nil, peermanagement.ErrLedgerNotFound
@@ -250,7 +290,13 @@ func (p *LedgerProvider) GetProofPath(
 		return nil, nil, peermanagement.ErrKeyNotFound
 	}
 
-	l, err := p.svc.GetLedgerByHash(hash)
+	l, err := p.getLedgerContext(ctx, hash)
+	if ctxErr := ctx.Err(); ctxErr != nil {
+		return nil, nil, ctxErr
+	}
+	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+		return nil, nil, err
+	}
 	if err != nil || l == nil || p.belowFloor(l.Sequence()) {
 		return nil, nil, peermanagement.ErrLedgerNotFound
 	}
@@ -268,7 +314,10 @@ func (p *LedgerProvider) GetProofPath(
 		return nil, nil, fmt.Errorf("snapshot map: %w", err)
 	}
 
-	proof, err := snap.GetProofPath(keyArr)
+	proof, err := snap.GetProofPathContext(ctx, keyArr)
+	if ctxErr := ctx.Err(); ctxErr != nil {
+		return nil, nil, ctxErr
+	}
 	if err != nil {
 		return nil, nil, fmt.Errorf("get proof path: %w", err)
 	}
@@ -277,4 +326,16 @@ func (p *LedgerProvider) GetProofPath(
 	}
 
 	return l.SerializeHeader(), proof.Path, nil
+}
+
+func (p *LedgerProvider) getLedgerContext(ctx context.Context, hash [32]byte) (*ledger.Ledger, error) {
+	if lookup, ok := p.svc.(ledgerLookupContext); ok {
+		return lookup.GetLedgerByHashContext(ctx, hash)
+	}
+	select {
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	default:
+	}
+	return p.svc.GetLedgerByHash(hash)
 }

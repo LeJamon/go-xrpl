@@ -91,6 +91,28 @@ func TestReplayDeltaRequest_Success(t *testing.T) {
 	assert.Equal(t, 1, provider.calls)
 }
 
+func TestReplayDeltaRequest_PrioritySenderBypassesSharedEvents(t *testing.T) {
+	provider := &fakeReplayDeltaProvider{header: []byte("header")}
+	events := make(chan Event)
+	h := NewLedgerSyncHandler(events)
+	h.SetProvider(provider)
+	var gotPeer PeerID
+	var gotFrame []byte
+	h.SetPrioritySender(func(_ context.Context, peerID PeerID, frame []byte) error {
+		gotPeer = peerID
+		gotFrame = append([]byte(nil), frame...)
+		return nil
+	})
+	require.NoError(t, h.HandleMessage(context.Background(), PeerID(9), &message.ReplayDeltaRequest{LedgerHash: fixedHash()}))
+	assert.Equal(t, PeerID(9), gotPeer)
+	require.NotEmpty(t, gotFrame)
+	header, _, err := message.ReadMessage(bytes.NewReader(gotFrame))
+	require.NoError(t, err)
+	assert.Equal(t, message.TypeReplayDeltaResponse, header.MessageType)
+	assert.Empty(t, events, "completed replies must not depend on the shared event channel")
+	assert.Zero(t, h.DroppedResponses())
+}
+
 // TestReplayDeltaRequest_BadHashLength verifies the length precheck:
 // any ledger_hash whose length is not 32 must yield reBAD_REQUEST without
 // touching the provider. Mirrors rippled's `ledgerhash().size() !=
@@ -110,11 +132,7 @@ func TestReplayDeltaRequest_BadHashLength(t *testing.T) {
 	require.ErrorIs(t, err, ErrPeerBadRequest,
 		"malformed ledger hash must be signaled as ErrPeerBadRequest so the dispatcher can charge the peer")
 
-	resp := drainReplayDeltaResponse(t, events)
-	assert.Equal(t, message.ReplyErrorBadRequest, resp.Error)
-	assert.Equal(t, short, resp.LedgerHash)
-	assert.Empty(t, resp.LedgerHeader)
-	assert.Empty(t, resp.Transactions)
+	assert.Empty(t, events, "malformed requests are charged and dropped without a reply")
 	assert.Zero(t, provider.calls, "provider must not be called for bad-length requests")
 }
 
@@ -133,11 +151,7 @@ func TestReplayDeltaRequest_UnknownLedger(t *testing.T) {
 	err := h.HandleMessage(context.Background(), PeerID(2), &message.ReplayDeltaRequest{LedgerHash: hash})
 	require.NoError(t, err)
 
-	resp := drainReplayDeltaResponse(t, events)
-	assert.Equal(t, message.ReplyErrorNoLedger, resp.Error)
-	assert.Equal(t, hash, resp.LedgerHash)
-	assert.Empty(t, resp.LedgerHeader)
-	assert.Empty(t, resp.Transactions)
+	assert.Empty(t, events, "unknown ledgers are charged and dropped without a reply")
 	assert.Equal(t, 1, provider.calls)
 }
 
@@ -156,8 +170,7 @@ func TestReplayDeltaRequest_ProviderError(t *testing.T) {
 	err := h.HandleMessage(context.Background(), PeerID(3), &message.ReplayDeltaRequest{LedgerHash: hash})
 	require.NoError(t, err)
 
-	resp := drainReplayDeltaResponse(t, events)
-	assert.Equal(t, message.ReplyErrorNoLedger, resp.Error)
+	assert.Empty(t, events, "provider errors are charged and dropped without a reply")
 }
 
 // TestReplayDeltaRequest_NoProvider verifies that with no provider wired
@@ -207,9 +220,5 @@ func TestReplayDeltaRequest_OversizedResponse(t *testing.T) {
 	err := h.HandleMessage(context.Background(), PeerID(5), &message.ReplayDeltaRequest{LedgerHash: hash})
 	require.NoError(t, err)
 
-	resp := drainReplayDeltaResponse(t, events)
-	assert.Equal(t, message.ReplyErrorNoLedger, resp.Error)
-	assert.Equal(t, hash, resp.LedgerHash)
-	assert.Empty(t, resp.LedgerHeader, "oversized response must drop the header")
-	assert.Empty(t, resp.Transactions, "oversized response must drop the tx list")
+	assert.Empty(t, events, "oversized responses are charged and dropped without a reply")
 }

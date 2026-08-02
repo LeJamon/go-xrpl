@@ -891,6 +891,17 @@ func New(opts ...Option) (*Overlay, error) {
 	o.relay = NewRelay(&cfg, o.handleSquelch, o.chargeIgnoredSquelch)
 
 	o.ledgerSync.SetPeerLedgerHintLookup(o.PeersWithClosedLedger)
+	o.ledgerSync.SetChargePeer(func(peerID PeerID, fee resource.Charge, reason string) {
+		if peer, ok := o.getPeer(peerID); ok {
+			peer.Charge(fee, reason)
+		}
+	})
+	o.ledgerSync.SetPrioritySender(func(ctx context.Context, peerID PeerID, frame []byte) error {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		return o.SendPriority(peerID, frame)
+	})
 
 	return o, nil
 }
