@@ -1035,18 +1035,6 @@ func (o *Overlay) Run(ctx context.Context) error {
 		o.lifecycleMu.Unlock()
 	}
 
-	o.lifecycleMu.Lock()
-	if o.lifecycleState != overlayLifecycleRunning {
-		o.lifecycleMu.Unlock()
-		return ErrShutdown
-	}
-	if err := runCtx.Err(); err != nil {
-		o.lifecycleMu.Unlock()
-		return err
-	}
-	o.signalListenerReady()
-	o.lifecycleMu.Unlock()
-
 	g, gCtx := errgroup.WithContext(runCtx)
 	o.lifecycleMu.Lock()
 	o.runDone = gCtx.Done()
@@ -1070,9 +1058,18 @@ func (o *Overlay) Run(ctx context.Context) error {
 	if o.lifecycleState != overlayLifecycleRunning {
 		o.lifecycleMu.Unlock()
 		scheduler.close()
+		if err := runCtx.Err(); err != nil {
+			return err
+		}
 		return ErrShutdown
 	}
+	if err := runCtx.Err(); err != nil {
+		o.lifecycleMu.Unlock()
+		scheduler.close()
+		return err
+	}
 	o.serveScheduler = scheduler
+	o.signalListenerReady()
 	o.lifecycleMu.Unlock()
 	g.Go(func() error { return scheduler.Run(gCtx) })
 
