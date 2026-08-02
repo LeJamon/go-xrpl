@@ -983,7 +983,7 @@ func run(
 	}
 	if consensusComponents != nil && consensusComponents.Adaptor != nil {
 		consensusComponents.Adaptor.SetOnOperatingModeChange(func(mode consensus.OperatingMode) {
-			ledgerService.SignalServerMode(mode.String())
+			ledgerService.SignalServerMode(serverStatus.modePublication(mode.String()))
 		})
 	}
 
@@ -1015,7 +1015,6 @@ func run(
 			return fmt.Errorf("accepted ledger event %d has no source ledger", event.LedgerInfo.Sequence)
 		}
 		publisher.PublishLedgerClosed(ledgerCloseEvent)
-
 
 		// pubBookChanges → book_changes aggregate stream
 		// (Subscribe.cpp:139-142 + NetworkOPs.cpp:3160-3174). Feed the

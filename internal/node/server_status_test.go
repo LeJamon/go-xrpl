@@ -10,6 +10,7 @@ import (
 	"github.com/LeJamon/go-xrpl/internal/consensus/adaptor"
 	"github.com/LeJamon/go-xrpl/internal/ledger/service"
 	"github.com/LeJamon/go-xrpl/internal/rpc"
+	"github.com/LeJamon/go-xrpl/internal/rpc/subscription"
 	"github.com/LeJamon/go-xrpl/internal/rpc/types"
 )
 
@@ -23,12 +24,13 @@ func newServerStatusRecorder() *serverStatusRecorder {
 	return &serverStatusRecorder{ready: make(chan *rpc.ServerStatusEvent, 8)}
 }
 
-func (r *serverStatusRecorder) PublishServerStatus(event *rpc.ServerStatusEvent) {
+func (r *serverStatusRecorder) PublishServerStatus(event *rpc.ServerStatusEvent) bool {
 	copy := *event
 	r.mu.Lock()
 	r.events = append(r.events, &copy)
 	r.mu.Unlock()
 	r.ready <- &copy
+	return true
 }
 
 func (r *serverStatusRecorder) count() int {
@@ -84,7 +86,9 @@ func TestServerStatusPublishesModeAndLoadWithoutLedgerAcceptance(t *testing.T) {
 	recorder := newServerStatusRecorder()
 	status := newServerStatusPublisher(serverStatusTestServices(svc), recorder)
 	svc.SetServerStatusCallback(status.publish)
-	consensusAdaptor.SetOnOperatingModeChange(func(mode consensus.OperatingMode) { svc.SignalServerMode(mode.String()) })
+	consensusAdaptor.SetOnOperatingModeChange(func(mode consensus.OperatingMode) {
+		svc.SignalServerMode(status.modePublication(mode.String()))
+	})
 	svc.FeeTrack().SetOnChange(func() { svc.SignalServerStatus() })
 
 	status.publish(nil)
@@ -132,6 +136,56 @@ func TestServerStatusPublisherSuppressesUnchangedSnapshot(t *testing.T) {
 	status.publish(nil)
 	if got := recorder.count(); got != 1 {
 		t.Fatalf("unchanged snapshot published %d events, want 1", got)
+	}
+}
+
+func TestServerStatusPublisherDoesNotCacheWithoutSubscribers(t *testing.T) {
+	svc, err := service.New(service.Config{Standalone: true})
+	if err != nil {
+		t.Fatalf("New service: %v", err)
+	}
+	if err := svc.Start(); err != nil {
+		t.Fatalf("Start service: %v", err)
+	}
+	t.Cleanup(svc.Stop)
+
+	manager := subscription.NewManager()
+	status := newServerStatusPublisher(serverStatusTestServices(svc), rpc.NewPublisher(manager))
+	status.publish(nil)
+
+	conn := &types.Connection{
+		ID:            "server-subscriber",
+		Subscriptions: map[types.SubscriptionType]types.SubscriptionConfig{types.SubServer: {}},
+		SendChannel:   make(chan []byte, 1),
+	}
+	manager.AddConnection(conn)
+	status.publish(nil)
+	select {
+	case <-conn.SendChannel:
+	case <-time.After(time.Second):
+		t.Fatal("first status after subscribing was suppressed")
+	}
+}
+
+func TestServerModePublicationUsesTransitionSnapshot(t *testing.T) {
+	svc, err := service.New(service.Config{Standalone: true})
+	if err != nil {
+		t.Fatalf("New service: %v", err)
+	}
+	if err := svc.Start(); err != nil {
+		t.Fatalf("Start service: %v", err)
+	}
+	t.Cleanup(svc.Stop)
+
+	recorder := newServerStatusRecorder()
+	status := newServerStatusPublisher(serverStatusTestServices(svc), recorder)
+	publication := status.modePublication(consensus.OpModeTracking.String())
+	svc.FeeTrack().SetRemoteFee(512)
+	publication()
+
+	event := waitForServerStatus(t, recorder)
+	if event.ServerStatus != consensus.OpModeTracking.String() || event.LoadFactorServer != 256 {
+		t.Fatalf("mode transition snapshot = status %q, load %d", event.ServerStatus, event.LoadFactorServer)
 	}
 }
 

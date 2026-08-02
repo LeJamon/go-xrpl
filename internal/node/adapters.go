@@ -568,7 +568,7 @@ type serverStatusSnapshot struct {
 }
 
 type serverStatusEventPublisher interface {
-	PublishServerStatus(*rpc.ServerStatusEvent)
+	PublishServerStatus(*rpc.ServerStatusEvent) bool
 }
 
 type serverStatusPublisher struct {
@@ -586,12 +586,27 @@ func newServerStatusPublisher(services *types.ServiceContainer, publisher server
 }
 
 func (p *serverStatusPublisher) publish(mode *string) {
+	snapshot, event := p.capture(mode)
+	p.publishCaptured(snapshot, event)
+}
+
+func (p *serverStatusPublisher) modePublication(mode string) service.ServerModePublication {
+	snapshot, event := p.capture(&mode)
+	if event == nil {
+		return nil
+	}
+	return func() {
+		p.publishCaptured(snapshot, event)
+	}
+}
+
+func (p *serverStatusPublisher) capture(mode *string) (serverStatusSnapshot, *rpc.ServerStatusEvent) {
 	if p == nil || p.services == nil || p.services.Ledger == nil || p.publisher == nil {
-		return
+		return serverStatusSnapshot{}, nil
 	}
 	p.mu.Lock()
-	baseFee, _, _ := p.services.Ledger.GetCurrentFees()
-	load := handlers.ComputeServerLoad(p.services)
+	defer p.mu.Unlock()
+
 	serverStatus := "full"
 	if mode != nil {
 		serverStatus = *mode
@@ -606,13 +621,8 @@ func (p *serverStatusPublisher) publish(mode *string) {
 		p.mode = serverStatus
 		p.haveMode = true
 	}
-	baseFeeClipped := jsonClippedXRPAmount(int64(baseFee))
-	loadBase := clipServerLoad(load.LoadBase)
-	loadFactor := clipServerLoad(load.LoadFactor)
-	loadFactorFeeEscalation := clipServerLoad(load.LoadFactorFeeEscalation)
-	loadFactorFeeQueue := clipServerLoad(load.LoadFactorFeeQueue)
-	loadFactorFeeReference := clipServerLoad(load.LoadFactorFeeReference)
-	loadFactorServer := clipServerLoad(load.LoadFactorServer)
+	baseFee, _, _ := p.services.Ledger.GetCurrentFees()
+	load := handlers.ComputeServerLoad(p.services)
 	snapshot := serverStatusSnapshot{
 		baseFee:                 baseFee,
 		loadBase:                load.LoadBase,
@@ -623,26 +633,32 @@ func (p *serverStatusPublisher) publish(mode *string) {
 		loadFactorServer:        load.LoadFactorServer,
 		serverStatus:            serverStatus,
 	}
+	return snapshot, &rpc.ServerStatusEvent{
+		Type:                    "serverStatus",
+		BaseFee:                 jsonClippedXRPAmount(int64(baseFee)),
+		LoadBase:                clipServerLoad(load.LoadBase),
+		LoadFactor:              clipServerLoad(load.LoadFactor),
+		LoadFactorFeeEscalation: clipServerLoad(load.LoadFactorFeeEscalation),
+		LoadFactorFeeQueue:      clipServerLoad(load.LoadFactorFeeQueue),
+		LoadFactorFeeReference:  clipServerLoad(load.LoadFactorFeeReference),
+		LoadFactorServer:        clipServerLoad(load.LoadFactorServer),
+		ServerStatus:            serverStatus,
+	}
+}
 
-	if p.haveLast && snapshot == p.last {
-		p.mu.Unlock()
+func (p *serverStatusPublisher) publishCaptured(snapshot serverStatusSnapshot, event *rpc.ServerStatusEvent) {
+	if event == nil {
 		return
 	}
-	p.last = snapshot
-	p.haveLast = true
-	p.mu.Unlock()
-
-	p.publisher.PublishServerStatus(&rpc.ServerStatusEvent{
-		Type:                    "serverStatus",
-		BaseFee:                 baseFeeClipped,
-		LoadBase:                loadBase,
-		LoadFactor:              loadFactor,
-		LoadFactorFeeEscalation: loadFactorFeeEscalation,
-		LoadFactorFeeQueue:      loadFactorFeeQueue,
-		LoadFactorFeeReference:  loadFactorFeeReference,
-		LoadFactorServer:        loadFactorServer,
-		ServerStatus:            serverStatus,
-	})
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if p.haveLast && snapshot == p.last {
+		return
+	}
+	if p.publisher.PublishServerStatus(event) {
+		p.last = snapshot
+		p.haveLast = true
+	}
 }
 
 func clipServerLoad(value uint64) uint32 {

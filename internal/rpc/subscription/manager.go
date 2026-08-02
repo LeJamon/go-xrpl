@@ -725,15 +725,18 @@ func (sm *Manager) HasStreamSubscriptions(connID string) bool {
 }
 
 // BroadcastToStream sends a message to every connection subscribed to a
-// stream. Broadcasts snapshot subscriber connections under sm.mu, then
-// send after the lock is released — a slow consumer never stalls
-// HandleSubscribe / HandleUnsubscribe / RemoveConnection or other
-// broadcasts (#428 race fix). Delivery uses types.Connection.TrySend so
-// the per-connection consecutive-drop counter is updated and the
-// connection is disconnected after MaxConsecutiveDrops back-to-back
-// failures — unifies the slow-consumer policy across all outbound paths.
-func (sm *Manager) BroadcastToStream(streamType types.SubscriptionType, data []byte, _ any) {
-	deliver(sm.collectStreamTargets(streamType), data)
+// stream and returns the number of snapshotted targets. Broadcasts snapshot
+// subscriber connections under sm.mu, then send after the lock is released —
+// a slow consumer never stalls HandleSubscribe / HandleUnsubscribe /
+// RemoveConnection or other broadcasts (#428 race fix). Delivery uses
+// types.Connection.TrySend so the per-connection consecutive-drop counter is
+// updated and the connection is disconnected after MaxConsecutiveDrops
+// back-to-back failures — unifies the slow-consumer policy across all outbound
+// paths.
+func (sm *Manager) BroadcastToStream(streamType types.SubscriptionType, data []byte, _ any) int {
+	targets := sm.collectStreamTargets(streamType)
+	deliver(targets, data)
+	return len(targets)
 }
 
 // BroadcastToStreamVersioned selects the transaction representation recorded

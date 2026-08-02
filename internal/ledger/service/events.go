@@ -87,11 +87,15 @@ type SubmittedTxCallback func(SubmittedTxEvent)
 // and must not call Service.Stop synchronously.
 type ServerStatusCallback func(mode *string)
 
+// ServerModePublication delivers a status snapshot captured at an effective
+// operating-mode transition. It follows the ServerStatusCallback contract.
+type ServerModePublication func()
+
 type publicationEvent struct {
 	ledger       *LedgerAcceptedEvent
 	submitted    *SubmittedTxEvent
 	serverStatus bool
-	serverMode   *string
+	serverMode   ServerModePublication
 }
 
 // Errors reports fatal publication failures that require runtime shutdown.
@@ -198,18 +202,20 @@ func (p *eventPublisher) dispatchServerStatusEvent() bool {
 	return true
 }
 
-func (p *eventPublisher) dispatchServerModeEvent(mode string) bool {
+func (p *eventPublisher) dispatchServerModeEvent(publication ServerModePublication) bool {
 	p.ledgerEventMu.Lock()
 	defer p.ledgerEventMu.Unlock()
 	if p.ledgerEventStopping || p.publicationFailed {
 		return false
 	}
+	if publication == nil {
+		return true
+	}
 	startDispatcher := p.startLedgerEventDispatcherLocked()
 	if startDispatcher {
 		go p.runLedgerEventDispatcher()
 	}
-	copy := mode
-	return p.enqueuePublicationLocked(publicationEvent{serverMode: &copy})
+	return p.enqueuePublicationLocked(publicationEvent{serverMode: publication})
 }
 
 func (p *eventPublisher) enqueuePublicationLocked(event publicationEvent) bool {
@@ -383,12 +389,16 @@ func (p *eventPublisher) deliverPublication(event publicationEvent) error {
 	if event.ledger != nil {
 		return p.deliverLedgerEvent(event.ledger)
 	}
-	if event.serverStatus || event.serverMode != nil {
+	if event.serverMode != nil {
+		event.serverMode()
+		return nil
+	}
+	if event.serverStatus {
 		p.subscriberMu.RLock()
 		callback := p.serverStatusCallback
 		p.subscriberMu.RUnlock()
 		if callback != nil {
-			callback(event.serverMode)
+			callback(nil)
 		}
 	}
 	return nil
@@ -454,11 +464,11 @@ func (s *Service) SignalServerStatus() bool {
 	return s.eventPublisher.dispatchServerStatusEvent()
 }
 
-// SignalServerMode schedules an exact effective operating-mode transition on
-// the shared publication FIFO. Unlike fee/load samples, mode changes do not
-// coalesce because subscribers must observe transition order.
-func (s *Service) SignalServerMode(mode string) bool {
-	return s.eventPublisher.dispatchServerModeEvent(mode)
+// SignalServerMode queues a status publication captured at an effective
+// operating-mode transition. Mode publications do not coalesce because
+// subscribers must observe transition order.
+func (s *Service) SignalServerMode(publication ServerModePublication) bool {
+	return s.eventPublisher.dispatchServerModeEvent(publication)
 }
 
 // SetTxRelay registers the per-tx broadcast handler invoked by

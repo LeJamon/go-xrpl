@@ -178,7 +178,9 @@ func (s *Service) SubmitTransaction(transaction tx.Transaction, rawBlob []byte, 
 	}
 
 	s.dispatchProposedTransaction(ptx, rawBlob, outcome, s.openLedgerView.Current())
-	s.eventPublisher.dispatchServerStatusEvent()
+	if outcome.Applied {
+		s.eventPublisher.dispatchServerStatusEvent()
+	}
 
 	return result, nil
 }

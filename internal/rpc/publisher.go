@@ -24,8 +24,9 @@ type EventPublisher interface {
 	// PublishValidation publishes a validation event to validation stream subscribers
 	PublishValidation(event *ValidationEvent)
 
-	// PublishServerStatus publishes a server status event to server stream subscribers
-	PublishServerStatus(event *ServerStatusEvent)
+	// PublishServerStatus publishes a server status event and reports whether
+	// at least one server-stream subscriber was targeted.
+	PublishServerStatus(event *ServerStatusEvent) bool
 
 	// PublishConsensusPhase publishes a consensus phase change to consensus stream subscribers
 	PublishConsensusPhase(phase string)
@@ -150,19 +151,19 @@ func marshalValidationEvent(event *ValidationEvent, apiVersion int) ([]byte, err
 	})
 }
 
-// PublishServerStatus broadcasts a server status event to server stream subscribers
-func (p *Publisher) PublishServerStatus(event *ServerStatusEvent) {
+// PublishServerStatus broadcasts a server status event to server stream subscribers.
+func (p *Publisher) PublishServerStatus(event *ServerStatusEvent) bool {
 	if event == nil || p.manager == nil {
-		return
+		return false
 	}
 
 	data, err := json.Marshal(event)
 	if err != nil {
 		xrpllog.Named(xrpllog.PartitionRPC).Error("Failed to marshal ServerStatusEvent", "err", err)
-		return
+		return false
 	}
 
-	p.manager.BroadcastToStream(types.SubServer, data, nil)
+	return p.manager.BroadcastToStream(types.SubServer, data, nil) != 0
 }
 
 // PublishConsensusPhase broadcasts a consensus phase change event
@@ -290,7 +291,7 @@ func NewNoOpPublisher() *NoOpPublisher {
 func (p *NoOpPublisher) PublishLedgerClosed(event *LedgerCloseEvent)                   {}
 func (p *NoOpPublisher) PublishTransaction(event *TransactionEvent, accounts []string) {}
 func (p *NoOpPublisher) PublishValidation(event *ValidationEvent)                      {}
-func (p *NoOpPublisher) PublishServerStatus(event *ServerStatusEvent)                  {}
+func (p *NoOpPublisher) PublishServerStatus(event *ServerStatusEvent) bool             { return false }
 func (p *NoOpPublisher) PublishConsensusPhase(phase string)                            {}
 func (p *NoOpPublisher) PublishManifest(event *ManifestEvent)                          {}
 func (p *NoOpPublisher) PublishPeerStatus(event *PeerStatusEvent)                      {}
