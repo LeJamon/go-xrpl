@@ -11,6 +11,10 @@ type EngineLifecycle interface {
 	Stop() error
 }
 
+type EngineTerminal interface {
+	Done() <-chan error
+}
+
 type EngineRoundDriver interface {
 	// StartRound begins a round; proposing enables this node's proposal.
 	StartRound(round RoundID, proposing bool) error

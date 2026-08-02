@@ -76,9 +76,10 @@ type Components struct {
 	fatalOnce     sync.Once
 	manifestStore manifest.Store
 
-	overlayDone chan struct{}
-	routerDone  chan struct{}
-	vlTickDone  chan struct{}
+	overlayDone       chan struct{}
+	routerDone        chan struct{}
+	engineMonitorDone chan struct{}
+	vlTickDone        chan struct{}
 }
 
 // validatorListTickInterval is how often Components.Start fires
@@ -197,6 +198,28 @@ func (c *Components) Start(ctx context.Context) error {
 		c.stop()
 		return fmt.Errorf("start consensus engine: %w", err)
 	}
+	if terminal, ok := c.Engine.(consensus.EngineTerminal); ok {
+		if engineDone := terminal.Done(); engineDone != nil {
+			c.lifecycleMu.Lock()
+			c.engineMonitorDone = make(chan struct{})
+			monitorDone := c.engineMonitorDone
+			c.lifecycleMu.Unlock()
+			go func() {
+				defer close(monitorDone)
+				select {
+				case err, ok := <-engineDone:
+					if runCtx.Err() != nil {
+						return
+					}
+					if !ok || err == nil {
+						err = errors.New("engine stopped unexpectedly")
+					}
+					c.reportFatal(fmt.Errorf("consensus engine stopped: %w", err))
+				case <-runCtx.Done():
+				}
+			}()
+		}
+	}
 
 	c.lifecycleMu.Lock()
 	c.routerDone = make(chan struct{})
@@ -278,6 +301,7 @@ func (c *Components) stop() {
 		c.stopped = true
 		cancel := c.runCancel
 		routerDone := c.routerDone
+		engineMonitorDone := c.engineMonitorDone
 		vlTickDone := c.vlTickDone
 		overlayDone := c.overlayDone
 		c.lifecycleMu.Unlock()
@@ -299,6 +323,9 @@ func (c *Components) stop() {
 		}
 		if overlayDone != nil {
 			<-overlayDone
+		}
+		if engineMonitorDone != nil {
+			<-engineMonitorDone
 		}
 		if c.Router != nil {
 			legacy, replay := c.Router.StopAcquisitions()

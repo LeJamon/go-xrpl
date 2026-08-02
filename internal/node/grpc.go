@@ -7,6 +7,7 @@ import (
 	"net"
 	rtdebug "runtime/debug"
 	"strings"
+	"sync"
 
 	googlegrpc "google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
@@ -50,6 +51,9 @@ type boundGRPCServer struct {
 	ready     <-chan struct{}
 	markReady func()
 	server    *googlegrpc.Server
+	requestMu sync.Mutex
+	requestWG sync.WaitGroup
+	stopping  bool
 }
 
 func prepareGRPCServer(
@@ -82,19 +86,71 @@ func bindGRPCServer(
 	boundAddr := lis.Addr().String()
 	readyListener := newServeReadyListener(lis)
 
-	srv := googlegrpc.NewServer(
-		googlegrpc.ChainUnaryInterceptor(grpcRecoveryInterceptor(log)),
-	)
-	rpcv1.RegisterXRPLedgerAPIServiceServer(srv, xrplgrpc.NewServer(lookup))
-
-	return &boundGRPCServer{
+	bound := &boundGRPCServer{
 		name:      name,
 		address:   boundAddr,
 		listener:  readyListener,
 		ready:     readyListener.ready,
 		markReady: readyListener.markReady,
-		server:    srv,
-	}, nil
+	}
+	srv := googlegrpc.NewServer(
+		googlegrpc.ChainUnaryInterceptor(bound.trackUnary, grpcRecoveryInterceptor(log)),
+		googlegrpc.ChainStreamInterceptor(bound.trackStream),
+	)
+	rpcv1.RegisterXRPLedgerAPIServiceServer(srv, xrplgrpc.NewServer(lookup))
+	bound.server = srv
+	return bound, nil
+}
+
+func (s *boundGRPCServer) admitRequest() bool {
+	s.requestMu.Lock()
+	defer s.requestMu.Unlock()
+	if s.stopping {
+		return false
+	}
+	s.requestWG.Add(1)
+	return true
+}
+
+func (s *boundGRPCServer) trackUnary(
+	ctx context.Context,
+	req any,
+	_ *googlegrpc.UnaryServerInfo,
+	handler googlegrpc.UnaryHandler,
+) (any, error) {
+	if !s.admitRequest() {
+		return nil, status.Error(codes.Unavailable, "server shutting down")
+	}
+	defer s.requestWG.Done()
+	return handler(ctx, req)
+}
+
+func (s *boundGRPCServer) trackStream(
+	srv any,
+	stream googlegrpc.ServerStream,
+	_ *googlegrpc.StreamServerInfo,
+	handler googlegrpc.StreamHandler,
+) error {
+	if !s.admitRequest() {
+		return status.Error(codes.Unavailable, "server shutting down")
+	}
+	defer s.requestWG.Done()
+	return handler(srv, stream)
+}
+
+func (s *boundGRPCServer) stopRequests() {
+	if s == nil {
+		return
+	}
+	s.requestMu.Lock()
+	s.stopping = true
+	s.requestMu.Unlock()
+}
+
+func (s *boundGRPCServer) waitRequests() {
+	if s != nil {
+		s.requestWG.Wait()
+	}
 }
 
 func validateGRPCPort(name string, p config.PortConfig) error {

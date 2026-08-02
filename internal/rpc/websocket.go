@@ -60,7 +60,10 @@ type WebSocketServer struct {
 	pingInterval time.Duration
 	// wg tracks admitted HTTP handlers and per-connection goroutines so Close
 	// can join them on shutdown.
-	wg sync.WaitGroup
+	wg        sync.WaitGroup
+	closeOnce sync.Once
+	closeDone chan struct{}
+	forceDone chan struct{}
 }
 
 // WebSocketConnection represents a single WebSocket connection
@@ -129,6 +132,8 @@ func NewWebSocketServerWithLoadTracker(timeout time.Duration, services *types.Se
 		services:            services,
 		loadTracker:         tracker,
 		pingInterval:        30 * time.Second,
+		closeDone:           make(chan struct{}),
+		forceDone:           make(chan struct{}),
 	}
 	// The url (RPCSub) registry lives on the WebSocket server because url
 	// subscribers share its subscription manager's broadcast fan-out.
@@ -1311,6 +1316,21 @@ func (ws *WebSocketServer) SubscriptionManager() *subscription.Manager {
 // misbehaving handler cannot stall shutdown indefinitely; if ctx expires first,
 // Close returns ctx.Err().
 func (ws *WebSocketServer) Close(ctx context.Context) error {
+	ws.closeOnce.Do(func() {
+		go ws.shutdown(ctx)
+	})
+	select {
+	case <-ws.closeDone:
+		return nil
+	case <-ctx.Done():
+		<-ws.forceDone
+		return ctx.Err()
+	}
+}
+
+func (ws *WebSocketServer) shutdown(ctx context.Context) {
+	defer close(ws.closeDone)
+
 	ws.connectionsMutex.Lock()
 	ws.closing = true
 	connections := make([]*WebSocketConnection, 0, len(ws.connections))
@@ -1344,32 +1364,17 @@ func (ws *WebSocketServer) Close(ctx context.Context) error {
 		close(closeFramesDone)
 	}()
 
-	var shutdownErr error
 	select {
 	case <-closeFramesDone:
-		shutdownErr = ctx.Err()
 	case <-ctx.Done():
-		shutdownErr = ctx.Err()
 	}
 
 	for _, conn := range connections {
 		_ = conn.conn.Close()
 	}
+	close(ws.forceDone)
 
-	done := make(chan struct{})
-	go func() {
-		closeFrames.Wait()
-		ws.wg.Wait()
-		ws.urlSubs.Close()
-		close(done)
-	}()
-	if shutdownErr != nil {
-		return shutdownErr
-	}
-	select {
-	case <-done:
-		return nil
-	case <-ctx.Done():
-		return ctx.Err()
-	}
+	closeFrames.Wait()
+	ws.wg.Wait()
+	ws.urlSubs.Close()
 }

@@ -6,12 +6,11 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net/http"
 	"os"
-	"os/signal"
 	"runtime/debug"
 	"sort"
 	"strings"
-	"syscall"
 	"time"
 
 	"github.com/LeJamon/go-xrpl/amendment"
@@ -131,7 +130,26 @@ func isFullGitHash(value string) bool {
 // blocks until a terminating signal or fatal error. It is the composition root
 // extracted from the CLI so flag parsing and node wiring stay separable.
 func Run(ctx context.Context, appConfig *config.Config, configPath string, standalone bool, startup service.StartupConfig, rootLogger, serverLog xrpllog.Logger) error {
-	return run(ctx, appConfig, configPath, standalone, startup, rootLogger, serverLog, nil)
+	return run(ctx, appConfig, configPath, standalone, startup, rootLogger, serverLog, RunOptions{})
+}
+
+// RunOptions supplies process-owned lifecycle events to the node runtime.
+type RunOptions struct {
+	Ready    func()
+	Stopping func()
+	Reload   <-chan os.Signal
+}
+
+func RunWithOptions(
+	ctx context.Context,
+	appConfig *config.Config,
+	configPath string,
+	standalone bool,
+	startup service.StartupConfig,
+	rootLogger, serverLog xrpllog.Logger,
+	options RunOptions,
+) error {
+	return run(ctx, appConfig, configPath, standalone, startup, rootLogger, serverLog, options)
 }
 
 // RunWithReady runs the node and calls ready after every configured service has
@@ -145,7 +163,7 @@ func RunWithReady(
 	rootLogger, serverLog xrpllog.Logger,
 	ready func(),
 ) error {
-	return run(ctx, appConfig, configPath, standalone, startup, rootLogger, serverLog, ready)
+	return RunWithOptions(ctx, appConfig, configPath, standalone, startup, rootLogger, serverLog, RunOptions{Ready: ready})
 }
 
 func run(
@@ -155,8 +173,10 @@ func run(
 	standalone bool,
 	startup service.StartupConfig,
 	rootLogger, serverLog xrpllog.Logger,
-	ready func(),
+	options RunOptions,
 ) (runErr error) {
+	ctx, cancelRuntime := context.WithCancelCause(ctx)
+	defer cancelRuntime(nil)
 	if err := context.Cause(ctx); err != nil {
 		return err
 	}
@@ -180,7 +200,13 @@ func run(
 		stallWatchdog       *watchdog.Watchdog
 	)
 	defer func() {
-		runErr = errors.Join(runErr, doShutdown(transports, wsServer, ledgerService, ledgerCleaner, consensusComponents, rotator, db, repoManager, serverLog))
+		cancelRuntime(nil)
+		if options.Stopping != nil {
+			options.Stopping()
+		}
+		if shutdownErr := doShutdown(transports, wsServer, ledgerService, ledgerCleaner, consensusComponents, rotator, db, repoManager, serverLog); shutdownErr != nil {
+			runErr = errors.Join(runErr, shutdownErr)
+		}
 	}()
 
 	db, repoManager, err = setupStorage(ctx, appConfig, serverLog)
@@ -247,7 +273,10 @@ func run(
 	// One instance is shared between the ledger service (which folds validated
 	// flag ledgers into it) and the consensus adaptor (which sources vote
 	// stances from it).
-	amendmentTable := buildTable(appConfig.Amendments, repoManager, serverLog)
+	amendmentTable := buildTable(ctx, appConfig.Amendments, repoManager, serverLog)
+	if err := context.Cause(ctx); err != nil {
+		return err
+	}
 
 	// Build the transaction-queue config from the operator's
 	// [transaction_queue] stanza layered over the rippled defaults.
@@ -343,7 +372,7 @@ func run(
 				}
 				minimumOnline := rotator.MinimumOnline()
 				if minimumOnline == 0 && repoManager != nil {
-					minSeq, minErr := repoManager.Ledger().GetMinLedgerSeq(context.Background())
+					minSeq, minErr := repoManager.Ledger().GetMinLedgerSeq(ctx)
 					if minErr != nil {
 						return fmt.Errorf("load online-delete minimum ledger: %w", minErr)
 					}
@@ -603,7 +632,7 @@ func run(
 		// the request without charging.
 		if db != nil {
 			overlay.SetNodeObjectProvider(func(hash [32]byte) ([]byte, bool) {
-				node, err := db.Fetch(context.Background(), nodestore.Hash256(hash))
+				node, err := db.Fetch(ctx, nodestore.Hash256(hash))
 				if err != nil || node == nil {
 					return nil, false
 				}
@@ -1133,7 +1162,7 @@ func run(
 	// loop wedges, so a deadlocked node screams and can be restarted instead of
 	// going quiet.
 	if stallWatchdog != nil {
-		wdCtx, cancelWatchdog := context.WithCancel(context.Background())
+		wdCtx, cancelWatchdog := context.WithCancel(ctx)
 		defer cancelWatchdog()
 		go stallWatchdog.Run(wdCtx)
 		serverLog.Info("Stall watchdog armed",
@@ -1143,33 +1172,17 @@ func run(
 		)
 	}
 
-	sigCh := make(chan os.Signal, 1)
-	signal.Notify(sigCh, syscall.SIGTERM, syscall.SIGINT)
-	defer signal.Stop(sigCh)
-
-	// SIGHUP triggers a UNL reload: re-read the config from --conf and
-	// replace the adaptor's trusted validator set. Per-round delta
-	// detection in the consensus engine then drives OnUNLChange so
-	// newly-added validators get the NegativeUNL grace period.
-	// Mirrors the operator-trigger surface of rippled's ValidatorList
-	// (applyLists → updateTrusted) without (yet) the publisher-trust
-	// subsystem. Buffered so a flurry of HUPs coalesces.
-	reloadCh := make(chan os.Signal, 1)
-	signal.Notify(reloadCh, syscall.SIGHUP)
-	defer signal.Stop(reloadCh)
-
 	var componentErrCh <-chan error
 	if consensusComponents != nil {
 		componentErrCh = consensusComponents.Errors()
 	}
-	if ready != nil {
-		ready()
+	if options.Ready != nil {
+		options.Ready()
 	}
 	return waitForShutdown(
 		ctx,
 		serverLog,
-		sigCh,
-		reloadCh,
+		options.Reload,
 		shutdownCh,
 		listenerErrCh,
 		componentErrCh,
@@ -1207,29 +1220,46 @@ func validateTrustedValidatorConfig(appConfig *config.Config, standalone bool) e
 	return errors.New("trusted validator configuration is empty: configure validators or validator_list_keys, or use --standalone")
 }
 
-// waitForShutdown blocks until a terminating event arrives: an OS signal, an
-// RPC stop, or a listener or consensus-component failure. SIGHUP is
-// non-terminating — it reloads the trusted validator set in place and keeps
-// waiting. It returns the fatal error (if any) so the caller's deferred cleanup
-// runs.
+// waitForShutdown blocks until context cancellation, an RPC stop, or a listener
+// or consensus-component failure. Validator reloads run on a separate serialized
+// worker so they cannot prevent a terminating event from being observed.
 
 func waitForShutdown(
 	ctx context.Context,
 	log xrpllog.Logger,
-	sigCh, reloadCh chan os.Signal,
+	reloadCh <-chan os.Signal,
 	shutdownCh chan struct{},
 	listenerErrCh chan error,
 	componentErrCh <-chan error,
 	consensusComponents *adaptor.Components,
 	configPath string,
 ) error {
+	reloadCtx, cancelReload := context.WithCancel(ctx)
+	reloadDone := make(chan struct{})
+	var reloader staticValidatorReloader
+	if consensusComponents != nil {
+		reloader = consensusComponents
+	}
+	go func() {
+		defer close(reloadDone)
+		runValidatorReloadLoop(
+			reloadCtx,
+			log,
+			reloader,
+			configPath,
+			reloadCh,
+			config.LoadConfig,
+		)
+	}()
+	defer func() {
+		cancelReload()
+		<-reloadDone
+	}()
+
 	for {
 		select {
 		case <-ctx.Done():
 			return context.Cause(ctx)
-		case sig := <-sigCh:
-			log.Info("Received signal, shutting down", "signal", sig)
-			return nil
 		case <-shutdownCh:
 			return nil
 		case err := <-listenerErrCh:
@@ -1245,8 +1275,6 @@ func waitForShutdown(
 			}
 			log.Error("Consensus component failed — initiating shutdown", "err", err)
 			return err
-		case <-reloadCh:
-			reloadTrustedValidators(log, consensusComponents, configPath)
 		}
 	}
 }
@@ -1472,6 +1500,10 @@ type staticValidatorReloader interface {
 	ValidateValidatorReload(publisherKeys [][33]byte, publisherSites []string, publisherThreshold, staticValidatorCount int) error
 }
 
+type validatorConfigLoader func(config.Paths) (*config.Config, error)
+
+const validatorReloadTimeout = 5 * time.Second
+
 // stallPinger is the optional surface the stall watchdog installs on the
 // consensus engine. Kept off the core consensus.Engine interface so test
 // mocks and alternative engines need not implement it; *rcl.Engine satisfies
@@ -1490,6 +1522,33 @@ func reloadTrustedValidators(serverLog xrpllog.Logger, components *adaptor.Compo
 	applyValidatorReload(serverLog, components, configPath)
 }
 
+func runValidatorReloadLoop(
+	ctx context.Context,
+	serverLog xrpllog.Logger,
+	reloader staticValidatorReloader,
+	configPath string,
+	requests <-chan os.Signal,
+	load validatorConfigLoader,
+) {
+	loadGate := make(chan struct{}, 1)
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case _, ok := <-requests:
+			if !ok {
+				return
+			}
+			if reloader == nil {
+				continue
+			}
+			reloadCtx, cancel := context.WithTimeout(ctx, validatorReloadTimeout)
+			applyValidatorReloadContextWithGate(reloadCtx, serverLog, reloader, configPath, load, loadGate)
+			cancel()
+		}
+	}
+}
+
 // applyValidatorReload re-reads configPath, re-parses the [validators]
 // stanza, and pushes the result into reloader. Errors are logged and
 // the previous trusted set is retained — a bad reload must not wedge
@@ -1498,11 +1557,60 @@ func reloadTrustedValidators(serverLog xrpllog.Logger, components *adaptor.Compo
 // Skipped silently when configPath is empty (validator config can't
 // be re-read from nothing).
 func applyValidatorReload(serverLog xrpllog.Logger, reloader staticValidatorReloader, configPath string) {
+	applyValidatorReloadContext(context.Background(), serverLog, reloader, configPath, config.LoadConfig)
+}
+
+func applyValidatorReloadContext(
+	ctx context.Context,
+	serverLog xrpllog.Logger,
+	reloader staticValidatorReloader,
+	configPath string,
+	load validatorConfigLoader,
+) {
+	applyValidatorReloadContextWithGate(ctx, serverLog, reloader, configPath, load, make(chan struct{}, 1))
+}
+
+func applyValidatorReloadContextWithGate(
+	ctx context.Context,
+	serverLog xrpllog.Logger,
+	reloader staticValidatorReloader,
+	configPath string,
+	load validatorConfigLoader,
+	loadGate chan struct{},
+) {
 	if configPath == "" {
 		serverLog.Warn("SIGHUP received but no --conf path set; skipping UNL reload")
 		return
 	}
-	cfg, err := config.LoadConfig(config.Paths{Main: configPath})
+	if err := context.Cause(ctx); err != nil {
+		serverLog.Warn("SIGHUP UNL reload canceled", "err", err)
+		return
+	}
+	type loadResult struct {
+		cfg *config.Config
+		err error
+	}
+	select {
+	case loadGate <- struct{}{}:
+	case <-ctx.Done():
+		serverLog.Warn("SIGHUP UNL reload canceled", "err", context.Cause(ctx))
+		return
+	}
+	loaded := make(chan loadResult, 1)
+	go func() {
+		defer func() { <-loadGate }()
+		cfg, err := load(config.Paths{Main: configPath})
+		loaded <- loadResult{cfg: cfg, err: err}
+	}()
+
+	var result loadResult
+	select {
+	case <-ctx.Done():
+		serverLog.Warn("SIGHUP UNL reload canceled", "err", context.Cause(ctx))
+		return
+	case result = <-loaded:
+	}
+	cfg, err := result.cfg, result.err
 	if err != nil {
 		serverLog.Error("SIGHUP UNL reload: re-load config failed", "err", err)
 		return
@@ -1526,6 +1634,10 @@ func applyValidatorReload(serverLog xrpllog.Logger, reloader staticValidatorRelo
 		serverLog.Error("SIGHUP UNL reload rejected", "err", err)
 		return
 	}
+	if err := context.Cause(ctx); err != nil {
+		serverLog.Warn("SIGHUP UNL reload canceled", "err", err)
+		return
+	}
 	reloader.ReloadStaticValidators(validators, masterKeys)
 	serverLog.Info("SIGHUP UNL reload applied",
 		"validators_count", len(validators),
@@ -1533,7 +1645,15 @@ func applyValidatorReload(serverLog xrpllog.Logger, reloader staticValidatorRelo
 	)
 }
 
-// doShutdown performs graceful shutdown of all server components
+const nodeShutdownTimeout = 30 * time.Second
+
+const (
+	transportShutdownGrace = 5 * time.Second
+	producerShutdownGrace  = 5 * time.Second
+	serviceShutdownGrace   = 10 * time.Second
+	storeShutdownGrace     = 5 * time.Second
+)
+
 func doShutdown(
 	transports *boundRPCTransports,
 	wsServer *rpc.WebSocketServer,
@@ -1545,83 +1665,81 @@ func doShutdown(
 	repoManager relationaldb.RepositoryManager,
 	logger xrpllog.Logger,
 ) error {
-	var shutdownErr error
-	const drainTimeout = 30 * time.Second
-	ctx, cancel := context.WithTimeout(context.Background(), drainTimeout)
+	return doShutdownWithin(
+		nodeShutdownTimeout,
+		transports,
+		wsServer,
+		ledgerService,
+		ledgerCleaner,
+		consensusComponents,
+		rotator,
+		kvDB,
+		repoManager,
+		logger,
+	)
+}
+
+func doShutdownWithin(
+	timeout time.Duration,
+	transports *boundRPCTransports,
+	wsServer *rpc.WebSocketServer,
+	ledgerService *service.Service,
+	ledgerCleaner *cleaner.Cleaner,
+	consensusComponents *adaptor.Components,
+	rotator *shamapstore.Rotator,
+	kvDB nodestore.Database,
+	repoManager relationaldb.RepositoryManager,
+	logger xrpllog.Logger,
+) error {
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
+	var errs []error
 
-	logger.Info("Draining HTTP connections...")
-	if transports != nil {
-		for _, bound := range transports.http {
-			if err := bound.server.Shutdown(ctx); err != nil {
-				shutdownErr = errors.Join(shutdownErr, fmt.Errorf("shutdown HTTP server: %w", err))
-				logger.Warn("HTTP server graceful shutdown failed", "err", err)
-				if closeErr := bound.server.Close(); closeErr != nil {
-					shutdownErr = errors.Join(shutdownErr, fmt.Errorf("close HTTP server: %w", closeErr))
-					logger.Warn("HTTP server forced close failed", "err", closeErr)
-				}
-			}
-		}
-		for _, bound := range transports.ws {
-			if err := bound.server.Shutdown(ctx); err != nil {
-				shutdownErr = errors.Join(shutdownErr, fmt.Errorf("shutdown WebSocket HTTP server: %w", err))
-				logger.Warn("WebSocket HTTP server graceful shutdown failed", "err", err)
-				if closeErr := bound.server.Close(); closeErr != nil {
-					shutdownErr = errors.Join(shutdownErr, fmt.Errorf("close WebSocket HTTP server: %w", closeErr))
-					logger.Warn("WebSocket HTTP server forced close failed", "err", closeErr)
-				}
-			}
-		}
+	transportsStopped, err := shutdownTransports(ctx, transports, wsServer, logger)
+	if err != nil {
+		errs = append(errs, err)
+	}
+	if !transportsStopped {
+		errs = append(errs, errors.New("shutdown incomplete: dependencies left running because transport handlers did not stop"))
+		return errors.Join(errs...)
 	}
 
-	if wsServer != nil {
-		if err := wsServer.Close(ctx); err != nil {
-			shutdownErr = errors.Join(shutdownErr, fmt.Errorf("close WebSocket server: %w", err))
-			logger.Warn("WebSocket server shutdown timed out", "err", err)
-		}
-	}
-
-	if transports != nil && transports.grpc != nil {
-		logger.Info("Draining gRPC connections...")
-		stopped := make(chan struct{})
-		go func() {
-			transports.grpc.server.GracefulStop()
-			close(stopped)
-		}()
-		select {
-		case <-stopped:
-		case <-ctx.Done():
-			transports.grpc.server.Stop()
-			shutdownErr = errors.Join(shutdownErr, fmt.Errorf("drain gRPC server: %w", ctx.Err()))
-			logger.Warn("gRPC server graceful shutdown timed out; forced stop")
-		}
-	}
-	if transports != nil {
-		_ = transports.closeListeners()
-		transports.wait()
-	}
-
+	producersStopped := true
 	if rotator != nil {
-		rotator.Stop()
-		logger.Info("Online delete rotator stopped")
+		completed, err := runShutdownPhaseWithin(ctx, producerShutdownGrace, "stop online delete rotator", func() error {
+			rotator.Stop()
+			return nil
+		})
+		producersStopped = producersStopped && completed
+		if err != nil {
+			errs = append(errs, err)
+		} else {
+			logger.Info("Online delete rotator stopped")
+		}
 	}
-
 	if ledgerCleaner != nil {
-		ledgerCleaner.Stop()
-		logger.Info("Ledger cleaner stopped")
+		completed, err := runShutdownPhaseWithin(ctx, producerShutdownGrace, "stop ledger cleaner", func() error {
+			ledgerCleaner.Stop()
+			return nil
+		})
+		producersStopped = producersStopped && completed
+		if err != nil {
+			errs = append(errs, err)
+		} else {
+			logger.Info("Ledger cleaner stopped")
+		}
 	}
-
 	if consensusComponents != nil {
-		stopErr := consensusComponents.Stop()
-		if stopErr != nil {
-			shutdownErr = errors.Join(shutdownErr, fmt.Errorf("stop consensus components: %w", stopErr))
-			logger.Warn("Consensus component shutdown failed", "err", stopErr)
-			if consensusComponents.Archive != nil {
-				waitCtx, waitCancel := context.WithTimeout(context.Background(), 5*time.Second)
-				terminalErr := consensusComponents.Archive.Close(waitCtx)
-				waitCancel()
-				if terminalErr != nil && !errors.Is(stopErr, terminalErr) {
-					shutdownErr = errors.Join(shutdownErr, fmt.Errorf("close validation archive: %w", terminalErr))
+		completed, err := runShutdownPhaseWithin(ctx, producerShutdownGrace, "stop consensus components", consensusComponents.Stop)
+		producersStopped = producersStopped && completed
+		if err != nil {
+			errs = append(errs, err)
+			if completed && consensusComponents.Archive != nil {
+				archiveCtx, cancelArchive := context.WithTimeout(context.Background(), producerShutdownGrace)
+				terminalErr := consensusComponents.Archive.Close(archiveCtx)
+				cancelArchive()
+				if terminalErr != nil && !errors.Is(err, terminalErr) {
+					errs = append(errs, fmt.Errorf("close validation archive: %w", terminalErr))
 					logger.Warn("Validation archive terminal shutdown failed", "err", terminalErr)
 				}
 			}
@@ -1641,38 +1759,213 @@ func doShutdown(
 				)
 			}
 		}
-		logger.Info("Consensus components stopped")
+		if completed {
+			logger.Info("Consensus components stopped")
+		}
 	}
 
-	// Drain and join the persistence worker before closing its stores, so
-	// queued ledger persists become durable instead of being
-	// abandoned (and so no StoreBatch races kvDB.Close). Ordered after the
-	// consensus components stop, so no new ledger closes past this point.
-	if ledgerService != nil {
-		ledgerService.Stop()
-		logger.Info("Ledger service persistence drained")
+	if !producersStopped {
+		errs = append(errs, errors.New("shutdown incomplete: stores left open because producers did not stop"))
+		return errors.Join(errs...)
 	}
+
+	serviceStopped := true
+	if ledgerService != nil {
+		completed, err := runShutdownPhaseWithin(ctx, serviceShutdownGrace, "stop ledger service", func() error {
+			ledgerService.Stop()
+			return nil
+		})
+		serviceStopped = completed
+		if err != nil {
+			errs = append(errs, err)
+		} else {
+			logger.Info("Ledger service persistence drained")
+		}
+	}
+	if !serviceStopped {
+		errs = append(errs, errors.New("shutdown incomplete: stores left open because ledger service did not stop"))
+		return errors.Join(errs...)
+	}
+
 	if kvDB != nil {
-		if err := kvDB.Close(); err != nil {
-			shutdownErr = errors.Join(shutdownErr, fmt.Errorf("close node store: %w", err))
-			logger.Warn("Node store close failed", "err", err)
+		_, err := runShutdownPhaseWithin(ctx, storeShutdownGrace, "close node store", kvDB.Close)
+		if err != nil {
+			errs = append(errs, err)
 		}
 	}
 	if repoManager != nil {
-		if err := repoManager.Close(); err != nil {
-			shutdownErr = errors.Join(shutdownErr, fmt.Errorf("close relational DB: %w", err))
-			logger.Warn("Relational DB close failed", "err", err)
+		_, err := runShutdownPhaseWithin(ctx, storeShutdownGrace, "close relational database", repoManager.Close)
+		if err != nil {
+			errs = append(errs, err)
 		}
 	}
 
-	logger.Info("Shutdown complete")
+	shutdownErr := errors.Join(errs...)
+	if shutdownErr != nil {
+		logger.Warn("Shutdown completed with errors", "err", shutdownErr)
+	} else {
+		logger.Info("Shutdown complete")
+	}
 	return shutdownErr
+}
+
+func runShutdownPhase(ctx context.Context, name string, stop func() error) (bool, error) {
+	if err := context.Cause(ctx); err != nil {
+		return false, fmt.Errorf("%s: %w", name, err)
+	}
+	result := make(chan error, 1)
+	go func() { result <- stop() }()
+	select {
+	case err := <-result:
+		if err != nil {
+			return true, fmt.Errorf("%s: %w", name, err)
+		}
+		return true, nil
+	case <-ctx.Done():
+		return false, fmt.Errorf("%s: %w", name, context.Cause(ctx))
+	}
+}
+
+func runShutdownPhaseWithin(
+	ctx context.Context,
+	timeout time.Duration,
+	name string,
+	stop func() error,
+) (bool, error) {
+	phaseCtx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+	return runShutdownPhase(phaseCtx, name, stop)
+}
+
+func shutdownTransports(
+	ctx context.Context,
+	transports *boundRPCTransports,
+	wsServer *rpc.WebSocketServer,
+	logger xrpllog.Logger,
+) (bool, error) {
+	var errs []error
+	var servers []*http.Server
+	if transports != nil {
+		transports.stopRequests()
+		for _, bound := range transports.http {
+			servers = append(servers, bound.server)
+		}
+		for _, bound := range transports.ws {
+			servers = append(servers, bound.server)
+		}
+	}
+
+	type shutdownResult struct {
+		name string
+		err  error
+	}
+	graceCtx, cancelGrace := context.WithTimeout(ctx, transportShutdownGrace)
+	defer cancelGrace()
+
+	resultCount := len(servers)
+	if wsServer != nil {
+		resultCount++
+	}
+	if transports != nil && transports.grpc != nil {
+		resultCount++
+	}
+	results := make(chan shutdownResult, resultCount)
+	for _, server := range servers {
+		go func() {
+			results <- shutdownResult{
+				name: "drain HTTP server " + server.Addr,
+				err:  server.Shutdown(graceCtx),
+			}
+		}()
+	}
+	if wsServer != nil {
+		go func() {
+			results <- shutdownResult{name: "close WebSocket sessions", err: wsServer.Close(graceCtx)}
+		}()
+	}
+	if transports != nil && transports.grpc != nil {
+		logger.Info("Draining gRPC connections...")
+		go func() {
+			transports.grpc.server.GracefulStop()
+			results <- shutdownResult{name: "drain gRPC server"}
+		}()
+	}
+
+	graceful := true
+	for remaining := resultCount; remaining > 0; remaining-- {
+		select {
+		case result := <-results:
+			if result.err != nil {
+				graceful = false
+				errs = append(errs, fmt.Errorf("%s: %w", result.name, result.err))
+			}
+		case <-graceCtx.Done():
+			graceful = false
+			errs = append(errs, fmt.Errorf("drain transports: %w", context.Cause(graceCtx)))
+			remaining = 0
+		}
+	}
+
+	if !graceful {
+		for _, server := range servers {
+			if err := server.Close(); err != nil {
+				errs = append(errs, fmt.Errorf("force close HTTP server %s: %w", server.Addr, err))
+			}
+		}
+		if transports != nil && transports.grpc != nil {
+			transports.grpc.server.Stop()
+		}
+	}
+	if transports != nil {
+		if err := transports.closeListeners(); err != nil {
+			errs = append(errs, fmt.Errorf("close transport listeners: %w", err))
+		}
+	}
+
+	type joinResult struct {
+		name string
+		err  error
+	}
+	joinCount := 0
+	joined := make(chan joinResult, 3)
+	if transports != nil {
+		joinCount += 2
+		go func() {
+			transports.wait()
+			joined <- joinResult{name: "join transport servers"}
+		}()
+		go func() {
+			transports.waitRequests()
+			joined <- joinResult{name: "join transport handlers"}
+		}()
+	}
+	if wsServer != nil {
+		joinCount++
+		go func() {
+			joined <- joinResult{name: "join WebSocket sessions", err: wsServer.Close(ctx)}
+		}()
+	}
+	complete := true
+	for remaining := joinCount; remaining > 0; remaining-- {
+		select {
+		case result := <-joined:
+			if result.err != nil {
+				complete = false
+				errs = append(errs, fmt.Errorf("%s: %w", result.name, result.err))
+			}
+		case <-ctx.Done():
+			complete = false
+			errs = append(errs, fmt.Errorf("join transports: %w", context.Cause(ctx)))
+			remaining = 0
+		}
+	}
+	return complete, errors.Join(errs...)
 }
 
 // ledgerCleanerSource adapts the ledger service + node store to the
 // cleaner.LedgerSource interface the ledger-integrity verifier consumes.
 
-func buildTable(cfg config.AmendmentsConfig, repo relationaldb.RepositoryManager, log xrpllog.Logger) *amendment.Table {
+func buildTable(ctx context.Context, cfg config.AmendmentsConfig, repo relationaldb.RepositoryManager, log xrpllog.Logger) *amendment.Table {
 	t := amendment.NewTable()
 	for _, name := range cfg.Upvote {
 		f := amendment.FeatureByName(name)
@@ -1694,7 +1987,7 @@ func buildTable(cfg config.AmendmentsConfig, repo relationaldb.RepositoryManager
 	if repo == nil || repo.Amendment() == nil {
 		return t
 	}
-	recs, err := repo.Amendment().LoadAmendmentVotes(context.Background())
+	recs, err := repo.Amendment().LoadAmendmentVotes(ctx)
 	if err != nil {
 		log.Warn("failed to load persisted amendment votes; using config only", "err", err)
 		return t

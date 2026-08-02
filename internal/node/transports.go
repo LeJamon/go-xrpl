@@ -34,11 +34,14 @@ type boundHTTPServer struct {
 }
 
 type boundRPCTransports struct {
-	http    []*boundHTTPServer
-	ws      []*boundHTTPServer
-	grpc    *boundGRPCServer
-	errors  chan error
-	serveWG sync.WaitGroup
+	http      []*boundHTTPServer
+	ws        []*boundHTTPServer
+	grpc      *boundGRPCServer
+	errors    chan error
+	serveWG   sync.WaitGroup
+	requestMu sync.Mutex
+	requestWG sync.WaitGroup
+	stopping  bool
 }
 
 type serveReadyListener struct {
@@ -110,8 +113,13 @@ func bindRPCTransports(
 			return nil, parseErr
 		}
 		mux := http.NewServeMux()
-		mux.Handle("/", rpc.PortMiddleware(pc, connLimiter, wsServer))
-		srv := &http.Server{Addr: p.BindAddress(), Handler: mux, ReadHeaderTimeout: 10 * time.Second}
+		mux.Handle("/", bound.trackHandler(rpc.PortMiddleware(pc, connLimiter, wsServer)))
+		srv := &http.Server{
+			Addr:              p.BindAddress(),
+			Handler:           mux,
+			ReadHeaderTimeout: 10 * time.Second,
+			BaseContext:       func(net.Listener) context.Context { return ctx },
+		}
 		bound.ws = append(bound.ws, &boundHTTPServer{
 			name: name, protocol: "ws", address: srv.Addr, server: srv,
 		})
@@ -124,7 +132,7 @@ func bindRPCTransports(
 			return nil, parseErr
 		}
 		mux := http.NewServeMux()
-		mux.Handle("/", rpc.PortMiddleware(pc, connLimiter, httpMux))
+		mux.Handle("/", bound.trackHandler(rpc.PortMiddleware(pc, connLimiter, httpMux)))
 		srv := &http.Server{
 			Addr:              p.BindAddress(),
 			Handler:           mux,
@@ -132,6 +140,7 @@ func bindRPCTransports(
 			ReadTimeout:       httpReadTimeout,
 			WriteTimeout:      httpWriteTimeout,
 			IdleTimeout:       httpIdleTimeout,
+			BaseContext:       func(net.Listener) context.Context { return ctx },
 		}
 		bound.http = append(bound.http, &boundHTTPServer{
 			name: name, protocol: "http", address: srv.Addr, server: srv,
@@ -224,6 +233,43 @@ func (t *boundRPCTransports) serve(log xrpllog.Logger) error {
 func (t *boundRPCTransports) wait() {
 	if t != nil {
 		t.serveWG.Wait()
+	}
+}
+
+func (t *boundRPCTransports) trackHandler(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		t.requestMu.Lock()
+		if t.stopping {
+			t.requestMu.Unlock()
+			http.Error(w, "server shutting down", http.StatusServiceUnavailable)
+			return
+		}
+		t.requestWG.Add(1)
+		t.requestMu.Unlock()
+		defer t.requestWG.Done()
+
+		next.ServeHTTP(w, r)
+	})
+}
+
+func (t *boundRPCTransports) stopRequests() {
+	if t == nil {
+		return
+	}
+	t.requestMu.Lock()
+	t.stopping = true
+	t.requestMu.Unlock()
+	if t.grpc != nil {
+		t.grpc.stopRequests()
+	}
+}
+
+func (t *boundRPCTransports) waitRequests() {
+	if t != nil {
+		t.requestWG.Wait()
+		if t.grpc != nil {
+			t.grpc.waitRequests()
+		}
 	}
 }
 

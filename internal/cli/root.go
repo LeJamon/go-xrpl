@@ -32,6 +32,7 @@ type commandDependencies struct {
 	loadConfig func(config.Paths) (*config.Config, error)
 	httpClient *http.Client
 	runNode    nodeRunFunc
+	reload     <-chan os.Signal
 }
 
 type application struct {
@@ -130,8 +131,21 @@ func (a *application) requireConfig(skipValidators bool) (*config.Config, error)
 }
 
 func Run(ctx context.Context, args []string, streams IOStreams) int {
-	root := NewRootCommand(streams)
-	return executeRoot(ctx, root, args)
+	return runWithSignalSource(ctx, args, streams, systemProcessSignals)
+}
+
+func runWithSignalSource(
+	ctx context.Context,
+	args []string,
+	streams IOStreams,
+	source processSignalSource,
+) int {
+	signals := source(ctx)
+	defer signals.stop()
+	deps := defaultCommandDependencies()
+	deps.reload = signals.reload
+	root := newRootCommand(streams, deps)
+	return executeRoot(signals.ctx, root, args)
 }
 
 func executeRoot(ctx context.Context, root *cobra.Command, args []string) int {

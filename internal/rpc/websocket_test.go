@@ -140,7 +140,12 @@ func TestWebSocketServer_Close_RespectsContext(t *testing.T) {
 
 	// Inflate the WaitGroup so it never reaches zero on its own.
 	ws.wg.Add(1)
-	defer ws.wg.Done()
+	released := false
+	defer func() {
+		if !released {
+			ws.wg.Done()
+		}
+	}()
 
 	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
 	defer cancel()
@@ -154,6 +159,14 @@ func TestWebSocketServer_Close_RespectsContext(t *testing.T) {
 	}
 	if elapsed > 500*time.Millisecond {
 		t.Errorf("Close took too long despite ctx deadline: %v", elapsed)
+	}
+
+	ws.wg.Done()
+	released = true
+	joinCtx, cancelJoin := context.WithTimeout(context.Background(), time.Second)
+	defer cancelJoin()
+	if err := ws.Close(joinCtx); err != nil {
+		t.Fatalf("second Close did not join the in-flight shutdown: %v", err)
 	}
 }
 
