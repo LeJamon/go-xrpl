@@ -209,7 +209,7 @@ func TestAcceptedTransactionRejectsObjectTerminatorInAffectedNodes(t *testing.T)
 	require.NoError(t, err)
 	accepted := ParseAcceptedTransaction(bytes.Join([][]byte{txField, metaField}, nil))
 
-	require.ErrorContains(t, accepted.ParseError(), "illegal end-of-object marker in array")
+	require.ErrorContains(t, accepted.ParseError(), "Illegal terminator in array")
 	require.Equal(t, ter.TemMALFORMED, accepted.Result())
 	_, hasIndex := accepted.TransactionIndex()
 	require.False(t, hasIndex)

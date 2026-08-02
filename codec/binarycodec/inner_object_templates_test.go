@@ -135,7 +135,7 @@ func TestDecodeBytesValidatesInnerObjectTemplates(t *testing.T) {
 
 func TestDecodeBytesRejectsObjectEndMarkerAtArrayScope(t *testing.T) {
 	_, err := DecodeBytes([]byte{0xF8, 0xE1})
-	require.ErrorContains(t, err, "illegal end-of-object marker in array")
+	require.ErrorContains(t, err, "Illegal terminator in array")
 }
 
 func TestDecodeBytesAllowsUntemplatedObjectWrapper(t *testing.T) {

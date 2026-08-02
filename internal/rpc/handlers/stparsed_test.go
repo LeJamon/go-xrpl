@@ -202,6 +202,25 @@ func TestSerializedFieldParseMessageRejectsInvalidArrayWrappers(t *testing.T) {
 	}
 }
 
+func TestSerializedFieldParseMessageCanonicalizesNullInnerObjects(t *testing.T) {
+	direct := map[string]any{"Memo": nil}
+	if message := serializedFieldParseMessage(direct, "tx_json", binarycodecdefs.Get()); message != "" {
+		t.Fatalf("direct message = %q", message)
+	}
+	if !reflect.DeepEqual(direct["Memo"], map[string]any{}) {
+		t.Fatalf("direct Memo = %#v, want empty object", direct["Memo"])
+	}
+
+	wrapper := map[string]any{"Memo": nil}
+	array := map[string]any{"Memos": []any{wrapper}}
+	if message := serializedFieldParseMessage(array, "tx_json", binarycodecdefs.Get()); message != "" {
+		t.Fatalf("array message = %q", message)
+	}
+	if !reflect.DeepEqual(wrapper["Memo"], map[string]any{}) {
+		t.Fatalf("array Memo = %#v, want empty object", wrapper["Memo"])
+	}
+}
+
 func TestSerializedFieldParseMessageCanonicalizesInnerDiscardable(t *testing.T) {
 	entry := map[string]any{
 		"Account":      "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh",

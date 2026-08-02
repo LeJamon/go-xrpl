@@ -61,12 +61,16 @@ func (t *STObject) FromJSON(json any) ([]byte, error) {
 
 		st := SerializedTypeFor(v.Type)
 		setSkipJSONArrayLimit(st, t.skipJSONArrayLimit)
+		fieldValue := fimap[v]
+		if v.Type == "STObject" && fieldValue == nil {
+			fieldValue = map[string]any{}
+		}
 		if !t.skipJSONArrayLimit {
-			if err := checkJSONArraySize(v.FieldName, v.Type, fimap[v]); err != nil {
+			if err := checkJSONArraySize(v.FieldName, v.Type, fieldValue); err != nil {
 				return nil, err
 			}
 		}
-		b, err := st.FromJSON(fimap[v])
+		b, err := st.FromJSON(fieldValue)
 		if err != nil {
 			return nil, err
 		}

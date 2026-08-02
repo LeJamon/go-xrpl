@@ -38,6 +38,13 @@ func TestSTArrayFromJson(t *testing.T) {
 			expectedErr: ErrNotSTObjectInSTArray,
 		},
 		{
+			name: "pass - null wrapper is an empty stobject",
+			input: []any{map[string]any{
+				"Memo": nil,
+			}},
+			expectedOutput: []byte{0xEA, 0xE1, 0xF1},
+		},
+		{
 			name: "pass - nested stobject test",
 			input: []any{
 				map[string]any{

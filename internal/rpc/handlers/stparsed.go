@@ -37,10 +37,11 @@ func serializedFieldParseMessage(value any, path string, defs *binarycodecdefs.D
 		fieldPath := path + "." + name
 		switch field.Type {
 		case "STObject":
-			child, ok := fieldValue.(map[string]any)
+			child, ok := parsedInnerObject(fieldValue)
 			if !ok {
 				return fmt.Sprintf("Field '%s' is not a JSON object.", fieldPath)
 			}
+			object[name] = child
 			if message := serializedFieldParseMessage(child, fieldPath, defs); message != "" {
 				return message
 			}
@@ -70,12 +71,13 @@ func serializedFieldParseMessage(value any, path string, defs *binarycodecdefs.D
 				if err != nil {
 					return fmt.Sprintf("Field '%s.%s' is unknown.", fieldPath, wrapperName)
 				}
-				wrapperObject, ok := wrapperValue.(map[string]any)
+				wrapperObject, ok := parsedInnerObject(wrapperValue)
 				if !ok {
 					return fmt.Sprintf(
 						"Field '%s[%d]' must be an object with a single key/object value.",
 						fieldPath, i)
 				}
+				itemObject[wrapperName] = wrapperObject
 				itemPath := fmt.Sprintf("%s.[%d].%s", fieldPath, i, wrapperName)
 				if message := serializedFieldParseMessage(wrapperObject, itemPath, defs); message != "" {
 					return fmt.Sprintf("Error at '%s'. %s", itemPath, message)
@@ -101,6 +103,14 @@ func serializedFieldParseMessage(value any, path string, defs *binarycodecdefs.D
 	}
 
 	return ""
+}
+
+func parsedInnerObject(value any) (map[string]any, bool) {
+	if value == nil {
+		return map[string]any{}, true
+	}
+	object, ok := value.(map[string]any)
+	return object, ok
 }
 
 func validateSerializedLeaf(
