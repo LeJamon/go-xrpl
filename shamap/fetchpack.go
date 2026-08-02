@@ -1,5 +1,7 @@
 package shamap
 
+import "context"
+
 // FetchPackNode is a single SHAMap tree node packaged for a fetch-pack: its
 // node hash (the TMIndexedObject.hash carried on the wire) and its prefix
 // serialization (SerializeWithPrefix — the [HashPrefix][body] blob whose
@@ -44,38 +46,192 @@ func (sm *SHAMap) WalkFetchPackNodes(maxNodes int) ([]FetchPackNode, error) {
 		return nil, nil
 	}
 	out := make([]FetchPackNode, 0, maxNodes)
-	if err := walkFetchPackRec(sm.tree.root, maxNodes, &out); err != nil {
+	if err := walkFetchPackDifferences(context.Background(), sm, nil, sm.tree.root, nil, maxNodes, 0, nil, nil, &out); err != nil {
 		return nil, err
 	}
 	return out, nil
 }
 
-func walkFetchPackRec(node mapNode, maxNodes int, out *[]FetchPackNode) error {
-	if node == nil || len(*out) >= maxNodes {
+// WalkFetchPackNodesContext is the cancellation-aware form of
+// WalkFetchPackNodes used by bounded peer serving.
+func (sm *SHAMap) WalkFetchPackNodesContext(ctx context.Context, maxNodes int) ([]FetchPackNode, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if sm == nil || maxNodes <= 0 {
+		return nil, nil
+	}
+	sm.tree.mu.RLock()
+	defer sm.tree.mu.RUnlock()
+	if sm.tree.root == nil || !sm.tree.root.HasChildren() {
+		return nil, nil
+	}
+	out := make([]FetchPackNode, 0, maxNodes)
+	if err := walkFetchPackDifferences(ctx, sm, nil, sm.tree.root, nil, maxNodes, 0, nil, nil, &out); err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+// WalkFetchPackDifferences returns the nodes present in sm but not already
+// represented by have. Shared subtrees are skipped by hash, while changed
+// inner nodes and their descendants are serialized with the same prefix used
+// by fetch-pack wire objects. Traversal is bounded and cancellation-aware.
+func (sm *SHAMap) WalkFetchPackDifferences(ctx context.Context, have *SHAMap, maxNodes int) ([]FetchPackNode, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if maxNodes <= 0 || sm == nil {
+		return nil, nil
+	}
+	sm.tree.mu.RLock()
+	defer sm.tree.mu.RUnlock()
+	if sm.tree.root == nil || !sm.tree.root.HasChildren() {
+		return nil, nil
+	}
+	var haveRoot mapNode
+	sharedTree := have != nil && sm == have
+	if have != nil {
+		if !sharedTree {
+			have.tree.mu.RLock()
+			defer have.tree.mu.RUnlock()
+		}
+		haveRoot = have.tree.root
+	}
+	out := make([]FetchPackNode, 0, maxNodes)
+	if err := walkFetchPackDifferences(ctx, sm, have, sm.tree.root, haveRoot, maxNodes, 0, nil, nil, &out); err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+// WalkFetchPackNodesContextBounded is WalkFetchPackNodesContext with an
+// aggregate serialization budget. complete is false when the byte limit stops
+// traversal before the node-count limit does.
+func (sm *SHAMap) WalkFetchPackNodesContextBounded(ctx context.Context, maxNodes int, maxBytes int64) ([]FetchPackNode, bool, error) {
+	return sm.walkFetchPackDifferencesBounded(ctx, nil, maxNodes, maxBytes)
+}
+
+// WalkFetchPackDifferencesBounded is WalkFetchPackDifferences with an aggregate
+// serialization budget. complete is false when another differing node exists
+// but cannot fit.
+func (sm *SHAMap) WalkFetchPackDifferencesBounded(ctx context.Context, have *SHAMap, maxNodes int, maxBytes int64) ([]FetchPackNode, bool, error) {
+	return sm.walkFetchPackDifferencesBounded(ctx, have, maxNodes, maxBytes)
+}
+
+func (sm *SHAMap) walkFetchPackDifferencesBounded(ctx context.Context, have *SHAMap, maxNodes int, maxBytes int64) ([]FetchPackNode, bool, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if sm == nil || maxNodes <= 0 || maxBytes <= 0 {
+		return nil, false, nil
+	}
+	sm.tree.mu.RLock()
+	defer sm.tree.mu.RUnlock()
+	if sm.tree.root == nil || !sm.tree.root.HasChildren() {
+		return nil, true, nil
+	}
+	var haveRoot mapNode
+	sharedTree := have != nil && sm == have
+	if have != nil {
+		if !sharedTree {
+			have.tree.mu.RLock()
+			defer have.tree.mu.RUnlock()
+		}
+		haveRoot = have.tree.root
+	}
+	out := make([]FetchPackNode, 0, maxNodes)
+	used := int64(0)
+	complete := true
+	if err := walkFetchPackDifferences(ctx, sm, have, sm.tree.root, haveRoot, maxNodes, maxBytes, &used, &complete, &out); err != nil {
+		return nil, false, err
+	}
+	return out, complete, nil
+}
+
+func walkFetchPackDifferences(
+	ctx context.Context,
+	wantMap, haveMap *SHAMap,
+	want, have mapNode,
+	maxNodes int,
+	maxBytes int64,
+	used *int64,
+	complete *bool,
+	out *[]FetchPackNode,
+) error {
+	if want == nil || len(*out) >= maxNodes || complete != nil && !*complete {
 		return nil
 	}
-	data, err := node.SerializeWithPrefix()
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	default:
+	}
+	if have != nil && want.Hash() == have.Hash() {
+		return nil
+	}
+	data, err := want.SerializeWithPrefix()
 	if err != nil {
 		return err
 	}
-	*out = append(*out, FetchPackNode{Hash: node.Hash(), Data: data})
-
-	inner, ok := node.(*innerNode)
+	if maxBytes > 0 && int64(len(data)) > maxBytes-*used {
+		*complete = false
+		return nil
+	}
+	*out = append(*out, FetchPackNode{Hash: want.Hash(), Data: data})
+	if used != nil {
+		*used += int64(len(data))
+	}
+	if len(*out) >= maxNodes {
+		return nil
+	}
+	wantInner, ok := want.(*innerNode)
 	if !ok {
 		return nil
 	}
-	inner.mu.RLock()
-	defer inner.mu.RUnlock()
-	for branch := 0; branch < BranchFactor; branch++ {
-		if len(*out) >= maxNodes {
-			break
-		}
-		child := inner.children[branch]
-		if child == nil {
+	var haveInner *innerNode
+	if candidate, ok := have.(*innerNode); ok {
+		haveInner = candidate
+	}
+	for branch := range BranchFactor {
+		child, wantHash, present := wantInner.LoadChild(branch)
+		if !present {
 			continue
 		}
-		if err := walkFetchPackRec(child, maxNodes, out); err != nil {
+		var haveChild mapNode
+		if haveInner != nil {
+			var haveHash [32]byte
+			var havePresent bool
+			haveChild, haveHash, havePresent = haveInner.LoadChild(branch)
+			if child != nil {
+				wantHash = child.Hash()
+			}
+			if haveChild != nil {
+				haveHash = haveChild.Hash()
+			}
+			if havePresent && haveHash == wantHash {
+				continue
+			}
+			if havePresent && haveChild == nil {
+				var err error
+				haveChild, err = haveMap.descendCtx(ctx, haveInner, branch)
+				if err != nil {
+					return err
+				}
+			}
+		}
+		if child == nil {
+			var err error
+			child, err = wantMap.descendCtx(ctx, wantInner, branch)
+			if err != nil {
+				return err
+			}
+		}
+		if err := walkFetchPackDifferences(ctx, wantMap, haveMap, child, haveChild, maxNodes, maxBytes, used, complete, out); err != nil {
 			return err
+		}
+		if len(*out) >= maxNodes || complete != nil && !*complete {
+			return nil
 		}
 	}
 	return nil
