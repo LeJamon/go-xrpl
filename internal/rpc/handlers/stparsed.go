@@ -71,11 +71,19 @@ func serializedFieldParseMessage(value any, path string, defs *binarycodecdefs.D
 				if err != nil {
 					return fmt.Sprintf("Field '%s.%s' is unknown.", fieldPath, wrapperName)
 				}
-				wrapperObject, ok := parsedInnerObject(wrapperValue)
-				if !ok {
-					return fmt.Sprintf(
-						"Field '%s[%d]' must be an object with a single key/object value.",
-						fieldPath, i)
+				var wrapperObject map[string]any
+				if wrapperValue == nil {
+					wrapperObject = map[string]any{}
+				} else {
+					wrapperObject, ok = wrapperValue.(map[string]any)
+					if !ok {
+						return fmt.Sprintf(
+							"Field '%s[%d]' must be an object with a single key/object value.",
+							fieldPath, i)
+					}
+					if wrapperObject == nil {
+						wrapperObject = map[string]any{}
+					}
 				}
 				itemObject[wrapperName] = wrapperObject
 				itemPath := fmt.Sprintf("%s.[%d].%s", fieldPath, i, wrapperName)
@@ -106,11 +114,8 @@ func serializedFieldParseMessage(value any, path string, defs *binarycodecdefs.D
 }
 
 func parsedInnerObject(value any) (map[string]any, bool) {
-	if value == nil {
-		return map[string]any{}, true
-	}
 	object, ok := value.(map[string]any)
-	return object, ok
+	return object, ok && object != nil
 }
 
 func validateSerializedLeaf(

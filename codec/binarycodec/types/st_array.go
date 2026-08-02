@@ -48,12 +48,21 @@ func (t *STArray) FromJSON(json any) ([]byte, error) {
 		if !ok || len(object) != 1 {
 			return nil, ErrNotSTObjectInSTArray
 		}
-		for fieldName := range object {
-			field, err := definitions.Get().FieldInstanceByName(fieldName)
-			if err != nil || field.Type != "STObject" {
-				return nil, ErrNotSTObjectInSTArray
-			}
+		var fieldName string
+		var fieldValue any
+		for fieldName, fieldValue = range object {
 		}
+		field, err := definitions.Get().FieldInstanceByName(fieldName)
+		if err != nil || field.Type != "STObject" {
+			return nil, ErrNotSTObjectInSTArray
+		}
+		inner, ok := fieldValue.(map[string]any)
+		if fieldValue == nil || (ok && inner == nil) {
+			inner = map[string]any{}
+		} else if !ok {
+			return nil, ErrNotSTObjectInSTArray
+		}
+		object = map[string]any{fieldName: inner}
 		st := NewSTObject(serdes.NewBinarySerializer(serdes.DefaultFieldIDCodec()))
 		st.skipJSONArrayLimit = t.skipJSONArrayLimit
 		b, err := st.FromJSON(object)

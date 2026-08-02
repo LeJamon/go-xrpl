@@ -61,7 +61,6 @@ func (p *serverStatusPublisher) statusPublication(mode *string) service.ServerSt
 func (p *serverStatusPublisher) modePublication(mode string) service.ServerStatusPublication {
 	return p.statusPublication(&mode)
 }
-
 func (p *serverStatusPublisher) capture(mode *string) (serverStatusSnapshot, *rpc.ServerStatusEvent) {
 	if p == nil || p.services == nil || p.services.Ledger == nil || p.publisher == nil {
 		return serverStatusSnapshot{}, nil

@@ -202,16 +202,19 @@ func TestSerializedFieldParseMessageRejectsInvalidArrayWrappers(t *testing.T) {
 	}
 }
 
-func TestSerializedFieldParseMessageCanonicalizesNullInnerObjects(t *testing.T) {
+func TestSerializedFieldParseMessageNullInnerObjectSemantics(t *testing.T) {
 	direct := map[string]any{"Memo": nil}
-	if message := serializedFieldParseMessage(direct, "tx_json", binarycodecdefs.Get()); message != "" {
-		t.Fatalf("direct message = %q", message)
+	want := "Field 'tx_json.Memo' is not a JSON object."
+	if message := serializedFieldParseMessage(direct, "tx_json", binarycodecdefs.Get()); message != want {
+		t.Fatalf("direct message = %q, want %q", message, want)
 	}
-	if !reflect.DeepEqual(direct["Memo"], map[string]any{}) {
-		t.Fatalf("direct Memo = %#v, want empty object", direct["Memo"])
+	var typedNil map[string]any
+	direct = map[string]any{"Memo": typedNil}
+	if message := serializedFieldParseMessage(direct, "tx_json", binarycodecdefs.Get()); message != want {
+		t.Fatalf("typed-nil direct message = %q, want %q", message, want)
 	}
 
-	wrapper := map[string]any{"Memo": nil}
+	wrapper := map[string]any{"Memo": typedNil}
 	array := map[string]any{"Memos": []any{wrapper}}
 	if message := serializedFieldParseMessage(array, "tx_json", binarycodecdefs.Get()); message != "" {
 		t.Fatalf("array message = %q", message)

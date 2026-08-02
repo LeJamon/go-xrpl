@@ -3,12 +3,15 @@ package binarycodec
 import (
 	"testing"
 
+	"github.com/LeJamon/go-xrpl/codec/binarycodec/definitions"
+	"github.com/LeJamon/go-xrpl/codec/binarycodec/serdes"
+	binarycodectypes "github.com/LeJamon/go-xrpl/codec/binarycodec/types"
 	"github.com/stretchr/testify/require"
 )
 
 const innerTemplateTestAccount = "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh"
 
-func TestDecodeBytesValidatesInnerObjectTemplates(t *testing.T) {
+func TestEncodeAndDecodeBytesValidatesInnerObjectTemplates(t *testing.T) {
 	tests := []struct {
 		name      string
 		object    map[string]any
@@ -37,6 +40,18 @@ func TestDecodeBytesValidatesInnerObjectTemplates(t *testing.T) {
 			wantError: "Field 'Amount' found in disallowed location.",
 		},
 		{
+			name: "tagged X-address adds disallowed inner field",
+			object: map[string]any{
+				"SignerEntries": []any{map[string]any{
+					"SignerEntry": map[string]any{
+						"Account":      "XVYRdEocC28DRx94ZFGP3qNJ1D5Ln7kXKTG5X57UCKzEwYx",
+						"SignerWeight": 1,
+					},
+				}},
+			},
+			wantError: "Field 'SourceTag' found in disallowed location.",
+		},
+		{
 			name: "PriceData missing required QuoteAsset",
 			object: map[string]any{
 				"PriceDataSeries": []any{map[string]any{
@@ -52,7 +67,7 @@ func TestDecodeBytesValidatesInnerObjectTemplates(t *testing.T) {
 					"PriceData": map[string]any{
 						"BaseAsset":  "XRP",
 						"QuoteAsset": "USD",
-						"Scale":      0,
+						"Scale":      float64(0),
 					},
 				}},
 			},
@@ -119,18 +134,57 @@ func TestDecodeBytesValidatesInnerObjectTemplates(t *testing.T) {
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			blob, err := EncodeBytes(test.object)
+			if test.wantError != "" {
+				require.ErrorContains(t, err, test.wantError)
+				require.Nil(t, blob)
+				return
+			}
 			require.NoError(t, err)
 
 			decoded, err := DecodeBytes(blob)
-			if test.wantError != "" {
-				require.ErrorContains(t, err, test.wantError)
-				require.Nil(t, decoded)
-				return
-			}
 			require.NoError(t, err)
 			require.NotNil(t, decoded)
 		})
 	}
+}
+
+func TestDecodeBytesValidatesInnerObjectTemplates(t *testing.T) {
+	child, err := EncodeBytes(map[string]any{"Account": innerTemplateTestAccount})
+	require.NoError(t, err)
+
+	wrapper := serdes.NewBinarySerializer(serdes.DefaultFieldIDCodec())
+	signerEntry, err := definitions.Get().FieldInstanceByName("SignerEntry")
+	require.NoError(t, err)
+	require.NoError(t, wrapper.WriteFieldAndValue(*signerEntry, child))
+
+	arrayValue := append(append([]byte(nil), wrapper.Bytes()...), binarycodectypes.ArrayEndMarker)
+	outer := serdes.NewBinarySerializer(serdes.DefaultFieldIDCodec())
+	signerEntries, err := definitions.Get().FieldInstanceByName("SignerEntries")
+	require.NoError(t, err)
+	require.NoError(t, outer.WriteFieldAndValue(*signerEntries, arrayValue))
+
+	decoded, err := DecodeBytes(outer.Bytes())
+	require.ErrorContains(t, err, "Field 'SignerWeight' is required but missing.")
+	require.Nil(t, decoded)
+}
+
+func TestEncodeBytesNullInnerObjectSemantics(t *testing.T) {
+	blob, err := EncodeBytes(map[string]any{"CounterpartySignature": nil})
+	require.Error(t, err)
+	require.Nil(t, blob)
+
+	var typedNil map[string]any
+	blob, err = EncodeBytes(map[string]any{"Memo": typedNil})
+	require.Error(t, err)
+	require.Nil(t, blob)
+
+	blob, err = EncodeBytes(map[string]any{
+		"Memos": []any{map[string]any{"Memo": typedNil}},
+	})
+	require.NoError(t, err)
+	decoded, err := DecodeBytes(blob)
+	require.NoError(t, err)
+	require.Equal(t, map[string]any{}, decoded["Memos"].([]any)[0].(map[string]any)["Memo"])
 }
 
 func TestDecodeBytesRejectsObjectEndMarkerAtArrayScope(t *testing.T) {

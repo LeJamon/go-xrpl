@@ -152,10 +152,9 @@ func TestBuildValidatedTransactionEventRejectsCorruptLeaf(t *testing.T) {
 	}
 }
 
-func TestPrepareAcceptedPublicationsSkipsOnlyCorruptRecords(t *testing.T) {
+func TestPrepareAcceptedPublicationsRejectsWholeLedger(t *testing.T) {
 	ledgerHash := [32]byte{0xAB}
-	goodData := validatedPaymentData(t, 0, 4)
-	goodAccepted := service.ParseAcceptedTransaction(goodData)
+	goodAccepted := service.ParseAcceptedTransaction(validatedPaymentData(t, 0, 4))
 	require.NoError(t, goodAccepted.ParseError())
 	corruptAccepted := service.ParseAcceptedTransaction([]byte("corrupt"))
 	require.Error(t, corruptAccepted.ParseError())
@@ -170,16 +169,15 @@ func TestPrepareAcceptedPublicationsSkipsOnlyCorruptRecords(t *testing.T) {
 		TransactionResults: []service.TransactionResultEvent{
 			{
 				TxHash:      [32]byte{1},
-				TxData:      goodData,
-				Accepted:    corruptAccepted,
+				TxData:      []byte("must not be decoded again"),
+				Accepted:    goodAccepted,
 				Validated:   true,
 				LedgerIndex: 9,
 				LedgerHash:  ledgerHash,
 			},
 			{
 				TxHash:      [32]byte{2},
-				TxData:      []byte("must not be decoded again"),
-				Accepted:    goodAccepted,
+				Accepted:    corruptAccepted,
 				Validated:   true,
 				LedgerIndex: 9,
 				LedgerHash:  ledgerHash,
@@ -187,15 +185,10 @@ func TestPrepareAcceptedPublicationsSkipsOnlyCorruptRecords(t *testing.T) {
 		},
 	}
 
-	publications, bookTransactions, failures := prepareAcceptedPublications(event, 0)
-	require.Len(t, failures, 1)
-	require.Equal(t, [32]byte{1}, failures[0].hash)
-	require.Len(t, publications, 1)
-	wantHash := [32]byte{2}
-	require.Equal(t, upperHex(wantHash[:]), publications[0].event.Hash)
-	require.Equal(t, ter.TecUNFUNDED_PAYMENT, publications[0].engineResult)
-	require.Len(t, bookTransactions, 1)
-	require.Empty(t, acceptedOrderBookPairs(publications[0]))
+	publications, bookTransactions, err := prepareAcceptedPublications(event, 0)
+	require.Error(t, err)
+	require.Nil(t, publications)
+	require.Nil(t, bookTransactions)
 }
 
 func validatedPaymentData(t *testing.T, networkID, transactionIndex uint32) []byte {

@@ -4,6 +4,7 @@ package types
 import (
 	"encoding/binary"
 	"fmt"
+	"math"
 
 	"github.com/LeJamon/go-xrpl/codec/binarycodec/definitions"
 	"github.com/LeJamon/go-xrpl/codec/binarycodec/serdes"
@@ -27,24 +28,35 @@ func (u *UInt16) FromJSON(value any) ([]byte, error) {
 		value = int(tc)
 	}
 
-	var val uint16
+	var intValue uint64
 	switch v := value.(type) {
 	case int:
-		val = uint16(v)
+		if v < 0 {
+			return nil, fmt.Errorf("value %d out of range for UInt16", v)
+		}
+		intValue = uint64(v)
 	case int64:
-		val = uint16(v)
+		if v < 0 {
+			return nil, fmt.Errorf("value %d out of range for UInt16", v)
+		}
+		intValue = uint64(v)
 	case uint16:
-		val = v
+		intValue = uint64(v)
 	case uint32:
-		val = uint16(v)
+		intValue = uint64(v)
 	case float64:
-		val = uint16(v)
+		if math.IsNaN(v) || math.IsInf(v, 0) || v < 0 || v > math.MaxUint16 || math.Trunc(v) != v {
+			return nil, fmt.Errorf("value %v out of range for UInt16", v)
+		}
+		intValue = uint64(v)
 	default:
 		return nil, fmt.Errorf("unsupported type %T for UInt16", value)
 	}
-
+	if intValue > math.MaxUint16 {
+		return nil, fmt.Errorf("value %d out of range for UInt16", intValue)
+	}
 	var out [2]byte
-	binary.BigEndian.PutUint16(out[:], val)
+	binary.BigEndian.PutUint16(out[:], uint16(intValue))
 	return out[:], nil
 }
 

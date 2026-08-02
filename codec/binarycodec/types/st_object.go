@@ -23,6 +23,7 @@ const maxNestingDepth = 10
 type STObject struct {
 	binarySerializer   *serdes.BinarySerializer
 	skipJSONArrayLimit bool
+	innerTemplateField string
 }
 
 // NewSTObject returns a new STObject with the given binary serializer.
@@ -51,6 +52,22 @@ func (t *STObject) FromJSON(json any) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
+	if t.innerTemplateField != "" {
+		values := make(map[string]any, len(fimap))
+		fieldOrder := make([]string, 0, len(fimap))
+		for field, value := range fimap {
+			if isDiscardableInnerField(field.FieldName) {
+				delete(fimap, field)
+				continue
+			}
+			values[field.FieldName] = value
+			fieldOrder = append(fieldOrder, field.FieldName)
+		}
+		sort.Strings(fieldOrder)
+		if err := validateInnerObject(t.innerTemplateField, values, fieldOrder); err != nil {
+			return nil, err
+		}
+	}
 
 	sk := getSortedKeys(fimap)
 
@@ -62,8 +79,12 @@ func (t *STObject) FromJSON(json any) ([]byte, error) {
 		st := SerializedTypeFor(v.Type)
 		setSkipJSONArrayLimit(st, t.skipJSONArrayLimit)
 		fieldValue := fimap[v]
-		if v.Type == "STObject" && fieldValue == nil {
-			fieldValue = map[string]any{}
+		if v.Type == "STObject" {
+			object, ok := fieldValue.(map[string]any)
+			if !ok || object == nil {
+				return nil, errNotValidJSON
+			}
+			st.(*STObject).innerTemplateField = v.FieldName
 		}
 		if !t.skipJSONArrayLimit {
 			if err := checkJSONArraySize(v.FieldName, v.Type, fieldValue); err != nil {

@@ -126,11 +126,6 @@ type acceptedPublication struct {
 	engineResult ter.Result
 }
 
-type acceptedProjectionFailure struct {
-	hash [32]byte
-	err  error
-}
-
 func projectAcceptedTransaction(
 	accepted *service.AcceptedTransaction,
 	ctx handlers.SyntheticMetadataContext,
@@ -168,26 +163,23 @@ func projectTransactionResult(
 func prepareAcceptedPublications(
 	event *service.LedgerAcceptedEvent,
 	defaultNetworkID uint32,
-) ([]acceptedPublication, []handlers.BookChangesTransaction, []acceptedProjectionFailure) {
+) ([]acceptedPublication, []handlers.BookChangesTransaction, error) {
 	if event == nil || event.LedgerInfo == nil {
 		return nil, nil, nil
 	}
 	publications := make([]acceptedPublication, 0, len(event.TransactionResults))
 	bookTransactions := make([]handlers.BookChangesTransaction, 0, len(event.TransactionResults))
-	var failures []acceptedProjectionFailure
 	for _, txResult := range event.TransactionResults {
 		projection, err := projectTransactionResult(txResult, handlers.SyntheticMetadataContext{
 			LedgerSequence: txResult.LedgerIndex,
 			CloseTime:      rippleEpochSeconds(event.LedgerInfo.CloseTime),
 		})
 		if err != nil {
-			failures = append(failures, acceptedProjectionFailure{hash: txResult.TxHash, err: err})
-			continue
+			return nil, nil, fmt.Errorf("project accepted transaction %s: %w", upperHex(txResult.TxHash[:]), err)
 		}
 		txEvent, engineResult, err := buildProjectedValidatedTransactionEvent(txResult, projection, event, defaultNetworkID)
 		if err != nil {
-			failures = append(failures, acceptedProjectionFailure{hash: txResult.TxHash, err: err})
-			continue
+			return nil, nil, fmt.Errorf("build accepted transaction %s: %w", upperHex(txResult.TxHash[:]), err)
 		}
 		bookTransactions = append(bookTransactions, handlers.BookChangesTransaction{
 			Transaction: projection.transaction,
@@ -199,7 +191,7 @@ func prepareAcceptedPublications(
 			engineResult: engineResult,
 		})
 	}
-	return publications, bookTransactions, failures
+	return publications, bookTransactions, nil
 }
 
 func acceptedOrderBookPairs(publication acceptedPublication) []types.OrderBookSpec {

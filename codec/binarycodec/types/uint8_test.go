@@ -66,6 +66,14 @@ func TestUint8_FromJson(t *testing.T) {
 	}
 }
 
+func TestUint8FromJSONRejectsNonCanonicalNumbers(t *testing.T) {
+	for _, value := range []any{-1, 256, float64(0.5), float64(256)} {
+		if encoded, err := (&UInt8{}).FromJSON(value); err == nil || encoded != nil {
+			t.Fatalf("FromJSON(%v) = %v, %v; want error", value, encoded, err)
+		}
+	}
+}
+
 func TestUint8_ToJson(t *testing.T) {
 	tt := []struct {
 		name        string

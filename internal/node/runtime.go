@@ -905,9 +905,13 @@ func (r *nodeRuntime) bindStreams() error {
 	}
 
 	// Wire up ledger service events to WebSocket broadcasts
-	r.ledger.SetEventSink(service.EventSinkFunc(func(event *service.LedgerAcceptedEvent) {
+	r.ledger.SetEventSink(service.EventSinkFunc(func(event *service.LedgerAcceptedEvent) error {
 		if event == nil || event.LedgerInfo == nil {
-			return
+			return nil
+		}
+		publications, bookTransactions, err := prepareAcceptedPublications(event, r.networkID)
+		if err != nil {
+			return err
 		}
 
 		// Drive online-delete rotation off the validated-ledger advance. The
@@ -921,15 +925,9 @@ func (r *nodeRuntime) bindStreams() error {
 		serverInfo := r.ledger.GetServerInfo()
 		ledgerCloseEvent := buildLedgerCloseEvent(event, serverInfo)
 		if ledgerCloseEvent == nil {
-			r.serverLog.Error("Skipping accepted ledger event without source ledger", "sequence", event.LedgerInfo.Sequence)
-			return
+			return fmt.Errorf("accepted ledger event %d has no source ledger", event.LedgerInfo.Sequence)
 		}
 		r.publisher.PublishLedgerClosed(ledgerCloseEvent)
-
-		publications, bookTransactions, failures := prepareAcceptedPublications(event, r.networkID)
-		for _, failure := range failures {
-			r.serverLog.Error("Skipping corrupt accepted transaction", "hash", upperHex(failure.hash[:]), "err", failure.err)
-		}
 
 		// pubBookChanges → book_changes aggregate stream
 		// (Subscribe.cpp:139-142 + NetworkOPs.cpp:3160-3174). Feed the
@@ -961,6 +959,7 @@ func (r *nodeRuntime) bindStreams() error {
 			"sequence", event.LedgerInfo.Sequence,
 			"txs", len(event.TransactionResults),
 		)
+		return nil
 	}))
 
 	if !r.standalone && r.appConfig.Watchdog.IsEnabled() {

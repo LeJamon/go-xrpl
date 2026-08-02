@@ -212,6 +212,8 @@ func isDefaultInnerValue(value any) bool {
 		return value == 0
 	case uint64:
 		return value == 0
+	case float64:
+		return value == 0
 	default:
 		return false
 	}
