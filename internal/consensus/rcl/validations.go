@@ -155,13 +155,8 @@ type ValidationTracker struct {
 	trusted map[consensus.NodeID]bool
 
 	// negUNL is the set of validators disabled via the negative-UNL
-	// mechanism. They do NOT count toward the full-validation quorum for
-	// a ledger, nor toward the quorum/peer-LCL support the engine reads
-	// via the quorum/support read paths — matching rippled, which filters negative-UNL
-	// entries before every quorum comparison. They DO still steer
-	// preferred-ledger selection through the trie: rippled's updateTrie
-	// gates only on trusted(), so a deemed-offline validator still
-	// contributes branch support to GetPreferred / getNodesAfter.
+	// mechanism. They are excluded from full-validation quorum counts but
+	// still steer preferred-ledger selection through the trie.
 	negUNL map[consensus.NodeID]bool
 
 	// quorum is the number of validations needed for finality
@@ -207,12 +202,10 @@ type ValidationTracker struct {
 	// the trie; the tracker then falls back to flat hash-count support.
 	ancestry LedgerAncestryProvider
 
-	// trie holds branchSupport for every trusted validator's latest tip,
-	// INCLUDING validators on the negUNL — mirroring rippled's
-	// trusted()-only updateTrie so negUNL validators still steer
-	// GetPreferred / ProposersFinished. The negUNL-excluded count the
-	// engine's quorum/peer-LCL gates need is derived separately in
-	// the trusted-support helper. nil when ancestry is unset.
+	// trie holds branch support for every trusted validator's latest tip,
+	// including validators on the negUNL, so they continue to steer
+	// GetPreferred and ProposersFinished. Full-validation quorum counts
+	// exclude negUNL validators separately. nil when ancestry is unset.
 	trie *ledgertrie.Trie
 
 	// trieTips records each validator's current trie tip so a newer
