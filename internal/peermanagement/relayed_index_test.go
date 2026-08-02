@@ -124,3 +124,39 @@ func TestOverlay_MessageRelayedRecentlyWindow(t *testing.T) {
 	now = now.Add(Idled)
 	assert.False(t, o.MessageRelayedRecently(hash))
 }
+
+func TestOverlay_RelayFromValidatorMarksOnlySuccessfulEnqueue(t *testing.T) {
+	id, err := NewIdentity()
+	require.NoError(t, err)
+	o := &Overlay{
+		cfg:          Config{},
+		peers:        make(map[PeerID]*Peer),
+		relayedIndex: make(map[[32]byte]*relayedEntry),
+	}
+	source := NewPeer(PeerID(1), Endpoint{Host: "127.0.0.1", Port: 51235}, false, id, make(chan Event, 1))
+	destination := NewPeer(PeerID(2), Endpoint{Host: "127.0.0.1", Port: 51235}, false, id, make(chan Event, 1))
+	source.setState(PeerStateConnected)
+	destination.setState(PeerStateConnected)
+	o.peers[source.ID()] = source
+	o.peers[destination.ID()] = destination
+
+	// Saturate the destination's ordinary lane so RelayFromValidator has no
+	// successful enqueue to account for.
+	for range ordinarySendMaximum {
+		require.NoError(t, destination.Send([]byte{0xAA}))
+	}
+	hash := [32]byte{0xD1}
+	o.RecordMessageSource(hash, source.ID())
+	require.ErrorIs(t, o.RelayFromValidator([]byte("validator"), hash, 0, []byte{0xBB}), ErrSendBufferFull)
+	assert.False(t, o.MessageRelayedRecently(hash),
+		"a failed relay must not enter the duplicate-counting window")
+
+	// A later relay that is accepted by a peer does enter the window.
+	destination = NewPeer(PeerID(3), Endpoint{Host: "127.0.0.1", Port: 51235}, false, id, make(chan Event, 1))
+	destination.setState(PeerStateConnected)
+	o.peers[destination.ID()] = destination
+	hash = [32]byte{0xD2}
+	o.RecordMessageSource(hash, source.ID())
+	require.ErrorIs(t, o.RelayFromValidator([]byte("validator"), hash, 0, []byte{0xBC}), ErrSendBufferFull)
+	assert.True(t, o.MessageRelayedRecently(hash))
+}

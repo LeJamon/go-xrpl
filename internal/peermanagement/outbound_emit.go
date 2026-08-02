@@ -227,18 +227,34 @@ func (o *Overlay) sendTxQueueAnnounce() {
 		return
 	}
 
+	// Resolve the peer set and negotiated capabilities while holding peersMu,
+	// then release it before enqueueing. PeerSupports performs its own peer-map
+	// lookup, so calling it while this read lock is held can deadlock when a
+	// writer is waiting for peersMu: the nested RLock is blocked by the queued
+	// writer while the outer RLock cannot be released until the nested call
+	// returns.
+	type txRelayPeer struct {
+		id   PeerID
+		peer *Peer
+	}
 	o.peersMu.RLock()
-	defer o.peersMu.RUnlock()
+	targets := make([]txRelayPeer, 0, len(o.peers))
 	for id, peer := range o.peers {
 		if peer.State() != PeerStateConnected {
 			continue
 		}
-		if !o.PeerSupports(id, FeatureTxReduceRelay) {
+		caps := peer.Capabilities()
+		if caps == nil || !caps.HasFeature(FeatureTxReduceRelay) {
 			continue
 		}
-		if err := peer.Send(frame); err != nil {
+		targets = append(targets, txRelayPeer{id: id, peer: peer})
+	}
+	o.peersMu.RUnlock()
+
+	for _, target := range targets {
+		if err := target.peer.Send(frame); err != nil {
 			slog.Debug("HaveTransactions send failed",
-				"t", "Overlay", "peer", id, "err", err)
+				"t", "Overlay", "peer", target.id, "err", err)
 		}
 	}
 }

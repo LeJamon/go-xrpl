@@ -254,18 +254,32 @@ func (o *Overlay) broadcastExceptSet(excluded map[PeerID]bool, msg []byte, prior
 // by a separate code path (see Broadcast) that skips the filter
 // entirely.
 func (o *Overlay) RelayFromValidator(validator []byte, suppressionHash [32]byte, exceptPeer PeerID, msg []byte) error {
-	sources := o.releaseMessageSources(suppressionHash)
+	// Hold source evidence until at least one recipient accepts the relay. A
+	// failed enqueue is not a relay: marking the suppression bucket as
+	// relayed in that case would gate future duplicate accounting despite the
+	// message never leaving this node.
+	sources := o.takeMessageSources(suppressionHash)
 	sourceSet := make(map[PeerID]struct{}, len(sources))
 	for _, id := range sources {
 		sourceSet[id] = struct{}{}
 	}
 
-	err := o.forEachConnected(msg, "relay-from-validator", false, func(id PeerID, peer *Peer) bool {
+	result := fanoutResult{operation: "relay-from-validator"}
+	for _, target := range o.connectedPeers() {
+		id, peer := target.id, target.peer
 		_, wasSource := sourceSet[id]
-		return wasSource || id == exceptPeer || !peer.ExpireSquelch(validator)
-	})
-	for _, id := range sources {
-		o.OnValidatorMessage(validator, id)
+		if wasSource || id == exceptPeer || !peer.ExpireSquelch(validator) {
+			continue
+		}
+		result.record(sendPeer(peer, msg, false))
+	}
+	err := result.err()
+	o.logFanoutFailure(err)
+	if result.attempted > result.failed {
+		o.markMessageRelayed(suppressionHash)
+		for _, id := range sources {
+			o.OnValidatorMessage(validator, id)
+		}
 	}
 	return err
 }
@@ -335,6 +349,56 @@ func (o *Overlay) PeersThatHave(suppressionHash [32]byte) []PeerID {
 
 func (o *Overlay) releaseMessageSources(suppressionHash [32]byte) []PeerID {
 	return o.messageSources(suppressionHash, true)
+}
+
+// takeMessageSources removes the current inbound source set without marking
+// the message as relayed. RelayFromValidator marks it only after a recipient
+// successfully accepts the frame.
+func (o *Overlay) takeMessageSources(suppressionHash [32]byte) []PeerID {
+	if o.relayedIndex == nil {
+		return nil
+	}
+	clock := o.clockForIndex
+	if clock == nil {
+		clock = time.Now
+	}
+
+	o.relayedIndexMu.Lock()
+	defer o.relayedIndexMu.Unlock()
+
+	entry, ok := o.relayedIndex[suppressionHash]
+	if !ok {
+		return nil
+	}
+	now := clock()
+	if now.Sub(entry.seenAt) >= RelayedIndexTTL {
+		delete(o.relayedIndex, suppressionHash)
+		return nil
+	}
+	out := make([]PeerID, 0, len(entry.peers))
+	for id := range entry.peers {
+		out = append(out, id)
+	}
+	entry.peers = make(map[PeerID]struct{})
+	entry.seenAt = now
+	return out
+}
+
+func (o *Overlay) markMessageRelayed(suppressionHash [32]byte) {
+	if o.relayedIndex == nil {
+		return
+	}
+	clock := o.clockForIndex
+	if clock == nil {
+		clock = time.Now
+	}
+	now := clock()
+	o.relayedIndexMu.Lock()
+	if entry, ok := o.relayedIndex[suppressionHash]; ok {
+		entry.relayedAt = now
+		entry.seenAt = now
+	}
+	o.relayedIndexMu.Unlock()
 }
 
 // MessageRelayedRecently reports whether this hash was relayed within the
