@@ -65,12 +65,13 @@ type ManifestFrame struct {
 	reservation   int64
 }
 
-func newManifestFrame(path string, header MessageHeader, budget *readBudget) *ManifestFrame {
+func newManifestFrame(path string, header MessageHeader, budget *readBudget, reservation int64) *ManifestFrame {
 	return &ManifestFrame{
-		path:   path,
-		header: header,
-		budget: budget,
-		done:   make(chan struct{}),
+		path:        path,
+		header:      header,
+		budget:      budget,
+		done:        make(chan struct{}),
+		reservation: reservation,
 	}
 }
 
@@ -104,35 +105,35 @@ func (f *ManifestFrame) Materialize(ctx context.Context) ([]byte, error) {
 	}
 	f.mu.Unlock()
 
-	reservation := manifestReadReservation(f.header)
-	if f.budget != nil {
-		if err := f.budget.acquire(ctx, f.done, reservation); err != nil {
-			f.mu.Lock()
-			f.materializing = false
-			closed := f.closed
-			f.mu.Unlock()
-			if closed {
-				return nil, ErrManifestFrameClosed
-			}
-			return nil, err
-		}
-	}
-
 	f.mu.Lock()
 	if f.closed {
 		f.mu.Unlock()
-		if f.budget != nil {
-			f.budget.release(reservation)
-		}
 		return nil, ErrManifestFrameClosed
 	}
-	f.reservation = reservation
-	payload, err := os.ReadFile(f.path)
+	err := ctx.Err()
+	var payload []byte
+	if err == nil {
+		payload, err = os.ReadFile(f.path)
+	}
 	if err == nil && uint32(len(payload)) != f.header.PayloadSize {
 		err = fmt.Errorf("manifest payload size: got %d, want %d", len(payload), f.header.PayloadSize)
 	}
 	if err == nil {
+		err = ctx.Err()
+	}
+	if err == nil && f.header.Compressed {
+		payload, err = DecompressLZ4(payload, int(f.header.UncompressedSize))
+	}
+	if err == nil {
+		err = ctx.Err()
+	}
+	var releaseBytes int64
+	if err == nil {
 		f.materialized = true
+		if f.header.Compressed {
+			releaseBytes = int64(f.header.PayloadSize)
+			f.reservation -= releaseBytes
+		}
 	}
 	f.materializing = false
 	f.mu.Unlock()
@@ -140,6 +141,9 @@ func (f *ManifestFrame) Materialize(ctx context.Context) ([]byte, error) {
 	if err != nil {
 		_ = f.Close()
 		return nil, err
+	}
+	if releaseBytes > 0 && f.budget != nil {
+		f.budget.release(releaseBytes)
 	}
 	return payload, nil
 }
@@ -177,11 +181,26 @@ func (f *ManifestFrame) completion() <-chan struct{} {
 }
 
 func spoolManifestFrame(
+	ctx context.Context,
+	closeCh <-chan struct{},
 	r io.Reader,
 	header MessageHeader,
 	budget *readBudget,
 	dir string,
 ) (*ManifestFrame, error) {
+	reservation := manifestFrameReservation(header)
+	if budget != nil {
+		if err := budget.acquire(ctx, closeCh, reservation); err != nil {
+			return nil, err
+		}
+	}
+	releaseBudget := true
+	defer func() {
+		if releaseBudget && budget != nil {
+			budget.release(reservation)
+		}
+	}()
+
 	file, err := os.CreateTemp(dir, "goxrpl-manifests-*")
 	if err != nil {
 		return nil, &manifestSpoolLocalError{operation: "create manifest spool", err: err}
@@ -202,7 +221,18 @@ func spoolManifestFrame(
 		cleanup()
 		return nil, &manifestSpoolLocalError{operation: "close manifest spool", err: closeErr}
 	}
-	return newManifestFrame(path, header, budget), nil
+	releaseBudget = false
+	return newManifestFrame(path, header, budget, reservation), nil
+}
+
+func manifestFrameReservation(header MessageHeader) int64 {
+	wireBytes := int64(header.PayloadSize)
+	decodedBytes := wireBytes
+	if header.Compressed {
+		decodedBytes = int64(header.UncompressedSize)
+		return 2*wireBytes + decodedBytes
+	}
+	return wireBytes + decodedBytes
 }
 
 func copyManifestPayload(dst io.Writer, src io.Reader, size uint32) error {

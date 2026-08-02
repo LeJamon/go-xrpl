@@ -58,6 +58,7 @@ type ledgerAcquisitionNetwork interface {
 type acquisitionWorkEvent struct {
 	kind       acquisitionWorkKind
 	data       *message.LedgerData
+	owner      *peermanagement.InboundMessage
 	peerID     uint64
 	resume     bool
 	useful     int
@@ -69,6 +70,20 @@ type acquisitionWorkEvent struct {
 	queryDepth uint32
 	collect    bool
 	at         time.Time
+}
+
+func (e *acquisitionWorkEvent) release() {
+	if e == nil || e.owner == nil {
+		return
+	}
+	_ = e.owner.Close()
+	e.owner = nil
+}
+
+func releaseAcquisitionWorkEvents(events []acquisitionWorkEvent) {
+	for i := range events {
+		events[i].release()
+	}
 }
 
 type acquisitionWorkBatch struct {
@@ -264,6 +279,7 @@ func (l *acquisitionWorkLane) submit(ledger *inbound.Ledger, event acquisitionWo
 
 func (l *acquisitionWorkLane) run() {
 	defer close(l.done)
+	defer l.releasePending()
 	for {
 		select {
 		case <-l.ctx.Done():
@@ -287,6 +303,12 @@ func (l *acquisitionWorkLane) runBatch(batch *acquisitionWorkBatch) bool {
 	events := append([]acquisitionWorkEvent(nil), batch.events...)
 	batch.events = batch.events[:0]
 	l.mu.Unlock()
+	retained := false
+	defer func() {
+		if !retained {
+			releaseAcquisitionWorkEvents(events)
+		}
+	}()
 
 	result := l.process(batch.ctx, batch.ledger, events)
 	if errors.Is(result.err, shamap.ErrTraversalBudget) && batch.ctx.Err() == nil {
@@ -324,12 +346,16 @@ func (l *acquisitionWorkLane) runBatch(batch *acquisitionWorkBatch) bool {
 	case <-result.ack:
 	}
 
+	var discarded []acquisitionWorkEvent
 	l.mu.Lock()
 	if result.complete || result.remove || batch.ctx.Err() != nil {
 		delete(l.pending, batch.ledger)
 		batch.cancel()
+		discarded = append(discarded, batch.events...)
+		batch.events = nil
 	} else if result.yielded {
 		batch.events = append(batch.events, events...)
+		retained = true
 		l.ready = append(l.ready, batch)
 		l.notifyLocked()
 	} else if len(batch.events) == 0 {
@@ -340,7 +366,25 @@ func (l *acquisitionWorkLane) runBatch(batch *acquisitionWorkBatch) bool {
 		l.notifyLocked()
 	}
 	l.mu.Unlock()
+	releaseAcquisitionWorkEvents(discarded)
 	return true
+}
+
+func (l *acquisitionWorkLane) releasePending() {
+	l.mu.Lock()
+	batches := make([]*acquisitionWorkBatch, 0, len(l.pending))
+	for _, batch := range l.pending {
+		batches = append(batches, batch)
+	}
+	l.pending = make(map[*inbound.Ledger]*acquisitionWorkBatch)
+	l.ready = nil
+	l.mu.Unlock()
+
+	for _, batch := range batches {
+		batch.cancel()
+		releaseAcquisitionWorkEvents(batch.events)
+		batch.events = nil
+	}
 }
 
 func (l *acquisitionWorkLane) takeReady() *acquisitionWorkBatch {

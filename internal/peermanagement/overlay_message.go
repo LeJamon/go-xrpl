@@ -96,6 +96,7 @@ func (o *Overlay) onPeerFailed(evt Event) {
 }
 
 func (o *Overlay) onMessageReceived(evt Event) {
+	defer evt.release()
 	msgType := message.MessageType(evt.MessageType)
 
 	// Record reduce-relay traffic metrics before dispatch: counted on
@@ -221,48 +222,30 @@ func (o *Overlay) onMessageReceived(evt Event) {
 	slog.Debug("Message received", "t", "Overlay", "type", msgType.String(), "peer", evt.PeerID, "size", len(evt.Payload))
 
 	if msgType == message.TypeTransaction {
-		o.forwardTransaction(&InboundMessage{
-			PeerID:  evt.PeerID,
-			Type:    evt.MessageType,
-			Payload: evt.Payload,
-		})
+		o.forwardTransaction(evt.inboundMessage())
 		return
 	}
 
 	switch msgType {
 	case message.TypeLedgerData, message.TypeReplayDeltaResponse, message.TypeProofPathResponse:
-		o.forwardLedgerData(&InboundMessage{
-			PeerID:  evt.PeerID,
-			Type:    evt.MessageType,
-			Payload: evt.Payload,
-		})
+		o.forwardLedgerData(evt.inboundMessage())
 		return
 	}
 
 	if isConsensusPriorityMessageType(msgType) {
-		o.forwardConsensus(&InboundMessage{
-			PeerID:  evt.PeerID,
-			Type:    evt.MessageType,
-			Payload: evt.Payload,
-		})
+		o.forwardConsensus(evt.inboundMessage())
 		return
 	}
 	if isConsensusControlMessageType(msgType) {
-		o.forwardConsensusControl(&InboundMessage{
-			PeerID:  evt.PeerID,
-			Type:    evt.MessageType,
-			Payload: evt.Payload,
-		})
+		o.forwardConsensusControl(evt.inboundMessage())
 		return
 	}
 
+	msg := evt.inboundMessage()
 	select {
-	case o.messages <- &InboundMessage{
-		PeerID:  evt.PeerID,
-		Type:    evt.MessageType,
-		Payload: evt.Payload,
-	}:
+	case o.messages <- msg:
 	default:
+		_ = msg.Close()
 		o.droppedMessages.Add(1)
 		slog.Warn("Message dropped: channel full", "t", "Overlay", "type", msgType.String())
 		if msgType == message.TypeManifests {
@@ -273,23 +256,29 @@ func (o *Overlay) onMessageReceived(evt Event) {
 
 func (o *Overlay) forwardConsensus(msg *InboundMessage) {
 	if o.consensusMessages == nil {
+		_ = msg.Close()
 		return
 	}
 	select {
 	case o.consensusMessages <- msg:
 	case <-o.stopCh:
+		_ = msg.Close()
 	case <-o.runDone:
+		_ = msg.Close()
 	}
 }
 
 func (o *Overlay) forwardConsensusControl(msg *InboundMessage) {
 	if o.consensusControlMessages == nil {
+		_ = msg.Close()
 		return
 	}
 	select {
 	case o.consensusControlMessages <- msg:
 	case <-o.stopCh:
+		_ = msg.Close()
 	case <-o.runDone:
+		_ = msg.Close()
 	}
 }
 
@@ -303,6 +292,7 @@ func (o *Overlay) forwardTransaction(msg *InboundMessage) {
 	select {
 	case o.txMessages <- msg:
 	default:
+		_ = msg.Close()
 		// Counted via droppedTransactions (jq_trans_overflow); log at Debug so a
 		// shed storm under load cannot itself flood the single log writer.
 		o.droppedTransactions.Add(1)
@@ -323,12 +313,15 @@ func (o *Overlay) DroppedTransactions() uint64 {
 // of discarding a reply needed to complete catch-up.
 func (o *Overlay) forwardLedgerData(msg *InboundMessage) {
 	if o.ledgerData == nil {
+		_ = msg.Close()
 		return
 	}
 	select {
 	case o.ledgerData <- msg:
 	case <-o.stopCh:
+		_ = msg.Close()
 	case <-o.runDone:
+		_ = msg.Close()
 	}
 }
 

@@ -4,6 +4,7 @@ package peermanagement
 import (
 	"fmt"
 	"net"
+	"sync"
 
 	"github.com/LeJamon/go-xrpl/internal/peermanagement/message"
 )
@@ -126,6 +127,45 @@ type Event struct {
 
 	// Error is set for failure events.
 	Error error
+
+	reservation *inboundReservation
+}
+
+func (e *Event) release() {
+	if e == nil {
+		return
+	}
+	if e.ManifestFrame != nil {
+		_ = e.ManifestFrame.Close()
+		e.ManifestFrame = nil
+	}
+	if e.reservation != nil {
+		e.reservation.release()
+		e.reservation = nil
+	}
+}
+
+func (e *Event) inboundMessage() *InboundMessage {
+	msg := &InboundMessage{
+		PeerID:        e.PeerID,
+		Type:          e.MessageType,
+		Payload:       e.Payload,
+		ManifestFrame: e.ManifestFrame,
+		reservation:   e.reservation,
+	}
+	e.reservation = nil
+	e.ManifestFrame = nil
+	return msg
+}
+
+func (e *Event) retainedInboundMessage() *InboundMessage {
+	return &InboundMessage{
+		PeerID:        e.PeerID,
+		Type:          e.MessageType,
+		Payload:       e.Payload,
+		ManifestFrame: e.ManifestFrame,
+		reservation:   e.reservation.retain(),
+	}
 }
 
 // InboundMessage represents a message received from a peer.
@@ -148,4 +188,23 @@ type InboundMessage struct {
 	// Payload. It is nil for messages read off the wire, whose decoded
 	// form lives in Payload.
 	Tx *message.Transaction
+
+	reservation *inboundReservation
+	closeOnce   sync.Once
+	closeErr    error
+}
+
+// Close releases retained inbound bytes and removes any spool file.
+func (m *InboundMessage) Close() error {
+	if m == nil {
+		return nil
+	}
+	m.closeOnce.Do(func() {
+		if m.ManifestFrame != nil {
+			m.closeErr = m.ManifestFrame.Close()
+		}
+		m.reservation.release()
+		m.reservation = nil
+	})
+	return m.closeErr
 }

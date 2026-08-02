@@ -763,19 +763,19 @@ func (r *Router) Run(ctx context.Context) {
 			if !ok {
 				return
 			}
-			r.handleMessage(msg)
+			r.handleInboundMessage(msg)
 		case msg, ok := <-r.serviceInbox:
 			if !ok {
 				r.serviceInbox = nil
 				continue
 			}
-			r.handleMessage(msg)
+			r.handleInboundMessage(msg)
 		case msg, ok := <-r.consensusControlInbox:
 			if !ok {
 				r.consensusControlInbox = nil
 				continue
 			}
-			r.handleMessage(msg)
+			r.handleInboundMessage(msg)
 		case msg, ok := <-acqInbox:
 			// Dedicated acquisition-reply lane (liBASE and the replay-delta /
 			// proof-path responses). Its own buffered lane keeps a flood on
@@ -788,7 +788,7 @@ func (r *Router) Run(ctx context.Context) {
 				r.acqInbox = nil
 				continue
 			}
-			r.handleMessage(msg)
+			r.handleInboundMessage(msg)
 		case msg, ok := <-r.txInbox:
 			if !ok {
 				// Lane closed (or never wired): stop selecting it so we
@@ -840,7 +840,7 @@ func (r *Router) drainConsensusInbox(ctx context.Context) bool {
 			if !ok {
 				return false
 			}
-			r.handleMessage(msg)
+			r.handleInboundMessage(msg)
 		default:
 			return true
 		}
@@ -857,7 +857,7 @@ func (r *Router) drainAcquisitionInboxBeforeMaintenance(workLane *acquisitionWor
 				r.acqInbox = nil
 				return drained
 			}
-			r.handleMessage(msg)
+			r.handleInboundMessage(msg)
 			drained++
 		default:
 			return drained
@@ -870,23 +870,29 @@ func (r *Router) drainAcquisitionInboxBeforeMaintenance(workLane *acquisitionWor
 // message loop. Before the first Run it handles synchronously for direct
 // dispatch tests. Once shutdown begins, admission remains closed.
 func (r *Router) submitTxJob(msg *peermanagement.InboundMessage) {
+	if msg == nil {
+		return
+	}
 	r.lifecycleMu.RLock()
 	state := r.lifecycleState
 	jobs := r.txJobs
 	if state == routerLifecycleInitial {
 		r.lifecycleMu.RUnlock()
+		defer func() { _ = msg.Close() }()
 		r.handleTransaction(msg)
 		return
 	}
 	if state != routerLifecycleRunning || jobs == nil {
 		r.lifecycleMu.RUnlock()
 		r.droppedTxJobs.Add(1)
+		_ = msg.Close()
 		return
 	}
 	select {
 	case jobs <- msg:
 	default:
 		r.droppedTxJobs.Add(1)
+		_ = msg.Close()
 		r.logger.Debug("inbound tx dropped: worker pool saturated",
 			"t", "consensus", "event", "tx-shed", "peer", msg.PeerID)
 	}
@@ -903,23 +909,29 @@ func (r *Router) DroppedTxJobs() uint64 {
 // the Run message loop. Before the first Run it handles synchronously for
 // direct dispatch tests. Once shutdown begins, admission remains closed.
 func (r *Router) submitServeJob(msg *peermanagement.InboundMessage) {
+	if msg == nil {
+		return
+	}
 	r.lifecycleMu.RLock()
 	state := r.lifecycleState
 	jobs := r.serveJobs
 	if state == routerLifecycleInitial {
 		r.lifecycleMu.RUnlock()
+		defer func() { _ = msg.Close() }()
 		r.handleGetLedger(msg)
 		return
 	}
 	if state != routerLifecycleRunning || jobs == nil {
 		r.lifecycleMu.RUnlock()
 		r.droppedServeJobs.Add(1)
+		_ = msg.Close()
 		return
 	}
 	select {
 	case jobs <- msg:
 	default:
 		r.droppedServeJobs.Add(1)
+		_ = msg.Close()
 		r.logger.Debug("inbound get_ledger dropped: serve pool saturated",
 			"t", "consensus", "event", "serve-shed", "peer", msg.PeerID)
 	}
@@ -977,6 +989,7 @@ func (r *Router) processManifestJob(msg *peermanagement.InboundMessage) {
 }
 
 func (r *Router) processManifestJobContext(ctx context.Context, msg *peermanagement.InboundMessage) {
+	defer func() { _ = msg.Close() }()
 	processed := false
 	defer func() {
 		if !processed {

@@ -100,7 +100,7 @@ type Peer struct {
 	consensusControlEvents chan<- Event
 	acquisitionEvents      chan<- Event
 	manifestMessages       chan<- *InboundMessage
-	manifestReadBudget     *readBudget
+	inboundReadBudget      *readBudget
 	manifestSpoolDir       string
 
 	// droppedEvents counts non-blocking event sends that fell through
@@ -298,15 +298,22 @@ func (p *Peer) SetManifestMessages(messages chan<- *InboundMessage) {
 	p.manifestMessages = messages
 }
 
-func (p *Peer) SetManifestReadBudget(budget *readBudget) {
-	p.manifestReadBudget = budget
+func (p *Peer) SetInboundReadBudget(budget *readBudget) {
+	p.inboundReadBudget = budget
 }
 
 func (p *Peer) SetManifestSpoolDir(dir string) {
 	p.manifestSpoolDir = dir
 }
 
-func manifestReadReservation(header MessageHeader) int64 {
+func isInboundBulkMessageType(msgType message.MessageType) bool {
+	return !message.IsKnownMessageType(msgType) || message.MaxPayloadSizeForType(msgType) > 64*1024
+}
+
+func inboundFrameReservation(header MessageHeader) int64 {
+	if !isInboundBulkMessageType(header.MessageType) {
+		return 0
+	}
 	size := int64(header.PayloadSize)
 	if header.Compressed {
 		size += int64(header.UncompressedSize)
@@ -319,15 +326,12 @@ func manifestReadReservation(header MessageHeader) int64 {
 // peer releases a read loop waiting for capacity.
 func (p *Peer) dispatchEvent(evt Event) bool {
 	if evt.Type == EventMessageReceived && message.MessageType(evt.MessageType) == message.TypeManifests && p.manifestMessages != nil {
+		msg := evt.inboundMessage()
 		select {
-		case p.manifestMessages <- &InboundMessage{
-			PeerID:        evt.PeerID,
-			Type:          evt.MessageType,
-			Payload:       evt.Payload,
-			ManifestFrame: evt.ManifestFrame,
-		}:
+		case p.manifestMessages <- msg:
 			return true
 		case <-p.closeCh:
+			_ = msg.Close()
 			return false
 		}
 	}
@@ -336,6 +340,7 @@ func (p *Peer) dispatchEvent(evt Event) bool {
 		case p.consensusEvents <- evt:
 			return true
 		case <-p.closeCh:
+			evt.release()
 			return false
 		}
 	}
@@ -344,6 +349,7 @@ func (p *Peer) dispatchEvent(evt Event) bool {
 		case p.consensusControlEvents <- evt:
 			return true
 		case <-p.closeCh:
+			evt.release()
 			return false
 		}
 	}
@@ -352,16 +358,19 @@ func (p *Peer) dispatchEvent(evt Event) bool {
 		case p.acquisitionEvents <- evt:
 			return true
 		case <-p.closeCh:
+			evt.release()
 			return false
 		}
 	}
 	if p.events == nil {
+		evt.release()
 		return false
 	}
 	select {
 	case p.events <- evt:
 		return true
 	default:
+		evt.release()
 		if p.droppedEvents != nil {
 			p.droppedEvents.Add(1)
 		}
@@ -1178,9 +1187,8 @@ func (p *Peer) readLoop(ctx context.Context) error {
 		header, err := readMessageHeader(frameReader)
 		if err == nil &&
 			header.MessageType == TypeManifests &&
-			!header.Compressed &&
 			p.manifestSpoolDir != "" &&
-			header.PayloadSize > manifestSpoolThreshold {
+			(header.PayloadSize > manifestSpoolThreshold || header.UncompressedSize > manifestSpoolThreshold) {
 			if outstandingManifest != nil {
 				select {
 				case <-outstandingManifest:
@@ -1197,9 +1205,11 @@ func (p *Peer) readLoop(ctx context.Context) error {
 			frameReader.startedAt = p.readPolicy.now()
 			_ = frameReader.setHeader(*header)
 			manifestFrame, spoolErr := spoolManifestFrame(
+				ctx,
+				p.closeCh,
 				frameReader,
 				*header,
-				p.manifestReadBudget,
+				p.inboundReadBudget,
 				p.manifestSpoolDir,
 			)
 			now := p.readPolicy.now()
@@ -1218,7 +1228,11 @@ func (p *Peer) readLoop(ctx context.Context) error {
 			}
 
 			payloadWireSize := uint64(header.PayloadSize)
-			p.metrics.recv.addMessage(payloadWireSize + HeaderSizeUncompressed)
+			headerSize := uint64(HeaderSizeUncompressed)
+			if header.Compressed {
+				headerSize = HeaderSizeCompressed
+			}
+			p.metrics.recv.addMessage(payloadWireSize + headerSize)
 			p.bootstrapManifest.Store(true)
 			p.traffic.AddCount(CategorizeMessage(uint16(header.MessageType)), true, int(header.PayloadSize))
 
@@ -1243,14 +1257,14 @@ func (p *Peer) readLoop(ctx context.Context) error {
 			continue
 		}
 
-		var manifestReservation int64
+		var retainedReservation int64
 		if err == nil {
-			if header.MessageType == TypeManifests && p.manifestReadBudget != nil {
-				reservation := manifestReadReservation(*header)
-				if acquireErr := p.manifestReadBudget.acquire(ctx, p.closeCh, reservation); acquireErr != nil {
+			if p.inboundReadBudget != nil {
+				reservation := inboundFrameReservation(*header)
+				if acquireErr := p.inboundReadBudget.acquire(ctx, p.closeCh, reservation); acquireErr != nil {
 					err = acquireErr
 				} else {
-					manifestReservation = reservation
+					retainedReservation = reservation
 					frameReader.startedAt = p.readPolicy.now()
 				}
 			}
@@ -1258,10 +1272,10 @@ func (p *Peer) readLoop(ctx context.Context) error {
 				_ = frameReader.setHeader(*header)
 			}
 		}
-		releaseManifestReservation := func() {
-			if manifestReservation > 0 {
-				p.manifestReadBudget.release(manifestReservation)
-				manifestReservation = 0
+		releaseRetainedReservation := func() {
+			if retainedReservation > 0 {
+				p.inboundReadBudget.release(retainedReservation)
+				retainedReservation = 0
 			}
 		}
 		var payload []byte
@@ -1274,7 +1288,7 @@ func (p *Peer) readLoop(ctx context.Context) error {
 		}
 		frameReader.finish(err == nil, now)
 		if err != nil {
-			releaseManifestReservation()
+			releaseRetainedReservation()
 			if p.closed.Load() {
 				return nil
 			}
@@ -1318,13 +1332,13 @@ func (p *Peer) readLoop(ctx context.Context) error {
 			// protocol violation — charge and tear the connection down.
 			if !p.compressionNegotiated() {
 				p.IncBadData("compression-unnegotiated")
-				releaseManifestReservation()
+				releaseRetainedReservation()
 				return fmt.Errorf("peer sent a compressed frame without negotiating compression")
 			}
 		}
 
 		if !message.IsKnownMessageType(header.MessageType) {
-			releaseManifestReservation()
+			releaseRetainedReservation()
 			continue
 		}
 		if header.MessageType == TypeManifests {
@@ -1336,18 +1350,22 @@ func (p *Peer) readLoop(ctx context.Context) error {
 			if err != nil {
 				p.IncBadData("decompress-lz4-failed")
 				if header.MessageType == TypeManifests && p.onBootstrapReady != nil {
-					releaseManifestReservation()
+					releaseRetainedReservation()
 					return fmt.Errorf("bootstrap manifests decompression failed: %w", err)
 				}
 				if p.consecutiveDecompressFailures.Add(1) >= maxConsecutiveDecompressFailures {
-					releaseManifestReservation()
+					releaseRetainedReservation()
 					return fmt.Errorf("decompress-lz4 failed %d times in a row: %w",
 						maxConsecutiveDecompressFailures, err)
 				}
-				releaseManifestReservation()
+				releaseRetainedReservation()
 				continue
 			}
 			p.consecutiveDecompressFailures.Store(0)
+			if retainedReservation > 0 {
+				p.inboundReadBudget.release(int64(header.PayloadSize))
+				retainedReservation -= int64(header.PayloadSize)
+			}
 		}
 		p.traffic.AddCount(CategorizeMessage(uint16(header.MessageType)), true, len(payload))
 
@@ -1357,8 +1375,9 @@ func (p *Peer) readLoop(ctx context.Context) error {
 			MessageType: uint16(header.MessageType),
 			Payload:     payload,
 			WireSize:    payloadWireSize,
+			reservation: newInboundReservation(p.inboundReadBudget, retainedReservation),
 		})
-		releaseManifestReservation()
+		retainedReservation = 0
 		if !delivered && header.MessageType == TypeManifests && p.onBootstrapReady != nil {
 			return errBootstrapManifestDropped
 		}

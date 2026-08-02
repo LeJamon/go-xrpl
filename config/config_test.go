@@ -677,6 +677,16 @@ func TestOverlayConfig_VerifyEndpointsValidation(t *testing.T) {
 	}
 }
 
+func TestOverlayConfig_InboundRetainedBytesValidation(t *testing.T) {
+	o := OverlayConfig{InboundRetainedBytes: 3 * 64 * 1024 * 1024}
+	require.NoError(t, o.Validate())
+
+	o.InboundRetainedBytes--
+	err := o.Validate()
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "inbound_retained_bytes")
+}
+
 func TestConfigValidation_CompleteConfig(t *testing.T) {
 	assert.NoError(t, ValidateConfig(validCompleteConfig()))
 }
