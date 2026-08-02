@@ -590,14 +590,18 @@ func (p *serverStatusPublisher) publish(mode *string) {
 	p.publishCaptured(snapshot, event)
 }
 
-func (p *serverStatusPublisher) modePublication(mode string) service.ServerModePublication {
-	snapshot, event := p.capture(&mode)
+func (p *serverStatusPublisher) statusPublication(mode *string) service.ServerStatusPublication {
+	snapshot, event := p.capture(mode)
 	if event == nil {
 		return nil
 	}
 	return func() {
 		p.publishCaptured(snapshot, event)
 	}
+}
+
+func (p *serverStatusPublisher) modePublication(mode string) service.ServerStatusPublication {
+	return p.statusPublication(&mode)
 }
 
 func (p *serverStatusPublisher) capture(mode *string) (serverStatusSnapshot, *rpc.ServerStatusEvent) {

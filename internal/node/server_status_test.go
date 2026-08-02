@@ -87,9 +87,11 @@ func TestServerStatusPublishesModeAndLoadWithoutLedgerAcceptance(t *testing.T) {
 	status := newServerStatusPublisher(serverStatusTestServices(svc), recorder)
 	svc.SetServerStatusCallback(status.publish)
 	consensusAdaptor.SetOnOperatingModeChange(func(mode consensus.OperatingMode) {
-		svc.SignalServerMode(status.modePublication(mode.String()))
+		svc.SignalServerStatusPublication(status.modePublication(mode.String()))
 	})
-	svc.FeeTrack().SetOnChange(func() { svc.SignalServerStatus() })
+	svc.FeeTrack().SetOnChange(func() {
+		svc.SignalServerStatusPublication(status.statusPublication(nil))
+	})
 
 	status.publish(nil)
 	initial := waitForServerStatus(t, recorder)
@@ -167,7 +169,7 @@ func TestServerStatusPublisherDoesNotCacheWithoutSubscribers(t *testing.T) {
 	}
 }
 
-func TestServerModePublicationUsesTransitionSnapshot(t *testing.T) {
+func TestServerStatusPublicationUsesTransitionSnapshot(t *testing.T) {
 	svc, err := service.New(service.Config{Standalone: true})
 	if err != nil {
 		t.Fatalf("New service: %v", err)

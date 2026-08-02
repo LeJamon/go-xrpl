@@ -978,12 +978,12 @@ func run(
 	ledgerService.SetServerStatusCallback(serverStatus.publish)
 	if feeTrack := ledgerService.FeeTrack(); feeTrack != nil {
 		feeTrack.SetOnChange(func() {
-			ledgerService.SignalServerStatus()
+			ledgerService.SignalServerStatusPublication(serverStatus.statusPublication(nil))
 		})
 	}
 	if consensusComponents != nil && consensusComponents.Adaptor != nil {
 		consensusComponents.Adaptor.SetOnOperatingModeChange(func(mode consensus.OperatingMode) {
-			ledgerService.SignalServerMode(serverStatus.modePublication(mode.String()))
+			ledgerService.SignalServerStatusPublication(serverStatus.modePublication(mode.String()))
 		})
 	}
 

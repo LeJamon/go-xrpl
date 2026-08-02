@@ -87,15 +87,15 @@ type SubmittedTxCallback func(SubmittedTxEvent)
 // and must not call Service.Stop synchronously.
 type ServerStatusCallback func(mode *string)
 
-// ServerModePublication delivers a status snapshot captured at an effective
-// operating-mode transition. It follows the ServerStatusCallback contract.
-type ServerModePublication func()
+// ServerStatusPublication delivers a status snapshot captured when its
+// triggering state changes.
+type ServerStatusPublication func()
 
 type publicationEvent struct {
-	ledger       *LedgerAcceptedEvent
-	submitted    *SubmittedTxEvent
-	serverStatus bool
-	serverMode   ServerModePublication
+	ledger         *LedgerAcceptedEvent
+	submitted      *SubmittedTxEvent
+	serverStatus   bool
+	serverSnapshot ServerStatusPublication
 }
 
 // Errors reports fatal publication failures that require runtime shutdown.
@@ -202,7 +202,7 @@ func (p *eventPublisher) dispatchServerStatusEvent() bool {
 	return true
 }
 
-func (p *eventPublisher) dispatchServerModeEvent(publication ServerModePublication) bool {
+func (p *eventPublisher) dispatchServerStatusPublication(publication ServerStatusPublication) bool {
 	p.ledgerEventMu.Lock()
 	defer p.ledgerEventMu.Unlock()
 	if p.ledgerEventStopping || p.publicationFailed {
@@ -215,7 +215,7 @@ func (p *eventPublisher) dispatchServerModeEvent(publication ServerModePublicati
 	if startDispatcher {
 		go p.runLedgerEventDispatcher()
 	}
-	return p.enqueuePublicationLocked(publicationEvent{serverMode: publication})
+	return p.enqueuePublicationLocked(publicationEvent{serverSnapshot: publication})
 }
 
 func (p *eventPublisher) enqueuePublicationLocked(event publicationEvent) bool {
@@ -389,8 +389,8 @@ func (p *eventPublisher) deliverPublication(event publicationEvent) error {
 	if event.ledger != nil {
 		return p.deliverLedgerEvent(event.ledger)
 	}
-	if event.serverMode != nil {
-		event.serverMode()
+	if event.serverSnapshot != nil {
+		event.serverSnapshot()
 		return nil
 	}
 	if event.serverStatus {
@@ -464,11 +464,11 @@ func (s *Service) SignalServerStatus() bool {
 	return s.eventPublisher.dispatchServerStatusEvent()
 }
 
-// SignalServerMode queues a status publication captured at an effective
-// operating-mode transition. Mode publications do not coalesce because
-// subscribers must observe transition order.
-func (s *Service) SignalServerMode(publication ServerModePublication) bool {
-	return s.eventPublisher.dispatchServerModeEvent(publication)
+// SignalServerStatusPublication queues a captured status snapshot. Captured
+// publications do not coalesce because subscribers must observe state changes
+// in trigger order.
+func (s *Service) SignalServerStatusPublication(publication ServerStatusPublication) bool {
+	return s.eventPublisher.dispatchServerStatusPublication(publication)
 }
 
 // SetTxRelay registers the per-tx broadcast handler invoked by
