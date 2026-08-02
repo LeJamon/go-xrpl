@@ -286,8 +286,9 @@ func (a *Adaptor) OnLedgerFullyValidated(ledgerID consensus.LedgerID, seq uint32
 	copy(hash[:], ledgerID[:])
 	if validated := a.ledgerService.GetValidatedLedger(); validated != nil {
 		tipSeq, tipHash := validated.Sequence(), validated.Hash()
-		provisionalConfirmation := a.ledgerService.IsFastLoadProvisional() && seq == tipSeq && hash == tipHash
-		if seq <= tipSeq && (seq < tipSeq || hash == tipHash) && !provisionalConfirmation {
+		startupConfirmation := (a.ledgerService.NeedsInitialSync() || a.ledgerService.IsFastLoadProvisional()) &&
+			seq == tipSeq && hash == tipHash
+		if seq <= tipSeq && (seq < tipSeq || hash == tipHash) && !startupConfirmation {
 			return
 		}
 	}

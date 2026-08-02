@@ -225,10 +225,11 @@ func TestRefreshRemoteFee_ValidationBeforePeerAdoption(t *testing.T) {
 
 	require.Equal(t, header.LedgerIndex, svc.GetValidatedLedgerIndex())
 	require.Equal(t, uint32(500), ft.RemoteFee())
-	require.Equal(t, []feeLookup{{id: targetID, seq: header.LedgerIndex}, {id: targetID, seq: header.LedgerIndex}, {id: parentID, seq: header.LedgerIndex - 1}}, historian.lookupCalls())
+	wantLookups := []feeLookup{{id: targetID, seq: header.LedgerIndex}, {id: targetID, seq: header.LedgerIndex}, {id: parentID, seq: header.LedgerIndex - 1}}
+	require.Equal(t, wantLookups, historian.lookupCalls())
 
 	a.OnLedgerFullyValidated(targetID, header.LedgerIndex)
-	require.Equal(t, []feeLookup{{id: targetID, seq: header.LedgerIndex}, {id: targetID, seq: header.LedgerIndex}, {id: parentID, seq: header.LedgerIndex - 1}, {id: targetID, seq: header.LedgerIndex}}, historian.lookupCalls())
+	require.Equal(t, wantLookups, historian.lookupCalls())
 }
 
 func TestRefreshRemoteFee_ValidationBeforeConsensusClose(t *testing.T) {
