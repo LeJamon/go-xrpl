@@ -134,28 +134,30 @@ func (o *Overlay) admitInboundEndpoint(addr string) bool {
 	return !c.Disconnect()
 }
 
-// startListener creates and starts the TCP/TLS listener.
-func (o *Overlay) startListener() error {
+// startListener creates the TCP/TLS listener without publishing it. Run owns
+// publication under lifecycleMu so Stop cannot miss a socket that is still
+// being prepared.
+func (o *Overlay) startListener(ctx context.Context) (net.Listener, error) {
 	var lc net.ListenConfig
-	tcpListener, err := lc.Listen(o.ctx, "tcp", o.cfg.ListenAddr)
+	listen := lc.Listen
+	if o.listenFunc != nil {
+		listen = o.listenFunc
+	}
+	tcpListener, err := listen(ctx, "tcp", o.cfg.ListenAddr)
 	if err != nil {
-		return err
+		return nil, err
 	}
 
 	certPEM, keyPEM, err := o.identity.TLSCertificatePEM()
 	if err != nil {
 		tcpListener.Close()
-		return fmt.Errorf("overlay: build TLS cert: %w", err)
+		return nil, fmt.Errorf("overlay: build TLS cert: %w", err)
 	}
 
-	l := peertls.NewListener(tcpListener, &peertls.Config{
+	return peertls.NewListener(tcpListener, &peertls.Config{
 		CertPEM: certPEM,
 		KeyPEM:  keyPEM,
-	})
-	o.listenerMu.Lock()
-	o.listener = l
-	o.listenerMu.Unlock()
-	return nil
+	}), nil
 }
 
 // acceptLoop accepts incoming connections. acceptBackoff throttles

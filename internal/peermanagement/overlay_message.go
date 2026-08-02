@@ -37,6 +37,7 @@ func (o *Overlay) onPeerConnected(evt Event) {
 
 func (o *Overlay) onPeerDisconnected(evt Event) {
 	o.peerDisconnects.Add(1)
+	o.cancelServePeer(evt.PeerID)
 	o.relay.RemovePeer(evt.PeerID)
 	// Fire the higher-layer disconnect callback so per-peer state in
 	// consumers (router peerStates, adaptor peerLCLs) gets cleaned.

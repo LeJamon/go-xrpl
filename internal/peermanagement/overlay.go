@@ -22,25 +22,15 @@ import (
 )
 
 // serveWorkerCount bounds concurrent heavy serve operations (fetch-pack /
-// get-objects / tx back-fill) handled off the event loop, and
-// serveQueueDepth bounds the pending backlog before submitServe sheds
-// load. Mirrors rippled bounding these behind its job queue rather than
-// the read strand.
+// get-objects / tx back-fill) handled off the event loop. The scheduler also
+// applies a per-peer active and queued limit so one peer cannot monopolize
+// workers or backlog.
 const (
-	serveWorkerCount = 4
-	serveQueueDepth  = 64
+	serveWorkerCount        = 4
+	serveQueueDepth         = 64
+	servePerPeerQueue       = 8
+	servePerPeerConcurrency = 2
 )
-
-type overlayServeJob struct {
-	run     func()
-	discard func()
-}
-
-func (j overlayServeJob) drop() {
-	if j.discard != nil {
-		j.discard()
-	}
-}
 
 // Overlay is the central orchestrator for XRPL peer-to-peer networking.
 // It manages peer connections, discovery, message routing, and the reduce-relay system.
@@ -156,15 +146,11 @@ type Overlay struct {
 	// prevents unrelated traffic from discarding replies required for catch-up.
 	ledgerData chan *InboundMessage
 
-	// serveJobs carries heavy inbound serve work (fetch-pack, generic
-	// get-objects, tx back-fill) off the event-loop goroutine onto a
-	// bounded worker pool, so a single expensive serve can't stall ping
-	// replies and lifecycle handling. Created in Run; nil when the overlay
-	// was built without Run (submitServe then runs the job inline, which
-	// preserves the synchronous behaviour unit tests rely on). Mirrors
-	// rippled offloading these to its job queue (jtPACK et al.) rather than
-	// running them on the peer read strand.
-	serveJobs chan overlayServeJob
+	// serveScheduler carries heavy inbound serve work off the event-loop
+	// goroutine. It is created in Run; nil when the overlay was built without
+	// Run (submitServe then runs the job inline, preserving synchronous unit
+	// test behaviour).
+	serveScheduler *serveScheduler
 
 	// Peer lifecycle callbacks wired by higher layers (e.g., consensus
 	// router) that need to clean up per-peer state on disconnect. Fired
@@ -276,14 +262,12 @@ type Overlay struct {
 	peerDisconnects atomic.Uint64
 
 	// Network
-	// listenerMu guards listener: written once by startListener (called
-	// from Run before any concurrent reader exists). Read under RLock
-	// from ListenAddr and Stop (other goroutines). The reads in Run and
-	// acceptLoop are unlocked: Run's read at "if o.listener != nil" is
-	// in the same goroutine as the write, and acceptLoop is spawned via
-	// g.Go after the write returns, so happens-before applies.
+	// listenerMu guards listener publication. Run publishes only after the
+	// complete TCP/TLS listener has been prepared; reads under RLock are used
+	// by ListenAddr and Stop, while acceptLoop starts after publication.
 	listenerMu sync.RWMutex
 	listener   net.Listener
+	listenFunc func(context.Context, string, string) (net.Listener, error)
 
 	// listenerReady is closed once Run has finished its listener-bind
 	// phase — after startListener publishes o.listener, or immediately
@@ -1022,16 +1006,20 @@ func (o *Overlay) Run(ctx context.Context) error {
 	// Bind under lifecycleMu so Stop cannot transition the state between the
 	// running check and listener publication.
 	if o.cfg.ListenAddr != "" {
-		o.lifecycleMu.Lock()
-		if o.lifecycleState != overlayLifecycleRunning {
-			o.lifecycleMu.Unlock()
-			return ErrShutdown
-		}
-		err := o.startListener()
-		o.lifecycleMu.Unlock()
+		listener, err := o.startListener(runCtx)
 		if err != nil {
 			return fmt.Errorf("listener error: %w", err)
 		}
+		o.lifecycleMu.Lock()
+		if o.lifecycleState != overlayLifecycleRunning {
+			o.lifecycleMu.Unlock()
+			_ = listener.Close()
+			return ErrShutdown
+		}
+		o.listenerMu.Lock()
+		o.listener = listener
+		o.listenerMu.Unlock()
+		o.lifecycleMu.Unlock()
 	}
 
 	// Start resource manager (per-endpoint consumer table). The
@@ -1073,14 +1061,20 @@ func (o *Overlay) Run(ctx context.Context) error {
 		return nil
 	})
 
-	// Start the bounded serve-worker pool before the event loop so heavy
+	// Start the fair, bounded serve scheduler before the event loop so heavy
 	// inbound serve work (handleGetObjectsMessage) runs off the loop. The
-	// channel is assigned before eventLoop is launched (happens-before the
-	// only reader, submitServe, which runs on the loop).
-	o.serveJobs = make(chan overlayServeJob, serveQueueDepth)
-	for range serveWorkerCount {
-		g.Go(func() error { return o.serveWorker(gCtx) })
+	// scheduler context is canceled with the overlay and cancels queued or
+	// running work during shutdown.
+	scheduler := newServeScheduler(gCtx, serveWorkerCount, serveQueueDepth, servePerPeerQueue, servePerPeerConcurrency)
+	o.lifecycleMu.Lock()
+	if o.lifecycleState != overlayLifecycleRunning {
+		o.lifecycleMu.Unlock()
+		scheduler.close()
+		return ErrShutdown
 	}
+	o.serveScheduler = scheduler
+	o.lifecycleMu.Unlock()
+	g.Go(func() error { return scheduler.Run(gCtx) })
 
 	// Accept incoming connections.
 	o.listenerMu.RLock()
@@ -1141,6 +1135,7 @@ func (o *Overlay) requestStop() {
 		o.shutdownDone = make(chan struct{})
 	}
 	cancel := o.cancel
+	scheduler := o.serveScheduler
 	if !o.stopRequested {
 		o.stopRequested = true
 		if o.stopCh != nil {
@@ -1165,6 +1160,9 @@ func (o *Overlay) requestStop() {
 		p.Close()
 	}
 	o.peersMu.Unlock()
+	if scheduler != nil {
+		scheduler.close()
+	}
 }
 
 func (o *Overlay) closeListener() error {
@@ -1247,7 +1245,6 @@ func (o *Overlay) releaseQueuedInbound() {
 	drainMessages(o.txMessages)
 	drainMessages(o.manifestMessages)
 	drainMessages(o.ledgerData)
-	o.discardServeJobs()
 }
 
 // eventLoop processes internal events. It drains both the dedicated
@@ -1299,57 +1296,76 @@ func (o *Overlay) consensusControlEventLoop(ctx context.Context) error {
 	}
 }
 
-// serveWorker drains the bounded serve-job queue. Multiple workers run
-// concurrently; the serve paths (fetch-pack / get-objects / tx back-fill)
-// are read-only against the ledger/node store and peer-safe, so parallel
-// execution is sound.
-func (o *Overlay) serveWorker(ctx context.Context) error {
-	for {
-		select {
-		case <-ctx.Done():
-			o.discardServeJobs()
-			return ctx.Err()
-		case job := <-o.serveJobs:
-			job.run()
-		}
-	}
+// submitServe preserves the small synchronous helper used by tests and by
+// callers that do not need peer attribution. Production request paths use
+// submitServeForPeer so admission charges and fairness are applied.
+func (o *Overlay) submitServe(job func()) {
+	o.submitServeForPeer(0, resource.Charge{}, func(context.Context) { job() })
 }
 
-func (o *Overlay) submitServeJob(job overlayServeJob) bool {
-	if o.serveJobs == nil {
-		job.run()
-		return true
-	}
-	select {
-	case <-o.runDone:
-		job.drop()
+// submitServeForPeer admits a heavy serve request to the fair scheduler. The
+// admission charge is applied before queueing; a shed request receives the
+// inexpensive no-reply charge so repeatedly filling the queue is not free.
+func (o *Overlay) submitServeForPeer(peerID PeerID, admission resource.Charge, job func(context.Context)) bool {
+	return o.submitServeForPeerOwned(peerID, admission, job, nil)
+}
+
+func (o *Overlay) submitServeForPeerOwned(
+	peerID PeerID,
+	admission resource.Charge,
+	job func(context.Context),
+	discard func(),
+) bool {
+	if job == nil {
 		return false
-	default:
 	}
-	select {
-	case o.serveJobs <- job:
-		return true
-	default:
-		job.drop()
+	peer, exists := o.getPeer(peerID)
+	if peerID != 0 && !exists {
+		return false
+	}
+	if exists && admission.Cost() > 0 {
+		peer.Charge(admission, "serve request admission")
+	}
+	o.lifecycleMu.Lock()
+	scheduler := o.serveScheduler
+	serveCtx := o.ctx
+	lifecycleState := o.lifecycleState
+	o.lifecycleMu.Unlock()
+	if lifecycleState == overlayLifecycleStopping || lifecycleState == overlayLifecycleStopped {
 		o.droppedServeJobs.Add(1)
-		slog.Debug("serve job dropped: worker pool saturated", "t", "Overlay")
+		if exists {
+			peer.Charge(resource.FeeRequestNoReply, "serve scheduler stopped")
+		}
 		return false
 	}
+	if scheduler == nil {
+		job(context.Background())
+		return true
+	}
+	if scheduler.SubmitOwned(serveCtx, peerID, job, discard) {
+		return true
+	}
+	o.droppedServeJobs.Add(1)
+	if exists {
+		peer.Charge(resource.FeeRequestNoReply, "serve scheduler saturated")
+	}
+	slog.Debug("serve job dropped: scheduler saturated", "t", "Overlay", "peer", peerID)
+	return false
 }
 
-func (o *Overlay) discardServeJobs() {
-	for {
-		select {
-		case job := <-o.serveJobs:
-			job.drop()
-		default:
-			return
-		}
+// cancelServePeer disposes queued work and propagates cancellation to any
+// active provider calls when a peer disconnects.
+func (o *Overlay) cancelServePeer(peerID PeerID) {
+	o.lifecycleMu.Lock()
+	scheduler := o.serveScheduler
+	o.lifecycleMu.Unlock()
+	if scheduler != nil {
+		scheduler.CancelPeer(peerID)
 	}
 }
 
 // DroppedServeJobs returns the cumulative count of heavy serve jobs shed
-// because the worker pool was saturated.
+// because the scheduler was saturated or stopping.
 func (o *Overlay) DroppedServeJobs() uint64 {
 	return o.droppedServeJobs.Load()
 }
