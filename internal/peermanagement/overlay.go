@@ -148,8 +148,8 @@ type Overlay struct {
 
 	// serveScheduler carries heavy inbound serve work off the event-loop
 	// goroutine. It is created in Run; nil when the overlay was built without
-	// Run (submitServe then runs the job inline, preserving synchronous unit
-	// test behaviour).
+	// Run (submitServeForPeerOwned then runs the job inline, preserving
+	// synchronous unit test behaviour).
 	serveScheduler *serveScheduler
 
 	// Peer lifecycle callbacks wired by higher layers (e.g., consensus
@@ -1294,20 +1294,6 @@ func (o *Overlay) consensusControlEventLoop(ctx context.Context) error {
 			o.onMessageReceived(evt)
 		}
 	}
-}
-
-// submitServe preserves the small synchronous helper used by tests and by
-// callers that do not need peer attribution. Production request paths use
-// submitServeForPeer so admission charges and fairness are applied.
-func (o *Overlay) submitServe(job func()) {
-	o.submitServeForPeer(0, resource.Charge{}, func(context.Context) { job() })
-}
-
-// submitServeForPeer admits a heavy serve request to the fair scheduler. The
-// admission charge is applied before queueing; a shed request receives the
-// inexpensive no-reply charge so repeatedly filling the queue is not free.
-func (o *Overlay) submitServeForPeer(peerID PeerID, admission resource.Charge, job func(context.Context)) bool {
-	return o.submitServeForPeerOwned(peerID, admission, job, nil)
 }
 
 func (o *Overlay) submitServeForPeerOwned(
