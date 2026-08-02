@@ -137,6 +137,21 @@ func MeetsInnerObjectTemplate(fieldName string, values map[string]any) bool {
 	return validateInnerObject(fieldName, values, fieldOrder) == nil
 }
 
+// CanonicalizeInnerObjectTemplate removes discardable fields and reports
+// whether the remaining object satisfies its registered SField template.
+// Fields without a registered template are left unchanged and are valid.
+func CanonicalizeInnerObjectTemplate(fieldName string, values map[string]any) bool {
+	if _, ok := innerObjectTemplates[fieldName]; !ok {
+		return true
+	}
+	for name := range values {
+		if isDiscardableInnerField(name) {
+			delete(values, name)
+		}
+	}
+	return MeetsInnerObjectTemplate(fieldName, values)
+}
+
 func validateInnerObject(fieldName string, values map[string]any, fieldOrder []string) error {
 	template, ok := innerObjectTemplates[fieldName]
 	if !ok {
@@ -167,6 +182,10 @@ func innerObjectFieldAllowed(template []innerObjectField, name string) bool {
 			return true
 		}
 	}
+	return isDiscardableInnerField(name)
+}
+
+func isDiscardableInnerField(name string) bool {
 	field, err := definitions.Get().FieldInstanceByName(name)
 	return err == nil && field.Nth > 256
 }

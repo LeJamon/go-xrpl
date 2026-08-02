@@ -190,6 +190,33 @@ func TestAcceptedTransactionRejectsMalformedInnerObjectTemplate(t *testing.T) {
 	require.Nil(t, accepted.Transaction())
 }
 
+func TestAcceptedTransactionRejectsObjectTerminatorInAffectedNodes(t *testing.T) {
+	txBlob, err := binarycodec.EncodeBytes(validAcceptedPayment())
+	require.NoError(t, err)
+	metaBlob, err := binarycodec.EncodeBytes(map[string]any{
+		"AffectedNodes":     []any{},
+		"TransactionIndex":  uint32(13),
+		"TransactionResult": "tesSUCCESS",
+	})
+	require.NoError(t, err)
+	terminator := bytes.Index(metaBlob, []byte{0xF8, 0xF1})
+	require.NotEqual(t, -1, terminator)
+	metaBlob[terminator+1] = 0xE1
+
+	txField, err := txcore.EncodeWithVL(txBlob)
+	require.NoError(t, err)
+	metaField, err := txcore.EncodeWithVL(metaBlob)
+	require.NoError(t, err)
+	accepted := ParseAcceptedTransaction(bytes.Join([][]byte{txField, metaField}, nil))
+
+	require.ErrorContains(t, accepted.ParseError(), "illegal end-of-object marker in array")
+	require.Equal(t, ter.TemMALFORMED, accepted.Result())
+	_, hasIndex := accepted.TransactionIndex()
+	require.False(t, hasIndex)
+	require.Nil(t, accepted.Transaction())
+	require.Nil(t, accepted.Metadata())
+}
+
 func TestValidateAcceptedMetadataRejectsWrongRequiredFieldTypes(t *testing.T) {
 	valid := map[string]any{
 		"AffectedNodes":     []any{},

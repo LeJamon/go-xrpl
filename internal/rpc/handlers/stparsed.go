@@ -44,7 +44,7 @@ func serializedFieldParseMessage(value any, path string, defs *binarycodecdefs.D
 			if message := serializedFieldParseMessage(child, fieldPath, defs); message != "" {
 				return message
 			}
-			if !binarycodectypes.MeetsInnerObjectTemplate(name, child) {
+			if !binarycodectypes.CanonicalizeInnerObjectTemplate(name, child) {
 				return fmt.Sprintf("Object '%s' contents did not meet requirements for that type.", name)
 			}
 		case "STArray":
@@ -66,7 +66,8 @@ func serializedFieldParseMessage(value any, path string, defs *binarycodecdefs.D
 				var wrapperValue any
 				for wrapperName, wrapperValue = range itemObject {
 				}
-				if _, err := defs.FieldInstanceByName(wrapperName); err != nil {
+				wrapperField, err := defs.FieldInstanceByName(wrapperName)
+				if err != nil {
 					return fmt.Sprintf("Field '%s.%s' is unknown.", fieldPath, wrapperName)
 				}
 				wrapperObject, ok := wrapperValue.(map[string]any)
@@ -79,7 +80,12 @@ func serializedFieldParseMessage(value any, path string, defs *binarycodecdefs.D
 				if message := serializedFieldParseMessage(wrapperObject, itemPath, defs); message != "" {
 					return fmt.Sprintf("Error at '%s'. %s", itemPath, message)
 				}
-				if !binarycodectypes.MeetsInnerObjectTemplate(wrapperName, wrapperObject) {
+				if wrapperField.Type != "STObject" {
+					return fmt.Sprintf(
+						"Item '%s' at index %d is not an object.  Arrays may only contain objects.",
+						itemPath, i)
+				}
+				if !binarycodectypes.CanonicalizeInnerObjectTemplate(wrapperName, wrapperObject) {
 					return fmt.Sprintf(
 						"Error at '%s'. Object '%s' contents did not meet requirements for that type.",
 						itemPath, wrapperName)

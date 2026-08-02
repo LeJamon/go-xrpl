@@ -23,6 +23,21 @@ func TestSTArrayFromJson(t *testing.T) {
 			expectedOutput: nil,
 		},
 		{
+			name: "fail - element has multiple wrappers",
+			input: []any{map[string]any{
+				"Memo":   map[string]any{},
+				"Signer": map[string]any{},
+			}},
+			expectedErr: ErrNotSTObjectInSTArray,
+		},
+		{
+			name: "fail - wrapper SField is not STObject",
+			input: []any{map[string]any{
+				"Account": map[string]any{},
+			}},
+			expectedErr: ErrNotSTObjectInSTArray,
+		},
+		{
 			name: "pass - nested stobject test",
 			input: []any{
 				map[string]any{
@@ -107,6 +122,13 @@ func TestSTArrayToJson(t *testing.T) {
 			},
 			output:      nil,
 			expectedErr: errors.New("FieldHeader {200 200} not found"),
+		},
+		{
+			name: "fail - object terminator at array scope",
+			malleate: func(t *testing.T) *serdes.BinaryParser {
+				return serdes.NewBinaryParser([]byte{ObjectEndMarker}, defs)
+			},
+			expectedErr: errIllegalObjectEndMarker,
 		},
 		{
 			name: "pass - large starray",

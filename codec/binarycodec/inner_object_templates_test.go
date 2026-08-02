@@ -132,3 +132,21 @@ func TestDecodeBytesValidatesInnerObjectTemplates(t *testing.T) {
 		})
 	}
 }
+
+func TestDecodeBytesRejectsObjectEndMarkerAtArrayScope(t *testing.T) {
+	_, err := DecodeBytes([]byte{0xF8, 0xE1})
+	require.ErrorContains(t, err, "illegal end-of-object marker in array")
+}
+
+func TestDecodeBytesAllowsUntemplatedObjectWrapper(t *testing.T) {
+	blob, err := EncodeBytes(map[string]any{
+		"Permissions": []any{map[string]any{
+			"Memo": map[string]any{"MemoData": ""},
+		}},
+	})
+	require.NoError(t, err)
+
+	decoded, err := DecodeBytes(blob)
+	require.NoError(t, err)
+	require.NotNil(t, decoded)
+}

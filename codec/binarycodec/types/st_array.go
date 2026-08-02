@@ -4,6 +4,7 @@ package types
 import (
 	"errors"
 
+	"github.com/LeJamon/go-xrpl/codec/binarycodec/definitions"
 	"github.com/LeJamon/go-xrpl/codec/binarycodec/serdes"
 )
 
@@ -43,9 +44,19 @@ func (t *STArray) FromJSON(json any) ([]byte, error) {
 
 	var sink []byte
 	for _, v := range elems {
+		object, ok := v.(map[string]any)
+		if !ok || len(object) != 1 {
+			return nil, ErrNotSTObjectInSTArray
+		}
+		for fieldName := range object {
+			field, err := definitions.Get().FieldInstanceByName(fieldName)
+			if err != nil || field.Type != "STObject" {
+				return nil, ErrNotSTObjectInSTArray
+			}
+		}
 		st := NewSTObject(serdes.NewBinarySerializer(serdes.DefaultFieldIDCodec()))
 		st.skipJSONArrayLimit = t.skipJSONArrayLimit
-		b, err := st.FromJSON(v)
+		b, err := st.FromJSON(object)
 		if err != nil {
 			return nil, err
 		}
@@ -83,6 +94,9 @@ func (t *STArray) ToJSON(p *serdes.BinaryParser, opts ...int) (any, error) {
 		// terminator (STArray.cpp:65).
 		if fi.FieldName == "ArrayEndMarker" {
 			break
+		}
+		if fi.FieldName == "ObjectEndMarker" {
+			return nil, errIllegalObjectEndMarker
 		}
 
 		// All array elements must be STObjects

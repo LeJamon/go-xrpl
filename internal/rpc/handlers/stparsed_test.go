@@ -169,3 +169,69 @@ func TestSerializedFieldParseMessageInnerTemplate(t *testing.T) {
 		t.Fatalf("message = %q, want %q", got, want)
 	}
 }
+
+func TestSerializedFieldParseMessageRejectsInvalidArrayWrappers(t *testing.T) {
+	tests := []struct {
+		name    string
+		wrapper map[string]any
+		want    string
+	}{
+		{
+			name: "multiple wrappers",
+			wrapper: map[string]any{
+				"Memo":   map[string]any{},
+				"Signer": map[string]any{},
+			},
+			want: "Field 'tx_json.Memos[0]' must be an object with a single key/object value.",
+		},
+		{
+			name:    "non STObject wrapper",
+			wrapper: map[string]any{"Account": map[string]any{}},
+			want: "Item 'tx_json.Memos.[0].Account' at index 0 is not an object.  " +
+				"Arrays may only contain objects.",
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			object := map[string]any{"Memos": []any{test.wrapper}}
+			if got := serializedFieldParseMessage(object, "tx_json", binarycodecdefs.Get()); got != test.want {
+				t.Fatalf("message = %q, want %q", got, test.want)
+			}
+		})
+	}
+}
+
+func TestSerializedFieldParseMessageCanonicalizesInnerDiscardable(t *testing.T) {
+	entry := map[string]any{
+		"Account":      "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh",
+		"hash":         "0000000000000000000000000000000000000000000000000000000000000000",
+		"SignerWeight": json.Number("1"),
+	}
+	object := map[string]any{
+		"SignerEntries": []any{map[string]any{"SignerEntry": entry}},
+	}
+	if message := serializedFieldParseMessage(object, "tx_json", binarycodecdefs.Get()); message != "" {
+		t.Fatalf("message = %q, want success", message)
+	}
+	if _, ok := entry["hash"]; ok {
+		t.Fatal("discardable hash was not removed")
+	}
+}
+
+func TestSerializedFieldParseMessageUsesSharedDefaultStyle(t *testing.T) {
+	object := map[string]any{
+		"PriceDataSeries": []any{map[string]any{
+			"PriceData": map[string]any{
+				"BaseAsset":  "XRP",
+				"QuoteAsset": "USD",
+				"Scale":      json.Number("0"),
+			},
+		}},
+	}
+	want := "Error at 'tx_json.PriceDataSeries.[0].PriceData'. " +
+		"Object 'PriceData' contents did not meet requirements for that type."
+	if got := serializedFieldParseMessage(object, "tx_json", binarycodecdefs.Get()); got != want {
+		t.Fatalf("message = %q, want %q", got, want)
+	}
+}

@@ -35,7 +35,8 @@ var (
 	// found while parsing an object (STObject.cpp:259-263): the array terminator
 	// is consumed by STArray, so encountering one inside an object means
 	// malformed nesting at any depth, never a valid terminator.
-	errIllegalArrayEndMarker = errors.New("illegal end-of-array marker in object")
+	errIllegalArrayEndMarker  = errors.New("illegal end-of-array marker in object")
+	errIllegalObjectEndMarker = errors.New("illegal end-of-object marker in array")
 	// errMaxNestingDepth mirrors rippled's nesting cap (STVar.cpp:122,
 	// STObject.cpp:89): a STObject/STArray nested past maxNestingDepth is
 	// rejected. Without it a deeply nested blob recurses until the goroutine

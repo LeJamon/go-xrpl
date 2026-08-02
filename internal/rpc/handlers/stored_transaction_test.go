@@ -21,18 +21,18 @@ func TestDecodeTxBlobCanonicalizesJSONStoredObjects(t *testing.T) {
 	meta := map[string]any{
 		"TransactionResult": "tesSUCCESS",
 		"TransactionIndex":  0,
-		"AffectedNodes": []any{map[string]any{
-			"CreatedNode": map[string]any{
+		"AffectedNodes": []any{
+			map[string]any{"CreatedNode": map[string]any{
 				"LedgerEntryType": "AccountRoot",
 				"LedgerIndex":     "1111111111111111111111111111111111111111111111111111111111111111",
 				"NewFields":       map[string]any{"Account": "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh"},
-			},
-			"ModifiedNode": map[string]any{
+			}},
+			map[string]any{"ModifiedNode": map[string]any{
 				"LedgerEntryType": "AccountRoot",
 				"LedgerIndex":     "2222222222222222222222222222222222222222222222222222222222222222",
 				"FinalFields":     map[string]any{},
-			},
-		}},
+			}},
+		},
 	}
 	data, err := json.Marshal(map[string]any{"tx_json": txJSON, "meta": meta})
 	require.NoError(t, err)
