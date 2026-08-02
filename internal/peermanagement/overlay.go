@@ -281,21 +281,31 @@ type Overlay struct {
 	listenerReadyOnce sync.Once
 
 	// Lifecycle
-	// lifecycleMu guards ctx/cancel against the Run-write vs Stop-read
-	// race: Run is typically launched in its own goroutine and lazily
-	// initialises cancel, while a concurrent Stop (e.g. error-path
-	// teardown) reads it. Other ctx reads live in goroutines spawned by
-	// Run after the write, so happens-before covers them.
+	// lifecycleMu owns the one-shot lifecycle state and the context used by
+	// every resource started by Run. An Overlay cannot be restarted: a
+	// stopped instance remains stopped for the rest of its lifetime.
 	lifecycleMu sync.Mutex
 	ctx         context.Context
 	cancel      context.CancelFunc
 	stopOnce    sync.Once
+	state       overlayState
+	runFinished chan struct{}
+	shutdownErr error
 
 	// stopCh is closed by Stop to release any lifecycle send blocked on an
 	// event loop that has already exited during shutdown.
 	stopCh  chan struct{}
 	runDone <-chan struct{}
 }
+
+type overlayState uint8
+
+const (
+	overlayNew overlayState = iota
+	overlayRunning
+	overlayStopping
+	overlayStopped
+)
 
 // LedgerSync returns the overlay's ledger-sync handler so callers in a
 // higher layer (e.g., consensus startup) can wire a LedgerProvider that
@@ -861,6 +871,7 @@ func New(opts ...Option) (*Overlay, error) {
 		lifecycle:                make(chan Event, lifecycleBufferSize(&cfg)),
 		stopCh:                   make(chan struct{}),
 		listenerReady:            make(chan struct{}),
+		runFinished:              make(chan struct{}),
 		relayedIndex:             make(map[[32]byte]*relayedEntry),
 		clockForIndex:            time.Now,
 		inboundSem:               make(chan struct{}, inboundCap),
@@ -946,18 +957,49 @@ func loadOrCreateIdentity(dataDir string) (*Identity, error) {
 	return id, nil
 }
 
-// Run starts the overlay and blocks until the context is cancelled.
-func (o *Overlay) Run(ctx context.Context) error {
+// Run starts the overlay and blocks until the context is cancelled or one of
+// its owned loops fails. Run is intentionally one-shot: an Overlay owns the
+// listener, discovery state, and resource manager for one lifetime only.
+func (o *Overlay) Run(parent context.Context) (runErr error) {
 	o.lifecycleMu.Lock()
-	o.ctx, o.cancel = context.WithCancel(ctx) //nolint:gosec // G118: cancel stored in struct field and deferred, called on shutdown
-	cancel := o.cancel
+	if o.state != overlayNew {
+		err := ErrAlreadyRunning
+		if o.state == overlayStopping || o.state == overlayStopped {
+			err = ErrShutdown
+		}
+		o.lifecycleMu.Unlock()
+		return err
+	}
+	if o.stopCh == nil {
+		o.stopCh = make(chan struct{})
+	}
+	if o.runFinished == nil {
+		o.runFinished = make(chan struct{})
+	}
+	runCtx, cancel := context.WithCancel(parent) //nolint:gosec // G118: cancellation is owned by this Run/Stop pair
+	o.ctx = runCtx
+	o.cancel = cancel
+	o.state = overlayRunning
+	finished := o.runFinished
 	o.lifecycleMu.Unlock()
-	defer cancel()
 
-	// Start listener if configured
+	defer func() {
+		cleanupErr := o.shutdown()
+		if runErr == nil {
+			runErr = cleanupErr
+		}
+		o.lifecycleMu.Lock()
+		o.shutdownErr = cleanupErr
+		o.state = overlayStopped
+		close(finished)
+		o.lifecycleMu.Unlock()
+	}()
+
+	// Start listener if configured.
 	if o.cfg.ListenAddr != "" {
 		if err := o.startListener(); err != nil {
-			return fmt.Errorf("listener error: %w", err)
+			runErr = fmt.Errorf("listener error: %w", err)
+			return runErr
 		}
 	}
 	o.signalListenerReady()
@@ -969,13 +1011,25 @@ func (o *Overlay) Run(ctx context.Context) error {
 		o.resourceManager.Start()
 	}
 
-	// Start discovery
-	if err := o.discovery.Start(o.ctx); err != nil {
-		return fmt.Errorf("discovery error: %w", err)
+	// Start discovery.
+	if o.discovery != nil {
+		if err := o.discovery.Start(runCtx); err != nil {
+			runErr = fmt.Errorf("discovery error: %w", err)
+			return runErr
+		}
 	}
 
-	g, gCtx := errgroup.WithContext(o.ctx)
+	g, gCtx := errgroup.WithContext(runCtx)
 	o.runDone = gCtx.Done()
+
+	// Closing the listener is the cancellation bridge for Accept: net.Listener
+	// does not observe context cancellation on its own. This watcher belongs to
+	// the same errgroup as every event/serve loop, so g.Wait joins it too.
+	g.Go(func() error {
+		<-gCtx.Done()
+		_ = o.closeListener()
+		return nil
+	})
 
 	// Start the bounded serve-worker pool before the event loop so heavy
 	// inbound serve work (handleGetObjectsMessage) runs off the loop. The
@@ -986,78 +1040,143 @@ func (o *Overlay) Run(ctx context.Context) error {
 		g.Go(func() error { return o.serveWorker(gCtx) })
 	}
 
-	// Accept incoming connections
-	if o.listener != nil {
+	// Accept incoming connections.
+	o.listenerMu.RLock()
+	hasListener := o.listener != nil
+	o.listenerMu.RUnlock()
+	if hasListener {
 		g.Go(func() error { return o.acceptLoop(gCtx) })
 	}
 
-	// Event processing loops
+	// Event processing loops.
 	g.Go(func() error { return o.eventLoop(gCtx) })
 	g.Go(func() error { return o.consensusEventLoop(gCtx) })
 	g.Go(func() error { return o.consensusControlEventLoop(gCtx) })
 	g.Go(func() error { return o.acquisitionEventLoop(gCtx) })
 
-	// Discovery/autoconnect loop
-	g.Go(func() error { return o.discoveryLoop(gCtx) })
+	// Discovery/autoconnect loop.
+	if o.discovery != nil {
+		g.Go(func() error { return o.discoveryLoop(gCtx) })
+	}
 
-	// Maintenance loop (cleanup, ping, etc.)
+	// Maintenance loop (cleanup, ping, etc.).
 	g.Go(func() error { return o.maintenanceLoop(gCtx) })
 
-	return g.Wait()
+	runErr = g.Wait()
+	return runErr
 }
 
-// Stop gracefully shuts down the overlay. Blocks on peerWG so callers
-// observe a fully-quiesced overlay rather than racing against
-// peer.Run goroutines still draining after Close. Idempotent: repeated
-// calls (defensive cleanup, error-path + deferred stop) are no-ops.
+// Stop requests shutdown and waits for Run to finish. It is safe to call
+// before Run, while Run is starting, or repeatedly after Run has returned.
+// Cleanup errors are retained so every caller observes the same result.
 func (o *Overlay) Stop() error {
-	o.stopOnce.Do(func() {
-		o.peerStartMu.Lock()
-		o.peerStartsClosed = true
-		o.peerStartMu.Unlock()
-
-		// Release any lifecycle send blocked on an event loop that is
-		// about to exit, so run-watcher goroutines drain cleanly under
-		// peerWG.Wait below. Guarded for overlays built outside New (some
-		// tests / embedders construct the struct directly).
-		if o.stopCh != nil {
-			close(o.stopCh)
+	o.lifecycleMu.Lock()
+	switch o.state {
+	case overlayNew:
+		o.state = overlayStopped
+		if o.stopCh == nil {
+			o.stopCh = make(chan struct{})
 		}
-
-		o.lifecycleMu.Lock()
-		cancel := o.cancel
+		finished := o.runFinished
+		if finished == nil {
+			o.runFinished = make(chan struct{})
+		}
 		o.lifecycleMu.Unlock()
-		if cancel != nil {
-			cancel()
+		o.signalStop()
+		if o.discovery != nil {
+			o.discovery.Stop()
 		}
-
-		// Close listener
-		o.listenerMu.RLock()
-		l := o.listener
-		o.listenerMu.RUnlock()
-		if l != nil {
-			l.Close()
-		}
-
-		// Stop discovery
-		o.discovery.Stop()
-
-		// Close all peers
-		o.peersMu.Lock()
-		for _, p := range o.peers {
-			p.Close()
-		}
-		o.peersMu.Unlock()
-
-		o.peerStartWG.Wait()
-		o.peerWG.Wait()
-
 		if o.resourceManager != nil {
 			o.resourceManager.Stop()
 		}
-	})
+		_ = finished
+		return nil
+	case overlayRunning:
+		o.state = overlayStopping
+	case overlayStopping:
+		// Another caller owns the signal; all callers join Run below.
+	case overlayStopped:
+		err := o.shutdownErr
+		o.lifecycleMu.Unlock()
+		return err
+	}
+	cancel := o.cancel
+	finished := o.runFinished
+	o.lifecycleMu.Unlock()
 
+	o.signalStop()
+	if cancel != nil {
+		cancel()
+	}
+	if finished != nil {
+		<-finished
+	}
+	o.lifecycleMu.Lock()
+	err := o.shutdownErr
+	o.lifecycleMu.Unlock()
+	return err
+}
+
+// signalStop closes the stop gate exactly once. The gate is independent from
+// the Run context because lifecycle dispatchers may be unwinding before the
+// errgroup context has propagated cancellation to every child.
+func (o *Overlay) signalStop() {
+	if o.stopCh == nil {
+		return
+	}
+	o.stopOnce.Do(func() { close(o.stopCh) })
+}
+
+func (o *Overlay) closeListener() error {
+	o.listenerMu.RLock()
+	l := o.listener
+	o.listenerMu.RUnlock()
+	if l == nil {
+		return nil
+	}
+	if err := l.Close(); err != nil && !errors.Is(err, net.ErrClosed) {
+		return err
+	}
 	return nil
+}
+
+// shutdown owns teardown for every resource started by Run. It is called by
+// Run's deferred finalizer after g.Wait, so peer start/run WaitGroups are safe
+// to join without racing a future Add.
+func (o *Overlay) shutdown() error {
+	o.signalStop()
+	o.lifecycleMu.Lock()
+	cancel := o.cancel
+	o.lifecycleMu.Unlock()
+	if cancel != nil {
+		cancel()
+	}
+
+	var errs []error
+	if err := o.closeListener(); err != nil {
+		errs = append(errs, err)
+	}
+	if o.discovery != nil {
+		o.discovery.Stop()
+	}
+
+	o.peerStartMu.Lock()
+	o.peerStartsClosed = true
+	o.peerStartMu.Unlock()
+
+	o.peersMu.Lock()
+	for _, p := range o.peers {
+		p.Close()
+	}
+	o.peersMu.Unlock()
+
+	o.peerStartWG.Wait()
+	o.peerWG.Wait()
+
+	if o.resourceManager != nil {
+		o.resourceManager.Stop()
+	}
+	return errors.Join(errs...)
 }
 
 // eventLoop processes internal events. It drains both the dedicated
