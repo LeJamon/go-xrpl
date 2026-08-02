@@ -123,6 +123,21 @@ func TestBuildHandshakeResponse(t *testing.T) {
 	assert.Equal(t, cfg.UserAgent, resp.Header.Get(HeaderServer))
 }
 
+func TestBuildHandshakeResponseMirrorsHTTPVersion(t *testing.T) {
+	id, err := NewIdentity()
+	require.NoError(t, err)
+
+	request := emptyHandshakeRequest()
+	request.Proto = "HTTP/2.0"
+	request.ProtoMajor = 2
+	request.ProtoMinor = 0
+
+	resp := BuildHandshakeResponse(request, id, make([]byte, 32), DefaultHandshakeConfig(), "")
+	assert.Equal(t, request.Proto, resp.Proto)
+	assert.Equal(t, request.ProtoMajor, resp.ProtoMajor)
+	assert.Equal(t, request.ProtoMinor, resp.ProtoMinor)
+}
+
 func TestBuildHandshakeResponseNegotiatesFeatures(t *testing.T) {
 	id, err := NewIdentity()
 	require.NoError(t, err)

@@ -233,12 +233,19 @@ func BuildHandshakeResponse(request *http.Request, id *Identity, sharedValue []b
 	if negotiated == "" {
 		negotiated = supportedProtocols[len(supportedProtocols)-1].String()
 	}
+	proto, protoMajor, protoMinor := "HTTP/1.1", 1, 1
+	if request != nil && request.ProtoMajor > 0 {
+		proto, protoMajor, protoMinor = request.Proto, request.ProtoMajor, request.ProtoMinor
+		if proto == "" {
+			proto = fmt.Sprintf("HTTP/%d.%d", protoMajor, protoMinor)
+		}
+	}
 	resp := &http.Response{
 		StatusCode: http.StatusSwitchingProtocols,
 		Status:     "101 Switching Protocols",
-		Proto:      "HTTP/1.1",
-		ProtoMajor: 1,
-		ProtoMinor: 1,
+		Proto:      proto,
+		ProtoMajor: protoMajor,
+		ProtoMinor: protoMinor,
 		Header:     make(http.Header),
 	}
 
