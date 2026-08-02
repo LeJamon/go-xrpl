@@ -321,9 +321,10 @@ func TestLedgerProvider_GetProofPath_TxMap_Existing(t *testing.T) {
 	provider := newLedgerProviderForTest(lookup)
 
 	hash := closed.Hash()
-	header, path, err := provider.GetProofPath(hash[:], txs[0].key[:], message.LedgerMapTransaction)
+	headerBytes, path, err := provider.GetProofPath(hash[:], txs[0].key[:], message.LedgerMapTransaction)
 	require.NoError(t, err)
-	assert.Equal(t, closed.SerializeHeader(), header)
+	assert.Equal(t, header.AddRaw(closed.Header(), false), headerBytes)
+	assert.Len(t, headerBytes, header.SizeBase)
 	require.NotEmpty(t, path, "proof path for an existing key must be non-empty")
 }
 
@@ -352,9 +353,10 @@ func TestLedgerProvider_GetProofPath_StateMap_Existing(t *testing.T) {
 	provider := newLedgerProviderForTest(lookup)
 
 	hash := closed.Hash()
-	header, path, err := provider.GetProofPath(hash[:], targetKey[:], message.LedgerMapAccountState)
+	headerBytes, path, err := provider.GetProofPath(hash[:], targetKey[:], message.LedgerMapAccountState)
 	require.NoError(t, err)
-	assert.Equal(t, closed.SerializeHeader(), header)
+	assert.Equal(t, header.AddRaw(closed.Header(), false), headerBytes)
+	assert.Len(t, headerBytes, header.SizeBase)
 	require.NotEmpty(t, path, "proof path for an existing state key must be non-empty")
 }
 

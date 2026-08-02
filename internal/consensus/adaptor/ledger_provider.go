@@ -325,7 +325,7 @@ func (p *LedgerProvider) GetProofPathContext(
 		return nil, nil, peermanagement.ErrKeyNotFound
 	}
 
-	return l.SerializeHeader(), proof.Path, nil
+	return header.AddRaw(l.Header(), false), proof.Path, nil
 }
 
 func (p *LedgerProvider) getLedgerContext(ctx context.Context, hash [32]byte) (*ledger.Ledger, error) {
