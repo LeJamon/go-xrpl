@@ -573,6 +573,9 @@ func TestAggregator_ApplyList_PendingThenKnownSequence(t *testing.T) {
 	if _, m := agg.TrustedValidators(); len(m) != 0 {
 		t.Fatalf("trusted before promotion: want 0, got %d", len(m))
 	}
+	if agg.IsMasterListed(v1) {
+		t.Fatal("validator reported listed before promotion")
+	}
 
 	// Same sequence again — KnownSequence (re-arrival at a queued seq).
 	d, _, _ = agg.ApplyList(pub.manifestB64, blob, sig, 1, "test://")
@@ -587,6 +590,9 @@ func TestAggregator_ApplyList_PendingThenKnownSequence(t *testing.T) {
 	_, masters := agg.TrustedValidators()
 	if len(masters) != 1 || masters[0] != v1 {
 		t.Fatalf("post-Tick trusted: want [v1] got %d entries", len(masters))
+	}
+	if !agg.IsMasterListed(v1) {
+		t.Fatal("validator not reported listed after promotion tick")
 	}
 }
 

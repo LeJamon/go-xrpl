@@ -309,6 +309,9 @@ func (c *Components) stop() {
 					"replay_in_flight_at_stop", replay)
 			}
 		}
+		if c.ValidatorList != nil {
+			c.ValidatorList.Tick()
+		}
 		if c.Engine != nil {
 			c.stopErr = errors.Join(c.stopErr, c.Engine.Stop())
 		}
@@ -451,8 +454,8 @@ func NewFromConfig(
 
 	// Seed the local token manifest after durable validator state has loaded.
 	if identity != nil && identity.Manifest != nil {
-		if d := validatorManifests.ApplyManifest(identity.Manifest); d != manifest.Accepted && d != manifest.Stale {
-			return nil, fmt.Errorf("seed local manifest into cache: disposition=%s", d)
+		if err := seedLocalManifest(validatorManifests, identity.Manifest); err != nil {
+			return nil, err
 		}
 	} else {
 		slog.Info("local validator manifest not configured",
@@ -611,6 +614,14 @@ func NewFromConfig(
 	wireValidatorListTrust(c)
 
 	return c, nil
+}
+
+func seedLocalManifest(cache *manifest.Cache, local *manifest.Manifest) error {
+	disposition := cache.ApplyManifest(local)
+	if disposition == manifest.Invalid {
+		return fmt.Errorf("seed local manifest into cache: disposition=%s", disposition)
+	}
+	return nil
 }
 
 func restoreManifests(role string, cache *manifest.Cache, rows [][]byte) {

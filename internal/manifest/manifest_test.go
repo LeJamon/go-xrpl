@@ -740,6 +740,24 @@ func TestManifest_Revoked_WithEphemeral_Rejected(t *testing.T) {
 	}
 }
 
+func TestManifest_Revoked_WithEmptyEphemeralField_Rejected(t *testing.T) {
+	serialized, _, _ := buildManifest(t, manifest.RevokedSequence, true, 0x0E, 0)
+	for _, field := range []string{"SigningPubKey", "Signature"} {
+		t.Run(field, func(t *testing.T) {
+			decoded, err := binarycodec.DecodeBytes(serialized)
+			require.NoError(t, err)
+			decoded[field] = ""
+			encoded, err := binarycodec.Encode(decoded)
+			require.NoError(t, err)
+			withEmptyField, err := hex.DecodeString(encoded)
+			require.NoError(t, err)
+
+			_, err = manifest.Deserialize(withEmptyField)
+			require.ErrorContains(t, err, "revoked manifest contains ephemeral key/signature")
+		})
+	}
+}
+
 // buildManifestSecpMaster builds a serialized manifest with a
 // secp256k1 master key and ed25519 ephemeral key, both signing the
 // canonical preimage. The returned master signature is forced to its

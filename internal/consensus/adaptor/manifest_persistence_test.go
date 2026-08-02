@@ -95,6 +95,47 @@ func TestRestoreManifestsRejectsInvalidRowsAndKeepsRevocation(t *testing.T) {
 	require.True(t, cache.Revoked(revocation.MasterKey()))
 }
 
+func TestSeedLocalManifestToleratesPersistedKeyCollisions(t *testing.T) {
+	tests := []struct {
+		name      string
+		persisted []byte
+		local     []byte
+		want      manifest.Disposition
+	}{
+		{
+			name:      "master already used as signing key",
+			persisted: buildWireManifest(t, 1, 0x51, 0x52),
+			local:     buildWireManifest(t, 1, 0x52, 0x53),
+			want:      manifest.BadMasterKey,
+		},
+		{
+			name:      "signing key already used",
+			persisted: buildWireManifest(t, 1, 0x54, 0x55),
+			local:     buildWireManifest(t, 1, 0x56, 0x55),
+			want:      manifest.BadEphemeralKey,
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			persisted, err := manifest.Deserialize(test.persisted)
+			require.NoError(t, err)
+			local, err := manifest.Deserialize(test.local)
+			require.NoError(t, err)
+
+			cache := manifest.NewCache()
+			require.Equal(t, manifest.Accepted, cache.ApplyManifest(persisted))
+			require.Equal(t, test.want, cache.ApplyManifest(local))
+			require.NoError(t, seedLocalManifest(cache, local))
+		})
+	}
+
+	invalidWire := buildWireManifest(t, 1, 0x57, 0x58)
+	invalidWire[len(invalidWire)-1] ^= 1
+	invalid, err := manifest.Deserialize(invalidWire)
+	require.NoError(t, err)
+	require.ErrorContains(t, seedLocalManifest(manifest.NewCache(), invalid), "disposition=invalid")
+}
+
 func TestNewFromConfigFailsWhenManifestStoreCannotLoad(t *testing.T) {
 	dir := t.TempDir()
 	db, err := sql.Open("sqlite", filepath.Join(dir, "manifests.db"))

@@ -342,15 +342,6 @@ func requireHexField(m map[string]any, name string) (string, error) {
 }
 
 func hasField(m map[string]any, name string) bool {
-	v, ok := m[name]
-	if !ok {
-		return false
-	}
-	s, ok := v.(string)
-	if !ok {
-		// Non-string fields (numeric) are always "present" if the key
-		// is in the map.
-		return true
-	}
-	return s != ""
+	_, ok := m[name]
+	return ok
 }
