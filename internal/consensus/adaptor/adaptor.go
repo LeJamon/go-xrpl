@@ -37,6 +37,11 @@ var _ consensus.Adaptor = (*Adaptor)(nil)
 // to the ledger service, transaction queue, and P2P network.
 type Adaptor struct {
 	trustUpdateMu sync.Mutex
+	// trustTransitionMu serializes a complete trust snapshot publication and
+	// its callback. Readers still use trustUpdateMu and may re-enter from the
+	// callback; the callback itself must not synchronously start another trust
+	// transition.
+	trustTransitionMu sync.Mutex
 	// trustTransitioning closes the finality window between publishing a new
 	// trust set and installing its matching tracker snapshot.
 	trustTransitioning atomic.Bool
@@ -172,6 +177,9 @@ type Adaptor struct {
 	// onTrustChanged publishes the matching trusted/quorum snapshot after
 	// every SetTrustedValidators swap. nil-safe.
 	onTrustChanged func([]consensus.NodeID, int)
+	// onTrustSettled runs after the trust-change callback returns and the
+	// transition gate reopens. nil-safe.
+	onTrustSettled func()
 
 	// lastIssuedValidationSeq is the highest ledger seq this node has
 	// broadcast a validation for — rippled's localSeqEnforcer_.largest(),
@@ -740,7 +748,18 @@ func (a *Adaptor) GenerateFlagLedgerPseudoTxs(prevLedger consensus.Ledger, paren
 	}
 	upcomingSeq := prev.Sequence() + 1
 
-	filtered := a.filterNegativeUNL(parentValidations)
+	// The producer boundary is intentionally defensive: only full validations
+	// for the exact parent hash/sequence may influence fee or amendment votes.
+	// The engine normally supplies this already-filtered snapshot from the
+	// tracker, but callers such as replay tools and tests can invoke the
+	// adaptor directly.
+	parentID := consensus.LedgerID(prev.ParentHash())
+	var parentSeq uint32
+	if prev.Sequence() > 0 {
+		parentSeq = prev.Sequence() - 1
+	}
+	filtered := filterFullValidations(parentValidations, parentID, parentSeq, a.IsTrusted)
+	filtered = a.filterNegativeUNL(filtered)
 
 	// Quorum gate. Standalone reports quorum 0.
 	if len(filtered) < a.GetQuorum() {
@@ -760,6 +779,26 @@ func (a *Adaptor) GenerateFlagLedgerPseudoTxs(prevLedger consensus.Ledger, paren
 		blobs = append(blobs, extra...)
 	}
 	return blobs
+}
+
+func filterFullValidations(
+	vals []*consensus.Validation,
+	ledgerID consensus.LedgerID,
+	ledgerSeq uint32,
+	isTrusted func(consensus.NodeID) bool,
+) []*consensus.Validation {
+	if len(vals) == 0 {
+		return vals
+	}
+	out := make([]*consensus.Validation, 0, len(vals))
+	for _, validation := range vals {
+		if validation == nil || !validation.Full || validation.LedgerID != ledgerID ||
+			validation.LedgerSeq != ledgerSeq || (isTrusted != nil && !isTrusted(validation.NodeID)) {
+			continue
+		}
+		out = append(out, validation)
+	}
+	return out
 }
 
 // filterNegativeUNL returns vals minus any validations signed by

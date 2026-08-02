@@ -15,20 +15,25 @@ import (
 type recordingFeeHistorian struct {
 	*stubHistorian
 	mu    sync.Mutex
-	calls []consensus.LedgerID
+	calls []feeLookup
 }
 
-func (h *recordingFeeHistorian) GetTrustedValidations(id consensus.LedgerID) []*consensus.Validation {
+type feeLookup struct {
+	id  consensus.LedgerID
+	seq uint32
+}
+
+func (h *recordingFeeHistorian) GetTrustedFullValidations(id consensus.LedgerID, seq uint32) []*consensus.Validation {
 	h.mu.Lock()
-	h.calls = append(h.calls, id)
+	h.calls = append(h.calls, feeLookup{id: id, seq: seq})
 	h.mu.Unlock()
-	return h.stubHistorian.GetTrustedValidations(id)
+	return h.stubHistorian.GetTrustedFullValidations(id, seq)
 }
 
-func (h *recordingFeeHistorian) lookupCalls() []consensus.LedgerID {
+func (h *recordingFeeHistorian) lookupCalls() []feeLookup {
 	h.mu.Lock()
 	defer h.mu.Unlock()
-	return append([]consensus.LedgerID(nil), h.calls...)
+	return append([]feeLookup(nil), h.calls...)
 }
 
 // TestRefreshRemoteFee_MedianOverTrustedValidations pins the
@@ -46,9 +51,9 @@ func TestRefreshRemoteFee_MedianOverTrustedValidations(t *testing.T) {
 	a.SetValidationHistorian(&stubHistorian{
 		byLedger: map[consensus.LedgerID][]*consensus.Validation{
 			id: {
-				{LoadFee: 320, Full: true},
-				{LoadFee: 0, Full: true}, // omitted → substituted with LoadBase=256
-				{LoadFee: 500, Full: true},
+				{LoadFee: 320, LedgerSeq: 1, Full: true},
+				{LoadFee: 0, LedgerSeq: 1, Full: true}, // omitted → substituted with LoadBase=256
+				{LoadFee: 500, LedgerSeq: 1, Full: true},
 			},
 		},
 	})
@@ -69,9 +74,9 @@ func TestRefreshRemoteFee_ExcludesPartialValidations(t *testing.T) {
 	a.SetValidationHistorian(&stubHistorian{
 		byLedger: map[consensus.LedgerID][]*consensus.Validation{
 			id: {
-				{LoadFee: 320, Full: true},
-				{LoadFee: 10, Full: false}, // partial → dropped
-				{LoadFee: 400, Full: true},
+				{LoadFee: 320, LedgerSeq: 1, Full: true},
+				{LoadFee: 10, LedgerSeq: 1, Full: false}, // partial → dropped
+				{LoadFee: 400, LedgerSeq: 1, Full: true},
 			},
 		},
 	})
@@ -141,8 +146,8 @@ func TestRefreshRemoteFee_FoldsParentLedgerValidations(t *testing.T) {
 
 	a.SetValidationHistorian(&stubHistorian{
 		byLedger: map[consensus.LedgerID][]*consensus.Validation{
-			id:       {{LoadFee: 320, Full: true}},
-			parentID: {{LoadFee: 500, Full: true}, {LoadFee: 500, Full: true}},
+			id:       {{LoadFee: 320, LedgerSeq: 1, Full: true}},
+			parentID: {{LoadFee: 500, LedgerSeq: 0, Full: true}, {LoadFee: 500, LedgerSeq: 0, Full: true}},
 		},
 	})
 
@@ -162,13 +167,13 @@ func TestCollectValidationFees_DistinguishesExplicitZeroFromAbsent(t *testing.T)
 	historian := &stubHistorian{
 		byLedger: map[consensus.LedgerID][]*consensus.Validation{
 			id: {
-				{Full: true},
+				{LedgerSeq: 0, Full: true},
 				explicitZero,
 			},
 		},
 	}
 
-	require.Equal(t, []uint32{feetrack.LoadBase, 0}, collectValidationFees(historian, id, feetrack.LoadBase))
+	require.Equal(t, []uint32{feetrack.LoadBase, 0}, collectValidationFees(historian, id, 0, feetrack.LoadBase))
 }
 
 func TestRefreshRemoteFee_ValidationBeforePeerAdoption(t *testing.T) {
@@ -192,8 +197,8 @@ func TestRefreshRemoteFee_ValidationBeforePeerAdoption(t *testing.T) {
 	parentID := consensus.LedgerID(header.ParentHash)
 	historian := &recordingFeeHistorian{stubHistorian: &stubHistorian{
 		byLedger: map[consensus.LedgerID][]*consensus.Validation{
-			targetID: {{LoadFee: 320, Full: true}},
-			parentID: {{LoadFee: 500, Full: true}, {LoadFee: 500, Full: true}},
+			targetID: {{LoadFee: 320, LedgerSeq: header.LedgerIndex, Full: true}},
+			parentID: {{LoadFee: 500, LedgerSeq: header.LedgerIndex - 1, Full: true}, {LoadFee: 500, LedgerSeq: header.LedgerIndex - 1, Full: true}},
 		},
 	}}
 	a.SetValidationHistorian(historian)
@@ -205,7 +210,7 @@ func TestRefreshRemoteFee_ValidationBeforePeerAdoption(t *testing.T) {
 	ft.SetRemoteFee(777)
 	a.OnLedgerFullyValidated(targetID, header.LedgerIndex)
 	require.Equal(t, uint32(777), ft.RemoteFee())
-	require.Equal(t, []consensus.LedgerID{targetID}, historian.lookupCalls())
+	require.Equal(t, []feeLookup{{id: targetID, seq: header.LedgerIndex}}, historian.lookupCalls())
 
 	done := make(chan error, 1)
 	go func() {
@@ -220,10 +225,10 @@ func TestRefreshRemoteFee_ValidationBeforePeerAdoption(t *testing.T) {
 
 	require.Equal(t, header.LedgerIndex, svc.GetValidatedLedgerIndex())
 	require.Equal(t, uint32(500), ft.RemoteFee())
-	require.Equal(t, []consensus.LedgerID{targetID, targetID, parentID}, historian.lookupCalls())
+	require.Equal(t, []feeLookup{{id: targetID, seq: header.LedgerIndex}, {id: targetID, seq: header.LedgerIndex}, {id: parentID, seq: header.LedgerIndex - 1}}, historian.lookupCalls())
 
 	a.OnLedgerFullyValidated(targetID, header.LedgerIndex)
-	require.Equal(t, []consensus.LedgerID{targetID, targetID, parentID, targetID}, historian.lookupCalls())
+	require.Equal(t, []feeLookup{{id: targetID, seq: header.LedgerIndex}, {id: targetID, seq: header.LedgerIndex}, {id: parentID, seq: header.LedgerIndex - 1}, {id: targetID, seq: header.LedgerIndex}}, historian.lookupCalls())
 }
 
 func TestRefreshRemoteFee_ValidationBeforeConsensusClose(t *testing.T) {
@@ -244,8 +249,8 @@ func TestRefreshRemoteFee_ValidationBeforeConsensusClose(t *testing.T) {
 	parentID := consensus.LedgerID(expected.ParentHash())
 	historian := &recordingFeeHistorian{stubHistorian: &stubHistorian{
 		byLedger: map[consensus.LedgerID][]*consensus.Validation{
-			targetID: {{LoadFee: 320, Full: true}},
-			parentID: {{LoadFee: 500, Full: true}, {LoadFee: 500, Full: true}},
+			targetID: {{LoadFee: 320, LedgerSeq: expected.Sequence(), Full: true}},
+			parentID: {{LoadFee: 500, LedgerSeq: expected.Sequence() - 1, Full: true}, {LoadFee: 500, LedgerSeq: expected.Sequence() - 1, Full: true}},
 		},
 	}}
 	a.SetValidationHistorian(historian)
@@ -253,7 +258,7 @@ func TestRefreshRemoteFee_ValidationBeforeConsensusClose(t *testing.T) {
 	ft.SetRemoteFee(777)
 	a.OnLedgerFullyValidated(targetID, expected.Sequence())
 	require.Equal(t, uint32(777), ft.RemoteFee())
-	require.Equal(t, []consensus.LedgerID{targetID}, historian.lookupCalls())
+	require.Equal(t, []feeLookup{{id: targetID, seq: expected.Sequence()}}, historian.lookupCalls())
 
 	done := make(chan error, 1)
 	go func() {
@@ -270,7 +275,7 @@ func TestRefreshRemoteFee_ValidationBeforeConsensusClose(t *testing.T) {
 	require.Equal(t, expected.Hash(), svc.GetClosedLedger().Hash())
 	require.Equal(t, expected.Sequence(), svc.GetValidatedLedgerIndex())
 	require.Equal(t, uint32(500), ft.RemoteFee())
-	require.Equal(t, []consensus.LedgerID{targetID, targetID, parentID}, historian.lookupCalls())
+	require.Equal(t, []feeLookup{{id: targetID, seq: expected.Sequence()}, {id: targetID, seq: expected.Sequence()}, {id: parentID, seq: expected.Sequence() - 1}}, historian.lookupCalls())
 }
 
 // TestGetLoadFee_MaxLocalCluster pins RCLConsensus.cpp:872 port: the

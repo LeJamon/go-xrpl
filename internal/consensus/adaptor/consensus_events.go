@@ -314,7 +314,7 @@ func (a *Adaptor) validatedSignTime(ledgerID consensus.LedgerID, seq uint32) tim
 	if a.validationHistorian == nil {
 		return time.Time{}
 	}
-	validations := a.filterNegativeUNL(a.validationHistorian.GetTrustedValidations(ledgerID))
+	validations := a.filterNegativeUNL(a.validationHistorian.GetTrustedFullValidations(ledgerID, seq))
 	signTime, count := sampleValidatedSignTime(validations, seq)
 	if count == 0 || count < a.GetQuorum() {
 		return time.Time{}
@@ -362,8 +362,10 @@ func (a *Adaptor) refreshRemoteFee(seq uint32, ledgerID, parentID consensus.Ledg
 	}
 	base := feetrack.LoadBase
 
-	fees := collectValidationFees(historian, ledgerID, base)
-	fees = append(fees, collectValidationFees(historian, parentID, base)...)
+	fees := collectValidationFees(historian, ledgerID, seq, base)
+	if seq > 0 {
+		fees = append(fees, collectValidationFees(historian, parentID, seq-1, base)...)
+	}
 	fee := base
 	if len(fees) > 0 {
 		slices.Sort(fees)
@@ -373,11 +375,16 @@ func (a *Adaptor) refreshRemoteFee(seq uint32, ledgerID, parentID consensus.Ledg
 	a.remoteFeeSeq = seq
 }
 
-func collectValidationFees(historian consensus.ValidationHistorian, ledgerID consensus.LedgerID, base uint32) []uint32 {
-	vals := historian.GetTrustedValidations(ledgerID)
+func collectValidationFees(
+	historian consensus.ValidationHistorian,
+	ledgerID consensus.LedgerID,
+	seq uint32,
+	base uint32,
+) []uint32 {
+	vals := historian.GetTrustedFullValidations(ledgerID, seq)
 	fees := make([]uint32, 0, len(vals))
 	for _, v := range vals {
-		if v == nil || !v.Full {
+		if v == nil || !v.Full || v.LedgerSeq != seq {
 			continue
 		}
 		fee := v.LoadFee

@@ -41,9 +41,12 @@ func makeTrustedValidation(nodeID consensus.NodeID, ledgerID consensus.LedgerID,
 		LedgerID:  ledgerID,
 		LedgerSeq: seq,
 		NodeID:    nodeID,
-		SignTime:  now,
-		SeenTime:  now,
-		Full:      true,
+		// Rippled replaces current_ by signing time. Give higher-sequence
+		// fixture validations a deterministic later sign time so they exercise
+		// the normal supersede path without weakening that rule.
+		SignTime: now.Add(time.Duration(seq) * time.Nanosecond),
+		SeenTime: now,
+		Full:     true,
 	}
 }
 

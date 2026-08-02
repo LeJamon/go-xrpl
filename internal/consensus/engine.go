@@ -150,7 +150,12 @@ const (
 // per-ledger trusted-validation lookups and trie-based preferred-LCL
 // selection. Implemented by rcl.ValidationTracker, wired via WireableAdaptor.
 type ValidationHistorian interface {
-	GetTrustedValidations(ledgerID LedgerID) []*Validation
+	// GetTrustedFullValidations returns trusted full validations for the exact
+	// ledger hash and sequence. The sequence check is part of the lookup so
+	// protocol voting cannot accidentally consume mixed-sequence evidence that
+	// happens to share a ledger hash.
+	GetTrustedFullValidations(ledgerID LedgerID, ledgerSeq uint32) []*Validation
+
 	GetPreferred(largestIssued uint32) (LedgerID, uint32, bool)
 	PreferredFromValidations(minSeq uint32) (LedgerID, uint32, bool)
 
@@ -205,6 +210,14 @@ type ValidationRelayPolicy interface {
 // newly-trusted validators immediately rather than at the next accepted ledger.
 type TrustChangeNotifier interface {
 	OnTrustChanged(fn func(trusted []NodeID, quorum int))
+}
+
+// TrustChangeSettledNotifier is an optional Adaptor extension. It registers a
+// callback invoked after a trust snapshot callback has returned and the
+// adaptor's transition gate has reopened. Consumers use it to recheck state
+// that deliberately stayed closed while the matching snapshot was installed.
+type TrustChangeSettledNotifier interface {
+	OnTrustSettled(fn func())
 }
 
 // LedgerAcceptDeferrer is an optional Adaptor extension for environments that

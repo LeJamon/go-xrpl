@@ -74,12 +74,16 @@ func TestAdaptor_SetTrustedValidatorsFiresTrustChange(t *testing.T) {
 	var sawTransitionGate bool
 	var callbackTrusted []consensus.NodeID
 	var callbackQuorum int
+	var sawSettledGate bool
 	fired := 0
 	a.OnTrustChanged(func(trusted []consensus.NodeID, quorum int) {
 		fired++
 		sawTransitionGate = a.IsQuorumUnavailable()
 		callbackTrusted = trusted
 		callbackQuorum = quorum
+	})
+	a.OnTrustSettled(func() {
+		sawSettledGate = a.IsQuorumUnavailable()
 	})
 	fired = 0
 	sawTransitionGate = false
@@ -90,6 +94,7 @@ func TestAdaptor_SetTrustedValidatorsFiresTrustChange(t *testing.T) {
 	assert.Equal(t, []consensus.NodeID{n}, callbackTrusted)
 	assert.Equal(t, 1, callbackQuorum)
 	assert.False(t, a.IsQuorumUnavailable(), "transition gate must reopen after snapshot installation")
+	assert.False(t, sawSettledGate, "settled callback must observe the reopened transition gate")
 	assert.True(t, a.IsTrusted(n), "trusted readers must observe the installed snapshot")
 
 	a.SetTrustedValidators(nil, nil)

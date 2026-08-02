@@ -4562,8 +4562,8 @@ func TestPhaseEstablish_PauseAndRecover(t *testing.T) {
 	// validations via Add with the higher seq — strict-less-than
 	// rule (seq < prev) means seq==12 makes them non-laggards.
 	if engine.validationTracker != nil {
-		engine.validationTracker.Add(&consensus.Validation{NodeID: peerA, LedgerID: consensus.LedgerID{0x0c}, LedgerSeq: 12, Full: true, SignTime: now, SeenTime: now})
-		engine.validationTracker.Add(&consensus.Validation{NodeID: peerB, LedgerID: consensus.LedgerID{0x0c}, LedgerSeq: 12, Full: true, SignTime: now, SeenTime: now})
+		engine.validationTracker.Add(&consensus.Validation{NodeID: peerA, LedgerID: consensus.LedgerID{0x0c}, LedgerSeq: 12, Full: true, SignTime: now.Add(time.Nanosecond), SeenTime: now})
+		engine.validationTracker.Add(&consensus.Validation{NodeID: peerB, LedgerID: consensus.LedgerID{0x0c}, LedgerSeq: 12, Full: true, SignTime: now.Add(time.Nanosecond), SeenTime: now})
 	}
 
 	// shouldPause now returns false — the round is free to progress.

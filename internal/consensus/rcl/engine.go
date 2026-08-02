@@ -501,6 +501,9 @@ func (e *Engine) Start(ctx context.Context) error {
 	if notifier, ok := e.adaptor.(consensus.TrustChangeNotifier); ok {
 		tracker := e.validationTracker
 		notifier.OnTrustChanged(tracker.SetTrustedAndQuorum)
+		if settled, ok := e.adaptor.(consensus.TrustChangeSettledNotifier); ok {
+			settled.OnTrustSettled(tracker.RecheckFinality)
+		}
 	}
 	if e.ledgerAncestry != nil {
 		e.validationTracker.SetLedgerAncestryProvider(e.ledgerAncestry)
@@ -1389,7 +1392,11 @@ func (e *Engine) closeLedger() {
 		prev := e.prevLedger
 		switch {
 		case protocol.IsFlagLedger(prev.Seq()):
-			parentVals := e.parentValidations(prev.ParentID())
+			var parentSeq uint32
+			if prev.Seq() > 0 {
+				parentSeq = prev.Seq() - 1
+			}
+			parentVals := e.parentValidations(prev.ParentID(), parentSeq)
 			if extra := e.adaptor.GenerateFlagLedgerPseudoTxs(prev, parentVals); len(extra) > 0 {
 				txs = append(txs, extra...)
 			}

@@ -25,7 +25,9 @@ func (vt *ValidationTracker) Clear() {
 
 	vt.validations = make(map[consensus.LedgerID]*ledgerValidations)
 	vt.byNode = make(map[consensus.NodeID]*consensus.Validation)
-	vt.fired = make(map[consensus.LedgerID]struct{})
+	vt.fired = make(map[finalityKey]struct{})
+	vt.pendingFinality = nil
+	vt.pendingGeneration = make(map[finalityKey]uint64)
 	vt.rebuildTrieLocked()
 }
 

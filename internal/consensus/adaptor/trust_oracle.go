@@ -99,16 +99,36 @@ func (a *Adaptor) DropUntrustedValidations() bool {
 }
 
 func (a *Adaptor) OnTrustChanged(fn func([]consensus.NodeID, int)) {
-	a.trustUpdateMu.Lock()
-	defer a.trustUpdateMu.Unlock()
+	a.trustTransitionMu.Lock()
+	defer a.trustTransitionMu.Unlock()
 
+	a.trustUpdateMu.Lock()
 	a.mu.Lock()
 	a.onTrustChanged = fn
 	a.mu.Unlock()
+	a.trustUpdateMu.Unlock()
 
 	if fn != nil {
 		trusted, quorum := a.trustedValidatorsAndQuorum()
 		fn(trusted, quorum)
+	}
+}
+
+// OnTrustSettled registers a callback for the point after a trust transition
+// callback has returned and the transition gate has reopened. If registration
+// observes an already-settled snapshot, it invokes the callback once so a
+// concurrent reload cannot leave stored evidence unexamined.
+func (a *Adaptor) OnTrustSettled(fn func()) {
+	a.trustTransitionMu.Lock()
+	a.trustUpdateMu.Lock()
+	a.mu.Lock()
+	a.onTrustSettled = fn
+	a.mu.Unlock()
+	a.trustUpdateMu.Unlock()
+	settled := fn != nil && !a.trustTransitioning.Load()
+	a.trustTransitionMu.Unlock()
+	if settled {
+		fn()
 	}
 }
 
@@ -168,11 +188,17 @@ func (a *Adaptor) SetTrustedValidators(validators []consensus.NodeID, masterKeys
 		copy(mkCopy, masterKeys)
 	}
 
+	a.trustTransitionMu.Lock()
+	defer a.trustTransitionMu.Unlock()
+
 	a.trustUpdateMu.Lock()
 	a.trustTransitioning.Store(true)
+	trustLocked := true
 	defer func() {
+		if trustLocked {
+			a.trustUpdateMu.Unlock()
+		}
 		a.trustTransitioning.Store(false)
-		a.trustUpdateMu.Unlock()
 	}()
 
 	negUNL := a.GetNegativeUNL()
@@ -186,6 +212,7 @@ func (a *Adaptor) SetTrustedValidators(validators []consensus.NodeID, masterKeys
 	a.trustedSet = newSet
 	a.trustedMasterKeys = mkCopy
 	onTrustChanged := a.onTrustChanged
+	onTrustSettled := a.onTrustSettled
 	a.mu.Unlock()
 
 	// trustedVotes is assigned once in New and never reassigned, so the
@@ -197,8 +224,22 @@ func (a *Adaptor) SetTrustedValidators(validators []consensus.NodeID, masterKeys
 	if a.IsUNLBlocked() && a.GetOperatingMode() > consensus.OpModeConnected {
 		a.SetOperatingMode(consensus.OpModeConnected)
 	}
+	// The tracker callback may synchronously call back into adaptor trust
+	// readers. Release trustUpdateMu before dispatching it; the outer
+	// transition mutex keeps a later setter from publishing out of order, and
+	// the transition bit stays set until the matching tracker snapshot has been
+	// installed.
+	a.trustUpdateMu.Unlock()
+	trustLocked = false
 	if onTrustChanged != nil {
 		onTrustChanged(vCopy, quorum)
+	}
+	// The tracker callback is intentionally run while the transition gate is
+	// closed. Recheck once the matching snapshot is installed and the gate is
+	// open so evidence collected during the transition can be promoted.
+	a.trustTransitioning.Store(false)
+	if onTrustSettled != nil {
+		onTrustSettled()
 	}
 }
 
