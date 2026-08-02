@@ -61,19 +61,6 @@ func TestEncodeAndDecodeBytesValidatesInnerObjectTemplates(t *testing.T) {
 			wantError: "Field 'QuoteAsset' is required but missing.",
 		},
 		{
-			name: "PriceData explicitly sets default Scale",
-			object: map[string]any{
-				"PriceDataSeries": []any{map[string]any{
-					"PriceData": map[string]any{
-						"BaseAsset":  "XRP",
-						"QuoteAsset": "USD",
-						"Scale":      float64(0),
-					},
-				}},
-			},
-			wantError: "Field 'Scale' may not be explicitly set to default.",
-		},
-		{
 			name: "direct CounterpartySignature disallowed field",
 			object: map[string]any{
 				"CounterpartySignature": map[string]any{"Amount": "1"},
@@ -146,6 +133,24 @@ func TestEncodeAndDecodeBytesValidatesInnerObjectTemplates(t *testing.T) {
 			require.NotNil(t, decoded)
 		})
 	}
+}
+
+func TestEncodeBytesOmitsDefaultInnerObjectFields(t *testing.T) {
+	blob, err := EncodeBytes(map[string]any{
+		"PriceDataSeries": []any{map[string]any{
+			"PriceData": map[string]any{
+				"BaseAsset":  "XRP",
+				"QuoteAsset": "USD",
+				"Scale":      float64(0),
+			},
+		}},
+	})
+	require.NoError(t, err)
+
+	decoded, err := DecodeBytes(blob)
+	require.NoError(t, err)
+	priceData := decoded["PriceDataSeries"].([]any)[0].(map[string]any)["PriceData"].(map[string]any)
+	require.NotContains(t, priceData, "Scale")
 }
 
 func TestDecodeBytesValidatesInnerObjectTemplates(t *testing.T) {

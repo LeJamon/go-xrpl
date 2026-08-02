@@ -170,7 +170,8 @@ func TestAcceptedTransactionRejectsMalformedInnerObjectTemplate(t *testing.T) {
 		"Sequence": uint32(1),
 		"SignerEntries": []any{map[string]any{
 			"SignerEntry": map[string]any{
-				"Account": "r4bbzCamAis69rNoRdSaMSmPb1kDUHXcAL",
+				"Account":      "r4bbzCamAis69rNoRdSaMSmPb1kDUHXcAL",
+				"SignerWeight": uint16(1),
 			},
 		}},
 		"SignerQuorum":    uint32(1),
@@ -183,7 +184,7 @@ func TestAcceptedTransactionRejectsMalformedInnerObjectTemplate(t *testing.T) {
 		"TransactionResult": "tesSUCCESS",
 	}
 
-	accepted := ParseAcceptedTransaction(acceptedLeaf(t, transaction, metadata))
+	accepted := ParseAcceptedTransaction(acceptedLeafWithoutSignerWeight(t, transaction, metadata))
 	require.ErrorContains(t, accepted.ParseError(), "Field 'SignerWeight' is required but missing.")
 	require.Equal(t, uint32(12), mustAcceptedIndex(t, accepted))
 	require.Equal(t, ter.TemMALFORMED, accepted.Result())
@@ -272,6 +273,25 @@ func acceptedLeaf(t *testing.T, transaction, metadata map[string]any) []byte {
 	t.Helper()
 	txBlob, err := binarycodec.EncodeBytes(transaction)
 	require.NoError(t, err)
+	metaBlob, err := binarycodec.EncodeBytes(metadata)
+	require.NoError(t, err)
+	txField, err := txcore.EncodeWithVL(txBlob)
+	require.NoError(t, err)
+	metaField, err := txcore.EncodeWithVL(metaBlob)
+	require.NoError(t, err)
+	return bytes.Join([][]byte{txField, metaField}, nil)
+}
+
+func acceptedLeafWithoutSignerWeight(t *testing.T, transaction, metadata map[string]any) []byte {
+	t.Helper()
+	txBlob, err := binarycodec.EncodeBytes(transaction)
+	require.NoError(t, err)
+	signerWeight, err := binarycodec.EncodeBytes(map[string]any{"SignerWeight": uint16(1)})
+	require.NoError(t, err)
+	offset := bytes.Index(txBlob, signerWeight)
+	require.NotEqual(t, -1, offset)
+	txBlob = append(txBlob[:offset:offset], txBlob[offset+len(signerWeight):]...)
+
 	metaBlob, err := binarycodec.EncodeBytes(metadata)
 	require.NoError(t, err)
 	txField, err := txcore.EncodeWithVL(txBlob)

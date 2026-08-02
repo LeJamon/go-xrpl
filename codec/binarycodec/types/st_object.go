@@ -56,7 +56,8 @@ func (t *STObject) FromJSON(json any) ([]byte, error) {
 		values := make(map[string]any, len(fimap))
 		fieldOrder := make([]string, 0, len(fimap))
 		for field, value := range fimap {
-			if isDiscardableInnerField(field.FieldName) {
+			if isDiscardableInnerField(field.FieldName) ||
+				isDefaultInnerField(t.innerTemplateField, field.FieldName, value) {
 				delete(fimap, field)
 				continue
 			}

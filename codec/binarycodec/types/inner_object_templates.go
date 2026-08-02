@@ -190,6 +190,15 @@ func isDiscardableInnerField(name string) bool {
 	return err == nil && field.Nth > 256
 }
 
+func isDefaultInnerField(objectName, fieldName string, value any) bool {
+	for _, field := range innerObjectTemplates[objectName] {
+		if field.name == fieldName {
+			return field.style == innerDefault && isDefaultInnerValue(value)
+		}
+	}
+	return false
+}
+
 func isDefaultInnerValue(value any) bool {
 	switch value := value.(type) {
 	case int:

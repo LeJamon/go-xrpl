@@ -56,16 +56,16 @@ func TestSignerEntriesDecodeEnforcesInnerObjectTemplate(t *testing.T) {
 			signer: map[string]any{"SignerEntry": map[string]any{
 				"Account": innerTemplateAccount,
 			}},
-			wantErr: "Field 'SignerWeight' is required but missing.",
+			wantErr: "required field SignerWeight is missing",
 		},
 		{
 			name: "unknown field",
 			signer: map[string]any{"SignerEntry": map[string]any{
 				"Account":      innerTemplateAccount,
-				"SignerWeight": uint32(1),
+				"SignerWeight": 1,
 				"Sequence":     uint32(1),
 			}},
-			wantErr: "Field 'Sequence' found in disallowed location.",
+			wantErr: "field Sequence is not allowed",
 		},
 	}
 
