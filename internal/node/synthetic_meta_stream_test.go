@@ -11,6 +11,7 @@ import (
 	"github.com/LeJamon/go-xrpl/codec/binarycodec"
 	"github.com/LeJamon/go-xrpl/internal/ledger/service"
 	"github.com/LeJamon/go-xrpl/internal/rpc/handlers"
+	"github.com/LeJamon/go-xrpl/internal/tx/ter"
 	"github.com/LeJamon/go-xrpl/keylet"
 	"github.com/LeJamon/go-xrpl/protocol"
 	"github.com/stretchr/testify/require"
@@ -55,7 +56,8 @@ func TestDecodeTxWithMetaToJSONInjectsSyntheticFields(t *testing.T) {
 	data = append(data, byte(len(metaBlob)))
 	data = append(data, metaBlob...)
 
-	_, metaRaw := decodeTxWithMetaToJSONAt(data, handlers.SyntheticMetadataContext{LedgerSequence: 4_594_095})
+	_, metaRaw, err := decodeTxWithMetaToJSONAt(data, handlers.SyntheticMetadataContext{LedgerSequence: 4_594_095})
+	require.NoError(t, err)
 	var decodedMeta map[string]any
 	require.NoError(t, json.Unmarshal(metaRaw, &decodedMeta))
 
@@ -87,15 +89,16 @@ func TestBuildValidatedTransactionEventProjection(t *testing.T) {
 
 	t.Run("validated failure projects result time and checked CTID", func(t *testing.T) {
 		txData := validatedPaymentData(t, 2_048, transactionIndex)
-		event, result := buildValidatedTransactionEvent(service.TransactionResultEvent{
+		event, result, err := buildValidatedTransactionEvent(service.TransactionResultEvent{
 			TxHash:      txHash,
 			TxData:      txData,
 			Validated:   true,
 			LedgerIndex: ledgerSequence,
 			LedgerHash:  ledgerHash,
 		}, ledgerEvent, 9)
+		require.NoError(t, err)
 
-		require.Equal(t, "tecUNFUNDED_PAYMENT", result)
+		require.Equal(t, ter.TecUNFUNDED_PAYMENT, result)
 		require.Equal(t, "tecUNFUNDED_PAYMENT", event.EngineResult)
 		require.Equal(t, 104, event.EngineResultCode)
 		require.Equal(t, "Insufficient XRP balance to send.", event.EngineResultMessage)
@@ -113,13 +116,56 @@ func TestBuildValidatedTransactionEventProjection(t *testing.T) {
 
 	t.Run("network ID overflow omits CTID", func(t *testing.T) {
 		txData := validatedPaymentData(t, 65_536, transactionIndex)
-		event, _ := buildValidatedTransactionEvent(service.TransactionResultEvent{
+		event, _, err := buildValidatedTransactionEvent(service.TransactionResultEvent{
 			TxData:      txData,
 			Validated:   true,
 			LedgerIndex: ledgerSequence,
 		}, ledgerEvent, 9)
+		require.NoError(t, err)
 		require.Empty(t, event.CTID)
 	})
+}
+
+func TestBuildValidatedTransactionEventRejectsCorruptLeaf(t *testing.T) {
+	ledgerEvent := &service.LedgerAcceptedEvent{LedgerInfo: &service.LedgerInfo{
+		Sequence:  1,
+		Validated: true,
+		Closed:    true,
+	}}
+	valid := validatedPaymentData(t, 0, 0)
+	tests := [][]byte{
+		nil,
+		{0xff},
+		valid[:len(valid)-1],
+		append(append([]byte(nil), valid...), 0),
+	}
+	for _, data := range tests {
+		event, _, err := buildValidatedTransactionEvent(service.TransactionResultEvent{
+			TxData:      data,
+			Validated:   true,
+			LedgerIndex: 1,
+		}, ledgerEvent, 0)
+		require.Error(t, err)
+		require.Nil(t, event)
+	}
+}
+
+func TestBuildValidatedTransactionPublicationsRejectsWholeLedger(t *testing.T) {
+	ledgerEvent := &service.LedgerAcceptedEvent{LedgerInfo: &service.LedgerInfo{
+		Sequence:  1,
+		Validated: true,
+		Closed:    true,
+	}}
+	publications, err := buildValidatedTransactionPublications(
+		[]service.TransactionResultEvent{
+			{TxHash: [32]byte{1}, TxData: validatedPaymentData(t, 0, 0), Validated: true, LedgerIndex: 1},
+			{TxHash: [32]byte{2}, TxData: []byte{0xff}, Validated: true, LedgerIndex: 1},
+		},
+		ledgerEvent,
+		0,
+	)
+	require.Error(t, err)
+	require.Nil(t, publications)
 }
 
 func validatedPaymentData(t *testing.T, networkID, transactionIndex uint32) []byte {

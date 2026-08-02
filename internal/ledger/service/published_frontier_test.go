@@ -1,6 +1,7 @@
 package service
 
 import (
+	"errors"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -43,6 +44,23 @@ func TestPublishedFrontier_AdvancesBeforeCallback(t *testing.T) {
 
 	assert.True(t, observed.HavePublished)
 	assert.Equal(t, uint32(10), observed.PublishedLedgerSeq)
+}
+
+func TestPublishedFrontier_RollsBackOnSinkError(t *testing.T) {
+	svc, err := New(DefaultConfig())
+	require.NoError(t, err)
+
+	sinkErr := errors.New("corrupt accepted transaction")
+	svc.SetEventSink(EventSinkFunc(func(*LedgerAcceptedEvent) error {
+		return sinkErr
+	}))
+	validated := makeStubLedger(t, 10, [32]byte{0x10}, [32]byte{0x09})
+	err = svc.deliverLedgerEvent(&LedgerAcceptedEvent{Ledger: validated})
+	require.ErrorIs(t, err, sinkErr)
+
+	info := svc.GetServerInfo()
+	assert.False(t, info.HavePublished)
+	assert.Zero(t, info.PublishedLedgerSeq)
 }
 
 func TestPublishedFrontier_IgnoresUnvalidatedAndNeverRegresses(t *testing.T) {

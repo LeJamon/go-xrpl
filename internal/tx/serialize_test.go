@@ -244,3 +244,47 @@ func TestSplitTxWithMetaBlob_Errors(t *testing.T) {
 		t.Error("expected error for truncated tx data")
 	}
 }
+
+func TestSplitTxWithMetaBlobStrict(t *testing.T) {
+	txData := []byte{0x12, 0x00}
+	metaData := []byte{0x20, 0x1c, 0, 0, 0, 0}
+	txField, err := EncodeWithVL(txData)
+	if err != nil {
+		t.Fatal(err)
+	}
+	metaField, err := EncodeWithVL(metaData)
+	if err != nil {
+		t.Fatal(err)
+	}
+	valid := append(append([]byte(nil), txField...), metaField...)
+
+	gotTx, gotMeta, err := SplitTxWithMetaBlobStrict(valid)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(gotTx, txData) || !bytes.Equal(gotMeta, metaData) {
+		t.Fatalf("split = (%X, %X), want (%X, %X)", gotTx, gotMeta, txData, metaData)
+	}
+
+	tests := []struct {
+		name string
+		blob []byte
+	}{
+		{name: "nil"},
+		{name: "reserved transaction length", blob: []byte{0xff}},
+		{name: "truncated transaction length", blob: []byte{193}},
+		{name: "truncated transaction", blob: []byte{2, 0x12}},
+		{name: "missing metadata", blob: txField},
+		{name: "empty metadata", blob: append(append([]byte(nil), txField...), 0)},
+		{name: "reserved metadata length", blob: append(append([]byte(nil), txField...), 0xff)},
+		{name: "truncated metadata", blob: append(append([]byte(nil), txField...), 2, 0x20)},
+		{name: "trailing data", blob: append(append([]byte(nil), valid...), 0)},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			if _, _, err := SplitTxWithMetaBlobStrict(tc.blob); err == nil {
+				t.Fatal("expected error")
+			}
+		})
+	}
+}

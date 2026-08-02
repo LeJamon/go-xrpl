@@ -5,6 +5,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"math"
 	"strconv"
 	"strings"
@@ -21,6 +22,7 @@ import (
 	"github.com/LeJamon/go-xrpl/internal/rpc"
 	"github.com/LeJamon/go-xrpl/internal/rpc/handlers"
 	"github.com/LeJamon/go-xrpl/internal/rpc/types"
+	txcore "github.com/LeJamon/go-xrpl/internal/tx"
 	"github.com/LeJamon/go-xrpl/internal/tx/ter"
 	"github.com/LeJamon/go-xrpl/internal/txq"
 	"github.com/LeJamon/go-xrpl/protocol"
@@ -193,65 +195,47 @@ func queuedTxInfos(details []*txq.CandidateDetails) []types.QueuedTxInfo {
 	return out
 }
 
-// decodeTxWithMetaToJSON splits a VL-encoded tx+meta binary blob and decodes
-// each part to JSON. The blob format is: [VL-length][tx_blob][VL-length][meta_blob].
-// Returns (txJSON, metaJSON) as json.RawMessage, or empty JSON objects on error.
-func decodeTxWithMetaToJSON(data []byte) (json.RawMessage, json.RawMessage) {
+func decodeTxWithMetaToJSON(data []byte) (json.RawMessage, json.RawMessage, error) {
 	return decodeTxWithMetaToJSONAt(data, handlers.SyntheticMetadataContext{})
 }
 
 func decodeTxWithMetaToJSONAt(
 	data []byte,
 	ctx handlers.SyntheticMetadataContext,
-) (json.RawMessage, json.RawMessage) {
-	emptyObj := json.RawMessage("{}")
-
-	if len(data) == 0 {
-		return emptyObj, emptyObj
-	}
-
-	// Parse first VL field (transaction)
-	txLen, txPrefixLen := parseVLLength(data)
-	if txPrefixLen == 0 || txPrefixLen+txLen > len(data) {
-		return emptyObj, emptyObj
-	}
-	txBlob := data[txPrefixLen : txPrefixLen+txLen]
-
-	// Parse second VL field (metadata)
-	metaStart := txPrefixLen + txLen
-	var metaBlob []byte
-	if metaStart < len(data) {
-		metaLen, metaPrefixLen := parseVLLength(data[metaStart:])
-		if metaPrefixLen > 0 && metaStart+metaPrefixLen+metaLen <= len(data) {
-			metaBlob = data[metaStart+metaPrefixLen : metaStart+metaPrefixLen+metaLen]
-		}
-	}
-
-	// Decode transaction binary to JSON
-	txHex := hex.EncodeToString(txBlob)
-	txMap, err := binarycodec.Decode(txHex)
+) (json.RawMessage, json.RawMessage, error) {
+	txBlob, metaBlob, err := txcore.SplitTxWithMetaBlobStrict(data)
 	if err != nil {
-		return emptyObj, emptyObj
+		return nil, nil, fmt.Errorf("split accepted transaction: %w", err)
 	}
+
+	txMap, err := binarycodec.DecodeBytes(txBlob)
+	if err != nil {
+		return nil, nil, fmt.Errorf("decode accepted transaction: %w", err)
+	}
+	txMap, err = txcore.CanonicalizeSerializedTransaction(txMap)
+	if err != nil {
+		return nil, nil, fmt.Errorf("validate accepted transaction: %w", err)
+	}
+
+	metaMap, err := binarycodec.DecodeBytes(metaBlob)
+	if err != nil {
+		return nil, nil, fmt.Errorf("decode accepted metadata: %w", err)
+	}
+	metaMap, err = txcore.CanonicalizeSerializedMetadata(metaMap)
+	if err != nil {
+		return nil, nil, fmt.Errorf("validate accepted metadata: %w", err)
+	}
+	handlers.InjectSyntheticFields(txMap, metaMap, ctx)
+
 	txJSON, err := json.Marshal(txMap)
 	if err != nil {
-		return emptyObj, emptyObj
+		return nil, nil, fmt.Errorf("marshal accepted transaction: %w", err)
 	}
-
-	// Decode metadata binary to JSON
-	metaJSON := emptyObj
-	if len(metaBlob) > 0 {
-		metaHex := hex.EncodeToString(metaBlob)
-		metaMap, err := binarycodec.Decode(metaHex)
-		if err == nil {
-			handlers.InjectSyntheticFields(txMap, metaMap, ctx)
-			if m, err := json.Marshal(metaMap); err == nil {
-				metaJSON = m
-			}
-		}
+	metaJSON, err := json.Marshal(metaMap)
+	if err != nil {
+		return nil, nil, fmt.Errorf("marshal accepted metadata: %w", err)
 	}
-
-	return json.RawMessage(txJSON), metaJSON
+	return txJSON, metaJSON, nil
 }
 
 // rpcEventBridge fans the consensus engine's event bus out to the
@@ -379,16 +363,6 @@ func jsonClippedXRPAmount(value int64) int32 {
 		return math.MaxInt32
 	}
 	return int32(value)
-}
-
-// extractBookPairsFromTxData walks a VL-encoded tx+meta blob and
-// returns every distinct order book from affected Offer nodes.
-func extractBookPairsFromTxData(data []byte) []types.OrderBookSpec {
-	_, metaJSON := decodeTxWithMetaToJSON(data)
-	if len(metaJSON) == 0 {
-		return nil
-	}
-	return extractBookPairsFromMetadata(metaJSON)
 }
 
 func extractBookPairsFromMetadata(metaJSON []byte) []types.OrderBookSpec {
@@ -550,18 +524,22 @@ type serverStatusSnapshot struct {
 // transaction set directly off the event rather than re-fetching the
 // ledger from the adapter (which can race close-time visibility).
 type acceptedLedgerView struct {
-	event *service.LedgerAcceptedEvent
+	event              *service.LedgerAcceptedEvent
+	transactionResults []service.TransactionResultEvent
 }
 
-func newAcceptedLedgerView(event *service.LedgerAcceptedEvent) *acceptedLedgerView {
-	return &acceptedLedgerView{event: event}
+func newAcceptedLedgerView(
+	event *service.LedgerAcceptedEvent,
+	transactionResults []service.TransactionResultEvent,
+) *acceptedLedgerView {
+	return &acceptedLedgerView{event: event, transactionResults: transactionResults}
 }
 
 func (a *acceptedLedgerView) ForEachTransaction(fn func(txHash [32]byte, txData []byte) bool) error {
 	if a == nil || a.event == nil {
 		return nil
 	}
-	for _, tr := range a.event.TransactionResults {
+	for _, tr := range a.transactionResults {
 		if !fn(tr.TxHash, tr.TxData) {
 			return nil
 		}
@@ -597,52 +575,48 @@ func (a *acceptedLedgerView) IsValidated() bool {
 	return a.event.LedgerInfo.Validated
 }
 
-// metaTransactionResult returns the TransactionResult string (e.g.
-// "tesSUCCESS") from a decoded transaction metadata blob. Returns
-// "tesSUCCESS" when the field is missing so callers stay on the
-// historic happy-path default; book-stream consumers gate on the
-// returned value matching "tesSUCCESS" exactly, mirroring rippled's
-// pubValidatedTransaction tesSUCCESS gate at NetworkOPs.cpp:3409-3410.
-func metaTransactionResult(metaJSON json.RawMessage) string {
-	if len(metaJSON) == 0 {
-		return "tesSUCCESS"
-	}
+func metaTransactionResult(metaJSON json.RawMessage) (ter.Result, error) {
 	var meta struct {
-		TransactionResult string `json:"TransactionResult"`
+		TransactionResult *string `json:"TransactionResult"`
 	}
-	if err := json.Unmarshal(metaJSON, &meta); err != nil || meta.TransactionResult == "" {
-		return "tesSUCCESS"
+	if err := json.Unmarshal(metaJSON, &meta); err != nil {
+		return 0, fmt.Errorf("decode transaction result: %w", err)
 	}
-	return meta.TransactionResult
-}
-
-func metaTransactionResultDetails(metaJSON json.RawMessage) (string, int, string) {
-	name := metaTransactionResult(metaJSON)
+	if meta.TransactionResult == nil || *meta.TransactionResult == "" {
+		return 0, errors.New("metadata is missing TransactionResult")
+	}
+	name := *meta.TransactionResult
 	code, err := definitions.Get().TransactionResultCode(name)
 	if err != nil {
-		return name, 0, "-"
+		return 0, fmt.Errorf("unknown transaction result %q: %w", name, err)
 	}
-	return name, int(code), ter.Result(code).Message()
+	return ter.Result(code), nil
 }
 
 func buildValidatedTransactionEvent(
 	txResult service.TransactionResultEvent,
 	event *service.LedgerAcceptedEvent,
 	defaultNetworkID uint32,
-) (*rpc.TransactionEvent, string) {
+) (*rpc.TransactionEvent, ter.Result, error) {
 	info := event.LedgerInfo
 	closeTime := rippleEpochSeconds(info.CloseTime)
-	txJSON, metaJSON := decodeTxWithMetaToJSONAt(txResult.TxData, handlers.SyntheticMetadataContext{
+	txJSON, metaJSON, err := decodeTxWithMetaToJSONAt(txResult.TxData, handlers.SyntheticMetadataContext{
 		LedgerSequence: txResult.LedgerIndex,
 		CloseTime:      closeTime,
 	})
-	engineResult, engineResultCode, engineResultMessage := metaTransactionResultDetails(metaJSON)
+	if err != nil {
+		return nil, 0, err
+	}
+	engineResult, err := metaTransactionResult(metaJSON)
+	if err != nil {
+		return nil, 0, err
+	}
 
 	streamEvent := &rpc.TransactionEvent{
 		Type:                "transaction",
-		EngineResult:        engineResult,
-		EngineResultCode:    engineResultCode,
-		EngineResultMessage: engineResultMessage,
+		EngineResult:        engineResult.String(),
+		EngineResultCode:    int(engineResult),
+		EngineResultMessage: engineResult.Message(),
 		LedgerIndex:         txResult.LedgerIndex,
 		LedgerHash:          upperHex(info.Hash[:]),
 		Transaction:         txJSON,
@@ -652,7 +626,7 @@ func buildValidatedTransactionEvent(
 		Status:              "closed",
 	}
 	if !txResult.Validated {
-		return streamEvent, engineResult
+		return streamEvent, engineResult, nil
 	}
 
 	if !info.CloseTime.IsZero() {
@@ -660,8 +634,11 @@ func buildValidatedTransactionEvent(
 	}
 
 	var txFields map[string]any
-	if err := json.Unmarshal(txJSON, &txFields); err != nil || txFields == nil {
-		return streamEvent, engineResult
+	if err := json.Unmarshal(txJSON, &txFields); err != nil {
+		return nil, 0, fmt.Errorf("decode projected transaction: %w", err)
+	}
+	if txFields == nil {
+		return nil, 0, errors.New("decoded projected transaction is null")
 	}
 	if closeTime >= 0 && closeTime <= int64(^uint32(0)) {
 		txFields["date"] = uint32(closeTime)
@@ -672,13 +649,15 @@ func buildValidatedTransactionEvent(
 			txFields["owner_funds"] = funds
 		}
 	}
-	if encoded, err := json.Marshal(txFields); err == nil {
-		streamEvent.Transaction = encoded
+	encoded, err := json.Marshal(txFields)
+	if err != nil {
+		return nil, 0, fmt.Errorf("marshal projected transaction: %w", err)
 	}
+	streamEvent.Transaction = encoded
 
 	transactionIndex, ok := metadataTransactionIndex(metaJSON)
 	if !ok {
-		return streamEvent, engineResult
+		return nil, 0, errors.New("metadata is missing TransactionIndex")
 	}
 	networkID := defaultNetworkID
 	if raw, exists := txFields["NetworkID"]; exists {
@@ -689,7 +668,33 @@ func buildValidatedTransactionEvent(
 	if ctid, ok := handlers.EncodeCTID(txResult.LedgerIndex, transactionIndex, networkID); ok {
 		streamEvent.CTID = ctid
 	}
-	return streamEvent, engineResult
+	return streamEvent, engineResult, nil
+}
+
+type validatedTransactionPublication struct {
+	result       service.TransactionResultEvent
+	event        *rpc.TransactionEvent
+	engineResult ter.Result
+}
+
+func buildValidatedTransactionPublications(
+	results []service.TransactionResultEvent,
+	event *service.LedgerAcceptedEvent,
+	defaultNetworkID uint32,
+) ([]validatedTransactionPublication, error) {
+	publications := make([]validatedTransactionPublication, 0, len(results))
+	for _, result := range results {
+		txEvent, engineResult, err := buildValidatedTransactionEvent(result, event, defaultNetworkID)
+		if err != nil {
+			return nil, fmt.Errorf("decode accepted transaction %s: %w", upperHex(result.TxHash[:]), err)
+		}
+		publications = append(publications, validatedTransactionPublication{
+			result:       result,
+			event:        txEvent,
+			engineResult: engineResult,
+		})
+	}
+	return publications, nil
 }
 
 func rippleEpochSeconds(t time.Time) int64 {
@@ -723,28 +728,6 @@ func uint32JSONValue(value any) (uint32, bool) {
 		return 0, false
 	}
 	return parsed, true
-}
-
-// parseVLLength parses a variable-length field prefix.
-// Returns (length, bytesConsumed).
-func parseVLLength(data []byte) (int, int) {
-	if len(data) == 0 {
-		return 0, 0
-	}
-	b1 := int(data[0])
-	if b1 <= 192 {
-		return b1, 1
-	}
-	if b1 <= 240 {
-		if len(data) < 2 {
-			return 0, 0
-		}
-		return 193 + ((b1 - 193) * 256) + int(data[1]), 2
-	}
-	if len(data) < 3 {
-		return 0, 0
-	}
-	return 12481 + ((b1 - 241) * 65536) + (int(data[1]) * 256) + int(data[2]), 3
 }
 
 // buildTable constructs the live amendment table from the operator's

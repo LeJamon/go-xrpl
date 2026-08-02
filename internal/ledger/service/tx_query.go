@@ -177,29 +177,37 @@ func (s *Service) SubmitTransaction(transaction tx.Transaction, rawBlob []byte, 
 		s.pendingTxs = append(s.pendingTxs, ptx)
 	}
 
-	if cb := s.submittedTxCallback; cb != nil && rawBlob != nil && outcome.Applied &&
-		mayPublishProposedTransaction(ptx.Parsed.GetCommon().GetFlags()) {
-		current := s.openLedgerView.Current()
-		ev := SubmittedTxEvent{
-			RawBlob:          append([]byte(nil), rawBlob...),
-			TxHash:           ptx.Hash,
-			AffectedAccounts: extractMentionedAccounts(rawBlob),
-			CurrentLedger:    currentSeq,
-			OwnerFunds:       proposedOwnerFunds(rawBlob, current),
-			Result: Result{
-				Code:    int(outcome.Result),
-				Name:    outcome.Result.String(),
-				Message: outcome.Message,
-				Applied: outcome.Applied,
-			},
-		}
-		// Dispatch off-goroutine like every other Service callback (the event
-		// owns a copy of the blob): a WebSocket subscriber must not be able to
-		// run a Service getter and re-enter s.mu, nor stall submits/closes.
-		go cb(ev)
-	}
+	s.dispatchProposedTransaction(ptx, rawBlob, outcome, s.openLedgerView.Current())
 
 	return result, nil
+}
+
+// dispatchProposedTransaction publishes only transactions committed to the
+// open ledger. Callers hold s.mu, which serializes local and peer ingress with
+// ledger acceptance before the shared publication FIFO.
+func (s *Service) dispatchProposedTransaction(
+	ptx openledger.PendingTx,
+	rawBlob []byte,
+	outcome openledger.SubmitOutcome,
+	current *ledger.Ledger,
+) {
+	if !s.eventPublisher.hasSubmittedTxCallback() || rawBlob == nil || !outcome.Applied || current == nil ||
+		!mayPublishProposedTransaction(ptx.Parsed.GetCommon().GetFlags()) {
+		return
+	}
+	s.eventPublisher.dispatchSubmittedTxEvent(SubmittedTxEvent{
+		RawBlob:          append([]byte(nil), rawBlob...),
+		TxHash:           ptx.Hash,
+		AffectedAccounts: extractMentionedAccounts(rawBlob),
+		CurrentLedger:    current.Sequence(),
+		OwnerFunds:       proposedOwnerFunds(rawBlob, current),
+		Result: Result{
+			Code:    int(outcome.Result),
+			Name:    outcome.Result.String(),
+			Message: outcome.Message,
+			Applied: outcome.Applied,
+		},
+	})
 }
 
 func mayPublishProposedTransaction(flags uint32) bool {

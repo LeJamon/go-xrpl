@@ -31,6 +31,7 @@ import (
 	"github.com/LeJamon/go-xrpl/internal/rpc/handlers"
 	"github.com/LeJamon/go-xrpl/internal/rpc/loadtrack"
 	"github.com/LeJamon/go-xrpl/internal/rpc/types"
+	"github.com/LeJamon/go-xrpl/internal/tx/ter"
 	validatorlist "github.com/LeJamon/go-xrpl/internal/validator/list"
 	"github.com/LeJamon/go-xrpl/internal/watchdog"
 	xrpllog "github.com/LeJamon/go-xrpl/log"
@@ -982,9 +983,17 @@ func run(
 	var lastServerSnapshot serverStatusSnapshot
 
 	// Wire up ledger service events to WebSocket broadcasts
-	ledgerService.SetEventSink(service.EventSinkFunc(func(event *service.LedgerAcceptedEvent) {
+	ledgerService.SetEventSink(service.EventSinkFunc(func(event *service.LedgerAcceptedEvent) error {
 		if event == nil || event.LedgerInfo == nil {
-			return
+			return nil
+		}
+		transactions, err := buildValidatedTransactionPublications(
+			event.TransactionResults,
+			event,
+			uint32(networkID),
+		)
+		if err != nil {
+			return err
 		}
 
 		// Drive online-delete rotation off the validated-ledger advance. The
@@ -1013,8 +1022,10 @@ func run(
 		}
 		publisher.PublishLedgerClosed(ledgerCloseEvent)
 
-		for _, txResult := range event.TransactionResults {
-			txEvent, engineResult := buildValidatedTransactionEvent(txResult, event, uint32(networkID))
+		for _, publication := range transactions {
+			txResult := publication.result
+			txEvent := publication.event
+			engineResult := publication.engineResult
 			publisher.PublishTransaction(txEvent, txResult.AffectedAccounts)
 
 			// Per-book delivery is tesSUCCESS-only — rippled gates
@@ -1022,10 +1033,10 @@ func run(
 			// (NetworkOPs.cpp:3409-3410). Subscribers receive the
 			// full tx + meta JSON, matching the transactions-stream
 			// payload (rippled fans the same MultiApiJson into both).
-			if engineResult != "tesSUCCESS" {
+			if engineResult != ter.TesSUCCESS {
 				continue
 			}
-			pairs := extractBookPairsFromTxData(txResult.TxData)
+			pairs := extractBookPairsFromMetadata(txEvent.Meta)
 			if len(pairs) == 0 {
 				continue
 			}
@@ -1037,7 +1048,7 @@ func run(
 		// already-closed ledger view directly from the event so a slow
 		// adapter store cannot drop the announce when the ledger isn't
 		// yet visible to GetLedgerBySequence.
-		bookView := newAcceptedLedgerView(event)
+		bookView := newAcceptedLedgerView(event, event.TransactionResults)
 		payload := handlers.ComputeBookChanges(bookView)
 		if data, err := json.Marshal(payload); err == nil {
 			wsServer.SubscriptionManager().BroadcastToStream(types.SubBookChanges, data, nil)
@@ -1093,6 +1104,7 @@ func run(
 			"sequence", event.LedgerInfo.Sequence,
 			"txs", len(event.TransactionResults),
 		)
+		return nil
 	}))
 
 	if !standalone && appConfig.Watchdog.IsEnabled() {
@@ -1186,6 +1198,7 @@ func run(
 		shutdownCh,
 		listenerErrCh,
 		componentErrCh,
+		ledgerService.Errors(),
 		consensusComponents,
 		configPath,
 	)
@@ -1231,6 +1244,7 @@ func waitForShutdown(
 	shutdownCh chan struct{},
 	listenerErrCh chan error,
 	componentErrCh <-chan error,
+	serviceErrCh <-chan error,
 	consensusComponents *adaptor.Components,
 	configPath string,
 ) error {
@@ -1274,6 +1288,16 @@ func waitForShutdown(
 				err = errors.New("consensus component stopped unexpectedly")
 			}
 			log.Error("Consensus component failed — initiating shutdown", "err", err)
+			return err
+		case err, ok := <-serviceErrCh:
+			if !ok {
+				serviceErrCh = nil
+				continue
+			}
+			if err == nil {
+				err = errors.New("ledger service stopped unexpectedly")
+			}
+			log.Error("Ledger service failed — initiating shutdown", "err", err)
 			return err
 		}
 	}

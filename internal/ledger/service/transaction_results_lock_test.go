@@ -4,6 +4,8 @@ import (
 	"errors"
 	"testing"
 
+	txcore "github.com/LeJamon/go-xrpl/internal/tx"
+	"github.com/LeJamon/go-xrpl/internal/tx/ter"
 	"github.com/stretchr/testify/require"
 )
 
@@ -68,4 +70,52 @@ func TestCollectTransactionResultsSnapshotsValidationBeforeTraversal(t *testing.
 	require.False(t, source.validationDuringWalk)
 	require.True(t, results[0].Validated)
 	require.True(t, results[1].Validated)
+}
+
+type indexedTransactionResultSource struct {
+	entries []struct {
+		hash [32]byte
+		data []byte
+	}
+}
+
+func (s indexedTransactionResultSource) IsValidated() bool { return true }
+
+func (s indexedTransactionResultSource) ForEachTransaction(fn func([32]byte, []byte) bool) error {
+	for _, entry := range s.entries {
+		if !fn(entry.hash, entry.data) {
+			break
+		}
+	}
+	return nil
+}
+
+func TestStageTransactionResultsSortsByTransactionIndex(t *testing.T) {
+	makeData := func(index uint32) []byte {
+		data, err := txcore.CreateTxWithMetaBlob([]byte{0x12, 0x00}, &txcore.Metadata{
+			AffectedNodes:     []txcore.AffectedNode{},
+			TransactionIndex:  index,
+			TransactionResult: ter.TesSUCCESS,
+		})
+		require.NoError(t, err)
+		return data
+	}
+	source := indexedTransactionResultSource{entries: []struct {
+		hash [32]byte
+		data []byte
+	}{
+		{hash: [32]byte{9}, data: []byte("missing-index")},
+		{hash: [32]byte{3}, data: makeData(2)},
+		{hash: [32]byte{1}, data: makeData(0)},
+		{hash: [32]byte{2}, data: makeData(1)},
+	}}
+
+	staged, err := stageTransactionResults(source, 7, [32]byte{8})
+	require.NoError(t, err)
+	require.Equal(t, [][32]byte{{1}, {2}, {3}, {9}}, [][32]byte{
+		staged.results[0].TxHash,
+		staged.results[1].TxHash,
+		staged.results[2].TxHash,
+		staged.results[3].TxHash,
+	})
 }
