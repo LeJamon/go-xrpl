@@ -633,6 +633,13 @@ func applyValidatorReloadContextWithGate(
 
 // buildTable builds the live amendment table from configured votes and overlays
 // any votes persisted by the relational repository.
+// buildTable constructs the live amendment table from the operator's
+// [amendments] config and any persisted runtime votes. Config preferences are
+// applied first, then persisted votes (from the `feature` RPC) override them so
+// runtime changes win across restarts — mirroring rippled, where the FeatureVotes
+// DB takes precedence over the config stanzas. Unknown names are logged and
+// ignored. The returned table owns operator veto/upvote and the enabled/blocked
+// state, and is shared between the ledger service and the consensus adaptor.
 func buildTable(ctx context.Context, cfg config.AmendmentsConfig, repo relationaldb.RepositoryManager, log xrpllog.Logger) *amendment.Table {
 	t := amendment.NewTable()
 	for _, name := range cfg.Upvote {

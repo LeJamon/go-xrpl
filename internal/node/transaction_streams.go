@@ -112,12 +112,6 @@ func buildProposedTxEvent(ev service.SubmittedTxEvent) *rpc.ProposedTransactionE
 	)
 }
 
-// buildManifestEvent renders a rippled-shape manifestReceived event.
-// Mirrors NetworkOPs::pubManifest (NetworkOPs.cpp:2229-2265): the
-// canonical serialized blob is emitted as `manifest`, with the master
-// signature always present and signing_key/signature/domain conditional
-// on manifest presence.
-
 type acceptedTransactionProjection struct {
 	transaction      map[string]any
 	metadata         map[string]any
@@ -319,11 +313,3 @@ func uint32JSONValue(value any) (uint32, bool) {
 	}
 	return parsed, true
 }
-
-// buildTable constructs the live amendment table from the operator's
-// [amendments] config and any persisted runtime votes. Config preferences are
-// applied first, then persisted votes (from the `feature` RPC) override them so
-// runtime changes win across restarts — mirroring rippled, where the FeatureVotes
-// DB takes precedence over the config stanzas. Unknown names are logged and
-// ignored. The returned table owns operator veto/upvote and the enabled/blocked
-// state, and is shared between the ledger service and the consensus adaptor.

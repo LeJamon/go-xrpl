@@ -124,7 +124,7 @@ func (a *acceptedLedgerView) Hash() [32]byte {
 }
 
 func (a *acceptedLedgerView) CloseTime() int64 {
-	return rippleEpochSeconds(a.info.CloseTime)
+	return protocol.RippleSeconds(a.info.CloseTime)
 }
 
 func (a *acceptedLedgerView) IsValidated() bool {

@@ -7,6 +7,11 @@ import (
 	"github.com/LeJamon/go-xrpl/internal/rpc/types"
 )
 
+// buildManifestEvent renders a rippled-shape manifestReceived event.
+// Mirrors NetworkOPs::pubManifest (NetworkOPs.cpp:2229-2265): the
+// canonical serialized blob is emitted as `manifest`, with the master
+// signature always present and signing_key/signature/domain conditional
+// on manifest presence.
 func buildManifestEvent(m *manifest.Manifest) *rpc.ManifestEvent {
 	if m == nil {
 		return nil
@@ -41,8 +46,3 @@ func publishManifestIfSubscribed(publisher manifestEventPublisher, m *manifest.M
 	}
 	publisher.PublishManifest(buildManifestEvent(m))
 }
-
-// serverStatusSnapshot is the diff key for the pubServer emit gate.
-// Two snapshots being equal means none of the fields rippled keys on
-// (NetworkOPs.cpp:2278-2295 ServerFeeSummary::operator==) have moved,
-// so the corresponding serverStatus event is suppressed.

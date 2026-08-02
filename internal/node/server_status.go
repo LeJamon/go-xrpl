@@ -10,6 +10,10 @@ import (
 	"github.com/LeJamon/go-xrpl/internal/rpc/types"
 )
 
+// serverStatusSnapshot is the diff key for the pubServer emit gate.
+// Two snapshots being equal means none of the fields rippled keys on
+// (NetworkOPs.cpp:2278-2295 ServerFeeSummary::operator==) have moved,
+// so the corresponding serverStatus event is suppressed.
 type serverStatusSnapshot struct {
 	baseFee                 uint64
 	loadBase                uint64

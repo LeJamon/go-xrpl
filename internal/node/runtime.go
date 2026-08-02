@@ -801,7 +801,7 @@ func (r *nodeRuntime) configureConsensus() error {
 		)
 	} else {
 		genesisAddr, _ := r.ledger.GetGenesisAccount()
-		r.serverLog.Info("Running in r.standalone mode",
+		r.serverLog.Info("Running in standalone mode",
 			"genesisAccount", genesisAddr,
 			"validatedLedger", r.ledger.GetValidatedLedgerIndex(),
 			"openLedger", r.ledger.GetCurrentLedgerIndex(),
