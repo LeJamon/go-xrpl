@@ -144,7 +144,6 @@ func (r *nodeRuntime) configureStorage() error {
 
 func (r *nodeRuntime) configureLedger() error {
 	ctx := r.ctx
-	// Load genesis configuration from config file path (if set)
 	genesisFile := r.appConfig.GenesisFile
 	var genesisConfig genesis.Config
 	if genesisFile != "" {
@@ -186,14 +185,12 @@ func (r *nodeRuntime) configureLedger() error {
 		r.serverLog.Info("Genesis config using built-in defaults")
 	}
 
-	// Get network ID from config
 	networkID, err := r.appConfig.ResolvedNetworkID()
 	if err != nil {
 		return fmt.Errorf("get network ID: %w", err)
 	}
 	r.networkID = uint32(networkID)
 
-	// Build the live amendment table from the operator's [amendments] config.
 	// One instance is shared between the ledger service (which folds validated
 	// flag ledgers into it) and the consensus adaptor (which sources vote
 	// stances from it).
@@ -209,7 +206,6 @@ func (r *nodeRuntime) configureLedger() error {
 		return err
 	}
 
-	// Initialize ledger service
 	cfg := service.Config{
 		Standalone:      r.standalone,
 		NodeSize:        r.appConfig.NodeSize,
@@ -251,7 +247,6 @@ func (r *nodeRuntime) configureMaintenance() error {
 	}
 	r.stopSampler = sampler.Stop
 
-	// Wire up RPC services
 	r.ledgerAdapter = rpc.NewLedgerServiceAdapter(r.ledger)
 	r.services = types.NewServiceContainer(r.ledgerAdapter)
 	r.services.ServerInfoConfig = serverInfoConfigSnapshot(r.appConfig)
@@ -460,7 +455,6 @@ func (r *nodeRuntime) configureMaintenance() error {
 
 func (r *nodeRuntime) configureConsensus() error {
 	ctx := r.ctx
-	// Start consensus/networking if not in standalone mode
 	if !r.standalone {
 		var compErr error
 		var validationRepo relationaldb.ValidationRepository
@@ -580,7 +574,6 @@ func (r *nodeRuntime) configureConsensus() error {
 			overlay.SetLocalLoadFeeProvider(ft.LocalFee)
 		}
 
-		// Expose node identity and consensus stats to RPC handlers.
 		r.services.NodePublicKey = r.consensus.Overlay.Identity().EncodedPublicKey()
 		engine := r.consensus.Engine
 		r.services.LastCloseInfo = func() (int, int) {
@@ -823,7 +816,6 @@ func (r *nodeRuntime) bindRPC() error {
 
 	r.services.SetDispatcher(r.httpServer)
 
-	// Create WebSocket server for real-time subscriptions
 	r.wsServer = rpc.NewWebSocketServerWithLoadTracker(rpcDispatchTimeout, r.services, transportLoad)
 	if r.appConfig.WebsocketPingFrequency > 0 {
 		r.wsServer.SetPingInterval(time.Duration(r.appConfig.WebsocketPingFrequency) * time.Second)
@@ -833,7 +825,6 @@ func (r *nodeRuntime) bindRPC() error {
 		r.wsServer.SetPeerSource(r.consensus.Overlay)
 	}
 
-	// Create a ledger info provider adapter for WebSocket subscribe responses
 	r.wsServer.SetLedgerInfoProvider(&ledgerInfoAdapter{ledgerService: r.ledger})
 
 	r.publisher = rpc.NewPublisher(r.wsServer.SubscriptionManager())
@@ -904,7 +895,6 @@ func (r *nodeRuntime) bindStreams() error {
 		})
 	}
 
-	// Wire up ledger service events to WebSocket broadcasts
 	r.ledger.SetEventSink(service.EventSinkFunc(func(event *service.LedgerAcceptedEvent) error {
 		if event == nil || event.LedgerInfo == nil {
 			return nil
@@ -950,7 +940,6 @@ func (r *nodeRuntime) bindStreams() error {
 
 		serverStatus.publish(nil)
 
-		// Update persistent path_find sessions on ledger close
 		r.wsServer.UpdatePathFindSessions(func() (types.LedgerStateView, error) {
 			return r.services.Ledger.GetClosedLedgerView()
 		})

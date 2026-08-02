@@ -7,7 +7,6 @@ import (
 	"github.com/LeJamon/go-xrpl/internal/rpc/types"
 )
 
-// buildManifestEvent renders a rippled-shape manifestReceived event.
 // Mirrors NetworkOPs::pubManifest (NetworkOPs.cpp:2229-2265): the
 // canonical serialized blob is emitted as `manifest`, with the master
 // signature always present and signing_key/signature/domain conditional

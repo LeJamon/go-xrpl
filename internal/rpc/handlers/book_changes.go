@@ -34,7 +34,6 @@ type bookChange struct {
 	Domain         string
 }
 
-// BookChangesHeader is the ledger header surface needed to render book changes.
 type BookChangesHeader interface {
 	Sequence() uint32
 	Hash() [32]byte
@@ -42,14 +41,11 @@ type BookChangesHeader interface {
 	IsValidated() bool
 }
 
-// LedgerWithTransactions is the minimal raw-ledger surface needed to compute
-// book changes. types.LedgerEntry satisfies it.
 type LedgerWithTransactions interface {
 	BookChangesHeader
 	ForEachTransaction(fn func(txHash [32]byte, txData []byte) bool) error
 }
 
-// BookChangesTransaction supplies an already-decoded transaction and metadata.
 type BookChangesTransaction struct {
 	Transaction map[string]any
 	Metadata    map[string]any

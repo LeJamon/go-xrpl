@@ -17,7 +17,6 @@ type ledgerInfoService interface {
 	GetServerInfo() service.ServerInfo
 }
 
-// ledgerInfoAdapter adapts the ledger service to the LedgerInfoProvider interface
 type ledgerInfoAdapter struct {
 	ledgerService ledgerInfoService
 }
@@ -98,7 +97,6 @@ func buildLedgerCloseEvent(event *service.LedgerAcceptedEvent, serverInfo servic
 	}
 }
 
-// upperHex renders bytes as uppercase hex
 func upperHex(b []byte) string {
 	return strings.ToUpper(hex.EncodeToString(b))
 }

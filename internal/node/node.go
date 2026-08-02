@@ -631,8 +631,6 @@ func applyValidatorReloadContextWithGate(
 	)
 }
 
-// buildTable builds the live amendment table from configured votes and overlays
-// any votes persisted by the relational repository.
 // buildTable constructs the live amendment table from the operator's
 // [amendments] config and any persisted runtime votes. Config preferences are
 // applied first, then persisted votes (from the `feature` RPC) override them so
