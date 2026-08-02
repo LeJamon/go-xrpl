@@ -24,7 +24,6 @@ func (a *Adaptor) GetOperatingMode() consensus.OperatingMode {
 
 func (a *Adaptor) SetOperatingMode(mode consensus.OperatingMode) {
 	a.mu.Lock()
-	defer a.mu.Unlock()
 
 	// A blocked node is never more than connected: it cannot safely
 	// participate in consensus, so it must not claim to be synced.
@@ -38,24 +37,44 @@ func (a *Adaptor) SetOperatingMode(mode consensus.OperatingMode) {
 			mode = consensus.OpModeConnected
 		}
 	}
-	a.setOperatingModeLocked(mode)
+	changed := a.setOperatingModeLocked(mode)
+	onModeChange := a.onModeChange
+	a.mu.Unlock()
+	if changed && onModeChange != nil {
+		onModeChange(mode)
+	}
 }
 
-func (a *Adaptor) setOperatingModeLocked(mode consensus.OperatingMode) {
+func (a *Adaptor) setOperatingModeLocked(mode consensus.OperatingMode) bool {
+	if a.operatingMode == mode {
+		return false
+	}
 	a.operatingMode = mode
 	if a.stateAcct != nil {
 		// Held under a.mu so the field and the accounting transition share one
 		// serialization order; the tracker's own mutex never re-enters a.mu.
 		a.stateAcct.transition(mode)
 	}
+	return true
+}
+
+// SetOnOperatingModeChange installs a callback for effective mode changes.
+func (a *Adaptor) SetOnOperatingModeChange(fn func(consensus.OperatingMode)) {
+	a.mu.Lock()
+	a.onModeChange = fn
+	a.mu.Unlock()
 }
 
 func (a *Adaptor) demoteOperatingModeForWrongLedger() {
 	a.mu.Lock()
-	defer a.mu.Unlock()
-
+	changed := false
 	if a.operatingMode == consensus.OpModeFull || a.operatingMode == consensus.OpModeTracking {
-		a.setOperatingModeLocked(consensus.OpModeConnected)
+		changed = a.setOperatingModeLocked(consensus.OpModeConnected)
+	}
+	onModeChange := a.onModeChange
+	a.mu.Unlock()
+	if changed && onModeChange != nil {
+		onModeChange(consensus.OpModeConnected)
 	}
 }
 

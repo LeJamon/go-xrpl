@@ -974,12 +974,18 @@ func run(
 		)
 	})
 
-	// pubServer cache: rippled gates the serverStatus emit on the
-	// ServerFeeSummary changing (NetworkOPs.cpp:3209-3225 reportFeeChange);
-	// the server stream is silent in steady state. We track the
-	// previous snapshot here so a constant-fee ledger run does not
-	// flood subscribers.
-	var lastServerSnapshot serverStatusSnapshot
+	serverStatus := newServerStatusPublisher(services, publisher)
+	ledgerService.SetServerStatusCallback(serverStatus.publish)
+	if feeTrack := ledgerService.FeeTrack(); feeTrack != nil {
+		feeTrack.SetOnChange(func() {
+			ledgerService.SignalServerStatus()
+		})
+	}
+	if consensusComponents != nil && consensusComponents.Adaptor != nil {
+		consensusComponents.Adaptor.SetOnOperatingModeChange(func(mode consensus.OperatingMode) {
+			ledgerService.SignalServerMode(mode.String())
+		})
+	}
 
 	// Wire up ledger service events to WebSocket broadcasts
 	ledgerService.SetEventSink(service.EventSinkFunc(func(event *service.LedgerAcceptedEvent) error {
@@ -1033,46 +1039,7 @@ func run(
 			}
 		}
 
-		// pubServer → server stream (NetworkOPs.cpp:2308-2373 +
-		// 3209-3225 reportFeeChange). Diff-check against the previous
-		// snapshot so a constant-fee ledger does not flood subscribers.
-		// server_status is sourced from the live operating mode (the
-		// same value server_info returns), not a hardcoded "full".
-		load := handlers.ComputeServerLoad(services)
-		serverStatus := "full"
-		if info := services.Ledger.GetServerInfo(); info.ServerState != "" {
-			serverStatus = info.ServerState
-		}
-		nextSnap := serverStatusSnapshot{
-			baseFee:                 ledgerCloseEvent.FeeBase,
-			loadBase:                load.LoadBase,
-			loadFactor:              load.LoadFactor,
-			loadFactorLocal:         load.LoadFactorLocal,
-			loadFactorNet:           load.LoadFactorNet,
-			loadFactorCluster:       load.LoadFactorCluster,
-			loadFactorFeeEscalation: load.LoadFactorFeeEscalation,
-			loadFactorFeeQueue:      load.LoadFactorFeeQueue,
-			loadFactorFeeReference:  load.LoadFactorFeeReference,
-			loadFactorServer:        load.LoadFactorServer,
-			serverStatus:            serverStatus,
-		}
-		if nextSnap != lastServerSnapshot {
-			lastServerSnapshot = nextSnap
-			publisher.PublishServerStatus(&rpc.ServerStatusEvent{
-				Type:                    "serverStatus",
-				BaseFee:                 ledgerCloseEvent.FeeBase,
-				LoadBase:                int(load.LoadBase),
-				LoadFactor:              int(load.LoadFactor),
-				LoadFactorLocal:         int(load.LoadFactorLocal),
-				LoadFactorNet:           int(load.LoadFactorNet),
-				LoadFactorCluster:       int(load.LoadFactorCluster),
-				LoadFactorFeeEscalation: int(load.LoadFactorFeeEscalation),
-				LoadFactorFeeQueue:      int(load.LoadFactorFeeQueue),
-				LoadFactorFeeReference:  int(load.LoadFactorFeeReference),
-				LoadFactorServer:        int(load.LoadFactorServer),
-				ServerStatus:            serverStatus,
-			})
-		}
+		serverStatus.publish(nil)
 
 		// Update persistent path_find sessions on ledger close
 		wsServer.UpdatePathFindSessions(func() (types.LedgerStateView, error) {

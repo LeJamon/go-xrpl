@@ -83,9 +83,15 @@ type Result struct {
 // and must not call Service.Stop synchronously.
 type SubmittedTxCallback func(SubmittedTxEvent)
 
+// ServerStatusCallback runs on the publication worker. It must return promptly
+// and must not call Service.Stop synchronously.
+type ServerStatusCallback func(mode *string)
+
 type publicationEvent struct {
-	ledger    *LedgerAcceptedEvent
-	submitted *SubmittedTxEvent
+	ledger       *LedgerAcceptedEvent
+	submitted    *SubmittedTxEvent
+	serverStatus bool
+	serverMode   *string
 }
 
 // Errors reports fatal publication failures that require runtime shutdown.
@@ -121,6 +127,12 @@ func (p *eventPublisher) hasSubmittedTxCallback() bool {
 	p.subscriberMu.RLock()
 	defer p.subscriberMu.RUnlock()
 	return p.submittedTxCallback != nil
+}
+
+func (p *eventPublisher) setServerStatusCallback(fn ServerStatusCallback) {
+	p.subscriberMu.Lock()
+	defer p.subscriberMu.Unlock()
+	p.serverStatusCallback = fn
 }
 
 // dispatchLedgerEvent enqueues accepted ledgers for FIFO, single-threaded
@@ -164,6 +176,40 @@ func (p *eventPublisher) dispatchSubmittedTxEvent(event SubmittedTxEvent) {
 	copy := event
 	p.enqueuePublicationLocked(publicationEvent{submitted: &copy})
 	p.ledgerEventMu.Unlock()
+}
+
+func (p *eventPublisher) dispatchServerStatusEvent() bool {
+	p.ledgerEventMu.Lock()
+	defer p.ledgerEventMu.Unlock()
+	if p.ledgerEventStopping || p.publicationFailed {
+		return false
+	}
+	startDispatcher := p.startLedgerEventDispatcherLocked()
+	if startDispatcher {
+		go p.runLedgerEventDispatcher()
+	}
+	if p.serverStatusQueued {
+		return true
+	}
+	if !p.enqueuePublicationLocked(publicationEvent{serverStatus: true}) {
+		return false
+	}
+	p.serverStatusQueued = true
+	return true
+}
+
+func (p *eventPublisher) dispatchServerModeEvent(mode string) bool {
+	p.ledgerEventMu.Lock()
+	defer p.ledgerEventMu.Unlock()
+	if p.ledgerEventStopping || p.publicationFailed {
+		return false
+	}
+	startDispatcher := p.startLedgerEventDispatcherLocked()
+	if startDispatcher {
+		go p.runLedgerEventDispatcher()
+	}
+	copy := mode
+	return p.enqueuePublicationLocked(publicationEvent{serverMode: &copy})
 }
 
 func (p *eventPublisher) enqueuePublicationLocked(event publicationEvent) bool {
@@ -301,6 +347,9 @@ func (p *eventPublisher) runLedgerEventDispatcher() {
 				ev := p.publicationQueue[0]
 				p.publicationQueue[0] = publicationEvent{}
 				p.publicationQueue = p.publicationQueue[1:]
+				if ev.serverStatus {
+					p.serverStatusQueued = false
+				}
 				p.ledgerEventMu.Unlock()
 				if err := p.deliverPublication(ev); err != nil {
 					p.ledgerEventMu.Lock()
@@ -333,6 +382,14 @@ func (p *eventPublisher) deliverPublication(event publicationEvent) error {
 	}
 	if event.ledger != nil {
 		return p.deliverLedgerEvent(event.ledger)
+	}
+	if event.serverStatus || event.serverMode != nil {
+		p.subscriberMu.RLock()
+		callback := p.serverStatusCallback
+		p.subscriberMu.RUnlock()
+		if callback != nil {
+			callback(event.serverMode)
+		}
 	}
 	return nil
 }
@@ -383,6 +440,25 @@ func (p *eventPublisher) deliverLedgerEvent(event *LedgerAcceptedEvent) error {
 // unwire. The callback contract is documented on SubmittedTxCallback.
 func (s *Service) SetSubmittedTxCallback(fn SubmittedTxCallback) {
 	s.eventPublisher.setSubmittedTxCallback(fn)
+}
+
+// SetServerStatusCallback registers the callback used to sample and publish
+// the current server status. Pass nil to unwire.
+func (s *Service) SetServerStatusCallback(fn ServerStatusCallback) {
+	s.eventPublisher.setServerStatusCallback(fn)
+}
+
+// SignalServerStatus schedules a coalesced server-status sample on the shared
+// publication FIFO. It reports false after publication has stopped or failed.
+func (s *Service) SignalServerStatus() bool {
+	return s.eventPublisher.dispatchServerStatusEvent()
+}
+
+// SignalServerMode schedules an exact effective operating-mode transition on
+// the shared publication FIFO. Unlike fee/load samples, mode changes do not
+// coalesce because subscribers must observe transition order.
+func (s *Service) SignalServerMode(mode string) bool {
+	return s.eventPublisher.dispatchServerModeEvent(mode)
 }
 
 // SetTxRelay registers the per-tx broadcast handler invoked by

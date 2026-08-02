@@ -65,6 +65,7 @@ type Adaptor struct {
 	trustedMasterKeys [][33]byte
 
 	operatingMode consensus.OperatingMode
+	onModeChange  func(consensus.OperatingMode)
 
 	// stateAcct tracks transition counts and cumulative durations per
 	// operating mode for server_info.state_accounting.

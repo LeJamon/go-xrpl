@@ -869,6 +869,7 @@ func (s *Service) SubmitOpenLedgerTx(blob []byte, local bool) (openledger.Result
 		s.localTxs.PushBack(current.Sequence(), ptx)
 	}
 	s.dispatchProposedTransaction(ptx, blob, outcome, current)
+	s.eventPublisher.dispatchServerStatusEvent()
 	return outcome.Class, nil
 }
 

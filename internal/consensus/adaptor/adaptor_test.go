@@ -152,6 +152,34 @@ func TestAdaptorOperatingMode(t *testing.T) {
 	assert.Equal(t, consensus.OpModeFull, a.GetOperatingMode())
 }
 
+func TestOperatingModeChangeCallbackRunsAfterEffectiveTransition(t *testing.T) {
+	a := New(Config{})
+	changed := make(chan consensus.OperatingMode, 1)
+	a.SetOnOperatingModeChange(func(mode consensus.OperatingMode) {
+		if got := a.GetOperatingMode(); got != mode {
+			t.Errorf("callback mode = %v, current mode = %v", mode, got)
+		}
+		changed <- mode
+	})
+
+	a.SetOperatingMode(consensus.OpModeDisconnected)
+	select {
+	case mode := <-changed:
+		t.Fatalf("same-mode update published %v", mode)
+	default:
+	}
+
+	go a.SetOperatingMode(consensus.OpModeConnected)
+	select {
+	case mode := <-changed:
+		if mode != consensus.OpModeConnected {
+			t.Fatalf("callback mode = %v", mode)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("mode callback deadlocked on adaptor re-entry")
+	}
+}
+
 func TestAdaptorGetLastClosedLedger(t *testing.T) {
 	a := newTestAdaptor(t)
 

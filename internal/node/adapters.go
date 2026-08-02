@@ -565,14 +565,82 @@ type serverStatusSnapshot struct {
 	baseFee                 uint64
 	loadBase                uint64
 	loadFactor              uint64
-	loadFactorLocal         uint64
-	loadFactorNet           uint64
-	loadFactorCluster       uint64
 	loadFactorFeeEscalation uint64
 	loadFactorFeeQueue      uint64
 	loadFactorFeeReference  uint64
 	loadFactorServer        uint64
 	serverStatus            string
+}
+
+type serverStatusEventPublisher interface {
+	PublishServerStatus(*rpc.ServerStatusEvent)
+}
+
+type serverStatusPublisher struct {
+	mu        sync.Mutex
+	services  *types.ServiceContainer
+	publisher serverStatusEventPublisher
+	haveLast  bool
+	last      serverStatusSnapshot
+	haveMode  bool
+	mode      string
+}
+
+func newServerStatusPublisher(services *types.ServiceContainer, publisher serverStatusEventPublisher) *serverStatusPublisher {
+	return &serverStatusPublisher{services: services, publisher: publisher}
+}
+
+func (p *serverStatusPublisher) publish(mode *string) {
+	if p == nil || p.services == nil || p.services.Ledger == nil || p.publisher == nil {
+		return
+	}
+	p.mu.Lock()
+	baseFee, _, _ := p.services.Ledger.GetCurrentFees()
+	load := handlers.ComputeServerLoad(p.services)
+	serverStatus := "full"
+	if mode != nil {
+		serverStatus = *mode
+		p.mode = serverStatus
+		p.haveMode = true
+	} else if p.haveMode {
+		serverStatus = p.mode
+	} else {
+		if info := p.services.Ledger.GetServerInfo(); info.ServerState != "" {
+			serverStatus = info.ServerState
+		}
+		p.mode = serverStatus
+		p.haveMode = true
+	}
+	snapshot := serverStatusSnapshot{
+		baseFee:                 baseFee,
+		loadBase:                load.LoadBase,
+		loadFactor:              load.LoadFactor,
+		loadFactorFeeEscalation: load.LoadFactorFeeEscalation,
+		loadFactorFeeQueue:      load.LoadFactorFeeQueue,
+		loadFactorFeeReference:  load.LoadFactorFeeReference,
+		loadFactorServer:        load.LoadFactorServer,
+		serverStatus:            serverStatus,
+	}
+
+	if p.haveLast && snapshot == p.last {
+		p.mu.Unlock()
+		return
+	}
+	p.last = snapshot
+	p.haveLast = true
+	p.mu.Unlock()
+
+	p.publisher.PublishServerStatus(&rpc.ServerStatusEvent{
+		Type:                    "serverStatus",
+		BaseFee:                 baseFee,
+		LoadBase:                int(load.LoadBase),
+		LoadFactor:              int(load.LoadFactor),
+		LoadFactorFeeEscalation: int(load.LoadFactorFeeEscalation),
+		LoadFactorFeeQueue:      int(load.LoadFactorFeeQueue),
+		LoadFactorFeeReference:  int(load.LoadFactorFeeReference),
+		LoadFactorServer:        int(load.LoadFactorServer),
+		ServerStatus:            serverStatus,
+	})
 }
 
 // acceptedLedgerView adapts a LedgerAcceptedEvent to the

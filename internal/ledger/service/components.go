@@ -29,6 +29,7 @@ type eventPublisher struct {
 	publicationQueue        []publicationEvent
 	publicationLimit        int
 	publicationFailed       bool
+	serverStatusQueued      bool
 	publicationErrors       chan error
 	ledgerEventCandidates   map[uint32]*LedgerAcceptedEvent
 	ledgerEventFrontierSeq  uint32
@@ -42,6 +43,7 @@ type eventPublisher struct {
 	subscriberMu            sync.RWMutex
 	eventSink               EventSink
 	submittedTxCallback     SubmittedTxCallback
+	serverStatusCallback    ServerStatusCallback
 }
 
 type historyComponent struct {

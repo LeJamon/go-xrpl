@@ -594,9 +594,6 @@ func ComputeServerLoad(services *types.ServiceContainer) ServerLoadSnapshot {
 	if feeReference != 0 {
 		snap.LoadFactorFeeEscalation = feeEscalation * loadBase / feeReference
 	}
-	if snap.LoadFactorFeeEscalation > snap.LoadFactor {
-		snap.LoadFactor = snap.LoadFactorFeeEscalation
-	}
 	if services != nil && services.LoadFactorFees != nil {
 		fees := services.LoadFactorFees()
 		if fees.Local > 0 {
@@ -609,6 +606,8 @@ func ComputeServerLoad(services *types.ServiceContainer) ServerLoadSnapshot {
 			snap.LoadFactorCluster = uint64(fees.Cluster)
 		}
 	}
+	snap.LoadFactorServer = max(snap.LoadFactorLocal, snap.LoadFactorNet, snap.LoadFactorCluster)
+	snap.LoadFactor = max(snap.LoadFactorServer, snap.LoadFactorFeeEscalation)
 	return snap
 }
 

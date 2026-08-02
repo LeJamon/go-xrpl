@@ -100,9 +100,6 @@ type ServerStatusEvent struct {
 	BaseFee                 uint64 `json:"base_fee,omitempty"`                   // Base fee
 	LoadBase                int    `json:"load_base"`                            // Load base (256 = normal)
 	LoadFactor              int    `json:"load_factor"`                          // Current load factor
-	LoadFactorLocal         int    `json:"load_factor_local,omitempty"`          // Local load factor
-	LoadFactorNet           int    `json:"load_factor_net,omitempty"`            // Network load factor
-	LoadFactorCluster       int    `json:"load_factor_cluster,omitempty"`        // Cluster load factor
 	LoadFactorFeeEscalation int    `json:"load_factor_fee_escalation,omitempty"` // Fee escalation load factor
 	LoadFactorFeeQueue      int    `json:"load_factor_fee_queue,omitempty"`      // Fee queue load factor
 	LoadFactorFeeReference  int    `json:"load_factor_fee_reference,omitempty"`  // TxQ reference fee level (NetworkOPs.cpp:2345)

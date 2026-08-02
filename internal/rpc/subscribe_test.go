@@ -1865,6 +1865,36 @@ func TestComputeServerLoad_TracksTxQ(t *testing.T) {
 		"server-wide load_factor must rise to escalation when it exceeds loadBase")
 }
 
+func TestComputeServerLoad_UsesServerAndOverallMaxima(t *testing.T) {
+	mock := newMockLedgerService()
+	services := types.NewServiceContainer(mock)
+	services.LoadFactorFees = func() types.LoadFactorFees {
+		return types.LoadFactorFees{Local: 700, Net: 900, Cluster: 800}
+	}
+	services.TxQMetrics = func() types.TxQServerMetrics {
+		return types.TxQServerMetrics{
+			ReferenceFeeLevel:     256,
+			MinProcessingFeeLevel: 256,
+			OpenLedgerFeeLevel:    600,
+		}
+	}
+
+	load := handlers.ComputeServerLoad(services)
+	assert.Equal(t, uint64(900), load.LoadFactorServer)
+	assert.Equal(t, uint64(900), load.LoadFactor)
+
+	services.TxQMetrics = func() types.TxQServerMetrics {
+		return types.TxQServerMetrics{
+			ReferenceFeeLevel:     256,
+			MinProcessingFeeLevel: 256,
+			OpenLedgerFeeLevel:    1200,
+		}
+	}
+	load = handlers.ComputeServerLoad(services)
+	assert.Equal(t, uint64(900), load.LoadFactorServer)
+	assert.Equal(t, uint64(1200), load.LoadFactor)
+}
+
 // TestSubscribeRtTransactionsAlias verifies the deprecated
 // "rt_transactions" stream name is accepted as an alias for
 // "transactions_proposed" (rippled Subscribe.cpp:151-156).
