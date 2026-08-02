@@ -529,8 +529,6 @@ func (e *Engine) Start(ctx context.Context) error {
 	e.ctx, e.cancel = context.WithCancel(ctx)
 	e.prevLedger = ledger
 
-	// Wire the validation tracker from one trusted, quorum, and negative-UNL snapshot.
-	// Its callback flips the ledger service's validated_ledger pointer.
 	trusted, quorum, negativeUNL := validationConfig(e.adaptor)
 	e.validationTracker = NewValidationTracker(quorum)
 	e.setValidationConfig(trusted, quorum, negativeUNL)
