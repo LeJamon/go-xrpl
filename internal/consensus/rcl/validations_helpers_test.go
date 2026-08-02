@@ -1,10 +1,79 @@
 package rcl
 
-import "github.com/LeJamon/go-xrpl/internal/consensus"
+import (
+	"github.com/LeJamon/go-xrpl/internal/consensus"
+	"github.com/LeJamon/go-xrpl/internal/consensus/ledgertrie"
+)
 
 // This file holds ValidationTracker query methods that exist only to
 // support tests. Keeping them out of validations.go keeps the production
 // API surface limited to what the engine actually calls.
+
+// SetTrusted updates the trusted set without changing the test tracker's
+// quorum. Production code uses SetTrustedAndQuorum so the two values always
+// install atomically.
+func (vt *ValidationTracker) SetTrusted(nodes []consensus.NodeID) {
+	vt.mu.Lock()
+	vt.setTrustedLocked(nodes)
+	vt.mu.Unlock()
+	vt.checkAcquired()
+}
+
+// SetQuorum updates the quorum requirement for tests. Production code sets
+// quorum together with the trusted set via SetTrustedAndQuorum.
+func (vt *ValidationTracker) SetQuorum(quorum int) {
+	vt.mu.Lock()
+	vt.quorum = quorum
+	vt.mu.Unlock()
+}
+
+// TrustedSupport returns trusted, non-negative-UNL validators supporting the
+// ledger or one of its descendants. It mirrors the old test-facing query;
+// production callers use the finality and preferred-ledger APIs directly.
+func (vt *ValidationTracker) TrustedSupport(ledgerID consensus.LedgerID) int {
+	vt.checkAcquired()
+
+	vt.mu.RLock()
+	trie := vt.trie
+	ancestry := vt.ancestry
+	vt.mu.RUnlock()
+
+	if trie == nil || ancestry == nil {
+		return vt.TrustedValidationCount(ledgerID)
+	}
+
+	lgr, ok := ancestry.LedgerByID(ledgerID)
+	if !ok {
+		return vt.TrustedValidationCount(ledgerID)
+	}
+
+	vt.mu.Lock()
+	defer vt.mu.Unlock()
+	if vt.trie != trie {
+		ledgerVals, exists := vt.validations[ledgerID]
+		if !exists {
+			return 0
+		}
+		ledgerVals.touch(vt.now())
+		return vt.countTrustedExcludingNegUNLLocked(ledgerVals.vals)
+	}
+	return vt.branchSupportExcludingNegUNLLocked(lgr)
+}
+
+func (vt *ValidationTracker) branchSupportExcludingNegUNLLocked(lgr ledgertrie.Ledger) int {
+	targetSeq := lgr.Seq()
+	targetID := lgr.ID()
+	count := 0
+	for nodeID, tip := range vt.trieTips {
+		if vt.negUNL[nodeID] {
+			continue
+		}
+		if tip.Seq() >= targetSeq && tip.Ancestor(targetSeq) == targetID {
+			count++
+		}
+	}
+	return count
+}
 
 // GetValidationCount returns the count of validations for a ledger.
 func (vt *ValidationTracker) GetValidationCount(ledgerID consensus.LedgerID) int {

@@ -48,7 +48,7 @@ func makeTrustedValidation(nodeID consensus.NodeID, ledgerID consensus.LedgerID,
 }
 
 func TestValidationTracker_InsertTipDoesNotRecordRejectedLedger(t *testing.T) {
-	vt := NewValidationTracker(1, 5*time.Minute)
+	vt := NewValidationTracker(1)
 	vt.trie = ledgertrie.New(genesisLedger{})
 	vt.trieTips = make(map[consensus.NodeID]ledgertrie.Ledger)
 
@@ -86,7 +86,7 @@ func TestValidationTracker_InsertTipDoesNotRecordRejectedLedger(t *testing.T) {
 // branchSupport(abc) = 1, so the majority-deeper branch correctly
 // wins.
 func TestValidationTracker_TrieDeepestSharedAncestor(t *testing.T) {
-	vt := NewValidationTracker(2, 5*time.Minute)
+	vt := NewValidationTracker(2)
 
 	now := time.Now()
 	vt.SetNow(func() time.Time { return now })
@@ -145,7 +145,7 @@ func TestValidationTracker_TrieDeepestSharedAncestor(t *testing.T) {
 // abc to abde, the trie must remove abc's tip and insert abde's, so
 // branchSupport reflects the actual current network state.
 func TestValidationTracker_TrieNewerValidationReplacesOld(t *testing.T) {
-	vt := NewValidationTracker(2, 5*time.Minute)
+	vt := NewValidationTracker(2)
 	now := time.Now()
 	vt.SetNow(func() time.Time { return now })
 
@@ -187,7 +187,7 @@ func TestValidationTracker_TrieNewerValidationReplacesOld(t *testing.T) {
 // (post-#939) it now enters the trie for preferred-ledger steering. The
 // exclusion lives on the support read path, not on trie membership.
 func TestValidationTracker_TrieNegUNLExcluded(t *testing.T) {
-	vt := NewValidationTracker(2, 5*time.Minute)
+	vt := NewValidationTracker(2)
 	now := time.Now()
 	vt.SetNow(func() time.Time { return now })
 
@@ -227,7 +227,7 @@ func TestValidationTracker_TrieNegUNLExcluded(t *testing.T) {
 // backing, the shared ancestor a has only n1's 1. The pre-fix trie
 // (which dropped negUNL at insert) would instead have steered to ab.
 func TestValidationTracker_TrieNegUNLSteersButExcludedFromQuorum(t *testing.T) {
-	vt := NewValidationTracker(2, 5*time.Minute)
+	vt := NewValidationTracker(2)
 	now := time.Now()
 	vt.SetNow(func() time.Time { return now })
 
@@ -279,7 +279,7 @@ func TestValidationTracker_TrieNegUNLSteersButExcludedFromQuorum(t *testing.T) {
 // competition through the full Add() path and asserts GetPreferred
 // returns the trie's SpanTip.
 func TestValidationTracker_TrieGetPreferred(t *testing.T) {
-	vt := NewValidationTracker(2, 5*time.Minute)
+	vt := NewValidationTracker(2)
 	now := time.Now()
 	vt.SetNow(func() time.Time { return now })
 
@@ -330,7 +330,7 @@ func TestValidationTracker_TrieGetPreferred(t *testing.T) {
 // descent starts, so the same 3-2 margin no longer beats uncommitted
 // and the descent stops at the common ancestor "a".
 func TestValidationTracker_TrieGetPreferred_LargestIssuedAffectsDescent(t *testing.T) {
-	vt := NewValidationTracker(2, 5*time.Minute)
+	vt := NewValidationTracker(2)
 	now := time.Now()
 	vt.SetNow(func() time.Time { return now })
 
@@ -385,7 +385,7 @@ func TestValidationTracker_TrieGetPreferred_LargestIssuedAffectsDescent(t *testi
 // TestValidationTracker_TrieDisabled_FallsBack keeps the existing
 // flat-count behaviour when no ancestry provider is installed.
 func TestValidationTracker_TrieDisabled_FallsBack(t *testing.T) {
-	vt := NewValidationTracker(2, 5*time.Minute)
+	vt := NewValidationTracker(2)
 	now := time.Now()
 	vt.SetNow(func() time.Time { return now })
 
@@ -416,7 +416,7 @@ func TestValidationTracker_TrieDisabled_FallsBack(t *testing.T) {
 // Mirrors rippled's removeTrie call in Validations::eraseFromCurrent
 // (Validations.h:519-523).
 func TestValidationTracker_ExpireOldDropsTrieTip(t *testing.T) {
-	vt := NewValidationTracker(2, 5*time.Minute)
+	vt := NewValidationTracker(2)
 	now := time.Now()
 	vt.SetNow(func() time.Time { return now })
 
@@ -463,7 +463,7 @@ func TestValidationTracker_ExpireOldDropsTrieTip(t *testing.T) {
 // quorum count. Exercises the seq-only fallback (no ancestry provider)
 // where the prior code wrongly skipped negUNL.
 func TestValidationTracker_ProposersFinishedIncludesNegUNL(t *testing.T) {
-	vt := NewValidationTracker(2, 5*time.Minute)
+	vt := NewValidationTracker(2)
 	now := time.Now()
 	vt.SetNow(func() time.Time { return now })
 
@@ -487,7 +487,7 @@ func TestValidationTracker_ProposersFinishedIncludesNegUNL(t *testing.T) {
 // nil while the trie is disabled, and a marshalable support snapshot once an
 // ancestry provider is wired and a trusted validation is inserted.
 func TestValidationTracker_GetJSONTrie(t *testing.T) {
-	vt := NewValidationTracker(2, 5*time.Minute)
+	vt := NewValidationTracker(2)
 
 	if js := vt.GetJSONTrie(); js != nil {
 		t.Fatalf("GetJSONTrie with no ancestry provider must be nil, got %v", js)

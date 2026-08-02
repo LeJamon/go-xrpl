@@ -544,7 +544,7 @@ type DisputedTx struct {
 
 	// Votes tracks per-peer yes/no votes on this transaction. A peer
 	// without an entry has not yet reported a position that lets us
-	// count it. Maintained by DisputeTracker.SetVote / UnVote.
+	// count it. Maintained by rcl's dispute tracker.
 	Votes map[NodeID]bool
 
 	// AvalancheState is the current threshold bracket for this
