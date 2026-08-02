@@ -33,6 +33,7 @@ func (e *Engine) phaseEstablish() {
 	// (rippled updateOurPositions prunes unconditionally, Consensus.h:
 	// 1509-1528): a bowed-out observer waiting at the close-time gate must
 	// not have its tally diluted forever by a silent peer's stale vote.
+	e.pruneUntrustedProposalsLocked()
 	e.pruneStaleProposalsLocked()
 
 	e.updatePosition()
@@ -45,6 +46,32 @@ func (e *Engine) phaseEstablish() {
 	}
 
 	e.checkConvergence()
+}
+
+// pruneUntrustedProposalsLocked removes current positions that lost trust
+// since they were received or replayed and revokes their dispute votes.
+// Caller must hold e.mu.
+func (e *Engine) pruneUntrustedProposalsLocked() {
+	e.purgePendingTrustLocked()
+	trusted := e.trustedPredicate()
+	for _, nodeID := range e.proposalTracker.PruneUntrusted(trusted) {
+		if e.disputeTracker != nil {
+			e.disputeTracker.UnVote(nodeID)
+		}
+	}
+	e.purgePendingTrustLocked()
+}
+
+// unvoteDeadProposalsLocked applies replayed bow-outs to the dispute tracker.
+// ProposalTracker owns the dead/current maps; the engine owns dispute votes.
+// Caller must hold e.mu.
+func (e *Engine) unvoteDeadProposalsLocked() {
+	if e.disputeTracker == nil {
+		return
+	}
+	for _, nodeID := range e.proposalTracker.DeadNodeIDs() {
+		e.disputeTracker.UnVote(nodeID)
+	}
 }
 
 // pruneStaleProposalsLocked drops peer proposals older than the freshness
@@ -626,6 +653,8 @@ func checkConsensusReached(agreeing, total int, countSelf bool, minPct int, reac
 // currPeerPositions_ tally (Consensus.h:1689-1707); the Yes check adds
 // self via countSelf. Caller must hold e.mu.
 func (e *Engine) countAgreement() (agree, disagree int) {
+	e.purgePendingTrustLocked()
+	trusted := e.trustedPredicate()
 	var ourTxSet consensus.TxSetID
 	haveOurs := false
 	if e.state != nil && e.state.OurPosition != nil {
@@ -640,7 +669,7 @@ func (e *Engine) countAgreement() (agree, disagree int) {
 		// popular tx set so non-proposing nodes still get a convergence signal.
 		counts := make(map[consensus.TxSetID]int)
 		for nodeID, p := range e.proposalTracker.All() {
-			if e.adaptor.IsTrusted(nodeID) {
+			if trusted(nodeID) {
 				counts[p.TxSet]++
 			}
 		}
@@ -660,7 +689,7 @@ func (e *Engine) countAgreement() (agree, disagree int) {
 	}
 
 	for nodeID, p := range e.proposalTracker.All() {
-		if !e.adaptor.IsTrusted(nodeID) {
+		if !trusted(nodeID) {
 			continue
 		}
 		if p.TxSet == ourTxSet {
@@ -676,6 +705,7 @@ func (e *Engine) countAgreement() (agree, disagree int) {
 // rebuilds ourTxSet from the inclusion decisions and rebroadcasts our
 // position. Caller must hold e.mu.
 func (e *Engine) updatePosition() {
+	e.purgePendingTrustLocked()
 	if e.state == nil {
 		return
 	}
@@ -807,7 +837,11 @@ func (e *Engine) updatePosition() {
 	}
 
 	// Refresh per-peer votes for peers whose position matches the new set.
+	trusted := e.trustedPredicate()
 	for nodeID, p := range e.proposalTracker.All() {
+		if !trusted(nodeID) {
+			continue
+		}
 		if p.TxSet != newTxSet.ID() {
 			continue
 		}

@@ -3039,6 +3039,7 @@ func TestConsensus_AbandonHardTimeout(t *testing.T) {
 			TxSet:    consensus.TxSetID{byte(0xB0 + i)},
 		}
 	}
+	adaptor.notifyTrustChanged()
 	engine.phaseEstablish()
 	phaseAfter := engine.phase
 	modeAfter := engine.mode
@@ -3153,6 +3154,7 @@ func TestConsensus_AbandonRetryGate(t *testing.T) {
 			TxSet:    consensus.TxSetID{byte(0xC0 + i)},
 		}
 	}
+	adaptor.notifyTrustChanged()
 	engine.phaseEstablish()
 	phaseAfter := engine.phase
 	modeAfter := engine.mode
