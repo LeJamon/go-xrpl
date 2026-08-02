@@ -1302,9 +1302,9 @@ func TestGetSubscribeResponse(t *testing.T) {
 	assert.Equal(t, uint32(100), response.LedgerIndex)
 	assert.Equal(t, "4BC50C9B0D8515D3EAAE1E74B29A95804346C491EE1A95BF25E4AAB854A6A652", response.LedgerHash)
 	assert.Equal(t, uint32(735000000), response.LedgerTime)
-	assert.Equal(t, uint64(10), response.FeeBase)
-	assert.Equal(t, uint64(10000000), response.ReserveBase)
-	assert.Equal(t, uint64(2000000), response.ReserveInc)
+	assert.Equal(t, int32(10), response.FeeBase)
+	assert.Equal(t, int32(10000000), response.ReserveBase)
+	assert.Equal(t, int32(2000000), response.ReserveInc)
 }
 
 // Subscribe/Unsubscribe Method Tests (RPC Handler level)
@@ -1863,6 +1863,36 @@ func TestComputeServerLoad_TracksTxQ(t *testing.T) {
 	assert.Equal(t, uint64(256), load.LoadFactorFeeReference)
 	assert.Equal(t, uint64(1024), load.LoadFactor,
 		"server-wide load_factor must rise to escalation when it exceeds loadBase")
+}
+
+func TestComputeServerLoad_UsesServerAndOverallMaxima(t *testing.T) {
+	mock := newMockLedgerService()
+	services := types.NewServiceContainer(mock)
+	services.LoadFactorFees = func() types.LoadFactorFees {
+		return types.LoadFactorFees{Local: 700, Net: 900, Cluster: 800}
+	}
+	services.TxQMetrics = func() types.TxQServerMetrics {
+		return types.TxQServerMetrics{
+			ReferenceFeeLevel:     256,
+			MinProcessingFeeLevel: 256,
+			OpenLedgerFeeLevel:    600,
+		}
+	}
+
+	load := handlers.ComputeServerLoad(services)
+	assert.Equal(t, uint64(900), load.LoadFactorServer)
+	assert.Equal(t, uint64(900), load.LoadFactor)
+
+	services.TxQMetrics = func() types.TxQServerMetrics {
+		return types.TxQServerMetrics{
+			ReferenceFeeLevel:     256,
+			MinProcessingFeeLevel: 256,
+			OpenLedgerFeeLevel:    1200,
+		}
+	}
+	load = handlers.ComputeServerLoad(services)
+	assert.Equal(t, uint64(900), load.LoadFactorServer)
+	assert.Equal(t, uint64(1200), load.LoadFactor)
 }
 
 // TestSubscribeRtTransactionsAlias verifies the deprecated

@@ -3,6 +3,7 @@ package handlers
 import (
 	"encoding/json"
 	"fmt"
+	"math/bits"
 	"os"
 	"strconv"
 	"strings"
@@ -277,7 +278,7 @@ func buildServerInfo(ctx *types.RpcContext, human bool) map[string]any {
 	feeEscalation, feeQueue, feeReference := resolveLoadFactorFees(services)
 	loadFactorFeeEscalation := feeEscalation
 	if feeReference != 0 {
-		loadFactorFeeEscalation = feeEscalation * loadBase / feeReference
+		loadFactorFeeEscalation = mulDivSaturating(feeEscalation, loadBase, feeReference)
 	}
 	var loadFactorFees types.LoadFactorFees
 	if services != nil && services.LoadFactorFees != nil {
@@ -591,11 +592,9 @@ func ComputeServerLoad(services *types.ServiceContainer) ServerLoadSnapshot {
 		LoadFactorNet:           loadBase,
 		LoadFactorCluster:       loadBase,
 	}
+	scaledFeeEscalation := feeEscalation
 	if feeReference != 0 {
-		snap.LoadFactorFeeEscalation = feeEscalation * loadBase / feeReference
-	}
-	if snap.LoadFactorFeeEscalation > snap.LoadFactor {
-		snap.LoadFactor = snap.LoadFactorFeeEscalation
+		scaledFeeEscalation = mulDivSaturating(feeEscalation, loadBase, feeReference)
 	}
 	if services != nil && services.LoadFactorFees != nil {
 		fees := services.LoadFactorFees()
@@ -609,7 +608,21 @@ func ComputeServerLoad(services *types.ServiceContainer) ServerLoadSnapshot {
 			snap.LoadFactorCluster = uint64(fees.Cluster)
 		}
 	}
+	snap.LoadFactorServer = max(snap.LoadFactorLocal, snap.LoadFactorNet, snap.LoadFactorCluster)
+	snap.LoadFactor = max(snap.LoadFactorServer, scaledFeeEscalation)
 	return snap
+}
+
+func mulDivSaturating(a, b, divisor uint64) uint64 {
+	if divisor == 0 {
+		return ^uint64(0)
+	}
+	hi, lo := bits.Mul64(a, b)
+	if hi >= divisor {
+		return ^uint64(0)
+	}
+	quotient, _ := bits.Div64(hi, lo, divisor)
+	return quotient
 }
 
 // stateAccountingResolved is the rendered shape consumed by

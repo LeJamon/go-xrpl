@@ -35,7 +35,6 @@ import (
 	validatorlist "github.com/LeJamon/go-xrpl/internal/validator/list"
 	"github.com/LeJamon/go-xrpl/internal/watchdog"
 	xrpllog "github.com/LeJamon/go-xrpl/log"
-	"github.com/LeJamon/go-xrpl/protocol"
 	"github.com/LeJamon/go-xrpl/shamap/backend"
 	kvpebble "github.com/LeJamon/go-xrpl/storage/kvstore/pebble"
 	"github.com/LeJamon/go-xrpl/storage/nodestore"
@@ -975,12 +974,18 @@ func run(
 		)
 	})
 
-	// pubServer cache: rippled gates the serverStatus emit on the
-	// ServerFeeSummary changing (NetworkOPs.cpp:3209-3225 reportFeeChange);
-	// the server stream is silent in steady state. We track the
-	// previous snapshot here so a constant-fee ledger run does not
-	// flood subscribers.
-	var lastServerSnapshot serverStatusSnapshot
+	serverStatus := newServerStatusPublisher(services, publisher)
+	ledgerService.SetServerStatusCallback(serverStatus.publish)
+	if feeTrack := ledgerService.FeeTrack(); feeTrack != nil {
+		feeTrack.SetOnChange(func() {
+			ledgerService.SignalServerStatusPublication(serverStatus.statusPublication(nil))
+		})
+	}
+	if consensusComponents != nil && consensusComponents.Adaptor != nil {
+		consensusComponents.Adaptor.SetOnOperatingModeChange(func(mode consensus.OperatingMode) {
+			ledgerService.SignalServerStatusPublication(serverStatus.modePublication(mode.String()))
+		})
+	}
 
 	// Wire up ledger service events to WebSocket broadcasts
 	ledgerService.SetEventSink(service.EventSinkFunc(func(event *service.LedgerAcceptedEvent) error {
@@ -1004,44 +1009,12 @@ func run(
 			rotator.Notify(event.LedgerInfo.Sequence)
 		}
 
-		baseFee, reserveBase, reserveInc := ledgerService.GetCurrentFees()
-
-		ledgerTime := protocol.ToRippleTime(event.LedgerInfo.CloseTime)
-
-		ledgerCloseEvent := &rpc.LedgerCloseEvent{
-			Type:             "ledgerClosed",
-			LedgerIndex:      event.LedgerInfo.Sequence,
-			LedgerHash:       upperHex(event.LedgerInfo.Hash[:]),
-			LedgerTime:       ledgerTime,
-			FeeBase:          baseFee,
-			FeeRef:           baseFee,
-			ReserveBase:      reserveBase,
-			ReserveInc:       reserveInc,
-			TxnCount:         len(event.TransactionResults),
-			ValidatedLedgers: "",
+		serverInfo := ledgerService.GetServerInfo()
+		ledgerCloseEvent := buildLedgerCloseEvent(event, serverInfo)
+		if ledgerCloseEvent == nil {
+			return fmt.Errorf("accepted ledger event %d has no source ledger", event.LedgerInfo.Sequence)
 		}
 		publisher.PublishLedgerClosed(ledgerCloseEvent)
-
-		for _, publication := range transactions {
-			txResult := publication.result
-			txEvent := publication.event
-			engineResult := publication.engineResult
-			publisher.PublishTransaction(txEvent, txResult.AffectedAccounts)
-
-			// Per-book delivery is tesSUCCESS-only — rippled gates
-			// getOrderBookDB().processTxn on the engine result
-			// (NetworkOPs.cpp:3409-3410). Subscribers receive the
-			// full tx + meta JSON, matching the transactions-stream
-			// payload (rippled fans the same MultiApiJson into both).
-			if engineResult != ter.TesSUCCESS {
-				continue
-			}
-			pairs := extractBookPairsFromMetadata(txEvent.Meta)
-			if len(pairs) == 0 {
-				continue
-			}
-			publisher.PublishOrderBookChange(txEvent, pairs)
-		}
 
 		// pubBookChanges → book_changes aggregate stream
 		// (Subscribe.cpp:139-142 + NetworkOPs.cpp:3160-3174). Feed the
@@ -1054,46 +1027,18 @@ func run(
 			wsServer.SubscriptionManager().BroadcastToStream(types.SubBookChanges, data, nil)
 		}
 
-		// pubServer → server stream (NetworkOPs.cpp:2308-2373 +
-		// 3209-3225 reportFeeChange). Diff-check against the previous
-		// snapshot so a constant-fee ledger does not flood subscribers.
-		// server_status is sourced from the live operating mode (the
-		// same value server_info returns), not a hardcoded "full".
-		load := handlers.ComputeServerLoad(services)
-		serverStatus := "full"
-		if info := services.Ledger.GetServerInfo(); info.ServerState != "" {
-			serverStatus = info.ServerState
+		for _, publication := range transactions {
+			publisher.PublishTransaction(publication.event, publication.result.AffectedAccounts)
+			if publication.engineResult != ter.TesSUCCESS {
+				continue
+			}
+			pairs := extractBookPairsFromMetadata(publication.event.Meta)
+			if len(pairs) != 0 {
+				publisher.PublishOrderBookChange(publication.event, pairs)
+			}
 		}
-		nextSnap := serverStatusSnapshot{
-			baseFee:                 baseFee,
-			loadBase:                load.LoadBase,
-			loadFactor:              load.LoadFactor,
-			loadFactorLocal:         load.LoadFactorLocal,
-			loadFactorNet:           load.LoadFactorNet,
-			loadFactorCluster:       load.LoadFactorCluster,
-			loadFactorFeeEscalation: load.LoadFactorFeeEscalation,
-			loadFactorFeeQueue:      load.LoadFactorFeeQueue,
-			loadFactorFeeReference:  load.LoadFactorFeeReference,
-			loadFactorServer:        load.LoadFactorServer,
-			serverStatus:            serverStatus,
-		}
-		if nextSnap != lastServerSnapshot {
-			lastServerSnapshot = nextSnap
-			publisher.PublishServerStatus(&rpc.ServerStatusEvent{
-				Type:                    "serverStatus",
-				BaseFee:                 baseFee,
-				LoadBase:                int(load.LoadBase),
-				LoadFactor:              int(load.LoadFactor),
-				LoadFactorLocal:         int(load.LoadFactorLocal),
-				LoadFactorNet:           int(load.LoadFactorNet),
-				LoadFactorCluster:       int(load.LoadFactorCluster),
-				LoadFactorFeeEscalation: int(load.LoadFactorFeeEscalation),
-				LoadFactorFeeQueue:      int(load.LoadFactorFeeQueue),
-				LoadFactorFeeReference:  int(load.LoadFactorFeeReference),
-				LoadFactorServer:        int(load.LoadFactorServer),
-				ServerStatus:            serverStatus,
-			})
-		}
+
+		serverStatus.publish(nil)
 
 		// Update persistent path_find sessions on ledger close
 		wsServer.UpdatePathFindSessions(func() (types.LedgerStateView, error) {

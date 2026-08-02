@@ -15,7 +15,9 @@ import (
 	"github.com/LeJamon/go-xrpl/codec/addresscodec"
 	binarycodec "github.com/LeJamon/go-xrpl/codec/binarycodec"
 	"github.com/LeJamon/go-xrpl/codec/binarycodec/definitions"
+	"github.com/LeJamon/go-xrpl/drops"
 	"github.com/LeJamon/go-xrpl/internal/consensus"
+	consensusadaptor "github.com/LeJamon/go-xrpl/internal/consensus/adaptor"
 	"github.com/LeJamon/go-xrpl/internal/ledger/cleaner"
 	"github.com/LeJamon/go-xrpl/internal/ledger/service"
 	"github.com/LeJamon/go-xrpl/internal/manifest"
@@ -25,6 +27,7 @@ import (
 	txcore "github.com/LeJamon/go-xrpl/internal/tx"
 	"github.com/LeJamon/go-xrpl/internal/tx/ter"
 	"github.com/LeJamon/go-xrpl/internal/txq"
+	xrpllog "github.com/LeJamon/go-xrpl/log"
 	"github.com/LeJamon/go-xrpl/protocol"
 	"github.com/LeJamon/go-xrpl/shamap"
 )
@@ -134,24 +137,69 @@ func (a *ledgerInfoAdapter) GetCurrentLedgerInfo() *types.LedgerSubscribeInfo {
 		return nil
 	}
 
-	baseFee, reserveBase, reserveInc := a.ledgerService.GetCurrentFees()
+	baseFee, reserveBase, reserveInc := service.FeesFromLedger(validatedLedger)
 
 	ledgerTime := protocol.ToRippleTime(validatedLedger.CloseTime())
 
 	hash := validatedLedger.Hash()
 	serverInfo := a.ledgerService.GetServerInfo()
+	validatedLedgers := ""
+	if serverPublishesValidatedRange(serverInfo.ServerState) && !serverInfo.NeedsNetworkLedger {
+		validatedLedgers = serverInfo.CompleteLedgers
+	}
+	xrpFeesEnabled := validatedLedger.Rules() != nil && validatedLedger.Rules().XRPFeesEnabled()
 
 	return &types.LedgerSubscribeInfo{
 		LedgerIndex:      validatedLedger.Sequence(),
 		LedgerHash:       upperHex(hash[:]),
 		LedgerTime:       ledgerTime,
-		FeeBase:          baseFee,
-		FeeRef:           baseFee,
-		ReserveBase:      reserveBase,
-		ReserveInc:       reserveInc,
-		ValidatedLedgers: serverInfo.CompleteLedgers,
+		FeeBase:          jsonClippedXRPAmount(int64(baseFee)),
+		FeeRef:           deprecatedFeeReferenceUnits,
+		ReserveBase:      jsonClippedXRPAmount(int64(reserveBase)),
+		ReserveInc:       jsonClippedXRPAmount(int64(reserveInc)),
+		ValidatedLedgers: validatedLedgers,
 		NetworkID:        serverInfo.NetworkID,
-		XRPFeesEnabled:   a.ledgerService.XRPFeesEnabled(),
+		XRPFeesEnabled:   xrpFeesEnabled,
+	}
+}
+
+const deprecatedFeeReferenceUnits uint64 = 10
+
+func serverPublishesValidatedRange(state string) bool {
+	switch state {
+	case "syncing", "tracking", "full", "proposing", "validating":
+		return true
+	default:
+		return false
+	}
+}
+
+func buildLedgerCloseEvent(event *service.LedgerAcceptedEvent, serverInfo service.ServerInfo) *rpc.LedgerCloseEvent {
+	if event == nil || event.LedgerInfo == nil || event.Ledger == nil {
+		return nil
+	}
+	baseFee, reserveBase, reserveInc := service.FeesFromLedger(event.Ledger)
+	var feeRef *uint64
+	if rules := event.Ledger.Rules(); rules == nil || !rules.XRPFeesEnabled() {
+		value := deprecatedFeeReferenceUnits
+		feeRef = &value
+	}
+	validatedLedgers := ""
+	if serverPublishesValidatedRange(serverInfo.ServerState) {
+		validatedLedgers = serverInfo.CompleteLedgers
+	}
+	return &rpc.LedgerCloseEvent{
+		Type:             "ledgerClosed",
+		LedgerIndex:      event.LedgerInfo.Sequence,
+		LedgerHash:       upperHex(event.LedgerInfo.Hash[:]),
+		LedgerTime:       protocol.ToRippleTime(event.LedgerInfo.CloseTime),
+		FeeBase:          jsonClippedXRPAmount(int64(baseFee)),
+		FeeRef:           feeRef,
+		NetworkID:        serverInfo.NetworkID,
+		ReserveBase:      jsonClippedXRPAmount(int64(reserveBase)),
+		ReserveInc:       jsonClippedXRPAmount(int64(reserveInc)),
+		TxnCount:         len(event.TransactionResults),
+		ValidatedLedgers: validatedLedgers,
 	}
 }
 
@@ -260,7 +308,12 @@ func (b *rpcEventBridge) OnEvent(event consensus.Event) {
 		if e == nil || e.Validation == nil {
 			return
 		}
-		b.publisher.PublishValidation(buildValidationEvent(e, b.manifests, b.networkID))
+		validationEvent, err := buildValidationEvent(e, b.manifests, b.networkID)
+		if err != nil {
+			xrpllog.Named(xrpllog.PartitionRPC).Error("Skipping invalid validation event", "err", err)
+			return
+		}
+		b.publisher.PublishValidation(validationEvent)
 	case *consensus.PhaseChangedEvent:
 		if e == nil {
 			return
@@ -286,26 +339,30 @@ func consensusPhaseName(p consensus.Phase) string {
 // from a ValidationReceivedEvent. master_key is emitted only when the
 // manifest cache resolves a master distinct from the signing key
 // (NetworkOPs.cpp:2434-2438); validation_public_key carries the signing
-// (ephemeral) key in every case. The raw STValidation wire bytes are
-// surfaced via the `data` field (NetworkOPs.cpp:2422) and network_id
+// (ephemeral) key in every case. Canonical STValidation bytes are
+// surfaced via the `data` field and network_id
 // from the local config (NetworkOPs.cpp:2423).
-func buildValidationEvent(e *consensus.ValidationReceivedEvent, manifests *manifest.Cache, networkID uint32) *rpc.ValidationEvent {
+func buildValidationEvent(e *consensus.ValidationReceivedEvent, manifests *manifest.Cache, networkID uint32) (*rpc.ValidationEvent, error) {
 	v := e.Validation
+	canonical, err := consensusadaptor.CanonicalSTValidation(v)
+	if err != nil {
+		return nil, err
+	}
 	signingEnc, _ := addresscodec.EncodeNodePublicKey(v.SigningPubKey[:])
 	ev := rpc.NewValidationEvent(
 		upperHex(v.LedgerID[:]),
-		strconv.FormatUint(uint64(v.LedgerSeq), 10),
+		v.LedgerSeq,
 		signingEnc,
 		upperHex(v.Signature),
 		protocol.ToRippleTime(v.SignTime),
 		v.Flags,
 		v.Full,
 	)
-	if len(v.Raw) > 0 {
-		ev.Data = upperHex(v.Raw)
-	}
-	if networkID > 0 {
-		ev.NetworkID = networkID
+	ev.Data = upperHex(canonical)
+	ev.NetworkID = networkID
+	if !v.CloseTime.IsZero() {
+		closeTime := protocol.ToRippleTime(v.CloseTime)
+		ev.CloseTime = &closeTime
 	}
 	if manifests != nil {
 		master := manifests.GetMasterKey(v.SigningPubKey)
@@ -352,17 +409,11 @@ func buildValidationEvent(e *consensus.ValidationReceivedEvent, manifests *manif
 	if v.ValidatedHash != [32]byte{} {
 		ev.ValidatedHash = upperHex(v.ValidatedHash[:])
 	}
-	return ev
+	return ev, nil
 }
 
 func jsonClippedXRPAmount(value int64) int32 {
-	if value < math.MinInt32 {
-		return math.MinInt32
-	}
-	if value > math.MaxInt32 {
-		return math.MaxInt32
-	}
-	return int32(value)
+	return drops.XRPAmount(value).JSONClipped()
 }
 
 func extractBookPairsFromMetadata(metaJSON []byte) []types.OrderBookSpec {
@@ -509,14 +560,116 @@ type serverStatusSnapshot struct {
 	baseFee                 uint64
 	loadBase                uint64
 	loadFactor              uint64
-	loadFactorLocal         uint64
-	loadFactorNet           uint64
-	loadFactorCluster       uint64
 	loadFactorFeeEscalation uint64
 	loadFactorFeeQueue      uint64
 	loadFactorFeeReference  uint64
 	loadFactorServer        uint64
 	serverStatus            string
+}
+
+type serverStatusEventPublisher interface {
+	PublishServerStatus(*rpc.ServerStatusEvent) bool
+}
+
+type serverStatusPublisher struct {
+	mu        sync.Mutex
+	services  *types.ServiceContainer
+	publisher serverStatusEventPublisher
+	haveLast  bool
+	last      serverStatusSnapshot
+	haveMode  bool
+	mode      string
+}
+
+func newServerStatusPublisher(services *types.ServiceContainer, publisher serverStatusEventPublisher) *serverStatusPublisher {
+	return &serverStatusPublisher{services: services, publisher: publisher}
+}
+
+func (p *serverStatusPublisher) publish(mode *string) {
+	snapshot, event := p.capture(mode)
+	p.publishCaptured(snapshot, event)
+}
+
+func (p *serverStatusPublisher) statusPublication(mode *string) service.ServerStatusPublication {
+	snapshot, event := p.capture(mode)
+	if event == nil {
+		return nil
+	}
+	return func() {
+		p.publishCaptured(snapshot, event)
+	}
+}
+
+func (p *serverStatusPublisher) modePublication(mode string) service.ServerStatusPublication {
+	return p.statusPublication(&mode)
+}
+
+func (p *serverStatusPublisher) capture(mode *string) (serverStatusSnapshot, *rpc.ServerStatusEvent) {
+	if p == nil || p.services == nil || p.services.Ledger == nil || p.publisher == nil {
+		return serverStatusSnapshot{}, nil
+	}
+	p.mu.Lock()
+	defer p.mu.Unlock()
+
+	serverStatus := "full"
+	if mode != nil {
+		serverStatus = *mode
+		p.mode = serverStatus
+		p.haveMode = true
+	} else if p.haveMode {
+		serverStatus = p.mode
+	} else {
+		if info := p.services.Ledger.GetServerInfo(); info.ServerState != "" {
+			serverStatus = info.ServerState
+		}
+		p.mode = serverStatus
+		p.haveMode = true
+	}
+	baseFee, _, _ := p.services.Ledger.GetCurrentFees()
+	load := handlers.ComputeServerLoad(p.services)
+	snapshot := serverStatusSnapshot{
+		baseFee:                 baseFee,
+		loadBase:                load.LoadBase,
+		loadFactor:              load.LoadFactor,
+		loadFactorFeeEscalation: load.LoadFactorFeeEscalation,
+		loadFactorFeeQueue:      load.LoadFactorFeeQueue,
+		loadFactorFeeReference:  load.LoadFactorFeeReference,
+		loadFactorServer:        load.LoadFactorServer,
+		serverStatus:            serverStatus,
+	}
+	return snapshot, &rpc.ServerStatusEvent{
+		Type:                    "serverStatus",
+		BaseFee:                 jsonClippedXRPAmount(int64(baseFee)),
+		LoadBase:                clipServerLoad(load.LoadBase),
+		LoadFactor:              clipServerLoad(load.LoadFactor),
+		LoadFactorFeeEscalation: clipServerLoad(load.LoadFactorFeeEscalation),
+		LoadFactorFeeQueue:      clipServerLoad(load.LoadFactorFeeQueue),
+		LoadFactorFeeReference:  clipServerLoad(load.LoadFactorFeeReference),
+		LoadFactorServer:        clipServerLoad(load.LoadFactorServer),
+		ServerStatus:            serverStatus,
+	}
+}
+
+func (p *serverStatusPublisher) publishCaptured(snapshot serverStatusSnapshot, event *rpc.ServerStatusEvent) {
+	if event == nil {
+		return
+	}
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if p.haveLast && snapshot == p.last {
+		return
+	}
+	if p.publisher.PublishServerStatus(event) {
+		p.last = snapshot
+		p.haveLast = true
+	}
+}
+
+func clipServerLoad(value uint64) uint32 {
+	if value > math.MaxUint32 {
+		return math.MaxUint32
+	}
+	return uint32(value)
 }
 
 // acceptedLedgerView adapts a LedgerAcceptedEvent to the

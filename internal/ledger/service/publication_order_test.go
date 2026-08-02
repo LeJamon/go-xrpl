@@ -203,3 +203,171 @@ func TestPublicationDispatcherRejectsAfterStop(t *testing.T) {
 	default:
 	}
 }
+
+func TestServerStatusSignalPreservesPublicationOrder(t *testing.T) {
+	publisher := &eventPublisher{
+		service:               &Service{},
+		publicationLimit:      4,
+		publicationErrors:     make(chan error, 1),
+		ledgerEventCandidates: make(map[uint32]*LedgerAcceptedEvent),
+	}
+	started := make(chan struct{})
+	release := make(chan struct{})
+	done := make(chan struct{})
+	var mu sync.Mutex
+	var order []string
+	publisher.setSubmittedTxCallback(func(event SubmittedTxEvent) {
+		mu.Lock()
+		order = append(order, "proposed")
+		mu.Unlock()
+		if event.CurrentLedger == 1 {
+			close(started)
+			<-release
+		}
+		if event.CurrentLedger == 2 {
+			close(done)
+		}
+	})
+	publisher.setServerStatusCallback(func(*string) {
+		mu.Lock()
+		order = append(order, "server")
+		mu.Unlock()
+	})
+	publisher.start()
+	publisher.dispatchSubmittedTxEvent(SubmittedTxEvent{CurrentLedger: 1})
+	select {
+	case <-started:
+	case <-time.After(time.Second):
+		t.Fatal("first publication did not start")
+	}
+	if !publisher.dispatchServerStatusEvent() {
+		t.Fatal("server status signal was rejected")
+	}
+	publisher.dispatchSubmittedTxEvent(SubmittedTxEvent{CurrentLedger: 2})
+	close(release)
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("publication queue did not drain")
+	}
+	publisher.stop()
+
+	mu.Lock()
+	defer mu.Unlock()
+	if got := strings.Join(order, ","); got != "proposed,server,proposed" {
+		t.Fatalf("publication order = %s", got)
+	}
+}
+
+func TestServerStatusSignalCoalescesAndAllowsCallbackReentry(t *testing.T) {
+	publisher := &eventPublisher{
+		service:               &Service{},
+		publicationLimit:      2,
+		publicationErrors:     make(chan error, 1),
+		ledgerEventCandidates: make(map[uint32]*LedgerAcceptedEvent),
+	}
+	firstStarted := make(chan struct{})
+	releaseFirst := make(chan struct{})
+	thirdDone := make(chan struct{})
+	var mu sync.Mutex
+	calls := 0
+	publisher.setServerStatusCallback(func(*string) {
+		mu.Lock()
+		calls++
+		call := calls
+		mu.Unlock()
+		switch call {
+		case 1:
+			close(firstStarted)
+			<-releaseFirst
+		case 2:
+			if !publisher.dispatchServerStatusEvent() {
+				t.Error("reentrant status signal was rejected")
+			}
+		case 3:
+			close(thirdDone)
+		}
+	})
+	publisher.start()
+	if !publisher.dispatchServerStatusEvent() {
+		t.Fatal("first status signal was rejected")
+	}
+	select {
+	case <-firstStarted:
+	case <-time.After(time.Second):
+		t.Fatal("first status callback did not start")
+	}
+	for range 10 {
+		if !publisher.dispatchServerStatusEvent() {
+			t.Fatal("coalesced status signal was rejected")
+		}
+	}
+	close(releaseFirst)
+	select {
+	case <-thirdDone:
+	case <-time.After(time.Second):
+		t.Fatal("reentrant status callback did not run")
+	}
+	publisher.stop()
+
+	mu.Lock()
+	defer mu.Unlock()
+	if calls != 3 {
+		t.Fatalf("status callbacks = %d, want 3", calls)
+	}
+}
+
+func TestServerStatusSignalDrainsOnStopAndRejectsAfter(t *testing.T) {
+	publisher := &eventPublisher{
+		service:               &Service{},
+		publicationLimit:      2,
+		publicationErrors:     make(chan error, 1),
+		ledgerEventCandidates: make(map[uint32]*LedgerAcceptedEvent),
+	}
+	started := make(chan struct{})
+	release := make(chan struct{})
+	drained := make(chan struct{})
+	var mu sync.Mutex
+	calls := 0
+	publisher.setServerStatusCallback(func(*string) {
+		mu.Lock()
+		calls++
+		call := calls
+		mu.Unlock()
+		if call == 1 {
+			close(started)
+			<-release
+		}
+	})
+	publisher.start()
+	publisher.dispatchServerStatusEvent()
+	select {
+	case <-started:
+	case <-time.After(time.Second):
+		t.Fatal("status callback did not start")
+	}
+	publisher.dispatchServerStatusEvent()
+	go func() {
+		publisher.stop()
+		close(drained)
+	}()
+	select {
+	case <-drained:
+		t.Fatal("stop returned before queued status drained")
+	case <-time.After(20 * time.Millisecond):
+	}
+	close(release)
+	select {
+	case <-drained:
+	case <-time.After(time.Second):
+		t.Fatal("stop did not return after status drain")
+	}
+	if publisher.dispatchServerStatusEvent() {
+		t.Fatal("status signal was accepted after stop")
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if calls != 2 {
+		t.Fatalf("status callbacks = %d, want 2", calls)
+	}
+}

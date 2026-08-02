@@ -35,6 +35,7 @@ type LoadFeeTrack struct {
 	remoteFee  uint32
 	clusterFee uint32
 	raiseCount uint32
+	onChange   func()
 }
 
 // New returns a LoadFeeTrack initialised to the normal fee with no pending
@@ -50,8 +51,13 @@ func New() *LoadFeeTrack {
 // SetRemoteFee records a remote-reported fee factor.
 func (t *LoadFeeTrack) SetRemoteFee(f uint32) {
 	t.mu.Lock()
+	changed := t.remoteFee != f
 	t.remoteFee = f
+	onChange := t.onChange
 	t.mu.Unlock()
+	if changed && onChange != nil {
+		onChange()
+	}
 }
 
 // RemoteFee returns the last remote-reported fee factor.
@@ -64,7 +70,19 @@ func (t *LoadFeeTrack) RemoteFee() uint32 {
 // SetClusterFee records the cluster-aggregated fee factor.
 func (t *LoadFeeTrack) SetClusterFee(f uint32) {
 	t.mu.Lock()
+	changed := t.clusterFee != f
 	t.clusterFee = f
+	onChange := t.onChange
+	t.mu.Unlock()
+	if changed && onChange != nil {
+		onChange()
+	}
+}
+
+// SetOnChange installs a callback for effective fee-factor changes.
+func (t *LoadFeeTrack) SetOnChange(fn func()) {
+	t.mu.Lock()
+	t.onChange = fn
 	t.mu.Unlock()
 }
 
@@ -114,9 +132,9 @@ func (t *LoadFeeTrack) IsLoadedCluster() bool {
 // fee floor.
 func (t *LoadFeeTrack) RaiseLocalFee() bool {
 	t.mu.Lock()
-	defer t.mu.Unlock()
 	t.raiseCount++
 	if t.raiseCount < 2 {
+		t.mu.Unlock()
 		return false
 	}
 
@@ -127,7 +145,13 @@ func (t *LoadFeeTrack) RaiseLocalFee() bool {
 		raised = uint64(feeMax)
 	}
 	t.localFee = uint32(raised)
-	return orig != t.localFee
+	changed := orig != t.localFee
+	onChange := t.onChange
+	t.mu.Unlock()
+	if changed && onChange != nil {
+		onChange()
+	}
+	return changed
 }
 
 // LowerLocalFee decays the local fee back toward LoadBase and reports whether
@@ -135,14 +159,19 @@ func (t *LoadFeeTrack) RaiseLocalFee() bool {
 // next RaiseLocalFee again needs two ticks to take effect (hysteresis).
 func (t *LoadFeeTrack) LowerLocalFee() bool {
 	t.mu.Lock()
-	defer t.mu.Unlock()
 	orig := t.localFee
 	t.raiseCount = 0
 	t.localFee -= t.localFee / feeDecFraction
 	if t.localFee < LoadBase {
 		t.localFee = LoadBase
 	}
-	return orig != t.localFee
+	changed := orig != t.localFee
+	onChange := t.onChange
+	t.mu.Unlock()
+	if changed && onChange != nil {
+		onChange()
+	}
+	return changed
 }
 
 // ScaleFeeLoad scales fee by the current local/remote/cluster load.

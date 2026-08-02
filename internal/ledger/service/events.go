@@ -83,9 +83,19 @@ type Result struct {
 // and must not call Service.Stop synchronously.
 type SubmittedTxCallback func(SubmittedTxEvent)
 
+// ServerStatusCallback runs on the publication worker. It must return promptly
+// and must not call Service.Stop synchronously.
+type ServerStatusCallback func(mode *string)
+
+// ServerStatusPublication delivers a status snapshot captured when its
+// triggering state changes.
+type ServerStatusPublication func()
+
 type publicationEvent struct {
-	ledger    *LedgerAcceptedEvent
-	submitted *SubmittedTxEvent
+	ledger         *LedgerAcceptedEvent
+	submitted      *SubmittedTxEvent
+	serverStatus   bool
+	serverSnapshot ServerStatusPublication
 }
 
 // Errors reports fatal publication failures that require runtime shutdown.
@@ -121,6 +131,12 @@ func (p *eventPublisher) hasSubmittedTxCallback() bool {
 	p.subscriberMu.RLock()
 	defer p.subscriberMu.RUnlock()
 	return p.submittedTxCallback != nil
+}
+
+func (p *eventPublisher) setServerStatusCallback(fn ServerStatusCallback) {
+	p.subscriberMu.Lock()
+	defer p.subscriberMu.Unlock()
+	p.serverStatusCallback = fn
 }
 
 // dispatchLedgerEvent enqueues accepted ledgers for FIFO, single-threaded
@@ -164,6 +180,42 @@ func (p *eventPublisher) dispatchSubmittedTxEvent(event SubmittedTxEvent) {
 	copy := event
 	p.enqueuePublicationLocked(publicationEvent{submitted: &copy})
 	p.ledgerEventMu.Unlock()
+}
+
+func (p *eventPublisher) dispatchServerStatusEvent() bool {
+	p.ledgerEventMu.Lock()
+	defer p.ledgerEventMu.Unlock()
+	if p.ledgerEventStopping || p.publicationFailed {
+		return false
+	}
+	startDispatcher := p.startLedgerEventDispatcherLocked()
+	if startDispatcher {
+		go p.runLedgerEventDispatcher()
+	}
+	if p.serverStatusQueued {
+		return true
+	}
+	if !p.enqueuePublicationLocked(publicationEvent{serverStatus: true}) {
+		return false
+	}
+	p.serverStatusQueued = true
+	return true
+}
+
+func (p *eventPublisher) dispatchServerStatusPublication(publication ServerStatusPublication) bool {
+	p.ledgerEventMu.Lock()
+	defer p.ledgerEventMu.Unlock()
+	if p.ledgerEventStopping || p.publicationFailed {
+		return false
+	}
+	if publication == nil {
+		return true
+	}
+	startDispatcher := p.startLedgerEventDispatcherLocked()
+	if startDispatcher {
+		go p.runLedgerEventDispatcher()
+	}
+	return p.enqueuePublicationLocked(publicationEvent{serverSnapshot: publication})
 }
 
 func (p *eventPublisher) enqueuePublicationLocked(event publicationEvent) bool {
@@ -301,6 +353,9 @@ func (p *eventPublisher) runLedgerEventDispatcher() {
 				ev := p.publicationQueue[0]
 				p.publicationQueue[0] = publicationEvent{}
 				p.publicationQueue = p.publicationQueue[1:]
+				if ev.serverStatus {
+					p.serverStatusQueued = false
+				}
 				p.ledgerEventMu.Unlock()
 				if err := p.deliverPublication(ev); err != nil {
 					p.ledgerEventMu.Lock()
@@ -333,6 +388,18 @@ func (p *eventPublisher) deliverPublication(event publicationEvent) error {
 	}
 	if event.ledger != nil {
 		return p.deliverLedgerEvent(event.ledger)
+	}
+	if event.serverSnapshot != nil {
+		event.serverSnapshot()
+		return nil
+	}
+	if event.serverStatus {
+		p.subscriberMu.RLock()
+		callback := p.serverStatusCallback
+		p.subscriberMu.RUnlock()
+		if callback != nil {
+			callback(nil)
+		}
 	}
 	return nil
 }
@@ -383,6 +450,25 @@ func (p *eventPublisher) deliverLedgerEvent(event *LedgerAcceptedEvent) error {
 // unwire. The callback contract is documented on SubmittedTxCallback.
 func (s *Service) SetSubmittedTxCallback(fn SubmittedTxCallback) {
 	s.eventPublisher.setSubmittedTxCallback(fn)
+}
+
+// SetServerStatusCallback registers the callback used to sample and publish
+// the current server status. Pass nil to unwire.
+func (s *Service) SetServerStatusCallback(fn ServerStatusCallback) {
+	s.eventPublisher.setServerStatusCallback(fn)
+}
+
+// SignalServerStatus schedules a coalesced server-status sample on the shared
+// publication FIFO. It reports false after publication has stopped or failed.
+func (s *Service) SignalServerStatus() bool {
+	return s.eventPublisher.dispatchServerStatusEvent()
+}
+
+// SignalServerStatusPublication queues a captured status snapshot. Captured
+// publications do not coalesce because subscribers must observe state changes
+// in trigger order.
+func (s *Service) SignalServerStatusPublication(publication ServerStatusPublication) bool {
+	return s.eventPublisher.dispatchServerStatusPublication(publication)
 }
 
 // SetTxRelay registers the per-tx broadcast handler invoked by

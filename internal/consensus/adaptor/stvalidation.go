@@ -6,9 +6,30 @@ import (
 	"fmt"
 	"sort"
 
+	"github.com/LeJamon/go-xrpl/codec/binarycodec"
 	"github.com/LeJamon/go-xrpl/drops"
 	"github.com/LeJamon/go-xrpl/internal/consensus"
 )
+
+// CanonicalSTValidation returns the canonical serialized validation while
+// preserving the presence and values of optional fields received on the wire.
+func CanonicalSTValidation(v *consensus.Validation) ([]byte, error) {
+	if v == nil {
+		return nil, errors.New("nil validation")
+	}
+	if len(v.Raw) == 0 {
+		return SerializeSTValidation(v), nil
+	}
+	fields, err := binarycodec.DecodeBytes(v.Raw)
+	if err != nil {
+		return nil, fmt.Errorf("decode validation: %w", err)
+	}
+	canonical, err := binarycodec.EncodeBytesTrusted(fields)
+	if err != nil {
+		return nil, fmt.Errorf("encode validation: %w", err)
+	}
+	return canonical, nil
+}
 
 // XRPL SField type codes. An off-by-2 for UINT384/UINT512 would be
 // latent (no validation field uses these types) but would break the

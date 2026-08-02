@@ -403,9 +403,9 @@ func TestSubscribeConformanceLedgerResponseFields(t *testing.T) {
 	assert.Equal(t, uint32(2), response.LedgerIndex, "LedgerIndex should match")
 	assert.NotEmpty(t, response.LedgerHash, "LedgerHash should be present")
 	assert.Equal(t, uint32(735000000), response.LedgerTime, "LedgerTime should match")
-	assert.Equal(t, uint64(10), response.FeeBase, "FeeBase should match")
-	assert.Equal(t, uint64(10000000), response.ReserveBase, "ReserveBase should match")
-	assert.Equal(t, uint64(2000000), response.ReserveInc, "ReserveInc should match")
+	assert.Equal(t, int32(10), response.FeeBase, "FeeBase should match")
+	assert.Equal(t, int32(10000000), response.ReserveBase, "ReserveBase should match")
+	assert.Equal(t, int32(2000000), response.ReserveInc, "ReserveInc should match")
 }
 
 // book_changes Stream Tests

@@ -2,6 +2,7 @@ package rpc
 
 import (
 	"encoding/json"
+	"strconv"
 
 	"github.com/LeJamon/go-xrpl/internal/rpc/handlers"
 	"github.com/LeJamon/go-xrpl/internal/rpc/subscription"
@@ -23,8 +24,9 @@ type EventPublisher interface {
 	// PublishValidation publishes a validation event to validation stream subscribers
 	PublishValidation(event *ValidationEvent)
 
-	// PublishServerStatus publishes a server status event to server stream subscribers
-	PublishServerStatus(event *ServerStatusEvent)
+	// PublishServerStatus publishes a server status event and reports whether
+	// at least one server-stream subscriber was targeted.
+	PublishServerStatus(event *ServerStatusEvent) bool
 
 	// PublishConsensusPhase publishes a consensus phase change to consensus stream subscribers
 	PublishConsensusPhase(phase string)
@@ -121,28 +123,47 @@ func (p *Publisher) PublishValidation(event *ValidationEvent) {
 		return
 	}
 
-	data, err := json.Marshal(event)
+	v1, err := marshalValidationEvent(event, types.ApiVersion1)
+	if err != nil {
+		xrpllog.Named(xrpllog.PartitionRPC).Error("Failed to marshal ValidationEvent", "err", err)
+		return
+	}
+	v2, err := marshalValidationEvent(event, types.ApiVersion2)
 	if err != nil {
 		xrpllog.Named(xrpllog.PartitionRPC).Error("Failed to marshal ValidationEvent", "err", err)
 		return
 	}
 
-	p.manager.BroadcastToStream(types.SubValidations, data, nil)
+	p.manager.BroadcastToStreamVersioned(types.SubValidations, v1, v2)
 }
 
-// PublishServerStatus broadcasts a server status event to server stream subscribers
-func (p *Publisher) PublishServerStatus(event *ServerStatusEvent) {
+func marshalValidationEvent(event *ValidationEvent, apiVersion int) ([]byte, error) {
+	if apiVersion != types.ApiVersion1 {
+		return json.Marshal(event)
+	}
+	type validationEvent ValidationEvent
+	return json.Marshal(struct {
+		*validationEvent
+		LedgerIndex string `json:"ledger_index"`
+	}{
+		validationEvent: (*validationEvent)(event),
+		LedgerIndex:     strconv.FormatUint(uint64(event.LedgerIndex), 10),
+	})
+}
+
+// PublishServerStatus broadcasts a server status event to server stream subscribers.
+func (p *Publisher) PublishServerStatus(event *ServerStatusEvent) bool {
 	if event == nil || p.manager == nil {
-		return
+		return false
 	}
 
 	data, err := json.Marshal(event)
 	if err != nil {
 		xrpllog.Named(xrpllog.PartitionRPC).Error("Failed to marshal ServerStatusEvent", "err", err)
-		return
+		return false
 	}
 
-	p.manager.BroadcastToStream(types.SubServer, data, nil)
+	return p.manager.BroadcastToStream(types.SubServer, data, nil) != 0
 }
 
 // PublishConsensusPhase broadcasts a consensus phase change event
@@ -270,7 +291,7 @@ func NewNoOpPublisher() *NoOpPublisher {
 func (p *NoOpPublisher) PublishLedgerClosed(event *LedgerCloseEvent)                   {}
 func (p *NoOpPublisher) PublishTransaction(event *TransactionEvent, accounts []string) {}
 func (p *NoOpPublisher) PublishValidation(event *ValidationEvent)                      {}
-func (p *NoOpPublisher) PublishServerStatus(event *ServerStatusEvent)                  {}
+func (p *NoOpPublisher) PublishServerStatus(event *ServerStatusEvent) bool             { return false }
 func (p *NoOpPublisher) PublishConsensusPhase(phase string)                            {}
 func (p *NoOpPublisher) PublishManifest(event *ManifestEvent)                          {}
 func (p *NoOpPublisher) PublishPeerStatus(event *PeerStatusEvent)                      {}

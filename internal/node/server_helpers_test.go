@@ -9,11 +9,13 @@ import (
 	"testing"
 	"time"
 
+	"github.com/LeJamon/go-xrpl/amendment"
 	"github.com/LeJamon/go-xrpl/codec/binarycodec"
 	"github.com/LeJamon/go-xrpl/config"
 	"github.com/LeJamon/go-xrpl/drops"
 	"github.com/LeJamon/go-xrpl/internal/consensus"
 	"github.com/LeJamon/go-xrpl/internal/ledger/cleaner"
+	"github.com/LeJamon/go-xrpl/internal/ledger/genesis"
 	"github.com/LeJamon/go-xrpl/internal/ledger/service"
 	"github.com/LeJamon/go-xrpl/internal/manifest"
 	"github.com/LeJamon/go-xrpl/internal/rpc"
@@ -41,6 +43,98 @@ func TestConsensusPhaseName(t *testing.T) {
 	// An out-of-range phase falls through to Phase.String().
 	if got := consensusPhaseName(consensus.Phase(99)); got == "" {
 		t.Error("default phase name should be non-empty")
+	}
+}
+
+func TestBuildLedgerCloseEventUsesSourceLedgerAndWirePresence(t *testing.T) {
+	for _, test := range []struct {
+		name       string
+		xrpFees    bool
+		wantFeeRef bool
+	}{
+		{name: "legacy", wantFeeRef: true},
+		{name: "xrp fees", xrpFees: true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			genesisConfig := genesis.DefaultConfig()
+			if test.xrpFees {
+				genesisConfig.Amendments = append(genesisConfig.Amendments, amendment.FeatureXRPFees)
+			}
+			svc, err := service.New(service.Config{
+				Standalone:    true,
+				Startup:       service.StartupConfig{Mode: service.StartupFresh},
+				GenesisConfig: genesisConfig,
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := svc.Start(); err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(svc.Stop)
+			source := svc.GetValidatedLedger()
+			if source == nil {
+				t.Fatal("missing validated source ledger")
+			}
+			hash := source.Hash()
+			event := &service.LedgerAcceptedEvent{
+				Ledger: source,
+				LedgerInfo: &service.LedgerInfo{
+					Sequence:  source.Sequence(),
+					Hash:      hash,
+					CloseTime: source.CloseTime(),
+				},
+				TransactionResults: make([]service.TransactionResultEvent, 2),
+			}
+			got := buildLedgerCloseEvent(event, service.ServerInfo{
+				ServerState:     "full",
+				CompleteLedgers: "1-2,4",
+				NetworkID:       0,
+			})
+			if got == nil {
+				t.Fatal("nil ledger event")
+			}
+			base, reserve, increment := service.FeesFromLedger(source)
+			wantBase := jsonClippedXRPAmount(int64(base))
+			wantReserve := jsonClippedXRPAmount(int64(reserve))
+			wantIncrement := jsonClippedXRPAmount(int64(increment))
+			if got.FeeBase != wantBase || got.ReserveBase != wantReserve || got.ReserveInc != wantIncrement {
+				t.Fatalf("fees = (%d,%d,%d), want source ledger (%d,%d,%d)", got.FeeBase, got.ReserveBase, got.ReserveInc, base, reserve, increment)
+			}
+			if (got.FeeRef != nil) != test.wantFeeRef {
+				t.Fatalf("fee_ref presence = %t, want %t", got.FeeRef != nil, test.wantFeeRef)
+			}
+			if got.FeeRef != nil && *got.FeeRef != deprecatedFeeReferenceUnits {
+				t.Fatalf("fee_ref = %d, want %d", *got.FeeRef, deprecatedFeeReferenceUnits)
+			}
+			if got.NetworkID != 0 || got.ValidatedLedgers != "1-2,4" || got.TxnCount != 2 {
+				t.Fatalf("event fields = %+v", got)
+			}
+
+			subscribeInfo := (&ledgerInfoAdapter{ledgerService: svc}).GetCurrentLedgerInfo()
+			if subscribeInfo == nil {
+				t.Fatal("nil ledger subscribe info")
+			}
+			if subscribeInfo.FeeBase != wantBase || subscribeInfo.ReserveBase != wantReserve || subscribeInfo.ReserveInc != wantIncrement {
+				t.Fatalf("subscribe fees = (%d,%d,%d), want validated ledger (%d,%d,%d)", subscribeInfo.FeeBase, subscribeInfo.ReserveBase, subscribeInfo.ReserveInc, base, reserve, increment)
+			}
+			if subscribeInfo.FeeRef != deprecatedFeeReferenceUnits || subscribeInfo.XRPFeesEnabled != test.xrpFees {
+				t.Fatalf("subscribe fee gate = ref %d, XRPFees %t", subscribeInfo.FeeRef, subscribeInfo.XRPFeesEnabled)
+			}
+		})
+	}
+}
+
+func TestServerPublishesValidatedRange(t *testing.T) {
+	for _, state := range []string{"syncing", "tracking", "full", "proposing", "validating"} {
+		if !serverPublishesValidatedRange(state) {
+			t.Errorf("%s must publish validated range", state)
+		}
+	}
+	for _, state := range []string{"", "disconnected", "connected"} {
+		if serverPublishesValidatedRange(state) {
+			t.Errorf("%s must omit validated range", state)
+		}
 	}
 }
 
@@ -358,6 +452,15 @@ func TestUpperHex(t *testing.T) {
 	}
 }
 
+func mustBuildValidationEvent(t *testing.T, v *consensus.Validation, networkID uint32) *rpc.ValidationEvent {
+	t.Helper()
+	event, err := buildValidationEvent(&consensus.ValidationReceivedEvent{Validation: v}, nil, networkID)
+	if err != nil {
+		t.Fatalf("build validation event: %v", err)
+	}
+	return event
+}
+
 func TestBuildValidationEvent_UppercaseHexFields(t *testing.T) {
 	// Bytes chosen so every hex field contains A-F digits, exposing any
 	// lowercase formatting in the stream layer (#787).
@@ -367,9 +470,8 @@ func TestBuildValidationEvent_UppercaseHexFields(t *testing.T) {
 		Signature:     []byte{0xde, 0xad, 0xbe, 0xef},
 		Amendments:    [][32]byte{{0xfe, 0xed}, {0xba, 0xbe}},
 		ValidatedHash: [32]byte{0xca, 0xfe},
-		Raw:           []byte{0xfa, 0xce},
 	}
-	ev := buildValidationEvent(&consensus.ValidationReceivedEvent{Validation: v}, nil, 0)
+	ev := mustBuildValidationEvent(t, v, 0)
 	if ev == nil {
 		t.Fatal("nil event")
 	}
@@ -396,19 +498,64 @@ func TestBuildValidationEvent_UppercaseHexFields(t *testing.T) {
 	}
 }
 
+func TestBuildValidationEvent_RequiredFieldsAndCloseTimePresence(t *testing.T) {
+	withoutClose := mustBuildValidationEvent(t, &consensus.Validation{LedgerSeq: 42}, 0)
+	encoded, err := json.Marshal(withoutClose)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(encoded, &fields); err != nil {
+		t.Fatal(err)
+	}
+	if got, ok := fields["network_id"]; !ok || string(got) != "0" {
+		t.Fatalf("network_id = %s, present=%t; want explicit 0", got, ok)
+	}
+	if got, ok := fields["data"]; !ok || string(got) == `""` {
+		t.Fatalf("data = %s, present=%t; want canonical validation bytes", got, ok)
+	}
+	if _, ok := fields["close_time"]; ok {
+		t.Fatalf("close_time must be absent: %s", encoded)
+	}
+
+	withEpochClose := mustBuildValidationEvent(t, &consensus.Validation{
+		LedgerSeq: 42,
+		CloseTime: time.Unix(protocol.RippleEpochUnix, 0).UTC(),
+	}, 0)
+	encoded, err = json.Marshal(withEpochClose)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := json.Unmarshal(encoded, &fields); err != nil {
+		t.Fatal(err)
+	}
+	if got, ok := fields["close_time"]; !ok || string(got) != "0" {
+		t.Fatalf("close_time = %s, present=%t; want explicit 0", got, ok)
+	}
+}
+
+func TestBuildValidationEventRejectsInvalidRawData(t *testing.T) {
+	_, err := buildValidationEvent(&consensus.ValidationReceivedEvent{
+		Validation: &consensus.Validation{Raw: []byte{0xff}},
+	}, nil, 0)
+	if err == nil {
+		t.Fatal("invalid raw validation must not be published")
+	}
+}
+
 func TestBuildValidationEvent_CookieDecimal(t *testing.T) {
 	// rippled emits cookie as std::to_string(*cookie) — base-10 decimal
 	// (NetworkOPs.cpp:2429), unlike the hash/sig/blob fields which are
 	// hex. 0xAB = 171: "171" (decimal) ≠ "ab"/"AB" (hex).
 	v := &consensus.Validation{Cookie: 0xAB}
-	ev := buildValidationEvent(&consensus.ValidationReceivedEvent{Validation: v}, nil, 0)
+	ev := mustBuildValidationEvent(t, v, 0)
 	if ev.Cookie != "171" {
 		t.Errorf("cookie = %q, want decimal \"171\"", ev.Cookie)
 	}
 
 	// Cookie 0 is the absent proxy → field omitted.
 	v0 := &consensus.Validation{}
-	if ev0 := buildValidationEvent(&consensus.ValidationReceivedEvent{Validation: v0}, nil, 0); ev0.Cookie != "" {
+	if ev0 := mustBuildValidationEvent(t, v0, 0); ev0.Cookie != "" {
 		t.Errorf("cookie = %q, want empty when absent", ev0.Cookie)
 	}
 }
@@ -418,14 +565,14 @@ func TestBuildValidationEvent_ServerVersionDecimal(t *testing.T) {
 	// decimal (NetworkOPs.cpp:2426). The go-xrpl server version tag
 	// 0x4000_0000_0000_0000 = 4611686018427387904 decimal.
 	v := &consensus.Validation{ServerVersion: 0x4000_0000_0000_0000}
-	ev := buildValidationEvent(&consensus.ValidationReceivedEvent{Validation: v}, nil, 0)
+	ev := mustBuildValidationEvent(t, v, 0)
 	if ev.ServerVersion != "4611686018427387904" {
 		t.Errorf("server_version = %q, want decimal \"4611686018427387904\"", ev.ServerVersion)
 	}
 
 	// ServerVersion 0 is the absent proxy → field omitted.
 	v0 := &consensus.Validation{}
-	if ev0 := buildValidationEvent(&consensus.ValidationReceivedEvent{Validation: v0}, nil, 0); ev0.ServerVersion != "" {
+	if ev0 := mustBuildValidationEvent(t, v0, 0); ev0.ServerVersion != "" {
 		t.Errorf("server_version = %q, want empty when absent", ev0.ServerVersion)
 	}
 }
@@ -445,7 +592,7 @@ func TestBuildValidationEvent_LoadFeePresence(t *testing.T) {
 
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			event := buildValidationEvent(&consensus.ValidationReceivedEvent{Validation: test.validation}, nil, 0)
+			event := mustBuildValidationEvent(t, test.validation, 0)
 			encoded, err := json.Marshal(event)
 			if err != nil {
 				t.Fatalf("marshal validation event: %v", err)
@@ -538,7 +685,7 @@ func TestBuildValidationEvent_FeeVotePresenceAndSign(t *testing.T) {
 
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			event := buildValidationEvent(&consensus.ValidationReceivedEvent{Validation: test.validation}, nil, 0)
+			event := mustBuildValidationEvent(t, test.validation, 0)
 			encoded, err := json.Marshal(event)
 			if err != nil {
 				t.Fatalf("marshal validation event: %v", err)

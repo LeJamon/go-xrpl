@@ -221,3 +221,24 @@ func TestLoadFactorAggregates(t *testing.T) {
 		t.Fatalf("scaling factors = (%d,%d); want (500,400)", feeFactor, remFee)
 	}
 }
+
+func TestOnChangeReportsOnlyEffectiveFactorChanges(t *testing.T) {
+	tr := New()
+	calls := 0
+	tr.SetOnChange(func() { calls++ })
+
+	tr.SetRemoteFee(LoadBase)
+	tr.SetClusterFee(LoadBase)
+	tr.RaiseLocalFee()
+	if calls != 0 {
+		t.Fatalf("callbacks before effective change = %d", calls)
+	}
+
+	tr.SetRemoteFee(512)
+	tr.SetClusterFee(384)
+	tr.RaiseLocalFee()
+	tr.LowerLocalFee()
+	if calls != 4 {
+		t.Fatalf("callbacks after effective changes = %d, want 4", calls)
+	}
+}

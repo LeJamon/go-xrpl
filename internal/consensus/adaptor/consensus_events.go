@@ -16,6 +16,11 @@ import (
 	"github.com/LeJamon/go-xrpl/protocol"
 )
 
+type operatingModeChange struct {
+	mode     consensus.OperatingMode
+	callback func(consensus.OperatingMode)
+}
+
 func (a *Adaptor) GetOperatingMode() consensus.OperatingMode {
 	a.mu.Lock()
 	defer a.mu.Unlock()
@@ -24,7 +29,6 @@ func (a *Adaptor) GetOperatingMode() consensus.OperatingMode {
 
 func (a *Adaptor) SetOperatingMode(mode consensus.OperatingMode) {
 	a.mu.Lock()
-	defer a.mu.Unlock()
 
 	// A blocked node is never more than connected: it cannot safely
 	// participate in consensus, so it must not claim to be synced.
@@ -38,24 +42,73 @@ func (a *Adaptor) SetOperatingMode(mode consensus.OperatingMode) {
 			mode = consensus.OpModeConnected
 		}
 	}
-	a.setOperatingModeLocked(mode)
+	changed := a.setOperatingModeLocked(mode)
+	startDraining := changed && a.enqueueOperatingModeChangeLocked(mode)
+	a.mu.Unlock()
+	if startDraining {
+		a.drainOperatingModeChanges()
+	}
 }
 
-func (a *Adaptor) setOperatingModeLocked(mode consensus.OperatingMode) {
+func (a *Adaptor) setOperatingModeLocked(mode consensus.OperatingMode) bool {
+	if a.operatingMode == mode {
+		return false
+	}
 	a.operatingMode = mode
 	if a.stateAcct != nil {
 		// Held under a.mu so the field and the accounting transition share one
 		// serialization order; the tracker's own mutex never re-enters a.mu.
 		a.stateAcct.transition(mode)
 	}
+	return true
+}
+
+// SetOnOperatingModeChange installs a callback for effective mode changes.
+func (a *Adaptor) SetOnOperatingModeChange(fn func(consensus.OperatingMode)) {
+	a.mu.Lock()
+	a.onModeChange = fn
+	a.mu.Unlock()
+}
+
+func (a *Adaptor) enqueueOperatingModeChangeLocked(mode consensus.OperatingMode) bool {
+	if a.onModeChange == nil {
+		return false
+	}
+	a.modeChanges = append(a.modeChanges, operatingModeChange{mode: mode, callback: a.onModeChange})
+	if a.modeDraining {
+		return false
+	}
+	a.modeDraining = true
+	return true
+}
+
+func (a *Adaptor) drainOperatingModeChanges() {
+	for {
+		a.mu.Lock()
+		if len(a.modeChanges) == 0 {
+			a.modeDraining = false
+			a.mu.Unlock()
+			return
+		}
+		change := a.modeChanges[0]
+		a.modeChanges[0] = operatingModeChange{}
+		a.modeChanges = a.modeChanges[1:]
+		a.mu.Unlock()
+
+		change.callback(change.mode)
+	}
 }
 
 func (a *Adaptor) demoteOperatingModeForWrongLedger() {
 	a.mu.Lock()
-	defer a.mu.Unlock()
-
+	changed := false
 	if a.operatingMode == consensus.OpModeFull || a.operatingMode == consensus.OpModeTracking {
-		a.setOperatingModeLocked(consensus.OpModeConnected)
+		changed = a.setOperatingModeLocked(consensus.OpModeConnected)
+	}
+	startDraining := changed && a.enqueueOperatingModeChangeLocked(consensus.OpModeConnected)
+	a.mu.Unlock()
+	if startDraining {
+		a.drainOperatingModeChanges()
 	}
 }
 
