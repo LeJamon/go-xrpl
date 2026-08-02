@@ -317,13 +317,6 @@ type validatedLedgerNotification struct {
 	parentHash [32]byte
 }
 
-func (s *Service) validatedLedgerSeqLocked() uint32 {
-	if s.validatedLedger == nil {
-		return 0
-	}
-	return s.validatedLedger.Sequence()
-}
-
 // Caller must hold s.mu for writing and invoke notify only after unlocking.
 func (s *Service) validatedLedgerNotificationLocked(previous *ledger.Ledger) validatedLedgerNotification {
 	if s.onValidatedLedger == nil || s.validatedLedger == nil {
