@@ -16,8 +16,7 @@ import (
 )
 
 // inboundBacklogSlack caps the accept-side goroutine count to
-// MaxInbound + slack so a burst of accepts cannot fan out unbounded;
-// canAcceptInbound is the authoritative slot gate.
+// MaxInbound + slack so a burst of accepts cannot fan out unbounded.
 const inboundBacklogSlack = 8
 
 // acceptBackoff throttles the retry rate when listener.Accept returns
