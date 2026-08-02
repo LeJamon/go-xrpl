@@ -35,6 +35,7 @@ func expireRoundSetup(t *testing.T, adaptor *mockAdaptor, engine *Engine, round 
 			TxSet: consensus.TxSetID{nidBase + 0x10 + byte(i)}, CloseTime: ct,
 		}
 	}
+	adaptor.notifyTrustChanged()
 }
 
 // An Expired round WITHOUT close-time consensus must not accept: rippled's

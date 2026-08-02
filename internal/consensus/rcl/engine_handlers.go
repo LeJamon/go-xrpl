@@ -18,6 +18,7 @@ func (e *Engine) OnProposal(proposal *consensus.Proposal, originPeer uint64) err
 
 	e.mu.Lock()
 	defer e.mu.Unlock()
+	e.purgePendingTrustLocked()
 
 	// A proposal carrying our own validator identity — a duplicate-key
 	// misconfiguration (two nodes sharing our key) or our own proposal routed
@@ -39,6 +40,13 @@ func (e *Engine) OnProposal(proposal *consensus.Proposal, originPeer uint64) err
 	// Drop untrusted proposals: buffering them would let throwaway keypairs
 	// grow the tracker unboundedly and feed phantom proposers into
 	// convergence counts.
+	if !e.adaptor.IsTrusted(proposal.NodeID) {
+		return nil
+	}
+	// Trust callbacks do not take e.mu, so one may have queued a purge while
+	// the trust gate was being evaluated. Apply it again immediately before
+	// admitting this proposal, then re-check trust after the destructive purge.
+	e.purgePendingTrustLocked()
 	if !e.adaptor.IsTrusted(proposal.NodeID) {
 		return nil
 	}
@@ -72,6 +80,7 @@ func (e *Engine) OnProposal(proposal *consensus.Proposal, originPeer uint64) err
 		if e.disputeTracker != nil {
 			e.disputeTracker.UnVote(proposal.NodeID)
 		}
+		e.adaptor.RelayProposal(proposal, originPeer)
 		return nil
 	}
 
@@ -137,6 +146,9 @@ func (e *Engine) OnProposal(proposal *consensus.Proposal, originPeer uint64) err
 	// position (self-originated sets were already seeded in closeLedger).
 	if e.ourTxSet != nil {
 		if peerSet, ok := e.acquiredTxSets[proposal.TxSet]; ok {
+			if !e.adaptor.IsTrusted(proposal.NodeID) {
+				return nil
+			}
 			e.createDisputesAgainst(peerSet)
 			if e.disputeTracker.UpdateDisputes(proposal.NodeID, peerSet) {
 				e.peerUnchangedCounter = 0
@@ -243,6 +255,7 @@ func validationDispositionStatus(status ValStatus) consensus.ValidationStatus {
 func (e *Engine) OnTxSet(id consensus.TxSetID, txs [][]byte) error {
 	e.mu.Lock()
 	defer e.mu.Unlock()
+	e.purgePendingTrustLocked()
 
 	txSet, err := e.adaptor.BuildTxSet(txs)
 	if err != nil {
@@ -252,6 +265,11 @@ func (e *Engine) OnTxSet(id consensus.TxSetID, txs [][]byte) error {
 	if txSet.ID() != id {
 		return fmt.Errorf("tx set ID mismatch: expected %x, got %x", id, txSet.ID())
 	}
+	// Building a set can overlap a trust callback. Apply removals before the
+	// set can seed any dispute state, then use one trust epoch for the peer
+	// back-fill below.
+	e.purgePendingTrustLocked()
+	trusted := e.trustedPredicate()
 
 	// Cache for dispute wiring. A late tx set retroactively populates any
 	// dispute whose tx it contains for some peer.
@@ -260,6 +278,9 @@ func (e *Engine) OnTxSet(id consensus.TxSetID, txs [][]byte) error {
 		if e.ourTxSet != nil && id != e.ourTxSet.ID() {
 			e.createDisputesAgainst(txSet)
 			for nodeID, p := range e.proposalTracker.All() {
+				if !trusted(nodeID) {
+					continue
+				}
 				if p.TxSet == id {
 					if e.disputeTracker.UpdateDisputes(nodeID, txSet) {
 						e.peerUnchangedCounter = 0
@@ -339,7 +360,11 @@ func (e *Engine) createDisputesAgainst(peerTxSet consensus.TxSet) {
 // seedDisputeVotes records each known peer's vote on a new dispute from
 // its acquired tx set. Caller must hold e.mu.
 func (e *Engine) seedDisputeVotes(txID consensus.TxID) {
+	trusted := e.trustedPredicate()
 	for nodeID, p := range e.proposalTracker.All() {
+		if !trusted(nodeID) {
+			continue
+		}
 		peerSet, ok := e.acquiredTxSets[p.TxSet]
 		if !ok {
 			continue

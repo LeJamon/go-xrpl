@@ -342,7 +342,7 @@ func TestProposalTracker_ReplayDropsNonIncreasing(t *testing.T) {
 	pt.BufferRecent(&consensus.Proposal{NodeID: node, Position: 1, PreviousLedger: prev})
 
 	closeTimes, replayed, relay := pt.Replay(prev, alwaysTrusted)
-	if len(closeTimes) != 1 || !closeTimes[0].Equal(ct1) {
+	if len(closeTimes) != 1 || closeTimes[0].NodeID != node || !closeTimes[0].CloseTime.Equal(ct1) {
 		t.Fatalf("closeTimes = %v, want exactly [%v]", closeTimes, ct1)
 	}
 	if replayed != 2 {
@@ -428,7 +428,7 @@ func TestProposalTracker_Replay(t *testing.T) {
 		t.Errorf("relay = %d proposals, want 2", len(relay))
 	}
 	// Only the Position==0 proposal yields a close-time vote.
-	if len(closeTimes) != 1 || !closeTimes[0].Equal(ct) {
+	if len(closeTimes) != 1 || closeTimes[0].NodeID != nodeA || !closeTimes[0].CloseTime.Equal(ct) {
 		t.Errorf("closeTimes = %v, want one entry equal to %v", closeTimes, ct)
 	}
 	// nodeA upserted to its highest position; nodeB (other ledger) absent.

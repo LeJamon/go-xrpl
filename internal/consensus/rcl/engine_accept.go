@@ -29,6 +29,8 @@ func (e *Engine) acceptLedger(result consensus.Result) {
 	if e.phase != consensus.PhaseEstablish {
 		return
 	}
+	e.purgePendingTrustLocked()
+	trusted := e.trustedPredicate()
 
 	// Close-time consensus → determineCloseTime + effCloseTime; else a
 	// deterministic parentClose+1s fallback (a local-clock fallback diverges
@@ -39,7 +41,18 @@ func (e *Engine) acceptLedger(result consensus.Result) {
 	closeTimeCorrect := false
 	var ctBranch string
 	if e.closeTime.haveConsensus {
-		rawCloseTime = e.determineCloseTime()
+		// updateCloseTimePosition records the winner selected from the
+		// current trusted positions. Use that snapshot through acceptance;
+		// re-tallying CloseTimes.Peers here would resurrect stale or revised
+		// initial votes (and is particularly harmful for observers).
+		if e.closeTime.consensusCloseTimeSet {
+			rawCloseTime = e.closeTime.consensusCloseTime
+		} else {
+			// Keep direct/manual acceptance callers compatible with the
+			// historical helper path. Normal close-time-gated rounds always
+			// set the snapshot before haveConsensus becomes true.
+			rawCloseTime = e.determineCloseTime()
+		}
 		if rawCloseTime.IsZero() {
 			closeTime = priorClose.Add(time.Second)
 			ctBranch = "consensus-disagree"
@@ -75,7 +88,7 @@ func (e *Engine) acceptLedger(result consensus.Result) {
 		"self_ct_xrpl", e.state.CloseTimes.Self.Unix()-protocol.RippleEpochUnix,
 		"resolution_s", int(resolution.Seconds()),
 		"peer_ct_count", len(e.state.CloseTimes.Peers),
-		"proposer_count", e.proposalTracker.Count(),
+		"proposer_count", e.proposalTracker.CountTrusted(trusted),
 	)
 
 	var txSet consensus.TxSet
@@ -85,7 +98,7 @@ func (e *Engine) acceptLedger(result consensus.Result) {
 		// Find most popular among trusted
 		txSetCounts := make(map[consensus.TxSetID]int)
 		for nodeID, proposal := range e.proposalTracker.All() {
-			if e.adaptor.IsTrusted(nodeID) {
+			if trusted(nodeID) {
 				txSetCounts[proposal.TxSet]++
 			}
 		}
@@ -179,6 +192,7 @@ func (e *Engine) buildAcceptedLedger(work ledgerAcceptWork) (consensus.Ledger, e
 // commitAcceptedLedgerLocked completes acceptance after the off-lock ledger
 // application. Caller must hold e.mu.
 func (e *Engine) commitAcceptedLedgerLocked(work ledgerAcceptWork, newLedger consensus.Ledger, err error) {
+	e.purgePendingTrustLocked()
 	e.buildInProgress = false
 
 	if err != nil {
@@ -243,11 +257,12 @@ func (e *Engine) commitAcceptedLedgerLocked(work ledgerAcceptWork, newLedger con
 		})
 	}
 
+	trustedProposers := e.proposalTracker.CountTrusted(e.trustedPredicate())
 	e.eventBus.Publish(&consensus.ConsensusReachedEvent{
 		Round:     e.state.Round,
 		TxSet:     txSet.ID(),
 		CloseTime: closeTime,
-		Proposers: e.proposalTracker.Count(),
+		Proposers: trustedProposers,
 		Result:    result,
 		// StartTime is wall-clock (see startRoundLocked); paired with e.now()
 		// and captured before the off-lock build, like prevRoundTime.
@@ -255,7 +270,6 @@ func (e *Engine) commitAcceptedLedgerLocked(work ledgerAcceptWork, newLedger con
 		Timestamp: e.adaptor.Now(),
 	})
 
-	trustedProposers := e.proposalTracker.CountTrusted(e.adaptor.IsTrusted)
 	isolated := trustedProposers == 0 && !e.adaptor.IsStandalone()
 	if isolated {
 		if e.adaptor.GetOperatingMode() == consensus.OpModeFull {
@@ -436,13 +450,15 @@ func (e *Engine) commitAcceptedLedgerLocked(work ledgerAcceptWork, newLedger con
 // updateCloseTimePosition tallies close-time votes, applies avalanche
 // thresholds, and bumps our proposal's close time to consensus.
 func (e *Engine) updateCloseTimePosition() {
+	e.purgePendingTrustLocked()
+	trusted := e.trustedPredicate()
 	resolution := e.currentCloseTimeResolution()
 
 	// Tally close-time votes from trusted proposals, rounded via roundCloseTime.
 	closeTimeVotes := make(map[time.Time]int)
 	participants := 0
 	for nodeID, proposal := range e.proposalTracker.All() {
-		if e.adaptor.IsTrusted(nodeID) {
+		if trusted(nodeID) {
 			rounded := roundCloseTime(proposal.CloseTime, resolution)
 			closeTimeVotes[rounded]++
 			participants++
@@ -451,6 +467,12 @@ func (e *Engine) updateCloseTimePosition() {
 
 	if participants == 0 {
 		e.closeTime.haveConsensus = true // trivially
+		if e.state.OurPosition != nil {
+			e.closeTime.consensusCloseTime = roundCloseTime(e.state.OurPosition.CloseTime, resolution)
+		} else {
+			e.closeTime.consensusCloseTime = roundCloseTime(e.state.CloseTimes.Self, resolution)
+		}
+		e.closeTime.consensusCloseTimeSet = true
 		return
 	}
 
@@ -466,6 +488,8 @@ func (e *Engine) updateCloseTimePosition() {
 	threshConsensus := participantsNeeded(participants, 75) // avCT_CONSENSUS_PCT
 
 	consensusCloseTime, winningVotes, haveWinner := mostVotedAscending(closeTimeVotes, threshVote)
+	e.closeTime.consensusCloseTime = consensusCloseTime
+	e.closeTime.consensusCloseTimeSet = haveWinner
 	e.closeTime.haveConsensus = haveWinner && winningVotes >= threshConsensus
 
 	votesSummary := summarizeCloseTimeVotes(closeTimeVotes)
@@ -532,6 +556,13 @@ func (e *Engine) convergePercent() int {
 // position if set, else the most popular peer close time rounded to
 // resolution (observers).
 func (e *Engine) determineCloseTime() time.Time {
+	// In production this snapshot is populated by updateCloseTimePosition and
+	// consumed directly by acceptLedger. Keep the helper's historical fallback
+	// for diagnostics and focused callers that construct a round by hand.
+	if e.closeTime != nil && e.closeTime.consensusCloseTimeSet {
+		return e.closeTime.consensusCloseTime
+	}
+
 	// Our position is already rounded by updateCloseTimePosition.
 	if e.state.OurPosition != nil {
 		return e.state.OurPosition.CloseTime

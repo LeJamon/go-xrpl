@@ -68,6 +68,7 @@ func (e *Engine) MissedHeartbeats() uint64 {
 func (e *Engine) timerEntry() {
 	tickStart := time.Now()
 	e.mu.Lock()
+	e.purgePendingTrustLocked()
 	e.deferBroadcasts++
 	var pending []func()
 	defer func() {
@@ -422,6 +423,7 @@ func (e *Engine) handleWrongLedger(netLedgerID consensus.LedgerID, target consen
 	}
 
 	// Stop proposing.
+	e.purgePendingTrustLocked()
 	if e.mode == consensus.ModeProposing {
 		e.setMode(consensus.ModeObserving)
 	}
@@ -441,14 +443,17 @@ func (e *Engine) handleWrongLedger(netLedgerID consensus.LedgerID, target consen
 
 		// Replay proposals for the new ledger; close-time votes only if a
 		// round state exists.
-		closeTimes, _, relay := e.proposalTracker.Replay(netLedgerID, e.adaptor.IsTrusted)
-		if e.state != nil {
-			for _, ct := range closeTimes {
-				e.state.CloseTimes.Peers[ct]++
-			}
-		}
+		replayTrusted := e.trustedPredicate()
+		closeTimes, _, relay := e.proposalTracker.Replay(netLedgerID, replayTrusted)
+		e.unvoteDeadProposalsLocked()
+		e.pruneUntrustedProposalsLocked()
+		e.appendReplayCloseTimesLocked(closeTimes)
 
+		relayTrusted := e.trustedPredicate()
 		for _, p := range relay {
+			if !relayTrusted(p.NodeID) {
+				continue
+			}
 			e.adaptor.RelayProposal(p, 0)
 		}
 	}

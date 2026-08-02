@@ -83,6 +83,56 @@ func (pt *ProposalTracker) CountTrusted(trusted func(consensus.NodeID) bool) int
 	return n
 }
 
+// PruneUntrusted permanently removes current-round and buffered positions
+// whose validators are no longer trusted and returns the removed current
+// node IDs. Replay and consensus callers invoke this immediately before using
+// the current position set so a trust change cannot leave a stale vote in
+// close-time or dispute tallies, then resurrect it if trust is restored.
+func (pt *ProposalTracker) PruneUntrusted(trusted func(consensus.NodeID) bool) []consensus.NodeID {
+	var removed []consensus.NodeID
+	for nodeID := range pt.proposals {
+		if trusted(nodeID) {
+			continue
+		}
+		pt.PurgeNode(nodeID)
+		removed = append(removed, nodeID)
+	}
+	for nodeID := range pt.recentProposals {
+		if !trusted(nodeID) {
+			pt.PurgeNode(nodeID)
+		}
+	}
+	return removed
+}
+
+// PurgeNode permanently removes all current and buffered positions for node.
+// It intentionally leaves the round's dead-node marker untouched: a replayed
+// bow-out still has live-equivalent dead semantics even if its position data
+// is later purged.
+func (pt *ProposalTracker) PurgeNode(nodeID consensus.NodeID) {
+	delete(pt.proposals, nodeID)
+	delete(pt.recentProposals, nodeID)
+}
+
+// dropBufferedThrough removes a node's replay history through p, including p.
+// A bow-out is terminal for the current round; retaining older positions would
+// replay the same dead marker on the next round and block a fresh rejoin.
+func (pt *ProposalTracker) dropBufferedThrough(nodeID consensus.NodeID, p *consensus.Proposal) {
+	positions := pt.recentProposals[nodeID]
+	for i, buffered := range positions {
+		if buffered != p {
+			continue
+		}
+		positions = positions[i+1:]
+		if len(positions) == 0 {
+			delete(pt.recentProposals, nodeID)
+		} else {
+			pt.recentProposals[nodeID] = positions
+		}
+		return
+	}
+}
+
 // MarkDead removes a node's position and records it as bowed out for the round.
 func (pt *ProposalTracker) MarkDead(nodeID consensus.NodeID) {
 	delete(pt.proposals, nodeID)
@@ -163,27 +213,75 @@ func (pt *ProposalTracker) LatestFresh(trusted func(consensus.NodeID) bool, now 
 	return out
 }
 
+// ReplayCloseTime is an initial close-time vote replayed from a trusted
+// validator. The node identity lets callers re-check trust immediately before
+// recording the vote, after replay has returned.
+type ReplayCloseTime struct {
+	NodeID    consensus.NodeID
+	CloseTime time.Time
+}
+
 // Replay upserts buffered proposals for prevID into current-round positions
-// (monotonic) and returns the close-time votes to record — one per stored
-// Position==0 trusted proposal — the count of trusted proposals replayed, and
-// the proposals whose position was (re-)stored, so the caller can re-share them
-// to peers that missed them on this ledger. Buffered duplicates at a
-// non-increasing ProposeSeq are dropped: not counted, not relayed.
-func (pt *ProposalTracker) Replay(prevID consensus.LedgerID, trusted func(consensus.NodeID) bool) (closeTimes []time.Time, trustedReplayed int, relay []*consensus.Proposal) {
+// (monotonic) and returns the node-associated close-time votes to record — one
+// per stored Position==0 trusted proposal — the count of trusted proposals
+// replayed, and the proposals whose position was (re-)stored, so the caller can
+// re-share them to peers that missed them on this ledger. A replayed seqLeave
+// removes the current position, marks the node dead, and is returned for relay
+// without counting as a proposer. Buffered duplicates at a non-increasing
+// ProposeSeq are dropped: not counted, not relayed.
+func (pt *ProposalTracker) Replay(prevID consensus.LedgerID, trusted func(consensus.NodeID) bool) (closeTimes []ReplayCloseTime, trustedReplayed int, relay []*consensus.Proposal) {
+	// A trust transition can occur between rounds, leaving an old current
+	// position behind while its validator's buffered entries are replayed.
+	// Remove it before replay can expose the current set to callers.
+	pt.PruneUntrusted(trusted)
+
 	for nodeID, positions := range pt.recentProposals {
+		if !trusted(nodeID) {
+			pt.PurgeNode(nodeID)
+			continue
+		}
 		for _, p := range positions {
 			if p.PreviousLedger != prevID {
 				continue
 			}
+			// Re-check immediately before storing: the trust view may have
+			// changed while replaying another validator's buffered positions.
+			if !trusted(nodeID) {
+				pt.PurgeNode(nodeID)
+				break
+			}
+			// Replay a bow-out through the same current/dead/unvote state
+			// transition as a live proposal. A later position in the same
+			// replay remains blocked by IsDead until the next round resets it.
+			const seqLeave = uint32(0xFFFFFFFF)
+			if p.Position == seqLeave {
+				if pt.IsDead(nodeID) {
+					break
+				}
+				pt.MarkDead(nodeID)
+				if !trusted(nodeID) {
+					pt.PurgeNode(nodeID)
+					break
+				}
+				relay = append(relay, p)
+				pt.dropBufferedThrough(nodeID, p)
+				break
+			}
+			if pt.IsDead(nodeID) {
+				break
+			}
 			if !pt.Store(p) {
 				continue
 			}
-			relay = append(relay, p)
+			// A trust transition during Store must not leave a current-round
+			// position that can be relayed or tallied by the caller.
 			if !trusted(nodeID) {
-				continue
+				pt.PurgeNode(nodeID)
+				break
 			}
+			relay = append(relay, p)
 			if p.Position == 0 {
-				closeTimes = append(closeTimes, p.CloseTime)
+				closeTimes = append(closeTimes, ReplayCloseTime{NodeID: nodeID, CloseTime: p.CloseTime})
 			}
 			trustedReplayed++
 		}
