@@ -150,6 +150,24 @@ func TestBuildValidatedTransactionEventRejectsCorruptLeaf(t *testing.T) {
 	}
 }
 
+func TestBuildValidatedTransactionPublicationsRejectsWholeLedger(t *testing.T) {
+	ledgerEvent := &service.LedgerAcceptedEvent{LedgerInfo: &service.LedgerInfo{
+		Sequence:  1,
+		Validated: true,
+		Closed:    true,
+	}}
+	publications, err := buildValidatedTransactionPublications(
+		[]service.TransactionResultEvent{
+			{TxHash: [32]byte{1}, TxData: validatedPaymentData(t, 0, 0), Validated: true, LedgerIndex: 1},
+			{TxHash: [32]byte{2}, TxData: []byte{0xff}, Validated: true, LedgerIndex: 1},
+		},
+		ledgerEvent,
+		0,
+	)
+	require.Error(t, err)
+	require.Nil(t, publications)
+}
+
 func validatedPaymentData(t *testing.T, networkID, transactionIndex uint32) []byte {
 	t.Helper()
 	txJSON := map[string]any{

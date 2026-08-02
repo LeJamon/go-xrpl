@@ -983,9 +983,17 @@ func run(
 	var lastServerSnapshot serverStatusSnapshot
 
 	// Wire up ledger service events to WebSocket broadcasts
-	ledgerService.SetEventSink(service.EventSinkFunc(func(event *service.LedgerAcceptedEvent) {
+	ledgerService.SetEventSink(service.EventSinkFunc(func(event *service.LedgerAcceptedEvent) error {
 		if event == nil || event.LedgerInfo == nil {
-			return
+			return nil
+		}
+		transactions, err := buildValidatedTransactionPublications(
+			event.TransactionResults,
+			event,
+			uint32(networkID),
+		)
+		if err != nil {
+			return err
 		}
 
 		// Drive online-delete rotation off the validated-ledger advance. The
@@ -1014,14 +1022,10 @@ func run(
 		}
 		publisher.PublishLedgerClosed(ledgerCloseEvent)
 
-		publishableResults := make([]service.TransactionResultEvent, 0, len(event.TransactionResults))
-		for _, txResult := range event.TransactionResults {
-			txEvent, engineResult, err := buildValidatedTransactionEvent(txResult, event, uint32(networkID))
-			if err != nil {
-				serverLog.Error("Skipping corrupt accepted transaction", "hash", upperHex(txResult.TxHash[:]), "err", err)
-				continue
-			}
-			publishableResults = append(publishableResults, txResult)
+		for _, publication := range transactions {
+			txResult := publication.result
+			txEvent := publication.event
+			engineResult := publication.engineResult
 			publisher.PublishTransaction(txEvent, txResult.AffectedAccounts)
 
 			// Per-book delivery is tesSUCCESS-only — rippled gates
@@ -1044,7 +1048,7 @@ func run(
 		// already-closed ledger view directly from the event so a slow
 		// adapter store cannot drop the announce when the ledger isn't
 		// yet visible to GetLedgerBySequence.
-		bookView := newAcceptedLedgerView(event, publishableResults)
+		bookView := newAcceptedLedgerView(event, event.TransactionResults)
 		payload := handlers.ComputeBookChanges(bookView)
 		if data, err := json.Marshal(payload); err == nil {
 			wsServer.SubscriptionManager().BroadcastToStream(types.SubBookChanges, data, nil)
@@ -1100,6 +1104,7 @@ func run(
 			"sequence", event.LedgerInfo.Sequence,
 			"txs", len(event.TransactionResults),
 		)
+		return nil
 	}))
 
 	if !standalone && appConfig.Watchdog.IsEnabled() {

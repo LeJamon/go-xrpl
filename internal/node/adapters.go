@@ -671,6 +671,32 @@ func buildValidatedTransactionEvent(
 	return streamEvent, engineResult, nil
 }
 
+type validatedTransactionPublication struct {
+	result       service.TransactionResultEvent
+	event        *rpc.TransactionEvent
+	engineResult ter.Result
+}
+
+func buildValidatedTransactionPublications(
+	results []service.TransactionResultEvent,
+	event *service.LedgerAcceptedEvent,
+	defaultNetworkID uint32,
+) ([]validatedTransactionPublication, error) {
+	publications := make([]validatedTransactionPublication, 0, len(results))
+	for _, result := range results {
+		txEvent, engineResult, err := buildValidatedTransactionEvent(result, event, defaultNetworkID)
+		if err != nil {
+			return nil, fmt.Errorf("decode accepted transaction %s: %w", upperHex(result.TxHash[:]), err)
+		}
+		publications = append(publications, validatedTransactionPublication{
+			result:       result,
+			event:        txEvent,
+			engineResult: engineResult,
+		})
+	}
+	return publications, nil
+}
+
 func rippleEpochSeconds(t time.Time) int64 {
 	if t.IsZero() {
 		return 0

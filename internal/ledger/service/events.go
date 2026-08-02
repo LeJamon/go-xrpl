@@ -47,15 +47,16 @@ type TransactionResultEvent struct {
 
 type EventSink interface {
 	// LedgerAccepted must not call Service.Stop synchronously.
-	LedgerAccepted(event *LedgerAcceptedEvent)
+	LedgerAccepted(event *LedgerAcceptedEvent) error
 }
 
-type EventSinkFunc func(event *LedgerAcceptedEvent)
+type EventSinkFunc func(event *LedgerAcceptedEvent) error
 
-func (f EventSinkFunc) LedgerAccepted(event *LedgerAcceptedEvent) {
-	if f != nil {
-		f(event)
+func (f EventSinkFunc) LedgerAccepted(event *LedgerAcceptedEvent) error {
+	if f == nil {
+		return nil
 	}
+	return f(event)
 }
 
 // SubmittedTxEvent carries the inputs the WebSocket transactions_proposed
@@ -171,13 +172,7 @@ func (p *eventPublisher) enqueuePublicationLocked(event publicationEvent) bool {
 		return false
 	}
 	if len(p.publicationQueue) >= p.publicationLimit {
-		p.publicationFailed = true
-		p.publicationFailureOnce.Do(func() {
-			select {
-			case p.publicationErrors <- fmt.Errorf("publication queue exceeded capacity %d", p.publicationLimit):
-			default:
-			}
-		})
+		p.failPublicationLocked(fmt.Errorf("publication queue exceeded capacity %d", p.publicationLimit))
 		return false
 	}
 	p.publicationQueue = append(p.publicationQueue, event)
@@ -186,6 +181,16 @@ func (p *eventPublisher) enqueuePublicationLocked(event publicationEvent) bool {
 	default:
 	}
 	return true
+}
+
+func (p *eventPublisher) failPublicationLocked(err error) {
+	p.publicationFailed = true
+	p.publicationFailureOnce.Do(func() {
+		select {
+		case p.publicationErrors <- err:
+		default:
+		}
+	})
 }
 
 func (p *eventPublisher) ensurePublicationQueueLocked() {
@@ -297,7 +302,13 @@ func (p *eventPublisher) runLedgerEventDispatcher() {
 				p.publicationQueue[0] = publicationEvent{}
 				p.publicationQueue = p.publicationQueue[1:]
 				p.ledgerEventMu.Unlock()
-				p.deliverPublication(ev)
+				if err := p.deliverPublication(ev); err != nil {
+					p.ledgerEventMu.Lock()
+					p.publicationQueue = nil
+					p.failPublicationLocked(err)
+					p.ledgerEventMu.Unlock()
+					return
+				}
 				continue
 			}
 			stopping := p.ledgerEventStopping
@@ -310,7 +321,7 @@ func (p *eventPublisher) runLedgerEventDispatcher() {
 	}
 }
 
-func (p *eventPublisher) deliverPublication(event publicationEvent) {
+func (p *eventPublisher) deliverPublication(event publicationEvent) error {
 	if event.submitted != nil {
 		p.subscriberMu.RLock()
 		callback := p.submittedTxCallback
@@ -318,22 +329,32 @@ func (p *eventPublisher) deliverPublication(event publicationEvent) {
 		if callback != nil {
 			callback(*event.submitted)
 		}
-		return
+		return nil
 	}
 	if event.ledger != nil {
-		p.deliverLedgerEvent(event.ledger)
+		return p.deliverLedgerEvent(event.ledger)
 	}
+	return nil
 }
 
 // deliverLedgerEvent advances the published frontier at the ordered delivery
 // boundary, then invokes the current callback outside the lock.
-func (p *eventPublisher) deliverLedgerEvent(event *LedgerAcceptedEvent) {
+func (p *eventPublisher) deliverLedgerEvent(event *LedgerAcceptedEvent) error {
 	s := p.service
+	var (
+		advanced     bool
+		previousHave bool
+		previousSeq  uint32
+		sequence     uint32
+	)
 	s.mu.Lock()
 	if event.Ledger != nil && event.Ledger.IsValidated() {
-		seq := event.Ledger.Sequence()
-		if !s.havePublished || seq > s.publishedLedgerSeq {
-			s.publishedLedgerSeq = seq
+		sequence = event.Ledger.Sequence()
+		if !s.havePublished || sequence > s.publishedLedgerSeq {
+			advanced = true
+			previousHave = s.havePublished
+			previousSeq = s.publishedLedgerSeq
+			s.publishedLedgerSeq = sequence
 			s.havePublished = true
 		}
 	}
@@ -341,9 +362,21 @@ func (p *eventPublisher) deliverLedgerEvent(event *LedgerAcceptedEvent) {
 	p.subscriberMu.RLock()
 	sink := p.eventSink
 	p.subscriberMu.RUnlock()
-	if sink != nil {
-		sink.LedgerAccepted(event)
+	if sink == nil {
+		return nil
 	}
+	if err := sink.LedgerAccepted(event); err != nil {
+		if advanced {
+			s.mu.Lock()
+			if s.havePublished && s.publishedLedgerSeq == sequence {
+				s.havePublished = previousHave
+				s.publishedLedgerSeq = previousSeq
+			}
+			s.mu.Unlock()
+		}
+		return fmt.Errorf("publish ledger event: %w", err)
+	}
+	return nil
 }
 
 // SetSubmittedTxCallback registers the proposed-transaction sink. Pass nil to

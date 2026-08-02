@@ -1,6 +1,7 @@
 package service
 
 import (
+	"errors"
 	"strings"
 	"sync"
 	"testing"
@@ -27,11 +28,12 @@ func TestPublicationDispatcherOrdersProposedBeforeValidated(t *testing.T) {
 		close(proposedStarted)
 		<-releaseProposed
 	})
-	publisher.setEventSink(EventSinkFunc(func(*LedgerAcceptedEvent) {
+	publisher.setEventSink(EventSinkFunc(func(*LedgerAcceptedEvent) error {
 		mu.Lock()
 		order = append(order, "validated")
 		mu.Unlock()
 		close(validated)
+		return nil
 	}))
 	publisher.start()
 
@@ -149,6 +151,39 @@ func TestPublicationDispatcherFailsClosedAtCapacity(t *testing.T) {
 	if len(delivered) != 2 || delivered[0] != 1 || delivered[1] != 2 {
 		t.Fatalf("delivered events = %v, want accepted prefix [1 2]", delivered)
 	}
+}
+
+func TestPublicationDispatcherFailsClosedOnSinkError(t *testing.T) {
+	sinkErr := errors.New("corrupt accepted transaction")
+	publisher := &eventPublisher{
+		service:               &Service{},
+		publicationErrors:     make(chan error, 1),
+		ledgerEventCandidates: make(map[uint32]*LedgerAcceptedEvent),
+	}
+	publisher.setEventSink(EventSinkFunc(func(*LedgerAcceptedEvent) error {
+		return sinkErr
+	}))
+	publisher.start()
+	publisher.dispatchLedgerEvent(&LedgerAcceptedEvent{})
+
+	select {
+	case err := <-publisher.publicationErrors:
+		if !errors.Is(err, sinkErr) {
+			t.Fatalf("publication failure = %v, want %v", err, sinkErr)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("sink failure was not reported")
+	}
+
+	publisher.dispatchSubmittedTxEvent(SubmittedTxEvent{CurrentLedger: 1})
+	publisher.ledgerEventMu.Lock()
+	queued := len(publisher.publicationQueue)
+	failed := publisher.publicationFailed
+	publisher.ledgerEventMu.Unlock()
+	if queued != 0 || !failed {
+		t.Fatalf("queue state after sink failure = len %d, failed %t", queued, failed)
+	}
+	publisher.stop()
 }
 
 func TestPublicationDispatcherRejectsAfterStop(t *testing.T) {
