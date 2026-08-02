@@ -93,7 +93,11 @@ func (o *Overlay) handleClusterMessage(evt Event) {
 	// Recompute the cluster-fee median and forward it through the
 	// LoadFeeTrack sink. An empty fresh set publishes zero.
 	if sink := o.clusterFeeSinkSnapshot(); sink != nil {
-		fee, _ := o.cluster.MedianFee(time.Now().Add(-clusterFeeWindow))
+		now := time.Now()
+		if o.clockForCluster != nil {
+			now = o.clockForCluster()
+		}
+		fee, _ := o.cluster.MedianFee(now.Add(-clusterFeeWindow))
 		sink(fee)
 	}
 

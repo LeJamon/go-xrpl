@@ -162,6 +162,51 @@ func TestHandleClusterMessage_ClearsStaleClusterFee(t *testing.T) {
 	assert.Zero(t, clusterFee)
 }
 
+func TestHandleClusterMessage_ClearsClusterFeeAfterReportAgesOut(t *testing.T) {
+	id, err := NewIdentity()
+	require.NoError(t, err)
+	peerIdentity, err := NewIdentity()
+	require.NoError(t, err)
+	peerToken := NewPublicKeyTokenFromBtcec(peerIdentity.BtcecPublicKey())
+	peerNodePubEncoded, err := addresscodec.EncodeNodePublicKey(peerToken.Bytes())
+	require.NoError(t, err)
+
+	clusterReg := cluster.New()
+	require.NoError(t, clusterReg.Load([]string{peerNodePubEncoded + " peer"}))
+	clusterFee := uint32(0)
+	now := time.Unix(2_000_000_000, 0)
+	o := &Overlay{
+		peers:   make(map[PeerID]*Peer),
+		events:  make(chan Event, 8),
+		cluster: clusterReg,
+		clockForCluster: func() time.Time {
+			return now
+		},
+		clusterFeeSink: func(fee uint32) {
+			clusterFee = fee
+		},
+	}
+
+	peer := NewPeer(PeerID(35), Endpoint{Host: "127.0.0.1", Port: 51235}, false, id, make(chan Event, 1))
+	peer.remotePubKey = peerToken
+	o.peers[peer.ID()] = peer
+
+	payload, err := message.Encode(&message.Cluster{ClusterNodes: []message.ClusterNode{
+		{PublicKey: peerNodePubEncoded, NodeName: "peer", NodeLoad: 512, ReportTime: uint32(now.Unix())},
+	}})
+	require.NoError(t, err)
+	o.onMessageReceived(Event{PeerID: peer.ID(), MessageType: uint16(message.TypeCluster), Payload: payload})
+	assert.Equal(t, uint32(512), clusterFee)
+
+	now = now.Add(clusterFeeWindow + time.Second)
+	// An otherwise valid frame from the trusted peer must recompute the
+	// median, including the empty result, so stale fee state cannot persist.
+	payload, err = message.Encode(&message.Cluster{})
+	require.NoError(t, err)
+	o.onMessageReceived(Event{PeerID: peer.ID(), MessageType: uint16(message.TypeCluster), Payload: payload})
+	assert.Zero(t, clusterFee)
+}
+
 // TestHandleClusterMessage_ImportsLoadSourceGossip pins issue #765: a
 // TMCluster frame from a registered cluster peer must fold its
 // TMLoadSource entries into the resource manager (importConsumers),
