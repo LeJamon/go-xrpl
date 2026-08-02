@@ -11,7 +11,6 @@ type EngineLifecycle interface {
 	Stop() error
 }
 
-// EngineTerminal is implemented by engines that expose background-loop exit.
 type EngineTerminal interface {
 	Done() <-chan error
 }

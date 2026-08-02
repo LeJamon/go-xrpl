@@ -730,7 +730,6 @@ func (e *Engine) Start(ctx context.Context) error {
 	return nil
 }
 
-// Done reports termination of the engine-owned background loop.
 func (e *Engine) Done() <-chan error {
 	e.lifecycleMu.Lock()
 	defer e.lifecycleMu.Unlock()

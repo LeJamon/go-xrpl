@@ -140,7 +140,6 @@ type RunOptions struct {
 	Reload   <-chan os.Signal
 }
 
-// RunWithOptions runs the node with process-owned lifecycle options.
 func RunWithOptions(
 	ctx context.Context,
 	appConfig *config.Config,
@@ -1655,7 +1654,6 @@ const (
 	storeShutdownGrace     = 5 * time.Second
 )
 
-// doShutdown performs bounded shutdown of all server components.
 func doShutdown(
 	transports *boundRPCTransports,
 	wsServer *rpc.WebSocketServer,
