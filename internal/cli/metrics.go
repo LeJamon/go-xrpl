@@ -45,7 +45,7 @@ func newMetricsRegistry() *prometheus.Registry {
 		Name:      "io_latency_events_total",
 		Help:      "Scheduler-latency samples that crossed the 10ms reporting threshold.",
 	}, func() float64 {
-		return float64(observability.IOLatencyEventStats().Count)
+		return float64(observability.IOLatencyEventCount())
 	})
 
 	reg.MustRegister(buildInfo, schedLatency, ioLatencyEvents)

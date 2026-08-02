@@ -266,13 +266,11 @@ func Run(ctx context.Context, appConfig *config.Config, configPath string, stand
 		return err
 	}
 
-	// Start the goroutine-scheduling-latency sampler. Runs in both
-	// standalone and consensus modes; cancelled when runServer returns.
-	// Mirrors rippled's beast::io_latency_probe lifetime
-	// (rippled/src/xrpld/app/main/Application.cpp:1537).
-	samplerCtx, cancelSampler := context.WithCancel(context.Background())
-	defer cancelSampler()
-	observability.StartSchedLatencySampler(samplerCtx)
+	sampler := observability.NewSchedLatencySampler()
+	if err := sampler.Start(ctx); err != nil {
+		return fmt.Errorf("start scheduler latency sampler: %w", err)
+	}
+	defer sampler.Stop()
 
 	// Wire up RPC services
 	ledgerAdapter := rpc.NewLedgerServiceAdapter(ledgerService)
