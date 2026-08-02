@@ -26,8 +26,11 @@ type auxiliaryServer struct {
 
 type auxiliaryServers struct {
 	servers      []auxiliaryServer
+	pprof        bool
 	serveWG      sync.WaitGroup
+	startOnce    sync.Once
 	shutdownOnce sync.Once
+	lifecycleMu  sync.Mutex
 	shutdownErr  error
 	stopping     atomic.Bool
 }
@@ -42,6 +45,18 @@ type auxiliaryServerSpec struct {
 func startAuxiliaryServers(
 	ctx context.Context,
 	cancel context.CancelCauseFunc,
+	getenv func(string) string,
+	listen func(string, string) (net.Listener, error),
+) (*auxiliaryServers, error) {
+	aux, err := bindAuxiliaryServers(getenv, listen)
+	if err != nil {
+		return nil, err
+	}
+	aux.Start(ctx, cancel)
+	return aux, nil
+}
+
+func bindAuxiliaryServers(
 	getenv func(string) string,
 	listen func(string, string) (net.Listener, error),
 ) (*auxiliaryServers, error) {
@@ -99,36 +114,45 @@ func startAuxiliaryServers(
 				ReadHeaderTimeout: 5 * time.Second,
 			},
 		})
+		aux.pprof = aux.pprof || spec.pprof
 	}
-
-	for _, spec := range specs {
-		if spec.pprof {
-			observability.EnablePProf()
-			break
-		}
-	}
-
-	for i := range aux.servers {
-		entry := &aux.servers[i]
-		aux.serveWG.Add(1)
-		go func() {
-			defer aux.serveWG.Done()
-			if err := entry.server.Serve(entry.listener); err != nil &&
-				!errors.Is(err, http.ErrServerClosed) &&
-				!aux.stopping.Load() &&
-				ctx.Err() == nil {
-				cancel(fmt.Errorf("%s server on %s failed: %w", entry.name, entry.addr, err))
-			}
-		}()
-	}
-	if len(aux.servers) != 0 {
-		go func() {
-			<-ctx.Done()
-			_ = aux.Shutdown()
-		}()
-	}
-
 	return aux, nil
+}
+
+func (a *auxiliaryServers) Start(ctx context.Context, cancel context.CancelCauseFunc) {
+	if a == nil {
+		return
+	}
+	a.startOnce.Do(func() {
+		a.lifecycleMu.Lock()
+		defer a.lifecycleMu.Unlock()
+		if a.stopping.Load() {
+			return
+		}
+		if a.pprof {
+			observability.EnablePProf()
+		}
+
+		for i := range a.servers {
+			entry := &a.servers[i]
+			a.serveWG.Add(1)
+			go func() {
+				defer a.serveWG.Done()
+				if err := entry.server.Serve(entry.listener); err != nil &&
+					!errors.Is(err, http.ErrServerClosed) &&
+					!a.stopping.Load() &&
+					ctx.Err() == nil {
+					cancel(fmt.Errorf("%s server on %s failed: %w", entry.name, entry.addr, err))
+				}
+			}()
+		}
+		if len(a.servers) != 0 {
+			go func() {
+				<-ctx.Done()
+				_ = a.Shutdown()
+			}()
+		}
+	})
 }
 
 func (a *auxiliaryServers) Addresses() map[string]string {
@@ -144,7 +168,9 @@ func (a *auxiliaryServers) Shutdown() error {
 		return nil
 	}
 	a.shutdownOnce.Do(func() {
+		a.lifecycleMu.Lock()
 		a.stopping.Store(true)
+		a.lifecycleMu.Unlock()
 		ctx, cancel := context.WithTimeout(context.Background(), auxiliaryShutdownTimeout)
 		defer cancel()
 
@@ -154,6 +180,7 @@ func (a *auxiliaryServers) Shutdown() error {
 				errs = append(errs, fmt.Errorf("shutdown %s server: %w", a.servers[i].name, err))
 			}
 		}
+		a.closeListeners()
 		serveDone := make(chan struct{})
 		go func() {
 			a.serveWG.Wait()

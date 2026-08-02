@@ -2,6 +2,7 @@ package node
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net"
 	rtdebug "runtime/debug"
@@ -42,58 +43,88 @@ func grpcRecoveryInterceptor(log xrpllog.Logger) googlegrpc.UnaryServerIntercept
 	}
 }
 
-// startGRPCServer binds a listener for the [port_grpc] section and serves
-// the XRPLedgerAPIService (the binary ledger surface consumed by Clio).
-// It returns the running server and its bound address; Serve runs in a
-// goroutine and reports a non-graceful exit on errCh.
-//
-// Mirrors rippled's GRPCServer: the server only exists when a [port_grpc]
-// section supplies both ip and port. secure_gateway is parsed (and an
-// unspecified address rejected, as rippled does) but does not yet alter
-// per-request handling — go-xrpl's gRPC surface has no resource-limit
-// accounting to bypass.
-func startGRPCServer(
+type boundGRPCServer struct {
+	name      string
+	address   string
+	listener  net.Listener
+	ready     <-chan struct{}
+	markReady func()
+	server    *googlegrpc.Server
+}
+
+func prepareGRPCServer(
+	ctx context.Context,
 	name string,
 	p config.PortConfig,
 	lookup xrplgrpc.LedgerLookup,
 	log xrpllog.Logger,
-	errCh chan<- error,
-) (*googlegrpc.Server, string, error) {
-	if _, err := p.ParseSecureGatewayNets(); err != nil {
-		return nil, "", fmt.Errorf("parse secure_gateway nets for grpc port %q: %w", name, err)
+	listen listenFunc,
+) (*boundGRPCServer, error) {
+	if err := validateGRPCPort(name, p); err != nil {
+		return nil, err
 	}
-	// rippled forbids an unspecified address in grpc secure_gateway
-	// (GRPCServer.cpp:361-368) — match-all would defeat the rate-limit
-	// bypass it scopes to known Clio hosts.
-	for _, entry := range p.SecureGateway {
-		if ip := net.ParseIP(strings.TrimSpace(entry)); ip != nil && ip.IsUnspecified() {
-			return nil, "", fmt.Errorf("grpc port %q: unspecified IP %q in secure_gateway", name, entry)
-		}
-	}
+	return bindGRPCServer(ctx, name, p, lookup, log, listen)
+}
 
+func bindGRPCServer(
+	ctx context.Context,
+	name string,
+	p config.PortConfig,
+	lookup xrplgrpc.LedgerLookup,
+	log xrpllog.Logger,
+	listen listenFunc,
+) (*boundGRPCServer, error) {
 	addr := p.BindAddress()
-	var lc net.ListenConfig
-	lis, err := lc.Listen(context.Background(), "tcp", addr)
+	lis, err := listen(ctx, "tcp", addr)
 	if err != nil {
-		return nil, "", fmt.Errorf("grpc listen on %s: %w", addr, err)
+		return nil, fmt.Errorf("grpc listen on %s: %w", addr, err)
 	}
 	boundAddr := lis.Addr().String()
+	readyListener := newServeReadyListener(lis)
 
 	srv := googlegrpc.NewServer(
 		googlegrpc.ChainUnaryInterceptor(grpcRecoveryInterceptor(log)),
 	)
 	rpcv1.RegisterXRPLedgerAPIServiceServer(srv, xrplgrpc.NewServer(lookup))
 
+	return &boundGRPCServer{
+		name:      name,
+		address:   boundAddr,
+		listener:  readyListener,
+		ready:     readyListener.ready,
+		markReady: readyListener.markReady,
+		server:    srv,
+	}, nil
+}
+
+func validateGRPCPort(name string, p config.PortConfig) error {
+	if _, err := p.ParseSecureGatewayNets(); err != nil {
+		return fmt.Errorf("parse secure_gateway nets for grpc port %q: %w", name, err)
+	}
+	// rippled forbids an unspecified address in grpc secure_gateway
+	// (GRPCServer.cpp:361-368) — match-all would defeat the rate-limit
+	// bypass it scopes to known Clio hosts.
+	for _, entry := range p.SecureGateway {
+		if ip := net.ParseIP(strings.TrimSpace(entry)); ip != nil && ip.IsUnspecified() {
+			return fmt.Errorf("grpc port %q: unspecified IP %q in secure_gateway", name, entry)
+		}
+	}
+	return nil
+}
+
+func (s *boundGRPCServer) serve(log xrpllog.Logger, errCh chan<- error, done func()) {
 	go func() {
-		log.Info("Listening", "protocol", "grpc", "name", name, "addr", boundAddr)
-		if err := srv.Serve(lis); err != nil {
-			log.Error("gRPC server failed", "name", name, "addr", boundAddr, "err", err)
+		if done != nil {
+			defer done()
+		}
+		defer s.markReady()
+		log.Info("Listening", "protocol", "grpc", "name", s.name, "addr", s.address)
+		if err := s.server.Serve(s.listener); err != nil && !errors.Is(err, googlegrpc.ErrServerStopped) {
+			log.Error("gRPC server failed", "name", s.name, "addr", s.address, "err", err)
 			select {
-			case errCh <- fmt.Errorf("grpc %s (%s): %w", name, boundAddr, err):
+			case errCh <- fmt.Errorf("grpc %s (%s): %w", s.name, s.address, err):
 			default:
 			}
 		}
 	}()
-
-	return srv, boundAddr, nil
 }

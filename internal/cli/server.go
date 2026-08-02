@@ -35,6 +35,7 @@ type nodeRunFunc func(
 	service.StartupConfig,
 	xrpllog.Logger,
 	xrpllog.Logger,
+	func(),
 ) error
 
 func runNode(
@@ -45,8 +46,9 @@ func runNode(
 	startup service.StartupConfig,
 	rootLogger,
 	serverLog xrpllog.Logger,
+	ready func(),
 ) error {
-	return node.Run(ctx, cfg, configPath, standalone, startup, rootLogger, serverLog)
+	return node.RunWithReady(ctx, cfg, configPath, standalone, startup, rootLogger, serverLog, ready)
 }
 
 func (a *application) newServerCommand(options *serverOptions) *cobra.Command {
@@ -124,12 +126,15 @@ func (a *application) runServer(cmd *cobra.Command, options *serverOptions) erro
 
 	runCtx, cancel := context.WithCancelCause(cmd.Context())
 	defer cancel(nil)
-	auxiliary, err := startAuxiliaryServers(runCtx, cancel, os.Getenv, net.Listen)
+	auxiliary, err := bindAuxiliaryServers(os.Getenv, net.Listen)
 	if err != nil {
 		return err
 	}
-	for name, address := range auxiliary.Addresses() {
-		serverLog.Info(name+" enabled", "addr", address)
+	ready := func() {
+		auxiliary.Start(runCtx, cancel)
+		for name, address := range auxiliary.Addresses() {
+			serverLog.Info(name+" enabled", "addr", address)
+		}
 	}
 	nodeErr := a.deps.runNode(
 		runCtx,
@@ -139,6 +144,7 @@ func (a *application) runServer(cmd *cobra.Command, options *serverOptions) erro
 		startup,
 		rootLogger,
 		serverLog,
+		ready,
 	)
 	cancel(nil)
 	return errors.Join(nodeErr, auxiliary.Shutdown())
