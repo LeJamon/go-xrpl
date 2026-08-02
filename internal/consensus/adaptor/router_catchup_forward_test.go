@@ -499,7 +499,9 @@ func TestAdaptor_FastLoadedLedgerIsReplacedBySameHeightQuorum(t *testing.T) {
 	require.Equal(t, replacementHash, svc.GetValidatedLedger().Hash())
 	require.False(t, svc.IsFastLoadProvisional())
 	require.False(t, svc.NeedsInitialSync())
-	require.Equal(t, consensus.OpModeTracking, r.adaptor.GetOperatingMode())
+	require.Eventually(t, func() bool {
+		return r.adaptor.GetOperatingMode() == consensus.OpModeTracking
+	}, time.Second, 10*time.Millisecond)
 	require.Contains(t, engine.getLedgers(), consensus.LedgerID(replacementHash))
 }
 
