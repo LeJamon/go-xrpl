@@ -326,6 +326,12 @@ func TestValidationTracker_ProviderTypedNilResultStaysParked(t *testing.T) {
 	if got := vt.TrustedSupport(valid.ID()); got != 1 {
 		t.Fatalf("corrected typed-nil provider result did not restore support: got %d", got)
 	}
+	vt.mu.RLock()
+	tips, parked := len(vt.trieTips), len(vt.acquiring)
+	vt.mu.RUnlock()
+	if tips != 1 || parked != 0 {
+		t.Fatalf("corrected provider result did not repopulate the trie: tips=%d acquiring=%d", tips, parked)
+	}
 }
 
 func TestValidationTracker_TypedNilProviderDisablesSafely(t *testing.T) {

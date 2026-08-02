@@ -56,8 +56,9 @@ type cacheEntry struct {
 }
 
 type ancestryFlight struct {
-	done   chan struct{}
-	result *providerLedger
+	done     chan struct{}
+	result   *providerLedger
+	fallback *providerLedger
 }
 
 // NewAncestryProvider wraps the ledger service. A nil svc returns a
@@ -90,6 +91,7 @@ func (p *AncestryProvider) LedgerByID(id consensus.LedgerID) (ledgertrie.Ledger,
 	if p == nil || p.lookup == nil {
 		return nil, false
 	}
+	var fallback *providerLedger
 	if cached, ok := p.cacheGet(id); ok {
 		if !cached.partial {
 			return cached, true
@@ -101,15 +103,23 @@ func (p *AncestryProvider) LedgerByID(id consensus.LedgerID) (ledgertrie.Ledger,
 		if !p.headerAvailable(cached.retryHash, cached.retrySeq) {
 			return cached, true
 		}
-		p.cacheDelete(id, cached)
+		fallback = cached
 	}
 
 	p.mu.Lock()
 	if cached, ok := p.cacheGetLocked(id); ok {
-		p.mu.Unlock()
-		return cached, true
+		if fallback == nil || cached != fallback {
+			p.mu.Unlock()
+			return cached, true
+		}
+		elem := p.cache[id]
+		delete(p.cache, id)
+		p.lru.Remove(elem)
 	}
 	if flight, ok := p.inflight[id]; ok {
+		if flight.fallback == nil {
+			flight.fallback = fallback
+		}
 		p.mu.Unlock()
 		<-flight.done
 		if flight.result == nil {
@@ -120,7 +130,7 @@ func (p *AncestryProvider) LedgerByID(id consensus.LedgerID) (ledgertrie.Ledger,
 	if p.inflight == nil {
 		p.inflight = make(map[consensus.LedgerID]*ancestryFlight)
 	}
-	flight := &ancestryFlight{done: make(chan struct{})}
+	flight := &ancestryFlight{done: make(chan struct{}), fallback: fallback}
 	p.inflight[id] = flight
 	p.mu.Unlock()
 
@@ -128,9 +138,21 @@ func (p *AncestryProvider) LedgerByID(id consensus.LedgerID) (ledgertrie.Ledger,
 	return built, built != nil
 }
 
-func (p *AncestryProvider) buildAndFinish(id consensus.LedgerID, flight *ancestryFlight) (built *providerLedger) {
+func (p *AncestryProvider) buildAndFinish(
+	id consensus.LedgerID,
+	flight *ancestryFlight,
+) (built *providerLedger) {
 	defer func() {
 		p.mu.Lock()
+		if built == nil ||
+			(built.partial && flight.fallback != nil &&
+				(built.id != flight.fallback.id || built.seq != flight.fallback.seq ||
+					built.minSeq > flight.fallback.minSeq)) {
+			built = flight.fallback
+		}
+		if built != nil {
+			p.cachePutLocked(id, built)
+		}
 		flight.result = built
 		delete(p.inflight, id)
 		close(flight.done)
@@ -138,9 +160,6 @@ func (p *AncestryProvider) buildAndFinish(id consensus.LedgerID, flight *ancestr
 	}()
 
 	built = p.buildChain(id)
-	if built != nil {
-		p.cachePut(id, built)
-	}
 	return built
 }
 
@@ -164,20 +183,13 @@ func (p *AncestryProvider) cacheGetLocked(id consensus.LedgerID) (*providerLedge
 	return elem.Value.(*cacheEntry).pl, true
 }
 
-func (p *AncestryProvider) cacheDelete(id consensus.LedgerID, expected *providerLedger) {
-	p.mu.Lock()
-	defer p.mu.Unlock()
-	elem, ok := p.cache[id]
-	if !ok || elem.Value.(*cacheEntry).pl != expected {
-		return
-	}
-	delete(p.cache, id)
-	p.lru.Remove(elem)
-}
-
 func (p *AncestryProvider) cachePut(id consensus.LedgerID, pl *providerLedger) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
+	p.cachePutLocked(id, pl)
+}
+
+func (p *AncestryProvider) cachePutLocked(id consensus.LedgerID, pl *providerLedger) {
 	if elem, ok := p.cache[id]; ok {
 		// Keep the complete chain when a concurrent lookup only observed a
 		// transient gap. A complete result must be allowed to replace a
