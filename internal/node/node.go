@@ -132,7 +132,7 @@ func isFullGitHash(value string) bool {
 // Run assembles and starts every node subsystem from the parsed config, then
 // blocks until a terminating signal or fatal error. It is the composition root
 // extracted from the CLI so flag parsing and node wiring stay separable.
-func Run(ctx context.Context, appConfig *config.Config, configPath string, standalone bool, startup service.StartupConfig, rootLogger, serverLog xrpllog.Logger) error {
+func Run(ctx context.Context, appConfig *config.Config, configPath string, standalone bool, startup service.StartupConfig, rootLogger, serverLog xrpllog.Logger) (runErr error) {
 	if err := context.Cause(ctx); err != nil {
 		return err
 	}
@@ -158,7 +158,7 @@ func Run(ctx context.Context, appConfig *config.Config, configPath string, stand
 		stallWatchdog       *watchdog.Watchdog
 	)
 	defer func() {
-		doShutdown(httpSrvs, wsSrvs, wsServer, grpcSrv, ledgerService, ledgerCleaner, consensusComponents, rotator, db, repoManager, serverLog)
+		runErr = errors.Join(runErr, doShutdown(httpSrvs, wsSrvs, wsServer, grpcSrv, ledgerService, ledgerCleaner, consensusComponents, rotator, db, repoManager, serverLog))
 	}()
 
 	db, repoManager, err = setupStorage(appConfig, serverLog)
@@ -493,7 +493,7 @@ func Run(ctx context.Context, appConfig *config.Config, configPath string, stand
 		if appConfig.NodeDB.EarliestSeq > 0 || rotator != nil {
 			floor = minimumOnlineFloorFunc(retentionFloor)
 		}
-		consensusComponents, compErr = adaptor.NewFromConfig(appConfig, ledgerService, validationRepo, floor)
+		consensusComponents, compErr = adaptor.NewFromConfig(ctx, appConfig, ledgerService, validationRepo, floor)
 		if compErr != nil {
 			return fmt.Errorf("create consensus components: %w", compErr)
 		}
@@ -718,7 +718,7 @@ func Run(ctx context.Context, appConfig *config.Config, configPath string, stand
 		// The cache is shared — the router writes inbound manifests,
 		// the engine reads for ephemeral→master translation, and this
 		// RPC reads for external queries.
-		services.Manifests = consensusComponents.Manifests
+		services.Manifests = consensusComponents.ValidatorManifests
 
 		// Expose the publisher-list aggregator (when configured) to
 		// the `validators` and `validator_list_sites` RPC methods.
@@ -762,7 +762,7 @@ func Run(ctx context.Context, appConfig *config.Config, configPath string, stand
 			}
 			return out
 		}
-		if mc := consensusComponents.Manifests; mc != nil {
+		if mc := consensusComponents.ValidatorManifests; mc != nil {
 			// Mirrors rippled getJson at ValidatorList.cpp:1726-1734 —
 			// `signing_keys` only surfaces master→signing pairs for
 			// masters present in keyListings_, i.e. validators listed
@@ -896,8 +896,8 @@ func Run(ctx context.Context, appConfig *config.Config, configPath string, stand
 		// installed on the cache, fed by every accepted manifest
 		// regardless of source (overlay relay, startup, validator-list
 		// aggregator, local-manifest emit).
-		if consensusComponents.Manifests != nil {
-			consensusComponents.Manifests.SetOnAccepted(func(m *manifest.Manifest) {
+		if consensusComponents.ValidatorManifests != nil {
+			consensusComponents.ValidatorManifests.SubscribeAccepted(func(m *manifest.Manifest) {
 				publishManifestIfSubscribed(publisher, m)
 			})
 		}
@@ -910,7 +910,7 @@ func Run(ctx context.Context, appConfig *config.Config, configPath string, stand
 		if consensusComponents.Engine != nil {
 			consensusComponents.Engine.Subscribe(&rpcEventBridge{
 				publisher: publisher,
-				manifests: consensusComponents.Manifests,
+				manifests: consensusComponents.ValidatorManifests,
 				networkID: uint32(networkID),
 			})
 		}
@@ -1621,21 +1621,37 @@ func doShutdown(
 	kvDB nodestore.Database,
 	repoManager relationaldb.RepositoryManager,
 	logger xrpllog.Logger,
-) {
+) error {
+	var shutdownErr error
 	const drainTimeout = 30 * time.Second
 	ctx, cancel := context.WithTimeout(context.Background(), drainTimeout)
 	defer cancel()
 
 	logger.Info("Draining HTTP connections...")
 	for _, srv := range httpSrvs {
-		_ = srv.Shutdown(ctx)
+		if err := srv.Shutdown(ctx); err != nil {
+			shutdownErr = errors.Join(shutdownErr, fmt.Errorf("shutdown HTTP server: %w", err))
+			logger.Warn("HTTP server graceful shutdown failed", "err", err)
+			if closeErr := srv.Close(); closeErr != nil {
+				shutdownErr = errors.Join(shutdownErr, fmt.Errorf("close HTTP server: %w", closeErr))
+				logger.Warn("HTTP server forced close failed", "err", closeErr)
+			}
+		}
 	}
 	for _, srv := range wsSrvs {
-		_ = srv.Shutdown(ctx)
+		if err := srv.Shutdown(ctx); err != nil {
+			shutdownErr = errors.Join(shutdownErr, fmt.Errorf("shutdown WebSocket HTTP server: %w", err))
+			logger.Warn("WebSocket HTTP server graceful shutdown failed", "err", err)
+			if closeErr := srv.Close(); closeErr != nil {
+				shutdownErr = errors.Join(shutdownErr, fmt.Errorf("close WebSocket HTTP server: %w", closeErr))
+				logger.Warn("WebSocket HTTP server forced close failed", "err", closeErr)
+			}
+		}
 	}
 
 	if wsServer != nil {
 		if err := wsServer.Close(ctx); err != nil {
+			shutdownErr = errors.Join(shutdownErr, fmt.Errorf("close WebSocket server: %w", err))
 			logger.Warn("WebSocket server shutdown timed out", "err", err)
 		}
 	}
@@ -1651,6 +1667,7 @@ func doShutdown(
 		case <-stopped:
 		case <-ctx.Done():
 			grpcSrv.Stop()
+			shutdownErr = errors.Join(shutdownErr, fmt.Errorf("drain gRPC server: %w", ctx.Err()))
 			logger.Warn("gRPC server graceful shutdown timed out; forced stop")
 		}
 	}
@@ -1668,12 +1685,14 @@ func doShutdown(
 	if consensusComponents != nil {
 		stopErr := consensusComponents.Stop()
 		if stopErr != nil {
+			shutdownErr = errors.Join(shutdownErr, fmt.Errorf("stop consensus components: %w", stopErr))
 			logger.Warn("Consensus component shutdown failed", "err", stopErr)
 			if consensusComponents.Archive != nil {
 				waitCtx, waitCancel := context.WithTimeout(context.Background(), 5*time.Second)
 				terminalErr := consensusComponents.Archive.Close(waitCtx)
 				waitCancel()
 				if terminalErr != nil && !errors.Is(stopErr, terminalErr) {
+					shutdownErr = errors.Join(shutdownErr, fmt.Errorf("close validation archive: %w", terminalErr))
 					logger.Warn("Validation archive terminal shutdown failed", "err", terminalErr)
 				}
 			}
@@ -1706,16 +1725,19 @@ func doShutdown(
 	}
 	if kvDB != nil {
 		if err := kvDB.Close(); err != nil {
+			shutdownErr = errors.Join(shutdownErr, fmt.Errorf("close node store: %w", err))
 			logger.Warn("Node store close failed", "err", err)
 		}
 	}
 	if repoManager != nil {
 		if err := repoManager.Close(); err != nil {
+			shutdownErr = errors.Join(shutdownErr, fmt.Errorf("close relational DB: %w", err))
 			logger.Warn("Relational DB close failed", "err", err)
 		}
 	}
 
 	logger.Info("Shutdown complete")
+	return shutdownErr
 }
 
 // ledgerCleanerSource adapts the ledger service + node store to the
