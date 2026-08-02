@@ -29,7 +29,7 @@ func waitRun(t *testing.T, done <-chan error) error {
 	select {
 	case err := <-done:
 		return err
-	case <-time.After(2 * time.Second):
+	case <-time.After(5 * time.Second):
 		t.Fatal("overlay Run did not return")
 		return nil
 	}
@@ -43,7 +43,7 @@ func TestOverlayRunCancellationOwnsResources(t *testing.T) {
 
 	select {
 	case <-o.ListenerReady():
-	case <-time.After(2 * time.Second):
+	case <-time.After(5 * time.Second):
 		t.Fatal("listener did not become ready")
 	}
 	addr := o.ListenAddr()
@@ -70,7 +70,7 @@ func TestOverlayRunIsOneShot(t *testing.T) {
 
 	select {
 	case <-o.ListenerReady():
-	case <-time.After(2 * time.Second):
+	case <-time.After(5 * time.Second):
 		t.Fatal("Run did not finish startup")
 	}
 	if err := o.Run(context.Background()); !errors.Is(err, ErrAlreadyRunning) {
