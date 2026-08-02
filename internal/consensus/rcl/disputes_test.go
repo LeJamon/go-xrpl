@@ -77,14 +77,14 @@ func TestDisputeTracker_AllStalled(t *testing.T) {
 	parms := consensus.DefaultConsensusParms()
 
 	t.Run("empty set is not stalled", func(t *testing.T) {
-		dt := NewDisputeTracker()
+		dt := newDisputeTracker()
 		if dt.AllStalled(parms, true, parms.StalledRounds+1) {
 			t.Fatalf("empty dispute set must not be stalled")
 		}
 	})
 
 	t.Run("non-terminal avalanche state is not stalled", func(t *testing.T) {
-		dt := NewDisputeTracker()
+		dt := newDisputeTracker()
 		txID := makeTxID(1)
 		dt.CreateDispute(txID, nil, true)
 		d := dt.Dispute(txID)
@@ -100,7 +100,7 @@ func TestDisputeTracker_AllStalled(t *testing.T) {
 	})
 
 	t.Run("active flipping suppresses stall", func(t *testing.T) {
-		dt := NewDisputeTracker()
+		dt := newDisputeTracker()
 		txID := makeTxID(2)
 		dt.CreateDispute(txID, nil, true)
 		d := dt.Dispute(txID)
@@ -115,7 +115,7 @@ func TestDisputeTracker_AllStalled(t *testing.T) {
 	})
 
 	t.Run("frozen + one-sided tally stalls", func(t *testing.T) {
-		dt := NewDisputeTracker()
+		dt := newDisputeTracker()
 		txID := makeTxID(3)
 		dt.CreateDispute(txID, nil, true)
 		d := dt.Dispute(txID)
@@ -140,7 +140,7 @@ func TestDisputeTracker_AllStalled(t *testing.T) {
 	// always false, so the gate is bypassed and the predicate falls
 	// through to the avMIN_ROUNDS dwell + tally checks. Pin both arms.
 	t.Run("observer mode falls through to tally", func(t *testing.T) {
-		dt := NewDisputeTracker()
+		dt := newDisputeTracker()
 		txID := makeTxID(4)
 		dt.CreateDispute(txID, nil, false)
 		d := dt.Dispute(txID)
@@ -161,7 +161,7 @@ func TestDisputeTracker_AllStalled(t *testing.T) {
 	// non-stalled dispute in the set must short-circuit the aggregate
 	// to false, regardless of how many siblings are stalled.
 	t.Run("mixed disputes — one not stalled — aggregate false", func(t *testing.T) {
-		dt := NewDisputeTracker()
+		dt := newDisputeTracker()
 		stalledID := makeTxID(5)
 		dt.CreateDispute(stalledID, nil, true)
 		ds := dt.Dispute(stalledID)
@@ -186,7 +186,7 @@ func TestDisputeTracker_AllStalled(t *testing.T) {
 	})
 
 	t.Run("invalid avalanche state panics", func(t *testing.T) {
-		dt := NewDisputeTracker()
+		dt := newDisputeTracker()
 		txID := makeTxID(7)
 		dt.CreateDispute(txID, nil, true)
 		dt.Dispute(txID).AvalancheState = consensus.AvalancheStuck + 1
@@ -559,7 +559,7 @@ func TestConsensus_BowOut_UnVotesDisputes(t *testing.T) {
 // Acceptance criterion: issue #266 — "threshold rises 50 → 65 → 70 → 95
 // as avalanche state advances."
 func TestConsensus_AvalancheThresholdRamp(t *testing.T) {
-	dt := NewDisputeTracker()
+	dt := newDisputeTracker()
 	parms := consensus.DefaultConsensusParms()
 
 	txID := makeTxID(0xC)

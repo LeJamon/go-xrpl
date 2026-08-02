@@ -2,11 +2,13 @@ package manifest_test
 
 import (
 	"bytes"
+	"context"
 	"crypto/ed25519"
 	"encoding/hex"
 	"math/big"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/LeJamon/go-xrpl/codec/binarycodec"
 	rootcrypto "github.com/LeJamon/go-xrpl/crypto"
@@ -148,6 +150,51 @@ func TestManifest_RejectsOversizedPayloadBeforeDecode(t *testing.T) {
 	require.ErrorContains(t, err, "payload exceeds 1024 bytes")
 }
 
+func TestDispositionString(t *testing.T) {
+	tests := []struct {
+		disposition manifest.Disposition
+		want        string
+	}{
+		{manifest.Accepted, "accepted"},
+		{manifest.Stale, "stale"},
+		{manifest.Invalid, "invalid"},
+		{manifest.BadMasterKey, "bad_master_key"},
+		{manifest.BadEphemeralKey, "bad_ephemeral_key"},
+		{manifest.Disposition(99), "unknown"},
+	}
+	for _, test := range tests {
+		require.Equal(t, test.want, test.disposition.String())
+	}
+}
+
+func TestManifestSignaturesComeFromImmutableParsedState(t *testing.T) {
+	for _, revoked := range []bool{false, true} {
+		sequence := uint32(7)
+		if revoked {
+			sequence = manifest.RevokedSequence
+		}
+		wire, _, _ := buildManifest(t, sequence, revoked, 0x0a, 0x0b)
+		decoded, err := binarycodec.DecodeBytes(wire)
+		require.NoError(t, err)
+		parsed, err := manifest.Deserialize(wire)
+		require.NoError(t, err)
+
+		masterSignature, signature := parsed.Signatures()
+		require.Equal(t, decoded["MasterSignature"], masterSignature)
+		if revoked {
+			require.Empty(t, signature)
+		} else {
+			require.Equal(t, decoded["Signature"], signature)
+		}
+
+		serialized := parsed.Serialized()
+		serialized[0] ^= 0xff
+		gotMaster, gotSigning := parsed.Signatures()
+		require.Equal(t, masterSignature, gotMaster)
+		require.Equal(t, signature, gotSigning)
+	}
+}
+
 // deterministicEd25519Keypair returns a 33-byte xrpl-style public key
 // (0xED prefix + 32 bytes) and a 64-byte ed25519 private key seeded
 // from `seed`. Tests use a byte seed so they're reproducible and each
@@ -170,9 +217,10 @@ func TestManifest_OnAccepted_FiresOnce(t *testing.T) {
 
 	c := manifest.NewCache()
 	var fired []*manifest.Manifest
-	c.SetOnAccepted(func(got *manifest.Manifest) {
+	unsubscribe := c.SubscribeAccepted(func(got *manifest.Manifest) {
 		fired = append(fired, got)
 	})
+	defer unsubscribe()
 
 	if d := c.ApplyManifest(m); d != manifest.Accepted {
 		t.Fatalf("ApplyManifest: got %s want accepted", d)
@@ -180,8 +228,8 @@ func TestManifest_OnAccepted_FiresOnce(t *testing.T) {
 	if len(fired) != 1 {
 		t.Fatalf("OnAccepted fired %d times, want 1", len(fired))
 	}
-	if fired[0].MasterKey != m.MasterKey {
-		t.Fatalf("OnAccepted manifest mismatch: got master %x want %x", fired[0].MasterKey, m.MasterKey)
+	if fired[0].MasterKey() != m.MasterKey() {
+		t.Fatalf("OnAccepted manifest mismatch: got master %x want %x", fired[0].MasterKey(), m.MasterKey())
 	}
 
 	// Re-applying the same manifest is Stale; the callback must not fire again.
@@ -193,6 +241,290 @@ func TestManifest_OnAccepted_FiresOnce(t *testing.T) {
 	}
 }
 
+func TestManifest_CacheOwnsAcceptedState(t *testing.T) {
+	serialized, master, signing := buildManifest(t, 1, false, 0x12, 0x13)
+	m, err := manifest.Deserialize(serialized)
+	require.NoError(t, err)
+
+	c := manifest.NewCache()
+	var callback *manifest.Manifest
+	c.SubscribeAccepted(func(got *manifest.Manifest) {
+		callback = got
+		wire := got.Serialized()
+		wire[0] ^= 0xff
+	})
+	require.Equal(t, manifest.Accepted, c.ApplyManifest(m))
+	require.NotNil(t, callback)
+
+	inputWire := m.Serialized()
+	inputWire[0] ^= 0xff
+
+	require.Equal(t, signing, mustSigningKey(t, c, master))
+	require.Equal(t, uint32(1), mustSequence(t, c, master))
+	stored, ok := c.GetManifest(master)
+	require.True(t, ok)
+	require.Equal(t, serialized, stored)
+
+	stored[0] ^= 0xff
+	require.Equal(t, serialized, mustManifest(t, c, master))
+	all := c.SerializedAll()
+	require.Len(t, all, 1)
+	all[0][0] ^= 0xff
+	require.Equal(t, serialized, mustManifest(t, c, master))
+	mapping := c.MasterToSigning()
+	mapping[master] = [33]byte{}
+	require.Equal(t, signing, mustSigningKey(t, c, master))
+	snapshot := c.Snapshot()
+	require.Len(t, snapshot, 1)
+	snapshotWire := snapshot[0].Serialized()
+	snapshotWire[0] ^= 0xff
+	require.Equal(t, serialized, mustManifest(t, c, master))
+	require.Equal(t, uint32(1), mustSequence(t, c, master))
+}
+
+func TestManifest_SubscribersReceiveIndependentCopies(t *testing.T) {
+	serialized, master, _ := buildManifest(t, 1, false, 0x14, 0x15)
+	m, err := manifest.Deserialize(serialized)
+	require.NoError(t, err)
+
+	c := manifest.NewCache()
+	var first *manifest.Manifest
+	c.SubscribeAccepted(func(got *manifest.Manifest) {
+		first = got
+		wire := got.Serialized()
+		wire[0] ^= 0xff
+	})
+	var second *manifest.Manifest
+	c.SubscribeAccepted(func(got *manifest.Manifest) {
+		second = got
+	})
+	require.Equal(t, manifest.Accepted, c.ApplyManifest(m))
+	require.NotNil(t, first)
+	require.NotNil(t, second)
+	require.NotSame(t, first, second)
+	require.Equal(t, master, second.MasterKey())
+	require.Equal(t, serialized, second.Serialized())
+}
+
+func TestManifest_CallbackReentryPreservesOrder(t *testing.T) {
+	firstWire, _, _ := buildManifest(t, 1, false, 0x16, 0x17)
+	secondWire, _, _ := buildManifest(t, 2, false, 0x16, 0x18)
+	first, err := manifest.Deserialize(firstWire)
+	require.NoError(t, err)
+	second, err := manifest.Deserialize(secondWire)
+	require.NoError(t, err)
+
+	c := manifest.NewCache()
+	var delivered []uint32
+	c.SubscribeAccepted(func(got *manifest.Manifest) {
+		delivered = append(delivered, got.Sequence())
+		if got.Sequence() == 1 {
+			require.Equal(t, manifest.Accepted, c.ApplyManifest(second))
+		}
+	})
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		require.Equal(t, manifest.Accepted, c.ApplyManifest(first))
+	}()
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("ApplyManifest deadlocked during callback re-entry")
+	}
+	require.Equal(t, []uint32{1, 2}, delivered)
+}
+
+func TestManifest_SlowSubscriberDoesNotBlockConcurrentApply(t *testing.T) {
+	firstWire, _, _ := buildManifest(t, 1, false, 0x19, 0x1a)
+	secondWire, _, _ := buildManifest(t, 2, false, 0x19, 0x1b)
+	first, err := manifest.Deserialize(firstWire)
+	require.NoError(t, err)
+	second, err := manifest.Deserialize(secondWire)
+	require.NoError(t, err)
+
+	c := manifest.NewCache()
+	entered := make(chan struct{})
+	release := make(chan struct{})
+	c.SubscribeAccepted(func(got *manifest.Manifest) {
+		if got.Sequence() == 1 {
+			close(entered)
+			<-release
+		}
+	})
+	firstDone := make(chan struct{})
+	go func() {
+		defer close(firstDone)
+		require.Equal(t, manifest.Accepted, c.ApplyManifest(first))
+	}()
+	<-entered
+	secondDone := make(chan manifest.Disposition, 1)
+	go func() { secondDone <- c.ApplyManifest(second) }()
+	select {
+	case got := <-secondDone:
+		require.Equal(t, manifest.Accepted, got)
+	case <-time.After(time.Second):
+		t.Fatal("concurrent ApplyManifest blocked on slow subscriber")
+	}
+	close(release)
+	<-firstDone
+}
+
+func TestManifest_ConcurrentApply(t *testing.T) {
+	const count = 32
+	manifests := make([]*manifest.Manifest, 0, count)
+	for i := 0; i < count; i++ {
+		wire, _, _ := buildManifest(t, 1, false, byte(i+1), byte(i+65))
+		parsed, err := manifest.Deserialize(wire)
+		require.NoError(t, err)
+		manifests = append(manifests, parsed)
+	}
+
+	cache := manifest.NewCache()
+	accepted := make(chan struct{}, count)
+	cache.SubscribeAccepted(func(*manifest.Manifest) { accepted <- struct{}{} })
+	results := make(chan manifest.Disposition, count)
+	for _, parsed := range manifests {
+		go func() { results <- cache.ApplyManifest(parsed) }()
+	}
+	for range count {
+		require.Equal(t, manifest.Accepted, <-results)
+	}
+	require.Len(t, accepted, count)
+	require.Equal(t, uint64(count), cache.Sequence())
+	require.Len(t, cache.SerializedAll(), count)
+}
+
+func TestManifest_SubscriberPanicAndRemovalAreIsolated(t *testing.T) {
+	c := manifest.NewCache()
+	c.SubscribeAccepted(func(*manifest.Manifest) { panic("subscriber failure") })
+	count := 0
+	unsubscribe := c.SubscribeAccepted(func(*manifest.Manifest) { count++ })
+
+	firstWire, _, _ := buildManifest(t, 1, false, 0x1c, 0x1d)
+	first, err := manifest.Deserialize(firstWire)
+	require.NoError(t, err)
+	require.Equal(t, manifest.Accepted, c.ApplyManifest(first))
+	require.Equal(t, 1, count)
+
+	unsubscribe()
+	unsubscribe()
+	secondWire, _, _ := buildManifest(t, 2, false, 0x1c, 0x1e)
+	second, err := manifest.Deserialize(secondWire)
+	require.NoError(t, err)
+	require.Equal(t, manifest.Accepted, c.ApplyManifest(second))
+	require.Equal(t, 1, count)
+}
+
+func TestManifest_KeyCollisionDispositions(t *testing.T) {
+	tests := []struct {
+		name     string
+		first    [3]byte
+		second   [3]byte
+		expected manifest.Disposition
+	}{
+		{name: "same master same ephemeral higher sequence", first: [3]byte{1, 0x21, 0x22}, second: [3]byte{2, 0x21, 0x22}, expected: manifest.BadEphemeralKey},
+		{name: "different master same ephemeral", first: [3]byte{1, 0x23, 0x24}, second: [3]byte{1, 0x25, 0x24}, expected: manifest.BadEphemeralKey},
+		{name: "master already used as ephemeral", first: [3]byte{1, 0x26, 0x27}, second: [3]byte{1, 0x27, 0x28}, expected: manifest.BadMasterKey},
+		{name: "ephemeral already used as master", first: [3]byte{1, 0x29, 0x2a}, second: [3]byte{1, 0x2b, 0x29}, expected: manifest.BadEphemeralKey},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			firstWire, _, _ := buildManifest(t, uint32(test.first[0]), false, test.first[1], test.first[2])
+			secondWire, _, _ := buildManifest(t, uint32(test.second[0]), false, test.second[1], test.second[2])
+			first, err := manifest.Deserialize(firstWire)
+			require.NoError(t, err)
+			second, err := manifest.Deserialize(secondWire)
+			require.NoError(t, err)
+			c := manifest.NewCache()
+			require.Equal(t, manifest.Accepted, c.ApplyManifest(first))
+			require.Equal(t, test.expected, c.ApplyManifest(second))
+		})
+	}
+}
+
+func TestManifest_KeyCollisionsAreCacheLocal(t *testing.T) {
+	wire, _, _ := buildManifest(t, 1, false, 0x2c, 0x2d)
+	parsed, err := manifest.Deserialize(wire)
+	require.NoError(t, err)
+	validators := manifest.NewCache()
+	publishers := manifest.NewCache()
+	require.Equal(t, manifest.Accepted, validators.ApplyManifest(parsed))
+	require.Equal(t, manifest.Accepted, publishers.ApplyManifest(parsed))
+}
+
+func TestManifest_PersistencePreservesRevocationAndRotation(t *testing.T) {
+	revokedOldWire, revokedMaster, revokedSigning := buildManifest(t, 1, false, 0x2e, 0x2f)
+	revokedOld, err := manifest.Deserialize(revokedOldWire)
+	require.NoError(t, err)
+	revocationWire, _, _ := buildManifest(t, manifest.RevokedSequence, true, 0x2e, 0)
+	revocation, err := manifest.Deserialize(revocationWire)
+	require.NoError(t, err)
+
+	rotationOldWire, rotationMaster, rotationOldSigning := buildManifest(t, 1, false, 0x30, 0x31)
+	rotationOld, err := manifest.Deserialize(rotationOldWire)
+	require.NoError(t, err)
+	rotationWire, _, rotationSigning := buildManifest(t, 2, false, 0x30, 0x32)
+	rotation, err := manifest.Deserialize(rotationWire)
+	require.NoError(t, err)
+
+	before := manifest.NewCache()
+	require.Equal(t, manifest.Accepted, before.ApplyManifest(revokedOld))
+	require.Equal(t, manifest.Accepted, before.ApplyManifest(revocation))
+	require.Equal(t, manifest.Accepted, before.ApplyManifest(rotationOld))
+	require.Equal(t, manifest.Accepted, before.ApplyManifest(rotation))
+
+	rows := make([][]byte, 0, 2)
+	for _, entry := range before.Snapshot() {
+		rows = append(rows, entry.Serialized())
+	}
+	ctx := context.Background()
+	dir := t.TempDir()
+	store, err := manifest.OpenSQLiteStore(ctx, dir)
+	require.NoError(t, err)
+	require.NoError(t, store.Replace(ctx, manifest.StoredManifests{Validators: rows}))
+	require.NoError(t, store.Close())
+
+	store, err = manifest.OpenSQLiteStore(ctx, dir)
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, store.Close()) })
+	stored, err := store.Load(ctx)
+	require.NoError(t, err)
+	after := manifest.NewCache()
+	for _, raw := range stored.Validators {
+		parsed, parseErr := manifest.Deserialize(raw)
+		require.NoError(t, parseErr)
+		require.Equal(t, manifest.Accepted, after.ApplyManifest(parsed))
+	}
+
+	require.True(t, after.Revoked(revokedMaster))
+	require.Equal(t, manifest.Stale, after.ApplyManifest(revokedOld))
+	require.NotEqual(t, revokedMaster, after.GetMasterKey(revokedSigning))
+	require.Equal(t, rotationSigning, mustSigningKey(t, after, rotationMaster))
+	require.NotEqual(t, rotationMaster, after.GetMasterKey(rotationOldSigning))
+}
+
+func mustManifest(t *testing.T, c *manifest.Cache, master [33]byte) []byte {
+	t.Helper()
+	got, ok := c.GetManifest(master)
+	require.True(t, ok)
+	return got
+}
+
+func mustSequence(t *testing.T, c *manifest.Cache, master [33]byte) uint32 {
+	t.Helper()
+	got, ok := c.GetSequence(master)
+	require.True(t, ok)
+	return got
+}
+
+func mustSigningKey(t *testing.T, c *manifest.Cache, master [33]byte) [33]byte {
+	t.Helper()
+	got, ok := c.GetSigningKey(master)
+	require.True(t, ok)
+	return got
+}
+
 func TestManifest_WireDecode_ValidMasterSig_Accepted(t *testing.T) {
 	serialized, master, ephemeral := buildManifest(t, 1, false, 0x01, 0x02)
 
@@ -200,14 +532,14 @@ func TestManifest_WireDecode_ValidMasterSig_Accepted(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Deserialize: %v", err)
 	}
-	if m.MasterKey != master {
-		t.Fatalf("MasterKey mismatch: got %x want %x", m.MasterKey, master)
+	if m.MasterKey() != master {
+		t.Fatalf("MasterKey mismatch: got %x want %x", m.MasterKey(), master)
 	}
-	if m.SigningKey != ephemeral {
-		t.Fatalf("SigningKey mismatch: got %x want %x", m.SigningKey, ephemeral)
+	if m.SigningKey() != ephemeral {
+		t.Fatalf("SigningKey mismatch: got %x want %x", m.SigningKey(), ephemeral)
 	}
-	if m.Sequence != 1 {
-		t.Fatalf("Sequence: got %d want 1", m.Sequence)
+	if m.Sequence() != 1 {
+		t.Fatalf("Sequence: got %d want 1", m.Sequence())
 	}
 	if m.Revoked() {
 		t.Fatal("Revoked: true, want false")
@@ -405,6 +737,24 @@ func TestManifest_Revoked_WithEphemeral_Rejected(t *testing.T) {
 
 	if _, err := manifest.Deserialize(corrupted); err == nil {
 		t.Fatal("Deserialize: got nil, want rejection of revoked + ephemeral")
+	}
+}
+
+func TestManifest_Revoked_WithEmptyEphemeralField_Rejected(t *testing.T) {
+	serialized, _, _ := buildManifest(t, manifest.RevokedSequence, true, 0x0E, 0)
+	for _, field := range []string{"SigningPubKey", "Signature"} {
+		t.Run(field, func(t *testing.T) {
+			decoded, err := binarycodec.DecodeBytes(serialized)
+			require.NoError(t, err)
+			decoded[field] = ""
+			encoded, err := binarycodec.Encode(decoded)
+			require.NoError(t, err)
+			withEmptyField, err := hex.DecodeString(encoded)
+			require.NoError(t, err)
+
+			_, err = manifest.Deserialize(withEmptyField)
+			require.ErrorContains(t, err, "revoked manifest contains ephemeral key/signature")
+		})
 	}
 }
 
@@ -649,8 +999,8 @@ func TestManifest_Domain_Validation(t *testing.T) {
 				if err != nil {
 					t.Fatalf("Deserialize(%q): unexpected error: %v", tc.domain, err)
 				}
-				if m.Domain != tc.domain {
-					t.Errorf("Domain: got %q want %q", m.Domain, tc.domain)
+				if m.Domain() != tc.domain {
+					t.Errorf("Domain: got %q want %q", m.Domain(), tc.domain)
 				}
 				return
 			}
@@ -668,6 +1018,6 @@ func TestManifest_MaximumDomainFitsSerializedLimit(t *testing.T) {
 	require.Less(t, len(serialized), 1024)
 	parsed, err := manifest.Deserialize(serialized)
 	require.NoError(t, err)
-	require.Equal(t, domain, parsed.Domain)
+	require.Equal(t, domain, parsed.Domain())
 	require.NoError(t, parsed.Verify())
 }

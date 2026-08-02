@@ -43,7 +43,7 @@ func timerDrivenConvergenceEngine(t *testing.T, txSet *mockTxSet) (*Engine, *moc
 	engine.setPhase(consensus.PhaseEstablish)
 	engine.ourTxSet = txSet
 	engine.acquiredTxSets[txSet.ID()] = txSet
-	engine.disputeTracker = NewDisputeTracker()
+	engine.disputeTracker = newDisputeTracker()
 	engine.closeTime.haveConsensus = true
 	engine.state.OurPosition = &consensus.Proposal{
 		Round:          round,

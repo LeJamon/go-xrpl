@@ -96,8 +96,8 @@ type Engine struct {
 	censorship censorshipDetector
 
 	// proposalTracker owns the round-scoped peer-signal maps. Accessed only
-	// under e.mu (see ProposalTracker).
-	proposalTracker *ProposalTracker
+	// under e.mu (see proposalTracker).
+	proposalTracker *proposalTracker
 
 	// validationTracker accumulates trusted validations across ledgers and
 	// fires the fully-validated callback at quorum, driving
@@ -107,7 +107,7 @@ type Engine struct {
 	// disputeTracker owns the per-tx DisputedTx entries and per-peer vote
 	// map. Written by createDisputesAgainst / OnProposal / OnTxSet /
 	// UpdateOurPositions, read during checkConvergence.
-	disputeTracker *DisputeTracker
+	disputeTracker *disputeTracker
 
 	// acquiredTxSets caches peer tx sets in memory by TxSetID, populated by
 	// our BuildTxSet output and OnTxSet. Dispute wiring reads it to learn
@@ -203,7 +203,6 @@ type Engine struct {
 	ourLastValidatedTime time.Time
 
 	// Stats
-	roundCount     uint64
 	consensusCount uint64
 
 	// archive persists stale validations dropped by the tracker (optional;
@@ -381,9 +380,9 @@ func NewEngine(adaptor consensus.Adaptor, config Config) *Engine {
 		eventBus:        consensus.NewEventBus(100),
 		mode:            consensus.ModeObserving,
 		phase:           consensus.PhaseAccepted,
-		proposalTracker: NewProposalTracker(),
+		proposalTracker: newProposalTracker(),
 		closeTime:       newCloseTimeTracker(),
-		disputeTracker:  NewDisputeTracker(),
+		disputeTracker:  newDisputeTracker(),
 		acquiredTxSets:  make(map[consensus.TxSetID]consensus.TxSet),
 		comparesTxSets:  make(map[consensus.TxSetID]struct{}),
 		parms:           consensus.DefaultConsensusParms(),
@@ -488,7 +487,7 @@ func (e *Engine) Start(ctx context.Context) error {
 	// Wire the validation tracker: trusted set + quorum from the adaptor;
 	// its callback flips the ledger service's validated_ledger pointer.
 	trusted, quorum := e.adaptor.GetTrustedValidatorsAndQuorum()
-	e.validationTracker = NewValidationTracker(quorum, 5*time.Minute)
+	e.validationTracker = NewValidationTracker(quorum)
 	e.validationTracker.SetTrustedAndQuorum(trusted, quorum)
 	e.validationTracker.SetQuorumUnavailableFunc(e.adaptor.IsQuorumUnavailable)
 	if wired, ok := e.adaptor.(consensus.WireableAdaptor); ok {
@@ -767,7 +766,7 @@ func (e *Engine) startRoundLocked(round consensus.RoundID, proposing, recovering
 	// Reset tracking maps. Dead-node set is round-scoped, so a validator that
 	// bowed out last round can rejoin.
 	e.proposalTracker.ResetRound()
-	e.disputeTracker = NewDisputeTracker()
+	e.disputeTracker = newDisputeTracker()
 	e.acquiredTxSets = make(map[consensus.TxSetID]consensus.TxSet)
 	e.comparesTxSets = make(map[consensus.TxSetID]struct{})
 	e.peerUnchangedCounter = 0
@@ -815,7 +814,6 @@ func (e *Engine) startRoundLocked(round consensus.RoundID, proposing, recovering
 		}
 	}
 
-	e.roundCount++
 	return nil
 }
 

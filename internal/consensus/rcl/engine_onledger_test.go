@@ -22,7 +22,7 @@ func chainLedger(seq uint32, idb, pb byte) *mockLedger {
 
 func stageQuorumValidatedLedger(e *Engine, a *mockAdaptor, l consensus.Ledger) {
 	nodes := []consensus.NodeID{{0x21}, {0x22}}
-	e.validationTracker = NewValidationTracker(len(nodes), 5*time.Minute)
+	e.validationTracker = NewValidationTracker(len(nodes))
 	e.validationTracker.SetTrustedAndQuorum(nodes, len(nodes))
 	e.validationTracker.SetNow(a.Now)
 	now := a.Now()

@@ -57,12 +57,6 @@ func (e *Engine) run() {
 	}
 }
 
-// MissedHeartbeats returns the count of dropped heartbeat ticks since
-// start.
-func (e *Engine) MissedHeartbeats() uint64 {
-	return e.missedHeartbeats.Load()
-}
-
 // timerEntry is the single heartbeat dispatch; runs each
 // ledgerGRANULARITY and dispatches on current phase.
 func (e *Engine) timerEntry() {
@@ -429,7 +423,7 @@ func (e *Engine) handleWrongLedger(netLedgerID consensus.LedgerID, target consen
 	// Clear consensus state and replay (only for a new target ledger).
 	if e.prevLedger == nil || netLedgerID != e.prevLedger.ID() {
 		e.proposalTracker.ResetProposals()
-		e.disputeTracker = NewDisputeTracker()
+		e.disputeTracker = newDisputeTracker()
 		e.acquiredTxSets = make(map[consensus.TxSetID]consensus.TxSet)
 		e.comparesTxSets = make(map[consensus.TxSetID]struct{})
 		e.peerUnchangedCounter = 0

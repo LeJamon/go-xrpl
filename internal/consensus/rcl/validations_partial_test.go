@@ -16,7 +16,7 @@ import (
 // but is excluded from the full-validation quorum count, so it cannot by
 // itself fire the fully-validated callback. A later FULL validation does.
 func TestValidationTracker_TrustedPartialSteersButNotQuorum(t *testing.T) {
-	vt := NewValidationTracker(1, 5*time.Minute) // quorum = 1
+	vt := NewValidationTracker(1) // quorum = 1
 	now := time.Now()
 	vt.SetNow(func() time.Time { return now })
 
@@ -80,7 +80,7 @@ func TestValidationTracker_TrustedPartialSteersButNotQuorum(t *testing.T) {
 func TestValidationTracker_AddStatus_Classification(t *testing.T) {
 	base := time.Unix(1_700_000_000, 0)
 	now := base
-	vt := NewValidationTracker(10, 5*time.Minute)
+	vt := NewValidationTracker(10)
 	vt.SetNow(func() time.Time { return now })
 
 	node := consensus.NodeID{0x9}
@@ -141,7 +141,7 @@ func TestValidationTracker_AddStatus_Classification(t *testing.T) {
 // branch, so a partial equivocation is flagged just like a full one.
 func TestValidationTracker_AddStatus_PartialDoubleSign(t *testing.T) {
 	base := time.Unix(1_700_000_000, 0)
-	vt := NewValidationTracker(10, 5*time.Minute)
+	vt := NewValidationTracker(10)
 	vt.SetNow(func() time.Time { return base })
 
 	node := consensus.NodeID{0x7}

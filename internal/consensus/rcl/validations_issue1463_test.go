@@ -12,7 +12,7 @@ import (
 
 func TestValidationTrackerIssue1463_ExactHashAndSequenceFinality(t *testing.T) {
 	now := time.Date(2026, 7, 31, 12, 0, 0, 0, time.UTC)
-	vt := NewValidationTracker(2, 5*time.Minute)
+	vt := NewValidationTracker(2)
 	vt.SetNow(func() time.Time { return now })
 	nodes := []consensus.NodeID{{1}, {2}, {3}, {4}}
 	vt.SetTrusted(nodes)
@@ -62,7 +62,7 @@ func TestValidationTrackerIssue1463_TrustQuorumNegativeUNLRecheck(t *testing.T) 
 	now := time.Date(2026, 7, 31, 12, 0, 0, 0, time.UTC)
 	nodes := []consensus.NodeID{{1}, {2}}
 	ledger := consensus.LedgerID{0xB}
-	vt := NewValidationTracker(2, 5*time.Minute)
+	vt := NewValidationTracker(2)
 	vt.SetNow(func() time.Time { return now })
 	fires := 0
 	vt.SetFullyValidatedCallback(func(id consensus.LedgerID, seq uint32) {
@@ -114,7 +114,7 @@ func TestValidationTrackerIssue1463_ZeroQuorumNeedsTrustedFullEvidence(t *testin
 	now := time.Date(2026, 7, 31, 12, 0, 0, 0, time.UTC)
 	n1, n2 := consensus.NodeID{1}, consensus.NodeID{2}
 	ledger := consensus.LedgerID{0xC}
-	vt := NewValidationTracker(0, 5*time.Minute)
+	vt := NewValidationTracker(0)
 	vt.SetNow(func() time.Time { return now })
 	vt.SetTrusted([]consensus.NodeID{n1})
 	fires := 0
@@ -145,7 +145,7 @@ func TestValidationTrackerIssue1463_LiveGateRecheck(t *testing.T) {
 	now := time.Date(2026, 7, 31, 12, 0, 0, 0, time.UTC)
 	node := consensus.NodeID{1}
 	ledger := consensus.LedgerID{0xC1}
-	vt := NewValidationTracker(1, 5*time.Minute)
+	vt := NewValidationTracker(1)
 	vt.SetNow(func() time.Time { return now })
 	vt.SetTrusted([]consensus.NodeID{node})
 	unavailable := true
@@ -174,7 +174,7 @@ func TestValidationTrackerIssue1463_PendingResolverHonorsLiveGate(t *testing.T) 
 	now := time.Date(2026, 7, 31, 12, 0, 0, 0, time.UTC)
 	node := consensus.NodeID{1}
 	ledger := consensus.LedgerID{0xC2}
-	vt := NewValidationTracker(1, 5*time.Minute)
+	vt := NewValidationTracker(1)
 	vt.SetNow(func() time.Time { return now })
 	vt.SetTrusted([]consensus.NodeID{node})
 	unavailable := true
@@ -201,7 +201,7 @@ func TestValidationTrackerIssue1463_DemotionCancelsQueuedFinality(t *testing.T) 
 	now := time.Date(2026, 7, 31, 12, 0, 0, 0, time.UTC)
 	n1, n2 := consensus.NodeID{1}, consensus.NodeID{2}
 	first, second := consensus.LedgerID{0xD1}, consensus.LedgerID{0xD2}
-	vt := NewValidationTracker(2, 5*time.Minute)
+	vt := NewValidationTracker(2)
 	vt.SetNow(func() time.Time { return now })
 	vt.SetTrusted([]consensus.NodeID{n1, n2})
 	entered := make(chan struct{})
@@ -260,7 +260,7 @@ func TestValidationTrackerIssue1463_FinalityNotificationOrder(t *testing.T) {
 	// Same-sequence hashes must use lexical hash order; lower sequence wins
 	// regardless of insertion/map iteration order.
 	lowA, lowB, high := consensus.LedgerID{0x10}, consensus.LedgerID{0x20}, consensus.LedgerID{0x30}
-	vt := NewValidationTracker(1, 5*time.Minute)
+	vt := NewValidationTracker(1)
 	vt.SetNow(func() time.Time { return now })
 	vt.SetTrusted([]consensus.NodeID{n1, n2, n3})
 	add := func(node consensus.NodeID, id consensus.LedgerID, seq uint32) {
@@ -294,7 +294,7 @@ func TestValidationTrackerIssue1463_TrustedRemovalRearmsEvidence(t *testing.T) {
 	now := time.Date(2026, 7, 31, 12, 0, 0, 0, time.UTC)
 	node := consensus.NodeID{1}
 	ledger := consensus.LedgerID{0xD3}
-	vt := NewValidationTracker(1, 5*time.Minute)
+	vt := NewValidationTracker(1)
 	vt.SetNow(func() time.Time { return now })
 	vt.SetTrusted([]consensus.NodeID{node})
 	fires := 0
@@ -322,7 +322,7 @@ func TestValidationTrackerIssue1463_ValidationDeepClone(t *testing.T) {
 	now := time.Date(2026, 7, 31, 12, 0, 0, 0, time.UTC)
 	node := consensus.NodeID{1}
 	ledger := consensus.LedgerID{0xD}
-	vt := NewValidationTracker(1, 5*time.Minute)
+	vt := NewValidationTracker(1)
 	vt.SetNow(func() time.Time { return now })
 	vt.SetTrusted([]consensus.NodeID{node})
 
@@ -370,7 +370,7 @@ func TestValidationTrackerIssue1463_CurrentTipUsesSigningTime(t *testing.T) {
 	oldID := consensus.LedgerID{0xE}
 	olderID := consensus.LedgerID{0xF}
 	newerID := consensus.LedgerID{0x10}
-	vt := NewValidationTracker(10, 5*time.Minute)
+	vt := NewValidationTracker(10)
 	vt.SetNow(func() time.Time { return now })
 	vt.SetTrusted([]consensus.NodeID{node})
 
@@ -410,7 +410,7 @@ func TestValidationTrackerIssue1463_NegativeUNLPreservesAcquiring(t *testing.T) 
 	provider := newMapAncestryProvider()
 	provider.add(held)
 	node := consensus.NodeID{1}
-	vt := NewValidationTracker(1, 5*time.Minute)
+	vt := NewValidationTracker(1)
 	vt.SetNow(func() time.Time { return now })
 	vt.SetTrusted([]consensus.NodeID{node})
 	vt.SetLedgerAncestryProvider(provider)

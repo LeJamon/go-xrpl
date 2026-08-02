@@ -266,6 +266,29 @@ type manifestPublisherSpy struct {
 	events      []*rpc.ManifestEvent
 }
 
+func unverifiedManifest(t testing.TB, sequence uint32) *manifest.Manifest {
+	t.Helper()
+	encoded, err := binarycodec.Encode(map[string]any{
+		"PublicKey":       "ED" + strings.Repeat("00", 32),
+		"SigningPubKey":   "ED" + strings.Repeat("01", 32),
+		"Sequence":        sequence,
+		"MasterSignature": "00",
+		"Signature":       "00",
+	})
+	if err != nil {
+		t.Fatalf("encode manifest: %v", err)
+	}
+	wire, err := hex.DecodeString(encoded)
+	if err != nil {
+		t.Fatalf("decode manifest: %v", err)
+	}
+	parsed, err := manifest.Deserialize(wire)
+	if err != nil {
+		t.Fatalf("deserialize manifest: %v", err)
+	}
+	return parsed
+}
+
 func (p *manifestPublisherSpy) PublishManifest(event *rpc.ManifestEvent) {
 	p.events = append(p.events, event)
 }
@@ -276,7 +299,7 @@ func (p *manifestPublisherSpy) GetSubscriberCount(stream types.SubscriptionType)
 }
 
 func TestPublishManifestIfSubscribed(t *testing.T) {
-	m := &manifest.Manifest{Sequence: 7}
+	m := unverifiedManifest(t, 7)
 
 	withoutSubscribers := &manifestPublisherSpy{}
 	publishManifestIfSubscribed(withoutSubscribers, m)
@@ -292,14 +315,14 @@ func TestPublishManifestIfSubscribed(t *testing.T) {
 	if len(withSubscriber.events) != 1 {
 		t.Fatalf("published %d events, want 1", len(withSubscriber.events))
 	}
-	if withSubscriber.events[0] == nil || withSubscriber.events[0].Sequence != m.Sequence {
+	if withSubscriber.events[0] == nil || withSubscriber.events[0].Sequence != m.Sequence() {
 		t.Fatalf("published event = %+v", withSubscriber.events[0])
 	}
 }
 
 func BenchmarkPublishManifestWithoutSubscribers(b *testing.B) {
 	publisher := &manifestPublisherSpy{}
-	m := &manifest.Manifest{Sequence: 7}
+	m := unverifiedManifest(b, 7)
 	b.ReportAllocs()
 	for b.Loop() {
 		publishManifestIfSubscribed(publisher, m)

@@ -2,9 +2,14 @@ package rcl
 
 import (
 	"errors"
+	"runtime"
+	"sync"
+	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/LeJamon/go-xrpl/internal/consensus"
+	"github.com/LeJamon/go-xrpl/internal/consensus/ledgertrie"
 )
 
 // fakeHeader is a minimal LedgerHeader for unit tests. We build a
@@ -123,6 +128,378 @@ func TestAncestryProvider_MissingLinkTruncates(t *testing.T) {
 	if lgr.Ancestor(3)[1] != 'b' {
 		t.Errorf("Ancestor(3) tag should be 'b'")
 	}
+}
+
+func TestAncestryProvider_MissingLinkRepairsAfterArrival(t *testing.T) {
+	tip, byHash := buildChain(5, 'r')
+	var missingHash [32]byte
+	for hash, header := range byHash {
+		if header.Sequence() == 3 {
+			missingHash = hash
+			break
+		}
+	}
+	missing := byHash[missingHash]
+	delete(byHash, missingHash)
+
+	p := newTestProvider(byHash)
+	first, ok := p.LedgerByID(consensus.LedgerID(tip.hash))
+	if !ok {
+		t.Fatal("partial lookup should resolve the tip suffix")
+	}
+	if first.MinSeq() != 3 {
+		t.Fatalf("partial MinSeq = %d, want 3", first.MinSeq())
+	}
+
+	byHash[missingHash] = missing
+	second, ok := p.LedgerByID(consensus.LedgerID(tip.hash))
+	if !ok {
+		t.Fatal("repaired lookup should resolve")
+	}
+	if second.MinSeq() != 1 {
+		t.Fatalf("repaired MinSeq = %d, want 1", second.MinSeq())
+	}
+	if got := second.Ancestor(2); got[1] != 'r' {
+		t.Fatalf("repaired Ancestor(2) = %x, want chain tag r", got)
+	}
+}
+
+func TestAncestryProvider_RetainsPartialWhenRepairIsTransientlyUnavailable(t *testing.T) {
+	tip, byHash := buildChain(5, 'u')
+	var missingHash [32]byte
+	var unstableHash [32]byte
+	for hash, header := range byHash {
+		switch header.Sequence() {
+		case 3:
+			missingHash = hash
+		case 4:
+			unstableHash = hash
+		}
+	}
+	missing := byHash[missingHash]
+	unstable := byHash[unstableHash]
+	delete(byHash, missingHash)
+
+	failTip := false
+	p := newAncestryProviderFromLookup(func(hash [32]byte) (LedgerHeader, error) {
+		if failTip && hash == tip.hash {
+			failTip = false
+			return nil, errors.New("transient tip failure")
+		}
+		if header, ok := byHash[hash]; ok {
+			return header, nil
+		}
+		return nil, errors.New("not found")
+	})
+	partial, ok := p.LedgerByID(consensus.LedgerID(tip.hash))
+	if !ok {
+		t.Fatal("partial lookup should resolve the tip suffix")
+	}
+	if got := partial.MinSeq(); got != 3 {
+		t.Fatalf("partial MinSeq = %d, want 3", got)
+	}
+
+	byHash[missingHash] = missing
+	failTip = true
+	retained, ok := p.LedgerByID(consensus.LedgerID(tip.hash))
+	if !ok {
+		t.Fatal("transient repair failure should retain the cached suffix")
+	}
+	if got := retained.MinSeq(); got != 3 {
+		t.Fatalf("retained MinSeq = %d, want 3", got)
+	}
+
+	delete(byHash, unstableHash)
+	retained, ok = p.LedgerByID(consensus.LedgerID(tip.hash))
+	if !ok {
+		t.Fatal("poorer partial repair should retain the cached suffix")
+	}
+	if got := retained.MinSeq(); got != 3 {
+		t.Fatalf("retained MinSeq after poorer repair = %d, want 3", got)
+	}
+	byHash[unstableHash] = unstable
+
+	repaired, ok := p.LedgerByID(consensus.LedgerID(tip.hash))
+	if !ok {
+		t.Fatal("subsequent repair should resolve")
+	}
+	if got := repaired.MinSeq(); got != 1 {
+		t.Fatalf("repaired MinSeq = %d, want 1", got)
+	}
+}
+
+func TestAncestryProvider_EvictedPartialJoinsInflightFallback(t *testing.T) {
+	tip, byHash := buildChain(5, 'v')
+	var missingHash [32]byte
+	for hash, header := range byHash {
+		if header.Sequence() == 3 {
+			missingHash = hash
+			break
+		}
+	}
+	missing := byHash[missingHash]
+	delete(byHash, missingHash)
+
+	p := newTestProvider(byHash)
+	partial, ok := p.LedgerByID(consensus.LedgerID(tip.hash))
+	if !ok {
+		t.Fatal("partial lookup should resolve the tip suffix")
+	}
+	byHash[missingHash] = missing
+
+	retryProbe := make(chan struct{})
+	releaseRetryProbe := make(chan struct{})
+	buildTip := make(chan struct{})
+	releaseBuildTip := make(chan struct{})
+	p.lookup = func(hash [32]byte) (LedgerHeader, error) {
+		switch hash {
+		case missingHash:
+			close(retryProbe)
+			<-releaseRetryProbe
+			return missing, nil
+		case tip.hash:
+			close(buildTip)
+			<-releaseBuildTip
+			return nil, errors.New("transient tip failure")
+		default:
+			return byHash[hash], nil
+		}
+	}
+
+	type result struct {
+		ledger ledgertrie.Ledger
+		ok     bool
+	}
+	id := consensus.LedgerID(tip.hash)
+	first := make(chan result, 1)
+	go func() {
+		ledger, resolved := p.LedgerByID(id)
+		first <- result{ledger: ledger, ok: resolved}
+	}()
+	<-retryProbe
+
+	p.mu.Lock()
+	elem := p.cache[id]
+	delete(p.cache, id)
+	p.lru.Remove(elem)
+	p.mu.Unlock()
+
+	second := make(chan result, 1)
+	go func() {
+		ledger, resolved := p.LedgerByID(id)
+		second <- result{ledger: ledger, ok: resolved}
+	}()
+	<-buildTip
+	close(releaseRetryProbe)
+
+	deadline := time.NewTimer(time.Second)
+	defer deadline.Stop()
+	for {
+		p.mu.Lock()
+		flight := p.inflight[id]
+		hasFallback := flight != nil && flight.fallback != nil
+		p.mu.Unlock()
+		if hasFallback {
+			break
+		}
+		select {
+		case <-deadline.C:
+			t.Fatal("retrying caller did not attach its cached fallback to the in-flight build")
+		default:
+			runtime.Gosched()
+		}
+	}
+	close(releaseBuildTip)
+
+	for _, got := range []result{<-first, <-second} {
+		if !got.ok {
+			t.Fatal("shared transient failure should retain the cached suffix")
+		}
+		if minSeq := got.ledger.MinSeq(); minSeq != partial.MinSeq() {
+			t.Fatalf("retained MinSeq = %d, want %d", minSeq, partial.MinSeq())
+		}
+	}
+}
+
+func TestAncestryProvider_RejectsParentHashMismatchAndRepairs(t *testing.T) {
+	tip, byHash := buildChain(5, 'm')
+	var parentHash [32]byte
+	var correct LedgerHeader
+	for hash, header := range byHash {
+		if header.Sequence() == 4 {
+			parentHash = hash
+			correct = header
+			break
+		}
+	}
+	wrongHash := parentHash
+	wrongHash[0]++
+	malformed := &fakeHeader{seq: 4, hash: wrongHash, parent: correct.ParentHash()}
+	byHash[parentHash] = malformed
+
+	p := newTestProvider(byHash)
+	partial, ok := p.LedgerByID(consensus.LedgerID(tip.hash))
+	if !ok {
+		t.Fatal("hash-mismatched parent should leave a retryable suffix")
+	}
+	pl, ok := partial.(*providerLedger)
+	if !ok || !pl.retryable() {
+		t.Fatalf("hash-mismatched parent returned non-retryable ledger: %#v", partial)
+	}
+	if got := partial.MinSeq(); got != 4 {
+		t.Fatalf("hash-mismatched parent MinSeq = %d, want 4", got)
+	}
+
+	byHash[parentHash] = correct
+	repaired, ok := p.LedgerByID(consensus.LedgerID(tip.hash))
+	if !ok {
+		t.Fatal("corrected parent did not rebuild full chain")
+	}
+	if got := repaired.MinSeq(); got != 1 {
+		t.Fatalf("corrected parent MinSeq = %d, want 1", got)
+	}
+}
+
+func TestAncestryProvider_RejectsParentSequenceGapAndRepairs(t *testing.T) {
+	tip, byHash := buildChain(5, 'n')
+	var parentHash [32]byte
+	var correct LedgerHeader
+	for hash, header := range byHash {
+		if header.Sequence() == 4 {
+			parentHash = hash
+			correct = header
+			break
+		}
+	}
+	byHash[parentHash] = &fakeHeader{seq: 2, hash: parentHash, parent: correct.ParentHash()}
+
+	p := newTestProvider(byHash)
+	partial, ok := p.LedgerByID(consensus.LedgerID(tip.hash))
+	if !ok {
+		t.Fatal("sequence-gap parent should leave a retryable suffix")
+	}
+	pl, ok := partial.(*providerLedger)
+	if !ok || !pl.retryable() {
+		t.Fatalf("sequence-gap parent returned non-retryable ledger: %#v", partial)
+	}
+	if got := partial.MinSeq(); got != 4 {
+		t.Fatalf("sequence-gap parent MinSeq = %d, want 4", got)
+	}
+
+	byHash[parentHash] = correct
+	repaired, ok := p.LedgerByID(consensus.LedgerID(tip.hash))
+	if !ok {
+		t.Fatal("corrected sequence gap did not rebuild full chain")
+	}
+	if got := repaired.MinSeq(); got != 1 {
+		t.Fatalf("corrected sequence gap MinSeq = %d, want 1", got)
+	}
+}
+
+func TestAncestryProvider_NilHeadersAreUnknown(t *testing.T) {
+	tip, byHash := buildChain(3, 'z')
+	var typedNil *fakeHeader
+	byHash[tip.hash] = typedNil
+	p := newTestProvider(byHash)
+	if _, ok := p.LedgerByID(consensus.LedgerID(tip.hash)); ok {
+		t.Fatal("typed-nil tip header must not resolve")
+	}
+
+	tip, byHash = buildChain(3, 'y')
+	var parentHash [32]byte
+	for hash, header := range byHash {
+		if header.Sequence() == 2 {
+			parentHash = hash
+			break
+		}
+	}
+	byHash[parentHash] = typedNil
+	p = newTestProvider(byHash)
+	partial, ok := p.LedgerByID(consensus.LedgerID(tip.hash))
+	if !ok || partial.MinSeq() != 2 {
+		t.Fatalf("typed-nil parent should be retryable suffix: ok=%v ledger=%v", ok, partial)
+	}
+}
+
+func TestAncestryProvider_SameTipConcurrentLookupIsBounded(t *testing.T) {
+	tip, byHash := buildChain(12, 'q')
+	const workers = 32
+	var calls atomic.Int32
+	start := make(chan struct{})
+	p := newAncestryProviderFromLookup(func(hash [32]byte) (LedgerHeader, error) {
+		calls.Add(1)
+		if lh, ok := byHash[hash]; ok {
+			return lh, nil
+		}
+		return nil, errors.New("not found")
+	})
+
+	var wg sync.WaitGroup
+	for range workers {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			<-start
+			lgr, ok := p.LedgerByID(consensus.LedgerID(tip.hash))
+			if !ok {
+				t.Errorf("concurrent lookup returned ok=false")
+				return
+			}
+			if lgr.MinSeq() != 1 {
+				t.Errorf("concurrent lookup returned min=%d, want 1", lgr.MinSeq())
+			}
+		}()
+	}
+	close(start)
+	wg.Wait()
+
+	// The shared in-flight result keeps cold fan-in close to one ancestry
+	// walk. Allow a small scheduling tail of late callers to begin a second
+	// flight, but reject the full workers-times-depth hammering this test
+	// exposes without the gate.
+	if got, want := calls.Load(), int32(workers*2); got > want {
+		t.Fatalf("same-tip lookup duplicated service work: got %d calls, want <=%d", got, want)
+	}
+}
+
+func TestAncestryProvider_UsesEmbeddedHashOfSeq(t *testing.T) {
+	const tipSeq = uint32(5)
+	tip, byHash := buildChain(tipSeq, 's')
+
+	hashes := make(map[uint32][32]byte, tipSeq)
+	for hash, header := range byHash {
+		hashes[header.Sequence()] = hash
+	}
+	byHash[tip.hash] = &skipListHeader{fakeHeader: *tip, ancestors: hashes}
+	for hash, header := range byHash {
+		if header.Sequence() < tipSeq {
+			delete(byHash, hash)
+		}
+	}
+
+	p := newTestProvider(byHash)
+	lgr, ok := p.LedgerByID(consensus.LedgerID(tip.hash))
+	if !ok {
+		t.Fatal("embedded ancestry should resolve without parent records")
+	}
+	if lgr.MinSeq() != 1 {
+		t.Fatalf("embedded ancestry MinSeq = %d, want 1", lgr.MinSeq())
+	}
+	for seq := uint32(1); seq < tipSeq; seq++ {
+		if got, want := lgr.Ancestor(seq), consensus.LedgerID(hashes[seq]); got != want {
+			t.Fatalf("Ancestor(%d) = %x, want %x", seq, got, want)
+		}
+	}
+}
+
+type skipListHeader struct {
+	fakeHeader
+	ancestors map[uint32][32]byte
+}
+
+func (h *skipListHeader) HashOfSeq(seq uint32) ([32]byte, bool, error) {
+	hash, ok := h.ancestors[seq]
+	return hash, ok, nil
 }
 
 func TestAncestryProvider_BoundedAtMaxAncestors(t *testing.T) {
@@ -298,6 +675,39 @@ func TestAncestryProvider_SplicesCachedPrefix(t *testing.T) {
 	extra := calls - warmCalls
 	if extra > 6 {
 		t.Errorf("splice didn't short-circuit: extra lookups = %d (expected ≤6)", extra)
+	}
+}
+
+func TestAncestryProvider_BypassesWrongSequenceCachedParent(t *testing.T) {
+	tip, byHash := buildChain(6, 'w')
+	var parentHash [32]byte
+	for hash, header := range byHash {
+		if header.Sequence() == tip.seq-1 {
+			parentHash = hash
+			break
+		}
+	}
+	if parentHash == ([32]byte{}) {
+		t.Fatal("test chain did not expose the child parent")
+	}
+
+	p := newTestProvider(byHash)
+	p.cachePut(consensus.LedgerID(parentHash), &providerLedger{
+		id:        consensus.LedgerID(parentHash),
+		seq:       tip.seq - 2,
+		minSeq:    tip.seq - 2,
+		ancestors: nil,
+	})
+
+	lgr, ok := p.LedgerByID(consensus.LedgerID(tip.hash))
+	if !ok {
+		t.Fatal("child lookup failed with wrong-sequence cached parent")
+	}
+	if lgr.MinSeq() != 1 {
+		t.Fatalf("child MinSeq = %d, want 1", lgr.MinSeq())
+	}
+	if got := lgr.Ancestor(tip.seq - 1); got != consensus.LedgerID(parentHash) {
+		t.Fatalf("child parent = %x, want %x", got, parentHash)
 	}
 }
 
