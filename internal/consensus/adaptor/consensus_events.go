@@ -16,6 +16,11 @@ import (
 	"github.com/LeJamon/go-xrpl/protocol"
 )
 
+type operatingModeChange struct {
+	mode     consensus.OperatingMode
+	callback func(consensus.OperatingMode)
+}
+
 func (a *Adaptor) GetOperatingMode() consensus.OperatingMode {
 	a.mu.Lock()
 	defer a.mu.Unlock()
@@ -38,10 +43,10 @@ func (a *Adaptor) SetOperatingMode(mode consensus.OperatingMode) {
 		}
 	}
 	changed := a.setOperatingModeLocked(mode)
-	onModeChange := a.onModeChange
+	startDraining := changed && a.enqueueOperatingModeChangeLocked(mode)
 	a.mu.Unlock()
-	if changed && onModeChange != nil {
-		onModeChange(mode)
+	if startDraining {
+		a.drainOperatingModeChanges()
 	}
 }
 
@@ -65,16 +70,45 @@ func (a *Adaptor) SetOnOperatingModeChange(fn func(consensus.OperatingMode)) {
 	a.mu.Unlock()
 }
 
+func (a *Adaptor) enqueueOperatingModeChangeLocked(mode consensus.OperatingMode) bool {
+	if a.onModeChange == nil {
+		return false
+	}
+	a.modeChanges = append(a.modeChanges, operatingModeChange{mode: mode, callback: a.onModeChange})
+	if a.modeDraining {
+		return false
+	}
+	a.modeDraining = true
+	return true
+}
+
+func (a *Adaptor) drainOperatingModeChanges() {
+	for {
+		a.mu.Lock()
+		if len(a.modeChanges) == 0 {
+			a.modeDraining = false
+			a.mu.Unlock()
+			return
+		}
+		change := a.modeChanges[0]
+		a.modeChanges[0] = operatingModeChange{}
+		a.modeChanges = a.modeChanges[1:]
+		a.mu.Unlock()
+
+		change.callback(change.mode)
+	}
+}
+
 func (a *Adaptor) demoteOperatingModeForWrongLedger() {
 	a.mu.Lock()
 	changed := false
 	if a.operatingMode == consensus.OpModeFull || a.operatingMode == consensus.OpModeTracking {
 		changed = a.setOperatingModeLocked(consensus.OpModeConnected)
 	}
-	onModeChange := a.onModeChange
+	startDraining := changed && a.enqueueOperatingModeChangeLocked(consensus.OpModeConnected)
 	a.mu.Unlock()
-	if changed && onModeChange != nil {
-		onModeChange(consensus.OpModeConnected)
+	if startDraining {
+		a.drainOperatingModeChanges()
 	}
 }
 

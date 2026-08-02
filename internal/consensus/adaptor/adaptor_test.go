@@ -180,6 +180,96 @@ func TestOperatingModeChangeCallbackRunsAfterEffectiveTransition(t *testing.T) {
 	}
 }
 
+func TestOperatingModeChangeCallbacksPreserveConcurrentTransitionOrder(t *testing.T) {
+	a := New(Config{})
+	callbackEntered := make(chan struct{})
+	releaseCallback := make(chan struct{})
+	callbacks := make(chan consensus.OperatingMode, 2)
+	a.SetOnOperatingModeChange(func(mode consensus.OperatingMode) {
+		if mode == consensus.OpModeConnected {
+			close(callbackEntered)
+			<-releaseCallback
+		}
+		callbacks <- mode
+	})
+
+	firstDone := make(chan struct{})
+	go func() {
+		a.SetOperatingMode(consensus.OpModeConnected)
+		close(firstDone)
+	}()
+	select {
+	case <-callbackEntered:
+	case <-time.After(time.Second):
+		t.Fatal("first mode callback did not start")
+	}
+
+	secondDone := make(chan struct{})
+	go func() {
+		a.SetOperatingMode(consensus.OpModeSyncing)
+		close(secondDone)
+	}()
+	select {
+	case <-secondDone:
+	case <-time.After(time.Second):
+		t.Fatal("second mode transition blocked behind callback")
+	}
+	select {
+	case mode := <-callbacks:
+		t.Fatalf("later mode callback overtook blocked transition: %v", mode)
+	default:
+	}
+
+	close(releaseCallback)
+	select {
+	case <-firstDone:
+	case <-time.After(time.Second):
+		t.Fatal("mode callback drain did not complete")
+	}
+	for _, want := range []consensus.OperatingMode{consensus.OpModeConnected, consensus.OpModeSyncing} {
+		select {
+		case got := <-callbacks:
+			if got != want {
+				t.Fatalf("callback mode = %v, want %v", got, want)
+			}
+		case <-time.After(time.Second):
+			t.Fatalf("missing callback for mode %v", want)
+		}
+	}
+}
+
+func TestOperatingModeChangeCallbackMaySetOperatingMode(t *testing.T) {
+	a := New(Config{})
+	callbacks := make(chan consensus.OperatingMode, 2)
+	a.SetOnOperatingModeChange(func(mode consensus.OperatingMode) {
+		callbacks <- mode
+		if mode == consensus.OpModeConnected {
+			a.SetOperatingMode(consensus.OpModeSyncing)
+		}
+	})
+
+	done := make(chan struct{})
+	go func() {
+		a.SetOperatingMode(consensus.OpModeConnected)
+		close(done)
+	}()
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("recursive mode transition deadlocked")
+	}
+	for _, want := range []consensus.OperatingMode{consensus.OpModeConnected, consensus.OpModeSyncing} {
+		select {
+		case got := <-callbacks:
+			if got != want {
+				t.Fatalf("callback mode = %v, want %v", got, want)
+			}
+		case <-time.After(time.Second):
+			t.Fatalf("missing callback for mode %v", want)
+		}
+	}
+}
+
 func TestAdaptorGetLastClosedLedger(t *testing.T) {
 	a := newTestAdaptor(t)
 
