@@ -765,6 +765,9 @@ func (fs *FeatureSet) List() []Feature {
 }
 
 func (fs *FeatureSet) Intersect(other *FeatureSet) *FeatureSet {
+	if fs == nil || other == nil {
+		return NewFeatureSet()
+	}
 	fs.mu.RLock()
 	defer fs.mu.RUnlock()
 	other.mu.RLock()
@@ -775,6 +778,19 @@ func (fs *FeatureSet) Intersect(other *FeatureSet) *FeatureSet {
 		if other.features[f] {
 			result.features[f] = true
 		}
+	}
+	return result
+}
+
+func (fs *FeatureSet) clone() *FeatureSet {
+	result := NewFeatureSet()
+	if fs == nil {
+		return result
+	}
+	fs.mu.RLock()
+	defer fs.mu.RUnlock()
+	for feature := range fs.features {
+		result.features[feature] = true
 	}
 	return result
 }
@@ -792,9 +808,25 @@ func NewPeerCapabilities() *PeerCapabilities {
 	}
 }
 
+func (pc *PeerCapabilities) clone() *PeerCapabilities {
+	if pc == nil {
+		return nil
+	}
+	pc.mu.RLock()
+	features := pc.Features
+	pc.mu.RUnlock()
+	return &PeerCapabilities{Features: features.clone()}
+}
+
 func (pc *PeerCapabilities) HasFeature(f Feature) bool {
+	if pc == nil {
+		return false
+	}
 	pc.mu.RLock()
 	defer pc.mu.RUnlock()
+	if pc.Features == nil {
+		return false
+	}
 	return pc.Features.Has(f)
 }
 

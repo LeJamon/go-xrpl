@@ -23,8 +23,8 @@ const (
 	DefaultEventBufferSize             = 256
 	DefaultMessageBufferSize           = 256
 	DefaultSendBufferSize              = 64
-	DefaultInboundRetainedBytes  int64 = 3 * MaxMessageSize
-	DefaultOutboundRetainedBytes int64 = 8 * MaxMessageSize
+	DefaultInboundRetainedBytes  int64 = 3 * message.MaxMessageSize
+	DefaultOutboundRetainedBytes int64 = 8 * message.MaxMessageSize
 	acquisitionEventBufferSize         = 16
 
 	reliableSendBufferSize = 512
@@ -42,7 +42,7 @@ const (
 	bulkSequenceBufferSize         = 4
 	reliableFramesPerBulkFrame     = 16
 	outboundCriticalByteReserve    = 2 * 1024 * 1024
-	outboundNonCriticalByteMaximum = MaxMessageSize + message.HeaderSizeCompressed
+	outboundNonCriticalByteMaximum = message.MaxMessageSize + message.HeaderSizeCompressed
 	outboundRetainedByteMaximum    = outboundNonCriticalByteMaximum + outboundCriticalByteReserve
 	maxOutboundReservedPeers       = (math.MaxInt64 - int64(outboundNonCriticalByteMaximum)) / int64(outboundCriticalByteReserve)
 
@@ -425,8 +425,9 @@ func WithServerDomain(domain string) Option {
 // the `Local-IP` handshake header and to validate the peer's
 // `Remote-IP` self-report. A nil or unspecified IP suppresses both.
 func WithPublicIP(ip net.IP) Option {
+	ip = append(net.IP(nil), ip...)
 	return func(c *Config) {
-		c.PublicIP = ip
+		c.PublicIP = append(net.IP(nil), ip...)
 	}
 }
 
@@ -489,8 +490,8 @@ func (c *Config) Validate() error {
 	if c.InboundRetainedBytes == 0 {
 		c.InboundRetainedBytes = DefaultInboundRetainedBytes
 	}
-	if c.InboundRetainedBytes < 3*int64(MaxMessageSize) {
-		return fmt.Errorf("InboundRetainedBytes must be at least %d", 3*int64(MaxMessageSize))
+	if c.InboundRetainedBytes < 3*int64(message.MaxMessageSize) {
+		return fmt.Errorf("InboundRetainedBytes must be at least %d", 3*int64(message.MaxMessageSize))
 	}
 	minimumOutboundBytes := MinimumOutboundRetainedBytes(c.MaxPeers)
 	if c.OutboundRetainedBytes < minimumOutboundBytes {

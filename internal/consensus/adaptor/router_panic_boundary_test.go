@@ -55,7 +55,7 @@ func TestRouter_HandleMessage_RecoversHandlerPanic(t *testing.T) {
 	require.NotPanics(t, func() {
 		r.handleMessage(&peermanagement.InboundMessage{
 			PeerID:  9,
-			Type:    uint16(message.TypeProposeLedger),
+			Type:    message.TypeProposeLedger,
 			Payload: encodePayload(t, proposeSet),
 		})
 	}, "a panic from a frame handler must be recovered at the dispatch boundary")
@@ -74,7 +74,7 @@ func TestRouter_RecoverFrame_ChargesStageLabel(t *testing.T) {
 	for _, stage := range []string{"dispatch", "transaction", "get_ledger"} {
 		t.Run(stage, func(t *testing.T) {
 			r, rs := makeRouterWithBadDataRecorder(t)
-			msg := &peermanagement.InboundMessage{PeerID: 3, Type: uint16(message.TypeTransaction)}
+			msg := &peermanagement.InboundMessage{PeerID: 3, Type: message.TypeTransaction}
 
 			require.NotPanics(t, func() {
 				defer r.recoverFrame(msg, stage)

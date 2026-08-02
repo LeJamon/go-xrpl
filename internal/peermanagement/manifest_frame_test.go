@@ -198,9 +198,9 @@ func TestManifestFrameCleanupIsPrivateExactAndIdempotent(t *testing.T) {
 	_, err = os.Stat(keepPath)
 	require.NoError(t, err)
 
-	header := MessageHeader{
+	header := message.Header{
 		PayloadSize:      8,
-		MessageType:      TypeManifests,
+		MessageType:      message.TypeManifests,
 		UncompressedSize: 8,
 	}
 	_, err = spoolManifestFrame(context.Background(), nil, bytes.NewReader([]byte("short")), header, nil, spoolDir)
@@ -252,9 +252,9 @@ func TestEventReleaseClosesOwnedManifestFrame(t *testing.T) {
 	payload := []byte("manifest")
 	spoolDir := t.TempDir()
 	budget := newReadBudget(int64(2 * len(payload)))
-	header := MessageHeader{
+	header := message.Header{
 		PayloadSize:      uint32(len(payload)),
-		MessageType:      TypeManifests,
+		MessageType:      message.TypeManifests,
 		UncompressedSize: uint32(len(payload)),
 	}
 	frame, err := spoolManifestFrame(context.Background(), nil, bytes.NewReader(payload), header, budget, spoolDir)
@@ -273,7 +273,7 @@ func TestInboundMessageTakesManifestFrameOwnership(t *testing.T) {
 	payload := []byte("manifest")
 	path := filepath.Join(t.TempDir(), "manifest")
 	require.NoError(t, os.WriteFile(path, payload, 0o600))
-	frame := newManifestFrame(path, MessageHeader{PayloadSize: uint32(len(payload))}, nil, 0)
+	frame := newManifestFrame(path, message.Header{PayloadSize: uint32(len(payload))}, nil, 0)
 	event := Event{ManifestFrame: frame}
 
 	msg := event.inboundMessage()

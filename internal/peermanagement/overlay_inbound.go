@@ -219,9 +219,9 @@ func (o *Overlay) handleInbound(ctx context.Context, conn net.Conn) {
 		}
 	}()
 
-	// The inbound slot limit is enforced after the handshake (see
-	// hasInboundSlot below) because reserved/cluster peers are admitted beyond
-	// the cap and their node key is unknown until the handshake completes.
+	// The inbound slot limit is enforced after the handshake because
+	// reserved/cluster peers are admitted beyond the cap and their node key is
+	// unknown until the handshake completes.
 	// Concurrent handshakes stay bounded by inboundSem regardless.
 	remoteAddr := conn.RemoteAddr().String()
 	endpoint, _ := ParseEndpoint(remoteAddr)

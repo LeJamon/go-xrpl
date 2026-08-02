@@ -318,7 +318,7 @@ func isInboundBulkMessageType(msgType message.MessageType) bool {
 	return !message.IsKnownMessageType(msgType) || message.MaxPayloadSizeForType(msgType) > 64*1024
 }
 
-func inboundFrameReservation(header MessageHeader) int64 {
+func inboundFrameReservation(header message.Header) int64 {
 	if !isInboundBulkMessageType(header.MessageType) {
 		return 0
 	}
@@ -333,7 +333,7 @@ func inboundFrameReservation(header MessageHeader) int64 {
 // traffic and uses the best-effort event lane for other traffic. Closing the
 // peer releases a read loop waiting for capacity.
 func (p *Peer) dispatchEvent(evt Event) bool {
-	if evt.Type == EventMessageReceived && message.MessageType(evt.MessageType) == message.TypeManifests && p.manifestMessages != nil {
+	if evt.Type == EventMessageReceived && evt.MessageType == message.TypeManifests && p.manifestMessages != nil {
 		msg := evt.inboundMessage()
 		select {
 		case p.manifestMessages <- msg:
@@ -343,7 +343,7 @@ func (p *Peer) dispatchEvent(evt Event) bool {
 			return false
 		}
 	}
-	if evt.Type == EventMessageReceived && isConsensusPriorityMessageType(message.MessageType(evt.MessageType)) && p.consensusEvents != nil {
+	if evt.Type == EventMessageReceived && isConsensusPriorityMessageType(evt.MessageType) && p.consensusEvents != nil {
 		select {
 		case p.consensusEvents <- evt:
 			return true
@@ -352,7 +352,7 @@ func (p *Peer) dispatchEvent(evt Event) bool {
 			return false
 		}
 	}
-	if evt.Type == EventMessageReceived && isConsensusControlMessageType(message.MessageType(evt.MessageType)) && p.consensusControlEvents != nil {
+	if evt.Type == EventMessageReceived && isConsensusControlMessageType(evt.MessageType) && p.consensusControlEvents != nil {
 		select {
 		case p.consensusControlEvents <- evt:
 			return true
@@ -361,7 +361,7 @@ func (p *Peer) dispatchEvent(evt Event) bool {
 			return false
 		}
 	}
-	if evt.Type == EventMessageReceived && isAcquisitionMessageType(message.MessageType(evt.MessageType)) && p.acquisitionEvents != nil {
+	if evt.Type == EventMessageReceived && isAcquisitionMessageType(evt.MessageType) && p.acquisitionEvents != nil {
 		select {
 		case p.acquisitionEvents <- evt:
 			return true
@@ -472,13 +472,41 @@ func (p *Peer) State() PeerState {
 func (p *Peer) RemotePublicKey() *PublicKeyToken {
 	p.mu.RLock()
 	defer p.mu.RUnlock()
-	return p.remotePubKey
+	if p.remotePubKey == nil {
+		return nil
+	}
+	key, err := NewPublicKeyToken(p.remotePubKey.Bytes())
+	if err != nil {
+		return nil
+	}
+	return key
+}
+
+// RemotePublicKeyBytes returns a copy of the peer's compressed node key.
+func (p *Peer) RemotePublicKeyBytes() []byte {
+	p.mu.RLock()
+	defer p.mu.RUnlock()
+	if p.remotePubKey == nil {
+		return nil
+	}
+	return p.remotePubKey.Bytes()
+}
+
+// RemotePublicKeyEncoded returns the peer's node public key in its canonical
+// base58 representation.
+func (p *Peer) RemotePublicKeyEncoded() string {
+	p.mu.RLock()
+	defer p.mu.RUnlock()
+	if p.remotePubKey == nil {
+		return ""
+	}
+	return p.remotePubKey.Encode()
 }
 
 func (p *Peer) Capabilities() *PeerCapabilities {
 	p.mu.RLock()
 	defer p.mu.RUnlock()
-	return p.capabilities
+	return p.capabilities.clone()
 }
 
 // compressionNegotiated reports whether this connection agreed to use
@@ -1013,7 +1041,7 @@ type frameProgressReader struct {
 	startedAt           time.Time
 	deadline            time.Time
 	budgetDeadlineArmed bool
-	header              MessageHeader
+	header              message.Header
 	headerSet           bool
 	bytesRead           uint64
 	payloadStart        uint64
@@ -1038,7 +1066,7 @@ func (p *Peer) newFrameProgressReader(reader io.Reader, conn net.Conn) *framePro
 	}
 }
 
-func (r *frameProgressReader) setHeader(header MessageHeader) error {
+func (r *frameProgressReader) setHeader(header message.Header) error {
 	r.header = header
 	r.headerSet = true
 	r.payloadStart = r.bytesRead
@@ -1192,9 +1220,9 @@ func (p *Peer) readLoop(ctx context.Context) error {
 		}
 
 		frameReader := p.newFrameProgressReader(reader, conn)
-		header, err := readMessageHeader(frameReader)
+		header, err := message.ReadHeader(frameReader)
 		if err == nil &&
-			header.MessageType == TypeManifests &&
+			header.MessageType == message.TypeManifests &&
 			p.manifestSpoolDir != "" &&
 			(header.PayloadSize > manifestSpoolThreshold || header.UncompressedSize > manifestSpoolThreshold) {
 			if outstandingManifest != nil {
@@ -1236,18 +1264,18 @@ func (p *Peer) readLoop(ctx context.Context) error {
 			}
 
 			payloadWireSize := uint64(header.PayloadSize)
-			headerSize := uint64(HeaderSizeUncompressed)
+			headerSize := uint64(message.HeaderSizeUncompressed)
 			if header.Compressed {
-				headerSize = HeaderSizeCompressed
+				headerSize = message.HeaderSizeCompressed
 			}
 			p.metrics.recv.addMessage(payloadWireSize + headerSize)
 			p.bootstrapManifest.Store(true)
-			p.traffic.AddCount(CategorizeMessage(uint16(header.MessageType)), true, int(header.PayloadSize))
+			p.traffic.AddCount(CategorizeMessage(header.MessageType), true, int(header.PayloadSize))
 
 			delivered := p.dispatchEvent(Event{
 				Type:          EventMessageReceived,
 				PeerID:        p.id,
-				MessageType:   uint16(header.MessageType),
+				MessageType:   header.MessageType,
 				ManifestFrame: manifestFrame,
 				WireSize:      payloadWireSize,
 			})
@@ -1288,7 +1316,7 @@ func (p *Peer) readLoop(ctx context.Context) error {
 		}
 		var payload []byte
 		if err == nil {
-			payload, err = readMessagePayload(frameReader, *header)
+			payload, err = message.ReadPayload(frameReader, *header)
 		}
 		now := p.readPolicy.now()
 		if err == nil && !frameReader.deadline.IsZero() && !now.Before(frameReader.deadline) {
@@ -1327,9 +1355,9 @@ func (p *Peer) readLoop(ctx context.Context) error {
 		payloadWireSize := uint64(len(payload))
 		wireBytes := payloadWireSize
 		if header.Compressed {
-			wireBytes += HeaderSizeCompressed
+			wireBytes += message.HeaderSizeCompressed
 		} else {
-			wireBytes += HeaderSizeUncompressed
+			wireBytes += message.HeaderSizeUncompressed
 		}
 		p.metrics.recv.addMessage(wireBytes)
 
@@ -1349,15 +1377,15 @@ func (p *Peer) readLoop(ctx context.Context) error {
 			releaseRetainedReservation()
 			continue
 		}
-		if header.MessageType == TypeManifests {
+		if header.MessageType == message.TypeManifests {
 			p.bootstrapManifest.Store(true)
 		}
 
 		if header.Compressed {
-			payload, err = DecompressLZ4(payload, int(header.UncompressedSize))
+			payload, err = message.DecompressLZ4(payload, int(header.UncompressedSize))
 			if err != nil {
 				p.IncBadData("decompress-lz4-failed")
-				if header.MessageType == TypeManifests && p.onBootstrapReady != nil {
+				if header.MessageType == message.TypeManifests && p.onBootstrapReady != nil {
 					releaseRetainedReservation()
 					return fmt.Errorf("bootstrap manifests decompression failed: %w", err)
 				}
@@ -1375,21 +1403,21 @@ func (p *Peer) readLoop(ctx context.Context) error {
 				retainedReservation -= int64(header.PayloadSize)
 			}
 		}
-		p.traffic.AddCount(CategorizeMessage(uint16(header.MessageType)), true, len(payload))
+		p.traffic.AddCount(CategorizeMessage(header.MessageType), true, len(payload))
 
 		delivered := p.dispatchEvent(Event{
 			Type:        EventMessageReceived,
 			PeerID:      p.id,
-			MessageType: uint16(header.MessageType),
+			MessageType: header.MessageType,
 			Payload:     payload,
 			WireSize:    payloadWireSize,
 			reservation: newInboundReservation(p.inboundReadBudget, retainedReservation),
 		})
 		retainedReservation = 0
-		if !delivered && header.MessageType == TypeManifests && p.onBootstrapReady != nil {
+		if !delivered && header.MessageType == message.TypeManifests && p.onBootstrapReady != nil {
 			return errBootstrapManifestDropped
 		}
-		if delivered && header.MessageType == TypeManifests && p.onBootstrapReady != nil {
+		if delivered && header.MessageType == message.TypeManifests && p.onBootstrapReady != nil {
 			p.bootstrapManifestPending.Store(true)
 		}
 	}
@@ -1443,7 +1471,7 @@ func (p *Peer) writeLoop(ctx context.Context) error {
 		}
 		p.metrics.sent.addMessage(uint64(n))
 		if hdr, derr := message.DecodeHeader(wire); derr == nil {
-			p.traffic.AddCount(CategorizeMessage(uint16(hdr.MessageType)), false, n)
+			p.traffic.AddCount(CategorizeMessage(hdr.MessageType), false, n)
 		}
 	}
 }
@@ -1655,7 +1683,7 @@ func (p *Peer) recordPingSent(seq uint32, sentAt time.Time) {
 	}
 	p.pingsInFlight[seq] = pingInFlight{
 		sentAt:           sentAt,
-		progressDeadline: sentAt.Add(p.frameReadBudget(MaxMessageSize)),
+		progressDeadline: sentAt.Add(p.frameReadBudget(message.MaxMessageSize)),
 	}
 }
 

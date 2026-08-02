@@ -84,7 +84,7 @@ func TestRouter_TxSetAcquire_LearnsTransaction(t *testing.T) {
 	router.MarkTxSetStillNeeded(consensus.TxSetID(setID))
 	inbox <- &peermanagement.InboundMessage{
 		PeerID:  5,
-		Type:    uint16(message.TypeLedgerData),
+		Type:    message.TypeLedgerData,
 		Payload: encodePayload(t, resp),
 	}
 

@@ -4,6 +4,7 @@ package peermanagement
 import (
 	"fmt"
 	"net"
+	"strings"
 	"sync"
 
 	"github.com/LeJamon/go-xrpl/internal/peermanagement/message"
@@ -29,15 +30,20 @@ func ParseEndpoint(s string) (Endpoint, error) {
 	if err != nil {
 		return Endpoint{}, err
 	}
-	var port uint16
-	_, err = parsePort(portStr, &port)
+	if strings.TrimSpace(host) == "" {
+		return Endpoint{}, ErrInvalidEndpoint
+	}
+	port, err := parsePort(portStr)
 	if err != nil {
 		return Endpoint{}, err
 	}
 	return Endpoint{Host: host, Port: port}, nil
 }
 
-func parsePort(s string, port *uint16) (int, error) {
+func parsePort(s string) (uint16, error) {
+	if s == "" {
+		return 0, ErrInvalidEndpoint
+	}
 	var p int
 	for _, c := range s {
 		if c < '0' || c > '9' {
@@ -48,8 +54,7 @@ func parsePort(s string, port *uint16) (int, error) {
 			return 0, ErrInvalidEndpoint
 		}
 	}
-	*port = uint16(p)
-	return p, nil
+	return uint16(p), nil
 }
 
 // EventType represents the type of peer management event.
@@ -106,7 +111,7 @@ type Event struct {
 	PublicKey []byte
 
 	// MessageType is the type of message (for MessageReceived events).
-	MessageType uint16
+	MessageType message.MessageType
 
 	// Payload is the message payload (for MessageReceived events).
 	Payload []byte
@@ -175,7 +180,7 @@ type InboundMessage struct {
 	PeerID PeerID
 
 	// Type is the message type.
-	Type uint16
+	Type message.MessageType
 
 	// Payload is the raw message payload.
 	Payload []byte

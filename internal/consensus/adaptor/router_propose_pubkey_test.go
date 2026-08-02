@@ -78,7 +78,7 @@ func TestHandleProposal_Ed25519PubKeyChargesPeer(t *testing.T) {
 
 	r.handleMessage(&peermanagement.InboundMessage{
 		PeerID:  77,
-		Type:    uint16(message.TypeProposeLedger),
+		Type:    message.TypeProposeLedger,
 		Payload: encodePayload(t, p),
 	})
 

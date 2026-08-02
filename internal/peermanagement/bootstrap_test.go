@@ -90,7 +90,7 @@ func TestBootstrapGovernorAllowsOneBoundedHedge(t *testing.T) {
 	assert.False(t, ok)
 
 	assert.True(t, first.observeProgress(bootstrapFrameProgress{
-		messageType: TypeManifests,
+		messageType: message.TypeManifests,
 		wireSize:    60_431_740,
 		bytesRead:   1 << 20,
 		elapsed:     19 * time.Second,
@@ -159,7 +159,7 @@ func TestBootstrapGovernorHedgesOnlySlowManifestTransfers(t *testing.T) {
 			bytesRead := tt.rate * uint64(elapsed) / uint64(time.Second)
 
 			observation := lease.observeProgress(bootstrapFrameProgress{
-				messageType: TypeManifests,
+				messageType: message.TypeManifests,
 				wireSize:    60_431_740,
 				bytesRead:   bytesRead,
 				elapsed:     elapsed,
@@ -177,7 +177,7 @@ func TestBootstrapReleasedLeaseCannotEnableHedge(t *testing.T) {
 	lease.release()
 
 	assert.False(t, lease.observeProgress(bootstrapFrameProgress{
-		messageType: TypeManifests,
+		messageType: message.TypeManifests,
 		wireSize:    60_431_740,
 		bytesRead:   1 << 20,
 		elapsed:     30 * time.Second,
@@ -207,7 +207,7 @@ func TestBootstrapFlowRotatesTwoCutoffSourcesAndCompletesFromThird(t *testing.T)
 	require.Len(t, firstCandidates, 1)
 	firstAddress := firstCandidates[0]
 	firstProgress := bootstrapFrameProgress{
-		messageType: TypeManifests,
+		messageType: message.TypeManifests,
 		wireSize:    60_431_740,
 		bytesRead:   444_146 * 19,
 		elapsed:     19 * time.Second,
@@ -224,7 +224,7 @@ func TestBootstrapFlowRotatesTwoCutoffSourcesAndCompletesFromThird(t *testing.T)
 	secondAddress := secondCandidates[0]
 	require.NotEqual(t, firstAddress, secondAddress)
 	secondProgress := bootstrapFrameProgress{
-		messageType: TypeManifests,
+		messageType: message.TypeManifests,
 		wireSize:    60_431_740,
 		bytesRead:   360_735 * 24,
 		elapsed:     24 * time.Second,
@@ -258,7 +258,7 @@ func TestBootstrapFlowRotatesTwoCutoffSourcesAndCompletesFromThird(t *testing.T)
 	assert.NotEqual(t, firstAddress, thirdAddress)
 	assert.NotEqual(t, secondAddress, thirdAddress)
 	thirdObservation := third.observeProgress(bootstrapFrameProgress{
-		messageType: TypeManifests,
+		messageType: message.TypeManifests,
 		wireSize:    60_431_740,
 		bytesRead:   650_000 * 15,
 		elapsed:     15 * time.Second,
@@ -406,7 +406,7 @@ func TestDiscoveryPartialBootstrapFailureIsQuarantined(t *testing.T) {
 	d.AddPeer(address, 0, 0)
 	overlay := &Overlay{discovery: d}
 	overlay.delayPeerRetry(address, true, &FrameReadError{
-		MessageType: TypeManifests,
+		MessageType: message.TypeManifests,
 		WireSize:    1024,
 		BytesRead:   1,
 		Err:         errors.New("connection reset"),
@@ -433,7 +433,7 @@ func TestOverlayPartialManifestFailurePreservesOrdinarySourceSquelch(t *testing.
 
 	now = now.Add(20 * time.Second)
 	overlay.delayPeerRetry(address, false, &FrameReadError{
-		MessageType: TypeManifests,
+		MessageType: message.TypeManifests,
 		WireSize:    1024,
 		BytesRead:   1,
 		Err:         errors.New("connection reset"),
@@ -462,7 +462,7 @@ func TestOverlayLongLivedOrdinaryManifestFailureDoesNotRestartSquelch(t *testing
 
 	now = now.Add(2 * recentConnectAttempt)
 	overlay.delayPeerRetry(address, false, &FrameReadError{
-		MessageType: TypeManifests,
+		MessageType: message.TypeManifests,
 		WireSize:    1024,
 		BytesRead:   1,
 		Err:         errors.New("connection reset"),
@@ -483,7 +483,7 @@ func TestOverlayLocalSpoolFailureDoesNotExtendBootstrapQuarantine(t *testing.T) 
 	overlay := &Overlay{discovery: discovery}
 
 	overlay.delayPeerRetry(address, true, &FrameReadError{
-		MessageType: TypeManifests,
+		MessageType: message.TypeManifests,
 		WireSize:    1024,
 		BytesRead:   1,
 		Err: &manifestSpoolLocalError{
@@ -515,7 +515,7 @@ func TestOverlayOrdinaryPeerFailuresDoNotTriggerManifestQuarantine(t *testing.T)
 		{
 			name: "partial non-manifest frame",
 			err: &FrameReadError{
-				MessageType: TypePing,
+				MessageType: message.TypePing,
 				BytesRead:   1,
 				Err:         errors.New("connection reset"),
 			},
@@ -523,14 +523,14 @@ func TestOverlayOrdinaryPeerFailuresDoNotTriggerManifestQuarantine(t *testing.T)
 		{
 			name: "zero-byte manifest frame",
 			err: &FrameReadError{
-				MessageType: TypeManifests,
+				MessageType: message.TypeManifests,
 				Err:         errors.New("connection reset"),
 			},
 		},
 		{
 			name: "shutdown",
 			err: &FrameReadError{
-				MessageType: TypeManifests,
+				MessageType: message.TypeManifests,
 				BytesRead:   1,
 				Err:         context.Canceled,
 			},
@@ -589,7 +589,7 @@ func TestOverlayMalformedPingDoesNotAcknowledgeBootstrap(t *testing.T) {
 
 	overlay.onMessageReceived(Event{
 		PeerID:      1,
-		MessageType: uint16(message.TypePing),
+		MessageType: message.TypePing,
 		Payload:     []byte("not-a-ping"),
 	})
 
@@ -608,7 +608,7 @@ func TestOverlayPingDoesNotBypassSeenManifest(t *testing.T) {
 
 	overlay.onMessageReceived(Event{
 		PeerID:      1,
-		MessageType: uint16(message.TypePing),
+		MessageType: message.TypePing,
 		Payload:     payload,
 	})
 
@@ -635,7 +635,7 @@ func TestOverlayDroppedManifestDoesNotAcknowledgeBootstrap(t *testing.T) {
 
 	overlay.onMessageReceived(Event{
 		PeerID:      1,
-		MessageType: uint16(message.TypeManifests),
+		MessageType: message.TypeManifests,
 		Payload:     payload,
 	})
 

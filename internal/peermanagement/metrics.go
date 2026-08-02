@@ -2,6 +2,8 @@ package peermanagement
 
 import (
 	"sync/atomic"
+
+	"github.com/LeJamon/go-xrpl/internal/peermanagement/message"
 )
 
 // TrafficCategory represents a traffic category for counting.
@@ -99,27 +101,27 @@ func (tc *TrafficCounter) AddCount(cat TrafficCategory, inbound bool, bytes int)
 }
 
 // CategorizeMessage determines the traffic category for a message type.
-func CategorizeMessage(msgType uint16) TrafficCategory {
+func CategorizeMessage(msgType message.MessageType) TrafficCategory {
 	switch msgType {
-	case 3: // TypePing
+	case message.TypePing:
 		return CategoryBase
-	case 5: // TypeCluster
+	case message.TypeCluster:
 		return CategoryCluster
-	case 15: // TypeEndpoints
+	case message.TypeEndpoints:
 		return CategoryOverlay
-	case 2: // TypeManifests
+	case message.TypeManifests:
 		return CategoryManifests
-	case 30, 64: // TypeTransaction, TypeTransactions
+	case message.TypeTransaction, message.TypeTransactions:
 		return CategoryTransaction
-	case 33: // TypeProposeLedger
+	case message.TypeProposeLedger:
 		return CategoryProposal
-	case 41: // TypeValidation
+	case message.TypeValidation:
 		return CategoryValidation
-	case 54, 56: // TypeValidatorList, TypeValidatorListCollection
+	case message.TypeValidatorList, message.TypeValidatorListCollection:
 		return CategoryValidatorList
-	case 55: // TypeSquelch
+	case message.TypeSquelch:
 		return CategorySquelch
-	case 31, 32: // TypeGetLedger, TypeLedgerData
+	case message.TypeGetLedger, message.TypeLedgerData:
 		return CategoryLedgerData
 	default:
 		return CategoryUnknown

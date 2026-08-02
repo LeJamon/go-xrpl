@@ -132,7 +132,7 @@ func TestAcquisitionWork_DoesNotBlockRouter(t *testing.T) {
 	}
 	inbox <- &peermanagement.InboundMessage{
 		PeerID:  7,
-		Type:    uint16(message.TypeLedgerData),
+		Type:    message.TypeLedgerData,
 		Payload: encodePayload(t, data),
 	}
 	select {
@@ -153,7 +153,7 @@ func TestAcquisitionWork_DoesNotBlockRouter(t *testing.T) {
 	proposal.NodePubKey[0] = 0x02
 	inbox <- &peermanagement.InboundMessage{
 		PeerID:  8,
-		Type:    uint16(message.TypeProposeLedger),
+		Type:    message.TypeProposeLedger,
 		Payload: encodePayload(t, proposal),
 	}
 	require.Eventually(t, func() bool { return len(engine.getProposals()) == 1 }, time.Second, time.Millisecond)
@@ -430,7 +430,7 @@ func TestHandlePeerConnect_EmitsManifestBeforeAcquisitionTraversalCompletes(t *t
 	proposal.NodePubKey[0] = 0x02
 	inbox <- &peermanagement.InboundMessage{
 		PeerID:  8,
-		Type:    uint16(message.TypeProposeLedger),
+		Type:    message.TypeProposeLedger,
 		Payload: encodePayload(t, proposal),
 	}
 	select {
@@ -1356,7 +1356,7 @@ func TestRouter_MaintenanceDrainsBufferedReplyBeforeTerminalTimer(t *testing.T) 
 	ledgerHash := ledger.Hash()
 	inbox <- &peermanagement.InboundMessage{
 		PeerID: 7,
-		Type:   uint16(message.TypeLedgerData),
+		Type:   message.TypeLedgerData,
 		Payload: encodePayload(t, &message.LedgerData{
 			LedgerHash: ledgerHash[:],
 			InfoType:   message.LedgerInfoAsNode,

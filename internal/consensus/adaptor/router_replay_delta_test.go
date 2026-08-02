@@ -388,7 +388,7 @@ func TestRouter_ReplayDeltaResponse_Routed(t *testing.T) {
 
 	r.handleMessage(&peermanagement.InboundMessage{
 		PeerID:  7,
-		Type:    uint16(message.TypeReplayDeltaResponse),
+		Type:    message.TypeReplayDeltaResponse,
 		Payload: payload,
 	})
 
@@ -421,7 +421,7 @@ func TestRouter_FallsBackToLegacyOnReplayFailure(t *testing.T) {
 
 	r.handleMessage(&peermanagement.InboundMessage{
 		PeerID:  7,
-		Type:    uint16(message.TypeReplayDeltaResponse),
+		Type:    message.TypeReplayDeltaResponse,
 		Payload: payload,
 	})
 
@@ -487,7 +487,7 @@ func TestRouter_ReplayDeltaApplyStoresDerivedLedger(t *testing.T) {
 
 	r.handleMessage(&peermanagement.InboundMessage{
 		PeerID:  7,
-		Type:    uint16(message.TypeReplayDeltaResponse),
+		Type:    message.TypeReplayDeltaResponse,
 		Payload: payload,
 	})
 
@@ -534,7 +534,7 @@ func TestRouter_ReplayDeltaApply_StateMismatchFallsBack(t *testing.T) {
 
 	r.handleMessage(&peermanagement.InboundMessage{
 		PeerID:  7,
-		Type:    uint16(message.TypeReplayDeltaResponse),
+		Type:    message.TypeReplayDeltaResponse,
 		Payload: payload,
 	})
 
@@ -578,7 +578,7 @@ func TestRouter_ConcurrentAcquisitions_RouteCorrectly(t *testing.T) {
 	require.NoError(t, err)
 	r.handleMessage(&peermanagement.InboundMessage{
 		PeerID:  7,
-		Type:    uint16(message.TypeReplayDeltaResponse),
+		Type:    message.TypeReplayDeltaResponse,
 		Payload: payload,
 	})
 
@@ -608,7 +608,7 @@ func TestRouter_IgnoresUnsolicitedReplayDeltaResponse(t *testing.T) {
 
 	r.handleMessage(&peermanagement.InboundMessage{
 		PeerID:  7,
-		Type:    uint16(message.TypeReplayDeltaResponse),
+		Type:    message.TypeReplayDeltaResponse,
 		Payload: payload,
 	})
 
@@ -662,7 +662,7 @@ func TestRouter_ConsensusRecoveryWalkNotifiesOnlyExactTarget(t *testing.T) {
 	payload1, err := message.Encode(resp1)
 	require.NoError(t, err)
 	r.handleMessage(&peermanagement.InboundMessage{
-		PeerID: 7, Type: uint16(message.TypeReplayDeltaResponse), Payload: payload1,
+		PeerID: 7, Type: message.TypeReplayDeltaResponse, Payload: payload1,
 	})
 	require.Empty(t, engine.getLedgers())
 	require.Equal(t, consensusRecovery{
@@ -676,7 +676,7 @@ func TestRouter_ConsensusRecoveryWalkNotifiesOnlyExactTarget(t *testing.T) {
 	payload2, err := message.Encode(resp2)
 	require.NoError(t, err)
 	r.handleMessage(&peermanagement.InboundMessage{
-		PeerID: 7, Type: uint16(message.TypeReplayDeltaResponse), Payload: payload2,
+		PeerID: 7, Type: message.TypeReplayDeltaResponse, Payload: payload2,
 	})
 	require.Equal(t, []consensus.LedgerID{consensus.LedgerID(hash2)}, engine.getLedgers())
 	require.Equal(t, consensusRecovery{anchorHash: hash2, anchorSeq: seq2}, r.consensusRecovery)
@@ -720,7 +720,7 @@ func TestRouter_ConsensusRecoveryTargetChangeKeepsStepStoreOnly(t *testing.T) {
 	payload, err := message.Encode(resp1)
 	require.NoError(t, err)
 	r.handleMessage(&peermanagement.InboundMessage{
-		PeerID: 7, Type: uint16(message.TypeReplayDeltaResponse), Payload: payload,
+		PeerID: 7, Type: message.TypeReplayDeltaResponse, Payload: payload,
 	})
 	require.Empty(t, engine.getLedgers())
 	require.Equal(t, consensusRecovery{
@@ -880,7 +880,7 @@ func TestRouter_ReplayDeltaStoresOutOfOrderArrivalsByHash(t *testing.T) {
 	require.NoError(t, err)
 	r.handleMessage(&peermanagement.InboundMessage{
 		PeerID:  7,
-		Type:    uint16(message.TypeReplayDeltaResponse),
+		Type:    message.TypeReplayDeltaResponse,
 		Payload: payloadN2,
 	})
 
@@ -896,7 +896,7 @@ func TestRouter_ReplayDeltaStoresOutOfOrderArrivalsByHash(t *testing.T) {
 	require.NoError(t, err)
 	r.handleMessage(&peermanagement.InboundMessage{
 		PeerID:  9,
-		Type:    uint16(message.TypeReplayDeltaResponse),
+		Type:    message.TypeReplayDeltaResponse,
 		Payload: payloadN1,
 	})
 
@@ -953,7 +953,7 @@ func TestRouter_ReplayDeltaStoresWithoutParentChase(t *testing.T) {
 	require.NoError(t, err)
 	r.handleMessage(&peermanagement.InboundMessage{
 		PeerID:  7,
-		Type:    uint16(message.TypeReplayDeltaResponse),
+		Type:    message.TypeReplayDeltaResponse,
 		Payload: payloadN2,
 	})
 
@@ -996,7 +996,7 @@ func TestRouter_InitialReplaySwitchSchedulesHistoryBackfill(t *testing.T) {
 	require.NoError(t, err)
 	r.handleMessage(&peermanagement.InboundMessage{
 		PeerID:  7,
-		Type:    uint16(message.TypeReplayDeltaResponse),
+		Type:    message.TypeReplayDeltaResponse,
 		Payload: payload,
 	})
 

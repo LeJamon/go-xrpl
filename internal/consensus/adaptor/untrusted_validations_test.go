@@ -131,7 +131,7 @@ func TestRouter_DropUntrustedValidations(t *testing.T) {
 		v.Signature = make([]byte, 70)
 		return &peermanagement.InboundMessage{
 			PeerID:  2,
-			Type:    uint16(message.TypeValidation),
+			Type:    message.TypeValidation,
 			Payload: encodePayload(t, &message.Validation{Validation: SerializeSTValidation(v)}),
 		}
 	}

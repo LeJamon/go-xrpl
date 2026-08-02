@@ -37,7 +37,7 @@ func TestOverlay_TxLane_BoundedByCapacity(t *testing.T) {
 		o.onMessageReceived(Event{
 			Type:        EventMessageReceived,
 			PeerID:      PeerID(1),
-			MessageType: uint16(message.TypeTransaction),
+			MessageType: message.TypeTransaction,
 			Payload:     []byte{0xde, 0xad, 0xbe, 0xef},
 		})
 	}
@@ -71,7 +71,7 @@ func TestOverlay_TxFlood_DoesNotStarveConsensusLane(t *testing.T) {
 		o.onMessageReceived(Event{
 			Type:        EventMessageReceived,
 			PeerID:      PeerID(1),
-			MessageType: uint16(message.TypeTransaction),
+			MessageType: message.TypeTransaction,
 			Payload:     []byte{0x01},
 		})
 	}
@@ -87,7 +87,7 @@ func TestOverlay_TxFlood_DoesNotStarveConsensusLane(t *testing.T) {
 		o.onMessageReceived(Event{
 			Type:        EventMessageReceived,
 			PeerID:      PeerID(1),
-			MessageType: uint16(mt),
+			MessageType: mt,
 			Payload:     []byte{0x00},
 		})
 	}
@@ -95,7 +95,7 @@ func TestOverlay_TxFlood_DoesNotStarveConsensusLane(t *testing.T) {
 	o.onMessageReceived(Event{
 		Type:        EventMessageReceived,
 		PeerID:      PeerID(1),
-		MessageType: uint16(message.TypeLedgerData),
+		MessageType: message.TypeLedgerData,
 		Payload:     []byte{0x00},
 	})
 
@@ -114,7 +114,7 @@ func TestOverlay_OrdinaryTrafficUsesBestEffortLane(t *testing.T) {
 		o.onMessageReceived(Event{
 			Type:        EventMessageReceived,
 			PeerID:      PeerID(1),
-			MessageType: uint16(message.TypeGetLedger),
+			MessageType: message.TypeGetLedger,
 			Payload:     []byte{0x00},
 		})
 	}
@@ -145,7 +145,7 @@ func TestOverlay_ConsensusTrafficBackpressures(t *testing.T) {
 			evt := Event{
 				Type:        EventMessageReceived,
 				PeerID:      PeerID(1),
-				MessageType: uint16(msgType),
+				MessageType: msgType,
 				Payload:     []byte{0x00},
 			}
 			o.onMessageReceived(evt)
@@ -162,14 +162,14 @@ func TestOverlay_ConsensusTrafficBackpressures(t *testing.T) {
 			}
 
 			first := <-o.consensusMessages
-			assert.Equal(t, uint16(msgType), first.Type)
+			assert.Equal(t, msgType, first.Type)
 			select {
 			case <-done:
 			case <-time.After(time.Second):
 				t.Fatal("consensus message did not resume after capacity became available")
 			}
 			second := <-o.consensusMessages
-			assert.Equal(t, uint16(msgType), second.Type)
+			assert.Equal(t, msgType, second.Type)
 			assert.Equal(t, uint64(0), o.DroppedMessages())
 			assert.Empty(t, o.messages)
 		})
@@ -186,7 +186,7 @@ func TestOverlay_ConsensusControlTrafficBackpressures(t *testing.T) {
 			evt := Event{
 				Type:        EventMessageReceived,
 				PeerID:      PeerID(1),
-				MessageType: uint16(msgType),
+				MessageType: msgType,
 				Payload:     []byte{0x00},
 			}
 			o.onMessageReceived(evt)
@@ -203,14 +203,14 @@ func TestOverlay_ConsensusControlTrafficBackpressures(t *testing.T) {
 			}
 
 			first := <-o.consensusControlMessages
-			assert.Equal(t, uint16(msgType), first.Type)
+			assert.Equal(t, msgType, first.Type)
 			select {
 			case <-done:
 			case <-time.After(time.Second):
 				t.Fatal("consensus control message did not resume after capacity became available")
 			}
 			second := <-o.consensusControlMessages
-			assert.Equal(t, uint16(msgType), second.Type)
+			assert.Equal(t, msgType, second.Type)
 			assert.Equal(t, uint64(0), o.DroppedMessages())
 			assert.Empty(t, o.messages)
 			assert.Empty(t, o.consensusMessages)
@@ -233,7 +233,7 @@ func TestOverlay_ConsensusBackpressureReleasesOnShutdown(t *testing.T) {
 			evt := Event{
 				Type:        EventMessageReceived,
 				PeerID:      PeerID(1),
-				MessageType: uint16(tc.msgType),
+				MessageType: tc.msgType,
 				Payload:     []byte{0x00},
 			}
 			o.onMessageReceived(evt)
@@ -265,7 +265,7 @@ func TestOverlay_ServiceSaturationDoesNotBlockConsensusLanes(t *testing.T) {
 	serviceEvent := Event{
 		Type:        EventMessageReceived,
 		PeerID:      PeerID(1),
-		MessageType: uint16(message.TypeGetLedger),
+		MessageType: message.TypeGetLedger,
 		Payload:     []byte{0x00},
 	}
 	for range cap(o.messages) + 3 {
@@ -284,7 +284,7 @@ func TestOverlay_ServiceSaturationDoesNotBlockConsensusLanes(t *testing.T) {
 		o.onMessageReceived(Event{
 			Type:        EventMessageReceived,
 			PeerID:      PeerID(1),
-			MessageType: uint16(msgType),
+			MessageType: msgType,
 			Payload:     []byte{0x00},
 		})
 	}
@@ -296,7 +296,7 @@ func TestOverlay_ServiceSaturationDoesNotBlockConsensusLanes(t *testing.T) {
 		o.onMessageReceived(Event{
 			Type:        EventMessageReceived,
 			PeerID:      PeerID(1),
-			MessageType: uint16(msgType),
+			MessageType: msgType,
 			Payload:     []byte{0x00},
 		})
 	}
@@ -304,10 +304,10 @@ func TestOverlay_ServiceSaturationDoesNotBlockConsensusLanes(t *testing.T) {
 	assert.Len(t, o.consensusMessages, 4)
 	assert.Len(t, o.consensusControlMessages, 2)
 	for _, want := range priorityTypes {
-		assert.Equal(t, uint16(want), (<-o.consensusMessages).Type)
+		assert.Equal(t, want, (<-o.consensusMessages).Type)
 	}
 	for _, want := range controlTypes {
-		assert.Equal(t, uint16(want), (<-o.consensusControlMessages).Type)
+		assert.Equal(t, want, (<-o.consensusControlMessages).Type)
 	}
 	assert.Equal(t, uint64(3), o.DroppedMessages(),
 		"consensus traffic must not increment service shedding")
@@ -320,7 +320,7 @@ func TestOverlay_AcquisitionRepliesUseDedicatedLane(t *testing.T) {
 	o.onMessageReceived(Event{
 		Type:        EventMessageReceived,
 		PeerID:      PeerID(1),
-		MessageType: uint16(message.TypeLedgerData),
+		MessageType: message.TypeLedgerData,
 		Payload:     []byte{0x00},
 	})
 
@@ -329,7 +329,7 @@ func TestOverlay_AcquisitionRepliesUseDedicatedLane(t *testing.T) {
 		o.onMessageReceived(Event{
 			Type:        EventMessageReceived,
 			PeerID:      PeerID(1),
-			MessageType: uint16(message.TypeLedgerData),
+			MessageType: message.TypeLedgerData,
 			Payload:     []byte{0x00},
 		})
 		close(done)
@@ -373,7 +373,7 @@ func TestOverlay_AcquisitionBackpressureReleasesOnRunShutdown(t *testing.T) {
 		o.onMessageReceived(Event{
 			Type:        EventMessageReceived,
 			PeerID:      PeerID(1),
-			MessageType: uint16(message.TypeLedgerData),
+			MessageType: message.TypeLedgerData,
 			Payload:     []byte{0x00},
 		})
 		close(done)
@@ -418,7 +418,7 @@ func TestOverlay_TxLane_BoundedGoroutines(t *testing.T) {
 				o.onMessageReceived(Event{
 					Type:        EventMessageReceived,
 					PeerID:      PeerID(1),
-					MessageType: uint16(message.TypeTransaction),
+					MessageType: message.TypeTransaction,
 					Payload:     []byte{0x01},
 				})
 			}

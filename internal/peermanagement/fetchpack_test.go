@@ -73,7 +73,7 @@ func TestServeFetchPack_RepliesWithPack(t *testing.T) {
 
 	o.onMessageReceived(Event{
 		PeerID:      peer.ID(),
-		MessageType: uint16(message.TypeGetObjects),
+		MessageType: message.TypeGetObjects,
 		Payload:     payload,
 	})
 
@@ -117,7 +117,7 @@ func TestServeFetchPack_EmptyPackNoReply(t *testing.T) {
 
 	o.onMessageReceived(Event{
 		PeerID:      peer.ID(),
-		MessageType: uint16(message.TypeGetObjects),
+		MessageType: message.TypeGetObjects,
 		Payload:     payload,
 	})
 
@@ -186,7 +186,7 @@ func TestServeFetchPack_BadHashCharged(t *testing.T) {
 
 	o.onMessageReceived(Event{
 		PeerID:      peer.ID(),
-		MessageType: uint16(message.TypeGetObjects),
+		MessageType: message.TypeGetObjects,
 		Payload:     payload,
 	})
 
@@ -208,13 +208,13 @@ func TestHandleGetObjects_FetchPackReplyForwardedToRouter(t *testing.T) {
 
 	o.onMessageReceived(Event{
 		PeerID:      peer.ID(),
-		MessageType: uint16(message.TypeGetObjects),
+		MessageType: message.TypeGetObjects,
 		Payload:     payload,
 	})
 
 	select {
 	case got := <-o.ledgerData:
-		assert.Equal(t, uint16(message.TypeGetObjects), got.Type)
+		assert.Equal(t, message.TypeGetObjects, got.Type)
 		assert.Equal(t, peer.ID(), got.PeerID)
 	default:
 		t.Fatal("fetch-pack reply was not forwarded to the router channel")

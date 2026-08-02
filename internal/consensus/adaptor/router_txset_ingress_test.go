@@ -46,7 +46,7 @@ func deliverTxSetData(t *testing.T, r *Router, peerID uint64, data *message.Ledg
 	t.Helper()
 	r.handleLedgerData(&peermanagement.InboundMessage{
 		PeerID:  peermanagement.PeerID(peerID),
-		Type:    uint16(message.TypeLedgerData),
+		Type:    message.TypeLedgerData,
 		Payload: encodePayload(t, data),
 	})
 }

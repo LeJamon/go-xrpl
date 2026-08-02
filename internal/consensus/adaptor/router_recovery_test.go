@@ -42,7 +42,7 @@ func TestRouter_AdoptVerifiedLedger_NotifiesEngine(t *testing.T) {
 	require.NoError(t, err)
 	r.handleMessage(&peermanagement.InboundMessage{
 		PeerID:  7,
-		Type:    uint16(message.TypeReplayDeltaResponse),
+		Type:    message.TypeReplayDeltaResponse,
 		Payload: payload,
 	})
 

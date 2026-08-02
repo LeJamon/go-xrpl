@@ -96,10 +96,11 @@ type Overlay struct {
 
 	// relayedIndex maps a suppression hash to peers that delivered the
 	// corresponding message to us. Outbound recipients are never recorded.
-	relayedIndex    map[[32]byte]*relayedEntry
-	relayedIndexMu  sync.Mutex
-	clockForIndex   func() time.Time
-	clockForCluster func() time.Time
+	relayedIndex   map[[32]byte]*relayedEntry
+	relayedIndexMu sync.Mutex
+	// clock is the single time source for Overlay state that needs
+	// deterministic expiry or suppression windows.
+	clock func() time.Time
 
 	fanoutLogMu         sync.Mutex
 	fanoutLogLast       time.Time
@@ -876,8 +877,7 @@ func New(opts ...Option) (*Overlay, error) {
 		stopCh:                   make(chan struct{}),
 		listenerReady:            make(chan struct{}),
 		relayedIndex:             make(map[[32]byte]*relayedEntry),
-		clockForIndex:            time.Now,
-		clockForCluster:          time.Now,
+		clock:                    cfg.Clock,
 		inboundSem:               make(chan struct{}, inboundCap),
 		outboundSem:              make(chan struct{}, outboundCap),
 		resourceManager:          resource.NewManager(nil, nil),

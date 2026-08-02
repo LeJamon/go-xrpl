@@ -590,7 +590,7 @@ func (r *nodeRuntime) configureConsensus() error {
 			overlay.SetLocalLoadFeeProvider(ft.LocalFee)
 		}
 
-		r.services.NodePublicKey = r.consensus.Overlay.Identity().EncodedPublicKey()
+		r.services.NodePublicKey = r.consensus.Overlay.NodePublicKey()
 		engine := r.consensus.Engine
 		r.services.LastCloseInfo = func() (int, int) {
 			proposers, convergeTime := engine.GetLastCloseInfo()
