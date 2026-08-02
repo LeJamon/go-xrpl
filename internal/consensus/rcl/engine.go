@@ -102,7 +102,8 @@ type Engine struct {
 	// validationTracker accumulates trusted validations across ledgers and
 	// fires the fully-validated callback at quorum, driving
 	// server_info.validated_ledger forward.
-	validationTracker *ValidationTracker
+	validationTracker  *ValidationTracker
+	validationConfigMu sync.Mutex
 
 	// disputeTracker owns the per-tx DisputedTx entries and per-peer vote
 	// map. Written by createDisputesAgainst / OnProposal / OnTxSet /
@@ -251,6 +252,50 @@ type Engine struct {
 	// startup UNL and skips OnUNLChange, so the startup UNL is not reported
 	// as `added`. Mutated under e.mu.
 	previousTrustedSeeded bool
+}
+
+type validationConfigProvider interface {
+	GetValidationConfig() ([]consensus.NodeID, int, []consensus.NodeID)
+}
+
+type validationConfigChangeNotifier interface {
+	OnValidationConfigChanged(func())
+}
+
+func validationConfig(adaptor consensus.Adaptor) ([]consensus.NodeID, int, []consensus.NodeID) {
+	if provider, ok := adaptor.(validationConfigProvider); ok {
+		return provider.GetValidationConfig()
+	}
+	trusted, quorum := adaptor.GetTrustedValidatorsAndQuorum()
+	return trusted, quorum, adaptor.GetNegativeUNL()
+}
+
+func (e *Engine) setValidationConfig(trusted []consensus.NodeID, quorum int, negativeUNL []consensus.NodeID) {
+	e.validationConfigMu.Lock()
+	tracker := e.validationTracker
+	if tracker != nil {
+		tracker.updateTrustedQuorumAndNegativeUNL(trusted, quorum, negativeUNL)
+	}
+	e.validationConfigMu.Unlock()
+	if tracker != nil {
+		tracker.drainFinality()
+		tracker.checkAcquired()
+	}
+}
+
+func (e *Engine) refreshValidationConfig() int {
+	e.validationConfigMu.Lock()
+	tracker := e.validationTracker
+	if tracker == nil {
+		e.validationConfigMu.Unlock()
+		return 0
+	}
+	trusted, quorum, negativeUNL := validationConfig(e.adaptor)
+	tracker.updateTrustedQuorumAndNegativeUNL(trusted, quorum, negativeUNL)
+	e.validationConfigMu.Unlock()
+	tracker.drainFinality()
+	tracker.checkAcquired()
+	return quorum
 }
 
 // ValidationArchive is the archive API subset the engine consumes,
@@ -484,11 +529,9 @@ func (e *Engine) Start(ctx context.Context) error {
 	e.ctx, e.cancel = context.WithCancel(ctx)
 	e.prevLedger = ledger
 
-	// Wire the validation tracker: trusted set + quorum from the adaptor;
-	// its callback flips the ledger service's validated_ledger pointer.
-	trusted, quorum := e.adaptor.GetTrustedValidatorsAndQuorum()
+	trusted, quorum, negativeUNL := validationConfig(e.adaptor)
 	e.validationTracker = NewValidationTracker(quorum)
-	e.validationTracker.SetTrustedAndQuorum(trusted, quorum)
+	e.setValidationConfig(trusted, quorum, negativeUNL)
 	e.validationTracker.SetQuorumUnavailableFunc(e.adaptor.IsQuorumUnavailable)
 	if wired, ok := e.adaptor.(consensus.WireableAdaptor); ok {
 		wired.SetValidationHistorian(e.validationTracker)
@@ -499,7 +542,21 @@ func (e *Engine) Start(ctx context.Context) error {
 	// count what the newly-trusted validator already signed.
 	if notifier, ok := e.adaptor.(consensus.TrustChangeNotifier); ok {
 		tracker := e.validationTracker
-		notifier.OnTrustChanged(tracker.SetTrustedAndQuorum)
+		notifier.OnTrustChanged(func(trusted []consensus.NodeID, quorum int) {
+			if _, ok := e.adaptor.(validationConfigProvider); ok {
+				e.refreshValidationConfig()
+				return
+			}
+			e.setValidationConfig(trusted, quorum, e.adaptor.GetNegativeUNL())
+		})
+		if settled, ok := e.adaptor.(consensus.TrustChangeSettledNotifier); ok {
+			settled.OnTrustSettled(tracker.RecheckFinality)
+		}
+	}
+	_, validationConfigNotified := e.adaptor.(validationConfigChangeNotifier)
+	if notifier, ok := e.adaptor.(validationConfigChangeNotifier); ok {
+		notifier.OnValidationConfigChanged(func() { e.refreshValidationConfig() })
+		e.refreshValidationConfig()
 	}
 	if e.ledgerAncestry != nil {
 		e.validationTracker.SetLedgerAncestryProvider(e.ledgerAncestry)
@@ -518,6 +575,9 @@ func (e *Engine) Start(ctx context.Context) error {
 		// e.archive / e.inMemoryLedgers are read via atomics to stay
 		// race-free against SetArchive.
 		e.adaptor.OnLedgerFullyValidated(ledgerID, seq)
+		if !validationConfigNotified {
+			e.refreshValidationConfig()
+		}
 
 		arc := e.loadArchive()
 		inMem := e.inMemoryLedgers.Load()
@@ -1387,7 +1447,11 @@ func (e *Engine) closeLedger() {
 		prev := e.prevLedger
 		switch {
 		case protocol.IsFlagLedger(prev.Seq()):
-			parentVals := e.parentValidations(prev.ParentID())
+			var parentSeq uint32
+			if prev.Seq() > 0 {
+				parentSeq = prev.Seq() - 1
+			}
+			parentVals := e.parentValidations(prev.ParentID(), parentSeq)
 			if extra := e.adaptor.GenerateFlagLedgerPseudoTxs(prev, parentVals); len(extra) > 0 {
 				txs = append(txs, extra...)
 			}

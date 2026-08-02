@@ -15,7 +15,9 @@ import (
 func (vt *ValidationTracker) SetTrusted(nodes []consensus.NodeID) {
 	vt.mu.Lock()
 	vt.setTrustedLocked(nodes)
+	vt.recheckFinalityLocked()
 	vt.mu.Unlock()
+	vt.drainFinality()
 	vt.checkAcquired()
 }
 
@@ -24,7 +26,9 @@ func (vt *ValidationTracker) SetTrusted(nodes []consensus.NodeID) {
 func (vt *ValidationTracker) SetQuorum(quorum int) {
 	vt.mu.Lock()
 	vt.quorum = quorum
+	vt.recheckFinalityLocked()
 	vt.mu.Unlock()
+	vt.drainFinality()
 }
 
 // TrustedSupport returns trusted, non-negative-UNL validators supporting the
@@ -56,7 +60,7 @@ func (vt *ValidationTracker) TrustedSupport(ledgerID consensus.LedgerID) int {
 				return 0
 			}
 			ledgerVals.touch(vt.now())
-			count := vt.countTrustedExcludingNegUNLLocked(ledgerVals.vals)
+			count := countTrustedExcludingNegUNLLocked(ledgerVals.vals, vt.trusted, vt.negUNL, nil)
 			vt.mu.Unlock()
 			return count
 		}
@@ -114,7 +118,9 @@ func (vt *ValidationTracker) Clear() {
 
 	vt.validations = make(map[consensus.LedgerID]*ledgerValidations)
 	vt.byNode = make(map[consensus.NodeID]*consensus.Validation)
-	vt.fired = make(map[consensus.LedgerID]struct{})
+	vt.fired = make(map[finalityKey]struct{})
+	vt.pendingFinality = nil
+	vt.pendingGeneration = make(map[finalityKey]uint64)
 	vt.rebuildTrieLocked()
 }
 

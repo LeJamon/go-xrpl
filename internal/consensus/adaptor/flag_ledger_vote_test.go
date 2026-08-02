@@ -81,6 +81,7 @@ func TestGenerateFlagLedgerPseudoTxs_FeeVoteSeedsSetFee(t *testing.T) {
 		LedgerSeq:             wrapped.Seq() - 1,
 		NodeID:                a.identity.NodeID,
 		SignTime:              time.Now(),
+		Full:                  true,
 		BaseFee:               100,
 		ReserveBase:           50_000_000,
 		ReserveIncrement:      5_000_000,
@@ -97,6 +98,31 @@ func TestGenerateFlagLedgerPseudoTxs_FeeVoteSeedsSetFee(t *testing.T) {
 		"emitted blob must be a SetFee pseudo-tx")
 	assert.EqualValues(t, prev.Sequence()+1, asUint(stx["LedgerSequence"]),
 		"LedgerSequence carries upcoming seq = parent + 1")
+}
+
+func TestGenerateFlagLedgerPseudoTxs_ExcludesPartialAndWrongSequence(t *testing.T) {
+	a := newTestAdaptorWithConfig(t, FeeVoteStance{BaseFee: 100}, nil)
+	prev := a.ledgerService.GetClosedLedger()
+	require.NotNil(t, prev)
+	wrapped := WrapLedger(prev)
+	parentSeq := wrapped.Seq() - 1
+	parentID := wrapped.ParentID()
+	vote := func(node consensus.NodeID, seq uint32, full bool) *consensus.Validation {
+		return &consensus.Validation{
+			LedgerID: parentID, LedgerSeq: seq, NodeID: node, SignTime: time.Now(), Full: full,
+			BaseFee: 100, ReserveBase: 50_000_000, ReserveIncrement: 5_000_000,
+			BaseFeeDrops: 100, ReserveBaseDrops: 50_000_000, ReserveIncrementDrops: 5_000_000,
+		}
+	}
+
+	vals := []*consensus.Validation{
+		vote(a.identity.NodeID, parentSeq, false),
+		vote(a.identity.NodeID, parentSeq+1, true),
+		vote(consensus.NodeID{3}, parentSeq, true),
+	}
+	if blobs := a.GenerateFlagLedgerPseudoTxs(wrapped, vals); len(blobs) != 0 {
+		t.Fatalf("partial/wrong-sequence validations influenced flag-ledger votes: %d blobs", len(blobs))
+	}
 }
 
 func TestExtractFeeVote_NonNativeAndAbsentUseCurrent(t *testing.T) {
@@ -306,10 +332,11 @@ func TestGenerateFlagLedgerPseudoTxs_AmendmentVoteSeedsGotMajority(t *testing.T)
 	a.amendmentStances = map[[32]byte]amendmentvote.Stance{target: amendmentvote.VoteUp}
 
 	val := &consensus.Validation{
-		LedgerID:   wrapped.ID(),
-		LedgerSeq:  wrapped.Seq(),
+		LedgerID:   wrapped.ParentID(),
+		LedgerSeq:  wrapped.Seq() - 1,
 		NodeID:     a.identity.NodeID,
 		SignTime:   time.Now(),
+		Full:       true,
 		Amendments: [][32]byte{target},
 	}
 
@@ -381,10 +408,11 @@ func TestGenerateFlagLedgerPseudoTxs_UnsupportedAmendmentNotWalked(t *testing.T)
 	// keep it out of the pseudo-tx set.
 	a.amendmentStances = map[[32]byte]amendmentvote.Stance{target: amendmentvote.VoteUp}
 	val := &consensus.Validation{
-		LedgerID:   wrapped.ID(),
-		LedgerSeq:  wrapped.Seq(),
+		LedgerID:   wrapped.ParentID(),
+		LedgerSeq:  wrapped.Seq() - 1,
 		NodeID:     a.identity.NodeID,
 		SignTime:   time.Now(),
+		Full:       true,
 		Amendments: [][32]byte{target},
 	}
 

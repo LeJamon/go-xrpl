@@ -2,6 +2,7 @@ package rcl
 
 import (
 	"log/slog"
+	"sort"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -116,6 +117,17 @@ type ledgerValidations struct {
 	lastAccess atomic.Int64
 }
 
+type finalityKey struct {
+	ledgerID  consensus.LedgerID
+	ledgerSeq uint32
+}
+
+type finalityNotification struct {
+	ledgerID   consensus.LedgerID
+	ledgerSeq  uint32
+	generation uint64
+}
+
 func (lv *ledgerValidations) touch(now time.Time) {
 	lv.lastAccess.Store(now.UnixNano())
 }
@@ -170,7 +182,16 @@ type ValidationTracker struct {
 	// fired records ledgers we've already reported as fully validated,
 	// so the callback fires exactly once per ledger even if more
 	// validations keep arriving after the threshold is crossed.
-	fired map[consensus.LedgerID]struct{}
+	fired map[finalityKey]struct{}
+
+	// pendingFinality is the small, deduplicated queue of notifications that
+	// have crossed quorum but have not yet entered their callback. The queue is
+	// drained outside mu; pendingGeneration lets a cancelled/re-queued key's
+	// old queue node be discarded without racing the drainer.
+	pendingFinality     []finalityNotification
+	pendingGeneration   map[finalityKey]uint64
+	finalityGeneration  uint64
+	dispatchingFinality bool
 
 	// minSeq is the sequence floor for accepting new validations.
 	// Validations with LedgerSeq < minSeq are rejected in Add(). The
@@ -227,16 +248,29 @@ type ValidationTracker struct {
 // close-time offset.
 func NewValidationTracker(quorum int) *ValidationTracker {
 	return &ValidationTracker{
-		now:          time.Now,
-		validations:  make(map[consensus.LedgerID]*ledgerValidations),
-		byNode:       make(map[consensus.NodeID]*consensus.Validation),
-		bySequence:   make(map[uint32]*seqValidations),
-		seqEnforcers: make(map[consensus.NodeID]*seqEnforcer),
-		trusted:      make(map[consensus.NodeID]bool),
-		negUNL:       make(map[consensus.NodeID]bool),
-		quorum:       quorum,
-		fired:        make(map[consensus.LedgerID]struct{}),
+		now:               time.Now,
+		validations:       make(map[consensus.LedgerID]*ledgerValidations),
+		byNode:            make(map[consensus.NodeID]*consensus.Validation),
+		bySequence:        make(map[uint32]*seqValidations),
+		seqEnforcers:      make(map[consensus.NodeID]*seqEnforcer),
+		trusted:           make(map[consensus.NodeID]bool),
+		negUNL:            make(map[consensus.NodeID]bool),
+		quorum:            quorum,
+		fired:             make(map[finalityKey]struct{}),
+		pendingGeneration: make(map[finalityKey]uint64),
 	}
+}
+
+func cloneValidation(validation *consensus.Validation) *consensus.Validation {
+	if validation == nil {
+		return nil
+	}
+	clone := *validation
+	clone.Signature = append([]byte(nil), validation.Signature...)
+	clone.Amendments = append([][32]byte(nil), validation.Amendments...)
+	clone.SigningData = append([]byte(nil), validation.SigningData...)
+	clone.Raw = append([]byte(nil), validation.Raw...)
+	return &clone
 }
 
 // SetNow replaces the clock used by isCurrent for freshness checks.
@@ -260,8 +294,35 @@ func (vt *ValidationTracker) SetTrustedAndQuorum(nodes []consensus.NodeID, quoru
 	vt.mu.Lock()
 	vt.setTrustedLocked(nodes)
 	vt.quorum = quorum
+	vt.recheckFinalityLocked()
 	vt.mu.Unlock()
+	vt.drainFinality()
 	vt.checkAcquired()
+}
+
+// SetTrustedQuorumAndNegativeUNL replaces every input to finality accounting
+// under one lock so no intermediate configuration can promote a ledger.
+func (vt *ValidationTracker) SetTrustedQuorumAndNegativeUNL(
+	nodes []consensus.NodeID,
+	quorum int,
+	negativeUNL []consensus.NodeID,
+) {
+	vt.updateTrustedQuorumAndNegativeUNL(nodes, quorum, negativeUNL)
+	vt.drainFinality()
+	vt.checkAcquired()
+}
+
+func (vt *ValidationTracker) updateTrustedQuorumAndNegativeUNL(
+	nodes []consensus.NodeID,
+	quorum int,
+	negativeUNL []consensus.NodeID,
+) {
+	vt.mu.Lock()
+	vt.setTrustedLocked(nodes)
+	vt.quorum = quorum
+	vt.setNegativeUNLLocked(negativeUNL)
+	vt.recheckFinalityLocked()
+	vt.mu.Unlock()
 }
 
 func (vt *ValidationTracker) setTrustedLocked(nodes []consensus.NodeID) {
@@ -275,8 +336,22 @@ func (vt *ValidationTracker) setTrustedLocked(nodes []consensus.NodeID) {
 // SetQuorumUnavailableFunc installs the live finality safety gate.
 func (vt *ValidationTracker) SetQuorumUnavailableFunc(fn func() bool) {
 	vt.mu.Lock()
-	defer vt.mu.Unlock()
 	vt.quorumUnavailable = fn
+	vt.recheckFinalityLocked()
+	vt.mu.Unlock()
+	vt.drainFinality()
+}
+
+// RecheckFinality reevaluates stored validation buckets against the current
+// quorum, trust, negative-UNL, and live-unavailable state. Callers that own a
+// dynamic quorum-unavailable source should invoke this after that source
+// transitions open so evidence collected while the gate was closed can be
+// promoted without waiting for another validation message.
+func (vt *ValidationTracker) RecheckFinality() {
+	vt.mu.Lock()
+	vt.recheckFinalityLocked()
+	vt.mu.Unlock()
+	vt.drainFinality()
 }
 
 // SetSeqToKeep pins validations in [low, high) so ExpireOld will not drop
@@ -305,13 +380,20 @@ func (vt *ValidationTracker) SetSeqToKeep(low, high uint32) {
 // empty slice to clear the negUNL.
 func (vt *ValidationTracker) SetNegativeUNL(nodes []consensus.NodeID) {
 	vt.mu.Lock()
+	vt.setNegativeUNLLocked(nodes)
+	// Negative-UNL membership only changes quorum accounting. Trusted
+	// validators remain in the trie so preferred-ledger steering and any
+	// in-flight acquisition state are preserved.
+	vt.recheckFinalityLocked()
+	vt.mu.Unlock()
+	vt.drainFinality()
+}
+
+func (vt *ValidationTracker) setNegativeUNLLocked(nodes []consensus.NodeID) {
 	vt.negUNL = make(map[consensus.NodeID]bool, len(nodes))
 	for _, n := range nodes {
 		vt.negUNL[n] = true
 	}
-	vt.rebuildTrieLocked()
-	vt.mu.Unlock()
-	vt.checkAcquired()
 }
 
 // SetMinSeq advances the sequence floor below which incoming
@@ -332,8 +414,12 @@ func (vt *ValidationTracker) SetMinSeq(seq uint32) {
 // stamp the ledger without a secondary map lookup.
 func (vt *ValidationTracker) SetFullyValidatedCallback(fn func(ledgerID consensus.LedgerID, ledgerSeq uint32)) {
 	vt.mu.Lock()
-	defer vt.mu.Unlock()
 	vt.onFullyValidated = fn
+	if fn != nil {
+		vt.recheckFinalityLocked()
+	}
+	vt.mu.Unlock()
+	vt.drainFinality()
 }
 
 // SetOnStale installs a callback invoked once per validation dropped by
@@ -438,8 +524,10 @@ func (vt *ValidationTracker) Add(validation *consensus.Validation) bool {
 //     accepts, validations for seqs many rounds back are noise that
 //     can never retroactively become quorum; keeping them in memory
 //     wastes work on every checkFullValidation pass.
-//   - Per-node newer-seq-only rule: a node's tip is superseded only by
-//     a strictly higher seq; a same-or-lower seq is rejected.
+//   - The current/by-node tip follows rippled's signing-time rule: a
+//     validation replaces the current tip only when its sign time is newer.
+//     Sequence monotonicity and equivocation remain enforced independently by
+//     bySequence/seqEnforcers.
 //
 // onFullyValidated is fired OUTSIDE vt.mu so the callback may call
 // back into the tracker (e.g. ExpireOld) or take other locks that
@@ -456,17 +544,12 @@ func (vt *ValidationTracker) Add(validation *consensus.Validation) bool {
 // Defer order is LIFO: vt.mu.Unlock runs first (released before the
 // callback), then the captured fire-tuple is dispatched.
 func (vt *ValidationTracker) AddStatus(validation *consensus.Validation) ValStatus {
-	var (
-		fireID     consensus.LedgerID
-		fireSeq    uint32
-		shouldFire bool
-		cb         func(consensus.LedgerID, uint32)
-	)
-	defer func() {
-		if shouldFire && cb != nil {
-			cb(fireID, fireSeq)
-		}
-	}()
+	if validation == nil {
+		return ValStatusStale
+	}
+	// The tracker owns every validation it admits. Clone before reading any
+	// mutable field so later caller mutations cannot alter indexed state.
+	validation = cloneValidation(validation)
 
 	vt.mu.RLock()
 	nowFn := vt.now
@@ -490,7 +573,10 @@ func (vt *ValidationTracker) AddStatus(validation *consensus.Validation) ValStat
 	}
 
 	vt.mu.Lock()
-	defer vt.mu.Unlock()
+	defer func() {
+		vt.mu.Unlock()
+		vt.drainFinality()
+	}()
 
 	// validation.NodeID is already master-shaped on entry — the
 	// consensus router resolved the ephemeral signing pubkey through
@@ -530,18 +616,7 @@ func (vt *ValidationTracker) AddStatus(validation *consensus.Validation) ValStat
 		return ValStatusStale
 	}
 
-	// Supersede a node's tip only with a strictly higher seq; a
-	// same-or-lower-seq re-sign is rejected so a stale or sideways
-	// ledger can't skew ProposersFinished / PreferredFromValidations.
 	existing, hasExisting := vt.byNode[resolvedID]
-	if hasExisting {
-		if validation.LedgerSeq <= existing.LedgerSeq {
-			return ValStatusStale
-		}
-	}
-
-	// Update by-node tracking
-	vt.byNode[resolvedID] = validation
 
 	// Add to ledger validations
 	ledgerVals, exists := vt.validations[validation.LedgerID]
@@ -551,6 +626,19 @@ func (vt *ValidationTracker) AddStatus(validation *consensus.Validation) ValStat
 		vt.validations[validation.LedgerID] = ledgerVals
 	}
 	ledgerVals.vals[resolvedID] = validation
+
+	// Rippled's current_ map is replaced by signing time, not by sequence.
+	// A higher-sequence validation with an older/equal sign time remains in
+	// byLedger (and can therefore support its exact ledger) but does not move
+	// the node's current tip or trie position.
+	replaceCurrent := !hasExisting || validation.SignTime.After(existing.SignTime)
+	if !replaceCurrent {
+		// Rippled records the by-ledger evidence before returning Stale, but
+		// only a Current validation drives checkAccept. A later trust/quorum
+		// recheck can still promote this exact ledger without another message.
+		return ValStatusStale
+	}
+	vt.byNode[resolvedID] = validation
 
 	// Steer the trie on trusted() alone — negUNL validators included —
 	// mirroring rippled's updateTrie precondition. negUNL exclusion lives
@@ -563,10 +651,9 @@ func (vt *ValidationTracker) AddStatus(validation *consensus.Validation) ValStat
 		vt.updateTrieLocked(resolvedID, validation, preResolvedLedger, trieSnap, prior)
 	}
 
-	// Capture the fire-tuple under the lock; the deferred dispatcher
-	// invokes onFullyValidated after vt.mu.Unlock has run.
-	fireID, fireSeq, shouldFire = vt.checkFullValidationLocked(validation.LedgerID)
-	cb = vt.onFullyValidated
+	// Queue the fire-tuple under the lock; the deferred drainer revalidates
+	// eligibility and invokes the callback only after vt.mu is released.
+	vt.checkFullValidationLocked(validation.LedgerID, validation.LedgerSeq, true)
 	return ValStatusCurrent
 }
 
@@ -596,13 +683,9 @@ func (vt *ValidationTracker) trackBySequenceLocked(
 }
 
 // checkFullValidationLocked records that a ledger crossed the quorum
-// threshold (via vt.fired) and returns the (id, seq, shouldFire) tuple
-// the caller needs to invoke onFullyValidated outside the lock.
-//
-// Fires (well, requests-fire-by) exactly once per ledger — the first
-// time trusted count crosses the quorum threshold. Subsequent adds for
-// the same ledger are ignored to avoid repeatedly flipping
-// server_info's validated_ledger on every late-arriving peer validation.
+// threshold and enqueues one exact (hash, sequence) notification. The queue
+// is drained outside vt.mu; the drainer revalidates the live gate and current
+// evidence immediately before invoking the callback.
 //
 // Zero-quorum edge case (empty UNL): requires at least one tracked
 // validation for the ledger before firing, so we don't spuriously
@@ -614,40 +697,182 @@ func (vt *ValidationTracker) trackBySequenceLocked(
 // temporarily disabled shouldn't require one MORE validation to finalize.
 //
 // Caller MUST hold vt.mu.
-func (vt *ValidationTracker) checkFullValidationLocked(ledgerID consensus.LedgerID) (consensus.LedgerID, uint32, bool) {
-	if vt.onFullyValidated == nil {
-		return ledgerID, 0, false
-	}
-	if vt.quorumUnavailable != nil && vt.quorumUnavailable() {
-		return ledgerID, 0, false
-	}
-	if _, done := vt.fired[ledgerID]; done {
-		return ledgerID, 0, false
-	}
+func (vt *ValidationTracker) checkFullValidationLocked(
+	ledgerID consensus.LedgerID,
+	ledgerSeq uint32,
+	respectUnavailable bool,
+) bool {
+	key := finalityKey{ledgerID: ledgerID, ledgerSeq: ledgerSeq}
 	ledgerVals, exists := vt.validations[ledgerID]
-	if !exists || len(ledgerVals.vals) == 0 {
-		return ledgerID, 0, false
+	if !exists {
+		vt.cancelFinalityLocked(key)
+		return false
 	}
-
-	var sampleSeq uint32
-	for _, v := range ledgerVals.vals {
-		sampleSeq = v.LedgerSeq
-		break
+	trustedCount := countTrustedAtSeqLocked(ledgerVals.vals, vt.trusted, vt.negUNL, ledgerSeq)
+	// A zero quorum is only safe when there is at least one trusted full
+	// validation for this exact hash/sequence. Untrusted and partial evidence
+	// must never promote a ledger merely because the configured threshold is 0.
+	if trustedCount == 0 || trustedCount < vt.quorum {
+		vt.cancelFinalityLocked(key)
+		return false
 	}
-	trustedCount := vt.countTrustedExcludingNegUNLLocked(ledgerVals.vals)
-
-	if trustedCount >= vt.quorum {
-		vt.fired[ledgerID] = struct{}{}
-		return ledgerID, sampleSeq, true
+	// Keep a delivered marker intact while the live safety gate is closed, but
+	// cancel an event that is still pending so a later gate reopening can
+	// enqueue it again.
+	if respectUnavailable && vt.quorumUnavailableLocked() {
+		if _, pending := vt.pendingGeneration[key]; pending {
+			vt.cancelFinalityLocked(key)
+		}
+		return false
 	}
-	return ledgerID, 0, false
+	if vt.onFullyValidated == nil {
+		return false
+	}
+	if _, done := vt.fired[key]; done {
+		return false
+	}
+	vt.fired[key] = struct{}{}
+	vt.enqueueFinalityLocked(key)
+	return true
 }
 
-// GetTrustedValidations returns trusted validations for a ledger. No
-// seq argument is needed: entries are keyed by ledger hash, which
-// uniquely determines the seq, so all entries under a ledgerID share it.
-// Reading a ledger's set refreshes its access age (rippled's
-// byLedger touch) so actively-queried ledgers survive ExpireOld.
+// recheckFinalityLocked reevaluates every stored hash/sequence pair after a
+// trust, quorum, negative-UNL, or live-gate mutation. Caller must hold vt.mu.
+// Keys are sorted so enqueue order is deterministic despite map-backed
+// storage.
+func (vt *ValidationTracker) recheckFinalityLocked() {
+	keys := make(map[finalityKey]struct{})
+	for ledgerID, ledgerVals := range vt.validations {
+		for _, validation := range ledgerVals.vals {
+			if validation == nil {
+				continue
+			}
+			keys[finalityKey{ledgerID: ledgerID, ledgerSeq: validation.LedgerSeq}] = struct{}{}
+		}
+	}
+	ordered := make([]finalityKey, 0, len(keys))
+	for key := range keys {
+		ordered = append(ordered, key)
+	}
+	sort.Slice(ordered, func(i, j int) bool {
+		if ordered[i].ledgerSeq != ordered[j].ledgerSeq {
+			return ordered[i].ledgerSeq < ordered[j].ledgerSeq
+		}
+		return lexLessLgrID(ordered[i].ledgerID, ordered[j].ledgerID)
+	})
+
+	for _, key := range ordered {
+		vt.checkFullValidationLocked(key.ledgerID, key.ledgerSeq, true)
+	}
+}
+
+// enqueueFinalityLocked appends one notification and keeps the pending queue
+// ordered by (sequence, hash). Caller must hold vt.mu.
+func (vt *ValidationTracker) enqueueFinalityLocked(key finalityKey) {
+	if _, exists := vt.pendingGeneration[key]; exists {
+		return
+	}
+	vt.finalityGeneration++
+	generation := vt.finalityGeneration
+	vt.pendingGeneration[key] = generation
+	vt.pendingFinality = append(vt.pendingFinality, finalityNotification{
+		ledgerID:   key.ledgerID,
+		ledgerSeq:  key.ledgerSeq,
+		generation: generation,
+	})
+	sort.SliceStable(vt.pendingFinality, func(i, j int) bool {
+		left, right := vt.pendingFinality[i], vt.pendingFinality[j]
+		if left.ledgerSeq != right.ledgerSeq {
+			return left.ledgerSeq < right.ledgerSeq
+		}
+		if left.ledgerID != right.ledgerID {
+			return lexLessLgrID(left.ledgerID, right.ledgerID)
+		}
+		return left.generation < right.generation
+	})
+}
+
+// cancelFinalityLocked removes a key's fired marker and pending generation.
+// Queue compaction keeps repeated gate/trust churn from accumulating stale
+// notifications while a callback is in flight.
+func (vt *ValidationTracker) cancelFinalityLocked(key finalityKey) {
+	delete(vt.fired, key)
+	delete(vt.pendingGeneration, key)
+	if len(vt.pendingFinality) == 0 {
+		return
+	}
+	filtered := vt.pendingFinality[:0]
+	for _, notification := range vt.pendingFinality {
+		if notification.ledgerID == key.ledgerID && notification.ledgerSeq == key.ledgerSeq {
+			continue
+		}
+		filtered = append(filtered, notification)
+	}
+	vt.pendingFinality = filtered
+}
+
+// drainFinality is the sole callback dispatcher. It claims the drainer role
+// under vt.mu, then repeatedly pops and revalidates one notification before
+// unlocking for the callback. Reentrant mutations only enqueue work; the
+// active drainer observes and processes it after the callback returns.
+func (vt *ValidationTracker) drainFinality() {
+	vt.mu.Lock()
+	if vt.dispatchingFinality {
+		vt.mu.Unlock()
+		return
+	}
+	vt.dispatchingFinality = true
+	vt.mu.Unlock()
+
+	for {
+		vt.mu.Lock()
+		if len(vt.pendingFinality) == 0 {
+			vt.dispatchingFinality = false
+			vt.mu.Unlock()
+			return
+		}
+		notification := vt.pendingFinality[0]
+		vt.pendingFinality = vt.pendingFinality[1:]
+		key := finalityKey{ledgerID: notification.ledgerID, ledgerSeq: notification.ledgerSeq}
+		generation, pending := vt.pendingGeneration[key]
+		if !pending || generation != notification.generation {
+			vt.mu.Unlock()
+			continue
+		}
+		delete(vt.pendingGeneration, key)
+
+		// Demotion, trust removal, negative-UNL changes, or a closed live gate
+		// can invalidate a queued callback while another goroutine is running.
+		if !vt.finalityEligibleLocked(key, true) || vt.onFullyValidated == nil {
+			vt.cancelFinalityLocked(key)
+			vt.mu.Unlock()
+			continue
+		}
+		callback := vt.onFullyValidated
+		vt.mu.Unlock()
+		callback(key.ledgerID, key.ledgerSeq)
+	}
+}
+
+func (vt *ValidationTracker) finalityEligibleLocked(key finalityKey, respectUnavailable bool) bool {
+	ledgerVals, exists := vt.validations[key.ledgerID]
+	if !exists {
+		return false
+	}
+	trustedCount := countTrustedAtSeqLocked(ledgerVals.vals, vt.trusted, vt.negUNL, key.ledgerSeq)
+	if trustedCount == 0 || trustedCount < vt.quorum {
+		return false
+	}
+	return !respectUnavailable || !vt.quorumUnavailableLocked()
+}
+
+func (vt *ValidationTracker) quorumUnavailableLocked() bool {
+	return vt.quorumUnavailable != nil && vt.quorumUnavailable()
+}
+
+// GetTrustedValidations returns all trusted validations recorded for a ledger
+// hash, including partial validations. Callers that make protocol quorum or
+// voting decisions must use GetTrustedFullValidations instead.
 func (vt *ValidationTracker) GetTrustedValidations(ledgerID consensus.LedgerID) []*consensus.Validation {
 	vt.mu.RLock()
 	defer vt.mu.RUnlock()
@@ -661,8 +886,33 @@ func (vt *ValidationTracker) GetTrustedValidations(ledgerID consensus.LedgerID) 
 	var result []*consensus.Validation
 	for nodeID, v := range ledgerVals.vals {
 		if vt.trusted[nodeID] {
-			result = append(result, v)
+			result = append(result, cloneValidation(v))
 		}
+	}
+	return result
+}
+
+// GetTrustedFullValidations returns deep-cloned trusted full validations for
+// exactly (ledgerID, ledgerSeq). The sequence filter is deliberately enforced
+// inside the tracker so every protocol voting caller sees the same evidence.
+func (vt *ValidationTracker) GetTrustedFullValidations(
+	ledgerID consensus.LedgerID,
+	ledgerSeq uint32,
+) []*consensus.Validation {
+	vt.mu.RLock()
+	defer vt.mu.RUnlock()
+
+	ledgerVals, exists := vt.validations[ledgerID]
+	if !exists {
+		return nil
+	}
+	ledgerVals.touch(vt.now())
+	result := make([]*consensus.Validation, 0, len(ledgerVals.vals))
+	for nodeID, validation := range ledgerVals.vals {
+		if validation == nil || !validation.Full || validation.LedgerSeq != ledgerSeq || !vt.trusted[nodeID] {
+			continue
+		}
+		result = append(result, cloneValidation(validation))
 	}
 	return result
 }
@@ -681,7 +931,7 @@ func (vt *ValidationTracker) RecheckFullyValidated(
 	quorum := vt.quorum
 	ledgerVals, exists := vt.validations[ledgerID]
 	if !exists {
-		delete(vt.fired, ledgerID)
+		vt.cancelFinalityLocked(finalityKey{ledgerID: ledgerID, ledgerSeq: seq})
 		return nil, quorum, false
 	}
 	ledgerVals.touch(vt.now())
@@ -692,12 +942,29 @@ func (vt *ValidationTracker) RecheckFullyValidated(
 			validation.SignTime.IsZero() || !vt.trusted[nodeID] || vt.negUNL[nodeID] {
 			continue
 		}
-		copy := *validation
-		result = append(result, &copy)
+		result = append(result, cloneValidation(validation))
 	}
 	accepted := len(result) > 0 && len(result) >= quorum
+	key := finalityKey{ledgerID: ledgerID, ledgerSeq: seq}
 	if !accepted {
-		delete(vt.fired, ledgerID)
+		vt.cancelFinalityLocked(key)
+		return result, quorum, false
+	}
+	if vt.quorumUnavailableLocked() {
+		// A queued event that has not reached its callback must be re-armed
+		// when the live gate reopens. A previously delivered marker remains
+		// idempotent across a temporary outage.
+		if _, pending := vt.pendingGeneration[key]; pending {
+			vt.cancelFinalityLocked(key)
+		}
+		return result, quorum, false
+	}
+	if vt.onFullyValidated != nil {
+		if _, fired := vt.fired[key]; !fired {
+			vt.fired[key] = struct{}{}
+		}
+	} else {
+		delete(vt.fired, key)
 	}
 	return result, quorum, accepted
 }
@@ -717,7 +984,7 @@ func (vt *ValidationTracker) TrustedValidationCount(ledgerID consensus.LedgerID)
 		return 0
 	}
 	ledgerVals.touch(vt.now())
-	return vt.countTrustedExcludingNegUNLLocked(ledgerVals.vals)
+	return countTrustedExcludingNegUNLLocked(ledgerVals.vals, vt.trusted, vt.negUNL, nil)
 }
 
 // countTrustedExcludingNegUNLLocked counts validators in ledgerVals
@@ -727,16 +994,28 @@ func (vt *ValidationTracker) TrustedValidationCount(ledgerID consensus.LedgerID)
 // finality threshold — mirroring rippled's numTrustedForLedger
 // (Validations.h:1037-1050), which counts full validations only.
 // Caller must hold vt.mu.
-func (vt *ValidationTracker) countTrustedExcludingNegUNLLocked(
+func countTrustedExcludingNegUNLLocked(
 	ledgerVals map[consensus.NodeID]*consensus.Validation,
+	trusted map[consensus.NodeID]bool,
+	negUNL map[consensus.NodeID]bool,
+	seq *uint32,
 ) int {
 	count := 0
 	for nodeID, v := range ledgerVals {
-		if v.Full && vt.trusted[nodeID] && !vt.negUNL[nodeID] {
+		if v != nil && v.Full && trusted[nodeID] && !negUNL[nodeID] && (seq == nil || v.LedgerSeq == *seq) {
 			count++
 		}
 	}
 	return count
+}
+
+func countTrustedAtSeqLocked(
+	ledgerVals map[consensus.NodeID]*consensus.Validation,
+	trusted map[consensus.NodeID]bool,
+	negUNL map[consensus.NodeID]bool,
+	seq uint32,
+) int {
+	return countTrustedExcludingNegUNLLocked(ledgerVals, trusted, negUNL, &seq)
 }
 
 // GetPreferred returns the network-preferred ledger ID and sequence as
@@ -960,7 +1239,7 @@ func lexLessLgrID(a, b consensus.LedgerID) bool {
 func (vt *ValidationTracker) LatestValidation(nodeID consensus.NodeID) *consensus.Validation {
 	vt.mu.RLock()
 	defer vt.mu.RUnlock()
-	return vt.byNode[nodeID]
+	return cloneValidation(vt.byNode[nodeID])
 }
 
 // CurrentNodeIDs returns the node IDs of every validator whose latest
@@ -1067,7 +1346,11 @@ func (vt *ValidationTracker) ExpireOld(minSeq uint32) {
 			}
 		}
 		delete(vt.validations, ledgerID)
-		delete(vt.fired, ledgerID)
+		for key := range vt.fired {
+			if key.ledgerID == ledgerID {
+				vt.cancelFinalityLocked(key)
+			}
+		}
 	}
 
 	vt.mu.Unlock()
@@ -1076,7 +1359,7 @@ func (vt *ValidationTracker) ExpireOld(minSeq uint32) {
 		return
 	}
 	for _, v := range stale {
-		onStale(v)
+		onStale(cloneValidation(v))
 	}
 }
 
@@ -1095,6 +1378,8 @@ func (vt *ValidationTracker) Flush() {
 	vt.byNode = make(map[consensus.NodeID]*consensus.Validation)
 	vt.bySequence = make(map[uint32]*seqValidations)
 	vt.seqEnforcers = make(map[consensus.NodeID]*seqEnforcer)
-	vt.fired = make(map[consensus.LedgerID]struct{})
+	vt.fired = make(map[finalityKey]struct{})
+	vt.pendingFinality = nil
+	vt.pendingGeneration = make(map[finalityKey]uint64)
 	vt.rebuildTrieLocked()
 }

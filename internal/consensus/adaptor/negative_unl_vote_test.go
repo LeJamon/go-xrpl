@@ -66,6 +66,16 @@ func (s *stubHistorian) GetTrustedValidations(id consensus.LedgerID) []*consensu
 	return s.byLedger[id]
 }
 
+func (s *stubHistorian) GetTrustedFullValidations(id consensus.LedgerID, seq uint32) []*consensus.Validation {
+	var out []*consensus.Validation
+	for _, validation := range s.byLedger[id] {
+		if validation != nil && validation.Full && validation.LedgerSeq == seq {
+			out = append(out, validation)
+		}
+	}
+	return out
+}
+
 func (s *stubHistorian) GetPreferred(largestIssued uint32) (consensus.LedgerID, uint32, bool) {
 	return s.preferredID, s.preferredSeq, s.preferredOK
 }
@@ -188,17 +198,19 @@ func TestBuildScoreTable_DoesNotGateOnLocalParticipation(t *testing.T) {
 	otherID := consensus.NodeID{0xAA}
 
 	const localCount = protocol.FlagLedgerInterval / 2
+	const prevSeq = 2 * protocol.FlagLedgerInterval
 	byLedger := make(map[consensus.LedgerID][]*consensus.Validation, len(ancestors))
 	for i, h := range ancestors {
-		vals := []*consensus.Validation{{NodeID: otherID, LedgerID: consensus.LedgerID(h)}}
+		seq := prevSeq - protocol.FlagLedgerInterval + uint32(i)
+		vals := []*consensus.Validation{{NodeID: otherID, LedgerID: consensus.LedgerID(h), LedgerSeq: seq, Full: true}}
 		if uint32(i) < localCount {
-			vals = append(vals, &consensus.Validation{NodeID: myID, LedgerID: consensus.LedgerID(h)})
+			vals = append(vals, &consensus.Validation{NodeID: myID, LedgerID: consensus.LedgerID(h), LedgerSeq: seq, Full: true})
 		}
 		byLedger[consensus.LedgerID(h)] = vals
 	}
 
 	scoreTable, ok := a.buildNegativeUNLScoreTable(
-		&stubSkipListProvider{seq: 2 * protocol.FlagLedgerInterval, hashes: ancestors},
+		&stubSkipListProvider{seq: prevSeq, hashes: ancestors},
 		&stubHistorian{byLedger: byLedger},
 	)
 	require.True(t, ok, "a full skip-list must build a table regardless of local participation")
@@ -216,20 +228,21 @@ func TestBuildScoreTable_TalliesAcrossAncestors(t *testing.T) {
 
 	myID := consensus.NodeID{0x11}
 	offline := consensus.NodeID{0x22}
+	const prevSeq = 2 * protocol.FlagLedgerInterval // a flag ledger
 
 	byLedger := make(map[consensus.LedgerID][]*consensus.Validation, len(ancestors))
 	for i, h := range ancestors {
-		vals := []*consensus.Validation{{NodeID: myID, LedgerID: consensus.LedgerID(h)}}
+		seq := prevSeq - protocol.FlagLedgerInterval + uint32(i)
+		vals := []*consensus.Validation{{NodeID: myID, LedgerID: consensus.LedgerID(h), LedgerSeq: seq, Full: true}}
 		// `offline` validates only the first 50 ledgers — below the
 		// low water mark (128) so the producer would consider it a
 		// ToDisable candidate.
 		if i < 50 {
-			vals = append(vals, &consensus.Validation{NodeID: offline, LedgerID: consensus.LedgerID(h)})
+			vals = append(vals, &consensus.Validation{NodeID: offline, LedgerID: consensus.LedgerID(h), LedgerSeq: seq, Full: true})
 		}
 		byLedger[consensus.LedgerID(h)] = vals
 	}
 
-	const prevSeq = 2 * protocol.FlagLedgerInterval // a flag ledger
 	hist := &stubHistorian{byLedger: byLedger}
 	scoreTable, ok := a.buildNegativeUNLScoreTable(
 		&stubSkipListProvider{seq: prevSeq, hashes: ancestors},

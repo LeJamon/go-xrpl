@@ -213,7 +213,13 @@ func (a *Adaptor) buildNegativeUNLScoreTable(
 	scoreTable := make(map[consensus.NodeID]uint32)
 	for i := range window {
 		ledgerHash := ancestors[n-1-i]
-		for _, v := range historian.GetTrustedValidations(consensus.LedgerID(ledgerHash)) {
+		// The skip-list entry at this position is the ledger at
+		// (upcoming-2-i), matching rippled's getTrustedForLedger(hash, seq).
+		ledgerSeq := upcoming - 2 - i
+		for _, v := range historian.GetTrustedFullValidations(consensus.LedgerID(ledgerHash), ledgerSeq) {
+			if v == nil || !v.Full || v.LedgerSeq != ledgerSeq {
+				continue
+			}
 			scoreTable[v.NodeID]++
 		}
 	}

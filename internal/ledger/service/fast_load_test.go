@@ -647,9 +647,15 @@ func TestService_FastLoadReplacesSameHeightOnlyAfterTrustedQuorum(t *testing.T) 
 	require.True(t, svc.IsFastLoadProvisional())
 
 	stashed := make(chan struct{}, 1)
+	validated := make(chan [32]byte, 1)
 	svc.SetOnPendingValidationStashed(func(seq uint32, hash [32]byte) {
 		if seq == replacement.Sequence() && hash == replacementHash {
 			stashed <- struct{}{}
+		}
+	})
+	svc.SetOnValidatedLedger(func(seq uint32, hash, _ [32]byte) {
+		if seq == replacement.Sequence() {
+			validated <- hash
 		}
 	})
 	signTime := loaded.CloseTime().Add(2 * time.Second)
@@ -667,6 +673,12 @@ func TestService_FastLoadReplacesSameHeightOnlyAfterTrustedQuorum(t *testing.T) 
 	require.NoError(t, svc.SwitchToPreferredLedger(replacement))
 	require.Equal(t, replacementHash, svc.GetClosedLedger().Hash())
 	require.Equal(t, replacementHash, svc.GetValidatedLedger().Hash())
+	select {
+	case hash := <-validated:
+		require.Equal(t, replacementHash, hash)
+	case <-time.After(time.Second):
+		t.Fatal("same-height validated-ledger replacement was not notified")
+	}
 	require.True(t, svc.GetValidatedLedger().IsValidated())
 	require.False(t, svc.IsFastLoadProvisional())
 	require.False(t, svc.NeedsInitialSync())
