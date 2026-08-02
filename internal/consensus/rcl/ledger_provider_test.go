@@ -151,8 +151,6 @@ func TestAncestryProvider_MissingLinkRepairsAfterArrival(t *testing.T) {
 		t.Fatalf("partial MinSeq = %d, want 3", first.MinSeq())
 	}
 
-	// The missing header arrives after the partial suffix was cached. The
-	// retry marker must invalidate that suffix and rebuild the full window.
 	byHash[missingHash] = missing
 	second, ok := p.LedgerByID(consensus.LedgerID(tip.hash))
 	if !ok {
@@ -373,7 +371,6 @@ func TestAncestryProvider_RejectsParentSequenceGapAndRepairs(t *testing.T) {
 			break
 		}
 	}
-	// Keep the requested hash but return a header from the wrong sequence.
 	byHash[parentHash] = &fakeHeader{seq: 2, hash: parentHash, parent: correct.ParentHash()}
 
 	p := newTestProvider(byHash)
@@ -469,9 +466,6 @@ func TestAncestryProvider_UsesEmbeddedHashOfSeq(t *testing.T) {
 	const tipSeq = uint32(5)
 	tip, byHash := buildChain(tipSeq, 's')
 
-	// Replace the tip with a header whose embedded ancestry is complete, then
-	// remove intervening records. The provider should use the rolling skip
-	// list rather than treating those records as unavailable.
 	hashes := make(map[uint32][32]byte, tipSeq)
 	for hash, header := range byHash {
 		hashes[header.Sequence()] = hash
@@ -698,9 +692,6 @@ func TestAncestryProvider_BypassesWrongSequenceCachedParent(t *testing.T) {
 	}
 
 	p := newTestProvider(byHash)
-	// This entry is deliberately keyed by the correct parent hash but carries
-	// the wrong sequence. The child walk must ignore it and validate the
-	// direct parent header instead.
 	p.cachePut(consensus.LedgerID(parentHash), &providerLedger{
 		id:        consensus.LedgerID(parentHash),
 		seq:       tip.seq - 2,

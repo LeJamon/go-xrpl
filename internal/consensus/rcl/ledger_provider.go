@@ -27,10 +27,6 @@ var _ LedgerHeader = (*ledger.Ledger)(nil)
 
 type hashLookupFunc func(hash [32]byte) (LedgerHeader, error)
 
-// hashOfSeqHeader is implemented by the concrete ledger header when its
-// embedded rolling skip-list can answer ancestry without loading every
-// intervening ledger. Keep this optional so the provider remains useful for
-// narrow test doubles and other header implementations.
 type hashOfSeqHeader interface {
 	HashOfSeq(seq uint32) ([32]byte, bool, error)
 }
@@ -245,10 +241,8 @@ func (p *AncestryProvider) buildChain(id consensus.LedgerID) *providerLedger {
 	var retrySeq uint32
 	partial := false
 
-	// A concrete ledger carries the same rolling skip-list used by
-	// rippled's RCLValidatedLedger. Prefer it when every sequence in the
-	// bounded window is available: this remains correct even if an
-	// intervening ledger object is temporarily absent from the service.
+	// Embedded ancestry remains usable when intervening ledger objects are
+	// temporarily absent from the service.
 	if resolver, ok := tip.(hashOfSeqHeader); ok {
 		resolved := true
 		for seq := myMinSeq; seq < tipSeq; seq++ {
@@ -333,11 +327,8 @@ type providerLedger struct {
 	minSeq    uint32
 	ancestors []consensus.LedgerID
 
-	// partial marks a suffix truncated because retryHash was unavailable or
-	// malformed. retrySeq is the sequence the missing/corrected header must
-	// carry before the suffix is retried.
-	// The cache may retain such a suffix for cheap repeated reads, but
-	// LedgerByID probes retryHash before reusing it.
+	// retryHash and retrySeq identify the unavailable or malformed header that
+	// truncated a partial suffix.
 	retryHash [32]byte
 	retrySeq  uint32
 	partial   bool
@@ -357,7 +348,4 @@ func (l *providerLedger) Ancestor(s uint32) consensus.LedgerID {
 	return l.ancestors[s-l.minSeq]
 }
 
-// retryable reports whether this ledger's ancestry is a temporarily
-// incomplete suffix. The tracker keeps such a ledger parked rather than
-// treating the truncated path as a complete trie branch.
 func (l *providerLedger) retryable() bool { return l.partial }

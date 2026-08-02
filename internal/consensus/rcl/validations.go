@@ -842,8 +842,6 @@ func (vt *ValidationTracker) ProposersFinished(prev consensus.Ledger) int {
 	for attempt := 0; attempt < 2; attempt++ {
 		vt.checkAcquired()
 
-		// Trie fast path — getNodesAfter at Validations.h:973-993:
-		// branchSupport(ledger) - tipSupport(ledger).
 		vt.mu.RLock()
 		trie := vt.trie
 		ancestry := vt.ancestry
