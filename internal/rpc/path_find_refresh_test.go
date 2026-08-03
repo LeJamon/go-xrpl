@@ -73,6 +73,37 @@ func TestUpdatePathFindSessionsDoesNotBlockLedgerCallback(t *testing.T) {
 	close(releaseView)
 }
 
+func TestQueuePathFindSessionsIncludesNewConnection(t *testing.T) {
+	ws, _ := newPathFindRefreshTestServer(t, 0)
+	manager := ws.ensurePathFindRefreshManager()
+	defer manager.close()
+
+	computed := make(chan struct{}, 1)
+	conn := &WebSocketConnection{
+		ID: "new-connection",
+		legacy: &types.Connection{
+			ID:          "new-connection",
+			SendChannel: make(chan []byte, 1),
+		},
+	}
+	conn.installPathFindSession(&PathFindSession{
+		computeFn: func(tx.LedgerView) *pathfinder.PathRequestResult {
+			computed <- struct{}{}
+			return &pathfinder.PathRequestResult{}
+		},
+	})
+
+	ws.queuePathFindSessions(func() (types.LedgerStateView, error) {
+		return testLedgerView(), nil
+	}, conn)
+
+	select {
+	case <-computed:
+	case <-time.After(time.Second):
+		t.Fatal("new path-find session was not queued for a full update")
+	}
+}
+
 func TestPathFindRefreshMaximumConcurrency(t *testing.T) {
 	ws, connections := newPathFindRefreshTestServer(t, 3)
 	manager := ws.ensurePathFindRefreshManager()

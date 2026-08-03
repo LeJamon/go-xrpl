@@ -19,6 +19,7 @@ type PathFindSession struct {
 	mu        sync.Mutex
 	computeMu sync.Mutex
 	computeFn func(tx.LedgerView) *pathfinder.PathRequestResult
+	request   *pathfinder.PathRequest
 
 	// Request parameters (immutable after creation)
 	srcAccount    [20]byte
@@ -212,7 +213,16 @@ func ParseAndCreateSession(params json.RawMessage, id any) (*PathFindSession, *r
 		}
 	}
 
+	pathRequest := pathfinder.NewPathRequest(
+		srcAccount, dstAccount,
+		dstAmount, sendMax,
+		srcCurrencies, convertAll,
+	)
+	pathRequest.SetDomainID(domainID)
+	pathRequest.SetSearchLevel(0)
+
 	session := &PathFindSession{
+		request:       pathRequest,
 		srcAccount:    srcAccount,
 		dstAccount:    dstAccount,
 		dstAmount:     dstAmount,
@@ -230,27 +240,30 @@ func ParseAndCreateSession(params json.RawMessage, id any) (*PathFindSession, *r
 
 // Compute runs pathfinding while serializing computations for this session.
 // The returned result is not made visible through Status until CommitResult.
-func (s *PathFindSession) Compute(view tx.LedgerView) *pathfinder.PathRequestResult {
+func (s *PathFindSession) Compute(view tx.LedgerView, fast bool) *pathfinder.PathRequestResult {
 	s.computeMu.Lock()
 	defer s.computeMu.Unlock()
 	if s.computeFn != nil {
 		return s.computeFn(view)
 	}
 
-	pr := pathfinder.NewPathRequest(
-		s.srcAccount, s.dstAccount,
-		s.dstAmount, s.sendMax,
-		s.srcCurrencies, s.convertAll,
-	)
-	pr.SetDomainID(s.domainID)
-	return pr.Execute(view)
+	if s.request == nil {
+		s.request = pathfinder.NewPathRequest(
+			s.srcAccount, s.dstAccount,
+			s.dstAmount, s.sendMax,
+			s.srcCurrencies, s.convertAll,
+		)
+		s.request.SetDomainID(s.domainID)
+		s.request.SetSearchLevel(0)
+	}
+	return s.request.ExecuteUpdate(view, fast, false)
 }
 
 // Execute runs pathfinding against the given ledger view and stores the result.
 // Full updates are returned in pushed-event form; the initial fast result is
 // returned in response-result form.
 func (s *PathFindSession) Execute(view tx.LedgerView, fullReply bool) *PathFindEvent {
-	return s.CommitResult(s.Compute(view), fullReply)
+	return s.CommitResult(s.Compute(view, !fullReply), fullReply)
 }
 
 // CommitResult publishes a computed path result as the session's latest

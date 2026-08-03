@@ -1672,6 +1672,25 @@ func TestNewPathRequest_Defaults(t *testing.T) {
 	require.Equal(t, dst, pr.dstAccount)
 	require.Equal(t, maxReturnedPaths, pr.maxPaths)
 	require.False(t, pr.convertAll)
+	require.NotNil(t, pr.context)
+}
+
+func TestPathRequestAdjustsPersistentSearchLevel(t *testing.T) {
+	request := &PathRequest{}
+
+	request.adjustSearchLevel(true, false)
+	require.Equal(t, SearchLevelFast, request.searchLevel)
+
+	request.adjustSearchLevel(false, false)
+	require.Equal(t, SearchLevelDefault, request.searchLevel)
+
+	request.adjustSearchLevel(false, false)
+	require.Equal(t, SearchLevelDefault, request.searchLevel)
+
+	request.searchLevel = SearchLevelMax
+	request.lastSuccess = true
+	request.adjustSearchLevel(false, false)
+	require.Equal(t, SearchLevelDefault, request.searchLevel)
 }
 
 func TestNewPathRequest_WithSendMax(t *testing.T) {

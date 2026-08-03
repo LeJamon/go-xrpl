@@ -720,6 +720,7 @@ func (ws *WebSocketServer) executePathFindCreate(wsConn *WebSocketConnection, ct
 	event := session.Execute(view, false)
 
 	wsConn.installPathFindSession(session)
+	ws.queuePathFindSessions(currentPathFindView(ctx.Services.Ledger), wsConn)
 
 	return event, nil
 }
@@ -752,18 +753,40 @@ func (ws *WebSocketServer) executePathFindStatus(wsConn *WebSocketConnection, _ 
 // asynchronous refresh generation. The ledger-close callback must not perform
 // ledger-view acquisition or path computation itself.
 func (ws *WebSocketServer) UpdatePathFindSessions(getView func() (types.LedgerStateView, error)) {
+	ws.queuePathFindSessions(getView, nil)
+}
+
+func (ws *WebSocketServer) queuePathFindSessions(getView func() (types.LedgerStateView, error), additional *WebSocketConnection) {
 	manager := ws.ensurePathFindRefreshManager()
 	ws.connectionsMutex.RLock()
 	var targets []pathFindUpdateTarget
+	seen := make(map[*WebSocketConnection]struct{}, len(ws.connections)+1)
 	for _, conn := range ws.connections {
+		seen[conn] = struct{}{}
 		ws.bindPathFindRefreshManager(conn)
 		if target, ok := conn.snapshotPathFindUpdate(); ok {
 			targets = append(targets, target)
 		}
 	}
 	ws.connectionsMutex.RUnlock()
+	if _, exists := seen[additional]; additional != nil && !exists {
+		ws.bindPathFindRefreshManager(additional)
+		if target, ok := additional.snapshotPathFindUpdate(); ok {
+			targets = append(targets, target)
+		}
+	}
 
 	manager.enqueue(getView, targets)
+}
+
+func currentPathFindView(ledger types.LedgerService) func() (types.LedgerStateView, error) {
+	return func() (types.LedgerStateView, error) {
+		if source, ok := ledger.(types.LedgerViewSource); ok {
+			view, _, err := source.GetLedgerViewBySeq(ledger.GetCurrentLedgerIndex())
+			return view, err
+		}
+		return ledger.GetClosedLedgerView()
+	}
 }
 
 type pathFindUpdateTarget struct {

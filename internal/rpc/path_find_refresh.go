@@ -313,7 +313,7 @@ func (m *pathFindRefreshManager) execute(job pathFindRefreshJob) (result *pathfi
 			result = nil
 		}
 	}()
-	return job.target.session.Compute(job.view)
+	return job.target.session.Compute(job.view, false)
 }
 
 func (m *pathFindRefreshManager) commit(job pathFindRefreshJob, status *PathFindEvent, data []byte) {

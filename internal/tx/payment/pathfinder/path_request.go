@@ -59,6 +59,8 @@ type PathRequest struct {
 	maxPaths         int
 	searchLevel      int
 	domainID         *[32]byte
+	lastSuccess      bool
+	context          map[payment.Issue][][]payment.PathStep
 }
 
 // IsValidAsset reports whether an amount carries an asset that path finding
@@ -97,6 +99,7 @@ func NewPathRequest(
 		convertAll:       convertAll,
 		maxPaths:         maxReturnedPaths,
 		searchLevel:      SearchLevelDefault,
+		context:          make(map[payment.Issue][][]payment.PathStep),
 	}
 }
 
@@ -111,6 +114,39 @@ func (pr *PathRequest) SetSearchLevel(level int) {
 // permissioned domain.
 func (pr *PathRequest) SetDomainID(domainID *[32]byte) {
 	pr.domainID = domainID
+}
+
+// ExecuteUpdate adapts the search depth and retains paths found by earlier
+// updates of the same persistent request.
+func (pr *PathRequest) ExecuteUpdate(ledger tx.LedgerView, fast, loaded bool) *PathRequestResult {
+	pr.adjustSearchLevel(fast, loaded)
+	result := pr.Execute(ledger)
+	pr.lastSuccess = result != nil && len(result.Alternatives) != 0
+	return result
+}
+
+func (pr *PathRequest) adjustSearchLevel(fast, loaded bool) {
+	switch {
+	case pr.searchLevel == 0:
+		if loaded || fast {
+			pr.searchLevel = SearchLevelFast
+		} else {
+			pr.searchLevel = SearchLevelDefault
+		}
+	case pr.searchLevel == SearchLevelFast && !fast:
+		pr.searchLevel = SearchLevelDefault
+		if loaded && SearchLevelDefault > SearchLevelFast {
+			pr.searchLevel--
+		}
+	case pr.lastSuccess:
+		if pr.searchLevel > SearchLevelDefault || loaded && pr.searchLevel > SearchLevelFast {
+			pr.searchLevel--
+		}
+	case !loaded && pr.searchLevel < SearchLevelMax:
+		pr.searchLevel++
+	case loaded && pr.searchLevel > SearchLevelFast:
+		pr.searchLevel--
+	}
 }
 
 // Execute runs the pathfinding algorithm and returns the result.
@@ -188,8 +224,9 @@ func (pr *PathRequest) Execute(ledger tx.LedgerView) *PathRequestResult {
 		result.DestinationCurrencies = append(result.DestinationCurrencies, currency)
 	}
 
-	// Track previously found paths per source currency (mContext in rippled)
-	context := make(map[payment.Issue][][]payment.PathStep)
+	if pr.context == nil {
+		pr.context = make(map[payment.Issue][][]payment.PathStep)
+	}
 
 	// When convertAll is true, replace destination amount with largest possible.
 	// Reference: rippled convertAmount(saDstAmount, convert_all_) in PathRequest::findPaths()
@@ -234,9 +271,9 @@ func (pr *PathRequest) Execute(ledger tx.LedgerView) *PathRequestResult {
 
 		pf.ComputePathRanks(pr.maxPaths)
 
-		extraPaths := context[srcIssue]
+		extraPaths := pr.context[srcIssue]
 		bestPaths, fullLiquidityPath := pf.GetBestPaths(pr.maxPaths, extraPaths, srcIssue.Issuer)
-		context[srcIssue] = bestPaths
+		pr.context[srcIssue] = bestPaths
 
 		// An empty path set is still tried: rippled runs rippleCalc with
 		// default paths allowed, so a working default path yields an
