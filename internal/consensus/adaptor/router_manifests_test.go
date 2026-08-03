@@ -273,6 +273,56 @@ func TestRouter_ProcessManifestSpoolRejectsOversizeBeforeApply(t *testing.T) {
 	require.ErrorIs(t, err, peermanagement.ErrManifestFrameClosed)
 }
 
+func TestRouter_ProcessManifestSpoolChargesDecompressionFailure(t *testing.T) {
+	connections := make(chan manifestOverlayConnection, 1)
+	source := startRunningManifestOverlay(t, peermanagement.WithCompression(true))
+	source.overlay.SetPeerConnectCallback(func(peerID peermanagement.PeerID) {
+		connections <- manifestOverlayConnection{overlay: source, peerID: peerID}
+	})
+	client := startRunningManifestOverlay(t,
+		peermanagement.WithDataDir(t.TempDir()),
+		peermanagement.WithCompression(true),
+		peermanagement.WithMaxOutbound(1),
+		peermanagement.WithFixedPeers(source.overlay.ListenAddr()),
+	)
+
+	var connection manifestOverlayConnection
+	select {
+	case connection = <-connections:
+	case <-time.After(5 * time.Second):
+		t.Fatal("manifest source did not connect")
+	}
+
+	payload := bytes.Repeat([]byte("manifest"), 1<<20/len("manifest")+1)
+	frame, err := message.BuildWireMessage(message.TypeManifests, payload)
+	require.NoError(t, err)
+	frame, compressed := message.CompressFrameIfWorthwhile(frame)
+	require.True(t, compressed)
+	for i := message.HeaderSizeCompressed; i < len(frame); i++ {
+		frame[i] = 0xff
+	}
+	header, err := message.DecodeHeader(frame)
+	require.NoError(t, err)
+	_, err = message.DecompressLZ4(frame[message.HeaderSizeCompressed:], int(header.UncompressedSize))
+	require.Error(t, err)
+	require.NoError(t, connection.overlay.overlay.Send(connection.peerID, frame))
+
+	var inbound *peermanagement.InboundMessage
+	select {
+	case inbound = <-client.overlay.ManifestMessages():
+	case <-time.After(5 * time.Second):
+		t.Fatal("spooled manifest did not reach the processing lane")
+	}
+	require.NotNil(t, inbound.ManifestFrame)
+
+	router, _, _ := routerWithCache(t, nil, 0, 0)
+	badData := &badDataRecordingSender{}
+	router.gossip = badData
+	router.processManifestJob(inbound)
+
+	require.Equal(t, []badDataCall{{peerID: uint64(inbound.PeerID), reason: "decompress-lz4-failed"}}, badData.getBadDataCalls())
+}
+
 // TestRouter_HandleManifests_InvalidDoesNotStore drives a
 // parse-valid-but-signature-invalid manifest through the router. The
 // cache must reject it; no state change is the whole guarantee.

@@ -109,6 +109,29 @@ func TestCompressedManifestSpoolSharesInboundBudget(t *testing.T) {
 	require.ErrorIs(t, <-done, io.EOF)
 }
 
+func TestUnnegotiatedCompressedManifestRejectedBeforeSpooling(t *testing.T) {
+	spoolDir, err := prepareManifestSpoolDir(t.TempDir())
+	require.NoError(t, err)
+	budget := newReadBudget(int64(3 * message.MaxMessageSize))
+	peer := newLatencyTestPeer(t)
+	peer.bufReader = bufio.NewReader(bytes.NewReader(rawTestWireMessage(
+		message.TypeManifests,
+		[]byte{0xff},
+		message.AlgorithmLZ4,
+		manifestSpoolThreshold+1,
+	)))
+	peer.SetInboundReadBudget(budget)
+	peer.SetManifestSpoolDir(spoolDir)
+
+	err = peer.readLoop(context.Background())
+	require.ErrorIs(t, err, errCompressionUnnegotiated)
+	require.Positive(t, peer.BadDataCount())
+	require.Zero(t, readBudgetUsed(budget))
+	entries, readErr := os.ReadDir(spoolDir)
+	require.NoError(t, readErr)
+	require.Empty(t, entries)
+}
+
 func TestInboundRetainedBytesValidation(t *testing.T) {
 	cfg := DefaultConfig()
 	require.Equal(t, DefaultInboundRetainedBytes, cfg.InboundRetainedBytes)

@@ -114,7 +114,7 @@ func (e *FanoutError) Unwrap() error {
 	return e.Err
 }
 
-var errCompressionUnnegotiated = errors.New("outbound compressed frame without negotiated compression")
+var errCompressionUnnegotiated = errors.New("compressed frame without negotiated compression")
 var errBootstrapManifestDropped = errors.New("bootstrap manifests could not be delivered")
 
 // FrameReadError describes a failed payload transfer after its header was read.

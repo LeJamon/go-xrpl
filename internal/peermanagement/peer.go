@@ -1054,6 +1054,11 @@ func (p *Peer) readLoop(ctx context.Context) error {
 
 		frameReader := p.newFrameProgressReader(reader, conn)
 		header, err := message.ReadHeader(frameReader)
+		if err == nil && header.Compressed && !p.compressionNegotiated() {
+			p.IncBadData("compression-unnegotiated")
+			frameReader.finish(false, p.readPolicy.now())
+			return errCompressionUnnegotiated
+		}
 		if err == nil &&
 			header.MessageType == message.TypeManifests &&
 			p.manifestSpoolDir != "" &&
@@ -1193,18 +1198,6 @@ func (p *Peer) readLoop(ctx context.Context) error {
 			wireBytes += message.HeaderSizeUncompressed
 		}
 		p.metrics.recv.addMessage(wireBytes)
-
-		if header.Compressed {
-			// rippled rejects a compressed frame outright when compression
-			// was not negotiated for the connection (ProtocolMessage.h:369-
-			// 375). A peer shipping LZ4 frames we never agreed to is a
-			// protocol violation — charge and tear the connection down.
-			if !p.compressionNegotiated() {
-				p.IncBadData("compression-unnegotiated")
-				releaseRetainedReservation()
-				return fmt.Errorf("peer sent a compressed frame without negotiating compression")
-			}
-		}
 
 		if !message.IsKnownMessageType(header.MessageType) {
 			releaseRetainedReservation()
