@@ -414,6 +414,9 @@ func rpcSubPrincipal(ctx *types.RpcContext) string {
 		return "unknown"
 	}
 	if principal := strings.TrimSpace(ctx.ClientIP); principal != "" {
+		if ip := net.ParseIP(principal); ip != nil {
+			return ip.String()
+		}
 		return principal
 	}
 	return "unknown"

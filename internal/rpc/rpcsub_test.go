@@ -691,6 +691,37 @@ func TestRPCSub_BoundsGlobalAndPerPrincipal(t *testing.T) {
 	require.Nil(t, rpcErr)
 }
 
+func TestRPCSub_EquivalentIPv6PrincipalsShareCapacity(t *testing.T) {
+	ws, services := newRPCSubTestServer(t)
+	first := newRPCSubSink(t)
+	second := newRPCSubSink(t)
+	ws.urlSubs.maxEntries = 4
+	ws.urlSubs.maxWorkers = 4
+	ws.urlSubs.maxPerPrincipal = 1
+
+	firstCtx := adminCtx(services)
+	firstCtx.ClientIP = "2001:0db8:0:0:0:0:0:1"
+	_, rpcErr := ws.urlSubs.Subscribe(firstCtx, types.SubscriptionRequest{
+		URL: first.srv.URL, Streams: []types.SubscriptionType{types.SubLedger},
+	})
+	require.Nil(t, rpcErr)
+
+	secondCtx := adminCtx(services)
+	secondCtx.ClientIP = "2001:db8::1"
+	_, rpcErr = ws.urlSubs.Subscribe(secondCtx, types.SubscriptionRequest{
+		URL: second.srv.URL, Streams: []types.SubscriptionType{types.SubLedger},
+	})
+	require.NotNil(t, rpcErr)
+	assert.Equal(t, types.RpcTOO_BUSY, rpcErr.Code)
+
+	ws.urlSubs.mu.Lock()
+	defer ws.urlSubs.mu.Unlock()
+	assert.Equal(t, 1, ws.urlSubs.principalCounts["2001:db8::1"])
+	assert.Equal(t, 1, ws.urlSubs.principalWorkers["2001:db8::1"])
+	assert.Len(t, ws.urlSubs.principalCounts, 1)
+	assert.Len(t, ws.urlSubs.principalWorkers, 1)
+}
+
 func TestRPCSub_WorkerCapacityReclaimedBeforeUnsubscribeReturns(t *testing.T) {
 	ws, services := newRPCSubTestServer(t)
 	first := newRPCSubSink(t)
