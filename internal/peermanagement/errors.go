@@ -46,8 +46,9 @@ var (
 	ErrEncodeFailed    = errors.New("failed to encode message")
 
 	// Lifecycle errors
-	ErrNotRunning = errors.New("overlay not running")
-	ErrShutdown   = errors.New("overlay is shutting down")
+	ErrNotRunning     = errors.New("overlay not running")
+	ErrAlreadyRunning = errors.New("overlay already running")
+	ErrShutdown       = errors.New("overlay is shutting down")
 )
 
 type SendQueueError struct {
