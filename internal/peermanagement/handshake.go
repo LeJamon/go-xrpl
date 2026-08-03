@@ -129,6 +129,69 @@ func BuildHandshakeRequest(id *Identity, sharedValue []byte, cfg HandshakeConfig
 	return req, nil
 }
 
+// validateHandshakeRequest checks the HTTP envelope before any XRPL-specific
+// verification. Rippled accepts a GET carrying an Upgrade token over HTTP
+// 1.1 or newer; role admission and peer authentication run afterwards.
+func validateHandshakeRequest(req *http.Request) error {
+	if req == nil {
+		return fmt.Errorf("%w: missing request", ErrInvalidHandshake)
+	}
+	if req.Method != http.MethodGet {
+		return fmt.Errorf("%w: method must be GET, got %q", ErrInvalidHandshake, req.Method)
+	}
+	if !httpVersionAtLeast11(req.ProtoMajor, req.ProtoMinor) {
+		return fmt.Errorf("%w: protocol must be HTTP/1.1 or newer, got %q", ErrInvalidHandshake, req.Proto)
+	}
+	if !headerToken(req.Header, HeaderConnection, "upgrade") {
+		return fmt.Errorf("%w: %s header must include upgrade", ErrInvalidHandshake, HeaderConnection)
+	}
+	upgrade := strings.TrimSpace(req.Header.Get(HeaderUpgrade))
+	if upgrade == "" {
+		return fmt.Errorf("%w: missing %s", ErrInvalidHandshake, HeaderUpgrade)
+	}
+	if len(parseProtocolVersions(upgrade)) == 0 {
+		return fmt.Errorf("%w: %s header contains no valid XRPL protocol version", ErrInvalidHandshake, HeaderUpgrade)
+	}
+	return nil
+}
+
+// validateHandshakeResponse enforces the response half of the same envelope:
+// HTTP/1.1-or-newer 101, Connection: Upgrade, and exactly one supported XRPL
+// version.
+func validateHandshakeResponse(resp *http.Response) error {
+	if resp == nil {
+		return fmt.Errorf("%w: missing response", ErrInvalidHandshake)
+	}
+	if !httpVersionAtLeast11(resp.ProtoMajor, resp.ProtoMinor) {
+		return fmt.Errorf("%w: protocol must be HTTP/1.1 or newer, got %q", ErrInvalidHandshake, resp.Proto)
+	}
+	if resp.StatusCode != http.StatusSwitchingProtocols {
+		return fmt.Errorf("%w: got status %d", ErrInvalidHandshake, resp.StatusCode)
+	}
+	if !headerToken(resp.Header, HeaderConnection, "upgrade") {
+		return fmt.Errorf("%w: %s header must include upgrade", ErrInvalidHandshake, HeaderConnection)
+	}
+	if VerifyOutboundProtocolVersion(resp.Header.Get(HeaderUpgrade)) == "" {
+		return fmt.Errorf("%w: response must contain exactly one supported %s version", ErrInvalidHandshake, HeaderUpgrade)
+	}
+	return nil
+}
+
+func httpVersionAtLeast11(major, minor int) bool {
+	return major > 1 || (major == 1 && minor >= 1)
+}
+
+func headerToken(h http.Header, key, want string) bool {
+	for _, value := range h.Values(key) {
+		for _, token := range strings.Split(value, ",") {
+			if strings.EqualFold(strings.TrimSpace(token), want) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
 // WriteRawHandshakeRequest writes the request without the extra headers
 // (Host, Content-Length, ...) that http.Request.Write adds — rippled's
 // parser rejects them.
@@ -170,12 +233,19 @@ func BuildHandshakeResponse(request *http.Request, id *Identity, sharedValue []b
 	if negotiated == "" {
 		negotiated = supportedProtocols[len(supportedProtocols)-1].String()
 	}
+	proto, protoMajor, protoMinor := "HTTP/1.1", 1, 1
+	if request != nil && request.ProtoMajor > 0 {
+		proto, protoMajor, protoMinor = request.Proto, request.ProtoMajor, request.ProtoMinor
+		if proto == "" {
+			proto = fmt.Sprintf("HTTP/%d.%d", protoMajor, protoMinor)
+		}
+	}
 	resp := &http.Response{
 		StatusCode: http.StatusSwitchingProtocols,
 		Status:     "101 Switching Protocols",
-		Proto:      "HTTP/1.1",
-		ProtoMajor: 1,
-		ProtoMinor: 1,
+		Proto:      proto,
+		ProtoMajor: protoMajor,
+		ProtoMinor: protoMinor,
 		Header:     make(http.Header),
 	}
 

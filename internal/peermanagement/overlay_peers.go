@@ -65,6 +65,20 @@ func (o *Overlay) connectReserved(addr string, bootstrapLease *bootstrapLease) e
 		return ErrMaxPeersReached
 	}
 
+	var outboundUsage *resource.Consumer
+	if o.resourceManager != nil {
+		outboundUsage = o.resourceManager.NewOutboundEndpoint(endpoint.String())
+		if outboundUsage.Disconnect() {
+			outboundUsage.Release()
+			return ErrEndpointBanned
+		}
+		defer func() {
+			if outboundUsage != nil {
+				outboundUsage.Release()
+			}
+		}()
+	}
+
 	peerID := PeerID(o.nextID.Add(1))
 	peer := NewPeer(peerID, endpoint, false, o.identity, o.events)
 	peer.SetDroppedEventsCounter(&o.droppedEvents)
@@ -136,10 +150,11 @@ func (o *Overlay) connectReserved(addr string, bootstrapLease *bootstrapLease) e
 		return ErrAlreadyConnected
 	}
 
-	if err := o.addPeer(peer); err != nil {
+	if err := o.addPeerWithUsage(peer, outboundUsage); err != nil {
 		peer.Close()
 		return err
 	}
+	outboundUsage = nil
 	if bootstrapLease != nil {
 		o.trackPeerBootstrap(peerID, bootstrapLease)
 	}
@@ -514,6 +529,10 @@ func (o *Overlay) IsValidatorSquelchedOnPeer(peerID PeerID, validator []byte) bo
 // reconnects from the same address inherits its prior balance — this
 // is what enables charge-based blacklisting.
 func (o *Overlay) addPeer(peer *Peer) error {
+	return o.addPeerWithUsage(peer, nil)
+}
+
+func (o *Overlay) addPeerWithUsage(peer *Peer, usage *resource.Consumer) error {
 	key, hasKey := remotePeerKey(peer)
 	endpoint := endpointKey(postHandshakeEndpoint(peer, peer.Endpoint()))
 	o.peersMu.Lock()
@@ -540,13 +559,15 @@ func (o *Overlay) addPeer(peer *Peer) error {
 
 	if o.resourceManager != nil {
 		addr := peer.Endpoint().String()
-		var c *resource.Consumer
-		if o.isClusterPeer(peer) {
-			c = o.resourceManager.NewUnlimitedEndpoint(addr)
-		} else if peer.Inbound() {
-			c = o.resourceManager.NewInboundEndpoint(addr)
-		} else {
-			c = o.resourceManager.NewOutboundEndpoint(addr)
+		c := usage
+		if c == nil {
+			if o.isClusterPeer(peer) {
+				c = o.resourceManager.NewUnlimitedEndpoint(addr)
+			} else if peer.Inbound() {
+				c = o.resourceManager.NewInboundEndpoint(addr)
+			} else {
+				c = o.resourceManager.NewOutboundEndpoint(addr)
+			}
 		}
 		peer.attachUsage(c, o.bumpPeerDisconnectCharges)
 	}

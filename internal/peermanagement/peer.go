@@ -880,6 +880,10 @@ func (p *Peer) performHandshake(ctx context.Context, tlsConn peertls.PeerConn) e
 			fmt.Errorf("%w: got status %d, headers: %v, body: %s",
 				ErrInvalidHandshake, resp.StatusCode, resp.Header, string(body)))
 	}
+	if err := validateHandshakeResponse(resp); err != nil {
+		resp.Body.Close()
+		return NewHandshakeError(p.endpoint, "validate_envelope", err)
+	}
 	resp.Body.Close()
 
 	// Server-Domain check runs first (rippled verify order).

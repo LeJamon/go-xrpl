@@ -25,13 +25,15 @@ var (
 	ErrWriteIdle             = errors.New("peer write idle deadline exceeded")
 
 	// Handshake errors
-	ErrHandshakeFailed  = errors.New("handshake failed")
-	ErrInvalidHandshake = errors.New("invalid handshake data")
-	ErrHandshakeTimeout = errors.New("handshake timeout")
-	ErrProtocolMismatch = errors.New("protocol version mismatch")
-	ErrInvalidPublicKey = errors.New("invalid public key")
-	ErrInvalidSignature = errors.New("invalid signature")
-	ErrNetworkMismatch  = errors.New("network ID mismatch")
+	ErrHandshakeFailed          = errors.New("handshake failed")
+	ErrInvalidHandshake         = errors.New("invalid handshake data")
+	ErrHandshakeHeadersTooLarge = errors.New("handshake headers too large")
+	ErrHandshakeBodyTooLarge    = errors.New("handshake body too large")
+	ErrHandshakeTimeout         = errors.New("handshake timeout")
+	ErrProtocolMismatch         = errors.New("protocol version mismatch")
+	ErrInvalidPublicKey         = errors.New("invalid public key")
+	ErrInvalidSignature         = errors.New("invalid signature")
+	ErrNetworkMismatch          = errors.New("network ID mismatch")
 
 	// Discovery errors
 	ErrPeerNotFound    = errors.New("peer not found")
