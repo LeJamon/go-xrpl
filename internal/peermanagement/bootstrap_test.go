@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/LeJamon/go-xrpl/internal/peermanagement/message"
+	"github.com/LeJamon/go-xrpl/internal/peermanagement/peertls"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -647,6 +648,9 @@ func TestOverlayDroppedManifestDoesNotAcknowledgeBootstrap(t *testing.T) {
 }
 
 func TestOverlayConnectsOutboundTargetBeforeStartupFrameCompletes(t *testing.T) {
+	if !peertls.Supported() {
+		t.Skip("peer TLS requires CGO")
+	}
 	connections := make(chan bootstrapConnection, 2)
 	first := startBootstrapTestOverlay(t)
 	second := startBootstrapTestOverlay(t, WithListenAddr("[::1]:0"))

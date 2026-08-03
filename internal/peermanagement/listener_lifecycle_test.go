@@ -6,10 +6,14 @@ import (
 	"testing"
 	"time"
 
+	"github.com/LeJamon/go-xrpl/internal/peermanagement/peertls"
 	"github.com/stretchr/testify/require"
 )
 
 func TestOverlayStopDuringListenerBindClosesUnpublishedListener(t *testing.T) {
+	if !peertls.Supported() {
+		t.Skip("peer TLS requires CGO")
+	}
 	o, err := New(
 		WithListenAddr("127.0.0.1:0"),
 		WithDataDir(t.TempDir()),

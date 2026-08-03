@@ -158,6 +158,15 @@ int peertls_handshake(peertls_ssl* s) {
     return map_ssl_error(s->ssl, rc);
 }
 
+int peertls_shutdown(peertls_ssl* s) {
+    if (!s || !s->ssl) return PEERTLS_ERR_OTHER;
+    ERR_clear_error();
+    int rc = SSL_shutdown(s->ssl);
+    if (rc == 1) return 0;
+    if (rc == 0) return PEERTLS_ERR_WANT_READ;
+    return map_ssl_error(s->ssl, rc);
+}
+
 int peertls_read(peertls_ssl* s, void* buf, int len) {
     if (!s || !s->ssl) return PEERTLS_ERR_OTHER;
     ERR_clear_error();
