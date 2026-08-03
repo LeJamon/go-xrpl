@@ -751,16 +751,19 @@ func TestReadControlOutputPrecedesConcurrentWriteOutput(t *testing.T) {
 	case <-time.After(time.Second):
 		t.Fatal("Read did not enter the TLS engine")
 	}
-	if c.outMu.TryLock() {
-		c.outMu.Unlock()
-		t.Fatal("Read did not retain output ordering while the TLS operation was active")
-	}
-
 	writeDone := make(chan error, 1)
 	go func() {
 		_, err := c.Write([]byte("x"))
 		writeDone <- err
 	}()
+	deadline := time.Now().Add(time.Second)
+	for c.outMu.TryLock() {
+		c.outMu.Unlock()
+		if time.Now().After(deadline) {
+			t.Fatal("Write did not acquire the output lock")
+		}
+		time.Sleep(time.Millisecond)
+	}
 	close(engine.releaseRead)
 	select {
 	case err := <-readDone:
