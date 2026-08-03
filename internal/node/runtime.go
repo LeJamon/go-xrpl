@@ -251,13 +251,7 @@ func (r *nodeRuntime) configureMaintenance() error {
 	r.stopSampler = sampler.Stop
 
 	r.ledgerAdapter = rpcadapter.NewLedgerServiceAdapter(r.ledger)
-	r.services = types.NewServiceContainer(r.ledgerAdapter)
-	r.services.ClientLoad = types.NewClientLoadShedder()
-	r.services.ServerInfoConfig = serverInfoConfigSnapshot(r.appConfig)
-
-	// Gate the beta RPC API (api_version 3) on the operator's beta_rpc_api
-	// knob, mirroring rippled Config::BETA_RPC_API.
-	r.services.BetaRPCAPI = r.appConfig.BetaRPCAPI != 0
+	r.services = newRPCServiceContainer(r.ledgerAdapter, r.appConfig)
 
 	// Advisory-delete state (can_delete RPC). Available in both standalone and
 	// consensus modes; gated by node_db advisory_delete and persisted under
@@ -425,6 +419,10 @@ func (r *nodeRuntime) configureMaintenance() error {
 	r.services.IsLoadedCluster = func() bool {
 		ft := ledgerSvcRef.FeeTrack()
 		return ft != nil && ft.IsLoadedCluster()
+	}
+	r.services.IsLoadedLocal = func() bool {
+		ft := ledgerSvcRef.FeeTrack()
+		return ft != nil && ft.IsLoadedLocal()
 	}
 
 	// Background ledger-integrity verification requires the same durable SHAMap

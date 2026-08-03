@@ -59,6 +59,10 @@ type Config struct {
 	// 9. Misc Settings
 	NodeSize   string `toml:"node_size" mapstructure:"node_size"` // optional; "" = default ("medium")
 	BetaRPCAPI int    `toml:"beta_rpc_api" mapstructure:"beta_rpc_api"`
+	// PathSearchMax is a pointer so an explicit zero remains distinct from
+	// the absent default.
+	PathSearchMax  *int `toml:"path_search_max" mapstructure:"path_search_max"`
+	SigningSupport bool `toml:"signing_support" mapstructure:"signing_support"`
 
 	// WebsocketPingFrequency is the keepalive ping cadence in seconds for
 	// WebSocket clients. 0 = use the built-in default (30 seconds).
@@ -168,6 +172,20 @@ func (c *Config) GetFetchDepthUint32() uint32 {
 // IsValidator returns true if this node is configured as a validator
 func (c *Config) IsValidator() bool {
 	return c.ValidationSeed != "" || c.ValidatorToken != ""
+}
+
+const defaultPathSearchMax = 3
+
+// ResolvedPathSearchMax returns the startup path-search limit. Validators
+// disable pathfinding unless the operator explicitly configures a limit.
+func (c *Config) ResolvedPathSearchMax() int {
+	if c.PathSearchMax != nil {
+		return *c.PathSearchMax
+	}
+	if c.IsValidator() {
+		return 0
+	}
+	return defaultPathSearchMax
 }
 
 // PeerPort returns the port configured for peer protocol

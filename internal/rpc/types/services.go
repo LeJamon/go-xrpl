@@ -169,6 +169,12 @@ type ServerInfoConfigSnapshot struct {
 	GitHash      string
 }
 
+// RPCCapabilities is the immutable startup policy used by RPC handlers.
+type RPCCapabilities struct {
+	SigningEnabled bool
+	PathSearchMax  int
+}
+
 // ManifestLookup is the read-only facet of the validator-manifest cache
 // that the `manifest` RPC needs. Expressed as an interface (not a
 // concrete type) so internal/rpc/types doesn't import
@@ -207,6 +213,9 @@ type ServiceContainer struct {
 	// ServerInfoConfig is the immutable startup configuration and build
 	// metadata surfaced by server_info and server_state.
 	ServerInfoConfig ServerInfoConfigSnapshot
+
+	// Capabilities freezes operator-controlled RPC policy before listeners serve.
+	Capabilities RPCCapabilities
 
 	// LastCloseInfo returns proposer count and convergence time (ms) from the last consensus round
 	LastCloseInfo func() (proposers int, convergeTimeMs int)
@@ -353,6 +362,10 @@ type ServiceContainer struct {
 
 	// Nil in RPC-only test contexts, which handlers treat as unloaded.
 	IsLoadedCluster func() bool
+
+	// IsLoadedLocal reports whether local fee pressure is elevated. Nil in
+	// RPC-only test contexts, which handlers treat as unloaded.
+	IsLoadedLocal func() bool
 
 	// ClientLoad is the shared in-flight client-RPC counter that drives
 	// the rpcTOO_BUSY load-shedding gates. Approximates rippled's

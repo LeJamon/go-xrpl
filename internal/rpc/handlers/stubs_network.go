@@ -20,15 +20,15 @@ type FetchInfoMethod struct{ AdminHandler }
 
 func (m *FetchInfoMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (any, *types.RpcError) {
 	var request struct {
-		Clear bool `json:"clear,omitempty"`
+		Clear jsonCppBoolField `json:"clear"`
 	}
-	if params != nil {
-		_ = json.Unmarshal(params, &request)
+	if rpcErr := decodeRequestObject(params, &request); rpcErr != nil {
+		return nil, rpcErr
 	}
 
 	response := make(map[string]any)
 
-	if request.Clear {
+	if request.Clear.value {
 		if ctx.Services != nil && ctx.Services.FetchInfoClear != nil {
 			ctx.Services.FetchInfoClear()
 		}

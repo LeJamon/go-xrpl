@@ -147,6 +147,22 @@ func printSection(params json.RawMessage) string {
 // configured, matching rippled's getSHAMapStore().advisoryDelete() gate.
 type CanDeleteMethod struct{ AdminHandler }
 
+type canDeleteParam json.RawMessage
+
+func (p *canDeleteParam) UnmarshalJSON(data []byte) error {
+	var number uint32
+	if err := json.Unmarshal(data, &number); err == nil {
+		*p = append((*p)[:0], data...)
+		return nil
+	}
+	var text string
+	if err := json.Unmarshal(data, &text); err != nil {
+		return err
+	}
+	*p = append((*p)[:0], data...)
+	return nil
+}
+
 func (m *CanDeleteMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (any, *types.RpcError) {
 	if ctx.Services == nil {
 		return nil, types.RpcErrorNotEnabled("")
@@ -157,17 +173,17 @@ func (m *CanDeleteMethod) Handle(ctx *types.RpcContext, params json.RawMessage) 
 	}
 
 	var request struct {
-		CanDelete json.RawMessage `json:"can_delete,omitempty"`
+		CanDelete requestField[canDeleteParam] `json:"can_delete"`
 	}
-	if params != nil {
-		_ = json.Unmarshal(params, &request)
+	if rpcErr := decodeRequestObject(params, &request); rpcErr != nil {
+		return nil, rpcErr
 	}
 
-	if len(request.CanDelete) == 0 {
+	if !request.CanDelete.present {
 		return map[string]any{"can_delete": store.GetCanDelete()}, nil
 	}
 
-	seq, rpcErr := resolveCanDeleteSeq(ctx, store, request.CanDelete)
+	seq, rpcErr := resolveCanDeleteSeq(ctx, store, json.RawMessage(request.CanDelete.value))
 	if rpcErr != nil {
 		return nil, rpcErr
 	}
@@ -364,16 +380,16 @@ func rippledSeverityName(l xrpllog.Level) string {
 
 func (m *LogLevelMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (any, *types.RpcError) {
 	var request struct {
-		Severity  string `json:"severity,omitempty"`
-		Partition string `json:"partition,omitempty"`
+		Severity  jsonCppStringField `json:"severity"`
+		Partition jsonCppStringField `json:"partition"`
 	}
 
-	if params != nil {
-		_ = json.Unmarshal(params, &request)
+	if rpcErr := decodeRequestObject(params, &request); rpcErr != nil {
+		return nil, rpcErr
 	}
 
 	// GET: return current levels snapshot
-	if request.Severity == "" {
+	if !request.Severity.present {
 		global, partitions := xrpllog.Levels()
 		levels := map[string]string{
 			"base": rippledSeverityName(global),
@@ -385,13 +401,13 @@ func (m *LogLevelMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (
 	}
 
 	// SET: parse and apply the new level
-	lvl, ok := xrpllog.ParseLevel(request.Severity)
+	lvl, ok := xrpllog.ParseLevel(request.Severity.value)
 	if !ok {
 		return nil, types.RpcErrorInvalidParams("Invalid parameters.")
 	}
 
-	if request.Partition != "" && !strings.EqualFold(request.Partition, "base") {
-		xrpllog.SetPartitionLevel(request.Partition, lvl)
+	if request.Partition.present && !strings.EqualFold(request.Partition.value, "base") {
+		xrpllog.SetPartitionLevel(request.Partition.value, lvl)
 	} else {
 		xrpllog.SetLevel(lvl)
 	}

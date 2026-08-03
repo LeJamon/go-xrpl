@@ -180,6 +180,69 @@ func ParseParams(params json.RawMessage, dest any) *types.RpcError {
 	return nil
 }
 
+type requestField[T any] struct {
+	value   T
+	present bool
+}
+
+func (f *requestField[T]) UnmarshalJSON(data []byte) error {
+	if bytes.Equal(bytes.TrimSpace(data), []byte("null")) {
+		return errors.New("null request field")
+	}
+	if err := json.Unmarshal(data, &f.value); err != nil {
+		return err
+	}
+	f.present = true
+	return nil
+}
+
+type jsonCppBoolField struct {
+	value   bool
+	present bool
+}
+
+func (f *jsonCppBoolField) UnmarshalJSON(data []byte) error {
+	var value any
+	if err := json.Unmarshal(data, &value); err != nil {
+		return err
+	}
+	f.value = jsonCppBoolRaw(data)
+	f.present = true
+	return nil
+}
+
+type jsonCppStringField struct {
+	value   string
+	present bool
+}
+
+func (f *jsonCppStringField) UnmarshalJSON(data []byte) error {
+	value, ok := jsonCppStringRaw(data)
+	if !ok {
+		return errors.New("request field is not string-convertible")
+	}
+	f.value = value
+	f.present = true
+	return nil
+}
+
+func decodeRequestObject(params json.RawMessage, dest any) *types.RpcError {
+	if len(params) == 0 {
+		params = json.RawMessage(`{}`)
+	}
+	var object map[string]json.RawMessage
+	if err := json.Unmarshal(params, &object); err != nil || object == nil {
+		return types.RpcErrorInvalidParams("Invalid parameters.")
+	}
+	if rpcErr := validateJsonCppIntegerRange(params); rpcErr != nil {
+		return rpcErr
+	}
+	if err := json.Unmarshal(params, dest); err != nil {
+		return types.RpcErrorInvalidParams("Invalid parameters.")
+	}
+	return nil
+}
+
 func parseLedgerSpecifier(params json.RawMessage) (types.LedgerSpecifier, bool, *types.RpcError) {
 	if rpcErr := validateJsonCppIntegerRange(params); rpcErr != nil {
 		return types.LedgerSpecifier{}, false, rpcErr

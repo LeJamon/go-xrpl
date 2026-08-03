@@ -30,11 +30,11 @@ type amendmentVoteController interface {
 
 func (m *FeatureMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (any, *types.RpcError) {
 	var request struct {
-		Feature string `json:"feature,omitempty"`
-		Vetoed  *bool  `json:"vetoed,omitempty"`
+		Feature requestField[string] `json:"feature"`
+		Vetoed  jsonCppBoolField     `json:"vetoed"`
 	}
-	if params != nil {
-		_ = json.Unmarshal(params, &request)
+	if rpcErr := decodeRequestObject(params, &request); rpcErr != nil {
+		return nil, rpcErr
 	}
 
 	enabledSet, majorities := m.getAmendmentState(ctx.Services)
@@ -48,22 +48,32 @@ func (m *FeatureMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (a
 		lastVote = tbl.LastVote()
 	}
 
+	if !request.Feature.present {
+		allFeatures := amendment.AllFeatures()
+		features := make(map[string]any, len(allFeatures))
+		for _, f := range allFeatures {
+			hexID := strings.ToUpper(hex.EncodeToString(f.ID[:]))
+			features[hexID] = buildFeatureInfo(f, enabledSet, majorities, tbl, lastVote, ctx.IsAdmin)
+		}
+		return map[string]any{
+			"features": features,
+		}, nil
+	}
+
+	f := resolveFeature(request.Feature.value)
+	if f == nil {
+		return nil, types.RpcErrorBadFeature("Feature not found: " + request.Feature.value)
+	}
+
 	// Admin vote mutation: set or clear a veto on a specific amendment.
-	if request.Vetoed != nil {
+	if request.Vetoed.present {
 		if !ctx.IsAdmin {
 			return nil, types.RpcErrorNoPermission("feature")
-		}
-		if request.Feature == "" {
-			return nil, types.RpcErrorInvalidParams("feature required to set a vote")
-		}
-		f := resolveFeature(request.Feature)
-		if f == nil {
-			return nil, types.RpcErrorBadFeature("Feature not found: " + request.Feature)
 		}
 		if ctrl == nil || tbl == nil {
 			return nil, types.RpcErrorNotSupported("amendment voting is not available on this server")
 		}
-		if err := ctrl.SetAmendmentVote(ctx.Context, f.ID, *request.Vetoed); err != nil {
+		if err := ctrl.SetAmendmentVote(ctx.Context, f.ID, request.Vetoed.value); err != nil {
 			return nil, rpcInternalError("feature: recording amendment vote failed", err)
 		}
 		hexID := strings.ToUpper(hex.EncodeToString(f.ID[:]))
@@ -72,27 +82,9 @@ func (m *FeatureMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (a
 		}, nil
 	}
 
-	// Single feature lookup.
-	if request.Feature != "" {
-		f := resolveFeature(request.Feature)
-		if f == nil {
-			return nil, types.RpcErrorBadFeature("Feature not found: " + request.Feature)
-		}
-		hexID := strings.ToUpper(hex.EncodeToString(f.ID[:]))
-		return map[string]any{
-			hexID: buildFeatureInfo(f, enabledSet, majorities, tbl, lastVote, ctx.IsAdmin),
-		}, nil
-	}
-
-	// All features wrapped in "features" (matches rippled).
-	allFeatures := amendment.AllFeatures()
-	features := make(map[string]any, len(allFeatures))
-	for _, f := range allFeatures {
-		hexID := strings.ToUpper(hex.EncodeToString(f.ID[:]))
-		features[hexID] = buildFeatureInfo(f, enabledSet, majorities, tbl, lastVote, ctx.IsAdmin)
-	}
+	hexID := strings.ToUpper(hex.EncodeToString(f.ID[:]))
 	return map[string]any{
-		"features": features,
+		hexID: buildFeatureInfo(f, enabledSet, majorities, tbl, lastVote, ctx.IsAdmin),
 	}, nil
 }
 

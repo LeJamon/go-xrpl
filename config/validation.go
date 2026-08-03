@@ -225,6 +225,9 @@ func validateMiscSettings(config *Config) []error {
 	if err := ValidateBetaRPCAPI(config.BetaRPCAPI); err != nil {
 		errs = append(errs, err)
 	}
+	if err := ValidatePathSearchMax(config.PathSearchMax); err != nil {
+		errs = append(errs, err)
+	}
 	if err := ValidateWebsocketPingFrequency(config.WebsocketPingFrequency); err != nil {
 		errs = append(errs, err)
 	}

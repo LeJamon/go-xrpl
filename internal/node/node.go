@@ -87,6 +87,27 @@ func serverInfoConfigSnapshot(cfg *config.Config) types.ServerInfoConfigSnapshot
 	}
 }
 
+func rpcCapabilities(cfg *config.Config) types.RPCCapabilities {
+	if cfg == nil {
+		return types.RPCCapabilities{}
+	}
+	return types.RPCCapabilities{
+		SigningEnabled: cfg.SigningSupport,
+		PathSearchMax:  cfg.ResolvedPathSearchMax(),
+	}
+}
+
+func newRPCServiceContainer(ledger types.LedgerService, cfg *config.Config) *types.ServiceContainer {
+	services := types.NewServiceContainer(ledger)
+	services.ClientLoad = types.NewClientLoadShedder()
+	services.ServerInfoConfig = serverInfoConfigSnapshot(cfg)
+	services.Capabilities = rpcCapabilities(cfg)
+	if cfg != nil {
+		services.BetaRPCAPI = cfg.BetaRPCAPI != 0
+	}
+	return services
+}
+
 func goBuildRevision() string {
 	info, ok := debug.ReadBuildInfo()
 	return resolveBuildRevision(info, ok, version.Version)
