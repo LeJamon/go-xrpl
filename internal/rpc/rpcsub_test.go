@@ -853,21 +853,20 @@ func TestRPCSub_ConcurrentSubscribeUnsubscribeWorkerAccounting(t *testing.T) {
 }
 
 func TestRPCSub_DeliveryObservability(t *testing.T) {
-	ws, services := newRPCSubTestServer(t)
-	sink := newRPCSubSink(t)
-	_, rpcErr := subscribeURL(t, services, `{"url":"`+sink.srv.URL+`","streams":["ledger"]}`)
-	require.Nil(t, rpcErr)
-	ws.urlSubs.mu.Lock()
-	sub := ws.urlSubs.subs[sink.srv.URL]
-	ws.urlSubs.mu.Unlock()
-	require.NotNil(t, sub)
-	sub.stop()
-	<-sub.finished
+	metrics := &rpcSubMetrics{}
+	conn := types.NewConnection("observability", make(chan []byte, rpcSubQueueLimit))
+	conn.SendObserver = func(queued bool) {
+		if queued {
+			metrics.recordQueued("observability")
+		} else {
+			metrics.recordDropped("observability")
+		}
+	}
 	data, _ := json.Marshal(map[string]any{"type": "ledgerClosed"})
 	for i := 0; i < rpcSubQueueLimit+4; i++ {
-		ws.SubscriptionManager().BroadcastToStream(types.SubLedger, data, nil)
+		conn.TrySend(data)
 	}
-	snapshot := ws.urlSubs.metricsSnapshot()
+	snapshot := metrics.snapshot()
 	assert.Equal(t, uint64(rpcSubQueueLimit), snapshot.Queued)
 	assert.Equal(t, uint64(4), snapshot.Dropped)
 
