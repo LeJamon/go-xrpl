@@ -113,7 +113,6 @@ func TestCondition3() []byte { return append([]byte(nil), testCondition3...) }
 // TestFulfillment3 returns the fulfillment for preimage "nikb".
 func TestFulfillment3() []byte { return append([]byte(nil), testFulfillment3...) }
 
-// TestConditionInvalid returns a malformed condition.
 func TestConditionInvalid() []byte { return append([]byte(nil), testConditionInvalid...) }
 
 // TestFulfillmentWrong returns a fulfillment that matches none of the conditions.
