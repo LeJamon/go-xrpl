@@ -292,9 +292,9 @@ func newFrameLivenessPeer(t *testing.T, clock *livenessClock, conn net.Conn) (*P
 
 func manifestFrame(t *testing.T, payload []byte) []byte {
 	t.Helper()
-	var frame bytes.Buffer
-	require.NoError(t, message.WriteMessage(&frame, message.TypeManifests, opaqueTestPayload(payload)))
-	return frame.Bytes()
+	frame, err := message.BuildWireMessage(message.TypeManifests, opaqueTestPayload(payload))
+	require.NoError(t, err)
+	return frame
 }
 
 func TestPeerReadLoopAllowsProgressBeyondIdleInterval(t *testing.T) {
@@ -367,6 +367,7 @@ func TestPeerReadLoopReportsPartialFrameProgress(t *testing.T) {
 	var frameErr *FrameReadError
 	require.ErrorAs(t, err, &frameErr)
 	require.ErrorIs(t, err, io.ErrUnexpectedEOF)
+	require.ErrorIs(t, err, message.ErrTruncatedMessage)
 	assert.Equal(t, message.TypeManifests, frameErr.MessageType)
 	assert.Equal(t, uint32(len(opaqueTestPayload(payload))), frameErr.WireSize)
 	assert.False(t, frameErr.Compressed)

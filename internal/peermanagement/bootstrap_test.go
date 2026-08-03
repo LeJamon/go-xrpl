@@ -1,7 +1,6 @@
 package peermanagement
 
 import (
-	"bytes"
 	"context"
 	"errors"
 	"os"
@@ -668,9 +667,9 @@ func TestOverlayConnectsOutboundTargetBeforeStartupFrameCompletes(t *testing.T) 
 			List: []message.Manifest{{STObject: []byte{1}}},
 		})
 		require.NoError(t, err)
-		var frame bytes.Buffer
-		require.NoError(t, message.WriteMessage(&frame, message.TypeManifests, payload))
-		require.NoError(t, connected.overlay.Send(connected.peerID, frame.Bytes()))
+		frame, err := message.BuildWireMessage(message.TypeManifests, payload)
+		require.NoError(t, err)
+		require.NoError(t, connected.overlay.Send(connected.peerID, frame))
 		select {
 		case inbound := <-client.ManifestMessages():
 			_, err := message.Decode(message.TypeManifests, inbound.Payload)

@@ -2,6 +2,7 @@ package message
 
 import (
 	"bytes"
+	"errors"
 	"testing"
 )
 
@@ -115,9 +116,9 @@ func FuzzDecodeHeader(f *testing.F) {
 	})
 }
 
-// FuzzReadMessage wraps arbitrary bytes in a reader and calls ReadMessage.
+// FuzzReadFrame wraps arbitrary bytes in a reader and reads one frame.
 // It must never panic. On success it validates payload length matches the header.
-func FuzzReadMessage(f *testing.F) {
+func FuzzReadFrame(f *testing.F) {
 	// Seed: empty
 	f.Add([]byte{})
 
@@ -153,7 +154,7 @@ func FuzzReadMessage(f *testing.F) {
 		}
 
 		r := bytes.NewReader(data)
-		header, payload, err := ReadMessage(r)
+		header, payload, err := readTestMessage(r)
 		if err != nil {
 			return
 		}
@@ -214,39 +215,34 @@ func FuzzHeaderRoundTrip(f *testing.F) {
 	// Seed: uncompressed Ping
 	f.Add(uint32(100), uint16(3), uint8(0), uint32(0))
 	// Seed: compressed Transaction
-	f.Add(uint32(50), uint16(30), uint8(1), uint32(200))
+	f.Add(uint32(50), uint16(30), uint8(AlgorithmLZ4), uint32(200))
 	// Seed: zero values
 	f.Add(uint32(0), uint16(0), uint8(0), uint32(0))
 	// Seed: max payload uncompressed
 	f.Add(uint32(MaxPayloadSize), uint16(41), uint8(0), uint32(0))
 	// Seed: compressed with large uncompressed size
-	f.Add(uint32(1000), uint16(32), uint8(1), uint32(50000))
+	f.Add(uint32(1000), uint16(32), uint8(AlgorithmLZ4), uint32(50000))
+	for _, algorithm := range []uint8{0x01, 0x10, 0x80, 0x94, 0xA0, 0xF0} {
+		f.Add(uint32(100), uint16(TypePing), algorithm, uint32(200))
+	}
 
 	f.Fuzz(func(t *testing.T, payloadSize uint32, msgType uint16, algorithm uint8, uncompressedSize uint32) {
-		if payloadSize > MaxPayloadSize {
-			t.Skip("payload size exceeds maximum")
-		}
-		if algorithm > 1 {
-			t.Skip("fuzz input maps only 0 and 1 to valid algorithms")
-		}
-
-		algo := AlgorithmNone
-		if algorithm == 1 {
-			algo = AlgorithmLZ4
-		}
+		algo := CompressionAlgorithm(algorithm)
 		mt := MessageType(msgType)
-
-		bufSize := HeaderSizeUncompressed
-		if algo != AlgorithmNone {
-			bufSize = HeaderSizeCompressed
-		}
-		buf := make([]byte, bufSize)
+		buf := bytes.Repeat([]byte{0xa5}, HeaderSizeCompressed)
+		before := append([]byte(nil), buf...)
 
 		if err := EncodeHeader(buf, payloadSize, mt, algo, uncompressedSize); err != nil {
-			t.Fatalf("EncodeHeader failed: %v", err)
+			if algo != AlgorithmNone && algo != AlgorithmLZ4 && !errors.Is(err, ErrUnknownCompression) {
+				t.Fatalf("EncodeHeader error = %v, want ErrUnknownCompression", err)
+			}
+			if !bytes.Equal(buf, before) {
+				t.Fatal("EncodeHeader mutated destination on error")
+			}
+			return
 		}
 
-		h, err := DecodeHeader(buf)
+		h, err := DecodeHeader(buf[:(Header{Compressed: algo == AlgorithmLZ4}).HeaderSize()])
 		if err != nil {
 			t.Fatalf("DecodeHeader failed after successful EncodeHeader: %v", err)
 		}

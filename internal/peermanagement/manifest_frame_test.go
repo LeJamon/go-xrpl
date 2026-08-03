@@ -25,10 +25,11 @@ func opaqueTestPayload(value []byte) []byte {
 
 func manifestAndLedgerFrames(t *testing.T, manifest, ledger []byte) []byte {
 	t.Helper()
-	var wire bytes.Buffer
-	require.NoError(t, message.WriteMessage(&wire, message.TypeManifests, manifest))
-	require.NoError(t, message.WriteMessage(&wire, message.TypeLedgerData, opaqueTestPayload(ledger)))
-	return wire.Bytes()
+	manifestFrame, err := message.BuildWireMessage(message.TypeManifests, manifest)
+	require.NoError(t, err)
+	ledgerFrame, err := message.BuildWireMessage(message.TypeLedgerData, opaqueTestPayload(ledger))
+	require.NoError(t, err)
+	return append(manifestFrame, ledgerFrame...)
 }
 
 type failingManifestSpoolWriter struct {
@@ -140,10 +141,19 @@ func TestSecondOversizedManifestBlocksOnlyItsPeer(t *testing.T) {
 	firstPayload := opaqueTestPayload([]byte("first"))
 	secondPayload := opaqueTestPayload([]byte("second"))
 	var wire bytes.Buffer
-	require.NoError(t, message.WriteMessage(&wire, message.TypeManifests, manifestPayload))
-	require.NoError(t, message.WriteMessage(&wire, message.TypeLedgerData, firstPayload))
-	require.NoError(t, message.WriteMessage(&wire, message.TypeManifests, manifestPayload))
-	require.NoError(t, message.WriteMessage(&wire, message.TypeLedgerData, secondPayload))
+	for _, candidate := range []struct {
+		msgType message.MessageType
+		payload []byte
+	}{
+		{message.TypeManifests, manifestPayload},
+		{message.TypeLedgerData, firstPayload},
+		{message.TypeManifests, manifestPayload},
+		{message.TypeLedgerData, secondPayload},
+	} {
+		frame, err := message.BuildWireMessage(candidate.msgType, candidate.payload)
+		require.NoError(t, err)
+		wire.Write(frame)
+	}
 
 	peer := newLatencyTestPeer(t)
 	peer.bufReader = bufio.NewReader(bytes.NewReader(wire.Bytes()))

@@ -132,9 +132,11 @@ func (f *fakeManifestSender) Peers() []peermanagement.PeerInfo {
 func frameToManifestBytes(t *testing.T, frame []byte) [][]byte {
 	t.Helper()
 	r := bytes.NewReader(frame)
-	hdr, payload, err := message.ReadMessage(r)
+	hdr, err := message.ReadHeader(r)
+	require.NoError(t, err)
+	payload, err := message.ReadPayload(r, *hdr)
 	if err != nil {
-		t.Fatalf("ReadMessage: %v", err)
+		t.Fatalf("ReadPayload: %v", err)
 	}
 	if hdr.MessageType != message.TypeManifests {
 		t.Fatalf("frame type: got %v want TypeManifests", hdr.MessageType)

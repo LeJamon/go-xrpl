@@ -85,7 +85,7 @@ func TestSendClusterUpdate_EmitsExportedConsumerGossip(t *testing.T) {
 
 	frame := requireOutboundFrame(t, peer)
 
-	_, payload, err := message.ReadMessage(bytes.NewReader(frame))
+	_, payload, err := readTestFrame(bytes.NewReader(frame))
 	require.NoError(t, err)
 	decoded, err := message.Decode(message.TypeCluster, payload)
 	require.NoError(t, err)
@@ -148,7 +148,7 @@ func TestSendClusterUpdate_GatesSelfLoadOnValidatedLedgerAge(t *testing.T) {
 
 			o.sendClusterUpdate()
 			frame := requireOutboundFrame(t, peer)
-			_, payload, err := message.ReadMessage(bytes.NewReader(frame))
+			_, payload, err := readTestFrame(bytes.NewReader(frame))
 			require.NoError(t, err)
 			decoded, err := message.Decode(message.TypeCluster, payload)
 			require.NoError(t, err)
@@ -233,7 +233,7 @@ func TestSendTxQueueAnnounce_DrainsPerPeerQueueWithoutStarvation(t *testing.T) {
 	for want := range 3 {
 		o.sendTxQueueAnnounce()
 		frame := requireOutboundFrame(t, peer)
-		_, payload, readErr := message.ReadMessage(bytes.NewReader(frame))
+		_, payload, readErr := readTestFrame(bytes.NewReader(frame))
 		require.NoError(t, readErr)
 		decoded, decodeErr := message.Decode(message.TypeHaveTransactions, payload)
 		require.NoError(t, decodeErr)
@@ -412,7 +412,7 @@ func TestServeDoTransactions_UsesCacheStateAndRejectsMissing(t *testing.T) {
 		Objects: []message.IndexedObject{{Hash: includedHash[:]}, {Hash: queuedHash[:]}},
 	})
 	frame := requireOutboundFrame(t, peer)
-	_, payload, err := message.ReadMessage(bytes.NewReader(frame))
+	_, payload, err := readTestFrame(bytes.NewReader(frame))
 	require.NoError(t, err)
 	decoded, err := message.Decode(message.TypeTransactions, payload)
 	require.NoError(t, err)

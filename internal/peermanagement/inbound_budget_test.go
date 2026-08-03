@@ -23,9 +23,8 @@ func readBudgetUsed(budget *readBudget) int64 {
 func TestInboundBulkBudgetFollowsMessageThroughConsumer(t *testing.T) {
 	payload := protowire.AppendTag(nil, 100, protowire.BytesType)
 	payload = protowire.AppendBytes(payload, bytes.Repeat([]byte{0x4c}, 32*1024))
-	var wire bytes.Buffer
-	require.NoError(t, message.WriteMessage(&wire, message.TypeLedgerData, payload))
-	frame := wire.Bytes()
+	frame, err := message.BuildWireMessage(message.TypeLedgerData, payload)
+	require.NoError(t, err)
 
 	budget := newReadBudget(int64(len(payload)))
 	events := make(chan Event, 2)
@@ -412,15 +411,15 @@ func TestTransactionsBatchRetainsBudgetUntilAllChildrenClose(t *testing.T) {
 
 func TestOverlayShutdownReleasesQueuedManifestSpool(t *testing.T) {
 	payload := bytes.Repeat([]byte{0x4d}, manifestSpoolThreshold+1)
-	var wire bytes.Buffer
-	require.NoError(t, message.WriteMessage(&wire, message.TypeManifests, payload))
+	wire, err := message.BuildWireMessage(message.TypeManifests, payload)
+	require.NoError(t, err)
 
 	spoolDir, err := prepareManifestSpoolDir(t.TempDir())
 	require.NoError(t, err)
 	budget := newReadBudget(int64(2 * len(payload)))
 	manifests := make(chan *InboundMessage, 1)
 	peer := newLatencyTestPeer(t)
-	peer.bufReader = bufio.NewReader(bytes.NewReader(wire.Bytes()))
+	peer.bufReader = bufio.NewReader(bytes.NewReader(wire))
 	peer.SetManifestMessages(manifests)
 	peer.SetInboundReadBudget(budget)
 	peer.SetManifestSpoolDir(spoolDir)

@@ -45,7 +45,7 @@ func TestOverlayHandlePingPongEchoesOptionalFields(t *testing.T) {
 			require.True(t, o.handlePing(Event{PeerID: 7, Payload: payload}))
 
 			frame := requireOutboundFrame(t, peer)
-			header, replyPayload, err := message.ReadMessage(bytes.NewReader(frame))
+			header, replyPayload, err := readTestFrame(bytes.NewReader(frame))
 			require.NoError(t, err)
 			require.Equal(t, message.TypePing, header.MessageType)
 			decoded, err := message.Decode(message.TypePing, replyPayload)

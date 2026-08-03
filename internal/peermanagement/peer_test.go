@@ -252,16 +252,19 @@ func TestPeerReadLoopSkipsUnknownMessage(t *testing.T) {
 	malformedCompressed := []byte{0xff}
 
 	var frames bytes.Buffer
-	require.NoError(t, message.WriteMessageCompressed(
-		&frames,
+	frames.Write(rawTestWireMessage(
 		message.MessageType(9999),
 		malformedCompressed,
 		message.AlgorithmLZ4,
 		message.MaxMessageSize,
 	))
-	require.NoError(t, message.WriteMessage(&frames, message.MessageType(9998), unknownPayload))
+	unknownFrame, err := message.BuildWireMessage(message.MessageType(9998), unknownPayload)
+	require.NoError(t, err)
+	frames.Write(unknownFrame)
 	knownPayload := []byte{0x08, 0x00}
-	require.NoError(t, message.WriteMessage(&frames, message.TypePing, knownPayload))
+	knownFrame, err := message.BuildWireMessage(message.TypePing, knownPayload)
+	require.NoError(t, err)
+	frames.Write(knownFrame)
 	peer.bufReader = bufio.NewReader(bytes.NewReader(frames.Bytes()))
 
 	err = peer.readLoop(context.Background())

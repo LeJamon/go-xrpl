@@ -2,6 +2,7 @@ package message
 
 import (
 	"bytes"
+	"errors"
 	"reflect"
 	"strings"
 	"testing"
@@ -780,6 +781,35 @@ func TestDecodeUnknownType(t *testing.T) {
 type unknownMsg struct{}
 
 func (u *unknownMsg) Type() MessageType { return MessageType(9999) }
+
+type nilMapMessage map[string]struct{}
+
+func (nilMapMessage) Type() MessageType { return TypePing }
+
+func TestEncodeRejectsNilMessages(t *testing.T) {
+	var (
+		nilInterface Message
+		nilPing      *Ping
+		nilMap       nilMapMessage
+	)
+	for _, test := range []struct {
+		name string
+		msg  Message
+	}{
+		{"nil interface", nilInterface},
+		{"typed nil pointer", nilPing},
+		{"typed nil map", nilMap},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			if _, err := Encode(test.msg); !errors.Is(err, ErrNilMessage) {
+				t.Fatalf("Encode error = %v, want ErrNilMessage", err)
+			}
+			if _, err := EncodeFrame(test.msg); !errors.Is(err, ErrNilMessage) {
+				t.Fatalf("EncodeFrame error = %v, want ErrNilMessage", err)
+			}
+		})
+	}
+}
 
 func TestEncodeUnknownType(t *testing.T) {
 	_, err := Encode(&unknownMsg{})

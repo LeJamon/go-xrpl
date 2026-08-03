@@ -1,13 +1,17 @@
 package message
 
 import (
+	"errors"
 	"fmt"
+	"reflect"
 
 	"github.com/LeJamon/go-xrpl/internal/peermanagement/proto"
 	"google.golang.org/protobuf/encoding/protowire"
 	pb "google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/reflect/protoreflect"
 )
+
+var ErrNilMessage = errors.New("cannot encode nil message")
 
 // msgCodec bundles the three operations every message type needs:
 // proto constructor, encoder, decoder. A missing table entry surfaces
@@ -837,9 +841,31 @@ var codecs = map[MessageType]msgCodec{
 
 // Encode encodes a message to bytes using protobuf.
 func Encode(msg Message) ([]byte, error) {
-	c, ok := codecs[msg.Type()]
+	msgType, err := typeOfMessage(msg)
+	if err != nil {
+		return nil, err
+	}
+	return encode(msg, msgType)
+}
+
+func typeOfMessage(msg Message) (MessageType, error) {
+	if msg == nil {
+		return 0, ErrNilMessage
+	}
+	value := reflect.ValueOf(msg)
+	switch value.Kind() {
+	case reflect.Chan, reflect.Func, reflect.Interface, reflect.Map, reflect.Pointer, reflect.Slice:
+		if value.IsNil() {
+			return 0, ErrNilMessage
+		}
+	}
+	return msg.Type(), nil
+}
+
+func encode(msg Message, msgType MessageType) ([]byte, error) {
+	c, ok := codecs[msgType]
 	if !ok {
-		return nil, fmt.Errorf("unknown message type: %d", msg.Type())
+		return nil, fmt.Errorf("unknown message type: %d", msgType)
 	}
 	pmsg, err := c.encode(msg)
 	if err != nil {
@@ -852,7 +878,7 @@ func Encode(msg Message) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	if err := Preflight(msg.Type(), encoded); err != nil {
+	if err := Preflight(msgType, encoded); err != nil {
 		return nil, err
 	}
 	return encoded, nil
