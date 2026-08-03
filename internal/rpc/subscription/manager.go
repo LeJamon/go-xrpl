@@ -65,6 +65,28 @@ func NewManager() *Manager {
 	}
 }
 
+func cloneSubscriptions(src map[types.SubscriptionType]types.SubscriptionConfig) map[types.SubscriptionType]types.SubscriptionConfig {
+	if src == nil {
+		return nil
+	}
+	dst := make(map[types.SubscriptionType]types.SubscriptionConfig, len(src))
+	for key, cfg := range src {
+		copyCfg := cfg
+		copyCfg.Accounts = append([]string(nil), cfg.Accounts...)
+		if cfg.Books != nil {
+			copyCfg.Books = make([]types.BookRequest, len(cfg.Books))
+			for i, book := range cfg.Books {
+				copyBook := book
+				copyBook.TakerPays = append([]byte(nil), book.TakerPays...)
+				copyBook.TakerGets = append([]byte(nil), book.TakerGets...)
+				copyCfg.Books[i] = copyBook
+			}
+		}
+		dst[key] = copyCfg
+	}
+	return dst
+}
+
 // AddConnection adds a connection to the subscription manager
 func (sm *Manager) AddConnection(conn *types.Connection) {
 	sm.mu.Lock()
@@ -91,10 +113,33 @@ func (sm *Manager) RemoveConnection(connID string) {
 // URLSubscriptionRegistry, whose per-url connection is what gets
 // subscribed here.
 func (sm *Manager) HandleSubscribe(conn *types.Connection, request types.SubscriptionRequest, isAdmin bool) *types.RpcError {
-	w := request.WireArrays()
-
 	sm.mu.Lock()
 	defer sm.mu.Unlock()
+	return sm.handleSubscribeLocked(conn, request, isAdmin)
+}
+
+// HandleSubscribeTransactional applies a subscribe request as one atomic
+// operation. The regular WebSocket path intentionally preserves rippled's
+// per-item mutation semantics; URL subscriptions use this variant so a
+// malformed later field cannot leave an earlier stream/account/book attached.
+func (sm *Manager) HandleSubscribeTransactional(conn *types.Connection, request types.SubscriptionRequest, isAdmin bool) *types.RpcError {
+	sm.mu.Lock()
+	defer sm.mu.Unlock()
+
+	snapshot := cloneSubscriptions(conn.Subscriptions)
+	original := conn.Subscriptions
+	apiVersion := conn.APIVersion()
+	if rpcErr := sm.handleSubscribeLocked(conn, request, isAdmin); rpcErr != nil {
+		conn.Subscriptions = original
+		restoreSubscriptions(conn.Subscriptions, snapshot)
+		conn.SetAPIVersion(apiVersion)
+		return rpcErr
+	}
+	return nil
+}
+
+func (sm *Manager) handleSubscribeLocked(conn *types.Connection, request types.SubscriptionRequest, isAdmin bool) *types.RpcError {
+	w := request.WireArrays()
 	conn.SetAPIVersion(request.ApiVersion)
 
 	// Streams. "rt_transactions" is the deprecated alias rippled keeps around
@@ -578,10 +623,40 @@ func isValidDomainHex(domain string) bool {
 // can also unsubscribe with the alias (Unsubscribe.cpp:88-93). Like
 // HandleSubscribe, the url (RPCSub) branch is resolved by the caller.
 func (sm *Manager) HandleUnsubscribe(conn *types.Connection, request types.SubscriptionRequest, isAdmin bool) *types.RpcError {
-	w := request.WireArrays()
-
 	sm.mu.Lock()
 	defer sm.mu.Unlock()
+	return sm.handleUnsubscribeLocked(conn, request, isAdmin)
+}
+
+// HandleUnsubscribeTransactional applies a URL unsubscribe request as one
+// atomic operation. This keeps an invalid later stream/account/book from
+// removing earlier entries from an existing URL subscription.
+func (sm *Manager) HandleUnsubscribeTransactional(conn *types.Connection, request types.SubscriptionRequest, isAdmin bool) *types.RpcError {
+	sm.mu.Lock()
+	defer sm.mu.Unlock()
+
+	snapshot := cloneSubscriptions(conn.Subscriptions)
+	original := conn.Subscriptions
+	if rpcErr := sm.handleUnsubscribeLocked(conn, request, isAdmin); rpcErr != nil {
+		conn.Subscriptions = original
+		restoreSubscriptions(conn.Subscriptions, snapshot)
+		return rpcErr
+	}
+	return nil
+}
+
+func restoreSubscriptions(dst, snapshot map[types.SubscriptionType]types.SubscriptionConfig) {
+	if dst == nil {
+		return
+	}
+	clear(dst)
+	for key, cfg := range snapshot {
+		dst[key] = cfg
+	}
+}
+
+func (sm *Manager) handleUnsubscribeLocked(conn *types.Connection, request types.SubscriptionRequest, isAdmin bool) *types.RpcError {
+	w := request.WireArrays()
 
 	_, streams, rpcErr := resolveStreams(w.Present, w.Streams, request.Streams)
 	if rpcErr != nil {

@@ -545,6 +545,10 @@ type Connection struct {
 	// rippled's mSeq++ in send(): a number is consumed even when the
 	// bounded queue then drops the event, so the remote sees a gap.
 	EncodeOutbound func([]byte) []byte
+	// SendObserver receives the result of each non-blocking enqueue. It is
+	// intentionally narrow so internal subscription implementations can expose
+	// queue observability without widening the broadcast API.
+	SendObserver func(queued bool)
 
 	// consecutiveDrops counts back-to-back send failures. Reset to 0
 	// on every successful TrySend.
@@ -587,8 +591,14 @@ func (c *Connection) TrySend(data []byte) bool {
 	select {
 	case c.SendChannel <- data:
 		c.consecutiveDrops.Store(0)
+		if c.SendObserver != nil {
+			c.SendObserver(true)
+		}
 		return true
 	default:
+		if c.SendObserver != nil {
+			c.SendObserver(false)
+		}
 		if c.consecutiveDrops.Add(1) >= MaxConsecutiveDrops {
 			if c.Disconnect != nil {
 				c.Disconnect()
