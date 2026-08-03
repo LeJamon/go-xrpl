@@ -31,6 +31,10 @@ var (
 	// still open. Rippled treats this malformed fetch-pack request differently
 	// from an unknown ledger when charging the requester.
 	ErrFetchPackOpen = errors.New("fetch pack ledger is open")
+	// ErrFetchPackBusy signals that local ledger state is temporarily busy or
+	// stale for fetch-pack construction. Busy requests are dropped before the
+	// heavy-burden charge and are retried by the requester later.
+	ErrFetchPackBusy = errors.New("fetch pack provider busy")
 	// ErrPeerBadRequest is returned by LedgerSyncHandler.HandleMessage
 	// when the inbound request was malformed (e.g. bad field lengths,
 	// invalid enum values). The handler charges and drops the request; the
@@ -46,6 +50,13 @@ var (
 type ContextLedgerProvider interface {
 	GetReplayDeltaContext(context.Context, []byte) (header []byte, txLeaves [][]byte, err error)
 	GetProofPathContext(context.Context, []byte, []byte, message.LedgerMapType) (header []byte, path [][]byte, err error)
+}
+
+// ContextFetchPackProvider is the cancellation-aware fetch-pack extension of
+// LedgerProvider. Providers that do not implement it are still bounded by the
+// scheduler and receive a pre-call cancellation check.
+type ContextFetchPackProvider interface {
+	MakeFetchPackContext(context.Context, [32]byte, int) ([]message.IndexedObject, error)
 }
 
 // Ledger sync constants.
@@ -100,9 +111,10 @@ type LedgerProvider interface {
 	// HAS, and the provider returns the SHAMap nodes of its parent ("want") —
 	// a header object followed by the account-state and transaction tree
 	// nodes, each tagged with want's sequence. Returns ErrFetchPackTooEarly
-	// when HAVE is below the configured range. Unknown or parentless ledgers
-	// return (nil, nil), while an open HAVE returns ErrFetchPackOpen so the
-	// handler can apply rippled's malformed-request charge. maxObjects <= 0
+	// when HAVE is below the configured range. A provider that is locally busy
+	// or stale returns ErrFetchPackBusy before charging; unknown or parentless
+	// ledgers return (nil, nil), while an open HAVE returns ErrFetchPackOpen so
+	// the handler can apply rippled's malformed-request charge. maxObjects <= 0
 	// lets the provider apply its own cap.
 	MakeFetchPack(haveLedgerHash [32]byte, maxObjects int) ([]message.IndexedObject, error)
 }
@@ -187,6 +199,24 @@ func (h *LedgerSyncHandler) MakeFetchPack(haveLedgerHash [32]byte, maxObjects in
 	h.mu.RUnlock()
 	if provider == nil {
 		return nil, nil
+	}
+	return provider.MakeFetchPack(haveLedgerHash, maxObjects)
+}
+
+func (h *LedgerSyncHandler) MakeFetchPackContext(ctx context.Context, haveLedgerHash [32]byte, maxObjects int) ([]message.IndexedObject, error) {
+	h.mu.RLock()
+	provider := h.provider
+	h.mu.RUnlock()
+	if provider == nil {
+		return nil, nil
+	}
+	if contextProvider, ok := provider.(ContextFetchPackProvider); ok {
+		return contextProvider.MakeFetchPackContext(ctx, haveLedgerHash, maxObjects)
+	}
+	select {
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	default:
 	}
 	return provider.MakeFetchPack(haveLedgerHash, maxObjects)
 }

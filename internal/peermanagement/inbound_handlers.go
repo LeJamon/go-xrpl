@@ -250,7 +250,9 @@ func (o *Overlay) handleGetObjectsMessage(evt Event) {
 		switch gob.ObjType {
 		case message.ObjectTypeFetchPack:
 			if len(gob.LedgerHash) != 32 {
-				o.IncPeerBadData(evt.PeerID, "fetch-pack-bad-hash")
+				if peerOK {
+					peer.Charge(resource.FeeMalformedRequest, "fetch pack ledger hash")
+				}
 				return
 			}
 			// Rippled at PeerImp.cpp:2458-2462 forwards to doFetchPack.
@@ -259,8 +261,16 @@ func (o *Overlay) handleGetObjectsMessage(evt Event) {
 			// to the serve-worker pool — building a pack snapshots the
 			// state+tx tree (capped at fetchPackMaxObjects nodes) and
 			// must not run on the event loop.
-			o.submitRetainedServe(evt, resource.FeeHeavyBurdenPeer,
-				func(ctx context.Context) { o.serveFetchPackContext(ctx, evt.PeerID, gob) })
+			receivedAt := time.Now()
+			// The heavy charge is deferred until the worker has passed the
+			// provider's busy/stale guard. Charging at admission would make a
+			// request that was immediately refused for local load look served.
+			o.submitRetainedServe(evt, resource.Charge{},
+				func(ctx context.Context) {
+					deadlineCtx, cancel := context.WithDeadline(ctx, receivedAt.Add(time.Second))
+					defer cancel()
+					o.serveFetchPackContext(deadlineCtx, evt.PeerID, gob)
+				})
 			return
 		case message.ObjectTypeTransactions:
 			// Tx-reduce-relay back-fill request. Rippled gates on
@@ -339,20 +349,30 @@ func (o *Overlay) submitRetainedServe(
 // query=false TMGetObjectByHash. The requested ledger hash must be 32 bytes; an
 // unknown ledger or unavailable parent yields an empty pack which is dropped.
 // A request below the serving range is dropped with an additional malformed
-// request charge. Every valid-hash request is charged feeHeavyBurdenPeer up
-// front, mirroring rippled's
-// doFetchPack (PeerImp.cpp:2773): building a pack snapshots the want ledger's
+// request charge. The heavy-burden charge is applied after the provider's
+// busy/stale guard, so a locally busy request is dropped without either a
+// heavy or no-reply charge. Building a pack snapshots the want ledger's
 // state+tx tree and walks up to fetchPackMaxObjects nodes — heavier than
 // rippled's diff. go-xrpl builds the pack inline (no jtPACK job queue to bound),
-// so the send-queue back-pressure gate in handleGetObjectsMessage stands in for
-// rippled's isLoadedLocal / jtPACK busy guards (PeerImp.cpp:2758-2762).
+// so the send-queue back-pressure gate in handleGetObjectsMessage handles
+// admission while the provider reports its own busy/stale state at execution.
 func (o *Overlay) serveFetchPack(peerID PeerID, req *message.GetObjectByHash) {
-	if len(req.LedgerHash) == 32 {
-		if peer, ok := o.getPeer(peerID); ok {
-			peer.Charge(resource.FeeHeavyBurdenPeer, "fetch pack request")
+	o.serveFetchPackContext(context.Background(), peerID, req)
+}
+
+func (o *Overlay) chargeServePeer(peerID PeerID, fee resource.Charge, reason string) {
+	if o.ledgerSync != nil {
+		o.ledgerSync.mu.RLock()
+		charge := o.ledgerSync.chargePeer
+		o.ledgerSync.mu.RUnlock()
+		if charge != nil {
+			charge(peerID, fee, reason)
+			return
 		}
 	}
-	o.serveFetchPackContext(context.Background(), peerID, req)
+	if peer, ok := o.getPeer(peerID); ok {
+		peer.Charge(fee, reason)
+	}
 }
 
 func (o *Overlay) serveFetchPackContext(ctx context.Context, peerID PeerID, req *message.GetObjectByHash) {
@@ -360,7 +380,7 @@ func (o *Overlay) serveFetchPackContext(ctx context.Context, peerID PeerID, req 
 		return
 	}
 	if len(req.LedgerHash) != 32 {
-		o.IncPeerBadData(peerID, "fetch-pack-bad-hash")
+		o.chargeServePeer(peerID, resource.FeeMalformedRequest, "fetch pack ledger hash")
 		return
 	}
 
@@ -372,16 +392,27 @@ func (o *Overlay) serveFetchPackContext(ctx context.Context, peerID PeerID, req 
 	copy(haveHash[:], req.LedgerHash)
 
 	// maxObjects=0 lets the provider apply its own per-pack cap.
-	objects, err := o.ledgerSync.MakeFetchPack(haveHash, 0)
+	objects, err := o.ledgerSync.MakeFetchPackContext(ctx, haveHash, 0)
+	if errors.Is(err, ErrFetchPackBusy) {
+		slog.Debug("fetch-pack build busy", "t", "Overlay", "peer", peerID)
+		return
+	}
+	// Charge only after the provider has passed its local busy/stale guard.
+	// Unknown ledgers and other unavailable outcomes still incur the heavy
+	// request cost followed by the protocol's no-reply charge.
+	o.chargeServePeer(peerID, resource.FeeHeavyBurdenPeer, "fetch pack request")
 	if err != nil {
-		if errors.Is(err, ErrFetchPackTooEarly) {
-			peer.Charge(resource.FeeMalformedRequest, "fetch pack request too early")
+		if errors.Is(err, ErrFetchPackTooEarly) || errors.Is(err, ErrFetchPackOpen) {
+			o.chargeServePeer(peerID, resource.FeeMalformedRequest, "fetch pack malformed request")
+		} else if !errors.Is(err, context.Canceled) && !errors.Is(err, context.DeadlineExceeded) {
+			o.chargeServePeer(peerID, resource.FeeRequestNoReply, "fetch pack request unavailable")
 		}
 		slog.Debug("fetch-pack build failed",
 			"t", "Overlay", "peer", peerID, "err", err)
 		return
 	}
 	if len(objects) == 0 {
+		o.chargeServePeer(peerID, resource.FeeRequestNoReply, "fetch pack request unavailable")
 		return
 	}
 	objects = limitIndexedObjectsToReplyBudget(objects, req.LedgerHash)
@@ -398,7 +429,14 @@ func (o *Overlay) serveFetchPackContext(ctx context.Context, peerID PeerID, req 
 	if ctx.Err() != nil {
 		return
 	}
-	encodeAndSendPriority(peer, reply, "fetch-pack reply")
+	frame, err := message.EncodeFrame(reply)
+	if err != nil || len(frame) > message.MaxMessageSize {
+		o.chargeServePeer(peerID, resource.FeeRequestNoReply, "fetch pack response oversized")
+		return
+	}
+	if err := peer.SendPriority(frame); err != nil {
+		slog.Debug("fetch-pack priority send failed", "t", "Overlay", "peer", peerID, "err", err)
+	}
 }
 
 // handleHaveTransactionsMessage processes mtHAVE_TRANSACTIONS from a
@@ -801,7 +839,7 @@ func (o *Overlay) serveGetObjectsContext(ctx context.Context, peerID PeerID, req
 	// charges feeMalformedRequest "ledger hash" on a wrong-sized field
 	// and returns (PeerImp.cpp:2492-2501).
 	if len(req.LedgerHash) != 0 && len(req.LedgerHash) != 32 {
-		o.IncPeerBadData(peerID, "get-objects-ledgerhash")
+		peer.Charge(resource.FeeMalformedRequest, "get object ledger hash")
 		return
 	}
 

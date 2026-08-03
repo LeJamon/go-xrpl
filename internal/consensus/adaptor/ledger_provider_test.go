@@ -77,6 +77,16 @@ func (f *fakeLookup) GetLedgerByHash(hash [32]byte) (*ledger.Ledger, error) {
 
 func (f *fakeLookup) EarliestFetch() uint32 { return f.earliestFetch }
 
+type contextFakeLookup struct {
+	*fakeLookup
+	contextCalls int
+}
+
+func (f *contextFakeLookup) GetLedgerByHashContext(_ context.Context, hash [32]byte) (*ledger.Ledger, error) {
+	f.contextCalls++
+	return f.GetLedgerByHash(hash)
+}
+
 // makeGenesisLedger returns a genesis-derived, validated (and therefore
 // immutable) ledger. It is the cheapest "real" ledger we can hand the
 // provider for tests that don't need transactions in the tx map.
@@ -120,6 +130,30 @@ func makeOpenLedger(t *testing.T) *ledger.Ledger {
 	open, err := ledger.NewOpen(parent, time.Now())
 	require.NoError(t, err)
 	return open
+}
+
+func TestLedgerProvider_ContextMethodsUseCancellableLedgerLookup(t *testing.T) {
+	closed := makeGenesisLedger(t)
+	lookup := &contextFakeLookup{fakeLookup: newFakeLookup()}
+	lookup.add(closed)
+	provider := newLedgerProviderForTest(lookup)
+	hash := closed.Hash()
+
+	headerBytes, _, err := provider.GetReplayDeltaContext(context.Background(), hash[:])
+	require.NoError(t, err)
+	require.NotEmpty(t, headerBytes)
+	var key [32]byte
+	found := false
+	require.NoError(t, closed.ForEach(func(candidate [32]byte, _ []byte) bool {
+		key = candidate
+		found = true
+		return false
+	}))
+	require.True(t, found)
+	_, _, err = provider.GetProofPathContext(context.Background(), hash[:], key[:], message.LedgerMapAccountState)
+	require.NoError(t, err)
+	assert.Equal(t, 2, lookup.contextCalls,
+		"context serving paths must use the cancellable ledger lookup")
 }
 
 // fixedKey32 produces a deterministic 32-byte key with byte i+offset, so

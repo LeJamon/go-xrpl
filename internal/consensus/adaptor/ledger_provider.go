@@ -12,6 +12,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"time"
 
 	"github.com/LeJamon/go-xrpl/internal/ledger"
 	"github.com/LeJamon/go-xrpl/internal/ledger/header"
@@ -59,8 +60,10 @@ var _ peermanagement.LedgerProvider = (*LedgerProvider)(nil)
 // internal/ledger, which is forbidden by the layering boundary between the
 // two packages.
 type LedgerProvider struct {
-	svc   ledgerLookup
-	floor MinimumOnlineFloor
+	svc          ledgerLookup
+	floor        MinimumOnlineFloor
+	loadedLocal  func() bool
+	validatedAge func() time.Duration
 }
 
 // NewLedgerProvider constructs a LedgerProvider backed by the supplied
@@ -68,7 +71,19 @@ type LedgerProvider struct {
 // every call delegates to *service.Service, which carries its own
 // synchronization.
 func NewLedgerProvider(svc *service.Service) *LedgerProvider {
-	return &LedgerProvider{svc: svc}
+	return &LedgerProvider{
+		svc:          svc,
+		loadedLocal:  func() bool { return svc.FeeTrack() != nil && svc.FeeTrack().IsLoadedLocal() },
+		validatedAge: svc.GetValidatedLedgerAge,
+	}
+}
+
+// SetFetchPackGuards installs the load and validated-age signals used by the
+// fetch-pack admission guard. It is primarily useful for embedding services
+// whose load tracker is not the standard ledger Service tracker.
+func (p *LedgerProvider) SetFetchPackGuards(loadedLocal func() bool, validatedAge func() time.Duration) {
+	p.loadedLocal = loadedLocal
+	p.validatedAge = validatedAge
 }
 
 // SetMinimumOnlineFloor installs the online-delete retention floor. Once set,
@@ -157,89 +172,185 @@ func (p *LedgerProvider) GetReplayDeltaContext(ctx context.Context, ledgerHash [
 	return headerBytes, leaves, nil
 }
 
-// fetchPackMaxObjects caps the SHAMap nodes a single fetch-pack reply carries.
-// Unlike rippled's have-diff, go-xrpl sends the want ledger's whole state+tx
-// tree — its acquisition SHAMap has no node-hash store to supply un-sent shared
-// nodes (see shamap.SHAMap.WalkFetchPackNodes). The cap bounds the reply: a
-// moderate ledger fits in one pack, while a large (mainnet-scale) tree is
-// truncated to a root-first connected prefix and the receiver completes the
-// remainder via ordinary node-by-hash requests.
-const fetchPackMaxObjects = 12288
+// fetchPackMaxObjects is LedgerMaster's historical stop condition: once a pack
+// has 512 objects, traversal stops before adding an older ledger. The target
+// ledger's state and transaction maps each have their own larger limits.
+const (
+	fetchPackMaxObjects    = 512
+	fetchPackStateMaxNodes = 16384
+	fetchPackTxMaxNodes    = 512
+	fetchPackMaxAge        = time.Second
+	fetchPackMaxBytes      = int64(60 * 1024 * 1024)
+)
 
 // MakeFetchPack builds a fetch-pack for the parent of the ledger named by
 // haveLedgerHash: the requester supplies a ledger hash it HAS, and we serve
 // its predecessor ("want"). The reply carries want's header object (hash ==
 // want's ledger hash) followed by its account-state and, when non-empty, its
 // transaction SHAMap tree nodes, each tagged with want's sequence. It returns
-// ErrFetchPackTooEarly below the configured serving range, or (nil, nil) when
-// have is unknown, not yet immutable, or its parent is unavailable.
+// ErrFetchPackTooEarly below the configured serving range, ErrFetchPackOpen
+// for a known but open HAVE, ErrFetchPackBusy when local state is unavailable
+// for construction, or (nil, nil) when have is unknown or its parent is
+// unavailable.
 func (p *LedgerProvider) MakeFetchPack(haveLedgerHash [32]byte, maxObjects int) ([]message.IndexedObject, error) {
-	have, err := p.svc.GetLedgerByHash(haveLedgerHash)
-	if err != nil || have == nil || !have.IsImmutable() {
+	return p.MakeFetchPackContext(context.Background(), haveLedgerHash, maxObjects)
+}
+
+func (p *LedgerProvider) MakeFetchPackContext(ctx context.Context, haveLedgerHash [32]byte, maxObjects int) ([]message.IndexedObject, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	explicitCap := maxObjects > 0
+	if explicitCap && maxObjects > fetchPackMaxObjects {
+		maxObjects = fetchPackMaxObjects
+	}
+	if p.loadedLocal != nil && p.loadedLocal() {
+		return nil, peermanagement.ErrFetchPackBusy
+	}
+	if p.validatedAge != nil && p.validatedAge() > 40*time.Second {
+		return nil, peermanagement.ErrFetchPackBusy
+	}
+	have, err := p.getLedgerContext(ctx, haveLedgerHash)
+	if ctxErr := ctx.Err(); ctxErr != nil {
+		return nil, ctxErr
+	}
+	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+		return nil, err
+	}
+	if err != nil || have == nil {
 		return nil, nil
+	}
+	if !have.IsImmutable() {
+		return nil, peermanagement.ErrFetchPackOpen
 	}
 	if have.Sequence() < p.svc.EarliestFetch() {
 		return nil, peermanagement.ErrFetchPackTooEarly
 	}
-	want, err := p.svc.GetLedgerByHash(have.Header().ParentHash)
+	capacity := fetchPackMaxObjects
+	if explicitCap {
+		capacity = maxObjects
+	}
+	objects := make([]message.IndexedObject, 0, capacity)
+	currentHave := have
+	want, err := p.getLedgerContext(ctx, have.Header().ParentHash)
+	if ctxErr := ctx.Err(); ctxErr != nil {
+		return nil, ctxErr
+	}
+	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+		return nil, err
+	}
 	if err != nil || want == nil || p.belowFloor(want.Sequence()) {
 		return nil, nil
 	}
-	if maxObjects <= 0 || maxObjects > fetchPackMaxObjects {
-		maxObjects = fetchPackMaxObjects
-	}
+	deadline := time.Now().Add(fetchPackMaxAge)
+	remainingBytes := fetchPackMaxBytes
 
-	seq := want.Sequence()
-	wantHdr := want.Header()
-	objects := make([]message.IndexedObject, 0, maxObjects)
-
-	// Lead with the ledger-header object (HashPrefixLedgerMaster + raw
-	// header). Its hash is want's ledger hash and sha512Half(data)
-	// reproduces it, so a peer treats it as the pack's header node. go-xrpl
-	// receivers already hold the header (via the acquisition's GotBase) and
-	// simply ignore it.
-	wantHash := want.Hash()
-	headerData := append(protocol.HashPrefixLedgerMaster().Bytes(), header.AddRaw(wantHdr, false)...)
-	objects = append(objects, message.IndexedObject{
-		Hash:      append([]byte(nil), wantHash[:]...),
-		Data:      headerData,
-		LedgerSeq: seq,
-	})
-
-	stateMap, err := want.StateMapSnapshot()
-	if err != nil {
-		return nil, fmt.Errorf("snapshot state map: %w", err)
-	}
-	objects, err = appendFetchPackNodes(objects, stateMap, maxObjects, seq)
-	if err != nil {
-		return nil, fmt.Errorf("walk state map: %w", err)
-	}
-
-	if wantHdr.TxHash != ([32]byte{}) {
-		txMap, err := want.TxMapSnapshot()
-		if err != nil {
-			return nil, fmt.Errorf("snapshot tx map: %w", err)
+packLoop:
+	for want != nil && (!explicitCap || len(objects) < maxObjects) && time.Now().Before(deadline) {
+		if err := ctx.Err(); err != nil {
+			return nil, err
 		}
-		objects, err = appendFetchPackNodes(objects, txMap, maxObjects, seq)
+		seq := want.Sequence()
+		wantHdr := want.Header()
+		wantHash := want.Hash()
+		headerData := append(protocol.HashPrefixLedgerMaster().Bytes(), header.AddRaw(wantHdr, false)...)
+		if int64(len(headerData)) > remainingBytes {
+			break
+		}
+		objects = append(objects, message.IndexedObject{
+			Hash:      append([]byte(nil), wantHash[:]...),
+			Data:      headerData,
+			LedgerSeq: seq,
+		})
+		remainingBytes -= int64(len(headerData))
+
+		wantState, err := want.StateMapSnapshot()
 		if err != nil {
-			return nil, fmt.Errorf("walk tx map: %w", err)
+			return nil, fmt.Errorf("snapshot state map: %w", err)
+		}
+		haveState, err := currentHave.StateMapSnapshot()
+		if err != nil {
+			return nil, fmt.Errorf("snapshot have state map: %w", err)
+		}
+		stateLimit := fetchPackStateMaxNodes
+		if explicitCap {
+			stateLimit = min(maxObjects-len(objects), stateLimit)
+		}
+		stateNodes, complete, err := wantState.WalkFetchPackDifferencesBounded(ctx, haveState, stateLimit, remainingBytes)
+		if err != nil {
+			return nil, fmt.Errorf("walk state map: %w", err)
+		}
+		objects = appendFetchPackNodesFromWalk(objects, stateNodes, seq)
+		remainingBytes -= fetchPackNodesBytes(stateNodes)
+		if !complete {
+			break packLoop
+		}
+
+		if explicitCap && len(objects) >= maxObjects {
+			break
+		}
+		if wantHdr.TxHash != ([32]byte{}) {
+			txMap, err := want.TxMapSnapshot()
+			if err != nil {
+				return nil, fmt.Errorf("snapshot tx map: %w", err)
+			}
+			txLimit := fetchPackTxMaxNodes
+			if explicitCap {
+				txLimit = min(maxObjects-len(objects), txLimit)
+			}
+			txNodes, complete, err := txMap.WalkFetchPackNodesContextBounded(ctx, txLimit, remainingBytes)
+			if err != nil {
+				return nil, fmt.Errorf("walk tx map: %w", err)
+			}
+			objects = appendFetchPackNodesFromWalk(objects, txNodes, seq)
+			remainingBytes -= fetchPackNodesBytes(txNodes)
+			if !complete {
+				break packLoop
+			}
+		}
+		if explicitCap && len(objects) >= maxObjects {
+			break
+		}
+		if len(objects) >= fetchPackMaxObjects {
+			break
+		}
+		currentHave = want
+		want, err = p.getLedgerContext(ctx, want.Header().ParentHash)
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return nil, ctxErr
+		}
+		if err != nil {
+			if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+				return nil, err
+			}
+			// Historical traversal is opportunistic: once the requested
+			// predecessor has been packed, a missing older ledger simply ends
+			// the useful chain rather than failing the reply.
+			break
+		}
+		if want != nil && p.belowFloor(want.Sequence()) {
+			break
 		}
 	}
-
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	return objects, nil
 }
 
-// appendFetchPackNodes walks up to the remaining-object budget of m's SHAMap
-// tree nodes and appends each as a fetch-pack object tagged with seq.
-func appendFetchPackNodes(objects []message.IndexedObject, m *shamap.SHAMap, maxObjects int, seq uint32) ([]message.IndexedObject, error) {
-	remaining := maxObjects - len(objects)
-	if remaining <= 0 {
-		return objects, nil
+func (p *LedgerProvider) getLedgerContext(ctx context.Context, hash [32]byte) (*ledger.Ledger, error) {
+	if lookup, ok := p.svc.(ledgerLookupContext); ok {
+		return lookup.GetLedgerByHashContext(ctx, hash)
 	}
-	nodes, err := m.WalkFetchPackNodes(remaining)
-	if err != nil {
-		return objects, err
+	select {
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	default:
 	}
+	return p.svc.GetLedgerByHash(hash)
+}
+
+func appendFetchPackNodesFromWalk(objects []message.IndexedObject, nodes []shamap.FetchPackNode, seq uint32) []message.IndexedObject {
 	for i := range nodes {
 		objects = append(objects, message.IndexedObject{
 			Hash:      append([]byte(nil), nodes[i].Hash[:]...),
@@ -247,7 +358,15 @@ func appendFetchPackNodes(objects []message.IndexedObject, m *shamap.SHAMap, max
 			LedgerSeq: seq,
 		})
 	}
-	return objects, nil
+	return objects
+}
+
+func fetchPackNodesBytes(nodes []shamap.FetchPackNode) int64 {
+	var total int64
+	for i := range nodes {
+		total += int64(len(nodes[i].Data))
+	}
+	return total
 }
 
 // GetProofPath serves an mtPROOF_PATH_REQ:
@@ -326,16 +445,4 @@ func (p *LedgerProvider) GetProofPathContext(
 	}
 
 	return header.AddRaw(l.Header(), false), proof.Path, nil
-}
-
-func (p *LedgerProvider) getLedgerContext(ctx context.Context, hash [32]byte) (*ledger.Ledger, error) {
-	if lookup, ok := p.svc.(ledgerLookupContext); ok {
-		return lookup.GetLedgerByHashContext(ctx, hash)
-	}
-	select {
-	case <-ctx.Done():
-		return nil, ctx.Err()
-	default:
-	}
-	return p.svc.GetLedgerByHash(hash)
 }
