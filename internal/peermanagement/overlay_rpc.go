@@ -143,10 +143,10 @@ func (o *Overlay) ClusterJSON() map[string]any {
 	now := o.cfg.Clock()
 
 	o.cluster.ForEach(func(m cluster.Member) {
-		if len(selfKey) > 0 && bytes.Equal(selfKey, m.Identity) {
+		if len(selfKey) > 0 && bytes.Equal(selfKey, m.Identity[:]) {
 			return
 		}
-		encoded, err := addresscodec.EncodeNodePublicKey(m.Identity)
+		encoded, err := addresscodec.EncodeNodePublicKey(m.Identity[:])
 		if err != nil || encoded == "" {
 			return
 		}

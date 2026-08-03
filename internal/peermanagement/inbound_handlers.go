@@ -137,7 +137,10 @@ func (o *Overlay) handleClusterMessage(evt Event) {
 			// bad-data charge that rippled would not.
 			continue
 		}
-		reportTime := time.Unix(int64(node.ReportTime), 0)
+		var reportTime time.Time
+		if node.ReportTime != 0 {
+			reportTime = protocol.FromRippleTime(node.ReportTime)
+		}
 		o.cluster.Update(identity, node.NodeName, node.NodeLoad, reportTime)
 	}
 

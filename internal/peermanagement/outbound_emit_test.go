@@ -11,6 +11,7 @@ import (
 	"github.com/LeJamon/go-xrpl/internal/peermanagement/cluster"
 	"github.com/LeJamon/go-xrpl/internal/peermanagement/message"
 	"github.com/LeJamon/go-xrpl/internal/peermanagement/resource"
+	"github.com/LeJamon/go-xrpl/protocol"
 )
 
 // TestSendClusterUpdate_NoClusterConfigured_NoOp pins the
@@ -56,7 +57,8 @@ func TestSendClusterUpdate_EmitsExportedConsumerGossip(t *testing.T) {
 	// Register the receiving peer as a cluster member so it both appears
 	// in the broadcast registry and is selected as a send target.
 	clusterReg := cluster.New()
-	require.True(t, clusterReg.Update(peerToken.Bytes(), "peer", 0, time.Now()))
+	reportTime := protocol.FromRippleTime(800_000_000)
+	require.True(t, clusterReg.Update(peerToken.Bytes(), "peer", 0, reportTime))
 
 	// Seed the resource manager with an inbound consumer whose balance
 	// clears the gossip-export threshold.
@@ -88,6 +90,8 @@ func TestSendClusterUpdate_EmitsExportedConsumerGossip(t *testing.T) {
 	require.NoError(t, err)
 	cm, ok := decoded.(*message.Cluster)
 	require.True(t, ok)
+	require.Len(t, cm.ClusterNodes, 1)
+	assert.Equal(t, protocol.ToRippleTime(reportTime), cm.ClusterNodes[0].ReportTime)
 
 	require.Len(t, cm.LoadSources, 1, "exported consumer must appear as a load source")
 	assert.Equal(t, "203.0.113.7", cm.LoadSources[0].Name,

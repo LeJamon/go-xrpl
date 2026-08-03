@@ -21,6 +21,7 @@ import (
 	addresscodec "github.com/LeJamon/go-xrpl/codec/addresscodec"
 	"github.com/LeJamon/go-xrpl/internal/peermanagement/cluster"
 	"github.com/LeJamon/go-xrpl/internal/peermanagement/message"
+	"github.com/LeJamon/go-xrpl/protocol"
 )
 
 // clusterBroadcastInterval matches rippled's setClusterTimer cadence
@@ -120,7 +121,8 @@ func (o *Overlay) sendClusterUpdate() {
 		if provider := o.localLoadFeeProviderSnapshot(); provider != nil {
 			selfFee = provider()
 		}
-		if !o.cluster.Update(o.localNodeIdentity, "", selfFee, time.Now()) {
+		reportTime := protocol.FromRippleTime(protocol.ToRippleTime(time.Now()))
+		if !o.cluster.Update(o.localNodeIdentity, "", selfFee, reportTime) {
 			return
 		}
 	}
@@ -129,13 +131,13 @@ func (o *Overlay) sendClusterUpdate() {
 		ClusterNodes: make([]message.ClusterNode, 0, o.cluster.Size()),
 	}
 	o.cluster.ForEach(func(m cluster.Member) {
-		encoded, err := addresscodec.EncodeNodePublicKey(m.Identity)
+		encoded, err := addresscodec.EncodeNodePublicKey(m.Identity[:])
 		if err != nil {
 			return
 		}
 		clusterMsg.ClusterNodes = append(clusterMsg.ClusterNodes, message.ClusterNode{
 			PublicKey:  encoded,
-			ReportTime: uint32(m.ReportTime.Unix()),
+			ReportTime: protocol.ToRippleTime(m.ReportTime),
 			NodeLoad:   m.LoadFee,
 			NodeName:   m.Name,
 		})
