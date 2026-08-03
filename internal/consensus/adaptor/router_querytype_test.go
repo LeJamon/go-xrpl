@@ -12,9 +12,6 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// querytypeRecorder records both IncPeerBadData and SendToPeer so the
-// query_type validation tests. badDataCall and sentFrame are shared with the
-// other router tests in this package.
 type querytypeRecorder struct {
 	recordingSender
 	qmu     sync.Mutex
