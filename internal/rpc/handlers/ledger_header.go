@@ -56,12 +56,13 @@ func (m *LedgerHeaderMethod) Handle(ctx *types.RpcContext, params json.RawMessag
 	//   uint32 seq, uint64 drops, hash256 parentHash, hash256 txHash,
 	//   hash256 accountHash, uint32 parentCloseTime, uint32 closeTime,
 	//   uint8 closeTimeResolution, uint8 closeFlags
+	txHash, stateHash := ledgerMapHashes(targetLedger)
 	ledgerData := ledgerheader.AddRaw(ledgerheader.LedgerHeader{
 		LedgerIndex:         targetLedger.Sequence(),
 		ParentCloseTime:     protocol.FromRippleTime(uint32(max(targetLedger.ParentCloseTime(), 0))),
 		ParentHash:          targetLedger.ParentHash(),
-		TxHash:              targetLedger.TxMapHash(),
-		AccountHash:         targetLedger.StateMapHash(),
+		TxHash:              txHash,
+		AccountHash:         stateHash,
 		Drops:               targetLedger.TotalDrops(),
 		CloseFlags:          targetLedger.CloseFlags(),
 		CloseTimeResolution: uint8(targetLedger.CloseTimeResolution()),
@@ -71,8 +72,7 @@ func (m *LedgerHeaderMethod) Handle(ctx *types.RpcContext, params json.RawMessag
 
 	// Build the nested "ledger" JSON object (equivalent to addJson with options=0).
 	// Reference: rippled LedgerToJson.cpp fillJson()
-	ledgerObj := buildLedgerHeaderJSON(targetLedger, closed)
-	response["ledger"] = ledgerObj
+	response["ledger"] = buildLedgerHeaderJSON(targetLedger, closed)
 
 	return response, nil
 }
@@ -106,8 +106,7 @@ func buildLedgerSummaryJSON(lr types.LedgerReader, closed bool, apiVersion int) 
 	ledgerObj["closed"] = true
 
 	hash := lr.Hash()
-	txHash := lr.TxMapHash()
-	stateHash := lr.StateMapHash()
+	txHash, stateHash := ledgerMapHashes(lr)
 
 	ledgerObj["ledger_hash"] = FormatLedgerHash(hash)
 	ledgerObj["transaction_hash"] = FormatLedgerHash(txHash)

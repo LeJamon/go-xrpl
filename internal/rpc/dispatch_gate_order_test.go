@@ -102,7 +102,8 @@ func TestDispatchGateOrder(t *testing.T) {
 // precedes the unknown-command failure.
 func TestHTTPForbiddenBeatsBusy(t *testing.T) {
 	services := types.NewServiceContainer(nil)
-	srv := NewServer(time.Second, services)
+	services.ClientLoad = types.NewClientLoadShedder()
+	srv := NewServer(ServerOptions{Timeout: time.Second, Services: services})
 	srv.registry.Register("stop", &stubHandler{role: types.RoleAdmin})
 
 	for i := int64(0); i <= types.MaxJobQueueClients; i++ {
@@ -146,7 +147,7 @@ func TestHTTPForbiddenBeatsBusy(t *testing.T) {
 // invalid_API_version bare token.
 func TestHTTPKnownMethodUnsupportedVersionIsUnknownCommand(t *testing.T) {
 	services := types.NewServiceContainer(nil)
-	srv := NewServer(time.Second, services)
+	srv := NewServer(ServerOptions{Timeout: time.Second, Services: services})
 	srv.registry.Register("v1only", &stubHandler{role: types.RoleGuest, apiVers: []int{types.ApiVersion1}})
 
 	post := func(body string) *httptest.ResponseRecorder {

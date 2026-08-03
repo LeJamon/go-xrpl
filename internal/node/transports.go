@@ -27,6 +27,7 @@ type boundHTTPServer struct {
 	name      string
 	protocol  string
 	address   string
+	limit     int
 	listener  net.Listener
 	ready     <-chan struct{}
 	markReady func()
@@ -37,6 +38,7 @@ type boundRPCTransports struct {
 	http      []*boundHTTPServer
 	ws        []*boundHTTPServer
 	grpc      *boundGRPCServer
+	limiter   *connectionLimiter
 	errors    chan error
 	serveWG   sync.WaitGroup
 	requestMu sync.Mutex
@@ -72,11 +74,7 @@ func bindRPCTransports(
 	grpcLookup xrplgrpc.LedgerLookup,
 	listen listenFunc,
 ) (_ *boundRPCTransports, err error) {
-	connLimiter := rpc.NewConnLimiter()
-	if cfg.Server.MaxConnections != 0 {
-		connLimiter.SetGlobalLimit(cfg.Server.MaxConnections)
-	}
-	wsServer.SetConnLimiter(connLimiter)
+	connLimiter := newConnectionLimiter(cfg.Server.MaxConnections)
 
 	httpMux := http.NewServeMux()
 	httpMux.Handle("/", httpHandler)
@@ -96,9 +94,10 @@ func bindRPCTransports(
 	httpNames := sortedPortNames(httpPorts)
 	wsNames := sortedPortNames(wsPorts)
 	bound := &boundRPCTransports{
-		http:   make([]*boundHTTPServer, 0, len(httpNames)),
-		ws:     make([]*boundHTTPServer, 0, len(wsNames)),
-		errors: make(chan error, 2+len(wsNames)+len(httpNames)),
+		http:    make([]*boundHTTPServer, 0, len(httpNames)),
+		ws:      make([]*boundHTTPServer, 0, len(wsNames)),
+		limiter: connLimiter,
+		errors:  make(chan error, 2+len(wsNames)+len(httpNames)),
 	}
 	defer func() {
 		if err != nil {
@@ -113,7 +112,7 @@ func bindRPCTransports(
 			return nil, parseErr
 		}
 		mux := http.NewServeMux()
-		mux.Handle("/", bound.trackHandler(rpc.PortMiddleware(pc, connLimiter, wsServer)))
+		mux.Handle("/", bound.trackHandler(rpc.PortMiddleware(pc, wsServer)))
 		srv := &http.Server{
 			Addr:              p.BindAddress(),
 			Handler:           mux,
@@ -121,7 +120,7 @@ func bindRPCTransports(
 			BaseContext:       func(net.Listener) context.Context { return ctx },
 		}
 		bound.ws = append(bound.ws, &boundHTTPServer{
-			name: name, protocol: "ws", address: srv.Addr, server: srv,
+			name: name, protocol: "ws", address: srv.Addr, limit: pc.Limit, server: srv,
 		})
 	}
 
@@ -132,7 +131,7 @@ func bindRPCTransports(
 			return nil, parseErr
 		}
 		mux := http.NewServeMux()
-		mux.Handle("/", bound.trackHandler(rpc.PortMiddleware(pc, connLimiter, httpMux)))
+		mux.Handle("/", bound.trackHandler(rpc.PortMiddleware(pc, httpMux)))
 		srv := &http.Server{
 			Addr:              p.BindAddress(),
 			Handler:           mux,
@@ -143,7 +142,7 @@ func bindRPCTransports(
 			BaseContext:       func(net.Listener) context.Context { return ctx },
 		}
 		bound.http = append(bound.http, &boundHTTPServer{
-			name: name, protocol: "http", address: srv.Addr, server: srv,
+			name: name, protocol: "http", address: srv.Addr, limit: pc.Limit, server: srv,
 		})
 	}
 
@@ -168,7 +167,13 @@ func bindRPCTransports(
 		if listenErr != nil {
 			return nil, fmt.Errorf("%s %s listen on %s: %w", server.protocol, server.name, server.address, listenErr)
 		}
-		readyListener := newServeReadyListener(listener)
+		limited := &limitedListener{
+			Listener:  listener,
+			limiter:   connLimiter,
+			portName:  server.name,
+			portLimit: server.limit,
+		}
+		readyListener := newServeReadyListener(limited)
 		server.listener = readyListener
 		server.ready = readyListener.ready
 		server.markReady = readyListener.markReady

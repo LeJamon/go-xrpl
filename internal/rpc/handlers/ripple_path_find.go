@@ -1,7 +1,6 @@
 package handlers
 
 import (
-	"encoding/hex"
 	"encoding/json"
 	"sort"
 
@@ -136,17 +135,10 @@ func (m *RipplePathFindMethod) Handle(ctx *types.RpcContext, params json.RawMess
 
 	var domainID *[32]byte
 	if rawDomain, ok := probe["domain"]; ok {
-		var domainStr string
-		if err := json.Unmarshal(rawDomain, &domainStr); err != nil {
+		var parsed bool
+		domainID, parsed = types.ParsePathFindDomain(rawDomain)
+		if !parsed {
 			return nil, types.RpcErrorDomainMalformed("Domain is malformed.")
-		}
-		domainID = new([32]byte)
-		if domainStr != "0" {
-			decoded, err := hex.DecodeString(domainStr)
-			if err != nil || len(decoded) != 32 {
-				return nil, types.RpcErrorDomainMalformed("Domain is malformed.")
-			}
-			copy(domainID[:], decoded)
 		}
 	}
 

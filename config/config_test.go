@@ -229,6 +229,9 @@ ports = ["port_test"]
 admin = ["127.0.0.1"]
 admin_user = "common-user"
 admin_password = "common-password"
+user = "operator"
+password = "transport-password"
+allowed_origins = ["https://console.example"]
 secure_gateway = ["10.0.0.0/8"]
 
 [port_test]
@@ -250,6 +253,9 @@ path = "/tmp/test/db"
 	assert.Equal(t, []string{"127.0.0.1", "::1"}, port.Admin)
 	assert.Equal(t, "common-user", port.AdminUser)
 	assert.Equal(t, "port-password", port.AdminPassword)
+	assert.Equal(t, "operator", port.User)
+	assert.Equal(t, "transport-password", port.Password)
+	assert.Equal(t, []string{"https://console.example"}, port.AllowedOrigins)
 	assert.Equal(t, []string{"10.0.0.0/8", "192.168.0.0/16"}, port.SecureGateway)
 }
 

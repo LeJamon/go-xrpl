@@ -44,13 +44,7 @@ func (m *TxHistoryMethod) Handle(ctx *types.RpcContext, params json.RawMessage) 
 		// Decode to full JSON
 		decoded, err := decodeBinaryObject(tx.TxBlob)
 		if err != nil {
-			// Fallback to hex blob
-			txs[i] = map[string]any{
-				"hash":         hashStr,
-				"ledger_index": tx.LedgerIndex,
-				"tx_blob":      strings.ToUpper(hex.EncodeToString(tx.TxBlob)),
-			}
-			continue
+			return nil, rpcInternalError("tx_history: transaction decoding failed", err)
 		}
 
 		decoded["hash"] = hashStr

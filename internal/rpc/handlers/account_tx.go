@@ -12,6 +12,7 @@ import (
 	"strings"
 
 	"github.com/LeJamon/go-xrpl/internal/ledger/service/svcerr"
+	"github.com/LeJamon/go-xrpl/internal/rpc/txprojection"
 	"github.com/LeJamon/go-xrpl/internal/rpc/types"
 	"github.com/LeJamon/go-xrpl/protocol"
 )
@@ -194,7 +195,7 @@ func (m *AccountTxMethod) Handle(ctx *types.RpcContext, params json.RawMessage) 
 				}
 
 				// Inject DeliverMax for Payment transactions
-				injectDeliverMax(txJSON, ctx.ApiVersion)
+				txprojection.InjectDeliverMax(txJSON, ctx.ApiVersion)
 
 				if !isV2 {
 					txJSON["hash"] = txHashHex
@@ -535,24 +536,5 @@ func accountTxUint32(value any) (uint32, bool) {
 		return uint32(number), true
 	default:
 		return 0, false
-	}
-}
-
-// injectDeliverMax adds DeliverMax to Payment transaction JSON.
-// For API v1: adds DeliverMax = Amount (keeps Amount).
-// For API v2+: adds DeliverMax = Amount, then removes Amount.
-// This matches rippled's RPC::insertDeliverMax in DeliverMax.cpp.
-func injectDeliverMax(txJSON map[string]any, apiVersion int) {
-	amount, hasAmount := txJSON["Amount"]
-	if !hasAmount {
-		return
-	}
-	txType, _ := txJSON["TransactionType"].(string)
-	if txType != "Payment" {
-		return
-	}
-	txJSON["DeliverMax"] = amount
-	if apiVersion > 1 {
-		delete(txJSON, "Amount")
 	}
 }

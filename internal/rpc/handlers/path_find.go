@@ -15,8 +15,9 @@ import (
 // pushing updated paths on every ledger close) is a WebSocket-only feature
 // implemented separately on the WS transport: see
 // (*WebSocketServer).handlePathFind in internal/rpc/websocket.go and the
-// PathFindSession in internal/rpc/path_find_session.go, refreshed via
-// UpdatePathFindSessions on each ledger close (wired in cli/server.go).
+// PathFindSession in internal/rpc/path_find_session.go, refreshed by the
+// bounded asynchronous UpdatePathFindSessions pipeline after each ledger
+// close (wired in internal/node/runtime.go).
 type PathFindMethod struct{ BaseHandler }
 
 func (m *PathFindMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (any, *types.RpcError) {

@@ -32,18 +32,13 @@ func printTestServer(t *testing.T) *Server {
 		}
 	}
 
-	srv := &Server{
-		registry: types.NewMethodRegistry(),
-		timeout:  time.Second,
-		services: svc,
-	}
-	srv.registry.Register("print", &handlers.PrintMethod{})
-	srv.SetPeerSource(&stubPeerSource{
+	srv := NewServer(ServerOptions{Timeout: time.Second, Services: svc, PeerSource: &stubPeerSource{
 		peers:                  []map[string]any{{"address": "192.0.2.1:51235"}},
 		cluster:                map[string]any{},
 		criticalFailuresLocal:  4,
 		criticalFailuresShared: 2,
-	})
+	}})
+	srv.registry.Register("print", &handlers.PrintMethod{})
 	return srv
 }
 

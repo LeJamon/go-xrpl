@@ -3,6 +3,7 @@ package node
 import (
 	"encoding/hex"
 	"encoding/json"
+	"fmt"
 	"math"
 	"strings"
 	"testing"
@@ -104,7 +105,7 @@ func TestBuildLedgerCloseEventUsesSourceLedgerAndWirePresence(t *testing.T) {
 			if got.FeeRef != nil && *got.FeeRef != deprecatedFeeReferenceUnits {
 				t.Fatalf("fee_ref = %d, want %d", *got.FeeRef, deprecatedFeeReferenceUnits)
 			}
-			if got.NetworkID != 0 || got.ValidatedLedgers != "1-2,4" || got.TxnCount != 2 {
+			if got.NetworkID != 0 || got.ValidatedLedgers != "1-2,4" || !got.ValidatedLedgersPresent || got.TxnCount != 2 {
 				t.Fatalf("event fields = %+v", got)
 			}
 
@@ -117,6 +118,87 @@ func TestBuildLedgerCloseEventUsesSourceLedgerAndWirePresence(t *testing.T) {
 			}
 			if subscribeInfo.FeeRef != deprecatedFeeReferenceUnits || subscribeInfo.XRPFeesEnabled != test.xrpFees {
 				t.Fatalf("subscribe fee gate = ref %d, XRPFees %t", subscribeInfo.FeeRef, subscribeInfo.XRPFeesEnabled)
+			}
+		})
+	}
+}
+
+func TestLedgerClosedWireMatrix(t *testing.T) {
+	states := []string{"", "disconnected", "connected", "syncing", "tracking", "full", "proposing", "validating"}
+	completeLedgers := []string{"", "1-2,4"}
+
+	for _, xrpFees := range []bool{false, true} {
+		t.Run(fmt.Sprintf("xrp_fees_%t", xrpFees), func(t *testing.T) {
+			genesisConfig := genesis.DefaultConfig()
+			if xrpFees {
+				genesisConfig.Amendments = append(genesisConfig.Amendments, amendment.FeatureXRPFees)
+			}
+			svc, err := service.New(service.Config{
+				Standalone:    true,
+				Startup:       service.StartupConfig{Mode: service.StartupFresh},
+				GenesisConfig: genesisConfig,
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := svc.Start(); err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(svc.Stop)
+
+			source := svc.GetValidatedLedger()
+			if source == nil {
+				t.Fatal("missing validated source ledger")
+			}
+			hash := source.Hash()
+			base, reserveBase, reserveInc := service.FeesFromLedger(source)
+			wantBase := jsonClippedXRPAmount(int64(base))
+			wantReserveBase := jsonClippedXRPAmount(int64(reserveBase))
+			wantReserveInc := jsonClippedXRPAmount(int64(reserveInc))
+			for _, state := range states {
+				for _, needsNetworkLedger := range []bool{false, true} {
+					for _, networkID := range []uint32{0, 42} {
+						for _, complete := range completeLedgers {
+							name := fmt.Sprintf("%s/needs_%t/network_%d/complete_%t", state, needsNetworkLedger, networkID, complete != "")
+							t.Run(name, func(t *testing.T) {
+								event := buildLedgerCloseEvent(&service.LedgerAcceptedEvent{
+									Ledger: source,
+									LedgerInfo: &service.LedgerInfo{
+										Sequence:  source.Sequence(),
+										Hash:      hash,
+										CloseTime: source.CloseTime(),
+									},
+									TransactionResults: make([]service.TransactionResultEvent, 2),
+								}, service.ServerInfo{
+									ServerState:        state,
+									NeedsNetworkLedger: needsNetworkLedger,
+									CompleteLedgers:    complete,
+									NetworkID:          networkID,
+								})
+								if event == nil {
+									t.Fatal("nil ledger close event")
+								}
+								got, err := json.Marshal(event)
+								if err != nil {
+									t.Fatal(err)
+								}
+
+								want := fmt.Sprintf(`{"type":"ledgerClosed","fee_base":%d`, wantBase)
+								if !xrpFees {
+									want += `,"fee_ref":10`
+								}
+								want += fmt.Sprintf(`,"ledger_hash":"%s","ledger_index":%d,"ledger_time":%d,"network_id":%d,"reserve_base":%d,"reserve_inc":%d,"txn_count":2`, upperHex(hash[:]), source.Sequence(), protocol.ToRippleTime(source.CloseTime()), networkID, wantReserveBase, wantReserveInc)
+								if serverPublishesValidatedRange(state) {
+									want += fmt.Sprintf(`,"validated_ledgers":"%s"`, complete)
+								}
+								want += `}`
+								if string(got) != want {
+									t.Fatalf("ledgerClosed JSON = %s, want %s", got, want)
+								}
+							})
+						}
+					}
+				}
 			}
 		})
 	}

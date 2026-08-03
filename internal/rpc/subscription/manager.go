@@ -54,32 +54,54 @@ var (
 
 // Manager manages WebSocket subscriptions
 type Manager struct {
-	Connections map[string]*types.Connection
+	connections map[string]*types.Connection
 	mu          sync.RWMutex
 }
 
 // NewManager creates a new Manager
 func NewManager() *Manager {
 	return &Manager{
-		Connections: make(map[string]*types.Connection),
+		connections: make(map[string]*types.Connection),
 	}
+}
+
+func cloneSubscriptions(src map[types.SubscriptionType]types.SubscriptionConfig) map[types.SubscriptionType]types.SubscriptionConfig {
+	if src == nil {
+		return nil
+	}
+	dst := make(map[types.SubscriptionType]types.SubscriptionConfig, len(src))
+	for key, cfg := range src {
+		copyCfg := cfg
+		copyCfg.Accounts = append([]string(nil), cfg.Accounts...)
+		if cfg.Books != nil {
+			copyCfg.Books = make([]types.BookRequest, len(cfg.Books))
+			for i, book := range cfg.Books {
+				copyBook := book
+				copyBook.TakerPays = append([]byte(nil), book.TakerPays...)
+				copyBook.TakerGets = append([]byte(nil), book.TakerGets...)
+				copyCfg.Books[i] = copyBook
+			}
+		}
+		dst[key] = copyCfg
+	}
+	return dst
 }
 
 // AddConnection adds a connection to the subscription manager
 func (sm *Manager) AddConnection(conn *types.Connection) {
 	sm.mu.Lock()
 	defer sm.mu.Unlock()
-	if sm.Connections == nil {
-		sm.Connections = make(map[string]*types.Connection)
+	if sm.connections == nil {
+		sm.connections = make(map[string]*types.Connection)
 	}
-	sm.Connections[conn.ID] = conn
+	sm.connections[conn.ID] = conn
 }
 
 // RemoveConnection removes a connection from the subscription manager
 func (sm *Manager) RemoveConnection(connID string) {
 	sm.mu.Lock()
 	defer sm.mu.Unlock()
-	delete(sm.Connections, connID)
+	delete(sm.connections, connID)
 }
 
 // HandleSubscribe handles a subscribe request for a connection. The
@@ -87,14 +109,36 @@ func (sm *Manager) RemoveConnection(connID string) {
 // rippled applies to the peer_status stream (Subscribe.cpp:161-166);
 // non-admin callers requesting `peer_status` are rejected with
 // rpcNO_PERMISSION. The url (RPCSub) branch is resolved by the caller
-// before reaching the manager: url requests are routed to the
-// URLSubscriptionRegistry, whose per-url connection is what gets
-// subscribed here.
+// before reaching the manager: URL requests are routed to the URL service,
+// whose per-URL connection is what gets subscribed here.
 func (sm *Manager) HandleSubscribe(conn *types.Connection, request types.SubscriptionRequest, isAdmin bool) *types.RpcError {
-	w := request.WireArrays()
-
 	sm.mu.Lock()
 	defer sm.mu.Unlock()
+	return sm.handleSubscribeLocked(conn, request, isAdmin)
+}
+
+// HandleSubscribeTransactional applies a subscribe request as one atomic
+// operation. The regular WebSocket path intentionally preserves rippled's
+// per-item mutation semantics; URL subscriptions use this variant so a
+// malformed later field cannot leave an earlier stream/account/book attached.
+func (sm *Manager) HandleSubscribeTransactional(conn *types.Connection, request types.SubscriptionRequest, isAdmin bool) *types.RpcError {
+	sm.mu.Lock()
+	defer sm.mu.Unlock()
+
+	snapshot := cloneSubscriptions(conn.Subscriptions)
+	original := conn.Subscriptions
+	apiVersion := conn.APIVersion()
+	if rpcErr := sm.handleSubscribeLocked(conn, request, isAdmin); rpcErr != nil {
+		conn.Subscriptions = original
+		restoreSubscriptions(conn.Subscriptions, snapshot)
+		conn.SetAPIVersion(apiVersion)
+		return rpcErr
+	}
+	return nil
+}
+
+func (sm *Manager) handleSubscribeLocked(conn *types.Connection, request types.SubscriptionRequest, isAdmin bool) *types.RpcError {
+	w := request.WireArrays()
 	conn.SetAPIVersion(request.ApiVersion)
 
 	// Streams. "rt_transactions" is the deprecated alias rippled keeps around
@@ -455,8 +499,7 @@ func validateBook(book types.BookRequest, includeTaker bool) *types.RpcError {
 		return types.RpcErrorBadMarket()
 	}
 
-	// Optional taker — an unparseable account is rpcACT_MALFORMED
-	// (rippled 3.2.0 #6529 changed this from rpcBAD_ISSUER, Subscribe.cpp).
+	// Optional taker — an unparseable account is rpcACT_MALFORMED.
 	if includeTaker && book.Taker != "" && !isValidXRPLAddress(book.Taker) {
 		return types.RpcErrorActMalformed("Account malformed.")
 	}
@@ -578,10 +621,40 @@ func isValidDomainHex(domain string) bool {
 // can also unsubscribe with the alias (Unsubscribe.cpp:88-93). Like
 // HandleSubscribe, the url (RPCSub) branch is resolved by the caller.
 func (sm *Manager) HandleUnsubscribe(conn *types.Connection, request types.SubscriptionRequest, isAdmin bool) *types.RpcError {
-	w := request.WireArrays()
-
 	sm.mu.Lock()
 	defer sm.mu.Unlock()
+	return sm.handleUnsubscribeLocked(conn, request, isAdmin)
+}
+
+// HandleUnsubscribeTransactional applies a URL unsubscribe request as one
+// atomic operation. This keeps an invalid later stream/account/book from
+// removing earlier entries from an existing URL subscription.
+func (sm *Manager) HandleUnsubscribeTransactional(conn *types.Connection, request types.SubscriptionRequest, isAdmin bool) *types.RpcError {
+	sm.mu.Lock()
+	defer sm.mu.Unlock()
+
+	snapshot := cloneSubscriptions(conn.Subscriptions)
+	original := conn.Subscriptions
+	if rpcErr := sm.handleUnsubscribeLocked(conn, request, isAdmin); rpcErr != nil {
+		conn.Subscriptions = original
+		restoreSubscriptions(conn.Subscriptions, snapshot)
+		return rpcErr
+	}
+	return nil
+}
+
+func restoreSubscriptions(dst, snapshot map[types.SubscriptionType]types.SubscriptionConfig) {
+	if dst == nil {
+		return
+	}
+	clear(dst)
+	for key, cfg := range snapshot {
+		dst[key] = cfg
+	}
+}
+
+func (sm *Manager) handleUnsubscribeLocked(conn *types.Connection, request types.SubscriptionRequest, isAdmin bool) *types.RpcError {
+	w := request.WireArrays()
 
 	_, streams, rpcErr := resolveStreams(w.Present, w.Streams, request.Streams)
 	if rpcErr != nil {
@@ -712,7 +785,7 @@ func (sm *Manager) HandleUnsubscribe(conn *types.Connection, request types.Subsc
 func (sm *Manager) HasStreamSubscriptions(connID string) bool {
 	sm.mu.RLock()
 	defer sm.mu.RUnlock()
-	conn := sm.Connections[connID]
+	conn := sm.connections[connID]
 	if conn == nil {
 		return false
 	}
@@ -725,14 +798,12 @@ func (sm *Manager) HasStreamSubscriptions(connID string) bool {
 }
 
 // BroadcastToStream sends a message to every connection subscribed to a
-// stream and returns the number of snapshotted targets. Broadcasts snapshot
-// subscriber connections under sm.mu, then send after the lock is released —
-// a slow consumer never stalls HandleSubscribe / HandleUnsubscribe /
-// RemoveConnection or other broadcasts (#428 race fix). Delivery uses
+// stream and returns the number of snapshotted targets. Targets are collected
+// under sm.mu and delivered after the lock is released, so a slow consumer
+// cannot stall subscription mutations or other broadcasts. Delivery uses
 // types.Connection.TrySend so the per-connection consecutive-drop counter is
 // updated and the connection is disconnected after MaxConsecutiveDrops
-// back-to-back failures — unifies the slow-consumer policy across all outbound
-// paths.
+// back-to-back failures.
 func (sm *Manager) BroadcastToStream(streamType types.SubscriptionType, data []byte, _ any) int {
 	targets := sm.collectStreamTargets(streamType)
 	deliver(targets, data)
@@ -748,11 +819,11 @@ func (sm *Manager) BroadcastToStreamVersioned(streamType types.SubscriptionType,
 func (sm *Manager) collectStreamTargets(streamType types.SubscriptionType) []*types.Connection {
 	sm.mu.RLock()
 	defer sm.mu.RUnlock()
-	if len(sm.Connections) == 0 {
+	if len(sm.connections) == 0 {
 		return nil
 	}
-	targets := make([]*types.Connection, 0, len(sm.Connections))
-	for _, conn := range sm.Connections {
+	targets := make([]*types.Connection, 0, len(sm.connections))
+	for _, conn := range sm.connections {
 		if _, ok := conn.Subscriptions[streamType]; ok {
 			targets = append(targets, conn)
 		}
@@ -818,11 +889,11 @@ func (sm *Manager) collectAccountTargetsForStreams(streams []types.SubscriptionT
 	}
 	sm.mu.RLock()
 	defer sm.mu.RUnlock()
-	if len(sm.Connections) == 0 {
+	if len(sm.connections) == 0 {
 		return nil
 	}
 	var targets []*types.Connection
-	for _, conn := range sm.Connections {
+	for _, conn := range sm.connections {
 		matched := false
 		for _, stream := range streams {
 			cfg, ok := conn.Subscriptions[stream]
@@ -865,20 +936,19 @@ func (sm *Manager) BroadcastToOrderBooksVersioned(v1, v2 []byte, books []types.O
 func (sm *Manager) collectOrderBookTargets(books []types.OrderBookSpec) []*types.Connection {
 	sm.mu.RLock()
 	defer sm.mu.RUnlock()
-	if len(sm.Connections) == 0 || len(books) == 0 {
+	if len(sm.connections) == 0 || len(books) == 0 {
 		return nil
 	}
 	var targets []*types.Connection
-	for _, conn := range sm.Connections {
+	for _, conn := range sm.connections {
 		cfg, ok := conn.Subscriptions[types.SubBook]
 		if !ok {
 			continue
 		}
 		// Each entry in cfg.Books is a separate (taker_gets, taker_pays)
 		// subscription registered by HandleSubscribe (including
-		// `both:true` reverse-side expansion). The legacy scalar
-		// TakerGets/TakerPays fallback was removed when multi-book
-		// state collapsed to per-BookRequest storage.
+		// `both:true` reverse-side expansion). Each book is represented by
+		// its complete BookRequest value.
 		matched := false
 		for _, b := range cfg.Books {
 			for _, book := range books {
@@ -904,7 +974,7 @@ func (sm *Manager) GetSubscriberCount(streamType types.SubscriptionType) int {
 	defer sm.mu.RUnlock()
 
 	count := 0
-	for _, conn := range sm.Connections {
+	for _, conn := range sm.connections {
 		if _, ok := conn.Subscriptions[streamType]; ok {
 			count++
 		}
@@ -916,21 +986,21 @@ func (sm *Manager) GetSubscriberCount(streamType types.SubscriptionType) int {
 func (sm *Manager) ConnectionCount() int {
 	sm.mu.RLock()
 	defer sm.mu.RUnlock()
-	return len(sm.Connections)
+	return len(sm.connections)
 }
 
 // Connection returns a connection by ID
 func (sm *Manager) Connection(connID string) *types.Connection {
 	sm.mu.RLock()
 	defer sm.mu.RUnlock()
-	return sm.Connections[connID]
+	return sm.connections[connID]
 }
 
 // IsSubscribed checks if a connection is subscribed to a stream type
 func (sm *Manager) IsSubscribed(connID string, streamType types.SubscriptionType) bool {
 	sm.mu.RLock()
 	defer sm.mu.RUnlock()
-	conn := sm.Connections[connID]
+	conn := sm.connections[connID]
 	if conn == nil {
 		return false
 	}
@@ -944,7 +1014,7 @@ func (sm *Manager) IsSubscribed(connID string, streamType types.SubscriptionType
 func (sm *Manager) ConnectionSubscriptions(connID string) map[types.SubscriptionType]types.SubscriptionConfig {
 	sm.mu.RLock()
 	defer sm.mu.RUnlock()
-	conn := sm.Connections[connID]
+	conn := sm.connections[connID]
 	if conn == nil {
 		return nil
 	}

@@ -149,6 +149,11 @@ loopback requests also receive admin role; other clients receive **guest** role.
 Always set `secure_gateway` on a same-host public proxy backend so loopback does
 not trigger that admin fallback.
 
+The JSON-RPC handler accepts POST requests only. `GET /health` remains available
+as the liveness endpoint, but it is still subject to the configured per-port
+Origin and HTTP Basic Auth policy. Arbitrary GET query parameters are never
+dispatched as RPC commands.
+
 `server_info` and `server_state` omit rippled's optional job-queue `load`,
 requested `counters`, and `current_activities` fields. go-xrpl does not yet have
 equivalent job/performance instrumentation, so these fields remain unsupported
@@ -239,8 +244,14 @@ keys to precede any `[section]` header.
 `[server].ports` lists the named port sections to open. Each named
 `[port_<name>]` requires `port`, `ip`, and `protocol` (`http`, `ws`, `peer`, or
 `grpc`); optional `limit` caps concurrent connections (`0` = unlimited) and
-`send_queue_limit` sizes the per-connection WebSocket send buffer (default 100).
-List IPs in `admin` to grant those clients admin role.
+`send_queue_limit` sizes the per-connection WebSocket send buffer. `0` uses the
+rippled-compatible default of 100; explicit values must be in the range 1–65535.
+List IPs in `admin` to grant those clients admin role. `user` and `password`
+enable HTTP Basic Auth and must be configured together. `allowed_origins` is an
+exact list of HTTP(S) origins shared by HTTP CORS and WebSocket upgrades; an
+empty list rejects browser-originated requests while clients without an Origin
+header (including the CLI) remain usable. An admin-capable port that enables a
+browser origin must also configure Basic Auth.
 
 ### `[node_db]` — content-addressed state store
 

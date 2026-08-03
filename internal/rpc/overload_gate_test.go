@@ -196,7 +196,7 @@ func TestWSOverloadClosesBeforeRequestValidation(t *testing.T) {
 	}
 	for _, request := range tests {
 		t.Run(request, func(t *testing.T) {
-			ws := NewWebSocketServer(2*time.Second, nil)
+			ws := NewWebSocketServer(WebSocketServerOptions{Timeout: 2 * time.Second})
 			ws.methodRegistry.Register("stop", &stubHandler{role: types.RoleAdmin})
 			ws.loadTracker = loadtrack.New()
 			pushOverDropThreshold(t, ws.loadTracker, "127.0.0.1")
@@ -253,7 +253,7 @@ func TestWSEarlyMalformedResponsesChargeWithoutLoadWarning(t *testing.T) {
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			ws := NewWebSocketServer(2*time.Second, nil)
+			ws := NewWebSocketServer(WebSocketServerOptions{Timeout: 2 * time.Second})
 			ws.loadTracker.Import("warning-peer", loadtrack.Gossip{Items: []loadtrack.GossipItem{{
 				Key:     "127.0.0.1",
 				Balance: loadtrack.WarningThreshold - int(loadtrack.ChargeMalformed/uint32(loadtrack.DecayWindow/time.Second)),

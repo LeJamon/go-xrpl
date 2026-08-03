@@ -166,11 +166,13 @@ func (m *BookChangesMethod) Handle(ctx *types.RpcContext, params json.RawMessage
 // publisher can call it without duplicating the metadata walk.
 func collectBookChanges(ctx context.Context, targetLedger LedgerWithTransactions) (map[string]*bookChange, error) {
 	changes := make(map[string]*bookChange)
+	var decodeErr error
 
 	visit := func(txHash [32]byte, txData []byte) bool {
 		storedTx, err := decodeTxBlob(txData)
 		if err != nil {
-			return true
+			decodeErr = err
+			return false
 		}
 		accumulateBookChanges(changes, storedTx.TxJSON, storedTx.Meta)
 		return true
@@ -184,7 +186,13 @@ func collectBookChanges(ctx context.Context, targetLedger LedgerWithTransactions
 	} else {
 		err = targetLedger.ForEachTransaction(visit)
 	}
-	return changes, err
+	if err != nil {
+		return nil, err
+	}
+	if decodeErr != nil {
+		return nil, decodeErr
+	}
+	return changes, nil
 }
 
 func accumulateBookChanges(changes map[string]*bookChange, txJSON, metadata map[string]any) {

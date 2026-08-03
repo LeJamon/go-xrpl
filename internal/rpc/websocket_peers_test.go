@@ -24,13 +24,11 @@ func TestWebSocket_PeersRPC_UsesPeerSource(t *testing.T) {
 	ledger := &mockLedgerService{}
 	services := &types.ServiceContainer{Ledger: ledger}
 
-	ws := NewWebSocketServer(30*time.Second, services)
-	ws.RegisterAllMethods()
-	ws.SetPeerSource(src)
+	ws := NewWebSocketServer(WebSocketServerOptions{Timeout: 30 * time.Second, Services: services, PeerSource: src})
 
 	pc := loopbackAdminPortContext()
 	pc.PortName = "test_admin"
-	httpSrv := httptest.NewServer(PortMiddleware(pc, nil, ws))
+	httpSrv := httptest.NewServer(PortMiddleware(pc, ws))
 	defer httpSrv.Close()
 
 	wsURL := "ws" + strings.TrimPrefix(httpSrv.URL, "http")
@@ -42,7 +40,7 @@ func TestWebSocket_PeersRPC_UsesPeerSource(t *testing.T) {
 	peersList, ok := peers["result"].(map[string]any)["peers"].([]any)
 	require.True(t, ok, "peers result must contain a `peers` array")
 	assert.Len(t, peersList, len(src.peers),
-		"`peers` RPC over WS must return one entry per overlay peer (issue #419)")
+		"`peers` RPC over WS must return one entry per overlay peer")
 
 	info := wsCall(t, conn, map[string]any{"command": "server_info", "id": 2})
 	infoMap := info["result"].(map[string]any)["info"].(map[string]any)
@@ -61,11 +59,10 @@ func wsCall(t *testing.T, conn *websocket.Conn, req map[string]any) map[string]a
 	return resp
 }
 
-func TestWebSocket_SetPeerSource_NilDetaches(t *testing.T) {
+func TestWebSocketPeerSourceDefaultsToNil(t *testing.T) {
 	src := &stubPeerSource{peers: []map[string]any{{"address": "192.0.2.1:51235"}}}
-	ws := NewWebSocketServer(30*time.Second, nil)
-	ws.SetPeerSource(src)
-	require.NotNil(t, ws.loadPeerSource())
-	ws.SetPeerSource(nil)
-	require.Nil(t, ws.loadPeerSource())
+	withSource := NewWebSocketServer(WebSocketServerOptions{Timeout: 30 * time.Second, PeerSource: src})
+	require.NotNil(t, withSource.loadPeerSource())
+	withoutSource := NewWebSocketServer(WebSocketServerOptions{Timeout: 30 * time.Second})
+	require.Nil(t, withoutSource.loadPeerSource())
 }

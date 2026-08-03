@@ -16,8 +16,9 @@ import (
 
 func TestJSONProxyUsesSingleDispatchAccounting(t *testing.T) {
 	services := types.NewServiceContainer(nil)
-	server := NewServer(time.Second, services)
-	services.SetDispatcher(server)
+	services.ClientLoad = types.NewClientLoadShedder()
+	server := NewServer(ServerOptions{Timeout: time.Second, Services: services})
+	services.Dispatcher = server
 
 	for range types.MaxJobQueueClients - 1 {
 		services.ClientLoad.Begin()
@@ -113,8 +114,8 @@ func TestHTTPStructuredIDRedactionAcrossDispatchShapes(t *testing.T) {
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			services := types.NewServiceContainer(nil)
-			server := NewServer(time.Second, services)
-			services.SetDispatcher(server)
+			server := NewServer(ServerOptions{Timeout: time.Second, Services: services})
+			services.Dispatcher = server
 			server.registry.Register("capture", &stubHandler{
 				handle: func(_ *types.RpcContext, params json.RawMessage) (any, *types.RpcError) {
 					var received map[string]any
@@ -147,7 +148,7 @@ func TestURLUserinfoIsRedactedAcrossTransportEchoes(t *testing.T) {
 			return nil, types.RpcErrorInvalidParams("Invalid parameters.")
 		},
 	}
-	httpServer := NewServer(time.Second, types.NewServiceContainer(nil))
+	httpServer := NewServer(ServerOptions{Timeout: time.Second, Services: types.NewServiceContainer(nil)})
 	httpServer.registry.Register("userinfo_fail", fail)
 
 	urls := []struct {
@@ -178,7 +179,7 @@ func TestURLUserinfoIsRedactedAcrossTransportEchoes(t *testing.T) {
 			}
 
 			t.Run("WebSocket", func(t *testing.T) {
-				server := NewWebSocketServer(time.Second, nil)
+				server := NewWebSocketServer(WebSocketServerOptions{Timeout: time.Second})
 				server.methodRegistry.Register("userinfo_fail", fail)
 				body := wsRawRoundTrip(t, server,
 					`{"command":"userinfo_fail","url":"`+testURL.value+`"}`,

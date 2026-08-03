@@ -69,13 +69,13 @@ func decodeEnvelope(t *testing.T, body []byte) map[string]any {
 	return result
 }
 
-// TestPostBodyLimit ensures POSTs larger than MaxRequestBytes are rejected
+// TestPostBodyLimit ensures POSTs larger than maxRequestBytes are rejected
 // with HTTP 400, matching rippled's ServerHandler.cpp:625-633 behaviour for
 // oversized requests rather than being buffered into memory.
 func TestPostBodyLimit(t *testing.T) {
 	srv := newHardeningServer(t, time.Second, "ping", &stubHandler{})
 
-	pad := strings.Repeat("a", MaxRequestBytes+1)
+	pad := strings.Repeat("a", maxRequestBytes+1)
 	body := `{"method":"ping","params":[{"x":"` + pad + `"}]}`
 
 	req := httptest.NewRequest("POST", "/", strings.NewReader(body))
@@ -118,7 +118,7 @@ func TestInternalErrorMessageNotLeakedOnWire(t *testing.T) {
 	}
 }
 
-// TestBatchElementCap rejects a batch envelope past MaxBatchElements with a
+// TestBatchElementCap rejects a batch envelope past maxBatchElements with a
 // 400, while a batch at the cap is accepted — bounding request amplification on
 // the public endpoint without breaking legitimate batching.
 func TestBatchElementCap(t *testing.T) {
@@ -133,16 +133,22 @@ func TestBatchElementCap(t *testing.T) {
 	}
 
 	// Over the cap → 400.
-	req := httptest.NewRequest("POST", "/", strings.NewReader(buildBatch(MaxBatchElements+1)))
+	req := httptest.NewRequest("POST", "/", strings.NewReader(buildBatch(maxBatchElements+1)))
 	req.RemoteAddr = "10.0.0.1:1234"
 	rr := httptest.NewRecorder()
 	srv.ServeHTTP(rr, req)
 	if rr.Code != http.StatusBadRequest {
 		t.Fatalf("over-cap batch: expected 400, got %d\nbody: %s", rr.Code, rr.Body.String())
 	}
+	if got := rr.Header().Get("Content-Type"); got != jsonContentType {
+		t.Fatalf("over-cap Content-Type = %q, want %q", got, jsonContentType)
+	}
+	if got := rr.Body.String(); got != "Malformed batch request\r\n" {
+		t.Fatalf("over-cap body = %q, want exact plain HTTP error", got)
+	}
 
 	// At the cap → 200 with one reply per element.
-	req = httptest.NewRequest("POST", "/", strings.NewReader(buildBatch(MaxBatchElements)))
+	req = httptest.NewRequest("POST", "/", strings.NewReader(buildBatch(maxBatchElements)))
 	req.RemoteAddr = "10.0.0.1:1234"
 	rr = httptest.NewRecorder()
 	srv.ServeHTTP(rr, req)
@@ -153,8 +159,8 @@ func TestBatchElementCap(t *testing.T) {
 	if err := json.Unmarshal(rr.Body.Bytes(), &replies); err != nil {
 		t.Fatalf("batch reply not a JSON array: %v\nbody: %s", err, rr.Body.String())
 	}
-	if len(replies) != MaxBatchElements {
-		t.Errorf("reply count = %d, want %d", len(replies), MaxBatchElements)
+	if len(replies) != maxBatchElements {
+		t.Errorf("reply count = %d, want %d", len(replies), maxBatchElements)
 	}
 }
 
@@ -436,7 +442,7 @@ func TestLoadTracker_RejectsAfterDropThreshold(t *testing.T) {
 			if got := strings.TrimSpace(rr.Body.String()); got != "Server is overloaded" {
 				t.Fatalf("503 body = %q, want \"Server is overloaded\"", got)
 			}
-			// The denial must not ride the result envelope (the old slowDown-on-200 shape).
+			// The denial is a plain HTTP response, never a JSON-RPC result envelope.
 			if strings.Contains(rr.Body.String(), "result") || strings.Contains(rr.Body.String(), "slowDown") {
 				t.Fatalf("overload denial leaked the result envelope: %s", rr.Body.String())
 			}

@@ -10,6 +10,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/LeJamon/go-xrpl/amendment"
 	binarycodec "github.com/LeJamon/go-xrpl/codec/binarycodec"
 	ledgerselector "github.com/LeJamon/go-xrpl/internal/ledger/selector"
 	"github.com/LeJamon/go-xrpl/internal/ledger/service/svcerr"
@@ -41,6 +42,28 @@ func rpcTransactionSubmissionError(operation string, err error) *types.RpcError 
 func rpcDBDeserializationError(operation string, err error) *types.RpcError {
 	logRpcError(operation, err)
 	return types.RpcErrorDBDeserialization()
+}
+
+func ledgerMapHashes(l types.LedgerReader) (txHash, stateHash [32]byte) {
+	return l.TxMapHash(), l.StateMapHash()
+}
+
+func ledgerAmendmentRules(l types.LedgerReader) (*amendment.Rules, error) {
+	if source, ok := l.(types.LedgerAmendmentRulesErrorSource); ok {
+		rules, err := source.LedgerAmendmentRulesWithError()
+		if err != nil {
+			return nil, err
+		}
+		if rules != nil {
+			return rules, nil
+		}
+	}
+	if source, ok := l.(types.LedgerAmendmentRulesSource); ok {
+		if rules := source.LedgerAmendmentRules(); rules != nil {
+			return rules, nil
+		}
+	}
+	return amendment.EmptyRules(), nil
 }
 
 // RequireLedgerService checks that the ledger service is available

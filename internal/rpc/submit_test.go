@@ -38,7 +38,7 @@ func newMockLedgerServiceSubmit() *mockLedgerServiceSubmit {
 	}
 }
 
-func (m *mockLedgerServiceSubmit) SubmitTransaction(txJSON []byte, txBlobHex ...string) (*types.SubmitResult, error) {
+func (m *mockLedgerServiceSubmit) SubmitTransaction(txJSON []byte, txBlobHex string) (*types.SubmitResult, error) {
 	if m.submitError != nil {
 		return nil, m.submitError
 	}

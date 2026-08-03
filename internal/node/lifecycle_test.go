@@ -14,10 +14,35 @@ import (
 	"github.com/LeJamon/go-xrpl/config"
 	"github.com/LeJamon/go-xrpl/internal/ledger/service"
 	"github.com/LeJamon/go-xrpl/internal/rpc"
+	"github.com/LeJamon/go-xrpl/internal/rpc/types"
 	xrpllog "github.com/LeJamon/go-xrpl/log"
 	"github.com/LeJamon/go-xrpl/storage/nodestore"
 	"github.com/LeJamon/go-xrpl/storage/relationaldb"
 )
+
+func TestBindRPCWiresExplicitSharedServices(t *testing.T) {
+	runtime := &nodeRuntime{
+		appConfig:  &config.Config{},
+		services:   types.NewServiceContainer(nil),
+		serverLog:  xrpllog.Discard(),
+		shutdownCh: make(chan struct{}, 1),
+	}
+	runtime.services.ClientLoad = types.NewClientLoadShedder()
+	if err := runtime.bindRPC(); err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = runtime.wsServer.Close(context.Background()) }()
+
+	if runtime.services.Dispatcher != runtime.httpServer {
+		t.Fatal("bindRPC did not install the HTTP dispatcher")
+	}
+	if runtime.services.URLSubscriptions != runtime.wsServer.URLSubscriptionService() {
+		t.Fatal("bindRPC did not install the WebSocket URL subscription service")
+	}
+	if runtime.services.ClientLoad == nil {
+		t.Fatal("bindRPC lost the configured client-load shedder")
+	}
+}
 
 func TestRunReturnsCanceledContextBeforeStartup(t *testing.T) {
 	t.Parallel()
@@ -338,7 +363,7 @@ func TestNodeRuntimeShutdownLeavesStoresOpenWhileTransportHandlerIsRunning(t *te
 			close(started)
 			<-release
 		}),
-		rpc.NewWebSocketServer(time.Second, nil),
+		rpc.NewWebSocketServer(rpc.WebSocketServerOptions{Timeout: time.Second}),
 		nil,
 		systemListen,
 	)

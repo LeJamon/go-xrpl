@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"math/big"
 	"sort"
@@ -11,6 +12,7 @@ import (
 
 	addresscodec "github.com/LeJamon/go-xrpl/codec/addresscodec"
 	binarycodec "github.com/LeJamon/go-xrpl/codec/binarycodec"
+	"github.com/LeJamon/go-xrpl/internal/ledger/service/svcerr"
 	"github.com/LeJamon/go-xrpl/internal/ledger/state"
 	"github.com/LeJamon/go-xrpl/internal/rpc/types"
 	"github.com/LeJamon/go-xrpl/keylet"
@@ -140,21 +142,29 @@ func (m *GetAggregatePriceMethod) Handle(ctx *types.RpcContext, params json.RawM
 		}
 
 		entry, err := ctx.Services.Ledger.GetLedgerEntry(ctx.Context, keylet.Oracle(accountID, documentID).Key, ledgerIndex)
-		if err != nil || entry == nil {
+		if err != nil {
+			if errors.Is(err, svcerr.ErrLedgerEntryNotFound) {
+				continue
+			}
+			return nil, rpcInternalError("get_aggregate_price: oracle lookup failed", err).WithExtra(lookupFields)
+		}
+		if entry == nil {
 			continue
 		}
 		decoded, err := binarycodec.Decode(hex.EncodeToString(entry.Node))
 		if err != nil {
-			continue
+			return nil, rpcInternalError("get_aggregate_price: oracle decoding failed", err).WithExtra(lookupFields)
 		}
 
-		iterateAggregatePriceData(ctx, decoded, func(node map[string]any) bool {
+		if err := iterateAggregatePriceData(ctx, decoded, func(node map[string]any) bool {
 			point, found := aggregatePriceFromNode(node, baseAsset, quoteAsset)
 			if found {
 				prices = append(prices, point)
 			}
 			return found
-		})
+		}); err != nil {
+			return nil, rpcInternalError("get_aggregate_price: transaction decoding failed", err).WithExtra(lookupFields)
+		}
 	}
 
 	if len(prices) == 0 {
@@ -257,30 +267,36 @@ func parseCurrencyParam(raw json.RawMessage) (string, error) {
 	return value, nil
 }
 
-func iterateAggregatePriceData(ctx *types.RpcContext, initial map[string]any, visit func(map[string]any) bool) {
+func iterateAggregatePriceData(ctx *types.RpcContext, initial map[string]any, visit func(map[string]any) bool) error {
 	oracle := initial
 	chain := initial
 	isNew := false
 	for history := uint8(0); ; {
 		if oracle == nil || visit(oracle) || isNew {
-			return
+			return nil
 		}
 		history++
 		if history > 3 {
-			return
+			return nil
 		}
 
 		previousID, previousSequence, ok := aggregatePreviousTransaction(chain)
 		if !ok {
-			return
+			return nil
 		}
 		transaction, err := ctx.Services.Ledger.GetTransaction(previousID)
-		if err != nil || transaction == nil || transaction.LedgerIndex != previousSequence {
-			return
+		if err != nil {
+			if errors.Is(err, svcerr.ErrTxnNotFound) || errors.Is(err, svcerr.ErrLedgerNotFound) {
+				return nil
+			}
+			return err
+		}
+		if transaction == nil || transaction.LedgerIndex != previousSequence {
+			return nil
 		}
 		stored, err := decodeTxBlob(transaction.TxData)
 		if err != nil {
-			return
+			return err
 		}
 
 		found := false
@@ -292,7 +308,7 @@ func iterateAggregatePriceData(ctx *types.RpcContext, initial map[string]any, vi
 			chain = inner
 			oracle, isNew = inner["NewFields"].(map[string]any)
 			if isNew && history == 1 {
-				return
+				return nil
 			}
 			if !isNew {
 				oracle, _ = inner["FinalFields"].(map[string]any)
@@ -301,7 +317,7 @@ func iterateAggregatePriceData(ctx *types.RpcContext, initial map[string]any, vi
 			break
 		}
 		if !found {
-			return
+			return nil
 		}
 	}
 }

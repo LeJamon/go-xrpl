@@ -258,7 +258,7 @@ func TestServerDefinitionsInvalidSentinel(t *testing.T) {
 }
 
 // TestServerDefinitions_3_2_0_Sections verifies the five sections added in
-// rippled 3.2.0 (#6321): TRANSACTION_FORMATS, LEDGER_ENTRY_FORMATS,
+// rippled 3.2.0: TRANSACTION_FORMATS, LEDGER_ENTRY_FORMATS,
 // TRANSACTION_FLAGS, LEDGER_ENTRY_FLAGS and ACCOUNT_SET_FLAGS.
 func TestServerDefinitions_3_2_0_Sections(t *testing.T) {
 	method := &handlers.ServerDefinitionsMethod{}

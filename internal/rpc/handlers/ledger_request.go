@@ -19,8 +19,7 @@ import (
 func ledgerInfoJSON(l types.LedgerReader) map[string]any {
 	hash := l.Hash()
 	parent := l.ParentHash()
-	txHash := l.TxMapHash()
-	stateHash := l.StateMapHash()
+	txHash, stateHash := ledgerMapHashes(l)
 	closeTimeSec := l.CloseTime()
 	closeTime := protocol.FromRippleTime(uint32(max(closeTimeSec, 0)))
 	seqStr := strconv.FormatUint(uint64(l.Sequence()), 10)

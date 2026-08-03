@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"io"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -64,10 +65,8 @@ func (l *blockingWriteListener) Accept() (net.Conn, error) {
 
 // TestWebSocketServer_Close_JoinsHandlers verifies that Close blocks until
 // all per-connection goroutines (read loop, send pump, ping loop) have exited.
-// Regression test for issue #186.
 func TestWebSocketServer_Close_JoinsHandlers(t *testing.T) {
-	ws := NewWebSocketServer(30*time.Second, nil)
-	ws.RegisterAllMethods()
+	ws := NewWebSocketServer(WebSocketServerOptions{Timeout: 30 * time.Second})
 
 	httpSrv := httptest.NewServer(http.HandlerFunc(ws.ServeHTTP))
 	defer httpSrv.Close()
@@ -136,7 +135,7 @@ func TestWebSocketServer_Close_JoinsHandlers(t *testing.T) {
 // TestWebSocketServer_Close_RespectsContext verifies Close returns promptly
 // when the context expires, even if handlers might otherwise linger.
 func TestWebSocketServer_Close_RespectsContext(t *testing.T) {
-	ws := NewWebSocketServer(30*time.Second, nil)
+	ws := NewWebSocketServer(WebSocketServerOptions{Timeout: 30 * time.Second})
 
 	// Inflate the WaitGroup so it never reaches zero on its own.
 	ws.wg.Add(1)
@@ -171,9 +170,7 @@ func TestWebSocketServer_Close_RespectsContext(t *testing.T) {
 }
 
 func TestWebSocketServer_Close_ContextInterruptsBlockedControlWrite(t *testing.T) {
-	ws := NewWebSocketServer(30*time.Second, nil)
-	limiter := NewConnLimiter()
-	ws.SetConnLimiter(limiter)
+	ws := NewWebSocketServer(WebSocketServerOptions{Timeout: 30 * time.Second})
 	pc := &PortContext{PortName: "wsport", Limit: 1}
 
 	listener, err := net.Listen("tcp", "127.0.0.1:0")
@@ -184,7 +181,7 @@ func TestWebSocketServer_Close_ContextInterruptsBlockedControlWrite(t *testing.T
 		Listener: listener,
 		accepted: make(chan *blockingWriteConn, 1),
 	}
-	httpSrv := httptest.NewUnstartedServer(PortMiddleware(pc, limiter, http.HandlerFunc(ws.ServeHTTP)))
+	httpSrv := httptest.NewUnstartedServer(PortMiddleware(pc, http.HandlerFunc(ws.ServeHTTP)))
 	httpSrv.Listener.Close()
 	httpSrv.Listener = wrappedListener
 	httpSrv.Start()
@@ -198,7 +195,7 @@ func TestWebSocketServer_Close_ContextInterruptsBlockedControlWrite(t *testing.T
 	defer client.Close()
 	serverConn := <-wrappedListener.accepted
 
-	var wsConn *WebSocketConnection
+	var wsConn *websocketConnection
 	deadline := time.Now().Add(time.Second)
 	for wsConn == nil && time.Now().Before(deadline) {
 		ws.connectionsMutex.RLock()
@@ -214,7 +211,7 @@ func TestWebSocketServer_Close_ContextInterruptsBlockedControlWrite(t *testing.T
 	}
 
 	close(serverConn.armed)
-	wsConn.sendChannel <- []byte("block the server writer")
+	wsConn.SendChannel <- []byte("block the server writer")
 	select {
 	case <-serverConn.writeStarted:
 	case <-time.After(time.Second):
@@ -254,20 +251,12 @@ func TestWebSocketServer_Close_ContextInterruptsBlockedControlWrite(t *testing.T
 	default:
 		t.Fatal("Close did not close the blocked socket")
 	}
-
-	deadline = time.Now().Add(time.Second)
-	for limiter.Count(pc.PortName) != 0 && time.Now().Before(deadline) {
-		runtime.Gosched()
-	}
-	if got := limiter.Count(pc.PortName); got != 0 {
-		t.Fatalf("connection slots after Close = %d, want 0", got)
-	}
 }
 
 // TestWebSocketServer_Close_NoConnections verifies Close is safe with no
 // active connections and returns immediately.
 func TestWebSocketServer_Close_NoConnections(t *testing.T) {
-	ws := NewWebSocketServer(30*time.Second, nil)
+	ws := NewWebSocketServer(WebSocketServerOptions{Timeout: 30 * time.Second})
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()
 	if err := ws.Close(ctx); err != nil {
@@ -275,12 +264,71 @@ func TestWebSocketServer_Close_NoConnections(t *testing.T) {
 	}
 }
 
+func TestWebSocketConnectionCloseSocketUnblocksRead(t *testing.T) {
+	ws := NewWebSocketServer(WebSocketServerOptions{Timeout: 30 * time.Second})
+	httpSrv := httptest.NewServer(http.HandlerFunc(ws.ServeHTTP))
+	defer httpSrv.Close()
+
+	client, _, err := websocket.DefaultDialer.Dial("ws"+strings.TrimPrefix(httpSrv.URL, "http"), nil)
+	if err != nil {
+		t.Fatalf("dial: %v", err)
+	}
+	defer client.Close()
+
+	var serverConn *websocketConnection
+	requireDeadline := time.Now().Add(time.Second)
+	for serverConn == nil && time.Now().Before(requireDeadline) {
+		ws.connectionsMutex.RLock()
+		for _, candidate := range ws.connections {
+			serverConn = candidate
+			break
+		}
+		ws.connectionsMutex.RUnlock()
+		if serverConn == nil {
+			time.Sleep(time.Millisecond)
+		}
+	}
+	if serverConn == nil {
+		t.Fatal("server connection was not registered")
+	}
+
+	readDone := make(chan error, 1)
+	go func() {
+		_, _, readErr := client.ReadMessage()
+		readDone <- readErr
+	}()
+
+	var closers sync.WaitGroup
+	for range 16 {
+		closers.Add(1)
+		go func() {
+			defer closers.Done()
+			serverConn.closeSocket()
+		}()
+	}
+	closers.Wait()
+	select {
+	case <-readDone:
+	case <-time.After(time.Second):
+		t.Fatal("closing the canonical connection did not unblock the client read")
+	}
+	select {
+	case <-serverConn.Done():
+	default:
+		t.Fatal("canonical connection remained active after closeSocket")
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	if err := ws.Close(ctx); err != nil {
+		t.Fatalf("close server: %v", err)
+	}
+}
+
 func TestWebSocketServer_Close_RejectsNewConnections(t *testing.T) {
-	ws := NewWebSocketServer(30*time.Second, nil)
-	limiter := NewConnLimiter()
-	ws.SetConnLimiter(limiter)
+	ws := NewWebSocketServer(WebSocketServerOptions{Timeout: 30 * time.Second})
 	pc := &PortContext{PortName: "wsport", Limit: 1}
-	httpSrv := httptest.NewServer(PortMiddleware(pc, limiter, http.HandlerFunc(ws.ServeHTTP)))
+	httpSrv := httptest.NewServer(PortMiddleware(pc, http.HandlerFunc(ws.ServeHTTP)))
 	defer httpSrv.Close()
 
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
@@ -305,13 +353,20 @@ func TestWebSocketServer_Close_RejectsNewConnections(t *testing.T) {
 	if resp.StatusCode != http.StatusServiceUnavailable {
 		t.Fatalf("status = %d, want %d", resp.StatusCode, http.StatusServiceUnavailable)
 	}
-	if got := limiter.Count(pc.PortName); got != 0 {
-		t.Fatalf("connection slots after rejected upgrade = %d, want 0", got)
+	if got := resp.Header.Get("Content-Type"); got != jsonContentType {
+		t.Fatalf("Content-Type = %q, want %q", got, jsonContentType)
+	}
+	body, readErr := io.ReadAll(resp.Body)
+	if readErr != nil {
+		t.Fatalf("read rejection body: %v", readErr)
+	}
+	if got := string(body); got != "server shutting down\r\n" {
+		t.Fatalf("rejection body = %q, want exact plain HTTP error", got)
 	}
 }
 
 func TestWebSocketServer_Close_WaitsForInFlightUpgrade(t *testing.T) {
-	ws := NewWebSocketServer(30*time.Second, nil)
+	ws := NewWebSocketServer(WebSocketServerOptions{Timeout: 30 * time.Second})
 	upgradeStarted := make(chan struct{})
 	continueUpgrade := make(chan struct{})
 	ws.upgrader.CheckOrigin = func(*http.Request) bool {
@@ -401,105 +456,13 @@ func TestWebSocketServer_Close_WaitsForInFlightUpgrade(t *testing.T) {
 	}
 }
 
-func TestIsWebSocketUpgrade(t *testing.T) {
-	for _, test := range []struct {
-		name       string
-		connection string
-		upgrade    string
-		want       bool
-	}{
-		{name: "canonical", connection: "Upgrade", upgrade: "websocket", want: true},
-		{name: "token lists", connection: "keep-alive, Upgrade", upgrade: "websocket, other", want: true},
-		{name: "missing connection", upgrade: "websocket"},
-		{name: "missing upgrade", connection: "Upgrade"},
-	} {
-		t.Run(test.name, func(t *testing.T) {
-			req := httptest.NewRequest(http.MethodGet, "/", nil)
-			if test.connection != "" {
-				req.Header.Set("Connection", test.connection)
-			}
-			if test.upgrade != "" {
-				req.Header.Set("Upgrade", test.upgrade)
-			}
-			if got := isWebSocketUpgrade(req); got != test.want {
-				t.Fatalf("isWebSocketUpgrade() = %t, want %t", got, test.want)
-			}
-		})
-	}
-}
-
-// TestWebSocketServer_FailedUpgrade_ReleasesSlot verifies that a malformed
-// WebSocket upgrade request does not permanently leak its per-port connection
-// slot. PortMiddleware acquires a slot and delegates release to closeConnection,
-// which never runs when the gorilla upgrade fails — so ServeHTTP must release
-// the slot itself. Regression test for issue #598.
-func TestWebSocketServer_FailedUpgrade_ReleasesSlot(t *testing.T) {
-	ws := NewWebSocketServer(30*time.Second, nil)
-	ws.RegisterAllMethods()
-
-	limiter := NewConnLimiter()
-	ws.SetConnLimiter(limiter)
-
-	const portName = "wsport"
-	pc := &PortContext{PortName: portName, Limit: 1}
-	handler := PortMiddleware(pc, limiter, http.HandlerFunc(ws.ServeHTTP))
-
-	httpSrv := httptest.NewServer(handler)
-	defer httpSrv.Close()
-
-	for _, headers := range []struct {
-		name       string
-		connection string
-		upgrade    string
-	}{
-		{name: "canonical", connection: "Upgrade", upgrade: "websocket"},
-		{name: "token lists", connection: "keep-alive, Upgrade", upgrade: "websocket, other"},
-		{name: "not an upgrade", upgrade: "websocket"},
-	} {
-		t.Run(headers.name, func(t *testing.T) {
-			for i := range 5 {
-				req, err := http.NewRequest(http.MethodGet, httpSrv.URL, nil)
-				if err != nil {
-					t.Fatalf("new request %d: %v", i, err)
-				}
-				if headers.connection != "" {
-					req.Header.Set("Connection", headers.connection)
-				}
-				req.Header.Set("Upgrade", headers.upgrade)
-
-				resp, err := http.DefaultClient.Do(req)
-				if err != nil {
-					t.Fatalf("malformed upgrade %d: %v", i, err)
-				}
-				resp.Body.Close()
-				if resp.StatusCode == http.StatusServiceUnavailable {
-					t.Fatalf("request %d got 503 — slot leaked from a prior failed upgrade", i)
-				}
-			}
-		})
-		if got := limiter.Count(portName); got != 0 {
-			t.Fatalf("connection slots leaked after %s requests: count=%d, want 0", headers.name, got)
-		}
-	}
-
-	// A legitimate client must still be able to connect (limit=1).
-	wsURL := "ws" + strings.TrimPrefix(httpSrv.URL, "http")
-	c, _, err := websocket.DefaultDialer.Dial(wsURL, nil)
-	if err != nil {
-		t.Fatalf("legitimate dial after failed upgrades: %v", err)
-	}
-	c.Close()
-}
-
 // TestWebSocketServer_ConcurrentWrites_NoRace drives the ping path and the
 // data-send path against the same gorilla *websocket.Conn at once. pingLoop
-// (and Close) must write their control frames via WriteControl so they
-// serialize against handleSend's message-frame writes; the old WriteMessage
-// calls touched gorilla's unguarded single-writer state and raced handleSend.
-// Run under -race to catch a regression. Regression test for issue #746.
+// and Close write control frames via WriteControl so they serialize against
+// handleSend's message-frame writes. Run under -race to enforce gorilla's
+// single-writer invariant.
 func TestWebSocketServer_ConcurrentWrites_NoRace(t *testing.T) {
-	ws := NewWebSocketServer(30*time.Second, nil)
-	ws.RegisterAllMethods()
+	ws := NewWebSocketServer(WebSocketServerOptions{Timeout: 30 * time.Second})
 	ws.pingInterval = time.Millisecond // hammer the ping path during the test
 
 	httpSrv := httptest.NewServer(http.HandlerFunc(ws.ServeHTTP))
@@ -524,7 +487,7 @@ func TestWebSocketServer_ConcurrentWrites_NoRace(t *testing.T) {
 	}()
 
 	// Locate the server-side connection so we can push data frames through it.
-	var wsConn *WebSocketConnection
+	var wsConn *websocketConnection
 	deadline := time.Now().Add(2 * time.Second)
 	for time.Now().Before(deadline) {
 		ws.connectionsMutex.RLock()
@@ -544,7 +507,7 @@ func TestWebSocketServer_ConcurrentWrites_NoRace(t *testing.T) {
 	// Feed handleSend a steady stream of data frames while pingLoop fires.
 	for range 500 {
 		select {
-		case wsConn.sendChannel <- []byte(`{"type":"race-probe"}`):
+		case wsConn.SendChannel <- []byte(`{"type":"race-probe"}`):
 		case <-time.After(2 * time.Second):
 			t.Fatal("send channel stalled")
 		}
@@ -568,7 +531,7 @@ func TestWebSocketServer_New_Concurrent(t *testing.T) {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			_ = NewWebSocketServer(time.Second, nil)
+			_ = NewWebSocketServer(WebSocketServerOptions{Timeout: time.Second})
 		}()
 	}
 	wg.Wait()
@@ -577,11 +540,10 @@ func TestWebSocketServer_New_Concurrent(t *testing.T) {
 // TestWebSocketSubscribeErrorWireEnvelope asserts the full wire envelope a
 // subscribe validation failure produces over a live WebSocket: rippled puts
 // the token in `error`, the numeric code in `error_code` and the
-// ErrorCodes.cpp default text in `error_message` (issue #828 regression —
-// these envelopes previously went out as `"error": ""` with code 31).
+// ErrorCodes.cpp default text in `error_message`; the token and numeric code
+// are part of the wire contract.
 func TestWebSocketSubscribeErrorWireEnvelope(t *testing.T) {
-	ws := NewWebSocketServer(30*time.Second, nil)
-	ws.RegisterAllMethods()
+	ws := NewWebSocketServer(WebSocketServerOptions{Timeout: 30 * time.Second})
 
 	httpSrv := httptest.NewServer(http.HandlerFunc(ws.ServeHTTP))
 	defer httpSrv.Close()
@@ -676,7 +638,7 @@ func TestWebSocketSubscribeErrorWireEnvelope(t *testing.T) {
 
 func TestWebSocketHandlerPanicWireEnvelope(t *testing.T) {
 	const panicCause = "websocket panic must stay private"
-	ws := NewWebSocketServer(30*time.Second, nil)
+	ws := NewWebSocketServer(WebSocketServerOptions{Timeout: 30 * time.Second})
 	ws.methodRegistry.Register("panic", &stubHandler{
 		handle: func(*types.RpcContext, json.RawMessage) (any, *types.RpcError) {
 			panic(panicCause)
@@ -722,7 +684,7 @@ func TestWebSocketHandlerPanicWireEnvelope(t *testing.T) {
 }
 
 func TestWebSocketOrdinaryErrorWireEnvelope(t *testing.T) {
-	ws := NewWebSocketServer(30*time.Second, nil)
+	ws := NewWebSocketServer(WebSocketServerOptions{Timeout: 30 * time.Second})
 	ws.methodRegistry.Register("fail", &stubHandler{
 		handle: func(*types.RpcContext, json.RawMessage) (any, *types.RpcError) {
 			return nil, rpcInternalError()
@@ -738,7 +700,7 @@ func TestWebSocketOrdinaryErrorWireEnvelope(t *testing.T) {
 
 func TestWebSocketRedactsIDAndPreservesItInHandlerParams(t *testing.T) {
 	received := make(chan json.RawMessage, 1)
-	ws := NewWebSocketServer(30*time.Second, nil)
+	ws := NewWebSocketServer(WebSocketServerOptions{Timeout: 30 * time.Second})
 	ws.methodRegistry.Register("capture", &stubHandler{
 		handle: func(_ *types.RpcContext, params json.RawMessage) (any, *types.RpcError) {
 			received <- append(json.RawMessage(nil), params...)
@@ -778,13 +740,13 @@ func TestWebSocketSpecialCommandDecodeErrorsAreFixed(t *testing.T) {
 		name    string
 		command string
 		want    string
-		invoke  func(*WebSocketServer, *WebSocketConnection, *types.RpcContext, types.WebSocketCommand)
+		invoke  func(*WebSocketServer, *websocketConnection, *types.RpcContext, types.WebSocketCommand)
 	}{
 		{
 			name:    "subscribe",
 			command: "subscribe",
 			want:    `{"error":"invalidParams","error_code":31,"error_message":"Invalid subscription parameters.","id":7,"request":{"command":"subscribe","id":7},"status":"error","type":"response"}`,
-			invoke: func(ws *WebSocketServer, conn *WebSocketConnection, ctx *types.RpcContext, cmd types.WebSocketCommand) {
+			invoke: func(ws *WebSocketServer, conn *websocketConnection, ctx *types.RpcContext, cmd types.WebSocketCommand) {
 				ws.handleSpecialCommand(conn, ctx, cmd, ws.executeSubscribe)
 			},
 		},
@@ -792,7 +754,7 @@ func TestWebSocketSpecialCommandDecodeErrorsAreFixed(t *testing.T) {
 			name:    "unsubscribe",
 			command: "unsubscribe",
 			want:    `{"error":"invalidParams","error_code":31,"error_message":"Invalid unsubscription parameters.","id":7,"request":{"command":"unsubscribe","id":7},"status":"error","type":"response"}`,
-			invoke: func(ws *WebSocketServer, conn *WebSocketConnection, ctx *types.RpcContext, cmd types.WebSocketCommand) {
+			invoke: func(ws *WebSocketServer, conn *websocketConnection, ctx *types.RpcContext, cmd types.WebSocketCommand) {
 				ws.handleSpecialCommand(conn, ctx, cmd, ws.executeUnsubscribe)
 			},
 		},
@@ -800,20 +762,15 @@ func TestWebSocketSpecialCommandDecodeErrorsAreFixed(t *testing.T) {
 			name:    "path find",
 			command: "path_find",
 			want:    `{"error":"invalidParams","error_code":31,"error_message":"Invalid parameters.","id":7,"request":{"command":"path_find","id":7},"status":"error","type":"response"}`,
-			invoke: func(ws *WebSocketServer, conn *WebSocketConnection, ctx *types.RpcContext, cmd types.WebSocketCommand) {
+			invoke: func(ws *WebSocketServer, conn *websocketConnection, ctx *types.RpcContext, cmd types.WebSocketCommand) {
 				ws.handleSpecialCommand(conn, ctx, cmd, ws.executePathFind)
 			},
 		},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			ws := NewWebSocketServer(time.Second, nil)
-			ws.RegisterAllMethods()
-			wsConn := &WebSocketConnection{
-				ID:          "decode-test",
-				sendChannel: make(chan []byte, 1),
-				ctx:         context.Background(),
-			}
+			ws := NewWebSocketServer(WebSocketServerOptions{Timeout: time.Second})
+			wsConn := &websocketConnection{Connection: types.NewConnectionWithContext(context.Background(), "decode-test", make(chan []byte, 1))}
 			cmd := types.WebSocketCommand{
 				Command: test.command,
 				ID:      int32(7),
@@ -822,7 +779,7 @@ func TestWebSocketSpecialCommandDecodeErrorsAreFixed(t *testing.T) {
 			}
 
 			test.invoke(ws, wsConn, &types.RpcContext{ApiVersion: types.DefaultApiVersion}, cmd)
-			body := <-wsConn.sendChannel
+			body := <-wsConn.SendChannel
 			if got := string(body); got != test.want {
 				t.Fatalf("response = %s, want %s", got, test.want)
 			}
@@ -834,7 +791,7 @@ func TestWebSocketSpecialCommandDecodeErrorsAreFixed(t *testing.T) {
 }
 
 func TestWebSocketRejectsTrailingJSON(t *testing.T) {
-	ws := NewWebSocketServer(30*time.Second, nil)
+	ws := NewWebSocketServer(WebSocketServerOptions{Timeout: 30 * time.Second})
 	ws.methodRegistry.Register("ping", &stubHandler{})
 
 	body := wsRawRoundTrip(t, ws, `{"command":"ping","id":7}{"command":"ping","id":8}`)
@@ -845,14 +802,14 @@ func TestWebSocketRejectsTrailingJSON(t *testing.T) {
 }
 
 func TestWebSocketJSONInvalidWireEnvelope(t *testing.T) {
-	ws := NewWebSocketServer(30*time.Second, nil)
+	ws := NewWebSocketServer(WebSocketServerOptions{Timeout: 30 * time.Second})
 	tests := []struct {
 		name    string
 		request string
 		want    string
 	}{
 		{name: "malformed", request: `{`, want: `{"error":"jsonInvalid","type":"error","value":"<redacted>"}`},
-		{name: "oversized", request: strings.Repeat(" ", MaxRequestBytes+1), want: `{"error":"jsonInvalid","type":"error","value":"<redacted>"}`},
+		{name: "oversized", request: strings.Repeat(" ", maxRequestBytes+1), want: `{"error":"jsonInvalid","type":"error","value":"<redacted>"}`},
 		{name: "null", request: `null`, want: `{"error":"jsonInvalid","type":"error","value":"null"}`},
 		{name: "scalar", request: `7`, want: `{"error":"jsonInvalid","type":"error","value":"7"}`},
 		{name: "redacted array", request: `[{"secret":"private seed","nested":{"Seed":"nested seed"}}]`, want: `{"error":"jsonInvalid","type":"error","value":"[{\"nested\":{\"Seed\":\"<masked>\"},\"secret\":\"<masked>\"}]"}`},
@@ -871,7 +828,7 @@ func TestWebSocketJSONInvalidWireEnvelope(t *testing.T) {
 }
 
 func TestWebSocketJSONIntegerBounds(t *testing.T) {
-	ws := NewWebSocketServer(30*time.Second, nil)
+	ws := NewWebSocketServer(WebSocketServerOptions{Timeout: 30 * time.Second})
 	ws.methodRegistry.Register("ping", &stubHandler{})
 
 	for _, request := range []string{
@@ -911,7 +868,7 @@ func TestWebSocketJSONIntegerBounds(t *testing.T) {
 }
 
 func TestWebSocketErrorExceptionWireEnvelope(t *testing.T) {
-	ws := NewWebSocketServer(30*time.Second, nil)
+	ws := NewWebSocketServer(WebSocketServerOptions{Timeout: 30 * time.Second})
 	ws.methodRegistry.Register("simulate", &stubHandler{
 		handle: func(*types.RpcContext, json.RawMessage) (any, *types.RpcError) {
 			return nil, types.RpcErrorInvalidTransaction("invalid transaction detail")
@@ -928,22 +885,19 @@ func TestWebSocketErrorExceptionWireEnvelope(t *testing.T) {
 	}
 }
 
-// TestSetPingInterval guards the websocket_ping_frequency wiring: a
-// configured cadence must replace the default, and non-positive values
-// must be ignored.
-func TestSetPingInterval(t *testing.T) {
-	ws := NewWebSocketServer(time.Second, nil)
+func TestWebSocketServerOptionsPingInterval(t *testing.T) {
+	ws := NewWebSocketServer(WebSocketServerOptions{Timeout: time.Second})
 	if ws.pingInterval != 30*time.Second {
 		t.Fatalf("default pingInterval = %v, want 30s", ws.pingInterval)
 	}
 
-	ws.SetPingInterval(5 * time.Second)
-	if ws.pingInterval != 5*time.Second {
-		t.Errorf("pingInterval = %v, want 5s", ws.pingInterval)
+	configured := NewWebSocketServer(WebSocketServerOptions{Timeout: time.Second, PingInterval: 5 * time.Second})
+	if configured.pingInterval != 5*time.Second {
+		t.Errorf("configured pingInterval = %v, want 5s", configured.pingInterval)
 	}
 
-	ws.SetPingInterval(0)
-	if ws.pingInterval != 5*time.Second {
-		t.Errorf("pingInterval = %v after SetPingInterval(0), want 5s", ws.pingInterval)
+	zero := NewWebSocketServer(WebSocketServerOptions{Timeout: time.Second, PingInterval: 0})
+	if zero.pingInterval != 30*time.Second {
+		t.Errorf("zero pingInterval = %v, want default 30s", zero.pingInterval)
 	}
 }

@@ -141,7 +141,11 @@ func (m *LedgerDataMethod) Handle(ctx *types.RpcContext, params json.RawMessage)
 
 	// Include ledger header info on first query (when no marker was provided)
 	if !hasMarker {
-		response["ledger"] = buildLedgerJSON(targetLedger, binaryMode, false, ctx.ApiVersion)
+		ledgerJSON, ledgerErr := buildLedgerJSON(targetLedger, binaryMode, false, ctx.ApiVersion)
+		if ledgerErr != nil {
+			return nil, rpcInternalError("ledger_data: map root lookup failed", ledgerErr)
+		}
+		response["ledger"] = ledgerJSON
 	}
 
 	if result.Marker != "" {

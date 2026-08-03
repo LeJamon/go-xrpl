@@ -111,7 +111,7 @@ func (m *mockDepositAuthorizedLedgerService) GetLedgerByHash(hash [32]byte) (typ
 	}
 	return ledger, nil
 }
-func (m *mockDepositAuthorizedLedgerService) SubmitTransaction(txJSON []byte, txBlobHex ...string) (*types.SubmitResult, error) {
+func (m *mockDepositAuthorizedLedgerService) SubmitTransaction(txJSON []byte, txBlobHex string) (*types.SubmitResult, error) {
 	return nil, errors.New("not implemented")
 }
 func (m *mockDepositAuthorizedLedgerService) GetCurrentFees() (baseFee, reserveBase, reserveIncrement uint64) {

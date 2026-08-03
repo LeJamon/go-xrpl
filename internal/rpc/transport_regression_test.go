@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/LeJamon/go-xrpl/internal/rpc/loadtrack"
+	"github.com/LeJamon/go-xrpl/internal/rpc/subscription"
 	"github.com/LeJamon/go-xrpl/internal/rpc/types"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -41,19 +42,64 @@ func newTransportRegressionServer(t *testing.T) *Server {
 
 func TestTransportConstructorsShareInjectedLoadTracker(t *testing.T) {
 	tracker := loadtrack.New()
-	httpServer := NewServerWithLoadTracker(time.Second, nil, tracker)
-	wsServer := NewWebSocketServerWithLoadTracker(time.Second, nil, tracker)
+	httpServer := NewServer(ServerOptions{Timeout: time.Second, Services: nil, LoadTracker: tracker})
+	wsServer := NewWebSocketServer(WebSocketServerOptions{Timeout: time.Second, Services: nil, LoadTracker: tracker})
 
 	require.Same(t, tracker, httpServer.loadTracker)
 	require.Same(t, tracker, wsServer.loadTracker)
 	tracker.Charge("shared-client", loadtrack.LoadMalformed)
 	assert.Greater(t, wsServer.loadTracker.Balance("shared-client"), float64(0))
 
-	defaultHTTP := NewServer(time.Second, nil)
-	defaultWS := NewWebSocketServer(time.Second, nil)
+	defaultHTTP := NewServer(ServerOptions{Timeout: time.Second})
+	defaultWS := NewWebSocketServer(WebSocketServerOptions{Timeout: time.Second})
 	require.NotNil(t, defaultHTTP.loadTracker)
 	require.NotNil(t, defaultWS.loadTracker)
 	require.NotSame(t, defaultHTTP.loadTracker, defaultWS.loadTracker)
+}
+
+func TestRPCConstructorsUseExplicitDependencies(t *testing.T) {
+	services := types.NewServiceContainer(nil)
+	clientLoad := types.NewClientLoadShedder()
+	services.ClientLoad = clientLoad
+	manager := subscription.NewManager()
+	provider := stubLedgerInfoProvider{ledgerAvailable: true}
+	peerSource := &stubPeerSource{}
+
+	httpServer := NewServer(ServerOptions{
+		Timeout:     time.Second,
+		Services:    services,
+		LoadTracker: loadtrack.New(),
+		PeerSource:  peerSource,
+	})
+	wsServer := NewWebSocketServer(WebSocketServerOptions{
+		Timeout:             time.Second,
+		Services:            services,
+		LoadTracker:         httpServer.loadTracker,
+		PeerSource:          peerSource,
+		PingInterval:        5 * time.Second,
+		LedgerInfoProvider:  provider,
+		SubscriptionManager: manager,
+	})
+
+	if services.ClientLoad != clientLoad || services.Dispatcher != nil || services.URLSubscriptions != nil {
+		t.Fatal("RPC constructors mutated the service container")
+	}
+	clientLoad.Begin()
+	if httpServer.services.ClientLoad.InFlight() != 1 || wsServer.services.ClientLoad.InFlight() != 1 {
+		t.Fatal("HTTP and WebSocket servers did not observe the shared client-load shedder")
+	}
+	if wsServer.SubscriptionManager() != manager {
+		t.Fatal("WebSocket server did not retain the explicitly supplied subscription manager")
+	}
+	if wsServer.pingInterval != 5*time.Second || wsServer.ledgerInfoProvider != provider {
+		t.Fatal("WebSocket options were not applied")
+	}
+	if _, ok := httpServer.registry.Get("ping"); !ok {
+		t.Fatal("HTTP method registry was not ready at construction return")
+	}
+	if _, ok := wsServer.methodRegistry.Get("ping"); !ok {
+		t.Fatal("WebSocket method registry was not ready at construction return")
+	}
 }
 
 func seedTransportRegressionLoad(tracker *loadtrack.Tracker, balance int) {
@@ -350,7 +396,7 @@ func TestBuildXrplResponseBodyDoesNotMutateHandlerResult(t *testing.T) {
 		"nested": map[string]any{"ok": true},
 	}
 
-	response := buildXrplResponseBody(nil, result, nil, &JsonRpcResponseOptions{Warning: "load"})
+	response := buildXrplResponseBody(nil, result, nil, &jsonRPCResponseOptions{Warning: "load"})
 
 	assert.True(t, reflect.DeepEqual(want, result), "handler result mutated: %v", result)
 	assert.NotContains(t, result, "status")
@@ -463,7 +509,7 @@ func TestHTTPParseBoundaryUsesFixedResponse(t *testing.T) {
 		{name: "integer above range", body: `{"method":"ping","params":[{"id":4294967296}]}`},
 		{name: "real out of range", body: `{"method":"ping","params":[{"id":1e999}]}`},
 		{name: "too deeply nested", body: nestedJSONObject(26)},
-		{name: "oversized", body: strings.Repeat(" ", MaxRequestBytes+1)},
+		{name: "oversized", body: strings.Repeat(" ", maxRequestBytes+1)},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {

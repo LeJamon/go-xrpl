@@ -9,17 +9,36 @@ import (
 // LedgerCloseEvent represents a ledger close notification sent to subscribers
 // This matches the rippled ledgerClosed stream message format
 type LedgerCloseEvent struct {
-	Type             string  `json:"type"`                        // Always "ledgerClosed"
-	FeeBase          int32   `json:"fee_base"`                    // Transaction cost in fee units
-	FeeRef           *uint64 `json:"fee_ref,omitempty"`           // Deprecated reference fee units, before XRPFees
-	LedgerHash       string  `json:"ledger_hash"`                 // Hash of the ledger that closed
-	LedgerIndex      uint32  `json:"ledger_index"`                // Sequence number of the ledger
-	LedgerTime       uint32  `json:"ledger_time"`                 // Close time in seconds since Ripple epoch
-	NetworkID        uint32  `json:"network_id"`                  // Network identifier, including network 0
-	ReserveBase      int32   `json:"reserve_base"`                // Minimum reserve requirement in drops
-	ReserveInc       int32   `json:"reserve_inc"`                 // Owner reserve increment in drops
-	TxnCount         int     `json:"txn_count"`                   // Number of transactions in the ledger
-	ValidatedLedgers string  `json:"validated_ledgers,omitempty"` // Range of validated ledgers (e.g., "1-100")
+	Type                    string  `json:"type"`                        // Always "ledgerClosed"
+	FeeBase                 int32   `json:"fee_base"`                    // Transaction cost in fee units
+	FeeRef                  *uint64 `json:"fee_ref,omitempty"`           // Deprecated reference fee units, before XRPFees
+	LedgerHash              string  `json:"ledger_hash"`                 // Hash of the ledger that closed
+	LedgerIndex             uint32  `json:"ledger_index"`                // Sequence number of the ledger
+	LedgerTime              uint32  `json:"ledger_time"`                 // Close time in seconds since Ripple epoch
+	NetworkID               uint32  `json:"network_id"`                  // Network identifier, including network 0
+	ReserveBase             int32   `json:"reserve_base"`                // Minimum reserve requirement in drops
+	ReserveInc              int32   `json:"reserve_inc"`                 // Owner reserve increment in drops
+	TxnCount                int     `json:"txn_count"`                   // Number of transactions in the ledger
+	ValidatedLedgers        string  `json:"validated_ledgers,omitempty"` // Range of validated ledgers (e.g., "1-100")
+	ValidatedLedgersPresent bool    `json:"-"`
+}
+
+// MarshalJSON preserves the distinction between an omitted validated range and
+// a gate-enabled range whose value is currently empty.
+func (e LedgerCloseEvent) MarshalJSON() ([]byte, error) {
+	type alias LedgerCloseEvent
+	value := alias(e)
+	var validatedLedgers *string
+	if e.ValidatedLedgersPresent {
+		validatedLedgers = &value.ValidatedLedgers
+	}
+	return json.Marshal(struct {
+		alias
+		ValidatedLedgers *string `json:"validated_ledgers,omitempty"`
+	}{
+		alias:            value,
+		ValidatedLedgers: validatedLedgers,
+	})
 }
 
 // TransactionEvent represents a transaction notification sent to subscribers
@@ -180,23 +199,6 @@ type PeerStatusEvent struct {
 	LedgerIndexMax *uint32 `json:"ledger_index_max,omitempty"` // Max ledger index peer has — nil unless paired with min (PeerImp.cpp:1956-1960)
 	LedgerIndexMin *uint32 `json:"ledger_index_min,omitempty"` // Min ledger index peer has — nil unless paired with max
 }
-
-// Peer status actions — rippled PeerImp.cpp:1921-1932.
-const (
-	PeerActionClosingLedger  = "CLOSING_LEDGER"
-	PeerActionAcceptedLedger = "ACCEPTED_LEDGER"
-	PeerActionSwitchedLedger = "SWITCHED_LEDGER"
-	PeerActionLostSync       = "LOST_SYNC"
-)
-
-// Peer status strings — rippled PeerImp.cpp:1899-1913.
-const (
-	PeerStatusConnecting = "CONNECTING"
-	PeerStatusConnected  = "CONNECTED"
-	PeerStatusMonitoring = "MONITORING"
-	PeerStatusValidating = "VALIDATING"
-	PeerStatusShutting   = "SHUTTING"
-)
 
 // PathFindEvent represents path finding results
 // This is sent in response to path_find create requests

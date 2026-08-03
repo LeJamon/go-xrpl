@@ -175,9 +175,10 @@ func TestPublishLedgerClosedFieldPresence(t *testing.T) {
 	conn.Subscriptions[types.SubLedger] = types.SubscriptionConfig{}
 	publisher := NewPublisher(manager)
 	event := &LedgerCloseEvent{
-		Type:        "ledgerClosed",
-		LedgerIndex: 42,
-		NetworkID:   0,
+		Type:             "ledgerClosed",
+		LedgerIndex:      42,
+		NetworkID:        0,
+		ValidatedLedgers: "1-42",
 	}
 	publisher.PublishLedgerClosed(event)
 	var payload map[string]json.RawMessage
@@ -189,6 +190,7 @@ func TestPublishLedgerClosedFieldPresence(t *testing.T) {
 	feeRef := uint64(10)
 	event.FeeRef = &feeRef
 	event.ValidatedLedgers = "1-42"
+	event.ValidatedLedgersPresent = true
 	publisher.PublishLedgerClosed(event)
 	require.NoError(t, json.Unmarshal(readPublisherTestEvent(t, conn), &payload))
 	require.Equal(t, "10", string(payload["fee_ref"]))

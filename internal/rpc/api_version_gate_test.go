@@ -178,7 +178,7 @@ func TestApiVersion_BatchV3RejectedWithoutBeta(t *testing.T) {
 // given beta flag.
 func versionEchoWSServer(t *testing.T, beta bool) *WebSocketServer {
 	t.Helper()
-	ws := NewWebSocketServer(30*time.Second, types.NewServiceContainer(nil))
+	ws := NewWebSocketServer(WebSocketServerOptions{Timeout: 30 * time.Second, Services: types.NewServiceContainer(nil)})
 	ws.services.BetaRPCAPI = beta
 	ws.methodRegistry.Register("ping", &stubHandler{
 		apiVers: []int{types.ApiVersion1, types.ApiVersion2, types.ApiVersion3},

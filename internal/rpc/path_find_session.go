@@ -18,6 +18,8 @@ import (
 type PathFindSession struct {
 	mu        sync.Mutex
 	computeMu sync.Mutex
+	computeFn func(tx.LedgerView) *pathfinder.PathRequestResult
+	request   *pathfinder.PathRequest
 
 	// Request parameters (immutable after creation)
 	srcAccount    [20]byte
@@ -26,6 +28,7 @@ type PathFindSession struct {
 	sendMax       *tx.Amount
 	srcCurrencies []payment.Issue
 	convertAll    bool
+	domainID      *[32]byte
 
 	// Canonical account strings for response formatting
 	srcAccountStr string
@@ -46,6 +49,7 @@ type pathFindCreateRequest struct {
 	DestinationAmount  json.RawMessage `json:"destination_amount"`
 	SendMax            json.RawMessage `json:"send_max,omitempty"`
 	SourceCurrencies   json.RawMessage `json:"source_currencies,omitempty"`
+	Domain             json.RawMessage `json:"domain,omitempty"`
 }
 
 // ParseAndCreateSession parses a path_find create request and creates a session.
@@ -200,13 +204,32 @@ func ParseAndCreateSession(params json.RawMessage, id any) (*PathFindSession, *r
 		}
 	}
 
+	var domainID *[32]byte
+	if request.Domain != nil {
+		var parsed bool
+		domainID, parsed = rpctypes.ParsePathFindDomain(request.Domain)
+		if !parsed {
+			return nil, rpctypes.RpcErrorDomainMalformed("Domain is malformed.")
+		}
+	}
+
+	pathRequest := pathfinder.NewPathRequest(
+		srcAccount, dstAccount,
+		dstAmount, sendMax,
+		srcCurrencies, convertAll,
+	)
+	pathRequest.SetDomainID(domainID)
+	pathRequest.SetSearchLevel(0)
+
 	session := &PathFindSession{
+		request:       pathRequest,
 		srcAccount:    srcAccount,
 		dstAccount:    dstAccount,
 		dstAmount:     dstAmount,
 		sendMax:       sendMax,
 		srcCurrencies: srcCurrencies,
 		convertAll:    convertAll,
+		domainID:      domainID,
 		srcAccountStr: state.EncodeAccountIDSafe(srcAccount),
 		dstAccountStr: state.EncodeAccountIDSafe(dstAccount),
 		id:            id,
@@ -215,43 +238,59 @@ func ParseAndCreateSession(params json.RawMessage, id any) (*PathFindSession, *r
 	return session, nil
 }
 
+// Compute runs pathfinding while serializing computations for this session.
+// The returned result is not made visible through Status until CommitResult.
+func (s *PathFindSession) Compute(view tx.LedgerView, fast bool) *pathfinder.PathRequestResult {
+	s.computeMu.Lock()
+	defer s.computeMu.Unlock()
+	if s.computeFn != nil {
+		return s.computeFn(view)
+	}
+
+	if s.request == nil {
+		s.request = pathfinder.NewPathRequest(
+			s.srcAccount, s.dstAccount,
+			s.dstAmount, s.sendMax,
+			s.srcCurrencies, s.convertAll,
+		)
+		s.request.SetDomainID(s.domainID)
+		s.request.SetSearchLevel(0)
+	}
+	return s.request.ExecuteUpdate(view, fast, false)
+}
+
 // Execute runs pathfinding against the given ledger view and stores the result.
 // Full updates are returned in pushed-event form; the initial fast result is
 // returned in response-result form.
 func (s *PathFindSession) Execute(view tx.LedgerView, fullReply bool) *PathFindEvent {
-	pr := pathfinder.NewPathRequest(
-		s.srcAccount, s.dstAccount,
-		s.dstAmount, s.sendMax,
-		s.srcCurrencies, s.convertAll,
-	)
-	return s.executeAndStore(func() *pathfinder.PathRequestResult {
-		return pr.Execute(view)
-	}, fullReply)
+	return s.CommitResult(s.Compute(view, !fullReply), fullReply)
 }
 
-func (s *PathFindSession) executeAndStore(
-	execute func() *pathfinder.PathRequestResult,
-	fullReply bool,
-) *PathFindEvent {
-	s.computeMu.Lock()
-	defer s.computeMu.Unlock()
+// CommitResult publishes a computed path result as the session's latest
+// status. Callers that need an external generation check should build an event
+// first and use commitBuiltEvent while holding that check's locks.
+func (s *PathFindSession) CommitResult(result *pathfinder.PathRequestResult, fullReply bool) *PathFindEvent {
+	status := s.BuildEvent(result, fullReply)
+	return s.commitBuiltEvent(status)
+}
 
-	result := execute()
-
+func (s *PathFindSession) commitBuiltEvent(status *PathFindEvent) *PathFindEvent {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	return s.storeResultLocked(result, fullReply)
-}
-
-func (s *PathFindSession) storeResultLocked(result *pathfinder.PathRequestResult, fullReply bool) *PathFindEvent {
-	status := s.buildEvent(result, fullReply)
-	s.lastStatus = status
-
+	s.lastStatus = clonePathFindEvent(status)
 	event := clonePathFindEvent(status)
-	if fullReply {
+	if status.FullReply {
 		event.Type = "path_find"
 	}
 	return event
+}
+
+// BuildEvent formats a path result without changing the session status.
+func (s *PathFindSession) BuildEvent(result *pathfinder.PathRequestResult, fullReply bool) *PathFindEvent {
+	if result == nil {
+		result = &pathfinder.PathRequestResult{}
+	}
+	return s.buildEvent(result, fullReply)
 }
 
 // Status returns the stored response state with rippled's success marker.

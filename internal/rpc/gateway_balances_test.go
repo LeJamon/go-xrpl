@@ -71,7 +71,7 @@ func (m *mockGatewayBalancesLedgerService) GetLedgerBySequence(seq uint32) (type
 func (m *mockGatewayBalancesLedgerService) GetLedgerByHash(hash [32]byte) (types.LedgerReader, error) {
 	return accountQueryLedgerByHash(hash, m.validatedLedgerIndex)
 }
-func (m *mockGatewayBalancesLedgerService) SubmitTransaction(txJSON []byte, txBlobHex ...string) (*types.SubmitResult, error) {
+func (m *mockGatewayBalancesLedgerService) SubmitTransaction(txJSON []byte, txBlobHex string) (*types.SubmitResult, error) {
 	return nil, errors.New("not implemented")
 }
 func (m *mockGatewayBalancesLedgerService) GetCurrentFees() (baseFee, reserveBase, reserveIncrement uint64) {

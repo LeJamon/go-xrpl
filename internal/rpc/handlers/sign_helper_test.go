@@ -19,7 +19,7 @@ type submitRecorder struct {
 	failHardCalls int
 }
 
-func (s *submitRecorder) SubmitTransaction([]byte, ...string) (*types.SubmitResult, error) {
+func (s *submitRecorder) SubmitTransaction([]byte, string) (*types.SubmitResult, error) {
 	s.regularCalls++
 	return &types.SubmitResult{}, nil
 }
@@ -34,7 +34,7 @@ type regularSubmitRecorder struct {
 	calls int
 }
 
-func (s *regularSubmitRecorder) SubmitTransaction([]byte, ...string) (*types.SubmitResult, error) {
+func (s *regularSubmitRecorder) SubmitTransaction([]byte, string) (*types.SubmitResult, error) {
 	s.calls++
 	return &types.SubmitResult{}, nil
 }

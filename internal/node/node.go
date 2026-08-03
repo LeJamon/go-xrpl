@@ -5,6 +5,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"net"
 	"os"
 	"runtime/debug"
 	"sort"
@@ -465,11 +466,18 @@ func parsePortConfig(protocol, name string, p config.PortConfig) (*rpc.PortConte
 	if err != nil {
 		return nil, fmt.Errorf("parse secure_gateway nets for %s port %q: %w", protocol, name, err)
 	}
+	allowedOrigins, err := config.NormalizeOrigins(p.AllowedOrigins)
+	if err != nil {
+		return nil, fmt.Errorf("parse allowed_origins for %s port %q: %w", protocol, name, err)
+	}
 	return &rpc.PortContext{
 		PortName:          name,
-		AdminNets:         adminNets,
+		AdminNets:         append([]net.IPNet(nil), adminNets...),
 		AdminUser:         p.AdminUser,
 		AdminPassword:     p.AdminPassword,
+		User:              p.User,
+		Password:          p.Password,
+		AllowedOrigins:    append([]string(nil), allowedOrigins...),
 		SecureGatewayNets: secureGW,
 		Limit:             p.Limit,
 		SendQueue:         p.SendQueueLimit,

@@ -23,6 +23,12 @@ func ValidateConfig(config *Config) error {
 	}
 
 	// 2. Validate port configurations (if ports exist)
+	if (config.Server.User == "") != (config.Server.Password == "") {
+		errs = append(errs, errors.New("server user and password must be configured together"))
+	}
+	if _, err := NormalizeOrigins(config.Server.AllowedOrigins); err != nil {
+		errs = append(errs, fmt.Errorf("server allowed_origins: %w", err))
+	}
 	if len(config.Ports) > 0 {
 		errs = append(errs, validatePorts(config.Ports)...)
 	}
@@ -132,6 +138,10 @@ func validatePorts(ports map[string]PortConfig) []error {
 	for portName, portConfig := range ports {
 		if err := portConfig.Validate(); err != nil {
 			errs = append(errs, fmt.Errorf("port %s: %w", portName, err))
+		}
+		if (len(portConfig.Admin) > 0 || portConfig.AdminUser != "" || portConfig.AdminPassword != "") &&
+			len(portConfig.AllowedOrigins) > 0 && (portConfig.User == "" || portConfig.Password == "") {
+			errs = append(errs, fmt.Errorf("port %s: admin-capable browser listener requires both user and password", portName))
 		}
 
 		portKey := fmt.Sprintf("%s:%d", portConfig.IP, portConfig.Port)

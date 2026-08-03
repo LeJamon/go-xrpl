@@ -787,7 +787,9 @@ type FailHardSubmitter interface {
 }
 
 type TransactionSubmitter interface {
-	SubmitTransaction(txJSON []byte, txBlobHex ...string) (*SubmitResult, error)
+	// txBlobHex is the signed transaction blob, or an empty string when the
+	// caller has only transaction JSON.
+	SubmitTransaction(txJSON []byte, txBlobHex string) (*SubmitResult, error)
 	SimulateTransaction(txJSON []byte) (*SubmitResult, error)
 	GetTransaction(txHash [32]byte) (*TransactionInfo, error)
 	StoreTransaction(txHash [32]byte, txData []byte) error
@@ -984,6 +986,13 @@ type ContextLedgerStateSource interface {
 
 type LedgerAmendmentRulesSource interface {
 	LedgerAmendmentRules() *amendment.Rules
+}
+
+// LedgerAmendmentRulesErrorSource is the error-aware amendment-rules facet.
+// It is optional to preserve the existing LedgerReader mock contract while
+// allowing production adapters to surface rules-loading failures.
+type LedgerAmendmentRulesErrorSource interface {
+	LedgerAmendmentRulesWithError() (*amendment.Rules, error)
 }
 
 // LedgerServerInfo contains server status information from the ledger service
@@ -1505,20 +1514,10 @@ type NFTOffersResult struct {
 }
 
 // NewServiceContainer constructs a ServiceContainer wired to the given
-// ledger service. Callers attach the dispatcher, peer hooks, manifest
-// cache, etc. afterwards as components come online.
+// ledger service. Callers attach the runtime services as components come
+// online.
 func NewServiceContainer(ledger LedgerService) *ServiceContainer {
 	return &ServiceContainer{
 		Ledger: ledger,
 	}
-}
-
-// SetDispatcher sets the method dispatcher on the service container.
-func (sc *ServiceContainer) SetDispatcher(d MethodDispatcher) {
-	sc.Dispatcher = d
-}
-
-// SetShutdownFunc sets the shutdown function on the service container.
-func (sc *ServiceContainer) SetShutdownFunc(f func()) {
-	sc.ShutdownFunc = f
 }

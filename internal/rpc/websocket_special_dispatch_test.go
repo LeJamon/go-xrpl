@@ -12,31 +12,24 @@ import (
 	"github.com/LeJamon/go-xrpl/internal/rpc/types"
 )
 
-func newSpecialDispatchHarness(t *testing.T) (*WebSocketServer, *WebSocketConnection, *types.RpcContext) {
+func newSpecialDispatchHarness(t *testing.T) (*WebSocketServer, *websocketConnection, *types.RpcContext) {
 	t.Helper()
 	services := &types.ServiceContainer{ClientLoad: types.NewClientLoadShedder()}
-	ws := NewWebSocketServerWithLoadTracker(time.Second, services, loadtrack.New())
+	ws := NewWebSocketServer(WebSocketServerOptions{Timeout: time.Second, Services: services, LoadTracker: loadtrack.New()})
 	ws.methodRegistry.Register("subscribe", &stubHandler{})
 	ws.methodRegistry.Register("path_find", &stubHandler{})
 	send := make(chan []byte, 1)
-	conn := &WebSocketConnection{
-		ID:          "special-dispatch",
-		sendChannel: send,
-		ctx:         context.Background(),
-		legacy: &types.Connection{
-			ID:            "special-dispatch",
-			Subscriptions: make(map[types.SubscriptionType]types.SubscriptionConfig),
-			SendChannel:   send,
-		},
+	conn := &websocketConnection{
+		Connection: types.NewConnectionWithContext(context.Background(), "special-dispatch", send),
 	}
 	ctx := newRpcContext(context.Background(), types.RoleGuest, types.DefaultApiVersion, "192.0.2.1", nil, services)
 	return ws, conn, ctx
 }
 
-func specialDispatchResponse(t *testing.T, conn *WebSocketConnection) map[string]any {
+func specialDispatchResponse(t *testing.T, conn *websocketConnection) map[string]any {
 	t.Helper()
 	select {
-	case body := <-conn.sendChannel:
+	case body := <-conn.SendChannel:
 		var response map[string]any
 		if err := json.Unmarshal(body, &response); err != nil {
 			t.Fatalf("decode response %s: %v", body, err)
@@ -78,7 +71,7 @@ func TestWebSocketSpecialDispatchBusyBoundary(t *testing.T) {
 				}}})
 			}
 			called := false
-			ws.handleSpecialCommand(conn, ctx, specialDispatchCommand("subscribe"), func(_ *WebSocketConnection, _ *types.RpcContext, _ types.WebSocketCommand) (any, *types.RpcError) {
+			ws.handleSpecialCommand(conn, ctx, specialDispatchCommand("subscribe"), func(_ *websocketConnection, _ *types.RpcContext, _ types.WebSocketCommand) (any, *types.RpcError) {
 				called = true
 				if got := ws.services.ClientLoad.InFlight(); got != int64(test.inFlight+1) {
 					t.Fatalf("in-flight inside handler = %d, want %d", got, test.inFlight+1)
@@ -111,14 +104,14 @@ func TestWebSocketSpecialDispatchWarningVisibility(t *testing.T) {
 	}{
 		{
 			name: "success exposes warning",
-			handler: func(_ *WebSocketConnection, _ *types.RpcContext, _ types.WebSocketCommand) (any, *types.RpcError) {
+			handler: func(_ *websocketConnection, _ *types.RpcContext, _ types.WebSocketCommand) (any, *types.RpcError) {
 				return map[string]any{}, nil
 			},
 			wantWarning: true,
 		},
 		{
 			name: "error suppresses warning",
-			handler: func(_ *WebSocketConnection, _ *types.RpcContext, _ types.WebSocketCommand) (any, *types.RpcError) {
+			handler: func(_ *websocketConnection, _ *types.RpcContext, _ types.WebSocketCommand) (any, *types.RpcError) {
 				return nil, types.RpcErrorInvalidParams("Invalid parameters.")
 			},
 		},
@@ -144,7 +137,7 @@ func TestWebSocketSpecialDispatchWarningVisibility(t *testing.T) {
 
 func TestWebSocketSpecialDispatchRecoversPanic(t *testing.T) {
 	ws, conn, ctx := newSpecialDispatchHarness(t)
-	ws.handleSpecialCommand(conn, ctx, specialDispatchCommand("subscribe"), func(_ *WebSocketConnection, _ *types.RpcContext, _ types.WebSocketCommand) (any, *types.RpcError) {
+	ws.handleSpecialCommand(conn, ctx, specialDispatchCommand("subscribe"), func(_ *websocketConnection, _ *types.RpcContext, _ types.WebSocketCommand) (any, *types.RpcError) {
 		panic("private panic detail")
 	})
 
@@ -239,7 +232,7 @@ func TestWebSocketSubscribeBothSidesAlias(t *testing.T) {
 	if rpcErr != nil {
 		t.Fatalf("subscribe error = %v", rpcErr)
 	}
-	books := conn.legacy.Subscriptions[types.SubBook].Books
+	books := conn.Subscriptions[types.SubBook].Books
 	if len(books) != 2 {
 		t.Fatalf("book subscriptions = %d, want 2", len(books))
 	}

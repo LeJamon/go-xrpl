@@ -71,7 +71,7 @@ func (m *mockAccountNFTsLedgerService) GetLedgerBySequence(seq uint32) (types.Le
 func (m *mockAccountNFTsLedgerService) GetLedgerByHash(hash [32]byte) (types.LedgerReader, error) {
 	return accountQueryLedgerByHash(hash, m.validatedLedgerIndex)
 }
-func (m *mockAccountNFTsLedgerService) SubmitTransaction(txJSON []byte, txBlobHex ...string) (*types.SubmitResult, error) {
+func (m *mockAccountNFTsLedgerService) SubmitTransaction(txJSON []byte, txBlobHex string) (*types.SubmitResult, error) {
 	return nil, errors.New("not implemented")
 }
 func (m *mockAccountNFTsLedgerService) GetCurrentFees() (baseFee, reserveBase, reserveIncrement uint64) {

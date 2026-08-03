@@ -10,6 +10,7 @@ import (
 	"github.com/LeJamon/go-xrpl/internal/consensus/adaptor"
 	"github.com/LeJamon/go-xrpl/internal/ledger/service"
 	"github.com/LeJamon/go-xrpl/internal/rpc"
+	rpcadapter "github.com/LeJamon/go-xrpl/internal/rpc/adapter"
 	"github.com/LeJamon/go-xrpl/internal/rpc/subscription"
 	"github.com/LeJamon/go-xrpl/internal/rpc/types"
 )
@@ -40,7 +41,7 @@ func (r *serverStatusRecorder) count() int {
 }
 
 func serverStatusTestServices(svc *service.Service) *types.ServiceContainer {
-	services := types.NewServiceContainer(rpc.NewLedgerServiceAdapter(svc))
+	services := types.NewServiceContainer(rpcadapter.NewLedgerServiceAdapter(svc))
 	services.TxQMetrics = func() types.TxQServerMetrics {
 		metrics := svc.TxQMetrics()
 		return types.TxQServerMetrics{

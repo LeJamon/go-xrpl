@@ -72,7 +72,7 @@ func (m *mockAccountCurrenciesLedgerService) GetLedgerBySequence(seq uint32) (ty
 func (m *mockAccountCurrenciesLedgerService) GetLedgerByHash(hash [32]byte) (types.LedgerReader, error) {
 	return accountQueryLedgerByHash(hash, m.validatedLedgerIndex)
 }
-func (m *mockAccountCurrenciesLedgerService) SubmitTransaction(txJSON []byte, txBlobHex ...string) (*types.SubmitResult, error) {
+func (m *mockAccountCurrenciesLedgerService) SubmitTransaction(txJSON []byte, txBlobHex string) (*types.SubmitResult, error) {
 	return nil, errors.New("not implemented")
 }
 func (m *mockAccountCurrenciesLedgerService) GetCurrentFees() (baseFee, reserveBase, reserveIncrement uint64) {
