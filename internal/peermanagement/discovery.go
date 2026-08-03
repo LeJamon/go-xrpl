@@ -4,6 +4,7 @@ import (
 	"container/list"
 	"context"
 	"encoding/json"
+	"fmt"
 	"log/slog"
 	"math/rand/v2"
 	"net"
@@ -13,6 +14,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	addresscodec "github.com/LeJamon/go-xrpl/codec/addresscodec"
 )
 
 // Discovery constants.
@@ -59,22 +62,30 @@ type CachedEndpoint struct {
 
 // BootCache persists known peer addresses across restarts.
 type BootCache struct {
-	mu       sync.RWMutex
-	cache    map[string]*CachedEndpoint
-	filePath string
-	dirty    bool
+	mu        sync.RWMutex
+	cache     map[string]*CachedEndpoint
+	filePath  string
+	dirty     bool
+	writeFile atomicFileWriter
 }
 
 // NewBootCache creates a new boot cache.
 func NewBootCache(dataDir string) *BootCache {
+	var filePath string
+	if dataDir != "" {
+		filePath = filepath.Join(dataDir, DefaultBootCacheFile)
+	}
 	return &BootCache{
 		cache:    make(map[string]*CachedEndpoint),
-		filePath: filepath.Join(dataDir, DefaultBootCacheFile),
+		filePath: filePath,
 	}
 }
 
 // Load loads the cache from disk.
 func (bc *BootCache) Load() error {
+	if bc == nil || bc.filePath == "" {
+		return nil
+	}
 	bc.mu.Lock()
 	defer bc.mu.Unlock()
 
@@ -90,23 +101,36 @@ func (bc *BootCache) Load() error {
 	if err := json.Unmarshal(data, &entries); err != nil {
 		return err
 	}
+	if entries == nil {
+		return fmt.Errorf("cache must be a JSON array")
+	}
 
-	bc.cache = make(map[string]*CachedEndpoint)
+	loaded := make(map[string]*CachedEndpoint, len(entries))
 	now := time.Now()
-	for _, entry := range entries {
+	for i, entry := range entries {
+		if err := validateCachedEndpoint(entry); err != nil {
+			return fmt.Errorf("boot cache entry %d: %w", i, err)
+		}
 		if now.Sub(entry.LastSeen) <= CacheEntryTTL {
-			bc.cache[entry.Address] = entry
+			if _, exists := loaded[entry.Address]; exists {
+				return fmt.Errorf("boot cache entry %d: duplicate address %q", i, entry.Address)
+			}
+			loaded[entry.Address] = cloneCachedEndpoint(entry)
 		}
 	}
+	bc.cache = loaded
+	bc.dirty = false
 	return nil
 }
 
-// Save writes the cache to disk. Holds the write lock for the whole
-// operation (Save runs on shutdown, not a hot path) so dirty is never
-// mutated under a read lock, and clears dirty only after a successful
-// write so a failed write retains the flag and the next Save retries
-// instead of dropping the pending data.
+// Save writes the cache to disk. The complete snapshot and durable rename are
+// serialized with mutations so a concurrent save cannot overwrite newer
+// state. Once rename succeeds the in-memory snapshot matches the file even if
+// the subsequent directory sync reports an uncertain durability error.
 func (bc *BootCache) Save() error {
+	if bc == nil || bc.filePath == "" {
+		return nil
+	}
 	bc.mu.Lock()
 	defer bc.mu.Unlock()
 
@@ -116,27 +140,36 @@ func (bc *BootCache) Save() error {
 
 	entries := make([]*CachedEndpoint, 0, len(bc.cache))
 	for _, entry := range bc.cache {
-		entries = append(entries, entry)
+		if err := validateCachedEndpoint(entry); err != nil {
+			return err
+		}
+		entries = append(entries, cloneCachedEndpoint(entry))
 	}
+	sort.Slice(entries, func(i, j int) bool { return entries[i].Address < entries[j].Address })
 
 	data, err := json.MarshalIndent(entries, "", "  ")
 	if err != nil {
 		return err
 	}
 
-	if err := os.MkdirAll(filepath.Dir(bc.filePath), 0o755); err != nil {
-		return err
+	writer := bc.writeFile
+	if writer == nil {
+		writer = writeAtomicFile
 	}
-
-	if err := os.WriteFile(bc.filePath, data, 0o600); err != nil {
-		return err
+	committed, err := writer(bc.filePath, data, 0o600)
+	if committed {
+		// Rename made the new snapshot visible. Keep memory aligned with that
+		// snapshot even when directory durability is uncertain.
+		bc.dirty = false
 	}
-	bc.dirty = false
-	return nil
+	return err
 }
 
 // Insert adds or updates an endpoint in the cache.
 func (bc *BootCache) Insert(address string, port uint16) {
+	if bc == nil || strings.TrimSpace(address) == "" || port == 0 {
+		return
+	}
 	bc.mu.Lock()
 	defer bc.mu.Unlock()
 
@@ -185,17 +218,21 @@ func (bc *BootCache) MarkSuccess(address string) {
 
 // Endpoints returns endpoints sorted by valence.
 func (bc *BootCache) Endpoints(limit int) []*CachedEndpoint {
+	if bc == nil {
+		return nil
+	}
 	bc.mu.RLock()
 	defer bc.mu.RUnlock()
 
 	entries := make([]*CachedEndpoint, 0, len(bc.cache))
 	for _, entry := range bc.cache {
 		entries = append(entries, &CachedEndpoint{
-			Address:   entry.Address,
-			Port:      entry.Port,
-			LastSeen:  entry.LastSeen,
-			Valence:   entry.Valence,
-			FailCount: entry.FailCount,
+			Address:    entry.Address,
+			Port:       entry.Port,
+			LastSeen:   entry.LastSeen,
+			Valence:    entry.Valence,
+			FailCount:  entry.FailCount,
+			LastFailed: entry.LastFailed,
 		})
 	}
 
@@ -220,6 +257,7 @@ type ReservationTable struct {
 	mu           sync.RWMutex
 	reservations map[string]*PeerReservation
 	filePath     string
+	writeFile    atomicFileWriter
 }
 
 // NewReservationTable creates a new reservation table.
@@ -236,9 +274,16 @@ func NewReservationTable(dataDir string) *ReservationTable {
 
 // Contains returns true if the node has a reservation.
 func (t *ReservationTable) Contains(nodeID string) bool {
+	if t == nil {
+		return false
+	}
+	canonical, err := canonicalNodePublicKey(nodeID)
+	if err != nil {
+		return false
+	}
 	t.mu.RLock()
 	defer t.mu.RUnlock()
-	_, exists := t.reservations[nodeID]
+	_, exists := t.reservations[canonical]
 	return exists
 }
 
@@ -247,42 +292,84 @@ func (t *ReservationTable) Contains(nodeID string) bool {
 // error. Mirrors rippled's PeerReservationTable::insert_or_assign, whose DB
 // write surfaces failures to the caller.
 func (t *ReservationTable) Insert(r *PeerReservation) (*PeerReservation, error) {
+	if t == nil {
+		return nil, fmt.Errorf("reservation table is nil")
+	}
+	normalized, err := normalizeReservation(r)
+	if err != nil {
+		return nil, err
+	}
 	t.mu.Lock()
-	prev := t.reservations[r.NodeID]
-	t.reservations[r.NodeID] = r
-	t.mu.Unlock()
-	return prev, t.Save()
+	defer t.mu.Unlock()
+	if t.reservations == nil {
+		t.reservations = make(map[string]*PeerReservation)
+	}
+	prev := cloneReservation(t.reservations[normalized.NodeID])
+	t.reservations[normalized.NodeID] = normalized
+	committed, err := t.saveLocked()
+	if err != nil && !committed {
+		if prev == nil {
+			delete(t.reservations, normalized.NodeID)
+		} else {
+			t.reservations[normalized.NodeID] = prev
+		}
+		return prev, err
+	}
+	return prev, err
 }
 
 // Erase removes a reservation and persists the table, returning the removed
 // entry (nil if none existed) and any persistence error. Mirrors rippled's
 // PeerReservationTable::erase.
 func (t *ReservationTable) Erase(nodeID string) (*PeerReservation, error) {
-	t.mu.Lock()
-	prev, ok := t.reservations[nodeID]
-	if ok {
-		delete(t.reservations, nodeID)
+	if t == nil {
+		return nil, fmt.Errorf("reservation table is nil")
 	}
-	t.mu.Unlock()
+	canonical, err := canonicalNodePublicKey(nodeID)
+	if err != nil {
+		return nil, err
+	}
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	prev, ok := t.reservations[canonical]
+	if ok {
+		delete(t.reservations, canonical)
+	}
 	if !ok {
 		return nil, nil
 	}
-	return prev, t.Save()
+	committed, err := t.saveLocked()
+	if err != nil && !committed {
+		t.reservations[canonical] = prev
+		return cloneReservation(prev), err
+	}
+	return cloneReservation(prev), err
 }
 
 // List returns a snapshot of all reservations.
 func (t *ReservationTable) List() []PeerReservation {
+	if t == nil {
+		return nil
+	}
 	t.mu.RLock()
 	defer t.mu.RUnlock()
 	out := make([]PeerReservation, 0, len(t.reservations))
 	for _, r := range t.reservations {
-		out = append(out, *r)
+		if r != nil {
+			out = append(out, *cloneReservation(r))
+		}
 	}
+	sort.Slice(out, func(i, j int) bool { return out[i].NodeID < out[j].NodeID })
 	return out
 }
 
 // Load reads the reservation table from disk. A missing file is not an error.
 func (t *ReservationTable) Load() error {
+	if t == nil {
+		return fmt.Errorf("reservation table is nil")
+	}
+	t.mu.Lock()
+	defer t.mu.Unlock()
 	if t.filePath == "" {
 		return nil
 	}
@@ -297,38 +384,189 @@ func (t *ReservationTable) Load() error {
 	if err := json.Unmarshal(data, &entries); err != nil {
 		return err
 	}
-	t.mu.Lock()
-	defer t.mu.Unlock()
-	t.reservations = make(map[string]*PeerReservation, len(entries))
-	for _, e := range entries {
-		if e != nil && e.NodeID != "" {
-			t.reservations[e.NodeID] = e
-		}
+	if entries == nil {
+		return fmt.Errorf("reservations must be a JSON array")
 	}
+	loaded := make(map[string]*PeerReservation, len(entries))
+	for i, entry := range entries {
+		normalized, err := normalizeReservation(entry)
+		if err != nil {
+			return fmt.Errorf("reservation entry %d: %w", i, err)
+		}
+		if _, exists := loaded[normalized.NodeID]; exists {
+			return fmt.Errorf("reservation entry %d: duplicate node id %q", i, normalized.NodeID)
+		}
+		loaded[normalized.NodeID] = normalized
+	}
+	t.reservations = loaded
 	return nil
 }
 
 // Save writes the reservation table to disk. It is a no-op when no data
 // directory is configured (e.g. standalone / in-memory tests).
 func (t *ReservationTable) Save() error {
+	if t == nil {
+		return fmt.Errorf("reservation table is nil")
+	}
 	if t.filePath == "" {
 		return nil
 	}
-	t.mu.RLock()
-	entries := make([]*PeerReservation, 0, len(t.reservations))
-	for _, r := range t.reservations {
-		entries = append(entries, r)
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	_, err := t.saveLocked()
+	return err
+}
+
+func (t *ReservationTable) saveLocked() (bool, error) {
+	if t.filePath == "" {
+		return true, nil
 	}
-	t.mu.RUnlock()
+	entries := make([]*PeerReservation, 0, len(t.reservations))
+	seen := make(map[string]struct{}, len(t.reservations))
+	for _, r := range t.reservations {
+		normalized, err := normalizeReservation(r)
+		if err != nil {
+			return false, err
+		}
+		if _, exists := seen[normalized.NodeID]; exists {
+			return false, fmt.Errorf("duplicate node id %q", normalized.NodeID)
+		}
+		seen[normalized.NodeID] = struct{}{}
+		entries = append(entries, normalized)
+	}
+	sort.Slice(entries, func(i, j int) bool { return entries[i].NodeID < entries[j].NodeID })
 
 	data, err := json.MarshalIndent(entries, "", "  ")
 	if err != nil {
-		return err
+		return false, err
 	}
-	if err := os.MkdirAll(filepath.Dir(t.filePath), 0o755); err != nil {
-		return err
+	writer := t.writeFile
+	if writer == nil {
+		writer = writeAtomicFile
 	}
-	return os.WriteFile(t.filePath, data, 0o600)
+	return writer(t.filePath, data, 0o600)
+}
+
+func cloneCachedEndpoint(entry *CachedEndpoint) *CachedEndpoint {
+	if entry == nil {
+		return nil
+	}
+	copy := *entry
+	return &copy
+}
+
+func validateCachedEndpoint(entry *CachedEndpoint) error {
+	if entry == nil {
+		return fmt.Errorf("nil endpoint")
+	}
+	if strings.TrimSpace(entry.Address) == "" {
+		return fmt.Errorf("empty address")
+	}
+	if entry.Port == 0 {
+		return fmt.Errorf("invalid port 0")
+	}
+	endpoint, err := ParseEndpoint(entry.Address)
+	if err != nil {
+		return fmt.Errorf("invalid address %q: %w", entry.Address, err)
+	}
+	if endpoint.Port != entry.Port {
+		return fmt.Errorf("address port %d does not match port %d", endpoint.Port, entry.Port)
+	}
+	if entry.LastSeen.IsZero() {
+		return fmt.Errorf("missing last_seen")
+	}
+	if entry.Valence < 0 || entry.FailCount < 0 {
+		return fmt.Errorf("negative counters")
+	}
+	return nil
+}
+
+func cloneReservation(r *PeerReservation) *PeerReservation {
+	if r == nil {
+		return nil
+	}
+	copy := *r
+	return &copy
+}
+
+func normalizeReservation(r *PeerReservation) (*PeerReservation, error) {
+	if r == nil {
+		return nil, fmt.Errorf("nil reservation")
+	}
+	canonical, err := canonicalNodePublicKey(r.NodeID)
+	if err != nil {
+		return nil, fmt.Errorf("invalid node id %q: %w", r.NodeID, err)
+	}
+	normalized := cloneReservation(r)
+	normalized.NodeID = canonical
+	return normalized, nil
+}
+
+func canonicalNodePublicKey(nodeID string) (string, error) {
+	if strings.TrimSpace(nodeID) != nodeID || nodeID == "" {
+		return "", fmt.Errorf("empty or whitespace-padded node id")
+	}
+	raw, err := addresscodec.DecodeNodePublicKey(nodeID)
+	if err != nil {
+		return "", err
+	}
+	if len(raw) != 33 || (raw[0] != 0xED && raw[0] != 0x02 && raw[0] != 0x03) {
+		return "", fmt.Errorf("invalid node public key type or length")
+	}
+	canonical, err := addresscodec.EncodeNodePublicKey(raw)
+	if err != nil {
+		return "", err
+	}
+	return canonical, nil
+}
+
+type atomicFileWriter func(path string, data []byte, mode os.FileMode) (committed bool, err error)
+
+func writeAtomicFile(path string, data []byte, mode os.FileMode) (bool, error) {
+	dir := filepath.Dir(path)
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return false, err
+	}
+	tmp, err := os.CreateTemp(dir, "."+filepath.Base(path)+".tmp-*")
+	if err != nil {
+		return false, err
+	}
+	tmpName := tmp.Name()
+	removeTemp := true
+	defer func() {
+		if removeTemp {
+			_ = os.Remove(tmpName)
+		}
+	}()
+	if err := tmp.Chmod(mode); err != nil {
+		_ = tmp.Close()
+		return false, err
+	}
+	if _, err := tmp.Write(data); err != nil {
+		_ = tmp.Close()
+		return false, err
+	}
+	if err := tmp.Sync(); err != nil {
+		_ = tmp.Close()
+		return false, err
+	}
+	if err := tmp.Close(); err != nil {
+		return false, err
+	}
+	if err := os.Rename(tmpName, path); err != nil {
+		return false, err
+	}
+	removeTemp = false
+	dirFile, err := os.Open(dir)
+	if err != nil {
+		return true, err
+	}
+	syncErr := dirFile.Sync()
+	closeErr := dirFile.Close()
+	if syncErr != nil {
+		return true, syncErr
+	}
+	return true, closeErr
 }
 
 // Reservations exposes the reservation table backing the peer_reservations_*
@@ -470,14 +708,12 @@ func (d *Discovery) now() time.Time {
 func (d *Discovery) Start(ctx context.Context) error {
 	if d.bootCache != nil {
 		if err := d.bootCache.Load(); err != nil {
-			slog.Warn("Peer boot cache could not be loaded; continuing with an empty cache",
-				"t", "Discovery", "path", d.bootCache.filePath, "err", err)
+			return fmt.Errorf("load peer boot cache %q: %w", d.bootCache.filePath, err)
 		}
 	}
 	if d.reservation != nil {
 		if err := d.reservation.Load(); err != nil {
-			slog.Warn("Peer reservations could not be loaded; continuing with an empty table",
-				"t", "Discovery", "path", d.reservation.filePath, "err", err)
+			return fmt.Errorf("load peer reservations %q: %w", d.reservation.filePath, err)
 		}
 	}
 
@@ -608,7 +844,9 @@ func (d *Discovery) Stop() {
 		d.wg.Wait()
 
 		if d.bootCache != nil {
-			d.bootCache.Save()
+			if err := d.bootCache.Save(); err != nil {
+				slog.Warn("Peer boot cache could not be saved", "t", "Discovery", "path", d.bootCache.filePath, "err", err)
+			}
 		}
 	})
 }
