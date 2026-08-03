@@ -14,9 +14,7 @@ import (
 
 // newTestSubscriptionManager creates a new subscription.Manager for testing
 func newTestSubscriptionManager() *subscription.Manager {
-	return &subscription.Manager{
-		Connections: make(map[string]*types.Connection),
-	}
+	return subscription.NewManager()
 }
 
 // newTestConnection creates a new Connection for testing
@@ -1708,8 +1706,8 @@ func TestSubscribeMixedStreamsAccountsAndBooks(t *testing.T) {
 	sm.RemoveConnection(conn.ID)
 }
 
-// URL (RPCSub) subscription tests live in rpcsub_test.go: url requests are
-// routed to the URLSubscriptionRegistry before reaching the manager.
+// URL (RPCSub) subscription tests live in rpcsub_test.go: URL requests are
+// routed to the URL service before reaching the manager.
 
 // TestSubscribeBookBoth_AutoSubscribesReverse exercises the
 // `both:true` shorthand: the subscription manager should register both

@@ -8,6 +8,7 @@ import (
 
 	binarycodec "github.com/LeJamon/go-xrpl/codec/binarycodec"
 	"github.com/LeJamon/go-xrpl/crypto/sha512half"
+	"github.com/LeJamon/go-xrpl/internal/rpc/txprojection"
 	"github.com/LeJamon/go-xrpl/internal/rpc/types"
 	xrpllog "github.com/LeJamon/go-xrpl/log"
 )
@@ -130,7 +131,7 @@ func (m *SubmitMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (an
 
 	// Inject DeliverMax for Payment transactions, matching rippled's
 	// RPC::insertDeliverMax behavior in TransactionSign.cpp.
-	injectDeliverMax(txJsonMap, ctx.ApiVersion)
+	txprojection.InjectDeliverMax(txJsonMap, ctx.ApiVersion)
 
 	// For API v2+: add hash at root level of response, matching
 	// transactionFormatResultImpl in TransactionSign.cpp.

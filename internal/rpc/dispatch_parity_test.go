@@ -122,7 +122,7 @@ func TestSingleRequestParseFailuresReturn400(t *testing.T) {
 // warning:"load" INSIDE result (rippled ServerHandler.cpp:919-920 → :938/:971),
 // not at the top level (which is the WS placement, :519).
 func TestLoadWarningNestedInResultOnHTTP(t *testing.T) {
-	body := buildXrplResponseBody(nil, map[string]any{"foo": "bar"}, nil, &JsonRpcResponseOptions{Warning: "load"})
+	body := buildXrplResponseBody(nil, map[string]any{"foo": "bar"}, nil, &jsonRPCResponseOptions{Warning: "load"})
 	result, ok := body["result"].(map[string]any)
 	require.True(t, ok)
 	assert.Equal(t, "load", result["warning"], "HTTP load warning belongs inside result")

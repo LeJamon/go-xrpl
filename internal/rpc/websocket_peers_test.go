@@ -40,7 +40,7 @@ func TestWebSocket_PeersRPC_UsesPeerSource(t *testing.T) {
 	peersList, ok := peers["result"].(map[string]any)["peers"].([]any)
 	require.True(t, ok, "peers result must contain a `peers` array")
 	assert.Len(t, peersList, len(src.peers),
-		"`peers` RPC over WS must return one entry per overlay peer (issue #419)")
+		"`peers` RPC over WS must return one entry per overlay peer")
 
 	info := wsCall(t, conn, map[string]any{"command": "server_info", "id": 2})
 	infoMap := info["result"].(map[string]any)["info"].(map[string]any)

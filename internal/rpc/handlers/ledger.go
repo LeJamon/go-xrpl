@@ -12,6 +12,7 @@ import (
 	addresscodec "github.com/LeJamon/go-xrpl/codec/addresscodec"
 	binarycodec "github.com/LeJamon/go-xrpl/codec/binarycodec"
 	ledgerheader "github.com/LeJamon/go-xrpl/internal/ledger/header"
+	"github.com/LeJamon/go-xrpl/internal/rpc/txprojection"
 	"github.com/LeJamon/go-xrpl/internal/rpc/types"
 	"github.com/LeJamon/go-xrpl/internal/tx/mptutil"
 	"github.com/LeJamon/go-xrpl/protocol"
@@ -618,10 +619,10 @@ func buildQueueTxBody(qtx types.QueuedTxInfo, binary, expanded bool, apiVersion 
 		return body
 	}
 	if apiVersion > 1 {
-		txJSON := projectTransactionJSON(qtx.TxJSON, "", apiVersion)
+		txJSON := txprojection.ProjectJSON(qtx.TxJSON, "", apiVersion)
 		return map[string]any{"tx_json": txJSON, "hash": hashStr, "validated": false}
 	}
-	return projectTransactionJSON(qtx.TxJSON, hashStr, apiVersion)
+	return txprojection.ProjectJSON(qtx.TxJSON, hashStr, apiVersion)
 }
 
 // expandTransaction builds an expanded transaction object from raw txData.
@@ -688,7 +689,7 @@ func expandStoredTransaction(
 	}
 
 	if apiVersion > 1 {
-		txEntry["tx_json"] = projectTransactionJSON(storedTx.TxJSON, "", apiVersion)
+		txEntry["tx_json"] = txprojection.ProjectJSON(storedTx.TxJSON, "", apiVersion)
 		txEntry["hash"] = hashStr
 		if storedTx.Meta != nil {
 			injectExpandedLedgerDeliveredAmount(storedTx.TxJSON, storedTx.Meta, ctx)
@@ -696,7 +697,7 @@ func expandStoredTransaction(
 			txEntry["meta"] = storedTx.Meta
 		}
 	} else {
-		maps.Copy(txEntry, projectTransactionJSON(storedTx.TxJSON, hashStr, apiVersion))
+		maps.Copy(txEntry, txprojection.ProjectJSON(storedTx.TxJSON, hashStr, apiVersion))
 		if storedTx.Meta != nil {
 			injectExpandedLedgerDeliveredAmount(storedTx.TxJSON, storedTx.Meta, ctx)
 			InjectMPTokenIssuanceID(storedTx.TxJSON, storedTx.Meta)

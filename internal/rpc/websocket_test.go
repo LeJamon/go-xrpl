@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"io"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -64,7 +65,6 @@ func (l *blockingWriteListener) Accept() (net.Conn, error) {
 
 // TestWebSocketServer_Close_JoinsHandlers verifies that Close blocks until
 // all per-connection goroutines (read loop, send pump, ping loop) have exited.
-// Regression test for issue #186.
 func TestWebSocketServer_Close_JoinsHandlers(t *testing.T) {
 	ws := NewWebSocketServer(WebSocketServerOptions{Timeout: 30 * time.Second})
 
@@ -353,6 +353,16 @@ func TestWebSocketServer_Close_RejectsNewConnections(t *testing.T) {
 	if resp.StatusCode != http.StatusServiceUnavailable {
 		t.Fatalf("status = %d, want %d", resp.StatusCode, http.StatusServiceUnavailable)
 	}
+	if got := resp.Header.Get("Content-Type"); got != jsonContentType {
+		t.Fatalf("Content-Type = %q, want %q", got, jsonContentType)
+	}
+	body, readErr := io.ReadAll(resp.Body)
+	if readErr != nil {
+		t.Fatalf("read rejection body: %v", readErr)
+	}
+	if got := string(body); got != "server shutting down\r\n" {
+		t.Fatalf("rejection body = %q, want exact plain HTTP error", got)
+	}
 }
 
 func TestWebSocketServer_Close_WaitsForInFlightUpgrade(t *testing.T) {
@@ -448,10 +458,9 @@ func TestWebSocketServer_Close_WaitsForInFlightUpgrade(t *testing.T) {
 
 // TestWebSocketServer_ConcurrentWrites_NoRace drives the ping path and the
 // data-send path against the same gorilla *websocket.Conn at once. pingLoop
-// (and Close) must write their control frames via WriteControl so they
-// serialize against handleSend's message-frame writes; the old WriteMessage
-// calls touched gorilla's unguarded single-writer state and raced handleSend.
-// Run under -race to catch a regression. Regression test for issue #746.
+// and Close write control frames via WriteControl so they serialize against
+// handleSend's message-frame writes. Run under -race to enforce gorilla's
+// single-writer invariant.
 func TestWebSocketServer_ConcurrentWrites_NoRace(t *testing.T) {
 	ws := NewWebSocketServer(WebSocketServerOptions{Timeout: 30 * time.Second})
 	ws.pingInterval = time.Millisecond // hammer the ping path during the test
@@ -531,8 +540,8 @@ func TestWebSocketServer_New_Concurrent(t *testing.T) {
 // TestWebSocketSubscribeErrorWireEnvelope asserts the full wire envelope a
 // subscribe validation failure produces over a live WebSocket: rippled puts
 // the token in `error`, the numeric code in `error_code` and the
-// ErrorCodes.cpp default text in `error_message` (issue #828 regression —
-// these envelopes previously went out as `"error": ""` with code 31).
+// ErrorCodes.cpp default text in `error_message`; the token and numeric code
+// are part of the wire contract.
 func TestWebSocketSubscribeErrorWireEnvelope(t *testing.T) {
 	ws := NewWebSocketServer(WebSocketServerOptions{Timeout: 30 * time.Second})
 
@@ -800,7 +809,7 @@ func TestWebSocketJSONInvalidWireEnvelope(t *testing.T) {
 		want    string
 	}{
 		{name: "malformed", request: `{`, want: `{"error":"jsonInvalid","type":"error","value":"<redacted>"}`},
-		{name: "oversized", request: strings.Repeat(" ", MaxRequestBytes+1), want: `{"error":"jsonInvalid","type":"error","value":"<redacted>"}`},
+		{name: "oversized", request: strings.Repeat(" ", maxRequestBytes+1), want: `{"error":"jsonInvalid","type":"error","value":"<redacted>"}`},
 		{name: "null", request: `null`, want: `{"error":"jsonInvalid","type":"error","value":"null"}`},
 		{name: "scalar", request: `7`, want: `{"error":"jsonInvalid","type":"error","value":"7"}`},
 		{name: "redacted array", request: `[{"secret":"private seed","nested":{"Seed":"nested seed"}}]`, want: `{"error":"jsonInvalid","type":"error","value":"[{\"nested\":{\"Seed\":\"<masked>\"},\"secret\":\"<masked>\"}]"}`},

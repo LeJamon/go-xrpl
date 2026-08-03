@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/LeJamon/go-xrpl/internal/rpc/txprojection"
 	"github.com/LeJamon/go-xrpl/internal/rpc/types"
 	txcore "github.com/LeJamon/go-xrpl/internal/tx"
 	"github.com/LeJamon/go-xrpl/protocol"
@@ -109,7 +110,7 @@ func (m *TransactionEntryMethod) Handle(ctx *types.RpcContext, params json.RawMe
 	hashString := strings.ToUpper(txHashString)
 
 	response := map[string]any{
-		"tx_json": projectTransactionJSON(storedTx.TxJSON, hashString, ctx.ApiVersion),
+		"tx_json": txprojection.ProjectJSON(storedTx.TxJSON, hashString, ctx.ApiVersion),
 	}
 
 	if storedTx.Meta != nil {

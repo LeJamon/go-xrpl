@@ -396,7 +396,7 @@ func TestBuildXrplResponseBodyDoesNotMutateHandlerResult(t *testing.T) {
 		"nested": map[string]any{"ok": true},
 	}
 
-	response := buildXrplResponseBody(nil, result, nil, &JsonRpcResponseOptions{Warning: "load"})
+	response := buildXrplResponseBody(nil, result, nil, &jsonRPCResponseOptions{Warning: "load"})
 
 	assert.True(t, reflect.DeepEqual(want, result), "handler result mutated: %v", result)
 	assert.NotContains(t, result, "status")
@@ -509,7 +509,7 @@ func TestHTTPParseBoundaryUsesFixedResponse(t *testing.T) {
 		{name: "integer above range", body: `{"method":"ping","params":[{"id":4294967296}]}`},
 		{name: "real out of range", body: `{"method":"ping","params":[{"id":1e999}]}`},
 		{name: "too deeply nested", body: nestedJSONObject(26)},
-		{name: "oversized", body: strings.Repeat(" ", MaxRequestBytes+1)},
+		{name: "oversized", body: strings.Repeat(" ", maxRequestBytes+1)},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {

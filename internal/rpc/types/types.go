@@ -528,8 +528,7 @@ const MaxConsecutiveDrops = 8
 // Connection represents a WebSocket connection for subscription
 // management. The struct is shared between subscription.Manager and
 // the WebSocket server so both observe the same drop counter and
-// disconnect callback — eliminates the double-bookkeeping pattern
-// flagged in the #428 audit.
+// disconnect callback without duplicate connection bookkeeping.
 type Connection struct {
 	ID            string
 	Subscriptions map[SubscriptionType]SubscriptionConfig

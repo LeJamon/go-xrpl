@@ -200,23 +200,6 @@ type PeerStatusEvent struct {
 	LedgerIndexMin *uint32 `json:"ledger_index_min,omitempty"` // Min ledger index peer has — nil unless paired with max
 }
 
-// Peer status actions — rippled PeerImp.cpp:1921-1932.
-const (
-	PeerActionClosingLedger  = "CLOSING_LEDGER"
-	PeerActionAcceptedLedger = "ACCEPTED_LEDGER"
-	PeerActionSwitchedLedger = "SWITCHED_LEDGER"
-	PeerActionLostSync       = "LOST_SYNC"
-)
-
-// Peer status strings — rippled PeerImp.cpp:1899-1913.
-const (
-	PeerStatusConnecting = "CONNECTING"
-	PeerStatusConnected  = "CONNECTED"
-	PeerStatusMonitoring = "MONITORING"
-	PeerStatusValidating = "VALIDATING"
-	PeerStatusShutting   = "SHUTTING"
-)
-
 // PathFindEvent represents path finding results
 // This is sent in response to path_find create requests
 type PathFindEvent struct {

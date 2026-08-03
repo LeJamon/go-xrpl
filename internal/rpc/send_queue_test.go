@@ -21,8 +21,8 @@ func TestResolveSendQueueLimit(t *testing.T) {
 		want    int
 		wantErr bool
 	}{
-		{name: "nil context", want: DefaultSendQueueLimit},
-		{name: "zero uses default", value: 0, want: DefaultSendQueueLimit},
+		{name: "nil context", want: defaultSendQueueLimit},
+		{name: "zero uses default", value: 0, want: defaultSendQueueLimit},
 		{name: "minimum explicit value", value: 1, want: 1},
 		{name: "maximum explicit value", value: maxSendQueueLimit, want: maxSendQueueLimit},
 		{name: "negative rejected", value: -1, wantErr: true},
@@ -51,7 +51,7 @@ func TestWebSocketSendQueueLimitRealHandshake(t *testing.T) {
 		value int
 		want  int
 	}{
-		{name: "zero uses default", value: 0, want: DefaultSendQueueLimit},
+		{name: "zero uses default", value: 0, want: defaultSendQueueLimit},
 		{name: "minimum explicit value", value: 1, want: 1},
 		{name: "maximum explicit value", value: maxSendQueueLimit, want: maxSendQueueLimit},
 	} {

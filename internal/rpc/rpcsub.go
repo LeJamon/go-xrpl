@@ -93,9 +93,9 @@ func (m *rpcSubMetrics) recordDeliveryFailure(endpoint, reason string, details .
 	wsLog().Warn("rpcsub: delivery failures", args...)
 }
 
-// URLSubscriptionRegistry owns URL-based admin subscriptions. Each URL maps
+// urlSubscriptionRegistry owns URL-based admin subscriptions. Each URL maps
 // to one subscriber in the shared manager and one delivery goroutine.
-type URLSubscriptionRegistry struct {
+type urlSubscriptionRegistry struct {
 	ws     *WebSocketServer
 	client *http.Client
 	// ctx cancels in-flight deliveries on Close so shutdown isn't held
@@ -117,9 +117,9 @@ type URLSubscriptionRegistry struct {
 	closeDone        chan struct{}
 }
 
-func newURLSubscriptionRegistry(ws *WebSocketServer) *URLSubscriptionRegistry {
+func newURLSubscriptionRegistry(ws *WebSocketServer) *urlSubscriptionRegistry {
 	ctx, cancel := context.WithCancel(context.Background())
-	return &URLSubscriptionRegistry{
+	return &urlSubscriptionRegistry{
 		ws: ws,
 		client: &http.Client{
 			Timeout: rpcSubRequestTimeout,
@@ -139,7 +139,7 @@ func newURLSubscriptionRegistry(ws *WebSocketServer) *URLSubscriptionRegistry {
 	}
 }
 
-func (r *URLSubscriptionRegistry) metricsSnapshot() rpcSubMetricsSnapshot {
+func (r *urlSubscriptionRegistry) metricsSnapshot() rpcSubMetricsSnapshot {
 	return r.metrics.snapshot()
 }
 
@@ -148,7 +148,7 @@ func (r *URLSubscriptionRegistry) metricsSnapshot() rpcSubMetricsSnapshot {
 // Mirrors doSubscribe's URL branch for credential reuse: on an existing
 // destination only deprecated username/password members update credentials.
 // The caller has already verified the admin role.
-func (r *URLSubscriptionRegistry) Subscribe(ctx *types.RpcContext, request types.SubscriptionRequest) (map[string]any, *types.RpcError) {
+func (r *urlSubscriptionRegistry) Subscribe(ctx *types.RpcContext, request types.SubscriptionRequest) (map[string]any, *types.RpcError) {
 	if ctx != nil {
 		request.ApiVersion = ctx.ApiVersion
 	}
@@ -192,7 +192,7 @@ func (r *URLSubscriptionRegistry) Subscribe(ctx *types.RpcContext, request types
 // Unsubscribe removes the listed streams/accounts/books from the url's
 // subscriber and drops the registry entry once no stream subscriptions
 // remain. An unknown URL is a silent success.
-func (r *URLSubscriptionRegistry) Unsubscribe(ctx *types.RpcContext, request types.SubscriptionRequest) (map[string]any, *types.RpcError) {
+func (r *urlSubscriptionRegistry) Unsubscribe(ctx *types.RpcContext, request types.SubscriptionRequest) (map[string]any, *types.RpcError) {
 	key, rpcErr := canonicalRPCSubURL(request.URL)
 	if rpcErr != nil {
 		// Unsubscribe has always treated an unknown destination as a no-op.
@@ -224,7 +224,7 @@ type rpcSubLookup struct {
 	password string
 }
 
-func (r *URLSubscriptionRegistry) findOrCreateLocked(request types.SubscriptionRequest, key, principal string) (rpcSubLookup, *types.RpcError) {
+func (r *urlSubscriptionRegistry) findOrCreateLocked(request types.SubscriptionRequest, key, principal string) (rpcSubLookup, *types.RpcError) {
 	if r.subs == nil {
 		r.subs = make(map[string]*rpcSub)
 	}
@@ -290,7 +290,7 @@ func (r *URLSubscriptionRegistry) findOrCreateLocked(request types.SubscriptionR
 	return rpcSubLookup{sub: sub, created: true}, nil
 }
 
-func (r *URLSubscriptionRegistry) capacityError(kind, principal string) *types.RpcError {
+func (r *urlSubscriptionRegistry) capacityError(kind, principal string) *types.RpcError {
 	value := r.metrics.capacityRejects.Add(1)
 	if rpcSubMetricMilestone(value) {
 		wsLog().Warn("rpcsub: subscription capacity exhausted", "kind", kind, "principal", principal, "count", value, "entries", len(r.subs), "workers", r.workers)
@@ -298,7 +298,7 @@ func (r *URLSubscriptionRegistry) capacityError(kind, principal string) *types.R
 	return types.RpcErrorTooBusy()
 }
 
-func (r *URLSubscriptionRegistry) tryRemoveLocked(key string) *rpcSub {
+func (r *urlSubscriptionRegistry) tryRemoveLocked(key string) *rpcSub {
 	sub, ok := r.subs[key]
 	if !ok {
 		return nil
@@ -309,7 +309,7 @@ func (r *URLSubscriptionRegistry) tryRemoveLocked(key string) *rpcSub {
 	return r.removeLocked(key, sub)
 }
 
-func (r *URLSubscriptionRegistry) removeLocked(key string, sub *rpcSub) *rpcSub {
+func (r *urlSubscriptionRegistry) removeLocked(key string, sub *rpcSub) *rpcSub {
 	if current, ok := r.subs[key]; !ok || current != sub {
 		return nil
 	}
@@ -333,7 +333,7 @@ func waitRPCSub(sub *rpcSub) {
 
 // Close stops every url subscription, cancelling in-flight deliveries, and
 // waits for the delivery goroutines to exit.
-func (r *URLSubscriptionRegistry) Close() {
+func (r *urlSubscriptionRegistry) Close() {
 	r.mu.Lock()
 	if r.closed {
 		closeDone := r.closeDone
@@ -427,7 +427,7 @@ type rpcSub struct {
 	client    *http.Client
 	ctx       context.Context
 	cancel    context.CancelFunc
-	registry  *URLSubscriptionRegistry
+	registry  *urlSubscriptionRegistry
 	principal string
 	metrics   *rpcSubMetrics
 	conn      *types.Connection
@@ -523,7 +523,7 @@ func (s *rpcSub) run() {
 	}
 }
 
-func (r *URLSubscriptionRegistry) workerStopped(principal string) {
+func (r *urlSubscriptionRegistry) workerStopped(principal string) {
 	r.mu.Lock()
 	if r.workers > 0 {
 		r.workers--

@@ -11,6 +11,7 @@ import (
 	addresscodec "github.com/LeJamon/go-xrpl/codec/addresscodec"
 	binarycodec "github.com/LeJamon/go-xrpl/codec/binarycodec"
 	"github.com/LeJamon/go-xrpl/internal/ledger/service/svcerr"
+	"github.com/LeJamon/go-xrpl/internal/rpc/txprojection"
 	"github.com/LeJamon/go-xrpl/internal/rpc/types"
 	"github.com/LeJamon/go-xrpl/internal/tx"
 	"github.com/LeJamon/go-xrpl/internal/tx/sign"
@@ -172,7 +173,7 @@ type signResult struct {
 }
 
 func formatSignResult(result signResult, apiVersion int) map[string]any {
-	injectDeliverMax(result.TxMap, apiVersion)
+	txprojection.InjectDeliverMax(result.TxMap, apiVersion)
 	response := map[string]any{
 		"tx_blob": result.TxBlob,
 		"tx_json": result.TxMap,

@@ -861,10 +861,9 @@ func (r *nodeRuntime) bindRPC() error {
 }
 
 func (r *nodeRuntime) bindStreams() error {
-	// Wire the WebSocket event sources that previously had a publisher
-	// helper but no upstream subscriber. Each call mirrors a rippled
-	// pubXxx feed (NetworkOPs.cpp); without them the corresponding
-	// streams accepted subscribers but never delivered.
+	// Wire each WebSocket event source to its upstream publisher. Each call
+	// mirrors a rippled pubXxx feed (NetworkOPs.cpp), so subscribed streams
+	// receive the corresponding ledger and network events.
 	if r.consensus != nil && r.consensus.Overlay != nil {
 		// pubPeerStatus → peer_status (NetworkOPs.cpp:2514-2540).
 		r.consensus.Overlay.SetPeerStatusPublisher(func(u peermanagement.PeerStatusUpdate) {
