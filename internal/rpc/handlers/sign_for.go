@@ -2,20 +2,18 @@ package handlers
 
 import (
 	"bytes"
-	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"io"
 	"math"
-	"reflect"
 	"sort"
-	"strings"
+	"strconv"
 
 	addresscodec "github.com/LeJamon/go-xrpl/codec/addresscodec"
 	binarycodec "github.com/LeJamon/go-xrpl/codec/binarycodec"
-	"github.com/LeJamon/go-xrpl/crypto/ed25519"
-	"github.com/LeJamon/go-xrpl/crypto/secp256k1"
-	"github.com/LeJamon/go-xrpl/internal/ledger/state"
 	"github.com/LeJamon/go-xrpl/internal/rpc/types"
+	"github.com/LeJamon/go-xrpl/internal/tx"
+	"github.com/LeJamon/go-xrpl/internal/tx/sign"
 )
 
 // SignForMethod handles the sign_for RPC method
@@ -58,8 +56,14 @@ func (m *SignForMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (r
 
 	signatureTargetPresent := jsonFieldPresent(params, "signature_target")
 	var txMap map[string]any
-	if err := json.Unmarshal(request.TxJson, &txMap); err != nil {
+	decoder := json.NewDecoder(bytes.NewReader(request.TxJson))
+	decoder.UseNumber()
+	if err := decoder.Decode(&txMap); err != nil {
 		return nil, types.RpcErrorInvalidParams(fmt.Sprintf("Invalid tx_json: %v", err))
+	}
+	var trailing any
+	if err := decoder.Decode(&trailing); err != io.EOF {
+		return nil, types.RpcErrorInvalidParams("Invalid tx_json: expected object")
 	}
 	if txMap == nil {
 		return nil, types.RpcErrorExpectedField("tx_json", "object")
@@ -75,8 +79,7 @@ func (m *SignForMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (r
 			if !ok {
 				return nil, types.RpcErrorMissingField("tx_json.NetworkID")
 			}
-			n, ok := v.(float64)
-			if !ok || n != math.Trunc(n) || n < 0 || uint32(n) != networkID {
+			if n, ok := integralNetworkID(v); !ok || n != networkID {
 				return nil, types.RpcErrorInvalidField("tx_json.NetworkID")
 			}
 		}
@@ -98,7 +101,7 @@ func (m *SignForMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (r
 		}
 	}
 
-	privateKey, publicKey, keyType, rpcErr := request.signCredentials.deriveKeypair(ctx.ApiVersion, params)
+	privateKey, publicKey, _, rpcErr := request.signCredentials.deriveKeypair(ctx.ApiVersion, params)
 	if rpcErr != nil {
 		return nil, rpcErr
 	}
@@ -121,20 +124,23 @@ func (m *SignForMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (r
 		return nil, rpcErrorAlreadySingleSigned()
 	}
 
-	// sigContainer holds the Signers array the new signature is appended to:
-	// the transaction itself, or the nested CounterpartySignature object.
-	sigContainer := txMap
 	if signatureTargetPresent {
 		nested, targetErr := signatureTargetObject(txMap, request.SignatureTarget)
 		if targetErr != nil {
 			return nil, targetErr
 		}
 		nested["SigningPubKey"] = ""
-		sigContainer = nested
 	}
-	transaction, rpcErr := parseTransactionForSigning(txMap)
+	transaction, rpcErr := preprocessTransaction(txMap, transactionPreprocessOptions{
+		mode:            transactionPreprocessSignFor,
+		preserveSigners: true,
+	})
 	if rpcErr != nil {
 		return nil, rpcErr
+	}
+	feePayer := transaction.GetCommon().Account
+	if transaction.GetCommon().Delegate != "" {
+		feePayer = transaction.GetCommon().Delegate
 	}
 	derivedAccount, derivationErr := addresscodec.EncodeClassicAddressFromPublicKeyHex(publicKey)
 	if derivationErr != nil {
@@ -144,68 +150,99 @@ func (m *SignForMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (r
 		return nil, rpcErr
 	}
 
-	signers := make([]map[string]any, 0, 1)
-	if existing, ok := sigContainer["Signers"]; ok {
-		var signerErr *types.RpcError
-		signers, signerErr = signerMaps(existing)
-		if signerErr != nil {
-			return nil, signerErr
-		}
-	}
-
-	txMapForSigning := make(map[string]any)
-	for k, v := range txMap {
-		if k != "Signers" {
-			txMapForSigning[k] = v
-		}
-	}
-
-	// Encode for multisigning (adds the signer's account as suffix)
-	var signingPayload string
-	var err error
+	common := transaction.GetCommon()
+	signers := common.Signers
 	if signatureTargetPresent {
-		signingPayload, err = binarycodec.EncodeForMultisigningTarget(txMapForSigning, request.Account)
-	} else {
-		signingPayload, err = binarycodec.EncodeForMultisigning(txMapForSigning, request.Account)
+		if common.CounterpartySignature == nil {
+			return nil, types.RpcErrorInvalidParams("Invalid field 'tx_json.CounterpartySignature'.")
+		}
+		signers = common.CounterpartySignature.Signers
 	}
-	if err != nil {
-		return nil, rpcInternalError("sign_for: multisigning payload encoding failed", err)
-	}
-
-	// Sign the payload
-	signature, err := signPayload(signingPayload, privateKey, keyType)
-	if err != nil {
-		return nil, rpcInternalError("sign_for: transaction signing failed", err)
-	}
-
-	newSigner := map[string]any{
-		"Signer": map[string]any{
-			"Account":       request.Account,
-			"SigningPubKey": publicKey,
-			"TxnSignature":  signature,
-		},
-	}
-
-	signers = append(signers, newSigner)
-	feePayer := transaction.GetCommon().Account
-	if transaction.GetCommon().Delegate != "" {
-		feePayer = transaction.GetCommon().Delegate
-	}
-	if signerErr := sortAndValidateSignerMaps(signers, feePayer); signerErr != nil {
+	canonicalSigners, signerErr := normalizeTypedSigners(signers, feePayer)
+	if signerErr != nil {
 		return nil, signerErr
 	}
 
-	sigContainer["Signers"] = signers
+	// Sign the canonical transaction representation. The signature target only
+	// changes the multisigning preimage; the parsed transaction remains the
+	// object that receives the new signer and is flattened below.
+	var signature string
+	var err error
+	if signatureTargetPresent {
+		signature, err = sign.SignTransactionForMultiSignTarget(transaction, request.Account, privateKey)
+	} else {
+		signature, err = sign.SignTransactionForMultiSign(transaction, request.Account, privateKey)
+	}
+	if err != nil {
+		return nil, rpcInternalError("sign_for: multisigning payload signing failed", err)
+	}
 
-	txBlob, err := binarycodec.Encode(txMap)
+	canonicalAccount, accountErr := canonicalAccountID(request.Account)
+	if accountErr != nil {
+		return nil, types.RpcErrorInvalidParams("Invalid field 'account'.")
+	}
+	canonicalSigners = append(canonicalSigners, tx.SignerWrapper{Signer: tx.Signer{
+		Account:       canonicalAccount,
+		SigningPubKey: publicKey,
+		TxnSignature:  signature,
+	}})
+	canonicalSigners, signerErr = normalizeTypedSigners(canonicalSigners, feePayer)
+	if signerErr != nil {
+		return nil, signerErr
+	}
+
+	if signatureTargetPresent {
+		common.CounterpartySignature.Signers = canonicalSigners
+	} else {
+		common.Signers = canonicalSigners
+	}
+
+	canonicalMap, err := flattenCanonicalTransaction(transaction, txMap)
+	if err != nil {
+		return nil, rpcInternalError("sign_for: transaction flattening failed", err)
+	}
+	normalizeSignerResponseContainers(canonicalMap)
+	txBlob, err := binarycodec.Encode(canonicalMap)
 	if err != nil {
 		return nil, rpcInternalError("sign_for: transaction encoding failed", err)
 	}
 
 	txHash := CalculateTxHash(txBlob)
-	txMap["hash"] = txHash
+	canonicalMap["hash"] = txHash
 
-	return formatSignResult(signResult{TxMap: txMap, TxBlob: txBlob}, ctx.ApiVersion), nil
+	return formatSignResult(signResult{TxMap: canonicalMap, TxBlob: txBlob}, ctx.ApiVersion), nil
+}
+
+func integralNetworkID(value any) (uint32, bool) {
+	switch number := value.(type) {
+	case json.Number:
+		parsed, err := strconv.ParseUint(string(number), 10, 32)
+		return uint32(parsed), err == nil
+	case float64:
+		if number < 0 || number > math.MaxUint32 || number != math.Trunc(number) {
+			return 0, false
+		}
+		return uint32(number), true
+	case uint32:
+		return number, true
+	case uint64:
+		if number > math.MaxUint32 {
+			return 0, false
+		}
+		return uint32(number), true
+	case int:
+		if number < 0 {
+			return 0, false
+		}
+		return uint32(number), uint64(number) <= math.MaxUint32
+	case int64:
+		if number < 0 || uint64(number) > math.MaxUint32 {
+			return 0, false
+		}
+		return uint32(number), true
+	default:
+		return 0, false
+	}
 }
 
 func validateSignForPreConflict(txMap map[string]any, params json.RawMessage) *types.RpcError {
@@ -216,45 +253,7 @@ func validateSignForPreConflict(txMap map[string]any, params json.RawMessage) *t
 	if transactionType != "Payment" {
 		return nil
 	}
-
-	if deliverMax, ok := txMap["DeliverMax"]; ok {
-		if amount, present := txMap["Amount"]; present && !reflect.DeepEqual(amount, deliverMax) {
-			return types.RpcErrorInvalidParams("Cannot specify differing 'Amount' and 'DeliverMax'")
-		}
-		if _, present := txMap["Amount"]; !present {
-			txMap["Amount"] = deliverMax
-		}
-		delete(txMap, "DeliverMax")
-	}
-	amount, ok := txMap["Amount"]
-	if !ok {
-		return types.RpcErrorMissingField("tx_json.Amount")
-	}
-	encodedAmount, err := json.Marshal(amount)
-	if err != nil {
-		return types.RpcErrorInvalidField("tx_json.Amount")
-	}
-	if _, err := state.AmountFromJSON(encodedAmount); err != nil {
-		return types.RpcErrorInvalidField("tx_json.Amount")
-	}
-	destination, ok := txMap["Destination"].(string)
-	if !ok || !addresscodec.IsValidClassicAddress(destination) {
-		if _, present := txMap["Destination"]; !present {
-			return types.RpcErrorMissingField("tx_json.Destination")
-		}
-		return types.RpcErrorInvalidField("tx_json.Destination")
-	}
-	if jsonFieldPresent(params, "build_path") {
-		return types.RpcErrorInvalidParams("Field 'build_path' not allowed in this context.")
-	}
-	if domain, ok := txMap["DomainID"]; ok {
-		domainString, ok := domain.(string)
-		decoded, err := hex.DecodeString(domainString)
-		if !ok || err != nil || len(decoded) != 32 {
-			return types.RpcErrorDomainMalformed("Unable to parse 'DomainID'.")
-		}
-	}
-	return nil
+	return checkPayment(txMap, params, false, nil)
 }
 
 func validateSigningTxJSONShape(txMap map[string]any) *types.RpcError {
@@ -271,46 +270,56 @@ func validateSigningTxJSONShape(txMap map[string]any) *types.RpcError {
 	return nil
 }
 
-func signerMaps(value any) ([]map[string]any, *types.RpcError) {
+func normalizeSigners(value any, feePayer string) ([]map[string]any, *types.RpcError) {
+	const malformedSigners = "Signers array may only contain Signer entries."
+
+	var values []any
 	switch signers := value.(type) {
 	case []any:
-		result := make([]map[string]any, 0, len(signers))
-		for _, value := range signers {
-			signer, ok := value.(map[string]any)
-			if !ok {
-				return nil, types.RpcErrorInvalidParams("Signers array may only contain Signer entries.")
-			}
-			result = append(result, signer)
-		}
-		return result, nil
+		values = signers
 	case []map[string]any:
-		return append([]map[string]any(nil), signers...), nil
+		values = make([]any, len(signers))
+		for i := range signers {
+			values[i] = signers[i]
+		}
 	default:
-		return nil, types.RpcErrorInvalidParams("Signers array may only contain Signer entries.")
+		return nil, types.RpcErrorInvalidParams(malformedSigners)
 	}
-}
 
-func sortAndValidateSignerMaps(signers []map[string]any, feePayer string) *types.RpcError {
 	type signerEntry struct {
 		wrapper map[string]any
 		account string
 		id      []byte
 	}
-	entries := make([]signerEntry, 0, len(signers))
-	for _, wrapper := range signers {
+	entries := make([]signerEntry, 0, len(values))
+	for _, value := range values {
+		wrapper, ok := value.(map[string]any)
+		if !ok || len(wrapper) != 1 {
+			return nil, types.RpcErrorInvalidParams(malformedSigners)
+		}
 		signer, ok := wrapper["Signer"].(map[string]any)
-		if !ok {
-			return types.RpcErrorInvalidParams("Signers array may only contain Signer entries.")
+		if !ok || len(signer) != 3 {
+			return nil, types.RpcErrorInvalidParams(malformedSigners)
+		}
+		for _, field := range []string{"Account", "SigningPubKey", "TxnSignature"} {
+			if _, ok := signer[field].(string); !ok {
+				return nil, types.RpcErrorInvalidParams(malformedSigners)
+			}
 		}
 		account, ok := signer["Account"].(string)
 		if !ok {
-			return types.RpcErrorInvalidParams("Signers array may only contain Signer entries.")
+			return nil, types.RpcErrorInvalidParams(malformedSigners)
 		}
-		_, id, err := addresscodec.DecodeClassicAddressToAccountID(account)
+		canonicalAccount, err := canonicalAccountID(account)
 		if err != nil {
-			return types.RpcErrorInvalidParams("Signers array may only contain Signer entries.")
+			return nil, types.RpcErrorInvalidParams(malformedSigners)
 		}
-		entries = append(entries, signerEntry{wrapper: wrapper, account: account, id: id})
+		_, id, err := addresscodec.DecodeClassicAddressToAccountID(canonicalAccount)
+		if err != nil {
+			return nil, types.RpcErrorInvalidParams(malformedSigners)
+		}
+		signer["Account"] = canonicalAccount
+		entries = append(entries, signerEntry{wrapper: wrapper, account: canonicalAccount, id: id})
 	}
 
 	sort.Slice(entries, func(i, j int) bool {
@@ -318,51 +327,53 @@ func sortAndValidateSignerMaps(signers []map[string]any, feePayer string) *types
 	})
 	for i := 1; i < len(entries); i++ {
 		if bytes.Equal(entries[i-1].id, entries[i].id) {
-			return types.RpcErrorInvalidParams(
+			return nil, types.RpcErrorInvalidParams(
 				"Duplicate Signers:Signer:Account entries (" + entries[i].account + ") are not allowed.")
 		}
 	}
 
-	_, feePayerID, err := addresscodec.DecodeClassicAddressToAccountID(feePayer)
+	canonicalFeePayer, err := canonicalAccountID(feePayer)
 	if err != nil {
-		return types.RpcErrorInvalidParams("Invalid field 'tx_json.Account'.")
+		return nil, types.RpcErrorInvalidParams("Invalid field 'tx_json.Account'.")
 	}
+	_, feePayerID, err := addresscodec.DecodeClassicAddressToAccountID(canonicalFeePayer)
+	if err != nil {
+		return nil, types.RpcErrorInvalidParams("Invalid field 'tx_json.Account'.")
+	}
+	result := make([]map[string]any, len(entries))
 	for i, entry := range entries {
 		if bytes.Equal(entry.id, feePayerID) {
-			return types.RpcErrorInvalidParams(
+			return nil, types.RpcErrorInvalidParams(
 				"A Signer may not be the transaction's Account (" + feePayer + ").")
 		}
-		signers[i] = entry.wrapper
+		result[i] = entry.wrapper
 	}
-	return nil
+	return result, nil
 }
 
-// signPayload signs a hex-encoded payload with the given private key
-func signPayload(payloadHex string, privateKeyHex string, keyType string) (string, error) {
-	// Decode the payload
-	payloadBytes, err := hex.DecodeString(payloadHex)
-	if err != nil {
-		return "", err
+func normalizeTypedSigners(signers []tx.SignerWrapper, feePayer string) ([]tx.SignerWrapper, *types.RpcError) {
+	value := make([]any, len(signers))
+	for i, signer := range signers {
+		value[i] = map[string]any{"Signer": map[string]any{
+			"Account":       signer.Signer.Account,
+			"SigningPubKey": signer.Signer.SigningPubKey,
+			"TxnSignature":  signer.Signer.TxnSignature,
+		}}
 	}
-
-	// Convert to string for crypto functions
-	payloadStr := string(payloadBytes)
-
-	var signature string
-
-	if keyType == "ed25519" {
-		algo := ed25519.Algorithm{}
-		signature, err = algo.Sign(payloadStr, privateKeyHex)
-	} else {
-		algo := secp256k1.Algorithm{}
-		signature, err = algo.Sign(payloadStr, privateKeyHex)
+	normalized, rpcErr := normalizeSigners(value, feePayer)
+	if rpcErr != nil {
+		return nil, rpcErr
 	}
-
-	if err != nil {
-		return "", err
+	result := make([]tx.SignerWrapper, len(normalized))
+	for i, wrapper := range normalized {
+		inner := wrapper["Signer"].(map[string]any)
+		result[i] = tx.SignerWrapper{Signer: tx.Signer{
+			Account:       inner["Account"].(string),
+			SigningPubKey: inner["SigningPubKey"].(string),
+			TxnSignature:  inner["TxnSignature"].(string),
+		}}
 	}
-
-	return strings.ToUpper(signature), nil
+	return result, nil
 }
 
 func (m *SignForMethod) RequiredRole() types.Role {

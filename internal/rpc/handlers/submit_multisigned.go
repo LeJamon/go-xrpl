@@ -8,10 +8,9 @@ import (
 	"strconv"
 
 	binarycodec "github.com/LeJamon/go-xrpl/codec/binarycodec"
-	binarycodecdefs "github.com/LeJamon/go-xrpl/codec/binarycodec/definitions"
 	"github.com/LeJamon/go-xrpl/internal/ledger/service/svcerr"
+	"github.com/LeJamon/go-xrpl/internal/ledger/state"
 	"github.com/LeJamon/go-xrpl/internal/rpc/types"
-	"github.com/LeJamon/go-xrpl/internal/tx"
 )
 
 // SubmitMultisignedMethod handles the submit_multisigned RPC method
@@ -91,39 +90,20 @@ func (m *SubmitMultisignedMethod) Handle(ctx *types.RpcContext, params json.RawM
 	if rpcErr := validateSignForPreConflict(txMap, params); rpcErr != nil {
 		return nil, rpcErr
 	}
-
-	definitions := binarycodecdefs.Get()
-	if parseMessage := serializedFieldParseMessage(txMap, "tx_json", definitions); parseMessage != "" {
-		return nil, types.RpcErrorInvalidParams(parseMessage)
+	if feeString, ok := txMap["Fee"].(string); ok {
+		feeJSON, marshalErr := json.Marshal(feeString)
+		feeAmount, parseErr := state.AmountFromJSON(feeJSON)
+		if marshalErr == nil && parseErr == nil && !feeAmount.IsNative() {
+			return nil, types.RpcErrorInvalidParams("Invalid Fee field.  Fees must be specified in XRP.")
+		}
 	}
-	transactionTypeCode, ok := txMap["TransactionType"].(uint16)
-	if !ok {
-		return nil, types.RpcErrorInvalidParams("Field 'tx_json.TransactionType' has invalid data.")
-	}
-	transactionTypeName, err := definitions.TransactionTypeName(int32(transactionTypeCode))
-	if err != nil {
-		return nil, types.RpcErrorInvalidTransactionType(transactionTypeCode)
-	}
-	txMap["TransactionType"] = transactionTypeName
-	transactionType, _ := tx.TypeFromName(transactionTypeName)
-	if err := tx.ValidateTemplateFields(transactionType, txMap); err != nil {
-		return nil, types.RpcErrorInvalidParams(err.Error())
-	}
-	if reason := tx.TransactionMapLocalChecksFailureReason(transactionType, txMap); reason != "" {
-		return nil, types.RpcErrorInvalidParams(reason)
-	}
-	if _, ok := txMap["Fee"].(string); !ok {
-		return nil, types.RpcErrorInvalidParams("Invalid Fee field.  Fees must be specified in XRP.")
-	}
-	_, rpcErr := parseTransactionForSigning(txMap)
+	transaction, rpcErr := preprocessTransaction(txMap, transactionPreprocessOptions{
+		mode:               transactionPreprocessSubmitMultisigned,
+		preserveSigners:    true,
+		rejectTxnSignature: true,
+	})
 	if rpcErr != nil {
 		return nil, rpcErr
-	}
-
-	// TxnSignature must NOT be present on a multi-signed transaction.
-	// Matches rippled: rpcError(rpcSIGNING_MALFORMED) -> code 63, "signingMalformed"
-	if _, ok := txMap["TxnSignature"]; ok {
-		return nil, types.RpcErrorSigningMalformed()
 	}
 
 	// Matches rippled: "Invalid Fee field.  Fees must be specified in XRP." /
@@ -147,27 +127,29 @@ func (m *SubmitMultisignedMethod) Handle(ctx *types.RpcContext, params json.RawM
 		return nil, types.RpcErrorMissingField("tx_json.Signers")
 	}
 	signers, ok := signersValue.([]any)
-	if !ok || len(signers) == 0 {
+	if ok && len(signers) == 0 {
 		return nil, types.RpcErrorInvalidParams("tx_json.Signers array may not be empty.")
 	}
+	if _, ok := txMap["Fee"].(string); !ok {
+		return nil, types.RpcErrorInvalidParams("Invalid Fee field.  Fees must be specified in XRP.")
+	}
 
-	signerMapList, rpcErr := signerMaps(signers)
+	feePayer := transaction.GetCommon().Account
+	if delegate := transaction.GetCommon().Delegate; delegate != "" {
+		feePayer = delegate
+	}
+	normalizedSigners, rpcErr := normalizeTypedSigners(transaction.GetCommon().Signers, feePayer)
 	if rpcErr != nil {
 		return nil, rpcErr
 	}
-	feePayer := txAccount
-	if delegate, ok := txMap["Delegate"].(string); ok {
-		feePayer = delegate
-	}
-	if rpcErr := sortAndValidateSignerMaps(signerMapList, feePayer); rpcErr != nil {
-		return nil, rpcErr
-	}
-	for i := range signerMapList {
-		signers[i] = signerMapList[i]
-	}
+	transaction.GetCommon().Signers = normalizedSigners
 
+	canonicalMap, encErr := flattenCanonicalTransaction(transaction, txMap)
+	if encErr != nil {
+		return nil, rpcInternalError("submit_multisigned: transaction flattening failed", encErr)
+	}
 	// Encode the transaction to binary
-	txBlob, encErr := binarycodec.Encode(txMap)
+	txBlob, encErr := binarycodec.Encode(canonicalMap)
 	if encErr != nil {
 		return nil, rpcInternalError("submit_multisigned: transaction encoding failed", encErr)
 	}
@@ -176,7 +158,7 @@ func (m *SubmitMultisignedMethod) Handle(ctx *types.RpcContext, params json.RawM
 	txHash := CalculateTxHash(txBlob)
 
 	// Submit the transaction
-	txJSON, encErr := json.Marshal(txMap)
+	txJSON, encErr := json.Marshal(canonicalMap)
 	if encErr != nil {
 		return nil, rpcInternalError("submit_multisigned: transaction marshaling failed", encErr)
 	}
@@ -189,14 +171,14 @@ func (m *SubmitMultisignedMethod) Handle(ctx *types.RpcContext, params json.RawM
 		return nil, rpcTransactionSubmissionError("submit_multisigned: transaction submission failed", submitErr)
 	}
 
-	txMap["hash"] = txHash
+	canonicalMap["hash"] = txHash
 
 	response := map[string]any{
 		"engine_result":         result.EngineResult,
 		"engine_result_code":    result.EngineResultCode,
 		"engine_result_message": result.EngineResultMessage,
 		"tx_blob":               txBlob,
-		"tx_json":               txMap,
+		"tx_json":               canonicalMap,
 	}
 
 	if result.Applied {

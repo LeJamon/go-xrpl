@@ -497,9 +497,44 @@ func TestSimulateMethod_BatchRejection(t *testing.T) {
 
 	_, rpcErr := method.Handle(ctx, paramsJSON)
 	require.NotNil(t, rpcErr)
-	assert.Equal(t, types.RpcNOT_IMPL, rpcErr.Code)
-	assert.Equal(t, "notImpl", rpcErr.ErrorString)
-	assert.Equal(t, "Not implemented.", rpcErr.Message)
+	assert.Equal(t, types.RpcINVALID_PARAMS, rpcErr.Code)
+	assert.Equal(t, "invalidTransaction", rpcErr.ErrorString)
+	assert.NotEmpty(t, rpcErr.ErrorException)
+
+	batch := func(transactionType any) map[string]any {
+		inner := func(sequence int) map[string]any {
+			return map[string]any{
+				"RawTransaction": map[string]any{
+					"TransactionType": "AccountSet",
+					"Account":         validAccountAddress,
+					"Fee":             "10",
+					"Sequence":        sequence,
+					"SigningPubKey":   "",
+				},
+			}
+		}
+		return map[string]any{
+			"TransactionType": transactionType,
+			"Account":         validAccountAddress,
+			"Fee":             "10",
+			"Sequence":        1,
+			"SigningPubKey":   "",
+			"Flags":           0x00080000,
+			"RawTransactions": []any{inner(1), inner(2)},
+		}
+	}
+	for _, transactionType := range []any{"Batch", 71} {
+		t.Run(fmt.Sprint(transactionType), func(t *testing.T) {
+			params := map[string]any{"tx_json": batch(transactionType)}
+			paramsJSON, err := json.Marshal(params)
+			require.NoError(t, err)
+			_, rpcErr := method.Handle(ctx, paramsJSON)
+			require.NotNil(t, rpcErr)
+			assert.Equal(t, types.RpcNOT_IMPL, rpcErr.Code)
+			assert.Equal(t, "notImpl", rpcErr.ErrorString)
+			assert.Equal(t, "Not implemented.", rpcErr.Message)
+		})
+	}
 }
 
 func TestSimulateMethod_SuccessfulSimulation(t *testing.T) {

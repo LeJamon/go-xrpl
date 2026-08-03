@@ -918,6 +918,13 @@ type LedgerViewSource interface {
 	GetLedgerViewByHash(hash [32]byte) (LedgerStateView, LedgerReader, error)
 }
 
+// OpenLedgerViewSource provides an immutable snapshot of the current
+// open-ledger state for operations such as transaction path construction.
+// It is optional so lightweight RPC mocks can continue to omit the view.
+type OpenLedgerViewSource interface {
+	GetOpenLedgerView() (LedgerStateView, error)
+}
+
 // LedgerStateView provides low-level read access to ledger state.
 // This interface matches tx.LedgerView for pathfinding and other operations
 // that need direct state access. Any *ledger.Ledger satisfies this.

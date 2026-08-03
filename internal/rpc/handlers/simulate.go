@@ -11,7 +11,6 @@ import (
 	"strings"
 
 	binarycodec "github.com/LeJamon/go-xrpl/codec/binarycodec"
-	binarycodecdefs "github.com/LeJamon/go-xrpl/codec/binarycodec/definitions"
 	"github.com/LeJamon/go-xrpl/internal/ledger/service/svcerr"
 	"github.com/LeJamon/go-xrpl/internal/rpc/types"
 	"github.com/LeJamon/go-xrpl/internal/tx"
@@ -100,8 +99,6 @@ func (m *SimulateMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (
 	if _, ok := txJsonMap["Account"]; !ok {
 		return nil, types.RpcErrorMissingField("tx.Account")
 	}
-	transactionType := txJsonMap["TransactionType"]
-
 	// rippled autofillTx() — Simulate.cpp:71-156. Steps run in the same
 	// order so rippled's error precedence is preserved:
 	//   1. Fee        (→ rpcHIGH_FEE)
@@ -198,53 +195,30 @@ func (m *SimulateMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (
 		return nil, types.RpcErrorInvalidField("tx.Account")
 	}
 
-	// Reject Batch — rippled Simulate.cpp:345-348.
-	if txType, ok := txJsonMap["TransactionType"].(string); ok && txType == "Batch" {
+	// Parse and validate the canonical transaction once. The simulation mode
+	// preserves STTx's invalidTransaction error envelope while the shared
+	// preprocessor handles serialized-field normalization and array limits.
+	parsedTx, rpcErr := preprocessTransaction(txJsonMap, transactionPreprocessOptions{
+		mode: transactionPreprocessSimulate,
+	})
+	if rpcErr != nil {
+		return nil, rpcErr
+	}
+	// Batch simulation is intentionally unsupported, but the type must be
+	// checked after the full serialized parse so malformed Batch JSON reports
+	// its structural error first and numeric TransactionType values are covered.
+	if parsedTx.TxType() == tx.TypeBatch {
 		return nil, types.RpcErrorNotImpl()
 	}
 
-	// STParsedJSONObject parity — unknown-field surface (rippled
-	// Simulate.cpp:328-330). Each top-level tx_json key must resolve to
-	// a known SField; otherwise rippled returns
-	// `error_message: "Field 'tx_json.<key>' is unknown."` from
-	// STParsedJSONObject. binarycodec.definitions.Get() carries the
-	// same registry rippled's STParsedJSONObject consults.
-	defs := binarycodecdefs.Get()
-	if parseMessage := serializedFieldParseMessage(txJsonMap, "tx_json", defs); parseMessage != "" {
-		return nil, types.RpcErrorInvalidParams(parseMessage)
+	canonicalMap, err := flattenCanonicalTransaction(parsedTx, txJsonMap)
+	if err != nil {
+		return nil, rpcInternalError("simulate: transaction flattening failed", err)
 	}
-	// STParsedJSONObject stores TransactionType as its UInt16 code, while the
-	// Go transaction registry selects concrete types by their JSON name.
-	txJsonMap["TransactionType"] = transactionType
-
-	// STParsedJSONObject also caps each JSON array field at MaxJSONArrayElements
-	// (rippled maxSTParsedJSONArraySize); surface an overflow as invalidParams
-	// before the transaction is parsed and simulated. Other encode failures are
-	// left to the parse/validate path below.
-	if _, encErr := binarycodec.Encode(txJsonMap); encErr != nil {
-		if e := arraySizeRpcError(encErr); e != nil {
-			return nil, e
-		}
-	}
-
-	// Marshal tx_json for parse + service call.
-	txJSON, err := json.Marshal(txJsonMap)
+	// Marshal the canonical transaction for the ledger service call.
+	txJSON, err := json.Marshal(canonicalMap)
 	if err != nil {
 		return nil, rpcInternalError("simulate: transaction marshaling failed", err)
-	}
-
-	// STTx ctor parity — rippled Simulate.cpp:332-343. A parse failure or
-	// missing-required-field surface as
-	// `error: "invalidTransaction"` + `error_exception: <reason>`
-	// instead of flowing into the engine as a TER. This early structural
-	// validation guarantees the error envelope shape matches rippled even
-	// when type-specific engine preflight is rules-aware.
-	parsedTx, parseErr := tx.ParseJSON(txJSON)
-	if parseErr != nil {
-		return nil, types.RpcErrorInvalidTransaction(parseErr.Error())
-	}
-	if templateErr := tx.ValidateTemplateFields(parsedTx.TxType(), txJsonMap); templateErr != nil {
-		return nil, types.RpcErrorInvalidTransaction(templateErr.Error())
 	}
 
 	result, err := ctx.Services.Ledger.SimulateTransaction(txJSON)
@@ -276,7 +250,7 @@ func (m *SimulateMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (
 		if binaryOutput {
 			response["meta_blob"] = strings.ToUpper(hex.EncodeToString(result.Metadata.Blob))
 		} else if metaMap := metadataToMap(result.Metadata.JSON); metaMap != nil {
-			enrichSimulateMeta(metaMap, txJsonMap, SyntheticMetadataContext{
+			enrichSimulateMeta(metaMap, canonicalMap, SyntheticMetadataContext{
 				LedgerSequence: result.CurrentLedger,
 				CloseTime:      result.CurrentLedgerCloseTime,
 			})
@@ -287,11 +261,11 @@ func (m *SimulateMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (
 	}
 
 	if binaryOutput {
-		if encoded, err := binarycodec.Encode(txJsonMap); err == nil {
+		if encoded, err := binarycodec.Encode(canonicalMap); err == nil {
 			response["tx_blob"] = encoded
 		}
 	} else {
-		response["tx_json"] = txJsonMap
+		response["tx_json"] = canonicalMap
 	}
 
 	return response, nil

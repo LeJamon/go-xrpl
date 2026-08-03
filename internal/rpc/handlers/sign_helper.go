@@ -2,18 +2,23 @@ package handlers
 
 import (
 	"bytes"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"math"
+	"reflect"
 	"strconv"
 
 	addresscodec "github.com/LeJamon/go-xrpl/codec/addresscodec"
 	binarycodec "github.com/LeJamon/go-xrpl/codec/binarycodec"
 	"github.com/LeJamon/go-xrpl/internal/ledger/service/svcerr"
+	"github.com/LeJamon/go-xrpl/internal/ledger/state"
 	"github.com/LeJamon/go-xrpl/internal/rpc/txprojection"
 	"github.com/LeJamon/go-xrpl/internal/rpc/types"
 	"github.com/LeJamon/go-xrpl/internal/tx"
+	"github.com/LeJamon/go-xrpl/internal/tx/payment/pathfinder"
 	"github.com/LeJamon/go-xrpl/internal/tx/sign"
 	"github.com/LeJamon/go-xrpl/ledger/entry"
 )
@@ -218,6 +223,176 @@ func jsonFieldPresent(params json.RawMessage, field string) bool {
 	return ok
 }
 
+// checkPayment validates and normalizes payment fields shared by signing and submission.
+func checkPayment(txMap map[string]any, params json.RawMessage, doPath bool, rpcCtx *types.RpcContext) *types.RpcError {
+	if txMap["TransactionType"] != "Payment" {
+		return nil
+	}
+
+	if deliverMax, ok := txMap["DeliverMax"]; ok {
+		if amount, present := txMap["Amount"]; present {
+			if !reflect.DeepEqual(amount, deliverMax) {
+				return types.RpcErrorInvalidParams(
+					"Cannot specify differing 'Amount' and 'DeliverMax'")
+			}
+		} else {
+			txMap["Amount"] = deliverMax
+		}
+		delete(txMap, "DeliverMax")
+	}
+
+	amountValue, ok := txMap["Amount"]
+	if !ok {
+		return types.RpcErrorMissingField("tx_json.Amount")
+	}
+	amountJSON, err := json.Marshal(amountValue)
+	if err != nil {
+		return types.RpcErrorInvalidField("tx_json.Amount")
+	}
+	amount, err := state.AmountFromJSON(amountJSON)
+	if err != nil {
+		return types.RpcErrorInvalidField("tx_json.Amount")
+	}
+
+	destinationValue, present := txMap["Destination"]
+	destination, destinationIsString := destinationValue.(string)
+	if !present {
+		return types.RpcErrorMissingField("tx_json.Destination")
+	}
+	if !destinationIsString || !addresscodec.IsValidClassicAddress(destination) {
+		return types.RpcErrorInvalidField("tx_json.Destination")
+	}
+
+	buildPath := jsonFieldPresent(params, "build_path")
+	if buildPath && !doPath {
+		return types.RpcErrorInvalidParams(
+			"Field 'build_path' not allowed in this context.")
+	}
+	if buildPath && amount.IsMPT() {
+		if rpcCtx == nil || rpcCtx.Services == nil || rpcCtx.Services.Ledger == nil {
+			return types.RpcErrorInvalidParams(
+				"Field 'build_path' not allowed in this context.")
+		}
+		rulesSource, ok := rpcCtx.Services.Ledger.(types.TransactionRulesSource)
+		if !ok {
+			return types.RpcErrorInvalidParams(
+				"Field 'build_path' not allowed in this context.")
+		}
+		rules := rulesSource.TransactionRules()
+		if rules == nil || !rules.MPTokensV2Enabled() {
+			return types.RpcErrorInvalidParams(
+				"Field 'build_path' not allowed in this context.")
+		}
+	}
+	_, pathsPresent := txMap["Paths"]
+	if buildPath && pathsPresent {
+		return types.RpcErrorInvalidParams(
+			"Cannot specify both 'tx_json.Paths' and 'build_path'")
+	}
+	var domainID *[32]byte
+	if domain, ok := txMap["DomainID"]; ok {
+		domainString, isString := domain.(string)
+		decoded, decodeErr := hex.DecodeString(domainString)
+		if !isString || decodeErr != nil || len(decoded) != 32 {
+			return types.RpcErrorDomainMalformed("Unable to parse 'DomainID'.")
+		}
+		var parsed [32]byte
+		copy(parsed[:], decoded)
+		domainID = &parsed
+	}
+	if buildPath {
+		var sendMax *state.Amount
+		if sendMaxValue, present := txMap["SendMax"]; present {
+			sendMaxJSON, marshalErr := json.Marshal(sendMaxValue)
+			if marshalErr != nil {
+				return types.RpcErrorInvalidField("tx_json.SendMax")
+			}
+			parsedSendMax, parseErr := state.AmountFromJSON(sendMaxJSON)
+			if parseErr != nil {
+				return types.RpcErrorInvalidField("tx_json.SendMax")
+			}
+			sendMax = &parsedSendMax
+			if parsedSendMax.IsNative() && amount.IsNative() {
+				return types.RpcErrorInvalidParams(
+					"Cannot build XRP to XRP paths.")
+			}
+		} else if amount.IsNative() {
+			// A missing SendMax defaults to Amount. This is only relevant to
+			// the native/native rejection; issued amounts remain pathable.
+			return types.RpcErrorInvalidParams(
+				"Cannot build XRP to XRP paths.")
+		}
+		if rpcCtx == nil || rpcCtx.Services == nil || rpcCtx.Services.Ledger == nil {
+			return rpcInternalInvariantError("payment: ledger service unavailable for path construction")
+		}
+		release, rpcErr := AcquirePathfind(rpcCtx)
+		if rpcErr != nil {
+			return rpcErr
+		}
+		defer release()
+		viewSource, ok := rpcCtx.Services.Ledger.(types.OpenLedgerViewSource)
+		if !ok {
+			return rpcInternalInvariantError("payment: open ledger view unavailable for path construction")
+		}
+		view, viewErr := viewSource.GetOpenLedgerView()
+		if viewErr != nil || view == nil {
+			if viewErr == nil {
+				viewErr = errors.New("open ledger view is nil")
+			}
+			return rpcInternalError("payment: open ledger view unavailable", viewErr)
+		}
+		source, sourceOK := txMap["Account"].(string)
+		if !sourceOK {
+			return rpcInternalInvariantError("payment: source account unavailable for path construction")
+		}
+		_, sourceID, sourceErr := addresscodec.DecodeClassicAddressToAccountID(source)
+		if sourceErr != nil {
+			return rpcInternalError("payment: source account decode failed", sourceErr)
+		}
+		_, destinationID, destinationErr := addresscodec.DecodeClassicAddressToAccountID(destination)
+		if destinationErr != nil {
+			return rpcInternalError("payment: destination account decode failed", destinationErr)
+		}
+		var sourceAccountID, destinationAccountID [20]byte
+		copy(sourceAccountID[:], sourceID)
+		copy(destinationAccountID[:], destinationID)
+		if sendMax == nil {
+			defaultSendMax := amount
+			if !defaultSendMax.IsNative() && !defaultSendMax.IsMPT() {
+				defaultSendMax.Issuer = source
+			}
+			sendMax = &defaultSendMax
+		}
+		request := pathfinder.NewPathRequest(sourceAccountID, destinationAccountID, amount, sendMax, nil, false)
+		request.SetDomainID(domainID)
+		pathResult := request.Execute(view)
+		if pathResult == nil {
+			return rpcInternalInvariantError("payment: path construction returned no result")
+		}
+		if pathResult.SourceCurrencyOverflow {
+			return rpcInternalInvariantError("payment: source currency limit exceeded")
+		}
+		if len(pathResult.Alternatives) == 0 {
+			return nil
+		}
+		paths := pathResult.Alternatives[0].PathsComputed
+		if len(paths) == 0 {
+			return nil
+		}
+		encodedPaths, marshalErr := json.Marshal(paths)
+		if marshalErr != nil {
+			return rpcInternalError("payment: path serialization failed", marshalErr)
+		}
+		var pathJSON []any
+		if unmarshalErr := json.Unmarshal(encodedPaths, &pathJSON); unmarshalErr != nil {
+			return rpcInternalError("payment: path serialization failed", unmarshalErr)
+		}
+		txMap["Paths"] = pathJSON
+	}
+
+	return nil
+}
+
 func rpcErrorAlreadyMultisigned() *types.RpcError {
 	return types.NewRpcError(
 		types.RpcALREADY_MULTISIG, "alreadyMultisig", "alreadyMultisig", "Already multisigned.")
@@ -268,8 +443,14 @@ func signTransactionJSON(rpcCtx *types.RpcContext, txJSON json.RawMessage, creds
 
 	// Parse the transaction JSON
 	var txMap map[string]any
-	if err := json.Unmarshal(txJSON, &txMap); err != nil {
+	decoder := json.NewDecoder(bytes.NewReader(txJSON))
+	decoder.UseNumber()
+	if err := decoder.Decode(&txMap); err != nil {
 		return nil, types.RpcErrorInvalidParams(fmt.Sprintf("Invalid tx_json: %v", err))
+	}
+	var trailing any
+	if err := decoder.Decode(&trailing); err != io.EOF {
+		return nil, types.RpcErrorInvalidParams("Invalid tx_json: expected object")
 	}
 	if txMap == nil {
 		return nil, types.RpcErrorExpectedField("tx_json", "object")
@@ -391,6 +572,9 @@ func signTransactionJSON(rpcCtx *types.RpcContext, txJSON json.RawMessage, creds
 			return nil, types.RpcErrorMissingField("tx_json.Fee")
 		}
 	}
+	if rpcErr := checkPayment(txMap, rawParams, !offline, rpcCtx); rpcErr != nil {
+		return nil, rpcErr
+	}
 	if _, ok := txMap["Signers"]; ok {
 		return nil, rpcErrorAlreadyMultisigned()
 	}
@@ -430,7 +614,7 @@ func signTransactionJSON(rpcCtx *types.RpcContext, txJSON json.RawMessage, creds
 		targetObj["SigningPubKey"] = publicKey
 	}
 
-	transaction, rpcErr := parseTransactionForSigning(txMap)
+	transaction, rpcErr := preprocessTransaction(txMap, transactionPreprocessOptions{mode: transactionPreprocessSign})
 	if rpcErr != nil {
 		return nil, rpcErr
 	}
@@ -441,21 +625,29 @@ func signTransactionJSON(rpcCtx *types.RpcContext, txJSON json.RawMessage, creds
 	}
 
 	if !signatureTargetPresent {
-		txMap["TxnSignature"] = signature
+		transaction.GetCommon().TxnSignature = signature
 	} else {
-		targetObj["TxnSignature"] = signature
+		if transaction.GetCommon().CounterpartySignature == nil {
+			return nil, rpcInternalInvariantError("sign: counterparty signature target unavailable")
+		}
+		transaction.GetCommon().CounterpartySignature.TxnSignature = signature
 	}
 
-	txBlob, err := binarycodec.Encode(txMap)
+	canonicalMap, err := flattenCanonicalTransaction(transaction, txMap)
+	if err != nil {
+		return nil, rpcInternalError("sign: transaction flattening failed", err)
+	}
+	normalizeSignerResponseContainers(canonicalMap)
+	txBlob, err := binarycodec.Encode(canonicalMap)
 	if err != nil {
 		return nil, rpcInternalError("sign: transaction encoding failed", err)
 	}
 
 	txHash := CalculateTxHash(txBlob)
-	txMap["hash"] = txHash
+	canonicalMap["hash"] = txHash
 
 	return &signResult{
-		TxMap:  txMap,
+		TxMap:  canonicalMap,
 		TxBlob: txBlob,
 	}, nil
 }

@@ -56,6 +56,11 @@ func serializedFieldParseMessage(value any, path string, defs *binarycodecdefs.D
 			if !ok {
 				return fmt.Sprintf("Field '%s' is not a JSON array.", fieldPath)
 			}
+			if len(items) > binarycodectypes.MaxJSONArrayElements {
+				return fmt.Sprintf(
+					"Field '%s' exceeds allowed JSON array size of %d elements per field.",
+					fieldPath, binarycodectypes.MaxJSONArrayElements)
+			}
 			for i, item := range items {
 				itemObject, ok := item.(map[string]any)
 				if !ok || len(itemObject) != 1 {
