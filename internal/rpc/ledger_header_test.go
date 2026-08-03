@@ -9,6 +9,9 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/LeJamon/go-xrpl/internal/ledger/genesis"
+	ledgerheader "github.com/LeJamon/go-xrpl/internal/ledger/header"
+	"github.com/LeJamon/go-xrpl/internal/ledger/service"
 	"github.com/LeJamon/go-xrpl/internal/rpc/handlers"
 	"github.com/LeJamon/go-xrpl/internal/rpc/types"
 	"github.com/stretchr/testify/assert"
@@ -448,6 +451,77 @@ func TestLedgerHeaderOpenLedger(t *testing.T) {
 	// Open ledger should only have parent_hash, ledger_index, closed
 	assert.Contains(t, ledger, "parent_hash")
 	assert.Contains(t, ledger, "ledger_index")
+}
+
+func TestLedgerHeaderProductionOpenRootsAndFlags(t *testing.T) {
+	svc, err := service.New(service.Config{Standalone: true, GenesisConfig: genesis.DefaultConfig()})
+	require.NoError(t, err)
+	require.NoError(t, svc.Start())
+	t.Cleanup(svc.Stop)
+	open := svc.GetOpenLedger()
+	require.NotNil(t, open)
+
+	ctx := &types.RpcContext{
+		Context:    context.Background(),
+		Role:       types.RoleGuest,
+		ApiVersion: types.ApiVersion1,
+		Services:   &types.ServiceContainer{Ledger: NewLedgerServiceAdapter(svc)},
+	}
+	result, rpcErr := (&handlers.LedgerHeaderMethod{}).Handle(ctx, json.RawMessage(`{"ledger_index":"current"}`))
+	require.Nil(t, rpcErr)
+	response := resultToMapHeader(t, result)
+	raw, err := hex.DecodeString(response["ledger_data"].(string))
+	require.NoError(t, err)
+	decoded, err := ledgerheader.DeserializeHeader(raw, false)
+	require.NoError(t, err)
+	require.Equal(t, [32]byte{}, decoded.TxHash)
+	require.Equal(t, [32]byte{}, decoded.AccountHash)
+	require.Zero(t, decoded.CloseFlags)
+
+	ctx.Role = types.RoleAdmin
+	ctx.Unlimited = true
+	result, rpcErr = (&handlers.LedgerMethod{}).Handle(ctx, json.RawMessage(`{"ledger_index":"current","full":true}`))
+	require.Nil(t, rpcErr)
+	ledgerResult := result.(map[string]any)["ledger"].(map[string]any)
+	require.Equal(t, handlers.FormatLedgerHash(open.Hash()), ledgerResult["ledger_hash"])
+	require.Equal(t, handlers.FormatLedgerHash([32]byte{}), ledgerResult["transaction_hash"])
+	require.Equal(t, handlers.FormatLedgerHash([32]byte{}), ledgerResult["account_hash"])
+	require.Zero(t, ledgerResult["close_flags"])
+}
+
+type ledgerHeaderMapErrorReader struct {
+	*mockLedgerReader
+	err error
+}
+
+func (r ledgerHeaderMapErrorReader) TxMapHashWithError() ([32]byte, error) {
+	return [32]byte{}, r.err
+}
+
+func (r ledgerHeaderMapErrorReader) StateMapHashWithError() ([32]byte, error) {
+	return [32]byte{}, r.err
+}
+
+func TestLedgerHeaderMapHashFailureReturnsInternal(t *testing.T) {
+	mock := &ledgerMock{mockLedgerService: newMockLedgerService()}
+	reader := ledgerHeaderMapErrorReader{
+		mockLedgerReader: newDefaultLedgerReader(2, true),
+		err:              errors.New("SHAMap unavailable"),
+	}
+	mock.getLedgerBySequenceFn = func(uint32) (types.LedgerReader, error) {
+		return reader, nil
+	}
+	ctx := &types.RpcContext{
+		Context:    context.Background(),
+		Role:       types.RoleGuest,
+		ApiVersion: types.ApiVersion1,
+		Services:   &types.ServiceContainer{Ledger: mock},
+	}
+
+	result, rpcErr := (&handlers.LedgerHeaderMethod{}).Handle(ctx, json.RawMessage(`{"ledger_index":2}`))
+	assert.Nil(t, result)
+	require.NotNil(t, rpcErr)
+	assert.Equal(t, types.RpcINTERNAL, rpcErr.Code)
 }
 
 // TestLedgerHeaderCloseTimeEstimated tests the close_time_estimated field

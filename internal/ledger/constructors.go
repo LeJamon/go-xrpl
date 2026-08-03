@@ -85,6 +85,7 @@ func newOpen(parent *Ledger, closeTime time.Time, building bool) (*Ledger, error
 
 	newHeader := header.LedgerHeader{
 		LedgerIndex:         newLedgerSeq,
+		Hash:                incrementHash(parentHeader.Hash),
 		ParentHash:          parentHeader.Hash,
 		ParentCloseTime:     parentHeader.CloseTime,
 		CloseTime:           closeTime,
@@ -104,6 +105,16 @@ func newOpen(parent *Ledger, closeTime time.Time, building bool) (*Ledger, error
 		dropsDestroyed: 0,
 		rules:          parentRules,
 	}, nil
+}
+
+func incrementHash(hash [32]byte) [32]byte {
+	for i := len(hash) - 1; i >= 0; i-- {
+		hash[i]++
+		if hash[i] != 0 {
+			break
+		}
+	}
+	return hash
 }
 
 func FromGenesis(

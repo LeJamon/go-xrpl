@@ -139,11 +139,9 @@ func (m *AccountInfoMethod) Handle(ctx *types.RpcContext, params json.RawMessage
 	accountFlags["disallowIncomingPayChan"] = flags&lsfDisallowIncomingPayChan != 0
 	accountFlags["disallowIncomingTrustline"] = flags&lsfDisallowIncomingTrustln != 0
 
-	rules := amendment.EmptyRules()
-	if source, ok := ledger.(types.LedgerAmendmentRulesSource); ok {
-		if ledgerRules := source.LedgerAmendmentRules(); ledgerRules != nil {
-			rules = ledgerRules
-		}
+	rules, rulesErr := ledgerAmendmentRules(ledger)
+	if rulesErr != nil {
+		return nil, rpcInternalError("account_info: amendment rules lookup failed", rulesErr)
 	}
 	if rules.Enabled(amendment.FeatureClawback) {
 		accountFlags["allowTrustLineClawback"] = flags&lsfAllowTrustLineClawback != 0

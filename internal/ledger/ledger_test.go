@@ -134,6 +134,73 @@ func TestLedger_Close_UsesDynamicResolution(t *testing.T) {
 	}
 }
 
+func TestNewOpenUsesProvisionalSuccessorHeader(t *testing.T) {
+	parent := newParentAt(t, 2, 30, true)
+	parent.header.Hash = [32]byte{0: 0x10, 1: 0xff}
+	parent.header.TxHash = [32]byte{0x20}
+	parent.header.AccountHash = [32]byte{0x30}
+	parent.header.CloseFlags = header.LCFNoConsensusTime
+	parent.header.Validated = true
+	parent.header.Accepted = true
+	closeTime := parent.CloseTime().Add(10 * time.Second)
+
+	child, err := NewOpen(parent, closeTime)
+	if err != nil {
+		t.Fatalf("NewOpen: %v", err)
+	}
+	got := child.Header()
+	wantHash := [32]byte{0: 0x10, 1: 0xff, 31: 0x01}
+	if got.Hash != wantHash {
+		t.Fatalf("provisional hash = %x, want parent hash + 1 = %x", got.Hash, wantHash)
+	}
+	if got.TxHash != ([32]byte{}) || got.AccountHash != ([32]byte{}) {
+		t.Fatalf("open roots = tx %x/account %x, want zero roots", got.TxHash, got.AccountHash)
+	}
+	if got.CloseFlags != 0 || got.Validated || got.Accepted {
+		t.Fatalf("open closed-only flags = close %d validated %t accepted %t", got.CloseFlags, got.Validated, got.Accepted)
+	}
+	if got.LedgerIndex != parent.header.LedgerIndex+1 || got.ParentHash != parent.header.Hash ||
+		!got.ParentCloseTime.Equal(parent.header.CloseTime) || !got.CloseTime.Equal(closeTime) ||
+		got.Drops != parent.header.Drops {
+		t.Fatalf("successor header = %+v", got)
+	}
+}
+
+func TestIncrementHash(t *testing.T) {
+	for _, test := range []struct {
+		name string
+		in   [32]byte
+		want [32]byte
+	}{
+		{
+			name: "ordinary increment",
+			in:   [32]byte{31: 0x2a},
+			want: [32]byte{31: 0x2b},
+		},
+		{
+			name: "trailing byte carry",
+			in:   [32]byte{30: 0x12, 31: 0xff},
+			want: [32]byte{30: 0x13},
+		},
+		{
+			name: "modular wrap",
+			in: [32]byte{
+				0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+				0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+				0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+				0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+			},
+			want: [32]byte{},
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			if got := incrementHash(test.in); got != test.want {
+				t.Fatalf("incrementHash(%x) = %x, want %x", test.in, got, test.want)
+			}
+		})
+	}
+}
+
 func TestNewOpenForBuildUsesProvisionalApplicationTime(t *testing.T) {
 	parent := newParentAt(t, 17, 10, true)
 	parent.header.CloseTime = protocol.FromRippleTime(835360951)

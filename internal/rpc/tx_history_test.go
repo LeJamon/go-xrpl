@@ -167,6 +167,30 @@ func TestTxHistoryEmptyResult(t *testing.T) {
 	assert.Empty(t, txs, "txs should be empty when no transactions exist")
 }
 
+func TestTxHistoryMalformedTransactionReturnsInternal(t *testing.T) {
+	mock := newMockLedgerServiceTxHistory()
+	mock.txHistoryResult = &types.TxHistoryResult{
+		Index: 5,
+		Transactions: []types.AccountTransaction{{
+			Hash:        [32]byte{1},
+			LedgerIndex: 5,
+			TxBlob:      []byte{0xff},
+		}},
+	}
+	ctx := &types.RpcContext{
+		Context:    context.Background(),
+		Role:       types.RoleUser,
+		ApiVersion: types.ApiVersion1,
+		Services:   newTxHistoryTestServices(mock),
+	}
+
+	result, rpcErr := (&handlers.TxHistoryMethod{}).Handle(ctx, json.RawMessage(`{"start":5}`))
+	require.Nil(t, result)
+	require.NotNil(t, rpcErr)
+	assert.Equal(t, 73, rpcErr.Code)
+	assert.Equal(t, "internal", rpcErr.ErrorString)
+}
+
 // TestTxHistoryResponseStructure tests that the response contains expected fields.
 // Based on rippled TransactionHistory_test.cpp response validation.
 func TestTxHistoryResponseStructure(t *testing.T) {

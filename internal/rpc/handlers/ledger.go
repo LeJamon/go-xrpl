@@ -83,7 +83,10 @@ func (m *LedgerMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (an
 		request.Accounts = true
 	}
 
-	ledgerInfo := buildLedgerJSON(targetLedger, request.Binary, request.Full, ctx.ApiVersion)
+	ledgerInfo, ledgerInfoErr := buildLedgerJSON(targetLedger, request.Binary, request.Full, ctx.ApiVersion)
+	if ledgerInfoErr != nil {
+		return nil, rpcInternalError("ledger: map root lookup failed", ledgerInfoErr)
+	}
 	ledgerHash := FormatLedgerHash(targetLedger.Hash())
 
 	closeTimeSec := targetLedger.CloseTime()
@@ -106,10 +109,15 @@ func (m *LedgerMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (an
 	if request.Transactions {
 		var txList []any
 		apiVersion := ctx.ApiVersion
+		var decodeErr error
 		visit := func(txHashKey [32]byte, txData []byte) bool {
 			hashStr := strings.ToUpper(hex.EncodeToString(txHashKey[:]))
 			if request.Expand {
-				txEntry := expandTransaction(txData, hashStr, request.Binary, apiVersion, syntheticContext)
+				txEntry, err := expandTransaction(txData, hashStr, request.Binary, apiVersion, syntheticContext)
+				if err != nil {
+					decodeErr = err
+					return false
+				}
 				// Add per-entry context fields for v2+
 				if apiVersion > 1 && !request.Binary {
 					if targetLedger.IsClosed() {
@@ -124,7 +132,11 @@ func (m *LedgerMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (an
 					}
 				}
 				if ownerFundsView != nil {
-					storedTx, _ := decodeTxBlob(txData)
+					storedTx, err := decodeTxBlob(txData)
+					if err != nil {
+						decodeErr = err
+						return false
+					}
 					if !annotateOwnerFunds(txEntry, storedTx.TxJSON, ownerFundsView, ownerFundsReserveBase, ownerFundsReserveInc) {
 						return false
 					}
@@ -145,6 +157,13 @@ func (m *LedgerMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (an
 		}
 		if iterErr != nil {
 			return nil, rpcInternalError("ledger: transaction iteration failed", iterErr)
+		}
+		if decodeErr != nil {
+			// LedgerToJson treats a malformed stored transaction as a corrupt
+			// leaf, logs it, and returns the entries decoded before that leaf.
+			// Keep that partial-success behavior instead of turning the entire
+			// ledger response into a database-deserialization RPC error.
+			logRpcError("ledger: transaction decoding failed", decodeErr)
 		}
 		if txList == nil {
 			txList = []any{}
@@ -195,10 +214,14 @@ func (m *LedgerMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (an
 	return response, nil
 }
 
-func buildLedgerJSON(l types.LedgerReader, binaryMode, full bool, apiVersion int) map[string]any {
+func buildLedgerJSON(l types.LedgerReader, binaryMode, full bool, apiVersion int) (map[string]any, error) {
 	if binaryMode {
 		if !l.IsClosed() {
-			return map[string]any{"closed": false}
+			return map[string]any{"closed": false}, nil
+		}
+		txHash, stateHash, err := ledgerMapHashes(l)
+		if err != nil {
+			return nil, err
 		}
 		return map[string]any{
 			"closed": true,
@@ -206,14 +229,14 @@ func buildLedgerJSON(l types.LedgerReader, binaryMode, full bool, apiVersion int
 				LedgerIndex:         l.Sequence(),
 				ParentCloseTime:     protocol.FromRippleTime(uint32(max(l.ParentCloseTime(), 0))),
 				ParentHash:          l.ParentHash(),
-				TxHash:              l.TxMapHash(),
-				AccountHash:         l.StateMapHash(),
+				TxHash:              txHash,
+				AccountHash:         stateHash,
 				Drops:               l.TotalDrops(),
 				CloseFlags:          l.CloseFlags(),
 				CloseTimeResolution: uint8(l.CloseTimeResolution()),
 				CloseTime:           protocol.FromRippleTime(uint32(max(l.CloseTime(), 0))),
 			}, false))),
-		}
+		}, nil
 	}
 
 	parentHash := l.ParentHash()
@@ -230,12 +253,16 @@ func buildLedgerJSON(l types.LedgerReader, binaryMode, full bool, apiVersion int
 		result["closed"] = true
 	} else if !full {
 		result["closed"] = false
-		return result
+		return result, nil
 	}
 
+	txHash, stateHash, err := ledgerMapHashes(l)
+	if err != nil {
+		return nil, err
+	}
 	result["ledger_hash"] = FormatLedgerHash(l.Hash())
-	result["transaction_hash"] = FormatLedgerHash(l.TxMapHash())
-	result["account_hash"] = FormatLedgerHash(l.StateMapHash())
+	result["transaction_hash"] = FormatLedgerHash(txHash)
+	result["account_hash"] = FormatLedgerHash(stateHash)
 	result["total_coins"] = strconv.FormatUint(l.TotalDrops(), 10)
 	result["close_flags"] = l.CloseFlags()
 	result["parent_close_time"] = l.ParentCloseTime()
@@ -249,7 +276,7 @@ func buildLedgerJSON(l types.LedgerReader, binaryMode, full bool, apiVersion int
 			result["close_time_estimated"] = true
 		}
 	}
-	return result
+	return result, nil
 }
 
 func addLedgerTypeWarning(response map[string]any, params json.RawMessage) {
@@ -359,9 +386,17 @@ func ledgerDefaultResponse(ctx *types.RpcContext) (map[string]any, *types.RpcErr
 	if err != nil || open == nil {
 		return nil, types.RpcErrorLgrNotFound("ledgerNotFound")
 	}
+	closedJSON, err := buildLedgerSummaryJSON(closed, true, ctx.ApiVersion)
+	if err != nil {
+		return nil, rpcInternalError("ledger: closed ledger map root lookup failed", err)
+	}
+	openJSON, err := buildLedgerSummaryJSON(open, false, ctx.ApiVersion)
+	if err != nil {
+		return nil, rpcInternalError("ledger: open ledger map root lookup failed", err)
+	}
 	return map[string]any{
-		"closed": buildLedgerSummaryJSON(closed, true, ctx.ApiVersion),
-		"open":   buildLedgerSummaryJSON(open, false, ctx.ApiVersion),
+		"closed": closedJSON,
+		"open":   openJSON,
 	}, nil
 }
 
@@ -618,19 +653,15 @@ func expandTransaction(
 	binary bool,
 	apiVersion int,
 	ctx SyntheticMetadataContext,
-) map[string]any {
+) (map[string]any, error) {
 	storedTx, err := decodeTxBlob(txData)
-	if err == nil && storedTx.TxJSON != nil {
+	if err != nil {
+		return nil, err
+	}
+	if storedTx.TxJSON != nil {
 		return expandStoredTransaction(storedTx, hashStr, binary, apiVersion, ctx)
 	}
-
-	// Cannot decode: return raw blob
-	txEntry := map[string]any{}
-	txEntry["tx_blob"] = strings.ToUpper(hex.EncodeToString(txData))
-	if apiVersion > 1 || !binary {
-		txEntry["hash"] = hashStr
-	}
-	return txEntry
+	return nil, fmt.Errorf("stored transaction has no transaction JSON")
 }
 
 // expandStoredTransaction formats a JSON-stored transaction for the response.
@@ -640,7 +671,7 @@ func expandStoredTransaction(
 	binary bool,
 	apiVersion int,
 	ctx SyntheticMetadataContext,
-) map[string]any {
+) (map[string]any, error) {
 	txEntry := map[string]any{}
 
 	if binary {
@@ -648,6 +679,8 @@ func expandStoredTransaction(
 		txBlob, err := binarycodec.Encode(storedTx.TxJSON)
 		if err == nil {
 			txEntry["tx_blob"] = txBlob
+		} else {
+			return nil, fmt.Errorf("encode transaction: %w", err)
 		}
 		if apiVersion > 1 {
 			txEntry["hash"] = hashStr
@@ -661,9 +694,11 @@ func expandStoredTransaction(
 				} else {
 					txEntry["meta"] = metaBlob
 				}
+			} else {
+				return nil, fmt.Errorf("encode transaction metadata: %w", err)
 			}
 		}
-		return txEntry
+		return txEntry, nil
 	}
 
 	if apiVersion > 1 {
@@ -682,7 +717,7 @@ func expandStoredTransaction(
 			txEntry["metaData"] = storedTx.Meta
 		}
 	}
-	return txEntry
+	return txEntry, nil
 }
 
 func injectExpandedLedgerDeliveredAmount(txJSON, meta map[string]any, ctx SyntheticMetadataContext) {

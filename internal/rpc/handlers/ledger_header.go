@@ -56,12 +56,16 @@ func (m *LedgerHeaderMethod) Handle(ctx *types.RpcContext, params json.RawMessag
 	//   uint32 seq, uint64 drops, hash256 parentHash, hash256 txHash,
 	//   hash256 accountHash, uint32 parentCloseTime, uint32 closeTime,
 	//   uint8 closeTimeResolution, uint8 closeFlags
+	txHash, stateHash, hashErr := ledgerMapHashes(targetLedger)
+	if hashErr != nil {
+		return nil, rpcInternalError("ledger_header: map root lookup failed", hashErr)
+	}
 	ledgerData := ledgerheader.AddRaw(ledgerheader.LedgerHeader{
 		LedgerIndex:         targetLedger.Sequence(),
 		ParentCloseTime:     protocol.FromRippleTime(uint32(max(targetLedger.ParentCloseTime(), 0))),
 		ParentHash:          targetLedger.ParentHash(),
-		TxHash:              targetLedger.TxMapHash(),
-		AccountHash:         targetLedger.StateMapHash(),
+		TxHash:              txHash,
+		AccountHash:         stateHash,
 		Drops:               targetLedger.TotalDrops(),
 		CloseFlags:          targetLedger.CloseFlags(),
 		CloseTimeResolution: uint8(targetLedger.CloseTimeResolution()),
@@ -71,7 +75,10 @@ func (m *LedgerHeaderMethod) Handle(ctx *types.RpcContext, params json.RawMessag
 
 	// Build the nested "ledger" JSON object (equivalent to addJson with options=0).
 	// Reference: rippled LedgerToJson.cpp fillJson()
-	ledgerObj := buildLedgerHeaderJSON(targetLedger, closed)
+	ledgerObj, err := buildLedgerHeaderJSON(targetLedger, closed)
+	if err != nil {
+		return nil, rpcInternalError("ledger_header: map root lookup failed", err)
+	}
 	response["ledger"] = ledgerObj
 
 	return response, nil
@@ -80,11 +87,11 @@ func (m *LedgerHeaderMethod) Handle(ctx *types.RpcContext, params json.RawMessag
 // buildLedgerHeaderJSON builds the "ledger" JSON object matching rippled's
 // fillJson(json, closed, info, bFull=false, apiVersion=1).
 // Reference: rippled/src/xrpld/app/ledger/detail/LedgerToJson.cpp fillJson()
-func buildLedgerHeaderJSON(lr types.LedgerReader, closed bool) map[string]any {
+func buildLedgerHeaderJSON(lr types.LedgerReader, closed bool) (map[string]any, error) {
 	return buildLedgerSummaryJSON(lr, closed, types.ApiVersion1)
 }
 
-func buildLedgerSummaryJSON(lr types.LedgerReader, closed bool, apiVersion int) map[string]any {
+func buildLedgerSummaryJSON(lr types.LedgerReader, closed bool, apiVersion int) (map[string]any, error) {
 	ledgerObj := map[string]any{}
 
 	// parent_hash is always present
@@ -99,15 +106,17 @@ func buildLedgerSummaryJSON(lr types.LedgerReader, closed bool, apiVersion int) 
 
 	if !closed {
 		ledgerObj["closed"] = false
-		return ledgerObj
+		return ledgerObj, nil
 	}
 
 	// For closed ledgers, include full header fields
 	ledgerObj["closed"] = true
 
 	hash := lr.Hash()
-	txHash := lr.TxMapHash()
-	stateHash := lr.StateMapHash()
+	txHash, stateHash, err := ledgerMapHashes(lr)
+	if err != nil {
+		return nil, err
+	}
 
 	ledgerObj["ledger_hash"] = FormatLedgerHash(hash)
 	ledgerObj["transaction_hash"] = FormatLedgerHash(txHash)
@@ -135,7 +144,7 @@ func buildLedgerSummaryJSON(lr types.LedgerReader, closed bool, apiVersion int) 
 		}
 	}
 
-	return ledgerObj
+	return ledgerObj, nil
 }
 
 func (m *LedgerHeaderMethod) SupportedApiVersions() []int {

@@ -1140,7 +1140,7 @@ func (ws *WebSocketServer) closeConnection(wsConn *WebSocketConnection) {
 // snapshot for any `snapshot:true` book.
 //
 // The ledger ack field set mirrors rippled subLedger: fee_ref only while
-// XRPFees is disabled, network_id always present; per-ledger pubLedger
+// XRPFees is disabled, network_id is present when a validated ledger exists; per-ledger pubLedger
 // events (LedgerCloseEvent) carry txn_count separately. The snapshot block
 // mirrors rippled
 // Subscribe.cpp:339-394: when snapshot is set, the response carries `offers`
@@ -1155,19 +1155,21 @@ func (ws *WebSocketServer) buildSubscribeAck(ctx *types.RpcContext, request type
 		if ws.ledgerInfoProvider != nil {
 			info := ws.ledgerInfoProvider.GetCurrentLedgerInfo()
 			if info != nil {
-				result["ledger_index"] = info.LedgerIndex
-				result["ledger_hash"] = info.LedgerHash
-				result["ledger_time"] = info.LedgerTime
-				result["fee_base"] = info.FeeBase
-				// rippled emits the deprecated fee_ref only while XRPFees
-				// is disabled; network_id is always present.
-				if !info.XRPFeesEnabled {
-					result["fee_ref"] = info.FeeRef
+				if info.LedgerAvailable {
+					result["ledger_index"] = info.LedgerIndex
+					result["ledger_hash"] = info.LedgerHash
+					result["ledger_time"] = info.LedgerTime
+					result["fee_base"] = info.FeeBase
+					// rippled emits the deprecated fee_ref only while XRPFees
+					// is disabled; network_id is present with ledger fields.
+					if !info.XRPFeesEnabled {
+						result["fee_ref"] = info.FeeRef
+					}
+					result["reserve_base"] = info.ReserveBase
+					result["reserve_inc"] = info.ReserveInc
+					result["network_id"] = info.NetworkID
 				}
-				result["reserve_base"] = info.ReserveBase
-				result["reserve_inc"] = info.ReserveInc
-				result["network_id"] = info.NetworkID
-				if info.ValidatedLedgers != "" {
+				if info.ValidatedLedgersPresent {
 					result["validated_ledgers"] = info.ValidatedLedgers
 				}
 			}

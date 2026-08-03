@@ -340,6 +340,24 @@ func TestBookChangesContextReadError(t *testing.T) {
 	assert.True(t, ledger.called)
 }
 
+func TestBookChangesMalformedTransactionReturnsInternal(t *testing.T) {
+	mock := newMockLedgerServiceBC()
+	ledger := newMockLedgerReaderBC(2)
+	ledger.txs[[32]byte{1}] = []byte{0xff}
+	mock.addLedger(ledger)
+	ctx := &types.RpcContext{
+		Context:    context.Background(),
+		Role:       types.RoleGuest,
+		ApiVersion: types.ApiVersion1,
+		Services:   newTestServicesBC(mock),
+	}
+
+	result, rpcErr := (&handlers.BookChangesMethod{}).Handle(ctx, json.RawMessage(`{"ledger_index":2}`))
+	assert.Nil(t, result)
+	require.NotNil(t, rpcErr)
+	assert.Equal(t, types.RpcINTERNAL, rpcErr.Code)
+}
+
 func TestBookChangesDomainAndOrdering(t *testing.T) {
 	const (
 		issuer = "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh"

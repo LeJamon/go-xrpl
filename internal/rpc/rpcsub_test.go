@@ -2,6 +2,7 @@ package rpc
 
 import (
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -352,7 +353,7 @@ func TestRPCSub_AccountsDontBlockRemoval(t *testing.T) {
 // only while XRPFees is disabled.
 func TestRPCSub_SubscribeAckCarriesLedgerInfo(t *testing.T) {
 	ws, services := newRPCSubTestServer(t)
-	ws.SetLedgerInfoProvider(stubLedgerInfoProvider{})
+	ws.SetLedgerInfoProvider(stubLedgerInfoProvider{ledgerAvailable: true})
 	sink := newRPCSubSink(t)
 
 	result, rpcErr := subscribeURL(t, services, `{"url":"`+sink.srv.URL+`","streams":["ledger"]}`)
@@ -374,7 +375,7 @@ func TestRPCSub_SubscribeAckCarriesLedgerInfo(t *testing.T) {
 // subLedger gate.
 func TestRPCSub_SubscribeAckOmitsFeeRefUnderXRPFees(t *testing.T) {
 	ws, services := newRPCSubTestServer(t)
-	ws.SetLedgerInfoProvider(stubLedgerInfoProvider{xrpFees: true})
+	ws.SetLedgerInfoProvider(stubLedgerInfoProvider{ledgerAvailable: true, xrpFees: true})
 	sink := newRPCSubSink(t)
 
 	result, rpcErr := subscribeURL(t, services, `{"url":"`+sink.srv.URL+`","streams":["ledger"]}`)
@@ -385,18 +386,120 @@ func TestRPCSub_SubscribeAckOmitsFeeRefUnderXRPFees(t *testing.T) {
 	require.Contains(t, ack, "network_id")
 }
 
-type stubLedgerInfoProvider struct{ xrpFees bool }
+func TestSubLedgerWireMatrix(t *testing.T) {
+	states := []string{"", "disconnected", "connected", "syncing", "tracking", "full", "proposing", "validating"}
+	for _, xrpFees := range []bool{false, true} {
+		for _, state := range states {
+			for _, needsNetworkLedger := range []bool{false, true} {
+				for _, networkID := range []uint32{0, 42} {
+					for _, complete := range []string{"", "1-2,4"} {
+						name := fmt.Sprintf("xrp_fees_%t/%s/needs_%t/network_%d/complete_%t", xrpFees, state, needsNetworkLedger, networkID, complete != "")
+						t.Run(name, func(t *testing.T) {
+							validatedLedgers := ""
+							validatedLedgersPresent := publishesValidatedLedgers(state) && !needsNetworkLedger
+							if validatedLedgersPresent {
+								validatedLedgers = complete
+							}
+							ws, _ := newRPCSubTestServer(t)
+							ws.SetLedgerInfoProvider(stubLedgerInfoProvider{
+								ledgerAvailable:         true,
+								xrpFees:                 xrpFees,
+								validatedLedgers:        validatedLedgers,
+								validatedLedgersPresent: validatedLedgersPresent,
+								networkID:               networkID,
+							})
+							ack := ws.buildSubscribeAck(&types.RpcContext{}, types.SubscriptionRequest{Streams: []types.SubscriptionType{types.SubLedger}})
+							got, err := json.Marshal(ack)
+							require.NoError(t, err)
+
+							want := `{"fee_base":10`
+							if !xrpFees {
+								want += `,"fee_ref":10`
+							}
+							want += fmt.Sprintf(`,"ledger_hash":"ABCD","ledger_index":42,"ledger_time":735000000,"network_id":%d,"reserve_base":10000000,"reserve_inc":2000000`, networkID)
+							if validatedLedgersPresent {
+								want += fmt.Sprintf(`,"validated_ledgers":"%s"`, validatedLedgers)
+							}
+							want += `}`
+							if string(got) != want {
+								t.Fatalf("subLedger JSON = %s, want %s", got, want)
+							}
+						})
+					}
+				}
+			}
+		}
+	}
+}
+
+func TestSubLedgerWireMatrixWithoutValidatedLedger(t *testing.T) {
+	states := []string{"", "disconnected", "connected", "syncing", "tracking", "full", "proposing", "validating"}
+	for _, state := range states {
+		for _, needsNetworkLedger := range []bool{false, true} {
+			for _, networkID := range []uint32{0, 42} {
+				for _, complete := range []string{"", "1-2,4"} {
+					name := fmt.Sprintf("%s/needs_%t/network_%d/complete_%t", state, needsNetworkLedger, networkID, complete != "")
+					t.Run(name, func(t *testing.T) {
+						validatedLedgers := ""
+						validatedLedgersPresent := publishesValidatedLedgers(state) && !needsNetworkLedger
+						if validatedLedgersPresent {
+							validatedLedgers = complete
+						}
+						ws, _ := newRPCSubTestServer(t)
+						ws.SetLedgerInfoProvider(stubLedgerInfoProvider{
+							validatedLedgers:        validatedLedgers,
+							validatedLedgersPresent: validatedLedgersPresent,
+							networkID:               networkID,
+						})
+						ack := ws.buildSubscribeAck(&types.RpcContext{}, types.SubscriptionRequest{Streams: []types.SubscriptionType{types.SubLedger}})
+						got, err := json.Marshal(ack)
+						require.NoError(t, err)
+
+						want := "{}"
+						if validatedLedgersPresent {
+							want = fmt.Sprintf(`{"validated_ledgers":"%s"}`, validatedLedgers)
+						}
+						if string(got) != want {
+							t.Fatalf("subLedger JSON without validated ledger = %s, want %s", got, want)
+						}
+					})
+				}
+			}
+		}
+	}
+}
+
+func publishesValidatedLedgers(state string) bool {
+	switch state {
+	case "syncing", "tracking", "full", "proposing", "validating":
+		return true
+	default:
+		return false
+	}
+}
+
+type stubLedgerInfoProvider struct {
+	ledgerAvailable         bool
+	xrpFees                 bool
+	validatedLedgers        string
+	validatedLedgersPresent bool
+	networkID               uint32
+}
 
 func (s stubLedgerInfoProvider) GetCurrentLedgerInfo() *types.LedgerSubscribeInfo {
 	return &types.LedgerSubscribeInfo{
-		LedgerIndex:    42,
-		LedgerHash:     "ABCD",
-		LedgerTime:     735000000,
-		FeeBase:        10,
-		FeeRef:         10,
-		ReserveBase:    10000000,
-		ReserveInc:     2000000,
-		XRPFeesEnabled: s.xrpFees,
+		LedgerAvailable:         s.ledgerAvailable,
+		LedgerIndex:             42,
+		LedgerHash:              "ABCD",
+		LedgerTime:              735000000,
+		FeeBase:                 10,
+		FeeRef:                  10,
+		ReserveBase:             10000000,
+		ReserveInc:              2000000,
+		ValidatedLedgers:        s.validatedLedgers,
+		ValidatedLedgersPresent: s.validatedLedgersPresent,
+		NetworkID:               s.networkID,
+		XRPFeesEnabled:          s.xrpFees,
 	}
 }
 

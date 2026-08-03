@@ -180,13 +180,33 @@ func (a *ledgerReaderAdapter) ParentCloseTime() int64 {
 }
 
 func (a *ledgerReaderAdapter) TxMapHash() [32]byte {
-	h, _ := a.l.TxMapHash()
-	return h
+	hash, err := a.TxMapHashWithError()
+	if err != nil {
+		return a.l.Header().TxHash
+	}
+	return hash
 }
 
 func (a *ledgerReaderAdapter) StateMapHash() [32]byte {
-	h, _ := a.l.StateMapHash()
-	return h
+	hash, err := a.StateMapHashWithError()
+	if err != nil {
+		return a.l.Header().AccountHash
+	}
+	return hash
+}
+
+func (a *ledgerReaderAdapter) TxMapHashWithError() ([32]byte, error) {
+	if _, err := a.l.TxMapHash(); err != nil {
+		return [32]byte{}, err
+	}
+	return a.l.Header().TxHash, nil
+}
+
+func (a *ledgerReaderAdapter) StateMapHashWithError() ([32]byte, error) {
+	if _, err := a.l.StateMapHash(); err != nil {
+		return [32]byte{}, err
+	}
+	return a.l.Header().AccountHash, nil
 }
 
 func (a *ledgerReaderAdapter) ForEachTransaction(fn func(txHash [32]byte, txData []byte) bool) error {
@@ -210,11 +230,15 @@ func (a *ledgerReaderAdapter) ForEachLedgerStateContext(ctx context.Context, fn 
 }
 
 func (a *ledgerReaderAdapter) LedgerAmendmentRules() *amendment.Rules {
-	rules, err := ledger.LoadAmendmentsFromLedger(a.l)
-	if err != nil || rules == nil {
-		return amendment.EmptyRules()
+	return a.l.Rules()
+}
+
+func (a *ledgerReaderAdapter) LedgerAmendmentRulesWithError() (*amendment.Rules, error) {
+	rules := a.l.Rules()
+	if rules == nil {
+		return nil, fmt.Errorf("ledger %d amendment rules unavailable", a.l.Sequence())
 	}
-	return rules
+	return rules, nil
 }
 
 // SubmitTransaction submits a transaction to the open ledger.
@@ -267,12 +291,20 @@ func (a *LedgerServiceAdapter) submitTransaction(txJSON []byte, txBlobHex string
 	// Use the original signed blob if provided, otherwise re-encode
 	var rawBlob []byte
 	if txBlobHex != "" {
-		rawBlob, _ = hex.DecodeString(txBlobHex)
+		var decodeErr error
+		rawBlob, decodeErr = hex.DecodeString(txBlobHex)
+		if decodeErr != nil {
+			return nil, fmt.Errorf("decode tx_blob: %w", decodeErr)
+		}
 	}
 	if rawBlob == nil {
 		if txMap, fErr := transaction.Flatten(); fErr == nil {
 			if hexStr, eErr := binarycodec.Encode(txMap); eErr == nil {
-				rawBlob, _ = hex.DecodeString(hexStr)
+				var decodeErr error
+				rawBlob, decodeErr = hex.DecodeString(hexStr)
+				if decodeErr != nil {
+					return nil, fmt.Errorf("decode encoded transaction: %w", decodeErr)
+				}
 			}
 		}
 	}
@@ -280,7 +312,11 @@ func (a *LedgerServiceAdapter) submitTransaction(txJSON []byte, txBlobHex string
 		var jsonMap map[string]any
 		if jErr := json.Unmarshal(txJSON, &jsonMap); jErr == nil {
 			if hexStr, eErr := binarycodec.Encode(jsonMap); eErr == nil {
-				rawBlob, _ = hex.DecodeString(hexStr)
+				var decodeErr error
+				rawBlob, decodeErr = hex.DecodeString(hexStr)
+				if decodeErr != nil {
+					return nil, fmt.Errorf("decode encoded transaction: %w", decodeErr)
+				}
 			}
 		}
 	}

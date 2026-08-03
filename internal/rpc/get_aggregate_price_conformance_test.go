@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	addresscodec "github.com/LeJamon/go-xrpl/codec/addresscodec"
+	"github.com/LeJamon/go-xrpl/internal/ledger/service/svcerr"
 	"github.com/LeJamon/go-xrpl/internal/ledger/state"
 	"github.com/LeJamon/go-xrpl/internal/rpc/handlers"
 	"github.com/LeJamon/go-xrpl/internal/rpc/types"
@@ -20,8 +21,10 @@ import (
 
 type aggregatePriceLedgerService struct {
 	*mockLedgerService
-	entries      map[[32]byte]*types.LedgerEntryResult
-	transactions map[[32]byte]*types.TransactionInfo
+	entries        map[[32]byte]*types.LedgerEntryResult
+	transactions   map[[32]byte]*types.TransactionInfo
+	entryErr       error
+	transactionErr error
 }
 
 func newAggregatePriceLedgerService() *aggregatePriceLedgerService {
@@ -33,17 +36,23 @@ func newAggregatePriceLedgerService() *aggregatePriceLedgerService {
 }
 
 func (m *aggregatePriceLedgerService) GetLedgerEntry(_ context.Context, entryKey [32]byte, _ string) (*types.LedgerEntryResult, error) {
+	if m.entryErr != nil {
+		return nil, m.entryErr
+	}
 	entry, ok := m.entries[entryKey]
 	if !ok {
-		return nil, errors.New("ledger entry not found")
+		return nil, svcerr.ErrLedgerEntryNotFound
 	}
 	return entry, nil
 }
 
 func (m *aggregatePriceLedgerService) GetTransaction(hash [32]byte) (*types.TransactionInfo, error) {
+	if m.transactionErr != nil {
+		return nil, m.transactionErr
+	}
 	transaction, ok := m.transactions[hash]
 	if !ok {
-		return nil, errors.New("transaction not found")
+		return nil, svcerr.ErrTxnNotFound
 	}
 	return transaction, nil
 }
@@ -80,6 +89,131 @@ func TestGetAggregatePriceProjectionAndXRPLArithmetic(t *testing.T) {
 	assert.Equal(t, strings.Repeat("0", 64), result["ledger_hash"])
 	assert.Equal(t, true, result["validated"])
 	assert.NotContains(t, result, "ledger_current_index")
+}
+
+func TestGetAggregatePriceSkipsMissingOracleEntries(t *testing.T) {
+	const owner = "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh"
+	service := newAggregatePriceLedgerService()
+	key, node := aggregateOracleNode(t, owner, 1, 100, "XRP", "USD", 740, 0, "", 0)
+	service.entries[key] = &types.LedgerEntryResult{Node: node}
+
+	result := callAggregatePrice(t, service, map[string]any{
+		"base_asset":  "XRP",
+		"quote_asset": "USD",
+		"oracles": []map[string]any{
+			{"account": owner, "oracle_document_id": 999},
+			{"account": owner, "oracle_document_id": 1},
+		},
+	})
+	assert.Equal(t, uint16(1), result["entire_set"].(map[string]any)["size"])
+}
+
+func TestGetAggregatePriceLookupErrorReturnsInternal(t *testing.T) {
+	service := newAggregatePriceLedgerService()
+	service.entryErr = errors.New("node store unavailable")
+	result, rpcErr := callAggregatePriceError(t, service, map[string]any{
+		"base_asset":  "XRP",
+		"quote_asset": "USD",
+		"oracles": []map[string]any{{
+			"account":            ownerForAggregatePriceTest,
+			"oracle_document_id": 1,
+		}},
+	})
+	assert.Nil(t, result)
+	require.NotNil(t, rpcErr)
+	assert.Equal(t, types.RpcINTERNAL, rpcErr.Code)
+}
+
+func TestGetAggregatePriceMalformedOracleBytesReturnsInternal(t *testing.T) {
+	service := newAggregatePriceLedgerService()
+	key, _ := aggregateOracleNode(t, ownerForAggregatePriceTest, 1, 100, "XRP", "USD", 740, 0, "", 0)
+	service.entries[key] = &types.LedgerEntryResult{Node: []byte{0xff}}
+
+	result, rpcErr := callAggregatePriceError(t, service, map[string]any{
+		"base_asset":  "XRP",
+		"quote_asset": "USD",
+		"oracles": []map[string]any{{
+			"account":            ownerForAggregatePriceTest,
+			"oracle_document_id": 1,
+		}},
+	})
+	assert.Nil(t, result)
+	require.NotNil(t, rpcErr)
+	assert.Equal(t, types.RpcINTERNAL, rpcErr.Code)
+}
+
+func TestGetAggregatePriceHistoricalLookupErrorReturnsInternal(t *testing.T) {
+	service := newAggregatePriceLedgerService()
+	service.transactionErr = errors.New("transaction store unavailable")
+	key, node := aggregateOracleNode(t, ownerForAggregatePriceTest, 1, 100, "XRP", "EUR", 740, 0, strings.Repeat("A", 64), 5)
+	service.entries[key] = &types.LedgerEntryResult{Node: node}
+
+	result, rpcErr := callAggregatePriceError(t, service, map[string]any{
+		"base_asset":  "XRP",
+		"quote_asset": "USD",
+		"oracles": []map[string]any{{
+			"account":            ownerForAggregatePriceTest,
+			"oracle_document_id": 1,
+		}},
+	})
+	assert.Nil(t, result)
+	require.NotNil(t, rpcErr)
+	assert.Equal(t, types.RpcINTERNAL, rpcErr.Code)
+}
+
+func TestGetAggregatePriceMissingHistoricalTransactionReturnsObjectNotFound(t *testing.T) {
+	service := newAggregatePriceLedgerService()
+	key, node := aggregateOracleNode(t, ownerForAggregatePriceTest, 1, 100, "XRP", "EUR", 740, 0, strings.Repeat("A", 64), 5)
+	service.entries[key] = &types.LedgerEntryResult{Node: node}
+
+	result, rpcErr := callAggregatePriceError(t, service, map[string]any{
+		"base_asset":  "XRP",
+		"quote_asset": "USD",
+		"oracles": []map[string]any{{
+			"account":            ownerForAggregatePriceTest,
+			"oracle_document_id": 1,
+		}},
+	})
+	assert.Nil(t, result)
+	require.NotNil(t, rpcErr)
+	assert.Equal(t, types.RpcOBJECT_NOT_FOUND, rpcErr.Code)
+}
+
+func TestGetAggregatePriceMalformedHistoricalTransactionReturnsInternal(t *testing.T) {
+	service := newAggregatePriceLedgerService()
+	key, node := aggregateOracleNode(t, ownerForAggregatePriceTest, 1, 100, "XRP", "EUR", 740, 0, strings.Repeat("A", 64), 5)
+	service.entries[key] = &types.LedgerEntryResult{Node: node}
+	service.transactions[aggregateHash(t, strings.Repeat("A", 64))] = &types.TransactionInfo{
+		TxData:      []byte{0xff},
+		LedgerIndex: 5,
+	}
+
+	result, rpcErr := callAggregatePriceError(t, service, map[string]any{
+		"base_asset":  "XRP",
+		"quote_asset": "USD",
+		"oracles": []map[string]any{{
+			"account":            ownerForAggregatePriceTest,
+			"oracle_document_id": 1,
+		}},
+	})
+	assert.Nil(t, result)
+	require.NotNil(t, rpcErr)
+	assert.Equal(t, types.RpcINTERNAL, rpcErr.Code)
+}
+
+const ownerForAggregatePriceTest = "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh"
+
+func callAggregatePriceError(t *testing.T, service types.LedgerService, request map[string]any) (any, *types.RpcError) {
+	t.Helper()
+	encoded, err := json.Marshal(request)
+	require.NoError(t, err)
+	ctx := &types.RpcContext{
+		Context:    context.Background(),
+		Role:       types.RoleGuest,
+		ApiVersion: types.ApiVersion1,
+		Services:   &types.ServiceContainer{Ledger: service},
+	}
+	return (&handlers.GetAggregatePriceMethod{}).Handle(ctx, encoded)
 }
 
 func TestGetAggregatePriceThresholdIncludesBoundary(t *testing.T) {

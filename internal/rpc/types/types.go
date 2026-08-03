@@ -677,19 +677,26 @@ type LedgerInfoProvider interface {
 // LedgerSubscribeInfo contains ledger info returned in the subscribe
 // response for the `ledger` stream. Field set mirrors rippled's
 // subLedger ack (NetworkOPs::subLedger): fee_ref is emitted only when
-// the XRPFees amendment is disabled, and network_id is always present.
+// the XRPFees amendment is disabled, and network_id is present when a
+// validated ledger is available.
 // The per-ledger streamed event uses LedgerCloseEvent and carries
 // additional fields (txn_count, etc.).
 type LedgerSubscribeInfo struct {
-	LedgerIndex      uint32 `json:"ledger_index"`
-	LedgerHash       string `json:"ledger_hash"`
-	LedgerTime       uint32 `json:"ledger_time"`
-	FeeBase          int32  `json:"fee_base"`
-	FeeRef           uint64 `json:"fee_ref"`
-	ReserveBase      int32  `json:"reserve_base"`
-	ReserveInc       int32  `json:"reserve_inc"`
-	ValidatedLedgers string `json:"validated_ledgers,omitempty"`
-	NetworkID        uint32 `json:"network_id"`
+	// LedgerAvailable is false while the server has no validated ledger. In
+	// that state subLedger still emits validated_ledgers when its independent
+	// operating-mode gate allows it, but must omit all fields derived from a
+	// particular validated ledger.
+	LedgerAvailable         bool   `json:"-"`
+	LedgerIndex             uint32 `json:"ledger_index"`
+	LedgerHash              string `json:"ledger_hash"`
+	LedgerTime              uint32 `json:"ledger_time"`
+	FeeBase                 int32  `json:"fee_base"`
+	FeeRef                  uint64 `json:"fee_ref"`
+	ReserveBase             int32  `json:"reserve_base"`
+	ReserveInc              int32  `json:"reserve_inc"`
+	ValidatedLedgers        string `json:"validated_ledgers,omitempty"`
+	ValidatedLedgersPresent bool   `json:"-"`
+	NetworkID               uint32 `json:"network_id"`
 	// XRPFeesEnabled gates fee_ref: rippled emits the deprecated fee_ref
 	// only while the XRPFees amendment is disabled.
 	XRPFeesEnabled bool `json:"-"`

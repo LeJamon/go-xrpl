@@ -10,6 +10,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/LeJamon/go-xrpl/amendment"
 	binarycodec "github.com/LeJamon/go-xrpl/codec/binarycodec"
 	ledgerselector "github.com/LeJamon/go-xrpl/internal/ledger/selector"
 	"github.com/LeJamon/go-xrpl/internal/ledger/service/svcerr"
@@ -41,6 +42,43 @@ func rpcTransactionSubmissionError(operation string, err error) *types.RpcError 
 func rpcDBDeserializationError(operation string, err error) *types.RpcError {
 	logRpcError(operation, err)
 	return types.RpcErrorDBDeserialization()
+}
+
+// ledgerMapHashes reads both ledger roots without allowing a production
+// adapter's SHAMap error to be replaced with a zero hash. Legacy readers keep
+// the value-only methods, so the error-aware facet is optional for test and
+// embedded implementations.
+func ledgerMapHashes(l types.LedgerReader) (txHash, stateHash [32]byte, err error) {
+	if source, ok := l.(types.LedgerMapHashSource); ok {
+		txHash, err = source.TxMapHashWithError()
+		if err != nil {
+			return [32]byte{}, [32]byte{}, err
+		}
+		stateHash, err = source.StateMapHashWithError()
+		if err != nil {
+			return [32]byte{}, [32]byte{}, err
+		}
+		return txHash, stateHash, nil
+	}
+	return l.TxMapHash(), l.StateMapHash(), nil
+}
+
+func ledgerAmendmentRules(l types.LedgerReader) (*amendment.Rules, error) {
+	if source, ok := l.(types.LedgerAmendmentRulesErrorSource); ok {
+		rules, err := source.LedgerAmendmentRulesWithError()
+		if err != nil {
+			return nil, err
+		}
+		if rules != nil {
+			return rules, nil
+		}
+	}
+	if source, ok := l.(types.LedgerAmendmentRulesSource); ok {
+		if rules := source.LedgerAmendmentRules(); rules != nil {
+			return rules, nil
+		}
+	}
+	return amendment.EmptyRules(), nil
 }
 
 // RequireLedgerService checks that the ledger service is available

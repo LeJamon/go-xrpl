@@ -26,9 +26,19 @@ func (a *ledgerInfoAdapter) GetCurrentLedgerInfo() *types.LedgerSubscribeInfo {
 		return nil
 	}
 
+	serverInfo := a.ledgerService.GetServerInfo()
 	validatedLedger := a.ledgerService.GetValidatedLedger()
+	validatedLedgers := ""
+	validatedLedgersPresent := serverPublishesValidatedRange(serverInfo.ServerState) && !serverInfo.NeedsNetworkLedger
+	if validatedLedgersPresent {
+		validatedLedgers = serverInfo.CompleteLedgers
+	}
 	if validatedLedger == nil {
-		return nil
+		return &types.LedgerSubscribeInfo{
+			ValidatedLedgers:        validatedLedgers,
+			ValidatedLedgersPresent: validatedLedgersPresent,
+			NetworkID:               serverInfo.NetworkID,
+		}
 	}
 
 	baseFee, reserveBase, reserveInc := service.FeesFromLedger(validatedLedger)
@@ -36,24 +46,21 @@ func (a *ledgerInfoAdapter) GetCurrentLedgerInfo() *types.LedgerSubscribeInfo {
 	ledgerTime := protocol.ToRippleTime(validatedLedger.CloseTime())
 
 	hash := validatedLedger.Hash()
-	serverInfo := a.ledgerService.GetServerInfo()
-	validatedLedgers := ""
-	if serverPublishesValidatedRange(serverInfo.ServerState) && !serverInfo.NeedsNetworkLedger {
-		validatedLedgers = serverInfo.CompleteLedgers
-	}
 	xrpFeesEnabled := validatedLedger.Rules() != nil && validatedLedger.Rules().XRPFeesEnabled()
 
 	return &types.LedgerSubscribeInfo{
-		LedgerIndex:      validatedLedger.Sequence(),
-		LedgerHash:       upperHex(hash[:]),
-		LedgerTime:       ledgerTime,
-		FeeBase:          jsonClippedXRPAmount(int64(baseFee)),
-		FeeRef:           deprecatedFeeReferenceUnits,
-		ReserveBase:      jsonClippedXRPAmount(int64(reserveBase)),
-		ReserveInc:       jsonClippedXRPAmount(int64(reserveInc)),
-		ValidatedLedgers: validatedLedgers,
-		NetworkID:        serverInfo.NetworkID,
-		XRPFeesEnabled:   xrpFeesEnabled,
+		LedgerAvailable:         true,
+		LedgerIndex:             validatedLedger.Sequence(),
+		LedgerHash:              upperHex(hash[:]),
+		LedgerTime:              ledgerTime,
+		FeeBase:                 jsonClippedXRPAmount(int64(baseFee)),
+		FeeRef:                  deprecatedFeeReferenceUnits,
+		ReserveBase:             jsonClippedXRPAmount(int64(reserveBase)),
+		ReserveInc:              jsonClippedXRPAmount(int64(reserveInc)),
+		ValidatedLedgers:        validatedLedgers,
+		ValidatedLedgersPresent: validatedLedgersPresent,
+		NetworkID:               serverInfo.NetworkID,
+		XRPFeesEnabled:          xrpFeesEnabled,
 	}
 }
 
@@ -79,21 +86,23 @@ func buildLedgerCloseEvent(event *service.LedgerAcceptedEvent, serverInfo servic
 		feeRef = &value
 	}
 	validatedLedgers := ""
-	if serverPublishesValidatedRange(serverInfo.ServerState) {
+	validatedLedgersPresent := serverPublishesValidatedRange(serverInfo.ServerState)
+	if validatedLedgersPresent {
 		validatedLedgers = serverInfo.CompleteLedgers
 	}
 	return &rpc.LedgerCloseEvent{
-		Type:             "ledgerClosed",
-		LedgerIndex:      event.LedgerInfo.Sequence,
-		LedgerHash:       upperHex(event.LedgerInfo.Hash[:]),
-		LedgerTime:       protocol.ToRippleTime(event.LedgerInfo.CloseTime),
-		FeeBase:          jsonClippedXRPAmount(int64(baseFee)),
-		FeeRef:           feeRef,
-		NetworkID:        serverInfo.NetworkID,
-		ReserveBase:      jsonClippedXRPAmount(int64(reserveBase)),
-		ReserveInc:       jsonClippedXRPAmount(int64(reserveInc)),
-		TxnCount:         len(event.TransactionResults),
-		ValidatedLedgers: validatedLedgers,
+		Type:                    "ledgerClosed",
+		LedgerIndex:             event.LedgerInfo.Sequence,
+		LedgerHash:              upperHex(event.LedgerInfo.Hash[:]),
+		LedgerTime:              protocol.ToRippleTime(event.LedgerInfo.CloseTime),
+		FeeBase:                 jsonClippedXRPAmount(int64(baseFee)),
+		FeeRef:                  feeRef,
+		NetworkID:               serverInfo.NetworkID,
+		ReserveBase:             jsonClippedXRPAmount(int64(reserveBase)),
+		ReserveInc:              jsonClippedXRPAmount(int64(reserveInc)),
+		TxnCount:                len(event.TransactionResults),
+		ValidatedLedgers:        validatedLedgers,
+		ValidatedLedgersPresent: validatedLedgersPresent,
 	}
 }
 
