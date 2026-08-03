@@ -516,6 +516,20 @@ func (e *scriptedEngine) GetPeerFinished(p []byte) int {
 }
 func (e *scriptedEngine) Free() { e.freed = true }
 
+type blockingReadEngine struct {
+	scriptedEngine
+	readStarted chan struct{}
+	releaseRead chan struct{}
+}
+
+func (e *blockingReadEngine) Read(p []byte) (int, error) {
+	close(e.readStarted)
+	<-e.releaseRead
+	e.out = append(e.out, []byte("control")...)
+	p[0] = 'p'
+	return 1, nil
+}
+
 type rawRead struct {
 	data []byte
 	err  error
@@ -599,6 +613,9 @@ func TestReadDefersRawTerminalErrorAndPreservesPartialBIOInput(t *testing.T) {
 			_, err = c.Read(make([]byte, 1))
 			if !errors.Is(err, tc.want) {
 				t.Fatalf("terminal error = %v, want %v", err, tc.want)
+			}
+			if _, err = c.Write([]byte("x")); !errors.Is(err, tc.want) {
+				t.Fatalf("sticky terminal error = %v, want %v", err, tc.want)
 			}
 		})
 	}
@@ -710,6 +727,59 @@ func TestOutputFlushIsLosslessAndAccountsPlaintext(t *testing.T) {
 	})
 	if n, err := c.Write([]byte("x")); n != 1 || !errors.Is(err, io.ErrNoProgress) {
 		t.Fatalf("zero raw-write progress = (%d, %v)", n, err)
+	}
+}
+
+func TestReadControlOutputPrecedesConcurrentWriteOutput(t *testing.T) {
+	raw := &scriptedRawConn{}
+	engine := &blockingReadEngine{
+		scriptedEngine: scriptedEngine{
+			writes: []engineResult{{n: 1, out: []byte("application")}},
+		},
+		readStarted: make(chan struct{}),
+		releaseRead: make(chan struct{}),
+	}
+	c := readyScriptedConn(raw, engine)
+
+	readDone := make(chan error, 1)
+	go func() {
+		_, err := c.Read(make([]byte, 1))
+		readDone <- err
+	}()
+	select {
+	case <-engine.readStarted:
+	case <-time.After(time.Second):
+		t.Fatal("Read did not enter the TLS engine")
+	}
+	if c.outMu.TryLock() {
+		c.outMu.Unlock()
+		t.Fatal("Read did not retain output ordering while the TLS operation was active")
+	}
+
+	writeDone := make(chan error, 1)
+	go func() {
+		_, err := c.Write([]byte("x"))
+		writeDone <- err
+	}()
+	close(engine.releaseRead)
+	select {
+	case err := <-readDone:
+		if err != nil {
+			t.Fatalf("Read error = %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("Read did not finish")
+	}
+	select {
+	case err := <-writeDone:
+		if err != nil {
+			t.Fatalf("Write error = %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("Write did not finish")
+	}
+	if !bytes.Equal(raw.written, []byte("controlapplication")) {
+		t.Fatalf("wire output = %q", raw.written)
 	}
 }
 
@@ -839,6 +909,17 @@ func TestClosedStateAndConstructorValidation(t *testing.T) {
 	ln := &trackingListener{}
 	if _, err := NewListener(ln, &Config{CertPEM: []byte("bad"), KeyPEM: []byte("bad")}); err == nil || ln.closed {
 		t.Fatalf("NewListener malformed config = %v, closed=%v", err, ln.closed)
+	}
+	ln = &trackingListener{}
+	listener, err := NewListener(ln, &Config{CertPEM: cert, KeyPEM: key})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := listener.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := listener.Accept(); !errors.Is(err, net.ErrClosed) {
+		t.Fatalf("closed listener Accept error = %v", err)
 	}
 }
 

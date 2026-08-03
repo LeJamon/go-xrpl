@@ -1051,11 +1051,18 @@ func (p *Peer) Run(ctx context.Context) error {
 		conn := p.conn
 		p.mu.RUnlock()
 		if tlsConn, ok := conn.(peertls.GracefulConn); ok {
-			shutdownCtx, cancel := context.WithTimeout(context.Background(), DefaultHandshakeTimeout)
-			if p.waitOutboundDrain(ctx, shutdownCtx, errCh) == nil {
-				_ = tlsConn.ShutdownContext(shutdownCtx)
+			// The queue is bounded and writeLoop applies a size-aware deadline to
+			// every accepted frame; a shorter aggregate cap can discard valid data.
+			drainErr := p.waitOutboundDrain(ctx, context.Background(), errCh)
+			if drainErr != nil {
+				runErr = fmt.Errorf("peer graceful drain: %w", drainErr)
+			} else {
+				shutdownCtx, cancelShutdown := context.WithTimeout(context.Background(), gracefulShutdownTimeout)
+				if err := tlsConn.ShutdownContext(shutdownCtx); err != nil {
+					runErr = fmt.Errorf("peer TLS shutdown: %w", err)
+				}
+				cancelShutdown()
 			}
-			cancel()
 		}
 	}
 	p.Close()
@@ -1363,6 +1370,7 @@ func (p *Peer) beginGracefulClose() bool {
 	if p.closed.Load() {
 		return false
 	}
+	p.setState(PeerStateClosing)
 	p.gracefulClosing = true
 	return true
 }
@@ -1505,6 +1513,7 @@ const (
 	// probe. Mirrors rippled's peerTimerInterval (PeerImp.cpp:61) and
 	// the fail("Ping Timeout") branch at PeerImp.cpp:731-736.
 	pingTimeout = 60 * time.Second
+	gracefulShutdownTimeout = pingTimeout
 	// pingProbeInterval: cadence after the first probe. Finer than
 	// rippled's 60s peerTimerInterval; OnPong's sweep coalesces
 	// concurrent in-flight pings so the disconnect criterion stays
@@ -2049,7 +2058,9 @@ func (p *Peer) SendQueueLen() int {
 }
 
 func (p *Peer) Close() error {
+	p.sendMu.Lock()
 	if p.closed.Swap(true) {
+		p.sendMu.Unlock()
 		return nil
 	}
 
@@ -2062,6 +2073,7 @@ func (p *Peer) Close() error {
 	conn := p.conn
 	p.conn = nil
 	p.mu.Unlock()
+	p.sendMu.Unlock()
 
 	var err error
 	if conn != nil {

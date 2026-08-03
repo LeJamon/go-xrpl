@@ -46,7 +46,9 @@ func (*fatalRunConn) SetReadDeadline(time.Time) error  { return nil }
 func (*fatalRunConn) SetWriteDeadline(time.Time) error { return nil }
 
 type gracefulDrainConn struct {
-	readErr error
+	readErr     error
+	writeErr    error
+	shutdownErr error
 
 	writeStarted  chan struct{}
 	releaseWrites chan struct{}
@@ -83,6 +85,9 @@ func (c *gracefulDrainConn) Write(p []byte) (int, error) {
 	c.mu.Lock()
 	c.writes = append(c.writes, append([]byte(nil), p...))
 	c.mu.Unlock()
+	if c.writeErr != nil {
+		return 0, c.writeErr
+	}
 	return len(p), nil
 }
 
@@ -106,7 +111,11 @@ func (c *gracefulDrainConn) ShutdownContext(context.Context) error {
 	c.shutdownFrames = len(c.writes)
 	c.mu.Unlock()
 	c.shutdownOnce.Do(func() { close(c.shutdown) })
-	return c.Close()
+	closeErr := c.Close()
+	if c.shutdownErr != nil {
+		return c.shutdownErr
+	}
+	return closeErr
 }
 
 func TestOutboundQueueReliableFIFOAndBulkFairness(t *testing.T) {
@@ -477,6 +486,7 @@ func TestPeerRunDrainsAcceptedFramesBeforeGracefulEOFShutdown(t *testing.T) {
 		defer peer.sendMu.RUnlock()
 		return peer.gracefulClosing
 	}, time.Second, time.Millisecond)
+	assert.Equal(t, PeerStateClosing, peer.State())
 	require.ErrorIs(t, peer.Send([]byte("late")), ErrConnectionClosed)
 	close(conn.releaseWrites)
 
@@ -572,6 +582,37 @@ func TestPeerRunAbortsOnReadFailure(t *testing.T) {
 	default:
 		t.Fatal("read failure did not close transport")
 	}
+}
+
+func TestPeerRunReturnsGracefulDrainFailure(t *testing.T) {
+	writeErr := errors.New("peer write failed")
+	peer := newLatencyTestPeer(t)
+	conn := newGracefulDrainConn(io.EOF)
+	conn.writeErr = writeErr
+	close(conn.releaseWrites)
+	peer.conn = conn
+	peer.bufReader = bufio.NewReader(conn)
+	peer.setState(PeerStateConnected)
+
+	require.NoError(t, peer.Send([]byte("accepted")))
+	require.ErrorIs(t, peer.Run(context.Background()), writeErr)
+	select {
+	case <-conn.shutdown:
+		t.Fatal("write failure used graceful TLS shutdown")
+	default:
+	}
+}
+
+func TestPeerRunReturnsGracefulShutdownFailure(t *testing.T) {
+	shutdownErr := errors.New("TLS shutdown failed")
+	peer := newLatencyTestPeer(t)
+	conn := newGracefulDrainConn(io.EOF)
+	conn.shutdownErr = shutdownErr
+	peer.conn = conn
+	peer.bufReader = bufio.NewReader(conn)
+	peer.setState(PeerStateConnected)
+
+	require.ErrorIs(t, peer.Run(context.Background()), shutdownErr)
 }
 
 func TestOutboundQueueOwnsAcceptedFrameBytes(t *testing.T) {

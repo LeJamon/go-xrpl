@@ -149,6 +149,13 @@ type listener struct {
 }
 
 func (l *listener) Accept() (net.Conn, error) {
+	l.mu.Lock()
+	closed := l.closed || l.ctx == nil
+	l.mu.Unlock()
+	if closed {
+		return nil, net.ErrClosed
+	}
+
 	raw, err := l.inner.Accept()
 	if err != nil {
 		return nil, err
@@ -549,25 +556,29 @@ func (c *conn) Read(b []byte) (int, error) {
 	}
 
 	for {
+		c.outMu.Lock()
 		c.sslMu.Lock()
 		if err := c.operationStatusLocked(); err != nil {
 			c.sslMu.Unlock()
+			c.outMu.Unlock()
 			return 0, err
 		}
 		n, err := c.ssl.Read(b)
 		out, drainErr := c.takeOutputLocked()
 		c.sslMu.Unlock()
 		if n < 0 || n > len(b) {
-			return 0, c.failTLS(errors.New("peertls: invalid SSL read count"))
+			terminalErr := c.failTLS(errors.New("peertls: invalid SSL read count"))
+			c.outMu.Unlock()
+			return 0, terminalErr
 		}
 
+		var flushErr error
 		if len(out) > 0 || drainErr != nil {
-			c.outMu.Lock()
-			flushErr := c.flushStepOutputLocked(out, drainErr)
-			c.outMu.Unlock()
-			if flushErr != nil {
-				return n, flushErr
-			}
+			flushErr = c.flushStepOutputLocked(out, drainErr)
+		}
+		c.outMu.Unlock()
+		if flushErr != nil {
+			return n, flushErr
 		}
 		if n > 0 {
 			return n, err
@@ -575,7 +586,11 @@ func (c *conn) Read(b []byte) (int, error) {
 		switch {
 		case errors.Is(err, shim.ErrWantRead):
 			if err := c.pumpInboundLocked(); err != nil {
-				return 0, err
+				var timeoutErr net.Error
+				if errors.As(err, &timeoutErr) && timeoutErr.Timeout() {
+					return 0, err
+				}
+				return 0, c.failTLS(err)
 			}
 		case errors.Is(err, shim.ErrWantWrite):
 			if len(out) == 0 {
