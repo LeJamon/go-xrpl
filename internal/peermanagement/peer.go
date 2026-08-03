@@ -1512,7 +1512,7 @@ const (
 	// this age, and the cold-start delay before pingLoop's first
 	// probe. Mirrors rippled's peerTimerInterval (PeerImp.cpp:61) and
 	// the fail("Ping Timeout") branch at PeerImp.cpp:731-736.
-	pingTimeout = 60 * time.Second
+	pingTimeout             = 60 * time.Second
 	gracefulShutdownTimeout = pingTimeout
 	// pingProbeInterval: cadence after the first probe. Finer than
 	// rippled's 60s peerTimerInterval; OnPong's sweep coalesces
