@@ -18,6 +18,7 @@ import (
 	"github.com/LeJamon/go-xrpl/internal/manifest"
 	"github.com/LeJamon/go-xrpl/internal/observability"
 	"github.com/LeJamon/go-xrpl/internal/peermanagement"
+	"github.com/LeJamon/go-xrpl/internal/peermanagement/message"
 	"github.com/LeJamon/go-xrpl/internal/rpc"
 	"github.com/LeJamon/go-xrpl/internal/rpc/handlers"
 	"github.com/LeJamon/go-xrpl/internal/rpc/loadtrack"
@@ -541,13 +542,28 @@ func (r *nodeRuntime) configureConsensus() error {
 		// re-broadcast post-LCL (rippled OpenLedger.cpp:120-150).
 		r.ledger.SetTxRelay(broadcastTx)
 
-		// Wire the open-ledger tx lookup used by the tx-reduce-relay
-		// reply path (TMGetObjectByHash{otTRANSACTIONS} → TMTransactions
-		// reply) and the periodic TMHaveTransactions announce.
+		// Wire the authoritative transaction-cache lookup used by the
+		// tx-reduce-relay reply path (TMGetObjectByHash{otTRANSACTIONS} →
+		// TMTransactions reply). It includes queued transactions, not just
+		// the current open-ledger view.
 		// Feature-gated downstream by Config.EnableTxReduceRelay; the
 		// providers themselves are always wired so a flip of the
 		// config flag doesn't require a restart-and-rewire.
-		overlay.SetTxProvider(r.ledger.OpenLedgerGetTx)
+		overlay.SetTxRecordProvider(func(hash [32]byte) (peermanagement.TxRecord, bool) {
+			blob, included, deferred, ok := r.ledger.TransactionForRelay(hash)
+			if !ok {
+				return peermanagement.TxRecord{}, false
+			}
+			status := message.TxStatusNew
+			if included {
+				status = message.TxStatusCurrent
+			}
+			return peermanagement.TxRecord{
+				RawTransaction: blob,
+				Status:         status,
+				Deferred:       deferred,
+			}, true
+		})
 		overlay.SetOpenLedgerHashesProvider(r.ledger.OpenLedgerTxHashes)
 
 		// Wire the generic node-object lookup used by the

@@ -240,6 +240,18 @@ type Service struct {
 	// Nil when overlay broadcast is unwired (tests).
 	txRelay func(blob []byte)
 
+	// relayTxCache retains accepted transaction blobs after they leave the
+	// current open ledger or transaction queue. Reduce-relay announcements may
+	// arrive during that handoff, so the cache spans the request horizon while
+	// remaining explicitly bounded.
+	relayTxCacheMu    sync.Mutex
+	relayTxCache      map[[32]byte]relayTxRecord
+	relayTxCacheOrder []relayTxOrderEntry
+	relayTxCacheHead  int
+	relayTxCacheBytes int64
+	relayTxCacheLimit int64
+	relayTxCacheNext  uint64
+
 	// feeTrack is the local LoadFeeTrack mirror, always non-nil. Drivers:
 	//   - Raise/LowerLocalFee: per ledger close via tickLoadFeeLocked.
 	//   - SetRemoteFee: after validated-ledger promotion, median of trusted LoadFees.
@@ -259,6 +271,24 @@ type Service struct {
 	configCacheMu     sync.Mutex
 	configCacheLedger *ledger.Ledger
 	configCache       openledger.ApplyConfig
+}
+
+const (
+	relayTxCacheMaxEntries = 20_000
+	relayTxCacheMaxBytes   = 64 * 1024 * 1024
+	relayTxCacheTTL        = 5 * time.Minute
+)
+
+type relayTxRecord struct {
+	blob     []byte
+	deferred bool
+	seenAt   time.Time
+	orderID  uint64
+}
+
+type relayTxOrderEntry struct {
+	hash [32]byte
+	id   uint64
 }
 
 type serviceLifecycleState uint8
@@ -333,6 +363,8 @@ func New(cfg Config) (*Service, error) {
 		heldAdoptions:            make(map[uint32]*pendingAdopt),
 		txQueue:                  txq.New(txqCfg),
 		localTxs:                 localtxs.New(),
+		relayTxCache:             make(map[[32]byte]relayTxRecord),
+		relayTxCacheLimit:        relayTxCacheMaxBytes,
 		feeTrack:                 feetrack.New(),
 		validatedAgeNow:          time.Now,
 	}
@@ -743,13 +775,11 @@ func (s *Service) acceptOpenLedgerViewLocked(closedSeq uint32, retriableTxs []op
 	// Seed retries with the disputed/build-pass set; Accept drains then re-fills it.
 	retries := append([]openledger.PendingTx(nil), retriableTxs...)
 	relay := s.txRelay
-	relayCB := func(_ [32]byte, blob []byte) {
+	relayCB := func(hash [32]byte, blob []byte) {
+		s.rememberRelayTransaction(hash, blob, false)
 		if relay != nil {
 			relay(blob)
 		}
-	}
-	if relay == nil {
-		relayCB = nil
 	}
 	if err := s.openLedgerView.Accept(s.closedLedger, locals, anyDisputes, &retries, cfg, s.txQueue, modifier, relayCB); err != nil {
 		s.logger.Error("openLedger.Accept failed", "err", err, "seq", closedSeq)
@@ -853,7 +883,6 @@ func (s *Service) SubmitOpenLedgerTx(blob []byte, local bool) (openledger.Result
 	if !cfg.SkipSignatureVerification {
 		txengine.PrewarmSignature(ptx.Parsed)
 	}
-
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.openLedgerView == nil {
@@ -864,6 +893,9 @@ func (s *Service) SubmitOpenLedgerTx(blob []byte, local bool) (openledger.Result
 		return openledger.ResultFailure, cfgErr
 	}
 	outcome := s.openLedgerView.SubmitDetailed(ptx, cfg, s.txQueue)
+	if outcome.Class == openledger.ResultSuccess {
+		s.rememberRelayTransaction(ptx.Hash, ptx.Blob, outcome.Queued)
+	}
 	current := s.openLedgerView.Current()
 	if local && s.localTxs != nil && outcome.Class != openledger.ResultFailure {
 		s.localTxs.PushBack(current.Sequence(), ptx)
@@ -1003,6 +1035,9 @@ func (s *Service) OpenLedgerGetTx(hash [32]byte) ([]byte, bool) {
 		return nil, false
 	}
 	view := ov.Current()
+	if view == nil {
+		return nil, false
+	}
 	data, found, err := view.GetTransaction(hash)
 	if err != nil || !found {
 		return nil, false
@@ -1012,6 +1047,117 @@ func (s *Service) OpenLedgerGetTx(hash [32]byte) ([]byte, bool) {
 		return nil, false
 	}
 	return raw, true
+}
+
+// TransactionForRelay looks up a transaction in the authoritative local
+// transaction cache used by reduce-relay replies. Only membership in the live
+// open-ledger view is current; TxQ and retained-cache fallbacks are new, with
+// the cache preserving whether a queued transaction is deferred. The returned
+// blob is a private copy.
+func (s *Service) TransactionForRelay(hash [32]byte) (blob []byte, included, deferred, ok bool) {
+	if blob, ok = s.OpenLedgerGetTx(hash); ok {
+		return append([]byte(nil), blob...), true, false, true
+	}
+	s.mu.RLock()
+	queue := s.txQueue
+	s.mu.RUnlock()
+	if queue == nil {
+		return s.relayCacheGet(hash)
+	}
+	blob, ok = queue.GetTxBlob(hash)
+	if ok {
+		return blob, false, true, true
+	}
+	return s.relayCacheGet(hash)
+}
+
+func (s *Service) rememberRelayTransaction(hash [32]byte, blob []byte, deferred bool) {
+	if hash == ([32]byte{}) || len(blob) == 0 {
+		return
+	}
+	now := time.Now()
+	s.relayTxCacheMu.Lock()
+	defer s.relayTxCacheMu.Unlock()
+	limit := s.relayTxCacheLimit
+	if limit <= 0 {
+		limit = relayTxCacheMaxBytes
+	}
+	if int64(len(blob)) > limit {
+		return
+	}
+	if s.relayTxCache == nil {
+		s.relayTxCache = make(map[[32]byte]relayTxRecord)
+	}
+	orderID := uint64(0)
+	if existing, exists := s.relayTxCache[hash]; exists {
+		s.relayTxCacheBytes -= int64(len(existing.blob))
+		orderID = existing.orderID
+	} else {
+		s.relayTxCacheNext++
+		if s.relayTxCacheNext == 0 {
+			s.relayTxCacheNext++
+		}
+		orderID = s.relayTxCacheNext
+		s.relayTxCacheOrder = append(s.relayTxCacheOrder, relayTxOrderEntry{hash: hash, id: orderID})
+	}
+	s.relayTxCache[hash] = relayTxRecord{
+		blob:     append([]byte(nil), blob...),
+		deferred: deferred,
+		seenAt:   now,
+		orderID:  orderID,
+	}
+	s.relayTxCacheBytes += int64(len(blob))
+	for (len(s.relayTxCache) > relayTxCacheMaxEntries || s.relayTxCacheBytes > limit) &&
+		s.relayTxCacheHead < len(s.relayTxCacheOrder) {
+		old := s.relayTxCacheOrder[s.relayTxCacheHead]
+		s.relayTxCacheHead++
+		if record, stillPresent := s.relayTxCache[old.hash]; stillPresent && record.orderID == old.id {
+			s.relayTxCacheBytes -= int64(len(record.blob))
+			delete(s.relayTxCache, old.hash)
+		}
+	}
+	s.compactRelayCacheOrderLocked()
+}
+
+func (s *Service) relayCacheGet(hash [32]byte) (blob []byte, included, deferred, ok bool) {
+	s.relayTxCacheMu.Lock()
+	defer s.relayTxCacheMu.Unlock()
+	record, found := s.relayTxCache[hash]
+	if !found {
+		return nil, false, false, false
+	}
+	if time.Since(record.seenAt) >= relayTxCacheTTL {
+		delete(s.relayTxCache, hash)
+		s.relayTxCacheBytes -= int64(len(record.blob))
+		s.compactRelayCacheOrderLocked()
+		return nil, false, false, false
+	}
+	// The retained blob is no longer guaranteed to be in the current open
+	// ledger. Callers derive tsCURRENT only from the live view above; cache
+	// fallback is always a tsNEW-style record.
+	return append([]byte(nil), record.blob...), false, record.deferred, true
+}
+
+func (s *Service) compactRelayCacheOrderLocked() {
+	if len(s.relayTxCache) == 0 {
+		s.relayTxCacheOrder = nil
+		s.relayTxCacheHead = 0
+		s.relayTxCacheBytes = 0
+		return
+	}
+	activeOrder := len(s.relayTxCacheOrder) - s.relayTxCacheHead
+	if !(s.relayTxCacheHead > 1024 && s.relayTxCacheHead*2 > len(s.relayTxCacheOrder)) &&
+		activeOrder <= 2*relayTxCacheMaxEntries {
+		return
+	}
+	order := make([]relayTxOrderEntry, 0, len(s.relayTxCache))
+	for _, entry := range s.relayTxCacheOrder[s.relayTxCacheHead:] {
+		if record, ok := s.relayTxCache[entry.hash]; ok && record.orderID == entry.id {
+			order = append(order, entry)
+		}
+	}
+	s.relayTxCacheOrder = order
+	s.relayTxCacheHead = 0
 }
 
 // GetOpenLedger returns the current open ledger

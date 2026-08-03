@@ -679,8 +679,9 @@ func (r *Router) relayTransaction(except peermanagement.PeerID, blob []byte) {
 		r.logger.Warn("relay transaction encode failed", "error", err)
 		return
 	}
-	// Reduce-relay peer selection: relays the full frame to a subset of
-	// peers and lets the rest learn via the TMHaveTransactions announce.
+	// Reduce-relay peer selection derives the transaction ID from the wire
+	// frame itself. If the frame cannot be decoded, the overlay falls back to
+	// full relay rather than announcing an unfulfillable hash.
 	r.overlay.RelayTransaction(except, frame)
 }
 

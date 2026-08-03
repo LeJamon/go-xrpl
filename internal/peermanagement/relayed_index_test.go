@@ -150,6 +150,8 @@ func TestOverlay_RelayFromValidatorMarksOnlySuccessfulEnqueue(t *testing.T) {
 	require.ErrorIs(t, o.RelayFromValidator([]byte("validator"), hash, 0, []byte{0xBB}), ErrSendBufferFull)
 	assert.False(t, o.MessageRelayedRecently(hash),
 		"a failed relay must not enter the duplicate-counting window")
+	assert.Equal(t, []PeerID{source.ID()}, o.PeersThatHave(hash),
+		"a failed relay must restore the source snapshot")
 
 	// A later relay that is accepted by a peer does enter the window.
 	destination = NewPeer(PeerID(3), Endpoint{Host: "127.0.0.1", Port: 51235}, false, id, make(chan Event, 1))
@@ -159,4 +161,6 @@ func TestOverlay_RelayFromValidatorMarksOnlySuccessfulEnqueue(t *testing.T) {
 	o.RecordMessageSource(hash, source.ID())
 	require.ErrorIs(t, o.RelayFromValidator([]byte("validator"), hash, 0, []byte{0xBC}), ErrSendBufferFull)
 	assert.True(t, o.MessageRelayedRecently(hash))
+	assert.Empty(t, o.PeersThatHave(hash),
+		"a partially successful relay consumes the source snapshot")
 }

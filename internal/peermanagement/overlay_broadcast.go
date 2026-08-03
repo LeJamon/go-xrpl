@@ -280,6 +280,11 @@ func (o *Overlay) RelayFromValidator(validator []byte, suppressionHash [32]byte,
 		for _, id := range sources {
 			o.OnValidatorMessage(validator, id)
 		}
+	} else {
+		// A failed or fully-filtered fanout did not relay the message. Restore
+		// the source snapshot so a later retry can still suppress the peers that
+		// already delivered it and account the relay correctly.
+		o.restoreMessageSources(suppressionHash, sources)
 	}
 	return err
 }
@@ -399,6 +404,37 @@ func (o *Overlay) markMessageRelayed(suppressionHash [32]byte) {
 		entry.seenAt = now
 	}
 	o.relayedIndexMu.Unlock()
+}
+
+func (o *Overlay) restoreMessageSources(suppressionHash [32]byte, sources []PeerID) {
+	if o.relayedIndex == nil || len(sources) == 0 {
+		return
+	}
+	clock := o.clockForIndex
+	if clock == nil {
+		clock = time.Now
+	}
+	now := clock()
+	o.relayedIndexMu.Lock()
+	defer o.relayedIndexMu.Unlock()
+	entry, ok := o.relayedIndex[suppressionHash]
+	if !ok || now.Sub(entry.seenAt) >= RelayedIndexTTL {
+		if !ok {
+			entry = &relayedEntry{peers: make(map[PeerID]struct{})}
+			o.relayedIndex[suppressionHash] = entry
+		} else {
+			delete(o.relayedIndex, suppressionHash)
+			entry = &relayedEntry{peers: make(map[PeerID]struct{})}
+			o.relayedIndex[suppressionHash] = entry
+		}
+	}
+	if entry.peers == nil {
+		entry.peers = make(map[PeerID]struct{})
+	}
+	for _, id := range sources {
+		entry.peers[id] = struct{}{}
+	}
+	entry.seenAt = now
 }
 
 // MessageRelayedRecently reports whether this hash was relayed within the

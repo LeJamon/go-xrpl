@@ -364,6 +364,7 @@ func (o *Overlay) Cluster() *cluster.Registry { return o.cluster }
 func (o *Overlay) SetTxProvider(fn func(hash [32]byte) ([]byte, bool)) {
 	o.providersMu.Lock()
 	o.txProvider = fn
+	o.txRecordProvider = nil
 	o.providersMu.Unlock()
 }
 
@@ -371,6 +372,22 @@ func (o *Overlay) txProviderSnapshot() func(hash [32]byte) ([]byte, bool) {
 	o.providersMu.RLock()
 	defer o.providersMu.RUnlock()
 	return o.txProvider
+}
+
+// SetTxRecordProvider installs the authoritative transaction-cache lookup for
+// tx-reduce-relay. Unlike SetTxProvider, this provider may return transactions
+// held by the transaction queue and carries their status/deferred state.
+func (o *Overlay) SetTxRecordProvider(fn func(hash [32]byte) (TxRecord, bool)) {
+	o.providersMu.Lock()
+	o.txRecordProvider = fn
+	o.txProvider = nil
+	o.providersMu.Unlock()
+}
+
+func (o *Overlay) txRecordProviderSnapshot() func(hash [32]byte) (TxRecord, bool) {
+	o.providersMu.RLock()
+	defer o.providersMu.RUnlock()
+	return o.txRecordProvider
 }
 
 // SetNodeObjectProvider installs the node-store lookup used by the
@@ -392,11 +409,10 @@ func (o *Overlay) nodeObjectProviderSnapshot() func(hash [32]byte) ([]byte, bool
 	return o.nodeObjectProvider
 }
 
-// SetOpenLedgerHashesProvider installs the tx-hash snapshot reader
-// used by the periodic TMHaveTransactions emission. The provider
-// returns a (possibly empty) slice of 32-byte tx hashes currently in
-// the open-ledger view. The emitter only fires when EnableTxReduceRelay
-// is true AND this provider is wired; nil leaves the gossip dark.
+// SetOpenLedgerHashesProvider installs the legacy open-ledger hash snapshot
+// reader. Per-peer deferred queues now drive periodic TMHaveTransactions
+// emission; this hook remains available to embedded callers that use it for
+// diagnostics.
 func (o *Overlay) SetOpenLedgerHashesProvider(fn func() [][32]byte) {
 	o.providersMu.Lock()
 	o.openLedgerHashesProvider = fn
