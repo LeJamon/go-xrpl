@@ -264,7 +264,7 @@ func (e *EscrowFinish) Apply(ctx *tx.ApplyContext) ter.Result {
 
 	if escrowEntry.Condition == "" {
 		// Escrow has no condition — tx must NOT provide condition/fulfillment
-		if txCondition != "" || txFulfillment != "" {
+		if e.Condition != nil || e.Fulfillment != nil {
 			ctx.Log.Warn("escrow finish: condition/fulfillment provided but escrow has no condition")
 			return ter.TecCRYPTOCONDITION_ERROR
 		}

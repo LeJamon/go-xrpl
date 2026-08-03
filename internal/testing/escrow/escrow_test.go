@@ -1564,6 +1564,34 @@ func TestEscrow_CryptoConditions(t *testing.T) {
 		jtx.RequireBalance(t, env, alice, uint64(xrp(4000))-drops(env.BaseFee()))
 	})
 
+	t.Run("EmptyFieldsOnUnconditionalEscrow", func(t *testing.T) {
+		env := jtx.NewTestEnv(t)
+		alice := jtx.NewAccount("alice")
+		bob := jtx.NewAccount("bob")
+		fund5000(env, alice, bob)
+		env.Close()
+
+		seq := env.Seq(alice)
+		result := env.Submit(
+			escrow.EscrowCreate(alice, bob, xrp(1000)).
+				FinishTime(env.Now().Add(1 * time.Second)).
+				Build())
+		jtx.RequireTxSuccess(t, result)
+		env.Close()
+
+		escrowKey := keylet.Escrow(alice.ID, seq)
+		result = env.Submit(
+			escrow.EscrowFinish(bob, alice, seq).
+				Condition([]byte{}).
+				Fulfillment([]byte{}).
+				Build())
+		require.Equal(t, "tecCRYPTOCONDITION_ERROR", result.Code)
+		require.True(t, env.LedgerEntryExists(escrowKey))
+
+		jtx.RequireTxSuccess(t, env.Submit(escrow.EscrowFinish(bob, alice, seq).Build()))
+		require.False(t, env.LedgerEntryExists(escrowKey))
+	})
+
 	t.Run("NonPreimageSha256Condition", func(t *testing.T) {
 		// Test a condition other than PreimageSha256, which would require a separate amendment
 		// Reference: rippled lines 1141-1159
