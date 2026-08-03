@@ -205,6 +205,10 @@ type Overlay struct {
 	// when unwired. Guarded by providersMu.
 	localLoadFeeProvider func() (uint32, time.Duration)
 
+	// networkTimeProvider returns the consensus-adjusted network time used by
+	// cluster report freshness and timestamps. Guarded by providersMu.
+	networkTimeProvider func() time.Time
+
 	// localNodeIdentity is the raw 33-byte compressed NodePublic of
 	// THIS node. Used by the cluster timer to insert ourselves into
 	// the gossip frame so peers can correlate validator load. Set in New

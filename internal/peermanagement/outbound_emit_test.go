@@ -134,6 +134,10 @@ func TestSendClusterUpdate_GatesSelfLoadOnValidatedLedgerAge(t *testing.T) {
 			o.SetLocalLoadFeeProvider(func() (uint32, time.Duration) {
 				return 512, test.age
 			})
+			const reportTime = uint32(800_000_100)
+			o.SetNetworkTimeProvider(func() time.Time {
+				return protocol.FromRippleTime(reportTime)
+			})
 
 			peer := NewPeer(
 				PeerID(304),
@@ -160,6 +164,7 @@ func TestSendClusterUpdate_GatesSelfLoadOnValidatedLedgerAge(t *testing.T) {
 			for _, node := range cm.ClusterNodes {
 				if node.PublicKey == localPublic {
 					assert.Equal(t, test.want, node.NodeLoad)
+					assert.Equal(t, reportTime, node.ReportTime)
 					return
 				}
 			}

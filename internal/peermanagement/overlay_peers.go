@@ -462,6 +462,27 @@ func (o *Overlay) localLoadFeeProviderSnapshot() func() (uint32, time.Duration) 
 	return o.localLoadFeeProvider
 }
 
+// SetNetworkTimeProvider installs the consensus-adjusted clock used for
+// protocol timestamps and freshness checks in cluster gossip.
+func (o *Overlay) SetNetworkTimeProvider(fn func() time.Time) {
+	o.providersMu.Lock()
+	o.networkTimeProvider = fn
+	o.providersMu.Unlock()
+}
+
+func (o *Overlay) networkTime() time.Time {
+	o.providersMu.RLock()
+	provider := o.networkTimeProvider
+	o.providersMu.RUnlock()
+	if provider != nil {
+		return provider()
+	}
+	if o.clock != nil {
+		return o.clock()
+	}
+	return time.Now()
+}
+
 // clusterFeeWindow is the freshness threshold for cluster-fee median
 // inclusion — entries reporting older than this are dropped before the
 // median is taken.

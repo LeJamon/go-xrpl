@@ -126,7 +126,7 @@ func (o *Overlay) sendClusterUpdate() {
 				selfFee = fee
 			}
 		}
-		reportTime := protocol.FromRippleTime(protocol.ToRippleTime(time.Now()))
+		reportTime := protocol.FromRippleTime(protocol.ToRippleTime(o.networkTime()))
 		if !o.cluster.Update(o.localNodeIdentity, "", selfFee, reportTime) {
 			return
 		}

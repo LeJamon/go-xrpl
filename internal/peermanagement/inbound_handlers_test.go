@@ -183,13 +183,11 @@ func TestHandleClusterMessage_ClearsClusterFeeAfterReportAgesOut(t *testing.T) {
 		peers:   make(map[PeerID]*Peer),
 		events:  make(chan Event, 8),
 		cluster: clusterReg,
-		clock: func() time.Time {
-			return now
-		},
 		clusterFeeSink: func(fee uint32) {
 			clusterFee = fee
 		},
 	}
+	o.SetNetworkTimeProvider(func() time.Time { return now })
 
 	peer := NewPeer(PeerID(35), Endpoint{Host: "127.0.0.1", Port: 51235}, false, id, make(chan Event, 1))
 	peer.remotePubKey = peerToken
