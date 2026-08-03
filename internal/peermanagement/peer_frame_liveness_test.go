@@ -176,7 +176,7 @@ func TestPeerManifestDispatchBackpressuresUntilCapacity(t *testing.T) {
 	delivered := make(chan bool, 1)
 	go func() {
 		delivered <- peer.dispatchEvent(Event{
-			Type: EventMessageReceived, PeerID: peer.ID(), MessageType: uint16(message.TypeManifests), Payload: []byte("manifest"),
+			Type: EventMessageReceived, PeerID: peer.ID(), MessageType: message.TypeManifests, Payload: []byte("manifest"),
 		})
 	}()
 	select {
@@ -189,7 +189,7 @@ func TestPeerManifestDispatchBackpressuresUntilCapacity(t *testing.T) {
 	require.True(t, <-delivered)
 	inbound := <-manifestMessages
 	assert.Equal(t, peer.ID(), inbound.PeerID)
-	assert.Equal(t, uint16(message.TypeManifests), inbound.Type)
+	assert.Equal(t, message.TypeManifests, inbound.Type)
 	assert.Equal(t, []byte("manifest"), inbound.Payload)
 }
 
@@ -214,7 +214,7 @@ func TestPeerManifestReadBudgetBoundsPayloadAllocation(t *testing.T) {
 	first := newLatencyTestPeer(t)
 	first.bufReader = bufio.NewReader(bytes.NewReader(frame))
 	first.SetManifestMessages(firstQueue)
-	first.SetManifestReadBudget(budget)
+	first.SetInboundReadBudget(budget)
 	firstDone := make(chan error, 1)
 	go func() { firstDone <- first.readLoop(context.Background()) }()
 	require.Eventually(t, func() bool {
@@ -228,7 +228,7 @@ func TestPeerManifestReadBudgetBoundsPayloadAllocation(t *testing.T) {
 	second := newLatencyTestPeer(t)
 	second.bufReader = bufio.NewReader(secondReader)
 	second.SetManifestMessages(secondQueue)
-	second.SetManifestReadBudget(budget)
+	second.SetInboundReadBudget(budget)
 	secondDone := make(chan error, 1)
 	go func() { secondDone <- second.readLoop(context.Background()) }()
 
@@ -236,9 +236,14 @@ func TestPeerManifestReadBudgetBoundsPayloadAllocation(t *testing.T) {
 	time.Sleep(25 * time.Millisecond)
 	require.Less(t, secondReader.read.Load(), int64(len(frame)))
 
-	<-firstQueue
+	queued := <-firstQueue
+	require.NoError(t, queued.Close())
+	firstInbound := <-firstQueue
+	require.NoError(t, firstInbound.Close())
 	require.Eventually(t, func() bool { return secondReader.read.Load() == int64(len(frame)) }, time.Second, time.Millisecond)
-	require.Equal(t, payload, (<-secondQueue).Payload)
+	secondInbound := <-secondQueue
+	require.Equal(t, payload, secondInbound.Payload)
+	require.NoError(t, secondInbound.Close())
 	require.ErrorIs(t, <-firstDone, io.EOF)
 	require.ErrorIs(t, <-secondDone, io.EOF)
 }
@@ -313,7 +318,7 @@ func TestPeerReadLoopAllowsProgressBeyondIdleInterval(t *testing.T) {
 	assert.True(t, errors.Is(err, io.EOF))
 	require.Len(t, events, 1)
 	event := <-events
-	assert.Equal(t, uint16(message.TypeManifests), event.MessageType)
+	assert.Equal(t, message.TypeManifests, event.MessageType)
 	assert.Equal(t, []byte("manifest"), event.Payload)
 	assert.Equal(t, 12*time.Second, clock.current().Sub(time.Unix(1_000, 0)))
 	require.GreaterOrEqual(t, len(conn.deadlines), 4)
@@ -348,8 +353,8 @@ func TestPeerReadLoopReportsPartialFrameProgress(t *testing.T) {
 	conn := &chunkedLivenessConn{
 		clock: clock,
 		steps: []connReadStep{
-			{data: frame[:HeaderSizeUncompressed]},
-			{after: 2 * time.Second, data: frame[HeaderSizeUncompressed : HeaderSizeUncompressed+3], err: io.ErrUnexpectedEOF},
+			{data: frame[:message.HeaderSizeUncompressed]},
+			{after: 2 * time.Second, data: frame[message.HeaderSizeUncompressed : message.HeaderSizeUncompressed+3], err: io.ErrUnexpectedEOF},
 		},
 	}
 	peer, _ := newFrameLivenessPeer(t, clock, conn)
@@ -361,7 +366,7 @@ func TestPeerReadLoopReportsPartialFrameProgress(t *testing.T) {
 	var frameErr *FrameReadError
 	require.ErrorAs(t, err, &frameErr)
 	require.ErrorIs(t, err, io.ErrUnexpectedEOF)
-	assert.Equal(t, TypeManifests, frameErr.MessageType)
+	assert.Equal(t, message.TypeManifests, frameErr.MessageType)
 	assert.Equal(t, uint32(len(payload)), frameErr.WireSize)
 	assert.False(t, frameErr.Compressed)
 	assert.Equal(t, uint64(3), frameErr.BytesRead)
@@ -418,7 +423,7 @@ func TestPeerPingTimeoutDefersOnlyForBlockingFrame(t *testing.T) {
 	peer.readPolicy.idleTimeout = readIdleDeadline
 	peer.readPolicy.minimumFrameRate = 1
 	reader := peer.newFrameProgressReader(bytes.NewReader([]byte{1, 2}), nil)
-	require.NoError(t, reader.setHeader(MessageHeader{PayloadSize: 100}))
+	require.NoError(t, reader.setHeader(message.Header{PayloadSize: 100}))
 
 	clock.advance(time.Second)
 	buf := make([]byte, 1)
@@ -452,7 +457,7 @@ func TestPeerPingSentBeforeFrameUsesNextFrameProgress(t *testing.T) {
 	peer.recordPingSent(8, sentAt)
 
 	reader := peer.newFrameProgressReader(bytes.NewReader([]byte{1}), nil)
-	require.NoError(t, reader.setHeader(MessageHeader{PayloadSize: 100}))
+	require.NoError(t, reader.setHeader(message.Header{PayloadSize: 100}))
 	clock.advance(time.Second)
 	_, err := reader.Read(make([]byte, 1))
 	require.NoError(t, err)
@@ -473,7 +478,7 @@ func TestPeerStoppedFrameProgressNoLongerDefersPing(t *testing.T) {
 	peer.recordPingSent(8, sentAt)
 
 	reader := peer.newFrameProgressReader(bytes.NewReader([]byte{1}), nil)
-	require.NoError(t, reader.setHeader(MessageHeader{PayloadSize: 100}))
+	require.NoError(t, reader.setHeader(message.Header{PayloadSize: 100}))
 	clock.advance(time.Second)
 	_, err := reader.Read(make([]byte, 1))
 	require.NoError(t, err)
@@ -494,7 +499,7 @@ func TestPeerCompletedFrameGraceExpiresWithoutPong(t *testing.T) {
 	peer.recordPingSent(8, sentAt)
 
 	reader := peer.newFrameProgressReader(bytes.NewReader([]byte{1}), nil)
-	require.NoError(t, reader.setHeader(MessageHeader{PayloadSize: 100}))
+	require.NoError(t, reader.setHeader(message.Header{PayloadSize: 100}))
 	clock.advance(time.Second)
 	_, err := reader.Read(make([]byte, 1))
 	require.NoError(t, err)
@@ -534,8 +539,8 @@ func TestPeerReadLoopDispatchesPongBehindSlowFrame(t *testing.T) {
 	require.Len(t, events, 2)
 	manifestEvent := <-events
 	pongEvent := <-events
-	assert.Equal(t, uint16(message.TypeManifests), manifestEvent.MessageType)
-	assert.Equal(t, uint16(message.TypePing), pongEvent.MessageType)
+	assert.Equal(t, message.TypeManifests, manifestEvent.MessageType)
+	assert.Equal(t, message.TypePing, pongEvent.MessageType)
 	decoded, err := message.Decode(message.TypePing, pongEvent.Payload)
 	require.NoError(t, err)
 	peer.OnPong(decoded.(*message.Ping).Seq, clock.current())
@@ -551,7 +556,7 @@ func TestPeerConsecutiveFramesDeferPingWithinProgressBudget(t *testing.T) {
 	peer.readPolicy.minimumFrameRate = 1
 
 	first := peer.newFrameProgressReader(bytes.NewReader([]byte{1}), nil)
-	require.NoError(t, first.setHeader(MessageHeader{PayloadSize: 1}))
+	require.NoError(t, first.setHeader(message.Header{PayloadSize: 1}))
 	sentAt := clock.current()
 	peer.recordPingSent(9, sentAt)
 	clock.advance(time.Second)
@@ -560,7 +565,7 @@ func TestPeerConsecutiveFramesDeferPingWithinProgressBudget(t *testing.T) {
 	first.finish(true, clock.current())
 
 	second := peer.newFrameProgressReader(bytes.NewReader([]byte{2}), nil)
-	require.NoError(t, second.setHeader(MessageHeader{PayloadSize: 100}))
+	require.NoError(t, second.setHeader(message.Header{PayloadSize: 100}))
 	clock.advance(pingTimeout)
 	_, err = second.Read(make([]byte, 1))
 	require.NoError(t, err)
@@ -579,10 +584,10 @@ func TestPeerConsecutiveFramesCannotExtendPingPastProgressBudget(t *testing.T) {
 	sentAt := clock.current()
 	peer.recordPingSent(10, sentAt)
 
-	budget := peer.frameReadBudget(MaxMessageSize)
+	budget := peer.frameReadBudget(message.MaxMessageSize)
 	clock.advance(budget - time.Second)
 	reader := peer.newFrameProgressReader(bytes.NewReader([]byte{1}), nil)
-	require.NoError(t, reader.setHeader(MessageHeader{PayloadSize: MaxMessageSize}))
+	require.NoError(t, reader.setHeader(message.Header{PayloadSize: message.MaxMessageSize}))
 	_, err := reader.Read(make([]byte, 1))
 	require.NoError(t, err)
 	clock.advance(time.Second)

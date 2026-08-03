@@ -289,7 +289,7 @@ func TestOverlay_InboundSquelch_MalformedPubkey_Charges(t *testing.T) {
 
 	o.onMessageReceived(Event{
 		PeerID:      peer.ID(),
-		MessageType: uint16(message.TypeSquelch),
+		MessageType: message.TypeSquelch,
 		Payload:     payload,
 	})
 
@@ -343,7 +343,7 @@ func TestHandleSquelchMessage_DropsSelfTargetingSquelch(t *testing.T) {
 
 	o.onMessageReceived(Event{
 		PeerID:      peer.ID(),
-		MessageType: uint16(message.TypeSquelch),
+		MessageType: message.TypeSquelch,
 		Payload:     payload,
 	})
 
@@ -397,7 +397,7 @@ func TestHandleSquelchMessage_AllowsOtherValidatorSquelch(t *testing.T) {
 
 	o.onMessageReceived(Event{
 		PeerID:      peer.ID(),
-		MessageType: uint16(message.TypeSquelch),
+		MessageType: message.TypeSquelch,
 		Payload:     payload,
 	})
 
@@ -450,7 +450,7 @@ func TestOverlay_InboundSquelch_FromUnnegotiatedPeer(t *testing.T) {
 
 	o.onMessageReceived(Event{
 		PeerID:      peer.ID(),
-		MessageType: uint16(message.TypeSquelch),
+		MessageType: message.TypeSquelch,
 		Payload:     payload,
 	})
 

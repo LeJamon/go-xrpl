@@ -983,6 +983,9 @@ func OverlayOptionsFromConfig(appCfg *config.Config) []peermanagement.Option {
 	if appCfg.Overlay.VerifyEndpoints != nil {
 		opts = append(opts, peermanagement.WithVerifyEndpoints(*appCfg.Overlay.VerifyEndpoints != 0))
 	}
+	if appCfg.Overlay.InboundRetainedBytes != 0 {
+		opts = append(opts, peermanagement.WithInboundRetainedBytes(appCfg.Overlay.InboundRetainedBytes))
+	}
 
 	return opts
 }

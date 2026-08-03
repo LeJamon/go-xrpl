@@ -110,6 +110,43 @@ func TestPeer_Accessors(t *testing.T) {
 	assert.Nil(t, peer.Capabilities())
 }
 
+func TestPeerCapabilitiesSnapshotCannotMutateNegotiatedState(t *testing.T) {
+	id, err := NewIdentity()
+	require.NoError(t, err)
+	peer := NewPeer(PeerID(1), Endpoint{Host: "192.0.2.1", Port: 51235}, true, id, make(chan Event, 1))
+	peer.capabilities = NewPeerCapabilities()
+	peer.capabilities.Features.Enable(FeatureCompression)
+
+	snapshot := peer.Capabilities()
+	require.NotNil(t, snapshot)
+	snapshot.Features.Disable(FeatureCompression)
+	snapshot.Features.Enable(FeatureTxReduceRelay)
+
+	assert.True(t, peer.Capabilities().HasFeature(FeatureCompression))
+	assert.False(t, peer.Capabilities().HasFeature(FeatureTxReduceRelay))
+}
+
+func TestPeerRemotePublicKeyAccessorsReturnOwnedValues(t *testing.T) {
+	id, err := NewIdentity()
+	require.NoError(t, err)
+	peer := NewPeer(PeerID(1), Endpoint{Host: "192.0.2.1", Port: 51235}, true, id, make(chan Event, 1))
+	peer.remotePubKey, err = NewPublicKeyToken(id.PublicKey())
+	require.NoError(t, err)
+
+	bytes := peer.RemotePublicKeyBytes()
+	require.Len(t, bytes, CompressedPubKeyLen)
+	original := append([]byte(nil), bytes...)
+	bytes[0] ^= 0xff
+	assert.Equal(t, original, peer.RemotePublicKeyBytes())
+
+	token := peer.RemotePublicKey()
+	require.NotNil(t, token)
+	tokenBytes := token.Bytes()
+	tokenBytes[0] ^= 0xff
+	assert.Equal(t, original, peer.RemotePublicKeyBytes())
+	assert.Equal(t, token.Encode(), peer.RemotePublicKeyEncoded())
+}
+
 // TestPeer_Info tests the Info method
 func TestPeer_Info(t *testing.T) {
 	id, err := NewIdentity()
@@ -232,7 +269,7 @@ func TestPeerReadLoopSkipsUnknownMessage(t *testing.T) {
 	assert.True(t, errors.Is(err, io.EOF))
 	require.Len(t, events, 1)
 	evt := <-events
-	assert.Equal(t, uint16(message.TypePing), evt.MessageType)
+	assert.Equal(t, message.TypePing, evt.MessageType)
 	assert.Equal(t, knownPayload, evt.Payload)
 	assert.Zero(t, peer.BadDataCount())
 	assert.Zero(t, peer.consecutiveDecompressFailures.Load())

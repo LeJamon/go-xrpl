@@ -22,7 +22,7 @@ func TestRouter_GetLedger_HashSeqlessGatesOnLtype(t *testing.T) {
 		r, rs := makeRouterWithQueryTypeRecorder(t)
 		r.handleMessage(&peermanagement.InboundMessage{
 			PeerID:  11,
-			Type:    uint16(message.TypeGetLedger),
+			Type:    message.TypeGetLedger,
 			Payload: encodePayload(t, req),
 		})
 		bd, sent := rs.snapshot()

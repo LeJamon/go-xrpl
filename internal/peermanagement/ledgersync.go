@@ -8,6 +8,7 @@ import (
 	"sync/atomic"
 
 	"github.com/LeJamon/go-xrpl/internal/peermanagement/message"
+	"github.com/LeJamon/go-xrpl/internal/peermanagement/resource"
 )
 
 // Sentinel errors returned by LedgerProvider methods so handlers can map
@@ -18,35 +19,54 @@ import (
 // rippled/src/xrpld/app/ledger/detail/LedgerReplayMsgHandler.cpp:62-90.
 var (
 	// ErrLedgerNotFound signals the requested ledger is unknown to the
-	// provider or not yet immutable. The handler responds with
-	// ReplyErrorNoLedger.
+	// provider or not yet immutable. The handler charges and drops the request.
 	ErrLedgerNotFound = errors.New("ledger not found")
 	// ErrKeyNotFound signals the ledger exists but the requested key has
-	// no leaf in the selected map. The handler responds with
-	// ReplyErrorNoNode.
+	// no leaf in the selected map. The handler charges and drops the request.
 	ErrKeyNotFound = errors.New("key not found in ledger map")
 	// ErrFetchPackTooEarly signals that the requested HAVE ledger is below
 	// the configured peer-serving range.
 	ErrFetchPackTooEarly = errors.New("fetch pack ledger is too early")
+	// ErrFetchPackOpen signals that the requested HAVE ledger is known but
+	// still open. Rippled treats this malformed fetch-pack request differently
+	// from an unknown ledger when charging the requester.
+	ErrFetchPackOpen = errors.New("fetch pack ledger is open")
+	// ErrFetchPackBusy signals that local ledger state is temporarily busy or
+	// stale for fetch-pack construction. Busy requests are dropped before the
+	// heavy-burden charge and are retried by the requester later.
+	ErrFetchPackBusy = errors.New("fetch pack provider busy")
 	// ErrPeerBadRequest is returned by LedgerSyncHandler.HandleMessage
 	// when the inbound request was malformed (e.g. bad field lengths,
-	// invalid enum values) and we replied with ReplyErrorBadRequest. The
-	// overlay dispatcher uses it to attribute the failure to the
-	// originating peer via IncPeerBadData. Mirrors rippled's
-	// fee.update(feeInvalidData) path for reBAD_REQUEST replies.
+	// invalid enum values). The handler charges and drops the request; the
+	// overlay dispatcher uses this error to attribute the
+	// failure to the originating peer, mirroring rippled's malformed-request
+	// charge path.
 	ErrPeerBadRequest = errors.New("peer sent bad request")
 )
 
+// ContextLedgerProvider is implemented by providers that can stop storage
+// traversal when the serving request is canceled. The legacy methods remain
+// part of LedgerProvider so embedders and tests can migrate independently.
+type ContextLedgerProvider interface {
+	GetReplayDeltaContext(context.Context, []byte) (header []byte, txLeaves [][]byte, err error)
+	GetProofPathContext(context.Context, []byte, []byte, message.LedgerMapType) (header []byte, path [][]byte, err error)
+}
+
+// ContextFetchPackProvider is the cancellation-aware fetch-pack extension of
+// LedgerProvider. Providers that do not implement it are still bounded by the
+// scheduler and receive a pre-call cancellation check.
+type ContextFetchPackProvider interface {
+	MakeFetchPackContext(context.Context, [32]byte, int) ([]message.IndexedObject, error)
+}
+
 // Ledger sync constants.
 const (
-	// MaxReplayDeltaResponseBytes caps the total uncompressed payload size of
-	// a single mtREPLAY_DELTA_RESPONSE we will emit. Rippled does not enforce
-	// an upstream cap, but our framing layer enforces its own limit
-	// (message.MaxMessageSize = 64 MiB) and any response above that boundary
-	// would be dropped at the codec layer. A 16 MiB ceiling leaves comfortable
-	// headroom for the wire envelope and protects the event channel from
-	// arbitrarily large allocations driven by remote requests.
+	// MaxReplayDeltaResponseBytes caps the complete encoded wire frame of a
+	// replay/proof response. The check deliberately includes protobuf field
+	// tags, varints, and the six-byte XRPL frame header rather than only raw
+	// ledger node bytes.
 	MaxReplayDeltaResponseBytes = 16 * 1024 * 1024
+	MaxProofPathResponseBytes   = MaxReplayDeltaResponseBytes
 )
 
 // LedgerProvider is called to retrieve ledger data for responses.
@@ -57,7 +77,7 @@ type LedgerProvider interface {
 	// (mirrors rippled's ledger->isImmutable() check in
 	// LedgerReplayMsgHandler::processReplayDeltaRequest). When the ledger
 	// is unknown or not yet immutable, return (nil, nil, nil) so the
-	// handler can reply with reNO_LEDGER.
+	// handler can charge and drop the request.
 	GetReplayDelta(ledgerHash []byte) (header []byte, txLeaves [][]byte, err error)
 	// GetProofPath returns the serialized ledger header and the wire-order
 	// node path proving the existence of `key` in the requested map of
@@ -74,16 +94,16 @@ type LedgerProvider interface {
 	//
 	// Return contract:
 	//   - (nil, nil, ErrLedgerNotFound) when the ledger is unknown or not
-	//     yet immutable. The handler emits ReplyErrorNoLedger.
+	//     yet immutable. The handler charges and drops the request.
 	//   - (nil, nil, ErrKeyNotFound) when the ledger exists but the key
-	//     has no leaf in the selected map. The handler emits
-	//     ReplyErrorNoNode. Rippled returns reNO_NODE without a header
-	//     in this case (LedgerReplayMsgHandler.cpp:84-90, where header
-	//     packing happens AFTER the no-path early-return), so we mirror
-	//     that and do not require the header here.
+	//     has no leaf in the selected map. The handler charges and drops
+	//     the request. Rippled returns reNO_NODE without a header in this
+	//     case (LedgerReplayMsgHandler.cpp:84-90, where header packing
+	//     happens AFTER the no-path early-return), so we retain the
+	//     provider distinction for accounting without serializing an error.
 	//   - (header, path, nil) on success.
-	//   - any other error → handler emits ReplyErrorBadRequest and logs
-	//     at warn.
+	//   - any other error → handler charges the no-reply fee, logs at warn,
+	//     and drops the request.
 	GetProofPath(ledgerHash []byte, key []byte, mapType message.LedgerMapType) (header []byte, path [][]byte, err error)
 	// MakeFetchPack builds a fetch-pack for the predecessor of the ledger
 	// named by haveLedgerHash, mirroring rippled's LedgerMaster::makeFetchPack
@@ -91,9 +111,11 @@ type LedgerProvider interface {
 	// HAS, and the provider returns the SHAMap nodes of its parent ("want") —
 	// a header object followed by the account-state and transaction tree
 	// nodes, each tagged with want's sequence. Returns ErrFetchPackTooEarly
-	// when HAVE is below the configured range. Unknown, open, or parentless
-	// ledgers return (nil, nil), so the handler drops the request without
-	// replying. maxObjects <= 0 lets the provider apply its own cap.
+	// when HAVE is below the configured range. A provider that is locally busy
+	// or stale returns ErrFetchPackBusy before charging; unknown or parentless
+	// ledgers return (nil, nil), while an open HAVE returns ErrFetchPackOpen so
+	// the handler can apply rippled's malformed-request charge. maxObjects <= 0
+	// lets the provider apply its own cap.
 	MakeFetchPack(haveLedgerHash [32]byte, maxObjects int) ([]message.IndexedObject, error)
 }
 
@@ -107,10 +129,19 @@ type LedgerSyncHandler struct {
 	// Event channel for sending responses
 	events chan<- Event
 
+	// prioritySender delivers completed responses directly to the peer's
+	// bounded acquisition lane. It avoids routing replies through the lossy
+	// shared event channel when the overlay is running.
+	prioritySender func(context.Context, PeerID, []byte) error
+
 	// droppedResponses counts how many response events we had to drop
 	// because the events channel was full (slow consumer). Exposed via
 	// DroppedResponses so the overlay can aggregate into server_info.
 	droppedResponses atomic.Uint64
+
+	// chargePeer is wired by the Overlay so request accounting stays with the
+	// peer that originated the work. It is optional for standalone handlers.
+	chargePeer func(PeerID, resource.Charge, string)
 
 	// peerHintLookup is wired by the Overlay (see SetPeerLedgerHintLookup).
 	peerHintLookup func(target [32]byte) []PeerID
@@ -137,6 +168,27 @@ func (h *LedgerSyncHandler) SetProvider(provider LedgerProvider) {
 	h.provider = provider
 }
 
+func (h *LedgerSyncHandler) SetChargePeer(fn func(PeerID, resource.Charge, string)) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	h.chargePeer = fn
+}
+
+func (h *LedgerSyncHandler) SetPrioritySender(fn func(context.Context, PeerID, []byte) error) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	h.prioritySender = fn
+}
+
+func (h *LedgerSyncHandler) charge(peerID PeerID, fee resource.Charge, reason string) {
+	h.mu.RLock()
+	fn := h.chargePeer
+	h.mu.RUnlock()
+	if fn != nil {
+		fn(peerID, fee, reason)
+	}
+}
+
 // MakeFetchPack delegates to the configured provider so the overlay's
 // otFETCH_PACK serve path can build a pack without importing the ledger
 // layer. Returns (nil, nil) when no provider is wired (the handler then drops
@@ -147,6 +199,24 @@ func (h *LedgerSyncHandler) MakeFetchPack(haveLedgerHash [32]byte, maxObjects in
 	h.mu.RUnlock()
 	if provider == nil {
 		return nil, nil
+	}
+	return provider.MakeFetchPack(haveLedgerHash, maxObjects)
+}
+
+func (h *LedgerSyncHandler) MakeFetchPackContext(ctx context.Context, haveLedgerHash [32]byte, maxObjects int) ([]message.IndexedObject, error) {
+	h.mu.RLock()
+	provider := h.provider
+	h.mu.RUnlock()
+	if provider == nil {
+		return nil, nil
+	}
+	if contextProvider, ok := provider.(ContextFetchPackProvider); ok {
+		return contextProvider.MakeFetchPackContext(ctx, haveLedgerHash, maxObjects)
+	}
+	select {
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	default:
 	}
 	return provider.MakeFetchPack(haveLedgerHash, maxObjects)
 }
@@ -196,9 +266,8 @@ func (h *LedgerSyncHandler) HandleMessage(ctx context.Context, peerID PeerID, ms
 // Mirrors rippled's LedgerReplayMsgHandler::processProofPathRequest
 // (rippled/src/xrpld/app/ledger/detail/LedgerReplayMsgHandler.cpp:40-104):
 //  1. Validate len(key) == 32, len(ledgerHash) == 32, type ∈ {1, 2}.
-//     Any failure → reply with reBAD_REQUEST. The fields key/ledgerHash/
-//     type are echoed back on every reply, even on validation errors —
-//     rippled sets them before any further checks.
+//     Any failure is charged and dropped by PeerImp; no error response is
+//     sent. The decoded request fields are not echoed on this path.
 //  2. Look up the ledger by hash. Missing → reBAD_REQUEST is wrong; the
 //     spec says reNO_LEDGER. Provider returns ErrLedgerNotFound here.
 //  3. Walk the selected map (tx or account-state) toward the key. If the
@@ -210,20 +279,14 @@ func (h *LedgerSyncHandler) HandleMessage(ctx context.Context, peerID PeerID, ms
 //  4. On success, emit (header, path) with leaf-to-root path order
 //     matching rippled's wire format (see GetProofPath docstring).
 //
-// The encoded response is pushed onto the events channel as
-// EventLedgerResponse so the overlay can ship it to the requesting peer
-// (mirrors handleReplayDeltaRequest).
-func (h *LedgerSyncHandler) handleProofPathRequest(_ context.Context, peerID PeerID, req *message.ProofPathRequest) error {
+// Successful responses use the peer's bounded acquisition lane when wired by
+// the overlay; standalone handlers fall back to EventLedgerResponse.
+func (h *LedgerSyncHandler) handleProofPathRequest(ctx context.Context, peerID PeerID, req *message.ProofPathRequest) error {
 	// Validate up-front: independent of any configured provider, matching
 	// rippled's ordering at LedgerReplayMsgHandler.cpp:46-54.
 	if len(req.Key) != 32 || len(req.LedgerHash) != 32 ||
 		(req.MapType != message.LedgerMapTransaction && req.MapType != message.LedgerMapAccountState) {
-		h.sendProofPathResponse(peerID, &message.ProofPathResponse{
-			Key:        req.Key,
-			LedgerHash: req.LedgerHash,
-			MapType:    req.MapType,
-			Error:      message.ReplyErrorBadRequest,
-		})
+		h.charge(peerID, resource.FeeMalformedRequest, "proof path request")
 		return ErrPeerBadRequest
 	}
 
@@ -232,30 +295,35 @@ func (h *LedgerSyncHandler) handleProofPathRequest(_ context.Context, peerID Pee
 	h.mu.RUnlock()
 
 	if provider == nil {
-		// No provider wired: silently drop (matches handleReplayDeltaRequest).
+		h.charge(peerID, resource.FeeRequestNoReply, "proof path request unavailable")
 		return nil
 	}
 
-	header, path, err := provider.GetProofPath(req.LedgerHash, req.Key, req.MapType)
+	var header []byte
+	var path [][]byte
+	var err error
+	if contextProvider, ok := provider.(ContextLedgerProvider); ok {
+		header, path, err = contextProvider.GetProofPathContext(ctx, req.LedgerHash, req.Key, req.MapType)
+	} else {
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		default:
+		}
+		header, path, err = provider.GetProofPath(req.LedgerHash, req.Key, req.MapType)
+	}
+	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+		return err
+	}
 	switch {
 	case errors.Is(err, ErrLedgerNotFound):
-		h.sendProofPathResponse(peerID, &message.ProofPathResponse{
-			Key:        req.Key,
-			LedgerHash: req.LedgerHash,
-			MapType:    req.MapType,
-			Error:      message.ReplyErrorNoLedger,
-		})
+		h.charge(peerID, resource.FeeRequestNoReply, "proof path request no ledger")
 		return nil
 	case errors.Is(err, ErrKeyNotFound):
 		// Rippled does not pack the header on the no-node path —
 		// LedgerReplayMsgHandler.cpp:84-90 returns before the header is
 		// serialized at line 92. Mirror that here.
-		h.sendProofPathResponse(peerID, &message.ProofPathResponse{
-			Key:        req.Key,
-			LedgerHash: req.LedgerHash,
-			MapType:    req.MapType,
-			Error:      message.ReplyErrorNoNode,
-		})
+		h.charge(peerID, resource.FeeRequestNoReply, "proof path request no node")
 		return nil
 	case err != nil:
 		slog.Warn("ProofPath provider error",
@@ -263,19 +331,18 @@ func (h *LedgerSyncHandler) handleProofPathRequest(_ context.Context, peerID Pee
 			"peer", peerID,
 			"err", err,
 		)
-		// Provider returned an unexpected error; we reply with
-		// reBAD_REQUEST but the fault is ours, not the peer's, so do
-		// not signal ErrPeerBadRequest here.
-		h.sendProofPathResponse(peerID, &message.ProofPathResponse{
-			Key:        req.Key,
-			LedgerHash: req.LedgerHash,
-			MapType:    req.MapType,
-			Error:      message.ReplyErrorBadRequest,
-		})
+		// Provider returned an unexpected error; the fault is ours, not the
+		// peer's, so charge the no-reply fee without signaling bad input.
+		h.charge(peerID, resource.FeeRequestNoReply, "proof path request provider error")
 		return nil
 	}
 
-	h.sendProofPathResponse(peerID, &message.ProofPathResponse{
+	if proofPathResponseOversized(req, header, path) {
+		h.charge(peerID, resource.FeeRequestNoReply, "proof path response oversized")
+		return nil
+	}
+
+	h.sendProofPathResponse(ctx, peerID, &message.ProofPathResponse{
 		Key:          req.Key,
 		LedgerHash:   req.LedgerHash,
 		MapType:      req.MapType,
@@ -286,17 +353,19 @@ func (h *LedgerSyncHandler) handleProofPathRequest(_ context.Context, peerID Pee
 }
 
 // sendProofPathResponse encodes the response, wraps it in the XRPL
-// wire-frame header (6-byte type/size envelope), and best-effort delivers
-// it onto the events channel for the overlay to ship to the requesting
-// peer. Drops the response (with a warn log) if the events channel is
-// full — same non-blocking pattern as sendReplayDeltaResponse.
+// wire-frame header (6-byte type/size envelope), and delivers it through the
+// bounded priority lane. Standalone handlers without a priority sender use
+// the legacy non-blocking event fallback.
 //
 // The wire-frame wrap lives here (not in the overlay) so the Event
 // payload is a fully-formed frame that Overlay.onLedgerResponse can
 // hand straight to the peer's send queue. Mirrors the handlePing
 // round-trip in overlay.go, which also emits a complete wire frame.
-func (h *LedgerSyncHandler) sendProofPathResponse(peerID PeerID, resp *message.ProofPathResponse) {
-	if h.events == nil {
+func (h *LedgerSyncHandler) sendProofPathResponse(ctx context.Context, peerID PeerID, resp *message.ProofPathResponse) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if err := ctx.Err(); err != nil {
 		return
 	}
 	frame, err := message.EncodeFrame(resp)
@@ -304,8 +373,27 @@ func (h *LedgerSyncHandler) sendProofPathResponse(peerID PeerID, resp *message.P
 		slog.Warn("ProofPath encode failed", "t", "LedgerSync", "peer", peerID, "err", err)
 		return
 	}
+	if len(frame) > MaxProofPathResponseBytes {
+		h.charge(peerID, resource.FeeRequestNoReply, "proof path response oversized")
+		return
+	}
+	h.mu.RLock()
+	prioritySender := h.prioritySender
+	events := h.events
+	h.mu.RUnlock()
+	if prioritySender != nil {
+		if err := prioritySender(ctx, peerID, frame); err != nil && ctx.Err() == nil {
+			h.droppedResponses.Add(1)
+			h.charge(peerID, resource.FeeRequestNoReply, "proof path response send failed")
+			slog.Debug("ProofPath priority response failed", "t", "LedgerSync", "peer", peerID, "err", err)
+		}
+		return
+	}
+	if events == nil {
+		return
+	}
 	select {
-	case h.events <- Event{Type: EventLedgerResponse, PeerID: peerID, Payload: frame}:
+	case events <- Event{Type: EventLedgerResponse, PeerID: peerID, Payload: frame}:
 	default:
 		h.droppedResponses.Add(1)
 		slog.Warn("ProofPath response dropped: events channel full",
@@ -313,34 +401,44 @@ func (h *LedgerSyncHandler) sendProofPathResponse(peerID PeerID, resp *message.P
 	}
 }
 
+func replayDeltaResponseOversized(ledgerHash, header []byte, txLeaves [][]byte) bool {
+	frame, err := message.EncodeFrame(&message.ReplayDeltaResponse{
+		LedgerHash:   ledgerHash,
+		LedgerHeader: header,
+		Transactions: txLeaves,
+	})
+	return err != nil || len(frame) > MaxReplayDeltaResponseBytes
+}
+
+func proofPathResponseOversized(req *message.ProofPathRequest, header []byte, path [][]byte) bool {
+	frame, err := message.EncodeFrame(&message.ProofPathResponse{
+		Key:          req.Key,
+		LedgerHash:   req.LedgerHash,
+		MapType:      req.MapType,
+		LedgerHeader: header,
+		Path:         path,
+	})
+	return err != nil || len(frame) > MaxProofPathResponseBytes
+}
+
 // handleReplayDeltaRequest serves an inbound mtREPLAY_DELTA_REQUEST.
 //
 // Mirrors rippled's LedgerReplayMsgHandler::processReplayDeltaRequest
 // (rippled/src/xrpld/app/ledger/detail/LedgerReplayMsgHandler.cpp:179-219):
-//  1. Validate ledger_hash length == 32, else reply with reBAD_REQUEST.
-//  2. Look up the ledger and require it to be immutable, else reply with
-//     reNO_LEDGER. Both checks are folded into LedgerProvider.GetReplayDelta.
+//  1. Validate ledger_hash length == 32, else charge and drop.
+//  2. Look up the ledger and require it to be immutable, else charge and drop.
 //  3. Pack the ledger header (addRaw on LedgerInfo) and every leaf blob in
 //     the tx map, in tx-map iteration order.
 //  4. Defensive size cap: if the response payload would exceed
-//     MaxReplayDeltaResponseBytes, reply with reNO_LEDGER and drop the
-//     populated transaction list. TMReplyError has no reTOO_BUSY; we
-//     pick reNO_LEDGER over reBAD_REQUEST because the request itself is
-//     well-formed — we just can't serve a response of this size. The
-//     lighter error avoids charging the requester feeMalformedRequest
-//     on rippled's side (PeerImp.cpp:1545-1548).
+//     MaxReplayDeltaResponseBytes, charge and drop the populated list.
 //
-// The encoded response is pushed onto the events channel as
-// EventLedgerResponse so the overlay can ship it to the requesting peer
-// (mirrors handleProofPathRequest).
-func (h *LedgerSyncHandler) handleReplayDeltaRequest(_ context.Context, peerID PeerID, req *message.ReplayDeltaRequest) error {
+// Successful responses use the peer's bounded acquisition lane when wired by
+// the overlay; standalone handlers fall back to EventLedgerResponse.
+func (h *LedgerSyncHandler) handleReplayDeltaRequest(ctx context.Context, peerID PeerID, req *message.ReplayDeltaRequest) error {
 	// Validate ledger_hash length first — this check is independent of any
 	// configured provider, matching the rippled ordering.
 	if len(req.LedgerHash) != 32 {
-		h.sendReplayDeltaResponse(peerID, &message.ReplayDeltaResponse{
-			LedgerHash: req.LedgerHash,
-			Error:      message.ReplyErrorBadRequest,
-		})
+		h.charge(peerID, resource.FeeMalformedRequest, "replay delta request")
 		return ErrPeerBadRequest
 	}
 
@@ -349,45 +447,45 @@ func (h *LedgerSyncHandler) handleReplayDeltaRequest(_ context.Context, peerID P
 	h.mu.RUnlock()
 
 	if provider == nil {
-		// No provider wired: silently drop (matches handleProofPathRequest).
+		h.charge(peerID, resource.FeeRequestNoReply, "replay delta request unavailable")
 		return nil
 	}
 
-	header, txLeaves, err := provider.GetReplayDelta(req.LedgerHash)
+	var header []byte
+	var txLeaves [][]byte
+	var err error
+	if contextProvider, ok := provider.(ContextLedgerProvider); ok {
+		header, txLeaves, err = contextProvider.GetReplayDeltaContext(ctx, req.LedgerHash)
+	} else {
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		default:
+		}
+		header, txLeaves, err = provider.GetReplayDelta(req.LedgerHash)
+	}
+	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+		return err
+	}
 	if err != nil || len(header) == 0 {
-		h.sendReplayDeltaResponse(peerID, &message.ReplayDeltaResponse{
-			LedgerHash: req.LedgerHash,
-			Error:      message.ReplyErrorNoLedger,
-		})
+		h.charge(peerID, resource.FeeRequestNoReply, "replay delta request no ledger")
 		return nil
 	}
 
-	// Defensive size cap: refuse to encode a response above our ceiling.
-	// Use ReplyErrorNoLedger rather than ReplyErrorBadRequest — the
-	// request isn't malformed, we just can't serve the response at this
-	// size. Rippled's PeerImp.cpp:1545-1548 charges feeMalformedRequest
-	// (200 drops) for reBAD_REQUEST vs feeRequestNoReply (10 drops) for
-	// everything else, so the lighter error code avoids wrongly fee-
-	// charging an honest requester.
-	total := len(header)
-	for _, tx := range txLeaves {
-		total += len(tx)
-	}
-	if total > MaxReplayDeltaResponseBytes {
+	// Defensive size cap: refuse to encode a response above our ceiling and
+	// charge the no-reply fee; the request itself is well-formed.
+	if replayDeltaResponseOversized(req.LedgerHash, header, txLeaves) {
 		slog.Warn("ReplayDelta response oversized; refusing",
 			"t", "LedgerSync",
 			"peer", peerID,
-			"size", total,
+			"size", len(header),
 			"limit", MaxReplayDeltaResponseBytes,
 		)
-		h.sendReplayDeltaResponse(peerID, &message.ReplayDeltaResponse{
-			LedgerHash: req.LedgerHash,
-			Error:      message.ReplyErrorNoLedger,
-		})
+		h.charge(peerID, resource.FeeRequestNoReply, "replay delta response oversized")
 		return nil
 	}
 
-	h.sendReplayDeltaResponse(peerID, &message.ReplayDeltaResponse{
+	h.sendReplayDeltaResponse(ctx, peerID, &message.ReplayDeltaResponse{
 		LedgerHash:   req.LedgerHash,
 		LedgerHeader: header,
 		Transactions: txLeaves,
@@ -396,11 +494,9 @@ func (h *LedgerSyncHandler) handleReplayDeltaRequest(_ context.Context, peerID P
 }
 
 // sendReplayDeltaResponse encodes the response, wraps it in the XRPL
-// wire-frame header (6-byte type/size envelope), and best-effort delivers
-// it onto the events channel for the overlay to ship to the requesting
-// peer. Drops the response (with a warn log) if the events channel is
-// full — same non-blocking pattern as Overlay.onMessageReceived, to keep
-// a slow consumer from deadlocking the message dispatch path.
+// wire-frame header (6-byte type/size envelope), and delivers it through the
+// bounded priority lane. Standalone handlers without a priority sender use
+// the legacy non-blocking event fallback.
 //
 // The wire-frame wrap lives here (not in the overlay) so the Event
 // payload is a fully-formed frame that Overlay.onLedgerResponse can
@@ -408,8 +504,11 @@ func (h *LedgerSyncHandler) handleReplayDeltaRequest(_ context.Context, peerID P
 // peer on the other end parses the first 6 protobuf bytes as a garbage
 // frame header and stalls reading the phantom payload — the regression
 // this commit fixes.
-func (h *LedgerSyncHandler) sendReplayDeltaResponse(peerID PeerID, resp *message.ReplayDeltaResponse) {
-	if h.events == nil {
+func (h *LedgerSyncHandler) sendReplayDeltaResponse(ctx context.Context, peerID PeerID, resp *message.ReplayDeltaResponse) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if err := ctx.Err(); err != nil {
 		return
 	}
 	frame, err := message.EncodeFrame(resp)
@@ -417,8 +516,27 @@ func (h *LedgerSyncHandler) sendReplayDeltaResponse(peerID PeerID, resp *message
 		slog.Warn("ReplayDelta encode failed", "t", "LedgerSync", "peer", peerID, "err", err)
 		return
 	}
+	if len(frame) > MaxReplayDeltaResponseBytes {
+		h.charge(peerID, resource.FeeRequestNoReply, "replay delta response oversized")
+		return
+	}
+	h.mu.RLock()
+	prioritySender := h.prioritySender
+	events := h.events
+	h.mu.RUnlock()
+	if prioritySender != nil {
+		if err := prioritySender(ctx, peerID, frame); err != nil && ctx.Err() == nil {
+			h.droppedResponses.Add(1)
+			h.charge(peerID, resource.FeeRequestNoReply, "replay delta response send failed")
+			slog.Debug("ReplayDelta priority response failed", "t", "LedgerSync", "peer", peerID, "err", err)
+		}
+		return
+	}
+	if events == nil {
+		return
+	}
 	select {
-	case h.events <- Event{Type: EventLedgerResponse, PeerID: peerID, Payload: frame}:
+	case events <- Event{Type: EventLedgerResponse, PeerID: peerID, Payload: frame}:
 	default:
 		h.droppedResponses.Add(1)
 		slog.Warn("ReplayDelta response dropped: events channel full",

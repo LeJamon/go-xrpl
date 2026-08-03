@@ -3,12 +3,10 @@ package peermanagement
 import (
 	"container/list"
 	"context"
-	"encoding/json"
+	"fmt"
 	"log/slog"
 	"math/rand/v2"
 	"net"
-	"os"
-	"path/filepath"
 	"sort"
 	"strings"
 	"sync"
@@ -45,290 +43,6 @@ var fixedConnectBackoff = [...]time.Duration{
 	21 * time.Minute,
 	34 * time.Minute,
 	55 * time.Minute,
-}
-
-// CachedEndpoint represents a cached peer endpoint.
-type CachedEndpoint struct {
-	Address    string    `json:"address"`
-	Port       uint16    `json:"port"`
-	LastSeen   time.Time `json:"last_seen"`
-	Valence    int       `json:"valence"`
-	FailCount  int       `json:"fail_count"`
-	LastFailed time.Time `json:"last_failed,omitempty"`
-}
-
-// BootCache persists known peer addresses across restarts.
-type BootCache struct {
-	mu       sync.RWMutex
-	cache    map[string]*CachedEndpoint
-	filePath string
-	dirty    bool
-}
-
-// NewBootCache creates a new boot cache.
-func NewBootCache(dataDir string) *BootCache {
-	return &BootCache{
-		cache:    make(map[string]*CachedEndpoint),
-		filePath: filepath.Join(dataDir, DefaultBootCacheFile),
-	}
-}
-
-// Load loads the cache from disk.
-func (bc *BootCache) Load() error {
-	bc.mu.Lock()
-	defer bc.mu.Unlock()
-
-	data, err := os.ReadFile(bc.filePath)
-	if err != nil {
-		if os.IsNotExist(err) {
-			return nil
-		}
-		return err
-	}
-
-	var entries []*CachedEndpoint
-	if err := json.Unmarshal(data, &entries); err != nil {
-		return err
-	}
-
-	bc.cache = make(map[string]*CachedEndpoint)
-	now := time.Now()
-	for _, entry := range entries {
-		if now.Sub(entry.LastSeen) <= CacheEntryTTL {
-			bc.cache[entry.Address] = entry
-		}
-	}
-	return nil
-}
-
-// Save writes the cache to disk. Holds the write lock for the whole
-// operation (Save runs on shutdown, not a hot path) so dirty is never
-// mutated under a read lock, and clears dirty only after a successful
-// write so a failed write retains the flag and the next Save retries
-// instead of dropping the pending data.
-func (bc *BootCache) Save() error {
-	bc.mu.Lock()
-	defer bc.mu.Unlock()
-
-	if !bc.dirty {
-		return nil
-	}
-
-	entries := make([]*CachedEndpoint, 0, len(bc.cache))
-	for _, entry := range bc.cache {
-		entries = append(entries, entry)
-	}
-
-	data, err := json.MarshalIndent(entries, "", "  ")
-	if err != nil {
-		return err
-	}
-
-	if err := os.MkdirAll(filepath.Dir(bc.filePath), 0o755); err != nil {
-		return err
-	}
-
-	if err := os.WriteFile(bc.filePath, data, 0o600); err != nil {
-		return err
-	}
-	bc.dirty = false
-	return nil
-}
-
-// Insert adds or updates an endpoint in the cache.
-func (bc *BootCache) Insert(address string, port uint16) {
-	bc.mu.Lock()
-	defer bc.mu.Unlock()
-
-	if entry, exists := bc.cache[address]; exists {
-		entry.LastSeen = time.Now()
-		entry.Valence++
-	} else {
-		bc.cache[address] = &CachedEndpoint{
-			Address:  address,
-			Port:     port,
-			LastSeen: time.Now(),
-			Valence:  1,
-		}
-	}
-	bc.dirty = true
-}
-
-// MarkFailed records a connection failure.
-func (bc *BootCache) MarkFailed(address string) {
-	bc.mu.Lock()
-	defer bc.mu.Unlock()
-
-	if entry, exists := bc.cache[address]; exists {
-		entry.FailCount++
-		entry.LastFailed = time.Now()
-		entry.Valence--
-		if entry.Valence < 0 {
-			entry.Valence = 0
-		}
-		bc.dirty = true
-	}
-}
-
-// MarkSuccess records a successful connection.
-func (bc *BootCache) MarkSuccess(address string) {
-	bc.mu.Lock()
-	defer bc.mu.Unlock()
-
-	if entry, exists := bc.cache[address]; exists {
-		entry.LastSeen = time.Now()
-		entry.Valence++
-		entry.FailCount = 0
-		bc.dirty = true
-	}
-}
-
-// Endpoints returns endpoints sorted by valence.
-func (bc *BootCache) Endpoints(limit int) []*CachedEndpoint {
-	bc.mu.RLock()
-	defer bc.mu.RUnlock()
-
-	entries := make([]*CachedEndpoint, 0, len(bc.cache))
-	for _, entry := range bc.cache {
-		entries = append(entries, &CachedEndpoint{
-			Address:   entry.Address,
-			Port:      entry.Port,
-			LastSeen:  entry.LastSeen,
-			Valence:   entry.Valence,
-			FailCount: entry.FailCount,
-		})
-	}
-
-	sort.Slice(entries, func(i, j int) bool {
-		return entries[i].Valence > entries[j].Valence
-	})
-
-	if limit > 0 && limit < len(entries) {
-		entries = entries[:limit]
-	}
-	return entries
-}
-
-// PeerReservation represents a reserved peer slot.
-type PeerReservation struct {
-	NodeID      string `json:"node_id"`
-	Description string `json:"description,omitempty"`
-}
-
-// ReservationTable manages peer reservations.
-type ReservationTable struct {
-	mu           sync.RWMutex
-	reservations map[string]*PeerReservation
-	filePath     string
-}
-
-// NewReservationTable creates a new reservation table.
-func NewReservationTable(dataDir string) *ReservationTable {
-	var filePath string
-	if dataDir != "" {
-		filePath = filepath.Join(dataDir, DefaultReservationFile)
-	}
-	return &ReservationTable{
-		reservations: make(map[string]*PeerReservation),
-		filePath:     filePath,
-	}
-}
-
-// Contains returns true if the node has a reservation.
-func (t *ReservationTable) Contains(nodeID string) bool {
-	t.mu.RLock()
-	defer t.mu.RUnlock()
-	_, exists := t.reservations[nodeID]
-	return exists
-}
-
-// Insert adds or replaces a reservation and persists the table, returning the
-// previous entry for the same node (nil if there was none) and any persistence
-// error. Mirrors rippled's PeerReservationTable::insert_or_assign, whose DB
-// write surfaces failures to the caller.
-func (t *ReservationTable) Insert(r *PeerReservation) (*PeerReservation, error) {
-	t.mu.Lock()
-	prev := t.reservations[r.NodeID]
-	t.reservations[r.NodeID] = r
-	t.mu.Unlock()
-	return prev, t.Save()
-}
-
-// Erase removes a reservation and persists the table, returning the removed
-// entry (nil if none existed) and any persistence error. Mirrors rippled's
-// PeerReservationTable::erase.
-func (t *ReservationTable) Erase(nodeID string) (*PeerReservation, error) {
-	t.mu.Lock()
-	prev, ok := t.reservations[nodeID]
-	if ok {
-		delete(t.reservations, nodeID)
-	}
-	t.mu.Unlock()
-	if !ok {
-		return nil, nil
-	}
-	return prev, t.Save()
-}
-
-// List returns a snapshot of all reservations.
-func (t *ReservationTable) List() []PeerReservation {
-	t.mu.RLock()
-	defer t.mu.RUnlock()
-	out := make([]PeerReservation, 0, len(t.reservations))
-	for _, r := range t.reservations {
-		out = append(out, *r)
-	}
-	return out
-}
-
-// Load reads the reservation table from disk. A missing file is not an error.
-func (t *ReservationTable) Load() error {
-	if t.filePath == "" {
-		return nil
-	}
-	data, err := os.ReadFile(t.filePath)
-	if err != nil {
-		if os.IsNotExist(err) {
-			return nil
-		}
-		return err
-	}
-	var entries []*PeerReservation
-	if err := json.Unmarshal(data, &entries); err != nil {
-		return err
-	}
-	t.mu.Lock()
-	defer t.mu.Unlock()
-	t.reservations = make(map[string]*PeerReservation, len(entries))
-	for _, e := range entries {
-		if e != nil && e.NodeID != "" {
-			t.reservations[e.NodeID] = e
-		}
-	}
-	return nil
-}
-
-// Save writes the reservation table to disk. It is a no-op when no data
-// directory is configured (e.g. standalone / in-memory tests).
-func (t *ReservationTable) Save() error {
-	if t.filePath == "" {
-		return nil
-	}
-	t.mu.RLock()
-	entries := make([]*PeerReservation, 0, len(t.reservations))
-	for _, r := range t.reservations {
-		entries = append(entries, r)
-	}
-	t.mu.RUnlock()
-
-	data, err := json.MarshalIndent(entries, "", "  ")
-	if err != nil {
-		return err
-	}
-	if err := os.MkdirAll(filepath.Dir(t.filePath), 0o755); err != nil {
-		return err
-	}
-	return os.WriteFile(t.filePath, data, 0o600)
 }
 
 // Reservations exposes the reservation table backing the peer_reservations_*
@@ -470,14 +184,12 @@ func (d *Discovery) now() time.Time {
 func (d *Discovery) Start(ctx context.Context) error {
 	if d.bootCache != nil {
 		if err := d.bootCache.Load(); err != nil {
-			slog.Warn("Peer boot cache could not be loaded; continuing with an empty cache",
-				"t", "Discovery", "path", d.bootCache.filePath, "err", err)
+			return fmt.Errorf("load peer boot cache %q: %w", d.bootCache.filePath, err)
 		}
 	}
 	if d.reservation != nil {
 		if err := d.reservation.Load(); err != nil {
-			slog.Warn("Peer reservations could not be loaded; continuing with an empty table",
-				"t", "Discovery", "path", d.reservation.filePath, "err", err)
+			return fmt.Errorf("load peer reservations %q: %w", d.reservation.filePath, err)
 		}
 	}
 
@@ -608,7 +320,9 @@ func (d *Discovery) Stop() {
 		d.wg.Wait()
 
 		if d.bootCache != nil {
-			d.bootCache.Save()
+			if err := d.bootCache.Save(); err != nil {
+				slog.Warn("Peer boot cache could not be saved", "t", "Discovery", "path", d.bootCache.filePath, "err", err)
+			}
 		}
 	})
 }

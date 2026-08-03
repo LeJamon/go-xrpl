@@ -75,7 +75,7 @@ func TestRouter_HandleReplayDeltaResponse_DecodeFailure_ChargesPeer(t *testing.T
 
 	r.handleMessage(&peermanagement.InboundMessage{
 		PeerID:  42,
-		Type:    uint16(message.TypeReplayDeltaResponse),
+		Type:    message.TypeReplayDeltaResponse,
 		Payload: garbage,
 	})
 
@@ -114,7 +114,7 @@ func TestRouter_HandleReplayDeltaResponse_VerifyFailure_ChargesPeer(t *testing.T
 
 	r.handleMessage(&peermanagement.InboundMessage{
 		PeerID:  7,
-		Type:    uint16(message.TypeReplayDeltaResponse),
+		Type:    message.TypeReplayDeltaResponse,
 		Payload: payload,
 	})
 
@@ -138,7 +138,7 @@ func TestRouter_HandleReplayDeltaResponse_RouteMismatchDoesNotChargePeer(t *test
 	payload, err := message.Encode(resp)
 	require.NoError(t, err)
 	r.handleMessage(&peermanagement.InboundMessage{
-		PeerID: 7, Type: uint16(message.TypeReplayDeltaResponse), Payload: payload,
+		PeerID: 7, Type: message.TypeReplayDeltaResponse, Payload: payload,
 	})
 
 	assert.Empty(t, rs.getBadDataCalls())
@@ -157,7 +157,7 @@ func TestRouter_HandleLedgerData_DecodeFailure_ChargesPeer(t *testing.T) {
 
 	r.handleMessage(&peermanagement.InboundMessage{
 		PeerID:  99,
-		Type:    uint16(message.TypeLedgerData),
+		Type:    message.TypeLedgerData,
 		Payload: garbage,
 	})
 

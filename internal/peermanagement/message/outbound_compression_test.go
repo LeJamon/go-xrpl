@@ -79,11 +79,11 @@ func TestShouldCompressMatchesRippledMessageTypes(t *testing.T) {
 		TypeTransactions,
 	}
 	for _, msgType := range eligible {
-		assert.True(t, ShouldCompress(uint16(msgType)), msgType.String())
+		assert.True(t, ShouldCompress(msgType), msgType.String())
 	}
 
 	for _, msgType := range []MessageType{TypePing, TypeSquelch, TypeValidation, TypeReplayDeltaReq} {
-		assert.False(t, ShouldCompress(uint16(msgType)), msgType.String())
+		assert.False(t, ShouldCompress(msgType), msgType.String())
 	}
 }
 
@@ -109,7 +109,7 @@ func TestCompressIfWorthwhileAccountsForCompressedHeader(t *testing.T) {
 	require.NotNil(t, payload, "test fixture must compress without saving the longer header")
 	require.Less(t, len(compressed), len(payload))
 
-	selected, ok := CompressIfWorthwhile(uint16(TypeManifests), payload)
+	selected, ok := CompressIfWorthwhile(TypeManifests, payload)
 
 	assert.False(t, ok)
 	assert.Equal(t, payload, selected)

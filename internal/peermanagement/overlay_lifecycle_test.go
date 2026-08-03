@@ -2,10 +2,13 @@ package peermanagement
 
 import (
 	"context"
-	"errors"
 	"net"
+	"path/filepath"
 	"testing"
 	"time"
+
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func newLifecycleTestOverlay(t *testing.T, opts ...Option) *Overlay {
@@ -18,94 +21,189 @@ func newLifecycleTestOverlay(t *testing.T, opts ...Option) *Overlay {
 		WithMaxOutbound(1),
 	}
 	o, err := New(append(base, opts...)...)
-	if err != nil {
-		t.Fatalf("New: %v", err)
-	}
+	require.NoError(t, err)
 	return o
 }
 
-func waitRun(t *testing.T, done <-chan error) error {
-	t.Helper()
-	select {
-	case err := <-done:
-		return err
-	case <-time.After(5 * time.Second):
-		t.Fatal("overlay Run did not return")
-		return nil
-	}
-}
-
-func TestOverlayRunCancellationOwnsResources(t *testing.T) {
-	o := newLifecycleTestOverlay(t)
+func TestOverlayRunCancellationClosesListener(t *testing.T) {
+	o, err := New(WithDataDir(t.TempDir()), WithListenAddr("127.0.0.1:0"), WithPrivateMode(true))
+	require.NoError(t, err)
 	ctx, cancel := context.WithCancel(context.Background())
-	done := make(chan error, 1)
-	go func() { done <- o.Run(ctx) }()
-
+	runDone := make(chan error, 1)
+	go func() { runDone <- o.Run(ctx) }()
 	select {
 	case <-o.ListenerReady():
+	case err := <-runDone:
+		t.Fatalf("overlay stopped before startup: %v", err)
 	case <-time.After(5 * time.Second):
-		t.Fatal("listener did not become ready")
+		t.Fatal("overlay did not become ready")
 	}
 	addr := o.ListenAddr()
+
 	cancel()
-	if err := waitRun(t, done); !errors.Is(err, context.Canceled) {
-		t.Fatalf("Run error = %v, want context.Canceled", err)
+	select {
+	case err := <-runDone:
+		require.ErrorIs(t, err, context.Canceled)
+	case <-time.After(5 * time.Second):
+		t.Fatal("overlay did not stop after cancellation")
 	}
-	if err := o.Stop(); err != nil {
-		t.Fatalf("Stop after Run: %v", err)
-	}
+	require.NoError(t, o.Stop())
 
 	conn, err := net.DialTimeout("tcp", addr, 100*time.Millisecond)
 	if err == nil {
-		conn.Close()
+		_ = conn.Close()
 		t.Fatal("listener still accepted connections after cancellation")
 	}
 }
 
-func TestOverlayRunIsOneShot(t *testing.T) {
-	o := newLifecycleTestOverlay(t, WithListenAddr(""))
-	ctx, cancel := context.WithCancel(context.Background())
-	done := make(chan error, 1)
-	go func() { done <- o.Run(ctx) }()
+func TestOverlayRunStartupFailureUnwinds(t *testing.T) {
+	o, err := New(WithDataDir(t.TempDir()), WithListenAddr("127.0.0.1:not-a-port"))
+	require.NoError(t, err)
+	require.Error(t, o.Run(context.Background()))
+	require.NoError(t, o.Stop())
+}
 
+func TestOverlayStopPersistsLatePeerMutation(t *testing.T) {
+	dir := t.TempDir()
+	o, err := New(WithDataDir(dir), WithListenAddr("127.0.0.1:0"), WithPrivateMode(true))
+	require.NoError(t, err)
+	runDone := make(chan error, 1)
+	go func() { runDone <- o.Run(context.Background()) }()
 	select {
 	case <-o.ListenerReady():
+	case err := <-runDone:
+		t.Fatalf("overlay stopped before startup: %v", err)
 	case <-time.After(5 * time.Second):
-		t.Fatal("Run did not finish startup")
+		t.Fatal("overlay did not become ready")
 	}
-	if err := o.Run(context.Background()); !errors.Is(err, ErrAlreadyRunning) {
-		t.Fatalf("concurrent Run error = %v, want ErrAlreadyRunning", err)
+
+	const address = "198.51.100.20:51235"
+	release := make(chan struct{})
+	o.peerWG.Add(1)
+	go func() {
+		defer o.peerWG.Done()
+		<-release
+		o.discovery.MarkConnected(address, PeerID(20))
+	}()
+
+	stopDone := make(chan struct{})
+	go func() {
+		_ = o.Stop()
+		close(stopDone)
+	}()
+	select {
+	case <-stopDone:
+		t.Fatal("Stop completed before the in-flight peer producer joined")
+	case <-time.After(20 * time.Millisecond):
 	}
+	close(release)
+	select {
+	case <-stopDone:
+	case <-time.After(5 * time.Second):
+		t.Fatal("Stop did not complete after the peer producer joined")
+	}
+	<-runDone
+
+	reloaded := NewBootCache(filepath.Clean(dir))
+	require.NoError(t, reloaded.Load())
+	assert.Len(t, reloaded.Endpoints(0), 1)
+	assert.Equal(t, address, reloaded.Endpoints(0)[0].Address)
+}
+
+func TestOverlayContextCancellationPersistsLatePeerMutation(t *testing.T) {
+	dir := t.TempDir()
+	o, err := New(WithDataDir(dir), WithListenAddr("127.0.0.1:0"), WithPrivateMode(true))
+	require.NoError(t, err)
+	ctx, cancel := context.WithCancel(context.Background())
+	runDone := make(chan error, 1)
+	go func() { runDone <- o.Run(ctx) }()
+	select {
+	case <-o.ListenerReady():
+	case err := <-runDone:
+		t.Fatalf("overlay stopped before startup: %v", err)
+	case <-time.After(5 * time.Second):
+		t.Fatal("overlay did not become ready")
+	}
+
+	const address = "198.51.100.21:51235"
+	release := make(chan struct{})
+	o.peerWG.Add(1)
+	go func() {
+		defer o.peerWG.Done()
+		<-release
+		o.discovery.MarkConnected(address, PeerID(21))
+	}()
 	cancel()
-	if err := waitRun(t, done); !errors.Is(err, context.Canceled) {
-		t.Fatalf("first Run error = %v, want context.Canceled", err)
+	select {
+	case <-runDone:
+		t.Fatal("Run returned before the in-flight peer producer joined")
+	case <-time.After(20 * time.Millisecond):
 	}
-	if err := o.Run(context.Background()); !errors.Is(err, ErrShutdown) {
-		t.Fatalf("second Run error = %v, want ErrShutdown", err)
+	close(release)
+	select {
+	case <-runDone:
+	case <-time.After(5 * time.Second):
+		t.Fatal("Run did not complete after the peer producer joined")
+	}
+
+	reloaded := NewBootCache(filepath.Clean(dir))
+	require.NoError(t, reloaded.Load())
+	assert.Len(t, reloaded.Endpoints(0), 1)
+	assert.Equal(t, address, reloaded.Endpoints(0)[0].Address)
+}
+
+func TestOverlayStopBeforeRunRejectsRun(t *testing.T) {
+	o, err := New(WithDataDir(t.TempDir()), WithListenAddr("127.0.0.1:0"))
+	require.NoError(t, err)
+	require.NoError(t, o.Stop())
+	err = o.Run(context.Background())
+	assert.ErrorIs(t, err, ErrShutdown)
+	assert.Empty(t, o.ListenAddr())
+}
+
+func TestOverlayConcurrentStopRejectsStartupBeforeReadiness(t *testing.T) {
+	o, err := New(WithDataDir(t.TempDir()), WithListenAddr("127.0.0.1:0"))
+	require.NoError(t, err)
+	o.discovery.cfg.BootstrapPeers = []string{"blocked.example:51235"}
+	entered := make(chan struct{})
+	o.discovery.lookupIP = func(ctx context.Context, _ string) ([]net.IPAddr, error) {
+		close(entered)
+		<-ctx.Done()
+		return nil, ctx.Err()
+	}
+	runDone := make(chan error, 1)
+	go func() { runDone <- o.Run(context.Background()) }()
+	select {
+	case <-entered:
+	case <-time.After(5 * time.Second):
+		t.Fatal("discovery startup did not enter the blocking resolver")
+	}
+	require.NoError(t, o.Stop())
+	err = <-runDone
+	assert.ErrorIs(t, err, ErrShutdown)
+	assert.Empty(t, o.ListenAddr())
+	select {
+	case <-o.ListenerReady():
+		t.Fatal("concurrent Stop allowed startup readiness")
+	default:
 	}
 }
 
-func TestOverlayRunAfterStop(t *testing.T) {
-	o := newLifecycleTestOverlay(t, WithListenAddr(""))
-	if err := o.Stop(); err != nil {
-		t.Fatalf("Stop before Run: %v", err)
+func TestOverlayRejectsDoubleRun(t *testing.T) {
+	o, err := New(WithDataDir(t.TempDir()), WithListenAddr("127.0.0.1:0"), WithPrivateMode(true))
+	require.NoError(t, err)
+	runDone := make(chan error, 1)
+	go func() { runDone <- o.Run(context.Background()) }()
+	select {
+	case <-o.ListenerReady():
+	case err := <-runDone:
+		t.Fatalf("overlay stopped before startup: %v", err)
+	case <-time.After(5 * time.Second):
+		t.Fatal("overlay did not become ready")
 	}
-	if err := o.Stop(); err != nil {
-		t.Fatalf("repeated Stop before Run: %v", err)
-	}
-	if err := o.Run(context.Background()); !errors.Is(err, ErrShutdown) {
-		t.Fatalf("Run after Stop error = %v, want ErrShutdown", err)
-	}
-}
 
-func TestOverlayRunStartupFailureUnwinds(t *testing.T) {
-	o := newLifecycleTestOverlay(t, WithListenAddr("127.0.0.1:not-a-port"))
-	done := make(chan error, 1)
-	go func() { done <- o.Run(context.Background()) }()
-	if err := waitRun(t, done); err == nil {
-		t.Fatal("Run unexpectedly succeeded with an invalid listener address")
-	}
-	if err := o.Stop(); err != nil {
-		t.Fatalf("Stop after startup failure: %v", err)
-	}
+	assert.ErrorIs(t, o.Run(context.Background()), ErrAlreadyRunning)
+	require.NoError(t, o.Stop())
+	<-runDone
+	assert.ErrorIs(t, o.Run(context.Background()), ErrShutdown)
 }

@@ -17,11 +17,12 @@ import (
 //     0 skips validation for local dev networks — a security risk on a
 //     public network
 type OverlayConfig struct {
-	PublicIP        string `toml:"public_ip" mapstructure:"public_ip"`
-	IPLimit         int    `toml:"ip_limit" mapstructure:"ip_limit"`
-	MaxUnknownTime  int    `toml:"max_unknown_time" mapstructure:"max_unknown_time"`
-	MaxDivergedTime int    `toml:"max_diverged_time" mapstructure:"max_diverged_time"`
-	VerifyEndpoints *int   `toml:"verify_endpoints" mapstructure:"verify_endpoints"`
+	PublicIP             string `toml:"public_ip" mapstructure:"public_ip"`
+	IPLimit              int    `toml:"ip_limit" mapstructure:"ip_limit"`
+	MaxUnknownTime       int    `toml:"max_unknown_time" mapstructure:"max_unknown_time"`
+	MaxDivergedTime      int    `toml:"max_diverged_time" mapstructure:"max_diverged_time"`
+	VerifyEndpoints      *int   `toml:"verify_endpoints" mapstructure:"verify_endpoints"`
+	InboundRetainedBytes int64  `toml:"inbound_retained_bytes" mapstructure:"inbound_retained_bytes"`
 }
 
 // TransactionQueueConfig represents the [transaction_queue] section (EXPERIMENTAL).
@@ -68,6 +69,9 @@ func (o *OverlayConfig) Validate() error {
 		if err := validateZeroOrOne("verify_endpoints", *o.VerifyEndpoints); err != nil {
 			return err
 		}
+	}
+	if o.InboundRetainedBytes != 0 && o.InboundRetainedBytes < 3*64*1024*1024 {
+		return fmt.Errorf("inbound_retained_bytes must be at least %d, got %d", 3*64*1024*1024, o.InboundRetainedBytes)
 	}
 
 	return nil

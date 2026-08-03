@@ -25,13 +25,13 @@ type gossipNetwork interface {
 	RelayValidation(validation *consensus.Validation, exceptPeer uint64) error
 }
 
-func (r *Router) handleMessage(msg *peermanagement.InboundMessage) {
+func (r *Router) handleMessage(msg *peermanagement.InboundMessage) (transferred bool) {
 	defer r.recoverFrame(msg, "dispatch")
 
-	msgType := message.MessageType(msg.Type)
+	msgType := msg.Type
 	if r.peerSessions != nil && !r.peerSessions.IsPeerConnected(msg.PeerID) &&
 		msgType != message.TypeManifests {
-		return
+		return false
 	}
 	defer func() {
 		if r.peerSessions != nil && !r.peerSessions.IsPeerConnected(msg.PeerID) {
@@ -51,6 +51,7 @@ func (r *Router) handleMessage(msg *peermanagement.InboundMessage) {
 		// TMTransaction onto its jtTRANSACTION job queue rather than handling
 		// it on the read strand.
 		r.submitTxJob(msg)
+		transferred = true
 	case message.TypeHaveSet:
 		r.handleHaveSet(msg)
 	case message.TypeStatusChange:
@@ -61,8 +62,9 @@ func (r *Router) handleMessage(msg *peermanagement.InboundMessage) {
 		// proposal / validation / acquisition-reply handling on this
 		// goroutine. Inline when the pool isn't running (synchronous tests).
 		r.submitServeJob(msg)
+		transferred = true
 	case message.TypeLedgerData:
-		r.handleLedgerData(msg)
+		transferred = r.handleLedgerData(msg)
 	case message.TypeGetObjects:
 		// Only fetch-pack REPLIES reach the router; the overlay serves
 		// otFETCH_PACK requests inline and forwards replies here (see
@@ -78,6 +80,16 @@ func (r *Router) handleMessage(msg *peermanagement.InboundMessage) {
 	case message.TypeValidatorListCollection:
 		r.handleValidatorListCollection(msg)
 	default:
+	}
+	return transferred
+}
+
+func (r *Router) handleInboundMessage(msg *peermanagement.InboundMessage) {
+	if msg == nil {
+		return
+	}
+	if !r.handleMessage(msg) {
+		_ = msg.Close()
 	}
 }
 
@@ -667,8 +679,9 @@ func (r *Router) relayTransaction(except peermanagement.PeerID, blob []byte) {
 		r.logger.Warn("relay transaction encode failed", "error", err)
 		return
 	}
-	// Reduce-relay peer selection: relays the full frame to a subset of
-	// peers and lets the rest learn via the TMHaveTransactions announce.
+	// Reduce-relay peer selection derives the transaction ID from the wire
+	// frame itself. If the frame cannot be decoded, the overlay falls back to
+	// full relay rather than announcing an unfulfillable hash.
 	r.overlay.RelayTransaction(except, frame)
 }
 

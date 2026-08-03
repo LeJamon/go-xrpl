@@ -1,6 +1,20 @@
 package peermanagement
 
-import "testing"
+import (
+	"net"
+	"testing"
+)
+
+func TestWithPublicIPCopiesCallerValue(t *testing.T) {
+	ip := net.ParseIP("198.51.100.7")
+	cfg := DefaultConfig()
+	WithPublicIP(ip)(&cfg)
+	ip[0] ^= 0xff
+	assert := cfg.PublicIP.String()
+	if assert != "198.51.100.7" {
+		t.Fatalf("PublicIP changed through caller alias: got %s", assert)
+	}
+}
 
 // TestDefaultConfig_ReduceRelayOptIn pins Task 4.4 (G5): rippled ships
 // with reduce-relay disabled by default — `Config.h:248` sets

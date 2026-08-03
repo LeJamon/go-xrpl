@@ -25,7 +25,7 @@ func buildValidationAt(t *testing.T, peerID peermanagement.PeerID, signTime time
 	v.Signature = make([]byte, 70)
 	return &peermanagement.InboundMessage{
 		PeerID:  peerID,
-		Type:    uint16(message.TypeValidation),
+		Type:    message.TypeValidation,
 		Payload: encodePayload(t, &message.Validation{Validation: SerializeSTValidation(v)}),
 	}
 }

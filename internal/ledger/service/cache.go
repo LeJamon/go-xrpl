@@ -192,6 +192,13 @@ func (s *Service) hasCompleteLedger(l *ledger.Ledger) bool {
 	return s.completeLedgerHashes[l.Sequence()] == l.Hash()
 }
 
+// HasCompleteLedger reports whether seq belongs to the completed-ledger set.
+func (s *Service) HasCompleteLedger(seq uint32) bool {
+	s.completeMu.RLock()
+	defer s.completeMu.RUnlock()
+	return s.completedLedgers != nil && s.completedLedgers.contains(seq)
+}
+
 func (s *Service) completeLedgersString() string {
 	s.completeMu.RLock()
 	defer s.completeMu.RUnlock()

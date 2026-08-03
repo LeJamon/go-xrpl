@@ -93,7 +93,7 @@ func TestRouter_ResolveMasterNodeID_Validation_RewritesToMaster(t *testing.T) {
 
 	inbox <- &peermanagement.InboundMessage{
 		PeerID:  9,
-		Type:    uint16(message.TypeValidation),
+		Type:    message.TypeValidation,
 		Payload: encodePayload(t, &message.Validation{Validation: SerializeSTValidation(v)}),
 	}
 
@@ -153,7 +153,7 @@ func TestRouter_ResolveMasterNodeID_Validation_NoMappingPreservesSigning(t *test
 
 	inbox <- &peermanagement.InboundMessage{
 		PeerID:  10,
-		Type:    uint16(message.TypeValidation),
+		Type:    message.TypeValidation,
 		Payload: encodePayload(t, &message.Validation{Validation: SerializeSTValidation(v)}),
 	}
 

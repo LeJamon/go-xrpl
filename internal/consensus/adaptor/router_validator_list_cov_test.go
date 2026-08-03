@@ -222,7 +222,7 @@ func TestRvl_HandleVL_NilAgg(t *testing.T) {
 	vl := &message.ValidatorList{Version: 1, Manifest: []byte("m"), Blob: []byte("b"), Signature: []byte("s")}
 	r.handleValidatorList(&peermanagement.InboundMessage{
 		PeerID:  1,
-		Type:    uint16(message.TypeValidatorList),
+		Type:    message.TypeValidatorList,
 		Payload: encodePayload(t, vl),
 	})
 	assert.Empty(t, rs.getBadDataCalls())
@@ -232,7 +232,7 @@ func TestRvl_HandleVL_DecodeError(t *testing.T) {
 	r, rs := rvl_newRouterWithVL(t)
 	r.handleValidatorList(&peermanagement.InboundMessage{
 		PeerID:  5,
-		Type:    uint16(message.TypeValidatorList),
+		Type:    message.TypeValidatorList,
 		Payload: []byte{0xFF, 0xFE, 0xFD},
 	})
 	calls := rs.getBadDataCalls()
@@ -248,7 +248,7 @@ func TestRvl_HandleVL_Untrusted(t *testing.T) {
 	vl := &message.ValidatorList{Version: 1, Manifest: []byte("m"), Blob: []byte("b"), Signature: []byte("s")}
 	r.handleValidatorList(&peermanagement.InboundMessage{
 		PeerID:  3,
-		Type:    uint16(message.TypeValidatorList),
+		Type:    message.TypeValidatorList,
 		Payload: encodePayload(t, vl),
 	})
 	calls := rs.getBadDataCalls()
@@ -262,13 +262,13 @@ func TestRvl_HandleVL_Duplicate(t *testing.T) {
 	vl := &message.ValidatorList{Version: 1, Manifest: []byte("m2"), Blob: []byte("b2"), Signature: []byte("s2")}
 	payload := encodePayload(t, vl)
 
-	r.handleValidatorList(&peermanagement.InboundMessage{PeerID: 10, Type: uint16(message.TypeValidatorList), Payload: payload})
+	r.handleValidatorList(&peermanagement.InboundMessage{PeerID: 10, Type: message.TypeValidatorList, Payload: payload})
 	calls1 := rs.getBadDataCalls()
 	require.Len(t, calls1, 1)
 	assert.Equal(t, "vl-useless-untrusted", calls1[0].reason)
 
 	// Second delivery from different peer — same content → dedup fires.
-	r.handleValidatorList(&peermanagement.InboundMessage{PeerID: 11, Type: uint16(message.TypeValidatorList), Payload: payload})
+	r.handleValidatorList(&peermanagement.InboundMessage{PeerID: 11, Type: message.TypeValidatorList, Payload: payload})
 	calls2 := rs.getBadDataCalls()
 	require.Len(t, calls2, 2)
 	assert.Equal(t, uint64(11), calls2[1].peerID)
@@ -282,8 +282,8 @@ func TestRvl_HandleVL_NilMsgSeen(t *testing.T) {
 	vl := &message.ValidatorList{Version: 1, Manifest: []byte("nms"), Blob: []byte("nmsb"), Signature: []byte("nmss")}
 	payload := encodePayload(t, vl)
 
-	r.handleValidatorList(&peermanagement.InboundMessage{PeerID: 50, Type: uint16(message.TypeValidatorList), Payload: payload})
-	r.handleValidatorList(&peermanagement.InboundMessage{PeerID: 51, Type: uint16(message.TypeValidatorList), Payload: payload})
+	r.handleValidatorList(&peermanagement.InboundMessage{PeerID: 50, Type: message.TypeValidatorList, Payload: payload})
+	r.handleValidatorList(&peermanagement.InboundMessage{PeerID: 51, Type: message.TypeValidatorList, Payload: payload})
 
 	// Both processed independently — two Untrusted charges, no duplicate charge.
 	calls := rs.getBadDataCalls()
@@ -298,7 +298,7 @@ func TestRvl_HandleVLC_NilAgg(t *testing.T) {
 	coll := &message.ValidatorListCollection{Version: 2, Blobs: []message.ValidatorBlobInfo{{Blob: []byte("b")}}}
 	r.handleValidatorListCollection(&peermanagement.InboundMessage{
 		PeerID:  1,
-		Type:    uint16(message.TypeValidatorListCollection),
+		Type:    message.TypeValidatorListCollection,
 		Payload: encodePayload(t, coll),
 	})
 	assert.Empty(t, rs.getBadDataCalls())
@@ -308,7 +308,7 @@ func TestRvl_HandleVLC_DecodeError(t *testing.T) {
 	r, rs := rvl_newRouterWithVL(t)
 	r.handleValidatorListCollection(&peermanagement.InboundMessage{
 		PeerID:  6,
-		Type:    uint16(message.TypeValidatorListCollection),
+		Type:    message.TypeValidatorListCollection,
 		Payload: []byte{0xFF, 0xFE, 0xFD},
 	})
 	calls := rs.getBadDataCalls()
@@ -325,7 +325,7 @@ func TestRvl_HandleVLC_WrongVersion(t *testing.T) {
 	}
 	r.handleValidatorListCollection(&peermanagement.InboundMessage{
 		PeerID:  8,
-		Type:    uint16(message.TypeValidatorListCollection),
+		Type:    message.TypeValidatorListCollection,
 		Payload: encodePayload(t, coll),
 	})
 	calls := rs.getBadDataCalls()
@@ -341,7 +341,7 @@ func TestRvl_HandleVLC_NoBlobs(t *testing.T) {
 	}
 	r.handleValidatorListCollection(&peermanagement.InboundMessage{
 		PeerID:  9,
-		Type:    uint16(message.TypeValidatorListCollection),
+		Type:    message.TypeValidatorListCollection,
 		Payload: encodePayload(t, coll),
 	})
 	calls := rs.getBadDataCalls()
@@ -363,7 +363,7 @@ func TestRvl_HandleVLC_Untrusted(t *testing.T) {
 	}
 	r.handleValidatorListCollection(&peermanagement.InboundMessage{
 		PeerID:  16,
-		Type:    uint16(message.TypeValidatorListCollection),
+		Type:    message.TypeValidatorListCollection,
 		Payload: encodePayload(t, coll),
 	})
 	calls := rs.getBadDataCalls()
@@ -381,12 +381,12 @@ func TestRvl_HandleVLC_Duplicate(t *testing.T) {
 	}
 	payload := encodePayload(t, coll)
 
-	r.handleValidatorListCollection(&peermanagement.InboundMessage{PeerID: 20, Type: uint16(message.TypeValidatorListCollection), Payload: payload})
+	r.handleValidatorListCollection(&peermanagement.InboundMessage{PeerID: 20, Type: message.TypeValidatorListCollection, Payload: payload})
 	calls1 := rs.getBadDataCalls()
 	require.Len(t, calls1, 1)
 
 	// Second delivery from different peer → duplicate charge.
-	r.handleValidatorListCollection(&peermanagement.InboundMessage{PeerID: 21, Type: uint16(message.TypeValidatorListCollection), Payload: payload})
+	r.handleValidatorListCollection(&peermanagement.InboundMessage{PeerID: 21, Type: message.TypeValidatorListCollection, Payload: payload})
 	calls2 := rs.getBadDataCalls()
 	require.Len(t, calls2, 2)
 	assert.Equal(t, uint64(21), calls2[1].peerID)
@@ -404,8 +404,8 @@ func TestRvl_HandleVLC_NilMsgSeen(t *testing.T) {
 	}
 	payload := encodePayload(t, coll)
 
-	r.handleValidatorListCollection(&peermanagement.InboundMessage{PeerID: 60, Type: uint16(message.TypeValidatorListCollection), Payload: payload})
-	r.handleValidatorListCollection(&peermanagement.InboundMessage{PeerID: 61, Type: uint16(message.TypeValidatorListCollection), Payload: payload})
+	r.handleValidatorListCollection(&peermanagement.InboundMessage{PeerID: 60, Type: message.TypeValidatorListCollection, Payload: payload})
+	r.handleValidatorListCollection(&peermanagement.InboundMessage{PeerID: 61, Type: message.TypeValidatorListCollection, Payload: payload})
 
 	calls := rs.getBadDataCalls()
 	assert.Len(t, calls, 2)

@@ -3,7 +3,6 @@ package peermanagement
 import (
 	"bufio"
 	"context"
-	"encoding/hex"
 	"errors"
 	"fmt"
 	"io"
@@ -100,7 +99,7 @@ type Peer struct {
 	consensusControlEvents chan<- Event
 	acquisitionEvents      chan<- Event
 	manifestMessages       chan<- *InboundMessage
-	manifestReadBudget     *readBudget
+	inboundReadBudget      *readBudget
 	manifestSpoolDir       string
 
 	// droppedEvents counts non-blocking event sends that fell through
@@ -198,6 +197,13 @@ type Peer struct {
 	// past the cap, and the ring is never cleared (not even on LostSync).
 	recentLedgers [][32]byte
 
+	// txQueue holds transaction hashes deferred by reduce-relay. It mirrors
+	// rippled PeerImp::txQueue_: hashes remain queued until a HaveTransactions
+	// frame is successfully admitted to this peer's outbound queue.
+	txQueueMu  sync.Mutex
+	txQueue    [][32]byte
+	txQueueSet map[[32]byte]struct{}
+
 	// protocolVersion: negotiated peer-protocol token (e.g. "XRPL/2.2").
 	// Mirrors rippled PeerImp::protocol_, surfaced via `protocol` in the
 	// peers RPC (PeerImp.cpp:419). Rippled constructs PeerImp only after
@@ -264,6 +270,7 @@ func NewPeer(id PeerID, endpoint Endpoint, inbound bool, identity *Identity, eve
 		traffic:       NewTrafficCounter(),
 		metrics:       newPeerMetrics(nil),
 		squelchMap:    make(map[string]time.Time),
+		txQueueSet:    make(map[[32]byte]struct{}),
 		pingsInFlight: make(map[uint32]pingInFlight),
 		readPolicy: peerReadPolicy{
 			now:               time.Now,
@@ -298,15 +305,22 @@ func (p *Peer) SetManifestMessages(messages chan<- *InboundMessage) {
 	p.manifestMessages = messages
 }
 
-func (p *Peer) SetManifestReadBudget(budget *readBudget) {
-	p.manifestReadBudget = budget
+func (p *Peer) SetInboundReadBudget(budget *readBudget) {
+	p.inboundReadBudget = budget
 }
 
 func (p *Peer) SetManifestSpoolDir(dir string) {
 	p.manifestSpoolDir = dir
 }
 
-func manifestReadReservation(header MessageHeader) int64 {
+func isInboundBulkMessageType(msgType message.MessageType) bool {
+	return !message.IsKnownMessageType(msgType) || message.MaxPayloadSizeForType(msgType) > 64*1024
+}
+
+func inboundFrameReservation(header message.Header) int64 {
+	if !isInboundBulkMessageType(header.MessageType) {
+		return 0
+	}
 	size := int64(header.PayloadSize)
 	if header.Compressed {
 		size += int64(header.UncompressedSize)
@@ -318,50 +332,52 @@ func manifestReadReservation(header MessageHeader) int64 {
 // traffic and uses the best-effort event lane for other traffic. Closing the
 // peer releases a read loop waiting for capacity.
 func (p *Peer) dispatchEvent(evt Event) bool {
-	if evt.Type == EventMessageReceived && message.MessageType(evt.MessageType) == message.TypeManifests && p.manifestMessages != nil {
+	if evt.Type == EventMessageReceived && evt.MessageType == message.TypeManifests && p.manifestMessages != nil {
+		msg := evt.inboundMessage()
 		select {
-		case p.manifestMessages <- &InboundMessage{
-			PeerID:        evt.PeerID,
-			Type:          evt.MessageType,
-			Payload:       evt.Payload,
-			ManifestFrame: evt.ManifestFrame,
-		}:
+		case p.manifestMessages <- msg:
 			return true
 		case <-p.closeCh:
+			_ = msg.Close()
 			return false
 		}
 	}
-	if evt.Type == EventMessageReceived && isConsensusPriorityMessageType(message.MessageType(evt.MessageType)) && p.consensusEvents != nil {
+	if evt.Type == EventMessageReceived && isConsensusPriorityMessageType(evt.MessageType) && p.consensusEvents != nil {
 		select {
 		case p.consensusEvents <- evt:
 			return true
 		case <-p.closeCh:
+			evt.release()
 			return false
 		}
 	}
-	if evt.Type == EventMessageReceived && isConsensusControlMessageType(message.MessageType(evt.MessageType)) && p.consensusControlEvents != nil {
+	if evt.Type == EventMessageReceived && isConsensusControlMessageType(evt.MessageType) && p.consensusControlEvents != nil {
 		select {
 		case p.consensusControlEvents <- evt:
 			return true
 		case <-p.closeCh:
+			evt.release()
 			return false
 		}
 	}
-	if evt.Type == EventMessageReceived && isAcquisitionMessageType(message.MessageType(evt.MessageType)) && p.acquisitionEvents != nil {
+	if evt.Type == EventMessageReceived && isAcquisitionMessageType(evt.MessageType) && p.acquisitionEvents != nil {
 		select {
 		case p.acquisitionEvents <- evt:
 			return true
 		case <-p.closeCh:
+			evt.release()
 			return false
 		}
 	}
 	if p.events == nil {
+		evt.release()
 		return false
 	}
 	select {
 	case p.events <- evt:
 		return true
 	default:
+		evt.release()
 		if p.droppedEvents != nil {
 			p.droppedEvents.Add(1)
 		}
@@ -455,13 +471,41 @@ func (p *Peer) State() PeerState {
 func (p *Peer) RemotePublicKey() *PublicKeyToken {
 	p.mu.RLock()
 	defer p.mu.RUnlock()
-	return p.remotePubKey
+	if p.remotePubKey == nil {
+		return nil
+	}
+	key, err := NewPublicKeyToken(p.remotePubKey.Bytes())
+	if err != nil {
+		return nil
+	}
+	return key
+}
+
+// RemotePublicKeyBytes returns a copy of the peer's compressed node key.
+func (p *Peer) RemotePublicKeyBytes() []byte {
+	p.mu.RLock()
+	defer p.mu.RUnlock()
+	if p.remotePubKey == nil {
+		return nil
+	}
+	return p.remotePubKey.Bytes()
+}
+
+// RemotePublicKeyEncoded returns the peer's node public key in its canonical
+// base58 representation.
+func (p *Peer) RemotePublicKeyEncoded() string {
+	p.mu.RLock()
+	defer p.mu.RUnlock()
+	if p.remotePubKey == nil {
+		return ""
+	}
+	return p.remotePubKey.Encode()
 }
 
 func (p *Peer) Capabilities() *PeerCapabilities {
 	p.mu.RLock()
 	defer p.mu.RUnlock()
-	return p.capabilities
+	return p.capabilities.clone()
 }
 
 // compressionNegotiated reports whether this connection agreed to use
@@ -880,6 +924,10 @@ func (p *Peer) performHandshake(ctx context.Context, tlsConn peertls.PeerConn) e
 			fmt.Errorf("%w: got status %d, headers: %v, body: %s",
 				ErrInvalidHandshake, resp.StatusCode, resp.Header, string(body)))
 	}
+	if err := validateHandshakeResponse(resp); err != nil {
+		resp.Body.Close()
+		return NewHandshakeError(p.endpoint, "validate_envelope", err)
+	}
 	resp.Body.Close()
 
 	// Server-Domain check runs first (rippled verify order).
@@ -984,172 +1032,6 @@ func (p *Peer) Run(ctx context.Context) error {
 	return runErr
 }
 
-type frameProgressReader struct {
-	peer                *Peer
-	reader              io.Reader
-	conn                net.Conn
-	frameID             uint64
-	startedAt           time.Time
-	deadline            time.Time
-	budgetDeadlineArmed bool
-	header              MessageHeader
-	headerSet           bool
-	bytesRead           uint64
-	payloadStart        uint64
-	payloadStartedAt    time.Time
-}
-
-func (p *Peer) newFrameProgressReader(reader io.Reader, conn net.Conn) *frameProgressReader {
-	now := p.readPolicy.now()
-	p.readProgressMu.Lock()
-	p.readProgress.id++
-	p.readProgress.active = true
-	p.readProgress.deadline = time.Time{}
-	p.readProgress.lastProgress = time.Time{}
-	id := p.readProgress.id
-	p.readProgressMu.Unlock()
-	return &frameProgressReader{
-		peer:      p,
-		reader:    reader,
-		conn:      conn,
-		frameID:   id,
-		startedAt: now,
-	}
-}
-
-func (r *frameProgressReader) setHeader(header MessageHeader) error {
-	r.header = header
-	r.headerSet = true
-	r.payloadStart = r.bytesRead
-	r.payloadStartedAt = r.peer.readPolicy.now()
-	r.deadline = r.startedAt.Add(r.peer.frameReadBudget(header.PayloadSize))
-
-	r.peer.readProgressMu.Lock()
-	if r.peer.readProgress.id == r.frameID && r.peer.readProgress.active {
-		r.peer.readProgress.deadline = r.deadline
-	}
-	r.peer.readProgressMu.Unlock()
-	return nil
-}
-
-func (p *Peer) frameReadBudget(payloadSize uint32) time.Duration {
-	return p.readPolicy.idleTimeout + time.Duration(
-		(int64(payloadSize)*int64(time.Second)+p.readPolicy.minimumFrameRate-1)/
-			p.readPolicy.minimumFrameRate,
-	)
-}
-
-func (r *frameProgressReader) Read(dst []byte) (int, error) {
-	now := r.peer.readPolicy.now()
-	if !r.deadline.IsZero() && !now.Before(r.deadline) {
-		return 0, ErrFrameReadTooSlow
-	}
-	if r.conn != nil {
-		deadline := now.Add(r.peer.readPolicy.idleTimeout)
-		r.budgetDeadlineArmed = false
-		if !r.deadline.IsZero() && !deadline.Before(r.deadline) {
-			deadline = r.deadline
-			r.budgetDeadlineArmed = true
-		}
-		if err := r.conn.SetReadDeadline(deadline); err != nil {
-			return 0, err
-		}
-	}
-
-	n, err := r.reader.Read(dst)
-	if n > 0 {
-		r.bytesRead += uint64(n)
-		now = r.peer.readPolicy.now()
-		r.peer.readProgressMu.Lock()
-		if r.peer.readProgress.id == r.frameID && r.peer.readProgress.active {
-			r.peer.readProgress.lastProgress = now
-		}
-		r.peer.readProgressMu.Unlock()
-		if r.headerSet && r.peer.onBootstrapProgress != nil {
-			r.peer.onBootstrapProgress(bootstrapFrameProgress{
-				messageType: r.header.MessageType,
-				wireSize:    r.header.PayloadSize,
-				compressed:  r.header.Compressed,
-				bytesRead:   r.bytesRead - r.payloadStart,
-				elapsed:     now.Sub(r.payloadStartedAt),
-			})
-		}
-		if !r.deadline.IsZero() && !now.Before(r.deadline) {
-			return n, ErrFrameReadTooSlow
-		}
-	}
-	return n, err
-}
-
-func (r *frameProgressReader) failure(err error, now time.Time) error {
-	if !r.headerSet {
-		return err
-	}
-	bytesRead := r.bytesRead - r.payloadStart
-	elapsed := now.Sub(r.payloadStartedAt)
-	if elapsed < 0 {
-		elapsed = 0
-	}
-	return &FrameReadError{
-		MessageType: r.header.MessageType,
-		WireSize:    r.header.PayloadSize,
-		Compressed:  r.header.Compressed,
-		BytesRead:   bytesRead,
-		Elapsed:     elapsed,
-		Err:         err,
-	}
-}
-
-func (r *frameProgressReader) finish(success bool, now time.Time) {
-	r.peer.readProgressMu.Lock()
-	if r.peer.readProgress.id != r.frameID {
-		r.peer.readProgressMu.Unlock()
-		return
-	}
-	lastProgress := r.peer.readProgress.lastProgress
-	r.peer.readProgress.active = false
-	if success {
-		r.peer.latencyMu.Lock()
-		for seq, ping := range r.peer.pingsInFlight {
-			if lastProgress.After(ping.sentAt) && now.Before(ping.progressDeadline) {
-				ping.deferUntil = now.Add(r.peer.readPolicy.pingDispatchGrace)
-				if ping.progressDeadline.Before(ping.deferUntil) {
-					ping.deferUntil = ping.progressDeadline
-				}
-				r.peer.pingsInFlight[seq] = ping
-			}
-		}
-		r.peer.latencyMu.Unlock()
-	}
-	r.peer.readProgressMu.Unlock()
-}
-
-func (p *Peer) frameProgressBlocksPing(progress inboundFrameProgress, ping pingInFlight, now time.Time) bool {
-	return progress.active &&
-		now.Before(ping.progressDeadline) &&
-		!progress.deadline.IsZero() && now.Before(progress.deadline) &&
-		progress.lastProgress.After(ping.sentAt) &&
-		now.Sub(progress.lastProgress) < p.readPolicy.idleTimeout
-}
-
-func normalizeManifestSpoolReadError(err error, budgetDeadlineArmed bool) error {
-	var localSpoolErr *manifestSpoolLocalError
-	if errors.As(err, &localSpoolErr) {
-		return err
-	}
-	if errors.Is(err, ErrFrameReadTooSlow) {
-		return ErrFrameReadTooSlow
-	}
-	var netErr net.Error
-	if errors.As(err, &netErr) && netErr.Timeout() {
-		if budgetDeadlineArmed {
-			return ErrFrameReadTooSlow
-		}
-		return ErrReadIdle
-	}
-	return err
-}
-
 func (p *Peer) readLoop(ctx context.Context) error {
 	var outstandingManifest <-chan struct{}
 	for {
@@ -1171,12 +1053,11 @@ func (p *Peer) readLoop(ctx context.Context) error {
 		}
 
 		frameReader := p.newFrameProgressReader(reader, conn)
-		header, err := readMessageHeader(frameReader)
+		header, err := message.ReadHeader(frameReader)
 		if err == nil &&
-			header.MessageType == TypeManifests &&
-			!header.Compressed &&
+			header.MessageType == message.TypeManifests &&
 			p.manifestSpoolDir != "" &&
-			header.PayloadSize > manifestSpoolThreshold {
+			(header.PayloadSize > manifestSpoolThreshold || header.UncompressedSize > manifestSpoolThreshold) {
 			if outstandingManifest != nil {
 				select {
 				case <-outstandingManifest:
@@ -1193,9 +1074,11 @@ func (p *Peer) readLoop(ctx context.Context) error {
 			frameReader.startedAt = p.readPolicy.now()
 			_ = frameReader.setHeader(*header)
 			manifestFrame, spoolErr := spoolManifestFrame(
+				ctx,
+				p.closeCh,
 				frameReader,
 				*header,
-				p.manifestReadBudget,
+				p.inboundReadBudget,
 				p.manifestSpoolDir,
 			)
 			now := p.readPolicy.now()
@@ -1214,14 +1097,18 @@ func (p *Peer) readLoop(ctx context.Context) error {
 			}
 
 			payloadWireSize := uint64(header.PayloadSize)
-			p.metrics.recv.addMessage(payloadWireSize + HeaderSizeUncompressed)
+			headerSize := uint64(message.HeaderSizeUncompressed)
+			if header.Compressed {
+				headerSize = message.HeaderSizeCompressed
+			}
+			p.metrics.recv.addMessage(payloadWireSize + headerSize)
 			p.bootstrapManifest.Store(true)
-			p.traffic.AddCount(CategorizeMessage(uint16(header.MessageType)), true, int(header.PayloadSize))
+			p.traffic.AddCount(CategorizeMessage(header.MessageType), true, int(header.PayloadSize))
 
 			delivered := p.dispatchEvent(Event{
 				Type:          EventMessageReceived,
 				PeerID:        p.id,
-				MessageType:   uint16(header.MessageType),
+				MessageType:   header.MessageType,
 				ManifestFrame: manifestFrame,
 				WireSize:      payloadWireSize,
 			})
@@ -1239,14 +1126,14 @@ func (p *Peer) readLoop(ctx context.Context) error {
 			continue
 		}
 
-		var manifestReservation int64
+		var retainedReservation int64
 		if err == nil {
-			if header.MessageType == TypeManifests && p.manifestReadBudget != nil {
-				reservation := manifestReadReservation(*header)
-				if acquireErr := p.manifestReadBudget.acquire(ctx, p.closeCh, reservation); acquireErr != nil {
+			if p.inboundReadBudget != nil {
+				reservation := inboundFrameReservation(*header)
+				if acquireErr := p.inboundReadBudget.acquire(ctx, p.closeCh, reservation); acquireErr != nil {
 					err = acquireErr
 				} else {
-					manifestReservation = reservation
+					retainedReservation = reservation
 					frameReader.startedAt = p.readPolicy.now()
 				}
 			}
@@ -1254,15 +1141,15 @@ func (p *Peer) readLoop(ctx context.Context) error {
 				_ = frameReader.setHeader(*header)
 			}
 		}
-		releaseManifestReservation := func() {
-			if manifestReservation > 0 {
-				p.manifestReadBudget.release(manifestReservation)
-				manifestReservation = 0
+		releaseRetainedReservation := func() {
+			if retainedReservation > 0 {
+				p.inboundReadBudget.release(retainedReservation)
+				retainedReservation = 0
 			}
 		}
 		var payload []byte
 		if err == nil {
-			payload, err = readMessagePayload(frameReader, *header)
+			payload, err = message.ReadPayload(frameReader, *header)
 		}
 		now := p.readPolicy.now()
 		if err == nil && !frameReader.deadline.IsZero() && !now.Before(frameReader.deadline) {
@@ -1270,7 +1157,7 @@ func (p *Peer) readLoop(ctx context.Context) error {
 		}
 		frameReader.finish(err == nil, now)
 		if err != nil {
-			releaseManifestReservation()
+			releaseRetainedReservation()
 			if p.closed.Load() {
 				return nil
 			}
@@ -1301,9 +1188,9 @@ func (p *Peer) readLoop(ctx context.Context) error {
 		payloadWireSize := uint64(len(payload))
 		wireBytes := payloadWireSize
 		if header.Compressed {
-			wireBytes += HeaderSizeCompressed
+			wireBytes += message.HeaderSizeCompressed
 		} else {
-			wireBytes += HeaderSizeUncompressed
+			wireBytes += message.HeaderSizeUncompressed
 		}
 		p.metrics.recv.addMessage(wireBytes)
 
@@ -1314,51 +1201,56 @@ func (p *Peer) readLoop(ctx context.Context) error {
 			// protocol violation — charge and tear the connection down.
 			if !p.compressionNegotiated() {
 				p.IncBadData("compression-unnegotiated")
-				releaseManifestReservation()
+				releaseRetainedReservation()
 				return fmt.Errorf("peer sent a compressed frame without negotiating compression")
 			}
 		}
 
 		if !message.IsKnownMessageType(header.MessageType) {
-			releaseManifestReservation()
+			releaseRetainedReservation()
 			continue
 		}
-		if header.MessageType == TypeManifests {
+		if header.MessageType == message.TypeManifests {
 			p.bootstrapManifest.Store(true)
 		}
 
 		if header.Compressed {
-			payload, err = DecompressLZ4(payload, int(header.UncompressedSize))
+			payload, err = message.DecompressLZ4(payload, int(header.UncompressedSize))
 			if err != nil {
 				p.IncBadData("decompress-lz4-failed")
-				if header.MessageType == TypeManifests && p.onBootstrapReady != nil {
-					releaseManifestReservation()
+				if header.MessageType == message.TypeManifests && p.onBootstrapReady != nil {
+					releaseRetainedReservation()
 					return fmt.Errorf("bootstrap manifests decompression failed: %w", err)
 				}
 				if p.consecutiveDecompressFailures.Add(1) >= maxConsecutiveDecompressFailures {
-					releaseManifestReservation()
+					releaseRetainedReservation()
 					return fmt.Errorf("decompress-lz4 failed %d times in a row: %w",
 						maxConsecutiveDecompressFailures, err)
 				}
-				releaseManifestReservation()
+				releaseRetainedReservation()
 				continue
 			}
 			p.consecutiveDecompressFailures.Store(0)
+			if retainedReservation > 0 {
+				p.inboundReadBudget.release(int64(header.PayloadSize))
+				retainedReservation -= int64(header.PayloadSize)
+			}
 		}
-		p.traffic.AddCount(CategorizeMessage(uint16(header.MessageType)), true, len(payload))
+		p.traffic.AddCount(CategorizeMessage(header.MessageType), true, len(payload))
 
 		delivered := p.dispatchEvent(Event{
 			Type:        EventMessageReceived,
 			PeerID:      p.id,
-			MessageType: uint16(header.MessageType),
+			MessageType: header.MessageType,
 			Payload:     payload,
 			WireSize:    payloadWireSize,
+			reservation: newInboundReservation(p.inboundReadBudget, retainedReservation),
 		})
-		releaseManifestReservation()
-		if !delivered && header.MessageType == TypeManifests && p.onBootstrapReady != nil {
+		retainedReservation = 0
+		if !delivered && header.MessageType == message.TypeManifests && p.onBootstrapReady != nil {
 			return errBootstrapManifestDropped
 		}
-		if delivered && header.MessageType == TypeManifests && p.onBootstrapReady != nil {
+		if delivered && header.MessageType == message.TypeManifests && p.onBootstrapReady != nil {
 			p.bootstrapManifestPending.Store(true)
 		}
 	}
@@ -1412,7 +1304,7 @@ func (p *Peer) writeLoop(ctx context.Context) error {
 		}
 		p.metrics.sent.addMessage(uint64(n))
 		if hdr, derr := message.DecodeHeader(wire); derr == nil {
-			p.traffic.AddCount(CategorizeMessage(uint16(hdr.MessageType)), false, n)
+			p.traffic.AddCount(CategorizeMessage(hdr.MessageType), false, n)
 		}
 	}
 }
@@ -1624,7 +1516,7 @@ func (p *Peer) recordPingSent(seq uint32, sentAt time.Time) {
 	}
 	p.pingsInFlight[seq] = pingInFlight{
 		sentAt:           sentAt,
-		progressDeadline: sentAt.Add(p.frameReadBudget(MaxMessageSize)),
+		progressDeadline: sentAt.Add(p.frameReadBudget(message.MaxMessageSize)),
 	}
 }
 
@@ -2079,111 +1971,4 @@ func (p *Peer) setState(state PeerState) {
 	p.mu.Lock()
 	p.state = state
 	p.mu.Unlock()
-}
-
-// PeerInfo is a read-only snapshot of peer state.
-type PeerInfo struct {
-	ID             PeerID
-	Endpoint       Endpoint
-	Inbound        bool
-	State          PeerState
-	PublicKey      string
-	PublicKeyBytes []byte
-	ConnectedAt    time.Time
-	MessagesIn     uint64
-	MessagesOut    uint64
-
-	ServerDomain    string
-	NetworkID       string
-	Version         string
-	ClosedLedger    string
-	CompleteLedgers string
-	Tracking        PeerTracking
-	Load            int64
-
-	Latency    time.Duration
-	HasLatency bool
-
-	Protocol string
-
-	Status message.NodeStatus
-
-	// Per-peer wire byte counters and rolling-window throughput.
-	// Mirrors rippled PeerImp::metrics_ (PeerImp.h:226-230). Emitted
-	// under the `metrics` object in `peers` RPC.
-	TotalBytesRecv uint64
-	TotalBytesSent uint64
-	AvgBpsRecv     uint64
-	AvgBpsSent     uint64
-
-	// SendDrops is the count of outbound frames dropped because the peer's
-	// bounded send queue was full. go-xrpl-specific (rippled queues
-	// unboundedly); surfaced under the `outbound_queue` object in `peers` RPC.
-	SendDrops            uint64
-	SendDropsControl     uint64
-	SendDropsConsensus   uint64
-	SendDropsAcquisition uint64
-	SendDropsOrdinary    uint64
-	SendDropsBulk        uint64
-}
-
-func (p *Peer) Info() PeerInfo {
-	p.mu.RLock()
-	defer p.mu.RUnlock()
-
-	var (
-		pubKey      string
-		pubKeyBytes []byte
-	)
-	if p.remotePubKey != nil {
-		pubKey = p.remotePubKey.Encode()
-		pubKeyBytes = p.remotePubKey.Bytes()
-	}
-
-	stats := p.traffic.TotalStats()
-
-	var closedLedger string
-	if p.hasClosedLedger {
-		closedLedger = strings.ToUpper(hex.EncodeToString(p.closedLedger[:]))
-	}
-
-	var completeLedgers string
-	if p.firstLedgerSeq != 0 || p.lastLedgerSeq != 0 {
-		completeLedgers = fmt.Sprintf("%d - %d", p.firstLedgerSeq, p.lastLedgerSeq)
-	}
-
-	latency, hasLatency := p.Latency()
-
-	return PeerInfo{
-		ID:                   p.id,
-		Endpoint:             p.endpoint,
-		Inbound:              p.inbound,
-		State:                p.state,
-		PublicKey:            pubKey,
-		PublicKeyBytes:       pubKeyBytes,
-		ConnectedAt:          p.createdAt,
-		MessagesIn:           stats.MessagesIn,
-		MessagesOut:          stats.MessagesOut,
-		ServerDomain:         p.serverDomain,
-		NetworkID:            p.networkID,
-		Version:              p.userAgent,
-		ClosedLedger:         closedLedger,
-		CompleteLedgers:      completeLedgers,
-		Tracking:             PeerTracking(p.tracking.Load()),
-		Load:                 p.Load(),
-		Latency:              latency,
-		HasLatency:           hasLatency,
-		Protocol:             p.protocolVersion,
-		Status:               p.lastStatus,
-		TotalBytesRecv:       p.metrics.recv.totalBytesSnapshot(),
-		TotalBytesSent:       p.metrics.sent.totalBytesSnapshot(),
-		AvgBpsRecv:           p.metrics.recv.averageBytes(),
-		AvgBpsSent:           p.metrics.sent.averageBytes(),
-		SendDrops:            p.sendDrops.Load(),
-		SendDropsControl:     p.SendDropsByClass(OutboundClassControl),
-		SendDropsConsensus:   p.SendDropsByClass(OutboundClassConsensus),
-		SendDropsAcquisition: p.SendDropsByClass(OutboundClassAcquisition),
-		SendDropsOrdinary:    p.SendDropsByClass(OutboundClassOrdinary),
-		SendDropsBulk:        p.SendDropsByClass(OutboundClassBulk),
-	}
 }

@@ -72,12 +72,12 @@ func TestPeer_DispatchEvent_BackpressuresAcquisitionSeparately(t *testing.T) {
 	id, err := NewIdentity()
 	require.NoError(t, err)
 	events := make(chan Event, 1)
-	events <- Event{Type: EventMessageReceived, MessageType: uint16(message.TypeValidation)}
+	events <- Event{Type: EventMessageReceived, MessageType: message.TypeValidation}
 	acquisition := make(chan Event, 1)
 	peer := NewPeer(PeerID(1), Endpoint{Host: "127.0.0.1", Port: 1}, false, id, events)
 	peer.SetAcquisitionEvents(acquisition)
 
-	first := Event{Type: EventMessageReceived, MessageType: uint16(message.TypeLedgerData)}
+	first := Event{Type: EventMessageReceived, MessageType: message.TypeLedgerData}
 	require.True(t, peer.dispatchEvent(first))
 	done := make(chan bool, 1)
 	go func() { done <- peer.dispatchEvent(first) }()
@@ -110,7 +110,7 @@ func TestPeer_DispatchEvent_BackpressuresConsensusSeparately(t *testing.T) {
 			peer := NewPeer(PeerID(1), Endpoint{Host: "127.0.0.1", Port: 1}, false, id, events)
 			peer.SetConsensusEvents(consensus)
 
-			evt := Event{Type: EventMessageReceived, MessageType: uint16(msgType)}
+			evt := Event{Type: EventMessageReceived, MessageType: msgType}
 			require.True(t, peer.dispatchEvent(evt))
 			done := make(chan bool, 1)
 			go func() { done <- peer.dispatchEvent(evt) }()
@@ -145,7 +145,7 @@ func TestPeer_DispatchEvent_BackpressuresConsensusControlSeparately(t *testing.T
 			peer := NewPeer(PeerID(1), Endpoint{Host: "127.0.0.1", Port: 1}, false, id, events)
 			peer.SetConsensusControlEvents(control)
 
-			evt := Event{Type: EventMessageReceived, MessageType: uint16(msgType)}
+			evt := Event{Type: EventMessageReceived, MessageType: msgType}
 			require.True(t, peer.dispatchEvent(evt))
 			done := make(chan bool, 1)
 			go func() { done <- peer.dispatchEvent(evt) }()
@@ -183,7 +183,7 @@ func TestPeer_DispatchEvent_ConsensusBackpressureReleasesOnClose(t *testing.T) {
 			lane := make(chan Event, 1)
 			peer := NewPeer(PeerID(1), Endpoint{Host: "127.0.0.1", Port: 1}, false, id, make(chan Event, 1))
 			tc.wire(peer, lane)
-			evt := Event{Type: EventMessageReceived, MessageType: uint16(tc.msgType)}
+			evt := Event{Type: EventMessageReceived, MessageType: tc.msgType}
 			require.True(t, peer.dispatchEvent(evt))
 
 			done := make(chan bool, 1)
@@ -250,21 +250,21 @@ func TestConsensusPriorityLanePreservesValidatorListValidationOrder(t *testing.T
 	require.True(t, peer.dispatchEvent(Event{
 		Type:        EventMessageReceived,
 		PeerID:      PeerID(1),
-		MessageType: uint16(message.TypeValidatorList),
+		MessageType: message.TypeValidatorList,
 		Payload:     []byte{0x01},
 	}))
 	require.True(t, peer.dispatchEvent(Event{
 		Type:        EventMessageReceived,
 		PeerID:      PeerID(1),
-		MessageType: uint16(message.TypeValidation),
+		MessageType: message.TypeValidation,
 		Payload:     []byte{0x02},
 	}))
 
 	first := <-o.consensusMessages
 	second := <-o.consensusMessages
-	assert.Equal(t, uint16(message.TypeValidatorList), first.Type)
+	assert.Equal(t, message.TypeValidatorList, first.Type)
 	assert.Equal(t, []byte{0x01}, first.Payload)
-	assert.Equal(t, uint16(message.TypeValidation), second.Type)
+	assert.Equal(t, message.TypeValidation, second.Type)
 	assert.Equal(t, []byte{0x02}, second.Payload)
 
 	cancel()

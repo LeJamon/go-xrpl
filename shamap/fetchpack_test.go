@@ -1,6 +1,9 @@
 package shamap
 
-import "testing"
+import (
+	"context"
+	"testing"
+)
 
 // buildFetchPackTestMap builds a multi-level state SHAMap with deterministic,
 // non-zero keys so the tree has inner nodes above the leaves.
@@ -94,6 +97,51 @@ func TestWalkFetchPackNodes_RespectsCapAndOrder(t *testing.T) {
 	}
 }
 
+func TestWalkFetchPackNodesContextBoundedStopsBeforeByteOverflow(t *testing.T) {
+	sm := New(TypeState)
+	for i := byte(1); i <= 4; i++ {
+		var key [32]byte
+		key[0] = i
+		if err := sm.Put(key, []byte{i, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	all, err := sm.WalkFetchPackNodes(32)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(all) < 2 {
+		t.Fatalf("walk returned %d nodes, want at least 2", len(all))
+	}
+	budget := int64(len(all[0].Data))
+	got, complete, err := sm.WalkFetchPackNodesContextBounded(context.Background(), 32, budget)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if complete {
+		t.Fatal("byte-limited walk reported complete")
+	}
+	if len(got) != 1 {
+		t.Fatalf("byte-limited walk returned %d nodes, want 1", len(got))
+	}
+	if int64(len(got[0].Data)) > budget {
+		t.Fatalf("walk exceeded byte budget: %d > %d", len(got[0].Data), budget)
+	}
+}
+
+func TestWalkFetchPackNodesContextBoundedEmptyMap(t *testing.T) {
+	nodes, complete, err := New(TypeState).WalkFetchPackNodesContextBounded(context.Background(), 32, 1024)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !complete {
+		t.Fatal("empty map walk reported incomplete")
+	}
+	if len(nodes) != 0 {
+		t.Fatalf("empty map walk returned %d nodes", len(nodes))
+	}
+}
+
 // TestWalkFetchPackNodes_Bounds covers the degenerate inputs.
 func TestWalkFetchPackNodes_Bounds(t *testing.T) {
 	t.Parallel()
@@ -110,6 +158,43 @@ func TestWalkFetchPackNodes_Bounds(t *testing.T) {
 	for i, n := range nodes {
 		if !VerifyFetchPackNode(n.Hash, n.Data) {
 			t.Errorf("empty-map node %d failed VerifyFetchPackNode", i)
+		}
+	}
+}
+
+func TestWalkFetchPackNodes_LoadsPersistedDescendants(t *testing.T) {
+	source := buildFetchPackTestMap(t)
+	expected, err := source.WalkFetchPackNodes(1 << 20)
+	if err != nil {
+		t.Fatalf("source walk: %v", err)
+	}
+	rootHash, err := source.Hash()
+	if err != nil {
+		t.Fatalf("source hash: %v", err)
+	}
+	family := newMemoryFamily()
+	if err := flushToFamily(source, family); err != nil {
+		t.Fatalf("flush: %v", err)
+	}
+	backed, err := NewFromRootHash(TypeState, rootHash, family)
+	if err != nil {
+		t.Fatalf("NewFromRootHash: %v", err)
+	}
+	for branch := range BranchFactor {
+		if child, _, present := backed.tree.root.LoadChild(branch); present && child != nil {
+			t.Fatalf("branch %d was loaded before fetch-pack walk", branch)
+		}
+	}
+	got, err := backed.WalkFetchPackNodesContext(context.Background(), 1<<20)
+	if err != nil {
+		t.Fatalf("backed walk: %v", err)
+	}
+	if len(got) != len(expected) {
+		t.Fatalf("backed walk returned %d nodes, want %d", len(got), len(expected))
+	}
+	for i := range expected {
+		if got[i].Hash != expected[i].Hash {
+			t.Fatalf("node %d hash = %x, want %x", i, got[i].Hash[:8], expected[i].Hash[:8])
 		}
 	}
 }

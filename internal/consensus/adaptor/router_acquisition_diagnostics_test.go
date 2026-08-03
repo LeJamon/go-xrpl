@@ -48,7 +48,7 @@ func TestRouter_LedgerDataDiagnostics(t *testing.T) {
 			})
 			r.handleMessage(&peermanagement.InboundMessage{
 				PeerID:  17,
-				Type:    uint16(message.TypeLedgerData),
+				Type:    message.TypeLedgerData,
 				Payload: payload,
 			})
 

@@ -2,9 +2,11 @@ package peermanagement
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"net"
 	"net/http"
@@ -14,14 +16,104 @@ import (
 )
 
 // inboundBacklogSlack caps the accept-side goroutine count to
-// MaxInbound + slack so a burst of accepts cannot fan out unbounded;
-// canAcceptInbound is the authoritative slot gate.
+// MaxInbound + slack so a burst of accepts cannot fan out unbounded.
 const inboundBacklogSlack = 8
 
 // acceptBackoff throttles the retry rate when listener.Accept returns
 // a non-fatal error (typically EMFILE-class) so the loop does not
 // spin at CPU speed under FD pressure.
 const acceptBackoff = 100 * time.Millisecond
+
+const (
+	maxHandshakeHeaderBytes = 8 * 1024
+	maxHandshakeBodyBytes   = 1 << 20
+)
+
+// handshakeHeaderReader bounds the bytes consumed by http.ReadRequest until
+// the end-of-headers marker. Once the marker is seen it becomes transparent,
+// preserving any already-buffered peer frames for the Peer read loop.
+type handshakeHeaderReader struct {
+	r       io.Reader
+	used    int64
+	limit   int64
+	tail    [3]byte
+	tailLen int
+	done    bool
+}
+
+func (r *handshakeHeaderReader) Read(p []byte) (int, error) {
+	if r.done {
+		return r.r.Read(p)
+	}
+	if r.used >= r.limit {
+		return 0, ErrHandshakeHeadersTooLarge
+	}
+	remaining := r.limit - r.used
+	if int64(len(p)) > remaining {
+		p = p[:int(remaining)]
+	}
+	n, err := r.r.Read(p)
+	if n == 0 {
+		return n, err
+	}
+	r.used += int64(n)
+	var marker bytes.Buffer
+	marker.Grow(r.tailLen + n)
+	marker.Write(r.tail[:r.tailLen])
+	marker.Write(p[:n])
+	// net/http accepts both conventional CRLF and the LF-only form. Once
+	// either header terminator is parsed, stop enforcing the handshake limit so
+	// binary peer frames cannot be mistaken for oversized headers.
+	if bytes.Contains(marker.Bytes(), []byte("\r\n\r\n")) || bytes.Contains(marker.Bytes(), []byte("\n\n")) {
+		r.done = true
+		return n, err
+	}
+	if marker.Len() > len(r.tail) {
+		copy(r.tail[:], marker.Bytes()[marker.Len()-len(r.tail):])
+		r.tailLen = len(r.tail)
+	} else {
+		copy(r.tail[:], marker.Bytes())
+		r.tailLen = marker.Len()
+	}
+	return n, err
+}
+
+func readHandshakeBody(req *http.Request) error {
+	if req == nil {
+		return nil
+	}
+	// A declared length is available before reading the body. Reject it now so
+	// http.body.Close cannot drain an oversized fixed-length payload.
+	if req.ContentLength > maxHandshakeBodyBytes {
+		return fmt.Errorf("%w: declared length %d", ErrHandshakeBodyTooLarge, req.ContentLength)
+	}
+	if req.Body == nil {
+		if req.ContentLength > 0 || len(req.TransferEncoding) > 0 {
+			return fmt.Errorf("%w: body is missing", ErrInvalidHandshake)
+		}
+		return nil
+	}
+	readN, readErr := io.Copy(io.Discard, io.LimitReader(req.Body, maxHandshakeBodyBytes+1))
+	if readErr != nil {
+		return fmt.Errorf("%w: read request body: %w", ErrInvalidHandshake, readErr)
+	}
+	if readN > maxHandshakeBodyBytes {
+		// The connection is closed by the caller after a failed handshake. Do not
+		// call http.body.Close here: for fixed and chunked bodies it may drain an
+		// arbitrary amount of unread input before returning.
+		return fmt.Errorf("%w: got at least %d bytes", ErrHandshakeBodyTooLarge, readN)
+	}
+	if req.ContentLength >= 0 && readN != req.ContentLength {
+		return fmt.Errorf("%w: body length %d, want %d", ErrInvalidHandshake, readN, req.ContentLength)
+	}
+	// At this point the body was read to EOF, so Close cannot perform an
+	// unbounded drain. Preserve close errors for callers that provide them.
+	closeErr := req.Body.Close()
+	if closeErr != nil {
+		return fmt.Errorf("%w: close request body: %w", ErrInvalidHandshake, closeErr)
+	}
+	return nil
+}
 
 // admitInboundEndpoint reports whether an inbound connection from addr
 // may proceed. It refuses an endpoint whose resource Consumer is already
@@ -41,28 +133,30 @@ func (o *Overlay) admitInboundEndpoint(addr string) bool {
 	return !c.Disconnect()
 }
 
-// startListener creates and starts the TCP/TLS listener.
-func (o *Overlay) startListener() error {
+// startListener creates the TCP/TLS listener without publishing it. Run owns
+// publication under lifecycleMu so Stop cannot miss a socket that is still
+// being prepared.
+func (o *Overlay) startListener(ctx context.Context) (net.Listener, error) {
 	var lc net.ListenConfig
-	tcpListener, err := lc.Listen(o.ctx, "tcp", o.cfg.ListenAddr)
+	listen := lc.Listen
+	if o.listenFunc != nil {
+		listen = o.listenFunc
+	}
+	tcpListener, err := listen(ctx, "tcp", o.cfg.ListenAddr)
 	if err != nil {
-		return err
+		return nil, err
 	}
 
 	certPEM, keyPEM, err := o.identity.TLSCertificatePEM()
 	if err != nil {
 		tcpListener.Close()
-		return fmt.Errorf("overlay: build TLS cert: %w", err)
+		return nil, fmt.Errorf("overlay: build TLS cert: %w", err)
 	}
 
-	l := peertls.NewListener(tcpListener, &peertls.Config{
+	return peertls.NewListener(tcpListener, &peertls.Config{
 		CertPEM: certPEM,
 		KeyPEM:  keyPEM,
-	})
-	o.listenerMu.Lock()
-	o.listener = l
-	o.listenerMu.Unlock()
-	return nil
+	}), nil
 }
 
 // acceptLoop accepts incoming connections. acceptBackoff throttles
@@ -124,9 +218,9 @@ func (o *Overlay) handleInbound(ctx context.Context, conn net.Conn) {
 		}
 	}()
 
-	// The inbound slot limit is enforced after the handshake (see
-	// hasInboundSlot below) because reserved/cluster peers are admitted beyond
-	// the cap and their node key is unknown until the handshake completes.
+	// The inbound slot limit is enforced after the handshake because
+	// reserved/cluster peers are admitted beyond the cap and their node key is
+	// unknown until the handshake completes.
 	// Concurrent handshakes stay bounded by inboundSem regardless.
 	remoteAddr := conn.RemoteAddr().String()
 	endpoint, _ := ParseEndpoint(remoteAddr)
@@ -145,7 +239,7 @@ func (o *Overlay) handleInbound(ctx context.Context, conn net.Conn) {
 	peer.SetConsensusControlEvents(o.consensusControlEvents)
 	peer.SetAcquisitionEvents(o.acquisitionEvents)
 	peer.SetManifestMessages(o.manifestMessages)
-	peer.SetManifestReadBudget(o.manifestReadBudget)
+	peer.SetInboundReadBudget(o.inboundReadBudget)
 	peer.SetManifestSpoolDir(o.manifestSpoolDir)
 	if !o.reserveInboundIP(endpoint.Host) {
 		slog.Info("Inbound rejected: IP connection limit reached",
@@ -237,15 +331,36 @@ func (o *Overlay) performInboundHandshake(ctx context.Context, peer *Peer, tlsCo
 	}
 
 	deadline := time.Now().Add(o.cfg.HandshakeTimeout)
-	tlsConn.SetDeadline(deadline)
-	defer tlsConn.SetDeadline(time.Time{})
+	if ctxDeadline, ok := ctx.Deadline(); ok && ctxDeadline.Before(deadline) {
+		deadline = ctxDeadline
+	}
+	if err := tlsConn.SetDeadline(deadline); err != nil {
+		return NewHandshakeError(peer.Endpoint(), "set_deadline", err)
+	}
+	defer func() {
+		if err := tlsConn.SetDeadline(time.Time{}); err != nil {
+			slog.Debug("Inbound handshake deadline reset failed", "t", "Overlay", "err", err)
+		}
+	}()
 
-	bufReader := bufio.NewReader(tlsConn)
+	bufReader := bufio.NewReader(&handshakeHeaderReader{
+		r:     tlsConn,
+		limit: maxHandshakeHeaderBytes,
+	})
+	hsCfg := o.handshakeConfigFor()
 	req, err := http.ReadRequest(bufReader)
 	if err != nil {
+		writeInboundHandshakeError(tlsConn, hsCfg, tcpRemoteIP(tlsConn), err)
 		return NewHandshakeError(peer.Endpoint(), "read_request", err)
 	}
-	req.Body.Close()
+	if err := readHandshakeBody(req); err != nil {
+		writeInboundHandshakeError(tlsConn, hsCfg, tcpRemoteIP(tlsConn), err)
+		return NewHandshakeError(peer.Endpoint(), "read_body", err)
+	}
+	if err := validateHandshakeRequest(req); err != nil {
+		writeInboundHandshakeError(tlsConn, hsCfg, tcpRemoteIP(tlsConn), err)
+		return NewHandshakeError(peer.Endpoint(), "validate_envelope", err)
+	}
 
 	// A dialer that does not advertise the "peer" role (a crawler or a
 	// misdirected client) is handed alternates and closed rather than
@@ -258,16 +373,19 @@ func (o *Overlay) performInboundHandshake(ctx context.Context, peer *Peer, tlsCo
 		o.writeInboundRedirect(tlsConn)
 		return errInboundRejected
 	}
+	protocol := NegotiateProtocolVersion(req.Header.Get(HeaderUpgrade))
+	if protocol == "" {
+		err := fmt.Errorf("%w: unable to agree on a protocol version (peer offered %q)",
+			ErrInvalidHandshake, req.Header.Get(HeaderUpgrade))
+		writeInboundHandshakeError(tlsConn, hsCfg, tcpRemoteIP(tlsConn), err)
+		return NewHandshakeError(peer.Endpoint(), "negotiate", err)
+	}
 
 	// Server-Domain runs first in the verify chain.
 	if _, err := ValidateServerDomain(req.Header); err != nil {
+		writeInboundHandshakeError(tlsConn, hsCfg, tcpRemoteIP(tlsConn), err)
 		return NewHandshakeError(peer.Endpoint(), "verify_extras", err)
 	}
-
-	// Build the handshake config once and share it with both
-	// VerifyPeerHandshake and BuildHandshakeResponse so the inbound
-	// and outbound paths cannot diverge.
-	hsCfg := o.handshakeConfigFor()
 
 	// Full session-signature verification — the whole point of #269.
 	peerPubKey, verifyErr := VerifyPeerHandshake(
@@ -277,6 +395,7 @@ func (o *Overlay) performInboundHandshake(ctx context.Context, peer *Peer, tlsCo
 		hsCfg,
 	)
 	if verifyErr != nil {
+		writeInboundHandshakeError(tlsConn, hsCfg, tcpRemoteIP(tlsConn), verifyErr)
 		return NewHandshakeError(peer.Endpoint(), "verify", verifyErr)
 	}
 	peer.mu.Lock()
@@ -290,30 +409,10 @@ func (o *Overlay) performInboundHandshake(ctx context.Context, peer *Peer, tlsCo
 		peerRemote,
 	)
 	if extraErr != nil {
+		writeInboundHandshakeError(tlsConn, hsCfg, tcpRemoteIP(tlsConn), extraErr)
 		return NewHandshakeError(peer.Endpoint(), "verify_extras", extraErr)
 	}
 	peer.applyHandshakeExtras(extras)
-
-	protocol := NegotiateProtocolVersion(req.Header.Get(HeaderUpgrade))
-	if protocol == "" {
-		// Write a 400 Bad Request back so a misconfigured peer sees
-		// the rejection reason instead of a TCP RST. Best-effort: a
-		// write error here is shadowed by the negotiation failure we
-		// are already returning.
-		var remoteAddr string
-		if peerRemote != nil {
-			remoteAddr = peerRemote.String()
-		}
-		errResp := BuildHandshakeErrorResponse( //nolint:bodyclose // locally-built response serialized via Write; nothing to close
-			hsCfg.UserAgent,
-			remoteAddr,
-			"Unable to agree on a protocol version",
-		)
-		_ = errResp.Write(tlsConn)
-		return NewHandshakeError(peer.Endpoint(), "verify",
-			fmt.Errorf("%w: unable to agree on a protocol version (peer offered %q)",
-				ErrInvalidHandshake, req.Header.Get(HeaderUpgrade)))
-	}
 
 	// Decide admission before sending the 101 upgrade, mirroring rippled's
 	// onHandoff: a duplicate or slot-full dialer gets a rejection in lieu
@@ -349,6 +448,15 @@ func (o *Overlay) performInboundHandshake(ctx context.Context, peer *Peer, tlsCo
 
 	reservedKey = false
 	return nil
+}
+
+func writeInboundHandshakeError(tlsConn peertls.PeerConn, cfg HandshakeConfig, remoteIP net.IP, err error) {
+	remoteAddr := ""
+	if remoteIP != nil {
+		remoteAddr = remoteIP.String()
+	}
+	resp := BuildHandshakeErrorResponse(cfg.UserAgent, remoteAddr, err.Error()) //nolint:bodyclose // locally-built response serialized via Write
+	_ = resp.Write(tlsConn)
 }
 
 func setInboundHandshakeState(

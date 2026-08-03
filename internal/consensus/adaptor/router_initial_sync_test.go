@@ -34,7 +34,7 @@ func TestRouter_MalformedMatchingBaseCannotFallThrough(t *testing.T) {
 	}
 	r.handleMessage(&peermanagement.InboundMessage{
 		PeerID:  7,
-		Type:    uint16(message.TypeLedgerData),
+		Type:    message.TypeLedgerData,
 		Payload: encodePayload(t, ld),
 	})
 
@@ -71,7 +71,7 @@ func TestRouter_UnmatchedBaseCannotAdoptHeader(t *testing.T) {
 	}
 	r.handleMessage(&peermanagement.InboundMessage{
 		PeerID:  7,
-		Type:    uint16(message.TypeLedgerData),
+		Type:    message.TypeLedgerData,
 		Payload: encodePayload(t, ld),
 	})
 

@@ -130,7 +130,7 @@ func TestRouter_GetLedger_RelayOnMiss_Ledger(t *testing.T) {
 	}
 	r.handleMessage(&peermanagement.InboundMessage{
 		PeerID:  42,
-		Type:    uint16(message.TypeGetLedger),
+		Type:    message.TypeGetLedger,
 		Payload: encodePayload(t, req),
 	})
 
@@ -164,7 +164,7 @@ func TestRouter_GetLedger_NoRelayWhenSeqOnly(t *testing.T) {
 	}
 	r.handleMessage(&peermanagement.InboundMessage{
 		PeerID:  42,
-		Type:    uint16(message.TypeGetLedger),
+		Type:    message.TypeGetLedger,
 		Payload: encodePayload(t, req),
 	})
 
@@ -188,7 +188,7 @@ func TestRouter_GetLedger_RelayOnMiss_TxSet(t *testing.T) {
 	}
 	r.handleMessage(&peermanagement.InboundMessage{
 		PeerID:  21,
-		Type:    uint16(message.TypeGetLedger),
+		Type:    message.TypeGetLedger,
 		Payload: encodePayload(t, req),
 	})
 
@@ -221,7 +221,7 @@ func TestRouter_GetLedger_NoRelayWhenCookieSet(t *testing.T) {
 	}
 	r.handleMessage(&peermanagement.InboundMessage{
 		PeerID:  21,
-		Type:    uint16(message.TypeGetLedger),
+		Type:    message.TypeGetLedger,
 		Payload: encodePayload(t, req),
 	})
 
@@ -243,7 +243,7 @@ func TestRouter_GetLedger_NoRelayWhenZeroCookiePresent(t *testing.T) {
 	}
 	r.handleMessage(&peermanagement.InboundMessage{
 		PeerID:  21,
-		Type:    uint16(message.TypeGetLedger),
+		Type:    message.TypeGetLedger,
 		Payload: encodePayload(t, req),
 	})
 
@@ -264,7 +264,7 @@ func TestRouter_GetLedger_NoRelayWhenQueryTypeAbsent(t *testing.T) {
 	}
 	r.handleMessage(&peermanagement.InboundMessage{
 		PeerID:  21,
-		Type:    uint16(message.TypeGetLedger),
+		Type:    message.TypeGetLedger,
 		Payload: encodePayload(t, req),
 	})
 
@@ -287,7 +287,7 @@ func TestRouter_GetLedger_NoRelayWhenNoCandidate(t *testing.T) {
 	}
 	r.handleMessage(&peermanagement.InboundMessage{
 		PeerID:  21,
-		Type:    uint16(message.TypeGetLedger),
+		Type:    message.TypeGetLedger,
 		Payload: encodePayload(t, req),
 	})
 
@@ -310,7 +310,7 @@ func TestRouter_LedgerData_RoutedBackByCookie(t *testing.T) {
 	}
 	r.handleMessage(&peermanagement.InboundMessage{
 		PeerID:  5, // the peer that served the relayed request
-		Type:    uint16(message.TypeLedgerData),
+		Type:    message.TypeLedgerData,
 		Payload: encodePayload(t, ld),
 	})
 
@@ -414,7 +414,7 @@ func TestRouter_LedgerData_ValidatesBeforeCookieRelay(t *testing.T) {
 			tt.data.RequestCookieSet = true
 			r.handleMessage(&peermanagement.InboundMessage{
 				PeerID:  5,
-				Type:    uint16(message.TypeLedgerData),
+				Type:    message.TypeLedgerData,
 				Payload: encodePayload(t, tt.data),
 			})
 
@@ -437,7 +437,7 @@ func TestRouter_HaveSet_RecordsTxSetAdvertisement(t *testing.T) {
 	}
 	r.handleMessage(&peermanagement.InboundMessage{
 		PeerID:  88,
-		Type:    uint16(message.TypeHaveSet),
+		Type:    message.TypeHaveSet,
 		Payload: encodePayload(t, have),
 	})
 

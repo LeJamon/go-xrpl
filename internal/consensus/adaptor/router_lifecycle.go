@@ -47,7 +47,10 @@ func (r *Router) startLifecycle(parent context.Context) (context.Context, bool) 
 				case <-ctx.Done():
 					return
 				case msg := <-txJobs:
-					r.handleTransaction(msg)
+					func() {
+						defer func() { _ = msg.Close() }()
+						r.handleTransaction(msg)
+					}()
 				}
 			}
 		}()
@@ -65,7 +68,10 @@ func (r *Router) startLifecycle(parent context.Context) (context.Context, bool) 
 				case <-ctx.Done():
 					return
 				case msg := <-serveJobs:
-					r.handleGetLedger(msg)
+					func() {
+						defer func() { _ = msg.Close() }()
+						r.handleGetLedger(msg)
+					}()
 				}
 			}
 		}()
@@ -90,6 +96,8 @@ func (r *Router) stopLifecycle() {
 		return
 	}
 	r.lifecycleState = routerLifecycleStopped
+	txJobs := r.txJobs
+	serveJobs := r.serveJobs
 	r.txJobs = nil
 	r.serveJobs = nil
 	cancel := r.lifecycleCancel
@@ -98,6 +106,19 @@ func (r *Router) stopLifecycle() {
 	r.lifecycleMu.Unlock()
 
 	r.lifecycleWG.Wait()
+	drainInboundMessages(txJobs)
+	drainInboundMessages(serveJobs)
+}
+
+func drainInboundMessages(messages <-chan *peermanagement.InboundMessage) {
+	for {
+		select {
+		case msg := <-messages:
+			_ = msg.Close()
+		default:
+			return
+		}
+	}
 }
 
 func (r *Router) lifecycleContext() context.Context {

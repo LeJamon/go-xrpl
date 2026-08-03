@@ -151,7 +151,7 @@ func TestRouterDispatchesProposal(t *testing.T) {
 
 	inbox <- &peermanagement.InboundMessage{
 		PeerID:  1,
-		Type:    uint16(message.TypeProposeLedger),
+		Type:    message.TypeProposeLedger,
 		Payload: encodePayload(t, proposeSet),
 	}
 
@@ -190,7 +190,7 @@ func TestRouterDispatchesValidation(t *testing.T) {
 
 	inbox <- &peermanagement.InboundMessage{
 		PeerID:  2,
-		Type:    uint16(message.TypeValidation),
+		Type:    message.TypeValidation,
 		Payload: encodePayload(t, val),
 	}
 
@@ -236,7 +236,7 @@ func TestRouterDispatchesTransaction(t *testing.T) {
 
 	inbox <- &peermanagement.InboundMessage{
 		PeerID:  3,
-		Type:    uint16(message.TypeTransaction),
+		Type:    message.TypeTransaction,
 		Payload: encodePayload(t, txMsg),
 	}
 
@@ -280,7 +280,7 @@ func TestRouterDispatchesPreDecodedTransaction(t *testing.T) {
 
 	inbox <- &peermanagement.InboundMessage{
 		PeerID: 3,
-		Type:   uint16(message.TypeTransaction),
+		Type:   message.TypeTransaction,
 		Tx: &message.Transaction{
 			RawTransaction:   blob,
 			Status:           message.TxStatusNew,
@@ -307,7 +307,7 @@ func TestRouterIgnoresUnknownMessages(t *testing.T) {
 	// Send a Ping message — should be silently ignored
 	inbox <- &peermanagement.InboundMessage{
 		PeerID:  4,
-		Type:    uint16(message.TypePing),
+		Type:    message.TypePing,
 		Payload: []byte{0x01},
 	}
 
@@ -330,7 +330,7 @@ func TestRouterHandlesMalformedMessage(t *testing.T) {
 	// Send garbage as a proposal — should not panic
 	inbox <- &peermanagement.InboundMessage{
 		PeerID:  5,
-		Type:    uint16(message.TypeProposeLedger),
+		Type:    message.TypeProposeLedger,
 		Payload: []byte{0xFF, 0xFF, 0xFF},
 	}
 
@@ -457,7 +457,7 @@ func TestRouter_UpdateRelaySlot_DuplicatesOnly(t *testing.T) {
 	// Peer A delivers it first: first-seen, must NOT fire UpdateRelaySlot.
 	inbox <- &peermanagement.InboundMessage{
 		PeerID:  1,
-		Type:    uint16(message.TypeProposeLedger),
+		Type:    message.TypeProposeLedger,
 		Payload: payload,
 	}
 	time.Sleep(30 * time.Millisecond)
@@ -470,7 +470,7 @@ func TestRouter_UpdateRelaySlot_DuplicatesOnly(t *testing.T) {
 	// Peer B delivers the same bytes: duplicate, MUST fire UpdateRelaySlot.
 	inbox <- &peermanagement.InboundMessage{
 		PeerID:  2,
-		Type:    uint16(message.TypeProposeLedger),
+		Type:    message.TypeProposeLedger,
 		Payload: payload,
 	}
 	time.Sleep(30 * time.Millisecond)
@@ -525,10 +525,10 @@ func TestRouter_UpdateRelaySlot_UntrustedValidator(t *testing.T) {
 	}
 	payload := encodePayload(t, proposeSet)
 
-	inbox <- &peermanagement.InboundMessage{PeerID: 1, Type: uint16(message.TypeProposeLedger), Payload: payload}
+	inbox <- &peermanagement.InboundMessage{PeerID: 1, Type: message.TypeProposeLedger, Payload: payload}
 	time.Sleep(30 * time.Millisecond)
 	sender.setRelayed(hashProposalSuppression(ProposalFromMessage(proposeSet)))
-	inbox <- &peermanagement.InboundMessage{PeerID: 2, Type: uint16(message.TypeProposeLedger), Payload: payload}
+	inbox <- &peermanagement.InboundMessage{PeerID: 2, Type: message.TypeProposeLedger, Payload: payload}
 	time.Sleep(30 * time.Millisecond)
 
 	calls := sender.getCalls()
@@ -576,7 +576,7 @@ func TestRelay_DuplicateAfterRelayFeedsOnlyCurrentSource(t *testing.T) {
 	// slot-feeding yet (first-seen gate).
 	inbox <- &peermanagement.InboundMessage{
 		PeerID:  1,
-		Type:    uint16(message.TypeProposeLedger),
+		Type:    message.TypeProposeLedger,
 		Payload: payload,
 	}
 	time.Sleep(30 * time.Millisecond)
@@ -588,7 +588,7 @@ func TestRelay_DuplicateAfterRelayFeedsOnlyCurrentSource(t *testing.T) {
 
 	inbox <- &peermanagement.InboundMessage{
 		PeerID:  3,
-		Type:    uint16(message.TypeProposeLedger),
+		Type:    message.TypeProposeLedger,
 		Payload: payload,
 	}
 	time.Sleep(30 * time.Millisecond)
@@ -657,7 +657,7 @@ func TestRelay_FirstSeenMessageDoesNotFeedSlot(t *testing.T) {
 	// Slot must NOT fire.
 	inbox <- &peermanagement.InboundMessage{
 		PeerID:  99,
-		Type:    uint16(message.TypeProposeLedger),
+		Type:    message.TypeProposeLedger,
 		Payload: payload,
 	}
 	time.Sleep(30 * time.Millisecond)

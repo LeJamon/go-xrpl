@@ -23,7 +23,8 @@ const (
 	DefaultEventBufferSize             = 256
 	DefaultMessageBufferSize           = 256
 	DefaultSendBufferSize              = 64
-	DefaultOutboundRetainedBytes int64 = 8 * MaxMessageSize
+	DefaultInboundRetainedBytes  int64 = 3 * message.MaxMessageSize
+	DefaultOutboundRetainedBytes int64 = 8 * message.MaxMessageSize
 	acquisitionEventBufferSize         = 16
 
 	reliableSendBufferSize = 512
@@ -41,7 +42,7 @@ const (
 	bulkSequenceBufferSize         = 4
 	reliableFramesPerBulkFrame     = 16
 	outboundCriticalByteReserve    = 2 * 1024 * 1024
-	outboundNonCriticalByteMaximum = MaxMessageSize + message.HeaderSizeCompressed
+	outboundNonCriticalByteMaximum = message.MaxMessageSize + message.HeaderSizeCompressed
 	outboundRetainedByteMaximum    = outboundNonCriticalByteMaximum + outboundCriticalByteReserve
 	maxOutboundReservedPeers       = (math.MaxInt64 - int64(outboundNonCriticalByteMaximum)) / int64(outboundCriticalByteReserve)
 
@@ -121,6 +122,9 @@ type Config struct {
 	// across all peers. Noncritical traffic cannot consume the critical
 	// reserve derived from MaxPeers.
 	OutboundRetainedBytes int64
+	// InboundRetainedBytes bounds bulk wire, decoded, and spooled payload bytes
+	// across all peers until downstream processing completes.
+	InboundRetainedBytes int64
 
 	// MaxTransactions sizes the overlay's dedicated inbound
 	// TMTransaction lane. Inbound tx frames past this ceiling are shed
@@ -222,6 +226,7 @@ func DefaultConfig() Config {
 		EventBufferSize:       DefaultEventBufferSize,
 		MessageBufferSize:     DefaultMessageBufferSize,
 		MaxTransactions:       DefaultMaxTransactions,
+		InboundRetainedBytes:  DefaultInboundRetainedBytes,
 		OutboundRetainedBytes: DefaultOutboundRetainedBytes,
 
 		// Reduce-relay is opt-in. Leaving these zero-valued avoids
@@ -291,6 +296,13 @@ func WithIPLimit(n int) Option {
 func WithOutboundRetainedBytes(bytes int64) Option {
 	return func(c *Config) {
 		c.OutboundRetainedBytes = bytes
+	}
+}
+
+// WithInboundRetainedBytes sets the shared inbound bulk-payload budget.
+func WithInboundRetainedBytes(bytes int64) Option {
+	return func(c *Config) {
+		c.InboundRetainedBytes = bytes
 	}
 }
 
@@ -413,8 +425,9 @@ func WithServerDomain(domain string) Option {
 // the `Local-IP` handshake header and to validate the peer's
 // `Remote-IP` self-report. A nil or unspecified IP suppresses both.
 func WithPublicIP(ip net.IP) Option {
+	ip = append(net.IP(nil), ip...)
 	return func(c *Config) {
-		c.PublicIP = ip
+		c.PublicIP = append(net.IP(nil), ip...)
 	}
 }
 
@@ -473,6 +486,12 @@ func (c *Config) Validate() error {
 	}
 	if c.OutboundRetainedBytes == 0 {
 		c.OutboundRetainedBytes = DefaultOutboundRetainedBytes
+	}
+	if c.InboundRetainedBytes == 0 {
+		c.InboundRetainedBytes = DefaultInboundRetainedBytes
+	}
+	if c.InboundRetainedBytes < 3*int64(message.MaxMessageSize) {
+		return fmt.Errorf("InboundRetainedBytes must be at least %d", 3*int64(message.MaxMessageSize))
 	}
 	minimumOutboundBytes := MinimumOutboundRetainedBytes(c.MaxPeers)
 	if c.OutboundRetainedBytes < minimumOutboundBytes {

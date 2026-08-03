@@ -7,6 +7,7 @@ import (
 
 	"github.com/LeJamon/go-xrpl/internal/peermanagement/cluster"
 	"github.com/LeJamon/go-xrpl/internal/peermanagement/message"
+	"github.com/LeJamon/go-xrpl/internal/peermanagement/resource"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -47,6 +48,9 @@ func newFetchPackTestOverlay(t *testing.T, prov LedgerProvider) (*Overlay, *Peer
 	o.ledgerSync.SetProvider(prov)
 	peer := NewPeer(PeerID(7), Endpoint{Host: "127.0.0.1", Port: 51235}, false, id, make(chan Event, 1))
 	o.peers[peer.ID()] = peer
+	o.ledgerSync.SetChargePeer(func(_ PeerID, fee resource.Charge, reason string) {
+		peer.Charge(fee, reason)
+	})
 	return o, peer
 }
 
@@ -69,7 +73,7 @@ func TestServeFetchPack_RepliesWithPack(t *testing.T) {
 
 	o.onMessageReceived(Event{
 		PeerID:      peer.ID(),
-		MessageType: uint16(message.TypeGetObjects),
+		MessageType: message.TypeGetObjects,
 		Payload:     payload,
 	})
 
@@ -94,12 +98,15 @@ func TestServeFetchPack_RepliesWithPack(t *testing.T) {
 }
 
 // TestServeFetchPack_EmptyPackNoReply: an empty pack (unknown ledger) yields no
-// reply, but the valid request is still charged feeHeavyBurdenPeer up front —
-// mirroring rippled's doFetchPack, which sets the heavy-burden fee before the
-// build regardless of whether the ledger is found (PeerImp.cpp:2773).
+// reply, but the valid request still incurs the heavy-burden and no-reply
+// charges after the provider reports that it is unavailable.
 func TestServeFetchPack_EmptyPackNoReply(t *testing.T) {
 	prov := &fakeFetchPackProvider{objects: nil}
 	o, peer := newFetchPackTestOverlay(t, prov)
+	var charges []resource.Charge
+	o.ledgerSync.SetChargePeer(func(_ PeerID, fee resource.Charge, _ string) {
+		charges = append(charges, fee)
+	})
 
 	payload, err := message.Encode(&message.GetObjectByHash{
 		ObjType:    message.ObjectTypeFetchPack,
@@ -110,7 +117,7 @@ func TestServeFetchPack_EmptyPackNoReply(t *testing.T) {
 
 	o.onMessageReceived(Event{
 		PeerID:      peer.ID(),
-		MessageType: uint16(message.TypeGetObjects),
+		MessageType: message.TypeGetObjects,
 		Payload:     payload,
 	})
 
@@ -118,20 +125,17 @@ func TestServeFetchPack_EmptyPackNoReply(t *testing.T) {
 	if _, ok := takeOutboundFrame(peer); ok {
 		t.Fatal("an empty pack must not produce a reply")
 	}
-	assert.NotZero(t, peer.BadDataCount(),
-		"a valid fetch-pack request is charged feeHeavyBurdenPeer up front even when the pack is empty")
+	assert.Equal(t, []resource.Charge{resource.FeeHeavyBurdenPeer, resource.FeeRequestNoReply}, charges,
+		"an unavailable valid request must receive heavy and no-reply charges")
 }
 
 func TestServeFetchPack_TooEarlyAddsMalformedCharge(t *testing.T) {
-	controlOverlay, controlPeer := newFetchPackTestOverlay(t, &fakeFetchPackProvider{})
-	controlOverlay.serveFetchPack(controlPeer.ID(), &message.GetObjectByHash{
-		ObjType:    message.ObjectTypeFetchPack,
-		Query:      true,
-		LedgerHash: bytes.Repeat([]byte{0x33}, 32),
-	})
-
 	prov := &fakeFetchPackProvider{err: errors.Join(ErrFetchPackTooEarly)}
 	o, peer := newFetchPackTestOverlay(t, prov)
+	var charges []resource.Charge
+	o.ledgerSync.SetChargePeer(func(_ PeerID, fee resource.Charge, _ string) {
+		charges = append(charges, fee)
+	})
 
 	o.serveFetchPack(peer.ID(), &message.GetObjectByHash{
 		ObjType:    message.ObjectTypeFetchPack,
@@ -140,9 +144,30 @@ func TestServeFetchPack_TooEarlyAddsMalformedCharge(t *testing.T) {
 	})
 
 	require.Equal(t, 1, prov.calls)
-	assert.Greater(t, peer.Load(), controlPeer.Load())
+	assert.Equal(t, []resource.Charge{resource.FeeHeavyBurdenPeer, resource.FeeMalformedRequest}, charges)
 	if _, ok := takeOutboundFrame(peer); ok {
 		t.Fatal("a too-early fetch pack must not produce a reply")
+	}
+}
+
+func TestServeFetchPack_BusyProviderIsNotCharged(t *testing.T) {
+	prov := &fakeFetchPackProvider{err: ErrFetchPackBusy}
+	o, peer := newFetchPackTestOverlay(t, prov)
+	var charges []resource.Charge
+	o.ledgerSync.SetChargePeer(func(_ PeerID, fee resource.Charge, _ string) {
+		charges = append(charges, fee)
+	})
+
+	o.serveFetchPack(peer.ID(), &message.GetObjectByHash{
+		ObjType:    message.ObjectTypeFetchPack,
+		Query:      true,
+		LedgerHash: bytes.Repeat([]byte{0x44}, 32),
+	})
+
+	require.Equal(t, 1, prov.calls)
+	assert.Empty(t, charges, "a busy fetch-pack provider must not incur heavy or no-reply charges")
+	if _, ok := takeOutboundFrame(peer); ok {
+		t.Fatal("a busy fetch pack must not produce a reply")
 	}
 }
 
@@ -161,7 +186,7 @@ func TestServeFetchPack_BadHashCharged(t *testing.T) {
 
 	o.onMessageReceived(Event{
 		PeerID:      peer.ID(),
-		MessageType: uint16(message.TypeGetObjects),
+		MessageType: message.TypeGetObjects,
 		Payload:     payload,
 	})
 
@@ -183,13 +208,13 @@ func TestHandleGetObjects_FetchPackReplyForwardedToRouter(t *testing.T) {
 
 	o.onMessageReceived(Event{
 		PeerID:      peer.ID(),
-		MessageType: uint16(message.TypeGetObjects),
+		MessageType: message.TypeGetObjects,
 		Payload:     payload,
 	})
 
 	select {
 	case got := <-o.ledgerData:
-		assert.Equal(t, uint16(message.TypeGetObjects), got.Type)
+		assert.Equal(t, message.TypeGetObjects, got.Type)
 		assert.Equal(t, peer.ID(), got.PeerID)
 	default:
 		t.Fatal("fetch-pack reply was not forwarded to the router channel")

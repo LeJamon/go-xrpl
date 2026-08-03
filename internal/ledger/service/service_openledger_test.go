@@ -255,6 +255,9 @@ func TestService_AcceptConsensusResult_IncludedTxsNotDuplicated(t *testing.T) {
 	if res != openledger.ResultSuccess {
 		t.Fatalf("SubmitOpenLedgerTx result = %v, want ResultSuccess", res)
 	}
+	if got, included, deferred, ok := svc.TransactionForRelay(hash1); !ok || !bytes.Equal(got, blob1) || !included || deferred {
+		t.Fatalf("TransactionForRelay before close = (%x, %v, %v, %v), want live current tx", got, included, deferred, ok)
+	}
 
 	parent := svc.GetClosedLedger()
 	if parent == nil {
@@ -280,6 +283,9 @@ func TestService_AcceptConsensusResult_IncludedTxsNotDuplicated(t *testing.T) {
 	}
 	if got := svc.OpenLedgerTxs(); len(got) != 0 {
 		t.Errorf("post-Accept OpenLedgerTxs len = %d, want 0", len(got))
+	}
+	if got, included, deferred, ok := svc.TransactionForRelay(hash1); !ok || !bytes.Equal(got, blob1) || included || deferred {
+		t.Fatalf("TransactionForRelay after close = (%x, %v, %v, %v), want cached tsNEW record", got, included, deferred, ok)
 	}
 }
 
