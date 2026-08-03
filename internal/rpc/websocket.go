@@ -119,9 +119,8 @@ func NewWebSocketServerWithLoadTracker(timeout time.Duration, services *types.Se
 	}
 	ws := &WebSocketServer{
 		upgrader: websocket.Upgrader{
-			// Accept any Origin, deliberately matching rippled: its WS
-			// server never validates the Origin header — access control
-			// is done via admin IP nets / port configuration instead.
+			// The shared transport middleware validates Origin before this
+			// upgrader runs; direct callers are checked by ServeHTTP.
 			CheckOrigin: func(r *http.Request) bool { return true },
 			// Don't require specific subprotocol - xrpl.js doesn't use one
 		},
@@ -170,6 +169,9 @@ func (ws *WebSocketServer) SetConnLimiter(limiter *ConnLimiter) {
 func (ws *WebSocketServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	portCtx := GetPortContext(r.Context())
 	isWebSocket := isWebSocketUpgrade(r)
+	if !transportAuthorized(r.Context()) && !authorizeTransport(w, r, portCtx) {
+		return
+	}
 
 	ws.connectionsMutex.Lock()
 	if ws.closing {

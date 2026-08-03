@@ -82,6 +82,8 @@ ports = ["port_rpc_admin_local", "port_rpc_public", "port_peer", "port_ws_admin_
 # Optional fields:
 #   - limit             → max concurrent connections (0 = unlimited)
 #   - send_queue_limit  → WS send buffer per connection (default 100)
+#   - user/password     → HTTP Basic Auth, required together when set
+#   - allowed_origins   → exact http(s) browser origins; omitted denies browser origins
 # =============================================================================
 
 # --- Admin ports (localhost only) ---
@@ -91,6 +93,11 @@ port = 5005
 ip = "127.0.0.1"
 admin = ["127.0.0.1"]
 protocol = "http"
+# To expose this admin port to a browser, configure both an exact origin and
+# Basic Auth credentials. CLI requests without an Origin header remain allowed.
+# allowed_origins = ["https://admin.example"]
+# user = "operator"
+# password = "replace-with-a-secret"
 
 [port_ws_admin_local]
 port = 6006

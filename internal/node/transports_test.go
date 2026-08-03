@@ -147,6 +147,57 @@ func TestBoundRPCTransportsDoNotServeBeforeCommit(t *testing.T) {
 	bound.wait()
 }
 
+func TestBoundRPCTransportsHealthUsesTransportBasicAuth(t *testing.T) {
+	bound, err := bindRPCTransports(
+		context.Background(),
+		xrpllog.Discard(),
+		&config.Config{Ports: map[string]config.PortConfig{
+			"http": {
+				IP:       "127.0.0.1",
+				Port:     0,
+				Protocol: "http",
+				User:     "operator",
+				Password: "transport-secret",
+			},
+		}},
+		http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}),
+		rpc.NewWebSocketServer(time.Second, nil),
+		nil,
+		systemListen,
+	)
+	require.NoError(t, err)
+	require.NoError(t, bound.serve(xrpllog.Discard()))
+	defer func() {
+		_ = bound.http[0].server.Shutdown(context.Background())
+		_ = bound.closeListeners()
+		bound.wait()
+	}()
+
+	healthURL := "http://" + bound.http[0].address + "/health"
+	for _, test := range []struct {
+		name     string
+		user     string
+		password string
+		want     int
+	}{
+		{name: "correct credentials", user: "operator", password: "transport-secret", want: http.StatusOK},
+		{name: "missing credentials", want: http.StatusUnauthorized},
+		{name: "incorrect credentials", user: "operator", password: "wrong", want: http.StatusUnauthorized},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			req, requestErr := http.NewRequest(http.MethodGet, healthURL, nil)
+			require.NoError(t, requestErr)
+			if test.user != "" || test.password != "" {
+				req.SetBasicAuth(test.user, test.password)
+			}
+			response, doErr := http.DefaultClient.Do(req)
+			require.NoError(t, doErr)
+			defer response.Body.Close()
+			require.Equal(t, test.want, response.StatusCode)
+		})
+	}
+}
+
 func TestBoundRPCTransportsServeAndJoinAllProtocols(t *testing.T) {
 	cfg := &config.Config{Ports: map[string]config.PortConfig{
 		"http": {IP: "127.0.0.1", Port: 0, Protocol: "http"},

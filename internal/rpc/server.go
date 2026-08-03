@@ -15,7 +15,6 @@ import (
 	"slices"
 	"strconv"
 	"strings"
-	"sync"
 	"sync/atomic"
 	"time"
 
@@ -51,16 +50,6 @@ type Server struct {
 	timeout     time.Duration
 	services    *types.ServiceContainer
 	loadTracker *loadtrack.Tracker
-
-	// corsAllowedOrigins, if non-empty, restricts Access-Control-Allow-Origin
-	// to the listed origins (set via SetCORSAllowedOrigins). Empty means
-	// `*` — a deliberate goxrpl divergence from rippled, which emits no
-	// CORS header at all (JSONRPCUtil.cpp:143-145 leaves the
-	// Access-Control-Allow-Origin line commented out). Browser clients
-	// won't work cross-origin against a vanilla rippled; emitting `*` by
-	// default keeps the goxrpl HTTP endpoint usable from web tools.
-	corsMu             sync.RWMutex
-	corsAllowedOrigins []string
 }
 
 var _ types.MethodDispatcher = (*Server)(nil)
@@ -89,43 +78,6 @@ func (h *peerSourceHolder) loadPeerSource() types.PeerSource {
 		return *p
 	}
 	return nil
-}
-
-// SetCORSAllowedOrigins replaces the list of origins accepted for CORS.
-// Pass nil/empty to fall back to `*` (the goxrpl default — rippled emits
-// no CORS header at all). Origins are matched exactly against the
-// request's Origin header; a leading wildcard `*` in the list keeps the
-// permissive behaviour. Safe to call after the server has started.
-func (s *Server) SetCORSAllowedOrigins(origins []string) {
-	s.corsMu.Lock()
-	defer s.corsMu.Unlock()
-	if len(origins) == 0 {
-		s.corsAllowedOrigins = nil
-		return
-	}
-	s.corsAllowedOrigins = append(s.corsAllowedOrigins[:0:0], origins...)
-}
-
-// resolveCORSOrigin returns the value to echo in
-// Access-Control-Allow-Origin. When no allowlist is configured the legacy
-// `*` is returned; otherwise the request's Origin is echoed only when it
-// matches an entry (or `*` is in the list), so misconfigured browsers
-// don't get a cross-origin pass.
-func (s *Server) resolveCORSOrigin(requestOrigin string) string {
-	s.corsMu.RLock()
-	defer s.corsMu.RUnlock()
-	if len(s.corsAllowedOrigins) == 0 {
-		return "*"
-	}
-	for _, o := range s.corsAllowedOrigins {
-		if o == "*" {
-			return "*"
-		}
-		if o == requestOrigin {
-			return requestOrigin
-		}
-	}
-	return ""
 }
 
 // NewServer creates a new RPC server with the given timeout and the
@@ -179,19 +131,13 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 	}()
 
-	// Set CORS headers. Default is `*` (goxrpl divergence from rippled,
-	// which emits no CORS header — see Server.corsAllowedOrigins comment).
-	// An explicit allowlist may be configured via SetCORSAllowedOrigins,
-	// in which case we echo back the request's Origin only when it is on
-	// the list.
-	if allow := s.resolveCORSOrigin(r.Header.Get("Origin")); allow != "" {
-		w.Header().Set("Access-Control-Allow-Origin", allow)
-		if allow != "*" {
-			w.Header().Set("Vary", "Origin")
+	if !transportAuthorized(r.Context()) {
+		if !authorizeTransport(w, r, GetPortContext(r.Context())) {
+			return
 		}
 	}
-	w.Header().Set("Access-Control-Allow-Methods", "POST, GET, OPTIONS")
-	w.Header().Set("Access-Control-Allow-Headers", "Content-Type")
+	w.Header().Set("Access-Control-Allow-Methods", "POST, OPTIONS")
+	w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization")
 	w.Header().Set("Content-Type", jsonContentType)
 
 	if r.Method == "OPTIONS" {
@@ -199,42 +145,12 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if r.Method != "POST" && r.Method != "GET" {
+	if r.Method != "POST" {
 		writePlainHTTPError(w, http.StatusMethodNotAllowed, "Method not allowed")
 		return
 	}
 
-	if r.Method == "GET" {
-		s.handleGetRequest(w, r)
-		return
-	}
-
 	s.handlePostRequest(w, r)
-}
-
-func (s *Server) handleGetRequest(w http.ResponseWriter, r *http.Request) {
-	query := r.URL.Query()
-	method := query.Get("command")
-
-	// Deliberate goxrpl extension: a GET with no `command` defaults to
-	// server_info. rippled has no GET form (it feeds every request body
-	// through the JSON parser); this keeps the endpoint browser-pokeable,
-	// like the permissive default CORS header above.
-	if method == "" {
-		method = "server_info"
-	}
-
-	portCtx := GetPortContext(r.Context())
-	peerIP := remoteAddrIP(r.RemoteAddr)
-	clientIP := resolveClientIP(r, portCtx)
-	user := userHeader(r)
-	role := roleForRequest(peerIP, user, nil, portCtx)
-	dispatchCtx, cancel := s.withTimeout(r.Context())
-	defer cancel()
-	ctx := newRpcContext(dispatchCtx, role, types.DefaultApiVersion, clientIP, s.loadPeerSource(), s.services)
-
-	result, rpcErr := s.executeMethod(method, nil, ctx)
-	s.writeXrplResponseWithOptions(w, nil, result, rpcErr, loadWarningOpts(ctx))
 }
 
 func (s *Server) handlePostRequest(w http.ResponseWriter, r *http.Request) {
@@ -1435,7 +1351,11 @@ func adminCredentialsMatch(params map[string]any, portCtx *PortContext) bool {
 	}
 	user, userOK := params["admin_user"].(string)
 	password, passwordOK := params["admin_password"].(string)
-	return userOK && passwordOK && user == portCtx.AdminUser && password == portCtx.AdminPassword
+	match := constantTimeCredentialsMatch(user, password, portCtx.AdminUser, portCtx.AdminPassword)
+	if !userOK || !passwordOK {
+		return false
+	}
+	return match
 }
 
 func roleParamsFromRawParams(raw json.RawMessage) map[string]any {

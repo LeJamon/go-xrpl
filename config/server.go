@@ -10,17 +10,18 @@ import (
 // ServerConfig represents the [server] section
 // This defines the ports that the server will listen on and default values
 type ServerConfig struct {
-	Ports         []string `toml:"ports" mapstructure:"ports"`       // List of port names to enable
-	Port          int      `toml:"port" mapstructure:"port"`         // Default port number
-	IP            string   `toml:"ip" mapstructure:"ip"`             // Default IP address
-	Protocol      string   `toml:"protocol" mapstructure:"protocol"` // Default protocol
-	Limit         int      `toml:"limit" mapstructure:"limit"`       // Default connection limit
-	User          string   `toml:"user" mapstructure:"user"`         // Default HTTP basic auth user
-	Password      string   `toml:"password" mapstructure:"password"` // Default HTTP basic auth password
-	Admin         []string `toml:"admin" mapstructure:"admin"`       // Default administrative networks
-	AdminUser     string   `toml:"admin_user" mapstructure:"admin_user"`
-	AdminPassword string   `toml:"admin_password" mapstructure:"admin_password"`
-	SecureGateway []string `toml:"secure_gateway" mapstructure:"secure_gateway"` // Default trusted proxy networks
+	Ports          []string `toml:"ports" mapstructure:"ports"`       // List of port names to enable
+	Port           int      `toml:"port" mapstructure:"port"`         // Default port number
+	IP             string   `toml:"ip" mapstructure:"ip"`             // Default IP address
+	Protocol       string   `toml:"protocol" mapstructure:"protocol"` // Default protocol
+	Limit          int      `toml:"limit" mapstructure:"limit"`       // Default connection limit
+	User           string   `toml:"user" mapstructure:"user"`         // Default HTTP basic auth user
+	Password       string   `toml:"password" mapstructure:"password"` // Default HTTP basic auth password
+	Admin          []string `toml:"admin" mapstructure:"admin"`       // Default administrative networks
+	AdminUser      string   `toml:"admin_user" mapstructure:"admin_user"`
+	AdminPassword  string   `toml:"admin_password" mapstructure:"admin_password"`
+	AllowedOrigins []string `toml:"allowed_origins" mapstructure:"allowed_origins"` // Exact browser origins allowed on HTTP/WS ports
+	SecureGateway  []string `toml:"secure_gateway" mapstructure:"secure_gateway"`   // Default trusted proxy networks
 	// MaxConnections is the process-wide ceiling on concurrent HTTP + WebSocket
 	// connections. 0 keeps the bounded built-in default; a negative value
 	// disables the global cap (per-port limits still apply).
@@ -41,9 +42,10 @@ type PortConfig struct {
 	Password string `toml:"password" mapstructure:"password"`
 
 	// Administrative access control
-	Admin         []string `toml:"admin" mapstructure:"admin"`
-	AdminUser     string   `toml:"admin_user" mapstructure:"admin_user"`
-	AdminPassword string   `toml:"admin_password" mapstructure:"admin_password"`
+	Admin          []string `toml:"admin" mapstructure:"admin"`
+	AdminUser      string   `toml:"admin_user" mapstructure:"admin_user"`
+	AdminPassword  string   `toml:"admin_password" mapstructure:"admin_password"`
+	AllowedOrigins []string `toml:"allowed_origins" mapstructure:"allowed_origins"`
 
 	// Secure gateway (for proxies)
 	SecureGateway []string `toml:"secure_gateway" mapstructure:"secure_gateway"`
@@ -103,6 +105,14 @@ func (p *PortConfig) Validate() error {
 	if p.Protocol == "" {
 		return errors.New("protocol is required")
 	}
+	if (p.User == "") != (p.Password == "") {
+		return errors.New("user and password must be configured together")
+	}
+	origins, err := NormalizeOrigins(p.AllowedOrigins)
+	if err != nil {
+		return err
+	}
+	p.AllowedOrigins = origins
 
 	// Validate protocol combinations
 	if err := p.validateProtocols(); err != nil {
