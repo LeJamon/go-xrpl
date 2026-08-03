@@ -476,12 +476,9 @@ func (o *Overlay) handleStatusChange(evt Event) {
 	if !exists {
 		return
 	}
-	// Stamp the wire's networktime with the local clock when the peer
-	// didn't include it, so the peer_status emit always carries a
-	// `date`. Mutate sc so the auto-filled value is observable to
-	// subscribers.
-	if sc.NetworkTime == 0 {
+	if !sc.HasNetworkTime() {
 		sc.NetworkTime = uint64(protocol.RippleSeconds(time.Now()))
+		sc.NetworkTimeSet = true
 	}
 
 	effectiveStatus := peer.applyStatusChange(sc)
@@ -489,14 +486,14 @@ func (o *Overlay) handleStatusChange(evt Event) {
 	// lostSync returns before either the tracking check or the
 	// publish runs, so a lostSync update never surfaces as a
 	// peer_status WebSocket event.
-	if sc.NewEvent == message.NodeEventLostSync {
+	if sc.HasNewEvent() && sc.NewEvent == message.NodeEventLostSync {
 		return
 	}
 
 	// The tracking check is gated on a fresh (<2 min) validated
 	// ledger. The gate must NOT short-circuit the publish below,
 	// which runs unconditionally for non-lostSync messages.
-	if sc.LedgerSeq != 0 {
+	if sc.HasLedgerSeq() {
 		if provider := o.validLedgerProviderSnapshot(); provider != nil {
 			if validSeq, age, ok := provider(); ok && validSeq != 0 && age < 2*time.Minute {
 				peer.CheckTracking(sc.LedgerSeq, validSeq)
@@ -512,7 +509,7 @@ func (o *Overlay) handleStatusChange(evt Event) {
 		// clears that storage and the all-zeros 64-char hex string is
 		// emitted.
 		var ledgerHash string
-		if len(sc.LedgerHash) > 0 {
+		if sc.HasLedgerHash() {
 			if h, ok := peer.ClosedLedger(); ok {
 				ledgerHash = strings.ToUpper(hex.EncodeToString(h[:]))
 			} else {
@@ -527,24 +524,29 @@ func (o *Overlay) handleStatusChange(evt Event) {
 			f, l := *sc.FirstSeq, *sc.LastSeq
 			minSeq, maxSeq = &f, &l
 		}
-		// The decoder loses proto-presence for ledger_seq (see
-		// internal/peermanagement/proto/ripple.pb.go), so use 0 as
-		// the absence proxy — XRPL ledger sequences start at the
-		// genesis ledger 1, no real peer broadcasts has_ledgerseq=0.
 		var ledgerIndex *uint32
-		if sc.LedgerSeq != 0 {
+		if sc.HasLedgerSeq() {
 			ls := sc.LedgerSeq
 			ledgerIndex = &ls
 		}
-		// Date is always set thanks to the auto-fill above. Truncate
-		// uint64 → uint32 to match the uint32 date rippled emits.
-		dateVal := uint32(sc.NetworkTime)
+		var status, action string
+		if sc.HasNewStatus() {
+			status = peerStatusUpperName(effectiveStatus)
+		}
+		if sc.HasNewEvent() {
+			action = peerStatusActionName(sc.NewEvent)
+		}
+		var date *uint32
+		if sc.HasNetworkTime() {
+			value := uint32(sc.NetworkTime)
+			date = &value
+		}
 		pub(PeerStatusUpdate{
-			Status:         peerStatusUpperName(effectiveStatus),
-			Action:         peerStatusActionName(sc.NewEvent),
+			Status:         status,
+			Action:         action,
 			LedgerIndex:    ledgerIndex,
 			LedgerHash:     ledgerHash,
-			Date:           &dateVal,
+			Date:           date,
 			LedgerIndexMin: minSeq,
 			LedgerIndexMax: maxSeq,
 		})
@@ -614,18 +616,15 @@ func (o *Overlay) handlePing(evt Event) bool {
 
 	switch ping.PType {
 	case message.PingTypePing:
-		pong := &message.Ping{
-			PType:    message.PingTypePong,
-			Seq:      ping.Seq,
-			PingTime: ping.PingTime,
-		}
-		wireMsg, err := message.EncodeFrame(pong)
+		pong := *ping
+		pong.PType = message.PingTypePong
+		wireMsg, err := message.EncodeFrame(&pong)
 		if err != nil {
 			return false
 		}
 		o.Send(evt.PeerID, wireMsg)
 	case message.PingTypePong:
-		if peer, exists := o.getPeer(evt.PeerID); exists {
+		if peer, exists := o.getPeer(evt.PeerID); exists && ping.HasSeq() {
 			peer.OnPong(ping.Seq, time.Now())
 		}
 	default:

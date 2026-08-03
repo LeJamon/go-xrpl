@@ -2,6 +2,7 @@ package message
 
 import (
 	"errors"
+	"fmt"
 
 	"github.com/pierrec/lz4"
 )
@@ -43,17 +44,20 @@ func CompressLZ4(data []byte) ([]byte, error) {
 // decompressed length does not match the claim.
 func DecompressLZ4(compressed []byte, uncompressedSize int) ([]byte, error) {
 	if uncompressedSize <= 0 {
-		return nil, ErrDecompressFailed
+		return nil, fmt.Errorf("%w: invalid uncompressed size %d", ErrDecompressFailed, uncompressedSize)
+	}
+	if uint64(uncompressedSize) > uint64(MaxMessageSize) {
+		return nil, fmt.Errorf("%w: uncompressed size %d exceeds protocol max %d", ErrMessageTooLarge, uncompressedSize, MaxMessageSize)
 	}
 
 	decompressed := make([]byte, uncompressedSize)
 	n, err := lz4.UncompressBlock(compressed, decompressed)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("%w: %w", ErrDecompressFailed, err)
 	}
 
 	if n != uncompressedSize {
-		return nil, ErrDecompressFailed
+		return nil, fmt.Errorf("%w: decompressed length %d does not match claim %d", ErrDecompressFailed, n, uncompressedSize)
 	}
 
 	return decompressed, nil

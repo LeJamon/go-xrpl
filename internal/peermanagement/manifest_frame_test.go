@@ -15,14 +15,21 @@ import (
 
 	"github.com/LeJamon/go-xrpl/internal/peermanagement/message"
 	"github.com/stretchr/testify/require"
+	"google.golang.org/protobuf/encoding/protowire"
 )
+
+func opaqueTestPayload(value []byte) []byte {
+	payload := protowire.AppendTag(nil, 100, protowire.BytesType)
+	return protowire.AppendBytes(payload, value)
+}
 
 func manifestAndLedgerFrames(t *testing.T, manifest, ledger []byte) []byte {
 	t.Helper()
-	var wire bytes.Buffer
-	require.NoError(t, message.WriteMessage(&wire, message.TypeManifests, manifest))
-	require.NoError(t, message.WriteMessage(&wire, message.TypeLedgerData, ledger))
-	return wire.Bytes()
+	manifestFrame, err := message.BuildWireMessage(message.TypeManifests, manifest)
+	require.NoError(t, err)
+	ledgerFrame, err := message.BuildWireMessage(message.TypeLedgerData, opaqueTestPayload(ledger))
+	require.NoError(t, err)
+	return append(manifestFrame, ledgerFrame...)
 }
 
 type failingManifestSpoolWriter struct {
@@ -73,9 +80,10 @@ func TestOversizedManifestPeersDoNotBlockLedgerFrames(t *testing.T) {
 	require.NoError(t, err)
 
 	manifestPayload := bytes.Repeat([]byte{0x4d}, manifestSpoolThreshold+1)
+	ledgerPayloadSize := len(opaqueTestPayload([]byte{1}))
 	manifestMessages := make(chan *InboundMessage, 2)
 	acquisitionEvents := make(chan Event, 2)
-	budget := newReadBudget(int64(4*len(manifestPayload) + 2))
+	budget := newReadBudget(int64(4*len(manifestPayload) + 2*ledgerPayloadSize))
 	done := make(chan error, 2)
 
 	for i := 1; i <= 2; i++ {
@@ -108,8 +116,8 @@ func TestOversizedManifestPeersDoNotBlockLedgerFrames(t *testing.T) {
 		ledgers[event.PeerID] = event.Payload
 		event.release()
 	}
-	require.Equal(t, []byte{1}, ledgers[1])
-	require.Equal(t, []byte{2}, ledgers[2])
+	require.Equal(t, opaqueTestPayload([]byte{1}), ledgers[1])
+	require.Equal(t, opaqueTestPayload([]byte{2}), ledgers[2])
 	budget.mu.Lock()
 	require.Equal(t, int64(4*len(manifestPayload)), budget.used)
 	budget.mu.Unlock()
@@ -130,18 +138,29 @@ func TestSecondOversizedManifestBlocksOnlyItsPeer(t *testing.T) {
 	require.NoError(t, err)
 
 	manifestPayload := bytes.Repeat([]byte{0x4d}, manifestSpoolThreshold+1)
+	firstPayload := opaqueTestPayload([]byte("first"))
+	secondPayload := opaqueTestPayload([]byte("second"))
 	var wire bytes.Buffer
-	require.NoError(t, message.WriteMessage(&wire, message.TypeManifests, manifestPayload))
-	require.NoError(t, message.WriteMessage(&wire, message.TypeLedgerData, []byte("first")))
-	require.NoError(t, message.WriteMessage(&wire, message.TypeManifests, manifestPayload))
-	require.NoError(t, message.WriteMessage(&wire, message.TypeLedgerData, []byte("second")))
+	for _, candidate := range []struct {
+		msgType message.MessageType
+		payload []byte
+	}{
+		{message.TypeManifests, manifestPayload},
+		{message.TypeLedgerData, firstPayload},
+		{message.TypeManifests, manifestPayload},
+		{message.TypeLedgerData, secondPayload},
+	} {
+		frame, err := message.BuildWireMessage(candidate.msgType, candidate.payload)
+		require.NoError(t, err)
+		wire.Write(frame)
+	}
 
 	peer := newLatencyTestPeer(t)
 	peer.bufReader = bufio.NewReader(bytes.NewReader(wire.Bytes()))
 	manifestMessages := make(chan *InboundMessage, 2)
 	acquisitionEvents := make(chan Event, 2)
 	peer.SetManifestMessages(manifestMessages)
-	peer.SetInboundReadBudget(newReadBudget(int64(2*len(manifestPayload) + len("first") + len("second"))))
+	peer.SetInboundReadBudget(newReadBudget(int64(2*len(manifestPayload) + len(firstPayload) + len(secondPayload))))
 	peer.SetManifestSpoolDir(spoolDir)
 	peer.SetAcquisitionEvents(acquisitionEvents)
 	var bootstrapReady atomic.Int32
@@ -157,7 +176,7 @@ func TestSecondOversizedManifestBlocksOnlyItsPeer(t *testing.T) {
 	first := <-manifestMessages
 	require.NotNil(t, first.ManifestFrame)
 	firstLedger := <-acquisitionEvents
-	require.Equal(t, []byte("first"), firstLedger.Payload)
+	require.Equal(t, firstPayload, firstLedger.Payload)
 	firstLedger.release()
 	require.True(t, peer.bootstrapManifestPending.Load())
 	require.Zero(t, bootstrapReady.Load())
@@ -173,7 +192,7 @@ func TestSecondOversizedManifestBlocksOnlyItsPeer(t *testing.T) {
 	second := <-manifestMessages
 	require.NotNil(t, second.ManifestFrame)
 	secondLedger := <-acquisitionEvents
-	require.Equal(t, []byte("second"), secondLedger.Payload)
+	require.Equal(t, secondPayload, secondLedger.Payload)
 	secondLedger.release()
 	require.ErrorIs(t, <-done, io.EOF)
 	require.NoError(t, second.ManifestFrame.Close())

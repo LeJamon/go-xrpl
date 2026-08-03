@@ -61,12 +61,11 @@ type ContextFetchPackProvider interface {
 
 // Ledger sync constants.
 const (
-	// MaxReplayDeltaResponseBytes caps the complete encoded wire frame of a
-	// replay/proof response. The check deliberately includes protobuf field
+	// MaxProofPathResponseBytes caps the complete encoded wire frame of a
+	// proof response. The check deliberately includes protobuf field
 	// tags, varints, and the six-byte XRPL frame header rather than only raw
 	// ledger node bytes.
-	MaxReplayDeltaResponseBytes = 16 * 1024 * 1024
-	MaxProofPathResponseBytes   = MaxReplayDeltaResponseBytes
+	MaxProofPathResponseBytes = 16 * 1024 * 1024
 )
 
 // LedgerProvider is called to retrieve ledger data for responses.
@@ -402,12 +401,12 @@ func (h *LedgerSyncHandler) sendProofPathResponse(ctx context.Context, peerID Pe
 }
 
 func replayDeltaResponseOversized(ledgerHash, header []byte, txLeaves [][]byte) bool {
-	frame, err := message.EncodeFrame(&message.ReplayDeltaResponse{
+	_, err := message.EncodeFrame(&message.ReplayDeltaResponse{
 		LedgerHash:   ledgerHash,
 		LedgerHeader: header,
 		Transactions: txLeaves,
 	})
-	return err != nil || len(frame) > MaxReplayDeltaResponseBytes
+	return err != nil
 }
 
 func proofPathResponseOversized(req *message.ProofPathRequest, header []byte, path [][]byte) bool {
@@ -429,8 +428,8 @@ func proofPathResponseOversized(req *message.ProofPathRequest, header []byte, pa
 //  2. Look up the ledger and require it to be immutable, else charge and drop.
 //  3. Pack the ledger header (addRaw on LedgerInfo) and every leaf blob in
 //     the tx map, in tx-map iteration order.
-//  4. Defensive size cap: if the response payload would exceed
-//     MaxReplayDeltaResponseBytes, charge and drop the populated list.
+//  4. Refuse a response that cannot be represented within the protocol frame
+//     ceiling, and charge the no-reply fee.
 //
 // Successful responses use the peer's bounded acquisition lane when wired by
 // the overlay; standalone handlers fall back to EventLedgerResponse.
@@ -479,7 +478,7 @@ func (h *LedgerSyncHandler) handleReplayDeltaRequest(ctx context.Context, peerID
 			"t", "LedgerSync",
 			"peer", peerID,
 			"size", len(header),
-			"limit", MaxReplayDeltaResponseBytes,
+			"limit", message.MaxMessageSize,
 		)
 		h.charge(peerID, resource.FeeRequestNoReply, "replay delta response oversized")
 		return nil
@@ -514,10 +513,6 @@ func (h *LedgerSyncHandler) sendReplayDeltaResponse(ctx context.Context, peerID 
 	frame, err := message.EncodeFrame(resp)
 	if err != nil {
 		slog.Warn("ReplayDelta encode failed", "t", "LedgerSync", "peer", peerID, "err", err)
-		return
-	}
-	if len(frame) > MaxReplayDeltaResponseBytes {
-		h.charge(peerID, resource.FeeRequestNoReply, "replay delta response oversized")
 		return
 	}
 	h.mu.RLock()

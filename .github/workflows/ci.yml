@@ -48,24 +48,26 @@ jobs:
           args: --config .golangci-warnings.yml
 
   generate:
-    name: Generate (ledger-entry drift check)
+    name: Generate (drift check)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
       - uses: ./.github/actions/setup
         with:
           cgo: "false"
-      # Re-run the ledger-entry generator and fail if any *_gen.go file
-      # changes — a spec edit without `go generate` would otherwise silently
-      # ship a stale typed decoder.
+      - uses: arduino/setup-protoc@v3
+        with:
+          version: "34.1"
+      - name: Install protoc-gen-go
+        run: go install google.golang.org/protobuf/cmd/protoc-gen-go@v1.36.11
       - name: Re-run go generate
-        run: go generate ./ledger/entry/...
+        run: go generate ./ledger/entry/... ./internal/peermanagement/proto
       - name: Fail on tree diff
         run: |
-          if ! git diff --exit-code -- ledger/entry; then
-            echo "::error::ledger-entry generated files are out of date."
-            echo "Run: go generate ./ledger/entry/..."
-            echo "Then commit the regenerated *_gen.go files."
+          if ! git diff --exit-code -- ledger/entry internal/peermanagement/proto/xrpl.pb.go; then
+            echo "::error::generated files are out of date."
+            echo "Run: go generate ./ledger/entry/... ./internal/peermanagement/proto"
+            echo "Then commit the regenerated files."
             exit 1
           fi
 

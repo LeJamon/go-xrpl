@@ -1,7 +1,9 @@
 package peermanagement
 
 import (
+	"strings"
 	"testing"
+	"time"
 
 	"github.com/LeJamon/go-xrpl/internal/peermanagement/message"
 	"github.com/stretchr/testify/assert"
@@ -275,6 +277,19 @@ func TestOverlay_handleStatusChange_LedgerHashZerosOnMalformedWire(t *testing.T)
 		"PeerImp.cpp:1948 emits hex of the cleared closedLedgerHash_, not the wire bytes")
 }
 
+func TestOverlay_handleStatusChange_ExplicitEmptyLedgerHashIsPublished(t *testing.T) {
+	peer := newTestPeer(t, 7)
+	o := newTestOverlayWithPeers(map[PeerID]*Peer{7: peer})
+	var got PeerStatusUpdate
+	o.SetPeerStatusPublisher(func(update PeerStatusUpdate) { got = update })
+
+	payload, err := message.Encode(&message.StatusChange{LedgerHash: []byte{}})
+	require.NoError(t, err)
+	o.handleStatusChange(Event{PeerID: 7, Payload: payload})
+
+	assert.Equal(t, strings.Repeat("0", 64), got.LedgerHash)
+}
+
 // TestOverlay_handleStatusChange_AutoFillsDate covers
 // PeerImp.cpp:1796-1797 — rippled stamps networktime with the local
 // clock when the wire didn't carry it. The published Date must be
@@ -301,6 +316,34 @@ func TestOverlay_handleStatusChange_AutoFillsDate(t *testing.T) {
 
 	require.NotNil(t, got.Date, "PeerImp.cpp:1796-1797 — networktime auto-filled")
 	assert.Greater(t, *got.Date, uint32(0))
+}
+
+func TestOverlay_handleStatusChange_PreservesExplicitZeroScalarPresence(t *testing.T) {
+	peer := newTestPeer(t, 7)
+	o := newTestOverlayWithPeers(map[PeerID]*Peer{7: peer})
+
+	providerCalls := 0
+	o.SetValidLedgerProvider(func() (uint32, time.Duration, bool) {
+		providerCalls++
+		return 1, 0, true
+	})
+	var got PeerStatusUpdate
+	o.SetPeerStatusPublisher(func(update PeerStatusUpdate) { got = update })
+
+	payload, err := message.Encode(&message.StatusChange{
+		LedgerSeqSet:   true,
+		NetworkTimeSet: true,
+	})
+	require.NoError(t, err)
+	o.handleStatusChange(Event{PeerID: 7, Payload: payload})
+
+	assert.Empty(t, got.Status)
+	assert.Empty(t, got.Action)
+	require.NotNil(t, got.LedgerIndex)
+	assert.Zero(t, *got.LedgerIndex)
+	require.NotNil(t, got.Date)
+	assert.Zero(t, *got.Date)
+	assert.Equal(t, 1, providerCalls, "present ledger_seq=0 passes the has-ledgerseq gate")
 }
 
 // TestOverlay_SetPeerStatusPublisher_Disconnect verifies the doc

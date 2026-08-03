@@ -450,6 +450,31 @@ func TestAggregator_ApplyCollection_AcceptedAndStale(t *testing.T) {
 	}
 }
 
+func TestAggregator_ApplyCollection_ExplicitEmptyLocalManifestDoesNotFallback(t *testing.T) {
+	pub := newPublisher(t, 0x01, 0x02)
+	validator := derivedValidatorKey(0x10)
+	agg, _ := list.New(list.Config{
+		PublisherKeys:      []list.PublisherKey{list.PublisherKey(pub.masterPub)},
+		Threshold:          1,
+		ValidatorManifests: manifest.NewCache(),
+		PublisherManifests: manifest.NewCache(),
+		Clock:              fixedClock(),
+	})
+	blob, signature := pub.signList(t, 1, 0, fixedClock()().Add(24*time.Hour).Unix(), [][33]byte{validator})
+
+	dispositions, _, _ := agg.ApplyCollection(&message.ValidatorListCollection{
+		Version:  2,
+		Manifest: pub.manifestB64,
+		Blobs: []message.ValidatorBlobInfo{{
+			Manifest:  []byte{},
+			Blob:      blob,
+			Signature: signature,
+		}},
+	}, "test://")
+
+	require.Equal(t, []list.Disposition{list.Malformed}, dispositions)
+}
+
 func deterministicKey(seed byte) (pub32 []byte, priv ed25519.PrivateKey) {
 	s := bytes.Repeat([]byte{seed}, ed25519.SeedSize)
 	priv = ed25519.NewKeyFromSeed(s)

@@ -21,38 +21,38 @@ const (
 	_ = protoimpl.EnforceVersion(protoimpl.MaxVersion - 20)
 )
 
-// Message types for the XRPL peer protocol
+// Unused numbers in the list below may have been used previously. Please don't
+// reassign them for reuse unless you are 100% certain that there won't be a
+// conflict. Even if you're sure, it's probably best to assign a new type.
 type MessageType int32
 
 const (
-	MessageType_mtUNKNOWN                 MessageType = 0
-	MessageType_mtMANIFESTS               MessageType = 2
-	MessageType_mtPING                    MessageType = 3
-	MessageType_mtCLUSTER                 MessageType = 5
-	MessageType_mtENDPOINTS               MessageType = 15
-	MessageType_mtTRANSACTION             MessageType = 30
-	MessageType_mtGET_LEDGER              MessageType = 31
-	MessageType_mtLEDGER_DATA             MessageType = 32
-	MessageType_mtPROPOSE_LEDGER          MessageType = 33
-	MessageType_mtSTATUS_CHANGE           MessageType = 34
-	MessageType_mtHAVE_SET                MessageType = 35
-	MessageType_mtVALIDATION              MessageType = 41
-	MessageType_mtGET_OBJECTS             MessageType = 42
-	MessageType_mtVALIDATORLIST           MessageType = 54
-	MessageType_mtSQUELCH                 MessageType = 55
-	MessageType_mtVALIDATORLISTCOLLECTION MessageType = 56
-	MessageType_mtPROOF_PATH_REQ          MessageType = 57
-	MessageType_mtPROOF_PATH_RESPONSE     MessageType = 58
-	MessageType_mtREPLAY_DELTA_REQ        MessageType = 59
-	MessageType_mtREPLAY_DELTA_RESPONSE   MessageType = 60
-	MessageType_mtHAVE_TRANSACTIONS       MessageType = 63
-	MessageType_mtTRANSACTIONS            MessageType = 64
+	MessageType_mtMANIFESTS                 MessageType = 2
+	MessageType_mtPING                      MessageType = 3
+	MessageType_mtCLUSTER                   MessageType = 5
+	MessageType_mtENDPOINTS                 MessageType = 15
+	MessageType_mtTRANSACTION               MessageType = 30
+	MessageType_mtGET_LEDGER                MessageType = 31
+	MessageType_mtLEDGER_DATA               MessageType = 32
+	MessageType_mtPROPOSE_LEDGER            MessageType = 33
+	MessageType_mtSTATUS_CHANGE             MessageType = 34
+	MessageType_mtHAVE_SET                  MessageType = 35
+	MessageType_mtVALIDATION                MessageType = 41
+	MessageType_mtGET_OBJECTS               MessageType = 42
+	MessageType_mtVALIDATOR_LIST            MessageType = 54
+	MessageType_mtSQUELCH                   MessageType = 55
+	MessageType_mtVALIDATOR_LIST_COLLECTION MessageType = 56
+	MessageType_mtPROOF_PATH_REQ            MessageType = 57
+	MessageType_mtPROOF_PATH_RESPONSE       MessageType = 58
+	MessageType_mtREPLAY_DELTA_REQ          MessageType = 59
+	MessageType_mtREPLAY_DELTA_RESPONSE     MessageType = 60
+	MessageType_mtHAVE_TRANSACTIONS         MessageType = 63
+	MessageType_mtTRANSACTIONS              MessageType = 64
 )
 
 // Enum value maps for MessageType.
 var (
 	MessageType_name = map[int32]string{
-		0:  "mtUNKNOWN",
 		2:  "mtMANIFESTS",
 		3:  "mtPING",
 		5:  "mtCLUSTER",
@@ -65,9 +65,9 @@ var (
 		35: "mtHAVE_SET",
 		41: "mtVALIDATION",
 		42: "mtGET_OBJECTS",
-		54: "mtVALIDATORLIST",
+		54: "mtVALIDATOR_LIST",
 		55: "mtSQUELCH",
-		56: "mtVALIDATORLISTCOLLECTION",
+		56: "mtVALIDATOR_LIST_COLLECTION",
 		57: "mtPROOF_PATH_REQ",
 		58: "mtPROOF_PATH_RESPONSE",
 		59: "mtREPLAY_DELTA_REQ",
@@ -76,28 +76,27 @@ var (
 		64: "mtTRANSACTIONS",
 	}
 	MessageType_value = map[string]int32{
-		"mtUNKNOWN":                 0,
-		"mtMANIFESTS":               2,
-		"mtPING":                    3,
-		"mtCLUSTER":                 5,
-		"mtENDPOINTS":               15,
-		"mtTRANSACTION":             30,
-		"mtGET_LEDGER":              31,
-		"mtLEDGER_DATA":             32,
-		"mtPROPOSE_LEDGER":          33,
-		"mtSTATUS_CHANGE":           34,
-		"mtHAVE_SET":                35,
-		"mtVALIDATION":              41,
-		"mtGET_OBJECTS":             42,
-		"mtVALIDATORLIST":           54,
-		"mtSQUELCH":                 55,
-		"mtVALIDATORLISTCOLLECTION": 56,
-		"mtPROOF_PATH_REQ":          57,
-		"mtPROOF_PATH_RESPONSE":     58,
-		"mtREPLAY_DELTA_REQ":        59,
-		"mtREPLAY_DELTA_RESPONSE":   60,
-		"mtHAVE_TRANSACTIONS":       63,
-		"mtTRANSACTIONS":            64,
+		"mtMANIFESTS":                 2,
+		"mtPING":                      3,
+		"mtCLUSTER":                   5,
+		"mtENDPOINTS":                 15,
+		"mtTRANSACTION":               30,
+		"mtGET_LEDGER":                31,
+		"mtLEDGER_DATA":               32,
+		"mtPROPOSE_LEDGER":            33,
+		"mtSTATUS_CHANGE":             34,
+		"mtHAVE_SET":                  35,
+		"mtVALIDATION":                41,
+		"mtGET_OBJECTS":               42,
+		"mtVALIDATOR_LIST":            54,
+		"mtSQUELCH":                   55,
+		"mtVALIDATOR_LIST_COLLECTION": 56,
+		"mtPROOF_PATH_REQ":            57,
+		"mtPROOF_PATH_RESPONSE":       58,
+		"mtREPLAY_DELTA_REQ":          59,
+		"mtREPLAY_DELTA_RESPONSE":     60,
+		"mtHAVE_TRANSACTIONS":         63,
+		"mtTRANSACTIONS":              64,
 	}
 )
 
@@ -123,33 +122,40 @@ func (x MessageType) Number() protoreflect.EnumNumber {
 	return protoreflect.EnumNumber(x)
 }
 
+// Deprecated: Do not use.
+func (x *MessageType) UnmarshalJSON(b []byte) error {
+	num, err := protoimpl.X.UnmarshalJSONEnum(x.Descriptor(), b)
+	if err != nil {
+		return err
+	}
+	*x = MessageType(num)
+	return nil
+}
+
 // Deprecated: Use MessageType.Descriptor instead.
 func (MessageType) EnumDescriptor() ([]byte, []int) {
 	return file_internal_peermanagement_proto_xrpl_proto_rawDescGZIP(), []int{0}
 }
 
-// Transaction status
 type TransactionStatus int32
 
 const (
-	TransactionStatus_tsUNKNOWN         TransactionStatus = 0
-	TransactionStatus_tsNEW             TransactionStatus = 1
-	TransactionStatus_tsCURRENT         TransactionStatus = 2
-	TransactionStatus_tsCOMMITED        TransactionStatus = 3
+	TransactionStatus_tsNEW             TransactionStatus = 1 // origin node did/could not validate
+	TransactionStatus_tsCURRENT         TransactionStatus = 2 // scheduled to go in this ledger
+	TransactionStatus_tsCOMMITTED       TransactionStatus = 3 // in a closed ledger
 	TransactionStatus_tsREJECT_CONFLICT TransactionStatus = 4
 	TransactionStatus_tsREJECT_INVALID  TransactionStatus = 5
 	TransactionStatus_tsREJECT_FUNDS    TransactionStatus = 6
 	TransactionStatus_tsHELD_SEQ        TransactionStatus = 7
-	TransactionStatus_tsHELD_LEDGER     TransactionStatus = 8
+	TransactionStatus_tsHELD_LEDGER     TransactionStatus = 8 // held for future ledger
 )
 
 // Enum value maps for TransactionStatus.
 var (
 	TransactionStatus_name = map[int32]string{
-		0: "tsUNKNOWN",
 		1: "tsNEW",
 		2: "tsCURRENT",
-		3: "tsCOMMITED",
+		3: "tsCOMMITTED",
 		4: "tsREJECT_CONFLICT",
 		5: "tsREJECT_INVALID",
 		6: "tsREJECT_FUNDS",
@@ -157,10 +163,9 @@ var (
 		8: "tsHELD_LEDGER",
 	}
 	TransactionStatus_value = map[string]int32{
-		"tsUNKNOWN":         0,
 		"tsNEW":             1,
 		"tsCURRENT":         2,
-		"tsCOMMITED":        3,
+		"tsCOMMITTED":       3,
 		"tsREJECT_CONFLICT": 4,
 		"tsREJECT_INVALID":  5,
 		"tsREJECT_FUNDS":    6,
@@ -191,27 +196,34 @@ func (x TransactionStatus) Number() protoreflect.EnumNumber {
 	return protoreflect.EnumNumber(x)
 }
 
+// Deprecated: Do not use.
+func (x *TransactionStatus) UnmarshalJSON(b []byte) error {
+	num, err := protoimpl.X.UnmarshalJSONEnum(x.Descriptor(), b)
+	if err != nil {
+		return err
+	}
+	*x = TransactionStatus(num)
+	return nil
+}
+
 // Deprecated: Use TransactionStatus.Descriptor instead.
 func (TransactionStatus) EnumDescriptor() ([]byte, []int) {
 	return file_internal_peermanagement_proto_xrpl_proto_rawDescGZIP(), []int{1}
 }
 
-// Node status
 type NodeStatus int32
 
 const (
-	NodeStatus_nsUNKNOWN    NodeStatus = 0
-	NodeStatus_nsCONNECTING NodeStatus = 1
-	NodeStatus_nsCONNECTED  NodeStatus = 2
-	NodeStatus_nsMONITORING NodeStatus = 3
-	NodeStatus_nsVALIDATING NodeStatus = 4
-	NodeStatus_nsSHUTTING   NodeStatus = 5
+	NodeStatus_nsCONNECTING NodeStatus = 1 // acquiring connections
+	NodeStatus_nsCONNECTED  NodeStatus = 2 // convinced we are connected to the real network
+	NodeStatus_nsMONITORING NodeStatus = 3 // we know what the previous ledger is
+	NodeStatus_nsVALIDATING NodeStatus = 4 // we have the full ledger contents
+	NodeStatus_nsSHUTTING   NodeStatus = 5 // node is shutting down
 )
 
 // Enum value maps for NodeStatus.
 var (
 	NodeStatus_name = map[int32]string{
-		0: "nsUNKNOWN",
 		1: "nsCONNECTING",
 		2: "nsCONNECTED",
 		3: "nsMONITORING",
@@ -219,7 +231,6 @@ var (
 		5: "nsSHUTTING",
 	}
 	NodeStatus_value = map[string]int32{
-		"nsUNKNOWN":    0,
 		"nsCONNECTING": 1,
 		"nsCONNECTED":  2,
 		"nsMONITORING": 3,
@@ -250,33 +261,39 @@ func (x NodeStatus) Number() protoreflect.EnumNumber {
 	return protoreflect.EnumNumber(x)
 }
 
+// Deprecated: Do not use.
+func (x *NodeStatus) UnmarshalJSON(b []byte) error {
+	num, err := protoimpl.X.UnmarshalJSONEnum(x.Descriptor(), b)
+	if err != nil {
+		return err
+	}
+	*x = NodeStatus(num)
+	return nil
+}
+
 // Deprecated: Use NodeStatus.Descriptor instead.
 func (NodeStatus) EnumDescriptor() ([]byte, []int) {
 	return file_internal_peermanagement_proto_xrpl_proto_rawDescGZIP(), []int{2}
 }
 
-// Node events
 type NodeEvent int32
 
 const (
-	NodeEvent_neUNKNOWN         NodeEvent = 0
-	NodeEvent_neCLOSING_LEDGER  NodeEvent = 1
-	NodeEvent_neACCEPTED_LEDGER NodeEvent = 2
-	NodeEvent_neSWITCHED_LEDGER NodeEvent = 3
+	NodeEvent_neCLOSING_LEDGER  NodeEvent = 1 // closing a ledger because its close time has come
+	NodeEvent_neACCEPTED_LEDGER NodeEvent = 2 // accepting a closed ledger, we have finished computing it
+	NodeEvent_neSWITCHED_LEDGER NodeEvent = 3 // changing due to network consensus
 	NodeEvent_neLOST_SYNC       NodeEvent = 4
 )
 
 // Enum value maps for NodeEvent.
 var (
 	NodeEvent_name = map[int32]string{
-		0: "neUNKNOWN",
 		1: "neCLOSING_LEDGER",
 		2: "neACCEPTED_LEDGER",
 		3: "neSWITCHED_LEDGER",
 		4: "neLOST_SYNC",
 	}
 	NodeEvent_value = map[string]int32{
-		"neUNKNOWN":         0,
 		"neCLOSING_LEDGER":  1,
 		"neACCEPTED_LEDGER": 2,
 		"neSWITCHED_LEDGER": 3,
@@ -306,34 +323,40 @@ func (x NodeEvent) Number() protoreflect.EnumNumber {
 	return protoreflect.EnumNumber(x)
 }
 
+// Deprecated: Do not use.
+func (x *NodeEvent) UnmarshalJSON(b []byte) error {
+	num, err := protoimpl.X.UnmarshalJSONEnum(x.Descriptor(), b)
+	if err != nil {
+		return err
+	}
+	*x = NodeEvent(num)
+	return nil
+}
+
 // Deprecated: Use NodeEvent.Descriptor instead.
 func (NodeEvent) EnumDescriptor() ([]byte, []int) {
 	return file_internal_peermanagement_proto_xrpl_proto_rawDescGZIP(), []int{3}
 }
 
-// Transaction set status
 type TxSetStatus int32
 
 const (
-	TxSetStatus_tsUNKNOWN_SET TxSetStatus = 0
-	TxSetStatus_tsHAVE        TxSetStatus = 1
-	TxSetStatus_tsCAN_GET     TxSetStatus = 2
-	TxSetStatus_tsNEED        TxSetStatus = 3
+	TxSetStatus_tsHAVE    TxSetStatus = 1 // We have this set locally
+	TxSetStatus_tsCAN_GET TxSetStatus = 2 // We have a peer with this set
+	TxSetStatus_tsNEED    TxSetStatus = 3 // We need this set and can't get it
 )
 
 // Enum value maps for TxSetStatus.
 var (
 	TxSetStatus_name = map[int32]string{
-		0: "tsUNKNOWN_SET",
 		1: "tsHAVE",
 		2: "tsCAN_GET",
 		3: "tsNEED",
 	}
 	TxSetStatus_value = map[string]int32{
-		"tsUNKNOWN_SET": 0,
-		"tsHAVE":        1,
-		"tsCAN_GET":     2,
-		"tsNEED":        3,
+		"tsHAVE":    1,
+		"tsCAN_GET": 2,
+		"tsNEED":    3,
 	}
 )
 
@@ -359,84 +382,28 @@ func (x TxSetStatus) Number() protoreflect.EnumNumber {
 	return protoreflect.EnumNumber(x)
 }
 
+// Deprecated: Do not use.
+func (x *TxSetStatus) UnmarshalJSON(b []byte) error {
+	num, err := protoimpl.X.UnmarshalJSONEnum(x.Descriptor(), b)
+	if err != nil {
+		return err
+	}
+	*x = TxSetStatus(num)
+	return nil
+}
+
 // Deprecated: Use TxSetStatus.Descriptor instead.
 func (TxSetStatus) EnumDescriptor() ([]byte, []int) {
 	return file_internal_peermanagement_proto_xrpl_proto_rawDescGZIP(), []int{4}
 }
 
-// Object types
-type ObjectType int32
-
-const (
-	ObjectType_otUNKNOWN          ObjectType = 0
-	ObjectType_otLEDGER           ObjectType = 1
-	ObjectType_otTRANSACTION      ObjectType = 2
-	ObjectType_otTRANSACTION_NODE ObjectType = 3
-	ObjectType_otSTATE_NODE       ObjectType = 4
-	ObjectType_otCAS_OBJECT       ObjectType = 5
-	ObjectType_otFETCH_PACK       ObjectType = 6
-	ObjectType_otTRANSACTIONS     ObjectType = 7
-)
-
-// Enum value maps for ObjectType.
-var (
-	ObjectType_name = map[int32]string{
-		0: "otUNKNOWN",
-		1: "otLEDGER",
-		2: "otTRANSACTION",
-		3: "otTRANSACTION_NODE",
-		4: "otSTATE_NODE",
-		5: "otCAS_OBJECT",
-		6: "otFETCH_PACK",
-		7: "otTRANSACTIONS",
-	}
-	ObjectType_value = map[string]int32{
-		"otUNKNOWN":          0,
-		"otLEDGER":           1,
-		"otTRANSACTION":      2,
-		"otTRANSACTION_NODE": 3,
-		"otSTATE_NODE":       4,
-		"otCAS_OBJECT":       5,
-		"otFETCH_PACK":       6,
-		"otTRANSACTIONS":     7,
-	}
-)
-
-func (x ObjectType) Enum() *ObjectType {
-	p := new(ObjectType)
-	*p = x
-	return p
-}
-
-func (x ObjectType) String() string {
-	return protoimpl.X.EnumStringOf(x.Descriptor(), protoreflect.EnumNumber(x))
-}
-
-func (ObjectType) Descriptor() protoreflect.EnumDescriptor {
-	return file_internal_peermanagement_proto_xrpl_proto_enumTypes[5].Descriptor()
-}
-
-func (ObjectType) Type() protoreflect.EnumType {
-	return &file_internal_peermanagement_proto_xrpl_proto_enumTypes[5]
-}
-
-func (x ObjectType) Number() protoreflect.EnumNumber {
-	return protoreflect.EnumNumber(x)
-}
-
-// Deprecated: Use ObjectType.Descriptor instead.
-func (ObjectType) EnumDescriptor() ([]byte, []int) {
-	return file_internal_peermanagement_proto_xrpl_proto_rawDescGZIP(), []int{5}
-}
-
-// Ledger info types
 type TMLedgerInfoType int32
 
 const (
-	TMLedgerInfoType_liBASE         TMLedgerInfoType = 0
-	TMLedgerInfoType_liTX_NODE      TMLedgerInfoType = 1
-	TMLedgerInfoType_liAS_NODE      TMLedgerInfoType = 2
-	TMLedgerInfoType_liTS_CANDIDATE TMLedgerInfoType = 3
+	TMLedgerInfoType_liBASE         TMLedgerInfoType = 0 // basic ledger info
+	TMLedgerInfoType_liTX_NODE      TMLedgerInfoType = 1 // transaction node
+	TMLedgerInfoType_liAS_NODE      TMLedgerInfoType = 2 // account state node
+	TMLedgerInfoType_liTS_CANDIDATE TMLedgerInfoType = 3 // candidate transaction set
 )
 
 // Enum value maps for TMLedgerInfoType.
@@ -466,28 +433,37 @@ func (x TMLedgerInfoType) String() string {
 }
 
 func (TMLedgerInfoType) Descriptor() protoreflect.EnumDescriptor {
-	return file_internal_peermanagement_proto_xrpl_proto_enumTypes[6].Descriptor()
+	return file_internal_peermanagement_proto_xrpl_proto_enumTypes[5].Descriptor()
 }
 
 func (TMLedgerInfoType) Type() protoreflect.EnumType {
-	return &file_internal_peermanagement_proto_xrpl_proto_enumTypes[6]
+	return &file_internal_peermanagement_proto_xrpl_proto_enumTypes[5]
 }
 
 func (x TMLedgerInfoType) Number() protoreflect.EnumNumber {
 	return protoreflect.EnumNumber(x)
 }
 
-// Deprecated: Use TMLedgerInfoType.Descriptor instead.
-func (TMLedgerInfoType) EnumDescriptor() ([]byte, []int) {
-	return file_internal_peermanagement_proto_xrpl_proto_rawDescGZIP(), []int{6}
+// Deprecated: Do not use.
+func (x *TMLedgerInfoType) UnmarshalJSON(b []byte) error {
+	num, err := protoimpl.X.UnmarshalJSONEnum(x.Descriptor(), b)
+	if err != nil {
+		return err
+	}
+	*x = TMLedgerInfoType(num)
+	return nil
 }
 
-// Ledger types
+// Deprecated: Use TMLedgerInfoType.Descriptor instead.
+func (TMLedgerInfoType) EnumDescriptor() ([]byte, []int) {
+	return file_internal_peermanagement_proto_xrpl_proto_rawDescGZIP(), []int{5}
+}
+
 type TMLedgerType int32
 
 const (
 	TMLedgerType_ltACCEPTED TMLedgerType = 0
-	TMLedgerType_ltCURRENT  TMLedgerType = 1
+	TMLedgerType_ltCURRENT  TMLedgerType = 1 // no longer supported
 	TMLedgerType_ltCLOSED   TMLedgerType = 2
 )
 
@@ -516,23 +492,32 @@ func (x TMLedgerType) String() string {
 }
 
 func (TMLedgerType) Descriptor() protoreflect.EnumDescriptor {
-	return file_internal_peermanagement_proto_xrpl_proto_enumTypes[7].Descriptor()
+	return file_internal_peermanagement_proto_xrpl_proto_enumTypes[6].Descriptor()
 }
 
 func (TMLedgerType) Type() protoreflect.EnumType {
-	return &file_internal_peermanagement_proto_xrpl_proto_enumTypes[7]
+	return &file_internal_peermanagement_proto_xrpl_proto_enumTypes[6]
 }
 
 func (x TMLedgerType) Number() protoreflect.EnumNumber {
 	return protoreflect.EnumNumber(x)
 }
 
-// Deprecated: Use TMLedgerType.Descriptor instead.
-func (TMLedgerType) EnumDescriptor() ([]byte, []int) {
-	return file_internal_peermanagement_proto_xrpl_proto_rawDescGZIP(), []int{7}
+// Deprecated: Do not use.
+func (x *TMLedgerType) UnmarshalJSON(b []byte) error {
+	num, err := protoimpl.X.UnmarshalJSONEnum(x.Descriptor(), b)
+	if err != nil {
+		return err
+	}
+	*x = TMLedgerType(num)
+	return nil
 }
 
-// Query type
+// Deprecated: Use TMLedgerType.Descriptor instead.
+func (TMLedgerType) EnumDescriptor() ([]byte, []int) {
+	return file_internal_peermanagement_proto_xrpl_proto_rawDescGZIP(), []int{6}
+}
+
 type TMQueryType int32
 
 const (
@@ -560,42 +545,48 @@ func (x TMQueryType) String() string {
 }
 
 func (TMQueryType) Descriptor() protoreflect.EnumDescriptor {
-	return file_internal_peermanagement_proto_xrpl_proto_enumTypes[8].Descriptor()
+	return file_internal_peermanagement_proto_xrpl_proto_enumTypes[7].Descriptor()
 }
 
 func (TMQueryType) Type() protoreflect.EnumType {
-	return &file_internal_peermanagement_proto_xrpl_proto_enumTypes[8]
+	return &file_internal_peermanagement_proto_xrpl_proto_enumTypes[7]
 }
 
 func (x TMQueryType) Number() protoreflect.EnumNumber {
 	return protoreflect.EnumNumber(x)
 }
 
-// Deprecated: Use TMQueryType.Descriptor instead.
-func (TMQueryType) EnumDescriptor() ([]byte, []int) {
-	return file_internal_peermanagement_proto_xrpl_proto_rawDescGZIP(), []int{8}
+// Deprecated: Do not use.
+func (x *TMQueryType) UnmarshalJSON(b []byte) error {
+	num, err := protoimpl.X.UnmarshalJSONEnum(x.Descriptor(), b)
+	if err != nil {
+		return err
+	}
+	*x = TMQueryType(num)
+	return nil
 }
 
-// Reply errors
+// Deprecated: Use TMQueryType.Descriptor instead.
+func (TMQueryType) EnumDescriptor() ([]byte, []int) {
+	return file_internal_peermanagement_proto_xrpl_proto_rawDescGZIP(), []int{7}
+}
+
 type TMReplyError int32
 
 const (
-	TMReplyError_reNO_ERROR    TMReplyError = 0
-	TMReplyError_reNO_LEDGER   TMReplyError = 1
-	TMReplyError_reNO_NODE     TMReplyError = 2
-	TMReplyError_reBAD_REQUEST TMReplyError = 3
+	TMReplyError_reNO_LEDGER   TMReplyError = 1 // We don't have the ledger you are asking about
+	TMReplyError_reNO_NODE     TMReplyError = 2 // We don't have any of the nodes you are asking for
+	TMReplyError_reBAD_REQUEST TMReplyError = 3 // The request is wrong, e.g. wrong format
 )
 
 // Enum value maps for TMReplyError.
 var (
 	TMReplyError_name = map[int32]string{
-		0: "reNO_ERROR",
 		1: "reNO_LEDGER",
 		2: "reNO_NODE",
 		3: "reBAD_REQUEST",
 	}
 	TMReplyError_value = map[string]int32{
-		"reNO_ERROR":    0,
 		"reNO_LEDGER":   1,
 		"reNO_NODE":     2,
 		"reBAD_REQUEST": 3,
@@ -613,40 +604,46 @@ func (x TMReplyError) String() string {
 }
 
 func (TMReplyError) Descriptor() protoreflect.EnumDescriptor {
-	return file_internal_peermanagement_proto_xrpl_proto_enumTypes[9].Descriptor()
+	return file_internal_peermanagement_proto_xrpl_proto_enumTypes[8].Descriptor()
 }
 
 func (TMReplyError) Type() protoreflect.EnumType {
-	return &file_internal_peermanagement_proto_xrpl_proto_enumTypes[9]
+	return &file_internal_peermanagement_proto_xrpl_proto_enumTypes[8]
 }
 
 func (x TMReplyError) Number() protoreflect.EnumNumber {
 	return protoreflect.EnumNumber(x)
 }
 
-// Deprecated: Use TMReplyError.Descriptor instead.
-func (TMReplyError) EnumDescriptor() ([]byte, []int) {
-	return file_internal_peermanagement_proto_xrpl_proto_rawDescGZIP(), []int{9}
+// Deprecated: Do not use.
+func (x *TMReplyError) UnmarshalJSON(b []byte) error {
+	num, err := protoimpl.X.UnmarshalJSONEnum(x.Descriptor(), b)
+	if err != nil {
+		return err
+	}
+	*x = TMReplyError(num)
+	return nil
 }
 
-// Ledger map types
+// Deprecated: Use TMReplyError.Descriptor instead.
+func (TMReplyError) EnumDescriptor() ([]byte, []int) {
+	return file_internal_peermanagement_proto_xrpl_proto_rawDescGZIP(), []int{8}
+}
+
 type TMLedgerMapType int32
 
 const (
-	TMLedgerMapType_lmUNKNOWN       TMLedgerMapType = 0
-	TMLedgerMapType_lmTRANSACTION   TMLedgerMapType = 1
-	TMLedgerMapType_lmACCOUNT_STATE TMLedgerMapType = 2
+	TMLedgerMapType_lmTRANSACTION   TMLedgerMapType = 1 // transaction map
+	TMLedgerMapType_lmACCOUNT_STATE TMLedgerMapType = 2 // account state map
 )
 
 // Enum value maps for TMLedgerMapType.
 var (
 	TMLedgerMapType_name = map[int32]string{
-		0: "lmUNKNOWN",
 		1: "lmTRANSACTION",
 		2: "lmACCOUNT_STATE",
 	}
 	TMLedgerMapType_value = map[string]int32{
-		"lmUNKNOWN":       0,
 		"lmTRANSACTION":   1,
 		"lmACCOUNT_STATE": 2,
 	}
@@ -663,72 +660,167 @@ func (x TMLedgerMapType) String() string {
 }
 
 func (TMLedgerMapType) Descriptor() protoreflect.EnumDescriptor {
-	return file_internal_peermanagement_proto_xrpl_proto_enumTypes[10].Descriptor()
+	return file_internal_peermanagement_proto_xrpl_proto_enumTypes[9].Descriptor()
 }
 
 func (TMLedgerMapType) Type() protoreflect.EnumType {
-	return &file_internal_peermanagement_proto_xrpl_proto_enumTypes[10]
+	return &file_internal_peermanagement_proto_xrpl_proto_enumTypes[9]
 }
 
 func (x TMLedgerMapType) Number() protoreflect.EnumNumber {
 	return protoreflect.EnumNumber(x)
 }
 
-// Deprecated: Use TMLedgerMapType.Descriptor instead.
-func (TMLedgerMapType) EnumDescriptor() ([]byte, []int) {
-	return file_internal_peermanagement_proto_xrpl_proto_rawDescGZIP(), []int{10}
+// Deprecated: Do not use.
+func (x *TMLedgerMapType) UnmarshalJSON(b []byte) error {
+	num, err := protoimpl.X.UnmarshalJSONEnum(x.Descriptor(), b)
+	if err != nil {
+		return err
+	}
+	*x = TMLedgerMapType(num)
+	return nil
 }
 
-type TMPing_PingType int32
+// Deprecated: Use TMLedgerMapType.Descriptor instead.
+func (TMLedgerMapType) EnumDescriptor() ([]byte, []int) {
+	return file_internal_peermanagement_proto_xrpl_proto_rawDescGZIP(), []int{9}
+}
+
+type TMGetObjectByHash_ObjectType int32
 
 const (
-	TMPing_ptPING TMPing_PingType = 0
-	TMPing_ptPONG TMPing_PingType = 1
+	TMGetObjectByHash_otUNKNOWN          TMGetObjectByHash_ObjectType = 0
+	TMGetObjectByHash_otLEDGER           TMGetObjectByHash_ObjectType = 1
+	TMGetObjectByHash_otTRANSACTION      TMGetObjectByHash_ObjectType = 2
+	TMGetObjectByHash_otTRANSACTION_NODE TMGetObjectByHash_ObjectType = 3
+	TMGetObjectByHash_otSTATE_NODE       TMGetObjectByHash_ObjectType = 4
+	TMGetObjectByHash_otCAS_OBJECT       TMGetObjectByHash_ObjectType = 5
+	TMGetObjectByHash_otFETCH_PACK       TMGetObjectByHash_ObjectType = 6
+	TMGetObjectByHash_otTRANSACTIONS     TMGetObjectByHash_ObjectType = 7
 )
 
-// Enum value maps for TMPing_PingType.
+// Enum value maps for TMGetObjectByHash_ObjectType.
 var (
-	TMPing_PingType_name = map[int32]string{
+	TMGetObjectByHash_ObjectType_name = map[int32]string{
+		0: "otUNKNOWN",
+		1: "otLEDGER",
+		2: "otTRANSACTION",
+		3: "otTRANSACTION_NODE",
+		4: "otSTATE_NODE",
+		5: "otCAS_OBJECT",
+		6: "otFETCH_PACK",
+		7: "otTRANSACTIONS",
+	}
+	TMGetObjectByHash_ObjectType_value = map[string]int32{
+		"otUNKNOWN":          0,
+		"otLEDGER":           1,
+		"otTRANSACTION":      2,
+		"otTRANSACTION_NODE": 3,
+		"otSTATE_NODE":       4,
+		"otCAS_OBJECT":       5,
+		"otFETCH_PACK":       6,
+		"otTRANSACTIONS":     7,
+	}
+)
+
+func (x TMGetObjectByHash_ObjectType) Enum() *TMGetObjectByHash_ObjectType {
+	p := new(TMGetObjectByHash_ObjectType)
+	*p = x
+	return p
+}
+
+func (x TMGetObjectByHash_ObjectType) String() string {
+	return protoimpl.X.EnumStringOf(x.Descriptor(), protoreflect.EnumNumber(x))
+}
+
+func (TMGetObjectByHash_ObjectType) Descriptor() protoreflect.EnumDescriptor {
+	return file_internal_peermanagement_proto_xrpl_proto_enumTypes[10].Descriptor()
+}
+
+func (TMGetObjectByHash_ObjectType) Type() protoreflect.EnumType {
+	return &file_internal_peermanagement_proto_xrpl_proto_enumTypes[10]
+}
+
+func (x TMGetObjectByHash_ObjectType) Number() protoreflect.EnumNumber {
+	return protoreflect.EnumNumber(x)
+}
+
+// Deprecated: Do not use.
+func (x *TMGetObjectByHash_ObjectType) UnmarshalJSON(b []byte) error {
+	num, err := protoimpl.X.UnmarshalJSONEnum(x.Descriptor(), b)
+	if err != nil {
+		return err
+	}
+	*x = TMGetObjectByHash_ObjectType(num)
+	return nil
+}
+
+// Deprecated: Use TMGetObjectByHash_ObjectType.Descriptor instead.
+func (TMGetObjectByHash_ObjectType) EnumDescriptor() ([]byte, []int) {
+	return file_internal_peermanagement_proto_xrpl_proto_rawDescGZIP(), []int{18, 0}
+}
+
+type TMPingPingType int32
+
+const (
+	TMPing_ptPING TMPingPingType = 0 // we want a reply
+	TMPing_ptPONG TMPingPingType = 1 // this is a reply
+)
+
+// Enum value maps for TMPingPingType.
+var (
+	TMPingPingType_name = map[int32]string{
 		0: "ptPING",
 		1: "ptPONG",
 	}
-	TMPing_PingType_value = map[string]int32{
+	TMPingPingType_value = map[string]int32{
 		"ptPING": 0,
 		"ptPONG": 1,
 	}
 )
 
-func (x TMPing_PingType) Enum() *TMPing_PingType {
-	p := new(TMPing_PingType)
+func (x TMPingPingType) Enum() *TMPingPingType {
+	p := new(TMPingPingType)
 	*p = x
 	return p
 }
 
-func (x TMPing_PingType) String() string {
+func (x TMPingPingType) String() string {
 	return protoimpl.X.EnumStringOf(x.Descriptor(), protoreflect.EnumNumber(x))
 }
 
-func (TMPing_PingType) Descriptor() protoreflect.EnumDescriptor {
+func (TMPingPingType) Descriptor() protoreflect.EnumDescriptor {
 	return file_internal_peermanagement_proto_xrpl_proto_enumTypes[11].Descriptor()
 }
 
-func (TMPing_PingType) Type() protoreflect.EnumType {
+func (TMPingPingType) Type() protoreflect.EnumType {
 	return &file_internal_peermanagement_proto_xrpl_proto_enumTypes[11]
 }
 
-func (x TMPing_PingType) Number() protoreflect.EnumNumber {
+func (x TMPingPingType) Number() protoreflect.EnumNumber {
 	return protoreflect.EnumNumber(x)
 }
 
-// Deprecated: Use TMPing_PingType.Descriptor instead.
-func (TMPing_PingType) EnumDescriptor() ([]byte, []int) {
-	return file_internal_peermanagement_proto_xrpl_proto_rawDescGZIP(), []int{21, 0}
+// Deprecated: Do not use.
+func (x *TMPingPingType) UnmarshalJSON(b []byte) error {
+	num, err := protoimpl.X.UnmarshalJSONEnum(x.Descriptor(), b)
+	if err != nil {
+		return err
+	}
+	*x = TMPingPingType(num)
+	return nil
 }
 
-// Provides the current ephemeral key for a validator
+// Deprecated: Use TMPingPingType.Descriptor instead.
+func (TMPingPingType) EnumDescriptor() ([]byte, []int) {
+	return file_internal_peermanagement_proto_xrpl_proto_rawDescGZIP(), []int{22, 0}
+}
+
+// Provides the current ephemeral key for a validator.
 type TMManifest struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Stobject      []byte                 `protobuf:"bytes,1,opt,name=stobject,proto3,oneof" json:"stobject,omitempty"`
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// A Manifest object in the XRPL serialization format.
+	Stobject      []byte `protobuf:"bytes,1,req,name=stobject" json:"stobject,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -772,9 +864,11 @@ func (x *TMManifest) GetStobject() []byte {
 
 type TMManifests struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
-	List  []*TMManifest          `protobuf:"bytes,1,rep,name=list,proto3" json:"list,omitempty"`
+	List  []*TMManifest          `protobuf:"bytes,1,rep,name=list" json:"list,omitempty"`
+	// The manifests sent when a peer first connects to another peer are `history`.
+	//
 	// Deprecated: Marked as deprecated in internal/peermanagement/proto/xrpl.proto.
-	History       bool `protobuf:"varint,2,opt,name=history,proto3" json:"history,omitempty"`
+	History       *bool `protobuf:"varint,2,opt,name=history" json:"history,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -818,20 +912,20 @@ func (x *TMManifests) GetList() []*TMManifest {
 
 // Deprecated: Marked as deprecated in internal/peermanagement/proto/xrpl.proto.
 func (x *TMManifests) GetHistory() bool {
-	if x != nil {
-		return x.History
+	if x != nil && x.History != nil {
+		return *x.History
 	}
 	return false
 }
 
-// Cluster node status
+// The status of a node in our cluster
 type TMClusterNode struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
-	PublicKey     *string                `protobuf:"bytes,1,opt,name=public_key,json=publicKey,proto3,oneof" json:"public_key,omitempty"`
-	ReportTime    *uint32                `protobuf:"varint,2,opt,name=report_time,json=reportTime,proto3,oneof" json:"report_time,omitempty"`
-	NodeLoad      *uint32                `protobuf:"varint,3,opt,name=node_load,json=nodeLoad,proto3,oneof" json:"node_load,omitempty"`
-	NodeName      string                 `protobuf:"bytes,4,opt,name=node_name,json=nodeName,proto3" json:"node_name,omitempty"`
-	Address       string                 `protobuf:"bytes,5,opt,name=address,proto3" json:"address,omitempty"`
+	PublicKey     *string                `protobuf:"bytes,1,req,name=publicKey" json:"publicKey,omitempty"`
+	ReportTime    *uint32                `protobuf:"varint,2,req,name=reportTime" json:"reportTime,omitempty"`
+	NodeLoad      *uint32                `protobuf:"varint,3,req,name=nodeLoad" json:"nodeLoad,omitempty"`
+	NodeName      *string                `protobuf:"bytes,4,opt,name=nodeName" json:"nodeName,omitempty"`
+	Address       *string                `protobuf:"bytes,5,opt,name=address" json:"address,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -888,25 +982,25 @@ func (x *TMClusterNode) GetNodeLoad() uint32 {
 }
 
 func (x *TMClusterNode) GetNodeName() string {
-	if x != nil {
-		return x.NodeName
+	if x != nil && x.NodeName != nil {
+		return *x.NodeName
 	}
 	return ""
 }
 
 func (x *TMClusterNode) GetAddress() string {
-	if x != nil {
-		return x.Address
+	if x != nil && x.Address != nil {
+		return *x.Address
 	}
 	return ""
 }
 
-// Load sources
+// Sources that are placing load on the server
 type TMLoadSource struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
-	Name          *string                `protobuf:"bytes,1,opt,name=name,proto3,oneof" json:"name,omitempty"`
-	Cost          *uint32                `protobuf:"varint,2,opt,name=cost,proto3,oneof" json:"cost,omitempty"`
-	Count         uint32                 `protobuf:"varint,3,opt,name=count,proto3" json:"count,omitempty"`
+	Name          *string                `protobuf:"bytes,1,req,name=name" json:"name,omitempty"`
+	Cost          *uint32                `protobuf:"varint,2,req,name=cost" json:"cost,omitempty"`
+	Count         *uint32                `protobuf:"varint,3,opt,name=count" json:"count,omitempty"` // number of connections
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -956,17 +1050,17 @@ func (x *TMLoadSource) GetCost() uint32 {
 }
 
 func (x *TMLoadSource) GetCount() uint32 {
-	if x != nil {
-		return x.Count
+	if x != nil && x.Count != nil {
+		return *x.Count
 	}
 	return 0
 }
 
-// Cluster status
+// The status of all nodes in the cluster
 type TMCluster struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
-	ClusterNodes  []*TMClusterNode       `protobuf:"bytes,1,rep,name=cluster_nodes,json=clusterNodes,proto3" json:"cluster_nodes,omitempty"`
-	LoadSources   []*TMLoadSource        `protobuf:"bytes,2,rep,name=load_sources,json=loadSources,proto3" json:"load_sources,omitempty"`
+	ClusterNodes  []*TMClusterNode       `protobuf:"bytes,1,rep,name=clusterNodes" json:"clusterNodes,omitempty"`
+	LoadSources   []*TMLoadSource        `protobuf:"bytes,2,rep,name=loadSources" json:"loadSources,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -1015,17 +1109,64 @@ func (x *TMCluster) GetLoadSources() []*TMLoadSource {
 	return nil
 }
 
-// Public key
+// Node public key
+type TMLink struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// Deprecated: Marked as deprecated in internal/peermanagement/proto/xrpl.proto.
+	NodePubKey    []byte `protobuf:"bytes,1,req,name=nodePubKey" json:"nodePubKey,omitempty"` // node public key
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *TMLink) Reset() {
+	*x = TMLink{}
+	mi := &file_internal_peermanagement_proto_xrpl_proto_msgTypes[5]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *TMLink) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*TMLink) ProtoMessage() {}
+
+func (x *TMLink) ProtoReflect() protoreflect.Message {
+	mi := &file_internal_peermanagement_proto_xrpl_proto_msgTypes[5]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use TMLink.ProtoReflect.Descriptor instead.
+func (*TMLink) Descriptor() ([]byte, []int) {
+	return file_internal_peermanagement_proto_xrpl_proto_rawDescGZIP(), []int{5}
+}
+
+// Deprecated: Marked as deprecated in internal/peermanagement/proto/xrpl.proto.
+func (x *TMLink) GetNodePubKey() []byte {
+	if x != nil {
+		return x.NodePubKey
+	}
+	return nil
+}
+
+// Peer public key
 type TMPublicKey struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
-	PublicKey     []byte                 `protobuf:"bytes,1,opt,name=public_key,json=publicKey,proto3,oneof" json:"public_key,omitempty"`
+	PublicKey     []byte                 `protobuf:"bytes,1,req,name=publicKey" json:"publicKey,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
 
 func (x *TMPublicKey) Reset() {
 	*x = TMPublicKey{}
-	mi := &file_internal_peermanagement_proto_xrpl_proto_msgTypes[5]
+	mi := &file_internal_peermanagement_proto_xrpl_proto_msgTypes[6]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1037,7 +1178,7 @@ func (x *TMPublicKey) String() string {
 func (*TMPublicKey) ProtoMessage() {}
 
 func (x *TMPublicKey) ProtoReflect() protoreflect.Message {
-	mi := &file_internal_peermanagement_proto_xrpl_proto_msgTypes[5]
+	mi := &file_internal_peermanagement_proto_xrpl_proto_msgTypes[6]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1050,7 +1191,7 @@ func (x *TMPublicKey) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use TMPublicKey.ProtoReflect.Descriptor instead.
 func (*TMPublicKey) Descriptor() ([]byte, []int) {
-	return file_internal_peermanagement_proto_xrpl_proto_rawDescGZIP(), []int{5}
+	return file_internal_peermanagement_proto_xrpl_proto_rawDescGZIP(), []int{6}
 }
 
 func (x *TMPublicKey) GetPublicKey() []byte {
@@ -1062,17 +1203,17 @@ func (x *TMPublicKey) GetPublicKey() []byte {
 
 type TMTransaction struct {
 	state            protoimpl.MessageState `protogen:"open.v1"`
-	RawTransaction   []byte                 `protobuf:"bytes,1,opt,name=raw_transaction,json=rawTransaction,proto3,oneof" json:"raw_transaction,omitempty"`
-	Status           *TransactionStatus     `protobuf:"varint,2,opt,name=status,proto3,enum=protocol.TransactionStatus,oneof" json:"status,omitempty"`
-	ReceiveTimestamp uint64                 `protobuf:"varint,3,opt,name=receive_timestamp,json=receiveTimestamp,proto3" json:"receive_timestamp,omitempty"`
-	Deferred         bool                   `protobuf:"varint,4,opt,name=deferred,proto3" json:"deferred,omitempty"`
+	RawTransaction   []byte                 `protobuf:"bytes,1,req,name=rawTransaction" json:"rawTransaction,omitempty"`
+	Status           *TransactionStatus     `protobuf:"varint,2,req,name=status,enum=protocol.TransactionStatus" json:"status,omitempty"`
+	ReceiveTimestamp *uint64                `protobuf:"varint,3,opt,name=receiveTimestamp" json:"receiveTimestamp,omitempty"`
+	Deferred         *bool                  `protobuf:"varint,4,opt,name=deferred" json:"deferred,omitempty"` // not applied to open ledger
 	unknownFields    protoimpl.UnknownFields
 	sizeCache        protoimpl.SizeCache
 }
 
 func (x *TMTransaction) Reset() {
 	*x = TMTransaction{}
-	mi := &file_internal_peermanagement_proto_xrpl_proto_msgTypes[6]
+	mi := &file_internal_peermanagement_proto_xrpl_proto_msgTypes[7]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1084,7 +1225,7 @@ func (x *TMTransaction) String() string {
 func (*TMTransaction) ProtoMessage() {}
 
 func (x *TMTransaction) ProtoReflect() protoreflect.Message {
-	mi := &file_internal_peermanagement_proto_xrpl_proto_msgTypes[6]
+	mi := &file_internal_peermanagement_proto_xrpl_proto_msgTypes[7]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1097,7 +1238,7 @@ func (x *TMTransaction) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use TMTransaction.ProtoReflect.Descriptor instead.
 func (*TMTransaction) Descriptor() ([]byte, []int) {
-	return file_internal_peermanagement_proto_xrpl_proto_rawDescGZIP(), []int{6}
+	return file_internal_peermanagement_proto_xrpl_proto_rawDescGZIP(), []int{7}
 }
 
 func (x *TMTransaction) GetRawTransaction() []byte {
@@ -1111,33 +1252,33 @@ func (x *TMTransaction) GetStatus() TransactionStatus {
 	if x != nil && x.Status != nil {
 		return *x.Status
 	}
-	return TransactionStatus_tsUNKNOWN
+	return TransactionStatus_tsNEW
 }
 
 func (x *TMTransaction) GetReceiveTimestamp() uint64 {
-	if x != nil {
-		return x.ReceiveTimestamp
+	if x != nil && x.ReceiveTimestamp != nil {
+		return *x.ReceiveTimestamp
 	}
 	return 0
 }
 
 func (x *TMTransaction) GetDeferred() bool {
-	if x != nil {
-		return x.Deferred
+	if x != nil && x.Deferred != nil {
+		return *x.Deferred
 	}
 	return false
 }
 
 type TMTransactions struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
-	Transactions  []*TMTransaction       `protobuf:"bytes,1,rep,name=transactions,proto3" json:"transactions,omitempty"`
+	Transactions  []*TMTransaction       `protobuf:"bytes,1,rep,name=transactions" json:"transactions,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
 
 func (x *TMTransactions) Reset() {
 	*x = TMTransactions{}
-	mi := &file_internal_peermanagement_proto_xrpl_proto_msgTypes[7]
+	mi := &file_internal_peermanagement_proto_xrpl_proto_msgTypes[8]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1149,7 +1290,7 @@ func (x *TMTransactions) String() string {
 func (*TMTransactions) ProtoMessage() {}
 
 func (x *TMTransactions) ProtoReflect() protoreflect.Message {
-	mi := &file_internal_peermanagement_proto_xrpl_proto_msgTypes[7]
+	mi := &file_internal_peermanagement_proto_xrpl_proto_msgTypes[8]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1162,7 +1303,7 @@ func (x *TMTransactions) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use TMTransactions.ProtoReflect.Descriptor instead.
 func (*TMTransactions) Descriptor() ([]byte, []int) {
-	return file_internal_peermanagement_proto_xrpl_proto_rawDescGZIP(), []int{7}
+	return file_internal_peermanagement_proto_xrpl_proto_rawDescGZIP(), []int{8}
 }
 
 func (x *TMTransactions) GetTransactions() []*TMTransaction {
@@ -1174,21 +1315,21 @@ func (x *TMTransactions) GetTransactions() []*TMTransaction {
 
 type TMStatusChange struct {
 	state              protoimpl.MessageState `protogen:"open.v1"`
-	NewStatus          NodeStatus             `protobuf:"varint,1,opt,name=new_status,json=newStatus,proto3,enum=protocol.NodeStatus" json:"new_status,omitempty"`
-	NewEvent           NodeEvent              `protobuf:"varint,2,opt,name=new_event,json=newEvent,proto3,enum=protocol.NodeEvent" json:"new_event,omitempty"`
-	LedgerSeq          uint32                 `protobuf:"varint,3,opt,name=ledger_seq,json=ledgerSeq,proto3" json:"ledger_seq,omitempty"`
-	LedgerHash         []byte                 `protobuf:"bytes,4,opt,name=ledger_hash,json=ledgerHash,proto3" json:"ledger_hash,omitempty"`
-	LedgerHashPrevious []byte                 `protobuf:"bytes,5,opt,name=ledger_hash_previous,json=ledgerHashPrevious,proto3" json:"ledger_hash_previous,omitempty"`
-	NetworkTime        uint64                 `protobuf:"varint,6,opt,name=network_time,json=networkTime,proto3" json:"network_time,omitempty"`
-	FirstSeq           *uint32                `protobuf:"varint,7,opt,name=first_seq,json=firstSeq,proto3,oneof" json:"first_seq,omitempty"`
-	LastSeq            *uint32                `protobuf:"varint,8,opt,name=last_seq,json=lastSeq,proto3,oneof" json:"last_seq,omitempty"`
+	NewStatus          *NodeStatus            `protobuf:"varint,1,opt,name=newStatus,enum=protocol.NodeStatus" json:"newStatus,omitempty"`
+	NewEvent           *NodeEvent             `protobuf:"varint,2,opt,name=newEvent,enum=protocol.NodeEvent" json:"newEvent,omitempty"`
+	LedgerSeq          *uint32                `protobuf:"varint,3,opt,name=ledgerSeq" json:"ledgerSeq,omitempty"`
+	LedgerHash         []byte                 `protobuf:"bytes,4,opt,name=ledgerHash" json:"ledgerHash,omitempty"`
+	LedgerHashPrevious []byte                 `protobuf:"bytes,5,opt,name=ledgerHashPrevious" json:"ledgerHashPrevious,omitempty"`
+	NetworkTime        *uint64                `protobuf:"varint,6,opt,name=networkTime" json:"networkTime,omitempty"`
+	FirstSeq           *uint32                `protobuf:"varint,7,opt,name=firstSeq" json:"firstSeq,omitempty"`
+	LastSeq            *uint32                `protobuf:"varint,8,opt,name=lastSeq" json:"lastSeq,omitempty"`
 	unknownFields      protoimpl.UnknownFields
 	sizeCache          protoimpl.SizeCache
 }
 
 func (x *TMStatusChange) Reset() {
 	*x = TMStatusChange{}
-	mi := &file_internal_peermanagement_proto_xrpl_proto_msgTypes[8]
+	mi := &file_internal_peermanagement_proto_xrpl_proto_msgTypes[9]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1200,7 +1341,7 @@ func (x *TMStatusChange) String() string {
 func (*TMStatusChange) ProtoMessage() {}
 
 func (x *TMStatusChange) ProtoReflect() protoreflect.Message {
-	mi := &file_internal_peermanagement_proto_xrpl_proto_msgTypes[8]
+	mi := &file_internal_peermanagement_proto_xrpl_proto_msgTypes[9]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1213,26 +1354,26 @@ func (x *TMStatusChange) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use TMStatusChange.ProtoReflect.Descriptor instead.
 func (*TMStatusChange) Descriptor() ([]byte, []int) {
-	return file_internal_peermanagement_proto_xrpl_proto_rawDescGZIP(), []int{8}
+	return file_internal_peermanagement_proto_xrpl_proto_rawDescGZIP(), []int{9}
 }
 
 func (x *TMStatusChange) GetNewStatus() NodeStatus {
-	if x != nil {
-		return x.NewStatus
+	if x != nil && x.NewStatus != nil {
+		return *x.NewStatus
 	}
-	return NodeStatus_nsUNKNOWN
+	return NodeStatus_nsCONNECTING
 }
 
 func (x *TMStatusChange) GetNewEvent() NodeEvent {
-	if x != nil {
-		return x.NewEvent
+	if x != nil && x.NewEvent != nil {
+		return *x.NewEvent
 	}
-	return NodeEvent_neUNKNOWN
+	return NodeEvent_neCLOSING_LEDGER
 }
 
 func (x *TMStatusChange) GetLedgerSeq() uint32 {
-	if x != nil {
-		return x.LedgerSeq
+	if x != nil && x.LedgerSeq != nil {
+		return *x.LedgerSeq
 	}
 	return 0
 }
@@ -1252,8 +1393,8 @@ func (x *TMStatusChange) GetLedgerHashPrevious() []byte {
 }
 
 func (x *TMStatusChange) GetNetworkTime() uint64 {
-	if x != nil {
-		return x.NetworkTime
+	if x != nil && x.NetworkTime != nil {
+		return *x.NetworkTime
 	}
 	return 0
 }
@@ -1272,28 +1413,32 @@ func (x *TMStatusChange) GetLastSeq() uint32 {
 	return 0
 }
 
-// Ledger proposal
+// Announce to the network our position on a closing ledger
 type TMProposeSet struct {
-	state          protoimpl.MessageState `protogen:"open.v1"`
-	ProposeSeq     *uint32                `protobuf:"varint,1,opt,name=propose_seq,json=proposeSeq,proto3,oneof" json:"propose_seq,omitempty"`
-	CurrentTxHash  []byte                 `protobuf:"bytes,2,opt,name=current_tx_hash,json=currentTxHash,proto3,oneof" json:"current_tx_hash,omitempty"`
-	NodePubKey     []byte                 `protobuf:"bytes,3,opt,name=node_pub_key,json=nodePubKey,proto3,oneof" json:"node_pub_key,omitempty"`
-	CloseTime      *uint32                `protobuf:"varint,4,opt,name=close_time,json=closeTime,proto3,oneof" json:"close_time,omitempty"`
-	Signature      []byte                 `protobuf:"bytes,5,opt,name=signature,proto3,oneof" json:"signature,omitempty"`
-	PreviousLedger []byte                 `protobuf:"bytes,6,opt,name=previous_ledger,json=previousLedger,proto3,oneof" json:"previous_ledger,omitempty"`
+	state               protoimpl.MessageState `protogen:"open.v1"`
+	ProposeSeq          *uint32                `protobuf:"varint,1,req,name=proposeSeq" json:"proposeSeq,omitempty"`
+	CurrentTxHash       []byte                 `protobuf:"bytes,2,req,name=currentTxHash" json:"currentTxHash,omitempty"` // the hash of the ledger we are proposing
+	NodePubKey          []byte                 `protobuf:"bytes,3,req,name=nodePubKey" json:"nodePubKey,omitempty"`
+	CloseTime           *uint32                `protobuf:"varint,4,req,name=closeTime" json:"closeTime,omitempty"`
+	Signature           []byte                 `protobuf:"bytes,5,req,name=signature" json:"signature,omitempty"` // signature of above fields
+	Previousledger      []byte                 `protobuf:"bytes,6,req,name=previousledger" json:"previousledger,omitempty"`
+	AddedTransactions   [][]byte               `protobuf:"bytes,10,rep,name=addedTransactions" json:"addedTransactions,omitempty"`     // not required if number is large
+	RemovedTransactions [][]byte               `protobuf:"bytes,11,rep,name=removedTransactions" json:"removedTransactions,omitempty"` // not required if number is large
+	// node vouches signature is correct
+	//
 	// Deprecated: Marked as deprecated in internal/peermanagement/proto/xrpl.proto.
-	CheckedSignature    bool     `protobuf:"varint,7,opt,name=checked_signature,json=checkedSignature,proto3" json:"checked_signature,omitempty"`
-	AddedTransactions   [][]byte `protobuf:"bytes,10,rep,name=added_transactions,json=addedTransactions,proto3" json:"added_transactions,omitempty"`
-	RemovedTransactions [][]byte `protobuf:"bytes,11,rep,name=removed_transactions,json=removedTransactions,proto3" json:"removed_transactions,omitempty"`
+	CheckedSignature *bool `protobuf:"varint,7,opt,name=checkedSignature" json:"checkedSignature,omitempty"`
+	// Number of hops traveled
+	//
 	// Deprecated: Marked as deprecated in internal/peermanagement/proto/xrpl.proto.
-	Hops          uint32 `protobuf:"varint,12,opt,name=hops,proto3" json:"hops,omitempty"`
+	Hops          *uint32 `protobuf:"varint,12,opt,name=hops" json:"hops,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
 
 func (x *TMProposeSet) Reset() {
 	*x = TMProposeSet{}
-	mi := &file_internal_peermanagement_proto_xrpl_proto_msgTypes[9]
+	mi := &file_internal_peermanagement_proto_xrpl_proto_msgTypes[10]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1305,7 +1450,7 @@ func (x *TMProposeSet) String() string {
 func (*TMProposeSet) ProtoMessage() {}
 
 func (x *TMProposeSet) ProtoReflect() protoreflect.Message {
-	mi := &file_internal_peermanagement_proto_xrpl_proto_msgTypes[9]
+	mi := &file_internal_peermanagement_proto_xrpl_proto_msgTypes[10]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1318,7 +1463,7 @@ func (x *TMProposeSet) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use TMProposeSet.ProtoReflect.Descriptor instead.
 func (*TMProposeSet) Descriptor() ([]byte, []int) {
-	return file_internal_peermanagement_proto_xrpl_proto_rawDescGZIP(), []int{9}
+	return file_internal_peermanagement_proto_xrpl_proto_rawDescGZIP(), []int{10}
 }
 
 func (x *TMProposeSet) GetProposeSeq() uint32 {
@@ -1356,19 +1501,11 @@ func (x *TMProposeSet) GetSignature() []byte {
 	return nil
 }
 
-func (x *TMProposeSet) GetPreviousLedger() []byte {
+func (x *TMProposeSet) GetPreviousledger() []byte {
 	if x != nil {
-		return x.PreviousLedger
+		return x.Previousledger
 	}
 	return nil
-}
-
-// Deprecated: Marked as deprecated in internal/peermanagement/proto/xrpl.proto.
-func (x *TMProposeSet) GetCheckedSignature() bool {
-	if x != nil {
-		return x.CheckedSignature
-	}
-	return false
 }
 
 func (x *TMProposeSet) GetAddedTransactions() [][]byte {
@@ -1386,24 +1523,32 @@ func (x *TMProposeSet) GetRemovedTransactions() [][]byte {
 }
 
 // Deprecated: Marked as deprecated in internal/peermanagement/proto/xrpl.proto.
+func (x *TMProposeSet) GetCheckedSignature() bool {
+	if x != nil && x.CheckedSignature != nil {
+		return *x.CheckedSignature
+	}
+	return false
+}
+
+// Deprecated: Marked as deprecated in internal/peermanagement/proto/xrpl.proto.
 func (x *TMProposeSet) GetHops() uint32 {
-	if x != nil {
-		return x.Hops
+	if x != nil && x.Hops != nil {
+		return *x.Hops
 	}
 	return 0
 }
 
 type TMHaveTransactionSet struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
-	Status        *TxSetStatus           `protobuf:"varint,1,opt,name=status,proto3,enum=protocol.TxSetStatus,oneof" json:"status,omitempty"`
-	Hash          []byte                 `protobuf:"bytes,2,opt,name=hash,proto3,oneof" json:"hash,omitempty"`
+	Status        *TxSetStatus           `protobuf:"varint,1,req,name=status,enum=protocol.TxSetStatus" json:"status,omitempty"`
+	Hash          []byte                 `protobuf:"bytes,2,req,name=hash" json:"hash,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
 
 func (x *TMHaveTransactionSet) Reset() {
 	*x = TMHaveTransactionSet{}
-	mi := &file_internal_peermanagement_proto_xrpl_proto_msgTypes[10]
+	mi := &file_internal_peermanagement_proto_xrpl_proto_msgTypes[11]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1415,7 +1560,7 @@ func (x *TMHaveTransactionSet) String() string {
 func (*TMHaveTransactionSet) ProtoMessage() {}
 
 func (x *TMHaveTransactionSet) ProtoReflect() protoreflect.Message {
-	mi := &file_internal_peermanagement_proto_xrpl_proto_msgTypes[10]
+	mi := &file_internal_peermanagement_proto_xrpl_proto_msgTypes[11]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1428,14 +1573,14 @@ func (x *TMHaveTransactionSet) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use TMHaveTransactionSet.ProtoReflect.Descriptor instead.
 func (*TMHaveTransactionSet) Descriptor() ([]byte, []int) {
-	return file_internal_peermanagement_proto_xrpl_proto_rawDescGZIP(), []int{10}
+	return file_internal_peermanagement_proto_xrpl_proto_rawDescGZIP(), []int{11}
 }
 
 func (x *TMHaveTransactionSet) GetStatus() TxSetStatus {
 	if x != nil && x.Status != nil {
 		return *x.Status
 	}
-	return TxSetStatus_tsUNKNOWN_SET
+	return TxSetStatus_tsHAVE
 }
 
 func (x *TMHaveTransactionSet) GetHash() []byte {
@@ -1445,20 +1590,20 @@ func (x *TMHaveTransactionSet) GetHash() []byte {
 	return nil
 }
 
-// Validator list
+// Validator list (UNL)
 type TMValidatorList struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
-	Manifest      []byte                 `protobuf:"bytes,1,opt,name=manifest,proto3,oneof" json:"manifest,omitempty"`
-	Blob          []byte                 `protobuf:"bytes,2,opt,name=blob,proto3,oneof" json:"blob,omitempty"`
-	Signature     []byte                 `protobuf:"bytes,3,opt,name=signature,proto3,oneof" json:"signature,omitempty"`
-	Version       *uint32                `protobuf:"varint,4,opt,name=version,proto3,oneof" json:"version,omitempty"`
+	Manifest      []byte                 `protobuf:"bytes,1,req,name=manifest" json:"manifest,omitempty"`
+	Blob          []byte                 `protobuf:"bytes,2,req,name=blob" json:"blob,omitempty"`
+	Signature     []byte                 `protobuf:"bytes,3,req,name=signature" json:"signature,omitempty"`
+	Version       *uint32                `protobuf:"varint,4,req,name=version" json:"version,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
 
 func (x *TMValidatorList) Reset() {
 	*x = TMValidatorList{}
-	mi := &file_internal_peermanagement_proto_xrpl_proto_msgTypes[11]
+	mi := &file_internal_peermanagement_proto_xrpl_proto_msgTypes[12]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1470,7 +1615,7 @@ func (x *TMValidatorList) String() string {
 func (*TMValidatorList) ProtoMessage() {}
 
 func (x *TMValidatorList) ProtoReflect() protoreflect.Message {
-	mi := &file_internal_peermanagement_proto_xrpl_proto_msgTypes[11]
+	mi := &file_internal_peermanagement_proto_xrpl_proto_msgTypes[12]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1483,7 +1628,7 @@ func (x *TMValidatorList) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use TMValidatorList.ProtoReflect.Descriptor instead.
 func (*TMValidatorList) Descriptor() ([]byte, []int) {
-	return file_internal_peermanagement_proto_xrpl_proto_rawDescGZIP(), []int{11}
+	return file_internal_peermanagement_proto_xrpl_proto_rawDescGZIP(), []int{12}
 }
 
 func (x *TMValidatorList) GetManifest() []byte {
@@ -1514,19 +1659,19 @@ func (x *TMValidatorList) GetVersion() uint32 {
 	return 0
 }
 
-// Validator list v2
+// Validator List v2
 type ValidatorBlobInfo struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
-	Manifest      []byte                 `protobuf:"bytes,1,opt,name=manifest,proto3" json:"manifest,omitempty"`
-	Blob          []byte                 `protobuf:"bytes,2,opt,name=blob,proto3,oneof" json:"blob,omitempty"`
-	Signature     []byte                 `protobuf:"bytes,3,opt,name=signature,proto3,oneof" json:"signature,omitempty"`
+	Manifest      []byte                 `protobuf:"bytes,1,opt,name=manifest" json:"manifest,omitempty"`
+	Blob          []byte                 `protobuf:"bytes,2,req,name=blob" json:"blob,omitempty"`
+	Signature     []byte                 `protobuf:"bytes,3,req,name=signature" json:"signature,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
 
 func (x *ValidatorBlobInfo) Reset() {
 	*x = ValidatorBlobInfo{}
-	mi := &file_internal_peermanagement_proto_xrpl_proto_msgTypes[12]
+	mi := &file_internal_peermanagement_proto_xrpl_proto_msgTypes[13]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1538,7 +1683,7 @@ func (x *ValidatorBlobInfo) String() string {
 func (*ValidatorBlobInfo) ProtoMessage() {}
 
 func (x *ValidatorBlobInfo) ProtoReflect() protoreflect.Message {
-	mi := &file_internal_peermanagement_proto_xrpl_proto_msgTypes[12]
+	mi := &file_internal_peermanagement_proto_xrpl_proto_msgTypes[13]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1551,7 +1696,7 @@ func (x *ValidatorBlobInfo) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ValidatorBlobInfo.ProtoReflect.Descriptor instead.
 func (*ValidatorBlobInfo) Descriptor() ([]byte, []int) {
-	return file_internal_peermanagement_proto_xrpl_proto_rawDescGZIP(), []int{12}
+	return file_internal_peermanagement_proto_xrpl_proto_rawDescGZIP(), []int{13}
 }
 
 func (x *ValidatorBlobInfo) GetManifest() []byte {
@@ -1575,18 +1720,19 @@ func (x *ValidatorBlobInfo) GetSignature() []byte {
 	return nil
 }
 
+// Collection of Validator List v2 (UNL)
 type TMValidatorListCollection struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
-	Version       *uint32                `protobuf:"varint,1,opt,name=version,proto3,oneof" json:"version,omitempty"`
-	Manifest      []byte                 `protobuf:"bytes,2,opt,name=manifest,proto3,oneof" json:"manifest,omitempty"`
-	Blobs         []*ValidatorBlobInfo   `protobuf:"bytes,3,rep,name=blobs,proto3" json:"blobs,omitempty"`
+	Version       *uint32                `protobuf:"varint,1,req,name=version" json:"version,omitempty"`
+	Manifest      []byte                 `protobuf:"bytes,2,req,name=manifest" json:"manifest,omitempty"`
+	Blobs         []*ValidatorBlobInfo   `protobuf:"bytes,3,rep,name=blobs" json:"blobs,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
 
 func (x *TMValidatorListCollection) Reset() {
 	*x = TMValidatorListCollection{}
-	mi := &file_internal_peermanagement_proto_xrpl_proto_msgTypes[13]
+	mi := &file_internal_peermanagement_proto_xrpl_proto_msgTypes[14]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1598,7 +1744,7 @@ func (x *TMValidatorListCollection) String() string {
 func (*TMValidatorListCollection) ProtoMessage() {}
 
 func (x *TMValidatorListCollection) ProtoReflect() protoreflect.Message {
-	mi := &file_internal_peermanagement_proto_xrpl_proto_msgTypes[13]
+	mi := &file_internal_peermanagement_proto_xrpl_proto_msgTypes[14]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1611,7 +1757,7 @@ func (x *TMValidatorListCollection) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use TMValidatorListCollection.ProtoReflect.Descriptor instead.
 func (*TMValidatorListCollection) Descriptor() ([]byte, []int) {
-	return file_internal_peermanagement_proto_xrpl_proto_rawDescGZIP(), []int{13}
+	return file_internal_peermanagement_proto_xrpl_proto_rawDescGZIP(), []int{14}
 }
 
 func (x *TMValidatorListCollection) GetVersion() uint32 {
@@ -1635,21 +1781,26 @@ func (x *TMValidatorListCollection) GetBlobs() []*ValidatorBlobInfo {
 	return nil
 }
 
-// Validation message
+// Used to sign a final closed ledger after reprocessing
 type TMValidation struct {
-	state      protoimpl.MessageState `protogen:"open.v1"`
-	Validation []byte                 `protobuf:"bytes,1,opt,name=validation,proto3,oneof" json:"validation,omitempty"`
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// The serialized validation
+	Validation []byte `protobuf:"bytes,1,req,name=validation" json:"validation,omitempty"`
+	// node vouches signature is correct
+	//
 	// Deprecated: Marked as deprecated in internal/peermanagement/proto/xrpl.proto.
-	CheckedSignature bool `protobuf:"varint,2,opt,name=checked_signature,json=checkedSignature,proto3" json:"checked_signature,omitempty"`
+	CheckedSignature *bool `protobuf:"varint,2,opt,name=checkedSignature" json:"checkedSignature,omitempty"`
+	// Number of hops traveled
+	//
 	// Deprecated: Marked as deprecated in internal/peermanagement/proto/xrpl.proto.
-	Hops          uint32 `protobuf:"varint,3,opt,name=hops,proto3" json:"hops,omitempty"`
+	Hops          *uint32 `protobuf:"varint,3,opt,name=hops" json:"hops,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
 
 func (x *TMValidation) Reset() {
 	*x = TMValidation{}
-	mi := &file_internal_peermanagement_proto_xrpl_proto_msgTypes[14]
+	mi := &file_internal_peermanagement_proto_xrpl_proto_msgTypes[15]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1661,7 +1812,7 @@ func (x *TMValidation) String() string {
 func (*TMValidation) ProtoMessage() {}
 
 func (x *TMValidation) ProtoReflect() protoreflect.Message {
-	mi := &file_internal_peermanagement_proto_xrpl_proto_msgTypes[14]
+	mi := &file_internal_peermanagement_proto_xrpl_proto_msgTypes[15]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1674,7 +1825,7 @@ func (x *TMValidation) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use TMValidation.ProtoReflect.Descriptor instead.
 func (*TMValidation) Descriptor() ([]byte, []int) {
-	return file_internal_peermanagement_proto_xrpl_proto_rawDescGZIP(), []int{14}
+	return file_internal_peermanagement_proto_xrpl_proto_rawDescGZIP(), []int{15}
 }
 
 func (x *TMValidation) GetValidation() []byte {
@@ -1686,32 +1837,34 @@ func (x *TMValidation) GetValidation() []byte {
 
 // Deprecated: Marked as deprecated in internal/peermanagement/proto/xrpl.proto.
 func (x *TMValidation) GetCheckedSignature() bool {
-	if x != nil {
-		return x.CheckedSignature
+	if x != nil && x.CheckedSignature != nil {
+		return *x.CheckedSignature
 	}
 	return false
 }
 
 // Deprecated: Marked as deprecated in internal/peermanagement/proto/xrpl.proto.
 func (x *TMValidation) GetHops() uint32 {
-	if x != nil {
-		return x.Hops
+	if x != nil && x.Hops != nil {
+		return *x.Hops
 	}
 	return 0
 }
 
-// Endpoints for peer discovery
+// An array of Endpoint messages
 type TMEndpoints struct {
-	state         protoimpl.MessageState      `protogen:"open.v1"`
-	Version       *uint32                     `protobuf:"varint,1,opt,name=version,proto3,oneof" json:"version,omitempty"`
-	EndpointsV2   []*TMEndpoints_TMEndpointv2 `protobuf:"bytes,3,rep,name=endpoints_v2,json=endpointsV2,proto3" json:"endpoints_v2,omitempty"`
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// This field is used to allow the TMEndpoints message format to be
+	// modified as necessary in the future.
+	Version       *uint32                     `protobuf:"varint,1,req,name=version" json:"version,omitempty"`
+	EndpointsV2   []*TMEndpoints_TMEndpointv2 `protobuf:"bytes,3,rep,name=endpoints_v2,json=endpointsV2" json:"endpoints_v2,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
 
 func (x *TMEndpoints) Reset() {
 	*x = TMEndpoints{}
-	mi := &file_internal_peermanagement_proto_xrpl_proto_msgTypes[15]
+	mi := &file_internal_peermanagement_proto_xrpl_proto_msgTypes[16]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1723,7 +1876,7 @@ func (x *TMEndpoints) String() string {
 func (*TMEndpoints) ProtoMessage() {}
 
 func (x *TMEndpoints) ProtoReflect() protoreflect.Message {
-	mi := &file_internal_peermanagement_proto_xrpl_proto_msgTypes[15]
+	mi := &file_internal_peermanagement_proto_xrpl_proto_msgTypes[16]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1736,7 +1889,7 @@ func (x *TMEndpoints) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use TMEndpoints.ProtoReflect.Descriptor instead.
 func (*TMEndpoints) Descriptor() ([]byte, []int) {
-	return file_internal_peermanagement_proto_xrpl_proto_rawDescGZIP(), []int{15}
+	return file_internal_peermanagement_proto_xrpl_proto_rawDescGZIP(), []int{16}
 }
 
 func (x *TMEndpoints) GetVersion() uint32 {
@@ -1753,21 +1906,20 @@ func (x *TMEndpoints) GetEndpointsV2() []*TMEndpoints_TMEndpointv2 {
 	return nil
 }
 
-// Indexed object
 type TMIndexedObject struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
-	Hash          []byte                 `protobuf:"bytes,1,opt,name=hash,proto3" json:"hash,omitempty"`
-	NodeId        []byte                 `protobuf:"bytes,2,opt,name=node_id,json=nodeId,proto3" json:"node_id,omitempty"`
-	Index         []byte                 `protobuf:"bytes,3,opt,name=index,proto3" json:"index,omitempty"`
-	Data          []byte                 `protobuf:"bytes,4,opt,name=data,proto3" json:"data,omitempty"`
-	LedgerSeq     uint32                 `protobuf:"varint,5,opt,name=ledger_seq,json=ledgerSeq,proto3" json:"ledger_seq,omitempty"`
+	Hash          []byte                 `protobuf:"bytes,1,opt,name=hash" json:"hash,omitempty"`
+	NodeID        []byte                 `protobuf:"bytes,2,opt,name=nodeID" json:"nodeID,omitempty"`
+	Index         []byte                 `protobuf:"bytes,3,opt,name=index" json:"index,omitempty"`
+	Data          []byte                 `protobuf:"bytes,4,opt,name=data" json:"data,omitempty"`
+	LedgerSeq     *uint32                `protobuf:"varint,5,opt,name=ledgerSeq" json:"ledgerSeq,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
 
 func (x *TMIndexedObject) Reset() {
 	*x = TMIndexedObject{}
-	mi := &file_internal_peermanagement_proto_xrpl_proto_msgTypes[16]
+	mi := &file_internal_peermanagement_proto_xrpl_proto_msgTypes[17]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1779,7 +1931,7 @@ func (x *TMIndexedObject) String() string {
 func (*TMIndexedObject) ProtoMessage() {}
 
 func (x *TMIndexedObject) ProtoReflect() protoreflect.Message {
-	mi := &file_internal_peermanagement_proto_xrpl_proto_msgTypes[16]
+	mi := &file_internal_peermanagement_proto_xrpl_proto_msgTypes[17]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1792,7 +1944,7 @@ func (x *TMIndexedObject) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use TMIndexedObject.ProtoReflect.Descriptor instead.
 func (*TMIndexedObject) Descriptor() ([]byte, []int) {
-	return file_internal_peermanagement_proto_xrpl_proto_rawDescGZIP(), []int{16}
+	return file_internal_peermanagement_proto_xrpl_proto_rawDescGZIP(), []int{17}
 }
 
 func (x *TMIndexedObject) GetHash() []byte {
@@ -1802,9 +1954,9 @@ func (x *TMIndexedObject) GetHash() []byte {
 	return nil
 }
 
-func (x *TMIndexedObject) GetNodeId() []byte {
+func (x *TMIndexedObject) GetNodeID() []byte {
 	if x != nil {
-		return x.NodeId
+		return x.NodeID
 	}
 	return nil
 }
@@ -1824,26 +1976,26 @@ func (x *TMIndexedObject) GetData() []byte {
 }
 
 func (x *TMIndexedObject) GetLedgerSeq() uint32 {
-	if x != nil {
-		return x.LedgerSeq
+	if x != nil && x.LedgerSeq != nil {
+		return *x.LedgerSeq
 	}
 	return 0
 }
 
 type TMGetObjectByHash struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Type          *ObjectType            `protobuf:"varint,1,opt,name=type,proto3,enum=protocol.ObjectType,oneof" json:"type,omitempty"`
-	Query         *bool                  `protobuf:"varint,2,opt,name=query,proto3,oneof" json:"query,omitempty"`
-	LedgerHash    []byte                 `protobuf:"bytes,4,opt,name=ledger_hash,json=ledgerHash,proto3" json:"ledger_hash,omitempty"`
-	Fat           bool                   `protobuf:"varint,5,opt,name=fat,proto3" json:"fat,omitempty"`
-	Objects       []*TMIndexedObject     `protobuf:"bytes,6,rep,name=objects,proto3" json:"objects,omitempty"`
+	state         protoimpl.MessageState        `protogen:"open.v1"`
+	Type          *TMGetObjectByHash_ObjectType `protobuf:"varint,1,req,name=type,enum=protocol.TMGetObjectByHash_ObjectType" json:"type,omitempty"`
+	Query         *bool                         `protobuf:"varint,2,req,name=query" json:"query,omitempty"`          // is this a query or a reply?
+	LedgerHash    []byte                        `protobuf:"bytes,4,opt,name=ledgerHash" json:"ledgerHash,omitempty"` // the hash of the ledger these queries are for
+	Fat           *bool                         `protobuf:"varint,5,opt,name=fat" json:"fat,omitempty"`              // return related nodes
+	Objects       []*TMIndexedObject            `protobuf:"bytes,6,rep,name=objects" json:"objects,omitempty"`       // the specific objects requested
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
 
 func (x *TMGetObjectByHash) Reset() {
 	*x = TMGetObjectByHash{}
-	mi := &file_internal_peermanagement_proto_xrpl_proto_msgTypes[17]
+	mi := &file_internal_peermanagement_proto_xrpl_proto_msgTypes[18]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1855,7 +2007,7 @@ func (x *TMGetObjectByHash) String() string {
 func (*TMGetObjectByHash) ProtoMessage() {}
 
 func (x *TMGetObjectByHash) ProtoReflect() protoreflect.Message {
-	mi := &file_internal_peermanagement_proto_xrpl_proto_msgTypes[17]
+	mi := &file_internal_peermanagement_proto_xrpl_proto_msgTypes[18]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1868,14 +2020,14 @@ func (x *TMGetObjectByHash) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use TMGetObjectByHash.ProtoReflect.Descriptor instead.
 func (*TMGetObjectByHash) Descriptor() ([]byte, []int) {
-	return file_internal_peermanagement_proto_xrpl_proto_rawDescGZIP(), []int{17}
+	return file_internal_peermanagement_proto_xrpl_proto_rawDescGZIP(), []int{18}
 }
 
-func (x *TMGetObjectByHash) GetType() ObjectType {
+func (x *TMGetObjectByHash) GetType() TMGetObjectByHash_ObjectType {
 	if x != nil && x.Type != nil {
 		return *x.Type
 	}
-	return ObjectType_otUNKNOWN
+	return TMGetObjectByHash_otUNKNOWN
 }
 
 func (x *TMGetObjectByHash) GetQuery() bool {
@@ -1893,8 +2045,8 @@ func (x *TMGetObjectByHash) GetLedgerHash() []byte {
 }
 
 func (x *TMGetObjectByHash) GetFat() bool {
-	if x != nil {
-		return x.Fat
+	if x != nil && x.Fat != nil {
+		return *x.Fat
 	}
 	return false
 }
@@ -1906,18 +2058,17 @@ func (x *TMGetObjectByHash) GetObjects() []*TMIndexedObject {
 	return nil
 }
 
-// Ledger node
 type TMLedgerNode struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
-	Nodedata      []byte                 `protobuf:"bytes,1,opt,name=nodedata,proto3,oneof" json:"nodedata,omitempty"`
-	Nodeid        []byte                 `protobuf:"bytes,2,opt,name=nodeid,proto3" json:"nodeid,omitempty"`
+	Nodedata      []byte                 `protobuf:"bytes,1,req,name=nodedata" json:"nodedata,omitempty"`
+	Nodeid        []byte                 `protobuf:"bytes,2,opt,name=nodeid" json:"nodeid,omitempty"` // missing for ledger base data
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
 
 func (x *TMLedgerNode) Reset() {
 	*x = TMLedgerNode{}
-	mi := &file_internal_peermanagement_proto_xrpl_proto_msgTypes[18]
+	mi := &file_internal_peermanagement_proto_xrpl_proto_msgTypes[19]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1929,7 +2080,7 @@ func (x *TMLedgerNode) String() string {
 func (*TMLedgerNode) ProtoMessage() {}
 
 func (x *TMLedgerNode) ProtoReflect() protoreflect.Message {
-	mi := &file_internal_peermanagement_proto_xrpl_proto_msgTypes[18]
+	mi := &file_internal_peermanagement_proto_xrpl_proto_msgTypes[19]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1942,7 +2093,7 @@ func (x *TMLedgerNode) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use TMLedgerNode.ProtoReflect.Descriptor instead.
 func (*TMLedgerNode) Descriptor() ([]byte, []int) {
-	return file_internal_peermanagement_proto_xrpl_proto_rawDescGZIP(), []int{18}
+	return file_internal_peermanagement_proto_xrpl_proto_rawDescGZIP(), []int{19}
 }
 
 func (x *TMLedgerNode) GetNodedata() []byte {
@@ -1961,21 +2112,21 @@ func (x *TMLedgerNode) GetNodeid() []byte {
 
 type TMGetLedger struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
-	Itype         *TMLedgerInfoType      `protobuf:"varint,1,opt,name=itype,proto3,enum=protocol.TMLedgerInfoType,oneof" json:"itype,omitempty"`
-	Ltype         *TMLedgerType          `protobuf:"varint,2,opt,name=ltype,proto3,enum=protocol.TMLedgerType,oneof" json:"ltype,omitempty"`
-	LedgerHash    []byte                 `protobuf:"bytes,3,opt,name=ledger_hash,json=ledgerHash,proto3" json:"ledger_hash,omitempty"`
-	LedgerSeq     *uint32                `protobuf:"varint,4,opt,name=ledger_seq,json=ledgerSeq,proto3,oneof" json:"ledger_seq,omitempty"`
-	NodeIds       [][]byte               `protobuf:"bytes,5,rep,name=node_ids,json=nodeIds,proto3" json:"node_ids,omitempty"`
-	RequestCookie *uint64                `protobuf:"varint,6,opt,name=request_cookie,json=requestCookie,proto3,oneof" json:"request_cookie,omitempty"`
-	QueryType     *TMQueryType           `protobuf:"varint,7,opt,name=query_type,json=queryType,proto3,enum=protocol.TMQueryType,oneof" json:"query_type,omitempty"`
-	QueryDepth    *uint32                `protobuf:"varint,8,opt,name=query_depth,json=queryDepth,proto3,oneof" json:"query_depth,omitempty"`
+	Itype         *TMLedgerInfoType      `protobuf:"varint,1,req,name=itype,enum=protocol.TMLedgerInfoType" json:"itype,omitempty"`
+	Ltype         *TMLedgerType          `protobuf:"varint,2,opt,name=ltype,enum=protocol.TMLedgerType" json:"ltype,omitempty"`
+	LedgerHash    []byte                 `protobuf:"bytes,3,opt,name=ledgerHash" json:"ledgerHash,omitempty"` // Can also be the transaction set hash if liTS_CANDIDATE
+	LedgerSeq     *uint32                `protobuf:"varint,4,opt,name=ledgerSeq" json:"ledgerSeq,omitempty"`
+	NodeIDs       [][]byte               `protobuf:"bytes,5,rep,name=nodeIDs" json:"nodeIDs,omitempty"`
+	RequestCookie *uint64                `protobuf:"varint,6,opt,name=requestCookie" json:"requestCookie,omitempty"`
+	QueryType     *TMQueryType           `protobuf:"varint,7,opt,name=queryType,enum=protocol.TMQueryType" json:"queryType,omitempty"`
+	QueryDepth    *uint32                `protobuf:"varint,8,opt,name=queryDepth" json:"queryDepth,omitempty"` // How deep to go, number of extra levels
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
 
 func (x *TMGetLedger) Reset() {
 	*x = TMGetLedger{}
-	mi := &file_internal_peermanagement_proto_xrpl_proto_msgTypes[19]
+	mi := &file_internal_peermanagement_proto_xrpl_proto_msgTypes[20]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1987,7 +2138,7 @@ func (x *TMGetLedger) String() string {
 func (*TMGetLedger) ProtoMessage() {}
 
 func (x *TMGetLedger) ProtoReflect() protoreflect.Message {
-	mi := &file_internal_peermanagement_proto_xrpl_proto_msgTypes[19]
+	mi := &file_internal_peermanagement_proto_xrpl_proto_msgTypes[20]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2000,7 +2151,7 @@ func (x *TMGetLedger) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use TMGetLedger.ProtoReflect.Descriptor instead.
 func (*TMGetLedger) Descriptor() ([]byte, []int) {
-	return file_internal_peermanagement_proto_xrpl_proto_rawDescGZIP(), []int{19}
+	return file_internal_peermanagement_proto_xrpl_proto_rawDescGZIP(), []int{20}
 }
 
 func (x *TMGetLedger) GetItype() TMLedgerInfoType {
@@ -2031,9 +2182,9 @@ func (x *TMGetLedger) GetLedgerSeq() uint32 {
 	return 0
 }
 
-func (x *TMGetLedger) GetNodeIds() [][]byte {
+func (x *TMGetLedger) GetNodeIDs() [][]byte {
 	if x != nil {
-		return x.NodeIds
+		return x.NodeIDs
 	}
 	return nil
 }
@@ -2061,19 +2212,19 @@ func (x *TMGetLedger) GetQueryDepth() uint32 {
 
 type TMLedgerData struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
-	LedgerHash    []byte                 `protobuf:"bytes,1,opt,name=ledger_hash,json=ledgerHash,proto3,oneof" json:"ledger_hash,omitempty"`
-	LedgerSeq     *uint32                `protobuf:"varint,2,opt,name=ledger_seq,json=ledgerSeq,proto3,oneof" json:"ledger_seq,omitempty"`
-	Type          *TMLedgerInfoType      `protobuf:"varint,3,opt,name=type,proto3,enum=protocol.TMLedgerInfoType,oneof" json:"type,omitempty"`
-	Nodes         []*TMLedgerNode        `protobuf:"bytes,4,rep,name=nodes,proto3" json:"nodes,omitempty"`
-	RequestCookie *uint32                `protobuf:"varint,5,opt,name=request_cookie,json=requestCookie,proto3,oneof" json:"request_cookie,omitempty"`
-	Error         TMReplyError           `protobuf:"varint,6,opt,name=error,proto3,enum=protocol.TMReplyError" json:"error,omitempty"`
+	LedgerHash    []byte                 `protobuf:"bytes,1,req,name=ledgerHash" json:"ledgerHash,omitempty"`
+	LedgerSeq     *uint32                `protobuf:"varint,2,req,name=ledgerSeq" json:"ledgerSeq,omitempty"`
+	Type          *TMLedgerInfoType      `protobuf:"varint,3,req,name=type,enum=protocol.TMLedgerInfoType" json:"type,omitempty"`
+	Nodes         []*TMLedgerNode        `protobuf:"bytes,4,rep,name=nodes" json:"nodes,omitempty"`
+	RequestCookie *uint32                `protobuf:"varint,5,opt,name=requestCookie" json:"requestCookie,omitempty"`
+	Error         *TMReplyError          `protobuf:"varint,6,opt,name=error,enum=protocol.TMReplyError" json:"error,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
 
 func (x *TMLedgerData) Reset() {
 	*x = TMLedgerData{}
-	mi := &file_internal_peermanagement_proto_xrpl_proto_msgTypes[20]
+	mi := &file_internal_peermanagement_proto_xrpl_proto_msgTypes[21]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2085,7 +2236,7 @@ func (x *TMLedgerData) String() string {
 func (*TMLedgerData) ProtoMessage() {}
 
 func (x *TMLedgerData) ProtoReflect() protoreflect.Message {
-	mi := &file_internal_peermanagement_proto_xrpl_proto_msgTypes[20]
+	mi := &file_internal_peermanagement_proto_xrpl_proto_msgTypes[21]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2098,7 +2249,7 @@ func (x *TMLedgerData) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use TMLedgerData.ProtoReflect.Descriptor instead.
 func (*TMLedgerData) Descriptor() ([]byte, []int) {
-	return file_internal_peermanagement_proto_xrpl_proto_rawDescGZIP(), []int{20}
+	return file_internal_peermanagement_proto_xrpl_proto_rawDescGZIP(), []int{21}
 }
 
 func (x *TMLedgerData) GetLedgerHash() []byte {
@@ -2137,26 +2288,25 @@ func (x *TMLedgerData) GetRequestCookie() uint32 {
 }
 
 func (x *TMLedgerData) GetError() TMReplyError {
-	if x != nil {
-		return x.Error
+	if x != nil && x.Error != nil {
+		return *x.Error
 	}
-	return TMReplyError_reNO_ERROR
+	return TMReplyError_reNO_LEDGER
 }
 
-// Ping/Pong
 type TMPing struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
-	Type          *TMPing_PingType       `protobuf:"varint,1,opt,name=type,proto3,enum=protocol.TMPing_PingType,oneof" json:"type,omitempty"`
-	Seq           *uint32                `protobuf:"varint,2,opt,name=seq,proto3,oneof" json:"seq,omitempty"`
-	PingTime      *uint64                `protobuf:"varint,3,opt,name=ping_time,json=pingTime,proto3,oneof" json:"ping_time,omitempty"`
-	NetTime       *uint64                `protobuf:"varint,4,opt,name=net_time,json=netTime,proto3,oneof" json:"net_time,omitempty"`
+	Type          *TMPingPingType        `protobuf:"varint,1,req,name=type,enum=protocol.TMPingPingType" json:"type,omitempty"`
+	Seq           *uint32                `protobuf:"varint,2,opt,name=seq" json:"seq,omitempty"`           // detect stale replies, ensure other side is reading
+	PingTime      *uint64                `protobuf:"varint,3,opt,name=pingTime" json:"pingTime,omitempty"` // know when we think we sent the ping
+	NetTime       *uint64                `protobuf:"varint,4,opt,name=netTime" json:"netTime,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
 
 func (x *TMPing) Reset() {
 	*x = TMPing{}
-	mi := &file_internal_peermanagement_proto_xrpl_proto_msgTypes[21]
+	mi := &file_internal_peermanagement_proto_xrpl_proto_msgTypes[22]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2168,7 +2318,7 @@ func (x *TMPing) String() string {
 func (*TMPing) ProtoMessage() {}
 
 func (x *TMPing) ProtoReflect() protoreflect.Message {
-	mi := &file_internal_peermanagement_proto_xrpl_proto_msgTypes[21]
+	mi := &file_internal_peermanagement_proto_xrpl_proto_msgTypes[22]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2181,10 +2331,10 @@ func (x *TMPing) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use TMPing.ProtoReflect.Descriptor instead.
 func (*TMPing) Descriptor() ([]byte, []int) {
-	return file_internal_peermanagement_proto_xrpl_proto_rawDescGZIP(), []int{21}
+	return file_internal_peermanagement_proto_xrpl_proto_rawDescGZIP(), []int{22}
 }
 
-func (x *TMPing) GetType() TMPing_PingType {
+func (x *TMPing) GetType() TMPingPingType {
 	if x != nil && x.Type != nil {
 		return *x.Type
 	}
@@ -2212,19 +2362,18 @@ func (x *TMPing) GetNetTime() uint64 {
 	return 0
 }
 
-// Squelch for reduce-relay
 type TMSquelch struct {
 	state           protoimpl.MessageState `protogen:"open.v1"`
-	Squelch         *bool                  `protobuf:"varint,1,opt,name=squelch,proto3,oneof" json:"squelch,omitempty"`
-	ValidatorPubKey []byte                 `protobuf:"bytes,2,opt,name=validator_pub_key,json=validatorPubKey,proto3,oneof" json:"validator_pub_key,omitempty"`
-	SquelchDuration uint32                 `protobuf:"varint,3,opt,name=squelch_duration,json=squelchDuration,proto3" json:"squelch_duration,omitempty"`
+	Squelch         *bool                  `protobuf:"varint,1,req,name=squelch" json:"squelch,omitempty"`                 // squelch if true, otherwise unsquelch
+	ValidatorPubKey []byte                 `protobuf:"bytes,2,req,name=validatorPubKey" json:"validatorPubKey,omitempty"`  // validator's public key
+	SquelchDuration *uint32                `protobuf:"varint,3,opt,name=squelchDuration" json:"squelchDuration,omitempty"` // squelch duration in seconds
 	unknownFields   protoimpl.UnknownFields
 	sizeCache       protoimpl.SizeCache
 }
 
 func (x *TMSquelch) Reset() {
 	*x = TMSquelch{}
-	mi := &file_internal_peermanagement_proto_xrpl_proto_msgTypes[22]
+	mi := &file_internal_peermanagement_proto_xrpl_proto_msgTypes[23]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2236,7 +2385,7 @@ func (x *TMSquelch) String() string {
 func (*TMSquelch) ProtoMessage() {}
 
 func (x *TMSquelch) ProtoReflect() protoreflect.Message {
-	mi := &file_internal_peermanagement_proto_xrpl_proto_msgTypes[22]
+	mi := &file_internal_peermanagement_proto_xrpl_proto_msgTypes[23]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2249,7 +2398,7 @@ func (x *TMSquelch) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use TMSquelch.ProtoReflect.Descriptor instead.
 func (*TMSquelch) Descriptor() ([]byte, []int) {
-	return file_internal_peermanagement_proto_xrpl_proto_rawDescGZIP(), []int{22}
+	return file_internal_peermanagement_proto_xrpl_proto_rawDescGZIP(), []int{23}
 }
 
 func (x *TMSquelch) GetSquelch() bool {
@@ -2267,25 +2416,24 @@ func (x *TMSquelch) GetValidatorPubKey() []byte {
 }
 
 func (x *TMSquelch) GetSquelchDuration() uint32 {
-	if x != nil {
-		return x.SquelchDuration
+	if x != nil && x.SquelchDuration != nil {
+		return *x.SquelchDuration
 	}
 	return 0
 }
 
-// Proof path request/response
 type TMProofPathRequest struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
-	Key           []byte                 `protobuf:"bytes,1,opt,name=key,proto3,oneof" json:"key,omitempty"`
-	LedgerHash    []byte                 `protobuf:"bytes,2,opt,name=ledger_hash,json=ledgerHash,proto3,oneof" json:"ledger_hash,omitempty"`
-	Type          *TMLedgerMapType       `protobuf:"varint,3,opt,name=type,proto3,enum=protocol.TMLedgerMapType,oneof" json:"type,omitempty"`
+	Key           []byte                 `protobuf:"bytes,1,req,name=key" json:"key,omitempty"`
+	LedgerHash    []byte                 `protobuf:"bytes,2,req,name=ledgerHash" json:"ledgerHash,omitempty"`
+	Type          *TMLedgerMapType       `protobuf:"varint,3,req,name=type,enum=protocol.TMLedgerMapType" json:"type,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
 
 func (x *TMProofPathRequest) Reset() {
 	*x = TMProofPathRequest{}
-	mi := &file_internal_peermanagement_proto_xrpl_proto_msgTypes[23]
+	mi := &file_internal_peermanagement_proto_xrpl_proto_msgTypes[24]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2297,7 +2445,7 @@ func (x *TMProofPathRequest) String() string {
 func (*TMProofPathRequest) ProtoMessage() {}
 
 func (x *TMProofPathRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_internal_peermanagement_proto_xrpl_proto_msgTypes[23]
+	mi := &file_internal_peermanagement_proto_xrpl_proto_msgTypes[24]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2310,7 +2458,7 @@ func (x *TMProofPathRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use TMProofPathRequest.ProtoReflect.Descriptor instead.
 func (*TMProofPathRequest) Descriptor() ([]byte, []int) {
-	return file_internal_peermanagement_proto_xrpl_proto_rawDescGZIP(), []int{23}
+	return file_internal_peermanagement_proto_xrpl_proto_rawDescGZIP(), []int{24}
 }
 
 func (x *TMProofPathRequest) GetKey() []byte {
@@ -2331,24 +2479,24 @@ func (x *TMProofPathRequest) GetType() TMLedgerMapType {
 	if x != nil && x.Type != nil {
 		return *x.Type
 	}
-	return TMLedgerMapType_lmUNKNOWN
+	return TMLedgerMapType_lmTRANSACTION
 }
 
 type TMProofPathResponse struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
-	Key           []byte                 `protobuf:"bytes,1,opt,name=key,proto3,oneof" json:"key,omitempty"`
-	LedgerHash    []byte                 `protobuf:"bytes,2,opt,name=ledger_hash,json=ledgerHash,proto3,oneof" json:"ledger_hash,omitempty"`
-	Type          *TMLedgerMapType       `protobuf:"varint,3,opt,name=type,proto3,enum=protocol.TMLedgerMapType,oneof" json:"type,omitempty"`
-	LedgerHeader  []byte                 `protobuf:"bytes,4,opt,name=ledger_header,json=ledgerHeader,proto3" json:"ledger_header,omitempty"`
-	Path          [][]byte               `protobuf:"bytes,5,rep,name=path,proto3" json:"path,omitempty"`
-	Error         TMReplyError           `protobuf:"varint,6,opt,name=error,proto3,enum=protocol.TMReplyError" json:"error,omitempty"`
+	Key           []byte                 `protobuf:"bytes,1,req,name=key" json:"key,omitempty"`
+	LedgerHash    []byte                 `protobuf:"bytes,2,req,name=ledgerHash" json:"ledgerHash,omitempty"`
+	Type          *TMLedgerMapType       `protobuf:"varint,3,req,name=type,enum=protocol.TMLedgerMapType" json:"type,omitempty"`
+	LedgerHeader  []byte                 `protobuf:"bytes,4,opt,name=ledgerHeader" json:"ledgerHeader,omitempty"`
+	Path          [][]byte               `protobuf:"bytes,5,rep,name=path" json:"path,omitempty"`
+	Error         *TMReplyError          `protobuf:"varint,6,opt,name=error,enum=protocol.TMReplyError" json:"error,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
 
 func (x *TMProofPathResponse) Reset() {
 	*x = TMProofPathResponse{}
-	mi := &file_internal_peermanagement_proto_xrpl_proto_msgTypes[24]
+	mi := &file_internal_peermanagement_proto_xrpl_proto_msgTypes[25]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2360,7 +2508,7 @@ func (x *TMProofPathResponse) String() string {
 func (*TMProofPathResponse) ProtoMessage() {}
 
 func (x *TMProofPathResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_internal_peermanagement_proto_xrpl_proto_msgTypes[24]
+	mi := &file_internal_peermanagement_proto_xrpl_proto_msgTypes[25]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2373,7 +2521,7 @@ func (x *TMProofPathResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use TMProofPathResponse.ProtoReflect.Descriptor instead.
 func (*TMProofPathResponse) Descriptor() ([]byte, []int) {
-	return file_internal_peermanagement_proto_xrpl_proto_rawDescGZIP(), []int{24}
+	return file_internal_peermanagement_proto_xrpl_proto_rawDescGZIP(), []int{25}
 }
 
 func (x *TMProofPathResponse) GetKey() []byte {
@@ -2394,7 +2542,7 @@ func (x *TMProofPathResponse) GetType() TMLedgerMapType {
 	if x != nil && x.Type != nil {
 		return *x.Type
 	}
-	return TMLedgerMapType_lmUNKNOWN
+	return TMLedgerMapType_lmTRANSACTION
 }
 
 func (x *TMProofPathResponse) GetLedgerHeader() []byte {
@@ -2412,23 +2560,22 @@ func (x *TMProofPathResponse) GetPath() [][]byte {
 }
 
 func (x *TMProofPathResponse) GetError() TMReplyError {
-	if x != nil {
-		return x.Error
+	if x != nil && x.Error != nil {
+		return *x.Error
 	}
-	return TMReplyError_reNO_ERROR
+	return TMReplyError_reNO_LEDGER
 }
 
-// Replay delta for ledger sync
 type TMReplayDeltaRequest struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
-	LedgerHash    []byte                 `protobuf:"bytes,1,opt,name=ledger_hash,json=ledgerHash,proto3,oneof" json:"ledger_hash,omitempty"`
+	LedgerHash    []byte                 `protobuf:"bytes,1,req,name=ledgerHash" json:"ledgerHash,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
 
 func (x *TMReplayDeltaRequest) Reset() {
 	*x = TMReplayDeltaRequest{}
-	mi := &file_internal_peermanagement_proto_xrpl_proto_msgTypes[25]
+	mi := &file_internal_peermanagement_proto_xrpl_proto_msgTypes[26]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2440,7 +2587,7 @@ func (x *TMReplayDeltaRequest) String() string {
 func (*TMReplayDeltaRequest) ProtoMessage() {}
 
 func (x *TMReplayDeltaRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_internal_peermanagement_proto_xrpl_proto_msgTypes[25]
+	mi := &file_internal_peermanagement_proto_xrpl_proto_msgTypes[26]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2453,7 +2600,7 @@ func (x *TMReplayDeltaRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use TMReplayDeltaRequest.ProtoReflect.Descriptor instead.
 func (*TMReplayDeltaRequest) Descriptor() ([]byte, []int) {
-	return file_internal_peermanagement_proto_xrpl_proto_rawDescGZIP(), []int{25}
+	return file_internal_peermanagement_proto_xrpl_proto_rawDescGZIP(), []int{26}
 }
 
 func (x *TMReplayDeltaRequest) GetLedgerHash() []byte {
@@ -2465,17 +2612,17 @@ func (x *TMReplayDeltaRequest) GetLedgerHash() []byte {
 
 type TMReplayDeltaResponse struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
-	LedgerHash    []byte                 `protobuf:"bytes,1,opt,name=ledger_hash,json=ledgerHash,proto3,oneof" json:"ledger_hash,omitempty"`
-	LedgerHeader  []byte                 `protobuf:"bytes,2,opt,name=ledger_header,json=ledgerHeader,proto3" json:"ledger_header,omitempty"`
-	Transaction   [][]byte               `protobuf:"bytes,3,rep,name=transaction,proto3" json:"transaction,omitempty"`
-	Error         TMReplyError           `protobuf:"varint,4,opt,name=error,proto3,enum=protocol.TMReplyError" json:"error,omitempty"`
+	LedgerHash    []byte                 `protobuf:"bytes,1,req,name=ledgerHash" json:"ledgerHash,omitempty"`
+	LedgerHeader  []byte                 `protobuf:"bytes,2,opt,name=ledgerHeader" json:"ledgerHeader,omitempty"`
+	Transaction   [][]byte               `protobuf:"bytes,3,rep,name=transaction" json:"transaction,omitempty"`
+	Error         *TMReplyError          `protobuf:"varint,4,opt,name=error,enum=protocol.TMReplyError" json:"error,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
 
 func (x *TMReplayDeltaResponse) Reset() {
 	*x = TMReplayDeltaResponse{}
-	mi := &file_internal_peermanagement_proto_xrpl_proto_msgTypes[26]
+	mi := &file_internal_peermanagement_proto_xrpl_proto_msgTypes[27]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2487,7 +2634,7 @@ func (x *TMReplayDeltaResponse) String() string {
 func (*TMReplayDeltaResponse) ProtoMessage() {}
 
 func (x *TMReplayDeltaResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_internal_peermanagement_proto_xrpl_proto_msgTypes[26]
+	mi := &file_internal_peermanagement_proto_xrpl_proto_msgTypes[27]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2500,7 +2647,7 @@ func (x *TMReplayDeltaResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use TMReplayDeltaResponse.ProtoReflect.Descriptor instead.
 func (*TMReplayDeltaResponse) Descriptor() ([]byte, []int) {
-	return file_internal_peermanagement_proto_xrpl_proto_rawDescGZIP(), []int{26}
+	return file_internal_peermanagement_proto_xrpl_proto_rawDescGZIP(), []int{27}
 }
 
 func (x *TMReplayDeltaResponse) GetLedgerHash() []byte {
@@ -2525,23 +2672,22 @@ func (x *TMReplayDeltaResponse) GetTransaction() [][]byte {
 }
 
 func (x *TMReplayDeltaResponse) GetError() TMReplyError {
-	if x != nil {
-		return x.Error
+	if x != nil && x.Error != nil {
+		return *x.Error
 	}
-	return TMReplyError_reNO_ERROR
+	return TMReplyError_reNO_LEDGER
 }
 
-// Have transactions (reduce-relay)
 type TMHaveTransactions struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
-	Hashes        [][]byte               `protobuf:"bytes,1,rep,name=hashes,proto3" json:"hashes,omitempty"`
+	Hashes        [][]byte               `protobuf:"bytes,1,rep,name=hashes" json:"hashes,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
 
 func (x *TMHaveTransactions) Reset() {
 	*x = TMHaveTransactions{}
-	mi := &file_internal_peermanagement_proto_xrpl_proto_msgTypes[27]
+	mi := &file_internal_peermanagement_proto_xrpl_proto_msgTypes[28]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2553,7 +2699,7 @@ func (x *TMHaveTransactions) String() string {
 func (*TMHaveTransactions) ProtoMessage() {}
 
 func (x *TMHaveTransactions) ProtoReflect() protoreflect.Message {
-	mi := &file_internal_peermanagement_proto_xrpl_proto_msgTypes[27]
+	mi := &file_internal_peermanagement_proto_xrpl_proto_msgTypes[28]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2566,7 +2712,7 @@ func (x *TMHaveTransactions) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use TMHaveTransactions.ProtoReflect.Descriptor instead.
 func (*TMHaveTransactions) Descriptor() ([]byte, []int) {
-	return file_internal_peermanagement_proto_xrpl_proto_rawDescGZIP(), []int{27}
+	return file_internal_peermanagement_proto_xrpl_proto_rawDescGZIP(), []int{28}
 }
 
 func (x *TMHaveTransactions) GetHashes() [][]byte {
@@ -2576,17 +2722,19 @@ func (x *TMHaveTransactions) GetHashes() [][]byte {
 	return nil
 }
 
+// An update to the Endpoint type that uses a string
+// to represent endpoints, thus allowing ipv6 or ipv4 addresses
 type TMEndpoints_TMEndpointv2 struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
-	Endpoint      *string                `protobuf:"bytes,1,opt,name=endpoint,proto3,oneof" json:"endpoint,omitempty"`
-	Hops          *uint32                `protobuf:"varint,2,opt,name=hops,proto3,oneof" json:"hops,omitempty"`
+	Endpoint      *string                `protobuf:"bytes,1,req,name=endpoint" json:"endpoint,omitempty"`
+	Hops          *uint32                `protobuf:"varint,2,req,name=hops" json:"hops,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
 
 func (x *TMEndpoints_TMEndpointv2) Reset() {
 	*x = TMEndpoints_TMEndpointv2{}
-	mi := &file_internal_peermanagement_proto_xrpl_proto_msgTypes[28]
+	mi := &file_internal_peermanagement_proto_xrpl_proto_msgTypes[29]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2598,7 +2746,7 @@ func (x *TMEndpoints_TMEndpointv2) String() string {
 func (*TMEndpoints_TMEndpointv2) ProtoMessage() {}
 
 func (x *TMEndpoints_TMEndpointv2) ProtoReflect() protoreflect.Message {
-	mi := &file_internal_peermanagement_proto_xrpl_proto_msgTypes[28]
+	mi := &file_internal_peermanagement_proto_xrpl_proto_msgTypes[29]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2611,7 +2759,7 @@ func (x *TMEndpoints_TMEndpointv2) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use TMEndpoints_TMEndpointv2.ProtoReflect.Descriptor instead.
 func (*TMEndpoints_TMEndpointv2) Descriptor() ([]byte, []int) {
-	return file_internal_peermanagement_proto_xrpl_proto_rawDescGZIP(), []int{15, 0}
+	return file_internal_peermanagement_proto_xrpl_proto_rawDescGZIP(), []int{16, 0}
 }
 
 func (x *TMEndpoints_TMEndpointv2) GetEndpoint() string {
@@ -2632,240 +2780,188 @@ var File_internal_peermanagement_proto_xrpl_proto protoreflect.FileDescriptor
 
 const file_internal_peermanagement_proto_xrpl_proto_rawDesc = "" +
 	"\n" +
-	"(internal/peermanagement/proto/xrpl.proto\x12\bprotocol\":\n" +
+	"(internal/peermanagement/proto/xrpl.proto\x12\bprotocol\"(\n" +
 	"\n" +
-	"TMManifest\x12\x1f\n" +
-	"\bstobject\x18\x01 \x01(\fH\x00R\bstobject\x88\x01\x01B\v\n" +
-	"\t_stobject\"U\n" +
+	"TMManifest\x12\x1a\n" +
+	"\bstobject\x18\x01 \x02(\fR\bstobject\"U\n" +
 	"\vTMManifests\x12(\n" +
 	"\x04list\x18\x01 \x03(\v2\x14.protocol.TMManifestR\x04list\x12\x1c\n" +
-	"\ahistory\x18\x02 \x01(\bB\x02\x18\x01R\ahistory\"\xdf\x01\n" +
-	"\rTMClusterNode\x12\"\n" +
+	"\ahistory\x18\x02 \x01(\bB\x02\x18\x01R\ahistory\"\x9f\x01\n" +
+	"\rTMClusterNode\x12\x1c\n" +
+	"\tpublicKey\x18\x01 \x02(\tR\tpublicKey\x12\x1e\n" +
 	"\n" +
-	"public_key\x18\x01 \x01(\tH\x00R\tpublicKey\x88\x01\x01\x12$\n" +
-	"\vreport_time\x18\x02 \x01(\rH\x01R\n" +
-	"reportTime\x88\x01\x01\x12 \n" +
-	"\tnode_load\x18\x03 \x01(\rH\x02R\bnodeLoad\x88\x01\x01\x12\x1b\n" +
-	"\tnode_name\x18\x04 \x01(\tR\bnodeName\x12\x18\n" +
-	"\aaddress\x18\x05 \x01(\tR\aaddressB\r\n" +
-	"\v_public_keyB\x0e\n" +
-	"\f_report_timeB\f\n" +
+	"reportTime\x18\x02 \x02(\rR\n" +
+	"reportTime\x12\x1a\n" +
+	"\bnodeLoad\x18\x03 \x02(\rR\bnodeLoad\x12\x1a\n" +
+	"\bnodeName\x18\x04 \x01(\tR\bnodeName\x12\x18\n" +
+	"\aaddress\x18\x05 \x01(\tR\aaddress\"L\n" +
+	"\fTMLoadSource\x12\x12\n" +
+	"\x04name\x18\x01 \x02(\tR\x04name\x12\x12\n" +
+	"\x04cost\x18\x02 \x02(\rR\x04cost\x12\x14\n" +
+	"\x05count\x18\x03 \x01(\rR\x05count\"\x82\x01\n" +
+	"\tTMCluster\x12;\n" +
+	"\fclusterNodes\x18\x01 \x03(\v2\x17.protocol.TMClusterNodeR\fclusterNodes\x128\n" +
+	"\vloadSources\x18\x02 \x03(\v2\x16.protocol.TMLoadSourceR\vloadSources\",\n" +
+	"\x06TMLink\x12\"\n" +
 	"\n" +
-	"_node_load\"h\n" +
-	"\fTMLoadSource\x12\x17\n" +
-	"\x04name\x18\x01 \x01(\tH\x00R\x04name\x88\x01\x01\x12\x17\n" +
-	"\x04cost\x18\x02 \x01(\rH\x01R\x04cost\x88\x01\x01\x12\x14\n" +
-	"\x05count\x18\x03 \x01(\rR\x05countB\a\n" +
-	"\x05_nameB\a\n" +
-	"\x05_cost\"\x84\x01\n" +
-	"\tTMCluster\x12<\n" +
-	"\rcluster_nodes\x18\x01 \x03(\v2\x17.protocol.TMClusterNodeR\fclusterNodes\x129\n" +
-	"\fload_sources\x18\x02 \x03(\v2\x16.protocol.TMLoadSourceR\vloadSources\"@\n" +
-	"\vTMPublicKey\x12\"\n" +
-	"\n" +
-	"public_key\x18\x01 \x01(\fH\x00R\tpublicKey\x88\x01\x01B\r\n" +
-	"\v_public_key\"\xdf\x01\n" +
-	"\rTMTransaction\x12,\n" +
-	"\x0fraw_transaction\x18\x01 \x01(\fH\x00R\x0erawTransaction\x88\x01\x01\x128\n" +
-	"\x06status\x18\x02 \x01(\x0e2\x1b.protocol.TransactionStatusH\x01R\x06status\x88\x01\x01\x12+\n" +
-	"\x11receive_timestamp\x18\x03 \x01(\x04R\x10receiveTimestamp\x12\x1a\n" +
-	"\bdeferred\x18\x04 \x01(\bR\bdeferredB\x12\n" +
-	"\x10_raw_transactionB\t\n" +
-	"\a_status\"M\n" +
+	"nodePubKey\x18\x01 \x02(\fB\x02\x18\x01R\n" +
+	"nodePubKey\"+\n" +
+	"\vTMPublicKey\x12\x1c\n" +
+	"\tpublicKey\x18\x01 \x02(\fR\tpublicKey\"\xb4\x01\n" +
+	"\rTMTransaction\x12&\n" +
+	"\x0erawTransaction\x18\x01 \x02(\fR\x0erawTransaction\x123\n" +
+	"\x06status\x18\x02 \x02(\x0e2\x1b.protocol.TransactionStatusR\x06status\x12*\n" +
+	"\x10receiveTimestamp\x18\x03 \x01(\x04R\x10receiveTimestamp\x12\x1a\n" +
+	"\bdeferred\x18\x04 \x01(\bR\bdeferred\"M\n" +
 	"\x0eTMTransactions\x12;\n" +
-	"\ftransactions\x18\x01 \x03(\v2\x17.protocol.TMTransactionR\ftransactions\"\xe9\x02\n" +
-	"\x0eTMStatusChange\x123\n" +
+	"\ftransactions\x18\x01 \x03(\v2\x17.protocol.TMTransactionR\ftransactions\"\xbb\x02\n" +
+	"\x0eTMStatusChange\x122\n" +
+	"\tnewStatus\x18\x01 \x01(\x0e2\x14.protocol.NodeStatusR\tnewStatus\x12/\n" +
+	"\bnewEvent\x18\x02 \x01(\x0e2\x13.protocol.NodeEventR\bnewEvent\x12\x1c\n" +
+	"\tledgerSeq\x18\x03 \x01(\rR\tledgerSeq\x12\x1e\n" +
 	"\n" +
-	"new_status\x18\x01 \x01(\x0e2\x14.protocol.NodeStatusR\tnewStatus\x120\n" +
-	"\tnew_event\x18\x02 \x01(\x0e2\x13.protocol.NodeEventR\bnewEvent\x12\x1d\n" +
+	"ledgerHash\x18\x04 \x01(\fR\n" +
+	"ledgerHash\x12.\n" +
+	"\x12ledgerHashPrevious\x18\x05 \x01(\fR\x12ledgerHashPrevious\x12 \n" +
+	"\vnetworkTime\x18\x06 \x01(\x04R\vnetworkTime\x12\x1a\n" +
+	"\bfirstSeq\x18\a \x01(\rR\bfirstSeq\x12\x18\n" +
+	"\alastSeq\x18\b \x01(\rR\alastSeq\"\x80\x03\n" +
+	"\fTMProposeSet\x12\x1e\n" +
 	"\n" +
-	"ledger_seq\x18\x03 \x01(\rR\tledgerSeq\x12\x1f\n" +
-	"\vledger_hash\x18\x04 \x01(\fR\n" +
-	"ledgerHash\x120\n" +
-	"\x14ledger_hash_previous\x18\x05 \x01(\fR\x12ledgerHashPrevious\x12!\n" +
-	"\fnetwork_time\x18\x06 \x01(\x04R\vnetworkTime\x12 \n" +
-	"\tfirst_seq\x18\a \x01(\rH\x00R\bfirstSeq\x88\x01\x01\x12\x1e\n" +
-	"\blast_seq\x18\b \x01(\rH\x01R\alastSeq\x88\x01\x01B\f\n" +
+	"proposeSeq\x18\x01 \x02(\rR\n" +
+	"proposeSeq\x12$\n" +
+	"\rcurrentTxHash\x18\x02 \x02(\fR\rcurrentTxHash\x12\x1e\n" +
 	"\n" +
-	"_first_seqB\v\n" +
-	"\t_last_seq\"\x8e\x04\n" +
-	"\fTMProposeSet\x12$\n" +
-	"\vpropose_seq\x18\x01 \x01(\rH\x00R\n" +
-	"proposeSeq\x88\x01\x01\x12+\n" +
-	"\x0fcurrent_tx_hash\x18\x02 \x01(\fH\x01R\rcurrentTxHash\x88\x01\x01\x12%\n" +
-	"\fnode_pub_key\x18\x03 \x01(\fH\x02R\n" +
-	"nodePubKey\x88\x01\x01\x12\"\n" +
-	"\n" +
-	"close_time\x18\x04 \x01(\rH\x03R\tcloseTime\x88\x01\x01\x12!\n" +
-	"\tsignature\x18\x05 \x01(\fH\x04R\tsignature\x88\x01\x01\x12,\n" +
-	"\x0fprevious_ledger\x18\x06 \x01(\fH\x05R\x0epreviousLedger\x88\x01\x01\x12/\n" +
-	"\x11checked_signature\x18\a \x01(\bB\x02\x18\x01R\x10checkedSignature\x12-\n" +
-	"\x12added_transactions\x18\n" +
-	" \x03(\fR\x11addedTransactions\x121\n" +
-	"\x14removed_transactions\x18\v \x03(\fR\x13removedTransactions\x12\x16\n" +
-	"\x04hops\x18\f \x01(\rB\x02\x18\x01R\x04hopsB\x0e\n" +
-	"\f_propose_seqB\x12\n" +
-	"\x10_current_tx_hashB\x0f\n" +
-	"\r_node_pub_keyB\r\n" +
-	"\v_close_timeB\f\n" +
-	"\n" +
-	"_signatureB\x12\n" +
-	"\x10_previous_ledger\"w\n" +
-	"\x14TMHaveTransactionSet\x122\n" +
-	"\x06status\x18\x01 \x01(\x0e2\x15.protocol.TxSetStatusH\x00R\x06status\x88\x01\x01\x12\x17\n" +
-	"\x04hash\x18\x02 \x01(\fH\x01R\x04hash\x88\x01\x01B\t\n" +
-	"\a_statusB\a\n" +
-	"\x05_hash\"\xbd\x01\n" +
-	"\x0fTMValidatorList\x12\x1f\n" +
-	"\bmanifest\x18\x01 \x01(\fH\x00R\bmanifest\x88\x01\x01\x12\x17\n" +
-	"\x04blob\x18\x02 \x01(\fH\x01R\x04blob\x88\x01\x01\x12!\n" +
-	"\tsignature\x18\x03 \x01(\fH\x02R\tsignature\x88\x01\x01\x12\x1d\n" +
-	"\aversion\x18\x04 \x01(\rH\x03R\aversion\x88\x01\x01B\v\n" +
-	"\t_manifestB\a\n" +
-	"\x05_blobB\f\n" +
-	"\n" +
-	"_signatureB\n" +
-	"\n" +
-	"\b_version\"\x82\x01\n" +
+	"nodePubKey\x18\x03 \x02(\fR\n" +
+	"nodePubKey\x12\x1c\n" +
+	"\tcloseTime\x18\x04 \x02(\rR\tcloseTime\x12\x1c\n" +
+	"\tsignature\x18\x05 \x02(\fR\tsignature\x12&\n" +
+	"\x0epreviousledger\x18\x06 \x02(\fR\x0epreviousledger\x12,\n" +
+	"\x11addedTransactions\x18\n" +
+	" \x03(\fR\x11addedTransactions\x120\n" +
+	"\x13removedTransactions\x18\v \x03(\fR\x13removedTransactions\x12.\n" +
+	"\x10checkedSignature\x18\a \x01(\bB\x02\x18\x01R\x10checkedSignature\x12\x16\n" +
+	"\x04hops\x18\f \x01(\rB\x02\x18\x01R\x04hops\"Y\n" +
+	"\x14TMHaveTransactionSet\x12-\n" +
+	"\x06status\x18\x01 \x02(\x0e2\x15.protocol.TxSetStatusR\x06status\x12\x12\n" +
+	"\x04hash\x18\x02 \x02(\fR\x04hash\"y\n" +
+	"\x0fTMValidatorList\x12\x1a\n" +
+	"\bmanifest\x18\x01 \x02(\fR\bmanifest\x12\x12\n" +
+	"\x04blob\x18\x02 \x02(\fR\x04blob\x12\x1c\n" +
+	"\tsignature\x18\x03 \x02(\fR\tsignature\x12\x18\n" +
+	"\aversion\x18\x04 \x02(\rR\aversion\"a\n" +
 	"\x11ValidatorBlobInfo\x12\x1a\n" +
-	"\bmanifest\x18\x01 \x01(\fR\bmanifest\x12\x17\n" +
-	"\x04blob\x18\x02 \x01(\fH\x00R\x04blob\x88\x01\x01\x12!\n" +
-	"\tsignature\x18\x03 \x01(\fH\x01R\tsignature\x88\x01\x01B\a\n" +
-	"\x05_blobB\f\n" +
+	"\bmanifest\x18\x01 \x01(\fR\bmanifest\x12\x12\n" +
+	"\x04blob\x18\x02 \x02(\fR\x04blob\x12\x1c\n" +
+	"\tsignature\x18\x03 \x02(\fR\tsignature\"\x84\x01\n" +
+	"\x19TMValidatorListCollection\x12\x18\n" +
+	"\aversion\x18\x01 \x02(\rR\aversion\x12\x1a\n" +
+	"\bmanifest\x18\x02 \x02(\fR\bmanifest\x121\n" +
+	"\x05blobs\x18\x03 \x03(\v2\x1b.protocol.ValidatorBlobInfoR\x05blobs\"v\n" +
+	"\fTMValidation\x12\x1e\n" +
 	"\n" +
-	"_signature\"\xa7\x01\n" +
-	"\x19TMValidatorListCollection\x12\x1d\n" +
-	"\aversion\x18\x01 \x01(\rH\x00R\aversion\x88\x01\x01\x12\x1f\n" +
-	"\bmanifest\x18\x02 \x01(\fH\x01R\bmanifest\x88\x01\x01\x121\n" +
-	"\x05blobs\x18\x03 \x03(\v2\x1b.protocol.ValidatorBlobInfoR\x05blobsB\n" +
-	"\n" +
-	"\b_versionB\v\n" +
-	"\t_manifest\"\x8b\x01\n" +
-	"\fTMValidation\x12#\n" +
-	"\n" +
-	"validation\x18\x01 \x01(\fH\x00R\n" +
-	"validation\x88\x01\x01\x12/\n" +
-	"\x11checked_signature\x18\x02 \x01(\bB\x02\x18\x01R\x10checkedSignature\x12\x16\n" +
-	"\x04hops\x18\x03 \x01(\rB\x02\x18\x01R\x04hopsB\r\n" +
-	"\v_validation\"\xdf\x01\n" +
-	"\vTMEndpoints\x12\x1d\n" +
-	"\aversion\x18\x01 \x01(\rH\x00R\aversion\x88\x01\x01\x12E\n" +
-	"\fendpoints_v2\x18\x03 \x03(\v2\".protocol.TMEndpoints.TMEndpointv2R\vendpointsV2\x1a^\n" +
-	"\fTMEndpointv2\x12\x1f\n" +
-	"\bendpoint\x18\x01 \x01(\tH\x00R\bendpoint\x88\x01\x01\x12\x17\n" +
-	"\x04hops\x18\x02 \x01(\rH\x01R\x04hops\x88\x01\x01B\v\n" +
-	"\t_endpointB\a\n" +
-	"\x05_hopsB\n" +
-	"\n" +
-	"\b_version\"\x87\x01\n" +
+	"validation\x18\x01 \x02(\fR\n" +
+	"validation\x12.\n" +
+	"\x10checkedSignature\x18\x02 \x01(\bB\x02\x18\x01R\x10checkedSignature\x12\x16\n" +
+	"\x04hops\x18\x03 \x01(\rB\x02\x18\x01R\x04hops\"\xb4\x01\n" +
+	"\vTMEndpoints\x12\x18\n" +
+	"\aversion\x18\x01 \x02(\rR\aversion\x12E\n" +
+	"\fendpoints_v2\x18\x03 \x03(\v2\".protocol.TMEndpoints.TMEndpointv2R\vendpointsV2\x1a>\n" +
+	"\fTMEndpointv2\x12\x1a\n" +
+	"\bendpoint\x18\x01 \x02(\tR\bendpoint\x12\x12\n" +
+	"\x04hops\x18\x02 \x02(\rR\x04hopsJ\x04\b\x02\x10\x03\"\x85\x01\n" +
 	"\x0fTMIndexedObject\x12\x12\n" +
-	"\x04hash\x18\x01 \x01(\fR\x04hash\x12\x17\n" +
-	"\anode_id\x18\x02 \x01(\fR\x06nodeId\x12\x14\n" +
+	"\x04hash\x18\x01 \x01(\fR\x04hash\x12\x16\n" +
+	"\x06nodeID\x18\x02 \x01(\fR\x06nodeID\x12\x14\n" +
 	"\x05index\x18\x03 \x01(\fR\x05index\x12\x12\n" +
-	"\x04data\x18\x04 \x01(\fR\x04data\x12\x1d\n" +
+	"\x04data\x18\x04 \x01(\fR\x04data\x12\x1c\n" +
+	"\tledgerSeq\x18\x05 \x01(\rR\tledgerSeq\"\xf3\x02\n" +
+	"\x11TMGetObjectByHash\x12:\n" +
+	"\x04type\x18\x01 \x02(\x0e2&.protocol.TMGetObjectByHash.ObjectTypeR\x04type\x12\x14\n" +
+	"\x05query\x18\x02 \x02(\bR\x05query\x12\x1e\n" +
 	"\n" +
-	"ledger_seq\x18\x05 \x01(\rR\tledgerSeq\"\xde\x01\n" +
-	"\x11TMGetObjectByHash\x12-\n" +
-	"\x04type\x18\x01 \x01(\x0e2\x14.protocol.ObjectTypeH\x00R\x04type\x88\x01\x01\x12\x19\n" +
-	"\x05query\x18\x02 \x01(\bH\x01R\x05query\x88\x01\x01\x12\x1f\n" +
-	"\vledger_hash\x18\x04 \x01(\fR\n" +
+	"ledgerHash\x18\x04 \x01(\fR\n" +
 	"ledgerHash\x12\x10\n" +
 	"\x03fat\x18\x05 \x01(\bR\x03fat\x123\n" +
-	"\aobjects\x18\x06 \x03(\v2\x19.protocol.TMIndexedObjectR\aobjectsB\a\n" +
-	"\x05_typeB\b\n" +
-	"\x06_queryJ\x04\b\x03\x10\x04\"T\n" +
-	"\fTMLedgerNode\x12\x1f\n" +
-	"\bnodedata\x18\x01 \x01(\fH\x00R\bnodedata\x88\x01\x01\x12\x16\n" +
-	"\x06nodeid\x18\x02 \x01(\fR\x06nodeidB\v\n" +
-	"\t_nodedata\"\xb9\x03\n" +
-	"\vTMGetLedger\x125\n" +
-	"\x05itype\x18\x01 \x01(\x0e2\x1a.protocol.TMLedgerInfoTypeH\x00R\x05itype\x88\x01\x01\x121\n" +
-	"\x05ltype\x18\x02 \x01(\x0e2\x16.protocol.TMLedgerTypeH\x01R\x05ltype\x88\x01\x01\x12\x1f\n" +
-	"\vledger_hash\x18\x03 \x01(\fR\n" +
-	"ledgerHash\x12\"\n" +
+	"\aobjects\x18\x06 \x03(\v2\x19.protocol.TMIndexedObjectR\aobjects\"\x9e\x01\n" +
 	"\n" +
-	"ledger_seq\x18\x04 \x01(\rH\x02R\tledgerSeq\x88\x01\x01\x12\x19\n" +
-	"\bnode_ids\x18\x05 \x03(\fR\anodeIds\x12*\n" +
-	"\x0erequest_cookie\x18\x06 \x01(\x04H\x03R\rrequestCookie\x88\x01\x01\x129\n" +
+	"ObjectType\x12\r\n" +
+	"\totUNKNOWN\x10\x00\x12\f\n" +
+	"\botLEDGER\x10\x01\x12\x11\n" +
+	"\rotTRANSACTION\x10\x02\x12\x16\n" +
+	"\x12otTRANSACTION_NODE\x10\x03\x12\x10\n" +
+	"\fotSTATE_NODE\x10\x04\x12\x10\n" +
+	"\fotCAS_OBJECT\x10\x05\x12\x10\n" +
+	"\fotFETCH_PACK\x10\x06\x12\x12\n" +
+	"\x0eotTRANSACTIONS\x10\aJ\x04\b\x03\x10\x04\"B\n" +
+	"\fTMLedgerNode\x12\x1a\n" +
+	"\bnodedata\x18\x01 \x02(\fR\bnodedata\x12\x16\n" +
+	"\x06nodeid\x18\x02 \x01(\fR\x06nodeid\"\xc0\x02\n" +
+	"\vTMGetLedger\x120\n" +
+	"\x05itype\x18\x01 \x02(\x0e2\x1a.protocol.TMLedgerInfoTypeR\x05itype\x12,\n" +
+	"\x05ltype\x18\x02 \x01(\x0e2\x16.protocol.TMLedgerTypeR\x05ltype\x12\x1e\n" +
 	"\n" +
-	"query_type\x18\a \x01(\x0e2\x15.protocol.TMQueryTypeH\x04R\tqueryType\x88\x01\x01\x12$\n" +
-	"\vquery_depth\x18\b \x01(\rH\x05R\n" +
-	"queryDepth\x88\x01\x01B\b\n" +
-	"\x06_itypeB\b\n" +
-	"\x06_ltypeB\r\n" +
-	"\v_ledger_seqB\x11\n" +
-	"\x0f_request_cookieB\r\n" +
-	"\v_query_typeB\x0e\n" +
-	"\f_query_depth\"\xd0\x02\n" +
-	"\fTMLedgerData\x12$\n" +
-	"\vledger_hash\x18\x01 \x01(\fH\x00R\n" +
-	"ledgerHash\x88\x01\x01\x12\"\n" +
+	"ledgerHash\x18\x03 \x01(\fR\n" +
+	"ledgerHash\x12\x1c\n" +
+	"\tledgerSeq\x18\x04 \x01(\rR\tledgerSeq\x12\x18\n" +
+	"\anodeIDs\x18\x05 \x03(\fR\anodeIDs\x12$\n" +
+	"\rrequestCookie\x18\x06 \x01(\x04R\rrequestCookie\x123\n" +
+	"\tqueryType\x18\a \x01(\x0e2\x15.protocol.TMQueryTypeR\tqueryType\x12\x1e\n" +
 	"\n" +
-	"ledger_seq\x18\x02 \x01(\rH\x01R\tledgerSeq\x88\x01\x01\x123\n" +
-	"\x04type\x18\x03 \x01(\x0e2\x1a.protocol.TMLedgerInfoTypeH\x02R\x04type\x88\x01\x01\x12,\n" +
-	"\x05nodes\x18\x04 \x03(\v2\x16.protocol.TMLedgerNodeR\x05nodes\x12*\n" +
-	"\x0erequest_cookie\x18\x05 \x01(\rH\x03R\rrequestCookie\x88\x01\x01\x12,\n" +
-	"\x05error\x18\x06 \x01(\x0e2\x16.protocol.TMReplyErrorR\x05errorB\x0e\n" +
-	"\f_ledger_hashB\r\n" +
-	"\v_ledger_seqB\a\n" +
-	"\x05_typeB\x11\n" +
-	"\x0f_request_cookie\"\xe5\x01\n" +
-	"\x06TMPing\x122\n" +
-	"\x04type\x18\x01 \x01(\x0e2\x19.protocol.TMPing.PingTypeH\x00R\x04type\x88\x01\x01\x12\x15\n" +
-	"\x03seq\x18\x02 \x01(\rH\x01R\x03seq\x88\x01\x01\x12 \n" +
-	"\tping_time\x18\x03 \x01(\x04H\x02R\bpingTime\x88\x01\x01\x12\x1e\n" +
-	"\bnet_time\x18\x04 \x01(\x04H\x03R\anetTime\x88\x01\x01\"\"\n" +
-	"\bPingType\x12\n" +
+	"queryDepth\x18\b \x01(\rR\n" +
+	"queryDepth\"\xfe\x01\n" +
+	"\fTMLedgerData\x12\x1e\n" +
+	"\n" +
+	"ledgerHash\x18\x01 \x02(\fR\n" +
+	"ledgerHash\x12\x1c\n" +
+	"\tledgerSeq\x18\x02 \x02(\rR\tledgerSeq\x12.\n" +
+	"\x04type\x18\x03 \x02(\x0e2\x1a.protocol.TMLedgerInfoTypeR\x04type\x12,\n" +
+	"\x05nodes\x18\x04 \x03(\v2\x16.protocol.TMLedgerNodeR\x05nodes\x12$\n" +
+	"\rrequestCookie\x18\x05 \x01(\rR\rrequestCookie\x12,\n" +
+	"\x05error\x18\x06 \x01(\x0e2\x16.protocol.TMReplyErrorR\x05error\"\xa3\x01\n" +
+	"\x06TMPing\x12-\n" +
+	"\x04type\x18\x01 \x02(\x0e2\x19.protocol.TMPing.pingTypeR\x04type\x12\x10\n" +
+	"\x03seq\x18\x02 \x01(\rR\x03seq\x12\x1a\n" +
+	"\bpingTime\x18\x03 \x01(\x04R\bpingTime\x12\x18\n" +
+	"\anetTime\x18\x04 \x01(\x04R\anetTime\"\"\n" +
+	"\bpingType\x12\n" +
 	"\n" +
 	"\x06ptPING\x10\x00\x12\n" +
 	"\n" +
-	"\x06ptPONG\x10\x01B\a\n" +
-	"\x05_typeB\x06\n" +
-	"\x04_seqB\f\n" +
+	"\x06ptPONG\x10\x01\"y\n" +
+	"\tTMSquelch\x12\x18\n" +
+	"\asquelch\x18\x01 \x02(\bR\asquelch\x12(\n" +
+	"\x0fvalidatorPubKey\x18\x02 \x02(\fR\x0fvalidatorPubKey\x12(\n" +
+	"\x0fsquelchDuration\x18\x03 \x01(\rR\x0fsquelchDuration\"u\n" +
+	"\x12TMProofPathRequest\x12\x10\n" +
+	"\x03key\x18\x01 \x02(\fR\x03key\x12\x1e\n" +
 	"\n" +
-	"_ping_timeB\v\n" +
-	"\t_net_time\"\xa8\x01\n" +
-	"\tTMSquelch\x12\x1d\n" +
-	"\asquelch\x18\x01 \x01(\bH\x00R\asquelch\x88\x01\x01\x12/\n" +
-	"\x11validator_pub_key\x18\x02 \x01(\fH\x01R\x0fvalidatorPubKey\x88\x01\x01\x12)\n" +
-	"\x10squelch_duration\x18\x03 \x01(\rR\x0fsquelchDurationB\n" +
+	"ledgerHash\x18\x02 \x02(\fR\n" +
+	"ledgerHash\x12-\n" +
+	"\x04type\x18\x03 \x02(\x0e2\x19.protocol.TMLedgerMapTypeR\x04type\"\xdc\x01\n" +
+	"\x13TMProofPathResponse\x12\x10\n" +
+	"\x03key\x18\x01 \x02(\fR\x03key\x12\x1e\n" +
 	"\n" +
-	"\b_squelchB\x14\n" +
-	"\x12_validator_pub_key\"\xa6\x01\n" +
-	"\x12TMProofPathRequest\x12\x15\n" +
-	"\x03key\x18\x01 \x01(\fH\x00R\x03key\x88\x01\x01\x12$\n" +
-	"\vledger_hash\x18\x02 \x01(\fH\x01R\n" +
-	"ledgerHash\x88\x01\x01\x122\n" +
-	"\x04type\x18\x03 \x01(\x0e2\x19.protocol.TMLedgerMapTypeH\x02R\x04type\x88\x01\x01B\x06\n" +
-	"\x04_keyB\x0e\n" +
-	"\f_ledger_hashB\a\n" +
-	"\x05_type\"\x8e\x02\n" +
-	"\x13TMProofPathResponse\x12\x15\n" +
-	"\x03key\x18\x01 \x01(\fH\x00R\x03key\x88\x01\x01\x12$\n" +
-	"\vledger_hash\x18\x02 \x01(\fH\x01R\n" +
-	"ledgerHash\x88\x01\x01\x122\n" +
-	"\x04type\x18\x03 \x01(\x0e2\x19.protocol.TMLedgerMapTypeH\x02R\x04type\x88\x01\x01\x12#\n" +
-	"\rledger_header\x18\x04 \x01(\fR\fledgerHeader\x12\x12\n" +
+	"ledgerHash\x18\x02 \x02(\fR\n" +
+	"ledgerHash\x12-\n" +
+	"\x04type\x18\x03 \x02(\x0e2\x19.protocol.TMLedgerMapTypeR\x04type\x12\"\n" +
+	"\fledgerHeader\x18\x04 \x01(\fR\fledgerHeader\x12\x12\n" +
 	"\x04path\x18\x05 \x03(\fR\x04path\x12,\n" +
-	"\x05error\x18\x06 \x01(\x0e2\x16.protocol.TMReplyErrorR\x05errorB\x06\n" +
-	"\x04_keyB\x0e\n" +
-	"\f_ledger_hashB\a\n" +
-	"\x05_type\"L\n" +
-	"\x14TMReplayDeltaRequest\x12$\n" +
-	"\vledger_hash\x18\x01 \x01(\fH\x00R\n" +
-	"ledgerHash\x88\x01\x01B\x0e\n" +
-	"\f_ledger_hash\"\xc2\x01\n" +
-	"\x15TMReplayDeltaResponse\x12$\n" +
-	"\vledger_hash\x18\x01 \x01(\fH\x00R\n" +
-	"ledgerHash\x88\x01\x01\x12#\n" +
-	"\rledger_header\x18\x02 \x01(\fR\fledgerHeader\x12 \n" +
+	"\x05error\x18\x06 \x01(\x0e2\x16.protocol.TMReplyErrorR\x05error\"6\n" +
+	"\x14TMReplayDeltaRequest\x12\x1e\n" +
+	"\n" +
+	"ledgerHash\x18\x01 \x02(\fR\n" +
+	"ledgerHash\"\xab\x01\n" +
+	"\x15TMReplayDeltaResponse\x12\x1e\n" +
+	"\n" +
+	"ledgerHash\x18\x01 \x02(\fR\n" +
+	"ledgerHash\x12\"\n" +
+	"\fledgerHeader\x18\x02 \x01(\fR\fledgerHeader\x12 \n" +
 	"\vtransaction\x18\x03 \x03(\fR\vtransaction\x12,\n" +
-	"\x05error\x18\x04 \x01(\x0e2\x16.protocol.TMReplyErrorR\x05errorB\x0e\n" +
-	"\f_ledger_hash\",\n" +
+	"\x05error\x18\x04 \x01(\x0e2\x16.protocol.TMReplyErrorR\x05error\",\n" +
 	"\x12TMHaveTransactions\x12\x16\n" +
-	"\x06hashes\x18\x01 \x03(\fR\x06hashes*\xc7\x03\n" +
-	"\vMessageType\x12\r\n" +
-	"\tmtUNKNOWN\x10\x00\x12\x0f\n" +
+	"\x06hashes\x18\x01 \x03(\fR\x06hashes*\xbb\x03\n" +
+	"\vMessageType\x12\x0f\n" +
 	"\vmtMANIFESTS\x10\x02\x12\n" +
 	"\n" +
 	"\x06mtPING\x10\x03\x12\r\n" +
@@ -2879,60 +2975,45 @@ const file_internal_peermanagement_proto_xrpl_proto_rawDesc = "" +
 	"\n" +
 	"mtHAVE_SET\x10#\x12\x10\n" +
 	"\fmtVALIDATION\x10)\x12\x11\n" +
-	"\rmtGET_OBJECTS\x10*\x12\x13\n" +
-	"\x0fmtVALIDATORLIST\x106\x12\r\n" +
-	"\tmtSQUELCH\x107\x12\x1d\n" +
-	"\x19mtVALIDATORLISTCOLLECTION\x108\x12\x14\n" +
+	"\rmtGET_OBJECTS\x10*\x12\x14\n" +
+	"\x10mtVALIDATOR_LIST\x106\x12\r\n" +
+	"\tmtSQUELCH\x107\x12\x1f\n" +
+	"\x1bmtVALIDATOR_LIST_COLLECTION\x108\x12\x14\n" +
 	"\x10mtPROOF_PATH_REQ\x109\x12\x19\n" +
 	"\x15mtPROOF_PATH_RESPONSE\x10:\x12\x16\n" +
 	"\x12mtREPLAY_DELTA_REQ\x10;\x12\x1b\n" +
 	"\x17mtREPLAY_DELTA_RESPONSE\x10<\x12\x17\n" +
 	"\x13mtHAVE_TRANSACTIONS\x10?\x12\x12\n" +
-	"\x0emtTRANSACTIONS\x10@*\xb0\x01\n" +
-	"\x11TransactionStatus\x12\r\n" +
-	"\ttsUNKNOWN\x10\x00\x12\t\n" +
+	"\x0emtTRANSACTIONS\x10@*\xa2\x01\n" +
+	"\x11TransactionStatus\x12\t\n" +
 	"\x05tsNEW\x10\x01\x12\r\n" +
-	"\ttsCURRENT\x10\x02\x12\x0e\n" +
-	"\n" +
-	"tsCOMMITED\x10\x03\x12\x15\n" +
+	"\ttsCURRENT\x10\x02\x12\x0f\n" +
+	"\vtsCOMMITTED\x10\x03\x12\x15\n" +
 	"\x11tsREJECT_CONFLICT\x10\x04\x12\x14\n" +
 	"\x10tsREJECT_INVALID\x10\x05\x12\x12\n" +
 	"\x0etsREJECT_FUNDS\x10\x06\x12\x0e\n" +
 	"\n" +
 	"tsHELD_SEQ\x10\a\x12\x11\n" +
-	"\rtsHELD_LEDGER\x10\b*r\n" +
+	"\rtsHELD_LEDGER\x10\b*c\n" +
 	"\n" +
-	"NodeStatus\x12\r\n" +
-	"\tnsUNKNOWN\x10\x00\x12\x10\n" +
+	"NodeStatus\x12\x10\n" +
 	"\fnsCONNECTING\x10\x01\x12\x0f\n" +
 	"\vnsCONNECTED\x10\x02\x12\x10\n" +
 	"\fnsMONITORING\x10\x03\x12\x10\n" +
 	"\fnsVALIDATING\x10\x04\x12\x0e\n" +
 	"\n" +
-	"nsSHUTTING\x10\x05*o\n" +
-	"\tNodeEvent\x12\r\n" +
-	"\tneUNKNOWN\x10\x00\x12\x14\n" +
+	"nsSHUTTING\x10\x05*`\n" +
+	"\tNodeEvent\x12\x14\n" +
 	"\x10neCLOSING_LEDGER\x10\x01\x12\x15\n" +
 	"\x11neACCEPTED_LEDGER\x10\x02\x12\x15\n" +
 	"\x11neSWITCHED_LEDGER\x10\x03\x12\x0f\n" +
-	"\vneLOST_SYNC\x10\x04*G\n" +
-	"\vTxSetStatus\x12\x11\n" +
-	"\rtsUNKNOWN_SET\x10\x00\x12\n" +
+	"\vneLOST_SYNC\x10\x04*4\n" +
+	"\vTxSetStatus\x12\n" +
 	"\n" +
 	"\x06tsHAVE\x10\x01\x12\r\n" +
 	"\ttsCAN_GET\x10\x02\x12\n" +
 	"\n" +
-	"\x06tsNEED\x10\x03*\x9e\x01\n" +
-	"\n" +
-	"ObjectType\x12\r\n" +
-	"\totUNKNOWN\x10\x00\x12\f\n" +
-	"\botLEDGER\x10\x01\x12\x11\n" +
-	"\rotTRANSACTION\x10\x02\x12\x16\n" +
-	"\x12otTRANSACTION_NODE\x10\x03\x12\x10\n" +
-	"\fotSTATE_NODE\x10\x04\x12\x10\n" +
-	"\fotCAS_OBJECT\x10\x05\x12\x10\n" +
-	"\fotFETCH_PACK\x10\x06\x12\x12\n" +
-	"\x0eotTRANSACTIONS\x10\a*P\n" +
+	"\x06tsNEED\x10\x03*P\n" +
 	"\x10TMLedgerInfoType\x12\n" +
 	"\n" +
 	"\x06liBASE\x10\x00\x12\r\n" +
@@ -2946,17 +3027,14 @@ const file_internal_peermanagement_proto_xrpl_proto_rawDesc = "" +
 	"\bltCLOSED\x10\x02*\x1d\n" +
 	"\vTMQueryType\x12\x0e\n" +
 	"\n" +
-	"qtINDIRECT\x10\x00*Q\n" +
-	"\fTMReplyError\x12\x0e\n" +
-	"\n" +
-	"reNO_ERROR\x10\x00\x12\x0f\n" +
+	"qtINDIRECT\x10\x00*A\n" +
+	"\fTMReplyError\x12\x0f\n" +
 	"\vreNO_LEDGER\x10\x01\x12\r\n" +
 	"\treNO_NODE\x10\x02\x12\x11\n" +
-	"\rreBAD_REQUEST\x10\x03*H\n" +
-	"\x0fTMLedgerMapType\x12\r\n" +
-	"\tlmUNKNOWN\x10\x00\x12\x11\n" +
+	"\rreBAD_REQUEST\x10\x03*9\n" +
+	"\x0fTMLedgerMapType\x12\x11\n" +
 	"\rlmTRANSACTION\x10\x01\x12\x13\n" +
-	"\x0flmACCOUNT_STATE\x10\x02B:Z8github.com/LeJamon/go-xrpl/internal/peermanagement/protob\x06proto3"
+	"\x0flmACCOUNT_STATE\x10\x02"
 
 var (
 	file_internal_peermanagement_proto_xrpl_proto_rawDescOnce sync.Once
@@ -2971,74 +3049,75 @@ func file_internal_peermanagement_proto_xrpl_proto_rawDescGZIP() []byte {
 }
 
 var file_internal_peermanagement_proto_xrpl_proto_enumTypes = make([]protoimpl.EnumInfo, 12)
-var file_internal_peermanagement_proto_xrpl_proto_msgTypes = make([]protoimpl.MessageInfo, 29)
+var file_internal_peermanagement_proto_xrpl_proto_msgTypes = make([]protoimpl.MessageInfo, 30)
 var file_internal_peermanagement_proto_xrpl_proto_goTypes = []any{
 	(MessageType)(0),                  // 0: protocol.MessageType
 	(TransactionStatus)(0),            // 1: protocol.TransactionStatus
 	(NodeStatus)(0),                   // 2: protocol.NodeStatus
 	(NodeEvent)(0),                    // 3: protocol.NodeEvent
 	(TxSetStatus)(0),                  // 4: protocol.TxSetStatus
-	(ObjectType)(0),                   // 5: protocol.ObjectType
-	(TMLedgerInfoType)(0),             // 6: protocol.TMLedgerInfoType
-	(TMLedgerType)(0),                 // 7: protocol.TMLedgerType
-	(TMQueryType)(0),                  // 8: protocol.TMQueryType
-	(TMReplyError)(0),                 // 9: protocol.TMReplyError
-	(TMLedgerMapType)(0),              // 10: protocol.TMLedgerMapType
-	(TMPing_PingType)(0),              // 11: protocol.TMPing.PingType
+	(TMLedgerInfoType)(0),             // 5: protocol.TMLedgerInfoType
+	(TMLedgerType)(0),                 // 6: protocol.TMLedgerType
+	(TMQueryType)(0),                  // 7: protocol.TMQueryType
+	(TMReplyError)(0),                 // 8: protocol.TMReplyError
+	(TMLedgerMapType)(0),              // 9: protocol.TMLedgerMapType
+	(TMGetObjectByHash_ObjectType)(0), // 10: protocol.TMGetObjectByHash.ObjectType
+	(TMPingPingType)(0),               // 11: protocol.TMPing.pingType
 	(*TMManifest)(nil),                // 12: protocol.TMManifest
 	(*TMManifests)(nil),               // 13: protocol.TMManifests
 	(*TMClusterNode)(nil),             // 14: protocol.TMClusterNode
 	(*TMLoadSource)(nil),              // 15: protocol.TMLoadSource
 	(*TMCluster)(nil),                 // 16: protocol.TMCluster
-	(*TMPublicKey)(nil),               // 17: protocol.TMPublicKey
-	(*TMTransaction)(nil),             // 18: protocol.TMTransaction
-	(*TMTransactions)(nil),            // 19: protocol.TMTransactions
-	(*TMStatusChange)(nil),            // 20: protocol.TMStatusChange
-	(*TMProposeSet)(nil),              // 21: protocol.TMProposeSet
-	(*TMHaveTransactionSet)(nil),      // 22: protocol.TMHaveTransactionSet
-	(*TMValidatorList)(nil),           // 23: protocol.TMValidatorList
-	(*ValidatorBlobInfo)(nil),         // 24: protocol.ValidatorBlobInfo
-	(*TMValidatorListCollection)(nil), // 25: protocol.TMValidatorListCollection
-	(*TMValidation)(nil),              // 26: protocol.TMValidation
-	(*TMEndpoints)(nil),               // 27: protocol.TMEndpoints
-	(*TMIndexedObject)(nil),           // 28: protocol.TMIndexedObject
-	(*TMGetObjectByHash)(nil),         // 29: protocol.TMGetObjectByHash
-	(*TMLedgerNode)(nil),              // 30: protocol.TMLedgerNode
-	(*TMGetLedger)(nil),               // 31: protocol.TMGetLedger
-	(*TMLedgerData)(nil),              // 32: protocol.TMLedgerData
-	(*TMPing)(nil),                    // 33: protocol.TMPing
-	(*TMSquelch)(nil),                 // 34: protocol.TMSquelch
-	(*TMProofPathRequest)(nil),        // 35: protocol.TMProofPathRequest
-	(*TMProofPathResponse)(nil),       // 36: protocol.TMProofPathResponse
-	(*TMReplayDeltaRequest)(nil),      // 37: protocol.TMReplayDeltaRequest
-	(*TMReplayDeltaResponse)(nil),     // 38: protocol.TMReplayDeltaResponse
-	(*TMHaveTransactions)(nil),        // 39: protocol.TMHaveTransactions
-	(*TMEndpoints_TMEndpointv2)(nil),  // 40: protocol.TMEndpoints.TMEndpointv2
+	(*TMLink)(nil),                    // 17: protocol.TMLink
+	(*TMPublicKey)(nil),               // 18: protocol.TMPublicKey
+	(*TMTransaction)(nil),             // 19: protocol.TMTransaction
+	(*TMTransactions)(nil),            // 20: protocol.TMTransactions
+	(*TMStatusChange)(nil),            // 21: protocol.TMStatusChange
+	(*TMProposeSet)(nil),              // 22: protocol.TMProposeSet
+	(*TMHaveTransactionSet)(nil),      // 23: protocol.TMHaveTransactionSet
+	(*TMValidatorList)(nil),           // 24: protocol.TMValidatorList
+	(*ValidatorBlobInfo)(nil),         // 25: protocol.ValidatorBlobInfo
+	(*TMValidatorListCollection)(nil), // 26: protocol.TMValidatorListCollection
+	(*TMValidation)(nil),              // 27: protocol.TMValidation
+	(*TMEndpoints)(nil),               // 28: protocol.TMEndpoints
+	(*TMIndexedObject)(nil),           // 29: protocol.TMIndexedObject
+	(*TMGetObjectByHash)(nil),         // 30: protocol.TMGetObjectByHash
+	(*TMLedgerNode)(nil),              // 31: protocol.TMLedgerNode
+	(*TMGetLedger)(nil),               // 32: protocol.TMGetLedger
+	(*TMLedgerData)(nil),              // 33: protocol.TMLedgerData
+	(*TMPing)(nil),                    // 34: protocol.TMPing
+	(*TMSquelch)(nil),                 // 35: protocol.TMSquelch
+	(*TMProofPathRequest)(nil),        // 36: protocol.TMProofPathRequest
+	(*TMProofPathResponse)(nil),       // 37: protocol.TMProofPathResponse
+	(*TMReplayDeltaRequest)(nil),      // 38: protocol.TMReplayDeltaRequest
+	(*TMReplayDeltaResponse)(nil),     // 39: protocol.TMReplayDeltaResponse
+	(*TMHaveTransactions)(nil),        // 40: protocol.TMHaveTransactions
+	(*TMEndpoints_TMEndpointv2)(nil),  // 41: protocol.TMEndpoints.TMEndpointv2
 }
 var file_internal_peermanagement_proto_xrpl_proto_depIdxs = []int32{
 	12, // 0: protocol.TMManifests.list:type_name -> protocol.TMManifest
-	14, // 1: protocol.TMCluster.cluster_nodes:type_name -> protocol.TMClusterNode
-	15, // 2: protocol.TMCluster.load_sources:type_name -> protocol.TMLoadSource
+	14, // 1: protocol.TMCluster.clusterNodes:type_name -> protocol.TMClusterNode
+	15, // 2: protocol.TMCluster.loadSources:type_name -> protocol.TMLoadSource
 	1,  // 3: protocol.TMTransaction.status:type_name -> protocol.TransactionStatus
-	18, // 4: protocol.TMTransactions.transactions:type_name -> protocol.TMTransaction
-	2,  // 5: protocol.TMStatusChange.new_status:type_name -> protocol.NodeStatus
-	3,  // 6: protocol.TMStatusChange.new_event:type_name -> protocol.NodeEvent
+	19, // 4: protocol.TMTransactions.transactions:type_name -> protocol.TMTransaction
+	2,  // 5: protocol.TMStatusChange.newStatus:type_name -> protocol.NodeStatus
+	3,  // 6: protocol.TMStatusChange.newEvent:type_name -> protocol.NodeEvent
 	4,  // 7: protocol.TMHaveTransactionSet.status:type_name -> protocol.TxSetStatus
-	24, // 8: protocol.TMValidatorListCollection.blobs:type_name -> protocol.ValidatorBlobInfo
-	40, // 9: protocol.TMEndpoints.endpoints_v2:type_name -> protocol.TMEndpoints.TMEndpointv2
-	5,  // 10: protocol.TMGetObjectByHash.type:type_name -> protocol.ObjectType
-	28, // 11: protocol.TMGetObjectByHash.objects:type_name -> protocol.TMIndexedObject
-	6,  // 12: protocol.TMGetLedger.itype:type_name -> protocol.TMLedgerInfoType
-	7,  // 13: protocol.TMGetLedger.ltype:type_name -> protocol.TMLedgerType
-	8,  // 14: protocol.TMGetLedger.query_type:type_name -> protocol.TMQueryType
-	6,  // 15: protocol.TMLedgerData.type:type_name -> protocol.TMLedgerInfoType
-	30, // 16: protocol.TMLedgerData.nodes:type_name -> protocol.TMLedgerNode
-	9,  // 17: protocol.TMLedgerData.error:type_name -> protocol.TMReplyError
-	11, // 18: protocol.TMPing.type:type_name -> protocol.TMPing.PingType
-	10, // 19: protocol.TMProofPathRequest.type:type_name -> protocol.TMLedgerMapType
-	10, // 20: protocol.TMProofPathResponse.type:type_name -> protocol.TMLedgerMapType
-	9,  // 21: protocol.TMProofPathResponse.error:type_name -> protocol.TMReplyError
-	9,  // 22: protocol.TMReplayDeltaResponse.error:type_name -> protocol.TMReplyError
+	25, // 8: protocol.TMValidatorListCollection.blobs:type_name -> protocol.ValidatorBlobInfo
+	41, // 9: protocol.TMEndpoints.endpoints_v2:type_name -> protocol.TMEndpoints.TMEndpointv2
+	10, // 10: protocol.TMGetObjectByHash.type:type_name -> protocol.TMGetObjectByHash.ObjectType
+	29, // 11: protocol.TMGetObjectByHash.objects:type_name -> protocol.TMIndexedObject
+	5,  // 12: protocol.TMGetLedger.itype:type_name -> protocol.TMLedgerInfoType
+	6,  // 13: protocol.TMGetLedger.ltype:type_name -> protocol.TMLedgerType
+	7,  // 14: protocol.TMGetLedger.queryType:type_name -> protocol.TMQueryType
+	5,  // 15: protocol.TMLedgerData.type:type_name -> protocol.TMLedgerInfoType
+	31, // 16: protocol.TMLedgerData.nodes:type_name -> protocol.TMLedgerNode
+	8,  // 17: protocol.TMLedgerData.error:type_name -> protocol.TMReplyError
+	11, // 18: protocol.TMPing.type:type_name -> protocol.TMPing.pingType
+	9,  // 19: protocol.TMProofPathRequest.type:type_name -> protocol.TMLedgerMapType
+	9,  // 20: protocol.TMProofPathResponse.type:type_name -> protocol.TMLedgerMapType
+	8,  // 21: protocol.TMProofPathResponse.error:type_name -> protocol.TMReplyError
+	8,  // 22: protocol.TMReplayDeltaResponse.error:type_name -> protocol.TMReplyError
 	23, // [23:23] is the sub-list for method output_type
 	23, // [23:23] is the sub-list for method input_type
 	23, // [23:23] is the sub-list for extension type_name
@@ -3051,37 +3130,13 @@ func file_internal_peermanagement_proto_xrpl_proto_init() {
 	if File_internal_peermanagement_proto_xrpl_proto != nil {
 		return
 	}
-	file_internal_peermanagement_proto_xrpl_proto_msgTypes[0].OneofWrappers = []any{}
-	file_internal_peermanagement_proto_xrpl_proto_msgTypes[2].OneofWrappers = []any{}
-	file_internal_peermanagement_proto_xrpl_proto_msgTypes[3].OneofWrappers = []any{}
-	file_internal_peermanagement_proto_xrpl_proto_msgTypes[5].OneofWrappers = []any{}
-	file_internal_peermanagement_proto_xrpl_proto_msgTypes[6].OneofWrappers = []any{}
-	file_internal_peermanagement_proto_xrpl_proto_msgTypes[8].OneofWrappers = []any{}
-	file_internal_peermanagement_proto_xrpl_proto_msgTypes[9].OneofWrappers = []any{}
-	file_internal_peermanagement_proto_xrpl_proto_msgTypes[10].OneofWrappers = []any{}
-	file_internal_peermanagement_proto_xrpl_proto_msgTypes[11].OneofWrappers = []any{}
-	file_internal_peermanagement_proto_xrpl_proto_msgTypes[12].OneofWrappers = []any{}
-	file_internal_peermanagement_proto_xrpl_proto_msgTypes[13].OneofWrappers = []any{}
-	file_internal_peermanagement_proto_xrpl_proto_msgTypes[14].OneofWrappers = []any{}
-	file_internal_peermanagement_proto_xrpl_proto_msgTypes[15].OneofWrappers = []any{}
-	file_internal_peermanagement_proto_xrpl_proto_msgTypes[17].OneofWrappers = []any{}
-	file_internal_peermanagement_proto_xrpl_proto_msgTypes[18].OneofWrappers = []any{}
-	file_internal_peermanagement_proto_xrpl_proto_msgTypes[19].OneofWrappers = []any{}
-	file_internal_peermanagement_proto_xrpl_proto_msgTypes[20].OneofWrappers = []any{}
-	file_internal_peermanagement_proto_xrpl_proto_msgTypes[21].OneofWrappers = []any{}
-	file_internal_peermanagement_proto_xrpl_proto_msgTypes[22].OneofWrappers = []any{}
-	file_internal_peermanagement_proto_xrpl_proto_msgTypes[23].OneofWrappers = []any{}
-	file_internal_peermanagement_proto_xrpl_proto_msgTypes[24].OneofWrappers = []any{}
-	file_internal_peermanagement_proto_xrpl_proto_msgTypes[25].OneofWrappers = []any{}
-	file_internal_peermanagement_proto_xrpl_proto_msgTypes[26].OneofWrappers = []any{}
-	file_internal_peermanagement_proto_xrpl_proto_msgTypes[28].OneofWrappers = []any{}
 	type x struct{}
 	out := protoimpl.TypeBuilder{
 		File: protoimpl.DescBuilder{
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_internal_peermanagement_proto_xrpl_proto_rawDesc), len(file_internal_peermanagement_proto_xrpl_proto_rawDesc)),
 			NumEnums:      12,
-			NumMessages:   29,
+			NumMessages:   30,
 			NumExtensions: 0,
 			NumServices:   0,
 		},

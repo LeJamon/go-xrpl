@@ -18,7 +18,7 @@ import (
 func decodeGetObjectsReply(t *testing.T, peer *Peer) *message.GetObjectByHash {
 	t.Helper()
 	if frame, ok := takeOutboundFrame(peer); ok {
-		hdr, payload, err := message.ReadMessage(bytes.NewReader(frame))
+		hdr, payload, err := readTestFrame(bytes.NewReader(frame))
 		require.NoError(t, err)
 		require.Equal(t, message.TypeGetObjects, hdr.MessageType)
 		decoded, err := message.Decode(message.TypeGetObjects, payload)

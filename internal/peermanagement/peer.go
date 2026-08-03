@@ -219,7 +219,8 @@ type Peer struct {
 	firstLedgerSeq uint32
 	lastLedgerSeq  uint32
 
-	lastStatus message.NodeStatus
+	lastStatus    message.NodeStatus
+	lastStatusSet bool
 
 	latencyMu     sync.RWMutex
 	pingsInFlight map[uint32]pingInFlight
@@ -553,18 +554,9 @@ func (p *Peer) applyHandshakeExtras(x HandshakeExtras) {
 // ledger only; the (firstSeq, lastSeq) range is updated only when both
 // fields are present, then clamped to (0,0) if either is zero or inverted.
 //
-// newStatus mirrors rippled PeerImp.cpp:1799-1810. Read carefully: rippled's
-// branches both end with `last_status_ = *m;`, which copy-assigns the
-// inbound proto verbatim — so the stored last_status_.newstatus() is
-// dropped whenever the wire message has no newstatus. The else-branch
-// additionally mutates the local `m` to carry the prior enum, so the
-// pubPeerStatus callback (which reads `m`, not last_status_) still sees
-// the inherited value once. We model the same split:
-//   - lastStatus is overwritten verbatim with the wire's NewStatus (zero
-//     argument drops the prior value, matching rippled's `peers` RPC).
-//   - The returned effective status is the wire value when set, or the
-//     prior lastStatus otherwise — consumed by handleStatusChange's
-//     pubPeerStatus emit so subscribers receive the inherited enum.
+// newStatus mirrors rippled's lastStatus copy and one-message inheritance:
+// an absent status inherits the prior present value for publishing, while the
+// stored message is replaced by the original absence.
 //
 // The lostSync early-return runs after the lastStatus write, so a
 // lostSync update carrying a NewStatus still records it — but
@@ -575,12 +567,20 @@ func (p *Peer) applyStatusChange(sc *message.StatusChange) message.NodeStatus {
 	}
 	p.mu.Lock()
 	defer p.mu.Unlock()
+	wireHadStatus := sc.HasNewStatus()
 	effective := sc.NewStatus
-	if sc.NewStatus == 0 {
+	if !wireHadStatus && p.lastStatusSet {
 		effective = p.lastStatus
+		sc.NewStatus = effective
+		sc.NewStatusSet = true
 	}
-	p.lastStatus = sc.NewStatus
-	if sc.NewEvent == message.NodeEventLostSync {
+	if wireHadStatus {
+		p.lastStatus = effective
+	} else {
+		p.lastStatus = 0
+	}
+	p.lastStatusSet = wireHadStatus
+	if sc.HasNewEvent() && sc.NewEvent == message.NodeEventLostSync {
 		p.hasClosedLedger = false
 		p.hasPreviousLedger = false
 		p.closedLedger = [32]byte{}
@@ -1054,6 +1054,11 @@ func (p *Peer) readLoop(ctx context.Context) error {
 
 		frameReader := p.newFrameProgressReader(reader, conn)
 		header, err := message.ReadHeader(frameReader)
+		if err == nil && header.Compressed && !p.compressionNegotiated() {
+			p.IncBadData("compression-unnegotiated")
+			frameReader.finish(false, p.readPolicy.now())
+			return errCompressionUnnegotiated
+		}
 		if err == nil &&
 			header.MessageType == message.TypeManifests &&
 			p.manifestSpoolDir != "" &&
@@ -1194,18 +1199,6 @@ func (p *Peer) readLoop(ctx context.Context) error {
 		}
 		p.metrics.recv.addMessage(wireBytes)
 
-		if header.Compressed {
-			// rippled rejects a compressed frame outright when compression
-			// was not negotiated for the connection (ProtocolMessage.h:369-
-			// 375). A peer shipping LZ4 frames we never agreed to is a
-			// protocol violation — charge and tear the connection down.
-			if !p.compressionNegotiated() {
-				p.IncBadData("compression-unnegotiated")
-				releaseRetainedReservation()
-				return fmt.Errorf("peer sent a compressed frame without negotiating compression")
-			}
-		}
-
 		if !message.IsKnownMessageType(header.MessageType) {
 			releaseRetainedReservation()
 			continue
@@ -1235,6 +1228,15 @@ func (p *Peer) readLoop(ctx context.Context) error {
 				p.inboundReadBudget.release(int64(header.PayloadSize))
 				retainedReservation -= int64(header.PayloadSize)
 			}
+		}
+		if err := message.Preflight(header.MessageType, payload); err != nil {
+			reason := wirePreflightChargeReason(err)
+			p.IncBadData(reason)
+			releaseRetainedReservation()
+			if header.MessageType == message.TypeManifests && p.onBootstrapReady != nil {
+				return fmt.Errorf("bootstrap manifests wire preflight failed: %w", err)
+			}
+			continue
 		}
 		p.traffic.AddCount(CategorizeMessage(header.MessageType), true, len(payload))
 
@@ -1706,7 +1708,8 @@ func chargeForReason(reason string) resource.Charge {
 		"squelch-map-full",
 		"squelch-malformed-pubkey",
 		"decompress-lz4-failed",
-		"message-too-large":
+		"message-too-large",
+		"wire-invalid":
 		return resource.FeeInvalidData
 	case "endpoints-too-large":
 		return resource.FeeUselessData
@@ -1729,6 +1732,7 @@ func chargeForReason(reason string) resource.Charge {
 		"replay-delta-resp-unnegotiated",
 		"proof-path-resp-unnegotiated",
 		"compression-unnegotiated",
+		"get-objects-transactions-oversize",
 		"get-objects-ledgerhash",
 		"have-set-hashsize",
 		"proposal-decode",
@@ -1756,6 +1760,21 @@ func chargeForReason(reason string) resource.Charge {
 		return resource.FeeUselessData
 	}
 	return resource.FeeInvalidData
+}
+
+func wirePreflightChargeReason(err error) string {
+	var limitErr *message.WireLimitError
+	if errors.As(err, &limitErr) {
+		switch limitErr.Reason {
+		case message.WireLimitEndpoints:
+			return "endpoints-too-large"
+		case message.WireLimitManifests:
+			return "manifests-oversize"
+		case message.WireLimitGetObjectTransactions:
+			return "get-objects-transactions-oversize"
+		}
+	}
+	return "wire-invalid"
 }
 
 // IncBadData routes a reason-keyed charge through the resource

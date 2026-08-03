@@ -4,12 +4,43 @@ import (
 	"bytes"
 	"crypto/rand"
 	"crypto/sha512"
+	"errors"
 	"fmt"
 	"testing"
 
+	"github.com/pierrec/lz4"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+func TestDecompressLZ4ErrorContracts(t *testing.T) {
+	for _, size := range []int{0, -1} {
+		if _, err := DecompressLZ4([]byte{1}, size); !errors.Is(err, ErrDecompressFailed) {
+			t.Fatalf("DecompressLZ4 size %d error = %v, want ErrDecompressFailed", size, err)
+		}
+	}
+
+	if _, err := DecompressLZ4([]byte{1}, MaxMessageSize+1); !errors.Is(err, ErrMessageTooLarge) {
+		t.Fatalf("DecompressLZ4 oversized error = %v, want ErrMessageTooLarge", err)
+	}
+
+	corrupt := []byte{0x10}
+	dst := make([]byte, 64)
+	_, cause := lz4.UncompressBlock(corrupt, dst)
+	require.Error(t, cause)
+	_, err := DecompressLZ4(corrupt, len(dst))
+	if !errors.Is(err, ErrDecompressFailed) || !errors.Is(err, cause) {
+		t.Fatalf("DecompressLZ4 corrupt error = %v, want ErrDecompressFailed and %v", err, cause)
+	}
+
+	original := bytes.Repeat([]byte{0x42}, 1024)
+	compressed, err := CompressLZ4(original)
+	require.NoError(t, err)
+	require.NotEmpty(t, compressed)
+	if _, err := DecompressLZ4(compressed, len(original)+1); !errors.Is(err, ErrDecompressFailed) {
+		t.Fatalf("DecompressLZ4 length mismatch error = %v, want ErrDecompressFailed", err)
+	}
+}
 
 // Reference: rippled src/test/overlay/compression_test.cpp
 //

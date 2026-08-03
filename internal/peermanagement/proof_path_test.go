@@ -56,7 +56,7 @@ func drainProofPathResponse(t *testing.T, events chan Event) *message.ProofPathR
 	require.Equal(t, 1, len(events), "expected exactly one event on the channel")
 	evt := <-events
 	require.Equal(t, EventLedgerResponse, evt.Type)
-	header, body, err := message.ReadMessage(bytes.NewReader(evt.Payload))
+	header, body, err := readTestFrame(bytes.NewReader(evt.Payload))
 	require.NoError(t, err, "event payload must be a valid wire frame")
 	require.Equal(t, message.TypeProofPathResponse, header.MessageType)
 	decoded, err := message.Decode(message.TypeProofPathResponse, body)
@@ -127,7 +127,7 @@ func TestProofPathRequest_PrioritySenderBypassesSharedEvents(t *testing.T) {
 	}))
 	assert.Equal(t, PeerID(9), gotPeer)
 	require.NotEmpty(t, gotFrame)
-	header, _, err := message.ReadMessage(bytes.NewReader(gotFrame))
+	header, _, err := readTestFrame(bytes.NewReader(gotFrame))
 	require.NoError(t, err)
 	assert.Equal(t, message.TypeProofPathResponse, header.MessageType)
 	assert.Empty(t, events, "completed replies must not depend on the shared event channel")
@@ -333,4 +333,20 @@ func TestProofPathRequest_NoProvider(t *testing.T) {
 	require.NoError(t, err)
 
 	assert.Equal(t, 0, len(events), "no event should be emitted when provider is nil")
+}
+
+func TestProofPathRequest_ResponseAbove16MiBRejected(t *testing.T) {
+	provider := &fakeProofPathProvider{
+		header: []byte("hdr"),
+		path:   [][]byte{make([]byte, MaxProofPathResponseBytes)},
+	}
+	events := make(chan Event, 1)
+	h := NewLedgerSyncHandler(events)
+	h.SetProvider(provider)
+
+	err := h.HandleMessage(context.Background(), PeerID(10), &message.ProofPathRequest{
+		Key: fixedKey(), LedgerHash: fixedHash(), MapType: message.LedgerMapAccountState,
+	})
+	require.NoError(t, err)
+	assert.Empty(t, events)
 }

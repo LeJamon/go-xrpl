@@ -194,6 +194,24 @@ func TestServeFetchPack_BadHashCharged(t *testing.T) {
 	assert.NotZero(t, peer.BadDataCount(), "a malformed fetch-pack hash must be charged")
 }
 
+func TestHandleGetObjects_ExplicitEmptyGenericLedgerHashCharged(t *testing.T) {
+	o, peer := newFetchPackTestOverlay(t, &fakeFetchPackProvider{})
+	payload, err := message.Encode(&message.GetObjectByHash{
+		ObjType:    message.ObjectTypeLedger,
+		Query:      true,
+		LedgerHash: []byte{},
+	})
+	require.NoError(t, err)
+
+	o.onMessageReceived(Event{
+		PeerID:      peer.ID(),
+		MessageType: message.TypeGetObjects,
+		Payload:     payload,
+	})
+
+	assert.NotZero(t, peer.BadDataCount())
+}
+
 // TestHandleGetObjects_FetchPackReplyForwardedToRouter: a query=false
 // fetch-pack reply is forwarded to the overlay→router channel for consumption.
 func TestHandleGetObjects_FetchPackReplyForwardedToRouter(t *testing.T) {

@@ -53,7 +53,7 @@ func drainReplayDeltaResponse(t *testing.T, events chan Event) *message.ReplayDe
 		t.Fatal("expected an event on the channel, got none")
 	}
 	require.Equal(t, EventLedgerResponse, evt.Type)
-	header, body, err := message.ReadMessage(bytes.NewReader(evt.Payload))
+	header, body, err := readTestFrame(bytes.NewReader(evt.Payload))
 	require.NoError(t, err, "event payload must be a valid wire frame")
 	require.Equal(t, message.TypeReplayDeltaResponse, header.MessageType)
 	decoded, err := message.Decode(message.TypeReplayDeltaResponse, body)
@@ -106,7 +106,7 @@ func TestReplayDeltaRequest_PrioritySenderBypassesSharedEvents(t *testing.T) {
 	require.NoError(t, h.HandleMessage(context.Background(), PeerID(9), &message.ReplayDeltaRequest{LedgerHash: fixedHash()}))
 	assert.Equal(t, PeerID(9), gotPeer)
 	require.NotEmpty(t, gotFrame)
-	header, _, err := message.ReadMessage(bytes.NewReader(gotFrame))
+	header, _, err := readTestFrame(bytes.NewReader(gotFrame))
 	require.NoError(t, err)
 	assert.Equal(t, message.TypeReplayDeltaResponse, header.MessageType)
 	assert.Empty(t, events, "completed replies must not depend on the shared event channel")
@@ -188,23 +188,14 @@ func TestReplayDeltaRequest_NoProvider(t *testing.T) {
 	assert.Equal(t, 0, len(events), "no event should be emitted when provider is nil")
 }
 
-// TestReplayDeltaRequest_OversizedResponse drives the defensive size cap.
-// A provider returns a payload whose total bytes exceed
-// MaxReplayDeltaResponseBytes; the handler must refuse to encode the tx
-// list and reply with reNO_LEDGER — NOT reBAD_REQUEST. The request
-// itself is well-formed; we just can't serve at this size, so the
-// lighter "no ledger available" code avoids charging the requester
-// feeMalformedRequest on rippled's side (PeerImp.cpp:1545-1548).
-func TestReplayDeltaRequest_OversizedResponse(t *testing.T) {
-	// Header is small; the tx leaves push us past the cap.
+func TestReplayDeltaRequest_ResponseAbove16MiBAccepted(t *testing.T) {
 	header := []byte("hdr")
 	chunkSize := 1 << 20 // 1 MiB
 	chunk := make([]byte, chunkSize)
 	for i := range chunk {
 		chunk[i] = 0xAB
 	}
-	// 17 leaves of 1 MiB each = 17 MiB > 16 MiB cap.
-	numLeaves := (MaxReplayDeltaResponseBytes / chunkSize) + 1
+	const numLeaves = 17
 	txLeaves := make([][]byte, numLeaves)
 	for i := range txLeaves {
 		txLeaves[i] = chunk
@@ -220,5 +211,10 @@ func TestReplayDeltaRequest_OversizedResponse(t *testing.T) {
 	err := h.HandleMessage(context.Background(), PeerID(5), &message.ReplayDeltaRequest{LedgerHash: hash})
 	require.NoError(t, err)
 
-	assert.Empty(t, events, "oversized responses are charged and dropped without a reply")
+	require.Len(t, events, 1)
+	event := <-events
+	frameHeader, payload, err := readTestFrame(bytes.NewReader(event.Payload))
+	require.NoError(t, err)
+	assert.Equal(t, message.TypeReplayDeltaResponse, frameHeader.MessageType)
+	assert.Greater(t, len(payload), 16*1024*1024)
 }

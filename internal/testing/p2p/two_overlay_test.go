@@ -726,7 +726,10 @@ func TestSingleOverlay_ReplayDelta_HandlerRoundTrip(t *testing.T) {
 		// protobuf body) so the overlay's onLedgerResponse can hand the
 		// payload straight to the peer's send queue without needing to
 		// know the message type. See LedgerSyncHandler.sendReplayDeltaResponse.
-		hdr, body, err := message.ReadMessage(bytes.NewReader(evt.Payload))
+		reader := bytes.NewReader(evt.Payload)
+		hdr, err := message.ReadHeader(reader)
+		require.NoError(t, err)
+		body, err := message.ReadPayload(reader, *hdr)
 		require.NoError(t, err, "event payload must be a valid wire frame")
 		require.Equal(t, message.TypeReplayDeltaResponse, hdr.MessageType)
 		decoded, err := message.Decode(message.TypeReplayDeltaResponse, body)

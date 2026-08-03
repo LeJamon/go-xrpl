@@ -42,7 +42,12 @@ func (o *Overlay) RelayTransaction(except PeerID, frame []byte) {
 // result means the caller must not suppress the full transaction: without a
 // usable hash a HAVE_TRANSACTIONS announcement could never be fulfilled.
 func transactionHashFromFrame(frame []byte) ([32]byte, bool) {
-	header, payload, err := message.ReadMessage(bytes.NewReader(frame))
+	reader := bytes.NewReader(frame)
+	header, err := message.ReadHeader(reader)
+	if err != nil {
+		return [32]byte{}, false
+	}
+	payload, err := message.ReadPayload(reader, *header)
 	if err != nil || header.MessageType != message.TypeTransaction {
 		return [32]byte{}, false
 	}

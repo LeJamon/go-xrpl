@@ -14,6 +14,7 @@ import (
 	"github.com/LeJamon/go-xrpl/internal/ledger/inbound"
 	"github.com/LeJamon/go-xrpl/internal/manifest"
 	"github.com/LeJamon/go-xrpl/internal/peermanagement"
+	"github.com/LeJamon/go-xrpl/internal/peermanagement/message"
 	validatorlist "github.com/LeJamon/go-xrpl/internal/validator/list"
 	"github.com/LeJamon/go-xrpl/shamap"
 )
@@ -1007,6 +1008,9 @@ func (r *Router) processManifestJobContext(ctx context.Context, msg *peermanagem
 		}()
 		payload, err := msg.ManifestFrame.Materialize(ctx)
 		if err != nil {
+			if errors.Is(err, message.ErrDecompressFailed) && r.gossip != nil {
+				r.gossip.IncPeerBadData(uint64(msg.PeerID), "decompress-lz4-failed")
+			}
 			r.logger.Warn("failed to materialize manifest spool", "error", err, "peer", msg.PeerID)
 			return
 		}

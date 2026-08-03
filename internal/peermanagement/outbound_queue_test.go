@@ -2,7 +2,6 @@ package peermanagement
 
 import (
 	"bufio"
-	"bytes"
 	"context"
 	"errors"
 	"net"
@@ -455,7 +454,7 @@ func TestValidationBurstBlockedWritersPreservesEveryAcceptedFrame(t *testing.T) 
 
 func outboundTestFrame(t *testing.T, messageType message.MessageType, payload []byte) []byte {
 	t.Helper()
-	var frame bytes.Buffer
-	require.NoError(t, message.WriteMessage(&frame, messageType, payload))
-	return frame.Bytes()
+	frame, err := message.BuildWireMessage(messageType, payload)
+	require.NoError(t, err)
+	return frame
 }

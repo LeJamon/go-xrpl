@@ -1380,7 +1380,7 @@ func (a *Aggregator) ApplyCollection(coll *message.ValidatorListCollection, site
 		// rippled applyList(globalManifest, localManifest, ...) at
 		// ValidatorList.cpp:1140-1151.
 		mf := blob.Manifest
-		if len(mf) == 0 {
+		if !blob.HasManifest() {
 			mf = coll.Manifest
 		}
 		disp, pk, seq := a.ApplyList(mf, blob.Blob, blob.Signature, coll.Version, siteURI)
