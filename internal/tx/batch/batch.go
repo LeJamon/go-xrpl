@@ -225,6 +225,11 @@ func (b *Batch) validateInnerTransactions() (map[string]struct{}, error) {
 		if inner == nil {
 			return nil, ErrBatchNilInnerTx
 		}
+		if inner.TxType() == tx.TypeClawback {
+			if err := tx.ValidateTransactionTemplateAllowlist(inner); err != nil {
+				return nil, ErrBatchInnerHashUncomputable
+			}
+		}
 
 		hash, err := tx.ComputeTransactionHash(inner)
 		if err != nil {
@@ -388,6 +393,11 @@ func (b *Batch) Flatten() (map[string]any, error) {
 	for i, rt := range b.RawTransactions {
 		if rt.RawTransaction.InnerTx == nil {
 			return nil, fmt.Errorf("inner transaction %d is nil", i)
+		}
+		if rt.RawTransaction.InnerTx.TxType() == tx.TypeClawback {
+			if err := tx.ValidateTransactionTemplateAllowlist(rt.RawTransaction.InnerTx); err != nil {
+				return nil, fmt.Errorf("invalid inner transaction %d: %w", i, err)
+			}
 		}
 		innerMap, err := rt.RawTransaction.InnerTx.Flatten()
 		if err != nil {

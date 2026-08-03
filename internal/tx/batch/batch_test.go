@@ -12,6 +12,7 @@ import (
 	"github.com/LeJamon/go-xrpl/amendment"
 	"github.com/LeJamon/go-xrpl/codec/binarycodec"
 	"github.com/LeJamon/go-xrpl/internal/tx"
+	"github.com/LeJamon/go-xrpl/internal/tx/clawback"
 	"github.com/LeJamon/go-xrpl/internal/tx/lending"
 	"github.com/LeJamon/go-xrpl/internal/tx/payment"
 )
@@ -141,6 +142,19 @@ const (
 	testSigner1 = "r9cZA1mLK5R5Am25ArfXFmqgNwjZgnfk59"
 	testSigner2 = "rB5Ux4Lv2nRx6eeoAAsZmtctnBQ2LiACnk"
 )
+
+type clawbackWithTopLevelMPTID struct {
+	*clawback.Clawback
+}
+
+func (c *clawbackWithTopLevelMPTID) Flatten() (map[string]any, error) {
+	fields, err := c.Clawback.Flatten()
+	if err != nil {
+		return nil, err
+	}
+	fields["MPTokenIssuanceID"] = "000000000000000000000001000000000000000000000001"
+	return fields, nil
+}
 
 // Auto-incremented so successive inners hash uniquely (Batch.Validate rejects
 // duplicates per rippled Batch.cpp:253-259).
@@ -466,6 +480,17 @@ func TestBatchFlatten(t *testing.T) {
 		signers, ok := flat["BatchSigners"].([]map[string]any)
 		require.True(t, ok)
 		assert.Len(t, signers, 1)
+	})
+
+	t.Run("rejects disallowed Clawback field", func(t *testing.T) {
+		b := NewBatch(testOuter)
+		b.AddInnerTransaction(&clawbackWithTopLevelMPTID{Clawback: clawback.NewClawback(
+			testOuter,
+			tx.NewIssuedAmountFromFloat64(1, "USD", testSigner1),
+		)})
+
+		_, err := b.Flatten()
+		require.EqualError(t, err, "invalid inner transaction 0: Field 'MPTokenIssuanceID' found in disallowed location.")
 	})
 }
 

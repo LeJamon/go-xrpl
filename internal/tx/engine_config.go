@@ -324,6 +324,15 @@ func computeTransactionHash(tx Transaction) ([32]byte, error) {
 		if c != nil && c.txIDCached {
 			return c.cachedTxID, nil
 		}
+		if tx.TxType() == TypeClawback {
+			fields, err := binarycodec.DecodeBytes(rawBytes)
+			if err != nil {
+				return [32]byte{}, err
+			}
+			if err := ValidateTemplateFields(TypeClawback, fields); err != nil {
+				return [32]byte{}, err
+			}
+		}
 		hash := hashWithTxnPrefix(rawBytes)
 		if c != nil {
 			c.cachedTxID = hash

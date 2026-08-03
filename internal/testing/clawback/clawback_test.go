@@ -821,7 +821,7 @@ func TestClawback_FrozenLine(t *testing.T) {
 	require.NotNil(t, data)
 	line, err := state.ParseRippleState(data)
 	require.NoError(t, err)
-	expected, opposite := uint32(state.LsfHighFreeze), uint32(state.LsfLowFreeze)
+	expected, opposite := state.LsfHighFreeze, state.LsfLowFreeze
 	if state.CompareAccountIDs(alice.ID, bob.ID) < 0 {
 		expected, opposite = state.LsfLowFreeze, state.LsfHighFreeze
 	}

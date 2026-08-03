@@ -336,6 +336,28 @@ func TestMPTokenClawbackTypedSerializationRejectsTopLevelIssuanceID(t *testing.T
 	require.EqualError(t, err, "Field 'MPTokenIssuanceID' found in disallowed location.")
 }
 
+func TestMPTokenClawbackRawHashRejectsTopLevelIssuanceID(t *testing.T) {
+	transaction := NewMPTokenClawback(
+		"rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh",
+		"r3kmLJN5D28dHuH8vZNUZpMC43pEHpaocV",
+		newTestMPTAmount(100, "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh"),
+	)
+	seq := uint32(1)
+	transaction.Sequence = &seq
+	transaction.Fee = "10"
+
+	fields, err := transaction.Flatten()
+	require.NoError(t, err)
+	tx.PopulateRequiredWireFields(fields, transaction.GetCommon())
+	fields["MPTokenIssuanceID"] = testMPTIssuanceID
+	wire, err := binarycodec.EncodeBytes(fields)
+	require.NoError(t, err)
+	transaction.SetRawBytes(wire)
+
+	_, err = tx.ComputeTransactionHash(transaction)
+	require.EqualError(t, err, "Field 'MPTokenIssuanceID' found in disallowed location.")
+}
+
 // Amendment Tests
 
 func TestClawbackRequiredAmendments(t *testing.T) {
