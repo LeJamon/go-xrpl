@@ -38,7 +38,6 @@ import (
 	"github.com/LeJamon/go-xrpl/crypto"
 	"github.com/LeJamon/go-xrpl/crypto/ed25519"
 	"github.com/LeJamon/go-xrpl/crypto/secp256k1"
-	"github.com/LeJamon/go-xrpl/internal/stringutil"
 	"github.com/LeJamon/go-xrpl/protocol"
 )
 
@@ -203,7 +202,7 @@ func Deserialize(data []byte) (*Manifest, error) {
 			return nil, fmt.Errorf("manifest: Domain not hex: %w", err)
 		}
 		m.domain = string(b)
-		if !stringutil.IsProperlyFormedTomlDomain(m.domain) {
+		if !protocol.IsProperlyFormedTomlDomain(m.domain) {
 			return nil, errors.New("manifest: Domain is not a properly formed TOML domain")
 		}
 	}

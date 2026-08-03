@@ -19,7 +19,6 @@ import (
 
 	rootcrypto "github.com/LeJamon/go-xrpl/crypto"
 	"github.com/LeJamon/go-xrpl/crypto/secp256k1"
-	"github.com/LeJamon/go-xrpl/internal/stringutil"
 	"github.com/LeJamon/go-xrpl/protocol"
 )
 
@@ -830,7 +829,7 @@ func ValidateServerDomain(headers http.Header) (string, error) {
 	if v == "" {
 		return "", nil
 	}
-	if !stringutil.IsProperlyFormedTomlDomain(v) {
+	if !protocol.IsProperlyFormedTomlDomain(v) {
 		return "", fmt.Errorf("%w: invalid Server-Domain %q",
 			ErrInvalidHandshake, v)
 	}

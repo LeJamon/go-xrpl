@@ -753,7 +753,7 @@ func TestManifest_Revoked_WithEmptyEphemeralField_Rejected(t *testing.T) {
 			require.NoError(t, err)
 
 			_, err = manifest.Deserialize(withEmptyField)
-			require.ErrorContains(t, err, "revoked manifest contains ephemeral key/signature")
+			require.ErrorContains(t, err, "revoked manifest must not carry ephemeral fields")
 		})
 	}
 }
