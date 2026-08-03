@@ -299,8 +299,6 @@ func TestRPCSubBookUnsubscribeTransactionally(t *testing.T) {
 	assert.Equal(t, 2, len(books))
 }
 
-// TestRPCSub_EmptyHostRejectedAtSubscribe rejects an ambiguous destination
-// before allocating a registry entry or delivery worker.
 func TestRPCSub_EmptyHostRejectedAtSubscribe(t *testing.T) {
 	ws, services := newRPCSubTestServer(t)
 
@@ -913,8 +911,6 @@ func TestRPCSub_ProductionClientTreatsRedirectAsFailure(t *testing.T) {
 	}
 }
 
-// TestRPCSub_MalformedStreamRollsBackEntry ensures a failed new URL request
-// leaves no registry entry or manager connection behind.
 func TestRPCSub_MalformedStreamRollsBackEntry(t *testing.T) {
 	ws, services := newRPCSubTestServer(t)
 	sink := newRPCSubSink(t)
