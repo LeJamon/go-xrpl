@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/LeJamon/go-xrpl/drops"
+	"github.com/LeJamon/go-xrpl/protocol"
 )
 
 // ValidateConfig performs comprehensive validation on the complete configuration.
@@ -216,6 +217,9 @@ func validateMiscSettings(config *Config) []error {
 	}
 	if err := ValidateWebsocketPingFrequency(config.WebsocketPingFrequency); err != nil {
 		errs = append(errs, err)
+	}
+	if config.ServerDomain != "" && !protocol.IsProperlyFormedTomlDomain(config.ServerDomain) {
+		errs = append(errs, errors.New("invalid server_domain: the domain name does not appear to meet the requirements"))
 	}
 	if config.FeeDefault != nil {
 		if err := validateVotingValue("fee_default", *config.FeeDefault, uint64(drops.MaxDrops)); err != nil {

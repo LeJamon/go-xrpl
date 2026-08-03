@@ -19,7 +19,6 @@ import (
 
 	rootcrypto "github.com/LeJamon/go-xrpl/crypto"
 	"github.com/LeJamon/go-xrpl/crypto/secp256k1"
-	"github.com/LeJamon/go-xrpl/internal/stringutil"
 	"github.com/LeJamon/go-xrpl/protocol"
 )
 
@@ -826,11 +825,12 @@ type HandshakeExtras struct {
 // Runs first in the verify order
 // (Server-Domain → Network-ID → Network-Time → Public-Key → ...).
 func ValidateServerDomain(headers http.Header) (string, error) {
-	v := headers.Get(HeaderServerDomain)
-	if v == "" {
+	values := headers.Values(HeaderServerDomain)
+	if len(values) == 0 {
 		return "", nil
 	}
-	if !stringutil.IsProperlyFormedTomlDomain(v) {
+	v := values[0]
+	if !protocol.IsProperlyFormedTomlDomain(v) {
 		return "", fmt.Errorf("%w: invalid Server-Domain %q",
 			ErrInvalidHandshake, v)
 	}

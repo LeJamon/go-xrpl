@@ -16,6 +16,35 @@ func TestWithPublicIPCopiesCallerValue(t *testing.T) {
 	}
 }
 
+func TestConfigValidateServerDomain(t *testing.T) {
+	tests := []struct {
+		name    string
+		domain  string
+		wantErr bool
+	}{
+		{name: "empty"},
+		{name: "valid", domain: "validator.example.com"},
+		{name: "invalid", domain: "-validator.example.com", wantErr: true},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			cfg := DefaultConfig()
+			cfg.ServerDomain = test.domain
+			err := cfg.Validate()
+			if test.wantErr {
+				if err == nil {
+					t.Fatal("Validate returned nil, want an invalid ServerDomain error")
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("Validate returned error: %v", err)
+			}
+		})
+	}
+}
+
 // TestDefaultConfig_ReduceRelayOptIn pins Task 4.4 (G5): rippled ships
 // with reduce-relay disabled by default — `Config.h:248` sets
 // `VP_REDUCE_RELAY_BASE_SQUELCH_ENABLE = false`, `Config.h:258` sets

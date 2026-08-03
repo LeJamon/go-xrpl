@@ -1,4 +1,4 @@
-package stringutil
+package protocol
 
 import (
 	"regexp"
@@ -6,10 +6,6 @@ import (
 	"testing"
 )
 
-// TestIsProperlyFormedTomlDomain_RegexCrossCheck pins the RE2 translation
-// against an independent rippled-shaped regex (StringUtilities.cpp:142-153),
-// so a future edit to tomlDomainRe that drifts from rippled's grammar fails
-// here rather than silently.
 func TestIsProperlyFormedTomlDomain_RegexCrossCheck(t *testing.T) {
 	rippledLike := regexp.MustCompile(
 		`^([A-Za-z0-9](?:[A-Za-z0-9\-]{0,61}[A-Za-z0-9])?\.)+[A-Za-z]{2,63}$`,
@@ -42,9 +38,6 @@ func TestIsProperlyFormedTomlDomain_RegexCrossCheck(t *testing.T) {
 	}
 }
 
-// TestIsProperlyFormedTomlDomain_TomlParity mirrors rippled's
-// isProperlyFormedTomlDomain (StringUtilities.cpp:131-156), enumerating the
-// length, label, and TLD boundaries.
 func TestIsProperlyFormedTomlDomain_TomlParity(t *testing.T) {
 	cases := []struct {
 		name string

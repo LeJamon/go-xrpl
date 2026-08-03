@@ -1528,6 +1528,38 @@ func TestHandshake_RemoteIPSelfReported_MatchesTcpConn(t *testing.T) {
 	})
 }
 
+func TestValidateServerDomain(t *testing.T) {
+	tests := []struct {
+		name    string
+		present bool
+		value   string
+		want    string
+		wantErr bool
+	}{
+		{name: "absent"},
+		{name: "present empty", present: true, wantErr: true},
+		{name: "valid", present: true, value: "validator.example.com", want: "validator.example.com"},
+		{name: "invalid", present: true, value: "-validator.example.com", wantErr: true},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			headers := make(http.Header)
+			if test.present {
+				headers[HeaderServerDomain] = []string{test.value}
+			}
+			got, err := ValidateServerDomain(headers)
+			if test.wantErr {
+				require.Error(t, err)
+				assert.True(t, errors.Is(err, ErrInvalidHandshake))
+				return
+			}
+			require.NoError(t, err)
+			assert.Equal(t, test.want, got)
+		})
+	}
+}
+
 // Round-trip topology: sender A (public IP pA) → receiver B (public IP pB).
 // Verifies the full set of issue-#270 headers + IP consistency
 // (Handshake.cpp:325-359).

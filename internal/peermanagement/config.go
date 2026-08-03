@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/LeJamon/go-xrpl/internal/peermanagement/message"
+	"github.com/LeJamon/go-xrpl/protocol"
 )
 
 // Default configuration values.
@@ -514,6 +515,9 @@ func (c *Config) Validate() error {
 	}
 	if c.Clock == nil {
 		return errors.New("Clock function cannot be nil")
+	}
+	if c.ServerDomain != "" && !protocol.IsProperlyFormedTomlDomain(c.ServerDomain) {
+		return errors.New("invalid ServerDomain: the domain name does not appear to meet the requirements")
 	}
 	// Legacy EnableReduceRelay propagates to both specific flags when
 	// the caller hasn't set them independently — enabling
