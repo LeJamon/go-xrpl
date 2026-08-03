@@ -445,18 +445,18 @@ func (o *Overlay) clusterFeeSinkSnapshot() func(fee uint32) {
 	return o.clusterFeeSink
 }
 
-// SetLocalLoadFeeProvider installs the reader that supplies our own
-// LoadFee for the outbound TMCluster gossip self-entry. nil-safe —
-// sendClusterUpdate falls back to 0 when unwired. Guarded by providersMu:
-// read concurrently by the maintenance loop's sendClusterUpdate while the
-// server wires it after Run has launched.
-func (o *Overlay) SetLocalLoadFeeProvider(fn func() uint32) {
+// SetLocalLoadFeeProvider installs the reader that supplies our own LoadFee
+// and validated-ledger age for the outbound TMCluster gossip self-entry.
+// nil-safe — sendClusterUpdate falls back to 0 when unwired. Guarded by
+// providersMu: read concurrently by the maintenance loop's sendClusterUpdate
+// while the server wires it after Run has launched.
+func (o *Overlay) SetLocalLoadFeeProvider(fn func() (uint32, time.Duration)) {
 	o.providersMu.Lock()
 	o.localLoadFeeProvider = fn
 	o.providersMu.Unlock()
 }
 
-func (o *Overlay) localLoadFeeProviderSnapshot() func() uint32 {
+func (o *Overlay) localLoadFeeProviderSnapshot() func() (uint32, time.Duration) {
 	o.providersMu.RLock()
 	defer o.providersMu.RUnlock()
 	return o.localLoadFeeProvider

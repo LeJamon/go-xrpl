@@ -3,6 +3,7 @@ package peermanagement
 import (
 	"sync"
 	"testing"
+	"time"
 )
 
 // TestPeerLifecycleCallbacksConcurrentAccess guards the providersMu
@@ -133,7 +134,7 @@ func TestClusterFeeProviderSettersConcurrentAccess(t *testing.T) {
 		defer wg.Done()
 		for range iterations {
 			o.SetClusterFeeSink(func(uint32) {})
-			o.SetLocalLoadFeeProvider(func() uint32 { return 0 })
+			o.SetLocalLoadFeeProvider(func() (uint32, time.Duration) { return 0, 0 })
 		}
 	}()
 
