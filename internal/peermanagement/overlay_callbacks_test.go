@@ -135,7 +135,6 @@ func TestClusterFeeProviderSettersConcurrentAccess(t *testing.T) {
 		for range iterations {
 			o.SetClusterFeeSink(func(uint32) {})
 			o.SetLocalLoadFeeProvider(func() (uint32, time.Duration) { return 0, 0 })
-			o.SetNetworkTimeProvider(time.Now)
 		}
 	}()
 
@@ -148,7 +147,6 @@ func TestClusterFeeProviderSettersConcurrentAccess(t *testing.T) {
 			if p := o.localLoadFeeProviderSnapshot(); p != nil {
 				p()
 			}
-			o.networkTime()
 		}
 	}()
 

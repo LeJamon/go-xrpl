@@ -581,9 +581,6 @@ func (r *nodeRuntime) configureConsensus() error {
 			})
 		}
 
-		// Cluster freshness and report timestamps use consensus-adjusted time.
-		overlay.SetNetworkTimeProvider(r.consensus.Adaptor.Now)
-
 		// LoadFeeTrack ingress + outbound self-load advertisement.
 		// Mirrors the rippled wiring split:
 		//   - PeerImp.cpp:1193 setClusterFee(median) on inbound TMCluster
