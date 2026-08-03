@@ -50,11 +50,12 @@ func (r *Router) handleGetLedger(msg *peermanagement.InboundMessage) {
 		return
 	}
 	if req.InfoType != message.LedgerInfoTsCandidate &&
-		len(req.LedgerHash) == 0 && !req.HasLedgerSeq() && req.LType != message.LedgerTypeClosed {
+		len(req.LedgerHash) == 0 && !req.HasLedgerSeq() &&
+		(!req.HasLType() || req.LType != message.LedgerTypeClosed) {
 		r.serve.IncPeerBadData(uint64(msg.PeerID), "get-ledger-invalid-request")
 		return
 	}
-	if req.LType < message.LedgerTypeAccepted || req.LType > message.LedgerTypeClosed {
+	if req.HasLType() && (req.LType < message.LedgerTypeAccepted || req.LType > message.LedgerTypeClosed) {
 		r.serve.IncPeerBadData(uint64(msg.PeerID), "get-ledger-invalid-ltype")
 		return
 	}
@@ -141,7 +142,7 @@ func (r *Router) handleGetLedger(msg *peermanagement.InboundMessage) {
 			return
 		}
 		l, err = svc.GetLedgerBySequence(req.LedgerSeq)
-	} else if req.LType == message.LedgerTypeClosed {
+	} else if req.HasLType() && req.LType == message.LedgerTypeClosed {
 		l = svc.GetClosedLedger()
 	}
 	if err != nil || l == nil {

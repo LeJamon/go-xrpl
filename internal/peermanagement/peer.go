@@ -219,7 +219,8 @@ type Peer struct {
 	firstLedgerSeq uint32
 	lastLedgerSeq  uint32
 
-	lastStatus message.NodeStatus
+	lastStatus    message.NodeStatus
+	lastStatusSet bool
 
 	latencyMu     sync.RWMutex
 	pingsInFlight map[uint32]pingInFlight
@@ -553,18 +554,9 @@ func (p *Peer) applyHandshakeExtras(x HandshakeExtras) {
 // ledger only; the (firstSeq, lastSeq) range is updated only when both
 // fields are present, then clamped to (0,0) if either is zero or inverted.
 //
-// newStatus mirrors rippled PeerImp.cpp:1799-1810. Read carefully: rippled's
-// branches both end with `last_status_ = *m;`, which copy-assigns the
-// inbound proto verbatim — so the stored last_status_.newstatus() is
-// dropped whenever the wire message has no newstatus. The else-branch
-// additionally mutates the local `m` to carry the prior enum, so the
-// pubPeerStatus callback (which reads `m`, not last_status_) still sees
-// the inherited value once. We model the same split:
-//   - lastStatus is overwritten verbatim with the wire's NewStatus (zero
-//     argument drops the prior value, matching rippled's `peers` RPC).
-//   - The returned effective status is the wire value when set, or the
-//     prior lastStatus otherwise — consumed by handleStatusChange's
-//     pubPeerStatus emit so subscribers receive the inherited enum.
+// newStatus mirrors rippled's lastStatus copy and one-message inheritance:
+// an absent status inherits the prior present value for publishing, while the
+// stored message is replaced by the original absence.
 //
 // The lostSync early-return runs after the lastStatus write, so a
 // lostSync update carrying a NewStatus still records it — but
@@ -575,12 +567,20 @@ func (p *Peer) applyStatusChange(sc *message.StatusChange) message.NodeStatus {
 	}
 	p.mu.Lock()
 	defer p.mu.Unlock()
+	wireHadStatus := sc.HasNewStatus()
 	effective := sc.NewStatus
-	if sc.NewStatus == 0 {
+	if !wireHadStatus && p.lastStatusSet {
 		effective = p.lastStatus
+		sc.NewStatus = effective
+		sc.NewStatusSet = true
 	}
-	p.lastStatus = sc.NewStatus
-	if sc.NewEvent == message.NodeEventLostSync {
+	if wireHadStatus {
+		p.lastStatus = effective
+	} else {
+		p.lastStatus = 0
+	}
+	p.lastStatusSet = wireHadStatus
+	if sc.HasNewEvent() && sc.NewEvent == message.NodeEventLostSync {
 		p.hasClosedLedger = false
 		p.hasPreviousLedger = false
 		p.closedLedger = [32]byte{}

@@ -13,10 +13,8 @@ import (
 )
 
 // querytypeRecorder records both IncPeerBadData and SendToPeer so the
-// query_type validation test can assert that a present-but-invalid query_type
-// charges the peer and serves nothing, while a valid (qtINDIRECT) or absent
-// one serves normally. badDataCall and sentFrame are shared with the other
-// router tests in this package.
+// query_type validation tests. badDataCall and sentFrame are shared with the
+// other router tests in this package.
 type querytypeRecorder struct {
 	recordingSender
 	qmu     sync.Mutex
@@ -59,42 +57,39 @@ func makeRouterWithQueryTypeRecorder(t *testing.T) (*Router, *querytypeRecorder)
 	return r, rs
 }
 
-// TestRouter_GetLedger_QueryTypeValidation pins rippled's
-// onMessage(TMGetLedger) query_type rule: qtINDIRECT is the only valid value.
-// A present-but-different value is invalid data — charge the peer and drop the
-// request without disconnecting; an absent or qtINDIRECT value is served. The
-// tx-set is served via a cached liTS_CANDIDATE request because that path is
-// exempt from load-shedding, so the positive cases are deterministic.
+// TestRouter_GetLedger_QueryTypeValidation pins proto2 closed-enum behavior:
+// unknown wire values become unknown fields, so rippled observes query_type as
+// absent. The tx-set path is exempt from load-shedding, keeping the cases
+// deterministic.
 func TestRouter_GetLedger_QueryTypeValidation(t *testing.T) {
 	blobs := [][]byte{
 		bytes.Repeat([]byte{0x11}, 16),
 		bytes.Repeat([]byte{0x55}, 16),
 	}
 
-	t.Run("invalid query_type charges peer and serves nothing", func(t *testing.T) {
+	t.Run("unknown query_type is treated as absent", func(t *testing.T) {
 		r, rs := makeRouterWithQueryTypeRecorder(t)
 		ts, err := r.adaptor.BuildTxSet(blobs)
 		require.NoError(t, err)
 		id := ts.ID()
 
-		invalid := message.LedgerQueryType(7)
 		req := &message.GetLedger{
 			InfoType:   message.LedgerInfoTsCandidate,
 			LedgerHash: id[:],
 			NodeIDs:    [][]byte{rootNodeID()},
-			QueryType:  &invalid,
 		}
+		payload := encodePayload(t, req)
+		payload = append(payload, 0x38, 0x07)
 		r.handleMessage(&peermanagement.InboundMessage{
 			PeerID:  42,
 			Type:    message.TypeGetLedger,
-			Payload: encodePayload(t, req),
+			Payload: payload,
 		})
 
 		bd, sent := rs.snapshot()
-		require.Len(t, bd, 1, "invalid query_type must charge bad data exactly once")
-		assert.Equal(t, uint64(42), bd[0].peerID)
-		assert.Equal(t, "get-ledger-bad-querytype", bd[0].reason)
-		assert.Empty(t, sent, "invalid query_type must not serve a response")
+		assert.Empty(t, bd)
+		require.Len(t, sent, 1)
+		assert.Equal(t, uint64(42), sent[0].peerID)
 	})
 
 	t.Run("qtINDIRECT serves normally", func(t *testing.T) {

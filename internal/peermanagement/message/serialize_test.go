@@ -3,7 +3,10 @@ package message
 import (
 	"bytes"
 	"reflect"
+	"strings"
 	"testing"
+
+	"google.golang.org/protobuf/encoding/protowire"
 )
 
 func TestPingRoundtrip(t *testing.T) {
@@ -341,10 +344,6 @@ func TestGetLedgerQueryDepthPresence(t *testing.T) {
 	}
 }
 
-// TestGetLedgerQueryTypePresence pins that query_type presence survives the
-// wire round-trip: an absent field decodes to nil (so the serve path treats
-// it as "accept"), while a present non-qtINDIRECT value is preserved as a
-// distinct non-nil value the serve path can reject.
 func TestGetLedgerQueryTypePresence(t *testing.T) {
 	t.Run("absent stays nil", func(t *testing.T) {
 		encoded, err := Encode(&GetLedger{InfoType: LedgerInfoBase})
@@ -360,9 +359,9 @@ func TestGetLedgerQueryTypePresence(t *testing.T) {
 		}
 	})
 
-	t.Run("present non-indirect preserved", func(t *testing.T) {
-		invalid := LedgerQueryType(7)
-		encoded, err := Encode(&GetLedger{InfoType: LedgerInfoBase, QueryType: &invalid})
+	t.Run("explicit indirect stays present", func(t *testing.T) {
+		value := QueryTypeIndirect
+		encoded, err := Encode(&GetLedger{InfoType: LedgerInfoBase, QueryType: &value})
 		if err != nil {
 			t.Fatalf("Encode error: %v", err)
 		}
@@ -370,12 +369,85 @@ func TestGetLedgerQueryTypePresence(t *testing.T) {
 		if err != nil {
 			t.Fatalf("Decode error: %v", err)
 		}
-		qt := decoded.(*GetLedger).QueryType
-		if qt == nil {
-			t.Fatal("QueryType = nil, want present")
+		if qt := decoded.(*GetLedger).QueryType; qt == nil || *qt != value {
+			t.Fatalf("QueryType = %v, want present qtINDIRECT", qt)
 		}
-		if *qt != invalid {
-			t.Errorf("QueryType = %d, want %d", *qt, invalid)
+	})
+
+	t.Run("unknown wire value becomes absent", func(t *testing.T) {
+		wire := []byte{0x08, 0x00, 0x38, 0x07}
+		decoded, err := Decode(TypeGetLedger, wire)
+		if err != nil {
+			t.Fatalf("Decode error: %v", err)
+		}
+		if qt := decoded.(*GetLedger).QueryType; qt != nil {
+			t.Fatalf("QueryType = %d, want nil", *qt)
+		}
+	})
+
+	t.Run("unknown outbound value is rejected", func(t *testing.T) {
+		invalid := LedgerQueryType(7)
+		if _, err := Encode(&GetLedger{InfoType: LedgerInfoBase, QueryType: &invalid}); err == nil {
+			t.Fatal("Encode accepted an unknown optional enum")
+		}
+	})
+
+	for _, test := range []struct {
+		name string
+		wire []byte
+	}{
+		{name: "valid then unknown", wire: []byte{0x08, 0x00, 0x38, 0x00, 0x38, 0x07}},
+		{name: "unknown then valid", wire: []byte{0x08, 0x00, 0x38, 0x07, 0x38, 0x00}},
+	} {
+		t.Run(test.name+" preserves optional valid enum", func(t *testing.T) {
+			decoded, err := Decode(TypeGetLedger, test.wire)
+			if err != nil {
+				t.Fatal(err)
+			}
+			queryType := decoded.(*GetLedger).QueryType
+			if queryType == nil || *queryType != QueryTypeIndirect {
+				t.Fatalf("QueryType = %v, want present qtINDIRECT", queryType)
+			}
+		})
+	}
+}
+
+func TestDuplicateRequiredEnumKeepsLastRecognizedValue(t *testing.T) {
+	for _, test := range []struct {
+		name string
+		wire []byte
+	}{
+		{name: "valid then unknown", wire: []byte{0x08, 0x00, 0x08, 0x07}},
+		{name: "unknown then valid", wire: []byte{0x08, 0x07, 0x08, 0x00}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			decoded, err := Decode(TypePing, test.wire)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got := decoded.(*Ping).PType; got != PingTypePing {
+				t.Fatalf("PType = %d, want ptPING", got)
+			}
+		})
+	}
+
+	t.Run("nested valid then unknown", func(t *testing.T) {
+		transaction := protowire.AppendTag(nil, 1, protowire.BytesType)
+		transaction = protowire.AppendBytes(transaction, nil)
+		transaction = protowire.AppendTag(transaction, 2, protowire.VarintType)
+		transaction = protowire.AppendVarint(transaction, uint64(TxStatusNew))
+		transaction = protowire.AppendTag(transaction, 2, protowire.VarintType)
+		transaction = protowire.AppendVarint(transaction, 99)
+		wire := protowire.AppendTag(nil, 1, protowire.BytesType)
+		wire = protowire.AppendBytes(wire, transaction)
+
+		decoded, err := Decode(TypeTransactions, wire)
+		if err != nil {
+			t.Fatal(err)
+		}
+		transactions := decoded.(*Transactions).Transactions
+		if len(transactions) != 1 || transactions[0].Status != TxStatusNew {
+			t.Fatalf("Transactions = %+v, want one tsNEW", transactions)
 		}
 	})
 }
@@ -415,6 +487,16 @@ func TestGetLedgerZeroValuePresence(t *testing.T) {
 		}
 		if got.LedgerSeq != 0 || got.RequestCookie != 0 {
 			t.Fatalf("explicit zero values changed: seq=%d cookie=%d", got.LedgerSeq, got.RequestCookie)
+		}
+	})
+
+	t.Run("unknown ltype wire value becomes absent", func(t *testing.T) {
+		decoded, err := Decode(TypeGetLedger, []byte{0x08, 0x00, 0x10, 0x07})
+		if err != nil {
+			t.Fatalf("Decode error: %v", err)
+		}
+		if got := decoded.(*GetLedger); got.HasLType() {
+			t.Fatalf("LType = %d, want absent", got.LType)
 		}
 	})
 }
@@ -585,7 +667,7 @@ func TestGenericEncodeDecode(t *testing.T) {
 		&Manifests{History: true},
 		&Endpoints{Version: 2},
 		&StatusChange{NewStatus: NodeStatusConnected},
-		&Transaction{RawTransaction: []byte{1, 2, 3}},
+		&Transaction{RawTransaction: []byte{1, 2, 3}, Status: TxStatusNew},
 		&Validation{Validation: []byte{4, 5, 6}},
 		&Squelch{Squelch: true, ValidatorPubKey: []byte{7, 8, 9}},
 	}
@@ -625,5 +707,269 @@ func TestEncodeUnknownType(t *testing.T) {
 	_, err := Encode(&unknownMsg{})
 	if err == nil {
 		t.Error("Expected error for unknown message type")
+	}
+}
+
+func TestDecodeRejectsMissingRequiredFields(t *testing.T) {
+	tests := []struct {
+		name    string
+		msgType MessageType
+		wire    []byte
+	}{
+		{name: "top level", msgType: TypePing},
+		{name: "nested", msgType: TypeManifests, wire: []byte{0x0a, 0x00}},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			if _, err := Decode(test.msgType, test.wire); err == nil {
+				t.Fatal("expected missing required field error")
+			}
+		})
+	}
+}
+
+func TestDecodeRejectsUnknownRequiredEnums(t *testing.T) {
+	transaction := []byte{0x0a, 0x01, 0x01, 0x10, 0x63}
+	tests := []struct {
+		name    string
+		msgType MessageType
+		wire    []byte
+	}{
+		{name: "top level", msgType: TypeTransaction, wire: transaction},
+		{name: "nested", msgType: TypeTransactions, wire: append([]byte{0x0a, byte(len(transaction))}, transaction...)},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			if _, err := Decode(test.msgType, test.wire); err == nil {
+				t.Fatal("expected unknown required enum error")
+			} else if !strings.Contains(err.Error(), "required field") {
+				t.Fatalf("error = %q, want required-field validation", err)
+			}
+		})
+	}
+}
+
+func TestEncodeRejectsUnknownRequiredEnums(t *testing.T) {
+	tests := []Message{
+		&Transaction{Status: TransactionStatus(99)},
+		&Transactions{Transactions: []Transaction{{Status: TransactionStatus(99)}}},
+	}
+	for _, message := range tests {
+		if _, err := Encode(message); err == nil {
+			t.Fatalf("Encode(%T) accepted an unknown required enum", message)
+		} else if !strings.Contains(err.Error(), "invalid required enum") {
+			t.Fatalf("Encode(%T) error = %q, want required enum validation", message, err)
+		}
+	}
+}
+
+func TestRequiredZeroValuesEncode(t *testing.T) {
+	tests := []struct {
+		name    string
+		message Message
+		wire    []byte
+	}{
+		{name: "enum and bool", message: &GetObjectByHash{}, wire: []byte{0x08, 0x00, 0x10, 0x00}},
+		{name: "empty bytes", message: &Validation{}, wire: []byte{0x0a, 0x00}},
+		{name: "nested empty bytes", message: &Manifests{List: []Manifest{{}}}, wire: []byte{0x0a, 0x02, 0x0a, 0x00}},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			wire, err := Encode(test.message)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !bytes.Equal(wire, test.wire) {
+				t.Fatalf("wire = %x, want %x", wire, test.wire)
+			}
+		})
+	}
+}
+
+func TestGetLedgerLTypePresence(t *testing.T) {
+	tests := []struct {
+		name    string
+		request *GetLedger
+		present bool
+	}{
+		{name: "absent", request: &GetLedger{InfoType: LedgerInfoBase}},
+		{name: "explicit zero", request: &GetLedger{InfoType: LedgerInfoBase, LTypeSet: true}, present: true},
+		{name: "nonzero", request: &GetLedger{InfoType: LedgerInfoBase, LType: LedgerTypeClosed}, present: true},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			wire, err := Encode(test.request)
+			if err != nil {
+				t.Fatal(err)
+			}
+			decoded, err := Decode(TypeGetLedger, wire)
+			if err != nil {
+				t.Fatal(err)
+			}
+			request := decoded.(*GetLedger)
+			if request.HasLType() != test.present || request.LTypeSet != test.present {
+				t.Fatalf("ltype presence = %v/%v, want %v", request.HasLType(), request.LTypeSet, test.present)
+			}
+			if request.LType != test.request.LType {
+				t.Fatalf("ltype = %d, want %d", request.LType, test.request.LType)
+			}
+		})
+	}
+}
+
+func TestPingOptionalScalarPresence(t *testing.T) {
+	tests := []struct {
+		name string
+		ping *Ping
+		set  bool
+	}{
+		{name: "absent", ping: &Ping{PType: PingTypePing}},
+		{name: "explicit zero", ping: &Ping{PType: PingTypePing, SeqSet: true, PingTimeSet: true, NetTimeSet: true}, set: true},
+		{name: "nonzero", ping: &Ping{PType: PingTypePong, Seq: 1, PingTime: 2, NetTime: 3}, set: true},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			wire, err := Encode(test.ping)
+			if err != nil {
+				t.Fatal(err)
+			}
+			decoded, err := Decode(TypePing, wire)
+			if err != nil {
+				t.Fatal(err)
+			}
+			ping := decoded.(*Ping)
+			if ping.SeqSet != test.set || ping.PingTimeSet != test.set || ping.NetTimeSet != test.set {
+				t.Fatalf("scalar presence = %v/%v/%v, want %v", ping.SeqSet, ping.PingTimeSet, ping.NetTimeSet, test.set)
+			}
+		})
+	}
+}
+
+func TestStatusChangeOptionalScalarPresence(t *testing.T) {
+	tests := []struct {
+		name   string
+		status *StatusChange
+		set    bool
+	}{
+		{name: "absent", status: &StatusChange{}},
+		{name: "explicit zero", status: &StatusChange{LedgerSeqSet: true, NetworkTimeSet: true}, set: true},
+		{name: "nonzero", status: &StatusChange{NewStatus: NodeStatusConnected, NewEvent: NodeEventAcceptedLedger, LedgerSeq: 1, NetworkTime: 2}, set: true},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			wire, err := Encode(test.status)
+			if err != nil {
+				t.Fatal(err)
+			}
+			decoded, err := Decode(TypeStatusChange, wire)
+			if err != nil {
+				t.Fatal(err)
+			}
+			status := decoded.(*StatusChange)
+			wantEnums := test.status.NewStatus != 0
+			if status.NewStatusSet != wantEnums || status.NewEventSet != wantEnums || status.LedgerSeqSet != test.set || status.NetworkTimeSet != test.set {
+				t.Fatalf("presence = %v/%v/%v/%v, want enums=%v scalars=%v", status.NewStatusSet, status.NewEventSet, status.LedgerSeqSet, status.NetworkTimeSet, wantEnums, test.set)
+			}
+			if status.NewStatus != test.status.NewStatus || status.NewEvent != test.status.NewEvent {
+				t.Fatalf("status/event = %d/%d, want %d/%d", status.NewStatus, status.NewEvent, test.status.NewStatus, test.status.NewEvent)
+			}
+		})
+	}
+
+	t.Run("unknown enum wire values become absent", func(t *testing.T) {
+		decoded, err := Decode(TypeStatusChange, []byte{0x08, 0x00, 0x10, 0x00})
+		if err != nil {
+			t.Fatal(err)
+		}
+		status := decoded.(*StatusChange)
+		if status.NewStatusSet || status.NewEventSet {
+			t.Fatalf("unknown enum presence retained: status=%v event=%v", status.NewStatusSet, status.NewEventSet)
+		}
+	})
+}
+
+func TestReplyErrorPresence(t *testing.T) {
+	tests := []struct {
+		name    string
+		message Message
+		msgType MessageType
+	}{
+		{name: "ledger data absent", message: &LedgerData{}, msgType: TypeLedgerData},
+		{name: "ledger data present", message: &LedgerData{Error: ReplyErrorNoLedger}, msgType: TypeLedgerData},
+		{name: "proof path absent", message: &ProofPathResponse{MapType: LedgerMapTransaction}, msgType: TypeProofPathResponse},
+		{name: "proof path present", message: &ProofPathResponse{MapType: LedgerMapTransaction, Error: ReplyErrorNoNode}, msgType: TypeProofPathResponse},
+		{name: "replay delta absent", message: &ReplayDeltaResponse{}, msgType: TypeReplayDeltaResponse},
+		{name: "replay delta present", message: &ReplayDeltaResponse{Error: ReplyErrorBadRequest}, msgType: TypeReplayDeltaResponse},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			wire, err := Encode(test.message)
+			if err != nil {
+				t.Fatal(err)
+			}
+			decoded, err := Decode(test.msgType, wire)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var set bool
+			switch message := decoded.(type) {
+			case *LedgerData:
+				set = message.ErrorSet
+			case *ProofPathResponse:
+				set = message.ErrorSet
+			case *ReplayDeltaResponse:
+				set = message.ErrorSet
+			}
+			wantSet := strings.Contains(test.name, "present")
+			if set != wantSet {
+				t.Fatalf("error presence = %v, want %v", set, wantSet)
+			}
+		})
+	}
+
+	for _, message := range []Message{
+		&LedgerData{ErrorSet: true},
+		&ProofPathResponse{MapType: LedgerMapTransaction, ErrorSet: true},
+		&ReplayDeltaResponse{ErrorSet: true},
+	} {
+		if _, err := Encode(message); err == nil {
+			t.Fatalf("Encode(%T) accepted an unknown optional enum", message)
+		}
+	}
+
+	for _, test := range []struct {
+		name    string
+		message Message
+		msgType MessageType
+		field   protowire.Number
+	}{
+		{name: "ledger data", message: &LedgerData{}, msgType: TypeLedgerData, field: 6},
+		{name: "proof path", message: &ProofPathResponse{MapType: LedgerMapTransaction}, msgType: TypeProofPathResponse, field: 6},
+		{name: "replay delta", message: &ReplayDeltaResponse{}, msgType: TypeReplayDeltaResponse, field: 4},
+	} {
+		t.Run(test.name+" unknown wire value becomes absent", func(t *testing.T) {
+			wire, err := Encode(test.message)
+			if err != nil {
+				t.Fatal(err)
+			}
+			wire = protowire.AppendTag(wire, test.field, protowire.VarintType)
+			wire = protowire.AppendVarint(wire, 0)
+			decoded, err := Decode(test.msgType, wire)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var set bool
+			switch message := decoded.(type) {
+			case *LedgerData:
+				set = message.HasError()
+			case *ProofPathResponse:
+				set = message.HasError()
+			case *ReplayDeltaResponse:
+				set = message.HasError()
+			}
+			if set {
+				t.Fatal("unknown optional enum remained present")
+			}
+		})
 	}
 }

@@ -63,16 +63,36 @@ func (t *Transactions) Type() MessageType { return TypeTransactions }
 // StatusChange represents a node status change.
 type StatusChange struct {
 	NewStatus          NodeStatus `json:"new_status,omitempty"`
+	NewStatusSet       bool       `json:"-"`
 	NewEvent           NodeEvent  `json:"new_event,omitempty"`
+	NewEventSet        bool       `json:"-"`
 	LedgerSeq          uint32     `json:"ledger_seq,omitempty"`
+	LedgerSeqSet       bool       `json:"-"`
 	LedgerHash         []byte     `json:"ledger_hash,omitempty"`
 	LedgerHashPrevious []byte     `json:"ledger_hash_previous,omitempty"`
 	NetworkTime        uint64     `json:"network_time,omitempty"`
+	NetworkTimeSet     bool       `json:"-"`
 	FirstSeq           *uint32    `json:"first_seq,omitempty"`
 	LastSeq            *uint32    `json:"last_seq,omitempty"`
 }
 
 func (s *StatusChange) Type() MessageType { return TypeStatusChange }
+
+func (s *StatusChange) HasNewStatus() bool {
+	return s != nil && (s.NewStatusSet || s.NewStatus != 0)
+}
+
+func (s *StatusChange) HasNewEvent() bool {
+	return s != nil && (s.NewEventSet || s.NewEvent != 0)
+}
+
+func (s *StatusChange) HasLedgerSeq() bool {
+	return s != nil && (s.LedgerSeqSet || s.LedgerSeq != 0)
+}
+
+func (s *StatusChange) HasNetworkTime() bool {
+	return s != nil && (s.NetworkTimeSet || s.NetworkTime != 0)
+}
 
 // ProposeSet represents a ledger proposal.
 type ProposeSet struct {
@@ -178,6 +198,7 @@ type LedgerNode struct {
 type GetLedger struct {
 	InfoType         LedgerInfoType   `json:"itype"`
 	LType            LedgerType       `json:"ltype,omitempty"`
+	LTypeSet         bool             `json:"-"`
 	LedgerHash       []byte           `json:"ledger_hash,omitempty"`
 	LedgerSeq        uint32           `json:"ledger_seq,omitempty"`
 	LedgerSeqSet     bool             `json:"-"`
@@ -190,6 +211,10 @@ type GetLedger struct {
 }
 
 func (g *GetLedger) Type() MessageType { return TypeGetLedger }
+
+func (g *GetLedger) HasLType() bool {
+	return g != nil && (g.LTypeSet || g.LType != 0)
+}
 
 // HasLedgerSeq reports protobuf field presence, including an explicit zero.
 func (g *GetLedger) HasLedgerSeq() bool {
@@ -215,6 +240,7 @@ type LedgerData struct {
 	RequestCookie    uint32         `json:"request_cookie,omitempty"`
 	RequestCookieSet bool           `json:"-"`
 	Error            ReplyError     `json:"error,omitempty"`
+	ErrorSet         bool           `json:"-"`
 }
 
 func (l *LedgerData) Type() MessageType { return TypeLedgerData }
@@ -224,15 +250,34 @@ func (l *LedgerData) HasRequestCookie() bool {
 	return l != nil && (l.RequestCookieSet || l.RequestCookie != 0)
 }
 
+func (l *LedgerData) HasError() bool {
+	return l != nil && (l.ErrorSet || l.Error != ReplyErrorNone)
+}
+
 // Ping represents a ping/pong message for keepalive and latency measurement.
 type Ping struct {
-	PType    PingType `json:"type"`
-	Seq      uint32   `json:"seq,omitempty"`
-	PingTime uint64   `json:"ping_time,omitempty"`
-	NetTime  uint64   `json:"net_time,omitempty"`
+	PType       PingType `json:"type"`
+	Seq         uint32   `json:"seq,omitempty"`
+	SeqSet      bool     `json:"-"`
+	PingTime    uint64   `json:"ping_time,omitempty"`
+	PingTimeSet bool     `json:"-"`
+	NetTime     uint64   `json:"net_time,omitempty"`
+	NetTimeSet  bool     `json:"-"`
 }
 
 func (p *Ping) Type() MessageType { return TypePing }
+
+func (p *Ping) HasSeq() bool {
+	return p != nil && (p.SeqSet || p.Seq != 0)
+}
+
+func (p *Ping) HasPingTime() bool {
+	return p != nil && (p.PingTimeSet || p.PingTime != 0)
+}
+
+func (p *Ping) HasNetTime() bool {
+	return p != nil && (p.NetTimeSet || p.NetTime != 0)
+}
 
 // Squelch represents a squelch message for reduce-relay.
 type Squelch struct {
@@ -260,9 +305,14 @@ type ProofPathResponse struct {
 	LedgerHeader []byte        `json:"ledger_header,omitempty"`
 	Path         [][]byte      `json:"path,omitempty"`
 	Error        ReplyError    `json:"error,omitempty"`
+	ErrorSet     bool          `json:"-"`
 }
 
 func (p *ProofPathResponse) Type() MessageType { return TypeProofPathResponse }
+
+func (p *ProofPathResponse) HasError() bool {
+	return p != nil && (p.ErrorSet || p.Error != ReplyErrorNone)
+}
 
 // ReplayDeltaRequest requests replay delta.
 type ReplayDeltaRequest struct {
@@ -277,9 +327,14 @@ type ReplayDeltaResponse struct {
 	LedgerHeader []byte     `json:"ledger_header,omitempty"`
 	Transactions [][]byte   `json:"transaction,omitempty"`
 	Error        ReplyError `json:"error,omitempty"`
+	ErrorSet     bool       `json:"-"`
 }
 
 func (r *ReplayDeltaResponse) Type() MessageType { return TypeReplayDeltaResponse }
+
+func (r *ReplayDeltaResponse) HasError() bool {
+	return r != nil && (r.ErrorSet || r.Error != ReplyErrorNone)
+}
 
 // HaveTransactions indicates available transaction hashes.
 type HaveTransactions struct {

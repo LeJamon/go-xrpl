@@ -2098,13 +2098,13 @@ func (r *Router) handleLedgerData(msg *peermanagement.InboundMessage) bool {
 		r.acquisition.IncPeerBadData(uint64(msg.PeerID), "ledger-data-sequence")
 		return false
 	}
-	if ld.Error != message.ReplyErrorNone &&
+	if ld.HasError() &&
 		(ld.Error < message.ReplyErrorNoLedger || ld.Error > message.ReplyErrorBadRequest) {
 		r.logger.Warn("invalid ledger_data reply error", "peer", msg.PeerID, "error", ld.Error)
 		r.acquisition.IncPeerBadData(uint64(msg.PeerID), "ledger-data-error")
 		return false
 	}
-	if ld.Error != message.ReplyErrorNone {
+	if ld.HasError() {
 		r.logger.Warn("inbound ledger: peer returned reply error",
 			"peer", msg.PeerID,
 			"seq", ld.LedgerSeq,

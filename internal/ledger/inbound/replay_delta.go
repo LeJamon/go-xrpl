@@ -550,7 +550,7 @@ func (r *ReplayDelta) verifyAndBuild(resp *message.ReplayDeltaResponse) error {
 	if resp == nil {
 		return errors.New("nil response")
 	}
-	if resp.Error != message.ReplyErrorNone {
+	if resp.HasError() {
 		return fmt.Errorf("peer signaled error: %d", resp.Error)
 	}
 	if len(resp.LedgerHeader) == 0 {

@@ -22,6 +22,20 @@ func TestWalkManifestsValidatesBeforeVisiting(t *testing.T) {
 	require.Zero(t, visits)
 }
 
+func TestWalkManifestsRejectsMissingRequiredSTObjectBeforeVisiting(t *testing.T) {
+	validEntry := protowire.AppendTag(nil, 1, protowire.BytesType)
+	validEntry = protowire.AppendBytes(validEntry, []byte("manifest"))
+	payload := protowire.AppendTag(nil, 1, protowire.BytesType)
+	payload = protowire.AppendBytes(payload, validEntry)
+	payload = protowire.AppendTag(payload, 1, protowire.BytesType)
+	payload = protowire.AppendBytes(payload, nil)
+
+	visits := 0
+	_, err := WalkManifests(payload, func([]byte) { visits++ })
+	require.ErrorContains(t, err, "missing required stobject")
+	require.Zero(t, visits)
+}
+
 func TestWalkManifestsVisitsAliasedEntriesInOrder(t *testing.T) {
 	var payload []byte
 	for _, wire := range [][]byte{[]byte("first"), []byte("second")} {

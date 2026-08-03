@@ -1,6 +1,10 @@
 package message
 
-import "google.golang.org/protobuf/encoding/protowire"
+import (
+	"errors"
+
+	"google.golang.org/protobuf/encoding/protowire"
+)
 
 // WalkManifests validates a TMManifests payload before visiting its entries.
 // The returned byte slices alias payload and are only valid during the call.
@@ -59,6 +63,7 @@ func validateManifests(payload []byte, visitEntries bool, visit func([]byte)) (i
 
 func manifestSTObject(payload []byte) ([]byte, error) {
 	var stObject []byte
+	found := false
 	for len(payload) > 0 {
 		num, typ, tagLen := protowire.ConsumeTag(payload)
 		if tagLen < 0 {
@@ -72,6 +77,7 @@ func manifestSTObject(payload []byte) ([]byte, error) {
 				return nil, protowire.ParseError(valueLen)
 			}
 			stObject = value
+			found = true
 			payload = payload[valueLen:]
 			continue
 		}
@@ -81,6 +87,9 @@ func manifestSTObject(payload []byte) ([]byte, error) {
 			return nil, protowire.ParseError(valueLen)
 		}
 		payload = payload[valueLen:]
+	}
+	if !found {
+		return nil, errors.New("TMManifest: missing required stobject")
 	}
 	return stObject, nil
 }
