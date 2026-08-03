@@ -1584,6 +1584,7 @@ func TestEscrow_CryptoConditions(t *testing.T) {
 			escrow.EscrowFinish(bob, alice, seq).
 				Condition([]byte{}).
 				Fulfillment([]byte{}).
+				Fee(150 * env.BaseFee()).
 				Build())
 		require.Equal(t, "tecCRYPTOCONDITION_ERROR", result.Code)
 		require.True(t, env.LedgerEntryExists(escrowKey))
