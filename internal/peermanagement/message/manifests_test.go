@@ -97,3 +97,22 @@ func TestWalkManifestsMatchesDecoderKnownFieldWireErrors(t *testing.T) {
 		})
 	}
 }
+
+func TestWalkManifestsEnforcesCollectionLimitBeforeVisiting(t *testing.T) {
+	entry := protowire.AppendTag(nil, 1, protowire.BytesType)
+	entry = protowire.AppendBytes(entry, []byte("manifest"))
+	atLimit := repeatedMessageField(1, maxManifests, entry)
+
+	visits := 0
+	count, err := WalkManifests(atLimit, func([]byte) { visits++ })
+	require.NoError(t, err)
+	require.Equal(t, maxManifests, count)
+	require.Equal(t, maxManifests, visits)
+
+	overLimit := append(atLimit, repeatedMessageField(1, 1, entry)...)
+	visits = 0
+	count, err = WalkManifests(overLimit, func([]byte) { visits++ })
+	require.Zero(t, count)
+	requireWireLimit(t, err, WireLimitManifests, maxManifests, maxManifests+1)
+	require.Zero(t, visits)
+}

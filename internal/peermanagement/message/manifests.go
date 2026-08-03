@@ -9,6 +9,9 @@ import (
 // WalkManifests validates a TMManifests payload before visiting its entries.
 // The returned byte slices alias payload and are only valid during the call.
 func WalkManifests(payload []byte, visit func([]byte)) (int, error) {
+	if err := Preflight(TypeManifests, payload); err != nil {
+		return 0, err
+	}
 	count, err := validateManifests(payload, false, nil)
 	if err != nil {
 		return 0, err

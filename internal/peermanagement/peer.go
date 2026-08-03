@@ -1236,6 +1236,15 @@ func (p *Peer) readLoop(ctx context.Context) error {
 				retainedReservation -= int64(header.PayloadSize)
 			}
 		}
+		if err := message.Preflight(header.MessageType, payload); err != nil {
+			reason := wirePreflightChargeReason(err)
+			p.IncBadData(reason)
+			releaseRetainedReservation()
+			if header.MessageType == message.TypeManifests && p.onBootstrapReady != nil {
+				return fmt.Errorf("bootstrap manifests wire preflight failed: %w", err)
+			}
+			continue
+		}
 		p.traffic.AddCount(CategorizeMessage(header.MessageType), true, len(payload))
 
 		delivered := p.dispatchEvent(Event{
@@ -1706,7 +1715,8 @@ func chargeForReason(reason string) resource.Charge {
 		"squelch-map-full",
 		"squelch-malformed-pubkey",
 		"decompress-lz4-failed",
-		"message-too-large":
+		"message-too-large",
+		"wire-invalid":
 		return resource.FeeInvalidData
 	case "endpoints-too-large":
 		return resource.FeeUselessData
@@ -1756,6 +1766,19 @@ func chargeForReason(reason string) resource.Charge {
 		return resource.FeeUselessData
 	}
 	return resource.FeeInvalidData
+}
+
+func wirePreflightChargeReason(err error) string {
+	var limitErr *message.WireLimitError
+	if errors.As(err, &limitErr) {
+		switch limitErr.Reason {
+		case message.WireLimitEndpoints:
+			return "endpoints-too-large"
+		case message.WireLimitManifests:
+			return "manifests-oversize"
+		}
+	}
+	return "wire-invalid"
 }
 
 // IncBadData routes a reason-keyed charge through the resource

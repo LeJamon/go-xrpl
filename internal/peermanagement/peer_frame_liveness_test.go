@@ -206,8 +206,9 @@ func (r *countingReader) Read(dst []byte) (int, error) {
 
 func TestPeerManifestReadBudgetBoundsPayloadAllocation(t *testing.T) {
 	payload := bytes.Repeat([]byte{0x4d}, 32*1024)
+	wirePayload := opaqueTestPayload(payload)
 	frame := manifestFrame(t, payload)
-	budget := newReadBudget(int64(len(payload)))
+	budget := newReadBudget(int64(len(wirePayload)))
 
 	firstQueue := make(chan *InboundMessage, 1)
 	firstQueue <- &InboundMessage{}
@@ -220,7 +221,7 @@ func TestPeerManifestReadBudgetBoundsPayloadAllocation(t *testing.T) {
 	require.Eventually(t, func() bool {
 		budget.mu.Lock()
 		defer budget.mu.Unlock()
-		return budget.used == int64(len(payload))
+		return budget.used == int64(len(wirePayload))
 	}, time.Second, time.Millisecond)
 
 	secondReader := &countingReader{reader: bytes.NewReader(frame)}
@@ -242,7 +243,7 @@ func TestPeerManifestReadBudgetBoundsPayloadAllocation(t *testing.T) {
 	require.NoError(t, firstInbound.Close())
 	require.Eventually(t, func() bool { return secondReader.read.Load() == int64(len(frame)) }, time.Second, time.Millisecond)
 	secondInbound := <-secondQueue
-	require.Equal(t, payload, secondInbound.Payload)
+	require.Equal(t, wirePayload, secondInbound.Payload)
 	require.NoError(t, secondInbound.Close())
 	require.ErrorIs(t, <-firstDone, io.EOF)
 	require.ErrorIs(t, <-secondDone, io.EOF)
@@ -292,7 +293,7 @@ func newFrameLivenessPeer(t *testing.T, clock *livenessClock, conn net.Conn) (*P
 func manifestFrame(t *testing.T, payload []byte) []byte {
 	t.Helper()
 	var frame bytes.Buffer
-	require.NoError(t, message.WriteMessage(&frame, message.TypeManifests, payload))
+	require.NoError(t, message.WriteMessage(&frame, message.TypeManifests, opaqueTestPayload(payload)))
 	return frame.Bytes()
 }
 
@@ -319,7 +320,7 @@ func TestPeerReadLoopAllowsProgressBeyondIdleInterval(t *testing.T) {
 	require.Len(t, events, 1)
 	event := <-events
 	assert.Equal(t, message.TypeManifests, event.MessageType)
-	assert.Equal(t, []byte("manifest"), event.Payload)
+	assert.Equal(t, opaqueTestPayload([]byte("manifest")), event.Payload)
 	assert.Equal(t, 12*time.Second, clock.current().Sub(time.Unix(1_000, 0)))
 	require.GreaterOrEqual(t, len(conn.deadlines), 4)
 	for i := 1; i < 4; i++ {
@@ -367,7 +368,7 @@ func TestPeerReadLoopReportsPartialFrameProgress(t *testing.T) {
 	require.ErrorAs(t, err, &frameErr)
 	require.ErrorIs(t, err, io.ErrUnexpectedEOF)
 	assert.Equal(t, message.TypeManifests, frameErr.MessageType)
-	assert.Equal(t, uint32(len(payload)), frameErr.WireSize)
+	assert.Equal(t, uint32(len(opaqueTestPayload(payload))), frameErr.WireSize)
 	assert.False(t, frameErr.Compressed)
 	assert.Equal(t, uint64(3), frameErr.BytesRead)
 	assert.Equal(t, 2*time.Second, frameErr.Elapsed)
@@ -404,7 +405,10 @@ func TestPeerReadLoopRejectsTricklePastFrameBudget(t *testing.T) {
 			{after: time.Second, data: frame[6:7]},
 			{after: time.Second, data: frame[7:8]},
 			{after: time.Second, data: frame[8:9]},
-			{after: time.Second, data: frame[9:]},
+			{after: time.Second, data: frame[9:10]},
+			{after: time.Second, data: frame[10:11]},
+			{after: time.Second, data: frame[11:12]},
+			{after: time.Second, data: frame[12:]},
 		},
 	}
 	peer, events := newFrameLivenessPeer(t, clock, conn)

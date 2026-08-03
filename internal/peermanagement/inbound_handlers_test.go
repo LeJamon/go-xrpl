@@ -8,6 +8,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"google.golang.org/protobuf/encoding/protowire"
 
 	addresscodec "github.com/LeJamon/go-xrpl/codec/addresscodec"
 	"github.com/LeJamon/go-xrpl/internal/peermanagement/cluster"
@@ -913,11 +914,11 @@ func TestHandleEndpoints_ChargesMalformedEntry(t *testing.T) {
 func TestHandleEndpoints_RejectsOversizedFrame(t *testing.T) {
 	o, peer := newEndpointsTestOverlay(t, PeerID(16))
 
-	eps := make([]message.Endpointv2, endpointsIngestMaxEntries)
-	for i := range eps {
-		eps[i] = message.Endpointv2{Endpoint: "10.0.0.1:51235", Hops: 1}
+	payload := make([]byte, 0, 2*endpointsIngestMaxEntries)
+	for range endpointsIngestMaxEntries {
+		payload = protowire.AppendTag(payload, 3, protowire.BytesType)
+		payload = protowire.AppendVarint(payload, 0)
 	}
-	payload := encodeEndpoints(t, 2, eps)
 	o.onMessageReceived(Event{
 		PeerID:      peer.ID(),
 		MessageType: message.TypeEndpoints,

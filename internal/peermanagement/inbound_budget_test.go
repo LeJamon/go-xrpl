@@ -11,6 +11,7 @@ import (
 
 	"github.com/LeJamon/go-xrpl/internal/peermanagement/message"
 	"github.com/stretchr/testify/require"
+	"google.golang.org/protobuf/encoding/protowire"
 )
 
 func readBudgetUsed(budget *readBudget) int64 {
@@ -20,7 +21,8 @@ func readBudgetUsed(budget *readBudget) int64 {
 }
 
 func TestInboundBulkBudgetFollowsMessageThroughConsumer(t *testing.T) {
-	payload := bytes.Repeat([]byte{0x4c}, 32*1024)
+	payload := protowire.AppendTag(nil, 100, protowire.BytesType)
+	payload = protowire.AppendBytes(payload, bytes.Repeat([]byte{0x4c}, 32*1024))
 	var wire bytes.Buffer
 	require.NoError(t, message.WriteMessage(&wire, message.TypeLedgerData, payload))
 	frame := wire.Bytes()

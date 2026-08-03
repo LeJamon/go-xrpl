@@ -105,23 +105,10 @@ func (r *Router) handleManifests(msg *peermanagement.InboundMessage) bool {
 		return false
 	}
 
-	count, err := message.WalkManifests(msg.Payload, nil)
-	if err != nil {
-		r.logger.Warn("failed to decode manifests frame", "error", err, "peer", msg.PeerID)
-		r.gossip.IncPeerBadData(uint64(msg.PeerID), "manifests-decode")
-		return false
-	}
-	if count == 0 {
-		return true
-	}
-	if count > manifestFrameMaxEntries {
-		r.gossip.IncPeerBadData(uint64(msg.PeerID), "manifests-oversize")
-	}
-	accepted := make([][]byte, 0, min(count, manifestFrameMaxEntries))
+	accepted := make([][]byte, 0, manifestFrameMaxEntries)
 	valid := false
 	badManifest := false
-	charged := count > manifestFrameMaxEntries
-	_, _ = message.WalkManifests(msg.Payload, func(wire []byte) {
+	count, err := message.WalkManifests(msg.Payload, func(wire []byte) {
 		hash := sha512half.Sum(wire)
 		if r.messageSeen != nil && r.messageSeen.seenRecently(hash) {
 			valid = true
@@ -152,11 +139,21 @@ func (r *Router) handleManifests(msg *peermanagement.InboundMessage) bool {
 			if r.messageSeen != nil {
 				r.messageSeen.observe(hash)
 			}
-			// Expected and harmless: a peer gossiped a manifest we
-			// already have at equal or higher seq. No action.
 		}
 	})
-	if badManifest && !charged {
+	if err != nil {
+		r.logger.Warn("failed to decode manifests frame", "error", err, "peer", msg.PeerID)
+		reason := "manifests-decode"
+		if errors.Is(err, message.ErrWireLimit) {
+			reason = "manifests-oversize"
+		}
+		r.gossip.IncPeerBadData(uint64(msg.PeerID), reason)
+		return false
+	}
+	if count == 0 {
+		return true
+	}
+	if badManifest {
 		r.gossip.IncPeerBadData(uint64(msg.PeerID), "manifest-invalid")
 	}
 	r.relayManifests(msg.PeerID, accepted)

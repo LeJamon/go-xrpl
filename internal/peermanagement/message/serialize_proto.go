@@ -848,7 +848,14 @@ func Encode(msg Message) ([]byte, error) {
 	if err := validateEnums(pmsg.ProtoReflect(), false); err != nil {
 		return nil, err
 	}
-	return pb.Marshal(pmsg)
+	encoded, err := pb.Marshal(pmsg)
+	if err != nil {
+		return nil, err
+	}
+	if err := Preflight(msg.Type(), encoded); err != nil {
+		return nil, err
+	}
+	return encoded, nil
 }
 
 // Decode decodes a message from bytes using protobuf.
@@ -857,12 +864,15 @@ func Decode(msgType MessageType, data []byte) (Message, error) {
 	if !ok {
 		return nil, fmt.Errorf("unknown message type: %d", msgType)
 	}
+	if err := Preflight(msgType, data); err != nil {
+		return nil, fmt.Errorf("failed to preflight: %w", err)
+	}
 	pmsg := c.newProto()
 	normalized, err := normalizeEnumWire(data, pmsg.ProtoReflect().Descriptor())
 	if err != nil {
 		return nil, fmt.Errorf("failed to unmarshal: %w", err)
 	}
-	if err := pb.Unmarshal(normalized, pmsg); err != nil {
+	if err := (pb.UnmarshalOptions{RecursionLimit: maxWireDepth, DiscardUnknown: true}).Unmarshal(normalized, pmsg); err != nil {
 		return nil, fmt.Errorf("failed to unmarshal: %w", err)
 	}
 	if err := validateEnums(pmsg.ProtoReflect(), true); err != nil {
