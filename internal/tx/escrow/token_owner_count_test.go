@@ -71,7 +71,7 @@ func TestAdjustOwnerCountViaView_PreservesPresentZeroAccountTxnID(t *testing.T) 
 	require.NoError(t, view.Insert(key, blob))
 
 	// The token-escrow finish trust-line / MPToken create path.
-	adjustOwnerCountViaView(view, dest, 1)
+	require.Equal(t, ter.TesSUCCESS, adjustOwnerCountViaView(view, dest, 1))
 
 	out, err := view.Read(key)
 	require.NoError(t, err)

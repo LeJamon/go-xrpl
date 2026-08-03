@@ -47,7 +47,7 @@ func TestIOUEscrow_CancelRecreatesTrustLine(t *testing.T) {
 				CancelTime(env.Now().Add(2*time.Second)).
 				Build()))
 		env.Close()
-		require.InDelta(t, 9000, env.BalanceIOU(alice, "USD", gw), 0.001)
+		require.Equal(t, usd(9000, gw), *env.IOUBalance(alice, gw, "USD"))
 
 		// alice pays away the rest and deletes her USD trust line.
 		jtx.RequireTxSuccess(t, env.Submit(payment.PayIssued(alice, gw, usd(9000, gw)).Build()))
@@ -55,6 +55,7 @@ func TestIOUEscrow_CancelRecreatesTrustLine(t *testing.T) {
 		env.Trust(alice, tx.NewIssuedAmountFromFloat64(0, "USD", gw.Address))
 		env.Close()
 		require.False(t, env.TrustLineExists(alice, gw, "USD"), "trust line should be deleted")
+		ownerCountBeforeCancel := env.OwnerCount(alice)
 
 		// Advance past the cancel time and cancel the escrow.
 		env.SetTime(env.Now().Add(10 * time.Second))
@@ -64,7 +65,8 @@ func TestIOUEscrow_CancelRecreatesTrustLine(t *testing.T) {
 		if fixOn {
 			jtx.RequireTxSuccess(t, res)
 			require.True(t, env.TrustLineExists(alice, gw, "USD"), "cancel must re-create the trust line")
-			require.InDelta(t, 1000, env.BalanceIOU(alice, "USD", gw), 0.001, "creator must get the escrowed IOU back")
+			require.Equal(t, usd(1000, gw), *env.IOUBalance(alice, gw, "USD"))
+			require.Equal(t, ownerCountBeforeCancel, env.OwnerCount(alice))
 		} else {
 			require.Equal(t, "tefEXCEPTION", res.Code, "pre-fix cancel must fail reading the escrow SLE owner count")
 		}

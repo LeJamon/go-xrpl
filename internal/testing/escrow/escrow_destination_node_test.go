@@ -77,19 +77,38 @@ func TestEscrowCreate_DestinationNode_Pagination(t *testing.T) {
 	// A directory page holds 32 entries; the 33rd escrow lands on page 1 of
 	// both alice's and bob's owner directories.
 	const n = 33
-	var lastSeq uint32
+	sequences := make([]uint32, 0, n)
 	for range n {
-		lastSeq = env.Seq(alice)
+		sequence := env.Seq(alice)
+		sequences = append(sequences, sequence)
 		r := env.Submit(escrow.EscrowCreate(alice, bob, xrp(1)).
 			FinishTime(env.Now().Add(1 * time.Second)).Build())
 		jtx.RequireTxSuccess(t, r)
 		env.Close()
 	}
 
+	lastSeq := sequences[len(sequences)-1]
 	esc := parseEscrowSLE(t, env, alice, lastSeq)
 	require.True(t, esc.HasDestNode)
 	require.Equal(t, uint64(1), esc.DestinationNode, "33rd escrow → destination dir page 1")
 	require.Equal(t, uint64(1), esc.OwnerNode, "33rd escrow → owner dir page 1")
+
+	lastKey := keylet.Escrow(alice.ID, lastSeq)
+	jtx.RequireTxSuccess(t, env.Submit(escrow.EscrowFinish(bob, alice, lastSeq).Build()))
+	require.False(t, env.LedgerEntryExists(lastKey))
+	requireOwnerDirContains(t, env, alice, lastKey.Key, false)
+	requireOwnerDirContains(t, env, bob, lastKey.Key, false)
+	require.Equal(t, uint32(n-1), env.OwnerCount(alice))
+
+	for _, sequence := range sequences[:len(sequences)-1] {
+		key := keylet.Escrow(alice.ID, sequence)
+		jtx.RequireTxSuccess(t, env.Submit(escrow.EscrowFinish(bob, alice, sequence).Build()))
+		require.False(t, env.LedgerEntryExists(key))
+		requireOwnerDirContains(t, env, alice, key.Key, false)
+		requireOwnerDirContains(t, env, bob, key.Key, false)
+	}
+	require.Zero(t, env.OwnerCount(alice))
+	require.Zero(t, env.OwnerCount(bob))
 }
 
 // A cross-account escrow created with sfDestinationNode must finish cleanly:

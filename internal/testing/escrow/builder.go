@@ -16,25 +16,33 @@ func ToRippleTime(t time.Time) uint32 {
 	return protocol.ToRippleTime(t)
 }
 
-// FromRippleTime converts a Ripple epoch time to Go time.Time.
-func FromRippleTime(rippleTime uint32) time.Time {
-	return protocol.FromRippleTime(rippleTime)
+type transactionOptions struct {
+	fee      uint64
+	sequence *uint32
+}
+
+func defaultTransactionOptions() transactionOptions {
+	return transactionOptions{fee: 10}
+}
+
+func (o *transactionOptions) apply(txn tx.Transaction) {
+	txn.GetCommon().Fee = fmt.Sprintf("%d", o.fee)
+	if o.sequence != nil {
+		txn.GetCommon().SetSequence(*o.sequence)
+	}
 }
 
 // EscrowCreateBuilder provides a fluent interface for building EscrowCreate transactions.
 type EscrowCreateBuilder struct {
+	transactionOptions
 	from        *jtx.Account
 	to          *jtx.Account
-	amount      int64      // XRP in drops
-	iouAmount   *tx.Amount // IOU amount (nil = XRP)
-	mptAmount   *tx.Amount // MPT amount (nil = not MPT)
+	amount      tx.Amount
 	finishAfter *uint32
 	cancelAfter *uint32
-	condition   []byte
+	condition   *string
 	destTag     *uint32
 	sourceTag   *uint32
-	fee         int64
-	sequence    *uint32
 	flags       uint32
 }
 
@@ -42,10 +50,10 @@ type EscrowCreateBuilder struct {
 // The amount is specified in drops (1 XRP = 1,000,000 drops).
 func EscrowCreate(from, to *jtx.Account, amount int64) *EscrowCreateBuilder {
 	return &EscrowCreateBuilder{
-		from:   from,
-		to:     to,
-		amount: amount,
-		fee:    10, // Default fee: 10 drops
+		transactionOptions: defaultTransactionOptions(),
+		from:               from,
+		to:                 to,
+		amount:             tx.NewXRPAmount(amount),
 	}
 }
 
@@ -78,14 +86,14 @@ func (b *EscrowCreateBuilder) CancelAfter(rippleTime uint32) *EscrowCreateBuilde
 // Condition sets the crypto-condition that must be fulfilled.
 // The condition should be the raw bytes of the crypto-condition.
 func (b *EscrowCreateBuilder) Condition(cond []byte) *EscrowCreateBuilder {
-	b.condition = cond
+	encoded := hex.EncodeToString(cond)
+	b.condition = &encoded
 	return b
 }
 
 // ConditionHex sets the crypto-condition from a hex string.
 func (b *EscrowCreateBuilder) ConditionHex(condHex string) *EscrowCreateBuilder {
-	cond, _ := hex.DecodeString(condHex)
-	b.condition = cond
+	b.condition = &condHex
 	return b
 }
 
@@ -103,7 +111,7 @@ func (b *EscrowCreateBuilder) SourceTag(tag uint32) *EscrowCreateBuilder {
 
 // Fee sets the transaction fee in drops.
 func (b *EscrowCreateBuilder) Fee(f uint64) *EscrowCreateBuilder {
-	b.fee = int64(f)
+	b.fee = f
 	return b
 }
 
@@ -121,28 +129,20 @@ func (b *EscrowCreateBuilder) Flags(flags uint32) *EscrowCreateBuilder {
 
 // IOUAmount sets an IOU amount for token escrow.
 func (b *EscrowCreateBuilder) IOUAmount(amount tx.Amount) *EscrowCreateBuilder {
-	b.iouAmount = &amount
+	b.amount = amount
 	return b
 }
 
 // MPTAmount sets an MPT amount for token escrow.
 func (b *EscrowCreateBuilder) MPTAmount(amount tx.Amount) *EscrowCreateBuilder {
-	b.mptAmount = &amount
+	b.amount = amount
 	return b
 }
 
 // Build constructs the EscrowCreate transaction.
-func (b *EscrowCreateBuilder) Build() tx.Transaction {
-	var amount tx.Amount
-	if b.mptAmount != nil {
-		amount = *b.mptAmount
-	} else if b.iouAmount != nil {
-		amount = *b.iouAmount
-	} else {
-		amount = tx.NewXRPAmount(b.amount)
-	}
-	e := escrowtx.NewEscrowCreate(b.from.Address, b.to.Address, amount)
-	e.Fee = fmt.Sprintf("%d", b.fee)
+func (b *EscrowCreateBuilder) Build() *escrowtx.EscrowCreate {
+	e := escrowtx.NewEscrowCreate(b.from.Address, b.to.Address, b.amount)
+	b.transactionOptions.apply(e)
 
 	if b.finishAfter != nil {
 		e.FinishAfter = b.finishAfter
@@ -151,17 +151,14 @@ func (b *EscrowCreateBuilder) Build() tx.Transaction {
 		e.CancelAfter = b.cancelAfter
 	}
 	if b.condition != nil {
-		s := hex.EncodeToString(b.condition)
-		e.Condition = &s
+		condition := *b.condition
+		e.Condition = &condition
 	}
 	if b.destTag != nil {
 		e.DestinationTag = b.destTag
 	}
 	if b.sourceTag != nil {
 		e.SourceTag = b.sourceTag
-	}
-	if b.sequence != nil {
-		e.SetSequence(*b.sequence)
 	}
 	if b.flags != 0 {
 		e.SetFlags(b.flags)
@@ -170,20 +167,14 @@ func (b *EscrowCreateBuilder) Build() tx.Transaction {
 	return e
 }
 
-// BuildEscrowCreate is a convenience method that returns the concrete *escrowtx.EscrowCreate type.
-func (b *EscrowCreateBuilder) BuildEscrowCreate() *escrowtx.EscrowCreate {
-	return b.Build().(*escrowtx.EscrowCreate)
-}
-
 // EscrowFinishBuilder provides a fluent interface for building EscrowFinish transactions.
 type EscrowFinishBuilder struct {
+	transactionOptions
 	finisher      *jtx.Account
 	owner         *jtx.Account
 	offerSeq      uint32
-	condition     []byte
-	fulfillment   []byte
-	fee           uint64
-	sequence      *uint32
+	condition     *string
+	fulfillment   *string
 	credentialIDs []string
 }
 
@@ -192,45 +183,37 @@ type EscrowFinishBuilder struct {
 // and offerSeq is the sequence number of the EscrowCreate transaction.
 func EscrowFinish(finisher *jtx.Account, owner *jtx.Account, offerSeq uint32) *EscrowFinishBuilder {
 	return &EscrowFinishBuilder{
-		finisher: finisher,
-		owner:    owner,
-		offerSeq: offerSeq,
-		fee:      10, // Default fee: 10 drops
+		transactionOptions: defaultTransactionOptions(),
+		finisher:           finisher,
+		owner:              owner,
+		offerSeq:           offerSeq,
 	}
 }
 
 // Fulfillment sets the fulfillment for the crypto-condition.
 // Both condition and fulfillment must be provided together.
 func (b *EscrowFinishBuilder) Fulfillment(f []byte) *EscrowFinishBuilder {
-	b.fulfillment = f
+	encoded := hex.EncodeToString(f)
+	b.fulfillment = &encoded
 	return b
 }
 
 // FulfillmentHex sets the fulfillment from a hex string.
 func (b *EscrowFinishBuilder) FulfillmentHex(fHex string) *EscrowFinishBuilder {
-	f, _ := hex.DecodeString(fHex)
-	b.fulfillment = f
+	b.fulfillment = &fHex
 	return b
 }
 
 // Condition sets the crypto-condition (required if fulfillment is provided).
 func (b *EscrowFinishBuilder) Condition(cond []byte) *EscrowFinishBuilder {
-	b.condition = cond
+	encoded := hex.EncodeToString(cond)
+	b.condition = &encoded
 	return b
 }
 
 // ConditionHex sets the crypto-condition from a hex string.
 func (b *EscrowFinishBuilder) ConditionHex(condHex string) *EscrowFinishBuilder {
-	cond, _ := hex.DecodeString(condHex)
-	b.condition = cond
-	return b
-}
-
-// WithConditionAndFulfillment sets both the condition and fulfillment together.
-// This is the recommended way to provide crypto-condition data.
-func (b *EscrowFinishBuilder) WithConditionAndFulfillment(cond, fulfillment []byte) *EscrowFinishBuilder {
-	b.condition = cond
-	b.fulfillment = fulfillment
+	b.condition = &condHex
 	return b
 }
 
@@ -249,45 +232,41 @@ func (b *EscrowFinishBuilder) Sequence(seq uint32) *EscrowFinishBuilder {
 
 // CredentialIDs sets the credential IDs for deposit preauth with credentials.
 func (b *EscrowFinishBuilder) CredentialIDs(ids []string) *EscrowFinishBuilder {
-	b.credentialIDs = ids
+	if ids == nil {
+		b.credentialIDs = nil
+	} else {
+		b.credentialIDs = append([]string{}, ids...)
+	}
 	return b
 }
 
 // Build constructs the EscrowFinish transaction.
-func (b *EscrowFinishBuilder) Build() tx.Transaction {
+func (b *EscrowFinishBuilder) Build() *escrowtx.EscrowFinish {
 	e := escrowtx.NewEscrowFinish(b.finisher.Address, b.owner.Address, b.offerSeq)
-	e.Fee = fmt.Sprintf("%d", b.fee)
+	b.transactionOptions.apply(e)
 
 	if b.condition != nil {
-		s := hex.EncodeToString(b.condition)
-		e.Condition = &s
+		condition := *b.condition
+		e.Condition = &condition
 	}
 	if b.fulfillment != nil {
-		s := hex.EncodeToString(b.fulfillment)
-		e.Fulfillment = &s
+		fulfillment := *b.fulfillment
+		e.Fulfillment = &fulfillment
 	}
-	if b.sequence != nil {
-		e.SetSequence(*b.sequence)
-	}
-	if len(b.credentialIDs) > 0 {
-		e.CredentialIDs = b.credentialIDs
+	if b.credentialIDs != nil {
+		e.CredentialIDs = append([]string{}, b.credentialIDs...)
+		e.GetCommon().SetPresentFields(map[string]bool{"CredentialIDs": true})
 	}
 
 	return e
 }
 
-// BuildEscrowFinish is a convenience method that returns the concrete *escrowtx.EscrowFinish type.
-func (b *EscrowFinishBuilder) BuildEscrowFinish() *escrowtx.EscrowFinish {
-	return b.Build().(*escrowtx.EscrowFinish)
-}
-
 // EscrowCancelBuilder provides a fluent interface for building EscrowCancel transactions.
 type EscrowCancelBuilder struct {
+	transactionOptions
 	canceller *jtx.Account
 	owner     *jtx.Account
 	offerSeq  uint32
-	fee       uint64
-	sequence  *uint32
 }
 
 // EscrowCancel creates a new EscrowCancelBuilder.
@@ -295,10 +274,10 @@ type EscrowCancelBuilder struct {
 // and offerSeq is the sequence number of the EscrowCreate transaction.
 func EscrowCancel(canceller *jtx.Account, owner *jtx.Account, offerSeq uint32) *EscrowCancelBuilder {
 	return &EscrowCancelBuilder{
-		canceller: canceller,
-		owner:     owner,
-		offerSeq:  offerSeq,
-		fee:       10, // Default fee: 10 drops
+		transactionOptions: defaultTransactionOptions(),
+		canceller:          canceller,
+		owner:              owner,
+		offerSeq:           offerSeq,
 	}
 }
 
@@ -315,18 +294,9 @@ func (b *EscrowCancelBuilder) Sequence(seq uint32) *EscrowCancelBuilder {
 }
 
 // Build constructs the EscrowCancel transaction.
-func (b *EscrowCancelBuilder) Build() tx.Transaction {
+func (b *EscrowCancelBuilder) Build() *escrowtx.EscrowCancel {
 	e := escrowtx.NewEscrowCancel(b.canceller.Address, b.owner.Address, b.offerSeq)
-	e.Fee = fmt.Sprintf("%d", b.fee)
-
-	if b.sequence != nil {
-		e.SetSequence(*b.sequence)
-	}
+	b.transactionOptions.apply(e)
 
 	return e
-}
-
-// BuildEscrowCancel is a convenience method that returns the concrete *escrowtx.EscrowCancel type.
-func (b *EscrowCancelBuilder) BuildEscrowCancel() *escrowtx.EscrowCancel {
-	return b.Build().(*escrowtx.EscrowCancel)
 }

@@ -762,6 +762,18 @@ func TestCryptoConditionValidation(t *testing.T) {
 			fulfillment: "A002",
 			expectError: true,
 		},
+		{
+			name:        "trailing data inside fulfillment body",
+			condition:   "A0258020E3B0C44298FC1C149AFBF4C8996FB92427AE41E4649B934CA495991B7852B855810100",
+			fulfillment: "A0038000FF",
+			expectError: true,
+		},
+		{
+			name:        "long-form zero preimage length",
+			condition:   "A0258020E3B0C44298FC1C149AFBF4C8996FB92427AE41E4649B934CA495991B7852B855810100",
+			fulfillment: "A003808100",
+			expectError: true,
+		},
 	}
 
 	for _, tt := range tests {
@@ -940,7 +952,7 @@ func TestParseFulfillment(t *testing.T) {
 		},
 		{
 			name:           "preimage aaa",
-			fulfillmentHex: "A005800361616161",
+			fulfillmentHex: "A0058003616161",
 			expectType:     0,
 			expectPreimage: "616161", // "aaa" in hex
 			expectError:    false,
@@ -959,6 +971,16 @@ func TestParseFulfillment(t *testing.T) {
 			expectPreimage: "",
 			expectError:    true,
 		},
+		{
+			name:           "trailing data inside outer body",
+			fulfillmentHex: "A0038000FF",
+			expectError:    true,
+		},
+		{
+			name:           "long-form zero preimage length",
+			fulfillmentHex: "A003808100",
+			expectError:    true,
+		},
 	}
 
 	for _, tt := range tests {
@@ -975,7 +997,7 @@ func TestParseFulfillment(t *testing.T) {
 				}
 			} else {
 				if err != nil {
-					t.Errorf("expected no error, got %v", err)
+					t.Fatalf("expected no error, got %v", err)
 				}
 				if fulfType != tt.expectType {
 					t.Errorf("expected type %d, got %d", tt.expectType, fulfType)
