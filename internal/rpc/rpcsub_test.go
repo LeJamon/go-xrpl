@@ -710,6 +710,28 @@ func TestRPCSub_WorkerCapacityReclaimedBeforeUnsubscribeReturns(t *testing.T) {
 	require.Nil(t, rpcErr, "an immediate replacement must fit the reclaimed worker slot")
 }
 
+func TestRPCSub_UnsubscribeCancelsConnection(t *testing.T) {
+	ws, services := newRPCSubTestServer(t)
+	sink := newRPCSubSink(t)
+
+	_, rpcErr := subscribeURL(t, services, `{"url":"`+sink.srv.URL+`","streams":["ledger"]}`)
+	require.Nil(t, rpcErr)
+	ws.urlSubs.mu.Lock()
+	sub := ws.urlSubs.subs[sink.srv.URL]
+	ws.urlSubs.mu.Unlock()
+	require.NotNil(t, sub)
+
+	_, rpcErr = unsubscribeURL(t, services, `{"url":"`+sink.srv.URL+`","streams":["ledger"]}`)
+	require.Nil(t, rpcErr)
+
+	select {
+	case <-sub.conn.Done():
+	default:
+		t.Fatal("unsubscribed connection remains active")
+	}
+	require.False(t, sub.conn.TrySend([]byte(`{}`)))
+}
+
 func TestRPCSub_PrincipalWorkerCapDuringRetirement(t *testing.T) {
 	ws, services := newRPCSubTestServer(t)
 	defer ws.urlSubs.Close()

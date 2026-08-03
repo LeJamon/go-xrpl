@@ -268,7 +268,7 @@ func (r *URLSubscriptionRegistry) findOrCreateLocked(request types.SubscriptionR
 		metrics:   metrics,
 		username:  username,
 		password:  password,
-		conn:      types.NewConnection("rpcsub:"+key, make(chan []byte, rpcSubQueueLimit)),
+		conn:      types.NewConnectionWithContext(subCtx, "rpcsub:"+key, make(chan []byte, rpcSubQueueLimit)),
 		done:      make(chan struct{}),
 		finished:  make(chan struct{}),
 	}

@@ -737,11 +737,11 @@ func (ws *WebSocketServer) UpdatePathFindSessions(getView func() (types.LedgerSt
 	ws.queuePathFindSessions(getView, nil)
 }
 
-func (ws *WebSocketServer) queuePathFindSessions(getView func() (types.LedgerStateView, error), additional *WebSocketConnection) {
+func (ws *WebSocketServer) queuePathFindSessions(getView func() (types.LedgerStateView, error), additional *websocketConnection) {
 	manager := ws.ensurePathFindRefreshManager()
 	ws.connectionsMutex.RLock()
 	var targets []pathFindUpdateTarget
-	seen := make(map[*WebSocketConnection]struct{}, len(ws.connections)+1)
+	seen := make(map[*websocketConnection]struct{}, len(ws.connections)+1)
 	for _, conn := range ws.connections {
 		seen[conn] = struct{}{}
 		ws.bindPathFindRefreshManager(conn)

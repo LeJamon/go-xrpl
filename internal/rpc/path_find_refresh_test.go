@@ -75,12 +75,8 @@ func TestQueuePathFindSessionsIncludesNewConnection(t *testing.T) {
 	defer manager.close()
 
 	computed := make(chan struct{}, 1)
-	conn := &WebSocketConnection{
-		ID: "new-connection",
-		legacy: &types.Connection{
-			ID:          "new-connection",
-			SendChannel: make(chan []byte, 1),
-		},
+	conn := &websocketConnection{
+		Connection: types.NewConnection("new-connection", make(chan []byte, 1)),
 	}
 	conn.installPathFindSession(&PathFindSession{
 		computeFn: func(tx.LedgerView) *pathfinder.PathRequestResult {
