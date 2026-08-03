@@ -784,7 +784,6 @@ func TestRPCStopUsesAdminCredentialsWithRPCServer(t *testing.T) {
 					AdminUser:     test.adminUser,
 					AdminPassword: test.adminPassword,
 				},
-				nil,
 				server,
 			))
 			defer httpServer.Close()

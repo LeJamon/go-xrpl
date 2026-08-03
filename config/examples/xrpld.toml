@@ -81,7 +81,7 @@ ports = ["port_rpc_admin_local", "port_rpc_public", "port_peer", "port_ws_admin_
 #
 # Optional fields:
 #   - limit             → max concurrent connections (0 = unlimited)
-#   - send_queue_limit  → WS send buffer per connection (default 100)
+#   - send_queue_limit  → WS send buffer per connection (0 = default 100; 1–65535 explicit)
 #   - user/password     → HTTP Basic Auth, required together when set
 #   - allowed_origins   → exact http(s) browser origins; omitted denies browser origins
 # =============================================================================

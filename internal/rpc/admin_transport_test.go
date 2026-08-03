@@ -53,9 +53,7 @@ func transportRequest(origin, user, password string) *http.Request {
 func TestHTTPTransportOriginAndBasicAuth(t *testing.T) {
 	var calls atomic.Int32
 	srv := transportTestServer(t, &calls)
-	limiter := NewConnLimiter()
-	limiter.SetGlobalLimit(1)
-	handler := PortMiddleware(transportTestPort(), limiter, srv)
+	handler := PortMiddleware(transportTestPort(), srv)
 
 	t.Run("allowed browser preflight does not need credentials", func(t *testing.T) {
 		req := httptest.NewRequest(http.MethodOptions, "/", nil)
@@ -84,7 +82,7 @@ func TestHTTPTransportOriginAndBasicAuth(t *testing.T) {
 		handler.ServeHTTP(rr, transportRequest("https://attacker.example", "operator", "secret"))
 		require.Equal(t, http.StatusForbidden, rr.Code)
 		require.Equal(t, int32(0), calls.Load())
-		require.Equal(t, 0, limiter.Count("admin"), "rejected origin consumed a limiter slot")
+		require.Equal(t, "close", rr.Header().Get("Connection"))
 	})
 
 	t.Run("duplicate origin headers are rejected", func(t *testing.T) {
@@ -94,7 +92,7 @@ func TestHTTPTransportOriginAndBasicAuth(t *testing.T) {
 		handler.ServeHTTP(rr, req)
 		require.Equal(t, http.StatusForbidden, rr.Code)
 		require.Equal(t, int32(0), calls.Load())
-		require.Equal(t, 0, limiter.Count("admin"), "duplicate origins consumed a limiter slot")
+		require.Equal(t, "close", rr.Header().Get("Connection"))
 	})
 
 	t.Run("allowed origin and credentials reach stop", func(t *testing.T) {
@@ -121,7 +119,7 @@ func TestHTTPTransportOriginAndBasicAuth(t *testing.T) {
 			require.Equal(t, http.StatusUnauthorized, rr.Code)
 			require.Equal(t, `Basic realm="xrpld"`, rr.Header().Get("WWW-Authenticate"))
 			require.Equal(t, int32(1), calls.Load(), "rejected credentials reached the handler")
-			require.Equal(t, 0, limiter.Count("admin"), "rejected credentials consumed a limiter slot")
+			require.Equal(t, "close", rr.Header().Get("Connection"))
 		})
 	}
 }
@@ -132,7 +130,7 @@ func TestHTTPTransportNoOriginCLI(t *testing.T) {
 	port := transportTestPort()
 	port.AllowedOrigins = []string{"https://console.example"}
 	rr := httptest.NewRecorder()
-	PortMiddleware(port, nil, srv).ServeHTTP(rr, transportRequest("", "operator", "secret"))
+	PortMiddleware(port, srv).ServeHTTP(rr, transportRequest("", "operator", "secret"))
 	require.Equal(t, http.StatusOK, rr.Code, rr.Body.String())
 	require.Empty(t, rr.Header().Get("Access-Control-Allow-Origin"))
 	require.Equal(t, int32(1), calls.Load())
@@ -142,7 +140,7 @@ func wsTransportServer(t *testing.T, pc *PortContext) (*httptest.Server, *WebSoc
 	t.Helper()
 	ws := NewWebSocketServer(time.Second, nil)
 	ws.methodRegistry.Register("ping", &stubHandler{role: types.RoleGuest})
-	httpSrv := httptest.NewServer(PortMiddleware(pc, nil, http.HandlerFunc(ws.ServeHTTP)))
+	httpSrv := httptest.NewServer(PortMiddleware(pc, http.HandlerFunc(ws.ServeHTTP)))
 	t.Cleanup(func() {
 		httpSrv.Close()
 		_ = ws.Close(context.Background())

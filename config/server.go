@@ -99,6 +99,9 @@ func (p *PortConfig) Validate() error {
 	if p.Port < 1 || p.Port > 65535 {
 		return fmt.Errorf("port number must be between 1 and 65535, got %d", p.Port)
 	}
+	if p.SendQueueLimit < 0 || p.SendQueueLimit > 65535 {
+		return fmt.Errorf("send_queue_limit must be 0 (default) or between 1 and 65535, got %d", p.SendQueueLimit)
+	}
 	if p.IP == "" {
 		return errors.New("IP address is required")
 	}

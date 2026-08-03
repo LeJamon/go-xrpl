@@ -172,8 +172,6 @@ func TestWebSocketServer_Close_RespectsContext(t *testing.T) {
 
 func TestWebSocketServer_Close_ContextInterruptsBlockedControlWrite(t *testing.T) {
 	ws := NewWebSocketServer(30*time.Second, nil)
-	limiter := NewConnLimiter()
-	ws.SetConnLimiter(limiter)
 	pc := &PortContext{PortName: "wsport", Limit: 1}
 
 	listener, err := net.Listen("tcp", "127.0.0.1:0")
@@ -184,7 +182,7 @@ func TestWebSocketServer_Close_ContextInterruptsBlockedControlWrite(t *testing.T
 		Listener: listener,
 		accepted: make(chan *blockingWriteConn, 1),
 	}
-	httpSrv := httptest.NewUnstartedServer(PortMiddleware(pc, limiter, http.HandlerFunc(ws.ServeHTTP)))
+	httpSrv := httptest.NewUnstartedServer(PortMiddleware(pc, http.HandlerFunc(ws.ServeHTTP)))
 	httpSrv.Listener.Close()
 	httpSrv.Listener = wrappedListener
 	httpSrv.Start()
@@ -254,14 +252,6 @@ func TestWebSocketServer_Close_ContextInterruptsBlockedControlWrite(t *testing.T
 	default:
 		t.Fatal("Close did not close the blocked socket")
 	}
-
-	deadline = time.Now().Add(time.Second)
-	for limiter.Count(pc.PortName) != 0 && time.Now().Before(deadline) {
-		runtime.Gosched()
-	}
-	if got := limiter.Count(pc.PortName); got != 0 {
-		t.Fatalf("connection slots after Close = %d, want 0", got)
-	}
 }
 
 // TestWebSocketServer_Close_NoConnections verifies Close is safe with no
@@ -277,10 +267,8 @@ func TestWebSocketServer_Close_NoConnections(t *testing.T) {
 
 func TestWebSocketServer_Close_RejectsNewConnections(t *testing.T) {
 	ws := NewWebSocketServer(30*time.Second, nil)
-	limiter := NewConnLimiter()
-	ws.SetConnLimiter(limiter)
 	pc := &PortContext{PortName: "wsport", Limit: 1}
-	httpSrv := httptest.NewServer(PortMiddleware(pc, limiter, http.HandlerFunc(ws.ServeHTTP)))
+	httpSrv := httptest.NewServer(PortMiddleware(pc, http.HandlerFunc(ws.ServeHTTP)))
 	defer httpSrv.Close()
 
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
@@ -304,9 +292,6 @@ func TestWebSocketServer_Close_RejectsNewConnections(t *testing.T) {
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusServiceUnavailable {
 		t.Fatalf("status = %d, want %d", resp.StatusCode, http.StatusServiceUnavailable)
-	}
-	if got := limiter.Count(pc.PortName); got != 0 {
-		t.Fatalf("connection slots after rejected upgrade = %d, want 0", got)
 	}
 }
 
@@ -399,96 +384,6 @@ func TestWebSocketServer_Close_WaitsForInFlightUpgrade(t *testing.T) {
 	if connectionCount != 0 {
 		t.Fatalf("registered connections = %d, want 0", connectionCount)
 	}
-}
-
-func TestIsWebSocketUpgrade(t *testing.T) {
-	for _, test := range []struct {
-		name       string
-		connection string
-		upgrade    string
-		want       bool
-	}{
-		{name: "canonical", connection: "Upgrade", upgrade: "websocket", want: true},
-		{name: "token lists", connection: "keep-alive, Upgrade", upgrade: "websocket, other", want: true},
-		{name: "missing connection", upgrade: "websocket"},
-		{name: "missing upgrade", connection: "Upgrade"},
-	} {
-		t.Run(test.name, func(t *testing.T) {
-			req := httptest.NewRequest(http.MethodGet, "/", nil)
-			if test.connection != "" {
-				req.Header.Set("Connection", test.connection)
-			}
-			if test.upgrade != "" {
-				req.Header.Set("Upgrade", test.upgrade)
-			}
-			if got := isWebSocketUpgrade(req); got != test.want {
-				t.Fatalf("isWebSocketUpgrade() = %t, want %t", got, test.want)
-			}
-		})
-	}
-}
-
-// TestWebSocketServer_FailedUpgrade_ReleasesSlot verifies that a malformed
-// WebSocket upgrade request does not permanently leak its per-port connection
-// slot. PortMiddleware acquires a slot and delegates release to closeConnection,
-// which never runs when the gorilla upgrade fails — so ServeHTTP must release
-// the slot itself. Regression test for issue #598.
-func TestWebSocketServer_FailedUpgrade_ReleasesSlot(t *testing.T) {
-	ws := NewWebSocketServer(30*time.Second, nil)
-	ws.RegisterAllMethods()
-
-	limiter := NewConnLimiter()
-	ws.SetConnLimiter(limiter)
-
-	const portName = "wsport"
-	pc := &PortContext{PortName: portName, Limit: 1}
-	handler := PortMiddleware(pc, limiter, http.HandlerFunc(ws.ServeHTTP))
-
-	httpSrv := httptest.NewServer(handler)
-	defer httpSrv.Close()
-
-	for _, headers := range []struct {
-		name       string
-		connection string
-		upgrade    string
-	}{
-		{name: "canonical", connection: "Upgrade", upgrade: "websocket"},
-		{name: "token lists", connection: "keep-alive, Upgrade", upgrade: "websocket, other"},
-		{name: "not an upgrade", upgrade: "websocket"},
-	} {
-		t.Run(headers.name, func(t *testing.T) {
-			for i := range 5 {
-				req, err := http.NewRequest(http.MethodGet, httpSrv.URL, nil)
-				if err != nil {
-					t.Fatalf("new request %d: %v", i, err)
-				}
-				if headers.connection != "" {
-					req.Header.Set("Connection", headers.connection)
-				}
-				req.Header.Set("Upgrade", headers.upgrade)
-
-				resp, err := http.DefaultClient.Do(req)
-				if err != nil {
-					t.Fatalf("malformed upgrade %d: %v", i, err)
-				}
-				resp.Body.Close()
-				if resp.StatusCode == http.StatusServiceUnavailable {
-					t.Fatalf("request %d got 503 — slot leaked from a prior failed upgrade", i)
-				}
-			}
-		})
-		if got := limiter.Count(portName); got != 0 {
-			t.Fatalf("connection slots leaked after %s requests: count=%d, want 0", headers.name, got)
-		}
-	}
-
-	// A legitimate client must still be able to connect (limit=1).
-	wsURL := "ws" + strings.TrimPrefix(httpSrv.URL, "http")
-	c, _, err := websocket.DefaultDialer.Dial(wsURL, nil)
-	if err != nil {
-		t.Fatalf("legitimate dial after failed upgrades: %v", err)
-	}
-	c.Close()
 }
 
 // TestWebSocketServer_ConcurrentWrites_NoRace drives the ping path and the

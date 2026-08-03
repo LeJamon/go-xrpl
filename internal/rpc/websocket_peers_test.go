@@ -30,7 +30,7 @@ func TestWebSocket_PeersRPC_UsesPeerSource(t *testing.T) {
 
 	pc := loopbackAdminPortContext()
 	pc.PortName = "test_admin"
-	httpSrv := httptest.NewServer(PortMiddleware(pc, nil, ws))
+	httpSrv := httptest.NewServer(PortMiddleware(pc, ws))
 	defer httpSrv.Close()
 
 	wsURL := "ws" + strings.TrimPrefix(httpSrv.URL, "http")

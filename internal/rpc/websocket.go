@@ -39,6 +39,18 @@ func wsLog() xrpllog.Logger { return xrpllog.Named(xrpllog.PartitionRPC) }
 // matching rippled's default ws_queue_limit of 100 (Port.cpp).
 const DefaultSendQueueLimit = 100
 
+const maxSendQueueLimit = 1<<16 - 1
+
+func resolveSendQueueLimit(portCtx *PortContext) (int, error) {
+	if portCtx == nil || portCtx.SendQueue == 0 {
+		return DefaultSendQueueLimit, nil
+	}
+	if portCtx.SendQueue < 1 || portCtx.SendQueue > maxSendQueueLimit {
+		return 0, fmt.Errorf("send_queue_limit must be 0 (default) or between 1 and %d, got %d", maxSendQueueLimit, portCtx.SendQueue)
+	}
+	return portCtx.SendQueue, nil
+}
+
 // WebSocketServer handles WebSocket connections for real-time subscriptions
 type WebSocketServer struct {
 	upgrader            websocket.Upgrader
@@ -49,7 +61,6 @@ type WebSocketServer struct {
 	closing             bool
 	timeout             time.Duration
 	ledgerInfoProvider  types.LedgerInfoProvider
-	connLimiter         *ConnLimiter
 	services            *types.ServiceContainer
 	urlSubs             *URLSubscriptionRegistry
 	peerSourceHolder
@@ -160,25 +171,24 @@ func (ws *WebSocketServer) SetLedgerInfoProvider(provider types.LedgerInfoProvid
 	ws.ledgerInfoProvider = provider
 }
 
-// SetConnLimiter sets the connection limiter used to release per-port slots
-// when WebSocket connections close.
-func (ws *WebSocketServer) SetConnLimiter(limiter *ConnLimiter) {
-	ws.connLimiter = limiter
-}
-
 func (ws *WebSocketServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	portCtx := GetPortContext(r.Context())
-	isWebSocket := isWebSocketUpgrade(r)
 	if !transportAuthorized(r.Context()) && !authorizeTransport(w, r, portCtx) {
+		return
+	}
+
+	sendQueueLimit, err := resolveSendQueueLimit(portCtx)
+	if err != nil {
+		r.Close = true
+		w.Header().Set("Connection", "close")
+		writePlainHTTPError(w, http.StatusInternalServerError, "invalid WebSocket configuration: "+err.Error())
+		wsLog().Error("invalid WebSocket send queue limit", "err", err)
 		return
 	}
 
 	ws.connectionsMutex.Lock()
 	if ws.closing {
 		ws.connectionsMutex.Unlock()
-		if isWebSocket {
-			ws.releaseConnectionSlot(portCtx)
-		}
 		http.Error(w, "server shutting down", http.StatusServiceUnavailable)
 		return
 	}
@@ -186,21 +196,14 @@ func (ws *WebSocketServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	ws.connectionsMutex.Unlock()
 	defer ws.wg.Done()
 
+	// If the handshake fails, let net/http close the underlying connection so
+	// the listener-owned admission slot is released. Successful upgrades
+	// hijack the connection and own its lifetime independently.
+	r.Close = true
 	conn, err := ws.upgrader.Upgrade(w, r, nil)
 	if err != nil {
-		// PortMiddleware acquired a slot for this WS request and delegated its
-		// release to closeConnection, which never runs when the upgrade fails.
-		// Release here so a malformed upgrade can't permanently leak the slot.
-		if isWebSocket {
-			ws.releaseConnectionSlot(portCtx)
-		}
 		wsLog().Error("WebSocket upgrade failed", "err", err)
 		return
-	}
-
-	sendQueueLimit := DefaultSendQueueLimit
-	if portCtx != nil && portCtx.SendQueue > 0 {
-		sendQueueLimit = portCtx.SendQueue
 	}
 
 	// Use Background() not r.Context() because the WebSocket connection
@@ -232,7 +235,6 @@ func (ws *WebSocketServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	if !ws.attachConnection(wsConn) {
 		wsConn.closeSocket()
-		ws.releaseConnectionSlot(portCtx)
 		return
 	}
 
@@ -1100,9 +1102,9 @@ func (ws *WebSocketServer) detachConnection(wsConn *WebSocketConnection) {
 }
 
 // closeSocket cancels the connection context and closes the underlying
-// socket. Closing the socket unblocks a read loop parked in ReadMessage
-// immediately, so closeConnection (and the conn-limit slot release) run
-// without waiting out the 90 s read deadline. Used by the slow-consumer
+// socket. Closing the socket releases its listener-owned connection slot and
+// unblocks a read loop parked in ReadMessage without waiting out the 90 s read
+// deadline. Used by the slow-consumer
 // Disconnect callback and the send-error path; idempotent — closeConnection
 // closes again and gorilla tolerates the double close.
 func (c *WebSocketConnection) closeSocket() {
@@ -1127,19 +1129,9 @@ func (ws *WebSocketServer) closeConnection(wsConn *WebSocketConnection) {
 
 	ws.detachConnection(wsConn)
 
-	if ws.connLimiter != nil && wsConn.portCtx != nil {
-		ws.connLimiter.Release(wsConn.portCtx.PortName)
-	}
-
 	wsConn.conn.Close()
 
 	wsLog().Debug("WebSocket connection closed", "connID", wsConn.ID)
-}
-
-func (ws *WebSocketServer) releaseConnectionSlot(portCtx *PortContext) {
-	if ws.connLimiter != nil && portCtx != nil {
-		ws.connLimiter.Release(portCtx.PortName)
-	}
 }
 
 // buildSubscribeAck assembles the subscribe response payload shared by the
