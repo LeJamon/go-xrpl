@@ -1,10 +1,12 @@
 package cluster_test
 
 import (
+	"bytes"
+	"sync"
 	"testing"
 	"time"
 
-	addresscodec "github.com/LeJamon/go-xrpl/codec/addresscodec"
+	"github.com/LeJamon/go-xrpl/codec/addresscodec"
 	"github.com/LeJamon/go-xrpl/internal/peermanagement/cluster"
 )
 
@@ -22,15 +24,19 @@ func mustDecode(t *testing.T, k string) []byte {
 	return b
 }
 
+func identityBytes(fill byte) []byte {
+	identity := bytes.Repeat([]byte{fill}, addresscodec.NodePublicKeyLength)
+	identity[0] = 0x02
+	return identity
+}
+
 func TestRegistry_MedianFee(t *testing.T) {
 	r := cluster.New()
 	now := time.Unix(2_000_000_000, 0)
 	r.Update(mustDecode(t, pubA), "a", 320, now)
 	r.Update(mustDecode(t, pubB), "b", 400, now)
 	// Older-than-window entry is excluded from the median.
-	stale := []byte{0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x0a,
-		0x0b, 0x0c, 0x0d, 0x0e, 0x0f, 0x10, 0x11, 0x12, 0x13, 0x14, 0x15, 0x16,
-		0x17, 0x18, 0x19, 0x1a, 0x1b, 0x1c, 0x1d, 0x1e, 0x1f, 0x20, 0x21}
+	stale := identityBytes(0x01)
 	r.Update(stale, "stale", 9999, now.Add(-2*time.Minute))
 
 	fee, ok := r.MedianFee(now.Add(-90 * time.Second))
@@ -52,22 +58,39 @@ func TestRegistry_MedianFee_EmptyWindow(t *testing.T) {
 	}
 }
 
-func TestRegistry_MedianFee_NilSafe(t *testing.T) {
+func TestRegistry_ReceiverSemantics(t *testing.T) {
 	var r *cluster.Registry
-	if _, ok := r.MedianFee(time.Now()); ok {
-		t.Fatal("nil registry MedianFee should report ok=false")
-	}
-}
-
-func TestRegistry_NilSafe(t *testing.T) {
-	var r *cluster.Registry
-	if _, ok := r.Member([]byte{0x01}); ok {
+	id := mustDecode(t, pubA)
+	if _, ok := r.Member(id); ok {
 		t.Fatalf("nil registry should never report membership")
 	}
 	if r.Size() != 0 {
 		t.Fatalf("nil Size = %d; want 0", r.Size())
 	}
 	r.ForEach(func(cluster.Member) { t.Fatal("ForEach on nil should be no-op") })
+	if r.Update(id, "node", 1, time.Time{}) {
+		t.Fatal("Update on nil registry should fail")
+	}
+	if err := r.Load([]string{pubA}); err == nil {
+		t.Fatal("Load on nil registry should return an error")
+	}
+	if _, ok := r.MedianFee(time.Now()); ok {
+		t.Fatal("MedianFee on nil registry should report ok=false")
+	}
+
+	var zero cluster.Registry
+	if !zero.Update(id, "node", 1, time.Time{}) {
+		t.Fatal("zero-value registry Update should succeed")
+	}
+	if _, ok := zero.Member(id); !ok {
+		t.Fatal("zero-value registry should retain updates")
+	}
+	if err := zero.Load([]string{pubB}); err != nil {
+		t.Fatalf("zero-value registry Load: %v", err)
+	}
+	if zero.Size() != 2 {
+		t.Fatalf("zero-value registry Size = %d; want 2", zero.Size())
+	}
 }
 
 func TestRegistry_LoadAndMember(t *testing.T) {
@@ -140,6 +163,27 @@ func TestRegistry_LoadRejectsInvalidPubkey(t *testing.T) {
 	}
 }
 
+func TestRegistry_LoadRejectsWrongIdentityLength(t *testing.T) {
+	r := cluster.New()
+	encoded := addresscodec.Base58CheckEncode(
+		identityBytes(0x01)[:addresscodec.NodePublicKeyLength-1],
+		addresscodec.NodePublicKeyPrefix,
+	)
+	if err := r.Load([]string{encoded}); err == nil {
+		t.Fatal("expected error for wrong-length node identity")
+	}
+}
+
+func TestRegistry_LoadRejectsInvalidKeyType(t *testing.T) {
+	r := cluster.New()
+	identity := identityBytes(0x01)
+	identity[0] = 0x01
+	encoded := addresscodec.Base58CheckEncode(identity, addresscodec.NodePublicKeyPrefix)
+	if err := r.Load([]string{encoded}); err == nil {
+		t.Fatal("expected error for invalid node public key type")
+	}
+}
+
 func TestRegistry_LoadDeduplicates(t *testing.T) {
 	r := cluster.New()
 	err := r.Load([]string{
@@ -191,6 +235,47 @@ func TestRegistry_UpdateReportTime(t *testing.T) {
 	}
 }
 
+func TestRegistry_IdentityBoundariesAndOwnership(t *testing.T) {
+	r := cluster.New()
+	for _, invalid := range [][]byte{
+		nil,
+		identityBytes(0x01)[:addresscodec.NodePublicKeyLength-1],
+		append(identityBytes(0x01), 0x01),
+		append([]byte{0x01}, identityBytes(0x01)[1:]...),
+	} {
+		if r.Update(invalid, "invalid", 1, time.Time{}) {
+			t.Fatalf("Update accepted %d-byte identity", len(invalid))
+		}
+		if _, ok := r.Member(invalid); ok {
+			t.Fatalf("Member accepted %d-byte identity", len(invalid))
+		}
+	}
+
+	id := mustDecode(t, pubA)
+	original := append([]byte(nil), id...)
+	if !r.Update(id, "node", 1, time.Time{}) {
+		t.Fatal("Update rejected valid identity")
+	}
+	id[0] ^= 0xff
+	member, ok := r.Member(original)
+	if !ok {
+		t.Fatal("mutating Update input changed the stored key")
+	}
+	member.Identity[0] ^= 0xff
+	again, ok := r.Member(original)
+	if !ok || !bytes.Equal(again.Identity[:], original) {
+		t.Fatal("mutating Member result changed registry-owned state")
+	}
+
+	r.ForEach(func(snapshot cluster.Member) {
+		snapshot.Identity[0] ^= 0xff
+	})
+	again, ok = r.Member(original)
+	if !ok || !bytes.Equal(again.Identity[:], original) {
+		t.Fatal("mutating ForEach snapshot changed registry-owned state")
+	}
+}
+
 func TestRegistry_ForEachIteratesAll(t *testing.T) {
 	r := cluster.New()
 	if err := r.Load([]string{pubA + " a", pubB + " b"}); err != nil {
@@ -210,12 +295,134 @@ func TestRegistry_ForEachIteratesAll(t *testing.T) {
 	}
 }
 
+func TestRegistry_ForEachDeterministicOrder(t *testing.T) {
+	r := cluster.New()
+	for _, fill := range []byte{0x03, 0x01, 0x02} {
+		if !r.Update(identityBytes(fill), "", 0, time.Time{}) {
+			t.Fatalf("Update(%x) failed", fill)
+		}
+	}
+	var got []byte
+	r.ForEach(func(member cluster.Member) {
+		got = append(got, member.Identity[1])
+	})
+	if !bytes.Equal(got, []byte{0x01, 0x02, 0x03}) {
+		t.Fatalf("ForEach order = %x; want 010203", got)
+	}
+}
+
+func TestRegistry_ForEachAllowsReentrantAccess(t *testing.T) {
+	r := cluster.New()
+	for _, fill := range []byte{0x01, 0x02} {
+		if !r.Update(identityBytes(fill), "", 0, time.Time{}) {
+			t.Fatalf("Update(%x) failed", fill)
+		}
+	}
+
+	callbackStarted := make(chan struct{})
+	releaseCallback := make(chan struct{})
+	type walkResult struct {
+		visited   []cluster.Identity
+		reentrant bool
+	}
+	walkDone := make(chan walkResult, 1)
+	go func() {
+		var visited []cluster.Identity
+		reentrant := true
+		r.ForEach(func(member cluster.Member) {
+			if len(visited) == 0 {
+				close(callbackStarted)
+				<-releaseCallback
+			}
+			if _, ok := r.Member(member.Identity[:]); !ok {
+				reentrant = false
+			}
+			if r.Size() == 0 {
+				reentrant = false
+			}
+			if !r.Update(member.Identity[:], "updated", 1, member.ReportTime.Add(time.Second)) {
+				reentrant = false
+			}
+			visited = append(visited, member.Identity)
+		})
+		walkDone <- walkResult{visited: visited, reentrant: reentrant}
+	}()
+	<-callbackStarted
+
+	writerDone := make(chan bool, 1)
+	go func() {
+		writerDone <- r.Update(identityBytes(0x03), "concurrent", 0, time.Time{})
+	}()
+	select {
+	case updated := <-writerDone:
+		if !updated {
+			t.Fatal("concurrent writer did not update the registry")
+		}
+	case <-time.After(2 * time.Second):
+		close(releaseCallback)
+		t.Fatal("concurrent writer blocked while ForEach callback was running")
+	}
+	close(releaseCallback)
+
+	var result walkResult
+	select {
+	case result = <-walkDone:
+	case <-time.After(2 * time.Second):
+		t.Fatal("ForEach callback deadlocked on nested registry access")
+	}
+	if !result.reentrant {
+		t.Fatal("ForEach callback could not access the registry")
+	}
+	if len(result.visited) != 2 {
+		t.Fatalf("current snapshot visited %d members; want 2", len(result.visited))
+	}
+	if r.Size() != 3 {
+		t.Fatalf("registry Size = %d after concurrent update; want 3", r.Size())
+	}
+}
+
+func TestRegistry_ConcurrentSnapshotsDoNotAlias(t *testing.T) {
+	r := cluster.New()
+	id := mustDecode(t, pubA)
+	if !r.Update(id, "node", 0, time.Time{}) {
+		t.Fatal("initial Update failed")
+	}
+
+	var wg sync.WaitGroup
+	wg.Add(3)
+	go func() {
+		defer wg.Done()
+		for i := 1; i <= 1_000; i++ {
+			r.Update(id, "", uint32(i), time.Unix(int64(i), 0))
+		}
+	}()
+	go func() {
+		defer wg.Done()
+		for range 1_000 {
+			member, ok := r.Member(id)
+			if ok {
+				member.Identity[0] ^= 0xff
+			}
+		}
+	}()
+	go func() {
+		defer wg.Done()
+		for range 1_000 {
+			r.ForEach(func(member cluster.Member) {
+				member.Identity[0] ^= 0xff
+			})
+		}
+	}()
+	wg.Wait()
+	member, ok := r.Member(id)
+	if !ok || !bytes.Equal(member.Identity[:], id) {
+		t.Fatal("concurrent snapshot mutation corrupted registry identity")
+	}
+}
+
 func makeNodePub(t *testing.T, salt byte) string {
 	t.Helper()
-	raw := make([]byte, 33)
-	for i := range raw {
-		raw[i] = salt
-	}
+	raw := identityBytes(salt)
 	enc, err := addresscodec.EncodeNodePublicKey(raw)
 	if err != nil {
 		t.Fatalf("EncodeNodePublicKey: %v", err)
@@ -288,9 +495,7 @@ func TestRegistry_LoadConfigParity(t *testing.T) {
 		}
 	})
 
-	t.Run("malformed entry aborts load and rejects subsequent entries", func(t *testing.T) {
-		// cluster_test.cpp:248-258 — a bad entry must prevent every
-		// other entry, including subsequent ones, from being inserted.
+	t.Run("malformed first entry stops subsequent entries", func(t *testing.T) {
 		r := cluster.New()
 		err := r.Load([]string{
 			pubs[0] + "XXX",
@@ -303,6 +508,28 @@ func TestRegistry_LoadConfigParity(t *testing.T) {
 			id, _ := addresscodec.DecodeNodePublicKey(p)
 			if _, ok := r.Member(id); ok {
 				t.Fatalf("entry %d unexpectedly present after Load failed", i)
+			}
+		}
+	})
+
+	t.Run("valid entries before an error are retained", func(t *testing.T) {
+		r := cluster.New()
+		err := r.Load([]string{
+			pubs[0],
+			pubs[1] + "XXX",
+			pubs[2],
+		})
+		if err == nil {
+			t.Fatal("expected error from malformed second entry")
+		}
+		first, _ := addresscodec.DecodeNodePublicKey(pubs[0])
+		if _, ok := r.Member(first); !ok {
+			t.Fatal("valid entry before load error was not retained")
+		}
+		for _, pub := range pubs[1:3] {
+			id, _ := addresscodec.DecodeNodePublicKey(pub)
+			if _, ok := r.Member(id); ok {
+				t.Fatalf("entry %q unexpectedly present after load error", pub)
 			}
 		}
 	})

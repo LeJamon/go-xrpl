@@ -21,6 +21,7 @@ import (
 	addresscodec "github.com/LeJamon/go-xrpl/codec/addresscodec"
 	"github.com/LeJamon/go-xrpl/internal/peermanagement/cluster"
 	"github.com/LeJamon/go-xrpl/internal/peermanagement/message"
+	"github.com/LeJamon/go-xrpl/protocol"
 )
 
 // clusterBroadcastInterval matches rippled's setClusterTimer cadence
@@ -28,6 +29,8 @@ import (
 // doesn't ripple, short enough that newly-joined cluster members hear
 // us within the first close-cycle they participate in.
 const clusterBroadcastInterval = 10 * time.Second
+
+const clusterLocalLoadMaxValidatedAge = 4 * time.Minute
 
 // txQueueBroadcastInterval drives the periodic tx-reduce-relay outbound
 // emission. Matches rippled's OverlayImpl::Timer::on_timer at 1s
@@ -113,14 +116,18 @@ func (o *Overlay) sendClusterUpdate() {
 	// NetworkOPs.cpp:1126-1139, where a stale reportTime returns
 	// false and the broadcast is skipped (with "Too soon to send
 	// cluster update" log). The self-entry's loadFee is sourced from
-	// localLoadFeeProvider (LoadFeeTrack.GetLocalFee); 0 when unwired,
-	// matching the pre-LoadFeeTrack behaviour.
+	// localLoadFeeProvider and forced to 0 when the validated ledger is
+	// older than four minutes, matching rippled's stale-ledger gate.
 	if len(o.localNodeIdentity) > 0 {
 		var selfFee uint32
 		if provider := o.localLoadFeeProviderSnapshot(); provider != nil {
-			selfFee = provider()
+			fee, validatedAge := provider()
+			if validatedAge <= clusterLocalLoadMaxValidatedAge {
+				selfFee = fee
+			}
 		}
-		if !o.cluster.Update(o.localNodeIdentity, "", selfFee, time.Now()) {
+		reportTime := protocol.FromRippleTime(protocol.ToRippleTime(time.Now()))
+		if !o.cluster.Update(o.localNodeIdentity, "", selfFee, reportTime) {
 			return
 		}
 	}
@@ -129,13 +136,13 @@ func (o *Overlay) sendClusterUpdate() {
 		ClusterNodes: make([]message.ClusterNode, 0, o.cluster.Size()),
 	}
 	o.cluster.ForEach(func(m cluster.Member) {
-		encoded, err := addresscodec.EncodeNodePublicKey(m.Identity)
+		encoded, err := addresscodec.EncodeNodePublicKey(m.Identity[:])
 		if err != nil {
 			return
 		}
 		clusterMsg.ClusterNodes = append(clusterMsg.ClusterNodes, message.ClusterNode{
 			PublicKey:  encoded,
-			ReportTime: uint32(m.ReportTime.Unix()),
+			ReportTime: protocol.ToRippleTime(m.ReportTime),
 			NodeLoad:   m.LoadFee,
 			NodeName:   m.Name,
 		})

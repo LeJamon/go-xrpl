@@ -584,10 +584,13 @@ func (r *nodeRuntime) configureConsensus() error {
 		// LoadFeeTrack ingress + outbound self-load advertisement.
 		// Mirrors the rippled wiring split:
 		//   - PeerImp.cpp:1193 setClusterFee(median) on inbound TMCluster
-		//   - NetworkOPs.cpp:1126-1132 self-entry sources getLocalFee()
+		//   - NetworkOPs.cpp:1189-1195 self-entry sources getLocalFee()
+		//     only while the validated ledger is at most four minutes old
 		if ft := r.ledger.FeeTrack(); ft != nil {
 			overlay.SetClusterFeeSink(ft.SetClusterFee)
-			overlay.SetLocalLoadFeeProvider(ft.LocalFee)
+			overlay.SetLocalLoadFeeProvider(func() (uint32, time.Duration) {
+				return ft.LocalFee(), r.ledger.GetValidatedLedgerAge()
+			})
 		}
 
 		r.services.NodePublicKey = r.consensus.Overlay.NodePublicKey()

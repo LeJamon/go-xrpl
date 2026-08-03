@@ -199,12 +199,11 @@ type Overlay struct {
 	// Guarded by providersMu.
 	clusterFeeSink func(fee uint32)
 
-	// localLoadFeeProvider returns the local node's current load fee
-	// factor (LoadFeeTrack.getLocalFee). Wired into sendClusterUpdate
-	// so the self-entry in each outbound TMCluster gossip advertises
-	// real load instead of 0. nil-safe — sendClusterUpdate falls back
-	// to 0 when unwired. Guarded by providersMu.
-	localLoadFeeProvider func() uint32
+	// localLoadFeeProvider returns the local node's current load fee and
+	// validated-ledger age. Wired into sendClusterUpdate so stale nodes
+	// advertise zero load. nil-safe — sendClusterUpdate falls back to 0
+	// when unwired. Guarded by providersMu.
+	localLoadFeeProvider func() (uint32, time.Duration)
 
 	// localNodeIdentity is the raw 33-byte compressed NodePublic of
 	// THIS node. Used by the cluster timer to insert ourselves into

@@ -8,9 +8,11 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/LeJamon/go-xrpl/codec/addresscodec"
 	"github.com/LeJamon/go-xrpl/internal/peermanagement/cluster"
 	"github.com/LeJamon/go-xrpl/internal/peermanagement/message"
 	"github.com/LeJamon/go-xrpl/internal/peermanagement/resource"
+	"github.com/LeJamon/go-xrpl/protocol"
 )
 
 // TestSendClusterUpdate_NoClusterConfigured_NoOp pins the
@@ -56,7 +58,8 @@ func TestSendClusterUpdate_EmitsExportedConsumerGossip(t *testing.T) {
 	// Register the receiving peer as a cluster member so it both appears
 	// in the broadcast registry and is selected as a send target.
 	clusterReg := cluster.New()
-	require.True(t, clusterReg.Update(peerToken.Bytes(), "peer", 0, time.Now()))
+	reportTime := protocol.FromRippleTime(800_000_000)
+	require.True(t, clusterReg.Update(peerToken.Bytes(), "peer", 0, reportTime))
 
 	// Seed the resource manager with an inbound consumer whose balance
 	// clears the gossip-export threshold.
@@ -88,12 +91,81 @@ func TestSendClusterUpdate_EmitsExportedConsumerGossip(t *testing.T) {
 	require.NoError(t, err)
 	cm, ok := decoded.(*message.Cluster)
 	require.True(t, ok)
+	require.Len(t, cm.ClusterNodes, 1)
+	assert.Equal(t, protocol.ToRippleTime(reportTime), cm.ClusterNodes[0].ReportTime)
 
 	require.Len(t, cm.LoadSources, 1, "exported consumer must appear as a load source")
 	assert.Equal(t, "203.0.113.7", cm.LoadSources[0].Name,
 		"load-source name must be the normalised inbound address (port stripped)")
 	assert.GreaterOrEqual(t, cm.LoadSources[0].Cost, uint32(resource.MinimumGossipBalance),
 		"exported cost must clear the gossip threshold")
+}
+
+func TestSendClusterUpdate_GatesSelfLoadOnValidatedLedgerAge(t *testing.T) {
+	for _, test := range []struct {
+		name string
+		age  time.Duration
+		want uint32
+	}{
+		{name: "fresh boundary", age: 4 * time.Minute, want: 512},
+		{name: "stale", age: 4*time.Minute + time.Second, want: 0},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			localIdentity, err := NewIdentity()
+			require.NoError(t, err)
+			peerIdentity, err := NewIdentity()
+			require.NoError(t, err)
+			peerToken := NewPublicKeyTokenFromBtcec(peerIdentity.BtcecPublicKey())
+
+			clusterReg := cluster.New()
+			require.True(t, clusterReg.Update(
+				peerToken.Bytes(),
+				"peer",
+				0,
+				protocol.FromRippleTime(800_000_000),
+			))
+
+			o := &Overlay{
+				peers:             make(map[PeerID]*Peer),
+				events:            make(chan Event, 8),
+				cluster:           clusterReg,
+				localNodeIdentity: localIdentity.PublicKey(),
+			}
+			o.SetLocalLoadFeeProvider(func() (uint32, time.Duration) {
+				return 512, test.age
+			})
+
+			peer := NewPeer(
+				PeerID(304),
+				Endpoint{Host: "127.0.0.1", Port: 51235},
+				false,
+				localIdentity,
+				make(chan Event, 1),
+			)
+			peer.remotePubKey = peerToken
+			peer.setState(PeerStateConnected)
+			o.peers[peer.ID()] = peer
+
+			o.sendClusterUpdate()
+			frame := requireOutboundFrame(t, peer)
+			_, payload, err := message.ReadMessage(bytes.NewReader(frame))
+			require.NoError(t, err)
+			decoded, err := message.Decode(message.TypeCluster, payload)
+			require.NoError(t, err)
+			cm, ok := decoded.(*message.Cluster)
+			require.True(t, ok)
+
+			localPublic, err := addresscodec.EncodeNodePublicKey(localIdentity.PublicKey())
+			require.NoError(t, err)
+			for _, node := range cm.ClusterNodes {
+				if node.PublicKey == localPublic {
+					assert.Equal(t, test.want, node.NodeLoad)
+					return
+				}
+			}
+			t.Fatalf("local cluster entry %q not found", localPublic)
+		})
+	}
 }
 
 // TestSendTxQueueAnnounce_FeatureDisabled_NoEmit pins the

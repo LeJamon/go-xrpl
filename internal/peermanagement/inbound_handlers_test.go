@@ -13,6 +13,7 @@ import (
 	"github.com/LeJamon/go-xrpl/internal/peermanagement/cluster"
 	"github.com/LeJamon/go-xrpl/internal/peermanagement/message"
 	"github.com/LeJamon/go-xrpl/internal/peermanagement/resource"
+	"github.com/LeJamon/go-xrpl/protocol"
 )
 
 // TestHandleClusterMessage_DropsNonClusterPeer pins issue #497 audit
@@ -106,11 +107,11 @@ func TestHandleClusterMessage_FiresClusterFeeSink(t *testing.T) {
 	// Pre-register the other identity so the registry update accepts it.
 	require.NoError(t, clusterReg.Load([]string{otherPub + " other"}))
 
-	now := uint32(time.Now().Unix())
+	now := time.Now().UTC().Truncate(time.Second)
 	cm := &message.Cluster{
 		ClusterNodes: []message.ClusterNode{
-			{PublicKey: peerNodePubEncoded, NodeName: "peer", NodeLoad: 320, ReportTime: now},
-			{PublicKey: otherPub, NodeName: "other", NodeLoad: 400, ReportTime: now},
+			{PublicKey: peerNodePubEncoded, NodeName: "peer", NodeLoad: 320, ReportTime: protocol.ToRippleTime(now)},
+			{PublicKey: otherPub, NodeName: "other", NodeLoad: 400, ReportTime: protocol.ToRippleTime(now)},
 		},
 	}
 	payload, err := message.Encode(cm)
@@ -124,6 +125,9 @@ func TestHandleClusterMessage_FiresClusterFeeSink(t *testing.T) {
 
 	require.Len(t, sinkCalls, 1, "clusterFeeSink must fire exactly once per ingress")
 	assert.Equal(t, uint32(400), sinkCalls[0])
+	member, ok := clusterReg.Member(peerNodePub)
+	require.True(t, ok)
+	assert.Equal(t, now, member.ReportTime)
 }
 
 func TestHandleClusterMessage_ClearsStaleClusterFee(t *testing.T) {
@@ -192,7 +196,7 @@ func TestHandleClusterMessage_ClearsClusterFeeAfterReportAgesOut(t *testing.T) {
 	o.peers[peer.ID()] = peer
 
 	payload, err := message.Encode(&message.Cluster{ClusterNodes: []message.ClusterNode{
-		{PublicKey: peerNodePubEncoded, NodeName: "peer", NodeLoad: 512, ReportTime: uint32(now.Unix())},
+		{PublicKey: peerNodePubEncoded, NodeName: "peer", NodeLoad: 512, ReportTime: protocol.ToRippleTime(now)},
 	}})
 	require.NoError(t, err)
 	o.onMessageReceived(Event{PeerID: peer.ID(), MessageType: message.TypeCluster, Payload: payload})
