@@ -10,8 +10,8 @@ import (
 )
 
 // peerTxReduceRelayEnabled reports whether a peer negotiated the
-// tx-reduce-relay feature. Reads the peer's capabilities directly so it is
-// safe to call while holding o.peersMu (unlike PeerSupports, which re-locks).
+// tx-reduce-relay feature. It uses a peer snapshot so it is safe to call
+// while holding o.peersMu (unlike PeerSupports, which re-locks).
 func peerTxReduceRelayEnabled(p *Peer) bool {
 	caps := p.Capabilities()
 	return caps != nil && caps.HasFeature(FeatureTxReduceRelay)
