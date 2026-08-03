@@ -850,9 +850,6 @@ func (target pathFindUpdateTarget) trySend(data []byte) bool {
 		target.connection.pathFindGeneration != target.generation {
 		return false
 	}
-	if target.connection.Connection == nil {
-		return false
-	}
 	return target.connection.TrySend(data)
 }
 
@@ -916,23 +913,12 @@ func (ws *WebSocketServer) sendCommandResponse(wsConn *websocketConnection, resu
 	ws.deliver(wsConn, data)
 }
 
-// deliver queues an already-marshalled WS frame through the shared TrySend so
-// per-request response delivery and broadcast delivery use the same
-// consecutive-drop counter and the same disconnect-on-N-drops threshold. Test
-// fixtures may build a wsConn without a canonical connection; those fall back
-// to a non-blocking channel send.
+// deliver queues an already-marshalled WS frame through the canonical
+// connection so per-request response delivery and broadcast delivery use the
+// same drop policy.
 func (ws *WebSocketServer) deliver(wsConn *websocketConnection, data []byte) {
-	if wsConn.Connection != nil {
-		if !wsConn.TrySend(data) {
-			wsLog().Debug("WebSocket send dropped (slow consumer)", "connID", wsConn.ID)
-		}
-		return
-	}
-	select {
-	case wsConn.SendChannel <- data:
-	case <-wsConn.Done():
-	default:
-		wsLog().Warn("WebSocket send channel full", "connID", wsConn.ID)
+	if !wsConn.TrySend(data) {
+		wsLog().Debug("WebSocket send dropped (slow consumer)", "connID", wsConn.ID)
 	}
 }
 
