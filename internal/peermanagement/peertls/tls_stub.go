@@ -4,8 +4,6 @@ package peertls
 
 import "net"
 
-// Supported reports whether XRPL session-signature TLS is available in this
-// build.
 func Supported() bool { return false }
 
 // Client reports that XRPL session-signature TLS is unavailable in this build.

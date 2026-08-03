@@ -21,7 +21,6 @@ const (
 	bioOutBufSize   = 32 * 1024
 )
 
-// pumpBufPool recycles scratch space used to move encrypted input into the BIO.
 var pumpBufPool = sync.Pool{
 	New: func() any {
 		buf := make([]byte, pumpBufSize)
@@ -88,8 +87,6 @@ var (
 	_ net.Listener = (*listener)(nil)
 )
 
-// Supported reports whether XRPL session-signature TLS is available in this
-// build.
 func Supported() bool { return true }
 
 // Client wraps inner as an XRPL TLS client. It does not close inner when

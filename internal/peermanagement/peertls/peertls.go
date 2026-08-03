@@ -23,7 +23,6 @@ type GracefulConn interface {
 	ShutdownContext(ctx context.Context) error
 }
 
-// Config contains the certificate and private key presented to peers.
 type Config struct {
 	CertPEM []byte
 	KeyPEM  []byte
@@ -34,6 +33,4 @@ type Config struct {
 var ErrSessionSigUnsupported = errors.New(
 	"peertls: session-signature TLS requires CGO + OpenSSL; rebuild with CGO_ENABLED=1")
 
-// ErrHandshakeIncomplete reports that an operation requires a completed TLS
-// handshake.
 var ErrHandshakeIncomplete = errors.New("peertls: handshake not complete")
