@@ -64,7 +64,9 @@ type WebSocketServer struct {
 	services            *types.ServiceContainer
 	urlSubs             *URLSubscriptionRegistry
 	peerSourceHolder
-	loadTracker *loadtrack.Tracker
+	loadTracker       *loadtrack.Tracker
+	pathFindRefreshMu sync.Mutex
+	pathFindRefresh   *pathFindRefreshManager
 	// pingInterval is how often pingLoop sends a keepalive ping. Settable
 	// so concurrency tests can drive the ping path without waiting on the
 	// production cadence.
@@ -89,6 +91,7 @@ type WebSocketConnection struct {
 	cancel             context.CancelFunc
 	pathFindSession    *PathFindSession // At most one active path_find session per connection
 	pathFindGeneration uint64
+	pathFindRefresh    *pathFindRefreshManager
 	portCtx            *PortContext // per-port config for role determination
 	// user is the X-User header captured at upgrade time. Used by
 	// roleForRequest for RoleIdentified promotion when the connection
@@ -145,6 +148,7 @@ func NewWebSocketServerWithLoadTracker(timeout time.Duration, services *types.Se
 		closeDone:           make(chan struct{}),
 		forceDone:           make(chan struct{}),
 	}
+	ws.pathFindRefresh = newPathFindRefreshManager(ws)
 	// The url (RPCSub) registry lives on the WebSocket server because url
 	// subscribers share its subscription manager's broadcast fan-out.
 	// Exposing it through the service container lets the plain JSON-RPC
@@ -689,6 +693,7 @@ func (ws *WebSocketServer) executePathFind(wsConn *WebSocketConnection, ctx *typ
 // executePathFindCreate creates a new persistent pathfinding session.
 // Any existing session on this connection is replaced (matching rippled).
 func (ws *WebSocketServer) executePathFindCreate(wsConn *WebSocketConnection, ctx *types.RpcContext, cmd types.WebSocketCommand) (any, *types.RpcError) {
+	ws.bindPathFindRefreshManager(wsConn)
 	wsConn.clearPathFindSession()
 
 	release, rpcErr := handlers.AcquirePathfind(ctx)
@@ -743,45 +748,22 @@ func (ws *WebSocketServer) executePathFindStatus(wsConn *WebSocketConnection, _ 
 	return session.Status(), nil
 }
 
-// UpdatePathFindSessions re-runs pathfinding for all active sessions on ledger close.
-// Called from the ledger close callback in server.go.
+// UpdatePathFindSessions snapshots active sessions and queues one bounded,
+// asynchronous refresh generation. The ledger-close callback must not perform
+// ledger-view acquisition or path computation itself.
 func (ws *WebSocketServer) UpdatePathFindSessions(getView func() (types.LedgerStateView, error)) {
+	manager := ws.ensurePathFindRefreshManager()
 	ws.connectionsMutex.RLock()
 	var targets []pathFindUpdateTarget
 	for _, conn := range ws.connections {
+		ws.bindPathFindRefreshManager(conn)
 		if target, ok := conn.snapshotPathFindUpdate(); ok {
 			targets = append(targets, target)
 		}
 	}
 	ws.connectionsMutex.RUnlock()
 
-	if len(targets) == 0 {
-		return
-	}
-
-	view, err := getView()
-	if err != nil {
-		wsLog().Error("Failed to get ledger view for path_find updates", "err", err)
-		return
-	}
-
-	for _, target := range targets {
-		if !target.current() {
-			continue
-		}
-
-		event := target.session.Execute(view, true)
-
-		data, marshalErr := json.Marshal(event)
-		if marshalErr != nil {
-			continue
-		}
-
-		// The identity check and non-blocking enqueue share the connection lock.
-		// A close/replacement therefore either happens before this check and
-		// suppresses the stale event, or after the event is already ordered.
-		target.trySend(data)
-	}
+	manager.enqueue(getView, targets)
 }
 
 type pathFindUpdateTarget struct {
@@ -792,20 +774,47 @@ type pathFindUpdateTarget struct {
 
 func (c *WebSocketConnection) clearPathFindSession() *PathFindSession {
 	c.mutex.Lock()
-	defer c.mutex.Unlock()
-
 	session := c.pathFindSession
+	generation := c.pathFindGeneration
+	manager := c.pathFindRefresh
 	c.pathFindSession = nil
 	c.pathFindGeneration++
+	c.mutex.Unlock()
+	if manager != nil && session != nil {
+		manager.cancel(c, session, generation)
+	}
 	return session
 }
 
 func (c *WebSocketConnection) installPathFindSession(session *PathFindSession) {
 	c.mutex.Lock()
-	defer c.mutex.Unlock()
-
+	previous := c.pathFindSession
+	previousGeneration := c.pathFindGeneration
+	manager := c.pathFindRefresh
 	c.pathFindSession = session
 	c.pathFindGeneration++
+	c.mutex.Unlock()
+	if manager != nil && previous != nil {
+		manager.cancel(c, previous, previousGeneration)
+	}
+}
+
+func (ws *WebSocketServer) ensurePathFindRefreshManager() *pathFindRefreshManager {
+	ws.pathFindRefreshMu.Lock()
+	defer ws.pathFindRefreshMu.Unlock()
+	if ws.pathFindRefresh == nil {
+		ws.pathFindRefresh = newPathFindRefreshManager(ws)
+	}
+	return ws.pathFindRefresh
+}
+
+func (ws *WebSocketServer) bindPathFindRefreshManager(conn *WebSocketConnection) {
+	manager := ws.ensurePathFindRefreshManager()
+	conn.mutex.Lock()
+	if conn.pathFindRefresh == nil {
+		conn.pathFindRefresh = manager
+	}
+	conn.mutex.Unlock()
 }
 
 func (c *WebSocketConnection) snapshotPathFindUpdate() (pathFindUpdateTarget, bool) {
@@ -835,6 +844,9 @@ func (target pathFindUpdateTarget) trySend(data []byte) bool {
 
 	if target.connection.pathFindSession != target.session ||
 		target.connection.pathFindGeneration != target.generation {
+		return false
+	}
+	if target.connection.legacy == nil {
 		return false
 	}
 	return target.connection.legacy.TrySend(data)
@@ -1068,6 +1080,7 @@ func marshalWebSocketJSON(value any) ([]byte, error) {
 // impossible for the two maps to drift on Add/Remove ordering — the
 // "duplicated connection state" concern flagged in the #428 audit.
 func (ws *WebSocketServer) attachConnection(wsConn *WebSocketConnection) bool {
+	ws.bindPathFindRefreshManager(wsConn)
 	legacy := &types.Connection{
 		ID:            wsConn.ID,
 		Subscriptions: wsConn.subscriptions,
@@ -1344,6 +1357,7 @@ func (ws *WebSocketServer) shutdown(ctx context.Context) {
 	closeFrames.Add(len(connections))
 	for _, conn := range connections {
 		conn.cancel()
+		conn.clearPathFindSession()
 		go func() {
 			defer closeFrames.Done()
 			_ = conn.conn.WriteControl(
@@ -1368,7 +1382,15 @@ func (ws *WebSocketServer) shutdown(ctx context.Context) {
 	for _, conn := range connections {
 		_ = conn.conn.Close()
 	}
+	refreshManager := ws.ensurePathFindRefreshManager()
+	refreshErr := refreshManager.wait(ctx)
 	close(ws.forceDone)
+	if refreshErr != nil {
+		// The close caller has already been released at its deadline. Keep this
+		// shutdown goroutine joining the fixed refresh worker set so eventual
+		// release of a non-cooperative pathfinder leaves no worker behind.
+		_ = refreshManager.wait(context.Background())
+	}
 
 	closeFrames.Wait()
 	ws.wg.Wait()

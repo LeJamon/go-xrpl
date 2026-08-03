@@ -203,6 +203,48 @@ func addOffer(
 	ledger.entries[offerKey.Key] = data
 }
 
+func addOfferToBook(
+	t *testing.T,
+	ledger *mockLedgerView,
+	account [20]byte,
+	seq uint32,
+	takerPays, takerGets state.Amount,
+	domainID [32]byte,
+) {
+	t.Helper()
+	var domainPtr *[32]byte
+	if domainID != ([32]byte{}) {
+		domainPtr = &domainID
+	}
+	book := keylet.Quality(keylet.BookBase(
+		bookSide(issueFromAmount(takerPays)),
+		bookSide(issueFromAmount(takerGets)),
+		domainPtr,
+	), payment.QualityFromAmounts(
+		payment.ToEitherAmount(takerPays),
+		payment.ToEitherAmount(takerGets),
+	).Value)
+	offer := &state.LedgerOffer{
+		Account:       testAccountAddress(account),
+		Sequence:      seq,
+		TakerPays:     takerPays,
+		TakerGets:     takerGets,
+		BookDirectory: book.Key,
+		DomainID:      domainID,
+	}
+	offerData, err := state.SerializeLedgerOffer(offer)
+	require.NoError(t, err, "serialize LedgerOffer")
+	offerKey := keylet.Offer(account, seq)
+	ledger.entries[offerKey.Key] = offerData
+
+	dirData, err := state.SerializeDirectoryNode(&state.DirectoryNode{
+		RootIndex: book.Key,
+		Indexes:   [][32]byte{offerKey.Key},
+	}, true)
+	require.NoError(t, err, "serialize BookDir")
+	ledger.entries[book.Key] = dirData
+}
+
 // ensureOwnerDirContains adds itemKey to the owner directory of the given account.
 // If no directory exists yet, creates one. If one exists, appends.
 func ensureOwnerDirContains(t *testing.T, ledger *mockLedgerView, account [20]byte, itemKey [32]byte) {
@@ -1321,6 +1363,84 @@ func TestFindPaths_XRPToIOU_ThroughOfferBook(t *testing.T) {
 	// With the offer present, the BookIndex should discover the XRP->USD book.
 	paths := pf.CompletePaths()
 	t.Logf("Found %d complete paths for XRP->USD", len(paths))
+}
+
+func TestPathRequestDomainFiltersUnrelatedOfferBooks(t *testing.T) {
+	ledger := newMockLedger()
+	alice := testAccountID(1)
+	bob := testAccountID(2)
+	gw := testAccountID(3)
+	mmDomain := testAccountID(4)
+	mmOther := testAccountID(5)
+	gwAddr := testAccountAddress(gw)
+
+	for _, account := range [][20]byte{alice, bob, gw, mmDomain, mmOther} {
+		addAccount(t, ledger, account, 10000000000, 0)
+	}
+
+	low, high := bob, gw
+	if compareAccountIDs(low, high) > 0 {
+		low, high = high, low
+	}
+	addRippleState(t, ledger, low, high, "USD", 0, 1000, 1000, 0)
+	for _, account := range [][20]byte{mmDomain, mmOther} {
+		low, high = account, gw
+		if compareAccountIDs(low, high) > 0 {
+			low, high = high, low
+		}
+		balance := -500.0
+		if low == account {
+			balance = 500
+		}
+		addRippleState(t, ledger, low, high, "USD", balance, 10000, 10000, 0)
+	}
+
+	var domainID, otherDomainID [32]byte
+	domainID[31] = 1
+	otherDomainID[31] = 2
+	for _, domain := range []struct {
+		id    [32]byte
+		owner [20]byte
+	}{
+		{id: domainID, owner: mmDomain},
+		{id: otherDomainID, owner: mmOther},
+	} {
+		data, err := state.SerializePermissionedDomain(&state.PermissionedDomainData{
+			Owner:    domain.owner,
+			Sequence: 1,
+		}, testAccountAddress(domain.owner))
+		require.NoError(t, err, "serialize PermissionedDomain")
+		ledger.entries[keylet.PermissionedDomainByID(domain.id).Key] = data
+	}
+	addOfferToBook(t, ledger, mmDomain, 1,
+		state.NewXRPAmountFromInt(10000000),
+		state.NewIssuedAmountFromFloat64(100, "USD", gwAddr),
+		domainID)
+	addOfferToBook(t, ledger, mmOther, 1,
+		state.NewXRPAmountFromInt(10000000),
+		state.NewIssuedAmountFromFloat64(100, "USD", gwAddr),
+		otherDomainID)
+
+	dstAmount := state.NewIssuedAmountFromFloat64(50, "USD", gwAddr)
+	sendMax := state.NewXRPAmountFromInt(99999999999)
+	request := NewPathRequest(
+		alice, bob, dstAmount, &sendMax,
+		[]payment.Issue{{Currency: "XRP"}}, false,
+	)
+	request.SetDomainID(&domainID)
+	result := request.Execute(ledger)
+	require.NotEmpty(t, result.Alternatives, "domain offer should provide liquidity")
+	require.Len(t, result.Alternatives, 1)
+	require.True(t, result.Alternatives[0].SourceAmount.IsNative())
+	require.Equal(t, int64(5_000_000), result.Alternatives[0].SourceAmount.Drops(),
+		"the matching domain offer should price 50 USD at 10 XRP per 100 USD")
+
+	// Removing the matching offer leaves only the same-pair offer in another
+	// domain. A request restricted to domainID must not use that unrelated book.
+	delete(ledger.entries, keylet.Offer(mmDomain, 1).Key)
+	withoutMatchingDomain := request.Execute(ledger)
+	require.Empty(t, withoutMatchingDomain.Alternatives,
+		"an offer from another domain must not provide liquidity")
 }
 
 func TestGetPathLiquidityDoesNotReuseConsumedOffer(t *testing.T) {
