@@ -195,7 +195,7 @@ func (l *listener) Addr() net.Addr { return l.inner.Addr() }
 // Locks:
 //   - sslMu owns the engine, TLS state, and terminal TLS error.
 //   - inMu owns raw reads, pendingIn, and pendingReadErr.
-//   - outMu owns raw writes and pendingOut.
+//   - outMu owns raw writes, pendingOut, and outputErr.
 //   - queuedOutMu owns TLS records waiting for the raw writer.
 //
 // No lock is held across raw I/O except its directional lock. Close closes the
@@ -214,6 +214,7 @@ type conn struct {
 
 	outMu      sync.Mutex
 	pendingOut []byte
+	outputErr  error
 
 	queuedOutMu sync.Mutex
 	queuedOut   []byte
@@ -451,6 +452,9 @@ func deferredReadError(err error) error {
 // flushOutputLocked writes queued OpenSSL output without dropping short-write
 // tails. The caller holds outMu.
 func (c *conn) flushOutputLocked() error {
+	if c.outputErr != nil {
+		return c.outputErr
+	}
 	for {
 		if len(c.pendingOut) == 0 {
 			c.queuedOutMu.Lock()
@@ -549,6 +553,7 @@ func (c *conn) releaseOutputLock() {
 func (c *conn) poisonOutput(err error) error {
 	terminal := fmt.Errorf("peertls: raw TLS write: %w", err)
 	terminal = c.failTLS(terminal)
+	c.outputErr = terminal
 	_ = c.inner.Close()
 	return terminal
 }
