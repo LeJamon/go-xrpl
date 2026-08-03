@@ -65,6 +65,20 @@ func encodeAndSend(peer *Peer, msg message.Message, opName string) {
 	}
 }
 
+// encodeAndSendPriority uses the acquisition lane for a direct response to a
+// peer request. Direct replies must not sit behind ordinary relay traffic in
+// the per-peer reliable queue.
+func encodeAndSendPriority(peer *Peer, msg message.Message, opName string) {
+	frame := buildFrame(msg, opName, "peer", peer.ID())
+	if frame == nil {
+		return
+	}
+	if err := peer.SendPriority(frame); err != nil {
+		slog.Debug(opName+" priority send failed",
+			"t", "Overlay", "peer", peer.ID(), "err", err)
+	}
+}
+
 // BroadcastHaveTxSet announces that we hold a particular transaction
 // set, mirroring rippled's post-consensus mtHAVE_SET emission. The
 // consensus adaptor calls this once per BuildTxSet so peers acquiring

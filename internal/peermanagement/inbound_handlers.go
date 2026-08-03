@@ -5,11 +5,13 @@
 package peermanagement
 
 import (
+	"context"
 	"errors"
 	"log/slog"
 	"math/rand/v2"
 	"net"
 	"strconv"
+	"sync"
 	"time"
 
 	addresscodec "github.com/LeJamon/go-xrpl/codec/addresscodec"
@@ -25,6 +27,55 @@ import (
 // go-xrpl refuses new work before peer.Send returns
 // ErrSendBufferFull.
 const peerSendQueueDropThreshold = (DefaultSendBufferSize * 3) / 4
+
+const (
+	// These allowances exceed the protobuf tags, lengths, and repeated-message
+	// envelope for one reply item, keeping the pre-marshal budget conservative.
+	serveReplyObjectOverhead      = int64(64)
+	serveReplyTransactionOverhead = int64(32)
+)
+
+type serveReplyBudget struct {
+	remaining int64
+}
+
+func newServeReplyBudget() serveReplyBudget {
+	return serveReplyBudget{remaining: int64(message.MaxMessageSize)}
+}
+
+func (b *serveReplyBudget) reserve(overhead int64, fields ...[]byte) bool {
+	if overhead < 0 || overhead > b.remaining {
+		return false
+	}
+	required := overhead
+	for _, field := range fields {
+		if int64(len(field)) > b.remaining-required {
+			return false
+		}
+		required += int64(len(field))
+	}
+	b.remaining -= required
+	return true
+}
+
+func limitIndexedObjectsToReplyBudget(objects []message.IndexedObject, fixedFields ...[]byte) []message.IndexedObject {
+	budget := newServeReplyBudget()
+	if !budget.reserve(serveReplyObjectOverhead, fixedFields...) {
+		clear(objects)
+		return objects[:0]
+	}
+	kept := 0
+	for i := range objects {
+		object := &objects[i]
+		if !budget.reserve(serveReplyObjectOverhead, object.Hash, object.NodeID, object.Index, object.Data) {
+			break
+		}
+		objects[kept] = *object
+		kept++
+	}
+	clear(objects[kept:])
+	return objects[:kept]
+}
 
 // handleClusterMessage processes mtCLUSTER from a peer. Mirrors rippled
 // PeerImp::onMessage(TMCluster) at PeerImp.cpp:1125-1194.
@@ -198,13 +249,18 @@ func (o *Overlay) handleGetObjectsMessage(evt Event) {
 		}
 		switch gob.ObjType {
 		case message.ObjectTypeFetchPack:
+			if len(gob.LedgerHash) != 32 {
+				o.IncPeerBadData(evt.PeerID, "fetch-pack-bad-hash")
+				return
+			}
 			// Rippled at PeerImp.cpp:2458-2462 forwards to doFetchPack.
 			// Build a pack of the predecessor ledger's SHAMap nodes and
 			// reply (serveFetchPack), mirroring makeFetchPack. Offloaded
 			// to the serve-worker pool — building a pack snapshots the
 			// state+tx tree (capped at fetchPackMaxObjects nodes) and
 			// must not run on the event loop.
-			o.submitRetainedServe(evt, func() { o.serveFetchPack(evt.PeerID, gob) })
+			o.submitRetainedServe(evt, resource.FeeHeavyBurdenPeer,
+				func(ctx context.Context) { o.serveFetchPackContext(ctx, evt.PeerID, gob) })
 			return
 		case message.ObjectTypeTransactions:
 			// Tx-reduce-relay back-fill request. Rippled gates on
@@ -220,14 +276,26 @@ func (o *Overlay) handleGetObjectsMessage(evt Event) {
 				o.IncPeerBadData(evt.PeerID, "get-objects-txn-unnegotiated")
 				return
 			}
-			o.submitRetainedServe(evt, func() { o.serveDoTransactions(evt.PeerID, gob) })
+			o.submitRetainedServe(evt, resource.FeeModerateBurdenPeer,
+				func(ctx context.Context) { o.serveDoTransactionsContext(ctx, evt.PeerID, gob) })
 			return
 		}
 
 		// Generic node-store object fetch by hash. Mirrors rippled's
 		// fetchNodeObject loop at PeerImp.cpp:2483-2538. Offloaded to the
 		// serve-worker pool — up to N node-store fetches per request.
-		o.submitRetainedServe(evt, func() { o.serveGetObjects(evt.PeerID, gob) })
+		if len(gob.LedgerHash) != 0 && len(gob.LedgerHash) != 32 {
+			o.IncPeerBadData(evt.PeerID, "get-objects-ledgerhash")
+			return
+		}
+		if len(gob.Objects) > hardMaxReplyNodes {
+			if peer, ok := o.getPeer(evt.PeerID); ok {
+				peer.Charge(resource.FeeInvalidData, "oversized get object request")
+			}
+			return
+		}
+		o.submitRetainedServe(evt, resource.FeeModerateBurdenPeer,
+			func(ctx context.Context) { o.serveGetObjectsContext(ctx, evt.PeerID, gob) })
 		return
 	}
 
@@ -248,15 +316,20 @@ func (o *Overlay) handleGetObjectsMessage(evt Event) {
 		"t", "Overlay", "peer", evt.PeerID)
 }
 
-func (o *Overlay) submitRetainedServe(evt Event, job func()) {
+func (o *Overlay) submitRetainedServe(
+	evt Event,
+	admission resource.Charge,
+	job func(context.Context),
+) {
 	reservation := evt.reservation.retain()
-	o.submitServeJob(overlayServeJob{
-		run: func() {
-			defer reservation.release()
-			job()
-		},
-		discard: reservation.release,
-	})
+	var releaseOnce sync.Once
+	release := func() { releaseOnce.Do(reservation.release) }
+	if !o.submitServeForPeerOwned(evt.PeerID, admission, func(ctx context.Context) {
+		defer release()
+		job(ctx)
+	}, release) {
+		release()
+	}
 }
 
 // serveFetchPack answers an inbound mtGET_OBJECTS{otFETCH_PACK, query=true}.
@@ -274,6 +347,18 @@ func (o *Overlay) submitRetainedServe(evt Event, job func()) {
 // so the send-queue back-pressure gate in handleGetObjectsMessage stands in for
 // rippled's isLoadedLocal / jtPACK busy guards (PeerImp.cpp:2758-2762).
 func (o *Overlay) serveFetchPack(peerID PeerID, req *message.GetObjectByHash) {
+	if len(req.LedgerHash) == 32 {
+		if peer, ok := o.getPeer(peerID); ok {
+			peer.Charge(resource.FeeHeavyBurdenPeer, "fetch pack request")
+		}
+	}
+	o.serveFetchPackContext(context.Background(), peerID, req)
+}
+
+func (o *Overlay) serveFetchPackContext(ctx context.Context, peerID PeerID, req *message.GetObjectByHash) {
+	if err := ctx.Err(); err != nil {
+		return
+	}
 	if len(req.LedgerHash) != 32 {
 		o.IncPeerBadData(peerID, "fetch-pack-bad-hash")
 		return
@@ -283,8 +368,6 @@ func (o *Overlay) serveFetchPack(peerID PeerID, req *message.GetObjectByHash) {
 	if !exists {
 		return
 	}
-	peer.Charge(resource.FeeHeavyBurdenPeer, "fetch pack request")
-
 	var haveHash [32]byte
 	copy(haveHash[:], req.LedgerHash)
 
@@ -301,6 +384,10 @@ func (o *Overlay) serveFetchPack(peerID PeerID, req *message.GetObjectByHash) {
 	if len(objects) == 0 {
 		return
 	}
+	objects = limitIndexedObjectsToReplyBudget(objects, req.LedgerHash)
+	if len(objects) == 0 {
+		return
+	}
 
 	reply := &message.GetObjectByHash{
 		ObjType:    message.ObjectTypeFetchPack,
@@ -308,7 +395,10 @@ func (o *Overlay) serveFetchPack(peerID PeerID, req *message.GetObjectByHash) {
 		LedgerHash: append([]byte(nil), req.LedgerHash...),
 		Objects:    objects,
 	}
-	encodeAndSend(peer, reply, "fetch-pack reply")
+	if ctx.Err() != nil {
+		return
+	}
+	encodeAndSendPriority(peer, reply, "fetch-pack reply")
 }
 
 // handleHaveTransactionsMessage processes mtHAVE_TRANSACTIONS from a
@@ -547,6 +637,13 @@ func (o *Overlay) handleEndpointsMessage(evt Event) {
 // rippled — we treat them as "skip", matching the more permissive
 // go-xrpl stance that the peer may legitimately be a hop ahead.
 func (o *Overlay) serveDoTransactions(peerID PeerID, req *message.GetObjectByHash) {
+	o.serveDoTransactionsContext(context.Background(), peerID, req)
+}
+
+func (o *Overlay) serveDoTransactionsContext(ctx context.Context, peerID PeerID, req *message.GetObjectByHash) {
+	if err := ctx.Err(); err != nil {
+		return
+	}
 	const maxQueueSize = 64 // matches rippled reduce_relay::MAX_TX_QUEUE_SIZE
 	if len(req.Objects) == 0 {
 		return
@@ -566,7 +663,11 @@ func (o *Overlay) serveDoTransactions(peerID PeerID, req *message.GetObjectByHas
 	reply := &message.Transactions{
 		Transactions: make([]message.Transaction, 0, len(req.Objects)),
 	}
+	budget := newServeReplyBudget()
 	for _, obj := range req.Objects {
+		if ctx.Err() != nil {
+			return
+		}
 		if len(obj.Hash) != 32 {
 			o.IncPeerBadData(peerID, "get-objects-txn-hashsize")
 			return
@@ -576,6 +677,9 @@ func (o *Overlay) serveDoTransactions(peerID PeerID, req *message.GetObjectByHas
 		blob, ok := txProvider(hash)
 		if !ok {
 			continue
+		}
+		if !budget.reserve(serveReplyTransactionOverhead, blob) {
+			break
 		}
 		reply.Transactions = append(reply.Transactions, message.Transaction{
 			RawTransaction:   blob,
@@ -591,7 +695,7 @@ func (o *Overlay) serveDoTransactions(peerID PeerID, req *message.GetObjectByHas
 	if !exists {
 		return
 	}
-	encodeAndSend(peer, reply, "TMTransactions reply")
+	encodeAndSendPriority(peer, reply, "TMTransactions reply")
 }
 
 // hardMaxReplyNodes bounds a single generic by-hash request. Mirrors
@@ -663,6 +767,20 @@ func getObjectByHashFee(requested, found int) resource.Charge {
 // PeerImp.cpp:2538 so a requester polling several peers can tell "I
 // don't have these" from a peer that never answered.
 func (o *Overlay) serveGetObjects(peerID PeerID, req *message.GetObjectByHash) {
+	if o.nodeObjectProviderSnapshot() != nil &&
+		(len(req.LedgerHash) == 0 || len(req.LedgerHash) == 32) &&
+		len(req.Objects) <= hardMaxReplyNodes {
+		if peer, ok := o.getPeer(peerID); ok {
+			peer.Charge(resource.FeeModerateBurdenPeer, "get object by hash request")
+		}
+	}
+	o.serveGetObjectsContext(context.Background(), peerID, req)
+}
+
+func (o *Overlay) serveGetObjectsContext(ctx context.Context, peerID PeerID, req *message.GetObjectByHash) {
+	if err := ctx.Err(); err != nil {
+		return
+	}
 	peer, exists := o.getPeer(peerID)
 	if !exists {
 		return
@@ -700,8 +818,6 @@ func (o *Overlay) serveGetObjects(peerID PeerID, req *message.GetObjectByHash) {
 	// fetch loop; the work-proportional differential is added afterwards.
 	// Rippled charges the base at admission in onMessage and the
 	// differential in the worker (PeerImp.cpp:2544, 2656).
-	peer.Charge(resource.FeeModerateBurdenPeer, "get object by hash request")
-
 	reply := &message.GetObjectByHash{
 		Query:   false,
 		ObjType: req.ObjType,
@@ -709,6 +825,10 @@ func (o *Overlay) serveGetObjects(peerID PeerID, req *message.GetObjectByHash) {
 	}
 	if len(req.LedgerHash) != 0 {
 		reply.LedgerHash = append([]byte(nil), req.LedgerHash...)
+	}
+	budget := newServeReplyBudget()
+	if !budget.reserve(serveReplyObjectOverhead, req.LedgerHash) {
+		return
 	}
 
 	// Defense in depth: the oversize gate above already rejects requests
@@ -721,6 +841,9 @@ func (o *Overlay) serveGetObjects(peerID PeerID, req *message.GetObjectByHash) {
 		iterLimit = hardMaxReplyNodes
 	}
 	for i := 0; i < iterLimit; i++ {
+		if ctx.Err() != nil {
+			return
+		}
 		obj := req.Objects[i]
 		// Rippled only processes objects carrying a uint256-sized hash
 		// (PeerImp.cpp:2511); others are silently skipped.
@@ -732,6 +855,9 @@ func (o *Overlay) serveGetObjects(peerID PeerID, req *message.GetObjectByHash) {
 		blob, ok := fetch(hash)
 		if !ok {
 			continue
+		}
+		if !budget.reserve(serveReplyObjectOverhead, obj.Hash, obj.NodeID, blob) {
+			break
 		}
 		// Rippled echoes the request's nodeid into the reply's index
 		// field and copies the ledger seq back (PeerImp.cpp:2526-2529).
@@ -752,7 +878,7 @@ func (o *Overlay) serveGetObjects(peerID PeerID, req *message.GetObjectByHash) {
 	// (computeGetObjectByHashFee, PeerImp.cpp:2656).
 	peer.Charge(getObjectByHashFee(requested, len(reply.Objects)), "processed get object by hash request")
 
-	encodeAndSend(peer, reply, "TMGetObjectByHash reply")
+	encodeAndSendPriority(peer, reply, "TMGetObjectByHash reply")
 }
 
 // handleTransactionsBatchMessage processes mtTRANSACTIONS (a batched

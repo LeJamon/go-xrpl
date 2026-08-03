@@ -40,6 +40,27 @@ func newServeTestPeer(t *testing.T, id PeerID) *Peer {
 	return NewPeer(id, endpoint, true, identity, make(chan Event, 1))
 }
 
+func TestServeReplyBudget(t *testing.T) {
+	budget := serveReplyBudget{remaining: 10}
+	require.True(t, budget.reserve(2, []byte{1, 2, 3}, []byte{4}))
+	require.Equal(t, int64(4), budget.remaining)
+	require.False(t, budget.reserve(2, []byte{1, 2, 3}))
+	require.Equal(t, int64(4), budget.remaining)
+	require.True(t, budget.reserve(4))
+	require.Zero(t, budget.remaining)
+}
+
+func TestLimitIndexedObjectsToReplyBudgetReleasesTail(t *testing.T) {
+	objects := []message.IndexedObject{
+		{Hash: []byte{1}, Data: []byte{2}},
+		{Hash: []byte{3}, Data: make([]byte, message.MaxMessageSize)},
+	}
+	limited := limitIndexedObjectsToReplyBudget(objects)
+	require.Len(t, limited, 1)
+	require.Nil(t, objects[1].Hash)
+	require.Nil(t, objects[1].Data)
+}
+
 // TestServeGetObjects_FetchesAndReplies covers the happy path of the
 // generic TMGetObjectByHash serve branch (rippled PeerImp.cpp:2483-2538):
 // found hashes are packed into a query=false reply echoing the request's

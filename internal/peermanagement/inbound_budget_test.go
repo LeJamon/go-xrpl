@@ -173,23 +173,30 @@ func TestGetObjectsQueryRetainsBudgetUntilServeCompletion(t *testing.T) {
 
 	budget := newReadBudget(int64(len(payload)))
 	require.NoError(t, budget.acquire(context.Background(), nil, int64(len(payload))))
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	scheduler := newServeScheduler(ctx, 1, 1, 1, 1)
+	peer := newLatencyTestPeer(t)
 	overlay := &Overlay{
-		cfg:       DefaultConfig(),
-		peers:     make(map[PeerID]*Peer),
-		serveJobs: make(chan overlayServeJob, 1),
-		runDone:   make(chan struct{}),
+		cfg:            DefaultConfig(),
+		peers:          map[PeerID]*Peer{peer.ID(): peer},
+		serveScheduler: scheduler,
+		ctx:            ctx,
+		lifecycleState: overlayLifecycleRunning,
 	}
 	overlay.onMessageReceived(Event{
 		Type:        EventMessageReceived,
-		PeerID:      1,
+		PeerID:      peer.ID(),
 		MessageType: uint16(message.TypeGetObjects),
 		Payload:     payload,
 		reservation: newInboundReservation(budget, int64(len(payload))),
 	})
 
 	require.Equal(t, int64(len(payload)), readBudgetUsed(budget))
-	job := <-overlay.serveJobs
-	job.run()
+	task, ok := scheduler.take(ctx)
+	require.True(t, ok)
+	task.run(task.ctx)
+	scheduler.finish(task)
 	require.Zero(t, readBudgetUsed(budget))
 }
 
@@ -199,17 +206,21 @@ func TestDroppedGetObjectsQueryReleasesBudget(t *testing.T) {
 
 	budget := newReadBudget(int64(len(payload)))
 	require.NoError(t, budget.acquire(context.Background(), nil, int64(len(payload))))
-	jobs := make(chan overlayServeJob, 1)
-	jobs <- overlayServeJob{run: func() {}}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	scheduler := newServeScheduler(ctx, 1, 1, 1, 1)
+	peer := newLatencyTestPeer(t)
+	require.True(t, scheduler.Submit(ctx, peer.ID(), func(context.Context) {}))
 	overlay := &Overlay{
-		cfg:       DefaultConfig(),
-		peers:     make(map[PeerID]*Peer),
-		serveJobs: jobs,
-		runDone:   make(chan struct{}),
+		cfg:            DefaultConfig(),
+		peers:          map[PeerID]*Peer{peer.ID(): peer},
+		serveScheduler: scheduler,
+		ctx:            ctx,
+		lifecycleState: overlayLifecycleRunning,
 	}
 	overlay.onMessageReceived(Event{
 		Type:        EventMessageReceived,
-		PeerID:      1,
+		PeerID:      peer.ID(),
 		MessageType: uint16(message.TypeGetObjects),
 		Payload:     payload,
 		reservation: newInboundReservation(budget, int64(len(payload))),
@@ -225,22 +236,57 @@ func TestServeShutdownReleasesQueuedDecodedBudget(t *testing.T) {
 
 	budget := newReadBudget(int64(len(payload)))
 	require.NoError(t, budget.acquire(context.Background(), nil, int64(len(payload))))
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	scheduler := newServeScheduler(ctx, 1, 1, 1, 1)
+	peer := newLatencyTestPeer(t)
 	overlay := &Overlay{
-		cfg:       DefaultConfig(),
-		peers:     make(map[PeerID]*Peer),
-		serveJobs: make(chan overlayServeJob, 1),
-		runDone:   make(chan struct{}),
+		cfg:            DefaultConfig(),
+		peers:          map[PeerID]*Peer{peer.ID(): peer},
+		serveScheduler: scheduler,
+		ctx:            ctx,
+		lifecycleState: overlayLifecycleRunning,
 	}
 	overlay.onMessageReceived(Event{
 		Type:        EventMessageReceived,
-		PeerID:      1,
+		PeerID:      peer.ID(),
 		MessageType: uint16(message.TypeGetObjects),
 		Payload:     payload,
 		reservation: newInboundReservation(budget, int64(len(payload))),
 	})
 	require.Equal(t, int64(len(payload)), readBudgetUsed(budget))
 
-	overlay.discardServeJobs()
+	scheduler.close()
+	require.Zero(t, readBudgetUsed(budget))
+}
+
+func TestServePeerCancellationReleasesQueuedDecodedBudget(t *testing.T) {
+	payload, err := message.Encode(&message.GetObjectByHash{Query: true})
+	require.NoError(t, err)
+
+	budget := newReadBudget(int64(len(payload)))
+	require.NoError(t, budget.acquire(context.Background(), nil, int64(len(payload))))
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	scheduler := newServeScheduler(ctx, 1, 1, 1, 1)
+	peer := newLatencyTestPeer(t)
+	overlay := &Overlay{
+		cfg:            DefaultConfig(),
+		peers:          map[PeerID]*Peer{peer.ID(): peer},
+		serveScheduler: scheduler,
+		ctx:            ctx,
+		lifecycleState: overlayLifecycleRunning,
+	}
+	overlay.onMessageReceived(Event{
+		Type:        EventMessageReceived,
+		PeerID:      peer.ID(),
+		MessageType: uint16(message.TypeGetObjects),
+		Payload:     payload,
+		reservation: newInboundReservation(budget, int64(len(payload))),
+	})
+	require.Equal(t, int64(len(payload)), readBudgetUsed(budget))
+
+	scheduler.CancelPeer(peer.ID())
 	require.Zero(t, readBudgetUsed(budget))
 }
 
