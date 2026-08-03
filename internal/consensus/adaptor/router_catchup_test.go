@@ -34,7 +34,7 @@ func statusChangeMessage(t *testing.T, peerID peermanagement.PeerID, seq uint32,
 	require.NoError(t, message.WriteMessage(&buf, message.TypeStatusChange, encoded))
 	return &peermanagement.InboundMessage{
 		PeerID:  peerID,
-		Type:    uint16(message.TypeStatusChange),
+		Type:    message.TypeStatusChange,
 		Payload: encoded,
 	}
 }
@@ -103,7 +103,7 @@ func TestRouter_StatusWithoutLedgerHashCannotSteerCatchup(t *testing.T) {
 	require.NoError(t, err)
 	r.handleMessage(&peermanagement.InboundMessage{
 		PeerID:  peerID,
-		Type:    uint16(message.TypeStatusChange),
+		Type:    message.TypeStatusChange,
 		Payload: encoded,
 	})
 
@@ -133,7 +133,7 @@ func TestRouter_LostSyncClearsPeerLedgerWithoutAcquiringAdvertisedHash(t *testin
 	require.NoError(t, err)
 	r.handleMessage(&peermanagement.InboundMessage{
 		PeerID:  peerID,
-		Type:    uint16(message.TypeStatusChange),
+		Type:    message.TypeStatusChange,
 		Payload: encoded,
 	})
 

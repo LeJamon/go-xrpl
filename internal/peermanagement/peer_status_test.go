@@ -443,7 +443,7 @@ func TestOverlay_onMessageReceived_StatusChangeReachesRouter(t *testing.T) {
 
 	o.onMessageReceived(Event{
 		PeerID:      7,
-		MessageType: uint16(message.TypeStatusChange),
+		MessageType: message.TypeStatusChange,
 		Payload:     encoded,
 	})
 
@@ -457,7 +457,7 @@ func TestOverlay_onMessageReceived_StatusChangeReachesRouter(t *testing.T) {
 	case msg := <-o.consensusControlMessages:
 		require.NotNil(t, msg, "forwarded InboundMessage must be non-nil")
 		assert.Equal(t, PeerID(7), msg.PeerID)
-		assert.Equal(t, uint16(message.TypeStatusChange), msg.Type)
+		assert.Equal(t, message.TypeStatusChange, msg.Type)
 		assert.Equal(t, encoded, msg.Payload)
 	default:
 		t.Fatal("TMStatusChange was not forwarded to the consensus lane — issue #381 regression: " +

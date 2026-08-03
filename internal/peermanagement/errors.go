@@ -4,17 +4,16 @@ import (
 	"errors"
 	"fmt"
 	"time"
+
+	"github.com/LeJamon/go-xrpl/internal/peermanagement/message"
 )
 
 // Sentinel errors for peer management operations.
 var (
 	// Connection errors
 	ErrMaxPeersReached       = errors.New("maximum peers reached")
-	ErrMaxInboundReached     = errors.New("maximum inbound connections reached")
-	ErrMaxOutboundReached    = errors.New("maximum outbound connections reached")
 	ErrAlreadyConnected      = errors.New("already connected to peer")
 	ErrSelfConnection        = errors.New("cannot connect to self")
-	ErrSlotUnavailable       = errors.New("no connection slot available")
 	ErrConnectionClosed      = errors.New("connection closed")
 	ErrSendBufferFull        = errors.New("peer send buffer full")
 	ErrCriticalSendQueueFull = errors.New("critical peer send queue exhausted")
@@ -46,7 +45,6 @@ var (
 	ErrUnknownMessage  = errors.New("unknown message type")
 	ErrDecodeFailed    = errors.New("failed to decode message")
 	ErrEncodeFailed    = errors.New("failed to encode message")
-
 	// Lifecycle errors
 	ErrNotRunning     = errors.New("overlay not running")
 	ErrAlreadyRunning = errors.New("overlay already running")
@@ -121,7 +119,7 @@ var errBootstrapManifestDropped = errors.New("bootstrap manifests could not be d
 
 // FrameReadError describes a failed payload transfer after its header was read.
 type FrameReadError struct {
-	MessageType MessageType
+	MessageType message.MessageType
 	WireSize    uint32
 	Compressed  bool
 	BytesRead   uint64

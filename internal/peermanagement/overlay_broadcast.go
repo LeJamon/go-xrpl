@@ -295,7 +295,7 @@ func (o *Overlay) RecordMessageSource(suppressionHash [32]byte, peerID PeerID) {
 	if o.relayedIndex == nil {
 		return
 	}
-	clock := o.clockForIndex
+	clock := o.clock
 	if clock == nil {
 		clock = time.Now
 	}
@@ -363,7 +363,7 @@ func (o *Overlay) takeMessageSources(suppressionHash [32]byte) []PeerID {
 	if o.relayedIndex == nil {
 		return nil
 	}
-	clock := o.clockForIndex
+	clock := o.clock
 	if clock == nil {
 		clock = time.Now
 	}
@@ -393,7 +393,7 @@ func (o *Overlay) markMessageRelayed(suppressionHash [32]byte) {
 	if o.relayedIndex == nil {
 		return
 	}
-	clock := o.clockForIndex
+	clock := o.clock
 	if clock == nil {
 		clock = time.Now
 	}
@@ -410,7 +410,7 @@ func (o *Overlay) restoreMessageSources(suppressionHash [32]byte, sources []Peer
 	if o.relayedIndex == nil || len(sources) == 0 {
 		return
 	}
-	clock := o.clockForIndex
+	clock := o.clock
 	if clock == nil {
 		clock = time.Now
 	}
@@ -443,7 +443,7 @@ func (o *Overlay) MessageRelayedRecently(suppressionHash [32]byte) bool {
 	if o.relayedIndex == nil {
 		return false
 	}
-	clock := o.clockForIndex
+	clock := o.clock
 	if clock == nil {
 		clock = time.Now
 	}
@@ -464,7 +464,7 @@ func (o *Overlay) messageSources(suppressionHash [32]byte, release bool) []PeerI
 	if o.relayedIndex == nil {
 		return nil
 	}
-	clock := o.clockForIndex
+	clock := o.clock
 	if clock == nil {
 		clock = time.Now
 	}

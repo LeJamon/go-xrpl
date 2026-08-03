@@ -99,7 +99,7 @@ func (o *Overlay) onPeerFailed(evt Event) {
 
 func (o *Overlay) onMessageReceived(evt Event) {
 	defer evt.release()
-	msgType := message.MessageType(evt.MessageType)
+	msgType := evt.MessageType
 
 	// Record reduce-relay traffic metrics before dispatch: counted on
 	// the inbound path, by message type and on-wire payload size, gated

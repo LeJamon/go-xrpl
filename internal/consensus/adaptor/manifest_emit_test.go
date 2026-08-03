@@ -485,7 +485,7 @@ func TestRouterAcknowledgesBootstrapOnlyAfterValidManifest(t *testing.T) {
 
 	router.processManifestJob(&peermanagement.InboundMessage{
 		PeerID:  7,
-		Type:    uint16(message.TypeManifests),
+		Type:    message.TypeManifests,
 		Payload: []byte("malformed"),
 	})
 	if sessions.acknowledged != 0 {
@@ -516,7 +516,7 @@ func TestRouterAcknowledgesBootstrapOnlyAfterValidManifest(t *testing.T) {
 	}
 	sessions.acknowledged = 0
 	sessions.rejected = 0
-	router.processManifestJob(&peermanagement.InboundMessage{PeerID: 7, Type: uint16(message.TypeManifests), Payload: payload})
+	router.processManifestJob(&peermanagement.InboundMessage{PeerID: 7, Type: message.TypeManifests, Payload: payload})
 	if sessions.acknowledged != 7 || sessions.rejected != 0 {
 		t.Fatalf("empty manifests ack=%d reject=%d, want ack=7 reject=0", sessions.acknowledged, sessions.rejected)
 	}
@@ -530,7 +530,7 @@ func TestRouterAcknowledgesBootstrapOnlyAfterValidManifest(t *testing.T) {
 			}
 			router.processManifestJob(&peermanagement.InboundMessage{
 				PeerID:  7,
-				Type:    uint16(message.TypeManifests),
+				Type:    message.TypeManifests,
 				Payload: payload,
 			})
 			if sessions.acknowledged != 0 {
@@ -554,7 +554,7 @@ func TestRouterAcknowledgesBootstrapOnlyAfterValidManifest(t *testing.T) {
 			}
 			router.processManifestJob(&peermanagement.InboundMessage{
 				PeerID:  7,
-				Type:    uint16(message.TypeManifests),
+				Type:    message.TypeManifests,
 				Payload: payload,
 			})
 			if sessions.acknowledged != 7 {

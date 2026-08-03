@@ -52,7 +52,7 @@ func TestHandleClusterMessage_DropsNonClusterPeer(t *testing.T) {
 
 	o.onMessageReceived(Event{
 		PeerID:      peer.ID(),
-		MessageType: uint16(message.TypeCluster),
+		MessageType: message.TypeCluster,
 		Payload:     payload,
 	})
 
@@ -118,7 +118,7 @@ func TestHandleClusterMessage_FiresClusterFeeSink(t *testing.T) {
 
 	o.onMessageReceived(Event{
 		PeerID:      peer.ID(),
-		MessageType: uint16(message.TypeCluster),
+		MessageType: message.TypeCluster,
 		Payload:     payload,
 	})
 
@@ -155,7 +155,7 @@ func TestHandleClusterMessage_ClearsStaleClusterFee(t *testing.T) {
 
 	o.onMessageReceived(Event{
 		PeerID:      peer.ID(),
-		MessageType: uint16(message.TypeCluster),
+		MessageType: message.TypeCluster,
 		Payload:     payload,
 	})
 
@@ -179,7 +179,7 @@ func TestHandleClusterMessage_ClearsClusterFeeAfterReportAgesOut(t *testing.T) {
 		peers:   make(map[PeerID]*Peer),
 		events:  make(chan Event, 8),
 		cluster: clusterReg,
-		clockForCluster: func() time.Time {
+		clock: func() time.Time {
 			return now
 		},
 		clusterFeeSink: func(fee uint32) {
@@ -195,7 +195,7 @@ func TestHandleClusterMessage_ClearsClusterFeeAfterReportAgesOut(t *testing.T) {
 		{PublicKey: peerNodePubEncoded, NodeName: "peer", NodeLoad: 512, ReportTime: uint32(now.Unix())},
 	}})
 	require.NoError(t, err)
-	o.onMessageReceived(Event{PeerID: peer.ID(), MessageType: uint16(message.TypeCluster), Payload: payload})
+	o.onMessageReceived(Event{PeerID: peer.ID(), MessageType: message.TypeCluster, Payload: payload})
 	assert.Equal(t, uint32(512), clusterFee)
 
 	now = now.Add(clusterFeeWindow + time.Second)
@@ -203,7 +203,7 @@ func TestHandleClusterMessage_ClearsClusterFeeAfterReportAgesOut(t *testing.T) {
 	// median, including the empty result, so stale fee state cannot persist.
 	payload, err = message.Encode(&message.Cluster{})
 	require.NoError(t, err)
-	o.onMessageReceived(Event{PeerID: peer.ID(), MessageType: uint16(message.TypeCluster), Payload: payload})
+	o.onMessageReceived(Event{PeerID: peer.ID(), MessageType: message.TypeCluster, Payload: payload})
 	assert.Zero(t, clusterFee)
 }
 
@@ -251,7 +251,7 @@ func TestHandleClusterMessage_ImportsLoadSourceGossip(t *testing.T) {
 
 	o.onMessageReceived(Event{
 		PeerID:      peer.ID(),
-		MessageType: uint16(message.TypeCluster),
+		MessageType: message.TypeCluster,
 		Payload:     payload,
 	})
 
@@ -306,7 +306,7 @@ func TestHandleClusterMessage_ReimportReplacesPriorGossip(t *testing.T) {
 		require.NoError(t, err)
 		o.onMessageReceived(Event{
 			PeerID:      peer.ID(),
-			MessageType: uint16(message.TypeCluster),
+			MessageType: message.TypeCluster,
 			Payload:     payload,
 		})
 	}
@@ -382,7 +382,7 @@ func TestHandleHaveTransactionsMessage_GatedOnFeatureNegotiation(t *testing.T) {
 
 	o.onMessageReceived(Event{
 		PeerID:      peer.ID(),
-		MessageType: uint16(message.TypeHaveTransactions),
+		MessageType: message.TypeHaveTransactions,
 		Payload:     payload,
 	})
 
@@ -421,7 +421,7 @@ func TestHandleTransactionsBatchMessage_GatedOnFeatureNegotiation(t *testing.T) 
 
 	o.onMessageReceived(Event{
 		PeerID:      peer.ID(),
-		MessageType: uint16(message.TypeTransactions),
+		MessageType: message.TypeTransactions,
 		Payload:     payload,
 	})
 
@@ -472,7 +472,7 @@ func TestHandleTransactionsBatchMessage_FansOutDecodedTx(t *testing.T) {
 
 	o.onMessageReceived(Event{
 		PeerID:      peer.ID(),
-		MessageType: uint16(message.TypeTransactions),
+		MessageType: message.TypeTransactions,
 		Payload:     payload,
 	})
 
@@ -480,7 +480,7 @@ func TestHandleTransactionsBatchMessage_FansOutDecodedTx(t *testing.T) {
 		select {
 		case got := <-o.txMessages:
 			require.NotNil(t, got)
-			assert.Equal(t, uint16(message.TypeTransaction), got.Type)
+			assert.Equal(t, message.TypeTransaction, got.Type)
 			assert.Nil(t, got.Payload,
 				"fanned-out frame must carry the decoded tx, not re-encoded bytes")
 			require.NotNil(t, got.Tx,
@@ -537,7 +537,7 @@ func TestHandleTransactionsBatchMessage_OverflowShedsToTxCounter(t *testing.T) {
 
 	o.onMessageReceived(Event{
 		PeerID:      peer.ID(),
-		MessageType: uint16(message.TypeTransactions),
+		MessageType: message.TypeTransactions,
 		Payload:     payload,
 	})
 
@@ -579,7 +579,7 @@ func TestHandleGetObjectsMessage_DropsReplyWithoutOutstandingRequest(t *testing.
 
 	o.onMessageReceived(Event{
 		PeerID:      peer.ID(),
-		MessageType: uint16(message.TypeGetObjects),
+		MessageType: message.TypeGetObjects,
 		Payload:     payload,
 	})
 
@@ -695,7 +695,7 @@ func TestHandleEndpoints_IngestsHopsGreaterEntries(t *testing.T) {
 	})
 	o.onMessageReceived(Event{
 		PeerID:      peer.ID(),
-		MessageType: uint16(message.TypeEndpoints),
+		MessageType: message.TypeEndpoints,
 		Payload:     payload,
 	})
 
@@ -722,7 +722,7 @@ func TestHandleEndpoints_Hops0RewrittenToSocketIP(t *testing.T) {
 	})
 	o.onMessageReceived(Event{
 		PeerID:      peer.ID(),
-		MessageType: uint16(message.TypeEndpoints),
+		MessageType: message.TypeEndpoints,
 		Payload:     payload,
 	})
 
@@ -752,7 +752,7 @@ func TestHandleEndpoints_VerifyOn_DropsNonPublic(t *testing.T) {
 	})
 	o.onMessageReceived(Event{
 		PeerID:      peer.ID(),
-		MessageType: uint16(message.TypeEndpoints),
+		MessageType: message.TypeEndpoints,
 		Payload:     payload,
 	})
 
@@ -776,7 +776,7 @@ func TestHandleEndpoints_VerifyOff_AcceptsNonPublic(t *testing.T) {
 	})
 	o.onMessageReceived(Event{
 		PeerID:      peer.ID(),
-		MessageType: uint16(message.TypeEndpoints),
+		MessageType: message.TypeEndpoints,
 		Payload:     payload,
 	})
 
@@ -802,7 +802,7 @@ func TestHandleEndpoints_VerifyOn_Hops0Validated(t *testing.T) {
 		})
 		o.onMessageReceived(Event{
 			PeerID:      peer.ID(),
-			MessageType: uint16(message.TypeEndpoints),
+			MessageType: message.TypeEndpoints,
 			Payload:     payload,
 		})
 
@@ -822,7 +822,7 @@ func TestHandleEndpoints_VerifyOn_Hops0Validated(t *testing.T) {
 		})
 		o.onMessageReceived(Event{
 			PeerID:      peer.ID(),
-			MessageType: uint16(message.TypeEndpoints),
+			MessageType: message.TypeEndpoints,
 			Payload:     payload,
 		})
 
@@ -851,7 +851,7 @@ func TestHandleEndpoints_DropsNonConvergedPeer(t *testing.T) {
 	})
 	o.onMessageReceived(Event{
 		PeerID:      peer.ID(),
-		MessageType: uint16(message.TypeEndpoints),
+		MessageType: message.TypeEndpoints,
 		Payload:     payload,
 	})
 
@@ -871,7 +871,7 @@ func TestHandleEndpoints_DropsUnsupportedVersion(t *testing.T) {
 	})
 	o.onMessageReceived(Event{
 		PeerID:      peer.ID(),
-		MessageType: uint16(message.TypeEndpoints),
+		MessageType: message.TypeEndpoints,
 		Payload:     payload,
 	})
 
@@ -892,7 +892,7 @@ func TestHandleEndpoints_ChargesMalformedEntry(t *testing.T) {
 	})
 	o.onMessageReceived(Event{
 		PeerID:      peer.ID(),
-		MessageType: uint16(message.TypeEndpoints),
+		MessageType: message.TypeEndpoints,
 		Payload:     payload,
 	})
 
@@ -916,7 +916,7 @@ func TestHandleEndpoints_RejectsOversizedFrame(t *testing.T) {
 	payload := encodeEndpoints(t, 2, eps)
 	o.onMessageReceived(Event{
 		PeerID:      peer.ID(),
-		MessageType: uint16(message.TypeEndpoints),
+		MessageType: message.TypeEndpoints,
 		Payload:     payload,
 	})
 
@@ -958,7 +958,7 @@ func TestHandleEndpoints_RejectsNonIPHost(t *testing.T) {
 	})
 	o.onMessageReceived(Event{
 		PeerID:      peer.ID(),
-		MessageType: uint16(message.TypeEndpoints),
+		MessageType: message.TypeEndpoints,
 		Payload:     payload,
 	})
 
@@ -981,7 +981,7 @@ func TestHandleEndpoints_RateLimitsPerPeer(t *testing.T) {
 	send := func(addr string) {
 		o.onMessageReceived(Event{
 			PeerID:      peer.ID(),
-			MessageType: uint16(message.TypeEndpoints),
+			MessageType: message.TypeEndpoints,
 			Payload:     encodeEndpoints(t, 2, []message.Endpointv2{{Endpoint: addr, Hops: 1}}),
 		})
 	}
@@ -1021,7 +1021,7 @@ func TestHandleEndpoints_SamplesOversizedFrame(t *testing.T) {
 	}
 	o.onMessageReceived(Event{
 		PeerID:      peer.ID(),
-		MessageType: uint16(message.TypeEndpoints),
+		MessageType: message.TypeEndpoints,
 		Payload:     encodeEndpoints(t, 2, eps),
 	})
 
@@ -1045,7 +1045,7 @@ func TestHandleEndpoints_DropsBeyondHorizon(t *testing.T) {
 	})
 	o.onMessageReceived(Event{
 		PeerID:      peer.ID(),
-		MessageType: uint16(message.TypeEndpoints),
+		MessageType: message.TypeEndpoints,
 		Payload:     payload,
 	})
 

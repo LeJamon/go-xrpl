@@ -162,7 +162,7 @@ func TestRouter_HandleGetLedger_Floor_DeclinesBelowBoundary(t *testing.T) {
 	}
 	inbox <- &peermanagement.InboundMessage{
 		PeerID:  7,
-		Type:    uint16(message.TypeGetLedger),
+		Type:    message.TypeGetLedger,
 		Payload: encodePayload(t, req),
 	}
 
@@ -198,7 +198,7 @@ func TestRouter_HandleGetLedger_Floor_ServesAtOrAboveBoundary(t *testing.T) {
 	}
 	inbox <- &peermanagement.InboundMessage{
 		PeerID:  7,
-		Type:    uint16(message.TypeGetLedger),
+		Type:    message.TypeGetLedger,
 		Payload: encodePayload(t, req),
 	}
 
@@ -321,7 +321,7 @@ func TestRouter_HandleGetLedger_RespectsConfiguredFetchDepth(t *testing.T) {
 			req := tc.make(belowHash[:], earliest-1, earliest)
 			router.handleMessage(&peermanagement.InboundMessage{
 				PeerID:  7,
-				Type:    uint16(message.TypeGetLedger),
+				Type:    message.TypeGetLedger,
 				Payload: encodePayload(t, req),
 			})
 

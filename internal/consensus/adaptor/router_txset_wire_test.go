@@ -145,7 +145,7 @@ func TestRouter_GetLedger_TsCandidate_ServesCachedTxSet(t *testing.T) {
 	}
 	inbox <- &peermanagement.InboundMessage{
 		PeerID:  7,
-		Type:    uint16(message.TypeGetLedger),
+		Type:    message.TypeGetLedger,
 		Payload: encodePayload(t, req),
 	}
 
@@ -209,7 +209,7 @@ func TestRouter_GetLedger_TsCandidate_ServesCachedTxSet(t *testing.T) {
 		}
 		inbox <- &peermanagement.InboundMessage{
 			PeerID: 7,
-			Type:   uint16(message.TypeGetLedger),
+			Type:   message.TypeGetLedger,
 			Payload: encodePayload(t, &message.GetLedger{
 				InfoType:      message.LedgerInfoTsCandidate,
 				LedgerHash:    wantID[:],
@@ -262,7 +262,7 @@ func TestRouter_GetLedger_TsCandidate_UnknownTxSet_NoResponse(t *testing.T) {
 	}
 	inbox <- &peermanagement.InboundMessage{
 		PeerID:  9,
-		Type:    uint16(message.TypeGetLedger),
+		Type:    message.TypeGetLedger,
 		Payload: encodePayload(t, req),
 	}
 
@@ -330,7 +330,7 @@ func TestRouter_LedgerData_TsCandidate_FeedsEngine(t *testing.T) {
 	require.NoError(t, adaptor.RequestTxSet(consensus.TxSetID(id)))
 	inbox <- &peermanagement.InboundMessage{
 		PeerID:  3,
-		Type:    uint16(message.TypeLedgerData),
+		Type:    message.TypeLedgerData,
 		Payload: encodePayload(t, resp),
 	}
 

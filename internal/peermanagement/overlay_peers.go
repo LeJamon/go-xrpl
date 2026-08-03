@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/LeJamon/go-xrpl/internal/peermanagement/cluster"
+	"github.com/LeJamon/go-xrpl/internal/peermanagement/message"
 	"github.com/LeJamon/go-xrpl/internal/peermanagement/peertls"
 	"github.com/LeJamon/go-xrpl/internal/peermanagement/resource"
 )
@@ -188,7 +189,7 @@ func (o *Overlay) delayPeerRetry(addr string, bootstrap bool, err error, stoppin
 	var localSpoolErr *manifestSpoolLocalError
 	if bootstrap &&
 		errors.As(err, &frameErr) &&
-		frameErr.MessageType == TypeManifests &&
+		frameErr.MessageType == message.TypeManifests &&
 		frameErr.BytesRead > 0 &&
 		!errors.As(frameErr.Err, &localSpoolErr) {
 		retry = bootstrapPartialRetry
@@ -509,9 +510,12 @@ func (o *Overlay) LedgerDataMessages() <-chan *InboundMessage {
 	return o.ledgerData
 }
 
-// Identity returns the node's identity.
-func (o *Overlay) Identity() *Identity {
-	return o.identity
+// NodePublicKey returns the node's base58-encoded public key.
+func (o *Overlay) NodePublicKey() string {
+	if o == nil || o.identity == nil {
+		return ""
+	}
+	return o.identity.EncodedPublicKey()
 }
 
 // IssueSquelch hand-rolls a TMSquelch frame to the given peer, marking
@@ -637,11 +641,11 @@ func (o *Overlay) removePeer(peerID PeerID) {
 }
 
 func remotePeerKey(peer *Peer) (string, bool) {
-	key := peer.RemotePublicKey()
-	if key == nil {
+	key := peer.RemotePublicKeyBytes()
+	if len(key) == 0 {
 		return "", false
 	}
-	return string(key.Bytes()), true
+	return string(key), true
 }
 
 func (o *Overlay) reservePeerKey(peer *Peer, bypassInboundLimit bool) error {
@@ -790,11 +794,11 @@ func (o *Overlay) isClusterPeer(peer *Peer) bool {
 	if o.cluster == nil {
 		return false
 	}
-	pk := peer.RemotePublicKey()
-	if pk == nil {
+	pk := peer.RemotePublicKeyBytes()
+	if len(pk) == 0 {
 		return false
 	}
-	_, ok := o.cluster.Member(pk.Bytes())
+	_, ok := o.cluster.Member(pk)
 	return ok
 }
 
@@ -820,31 +824,6 @@ func (o *Overlay) isConnectedTo(endpoint Endpoint) bool {
 
 func endpointKey(endpoint Endpoint) string {
 	return (Endpoint{Host: connectAttemptHost(endpoint.String()), Port: endpoint.Port}).String()
-}
-
-// canAcceptInbound checks if we can accept another inbound connection.
-func (o *Overlay) canAcceptInbound() bool {
-	o.peersMu.RLock()
-	defer o.peersMu.RUnlock()
-
-	count := 0
-	for _, peer := range o.peers {
-		if peer.Inbound() {
-			count++
-		}
-	}
-	return count < o.cfg.MaxInbound
-}
-
-// hasInboundSlot reports whether the just-handshaked inbound peer may be
-// admitted: either a normal slot is free, or the peer is a cluster member or
-// has an operator reservation and is therefore admitted beyond the inbound
-// cap.
-func (o *Overlay) hasInboundSlot(peer *Peer) bool {
-	if o.canAcceptInbound() {
-		return true
-	}
-	return o.isClusterPeer(peer) || o.isReservedPeer(peer)
 }
 
 func (o *Overlay) ordinaryOutboundCount() int {

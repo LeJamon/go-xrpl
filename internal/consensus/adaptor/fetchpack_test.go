@@ -482,7 +482,7 @@ func TestHandleFetchPackReply_VerifiesAndCaches(t *testing.T) {
 	armFetchAcquisition(r) // a pack is only processed while an acquisition is in flight
 	r.handleFetchPackReply(&peermanagement.InboundMessage{
 		PeerID:  peermanagement.PeerID(5),
-		Type:    uint16(message.TypeGetObjects),
+		Type:    message.TypeGetObjects,
 		Payload: payload,
 	})
 
@@ -644,7 +644,7 @@ func TestHandleFetchPackReply_NoActiveAcquisitionDropped(t *testing.T) {
 	// No acquisition armed.
 	r.handleFetchPackReply(&peermanagement.InboundMessage{
 		PeerID:  peermanagement.PeerID(5),
-		Type:    uint16(message.TypeGetObjects),
+		Type:    message.TypeGetObjects,
 		Payload: payload,
 	})
 
@@ -665,7 +665,7 @@ func TestHandleFetchPackReply_ProcessesAllWireValidObjects(t *testing.T) {
 	armFetchAcquisition(r)
 	r.handleFetchPackReply(&peermanagement.InboundMessage{
 		PeerID:  peermanagement.PeerID(8),
-		Type:    uint16(message.TypeGetObjects),
+		Type:    message.TypeGetObjects,
 		Payload: payload,
 	})
 
@@ -695,7 +695,7 @@ func TestHandleFetchPackReply_PoisonCharged(t *testing.T) {
 	armFetchAcquisition(r)
 	r.handleFetchPackReply(&peermanagement.InboundMessage{
 		PeerID:  peermanagement.PeerID(11),
-		Type:    uint16(message.TypeGetObjects),
+		Type:    message.TypeGetObjects,
 		Payload: payload,
 	})
 
@@ -723,7 +723,7 @@ func TestHandleFetchPackReply_HeaderObjectNotCharged(t *testing.T) {
 	armFetchAcquisition(r)
 	r.handleFetchPackReply(&peermanagement.InboundMessage{
 		PeerID:  peermanagement.PeerID(13),
-		Type:    uint16(message.TypeGetObjects),
+		Type:    message.TypeGetObjects,
 		Payload: payload,
 	})
 

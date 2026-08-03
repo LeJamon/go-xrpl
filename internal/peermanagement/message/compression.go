@@ -61,18 +61,18 @@ func DecompressLZ4(compressed []byte, uncompressedSize int) ([]byte, error) {
 
 // ShouldCompress reports whether a message type is worth compressing,
 // matching the set rippled compresses.
-func ShouldCompress(msgType uint16) bool {
+func ShouldCompress(msgType MessageType) bool {
 	switch msgType {
-	case uint16(TypeManifests),
-		uint16(TypeEndpoints),
-		uint16(TypeTransaction),
-		uint16(TypeGetLedger),
-		uint16(TypeLedgerData),
-		uint16(TypeGetObjects),
-		uint16(TypeValidatorList),
-		uint16(TypeValidatorListCollection),
-		uint16(TypeReplayDeltaResponse),
-		uint16(TypeTransactions):
+	case TypeManifests,
+		TypeEndpoints,
+		TypeTransaction,
+		TypeGetLedger,
+		TypeLedgerData,
+		TypeGetObjects,
+		TypeValidatorList,
+		TypeValidatorListCollection,
+		TypeReplayDeltaResponse,
+		TypeTransactions:
 		return true
 	default:
 		return false
@@ -82,7 +82,7 @@ func ShouldCompress(msgType uint16) bool {
 // CompressIfWorthwhile compresses data when the message type is
 // compressible and the payload is large enough; otherwise it returns the
 // input unchanged with false.
-func CompressIfWorthwhile(msgType uint16, data []byte) ([]byte, bool) {
+func CompressIfWorthwhile(msgType MessageType, data []byte) ([]byte, bool) {
 	if !ShouldCompress(msgType) || len(data) <= MinCompressibleSize {
 		return data, false
 	}
@@ -113,7 +113,7 @@ func CompressFrameIfWorthwhile(frame []byte) ([]byte, bool) {
 	}
 
 	payload, compressed := CompressIfWorthwhile(
-		uint16(header.MessageType),
+		header.MessageType,
 		frame[HeaderSizeUncompressed:],
 	)
 	if !compressed {

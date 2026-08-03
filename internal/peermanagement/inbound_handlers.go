@@ -83,7 +83,7 @@ func limitIndexedObjectsToReplyBudget(objects []message.IndexedObject, fixedFiel
 // Acceptance rule: the SENDER must be in our [cluster_nodes] registry.
 // Rippled gates this on Peer::cluster() which returns true when the
 // peer's NodePublic was loaded from [cluster_nodes]; we mirror the
-// same boundary via Overlay.cluster.Member(peer.RemotePublicKey()).
+// same boundary via Overlay.cluster.Member(peer.RemotePublicKeyBytes()).
 //
 // Payload effect: each ClusterNode entry refreshes the registry's
 // known load/report-time for that node. After the registry-update
@@ -102,12 +102,12 @@ func (o *Overlay) handleClusterMessage(evt Event) {
 
 	// Sender must be a cluster member. Rippled drops + charges
 	// feeUselessData "unknown cluster" at PeerImp.cpp:1128-1131.
-	pubToken := peer.RemotePublicKey()
-	if pubToken == nil {
+	pubKey := peer.RemotePublicKeyBytes()
+	if len(pubKey) == 0 {
 		o.IncPeerBadData(evt.PeerID, "cluster-no-pubkey")
 		return
 	}
-	member, isMember := o.cluster.Member(pubToken.Bytes())
+	member, isMember := o.cluster.Member(pubKey)
 	if !isMember {
 		slog.Debug("TMCluster from non-cluster peer; dropping",
 			"t", "Overlay", "peer", evt.PeerID)
@@ -145,8 +145,8 @@ func (o *Overlay) handleClusterMessage(evt Event) {
 	// LoadFeeTrack sink. An empty fresh set publishes zero.
 	if sink := o.clusterFeeSinkSnapshot(); sink != nil {
 		now := time.Now()
-		if o.clockForCluster != nil {
-			now = o.clockForCluster()
+		if o.clock != nil {
+			now = o.clock()
 		}
 		fee, _ := o.cluster.MedianFee(now.Add(-clusterFeeWindow))
 		sink(fee)
@@ -999,7 +999,7 @@ func (o *Overlay) handleTransactionsBatchMessage(evt Event) {
 	// same MaxTransactions ceiling and jq_trans_overflow accounting.
 	for i := range batch.Transactions {
 		inbound := evt.retainedInboundMessage()
-		inbound.Type = uint16(message.TypeTransaction)
+		inbound.Type = message.TypeTransaction
 		inbound.Payload = nil
 		inbound.Tx = &batch.Transactions[i]
 		o.forwardTransaction(inbound)

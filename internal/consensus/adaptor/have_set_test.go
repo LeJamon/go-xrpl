@@ -55,7 +55,7 @@ func TestRouterHaveSetMalformedHashReturnsBeforeStateMutation(t *testing.T) {
 			}
 			r.handleMessage(&peermanagement.InboundMessage{
 				PeerID:  88,
-				Type:    uint16(message.TypeHaveSet),
+				Type:    message.TypeHaveSet,
 				Payload: encodePayload(t, have),
 			})
 
@@ -82,7 +82,7 @@ func TestRouterHaveSetNeedDoesNotMutatePeerOrEngineState(t *testing.T) {
 	have := HaveSetToMessage(txSet.ID(), message.TxSetStatusNeed)
 	r.handleMessage(&peermanagement.InboundMessage{
 		PeerID:  88,
-		Type:    uint16(message.TypeHaveSet),
+		Type:    message.TypeHaveSet,
 		Payload: encodePayload(t, have),
 	})
 
@@ -99,7 +99,7 @@ func TestRouterHaveSetDuplicateChargesUselessData(t *testing.T) {
 	}
 	inbound := &peermanagement.InboundMessage{
 		PeerID:  88,
-		Type:    uint16(message.TypeHaveSet),
+		Type:    message.TypeHaveSet,
 		Payload: encodePayload(t, have),
 	}
 

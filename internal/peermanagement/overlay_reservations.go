@@ -13,8 +13,8 @@ func (o *Overlay) PeerReservations() *ReservationTable {
 }
 
 // isReservedPeer reports whether the peer's node public key has an operator
-// reservation. A reserved peer is admitted beyond the inbound slot cap
-// (see hasInboundSlot), mirroring the reservation half of rippled's
+// reservation. A reserved peer is admitted beyond the inbound slot cap,
+// mirroring the reservation half of rippled's
 // activate(slot, key, reserved) predicate (OverlayImpl.cpp:263-265). The
 // reservation key is the base58 NodePublic, matching what the
 // peer_reservations_* RPCs store. Unlike cluster members, reserved peers keep
@@ -24,11 +24,11 @@ func (o *Overlay) isReservedPeer(peer *Peer) bool {
 	if res == nil {
 		return false
 	}
-	pk := peer.RemotePublicKey()
-	if pk == nil {
+	pk := peer.RemotePublicKeyBytes()
+	if len(pk) == 0 {
 		return false
 	}
-	enc, err := addresscodec.EncodeNodePublicKey(pk.Bytes())
+	enc, err := addresscodec.EncodeNodePublicKey(pk)
 	if err != nil {
 		return false
 	}

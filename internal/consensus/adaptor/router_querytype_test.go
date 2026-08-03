@@ -86,7 +86,7 @@ func TestRouter_GetLedger_QueryTypeValidation(t *testing.T) {
 		}
 		r.handleMessage(&peermanagement.InboundMessage{
 			PeerID:  42,
-			Type:    uint16(message.TypeGetLedger),
+			Type:    message.TypeGetLedger,
 			Payload: encodePayload(t, req),
 		})
 
@@ -112,7 +112,7 @@ func TestRouter_GetLedger_QueryTypeValidation(t *testing.T) {
 		}
 		r.handleMessage(&peermanagement.InboundMessage{
 			PeerID:  7,
-			Type:    uint16(message.TypeGetLedger),
+			Type:    message.TypeGetLedger,
 			Payload: encodePayload(t, req),
 		})
 
@@ -135,7 +135,7 @@ func TestRouter_GetLedger_QueryTypeValidation(t *testing.T) {
 		}
 		r.handleMessage(&peermanagement.InboundMessage{
 			PeerID:  9,
-			Type:    uint16(message.TypeGetLedger),
+			Type:    message.TypeGetLedger,
 			Payload: encodePayload(t, req),
 		})
 
@@ -161,7 +161,7 @@ func TestRouter_GetLedger_QueryDepthValidation(t *testing.T) {
 		}
 		r.handleMessage(&peermanagement.InboundMessage{
 			PeerID:  42,
-			Type:    uint16(message.TypeGetLedger),
+			Type:    message.TypeGetLedger,
 			Payload: encodePayload(t, req),
 		})
 		return recorder.snapshot()

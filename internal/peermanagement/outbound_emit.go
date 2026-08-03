@@ -170,11 +170,11 @@ func (o *Overlay) sendClusterUpdate() {
 		if peer.State() != PeerStateConnected {
 			continue
 		}
-		token := peer.RemotePublicKey()
-		if token == nil {
+		key := peer.RemotePublicKeyBytes()
+		if len(key) == 0 {
 			continue
 		}
-		if _, ok := o.cluster.Member(token.Bytes()); !ok {
+		if _, ok := o.cluster.Member(key); !ok {
 			continue
 		}
 		if err := peer.Send(frame); err != nil {

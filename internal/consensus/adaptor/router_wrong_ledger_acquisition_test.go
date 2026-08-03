@@ -32,7 +32,7 @@ func TestAdaptorRequestLedgerTracksExactConsensusTarget(t *testing.T) {
 
 	r.handleMessage(&peermanagement.InboundMessage{
 		PeerID: 7,
-		Type:   uint16(message.TypeLedgerData),
+		Type:   message.TypeLedgerData,
 		Payload: encodePayload(t, &message.LedgerData{
 			LedgerHash: target[:],
 			LedgerSeq:  targetSeq,

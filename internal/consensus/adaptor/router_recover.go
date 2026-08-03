@@ -4,7 +4,6 @@ import (
 	"runtime/debug"
 
 	"github.com/LeJamon/go-xrpl/internal/peermanagement"
-	"github.com/LeJamon/go-xrpl/internal/peermanagement/message"
 )
 
 // recoverFrame is the router's panic boundary for peer-frame dispatch. The
@@ -24,7 +23,7 @@ func (r *Router) recoverFrame(msg *peermanagement.InboundMessage, stage string) 
 	}
 	r.logger.Error("panic recovered in router frame dispatch",
 		"t", "consensus", "stage", stage,
-		"peer", msg.PeerID, "msgType", message.MessageType(msg.Type),
+		"peer", msg.PeerID, "msgType", msg.Type,
 		"panic", rec, "stack", string(debug.Stack()))
 	r.gossip.IncPeerBadData(uint64(msg.PeerID), "panic-"+stage)
 }

@@ -9,6 +9,8 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+
+	"github.com/LeJamon/go-xrpl/internal/peermanagement/message"
 )
 
 const (
@@ -55,7 +57,7 @@ type ManifestFrame struct {
 	mu sync.Mutex
 
 	path   string
-	header MessageHeader
+	header message.Header
 	budget *readBudget
 	done   chan struct{}
 
@@ -65,7 +67,7 @@ type ManifestFrame struct {
 	reservation   int64
 }
 
-func newManifestFrame(path string, header MessageHeader, budget *readBudget, reservation int64) *ManifestFrame {
+func newManifestFrame(path string, header message.Header, budget *readBudget, reservation int64) *ManifestFrame {
 	return &ManifestFrame{
 		path:        path,
 		header:      header,
@@ -76,7 +78,7 @@ func newManifestFrame(path string, header MessageHeader, budget *readBudget, res
 }
 
 // Header returns the validated wire header for this payload.
-func (f *ManifestFrame) Header() MessageHeader {
+func (f *ManifestFrame) Header() message.Header {
 	return f.header
 }
 
@@ -122,7 +124,7 @@ func (f *ManifestFrame) Materialize(ctx context.Context) ([]byte, error) {
 		err = ctx.Err()
 	}
 	if err == nil && f.header.Compressed {
-		payload, err = DecompressLZ4(payload, int(f.header.UncompressedSize))
+		payload, err = message.DecompressLZ4(payload, int(f.header.UncompressedSize))
 	}
 	if err == nil {
 		err = ctx.Err()
@@ -184,7 +186,7 @@ func spoolManifestFrame(
 	ctx context.Context,
 	closeCh <-chan struct{},
 	r io.Reader,
-	header MessageHeader,
+	header message.Header,
 	budget *readBudget,
 	dir string,
 ) (*ManifestFrame, error) {
@@ -225,7 +227,7 @@ func spoolManifestFrame(
 	return newManifestFrame(path, header, budget, reservation), nil
 }
 
-func manifestFrameReservation(header MessageHeader) int64 {
+func manifestFrameReservation(header message.Header) int64 {
 	wireBytes := int64(header.PayloadSize)
 	decodedBytes := wireBytes
 	if header.Compressed {

@@ -28,7 +28,7 @@ type gossipNetwork interface {
 func (r *Router) handleMessage(msg *peermanagement.InboundMessage) (transferred bool) {
 	defer r.recoverFrame(msg, "dispatch")
 
-	msgType := message.MessageType(msg.Type)
+	msgType := msg.Type
 	if r.peerSessions != nil && !r.peerSessions.IsPeerConnected(msg.PeerID) &&
 		msgType != message.TypeManifests {
 		return false

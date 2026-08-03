@@ -200,7 +200,7 @@ func TestProposalSuppression_AdmitsOnlyAfterEngineAcceptance(t *testing.T) {
 	hash := hashProposalSuppression(ProposalFromMessage(proposal))
 	inbound := &peermanagement.InboundMessage{
 		PeerID:  7,
-		Type:    uint16(message.TypeProposeLedger),
+		Type:    message.TypeProposeLedger,
 		Payload: encodePayload(t, proposal),
 	}
 

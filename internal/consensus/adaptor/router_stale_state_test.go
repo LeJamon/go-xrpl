@@ -34,7 +34,7 @@ func TestRouter_LateAccountStateNodesEnterFetchPackOnly(t *testing.T) {
 	}
 	r.handleMessage(&peermanagement.InboundMessage{
 		PeerID:  7,
-		Type:    uint16(message.TypeLedgerData),
+		Type:    message.TypeLedgerData,
 		Payload: encodePayload(t, stateReply),
 	})
 
@@ -54,7 +54,7 @@ func TestRouter_LateAccountStateNodesEnterFetchPackOnly(t *testing.T) {
 	r.fetchPacks = newFetchPackCache()
 	r.handleMessage(&peermanagement.InboundMessage{
 		PeerID:  8,
-		Type:    uint16(message.TypeLedgerData),
+		Type:    message.TypeLedgerData,
 		Payload: encodePayload(t, txReply),
 	})
 	_, ok = r.fetchPacks.get(entry.Hash, time.Now())
@@ -85,7 +85,7 @@ func TestRouter_RejectsInvalidLedgerDataNodeCountsBeforeCaching(t *testing.T) {
 		}
 		r.handleMessage(&peermanagement.InboundMessage{
 			PeerID:  peermanagement.PeerID(20 + i),
-			Type:    uint16(message.TypeLedgerData),
+			Type:    message.TypeLedgerData,
 			Payload: encodePayload(t, reply),
 		})
 	}
@@ -120,7 +120,7 @@ func TestRouter_LateAccountStateNodeRequiresNodeID(t *testing.T) {
 	}
 	r.handleMessage(&peermanagement.InboundMessage{
 		PeerID:  30,
-		Type:    uint16(message.TypeLedgerData),
+		Type:    message.TypeLedgerData,
 		Payload: encodePayload(t, reply),
 	})
 

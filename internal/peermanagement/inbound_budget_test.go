@@ -117,7 +117,7 @@ func TestInboundRetainedBytesValidation(t *testing.T) {
 	require.Equal(t, DefaultInboundRetainedBytes, cfg.InboundRetainedBytes)
 
 	cfg = DefaultConfig()
-	cfg.InboundRetainedBytes = 3*int64(MaxMessageSize) - 1
+	cfg.InboundRetainedBytes = 3*int64(message.MaxMessageSize) - 1
 	err := cfg.Validate()
 	require.EqualError(t, err, "InboundRetainedBytes must be at least 201326592")
 }
@@ -153,7 +153,7 @@ func TestGetObjectsReplyRetainsBudgetUntilRouterConsumption(t *testing.T) {
 	overlay.onMessageReceived(Event{
 		Type:        EventMessageReceived,
 		PeerID:      1,
-		MessageType: uint16(message.TypeGetObjects),
+		MessageType: message.TypeGetObjects,
 		Payload:     payload,
 		reservation: newInboundReservation(budget, int64(len(payload))),
 	})
@@ -187,7 +187,7 @@ func TestGetObjectsQueryRetainsBudgetUntilServeCompletion(t *testing.T) {
 	overlay.onMessageReceived(Event{
 		Type:        EventMessageReceived,
 		PeerID:      peer.ID(),
-		MessageType: uint16(message.TypeGetObjects),
+		MessageType: message.TypeGetObjects,
 		Payload:     payload,
 		reservation: newInboundReservation(budget, int64(len(payload))),
 	})
@@ -221,7 +221,7 @@ func TestDroppedGetObjectsQueryReleasesBudget(t *testing.T) {
 	overlay.onMessageReceived(Event{
 		Type:        EventMessageReceived,
 		PeerID:      peer.ID(),
-		MessageType: uint16(message.TypeGetObjects),
+		MessageType: message.TypeGetObjects,
 		Payload:     payload,
 		reservation: newInboundReservation(budget, int64(len(payload))),
 	})
@@ -250,7 +250,7 @@ func TestServeShutdownReleasesQueuedDecodedBudget(t *testing.T) {
 	overlay.onMessageReceived(Event{
 		Type:        EventMessageReceived,
 		PeerID:      peer.ID(),
-		MessageType: uint16(message.TypeGetObjects),
+		MessageType: message.TypeGetObjects,
 		Payload:     payload,
 		reservation: newInboundReservation(budget, int64(len(payload))),
 	})
@@ -280,7 +280,7 @@ func TestServePeerCancellationReleasesQueuedDecodedBudget(t *testing.T) {
 	overlay.onMessageReceived(Event{
 		Type:        EventMessageReceived,
 		PeerID:      peer.ID(),
-		MessageType: uint16(message.TypeGetObjects),
+		MessageType: message.TypeGetObjects,
 		Payload:     payload,
 		reservation: newInboundReservation(budget, int64(len(payload))),
 	})
@@ -338,7 +338,7 @@ func TestReplayAndProofRequestsRetainBudgetUntilServeCompletion(t *testing.T) {
 			overlay.onMessageReceived(Event{
 				Type:        EventMessageReceived,
 				PeerID:      peer.ID(),
-				MessageType: uint16(tt.msgType),
+				MessageType: tt.msgType,
 				Payload:     payload,
 				reservation: newInboundReservation(budget, int64(len(payload))),
 			})
@@ -394,7 +394,7 @@ func TestTransactionsBatchRetainsBudgetUntilAllChildrenClose(t *testing.T) {
 	overlay.onMessageReceived(Event{
 		Type:        EventMessageReceived,
 		PeerID:      peer.ID(),
-		MessageType: uint16(message.TypeTransactions),
+		MessageType: message.TypeTransactions,
 		Payload:     payload,
 		reservation: newInboundReservation(budget, int64(len(payload))),
 	})

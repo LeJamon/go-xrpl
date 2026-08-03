@@ -3,6 +3,7 @@ package peermanagement
 import (
 	"testing"
 
+	"github.com/LeJamon/go-xrpl/internal/peermanagement/message"
 	"github.com/pierrec/lz4"
 )
 
@@ -46,7 +47,7 @@ func FuzzDecompressLZ4(f *testing.F) {
 		// Use uint16 directly — max value 65535 bytes, safe from OOM.
 		size := int(claimedSize)
 
-		result, err := DecompressLZ4(data, size)
+		result, err := message.DecompressLZ4(data, size)
 		if err != nil {
 			return
 		}

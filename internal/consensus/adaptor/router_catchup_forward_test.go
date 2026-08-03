@@ -87,7 +87,7 @@ func statusChangeWithParent(
 	require.NoError(t, err)
 	return &peermanagement.InboundMessage{
 		PeerID:  peerID,
-		Type:    uint16(message.TypeStatusChange),
+		Type:    message.TypeStatusChange,
 		Payload: encoded,
 	}
 }

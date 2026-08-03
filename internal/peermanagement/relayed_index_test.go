@@ -14,10 +14,10 @@ func TestOverlay_RecordMessageSource_AccumulatesInboundOnly(t *testing.T) {
 	require.NoError(t, err)
 
 	o := &Overlay{
-		peers:         make(map[PeerID]*Peer),
-		events:        make(chan Event, 8),
-		relayedIndex:  make(map[[32]byte]*relayedEntry),
-		clockForIndex: time.Now,
+		peers:        make(map[PeerID]*Peer),
+		events:       make(chan Event, 8),
+		relayedIndex: make(map[[32]byte]*relayedEntry),
+		clock:        time.Now,
 	}
 	cfg := DefaultConfig()
 	cfg.EnableVPReduceRelay = true
@@ -81,7 +81,7 @@ func TestOverlay_PeersThatHave_TTLExpiry(t *testing.T) {
 		events:       make(chan Event, 8),
 		relayedIndex: make(map[[32]byte]*relayedEntry),
 	}
-	o.clockForIndex = func() time.Time { return nowVal }
+	o.clock = func() time.Time { return nowVal }
 
 	hash := [32]byte{0x01}
 	nowVal = time.Unix(1_700_000_000, 0)
@@ -111,8 +111,8 @@ func TestOverlay_PeersThatHave_TTLExpiry(t *testing.T) {
 func TestOverlay_MessageRelayedRecentlyWindow(t *testing.T) {
 	now := time.Unix(1_700_000_000, 0)
 	o := &Overlay{
-		relayedIndex:  make(map[[32]byte]*relayedEntry),
-		clockForIndex: func() time.Time { return now },
+		relayedIndex: make(map[[32]byte]*relayedEntry),
+		clock:        func() time.Time { return now },
 	}
 	hash := [32]byte{0x02}
 	o.RecordMessageSource(hash, PeerID(7))

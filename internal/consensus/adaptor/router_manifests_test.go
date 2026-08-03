@@ -118,7 +118,7 @@ func TestRouter_HandleManifests_AppliesAccepted(t *testing.T) {
 	}
 	inbox <- &peermanagement.InboundMessage{
 		PeerID:  7,
-		Type:    uint16(message.TypeManifests),
+		Type:    message.TypeManifests,
 		Payload: encodePayload(t, frame),
 	}
 
@@ -233,7 +233,7 @@ func TestRouter_HandleManifests_InvalidDoesNotStore(t *testing.T) {
 	frame := &message.Manifests{List: []message.Manifest{{STObject: corrupted}}}
 	inbox <- &peermanagement.InboundMessage{
 		PeerID:  123,
-		Type:    uint16(message.TypeManifests),
+		Type:    message.TypeManifests,
 		Payload: encodePayload(t, frame),
 	}
 
@@ -253,7 +253,7 @@ func TestRouter_HandleManifests_AdmissionBoundsDurableCache(t *testing.T) {
 	require.NoError(t, err)
 	msg := &peermanagement.InboundMessage{
 		PeerID: 7,
-		Type:   uint16(message.TypeManifests),
+		Type:   message.TypeManifests,
 		Payload: encodePayload(t, &message.Manifests{List: []message.Manifest{{
 			STObject: wire,
 		}}}),
@@ -284,7 +284,7 @@ func TestRouter_HandleManifests_ChargesInvalidEntriesOncePerFrame(t *testing.T) 
 
 	router.handleManifests(&peermanagement.InboundMessage{
 		PeerID:  9,
-		Type:    uint16(message.TypeManifests),
+		Type:    message.TypeManifests,
 		Payload: encodePayload(t, &message.Manifests{List: list}),
 	})
 
@@ -329,7 +329,7 @@ func TestRouter_ManifestAcceptedAfterPeerRemovalCompletesBootstrap(t *testing.T)
 	case <-time.After(5 * time.Second):
 		t.Fatal("manifest frame did not reach client overlay")
 	}
-	require.Equal(t, uint16(message.TypeManifests), inbound.Type)
+	require.Equal(t, message.TypeManifests, inbound.Type)
 
 	source.overlay.stop(t)
 	require.Eventually(t, func() bool {
@@ -378,7 +378,7 @@ func TestRouter_HandleManifests_RelaysAcceptedEntriesExceptSource(t *testing.T) 
 
 	router.handleMessage(&peermanagement.InboundMessage{
 		PeerID:  7,
-		Type:    uint16(message.TypeManifests),
+		Type:    message.TypeManifests,
 		Payload: encodePayload(t, &message.Manifests{List: list}),
 	})
 
@@ -422,7 +422,7 @@ func TestRouter_ManifestWorkerDoesNotBlockDispatch(t *testing.T) {
 	go router.Run(t.Context())
 	manifestInbox <- &peermanagement.InboundMessage{
 		PeerID: 7,
-		Type:   uint16(message.TypeManifests),
+		Type:   message.TypeManifests,
 		Payload: encodePayload(t, &message.Manifests{List: []message.Manifest{{
 			STObject: buildWireManifest(t, 1, 220, 221),
 		}}}),
@@ -442,7 +442,7 @@ func TestRouter_ManifestWorkerDoesNotBlockDispatch(t *testing.T) {
 		queued = append(queued, parsed)
 		manifestInbox <- &peermanagement.InboundMessage{
 			PeerID:  peermanagement.PeerID(10 + i),
-			Type:    uint16(message.TypeManifests),
+			Type:    message.TypeManifests,
 			Payload: encodePayload(t, &message.Manifests{List: []message.Manifest{{STObject: wire}}}),
 		}
 	}
@@ -499,7 +499,7 @@ func TestRouter_ManifestWorkerJoinsOnShutdown(t *testing.T) {
 	}()
 	manifestInbox <- &peermanagement.InboundMessage{
 		PeerID: 1,
-		Type:   uint16(message.TypeManifests),
+		Type:   message.TypeManifests,
 		Payload: encodePayload(t, &message.Manifests{List: []message.Manifest{{
 			STObject: buildWireManifest(t, 1, 240, 241),
 		}}}),
@@ -516,7 +516,7 @@ func TestRouter_ManifestWorkerJoinsOnShutdown(t *testing.T) {
 	require.NoError(t, err)
 	manifestInbox <- &peermanagement.InboundMessage{
 		PeerID: 2,
-		Type:   uint16(message.TypeManifests),
+		Type:   message.TypeManifests,
 		Payload: encodePayload(t, &message.Manifests{List: []message.Manifest{{
 			STObject: queuedWire,
 		}}}),
