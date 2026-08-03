@@ -10,7 +10,14 @@ import (
 // SignMethod handles the sign RPC method
 type SignMethod struct{ BaseHandler }
 
-func (m *SignMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (any, *types.RpcError) {
+func (m *SignMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (result any, rpcErr *types.RpcError) {
+	if rpcErr := rejectDisabledSigning(ctx); rpcErr != nil {
+		return nil, rpcErr
+	}
+	defer func() {
+		result, rpcErr = addSigningDeprecation(result, rpcErr)
+	}()
+
 	setLoadHeavy(ctx)
 	var request signingRequest
 

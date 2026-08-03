@@ -618,6 +618,18 @@ func RpcErrorSrcActMalformed(message string) *RpcError {
 	return NewRpcError(RpcSRC_ACT_MALFORMED, "srcActMalformed", "srcActMalformed", message)
 }
 
+func RpcErrorMasterDisabled() *RpcError {
+	return NewRpcError(RpcMASTER_DISABLED, "masterDisabled", "masterDisabled", "Master key is disabled.")
+}
+
+func RpcErrorBadSecret() *RpcError {
+	return NewRpcError(RpcBAD_SECRET, "badSecret", "badSecret", "Secret does not match account.")
+}
+
+func RpcErrorDelegateActNotFound() *RpcError {
+	return NewRpcError(RpcDELEGATE_ACT_NOT_FOUND, "delegateActNotFound", "delegateActNotFound", "Delegate account not found.")
+}
+
 // RpcErrorNotImpl returns an error for unimplemented features
 // (matches rippled rpcNOT_IMPL, code 74, token "notImpl").
 func RpcErrorNotImpl() *RpcError {

@@ -27,7 +27,10 @@ func TestSignFor_NetworkIDEnforcement(t *testing.T) {
 		return &types.RpcContext{
 			Context:    context.Background(),
 			ApiVersion: types.ApiVersion1,
-			Services:   &types.ServiceContainer{Ledger: mock},
+			Services: &types.ServiceContainer{
+				Ledger:       mock,
+				Capabilities: types.RPCCapabilities{SigningEnabled: true},
+			},
 		}
 	}
 

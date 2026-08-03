@@ -19,6 +19,14 @@ const (
 	loadAdmissionSigner         = "rPMh7Pi9ct699iZUTWaytJUoHcJ7cgyziK"
 )
 
+func signingEnabledHandlerContext(ctx *types.RpcContext) *types.RpcContext {
+	if ctx.Services == nil {
+		ctx.Services = &types.ServiceContainer{}
+	}
+	ctx.Services.Capabilities.SigningEnabled = true
+	return ctx
+}
+
 type loadAdmissionLedger struct {
 	types.LedgerService
 	accountLookups   int
@@ -129,7 +137,7 @@ func TestSignRejectsClusterOnlyAndArmedLocalLoad(t *testing.T) {
 				ApiVersion: 2,
 				Services:   &types.ServiceContainer{IsLoadedCluster: track.IsLoadedCluster},
 			}
-			_, rpcErr := (&SignMethod{}).Handle(ctx, signingLoadParams(true))
+			_, rpcErr := (&SignMethod{}).Handle(signingEnabledHandlerContext(ctx), signingLoadParams(true))
 			assertTooBusy(t, rpcErr)
 		})
 	}
@@ -149,7 +157,7 @@ func TestSignRejectsLoadedOnlineAndOfflineBeforeLedgerWork(t *testing.T) {
 				Services:   services,
 			}
 
-			_, rpcErr := (&SignMethod{}).Handle(ctx, signingLoadParams(offline))
+			_, rpcErr := (&SignMethod{}).Handle(signingEnabledHandlerContext(ctx), signingLoadParams(offline))
 			assertTooBusy(t, rpcErr)
 			if ledger.accountLookups != 0 || ledger.sequenceFills != 0 || ledger.feeFills != 0 || ledger.transactionSends != 0 {
 				t.Fatalf("downstream calls = lookup:%d sequence:%d fee:%d submit:%d", ledger.accountLookups, ledger.sequenceFills, ledger.feeFills, ledger.transactionSends)
@@ -200,7 +208,7 @@ func TestOnlineSigningRejectsStaleLedgerBeforeLoad(t *testing.T) {
 					},
 				}
 
-				_, rpcErr := method.handle(ctx, method.params)
+				_, rpcErr := method.handle(signingEnabledHandlerContext(ctx), method.params)
 				if rpcErr == nil {
 					t.Fatal("expected stale-ledger error")
 				}
@@ -260,7 +268,7 @@ func TestSigningLoadAdmissionValidatesCredentialsAndShapeFirst(t *testing.T) {
 					return true
 				}},
 			}
-			_, rpcErr := (&SignMethod{}).Handle(ctx, test.params)
+			_, rpcErr := (&SignMethod{}).Handle(signingEnabledHandlerContext(ctx), test.params)
 			if rpcErr == nil || rpcErr.ErrorString != test.want {
 				t.Fatalf("error = %#v, want %s", rpcErr, test.want)
 			}
@@ -285,7 +293,7 @@ func TestSigningLoadAdmissionUnlimitedExemption(t *testing.T) {
 			Unlimited:  true,
 			Services:   &types.ServiceContainer{IsLoadedCluster: loaded},
 		}
-		result, rpcErr := (&SignMethod{}).Handle(ctx, signingLoadParams(true))
+		result, rpcErr := (&SignMethod{}).Handle(signingEnabledHandlerContext(ctx), signingLoadParams(true))
 		if rpcErr != nil {
 			t.Fatalf("unlimited offline sign: %v", rpcErr)
 		}
@@ -295,14 +303,14 @@ func TestSigningLoadAdmissionUnlimitedExemption(t *testing.T) {
 	})
 
 	t.Run("sign for", func(t *testing.T) {
-		params := json.RawMessage(`{"account":"` + loadAdmissionSigner + `","seed_hex":"` + loadAdmissionSeedHex + `","key_type":"ed25519","tx_json":{"TransactionType":"AccountSet","Account":"` + loadAdmissionAccount + `","Sequence":1,"Fee":"10","SigningPubKey":""}}`)
+		params := json.RawMessage(`{"account":"` + loadAdmissionSigningAccount + `","seed_hex":"` + loadAdmissionSeedHex + `","key_type":"ed25519","tx_json":{"TransactionType":"AccountSet","Account":"` + loadAdmissionAccount + `","Sequence":1,"Fee":"10","SigningPubKey":""}}`)
 		ctx := &types.RpcContext{
 			Context:    context.Background(),
 			ApiVersion: 2,
 			Unlimited:  true,
 			Services:   &types.ServiceContainer{IsLoadedCluster: loaded},
 		}
-		_, rpcErr := (&SignForMethod{}).Handle(ctx, params)
+		_, rpcErr := (&SignForMethod{}).Handle(signingEnabledHandlerContext(ctx), params)
 		if rpcErr != nil {
 			t.Fatalf("unlimited sign_for: %v", rpcErr)
 		}
@@ -355,7 +363,7 @@ func TestCredentialedSubmitAndMultisignMethodsRejectLoaded(t *testing.T) {
 			ApiVersion: 2,
 			Services:   &types.ServiceContainer{IsLoadedCluster: func() bool { return true }},
 		}
-		_, rpcErr := (&SignForMethod{}).Handle(ctx, params)
+		_, rpcErr := (&SignForMethod{}).Handle(signingEnabledHandlerContext(ctx), params)
 		assertTooBusy(t, rpcErr)
 	})
 
@@ -390,7 +398,7 @@ func TestMultisignLoadAdmissionValidationPrecedence(t *testing.T) {
 				return true
 			}},
 		}
-		_, rpcErr := (&SignForMethod{}).Handle(ctx, params)
+		_, rpcErr := (&SignForMethod{}).Handle(signingEnabledHandlerContext(ctx), params)
 		if rpcErr == nil || rpcErr.ErrorString != "invalidParams" {
 			t.Fatalf("error = %#v, want credential validation error", rpcErr)
 		}
@@ -410,7 +418,7 @@ func TestMultisignLoadAdmissionValidationPrecedence(t *testing.T) {
 				return true
 			}},
 		}
-		_, rpcErr := (&SignForMethod{}).Handle(ctx, params)
+		_, rpcErr := (&SignForMethod{}).Handle(signingEnabledHandlerContext(ctx), params)
 		if rpcErr == nil || rpcErr.ErrorString != "invalidParams" {
 			t.Fatalf("error = %#v, want transaction validation error", rpcErr)
 		}

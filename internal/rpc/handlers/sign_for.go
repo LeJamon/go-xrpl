@@ -22,7 +22,14 @@ import (
 // This adds a signature to a transaction for multi-signing
 type SignForMethod struct{ BaseHandler }
 
-func (m *SignForMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (any, *types.RpcError) {
+func (m *SignForMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (result any, rpcErr *types.RpcError) {
+	if rpcErr := rejectDisabledSigning(ctx); rpcErr != nil {
+		return nil, rpcErr
+	}
+	defer func() {
+		result, rpcErr = addSigningDeprecation(result, rpcErr)
+	}()
+
 	setLoadHeavy(ctx)
 	var request struct {
 		signingRequest
@@ -127,6 +134,13 @@ func (m *SignForMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (a
 	}
 	transaction, rpcErr := parseTransactionForSigning(txMap)
 	if rpcErr != nil {
+		return nil, rpcErr
+	}
+	derivedAccount, derivationErr := addresscodec.EncodeClassicAddressFromPublicKeyHex(publicKey)
+	if derivationErr != nil {
+		return nil, rpcInternalError("sign_for: account address derivation failed", derivationErr)
+	}
+	if rpcErr := authorizeSigningKey(ctx, request.Account, derivedAccount, false); rpcErr != nil {
 		return nil, rpcErr
 	}
 

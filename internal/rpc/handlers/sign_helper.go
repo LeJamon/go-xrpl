@@ -15,11 +15,14 @@ import (
 	"github.com/LeJamon/go-xrpl/internal/rpc/types"
 	"github.com/LeJamon/go-xrpl/internal/tx"
 	"github.com/LeJamon/go-xrpl/internal/tx/sign"
+	"github.com/LeJamon/go-xrpl/ledger/entry"
 )
 
 // counterpartySignatureField is the only inner-object SField a signature_target
 // may name, matching rippled (the LoanSet sfCounterpartySignature).
 const counterpartySignatureField = "CounterpartySignature"
+
+const signingDeprecation = "This command has been deprecated and will be removed in a future version of the server. Please migrate to a standalone signing tool."
 
 // signCredentials holds the signing credential parameters common to both
 // the sign and submit RPC methods.
@@ -186,6 +189,26 @@ func formatSignResult(result signResult, apiVersion int) map[string]any {
 	return response
 }
 
+func rejectDisabledSigning(ctx *types.RpcContext) *types.RpcError {
+	if ctx != nil && ctx.Role == types.RoleAdmin {
+		return nil
+	}
+	if ctx != nil && ctx.Services != nil && ctx.Services.Capabilities.SigningEnabled {
+		return nil
+	}
+	return types.RpcErrorNotSupported("Signing is not supported by this server.")
+}
+
+func addSigningDeprecation(result any, rpcErr *types.RpcError) (any, *types.RpcError) {
+	if rpcErr != nil {
+		return result, rpcErr.WithExtra(map[string]any{"deprecated": signingDeprecation})
+	}
+	if response, ok := result.(map[string]any); ok {
+		response["deprecated"] = signingDeprecation
+	}
+	return result, nil
+}
+
 func jsonFieldPresent(params json.RawMessage, field string) bool {
 	var fields map[string]json.RawMessage
 	if err := json.Unmarshal(params, &fields); err != nil {
@@ -285,10 +308,8 @@ func signTransactionJSON(rpcCtx *types.RpcContext, txJSON json.RawMessage, creds
 	if rpcErr := rejectSigningWhenLoaded(services, rpcCtx.Unlimited); rpcErr != nil {
 		return nil, rpcErr
 	}
-	if !signatureTargetPresent && txAccount != address {
-		return nil, types.RpcErrorInvalidParams("Account in tx_json does not match signing key")
-	}
 	srcAddress := txAccount
+	var sourceAccountInfo *types.AccountInfo
 
 	// Fill in missing fields if not offline. Order matches rippled's
 	// transactionPreProcessImpl (TransactionSign.cpp:454-505): source
@@ -296,7 +317,9 @@ func signTransactionJSON(rpcCtx *types.RpcContext, txJSON json.RawMessage, creds
 	if !offline {
 		// The source account must exist in the current ledger, whether or
 		// not Sequence is supplied (rpcSRC_ACT_NOT_FOUND).
-		if _, err := services.Ledger.GetAccountInfo(ctx, srcAddress, "current"); err != nil {
+		var err error
+		sourceAccountInfo, err = services.Ledger.GetAccountInfo(ctx, srcAddress, "current")
+		if err != nil {
 			if errors.Is(err, svcerr.ErrAccountNotFound) {
 				return nil, types.RpcErrorSrcActNotFound("Source account not found.")
 			}
@@ -371,6 +394,25 @@ func signTransactionJSON(rpcCtx *types.RpcContext, txJSON json.RawMessage, creds
 	if _, ok := txMap["Signers"]; ok {
 		return nil, rpcErrorAlreadyMultisigned()
 	}
+	if !signatureTargetPresent && !offline {
+		authorizationAccount := txAccount
+		delegatePresent := false
+		if delegateValue, present := txMap["Delegate"]; present {
+			delegatePresent = true
+			delegate, ok := delegateValue.(string)
+			if !ok || !addresscodec.IsValidClassicAddress(delegate) {
+				return nil, types.RpcErrorSrcActMalformed("Invalid field 'tx_json.Delegate'.")
+			}
+			authorizationAccount = delegate
+		}
+		if !delegatePresent {
+			if rpcErr := signingKeyAuthorization(authorizationAccount, address, sourceAccountInfo, false); rpcErr != nil {
+				return nil, rpcErr
+			}
+		} else if rpcErr := authorizeSigningKey(rpcCtx, authorizationAccount, address, true); rpcErr != nil {
+			return nil, rpcErr
+		}
+	}
 
 	// Without a target the signing key is the transaction's own key, placed at
 	// the top level. With a target the top-level SigningPubKey (the primary
@@ -416,6 +458,44 @@ func signTransactionJSON(rpcCtx *types.RpcContext, txJSON json.RawMessage, creds
 		TxMap:  txMap,
 		TxBlob: txBlob,
 	}, nil
+}
+
+func authorizeSigningKey(ctx *types.RpcContext, account, derivedAccount string, requireAccount bool) *types.RpcError {
+	var accountInfo *types.AccountInfo
+	if ctx != nil && ctx.Services != nil && ctx.Services.Ledger != nil {
+		info, err := ctx.Services.Ledger.GetAccountInfo(ctx.Context, account, "current")
+		if err != nil {
+			if !errors.Is(err, svcerr.ErrAccountNotFound) {
+				return rpcInternalError("signing authorization account lookup failed", err)
+			}
+		} else {
+			accountInfo = info
+		}
+	}
+
+	return signingKeyAuthorization(account, derivedAccount, accountInfo, requireAccount)
+}
+
+func signingKeyAuthorization(account, derivedAccount string, accountInfo *types.AccountInfo, requireAccount bool) *types.RpcError {
+	if accountInfo == nil {
+		if requireAccount {
+			return types.RpcErrorDelegateActNotFound()
+		}
+		if derivedAccount == account {
+			return nil
+		}
+		return types.RpcErrorBadSecret()
+	}
+	if derivedAccount == account {
+		if accountInfo.Flags&entry.LsfDisableMaster != 0 {
+			return types.RpcErrorMasterDisabled()
+		}
+		return nil
+	}
+	if accountInfo.RegularKey == derivedAccount {
+		return nil
+	}
+	return types.RpcErrorBadSecret()
 }
 
 func rejectSigningWhenLoaded(services *types.ServiceContainer, unlimited bool) *types.RpcError {

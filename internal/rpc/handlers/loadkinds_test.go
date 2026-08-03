@@ -37,6 +37,7 @@ func TestLoadCostEarlyErrorTiming(t *testing.T) {
 			ctx := &types.RpcContext{
 				Context:  context.Background(),
 				LoadCost: uint32(loadtrack.LoadReference),
+				Services: &types.ServiceContainer{Capabilities: types.RPCCapabilities{SigningEnabled: true}},
 			}
 			_, rpcErr := test.handler.Handle(ctx, test.params)
 			if rpcErr == nil {
