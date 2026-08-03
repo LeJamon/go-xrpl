@@ -24,9 +24,7 @@ func TestWebSocket_PeersRPC_UsesPeerSource(t *testing.T) {
 	ledger := &mockLedgerService{}
 	services := &types.ServiceContainer{Ledger: ledger}
 
-	ws := NewWebSocketServer(30*time.Second, services)
-	ws.RegisterAllMethods()
-	ws.SetPeerSource(src)
+	ws := NewWebSocketServer(WebSocketServerOptions{Timeout: 30 * time.Second, Services: services, PeerSource: src})
 
 	pc := loopbackAdminPortContext()
 	pc.PortName = "test_admin"
@@ -61,11 +59,10 @@ func wsCall(t *testing.T, conn *websocket.Conn, req map[string]any) map[string]a
 	return resp
 }
 
-func TestWebSocket_SetPeerSource_NilDetaches(t *testing.T) {
+func TestWebSocketPeerSourceDefaultsToNil(t *testing.T) {
 	src := &stubPeerSource{peers: []map[string]any{{"address": "192.0.2.1:51235"}}}
-	ws := NewWebSocketServer(30*time.Second, nil)
-	ws.SetPeerSource(src)
-	require.NotNil(t, ws.loadPeerSource())
-	ws.SetPeerSource(nil)
-	require.Nil(t, ws.loadPeerSource())
+	withSource := NewWebSocketServer(WebSocketServerOptions{Timeout: 30 * time.Second, PeerSource: src})
+	require.NotNil(t, withSource.loadPeerSource())
+	withoutSource := NewWebSocketServer(WebSocketServerOptions{Timeout: 30 * time.Second})
+	require.Nil(t, withoutSource.loadPeerSource())
 }

@@ -1514,20 +1514,10 @@ type NFTOffersResult struct {
 }
 
 // NewServiceContainer constructs a ServiceContainer wired to the given
-// ledger service. Callers attach the dispatcher, peer hooks, manifest
-// cache, etc. afterwards as components come online.
+// ledger service. Callers attach the runtime services as components come
+// online.
 func NewServiceContainer(ledger LedgerService) *ServiceContainer {
 	return &ServiceContainer{
 		Ledger: ledger,
 	}
-}
-
-// SetDispatcher sets the method dispatcher on the service container.
-func (sc *ServiceContainer) SetDispatcher(d MethodDispatcher) {
-	sc.Dispatcher = d
-}
-
-// SetShutdownFunc sets the shutdown function on the service container.
-func (sc *ServiceContainer) SetShutdownFunc(f func()) {
-	sc.ShutdownFunc = f
 }

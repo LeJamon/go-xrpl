@@ -27,7 +27,7 @@ func transportTestPort() *PortContext {
 
 func transportTestServer(t *testing.T, calls *atomic.Int32) *Server {
 	t.Helper()
-	srv := NewServer(time.Second, types.NewServiceContainer(nil))
+	srv := NewServer(ServerOptions{Timeout: time.Second, Services: types.NewServiceContainer(nil)})
 	srv.registry.Register("stop", &stubHandler{
 		role: types.RoleGuest,
 		handle: func(*types.RpcContext, json.RawMessage) (any, *types.RpcError) {
@@ -138,7 +138,7 @@ func TestHTTPTransportNoOriginCLI(t *testing.T) {
 
 func wsTransportServer(t *testing.T, pc *PortContext) (*httptest.Server, *WebSocketServer) {
 	t.Helper()
-	ws := NewWebSocketServer(time.Second, nil)
+	ws := NewWebSocketServer(WebSocketServerOptions{Timeout: time.Second})
 	ws.methodRegistry.Register("ping", &stubHandler{role: types.RoleGuest})
 	httpSrv := httptest.NewServer(PortMiddleware(pc, http.HandlerFunc(ws.ServeHTTP)))
 	t.Cleanup(func() {

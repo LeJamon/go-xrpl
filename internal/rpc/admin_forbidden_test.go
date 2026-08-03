@@ -168,7 +168,7 @@ func TestHTTPBatchAdminDenialForbidden(t *testing.T) {
 // i.e. the "forbidden" token with code 3. A non-admin role is forced by
 // configuring AdminNets that exclude the loopback test peer.
 func TestWSAdminDenialForbidden(t *testing.T) {
-	ws := NewWebSocketServer(2*time.Second, nil)
+	ws := NewWebSocketServer(WebSocketServerOptions{Timeout: 2 * time.Second})
 	ws.methodRegistry.Register("stop", &stubHandler{role: types.RoleAdmin})
 
 	_, adminNet, _ := net.ParseCIDR("10.0.0.0/8")

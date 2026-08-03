@@ -18,7 +18,7 @@ import (
 func TestWebSocketInvalidSendQueueReleasesListenerSlot(t *testing.T) {
 	for _, value := range []int{-1, 65536} {
 		t.Run(strconv.Itoa(value), func(t *testing.T) {
-			ws := rpc.NewWebSocketServer(time.Second, nil)
+			ws := rpc.NewWebSocketServer(rpc.WebSocketServerOptions{Timeout: time.Second})
 			bound, err := bindRPCTransports(
 				t.Context(),
 				xrpllog.Discard(),

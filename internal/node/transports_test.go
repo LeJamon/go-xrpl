@@ -37,7 +37,7 @@ func newConnectionLimitTestTransports(t *testing.T, protocol string, limit int) 
 			w.Header().Set("Content-Type", "text/plain")
 			_, _ = w.Write([]byte("ok"))
 		}),
-		rpc.NewWebSocketServer(time.Second, nil),
+		rpc.NewWebSocketServer(rpc.WebSocketServerOptions{Timeout: time.Second}),
 		nil,
 		systemListen,
 	)
@@ -194,7 +194,7 @@ func TestRPCConnectionLimitReleasesRejectedHTTPTransportConnections(t *testing.T
 			},
 		}},
 		http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusOK) }),
-		rpc.NewWebSocketServer(time.Second, nil),
+		rpc.NewWebSocketServer(rpc.WebSocketServerOptions{Timeout: time.Second}),
 		nil,
 		systemListen,
 	)
@@ -252,7 +252,7 @@ func TestRPCConnectionLimitReleasesRejectedHTTPTransportConnections(t *testing.T
 }
 
 func TestRPCConnectionLimitReleasesRejectedWebSocketConnections(t *testing.T) {
-	wsServer := rpc.NewWebSocketServer(time.Second, nil)
+	wsServer := rpc.NewWebSocketServer(rpc.WebSocketServerOptions{Timeout: time.Second})
 	bound, err := bindRPCTransports(
 		t.Context(),
 		xrpllog.Discard(),
@@ -334,7 +334,7 @@ func TestRPCConnectionLimitReleasesRejectedWebSocketConnections(t *testing.T) {
 }
 
 func TestRPCConnectionLimitIsGlobalAcrossHTTPAndWebSocketPorts(t *testing.T) {
-	wsServer := rpc.NewWebSocketServer(time.Second, nil)
+	wsServer := rpc.NewWebSocketServer(rpc.WebSocketServerOptions{Timeout: time.Second})
 	bound, err := bindRPCTransports(
 		t.Context(),
 		xrpllog.Discard(),
@@ -403,7 +403,7 @@ func TestBindRPCTransportsValidatesAllPortsBeforeBinding(t *testing.T) {
 		xrpllog.Discard(),
 		cfg,
 		http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}),
-		rpc.NewWebSocketServer(time.Second, nil),
+		rpc.NewWebSocketServer(rpc.WebSocketServerOptions{Timeout: time.Second}),
 		nil,
 		func(context.Context, string, string) (net.Listener, error) {
 			calls.Add(1)
@@ -429,7 +429,7 @@ func TestBindRPCTransportsClosesEarlierListenersOnLaterFailure(t *testing.T) {
 		xrpllog.Discard(),
 		cfg,
 		http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}),
-		rpc.NewWebSocketServer(time.Second, nil),
+		rpc.NewWebSocketServer(rpc.WebSocketServerOptions{Timeout: time.Second}),
 		nil,
 		func(context.Context, string, string) (net.Listener, error) {
 			if calls.Add(1) == 2 {
@@ -461,7 +461,7 @@ func TestBindRPCTransportsClosesHTTPWhenGRPCBindFails(t *testing.T) {
 		xrpllog.Discard(),
 		cfg,
 		http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}),
-		rpc.NewWebSocketServer(time.Second, nil),
+		rpc.NewWebSocketServer(rpc.WebSocketServerOptions{Timeout: time.Second}),
 		&stubLookup{},
 		func(context.Context, string, string) (net.Listener, error) {
 			if calls.Add(1) == 2 {
@@ -502,7 +502,7 @@ func TestBoundRPCTransportsDoNotServeBeforeCommit(t *testing.T) {
 		xrpllog.Discard(),
 		cfg,
 		http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}),
-		rpc.NewWebSocketServer(time.Second, nil),
+		rpc.NewWebSocketServer(rpc.WebSocketServerOptions{Timeout: time.Second}),
 		nil,
 		func(context.Context, string, string) (net.Listener, error) { return tracked, nil },
 	)
@@ -530,7 +530,7 @@ func TestBoundRPCTransportsHealthUsesTransportBasicAuth(t *testing.T) {
 			},
 		}},
 		http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}),
-		rpc.NewWebSocketServer(time.Second, nil),
+		rpc.NewWebSocketServer(rpc.WebSocketServerOptions{Timeout: time.Second}),
 		nil,
 		systemListen,
 	)
@@ -578,7 +578,7 @@ func TestBoundRPCTransportsServeAndJoinAllProtocols(t *testing.T) {
 		xrpllog.Discard(),
 		cfg,
 		http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}),
-		rpc.NewWebSocketServer(time.Second, nil),
+		rpc.NewWebSocketServer(rpc.WebSocketServerOptions{Timeout: time.Second}),
 		&stubLookup{},
 		systemListen,
 	)
@@ -619,7 +619,7 @@ func TestBoundRPCTransportsPreStoppedServersDoNotBlockServe(t *testing.T) {
 		xrpllog.Discard(),
 		cfg,
 		http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}),
-		rpc.NewWebSocketServer(time.Second, nil),
+		rpc.NewWebSocketServer(rpc.WebSocketServerOptions{Timeout: time.Second}),
 		&stubLookup{},
 		systemListen,
 	)
@@ -654,7 +654,7 @@ func TestShutdownTransportsForceClosesStuckHTTPHandler(t *testing.T) {
 			close(started)
 			<-release
 		}),
-		rpc.NewWebSocketServer(time.Second, nil),
+		rpc.NewWebSocketServer(rpc.WebSocketServerOptions{Timeout: time.Second}),
 		nil,
 		systemListen,
 	)

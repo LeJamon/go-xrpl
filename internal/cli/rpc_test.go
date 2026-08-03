@@ -772,7 +772,7 @@ func TestRPCStopUsesAdminCredentialsWithRPCServer(t *testing.T) {
 					shutdown <- struct{}{}
 				},
 			}
-			server := rpcserver.NewServer(time.Second, services)
+			server := rpcserver.NewServer(rpcserver.ServerOptions{Timeout: time.Second, Services: services})
 			_, adminNet, err := net.ParseCIDR("127.0.0.0/8")
 			if err != nil {
 				t.Fatal(err)

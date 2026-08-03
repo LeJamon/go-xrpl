@@ -93,10 +93,15 @@ func (s *rpcSubSink) expectNone(t *testing.T) {
 // carries the url-subscription registry, plus admin/guest contexts for
 // driving the plain JSON-RPC handlers.
 func newRPCSubTestServer(t *testing.T) (*WebSocketServer, *types.ServiceContainer) {
+	return newRPCSubTestServerWithProvider(t, nil)
+}
+
+func newRPCSubTestServerWithProvider(t *testing.T, provider types.LedgerInfoProvider) (*WebSocketServer, *types.ServiceContainer) {
 	t.Helper()
 	services := types.NewServiceContainer(nil)
-	ws := NewWebSocketServer(time.Second, services)
-	require.NotNil(t, services.URLSubscriptions, "NewWebSocketServer must expose the url registry")
+	ws := NewWebSocketServer(WebSocketServerOptions{Timeout: time.Second, Services: services, LedgerInfoProvider: provider})
+	services.URLSubscriptions = ws.URLSubscriptionService()
+	require.NotNil(t, services.URLSubscriptions, "composition must expose the url registry explicitly")
 	return ws, services
 }
 
@@ -382,8 +387,7 @@ func TestRPCSub_AccountsDontBlockRemoval(t *testing.T) {
 // field gating: network_id is always present (even 0) and fee_ref appears
 // only while XRPFees is disabled.
 func TestRPCSub_SubscribeAckCarriesLedgerInfo(t *testing.T) {
-	ws, services := newRPCSubTestServer(t)
-	ws.SetLedgerInfoProvider(stubLedgerInfoProvider{ledgerAvailable: true})
+	_, services := newRPCSubTestServerWithProvider(t, stubLedgerInfoProvider{ledgerAvailable: true})
 	sink := newRPCSubSink(t)
 
 	result, rpcErr := subscribeURL(t, services, `{"url":"`+sink.srv.URL+`","streams":["ledger"]}`)
@@ -404,8 +408,7 @@ func TestRPCSub_SubscribeAckCarriesLedgerInfo(t *testing.T) {
 // from the ack once the XRPFees amendment is enabled, mirroring rippled's
 // subLedger gate.
 func TestRPCSub_SubscribeAckOmitsFeeRefUnderXRPFees(t *testing.T) {
-	ws, services := newRPCSubTestServer(t)
-	ws.SetLedgerInfoProvider(stubLedgerInfoProvider{ledgerAvailable: true, xrpFees: true})
+	_, services := newRPCSubTestServerWithProvider(t, stubLedgerInfoProvider{ledgerAvailable: true, xrpFees: true})
 	sink := newRPCSubSink(t)
 
 	result, rpcErr := subscribeURL(t, services, `{"url":"`+sink.srv.URL+`","streams":["ledger"]}`)
@@ -430,8 +433,7 @@ func TestSubLedgerWireMatrix(t *testing.T) {
 							if validatedLedgersPresent {
 								validatedLedgers = complete
 							}
-							ws, _ := newRPCSubTestServer(t)
-							ws.SetLedgerInfoProvider(stubLedgerInfoProvider{
+							ws, _ := newRPCSubTestServerWithProvider(t, stubLedgerInfoProvider{
 								ledgerAvailable:         true,
 								xrpFees:                 xrpFees,
 								validatedLedgers:        validatedLedgers,
@@ -475,8 +477,7 @@ func TestSubLedgerWireMatrixWithoutValidatedLedger(t *testing.T) {
 						if validatedLedgersPresent {
 							validatedLedgers = complete
 						}
-						ws, _ := newRPCSubTestServer(t)
-						ws.SetLedgerInfoProvider(stubLedgerInfoProvider{
+						ws, _ := newRPCSubTestServerWithProvider(t, stubLedgerInfoProvider{
 							validatedLedgers:        validatedLedgers,
 							validatedLedgersPresent: validatedLedgersPresent,
 							networkID:               networkID,

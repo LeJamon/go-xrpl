@@ -67,9 +67,8 @@ type WebSocketServer struct {
 	loadTracker       *loadtrack.Tracker
 	pathFindRefreshMu sync.Mutex
 	pathFindRefresh   *pathFindRefreshManager
-	// pingInterval is how often pingLoop sends a keepalive ping. Settable
-	// so concurrency tests can drive the ping path without waiting on the
-	// production cadence.
+	// pingInterval is how often pingLoop sends a keepalive ping, selected at
+	// construction so tests and node composition can choose their cadence.
 	pingInterval time.Duration
 	// wg tracks admitted HTTP handlers and per-connection goroutines so Close
 	// can join them on shutdown.
@@ -77,6 +76,20 @@ type WebSocketServer struct {
 	closeOnce sync.Once
 	closeDone chan struct{}
 	forceDone chan struct{}
+}
+
+// WebSocketServerOptions controls construction of a WebSocket RPC server.
+// The service container is read by handlers and is never changed by the
+// constructor. A nil subscription manager selects a new manager for the
+// standalone server.
+type WebSocketServerOptions struct {
+	Timeout             time.Duration
+	Services            *types.ServiceContainer
+	LoadTracker         *loadtrack.Tracker
+	PeerSource          types.PeerSource
+	PingInterval        time.Duration
+	LedgerInfoProvider  types.LedgerInfoProvider
+	SubscriptionManager *subscription.Manager
 }
 
 // websocketConnection owns the transport-specific state for one logical
@@ -103,23 +116,20 @@ type websocketConnection struct {
 	closeOnce    sync.Once
 }
 
-// NewWebSocketServer creates a new WebSocket server. The provided
-// service container is attached to every RpcContext routed through the
-// server so handlers reach the ledger via ctx.Services. May be nil for
-// test contexts.
-func NewWebSocketServer(timeout time.Duration, services *types.ServiceContainer) *WebSocketServer {
-	return NewWebSocketServerWithLoadTracker(timeout, services, nil)
-}
-
-// NewWebSocketServerWithLoadTracker creates a WebSocket server using tracker
-// for transport-level admission and charging. A nil tracker preserves
-// NewWebSocketServer's standalone default.
-func NewWebSocketServerWithLoadTracker(timeout time.Duration, services *types.ServiceContainer, tracker *loadtrack.Tracker) *WebSocketServer {
+// NewWebSocketServer creates a new WebSocket RPC server. All method handlers
+// are registered before the constructor returns.
+func NewWebSocketServer(options WebSocketServerOptions) *WebSocketServer {
+	tracker := options.LoadTracker
 	if tracker == nil {
 		tracker = loadtrack.New()
 	}
-	if services != nil && services.ClientLoad == nil {
-		services.ClientLoad = types.NewClientLoadShedder()
+	manager := options.SubscriptionManager
+	if manager == nil {
+		manager = subscription.NewManager()
+	}
+	pingInterval := options.PingInterval
+	if pingInterval <= 0 {
+		pingInterval = 30 * time.Second
 	}
 	ws := &WebSocketServer{
 		upgrader: websocket.Upgrader{
@@ -128,41 +138,25 @@ func NewWebSocketServerWithLoadTracker(timeout time.Duration, services *types.Se
 			CheckOrigin: func(r *http.Request) bool { return true },
 			// Don't require specific subprotocol - xrpl.js doesn't use one
 		},
-		subscriptionManager: subscription.NewManager(),
+		subscriptionManager: manager,
 		methodRegistry:      types.NewMethodRegistry(),
 		connections:         make(map[string]*websocketConnection),
-		timeout:             timeout,
-		services:            services,
+		timeout:             options.Timeout,
+		services:            options.Services,
 		loadTracker:         tracker,
-		pingInterval:        30 * time.Second,
+		pingInterval:        pingInterval,
+		ledgerInfoProvider:  options.LedgerInfoProvider,
 		closeDone:           make(chan struct{}),
 		forceDone:           make(chan struct{}),
 	}
 	ws.pathFindRefresh = newPathFindRefreshManager(ws)
-	// The url (RPCSub) registry lives on the WebSocket server because url
-	// subscribers share its subscription manager's broadcast fan-out.
-	// Exposing it through the service container lets the plain JSON-RPC
-	// subscribe/unsubscribe handlers reach it.
+	// The URL (RPCSub) registry lives on the WebSocket server because URL
+	// subscribers share its subscription manager's broadcast fan-out. Node
+	// composition installs the returned service on the shared container.
 	ws.urlSubs = newURLSubscriptionRegistry(ws)
-	if services != nil {
-		services.URLSubscriptions = ws.urlSubs
-	}
+	ws.setPeerSource(options.PeerSource)
+	ws.registerAllMethods()
 	return ws
-}
-
-// SetPingInterval overrides the keepalive ping cadence (the operator's
-// websocket_ping_frequency key). Non-positive values are ignored. Must
-// be called before connections are accepted.
-func (ws *WebSocketServer) SetPingInterval(d time.Duration) {
-	if d > 0 {
-		ws.pingInterval = d
-	}
-}
-
-// SetLedgerInfoProvider sets the provider used to return current ledger info
-// in subscribe responses (e.g., when subscribing to the "ledger" stream).
-func (ws *WebSocketServer) SetLedgerInfoProvider(provider types.LedgerInfoProvider) {
-	ws.ledgerInfoProvider = provider
 }
 
 func (ws *WebSocketServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -1289,17 +1283,19 @@ func resolveWSClientIP(peerIP, upgradeForwardedFor string, portCtx *PortContext)
 	return upgradeForwardedFor
 }
 
-// RegisterAllMethods registers every RPC method available on the WebSocket
-// endpoint. subscribe/unsubscribe are part of the common table (as in
-// rippled); the WebSocket dispatch intercepts both before registry lookup
-// and runs the real subscription implementation.
-func (ws *WebSocketServer) RegisterAllMethods() {
+func (ws *WebSocketServer) registerAllMethods() {
 	handlers.RegisterAll(ws.methodRegistry)
 }
 
 // SubscriptionManager returns the subscription manager for event publishing
 func (ws *WebSocketServer) SubscriptionManager() *subscription.Manager {
 	return ws.subscriptionManager
+}
+
+// URLSubscriptionService returns the URL subscription registry that node
+// composition installs on the shared service container after construction.
+func (ws *WebSocketServer) URLSubscriptionService() types.URLSubscriptionService {
+	return ws.urlSubs
 }
 
 // Close gracefully closes all active WebSocket connections and url (RPCSub)

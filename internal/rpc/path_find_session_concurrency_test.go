@@ -17,7 +17,7 @@ func TestPathFindCreateInvalidReplacementClearsOldSession(t *testing.T) {
 	conn.installPathFindSession(old)
 	before := conn.pathFindGeneration
 
-	ws := NewWebSocketServer(0, nil)
+	ws := NewWebSocketServer(WebSocketServerOptions{Timeout: 0})
 	_, rpcErr := ws.executePathFindCreate(conn, &types.RpcContext{Context: ctx}, types.WebSocketCommand{
 		ID:     1,
 		Params: json.RawMessage(`{"subcommand":"create"}`),

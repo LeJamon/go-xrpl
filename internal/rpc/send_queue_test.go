@@ -56,7 +56,7 @@ func TestWebSocketSendQueueLimitRealHandshake(t *testing.T) {
 		{name: "maximum explicit value", value: maxSendQueueLimit, want: maxSendQueueLimit},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			ws := NewWebSocketServer(time.Second, nil)
+			ws := NewWebSocketServer(WebSocketServerOptions{Timeout: time.Second})
 			httpServer := httptest.NewServer(PortMiddleware(
 				&PortContext{SendQueue: test.value},
 				http.HandlerFunc(ws.ServeHTTP),
@@ -90,7 +90,7 @@ func TestWebSocketSendQueueLimitRealHandshake(t *testing.T) {
 func TestWebSocketSendQueueLimitInvalidConfigFailsBeforeUpgrade(t *testing.T) {
 	for _, value := range []int{-1, maxSendQueueLimit + 1} {
 		t.Run(strings.ReplaceAll(strconv.Itoa(value), "-", "negative_"), func(t *testing.T) {
-			ws := NewWebSocketServer(time.Second, nil)
+			ws := NewWebSocketServer(WebSocketServerOptions{Timeout: time.Second})
 			httpServer := httptest.NewServer(PortMiddleware(
 				&PortContext{SendQueue: value},
 				http.HandlerFunc(ws.ServeHTTP),

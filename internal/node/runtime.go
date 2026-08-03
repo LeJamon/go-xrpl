@@ -23,6 +23,7 @@ import (
 	rpcadapter "github.com/LeJamon/go-xrpl/internal/rpc/adapter"
 	"github.com/LeJamon/go-xrpl/internal/rpc/handlers"
 	"github.com/LeJamon/go-xrpl/internal/rpc/loadtrack"
+	"github.com/LeJamon/go-xrpl/internal/rpc/subscription"
 	"github.com/LeJamon/go-xrpl/internal/rpc/types"
 	validatorlist "github.com/LeJamon/go-xrpl/internal/validator/list"
 	"github.com/LeJamon/go-xrpl/internal/watchdog"
@@ -251,6 +252,7 @@ func (r *nodeRuntime) configureMaintenance() error {
 
 	r.ledgerAdapter = rpcadapter.NewLedgerServiceAdapter(r.ledger)
 	r.services = types.NewServiceContainer(r.ledgerAdapter)
+	r.services.ClientLoad = types.NewClientLoadShedder()
 	r.services.ServerInfoConfig = serverInfoConfigSnapshot(r.appConfig)
 
 	// Gate the beta RPC API (api_version 3) on the operator's beta_rpc_api
@@ -825,27 +827,34 @@ func (r *nodeRuntime) configureConsensus() error {
 
 func (r *nodeRuntime) bindRPC() error {
 	transportLoad := loadtrack.New()
+	var peerSource types.PeerSource
+	if r.consensus != nil && r.consensus.Overlay != nil {
+		peerSource = r.consensus.Overlay
+	}
+	manager := subscription.NewManager()
 
 	// Create HTTP JSON-RPC server. The dispatch timeout stays strictly below
 	// the transport WriteTimeout (see httpWriteTimeout) so a timed-out request
 	// can still serialize its error envelope.
-	r.httpServer = rpc.NewServerWithLoadTracker(rpcDispatchTimeout, r.services, transportLoad)
-	if r.consensus != nil && r.consensus.Overlay != nil {
-		r.httpServer.SetPeerSource(r.consensus.Overlay)
-	}
+	r.httpServer = rpc.NewServer(rpc.ServerOptions{
+		Timeout:     rpcDispatchTimeout,
+		Services:    r.services,
+		LoadTracker: transportLoad,
+		PeerSource:  peerSource,
+	})
+	r.services.Dispatcher = r.httpServer
 
-	r.services.SetDispatcher(r.httpServer)
-
-	r.wsServer = rpc.NewWebSocketServerWithLoadTracker(rpcDispatchTimeout, r.services, transportLoad)
-	if r.appConfig.WebsocketPingFrequency > 0 {
-		r.wsServer.SetPingInterval(time.Duration(r.appConfig.WebsocketPingFrequency) * time.Second)
-	}
-	r.wsServer.RegisterAllMethods()
-	if r.consensus != nil && r.consensus.Overlay != nil {
-		r.wsServer.SetPeerSource(r.consensus.Overlay)
-	}
-
-	r.wsServer.SetLedgerInfoProvider(&ledgerInfoAdapter{ledgerService: r.ledger})
+	pingInterval := time.Duration(r.appConfig.WebsocketPingFrequency) * time.Second
+	r.wsServer = rpc.NewWebSocketServer(rpc.WebSocketServerOptions{
+		Timeout:             rpcDispatchTimeout,
+		Services:            r.services,
+		LoadTracker:         transportLoad,
+		PeerSource:          peerSource,
+		PingInterval:        pingInterval,
+		LedgerInfoProvider:  &ledgerInfoAdapter{ledgerService: r.ledger},
+		SubscriptionManager: manager,
+	})
+	r.services.URLSubscriptions = r.wsServer.URLSubscriptionService()
 
 	r.publisher = rpc.NewPublisher(r.wsServer.SubscriptionManager())
 	return nil
@@ -989,13 +998,13 @@ func (r *nodeRuntime) bindStreams() error {
 
 func (r *nodeRuntime) bindTransports() error {
 	ctx := r.ctx
-	r.services.SetShutdownFunc(func() {
+	r.services.ShutdownFunc = func() {
 		r.serverLog.Info("Shutdown requested via RPC stop command")
 		select {
 		case r.shutdownCh <- struct{}{}:
 		default:
 		}
-	})
+	}
 
 	if err := context.Cause(ctx); err != nil {
 		return err

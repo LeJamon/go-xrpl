@@ -15,7 +15,7 @@ import (
 func newSpecialDispatchHarness(t *testing.T) (*WebSocketServer, *websocketConnection, *types.RpcContext) {
 	t.Helper()
 	services := &types.ServiceContainer{ClientLoad: types.NewClientLoadShedder()}
-	ws := NewWebSocketServerWithLoadTracker(time.Second, services, loadtrack.New())
+	ws := NewWebSocketServer(WebSocketServerOptions{Timeout: time.Second, Services: services, LoadTracker: loadtrack.New()})
 	ws.methodRegistry.Register("subscribe", &stubHandler{})
 	ws.methodRegistry.Register("path_find", &stubHandler{})
 	send := make(chan []byte, 1)

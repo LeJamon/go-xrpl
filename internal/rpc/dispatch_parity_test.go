@@ -134,7 +134,7 @@ func TestLoadWarningNestedInResultOnHTTP(t *testing.T) {
 // alias for `command`, and an unresolvable command yields a bare missingCommand
 // token that echoes the request and id (ServerHandler.cpp:446-468).
 func TestWSCommandAliasAndMissingCommand(t *testing.T) {
-	ws := NewWebSocketServer(2*time.Second, nil)
+	ws := NewWebSocketServer(WebSocketServerOptions{Timeout: 2 * time.Second})
 	ws.methodRegistry.Register("ping", &stubHandler{})
 
 	httpSrv := httptest.NewServer(http.HandlerFunc(ws.ServeHTTP))

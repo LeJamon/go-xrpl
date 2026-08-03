@@ -52,20 +52,24 @@ type Server struct {
 	loadTracker *loadtrack.Tracker
 }
 
+// ServerOptions controls construction of an HTTP JSON-RPC server.
+// Services may be nil for routing-only tests; constructors never mutate it.
+type ServerOptions struct {
+	Timeout     time.Duration
+	Services    *types.ServiceContainer
+	LoadTracker *loadtrack.Tracker
+	PeerSource  types.PeerSource
+}
+
 var _ types.MethodDispatcher = (*Server)(nil)
 
 // peerSourceHolder is the atomic peer-source slot embedded by both the HTTP
-// and WebSocket servers, exposed through the `peers` RPC. Embedding it gives
-// both the same SetPeerSource / loadPeerSource without duplicating the field
-// and methods on each server.
+// and WebSocket servers, exposed through the `peers` RPC.
 type peerSourceHolder struct {
 	peerSource atomic.Pointer[types.PeerSource]
 }
 
-// SetPeerSource registers the source of per-peer entries served by the
-// `peers` RPC handler. Passing nil detaches the source so the handler
-// returns an empty list. Safe to call concurrently with reads.
-func (h *peerSourceHolder) SetPeerSource(src types.PeerSource) {
+func (h *peerSourceHolder) setPeerSource(src types.PeerSource) {
 	if src == nil {
 		h.peerSource.Store(nil)
 		return
@@ -80,40 +84,25 @@ func (h *peerSourceHolder) loadPeerSource() types.PeerSource {
 	return nil
 }
 
-// NewServer creates a new RPC server with the given timeout and the
-// service container handlers will read through ctx.Services. The
-// container may be nil for test contexts that exercise routing only.
-func NewServer(timeout time.Duration, services *types.ServiceContainer) *Server {
-	return NewServerWithLoadTracker(timeout, services, nil)
-}
-
-// NewServerWithLoadTracker creates a server using tracker for transport-level
-// admission and charging. A nil tracker preserves NewServer's standalone
-// default.
-func NewServerWithLoadTracker(timeout time.Duration, services *types.ServiceContainer, tracker *loadtrack.Tracker) *Server {
+// NewServer creates a new RPC server. The service container is read by
+// handlers through ctx.Services and is never changed by this constructor.
+func NewServer(options ServerOptions) *Server {
+	tracker := options.LoadTracker
 	if tracker == nil {
 		tracker = loadtrack.New()
 	}
 	server := &Server{
 		registry:    types.NewMethodRegistry(),
-		timeout:     timeout,
-		services:    services,
+		timeout:     options.Timeout,
+		services:    options.Services,
 		loadTracker: tracker,
 	}
-
-	if services != nil && services.ClientLoad == nil {
-		services.ClientLoad = types.NewClientLoadShedder()
-	}
+	server.setPeerSource(options.PeerSource)
 
 	server.registerAllMethods()
 
 	return server
 }
-
-// Services returns the service container wired to this server. Used by
-// callers that need to attach the dispatcher (this server itself) or
-// the shutdown hook after construction.
-func (s *Server) Services() *types.ServiceContainer { return s.services }
 
 // JsonRpcResponseOptions contains optional fields for JSON-RPC responses
 // These fields are at the top level, not inside the result object

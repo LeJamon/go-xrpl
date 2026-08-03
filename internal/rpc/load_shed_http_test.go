@@ -12,18 +12,19 @@ import (
 	"github.com/LeJamon/go-xrpl/internal/rpc/types"
 )
 
-func TestNewServerWiresClientLoadShedder(t *testing.T) {
+func TestNewServerLeavesServiceContainerUntouched(t *testing.T) {
 	services := types.NewServiceContainer(nil)
-	_ = NewServer(time.Second, services)
+	_ = NewServer(ServerOptions{Timeout: time.Second, Services: services})
 
-	if services.ClientLoad == nil {
-		t.Fatal("NewServer did not wire services.ClientLoad")
+	if services.ClientLoad != nil {
+		t.Fatal("NewServer mutated services.ClientLoad")
 	}
 }
 
 func TestRpcTooBusyUsesLegacyHTTP200(t *testing.T) {
 	services := types.NewServiceContainer(nil)
-	srv := NewServer(time.Second, services)
+	services.ClientLoad = types.NewClientLoadShedder()
+	srv := NewServer(ServerOptions{Timeout: time.Second, Services: services})
 	srv.registry.Register("book_offers", &handlers.BookOffersMethod{})
 
 	for i := int64(0); i <= types.MaxJobQueueClients; i++ {
@@ -65,7 +66,8 @@ func TestRpcTooBusyUsesLegacyHTTP200(t *testing.T) {
 
 func TestRequestUnderThresholdReturnsHTTP200(t *testing.T) {
 	services := types.NewServiceContainer(nil)
-	srv := NewServer(time.Second, services)
+	services.ClientLoad = types.NewClientLoadShedder()
+	srv := NewServer(ServerOptions{Timeout: time.Second, Services: services})
 	srv.registry.Register("book_offers", &handlers.BookOffersMethod{})
 
 	body := `{"method":"book_offers","params":[{}]}`

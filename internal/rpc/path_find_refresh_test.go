@@ -17,7 +17,7 @@ import (
 
 func newPathFindRefreshTestServer(t *testing.T, count int) (*WebSocketServer, []*websocketConnection) {
 	t.Helper()
-	ws := NewWebSocketServer(time.Second, nil)
+	ws := NewWebSocketServer(WebSocketServerOptions{Timeout: time.Second})
 	manager := ws.ensurePathFindRefreshManager()
 	connections := make([]*websocketConnection, 0, count)
 	ws.connectionsMutex.Lock()
