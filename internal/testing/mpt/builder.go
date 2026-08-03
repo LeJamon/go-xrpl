@@ -508,15 +508,9 @@ func (m *MPTTester) PayFull(src, dest *jtx.Account, amount, sendMax, deliverMin 
 func (m *MPTTester) Claw(issuer, holder *jtx.Account, amount int64, expectedErr ...string) {
 	m.t.Helper()
 
-	// Use stored issuance ID, or compute it from current sequence if not yet created
-	id := m.id
-	if id == "" {
-		id = makeMPTIDHex(m.env.Seq(m.issuer), m.issuer)
-	}
-
 	// MPT clawback carries the issuance ID inside Amount and identifies the
 	// account to claw back from with Holder.
-	mptAmount := state.NewMPTAmountWithIssuanceID(amount, m.issuer.Address, id)
+	mptAmount := m.MPTAmount(amount)
 
 	cb := clawback.NewMPTokenClawback(issuer.Address, holder.Address, mptAmount)
 

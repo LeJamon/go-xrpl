@@ -372,6 +372,22 @@ func TestBatchValidation(t *testing.T) {
 			wantErr: true,
 			errMsg:  "inner transaction cannot be nil",
 		},
+		{
+			name: "invalid - Clawback field outside template",
+			tx: func() *Batch {
+				b := NewBatch(testOuter)
+				b.AddInnerTransaction(&clawbackWithTopLevelMPTID{Clawback: clawback.NewClawback(
+					testOuter,
+					tx.NewIssuedAmount(1, 0, "USD", testSigner1),
+				)})
+				b.AddInnerTransaction(makeTestPayment())
+				flags := BatchFlagAllOrNothing
+				b.Common.Flags = &flags
+				return b
+			}(),
+			wantErr: true,
+			errMsg:  "temINVALID_INNER_BATCH",
+		},
 
 		// Invalid cases - batch signers
 		{
@@ -486,11 +502,11 @@ func TestBatchFlatten(t *testing.T) {
 		b := NewBatch(testOuter)
 		b.AddInnerTransaction(&clawbackWithTopLevelMPTID{Clawback: clawback.NewClawback(
 			testOuter,
-			tx.NewIssuedAmountFromFloat64(1, "USD", testSigner1),
+			tx.NewIssuedAmount(1, 0, "USD", testSigner1),
 		)})
 
 		_, err := b.Flatten()
-		require.EqualError(t, err, "invalid inner transaction 0: Field 'MPTokenIssuanceID' found in disallowed location.")
+		require.EqualError(t, err, "temMALFORMED: invalid inner transaction 0: Field 'MPTokenIssuanceID' found in disallowed location.")
 	})
 }
 

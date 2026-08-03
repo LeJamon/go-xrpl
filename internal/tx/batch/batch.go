@@ -129,6 +129,7 @@ var (
 	ErrBatchInnerSeqAndTicket     = ter.Errorf(ter.TemSEQ_AND_TICKET, "inner transaction must have exactly one of Sequence and TicketSequence")
 	ErrBatchInnerTicketAndTxnID   = ter.Errorf(ter.TemINVALID_INNER_BATCH, "inner transaction must not carry AccountTxnID when using a ticket")
 	ErrBatchInnerDupSeqOrTicket   = ter.Errorf(ter.TemREDUNDANT, "duplicate inner Sequence or TicketSequence for account")
+	ErrBatchInvalidInnerTx        = ter.Errorf(ter.TemINVALID_INNER_BATCH, "inner transaction failed validation")
 	ErrBatchInnerHashUncomputable = ter.Errorf(ter.TemINVALID, "failed to compute inner transaction hash")
 )
 
@@ -227,7 +228,7 @@ func (b *Batch) validateInnerTransactions() (map[string]struct{}, error) {
 		}
 		if inner.TxType() == tx.TypeClawback {
 			if err := tx.ValidateTransactionTemplateAllowlist(inner); err != nil {
-				return nil, ErrBatchInnerHashUncomputable
+				return nil, ErrBatchInvalidInnerTx
 			}
 		}
 
@@ -396,7 +397,7 @@ func (b *Batch) Flatten() (map[string]any, error) {
 		}
 		if rt.RawTransaction.InnerTx.TxType() == tx.TypeClawback {
 			if err := tx.ValidateTransactionTemplateAllowlist(rt.RawTransaction.InnerTx); err != nil {
-				return nil, fmt.Errorf("invalid inner transaction %d: %w", i, err)
+				return nil, ter.Errorf(ter.TemMALFORMED, "invalid inner transaction %d: %v", i, err)
 			}
 		}
 		innerMap, err := rt.RawTransaction.InnerTx.Flatten()
