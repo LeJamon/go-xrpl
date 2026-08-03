@@ -107,4 +107,14 @@ func TestRouter_GetLedger_HashSeqlessGatesOnLtype(t *testing.T) {
 		assert.Equal(t, l.Sequence(), ld.LedgerSeq, "served seq must be the closed ledger's")
 		assert.Equal(t, hash[:], ld.LedgerHash, "served hash must be the closed ledger's")
 	})
+
+	t.Run("explicit empty hash is invalid and does not serve the closed ledger", func(t *testing.T) {
+		_, bd, sent := send(t, &message.GetLedger{
+			InfoType:   message.LedgerInfoBase,
+			LType:      message.LedgerTypeClosed,
+			LedgerHash: []byte{},
+		})
+		require.Equal(t, []badDataCall{{peerID: 11, reason: "get-ledger-invalid-hash"}}, bd)
+		assert.Empty(t, sent)
+	})
 }

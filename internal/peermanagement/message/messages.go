@@ -94,6 +94,10 @@ func (s *StatusChange) HasNetworkTime() bool {
 	return s != nil && (s.NetworkTimeSet || s.NetworkTime != 0)
 }
 
+func (s *StatusChange) HasLedgerHash() bool {
+	return s != nil && s.LedgerHash != nil
+}
+
 // ProposeSet represents a ledger proposal.
 type ProposeSet struct {
 	ProposeSeq          uint32   `json:"propose_seq"`
@@ -131,6 +135,10 @@ type ValidatorBlobInfo struct {
 	Manifest  []byte `json:"manifest,omitempty"`
 	Blob      []byte `json:"blob"`
 	Signature []byte `json:"signature"`
+}
+
+func (v *ValidatorBlobInfo) HasManifest() bool {
+	return v != nil && v.Manifest != nil
 }
 
 // ValidatorListCollection represents a collection of v2 validator lists.
@@ -188,6 +196,10 @@ type GetObjectByHash struct {
 
 func (g *GetObjectByHash) Type() MessageType { return TypeGetObjects }
 
+func (g *GetObjectByHash) HasLedgerHash() bool {
+	return g != nil && g.LedgerHash != nil
+}
+
 // LedgerNode represents a node in the ledger.
 type LedgerNode struct {
 	NodeData []byte `json:"nodedata"`
@@ -214,6 +226,10 @@ func (g *GetLedger) Type() MessageType { return TypeGetLedger }
 
 func (g *GetLedger) HasLType() bool {
 	return g != nil && (g.LTypeSet || g.LType != 0)
+}
+
+func (g *GetLedger) HasLedgerHash() bool {
+	return g != nil && g.LedgerHash != nil
 }
 
 // HasLedgerSeq reports protobuf field presence, including an explicit zero.

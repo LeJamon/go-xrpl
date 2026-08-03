@@ -501,6 +501,84 @@ func TestGetLedgerZeroValuePresence(t *testing.T) {
 	})
 }
 
+func TestOptionalBytesPresence(t *testing.T) {
+	t.Run("get ledger hash", func(t *testing.T) {
+		for _, test := range []struct {
+			name    string
+			hash    []byte
+			present bool
+		}{
+			{name: "absent"},
+			{name: "explicit empty", hash: []byte{}, present: true},
+		} {
+			t.Run(test.name, func(t *testing.T) {
+				wire, err := Encode(&GetLedger{InfoType: LedgerInfoBase, LedgerHash: test.hash})
+				if err != nil {
+					t.Fatal(err)
+				}
+				decoded, err := Decode(TypeGetLedger, wire)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if got := decoded.(*GetLedger).HasLedgerHash(); got != test.present {
+					t.Fatalf("HasLedgerHash = %v, want %v", got, test.present)
+				}
+			})
+		}
+	})
+
+	t.Run("get objects hash", func(t *testing.T) {
+		wire, err := Encode(&GetObjectByHash{LedgerHash: []byte{}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		decoded, err := Decode(TypeGetObjects, wire)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !decoded.(*GetObjectByHash).HasLedgerHash() {
+			t.Fatal("explicit empty ledger hash became absent")
+		}
+	})
+
+	t.Run("status ledger hash", func(t *testing.T) {
+		wire, err := Encode(&StatusChange{LedgerHash: []byte{}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		decoded, err := Decode(TypeStatusChange, wire)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !decoded.(*StatusChange).HasLedgerHash() {
+			t.Fatal("explicit empty ledger hash became absent")
+		}
+	})
+
+	t.Run("validator blob manifest", func(t *testing.T) {
+		wire, err := Encode(&ValidatorListCollection{
+			Version:  2,
+			Manifest: []byte{1},
+			Blobs: []ValidatorBlobInfo{{
+				Manifest:  []byte{},
+				Blob:      []byte{1},
+				Signature: []byte{1},
+			}},
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		decoded, err := Decode(TypeValidatorListCollection, wire)
+		if err != nil {
+			t.Fatal(err)
+		}
+		blobs := decoded.(*ValidatorListCollection).Blobs
+		if len(blobs) != 1 || !blobs[0].HasManifest() {
+			t.Fatalf("explicit empty nested manifest lost: %+v", blobs)
+		}
+	})
+}
+
 func TestLedgerDataRoundtrip(t *testing.T) {
 	original := &LedgerData{
 		LedgerHash: bytes.Repeat([]byte{0xAA}, 32),

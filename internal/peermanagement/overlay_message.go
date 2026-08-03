@@ -509,7 +509,7 @@ func (o *Overlay) handleStatusChange(evt Event) {
 		// clears that storage and the all-zeros 64-char hex string is
 		// emitted.
 		var ledgerHash string
-		if len(sc.LedgerHash) > 0 {
+		if sc.HasLedgerHash() {
 			if h, ok := peer.ClosedLedger(); ok {
 				ledgerHash = strings.ToUpper(hex.EncodeToString(h[:]))
 			} else {

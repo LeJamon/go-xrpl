@@ -1,6 +1,7 @@
 package peermanagement
 
 import (
+	"strings"
 	"testing"
 	"time"
 
@@ -274,6 +275,19 @@ func TestOverlay_handleStatusChange_LedgerHashZerosOnMalformedWire(t *testing.T)
 		"0000000000000000000000000000000000000000000000000000000000000000",
 		got.LedgerHash,
 		"PeerImp.cpp:1948 emits hex of the cleared closedLedgerHash_, not the wire bytes")
+}
+
+func TestOverlay_handleStatusChange_ExplicitEmptyLedgerHashIsPublished(t *testing.T) {
+	peer := newTestPeer(t, 7)
+	o := newTestOverlayWithPeers(map[PeerID]*Peer{7: peer})
+	var got PeerStatusUpdate
+	o.SetPeerStatusPublisher(func(update PeerStatusUpdate) { got = update })
+
+	payload, err := message.Encode(&message.StatusChange{LedgerHash: []byte{}})
+	require.NoError(t, err)
+	o.handleStatusChange(Event{PeerID: 7, Payload: payload})
+
+	assert.Equal(t, strings.Repeat("0", 64), got.LedgerHash)
 }
 
 // TestOverlay_handleStatusChange_AutoFillsDate covers

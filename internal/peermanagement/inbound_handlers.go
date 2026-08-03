@@ -297,7 +297,7 @@ func (o *Overlay) handleGetObjectsMessage(evt Event) {
 		// Generic node-store object fetch by hash. Mirrors rippled's
 		// fetchNodeObject loop at PeerImp.cpp:2483-2538. Offloaded to the
 		// serve-worker pool — up to N node-store fetches per request.
-		if len(gob.LedgerHash) != 0 && len(gob.LedgerHash) != 32 {
+		if gob.HasLedgerHash() && len(gob.LedgerHash) != 32 {
 			o.IncPeerBadData(evt.PeerID, "get-objects-ledgerhash")
 			return
 		}

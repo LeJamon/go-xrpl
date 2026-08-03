@@ -45,12 +45,12 @@ func (r *Router) handleGetLedger(msg *peermanagement.InboundMessage) {
 		r.serve.IncPeerBadData(uint64(msg.PeerID), "get-ledger-invalid-itype")
 		return
 	}
-	if req.InfoType == message.LedgerInfoTsCandidate && len(req.LedgerHash) == 0 {
+	if req.InfoType == message.LedgerInfoTsCandidate && !req.HasLedgerHash() {
 		r.serve.IncPeerBadData(uint64(msg.PeerID), "get-ledger-missing-txset-hash")
 		return
 	}
 	if req.InfoType != message.LedgerInfoTsCandidate &&
-		len(req.LedgerHash) == 0 && !req.HasLedgerSeq() &&
+		!req.HasLedgerHash() && !req.HasLedgerSeq() &&
 		(!req.HasLType() || req.LType != message.LedgerTypeClosed) {
 		r.serve.IncPeerBadData(uint64(msg.PeerID), "get-ledger-invalid-request")
 		return
@@ -59,7 +59,7 @@ func (r *Router) handleGetLedger(msg *peermanagement.InboundMessage) {
 		r.serve.IncPeerBadData(uint64(msg.PeerID), "get-ledger-invalid-ltype")
 		return
 	}
-	if len(req.LedgerHash) != 0 && len(req.LedgerHash) != 32 {
+	if req.HasLedgerHash() && len(req.LedgerHash) != 32 {
 		r.serve.IncPeerBadData(uint64(msg.PeerID), "get-ledger-invalid-hash")
 		return
 	}
@@ -133,7 +133,7 @@ func (r *Router) handleGetLedger(msg *peermanagement.InboundMessage) {
 	}
 
 	var l *ledger.Ledger
-	if len(req.LedgerHash) == 32 {
+	if req.HasLedgerHash() {
 		var hash [32]byte
 		copy(hash[:], req.LedgerHash)
 		l, err = svc.GetLedgerByHash(hash)
