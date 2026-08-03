@@ -86,7 +86,7 @@ func (o *Overlay) connectReserved(addr string, bootstrapLease *bootstrapLease) e
 	peer.SetConsensusControlEvents(o.consensusControlEvents)
 	peer.SetAcquisitionEvents(o.acquisitionEvents)
 	peer.SetManifestMessages(o.manifestMessages)
-	peer.SetManifestReadBudget(o.manifestReadBudget)
+	peer.SetInboundReadBudget(o.inboundReadBudget)
 	peer.SetManifestSpoolDir(o.manifestSpoolDir)
 	peer.handshakeCfg = o.handshakeConfigFor()
 	peer.onRedirect = func(peerIPs []string) {

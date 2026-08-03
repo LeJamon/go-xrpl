@@ -214,7 +214,7 @@ func TestPeerManifestReadBudgetBoundsPayloadAllocation(t *testing.T) {
 	first := newLatencyTestPeer(t)
 	first.bufReader = bufio.NewReader(bytes.NewReader(frame))
 	first.SetManifestMessages(firstQueue)
-	first.SetManifestReadBudget(budget)
+	first.SetInboundReadBudget(budget)
 	firstDone := make(chan error, 1)
 	go func() { firstDone <- first.readLoop(context.Background()) }()
 	require.Eventually(t, func() bool {
@@ -228,7 +228,7 @@ func TestPeerManifestReadBudgetBoundsPayloadAllocation(t *testing.T) {
 	second := newLatencyTestPeer(t)
 	second.bufReader = bufio.NewReader(secondReader)
 	second.SetManifestMessages(secondQueue)
-	second.SetManifestReadBudget(budget)
+	second.SetInboundReadBudget(budget)
 	secondDone := make(chan error, 1)
 	go func() { secondDone <- second.readLoop(context.Background()) }()
 
@@ -236,9 +236,14 @@ func TestPeerManifestReadBudgetBoundsPayloadAllocation(t *testing.T) {
 	time.Sleep(25 * time.Millisecond)
 	require.Less(t, secondReader.read.Load(), int64(len(frame)))
 
-	<-firstQueue
+	queued := <-firstQueue
+	require.NoError(t, queued.Close())
+	firstInbound := <-firstQueue
+	require.NoError(t, firstInbound.Close())
 	require.Eventually(t, func() bool { return secondReader.read.Load() == int64(len(frame)) }, time.Second, time.Millisecond)
-	require.Equal(t, payload, (<-secondQueue).Payload)
+	secondInbound := <-secondQueue
+	require.Equal(t, payload, secondInbound.Payload)
+	require.NoError(t, secondInbound.Close())
 	require.ErrorIs(t, <-firstDone, io.EOF)
 	require.ErrorIs(t, <-secondDone, io.EOF)
 }

@@ -27,10 +27,20 @@ import (
 // load. Mirrors rippled bounding these behind its job queue rather than
 // the read strand.
 const (
-	serveWorkerCount        = 4
-	serveQueueDepth         = 64
-	manifestReadBudgetBytes = int64(2 * message.MaxMessageSize)
+	serveWorkerCount = 4
+	serveQueueDepth  = 64
 )
+
+type overlayServeJob struct {
+	run     func()
+	discard func()
+}
+
+func (j overlayServeJob) drop() {
+	if j.discard != nil {
+		j.discard()
+	}
+}
 
 // Overlay is the central orchestrator for XRPL peer-to-peer networking.
 // It manages peer connections, discovery, message routing, and the reduce-relay system.
@@ -137,9 +147,9 @@ type Overlay struct {
 	// manifestMessages is fed directly by peer read loops with bounded
 	// backpressure. Signature verification is intentionally isolated from both
 	// the overlay event loop and the consensus router.
-	manifestMessages   chan *InboundMessage
-	manifestReadBudget *readBudget
-	manifestSpoolDir   string
+	manifestMessages  chan *InboundMessage
+	inboundReadBudget *readBudget
+	manifestSpoolDir  string
 
 	// ledgerData carries acquisition replies (mtLEDGER_DATA, by-hash objects,
 	// and replay/proof-path responses) on a bounded backpressure path. This
@@ -154,7 +164,7 @@ type Overlay struct {
 	// preserves the synchronous behaviour unit tests rely on). Mirrors
 	// rippled offloading these to its job queue (jtPACK et al.) rather than
 	// running them on the peer read strand.
-	serveJobs chan func()
+	serveJobs chan overlayServeJob
 
 	// Peer lifecycle callbacks wired by higher layers (e.g., consensus
 	// router) that need to clean up per-peer state on disconnect. Fired
@@ -866,7 +876,7 @@ func New(opts ...Option) (*Overlay, error) {
 		messages:                 make(chan *InboundMessage, messageBufferSize(cfg.MessageBufferSize)),
 		txMessages:               make(chan *InboundMessage, txLaneBufferSize(cfg.MaxTransactions)),
 		manifestMessages:         make(chan *InboundMessage, manifestMessageBufferSize(cfg.MaxPeers)),
-		manifestReadBudget:       newReadBudget(manifestReadBudgetBytes),
+		inboundReadBudget:        newReadBudget(cfg.InboundRetainedBytes),
 		manifestSpoolDir:         manifestSpoolDir,
 		ledgerData:               make(chan *InboundMessage, DefaultLedgerDataBufferSize),
 		lifecycle:                make(chan Event, lifecycleBufferSize(&cfg)),
@@ -1067,7 +1077,7 @@ func (o *Overlay) Run(ctx context.Context) error {
 	// inbound serve work (handleGetObjectsMessage) runs off the loop. The
 	// channel is assigned before eventLoop is launched (happens-before the
 	// only reader, submitServe, which runs on the loop).
-	o.serveJobs = make(chan func(), serveQueueDepth)
+	o.serveJobs = make(chan overlayServeJob, serveQueueDepth)
 	for range serveWorkerCount {
 		g.Go(func() error { return o.serveWorker(gCtx) })
 	}
@@ -1094,7 +1104,9 @@ func (o *Overlay) Run(ctx context.Context) error {
 	// Maintenance loop (cleanup, ping, etc.).
 	g.Go(func() error { return o.maintenanceLoop(gCtx) })
 
-	return g.Wait()
+	err := g.Wait()
+	o.releaseQueuedInbound()
+	return err
 }
 
 // Stop gracefully shuts down the overlay. It is safe before Run, while Run is
@@ -1186,6 +1198,7 @@ func (o *Overlay) shutdown() {
 		if runComplete != nil {
 			<-runComplete
 		}
+		o.releaseQueuedInbound()
 
 		if o.discovery != nil {
 			o.discovery.Stop()
@@ -1200,6 +1213,41 @@ func (o *Overlay) shutdown() {
 		close(done)
 	})
 	<-done
+}
+
+func (o *Overlay) releaseQueuedInbound() {
+	drainEvents := func(events <-chan Event) {
+		for {
+			select {
+			case evt := <-events:
+				evt.release()
+			default:
+				return
+			}
+		}
+	}
+	drainMessages := func(messages <-chan *InboundMessage) {
+		for {
+			select {
+			case msg := <-messages:
+				_ = msg.Close()
+			default:
+				return
+			}
+		}
+	}
+
+	drainEvents(o.events)
+	drainEvents(o.consensusEvents)
+	drainEvents(o.consensusControlEvents)
+	drainEvents(o.acquisitionEvents)
+	drainMessages(o.consensusMessages)
+	drainMessages(o.consensusControlMessages)
+	drainMessages(o.messages)
+	drainMessages(o.txMessages)
+	drainMessages(o.manifestMessages)
+	drainMessages(o.ledgerData)
+	o.discardServeJobs()
 }
 
 // eventLoop processes internal events. It drains both the dedicated
@@ -1259,28 +1307,44 @@ func (o *Overlay) serveWorker(ctx context.Context) error {
 	for {
 		select {
 		case <-ctx.Done():
+			o.discardServeJobs()
 			return ctx.Err()
 		case job := <-o.serveJobs:
-			job()
+			job.run()
 		}
 	}
 }
 
-// submitServe hands a heavy serve job to the worker pool. When the overlay
-// was built without Run (no pool — most unit tests), it runs the job
-// inline to preserve synchronous behaviour. On a saturated queue it sheds
-// the job and bumps droppedServeJobs: the requesting peer's query goes
-// unanswered and it retries elsewhere.
-func (o *Overlay) submitServe(job func()) {
+func (o *Overlay) submitServeJob(job overlayServeJob) bool {
 	if o.serveJobs == nil {
-		job()
-		return
+		job.run()
+		return true
+	}
+	select {
+	case <-o.runDone:
+		job.drop()
+		return false
+	default:
 	}
 	select {
 	case o.serveJobs <- job:
+		return true
 	default:
+		job.drop()
 		o.droppedServeJobs.Add(1)
 		slog.Debug("serve job dropped: worker pool saturated", "t", "Overlay")
+		return false
+	}
+}
+
+func (o *Overlay) discardServeJobs() {
+	for {
+		select {
+		case job := <-o.serveJobs:
+			job.drop()
+		default:
+			return
+		}
 	}
 }
 

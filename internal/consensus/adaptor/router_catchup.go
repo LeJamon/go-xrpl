@@ -2071,38 +2071,38 @@ func (r *Router) ourLCLMatchesPeers() bool {
 	return matching > total/2
 }
 
-func (r *Router) handleLedgerData(msg *peermanagement.InboundMessage) {
+func (r *Router) handleLedgerData(msg *peermanagement.InboundMessage) bool {
 	decoded, err := message.Decode(message.TypeLedgerData, msg.Payload)
 	if err != nil {
 		r.logger.Warn("failed to decode ledger_data", "error", err, "peer", msg.PeerID)
 		r.acquisition.IncPeerBadData(uint64(msg.PeerID), "ledger-data-decode")
-		return
+		return false
 	}
 	ld, ok := decoded.(*message.LedgerData)
 	if !ok {
-		return
+		return false
 	}
 	if len(ld.LedgerHash) != 32 {
 		r.logger.Warn("invalid ledger_data ledger hash", "peer", msg.PeerID, "length", len(ld.LedgerHash))
 		r.acquisition.IncPeerBadData(uint64(msg.PeerID), "ledger-data-hash")
-		return
+		return false
 	}
 	if ld.InfoType < message.LedgerInfoBase || ld.InfoType > message.LedgerInfoTsCandidate {
 		r.logger.Warn("invalid ledger_data info type", "peer", msg.PeerID, "info_type", ld.InfoType)
 		r.acquisition.IncPeerBadData(uint64(msg.PeerID), "ledger-data-type")
-		return
+		return false
 	}
 	if (ld.InfoType == message.LedgerInfoTsCandidate && ld.LedgerSeq != 0) ||
 		(ld.InfoType != message.LedgerInfoTsCandidate && r.invalidFutureLedgerSequence(ld.LedgerSeq)) {
 		r.logger.Warn("invalid ledger_data ledger sequence", "peer", msg.PeerID, "seq", ld.LedgerSeq)
 		r.acquisition.IncPeerBadData(uint64(msg.PeerID), "ledger-data-sequence")
-		return
+		return false
 	}
 	if ld.Error != message.ReplyErrorNone &&
 		(ld.Error < message.ReplyErrorNoLedger || ld.Error > message.ReplyErrorBadRequest) {
 		r.logger.Warn("invalid ledger_data reply error", "peer", msg.PeerID, "error", ld.Error)
 		r.acquisition.IncPeerBadData(uint64(msg.PeerID), "ledger-data-error")
-		return
+		return false
 	}
 	if ld.Error != message.ReplyErrorNone {
 		r.logger.Warn("inbound ledger: peer returned reply error",
@@ -2123,17 +2123,17 @@ func (r *Router) handleLedgerData(msg *peermanagement.InboundMessage) {
 			"nodes", len(ld.Nodes),
 		)
 		r.acquisition.IncPeerBadData(uint64(msg.PeerID), "ledger-data-count")
-		return
+		return false
 	}
 	if ld.InfoType == message.LedgerInfoAsNode || ld.InfoType == message.LedgerInfoTxNode {
 		for _, node := range ld.Nodes {
 			if len(node.NodeData) == 0 {
 				r.acquisition.IncPeerBadData(uint64(msg.PeerID), "ledger-data-node")
-				return
+				return false
 			}
 			if _, err := shamap.ParseNodeID(node.NodeID); err != nil {
 				r.acquisition.IncPeerBadData(uint64(msg.PeerID), "ledger-data-node")
-				return
+				return false
 			}
 		}
 	}
@@ -2144,7 +2144,7 @@ func (r *Router) handleLedgerData(msg *peermanagement.InboundMessage) {
 	// onMessage(TMLedgerData).
 	if ld.HasRequestCookie() {
 		r.routeRelayedLedgerData(ld, msg.PeerID)
-		return
+		return false
 	}
 
 	var il *inbound.Ledger
@@ -2166,17 +2166,18 @@ func (r *Router) handleLedgerData(msg *peermanagement.InboundMessage) {
 	// (consensus-time only).
 	if ld.InfoType == message.LedgerInfoTsCandidate {
 		r.handleTxSetData(ld, uint64(msg.PeerID))
-		return
+		return false
 	}
 
 	if il != nil {
-		if r.handleInboundLedgerData(il, ld, uint64(msg.PeerID)) {
-			return
+		if consumed, transferred := r.handleInboundLedgerDataOwned(il, ld, uint64(msg.PeerID), msg); consumed {
+			return transferred
 		}
 	}
 	if il == nil && ld.InfoType == message.LedgerInfoAsNode {
 		r.cacheStaleStateNodes(ld)
 	}
+	return false
 }
 
 func (r *Router) cacheStaleStateNodes(ld *message.LedgerData) {
@@ -2197,20 +2198,30 @@ func (r *Router) cacheStaleStateNodes(ld *message.LedgerData) {
 // acquisition (already matched by hash in handleLedgerData). Returns true if
 // the data was consumed by the acquisition.
 func (r *Router) handleInboundLedgerData(il *inbound.Ledger, ld *message.LedgerData, peerID uint64) bool {
+	consumed, _ := r.handleInboundLedgerDataOwned(il, ld, peerID, nil)
+	return consumed
+}
+
+func (r *Router) handleInboundLedgerDataOwned(
+	il *inbound.Ledger,
+	ld *message.LedgerData,
+	peerID uint64,
+	owner *peermanagement.InboundMessage,
+) (bool, bool) {
 	if il == nil {
-		return false
+		return false, false
 	}
 	if lane := r.currentAcquisitionWork(); lane != nil {
 		switch ld.InfoType {
 		case message.LedgerInfoBase, message.LedgerInfoAsNode, message.LedgerInfoTxNode:
 			if lane.submit(il, acquisitionWorkEvent{
-				kind: acquisitionWorkData, data: ld, peerID: peerID,
+				kind: acquisitionWorkData, data: ld, owner: owner, peerID: peerID,
 			}) {
-				return true
+				return true, owner != nil
 			}
 			r.logger.Warn("inbound ledger reply deferred: acquisition worker saturated",
 				"peer", peerID, "seq", il.Seq(), "info_type", ld.InfoType)
-			return true
+			return true, false
 		}
 	}
 
@@ -2221,7 +2232,7 @@ func (r *Router) handleInboundLedgerData(il *inbound.Ledger, ld *message.LedgerD
 			if r.fetchTracker.RemoveExpectedWithSnapshot(il, il.Snapshot(), false) {
 				r.retireAcquisitionStore(r.lifecycleContext(), il)
 			}
-			return true
+			return true, false
 		}
 		if err := il.GotBase(ld.Nodes); err != nil {
 			r.logger.Warn("inbound ledger: GotBase failed", "error", err)
@@ -2233,18 +2244,18 @@ func (r *Router) handleInboundLedgerData(il *inbound.Ledger, ld *message.LedgerD
 					r.retireAcquisitionStore(r.lifecycleContext(), il)
 				}
 			}
-			return true
+			return true, false
 		}
 
 		if il.IsComplete() {
 			r.completeInboundLedger(il)
-			return true
+			return true, false
 		}
 
 		// Re-request the missing state and transaction nodes from the peer
 		// that answered, mirroring rippled trigger(peer) on a reply.
 		r.requestMissingAcquisitionNodes(il, peerID)
-		return true
+		return true, false
 
 	case message.LedgerInfoAsNode:
 		il.ReleaseMissingPeer(peerID)
@@ -2252,18 +2263,18 @@ func (r *Router) handleInboundLedgerData(il *inbound.Ledger, ld *message.LedgerD
 		if err != nil {
 			r.logger.Warn("inbound ledger: GotStateNodes failed", "error", err)
 			r.acquisition.IncPeerBadData(peerID, "ledger-data-state")
-			return true
+			return true, false
 		}
 
 		if il.IsComplete() {
 			r.completeInboundLedger(il)
-			return true
+			return true, false
 		}
 
 		if useful > 0 {
 			r.requestMissingAcquisitionNodes(il, peerID)
 		}
-		return true
+		return true, false
 
 	case message.LedgerInfoTxNode:
 		il.ReleaseMissingPeer(peerID)
@@ -2271,21 +2282,21 @@ func (r *Router) handleInboundLedgerData(il *inbound.Ledger, ld *message.LedgerD
 		if err != nil {
 			r.logger.Warn("inbound ledger: GotTransactionNodes failed", "error", err)
 			r.acquisition.IncPeerBadData(peerID, "ledger-data-tx")
-			return true
+			return true, false
 		}
 
 		if il.IsComplete() {
 			r.completeInboundLedger(il)
-			return true
+			return true, false
 		}
 
 		if useful > 0 {
 			r.requestMissingAcquisitionNodes(il, peerID)
 		}
-		return true
+		return true, false
 	}
 
-	return false
+	return false, false
 }
 
 // requestMissingAcquisitionNodes asks for the acquisition's outstanding nodes,

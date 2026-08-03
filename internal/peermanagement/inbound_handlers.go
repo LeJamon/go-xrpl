@@ -204,7 +204,7 @@ func (o *Overlay) handleGetObjectsMessage(evt Event) {
 			// to the serve-worker pool — building a pack snapshots the
 			// state+tx tree (capped at fetchPackMaxObjects nodes) and
 			// must not run on the event loop.
-			o.submitServe(func() { o.serveFetchPack(evt.PeerID, gob) })
+			o.submitRetainedServe(evt, func() { o.serveFetchPack(evt.PeerID, gob) })
 			return
 		case message.ObjectTypeTransactions:
 			// Tx-reduce-relay back-fill request. Rippled gates on
@@ -220,14 +220,14 @@ func (o *Overlay) handleGetObjectsMessage(evt Event) {
 				o.IncPeerBadData(evt.PeerID, "get-objects-txn-unnegotiated")
 				return
 			}
-			o.submitServe(func() { o.serveDoTransactions(evt.PeerID, gob) })
+			o.submitRetainedServe(evt, func() { o.serveDoTransactions(evt.PeerID, gob) })
 			return
 		}
 
 		// Generic node-store object fetch by hash. Mirrors rippled's
 		// fetchNodeObject loop at PeerImp.cpp:2483-2538. Offloaded to the
 		// serve-worker pool — up to N node-store fetches per request.
-		o.submitServe(func() { o.serveGetObjects(evt.PeerID, gob) })
+		o.submitRetainedServe(evt, func() { o.serveGetObjects(evt.PeerID, gob) })
 		return
 	}
 
@@ -241,15 +241,22 @@ func (o *Overlay) handleGetObjectsMessage(evt Event) {
 	// are dropped.
 	switch gob.ObjType {
 	case message.ObjectTypeFetchPack, message.ObjectTypeStateNode, message.ObjectTypeTransactionNode:
-		o.forwardLedgerData(&InboundMessage{
-			PeerID:  evt.PeerID,
-			Type:    evt.MessageType,
-			Payload: evt.Payload,
-		})
+		o.forwardLedgerData(evt.retainedInboundMessage())
 		return
 	}
 	slog.Debug("TMGetObjects reply received without outstanding request; dropping",
 		"t", "Overlay", "peer", evt.PeerID)
+}
+
+func (o *Overlay) submitRetainedServe(evt Event, job func()) {
+	reservation := evt.reservation.retain()
+	o.submitServeJob(overlayServeJob{
+		run: func() {
+			defer reservation.release()
+			job()
+		},
+		discard: reservation.release,
+	})
 }
 
 // serveFetchPack answers an inbound mtGET_OBJECTS{otFETCH_PACK, query=true}.
@@ -789,10 +796,10 @@ func (o *Overlay) handleTransactionsBatchMessage(evt Event) {
 	// is shared with the wire path, so batch frames are subject to the
 	// same MaxTransactions ceiling and jq_trans_overflow accounting.
 	for i := range batch.Transactions {
-		o.forwardTransaction(&InboundMessage{
-			PeerID: evt.PeerID,
-			Type:   uint16(message.TypeTransaction),
-			Tx:     &batch.Transactions[i],
-		})
+		inbound := evt.retainedInboundMessage()
+		inbound.Type = uint16(message.TypeTransaction)
+		inbound.Payload = nil
+		inbound.Tx = &batch.Transactions[i]
+		o.forwardTransaction(inbound)
 	}
 }

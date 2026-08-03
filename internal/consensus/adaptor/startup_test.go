@@ -70,6 +70,18 @@ func TestOverlayOptionsFromConfig_UnsetDomainAndIPEmitNoOption(t *testing.T) {
 	assert.Nil(t, cfg.PublicIP)
 }
 
+func TestOverlayOptionsFromConfig_InboundRetainedBytes(t *testing.T) {
+	const budget = 4 * 64 * 1024 * 1024
+	cfg := peermanagement.DefaultConfig()
+	for _, opt := range OverlayOptionsFromConfig(&config.Config{
+		Overlay: config.OverlayConfig{InboundRetainedBytes: budget},
+	}) {
+		opt(&cfg)
+	}
+
+	assert.EqualValues(t, budget, cfg.InboundRetainedBytes)
+}
+
 func TestOverlayOptionsFromConfig_BootstrapPrecedence(t *testing.T) {
 	tests := []struct {
 		name          string
