@@ -47,9 +47,9 @@ type pathFindRefreshManager struct {
 	generation uint64
 	fairCursor int
 	pending    *pathFindRefreshUpdate
-	jobs       map[*WebSocketConnection]pathFindRefreshJob
-	ready      []*WebSocketConnection
-	running    map[*WebSocketConnection]pathFindRefreshJob
+	jobs       map[*websocketConnection]pathFindRefreshJob
+	ready      []*websocketConnection
+	running    map[*websocketConnection]pathFindRefreshJob
 
 	stop       chan struct{}
 	updateWake chan struct{}
@@ -64,8 +64,8 @@ type pathFindRefreshManager struct {
 func newPathFindRefreshManager(ws *WebSocketServer) *pathFindRefreshManager {
 	return &pathFindRefreshManager{
 		ws:         ws,
-		jobs:       make(map[*WebSocketConnection]pathFindRefreshJob),
-		running:    make(map[*WebSocketConnection]pathFindRefreshJob),
+		jobs:       make(map[*websocketConnection]pathFindRefreshJob),
+		running:    make(map[*websocketConnection]pathFindRefreshJob),
 		stop:       make(chan struct{}),
 		updateWake: make(chan struct{}, 1),
 		workWake:   make(chan struct{}, pathFindRefreshWorkerCount),
@@ -126,7 +126,7 @@ func (m *pathFindRefreshManager) enqueue(getView func() (types.LedgerStateView, 
 	}
 	// A newer generation makes all queued work obsolete. In-flight work is
 	// checked against generation before and after pathfinding.
-	m.jobs = make(map[*WebSocketConnection]pathFindRefreshJob)
+	m.jobs = make(map[*websocketConnection]pathFindRefreshJob)
 	m.ready = m.ready[:0]
 	m.mu.Unlock()
 	m.signal(m.updateWake)
@@ -154,7 +154,7 @@ func (m *pathFindRefreshManager) invalidate() {
 	if !m.closed {
 		m.generation++
 		m.pending = nil
-		m.jobs = make(map[*WebSocketConnection]pathFindRefreshJob)
+		m.jobs = make(map[*websocketConnection]pathFindRefreshJob)
 		m.ready = m.ready[:0]
 	}
 	m.mu.Unlock()
@@ -325,11 +325,11 @@ func (m *pathFindRefreshManager) commit(job pathFindRefreshJob, status *PathFind
 	connection := job.target.connection
 	connection.mutex.Lock()
 	defer connection.mutex.Unlock()
-	if connection.pathFindSession != job.target.session || connection.pathFindGeneration != job.target.generation || connection.legacy == nil {
+	if connection.pathFindSession != job.target.session || connection.pathFindGeneration != job.target.generation || connection.Connection == nil {
 		return
 	}
 	job.target.session.commitBuiltEvent(status)
-	job.target.connection.legacy.TrySend(data)
+	job.target.connection.TrySend(data)
 }
 
 func (m *pathFindRefreshManager) waitForPathfindAdmission(job pathFindRefreshJob) (func(), bool) {
@@ -373,7 +373,7 @@ func (m *pathFindRefreshManager) jobCurrent(job pathFindRefreshJob) bool {
 	return m.generationCurrent(job.generation) && job.target.current()
 }
 
-func (m *pathFindRefreshManager) cancel(connection *WebSocketConnection, session *PathFindSession, generation uint64) {
+func (m *pathFindRefreshManager) cancel(connection *websocketConnection, session *PathFindSession, generation uint64) {
 	m.mu.Lock()
 	if job, ok := m.jobs[connection]; ok && job.target.session == session && job.target.generation == generation {
 		delete(m.jobs, connection)
@@ -393,7 +393,7 @@ func (m *pathFindRefreshManager) shutdown() {
 		m.mu.Lock()
 		m.closed = true
 		m.pending = nil
-		m.jobs = make(map[*WebSocketConnection]pathFindRefreshJob)
+		m.jobs = make(map[*websocketConnection]pathFindRefreshJob)
 		m.ready = nil
 		started := m.started
 		m.mu.Unlock()

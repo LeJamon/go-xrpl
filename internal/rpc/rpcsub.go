@@ -268,14 +268,9 @@ func (r *URLSubscriptionRegistry) findOrCreateLocked(request types.SubscriptionR
 		metrics:   metrics,
 		username:  username,
 		password:  password,
-		conn: &types.Connection{
-			ID:            "rpcsub:" + key,
-			Subscriptions: make(map[types.SubscriptionType]types.SubscriptionConfig),
-			SendChannel:   make(chan []byte, rpcSubQueueLimit),
-			CloseChannel:  make(chan struct{}),
-		},
-		done:     make(chan struct{}),
-		finished: make(chan struct{}),
+		conn:      types.NewConnection("rpcsub:"+key, make(chan []byte, rpcSubQueueLimit)),
+		done:      make(chan struct{}),
+		finished:  make(chan struct{}),
 	}
 	sub.conn.EncodeOutbound = sub.encodeOutbound
 	sub.conn.SendObserver = func(queued bool) {
@@ -520,7 +515,7 @@ func (s *rpcSub) run() {
 		default:
 		}
 		select {
-		case data := <-s.conn.SendChannel:
+		case data := <-s.conn.Outbound():
 			s.deliver(data)
 		case <-s.done:
 			return

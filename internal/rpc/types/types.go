@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
+	"sync"
 	"sync/atomic"
 
 	addresscodec "github.com/LeJamon/go-xrpl/codec/addresscodec"
@@ -533,7 +534,9 @@ type Connection struct {
 	ID            string
 	Subscriptions map[SubscriptionType]SubscriptionConfig
 	SendChannel   chan []byte
-	CloseChannel  chan struct{}
+	ctx           context.Context
+	cancel        context.CancelFunc
+	cancelOnce    sync.Once
 	// Disconnect is invoked when MaxConsecutiveDrops is reached. The
 	// WS layer populates this with its per-conn cancel func so a
 	// persistently slow client gets torn down once, in one place.
@@ -554,6 +557,63 @@ type Connection struct {
 	// on every successful TrySend.
 	consecutiveDrops atomic.Int32
 	apiVersion       atomic.Int32
+}
+
+// NewConnection creates a subscription connection with a bounded outbound
+// queue and an independent cancellation context.
+func NewConnection(id string, sendChannel chan []byte) *Connection {
+	return NewConnectionWithContext(context.Background(), id, sendChannel)
+}
+
+// NewConnectionWithContext creates a subscription connection whose lifetime
+// is derived from parent.
+func NewConnectionWithContext(parent context.Context, id string, sendChannel chan []byte) *Connection {
+	if parent == nil {
+		parent = context.Background()
+	}
+	ctx, cancel := context.WithCancel(parent) //nolint:gosec // stored on Connection and invoked by Cancel
+	return &Connection{
+		ID:            id,
+		Subscriptions: make(map[SubscriptionType]SubscriptionConfig),
+		SendChannel:   sendChannel,
+		ctx:           ctx,
+		cancel:        cancel,
+	}
+}
+
+// Context returns the connection lifetime context. Connections built as
+// struct literals retain a non-cancellable background context for backwards
+// compatibility with in-package test fixtures.
+func (c *Connection) Context() context.Context {
+	if c == nil || c.ctx == nil {
+		return context.Background()
+	}
+	return c.ctx
+}
+
+// Done returns the channel closed when the connection is cancelled.
+func (c *Connection) Done() <-chan struct{} {
+	return c.Context().Done()
+}
+
+// Cancel ends the connection lifetime exactly once.
+func (c *Connection) Cancel() {
+	if c == nil {
+		return
+	}
+	c.cancelOnce.Do(func() {
+		if c.cancel != nil {
+			c.cancel()
+		}
+	})
+}
+
+// Outbound returns the bounded outbound queue consumed by the transport.
+func (c *Connection) Outbound() <-chan []byte {
+	if c == nil {
+		return nil
+	}
+	return c.SendChannel
 }
 
 // SetAPIVersion updates the representation used for subsequent subscription
@@ -585,10 +645,17 @@ func (c *Connection) TrySend(data []byte) bool {
 	if c == nil || c.SendChannel == nil {
 		return false
 	}
+	select {
+	case <-c.Done():
+		return false
+	default:
+	}
 	if c.EncodeOutbound != nil {
 		data = c.EncodeOutbound(data)
 	}
 	select {
+	case <-c.Done():
+		return false
 	case c.SendChannel <- data:
 		c.consecutiveDrops.Store(0)
 		if c.SendObserver != nil {

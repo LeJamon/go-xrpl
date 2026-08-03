@@ -56,7 +56,7 @@ type WebSocketServer struct {
 	upgrader            websocket.Upgrader
 	subscriptionManager *subscription.Manager
 	methodRegistry      *types.MethodRegistry
-	connections         map[string]*WebSocketConnection
+	connections         map[string]*websocketConnection
 	connectionsMutex    sync.RWMutex
 	closing             bool
 	timeout             time.Duration
@@ -79,16 +79,13 @@ type WebSocketServer struct {
 	forceDone chan struct{}
 }
 
-// WebSocketConnection represents a single WebSocket connection
-type WebSocketConnection struct {
-	ID                 string
+// websocketConnection owns the transport-specific state for one logical
+// client. Subscription and lifetime state lives in the embedded canonical
+// connection shared with the subscription manager.
+type websocketConnection struct {
+	*types.Connection
 	conn               *websocket.Conn
-	subscriptions      map[types.SubscriptionType]types.SubscriptionConfig
-	sendChannel        chan []byte
-	closeChannel       chan struct{}
 	mutex              sync.RWMutex
-	ctx                context.Context
-	cancel             context.CancelFunc
 	pathFindSession    *PathFindSession // At most one active path_find session per connection
 	pathFindGeneration uint64
 	pathFindRefresh    *pathFindRefreshManager
@@ -103,14 +100,7 @@ type WebSocketConnection struct {
 	// SecureGatewayNets allowlist. Mirrors rippled's
 	// WSInfoSub::forwarded_for (ServerHandler.cpp:497-501, :580).
 	forwardedFor string
-	// legacy is the same logical connection viewed through the
-	// subscription-manager data model. Created at AddConnection and
-	// torn down at closeConnection — kept on the WS struct so the
-	// two-map invariant (subscription.Manager.Connections and
-	// WebSocketServer.connections always identify the same set) is
-	// enforced by a single attach/detach helper rather than
-	// independent map operations.
-	legacy *types.Connection
+	closeOnce    sync.Once
 }
 
 // NewWebSocketServer creates a new WebSocket server. The provided
@@ -140,7 +130,7 @@ func NewWebSocketServerWithLoadTracker(timeout time.Duration, services *types.Se
 		},
 		subscriptionManager: subscription.NewManager(),
 		methodRegistry:      types.NewMethodRegistry(),
-		connections:         make(map[string]*WebSocketConnection),
+		connections:         make(map[string]*websocketConnection),
 		timeout:             timeout,
 		services:            services,
 		loadTracker:         tracker,
@@ -212,8 +202,6 @@ func (ws *WebSocketServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	// Use Background() not r.Context() because the WebSocket connection
 	// lives beyond the HTTP request lifecycle.
-	ctx, cancel := context.WithCancel(context.Background())
-
 	// Capture proxy-attribution headers at upgrade time. They are only
 	// consulted when the upgrade socket peer is in the per-port
 	// SecureGatewayNets set — see resolveWSClientIP.
@@ -224,17 +212,13 @@ func (ws *WebSocketServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		fwd = strings.TrimSpace(xri)
 	}
 
-	wsConn := &WebSocketConnection{
-		ID:            generateConnectionID(),
-		conn:          conn,
-		subscriptions: make(map[types.SubscriptionType]types.SubscriptionConfig),
-		sendChannel:   make(chan []byte, sendQueueLimit),
-		closeChannel:  make(chan struct{}),
-		ctx:           ctx,
-		cancel:        cancel,
-		portCtx:       portCtx,
-		user:          userHeader(r),
-		forwardedFor:  fwd,
+	connection := types.NewConnection(generateConnectionID(), make(chan []byte, sendQueueLimit))
+	wsConn := &websocketConnection{
+		Connection:   connection,
+		conn:         conn,
+		portCtx:      portCtx,
+		user:         userHeader(r),
+		forwardedFor: fwd,
 	}
 
 	if !ws.attachConnection(wsConn) {
@@ -256,7 +240,7 @@ func (ws *WebSocketServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}()
 }
 
-func (ws *WebSocketServer) handleConnection(wsConn *WebSocketConnection) {
+func (ws *WebSocketServer) handleConnection(wsConn *websocketConnection) {
 	defer ws.closeConnection(wsConn)
 	defer recoverPanic("handleConnection", wsConn.ID)
 
@@ -286,7 +270,7 @@ func (ws *WebSocketServer) handleConnection(wsConn *WebSocketConnection) {
 		}
 
 		select {
-		case <-wsConn.ctx.Done():
+		case <-wsConn.Done():
 			return
 		default:
 		}
@@ -295,7 +279,7 @@ func (ws *WebSocketServer) handleConnection(wsConn *WebSocketConnection) {
 	}
 }
 
-func (ws *WebSocketServer) pingLoop(wsConn *WebSocketConnection) {
+func (ws *WebSocketServer) pingLoop(wsConn *websocketConnection) {
 	defer recoverPanic("pingLoop", wsConn.ID)
 	// Fall back to the default when constructed via struct literal: a zero
 	// pingInterval would panic NewTicker. Read into a local rather than
@@ -309,7 +293,7 @@ func (ws *WebSocketServer) pingLoop(wsConn *WebSocketConnection) {
 
 	for {
 		select {
-		case <-wsConn.ctx.Done():
+		case <-wsConn.Done():
 			return
 		case <-ticker.C:
 			// WriteControl carries its own deadline and serializes against
@@ -325,15 +309,13 @@ func (ws *WebSocketServer) pingLoop(wsConn *WebSocketConnection) {
 	}
 }
 
-func (ws *WebSocketServer) handleSend(wsConn *WebSocketConnection) {
+func (ws *WebSocketServer) handleSend(wsConn *websocketConnection) {
 	defer recoverPanic("handleSend", wsConn.ID)
 	for {
 		select {
-		case <-wsConn.ctx.Done():
+		case <-wsConn.Done():
 			return
-		case <-wsConn.closeChannel:
-			return
-		case message := <-wsConn.sendChannel:
+		case message := <-wsConn.Outbound():
 			wsConn.conn.SetWriteDeadline(time.Now().Add(10 * time.Second))
 			if err := wsConn.conn.WriteMessage(websocket.TextMessage, message); err != nil {
 				wsLog().Debug("WebSocket send failed", "err", err)
@@ -346,7 +328,7 @@ func (ws *WebSocketServer) handleSend(wsConn *WebSocketConnection) {
 	}
 }
 
-func (ws *WebSocketServer) handleMessage(wsConn *WebSocketConnection, message []byte) {
+func (ws *WebSocketServer) handleMessage(wsConn *websocketConnection, message []byte) {
 	// Per-message recover so one bad command can't tear down the read
 	// loop and drop the connection's pending subscriptions.
 	defer func() {
@@ -383,7 +365,7 @@ func (ws *WebSocketServer) handleMessage(wsConn *WebSocketConnection, message []
 	peerIP := getWebSocketClientIP(wsConn.conn)
 	clientIP := resolveWSClientIP(peerIP, wsConn.forwardedFor, wsConn.portCtx)
 	role := roleForRequest(peerIP, wsConn.user, cmdMap, wsConn.portCtx)
-	loadCtx := newRpcContext(wsConn.ctx, role, types.DefaultApiVersion, clientIP, ws.loadPeerSource(), ws.services)
+	loadCtx := newRpcContext(wsConn.Context(), role, types.DefaultApiVersion, clientIP, ws.loadPeerSource(), ws.services)
 	if rpcErr := gateLoad(ws.loadTracker, loadCtx, "", wsLog()); rpcErr != nil {
 		wsConn.closeWithPolicyViolation("threshold exceeded")
 		return
@@ -393,7 +375,7 @@ func (ws *WebSocketServer) handleMessage(wsConn *WebSocketConnection, message []
 	if version, present := apiVersionFromObject(message); present {
 		apiVersion = version
 	}
-	versionCtx := newRpcContext(wsConn.ctx, role, apiVersion, clientIP, ws.loadPeerSource(), ws.services)
+	versionCtx := newRpcContext(wsConn.Context(), role, apiVersion, clientIP, ws.loadPeerSource(), ws.services)
 	if rpcErr := validateApiVersion(versionCtx); rpcErr != nil {
 		chargeLoad(ws.loadTracker, versionCtx, "", loadtrack.LoadMalformed, wsLog())
 		ws.sendErrorResponse(wsConn, rpcErr, id, nil, requestEcho)
@@ -427,10 +409,10 @@ func (ws *WebSocketServer) handleMessage(wsConn *WebSocketConnection, message []
 	}
 
 	wsLog().Debug("ws request", "cmd", cmd.Command, "remoteAddr", wsConn.conn.RemoteAddr().String(), "clientIP", clientIP, "role", role, "isAdmin", role == types.RoleAdmin)
-	dispatchCtx := wsConn.ctx
+	dispatchCtx := wsConn.Context()
 	var cancel context.CancelFunc
 	if ws.timeout > 0 {
-		dispatchCtx, cancel = context.WithTimeout(wsConn.ctx, ws.timeout)
+		dispatchCtx, cancel = context.WithTimeout(wsConn.Context(), ws.timeout)
 		defer cancel()
 	}
 	rpcCtx := newRpcContext(dispatchCtx, role, apiVersion, clientIP, ws.loadPeerSource(), ws.services)
@@ -450,9 +432,9 @@ func (ws *WebSocketServer) handleMessage(wsConn *WebSocketConnection, message []
 	ws.handleRPCMethod(wsConn, rpcCtx, cmd)
 }
 
-type wsSpecialHandler func(*WebSocketConnection, *types.RpcContext, types.WebSocketCommand) (any, *types.RpcError)
+type wsSpecialHandler func(*websocketConnection, *types.RpcContext, types.WebSocketCommand) (any, *types.RpcError)
 
-func (ws *WebSocketServer) handleSpecialCommand(wsConn *WebSocketConnection, ctx *types.RpcContext, cmd types.WebSocketCommand, handler wsSpecialHandler) {
+func (ws *WebSocketServer) handleSpecialCommand(wsConn *websocketConnection, ctx *types.RpcContext, cmd types.WebSocketCommand, handler wsSpecialHandler) {
 	ctx.LoadCost = uint32(loadtrack.LoadReference)
 	if rpcErr := handlers.RequireNotBusyClient(ctx); rpcErr != nil {
 		finalizeLoad(ws.loadTracker, ctx, cmd.Command, loadtrack.LoadReference, wsLog())
@@ -492,7 +474,7 @@ func (ws *WebSocketServer) handleSpecialCommand(wsConn *WebSocketConnection, ctx
 	ws.sendCommandResponse(wsConn, result, cmd, wsLoadWarningOpts(ctx))
 }
 
-func invokeWSSpecial(handler wsSpecialHandler, wsConn *WebSocketConnection, ctx *types.RpcContext, cmd types.WebSocketCommand) (result any, rpcErr *types.RpcError, recovered bool) {
+func invokeWSSpecial(handler wsSpecialHandler, wsConn *websocketConnection, ctx *types.RpcContext, cmd types.WebSocketCommand) (result any, rpcErr *types.RpcError, recovered bool) {
 	defer func() {
 		if rec := recover(); rec != nil {
 			wsLog().Error("rpc handler panic", "err", rec, "stack", string(debug.Stack()), "method", cmd.Command, "client", ctx.ClientIP)
@@ -505,7 +487,7 @@ func invokeWSSpecial(handler wsSpecialHandler, wsConn *WebSocketConnection, ctx 
 	return result, rpcErr, false
 }
 
-func (ws *WebSocketServer) executeSubscribe(wsConn *WebSocketConnection, ctx *types.RpcContext, cmd types.WebSocketCommand) (any, *types.RpcError) {
+func (ws *WebSocketServer) executeSubscribe(wsConn *websocketConnection, ctx *types.RpcContext, cmd types.WebSocketCommand) (any, *types.RpcError) {
 	var request types.SubscriptionRequest
 	if len(cmd.Params) > 0 {
 		if err := json.Unmarshal(cmd.Params, &request); err != nil {
@@ -526,21 +508,20 @@ func (ws *WebSocketServer) executeSubscribe(wsConn *WebSocketConnection, ctx *ty
 		return result, nil
 	}
 
-	// wsConn.legacy is the same connection the subscription manager already
-	// tracks (created in attachConnection, before any message can arrive); it
-	// shares the subscriptions map and carries the Disconnect callback a
-	// freshly-built copy would lack.
+	// The embedded canonical connection is the same object the subscription
+	// manager already tracks and carries the bounded queue and disconnect
+	// callback.
 	prefix, err := subscriptionRequestExcluding(cmd.Params, "books")
 	if err != nil {
 		return nil, types.RpcErrorInvalidParams("Invalid subscription parameters.")
 	}
 	prefix.ApiVersion = ctx.ApiVersion
-	if rpcErr := ws.subscriptionManager.HandleSubscribe(wsConn.legacy, prefix, ctx.IsAdmin); rpcErr != nil {
+	if rpcErr := ws.subscriptionManager.HandleSubscribe(wsConn.Connection, prefix, ctx.IsAdmin); rpcErr != nil {
 		return nil, rpcErr
 	}
 	if rpcErr := applySubscriptionBooks(request.WireArrays().Books, func(bookRequest types.SubscriptionRequest) *types.RpcError {
 		bookRequest.ApiVersion = ctx.ApiVersion
-		if rpcErr := ws.subscriptionManager.HandleSubscribe(wsConn.legacy, bookRequest, ctx.IsAdmin); rpcErr != nil {
+		if rpcErr := ws.subscriptionManager.HandleSubscribe(wsConn.Connection, bookRequest, ctx.IsAdmin); rpcErr != nil {
 			return rpcErr
 		}
 		setSubscriptionLoadCost(ctx, bookRequest)
@@ -614,16 +595,16 @@ func subscriptionRequestForBooks(books json.RawMessage) (types.SubscriptionReque
 	return request, err
 }
 
-func (ws *WebSocketServer) finishUnsubscribe(wsConn *WebSocketConnection, request types.SubscriptionRequest, params json.RawMessage, isAdmin bool) *types.RpcError {
+func (ws *WebSocketServer) finishUnsubscribe(wsConn *websocketConnection, request types.SubscriptionRequest, params json.RawMessage, isAdmin bool) *types.RpcError {
 	prefix, err := subscriptionRequestExcluding(params, "books")
 	if err != nil {
 		return types.RpcErrorInvalidParams("Invalid unsubscription parameters.")
 	}
-	if rpcErr := ws.subscriptionManager.HandleUnsubscribe(wsConn.legacy, prefix, isAdmin); rpcErr != nil {
+	if rpcErr := ws.subscriptionManager.HandleUnsubscribe(wsConn.Connection, prefix, isAdmin); rpcErr != nil {
 		return rpcErr
 	}
 	return applySubscriptionBooks(request.WireArrays().Books, func(bookRequest types.SubscriptionRequest) *types.RpcError {
-		return ws.subscriptionManager.HandleUnsubscribe(wsConn.legacy, bookRequest, isAdmin)
+		return ws.subscriptionManager.HandleUnsubscribe(wsConn.Connection, bookRequest, isAdmin)
 	})
 }
 
@@ -636,7 +617,7 @@ func setSubscriptionLoadCost(ctx *types.RpcContext, request types.SubscriptionRe
 	}
 }
 
-func (ws *WebSocketServer) executeUnsubscribe(wsConn *WebSocketConnection, ctx *types.RpcContext, cmd types.WebSocketCommand) (any, *types.RpcError) {
+func (ws *WebSocketServer) executeUnsubscribe(wsConn *websocketConnection, ctx *types.RpcContext, cmd types.WebSocketCommand) (any, *types.RpcError) {
 	var request types.SubscriptionRequest
 	if len(cmd.Params) > 0 {
 		if err := json.Unmarshal(cmd.Params, &request); err != nil {
@@ -662,7 +643,7 @@ func (ws *WebSocketServer) executeUnsubscribe(wsConn *WebSocketConnection, ctx *
 	return map[string]any{}, nil
 }
 
-func (ws *WebSocketServer) executePathFind(wsConn *WebSocketConnection, ctx *types.RpcContext, cmd types.WebSocketCommand) (any, *types.RpcError) {
+func (ws *WebSocketServer) executePathFind(wsConn *websocketConnection, ctx *types.RpcContext, cmd types.WebSocketCommand) (any, *types.RpcError) {
 	var params map[string]json.RawMessage
 	if len(cmd.Params) == 0 || json.Unmarshal(cmd.Params, &params) != nil {
 		return nil, types.RpcErrorInvalidParams("Invalid parameters.")
@@ -675,7 +656,7 @@ func (ws *WebSocketServer) executePathFind(wsConn *WebSocketConnection, ctx *typ
 	if err := json.Unmarshal(rawSubcommand, &subcommand); err != nil || subcommand == nil {
 		return nil, types.RpcErrorInvalidParams("Invalid field 'subcommand'.")
 	}
-	wsConn.legacy.SetAPIVersion(ctx.ApiVersion)
+	wsConn.SetAPIVersion(ctx.ApiVersion)
 
 	switch *subcommand {
 	case "create":
@@ -692,7 +673,7 @@ func (ws *WebSocketServer) executePathFind(wsConn *WebSocketConnection, ctx *typ
 
 // executePathFindCreate creates a new persistent pathfinding session.
 // Any existing session on this connection is replaced (matching rippled).
-func (ws *WebSocketServer) executePathFindCreate(wsConn *WebSocketConnection, ctx *types.RpcContext, cmd types.WebSocketCommand) (any, *types.RpcError) {
+func (ws *WebSocketServer) executePathFindCreate(wsConn *websocketConnection, ctx *types.RpcContext, cmd types.WebSocketCommand) (any, *types.RpcError) {
 	ws.bindPathFindRefreshManager(wsConn)
 	wsConn.clearPathFindSession()
 
@@ -726,7 +707,7 @@ func (ws *WebSocketServer) executePathFindCreate(wsConn *WebSocketConnection, ct
 }
 
 // executePathFindClose closes the active pathfinding session on this connection.
-func (ws *WebSocketServer) executePathFindClose(wsConn *WebSocketConnection, _ *types.RpcContext, _ types.WebSocketCommand) (any, *types.RpcError) {
+func (ws *WebSocketServer) executePathFindClose(wsConn *websocketConnection, _ *types.RpcContext, _ types.WebSocketCommand) (any, *types.RpcError) {
 	session := wsConn.clearPathFindSession()
 
 	if session == nil {
@@ -737,7 +718,7 @@ func (ws *WebSocketServer) executePathFindClose(wsConn *WebSocketConnection, _ *
 }
 
 // executePathFindStatus returns the current status of the active pathfinding session.
-func (ws *WebSocketServer) executePathFindStatus(wsConn *WebSocketConnection, _ *types.RpcContext, _ types.WebSocketCommand) (any, *types.RpcError) {
+func (ws *WebSocketServer) executePathFindStatus(wsConn *websocketConnection, _ *types.RpcContext, _ types.WebSocketCommand) (any, *types.RpcError) {
 	wsConn.mutex.RLock()
 	session := wsConn.pathFindSession
 	wsConn.mutex.RUnlock()
@@ -790,12 +771,12 @@ func currentPathFindView(ledger types.LedgerService) func() (types.LedgerStateVi
 }
 
 type pathFindUpdateTarget struct {
-	connection *WebSocketConnection
+	connection *websocketConnection
 	session    *PathFindSession
 	generation uint64
 }
 
-func (c *WebSocketConnection) clearPathFindSession() *PathFindSession {
+func (c *websocketConnection) clearPathFindSession() *PathFindSession {
 	c.mutex.Lock()
 	session := c.pathFindSession
 	generation := c.pathFindGeneration
@@ -809,7 +790,7 @@ func (c *WebSocketConnection) clearPathFindSession() *PathFindSession {
 	return session
 }
 
-func (c *WebSocketConnection) installPathFindSession(session *PathFindSession) {
+func (c *websocketConnection) installPathFindSession(session *PathFindSession) {
 	c.mutex.Lock()
 	previous := c.pathFindSession
 	previousGeneration := c.pathFindGeneration
@@ -831,7 +812,7 @@ func (ws *WebSocketServer) ensurePathFindRefreshManager() *pathFindRefreshManage
 	return ws.pathFindRefresh
 }
 
-func (ws *WebSocketServer) bindPathFindRefreshManager(conn *WebSocketConnection) {
+func (ws *WebSocketServer) bindPathFindRefreshManager(conn *websocketConnection) {
 	manager := ws.ensurePathFindRefreshManager()
 	conn.mutex.Lock()
 	if conn.pathFindRefresh == nil {
@@ -840,7 +821,7 @@ func (ws *WebSocketServer) bindPathFindRefreshManager(conn *WebSocketConnection)
 	conn.mutex.Unlock()
 }
 
-func (c *WebSocketConnection) snapshotPathFindUpdate() (pathFindUpdateTarget, bool) {
+func (c *websocketConnection) snapshotPathFindUpdate() (pathFindUpdateTarget, bool) {
 	c.mutex.RLock()
 	defer c.mutex.RUnlock()
 
@@ -869,13 +850,13 @@ func (target pathFindUpdateTarget) trySend(data []byte) bool {
 		target.connection.pathFindGeneration != target.generation {
 		return false
 	}
-	if target.connection.legacy == nil {
+	if target.connection.Connection == nil {
 		return false
 	}
-	return target.connection.legacy.TrySend(data)
+	return target.connection.TrySend(data)
 }
 
-func (ws *WebSocketServer) handleRPCMethod(wsConn *WebSocketConnection, ctx *types.RpcContext, cmd types.WebSocketCommand) {
+func (ws *WebSocketServer) handleRPCMethod(wsConn *websocketConnection, ctx *types.RpcContext, cmd types.WebSocketCommand) {
 	// Shared dispatch core (registry → admin gate → conditionMet →
 	// api-version → busy/load gates → handle → finalize), identical to the
 	// HTTP path. The WS-specific admin gate returns rpcFORBIDDEN instead of
@@ -906,7 +887,7 @@ func wsLoadWarningOpts(ctx *types.RpcContext) *types.WebSocketResponseOptions {
 	return nil
 }
 
-func (ws *WebSocketServer) sendCommandResponse(wsConn *WebSocketConnection, result any, cmd types.WebSocketCommand, opts *types.WebSocketResponseOptions) {
+func (ws *WebSocketServer) sendCommandResponse(wsConn *websocketConnection, result any, cmd types.WebSocketCommand, opts *types.WebSocketResponseOptions) {
 	payload := map[string]any{
 		"type":   "response",
 		"status": "success",
@@ -938,18 +919,18 @@ func (ws *WebSocketServer) sendCommandResponse(wsConn *WebSocketConnection, resu
 // deliver queues an already-marshalled WS frame through the shared TrySend so
 // per-request response delivery and broadcast delivery use the same
 // consecutive-drop counter and the same disconnect-on-N-drops threshold. Test
-// fixtures may build a wsConn without a legacy peer; those fall back to a
-// non-blocking channel send so unit tests stay self-contained.
-func (ws *WebSocketServer) deliver(wsConn *WebSocketConnection, data []byte) {
-	if wsConn.legacy != nil {
-		if !wsConn.legacy.TrySend(data) {
+// fixtures may build a wsConn without a canonical connection; those fall back
+// to a non-blocking channel send.
+func (ws *WebSocketServer) deliver(wsConn *websocketConnection, data []byte) {
+	if wsConn.Connection != nil {
+		if !wsConn.TrySend(data) {
 			wsLog().Debug("WebSocket send dropped (slow consumer)", "connID", wsConn.ID)
 		}
 		return
 	}
 	select {
-	case wsConn.sendChannel <- data:
-	case <-wsConn.ctx.Done():
+	case wsConn.SendChannel <- data:
+	case <-wsConn.Done():
 	default:
 		wsLog().Warn("WebSocket send channel full", "connID", wsConn.ID)
 	}
@@ -987,7 +968,7 @@ func resolveWSCommand(m map[string]any) (string, bool) {
 // `error` token (no error_code/error_message) plus the echoed request and id
 // (ServerHandler.cpp:452-468). Credentials in the echo are redacted — a
 // deliberate goxrpl superset of rippled's raw echo.
-func (ws *WebSocketServer) sendMissingCommand(wsConn *WebSocketConnection, request map[string]any, id any) {
+func (ws *WebSocketServer) sendMissingCommand(wsConn *websocketConnection, request map[string]any, id any) {
 	echo := redactedRequestMap(request)
 	resp := map[string]any{
 		"type":    "response",
@@ -1004,7 +985,7 @@ func (ws *WebSocketServer) sendMissingCommand(wsConn *WebSocketConnection, reque
 	ws.deliver(wsConn, data)
 }
 
-func (ws *WebSocketServer) sendJSONInvalid(wsConn *WebSocketConnection, value any, parsed bool) {
+func (ws *WebSocketServer) sendJSONInvalid(wsConn *websocketConnection, value any, parsed bool) {
 	rawValue := "<redacted>"
 	if parsed {
 		if data, err := marshalWebSocketJSON(redactJSONValue(value)); err == nil {
@@ -1023,11 +1004,11 @@ func (ws *WebSocketServer) sendJSONInvalid(wsConn *WebSocketConnection, value an
 	ws.deliver(wsConn, data)
 }
 
-func (ws *WebSocketServer) sendCommandError(wsConn *WebSocketConnection, rpcErr *types.RpcError, cmd types.WebSocketCommand) {
+func (ws *WebSocketServer) sendCommandError(wsConn *websocketConnection, rpcErr *types.RpcError, cmd types.WebSocketCommand) {
 	ws.sendErrorResponse(wsConn, rpcErr, cmd.ID, nil, cmd.Request)
 }
 
-func (ws *WebSocketServer) sendErrorResponse(wsConn *WebSocketConnection, rpcErr *types.RpcError, id any, opts *types.WebSocketResponseOptions, request map[string]any) {
+func (ws *WebSocketServer) sendErrorResponse(wsConn *websocketConnection, rpcErr *types.RpcError, id any, opts *types.WebSocketResponseOptions, request map[string]any) {
 	response := map[string]any{
 		"type":   "response",
 		"status": "error",
@@ -1102,19 +1083,9 @@ func marshalWebSocketJSON(value any) ([]byte, error) {
 // subscription manager. Pairing this with detachConnection makes it
 // impossible for the two maps to drift on Add/Remove ordering — the
 // "duplicated connection state" concern flagged in the #428 audit.
-func (ws *WebSocketServer) attachConnection(wsConn *WebSocketConnection) bool {
+func (ws *WebSocketServer) attachConnection(wsConn *websocketConnection) bool {
 	ws.bindPathFindRefreshManager(wsConn)
-	legacy := &types.Connection{
-		ID:            wsConn.ID,
-		Subscriptions: wsConn.subscriptions,
-		SendChannel:   wsConn.sendChannel,
-		CloseChannel:  wsConn.closeChannel,
-		// Subscription-manager-driven disconnect closes the socket (not just
-		// cancels the ctx) so a persistently slow subscriber is torn down
-		// immediately — cancel alone leaves the read loop blocked in
-		// ReadMessage until the 90 s deadline.
-		Disconnect: wsConn.closeSocket,
-	}
+	wsConn.Disconnect = wsConn.closeSocket
 
 	ws.connectionsMutex.Lock()
 	if ws.closing {
@@ -1122,15 +1093,14 @@ func (ws *WebSocketServer) attachConnection(wsConn *WebSocketConnection) bool {
 		return false
 	}
 	ws.wg.Add(3)
-	wsConn.legacy = legacy
 	ws.connections[wsConn.ID] = wsConn
 	ws.connectionsMutex.Unlock()
-	ws.subscriptionManager.AddConnection(legacy)
+	ws.subscriptionManager.AddConnection(wsConn.Connection)
 	return true
 }
 
 // detachConnection is the inverse of attachConnection.
-func (ws *WebSocketServer) detachConnection(wsConn *WebSocketConnection) {
+func (ws *WebSocketServer) detachConnection(wsConn *websocketConnection) {
 	ws.connectionsMutex.Lock()
 	delete(ws.connections, wsConn.ID)
 	ws.connectionsMutex.Unlock()
@@ -1143,29 +1113,33 @@ func (ws *WebSocketServer) detachConnection(wsConn *WebSocketConnection) {
 // deadline. Used by the slow-consumer
 // Disconnect callback and the send-error path; idempotent — closeConnection
 // closes again and gorilla tolerates the double close.
-func (c *WebSocketConnection) closeSocket() {
-	c.cancel()
-	c.conn.Close()
+func (c *websocketConnection) closeSocket() {
+	c.Cancel()
+	c.closeOnce.Do(func() {
+		if c.conn != nil {
+			_ = c.conn.Close()
+		}
+	})
 }
 
-func (c *WebSocketConnection) closeWithPolicyViolation(reason string) {
-	c.cancel()
+func (c *websocketConnection) closeWithPolicyViolation(reason string) {
+	c.Cancel()
 	_ = c.conn.WriteControl(
 		websocket.CloseMessage,
 		websocket.FormatCloseMessage(websocket.ClosePolicyViolation, reason),
 		time.Now().Add(time.Second),
 	)
-	c.conn.Close()
+	c.closeSocket()
 }
 
-func (ws *WebSocketServer) closeConnection(wsConn *WebSocketConnection) {
-	wsConn.cancel()
+func (ws *WebSocketServer) closeConnection(wsConn *websocketConnection) {
+	wsConn.Cancel()
 
 	wsConn.clearPathFindSession()
 
 	ws.detachConnection(wsConn)
 
-	wsConn.conn.Close()
+	wsConn.closeSocket()
 
 	wsLog().Debug("WebSocket connection closed", "connID", wsConn.ID)
 }
@@ -1365,7 +1339,7 @@ func (ws *WebSocketServer) shutdown(ctx context.Context) {
 
 	ws.connectionsMutex.Lock()
 	ws.closing = true
-	connections := make([]*WebSocketConnection, 0, len(ws.connections))
+	connections := make([]*websocketConnection, 0, len(ws.connections))
 	for _, conn := range ws.connections {
 		connections = append(connections, conn)
 	}
@@ -1379,7 +1353,7 @@ func (ws *WebSocketServer) shutdown(ctx context.Context) {
 	var closeFrames sync.WaitGroup
 	closeFrames.Add(len(connections))
 	for _, conn := range connections {
-		conn.cancel()
+		conn.Cancel()
 		conn.clearPathFindSession()
 		go func() {
 			defer closeFrames.Done()
@@ -1403,7 +1377,7 @@ func (ws *WebSocketServer) shutdown(ctx context.Context) {
 	}
 
 	for _, conn := range connections {
-		_ = conn.conn.Close()
+		conn.closeSocket()
 	}
 	refreshManager := ws.ensurePathFindRefreshManager()
 	refreshErr := refreshManager.wait(ctx)

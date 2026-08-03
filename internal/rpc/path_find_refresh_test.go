@@ -15,21 +15,17 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func newPathFindRefreshTestServer(t *testing.T, count int) (*WebSocketServer, []*WebSocketConnection) {
+func newPathFindRefreshTestServer(t *testing.T, count int) (*WebSocketServer, []*websocketConnection) {
 	t.Helper()
 	ws := NewWebSocketServer(time.Second, nil)
 	manager := ws.ensurePathFindRefreshManager()
-	connections := make([]*WebSocketConnection, 0, count)
+	connections := make([]*websocketConnection, 0, count)
 	ws.connectionsMutex.Lock()
 	for i := range count {
 		id := fmt.Sprintf("conn-%02d", i)
-		conn := &WebSocketConnection{
-			ID:              id,
+		conn := &websocketConnection{
+			Connection:      types.NewConnection(id, make(chan []byte, 8)),
 			pathFindRefresh: manager,
-			legacy: &types.Connection{
-				ID:          id,
-				SendChannel: make(chan []byte, 8),
-			},
 		}
 		conn.installPathFindSession(&PathFindSession{id: id})
 		ws.connections[id] = conn
@@ -257,7 +253,7 @@ func TestPathFindRefreshCloseSuppressesInFlightResult(t *testing.T) {
 		t.Fatal("in-flight refresh did not finish")
 	}
 	select {
-	case <-connections[0].legacy.SendChannel:
+	case <-connections[0].SendChannel:
 		t.Fatal("closed session received a stale refresh")
 	default:
 	}
@@ -294,7 +290,7 @@ func TestPathFindRefreshReplacementStillRuns(t *testing.T) {
 		t.Fatal("replacement session did not refresh")
 	}
 	select {
-	case data := <-connections[0].legacy.SendChannel:
+	case data := <-connections[0].SendChannel:
 		require.Contains(t, string(data), "replacement")
 	case <-time.After(time.Second):
 		t.Fatal("replacement result was not sent")
@@ -440,7 +436,7 @@ func TestPathFindRefreshDoesNotCommitSupersededResult(t *testing.T) {
 	require.Empty(t, status.Alternatives, "a superseded computation must not commit")
 	close(releaseLatest)
 	select {
-	case <-connections[0].legacy.SendChannel:
+	case <-connections[0].SendChannel:
 	case <-time.After(time.Second):
 		t.Fatal("latest refresh was not published")
 	}
@@ -484,7 +480,7 @@ func TestPathFindRefreshSharesPathfindAdmissionPerConnection(t *testing.T) {
 		t.Fatal("latest queued connection job did not run")
 	}
 	select {
-	case <-connections[0].legacy.SendChannel:
+	case <-connections[0].SendChannel:
 	case <-time.After(time.Second):
 		t.Fatal("latest queued connection job was not published")
 	}

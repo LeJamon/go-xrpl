@@ -72,7 +72,7 @@ func TestWebSocketSendQueueLimitRealHandshake(t *testing.T) {
 			require.Equal(t, http.StatusSwitchingProtocols, response.StatusCode)
 			t.Cleanup(func() { _ = client.Close() })
 
-			var connection *WebSocketConnection
+			var connection *websocketConnection
 			require.Eventually(t, func() bool {
 				ws.connectionsMutex.RLock()
 				defer ws.connectionsMutex.RUnlock()
@@ -82,7 +82,7 @@ func TestWebSocketSendQueueLimitRealHandshake(t *testing.T) {
 				}
 				return false
 			}, time.Second, time.Millisecond)
-			require.Equal(t, test.want, cap(connection.sendChannel))
+			require.Equal(t, test.want, cap(connection.SendChannel))
 		})
 	}
 }

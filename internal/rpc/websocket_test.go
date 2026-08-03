@@ -196,7 +196,7 @@ func TestWebSocketServer_Close_ContextInterruptsBlockedControlWrite(t *testing.T
 	defer client.Close()
 	serverConn := <-wrappedListener.accepted
 
-	var wsConn *WebSocketConnection
+	var wsConn *websocketConnection
 	deadline := time.Now().Add(time.Second)
 	for wsConn == nil && time.Now().Before(deadline) {
 		ws.connectionsMutex.RLock()
@@ -212,7 +212,7 @@ func TestWebSocketServer_Close_ContextInterruptsBlockedControlWrite(t *testing.T
 	}
 
 	close(serverConn.armed)
-	wsConn.sendChannel <- []byte("block the server writer")
+	wsConn.SendChannel <- []byte("block the server writer")
 	select {
 	case <-serverConn.writeStarted:
 	case <-time.After(time.Second):
@@ -262,6 +262,67 @@ func TestWebSocketServer_Close_NoConnections(t *testing.T) {
 	defer cancel()
 	if err := ws.Close(ctx); err != nil {
 		t.Fatalf("Close on empty server: %v", err)
+	}
+}
+
+func TestWebSocketConnectionCloseSocketUnblocksRead(t *testing.T) {
+	ws := NewWebSocketServer(30*time.Second, nil)
+	httpSrv := httptest.NewServer(http.HandlerFunc(ws.ServeHTTP))
+	defer httpSrv.Close()
+
+	client, _, err := websocket.DefaultDialer.Dial("ws"+strings.TrimPrefix(httpSrv.URL, "http"), nil)
+	if err != nil {
+		t.Fatalf("dial: %v", err)
+	}
+	defer client.Close()
+
+	var serverConn *websocketConnection
+	requireDeadline := time.Now().Add(time.Second)
+	for serverConn == nil && time.Now().Before(requireDeadline) {
+		ws.connectionsMutex.RLock()
+		for _, candidate := range ws.connections {
+			serverConn = candidate
+			break
+		}
+		ws.connectionsMutex.RUnlock()
+		if serverConn == nil {
+			time.Sleep(time.Millisecond)
+		}
+	}
+	if serverConn == nil {
+		t.Fatal("server connection was not registered")
+	}
+
+	readDone := make(chan error, 1)
+	go func() {
+		_, _, readErr := client.ReadMessage()
+		readDone <- readErr
+	}()
+
+	var closers sync.WaitGroup
+	for range 16 {
+		closers.Add(1)
+		go func() {
+			defer closers.Done()
+			serverConn.closeSocket()
+		}()
+	}
+	closers.Wait()
+	select {
+	case <-readDone:
+	case <-time.After(time.Second):
+		t.Fatal("closing the canonical connection did not unblock the client read")
+	}
+	select {
+	case <-serverConn.Done():
+	default:
+		t.Fatal("canonical connection remained active after closeSocket")
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	if err := ws.Close(ctx); err != nil {
+		t.Fatalf("close server: %v", err)
 	}
 }
 
@@ -419,7 +480,7 @@ func TestWebSocketServer_ConcurrentWrites_NoRace(t *testing.T) {
 	}()
 
 	// Locate the server-side connection so we can push data frames through it.
-	var wsConn *WebSocketConnection
+	var wsConn *websocketConnection
 	deadline := time.Now().Add(2 * time.Second)
 	for time.Now().Before(deadline) {
 		ws.connectionsMutex.RLock()
@@ -439,7 +500,7 @@ func TestWebSocketServer_ConcurrentWrites_NoRace(t *testing.T) {
 	// Feed handleSend a steady stream of data frames while pingLoop fires.
 	for range 500 {
 		select {
-		case wsConn.sendChannel <- []byte(`{"type":"race-probe"}`):
+		case wsConn.SendChannel <- []byte(`{"type":"race-probe"}`):
 		case <-time.After(2 * time.Second):
 			t.Fatal("send channel stalled")
 		}
@@ -673,13 +734,13 @@ func TestWebSocketSpecialCommandDecodeErrorsAreFixed(t *testing.T) {
 		name    string
 		command string
 		want    string
-		invoke  func(*WebSocketServer, *WebSocketConnection, *types.RpcContext, types.WebSocketCommand)
+		invoke  func(*WebSocketServer, *websocketConnection, *types.RpcContext, types.WebSocketCommand)
 	}{
 		{
 			name:    "subscribe",
 			command: "subscribe",
 			want:    `{"error":"invalidParams","error_code":31,"error_message":"Invalid subscription parameters.","id":7,"request":{"command":"subscribe","id":7},"status":"error","type":"response"}`,
-			invoke: func(ws *WebSocketServer, conn *WebSocketConnection, ctx *types.RpcContext, cmd types.WebSocketCommand) {
+			invoke: func(ws *WebSocketServer, conn *websocketConnection, ctx *types.RpcContext, cmd types.WebSocketCommand) {
 				ws.handleSpecialCommand(conn, ctx, cmd, ws.executeSubscribe)
 			},
 		},
@@ -687,7 +748,7 @@ func TestWebSocketSpecialCommandDecodeErrorsAreFixed(t *testing.T) {
 			name:    "unsubscribe",
 			command: "unsubscribe",
 			want:    `{"error":"invalidParams","error_code":31,"error_message":"Invalid unsubscription parameters.","id":7,"request":{"command":"unsubscribe","id":7},"status":"error","type":"response"}`,
-			invoke: func(ws *WebSocketServer, conn *WebSocketConnection, ctx *types.RpcContext, cmd types.WebSocketCommand) {
+			invoke: func(ws *WebSocketServer, conn *websocketConnection, ctx *types.RpcContext, cmd types.WebSocketCommand) {
 				ws.handleSpecialCommand(conn, ctx, cmd, ws.executeUnsubscribe)
 			},
 		},
@@ -695,7 +756,7 @@ func TestWebSocketSpecialCommandDecodeErrorsAreFixed(t *testing.T) {
 			name:    "path find",
 			command: "path_find",
 			want:    `{"error":"invalidParams","error_code":31,"error_message":"Invalid parameters.","id":7,"request":{"command":"path_find","id":7},"status":"error","type":"response"}`,
-			invoke: func(ws *WebSocketServer, conn *WebSocketConnection, ctx *types.RpcContext, cmd types.WebSocketCommand) {
+			invoke: func(ws *WebSocketServer, conn *websocketConnection, ctx *types.RpcContext, cmd types.WebSocketCommand) {
 				ws.handleSpecialCommand(conn, ctx, cmd, ws.executePathFind)
 			},
 		},
@@ -704,11 +765,7 @@ func TestWebSocketSpecialCommandDecodeErrorsAreFixed(t *testing.T) {
 		t.Run(test.name, func(t *testing.T) {
 			ws := NewWebSocketServer(time.Second, nil)
 			ws.RegisterAllMethods()
-			wsConn := &WebSocketConnection{
-				ID:          "decode-test",
-				sendChannel: make(chan []byte, 1),
-				ctx:         context.Background(),
-			}
+			wsConn := &websocketConnection{Connection: types.NewConnectionWithContext(context.Background(), "decode-test", make(chan []byte, 1))}
 			cmd := types.WebSocketCommand{
 				Command: test.command,
 				ID:      int32(7),
@@ -717,7 +774,7 @@ func TestWebSocketSpecialCommandDecodeErrorsAreFixed(t *testing.T) {
 			}
 
 			test.invoke(ws, wsConn, &types.RpcContext{ApiVersion: types.DefaultApiVersion}, cmd)
-			body := <-wsConn.sendChannel
+			body := <-wsConn.SendChannel
 			if got := string(body); got != test.want {
 				t.Fatalf("response = %s, want %s", got, test.want)
 			}

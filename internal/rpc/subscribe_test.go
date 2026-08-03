@@ -21,12 +21,7 @@ func newTestSubscriptionManager() *subscription.Manager {
 
 // newTestConnection creates a new Connection for testing
 func newTestConnection(id string) *types.Connection {
-	return &types.Connection{
-		ID:            id,
-		Subscriptions: make(map[types.SubscriptionType]types.SubscriptionConfig),
-		SendChannel:   make(chan []byte, 100),
-		CloseChannel:  make(chan struct{}),
-	}
+	return types.NewConnection(id, make(chan []byte, 100))
 }
 
 // Stream Subscription Tests
