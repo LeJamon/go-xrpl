@@ -16,13 +16,10 @@ import (
 // ledgerInfoJSON renders the closed-ledger header fields shared by the `ledger`
 // and `ledger_request` RPCs, mirroring rippled's LedgerFill at info level 0
 // (LedgerToJson.cpp fillJson).
-func ledgerInfoJSON(l types.LedgerReader) (map[string]any, error) {
+func ledgerInfoJSON(l types.LedgerReader) map[string]any {
 	hash := l.Hash()
 	parent := l.ParentHash()
-	txHash, stateHash, err := ledgerMapHashes(l)
-	if err != nil {
-		return nil, err
-	}
+	txHash, stateHash := ledgerMapHashes(l)
 	closeTimeSec := l.CloseTime()
 	closeTime := protocol.FromRippleTime(uint32(max(closeTimeSec, 0)))
 	seqStr := strconv.FormatUint(uint64(l.Sequence()), 10)
@@ -44,7 +41,7 @@ func ledgerInfoJSON(l types.LedgerReader) (map[string]any, error) {
 		"totalCoins":            strconv.FormatUint(l.TotalDrops(), 10),
 		"total_coins":           strconv.FormatUint(l.TotalDrops(), 10),
 		"transaction_hash":      strings.ToUpper(hex.EncodeToString(txHash[:])),
-	}, nil
+	}
 }
 
 // LedgerRequestMethod handles the ledger_request RPC method: it returns a
@@ -92,11 +89,7 @@ func (m *LedgerRequestMethod) Handle(ctx *types.RpcContext, params json.RawMessa
 
 		l, err := getLedgerByHashContext(ctx.Context, ctx.Services.Ledger, targetHash)
 		if err == nil && l != nil {
-			result, resultErr := ledgerRequestSuccess(l)
-			if resultErr != nil {
-				return nil, rpcInternalError("ledger_request: map root lookup failed", resultErr)
-			}
-			return result, nil
+			return ledgerRequestSuccess(l), nil
 		}
 		if err != nil && !errors.Is(err, svcerr.ErrLedgerNotFound) {
 			return nil, rpcInternalError("ledger_request: hash lookup failed", err)
@@ -131,11 +124,7 @@ func (m *LedgerRequestMethod) Handle(ctx *types.RpcContext, params json.RawMessa
 		targetSeq = uint32(idx)
 
 		if l, err := ctx.Services.Ledger.GetLedgerBySequence(targetSeq); err == nil && l != nil {
-			result, resultErr := ledgerRequestSuccess(l)
-			if resultErr != nil {
-				return nil, rpcInternalError("ledger_request: map root lookup failed", resultErr)
-			}
-			return result, nil
+			return ledgerRequestSuccess(l), nil
 		}
 	}
 
@@ -165,13 +154,9 @@ func (m *LedgerRequestMethod) Handle(ctx *types.RpcContext, params json.RawMessa
 
 // ledgerRequestSuccess builds the success response for a locally-available
 // ledger: {ledger_index, ledger} per rippled doLedgerRequest.
-func ledgerRequestSuccess(l types.LedgerReader) (map[string]any, error) {
-	ledger, err := ledgerInfoJSON(l)
-	if err != nil {
-		return nil, err
-	}
+func ledgerRequestSuccess(l types.LedgerReader) map[string]any {
 	return map[string]any{
 		"ledger_index": l.Sequence(),
-		"ledger":       ledger,
-	}, nil
+		"ledger":       ledgerInfoJSON(l),
+	}
 }

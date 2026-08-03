@@ -219,10 +219,7 @@ func buildLedgerJSON(l types.LedgerReader, binaryMode, full bool, apiVersion int
 		if !l.IsClosed() {
 			return map[string]any{"closed": false}, nil
 		}
-		txHash, stateHash, err := ledgerMapHashes(l)
-		if err != nil {
-			return nil, err
-		}
+		txHash, stateHash := ledgerMapHashes(l)
 		return map[string]any{
 			"closed": true,
 			"ledger_data": strings.ToUpper(hex.EncodeToString(ledgerheader.AddRaw(ledgerheader.LedgerHeader{
@@ -256,10 +253,7 @@ func buildLedgerJSON(l types.LedgerReader, binaryMode, full bool, apiVersion int
 		return result, nil
 	}
 
-	txHash, stateHash, err := ledgerMapHashes(l)
-	if err != nil {
-		return nil, err
-	}
+	txHash, stateHash := ledgerMapHashes(l)
 	result["ledger_hash"] = FormatLedgerHash(l.Hash())
 	result["transaction_hash"] = FormatLedgerHash(txHash)
 	result["account_hash"] = FormatLedgerHash(stateHash)
@@ -386,17 +380,9 @@ func ledgerDefaultResponse(ctx *types.RpcContext) (map[string]any, *types.RpcErr
 	if err != nil || open == nil {
 		return nil, types.RpcErrorLgrNotFound("ledgerNotFound")
 	}
-	closedJSON, err := buildLedgerSummaryJSON(closed, true, ctx.ApiVersion)
-	if err != nil {
-		return nil, rpcInternalError("ledger: closed ledger map root lookup failed", err)
-	}
-	openJSON, err := buildLedgerSummaryJSON(open, false, ctx.ApiVersion)
-	if err != nil {
-		return nil, rpcInternalError("ledger: open ledger map root lookup failed", err)
-	}
 	return map[string]any{
-		"closed": closedJSON,
-		"open":   openJSON,
+		"closed": buildLedgerSummaryJSON(closed, true, ctx.ApiVersion),
+		"open":   buildLedgerSummaryJSON(open, false, ctx.ApiVersion),
 	}, nil
 }
 

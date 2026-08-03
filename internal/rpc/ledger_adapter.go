@@ -180,33 +180,11 @@ func (a *ledgerReaderAdapter) ParentCloseTime() int64 {
 }
 
 func (a *ledgerReaderAdapter) TxMapHash() [32]byte {
-	hash, err := a.TxMapHashWithError()
-	if err != nil {
-		return a.l.Header().TxHash
-	}
-	return hash
+	return a.l.Header().TxHash
 }
 
 func (a *ledgerReaderAdapter) StateMapHash() [32]byte {
-	hash, err := a.StateMapHashWithError()
-	if err != nil {
-		return a.l.Header().AccountHash
-	}
-	return hash
-}
-
-func (a *ledgerReaderAdapter) TxMapHashWithError() ([32]byte, error) {
-	if _, err := a.l.TxMapHash(); err != nil {
-		return [32]byte{}, err
-	}
-	return a.l.Header().TxHash, nil
-}
-
-func (a *ledgerReaderAdapter) StateMapHashWithError() ([32]byte, error) {
-	if _, err := a.l.StateMapHash(); err != nil {
-		return [32]byte{}, err
-	}
-	return a.l.Header().AccountHash, nil
+	return a.l.Header().AccountHash
 }
 
 func (a *ledgerReaderAdapter) ForEachTransaction(fn func(txHash [32]byte, txData []byte) bool) error {

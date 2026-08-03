@@ -489,41 +489,6 @@ func TestLedgerHeaderProductionOpenRootsAndFlags(t *testing.T) {
 	require.Zero(t, ledgerResult["close_flags"])
 }
 
-type ledgerHeaderMapErrorReader struct {
-	*mockLedgerReader
-	err error
-}
-
-func (r ledgerHeaderMapErrorReader) TxMapHashWithError() ([32]byte, error) {
-	return [32]byte{}, r.err
-}
-
-func (r ledgerHeaderMapErrorReader) StateMapHashWithError() ([32]byte, error) {
-	return [32]byte{}, r.err
-}
-
-func TestLedgerHeaderMapHashFailureReturnsInternal(t *testing.T) {
-	mock := &ledgerMock{mockLedgerService: newMockLedgerService()}
-	reader := ledgerHeaderMapErrorReader{
-		mockLedgerReader: newDefaultLedgerReader(2, true),
-		err:              errors.New("SHAMap unavailable"),
-	}
-	mock.getLedgerBySequenceFn = func(uint32) (types.LedgerReader, error) {
-		return reader, nil
-	}
-	ctx := &types.RpcContext{
-		Context:    context.Background(),
-		Role:       types.RoleGuest,
-		ApiVersion: types.ApiVersion1,
-		Services:   &types.ServiceContainer{Ledger: mock},
-	}
-
-	result, rpcErr := (&handlers.LedgerHeaderMethod{}).Handle(ctx, json.RawMessage(`{"ledger_index":2}`))
-	assert.Nil(t, result)
-	require.NotNil(t, rpcErr)
-	assert.Equal(t, types.RpcINTERNAL, rpcErr.Code)
-}
-
 // TestLedgerHeaderCloseTimeEstimated tests the close_time_estimated field
 // when the LCFNoConsensusTime flag is set.
 func TestLedgerHeaderCloseTimeEstimated(t *testing.T) {

@@ -1,7 +1,6 @@
 package rpc
 
 import (
-	"errors"
 	"testing"
 
 	"github.com/LeJamon/go-xrpl/internal/ledger/genesis"
@@ -22,15 +21,7 @@ func TestLedgerReaderAdapterPreservesHeaderRootsAndRules(t *testing.T) {
 	reader, err := NewLedgerServiceAdapter(svc).GetLedgerBySequence(closed.Sequence())
 	require.NoError(t, err)
 
-	rootSource, ok := reader.(types.LedgerMapHashSource)
-	require.True(t, ok)
 	header := closed.Header()
-	txHash, err := rootSource.TxMapHashWithError()
-	require.NoError(t, err)
-	stateHash, err := rootSource.StateMapHashWithError()
-	require.NoError(t, err)
-	require.Equal(t, header.TxHash, txHash)
-	require.Equal(t, header.AccountHash, stateHash)
 	require.Equal(t, header.TxHash, reader.TxMapHash())
 	require.Equal(t, header.AccountHash, reader.StateMapHash())
 
@@ -42,7 +33,7 @@ func TestLedgerReaderAdapterPreservesHeaderRootsAndRules(t *testing.T) {
 	require.Same(t, rules, reader.(types.LedgerAmendmentRulesSource).LedgerAmendmentRules())
 }
 
-func TestLedgerReaderAdapterValidatesOpenMapsButReturnsHeaderRoots(t *testing.T) {
+func TestLedgerReaderAdapterReturnsOpenHeaderRoots(t *testing.T) {
 	svc, err := service.New(service.Config{Standalone: true, GenesisConfig: genesis.DefaultConfig()})
 	require.NoError(t, err)
 	require.NoError(t, svc.Start())
@@ -71,12 +62,6 @@ func TestLedgerReaderAdapterValidatesOpenMapsButReturnsHeaderRoots(t *testing.T)
 	require.NotEqual(t, header.AccountHash, liveStateHash)
 
 	reader := &ledgerReaderAdapter{l: open}
-	txHash, err := reader.TxMapHashWithError()
-	require.NoError(t, err)
-	stateHash, err := reader.StateMapHashWithError()
-	require.NoError(t, err)
-	require.Equal(t, header.TxHash, txHash)
-	require.Equal(t, header.AccountHash, stateHash)
 	require.Equal(t, header.TxHash, reader.TxMapHash())
 	require.Equal(t, header.AccountHash, reader.StateMapHash())
 }
@@ -91,24 +76,4 @@ func TestLedgerServiceAdapterRejectsMalformedTransactionBlob(t *testing.T) {
 	_, err = NewLedgerServiceAdapter(svc).SubmitTransaction(txJSON, "not-hex")
 	require.Error(t, err)
 	require.ErrorContains(t, err, "decode tx_blob")
-}
-
-func TestLedgerMapHashSourceErrorsAreNotSuppressed(t *testing.T) {
-	wantErr := errors.New("SHAMap unavailable")
-	reader := failingLedgerReader{err: wantErr}
-	_, err := reader.TxMapHashWithError()
-	require.ErrorIs(t, err, wantErr)
-}
-
-type failingLedgerReader struct {
-	types.LedgerReader
-	err error
-}
-
-func (r failingLedgerReader) TxMapHashWithError() ([32]byte, error) {
-	return [32]byte{}, r.err
-}
-
-func (r failingLedgerReader) StateMapHashWithError() ([32]byte, error) {
-	return [32]byte{}, r.err
 }

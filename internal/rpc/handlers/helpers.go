@@ -44,23 +44,8 @@ func rpcDBDeserializationError(operation string, err error) *types.RpcError {
 	return types.RpcErrorDBDeserialization()
 }
 
-// ledgerMapHashes reads both ledger roots without allowing a production
-// adapter's SHAMap error to be replaced with a zero hash. Legacy readers keep
-// the value-only methods, so the error-aware facet is optional for test and
-// embedded implementations.
-func ledgerMapHashes(l types.LedgerReader) (txHash, stateHash [32]byte, err error) {
-	if source, ok := l.(types.LedgerMapHashSource); ok {
-		txHash, err = source.TxMapHashWithError()
-		if err != nil {
-			return [32]byte{}, [32]byte{}, err
-		}
-		stateHash, err = source.StateMapHashWithError()
-		if err != nil {
-			return [32]byte{}, [32]byte{}, err
-		}
-		return txHash, stateHash, nil
-	}
-	return l.TxMapHash(), l.StateMapHash(), nil
+func ledgerMapHashes(l types.LedgerReader) (txHash, stateHash [32]byte) {
+	return l.TxMapHash(), l.StateMapHash()
 }
 
 func ledgerAmendmentRules(l types.LedgerReader) (*amendment.Rules, error) {

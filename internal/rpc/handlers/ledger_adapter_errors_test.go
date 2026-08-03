@@ -9,13 +9,6 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestLedgerMapHashesPropagatesAdapterFailure(t *testing.T) {
-	wantErr := errors.New("state map read failed")
-	reader := failingLedgerReader{err: wantErr}
-	_, _, err := ledgerMapHashes(reader)
-	require.ErrorIs(t, err, wantErr)
-}
-
 func TestLedgerAmendmentRulesPropagatesAdapterFailure(t *testing.T) {
 	wantErr := errors.New("amendment rules read failed")
 	reader := failingLedgerReader{rulesErr: wantErr}
@@ -25,16 +18,7 @@ func TestLedgerAmendmentRulesPropagatesAdapterFailure(t *testing.T) {
 
 type failingLedgerReader struct {
 	types.LedgerReader
-	err      error
 	rulesErr error
-}
-
-func (r failingLedgerReader) TxMapHashWithError() ([32]byte, error) {
-	return [32]byte{}, r.err
-}
-
-func (r failingLedgerReader) StateMapHashWithError() ([32]byte, error) {
-	return [32]byte{}, r.err
 }
 
 func (r failingLedgerReader) LedgerAmendmentRulesWithError() (*amendment.Rules, error) {

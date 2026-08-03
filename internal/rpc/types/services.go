@@ -968,15 +968,6 @@ type LedgerReader interface {
 	ForEachTransaction(fn func(txHash [32]byte, txData []byte) bool) error
 }
 
-// LedgerMapHashSource exposes map-root reads that may fail. LedgerReader keeps
-// the historical value-only methods for compatibility with lightweight RPC
-// mocks; production adapters implement this facet so handlers never turn a
-// backing SHAMap failure into an authoritative-looking zero hash.
-type LedgerMapHashSource interface {
-	TxMapHashWithError() ([32]byte, error)
-	StateMapHashWithError() ([32]byte, error)
-}
-
 // LedgerTransactionSource is implemented by ledger readers that can query the
 // transaction tree of that exact ledger.
 type LedgerTransactionSource interface {
