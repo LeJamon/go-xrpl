@@ -647,6 +647,20 @@ func ValidateTemplateFields(txType Type, values map[string]any) error {
 	return validateTemplateAllowlist(txType, fields)
 }
 
+// ValidateTransactionTemplateAllowlist rejects fields that are not legal for
+// the concrete transaction type without requiring submission-layer defaults.
+func ValidateTransactionTemplateAllowlist(transaction Transaction) error {
+	values, err := transaction.Flatten()
+	if err != nil {
+		return err
+	}
+	fields := make(map[string]bool, len(values))
+	for name := range values {
+		fields[name] = true
+	}
+	return validateTemplateAllowlist(transaction.TxType(), fields)
+}
+
 func isExplicitDefault(value any) bool {
 	if value == nil {
 		return true

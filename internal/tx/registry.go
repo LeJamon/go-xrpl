@@ -53,6 +53,15 @@ func FromJSON(data []byte) (Transaction, error) {
 	if !ok {
 		return nil, ErrUnknownTransactionType
 	}
+	presentFields, err := jsonPresentFields(data)
+	if err != nil {
+		return nil, err
+	}
+	if txType == TypeClawback {
+		if err := checkTemplate(txType, presentFields); err != nil {
+			return nil, err
+		}
+	}
 
 	tx, err := NewFromType(txType)
 	if err != nil {
@@ -60,10 +69,6 @@ func FromJSON(data []byte) (Transaction, error) {
 	}
 
 	if err := json.Unmarshal(data, tx); err != nil {
-		return nil, err
-	}
-	presentFields, err := jsonPresentFields(data)
-	if err != nil {
 		return nil, err
 	}
 	tx.GetCommon().SetPresentFields(presentFields)

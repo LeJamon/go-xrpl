@@ -273,6 +273,15 @@ func ComputeTransactionHash(tx Transaction) ([32]byte, error) {
 // transaction ID and transaction-map leaf.
 func SerializeTransaction(tx Transaction) ([]byte, error) {
 	if rawBytes := tx.GetRawBytes(); len(rawBytes) > 0 {
+		if tx.TxType() == TypeClawback {
+			decoded, err := binarycodec.DecodeBytes(rawBytes)
+			if err != nil {
+				return nil, err
+			}
+			if err := ValidateTemplateFields(tx.TxType(), decoded); err != nil {
+				return nil, err
+			}
+		}
 		return append([]byte(nil), rawBytes...), nil
 	}
 	txMap, err := tx.Flatten()
@@ -280,6 +289,11 @@ func SerializeTransaction(tx Transaction) ([]byte, error) {
 		return nil, err
 	}
 	PopulateRequiredWireFields(txMap, tx.GetCommon())
+	if tx.TxType() == TypeClawback {
+		if err := ValidateTemplateFields(tx.TxType(), txMap); err != nil {
+			return nil, err
+		}
+	}
 	hexStr, err := binarycodec.Encode(txMap)
 	if err != nil {
 		return nil, err
@@ -309,6 +323,15 @@ func computeTransactionHash(tx Transaction) ([32]byte, error) {
 	if rawBytes := tx.GetRawBytes(); len(rawBytes) > 0 {
 		if c != nil && c.txIDCached {
 			return c.cachedTxID, nil
+		}
+		if tx.TxType() == TypeClawback {
+			fields, err := binarycodec.DecodeBytes(rawBytes)
+			if err != nil {
+				return [32]byte{}, err
+			}
+			if err := ValidateTemplateFields(TypeClawback, fields); err != nil {
+				return [32]byte{}, err
+			}
 		}
 		hash := hashWithTxnPrefix(rawBytes)
 		if c != nil {
