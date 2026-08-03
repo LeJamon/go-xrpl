@@ -4,11 +4,27 @@
 package mpt_test
 
 import (
+	"encoding/hex"
 	"testing"
 
+	"github.com/LeJamon/go-xrpl/internal/ledger/state"
 	jtx "github.com/LeJamon/go-xrpl/internal/testing"
 	"github.com/LeJamon/go-xrpl/internal/testing/mpt"
+	"github.com/LeJamon/go-xrpl/internal/tx"
+	clawbacktx "github.com/LeJamon/go-xrpl/internal/tx/clawback"
+	"github.com/LeJamon/go-xrpl/keylet"
+	"github.com/stretchr/testify/require"
 )
+
+func mptID(t *testing.T, value string) [24]byte {
+	t.Helper()
+	decoded, err := hex.DecodeString(value)
+	require.NoError(t, err)
+	require.Len(t, decoded, 24)
+	var id [24]byte
+	copy(id[:], decoded)
+	return id
+}
 
 // --------------------------------------------------------------------------
 // TestMPT_CreateValidation
@@ -1447,6 +1463,32 @@ func TestMPT_Payment(t *testing.T) {
 // --------------------------------------------------------------------------
 
 func TestMPT_ClawbackValidation(t *testing.T) {
+	t.Run("ClawbackFeatureDisabledPrecedesFlags", func(t *testing.T) {
+		env := jtx.NewTestEnv(t)
+		env.DisableFeature("Clawback")
+		env.Close()
+		alice := jtx.NewAccount("alice")
+		bob := jtx.NewAccount("bob")
+		env.Fund(alice, bob)
+		tester := mpt.NewMPTTesterNoFund(t, env, alice)
+		transaction := clawbacktx.NewMPTokenClawback(alice.Address, bob.Address, tester.MPTAmount(1))
+		transaction.SetFlags(tx.TfUniversalMask)
+		jtx.RequireTxFail(t, env.Submit(transaction), jtx.TemDISABLED)
+	})
+
+	t.Run("InvalidFlagsPrecedeMPTokensFeatureGate", func(t *testing.T) {
+		env := jtx.NewTestEnv(t)
+		env.DisableFeature("MPTokensV1")
+		env.Close()
+		alice := jtx.NewAccount("alice")
+		bob := jtx.NewAccount("bob")
+		env.Fund(alice, bob)
+		tester := mpt.NewMPTTesterNoFund(t, env, alice)
+		transaction := clawbacktx.NewMPTokenClawback(alice.Address, bob.Address, tester.MPTAmount(1))
+		transaction.SetFlags(tx.TfUniversalMask)
+		jtx.RequireTxFail(t, env.Submit(transaction), jtx.TemINVALID_FLAG)
+	})
+
 	t.Run("FeatureDisabled", func(t *testing.T) {
 		// Reference: rippled lines 2360-2380
 		env := jtx.NewTestEnv(t)
@@ -1562,9 +1604,17 @@ func TestMPT_Clawback(t *testing.T) {
 
 		mptAlice.Authorize(mpt.AuthorizeOpts{Account: bob})
 		mptAlice.Pay(alice, bob, 100)
+		mptAlice.RequireMPTokenAmount(bob, 100)
+		require.Equal(t, uint64(100), mptAlice.IssuanceOutstandingAmount())
 
 		mptAlice.Claw(alice, bob, 1)
+		mptAlice.RequireMPTokenAmount(bob, 99)
+		require.Equal(t, uint64(99), mptAlice.IssuanceOutstandingAmount())
 		mptAlice.Claw(alice, bob, 1000) // clawback more than balance - should take remaining
+		mptAlice.RequireMPTokenAmount(bob, 0)
+		require.Equal(t, uint64(0), mptAlice.IssuanceOutstandingAmount())
+		jtx.RequireLedgerEntryExists(t, env, keylet.MPTokenByID(mptID(t, mptAlice.IssuanceID()), bob.ID))
+		jtx.RequireOwnerCount(t, env, bob, 1)
 
 		// Now balance is zero, fails
 		mptAlice.Claw(alice, bob, 1, jtx.TecINSUFFICIENT_FUNDS)
@@ -1590,6 +1640,8 @@ func TestMPT_Clawback(t *testing.T) {
 
 		mptAlice.Set(mpt.SetOpts{Account: alice, Flags: mpt.TfMPTLock})
 		mptAlice.Claw(alice, bob, 100)
+		mptAlice.RequireMPTokenAmount(bob, 0)
+		require.Equal(t, uint64(0), mptAlice.IssuanceOutstandingAmount())
 	})
 
 	t.Run("ClawbackIndividualLocked", func(t *testing.T) {
@@ -1612,6 +1664,8 @@ func TestMPT_Clawback(t *testing.T) {
 
 		mptAlice.Set(mpt.SetOpts{Account: alice, Holder: bob, Flags: mpt.TfMPTLock})
 		mptAlice.Claw(alice, bob, 100)
+		mptAlice.RequireMPTokenAmount(bob, 0)
+		require.Equal(t, uint64(0), mptAlice.IssuanceOutstandingAmount())
 	})
 
 	t.Run("ClawbackUnauthorized", func(t *testing.T) {
@@ -1642,6 +1696,8 @@ func TestMPT_Clawback(t *testing.T) {
 
 		// alice can still clawback even though bob is unauthorized
 		mptAlice.Claw(alice, bob, 100)
+		mptAlice.RequireMPTokenAmount(bob, 0)
+		require.Equal(t, uint64(0), mptAlice.IssuanceOutstandingAmount())
 	})
 
 	t.Run("ClawbackNonexistentHolder", func(t *testing.T) {
@@ -1663,6 +1719,99 @@ func TestMPT_Clawback(t *testing.T) {
 		// carol is never funded, so her AccountRoot does not exist.
 		carol := jtx.NewAccount("carol")
 		mptAlice.Claw(alice, carol, 1, jtx.TerNO_ACCOUNT)
+	})
+
+	t.Run("MultipleIssuancesAndHoldersRemainIndependent", func(t *testing.T) {
+		env := jtx.NewTestEnv(t)
+		alice := jtx.NewAccount("alice")
+		bob := jtx.NewAccount("bob")
+		carol := jtx.NewAccount("carol")
+		dave := jtx.NewAccount("dave")
+		env.Fund(alice, bob, carol, dave)
+
+		aliceMPT := mpt.NewMPTTester(t, env, alice, mpt.MPTInit{Holders: []*jtx.Account{bob, dave}})
+		aliceMPT.Create(mpt.CreateOpts{Flags: mpt.TfMPTCanClawback})
+		aliceMPT.Authorize(mpt.AuthorizeOpts{Account: bob})
+		aliceMPT.Authorize(mpt.AuthorizeOpts{Account: dave})
+		aliceMPT.Pay(alice, bob, 100)
+		aliceMPT.Pay(alice, dave, 200)
+
+		carolMPT := mpt.NewMPTTester(t, env, carol, mpt.MPTInit{Holders: []*jtx.Account{bob}})
+		carolMPT.Create(mpt.CreateOpts{Flags: mpt.TfMPTCanClawback})
+		carolMPT.Authorize(mpt.AuthorizeOpts{Account: bob})
+		carolMPT.Pay(carol, bob, 300)
+
+		aliceMPT.Claw(alice, bob, 40)
+		aliceMPT.RequireMPTokenAmount(bob, 60)
+		aliceMPT.RequireMPTokenAmount(dave, 200)
+		require.Equal(t, uint64(260), aliceMPT.IssuanceOutstandingAmount())
+		carolMPT.RequireMPTokenAmount(bob, 300)
+		require.Equal(t, uint64(300), carolMPT.IssuanceOutstandingAmount())
+
+		carolMPT.Claw(carol, bob, 125)
+		aliceMPT.RequireMPTokenAmount(bob, 60)
+		aliceMPT.RequireMPTokenAmount(dave, 200)
+		carolMPT.RequireMPTokenAmount(bob, 175)
+		require.Equal(t, uint64(175), carolMPT.IssuanceOutstandingAmount())
+	})
+
+	t.Run("OutstandingUnderflowIsInternalAndAtomic", func(t *testing.T) {
+		env := jtx.NewTestEnv(t)
+		alice := jtx.NewAccount("alice")
+		bob := jtx.NewAccount("bob")
+		env.Fund(alice, bob)
+		tester := mpt.NewMPTTester(t, env, alice, mpt.MPTInit{Holders: []*jtx.Account{bob}})
+		tester.Create(mpt.CreateOpts{Flags: mpt.TfMPTCanClawback})
+		tester.Authorize(mpt.AuthorizeOpts{Account: bob})
+		tester.Pay(alice, bob, 100)
+
+		issuanceKey := keylet.MPTIssuance(mptID(t, tester.IssuanceID()))
+		raw, err := env.Ledger().Read(issuanceKey)
+		require.NoError(t, err)
+		issuance, err := state.ParseMPTokenIssuance(raw)
+		require.NoError(t, err)
+		issuance.OutstandingAmount = 50
+		raw, err = state.SerializeMPTokenIssuance(issuance)
+		require.NoError(t, err)
+		require.NoError(t, env.Ledger().Update(issuanceKey, raw))
+
+		tester.Claw(alice, bob, 100, jtx.TecINTERNAL)
+		tester.RequireMPTokenAmount(bob, 100)
+		require.Equal(t, uint64(50), tester.IssuanceOutstandingAmount())
+	})
+
+	t.Run("Tickets", func(t *testing.T) {
+		env := jtx.NewTestEnv(t)
+		alice := jtx.NewAccount("alice")
+		bob := jtx.NewAccount("bob")
+		env.Fund(alice, bob)
+		tester := mpt.NewMPTTester(t, env, alice, mpt.MPTInit{Holders: []*jtx.Account{bob}})
+		tester.Create(mpt.CreateOpts{Flags: mpt.TfMPTCanClawback})
+		tester.Authorize(mpt.AuthorizeOpts{Account: bob})
+		tester.Pay(alice, bob, 100)
+		firstTicket := env.CreateTickets(alice, 10)
+		sequence := env.Seq(alice)
+		jtx.RequireOwnerCount(t, env, alice, 11)
+
+		for offset := uint32(0); offset < 10; offset++ {
+			transaction := clawbacktx.NewMPTokenClawback(alice.Address, bob.Address, tester.MPTAmount(5))
+			result := env.Submit(jtx.WithTicketSeq(transaction, firstTicket+offset))
+			jtx.RequireTxSuccess(t, result)
+		}
+		tester.RequireMPTokenAmount(bob, 50)
+		require.Equal(t, uint64(50), tester.IssuanceOutstandingAmount())
+		jtx.RequireTicketCount(t, env, alice, 0)
+		jtx.RequireOwnerCount(t, env, alice, 1)
+		jtx.RequireSequence(t, env, alice, sequence)
+
+		consumed := clawbacktx.NewMPTokenClawback(alice.Address, bob.Address, tester.MPTAmount(5))
+		jtx.RequireTxFail(t, env.Submit(jtx.WithTicketSeq(consumed, firstTicket)), "tefNO_TICKET")
+		future := clawbacktx.NewMPTokenClawback(alice.Address, bob.Address, tester.MPTAmount(5))
+		jtx.RequireTxFail(t, env.Submit(jtx.WithTicketSeq(future, sequence)), "terPRE_TICKET")
+		tester.RequireMPTokenAmount(bob, 50)
+		require.Equal(t, uint64(50), tester.IssuanceOutstandingAmount())
+		jtx.RequireOwnerCount(t, env, alice, 1)
+		jtx.RequireSequence(t, env, alice, sequence)
 	})
 }
 

@@ -95,6 +95,11 @@ func (e *Engine) preflight(tx txcore.Transaction) (result ter.Result) {
 // Reference: rippled Transactor.h Transactor::invokePreflight<T>.
 func (e *Engine) preflightStructure(tx txcore.Transaction, common *txcore.Common) ter.Result {
 	rules := e.rules()
+	if tx.TxType() == txcore.TypeClawback {
+		if err := txcore.ValidateTransactionTemplateAllowlist(tx); err != nil {
+			return ter.TemMALFORMED
+		}
+	}
 
 	// The transactions.macro amendment gate (rippled Permission::getTxFeature →
 	// temDISABLED) is the FIRST check, before checkExtraFeatures and preflight1,

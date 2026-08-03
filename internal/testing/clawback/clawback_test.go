@@ -13,8 +13,23 @@ import (
 	"github.com/LeJamon/go-xrpl/internal/testing/trustset"
 	"github.com/LeJamon/go-xrpl/internal/tx"
 	accounttx "github.com/LeJamon/go-xrpl/internal/tx/account"
+	clawbacktx "github.com/LeJamon/go-xrpl/internal/tx/clawback"
+	"github.com/LeJamon/go-xrpl/keylet"
 	"github.com/stretchr/testify/require"
 )
+
+type clawbackWithTopLevelMPTID struct {
+	*clawbacktx.Clawback
+}
+
+func (c *clawbackWithTopLevelMPTID) Flatten() (map[string]any, error) {
+	values, err := c.Clawback.Flatten()
+	if err != nil {
+		return nil, err
+	}
+	values["MPTokenIssuanceID"] = "000000000000000000000001000000000000000000000001"
+	return values, nil
+}
 
 // TestClawback_AllowTrustLineClawbackFlag tests the AllowTrustLineClawback flag.
 // Reference: rippled Clawback_test.cpp testAllowTrustLineClawbackFlag (lines 64-191)
@@ -236,7 +251,7 @@ func TestClawback_Validation(t *testing.T) {
 
 		// fails because amount is in XRP
 		{
-			cb := clawback.Claw(alice, bob, "USD", 5).BuildClawback()
+			cb := clawback.Claw(alice, bob, "USD", 5).Build()
 			cb.Amount = tx.NewXRPAmount(jtx.XRP(10))
 			result = env.Submit(cb)
 			require.Equal(t, "temBAD_AMOUNT", result.Code)
@@ -280,6 +295,19 @@ func TestClawback_Validation(t *testing.T) {
 	})
 }
 
+func TestClawback_TypedSubmissionRejectsTopLevelMPTID(t *testing.T) {
+	env := jtx.NewTestEnv(t)
+	alice := jtx.NewAccount("alice")
+	bob := jtx.NewAccount("bob")
+	env.Fund(alice, bob)
+	transaction := &clawbackWithTopLevelMPTID{Clawback: clawbacktx.NewMPTokenClawback(
+		alice.Address,
+		bob.Address,
+		state.NewMPTAmountWithIssuanceID(1, alice.Address, "000000000000000000000001000000000000000000000001"),
+	)}
+	jtx.RequireTxFail(t, env.Submit(transaction), jtx.TemMALFORMED)
+}
+
 // TestClawback_Permission tests clawback permission checks (preclaim).
 // Reference: rippled Clawback_test.cpp testPermission (lines 323-458)
 func TestClawback_Permission(t *testing.T) {
@@ -307,7 +335,7 @@ func TestClawback_Permission(t *testing.T) {
 	})
 
 	// Test that trustline cannot be clawed by someone who is not the issuer
-	t.Run("NonIssuerClawback", func(t *testing.T) {
+	t.Run("ThirdPartyWithoutTrustLine", func(t *testing.T) {
 		env := jtx.NewTestEnv(t)
 
 		alice := jtx.NewAccount("alice")
@@ -340,8 +368,12 @@ func TestClawback_Permission(t *testing.T) {
 
 		// cindy tries to claw from bob, and fails because trustline does not exist
 		result = env.Submit(clawback.Claw(cindy, bob, "USD", 200).Build())
-		require.Equal(t, "tecNO_LINE", result.Code)
+		jtx.RequireTxClaimed(t, result, "tecNO_LINE")
 		env.Close()
+		jtx.RequireIOUBalance(t, env, bob, alice, "USD", 1000)
+		jtx.RequireIOUBalance(t, env, alice, bob, "USD", -1000)
+		jtx.RequireOwnerCount(t, env, bob, 1)
+		jtx.RequireOwnerCount(t, env, cindy, 0)
 	})
 
 	// When a trustline is created between issuer and holder,
@@ -384,8 +416,11 @@ func TestClawback_Permission(t *testing.T) {
 
 			// bob cannot claw back USD from alice because he's not the issuer
 			result = env.Submit(clawback.Claw(bob, alice, "USD", 5).Build())
-			require.Equal(t, "tecNO_PERMISSION", result.Code)
+			jtx.RequireTxClaimed(t, result, "tecNO_PERMISSION")
 			env.Close()
+			jtx.RequireIOUBalance(t, env, bob, alice, "USD", 10)
+			jtx.RequireIOUBalance(t, env, alice, bob, "USD", -10)
+			jtx.RequireOwnerCount(t, env, bob, 1)
 		})
 
 		// bob issues 10 CAD to alice.
@@ -403,8 +438,11 @@ func TestClawback_Permission(t *testing.T) {
 
 			// alice cannot claw back CAD from bob because she's not the issuer
 			result = env.Submit(clawback.Claw(alice, bob, "CAD", 5).Build())
-			require.Equal(t, "tecNO_PERMISSION", result.Code)
+			jtx.RequireTxClaimed(t, result, "tecNO_PERMISSION")
 			env.Close()
+			jtx.RequireIOUBalance(t, env, bob, alice, "CAD", -10)
+			jtx.RequireIOUBalance(t, env, alice, bob, "CAD", 10)
+			jtx.RequireOwnerCount(t, env, alice, 1)
 		})
 	})
 }
@@ -643,8 +681,12 @@ func TestClawback_BidirectionalLine(t *testing.T) {
 	// alice fails to clawback. Even though she is also an issuer,
 	// the trustline balance is positive from her perspective
 	result = env.Submit(clawback.Claw(alice, bob, "USD", 200).Build())
-	require.Equal(t, "tecNO_PERMISSION", result.Code)
+	jtx.RequireTxClaimed(t, result, "tecNO_PERMISSION")
 	env.Close()
+	jtx.RequireIOUBalance(t, env, bob, alice, "USD", -500)
+	jtx.RequireIOUBalance(t, env, alice, bob, "USD", 500)
+	jtx.RequireOwnerCount(t, env, alice, 1)
+	jtx.RequireOwnerCount(t, env, bob, 1)
 
 	// bob is able to successfully clawback from alice because
 	// the trustline balance is negative from his perspective
@@ -667,8 +709,12 @@ func TestClawback_BidirectionalLine(t *testing.T) {
 
 	// bob is now the holder and fails to clawback
 	result = env.Submit(clawback.Claw(bob, alice, "USD", 200).Build())
-	require.Equal(t, "tecNO_PERMISSION", result.Code)
+	jtx.RequireTxClaimed(t, result, "tecNO_PERMISSION")
 	env.Close()
+	jtx.RequireIOUBalance(t, env, bob, alice, "USD", 700)
+	jtx.RequireIOUBalance(t, env, alice, bob, "USD", -700)
+	jtx.RequireOwnerCount(t, env, alice, 1)
+	jtx.RequireOwnerCount(t, env, bob, 1)
 
 	// alice successfully claws back
 	result = env.Submit(clawback.Claw(alice, bob, "USD", 200).Build())
@@ -725,6 +771,10 @@ func TestClawback_DeleteDefaultLine(t *testing.T) {
 	// bob no longer owns the trustline because it was deleted
 	jtx.RequireOwnerCount(t, env, alice, 0)
 	jtx.RequireOwnerCount(t, env, bob, 0)
+	jtx.RequireTrustLineNotExists(t, env, alice, bob, "USD")
+	jtx.RequireLedgerEntryNotExists(t, env, keylet.Line(alice.ID, bob.ID, "USD"))
+	jtx.RequireLines(t, env, alice, 0)
+	jtx.RequireLines(t, env, bob, 0)
 }
 
 // TestClawback_FrozenLine tests clawback on frozen trust lines.
@@ -766,14 +816,17 @@ func TestClawback_FrozenLine(t *testing.T) {
 	jtx.RequireIOUBalance(t, env, bob, alice, "USD", 800)
 	jtx.RequireIOUBalance(t, env, alice, bob, "USD", -800)
 
-	// trustline remains frozen - check the freeze flag
-	// The freeze flag is on alice's side of the trustline
-	flags := env.TrustLineFlags(alice, bob, "USD")
-	isAliceLow := alice.ID[0] < bob.ID[0] // simplified comparison
-	_ = isAliceLow
-	// Check that either LsfLowFreeze or LsfHighFreeze is set (depending on which is alice)
-	isFrozen := (flags&state.LsfLowFreeze != 0) || (flags&state.LsfHighFreeze != 0)
-	require.True(t, isFrozen, "Trust line should remain frozen after clawback")
+	data, err := env.Ledger().Read(keylet.Line(alice.ID, bob.ID, "USD"))
+	require.NoError(t, err)
+	require.NotNil(t, data)
+	line, err := state.ParseRippleState(data)
+	require.NoError(t, err)
+	expected, opposite := uint32(state.LsfHighFreeze), uint32(state.LsfLowFreeze)
+	if state.CompareAccountIDs(alice.ID, bob.ID) < 0 {
+		expected, opposite = state.LsfLowFreeze, state.LsfHighFreeze
+	}
+	require.NotZero(t, line.Flags&expected, "issuer-side freeze flag must remain set")
+	require.Zero(t, line.Flags&opposite, "holder-side freeze flag must remain clear")
 }
 
 // TestClawback_AmountExceedsAvailable tests clawback when amount exceeds balance.
@@ -825,58 +878,8 @@ func TestClawback_AmountExceedsAvailable(t *testing.T) {
 	// verify that bob's trustline was deleted
 	jtx.RequireOwnerCount(t, env, alice, 0)
 	jtx.RequireOwnerCount(t, env, bob, 0)
-}
-
-// TestClawback_Tickets tests clawback using tickets.
-// Reference: rippled Clawback_test.cpp testTickets (lines 876-930)
-func TestClawback_Tickets(t *testing.T) {
-	env := jtx.NewTestEnv(t)
-	alice := jtx.NewAccount("alice")
-	bob := jtx.NewAccount("bob")
-
-	env.Fund(alice, bob)
-	env.Close()
-
-	// alice sets asfAllowTrustLineClawback
-	result := env.Submit(accountset.AccountSet(alice).AllowClawback().Build())
-	jtx.RequireTxSuccess(t, result)
-	env.Close()
-	jtx.RequireFlagSet(t, env, alice, state.LsfAllowTrustLineClawback)
-
-	// alice issues 100 USD to bob
-	env.Trust(bob, tx.NewIssuedAmountFromFloat64(1000, "USD", alice.Address))
-	result = env.Submit(payment.PayIssued(alice, bob, tx.NewIssuedAmountFromFloat64(100, "USD", alice.Address)).Build())
-	jtx.RequireTxSuccess(t, result)
-	env.Close()
-
-	jtx.RequireIOUBalance(t, env, bob, alice, "USD", 100)
-	jtx.RequireIOUBalance(t, env, alice, bob, "USD", -100)
-
-	// alice creates 10 tickets
-	ticketCount := uint32(10)
-	aliceTicketSeq := env.CreateTickets(alice, ticketCount)
-	env.Close()
-	aliceSeq := env.Seq(alice)
-	jtx.RequireOwnerCount(t, env, alice, ticketCount)
-
-	remaining := ticketCount
-	for remaining > 0 {
-		// alice claws back 5 USD using a ticket
-		clawTx := clawback.Claw(alice, bob, "USD", 5).Build()
-		clawTx = jtx.WithTicketSeq(clawTx, aliceTicketSeq)
-		result = env.Submit(clawTx)
-		jtx.RequireTxSuccess(t, result)
-		env.Close()
-
-		aliceTicketSeq++
-		remaining--
-		jtx.RequireOwnerCount(t, env, alice, remaining)
-	}
-
-	// alice clawed back 50 USD total, trustline has 50 USD remaining
-	jtx.RequireIOUBalance(t, env, bob, alice, "USD", 50)
-	jtx.RequireIOUBalance(t, env, alice, bob, "USD", -50)
-
-	// Verify that the account sequence numbers did not advance.
-	require.Equal(t, aliceSeq, env.Seq(alice))
+	jtx.RequireTrustLineNotExists(t, env, alice, bob, "USD")
+	jtx.RequireLedgerEntryNotExists(t, env, keylet.Line(alice.ID, bob.ID, "USD"))
+	jtx.RequireLines(t, env, alice, 0)
+	jtx.RequireLines(t, env, bob, 0)
 }

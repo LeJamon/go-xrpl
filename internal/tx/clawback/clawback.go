@@ -30,9 +30,6 @@ type Clawback struct {
 
 	// Holder is the MPToken holder (optional, for MPToken clawback only)
 	Holder string `json:"Holder,omitempty" xrpl:"Holder,omitempty"`
-
-	// MPTokenIssuanceID is the issuance ID for MPToken clawback (required when Holder is set)
-	MPTokenIssuanceID string `json:"MPTokenIssuanceID,omitempty" xrpl:"MPTokenIssuanceID,omitempty"`
 }
 
 // NewClawback creates a new Clawback transaction for IOU tokens
@@ -44,12 +41,11 @@ func NewClawback(account string, amount state.Amount) *Clawback {
 }
 
 // NewMPTokenClawback creates a new Clawback transaction for MPTokens
-func NewMPTokenClawback(account, holder, issuanceID string, amount state.Amount) *Clawback {
+func NewMPTokenClawback(account, holder string, amount state.Amount) *Clawback {
 	return &Clawback{
-		BaseTx:            *tx.NewBaseTx(tx.TypeClawback, account),
-		Amount:            amount,
-		Holder:            holder,
-		MPTokenIssuanceID: issuanceID,
+		BaseTx: *tx.NewBaseTx(tx.TypeClawback, account),
+		Amount: amount,
+		Holder: holder,
 	}
 }
 
@@ -147,15 +143,8 @@ func (c *Clawback) applyMPT(ctx *tx.ApplyContext) ter.Result {
 		return result
 	}
 
-	// Get the MPT issuance ID: prefer the legacy field, fall back to Amount's embedded ID
-	mptIDHex := c.MPTokenIssuanceID
-	if mptIDHex == "" {
-		mptIDHex = c.Amount.MPTIssuanceID()
-	}
-
-	// Parse MPTokenIssuanceID
 	var mptID [24]byte
-	issuanceIDBytes, err := hex.DecodeString(mptIDHex)
+	issuanceIDBytes, err := hex.DecodeString(c.Amount.MPTIssuanceID())
 	if err != nil || len(issuanceIDBytes) != 24 {
 		// If the ID is invalid/empty, the issuance won't be found
 		return ter.TecOBJECT_NOT_FOUND
@@ -209,14 +198,12 @@ func (c *Clawback) applyMPT(ctx *tx.ApplyContext) ter.Result {
 
 	// Compute actual clawback amount = min(balance, requested)
 	actual := min(requested, token.MPTAmount)
+	if issuance.OutstandingAmount < actual {
+		return ter.TecINTERNAL
+	}
 
 	token.MPTAmount -= actual
-
-	if issuance.OutstandingAmount >= actual {
-		issuance.OutstandingAmount -= actual
-	} else {
-		issuance.OutstandingAmount = 0
-	}
+	issuance.OutstandingAmount -= actual
 
 	updatedToken, err := state.SerializeMPToken(token)
 	if err != nil {

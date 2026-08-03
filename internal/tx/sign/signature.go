@@ -477,13 +477,27 @@ func copyMap(m map[string]any) map[string]any {
 
 func flattenForSigning(tx txcore.Transaction) (map[string]any, error) {
 	if raw := tx.GetRawBytes(); len(raw) > 0 {
-		return binarycodec.DecodeBytes(raw)
+		txMap, err := binarycodec.DecodeBytes(raw)
+		if err != nil {
+			return nil, err
+		}
+		if tx.TxType() == txcore.TypeClawback {
+			if err := txcore.ValidateTemplateFields(tx.TxType(), txMap); err != nil {
+				return nil, err
+			}
+		}
+		return txMap, nil
 	}
 	txMap, err := tx.Flatten()
 	if err != nil {
 		return nil, err
 	}
 	txcore.PopulateRequiredWireFields(txMap, tx.GetCommon())
+	if tx.TxType() == txcore.TypeClawback {
+		if err := txcore.ValidateTemplateFields(tx.TxType(), txMap); err != nil {
+			return nil, err
+		}
+	}
 	return txMap, nil
 }
 

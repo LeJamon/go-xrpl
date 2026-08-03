@@ -80,6 +80,12 @@ func TestParseFromBinary_DisallowedField(t *testing.T) {
 			disallowedKey: "Destination",
 			disallowedVal: testDestination,
 		},
+		{
+			name:          "Clawback carrying top-level MPTokenIssuanceID",
+			txType:        "Clawback",
+			disallowedKey: "MPTokenIssuanceID",
+			disallowedVal: "000000000000000000000001000000000000000000000001",
+		},
 	}
 
 	for _, tc := range cases {
