@@ -825,10 +825,11 @@ type HandshakeExtras struct {
 // Runs first in the verify order
 // (Server-Domain → Network-ID → Network-Time → Public-Key → ...).
 func ValidateServerDomain(headers http.Header) (string, error) {
-	v := headers.Get(HeaderServerDomain)
-	if v == "" {
+	values := headers.Values(HeaderServerDomain)
+	if len(values) == 0 {
 		return "", nil
 	}
+	v := values[0]
 	if !protocol.IsProperlyFormedTomlDomain(v) {
 		return "", fmt.Errorf("%w: invalid Server-Domain %q",
 			ErrInvalidHandshake, v)
