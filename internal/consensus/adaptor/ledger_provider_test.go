@@ -1,7 +1,9 @@
 package adaptor
 
 import (
+	"context"
 	"errors"
+	"fmt"
 	"testing"
 	"time"
 
@@ -15,6 +17,25 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+type cancelOnNthErrContext struct {
+	cancelAt int
+	calls    int
+	canceled bool
+}
+
+func (c *cancelOnNthErrContext) Deadline() (time.Time, bool) { return time.Time{}, false }
+func (c *cancelOnNthErrContext) Done() <-chan struct{}       { return nil }
+func (c *cancelOnNthErrContext) Value(any) any               { return nil }
+
+func (c *cancelOnNthErrContext) Err() error {
+	c.calls++
+	if c.calls >= c.cancelAt {
+		c.canceled = true
+		return context.Canceled
+	}
+	return nil
+}
+
 // fakeLookup is a hand-rolled ledgerLookup double. It maps a ledger hash to
 // a *ledger.Ledger so each test can inject the exact graph it wants without
 // spinning up a full *service.Service. Sequence-based lookups are used by
@@ -23,6 +44,19 @@ import (
 type fakeLookup struct {
 	byHash        map[[32]byte]*ledger.Ledger
 	earliestFetch uint32
+}
+
+type contextErrorLookup struct {
+	*fakeLookup
+	err          error
+	beforeReturn func()
+}
+
+func (f *contextErrorLookup) GetLedgerByHashContext(context.Context, [32]byte) (*ledger.Ledger, error) {
+	if f.beforeReturn != nil {
+		f.beforeReturn()
+	}
+	return nil, f.err
 }
 
 func newFakeLookup() *fakeLookup {
@@ -151,6 +185,89 @@ func TestLedgerProvider_GetReplayDelta_ImmutableLedger(t *testing.T) {
 	}
 }
 
+func TestLedgerProvider_GetReplayDelta_ContextCancellationNeverReturnsPartialDelta(t *testing.T) {
+	closed := makeClosedLedgerWithTxs(t, []struct {
+		key  [32]byte
+		blob []byte
+	}{
+		{fixedKey32(1), []byte("tx-blob-one--padded")},
+		{fixedKey32(2), []byte("tx-blob-two--padded")},
+	})
+	lookup := newFakeLookup()
+	lookup.add(closed)
+	provider := newLedgerProviderForTest(lookup)
+	hash := closed.Hash()
+
+	for cancelAt := 2; cancelAt <= 256; cancelAt++ {
+		ctx := &cancelOnNthErrContext{cancelAt: cancelAt}
+		headerBytes, leaves, err := provider.GetReplayDeltaContext(ctx, hash[:])
+		if !ctx.canceled {
+			continue
+		}
+		require.ErrorIs(t, err, context.Canceled, "cancelAt=%d", cancelAt)
+		assert.Nil(t, headerBytes, "cancelAt=%d", cancelAt)
+		assert.Nil(t, leaves, "cancelAt=%d", cancelAt)
+	}
+}
+
+func TestLedgerProvider_GetReplayDelta_PropagatesLookupCancellation(t *testing.T) {
+	provider := newLedgerProviderForTest(&contextErrorLookup{
+		fakeLookup: newFakeLookup(),
+		err:        fmt.Errorf("lookup canceled: %w", context.Canceled),
+	})
+	headerBytes, leaves, err := provider.GetReplayDeltaContext(context.Background(), make([]byte, 32))
+	require.ErrorIs(t, err, context.Canceled)
+	assert.Nil(t, headerBytes)
+	assert.Nil(t, leaves)
+}
+
+func TestLedgerProvider_GetProofPath_PropagatesLookupDeadline(t *testing.T) {
+	provider := newLedgerProviderForTest(&contextErrorLookup{
+		fakeLookup: newFakeLookup(),
+		err:        fmt.Errorf("lookup timed out: %w", context.DeadlineExceeded),
+	})
+	headerBytes, path, err := provider.GetProofPathContext(
+		context.Background(), make([]byte, 32), make([]byte, 32), message.LedgerMapAccountState,
+	)
+	require.ErrorIs(t, err, context.DeadlineExceeded)
+	assert.Nil(t, headerBytes)
+	assert.Nil(t, path)
+}
+
+func TestLedgerProvider_ContextCancellationWinsOverLookupErrorTranslation(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		call func(*LedgerProvider, context.Context) error
+	}{
+		{
+			name: "replay delta",
+			call: func(provider *LedgerProvider, ctx context.Context) error {
+				_, _, err := provider.GetReplayDeltaContext(ctx, make([]byte, 32))
+				return err
+			},
+		},
+		{
+			name: "proof path",
+			call: func(provider *LedgerProvider, ctx context.Context) error {
+				_, _, err := provider.GetProofPathContext(
+					ctx, make([]byte, 32), make([]byte, 32), message.LedgerMapAccountState,
+				)
+				return err
+			},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx, cancel := context.WithCancel(context.Background())
+			provider := newLedgerProviderForTest(&contextErrorLookup{
+				fakeLookup:   newFakeLookup(),
+				err:          errors.New("storage unavailable"),
+				beforeReturn: cancel,
+			})
+			require.ErrorIs(t, tc.call(provider, ctx), context.Canceled)
+		})
+	}
+}
+
 // TestLedgerProvider_GetReplayDelta_UnknownLedger verifies that a hash
 // the lookup doesn't recognize yields (nil, nil, nil) — the documented
 // contract for "unknown / not immutable".
@@ -204,9 +321,10 @@ func TestLedgerProvider_GetProofPath_TxMap_Existing(t *testing.T) {
 	provider := newLedgerProviderForTest(lookup)
 
 	hash := closed.Hash()
-	header, path, err := provider.GetProofPath(hash[:], txs[0].key[:], message.LedgerMapTransaction)
+	headerBytes, path, err := provider.GetProofPath(hash[:], txs[0].key[:], message.LedgerMapTransaction)
 	require.NoError(t, err)
-	assert.Equal(t, closed.SerializeHeader(), header)
+	assert.Equal(t, header.AddRaw(closed.Header(), false), headerBytes)
+	assert.Len(t, headerBytes, header.SizeBase)
 	require.NotEmpty(t, path, "proof path for an existing key must be non-empty")
 }
 
@@ -235,9 +353,10 @@ func TestLedgerProvider_GetProofPath_StateMap_Existing(t *testing.T) {
 	provider := newLedgerProviderForTest(lookup)
 
 	hash := closed.Hash()
-	header, path, err := provider.GetProofPath(hash[:], targetKey[:], message.LedgerMapAccountState)
+	headerBytes, path, err := provider.GetProofPath(hash[:], targetKey[:], message.LedgerMapAccountState)
 	require.NoError(t, err)
-	assert.Equal(t, closed.SerializeHeader(), header)
+	assert.Equal(t, header.AddRaw(closed.Header(), false), headerBytes)
+	assert.Len(t, headerBytes, header.SizeBase)
 	require.NotEmpty(t, path, "proof path for an existing state key must be non-empty")
 }
 

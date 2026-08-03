@@ -290,6 +290,69 @@ func TestServePeerCancellationReleasesQueuedDecodedBudget(t *testing.T) {
 	require.Zero(t, readBudgetUsed(budget))
 }
 
+func TestReplayAndProofRequestsRetainBudgetUntilServeCompletion(t *testing.T) {
+	tests := []struct {
+		name    string
+		msgType message.MessageType
+		request message.Message
+	}{
+		{
+			name:    "replay delta",
+			msgType: message.TypeReplayDeltaReq,
+			request: &message.ReplayDeltaRequest{LedgerHash: bytes.Repeat([]byte{0x01}, 32)},
+		},
+		{
+			name:    "proof path",
+			msgType: message.TypeProofPathReq,
+			request: &message.ProofPathRequest{
+				Key:        bytes.Repeat([]byte{0x02}, 32),
+				LedgerHash: bytes.Repeat([]byte{0x03}, 32),
+				MapType:    message.LedgerMapAccountState,
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			payload, err := message.Encode(tt.request)
+			require.NoError(t, err)
+			budget := newReadBudget(int64(len(payload)))
+			require.NoError(t, budget.acquire(context.Background(), nil, int64(len(payload))))
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			scheduler := newServeScheduler(ctx, 1, 1, 1, 1)
+			peer := newLatencyTestPeer(t)
+			capabilities := NewPeerCapabilities()
+			capabilities.Features.Enable(FeatureLedgerReplay)
+			peer.capabilities = capabilities
+			cfg := DefaultConfig()
+			cfg.EnableLedgerReplay = true
+			overlay := &Overlay{
+				cfg:            cfg,
+				peers:          map[PeerID]*Peer{peer.ID(): peer},
+				serveScheduler: scheduler,
+				ctx:            ctx,
+				lifecycleState: overlayLifecycleRunning,
+				ledgerSync:     NewLedgerSyncHandler(nil),
+			}
+			overlay.onMessageReceived(Event{
+				Type:        EventMessageReceived,
+				PeerID:      peer.ID(),
+				MessageType: uint16(tt.msgType),
+				Payload:     payload,
+				reservation: newInboundReservation(budget, int64(len(payload))),
+			})
+			require.Equal(t, int64(len(payload)), readBudgetUsed(budget))
+
+			task, ok := scheduler.take(ctx)
+			require.True(t, ok)
+			task.run(task.ctx)
+			scheduler.finish(task)
+			require.Zero(t, readBudgetUsed(budget))
+		})
+	}
+}
+
 func TestStopDrainsRetainedEventsQueuedAfterRunCompletion(t *testing.T) {
 	o, err := New(WithDataDir(t.TempDir()))
 	require.NoError(t, err)
