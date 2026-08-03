@@ -30,16 +30,17 @@ var (
 type WireLimitReason string
 
 const (
-	WireLimitDepth          WireLimitReason = "nesting-depth"
-	WireLimitFieldCount     WireLimitReason = "field-count"
-	WireLimitTransactions   WireLimitReason = "transactions"
-	WireLimitGetObjects     WireLimitReason = "get-objects"
-	WireLimitLedgerData     WireLimitReason = "ledger-data-nodes"
-	WireLimitEndpoints      WireLimitReason = "endpoints"
-	WireLimitValidatorBlobs WireLimitReason = "validator-blobs"
-	WireLimitManifests      WireLimitReason = "manifests"
-	WireLimitClusterNodes   WireLimitReason = "cluster-nodes"
-	WireLimitLoadSources    WireLimitReason = "load-sources"
+	WireLimitDepth                 WireLimitReason = "nesting-depth"
+	WireLimitFieldCount            WireLimitReason = "field-count"
+	WireLimitTransactions          WireLimitReason = "transactions"
+	WireLimitGetObjects            WireLimitReason = "get-objects"
+	WireLimitGetObjectTransactions WireLimitReason = "get-object-transactions"
+	WireLimitLedgerData            WireLimitReason = "ledger-data-nodes"
+	WireLimitEndpoints             WireLimitReason = "endpoints"
+	WireLimitValidatorBlobs        WireLimitReason = "validator-blobs"
+	WireLimitManifests             WireLimitReason = "manifests"
+	WireLimitClusterNodes          WireLimitReason = "cluster-nodes"
+	WireLimitLoadSources           WireLimitReason = "load-sources"
 )
 
 type WireLimitError struct {
@@ -88,11 +89,13 @@ func Preflight(msgType MessageType, data []byte) error {
 	}
 	if msgType == TypeGetObjects {
 		limit := maxGetObjects
+		reason := WireLimitGetObjects
 		if state.getObjectTransactions {
 			limit = maxTransactions
+			reason = WireLimitGetObjectTransactions
 		}
 		if state.getObjects > limit {
-			return wireLimit(WireLimitGetObjects, limit, state.getObjects)
+			return wireLimit(reason, limit, state.getObjects)
 		}
 	}
 	return nil

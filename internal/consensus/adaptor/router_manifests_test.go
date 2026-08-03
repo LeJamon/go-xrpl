@@ -105,6 +105,17 @@ func rawManifestCollection(entries ...[]byte) []byte {
 	return payload
 }
 
+func nestedManifestGroups(depth int) []byte {
+	var payload []byte
+	for range depth {
+		payload = protowire.AppendTag(payload, 100, protowire.StartGroupType)
+	}
+	for range depth {
+		payload = protowire.AppendTag(payload, 100, protowire.EndGroupType)
+	}
+	return payload
+}
+
 // TestRouter_HandleManifests_AppliesAccepted drives an inbound
 // TMManifests frame through the router's Run loop and asserts that
 // after processing the cache contains the master→ephemeral binding
@@ -267,6 +278,21 @@ func TestRouter_ProcessManifestSpoolRejectsOversizeBeforeApply(t *testing.T) {
 // cache must reject it; no state change is the whole guarantee.
 // (The bad-data attribution surface is exercised in
 // router_bad_data_test.go — here we only verify the cache side.)
+func TestRouter_HandleManifests_GenericWireLimitUsesInvalidData(t *testing.T) {
+	router, _, _ := routerWithCache(t, nil, 0, 0)
+	badData := &badDataRecordingSender{}
+	router.gossip = badData
+
+	processed := router.handleManifests(&peermanagement.InboundMessage{
+		PeerID:  7,
+		Type:    message.TypeManifests,
+		Payload: nestedManifestGroups(16),
+	})
+
+	require.False(t, processed)
+	require.Equal(t, []badDataCall{{peerID: 7, reason: "wire-invalid"}}, badData.getBadDataCalls())
+}
+
 func TestRouter_HandleManifests_InvalidDoesNotStore(t *testing.T) {
 	engine := &mockEngine{}
 	adaptor := newTestAdaptor(t)

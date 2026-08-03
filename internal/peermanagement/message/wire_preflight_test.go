@@ -40,7 +40,7 @@ func TestPreflightCollectionLimitsInclusive(t *testing.T) {
 		prefix  []byte
 	}{
 		{name: "transactions", msgType: TypeTransactions, field: 1, limit: maxTransactions, reason: WireLimitTransactions},
-		{name: "get objects transactions", msgType: TypeGetObjects, field: 6, limit: maxTransactions, reason: WireLimitGetObjects, prefix: enumField(1, uint64(ObjectTypeTransactions))},
+		{name: "get objects transactions", msgType: TypeGetObjects, field: 6, limit: maxTransactions, reason: WireLimitGetObjectTransactions, prefix: enumField(1, uint64(ObjectTypeTransactions))},
 		{name: "ledger data", msgType: TypeLedgerData, field: 4, limit: maxLedgerDataNodes, reason: WireLimitLedgerData},
 		{name: "endpoints", msgType: TypeEndpoints, field: 3, limit: maxEndpoints, reason: WireLimitEndpoints},
 		{name: "validator blobs", msgType: TypeValidatorListCollection, field: 3, limit: maxValidatorBlobs, reason: WireLimitValidatorBlobs},
@@ -109,7 +109,7 @@ func TestPreflightGetObjectsUsesLastRecognizedType(t *testing.T) {
 				require.NoError(t, err)
 				return
 			}
-			requireWireLimit(t, err, WireLimitGetObjects, test.limit, maxTransactions+1)
+			requireWireLimit(t, err, WireLimitGetObjectTransactions, test.limit, maxTransactions+1)
 		})
 	}
 

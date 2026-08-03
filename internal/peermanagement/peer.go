@@ -1739,6 +1739,7 @@ func chargeForReason(reason string) resource.Charge {
 		"replay-delta-resp-unnegotiated",
 		"proof-path-resp-unnegotiated",
 		"compression-unnegotiated",
+		"get-objects-transactions-oversize",
 		"get-objects-ledgerhash",
 		"have-set-hashsize",
 		"proposal-decode",
@@ -1776,6 +1777,8 @@ func wirePreflightChargeReason(err error) string {
 			return "endpoints-too-large"
 		case message.WireLimitManifests:
 			return "manifests-oversize"
+		case message.WireLimitGetObjectTransactions:
+			return "get-objects-transactions-oversize"
 		}
 	}
 	return "wire-invalid"

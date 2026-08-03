@@ -144,8 +144,11 @@ func (r *Router) handleManifests(msg *peermanagement.InboundMessage) bool {
 	if err != nil {
 		r.logger.Warn("failed to decode manifests frame", "error", err, "peer", msg.PeerID)
 		reason := "manifests-decode"
-		if errors.Is(err, message.ErrWireLimit) {
+		var limitErr *message.WireLimitError
+		if errors.As(err, &limitErr) && limitErr.Reason == message.WireLimitManifests {
 			reason = "manifests-oversize"
+		} else if errors.Is(err, message.ErrWireLimit) {
+			reason = "wire-invalid"
 		}
 		r.gossip.IncPeerBadData(uint64(msg.PeerID), reason)
 		return false

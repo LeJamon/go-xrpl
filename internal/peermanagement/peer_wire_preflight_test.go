@@ -23,6 +23,12 @@ func peerRepeatedMessageField(field protowire.Number, count int) []byte {
 	return wire
 }
 
+func peerGetObjectTransactionsPayload(count int) []byte {
+	wire := protowire.AppendTag(nil, 1, protowire.VarintType)
+	wire = protowire.AppendVarint(wire, uint64(message.ObjectTypeTransactions))
+	return append(wire, peerRepeatedMessageField(6, count)...)
+}
+
 func TestPeerWirePreflightChargesAndDropsBeforeDispatch(t *testing.T) {
 	tests := []struct {
 		name     string
@@ -53,6 +59,13 @@ func TestPeerWirePreflightChargesAndDropsBeforeDispatch(t *testing.T) {
 			payload: peerRepeatedMessageField(1, 10_001),
 			reason:  "wire-invalid",
 			charge:  resource.FeeInvalidData,
+		},
+		{
+			name:    "get object transactions",
+			msgType: message.TypeGetObjects,
+			payload: peerGetObjectTransactionsPayload(10_001),
+			reason:  "get-objects-transactions-oversize",
+			charge:  resource.FeeMalformedRequest,
 		},
 	}
 
