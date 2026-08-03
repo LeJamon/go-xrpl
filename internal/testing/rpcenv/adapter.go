@@ -225,7 +225,7 @@ func (a *ledgerAdapter) GetLedgerViewByHash(hash [32]byte) (types.LedgerStateVie
 
 func (a *ledgerAdapter) IsAmendmentBlocked() bool { return false }
 
-func (a *ledgerAdapter) SubmitTransaction(_ []byte, _ ...string) (*types.SubmitResult, error) {
+func (a *ledgerAdapter) SubmitTransaction(_ []byte, _ string) (*types.SubmitResult, error) {
 	return nil, errNotImplemented
 }
 
@@ -256,7 +256,7 @@ func (a *ledgerAdapter) GetAutofillSequence(_ string, _ bool) (uint32, error) {
 // GetAccountInfo serves as the worked example for extending this adapter:
 // decode address → keylet.Account → Exists/Read → parse SLE → fill
 // types.AccountInfo with hex-formatted hashes and decimal-formatted balance.
-// Matches the conversion done by internal/rpc/ledger_adapter.go so
+// Matches the conversion done by internal/rpc/adapter so
 // handlers see identical shapes whether they run against production or the
 // harness.
 func (a *ledgerAdapter) GetAccountInfo(ctx context.Context, account string, ledgerIndex string) (*types.AccountInfo, error) {
@@ -319,8 +319,8 @@ func (a *ledgerAdapter) GetAccountInfo(ctx context.Context, account string, ledg
 
 // Methods below return errNotImplemented. To wire one up, follow the
 // GetAccountInfo pattern above: derive the keylet, read the SLE, parse
-// it, and convert to the result type. internal/rpc/ledger_adapter.go has
-// the canonical service→types conversions for reference.
+// it, and convert to the result type. The production adapter package has the
+// canonical service-to-types conversions for reference.
 
 func (a *ledgerAdapter) GetAccountLines(_ context.Context, _ string, _ string, _ string, _ uint32, _ string) (*types.AccountLinesResult, error) {
 	return nil, errNotImplemented

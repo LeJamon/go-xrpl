@@ -1,0 +1,99 @@
+package adapter
+
+import (
+	"context"
+
+	"github.com/LeJamon/go-xrpl/internal/ledger/service"
+	"github.com/LeJamon/go-xrpl/internal/rpc/types"
+	"github.com/LeJamon/go-xrpl/storage/relationaldb"
+)
+
+// GetTransaction retrieves a transaction by its hash
+func (a *LedgerServiceAdapter) GetTransaction(txHash [32]byte) (*types.TransactionInfo, error) {
+	result, err := a.svc.GetTransaction(txHash)
+	if err != nil {
+		return nil, err
+	}
+	return rpcTransactionInfo(result), nil
+}
+
+// GetTransactionWithRange performs the optional transaction-table lookup used
+// by the tx RPC without adding that method to the broad ledger service contract.
+func (a *LedgerServiceAdapter) GetTransactionWithRange(ctx context.Context, txHash [32]byte, minLedger, maxLedger uint32) (*types.TransactionInfo, types.TxSearchResult, error) {
+	result, searched, err := a.svc.GetTransactionWithRange(ctx, txHash, minLedger, maxLedger)
+	if result == nil {
+		return nil, rpcTxSearchResult(searched), err
+	}
+	return rpcTransactionInfo(result), rpcTxSearchResult(searched), err
+}
+
+func rpcTransactionInfo(result *service.TransactionResult) *types.TransactionInfo {
+	ledgerHash := ""
+	if result.LedgerHash != ([32]byte{}) {
+		ledgerHash = formatLedgerHash(result.LedgerHash)
+	}
+	return &types.TransactionInfo{
+		TxData:      result.TxData,
+		LedgerIndex: result.LedgerIndex,
+		LedgerHash:  ledgerHash,
+		Validated:   result.Validated,
+		TxIndex:     result.TxIndex,
+		CloseTime:   result.CloseTime,
+	}
+}
+
+func (a *LedgerServiceAdapter) SearchTransaction(ctx context.Context, txHash [32]byte, ledgerRange *types.TransactionSearchRange) (*types.TransactionSearchResult, error) {
+	var serviceRange *relationaldb.LedgerRange
+	if ledgerRange != nil {
+		serviceRange = &relationaldb.LedgerRange{
+			Min: relationaldb.LedgerIndex(ledgerRange.Min),
+			Max: relationaldb.LedgerIndex(ledgerRange.Max),
+		}
+	}
+	result, err := a.svc.SearchTransaction(ctx, txHash, serviceRange)
+	if err != nil {
+		return nil, err
+	}
+	response := &types.TransactionSearchResult{}
+	if result.Transaction != nil {
+		response.Transaction = rpcTransactionInfo(result.Transaction)
+	}
+	switch result.Searched {
+	case relationaldb.TxSearchAll:
+		searchedAll := true
+		response.SearchedAll = &searchedAll
+	case relationaldb.TxSearchSome:
+		searchedAll := false
+		response.SearchedAll = &searchedAll
+	}
+	return response, nil
+}
+
+// StoreTransaction stores a transaction in the current ledger
+func (a *LedgerServiceAdapter) StoreTransaction(txHash [32]byte, txData []byte) error {
+	return a.svc.StoreTransaction(txHash, txData)
+}
+
+// GetTransactionHistory retrieves recent transactions
+func (a *LedgerServiceAdapter) GetTransactionHistory(ctx context.Context, startIndex uint32) (*types.TxHistoryResult, error) {
+	result, err := a.svc.GetTransactionHistory(ctx, startIndex)
+	if err != nil {
+		return nil, err
+	}
+
+	// Convert service result to RPC result
+	txs := make([]types.AccountTransaction, len(result.Transactions))
+	for i, tx := range result.Transactions {
+		txs[i] = types.AccountTransaction{
+			Hash:        tx.Hash,
+			LedgerIndex: tx.LedgerIndex,
+			TxBlob:      tx.TxBlob,
+			Meta:        tx.Meta,
+		}
+	}
+
+	return &types.TxHistoryResult{
+		Index:        result.Index,
+		Transactions: txs,
+	}, nil
+}

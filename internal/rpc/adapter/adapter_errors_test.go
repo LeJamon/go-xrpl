@@ -1,4 +1,4 @@
-package rpc
+package adapter
 
 import (
 	"testing"
@@ -61,7 +61,8 @@ func TestLedgerReaderAdapterReturnsOpenHeaderRoots(t *testing.T) {
 	require.NotEqual(t, header.TxHash, liveTxHash)
 	require.NotEqual(t, header.AccountHash, liveStateHash)
 
-	reader := &ledgerReaderAdapter{l: open}
+	reader, err := NewLedgerServiceAdapter(svc).GetLedgerBySequence(open.Sequence())
+	require.NoError(t, err)
 	require.Equal(t, header.TxHash, reader.TxMapHash())
 	require.Equal(t, header.AccountHash, reader.StateMapHash())
 }

@@ -787,7 +787,9 @@ type FailHardSubmitter interface {
 }
 
 type TransactionSubmitter interface {
-	SubmitTransaction(txJSON []byte, txBlobHex ...string) (*SubmitResult, error)
+	// txBlobHex is the signed transaction blob, or an empty string when the
+	// caller has only transaction JSON.
+	SubmitTransaction(txJSON []byte, txBlobHex string) (*SubmitResult, error)
 	SimulateTransaction(txJSON []byte) (*SubmitResult, error)
 	GetTransaction(txHash [32]byte) (*TransactionInfo, error)
 	StoreTransaction(txHash [32]byte, txData []byte) error

@@ -43,7 +43,7 @@ func (l *loadAdmissionLedger) GetAutofillFee([]byte, bool, int, int) (uint64, er
 	return 10, nil
 }
 
-func (l *loadAdmissionLedger) SubmitTransaction([]byte, ...string) (*types.SubmitResult, error) {
+func (l *loadAdmissionLedger) SubmitTransaction([]byte, string) (*types.SubmitResult, error) {
 	l.transactionSends++
 	return &types.SubmitResult{}, nil
 }

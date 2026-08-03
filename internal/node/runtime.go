@@ -20,6 +20,7 @@ import (
 	"github.com/LeJamon/go-xrpl/internal/peermanagement"
 	"github.com/LeJamon/go-xrpl/internal/peermanagement/message"
 	"github.com/LeJamon/go-xrpl/internal/rpc"
+	rpcadapter "github.com/LeJamon/go-xrpl/internal/rpc/adapter"
 	"github.com/LeJamon/go-xrpl/internal/rpc/handlers"
 	"github.com/LeJamon/go-xrpl/internal/rpc/loadtrack"
 	"github.com/LeJamon/go-xrpl/internal/rpc/types"
@@ -55,7 +56,7 @@ type nodeRuntime struct {
 	consensus *adaptor.Components
 
 	services      *types.ServiceContainer
-	ledgerAdapter *rpc.LedgerServiceAdapter
+	ledgerAdapter *rpcadapter.LedgerServiceAdapter
 	httpServer    *rpc.Server
 	wsServer      *rpc.WebSocketServer
 	publisher     *rpc.Publisher
@@ -248,7 +249,7 @@ func (r *nodeRuntime) configureMaintenance() error {
 	}
 	r.stopSampler = sampler.Stop
 
-	r.ledgerAdapter = rpc.NewLedgerServiceAdapter(r.ledger)
+	r.ledgerAdapter = rpcadapter.NewLedgerServiceAdapter(r.ledger)
 	r.services = types.NewServiceContainer(r.ledgerAdapter)
 	r.services.ServerInfoConfig = serverInfoConfigSnapshot(r.appConfig)
 

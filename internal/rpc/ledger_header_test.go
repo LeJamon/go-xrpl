@@ -12,6 +12,7 @@ import (
 	"github.com/LeJamon/go-xrpl/internal/ledger/genesis"
 	ledgerheader "github.com/LeJamon/go-xrpl/internal/ledger/header"
 	"github.com/LeJamon/go-xrpl/internal/ledger/service"
+	rpcadapter "github.com/LeJamon/go-xrpl/internal/rpc/adapter"
 	"github.com/LeJamon/go-xrpl/internal/rpc/handlers"
 	"github.com/LeJamon/go-xrpl/internal/rpc/types"
 	"github.com/stretchr/testify/assert"
@@ -465,7 +466,7 @@ func TestLedgerHeaderProductionOpenRootsAndFlags(t *testing.T) {
 		Context:    context.Background(),
 		Role:       types.RoleGuest,
 		ApiVersion: types.ApiVersion1,
-		Services:   &types.ServiceContainer{Ledger: NewLedgerServiceAdapter(svc)},
+		Services:   &types.ServiceContainer{Ledger: rpcadapter.NewLedgerServiceAdapter(svc)},
 	}
 	result, rpcErr := (&handlers.LedgerHeaderMethod{}).Handle(ctx, json.RawMessage(`{"ledger_index":"current"}`))
 	require.Nil(t, rpcErr)

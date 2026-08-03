@@ -85,7 +85,7 @@ func accountQueryLedgerByHash(hash [32]byte, validated uint32) (types.LedgerRead
 		validated: true,
 	}, nil
 }
-func (m *mockLedgerService) SubmitTransaction(txJSON []byte, txBlobHex ...string) (*types.SubmitResult, error) {
+func (m *mockLedgerService) SubmitTransaction(txJSON []byte, txBlobHex string) (*types.SubmitResult, error) {
 	return nil, errors.New("not implemented")
 }
 func (m *mockLedgerService) GetCurrentFees() (baseFee, reserveBase, reserveIncrement uint64) {
