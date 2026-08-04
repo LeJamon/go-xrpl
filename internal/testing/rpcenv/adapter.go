@@ -191,8 +191,69 @@ func (a *ledgerAdapter) GetLedgerEntry(ctx context.Context, entryKey [32]byte, l
 	}, nil
 }
 
-func (a *ledgerAdapter) GetLedgerData(_ context.Context, _ string, _ uint32, _ string) (*types.LedgerDataResult, error) {
-	return nil, errNotImplemented
+func (a *ledgerAdapter) GetLedgerData(ctx context.Context, ledgerIndex string, limit uint32, marker string) (*types.LedgerDataResult, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	target, validated, err := a.resolveLedger(ledgerIndex)
+	if err != nil {
+		return nil, err
+	}
+	if limit == 0 {
+		limit = 200
+	}
+
+	var startKey [32]byte
+	if marker != "" {
+		decoded, decodeErr := hex.DecodeString(marker)
+		if len(marker) != 64 || decodeErr != nil {
+			return nil, svcerr.ErrInvalidMarker
+		}
+		copy(startKey[:], decoded)
+	}
+
+	result := &types.LedgerDataResult{
+		LedgerIndex: target.Sequence(),
+		LedgerHash:  target.Hash(),
+		State:       make([]types.LedgerDataItem, 0, limit),
+		Validated:   validated,
+	}
+	if marker == "" {
+		header := target.Header()
+		result.LedgerHeader = &types.LedgerHeaderInfo{
+			AccountHash:         header.AccountHash,
+			CloseFlags:          header.CloseFlags,
+			CloseTime:           protocol.RippleSeconds(header.CloseTime),
+			CloseTimeHuman:      header.CloseTime.UTC().Format("2006-Jan-02 15:04:05.000000000 UTC"),
+			CloseTimeISO:        protocol.FormatCloseTimeISO(header.CloseTime),
+			CloseTimeResolution: uint32(header.CloseTimeResolution),
+			Closed:              target.IsClosed(),
+			LedgerHash:          header.Hash,
+			LedgerIndex:         header.LedgerIndex,
+			ParentCloseTime:     protocol.RippleSeconds(header.ParentCloseTime),
+			ParentHash:          header.ParentHash,
+			TotalCoins:          header.Drops,
+			TransactionHash:     header.TxHash,
+		}
+	}
+
+	count := uint32(0)
+	err = target.IterateStateFrom(ctx, startKey, func(key [32]byte, data []byte) bool {
+		if count >= limit {
+			result.Marker = protocol.Hash256Hex(ledger.DecrementKey(key))
+			return false
+		}
+		result.State = append(result.State, types.LedgerDataItem{
+			Index: protocol.Hash256Hex(key),
+			Data:  data,
+		})
+		count++
+		return true
+	})
+	if err != nil {
+		return nil, err
+	}
+	return result, nil
 }
 
 func (a *ledgerAdapter) GetClosedLedgerView() (types.LedgerStateView, error) {
@@ -342,8 +403,78 @@ func (a *ledgerAdapter) GetAccountCurrencies(_ context.Context, _ string, _ stri
 	return nil, errNotImplemented
 }
 
-func (a *ledgerAdapter) GetAccountObjects(_ context.Context, _ string, _ string, _ string, _ uint32, _ string) (*types.AccountObjectsResult, error) {
-	return nil, errNotImplemented
+func (a *ledgerAdapter) GetAccountObjects(ctx context.Context, account, ledgerIndex, objectType string, limit uint32, marker string) (*types.AccountObjectsResult, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	if marker != "" {
+		return nil, svcerr.ErrInvalidMarker
+	}
+	target, validated, err := a.resolveLedger(ledgerIndex)
+	if err != nil {
+		return nil, err
+	}
+	_, accountIDBytes, err := addresscodec.DecodeClassicAddressToAccountID(account)
+	if err != nil {
+		return nil, fmt.Errorf("%w: %v", svcerr.ErrAccountMalformed, err)
+	}
+	var accountID [20]byte
+	copy(accountID[:], accountIDBytes)
+	exists, err := target.Exists(keylet.Account(accountID))
+	if err != nil {
+		return nil, err
+	}
+	if !exists {
+		return nil, svcerr.ErrAccountNotFound
+	}
+	if limit == 0 {
+		limit = 200
+	}
+
+	var wantedType uint16
+	if objectType != "" {
+		info, ok := protocol.LedgerEntryTypeByRPCName(objectType)
+		if !ok {
+			return nil, fmt.Errorf("rpcenv: unsupported account object type %q", objectType)
+		}
+		wantedType = uint16(info.Type)
+	}
+	result := &types.AccountObjectsResult{
+		Account:        account,
+		AccountObjects: make([]types.AccountObjectItem, 0),
+		LedgerIndex:    target.Sequence(),
+		LedgerHash:     target.Hash(),
+		Validated:      validated,
+	}
+	err = state.DirForEach(target, keylet.OwnerDir(accountID), func(itemKey [32]byte) error {
+		if uint32(len(result.AccountObjects)) >= limit {
+			return nil
+		}
+		data, readErr := target.Read(keylet.Keylet{Key: itemKey})
+		if readErr != nil {
+			return readErr
+		}
+		if data == nil {
+			return nil
+		}
+		entryType, decodeErr := state.DecodeType(data)
+		if decodeErr != nil {
+			return decodeErr
+		}
+		if wantedType != 0 && uint16(entryType) != wantedType {
+			return nil
+		}
+		result.AccountObjects = append(result.AccountObjects, types.AccountObjectItem{
+			Index:           protocol.Hash256Hex(itemKey),
+			LedgerEntryType: entryType.String(),
+			Data:            data,
+		})
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	return result, nil
 }
 
 func (a *ledgerAdapter) GetAccountNFTs(_ context.Context, _ string, _ string, _ uint32, _ string) (*types.AccountNFTsResult, error) {

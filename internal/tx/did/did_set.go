@@ -2,6 +2,7 @@ package did
 
 import (
 	"encoding/hex"
+	"errors"
 
 	"github.com/LeJamon/go-xrpl/amendment"
 	"github.com/LeJamon/go-xrpl/internal/ledger/state"
@@ -54,7 +55,7 @@ func (d *DIDSet) Validate() error {
 
 	// At least one field must be present
 	if !uriPresent && !docPresent && !dataPresent {
-		return ErrDIDEmpty
+		return errDIDEmpty
 	}
 
 	// If all present fields are empty, that's also an error
@@ -62,38 +63,19 @@ func (d *DIDSet) Validate() error {
 	if uriPresent && d.URI == "" &&
 		docPresent && d.DIDDocument == "" &&
 		dataPresent && d.Data == "" {
-		return ErrDIDEmpty
+		return errDIDEmpty
 	}
 
-	// Check field lengths (after hex decode)
-	// Reference: DID.cpp line 66-75
-	if d.URI != "" {
-		decoded, err := hex.DecodeString(d.URI)
-		if err != nil {
-			return ErrDIDInvalidHex
-		}
-		if len(decoded) > MaxDIDURILength {
-			return ErrDIDURITooLong
-		}
-	}
-
-	if d.DIDDocument != "" {
-		decoded, err := hex.DecodeString(d.DIDDocument)
-		if err != nil {
-			return ErrDIDInvalidHex
-		}
-		if len(decoded) > MaxDIDDocumentLength {
-			return ErrDIDDocTooLong
-		}
-	}
-
-	if d.Data != "" {
-		decoded, err := hex.DecodeString(d.Data)
-		if err != nil {
-			return ErrDIDInvalidHex
-		}
-		if len(decoded) > MaxDIDAttestationLength {
-			return ErrDIDDataTooLong
+	for _, field := range []struct {
+		value   string
+		tooLong error
+	}{
+		{d.URI, errDIDURITooLong},
+		{d.DIDDocument, errDIDDocTooLong},
+		{d.Data, errDIDDataTooLong},
+	} {
+		if err := validateDIDField(field.value, field.tooLong); err != nil {
+			return err
 		}
 	}
 
@@ -118,7 +100,10 @@ func (d *DIDSet) Apply(ctx *tx.ApplyContext) ter.Result {
 	didKey := keylet.DID(ctx.AccountID)
 
 	existingData, err := ctx.View.Read(didKey)
-	if err == nil && existingData != nil {
+	if err != nil {
+		return ctx.Internal("DIDSet.Read", err)
+	}
+	if existingData != nil {
 		did, err := state.ParseDID(existingData)
 		if err != nil {
 			return ter.TefINTERNAL
@@ -195,7 +180,10 @@ func (d *DIDSet) Apply(ctx *tx.ApplyContext) ter.Result {
 		dir.Owner = ctx.AccountID
 	})
 	if err != nil {
-		return ter.TecDIR_FULL
+		if errors.Is(err, state.ErrDirFull) {
+			return ter.TecDIR_FULL
+		}
+		return ctx.Internal("DIDSet.DirInsert", err)
 	}
 	did.OwnerNode = dirResult.Page
 
@@ -212,4 +200,18 @@ func (d *DIDSet) Apply(ctx *tx.ApplyContext) ter.Result {
 	ctx.Account.OwnerCount++
 
 	return ter.TesSUCCESS
+}
+
+func validateDIDField(value string, tooLong error) error {
+	if value == "" {
+		return nil
+	}
+	decoded, err := hex.DecodeString(value)
+	if err != nil {
+		return errDIDInvalidHex
+	}
+	if len(decoded) > maxDIDFieldLength {
+		return tooLong
+	}
+	return nil
 }
