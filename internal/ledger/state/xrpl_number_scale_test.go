@@ -19,6 +19,25 @@ func newNumberInternal(negative bool, mantissa uint64, exponent int, scale Manti
 	return n
 }
 
+func TestNewXRPLNumberFromUint(t *testing.T) {
+	tests := []struct {
+		mantissa uint64
+		exponent int
+		want     string
+	}{
+		{mantissa: math.MaxInt64, want: "9223372036854776e3"},
+		{mantissa: uint64(math.MaxInt64) + 1, want: "9223372036854776e3"},
+		{mantissa: math.MaxUint64, want: "1844674407370955e4"},
+		{mantissa: math.MaxUint64, exponent: -255, want: "1844674407370955e-251"},
+	}
+
+	for _, test := range tests {
+		number := NewXRPLNumberFromUint(test.mantissa, test.exponent)
+		require.Equal(t, test.want, number.String())
+		require.Positive(t, number.Signum())
+	}
+}
+
 // numberMin / numberMax / numberLowest mirror Number::min/max/lowest for a scale.
 func numberMin(scale MantissaScale) XRPLNumber {
 	minM, _, _ := scale.params()

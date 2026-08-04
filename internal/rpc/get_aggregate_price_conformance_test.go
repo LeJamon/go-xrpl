@@ -5,6 +5,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"math"
 	"strconv"
 	"strings"
 	"testing"
@@ -81,7 +82,7 @@ func TestGetAggregatePriceProjectionAndXRPLArithmetic(t *testing.T) {
 	entire := result["entire_set"].(map[string]any)
 	assert.Equal(t, "74.45", entire["mean"])
 	assert.Equal(t, uint16(10), entire["size"])
-	assert.Equal(t, "0.3027650354097492", entire["standard_deviation"])
+	assert.Equal(t, "0.3027650354097491666", entire["standard_deviation"])
 
 	request["ledger_index"] = "validated"
 	result = callAggregatePrice(t, service, request)
@@ -89,6 +90,41 @@ func TestGetAggregatePriceProjectionAndXRPLArithmetic(t *testing.T) {
 	assert.Equal(t, strings.Repeat("0", 64), result["ledger_hash"])
 	assert.Equal(t, true, result["validated"])
 	assert.NotContains(t, result, "ledger_current_index")
+}
+
+func TestGetAggregatePricePreservesUnsignedAssetPrices(t *testing.T) {
+	tests := []struct {
+		name  string
+		price uint64
+		scale uint8
+		want  string
+	}{
+		{name: "max int64", price: math.MaxInt64, want: "9223372036854776e3"},
+		{name: "max int64 plus one", price: uint64(math.MaxInt64) + 1, want: "9223372036854776e3"},
+		{name: "max uint64", price: math.MaxUint64, want: "1844674407370955e4"},
+		{name: "minimum STAmount exponent", price: math.MaxUint64, scale: 100, want: "1844674407370955e-96"},
+		{name: "below minimum STAmount exponent", price: math.MaxUint64, scale: 101, want: "0"},
+		{name: "max scale", price: math.MaxUint64, scale: math.MaxUint8, want: "0"},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			service := newAggregatePriceLedgerService()
+			key, node := aggregateOracleNode(t, ownerForAggregatePriceTest, 1, 100, "XRP", "USD", test.price, test.scale, "", 0)
+			service.entries[key] = &types.LedgerEntryResult{Node: node}
+
+			result := callAggregatePrice(t, service, map[string]any{
+				"base_asset":  "XRP",
+				"quote_asset": "USD",
+				"oracles": []map[string]any{{
+					"account":            ownerForAggregatePriceTest,
+					"oracle_document_id": 1,
+				}},
+			})
+			assert.Equal(t, test.want, result["median"])
+			assert.Equal(t, test.want, result["entire_set"].(map[string]any)["mean"])
+		})
+	}
 }
 
 func TestGetAggregatePriceSkipsMissingOracleEntries(t *testing.T) {
@@ -108,6 +144,23 @@ func TestGetAggregatePriceSkipsMissingOracleEntries(t *testing.T) {
 	assert.Equal(t, uint16(1), result["entire_set"].(map[string]any)["size"])
 }
 
+func TestGetAggregatePriceNilOracleResultReturnsInternal(t *testing.T) {
+	service := newAggregatePriceLedgerService()
+	key, _ := aggregateOracleNode(t, ownerForAggregatePriceTest, 1, 100, "XRP", "USD", 740, 0, "", 0)
+	service.entries[key] = nil
+	result, rpcErr := callAggregatePriceError(t, service, map[string]any{
+		"base_asset":  "XRP",
+		"quote_asset": "USD",
+		"oracles": []map[string]any{{
+			"account":            ownerForAggregatePriceTest,
+			"oracle_document_id": 1,
+		}},
+	})
+	assert.Nil(t, result)
+	require.NotNil(t, rpcErr)
+	assert.Equal(t, types.RpcINTERNAL, rpcErr.Code)
+}
+
 func TestGetAggregatePriceLookupErrorReturnsInternal(t *testing.T) {
 	service := newAggregatePriceLedgerService()
 	service.entryErr = errors.New("node store unavailable")
@@ -125,21 +178,36 @@ func TestGetAggregatePriceLookupErrorReturnsInternal(t *testing.T) {
 }
 
 func TestGetAggregatePriceMalformedOracleBytesReturnsInternal(t *testing.T) {
-	service := newAggregatePriceLedgerService()
-	key, _ := aggregateOracleNode(t, ownerForAggregatePriceTest, 1, 100, "XRP", "USD", 740, 0, "", 0)
-	service.entries[key] = &types.LedgerEntryResult{Node: []byte{0xff}}
-
-	result, rpcErr := callAggregatePriceError(t, service, map[string]any{
-		"base_asset":  "XRP",
-		"quote_asset": "USD",
-		"oracles": []map[string]any{{
-			"account":            ownerForAggregatePriceTest,
-			"oracle_document_id": 1,
-		}},
+	accountRoot, err := state.SerializeAccountRoot(&state.AccountRoot{
+		Account:  ownerForAggregatePriceTest,
+		Balance:  1,
+		Sequence: 1,
 	})
-	assert.Nil(t, result)
-	require.NotNil(t, rpcErr)
-	assert.Equal(t, types.RpcINTERNAL, rpcErr.Code)
+	require.NoError(t, err)
+
+	for name, node := range map[string][]byte{
+		"invalid binary": {0xff},
+		"empty object":   {},
+		"wrong type":     accountRoot,
+	} {
+		t.Run(name, func(t *testing.T) {
+			service := newAggregatePriceLedgerService()
+			key, _ := aggregateOracleNode(t, ownerForAggregatePriceTest, 1, 100, "XRP", "USD", 740, 0, "", 0)
+			service.entries[key] = &types.LedgerEntryResult{Node: node}
+
+			result, rpcErr := callAggregatePriceError(t, service, map[string]any{
+				"base_asset":  "XRP",
+				"quote_asset": "USD",
+				"oracles": []map[string]any{{
+					"account":            ownerForAggregatePriceTest,
+					"oracle_document_id": 1,
+				}},
+			})
+			assert.Nil(t, result)
+			require.NotNil(t, rpcErr)
+			assert.Equal(t, types.RpcINTERNAL, rpcErr.Code)
+		})
+	}
 }
 
 func TestGetAggregatePriceHistoricalLookupErrorReturnsInternal(t *testing.T) {

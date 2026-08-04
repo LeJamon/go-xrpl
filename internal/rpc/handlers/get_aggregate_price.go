@@ -149,7 +149,10 @@ func (m *GetAggregatePriceMethod) Handle(ctx *types.RpcContext, params json.RawM
 			return nil, rpcInternalError("get_aggregate_price: oracle lookup failed", err).WithExtra(lookupFields)
 		}
 		if entry == nil {
-			continue
+			return nil, rpcInternalError("get_aggregate_price: oracle lookup returned no result", nil).WithExtra(lookupFields)
+		}
+		if _, err := state.ParseOracle(entry.Node); err != nil {
+			return nil, rpcInternalError("get_aggregate_price: oracle decoding failed", err).WithExtra(lookupFields)
 		}
 		decoded, err := binarycodec.Decode(hex.EncodeToString(entry.Node))
 		if err != nil {
@@ -371,7 +374,7 @@ func aggregatePriceFromNode(node map[string]any, baseAsset, quoteAsset string) (
 			}
 		}
 		return aggregatePricePoint{
-			price:          newAggregatePriceAmount(int64(assetPrice), -int(scale)),
+			price:          newAggregatePriceAmountUnsigned(assetPrice, -int(scale)),
 			lastUpdateTime: lastUpdateTime,
 		}, true
 	}
@@ -422,6 +425,10 @@ func aggregateUint32(value any) (uint32, bool) {
 
 func newAggregatePriceAmount(mantissa int64, exponent int) aggregatePriceAmount {
 	return aggregatePriceAmountFromNumber(state.NewXRPLNumber(mantissa, exponent))
+}
+
+func newAggregatePriceAmountUnsigned(mantissa uint64, exponent int) aggregatePriceAmount {
+	return aggregatePriceAmountFromNumber(state.NewXRPLNumberFromUint(mantissa, exponent))
 }
 
 func aggregatePriceAmountFromNumber(number state.XRPLNumber) aggregatePriceAmount {
@@ -507,15 +514,25 @@ func aggregatePriceStats(prices []aggregatePricePoint) (aggregatePriceAmount, st
 	}
 	mean = mean.divide(newAggregatePriceAmount(int64(len(prices)), 0))
 
-	standardDeviation := state.NewXRPLNumber(0, 0)
+	standardDeviation := state.NewXRPLNumberScaled(0, 0, state.MantissaScaleLarge, state.RoundToNearest)
 	if len(prices) > 1 {
 		for _, point := range prices {
-			difference := point.price.subtract(mean).number
+			amountDifference := point.price.subtract(mean).number
+			difference := state.NewXRPLNumberScaled(
+				amountDifference.Mantissa(),
+				amountDifference.Exponent(),
+				state.MantissaScaleLarge,
+				state.RoundToNearest,
+			)
 			standardDeviation = standardDeviation.Add(difference.Mul(difference))
 		}
-		standardDeviation = aggregatePriceRoot2(
-			standardDeviation.Div(state.NewXRPLNumberFromInt(int64(len(prices) - 1))),
+		divisor := state.NewXRPLNumberScaled(
+			int64(len(prices)-1),
+			0,
+			state.MantissaScaleLarge,
+			state.RoundToNearest,
 		)
+		standardDeviation = standardDeviation.Div(divisor).Root2()
 	}
 	return mean, standardDeviation
 }
@@ -526,38 +543,6 @@ func aggregatePriceMedian(prices []aggregatePricePoint) aggregatePriceAmount {
 		return prices[middle].price
 	}
 	return prices[middle-1].price.add(prices[middle].price).divide(newAggregatePriceAmount(2, 0))
-}
-
-func aggregatePriceRoot2(value state.XRPLNumber) state.XRPLNumber {
-	one := state.NewXRPLNumberFromInt(1)
-	if value.Equal(one) || value.IsZero() {
-		return value
-	}
-	if value.Signum() < 0 {
-		panic("aggregate price Number root of negative value")
-	}
-
-	exponent := value.Exponent() + 16
-	if exponent%2 != 0 {
-		exponent++
-	}
-	scaled := state.NewXRPLNumber(value.Mantissa(), value.Exponent()-exponent)
-	a0 := state.NewXRPLNumberFromInt(18)
-	a1 := state.NewXRPLNumberFromInt(144)
-	a2 := state.NewXRPLNumberFromInt(-60)
-	denominator := state.NewXRPLNumberFromInt(105)
-	result := a2.Mul(scaled).Add(a1).Mul(scaled).Add(a0).Div(denominator)
-	two := state.NewXRPLNumberFromInt(2)
-	var previous, previousPrevious state.XRPLNumber
-	for {
-		previousPrevious = previous
-		previous = result
-		result = result.Add(scaled.Div(result)).Div(two)
-		if result.Equal(previous) || result.Equal(previousPrevious) {
-			break
-		}
-	}
-	return state.NewXRPLNumber(result.Mantissa(), result.Exponent()+exponent/2)
 }
 
 func (m *GetAggregatePriceMethod) RequiredCondition() types.Condition {
