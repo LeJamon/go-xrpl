@@ -469,6 +469,11 @@ type ServiceContainer struct {
 	// WebSocket server is wired — the handlers then report notSupported.
 	URLSubscriptions URLSubscriptionService
 
+	// AccountHistorySubscriptions is the optional provider for rippled's
+	// experimental account_history_tx_stream. Nil means the node cannot perform
+	// the historical replay/live handoff and subscribe requests return notEnabled.
+	AccountHistorySubscriptions AccountHistorySubscriptionService
+
 	// QueueAccountTxs returns the transactions currently queued in the TxQ
 	// for one account, sorted by SeqProxy. Backs account_info's queue_data
 	// (rippled TxQ::getAccountTxs → AccountInfo.cpp:193-283). Nil in
@@ -497,6 +502,19 @@ type URLSubscriptionService interface {
 	// subscription and drops the registry entry once no stream
 	// subscriptions remain. An unknown url is silent success.
 	Unsubscribe(ctx *RpcContext, request SubscriptionRequest) (map[string]any, *RpcError)
+}
+
+// AccountHistorySubscriptionService owns the historical replay and its live
+// continuation for account_history_tx_stream. Subscribe is called only after
+// request, transaction-table, and provider validation; implementations derive
+// asynchronous work from conn.Context(). Unsubscribe is an idempotent no-op for
+// unknown accounts.
+type AccountHistorySubscriptionService interface {
+	ValidateSubscribe(conn *Connection, account string) *RpcError
+	Subscribe(conn *Connection, account string)
+	Unsubscribe(conn *Connection, account string, historyOnly bool)
+	RemoveConnection(conn *Connection)
+	HasSubscriptions(conn *Connection) bool
 }
 
 // QueuedTxInfo is the per-transaction view of a TxQ candidate surfaced by

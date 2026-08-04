@@ -170,23 +170,39 @@ func (r *urlSubscriptionRegistry) Subscribe(ctx *types.RpcContext, request types
 		return nil, rpcErr
 	}
 
-	if rpcErr := r.ws.subscriptionManager.HandleSubscribeTransactional(lookup.sub.conn, request, true); rpcErr != nil {
-		var stopped *rpcSub
-		if lookup.created {
-			r.removeLocked(key, lookup.sub)
-			stopped = lookup.sub
-		} else {
-			lookup.sub.updateCredentials(lookup.username, true, lookup.password, true)
-		}
+	fail := func(rpcErr *types.RpcError) (map[string]any, *types.RpcError) {
+		stopped := r.rollbackLookupLocked(key, lookup)
 		r.mu.Unlock()
 		waitRPCSub(stopped)
 		return nil, rpcErr
 	}
+	prefix := request.WithoutBooks().WithoutAccountHistory()
+	if rpcErr := r.ws.subscriptionManager.ValidateSubscribe(lookup.sub.conn, prefix, true); rpcErr != nil {
+		return fail(rpcErr)
+	}
+	history, rpcErr := prepareAccountHistorySubscribe(ctx, request)
+	if rpcErr != nil {
+		return fail(rpcErr)
+	}
+	if rpcErr := history.validate(lookup.sub.conn); rpcErr != nil {
+		return fail(rpcErr)
+	}
+	if rpcErr := r.validateBooks(lookup.sub.conn, request, true); rpcErr != nil {
+		return fail(rpcErr)
+	}
+	if rpcErr := r.ws.subscriptionManager.HandleSubscribeTransactional(lookup.sub.conn, request.WithoutAccountHistory(), true); rpcErr != nil {
+		return fail(rpcErr)
+	}
+	history.apply(lookup.sub.conn)
 	for _, book := range request.Books {
 		setSubscriptionLoadCost(ctx, types.SubscriptionRequest{Books: []types.BookRequest{book}})
 	}
+	result := r.ws.buildSubscribeAck(ctx, request)
+	if history != nil {
+		result["warning"] = accountHistoryWarning
+	}
 	r.mu.Unlock()
-	return r.ws.buildSubscribeAck(ctx, request), nil
+	return result, nil
 }
 
 // Unsubscribe removes the listed streams/accounts/books from the url's
@@ -207,10 +223,25 @@ func (r *urlSubscriptionRegistry) Unsubscribe(ctx *types.RpcContext, request typ
 		r.mu.Unlock()
 		return map[string]any{}, nil
 	}
-	if rpcErr := r.ws.subscriptionManager.HandleUnsubscribeTransactional(sub.conn, request, true); rpcErr != nil {
+	prefix := request.WithoutBooks().WithoutAccountHistory()
+	if rpcErr := r.ws.subscriptionManager.ValidateUnsubscribe(sub.conn, prefix, true); rpcErr != nil {
 		r.mu.Unlock()
 		return nil, rpcErr
 	}
+	history, rpcErr := prepareAccountHistoryUnsubscribe(ctx, request)
+	if rpcErr != nil {
+		r.mu.Unlock()
+		return nil, rpcErr
+	}
+	if rpcErr := r.validateBooks(sub.conn, request, false); rpcErr != nil {
+		r.mu.Unlock()
+		return nil, rpcErr
+	}
+	if rpcErr := r.ws.subscriptionManager.HandleUnsubscribeTransactional(sub.conn, request.WithoutAccountHistory(), true); rpcErr != nil {
+		r.mu.Unlock()
+		return nil, rpcErr
+	}
+	history.apply(sub.conn)
 	stopped := r.tryRemoveLocked(key)
 	r.mu.Unlock()
 	waitRPCSub(stopped)
@@ -222,6 +253,33 @@ type rpcSubLookup struct {
 	created  bool
 	username string
 	password string
+}
+
+func (r *urlSubscriptionRegistry) rollbackLookupLocked(key string, lookup rpcSubLookup) *rpcSub {
+	if lookup.created {
+		r.removeLocked(key, lookup.sub)
+		return lookup.sub
+	}
+	lookup.sub.updateCredentials(lookup.username, true, lookup.password, true)
+	return nil
+}
+
+func (r *urlSubscriptionRegistry) validateBooks(conn *types.Connection, request types.SubscriptionRequest, subscribe bool) *types.RpcError {
+	validate := func(bookRequest types.SubscriptionRequest) *types.RpcError {
+		bookRequest.ApiVersion = request.ApiVersion
+		if subscribe {
+			return r.ws.subscriptionManager.ValidateSubscribe(conn, bookRequest, true)
+		}
+		return r.ws.subscriptionManager.ValidateUnsubscribe(conn, bookRequest, true)
+	}
+	wire := request.WireArrays()
+	if wire.Present {
+		return applySubscriptionBooks(wire.Books, validate)
+	}
+	if request.Books == nil {
+		return nil
+	}
+	return validate(types.SubscriptionRequest{Books: request.Books})
 }
 
 func (r *urlSubscriptionRegistry) findOrCreateLocked(request types.SubscriptionRequest, key, principal string) (rpcSubLookup, *types.RpcError) {
@@ -306,6 +364,9 @@ func (r *urlSubscriptionRegistry) tryRemoveLocked(key string) *rpcSub {
 	if r.ws.subscriptionManager.HasStreamSubscriptions(sub.conn.ID) {
 		return nil
 	}
+	if hasAccountHistorySubscriptions(r.ws.services, sub.conn) {
+		return nil
+	}
 	return r.removeLocked(key, sub)
 }
 
@@ -321,6 +382,7 @@ func (r *urlSubscriptionRegistry) removeLocked(key string, sub *rpcSub) *rpcSub 
 		}
 	}
 	r.ws.subscriptionManager.RemoveConnection(sub.conn.ID)
+	removeAccountHistoryConnection(r.ws.services, sub.conn)
 	sub.stop()
 	return sub
 }
@@ -351,6 +413,7 @@ func (r *urlSubscriptionRegistry) Close() {
 	r.cancel()
 	for _, sub := range subs {
 		r.ws.subscriptionManager.RemoveConnection(sub.conn.ID)
+		removeAccountHistoryConnection(r.ws.services, sub.conn)
 		sub.stop()
 	}
 	for _, sub := range subs {

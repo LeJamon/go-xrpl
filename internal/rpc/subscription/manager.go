@@ -137,6 +137,17 @@ func (sm *Manager) HandleSubscribeTransactional(conn *types.Connection, request 
 	return nil
 }
 
+// ValidateSubscribe applies a request to an isolated copy of a connection's
+// state. URL subscriptions use it to validate all independently-owned pieces
+// before committing any of them.
+func (sm *Manager) ValidateSubscribe(conn *types.Connection, request types.SubscriptionRequest, isAdmin bool) *types.RpcError {
+	sm.mu.Lock()
+	defer sm.mu.Unlock()
+	probe := &types.Connection{Subscriptions: cloneSubscriptions(conn.Subscriptions)}
+	probe.SetAPIVersion(conn.APIVersion())
+	return sm.handleSubscribeLocked(probe, request, isAdmin)
+}
+
 func (sm *Manager) handleSubscribeLocked(conn *types.Connection, request types.SubscriptionRequest, isAdmin bool) *types.RpcError {
 	w := request.WireArrays()
 	conn.SetAPIVersion(request.ApiVersion)
@@ -163,9 +174,33 @@ func (sm *Manager) handleSubscribeLocked(conn *types.Connection, request types.S
 		conn.Subscriptions[key] = types.SubscriptionConfig{}
 	}
 
+	// accounts_proposed takes precedence over the deprecated rt_accounts alias
+	// when both members are present.
+	proposedRaw, proposedTyped := w.RTAccounts, request.RTAccounts
+	if w.AccountsProposed != nil || (!w.Present && request.AccountsProposed != nil) {
+		proposedRaw, proposedTyped = w.AccountsProposed, request.AccountsProposed
+	}
+	proposedPresent, proposed, rpcErr := resolveAccounts(w.Present, proposedRaw, proposedTyped)
+	if rpcErr != nil {
+		return rpcErr
+	}
+	if proposedPresent {
+		if len(proposed) == 0 {
+			return types.RpcErrorActMalformed("Account malformed.")
+		}
+		for _, acc := range proposed {
+			if !isValidXRPLAddress(acc) {
+				return types.RpcErrorActMalformed("Account malformed.")
+			}
+		}
+		existing := conn.Subscriptions[types.SubAccountsProposed]
+		conn.Subscriptions[types.SubAccountsProposed] = types.SubscriptionConfig{
+			Accounts: mergeAccounts(existing.Accounts, proposed),
+		}
+	}
+
 	// accounts (Subscribe.cpp:192-200): a present-but-empty array, a non-string
-	// id, or an unparseable id all make parseAccountIds return an empty set →
-	// rpcACT_MALFORMED.
+	// id, or an unparseable id all make parseAccountIds return an empty set.
 	accountsPresent, accounts, rpcErr := resolveAccounts(w.Present, w.Accounts, request.Accounts)
 	if rpcErr != nil {
 		return rpcErr
@@ -179,32 +214,9 @@ func (sm *Manager) handleSubscribeLocked(conn *types.Connection, request types.S
 				return types.RpcErrorActMalformed("Account malformed.")
 			}
 		}
-		// Accumulate onto the existing subscription rather than replacing it.
 		existing := conn.Subscriptions[types.SubAccounts]
 		conn.Subscriptions[types.SubAccounts] = types.SubscriptionConfig{
 			Accounts: mergeAccounts(existing.Accounts, accounts),
-		}
-	}
-
-	// accounts_proposed (Subscribe.cpp:181-189), same semantics as accounts.
-	proposedPresent, proposed, rpcErr := resolveAccounts(w.Present, w.AccountsProposed, request.AccountsProposed)
-	if rpcErr != nil {
-		return rpcErr
-	}
-	if proposedPresent {
-		if len(proposed) == 0 {
-			return types.RpcErrorActMalformed("Account malformed.")
-		}
-		for _, acc := range proposed {
-			if !isValidXRPLAddress(acc) {
-				return types.RpcErrorActMalformed("Account malformed.")
-			}
-		}
-		// Accumulate, mirroring the accounts branch above (rippled's
-		// subAccount with rt=true).
-		existing := conn.Subscriptions[types.SubAccountsProposed]
-		conn.Subscriptions[types.SubAccountsProposed] = types.SubscriptionConfig{
-			Accounts: mergeAccounts(existing.Accounts, proposed),
 		}
 	}
 
@@ -643,6 +655,16 @@ func (sm *Manager) HandleUnsubscribeTransactional(conn *types.Connection, reques
 	return nil
 }
 
+// ValidateUnsubscribe is the non-mutating counterpart to
+// HandleUnsubscribeTransactional.
+func (sm *Manager) ValidateUnsubscribe(conn *types.Connection, request types.SubscriptionRequest, isAdmin bool) *types.RpcError {
+	sm.mu.Lock()
+	defer sm.mu.Unlock()
+	probe := &types.Connection{Subscriptions: cloneSubscriptions(conn.Subscriptions)}
+	probe.SetAPIVersion(conn.APIVersion())
+	return sm.handleUnsubscribeLocked(probe, request, isAdmin)
+}
+
 func restoreSubscriptions(dst, snapshot map[types.SubscriptionType]types.SubscriptionConfig) {
 	if dst == nil {
 		return
@@ -672,6 +694,44 @@ func (sm *Manager) handleUnsubscribeLocked(conn *types.Connection, request types
 			key = types.SubTransactionsProposed
 		}
 		delete(conn.Subscriptions, key)
+	}
+
+	proposedRaw, proposedTyped := w.RTAccounts, request.RTAccounts
+	if w.AccountsProposed != nil || (!w.Present && request.AccountsProposed != nil) {
+		proposedRaw, proposedTyped = w.AccountsProposed, request.AccountsProposed
+	}
+	proposedPresent, proposed, rpcErr := resolveAccounts(w.Present, proposedRaw, proposedTyped)
+	if rpcErr != nil {
+		return rpcErr
+	}
+	if proposedPresent {
+		if len(proposed) == 0 {
+			return types.RpcErrorActMalformed("Account malformed.")
+		}
+		for _, acc := range proposed {
+			if !isValidXRPLAddress(acc) {
+				return types.RpcErrorActMalformed("Account malformed.")
+			}
+		}
+		if existing, ok := conn.Subscriptions[types.SubAccountsProposed]; ok {
+			accountsToRemove := make(map[string]bool)
+			for _, acc := range proposed {
+				accountsToRemove[acc] = true
+			}
+			var remainingAccounts []string
+			for _, acc := range existing.Accounts {
+				if !accountsToRemove[acc] {
+					remainingAccounts = append(remainingAccounts, acc)
+				}
+			}
+			if len(remainingAccounts) > 0 {
+				conn.Subscriptions[types.SubAccountsProposed] = types.SubscriptionConfig{
+					Accounts: remainingAccounts,
+				}
+			} else {
+				delete(conn.Subscriptions, types.SubAccountsProposed)
+			}
+		}
 	}
 
 	// accounts (Unsubscribe.cpp:127-135): empty array / non-string / bad id →
@@ -706,41 +766,6 @@ func (sm *Manager) handleUnsubscribeLocked(conn *types.Connection, request types
 				}
 			} else {
 				delete(conn.Subscriptions, types.SubAccounts)
-			}
-		}
-	}
-
-	// accounts_proposed (Unsubscribe.cpp:116-124), same semantics as accounts.
-	proposedPresent, proposed, rpcErr := resolveAccounts(w.Present, w.AccountsProposed, request.AccountsProposed)
-	if rpcErr != nil {
-		return rpcErr
-	}
-	if proposedPresent {
-		if len(proposed) == 0 {
-			return types.RpcErrorActMalformed("Account malformed.")
-		}
-		for _, acc := range proposed {
-			if !isValidXRPLAddress(acc) {
-				return types.RpcErrorActMalformed("Account malformed.")
-			}
-		}
-		if existing, ok := conn.Subscriptions[types.SubAccountsProposed]; ok {
-			accountsToRemove := make(map[string]bool)
-			for _, acc := range proposed {
-				accountsToRemove[acc] = true
-			}
-			var remainingAccounts []string
-			for _, acc := range existing.Accounts {
-				if !accountsToRemove[acc] {
-					remainingAccounts = append(remainingAccounts, acc)
-				}
-			}
-			if len(remainingAccounts) > 0 {
-				conn.Subscriptions[types.SubAccountsProposed] = types.SubscriptionConfig{
-					Accounts: remainingAccounts,
-				}
-			} else {
-				delete(conn.Subscriptions, types.SubAccountsProposed)
 			}
 		}
 	}
