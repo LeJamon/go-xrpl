@@ -323,12 +323,11 @@ type ServiceContainer struct {
 	// (standalone / RPC-only) — handlers then report empty results.
 	PeerReservationList func() []PeerReservationEntry
 
-	// PeerConnect initiates an outbound peer connection to a host:port,
-	// backing the admin `connect` RPC (rippled Connect.cpp →
-	// overlay().connect()). The attempt runs in the background, mirroring
-	// rippled's non-blocking connect. Nil in standalone / RPC-only
-	// configurations (no overlay) — the handler falls back to reporting
-	// that peers are unavailable.
+	// PeerConnect admits an outbound peer connection to a host:port for the
+	// runtime-owned bounded scheduler backing the admin `connect` RPC. The
+	// function is non-blocking and returns admission errors synchronously;
+	// duplicate queued/running addresses are idempotent. Nil in standalone /
+	// RPC-only configurations (no live overlay).
 	PeerConnect func(addr string) error
 
 	// ResourceBlacklist returns the overlay resource manager's per-endpoint

@@ -94,8 +94,6 @@ func allHandlers() map[string]types.MethodHandler {
 		"peer_reservations_list": &handlers.PeerReservationsListMethod{},
 		"validators":             &handlers.ValidatorsMethod{},
 		"validator_list_sites":   &handlers.ValidatorListSitesMethod{},
-		"download_shard":         &handlers.DownloadShardMethod{},
-		"crawl_shards":           &handlers.CrawlShardsMethod{},
 
 		// Stub / missing methods
 		"fetch_info":      &handlers.FetchInfoMethod{},

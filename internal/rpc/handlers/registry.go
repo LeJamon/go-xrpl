@@ -77,8 +77,6 @@ func RegisterAll(registry *types.MethodRegistry) {
 	registry.Register("validators", &ValidatorsMethod{})
 	registry.Register("validator_info", &ValidatorInfoMethod{})
 	registry.Register("unl_list", &UnlListMethod{})
-	registry.Register("download_shard", &DownloadShardMethod{})
-	registry.Register("crawl_shards", &CrawlShardsMethod{})
 	registry.Register("can_delete", &CanDeleteMethod{})
 	registry.Register("get_counts", &GetCountsMethod{})
 	registry.Register("log_level", &LogLevelMethod{})

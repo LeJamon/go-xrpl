@@ -54,7 +54,8 @@ type nodeRuntime struct {
 	cleanerSource *ledgerCleanerSource
 	rotator       *shamapstore.Rotator
 
-	consensus *adaptor.Components
+	consensus            *adaptor.Components
+	peerConnectScheduler *peerConnectScheduler
 
 	services      *types.ServiceContainer
 	ledgerAdapter *rpcadapter.LedgerServiceAdapter
@@ -676,7 +677,16 @@ func (r *nodeRuntime) configureConsensus() error {
 				return out
 			}
 		}
-		r.services.PeerConnect = overlayRef.Connect
+		r.peerConnectScheduler = newPeerConnectScheduler(
+			r.ctx,
+			overlayRef.ConnectContext,
+			defaultPeerConnectWorkers,
+			defaultPeerConnectQueue,
+			func(addr string, err error) {
+				r.serverLog.Warn("Peer connection attempt failed", "addr", addr, "err", err)
+			},
+		)
+		r.services.PeerConnect = r.peerConnectScheduler.Enqueue
 		r.services.ResourceBlacklist = overlayRef.BlacklistJSON
 		acctRef := r.consensus.Adaptor
 		r.services.StateAccounting = func() types.StateAccountingSnapshot {
@@ -1149,6 +1159,22 @@ func (r *nodeRuntime) shutdownWithin(timeout time.Duration) error {
 			errs = append(errs, err)
 		} else {
 			r.serverLog.Info("Ledger cleaner stopped")
+		}
+	}
+	if r.peerConnectScheduler != nil {
+		completed, err := runShutdownPhaseWithin(ctx, producerShutdownGrace, "stop peer connect scheduler", func() error {
+			r.peerConnectScheduler.Close()
+			return nil
+		})
+		producersStopped = producersStopped && completed
+		if err != nil {
+			errs = append(errs, err)
+		} else {
+			r.serverLog.Info("Peer connect scheduler stopped")
+		}
+		if !completed {
+			errs = append(errs, errors.New("shutdown incomplete: consensus left running because peer connect scheduler did not stop"))
+			return errors.Join(errs...)
 		}
 	}
 	if r.consensus != nil {

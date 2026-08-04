@@ -25,12 +25,18 @@ import (
 // this matters only for direct external callers driving many parallel
 // Connects.
 func (o *Overlay) Connect(addr string) error {
+	return o.ConnectContext(nil, addr)
+}
+
+// ConnectContext initiates an outbound connection whose handshake is also
+// bounded by ctx. An established peer remains owned by the overlay lifecycle.
+func (o *Overlay) ConnectContext(ctx context.Context, addr string) error {
 	done, ok := o.beginPeerStart()
 	if !ok {
 		return ErrConnectionClosed
 	}
 	defer done()
-	return o.connectReserved(addr, nil)
+	return o.connectReservedContext(ctx, addr, nil)
 }
 
 func (o *Overlay) beginPeerStart() (func(), bool) {
@@ -44,6 +50,10 @@ func (o *Overlay) beginPeerStart() (func(), bool) {
 }
 
 func (o *Overlay) connectReserved(addr string, bootstrapLease *bootstrapLease) error {
+	return o.connectReservedContext(nil, addr, bootstrapLease)
+}
+
+func (o *Overlay) connectReservedContext(connectCtx context.Context, addr string, bootstrapLease *bootstrapLease) error {
 	endpoint, err := ParseEndpoint(addr)
 	if err != nil {
 		return err
@@ -94,7 +104,18 @@ func (o *Overlay) connectReserved(addr string, bootstrapLease *bootstrapLease) e
 		o.ingestRedirectEndpoints(peerIPs, peerID)
 	}
 
-	ctx, cancel := context.WithTimeout(baseCtx, o.cfg.ConnectTimeout)
+	attemptCtx := baseCtx
+	var cancelAttempt context.CancelFunc
+	var stopOverlayCancel func() bool
+	if connectCtx != nil {
+		attemptCtx, cancelAttempt = context.WithCancel(connectCtx)
+		stopOverlayCancel = context.AfterFunc(baseCtx, cancelAttempt)
+		defer func() {
+			stopOverlayCancel()
+			cancelAttempt()
+		}()
+	}
+	ctx, cancel := context.WithTimeout(attemptCtx, o.cfg.ConnectTimeout)
 	defer cancel()
 
 	certPEM, keyPEM, err := o.identity.TLSCertificatePEM()

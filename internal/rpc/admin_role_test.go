@@ -42,8 +42,6 @@ func allAdminMethods() []adminMethodEntry {
 		{"unl_list", &handlers.UnlListMethod{}},
 		{"blacklist", &handlers.BlackListMethod{}},
 		{"wallet_propose", &handlers.WalletProposeMethod{}},
-		{"download_shard", &handlers.DownloadShardMethod{}},
-		{"crawl_shards", &handlers.CrawlShardsMethod{}},
 	}
 }
 
@@ -163,7 +161,7 @@ func TestUserMethodsRequireUserRole(t *testing.T) {
 // added to the handlers package but forgotten in this test catalogue.
 // Update the expected count when adding new admin handlers.
 func TestAdminMethodCount(t *testing.T) {
-	const expectedAdminCount = 27
+	const expectedAdminCount = 25
 
 	got := len(allAdminMethods())
 	assert.Equal(t, expectedAdminCount, got,
@@ -206,7 +204,7 @@ func TestAllMethodsCovered(t *testing.T) {
 	// The expected total is the sum of all three role categories.
 	// Every handler struct in the handlers package must appear in exactly
 	// one of: allAdminMethods, allGuestMethods, allUserMethods.
-	const expectedTotal = 28 + 40 + 10 // 78
+	const expectedTotal = 25 + 41 + 10 // 76
 
 	total := len(allAdminMethods()) + len(allGuestMethods()) + len(allUserMethods())
 	assert.Equal(t, expectedTotal, total,

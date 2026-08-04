@@ -1,10 +1,14 @@
 package handlers
 
 import (
+	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
-	"net"
+	"math"
+	"net/netip"
 	"strconv"
+	"strings"
 
 	addresscodec "github.com/LeJamon/go-xrpl/codec/addresscodec"
 	"github.com/LeJamon/go-xrpl/internal/rpc/types"
@@ -68,63 +72,195 @@ func (m *TxReduceRelayMethod) RequiredRole() types.Role {
 	return types.RoleUser // rippled: Role::USER (Handler.cpp line 179)
 }
 
-// ConnectMethod handles the connect RPC method. When the overlay is wired it
-// initiates a real background outbound connection (rippled Connect.cpp →
-// overlay().connect()); otherwise it reports that peers are unavailable.
+// ConnectMethod handles the connect RPC method. A live runtime admits the
+// request to its bounded peer-connect scheduler and returns immediately.
 type ConnectMethod struct{ AdminHandler }
 
 func (m *ConnectMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (any, *types.RpcError) {
-	var request struct {
-		IP   string `json:"ip"`
-		Port int    `json:"port,omitempty"`
-	}
-
-	if params != nil {
-		if err := json.Unmarshal(params, &request); err != nil {
-			return nil, types.RpcErrorInvalidParams(fmt.Sprintf("Invalid parameters: %v", err))
-		}
-	}
-
-	// When the overlay is wired (consensus mode, i.e. rippled's
-	// non-standalone path) initiate a real outbound connection. rippled's
-	// overlay().connect() schedules the attempt and returns immediately, so
-	// run the handshake in the background and reply right away (Connect.cpp).
-	if ctx.Services != nil && ctx.Services.PeerConnect != nil {
-		if request.IP == "" {
-			return nil, types.RpcErrorInvalidParams("Missing required parameter: ip")
-		}
-		port := connectPort(request.Port)
-		addr := net.JoinHostPort(request.IP, strconv.Itoa(port))
-		go func() { _ = ctx.Services.PeerConnect(addr) }()
-		return connectMessage(request.IP, port), nil
-	}
-
-	// No overlay wired. Mirror rippled's standalone guard, which precedes the
-	// ip check (Connect.cpp:41), so connect in standalone reports notSynced
-	// regardless of the supplied params.
+	// The ledger invariant and standalone guard intentionally precede request
+	// decoding. This preserves rippled's notSynced result for every standalone
+	// request, including malformed parameters.
 	if ctx.Services == nil || ctx.Services.Ledger == nil {
 		return nil, rpcInternalInvariantError("connect: ledger service unavailable")
 	}
 	if ctx.Services.Ledger.IsStandalone() {
-		return nil, types.NewRpcError(types.RpcNOT_SYNCED, "notSynced", "notSynced",
-			"Not synced to the network.")
+		return nil, types.RpcErrorNotSynced("")
 	}
-	if request.IP == "" {
-		return nil, types.RpcErrorInvalidParams("Missing required parameter: ip")
+
+	request, rpcErr := decodeConnectRequest(params)
+	if rpcErr != nil {
+		return nil, rpcErr
 	}
-	return connectMessage(request.IP, connectPort(request.Port)), nil
+	ip, ok := parseConnectEndpoint(request.ip)
+	if !ok || ip.IsUnspecified() {
+		return connectMessage(request.ip, request.port), nil
+	}
+	if ctx.Services.PeerConnect == nil {
+		return nil, types.RpcErrorNotEnabled("")
+	}
+
+	addr := netip.AddrPortFrom(ip, uint16(request.port)).String()
+	if err := ctx.Services.PeerConnect(addr); err != nil {
+		switch {
+		case errors.Is(err, types.ErrPeerConnectQueueFull):
+			return nil, types.RpcErrorTooBusy()
+		case errors.Is(err, types.ErrPeerConnectClosed), errors.Is(err, types.ErrPeerConnectUnavailable):
+			return nil, types.RpcErrorNotEnabled("")
+		default:
+			return nil, rpcInternalError("connect: enqueue failed", err)
+		}
+	}
+	return connectMessage(request.ip, request.port), nil
 }
 
-// connectPort applies the default peer port when the caller omits it. rippled
-// uses DEFAULT_PEER_PORT (Connect.cpp:60); go-xrpl's peer protocol listens on
-// 51235 network-wide (peermanagement.DefaultListenAddr and the bootstrap
-// hubs), so the connect default mirrors "use the system peer port" with
-// go-xrpl's deployed value rather than rippled's IANA-registered 2459.
-func connectPort(port int) int {
-	if port == 0 {
-		return 51235
+func parseConnectEndpoint(value string) (netip.Addr, bool) {
+	if len(value) > 64 {
+		return netip.Addr{}, false
 	}
-	return port
+
+	value = strings.TrimSpace(value)
+	if ip, err := netip.ParseAddr(value); err == nil {
+		return ip, true
+	}
+	if endpoint, err := netip.ParseAddrPort(value); err == nil {
+		return endpoint.Addr(), true
+	}
+	if ip, ok := parseBracketedConnectEndpoint(value); ok {
+		return ip, true
+	}
+	if strings.HasSuffix(value, ":") {
+		if ip, err := netip.ParseAddr(strings.TrimSuffix(value, ":")); err == nil {
+			return ip, true
+		}
+	}
+
+	fields := strings.Fields(value)
+	if len(fields) != 2 {
+		return netip.Addr{}, false
+	}
+	if _, err := strconv.ParseUint(fields[1], 10, 16); err != nil {
+		return netip.Addr{}, false
+	}
+	ip, err := netip.ParseAddr(fields[0])
+	return ip, err == nil
+}
+
+func parseBracketedConnectEndpoint(value string) (netip.Addr, bool) {
+	if len(value) < 2 || value[0] != '[' {
+		return netip.Addr{}, false
+	}
+	closeBracket := strings.IndexByte(value, ']')
+	if closeBracket < 2 {
+		return netip.Addr{}, false
+	}
+	ip, err := netip.ParseAddr(value[1:closeBracket])
+	if err != nil {
+		return netip.Addr{}, false
+	}
+
+	suffix := value[closeBracket+1:]
+	if suffix == "" {
+		return ip, true
+	}
+	if suffix == ":" {
+		return ip, true
+	}
+	if suffix[0] != ':' && strings.TrimSpace(suffix[:1]) != "" {
+		return netip.Addr{}, false
+	}
+	if _, err := strconv.ParseUint(strings.TrimSpace(suffix[1:]), 10, 16); err != nil {
+		return netip.Addr{}, false
+	}
+	return ip, true
+}
+
+type connectRequest struct {
+	ip   string
+	port int
+}
+
+func decodeConnectRequest(params json.RawMessage) (connectRequest, *types.RpcError) {
+	fields := make(map[string]json.RawMessage)
+	if len(bytes.TrimSpace(params)) != 0 {
+		if err := json.Unmarshal(params, &fields); err != nil {
+			return connectRequest{}, types.RpcErrorInvalidParams("Invalid parameters.")
+		}
+	}
+
+	rawIP, ok := fields["ip"]
+	if !ok {
+		return connectRequest{}, types.RpcErrorMissingField("ip")
+	}
+	ip, rpcErr := parseConnectIP(rawIP)
+	if rpcErr != nil {
+		return connectRequest{}, rpcErr
+	}
+
+	port := 51235
+	if rawPort, supplied := fields["port"]; supplied {
+		var rpcErr *types.RpcError
+		port, rpcErr = parseConnectPort(rawPort)
+		if rpcErr != nil {
+			return connectRequest{}, rpcErr
+		}
+	}
+	return connectRequest{ip: ip, port: port}, nil
+}
+
+func parseConnectIP(raw json.RawMessage) (string, *types.RpcError) {
+	decoder := json.NewDecoder(bytes.NewReader(raw))
+	decoder.UseNumber()
+	var value any
+	if err := decoder.Decode(&value); err != nil {
+		return "", types.RpcErrorInvalidParams("Invalid parameters.")
+	}
+	switch value := value.(type) {
+	case nil:
+		return "", nil
+	case string:
+		return value, nil
+	case bool:
+		return strconv.FormatBool(value), nil
+	case json.Number:
+		if !strings.ContainsAny(value.String(), ".eE") {
+			return value.String(), nil
+		}
+		number, err := strconv.ParseFloat(value.String(), 64)
+		if err != nil {
+			return "", types.RpcErrorInvalidParams("Invalid parameters.")
+		}
+		return strconv.FormatFloat(number, 'f', 6, 64), nil
+	default:
+		return "", rpcInternalError("connect: ip coercion failed", errors.New("value cannot be converted to a string"))
+	}
+}
+
+func parseConnectPort(raw json.RawMessage) (int, *types.RpcError) {
+	if bytes.Equal(bytes.TrimSpace(raw), []byte("null")) {
+		return 0, types.RpcErrorInvalidParams("Invalid parameters.")
+	}
+	decoder := json.NewDecoder(bytes.NewReader(raw))
+	decoder.UseNumber()
+	var value any
+	if err := decoder.Decode(&value); err != nil {
+		return 0, types.RpcErrorInvalidParams("Invalid parameters.")
+	}
+	if number, ok := value.(json.Number); ok {
+		if port, err := strconv.ParseInt(number.String(), 10, 64); err == nil {
+			if port >= 1 && port <= 65535 {
+				return int(port), nil
+			}
+			return 0, types.RpcErrorInvalidParams("Invalid parameters.")
+		}
+		// Accept JSON numbers such as 51235.0 when they represent an
+		// integer, while rejecting fractional values and non-finite input.
+		if port, err := strconv.ParseFloat(number.String(), 64); err == nil &&
+			!math.IsNaN(port) && !math.IsInf(port, 0) && math.Trunc(port) == port &&
+			port >= 1 && port <= 65535 {
+			return int(port), nil
+		}
+	}
+	return 0, types.RpcErrorInvalidParams("Invalid parameters.")
 }
 
 // connectMessage formats the reply rippled returns from doConnect

@@ -6,7 +6,7 @@ The JSON-RPC and WebSocket methods registered by the server, generated from
 the method registry (`internal/rpc/handlers`). **Role** is the minimum role a
 caller needs; **API versions** are the API versions each method supports.
 
-Total: 76 methods.
+Total: 74 methods.
 
 | Method | Role | API versions |
 |--------|------|--------------|
@@ -27,9 +27,7 @@ Total: 76 methods.
 | `channel_verify` | guest | 1, 2, 3 |
 | `connect` | admin | 1, 2, 3 |
 | `consensus_info` | admin | 1, 2, 3 |
-| `crawl_shards` | admin | 1, 2, 3 |
 | `deposit_authorized` | guest | 1, 2, 3 |
-| `download_shard` | admin | 1, 2, 3 |
 | `feature` | guest | 1, 2, 3 |
 | `fee` | guest | 1, 2, 3 |
 | `fetch_info` | admin | 1, 2, 3 |

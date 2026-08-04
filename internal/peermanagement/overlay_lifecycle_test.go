@@ -33,6 +33,19 @@ func newLifecycleTestOverlay(t *testing.T, opts ...Option) *Overlay {
 	return o
 }
 
+func TestOverlayConnectContextHonorsCallerCancellation(t *testing.T) {
+	o := newLifecycleTestOverlay(t)
+	baseCtx, cancelBase := context.WithCancel(context.Background())
+	defer cancelBase()
+	o.lifecycleMu.Lock()
+	o.ctx = baseCtx
+	o.lifecycleMu.Unlock()
+	connectCtx, cancelConnect := context.WithCancel(context.Background())
+	cancelConnect()
+	err := o.ConnectContext(connectCtx, "127.0.0.1:1")
+	require.ErrorIs(t, err, context.Canceled)
+}
+
 func TestOverlayRunCancellationClosesListener(t *testing.T) {
 	requirePeerTLSSupported(t)
 	o, err := New(WithDataDir(t.TempDir()), WithListenAddr("127.0.0.1:0"), WithPrivateMode(true))

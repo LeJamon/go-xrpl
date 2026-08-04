@@ -3,9 +3,10 @@ package rpc
 import (
 	"context"
 	"encoding/json"
+	"errors"
+	"fmt"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/LeJamon/go-xrpl/internal/rpc/handlers"
 	"github.com/LeJamon/go-xrpl/internal/rpc/types"
@@ -675,6 +676,20 @@ func TestConnectMethod(t *testing.T) {
 		assert.Equal(t, types.RpcNOT_SYNCED, rpcErr.Code)
 	})
 
+	t.Run("Standalone rejects before malformed parameter decoding", func(t *testing.T) {
+		ctx := &types.RpcContext{
+			Context:    context.Background(),
+			Role:       types.RoleAdmin,
+			ApiVersion: types.ApiVersion1,
+			Services:   services,
+		}
+		result, rpcErr := method.Handle(ctx, json.RawMessage(`{not json`))
+		assert.Nil(t, result)
+		require.NotNil(t, rpcErr)
+		assert.Equal(t, types.RpcNOT_SYNCED, rpcErr.Code)
+	})
+
+	mock.standalone = false
 	t.Run("Missing ip parameter returns error", func(t *testing.T) {
 		// On the live (wired-overlay) path rippled is non-standalone, so a
 		// missing ip surfaces as a missing-field error.
@@ -696,12 +711,54 @@ func TestConnectMethod(t *testing.T) {
 		assert.Equal(t, types.RpcINVALID_PARAMS, rpcErr.Code)
 	})
 
-	t.Run("Wired overlay initiates background connection", func(t *testing.T) {
-		got := make(chan string, 1)
+	t.Run("Present non-address ip values return success without enqueue", func(t *testing.T) {
+		for _, tc := range []struct {
+			name   string
+			rawIP  string
+			wantIP string
+		}{
+			{name: "empty", rawIP: `""`, wantIP: ""},
+			{name: "null", rawIP: `null`, wantIP: ""},
+			{name: "boolean", rawIP: `true`, wantIP: "true"},
+			{name: "integer", rawIP: `7`, wantIP: "7"},
+			{name: "real", rawIP: `1.5`, wantIP: "1.500000"},
+			{name: "hostname", rawIP: `"example.com"`, wantIP: "example.com"},
+			{name: "unspecified", rawIP: `"0.0.0.0"`, wantIP: "0.0.0.0"},
+		} {
+			t.Run(tc.name, func(t *testing.T) {
+				svc := &types.ServiceContainer{Ledger: mock, PeerConnect: func(string) error {
+					t.Fatal("PeerConnect called for unspecified endpoint")
+					return nil
+				}}
+				ctx := &types.RpcContext{Context: context.Background(), Role: types.RoleAdmin, ApiVersion: types.ApiVersion1, Services: svc}
+				result, rpcErr := method.Handle(ctx, json.RawMessage(`{"ip":`+tc.rawIP+`}`))
+				require.Nil(t, rpcErr)
+				resultMap := result.(map[string]any)
+				assert.Equal(t, fmt.Sprintf("attempting connection to IP:%s port: 51235", tc.wantIP), resultMap["message"])
+			})
+		}
+	})
+
+	t.Run("Array and object ip values return internal", func(t *testing.T) {
+		for _, rawIP := range []string{`[]`, `{}`} {
+			svc := &types.ServiceContainer{Ledger: mock, PeerConnect: func(string) error {
+				t.Fatal("PeerConnect called after failed IP coercion")
+				return nil
+			}}
+			ctx := &types.RpcContext{Context: context.Background(), Role: types.RoleAdmin, ApiVersion: types.ApiVersion1, Services: svc}
+			result, rpcErr := method.Handle(ctx, json.RawMessage(`{"ip":`+rawIP+`}`))
+			assert.Nil(t, result)
+			require.NotNil(t, rpcErr)
+			assert.Equal(t, types.RpcINTERNAL, rpcErr.Code)
+		}
+	})
+
+	t.Run("Wired overlay enqueues synchronously", func(t *testing.T) {
+		var got string
 		svc := &types.ServiceContainer{
 			Ledger: mock,
 			PeerConnect: func(addr string) error {
-				got <- addr
+				got = addr
 				return nil
 			},
 		}
@@ -717,19 +774,14 @@ func TestConnectMethod(t *testing.T) {
 
 		require.Nil(t, rpcErr)
 		require.NotNil(t, result)
-		select {
-		case addr := <-got:
-			assert.Equal(t, "10.0.0.1:2459", addr)
-		case <-time.After(time.Second):
-			t.Fatal("PeerConnect was not invoked")
-		}
+		assert.Equal(t, "10.0.0.1:2459", got)
 	})
 
 	t.Run("Wired overlay defaults the port", func(t *testing.T) {
-		got := make(chan string, 1)
+		var got string
 		svc := &types.ServiceContainer{
 			Ledger:      mock,
-			PeerConnect: func(addr string) error { got <- addr; return nil },
+			PeerConnect: func(addr string) error { got = addr; return nil },
 		}
 		ctx := &types.RpcContext{
 			Context:    context.Background(),
@@ -740,11 +792,90 @@ func TestConnectMethod(t *testing.T) {
 
 		_, rpcErr := method.Handle(ctx, json.RawMessage(`{"ip": "10.0.0.2"}`))
 		require.Nil(t, rpcErr)
-		select {
-		case addr := <-got:
-			assert.Equal(t, "10.0.0.2:51235", addr)
-		case <-time.After(time.Second):
-			t.Fatal("PeerConnect was not invoked")
+		assert.Equal(t, "10.0.0.2:51235", got)
+	})
+
+	t.Run("Endpoint syntax is canonicalized and the requested port wins", func(t *testing.T) {
+		for _, tc := range []struct {
+			name string
+			ip   string
+			port int
+			want string
+		}{
+			{name: "surrounding whitespace", ip: " 127.0.0.1 ", port: 2459, want: "127.0.0.1:2459"},
+			{name: "IPv4 endpoint", ip: "127.0.0.1:80", port: 2459, want: "127.0.0.1:2459"},
+			{name: "IPv4 empty endpoint port", ip: "127.0.0.1:", port: 2459, want: "127.0.0.1:2459"},
+			{name: "bracketed IPv4 address", ip: "[127.0.0.1]", port: 2459, want: "127.0.0.1:2459"},
+			{name: "bracketed IPv6 address", ip: "[2001:db8::1]", port: 2459, want: "[2001:db8::1]:2459"},
+			{name: "IPv6 empty endpoint port", ip: "[2001:db8::1]:", port: 2459, want: "[2001:db8::1]:2459"},
+			{name: "IPv6 endpoint", ip: "[2001:db8::1]:80", port: 2459, want: "[2001:db8::1]:2459"},
+			{name: "legacy bracketed IPv6 endpoint", ip: "[2001:db8::1] 80", port: 2459, want: "[2001:db8::1]:2459"},
+			{name: "legacy IPv6 endpoint", ip: "2001:db8::1 80", port: 2459, want: "[2001:db8::1]:2459"},
+		} {
+			t.Run(tc.name, func(t *testing.T) {
+				var got string
+				svc := &types.ServiceContainer{Ledger: mock, PeerConnect: func(addr string) error { got = addr; return nil }}
+				ctx := &types.RpcContext{Context: context.Background(), Role: types.RoleAdmin, ApiVersion: types.ApiVersion1, Services: svc}
+				result, rpcErr := method.Handle(ctx, json.RawMessage(fmt.Sprintf(`{"ip":%q,"port":%d}`, tc.ip, tc.port)))
+				require.Nil(t, rpcErr)
+				assert.Equal(t, tc.want, got)
+				assert.Equal(t, fmt.Sprintf("attempting connection to IP:%s port: %d", tc.ip, tc.port), result.(map[string]any)["message"])
+			})
+		}
+	})
+
+	t.Run("Explicit port boundaries are accepted", func(t *testing.T) {
+		for _, tc := range []struct {
+			port int
+			want string
+		}{
+			{port: 1, want: "10.0.0.3:1"},
+			{port: 65535, want: "10.0.0.3:65535"},
+		} {
+			var got string
+			svc := &types.ServiceContainer{Ledger: mock, PeerConnect: func(addr string) error { got = addr; return nil }}
+			ctx := &types.RpcContext{Context: context.Background(), Role: types.RoleAdmin, ApiVersion: types.ApiVersion1, Services: svc}
+			_, rpcErr := method.Handle(ctx, json.RawMessage(fmt.Sprintf(`{"ip":"10.0.0.3","port":%d}`, tc.port)))
+			require.Nil(t, rpcErr)
+			assert.Equal(t, tc.want, got)
+		}
+	})
+
+	t.Run("Malformed and out-of-range ports are invalidParams", func(t *testing.T) {
+		for _, rawPort := range []string{"null", "0", "-1", "65536", "1.5", `"1"`, "true", "[]"} {
+			svc := &types.ServiceContainer{Ledger: mock, PeerConnect: func(string) error { t.Fatal("PeerConnect called for invalid port"); return nil }}
+			ctx := &types.RpcContext{Context: context.Background(), Role: types.RoleAdmin, ApiVersion: types.ApiVersion1, Services: svc}
+			_, rpcErr := method.Handle(ctx, json.RawMessage(fmt.Sprintf(`{"ip":"10.0.0.4","port":%s}`, rawPort)))
+			require.NotNil(t, rpcErr, rawPort)
+			assert.Equal(t, types.RpcINVALID_PARAMS, rpcErr.Code, rawPort)
+		}
+	})
+
+	t.Run("Unavailable scheduler returns notEnabled", func(t *testing.T) {
+		ctx := &types.RpcContext{Context: context.Background(), Role: types.RoleAdmin, ApiVersion: types.ApiVersion1,
+			Services: &types.ServiceContainer{Ledger: mock}}
+		_, rpcErr := method.Handle(ctx, json.RawMessage(`{"ip":"10.0.0.5"}`))
+		require.NotNil(t, rpcErr)
+		assert.Equal(t, types.RpcNOT_ENABLED, rpcErr.Code)
+	})
+
+	t.Run("Admission errors map to RPC errors", func(t *testing.T) {
+		for _, tc := range []struct {
+			name string
+			err  error
+			code int
+		}{
+			{"queue full", types.ErrPeerConnectQueueFull, types.RpcTOO_BUSY},
+			{"closed", types.ErrPeerConnectClosed, types.RpcNOT_ENABLED},
+			{"unexpected", errors.New("boom"), types.RpcINTERNAL},
+		} {
+			t.Run(tc.name, func(t *testing.T) {
+				svc := &types.ServiceContainer{Ledger: mock, PeerConnect: func(string) error { return tc.err }}
+				ctx := &types.RpcContext{Context: context.Background(), Role: types.RoleAdmin, ApiVersion: types.ApiVersion1, Services: svc}
+				_, rpcErr := method.Handle(ctx, json.RawMessage(`{"ip":"10.0.0.6"}`))
+				require.NotNil(t, rpcErr)
+				assert.Equal(t, tc.code, rpcErr.Code)
+			})
 		}
 	})
 
