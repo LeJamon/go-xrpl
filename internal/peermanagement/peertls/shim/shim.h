@@ -55,6 +55,10 @@ void         peertls_free(peertls_ssl* s);
  * negative error. The Go pump loops on this function. */
 int peertls_handshake(peertls_ssl* s);
 
+/* Send close_notify. A zero SSL_shutdown result is exposed as WANT_READ:
+ * local close_notify was sent and the peer response is still outstanding. */
+int peertls_shutdown(peertls_ssl* s);
+
 /* Encrypted application I/O. Same return convention as handshake. */
 int peertls_read (peertls_ssl* s, void* buf, int len);
 int peertls_write(peertls_ssl* s, const void* buf, int len);

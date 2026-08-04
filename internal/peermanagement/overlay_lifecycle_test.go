@@ -7,9 +7,17 @@ import (
 	"testing"
 	"time"
 
+	"github.com/LeJamon/go-xrpl/internal/peermanagement/peertls"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+func requirePeerTLSSupported(t *testing.T) {
+	t.Helper()
+	if !peertls.Supported() {
+		t.Skip("peer TLS requires CGO")
+	}
+}
 
 func newLifecycleTestOverlay(t *testing.T, opts ...Option) *Overlay {
 	t.Helper()
@@ -26,6 +34,7 @@ func newLifecycleTestOverlay(t *testing.T, opts ...Option) *Overlay {
 }
 
 func TestOverlayRunCancellationClosesListener(t *testing.T) {
+	requirePeerTLSSupported(t)
 	o, err := New(WithDataDir(t.TempDir()), WithListenAddr("127.0.0.1:0"), WithPrivateMode(true))
 	require.NoError(t, err)
 	ctx, cancel := context.WithCancel(context.Background())
@@ -64,6 +73,7 @@ func TestOverlayRunStartupFailureUnwinds(t *testing.T) {
 }
 
 func TestOverlayStopPersistsLatePeerMutation(t *testing.T) {
+	requirePeerTLSSupported(t)
 	dir := t.TempDir()
 	o, err := New(WithDataDir(dir), WithListenAddr("127.0.0.1:0"), WithPrivateMode(true))
 	require.NoError(t, err)
@@ -111,6 +121,7 @@ func TestOverlayStopPersistsLatePeerMutation(t *testing.T) {
 }
 
 func TestOverlayContextCancellationPersistsLatePeerMutation(t *testing.T) {
+	requirePeerTLSSupported(t)
 	dir := t.TempDir()
 	o, err := New(WithDataDir(dir), WithListenAddr("127.0.0.1:0"), WithPrivateMode(true))
 	require.NoError(t, err)
@@ -190,6 +201,7 @@ func TestOverlayConcurrentStopRejectsStartupBeforeReadiness(t *testing.T) {
 }
 
 func TestOverlayRejectsDoubleRun(t *testing.T) {
+	requirePeerTLSSupported(t)
 	o, err := New(WithDataDir(t.TempDir()), WithListenAddr("127.0.0.1:0"), WithPrivateMode(true))
 	require.NoError(t, err)
 	runDone := make(chan error, 1)

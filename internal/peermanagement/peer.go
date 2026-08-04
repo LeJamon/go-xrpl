@@ -94,6 +94,11 @@ type Peer struct {
 	bootstrapManifestPending atomic.Bool
 
 	outbound               *outboundQueue
+	sendMu                 sync.RWMutex
+	gracefulClosing        bool
+	outboundProgress       chan struct{}
+	outboundErrMu          sync.Mutex
+	outboundErr            error
 	events                 chan<- Event
 	consensusEvents        chan<- Event
 	consensusControlEvents chan<- Event
@@ -261,18 +266,19 @@ func DefaultPeerConfig() PeerConfig {
 
 func NewPeer(id PeerID, endpoint Endpoint, inbound bool, identity *Identity, events chan<- Event) *Peer {
 	return &Peer{
-		id:            id,
-		endpoint:      endpoint,
-		inbound:       inbound,
-		identity:      identity,
-		state:         PeerStateDisconnected,
-		outbound:      newOutboundQueue(),
-		events:        events,
-		traffic:       NewTrafficCounter(),
-		metrics:       newPeerMetrics(nil),
-		squelchMap:    make(map[string]time.Time),
-		txQueueSet:    make(map[[32]byte]struct{}),
-		pingsInFlight: make(map[uint32]pingInFlight),
+		id:               id,
+		endpoint:         endpoint,
+		inbound:          inbound,
+		identity:         identity,
+		state:            PeerStateDisconnected,
+		outbound:         newOutboundQueue(),
+		outboundProgress: make(chan struct{}, 1),
+		events:           events,
+		traffic:          NewTrafficCounter(),
+		metrics:          newPeerMetrics(nil),
+		squelchMap:       make(map[string]time.Time),
+		txQueueSet:       make(map[[32]byte]struct{}),
+		pingsInFlight:    make(map[uint32]pingInFlight),
 		readPolicy: peerReadPolicy{
 			now:               time.Now,
 			idleTimeout:       readIdleDeadline,
@@ -992,6 +998,19 @@ func tcpRemoteIP(conn net.Conn) net.IP {
 // conn and closeCh; runWG.Wait ensures a fully-quiesced peer before
 // return so a slow OS-level close cannot leak goroutines past the
 // caller's cleanup.
+type peerRunLoop uint8
+
+const (
+	peerReadLoop peerRunLoop = iota
+	peerWriteLoop
+	peerPingLoop
+)
+
+type peerRunResult struct {
+	loop peerRunLoop
+	err  error
+}
+
 func (p *Peer) Run(ctx context.Context) error {
 	p.mu.RLock()
 	if p.state != PeerStateConnected {
@@ -1000,22 +1019,22 @@ func (p *Peer) Run(ctx context.Context) error {
 	}
 	p.mu.RUnlock()
 
-	errCh := make(chan error, 3)
+	errCh := make(chan peerRunResult, 3)
 
 	p.runWG.Add(3)
 	go func() {
 		defer p.runWG.Done()
-		errCh <- p.readLoop(ctx)
+		errCh <- peerRunResult{loop: peerReadLoop, err: p.readLoop(ctx)}
 	}()
 
 	go func() {
 		defer p.runWG.Done()
-		errCh <- p.writeLoop(ctx)
+		errCh <- peerRunResult{loop: peerWriteLoop, err: p.writeLoop(ctx)}
 	}()
 
 	go func() {
 		defer p.runWG.Done()
-		errCh <- p.pingLoop(ctx)
+		errCh <- peerRunResult{loop: peerPingLoop, err: p.pingLoop(ctx)}
 	}()
 
 	var runErr error
@@ -1024,8 +1043,27 @@ func (p *Peer) Run(ctx context.Context) error {
 		runErr = ctx.Err()
 	case err := <-p.outbound.fatalSignal():
 		runErr = err
-	case err := <-errCh:
-		runErr = err
+	case result := <-errCh:
+		runErr = result.err
+	}
+	if errors.Is(runErr, io.EOF) && p.beginGracefulClose() {
+		p.mu.RLock()
+		conn := p.conn
+		p.mu.RUnlock()
+		if tlsConn, ok := conn.(peertls.GracefulConn); ok {
+			// The queue is bounded and writeLoop applies a size-aware deadline to
+			// every accepted frame; a shorter aggregate cap can discard valid data.
+			drainErr := p.waitOutboundDrain(ctx, context.Background(), errCh)
+			if drainErr != nil {
+				runErr = fmt.Errorf("peer graceful drain: %w", drainErr)
+			} else {
+				shutdownCtx, cancelShutdown := context.WithTimeout(context.Background(), gracefulShutdownTimeout)
+				if err := tlsConn.ShutdownContext(shutdownCtx); err != nil {
+					runErr = fmt.Errorf("peer TLS shutdown: %w", err)
+				}
+				cancelShutdown()
+			}
+		}
 	}
 	p.Close()
 	p.runWG.Wait()
@@ -1277,7 +1315,7 @@ func (p *Peer) writeLoop(ctx context.Context) error {
 		p.mu.RUnlock()
 
 		if conn == nil {
-			p.outbound.complete(token)
+			p.completeOutbound(token, ErrConnectionClosed)
 			return ErrConnectionClosed
 		}
 
@@ -1285,7 +1323,7 @@ func (p *Peer) writeLoop(ctx context.Context) error {
 		compressionEnabled := p.compressionNegotiated()
 		if header, err := message.DecodeHeader(data); err == nil && header.Compressed {
 			if !compressionEnabled {
-				p.outbound.complete(token)
+				p.completeOutbound(token, errCompressionUnnegotiated)
 				return errCompressionUnnegotiated
 			}
 		} else if compressionEnabled {
@@ -1293,11 +1331,11 @@ func (p *Peer) writeLoop(ctx context.Context) error {
 		}
 
 		if err := conn.SetWriteDeadline(time.Now().Add(p.frameReadBudget(uint32(len(wire))))); err != nil {
-			p.outbound.complete(token)
+			p.completeOutbound(token, err)
 			return err
 		}
 		n, err := writeComplete(conn, wire)
-		p.outbound.complete(token)
+		p.completeOutbound(token, err)
 		if err != nil {
 			if netErr, ok := err.(net.Error); ok && netErr.Timeout() {
 				return ErrWriteIdle
@@ -1307,6 +1345,65 @@ func (p *Peer) writeLoop(ctx context.Context) error {
 		p.metrics.sent.addMessage(uint64(n))
 		if hdr, derr := message.DecodeHeader(wire); derr == nil {
 			p.traffic.AddCount(CategorizeMessage(hdr.MessageType), false, n)
+		}
+	}
+}
+
+func (p *Peer) completeOutbound(token outboundToken, writeErr error) {
+	if writeErr != nil {
+		p.outboundErrMu.Lock()
+		if p.outboundErr == nil {
+			p.outboundErr = writeErr
+		}
+		p.outboundErrMu.Unlock()
+	}
+	p.outbound.complete(token)
+	select {
+	case p.outboundProgress <- struct{}{}:
+	default:
+	}
+}
+
+func (p *Peer) beginGracefulClose() bool {
+	p.sendMu.Lock()
+	defer p.sendMu.Unlock()
+	if p.closed.Load() {
+		return false
+	}
+	p.setState(PeerStateClosing)
+	p.gracefulClosing = true
+	return true
+}
+
+func (p *Peer) waitOutboundDrain(
+	runCtx, shutdownCtx context.Context,
+	runResults <-chan peerRunResult,
+) error {
+	for {
+		p.outboundErrMu.Lock()
+		writeErr := p.outboundErr
+		p.outboundErrMu.Unlock()
+		if writeErr != nil {
+			return writeErr
+		}
+		if p.outbound.snapshot().TotalFrames == 0 {
+			return nil
+		}
+		select {
+		case <-runCtx.Done():
+			return runCtx.Err()
+		case <-shutdownCtx.Done():
+			return shutdownCtx.Err()
+		case <-p.closeCh:
+			return ErrConnectionClosed
+		case result := <-runResults:
+			if result.loop == peerPingLoop && errors.Is(result.err, ErrConnectionClosed) {
+				continue
+			}
+			if result.err != nil {
+				return result.err
+			}
+		case <-p.outboundProgress:
 		}
 	}
 }
@@ -1415,7 +1512,8 @@ const (
 	// this age, and the cold-start delay before pingLoop's first
 	// probe. Mirrors rippled's peerTimerInterval (PeerImp.cpp:61) and
 	// the fail("Ping Timeout") branch at PeerImp.cpp:731-736.
-	pingTimeout = 60 * time.Second
+	pingTimeout             = 60 * time.Second
+	gracefulShutdownTimeout = pingTimeout
 	// pingProbeInterval: cadence after the first probe. Finer than
 	// rippled's 60s peerTimerInterval; OnPong's sweep coalesces
 	// concurrent in-flight pings so the disconnect criterion stays
@@ -1850,7 +1948,9 @@ func (p *Peer) ExpireSquelch(validator []byte) bool {
 // have protected capacity; exhausting either class signals the peer lifecycle
 // to close a connection that cannot keep up with protocol-critical traffic.
 func (p *Peer) Send(data []byte) error {
-	if p.closed.Load() {
+	p.sendMu.RLock()
+	defer p.sendMu.RUnlock()
+	if p.closed.Load() || p.gracefulClosing {
 		return ErrConnectionClosed
 	}
 	if p.SendQueueLen() < targetSendQueue {
@@ -1884,7 +1984,9 @@ func outboundClassForFrame(data []byte) OutboundSendClass {
 // SendPriority admits acquisition traffic to the same reliable FIFO while
 // protecting its share of the bounded queue.
 func (p *Peer) SendPriority(data []byte) error {
-	if p.closed.Load() {
+	p.sendMu.RLock()
+	defer p.sendMu.RUnlock()
+	if p.closed.Load() || p.gracefulClosing {
 		return ErrConnectionClosed
 	}
 	if p.SendQueueLen() < targetSendQueue {
@@ -1900,7 +2002,9 @@ func (p *Peer) SendPriority(data []byte) error {
 // SendManifestFrames schedules a complete manifest snapshot in the bounded
 // bulk lane. The writer emits at most one bulk frame per 16 reliable frames.
 func (p *Peer) SendManifestFrames(frames [][]byte) error {
-	if p.closed.Load() {
+	p.sendMu.RLock()
+	defer p.sendMu.RUnlock()
+	if p.closed.Load() || p.gracefulClosing {
 		return ErrConnectionClosed
 	}
 	if err := p.outbound.enqueueBulk(frames); err != nil {
@@ -1954,7 +2058,9 @@ func (p *Peer) SendQueueLen() int {
 }
 
 func (p *Peer) Close() error {
+	p.sendMu.Lock()
 	if p.closed.Swap(true) {
+		p.sendMu.Unlock()
 		return nil
 	}
 
@@ -1967,6 +2073,7 @@ func (p *Peer) Close() error {
 	conn := p.conn
 	p.conn = nil
 	p.mu.Unlock()
+	p.sendMu.Unlock()
 
 	var err error
 	if conn != nil {

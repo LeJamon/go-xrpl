@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"context"
 	"errors"
+	"io"
 	"net"
 	"sync"
 	"testing"
@@ -43,6 +44,79 @@ func (*fatalRunConn) RemoteAddr() net.Addr             { return livenessAddr("re
 func (*fatalRunConn) SetDeadline(time.Time) error      { return nil }
 func (*fatalRunConn) SetReadDeadline(time.Time) error  { return nil }
 func (*fatalRunConn) SetWriteDeadline(time.Time) error { return nil }
+
+type gracefulDrainConn struct {
+	readErr     error
+	writeErr    error
+	shutdownErr error
+
+	writeStarted  chan struct{}
+	releaseWrites chan struct{}
+	shutdown      chan struct{}
+	closed        chan struct{}
+	writeOnce     sync.Once
+	shutdownOnce  sync.Once
+	closeOnce     sync.Once
+
+	mu             sync.Mutex
+	writes         [][]byte
+	shutdownFrames int
+}
+
+func newGracefulDrainConn(readErr error) *gracefulDrainConn {
+	return &gracefulDrainConn{
+		readErr:       readErr,
+		writeStarted:  make(chan struct{}),
+		releaseWrites: make(chan struct{}),
+		shutdown:      make(chan struct{}),
+		closed:        make(chan struct{}),
+	}
+}
+
+func (c *gracefulDrainConn) Read([]byte) (int, error) { return 0, c.readErr }
+
+func (c *gracefulDrainConn) Write(p []byte) (int, error) {
+	c.writeOnce.Do(func() { close(c.writeStarted) })
+	select {
+	case <-c.releaseWrites:
+	case <-c.closed:
+		return 0, net.ErrClosed
+	}
+	c.mu.Lock()
+	c.writes = append(c.writes, append([]byte(nil), p...))
+	c.mu.Unlock()
+	if c.writeErr != nil {
+		return 0, c.writeErr
+	}
+	return len(p), nil
+}
+
+func (c *gracefulDrainConn) Close() error {
+	c.closeOnce.Do(func() { close(c.closed) })
+	return nil
+}
+
+func (*gracefulDrainConn) LocalAddr() net.Addr              { return livenessAddr("local") }
+func (*gracefulDrainConn) RemoteAddr() net.Addr             { return livenessAddr("remote") }
+func (*gracefulDrainConn) SetDeadline(time.Time) error      { return nil }
+func (*gracefulDrainConn) SetReadDeadline(time.Time) error  { return nil }
+func (*gracefulDrainConn) SetWriteDeadline(time.Time) error { return nil }
+func (*gracefulDrainConn) HandshakeContext(context.Context) error {
+	return nil
+}
+func (*gracefulDrainConn) SharedValue() ([]byte, error) { return make([]byte, 32), nil }
+
+func (c *gracefulDrainConn) ShutdownContext(context.Context) error {
+	c.mu.Lock()
+	c.shutdownFrames = len(c.writes)
+	c.mu.Unlock()
+	c.shutdownOnce.Do(func() { close(c.shutdown) })
+	closeErr := c.Close()
+	if c.shutdownErr != nil {
+		return c.shutdownErr
+	}
+	return closeErr
+}
 
 func TestOutboundQueueReliableFIFOAndBulkFairness(t *testing.T) {
 	queue := newOutboundQueue()
@@ -388,6 +462,157 @@ func TestPeerRunTerminatesOnCriticalQueueExhaustion(t *testing.T) {
 	assert.True(t, peer.closed.Load())
 	assert.Equal(t, PeerStateDisconnected, peer.State())
 	assert.Zero(t, peer.SendQueueLen())
+}
+
+func TestPeerRunDrainsAcceptedFramesBeforeGracefulEOFShutdown(t *testing.T) {
+	peer := newLatencyTestPeer(t)
+	conn := newGracefulDrainConn(io.EOF)
+	peer.conn = conn
+	peer.bufReader = bufio.NewReader(conn)
+	peer.setState(PeerStateConnected)
+
+	require.NoError(t, peer.Send([]byte("one")))
+	require.NoError(t, peer.Send([]byte("two")))
+	done := make(chan error, 1)
+	go func() { done <- peer.Run(context.Background()) }()
+
+	select {
+	case <-conn.writeStarted:
+	case <-time.After(time.Second):
+		t.Fatal("writer did not start")
+	}
+	require.Eventually(t, func() bool {
+		peer.sendMu.RLock()
+		defer peer.sendMu.RUnlock()
+		return peer.gracefulClosing
+	}, time.Second, time.Millisecond)
+	assert.Equal(t, PeerStateClosing, peer.State())
+	require.ErrorIs(t, peer.Send([]byte("late")), ErrConnectionClosed)
+	close(conn.releaseWrites)
+
+	select {
+	case err := <-done:
+		require.ErrorIs(t, err, io.EOF)
+	case <-time.After(time.Second):
+		t.Fatal("Peer.Run did not finish graceful EOF shutdown")
+	}
+	select {
+	case <-conn.shutdown:
+	default:
+		t.Fatal("TLS graceful shutdown was not called")
+	}
+	conn.mu.Lock()
+	writes := append([][]byte(nil), conn.writes...)
+	shutdownFrames := conn.shutdownFrames
+	conn.mu.Unlock()
+	assert.Equal(t, [][]byte{[]byte("one"), []byte("two")}, writes)
+	assert.Equal(t, 2, shutdownFrames)
+}
+
+func TestGracefulDrainIgnoresExpectedPingLoopClosure(t *testing.T) {
+	peer := newLatencyTestPeer(t)
+	conn := newGracefulDrainConn(io.EOF)
+	peer.conn = conn
+	peer.setState(PeerStateConnected)
+	t.Cleanup(func() { _ = peer.Close() })
+
+	require.NoError(t, peer.Send([]byte("one")))
+	require.NoError(t, peer.Send([]byte("two")))
+	writerCtx, cancelWriter := context.WithCancel(context.Background())
+	writerDone := make(chan error, 1)
+	go func() { writerDone <- peer.writeLoop(writerCtx) }()
+	select {
+	case <-conn.writeStarted:
+	case <-time.After(time.Second):
+		t.Fatal("writer did not start")
+	}
+	require.True(t, peer.beginGracefulClose())
+
+	pingErr := peer.runPingTick(time.Now())
+	require.ErrorIs(t, pingErr, ErrConnectionClosed)
+	runResults := make(chan peerRunResult, 1)
+	runResults <- peerRunResult{loop: peerPingLoop, err: pingErr}
+	shutdownCtx, cancelShutdown := context.WithTimeout(context.Background(), time.Second)
+	defer cancelShutdown()
+	gracefulDone := make(chan error, 1)
+	go func() {
+		err := peer.waitOutboundDrain(context.Background(), shutdownCtx, runResults)
+		if err == nil {
+			err = conn.ShutdownContext(shutdownCtx)
+		}
+		gracefulDone <- err
+	}()
+
+	select {
+	case err := <-gracefulDone:
+		t.Fatalf("graceful drain stopped on ping-loop closure: %v", err)
+	case <-time.After(20 * time.Millisecond):
+	}
+	close(conn.releaseWrites)
+	if err := <-gracefulDone; err != nil {
+		t.Fatalf("graceful shutdown error = %v", err)
+	}
+	cancelWriter()
+	require.ErrorIs(t, <-writerDone, context.Canceled)
+
+	conn.mu.Lock()
+	writes := append([][]byte(nil), conn.writes...)
+	shutdownFrames := conn.shutdownFrames
+	conn.mu.Unlock()
+	assert.Equal(t, [][]byte{[]byte("one"), []byte("two")}, writes)
+	assert.Equal(t, 2, shutdownFrames)
+}
+
+func TestPeerRunAbortsOnReadFailure(t *testing.T) {
+	readErr := errors.New("peer read failed")
+	peer := newLatencyTestPeer(t)
+	conn := newGracefulDrainConn(readErr)
+	peer.conn = conn
+	peer.bufReader = bufio.NewReader(conn)
+	peer.setState(PeerStateConnected)
+
+	require.ErrorIs(t, peer.Run(context.Background()), readErr)
+	select {
+	case <-conn.shutdown:
+		t.Fatal("read failure used graceful TLS shutdown")
+	default:
+	}
+	select {
+	case <-conn.closed:
+	default:
+		t.Fatal("read failure did not close transport")
+	}
+}
+
+func TestPeerRunReturnsGracefulDrainFailure(t *testing.T) {
+	writeErr := errors.New("peer write failed")
+	peer := newLatencyTestPeer(t)
+	conn := newGracefulDrainConn(io.EOF)
+	conn.writeErr = writeErr
+	close(conn.releaseWrites)
+	peer.conn = conn
+	peer.bufReader = bufio.NewReader(conn)
+	peer.setState(PeerStateConnected)
+
+	require.NoError(t, peer.Send([]byte("accepted")))
+	require.ErrorIs(t, peer.Run(context.Background()), writeErr)
+	select {
+	case <-conn.shutdown:
+		t.Fatal("write failure used graceful TLS shutdown")
+	default:
+	}
+}
+
+func TestPeerRunReturnsGracefulShutdownFailure(t *testing.T) {
+	shutdownErr := errors.New("TLS shutdown failed")
+	peer := newLatencyTestPeer(t)
+	conn := newGracefulDrainConn(io.EOF)
+	conn.shutdownErr = shutdownErr
+	peer.conn = conn
+	peer.bufReader = bufio.NewReader(conn)
+	peer.setState(PeerStateConnected)
+
+	require.ErrorIs(t, peer.Run(context.Background()), shutdownErr)
 }
 
 func TestOutboundQueueOwnsAcceptedFrameBytes(t *testing.T) {

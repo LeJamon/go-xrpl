@@ -163,6 +163,18 @@ func (s *SSL) Handshake() error {
 	return enrichLastError(CodeToErr(int(rc)))
 }
 
+// Shutdown sends close_notify. ErrWantRead means the local alert was sent and
+// OpenSSL is waiting for the peer's close_notify response.
+func (s *SSL) Shutdown() error {
+	runtime.LockOSThread()
+	defer runtime.UnlockOSThread()
+	rc := C.peertls_shutdown(s.p)
+	if rc == 0 {
+		return nil
+	}
+	return enrichLastError(CodeToErr(int(rc)))
+}
+
 func (s *SSL) Read(buf []byte) (int, error) {
 	if len(buf) == 0 {
 		return 0, nil

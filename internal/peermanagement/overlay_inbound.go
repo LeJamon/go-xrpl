@@ -153,10 +153,15 @@ func (o *Overlay) startListener(ctx context.Context) (net.Listener, error) {
 		return nil, fmt.Errorf("overlay: build TLS cert: %w", err)
 	}
 
-	return peertls.NewListener(tcpListener, &peertls.Config{
+	tlsListener, err := peertls.NewListener(tcpListener, &peertls.Config{
 		CertPEM: certPEM,
 		KeyPEM:  keyPEM,
-	}), nil
+	})
+	if err != nil {
+		_ = tcpListener.Close()
+		return nil, fmt.Errorf("overlay: build TLS listener: %w", err)
+	}
+	return tlsListener, nil
 }
 
 // acceptLoop accepts incoming connections. acceptBackoff throttles
@@ -175,9 +180,8 @@ func (o *Overlay) acceptLoop(ctx context.Context) error {
 			if ctx.Err() != nil {
 				return ctx.Err()
 			}
-			// A closed listener is terminal — exit instead of
-			// spinning the backoff. Also the !cgo peertls stub path,
-			// which closes the inner listener at NewListener.
+			// A closed listener is terminal — exit instead of spinning the
+			// backoff.
 			if errors.Is(err, net.ErrClosed) {
 				return err
 			}
