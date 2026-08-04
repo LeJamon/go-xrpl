@@ -13,7 +13,6 @@ import (
 	"github.com/LeJamon/go-xrpl/internal/rpc/types"
 	"github.com/LeJamon/go-xrpl/internal/tx"
 	"github.com/LeJamon/go-xrpl/internal/tx/sign"
-	xrpllog "github.com/LeJamon/go-xrpl/log"
 )
 
 // SubmitMethod handles the submit RPC method.
@@ -151,39 +150,12 @@ func (m *SubmitMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (re
 	}
 	txHashStr := CalculateTxHash(txBlobHex)
 
-	// Store transaction for later lookup if applied. The submit response is
-	// still successful even when persistence fails — the tx is already in the
-	// open ledger and will be re-applied on close — but we log so silent
-	// storage failures don't go unnoticed.
-	if submitResult.Applied && txHashStr != "" {
-		if txHashBytes, err := hex.DecodeString(txHashStr); err == nil && len(txHashBytes) == 32 {
-			var txHash [32]byte
-			copy(txHash[:], txHashBytes)
-			storedTx := StoredTransaction{
-				TxJSON: txJsonMap,
-				Meta: map[string]any{
-					"TransactionResult": submitResult.EngineResult,
-					"TransactionIndex":  0,
-					"AffectedNodes":     []any{},
-				},
-			}
-			storedData, mErr := json.Marshal(storedTx)
-			if mErr != nil {
-				xrpllog.Named(xrpllog.PartitionRPC).Warn("submit: marshal stored tx failed", "hash", txHashStr, "err", mErr)
-			} else if sErr := ctx.Services.Ledger.StoreTransaction(txHash, storedData); sErr != nil {
-				xrpllog.Named(xrpllog.PartitionRPC).Warn("submit: StoreTransaction failed", "hash", txHashStr, "err", sErr)
-			}
-		}
-	}
-
 	projectedTxJSON := txprojection.ProjectJSONForPath(
 		txJsonMap,
 		txHashStr,
 		ctx.ApiVersion,
 		projectionPath,
 	)
-
-	baseFee, _, _ := ctx.Services.Ledger.GetCurrentFees()
 
 	// Build response with independent boolean fields matching rippled's
 	// Transaction::SubmitResult struct. "accepted" = any() in rippled.
@@ -198,7 +170,6 @@ func (m *SubmitMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (re
 		"broadcast":             submitResult.Broadcast,
 		"kept":                  submitResult.Kept,
 		"queued":                submitResult.Queued,
-		"open_ledger_cost":      fmt.Sprintf("%d", baseFee),
 	}
 
 	// Signed paths use the modern root hash for API v2+. Raw-blob submit keeps
@@ -207,17 +178,11 @@ func (m *SubmitMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (re
 		response["hash"] = txHashStr
 	}
 
-	// Add validated_ledger_index only if we have one
-	if submitResult.ValidatedLedger > 0 {
-		response["validated_ledger_index"] = submitResult.ValidatedLedger
-	}
-
-	// Add account_sequence_next and account_sequence_available
-	if account, ok := txJsonMap["Account"].(string); ok {
-		if acctInfo, err := ctx.Services.Ledger.GetAccountInfo(ctx.Context, account, "current"); err == nil {
-			response["account_sequence_next"] = acctInfo.Sequence
-			response["account_sequence_available"] = acctInfo.Sequence
-		}
+	if state := submitResult.CurrentLedgerState; state != nil {
+		response["account_sequence_next"] = state.AccountSequenceNext
+		response["account_sequence_available"] = state.AccountSequenceAvailable
+		response["open_ledger_cost"] = fmt.Sprintf("%d", state.OpenLedgerCost)
+		response["validated_ledger_index"] = state.ValidatedLedgerIndex
 	}
 
 	return response, nil

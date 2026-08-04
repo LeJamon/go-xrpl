@@ -48,6 +48,21 @@ type SubmitResult struct {
 
 	// ValidatedLedger is the highest validated ledger sequence
 	ValidatedLedger uint32
+
+	// CurrentLedgerState is the immutable state snapshot captured at submit
+	// time. It is nil when no validated ledger exists or the authoritative
+	// account/fee state could not be derived.
+	CurrentLedgerState *SubmitLedgerState
+}
+
+// SubmitLedgerState contains the current-ledger values returned by submit.
+// The pointer on SubmitResult distinguishes an unavailable snapshot from
+// valid zero-valued fields.
+type SubmitLedgerState struct {
+	ValidatedLedgerIndex     uint32
+	OpenLedgerCost           uint64
+	AccountSequenceNext      uint32
+	AccountSequenceAvailable uint32
 }
 
 // SubmitTransaction is the RPC entry point for tx ingress. It mirrors
@@ -129,7 +144,8 @@ func (s *Service) SubmitTransaction(transaction tx.Transaction, rawBlob []byte, 
 
 	outcome := s.openLedgerView.SubmitDetailed(ptx, cfg, s.txQueue)
 
-	currentSeq := s.openLedgerView.Current().Sequence()
+	current := s.openLedgerView.Current()
+	currentSeq := current.Sequence()
 	result := &SubmitResult{
 		Result:        outcome.Result,
 		Applied:       outcome.Applied,
@@ -140,6 +156,7 @@ func (s *Service) SubmitTransaction(transaction tx.Transaction, rawBlob []byte, 
 	}
 	if s.validatedLedger != nil {
 		result.ValidatedLedger = s.validatedLedger.Sequence()
+		result.CurrentLedgerState = s.submitLedgerStateLocked(current, ptx.Parsed, cfg)
 	}
 	if outcome.Class == openledger.ResultSuccess {
 		s.rememberRelayTransaction(ptx.Hash, ptx.Blob, outcome.Queued)
@@ -186,6 +203,74 @@ func (s *Service) SubmitTransaction(transaction tx.Transaction, rawBlob []byte, 
 	}
 
 	return result, nil
+}
+
+// submitLedgerStateLocked derives the four submit-state fields from the same
+// post-submit view and TxQ snapshot while the service lock is held. Any read or
+// decode failure omits the complete snapshot rather than returning mixed state.
+func (s *Service) submitLedgerStateLocked(
+	current *ledger.Ledger,
+	parsedTx tx.Transaction,
+	cfg openledger.ApplyConfig,
+) *SubmitLedgerState {
+	if current == nil || parsedTx == nil {
+		return nil
+	}
+
+	common := parsedTx.GetCommon()
+	if common == nil {
+		return nil
+	}
+	accountID, err := state.DecodeAccountID(common.Account)
+	if err != nil {
+		return nil
+	}
+	account, err := state.ReadAccountRoot(current, accountID)
+	if err != nil {
+		return nil
+	}
+	accountSeq := uint32(0)
+	if account != nil {
+		accountSeq = account.Sequence
+	}
+
+	baseFee, reserveBase, reserveIncrement, err := readFeesFromLedgerContext(context.Background(), current)
+	if err != nil {
+		return nil
+	}
+	feeConfig := tx.EngineConfig{
+		BaseFee:                   baseFee,
+		ReserveBase:               reserveBase,
+		ReserveIncrement:          reserveIncrement,
+		LedgerSequence:            current.Sequence(),
+		ParentCloseTime:           cfg.ParentCloseTime,
+		ApplicationCloseTime:      cfg.ApplicationCloseTime,
+		ApplicationCloseTimeSet:   cfg.ApplicationCloseTimeSet,
+		ParentHash:                current.ParentHash(),
+		NetworkID:                 s.config.NetworkID,
+		SkipSignatureVerification: cfg.SkipSignatureVerification,
+		ApplyFlags:                cfg.ApplyFlags,
+		ViewOpen:                  cfg.Mode == openledger.OpenLedgerMode,
+		Standalone:                s.config.Standalone,
+		Rules:                     cfg.Rules,
+		FeeTrack:                  s.feeTrack,
+		Logger:                    s.config.Logger,
+	}
+	baseFeeForTx := computeBaseFeeForTx(current, parsedTx, feeConfig)
+	availableSeq := accountSeq
+	openLedgerCost := baseFeeForTx
+	if s.txQueue != nil {
+		feeAndSeq := s.txQueue.TxRequiredFeeAndSeq(accountID, accountSeq, baseFeeForTx, current.TxCount())
+		openLedgerCost = feeAndSeq.RequiredFee
+		availableSeq = feeAndSeq.AvailableSeq
+	}
+
+	return &SubmitLedgerState{
+		ValidatedLedgerIndex:     s.validatedLedger.Sequence(),
+		OpenLedgerCost:           openLedgerCost,
+		AccountSequenceNext:      accountSeq,
+		AccountSequenceAvailable: availableSeq,
+	}
 }
 
 // dispatchProposedTransaction publishes only transactions committed to the

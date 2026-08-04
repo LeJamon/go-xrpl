@@ -23,11 +23,13 @@ import (
 // mockLedgerServiceSubmit extends mockLedgerService with submit-specific behavior
 type mockLedgerServiceSubmit struct {
 	*mockLedgerService
-	submitResult *types.SubmitResult
-	submitError  error
-	storedTxs    map[string][]byte
-	submitCalls  int
-	lastTxBlob   string
+	submitResult     *types.SubmitResult
+	submitError      error
+	storedTxs        map[string][]byte
+	submitCalls      int
+	lastTxBlob       string
+	currentFeesCalls int
+	accountInfoCalls int
 }
 
 func newMockLedgerServiceSubmit() *mockLedgerServiceSubmit {
@@ -53,6 +55,16 @@ func (m *mockLedgerServiceSubmit) SubmitTransaction(txJSON []byte, txBlobHex str
 		return nil, m.submitError
 	}
 	return m.submitResult, nil
+}
+
+func (m *mockLedgerServiceSubmit) GetCurrentFees() (baseFee, reserveBase, reserveIncrement uint64) {
+	m.currentFeesCalls++
+	return 10, 10000000, 2000000
+}
+
+func (m *mockLedgerServiceSubmit) GetAccountInfo(ctx context.Context, account string, ledgerIndex string) (*types.AccountInfo, error) {
+	m.accountInfoCalls++
+	return m.mockLedgerService.GetAccountInfo(ctx, account, ledgerIndex)
 }
 
 func TestSubmitMethodRawBlobPresenceAndProjection(t *testing.T) {
@@ -527,7 +539,7 @@ func TestSubmitMethodValidTxJson(t *testing.T) {
 	}
 }
 
-func TestSubmitMethodStoredMetadataIncludesAffectedNodes(t *testing.T) {
+func TestSubmitMethodDoesNotPersistSyntheticMetadata(t *testing.T) {
 	mock := newMockLedgerServiceSubmit()
 	ctx := &types.RpcContext{
 		Context:    context.Background(),
@@ -539,14 +551,9 @@ func TestSubmitMethodStoredMetadataIncludesAffectedNodes(t *testing.T) {
 
 	_, rpcErr := (&handlers.SubmitMethod{}).Handle(ctx, params)
 	require.Nil(t, rpcErr)
-	require.Len(t, mock.storedTxs, 1)
-	for _, storedData := range mock.storedTxs {
-		var stored handlers.StoredTransaction
-		require.NoError(t, json.Unmarshal(storedData, &stored))
-		nodes, ok := stored.Meta["AffectedNodes"].([]any)
-		require.True(t, ok)
-		assert.Empty(t, nodes)
-	}
+	require.Empty(t, mock.storedTxs)
+	assert.Zero(t, mock.currentFeesCalls)
+	assert.Zero(t, mock.accountInfoCalls)
 }
 
 // TestSubmitMethodResponseFields tests that response contains expected fields
@@ -570,6 +577,12 @@ func TestSubmitMethodResponseFields(t *testing.T) {
 		Fee:                 10,
 		CurrentLedger:       3,
 		ValidatedLedger:     2,
+		CurrentLedgerState: &types.SubmitLedgerState{
+			ValidatedLedgerIndex:     2,
+			OpenLedgerCost:           12,
+			AccountSequenceNext:      7,
+			AccountSequenceAvailable: 9,
+		},
 	}
 
 	t.Run("Response contains all required fields", func(t *testing.T) {
@@ -606,6 +619,7 @@ func TestSubmitMethodResponseFields(t *testing.T) {
 		assert.Contains(t, resp, "tx_blob")
 		assert.Contains(t, resp, "account_sequence_next")
 		assert.Contains(t, resp, "account_sequence_available")
+		assert.Contains(t, resp, "open_ledger_cost")
 
 		// Verify field values for successful submission
 		assert.Equal(t, "tesSUCCESS", resp["engine_result"])
@@ -614,6 +628,10 @@ func TestSubmitMethodResponseFields(t *testing.T) {
 		assert.Equal(t, true, resp["accepted"])
 		assert.Equal(t, true, resp["applied"])
 		assert.Equal(t, false, resp["queued"])
+		assert.Equal(t, float64(2), resp["validated_ledger_index"])
+		assert.Equal(t, float64(7), resp["account_sequence_next"])
+		assert.Equal(t, float64(9), resp["account_sequence_available"])
+		assert.Equal(t, "12", resp["open_ledger_cost"])
 	})
 
 	t.Run("tx_json is included in response", func(t *testing.T) {
@@ -642,6 +660,37 @@ func TestSubmitMethodResponseFields(t *testing.T) {
 		assert.Equal(t, "Payment", txJson["TransactionType"])
 		assert.Equal(t, "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh", txJson["Account"])
 	})
+}
+
+func TestSubmitMethodOmitsLedgerStateFieldsWithoutSnapshot(t *testing.T) {
+	mock := newMockLedgerServiceSubmit()
+	mock.submitResult = &types.SubmitResult{
+		EngineResult:        "tesSUCCESS",
+		EngineResultCode:    0,
+		EngineResultMessage: "The transaction was applied.",
+		Applied:             true,
+		ValidatedLedger:     99,
+	}
+	ctx := &types.RpcContext{
+		Context:    context.Background(),
+		Role:       types.RoleUser,
+		ApiVersion: types.ApiVersion1,
+		Services:   newSubmitTestServices(mock),
+	}
+	result, rpcErr := (&handlers.SubmitMethod{}).Handle(ctx, rawSubmitParams(t, validStoredPaymentTransaction(), nil))
+	require.Nil(t, rpcErr)
+	resultJSON, err := json.Marshal(result)
+	require.NoError(t, err)
+	var response map[string]any
+	require.NoError(t, json.Unmarshal(resultJSON, &response))
+	for _, field := range []string{
+		"account_sequence_next",
+		"account_sequence_available",
+		"open_ledger_cost",
+		"validated_ledger_index",
+	} {
+		assert.NotContains(t, response, field, "field %q must be absent without a snapshot", field)
+	}
 }
 
 // TestSubmitMethodEngineResults tests various engine result codes

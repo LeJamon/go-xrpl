@@ -1136,8 +1136,23 @@ type SubmitResult struct {
 	// ValidatedLedger is the highest validated ledger sequence
 	ValidatedLedger uint32
 
+	// CurrentLedgerState is the immutable state snapshot captured at submit
+	// time. It is nil when no validated ledger exists or the authoritative
+	// account/fee state could not be derived.
+	CurrentLedgerState *SubmitLedgerState
+
 	// Metadata is nil when the transaction produced no metadata.
 	Metadata *SubmitMetadata
+}
+
+// SubmitLedgerState contains the four current-ledger values returned by
+// submit. The pointer on SubmitResult distinguishes an unavailable snapshot
+// from valid zero-valued fields.
+type SubmitLedgerState struct {
+	ValidatedLedgerIndex     uint32
+	OpenLedgerCost           uint64
+	AccountSequenceNext      uint32
+	AccountSequenceAvailable uint32
 }
 
 // SubmitMetadata carries simulation metadata in JSON and binary form

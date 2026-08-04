@@ -6,6 +6,7 @@ import (
 	"fmt"
 
 	binarycodec "github.com/LeJamon/go-xrpl/codec/binarycodec"
+	ledgerService "github.com/LeJamon/go-xrpl/internal/ledger/service"
 	"github.com/LeJamon/go-xrpl/internal/rpc/types"
 	"github.com/LeJamon/go-xrpl/internal/tx"
 	"github.com/LeJamon/go-xrpl/internal/tx/ter"
@@ -42,6 +43,35 @@ func malformedSubmitResult() *types.SubmitResult {
 
 func internalSubmitResult() *types.SubmitResult {
 	return errorSubmitResult(ter.TefINTERNAL)
+}
+
+func adaptSubmitResult(result *ledgerService.SubmitResult, broadcast, failHard bool) *types.SubmitResult {
+	if result == nil {
+		return nil
+	}
+	rpcResult := &types.SubmitResult{
+		EngineResult:           result.Result.String(),
+		EngineResultCode:       int(result.Result),
+		EngineResultMessage:    result.Message,
+		Applied:                result.Applied,
+		Broadcast:              broadcast,
+		Queued:                 result.Result == ter.TerQUEUED,
+		Kept:                   (!failHard || result.Result == ter.TesSUCCESS) && result.Result != ter.TefALREADY,
+		Fee:                    result.Fee,
+		CurrentLedger:          result.CurrentLedger,
+		CurrentLedgerCloseTime: result.CurrentLedgerCloseTime,
+		ValidatedLedger:        result.ValidatedLedger,
+	}
+	if result.CurrentLedgerState != nil {
+		state := *result.CurrentLedgerState
+		rpcResult.CurrentLedgerState = &types.SubmitLedgerState{
+			ValidatedLedgerIndex:     state.ValidatedLedgerIndex,
+			OpenLedgerCost:           state.OpenLedgerCost,
+			AccountSequenceNext:      state.AccountSequenceNext,
+			AccountSequenceAvailable: state.AccountSequenceAvailable,
+		}
+	}
+	return rpcResult
 }
 
 func (a *LedgerServiceAdapter) submitTransaction(txJSON []byte, txBlobHex string, failHard bool) (*types.SubmitResult, error) {
@@ -124,23 +154,5 @@ func (a *LedgerServiceAdapter) submitTransaction(txJSON []byte, txBlobHex string
 		broadcast = true
 	}
 
-	// Keep regular submissions except duplicate transactions. Fail-hard keeps
-	// only an applied result.
-	queued := result.Result == ter.TerQUEUED
-	kept := (!failHard || result.Result == ter.TesSUCCESS) &&
-		result.Result != ter.TefALREADY
-
-	return &types.SubmitResult{
-		EngineResult:           result.Result.String(),
-		EngineResultCode:       int(result.Result),
-		EngineResultMessage:    result.Message,
-		Applied:                result.Applied,
-		Broadcast:              broadcast,
-		Queued:                 queued,
-		Kept:                   kept,
-		Fee:                    result.Fee,
-		CurrentLedger:          result.CurrentLedger,
-		CurrentLedgerCloseTime: result.CurrentLedgerCloseTime,
-		ValidatedLedger:        result.ValidatedLedger,
-	}, nil
+	return adaptSubmitResult(result, broadcast, failHard), nil
 }

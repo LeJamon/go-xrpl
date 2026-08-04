@@ -11,6 +11,7 @@ import (
 	"github.com/LeJamon/go-xrpl/internal/testing/payment"
 	"github.com/LeJamon/go-xrpl/internal/tx"
 	"github.com/LeJamon/go-xrpl/internal/tx/ter"
+	"github.com/LeJamon/go-xrpl/internal/txq"
 )
 
 // signedPaymentWithFee builds a signed Payment blob carrying an explicit
@@ -93,6 +94,9 @@ func TestService_SubmitTransaction_RejectsOversizedMemo(t *testing.T) {
 	if res.Applied {
 		t.Errorf("Applied = true, want false for a memo-rejected tx")
 	}
+	if res.CurrentLedgerState != nil {
+		t.Errorf("local rejection must omit current-ledger state, got %+v", res.CurrentLedgerState)
+	}
 }
 
 func submitBlob(t *testing.T, svc *service.Service, blob []byte, failHard bool) *service.SubmitResult {
@@ -135,6 +139,18 @@ func TestService_SubmitTransaction_AppliesAtOrAboveFeeLevel(t *testing.T) {
 	if !openLedgerHasTx(t, svc, hash) {
 		t.Errorf("applied tx not present in open view")
 	}
+	if res.CurrentLedgerState == nil {
+		t.Fatal("applied submit must include current-ledger state")
+	}
+	if got := res.CurrentLedgerState.AccountSequenceNext; got != 2 {
+		t.Errorf("account_sequence_next = %d, want post-apply sequence 2", got)
+	}
+	if got := res.CurrentLedgerState.AccountSequenceAvailable; got != 2 {
+		t.Errorf("account_sequence_available = %d, want 2", got)
+	}
+	if res.CurrentLedgerState.OpenLedgerCost == 0 || res.CurrentLedgerState.ValidatedLedgerIndex == 0 {
+		t.Errorf("submit state missing fee/validated index: %+v", res.CurrentLedgerState)
+	}
 }
 
 // TestService_SubmitTransaction_QueuesBelowFeeLevel verifies that a tx
@@ -163,6 +179,62 @@ func TestService_SubmitTransaction_QueuesBelowFeeLevel(t *testing.T) {
 	}
 	if openLedgerHasTx(t, svc, hash) {
 		t.Errorf("queued tx must not be present in the open view")
+	}
+	if res.CurrentLedgerState == nil {
+		t.Fatal("queued submit must include current-ledger state")
+	}
+	if got := res.CurrentLedgerState.AccountSequenceNext; got != 1 {
+		t.Errorf("queued account_sequence_next = %d, want unchanged sequence 1", got)
+	}
+	if got := res.CurrentLedgerState.AccountSequenceAvailable; got != 2 {
+		t.Errorf("queued account_sequence_available = %d, want just-admitted sequence 2", got)
+	}
+}
+
+func TestService_SubmitTransaction_QueuedSnapshotUsesEscalatedFee(t *testing.T) {
+	cfg := service.DefaultConfig()
+	cfg.Standalone = true
+	queueCfg := txq.StandaloneConfig()
+	queueCfg.MinimumTxnInLedgerStandalone = 1
+	queueCfg.TargetTxnInLedger = 1
+	cfg.TxQ = &queueCfg
+	svc, err := service.New(cfg)
+	if err != nil {
+		t.Fatalf("service.New: %v", err)
+	}
+	if err := svc.Start(); err != nil {
+		t.Fatalf("service.Start: %v", err)
+	}
+	t.Cleanup(svc.Stop)
+
+	env := jtx.NewTestEnv(t)
+	master := jtx.MasterAccount()
+	alice := jtx.NewAccount("alice")
+	bob := jtx.NewAccount("bob")
+	firstBlob, _ := signedPaymentWithFee(t, env, master, alice, 100_000_000, 10, 1)
+	if first := submitBlob(t, svc, firstBlob, false); first.Result != ter.TesSUCCESS {
+		t.Fatalf("first payment result = %s, want tesSUCCESS", first.Result)
+	}
+	secondBlob, _ := signedPaymentWithFee(t, env, master, bob, 100_000_000, 10, 2)
+	if second := submitBlob(t, svc, secondBlob, false); second.Result != ter.TesSUCCESS {
+		t.Fatalf("second payment result = %s, want tesSUCCESS", second.Result)
+	}
+	queuedBlob, _ := signedPaymentWithFee(t, env, master, jtx.NewAccount("carol"), 100_000_000, 1, 3)
+	queued := submitBlob(t, svc, queuedBlob, false)
+	if queued.Result != ter.TerQUEUED {
+		t.Fatalf("queued payment result = %s, want terQUEUED", queued.Result)
+	}
+	if queued.CurrentLedgerState == nil {
+		t.Fatal("queued submit must include current-ledger state")
+	}
+	if got := queued.CurrentLedgerState.AccountSequenceNext; got != 3 {
+		t.Errorf("account_sequence_next = %d, want unchanged sequence 3", got)
+	}
+	if got := queued.CurrentLedgerState.AccountSequenceAvailable; got != 4 {
+		t.Errorf("account_sequence_available = %d, want just-admitted sequence 4", got)
+	}
+	if got := queued.CurrentLedgerState.OpenLedgerCost; got <= 10 {
+		t.Errorf("open_ledger_cost = %d, want escalated fee above base 10", got)
 	}
 }
 

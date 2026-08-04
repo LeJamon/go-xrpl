@@ -10,8 +10,33 @@ import (
 	"github.com/LeJamon/go-xrpl/internal/testing/accountset"
 	"github.com/LeJamon/go-xrpl/internal/testing/payment"
 	"github.com/LeJamon/go-xrpl/internal/tx"
+	"github.com/LeJamon/go-xrpl/internal/tx/ter"
 	"github.com/stretchr/testify/require"
 )
+
+func TestAdaptSubmitResultCopiesLedgerState(t *testing.T) {
+	source := &service.SubmitResult{
+		Result: ter.TesSUCCESS,
+		CurrentLedgerState: &service.SubmitLedgerState{
+			ValidatedLedgerIndex:     17,
+			OpenLedgerCost:           123,
+			AccountSequenceNext:      9,
+			AccountSequenceAvailable: 11,
+		},
+	}
+	adapted := adaptSubmitResult(source, true, false)
+	require.NotNil(t, adapted.CurrentLedgerState)
+	require.NotSame(t, source.CurrentLedgerState, adapted.CurrentLedgerState)
+	require.Equal(t, uint32(17), adapted.CurrentLedgerState.ValidatedLedgerIndex)
+	require.Equal(t, uint64(123), adapted.CurrentLedgerState.OpenLedgerCost)
+	require.Equal(t, uint32(9), adapted.CurrentLedgerState.AccountSequenceNext)
+	require.Equal(t, uint32(11), adapted.CurrentLedgerState.AccountSequenceAvailable)
+
+	source.CurrentLedgerState.OpenLedgerCost = 999
+	adapted.CurrentLedgerState.AccountSequenceNext = 42
+	require.Equal(t, uint64(123), adapted.CurrentLedgerState.OpenLedgerCost)
+	require.Equal(t, uint32(9), source.CurrentLedgerState.AccountSequenceNext)
+}
 
 func TestAdapterSubmissionSmoke(t *testing.T) {
 	svc, err := service.New(service.Config{Standalone: true, GenesisConfig: genesis.DefaultConfig()})
