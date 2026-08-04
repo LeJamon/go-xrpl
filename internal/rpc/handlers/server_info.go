@@ -134,11 +134,11 @@ func serverCountersRequested(params json.RawMessage) bool {
 
 func addServerDiagnostics(info map[string]any, services *types.ServiceContainer) {
 	rpcCounters := make(map[string]any)
-	methods := make([]map[string]any, 0)
 	var snapshot types.RPCDiagnosticsSnapshot
 	if services != nil && services.RPCDiagnostics != nil {
 		snapshot = services.RPCDiagnostics.Snapshot()
 	}
+	methods := make([]map[string]any, 0, len(snapshot.Current))
 
 	var total types.RPCMethodDiagnostics
 	for method, stats := range snapshot.Methods {
