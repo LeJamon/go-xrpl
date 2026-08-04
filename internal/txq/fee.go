@@ -149,9 +149,9 @@ func (fm *feeMetrics) update(feeLevels []FeeLevel, timeLeap bool, cfg Config) ui
 	if timeLeap {
 		// Ledgers are taking too long to process, so clamp down on limits
 		cutPct := uint64(100 - cfg.SlowConsensusDecreasePercent)
-		upperLimit := max(mulDiv(uint64(fm.txnsExpected), cutPct, 100), uint64(fm.minimumTxnCount))
+		upperLimit := max(mulDiv(fm.txnsExpected, cutPct, 100), fm.minimumTxnCount)
 
-		newExpected := min(max(mulDiv(uint64(size), cutPct, 100), uint64(fm.minimumTxnCount)), upperLimit)
+		newExpected := min(max(mulDiv(size, cutPct, 100), fm.minimumTxnCount), upperLimit)
 		fm.txnsExpected = newExpected
 
 		// Clear recent history
@@ -159,7 +159,7 @@ func (fm *feeMetrics) update(feeLevels []FeeLevel, timeLeap bool, cfg Config) ui
 		fm.recentIndex = 0
 	} else if size > fm.txnsExpected || size > fm.targetTxnCount {
 		// Add to recent counts with increase percentage
-		increased := mulDiv(uint64(size), 100+uint64(cfg.NormalConsensusIncreasePercent), 100)
+		increased := mulDiv(size, 100+uint64(cfg.NormalConsensusIncreasePercent), 100)
 		fm.addRecentCount(increased)
 
 		// Find max in recent counts
@@ -235,7 +235,7 @@ func scaleFeeLevel(snapshot feeMetricsSnapshot, txInLedger uint32) FeeLevel {
 	// Uses mulDiv for overflow-safe 128-bit intermediate arithmetic,
 	// matching rippled's scaleFeeLevel which saturates to max on overflow.
 	current := uint64(txInLedger)
-	target := uint64(snapshot.TxnsExpected)
+	target := snapshot.TxnsExpected
 	return FeeLevel(mulDiv(snapshot.EscalationMultiplier, current*current, target*target))
 }
 
@@ -245,7 +245,7 @@ func scaleFeeLevel(snapshot feeMetricsSnapshot, txInLedger uint32) FeeLevel {
 func escalatedSeriesFeeLevel(snapshot feeMetricsSnapshot, txInLedger, extraCount, seriesSize uint32) (FeeLevel, bool) {
 	current := uint64(txInLedger) + uint64(extraCount)
 	last := current + uint64(seriesSize) - 1
-	target := uint64(snapshot.TxnsExpected)
+	target := snapshot.TxnsExpected
 
 	// Sum of squares formula: sum(n=current->last) n^2
 	// = sum(1->last) n^2 - sum(1->current-1) n^2

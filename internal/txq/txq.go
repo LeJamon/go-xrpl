@@ -314,18 +314,6 @@ func (q *TxQ) rebuildByFee() {
 	}
 }
 
-// rebuildByID reconstructs the transaction lookup from byFee. It is used only
-// for zero-value/test queues; production queues maintain the index on every
-// insertion and removal.
-func (q *TxQ) rebuildByID() {
-	q.byID = make(map[[32]byte]*candidate, len(q.byFee))
-	for _, candidate := range q.byFee {
-		if candidate != nil {
-			q.byID[candidate.TxID] = candidate
-		}
-	}
-}
-
 // AccountTxs returns details of all queued transactions for an account.
 func (q *TxQ) AccountTxs(account [20]byte) []*CandidateDetails {
 	q.stateMu.RLock()
