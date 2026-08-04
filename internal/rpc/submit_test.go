@@ -1,15 +1,21 @@
 package rpc
 
 import (
+	"bytes"
 	"context"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"maps"
+	"strings"
 	"testing"
 
 	binarycodec "github.com/LeJamon/go-xrpl/codec/binarycodec"
+	"github.com/LeJamon/go-xrpl/crypto/ed25519"
 	"github.com/LeJamon/go-xrpl/internal/rpc/handlers"
 	"github.com/LeJamon/go-xrpl/internal/rpc/types"
+	"github.com/LeJamon/go-xrpl/internal/tx"
+	txsign "github.com/LeJamon/go-xrpl/internal/tx/sign"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -20,6 +26,8 @@ type mockLedgerServiceSubmit struct {
 	submitResult *types.SubmitResult
 	submitError  error
 	storedTxs    map[string][]byte
+	submitCalls  int
+	lastTxBlob   string
 }
 
 func newMockLedgerServiceSubmit() *mockLedgerServiceSubmit {
@@ -39,10 +47,196 @@ func newMockLedgerServiceSubmit() *mockLedgerServiceSubmit {
 }
 
 func (m *mockLedgerServiceSubmit) SubmitTransaction(txJSON []byte, txBlobHex string) (*types.SubmitResult, error) {
+	m.submitCalls++
+	m.lastTxBlob = txBlobHex
 	if m.submitError != nil {
 		return nil, m.submitError
 	}
 	return m.submitResult, nil
+}
+
+func TestSubmitMethodRawBlobPresenceAndProjection(t *testing.T) {
+	mock := newMockLedgerServiceSubmit()
+	ctx := &types.RpcContext{
+		Context:    context.Background(),
+		Role:       types.RoleUser,
+		ApiVersion: types.ApiVersion2,
+		Services:   newSubmitTestServices(mock),
+	}
+
+	rawMap := map[string]any{
+		"TransactionType": "Payment",
+		"Account":         validAccountAddress,
+		"Destination":     "rPMh7Pi9ct699iZUTWaytJUoHcJ7cgyziK",
+		"Amount":          "1000000",
+		"Fee":             "10",
+		"Memos":           []map[string]any{},
+		"Sequence":        1,
+	}
+	rawBlob := rawSubmitBlob(t, rawMap)
+	params, err := json.Marshal(map[string]any{
+		"tx_blob": strings.ToLower(rawBlob),
+		"tx_json": []any{},
+		"secret":  map[string]any{},
+	})
+	require.NoError(t, err)
+
+	result, rpcErr := (&handlers.SubmitMethod{}).Handle(ctx, params)
+	require.Nil(t, rpcErr)
+	response, ok := result.(map[string]any)
+	require.True(t, ok)
+	assert.Equal(t, strings.ToUpper(rawBlob), response["tx_blob"])
+	assert.Empty(t, response["deprecated"])
+	assert.NotContains(t, response, "hash", "raw submit retains legacy nested-hash shape")
+	assert.Equal(t, strings.ToUpper(rawBlob), mock.lastTxBlob)
+
+	txJSON, ok := response["tx_json"].(map[string]any)
+	require.True(t, ok)
+	assert.Equal(t, "Payment", txJSON["TransactionType"])
+	assert.Equal(t, "1000000", txJSON["Amount"])
+	assert.NotEmpty(t, txJSON["SigningPubKey"])
+	assert.NotEmpty(t, txJSON["TxnSignature"])
+	assert.Empty(t, txJSON["Memos"])
+	assert.Equal(t, handlers.CalculateTxHash(rawBlob), txJSON["hash"])
+	assert.NotContains(t, txJSON, "DeliverMax", "raw submit does not apply DeliverMax projection")
+	assert.Equal(t, 1, mock.submitCalls)
+}
+
+func TestSubmitMethodRawBlobInvalidTransactionEnvelope(t *testing.T) {
+	mock := newMockLedgerServiceSubmit()
+	ctx := &types.RpcContext{
+		Context:    context.Background(),
+		Role:       types.RoleUser,
+		ApiVersion: types.ApiVersion2,
+		Services:   newSubmitTestServices(mock),
+	}
+	params, err := json.Marshal(map[string]any{"tx_blob": "00"})
+	require.NoError(t, err)
+
+	result, rpcErr := (&handlers.SubmitMethod{}).Handle(ctx, params)
+	assert.Nil(t, result)
+	require.NotNil(t, rpcErr)
+	assert.Equal(t, "invalidTransaction", rpcErr.ErrorString)
+	assert.NotEmpty(t, rpcErr.ErrorException)
+	assert.Zero(t, mock.submitCalls)
+}
+
+func TestSubmitMethodRawBlobRejectsBadSignatureBeforeSubmission(t *testing.T) {
+	mock := newMockLedgerServiceSubmit()
+	mock.standalone = false
+	ctx := &types.RpcContext{
+		Context:    context.Background(),
+		Role:       types.RoleUser,
+		ApiVersion: types.ApiVersion2,
+		Services:   newSubmitTestServices(mock),
+	}
+	blob := rawSubmitBlob(t, map[string]any{
+		"TransactionType": "AccountSet",
+		"Account":         validAccountAddress,
+		"Fee":             "10",
+		"Sequence":        1,
+	})
+	decoded, err := binarycodec.Decode(blob)
+	require.NoError(t, err)
+	signature, ok := decoded["TxnSignature"].(string)
+	require.True(t, ok)
+	decoded["TxnSignature"] = strings.Repeat("00", len(signature)/2)
+	badBlob, err := binarycodec.Encode(decoded)
+	require.NoError(t, err)
+	params, err := json.Marshal(map[string]any{"tx_blob": badBlob})
+	require.NoError(t, err)
+
+	result, rpcErr := (&handlers.SubmitMethod{}).Handle(ctx, params)
+	assert.Nil(t, result)
+	require.NotNil(t, rpcErr)
+	assert.Equal(t, "invalidTransaction", rpcErr.ErrorString)
+	assert.Equal(t, "fails local checks: Invalid signature.", rpcErr.ErrorException)
+	assert.Zero(t, mock.submitCalls)
+}
+
+func TestSubmitMethodRawBlobCanonicalizesFieldOrder(t *testing.T) {
+	mock := newMockLedgerServiceSubmit()
+	ctx := &types.RpcContext{
+		Context:    context.Background(),
+		Role:       types.RoleUser,
+		ApiVersion: types.ApiVersion2,
+		Services:   newSubmitTestServices(mock),
+	}
+	canonicalBlob := rawSubmitBlob(t, map[string]any{
+		"TransactionType": "AccountSet",
+		"Account":         validAccountAddress,
+		"Fee":             "10",
+		"Sequence":        1,
+	})
+	canonicalBytes, err := hex.DecodeString(canonicalBlob)
+	require.NoError(t, err)
+	accountOffset := bytes.LastIndex(canonicalBytes, []byte{0x81, 0x14})
+	require.GreaterOrEqual(t, accountOffset, 0)
+	require.GreaterOrEqual(t, len(canonicalBytes), accountOffset+22)
+	accountField := append([]byte(nil), canonicalBytes[accountOffset:accountOffset+22]...)
+	nonCanonical := append(accountField, canonicalBytes[:accountOffset]...)
+	nonCanonical = append(nonCanonical, canonicalBytes[accountOffset+22:]...)
+	require.NotEqual(t, canonicalBytes, nonCanonical)
+	params, err := json.Marshal(map[string]any{"tx_blob": hex.EncodeToString(nonCanonical)})
+	require.NoError(t, err)
+
+	result, rpcErr := (&handlers.SubmitMethod{}).Handle(ctx, params)
+	require.Nil(t, rpcErr)
+	response, ok := result.(map[string]any)
+	require.True(t, ok)
+	assert.Equal(t, canonicalBlob, response["tx_blob"])
+	assert.Equal(t, canonicalBlob, mock.lastTxBlob)
+	txJSON, ok := response["tx_json"].(map[string]any)
+	require.True(t, ok)
+	assert.Equal(t, handlers.CalculateTxHash(canonicalBlob), txJSON["hash"])
+}
+
+func TestSubmitMethodAbsentBlobRequiresSigningCapability(t *testing.T) {
+	mock := newMockLedgerServiceSubmit()
+	ctx := &types.RpcContext{
+		Context:    context.Background(),
+		Role:       types.RoleUser,
+		ApiVersion: types.ApiVersion2,
+		Services:   newSubmitTestServices(mock),
+	}
+	params, err := json.Marshal(map[string]any{
+		"tx_json": map[string]any{
+			"TransactionType": "AccountSet",
+			"Account":         validAccountAddress,
+		},
+	})
+	require.NoError(t, err)
+
+	result, rpcErr := (&handlers.SubmitMethod{}).Handle(ctx, params)
+	assert.Nil(t, result)
+	require.NotNil(t, rpcErr)
+	assert.Equal(t, types.RpcNOT_SUPPORTED, rpcErr.Code)
+	assert.Equal(t, "Signing is not supported by this server.", rpcErr.Message)
+	assert.NotContains(t, rpcErr.Extra, "deprecated")
+	assert.Zero(t, mock.submitCalls)
+}
+
+func TestSubmitMethodAbsentBlobValidatesFailHardBeforeSigningCapability(t *testing.T) {
+	mock := newMockLedgerServiceSubmit()
+	ctx := &types.RpcContext{
+		Context:    context.Background(),
+		Role:       types.RoleUser,
+		ApiVersion: types.ApiVersion2,
+		Services:   newSubmitTestServices(mock),
+	}
+	params, err := json.Marshal(map[string]any{
+		"tx_json":   map[string]any{},
+		"fail_hard": "true",
+	})
+	require.NoError(t, err)
+
+	result, rpcErr := (&handlers.SubmitMethod{}).Handle(ctx, params)
+	assert.Nil(t, result)
+	require.NotNil(t, rpcErr)
+	assert.Equal(t, types.RpcINVALID_PARAMS, rpcErr.Code)
+	assert.Equal(t, "Invalid field 'fail_hard', not boolean.", rpcErr.Message)
+	assert.NotContains(t, rpcErr.Extra, "deprecated")
+	assert.Zero(t, mock.submitCalls)
 }
 
 func (m *mockLedgerServiceSubmit) StoreTransaction(txHash [32]byte, txData []byte) error {
@@ -59,6 +253,53 @@ func newSubmitTestServices(mock *mockLedgerServiceSubmit) *types.ServiceContaine
 	}
 }
 
+func rawSubmitParams(t *testing.T, txJSON map[string]any, extra map[string]any) json.RawMessage {
+	t.Helper()
+	txBlob := rawSubmitBlob(t, txJSON)
+	params := map[string]any{"tx_blob": txBlob}
+	maps.Copy(params, extra)
+	paramsJSON, err := json.Marshal(params)
+	require.NoError(t, err)
+	return paramsJSON
+}
+
+func rawSubmitBlob(t *testing.T, txJSON map[string]any) string {
+	t.Helper()
+	entropy := make([]byte, 16)
+	for i := range entropy {
+		entropy[i] = 0x11
+	}
+	privateKey, publicKey, err := ed25519.Algorithm{}.DeriveKeypair(entropy, false)
+	require.NoError(t, err)
+
+	wireJSON := maps.Clone(txJSON)
+	wireJSON["SigningPubKey"] = publicKey
+	delete(wireJSON, "TxnSignature")
+	encodedJSON, err := json.Marshal(wireJSON)
+	require.NoError(t, err)
+	transaction, err := tx.ParseJSON(encodedJSON)
+	require.NoError(t, err)
+	signature, err := txsign.SignTransaction(transaction, privateKey)
+	require.NoError(t, err)
+	wireJSON["TxnSignature"] = signature
+	blob, err := binarycodec.Encode(wireJSON)
+	require.NoError(t, err)
+	return blob
+}
+
+func signedSubmitParams(t *testing.T, txJSON map[string]any, extra map[string]any) json.RawMessage {
+	t.Helper()
+	params := map[string]any{
+		"tx_json":  txJSON,
+		"seed_hex": "DEDCE9CE67B451D852FD4E846FCDE31C",
+		"key_type": "secp256k1",
+	}
+	maps.Copy(params, extra)
+	paramsJSON, err := json.Marshal(params)
+	require.NoError(t, err)
+	return paramsJSON
+}
+
 // TestSubmitMethodErrorValidation tests error handling for invalid inputs
 func TestSubmitMethodErrorValidation(t *testing.T) {
 	mock := newMockLedgerServiceSubmit()
@@ -71,7 +312,6 @@ func TestSubmitMethodErrorValidation(t *testing.T) {
 		ApiVersion: types.ApiVersion1,
 		Services:   services,
 	}
-
 	tests := []struct {
 		name          string
 		params        any
@@ -82,21 +322,21 @@ func TestSubmitMethodErrorValidation(t *testing.T) {
 		{
 			name:          "Missing tx_blob and tx_json - empty params",
 			params:        map[string]any{},
-			expectedError: "Either tx_blob or tx_json must be provided",
-			expectedCode:  types.RpcINVALID_PARAMS,
+			expectedError: "Signing is not supported by this server.",
+			expectedCode:  types.RpcNOT_SUPPORTED,
 		},
 		{
 			name:          "Missing tx_blob and tx_json - nil params",
 			params:        nil,
-			expectedError: "Either tx_blob or tx_json must be provided",
-			expectedCode:  types.RpcINVALID_PARAMS,
+			expectedError: "Signing is not supported by this server.",
+			expectedCode:  types.RpcNOT_SUPPORTED,
 		},
 		{
 			name: "Empty tx_blob",
 			params: map[string]any{
 				"tx_blob": "",
 			},
-			expectedError: "Either tx_blob or tx_json must be provided",
+			expectedError: "Invalid parameters.",
 			expectedCode:  types.RpcINVALID_PARAMS,
 		},
 		{
@@ -128,7 +368,7 @@ func TestSubmitMethodErrorValidation(t *testing.T) {
 			params: map[string]any{
 				"tx_blob": "ZZZZ",
 			},
-			expectedError: "Invalid tx_blob",
+			expectedError: "Invalid parameters.",
 			expectedCode:  types.RpcINVALID_PARAMS,
 		},
 	}
@@ -269,11 +509,7 @@ func TestSubmitMethodValidTxJson(t *testing.T) {
 			mock.submitResult = tc.mockResult
 			mock.submitError = nil
 
-			params := map[string]any{
-				"tx_json": tc.txJson,
-			}
-			paramsJSON, err := json.Marshal(params)
-			require.NoError(t, err)
+			paramsJSON := rawSubmitParams(t, tc.txJson, nil)
 
 			result, rpcErr := method.Handle(ctx, paramsJSON)
 			require.Nil(t, rpcErr, "Expected no error")
@@ -299,8 +535,7 @@ func TestSubmitMethodStoredMetadataIncludesAffectedNodes(t *testing.T) {
 		ApiVersion: types.ApiVersion1,
 		Services:   newSubmitTestServices(mock),
 	}
-	params, err := json.Marshal(map[string]any{"tx_json": validStoredPaymentTransaction()})
-	require.NoError(t, err)
+	params := rawSubmitParams(t, validStoredPaymentTransaction(), nil)
 
 	_, rpcErr := (&handlers.SubmitMethod{}).Handle(ctx, params)
 	require.Nil(t, rpcErr)
@@ -338,18 +573,14 @@ func TestSubmitMethodResponseFields(t *testing.T) {
 	}
 
 	t.Run("Response contains all required fields", func(t *testing.T) {
-		params := map[string]any{
-			"tx_json": map[string]any{
-				"TransactionType": "Payment",
-				"Account":         "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh",
-				"Destination":     "rPMh7Pi9ct699iZUTWaytJUoHcJ7cgyziK",
-				"Amount":          "1000000",
-				"Fee":             "10",
-				"Sequence":        1,
-			},
-		}
-		paramsJSON, err := json.Marshal(params)
-		require.NoError(t, err)
+		paramsJSON := rawSubmitParams(t, map[string]any{
+			"TransactionType": "Payment",
+			"Account":         "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh",
+			"Destination":     "rPMh7Pi9ct699iZUTWaytJUoHcJ7cgyziK",
+			"Amount":          "1000000",
+			"Fee":             "10",
+			"Sequence":        1,
+		}, nil)
 
 		result, rpcErr := method.Handle(ctx, paramsJSON)
 		require.Nil(t, rpcErr)
@@ -386,18 +617,14 @@ func TestSubmitMethodResponseFields(t *testing.T) {
 	})
 
 	t.Run("tx_json is included in response", func(t *testing.T) {
-		params := map[string]any{
-			"tx_json": map[string]any{
-				"TransactionType": "Payment",
-				"Account":         "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh",
-				"Destination":     "rPMh7Pi9ct699iZUTWaytJUoHcJ7cgyziK",
-				"Amount":          "1000000",
-				"Fee":             "10",
-				"Sequence":        1,
-			},
-		}
-		paramsJSON, err := json.Marshal(params)
-		require.NoError(t, err)
+		paramsJSON := rawSubmitParams(t, map[string]any{
+			"TransactionType": "Payment",
+			"Account":         "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh",
+			"Destination":     "rPMh7Pi9ct699iZUTWaytJUoHcJ7cgyziK",
+			"Amount":          "1000000",
+			"Fee":             "10",
+			"Sequence":        1,
+		}, nil)
 
 		result, rpcErr := method.Handle(ctx, paramsJSON)
 		require.Nil(t, rpcErr)
@@ -564,11 +791,7 @@ func TestSubmitMethodEngineResults(t *testing.T) {
 				ValidatedLedger:     2,
 			}
 
-			params := map[string]any{
-				"tx_json": baseTxJson,
-			}
-			paramsJSON, err := json.Marshal(params)
-			require.NoError(t, err)
+			paramsJSON := rawSubmitParams(t, baseTxJson, nil)
 
 			result, rpcErr := method.Handle(ctx, paramsJSON)
 			require.Nil(t, rpcErr, "Submit should not return RPC error even for transaction failures")
@@ -592,10 +815,8 @@ func TestSubmitMethodEngineResults(t *testing.T) {
 }
 
 // TestSubmitMethodMalformedTransaction tests malformed transaction handling.
-// A tx_json that is not a JSON object cannot be unmarshalled into a transaction
-// map, so the handler rejects it with invalidParams rather than silently
-// proceeding with an empty map. Object-shaped tx_json is accepted and validated
-// downstream by the ledger service.
+// Without tx_blob, submit is a signed path and capability admission precedes
+// tx_json validation. These fixtures verify the disabled-signing response.
 func TestSubmitMethodMalformedTransaction(t *testing.T) {
 	mock := newMockLedgerServiceSubmit()
 	services := newSubmitTestServices(mock)
@@ -619,34 +840,35 @@ func TestSubmitMethodMalformedTransaction(t *testing.T) {
 			name:        "String tx_json - rejected",
 			txJson:      "not a valid json object",
 			expectError: true,
-			errorMsg:    "Invalid field 'tx_json'",
+			errorMsg:    "Signing is not supported by this server.",
 			description: "A JSON string is not a transaction object",
 		},
 		{
 			name:        "Number tx_json - rejected",
 			txJson:      12345,
 			expectError: true,
-			errorMsg:    "Invalid field 'tx_json'",
+			errorMsg:    "Signing is not supported by this server.",
 			description: "A JSON number is not a transaction object",
 		},
 		{
 			name:        "Boolean tx_json - rejected",
 			txJson:      true,
 			expectError: true,
-			errorMsg:    "Invalid field 'tx_json'",
+			errorMsg:    "Signing is not supported by this server.",
 			description: "A JSON boolean is not a transaction object",
 		},
 		{
 			name:        "Array tx_json - rejected",
 			txJson:      []any{1, 2, 3},
 			expectError: true,
-			errorMsg:    "Invalid field 'tx_json'",
+			errorMsg:    "Signing is not supported by this server.",
 			description: "A JSON array is not a transaction object",
 		},
 		{
 			name:        "Empty tx_json object - accepted",
 			txJson:      map[string]any{},
-			expectError: false,
+			expectError: true,
+			errorMsg:    "Signing is not supported by this server.",
 			description: "Empty object is valid, ledger service validates content",
 		},
 		{
@@ -655,7 +877,8 @@ func TestSubmitMethodMalformedTransaction(t *testing.T) {
 				"TransactionType": "Payment",
 				"Account":         "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh",
 			},
-			expectError: false,
+			expectError: true,
+			errorMsg:    "Signing is not supported by this server.",
 			description: "Minimal valid transaction structure",
 		},
 	}
@@ -675,7 +898,7 @@ func TestSubmitMethodMalformedTransaction(t *testing.T) {
 			if tc.expectError {
 				assert.Nil(t, result, "Expected nil result for error case")
 				require.NotNil(t, rpcErr, "Expected RPC error")
-				assert.Equal(t, types.RpcINVALID_PARAMS, rpcErr.Code)
+				assert.Equal(t, types.RpcNOT_SUPPORTED, rpcErr.Code)
 				assert.Contains(t, rpcErr.Message, tc.errorMsg)
 			} else {
 				require.Nil(t, rpcErr, "Expected no error - validation in ledger service")
@@ -695,16 +918,14 @@ func TestSubmitMethodServiceUnavailable(t *testing.T) {
 		Services:   nil,
 	}
 
-	params := map[string]any{
-		"tx_json": map[string]any{
-			"TransactionType": "Payment",
-			"Account":         "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh",
-			"Destination":     "rPMh7Pi9ct699iZUTWaytJUoHcJ7cgyziK",
-			"Amount":          "1000000",
-		},
-	}
-	paramsJSON, err := json.Marshal(params)
-	require.NoError(t, err)
+	paramsJSON := rawSubmitParams(t, map[string]any{
+		"TransactionType": "Payment",
+		"Account":         "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh",
+		"Destination":     "rPMh7Pi9ct699iZUTWaytJUoHcJ7cgyziK",
+		"Amount":          "1000000",
+		"Fee":             "10",
+		"Sequence":        1,
+	}, nil)
 
 	result, rpcErr := method.Handle(ctx, paramsJSON)
 
@@ -724,16 +945,14 @@ func TestSubmitMethodServiceNilLedger(t *testing.T) {
 		Services:   &types.ServiceContainer{Ledger: nil},
 	}
 
-	params := map[string]any{
-		"tx_json": map[string]any{
-			"TransactionType": "Payment",
-			"Account":         "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh",
-			"Destination":     "rPMh7Pi9ct699iZUTWaytJUoHcJ7cgyziK",
-			"Amount":          "1000000",
-		},
-	}
-	paramsJSON, err := json.Marshal(params)
-	require.NoError(t, err)
+	paramsJSON := rawSubmitParams(t, map[string]any{
+		"TransactionType": "Payment",
+		"Account":         "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh",
+		"Destination":     "rPMh7Pi9ct699iZUTWaytJUoHcJ7cgyziK",
+		"Amount":          "1000000",
+		"Fee":             "10",
+		"Sequence":        1,
+	}, nil)
 
 	result, rpcErr := method.Handle(ctx, paramsJSON)
 
@@ -778,16 +997,14 @@ func TestSubmitMethodSubmitError(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			mock.submitError = tc.submitError
 
-			params := map[string]any{
-				"tx_json": map[string]any{
-					"TransactionType": "Payment",
-					"Account":         "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh",
-					"Destination":     "rPMh7Pi9ct699iZUTWaytJUoHcJ7cgyziK",
-					"Amount":          "1000000",
-				},
-			}
-			paramsJSON, err := json.Marshal(params)
-			require.NoError(t, err)
+			paramsJSON := rawSubmitParams(t, map[string]any{
+				"TransactionType": "Payment",
+				"Account":         "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh",
+				"Destination":     "rPMh7Pi9ct699iZUTWaytJUoHcJ7cgyziK",
+				"Amount":          "1000000",
+				"Fee":             "10",
+				"Sequence":        1,
+			}, nil)
 
 			result, rpcErr := method.Handle(ctx, paramsJSON)
 
@@ -941,14 +1158,7 @@ func TestSubmitMethodOptionalParams(t *testing.T) {
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			params := map[string]any{
-				"tx_json": baseTxJson,
-			}
-			// Add extra params
-			maps.Copy(params, tc.extraParams)
-
-			paramsJSON, err := json.Marshal(params)
-			require.NoError(t, err)
+			paramsJSON := rawSubmitParams(t, baseTxJson, tc.extraParams)
 
 			result, rpcErr := method.Handle(ctx, paramsJSON)
 			require.Nil(t, rpcErr, "Expected no error")
@@ -971,6 +1181,7 @@ func TestSubmitMethodOptionalParams(t *testing.T) {
 func TestSubmitMethodSigningCredentials(t *testing.T) {
 	mock := newMockLedgerServiceSubmit()
 	services := newSubmitTestServices(mock)
+	services.Capabilities.SigningEnabled = true
 
 	method := &handlers.SubmitMethod{}
 	ctx := &types.RpcContext{
@@ -1054,8 +1265,10 @@ func TestSubmitMethodSigningCredentials(t *testing.T) {
 			require.NoError(t, err)
 
 			// The response must contain the deprecated warning
-			assert.Contains(t, resp, "deprecated",
-				"sign-and-submit response must include deprecation warning")
+			assert.Equal(t,
+				"Signing support in the 'submit' command has been deprecated and will be removed in a future version of the server. Please migrate to a standalone signing tool.",
+				resp["deprecated"],
+			)
 
 			// The tx_json in the response must contain a signature
 			txJson, ok := resp["tx_json"].(map[string]any)
@@ -1080,6 +1293,8 @@ func TestSubmitMethodSigningCredentials(t *testing.T) {
 
 func TestSubmitMethodEmptyCredentialIsPresent(t *testing.T) {
 	mock := newMockLedgerServiceSubmit()
+	services := newSubmitTestServices(mock)
+	services.Capabilities.SigningEnabled = true
 	params := json.RawMessage(`{
 		"tx_json": {
 			"TransactionType": "Payment",
@@ -1092,13 +1307,17 @@ func TestSubmitMethodEmptyCredentialIsPresent(t *testing.T) {
 		Context:    context.Background(),
 		Role:       types.RoleUser,
 		ApiVersion: types.ApiVersion1,
-		Services:   newSubmitTestServices(mock),
+		Services:   services,
 	}
 
 	_, rpcErr := (&handlers.SubmitMethod{}).Handle(ctx, params)
 	require.NotNil(t, rpcErr)
 	assert.Equal(t, types.RpcBAD_SEED, rpcErr.Code)
 	assert.Equal(t, "Invalid field 'secret'.", rpcErr.Message)
+	assert.Equal(t,
+		"Signing support in the 'submit' command has been deprecated and will be removed in a future version of the server. Please migrate to a standalone signing tool.",
+		rpcErr.Extra["deprecated"],
+	)
 }
 
 // TestSubmitMethodApiV2Response tests API v2 specific response formatting.
@@ -1106,6 +1325,7 @@ func TestSubmitMethodEmptyCredentialIsPresent(t *testing.T) {
 func TestSubmitMethodApiV2Response(t *testing.T) {
 	mock := newMockLedgerServiceSubmit()
 	services := newSubmitTestServices(mock)
+	services.Capabilities.SigningEnabled = true
 
 	method := &handlers.SubmitMethod{}
 
@@ -1126,11 +1346,7 @@ func TestSubmitMethodApiV2Response(t *testing.T) {
 			Services:   services,
 		}
 
-		params := map[string]any{
-			"tx_json": baseTxJson,
-		}
-		paramsJSON, err := json.Marshal(params)
-		require.NoError(t, err)
+		paramsJSON := signedSubmitParams(t, baseTxJson, nil)
 
 		result, rpcErr := method.Handle(ctx, paramsJSON)
 		require.Nil(t, rpcErr)
@@ -1160,11 +1376,7 @@ func TestSubmitMethodApiV2Response(t *testing.T) {
 			Services:   services,
 		}
 
-		params := map[string]any{
-			"tx_json": baseTxJson,
-		}
-		paramsJSON, err := json.Marshal(params)
-		require.NoError(t, err)
+		paramsJSON := signedSubmitParams(t, baseTxJson, nil)
 
 		result, rpcErr := method.Handle(ctx, paramsJSON)
 		require.Nil(t, rpcErr)
@@ -1181,10 +1393,10 @@ func TestSubmitMethodApiV2Response(t *testing.T) {
 		assert.True(t, hasRootHash, "API v2 should have hash at root level")
 		assert.NotEmpty(t, rootHash)
 
-		// Also in tx_json
+		// API v2+: hash moves to the response root; it is not a serialized field.
 		txJson, ok := resp["tx_json"].(map[string]any)
 		require.True(t, ok)
-		assert.Equal(t, rootHash, txJson["hash"], "root hash and tx_json hash should match")
+		assert.NotContains(t, txJson, "hash")
 	})
 
 	t.Run("API v3 has hash at root", func(t *testing.T) {
@@ -1195,11 +1407,7 @@ func TestSubmitMethodApiV2Response(t *testing.T) {
 			Services:   services,
 		}
 
-		params := map[string]any{
-			"tx_json": baseTxJson,
-		}
-		paramsJSON, err := json.Marshal(params)
-		require.NoError(t, err)
+		paramsJSON := signedSubmitParams(t, baseTxJson, nil)
 
 		result, rpcErr := method.Handle(ctx, paramsJSON)
 		require.Nil(t, rpcErr)
@@ -1224,6 +1432,7 @@ func TestSubmitMethodApiV2Response(t *testing.T) {
 func TestSubmitMethodDeliverMax(t *testing.T) {
 	mock := newMockLedgerServiceSubmit()
 	services := newSubmitTestServices(mock)
+	services.Capabilities.SigningEnabled = true
 
 	method := &handlers.SubmitMethod{}
 
@@ -1235,18 +1444,14 @@ func TestSubmitMethodDeliverMax(t *testing.T) {
 			Services:   services,
 		}
 
-		params := map[string]any{
-			"tx_json": map[string]any{
-				"TransactionType": "Payment",
-				"Account":         "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh",
-				"Destination":     "rPMh7Pi9ct699iZUTWaytJUoHcJ7cgyziK",
-				"Amount":          "1000000",
-				"Fee":             "10",
-				"Sequence":        1,
-			},
-		}
-		paramsJSON, err := json.Marshal(params)
-		require.NoError(t, err)
+		paramsJSON := signedSubmitParams(t, map[string]any{
+			"TransactionType": "Payment",
+			"Account":         "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh",
+			"Destination":     "rPMh7Pi9ct699iZUTWaytJUoHcJ7cgyziK",
+			"Amount":          "1000000",
+			"Fee":             "10",
+			"Sequence":        1,
+		}, nil)
 
 		result, rpcErr := method.Handle(ctx, paramsJSON)
 		require.Nil(t, rpcErr)
@@ -1277,18 +1482,14 @@ func TestSubmitMethodDeliverMax(t *testing.T) {
 			Services:   services,
 		}
 
-		params := map[string]any{
-			"tx_json": map[string]any{
-				"TransactionType": "Payment",
-				"Account":         "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh",
-				"Destination":     "rPMh7Pi9ct699iZUTWaytJUoHcJ7cgyziK",
-				"Amount":          "1000000",
-				"Fee":             "10",
-				"Sequence":        1,
-			},
-		}
-		paramsJSON, err := json.Marshal(params)
-		require.NoError(t, err)
+		paramsJSON := signedSubmitParams(t, map[string]any{
+			"TransactionType": "Payment",
+			"Account":         "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh",
+			"Destination":     "rPMh7Pi9ct699iZUTWaytJUoHcJ7cgyziK",
+			"Amount":          "1000000",
+			"Fee":             "10",
+			"Sequence":        1,
+		}, nil)
 
 		result, rpcErr := method.Handle(ctx, paramsJSON)
 		require.Nil(t, rpcErr)
@@ -1320,17 +1521,13 @@ func TestSubmitMethodDeliverMax(t *testing.T) {
 			Services:   services,
 		}
 
-		params := map[string]any{
-			"tx_json": map[string]any{
-				"TransactionType": "AccountSet",
-				"Account":         "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh",
-				"Fee":             "12",
-				"Sequence":        5,
-				"SetFlag":         8,
-			},
-		}
-		paramsJSON, err := json.Marshal(params)
-		require.NoError(t, err)
+		paramsJSON := signedSubmitParams(t, map[string]any{
+			"TransactionType": "AccountSet",
+			"Account":         "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh",
+			"Fee":             "12",
+			"Sequence":        5,
+			"SetFlag":         8,
+		}, nil)
 
 		result, rpcErr := method.Handle(ctx, paramsJSON)
 		require.Nil(t, rpcErr)
@@ -1388,8 +1585,7 @@ func TestSubmitMethodIndependentBooleans(t *testing.T) {
 			ValidatedLedger:     2,
 		}
 
-		params := map[string]any{"tx_json": baseTxJson}
-		paramsJSON, _ := json.Marshal(params)
+		paramsJSON := rawSubmitParams(t, baseTxJson, nil)
 
 		result, rpcErr := method.Handle(ctx, paramsJSON)
 		require.Nil(t, rpcErr)
@@ -1418,8 +1614,7 @@ func TestSubmitMethodIndependentBooleans(t *testing.T) {
 			ValidatedLedger:     2,
 		}
 
-		params := map[string]any{"tx_json": baseTxJson}
-		paramsJSON, _ := json.Marshal(params)
+		paramsJSON := rawSubmitParams(t, baseTxJson, nil)
 
 		result, rpcErr := method.Handle(ctx, paramsJSON)
 		require.Nil(t, rpcErr)
@@ -1448,8 +1643,7 @@ func TestSubmitMethodIndependentBooleans(t *testing.T) {
 			ValidatedLedger:     2,
 		}
 
-		params := map[string]any{"tx_json": baseTxJson}
-		paramsJSON, _ := json.Marshal(params)
+		paramsJSON := rawSubmitParams(t, baseTxJson, nil)
 
 		result, rpcErr := method.Handle(ctx, paramsJSON)
 		require.Nil(t, rpcErr)

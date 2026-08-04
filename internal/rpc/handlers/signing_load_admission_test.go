@@ -349,7 +349,7 @@ func TestCredentialedSubmitAndMultisignMethodsRejectLoaded(t *testing.T) {
 				IsLoadedCluster: func() bool { return true },
 			},
 		}
-		_, rpcErr := (&SubmitMethod{}).Handle(ctx, signingLoadParams(false))
+		_, rpcErr := (&SubmitMethod{}).Handle(signingEnabledHandlerContext(ctx), signingLoadParams(false))
 		assertTooBusy(t, rpcErr)
 		if ledger.accountLookups != 0 || ledger.sequenceFills != 0 || ledger.feeFills != 0 || ledger.transactionSends != 0 {
 			t.Fatalf("credentialed submit performed downstream work: %#v", ledger)

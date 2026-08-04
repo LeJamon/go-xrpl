@@ -45,21 +45,45 @@ func internalSubmitResult() *types.SubmitResult {
 }
 
 func (a *LedgerServiceAdapter) submitTransaction(txJSON []byte, txBlobHex string, failHard bool) (*types.SubmitResult, error) {
-	// Parse the transaction from JSON
-	transaction, err := tx.ParseJSON(txJSON)
-	if err != nil {
-		return malformedSubmitResult(), nil
-	}
-
-	// Use the original signed blob if provided, otherwise re-encode
+	// Parse and canonicalize a supplied blob before handing it to the ledger.
+	// STTx serialization orders fields canonically, so accepted non-canonical
+	// input must not change the transaction ID or relayed bytes.
 	var rawBlob []byte
+	var transaction tx.Transaction
 	if txBlobHex != "" {
 		var decodeErr error
 		rawBlob, decodeErr = hex.DecodeString(txBlobHex)
 		if decodeErr != nil {
 			return nil, fmt.Errorf("decode tx_blob: %w", decodeErr)
 		}
+		var parseErr error
+		transaction, parseErr = tx.ParseFromBinary(rawBlob)
+		if parseErr != nil {
+			return malformedSubmitResult(), nil
+		}
+		fields, canonicalErr := binarycodec.DecodeBytes(rawBlob)
+		if canonicalErr != nil {
+			return malformedSubmitResult(), nil
+		}
+		canonicalHex, canonicalErr := binarycodec.Encode(fields)
+		if canonicalErr != nil {
+			return malformedSubmitResult(), nil
+		}
+		rawBlob, canonicalErr = hex.DecodeString(canonicalHex)
+		if canonicalErr != nil {
+			return nil, fmt.Errorf("decode canonical tx_blob: %w", canonicalErr)
+		}
+		transaction.SetRawBytes(rawBlob)
+	} else {
+		var parseErr error
+		transaction, parseErr = tx.ParseJSON(txJSON)
+		if parseErr != nil {
+			return malformedSubmitResult(), nil
+		}
 	}
+
+	// If no signed blob was supplied, encode the parsed JSON transaction for
+	// open-ledger processing and relay.
 	if rawBlob == nil {
 		if txMap, fErr := transaction.Flatten(); fErr == nil {
 			if hexStr, eErr := binarycodec.Encode(txMap); eErr == nil {

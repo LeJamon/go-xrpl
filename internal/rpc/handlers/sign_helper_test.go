@@ -57,13 +57,24 @@ func TestFormatSignResult(t *testing.T) {
 		t.Run(test.name, func(t *testing.T) {
 			txMap := map[string]any{"TransactionType": "Payment", "Amount": "10", "hash": "HASH"}
 			response := formatSignResult(signResult{TxMap: txMap, TxBlob: "BLOB"}, test.apiVersion)
-			if response["tx_blob"] != "BLOB" || txMap["DeliverMax"] != "10" {
+			if response["tx_blob"] != "BLOB" {
 				t.Fatalf("unexpected response: %#v", response)
 			}
 			_, hasRootHash := response["hash"]
-			_, hasAmount := txMap["Amount"]
-			if hasRootHash != (test.apiVersion > 1) || hasAmount != (test.apiVersion == 1) {
+			txJSON, ok := response["tx_json"].(map[string]any)
+			if !ok {
+				t.Fatalf("missing tx_json: %#v", response)
+			}
+			_, sourceHasDeliverMax := txMap["DeliverMax"]
+			_, sourceHasHash := txMap["hash"]
+			_, hasAmount := txJSON["Amount"]
+			_, hasDeliverMax := txJSON["DeliverMax"]
+			_, hasNestedHash := txJSON["hash"]
+			if sourceHasDeliverMax || !sourceHasHash || hasRootHash != (test.apiVersion > 1) || hasAmount != (test.apiVersion == 1) || !hasDeliverMax || hasNestedHash != (test.apiVersion == 1) {
 				t.Fatalf("api %d response = %#v", test.apiVersion, response)
+			}
+			if test.apiVersion > 1 && response["hash"] != "HASH" {
+				t.Fatalf("api %d root hash = %#v", test.apiVersion, response["hash"])
 			}
 		})
 	}

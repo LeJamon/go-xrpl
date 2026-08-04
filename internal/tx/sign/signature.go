@@ -11,6 +11,7 @@ import (
 
 	txcore "github.com/LeJamon/go-xrpl/internal/tx"
 
+	"github.com/LeJamon/go-xrpl/amendment"
 	addresscodec "github.com/LeJamon/go-xrpl/codec/addresscodec"
 
 	binarycodec "github.com/LeJamon/go-xrpl/codec/binarycodec"
@@ -90,6 +91,133 @@ var ErrInternalLookup = ter.Errorf(ter.TefINTERNAL, "internal error during signe
 func IsMultiSigned(tx txcore.Transaction) bool {
 	common := tx.GetCommon()
 	return len(common.Signers) > 0 && common.SigningPubKey == ""
+}
+
+// CheckSTTxSignature mirrors the signature portion of rippled's checkValidity.
+// It returns rippled's failure reason, or an empty string when the outer and
+// optional counterparty signatures are valid.
+func CheckSTTxSignature(transaction txcore.Transaction, rules *amendment.Rules, checkSigs bool) string {
+	common := transaction.GetCommon()
+	if common.GetFlags()&txcore.TfInnerBatchTxn != 0 && rules != nil && rules.Enabled(amendment.FeatureBatch) {
+		if common.HasField("TxnSignature") || common.SigningPubKey != "" || common.HasField("Signers") {
+			return "Malformed: Invalid inner batch transaction."
+		}
+		if !rules.Enabled(amendment.FeatureFixBatchInnerSigs) {
+			return ""
+		}
+	}
+	if !checkSigs {
+		return ""
+	}
+
+	var reason string
+	if common.SigningPubKey == "" {
+		reason = checkSTTxMultiSign(transaction)
+	} else {
+		if common.HasField("Signers") {
+			return "Cannot both single- and multi-sign."
+		}
+		if err := VerifySignature(transaction, true); err != nil {
+			return "Invalid signature."
+		}
+	}
+	if reason != "" {
+		return reason
+	}
+
+	if common.CounterpartySignature != nil {
+		if reason := checkSTTxCounterpartySignature(transaction, common.CounterpartySignature); reason != "" {
+			return reason
+		}
+	}
+	return ""
+}
+
+func checkSTTxCounterpartySignature(transaction txcore.Transaction, cp *txcore.CounterpartySignature) string {
+	hasSigners := len(cp.Signers) > 0
+	hasTxnSignature := cp.TxnSignature != ""
+	if raw := transaction.GetRawBytes(); len(raw) > 0 {
+		if fields, err := binarycodec.DecodeBytes(raw); err == nil {
+			if object, ok := fields["CounterpartySignature"].(map[string]any); ok {
+				_, hasSigners = object["Signers"]
+				_, hasTxnSignature = object["TxnSignature"]
+			}
+		}
+	}
+
+	if cp.SigningPubKey != "" {
+		if hasSigners {
+			return counterpartyPrefix + "Cannot both single- and multi-sign."
+		}
+		if err := verifyCounterpartySingleSign(transaction, cp, true); err != nil {
+			return err.Error()
+		}
+		return ""
+	}
+	if !hasSigners {
+		return counterpartyPrefix + "Empty SigningPubKey."
+	}
+	if hasTxnSignature {
+		return counterpartyPrefix + "Cannot both single- and multi-sign."
+	}
+	if len(cp.Signers) < MinMultiSigners || len(cp.Signers) > MaxMultiSigners {
+		return counterpartyPrefix + "Invalid Signers array size."
+	}
+	if err := verifyCounterpartyMultiSign(transaction, cp, true); err != nil {
+		return err.Error()
+	}
+	return ""
+}
+
+func checkSTTxMultiSign(transaction txcore.Transaction) string {
+	common := transaction.GetCommon()
+	if !common.HasField("Signers") {
+		return "Empty SigningPubKey."
+	}
+	if common.HasField("TxnSignature") {
+		return "Cannot both single- and multi-sign."
+	}
+	if len(common.Signers) < MinMultiSigners || len(common.Signers) > MaxMultiSigners {
+		return "Invalid Signers array size."
+	}
+
+	feePayer := common.Account
+	if common.Delegate != "" {
+		feePayer = common.Delegate
+	}
+	feePayerID, err := state.DecodeAccountID(feePayer)
+	if err != nil {
+		return "Invalid multisigner."
+	}
+	txMap, err := flattenForSigning(transaction)
+	if err != nil {
+		return "Internal signature check failure."
+	}
+
+	var previous [20]byte
+	for _, wrapper := range common.Signers {
+		signer := wrapper.Signer
+		signerID, err := state.DecodeAccountID(signer.Account)
+		if err != nil {
+			return "Invalid multisigner."
+		}
+		if signerID == feePayerID {
+			return "Invalid multisigner."
+		}
+		if signerID == previous {
+			return "Duplicate Signers not allowed."
+		}
+		if bytes.Compare(previous[:], signerID[:]) > 0 {
+			return "Unsorted Signers array."
+		}
+		previous = signerID
+
+		payload, err := binarycodec.EncodeForMultisigning(copyMap(txMap), signer.Account)
+		if err != nil || !verifySignatureForKey(payload, signer.SigningPubKey, signer.TxnSignature, true) {
+			return "Invalid signature on account " + signer.Account + "."
+		}
+	}
+	return ""
 }
 
 // VerifySignature verifies that a transaction is properly signed.

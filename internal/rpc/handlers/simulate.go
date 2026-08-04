@@ -12,6 +12,7 @@ import (
 
 	binarycodec "github.com/LeJamon/go-xrpl/codec/binarycodec"
 	"github.com/LeJamon/go-xrpl/internal/ledger/service/svcerr"
+	"github.com/LeJamon/go-xrpl/internal/rpc/txprojection"
 	"github.com/LeJamon/go-xrpl/internal/rpc/types"
 	"github.com/LeJamon/go-xrpl/internal/tx"
 )
@@ -32,13 +33,15 @@ func (m *SimulateMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (
 		rawParams = make(map[string]json.RawMessage)
 	}
 
-	// Validate `binary` field type if present — must be a boolean.
-	// rippled: if context.params.isMember(jss::binary) && !context.params[jss::binary].isBool()
+	// Validate `binary` field type if present — must be a JSON boolean.
+	// JsonCpp's isBool() rejects null and numeric values.
 	var binaryOutput bool
 	if raw, ok := rawParams["binary"]; ok {
-		if err := json.Unmarshal(raw, &binaryOutput); err != nil {
+		trimmed := bytes.TrimSpace(raw)
+		if !bytes.Equal(trimmed, []byte("true")) && !bytes.Equal(trimmed, []byte("false")) {
 			return nil, types.RpcErrorInvalidField("binary")
 		}
+		_ = json.Unmarshal(raw, &binaryOutput)
 	}
 
 	// Reject forbidden fields: secret, seed, seed_hex, passphrase.
@@ -67,22 +70,25 @@ func (m *SimulateMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (
 
 	if hasTxBlobRaw {
 		var txBlobStr string
-		if err := json.Unmarshal(rawParams["tx_blob"], &txBlobStr); err != nil {
+		if err := json.Unmarshal(rawParams["tx_blob"], &txBlobStr); err != nil || txBlobStr == "" {
 			return nil, types.RpcErrorInvalidField("tx_blob")
 		}
-		if txBlobStr == "" {
+		rawBlob, err := hex.DecodeString(txBlobStr)
+		if err != nil || len(rawBlob) == 0 {
 			return nil, types.RpcErrorInvalidField("tx_blob")
 		}
-		decoded, err := binarycodec.Decode(txBlobStr)
+		txJsonMap, err = binarycodec.DecodeBytes(rawBlob)
 		if err != nil {
 			return nil, types.RpcErrorInvalidField("tx_blob")
 		}
-		txJsonMap = decoded
 	} else {
 		var txObj map[string]any
 		decoder := json.NewDecoder(bytes.NewReader(rawParams["tx_json"]))
 		decoder.UseNumber()
 		if err := decoder.Decode(&txObj); err != nil {
+			return nil, types.RpcErrorExpectedField("tx_json", "object")
+		}
+		if txObj == nil {
 			return nil, types.RpcErrorExpectedField("tx_json", "object")
 		}
 		var trailing any
@@ -215,6 +221,11 @@ func (m *SimulateMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (
 	if err != nil {
 		return nil, rpcInternalError("simulate: transaction flattening failed", err)
 	}
+	canonicalBlob, err := binarycodec.Encode(canonicalMap)
+	if err != nil {
+		return nil, rpcInternalError("simulate: transaction encoding failed", err)
+	}
+	canonicalHash := CalculateTxHash(canonicalBlob)
 	txJSON, err := json.Marshal(canonicalMap)
 	if err != nil {
 		return nil, rpcInternalError("simulate: transaction marshaling failed", err)
@@ -260,11 +271,14 @@ func (m *SimulateMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (
 	}
 
 	if binaryOutput {
-		if encoded, err := binarycodec.Encode(canonicalMap); err == nil {
-			response["tx_blob"] = encoded
-		}
+		response["tx_blob"] = canonicalBlob
 	} else {
-		response["tx_json"] = canonicalMap
+		response["tx_json"] = txprojection.ProjectJSONForPath(
+			canonicalMap,
+			canonicalHash,
+			ctx.ApiVersion,
+			txprojection.PathCanonical,
+		)
 	}
 
 	return response, nil

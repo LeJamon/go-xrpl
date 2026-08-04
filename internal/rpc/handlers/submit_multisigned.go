@@ -10,6 +10,7 @@ import (
 	binarycodec "github.com/LeJamon/go-xrpl/codec/binarycodec"
 	"github.com/LeJamon/go-xrpl/internal/ledger/service/svcerr"
 	"github.com/LeJamon/go-xrpl/internal/ledger/state"
+	"github.com/LeJamon/go-xrpl/internal/rpc/txprojection"
 	"github.com/LeJamon/go-xrpl/internal/rpc/types"
 )
 
@@ -171,14 +172,22 @@ func (m *SubmitMultisignedMethod) Handle(ctx *types.RpcContext, params json.RawM
 		return nil, rpcTransactionSubmissionError("submit_multisigned: transaction submission failed", submitErr)
 	}
 
-	canonicalMap["hash"] = txHash
+	projectedTxJSON := txprojection.ProjectJSONForPath(
+		canonicalMap,
+		txHash,
+		ctx.ApiVersion,
+		txprojection.PathSigned,
+	)
 
 	response := map[string]any{
 		"engine_result":         result.EngineResult,
 		"engine_result_code":    result.EngineResultCode,
 		"engine_result_message": result.EngineResultMessage,
 		"tx_blob":               txBlob,
-		"tx_json":               canonicalMap,
+		"tx_json":               projectedTxJSON,
+	}
+	if ctx.ApiVersion > 1 {
+		response["hash"] = txHash
 	}
 
 	if result.Applied {

@@ -27,7 +27,10 @@ import (
 // may name, matching rippled (the LoanSet sfCounterpartySignature).
 const counterpartySignatureField = "CounterpartySignature"
 
-const signingDeprecation = "This command has been deprecated and will be removed in a future version of the server. Please migrate to a standalone signing tool."
+const (
+	signingDeprecation       = "This command has been deprecated and will be removed in a future version of the server. Please migrate to a standalone signing tool."
+	submitSigningDeprecation = "Signing support in the 'submit' command has been deprecated and will be removed in a future version of the server. Please migrate to a standalone signing tool."
+)
 
 // signCredentials holds the signing credential parameters common to both
 // the sign and submit RPC methods.
@@ -37,17 +40,6 @@ type signCredentials struct {
 	SeedHex    json.RawMessage `json:"seed_hex,omitempty"`
 	Passphrase json.RawMessage `json:"passphrase,omitempty"`
 	KeyType    json.RawMessage `json:"key_type,omitempty"`
-}
-
-func (c signCredentials) any(params json.RawMessage) bool {
-	var fields map[string]json.RawMessage
-	_ = json.Unmarshal(params, &fields)
-	for _, field := range []string{"secret", "seed", "seed_hex", "passphrase"} {
-		if _, ok := fields[field]; ok {
-			return true
-		}
-	}
-	return false
 }
 
 func (c signCredentials) deriveKeypair(apiVersion int, params json.RawMessage) (string, string, string, *types.RpcError) {
@@ -181,17 +173,14 @@ type signResult struct {
 }
 
 func formatSignResult(result signResult, apiVersion int) map[string]any {
-	txprojection.InjectDeliverMax(result.TxMap, apiVersion)
-	response := map[string]any{
-		"tx_blob": result.TxBlob,
-		"tx_json": result.TxMap,
-	}
-	if apiVersion > 1 {
-		if hash, ok := result.TxMap["hash"].(string); ok {
-			response["hash"] = hash
-		}
-	}
-	return response
+	hash, _ := result.TxMap["hash"].(string)
+	return txprojection.FormatResult(
+		result.TxMap,
+		result.TxBlob,
+		hash,
+		apiVersion,
+		txprojection.PathSigned,
+	)
 }
 
 func rejectDisabledSigning(ctx *types.RpcContext) *types.RpcError {
@@ -205,11 +194,15 @@ func rejectDisabledSigning(ctx *types.RpcContext) *types.RpcError {
 }
 
 func addSigningDeprecation(result any, rpcErr *types.RpcError) (any, *types.RpcError) {
+	return addDeprecation(result, rpcErr, signingDeprecation)
+}
+
+func addDeprecation(result any, rpcErr *types.RpcError, message string) (any, *types.RpcError) {
 	if rpcErr != nil {
-		return result, rpcErr.WithExtra(map[string]any{"deprecated": signingDeprecation})
+		return result, rpcErr.WithExtra(map[string]any{"deprecated": message})
 	}
 	if response, ok := result.(map[string]any); ok {
-		response["deprecated"] = signingDeprecation
+		response["deprecated"] = message
 	}
 	return result, nil
 }
@@ -423,15 +416,17 @@ func signTransactionJSON(rpcCtx *types.RpcContext, txJSON json.RawMessage, creds
 	ctx := rpcCtx.Context
 	services := rpcCtx.Services
 	apiVersion := rpcCtx.ApiVersion
-	// Check if ledger service is available (needed for auto-filling fields)
-	if !offline && (services == nil || services.Ledger == nil) {
-		return nil, rpcInternalInvariantError("sign: ledger service unavailable")
-	}
 
 	// Parse credentials and derive keypair using the shared helper
 	privateKey, publicKey, _, rpcErr := creds.deriveKeypair(apiVersion, rawParams)
 	if rpcErr != nil {
 		return nil, rpcErr
+	}
+
+	// Check if ledger service is available (needed for auto-filling fields)
+	// only after credentials have entered the shared signing preprocessing.
+	if !offline && (services == nil || services.Ledger == nil) {
+		return nil, rpcInternalInvariantError("sign: ledger service unavailable")
 	}
 
 	// Derive address from public key

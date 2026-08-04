@@ -2,6 +2,7 @@ package sign
 
 import (
 	"fmt"
+	"strings"
 	"testing"
 
 	"github.com/LeJamon/go-xrpl/codec/binarycodec"
@@ -42,5 +43,97 @@ func TestVerifySignaturePreservesExplicitEmptyMemos(t *testing.T) {
 
 	if err := VerifySignature(txn, true); err != nil {
 		t.Fatalf("verify signature: %v", err)
+	}
+	if reason := CheckSTTxSignature(txn, nil, true); reason != "" {
+		t.Fatalf("check STTx signature: %s", reason)
+	}
+
+	wire["TxnSignature"] = strings.Repeat("00", 64)
+	badBlob, err := binarycodec.EncodeBytes(wire)
+	if err != nil {
+		t.Fatalf("encode bad signature: %v", err)
+	}
+	badTxn, err := txcore.ParseFromBinary(badBlob)
+	if err != nil {
+		t.Fatalf("parse bad signature: %v", err)
+	}
+	if reason := CheckSTTxSignature(badTxn, nil, true); reason != "Invalid signature." {
+		t.Fatalf("bad signature reason = %q", reason)
+	}
+	if reason := CheckSTTxSignature(badTxn, nil, false); reason != "" {
+		t.Fatalf("disabled signature checking reason = %q", reason)
+	}
+
+	_, signerPubKey, signerAccount := cpKeypair(t, 0x22)
+	for _, test := range []struct {
+		name         string
+		parsed       *txcore.CounterpartySignature
+		counterparty map[string]any
+		want         string
+	}{
+		{
+			name: "single sign with explicit empty signers",
+			parsed: &txcore.CounterpartySignature{
+				SigningPubKey: signerPubKey,
+				TxnSignature:  "00",
+			},
+			counterparty: map[string]any{
+				"SigningPubKey": signerPubKey,
+				"TxnSignature":  "00",
+				"Signers":       []map[string]any{},
+			},
+			want: "Counterparty: Cannot both single- and multi-sign.",
+		},
+		{
+			name:   "multi sign with explicit empty signers",
+			parsed: &txcore.CounterpartySignature{},
+			counterparty: map[string]any{
+				"SigningPubKey": "",
+				"Signers":       []map[string]any{},
+			},
+			want: "Counterparty: Invalid Signers array size.",
+		},
+		{
+			name: "multi sign with explicit empty transaction signature",
+			parsed: &txcore.CounterpartySignature{
+				Signers: []txcore.SignerWrapper{{
+					Signer: txcore.Signer{
+						Account:       signerAccount,
+						SigningPubKey: signerPubKey,
+						TxnSignature:  "00",
+					},
+				}},
+			},
+			counterparty: map[string]any{
+				"SigningPubKey": "",
+				"TxnSignature":  "",
+				"Signers": []map[string]any{{
+					"Signer": map[string]any{
+						"Account":       signerAccount,
+						"SigningPubKey": signerPubKey,
+						"TxnSignature":  "00",
+					},
+				}},
+			},
+			want: "Counterparty: Cannot both single- and multi-sign.",
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			transaction := primarySignedTx(t)
+			transaction.GetCommon().CounterpartySignature = test.parsed
+			candidate, err := transaction.Flatten()
+			if err != nil {
+				t.Fatalf("flatten transaction: %v", err)
+			}
+			candidate["CounterpartySignature"] = test.counterparty
+			blob, err := binarycodec.EncodeBytes(candidate)
+			if err != nil {
+				t.Fatalf("encode transaction: %v", err)
+			}
+			transaction.SetRawBytes(blob)
+			if reason := CheckSTTxSignature(transaction, nil, true); reason != test.want {
+				t.Fatalf("counterparty signature reason = %q, want %q", reason, test.want)
+			}
+		})
 	}
 }
