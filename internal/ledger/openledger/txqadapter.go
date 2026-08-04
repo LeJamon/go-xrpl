@@ -3,6 +3,7 @@ package openledger
 import (
 	"errors"
 
+	"github.com/LeJamon/go-xrpl/amendment"
 	"github.com/LeJamon/go-xrpl/internal/ledger"
 	"github.com/LeJamon/go-xrpl/internal/ledger/state"
 	"github.com/LeJamon/go-xrpl/internal/tx"
@@ -51,6 +52,13 @@ func NewTxqAdapter(view *ledger.Ledger, cfg ApplyConfig) *TxqAdapter {
 // tx.EngineConfig from the queue.
 func (a *TxqAdapter) GetApplyFlags() tx.ApplyFlags {
 	return a.cfg.ApplyFlags
+}
+
+func (a *TxqAdapter) RulesIdentity() *amendment.Rules {
+	if a == nil {
+		return nil
+	}
+	return a.cfg.Rules
 }
 
 func (a *TxqAdapter) GetLedgerSequence() uint32 {
@@ -176,6 +184,14 @@ func (a *TxqAdapter) baseFeeConfig() tx.EngineConfig {
 // Transactor.cpp:1108-1218). On applied=true the tx+meta is written to
 // the view's tx map so subsequent GetTxInLedger / TxExists reflect it.
 func (a *TxqAdapter) ApplyTransaction(txn tx.Transaction) (ter.Result, bool) {
+	return a.applyTransactionWithFlags(txn, a.cfg.ApplyFlags)
+}
+
+func (a *TxqAdapter) ApplyTransactionWithFlags(txn tx.Transaction, flags tx.ApplyFlags) (ter.Result, bool) {
+	return a.applyTransactionWithFlags(txn, flags)
+}
+
+func (a *TxqAdapter) applyTransactionWithFlags(txn tx.Transaction, flags tx.ApplyFlags) (ter.Result, bool) {
 	if a.view == nil || txn == nil {
 		return ter.TefINTERNAL, false
 	}
@@ -202,7 +218,7 @@ func (a *TxqAdapter) ApplyTransaction(txn tx.Transaction) (ter.Result, bool) {
 		Logger:                    a.cfg.Logger,
 		SkipSignatureVerification: a.cfg.SkipSignatureVerification,
 		Rules:                     a.cfg.Rules,
-		ApplyFlags:                a.cfg.ApplyFlags,
+		ApplyFlags:                flags,
 		FeeTrack:                  a.cfg.FeeTrack,
 		EnforceLoadFee:            true,
 	}
@@ -239,6 +255,14 @@ func (a *TxqAdapter) LastApplyResult() *tx.ApplyResult {
 // malformed or badly-signed submission is rejected with its preflight code
 // instead of terQUEUED (rippled TxQ.cpp:743-745).
 func (a *TxqAdapter) PreflightTransaction(txn tx.Transaction) ter.Result {
+	return a.preflightTransactionWithFlags(txn, a.cfg.ApplyFlags)
+}
+
+func (a *TxqAdapter) PreflightTransactionWithFlags(txn tx.Transaction, flags tx.ApplyFlags) ter.Result {
+	return a.preflightTransactionWithFlags(txn, flags)
+}
+
+func (a *TxqAdapter) preflightTransactionWithFlags(txn tx.Transaction, flags tx.ApplyFlags) ter.Result {
 	if a.view == nil || txn == nil {
 		return ter.TefINTERNAL
 	}
@@ -253,7 +277,7 @@ func (a *TxqAdapter) PreflightTransaction(txn tx.Transaction) ter.Result {
 		Logger:                    a.cfg.Logger,
 		SkipSignatureVerification: a.cfg.SkipSignatureVerification,
 		Rules:                     a.cfg.Rules,
-		ApplyFlags:                a.cfg.ApplyFlags,
+		ApplyFlags:                flags,
 		FeeTrack:                  a.cfg.FeeTrack,
 	}
 	return txengine.NewEngine(a.view, engineCfg).Preflight(txn)
@@ -266,6 +290,14 @@ func (a *TxqAdapter) PreflightTransaction(txn tx.Transaction) ter.Result {
 // codes here indicate the tx would fail once the queued chain lands —
 // surfaced to the caller so the tx is rejected rather than queued.
 func (a *TxqAdapter) PreclaimTransaction(txn tx.Transaction, accountID [20]byte, adjustedBalance uint64, adjustedSeq uint32) ter.Result {
+	return a.preclaimTransactionWithFlags(txn, accountID, adjustedBalance, adjustedSeq, a.cfg.ApplyFlags)
+}
+
+func (a *TxqAdapter) PreclaimTransactionWithFlags(txn tx.Transaction, accountID [20]byte, adjustedBalance uint64, adjustedSeq uint32, flags tx.ApplyFlags) ter.Result {
+	return a.preclaimTransactionWithFlags(txn, accountID, adjustedBalance, adjustedSeq, flags)
+}
+
+func (a *TxqAdapter) preclaimTransactionWithFlags(txn tx.Transaction, accountID [20]byte, adjustedBalance uint64, adjustedSeq uint32, flags tx.ApplyFlags) ter.Result {
 	if a.view == nil || txn == nil {
 		return ter.TefINTERNAL
 	}
@@ -320,7 +352,7 @@ func (a *TxqAdapter) PreclaimTransaction(txn tx.Transaction, accountID [20]byte,
 		Logger:                    a.cfg.Logger,
 		SkipSignatureVerification: a.cfg.SkipSignatureVerification,
 		Rules:                     a.cfg.Rules,
-		ApplyFlags:                a.cfg.ApplyFlags,
+		ApplyFlags:                flags,
 		FeeTrack:                  a.cfg.FeeTrack,
 		EnforceLoadFee:            true,
 	}
@@ -353,6 +385,10 @@ type txqSandbox struct {
 
 func (s *txqSandbox) ApplyTransaction(txn tx.Transaction) (ter.Result, bool) {
 	return s.child.ApplyTransaction(txn)
+}
+
+func (s *txqSandbox) ApplyTransactionWithFlags(txn tx.Transaction, flags tx.ApplyFlags) (ter.Result, bool) {
+	return s.child.ApplyTransactionWithFlags(txn, flags)
 }
 
 // Commit folds the sandbox's accumulated state back into the parent view and

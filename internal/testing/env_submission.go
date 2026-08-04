@@ -1249,38 +1249,13 @@ func sortHeldBySequence(txns []tx.Transaction) {
 	})
 }
 
-// computeTxID generates a deterministic transaction ID for a transaction.
-// Uses account + sequence/ticket to generate a unique hash.
+// computeTxID returns the canonical transaction hash used by the queue.
 func (e *TestEnv) computeTxID(txn tx.Transaction) [32]byte {
-	common := txn.GetCommon()
-	var data []byte
-	data = append(data, []byte(common.Account)...)
-	if common.Sequence != nil {
-		data = append(data, byte(*common.Sequence>>24), byte(*common.Sequence>>16),
-			byte(*common.Sequence>>8), byte(*common.Sequence))
+	id, err := tx.ComputeTransactionHash(txn)
+	if err != nil {
+		e.t.Fatalf("compute canonical transaction hash: %v", err)
 	}
-	if common.TicketSequence != nil {
-		data = append(data, byte(*common.TicketSequence>>24), byte(*common.TicketSequence>>16),
-			byte(*common.TicketSequence>>8), byte(*common.TicketSequence))
-	}
-	data = append(data, []byte(common.Fee)...)
-	txType := txn.TxType()
-	data = append(data, byte(txType>>8), byte(txType))
-	// Add a nonce based on the current ledger sequence and txInLedger
-	// to ensure unique IDs for same-account, same-seq transactions
-	data = append(data, byte(e.currentSeq>>8), byte(e.currentSeq))
-	data = append(data, byte(e.txInLedger>>8), byte(e.txInLedger))
-
-	return sha512HalfForTxID(data)
-}
-
-// sha512HalfForTxID computes SHA-512 and returns the first 32 bytes (SHA-512 Half).
-// Used for generating deterministic transaction IDs in the test environment.
-func sha512HalfForTxID(data []byte) [32]byte {
-	h := sha512.Sum512(data)
-	var result [32]byte
-	copy(result[:], h[:32])
-	return result
+	return id
 }
 
 // testClosedLedgerContext implements txq.ClosedLedgerContext for the test environment.
@@ -1372,6 +1347,10 @@ func (c *testTxQApplyContext) GetLedgerSequence() uint32 {
 }
 
 func (c *testTxQApplyContext) ApplyTransaction(txn tx.Transaction) (ter.Result, bool) {
+	return c.ApplyTransactionWithFlags(txn, tx.TapNONE)
+}
+
+func (c *testTxQApplyContext) ApplyTransactionWithFlags(txn tx.Transaction, flags tx.ApplyFlags) (ter.Result, bool) {
 	// Transactions applied through the TxQ must NOT check open-ledger fee
 	// adequacy. In rippled, TxQ::tryDirectApply calls ripple::apply() with
 	// tapNONE flags (NOT tapOPEN_LEDGER). The TxQ's own fee-level check is
@@ -1386,6 +1365,7 @@ func (c *testTxQApplyContext) ApplyTransaction(txn tx.Transaction) (ter.Result, 
 		feeTrack:             true,
 		enforceLoadFee:       true,
 	})
+	engineConfig.ApplyFlags = flags
 
 	engine := txengine.NewEngine(view, engineConfig)
 	applyResult := engine.Apply(txn)
@@ -1437,6 +1417,10 @@ func (s *testTxQSandbox) ApplyTransaction(txn tx.Transaction) (ter.Result, bool)
 	return s.child.ApplyTransaction(txn)
 }
 
+func (s *testTxQSandbox) ApplyTransactionWithFlags(txn tx.Transaction, flags tx.ApplyFlags) (ter.Result, bool) {
+	return s.child.ApplyTransactionWithFlags(txn, flags)
+}
+
 // Commit folds the sandbox snapshot back into the parent view and applies the
 // buffered env-counter side effects.
 func (s *testTxQSandbox) Commit() error {
@@ -1453,6 +1437,10 @@ func (s *testTxQSandbox) Commit() error {
 }
 
 func (c *testTxQApplyContext) PreflightTransaction(txn tx.Transaction) ter.Result {
+	return c.PreflightTransactionWithFlags(txn, c.GetApplyFlags())
+}
+
+func (c *testTxQApplyContext) PreflightTransactionWithFlags(txn tx.Transaction, flags tx.ApplyFlags) ter.Result {
 	// Mirror the engine config used by ApplyTransaction so TxQ admission
 	// preflight (rippled TxQ.cpp:743-745) matches the direct-apply path.
 	view := c.applyView()
@@ -1460,6 +1448,7 @@ func (c *testTxQApplyContext) PreflightTransaction(txn tx.Transaction) ter.Resul
 		parentCloseFromClock: true,
 		feeTrack:             true,
 	})
+	engineConfig.ApplyFlags = flags
 	return txengine.NewEngine(view, engineConfig).Preflight(txn)
 }
 
@@ -1486,12 +1475,20 @@ func (c *testTxQApplyContext) PreclaimTransaction(txn tx.Transaction, account [2
 	return 0
 }
 
+func (c *testTxQApplyContext) PreclaimTransactionWithFlags(txn tx.Transaction, account [20]byte, adjustedBalance uint64, adjustedSeq uint32, _ tx.ApplyFlags) ter.Result {
+	return c.PreclaimTransaction(txn, account, adjustedBalance, adjustedSeq)
+}
+
 // GetApplyFlags returns the engine ApplyFlags currently driving the
 // test env. The test env stores the flag on TestEnv.txQApplyFlags and
 // resets it after each Submit; default is 0 so TxQ admission behaves
 // as if no flag is set.
 func (c *testTxQApplyContext) GetApplyFlags() tx.ApplyFlags {
 	return c.env.txQApplyFlags
+}
+
+func (c *testTxQApplyContext) RulesIdentity() *amendment.Rules {
+	return c.env.rulesBuilder.Build()
 }
 
 // testTxQAcceptContext implements txq.AcceptContext for draining the queue.
@@ -1517,6 +1514,10 @@ func (c *testTxQAcceptContext) GetAccountSequence(account [20]byte) uint32 {
 }
 
 func (c *testTxQAcceptContext) ApplyTransaction(txn tx.Transaction) (ter.Result, bool) {
+	return c.ApplyTransactionWithFlags(txn, tx.TapNONE)
+}
+
+func (c *testTxQAcceptContext) ApplyTransactionWithFlags(txn tx.Transaction, flags tx.ApplyFlags) (ter.Result, bool) {
 	// TxQ accept (drain on close) applies queued transactions with tapNONE
 	// flags in rippled — NOT tapOPEN_LEDGER. This prevents the engine's
 	// fee adequacy check from rejecting fee=0 transactions that were
@@ -1528,6 +1529,7 @@ func (c *testTxQAcceptContext) ApplyTransaction(txn tx.Transaction) (ter.Result,
 		feeTrack:             true,
 		enforceLoadFee:       true,
 	})
+	engineConfig.ApplyFlags = flags
 
 	engine := txengine.NewEngine(c.env.ledger, engineConfig)
 	applyResult := engine.Apply(txn)
@@ -1539,6 +1541,16 @@ func (c *testTxQAcceptContext) ApplyTransaction(txn tx.Transaction) (ter.Result,
 		c.env.trackTxQAppliedTransaction(txn, applyResult)
 	}
 	return applyResult.Result, applied
+}
+
+func (c *testTxQAcceptContext) PreflightTransactionWithFlags(txn tx.Transaction, flags tx.ApplyFlags) ter.Result {
+	engineConfig := c.env.engineConfig(c.env.ledger, engineConfigOpts{parentCloseFromClock: true, feeTrack: true})
+	engineConfig.ApplyFlags = flags
+	return txengine.NewEngine(c.env.ledger, engineConfig).Preflight(txn)
+}
+
+func (c *testTxQAcceptContext) RulesIdentity() *amendment.Rules {
+	return c.env.rulesBuilder.Build()
 }
 
 func feeMetricTransactions(

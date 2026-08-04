@@ -64,25 +64,25 @@ func mulDiv(a, b, c uint64) uint64 {
 // FeeMetrics tracks and computes fee escalation metrics for the transaction queue.
 // It maintains a history of recent ledger transaction counts and computes
 // the escalated fee level based on how full the current open ledger is.
-type FeeMetrics struct {
+type feeMetrics struct {
 	// minimumTxnCount is the minimum value of txnsExpected
-	minimumTxnCount uint32
+	minimumTxnCount uint64
 
 	// targetTxnCount is the number of transactions per ledger that fee
 	// escalation "works towards"
-	targetTxnCount uint32
+	targetTxnCount uint64
 
-	// maximumTxnCount is the optional maximum value of txnsExpected
-	// Zero means no maximum
-	maximumTxnCount uint32
+	// maximumTxnCount is the optional maximum value of txnsExpected.
+	maximumTxnCount    uint64
+	hasMaximumTxnCount bool
 
 	// txnsExpected is the number of transactions expected per ledger.
 	// One more than this value will be accepted before escalation kicks in.
-	txnsExpected uint32
+	txnsExpected uint64
 
 	// recentTxnCounts is a circular buffer of recent transaction counts
 	// that exceed targetTxnCount
-	recentTxnCounts []uint32
+	recentTxnCounts []uint64
 	recentIndex     int
 	recentSize      int
 	recentCapacity  int
@@ -93,7 +93,7 @@ type FeeMetrics struct {
 }
 
 // NewFeeMetrics creates a new FeeMetrics with the given configuration.
-func NewFeeMetrics(cfg Config) *FeeMetrics {
+func newFeeMetrics(cfg Config) *feeMetrics {
 	minTxn := cfg.MinimumTxnInLedger
 	if cfg.Standalone {
 		minTxn = cfg.MinimumTxnInLedgerStandalone
@@ -106,33 +106,31 @@ func NewFeeMetrics(cfg Config) *FeeMetrics {
 		maxTxn = targetTxn
 	}
 
-	// Ensure recentCapacity is at least 1 to prevent division by zero and index panics.
-	// Reference: rippled uses boost::circular_buffer which requires capacity > 0.
+	// Config validation rejects zero history for production queues. Keeping the
+	// constructor free of a fallback makes invalid direct uses observable.
 	ledgersInQueue := cfg.LedgersInQueue
-	if ledgersInQueue == 0 {
-		ledgersInQueue = 20 // Match DefaultConfig
-	}
 
-	return &FeeMetrics{
-		minimumTxnCount:      minTxn,
-		targetTxnCount:       targetTxn,
-		maximumTxnCount:      maxTxn,
-		txnsExpected:         minTxn,
-		recentTxnCounts:      make([]uint32, ledgersInQueue),
+	return &feeMetrics{
+		minimumTxnCount:      uint64(minTxn),
+		targetTxnCount:       uint64(targetTxn),
+		maximumTxnCount:      uint64(maxTxn),
+		hasMaximumTxnCount:   cfg.MaximumTxnInLedgerSet,
+		txnsExpected:         uint64(minTxn),
+		recentTxnCounts:      make([]uint64, ledgersInQueue),
 		recentCapacity:       int(ledgersInQueue),
 		escalationMultiplier: cfg.MinimumEscalationMultiplier,
 	}
 }
 
 // Snapshot holds a point-in-time copy of the fee metrics for calculations.
-type Snapshot struct {
-	TxnsExpected         uint32
+type feeMetricsSnapshot struct {
+	TxnsExpected         uint64
 	EscalationMultiplier uint64
 }
 
 // Snapshot returns the current fee metrics snapshot.
-func (fm *FeeMetrics) Snapshot() Snapshot {
-	return Snapshot{
+func (fm *feeMetrics) snapshot() feeMetricsSnapshot {
+	return feeMetricsSnapshot{
 		TxnsExpected:         fm.txnsExpected,
 		EscalationMultiplier: fm.escalationMultiplier,
 	}
@@ -140,8 +138,8 @@ func (fm *FeeMetrics) Snapshot() Snapshot {
 
 // Update updates fee metrics based on the closed ledger and returns
 // the number of transactions in that ledger.
-func (fm *FeeMetrics) Update(feeLevels []FeeLevel, timeLeap bool, cfg Config) uint32 {
-	size := uint32(len(feeLevels))
+func (fm *feeMetrics) update(feeLevels []FeeLevel, timeLeap bool, cfg Config) uint64 {
+	size := uint64(len(feeLevels))
 
 	// Sort fee levels to compute median
 	sorted := make([]FeeLevel, len(feeLevels))
@@ -154,7 +152,7 @@ func (fm *FeeMetrics) Update(feeLevels []FeeLevel, timeLeap bool, cfg Config) ui
 		upperLimit := max(mulDiv(uint64(fm.txnsExpected), cutPct, 100), uint64(fm.minimumTxnCount))
 
 		newExpected := min(max(mulDiv(uint64(size), cutPct, 100), uint64(fm.minimumTxnCount)), upperLimit)
-		fm.txnsExpected = uint32(newExpected)
+		fm.txnsExpected = newExpected
 
 		// Clear recent history
 		fm.recentSize = 0
@@ -162,12 +160,12 @@ func (fm *FeeMetrics) Update(feeLevels []FeeLevel, timeLeap bool, cfg Config) ui
 	} else if size > fm.txnsExpected || size > fm.targetTxnCount {
 		// Add to recent counts with increase percentage
 		increased := mulDiv(uint64(size), 100+uint64(cfg.NormalConsensusIncreasePercent), 100)
-		fm.addRecentCount(uint32(increased))
+		fm.addRecentCount(increased)
 
 		// Find max in recent counts
 		maxRecent := fm.maxRecentCount()
 
-		var next uint32
+		var next uint64
 		if maxRecent >= fm.txnsExpected {
 			// Grow quickly
 			next = maxRecent
@@ -177,7 +175,7 @@ func (fm *FeeMetrics) Update(feeLevels []FeeLevel, timeLeap bool, cfg Config) ui
 		}
 
 		// Don't exceed maximum if set
-		if fm.maximumTxnCount != 0 && next > fm.maximumTxnCount {
+		if fm.hasMaximumTxnCount && next > fm.maximumTxnCount {
 			next = fm.maximumTxnCount
 		}
 		fm.txnsExpected = next
@@ -198,7 +196,7 @@ func (fm *FeeMetrics) Update(feeLevels []FeeLevel, timeLeap bool, cfg Config) ui
 }
 
 // addRecentCount adds a count to the circular buffer.
-func (fm *FeeMetrics) addRecentCount(count uint32) {
+func (fm *feeMetrics) addRecentCount(count uint64) {
 	if fm.recentCapacity == 0 {
 		return
 	}
@@ -210,12 +208,12 @@ func (fm *FeeMetrics) addRecentCount(count uint32) {
 }
 
 // maxRecentCount returns the maximum value in the recent counts buffer.
-func (fm *FeeMetrics) maxRecentCount() uint32 {
+func (fm *feeMetrics) maxRecentCount() uint64 {
 	if fm.recentSize == 0 {
 		return 0
 	}
 
-	max := uint32(0)
+	max := uint64(0)
 	for i := 0; i < fm.recentSize; i++ {
 		if fm.recentTxnCounts[i] > max {
 			max = fm.recentTxnCounts[i]
@@ -226,9 +224,9 @@ func (fm *FeeMetrics) maxRecentCount() uint32 {
 
 // ScaleFeeLevel computes the fee level a transaction must pay to bypass
 // the queue and get into the open ledger directly.
-func ScaleFeeLevel(snapshot Snapshot, txInLedger uint32) FeeLevel {
+func scaleFeeLevel(snapshot feeMetricsSnapshot, txInLedger uint32) FeeLevel {
 	// If we haven't exceeded the expected count, use base level
-	if txInLedger <= snapshot.TxnsExpected {
+	if uint64(txInLedger) <= snapshot.TxnsExpected {
 		return FeeLevel(BaseLevel)
 	}
 
@@ -238,14 +236,13 @@ func ScaleFeeLevel(snapshot Snapshot, txInLedger uint32) FeeLevel {
 	// matching rippled's scaleFeeLevel which saturates to max on overflow.
 	current := uint64(txInLedger)
 	target := uint64(snapshot.TxnsExpected)
-
 	return FeeLevel(mulDiv(snapshot.EscalationMultiplier, current*current, target*target))
 }
 
 // EscalatedSeriesFeeLevel computes the total fee level required for a series
 // of transactions to clear the queue. This is used when a transaction wants
 // to "rescue" earlier queued transactions by paying enough to cover all of them.
-func EscalatedSeriesFeeLevel(snapshot Snapshot, txInLedger, extraCount, seriesSize uint32) (FeeLevel, bool) {
+func escalatedSeriesFeeLevel(snapshot feeMetricsSnapshot, txInLedger, extraCount, seriesSize uint32) (FeeLevel, bool) {
 	current := uint64(txInLedger) + uint64(extraCount)
 	last := current + uint64(seriesSize) - 1
 	target := uint64(snapshot.TxnsExpected)

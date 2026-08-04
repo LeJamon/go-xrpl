@@ -2,6 +2,7 @@ package config
 
 import (
 	"fmt"
+	"math"
 	"net"
 )
 
@@ -31,7 +32,8 @@ type OverlayConfig struct {
 // (rippled's TxQ::Setup defaults), while a present key overrides the default
 // with its exact value, including 0. This mirrors rippled's setup_TxQ, which
 // overrides on key presence (BasicConfig::set), not on a non-zero value.
-// maximum_txn_in_ledger keeps its "0 = no maximum" meaning.
+// An absent maximum leaves the limit unset; an explicit zero remains present
+// and fails the minimum cross-check.
 type TransactionQueueConfig struct {
 	LedgersInQueue                 *int `toml:"ledgers_in_queue" mapstructure:"ledgers_in_queue"`
 	MinimumQueueSize               *int `toml:"minimum_queue_size" mapstructure:"minimum_queue_size"`
@@ -90,7 +92,6 @@ func (tq *TransactionQueueConfig) Validate() error {
 		{"ledgers_in_queue", tq.LedgersInQueue},
 		{"minimum_queue_size", tq.MinimumQueueSize},
 		{"retry_sequence_percent", tq.RetrySequencePercent},
-		{"minimum_escalation_multiplier", tq.MinimumEscalationMultiplier},
 		{"minimum_txn_in_ledger", tq.MinimumTxnInLedger},
 		{"minimum_txn_in_ledger_standalone", tq.MinimumTxnInLedgerStandalone},
 		{"target_txn_in_ledger", tq.TargetTxnInLedger},
@@ -106,12 +107,28 @@ func (tq *TransactionQueueConfig) Validate() error {
 		if err := validateNonNegative(knob.name, *knob.value); err != nil {
 			return err
 		}
+		if uint64(*knob.value) > math.MaxUint32 {
+			return fmt.Errorf("%s exceeds uint32 range: %d", knob.name, *knob.value)
+		}
+	}
+	if tq.MinimumEscalationMultiplier != nil {
+		if err := validateNonNegative("minimum_escalation_multiplier", *tq.MinimumEscalationMultiplier); err != nil {
+			return err
+		}
+	}
+	if tq.LedgersInQueue != nil {
+		if *tq.LedgersInQueue == 0 {
+			return fmt.Errorf("ledgers_in_queue must be positive")
+		}
+		if *tq.LedgersInQueue > 1<<20 {
+			return fmt.Errorf("ledgers_in_queue exceeds allocation cap: %d", *tq.LedgersInQueue)
+		}
 	}
 
 	// Cross-check only explicitly-set values; the same invariant is
 	// re-checked against the effective (defaulted) minimums when the queue
 	// is constructed.
-	if tq.MaximumTxnInLedger != nil && *tq.MaximumTxnInLedger > 0 {
+	if tq.MaximumTxnInLedger != nil {
 		max := *tq.MaximumTxnInLedger
 		if tq.MinimumTxnInLedger != nil && *tq.MinimumTxnInLedger > max {
 			return fmt.Errorf("minimum_txn_in_ledger (%d) exceeds maximum_txn_in_ledger (%d)", *tq.MinimumTxnInLedger, max)

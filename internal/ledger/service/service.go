@@ -321,6 +321,10 @@ func New(cfg Config) (*Service, error) {
 	if cfg.TxQ != nil {
 		txqCfg = *cfg.TxQ
 	}
+	txQueue, err := txq.New(txqCfg)
+	if err != nil {
+		return nil, fmt.Errorf("invalid transaction queue configuration: %w", err)
+	}
 	standardFees := genesis.StandardFees()
 	configuredFees := drops.Fees{
 		Base:      standardFees.BaseFee,
@@ -361,7 +365,7 @@ func New(cfg Config) (*Service, error) {
 		pendingValidation:        make(map[[32]byte]*LedgerAcceptedEvent),
 		pendingLedgerValidations: make(map[uint32]pendingValidationEntry),
 		heldAdoptions:            make(map[uint32]*pendingAdopt),
-		txQueue:                  txq.New(txqCfg),
+		txQueue:                  txQueue,
 		localTxs:                 localtxs.New(),
 		relayTxCache:             make(map[[32]byte]relayTxRecord),
 		relayTxCacheLimit:        relayTxCacheMaxBytes,

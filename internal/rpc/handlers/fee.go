@@ -32,6 +32,10 @@ func (m *FeeMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (any, 
 	currentLedgerIndex := ctx.Services.Ledger.GetCurrentLedgerIndex()
 
 	metrics := snapshotTxQ(ctx.Services, ctx.Services.Ledger.IsStandalone())
+	txCount := metrics.TxCount
+	maxQueue := metrics.TxQMaxSize
+	txInLedger := uint64(metrics.TxInLedger)
+	txPerLedger := uint64(metrics.TxPerLedger)
 
 	effectiveBase := effectiveBaseFee(baseFee, metrics)
 	openFee := dropsFromLevel(metrics.OpenLedgerFeeLevel, effectiveBase)
@@ -40,15 +44,15 @@ func (m *FeeMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (any, 
 	}
 	medianFee := dropsFromLevel(metrics.MedFeeLevel, baseFee)
 	minFeeBase := baseFee
-	if metrics.TxQMaxSize != nil && metrics.TxCount >= *metrics.TxQMaxSize {
+	if maxQueue != nil && txCount >= *maxQueue {
 		minFeeBase = effectiveBase
 	}
 	minimumFee := dropsFromLevel(metrics.MinProcessingFeeLevel, minFeeBase)
 
 	response := map[string]any{
-		"current_ledger_size":  strconv.FormatUint(uint64(metrics.TxInLedger), 10),
-		"current_queue_size":   strconv.FormatUint(uint64(metrics.TxCount), 10),
-		"expected_ledger_size": strconv.FormatUint(uint64(metrics.TxPerLedger), 10),
+		"current_ledger_size":  strconv.FormatUint(txInLedger, 10),
+		"current_queue_size":   strconv.FormatUint(txCount, 10),
+		"expected_ledger_size": strconv.FormatUint(txPerLedger, 10),
 		"ledger_current_index": currentLedgerIndex,
 		"levels": map[string]any{
 			"reference_level":   strconv.FormatUint(metrics.ReferenceFeeLevel, 10),
@@ -63,8 +67,8 @@ func (m *FeeMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (any, 
 			"open_ledger_fee": strconv.FormatUint(openFee, 10),
 		},
 	}
-	if metrics.TxQMaxSize != nil {
-		response["max_queue_size"] = strconv.FormatUint(uint64(*metrics.TxQMaxSize), 10)
+	if maxQueue != nil {
+		response["max_queue_size"] = strconv.FormatUint(*maxQueue, 10)
 	}
 
 	return response, nil
@@ -80,7 +84,7 @@ func snapshotTxQ(services *types.ServiceContainer, standalone bool) types.TxQFee
 	if standalone {
 		expected = feeStandaloneExpect
 	}
-	maxQueue := expected * feeLedgersInQueue
+	maxQueue := uint64(expected) * feeLedgersInQueue
 	return types.TxQFeeMetrics{
 		TxCount:               0,
 		TxQMaxSize:            &maxQueue,

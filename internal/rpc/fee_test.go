@@ -76,7 +76,7 @@ func TestFee_LiveMetrics_Escalating(t *testing.T) {
 	mock.standalone = false
 	mock.currentLedgerIndex = 99
 	services := &types.ServiceContainer{Ledger: mock}
-	maxQ := uint32(640)
+	maxQ := uint64(640)
 	services.TxQFeeMetrics = func() types.TxQFeeMetrics {
 		return types.TxQFeeMetrics{
 			TxCount:               5,
@@ -117,7 +117,7 @@ func TestFee_QueueFull_SwapsMinimumBase(t *testing.T) {
 	mock.currentLedgerIndex = 99
 	mock.baseFee = 0
 	services := &types.ServiceContainer{Ledger: mock}
-	maxQ := uint32(2)
+	maxQ := uint64(2)
 	services.TxQFeeMetrics = func() types.TxQFeeMetrics {
 		return types.TxQFeeMetrics{
 			TxCount:               2,

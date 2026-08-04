@@ -17,7 +17,7 @@ func TestUpperBoundSeqProxy_PicksSmallestStrictlyGreater(t *testing.T) {
 			SeqProxy: NewSeqProxySequence(s),
 		}
 	}
-	q := New(makeAdmissionConfig())
+	q := mustNew(makeAdmissionConfig())
 	next, ok := q.upperBoundSeqProxy(aq, NewSeqProxySequence(10))
 	require.True(t, ok)
 	require.Equal(t, NewSeqProxySequence(11), next)
@@ -31,7 +31,7 @@ func TestUpperBoundSeqProxy_RejectsTicketAsNeighbour(t *testing.T) {
 	aq := NewAccountQueue([20]byte{1})
 	ticket := SeqProxy{Value: 12, IsTicket: true}
 	aq.Transactions[ticket] = &Candidate{SeqProxy: ticket}
-	q := New(makeAdmissionConfig())
+	q := mustNew(makeAdmissionConfig())
 	next, ok := q.upperBoundSeqProxy(aq, NewSeqProxySequence(9))
 	require.True(t, ok)
 	require.True(t, next.IsTicket, "ticket dominates the upper-bound when no later seq exists")
@@ -48,7 +48,7 @@ func TestUpperBoundSeqProxy_PrefersSeqBeforeTicket(t *testing.T) {
 	aq.Transactions[NewSeqProxySequence(11)] = &Candidate{SeqProxy: NewSeqProxySequence(11)}
 	ticket := SeqProxy{Value: 5, IsTicket: true}
 	aq.Transactions[ticket] = &Candidate{SeqProxy: ticket}
-	q := New(makeAdmissionConfig())
+	q := mustNew(makeAdmissionConfig())
 	next, ok := q.upperBoundSeqProxy(aq, NewSeqProxySequence(10))
 	require.True(t, ok)
 	require.False(t, next.IsTicket, "seq 11 outranks ticket 5 under SeqProxy ordering")
@@ -59,7 +59,7 @@ func TestUpperBoundSeqProxy_PrefersSeqBeforeTicket(t *testing.T) {
 // nextTxIter == end() branch.
 func TestUpperBoundSeqProxy_EmptyQueueReturnsFalse(t *testing.T) {
 	aq := NewAccountQueue([20]byte{1})
-	q := New(makeAdmissionConfig())
+	q := mustNew(makeAdmissionConfig())
 	_, ok := q.upperBoundSeqProxy(aq, NewSeqProxySequence(0))
 	require.False(t, ok)
 }

@@ -2,6 +2,7 @@ package node
 
 import (
 	"github.com/LeJamon/go-xrpl/internal/rpc/types"
+	"github.com/LeJamon/go-xrpl/internal/tx"
 	"github.com/LeJamon/go-xrpl/internal/txq"
 )
 
@@ -30,9 +31,11 @@ func queuedTxInfos(details []*txq.CandidateDetails) []types.QueuedTxInfo {
 			LastResult:       d.LastResult.String(),
 			HasLastResult:    d.HasLastResult,
 		}
-		if d.Txn != nil {
-			if flat, err := d.Txn.Flatten(); err == nil {
-				info.TxJSON = flat
+		if len(d.TxBlob) > 0 {
+			if parsed, err := tx.ParseFromBinary(d.TxBlob); err == nil {
+				if flat, err := parsed.Flatten(); err == nil {
+					info.TxJSON = flat
+				}
 			}
 		}
 		out = append(out, info)

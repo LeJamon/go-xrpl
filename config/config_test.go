@@ -66,7 +66,6 @@ minimum_escalation_multiplier = 128000
 minimum_txn_in_ledger = 32
 minimum_txn_in_ledger_standalone = 1000
 target_txn_in_ledger = 256
-maximum_txn_in_ledger = 0
 normal_consensus_increase_percent = 20
 slow_consensus_decrease_percent = 50
 maximum_txn_per_account = 10

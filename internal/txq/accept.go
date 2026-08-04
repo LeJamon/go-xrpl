@@ -1,6 +1,7 @@
 package txq
 
 import (
+	"github.com/LeJamon/go-xrpl/amendment"
 	"github.com/LeJamon/go-xrpl/internal/tx"
 	"github.com/LeJamon/go-xrpl/internal/tx/ter"
 )
@@ -10,9 +11,9 @@ type AcceptContext interface {
 	// GetTxInLedger returns the number of transactions in the open ledger.
 	GetTxInLedger() uint32
 
-	// ApplyTransaction attempts to apply a transaction to the open ledger.
-	// Returns the result and whether the transaction was applied.
-	ApplyTransaction(txn tx.Transaction) (ter.Result, bool)
+	ApplyTransactionWithFlags(txn tx.Transaction, flags tx.ApplyFlags) (ter.Result, bool)
+	PreflightTransactionWithFlags(txn tx.Transaction, flags tx.ApplyFlags) ter.Result
+	RulesIdentity() *amendment.Rules
 
 	// GetParentHash returns the parent ledger hash for deterministic ordering.
 	GetParentHash() [32]byte
@@ -27,25 +28,31 @@ type AcceptContext interface {
 func (q *TxQ) Accept(ctx AcceptContext) bool {
 	q.mu.Lock()
 	defer q.mu.Unlock()
+	parentHash := ctx.GetParentHash()
+	q.stateMu.Lock()
+	defer q.stateMu.Unlock()
 
 	ledgerChanged := false
-	parentHash := ctx.GetParentHash()
 
 	// The fee snapshot is constant for the whole Accept pass (only
 	// ProcessClosedLedger mutates it, under the same lock), so take it once
 	// before the loop rather than re-fetching every iteration (TxQ.cpp:1447).
-	snapshot := q.feeMetrics.Snapshot()
+	snapshot := q.feeMetrics.snapshot()
 
 	// Process candidates from highest fee to lowest
 	i := 0
 	for i < len(q.byFee) {
 		candidate := q.byFee[i]
+		if candidate == nil {
+			q.byFee = append(q.byFee[:i], q.byFee[i+1:]...)
+			continue
+		}
 		account := candidate.Account
 
 		aq, exists := q.byAccount[account]
 		if !exists {
-			// Shouldn't happen, but handle it
-			i++
+			// Corruption repair: do not retain an orphaned fee/id index.
+			q.erase(candidate)
 			continue
 		}
 
@@ -60,16 +67,44 @@ func (q *TxQ) Accept(ctx AcceptContext) bool {
 			}
 		}
 
+		q.stateMu.Unlock()
 		txInLedger := ctx.GetTxInLedger()
-		requiredFeeLevel := ScaleFeeLevel(snapshot, txInLedger)
+		q.stateMu.Lock()
+		requiredFeeLevel := scaleFeeLevel(snapshot, txInLedger)
 
 		if candidate.FeeLevel < requiredFeeLevel {
 			// Fee escalation means remaining transactions can't afford to get in
 			break
 		}
 
-		// Try to apply the transaction
-		result, applied := ctx.ApplyTransaction(candidate.Txn)
+		// Amendment changes or a different submission flag set invalidate a
+		// cached preflight verdict. Re-run before touching the open ledger.
+		q.stateMu.Unlock()
+		currentRules := ctx.RulesIdentity()
+		q.stateMu.Lock()
+		result := ter.TesSUCCESS
+		shouldApply := true
+		if candidate.PreflightResult != ter.TesSUCCESS || candidate.PreflightFlags != candidate.Flags || candidate.PreflightRules != currentRules {
+			q.stateMu.Unlock()
+			preflight := ctx.PreflightTransactionWithFlags(candidateTransaction(candidate), candidate.Flags)
+			q.stateMu.Lock()
+			candidate.PreflightResult = preflight
+			candidate.PreflightFlags = candidate.Flags
+			candidate.PreflightRules = currentRules
+			if preflight != ter.TesSUCCESS {
+				result = preflight
+				shouldApply = false
+			}
+		}
+
+		applied := false
+		if shouldApply {
+			// Try to apply the transaction outside the state lock so callbacks may
+			// query queue snapshots reentrantly.
+			q.stateMu.Unlock()
+			result, applied = ctx.ApplyTransactionWithFlags(candidateTransaction(candidate), candidate.Flags)
+			q.stateMu.Lock()
+		}
 
 		if applied {
 			// Transaction applied successfully, remove from queue
@@ -131,7 +166,7 @@ func (q *TxQ) Accept(ctx AcceptContext) bool {
 // eraseAndAdvance removes a candidate and adjusts the index so the next
 // appropriate candidate is tried.
 // Reference: TxQ.cpp:466-502
-func (q *TxQ) eraseAndAdvance(idx *int, c *Candidate) {
+func (q *TxQ) eraseAndAdvance(idx *int, c *candidate) {
 	aq, exists := q.byAccount[c.Account]
 	if !exists {
 		// Defensive: the account is gone from byAccount but the candidate is
@@ -145,7 +180,7 @@ func (q *TxQ) eraseAndAdvance(idx *int, c *Candidate) {
 	nextCandidate := aq.GetNextTx(c.SeqProxy)
 
 	// Determine what comes next in byFee after the current candidate.
-	var feeNext *Candidate
+	var feeNext *candidate
 	if *idx+1 < len(q.byFee) {
 		feeNext = q.byFee[*idx+1]
 	}
@@ -177,7 +212,7 @@ func (q *TxQ) eraseAndAdvance(idx *int, c *Candidate) {
 // rippled's `if (endIter != candidateIter) erase(endIter)` guard, and adjusts
 // idx when the dropped element sits before the current one in byFee so the
 // caller's i++ lands on the right next candidate (TxQ.cpp:1541-1556).
-func (q *TxQ) dropLastForAccount(aq *AccountQueue, current *Candidate, idx *int) {
+func (q *TxQ) dropLastForAccount(aq *accountQueue, current *candidate, idx *int) {
 	sorted := aq.SortedCandidates()
 	if len(sorted) == 0 {
 		return
@@ -199,7 +234,7 @@ func (q *TxQ) dropLastForAccount(aq *AccountQueue, current *Candidate, idx *int)
 
 // indexInByFee returns the index of candidate c in byFee, or -1 if absent.
 // Caller must hold the lock.
-func (q *TxQ) indexInByFee(c *Candidate) int {
+func (q *TxQ) indexInByFee(c *candidate) int {
 	for i, cand := range q.byFee {
 		if cand == c {
 			return i

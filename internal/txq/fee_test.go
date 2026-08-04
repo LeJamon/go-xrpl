@@ -173,7 +173,7 @@ func TestFeeMetrics_Update(t *testing.T) {
 
 	// Initial state
 	snapshot := fm.Snapshot()
-	if snapshot.TxnsExpected != cfg.MinimumTxnInLedgerStandalone {
+	if snapshot.TxnsExpected != uint64(cfg.MinimumTxnInLedgerStandalone) {
 		t.Errorf("Initial TxnsExpected = %d, want %d",
 			snapshot.TxnsExpected, cfg.MinimumTxnInLedgerStandalone)
 	}
