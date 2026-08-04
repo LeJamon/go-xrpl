@@ -14,7 +14,7 @@ import (
 
 // AccountObjectsMethod handles account_objects: it enumerates the raw ledger
 // entries owned by the account, with type and deletion_blockers_only filters.
-type AccountObjectsMethod struct{ BaseHandler }
+type AccountObjectsMethod struct{ baseHandler }
 
 // deletionBlockerTypes lists SLE types that block account deletion.
 // Matches rippled's deletionBlockers[] in doAccountObjects (AccountObjects.cpp).
@@ -78,7 +78,7 @@ func (m *AccountObjectsMethod) Handle(ctx *types.RpcContext, params json.RawMess
 	if parseErr != nil {
 		return nil, parseErr
 	}
-	if err := RequireLedgerService(ctx.Services); err != nil {
+	if err := requireLedgerService(ctx.Services); err != nil {
 		return nil, err
 	}
 	ledgerIndex, ledgerFields, selErr := preflightAccountPage(ctx, params, account, "Failed to get account information", true)
@@ -111,7 +111,7 @@ func (m *AccountObjectsMethod) Handle(ctx *types.RpcContext, params json.RawMess
 			return nil, typeErr
 		}
 	}
-	limit, limitErr := ReadLimitField(params, LimitAccountObjects, ctx.Unlimited)
+	limit, limitErr := readLimitField(params, limitAccountObjects, ctx.Unlimited)
 	if limitErr != nil {
 		return nil, limitErr
 	}

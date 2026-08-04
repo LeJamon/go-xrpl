@@ -13,7 +13,7 @@ import (
 // Empty list when no source is wired (standalone mode). The "cluster"
 // field mirrors rippled's doPeers (Peers.cpp:59-80) which always emits
 // an object — empty when no [cluster_nodes] are configured.
-type PeersMethod struct{ AdminHandler }
+type PeersMethod struct{ adminHandler }
 
 func (m *PeersMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (any, *types.RpcError) {
 	var (
@@ -40,7 +40,7 @@ func (m *PeersMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (any
 // Mirrors rippled Reservations.cpp doPeerReservationsAdd: inserts or replaces a
 // reservation for a base58 NodePublic key, returning the previous reservation
 // (if any) under "previous". Empty result when no overlay is wired.
-type PeerReservationsAddMethod struct{ AdminHandler }
+type PeerReservationsAddMethod struct{ adminHandler }
 
 func (m *PeerReservationsAddMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (any, *types.RpcError) {
 	fields, rpcErr := objectParams(params)
@@ -78,7 +78,7 @@ func (m *PeerReservationsAddMethod) Handle(ctx *types.RpcContext, params json.Ra
 // PeerReservationsDelMethod handles the peer_reservations_del RPC method.
 // Mirrors rippled doPeerReservationsDel: removes a reservation by base58
 // NodePublic key, returning the erased reservation (if any) under "previous".
-type PeerReservationsDelMethod struct{ AdminHandler }
+type PeerReservationsDelMethod struct{ adminHandler }
 
 func (m *PeerReservationsDelMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (any, *types.RpcError) {
 	fields, rpcErr := objectParams(params)
@@ -112,7 +112,7 @@ func (m *PeerReservationsDelMethod) Handle(ctx *types.RpcContext, params json.Ra
 // PeerReservationsListMethod handles the peer_reservations_list RPC method.
 // Mirrors rippled doPeerReservationsList: returns all reservations under
 // "reservations". Empty when no overlay is wired.
-type PeerReservationsListMethod struct{ AdminHandler }
+type PeerReservationsListMethod struct{ adminHandler }
 
 func (m *PeerReservationsListMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (any, *types.RpcError) {
 	reservations := make([]any, 0)

@@ -10,14 +10,14 @@ import (
 )
 
 // VaultInfoMethod handles the vault_info RPC method
-type VaultInfoMethod struct{ BaseHandler }
+type VaultInfoMethod struct{ baseHandler }
 
 func (m *VaultInfoMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (any, *types.RpcError) {
 	parsedLedgerSpec, _, ledgerSpecErr := parseLedgerSpecifier(params)
 	if ledgerSpecErr != nil {
 		return nil, ledgerSpecErr
 	}
-	targetLedger, validated, lookupErr := LookupLedger(ctx, parsedLedgerSpec)
+	targetLedger, validated, lookupErr := lookupLedger(ctx, parsedLedgerSpec)
 	if lookupErr != nil {
 		return nil, lookupErr
 	}
@@ -28,7 +28,7 @@ func (m *VaultInfoMethod) Handle(ctx *types.RpcContext, params json.RawMessage) 
 	}
 
 	var rawParams map[string]json.RawMessage
-	if err := ParseParams(params, &rawParams); err != nil {
+	if err := parseParams(params, &rawParams); err != nil {
 		return nil, err
 	}
 	vaultKey, parseErr := parseVaultInfoKey(rawParams)

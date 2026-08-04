@@ -17,7 +17,7 @@ import (
 
 // SubmitMethod handles the submit RPC method.
 // Supports both tx_blob (pre-signed hex) and tx_json submissions.
-type SubmitMethod struct{ BaseHandler }
+type SubmitMethod struct{ baseHandler }
 
 func (m *SubmitMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (result any, rpcErr *types.RpcError) {
 	setLoadMedium(ctx)
@@ -135,7 +135,7 @@ func (m *SubmitMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (re
 		}
 	}
 
-	if err := RequireLedgerService(ctx.Services); err != nil {
+	if err := requireLedgerService(ctx.Services); err != nil {
 		return nil, err
 	}
 

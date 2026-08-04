@@ -17,7 +17,7 @@ import (
 // BookChangesMethod handles the book_changes RPC method.
 // Computes OHLCV data for all currency pairs that had offer changes in a ledger.
 // Reference: rippled BookChanges.h (computeBookChanges)
-type BookChangesMethod struct{ BaseHandler }
+type BookChangesMethod struct{ baseHandler }
 
 // bookChange tracks OHLCV data for a single currency pair
 type bookChange struct {
@@ -57,11 +57,11 @@ type BookChangesTransaction struct {
 // The shape of the returned map matches the JSON the RPC handler
 // emits, so subscribers can marshal it verbatim into the stream event.
 func ComputeBookChanges(l LedgerWithTransactions) map[string]any {
-	result, _ := ComputeBookChangesContext(context.Background(), l)
+	result, _ := computeBookChangesContext(context.Background(), l)
 	return result
 }
 
-func ComputeBookChangesContext(ctx context.Context, l LedgerWithTransactions) (map[string]any, error) {
+func computeBookChangesContext(ctx context.Context, l LedgerWithTransactions) (map[string]any, error) {
 	if l == nil {
 		return map[string]any{
 			"type":         "bookChanges",
@@ -76,9 +76,9 @@ func ComputeBookChangesContext(ctx context.Context, l LedgerWithTransactions) (m
 	return formatBookChanges(l, changes), nil
 }
 
-// ComputeBookChangesFromTransactions computes book changes without decoding raw
+// computeBookChangesFromTransactions computes book changes without decoding raw
 // accepted transaction leaves again.
-func ComputeBookChangesFromTransactions(l BookChangesHeader, transactions []BookChangesTransaction) map[string]any {
+func computeBookChangesFromTransactions(l BookChangesHeader, transactions []BookChangesTransaction) map[string]any {
 	changes := make(map[string]*bookChange)
 	for _, transaction := range transactions {
 		accumulateBookChanges(changes, transaction.Transaction, transaction.Metadata)
@@ -97,7 +97,7 @@ func ComputeBookChangesFromTransactionsStrict(l BookChangesHeader, transactions 
 			return nil, fmt.Errorf("book changes transaction %d is incomplete", i)
 		}
 	}
-	return ComputeBookChangesFromTransactions(l, transactions), nil
+	return computeBookChangesFromTransactions(l, transactions), nil
 }
 
 func formatBookChanges(l BookChangesHeader, changes map[string]*bookChange) map[string]any {
@@ -154,7 +154,7 @@ func (m *BookChangesMethod) Handle(ctx *types.RpcContext, params json.RawMessage
 	var request struct {
 	}
 
-	if err := ParseParams(params, &request); err != nil {
+	if err := parseParams(params, &request); err != nil {
 		return nil, err
 	}
 
@@ -162,12 +162,12 @@ func (m *BookChangesMethod) Handle(ctx *types.RpcContext, params json.RawMessage
 	// RPC::lookupLedger): defaults to current, threads ledger_hash, and rejects
 	// a malformed numeric ledger_index with ledgerIndexMalformed instead of
 	// silently falling back.
-	targetLedger, _, lerr := LookupLedger(ctx, params)
+	targetLedger, _, lerr := lookupLedger(ctx, params)
 	if lerr != nil {
 		return nil, lerr
 	}
 
-	result, err := ComputeBookChangesContext(ctx.Context, targetLedger)
+	result, err := computeBookChangesContext(ctx.Context, targetLedger)
 	if err != nil {
 		return nil, rpcInternalError("book_changes: transaction iteration failed", err)
 	}

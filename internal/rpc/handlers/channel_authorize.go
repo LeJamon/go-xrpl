@@ -15,7 +15,7 @@ import (
 
 // ChannelAuthorizeMethod handles the channel_authorize RPC method
 // This creates a signature that can be used to redeem a specific amount from a payment channel.
-type ChannelAuthorizeMethod struct{ BaseHandler }
+type ChannelAuthorizeMethod struct{ baseHandler }
 
 // channelAuthorizeRequest represents the request parameters
 type channelAuthorizeRequest struct {

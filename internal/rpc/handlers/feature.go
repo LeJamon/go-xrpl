@@ -18,7 +18,7 @@ import (
 // caller may read amendment status, but the admin-only fields (vetoed, count,
 // validations, threshold) and the `vetoed` mutation require admin.
 // Reference: rippled Feature1.cpp
-type FeatureMethod struct{ BaseHandler }
+type FeatureMethod struct{ baseHandler }
 
 // amendmentVoteController is the optional capability the live ledger-service
 // adapter implements to expose the amendment table and accept vote mutations.

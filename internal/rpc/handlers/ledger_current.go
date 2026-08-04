@@ -6,11 +6,11 @@ import (
 	"github.com/LeJamon/go-xrpl/internal/rpc/types"
 )
 
-// LedgerCurrentMethod handles the ledger_current RPC method
-type LedgerCurrentMethod struct{ BaseHandler }
+// ledgerCurrentMethod handles the ledger_current RPC method
+type ledgerCurrentMethod struct{ baseHandler }
 
-func (m *LedgerCurrentMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (any, *types.RpcError) {
-	if err := RequireLedgerService(ctx.Services); err != nil {
+func (m *ledgerCurrentMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (any, *types.RpcError) {
+	if err := requireLedgerService(ctx.Services); err != nil {
 		return nil, err
 	}
 
@@ -26,6 +26,6 @@ func (m *LedgerCurrentMethod) Handle(ctx *types.RpcContext, params json.RawMessa
 	return response, nil
 }
 
-func (m *LedgerCurrentMethod) RequiredCondition() types.Condition {
+func (m *ledgerCurrentMethod) RequiredCondition() types.Condition {
 	return types.NeedsCurrentLedger
 }

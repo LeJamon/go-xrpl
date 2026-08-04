@@ -20,7 +20,7 @@ import (
 // `clear` param by resetting the acquisition counters. The `info` object is
 // empty when the node isn't acquiring (e.g. standalone / RPC-only), which is
 // rippled's behavior too.
-type FetchInfoMethod struct{ AdminHandler }
+type FetchInfoMethod struct{ adminHandler }
 
 func (m *FetchInfoMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (any, *types.RpcError) {
 	var request struct {
@@ -58,7 +58,7 @@ func (m *FetchInfoMethod) Handle(ctx *types.RpcContext, params json.RawMessage) 
 // ledgerData and peer-selection averages are reported as 0 until those
 // subsystems exist (see peermanagement.txMetrics). Zeros throughout when no
 // overlay is wired (standalone / RPC-only).
-type TxReduceRelayMethod struct{ BaseHandler }
+type TxReduceRelayMethod struct{ baseHandler }
 
 func (m *TxReduceRelayMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (any, *types.RpcError) {
 	var metrics types.TxReduceRelayMetrics
@@ -74,7 +74,7 @@ func (m *TxReduceRelayMethod) RequiredRole() types.Role {
 
 // ConnectMethod handles the connect RPC method. A live runtime admits the
 // request to its bounded peer-connect scheduler and returns immediately.
-type ConnectMethod struct{ AdminHandler }
+type ConnectMethod struct{ adminHandler }
 
 func (m *ConnectMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (any, *types.RpcError) {
 	// The ledger invariant and standalone guard intentionally precede request
@@ -278,7 +278,7 @@ func connectMessage(ip string, port int) map[string]any {
 // (ValidatorList::for_each_listed) and emits a {pubkey_validator, trusted}
 // entry, where trusted reflects whether the key is in the effective UNL. With
 // no publisher-trust subsystem configured (e.g. standalone) the list is empty.
-type UnlListMethod struct{ AdminHandler }
+type UnlListMethod struct{ adminHandler }
 
 func (m *UnlListMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (any, *types.RpcError) {
 	unl := make([]any, 0)
@@ -305,7 +305,7 @@ func (m *UnlListMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (a
 // per-endpoint reputation table, optionally filtered by a `threshold` score.
 // The response is keyed by endpoint address (rippled returns the getJson
 // object directly). Empty when no overlay is wired (standalone / RPC-only).
-type BlackListMethod struct{ AdminHandler }
+type BlackListMethod struct{ adminHandler }
 
 func (m *BlackListMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (any, *types.RpcError) {
 	var request struct {

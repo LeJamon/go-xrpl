@@ -18,7 +18,7 @@ import (
 // secp256k1 validator keypair from an optional secret (or a fresh random
 // seed) and returns it in the formats a validator config consumes.
 // Admin-only — it makes no sense to ask an untrusted server for this.
-type ValidationCreateMethod struct{ AdminHandler }
+type ValidationCreateMethod struct{ adminHandler }
 
 type validationCreateRequest struct {
 	Secret *string `json:"secret,omitempty"`

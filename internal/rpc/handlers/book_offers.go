@@ -25,13 +25,13 @@ var (
 	jsonNullBytes = []byte("null")
 )
 
-type BookOffersMethod struct{ BaseHandler }
+type BookOffersMethod struct{ baseHandler }
 
 func (m *BookOffersMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (any, *types.RpcError) {
-	if err := RequireNotBusyBookOffers(ctx); err != nil {
+	if err := requireNotBusyBookOffers(ctx); err != nil {
 		return nil, err
 	}
-	if err := RequireLedgerService(ctx.Services); err != nil {
+	if err := requireLedgerService(ctx.Services); err != nil {
 		return nil, err
 	}
 
@@ -153,7 +153,7 @@ func (m *BookOffersMethod) Handle(ctx *types.RpcContext, params json.RawMessage)
 		return nil, types.RpcErrorBadMarket()
 	}
 
-	limit, limitErr := ReadLimitField(params, LimitBookOffers, ctx.Unlimited)
+	limit, limitErr := readLimitField(params, limitBookOffers, ctx.Unlimited)
 	if limitErr != nil {
 		return nil, limitErr
 	}

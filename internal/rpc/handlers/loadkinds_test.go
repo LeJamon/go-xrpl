@@ -65,7 +65,7 @@ func TestRipplePathFindBusyAdmissionIsHeavy(t *testing.T) {
 		},
 	}
 
-	_, rpcErr := (&RipplePathFindMethod{}).Handle(ctx, json.RawMessage(`{}`))
+	_, rpcErr := (&ripplePathFindMethod{}).Handle(ctx, json.RawMessage(`{}`))
 	if rpcErr == nil {
 		t.Fatal("expected busy path-find request to fail admission")
 	}

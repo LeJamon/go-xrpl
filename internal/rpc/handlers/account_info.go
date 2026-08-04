@@ -37,7 +37,7 @@ const (
 )
 
 // AccountInfoMethod handles the account_info RPC method.
-type AccountInfoMethod struct{ BaseHandler }
+type AccountInfoMethod struct{ baseHandler }
 
 func (m *AccountInfoMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (any, *types.RpcError) {
 	rawFields, fieldsErr := rawJSONFields(params)
@@ -62,11 +62,11 @@ func (m *AccountInfoMethod) Handle(ctx *types.RpcContext, params json.RawMessage
 		return nil, types.RpcErrorMissingField("account")
 	}
 
-	if err := RequireLedgerService(ctx.Services); err != nil {
+	if err := requireLedgerService(ctx.Services); err != nil {
 		return nil, err
 	}
 
-	ledger, lookupValidated, lookupErr := LookupLedger(ctx, params)
+	ledger, lookupValidated, lookupErr := lookupLedger(ctx, params)
 	if lookupErr != nil {
 		return nil, lookupErr
 	}

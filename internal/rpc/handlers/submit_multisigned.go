@@ -16,7 +16,7 @@ import (
 
 // SubmitMultisignedMethod handles the submit_multisigned RPC method
 // This submits a multi-signed transaction to the network
-type SubmitMultisignedMethod struct{ BaseHandler }
+type SubmitMultisignedMethod struct{ baseHandler }
 
 func (m *SubmitMultisignedMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (any, *types.RpcError) {
 	setLoadHeavy(ctx)
@@ -25,7 +25,7 @@ func (m *SubmitMultisignedMethod) Handle(ctx *types.RpcContext, params json.RawM
 		FailHard bool            `json:"fail_hard,omitempty"`
 	}
 
-	if err := ParseParams(params, &request); err != nil {
+	if err := parseParams(params, &request); err != nil {
 		return nil, err
 	}
 
@@ -33,7 +33,7 @@ func (m *SubmitMultisignedMethod) Handle(ctx *types.RpcContext, params json.RawM
 		return nil, types.RpcErrorMissingField("tx_json")
 	}
 
-	if err := RequireLedgerService(ctx.Services); err != nil {
+	if err := requireLedgerService(ctx.Services); err != nil {
 		return nil, err
 	}
 

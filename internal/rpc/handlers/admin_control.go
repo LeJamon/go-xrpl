@@ -27,7 +27,7 @@ import (
 // transitions/durations) are rendered as decimal strings to match rippled's
 // std::to_string convention (NetworkOPs.cpp:2986-2991, 4843-4846) and go-xrpl's
 // own server_info; sequence numbers and proposer/converge counts stay numeric.
-type PrintMethod struct{ AdminHandler }
+type PrintMethod struct{ adminHandler }
 
 type outboundCriticalQueueFailureSource interface {
 	OutboundCriticalQueueFailures() (local, shared uint64)
@@ -145,7 +145,7 @@ func printSection(params json.RawMessage) string {
 // "never" (0), "always" (max uint32), or "now" (the last rotated ledger,
 // notReady if none). The method returns notEnabled unless advisory_delete is
 // configured, matching rippled's getSHAMapStore().advisoryDelete() gate.
-type CanDeleteMethod struct{ AdminHandler }
+type CanDeleteMethod struct{ adminHandler }
 
 type canDeleteParam json.RawMessage
 
@@ -270,7 +270,7 @@ func isAllDigits(s string) bool {
 // omitted rather than fabricated. The node_* counters are emitted as decimal
 // strings to match rippled's NodeStore::Database::getCountsJson
 // (Database.cpp:283-288), which stringifies them via std::to_string.
-type GetCountsMethod struct{ AdminHandler }
+type GetCountsMethod struct{ adminHandler }
 
 // uptimeText renders a duration the way rippled's GetCounts.cpp textTime does:
 // the largest non-zero units in descending order, comma-separated and
@@ -357,7 +357,7 @@ func (m *GetCountsMethod) Handle(ctx *types.RpcContext, params json.RawMessage) 
 // ever instantiated (Logs::partition_severities), most at the base level;
 // go-xrpl has no lazy sink registry and lists only partitions with an
 // explicit override.
-type LogLevelMethod struct{ AdminHandler }
+type LogLevelMethod struct{ adminHandler }
 
 // rippledSeverityName maps a log level to rippled's severity naming
 // (Logs::toString): Trace, Debug, Info, Warning, Error, Fatal.
@@ -419,7 +419,7 @@ func (m *LogLevelMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (
 // Mirrors rippled LogRotate.cpp: closes and reopens the log file so external
 // rotation tools can rename it and have writes continue against a fresh file.
 // When logging is not file-backed (stdout/stderr) there is nothing to rotate.
-type LogRotateMethod struct{ AdminHandler }
+type LogRotateMethod struct{ adminHandler }
 
 func (m *LogRotateMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (any, *types.RpcError) {
 	if err := xrpllog.Rotate(); err != nil {

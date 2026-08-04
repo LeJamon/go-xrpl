@@ -19,17 +19,17 @@ import (
 )
 
 // LedgerEntryMethod handles the ledger_entry RPC method
-type LedgerEntryMethod struct{ BaseHandler }
+type LedgerEntryMethod struct{ baseHandler }
 
 func (m *LedgerEntryMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (any, *types.RpcError) {
 	// We need to parse into a generic map first because the fields are polymorphic
 	// (some are strings, some are objects)
 	var rawParams map[string]json.RawMessage
-	if err := ParseParams(params, &rawParams); err != nil {
+	if err := parseParams(params, &rawParams); err != nil {
 		return nil, err
 	}
 
-	if err := RequireLedgerService(ctx.Services); err != nil {
+	if err := requireLedgerService(ctx.Services); err != nil {
 		return nil, err
 	}
 
@@ -41,7 +41,7 @@ func (m *LedgerEntryMethod) Handle(ctx *types.RpcContext, params json.RawMessage
 	if selectorErr != nil {
 		return nil, selectorErr
 	}
-	targetLedger, validated, lookupErr := LookupLedger(ctx, ledgerSpec)
+	targetLedger, validated, lookupErr := lookupLedger(ctx, ledgerSpec)
 	if lookupErr != nil {
 		return nil, lookupErr
 	}

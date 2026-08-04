@@ -11,106 +11,12 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// allHandlers returns every handler type in the handlers package, keyed by
-// method name.  This is the single source of truth for the API version
-// conformance tests — if a new handler is added to handlers/ it must be
-// added here as well.
 func allHandlers() map[string]types.MethodHandler {
-	return map[string]types.MethodHandler{
-		// Account methods
-		"account_info":       &handlers.AccountInfoMethod{},
-		"account_channels":   &handlers.AccountChannelsMethod{},
-		"account_currencies": &handlers.AccountCurrenciesMethod{},
-		"account_lines":      &handlers.AccountLinesMethod{},
-		"account_nfts":       &handlers.AccountNftsMethod{},
-		"account_objects":    &handlers.AccountObjectsMethod{},
-		"account_offers":     &handlers.AccountOffersMethod{},
-		"account_tx":         &handlers.AccountTxMethod{},
-
-		// Transaction methods
-		"tx":                 &handlers.TxMethod{},
-		"tx_history":         &handlers.TxHistoryMethod{},
-		"submit":             &handlers.SubmitMethod{},
-		"submit_multisigned": &handlers.SubmitMultisignedMethod{},
-		"sign":               &handlers.SignMethod{},
-		"sign_for":           &handlers.SignForMethod{},
-		"transaction_entry":  &handlers.TransactionEntryMethod{},
-
-		// Ledger methods
-		"ledger":         &handlers.LedgerMethod{},
-		"ledger_accept":  &handlers.LedgerAcceptMethod{},
-		"ledger_closed":  &handlers.LedgerClosedMethod{},
-		"ledger_current": &handlers.LedgerCurrentMethod{},
-		"ledger_data":    &handlers.LedgerDataMethod{},
-		"ledger_entry":   &handlers.LedgerEntryMethod{},
-		"ledger_range":   &handlers.LedgerRangeMethod{},
-
-		// Server methods
-		"ping":               &handlers.PingMethod{},
-		"server_info":        &handlers.ServerInfoMethod{},
-		"server_state":       &handlers.ServerStateMethod{},
-		"server_definitions": &handlers.ServerDefinitionsMethod{},
-		"random":             &handlers.RandomMethod{},
-		"fee":                &handlers.FeeMethod{},
-		"feature":            &handlers.FeatureMethod{},
-		"version":            &handlers.VersionMethod{},
-
-		// Order book / path methods
-		"book_offers":      &handlers.BookOffersMethod{},
-		"book_changes":     &handlers.BookChangesMethod{},
-		"path_find":        &handlers.PathFindMethod{},
-		"ripple_path_find": &handlers.RipplePathFindMethod{},
-
-		// NFT methods
-		"nft_buy_offers":  &handlers.NftBuyOffersMethod{},
-		"nft_sell_offers": &handlers.NftSellOffersMethod{},
-
-		// Utility methods
-		"deposit_authorized":  &handlers.DepositAuthorizedMethod{},
-		"gateway_balances":    &handlers.GatewayBalancesMethod{},
-		"noripple_check":      &handlers.NoRippleCheckMethod{},
-		"channel_authorize":   &handlers.ChannelAuthorizeMethod{},
-		"channel_verify":      &handlers.ChannelVerifyMethod{},
-		"wallet_propose":      &handlers.WalletProposeMethod{},
-		"json":                &handlers.JSONMethod{},
-		"manifest":            &handlers.ManifestMethod{},
-		"amm_info":            &handlers.AMMInfoMethod{},
-		"vault_info":          &handlers.VaultInfoMethod{},
-		"get_aggregate_price": &handlers.GetAggregatePriceMethod{},
-		"simulate":            &handlers.SimulateMethod{},
-
-		// WebSocket subscription methods
-		"subscribe":   &handlers.SubscribeMethod{},
-		"unsubscribe": &handlers.UnsubscribeMethod{},
-
-		// Admin / network methods
-		"stop":                   &handlers.StopMethod{},
-		"validation_create":      &handlers.ValidationCreateMethod{},
-		"consensus_info":         &handlers.ConsensusInfoMethod{},
-		"peers":                  &handlers.PeersMethod{},
-		"peer_reservations_add":  &handlers.PeerReservationsAddMethod{},
-		"peer_reservations_del":  &handlers.PeerReservationsDelMethod{},
-		"peer_reservations_list": &handlers.PeerReservationsListMethod{},
-		"validators":             &handlers.ValidatorsMethod{},
-		"validator_list_sites":   &handlers.ValidatorListSitesMethod{},
-
-		// Stub / missing methods
-		"fetch_info":      &handlers.FetchInfoMethod{},
-		"owner_info":      &handlers.OwnerInfoMethod{},
-		"ledger_header":   &handlers.LedgerHeaderMethod{},
-		"ledger_request":  &handlers.LedgerRequestMethod{},
-		"ledger_cleaner":  &handlers.LedgerCleanerMethod{},
-		"tx_reduce_relay": &handlers.TxReduceRelayMethod{},
-		"connect":         &handlers.ConnectMethod{},
-		"print":           &handlers.PrintMethod{},
-		"validator_info":  &handlers.ValidatorInfoMethod{},
-		"can_delete":      &handlers.CanDeleteMethod{},
-		"get_counts":      &handlers.GetCountsMethod{},
-		"log_level":       &handlers.LogLevelMethod{},
-		"logrotate":       &handlers.LogRotateMethod{},
-		"unl_list":        &handlers.UnlListMethod{},
-		"blacklist":       &handlers.BlackListMethod{},
+	all := make(map[string]types.MethodHandler)
+	for _, descriptor := range handlers.MethodDescriptors() {
+		all[descriptor.Name] = descriptor.Handler
 	}
+	return all
 }
 
 // Test 1: TestApiVersionConstants

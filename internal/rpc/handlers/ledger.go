@@ -20,7 +20,7 @@ import (
 )
 
 // LedgerMethod handles the ledger RPC method.
-type LedgerMethod struct{ BaseHandler }
+type LedgerMethod struct{ baseHandler }
 
 func (m *LedgerMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (any, *types.RpcError) {
 	if boolErr := validateLedgerBooleanOptions(params); boolErr != nil {
@@ -42,12 +42,12 @@ func (m *LedgerMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (an
 		Type         json.RawMessage `json:"type,omitempty"`
 	}
 
-	if err := ParseParams(params, &request); err != nil {
+	if err := parseParams(params, &request); err != nil {
 		return nil, err
 	}
 	request.LedgerSpecifier = ledgerSpec
 
-	if err := RequireLedgerService(ctx.Services); err != nil {
+	if err := requireLedgerService(ctx.Services); err != nil {
 		return nil, err
 	}
 	if !hasLedgerSelector {
@@ -61,7 +61,7 @@ func (m *LedgerMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (an
 	dumpQueue := request.Queue && hasLedgerSelector
 
 	// Resolve the target before the permission gate, matching LedgerHandler::check.
-	targetLedger, validated, lerr := LookupLedger(ctx, request.LedgerSpecifier)
+	targetLedger, validated, lerr := lookupLedger(ctx, request.LedgerSpecifier)
 	if lerr != nil {
 		return nil, lerr
 	}
@@ -555,9 +555,9 @@ func dumpAccountState(ctx *types.RpcContext, l types.LedgerReader, binary, expan
 		ledgerIndex = hex.EncodeToString(hash[:])
 	}
 	marker := ""
-	limit := LimitLedgerData.Default
+	limit := limitLedgerData.Default
 	if binary {
-		limit = LimitLedgerDataBinary.Default
+		limit = limitLedgerDataBinary.Default
 	}
 	for {
 		result, err := ctx.Services.Ledger.GetLedgerData(ctx.Context, ledgerIndex, limit, marker)
@@ -749,14 +749,14 @@ func expandStoredTransaction(
 		txEntry["hash"] = hashStr
 		if storedTx.Meta != nil {
 			injectExpandedLedgerDeliveredAmount(storedTx.TxJSON, storedTx.Meta, ctx)
-			InjectMPTokenIssuanceID(storedTx.TxJSON, storedTx.Meta)
+			injectMPTokenIssuanceID(storedTx.TxJSON, storedTx.Meta)
 			txEntry["meta"] = storedTx.Meta
 		}
 	} else {
 		maps.Copy(txEntry, txprojection.ProjectJSON(storedTx.TxJSON, hashStr, apiVersion))
 		if storedTx.Meta != nil {
 			injectExpandedLedgerDeliveredAmount(storedTx.TxJSON, storedTx.Meta, ctx)
-			InjectMPTokenIssuanceID(storedTx.TxJSON, storedTx.Meta)
+			injectMPTokenIssuanceID(storedTx.TxJSON, storedTx.Meta)
 			txEntry["metaData"] = storedTx.Meta
 		}
 	}

@@ -35,10 +35,10 @@ func TestGates_NilOrUnwiredIsNoOp(t *testing.T) {
 		if rpcErr := RequireNotBusyClient(ctx); rpcErr != nil {
 			t.Fatalf("RequireNotBusyClient(%v) = %v, want nil", ctx, rpcErr)
 		}
-		if rpcErr := RequireNotBusyBookOffers(ctx); rpcErr != nil {
+		if rpcErr := requireNotBusyBookOffers(ctx); rpcErr != nil {
 			t.Fatalf("RequireNotBusyBookOffers(%v) = %v, want nil", ctx, rpcErr)
 		}
-		release, rpcErr := AcquirePathfind(ctx)
+		release, rpcErr := acquirePathfind(ctx)
 		if rpcErr != nil {
 			t.Fatalf("AcquirePathfind(%v) = %v, want nil", ctx, rpcErr)
 		}
@@ -75,11 +75,11 @@ func TestRequireNotBusyBookOffers_Strictness(t *testing.T) {
 	s := types.NewClientLoadShedder()
 	loadInFlight(s, types.MaxBookOffersClients)
 
-	if rpcErr := RequireNotBusyBookOffers(gatedCtx(s)); rpcErr != nil {
+	if rpcErr := requireNotBusyBookOffers(gatedCtx(s)); rpcErr != nil {
 		t.Fatalf("count==200 should not shed, got %v", rpcErr)
 	}
 	s.Begin()
-	if rpcErr := RequireNotBusyBookOffers(gatedCtx(s)); rpcErr == nil {
+	if rpcErr := requireNotBusyBookOffers(gatedCtx(s)); rpcErr == nil {
 		t.Fatal("count==201 should shed")
 	}
 }
@@ -93,10 +93,10 @@ func TestGates_UnlimitedBypass(t *testing.T) {
 	if rpcErr := RequireNotBusyClient(unlimitedCtx(s)); rpcErr != nil {
 		t.Fatalf("admin must bypass generic gate, got %v", rpcErr)
 	}
-	if rpcErr := RequireNotBusyBookOffers(unlimitedCtx(s)); rpcErr != nil {
+	if rpcErr := requireNotBusyBookOffers(unlimitedCtx(s)); rpcErr != nil {
 		t.Fatalf("admin must bypass book_offers gate, got %v", rpcErr)
 	}
-	release, rpcErr := AcquirePathfind(unlimitedCtx(s))
+	release, rpcErr := acquirePathfind(unlimitedCtx(s))
 	if rpcErr != nil {
 		t.Fatalf("admin must bypass pathfind gate, got %v", rpcErr)
 	}
@@ -109,20 +109,20 @@ func TestGates_UnlimitedBypass(t *testing.T) {
 	}
 }
 
-// AcquirePathfind mirrors LegacyPathFind ctor (LegacyPathFind.cpp:30-60):
+// acquirePathfind mirrors LegacyPathFind ctor (LegacyPathFind.cpp:30-60):
 // the first gate is the > maxPathfindJobCount (50) check.
 func TestAcquirePathfind_JobCountGate(t *testing.T) {
 	s := types.NewClientLoadShedder()
 	loadInFlight(s, types.MaxPathfindClients) // == 50
 
-	release, rpcErr := AcquirePathfind(gatedCtx(s))
+	release, rpcErr := acquirePathfind(gatedCtx(s))
 	if rpcErr != nil {
 		t.Fatalf("count==50 should not shed, got %v", rpcErr)
 	}
 	release()
 
 	s.Begin() // 51
-	if _, rpcErr := AcquirePathfind(gatedCtx(s)); rpcErr == nil {
+	if _, rpcErr := acquirePathfind(gatedCtx(s)); rpcErr == nil {
 		t.Fatal("count==51 should shed before reaching in-progress check")
 	}
 	if got := s.PathfindActive(); got != 0 {
@@ -134,7 +134,7 @@ func TestAcquirePathfind_LocalLoadGateWithoutClientCounter(t *testing.T) {
 	ctx := &types.RpcContext{Services: &types.ServiceContainer{
 		IsLoadedLocal: func() bool { return true },
 	}}
-	if _, rpcErr := AcquirePathfind(ctx); rpcErr == nil || rpcErr.ErrorString != "tooBusy" {
+	if _, rpcErr := acquirePathfind(ctx); rpcErr == nil || rpcErr.ErrorString != "tooBusy" {
 		t.Fatalf("local load should shed without ClientLoad, got %v", rpcErr)
 	}
 }
@@ -148,7 +148,7 @@ func TestAcquirePathfind_UnlimitedBypassesLocalLoad(t *testing.T) {
 			IsLoadedLocal: func() bool { return true },
 		},
 	}
-	release, rpcErr := AcquirePathfind(ctx)
+	release, rpcErr := acquirePathfind(ctx)
 	if rpcErr != nil {
 		t.Fatalf("unlimited caller should bypass local load, got %v", rpcErr)
 	}
@@ -160,22 +160,22 @@ func TestAcquirePathfind_UnlimitedBypassesLocalLoad(t *testing.T) {
 
 func TestAcquirePathfind_UnlimitedExceedsCapButConsumesSlot(t *testing.T) {
 	s := types.NewClientLoadShedder()
-	r1, rpcErr := AcquirePathfind(gatedCtx(s))
+	r1, rpcErr := acquirePathfind(gatedCtx(s))
 	if rpcErr != nil {
 		t.Fatalf("first regular acquire: %v", rpcErr)
 	}
-	r2, rpcErr := AcquirePathfind(gatedCtx(s))
+	r2, rpcErr := acquirePathfind(gatedCtx(s))
 	if rpcErr != nil {
 		t.Fatalf("second regular acquire: %v", rpcErr)
 	}
-	adminRelease, rpcErr := AcquirePathfind(unlimitedCtx(s))
+	adminRelease, rpcErr := acquirePathfind(unlimitedCtx(s))
 	if rpcErr != nil {
 		t.Fatalf("admin acquire above cap: %v", rpcErr)
 	}
 	if got := s.PathfindActive(); got != types.MaxPathfindsInProgress+1 {
 		t.Fatalf("pathfind active with admin = %d, want %d", got, types.MaxPathfindsInProgress+1)
 	}
-	if _, rpcErr := AcquirePathfind(gatedCtx(s)); rpcErr == nil {
+	if _, rpcErr := acquirePathfind(gatedCtx(s)); rpcErr == nil {
 		t.Fatal("regular caller should remain capped while admin is active")
 	}
 	adminRelease()
@@ -183,21 +183,21 @@ func TestAcquirePathfind_UnlimitedExceedsCapButConsumesSlot(t *testing.T) {
 	r1()
 }
 
-// AcquirePathfind enforces the concurrent-in-progress cap from
+// acquirePathfind enforces the concurrent-in-progress cap from
 // rippled LegacyPathFind.cpp:47 (maxPathfindsInProgress = 2).
 func TestAcquirePathfind_InProgressCap(t *testing.T) {
 	s := types.NewClientLoadShedder()
 
-	r1, err1 := AcquirePathfind(gatedCtx(s))
+	r1, err1 := acquirePathfind(gatedCtx(s))
 	if err1 != nil {
 		t.Fatalf("first acquire should succeed: %v", err1)
 	}
-	r2, err2 := AcquirePathfind(gatedCtx(s))
+	r2, err2 := acquirePathfind(gatedCtx(s))
 	if err2 != nil {
 		t.Fatalf("second acquire should succeed: %v", err2)
 	}
 
-	if _, err3 := AcquirePathfind(gatedCtx(s)); err3 == nil {
+	if _, err3 := acquirePathfind(gatedCtx(s)); err3 == nil {
 		t.Fatal("third concurrent acquire must shed (cap = 2)")
 	}
 	if got := s.PathfindActive(); got != types.MaxPathfindsInProgress {
@@ -205,7 +205,7 @@ func TestAcquirePathfind_InProgressCap(t *testing.T) {
 	}
 
 	r1()
-	r3, err3 := AcquirePathfind(gatedCtx(s))
+	r3, err3 := acquirePathfind(gatedCtx(s))
 	if err3 != nil {
 		t.Fatalf("after release a slot should free up: %v", err3)
 	}
@@ -218,11 +218,11 @@ func TestAcquirePathfind_InProgressCap(t *testing.T) {
 
 func TestWaitPathfindWaitsForRelease(t *testing.T) {
 	s := types.NewClientLoadShedder()
-	r1, err1 := AcquirePathfind(gatedCtx(s))
+	r1, err1 := acquirePathfind(gatedCtx(s))
 	if err1 != nil {
 		t.Fatalf("first acquire should succeed: %v", err1)
 	}
-	r2, err2 := AcquirePathfind(gatedCtx(s))
+	r2, err2 := acquirePathfind(gatedCtx(s))
 	if err2 != nil {
 		t.Fatalf("second acquire should succeed: %v", err2)
 	}

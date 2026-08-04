@@ -14,7 +14,7 @@ import (
 // TxQ snapshot. When the TxQ hook isn't wired (standalone tests,
 // pre-startup) the handler falls back to rippled's idle-state
 // defaults — reference_level=256, drops fields equal to base_fee.
-type FeeMethod struct{ BaseHandler }
+type FeeMethod struct{ baseHandler }
 
 const (
 	feeBaseLevel        uint64 = 256 // rippled TxQ.h baseLevel
@@ -24,7 +24,7 @@ const (
 )
 
 func (m *FeeMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (any, *types.RpcError) {
-	if err := RequireLedgerService(ctx.Services); err != nil {
+	if err := requireLedgerService(ctx.Services); err != nil {
 		return nil, err
 	}
 

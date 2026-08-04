@@ -8,10 +8,10 @@ import (
 
 // ServerStateMethod handles the server_state RPC method.
 // This is the "machine-readable" variant (rippled human=false).
-type ServerStateMethod struct{ BaseHandler }
+type ServerStateMethod struct{ baseHandler }
 
 func (m *ServerStateMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (any, *types.RpcError) {
-	if err := RequireLedgerService(ctx.Services); err != nil {
+	if err := requireLedgerService(ctx.Services); err != nil {
 		return nil, err
 	}
 

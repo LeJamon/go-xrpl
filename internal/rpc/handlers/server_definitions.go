@@ -19,7 +19,7 @@ import (
 // Returns the transaction, ledger entry, field, and result type definitions
 // used by the binary codec for serialization.
 // Reference: rippled ServerInfo.cpp doServerDefinitions.
-type ServerDefinitionsMethod struct{ BaseHandler }
+type ServerDefinitionsMethod struct{ baseHandler }
 
 // The definitions document is static, so the response body and its hash are
 // computed once and shared across calls, mirroring rippled's

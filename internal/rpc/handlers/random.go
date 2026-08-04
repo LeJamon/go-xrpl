@@ -9,10 +9,10 @@ import (
 	"github.com/LeJamon/go-xrpl/internal/rpc/types"
 )
 
-// RandomMethod handles the random RPC method
-type RandomMethod struct{ BaseHandler }
+// randomMethod handles the random RPC method
+type randomMethod struct{ baseHandler }
 
-func (m *RandomMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (any, *types.RpcError) {
+func (m *randomMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (any, *types.RpcError) {
 	// Generate 256 bits (32 bytes) of cryptographically secure random data
 	randomBytes := make([]byte, 32)
 	_, err := rand.Read(randomBytes)

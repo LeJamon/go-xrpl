@@ -66,23 +66,23 @@ func ledgerAmendmentRules(l types.LedgerReader) (*amendment.Rules, error) {
 	return amendment.EmptyRules(), nil
 }
 
-// RequireLedgerService checks that the ledger service is available
+// requireLedgerService checks that the ledger service is available
 // on the request's service container. Returns an RpcError if not.
-func RequireLedgerService(services *types.ServiceContainer) *types.RpcError {
+func requireLedgerService(services *types.ServiceContainer) *types.RpcError {
 	if services == nil || services.Ledger == nil {
 		return rpcInternalInvariantError("rpc: ledger service unavailable")
 	}
 	return nil
 }
 
-// RequireTxTables gates tx-history-backed handlers (tx, account_tx,
+// requireTxTables gates tx-history-backed handlers (tx, account_tx,
 // tx_history) the way rippled does: config().useTxTables() is checked
 // before any parameter validation, so a node without a transaction
 // database answers notEnabled even for otherwise-malformed requests.
 // Services that don't implement types.TxTablesProvider are assumed to
 // have history available.
-func RequireTxTables(services *types.ServiceContainer) *types.RpcError {
-	if err := RequireLedgerService(services); err != nil {
+func requireTxTables(services *types.ServiceContainer) *types.RpcError {
+	if err := requireLedgerService(services); err != nil {
 		return err
 	}
 	if p, ok := services.Ledger.(types.TxTablesProvider); ok && !p.UseTxTables() {
@@ -124,10 +124,10 @@ func RequireNotBusyClient(ctx *types.RpcContext) *types.RpcError {
 	return nil
 }
 
-// RequireNotBusyBookOffers is the book_offers-specific gate matching
+// requireNotBusyBookOffers is the book_offers-specific gate matching
 // rippled BookOffers.cpp:42-43 (`getJobCountGE(jtCLIENT) > 200`). Fires
 // in addition to the generic dispatcher-level gate.
-func RequireNotBusyBookOffers(ctx *types.RpcContext) *types.RpcError {
+func requireNotBusyBookOffers(ctx *types.RpcContext) *types.RpcError {
 	s := shedCheck(ctx)
 	if s == nil {
 		return nil
@@ -138,7 +138,7 @@ func RequireNotBusyBookOffers(ctx *types.RpcContext) *types.RpcError {
 	return nil
 }
 
-// AcquirePathfind admits a path-finding request, mirroring the
+// acquirePathfind admits a path-finding request, mirroring the
 // LegacyPathFind ctor at rippled LegacyPathFind.cpp:30-60:
 //
 //  1. Admin/unlimited callers bypass the load and concurrency gates but still
@@ -150,7 +150,7 @@ func RequireNotBusyBookOffers(ctx *types.RpcContext) *types.RpcError {
 // Returns a release func the caller MUST invoke (typically via defer)
 // when admitted; release is nil on shed. Local fee pressure is checked even
 // when the in-flight client counter is not wired.
-func AcquirePathfind(ctx *types.RpcContext) (release func(), rpcErr *types.RpcError) {
+func acquirePathfind(ctx *types.RpcContext) (release func(), rpcErr *types.RpcError) {
 	if ctx == nil || ctx.Services == nil {
 		return func() {}, nil
 	}
@@ -178,9 +178,9 @@ func AcquirePathfind(ctx *types.RpcContext) (release func(), rpcErr *types.RpcEr
 	return s.ReleasePathfind, nil
 }
 
-// WaitPathfind queues a default-ledger request behind the bounded path-finding
+// waitPathfind queues a default-ledger request behind the bounded path-finding
 // workers until a slot is available or the request is canceled.
-func WaitPathfind(ctx *types.RpcContext) (release func(), rpcErr *types.RpcError) {
+func waitPathfind(ctx *types.RpcContext) (release func(), rpcErr *types.RpcError) {
 	if ctx == nil || ctx.Services == nil || ctx.Services.ClientLoad == nil {
 		return func() {}, nil
 	}
@@ -190,9 +190,9 @@ func WaitPathfind(ctx *types.RpcContext) (release func(), rpcErr *types.RpcError
 	return ctx.Services.ClientLoad.ReleasePathfind, nil
 }
 
-// ParseParams unmarshals JSON params into dest, returning an RpcError on failure.
+// parseParams unmarshals JSON params into dest, returning an RpcError on failure.
 // If params is nil, dest is left untouched (zero value).
-func ParseParams(params json.RawMessage, dest any) *types.RpcError {
+func parseParams(params json.RawMessage, dest any) *types.RpcError {
 	if params == nil {
 		return nil
 	}
@@ -366,9 +366,9 @@ func validateJsonCppIntegerRange(params json.RawMessage) *types.RpcError {
 	return nil
 }
 
-// ValidateAccount validates a base58-encoded XRPL account address.
+// validateClassicAccount validates a base58-encoded XRPL account address.
 // Returns rpcACT_MALFORMED (code 35) if malformed, matching rippled behavior.
-func ValidateAccount(account string) *types.RpcError {
+func validateClassicAccount(account string) *types.RpcError {
 	if account == "" {
 		return types.RpcErrorActMalformed("Account malformed.")
 	}
@@ -405,7 +405,7 @@ func preflightAccountPage(
 	ledgerIndex := strconv.FormatUint(uint64(reader.Sequence()), 10)
 	ledgerFields := make(map[string]any, 3)
 	fillResolvedLedgerFields(ledgerFields, reader, resolved.Validated)
-	if rpcErr := ValidateAccount(account); rpcErr != nil {
+	if rpcErr := validateClassicAccount(account); rpcErr != nil {
 		if includeLedgerFieldsOnError {
 			rpcErr = rpcErr.WithExtra(ledgerFields)
 		}
@@ -569,7 +569,7 @@ func resolveLedgerSelection(
 	ctx *types.RpcContext,
 	selection ledgerselector.Selector,
 ) (ledgerselector.Result[types.LedgerReader], *types.RpcError) {
-	if err := RequireLedgerService(ctx.Services); err != nil {
+	if err := requireLedgerService(ctx.Services); err != nil {
 		return ledgerselector.Result[types.LedgerReader]{}, err
 	}
 	svc := ctx.Services.Ledger
@@ -628,8 +628,8 @@ func resolveLedgerSelection(
 	return resolved, nil
 }
 
-// LookupLedger resolves a request's ledger selector, defaulting to current.
-func LookupLedger(ctx *types.RpcContext, input any) (types.LedgerReader, bool, *types.RpcError) {
+// lookupLedger resolves a request's ledger selector, defaulting to current.
+func lookupLedger(ctx *types.RpcContext, input any) (types.LedgerReader, bool, *types.RpcError) {
 	selection, rpcErr := parseLedgerSelectorInput(input, ledgerselector.Current())
 	if rpcErr != nil {
 		return nil, false, rpcErr
@@ -750,37 +750,37 @@ func FormatHash(b []byte) string {
 	return strings.ToUpper(hex.EncodeToString(b))
 }
 
-// LimitRange defines the min, default, and max values for a paginated limit parameter.
+// limitRange defines the min, default, and max values for a paginated limit parameter.
 // Matches rippled's Tuning::LimitRange struct.
-type LimitRange struct {
+type limitRange struct {
 	Min, Default, Max uint32
 }
 
 // Tuning constants matching rippled/src/xrpld/rpc/detail/Tuning.h
 var (
-	LimitAccountLines    = LimitRange{10, 200, 400}
-	LimitAccountChannels = LimitRange{10, 200, 400}
-	LimitAccountObjects  = LimitRange{10, 200, 400}
-	LimitAccountOffers   = LimitRange{10, 200, 400}
-	LimitAccountTx       = LimitRange{10, 200, 400}
-	LimitBookOffers      = LimitRange{1, 60, 100}
-	LimitNoRippleCheck   = LimitRange{10, 300, 400}
-	LimitAccountNFTokens = LimitRange{20, 100, 400}
-	LimitNFTOffers       = LimitRange{50, 250, 500}
+	limitAccountLines    = limitRange{10, 200, 400}
+	limitAccountChannels = limitRange{10, 200, 400}
+	limitAccountObjects  = limitRange{10, 200, 400}
+	limitAccountOffers   = limitRange{10, 200, 400}
+	limitAccountTx       = limitRange{10, 200, 400}
+	limitBookOffers      = limitRange{1, 60, 100}
+	limitNoRippleCheck   = limitRange{10, 300, 400}
+	limitAccountNFTokens = limitRange{20, 100, 400}
+	limitNFTOffers       = limitRange{50, 250, 500}
 
 	// LedgerData limits from rippled Tuning.h: pageLength(isBinary)
 	// Binary mode: binaryPageLength = 2048
 	// JSON mode: jsonPageLength = 256
-	LimitLedgerData       = LimitRange{16, 256, 256}
-	LimitLedgerDataBinary = LimitRange{16, 2048, 2048}
+	limitLedgerData       = limitRange{16, 256, 256}
+	limitLedgerDataBinary = limitRange{16, 2048, 2048}
 )
 
-// ReadLimitField mirrors rippled's readLimitField (RPCHelpers.cpp): it reads the
+// readLimitField mirrors rippled's readLimitField (RPCHelpers.cpp): it reads the
 // "limit" field from the raw request params. An absent or null limit yields the
 // range default; a non-integer or negative value is expected_field_error; an
 // explicit 0 is invalid_field_error — rejected for every role, before clamping;
 // otherwise the value is clamped to [Min, Max] for non-unlimited roles.
-func ReadLimitField(params json.RawMessage, r LimitRange, unlimited bool) (uint32, *types.RpcError) {
+func readLimitField(params json.RawMessage, r limitRange, unlimited bool) (uint32, *types.RpcError) {
 	raw, present := rawLimitField(params)
 	if !present || isJSONNull(raw) {
 		return r.Default, nil
@@ -827,25 +827,25 @@ func arraySizeRpcError(err error) *types.RpcError {
 	return nil
 }
 
-// BaseHandler provides default implementations of RequiredRole (RoleGuest),
+// baseHandler provides default implementations of RequiredRole (RoleGuest),
 // SupportedApiVersions ([1,2,3]), and RequiredCondition (NoCondition).
 // Embed this in handler structs to avoid repeating these 3 boilerplate methods.
-type BaseHandler struct{}
+type baseHandler struct{}
 
-func (BaseHandler) RequiredRole() types.Role { return types.RoleGuest }
-func (BaseHandler) SupportedApiVersions() []int {
+func (baseHandler) RequiredRole() types.Role { return types.RoleGuest }
+func (baseHandler) SupportedApiVersions() []int {
 	return []int{types.ApiVersion1, types.ApiVersion2, types.ApiVersion3}
 }
-func (BaseHandler) RequiredCondition() types.Condition { return types.NoCondition }
+func (baseHandler) RequiredCondition() types.Condition { return types.NoCondition }
 
-// AdminHandler is like BaseHandler but defaults to RoleAdmin.
-type AdminHandler struct{}
+// adminHandler is like baseHandler but defaults to RoleAdmin.
+type adminHandler struct{}
 
-func (AdminHandler) RequiredRole() types.Role { return types.RoleAdmin }
-func (AdminHandler) SupportedApiVersions() []int {
+func (adminHandler) RequiredRole() types.Role { return types.RoleAdmin }
+func (adminHandler) SupportedApiVersions() []int {
 	return []int{types.ApiVersion1, types.ApiVersion2, types.ApiVersion3}
 }
-func (AdminHandler) RequiredCondition() types.Condition { return types.NoCondition }
+func (adminHandler) RequiredCondition() types.Condition { return types.NoCondition }
 
 func decodeBinaryObject(data []byte) (map[string]any, error) {
 	return binarycodec.Decode(hex.EncodeToString(data))

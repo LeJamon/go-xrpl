@@ -18,7 +18,7 @@ import (
 	"github.com/LeJamon/go-xrpl/keylet"
 )
 
-type GetAggregatePriceMethod struct{ BaseHandler }
+type GetAggregatePriceMethod struct{ baseHandler }
 
 type aggregatePriceAmount struct {
 	number state.XRPLNumber
@@ -94,7 +94,7 @@ func (m *GetAggregatePriceMethod) Handle(ctx *types.RpcContext, params json.RawM
 		return nil, types.RpcErrorInvalidParams("Invalid parameters.")
 	}
 
-	if err := RequireLedgerService(ctx.Services); err != nil {
+	if err := requireLedgerService(ctx.Services); err != nil {
 		return nil, err
 	}
 	ledgerSpec, _, ledgerSpecErr := parseLedgerSpecifier(params)
@@ -105,7 +105,7 @@ func (m *GetAggregatePriceMethod) Handle(ctx *types.RpcContext, params json.RawM
 	if selectorErr != nil {
 		return nil, selectorErr
 	}
-	targetLedger, lookupValidated, lookupErr := LookupLedger(ctx, ledgerSpec)
+	targetLedger, lookupValidated, lookupErr := lookupLedger(ctx, ledgerSpec)
 	if lookupErr != nil {
 		return nil, lookupErr
 	}

@@ -15,7 +15,7 @@ import (
 // account in both the closed ("accepted") and current ledgers, grouped into
 // offers and trust lines (ripple_lines), matching
 // NetworkOPsImp::getOwnerInfo.
-type OwnerInfoMethod struct{ BaseHandler }
+type OwnerInfoMethod struct{ baseHandler }
 
 func (m *OwnerInfoMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (any, *types.RpcError) {
 	var request struct {
@@ -53,7 +53,7 @@ func (m *OwnerInfoMethod) Handle(ctx *types.RpcContext, params json.RawMessage) 
 		}, nil
 	}
 
-	if err := RequireLedgerService(ctx.Services); err != nil {
+	if err := requireLedgerService(ctx.Services); err != nil {
 		return nil, err
 	}
 	walker, ok := ctx.Services.Ledger.(types.OwnerDirectoryReader)

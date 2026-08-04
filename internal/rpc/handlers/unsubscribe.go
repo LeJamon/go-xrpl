@@ -13,7 +13,7 @@ import (
 // entry is dropped once no stream subscriptions remain. The gating mirrors
 // the subscribe path: no url → rpcINVALID_PARAMS ("Must be a JSON-RPC
 // call." branch), url from a non-admin → rpcNO_PERMISSION.
-type UnsubscribeMethod struct{ BaseHandler }
+type UnsubscribeMethod struct{ baseHandler }
 
 func (m *UnsubscribeMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (any, *types.RpcError) {
 	request, svc, rpcErr := urlSubscriptionRequest(ctx, params, "unsubscribe")

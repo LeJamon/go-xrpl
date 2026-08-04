@@ -3,84 +3,85 @@
 # RPC methods
 
 The JSON-RPC and WebSocket methods registered by the server, generated from
-the method registry (`internal/rpc/handlers`). **Role** is the minimum role a
-caller needs; **API versions** are the API versions each method supports.
+the method descriptors (`internal/rpc/handlers`). **Role** is the minimum role a
+caller needs; **Condition** is the dispatch precondition; **API versions** are
+the API versions each method supports.
 
 Total: 74 methods.
 
-| Method | Role | API versions |
-|--------|------|--------------|
-| `account_channels` | guest | 1, 2, 3 |
-| `account_currencies` | guest | 1, 2, 3 |
-| `account_info` | guest | 1, 2, 3 |
-| `account_lines` | guest | 1, 2, 3 |
-| `account_nfts` | guest | 1, 2, 3 |
-| `account_objects` | guest | 1, 2, 3 |
-| `account_offers` | guest | 1, 2, 3 |
-| `account_tx` | guest | 1, 2, 3 |
-| `amm_info` | guest | 1, 2, 3 |
-| `blacklist` | admin | 1, 2, 3 |
-| `book_changes` | guest | 1, 2, 3 |
-| `book_offers` | guest | 1, 2, 3 |
-| `can_delete` | admin | 1, 2, 3 |
-| `channel_authorize` | user | 1, 2, 3 |
-| `channel_verify` | guest | 1, 2, 3 |
-| `connect` | admin | 1, 2, 3 |
-| `consensus_info` | admin | 1, 2, 3 |
-| `deposit_authorized` | guest | 1, 2, 3 |
-| `feature` | guest | 1, 2, 3 |
-| `fee` | guest | 1, 2, 3 |
-| `fetch_info` | admin | 1, 2, 3 |
-| `gateway_balances` | guest | 1, 2, 3 |
-| `get_aggregate_price` | guest | 1, 2, 3 |
-| `get_counts` | admin | 1, 2, 3 |
-| `json` | guest | 1, 2, 3 |
-| `ledger` | guest | 1, 2, 3 |
-| `ledger_accept` | admin | 1, 2, 3 |
-| `ledger_cleaner` | admin | 1, 2, 3 |
-| `ledger_closed` | guest | 1, 2, 3 |
-| `ledger_current` | guest | 1, 2, 3 |
-| `ledger_data` | guest | 1, 2, 3 |
-| `ledger_entry` | guest | 1, 2, 3 |
-| `ledger_header` | guest | 1 |
-| `ledger_range` | admin | 1, 2, 3 |
-| `ledger_request` | admin | 1, 2, 3 |
-| `log_level` | admin | 1, 2, 3 |
-| `logrotate` | admin | 1, 2, 3 |
-| `manifest` | user | 1, 2, 3 |
-| `nft_buy_offers` | guest | 1, 2, 3 |
-| `nft_sell_offers` | guest | 1, 2, 3 |
-| `noripple_check` | guest | 1, 2, 3 |
-| `owner_info` | guest | 1, 2, 3 |
-| `path_find` | guest | 1, 2, 3 |
-| `peer_reservations_add` | admin | 1, 2, 3 |
-| `peer_reservations_del` | admin | 1, 2, 3 |
-| `peer_reservations_list` | admin | 1, 2, 3 |
-| `peers` | admin | 1, 2, 3 |
-| `ping` | guest | 1, 2, 3 |
-| `print` | admin | 1, 2, 3 |
-| `random` | guest | 1, 2, 3 |
-| `ripple_path_find` | guest | 1, 2, 3 |
-| `server_definitions` | guest | 1, 2, 3 |
-| `server_info` | guest | 1, 2, 3 |
-| `server_state` | guest | 1, 2, 3 |
-| `sign` | user | 1, 2, 3 |
-| `sign_for` | user | 1, 2, 3 |
-| `simulate` | guest | 1, 2, 3 |
-| `stop` | admin | 1, 2, 3 |
-| `submit` | user | 1, 2, 3 |
-| `submit_multisigned` | user | 1, 2, 3 |
-| `subscribe` | guest | 1, 2, 3 |
-| `transaction_entry` | user | 1, 2, 3 |
-| `tx` | user | 1, 2, 3 |
-| `tx_history` | user | 1 |
-| `tx_reduce_relay` | user | 1, 2, 3 |
-| `unl_list` | admin | 1, 2, 3 |
-| `unsubscribe` | guest | 1, 2, 3 |
-| `validation_create` | admin | 1, 2, 3 |
-| `validator_info` | admin | 1, 2, 3 |
-| `validator_list_sites` | admin | 1, 2, 3 |
-| `validators` | admin | 1, 2, 3 |
-| `vault_info` | guest | 1, 2, 3 |
-| `version` | guest | 1, 2, 3 |
-| `wallet_propose` | admin | 1, 2, 3 |
+| Method | Role | Condition | API versions |
+|--------|------|-----------|--------------|
+| `account_channels` | guest | none | 1, 2, 3 |
+| `account_currencies` | guest | none | 1, 2, 3 |
+| `account_info` | guest | none | 1, 2, 3 |
+| `account_lines` | guest | none | 1, 2, 3 |
+| `account_nfts` | guest | none | 1, 2, 3 |
+| `account_objects` | guest | none | 1, 2, 3 |
+| `account_offers` | guest | none | 1, 2, 3 |
+| `account_tx` | guest | none | 1, 2, 3 |
+| `amm_info` | guest | none | 1, 2, 3 |
+| `blacklist` | admin | none | 1, 2, 3 |
+| `book_changes` | guest | none | 1, 2, 3 |
+| `book_offers` | guest | none | 1, 2, 3 |
+| `can_delete` | admin | none | 1, 2, 3 |
+| `channel_authorize` | user | none | 1, 2, 3 |
+| `channel_verify` | guest | none | 1, 2, 3 |
+| `connect` | admin | none | 1, 2, 3 |
+| `consensus_info` | admin | none | 1, 2, 3 |
+| `deposit_authorized` | guest | current ledger | 1, 2, 3 |
+| `feature` | guest | none | 1, 2, 3 |
+| `fee` | guest | current ledger | 1, 2, 3 |
+| `fetch_info` | admin | none | 1, 2, 3 |
+| `gateway_balances` | guest | none | 1, 2, 3 |
+| `get_aggregate_price` | guest | current ledger | 1, 2, 3 |
+| `get_counts` | admin | none | 1, 2, 3 |
+| `json` | guest | none | 1, 2, 3 |
+| `ledger` | guest | none | 1, 2, 3 |
+| `ledger_accept` | admin | current ledger | 1, 2, 3 |
+| `ledger_cleaner` | admin | network | 1, 2, 3 |
+| `ledger_closed` | guest | closed ledger | 1, 2, 3 |
+| `ledger_current` | guest | current ledger | 1, 2, 3 |
+| `ledger_data` | guest | none | 1, 2, 3 |
+| `ledger_entry` | guest | none | 1, 2, 3 |
+| `ledger_header` | guest | none | 1 |
+| `ledger_range` | admin | none | 1, 2, 3 |
+| `ledger_request` | admin | none | 1, 2, 3 |
+| `log_level` | admin | none | 1, 2, 3 |
+| `logrotate` | admin | none | 1, 2, 3 |
+| `manifest` | user | none | 1, 2, 3 |
+| `nft_buy_offers` | guest | none | 1, 2, 3 |
+| `nft_sell_offers` | guest | none | 1, 2, 3 |
+| `noripple_check` | guest | none | 1, 2, 3 |
+| `owner_info` | guest | current ledger | 1, 2, 3 |
+| `path_find` | guest | current ledger | 1, 2, 3 |
+| `peer_reservations_add` | admin | none | 1, 2, 3 |
+| `peer_reservations_del` | admin | none | 1, 2, 3 |
+| `peer_reservations_list` | admin | none | 1, 2, 3 |
+| `peers` | admin | none | 1, 2, 3 |
+| `ping` | guest | none | 1, 2, 3 |
+| `print` | admin | none | 1, 2, 3 |
+| `random` | guest | none | 1, 2, 3 |
+| `ripple_path_find` | guest | none | 1, 2, 3 |
+| `server_definitions` | guest | none | 1, 2, 3 |
+| `server_info` | guest | none | 1, 2, 3 |
+| `server_state` | guest | none | 1, 2, 3 |
+| `sign` | user | none | 1, 2, 3 |
+| `sign_for` | user | none | 1, 2, 3 |
+| `simulate` | guest | current ledger | 1, 2, 3 |
+| `stop` | admin | none | 1, 2, 3 |
+| `submit` | user | current ledger | 1, 2, 3 |
+| `submit_multisigned` | user | current ledger | 1, 2, 3 |
+| `subscribe` | guest | none | 1, 2, 3 |
+| `transaction_entry` | user | none | 1, 2, 3 |
+| `tx` | user | network | 1, 2, 3 |
+| `tx_history` | user | none | 1 |
+| `tx_reduce_relay` | user | none | 1, 2, 3 |
+| `unl_list` | admin | none | 1, 2, 3 |
+| `unsubscribe` | guest | none | 1, 2, 3 |
+| `validation_create` | admin | none | 1, 2, 3 |
+| `validator_info` | admin | none | 1, 2, 3 |
+| `validator_list_sites` | admin | none | 1, 2, 3 |
+| `validators` | admin | none | 1, 2, 3 |
+| `vault_info` | guest | none | 1, 2, 3 |
+| `version` | guest | none | 1, 2, 3 |
+| `wallet_propose` | admin | none | 1, 2, 3 |

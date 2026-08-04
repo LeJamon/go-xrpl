@@ -8,7 +8,7 @@ import (
 )
 
 // LedgerRangeMethod handles the ledger_range RPC method
-type LedgerRangeMethod struct{ AdminHandler }
+type LedgerRangeMethod struct{ adminHandler }
 
 func (m *LedgerRangeMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (any, *types.RpcError) {
 	// Parse parameters
@@ -17,7 +17,7 @@ func (m *LedgerRangeMethod) Handle(ctx *types.RpcContext, params json.RawMessage
 		StopLedger  uint32 `json:"stop_ledger"`
 	}
 
-	if err := ParseParams(params, &request); err != nil {
+	if err := parseParams(params, &request); err != nil {
 		return nil, err
 	}
 
@@ -35,7 +35,7 @@ func (m *LedgerRangeMethod) Handle(ctx *types.RpcContext, params json.RawMessage
 		return nil, types.RpcErrorInvalidParams("Ledger range too large (max 1000 ledgers)")
 	}
 
-	if err := RequireLedgerService(ctx.Services); err != nil {
+	if err := requireLedgerService(ctx.Services); err != nil {
 		return nil, err
 	}
 

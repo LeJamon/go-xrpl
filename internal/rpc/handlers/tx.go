@@ -19,12 +19,12 @@ import (
 )
 
 // TxMethod handles the tx RPC method
-type TxMethod struct{ BaseHandler }
+type TxMethod struct{ baseHandler }
 
 func (m *TxMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (any, *types.RpcError) {
 	// notEnabled takes precedence over any parameter validation, matching
 	// rippled's useTxTables() gate as the first statement of doTxJson.
-	if err := RequireTxTables(ctx.Services); err != nil {
+	if err := requireTxTables(ctx.Services); err != nil {
 		return nil, err
 	}
 

@@ -104,10 +104,10 @@ func formatServerTime(t time.Time) string {
 
 // ServerInfoMethod handles the server_info RPC method.
 // This is the "human-readable" variant (rippled human=true).
-type ServerInfoMethod struct{ BaseHandler }
+type ServerInfoMethod struct{ baseHandler }
 
 func (m *ServerInfoMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (any, *types.RpcError) {
-	if err := RequireLedgerService(ctx.Services); err != nil {
+	if err := requireLedgerService(ctx.Services); err != nil {
 		return nil, err
 	}
 

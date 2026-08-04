@@ -58,7 +58,7 @@ func ledgerInfoJSON(l types.LedgerReader) map[string]any {
 // flight it returns the bare acquisition snapshot for the target ledger, or
 // lgrNotFound + acquiring when a reference ledger is being fetched first to
 // resolve a deep sequence's hash.
-type LedgerRequestMethod struct{ AdminHandler }
+type LedgerRequestMethod struct{ adminHandler }
 
 func (m *LedgerRequestMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (any, *types.RpcError) {
 	var request struct {
@@ -71,7 +71,7 @@ func (m *LedgerRequestMethod) Handle(ctx *types.RpcContext, params json.RawMessa
 		}
 	}
 
-	if err := RequireLedgerService(ctx.Services); err != nil {
+	if err := requireLedgerService(ctx.Services); err != nil {
 		return nil, err
 	}
 

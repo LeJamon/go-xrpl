@@ -317,7 +317,7 @@ func checkPayment(txMap map[string]any, params json.RawMessage, doPath bool, rpc
 		if rpcCtx == nil || rpcCtx.Services == nil || rpcCtx.Services.Ledger == nil {
 			return rpcInternalInvariantError("payment: ledger service unavailable for path construction")
 		}
-		release, rpcErr := AcquirePathfind(rpcCtx)
+		release, rpcErr := acquirePathfind(rpcCtx)
 		if rpcErr != nil {
 			return rpcErr
 		}

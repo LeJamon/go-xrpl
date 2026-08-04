@@ -18,20 +18,20 @@ import (
 // Reference: rippled/src/xrpld/rpc/handlers/LedgerHeader.cpp
 // doLedgerHeader calls lookupLedger, serializes the header via addRaw,
 // and returns both ledger_data (binary hex) and a ledger JSON object.
-type LedgerHeaderMethod struct{ BaseHandler }
+type LedgerHeaderMethod struct{ baseHandler }
 
 func (m *LedgerHeaderMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (any, *types.RpcError) {
 	var request struct {
 	}
 
-	if err := ParseParams(params, &request); err != nil {
+	if err := parseParams(params, &request); err != nil {
 		return nil, err
 	}
 
 	// Resolve the target ledger through the shared lookup (rippled
 	// RPC::lookupLedger): defaults to current, threads ledger_hash, and emits
 	// rippled's ledgerHashMalformed / ledgerIndexMalformed / ledgerNotFound.
-	targetLedger, validated, lerr := LookupLedger(ctx, params)
+	targetLedger, validated, lerr := lookupLedger(ctx, params)
 	if lerr != nil {
 		return nil, lerr
 	}

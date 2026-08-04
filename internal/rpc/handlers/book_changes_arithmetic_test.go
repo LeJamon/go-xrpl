@@ -56,7 +56,7 @@ func TestComputeBookChangesCanonicalArithmeticAndRendering(t *testing.T) {
 
 			ledger := mptBookChangesLedger{blob: blob}
 			result := ComputeBookChanges(ledger)
-			predecoded := ComputeBookChangesFromTransactions(ledger, []BookChangesTransaction{{
+			predecoded := computeBookChangesFromTransactions(ledger, []BookChangesTransaction{{
 				Transaction: transaction,
 				Metadata:    metadata,
 			}})

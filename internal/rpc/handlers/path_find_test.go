@@ -22,8 +22,8 @@ func TestPathFindCapabilityPrecedesValidation(t *testing.T) {
 		name   string
 		handle func(*types.RpcContext, json.RawMessage) (any, *types.RpcError)
 	}{
-		{name: "path_find", handle: (&PathFindMethod{}).Handle},
-		{name: "ripple_path_find", handle: (&RipplePathFindMethod{}).Handle},
+		{name: "path_find", handle: (&pathFindMethod{}).Handle},
+		{name: "ripple_path_find", handle: (&ripplePathFindMethod{}).Handle},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			_, rpcErr := test.handle(pathFindTestContext(0), json.RawMessage("{not json"))
@@ -35,7 +35,7 @@ func TestPathFindCapabilityPrecedesValidation(t *testing.T) {
 }
 
 func TestRipplePathFindRequiredCondition(t *testing.T) {
-	if got := (&RipplePathFindMethod{}).RequiredCondition(); got != types.NoCondition {
+	if got := (&ripplePathFindMethod{}).RequiredCondition(); got != types.NoCondition {
 		t.Fatalf("RequiredCondition = %v, want NoCondition", got)
 	}
 }
@@ -53,7 +53,7 @@ func TestPathFindPlainValidationAndNoEvents(t *testing.T) {
 		{name: "unknown", params: `{"subcommand":"future"}`, want: "noEvents"},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			_, rpcErr := (&PathFindMethod{}).Handle(pathFindTestContext(3), json.RawMessage(test.params))
+			_, rpcErr := (&pathFindMethod{}).Handle(pathFindTestContext(3), json.RawMessage(test.params))
 			if rpcErr == nil || rpcErr.ErrorString != test.want {
 				t.Fatalf("path_find error = %v, want %s", rpcErr, test.want)
 			}
@@ -138,7 +138,7 @@ func TestRipplePathFindStaleDefaultUsesApiVersionError(t *testing.T) {
 					Capabilities: types.RPCCapabilities{PathSearchMax: 3},
 				},
 			}
-			_, rpcErr := (&RipplePathFindMethod{}).Handle(ctx, json.RawMessage(`{}`))
+			_, rpcErr := (&ripplePathFindMethod{}).Handle(ctx, json.RawMessage(`{}`))
 			if rpcErr == nil || rpcErr.ErrorString != test.want {
 				t.Fatalf("stale default error = %v, want %s", rpcErr, test.want)
 			}
@@ -158,7 +158,7 @@ func TestRipplePathFindExplicitHistoricalBypassesStaleDefaultGate(t *testing.T) 
 			ClientLoad:   types.NewClientLoadShedder(),
 		},
 	}
-	_, rpcErr := (&RipplePathFindMethod{}).Handle(ctx, json.RawMessage(`{"ledger_index":7}`))
+	_, rpcErr := (&ripplePathFindMethod{}).Handle(ctx, json.RawMessage(`{"ledger_index":7}`))
 	if rpcErr == nil || rpcErr.ErrorString != "srcActMissing" {
 		t.Fatalf("explicit historical error = %v, want srcActMissing after lookup", rpcErr)
 	}
@@ -195,7 +195,7 @@ func TestRipplePathFindExistsErrorsAreInternal(t *testing.T) {
 				Capabilities: types.RPCCapabilities{PathSearchMax: 3},
 			}}
 			params := json.RawMessage(`{"source_account":"` + account + `","destination_account":"` + account + `","destination_amount":"10"}`)
-			_, rpcErr := (&RipplePathFindMethod{}).Handle(ctx, params)
+			_, rpcErr := (&ripplePathFindMethod{}).Handle(ctx, params)
 			if rpcErr == nil || rpcErr.ErrorString != "internal" || rpcErr.Message != "Internal error." {
 				t.Fatalf("exists error = %v, want sanitized internal", rpcErr)
 			}

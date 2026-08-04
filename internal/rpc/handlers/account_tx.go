@@ -19,10 +19,10 @@ import (
 
 // AccountTxMethod handles account_tx: it pages through the transactions that
 // affected the account over a validated-ledger range, oldest- or newest-first.
-type AccountTxMethod struct{ BaseHandler }
+type AccountTxMethod struct{ baseHandler }
 
 func (m *AccountTxMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (any, *types.RpcError) {
-	if err := RequireTxTables(ctx.Services); err != nil {
+	if err := requireTxTables(ctx.Services); err != nil {
 		return nil, err
 	}
 	if err := validateJsonCppIntegerRange(params); err != nil {
@@ -49,7 +49,7 @@ func (m *AccountTxMethod) Handle(ctx *types.RpcContext, params json.RawMessage) 
 		}
 	}
 
-	limit, limitErr := ReadLimitField(params, LimitAccountTx, ctx.Unlimited)
+	limit, limitErr := readLimitField(params, limitAccountTx, ctx.Unlimited)
 	if limitErr != nil {
 		return nil, limitErr
 	}
@@ -398,7 +398,7 @@ func resolveAccountTxLedgerSelection(ctx *types.RpcContext, selection accountTxL
 	if selection.spec == nil {
 		return int64(validatedMin), int64(validatedMax), nil
 	}
-	ledger, validated, err := LookupLedger(ctx, selection.spec)
+	ledger, validated, err := lookupLedger(ctx, selection.spec)
 	if err != nil {
 		return 0, 0, err
 	}

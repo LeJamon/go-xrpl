@@ -18,7 +18,7 @@ import (
 
 // SignForMethod handles the sign_for RPC method
 // This adds a signature to a transaction for multi-signing
-type SignForMethod struct{ BaseHandler }
+type SignForMethod struct{ baseHandler }
 
 func (m *SignForMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (result any, rpcErr *types.RpcError) {
 	if rpcErr := rejectDisabledSigning(ctx); rpcErr != nil {

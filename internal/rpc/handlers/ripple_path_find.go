@@ -46,11 +46,11 @@ type pathAlternativeJSON struct {
 	SourceAmount      any                  `json:"source_amount"`
 }
 
-// RipplePathFindMethod handles the ripple_path_find RPC method.
+// ripplePathFindMethod handles the ripple_path_find RPC method.
 // Reference: rippled RipplePathFind.cpp + PathRequest::parseJson/isValid.
-type RipplePathFindMethod struct{ BaseHandler }
+type ripplePathFindMethod struct{ baseHandler }
 
-func (m *RipplePathFindMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (any, *types.RpcError) {
+func (m *ripplePathFindMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (any, *types.RpcError) {
 	if rpcErr := RequirePathSearch(ctx); rpcErr != nil {
 		return nil, rpcErr
 	}
@@ -66,7 +66,7 @@ func (m *RipplePathFindMethod) Handle(ctx *types.RpcContext, params json.RawMess
 	if ledgerSpecErr != nil {
 		return nil, ledgerSpecErr
 	}
-	if rpcErr := RequireLedgerService(ctx.Services); rpcErr != nil {
+	if rpcErr := requireLedgerService(ctx.Services); rpcErr != nil {
 		return nil, rpcErr
 	}
 	var view types.LedgerStateView
@@ -80,7 +80,7 @@ func (m *RipplePathFindMethod) Handle(ctx *types.RpcContext, params json.RawMess
 		if rpcErr != nil {
 			return nil, rpcErr
 		}
-		release, rpcErr := AcquirePathfind(ctx)
+		release, rpcErr := acquirePathfind(ctx)
 		if rpcErr != nil {
 			return nil, rpcErr
 		}
@@ -195,7 +195,7 @@ func (m *RipplePathFindMethod) Handle(ctx *types.RpcContext, params json.RawMess
 
 	// Run pathfinding at the production search level (rippled PATH_SEARCH).
 	if !usesLookup {
-		release, rpcErr := WaitPathfind(ctx)
+		release, rpcErr := waitPathfind(ctx)
 		if rpcErr != nil {
 			return nil, rpcErr
 		}

@@ -15,7 +15,7 @@ import (
 // make_param_error("not a validator") — i.e. rpcINVALID_PARAMS with
 // the literal "not a validator" message. SDK tooling (xrpl.js, xrpl-py)
 // pattern-matches on that exact wire shape.
-type ValidatorInfoMethod struct{ AdminHandler }
+type ValidatorInfoMethod struct{ adminHandler }
 
 type validatorInfoResponse struct {
 	MasterKey    string `json:"master_key,omitempty"`

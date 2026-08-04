@@ -41,7 +41,7 @@ func TestRipplePathFindRejectsMPTWithZeroIssuer(t *testing.T) {
 
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			_, rpcErr := (&RipplePathFindMethod{}).Handle(&types.RpcContext{
+			_, rpcErr := (&ripplePathFindMethod{}).Handle(&types.RpcContext{
 				Services: &types.ServiceContainer{
 					Ledger:       &pathFindTestLedger{info: freshPathFindInfo(), view: &pathFindTestView{}},
 					Capabilities: types.RPCCapabilities{PathSearchMax: 3},
