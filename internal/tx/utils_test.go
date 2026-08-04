@@ -1,11 +1,48 @@
 package tx
 
 import (
+	"math"
 	"testing"
 
 	"github.com/LeJamon/go-xrpl/internal/ledger/state"
 	"github.com/LeJamon/go-xrpl/keylet"
 )
+
+func TestAccountFundsNoFreezeStrictRejectsReserveOverflow(t *testing.T) {
+	var accountID [20]byte
+	accountID[0] = 1
+	account, err := state.EncodeAccountID(accountID)
+	if err != nil {
+		t.Fatalf("EncodeAccountID: %v", err)
+	}
+	data, err := state.SerializeAccountRoot(&state.AccountRoot{
+		Account:    account,
+		Balance:    1_000_000,
+		OwnerCount: math.MaxUint32,
+	})
+	if err != nil {
+		t.Fatalf("SerializeAccountRoot: %v", err)
+	}
+	view := newMockBaseView()
+	view.data[keylet.Account(accountID).Key] = data
+
+	if _, err := AccountFundsNoFreezeStrict(view, accountID, NewXRPAmount(1), 0, math.MaxUint64); err == nil {
+		t.Fatal("AccountFundsNoFreezeStrict multiplication overflow error = nil")
+	}
+
+	data, err = state.SerializeAccountRoot(&state.AccountRoot{
+		Account:    account,
+		Balance:    1_000_000,
+		OwnerCount: 1,
+	})
+	if err != nil {
+		t.Fatalf("SerializeAccountRoot: %v", err)
+	}
+	view.data[keylet.Account(accountID).Key] = data
+	if _, err := AccountFundsNoFreezeStrict(view, accountID, NewXRPAmount(1), math.MaxUint64, 1); err == nil {
+		t.Fatal("AccountFundsNoFreezeStrict addition overflow error = nil")
+	}
+}
 
 // TestLPTokenFrozenForIssuer_AMMUnresolvable covers the corrupt-ledger arm: an
 // issuer AccountRoot carrying sfAMMID whose referenced AMM SLE is absent. rippled

@@ -24,10 +24,14 @@ import (
 // ownerFundsView serves a single AccountRoot SLE so tx.AccountFunds can compute
 // XRP liquidity; every other read is empty.
 type ownerFundsView struct {
-	entries map[keylet.Keylet][]byte
+	entries    map[keylet.Keylet][]byte
+	readErrors map[keylet.Keylet]error
 }
 
 func (v *ownerFundsView) Read(k keylet.Keylet) ([]byte, error) {
+	if err := v.readErrors[k]; err != nil {
+		return nil, err
+	}
 	return v.entries[k], nil
 }
 func (v *ownerFundsView) Exists(keylet.Keylet) (bool, error)                 { return false, nil }
@@ -331,6 +335,75 @@ func TestLedgerOwnerFundsUsesTargetLedgerReservesIncludingZero(t *testing.T) {
 	require.Nil(t, rpcErr)
 	entry = resultToMap(t, result)["ledger"].(map[string]any)["transactions"].([]any)[0].(map[string]any)
 	assert.Equal(t, "1000000000", entry["owner_funds"])
+
+	partialFeeData, err := binarycodec.EncodeBytes(map[string]any{
+		"LedgerEntryType":       "FeeSettings",
+		"Flags":                 uint32(0),
+		"ReserveIncrementDrops": "3000000",
+	})
+	require.NoError(t, err)
+	view.entries[keylet.Fees()] = partialFeeData
+	result, rpcErr = (&handlers.LedgerMethod{}).Handle(ctx, paramsJSON)
+	require.Nil(t, rpcErr)
+	entry = resultToMap(t, result)["ledger"].(map[string]any)["transactions"].([]any)[0].(map[string]any)
+	assert.Equal(t, "990000000", entry["owner_funds"])
+
+	view.readErrors = map[keylet.Keylet]error{keylet.Fees(): errors.New("fee read failed")}
+	paymentData, err := json.Marshal(map[string]any{"tx_json": map[string]any{
+		"TransactionType": "Payment",
+		"Account":         account,
+		"Destination":     "rDsbeomae4FXwgQTJp9Rs64Qg9vDiTCdBv",
+		"Amount":          "1",
+		"Sequence":        1,
+		"Fee":             "10",
+		"SigningPubKey":   "",
+	}})
+	require.NoError(t, err)
+	reader.transactions[0].data = paymentData
+	result, rpcErr = (&handlers.LedgerMethod{}).Handle(ctx, paramsJSON)
+	require.Nil(t, rpcErr)
+	entry = resultToMap(t, result)["ledger"].(map[string]any)["transactions"].([]any)[0].(map[string]any)
+	assert.NotContains(t, entry, "owner_funds")
+
+	iouOfferData, err := json.Marshal(map[string]any{"tx_json": map[string]any{
+		"TransactionType": "OfferCreate",
+		"Account":         account,
+		"TakerGets": map[string]any{
+			"currency": "USD",
+			"issuer":   "rDsbeomae4FXwgQTJp9Rs64Qg9vDiTCdBv",
+			"value":    "1",
+		},
+		"TakerPays":     "1",
+		"Sequence":      1,
+		"Fee":           "10",
+		"SigningPubKey": "",
+	}})
+	require.NoError(t, err)
+	reader.transactions[0].data = iouOfferData
+	result, rpcErr = (&handlers.LedgerMethod{}).Handle(ctx, paramsJSON)
+	require.Nil(t, rpcErr)
+	entry = resultToMap(t, result)["ledger"].(map[string]any)["transactions"].([]any)[0].(map[string]any)
+	assert.Equal(t, "0", entry["owner_funds"])
+
+	reader.transactions[0].data = storedJSON
+	result, rpcErr = (&handlers.LedgerMethod{}).Handle(ctx, paramsJSON)
+	assert.Nil(t, result)
+	require.NotNil(t, rpcErr)
+	assert.Equal(t, types.RpcINTERNAL, rpcErr.Code)
+
+	view.readErrors = nil
+	view.entries[keylet.Fees()] = []byte{0x11, 0xff}
+	result, rpcErr = (&handlers.LedgerMethod{}).Handle(ctx, paramsJSON)
+	assert.Nil(t, result)
+	require.NotNil(t, rpcErr)
+	assert.Equal(t, types.RpcINTERNAL, rpcErr.Code)
+
+	view.entries[keylet.Fees()] = feeData
+	view.readErrors = map[keylet.Keylet]error{keylet.Account(accountID): errors.New("account read failed")}
+	result, rpcErr = (&handlers.LedgerMethod{}).Handle(ctx, paramsJSON)
+	assert.Nil(t, result)
+	require.NotNil(t, rpcErr)
+	assert.Equal(t, types.RpcINTERNAL, rpcErr.Code)
 }
 
 func TestTransactionOwnerFundsMPT(t *testing.T) {
@@ -373,19 +446,42 @@ func TestTransactionOwnerFundsMPT(t *testing.T) {
 		"mpt_issuance_id": hex.EncodeToString(issuanceID[:]),
 	}
 
-	funds, ok := handlers.TransactionOwnerFunds(map[string]any{
+	funds, ok, fundsErr := handlers.TransactionOwnerFunds(map[string]any{
+		"TransactionType": "OfferCreate",
+		"Account":         holder,
+		"TakerGets":       takerGets,
+	}, view, 0, 0)
+	require.NoError(t, fundsErr)
+	require.True(t, ok)
+	assert.Equal(t, "75", funds)
+
+	view.readErrors = map[keylet.Keylet]error{keylet.MPTIssuance(issuanceID): errors.New("issuance read failed")}
+	_, ok, fundsErr = handlers.TransactionOwnerFunds(map[string]any{
 		"TransactionType": "OfferCreate",
 		"Account":         holder,
 		"TakerGets":       takerGets,
 	}, view, 0, 0)
 	require.True(t, ok)
-	assert.Equal(t, "75", funds)
+	require.Error(t, fundsErr)
 
-	_, ok = handlers.TransactionOwnerFunds(map[string]any{
+	view.readErrors = nil
+	delete(view.entries, keylet.MPTIssuance(issuanceID))
+	funds, ok, fundsErr = handlers.TransactionOwnerFunds(map[string]any{
+		"TransactionType": "OfferCreate",
+		"Account":         holder,
+		"TakerGets":       takerGets,
+	}, view, 0, 0)
+	require.NoError(t, fundsErr)
+	require.True(t, ok)
+	assert.Equal(t, "0", funds)
+	view.entries[keylet.MPTIssuance(issuanceID)] = issuanceData
+
+	_, ok, fundsErr = handlers.TransactionOwnerFunds(map[string]any{
 		"TransactionType": "OfferCreate",
 		"Account":         issuer,
 		"TakerGets":       takerGets,
 	}, view, 0, 0)
+	require.NoError(t, fundsErr)
 	assert.False(t, ok)
 
 	mptOffer := map[string]any{

@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"maps"
 	"strconv"
@@ -97,20 +98,16 @@ func (m *LedgerMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (an
 		CloseTime:      closeTimeSec,
 	}
 
-	_, reserveBase, reserveInc := ctx.Services.Ledger.GetCurrentFees()
-	var ownerFundsView types.LedgerStateView
-	ownerFundsReserveBase, ownerFundsReserveInc := reserveBase, reserveInc
+	var ownerFundsAnnotator *ledgerOwnerFundsAnnotator
 	if request.OwnerFunds && request.Expand {
-		ownerFundsView = ownerFundsLedgerView(ctx, targetLedger)
-		if ownerFundsView != nil {
-			ownerFundsReserveBase, ownerFundsReserveInc = reserveSettingsFromLedger(ownerFundsView, reserveBase, reserveInc)
-		}
+		ownerFundsAnnotator = &ledgerOwnerFundsAnnotator{ctx: ctx, ledger: targetLedger}
 	}
 
 	if request.Transactions {
 		var txList []any
 		apiVersion := ctx.ApiVersion
 		var decodeErr error
+		var ownerFundsErr error
 		visit := func(txHashKey [32]byte, txData []byte) bool {
 			hashStr := strings.ToUpper(hex.EncodeToString(txHashKey[:]))
 			if request.Expand {
@@ -132,13 +129,18 @@ func (m *LedgerMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (an
 						}
 					}
 				}
-				if ownerFundsView != nil {
+				if ownerFundsAnnotator != nil {
 					storedTx, err := decodeTxBlob(txData)
 					if err != nil {
 						decodeErr = err
 						return false
 					}
-					if !annotateOwnerFunds(txEntry, storedTx.TxJSON, ownerFundsView, ownerFundsReserveBase, ownerFundsReserveInc) {
+					continueEnumeration, err := ownerFundsAnnotator.annotate(txEntry, storedTx.TxJSON)
+					if err != nil {
+						ownerFundsErr = err
+						return false
+					}
+					if !continueEnumeration {
 						return false
 					}
 				}
@@ -158,6 +160,9 @@ func (m *LedgerMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (an
 		}
 		if iterErr != nil {
 			return nil, rpcInternalError("ledger: transaction iteration failed", iterErr)
+		}
+		if ownerFundsErr != nil {
+			return nil, rpcInternalError("ledger: transaction owner_funds failed", ownerFundsErr)
 		}
 		if decodeErr != nil {
 			// LedgerToJson treats a malformed stored transaction as a corrupt
@@ -194,15 +199,15 @@ func (m *LedgerMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (an
 	}
 
 	if dumpQueue {
-		queueData, queueInternalError := buildLedgerQueueData(
+		queueData, queueInternalError, queueOwnerFundsErr := buildLedgerQueueData(
 			ctx,
 			request.Binary,
 			request.Expand,
-			request.OwnerFunds,
-			ownerFundsView,
-			ownerFundsReserveBase,
-			ownerFundsReserveInc,
+			ownerFundsAnnotator,
 		)
+		if queueOwnerFundsErr != nil {
+			return nil, rpcInternalError("ledger: queue owner_funds failed", queueOwnerFundsErr)
+		}
 		if len(queueData) > 0 {
 			response["queue_data"] = queueData
 		}
@@ -388,27 +393,69 @@ func ledgerDefaultResponse(ctx *types.RpcContext) (map[string]any, *types.RpcErr
 }
 
 // ownerFundsLedgerView resolves the state view for the target ledger so
-// owner_funds can be computed against it, mirroring rippled's accountFunds
-// call against fill.ledger (LedgerToJson.cpp:216-221). Returns nil when the
-// service can't supply a view for that ledger (mocks, unsupported selectors),
-// in which case the annotation is simply omitted.
-func ownerFundsLedgerView(ctx *types.RpcContext, l types.LedgerReader) types.LedgerStateView {
+// owner_funds can be computed against that ledger rather than current state.
+// Missing capabilities, lookup failures, and nil results are operational
+// errors because silently omitting owner_funds would produce a partial reply.
+func ownerFundsLedgerView(ctx *types.RpcContext, l types.LedgerReader) (types.LedgerStateView, error) {
 	src, ok := ctx.Services.Ledger.(types.LedgerViewSource)
 	if !ok {
-		return nil
+		return nil, errors.New("ledger service does not expose state views")
 	}
 	if l.IsClosed() {
 		view, _, err := src.GetLedgerViewByHash(l.Hash())
 		if err != nil {
-			return nil
+			return nil, err
 		}
-		return view
+		if view == nil {
+			return nil, errors.New("ledger view lookup returned nil")
+		}
+		return view, nil
 	}
 	view, _, err := src.GetLedgerViewBySeq(l.Sequence())
 	if err != nil {
-		return nil
+		return nil, err
 	}
-	return view
+	if view == nil {
+		return nil, errors.New("ledger view lookup returned nil")
+	}
+	return view, nil
+}
+
+type ledgerOwnerFundsAnnotator struct {
+	ctx          *types.RpcContext
+	ledger       types.LedgerReader
+	view         types.LedgerStateView
+	reservesRead bool
+	reserveBase  uint64
+	reserveInc   uint64
+}
+
+func (a *ledgerOwnerFundsAnnotator) annotate(txEntry, txJSON map[string]any) (bool, error) {
+	if ledgerOwnerFundsUnsupportedMPT(txJSON) {
+		return false, nil
+	}
+	applicable, needsReserves := TransactionOwnerFundsRequirements(txJSON)
+	if !applicable {
+		return true, nil
+	}
+	if a.view == nil {
+		view, err := ownerFundsLedgerView(a.ctx, a.ledger)
+		if err != nil {
+			return false, fmt.Errorf("owner_funds view lookup: %w", err)
+		}
+		a.view = view
+	}
+	if needsReserves && !a.reservesRead {
+		_, fallbackBase, fallbackInc := a.ctx.Services.Ledger.GetCurrentFees()
+		reserveBase, reserveInc, err := reserveSettingsFromLedger(a.view, fallbackBase, fallbackInc)
+		if err != nil {
+			return false, fmt.Errorf("owner_funds reserve lookup: %w", err)
+		}
+		a.reserveBase = reserveBase
+		a.reserveInc = reserveInc
+		a.reservesRead = true
+	}
+	return annotateOwnerFunds(txEntry, txJSON, a.view, a.reserveBase, a.reserveInc)
 }
 
 // annotateOwnerFunds adds owner_funds to an expanded OfferCreate tx entry
@@ -420,15 +467,19 @@ func annotateOwnerFunds(
 	txJSON map[string]any,
 	view types.LedgerStateView,
 	reserveBase, reserveInc uint64,
-) bool {
+) (bool, error) {
 	if ledgerOwnerFundsUnsupportedMPT(txJSON) {
-		return false
+		return false, nil
 	}
 
-	if funds, ok := TransactionOwnerFunds(txJSON, view, reserveBase, reserveInc); ok {
+	funds, ok, err := TransactionOwnerFunds(txJSON, view, reserveBase, reserveInc)
+	if err != nil {
+		return false, err
+	}
+	if ok {
 		txEntry["owner_funds"] = funds
 	}
-	return true
+	return true, nil
 }
 
 func ledgerOwnerFundsUnsupportedMPT(txJSON map[string]any) bool {
@@ -537,16 +588,15 @@ func dumpAccountState(ctx *types.RpcContext, l types.LedgerReader, binary, expan
 // empty or unwired.
 func buildLedgerQueueData(
 	ctx *types.RpcContext,
-	binary, expanded, ownerFunds bool,
-	ownerFundsView types.LedgerStateView,
-	reserveBase, reserveInc uint64,
-) ([]any, bool) {
+	binary, expanded bool,
+	ownerFundsAnnotator *ledgerOwnerFundsAnnotator,
+) ([]any, bool, error) {
 	if ctx.Services == nil || ctx.Services.QueueAllTxs == nil {
-		return nil, false
+		return nil, false, nil
 	}
 	txs := ctx.Services.QueueAllTxs()
 	if len(txs) == 0 {
-		return nil, false
+		return nil, false, nil
 	}
 
 	apiVersion := ctx.ApiVersion
@@ -573,11 +623,17 @@ func buildLedgerQueueData(
 		}
 
 		txBody := buildQueueTxBody(qtx, binary, expanded, apiVersion)
-		if ownerFunds && expanded && ownerFundsView != nil {
+		if expanded && ownerFundsAnnotator != nil {
 			body, ok := txBody.(map[string]any)
-			if ok && !annotateOwnerFunds(body, qtx.TxJSON, ownerFundsView, reserveBase, reserveInc) {
-				queueData = append(queueData, entry)
-				return queueData, true
+			if ok {
+				continueEnumeration, err := ownerFundsAnnotator.annotate(body, qtx.TxJSON)
+				if err != nil {
+					return nil, false, err
+				}
+				if !continueEnumeration {
+					queueData = append(queueData, entry)
+					return queueData, true, nil
+				}
 			}
 		}
 		if body, ok := txBody.(map[string]any); ok {
@@ -596,7 +652,7 @@ func buildLedgerQueueData(
 
 		queueData = append(queueData, entry)
 	}
-	return queueData, false
+	return queueData, false, nil
 }
 
 // buildQueueTxBody renders the queued transaction body the way

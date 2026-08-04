@@ -73,6 +73,45 @@ func TestComputeBookChangesCanonicalArithmeticAndRendering(t *testing.T) {
 	}
 }
 
+func TestComputeBookChangesFromTransactionsStrict(t *testing.T) {
+	ledger := mptBookChangesLedger{}
+
+	result, err := ComputeBookChangesFromTransactionsStrict(ledger, nil)
+	require.NoError(t, err)
+	encoded, err := json.Marshal(result)
+	require.NoError(t, err)
+	require.NotEqual(t, "null", string(encoded))
+	require.Equal(t, []map[string]any{}, result["changes"])
+
+	for _, test := range []struct {
+		name         string
+		ledger       BookChangesHeader
+		transactions []BookChangesTransaction
+	}{
+		{name: "nil ledger header"},
+		{
+			name:   "nil transaction projection",
+			ledger: ledger,
+			transactions: []BookChangesTransaction{{
+				Metadata: map[string]any{"AffectedNodes": []any{}},
+			}},
+		},
+		{
+			name:   "nil metadata projection",
+			ledger: ledger,
+			transactions: []BookChangesTransaction{{
+				Transaction: validBookChangesTxJSON(),
+			}},
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			result, err := ComputeBookChangesFromTransactionsStrict(test.ledger, test.transactions)
+			require.Error(t, err)
+			require.Nil(t, result)
+		})
+	}
+}
+
 func validBookChangesTxJSON() map[string]any {
 	return map[string]any{
 		"Account":         "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh",

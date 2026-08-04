@@ -86,6 +86,20 @@ func ComputeBookChangesFromTransactions(l BookChangesHeader, transactions []Book
 	return formatBookChanges(l, changes)
 }
 
+// ComputeBookChangesFromTransactionsStrict rejects incomplete accepted-ledger
+// projections instead of emitting a partial aggregate.
+func ComputeBookChangesFromTransactionsStrict(l BookChangesHeader, transactions []BookChangesTransaction) (map[string]any, error) {
+	if l == nil {
+		return nil, fmt.Errorf("book changes ledger header is nil")
+	}
+	for i, transaction := range transactions {
+		if transaction.Transaction == nil || transaction.Metadata == nil {
+			return nil, fmt.Errorf("book changes transaction %d is incomplete", i)
+		}
+	}
+	return ComputeBookChangesFromTransactions(l, transactions), nil
+}
+
 func formatBookChanges(l BookChangesHeader, changes map[string]*bookChange) map[string]any {
 	if l == nil {
 		return map[string]any{

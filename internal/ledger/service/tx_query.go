@@ -288,12 +288,17 @@ func (s *Service) dispatchProposedTransaction(
 		!mayPublishProposedTransaction(ptx.Parsed.GetCommon().GetFlags()) {
 		return
 	}
+	ownerFunds, _, err := proposedOwnerFunds(rawBlob, current)
+	if err != nil {
+		s.logger.Error("failed to compute proposed transaction owner funds", "hash", fmt.Sprintf("%X", ptx.Hash), "err", err)
+		return
+	}
 	s.eventPublisher.dispatchSubmittedTxEvent(SubmittedTxEvent{
 		RawBlob:          append([]byte(nil), rawBlob...),
 		TxHash:           ptx.Hash,
 		AffectedAccounts: extractMentionedAccounts(rawBlob),
 		CurrentLedger:    current.Sequence(),
-		OwnerFunds:       proposedOwnerFunds(rawBlob, current),
+		OwnerFunds:       ownerFunds,
 		Result: Result{
 			Code:    int(outcome.Result),
 			Name:    outcome.Result.String(),
@@ -341,7 +346,7 @@ func readFeesFromLedgerContext(ctx context.Context, l *ledger.Ledger) (baseFee, 
 
 	feeSettings, err := state.ParseFeeSettings(data)
 	if err != nil {
-		return uint64(fees.Base), uint64(fees.Reserve), uint64(fees.Increment), nil
+		return 0, 0, 0, fmt.Errorf("parse FeeSettings: %w", err)
 	}
 	fees = mergeFeeSettings(fees, feeSettings)
 	return uint64(fees.Base), uint64(fees.Reserve), uint64(fees.Increment), nil
@@ -351,6 +356,13 @@ func readFeesFromLedgerContext(ctx context.Context, l *ledger.Ledger) (baseFee, 
 // ledger, falling back to the protocol defaults when its FeeSettings entry is unavailable.
 func FeesFromLedger(l *ledger.Ledger) (baseFee, reserveBase, reserveIncrement uint64) {
 	return readFeesFromLedger(l)
+}
+
+// FeesFromLedgerStrict returns the fee settings carried by l while preserving
+// storage and decoding failures. A missing FeeSettings entry uses the ledger's
+// configured fee values.
+func FeesFromLedgerStrict(l *ledger.Ledger) (baseFee, reserveBase, reserveIncrement uint64, err error) {
+	return readFeesFromLedgerContext(context.Background(), l)
 }
 
 // GetCurrentFees returns the current fee settings read from the FeeSettings

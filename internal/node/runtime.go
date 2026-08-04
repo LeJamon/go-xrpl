@@ -961,10 +961,15 @@ func (r *nodeRuntime) bindStreams() error {
 		// adapter store cannot drop the announce when the ledger isn't
 		// yet visible to GetLedgerBySequence.
 		bookView := newAcceptedLedgerView(*event.LedgerInfo)
-		payload := handlers.ComputeBookChangesFromTransactions(bookView, bookTransactions)
-		if data, err := json.Marshal(payload); err == nil {
-			r.wsServer.SubscriptionManager().BroadcastToStream(types.SubBookChanges, data, nil)
+		payload, err := handlers.ComputeBookChangesFromTransactionsStrict(bookView, bookTransactions)
+		if err != nil {
+			return fmt.Errorf("compute accepted ledger book changes: %w", err)
 		}
+		data, err := json.Marshal(payload)
+		if err != nil {
+			return fmt.Errorf("marshal accepted ledger book changes: %w", err)
+		}
+		r.wsServer.SubscriptionManager().BroadcastToStream(types.SubBookChanges, data, nil)
 
 		for _, publication := range publications {
 			r.publisher.PublishTransaction(publication.event, publication.projection.affectedAccounts)
