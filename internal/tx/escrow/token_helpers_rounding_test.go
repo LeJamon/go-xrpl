@@ -8,6 +8,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/LeJamon/go-xrpl/internal/ledger/state"
+	"github.com/LeJamon/go-xrpl/internal/tx/ter"
 	"github.com/LeJamon/go-xrpl/keylet"
 )
 
@@ -103,7 +104,7 @@ func TestComputeMPTTransferFeeUsesCanonicalRounding(t *testing.T) {
 				destinationID = issuerID
 			}
 
-			original, final := computeMPTTransferFee(
+			original, final, result := computeMPTTransferFee(
 				view,
 				tt.lockedRate,
 				mptHexID,
@@ -112,6 +113,7 @@ func TestComputeMPTTransferFeeUsesCanonicalRounding(t *testing.T) {
 				originalAmount,
 				numberContext,
 			)
+			require.Equal(t, ter.TesSUCCESS, result)
 			require.Equal(t, originalAmount, original)
 			require.Equal(t, tt.finalAmount, final)
 		})

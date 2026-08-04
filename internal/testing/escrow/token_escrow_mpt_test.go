@@ -3,12 +3,14 @@
 package escrow_test
 
 import (
+	"fmt"
 	"testing"
 	"time"
 
 	"github.com/LeJamon/go-xrpl/internal/ledger/state"
 	jtx "github.com/LeJamon/go-xrpl/internal/testing"
 	"github.com/LeJamon/go-xrpl/internal/testing/escrow"
+	"github.com/LeJamon/go-xrpl/internal/testing/metadata"
 	"github.com/LeJamon/go-xrpl/internal/testing/mpt"
 	"github.com/LeJamon/go-xrpl/internal/tx/mptutil"
 	"github.com/LeJamon/go-xrpl/keylet"
@@ -54,7 +56,7 @@ func TestMPTEscrow_Enablement(t *testing.T) {
 		result := env.Submit(
 			escrow.EscrowCreate(alice, bob, 0).
 				MPTAmount(amt).
-				Condition(escrow.TestCondition1).
+				Condition(escrow.TestCondition1()).
 				FinishTime(env.Now().Add(1 * time.Second)).
 				Fee(env.BaseFee() * 150).
 				Build())
@@ -64,8 +66,8 @@ func TestMPTEscrow_Enablement(t *testing.T) {
 		// EscrowFinish on non-existent escrow should fail with tecNO_TARGET
 		result = env.Submit(
 			escrow.EscrowFinish(bob, alice, seq1).
-				Condition(escrow.TestCondition1).
-				Fulfillment(escrow.TestFulfillment1).
+				Condition(escrow.TestCondition1()).
+				Fulfillment(escrow.TestFulfillment1()).
 				Fee(env.BaseFee() * 150).
 				Build())
 		jtx.RequireTxFail(t, result, jtx.TecNO_TARGET)
@@ -76,7 +78,7 @@ func TestMPTEscrow_Enablement(t *testing.T) {
 		result = env.Submit(
 			escrow.EscrowCreate(alice, bob, 0).
 				MPTAmount(amt).
-				Condition(escrow.TestCondition2).
+				Condition(escrow.TestCondition2()).
 				FinishTime(env.Now().Add(1 * time.Second)).
 				CancelTime(env.Now().Add(2 * time.Second)).
 				Fee(env.BaseFee() * 150).
@@ -119,7 +121,7 @@ func TestMPTEscrow_Enablement(t *testing.T) {
 		result := env.Submit(
 			escrow.EscrowCreate(alice, bob, 0).
 				MPTAmount(amt).
-				Condition(escrow.TestCondition1).
+				Condition(escrow.TestCondition1()).
 				FinishTime(env.Now().Add(1 * time.Second)).
 				Fee(env.BaseFee() * 150).
 				Build())
@@ -128,8 +130,8 @@ func TestMPTEscrow_Enablement(t *testing.T) {
 
 		result = env.Submit(
 			escrow.EscrowFinish(bob, alice, seq1).
-				Condition(escrow.TestCondition1).
-				Fulfillment(escrow.TestFulfillment1).
+				Condition(escrow.TestCondition1()).
+				Fulfillment(escrow.TestFulfillment1()).
 				Fee(env.BaseFee() * 150).
 				Build())
 		jtx.RequireTxSuccess(t, result)
@@ -140,7 +142,7 @@ func TestMPTEscrow_Enablement(t *testing.T) {
 		result = env.Submit(
 			escrow.EscrowCreate(alice, bob, 0).
 				MPTAmount(amt).
-				Condition(escrow.TestCondition2).
+				Condition(escrow.TestCondition2()).
 				FinishTime(env.Now().Add(1 * time.Second)).
 				CancelTime(env.Now().Add(2 * time.Second)).
 				Fee(env.BaseFee() * 150).
@@ -185,7 +187,7 @@ func TestMPTEscrow_CreatePreflight(t *testing.T) {
 		result := env.Submit(
 			escrow.EscrowCreate(alice, bob, 0).
 				MPTAmount(amt).
-				Condition(escrow.TestCondition1).
+				Condition(escrow.TestCondition1()).
 				FinishTime(env.Now().Add(1 * time.Second)).
 				Fee(env.BaseFee() * 150).
 				Build())
@@ -221,7 +223,7 @@ func TestMPTEscrow_CreatePreflight(t *testing.T) {
 		result := env.Submit(
 			escrow.EscrowCreate(alice, bob, 0).
 				MPTAmount(amt).
-				Condition(escrow.TestCondition1).
+				Condition(escrow.TestCondition1()).
 				FinishTime(env.Now().Add(1 * time.Second)).
 				Fee(env.BaseFee() * 150).
 				Build())
@@ -263,7 +265,7 @@ func TestMPTEscrow_CanEscrowFlag(t *testing.T) {
 	result := env.Submit(
 		escrow.EscrowCreate(alice, bob, 0).
 			MPTAmount(amt).
-			Condition(escrow.TestCondition1).
+			Condition(escrow.TestCondition1()).
 			FinishTime(env.Now().Add(1 * time.Second)).
 			Fee(env.BaseFee() * 150).
 			Build())
@@ -302,7 +304,7 @@ func TestMPTEscrow_CreatePreclaim(t *testing.T) {
 		result := env.Submit(
 			escrow.EscrowCreate(gw, alice, 0).
 				MPTAmount(amt).
-				Condition(escrow.TestCondition1).
+				Condition(escrow.TestCondition1()).
 				FinishTime(env.Now().Add(1 * time.Second)).
 				Fee(env.BaseFee() * 150).
 				Build())
@@ -331,7 +333,7 @@ func TestMPTEscrow_CreatePreclaim(t *testing.T) {
 		result := env.Submit(
 			escrow.EscrowCreate(alice, bob, 0).
 				MPTAmount(amt).
-				Condition(escrow.TestCondition1).
+				Condition(escrow.TestCondition1()).
 				FinishTime(env.Now().Add(1 * time.Second)).
 				Fee(env.BaseFee() * 150).
 				Build())
@@ -364,7 +366,7 @@ func TestMPTEscrow_CreatePreclaim(t *testing.T) {
 		result := env.Submit(
 			escrow.EscrowCreate(alice, bob, 0).
 				MPTAmount(amt).
-				Condition(escrow.TestCondition1).
+				Condition(escrow.TestCondition1()).
 				FinishTime(env.Now().Add(1 * time.Second)).
 				Fee(env.BaseFee() * 150).
 				Build())
@@ -407,7 +409,7 @@ func TestMPTEscrow_CreatePreclaim(t *testing.T) {
 		result := env.Submit(
 			escrow.EscrowCreate(alice, bob, 0).
 				MPTAmount(amt).
-				Condition(escrow.TestCondition1).
+				Condition(escrow.TestCondition1()).
 				FinishTime(env.Now().Add(1 * time.Second)).
 				Fee(env.BaseFee() * 150).
 				Build())
@@ -452,7 +454,7 @@ func TestMPTEscrow_CreatePreclaim(t *testing.T) {
 		result := env.Submit(
 			escrow.EscrowCreate(alice, bob, 0).
 				MPTAmount(amt).
-				Condition(escrow.TestCondition1).
+				Condition(escrow.TestCondition1()).
 				FinishTime(env.Now().Add(1 * time.Second)).
 				Fee(env.BaseFee() * 150).
 				Build())
@@ -491,7 +493,7 @@ func TestMPTEscrow_CreatePreclaim(t *testing.T) {
 		result := env.Submit(
 			escrow.EscrowCreate(alice, bob, 0).
 				MPTAmount(amt).
-				Condition(escrow.TestCondition1).
+				Condition(escrow.TestCondition1()).
 				FinishTime(env.Now().Add(1 * time.Second)).
 				Fee(env.BaseFee() * 150).
 				Build())
@@ -530,7 +532,7 @@ func TestMPTEscrow_CreatePreclaim(t *testing.T) {
 		result := env.Submit(
 			escrow.EscrowCreate(alice, bob, 0).
 				MPTAmount(amt).
-				Condition(escrow.TestCondition1).
+				Condition(escrow.TestCondition1()).
 				FinishTime(env.Now().Add(1 * time.Second)).
 				Fee(env.BaseFee() * 150).
 				Build())
@@ -567,7 +569,7 @@ func TestMPTEscrow_CreatePreclaim(t *testing.T) {
 		result := env.Submit(
 			escrow.EscrowCreate(alice, bob, 0).
 				MPTAmount(amt).
-				Condition(escrow.TestCondition1).
+				Condition(escrow.TestCondition1()).
 				FinishTime(env.Now().Add(1 * time.Second)).
 				Fee(env.BaseFee() * 150).
 				Build())
@@ -603,7 +605,7 @@ func TestMPTEscrow_CreatePreclaim(t *testing.T) {
 		result := env.Submit(
 			escrow.EscrowCreate(alice, bob, 0).
 				MPTAmount(amt).
-				Condition(escrow.TestCondition1).
+				Condition(escrow.TestCondition1()).
 				FinishTime(env.Now().Add(1 * time.Second)).
 				Fee(env.BaseFee() * 150).
 				Build())
@@ -640,7 +642,7 @@ func TestMPTEscrow_CreatePreclaim(t *testing.T) {
 		result := env.Submit(
 			escrow.EscrowCreate(alice, bob, 0).
 				MPTAmount(amt).
-				Condition(escrow.TestCondition1).
+				Condition(escrow.TestCondition1()).
 				FinishTime(env.Now().Add(1 * time.Second)).
 				Fee(env.BaseFee() * 150).
 				Build())
@@ -684,7 +686,7 @@ func TestMPTEscrow_FinishDoApply(t *testing.T) {
 		result := env.Submit(
 			escrow.EscrowCreate(alice, bob, 0).
 				MPTAmount(amt).
-				Condition(escrow.TestCondition1).
+				Condition(escrow.TestCondition1()).
 				FinishTime(env.Now().Add(1 * time.Second)).
 				Fee(env.BaseFee() * 150).
 				Build())
@@ -693,8 +695,8 @@ func TestMPTEscrow_FinishDoApply(t *testing.T) {
 
 		result = env.Submit(
 			escrow.EscrowFinish(bob, alice, seq1).
-				Condition(escrow.TestCondition1).
-				Fulfillment(escrow.TestFulfillment1).
+				Condition(escrow.TestCondition1()).
+				Fulfillment(escrow.TestFulfillment1()).
 				Fee(env.BaseFee() * 150).
 				Build())
 		jtx.RequireTxSuccess(t, result)
@@ -732,7 +734,7 @@ func TestMPTEscrow_FinishDoApply(t *testing.T) {
 		result := env.Submit(
 			escrow.EscrowCreate(alice, bob, 0).
 				MPTAmount(amt).
-				Condition(escrow.TestCondition1).
+				Condition(escrow.TestCondition1()).
 				FinishTime(env.Now().Add(1 * time.Second)).
 				Fee(env.BaseFee() * 150).
 				Build())
@@ -742,8 +744,8 @@ func TestMPTEscrow_FinishDoApply(t *testing.T) {
 		// Carol tries to finish — should fail
 		result = env.Submit(
 			escrow.EscrowFinish(carol, alice, seq1).
-				Condition(escrow.TestCondition1).
-				Fulfillment(escrow.TestFulfillment1).
+				Condition(escrow.TestCondition1()).
+				Fulfillment(escrow.TestFulfillment1()).
 				Fee(env.BaseFee() * 150).
 				Build())
 		jtx.RequireTxFail(t, result, jtx.TecNO_PERMISSION)
@@ -757,10 +759,26 @@ func TestMPTEscrow_FinishDoApply(t *testing.T) {
 // --------------------------------------------------------------------------
 
 func TestMPTEscrow_FinishBasic(t *testing.T) {
+	for _, fixEnabled := range []bool{false, true} {
+		name := "WithoutFixTokenEscrowV1"
+		if fixEnabled {
+			name = "WithFixTokenEscrowV1"
+		}
+		t.Run(name, func(t *testing.T) {
+			testMPTEscrowFinishBasic(t, fixEnabled)
+		})
+	}
+}
+
+func testMPTEscrowFinishBasic(t *testing.T, fixEnabled bool) {
+	t.Helper()
 	// Create MPT escrow, advance time, finish
 	// Verify: sender's MPT balance decreased, receiver's increased
 	env := jtx.NewTestEnv(t)
 	env.EnableFeature("TokenEscrow")
+	if !fixEnabled {
+		env.DisableFeature("fixTokenEscrowV1")
+	}
 
 	alice := jtx.NewAccount("alice")
 	bob := jtx.NewAccount("bob")
@@ -777,6 +795,12 @@ func TestMPTEscrow_FinishBasic(t *testing.T) {
 	mptGw.Authorize(mpt.AuthorizeOpts{Account: alice})
 	mptGw.Pay(gw, alice, 10_000)
 	env.Close()
+	aliceOwnerCount := env.OwnerCount(alice)
+	bobOwnerCount := env.OwnerCount(bob)
+	gwOwnerCount := env.OwnerCount(gw)
+	aliceDirEntries := ownerDirEntryCount(t, env, alice)
+	bobDirEntries := ownerDirEntryCount(t, env, bob)
+	gwDirEntries := ownerDirEntryCount(t, env, gw)
 
 	amt := mptAmount(1_000, gw.Address, mptGw.IssuanceID())
 
@@ -784,26 +808,53 @@ func TestMPTEscrow_FinishBasic(t *testing.T) {
 	result := env.Submit(
 		escrow.EscrowCreate(alice, bob, 0).
 			MPTAmount(amt).
-			Condition(escrow.TestCondition1).
+			Condition(escrow.TestCondition1()).
 			FinishTime(env.Now().Add(1 * time.Second)).
 			Fee(env.BaseFee() * 150).
 			Build())
 	jtx.RequireTxSuccess(t, result)
+	escrowKey := keylet.Escrow(alice.ID, seq1)
+	requireEscrowMetaNode(t, result, "CreatedNode", escrowKey)
+	require.True(t, env.LedgerEntryExists(escrowKey))
+	require.Equal(t, aliceOwnerCount+1, env.OwnerCount(alice))
+	require.Equal(t, bobOwnerCount, env.OwnerCount(bob))
+	require.Equal(t, gwOwnerCount, env.OwnerCount(gw))
+	requireOwnerDirContains(t, env, alice, escrowKey.Key, true)
+	requireOwnerDirContains(t, env, bob, escrowKey.Key, true)
+	require.Equal(t, aliceDirEntries+1, ownerDirEntryCount(t, env, alice))
+	require.Equal(t, bobDirEntries+1, ownerDirEntryCount(t, env, bob))
+	require.Equal(t, gwDirEntries, ownerDirEntryCount(t, env, gw))
+	mptGw.RequireMPTokenAmount(alice, 9_000)
+	require.Equal(t, uint64(1_000), mptGw.HolderLockedAmount(alice))
+	require.Equal(t, uint64(1_000), mptGw.IssuanceLockedAmount())
+	require.Equal(t, uint64(10_000), mptGw.IssuanceOutstandingAmount())
 	env.Close()
 
 	// Finish the escrow
 	result = env.Submit(
 		escrow.EscrowFinish(bob, alice, seq1).
-			Condition(escrow.TestCondition1).
-			Fulfillment(escrow.TestFulfillment1).
+			Condition(escrow.TestCondition1()).
+			Fulfillment(escrow.TestFulfillment1()).
 			Fee(env.BaseFee() * 150).
 			Build())
 	jtx.RequireTxSuccess(t, result)
+	requireEscrowMetaNode(t, result, "DeletedNode", escrowKey)
 	env.Close()
 
-	// The escrow finished successfully — that confirms the full create→finish flow works.
-	// Detailed balance assertions would require reading MPToken SLEs directly.
-	require.True(t, true, "MPT escrow create→finish flow completed successfully")
+	require.False(t, env.LedgerEntryExists(escrowKey))
+	require.Equal(t, aliceOwnerCount, env.OwnerCount(alice))
+	require.Equal(t, bobOwnerCount+1, env.OwnerCount(bob))
+	require.Equal(t, gwOwnerCount, env.OwnerCount(gw))
+	requireOwnerDirContains(t, env, alice, escrowKey.Key, false)
+	requireOwnerDirContains(t, env, bob, escrowKey.Key, false)
+	require.Equal(t, aliceDirEntries, ownerDirEntryCount(t, env, alice))
+	require.Equal(t, bobDirEntries+1, ownerDirEntryCount(t, env, bob))
+	require.Equal(t, gwDirEntries, ownerDirEntryCount(t, env, gw))
+	mptGw.RequireMPTokenAmount(alice, 9_000)
+	mptGw.RequireMPTokenAmount(bob, 1_000)
+	require.Zero(t, mptGw.HolderLockedAmount(alice))
+	require.Zero(t, mptGw.IssuanceLockedAmount())
+	require.Equal(t, uint64(10_000), mptGw.IssuanceOutstandingAmount())
 }
 
 // --------------------------------------------------------------------------
@@ -812,10 +863,26 @@ func TestMPTEscrow_FinishBasic(t *testing.T) {
 // --------------------------------------------------------------------------
 
 func TestMPTEscrow_CancelBasic(t *testing.T) {
+	for _, fixEnabled := range []bool{false, true} {
+		name := "WithoutFixTokenEscrowV1"
+		if fixEnabled {
+			name = "WithFixTokenEscrowV1"
+		}
+		t.Run(name, func(t *testing.T) {
+			testMPTEscrowCancelBasic(t, fixEnabled)
+		})
+	}
+}
+
+func testMPTEscrowCancelBasic(t *testing.T, fixEnabled bool) {
+	t.Helper()
 	// Create MPT escrow, cancel it
 	// Verify: amount returned to sender
 	env := jtx.NewTestEnv(t)
 	env.EnableFeature("TokenEscrow")
+	if !fixEnabled {
+		env.DisableFeature("fixTokenEscrowV1")
+	}
 
 	alice := jtx.NewAccount("alice")
 	bob := jtx.NewAccount("bob")
@@ -832,6 +899,12 @@ func TestMPTEscrow_CancelBasic(t *testing.T) {
 	mptGw.Authorize(mpt.AuthorizeOpts{Account: alice})
 	mptGw.Pay(gw, alice, 10_000)
 	env.Close()
+	aliceOwnerCount := env.OwnerCount(alice)
+	bobOwnerCount := env.OwnerCount(bob)
+	gwOwnerCount := env.OwnerCount(gw)
+	aliceDirEntries := ownerDirEntryCount(t, env, alice)
+	bobDirEntries := ownerDirEntryCount(t, env, bob)
+	gwDirEntries := ownerDirEntryCount(t, env, gw)
 
 	amt := mptAmount(1_000, gw.Address, mptGw.IssuanceID())
 
@@ -839,22 +912,95 @@ func TestMPTEscrow_CancelBasic(t *testing.T) {
 	result := env.Submit(
 		escrow.EscrowCreate(alice, bob, 0).
 			MPTAmount(amt).
-			Condition(escrow.TestCondition2).
+			Condition(escrow.TestCondition2()).
 			FinishTime(env.Now().Add(1 * time.Second)).
 			CancelTime(env.Now().Add(2 * time.Second)).
 			Fee(env.BaseFee() * 150).
 			Build())
 	jtx.RequireTxSuccess(t, result)
+	escrowKey := keylet.Escrow(alice.ID, seq1)
+	requireEscrowMetaNode(t, result, "CreatedNode", escrowKey)
+	require.True(t, env.LedgerEntryExists(escrowKey))
+	require.Equal(t, aliceOwnerCount+1, env.OwnerCount(alice))
+	require.Equal(t, bobOwnerCount, env.OwnerCount(bob))
+	require.Equal(t, gwOwnerCount, env.OwnerCount(gw))
+	requireOwnerDirContains(t, env, alice, escrowKey.Key, true)
+	requireOwnerDirContains(t, env, bob, escrowKey.Key, true)
+	require.Equal(t, aliceDirEntries+1, ownerDirEntryCount(t, env, alice))
+	require.Equal(t, bobDirEntries+1, ownerDirEntryCount(t, env, bob))
+	require.Equal(t, gwDirEntries, ownerDirEntryCount(t, env, gw))
+	mptGw.RequireMPTokenAmount(alice, 9_000)
+	require.Equal(t, uint64(1_000), mptGw.HolderLockedAmount(alice))
+	require.Equal(t, uint64(1_000), mptGw.IssuanceLockedAmount())
+	require.Equal(t, uint64(10_000), mptGw.IssuanceOutstandingAmount())
 	env.Close()
 
 	// Cancel the escrow
 	result = env.Submit(
 		escrow.EscrowCancel(bob, alice, seq1).Build())
 	jtx.RequireTxSuccess(t, result)
+	requireEscrowMetaNode(t, result, "DeletedNode", escrowKey)
 	env.Close()
 
-	// The escrow cancelled successfully — amount returned to alice.
-	require.True(t, true, "MPT escrow create→cancel flow completed successfully")
+	require.False(t, env.LedgerEntryExists(escrowKey))
+	require.Equal(t, aliceOwnerCount, env.OwnerCount(alice))
+	require.Equal(t, bobOwnerCount, env.OwnerCount(bob))
+	require.Equal(t, gwOwnerCount, env.OwnerCount(gw))
+	requireOwnerDirContains(t, env, alice, escrowKey.Key, false)
+	requireOwnerDirContains(t, env, bob, escrowKey.Key, false)
+	require.Equal(t, aliceDirEntries, ownerDirEntryCount(t, env, alice))
+	require.Equal(t, bobDirEntries, ownerDirEntryCount(t, env, bob))
+	require.Equal(t, gwDirEntries, ownerDirEntryCount(t, env, gw))
+	mptGw.RequireMPTokenAmount(alice, 10_000)
+	mptGw.RequireMPTokenAmount(bob, 0)
+	require.Zero(t, mptGw.HolderLockedAmount(alice))
+	require.Zero(t, mptGw.IssuanceLockedAmount())
+	require.Equal(t, uint64(10_000), mptGw.IssuanceOutstandingAmount())
+}
+
+func requireOwnerDirContains(
+	t *testing.T,
+	env *jtx.TestEnv,
+	owner *jtx.Account,
+	target [32]byte,
+	want bool,
+) {
+	t.Helper()
+	found := false
+	err := state.DirForEach(env.Ledger(), keylet.OwnerDir(owner.ID), func(item [32]byte) error {
+		if item == target {
+			found = true
+		}
+		return nil
+	})
+	require.NoError(t, err)
+	require.Equal(t, want, found, "owner directory membership mismatch for %s", owner.Name)
+}
+
+func ownerDirEntryCount(t *testing.T, env *jtx.TestEnv, owner *jtx.Account) int {
+	t.Helper()
+	count := 0
+	err := state.DirForEach(env.Ledger(), keylet.OwnerDir(owner.ID), func([32]byte) error {
+		count++
+		return nil
+	})
+	require.NoError(t, err)
+	return count
+}
+
+func requireEscrowMetaNode(t *testing.T, result jtx.TxResult, nodeType string, escrowKey keylet.Keylet) {
+	t.Helper()
+	require.NotNil(t, result.Metadata)
+	nodes := metadata.FindNodes(result.Metadata, nodeType, "Escrow")
+	require.Len(t, nodes, 1)
+	require.Equal(t, fmt.Sprintf("%X", escrowKey.Key), nodes[0].LedgerIndex)
+	if nodeType == "CreatedNode" {
+		require.NotNil(t, nodes[0].NewFields)
+		require.Nil(t, nodes[0].FinalFields)
+		return
+	}
+	require.NotNil(t, nodes[0].FinalFields)
+	require.Nil(t, nodes[0].NewFields)
 }
 
 // --------------------------------------------------------------------------
@@ -882,6 +1028,8 @@ func TestMPTEscrow_SelfEscrow(t *testing.T) {
 		mptGw.Authorize(mpt.AuthorizeOpts{Account: alice})
 		mptGw.Pay(gw, alice, 10_000)
 		env.Close()
+		aliceOwnerCount := env.OwnerCount(alice)
+		gwOwnerCount := env.OwnerCount(gw)
 
 		amt := mptAmount(1_000, gw.Address, mptGw.IssuanceID())
 
@@ -889,21 +1037,40 @@ func TestMPTEscrow_SelfEscrow(t *testing.T) {
 		result := env.Submit(
 			escrow.EscrowCreate(alice, alice, 0).
 				MPTAmount(amt).
-				Condition(escrow.TestCondition1).
+				Condition(escrow.TestCondition1()).
 				FinishTime(env.Now().Add(1 * time.Second)).
 				Fee(env.BaseFee() * 150).
 				Build())
 		jtx.RequireTxSuccess(t, result)
+		escrowKey := keylet.Escrow(alice.ID, seq)
+		requireEscrowMetaNode(t, result, "CreatedNode", escrowKey)
+		require.True(t, env.LedgerEntryExists(escrowKey))
+		requireOwnerDirContains(t, env, alice, escrowKey.Key, true)
+		require.Equal(t, aliceOwnerCount+1, env.OwnerCount(alice))
+		require.Equal(t, gwOwnerCount, env.OwnerCount(gw))
+		mptGw.RequireMPTokenAmount(alice, 9_000)
+		require.Equal(t, uint64(1_000), mptGw.HolderLockedAmount(alice))
+		require.Equal(t, uint64(1_000), mptGw.IssuanceLockedAmount())
+		require.Equal(t, uint64(10_000), mptGw.IssuanceOutstandingAmount())
 		env.Close()
 
 		result = env.Submit(
 			escrow.EscrowFinish(alice, alice, seq).
-				Condition(escrow.TestCondition1).
-				Fulfillment(escrow.TestFulfillment1).
+				Condition(escrow.TestCondition1()).
+				Fulfillment(escrow.TestFulfillment1()).
 				Fee(env.BaseFee() * 150).
 				Build())
 		jtx.RequireTxSuccess(t, result)
+		requireEscrowMetaNode(t, result, "DeletedNode", escrowKey)
 		env.Close()
+		require.False(t, env.LedgerEntryExists(escrowKey))
+		requireOwnerDirContains(t, env, alice, escrowKey.Key, false)
+		require.Equal(t, aliceOwnerCount, env.OwnerCount(alice))
+		require.Equal(t, gwOwnerCount, env.OwnerCount(gw))
+		mptGw.RequireMPTokenAmount(alice, 10_000)
+		require.Zero(t, mptGw.HolderLockedAmount(alice))
+		require.Zero(t, mptGw.IssuanceLockedAmount())
+		require.Equal(t, uint64(10_000), mptGw.IssuanceOutstandingAmount())
 	})
 
 	t.Run("SelfCancel", func(t *testing.T) {
@@ -925,6 +1092,8 @@ func TestMPTEscrow_SelfEscrow(t *testing.T) {
 		mptGw.Authorize(mpt.AuthorizeOpts{Account: alice})
 		mptGw.Pay(gw, alice, 10_000)
 		env.Close()
+		aliceOwnerCount := env.OwnerCount(alice)
+		gwOwnerCount := env.OwnerCount(gw)
 
 		amt := mptAmount(1_000, gw.Address, mptGw.IssuanceID())
 
@@ -932,18 +1101,37 @@ func TestMPTEscrow_SelfEscrow(t *testing.T) {
 		result := env.Submit(
 			escrow.EscrowCreate(alice, alice, 0).
 				MPTAmount(amt).
-				Condition(escrow.TestCondition1).
+				Condition(escrow.TestCondition1()).
 				FinishTime(env.Now().Add(1 * time.Second)).
 				CancelTime(env.Now().Add(2 * time.Second)).
 				Fee(env.BaseFee() * 150).
 				Build())
 		jtx.RequireTxSuccess(t, result)
+		escrowKey := keylet.Escrow(alice.ID, seq)
+		requireEscrowMetaNode(t, result, "CreatedNode", escrowKey)
+		require.True(t, env.LedgerEntryExists(escrowKey))
+		requireOwnerDirContains(t, env, alice, escrowKey.Key, true)
+		require.Equal(t, aliceOwnerCount+1, env.OwnerCount(alice))
+		require.Equal(t, gwOwnerCount, env.OwnerCount(gw))
+		mptGw.RequireMPTokenAmount(alice, 9_000)
+		require.Equal(t, uint64(1_000), mptGw.HolderLockedAmount(alice))
+		require.Equal(t, uint64(1_000), mptGw.IssuanceLockedAmount())
+		require.Equal(t, uint64(10_000), mptGw.IssuanceOutstandingAmount())
 		env.Close()
 
 		result = env.Submit(
 			escrow.EscrowCancel(alice, alice, seq).Build())
 		jtx.RequireTxSuccess(t, result)
+		requireEscrowMetaNode(t, result, "DeletedNode", escrowKey)
 		env.Close()
+		require.False(t, env.LedgerEntryExists(escrowKey))
+		requireOwnerDirContains(t, env, alice, escrowKey.Key, false)
+		require.Equal(t, aliceOwnerCount, env.OwnerCount(alice))
+		require.Equal(t, gwOwnerCount, env.OwnerCount(gw))
+		mptGw.RequireMPTokenAmount(alice, 10_000)
+		require.Zero(t, mptGw.HolderLockedAmount(alice))
+		require.Zero(t, mptGw.IssuanceLockedAmount())
+		require.Equal(t, uint64(10_000), mptGw.IssuanceOutstandingAmount())
 	})
 }
 
@@ -984,12 +1172,17 @@ func TestMPTEscrow_FinishPreclaim(t *testing.T) {
 		result := env.Submit(
 			escrow.EscrowCreate(alice, bob, 0).
 				MPTAmount(amt).
-				Condition(escrow.TestCondition1).
+				Condition(escrow.TestCondition1()).
 				FinishTime(env.Now().Add(1 * time.Second)).
 				Fee(env.BaseFee() * 150).
 				Build())
 		jtx.RequireTxSuccess(t, result)
 		env.Close()
+		escrowKey := keylet.Escrow(alice.ID, seq1)
+		aliceOwnerCount := env.OwnerCount(alice)
+		bobOwnerCount := env.OwnerCount(bob)
+		aliceDirEntries := ownerDirEntryCount(t, env, alice)
+		bobDirEntries := ownerDirEntryCount(t, env, bob)
 
 		// UN-authorize dest after escrow creation
 		mptGw.Authorize(mpt.AuthorizeOpts{
@@ -1000,12 +1193,24 @@ func TestMPTEscrow_FinishPreclaim(t *testing.T) {
 
 		result = env.Submit(
 			escrow.EscrowFinish(bob, alice, seq1).
-				Condition(escrow.TestCondition1).
-				Fulfillment(escrow.TestFulfillment1).
+				Condition(escrow.TestCondition1()).
+				Fulfillment(escrow.TestFulfillment1()).
 				Fee(env.BaseFee() * 150).
 				Build())
 		jtx.RequireTxFail(t, result, jtx.TecNO_AUTH)
 		env.Close()
+		require.True(t, env.LedgerEntryExists(escrowKey))
+		requireOwnerDirContains(t, env, alice, escrowKey.Key, true)
+		requireOwnerDirContains(t, env, bob, escrowKey.Key, true)
+		require.Equal(t, aliceOwnerCount, env.OwnerCount(alice))
+		require.Equal(t, bobOwnerCount, env.OwnerCount(bob))
+		require.Equal(t, aliceDirEntries, ownerDirEntryCount(t, env, alice))
+		require.Equal(t, bobDirEntries, ownerDirEntryCount(t, env, bob))
+		mptGw.RequireMPTokenAmount(alice, 9_990)
+		mptGw.RequireMPTokenAmount(bob, 10_000)
+		require.Equal(t, uint64(10), mptGw.HolderLockedAmount(alice))
+		require.Equal(t, uint64(10), mptGw.IssuanceLockedAmount())
+		require.Equal(t, uint64(20_000), mptGw.IssuanceOutstandingAmount())
 	})
 }
 
@@ -1047,11 +1252,16 @@ func TestMPTEscrow_CancelPreclaim(t *testing.T) {
 			escrow.EscrowCreate(alice, bob, 0).
 				MPTAmount(amt).
 				CancelTime(env.Now().Add(2 * time.Second)).
-				Condition(escrow.TestCondition1).
+				Condition(escrow.TestCondition1()).
 				Fee(env.BaseFee() * 150).
 				Build())
 		jtx.RequireTxSuccess(t, result)
 		env.Close()
+		escrowKey := keylet.Escrow(alice.ID, seq1)
+		aliceOwnerCount := env.OwnerCount(alice)
+		bobOwnerCount := env.OwnerCount(bob)
+		aliceDirEntries := ownerDirEntryCount(t, env, alice)
+		bobDirEntries := ownerDirEntryCount(t, env, bob)
 
 		// UN-authorize account (alice) after escrow creation
 		mptGw.Authorize(mpt.AuthorizeOpts{
@@ -1064,6 +1274,18 @@ func TestMPTEscrow_CancelPreclaim(t *testing.T) {
 			escrow.EscrowCancel(bob, alice, seq1).Build())
 		jtx.RequireTxFail(t, result, jtx.TecNO_AUTH)
 		env.Close()
+		require.True(t, env.LedgerEntryExists(escrowKey))
+		requireOwnerDirContains(t, env, alice, escrowKey.Key, true)
+		requireOwnerDirContains(t, env, bob, escrowKey.Key, true)
+		require.Equal(t, aliceOwnerCount, env.OwnerCount(alice))
+		require.Equal(t, bobOwnerCount, env.OwnerCount(bob))
+		require.Equal(t, aliceDirEntries, ownerDirEntryCount(t, env, alice))
+		require.Equal(t, bobDirEntries, ownerDirEntryCount(t, env, bob))
+		mptGw.RequireMPTokenAmount(alice, 9_990)
+		mptGw.RequireMPTokenAmount(bob, 10_000)
+		require.Equal(t, uint64(10), mptGw.HolderLockedAmount(alice))
+		require.Equal(t, uint64(10), mptGw.IssuanceLockedAmount())
+		require.Equal(t, uint64(20_000), mptGw.IssuanceOutstandingAmount())
 	})
 }
 
@@ -1096,7 +1318,7 @@ func TestMPTEscrow_TransferFeeRounding(t *testing.T) {
 	result := env.Submit(
 		escrow.EscrowCreate(alice, bob, 0).
 			MPTAmount(amt).
-			Condition(escrow.TestCondition1).
+			Condition(escrow.TestCondition1()).
 			FinishTime(env.Now().Add(1 * time.Second)).
 			Fee(env.BaseFee() * 150).
 			Build())
@@ -1111,8 +1333,8 @@ func TestMPTEscrow_TransferFeeRounding(t *testing.T) {
 
 	result = env.Submit(
 		escrow.EscrowFinish(bob, alice, seq).
-			Condition(escrow.TestCondition1).
-			Fulfillment(escrow.TestFulfillment1).
+			Condition(escrow.TestCondition1()).
+			Fulfillment(escrow.TestFulfillment1()).
 			Fee(env.BaseFee() * 150).
 			Build())
 	jtx.RequireTxSuccess(t, result)
@@ -1191,7 +1413,7 @@ func TestMPTEscrow_LockedRate(t *testing.T) {
 				result := env.Submit(
 					escrow.EscrowCreate(alice, bob, 0).
 						MPTAmount(amt).
-						Condition(escrow.TestCondition1).
+						Condition(escrow.TestCondition1()).
 						FinishTime(env.Now().Add(1 * time.Second)).
 						Fee(env.BaseFee() * 150).
 						Build())
@@ -1206,8 +1428,8 @@ func TestMPTEscrow_LockedRate(t *testing.T) {
 
 				result = env.Submit(
 					escrow.EscrowFinish(bob, alice, seq1).
-						Condition(escrow.TestCondition1).
-						Fulfillment(escrow.TestFulfillment1).
+						Condition(escrow.TestCondition1()).
+						Fulfillment(escrow.TestFulfillment1()).
 						Fee(env.BaseFee() * 150).
 						Build())
 				jtx.RequireTxSuccess(t, result)
@@ -1232,39 +1454,15 @@ func TestMPTEscrow_LockedRate(t *testing.T) {
 	})
 
 	t.Run("Cancel", func(t *testing.T) {
-		// A cancel applies parityRate: the full amount returns to the creator and
-		// nothing stays escrowed or is burned, independent of fixTokenEscrowV1.
-		env := jtx.NewTestEnv(t)
-		env.EnableFeature("TokenEscrow")
-
-		alice := jtx.NewAccount("alice")
-		bob := jtx.NewAccount("bob")
-		gw := jtx.NewAccount("gw")
-		mptGw := lockedRateSetup(t, env, alice, bob, gw)
-
-		amt := mptAmount(125, gw.Address, mptGw.IssuanceID())
-		seq1 := env.Seq(alice)
-		result := env.Submit(
-			escrow.EscrowCreate(alice, bob, 0).
-				MPTAmount(amt).
-				Condition(escrow.TestCondition1).
-				FinishTime(env.Now().Add(1 * time.Second)).
-				CancelTime(env.Now().Add(2 * time.Second)).
-				Fee(env.BaseFee() * 150).
-				Build())
-		jtx.RequireTxSuccess(t, result)
-		env.Close()
-
-		result = env.Submit(
-			escrow.EscrowCancel(alice, alice, seq1).Build())
-		jtx.RequireTxSuccess(t, result)
-		env.Close()
-
-		mptGw.RequireMPTokenAmount(alice, 10_000)
-		mptGw.RequireMPTokenAmount(bob, 10_000)
-		require.Equal(t, uint64(0), mptGw.HolderLockedAmount(alice))
-		require.Equal(t, uint64(0), mptGw.IssuanceLockedAmount())
-		require.Equal(t, uint64(20_000), mptGw.IssuanceOutstandingAmount())
+		for _, fixEnabled := range []bool{false, true} {
+			name := "WithoutFix"
+			if fixEnabled {
+				name = "WithFix"
+			}
+			t.Run(name, func(t *testing.T) {
+				testMPTEscrowLockedRateCancel(t, fixEnabled)
+			})
+		}
 	})
 
 	t.Run("IssuerIsDestination", func(t *testing.T) {
@@ -1283,7 +1481,7 @@ func TestMPTEscrow_LockedRate(t *testing.T) {
 		result := env.Submit(
 			escrow.EscrowCreate(alice, gw, 0).
 				MPTAmount(amt).
-				Condition(escrow.TestCondition1).
+				Condition(escrow.TestCondition1()).
 				FinishTime(env.Now().Add(1 * time.Second)).
 				Fee(env.BaseFee() * 150).
 				Build())
@@ -1296,8 +1494,8 @@ func TestMPTEscrow_LockedRate(t *testing.T) {
 
 		result = env.Submit(
 			escrow.EscrowFinish(gw, alice, seq1).
-				Condition(escrow.TestCondition1).
-				Fulfillment(escrow.TestFulfillment1).
+				Condition(escrow.TestCondition1()).
+				Fulfillment(escrow.TestFulfillment1()).
 				Fee(env.BaseFee() * 150).
 				Build())
 		jtx.RequireTxSuccess(t, result)
@@ -1308,4 +1506,41 @@ func TestMPTEscrow_LockedRate(t *testing.T) {
 		require.Equal(t, uint64(0), mptGw.IssuanceLockedAmount())
 		require.Equal(t, uint64(19_875), mptGw.IssuanceOutstandingAmount())
 	})
+}
+
+func testMPTEscrowLockedRateCancel(t *testing.T, fixEnabled bool) {
+	t.Helper()
+	env := jtx.NewTestEnv(t)
+	env.EnableFeature("TokenEscrow")
+	if !fixEnabled {
+		env.DisableFeature("fixTokenEscrowV1")
+	}
+
+	alice := jtx.NewAccount("alice")
+	bob := jtx.NewAccount("bob")
+	gw := jtx.NewAccount("gw")
+	mptGw := lockedRateSetup(t, env, alice, bob, gw)
+
+	amt := mptAmount(125, gw.Address, mptGw.IssuanceID())
+	seq1 := env.Seq(alice)
+	result := env.Submit(
+		escrow.EscrowCreate(alice, bob, 0).
+			MPTAmount(amt).
+			Condition(escrow.TestCondition1()).
+			FinishTime(env.Now().Add(1 * time.Second)).
+			CancelTime(env.Now().Add(2 * time.Second)).
+			Fee(env.BaseFee() * 150).
+			Build())
+	jtx.RequireTxSuccess(t, result)
+	env.Close()
+
+	result = env.Submit(escrow.EscrowCancel(alice, alice, seq1).Build())
+	jtx.RequireTxSuccess(t, result)
+	env.Close()
+
+	mptGw.RequireMPTokenAmount(alice, 10_000)
+	mptGw.RequireMPTokenAmount(bob, 10_000)
+	require.Zero(t, mptGw.HolderLockedAmount(alice))
+	require.Zero(t, mptGw.IssuanceLockedAmount())
+	require.Equal(t, uint64(20_000), mptGw.IssuanceOutstandingAmount())
 }

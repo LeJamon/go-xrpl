@@ -114,7 +114,7 @@ func TestInvalidAMMPayment(t *testing.T) {
 		cancelTime := escrow.ToRippleTime(now) + 2
 
 		escrowTx := escrow.EscrowCreate(env.Carol, ammAcc, 1000000). // 1 XRP in drops
-										Condition(escrow.TestCondition1).
+										Condition(escrow.TestCondition1()).
 										FinishAfter(finishTime).
 										CancelAfter(cancelTime).
 										Fee(1500). // baseFee * 150

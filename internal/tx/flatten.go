@@ -162,7 +162,7 @@ func ReflectFlatten(tx Transaction) (map[string]any, error) {
 	for _, f := range info.fields {
 		val := v.Field(f.index)
 
-		if f.omitempty && isEmptyValue(val) {
+		if f.omitempty && isEmptyValue(val) && !tx.GetCommon().HasField(f.name) {
 			continue
 		}
 

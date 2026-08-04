@@ -72,7 +72,10 @@ func (e *EscrowCancel) Preclaim(view tx.LedgerView, config tx.EngineConfig) ter.
 		return ter.TemINVALID
 	}
 	escrowData, readErr := view.Read(keylet.Escrow(ownerID, e.OfferSequence))
-	if readErr != nil || escrowData == nil {
+	if readErr != nil {
+		return ter.TefINTERNAL
+	}
+	if escrowData == nil {
 		return ter.TecNO_TARGET
 	}
 	escrowEntry, parseErr := state.ParseEscrow(escrowData)
@@ -111,7 +114,13 @@ func (e *EscrowCancel) Apply(ctx *tx.ApplyContext) ter.Result {
 	// Find the escrow
 	escrowKey := keylet.Escrow(ownerID, e.OfferSequence)
 	escrowData, err := ctx.View.Read(escrowKey)
-	if err != nil || escrowData == nil {
+	if err != nil {
+		return ctx.Internal("read escrow", err)
+	}
+	if escrowData == nil {
+		if rules.Enabled(amendment.FeatureTokenEscrow) {
+			return ter.TecINTERNAL
+		}
 		ctx.Log.Warn("escrow cancel: escrow not found",
 			"owner", e.Owner,
 			"offerSequence", e.OfferSequence,
@@ -204,11 +213,17 @@ func (e *EscrowCancel) Apply(ctx *tx.ApplyContext) ter.Result {
 			// MPT cancel: return tokens to sender (sender == receiver == escrow creator).
 			// parityRate means no transfer fee on cancel.
 			// Reference: rippled line 1371-1387 (escrowUnlockApplyHelper<MPTIssue>)
-			mptRaw, _ := escrowAmount.MPTRaw()
+			mptRaw, ok := escrowAmount.MPTRaw()
+			if !ok {
+				return ter.TefINTERNAL
+			}
 			finalAmount := uint64(mptRaw)
 
 			// Get dest (= owner) balance and ownerCount for the reserve check.
-			ownerBalance, ownerOwnerCount := ownerReserveSnapshot(ctx, ownerID, ownerIsSelf)
+			ownerBalance, ownerOwnerCount, snapshotResult := ownerReserveSnapshot(ctx, ownerID, ownerIsSelf)
+			if snapshotResult != ter.TesSUCCESS {
+				return snapshotResult
+			}
 
 			if result := escrowUnlockMPT(
 				ctx.View,
@@ -232,7 +247,10 @@ func (e *EscrowCancel) Apply(ctx *tx.ApplyContext) ter.Result {
 			// IOU cancel: return tokens to sender (sender == receiver == escrow creator).
 			// parityRate means no transfer fee on cancel.
 			// Reference: rippled line 1371-1387 (escrowUnlockApplyHelper<Issue>)
-			ownerBalance, ownerOwnerCount := ownerReserveSnapshot(ctx, ownerID, ownerIsSelf)
+			ownerBalance, ownerOwnerCount, snapshotResult := ownerReserveSnapshot(ctx, ownerID, ownerIsSelf)
+			if snapshotResult != ter.TesSUCCESS {
+				return snapshotResult
+			}
 
 			if result := escrowUnlockIOU(
 				ctx.View,
@@ -259,18 +277,27 @@ func (e *EscrowCancel) Apply(ctx *tx.ApplyContext) ter.Result {
 		// Reference: rippled Escrow.cpp doApply() lines 1389-1398
 		if escrowEntry.HasIssuerNode {
 			issuerID, err := state.DecodeAccountID(escrowAmount.Issuer)
-			if err == nil {
-				issuerDirKey := keylet.OwnerDir(issuerID)
-				if result := tx.DirRemoveOrBadLedger(ctx.View, issuerDirKey, escrowEntry.IssuerNode, escrowKey.Key); result != ter.TesSUCCESS {
-					return result
-				}
+			if err != nil {
+				return ter.TefBAD_LEDGER
+			}
+			issuerDirKey := keylet.OwnerDir(issuerID)
+			if result := tx.DirRemoveOrBadLedger(ctx.View, issuerDirKey, escrowEntry.IssuerNode, escrowKey.Key); result != ter.TesSUCCESS {
+				return result
+			}
+		}
+
+		if ownerIsSelf {
+			if result := resyncSelfOwnerCount(ctx); result != ter.TesSUCCESS {
+				return result
 			}
 		}
 	}
 
 	// Decrement owner count
 	// Reference: rippled Escrow.cpp doApply() line 1401
-	adjustOwnerCount(ctx, ownerID, -1)
+	if result := adjustOwnerCount(ctx, ownerID, -1); result != ter.TesSUCCESS {
+		return result
+	}
 
 	// Delete the escrow
 	// Reference: rippled Escrow.cpp doApply() line 1405
@@ -288,14 +315,20 @@ func (e *EscrowCancel) Apply(ctx *tx.ApplyContext) ter.Result {
 // submitter (createAsset), so the fee is added back in the self case. For a
 // third-party owner the current ledger balance is used.
 // Reference: rippled Escrow.cpp:1377 (mPriorBalance argument).
-func ownerReserveSnapshot(ctx *tx.ApplyContext, ownerID [20]byte, ownerIsSelf bool) (uint64, uint32) {
+func ownerReserveSnapshot(ctx *tx.ApplyContext, ownerID [20]byte, ownerIsSelf bool) (uint64, uint32, ter.Result) {
 	if ownerIsSelf {
-		return ctx.PriorBalance(), ctx.Account.OwnerCount
+		return ctx.PriorBalance(), ctx.Account.OwnerCount, ter.TesSUCCESS
 	}
-	ownerData, _ := ctx.View.Read(keylet.Account(ownerID))
-	ownerAccount, _ := state.ParseAccountRoot(ownerData)
-	if ownerAccount != nil {
-		return ownerAccount.Balance, ownerAccount.OwnerCount
+	ownerData, err := ctx.View.Read(keylet.Account(ownerID))
+	if err != nil {
+		return 0, 0, ctx.Internal("read escrow owner", err)
 	}
-	return 0, 0
+	if ownerData == nil {
+		return 0, 0, ter.TefBAD_LEDGER
+	}
+	ownerAccount, err := state.ParseAccountRoot(ownerData)
+	if err != nil {
+		return 0, 0, ctx.Internal("parse escrow owner", err)
+	}
+	return ownerAccount.Balance, ownerAccount.OwnerCount, ter.TesSUCCESS
 }
