@@ -832,7 +832,6 @@ type LedgerNavigator interface {
 	GetClosedLedgerIndex() uint32
 	GetValidatedLedgerIndex() uint32
 	AcceptLedger(ctx context.Context) (uint32, error)
-	AcceptLedgerAt(ctx context.Context, closeTime time.Time) (uint32, error)
 	IsStandalone() bool
 }
 

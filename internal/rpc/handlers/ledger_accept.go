@@ -2,11 +2,8 @@ package handlers
 
 import (
 	"encoding/json"
-	"fmt"
-	"time"
 
 	"github.com/LeJamon/go-xrpl/internal/rpc/types"
-	"github.com/LeJamon/go-xrpl/protocol"
 )
 
 // LedgerAcceptMethod handles the ledger_accept RPC method
@@ -23,28 +20,7 @@ func (m *LedgerAcceptMethod) Handle(ctx *types.RpcContext, params json.RawMessag
 		return nil, types.RpcErrorNotStandalone("ledger_accept is only available in standalone mode")
 	}
 
-	// Optional close_time (XRPL ripple-epoch seconds). Not a rippled
-	// RPC field — goxrpl-specific extension for differential testing
-	// against rippled standalone, where unsynchronized time.Now()
-	// clocks would otherwise produce divergent ledger headers.
-	// Malformed input is an error rather than a silent fallback to
-	// time.Now() so callers asking for determinism don't get a
-	// non-deterministic close.
-	var req struct {
-		CloseTime *uint32 `json:"close_time,omitempty"`
-	}
-	closeTime := time.Time{}
-	if len(params) > 0 {
-		if err := json.Unmarshal(params, &req); err != nil {
-			return nil, types.NewRpcError(types.RpcINVALID_PARAMS, "invalidParams", "invalidParams",
-				fmt.Sprintf("ledger_accept: malformed params: %v", err))
-		}
-		if req.CloseTime != nil {
-			closeTime = time.Unix(int64(*req.CloseTime)+protocol.RippleEpochUnix, 0).UTC()
-		}
-	}
-
-	closedSeq, err := ctx.Services.Ledger.AcceptLedgerAt(ctx.Context, closeTime)
+	closedSeq, err := ctx.Services.Ledger.AcceptLedger(ctx.Context)
 	if err != nil {
 		return nil, rpcInternalError("ledger_accept: accepting ledger failed", err)
 	}

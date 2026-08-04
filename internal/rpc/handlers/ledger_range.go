@@ -2,6 +2,7 @@ package handlers
 
 import (
 	"encoding/json"
+	"slices"
 
 	"github.com/LeJamon/go-xrpl/internal/rpc/types"
 )
@@ -43,12 +44,17 @@ func (m *LedgerRangeMethod) Handle(ctx *types.RpcContext, params json.RawMessage
 		return nil, rpcInternalError("ledger_range: ledger query failed", err)
 	}
 
-	// Build ledgers array
-	ledgers := make([]map[string]any, 0, len(result.Hashes))
-	for seq, hash := range result.Hashes {
+	sequences := make([]uint32, 0, len(result.Hashes))
+	for seq := range result.Hashes {
+		sequences = append(sequences, seq)
+	}
+	slices.Sort(sequences)
+
+	ledgers := make([]map[string]any, 0, len(sequences))
+	for _, seq := range sequences {
 		ledgers = append(ledgers, map[string]any{
 			"ledger_index": seq,
-			"ledger_hash":  FormatLedgerHash(hash),
+			"ledger_hash":  FormatLedgerHash(result.Hashes[seq]),
 		})
 	}
 

@@ -6,8 +6,6 @@ import (
 	"errors"
 	"testing"
 
-	"time"
-
 	"github.com/LeJamon/go-xrpl/internal/ledger/service/svcerr"
 	"github.com/LeJamon/go-xrpl/internal/rpc/handlers"
 	"github.com/LeJamon/go-xrpl/internal/rpc/types"
@@ -52,9 +50,6 @@ func (m *mockAccountChannelsLedgerService) GetValidatedLedgerIndex() uint32 {
 	return m.validatedLedgerIndex
 }
 func (m *mockAccountChannelsLedgerService) AcceptLedger(context.Context) (uint32, error) {
-	return m.closedLedgerIndex + 1, nil
-}
-func (m *mockAccountChannelsLedgerService) AcceptLedgerAt(context.Context, time.Time) (uint32, error) {
 	return m.closedLedgerIndex + 1, nil
 }
 func (m *mockAccountChannelsLedgerService) IsStandalone() bool { return m.standalone }

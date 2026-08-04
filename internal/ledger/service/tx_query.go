@@ -192,7 +192,7 @@ func (s *Service) SubmitTransaction(transaction tx.Transaction, rawBlob []byte, 
 		}
 	}
 
-	// Standalone-mode close (AcceptLedgerAt) still drains pendingTxs
+	// Standalone-mode close still drains pendingTxs
 	// for the canonical re-sort. Append on apply so the legacy path
 	// keeps working alongside the openLedgerView ingress.
 	if outcome.Applied && rawBlob != nil {

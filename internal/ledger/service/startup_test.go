@@ -335,7 +335,7 @@ func TestService_StartupReplayStagesParentAndRebuildsTarget(t *testing.T) {
 	require.NoError(t, err)
 	require.True(t, hasTx)
 
-	seq, err := svc.AcceptLedgerAt(ctx, time.Unix(1, 0))
+	seq, err := svc.acceptLedgerAt(ctx, time.Unix(1, 0))
 	require.NoError(t, err)
 	require.Equal(t, target.Sequence(), seq)
 	replayed := svc.GetClosedLedger()

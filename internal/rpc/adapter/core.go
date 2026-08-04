@@ -2,7 +2,6 @@ package adapter
 
 import (
 	"context"
-	"time"
 
 	"github.com/LeJamon/go-xrpl/internal/ledger/service"
 	"github.com/LeJamon/go-xrpl/internal/rpc/types"
@@ -57,11 +56,6 @@ func (a *LedgerServiceAdapter) GetValidatedLedgerIndex() uint32 {
 // AcceptLedger closes the current open ledger (standalone mode only)
 func (a *LedgerServiceAdapter) AcceptLedger(ctx context.Context) (uint32, error) {
 	return a.svc.AcceptLedger(ctx)
-}
-
-// AcceptLedgerAt is AcceptLedger with an explicit close_time.
-func (a *LedgerServiceAdapter) AcceptLedgerAt(ctx context.Context, closeTime time.Time) (uint32, error) {
-	return a.svc.AcceptLedgerAt(ctx, closeTime)
 }
 
 // IsStandalone returns true if running in standalone mode

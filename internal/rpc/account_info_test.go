@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"errors"
 	"testing"
-	"time"
 
 	"github.com/LeJamon/go-xrpl/codec/binarycodec"
 	"github.com/LeJamon/go-xrpl/internal/ledger/service/svcerr"
@@ -51,9 +50,6 @@ func (m *mockLedgerService) GetCurrentLedgerIndex() uint32   { return m.currentL
 func (m *mockLedgerService) GetClosedLedgerIndex() uint32    { return m.closedLedgerIndex }
 func (m *mockLedgerService) GetValidatedLedgerIndex() uint32 { return m.validatedLedgerIndex }
 func (m *mockLedgerService) AcceptLedger(context.Context) (uint32, error) {
-	return m.closedLedgerIndex + 1, nil
-}
-func (m *mockLedgerService) AcceptLedgerAt(context.Context, time.Time) (uint32, error) {
 	return m.closedLedgerIndex + 1, nil
 }
 func (m *mockLedgerService) IsStandalone() bool                    { return m.standalone }
