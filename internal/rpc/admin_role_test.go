@@ -22,7 +22,6 @@ func allAdminMethods() []adminMethodEntry {
 		{"ledger_accept", &handlers.LedgerAcceptMethod{}},
 		{"ledger_cleaner", &handlers.LedgerCleanerMethod{}},
 		{"ledger_request", &handlers.LedgerRequestMethod{}},
-		{"ledger_diff", &handlers.LedgerDiffMethod{}},
 		{"ledger_range", &handlers.LedgerRangeMethod{}},
 		{"log_level", &handlers.LogLevelMethod{}},
 		{"log_rotate", &handlers.LogRotateMethod{}},
@@ -69,7 +68,6 @@ func allGuestMethods() []guestMethodEntry {
 		{"ledger_current", &handlers.LedgerCurrentMethod{}},
 		{"ledger_data", &handlers.LedgerDataMethod{}},
 		{"ledger_entry", &handlers.LedgerEntryMethod{}},
-		{"ledger_index", &handlers.LedgerIndexMethod{}},
 		{"ledger_header", &handlers.LedgerHeaderMethod{}},
 		{"ping", &handlers.PingMethod{}},
 		{"random", &handlers.RandomMethod{}},
@@ -161,7 +159,7 @@ func TestUserMethodsRequireUserRole(t *testing.T) {
 // added to the handlers package but forgotten in this test catalogue.
 // Update the expected count when adding new admin handlers.
 func TestAdminMethodCount(t *testing.T) {
-	const expectedAdminCount = 25
+	const expectedAdminCount = 24
 
 	got := len(allAdminMethods())
 	assert.Equal(t, expectedAdminCount, got,
@@ -174,7 +172,7 @@ func TestAdminMethodCount(t *testing.T) {
 // added to the handlers package but forgotten in this test catalogue.
 // Update the expected count when adding new guest handlers.
 func TestGuestMethodCount(t *testing.T) {
-	const expectedGuestCount = 41
+	const expectedGuestCount = 40
 
 	got := len(allGuestMethods())
 	assert.Equal(t, expectedGuestCount, got,
@@ -204,7 +202,7 @@ func TestAllMethodsCovered(t *testing.T) {
 	// The expected total is the sum of all three role categories.
 	// Every handler struct in the handlers package must appear in exactly
 	// one of: allAdminMethods, allGuestMethods, allUserMethods.
-	const expectedTotal = 25 + 41 + 10 // 76
+	const expectedTotal = 24 + 40 + 10 // 74
 
 	total := len(allAdminMethods()) + len(allGuestMethods()) + len(allUserMethods())
 	assert.Equal(t, expectedTotal, total,

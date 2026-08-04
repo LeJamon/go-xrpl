@@ -366,18 +366,6 @@ func validateJsonCppIntegerRange(params json.RawMessage) *types.RpcError {
 	return nil
 }
 
-func ValidateJsonCppIntegerRange(params json.RawMessage) *types.RpcError {
-	return validateJsonCppIntegerRange(params)
-}
-
-// RequireAccount checks that the account parameter is non-empty.
-func RequireAccount(account string) *types.RpcError {
-	if account == "" {
-		return types.RpcErrorInvalidParams("Missing required parameter: account")
-	}
-	return nil
-}
-
 // ValidateAccount validates a base58-encoded XRPL account address.
 // Returns rpcACT_MALFORMED (code 35) if malformed, matching rippled behavior.
 func ValidateAccount(account string) *types.RpcError {

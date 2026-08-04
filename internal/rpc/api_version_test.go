@@ -43,7 +43,6 @@ func allHandlers() map[string]types.MethodHandler {
 		"ledger_current": &handlers.LedgerCurrentMethod{},
 		"ledger_data":    &handlers.LedgerDataMethod{},
 		"ledger_entry":   &handlers.LedgerEntryMethod{},
-		"ledger_index":   &handlers.LedgerIndexMethod{},
 		"ledger_range":   &handlers.LedgerRangeMethod{},
 
 		// Server methods
@@ -101,7 +100,6 @@ func allHandlers() map[string]types.MethodHandler {
 		"ledger_header":   &handlers.LedgerHeaderMethod{},
 		"ledger_request":  &handlers.LedgerRequestMethod{},
 		"ledger_cleaner":  &handlers.LedgerCleanerMethod{},
-		"ledger_diff":     &handlers.LedgerDiffMethod{},
 		"tx_reduce_relay": &handlers.TxReduceRelayMethod{},
 		"connect":         &handlers.ConnectMethod{},
 		"print":           &handlers.PrintMethod{},

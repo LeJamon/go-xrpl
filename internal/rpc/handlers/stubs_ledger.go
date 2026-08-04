@@ -123,17 +123,3 @@ func decodeOwnerObject(obj types.AccountObjectItem) map[string]any {
 func (m *OwnerInfoMethod) RequiredCondition() types.Condition {
 	return types.NeedsCurrentLedger
 }
-
-// LedgerDiffMethod handles the ledger_diff RPC method.
-// STUB: Returns error. Only available via gRPC in rippled.
-//
-// NOTE: This is gRPC-only in rippled and is NOT available via JSON-RPC.
-//
-//	It computes the state diff between two ledger versions.
-//	This stub exists for completeness but may never need implementation.
-type LedgerDiffMethod struct{ AdminHandler }
-
-func (m *LedgerDiffMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (any, *types.RpcError) {
-	return nil, types.NewRpcError(types.RpcNOT_IMPL, "notImplemented", "notImplemented",
-		"ledger_diff is only available via gRPC in rippled — JSON-RPC not supported")
-}

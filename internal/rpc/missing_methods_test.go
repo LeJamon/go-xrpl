@@ -477,35 +477,6 @@ func TestLedgerCleanerMethod(t *testing.T) {
 	})
 }
 
-// LedgerDiffMethod Tests
-
-func TestLedgerDiffMethod(t *testing.T) {
-	mock := newMockLedgerServiceMissingMethods()
-	services := servicesForMissingMethods(mock)
-
-	method := &handlers.LedgerDiffMethod{}
-
-	t.Run("Returns gRPC only error", func(t *testing.T) {
-		ctx := &types.RpcContext{
-			Context:    context.Background(),
-			Role:       types.RoleAdmin,
-			ApiVersion: types.ApiVersion1,
-			Services:   services,
-		}
-
-		result, rpcErr := method.Handle(ctx, nil)
-
-		assert.Nil(t, result)
-		require.NotNil(t, rpcErr)
-		// ledger_diff is gRPC only in rippled
-		assert.Contains(t, rpcErr.Message, "gRPC")
-	})
-
-	t.Run("RequiredRole is Admin", func(t *testing.T) {
-		assert.Equal(t, types.RoleAdmin, method.RequiredRole())
-	})
-}
-
 // SimulateMethod Tests
 // Reference: rippled/src/test/rpc/Simulate_test.cpp
 
@@ -1939,7 +1910,6 @@ func TestMissingMethodsServiceUnavailable(t *testing.T) {
 		{"LedgerHeaderMethod", &handlers.LedgerHeaderMethod{}},
 		{"LedgerRequestMethod", &handlers.LedgerRequestMethod{}},
 		{"LedgerCleanerMethod", &handlers.LedgerCleanerMethod{}},
-		{"LedgerDiffMethod", &handlers.LedgerDiffMethod{}},
 		{"SimulateMethod", &handlers.SimulateMethod{}},
 		{"TxReduceRelayMethod", &handlers.TxReduceRelayMethod{}},
 		{"ConnectMethod", &handlers.ConnectMethod{}},
