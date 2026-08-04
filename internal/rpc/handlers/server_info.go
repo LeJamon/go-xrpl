@@ -112,10 +112,84 @@ func (m *ServerInfoMethod) Handle(ctx *types.RpcContext, params json.RawMessage)
 	}
 
 	info := buildServerInfo(ctx, true)
+	if serverCountersRequested(params) {
+		addServerDiagnostics(info, ctx.Services)
+	}
 	if warnings := buildServerWarnings(ctx.Services, ctx.IsAdmin); len(warnings) > 0 {
 		info["warnings"] = warnings
 	}
 	return map[string]any{"info": info}, nil
+}
+
+func serverCountersRequested(params json.RawMessage) bool {
+	if len(params) == 0 {
+		return false
+	}
+	var object map[string]json.RawMessage
+	if json.Unmarshal(params, &object) != nil || object == nil {
+		return false
+	}
+	return jsonCppBoolRaw(object["counters"])
+}
+
+func addServerDiagnostics(info map[string]any, services *types.ServiceContainer) {
+	rpcCounters := make(map[string]any)
+	methods := make([]map[string]any, 0)
+	var snapshot types.RPCDiagnosticsSnapshot
+	if services != nil && services.RPCDiagnostics != nil {
+		snapshot = services.RPCDiagnostics.Snapshot()
+	}
+
+	var total types.RPCMethodDiagnostics
+	for method, stats := range snapshot.Methods {
+		if stats.Started == 0 {
+			continue
+		}
+		rpcCounters[method] = rpcDiagnosticsJSON(stats)
+		total.Started += stats.Started
+		total.Finished += stats.Finished
+		total.Errored += stats.Errored
+		total.DurationUs += stats.DurationUs
+	}
+	if total.Started != 0 {
+		rpcCounters["total"] = rpcDiagnosticsJSON(total)
+	}
+	for _, activity := range snapshot.Current {
+		methods = append(methods, map[string]any{
+			"method":      activity.Method,
+			"duration_us": strconv.FormatUint(activity.DurationUs, 10),
+		})
+	}
+
+	nodeStore := make(map[string]any)
+	if services != nil && services.GetCounts != nil {
+		if counts := services.GetCounts().NodeStore; counts != nil {
+			nodeStore["node_writes"] = strconv.FormatUint(counts.Writes, 10)
+			nodeStore["node_reads_total"] = strconv.FormatUint(counts.Reads, 10)
+			nodeStore["node_reads_hit"] = strconv.FormatUint(counts.FetchHits, 10)
+			nodeStore["node_written_bytes"] = strconv.FormatUint(counts.WriteBytes, 10)
+			nodeStore["node_read_bytes"] = strconv.FormatUint(counts.ReadBytes, 10)
+		}
+	}
+
+	info["counters"] = map[string]any{
+		"rpc":       rpcCounters,
+		"job_queue": map[string]any{},
+		"nodestore": nodeStore,
+	}
+	info["current_activities"] = map[string]any{
+		"jobs":    []map[string]any{},
+		"methods": methods,
+	}
+}
+
+func rpcDiagnosticsJSON(stats types.RPCMethodDiagnostics) map[string]any {
+	return map[string]any{
+		"started":     strconv.FormatUint(stats.Started, 10),
+		"finished":    strconv.FormatUint(stats.Finished, 10),
+		"errored":     strconv.FormatUint(stats.Errored, 10),
+		"duration_us": strconv.FormatUint(stats.DurationUs, 10),
+	}
 }
 
 func buildServerWarnings(services *types.ServiceContainer, isAdmin bool) []types.WarningObject {

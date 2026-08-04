@@ -15,8 +15,9 @@ import (
 func newSpecialDispatchHarness(t *testing.T) (*WebSocketServer, *websocketConnection, *types.RpcContext) {
 	t.Helper()
 	services := &types.ServiceContainer{
-		ClientLoad:   types.NewClientLoadShedder(),
-		Capabilities: types.RPCCapabilities{PathSearchMax: 3},
+		ClientLoad:     types.NewClientLoadShedder(),
+		RPCDiagnostics: NewRPCDiagnostics(),
+		Capabilities:   types.RPCCapabilities{PathSearchMax: 3},
 	}
 	ws := NewWebSocketServer(WebSocketServerOptions{Timeout: time.Second, Services: services, LoadTracker: loadtrack.New()})
 	ws.methodRegistry.Register("subscribe", &stubHandler{})
@@ -169,6 +170,9 @@ func TestWebSocketSpecialDispatchRecoversPanic(t *testing.T) {
 	}
 	if got := ws.services.ClientLoad.InFlight(); got != 0 {
 		t.Fatalf("in-flight leaked after panic: %d", got)
+	}
+	if stats := ws.services.RPCDiagnostics.Snapshot().Methods["subscribe"]; stats.Started != 1 || stats.Finished != 0 || stats.Errored != 1 {
+		t.Fatalf("diagnostics = %#v", stats)
 	}
 }
 

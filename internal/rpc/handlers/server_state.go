@@ -16,6 +16,9 @@ func (m *ServerStateMethod) Handle(ctx *types.RpcContext, params json.RawMessage
 	}
 
 	state := buildServerInfo(ctx, false)
+	if serverCountersRequested(params) {
+		addServerDiagnostics(state, ctx.Services)
+	}
 	if warnings := buildServerWarnings(ctx.Services, ctx.IsAdmin); len(warnings) > 0 {
 		state["warnings"] = warnings
 	}

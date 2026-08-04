@@ -383,6 +383,11 @@ type ServiceContainer struct {
 	// nil as "never shed".
 	ClientLoad *ClientLoadShedder
 
+	// RPCDiagnostics records completed and currently-running RPC handlers for
+	// server_info/server_state. It is shared by every transport so the snapshot
+	// represents the node rather than one listener.
+	RPCDiagnostics RPCDiagnostics
+
 	// GetCounts returns the runtime counters surfaced by the get_counts RPC
 	// (node-store I/O counters and locally-held transactions). Nil until the
 	// ledger service is wired — the handler then reports only the standalone
@@ -575,6 +580,31 @@ type NodeStoreCounts struct {
 	Writes     uint64 // node_writes
 	ReadBytes  uint64 // node_read_bytes
 	WriteBytes uint64 // node_written_bytes
+}
+
+// RPCDiagnostics records handler execution after admission and exposes an
+// immutable point-in-time snapshot. The finish callback receives true only
+// when the handler panicked; ordinary RPC error results are completed calls.
+type RPCDiagnostics interface {
+	Start(method string) (finish func(panicked bool))
+	Snapshot() RPCDiagnosticsSnapshot
+}
+
+type RPCDiagnosticsSnapshot struct {
+	Methods map[string]RPCMethodDiagnostics
+	Current []RPCActivity
+}
+
+type RPCMethodDiagnostics struct {
+	Started    uint64
+	Finished   uint64
+	Errored    uint64
+	DurationUs uint64
+}
+
+type RPCActivity struct {
+	Method     string
+	DurationUs uint64
 }
 
 // FullBelowCounts holds the shared SHAMap completeness-cache metrics.

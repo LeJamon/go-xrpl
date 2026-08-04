@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"path/filepath"
 	"time"
 
 	"github.com/LeJamon/go-xrpl/config"
@@ -253,6 +254,9 @@ func (r *nodeRuntime) configureMaintenance() error {
 
 	r.ledgerAdapter = rpcadapter.NewLedgerServiceAdapter(r.ledger)
 	r.services = newRPCServiceContainer(r.ledgerAdapter, r.appConfig)
+	if err := r.configureStandaloneNodeIdentity(); err != nil {
+		return err
+	}
 
 	// Advisory-delete state (can_delete RPC). Available in both standalone and
 	// consensus modes; gated by node_db advisory_delete and persisted under
@@ -453,6 +457,22 @@ func (r *nodeRuntime) configureMaintenance() error {
 			return toCleanerStatus(cleanerRef.Status())
 		}
 	}
+	return nil
+}
+
+func (r *nodeRuntime) configureStandaloneNodeIdentity() error {
+	if !r.standalone {
+		return nil
+	}
+	dataDir := r.appConfig.LocalStateDir()
+	if dataDir != "" {
+		dataDir = filepath.Join(dataDir, "peers")
+	}
+	identity, err := peermanagement.LoadOrCreateIdentity(dataDir)
+	if err != nil {
+		return fmt.Errorf("load node identity: %w", err)
+	}
+	r.services.NodePublicKey = identity.EncodedPublicKey()
 	return nil
 }
 

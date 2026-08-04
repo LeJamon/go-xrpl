@@ -20,6 +20,7 @@ func TestNewRPCServiceContainerFreezesCapabilities(t *testing.T) {
 	require.Zero(t, services.Capabilities.PathSearchMax)
 	require.True(t, services.BetaRPCAPI)
 	require.NotNil(t, services.ClientLoad)
+	require.NotNil(t, services.RPCDiagnostics)
 
 	cfg.SigningSupport = false
 	pathMax = 9

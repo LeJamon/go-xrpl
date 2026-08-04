@@ -193,13 +193,21 @@ func dispatchResolvedMethod(
 		services.ClientLoad.Begin()
 		defer services.ClientLoad.End()
 	}
+	finishDiagnostics := startRPCDiagnostics(services, method)
 	result, rpcErr, recovered := invokeHandler(resolution.handler, ctx, params, method, log)
+	finishDiagnostics(recovered)
 	kind := loadtrack.LoadKind(ctx.LoadCost)
 	if recovered && kind == loadtrack.LoadReference {
 		kind = loadtrack.LoadException
 	}
 	finalizeLoad(tracker, ctx, method, kind, log)
 	return result, rpcErr
+}
+func startRPCDiagnostics(services *types.ServiceContainer, method string) func(bool) {
+	if services == nil || services.RPCDiagnostics == nil {
+		return func(bool) {}
+	}
+	return services.RPCDiagnostics.Start(method)
 }
 func dispatchNestedMethod(
 	registry *types.MethodRegistry,

@@ -141,7 +141,10 @@ func (ws *WebSocketServer) handleSpecialCommand(wsConn *websocketConnection, ctx
 			ws.services.ClientLoad.Begin()
 			defer ws.services.ClientLoad.End()
 		}
-		return invokeWSSpecial(handler, wsConn, ctx, cmd)
+		finishDiagnostics := startRPCDiagnostics(ws.services, cmd.Command)
+		result, rpcErr, recovered := invokeWSSpecial(handler, wsConn, ctx, cmd)
+		finishDiagnostics(recovered)
+		return result, rpcErr, recovered
 	}()
 	kind := loadtrack.LoadKind(ctx.LoadCost)
 	if recovered && kind == loadtrack.LoadReference {

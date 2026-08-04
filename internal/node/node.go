@@ -100,6 +100,7 @@ func rpcCapabilities(cfg *config.Config) types.RPCCapabilities {
 func newRPCServiceContainer(ledger types.LedgerService, cfg *config.Config) *types.ServiceContainer {
 	services := types.NewServiceContainer(ledger)
 	services.ClientLoad = types.NewClientLoadShedder()
+	services.RPCDiagnostics = rpc.NewRPCDiagnostics()
 	services.ServerInfoConfig = serverInfoConfigSnapshot(cfg)
 	services.Capabilities = rpcCapabilities(cfg)
 	if cfg != nil {
