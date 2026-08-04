@@ -270,7 +270,7 @@ func buildLedgerJSON(l types.LedgerReader, binaryMode, full bool, apiVersion int
 	result["close_time_resolution"] = l.CloseTimeResolution()
 	if l.CloseTime() != 0 {
 		closeTime := protocol.FromRippleTime(uint32(max(l.CloseTime(), 0)))
-		result["close_time_human"] = closeTime.UTC().Format("2006-Jan-02 15:04:05.000000000 UTC")
+		result["close_time_human"] = protocol.FormatCloseTimeHuman(closeTime)
 		result["close_time_iso"] = protocol.FormatCloseTimeISO(closeTime)
 		if l.CloseFlags()&ledgerheader.LCFNoConsensusTime != 0 {
 			result["close_time_estimated"] = true

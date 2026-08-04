@@ -21,16 +21,13 @@ func ledgerInfoJSON(l types.LedgerReader) map[string]any {
 	parent := l.ParentHash()
 	txHash, stateHash := ledgerMapHashes(l)
 	closeTimeSec := l.CloseTime()
-	closeTime := protocol.FromRippleTime(uint32(max(closeTimeSec, 0)))
 	seqStr := strconv.FormatUint(uint64(l.Sequence()), 10)
 
-	return map[string]any{
+	result := map[string]any{
 		"accepted":              true,
 		"account_hash":          strings.ToUpper(hex.EncodeToString(stateHash[:])),
 		"close_flags":           l.CloseFlags(),
 		"close_time":            closeTimeSec,
-		"close_time_human":      closeTime.UTC().Format("2006-Jan-02 15:04:05.000000000 UTC"),
-		"close_time_iso":        protocol.FormatCloseTimeISO(closeTime),
 		"close_time_resolution": l.CloseTimeResolution(),
 		"closed":                l.IsClosed(),
 		"ledger_hash":           strings.ToUpper(hex.EncodeToString(hash[:])),
@@ -42,6 +39,12 @@ func ledgerInfoJSON(l types.LedgerReader) map[string]any {
 		"total_coins":           strconv.FormatUint(l.TotalDrops(), 10),
 		"transaction_hash":      strings.ToUpper(hex.EncodeToString(txHash[:])),
 	}
+	if closeTimeSec > 0 {
+		closeTime := protocol.FromRippleTime(uint32(closeTimeSec))
+		result["close_time_human"] = protocol.FormatCloseTimeHuman(closeTime)
+		result["close_time_iso"] = protocol.FormatCloseTimeISO(closeTime)
+	}
+	return result
 }
 
 // LedgerRequestMethod handles the ledger_request RPC method: it returns a

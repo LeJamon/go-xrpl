@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/hex"
 	"errors"
-	"time"
 
 	"github.com/LeJamon/go-xrpl/internal/ledger"
 	ledgerselector "github.com/LeJamon/go-xrpl/internal/ledger/selector"
@@ -148,11 +147,6 @@ func parentCloseTimeRippleEpoch(parent *ledger.Ledger) uint32 {
 	return protocol.ToRippleTime(parent.CloseTime())
 }
 
-// formatCloseTimeHuman formats close time in XRPL human-readable format
-func formatCloseTimeHuman(t time.Time) string {
-	return t.UTC().Format("2006-Jan-02 15:04:05.000000000 UTC")
-}
-
 // GetLedgerData retrieves all ledger state entries with optional pagination
 func (q *queryFacade) GetLedgerData(ctx context.Context, ledgerIndex string, limit uint32, marker string) (*LedgerDataResult, error) {
 	s := q.service
@@ -192,7 +186,7 @@ func (q *queryFacade) GetLedgerData(ctx context.Context, ledgerIndex string, lim
 			AccountHash:         hdr.AccountHash,
 			CloseFlags:          hdr.CloseFlags,
 			CloseTime:           protocol.RippleSeconds(hdr.CloseTime),
-			CloseTimeHuman:      formatCloseTimeHuman(hdr.CloseTime),
+			CloseTimeHuman:      protocol.FormatCloseTimeHuman(hdr.CloseTime),
 			CloseTimeISO:        protocol.FormatCloseTimeISO(hdr.CloseTime),
 			CloseTimeResolution: uint32(hdr.CloseTimeResolution),
 			Closed:              targetLedger.IsClosed() || targetLedger.IsValidated(),

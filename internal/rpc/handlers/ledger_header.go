@@ -125,7 +125,7 @@ func buildLedgerSummaryJSON(lr types.LedgerReader, closed bool, apiVersion int) 
 	// close_time_human and close_time_iso only when closeTime > 0
 	if ct > 0 {
 		closeTimeUTC := protocol.FromRippleTime(uint32(ct))
-		ledgerObj["close_time_human"] = closeTimeUTC.Format("2006-Jan-02 15:04:05.000000000 UTC")
+		ledgerObj["close_time_human"] = protocol.FormatCloseTimeHuman(closeTimeUTC)
 		ledgerObj["close_time_iso"] = protocol.FormatCloseTimeISO(closeTimeUTC)
 
 		// close_time_estimated only when there was no consensus on close time

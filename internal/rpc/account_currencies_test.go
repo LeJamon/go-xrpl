@@ -318,6 +318,13 @@ func TestAccountCurrenciesBadInput(t *testing.T) {
 				assert.Equal(t, tc.expectedToken, rpcErr.ErrorString,
 					"Error token should match expected")
 			}
+			if tc.expectedCode == types.RpcACT_NOT_FOUND {
+				assert.Equal(t, map[string]any{
+					"error":         "actNotFound",
+					"error_code":    types.RpcACT_NOT_FOUND,
+					"error_message": "Account not found.",
+				}, rpcErr.ResponseFields())
+			}
 		})
 	}
 }

@@ -13,6 +13,7 @@ import (
 	"github.com/LeJamon/go-xrpl/internal/ledger/service/svcerr"
 	"github.com/LeJamon/go-xrpl/internal/rpc/handlers"
 	"github.com/LeJamon/go-xrpl/internal/rpc/types"
+	"github.com/LeJamon/go-xrpl/protocol"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -317,7 +318,7 @@ func TestLedgerBasicRequest(t *testing.T) {
 				"account_hash":          handlers.FormatLedgerHash(currentReader.StateMapHash()),
 				"close_flags":           float64(currentReader.CloseFlags()),
 				"close_time":            float64(currentReader.CloseTime()),
-				"close_time_human":      closeTime.Format("2006-Jan-02 15:04:05.000000000 UTC"),
+				"close_time_human":      protocol.FormatCloseTimeHuman(closeTime),
 				"close_time_iso":        closeTime.Format(time.RFC3339),
 				"close_time_resolution": float64(currentReader.CloseTimeResolution()),
 				"ledger_hash":           handlers.FormatLedgerHash(currentReader.Hash()),
@@ -982,7 +983,7 @@ func TestLedgerResponseStructure(t *testing.T) {
 			"account_hash":          handlers.FormatLedgerHash(reader.StateMapHash()),
 			"close_flags":           float64(reader.CloseFlags()),
 			"close_time":            float64(reader.CloseTime()),
-			"close_time_human":      closeTime.Format("2006-Jan-02 15:04:05.000000000 UTC"),
+			"close_time_human":      protocol.FormatCloseTimeHuman(closeTime),
 			"close_time_iso":        closeTime.Format(time.RFC3339),
 			"close_time_resolution": float64(reader.CloseTimeResolution()),
 			"closed":                true,

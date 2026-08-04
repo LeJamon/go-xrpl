@@ -210,6 +210,8 @@ type ServiceContainer struct {
 
 	// NodePublicKey is the base58-encoded node identity public key (e.g. "n9...")
 	NodePublicKey string
+	// SystemTime supplies the wall clock used in time-bearing RPC projections.
+	SystemTime func() time.Time
 
 	// ServerInfoConfig is the immutable startup configuration and build
 	// metadata surfaced by server_info and server_state.

@@ -55,6 +55,21 @@ func TestKeyToEnglishCanonicalVectors(t *testing.T) {
 	}
 }
 
+func TestWordFromBlob(t *testing.T) {
+	key := make([]byte, 33)
+	key[0] = 2
+	for i := 1; i < len(key); i++ {
+		key[i] = byte(i)
+	}
+
+	if got := WordFromBlob(key); got != "LANG" {
+		t.Fatalf("WordFromBlob() = %q, want LANG", got)
+	}
+	if got := WordFromBlob(nil); got != "A" {
+		t.Fatalf("WordFromBlob(nil) = %q, want A", got)
+	}
+}
+
 // Cross-implementation vectors lifted verbatim from rippled's
 // KeyGeneration_test.cpp. master_seed_hex is the 16-byte seed entropy;
 // master_key is what rippled's seedAs1751 (and go-xrpl's SeedToEnglish, used by
