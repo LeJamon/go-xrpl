@@ -41,7 +41,12 @@ func TestRipplePathFindRejectsMPTWithZeroIssuer(t *testing.T) {
 
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			_, rpcErr := (&RipplePathFindMethod{}).Handle(&types.RpcContext{}, test.params)
+			_, rpcErr := (&RipplePathFindMethod{}).Handle(&types.RpcContext{
+				Services: &types.ServiceContainer{
+					Ledger:       &pathFindTestLedger{info: freshPathFindInfo(), view: &pathFindTestView{}},
+					Capabilities: types.RPCCapabilities{PathSearchMax: 3},
+				},
+			}, test.params)
 			require.NotNil(t, rpcErr)
 			require.Equal(t, test.token, rpcErr.ErrorString)
 		})
@@ -93,4 +98,13 @@ func TestParseSourceCurrenciesAcceptsZeroMPTLiteral(t *testing.T) {
 	require.Len(t, issues, 1)
 	require.True(t, issues[0].IsMPT)
 	require.Equal(t, [24]byte{}, issues[0].MPTID)
+}
+
+func TestParseSourceCurrenciesMPTIssuerIsCurrencyMalformed(t *testing.T) {
+	probe := map[string]json.RawMessage{
+		"source_currencies": json.RawMessage(`[{"mpt_issuance_id":"0","issuer":"rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh"}]`),
+	}
+	_, rpcErr := parseSourceCurrencies(probe, [20]byte{1}, nil)
+	require.NotNil(t, rpcErr)
+	require.Equal(t, "srcCurMalformed", rpcErr.ErrorString)
 }

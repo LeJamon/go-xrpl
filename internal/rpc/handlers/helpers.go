@@ -91,6 +91,16 @@ func RequireTxTables(services *types.ServiceContainer) *types.RpcError {
 	return nil
 }
 
+// RequirePathSearch gates the path-finding RPCs on the startup path-search
+// capability. The check belongs at each transport/handler entry point so a
+// disabled server rejects before parsing request parameters or charging load.
+func RequirePathSearch(ctx *types.RpcContext) *types.RpcError {
+	if ctx == nil || ctx.Services == nil || ctx.Services.Capabilities.PathSearchMax == 0 {
+		return types.RpcErrorNotSupported("")
+	}
+	return nil
+}
+
 // shedCheck returns the shedder when a gate should run: nil otherwise.
 // Skips when ctx is missing, the shedder isn't wired, or the caller is
 // unlimited (admin/identified) — mirroring rippled's isUnlimited(role)
@@ -131,17 +141,31 @@ func RequireNotBusyBookOffers(ctx *types.RpcContext) *types.RpcError {
 // AcquirePathfind admits a path-finding request, mirroring the
 // LegacyPathFind ctor at rippled LegacyPathFind.cpp:30-60:
 //
-//  1. Admin/unlimited callers bypass the gate.
+//  1. Admin/unlimited callers bypass the load and concurrency gates but still
+//     increment the shared in-progress counter.
 //  2. If in-flight RPCs exceed Tuning::maxPathfindJobCount (50), shed.
 //  3. Otherwise CAS-increment the concurrent-path-find counter; if it
 //     would exceed Tuning::maxPathfindsInProgress (2), shed.
 //
 // Returns a release func the caller MUST invoke (typically via defer)
-// when admitted; release is nil on shed. The isLoadedLocal() check
-// rippled performs in the same ctor will land alongside the LoadFeeTrack
-// subsystem (ServiceContainer.LoadFactorFees is nil today).
+// when admitted; release is nil on shed. Local fee pressure is checked even
+// when the in-flight client counter is not wired.
 func AcquirePathfind(ctx *types.RpcContext) (release func(), rpcErr *types.RpcError) {
-	s := shedCheck(ctx)
+	if ctx == nil || ctx.Services == nil {
+		return func() {}, nil
+	}
+	services := ctx.Services
+	s := services.ClientLoad
+	if ctx.Unlimited {
+		if s == nil {
+			return func() {}, nil
+		}
+		s.AcquirePathfindUnlimited()
+		return s.ReleasePathfind, nil
+	}
+	if services.IsLoadedLocal != nil && services.IsLoadedLocal() {
+		return nil, types.RpcErrorTooBusy()
+	}
 	if s == nil {
 		return func() {}, nil
 	}

@@ -58,7 +58,11 @@ func TestRipplePathFindBusyAdmissionIsHeavy(t *testing.T) {
 	ctx := &types.RpcContext{
 		Context:  context.Background(),
 		LoadCost: uint32(loadtrack.LoadReference),
-		Services: &types.ServiceContainer{ClientLoad: shedder},
+		Services: &types.ServiceContainer{
+			Ledger:       &loadAdmissionLedger{serverInfo: &types.LedgerServerInfo{Standalone: true}},
+			ClientLoad:   shedder,
+			Capabilities: types.RPCCapabilities{PathSearchMax: 3},
+		},
 	}
 
 	_, rpcErr := (&RipplePathFindMethod{}).Handle(ctx, json.RawMessage(`{}`))

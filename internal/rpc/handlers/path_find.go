@@ -21,6 +21,24 @@ import (
 type PathFindMethod struct{ BaseHandler }
 
 func (m *PathFindMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (any, *types.RpcError) {
+	if rpcErr := RequirePathSearch(ctx); rpcErr != nil {
+		return nil, rpcErr
+	}
+	if len(params) == 0 {
+		return nil, types.RpcErrorInvalidParams("Invalid parameters.")
+	}
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(params, &fields); err != nil || fields == nil {
+		return nil, types.RpcErrorInvalidParams("Invalid parameters.")
+	}
+	rawSubcommand, ok := fields["subcommand"]
+	if !ok {
+		return nil, types.RpcErrorInvalidParams("Invalid parameters.")
+	}
+	var subcommand *string
+	if err := json.Unmarshal(rawSubcommand, &subcommand); err != nil || subcommand == nil {
+		return nil, types.RpcErrorInvalidParams("Invalid parameters.")
+	}
 	return nil, types.RpcErrorNoEvents("")
 }
 

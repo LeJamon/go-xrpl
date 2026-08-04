@@ -98,7 +98,13 @@ func TestGates_UnlimitedBypass(t *testing.T) {
 	if rpcErr != nil {
 		t.Fatalf("admin must bypass pathfind gate, got %v", rpcErr)
 	}
-	release() // must be a safe no-op
+	if got := s.PathfindActive(); got != 1 {
+		t.Fatalf("admin pathfind active = %d, want 1", got)
+	}
+	release()
+	if got := s.PathfindActive(); got != 0 {
+		t.Fatalf("admin pathfind active after release = %d, want 0", got)
+	}
 }
 
 // AcquirePathfind mirrors LegacyPathFind ctor (LegacyPathFind.cpp:30-60):
@@ -120,6 +126,59 @@ func TestAcquirePathfind_JobCountGate(t *testing.T) {
 	if got := s.PathfindActive(); got != 0 {
 		t.Errorf("pathfindActive leaked: got %d, want 0", got)
 	}
+}
+
+func TestAcquirePathfind_LocalLoadGateWithoutClientCounter(t *testing.T) {
+	ctx := &types.RpcContext{Services: &types.ServiceContainer{
+		IsLoadedLocal: func() bool { return true },
+	}}
+	if _, rpcErr := AcquirePathfind(ctx); rpcErr == nil || rpcErr.ErrorString != "tooBusy" {
+		t.Fatalf("local load should shed without ClientLoad, got %v", rpcErr)
+	}
+}
+
+func TestAcquirePathfind_UnlimitedBypassesLocalLoad(t *testing.T) {
+	s := types.NewClientLoadShedder()
+	ctx := &types.RpcContext{
+		Unlimited: true,
+		Services: &types.ServiceContainer{
+			ClientLoad:    s,
+			IsLoadedLocal: func() bool { return true },
+		},
+	}
+	release, rpcErr := AcquirePathfind(ctx)
+	if rpcErr != nil {
+		t.Fatalf("unlimited caller should bypass local load, got %v", rpcErr)
+	}
+	if got := s.PathfindActive(); got != 1 {
+		t.Fatalf("unlimited pathfind active = %d, want 1", got)
+	}
+	release()
+}
+
+func TestAcquirePathfind_UnlimitedExceedsCapButConsumesSlot(t *testing.T) {
+	s := types.NewClientLoadShedder()
+	r1, rpcErr := AcquirePathfind(gatedCtx(s))
+	if rpcErr != nil {
+		t.Fatalf("first regular acquire: %v", rpcErr)
+	}
+	r2, rpcErr := AcquirePathfind(gatedCtx(s))
+	if rpcErr != nil {
+		t.Fatalf("second regular acquire: %v", rpcErr)
+	}
+	adminRelease, rpcErr := AcquirePathfind(unlimitedCtx(s))
+	if rpcErr != nil {
+		t.Fatalf("admin acquire above cap: %v", rpcErr)
+	}
+	if got := s.PathfindActive(); got != types.MaxPathfindsInProgress+1 {
+		t.Fatalf("pathfind active with admin = %d, want %d", got, types.MaxPathfindsInProgress+1)
+	}
+	if _, rpcErr := AcquirePathfind(gatedCtx(s)); rpcErr == nil {
+		t.Fatal("regular caller should remain capped while admin is active")
+	}
+	adminRelease()
+	r2()
+	r1()
 }
 
 // AcquirePathfind enforces the concurrent-in-progress cap from

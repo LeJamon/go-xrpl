@@ -778,7 +778,10 @@ func TestWebSocketSpecialCommandDecodeErrorsAreFixed(t *testing.T) {
 				Request: map[string]any{"command": test.command, "id": int32(7)},
 			}
 
-			test.invoke(ws, wsConn, &types.RpcContext{ApiVersion: types.DefaultApiVersion}, cmd)
+			test.invoke(ws, wsConn, &types.RpcContext{
+				ApiVersion: types.DefaultApiVersion,
+				Services:   &types.ServiceContainer{Capabilities: types.RPCCapabilities{PathSearchMax: 3}},
+			}, cmd)
 			body := <-wsConn.SendChannel
 			if got := string(body); got != test.want {
 				t.Fatalf("response = %s, want %s", got, test.want)

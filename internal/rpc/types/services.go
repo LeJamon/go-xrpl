@@ -720,6 +720,15 @@ func (s *ClientLoadShedder) AcquirePathfind() bool {
 	}
 }
 
+// AcquirePathfindUnlimited enters the path-finding critical section without
+// enforcing the non-admin concurrency cap.
+func (s *ClientLoadShedder) AcquirePathfindUnlimited() {
+	if s == nil {
+		return
+	}
+	s.pathfindActive.Add(1)
+}
+
 func (s *ClientLoadShedder) ReleasePathfind() {
 	if s == nil {
 		return
