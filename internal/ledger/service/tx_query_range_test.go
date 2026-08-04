@@ -7,6 +7,7 @@ import (
 
 	binarycodec "github.com/LeJamon/go-xrpl/codec/binarycodec"
 	"github.com/LeJamon/go-xrpl/internal/tx"
+	"github.com/LeJamon/go-xrpl/internal/tx/ter"
 	"github.com/LeJamon/go-xrpl/storage/relationaldb"
 	sqlitedb "github.com/LeJamon/go-xrpl/storage/relationaldb/sqlite"
 )
@@ -101,5 +102,104 @@ func TestGetTransactionWithRangeRelationalFallback(t *testing.T) {
 	_, searched, err = svc.GetTransactionWithRange(ctx, missingHash, 1, 4)
 	if err == nil || searched != relationaldb.TxSearchSome {
 		t.Fatalf("partial miss = (%v, %d), want error and TxSearchSome", err, searched)
+	}
+}
+
+func TestTransactionSearchReturnsUnvalidatedHistoryBeforeDatabase(t *testing.T) {
+	ctx := context.Background()
+	repositories, err := sqlitedb.NewRepositoryManager(ctx, t.TempDir(), sqlitedb.Settings{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = repositories.Close() })
+
+	svc, err := New(DefaultConfig())
+	if err != nil {
+		t.Fatal(err)
+	}
+	svc.mu.Lock()
+	svc.relationalDB = repositories
+	svc.mu.Unlock()
+
+	rawTxn, hash := validRelationalTestTransaction(t, 1)
+	combined, err := tx.CreateTxWithMetaBlob(rawTxn, &tx.Metadata{
+		TransactionResult: ter.TesSUCCESS,
+		TransactionIndex:  7,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	historyLedger := relationalTestLedger(t, hash, combined)
+	svc.historyComponent.mu.Lock()
+	svc.putHistoryLocked(historyLedger)
+	svc.txIndex[hash] = historyLedger.Sequence()
+	svc.historyComponent.mu.Unlock()
+
+	ranged, searched, err := svc.GetTransactionWithRange(ctx, hash, 999, 1000)
+	if err != nil {
+		t.Fatalf("GetTransactionWithRange: %v", err)
+	}
+	if ranged == nil || ranged.LedgerIndex != historyLedger.Sequence() || ranged.Validated {
+		t.Fatalf("range lookup = %+v, want unvalidated history result", ranged)
+	}
+	if searched != relationaldb.TxSearchAll {
+		t.Fatalf("range search = %d, want TxSearchAll", searched)
+	}
+
+	searchedResult, err := svc.SearchTransaction(ctx, hash, &relationaldb.LedgerRange{Min: 999, Max: 1000})
+	if err != nil {
+		t.Fatalf("SearchTransaction: %v", err)
+	}
+	if searchedResult == nil || searchedResult.Transaction == nil || searchedResult.Transaction.LedgerIndex != historyLedger.Sequence() || searchedResult.Transaction.Validated {
+		t.Fatalf("search result = %+v, want unvalidated history result", searchedResult)
+	}
+	if searchedResult.Searched != relationaldb.TxSearchAll {
+		t.Fatalf("search result searched = %d, want TxSearchAll", searchedResult.Searched)
+	}
+
+	if err := historyLedger.SetValidated(); err != nil {
+		t.Fatalf("SetValidated: %v", err)
+	}
+	dbCombined, err := tx.CreateTxWithMetaBlob(rawTxn, &tx.Metadata{
+		TransactionResult: ter.TesSUCCESS,
+		TransactionIndex:  9,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	dbRaw, dbMeta, err := tx.SplitTxWithMetaBlobStrict(dbCombined)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ledgerHash := relationaldb.Hash(historyLedger.Hash())
+	if err := repositories.Ledger().SaveValidatedLedger(ctx, relationaldb.LedgerInfo{
+		Hash:     ledgerHash,
+		Sequence: relationaldb.LedgerIndex(historyLedger.Sequence()),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := repositories.Transaction().SaveTransaction(ctx, relationaldb.TransactionInfo{
+		Hash:      relationaldb.Hash(hash),
+		LedgerSeq: relationaldb.LedgerIndex(historyLedger.Sequence()),
+		Status:    "validated",
+		RawTxn:    dbRaw,
+		TxnMeta:   dbMeta,
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	validatedRange, _, err := svc.GetTransactionWithRange(ctx, hash, 999, 1000)
+	if err != nil {
+		t.Fatalf("GetTransactionWithRange(validated): %v", err)
+	}
+	if validatedRange == nil || !validatedRange.Validated || validatedRange.TxIndex != 9 {
+		t.Fatalf("validated range lookup = %+v, want DB result with index 9", validatedRange)
+	}
+	validatedSearch, err := svc.SearchTransaction(ctx, hash, &relationaldb.LedgerRange{Min: 999, Max: 1000})
+	if err != nil {
+		t.Fatalf("SearchTransaction(validated): %v", err)
+	}
+	if validatedSearch == nil || validatedSearch.Transaction == nil || !validatedSearch.Transaction.Validated || validatedSearch.Transaction.TxIndex != 9 {
+		t.Fatalf("validated search result = %+v, want DB result with index 9", validatedSearch)
 	}
 }

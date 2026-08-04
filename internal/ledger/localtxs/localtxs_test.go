@@ -232,6 +232,29 @@ func TestLocalTxs_GetTxSet_CanonicalOrder(t *testing.T) {
 	}
 }
 
+func TestLocalTxs_GetReturnsOwnedTransaction(t *testing.T) {
+	env := jtx.NewTestEnv(t)
+	alice := jtx.NewAccount("alice")
+	bob := jtx.NewAccount("bob")
+	env.Fund(alice, bob)
+	ptx, _ := pendingFromPay(t, env, alice, bob, env.Seq(alice)+10)
+
+	pool := localtxs.New()
+	pool.PushBack(1, ptx)
+	got, ok := pool.Get(ptx.Hash)
+	if !ok {
+		t.Fatal("Get returned ok=false for a held transaction")
+	}
+	if !bytes.Equal(got.Blob, ptx.Blob) {
+		t.Fatal("Get returned a different transaction blob")
+	}
+	got.Blob[0] ^= 0xff
+	again, ok := pool.Get(ptx.Hash)
+	if !ok || !bytes.Equal(again.Blob, ptx.Blob) {
+		t.Fatal("Get did not return an owned blob copy")
+	}
+}
+
 // TestLocalTxs_GetTxSet_SortsBySequenceWithinAccount verifies that two
 // pending txs from the same account are returned in ascending sequence
 // order regardless of push order.

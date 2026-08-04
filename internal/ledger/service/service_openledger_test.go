@@ -17,6 +17,7 @@ import (
 	"github.com/LeJamon/go-xrpl/internal/testing/payment"
 	"github.com/LeJamon/go-xrpl/internal/tx"
 	"github.com/LeJamon/go-xrpl/internal/tx/pseudo"
+	"github.com/LeJamon/go-xrpl/storage/relationaldb"
 )
 
 func openLedgerHasTx(t *testing.T, svc *service.Service, hash [32]byte) bool {
@@ -114,6 +115,69 @@ func TestService_OpenLedgerSubmit_Roundtrip(t *testing.T) {
 	}
 	if !bytes.Equal(got, blob) {
 		t.Errorf("OpenLedgerGetTx returned mismatched blob")
+	}
+}
+
+func TestService_GetTransaction_OpenThenClosedLifecycle(t *testing.T) {
+	svc := newServiceForOpenLedgerTest(t)
+	t.Cleanup(svc.Stop)
+
+	env := jtx.NewTestEnv(t)
+	blob, hash := buildSignedPaymentBlob(t, env, jtx.MasterAccount(), jtx.NewAccount("lookup-destination"), 50_000_000, 1)
+	if result, err := svc.SubmitOpenLedgerTx(blob, true); err != nil || result != openledger.ResultSuccess {
+		t.Fatalf("SubmitOpenLedgerTx = (%v, %v), want success", result, err)
+	}
+
+	openResult, err := svc.GetTransaction(hash)
+	if err != nil {
+		t.Fatalf("GetTransaction(open): %v", err)
+	}
+	if openResult.LedgerIndex != 0 || openResult.LedgerHash != ([32]byte{}) || openResult.Validated || openResult.CloseTime != 0 {
+		t.Fatalf("open transaction advertised closed-ledger state: %+v", openResult)
+	}
+	if openResult.TxIndex != ^uint32(0) {
+		t.Fatalf("open transaction index = %d, want invalid", openResult.TxIndex)
+	}
+	txBlob, metaBlob, err := tx.SplitTxWithMetaBlob(openResult.TxData)
+	if err != nil {
+		t.Fatalf("split open transaction: %v", err)
+	}
+	if !bytes.Equal(txBlob, blob) || metaBlob != nil {
+		t.Fatalf("open transaction payload = (%x, %x), want tx-only input", txBlob, metaBlob)
+	}
+	ranged, searched, err := svc.GetTransactionWithRange(context.Background(), hash, 999, 1000)
+	if err != nil || ranged == nil || searched != relationaldb.TxSearchAll || ranged.LedgerIndex != 0 {
+		t.Fatalf("GetTransactionWithRange(open) = (%+v, %v, %v), want cache-first open result", ranged, searched, err)
+	}
+
+	parent := svc.GetClosedLedger()
+	if parent == nil {
+		t.Fatal("GetClosedLedger returned nil before close")
+	}
+	closedSeq, err := svc.AcceptConsensusResult(context.Background(), parent, [][]byte{blob}, nil, time.Now(), true)
+	if err != nil {
+		t.Fatalf("AcceptConsensusResult: %v", err)
+	}
+	closedResult, err := svc.GetTransaction(hash)
+	if err != nil {
+		t.Fatalf("GetTransaction(closed): %v", err)
+	}
+	if closedResult.LedgerIndex != closedSeq || closedResult.LedgerHash == ([32]byte{}) || closedResult.TxIndex == ^uint32(0) {
+		t.Fatalf("closed transaction state = %+v, want closed ledger metadata", closedResult)
+	}
+	closedTx, closedMeta, err := tx.SplitTxWithMetaBlobStrict(closedResult.TxData)
+	if err != nil || len(closedMeta) == 0 {
+		t.Fatalf("closed transaction payload = (%x, %v), want strict tx+metadata: %v", closedTx, closedMeta, err)
+	}
+	metadata, err := binarycodec.DecodeBytes(closedMeta)
+	if err != nil {
+		t.Fatalf("decode closed transaction metadata: %v", err)
+	}
+	if metadata["TransactionResult"] != "tesSUCCESS" || metadata["TransactionIndex"] != closedResult.TxIndex {
+		t.Fatalf("closed transaction metadata = %+v, want canonical result/index", metadata)
+	}
+	if nodes, ok := metadata["AffectedNodes"].([]any); !ok || len(nodes) == 0 {
+		t.Fatalf("closed transaction AffectedNodes = %#v, want real ledger changes", metadata["AffectedNodes"])
 	}
 }
 

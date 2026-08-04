@@ -842,6 +842,29 @@ func decodeTxBlobForTx(data []byte) (StoredTransaction, error) {
 	return decodeTxBlobWithMetadataMode(data, true, false, false)
 }
 
+// decodeOpenTxBlob decodes the transaction-only VL form returned for an
+// accepted transaction that is still in the open ledger. Open rows must not
+// carry metadata; closed transaction rows continue through decodeTxBlobForTx
+// and retain their strict metadata validation.
+func decodeOpenTxBlob(data []byte) (StoredTransaction, error) {
+	txBytes, metaBytes, err := tx.SplitTxWithMetaBlob(data)
+	if err != nil {
+		return StoredTransaction{}, err
+	}
+	if metaBytes != nil {
+		return StoredTransaction{}, errors.New("open transaction unexpectedly contains metadata")
+	}
+	txJSON, err := binarycodec.DecodeBytes(txBytes)
+	if err != nil {
+		return StoredTransaction{}, fmt.Errorf("decode open transaction: %w", err)
+	}
+	stored := StoredTransaction{TxJSON: txJSON}
+	if err := validateStoredTransaction(&stored, false); err != nil {
+		return StoredTransaction{}, err
+	}
+	return stored, nil
+}
+
 func decodeTxBlobForTransactionEntry(data []byte) (StoredTransaction, error) {
 	return decodeTxBlobWithMetadataMode(data, false, true, true)
 }

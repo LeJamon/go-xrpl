@@ -2,14 +2,18 @@ package service_test
 
 import (
 	"encoding/hex"
+	"errors"
 	"strings"
 	"testing"
 
+	"github.com/LeJamon/go-xrpl/amendment"
 	binarycodec "github.com/LeJamon/go-xrpl/codec/binarycodec"
 	"github.com/LeJamon/go-xrpl/internal/ledger/service"
 	jtx "github.com/LeJamon/go-xrpl/internal/testing"
+	batchtesting "github.com/LeJamon/go-xrpl/internal/testing/batch"
 	"github.com/LeJamon/go-xrpl/internal/testing/payment"
 	"github.com/LeJamon/go-xrpl/internal/tx"
+	batchtx "github.com/LeJamon/go-xrpl/internal/tx/batch"
 	"github.com/LeJamon/go-xrpl/internal/tx/ter"
 	"github.com/LeJamon/go-xrpl/internal/txq"
 )
@@ -153,6 +157,135 @@ func TestService_SubmitTransaction_AppliesAtOrAboveFeeLevel(t *testing.T) {
 	}
 }
 
+func TestService_SubmitTransaction_BadSignatureIsNotQueryable(t *testing.T) {
+	cfg := defaultServiceConfig()
+	cfg.Standalone = false
+	svc, err := service.New(cfg)
+	if err != nil {
+		t.Fatalf("service.New: %v", err)
+	}
+	if err := svc.Start(); err != nil {
+		t.Fatalf("service.Start: %v", err)
+	}
+	t.Cleanup(svc.Stop)
+
+	env := jtx.NewTestEnv(t)
+	blob, _ := signedPaymentWithFee(t, env, jtx.MasterAccount(), jtx.NewAccount("alice"), 100_000_000, 10, 1)
+	wire, err := binarycodec.DecodeBytes(blob)
+	if err != nil {
+		t.Fatalf("DecodeBytes: %v", err)
+	}
+	wire["TxnSignature"] = strings.Repeat("00", 64)
+	badHex, err := binarycodec.Encode(wire)
+	if err != nil {
+		t.Fatalf("Encode: %v", err)
+	}
+	badBlob, err := hex.DecodeString(badHex)
+	if err != nil {
+		t.Fatalf("DecodeString: %v", err)
+	}
+	parsed, err := tx.ParseFromBinary(badBlob)
+	if err != nil {
+		t.Fatalf("ParseFromBinary: %v", err)
+	}
+	hash, err := tx.ComputeTransactionHash(parsed)
+	if err != nil {
+		t.Fatalf("ComputeTransactionHash: %v", err)
+	}
+
+	result, err := svc.SubmitTransaction(parsed, badBlob, false)
+	if err != nil {
+		t.Fatalf("SubmitTransaction: %v", err)
+	}
+	if result.Result != ter.TemINVALID {
+		t.Fatalf("Result = %s, want temINVALID", result.Result)
+	}
+	if _, err := svc.GetTransaction(hash); !errors.Is(err, service.ErrTxnNotFound) {
+		t.Fatalf("GetTransaction(bad signature) = %v, want ErrTxnNotFound", err)
+	}
+}
+
+func TestService_SubmitTransaction_BatchSignerFailureRemainsQueryable(t *testing.T) {
+	cfg := defaultServiceConfig()
+	cfg.Standalone = false
+	cfg.Startup.Mode = service.StartupFresh
+	cfg.GenesisConfig.Amendments = append(cfg.GenesisConfig.Amendments, amendment.FeatureBatch)
+	svc, err := service.New(cfg)
+	if err != nil {
+		t.Fatalf("service.New: %v", err)
+	}
+	if err := svc.Start(); err != nil {
+		t.Fatalf("service.Start: %v", err)
+	}
+	t.Cleanup(svc.Stop)
+	if !svc.TransactionRules().Enabled(amendment.FeatureBatch) {
+		t.Fatal("Batch amendment not enabled in service rules")
+	}
+
+	env := jtx.NewTestEnv(t)
+	env.EnableFeatureNow("Batch")
+	env.SetVerifySignatures(true)
+	outer := jtx.MasterAccount()
+	innerSigner := jtx.NewAccount("batch-signer")
+	batch := batchtesting.NewBatchBuilder(
+		outer,
+		1,
+		batchtesting.CalcBatchFeeFromEnv(env, 1, 2),
+		batchtx.BatchFlagAllOrNothing,
+	).
+		AddInnerTx(batchtesting.MakeInnerPaymentXRP(outer, innerSigner, 1, 2)).
+		AddInnerTx(batchtesting.MakeInnerPaymentXRP(innerSigner, outer, 1, 1)).
+		AddGarbageSigner(innerSigner).
+		Build()
+	env.SignWith(batch, outer)
+
+	txMap, err := batch.Flatten()
+	if err != nil {
+		t.Fatalf("Flatten: %v", err)
+	}
+	blobHex, err := binarycodec.Encode(txMap)
+	if err != nil {
+		t.Fatalf("binarycodec.Encode: %v", err)
+	}
+	blob, err := hex.DecodeString(blobHex)
+	if err != nil {
+		t.Fatalf("hex.DecodeString: %v", err)
+	}
+	parsed, err := tx.ParseFromBinary(blob)
+	if err != nil {
+		t.Fatalf("ParseFromBinary: %v", err)
+	}
+	hash, err := tx.ComputeTransactionHash(parsed)
+	if err != nil {
+		t.Fatalf("ComputeTransactionHash: %v", err)
+	}
+
+	result, err := svc.SubmitTransaction(parsed, blob, false)
+	if err != nil {
+		t.Fatalf("SubmitTransaction: %v", err)
+	}
+	if result.Result != ter.TemBAD_SIGNATURE {
+		t.Fatalf("Result = %s, want temBAD_SIGNATURE", result.Result)
+	}
+	if result.Applied {
+		t.Fatal("invalid BatchSigner signature must not apply")
+	}
+	hold, err := svc.GetTransaction(hash)
+	if err != nil {
+		t.Fatalf("GetTransaction(held batch) = %v", err)
+	}
+	if hold.Validated || hold.LedgerIndex != 0 || hold.TxIndex != ^uint32(0) {
+		t.Fatalf("held batch advertised validated-ledger state: %+v", hold)
+	}
+	heldBlob, metaBlob, err := tx.SplitTxWithMetaBlob(hold.TxData)
+	if err != nil {
+		t.Fatalf("split held batch: %v", err)
+	}
+	if string(heldBlob) != string(blob) || metaBlob != nil {
+		t.Fatalf("held batch payload = (%x, %x), want tx-only input", heldBlob, metaBlob)
+	}
+}
+
 // TestService_SubmitTransaction_QueuesBelowFeeLevel verifies that a tx
 // paying below the open-ledger fee level is held by TxQ and surfaces
 // terQUEUED through SubmitTransaction (Applied=false) instead of applying.
@@ -179,6 +312,20 @@ func TestService_SubmitTransaction_QueuesBelowFeeLevel(t *testing.T) {
 	}
 	if openLedgerHasTx(t, svc, hash) {
 		t.Errorf("queued tx must not be present in the open view")
+	}
+	queuedResult, err := svc.GetTransaction(hash)
+	if err != nil {
+		t.Fatalf("queued tx lookup: %v", err)
+	}
+	if queuedResult.LedgerIndex != 0 || queuedResult.Validated || queuedResult.TxIndex != ^uint32(0) {
+		t.Fatalf("queued tx advertised closed-ledger state: %+v", queuedResult)
+	}
+	queuedBlob, metaBlob, err := tx.SplitTxWithMetaBlob(queuedResult.TxData)
+	if err != nil {
+		t.Fatalf("split queued tx: %v", err)
+	}
+	if string(queuedBlob) != string(blob) || metaBlob != nil {
+		t.Fatalf("queued tx payload = (%x, %x), want tx-only input", queuedBlob, metaBlob)
 	}
 	if res.CurrentLedgerState == nil {
 		t.Fatal("queued submit must include current-ledger state")
