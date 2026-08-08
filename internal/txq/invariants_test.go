@@ -318,6 +318,7 @@ func TestTxQConfigRejectsZeroAndExcessiveHistory(t *testing.T) {
 func TestTxQConfigClampsPresentMaximumToTarget(t *testing.T) {
 	cfg := DefaultConfig()
 	cfg.MinimumTxnInLedger = 2
+	cfg.MinimumTxnInLedgerStandalone = 2
 	cfg.TargetTxnInLedger = 100
 	cfg.MaximumTxnInLedger = 50
 	cfg.MaximumTxnInLedgerSet = true
@@ -325,6 +326,46 @@ func TestTxQConfigClampsPresentMaximumToTarget(t *testing.T) {
 	got := q.Config()
 	if !got.MaximumTxnInLedgerSet || got.MaximumTxnInLedger != 100 {
 		t.Fatalf("effective maximum = (%t, %d), want (true, 100)", got.MaximumTxnInLedgerSet, got.MaximumTxnInLedger)
+	}
+}
+
+func TestTxQConfigRejectsMaximumBelowEitherMinimum(t *testing.T) {
+	tests := []struct {
+		name          string
+		normalMinimum uint32
+		standaloneMin uint32
+	}{
+		{name: "normal", normalMinimum: 20, standaloneMin: 2},
+		{name: "standalone", normalMinimum: 2, standaloneMin: 20},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			cfg := DefaultConfig()
+			cfg.MinimumTxnInLedger = test.normalMinimum
+			cfg.MinimumTxnInLedgerStandalone = test.standaloneMin
+			cfg.TargetTxnInLedger = 2
+			cfg.MaximumTxnInLedger = 10
+			cfg.MaximumTxnInLedgerSet = true
+			if _, err := New(cfg); err == nil {
+				t.Fatal("New accepted a maximum below a configured minimum")
+			}
+		})
+	}
+}
+
+func TestTxQConfigUsesStandaloneMinimumForTarget(t *testing.T) {
+	cfg := DefaultConfig()
+	cfg.Standalone = true
+	cfg.MinimumTxnInLedger = 32
+	cfg.MinimumTxnInLedgerStandalone = 10
+	cfg.TargetTxnInLedger = 5
+
+	q := mustNew(cfg)
+	if got := q.Config().TargetTxnInLedger; got != 10 {
+		t.Fatalf("effective target = %d, want standalone minimum 10", got)
+	}
+	if got := q.feeMetrics.snapshot().TxnsExpected; got != 10 {
+		t.Fatalf("initial expected transactions = %d, want standalone minimum 10", got)
 	}
 }
 
@@ -397,7 +438,7 @@ func TestTxQCommitFailureDoesNotMutateRetryState(t *testing.T) {
 		commitErr: errors.New("commit failed"),
 	}
 	ctx := &mockClearCtx{sandbox: sb}
-	result := q.tryClearAccountQueue(ctx, aq, newTx, seqProxy, FeeLevel(1_000_000), 4, 1)
+	result := q.tryClearAccountQueue(ctx, aq, newTx, seqProxy, FeeLevel(1_000_000), 4, 1, tx.TapNONE)
 	if result == nil || result.Result != ter.TefINTERNAL || result.Queued {
 		t.Fatalf("commit failure result = %#v, want non-queued tefINTERNAL", result)
 	}
@@ -461,6 +502,27 @@ func TestTxQReadCallbacksCanReenterApply(t *testing.T) {
 	case <-time.After(2 * time.Second):
 		t.Fatal("Apply deadlocked while callback queried queue snapshots")
 	}
+}
+
+func TestTxQWithStateUnlockedRelocksAfterPanic(t *testing.T) {
+	q := mustNew(DefaultConfig())
+	q.stateMu.Lock()
+	recovered := false
+	func() {
+		defer func() {
+			recovered = recover() != nil
+		}()
+		q.withStateUnlocked(func() { panic("callback failed") })
+	}()
+	if !recovered {
+		q.stateMu.Unlock()
+		t.Fatal("callback panic was not preserved")
+	}
+	if q.stateMu.TryLock() {
+		q.stateMu.Unlock()
+		t.Fatal("state mutex was not reacquired after callback panic")
+	}
+	q.stateMu.Unlock()
 }
 
 func TestTxQAdmissionCallbacksCanReenterQueueReads(t *testing.T) {

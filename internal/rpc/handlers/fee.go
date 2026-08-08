@@ -34,8 +34,8 @@ func (m *FeeMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (any, 
 	metrics := snapshotTxQ(ctx.Services, ctx.Services.Ledger.IsStandalone())
 	txCount := metrics.TxCount
 	maxQueue := metrics.TxQMaxSize
-	txInLedger := uint64(metrics.TxInLedger)
-	txPerLedger := uint64(metrics.TxPerLedger)
+	txInLedger := metrics.TxInLedger
+	txPerLedger := metrics.TxPerLedger
 
 	effectiveBase := effectiveBaseFee(baseFee, metrics)
 	openFee := dropsFromLevel(metrics.OpenLedgerFeeLevel, effectiveBase)
@@ -80,11 +80,11 @@ func snapshotTxQ(services *types.ServiceContainer, standalone bool) types.TxQFee
 	if services != nil && services.TxQFeeMetrics != nil {
 		return services.TxQFeeMetrics()
 	}
-	expected := uint32(feeDefaultExpected)
+	expected := uint64(feeDefaultExpected)
 	if standalone {
 		expected = feeStandaloneExpect
 	}
-	maxQueue := uint64(expected) * feeLedgersInQueue
+	maxQueue := expected * feeLedgersInQueue
 	return types.TxQFeeMetrics{
 		TxCount:               0,
 		TxQMaxSize:            &maxQueue,

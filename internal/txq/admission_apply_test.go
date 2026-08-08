@@ -13,11 +13,12 @@ import (
 
 // seqTx is a minimal sequence-based tx.Transaction for driving TxQ.Apply.
 type seqTx struct {
-	seq          uint32
-	ticket       uint32
-	fee          string
-	accountTxnID string
-	lastLedger   *uint32
+	seq           uint32
+	ticket        uint32
+	fee           string
+	accountTxnID  string
+	previousTxnID bool
+	lastLedger    *uint32
 }
 
 func (m *seqTx) TxType() tx.Type { return tx.TypeAccountSet }
@@ -29,6 +30,9 @@ func (m *seqTx) GetCommon() *tx.Common {
 		Fee:                m.fee,
 		AccountTxnID:       m.accountTxnID,
 		LastLedgerSequence: m.lastLedger,
+	}
+	if m.previousTxnID {
+		common.SetPresentFields(map[string]bool{"PreviousTxnID": true})
 	}
 	if m.ticket != 0 {
 		zero := uint32(0)
@@ -248,6 +252,16 @@ func TestApplyQueueConstraintValidationPrecedence(t *testing.T) {
 
 		result := q.Apply(ctx, &seqTx{ticket: 2, fee: "10"}, [32]byte{2}, accountID)
 		require.Equal(t, ter.TerPRE_TICKET, result.Result)
+	})
+
+	t.Run("previous transaction id cannot be held", func(t *testing.T) {
+		q := mustNew(makeAdmissionConfig())
+		ctx := newContext()
+		ctx.flags = tx.TapNONE
+
+		result := q.Apply(ctx, &seqTx{seq: 1, fee: "10", previousTxnID: true}, [32]byte{6}, accountID)
+		require.Equal(t, ter.TelCAN_NOT_QUEUE, result.Result)
+		require.False(t, result.Queued)
 	})
 
 	t.Run("queued blocker before hold constraints", func(t *testing.T) {

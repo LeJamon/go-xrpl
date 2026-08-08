@@ -155,7 +155,7 @@ func TestTryClearAccountQueue_RollbackOnPrecedingFailure(t *testing.T) {
 	)}
 	ctx := &mockClearCtx{sandbox: sb}
 
-	result := q.tryClearAccountQueue(ctx, aq, newTx, seqProxy, FeeLevel(1_000_000), 4, 1)
+	result := q.tryClearAccountQueue(ctx, aq, newTx, seqProxy, FeeLevel(1_000_000), 4, 1, tx.TapNONE)
 
 	if result != nil {
 		t.Fatalf("expected nil (fall through to queuing), got %+v", *result)
@@ -191,7 +191,7 @@ func TestTryClearAccountQueue_RollbackOnNewTxFailure(t *testing.T) {
 	)}
 	ctx := &mockClearCtx{sandbox: sb}
 
-	result := q.tryClearAccountQueue(ctx, aq, newTx, seqProxy, FeeLevel(1_000_000), 4, 1)
+	result := q.tryClearAccountQueue(ctx, aq, newTx, seqProxy, FeeLevel(1_000_000), 4, 1, tx.TapNONE)
 
 	if result != nil {
 		t.Fatalf("expected nil (fall through to queuing) when the new tx fails, got %+v", *result)
@@ -225,7 +225,7 @@ func TestTryClearAccountQueue_CommitOnFullSuccess(t *testing.T) {
 	)}
 	ctx := &mockClearCtx{sandbox: sb}
 
-	result := q.tryClearAccountQueue(ctx, aq, newTx, seqProxy, FeeLevel(1_000_000), 4, 1)
+	result := q.tryClearAccountQueue(ctx, aq, newTx, seqProxy, FeeLevel(1_000_000), 4, 1, tx.TapNONE)
 
 	if result == nil || !result.Applied {
 		t.Fatalf("expected an applied result, got %v", result)
@@ -269,7 +269,7 @@ func TestTryClearAccountQueue_CommitFailureKeepsQueue(t *testing.T) {
 	}
 	ctx := &mockClearCtx{sandbox: sb}
 
-	result := q.tryClearAccountQueue(ctx, aq, newTx, seqProxy, FeeLevel(1_000_000), 4, 1)
+	result := q.tryClearAccountQueue(ctx, aq, newTx, seqProxy, FeeLevel(1_000_000), 4, 1, tx.TapNONE)
 	if result == nil || result.Result != ter.TefINTERNAL || result.Applied || result.Queued {
 		t.Fatalf("commit failure result = %#v, want tefINTERNAL and no queue/apply", result)
 	}
@@ -337,6 +337,7 @@ func TestTryClearAccountQueue_CommitRemovesReplacement(t *testing.T) {
 
 			result := q.tryClearAccountQueue(
 				&mockClearCtx{sandbox: sb}, aq, newTx, seqProxy, FeeLevel(1_000_000), 4, 1,
+				tx.TapNONE,
 			)
 
 			if result == nil || !result.Applied {

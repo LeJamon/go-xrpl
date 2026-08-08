@@ -190,9 +190,11 @@ func (q *TxQ) Apply(ctx ApplyContext, txn tx.Transaction, txID [32]byte, account
 	canDirectApply := seqProxy.IsTicket || seqProxy.Value == acctSeq
 
 	if canDirectApply && feeLevel >= requiredFeeLevel {
-		q.stateMu.Unlock()
-		result, applied := ctx.ApplyTransactionWithFlags(txn, originalFlags)
-		q.stateMu.Lock()
+		var result ter.Result
+		var applied bool
+		q.withStateUnlocked(func() {
+			result, applied = ctx.ApplyTransactionWithFlags(txn, originalFlags)
+		})
 		if applied {
 			if aq, exists := q.byAccount[account]; exists {
 				if c, exists := aq.Transactions[seqProxy]; exists {
@@ -207,17 +209,19 @@ func (q *TxQ) Apply(ctx ApplyContext, txn tx.Transaction, txID [32]byte, account
 		return ApplyResult{Result: result, Applied: false}
 	}
 
-	q.stateMu.Unlock()
-	accountExists := ctx.AccountExists(account)
-	q.stateMu.Lock()
+	var accountExists bool
+	q.withStateUnlocked(func() {
+		accountExists = ctx.AccountExists(account)
+	})
 	if !accountExists {
 		return ApplyResult{Result: ter.TerNO_ACCOUNT, Applied: false}
 	}
 
 	if seqProxy.IsTicket {
-		q.stateMu.Unlock()
-		ticketExists := ctx.TicketExists(account, seqProxy.Value)
-		q.stateMu.Lock()
+		var ticketExists bool
+		q.withStateUnlocked(func() {
+			ticketExists = ctx.TicketExists(account, seqProxy.Value)
+		})
 		if !ticketExists {
 			if seqProxy.Value < acctSeq {
 				return ApplyResult{Result: ter.TefNO_TICKET, Applied: false}
@@ -303,10 +307,12 @@ func (q *TxQ) Apply(ctx ApplyContext, txn tx.Transaction, txID [32]byte, account
 	// View the unconditional preclaim (below) runs against. Defaults to the
 	// account's actual balance and sequence — the plain open view; the multiTxn
 	// path overrides these with the in-flight-adjusted values (TxQ.cpp:1137-1170).
-	q.stateMu.Unlock()
-	balance, err := ctx.GetAccountBalance(account)
-	q.stateMu.Lock()
-	if err != nil {
+	var balance uint64
+	var balanceErr error
+	q.withStateUnlocked(func() {
+		balance, balanceErr = ctx.GetAccountBalance(account)
+	})
+	if balanceErr != nil {
 		return ApplyResult{Result: ter.TefINTERNAL, Applied: false}
 	}
 	preclaimBalance := balance
@@ -395,10 +401,12 @@ func (q *TxQ) Apply(ctx ApplyContext, txn tx.Transaction, txID [32]byte, account
 			// The new tx's fee is NOT added here; it is accounted for by the
 			// preclaim against the adjusted view, not the balance gate below.
 
-			q.stateMu.Unlock()
-			reserve := ctx.GetAccountReserve(0)
-			referenceFee := ctx.GetReferenceFee()
-			q.stateMu.Lock()
+			var reserve uint64
+			var referenceFee uint64
+			q.withStateUnlocked(func() {
+				reserve = ctx.GetAccountReserve(0)
+				referenceFee = ctx.GetReferenceFee()
+			})
 			if totalFee >= balance || (reserve > 10*referenceFee && totalFee >= reserve) {
 				return ApplyResult{Result: ter.TelCAN_NOT_QUEUE_BALANCE, Applied: false}
 			}
@@ -427,9 +435,10 @@ func (q *TxQ) Apply(ctx ApplyContext, txn tx.Transaction, txID [32]byte, account
 	// otherwise. Reject only when the result is not likely to claim a fee:
 	// not tesSUCCESS and not a tec (a tec still claims a fee once applied).
 	// rippled's likelyToClaimFee excludes tec results under tapRETRY.
-	q.stateMu.Unlock()
-	preclaimResult := ctx.PreclaimTransactionWithFlags(txn, account, preclaimBalance, preclaimSeq, originalFlags)
-	q.stateMu.Lock()
+	var preclaimResult ter.Result
+	q.withStateUnlocked(func() {
+		preclaimResult = ctx.PreclaimTransactionWithFlags(txn, account, preclaimBalance, preclaimSeq, originalFlags)
+	})
 	if result := preclaimResult; result != ter.TesSUCCESS && (!result.IsTec() || originalFlags&tx.TapRETRY != 0) {
 		return ApplyResult{Result: result, Applied: false}
 	}
@@ -453,12 +462,13 @@ func (q *TxQ) Apply(ctx ApplyContext, txn tx.Transaction, txID [32]byte, account
 		// entry below acctSeq must not veto the clear.
 		firstRelevant := aq.FirstRelevant(acctSeqProx)
 		if firstRelevant != nil && firstRelevant.RetriesRemaining == RetriesAllowed {
-			q.stateMu.Unlock()
-			if result := q.tryClearAccountQueue(ctx, aq, txn, seqProxy, feeLevel, txInLedger, acctSeq, originalFlags); result != nil {
-				q.stateMu.Lock()
-				return *result
+			var clearResult *ApplyResult
+			q.withStateUnlocked(func() {
+				clearResult = q.tryClearAccountQueue(ctx, aq, txn, seqProxy, feeLevel, txInLedger, acctSeq, originalFlags)
+			})
+			if clearResult != nil {
+				return *clearResult
 			}
-			q.stateMu.Lock()
 		}
 	}
 
@@ -555,9 +565,9 @@ func (q *TxQ) Apply(ctx ApplyContext, txn tx.Transaction, txID [32]byte, account
 	}
 	candidate.Flags = storedFlags
 	candidate.PreflightFlags = originalFlags
-	q.stateMu.Unlock()
-	candidate.PreflightRules = ctx.RulesIdentity()
-	q.stateMu.Lock()
+	q.withStateUnlocked(func() {
+		candidate.PreflightRules = ctx.RulesIdentity()
+	})
 
 	aq.Add(candidate)
 	q.insertByFee(candidate)
@@ -579,12 +589,8 @@ func (q *TxQ) tryClearAccountQueue(
 	feeLevelPaid FeeLevel,
 	txInLedger uint32,
 	acctSeq uint32,
-	incomingFlagsOpt ...tx.ApplyFlags,
+	incomingFlags tx.ApplyFlags,
 ) *ApplyResult {
-	incomingFlags := tx.TapNONE
-	if len(incomingFlagsOpt) > 0 {
-		incomingFlags = incomingFlagsOpt[0]
-	}
 	// Collect the queued txs in the clear range [acctSeqProx, seqProxy):
 	// relevant entries (>= acctSeqProx) that come BEFORE the new tx, in
 	// SeqProxy order. rippled restricts the clear to this half-open range
@@ -705,7 +711,7 @@ func (q *TxQ) tryClearAccountQueue(
 
 // canBeHeld checks the constraints that only apply when holding a transaction.
 func (q *TxQ) canBeHeld(common *tx.Common, flags tx.ApplyFlags, ledgerSeq uint32, aq *accountQueue, replacingCandidate *candidate, seqProxy SeqProxy, acctSeq uint32) (bool, ApplyResult) {
-	if common.AccountTxnID != "" || flags&tx.TapFAIL_HARD != 0 {
+	if common.HasField("PreviousTxnID") || common.AccountTxnID != "" || flags&tx.TapFAIL_HARD != 0 {
 		return true, ApplyResult{Result: ter.TelCAN_NOT_QUEUE, Applied: false}
 	}
 	if common.LastLedgerSequence != nil &&

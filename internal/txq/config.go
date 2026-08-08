@@ -79,7 +79,7 @@ func (c Config) normalize() (Config, error) {
 	}
 	// The active mode selects the effective minimum used by fee escalation.
 	effectiveMin := c.MinimumTxnInLedger
-	if c.Standalone && c.MinimumTxnInLedgerStandalone > effectiveMin {
+	if c.Standalone {
 		effectiveMin = c.MinimumTxnInLedgerStandalone
 	}
 	if c.TargetTxnInLedger < effectiveMin {
@@ -89,8 +89,11 @@ func (c Config) normalize() (Config, error) {
 		c.MaximumTxnInLedgerSet = true
 	}
 	if c.MaximumTxnInLedgerSet {
-		if c.MaximumTxnInLedger < effectiveMin {
-			return Config{}, fmt.Errorf("transaction queue: minimum transactions in ledger (%d) exceeds maximum (%d)", effectiveMin, c.MaximumTxnInLedger)
+		if c.MaximumTxnInLedger < c.MinimumTxnInLedger {
+			return Config{}, fmt.Errorf("transaction queue: minimum transactions in ledger (%d) exceeds maximum (%d)", c.MinimumTxnInLedger, c.MaximumTxnInLedger)
+		}
+		if c.MaximumTxnInLedger < c.MinimumTxnInLedgerStandalone {
+			return Config{}, fmt.Errorf("transaction queue: standalone minimum transactions in ledger (%d) exceeds maximum (%d)", c.MinimumTxnInLedgerStandalone, c.MaximumTxnInLedger)
 		}
 		if c.MaximumTxnInLedger < c.TargetTxnInLedger {
 			c.MaximumTxnInLedger = c.TargetTxnInLedger

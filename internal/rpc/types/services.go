@@ -1046,8 +1046,8 @@ type TxQServerMetrics struct {
 type TxQFeeMetrics struct {
 	TxCount               uint64
 	TxQMaxSize            *uint64 // nil → no limit, omits max_queue_size
-	TxInLedger            uint32
-	TxPerLedger           uint32
+	TxInLedger            uint64
+	TxPerLedger           uint64
 	ReferenceFeeLevel     uint64
 	MinProcessingFeeLevel uint64
 	MedFeeLevel           uint64

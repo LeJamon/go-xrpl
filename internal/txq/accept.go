@@ -67,9 +67,10 @@ func (q *TxQ) Accept(ctx AcceptContext) bool {
 			}
 		}
 
-		q.stateMu.Unlock()
-		txInLedger := ctx.GetTxInLedger()
-		q.stateMu.Lock()
+		var txInLedger uint32
+		q.withStateUnlocked(func() {
+			txInLedger = ctx.GetTxInLedger()
+		})
 		requiredFeeLevel := scaleFeeLevel(snapshot, txInLedger)
 
 		if candidate.FeeLevel < requiredFeeLevel {
@@ -79,15 +80,17 @@ func (q *TxQ) Accept(ctx AcceptContext) bool {
 
 		// Amendment changes or a different submission flag set invalidate a
 		// cached preflight verdict. Re-run before touching the open ledger.
-		q.stateMu.Unlock()
-		currentRules := ctx.RulesIdentity()
-		q.stateMu.Lock()
+		var currentRules *amendment.Rules
+		q.withStateUnlocked(func() {
+			currentRules = ctx.RulesIdentity()
+		})
 		result := ter.TesSUCCESS
 		shouldApply := true
 		if candidate.PreflightResult != ter.TesSUCCESS || candidate.PreflightFlags != candidate.Flags || candidate.PreflightRules != currentRules {
-			q.stateMu.Unlock()
-			preflight := ctx.PreflightTransactionWithFlags(candidateTransaction(candidate), candidate.Flags)
-			q.stateMu.Lock()
+			var preflight ter.Result
+			q.withStateUnlocked(func() {
+				preflight = ctx.PreflightTransactionWithFlags(candidateTransaction(candidate), candidate.Flags)
+			})
 			candidate.PreflightResult = preflight
 			candidate.PreflightFlags = candidate.Flags
 			candidate.PreflightRules = currentRules
@@ -101,9 +104,9 @@ func (q *TxQ) Accept(ctx AcceptContext) bool {
 		if shouldApply {
 			// Try to apply the transaction outside the state lock so callbacks may
 			// query queue snapshots reentrantly.
-			q.stateMu.Unlock()
-			result, applied = ctx.ApplyTransactionWithFlags(candidateTransaction(candidate), candidate.Flags)
-			q.stateMu.Lock()
+			q.withStateUnlocked(func() {
+				result, applied = ctx.ApplyTransactionWithFlags(candidateTransaction(candidate), candidate.Flags)
+			})
 		}
 
 		if applied {

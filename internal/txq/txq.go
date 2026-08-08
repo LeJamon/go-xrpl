@@ -97,6 +97,12 @@ func (q *TxQ) incTxQFull() {
 	q.txqFull++
 }
 
+func (q *TxQ) withStateUnlocked(fn func()) {
+	q.stateMu.Unlock()
+	defer q.stateMu.Lock()
+	fn()
+}
+
 // Metrics returns the current queue metrics.
 func (q *TxQ) Metrics(txInLedger uint32) Metrics {
 	q.stateMu.RLock()

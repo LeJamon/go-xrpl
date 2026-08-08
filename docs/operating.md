@@ -291,10 +291,10 @@ browser origin must also configure Basic Auth.
 
 Governs fee escalation and queueing (EXPERIMENTAL). Every key is optional;
 omit one to use rippled's `TxQ::Setup` default, or set it explicitly
-(including `0`). Keys: `ledgers_in_queue`, `minimum_queue_size`,
+(including `0`, where allowed). Keys: `ledgers_in_queue`, `minimum_queue_size`,
 `retry_sequence_percent`, `minimum_escalation_multiplier`,
 `minimum_txn_in_ledger`, `minimum_txn_in_ledger_standalone`, `target_txn_in_ledger`,
-`maximum_txn_in_ledger` (`0` = no maximum), `normal_consensus_increase_percent`,
+`maximum_txn_in_ledger` (omit for no maximum), `normal_consensus_increase_percent`,
 `slow_consensus_decrease_percent`, `maximum_txn_per_account`,
 `minimum_last_ledger_buffer`.
 

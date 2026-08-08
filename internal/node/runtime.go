@@ -360,8 +360,8 @@ func (r *nodeRuntime) configureMaintenance() error {
 		return types.TxQFeeMetrics{
 			TxCount:               m.TxCount,
 			TxQMaxSize:            m.TxQMaxSize,
-			TxInLedger:            uint32(m.TxInLedger),
-			TxPerLedger:           uint32(m.TxPerLedger),
+			TxInLedger:            m.TxInLedger,
+			TxPerLedger:           m.TxPerLedger,
 			ReferenceFeeLevel:     m.ReferenceFeeLevel,
 			MinProcessingFeeLevel: m.MinProcessingFeeLevel,
 			MedFeeLevel:           m.MedFeeLevel,

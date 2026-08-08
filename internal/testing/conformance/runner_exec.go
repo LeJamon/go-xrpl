@@ -112,14 +112,14 @@ func (r *runner) setupEnv(cfg EnvConfig) {
 	r.env.SetTime(rippleEpoch.Add(-setupResolution))
 	r.env.Close()
 
-	// Reset TxQ maxSize to nil after the initial close. In rippled,
+	// Reinitialize the still-empty TxQ after the initial close. In rippled,
 	// startGenesisLedger() does NOT call TxQ::processClosedLedger, so
 	// maxSize_ remains std::nullopt until the first user env.close().
 	// Our Close() above triggers ProcessClosedLedger which prematurely
-	// sets maxSize. Resetting it ensures the queue starts unlimited,
+	// sets maxSize. Reinitializing it ensures the queue starts unlimited,
 	// matching rippled's behavior where the first "real" close sets it.
 	if r.enableTxQ {
-		r.env.ResetTxQMaxSize()
+		r.env.ReinitializeTxQ()
 	}
 
 	// For non-TxQ suites, disable open-ledger fee adequacy checks by default.

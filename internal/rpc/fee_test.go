@@ -2,6 +2,7 @@ package rpc
 
 import (
 	"context"
+	"math"
 	"testing"
 
 	"github.com/LeJamon/go-xrpl/internal/rpc/handlers"
@@ -106,6 +107,26 @@ func TestFee_LiveMetrics_Escalating(t *testing.T) {
 	require.Equal(t, "20", drops["median_fee"])
 	require.Equal(t, "10", drops["minimum_fee"])
 	require.Equal(t, "40", drops["open_ledger_fee"])
+}
+
+func TestFee_LiveMetrics_PreservesWideQueueCounts(t *testing.T) {
+	mock := newMockLedgerService()
+	services := &types.ServiceContainer{Ledger: mock}
+	wide := uint64(math.MaxUint32) + 1
+	services.TxQFeeMetrics = func() types.TxQFeeMetrics {
+		return types.TxQFeeMetrics{
+			TxInLedger:            wide,
+			TxPerLedger:           wide + 1,
+			ReferenceFeeLevel:     256,
+			MinProcessingFeeLevel: 256,
+			MedFeeLevel:           256,
+			OpenLedgerFeeLevel:    256,
+		}
+	}
+
+	resp := feeRequest(t, services)
+	require.Equal(t, "4294967296", resp["current_ledger_size"])
+	require.Equal(t, "4294967297", resp["expected_ledger_size"])
 }
 
 // TestFee_QueueFull_SwapsMinimumBase mirrors rippled TxQ.cpp:1900-1902:
