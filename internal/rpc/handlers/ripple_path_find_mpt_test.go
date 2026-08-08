@@ -100,11 +100,11 @@ func TestParseSourceCurrenciesAcceptsZeroMPTLiteral(t *testing.T) {
 	require.Equal(t, [24]byte{}, issues[0].MPTID)
 }
 
-func TestParseSourceCurrenciesMPTIssuerIsCurrencyMalformed(t *testing.T) {
+func TestParseSourceCurrenciesMPTIssuerIsIssuerMalformed(t *testing.T) {
 	probe := map[string]json.RawMessage{
 		"source_currencies": json.RawMessage(`[{"mpt_issuance_id":"0","issuer":"rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh"}]`),
 	}
 	_, rpcErr := parseSourceCurrencies(probe, [20]byte{1}, nil)
 	require.NotNil(t, rpcErr)
-	require.Equal(t, "srcCurMalformed", rpcErr.ErrorString)
+	require.Equal(t, "srcIsrMalformed", rpcErr.ErrorString)
 }

@@ -178,6 +178,18 @@ func AcquirePathfind(ctx *types.RpcContext) (release func(), rpcErr *types.RpcEr
 	return s.ReleasePathfind, nil
 }
 
+// WaitPathfind queues a default-ledger request behind the bounded path-finding
+// workers until a slot is available or the request is canceled.
+func WaitPathfind(ctx *types.RpcContext) (release func(), rpcErr *types.RpcError) {
+	if ctx == nil || ctx.Services == nil || ctx.Services.ClientLoad == nil {
+		return func() {}, nil
+	}
+	if !ctx.Services.ClientLoad.WaitPathfind(ctx.Context) {
+		return nil, types.RpcErrorTooBusy()
+	}
+	return ctx.Services.ClientLoad.ReleasePathfind, nil
+}
+
 // ParseParams unmarshals JSON params into dest, returning an RpcError on failure.
 // If params is nil, dest is left untouched (zero value).
 func ParseParams(params json.RawMessage, dest any) *types.RpcError {

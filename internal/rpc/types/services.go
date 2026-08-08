@@ -3,6 +3,7 @@ package types
 import (
 	"context"
 	"strconv"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -669,10 +670,19 @@ const (
 type ClientLoadShedder struct {
 	inFlight       atomic.Int64
 	pathfindActive atomic.Int64
+	pathfindOnce   sync.Once
+	pathfindReady  chan struct{}
 }
 
 func NewClientLoadShedder() *ClientLoadShedder {
 	return &ClientLoadShedder{}
+}
+
+func (s *ClientLoadShedder) pathfindSignal() chan struct{} {
+	s.pathfindOnce.Do(func() {
+		s.pathfindReady = make(chan struct{}, int(MaxPathfindsInProgress))
+	})
+	return s.pathfindReady
 }
 
 // Begin records the start of a client-RPC dispatch.
@@ -720,6 +730,25 @@ func (s *ClientLoadShedder) AcquirePathfind() bool {
 	}
 }
 
+// WaitPathfind blocks until a bounded path-finding slot is available or the
+// request is canceled.
+func (s *ClientLoadShedder) WaitPathfind(ctx context.Context) bool {
+	if s == nil {
+		return true
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	for !s.AcquirePathfind() {
+		select {
+		case <-ctx.Done():
+			return false
+		case <-s.pathfindSignal():
+		}
+	}
+	return true
+}
+
 // AcquirePathfindUnlimited enters the path-finding critical section without
 // enforcing the non-admin concurrency cap.
 func (s *ClientLoadShedder) AcquirePathfindUnlimited() {
@@ -734,6 +763,10 @@ func (s *ClientLoadShedder) ReleasePathfind() {
 		return
 	}
 	s.pathfindActive.Add(-1)
+	select {
+	case s.pathfindSignal() <- struct{}{}:
+	default:
+	}
 }
 
 // PathfindActive returns the current concurrent-path-find count.

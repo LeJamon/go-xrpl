@@ -194,6 +194,13 @@ func (m *RipplePathFindMethod) Handle(ctx *types.RpcContext, params json.RawMess
 	}
 
 	// Run pathfinding at the production search level (rippled PATH_SEARCH).
+	if !usesLookup {
+		release, rpcErr := WaitPathfind(ctx)
+		if rpcErr != nil {
+			return nil, rpcErr
+		}
+		defer release()
+	}
 	pr := pathfinder.NewPathRequest(srcAccount, dstAccount, dstAmount, sendMax, srcCurrencies, convertAll)
 	pr.SetDomainID(domainID)
 	result := pr.Execute(view)
@@ -316,8 +323,11 @@ func parseSourceCurrencies(
 		rawCurrency, hasCurrency := fields["currency"]
 		rawMPT, hasMPT := fields["mpt_issuance_id"]
 		_, hasIssuer := fields["issuer"]
-		if hasCurrency == hasMPT || hasMPT && hasIssuer {
+		if hasCurrency == hasMPT {
 			return nil, types.RpcErrorSrcCurMalformed("Source currency is malformed.")
+		}
+		if hasMPT && hasIssuer {
+			return nil, types.RpcErrorSrcIsrMalformed("Source issuer is malformed.")
 		}
 		if hasMPT {
 			var mptID string

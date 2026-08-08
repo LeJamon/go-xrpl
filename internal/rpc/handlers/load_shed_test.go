@@ -1,7 +1,9 @@
 package handlers
 
 import (
+	"context"
 	"testing"
+	"time"
 
 	"github.com/LeJamon/go-xrpl/internal/rpc/types"
 )
@@ -212,4 +214,57 @@ func TestAcquirePathfind_InProgressCap(t *testing.T) {
 	if got := s.PathfindActive(); got != 0 {
 		t.Errorf("PathfindActive leaked after all release: %d", got)
 	}
+}
+
+func TestWaitPathfindWaitsForRelease(t *testing.T) {
+	s := types.NewClientLoadShedder()
+	r1, err1 := AcquirePathfind(gatedCtx(s))
+	if err1 != nil {
+		t.Fatalf("first acquire should succeed: %v", err1)
+	}
+	r2, err2 := AcquirePathfind(gatedCtx(s))
+	if err2 != nil {
+		t.Fatalf("second acquire should succeed: %v", err2)
+	}
+
+	acquired := make(chan bool, 1)
+	go func() {
+		acquired <- s.WaitPathfind(context.Background())
+	}()
+
+	select {
+	case <-acquired:
+		t.Fatal("third pathfind should wait while both slots are occupied")
+	case <-time.After(10 * time.Millisecond):
+	}
+
+	r1()
+	select {
+	case ok := <-acquired:
+		if !ok {
+			t.Fatal("waiting pathfind should acquire the released slot")
+		}
+	case <-time.After(time.Second):
+		t.Fatal("waiting pathfind did not acquire the released slot")
+	}
+
+	s.ReleasePathfind()
+	r2()
+	if got := s.PathfindActive(); got != 0 {
+		t.Fatalf("PathfindActive leaked after wait: %d", got)
+	}
+}
+
+func TestWaitPathfindHonorsCancellation(t *testing.T) {
+	s := types.NewClientLoadShedder()
+	s.AcquirePathfindUnlimited()
+	s.AcquirePathfindUnlimited()
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	if s.WaitPathfind(ctx) {
+		t.Fatal("canceled pathfind wait should fail")
+	}
+	s.ReleasePathfind()
+	s.ReleasePathfind()
 }
