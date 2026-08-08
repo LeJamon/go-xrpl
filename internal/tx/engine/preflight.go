@@ -381,6 +381,13 @@ func (e *Engine) preflightSequence(common *txcore.Common) ter.Result {
 		return ter.TemBAD_SEQUENCE
 	}
 
+	if common.AccountTxnID != "" {
+		accountTxnID, err := hex.DecodeString(common.AccountTxnID)
+		if err != nil || len(accountTxnID) != 32 {
+			return ter.TemINVALID
+		}
+	}
+
 	// An AccountTxnID constrains transaction ordering more than Sequence, while
 	// Tickets relax it, so the combination is unsupported — but only when the
 	// transaction actually uses a ticket. rippled gates this on

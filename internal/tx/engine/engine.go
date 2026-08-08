@@ -44,6 +44,8 @@ type Engine struct {
 	// violation for a given (result, table). Production always leaves it nil,
 	// so runInvariantsOnTable behaves exactly as the real checkers dictate.
 	invariantViolationHook func(result ter.Result, table *applystate.ApplyStateTable) *invariants.InvariantViolation
+
+	applyObserver ApplyObserver
 }
 
 // rulesView wraps a LedgerView so Rules() reports a known rule set. The engine's
@@ -80,6 +82,18 @@ type InvariantViolationValue = invariants.InvariantViolation
 // on both the tes and tec apply paths after the real checkers pass cleanly.
 type InvariantViolationHook = func(result ter.Result, table *applystate.ApplyStateTable) *InvariantViolationValue
 
+// ApplyPhase identifies a transaction-engine phase exposed to test observers.
+type ApplyPhase uint8
+
+const (
+	ApplyPhaseTransaction ApplyPhase = iota
+	ApplyPhaseInvariants
+)
+
+// ApplyObserver observes transaction-handler and invariant execution in tests.
+// Production leaves it nil.
+type ApplyObserver func(ApplyPhase)
+
 // SetInvariantViolationHookForTest installs a test-only hook that forces an
 // invariant violation, used to exercise the tec→tecINVARIANT_FAILED→
 // tefINVARIANT_FAILED escalation without crafting a state that trips a real
@@ -87,6 +101,17 @@ type InvariantViolationHook = func(result ter.Result, table *applystate.ApplySta
 // checkers alone decide.
 func (e *Engine) SetInvariantViolationHookForTest(hook InvariantViolationHook) {
 	e.invariantViolationHook = hook
+}
+
+// SetApplyObserverForTest installs a test-only execution observer.
+func (e *Engine) SetApplyObserverForTest(observer ApplyObserver) {
+	e.applyObserver = observer
+}
+
+func (e *Engine) observeApplyPhase(phase ApplyPhase) {
+	if e.applyObserver != nil {
+		e.applyObserver(phase)
+	}
 }
 
 // NewInvariantViolation builds an invariant violation value for tests that drive

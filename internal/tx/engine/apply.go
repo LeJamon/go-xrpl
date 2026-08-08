@@ -208,6 +208,7 @@ func (e *Engine) applyWithContext(
 	if applied {
 		metadata.TransactionIndex = e.txCount.Add(1) - 1
 	} else {
+		fee = 0
 		metadata = nil
 	}
 

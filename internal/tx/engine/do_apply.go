@@ -125,6 +125,7 @@ func (e *Engine) doApply(ctx context.Context, tx txcore.Transaction, metadata *t
 	}
 
 	// Dispatch to the per-tx-type Apply().
+	e.observeApplyPhase(ApplyPhaseTransaction)
 	result := e.invokeApply(st)
 
 	// If tx.Apply() returned a non-applied result (tem*/tef*/ter*), discard all
@@ -714,6 +715,7 @@ func (e *Engine) runInvariants(st *applyState, result ter.Result) (r ter.Result,
 // violation has been handled (escalated via applyInvariantViolation) and
 // (zero, false) when the entries pass and the caller may commit `table`.
 func (e *Engine) runInvariantsOnTable(st *applyState, result ter.Result, table *applystate.ApplyStateTable) (r ter.Result, handled bool) {
+	e.observeApplyPhase(ApplyPhaseInvariants)
 	defer func() {
 		if rec := recover(); rec != nil {
 			e.logger.Error("invariant check panic recovered, returning tecINVARIANT_FAILED",
@@ -767,6 +769,7 @@ func (e *Engine) runInvariantsOnTable(st *applyState, result ter.Result, table *
 // A panic from CheckInvariants (e.g. AMM XRPLNumber overflow) is treated as a
 // violation, matching rippled's checkInvariantsHelper catch-all.
 func (e *Engine) CheckInnerInvariants(innerTx txcore.Transaction, result ter.Result, innerTable txcore.LedgerView) (r ter.Result) {
+	e.observeApplyPhase(ApplyPhaseInvariants)
 	defer func() {
 		if rec := recover(); rec != nil {
 			e.logger.Error("inner invariant check panic recovered, returning tecINVARIANT_FAILED",

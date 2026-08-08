@@ -221,15 +221,20 @@ func (e *TestEnv) submitWithSigVerification(txn tx.Transaction) TxResult {
 	// Seed txCount so metadata.TransactionIndex matches rippled — see applyDirect.
 	applyResult := e.applyStaged(txn, engineConfig, e.txInLedger, true)
 
-	if applyResult.Result.IsApplied() {
+	if applyResult.Applied {
 		e.txInLedger += 1 + uint32(len(applyResult.AppliedInnerTransactions))
 		e.closingTxTotal += e.recordFeeMetricTransactions(txn, applyResult.AppliedInnerTransactions)
 	}
-	e.trackDirectTransaction(txn, applyResult)
+	e.trackDirectTransaction(txn, applyResult.ApplyResult)
 
 	return TxResult{
+		Result:                   applyResult.Result,
 		Code:                     applyResult.Result.String(),
 		Success:                  applyResult.Result.IsSuccess(),
+		Applied:                  applyResult.Applied,
+		Fee:                      applyResult.Fee,
+		ApplyInvoked:             applyResult.ApplyInvoked,
+		InvariantsChecked:        applyResult.InvariantsChecked,
 		Message:                  applyResult.Message,
 		Metadata:                 applyResult.Metadata,
 		AppliedInnerTransactions: applyResult.AppliedInnerTransactions,

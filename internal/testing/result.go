@@ -2,15 +2,33 @@ package jtx
 
 import (
 	"github.com/LeJamon/go-xrpl/internal/tx"
+	"github.com/LeJamon/go-xrpl/internal/tx/ter"
 )
 
 // TxResult represents the result of applying a transaction.
 type TxResult struct {
+	// Result is the typed transaction engine result.
+	Result ter.Result
+
 	// Code is the transaction engine result code (e.g., "tesSUCCESS").
 	Code string
 
 	// Success indicates whether the transaction was successfully applied.
 	Success bool
+
+	// Applied reports whether the engine committed the transaction or a
+	// fee-claiming recovery result.
+	Applied bool
+
+	// Fee is the number of drops actually charged and committed.
+	Fee uint64
+
+	// Queued reports that TxQ retained the transaction for later application.
+	Queued bool
+
+	// ApplyInvoked and InvariantsChecked expose engine reachability to tests.
+	ApplyInvoked      bool
+	InvariantsChecked bool
 
 	// Message provides additional details about the result.
 	Message string

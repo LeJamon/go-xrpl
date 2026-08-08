@@ -446,6 +446,27 @@ func (e *TestEnv) applyWithRetry(txns []tx.Transaction, heldHashes map[[32]byte]
 // afford the escalated fee or have a future sequence are queued and return
 // terQUEUED or terPRE_SEQ respectively.
 func (e *TestEnv) Submit(transaction any) TxResult {
+	txn := e.prepareSubmission(transaction)
+
+	// If TxQ is enabled and not bypassed, route through TxQ for fee escalation and queuing.
+	if e.txQueue != nil && !e.bypassTxQ {
+		result := e.submitViaTxQ(txn)
+		// A held tx whose sequence gap is now filled can replace a lower-fee
+		// queued entry; do that before the next ledger drains the queue.
+		e.retryHeldReplacementsIntoQueue()
+		return result
+	}
+
+	return e.applyDirect(txn, tx.TapNONE)
+}
+
+// SubmitWithFlags applies a transaction directly with the supplied engine
+// flags. It bypasses TxQ so tests can exercise one exact application pass.
+func (e *TestEnv) SubmitWithFlags(transaction any, flags tx.ApplyFlags) TxResult {
+	return e.applyDirect(e.prepareSubmission(transaction), flags)
+}
+
+func (e *TestEnv) prepareSubmission(transaction any) tx.Transaction {
 	e.t.Helper()
 
 	// Convert to tx.Transaction interface
@@ -489,17 +510,7 @@ func (e *TestEnv) Submit(transaction any) TxResult {
 		common.Sequence = &seq
 	}
 
-	// If TxQ is enabled and not bypassed, route through TxQ for fee escalation and queuing.
-	if e.txQueue != nil && !e.bypassTxQ {
-		result := e.submitViaTxQ(txn)
-		// A held tx whose sequence gap is now filled can replace a lower-fee
-		// queued entry; do that before the next ledger drains the queue.
-		e.retryHeldReplacementsIntoQueue()
-		return result
-	}
-
-	// Direct apply path (no TxQ)
-	return e.applyDirect(txn)
+	return txn
 }
 
 // toRippleTime converts a wall-clock time to seconds since the Ripple epoch,
@@ -563,18 +574,33 @@ func (e *TestEnv) engineConfig(view *ledger.Ledger, opts engineConfigOpts) tx.En
 	return cfg
 }
 
+type stagedApplyResult struct {
+	tx.ApplyResult
+	ApplyInvoked      bool
+	InvariantsChecked bool
+}
+
 func (e *TestEnv) applyStaged(
 	txn tx.Transaction,
 	config tx.EngineConfig,
 	transactionCount uint32,
 	applyBatchInners bool,
-) tx.ApplyResult {
+) stagedApplyResult {
 	staged, err := e.ledger.MutableSnapshotUnflushed()
 	if err != nil {
 		e.t.Fatalf("snapshot ledger for transaction apply: %v", err)
 	}
 	engine := txengine.NewEngine(staged, config)
 	engine.SetBaseTxCount(transactionCount)
+	var observed stagedApplyResult
+	engine.SetApplyObserverForTest(func(phase txengine.ApplyPhase) {
+		switch phase {
+		case txengine.ApplyPhaseTransaction:
+			observed.ApplyInvoked = true
+		case txengine.ApplyPhaseInvariants:
+			observed.InvariantsChecked = true
+		}
+	})
 	if e.invariantViolationHook != nil {
 		engine.SetInvariantViolationHookForTest(e.invariantViolationHook)
 	}
@@ -587,7 +613,8 @@ func (e *TestEnv) applyStaged(
 			e.t.Fatalf("commit staged transaction apply: %v", err)
 		}
 	}
-	return result
+	observed.ApplyResult = result
+	return observed
 }
 
 func (e *TestEnv) trackTxQAppliedTransaction(txn tx.Transaction, result tx.ApplyResult) {
@@ -603,7 +630,7 @@ func (e *TestEnv) trackTxQAppliedTransaction(txn tx.Transaction, result tx.Apply
 
 // applyDirect applies a transaction directly without TxQ routing.
 // This is the original Submit path.
-func (e *TestEnv) applyDirect(txn tx.Transaction) TxResult {
+func (e *TestEnv) applyDirect(txn tx.Transaction, flags tx.ApplyFlags) TxResult {
 	e.t.Helper()
 
 	// Header-based ParentCloseTime (not the clock) keeps the initial apply and
@@ -611,6 +638,7 @@ func (e *TestEnv) applyDirect(txn tx.Transaction) TxResult {
 	engineConfig := e.engineConfig(e.ledger, engineConfigOpts{
 		openLedger: e.openLedger,
 		feeTrack:   true,
+		applyFlags: flags,
 	})
 
 	// Seed the engine's txCount from the env's tx-in-ledger counter so
@@ -623,7 +651,7 @@ func (e *TestEnv) applyDirect(txn tx.Transaction) TxResult {
 	// TestReproByteDiff_MultiTrustSetThreading.
 	applyResult := e.applyStaged(txn, engineConfig, e.txInLedger, true)
 
-	if applyResult.Result.IsApplied() {
+	if applyResult.Applied {
 		e.txInLedger += 1 + uint32(len(applyResult.AppliedInnerTransactions))
 		e.closingTxTotal += e.recordFeeMetricTransactions(txn, applyResult.AppliedInnerTransactions)
 	}
@@ -633,11 +661,16 @@ func (e *TestEnv) applyDirect(txn tx.Transaction) TxResult {
 	// included in the replay set. Permanent failures (tem*, tef*, tel*) are
 	// dropped — they never appear in rippled's canonical TX set.
 	// Reference: rippled's open ledger tx map only contains applied txns.
-	e.trackDirectTransaction(txn, applyResult)
+	e.trackDirectTransaction(txn, applyResult.ApplyResult)
 
 	return TxResult{
+		Result:                   applyResult.Result,
 		Code:                     applyResult.Result.String(),
 		Success:                  applyResult.Result.IsSuccess(),
+		Applied:                  applyResult.Applied,
+		Fee:                      applyResult.Fee,
+		ApplyInvoked:             applyResult.ApplyInvoked,
+		InvariantsChecked:        applyResult.InvariantsChecked,
 		Message:                  applyResult.Message,
 		Metadata:                 applyResult.Metadata,
 		AppliedInnerTransactions: applyResult.AppliedInnerTransactions,
@@ -645,7 +678,7 @@ func (e *TestEnv) applyDirect(txn tx.Transaction) TxResult {
 }
 
 func (e *TestEnv) trackDirectTransaction(txn tx.Transaction, result tx.ApplyResult) {
-	if result.Result.IsApplied() || isRetryable(result.Result) {
+	if result.Applied || isRetryable(result.Result) {
 		if e.inSetupMode {
 			e.openLedgerSetupTxns = append(e.openLedgerSetupTxns, txn)
 		} else {
@@ -700,8 +733,10 @@ func (e *TestEnv) submitViaTxQ(txn tx.Transaction) TxResult {
 		e.retryHeldTransactions(accountAddr)
 
 		return TxResult{
+			Result:  result.Result,
 			Code:    result.Result.String(),
 			Success: result.Result.IsSuccess(),
+			Applied: true,
 			Message: result.Result.String(),
 		}
 	}
@@ -713,8 +748,10 @@ func (e *TestEnv) submitViaTxQ(txn tx.Transaction) TxResult {
 		e.addLocalTransaction(accountAddr, txn)
 
 		return TxResult{
+			Result:  ter.TerQUEUED,
 			Code:    ter.TerQUEUED.String(),
 			Success: false,
+			Queued:  true,
 			Message: "Transaction queued",
 		}
 	}
@@ -732,6 +769,7 @@ func (e *TestEnv) submitViaTxQ(txn tx.Transaction) TxResult {
 	}
 
 	return TxResult{
+		Result:  result.Result,
 		Code:    result.Result.String(),
 		Success: false,
 		Message: result.Result.String(),
@@ -1637,8 +1675,11 @@ func (e *TestEnv) SubmitPseudo(transaction any) TxResult {
 	applyResult := engine.ApplyPseudo(txn)
 
 	return TxResult{
+		Result:   applyResult.Result,
 		Code:     applyResult.Result.String(),
 		Success:  applyResult.Result.IsSuccess(),
+		Applied:  applyResult.Applied,
+		Fee:      applyResult.Fee,
 		Message:  applyResult.Message,
 		Metadata: applyResult.Metadata,
 	}

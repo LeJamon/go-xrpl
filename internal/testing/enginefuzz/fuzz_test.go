@@ -1,49 +1,44 @@
 package enginefuzz
 
-import (
-	"bytes"
-	"fmt"
-	"testing"
-)
+import "testing"
 
-// FuzzEngineInvariants applies generated transaction sequences through the
-// engine and fails if any apply reports an invariant violation or inflates
-// total XRP. Run it with, e.g.:
-//
-//	go test -run x -fuzz FuzzEngineInvariants ./internal/testing/enginefuzz/
-//
-// See the package doc and issue #682 for the rationale.
-func FuzzEngineInvariants(f *testing.F) {
+func addSeedCorpus(f *testing.F) {
 	for _, seed := range seedCorpus() {
-		f.Add(seed)
+		f.Add(encodeTrace(seed.Trace))
 	}
+}
+
+func FuzzEngineInvariants(f *testing.F) {
+	addSeedCorpus(f)
 	f.Fuzz(func(t *testing.T, data []byte) {
-		run(t, data)
+		runTrace(t, decodeTrace(data))
 	})
 }
 
-// TestEngineInvariants_SeedCorpus runs the seed corpus deterministically so the
-// harness is exercised by plain `go test` / CI without the -fuzz flag.
-func TestEngineInvariants_SeedCorpus(t *testing.T) {
-	for i, seed := range seedCorpus() {
-		t.Run(fmt.Sprintf("seed-%d", i), func(t *testing.T) {
-			run(t, seed)
+func TestEngineInvariantsSeedCorpus(t *testing.T) {
+	seenKinds := make(map[txKind]int)
+	appliedKinds := make(map[txKind]int)
+	for _, seed := range seedCorpus() {
+		t.Run(seed.Name, func(t *testing.T) {
+			decoded := decodeTrace(encodeTrace(seed.Trace))
+			report := runTrace(t, decoded)
+			if report.InvariantChecks == 0 || report.TransactionCalls == 0 {
+				t.Fatalf("seed did not reach transaction apply and invariants: %+v", report)
+			}
+			for kind, count := range report.Kinds {
+				seenKinds[kind] += count
+			}
+			for kind, count := range report.Applied {
+				appliedKinds[kind] += count
+			}
 		})
 	}
-}
-
-// seedCorpus returns deterministic byte inputs that drive varied transaction
-// sequences. They seed the fuzzer's corpus and back the smoke test above.
-func seedCorpus() [][]byte {
-	ramp := make([]byte, 256)
-	for i := range ramp {
-		ramp[i] = byte(i)
-	}
-	return [][]byte{
-		{},
-		bytes.Repeat([]byte{0x00}, 16),
-		ramp,
-		bytes.Repeat([]byte{0x01, 0x40, 0x9a, 0x7f, 0x10, 0x33}, 24),
-		bytes.Repeat([]byte{0xff, 0x00, 0x80, 0x2a}, 32),
+	for kind := txKind(0); kind < numKinds; kind++ {
+		if seenKinds[kind] == 0 {
+			t.Errorf("seed corpus never generates %s", kind)
+		}
+		if appliedKinds[kind] == 0 {
+			t.Errorf("seed corpus never applies %s", kind)
+		}
 	}
 }
