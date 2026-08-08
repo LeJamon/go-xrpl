@@ -74,7 +74,7 @@ func makeAdmissionConfig() Config {
 		MinimumLastLedgerBuffer:        2,
 		QueueSizeMin:                   10,
 		MaximumTxnPerAccount:           10,
-		MinimumTxnInLedgerStandalone:   100,
+		MinimumTxnInLedgerStandalone:   10,
 		NormalConsensusIncreasePercent: 20,
 		SlowConsensusDecreasePercent:   50,
 		Standalone:                     false,
