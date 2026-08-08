@@ -74,7 +74,7 @@ func TestDIDRPCLifecycle(t *testing.T) {
 func TestDIDAccountObjectsPagination(t *testing.T) {
 	env := New(t)
 	alice := jtx.NewAccount("alice")
-	env.Fund(alice)
+	env.FundAmount(alice, env.ReserveBase()+33*env.ReserveIncrement()+2*env.BaseFee())
 	env.Close()
 	jtx.RequireTxSuccess(t, env.Submit(ticket.TicketCreate(alice, 32).Build()))
 	jtx.RequireTxSuccess(t, env.Submit(did.DIDSet(alice).URI("uri").Build()))
