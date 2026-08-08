@@ -77,6 +77,7 @@ func testAccountReserve(t *testing.T, fixEmptyDID bool) {
 	result := env.Submit(tx1)
 	jtx.RequireTxClaimed(t, result, jtx.TecINSUFFICIENT_RESERVE)
 	env.Close()
+	requireDIDAbsent(t, env, alice)
 	if env.OwnerCount(alice) != 0 {
 		t.Errorf("Expected owner count 0, got %d", env.OwnerCount(alice))
 	}
@@ -93,6 +94,7 @@ func testAccountReserve(t *testing.T, fixEmptyDID bool) {
 	result = env.Submit(tx2)
 	jtx.RequireTxClaimed(t, result, jtx.TecINSUFFICIENT_RESERVE)
 	env.Close()
+	requireDIDAbsent(t, env, alice)
 	require.Equal(t, acctReserve+incReserve-1, env.Balance(alice))
 	if env.OwnerCount(alice) != 0 {
 		t.Errorf("Expected owner count 0, got %d", env.OwnerCount(alice))

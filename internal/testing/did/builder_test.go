@@ -13,12 +13,22 @@ import (
 func TestDIDSetBuilderEncodingIntent(t *testing.T) {
 	alice := jtx.NewAccount("alice")
 
-	for _, raw := range []string{"AB", "4142", "deadbeef"} {
-		t.Run("raw URI "+raw, func(t *testing.T) {
-			built := DIDSet(alice).URI(raw).Build()
-			require.Equal(t, hex.EncodeToString([]byte(raw)), built.URI)
-			require.True(t, built.HasField("URI"))
-		})
+	for _, field := range []struct {
+		name  string
+		set   func(*DIDSetBuilder, string) *DIDSetBuilder
+		value func(*txdid.DIDSet) string
+	}{
+		{name: "URI", set: (*DIDSetBuilder).URI, value: func(d *txdid.DIDSet) string { return d.URI }},
+		{name: "DIDDocument", set: (*DIDSetBuilder).Document, value: func(d *txdid.DIDSet) string { return d.DIDDocument }},
+		{name: "Data", set: (*DIDSetBuilder).Data, value: func(d *txdid.DIDSet) string { return d.Data }},
+	} {
+		for _, raw := range []string{"AB", "4142", "deadbeef"} {
+			t.Run("raw "+field.name+" "+raw, func(t *testing.T) {
+				built := field.set(DIDSet(alice), raw).Build()
+				require.Equal(t, hex.EncodeToString([]byte(raw)), field.value(built))
+				require.True(t, built.HasField(field.name))
+			})
+		}
 	}
 
 	for _, tc := range []struct {
@@ -27,6 +37,7 @@ func TestDIDSetBuilderEncodingIntent(t *testing.T) {
 	}{
 		{"lowercase", "deadbeef"},
 		{"uppercase", "DEADBEEF"},
+		{"odd length", "A"},
 	} {
 		t.Run("hex "+tc.name, func(t *testing.T) {
 			built := DIDSet(alice).URIHex(tc.hex).Build()
@@ -35,7 +46,7 @@ func TestDIDSetBuilderEncodingIntent(t *testing.T) {
 		})
 	}
 
-	for _, invalid := range []string{"A", "GG"} {
+	for _, invalid := range []string{"GG"} {
 		t.Run("invalid hex "+invalid, func(t *testing.T) {
 			require.Error(t, DIDSet(alice).URIHex(invalid).Build().Validate())
 		})

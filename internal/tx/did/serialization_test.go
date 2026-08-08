@@ -64,6 +64,32 @@ func TestDIDSetFieldPresenceRoundTrips(t *testing.T) {
 	}
 }
 
+func TestDIDSetOddLengthHexCanonicalizes(t *testing.T) {
+	all.RegisterAll()
+	alice := jtx.NewAccount("alice")
+
+	for _, field := range []string{"URI", "DIDDocument", "Data"} {
+		t.Run(field, func(t *testing.T) {
+			original := did.NewDIDSet(alice.Address)
+			original.Fee = "10"
+			original.SetSequence(1)
+			original.SetPresentFields(map[string]bool{field: true})
+			setDIDField(original, field, "A")
+
+			require.NoError(t, original.Validate())
+			binary, err := tx.SerializeTransaction(original)
+			require.NoError(t, err)
+			decoded, err := binarycodec.DecodeBytes(binary)
+			require.NoError(t, err)
+			require.Equal(t, "0A", decoded[field])
+
+			fromBinary, err := tx.ParseFromBinary(binary)
+			require.NoError(t, err)
+			assertDIDField(t, fromBinary.(*did.DIDSet), field, true, "0A")
+		})
+	}
+}
+
 func setDIDField(transaction *did.DIDSet, field, value string) {
 	switch field {
 	case "URI":

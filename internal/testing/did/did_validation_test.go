@@ -4,6 +4,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/stretchr/testify/require"
+
 	jtx "github.com/LeJamon/go-xrpl/internal/testing"
 	"github.com/LeJamon/go-xrpl/internal/testing/did"
 )
@@ -92,13 +94,16 @@ func testSetInvalid(t *testing.T, fixEmptyDID bool) {
 		}
 	}
 	env.Close()
-
-	expectedOwnerCount := uint32(0)
-	if !fixEmptyDID {
-		expectedOwnerCount = 1
-	}
-	if env.OwnerCount(alice) != expectedOwnerCount {
-		t.Errorf("Expected owner count %d, got %d", expectedOwnerCount, env.OwnerCount(alice))
+	if fixEmptyDID {
+		requireDIDAbsent(t, env, alice)
+		require.Zero(t, env.OwnerCount(alice))
+	} else {
+		view := getDIDEntry(t, env, alice)
+		require.NotNil(t, view)
+		requireFieldAbsent(t, "URI", view.URI)
+		requireFieldAbsent(t, "DIDDocument", view.DIDDocument)
+		requireFieldAbsent(t, "Data", view.Data)
+		require.Equal(t, uint32(1), env.OwnerCount(alice))
 	}
 }
 

@@ -48,6 +48,7 @@ func TestDIDSetFieldLengthBoundaries(t *testing.T) {
 				decoded, err := hex.DecodeString(field.value(view))
 				require.NoError(t, err)
 				require.Len(t, decoded, 256)
+				require.Equal(t, strings.Repeat("a", length), string(decoded))
 				require.Equal(t, uint32(1), env.OwnerCount(alice))
 			})
 		}

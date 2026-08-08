@@ -9,6 +9,7 @@ import (
 	"github.com/LeJamon/go-xrpl/internal/rpc/types"
 	jtx "github.com/LeJamon/go-xrpl/internal/testing"
 	"github.com/LeJamon/go-xrpl/internal/testing/did"
+	"github.com/LeJamon/go-xrpl/internal/testing/ticket"
 )
 
 func TestDIDRPCLifecycle(t *testing.T) {
@@ -68,6 +69,54 @@ func TestDIDRPCLifecycle(t *testing.T) {
 	data, rpcErr := env.RPC("ledger_data", map[string]any{"type": "did", "ledger_index": "validated"})
 	require.Nil(t, rpcErr)
 	require.Empty(t, didJSONMap(t, data)["state"])
+}
+
+func TestDIDAccountObjectsPagination(t *testing.T) {
+	env := New(t)
+	alice := jtx.NewAccount("alice")
+	env.Fund(alice)
+	env.Close()
+	jtx.RequireTxSuccess(t, env.Submit(ticket.TicketCreate(alice, 32).Build()))
+	jtx.RequireTxSuccess(t, env.Submit(did.DIDSet(alice).URI("uri").Build()))
+	env.Close()
+
+	marker := ""
+	found := false
+	for range 5 {
+		params := map[string]any{
+			"account":      alice.Address,
+			"type":         "did",
+			"ledger_index": "validated",
+			"limit":        10,
+		}
+		if marker != "" {
+			params["marker"] = marker
+		}
+		result, rpcErr := env.RPC("account_objects", params)
+		require.Nil(t, rpcErr)
+		response := didJSONMap(t, result)
+		objects := response["account_objects"].([]any)
+		if len(objects) != 0 {
+			require.Len(t, objects, 1)
+			requireDIDRPCFields(t, objects[0], "757269", "", false)
+			require.NotContains(t, response, "marker")
+			found = true
+			break
+		}
+		var ok bool
+		marker, ok = response["marker"].(string)
+		require.True(t, ok)
+		require.NotEmpty(t, marker)
+	}
+	require.True(t, found)
+
+	_, rpcErr := env.RPC("account_objects", map[string]any{
+		"account":      alice.Address,
+		"type":         "did",
+		"ledger_index": "validated",
+		"marker":       "not-a-marker",
+	})
+	requireRPCError(t, rpcErr, "invalidParams")
 }
 
 func requireDIDLedgerEntry(t *testing.T, env *Env, account, ledgerIndex string) map[string]any {

@@ -12,6 +12,7 @@ import (
 	"github.com/LeJamon/go-xrpl/codec/addresscodec"
 	"github.com/LeJamon/go-xrpl/internal/ledger"
 	"github.com/LeJamon/go-xrpl/internal/ledger/genesis"
+	ledgerservice "github.com/LeJamon/go-xrpl/internal/ledger/service"
 	"github.com/LeJamon/go-xrpl/internal/ledger/service/svcerr"
 	"github.com/LeJamon/go-xrpl/internal/ledger/state"
 	"github.com/LeJamon/go-xrpl/internal/rpc/types"
@@ -407,9 +408,6 @@ func (a *ledgerAdapter) GetAccountObjects(ctx context.Context, account, ledgerIn
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
-	if marker != "" {
-		return nil, svcerr.ErrInvalidMarker
-	}
 	target, validated, err := a.resolveLedger(ledgerIndex)
 	if err != nil {
 		return nil, err
@@ -420,61 +418,26 @@ func (a *ledgerAdapter) GetAccountObjects(ctx context.Context, account, ledgerIn
 	}
 	var accountID [20]byte
 	copy(accountID[:], accountIDBytes)
-	exists, err := target.Exists(keylet.Account(accountID))
+	result, err := ledgerservice.QueryAccountObjects(ctx, target, account, accountID, validated, objectType, limit, marker)
 	if err != nil {
 		return nil, err
 	}
-	if !exists {
-		return nil, svcerr.ErrAccountNotFound
+	objects := make([]types.AccountObjectItem, len(result.AccountObjects))
+	for index, object := range result.AccountObjects {
+		objects[index] = types.AccountObjectItem{
+			Index:           object.Index,
+			LedgerEntryType: object.LedgerEntryType,
+			Data:            object.Data,
+		}
 	}
-	if limit == 0 {
-		limit = 200
-	}
-
-	var wantedType uint16
-	if objectType != "" {
-		info, ok := protocol.LedgerEntryTypeByRPCName(objectType)
-		if !ok {
-			return nil, fmt.Errorf("rpcenv: unsupported account object type %q", objectType)
-		}
-		wantedType = uint16(info.Type)
-	}
-	result := &types.AccountObjectsResult{
-		Account:        account,
-		AccountObjects: make([]types.AccountObjectItem, 0),
-		LedgerIndex:    target.Sequence(),
-		LedgerHash:     target.Hash(),
-		Validated:      validated,
-	}
-	err = state.DirForEach(target, keylet.OwnerDir(accountID), func(itemKey [32]byte) error {
-		if uint32(len(result.AccountObjects)) >= limit {
-			return nil
-		}
-		data, readErr := target.Read(keylet.Keylet{Key: itemKey})
-		if readErr != nil {
-			return readErr
-		}
-		if data == nil {
-			return nil
-		}
-		entryType, decodeErr := state.DecodeType(data)
-		if decodeErr != nil {
-			return decodeErr
-		}
-		if wantedType != 0 && uint16(entryType) != wantedType {
-			return nil
-		}
-		result.AccountObjects = append(result.AccountObjects, types.AccountObjectItem{
-			Index:           protocol.Hash256Hex(itemKey),
-			LedgerEntryType: entryType.String(),
-			Data:            data,
-		})
-		return nil
-	})
-	if err != nil {
-		return nil, err
-	}
-	return result, nil
+	return &types.AccountObjectsResult{
+		Account:        result.Account,
+		AccountObjects: objects,
+		LedgerIndex:    result.LedgerIndex,
+		LedgerHash:     result.LedgerHash,
+		Validated:      result.Validated,
+		Marker:         result.Marker,
+	}, nil
 }
 
 func (a *ledgerAdapter) GetAccountNFTs(_ context.Context, _ string, _ string, _ uint32, _ string) (*types.AccountNFTsResult, error) {

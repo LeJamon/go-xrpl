@@ -206,6 +206,9 @@ func validateDIDField(value string, tooLong error) error {
 	if value == "" {
 		return nil
 	}
+	if len(value)%2 != 0 {
+		value = "0" + value
+	}
 	decoded, err := hex.DecodeString(value)
 	if err != nil {
 		return errDIDInvalidHex
