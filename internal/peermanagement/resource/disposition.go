@@ -17,3 +17,16 @@ const (
 	// caller must tear down the endpoint.
 	Drop
 )
+
+func (d Disposition) String() string {
+	switch d {
+	case Ok:
+		return "ok"
+	case Warn:
+		return "warn"
+	case Drop:
+		return "drop"
+	default:
+		return "unknown"
+	}
+}

@@ -21,6 +21,7 @@ import (
 	"github.com/LeJamon/go-xrpl/internal/ledger/service"
 	"github.com/LeJamon/go-xrpl/internal/manifest"
 	"github.com/LeJamon/go-xrpl/internal/peermanagement"
+	"github.com/LeJamon/go-xrpl/internal/peermanagement/resource"
 	validatorlist "github.com/LeJamon/go-xrpl/internal/validator/list"
 	"github.com/LeJamon/go-xrpl/storage/relationaldb"
 )
@@ -988,6 +989,26 @@ func OverlayOptionsFromConfig(appCfg *config.Config) []peermanagement.Option {
 	}
 	if appCfg.Overlay.InboundRetainedBytes != 0 {
 		opts = append(opts, peermanagement.WithInboundRetainedBytes(appCfg.Overlay.InboundRetainedBytes))
+	}
+	configuredLimits := appCfg.Overlay.ResourceLimits
+	if configuredLimits != (config.ResourceLimitsConfig{}) {
+		limits := resource.DefaultLimits()
+		if configuredLimits.MaxEntries != 0 {
+			limits.MaxEntries = configuredLimits.MaxEntries
+		}
+		if configuredLimits.MaxImportedEntries != 0 {
+			limits.MaxImportedEntries = configuredLimits.MaxImportedEntries
+		}
+		if configuredLimits.MaxImportOrigins != 0 {
+			limits.MaxImportOrigins = configuredLimits.MaxImportOrigins
+		}
+		if configuredLimits.MaxImportItems != 0 {
+			limits.MaxImportItems = configuredLimits.MaxImportItems
+		}
+		if configuredLimits.MaxImportedEntries == 0 && limits.MaxImportedEntries > limits.MaxEntries {
+			limits.MaxImportedEntries = limits.MaxEntries
+		}
+		opts = append(opts, peermanagement.WithResourceLimits(limits))
 	}
 
 	return opts

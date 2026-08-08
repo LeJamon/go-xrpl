@@ -518,6 +518,22 @@ func (o *Overlay) IncPeerBadData(peerID PeerID, reason string) uint32 {
 	return peer.IncBadData(reason)
 }
 
+func (o *Overlay) selectMessageCharge(evt *Event, fee resource.Charge, chargeContext string) {
+	if evt != nil && evt.selectCharge(fee, chargeContext) {
+		return
+	}
+	if evt == nil {
+		return
+	}
+	if peer, ok := o.getPeer(evt.PeerID); ok {
+		peer.Charge(fee, chargeContext)
+	}
+}
+
+func (o *Overlay) selectMessageChargeReason(evt *Event, reason string) {
+	o.selectMessageCharge(evt, chargeForReason(reason), reason)
+}
+
 // peerNegotiatedLedgerReplay reports whether the peer identified by
 // peerID advertised the ledger-replay feature during handshake. Used
 // to gate serving mtREPLAY_DELTA_REQ and mtPROOF_PATH_REQ: these

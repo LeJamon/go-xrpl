@@ -8,6 +8,7 @@ import (
 	"sync"
 
 	"github.com/LeJamon/go-xrpl/internal/peermanagement/message"
+	"github.com/LeJamon/go-xrpl/internal/peermanagement/resource"
 )
 
 // PeerID is a unique identifier for a connected peer.
@@ -134,6 +135,7 @@ type Event struct {
 	Error error
 
 	reservation *inboundReservation
+	charge      *messageCharge
 }
 
 func (e *Event) release() {
@@ -148,6 +150,10 @@ func (e *Event) release() {
 		e.reservation.release()
 		e.reservation = nil
 	}
+	if e.charge != nil {
+		e.charge.finish()
+		e.charge = nil
+	}
 }
 
 func (e *Event) inboundMessage() *InboundMessage {
@@ -161,6 +167,21 @@ func (e *Event) inboundMessage() *InboundMessage {
 	e.reservation = nil
 	e.ManifestFrame = nil
 	return msg
+}
+
+func (e *Event) manifestInboundMessage() *InboundMessage {
+	msg := e.inboundMessage()
+	msg.charge = e.charge
+	e.charge = nil
+	return msg
+}
+
+func (e *Event) selectCharge(fee resource.Charge, chargeContext string) bool {
+	if e == nil || e.charge == nil {
+		return false
+	}
+	e.charge.update(fee, chargeContext)
+	return true
 }
 
 func (e *Event) retainedInboundMessage() *InboundMessage {
@@ -195,6 +216,7 @@ type InboundMessage struct {
 	Tx *message.Transaction
 
 	reservation *inboundReservation
+	charge      *messageCharge
 	closeOnce   sync.Once
 	closeErr    error
 }
@@ -210,6 +232,23 @@ func (m *InboundMessage) Close() error {
 		}
 		m.reservation.release()
 		m.reservation = nil
+		m.charge.finish()
+		m.charge = nil
 	})
 	return m.closeErr
+}
+
+func (m *InboundMessage) SelectPeerCharge(fee resource.Charge, chargeContext string) bool {
+	if m == nil || m.charge == nil {
+		return false
+	}
+	m.charge.update(fee, chargeContext)
+	return true
+}
+
+// CompletePeerCharge applies the selected per-message charge exactly once.
+func (m *InboundMessage) CompletePeerCharge() {
+	if m != nil {
+		m.charge.finish()
+	}
 }

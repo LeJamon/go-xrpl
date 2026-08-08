@@ -14,6 +14,7 @@ import (
 	"github.com/LeJamon/go-xrpl/internal/manifest"
 	"github.com/LeJamon/go-xrpl/internal/peermanagement"
 	"github.com/LeJamon/go-xrpl/internal/peermanagement/message"
+	"github.com/LeJamon/go-xrpl/internal/peermanagement/resource"
 	"github.com/LeJamon/go-xrpl/protocol"
 )
 
@@ -144,17 +145,25 @@ func (r *Router) handleManifests(msg *peermanagement.InboundMessage) bool {
 	if err != nil {
 		r.logger.Warn("failed to decode manifests frame", "error", err, "peer", msg.PeerID)
 		reason := "manifests-decode"
+		fee := resource.FeeInvalidData()
 		var limitErr *message.WireLimitError
 		if errors.As(err, &limitErr) && limitErr.Reason == message.WireLimitManifests {
 			reason = "manifests-oversize"
+			fee = resource.FeeModerateBurdenPeer()
 		} else if errors.Is(err, message.ErrWireLimit) {
 			reason = "wire-invalid"
 		}
-		r.gossip.IncPeerBadData(uint64(msg.PeerID), reason)
+		if !msg.SelectPeerCharge(fee, reason) {
+			r.gossip.IncPeerBadData(uint64(msg.PeerID), reason)
+		}
 		return false
 	}
 	if count == 0 {
+		msg.SelectPeerCharge(resource.FeeUselessData(), "empty")
 		return true
+	}
+	if count > manifestFrameMaxEntries {
+		msg.SelectPeerCharge(resource.FeeModerateBurdenPeer(), "oversize")
 	}
 	if badManifest {
 		r.gossip.IncPeerBadData(uint64(msg.PeerID), "manifest-invalid")

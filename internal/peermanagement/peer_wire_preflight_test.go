@@ -72,7 +72,7 @@ func TestPeerWirePreflightChargesAndDropsBeforeDispatch(t *testing.T) {
 			msgType: message.TypeValidatorListCollection,
 			payload: peerRepeatedMessageField(3, 6),
 			reason:  "vl-coll-heavy-too-many-blobs",
-			charge:  resource.FeeHeavyBurdenPeer,
+			charge:  resource.FeeHeavyBurdenPeer(),
 		},
 	}
 

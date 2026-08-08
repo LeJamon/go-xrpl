@@ -540,6 +540,9 @@ func (c *Config) Validate() error {
 	if limits.MaxEntries > 0 && limits.MaxImportedEntries > limits.MaxEntries {
 		return errors.New("MaxImportedEntries cannot exceed MaxEntries")
 	}
+	if limits.MaxImportItems > resource.DefaultMaxImportItems {
+		return fmt.Errorf("MaxImportItems cannot exceed %d", resource.DefaultMaxImportItems)
+	}
 	if c.ServerDomain != "" && !protocol.IsProperlyFormedTomlDomain(c.ServerDomain) {
 		return errors.New("invalid ServerDomain: the domain name does not appear to meet the requirements")
 	}
