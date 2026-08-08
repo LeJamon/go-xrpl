@@ -3,6 +3,7 @@ package account
 import (
 	"testing"
 
+	"github.com/LeJamon/go-xrpl/amendment"
 	"github.com/LeJamon/go-xrpl/internal/tx"
 	"github.com/LeJamon/go-xrpl/internal/tx/ter"
 )
@@ -312,6 +313,18 @@ func TestAccountSetDomain(t *testing.T) {
 			expectError: true,
 			errorMsg:    "telBAD_DOMAIN: domain too long",
 		},
+		{
+			name:        "odd-length domain encoding",
+			domain:      "0",
+			expectError: true,
+			errorMsg:    "telBAD_DOMAIN: invalid domain encoding",
+		},
+		{
+			name:        "non-hex domain encoding",
+			domain:      "zz",
+			expectError: true,
+			errorMsg:    "telBAD_DOMAIN: invalid domain encoding",
+		},
 	}
 
 	for _, tt := range tests {
@@ -331,6 +344,45 @@ func TestAccountSetDomain(t *testing.T) {
 				if err != nil {
 					t.Errorf("expected no error, got %v", err)
 				}
+			}
+		})
+	}
+}
+
+func TestAccountSetEmailHash(t *testing.T) {
+	tests := []struct {
+		name        string
+		emailHash   string
+		present     bool
+		expectError bool
+	}{
+		{name: "absent", emailHash: ""},
+		{name: "present empty", emailHash: "", present: true},
+		{name: "uppercase", emailHash: "5F31A79367DC3137FADA860C05742EE6"},
+		{name: "lowercase", emailHash: "5f31a79367dc3137fada860c05742ee6"},
+		{name: "zero", emailHash: "00000000000000000000000000000000"},
+		{name: "too short", emailHash: "5F31A79367DC3137FADA860C05742E", expectError: true},
+		{name: "too long", emailHash: "5F31A79367DC3137FADA860C05742EE600", expectError: true},
+		{name: "non-hex", emailHash: "GGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGG", expectError: true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			accountSet := NewAccountSet("rAlice")
+			accountSet.EmailHash = tt.emailHash
+			if tt.present {
+				accountSet.SetPresentFields(map[string]bool{"EmailHash": true})
+			}
+
+			err := accountSet.Validate()
+			if tt.expectError {
+				if err == nil || err.Error() != "temMALFORMED: invalid email hash" {
+					t.Fatalf("expected malformed EmailHash error, got %v", err)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("expected valid EmailHash, got %v", err)
 			}
 		})
 	}
@@ -400,6 +452,16 @@ func TestAccountSetNFTokenMinter(t *testing.T) {
 				t.Errorf("expected TesSUCCESS, got %v", got)
 			}
 		})
+	}
+}
+
+func TestAccountSetNFTokenMinterPairingIsUnconditional(t *testing.T) {
+	accountSet := NewAccountSet("rAlice")
+	accountSet.SetFlag = ptrUint32AccountSet(AccountSetFlagAuthorizedNFTokenMinter)
+
+	err := accountSet.PreflightRules(amendment.NewRulesBuilder().Build())
+	if err == nil || err.Error() != "temMALFORMED: invalid NFTokenMinter field pairing" {
+		t.Fatalf("expected unconditional NFTokenMinter pairing error, got %v", err)
 	}
 }
 

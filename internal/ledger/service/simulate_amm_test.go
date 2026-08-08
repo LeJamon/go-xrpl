@@ -104,7 +104,8 @@ func TestService_SimulateTransaction_AMMCreateUsesParentHash(t *testing.T) {
 	// trusts gateway USD, and gateway funds her with USD.
 	gwSeq := accountSeq(t, svc, gw.Address)
 	aliceSeq := accountSeq(t, svc, alice.Address)
-	mustApply(t, svc, signedBlob(t, env, accountset.AccountSet(gw).DefaultRipple().Sequence(gwSeq).Build(), gw))
+	mustApply(t, svc, signedBlob(t, env, accountset.AccountSet(gw).
+		DefaultRipple().Fee(env.BaseFee()).Sequence(gwSeq).Build(), gw))
 	mustApply(t, svc, signedBlob(t, env, trustset.TrustUSD(alice, gw, "1000").Sequence(aliceSeq).Build(), alice))
 	mustApply(t, svc, signedBlob(t, env, payment.PayIssued(gw, alice, gw.IOU("USD", 100)).Sequence(gwSeq+1).Build(), gw))
 	closeLedger(t, svc)

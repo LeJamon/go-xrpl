@@ -2,54 +2,20 @@ package accountset
 
 import (
 	"encoding/hex"
+	"fmt"
 	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/require"
 
+	"github.com/LeJamon/go-xrpl/codec/binarycodec"
 	"github.com/LeJamon/go-xrpl/internal/ledger/state"
 	jtx "github.com/LeJamon/go-xrpl/internal/testing"
+	"github.com/LeJamon/go-xrpl/internal/tx"
 	accounttx "github.com/LeJamon/go-xrpl/internal/tx/account"
 	"github.com/LeJamon/go-xrpl/keylet"
 )
 
-// asfToLsf maps an AccountSet flag (asf*) to the corresponding ledger flag (lsf*).
-func asfToLsf(asfFlag uint32) uint32 {
-	switch asfFlag {
-	case accounttx.AccountSetFlagRequireDest:
-		return state.LsfRequireDestTag
-	case accounttx.AccountSetFlagRequireAuth:
-		return state.LsfRequireAuth
-	case accounttx.AccountSetFlagDisallowXRP:
-		return state.LsfDisallowXRP
-	case accounttx.AccountSetFlagDisableMaster:
-		return state.LsfDisableMaster
-	case accounttx.AccountSetFlagNoFreeze:
-		return state.LsfNoFreeze
-	case accounttx.AccountSetFlagGlobalFreeze:
-		return state.LsfGlobalFreeze
-	case accounttx.AccountSetFlagDefaultRipple:
-		return state.LsfDefaultRipple
-	case accounttx.AccountSetFlagDepositAuth:
-		return state.LsfDepositAuth
-	case accounttx.AccountSetFlagDisallowIncomingNFTokenOffer:
-		return state.LsfDisallowIncomingNFTokenOffer
-	case accounttx.AccountSetFlagDisallowIncomingCheck:
-		return state.LsfDisallowIncomingCheck
-	case accounttx.AccountSetFlagDisallowIncomingPayChan:
-		return state.LsfDisallowIncomingPayChan
-	case accounttx.AccountSetFlagDisallowIncomingTrustline:
-		return state.LsfDisallowIncomingTrustline
-	case accounttx.AccountSetFlagAllowTrustLineClawback:
-		return state.LsfAllowTrustLineClawback
-	default:
-		return 0
-	}
-}
-
-// =========================================================================
-// testNullAccountSet — rippled AccountSet_test.cpp lines 33-45
-// =========================================================================
 // Verifies that a freshly funded account (with noripple) has flags == 0.
 func TestAccountSet_NullAccountSet(t *testing.T) {
 	env := jtx.NewTestEnv(t)
@@ -63,154 +29,80 @@ func TestAccountSet_NullAccountSet(t *testing.T) {
 		"Expected flags 0 for newly funded noripple account, got 0x%x", info.Flags)
 }
 
-// =========================================================================
-// testMostFlags — rippled AccountSet_test.cpp lines 47-157
-// =========================================================================
-// Tests setting and clearing most account flags, with and without DepositAuth.
 func TestAccountSet_MostFlags(t *testing.T) {
 	env := jtx.NewTestEnv(t)
 	alice := jtx.NewAccount("alice")
 	env.FundNoRipple(alice)
 
 	// Set up a regular key so we can test DisableMaster
-	// Reference: rippled's env.memoize("alie"); env(regkey(alice, "alie"));
 	alie := jtx.NewAccount("alie")
 	env.FundNoRipple(alie) // Register so env knows the account
 	env.SetRegularKey(alice, alie)
 	env.Close()
 
-	// Flags that are tested elsewhere and should be skipped
-	skipFlags := map[uint32]bool{
-		accounttx.AccountSetFlagNoFreeze:                     true, // Can't be cleared
-		accounttx.AccountSetFlagAuthorizedNFTokenMinter:      true, // Requires NFTokenMinter field
-		accounttx.AccountSetFlagDisallowIncomingCheck:        true, // DisallowIncoming amendment
-		accounttx.AccountSetFlagDisallowIncomingPayChan:      true, // DisallowIncoming amendment
-		accounttx.AccountSetFlagDisallowIncomingNFTokenOffer: true, // DisallowIncoming amendment
-		accounttx.AccountSetFlagDisallowIncomingTrustline:    true, // DisallowIncoming amendment
-		accounttx.AccountSetFlagAllowTrustLineClawback:       true, // Can't be cleared
-		accounttx.AccountSetFlagAllowTrustLineLocking:        true, // AllowTokenLocking amendment
+	tests := []struct {
+		name        string
+		accountFlag uint32
+		ledgerFlag  uint32
+	}{
+		{name: "RequireDest", accountFlag: accounttx.AccountSetFlagRequireDest, ledgerFlag: state.LsfRequireDestTag},
+		{name: "RequireAuth", accountFlag: accounttx.AccountSetFlagRequireAuth, ledgerFlag: state.LsfRequireAuth},
+		{name: "DisallowXRP", accountFlag: accounttx.AccountSetFlagDisallowXRP, ledgerFlag: state.LsfDisallowXRP},
+		{name: "GlobalFreeze", accountFlag: accounttx.AccountSetFlagGlobalFreeze, ledgerFlag: state.LsfGlobalFreeze},
+		{name: "DisableMaster", accountFlag: accounttx.AccountSetFlagDisableMaster, ledgerFlag: state.LsfDisableMaster},
+		{name: "DefaultRipple", accountFlag: accounttx.AccountSetFlagDefaultRipple, ledgerFlag: state.LsfDefaultRipple},
+		{name: "DepositAuth", accountFlag: accounttx.AccountSetFlagDepositAuth, ledgerFlag: state.LsfDepositAuth},
 	}
-
-	testFlags := func(goodFlags []uint32) {
-		origFlags := env.AccountInfo(alice).Flags
-
-		goodFlagSet := make(map[uint32]bool)
-		for _, f := range goodFlags {
-			goodFlagSet[f] = true
-		}
-
-		// Test flags 1 through 31 (std::numeric_limits<uint32_t>::digits)
-		for flag := uint32(1); flag < 32; flag++ {
-			if skipFlags[flag] {
-				continue
-			}
-
-			if goodFlagSet[flag] {
-				// Good flag — should be settable and clearable
-				lsfFlag := asfToLsf(flag)
-				if lsfFlag == 0 {
-					continue // Unknown mapping
-				}
-
-				jtx.RequireFlagNotSet(t, env, alice, lsfFlag)
-
-				// Set the flag (using master key)
-				result := env.Submit(AccountSet(alice).SetFlag(flag).Build())
-				jtx.RequireTxSuccess(t, result)
-				env.Close()
-				jtx.RequireFlagSet(t, env, alice, lsfFlag)
-
-				// Clear the flag (using regular key — env.Submit skips sig verification)
-				result = env.Submit(AccountSet(alice).ClearFlag(flag).Build())
-				jtx.RequireTxSuccess(t, result)
-				env.Close()
-				jtx.RequireFlagNotSet(t, env, alice, lsfFlag)
-
-				nowFlags := env.AccountInfo(alice).Flags
-				require.Equal(t, origFlags, nowFlags,
-					"Flag %d: expected flags to return to 0x%x after clear, got 0x%x",
-					flag, origFlags, nowFlags)
-			} else {
-				// Bad flag — setting/clearing should not change flags
-				currentFlags := env.AccountInfo(alice).Flags
-				require.Equal(t, origFlags, currentFlags)
-
-				env.Submit(AccountSet(alice).SetFlag(flag).Build())
-				env.Close()
-				currentFlags = env.AccountInfo(alice).Flags
-				require.Equal(t, origFlags, currentFlags,
-					"Bad flag %d: expected flags unchanged 0x%x after set, got 0x%x",
-					flag, origFlags, currentFlags)
-
-				env.Submit(AccountSet(alice).ClearFlag(flag).Build())
-				env.Close()
-				currentFlags = env.AccountInfo(alice).Flags
-				require.Equal(t, origFlags, currentFlags,
-					"Bad flag %d: expected flags unchanged 0x%x after clear, got 0x%x",
-					flag, origFlags, currentFlags)
-			}
-		}
-	}
-
-	// DepositAuth is permanently enabled; asfDepositAuth is a settable flag.
-	testFlags([]uint32{
-		accounttx.AccountSetFlagRequireDest,
-		accounttx.AccountSetFlagRequireAuth,
-		accounttx.AccountSetFlagDisallowXRP,
-		accounttx.AccountSetFlagGlobalFreeze,
-		accounttx.AccountSetFlagDisableMaster,
-		accounttx.AccountSetFlagDefaultRipple,
-		accounttx.AccountSetFlagDepositAuth,
-	})
-}
-
-// =========================================================================
-// testSetAndResetAccountTxnID — rippled AccountSet_test.cpp lines 159-180
-// =========================================================================
-// asfAccountTxnID is special — it controls field presence, not a flag bit.
-func TestAccountSet_SetAndResetAccountTxnID(t *testing.T) {
-	env := jtx.NewTestEnv(t)
-	alice := jtx.NewAccount("alice")
-	env.FundNoRipple(alice)
 
 	origFlags := env.AccountInfo(alice).Flags
-
-	// asfAccountTxnID controls field PRESENCE (rippled isFieldPresent), not a
-	// value: enable makes sfAccountTxnID present with value zero, clear removes
-	// it. Check presence via the raw AccountRoot, mirroring rippled's
-	// AccountSet_test.cpp checks.
-	hasAccountTxnID := func() bool {
-		t.Helper()
-		data, err := env.LedgerEntry(keylet.Account(alice.ID))
-		require.NoError(t, err)
-		ar, err := state.ParseAccountRoot(data)
-		require.NoError(t, err)
-		return ar.HasAccountTxnID
+	handled := map[uint32]bool{
+		accounttx.AccountSetFlagAccountTxnID:                 true,
+		accounttx.AccountSetFlagNoFreeze:                     true,
+		accounttx.AccountSetFlagAuthorizedNFTokenMinter:      true,
+		accounttx.AccountSetFlagDisallowIncomingCheck:        true,
+		accounttx.AccountSetFlagDisallowIncomingPayChan:      true,
+		accounttx.AccountSetFlagDisallowIncomingNFTokenOffer: true,
+		accounttx.AccountSetFlagDisallowIncomingTrustline:    true,
+		accounttx.AccountSetFlagAllowTrustLineClawback:       true,
+		accounttx.AccountSetFlagAllowTrustLineLocking:        true,
 	}
 
-	// AccountTxnID should not be present initially.
-	require.False(t, hasAccountTxnID(), "AccountTxnID should not be present initially")
+	for _, tt := range tests {
+		handled[tt.accountFlag] = true
+		t.Run(tt.name, func(t *testing.T) {
+			jtx.RequireFlagNotSet(t, env, alice, tt.ledgerFlag)
 
-	// Set asfAccountTxnID — field should become present (value zero).
-	result := env.Submit(AccountSet(alice).SetFlag(accounttx.AccountSetFlagAccountTxnID).Build())
-	jtx.RequireTxSuccess(t, result)
-	env.Close()
-	require.True(t, hasAccountTxnID(), "AccountTxnID should be present after set")
+			result := env.SubmitSigned(AccountSet(alice).SetFlag(tt.accountFlag).Build())
+			jtx.RequireTxSuccess(t, result)
+			env.Close()
+			jtx.RequireFlagSet(t, env, alice, tt.ledgerFlag)
 
-	// Clear asfAccountTxnID — field should be removed.
-	result = env.Submit(AccountSet(alice).ClearFlag(accounttx.AccountSetFlagAccountTxnID).Build())
-	jtx.RequireTxSuccess(t, result)
-	env.Close()
-	require.False(t, hasAccountTxnID(), "AccountTxnID should not be present after clear")
+			result = env.SubmitSignedWith(AccountSet(alice).ClearFlag(tt.accountFlag).Build(), alie)
+			jtx.RequireTxSuccess(t, result)
+			env.Close()
+			jtx.RequireFlagNotSet(t, env, alice, tt.ledgerFlag)
+			require.Equal(t, origFlags, env.AccountInfo(alice).Flags)
+		})
+	}
 
-	// Flags should be unchanged
-	nowFlags := env.AccountInfo(alice).Flags
-	require.Equal(t, origFlags, nowFlags)
+	for flag := uint32(1); flag < 32; flag++ {
+		if handled[flag] {
+			continue
+		}
+		t.Run(fmt.Sprintf("unknown-%d", flag), func(t *testing.T) {
+			result := env.SubmitSigned(AccountSet(alice).SetFlag(flag).Build())
+			jtx.RequireTxSuccess(t, result)
+			env.Close()
+			require.Equal(t, origFlags, env.AccountInfo(alice).Flags)
+
+			result = env.SubmitSignedWith(AccountSet(alice).ClearFlag(flag).Build(), alie)
+			jtx.RequireTxSuccess(t, result)
+			env.Close()
+			require.Equal(t, origFlags, env.AccountInfo(alice).Flags)
+		})
+	}
 }
 
-// =========================================================================
-// testSetNoFreeze — rippled AccountSet_test.cpp lines 182-201
-// =========================================================================
 // NoFreeze requires master key to set and cannot be cleared once set.
 func TestAccountSet_SetNoFreeze(t *testing.T) {
 	env := jtx.NewTestEnv(t)
@@ -225,12 +117,12 @@ func TestAccountSet_SetNoFreeze(t *testing.T) {
 	jtx.RequireFlagNotSet(t, env, alice, state.LsfNoFreeze)
 
 	// Setting NoFreeze with regular key should fail with tecNEED_MASTER_KEY
-	// Reference: rippled AccountSet_test.cpp line 195
 	result := env.SubmitSignedWith(
 		AccountSet(alice).SetFlag(accounttx.AccountSetFlagNoFreeze).Build(),
 		eric,
 	)
 	jtx.RequireTxFail(t, result, "tecNEED_MASTER_KEY")
+	jtx.RequireFlagNotSet(t, env, alice, state.LsfNoFreeze)
 
 	// Setting NoFreeze with master key should succeed
 	result = env.SubmitSigned(
@@ -245,9 +137,6 @@ func TestAccountSet_SetNoFreeze(t *testing.T) {
 	jtx.RequireFlagSet(t, env, alice, state.LsfNoFreeze) // Still set
 }
 
-// =========================================================================
-// testDomain — rippled AccountSet_test.cpp lines 203-251
-// =========================================================================
 // Tests setting and clearing the Domain field, plus length limits.
 func TestAccountSet_Domain(t *testing.T) {
 	env := jtx.NewTestEnv(t)
@@ -262,6 +151,12 @@ func TestAccountSet_Domain(t *testing.T) {
 	jtx.RequireTxSuccess(t, result)
 	info := env.AccountInfo(alice)
 	require.Equal(t, domain, info.Domain, "Domain should be set to example.com")
+
+	for _, malformed := range []string{"0", "zz"} {
+		result = env.Submit(AccountSet(alice).Domain(malformed).Build())
+		jtx.RequireTxFail(t, result, "telBAD_DOMAIN")
+		require.Equal(t, domain, env.AccountInfo(alice).Domain)
+	}
 
 	// Clear domain with empty string
 	result = env.Submit(AccountSet(alice).Domain("").Build())
@@ -287,15 +182,14 @@ func TestAccountSet_Domain(t *testing.T) {
 			info = env.AccountInfo(alice)
 			require.Equal(t, domain2, info.Domain)
 		} else {
+			before := env.AccountInfo(alice).Domain
 			result = env.Submit(AccountSet(alice).Domain(domain2Hex).Build())
 			jtx.RequireTxFail(t, result, "telBAD_DOMAIN")
+			require.Equal(t, before, env.AccountInfo(alice).Domain)
 		}
 	}
 }
 
-// =========================================================================
-// testMessageKey — rippled AccountSet_test.cpp lines 253-278
-// =========================================================================
 // Tests setting and clearing the MessageKey field, plus invalid key validation.
 func TestAccountSet_MessageKey(t *testing.T) {
 	env := jtx.NewTestEnv(t)
@@ -320,15 +214,12 @@ func TestAccountSet_MessageKey(t *testing.T) {
 	require.Equal(t, "", info.MessageKey, "MessageKey should be cleared")
 
 	// Set invalid message key — should fail
-	// Reference: rippled AccountSet_test.cpp line 277
 	invalidKeyHex := hex.EncodeToString([]byte("NOT_REALLY_A_PUBKEY"))
 	result = env.Submit(AccountSet(alice).MessageKey(invalidKeyHex).Build())
 	jtx.RequireTxFail(t, result, "telBAD_PUBLIC_KEY")
+	require.Empty(t, env.AccountInfo(alice).MessageKey)
 }
 
-// =========================================================================
-// testWalletID — rippled AccountSet_test.cpp lines 280-300
-// =========================================================================
 // Tests setting and clearing the WalletLocator field.
 func TestAccountSet_WalletID(t *testing.T) {
 	env := jtx.NewTestEnv(t)
@@ -351,9 +242,6 @@ func TestAccountSet_WalletID(t *testing.T) {
 	require.Equal(t, "", info.WalletLocator, "WalletLocator should be cleared")
 }
 
-// =========================================================================
-// testEmailHash — rippled AccountSet_test.cpp lines 302-321
-// =========================================================================
 // Tests setting and clearing the EmailHash field.
 func TestAccountSet_EmailHash(t *testing.T) {
 	env := jtx.NewTestEnv(t)
@@ -362,87 +250,95 @@ func TestAccountSet_EmailHash(t *testing.T) {
 
 	mh := "5F31A79367DC3137FADA860C05742EE6"
 
-	// Set EmailHash
+	readEmailHash := func() (string, bool) {
+		t.Helper()
+		data, err := env.LedgerEntry(keylet.Account(alice.ID))
+		require.NoError(t, err)
+		fields, err := binarycodec.Decode(hex.EncodeToString(data))
+		require.NoError(t, err)
+		value, present := fields["EmailHash"].(string)
+		return value, present
+	}
+
 	result := env.Submit(AccountSet(alice).EmailHash(mh).Build())
 	jtx.RequireTxSuccess(t, result)
-	info := env.AccountInfo(alice)
-	require.Equal(t, strings.ToLower(mh), strings.ToLower(info.EmailHash),
-		"EmailHash should match the set value")
+	stored, present := readEmailHash()
+	require.True(t, present)
+	require.Equal(t, strings.ToUpper(mh), stored)
 
-	// Clear EmailHash with empty string
-	// In rippled, clearing EmailHash sends the all-zeros hash.
-	// The Go AccountSet Apply maps "00000000000000000000000000000000" → ""
-	result = env.Submit(AccountSet(alice).EmailHash("").Build())
+	for _, malformed := range []string{
+		"5F31A79367DC3137FADA860C05742E",
+		"5F31A79367DC3137FADA860C05742EE600",
+		"GGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGG",
+	} {
+		result = env.Submit(AccountSet(alice).EmailHash(malformed).Build())
+		jtx.RequireTxFail(t, result, "temMALFORMED")
+		stored, present = readEmailHash()
+		require.True(t, present)
+		require.Equal(t, strings.ToUpper(mh), stored)
+	}
+
+	result = env.Submit(AccountSet(alice).EmailHash(strings.Repeat("0", 32)).Build())
 	jtx.RequireTxSuccess(t, result)
-	info = env.AccountInfo(alice)
-	require.Equal(t, "", info.EmailHash, "EmailHash should be cleared")
+	stored, present = readEmailHash()
+	require.False(t, present)
+	require.Empty(t, stored)
+
+	result = env.Submit(AccountSet(alice).EmailHash(mh).Build())
+	jtx.RequireTxSuccess(t, result)
+	parsed, err := tx.FromJSON([]byte(fmt.Sprintf(
+		`{"TransactionType":"AccountSet","Account":%q,"EmailHash":""}`,
+		alice.Address,
+	)))
+	require.NoError(t, err)
+	emptyHash, ok := parsed.(*accounttx.AccountSet)
+	require.True(t, ok)
+	require.True(t, emptyHash.HasField("EmailHash"))
+	result = env.Submit(emptyHash)
+	jtx.RequireTxSuccess(t, result)
+	stored, present = readEmailHash()
+	require.False(t, present)
+	require.Empty(t, stored)
 }
 
-// =========================================================================
-// testTransferRate — rippled AccountSet_test.cpp lines 323-368
-// =========================================================================
 // Tests transfer rate validation: valid range is 1.0-2.0 (or 0 to clear).
 func TestAccountSet_TransferRate(t *testing.T) {
-	const qualityOne = uint32(1_000_000_000)
-
 	env := jtx.NewTestEnv(t)
 	alice := jtx.NewAccount("alice")
 	env.Fund(alice)
 
-	type testCase struct {
-		set  float64
-		code string
-		get  float64
-	}
-
-	tests := []testCase{
-		{1.0, "tesSUCCESS", 1.0},
-		{1.1, "tesSUCCESS", 1.1},
-		{2.0, "tesSUCCESS", 2.0},
-		{2.1, "temBAD_TRANSFER_RATE", 2.0}, // Rejected, previous rate kept
-		{0.0, "tesSUCCESS", 1.0},           // 0 clears the field (defaults to 1.0)
-		{2.0, "tesSUCCESS", 2.0},
-		{0.9, "temBAD_TRANSFER_RATE", 2.0}, // Rejected, previous rate kept
+	tests := []struct {
+		name   string
+		set    uint32
+		code   string
+		stored uint32
+	}{
+		{name: "maximum", set: 2_000_000_000, code: "tesSUCCESS", stored: 2_000_000_000},
+		{name: "above maximum", set: 2_000_000_001, code: "temBAD_TRANSFER_RATE", stored: 2_000_000_000},
+		{name: "below minimum", set: 999_999_999, code: "temBAD_TRANSFER_RATE", stored: 2_000_000_000},
+		{name: "minimum clears", set: 1_000_000_000, code: "tesSUCCESS", stored: 0},
+		{name: "above minimum", set: 1_000_000_001, code: "tesSUCCESS", stored: 1_000_000_001},
+		{name: "zero clears", set: 0, code: "tesSUCCESS", stored: 0},
 	}
 
 	for _, tc := range tests {
-		rate := uint32(tc.set * float64(qualityOne))
-		result := env.Submit(AccountSet(alice).TransferRate(rate).Build())
-		env.Close()
-
-		if tc.code == "tesSUCCESS" {
-			require.Equal(t, "tesSUCCESS", result.Code,
-				"TransferRate %.1f: expected tesSUCCESS, got %s", tc.set, result.Code)
-		} else {
-			require.Equal(t, tc.code, result.Code,
-				"TransferRate %.1f: expected %s, got %s", tc.set, tc.code, result.Code)
-		}
-
-		// Verify the stored rate
-		info := env.AccountInfo(alice)
-		if info.TransferRate == 0 {
-			// Field not present → default 1.0
-			require.InDelta(t, 1.0, tc.get, 0.001,
-				"TransferRate %.1f: expected get=%.1f, got 1.0 (default)", tc.set, tc.get)
-		} else {
-			actualRate := float64(info.TransferRate) / float64(qualityOne)
-			require.InDelta(t, tc.get, actualRate, 0.001,
-				"TransferRate %.1f: expected get=%.1f, got %.6f", tc.set, tc.get, actualRate)
-		}
+		t.Run(tc.name, func(t *testing.T) {
+			result := env.Submit(AccountSet(alice).TransferRate(tc.set).Build())
+			require.Equal(t, tc.code, result.Code)
+			env.Close()
+			require.Equal(t, tc.stored, env.AccountInfo(alice).TransferRate)
+		})
 	}
 }
 
-// =========================================================================
-// testGateway — rippled AccountSet_test.cpp lines 370-472
-// =========================================================================
 // Tests transfer rate application in real payment scenarios with IOUs.
 func TestAccountSet_Gateway(t *testing.T) {
 	const qualityOne = uint32(1_000_000_000)
 
 	// Test gateway with a variety of allowed transfer rates (1.0 to 2.0)
-	// Reference: rippled AccountSet_test.cpp lines 382-406
 	for rate := 1.0; rate <= 2.0; rate += 0.03125 {
-		t.Run("", func(t *testing.T) {
+		rateU32 := uint32(rate * float64(qualityOne))
+		t.Run(fmt.Sprintf("rate-%d", rateU32), func(t *testing.T) {
 			env := jtx.NewTestEnv(t)
 			gw := jtx.NewAccount("gateway")
 			alice := jtx.NewAccount("alice")
@@ -456,7 +352,6 @@ func TestAccountSet_Gateway(t *testing.T) {
 			env.Close()
 
 			// Set transfer rate on gateway
-			rateU32 := uint32(rate * float64(qualityOne))
 			env.SetTransferRate(gw, rateU32)
 			env.Close()
 
@@ -478,10 +373,10 @@ func TestAccountSet_Gateway(t *testing.T) {
 	}
 
 	// Test legacy out-of-bounds transfer rates by modifying ledger directly.
-	// Reference: rippled AccountSet_test.cpp lines 408-471
 	// Two out-of-bounds values currently in the MainNet ledger: 4.0 and 4.294967295
 	for _, rate := range []float64{4.0, 4.294967295} {
-		t.Run("", func(t *testing.T) {
+		rateU32 := uint32(rate * float64(qualityOne))
+		t.Run(fmt.Sprintf("legacy-%d", rateU32), func(t *testing.T) {
 			env := jtx.NewTestEnv(t)
 			gw := jtx.NewAccount("gateway")
 			alice := jtx.NewAccount("alice")
@@ -498,7 +393,6 @@ func TestAccountSet_Gateway(t *testing.T) {
 			env.Close()
 
 			// Hack the ledger to set the out-of-bounds transfer rate.
-			// Reference: rippled AccountSet_test.cpp lines 446-460
 			env.SetTransferRateDirect(gw, uint32(rate*float64(qualityOne)))
 
 			// gw pays alice 10 USD, alice pays bob 1 USD
@@ -514,67 +408,66 @@ func TestAccountSet_Gateway(t *testing.T) {
 	}
 }
 
-// =========================================================================
-// testBadInputs — rippled AccountSet_test.cpp lines 474-515
-// =========================================================================
 // Tests conflicting flag combinations and missing prerequisites.
 func TestAccountSet_BadInputs(t *testing.T) {
 	env := jtx.NewTestEnv(t)
 	alice := jtx.NewAccount("alice")
 	env.Fund(alice)
+	origFlags := env.AccountInfo(alice).Flags
 
 	// Setting and clearing the same flag → temINVALID_FLAG
-	// Reference: rippled AccountSet_test.cpp lines 484-495
 	result := env.Submit(AccountSet(alice).
 		SetFlag(accounttx.AccountSetFlagDisallowXRP).
 		ClearFlag(accounttx.AccountSetFlagDisallowXRP).Build())
 	jtx.RequireTxFail(t, result, "temINVALID_FLAG")
+	require.Equal(t, origFlags, env.AccountInfo(alice).Flags)
 
 	result = env.Submit(AccountSet(alice).
 		SetFlag(accounttx.AccountSetFlagRequireAuth).
 		ClearFlag(accounttx.AccountSetFlagRequireAuth).Build())
 	jtx.RequireTxFail(t, result, "temINVALID_FLAG")
+	require.Equal(t, origFlags, env.AccountInfo(alice).Flags)
 
 	result = env.Submit(AccountSet(alice).
 		SetFlag(accounttx.AccountSetFlagRequireDest).
 		ClearFlag(accounttx.AccountSetFlagRequireDest).Build())
 	jtx.RequireTxFail(t, result, "temINVALID_FLAG")
+	require.Equal(t, origFlags, env.AccountInfo(alice).Flags)
 
 	// Setting a flag while transaction flags contradict → temINVALID_FLAG
-	// Reference: rippled AccountSet_test.cpp lines 496-510
 	result = env.Submit(AccountSet(alice).
 		SetFlag(accounttx.AccountSetFlagDisallowXRP).
 		TxFlags(accounttx.AccountSetTxFlagAllowXRP).Build())
 	jtx.RequireTxFail(t, result, "temINVALID_FLAG")
+	require.Equal(t, origFlags, env.AccountInfo(alice).Flags)
 
 	result = env.Submit(AccountSet(alice).
 		SetFlag(accounttx.AccountSetFlagRequireAuth).
 		TxFlags(accounttx.AccountSetTxFlagOptionalAuth).Build())
 	jtx.RequireTxFail(t, result, "temINVALID_FLAG")
+	require.Equal(t, origFlags, env.AccountInfo(alice).Flags)
 
 	result = env.Submit(AccountSet(alice).
 		SetFlag(accounttx.AccountSetFlagRequireDest).
 		TxFlags(accounttx.AccountSetTxFlagOptionalDestTag).Build())
 	jtx.RequireTxFail(t, result, "temINVALID_FLAG")
+	require.Equal(t, origFlags, env.AccountInfo(alice).Flags)
 
 	// Using the mask value for transaction flags → temINVALID_FLAG
-	// Reference: rippled AccountSet_test.cpp lines 508-510
 	result = env.Submit(AccountSet(alice).
 		SetFlag(accounttx.AccountSetFlagRequireDest).
 		TxFlags(accounttx.AccountSetTxFlagMask).Build())
 	jtx.RequireTxFail(t, result, "temINVALID_FLAG")
+	require.Equal(t, origFlags, env.AccountInfo(alice).Flags)
 
 	// Disabling master key without an alternative → tecNO_ALTERNATIVE_KEY
-	// Reference: rippled AccountSet_test.cpp lines 512-514
 	result = env.SubmitSigned(
 		AccountSet(alice).SetFlag(accounttx.AccountSetFlagDisableMaster).Build(),
 	)
 	jtx.RequireTxFail(t, result, "tecNO_ALTERNATIVE_KEY")
+	require.Equal(t, origFlags, env.AccountInfo(alice).Flags)
 }
 
-// =========================================================================
-// testRequireAuthWithDir — rippled AccountSet_test.cpp lines 517-546
-// =========================================================================
 // RequireAuth cannot be set when the account has owned objects.
 func TestAccountSet_RequireAuth(t *testing.T) {
 	env := jtx.NewTestEnv(t)
@@ -590,10 +483,10 @@ func TestAccountSet_RequireAuth(t *testing.T) {
 	env.Close()
 
 	// RequireAuth should fail with tecOWNERS because the directory is not empty.
-	// Reference: rippled AccountSet_test.cpp line 538
 	result := env.Submit(AccountSet(alice).
 		SetFlag(accounttx.AccountSetFlagRequireAuth).Build())
 	jtx.RequireTxFail(t, result, "tecOWNERS")
+	jtx.RequireFlagNotSet(t, env, alice, state.LsfRequireAuth)
 
 	// Remove the signer list.
 	env.RemoveSignerList(alice)
@@ -603,11 +496,9 @@ func TestAccountSet_RequireAuth(t *testing.T) {
 	result = env.Submit(AccountSet(alice).
 		SetFlag(accounttx.AccountSetFlagRequireAuth).Build())
 	jtx.RequireTxSuccess(t, result)
+	jtx.RequireFlagSet(t, env, alice, state.LsfRequireAuth)
 }
 
-// =========================================================================
-// testTicket — rippled AccountSet_test.cpp lines 548-579
-// =========================================================================
 // Tests ticket creation and consumption via AccountSet (noop) transactions.
 func TestAccountSet_Ticket(t *testing.T) {
 	env := jtx.NewTestEnv(t)
@@ -622,7 +513,6 @@ func TestAccountSet_Ticket(t *testing.T) {
 	jtx.RequireTicketCount(t, env, alice, 1)
 
 	// Try using a ticket that alice doesn't have (ticketSeq + 1).
-	// Reference: rippled AccountSet_test.cpp line 564
 	result := env.Submit(jtx.WithTicketSeq(AccountSet(alice).Build(), ticketSeq+1))
 	env.Close()
 	jtx.RequireTxFail(t, result, "terPRE_TICKET")
@@ -630,7 +520,6 @@ func TestAccountSet_Ticket(t *testing.T) {
 	jtx.RequireTicketCount(t, env, alice, 1)
 
 	// Use the actual ticket. Sequence should NOT advance.
-	// Reference: rippled AccountSet_test.cpp lines 570-574
 	aliceSeq := env.Seq(alice)
 	result = env.Submit(jtx.WithTicketSeq(AccountSet(alice).Build(), ticketSeq))
 	env.Close()
@@ -640,7 +529,6 @@ func TestAccountSet_Ticket(t *testing.T) {
 	require.Equal(t, aliceSeq, env.Seq(alice), "Sequence should not advance when using a ticket")
 
 	// Try re-using the consumed ticket.
-	// Reference: rippled AccountSet_test.cpp lines 577-578
 	result = env.Submit(jtx.WithTicketSeq(AccountSet(alice).Build(), ticketSeq))
 	env.Close()
 	jtx.RequireTxFail(t, result, "tefNO_TICKET")
@@ -651,9 +539,6 @@ func TestAccountSet_Ticket(t *testing.T) {
 // slice while continuation pages still hold entries. In that case the
 // directory is NOT empty and asfRequireAuth / asfAllowTrustLineClawback must
 // be rejected with tecOWNERS.
-//
-// Reference: rippled View.cpp dirIsEmpty (lines 905-911) and
-// SetAccount.cpp preclaim() lines 269-307.
 func TestAccountSet_DirIsEmpty_AnchorEmptyWithContinuation(t *testing.T) {
 	t.Run("RequireAuth", func(t *testing.T) {
 		env := jtx.NewTestEnv(t)
@@ -726,9 +611,7 @@ func TestAccountSet_PreclaimOrder_RequireAuthBeforeClawback(t *testing.T) {
 	jtx.RequireTxFail(t, res, "tecOWNERS")
 }
 
-// =========================================================================
 // DisableMaster requires the master key — issue 734.
-// =========================================================================
 // asfDisableMaster may be set only by a transaction signed with the account's
 // own master key. A regular-key-signed or multi-signed AccountSet must be
 // rejected with tecNEED_MASTER_KEY, matching rippled SetAccount.cpp sigWithMaster.
