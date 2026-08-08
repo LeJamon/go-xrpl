@@ -824,31 +824,52 @@ func TestConnectMethod(t *testing.T) {
 		}
 	})
 
-	t.Run("Explicit port boundaries are accepted", func(t *testing.T) {
+	t.Run("Convertible ports are coerced and wrapped", func(t *testing.T) {
 		for _, tc := range []struct {
-			port int
-			want string
+			name        string
+			rawPort     string
+			wantPort    int
+			wantAddress string
 		}{
-			{port: 1, want: "10.0.0.3:1"},
-			{port: 65535, want: "10.0.0.3:65535"},
+			{name: "null", rawPort: "null", wantPort: 0, wantAddress: "10.0.0.3:0"},
+			{name: "zero", rawPort: "0", wantPort: 0, wantAddress: "10.0.0.3:0"},
+			{name: "negative", rawPort: "-1", wantPort: -1, wantAddress: "10.0.0.3:65535"},
+			{name: "wrapped", rawPort: "65536", wantPort: 65536, wantAddress: "10.0.0.3:0"},
+			{name: "fractional", rawPort: "1.5", wantPort: 1, wantAddress: "10.0.0.3:1"},
+			{name: "true", rawPort: "true", wantPort: 1, wantAddress: "10.0.0.3:1"},
+			{name: "false", rawPort: "false", wantPort: 0, wantAddress: "10.0.0.3:0"},
+			{name: "maximum endpoint port", rawPort: "65535", wantPort: 65535, wantAddress: "10.0.0.3:65535"},
+			{name: "minimum integer", rawPort: "-2147483648", wantPort: -2147483648, wantAddress: "10.0.0.3:0"},
+			{name: "maximum integer", rawPort: "2147483647", wantPort: 2147483647, wantAddress: "10.0.0.3:65535"},
 		} {
-			var got string
-			svc := &types.ServiceContainer{Ledger: mock, PeerConnect: func(addr string) error { got = addr; return nil }}
-			ctx := &types.RpcContext{Context: context.Background(), Role: types.RoleAdmin, ApiVersion: types.ApiVersion1, Services: svc}
-			_, rpcErr := method.Handle(ctx, json.RawMessage(fmt.Sprintf(`{"ip":"10.0.0.3","port":%d}`, tc.port)))
-			require.Nil(t, rpcErr)
-			assert.Equal(t, tc.want, got)
+			t.Run(tc.name, func(t *testing.T) {
+				var got string
+				svc := &types.ServiceContainer{Ledger: mock, PeerConnect: func(addr string) error { got = addr; return nil }}
+				ctx := &types.RpcContext{Context: context.Background(), Role: types.RoleAdmin, ApiVersion: types.ApiVersion1, Services: svc}
+				result, rpcErr := method.Handle(ctx, json.RawMessage(fmt.Sprintf(`{"ip":"10.0.0.3","port":%s}`, tc.rawPort)))
+				require.Nil(t, rpcErr)
+				assert.Equal(t, tc.wantAddress, got)
+				assert.Equal(t, fmt.Sprintf("attempting connection to IP:10.0.0.3 port: %d", tc.wantPort), result.(map[string]any)["message"])
+			})
 		}
 	})
 
 	t.Run("Malformed and out-of-range ports are invalidParams", func(t *testing.T) {
-		for _, rawPort := range []string{"null", "0", "-1", "65536", "1.5", `"1"`, "true", "[]"} {
+		for _, rawPort := range []string{`"1"`, "[]", "{}", "2147483648", "-2147483649"} {
 			svc := &types.ServiceContainer{Ledger: mock, PeerConnect: func(string) error { t.Fatal("PeerConnect called for invalid port"); return nil }}
 			ctx := &types.RpcContext{Context: context.Background(), Role: types.RoleAdmin, ApiVersion: types.ApiVersion1, Services: svc}
 			_, rpcErr := method.Handle(ctx, json.RawMessage(fmt.Sprintf(`{"ip":"10.0.0.4","port":%s}`, rawPort)))
 			require.NotNil(t, rpcErr, rawPort)
 			assert.Equal(t, types.RpcINVALID_PARAMS, rpcErr.Code, rawPort)
 		}
+	})
+
+	t.Run("Port validation precedes IP conversion", func(t *testing.T) {
+		svc := &types.ServiceContainer{Ledger: mock, PeerConnect: func(string) error { t.Fatal("PeerConnect called for invalid request"); return nil }}
+		ctx := &types.RpcContext{Context: context.Background(), Role: types.RoleAdmin, ApiVersion: types.ApiVersion1, Services: svc}
+		_, rpcErr := method.Handle(ctx, json.RawMessage(`{"ip":[],"port":"1"}`))
+		require.NotNil(t, rpcErr)
+		assert.Equal(t, types.RpcINVALID_PARAMS, rpcErr.Code)
 	})
 
 	t.Run("Unavailable scheduler returns notEnabled", func(t *testing.T) {

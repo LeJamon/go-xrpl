@@ -191,10 +191,6 @@ func decodeConnectRequest(params json.RawMessage) (connectRequest, *types.RpcErr
 	if !ok {
 		return connectRequest{}, types.RpcErrorMissingField("ip")
 	}
-	ip, rpcErr := parseConnectIP(rawIP)
-	if rpcErr != nil {
-		return connectRequest{}, rpcErr
-	}
 
 	port := 51235
 	if rawPort, supplied := fields["port"]; supplied {
@@ -203,6 +199,10 @@ func decodeConnectRequest(params json.RawMessage) (connectRequest, *types.RpcErr
 		if rpcErr != nil {
 			return connectRequest{}, rpcErr
 		}
+	}
+	ip, rpcErr := parseConnectIP(rawIP)
+	if rpcErr != nil {
+		return connectRequest{}, rpcErr
 	}
 	return connectRequest{ip: ip, port: port}, nil
 }
@@ -236,27 +236,29 @@ func parseConnectIP(raw json.RawMessage) (string, *types.RpcError) {
 }
 
 func parseConnectPort(raw json.RawMessage) (int, *types.RpcError) {
-	if bytes.Equal(bytes.TrimSpace(raw), []byte("null")) {
-		return 0, types.RpcErrorInvalidParams("Invalid parameters.")
-	}
 	decoder := json.NewDecoder(bytes.NewReader(raw))
 	decoder.UseNumber()
 	var value any
 	if err := decoder.Decode(&value); err != nil {
 		return 0, types.RpcErrorInvalidParams("Invalid parameters.")
 	}
-	if number, ok := value.(json.Number); ok {
-		if port, err := strconv.ParseInt(number.String(), 10, 64); err == nil {
-			if port >= 1 && port <= 65535 {
+	switch value := value.(type) {
+	case nil:
+		return 0, nil
+	case bool:
+		if value {
+			return 1, nil
+		}
+		return 0, nil
+	case json.Number:
+		if port, err := strconv.ParseInt(value.String(), 10, 64); err == nil {
+			if port >= math.MinInt32 && port <= math.MaxInt32 {
 				return int(port), nil
 			}
 			return 0, types.RpcErrorInvalidParams("Invalid parameters.")
 		}
-		// Accept JSON numbers such as 51235.0 when they represent an
-		// integer, while rejecting fractional values and non-finite input.
-		if port, err := strconv.ParseFloat(number.String(), 64); err == nil &&
-			!math.IsNaN(port) && !math.IsInf(port, 0) && math.Trunc(port) == port &&
-			port >= 1 && port <= 65535 {
+		if port, err := strconv.ParseFloat(value.String(), 64); err == nil &&
+			port >= math.MinInt32 && port <= math.MaxInt32 {
 			return int(port), nil
 		}
 	}
