@@ -173,8 +173,6 @@ func (d *DIDSet) Apply(ctx *tx.ApplyContext) ter.Result {
 		return ter.TecEMPTY_DID
 	}
 
-	// Add to owner directory first so sfOwnerNode records the actual page.
-	// Reference: rippled DID.cpp:105-109 (dirInsert → sfOwnerNode = *page).
 	ownerDirKey := keylet.OwnerDir(ctx.AccountID)
 	dirResult, err := state.DirInsert(ctx.View, ownerDirKey, didKey.Key, false, func(dir *state.DirectoryNode) {
 		dir.Owner = ctx.AccountID

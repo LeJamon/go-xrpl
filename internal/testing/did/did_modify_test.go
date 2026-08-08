@@ -7,7 +7,6 @@ import (
 	"github.com/LeJamon/go-xrpl/internal/testing/did"
 )
 
-// TestSetModify tests modifying an existing DID with DIDSet.
 func TestSetModify(t *testing.T) {
 	runWithFeatureSets(t, testSetModify)
 }
@@ -23,7 +22,6 @@ func testSetModify(t *testing.T, fixEmptyDID bool) {
 		t.Errorf("Expected owner count 0, got %d", env.OwnerCount(alice))
 	}
 
-	// Create DID with only URI
 	initialURI := "uri"
 	{
 		tx1 := did.DIDSet(alice).URI(initialURI).Build()
@@ -35,7 +33,6 @@ func testSetModify(t *testing.T, fixEmptyDID bool) {
 			t.Errorf("Create DID: expected owner count 1, got %d", env.OwnerCount(alice))
 		}
 
-		// Verify DID entry fields
 		entry := getDIDEntry(t, env, alice)
 		if entry == nil {
 			t.Fatal("Create DID: expected DID entry to exist")
@@ -46,7 +43,6 @@ func testSetModify(t *testing.T, fixEmptyDID bool) {
 		requireFieldAbsent(t, "Data", entry.Data)
 	}
 
-	// Try to delete URI, fails because no elements would remain
 	{
 		tx1 := did.DIDSet(alice).URI("").Build()
 		result := env.Submit(tx1)
@@ -55,7 +51,6 @@ func testSetModify(t *testing.T, fixEmptyDID bool) {
 			t.Errorf("Delete URI: expected owner count 1, got %d", env.OwnerCount(alice))
 		}
 
-		// DID should remain unchanged
 		entry := getDIDEntry(t, env, alice)
 		if entry == nil {
 			t.Fatal("Delete URI: expected DID entry to still exist")
@@ -65,7 +60,6 @@ func testSetModify(t *testing.T, fixEmptyDID bool) {
 		requireFieldAbsent(t, "Data", entry.Data)
 	}
 
-	// Set DIDDocument
 	initialDocument := "data"
 	{
 		tx1 := did.DIDSet(alice).Document(initialDocument).Build()
@@ -86,7 +80,6 @@ func testSetModify(t *testing.T, fixEmptyDID bool) {
 		requireFieldAbsent(t, "Data", entry.Data)
 	}
 
-	// Set Data
 	initialData := "attest"
 	{
 		tx1 := did.DIDSet(alice).Data(initialData).Build()
@@ -107,7 +100,6 @@ func testSetModify(t *testing.T, fixEmptyDID bool) {
 		checkVL(t, "Data", entry.Data, initialData)
 	}
 
-	// Remove URI
 	{
 		tx1 := did.DIDSet(alice).URI("").Build()
 		result := env.Submit(tx1)
@@ -127,7 +119,6 @@ func testSetModify(t *testing.T, fixEmptyDID bool) {
 		checkVL(t, "Data", entry.Data, initialData)
 	}
 
-	// Remove Data
 	{
 		tx1 := did.DIDSet(alice).Data("").Build()
 		result := env.Submit(tx1)
@@ -147,7 +138,6 @@ func testSetModify(t *testing.T, fixEmptyDID bool) {
 		requireFieldAbsent(t, "Data", entry.Data)
 	}
 
-	// Remove DIDDocument + set URI
 	secondURI := "uri2"
 	{
 		tx1 := did.DIDSet(alice).URI(secondURI).Document("").Build()
@@ -168,7 +158,6 @@ func testSetModify(t *testing.T, fixEmptyDID bool) {
 		requireFieldAbsent(t, "Data", entry.Data)
 	}
 
-	// Remove URI + set DIDDocument
 	secondDocument := "data2"
 	{
 		tx1 := did.DIDSet(alice).URI("").Document(secondDocument).Build()
@@ -189,7 +178,6 @@ func testSetModify(t *testing.T, fixEmptyDID bool) {
 		requireFieldAbsent(t, "Data", entry.Data)
 	}
 
-	// Remove DIDDocument + set Data
 	secondData := "randomData"
 	{
 		tx1 := did.DIDSet(alice).Document("").Data(secondData).Build()
@@ -210,7 +198,6 @@ func testSetModify(t *testing.T, fixEmptyDID bool) {
 		checkVL(t, "Data", entry.Data, secondData)
 	}
 
-	// Delete DID
 	{
 		tx1 := did.DIDDelete(alice).Build()
 		result := env.Submit(tx1)
