@@ -360,12 +360,12 @@ func TestAccountDelete_CredentialExpiry(t *testing.T) {
 
 		expiration := env.NowRipple() + 20
 		jtx.RequireTxSuccess(t, env.Submit(
-			credential.CredentialCreate(carol, john, credType).Expiration(expiration).Build()))
+			credential.CredentialCreateText(carol, john, credType).Expiration(expiration).Build()))
 		env.Close()
-		jtx.RequireTxSuccess(t, env.Submit(credential.CredentialAccept(john, carol, credType).Build()))
+		jtx.RequireTxSuccess(t, env.Submit(credential.CredentialAcceptText(john, carol, credType).Build()))
 		env.Close()
 
-		credIdx := depositpreauth.CredentialIndex(john, carol, credType)
+		credIdx := depositpreauth.CredentialIndexHex(john, carol, credType)
 		credK := keylet.Credential(john.ID, carol.ID, []byte(credType))
 
 		// Advancing 256 ledgers also moves time far past the expiration.
@@ -394,12 +394,12 @@ func TestAccountDelete_CredentialExpiry(t *testing.T) {
 		// Far enough out to stay in the future across the 256-ledger advance.
 		expiration := env.NowRipple() + 20000
 		jtx.RequireTxSuccess(t, env.Submit(
-			credential.CredentialCreate(carol, john, credType).Expiration(expiration).Build()))
+			credential.CredentialCreateText(carol, john, credType).Expiration(expiration).Build()))
 		env.Close()
-		jtx.RequireTxSuccess(t, env.Submit(credential.CredentialAccept(john, carol, credType).Build()))
+		jtx.RequireTxSuccess(t, env.Submit(credential.CredentialAcceptText(john, carol, credType).Build()))
 		env.Close()
 
-		credIdx := depositpreauth.CredentialIndex(john, carol, credType)
+		credIdx := depositpreauth.CredentialIndexHex(john, carol, credType)
 		credK := keylet.Credential(john.ID, carol.ID, []byte(credType))
 
 		// Alice requires deposit authorization, satisfied via the credential,
@@ -407,7 +407,7 @@ func TestAccountDelete_CredentialExpiry(t *testing.T) {
 		env.EnableDepositAuth(alice)
 		env.Close()
 		jtx.RequireTxSuccess(t, env.Submit(depositpreauth.AuthCredentials(alice, []depositpreauth.AuthorizeCredentials{
-			{Issuer: carol, CredType: credType},
+			{Issuer: carol, CredTypeText: credType},
 		}).Build()))
 		env.Close()
 

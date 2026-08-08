@@ -37,7 +37,7 @@ func TestSuccessful(t *testing.T) {
 
 	// Test: Create credential for subject
 	t.Run("CreateForSubject", func(t *testing.T) {
-		tx := credential.CredentialCreate(issuer, subject, credType).URI(uri).Build()
+		tx := credential.CredentialCreateText(issuer, subject, credType).URI(uri).Build()
 		result := env.Submit(tx)
 		if !result.Success {
 			t.Fatalf("Expected success, got %s: %s", result.Code, result.Message)
@@ -60,7 +60,7 @@ func TestSuccessful(t *testing.T) {
 
 	// Test: Accept credential
 	t.Run("AcceptCredential", func(t *testing.T) {
-		tx := credential.CredentialAccept(subject, issuer, credType).Build()
+		tx := credential.CredentialAcceptText(subject, issuer, credType).Build()
 		result := env.Submit(tx)
 		if !result.Success {
 			t.Fatalf("Expected success, got %s: %s", result.Code, result.Message)
@@ -83,7 +83,7 @@ func TestSuccessful(t *testing.T) {
 
 	// Test: Delete credential by subject
 	t.Run("DeleteCredential", func(t *testing.T) {
-		tx := credential.CredentialDelete(subject, subject, issuer, credType).Build()
+		tx := credential.CredentialDeleteText(subject, subject, issuer, credType).Build()
 		result := env.Submit(tx)
 		if !result.Success {
 			t.Fatalf("Expected success, got %s: %s", result.Code, result.Message)
@@ -121,7 +121,7 @@ func TestCreateForSelf(t *testing.T) {
 
 	// Test: Create credential for self (issuer == subject)
 	t.Run("CreateForSelf", func(t *testing.T) {
-		tx := credential.CredentialCreate(issuer, issuer, credType).URI(uri).Build()
+		tx := credential.CredentialCreateText(issuer, issuer, credType).URI(uri).Build()
 		result := env.Submit(tx)
 		if !result.Success {
 			t.Fatalf("Expected success, got %s: %s", result.Code, result.Message)
@@ -141,7 +141,7 @@ func TestCreateForSelf(t *testing.T) {
 
 	// Test: Delete self-issued credential
 	t.Run("DeleteSelfCredential", func(t *testing.T) {
-		tx := credential.CredentialDelete(issuer, issuer, issuer, credType).Build()
+		tx := credential.CredentialDeleteText(issuer, issuer, issuer, credType).Build()
 		result := env.Submit(tx)
 		if !result.Success {
 			t.Fatalf("Expected success, got %s: %s", result.Code, result.Message)
@@ -176,7 +176,7 @@ func TestCredentialsDelete(t *testing.T) {
 		ct := "delother"
 		// Create credential with near-future expiration
 		now := env.NowRipple()
-		tx := credential.CredentialCreate(issuer, subject, ct).
+		tx := credential.CredentialCreateText(issuer, subject, ct).
 			Expiration(now + 20).Build()
 		result := env.Submit(tx)
 		if !result.Success {
@@ -190,7 +190,7 @@ func TestCredentialsDelete(t *testing.T) {
 		env.Close()
 
 		// Other account can delete expired credentials
-		deleteTx := credential.CredentialDelete(other, subject, issuer, ct).Build()
+		deleteTx := credential.CredentialDeleteText(other, subject, issuer, ct).Build()
 		result = env.Submit(deleteTx)
 		if !result.Success {
 			t.Errorf("Expected success, got %s: %s", result.Code, result.Message)
@@ -213,14 +213,14 @@ func TestCredentialsDelete(t *testing.T) {
 	// Reference: rippled testCredentialsDelete "Delete by subject"
 	t.Run("DeleteBySubject", func(t *testing.T) {
 		ct := "delsubj"
-		createTx := credential.CredentialCreate(issuer, subject, ct).Build()
+		createTx := credential.CredentialCreateText(issuer, subject, ct).Build()
 		result := env.Submit(createTx)
 		if !result.Success {
 			t.Fatalf("Create expected success, got %s", result.Code)
 		}
 		env.Close()
 
-		deleteTx := credential.CredentialDelete(subject, subject, issuer, ct).Build()
+		deleteTx := credential.CredentialDeleteText(subject, subject, issuer, ct).Build()
 		result = env.Submit(deleteTx)
 		if !result.Success {
 			t.Errorf("Expected success, got %s: %s", result.Code, result.Message)
@@ -242,14 +242,14 @@ func TestCredentialsDelete(t *testing.T) {
 	// Reference: rippled testCredentialsDelete "Delete by issuer"
 	t.Run("DeleteByIssuer", func(t *testing.T) {
 		ct := "deliss"
-		createTx := credential.CredentialCreate(issuer, subject, ct).Build()
+		createTx := credential.CredentialCreateText(issuer, subject, ct).Build()
 		result := env.Submit(createTx)
 		if !result.Success {
 			t.Fatalf("Create expected success, got %s", result.Code)
 		}
 		env.Close()
 
-		deleteTx := credential.CredentialDelete(issuer, subject, issuer, ct).Build()
+		deleteTx := credential.CredentialDeleteText(issuer, subject, issuer, ct).Build()
 		result = env.Submit(deleteTx)
 		if !result.Success {
 			t.Errorf("Expected success, got %s: %s", result.Code, result.Message)
@@ -274,7 +274,7 @@ func TestCredentialsDelete(t *testing.T) {
 	// resets owner counts. Go's AccountDelete does not cascade-delete directory entries.
 	t.Run("DeleteIssuerBeforeAccept", func(t *testing.T) {
 		ct := "delibacc"
-		createTx := credential.CredentialCreate(issuer, subject, ct).Build()
+		createTx := credential.CredentialCreateText(issuer, subject, ct).Build()
 		result := env.Submit(createTx)
 		if !result.Success {
 			t.Fatalf("Create expected success, got %s", result.Code)
@@ -310,14 +310,14 @@ func TestCredentialsDelete(t *testing.T) {
 	// Rippled cascade-deletes the credential (now owned by subject) and resets subject's owner count.
 	t.Run("DeleteIssuerAfterAccept", func(t *testing.T) {
 		ct := "deliaaft"
-		createTx := credential.CredentialCreate(issuer, subject, ct).Build()
+		createTx := credential.CredentialCreateText(issuer, subject, ct).Build()
 		result := env.Submit(createTx)
 		if !result.Success {
 			t.Fatalf("Create expected success, got %s", result.Code)
 		}
 		env.Close()
 
-		acceptTx := credential.CredentialAccept(subject, issuer, ct).Build()
+		acceptTx := credential.CredentialAcceptText(subject, issuer, ct).Build()
 		result = env.Submit(acceptTx)
 		if !result.Success {
 			t.Fatalf("Accept expected success, got %s: %s", result.Code, result.Message)
@@ -352,7 +352,7 @@ func TestCredentialsDelete(t *testing.T) {
 	// Rippled cascade-deletes the credential and resets issuer's owner count.
 	t.Run("DeleteSubjectBeforeAccept", func(t *testing.T) {
 		ct := "delsbfr"
-		createTx := credential.CredentialCreate(issuer, subject, ct).Build()
+		createTx := credential.CredentialCreateText(issuer, subject, ct).Build()
 		result := env.Submit(createTx)
 		if !result.Success {
 			t.Fatalf("Create expected success, got %s", result.Code)
@@ -387,14 +387,14 @@ func TestCredentialsDelete(t *testing.T) {
 	// Rippled cascade-deletes the credential (now owned by subject) and resets issuer's owner count.
 	t.Run("DeleteSubjectAfterAccept", func(t *testing.T) {
 		ct := "delsaft"
-		createTx := credential.CredentialCreate(issuer, subject, ct).Build()
+		createTx := credential.CredentialCreateText(issuer, subject, ct).Build()
 		result := env.Submit(createTx)
 		if !result.Success {
 			t.Fatalf("Create expected success, got %s", result.Code)
 		}
 		env.Close()
 
-		acceptTx := credential.CredentialAccept(subject, issuer, ct).Build()
+		acceptTx := credential.CredentialAcceptText(subject, issuer, ct).Build()
 		result = env.Submit(acceptTx)
 		if !result.Success {
 			t.Fatalf("Accept expected success, got %s: %s", result.Code, result.Message)
@@ -467,7 +467,7 @@ func TestCreateFailed(t *testing.T) {
 
 	// Reference: rippled "Credentials fail, empty credentialType param."
 	t.Run("EmptyCredentialType", func(t *testing.T) {
-		tx := credential.CredentialCreate(issuer, subject, "").Build()
+		tx := credential.CredentialCreateText(issuer, subject, "").Build()
 		result := env.Submit(tx)
 		jtx.RequireTxFail(t, result, jtx.TemMALFORMED)
 	})
@@ -475,7 +475,7 @@ func TestCreateFailed(t *testing.T) {
 	// Reference: rippled "Credentials fail, credentialType length > maxCredentialTypeLength."
 	t.Run("CredentialTypeTooLong", func(t *testing.T) {
 		longCredType := strings.Repeat("a", 65)
-		tx := credential.CredentialCreate(issuer, subject, longCredType).Build()
+		tx := credential.CredentialCreateText(issuer, subject, longCredType).Build()
 		result := env.Submit(tx)
 		jtx.RequireTxFail(t, result, jtx.TemMALFORMED)
 	})
@@ -483,7 +483,7 @@ func TestCreateFailed(t *testing.T) {
 	// Reference: rippled "Credentials fail, URI length > 256."
 	t.Run("URITooLong", func(t *testing.T) {
 		longURI := strings.Repeat("a", 257)
-		tx := credential.CredentialCreate(issuer, subject, credType).URI(longURI).Build()
+		tx := credential.CredentialCreateText(issuer, subject, credType).URI(longURI).Build()
 		result := env.Submit(tx)
 		jtx.RequireTxFail(t, result, jtx.TemMALFORMED)
 	})
@@ -516,7 +516,7 @@ func TestCreateFailed(t *testing.T) {
 	// Reference: rippled "Credentials fail, expiration in the past."
 	t.Run("ExpirationInPast", func(t *testing.T) {
 		now := env.NowRipple()
-		tx := credential.CredentialCreate(issuer, subject, credType).
+		tx := credential.CredentialCreateText(issuer, subject, credType).
 			Expiration(now - 1).Build()
 		result := env.Submit(tx)
 		jtx.RequireTxClaimed(t, result, jtx.TecEXPIRED)
@@ -537,7 +537,7 @@ func TestCreateFailed(t *testing.T) {
 	// Reference: rippled "Credentials fail, duplicate."
 	t.Run("Duplicate", func(t *testing.T) {
 		// First create should succeed
-		tx1 := credential.CredentialCreate(issuer, subject, credType).Build()
+		tx1 := credential.CredentialCreateText(issuer, subject, credType).Build()
 		result1 := env.Submit(tx1)
 		if !result1.Success {
 			t.Fatalf("First create expected success, got %s", result1.Code)
@@ -545,7 +545,7 @@ func TestCreateFailed(t *testing.T) {
 		env.Close()
 
 		// Second create should fail with tecDUPLICATE
-		tx2 := credential.CredentialCreate(issuer, subject, credType).Build()
+		tx2 := credential.CredentialCreateText(issuer, subject, credType).Build()
 		result2 := env.Submit(tx2)
 		jtx.RequireTxClaimed(t, result2, jtx.TecDUPLICATE)
 		env.Close()
@@ -557,7 +557,7 @@ func TestCreateFailed(t *testing.T) {
 		}
 
 		// Cleanup
-		deleteTx := credential.CredentialDelete(issuer, subject, issuer, credType).Build()
+		deleteTx := credential.CredentialDeleteText(issuer, subject, issuer, credType).Build()
 		env.Submit(deleteTx)
 		env.Close()
 	})
@@ -566,7 +566,7 @@ func TestCreateFailed(t *testing.T) {
 	t.Run("SubjectDoesNotExist", func(t *testing.T) {
 		nonExistent := jtx.NewAccount("nonexistent")
 		// Do NOT fund nonExistent — it should not exist in the ledger
-		tx := credential.CredentialCreate(issuer, nonExistent, credType).Build()
+		tx := credential.CredentialCreateText(issuer, nonExistent, credType).Build()
 		result := env.Submit(tx)
 		jtx.RequireTxClaimed(t, result, jtx.TecNO_TARGET)
 		env.Close()
@@ -575,7 +575,7 @@ func TestCreateFailed(t *testing.T) {
 	// Test: Invalid flags
 	// Reference: rippled testFlags with fixInvalidTxFlags enabled
 	t.Run("InvalidFlags", func(t *testing.T) {
-		tx := credential.CredentialCreate(issuer, subject, credType).Flags(0x00010000).Build()
+		tx := credential.CredentialCreateText(issuer, subject, credType).Flags(0x00010000).Build()
 		result := env.Submit(tx)
 		jtx.RequireTxFail(t, result, jtx.TemINVALID_FLAG)
 	})
@@ -598,7 +598,7 @@ func TestCreateReserve(t *testing.T) {
 	env.Close()
 
 	// Create should fail with insufficient reserve
-	tx := credential.CredentialCreate(issuer, subject, credType).Build()
+	tx := credential.CredentialCreateText(issuer, subject, credType).Build()
 	result := env.Submit(tx)
 	jtx.RequireTxClaimed(t, result, jtx.TecINSUFFICIENT_RESERVE)
 	env.Close()
@@ -618,7 +618,7 @@ func TestAcceptFailed(t *testing.T) {
 
 	// Reference: rippled "CredentialsAccept fail, Credential doesn't exist."
 	t.Run("CredentialNotExist", func(t *testing.T) {
-		tx := credential.CredentialAccept(subject, issuer, credType).Build()
+		tx := credential.CredentialAcceptText(subject, issuer, credType).Build()
 		result := env.Submit(tx)
 		jtx.RequireTxClaimed(t, result, jtx.TecNO_ENTRY)
 		env.Close()
@@ -635,14 +635,14 @@ func TestAcceptFailed(t *testing.T) {
 
 	// Reference: rippled "CredentialsAccept fail, invalid credentialType param."
 	t.Run("EmptyCredentialType", func(t *testing.T) {
-		tx := credential.CredentialAccept(subject, issuer, "").Build()
+		tx := credential.CredentialAcceptText(subject, issuer, "").Build()
 		result := env.Submit(tx)
 		jtx.RequireTxFail(t, result, jtx.TemMALFORMED)
 	})
 
 	// Test: Invalid flags
 	t.Run("InvalidFlags", func(t *testing.T) {
-		tx := credential.CredentialAccept(subject, issuer, credType).Flags(0x00010000).Build()
+		tx := credential.CredentialAcceptText(subject, issuer, credType).Flags(0x00010000).Build()
 		result := env.Submit(tx)
 		jtx.RequireTxFail(t, result, jtx.TemINVALID_FLAG)
 	})
@@ -660,11 +660,11 @@ func TestAcceptFailed(t *testing.T) {
 	// Reference: rippled "CredentialsAccept fail, lsfAccepted already set."
 	t.Run("AlreadyAccepted", func(t *testing.T) {
 		// Create and accept
-		createTx := credential.CredentialCreate(issuer, subject, credType).Build()
+		createTx := credential.CredentialCreateText(issuer, subject, credType).Build()
 		env.Submit(createTx)
 		env.Close()
 
-		acceptTx := credential.CredentialAccept(subject, issuer, credType).Build()
+		acceptTx := credential.CredentialAcceptText(subject, issuer, credType).Build()
 		result1 := env.Submit(acceptTx)
 		if !result1.Success {
 			t.Fatalf("First accept expected success, got %s", result1.Code)
@@ -672,7 +672,7 @@ func TestAcceptFailed(t *testing.T) {
 		env.Close()
 
 		// Try to accept again - should fail with tecDUPLICATE
-		acceptTx2 := credential.CredentialAccept(subject, issuer, credType).Build()
+		acceptTx2 := credential.CredentialAcceptText(subject, issuer, credType).Build()
 		result2 := env.Submit(acceptTx2)
 		jtx.RequireTxClaimed(t, result2, jtx.TecDUPLICATE)
 		env.Close()
@@ -684,7 +684,7 @@ func TestAcceptFailed(t *testing.T) {
 		}
 
 		// Cleanup
-		deleteTx := credential.CredentialDelete(subject, subject, issuer, credType).Build()
+		deleteTx := credential.CredentialDeleteText(subject, subject, issuer, credType).Build()
 		env.Submit(deleteTx)
 		env.Close()
 	})
@@ -698,7 +698,7 @@ func TestAcceptFailed(t *testing.T) {
 		// In rippled, setting expiration to parentCloseTime and then closing one ledger
 		// makes the credential expired on the next operation.
 		now := env.NowRipple()
-		tx := credential.CredentialCreate(issuer, subject, credType2).
+		tx := credential.CredentialCreateText(issuer, subject, credType2).
 			Expiration(now).Build()
 		result := env.Submit(tx)
 		if !result.Success {
@@ -708,7 +708,7 @@ func TestAcceptFailed(t *testing.T) {
 		env.Close()
 
 		// Credentials are now expired
-		acceptTx := credential.CredentialAccept(subject, issuer, credType2).Build()
+		acceptTx := credential.CredentialAcceptText(subject, issuer, credType2).Build()
 		result = env.Submit(acceptTx)
 		jtx.RequireTxClaimed(t, result, jtx.TecEXPIRED)
 		env.Close()
@@ -731,7 +731,7 @@ func TestAcceptFailed(t *testing.T) {
 	// should fail. In rippled this returns tecNO_ISSUER.
 	t.Run("IssuerDoesNotExist", func(t *testing.T) {
 		ct := "noiss"
-		createTx := credential.CredentialCreate(issuer, subject, ct).Build()
+		createTx := credential.CredentialCreateText(issuer, subject, ct).Build()
 		result := env.Submit(createTx)
 		if !result.Success {
 			t.Fatalf("Create expected success, got %s", result.Code)
@@ -749,7 +749,7 @@ func TestAcceptFailed(t *testing.T) {
 		env.Close()
 
 		// Try to accept — issuer no longer exists
-		acceptTx := credential.CredentialAccept(subject, issuer, ct).Build()
+		acceptTx := credential.CredentialAcceptText(subject, issuer, ct).Build()
 		result = env.Submit(acceptTx)
 		jtx.RequireTxClaimed(t, result, jtx.TecNO_ISSUER)
 		env.Close()
@@ -784,7 +784,7 @@ func TestAcceptReserve(t *testing.T) {
 	env.Close()
 
 	// Create credential should succeed (issuer has reserve)
-	createTx := credential.CredentialCreate(issuer, subject, credType).Build()
+	createTx := credential.CredentialCreateText(issuer, subject, credType).Build()
 	result := env.Submit(createTx)
 	if !result.Success {
 		t.Fatalf("Create expected success, got %s", result.Code)
@@ -792,7 +792,7 @@ func TestAcceptReserve(t *testing.T) {
 	env.Close()
 
 	// Accept should fail - subject doesn't have reserve
-	acceptTx := credential.CredentialAccept(subject, issuer, credType).Build()
+	acceptTx := credential.CredentialAcceptText(subject, issuer, credType).Build()
 	result = env.Submit(acceptTx)
 	jtx.RequireTxClaimed(t, result, jtx.TecINSUFFICIENT_RESERVE)
 	env.Close()
@@ -804,7 +804,7 @@ func TestAcceptReserve(t *testing.T) {
 	}
 
 	// Cleanup by issuer
-	deleteTx := credential.CredentialDelete(issuer, subject, issuer, credType).Build()
+	deleteTx := credential.CredentialDeleteText(issuer, subject, issuer, credType).Build()
 	env.Submit(deleteTx)
 	env.Close()
 }
@@ -824,7 +824,7 @@ func TestDeleteFailed(t *testing.T) {
 
 	// Reference: rippled "CredentialsDelete fail, no Credentials."
 	t.Run("CredentialNotExist", func(t *testing.T) {
-		tx := credential.CredentialDelete(subject, subject, issuer, credType).Build()
+		tx := credential.CredentialDeleteText(subject, subject, issuer, credType).Build()
 		result := env.Submit(tx)
 		jtx.RequireTxClaimed(t, result, jtx.TecNO_ENTRY)
 		env.Close()
@@ -856,14 +856,14 @@ func TestDeleteFailed(t *testing.T) {
 
 	// Reference: rippled "CredentialsDelete fail, invalid credentialType param."
 	t.Run("EmptyCredentialType", func(t *testing.T) {
-		tx := credential.CredentialDelete(subject, subject, issuer, "").Build()
+		tx := credential.CredentialDeleteText(subject, subject, issuer, "").Build()
 		result := env.Submit(tx)
 		jtx.RequireTxFail(t, result, jtx.TemMALFORMED)
 	})
 
 	// Test: Invalid flags
 	t.Run("InvalidFlags", func(t *testing.T) {
-		tx := credential.CredentialDelete(subject, subject, issuer, credType).Flags(0x00010000).Build()
+		tx := credential.CredentialDeleteText(subject, subject, issuer, credType).Flags(0x00010000).Build()
 		result := env.Submit(tx)
 		jtx.RequireTxFail(t, result, jtx.TemINVALID_FLAG)
 	})
@@ -873,12 +873,12 @@ func TestDeleteFailed(t *testing.T) {
 		credType2 := "fghij"
 
 		// Create credential without expiration
-		createTx := credential.CredentialCreate(issuer, subject, credType2).Build()
+		createTx := credential.CredentialCreateText(issuer, subject, credType2).Build()
 		env.Submit(createTx)
 		env.Close()
 
 		// Other account tries to delete - should fail
-		deleteTx := credential.CredentialDelete(other, subject, issuer, credType2).Build()
+		deleteTx := credential.CredentialDeleteText(other, subject, issuer, credType2).Build()
 		result := env.Submit(deleteTx)
 		jtx.RequireTxClaimed(t, result, jtx.TecNO_PERMISSION)
 		env.Close()
@@ -890,7 +890,7 @@ func TestDeleteFailed(t *testing.T) {
 		}
 
 		// Cleanup by issuer
-		cleanupTx := credential.CredentialDelete(issuer, subject, issuer, credType2).Build()
+		cleanupTx := credential.CredentialDeleteText(issuer, subject, issuer, credType2).Build()
 		env.Submit(cleanupTx)
 		env.Close()
 	})
@@ -900,7 +900,7 @@ func TestDeleteFailed(t *testing.T) {
 	t.Run("TimeNotExpiredYet", func(t *testing.T) {
 		now := env.NowRipple()
 		// Create credential with expiration far in the future
-		tx := credential.CredentialCreate(issuer, subject, credType).
+		tx := credential.CredentialCreateText(issuer, subject, credType).
 			Expiration(now + 1000).Build()
 		result := env.Submit(tx)
 		if !result.Success {
@@ -909,7 +909,7 @@ func TestDeleteFailed(t *testing.T) {
 		env.Close()
 
 		// Other account can't delete credentials that are not yet expired
-		deleteTx := credential.CredentialDelete(other, subject, issuer, credType).Build()
+		deleteTx := credential.CredentialDeleteText(other, subject, issuer, credType).Build()
 		result = env.Submit(deleteTx)
 		jtx.RequireTxClaimed(t, result, jtx.TecNO_PERMISSION)
 		env.Close()
@@ -921,7 +921,7 @@ func TestDeleteFailed(t *testing.T) {
 		}
 
 		// Cleanup by issuer
-		cleanupTx := credential.CredentialDelete(issuer, subject, issuer, credType).Build()
+		cleanupTx := credential.CredentialDeleteText(issuer, subject, issuer, credType).Build()
 		env.Submit(cleanupTx)
 		env.Close()
 	})
@@ -965,7 +965,7 @@ func TestDeleteBySubject(t *testing.T) {
 	env.Close()
 
 	// Create credential
-	createTx := credential.CredentialCreate(issuer, subject, credType).Build()
+	createTx := credential.CredentialCreateText(issuer, subject, credType).Build()
 	result := env.Submit(createTx)
 	if !result.Success {
 		t.Fatalf("Create expected success, got %s", result.Code)
@@ -973,7 +973,7 @@ func TestDeleteBySubject(t *testing.T) {
 	env.Close()
 
 	// Subject can delete (even before accepting)
-	deleteTx := credential.CredentialDelete(subject, subject, issuer, credType).Build()
+	deleteTx := credential.CredentialDeleteText(subject, subject, issuer, credType).Build()
 	result = env.Submit(deleteTx)
 	if !result.Success {
 		t.Errorf("Expected success, got %s: %s", result.Code, result.Message)
@@ -1006,7 +1006,7 @@ func TestDeleteByIssuer(t *testing.T) {
 	env.Close()
 
 	// Create credential
-	createTx := credential.CredentialCreate(issuer, subject, credType).Build()
+	createTx := credential.CredentialCreateText(issuer, subject, credType).Build()
 	result := env.Submit(createTx)
 	if !result.Success {
 		t.Fatalf("Create expected success, got %s", result.Code)
@@ -1014,7 +1014,7 @@ func TestDeleteByIssuer(t *testing.T) {
 	env.Close()
 
 	// Issuer can delete
-	deleteTx := credential.CredentialDelete(issuer, subject, issuer, credType).Build()
+	deleteTx := credential.CredentialDeleteText(issuer, subject, issuer, credType).Build()
 	result = env.Submit(deleteTx)
 	if !result.Success {
 		t.Errorf("Expected success, got %s: %s", result.Code, result.Message)
@@ -1046,7 +1046,7 @@ func TestCredentialTypeLimits(t *testing.T) {
 	// Test: CredentialType at exactly 64 bytes should succeed
 	t.Run("CredentialTypeAtLimit", func(t *testing.T) {
 		credType64 := strings.Repeat("a", 64)
-		tx := credential.CredentialCreate(issuer, subject, credType64).Build()
+		tx := credential.CredentialCreateText(issuer, subject, credType64).Build()
 		result := env.Submit(tx)
 		if !result.Success {
 			t.Errorf("Expected success with 64-byte CredentialType, got %s", result.Code)
@@ -1054,7 +1054,7 @@ func TestCredentialTypeLimits(t *testing.T) {
 		env.Close()
 
 		// Cleanup
-		deleteTx := credential.CredentialDelete(issuer, subject, issuer, credType64).Build()
+		deleteTx := credential.CredentialDeleteText(issuer, subject, issuer, credType64).Build()
 		env.Submit(deleteTx)
 		env.Close()
 	})
@@ -1063,7 +1063,7 @@ func TestCredentialTypeLimits(t *testing.T) {
 	t.Run("URIAtLimit", func(t *testing.T) {
 		credType := "testcred"
 		uri256 := strings.Repeat("b", 256)
-		tx := credential.CredentialCreate(issuer, subject, credType).URI(uri256).Build()
+		tx := credential.CredentialCreateText(issuer, subject, credType).URI(uri256).Build()
 		result := env.Submit(tx)
 		if !result.Success {
 			t.Errorf("Expected success with 256-byte URI, got %s", result.Code)
@@ -1071,7 +1071,7 @@ func TestCredentialTypeLimits(t *testing.T) {
 		env.Close()
 
 		// Cleanup
-		deleteTx := credential.CredentialDelete(issuer, subject, issuer, credType).Build()
+		deleteTx := credential.CredentialDeleteText(issuer, subject, issuer, credType).Build()
 		env.Submit(deleteTx)
 		env.Close()
 	})
@@ -1095,19 +1095,19 @@ func TestEnabled(t *testing.T) {
 
 	// Without the featureCredentials amendment, all credential transactions should fail
 	t.Run("CreateDisabled", func(t *testing.T) {
-		tx := credential.CredentialCreate(issuer, subject, credType).Build()
+		tx := credential.CredentialCreateText(issuer, subject, credType).Build()
 		result := env.Submit(tx)
 		jtx.RequireTxFail(t, result, jtx.TemDISABLED)
 	})
 
 	t.Run("AcceptDisabled", func(t *testing.T) {
-		tx := credential.CredentialAccept(subject, issuer, credType).Build()
+		tx := credential.CredentialAcceptText(subject, issuer, credType).Build()
 		result := env.Submit(tx)
 		jtx.RequireTxFail(t, result, jtx.TemDISABLED)
 	})
 
 	t.Run("DeleteDisabled", func(t *testing.T) {
-		tx := credential.CredentialDelete(subject, subject, issuer, credType).Build()
+		tx := credential.CredentialDeleteText(subject, subject, issuer, credType).Build()
 		result := env.Submit(tx)
 		jtx.RequireTxFail(t, result, jtx.TemDISABLED)
 	})
@@ -1126,7 +1126,7 @@ func TestMultipleCredentials(t *testing.T) {
 
 	// Create multiple credentials
 	for _, ct := range credTypes {
-		tx := credential.CredentialCreate(issuer, subject, ct).Build()
+		tx := credential.CredentialCreateText(issuer, subject, ct).Build()
 		result := env.Submit(tx)
 		if !result.Success {
 			t.Fatalf("Create %s expected success, got %s", ct, result.Code)
@@ -1141,7 +1141,7 @@ func TestMultipleCredentials(t *testing.T) {
 
 	// Accept all
 	for _, ct := range credTypes {
-		tx := credential.CredentialAccept(subject, issuer, ct).Build()
+		tx := credential.CredentialAcceptText(subject, issuer, ct).Build()
 		result := env.Submit(tx)
 		if !result.Success {
 			t.Fatalf("Accept %s expected success, got %s", ct, result.Code)
@@ -1159,7 +1159,7 @@ func TestMultipleCredentials(t *testing.T) {
 
 	// Delete all
 	for _, ct := range credTypes {
-		tx := credential.CredentialDelete(subject, subject, issuer, ct).Build()
+		tx := credential.CredentialDeleteText(subject, subject, issuer, ct).Build()
 		result := env.Submit(tx)
 		if !result.Success {
 			t.Fatalf("Delete %s expected success, got %s", ct, result.Code)

@@ -77,7 +77,7 @@ func TestCredentialAccept_ExpiredRemovesFromBothDirectories(t *testing.T) {
 
 	// Issuer creates a credential for subject with a short expiration.
 	now := env.NowRipple()
-	r := env.Submit(credential.CredentialCreate(issuer, subject, credType).
+	r := env.Submit(credential.CredentialCreateText(issuer, subject, credType).
 		Expiration(now + 20).Build())
 	jtx.RequireTxSuccess(t, r)
 	env.Close()
@@ -95,7 +95,7 @@ func TestCredentialAccept_ExpiredRemovesFromBothDirectories(t *testing.T) {
 		env.Close()
 	}
 
-	r = env.Submit(credential.CredentialAccept(subject, issuer, credType).Build())
+	r = env.Submit(credential.CredentialAcceptText(subject, issuer, credType).Build())
 	jtx.RequireTxClaimed(t, r, jtx.TecEXPIRED)
 	env.Close()
 
@@ -124,10 +124,10 @@ func TestCredentialDelete_ViaDeleteSLE_AcceptedBySubject(t *testing.T) {
 
 	credKey := jtx.CredentialKeylet(subject, issuer, credType)
 
-	r := env.Submit(credential.CredentialCreate(issuer, subject, credType).Build())
+	r := env.Submit(credential.CredentialCreateText(issuer, subject, credType).Build())
 	jtx.RequireTxSuccess(t, r)
 	env.Close()
-	r = env.Submit(credential.CredentialAccept(subject, issuer, credType).Build())
+	r = env.Submit(credential.CredentialAcceptText(subject, issuer, credType).Build())
 	jtx.RequireTxSuccess(t, r)
 	env.Close()
 
@@ -138,7 +138,7 @@ func TestCredentialDelete_ViaDeleteSLE_AcceptedBySubject(t *testing.T) {
 	require.True(t, dirContains(t, env, subject, credKey))
 
 	// Subject (the owner) deletes the credential.
-	r = env.Submit(credential.CredentialDelete(subject, subject, issuer, credType).Build())
+	r = env.Submit(credential.CredentialDeleteText(subject, subject, issuer, credType).Build())
 	jtx.RequireTxSuccess(t, r)
 	env.Close()
 
@@ -166,7 +166,7 @@ func TestCredentialDelete_ViaDeleteSLE_UnacceptedByIssuer(t *testing.T) {
 
 	credKey := jtx.CredentialKeylet(subject, issuer, credType)
 
-	r := env.Submit(credential.CredentialCreate(issuer, subject, credType).Build())
+	r := env.Submit(credential.CredentialCreateText(issuer, subject, credType).Build())
 	jtx.RequireTxSuccess(t, r)
 	env.Close()
 
@@ -177,7 +177,7 @@ func TestCredentialDelete_ViaDeleteSLE_UnacceptedByIssuer(t *testing.T) {
 	require.True(t, dirContains(t, env, subject, credKey))
 
 	// Issuer (the owner) deletes the un-accepted credential.
-	r = env.Submit(credential.CredentialDelete(issuer, subject, issuer, credType).Build())
+	r = env.Submit(credential.CredentialDeleteText(issuer, subject, issuer, credType).Build())
 	jtx.RequireTxSuccess(t, r)
 	env.Close()
 
@@ -224,7 +224,7 @@ func TestCredentialCreate_ReserveUsesActualFee(t *testing.T) {
 	}
 	require.GreaterOrEqual(t, env.Balance(issuer), reserve, "issuer must hold at least the reserve")
 
-	r := env.Submit(credential.CredentialCreate(issuer, subject, credType).
+	r := env.Submit(credential.CredentialCreateText(issuer, subject, credType).
 		Fee(bigFee).Build())
 	jtx.RequireTxSuccess(t, r)
 	env.Close()

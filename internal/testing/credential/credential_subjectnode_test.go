@@ -18,7 +18,7 @@ func TestCredentialCreate_SelfIssued_OmitsSubjectNode(t *testing.T) {
 	env.Close()
 
 	credType := "abcde"
-	r := env.Submit(credential.CredentialCreate(alice, alice, credType).Build())
+	r := env.Submit(credential.CredentialCreateText(alice, alice, credType).Build())
 	jtx.RequireTxSuccess(t, r)
 
 	key := keylet.Credential(alice.ID, alice.ID, []byte(credType))
@@ -41,7 +41,7 @@ func TestCredentialCreate_CrossAccount_EmitsZeroSubjectNode(t *testing.T) {
 	env.Close()
 
 	credType := "abcde"
-	r := env.Submit(credential.CredentialCreate(issuer, subject, credType).Build())
+	r := env.Submit(credential.CredentialCreateText(issuer, subject, credType).Build())
 	jtx.RequireTxSuccess(t, r)
 
 	key := keylet.Credential(subject.ID, issuer.ID, []byte(credType))

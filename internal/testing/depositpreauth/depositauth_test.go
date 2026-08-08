@@ -7,23 +7,14 @@ import (
 
 	"github.com/LeJamon/go-xrpl/internal/ledger/state"
 	jtx "github.com/LeJamon/go-xrpl/internal/testing"
+	"github.com/LeJamon/go-xrpl/internal/testing/accountset"
 	"github.com/LeJamon/go-xrpl/internal/testing/payment"
 	"github.com/LeJamon/go-xrpl/internal/testing/trustset"
 	"github.com/LeJamon/go-xrpl/internal/tx"
+	accounttx "github.com/LeJamon/go-xrpl/internal/tx/account"
 	paymentPkg "github.com/LeJamon/go-xrpl/internal/tx/payment"
 	"github.com/stretchr/testify/require"
 )
-
-// hasDepositAuth returns true if the account has lsfDepositAuth set.
-// Reference: rippled hasDepositAuth()
-func hasDepositAuth(t *testing.T, env *jtx.TestEnv, acc *jtx.Account) bool {
-	t.Helper()
-	info := env.AccountInfo(acc)
-	if info == nil {
-		return false
-	}
-	return (info.Flags & state.LsfDepositAuth) == state.LsfDepositAuth
-}
 
 // reserve returns the account reserve for the given owner count.
 // Reference: rippled reserve(env, count)
@@ -46,13 +37,11 @@ func TestDepositAuth_Enable(t *testing.T) {
 
 	env.EnableDepositAuth(alice)
 	env.Close()
-	require.True(t, hasDepositAuth(t, env, alice),
-		"DepositAuth flag should be set")
+	jtx.RequireFlagSet(t, env, alice, state.LsfDepositAuth)
 
 	env.DisableDepositAuth(alice)
 	env.Close()
-	require.False(t, hasDepositAuth(t, env, alice),
-		"DepositAuth flag should be cleared")
+	jtx.RequireFlagNotSet(t, env, alice, state.LsfDepositAuth)
 }
 
 // --------------------------------------------------------------------------
@@ -85,10 +74,11 @@ func TestDepositAuth_PayIOU(t *testing.T) {
 	result = env.Submit(payment.PayIssued(gw, alice, usd150).Build())
 	jtx.RequireTxSuccess(t, result)
 
-	// carol creates an offer: sell USD(100) for XRP(100)
+	// carol creates an offer: sell XRP(100) for USD(100)
 	usd100Offer := tx.NewIssuedAmountFromFloat64(100, "USD", gw.Address)
 	xrp100Offer := tx.NewXRPAmount(jtx.XRP(100))
-	env.CreateOffer(carol, usd100Offer, xrp100Offer)
+	result = env.CreateOffer(carol, xrp100Offer, usd100Offer)
+	jtx.RequireTxSuccess(t, result)
 	env.Close()
 
 	// alice pays bob some USD to set up initial balance
@@ -100,11 +90,11 @@ func TestDepositAuth_PayIOU(t *testing.T) {
 	// bob enables DepositAuth
 	env.EnableDepositAuth(bob)
 	env.Close()
-	require.True(t, hasDepositAuth(t, env, bob))
+	jtx.RequireFlagSet(t, env, bob, state.LsfDepositAuth)
 
 	// --- failedIouPayments closure ---
 	failedIouPayments := func() {
-		require.True(t, hasDepositAuth(t, env, bob))
+		jtx.RequireFlagSet(t, env, bob, state.LsfDepositAuth)
 
 		bobXRP := env.Balance(bob)
 		bobUSD := env.BalanceIOU(bob, "USD", gw)
@@ -149,15 +139,9 @@ func TestDepositAuth_PayIOU(t *testing.T) {
 	failedIouPayments()
 
 	// Test when bob has XRP balance == 0.
-	env.Noop(bob)
+	env.NoopWithFee(bob, reserve(env, 0))
 	env.Close()
-
-	// After noop at base-reserve fee, bob should have 0 XRP.
-	// (Noop uses baseFee, but we need to drain to 0.)
-	// Use a noop with exact remaining balance as fee.
-	// Actually the Noop helper uses baseFee. To get bob to 0, we need a custom fee.
-	// rippled: env(noop(bob), fee(reserve(env, 0)));
-	// For now just verify the IOU payments still fail.
+	require.Zero(t, env.Balance(bob))
 	failedIouPayments()
 
 	// bob clears DepositAuth and payments succeed again.
@@ -167,10 +151,20 @@ func TestDepositAuth_PayIOU(t *testing.T) {
 
 	env.DisableDepositAuth(bob)
 	env.Close()
+	jtx.RequireFlagNotSet(t, env, bob, state.LsfDepositAuth)
 
+	bobUSD := env.BalanceIOU(bob, "USD", gw)
 	result = env.Submit(payment.PayIssued(alice, bob, usd50).Build())
 	jtx.RequireTxSuccess(t, result)
 	env.Close()
+	require.InDelta(t, bobUSD+50, env.BalanceIOU(bob, "USD", gw), 1e-10)
+
+	bobXRP := env.Balance(bob)
+	usd1 := tx.NewIssuedAmountFromFloat64(1, "USD", gw.Address)
+	result = env.Submit(payment.Pay(alice, bob, 1).SendMax(usd1).Build())
+	jtx.RequireTxSuccess(t, result)
+	env.Close()
+	require.Equal(t, bobXRP+1, env.Balance(bob))
 }
 
 // --------------------------------------------------------------------------
@@ -180,6 +174,7 @@ func TestDepositAuth_PayIOU(t *testing.T) {
 
 func TestDepositAuth_PayXRP(t *testing.T) {
 	env := jtx.NewTestEnv(t)
+	env.EnableOpenLedgerReplay()
 
 	alice := jtx.NewAccount("alice")
 	bob := jtx.NewAccount("bob")
@@ -191,10 +186,6 @@ func TestDepositAuth_PayXRP(t *testing.T) {
 	env.Close()
 
 	// bob enables DepositAuth
-	env.Submit(
-		payment.Pay(bob, bob, 0).Fee(baseFee).Build(), // placeholder; use AccountSet
-	)
-	// Actually use the env helper:
 	env.EnableDepositAuth(bob)
 	env.Close()
 
@@ -263,16 +254,38 @@ func TestDepositAuth_PayXRP(t *testing.T) {
 	require.Equal(t, uint64(0), env.Balance(bob))
 
 	// bob should not be able to clear lsfDepositAuth (terINSUF_FEE_B).
+	bobSeq := env.Seq(bob)
+	clearDepositAuth := accountset.AccountSet(bob).
+		ClearFlag(accounttx.AccountSetFlagDepositAuth).
+		Fee(baseFee).
+		Build()
+	result = env.Submit(clearDepositAuth)
+	require.Equal(t, "terINSUF_FEE_B", result.Code)
+	env.Close()
+	require.Zero(t, env.Balance(bob))
+	require.Equal(t, bobSeq, env.Seq(bob))
+	jtx.RequireFlagSet(t, env, bob, state.LsfDepositAuth)
 
 	// Pay bob 1 drop – should succeed when balance is at or below reserve.
 	result = env.Submit(payment.Pay(alice, bob, 1).Build())
-	// Result depends on bob's exact balance. If above reserve, tecNO_PERMISSION.
-	// If at/below, tesSUCCESS.
+	jtx.RequireTxSuccess(t, result)
 	env.Close()
+	require.Equal(t, uint64(1), env.Balance(bob))
+	require.Equal(t, bobSeq, env.Seq(bob))
+	jtx.RequireFlagSet(t, env, bob, state.LsfDepositAuth)
 
-	// Since bob no longer has lsfDepositAuth set (after clearing), any payment succeeds.
-	// This part requires exact balance manipulation which is hard without custom fee support.
-	// The core logic is tested above with the reserve-boundary checks.
+	// Funding the remaining fee causes the held AccountSet to retry and clear the flag.
+	result = env.Submit(payment.Pay(alice, bob, baseFee-1).Build())
+	jtx.RequireTxSuccess(t, result)
+	env.Close()
+	require.Zero(t, env.Balance(bob))
+	require.Equal(t, bobSeq+1, env.Seq(bob))
+	jtx.RequireFlagNotSet(t, env, bob, state.LsfDepositAuth)
+
+	result = env.Submit(payment.Pay(alice, bob, reserve(env, 0)+1).Build())
+	jtx.RequireTxSuccess(t, result)
+	env.Close()
+	require.Equal(t, reserve(env, 0)+1, env.Balance(bob))
 }
 
 // --------------------------------------------------------------------------
@@ -303,24 +316,37 @@ func TestDepositAuth_NoRipple(t *testing.T) {
 		if noRipplePrev {
 			aliceTrust = aliceTrust.NoRipple()
 		}
-		env.Submit(aliceTrust.Build())
+		result := env.Submit(aliceTrust.Build())
+		jtx.RequireTxSuccess(t, result)
 
 		// gw1 trusts bob["USD"] with optional noRipple
 		bobTrust := trustset.TrustLine(gw1, "USD", bob, "10")
 		if noRippleNext {
 			bobTrust = bobTrust.NoRipple()
 		}
-		env.Submit(bobTrust.Build())
+		result = env.Submit(bobTrust.Build())
+		jtx.RequireTxSuccess(t, result)
 
-		env.Submit(trustset.TrustLine(alice, "USD", gw1, "10").Build())
-		env.Submit(trustset.TrustLine(bob, "USD", gw1, "10").Build())
+		result = env.Submit(trustset.TrustLine(alice, "USD", gw1, "10").Build())
+		jtx.RequireTxSuccess(t, result)
+		result = env.Submit(trustset.TrustLine(bob, "USD", gw1, "10").Build())
+		jtx.RequireTxSuccess(t, result)
 
 		usd10 := tx.NewIssuedAmountFromFloat64(10, "USD", gw1.Address)
-		env.Submit(payment.PayIssued(gw1, alice, usd10).Build())
+		result = env.Submit(payment.PayIssued(gw1, alice, usd10).Build())
+		jtx.RequireTxSuccess(t, result)
 
 		if withDepositAuth {
 			env.EnableDepositAuth(gw1)
 		}
+		env.Close()
+		if withDepositAuth {
+			jtx.RequireFlagSet(t, env, gw1, state.LsfDepositAuth)
+		} else {
+			jtx.RequireFlagNotSet(t, env, gw1, state.LsfDepositAuth)
+		}
+		require.InDelta(t, 10, env.BalanceIOU(alice, "USD", gw1), 1e-10)
+		require.Zero(t, env.BalanceIOU(bob, "USD", gw1))
 
 		// Expected result: tecPATH_DRY if both noRipple flags are set, tesSUCCESS otherwise.
 		expectedCode := "tesSUCCESS"
@@ -330,12 +356,20 @@ func TestDepositAuth_NoRipple(t *testing.T) {
 
 		// Use explicit path through gw1 (matching rippled: path(gw1))
 		gw1Path := [][]paymentPkg.PathStep{{{Account: gw1.Address}}}
-		result := env.Submit(
+		result = env.Submit(
 			payment.PayIssued(alice, bob, usd10).Paths(gw1Path).Build(),
 		)
 		require.Equal(t, expectedCode, result.Code,
 			"noRipplePrev=%v noRippleNext=%v withDepositAuth=%v",
 			noRipplePrev, noRippleNext, withDepositAuth)
+		env.Close()
+		if expectedCode == "tesSUCCESS" {
+			require.Zero(t, env.BalanceIOU(alice, "USD", gw1))
+			require.InDelta(t, 10, env.BalanceIOU(bob, "USD", gw1), 1e-10)
+		} else {
+			require.InDelta(t, 10, env.BalanceIOU(alice, "USD", gw1), 1e-10)
+			require.Zero(t, env.BalanceIOU(bob, "USD", gw1))
+		}
 	}
 
 	testNonIssuer := func(t *testing.T, noRipplePrev, noRippleNext, withDepositAuth bool) {
@@ -350,20 +384,31 @@ func TestDepositAuth_NoRipple(t *testing.T) {
 		if noRipplePrev {
 			usd1Trust = usd1Trust.NoRipple()
 		}
-		env.Submit(usd1Trust.Build())
+		result := env.Submit(usd1Trust.Build())
+		jtx.RequireTxSuccess(t, result)
 
 		usd2Trust := trustset.TrustLine(alice, "USD", gw2, "10")
 		if noRippleNext {
 			usd2Trust = usd2Trust.NoRipple()
 		}
-		env.Submit(usd2Trust.Build())
+		result = env.Submit(usd2Trust.Build())
+		jtx.RequireTxSuccess(t, result)
 
 		usd2_10 := tx.NewIssuedAmountFromFloat64(10, "USD", gw2.Address)
-		env.Submit(payment.PayIssued(gw2, alice, usd2_10).Build())
+		result = env.Submit(payment.PayIssued(gw2, alice, usd2_10).Build())
+		jtx.RequireTxSuccess(t, result)
 
 		if withDepositAuth {
 			env.EnableDepositAuth(alice)
 		}
+		env.Close()
+		if withDepositAuth {
+			jtx.RequireFlagSet(t, env, alice, state.LsfDepositAuth)
+		} else {
+			jtx.RequireFlagNotSet(t, env, alice, state.LsfDepositAuth)
+		}
+		require.Zero(t, env.BalanceIOU(alice, "USD", gw1))
+		require.InDelta(t, 10, env.BalanceIOU(alice, "USD", gw2), 1e-10)
 
 		expectedCode := "tesSUCCESS"
 		if noRippleNext && noRipplePrev {
@@ -374,7 +419,7 @@ func TestDepositAuth_NoRipple(t *testing.T) {
 		usd2_10_pay := tx.NewIssuedAmountFromFloat64(10, "USD", gw2.Address)
 		// Use explicit path through alice (matching rippled: path(alice), sendmax(USD1(10)))
 		alicePath := [][]paymentPkg.PathStep{{{Account: alice.Address}}}
-		result := env.Submit(
+		result = env.Submit(
 			payment.PayIssued(gw1, gw2, usd2_10_pay).
 				SendMax(usd1_10).
 				Paths(alicePath).
@@ -383,6 +428,14 @@ func TestDepositAuth_NoRipple(t *testing.T) {
 		require.Equal(t, expectedCode, result.Code,
 			"noRipplePrev=%v noRippleNext=%v withDepositAuth=%v",
 			noRipplePrev, noRippleNext, withDepositAuth)
+		env.Close()
+		if expectedCode == "tesSUCCESS" {
+			require.InDelta(t, 10, env.BalanceIOU(alice, "USD", gw1), 1e-10)
+			require.Zero(t, env.BalanceIOU(alice, "USD", gw2))
+		} else {
+			require.Zero(t, env.BalanceIOU(alice, "USD", gw1))
+			require.InDelta(t, 10, env.BalanceIOU(alice, "USD", gw2), 1e-10)
+		}
 	}
 
 	// Test every combination of noRipplePrev, noRippleNext, and withDepositAuth.

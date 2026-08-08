@@ -2046,11 +2046,11 @@ func TestEscrow_Credentials(t *testing.T) {
 		credType := "abcde"
 
 		// Create credential: zelda issues to carol
-		result := env.Submit(credential.CredentialCreate(zelda, carol, credType).Build())
+		result := env.Submit(credential.CredentialCreateText(zelda, carol, credType).Build())
 		jtx.RequireTxSuccess(t, result)
 		env.Close()
 
-		credIdx := dp.CredentialIndex(carol, zelda, credType)
+		credIdx := dp.CredentialIndexHex(carol, zelda, credType)
 
 		seq := env.Seq(alice)
 		result = env.Submit(
@@ -2073,7 +2073,7 @@ func TestEscrow_Credentials(t *testing.T) {
 		env.Close()
 
 		// Accept the credential
-		result = env.Submit(credential.CredentialAccept(carol, zelda, credType).Build())
+		result = env.Submit(credential.CredentialAcceptText(carol, zelda, credType).Build())
 		jtx.RequireTxSuccess(t, result)
 		env.Close()
 
@@ -2094,7 +2094,7 @@ func TestEscrow_Credentials(t *testing.T) {
 		// Bob authorizes credentials from zelda with this credType
 		result = env.Submit(
 			dp.AuthCredentials(bob, []dp.AuthorizeCredentials{
-				{Issuer: zelda, CredType: credType},
+				{Issuer: zelda, CredTypeText: credType},
 			}).Build())
 		jtx.RequireTxSuccess(t, result)
 		env.Close()
@@ -2123,14 +2123,14 @@ func TestEscrow_Credentials(t *testing.T) {
 
 		credType := "abcde"
 
-		result := env.Submit(credential.CredentialCreate(zelda, carol, credType).Build())
+		result := env.Submit(credential.CredentialCreateText(zelda, carol, credType).Build())
 		jtx.RequireTxSuccess(t, result)
 		env.Close()
-		result = env.Submit(credential.CredentialAccept(carol, zelda, credType).Build())
+		result = env.Submit(credential.CredentialAcceptText(carol, zelda, credType).Build())
 		jtx.RequireTxSuccess(t, result)
 		env.Close()
 
-		credIdx := dp.CredentialIndex(carol, zelda, credType)
+		credIdx := dp.CredentialIndexHex(carol, zelda, credType)
 
 		seq := env.Seq(alice)
 		result = env.Submit(
@@ -2156,14 +2156,14 @@ func TestEscrow_Credentials(t *testing.T) {
 
 		// Test: use any valid credentials if account == dst
 		credType2 := "fghijk"
-		result = env.Submit(credential.CredentialCreate(zelda, bob, credType2).Build())
+		result = env.Submit(credential.CredentialCreateText(zelda, bob, credType2).Build())
 		jtx.RequireTxSuccess(t, result)
 		env.Close()
-		result = env.Submit(credential.CredentialAccept(bob, zelda, credType2).Build())
+		result = env.Submit(credential.CredentialAcceptText(bob, zelda, credType2).Build())
 		jtx.RequireTxSuccess(t, result)
 		env.Close()
 
-		credIdxBob := dp.CredentialIndex(bob, zelda, credType2)
+		credIdxBob := dp.CredentialIndexHex(bob, zelda, credType2)
 
 		seq2 := env.Seq(alice)
 		result = env.Submit(
@@ -2178,7 +2178,7 @@ func TestEscrow_Credentials(t *testing.T) {
 		env.Close()
 		result = env.Submit(
 			dp.AuthCredentials(bob, []dp.AuthorizeCredentials{
-				{Issuer: zelda, CredType: credType},
+				{Issuer: zelda, CredTypeText: credType},
 			}).Build())
 		jtx.RequireTxSuccess(t, result)
 		env.Close()
