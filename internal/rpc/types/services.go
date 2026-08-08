@@ -385,7 +385,8 @@ type ServiceContainer struct {
 	// RPCDiagnostics records completed and currently-running RPC handlers for
 	// server_info/server_state. It is shared by every transport so the snapshot
 	// represents the node rather than one listener.
-	RPCDiagnostics RPCDiagnostics
+	RPCDiagnostics      RPCDiagnostics
+	SubscriptionMetrics func() SubscriptionMetrics
 
 	// GetCounts returns the runtime counters surfaced by the get_counts RPC
 	// (node-store I/O counters and locally-held transactions). Nil until the
@@ -509,11 +510,18 @@ type URLSubscriptionService interface {
 // asynchronous work from conn.Context(). Unsubscribe is an idempotent no-op for
 // unknown accounts.
 type AccountHistorySubscriptionService interface {
-	ValidateSubscribe(conn *Connection, account string) *RpcError
-	Subscribe(conn *Connection, account string)
-	Unsubscribe(conn *Connection, account string, historyOnly bool)
-	RemoveConnection(conn *Connection)
-	HasSubscriptions(conn *Connection) bool
+	ValidateSubscribe(conn AccountHistorySubscriptionSink, account string) *RpcError
+	Subscribe(conn AccountHistorySubscriptionSink, account string)
+	Unsubscribe(conn AccountHistorySubscriptionSink, account string, historyOnly bool)
+	RemoveConnection(conn AccountHistorySubscriptionSink)
+	HasSubscriptions(conn AccountHistorySubscriptionSink) bool
+}
+
+type AccountHistorySubscriptionSink interface {
+	ID() string
+	Context() context.Context
+	Done() <-chan struct{}
+	TrySend([]byte) bool
 }
 
 // QueuedTxInfo is the per-transaction view of a TxQ candidate surfaced by
@@ -610,6 +618,17 @@ type RPCDiagnostics interface {
 type RPCDiagnosticsSnapshot struct {
 	Methods map[string]RPCMethodDiagnostics
 	Current []RPCActivity
+}
+
+type SubscriptionMetrics struct {
+	Connections               uint64
+	Items                     uint64
+	RequestLimitRejections    uint64
+	ConnectionLimitRejections uint64
+	GlobalLimitRejections     uint64
+	DeliveriesQueued          uint64
+	DeliveriesDropped         uint64
+	DeliveryDisconnects       uint64
 }
 
 type RPCMethodDiagnostics struct {

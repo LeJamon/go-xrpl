@@ -1,6 +1,8 @@
 package handlers
 
 import (
+	"crypto/rand"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"math/bits"
@@ -91,6 +93,41 @@ func serverHostID(services *types.ServiceContainer, admin bool) string {
 	return "go-xrpl"
 }
 
+func ServerSubscriptionState(services *types.ServiceContainer, admin bool) map[string]any {
+	random := make([]byte, 32)
+	_, _ = rand.Read(random)
+	load := ComputeServerLoad(services)
+	status := "full"
+	standalone := false
+	if services != nil && services.Ledger != nil {
+		info := services.Ledger.GetServerInfo()
+		standalone = info.Standalone
+		if info.ServerState != "" {
+			status = info.ServerState
+		}
+		if standalone {
+			status = "standalone"
+		} else if !admin && (status == "proposing" || status == "validating") {
+			status = "full"
+		}
+	}
+	result := map[string]any{
+		"random":        strings.ToUpper(hex.EncodeToString(random)),
+		"server_status": status,
+		"load_base":     clipToUint32(load.LoadBase),
+		"load_factor":   clipToUint32(load.LoadFactorServer),
+		"hostid":        serverHostID(services, admin),
+		"pubkey_node":   "",
+	}
+	if services != nil {
+		result["pubkey_node"] = services.NodePublicKey
+	}
+	if standalone {
+		result["stand_alone"] = true
+	}
+	return result
+}
+
 func serverSystemTime(services *types.ServiceContainer) time.Time {
 	if services != nil && services.SystemTime != nil {
 		return services.SystemTime()
@@ -172,11 +209,25 @@ func addServerDiagnostics(info map[string]any, services *types.ServiceContainer)
 		}
 	}
 
-	info["counters"] = map[string]any{
+	counters := map[string]any{
 		"rpc":       rpcCounters,
 		"job_queue": map[string]any{},
 		"nodestore": nodeStore,
 	}
+	if services != nil && services.SubscriptionMetrics != nil {
+		metrics := services.SubscriptionMetrics()
+		counters["subscriptions"] = map[string]any{
+			"connections":                 strconv.FormatUint(metrics.Connections, 10),
+			"items":                       strconv.FormatUint(metrics.Items, 10),
+			"request_limit_rejections":    strconv.FormatUint(metrics.RequestLimitRejections, 10),
+			"connection_limit_rejections": strconv.FormatUint(metrics.ConnectionLimitRejections, 10),
+			"global_limit_rejections":     strconv.FormatUint(metrics.GlobalLimitRejections, 10),
+			"deliveries_queued":           strconv.FormatUint(metrics.DeliveriesQueued, 10),
+			"deliveries_dropped":          strconv.FormatUint(metrics.DeliveriesDropped, 10),
+			"delivery_disconnects":        strconv.FormatUint(metrics.DeliveryDisconnects, 10),
+		}
+	}
+	info["counters"] = counters
 	info["current_activities"] = map[string]any{
 		"jobs":    []map[string]any{},
 		"methods": methods,

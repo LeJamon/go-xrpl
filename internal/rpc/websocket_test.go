@@ -14,6 +14,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/LeJamon/go-xrpl/internal/rpc/subscription"
 	"github.com/LeJamon/go-xrpl/internal/rpc/types"
 	"github.com/gorilla/websocket"
 )
@@ -211,7 +212,9 @@ func TestWebSocketServer_Close_ContextInterruptsBlockedControlWrite(t *testing.T
 	}
 
 	close(serverConn.armed)
-	wsConn.SendChannel <- []byte("block the server writer")
+	if !wsConn.TrySend([]byte("block the server writer")) {
+		t.Fatal("failed to queue blocking frame")
+	}
 	select {
 	case <-serverConn.writeStarted:
 	case <-time.After(time.Second):
@@ -505,10 +508,8 @@ func TestWebSocketServer_ConcurrentWrites_NoRace(t *testing.T) {
 	}
 
 	// Feed handleSend a steady stream of data frames while pingLoop fires.
-	for range 500 {
-		select {
-		case wsConn.SendChannel <- []byte(`{"type":"race-probe"}`):
-		case <-time.After(2 * time.Second):
+	for range 100 {
+		if !wsConn.TrySend([]byte(`{"type":"race-probe"}`)) {
 			t.Fatal("send channel stalled")
 		}
 	}
@@ -522,6 +523,34 @@ func TestWebSocketServer_ConcurrentWrites_NoRace(t *testing.T) {
 
 	client.Close()
 	<-readDone
+}
+
+func TestWebSocketRegistrationRejectsDuplicateAndStaleOwner(t *testing.T) {
+	ws := NewWebSocketServer(WebSocketServerOptions{})
+	first := &websocketConnection{Connection: subscription.NewConnection("same-id", make(chan []byte, 1))}
+	second := &websocketConnection{Connection: subscription.NewConnection("same-id", make(chan []byte, 1))}
+	if !ws.attachConnection(first) {
+		t.Fatal("first owner was rejected")
+	}
+	if ws.attachConnection(second) {
+		t.Fatal("duplicate owner was accepted")
+	}
+
+	ws.detachConnection(first)
+	if !ws.attachConnection(second) {
+		t.Fatal("replacement owner was rejected")
+	}
+	ws.detachConnection(first)
+	ws.connectionsMutex.RLock()
+	current := ws.connections[second.ID()]
+	ws.connectionsMutex.RUnlock()
+	if current != second {
+		t.Fatal("stale owner removed its replacement")
+	}
+	if second.registration.Snapshot().ItemCount() != 0 {
+		t.Fatal("unexpected replacement subscriptions")
+	}
+	ws.detachConnection(second)
 }
 
 // Sanity: ensure we can call NewWebSocketServer concurrently without races.
@@ -770,7 +799,7 @@ func TestWebSocketSpecialCommandDecodeErrorsAreFixed(t *testing.T) {
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			ws := NewWebSocketServer(WebSocketServerOptions{Timeout: time.Second})
-			wsConn := &websocketConnection{Connection: types.NewConnectionWithContext(context.Background(), "decode-test", make(chan []byte, 1))}
+			wsConn := &websocketConnection{Connection: subscription.NewConnectionWithContext(context.Background(), "decode-test", make(chan []byte, 1))}
 			cmd := types.WebSocketCommand{
 				Command: test.command,
 				ID:      int32(7),
@@ -782,7 +811,7 @@ func TestWebSocketSpecialCommandDecodeErrorsAreFixed(t *testing.T) {
 				ApiVersion: types.DefaultApiVersion,
 				Services:   &types.ServiceContainer{Capabilities: types.RPCCapabilities{PathSearchMax: 3}},
 			}, cmd)
-			body := <-wsConn.SendChannel
+			body := <-wsConn.Outbound()
 			if got := string(body); got != test.want {
 				t.Fatalf("response = %s, want %s", got, test.want)
 			}

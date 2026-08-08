@@ -109,7 +109,7 @@ func (m *pathFindRefreshManager) enqueue(getView func() (types.LedgerStateView, 
 	// list between generations prevents a connection at the end of the list
 	// from being perpetually superseded by the first workers.
 	sort.Slice(targets, func(i, j int) bool {
-		return targets[i].connection.ID < targets[j].connection.ID
+		return targets[i].connection.ID() < targets[j].connection.ID()
 	})
 	m.mu.Lock()
 	if m.closed {
@@ -309,7 +309,7 @@ func (m *pathFindRefreshManager) finishJob(job pathFindRefreshJob) {
 func (m *pathFindRefreshManager) execute(job pathFindRefreshJob) (result *pathfinder.PathRequestResult) {
 	defer func() {
 		if rec := recover(); rec != nil {
-			wsLog().Error("path_find refresh panic", "conn", job.target.connection.ID, "err", rec)
+			wsLog().Error("path_find refresh panic", "conn", job.target.connection.ID(), "err", rec)
 			result = nil
 		}
 	}()

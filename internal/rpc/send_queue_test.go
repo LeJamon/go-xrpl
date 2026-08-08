@@ -12,6 +12,9 @@ import (
 
 	"github.com/gorilla/websocket"
 	"github.com/stretchr/testify/require"
+
+	"github.com/LeJamon/go-xrpl/internal/rpc/subscription"
+	"github.com/LeJamon/go-xrpl/internal/rpc/types"
 )
 
 func TestResolveSendQueueLimit(t *testing.T) {
@@ -43,6 +46,28 @@ func TestResolveSendQueueLimit(t *testing.T) {
 			require.Equal(t, test.want, got)
 		})
 	}
+}
+
+func TestOrdinaryWebSocketReplyDoesNotCountAsSubscriptionDelivery(t *testing.T) {
+	manager := subscription.NewManager()
+	conn := subscription.NewConnection("ordinary-reply", make(chan []byte, 2))
+	registration, ok := manager.Attach(conn)
+	require.True(t, ok)
+	t.Cleanup(func() { manager.Detach(registration) })
+
+	wsConn := &websocketConnection{Connection: conn, registration: registration}
+	(&WebSocketServer{}).deliver(wsConn, []byte(`{"result":{}}`))
+
+	metrics := manager.Metrics()
+	require.Zero(t, metrics.DeliveriesQueued)
+	require.Zero(t, metrics.DeliveriesDropped)
+	require.Zero(t, metrics.DeliveryDisconnects)
+
+	require.Nil(t, manager.HandleSubscribe(registration, types.SubscriptionRequest{
+		Streams: []types.SubscriptionType{types.SubLedger},
+	}, false))
+	require.Equal(t, 1, manager.BroadcastToStream(types.SubLedger, []byte(`{"type":"ledgerClosed"}`)))
+	require.Equal(t, uint64(1), manager.Metrics().DeliveriesQueued)
 }
 
 func TestWebSocketSendQueueLimitRealHandshake(t *testing.T) {
@@ -82,7 +107,7 @@ func TestWebSocketSendQueueLimitRealHandshake(t *testing.T) {
 				}
 				return false
 			}, time.Second, time.Millisecond)
-			require.Equal(t, test.want, cap(connection.SendChannel))
+			require.Equal(t, test.want, cap(connection.Outbound()))
 		})
 	}
 }
