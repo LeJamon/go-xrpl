@@ -112,7 +112,7 @@ func TestGateLoadKeysUnlimitedHTTPBySocketPeer(t *testing.T) {
 	}
 	defer ctx.ResourceAdmission.Cancel()
 	entries := manager.Snapshot(0)
-	if len(entries) != 1 || entries[0].Address != "203.0.113.5:1" || entries[0].Type != "admin" {
+	if len(entries) != 1 || entries[0].Address != "IP Address: 203.0.113.5:1" || entries[0].Type != "admin" {
 		t.Fatalf("unlimited entries = %+v", entries)
 	}
 }
@@ -129,7 +129,7 @@ func TestGateLoadKeepsWebSocketConnectionConsumer(t *testing.T) {
 	}
 	defer ctx.ResourceAdmission.Cancel()
 	entries := manager.Snapshot(0)
-	if len(entries) != 1 || entries[0].Address != "198.51.100.7" || entries[0].Type != "inbound" {
+	if len(entries) != 1 || entries[0].Address != "IP Address: 198.51.100.7" || entries[0].Type != "inbound" {
 		t.Fatalf("WebSocket entries = %+v", entries)
 	}
 }
@@ -150,7 +150,7 @@ func TestWebSocketHandshakeSelectsUnlimitedConsumer(t *testing.T) {
 	}
 	defer client.Close()
 	entries := manager.Snapshot(0)
-	if len(entries) != 1 || entries[0].Address != "127.0.0.1:1" || entries[0].Type != "admin" {
+	if len(entries) != 1 || entries[0].Address != "IP Address: 127.0.0.1:1" || entries[0].Type != "admin" {
 		t.Fatalf("handshake entries = %+v", entries)
 	}
 }

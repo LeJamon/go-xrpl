@@ -334,11 +334,8 @@ func TestHandleClusterMessage_ReimportReplacesPriorGossip(t *testing.T) {
 	assert.Equal(t, 1, rm.Stats().Imports, "one peer must retain one stable gossip origin")
 }
 
-// TestValidGossipAddress pins the load-source name filter against rippled's
-// beast::IP::Endpoint::from_string + `!= Endpoint()` guard
-// (PeerImp.cpp:1166-1168, IPEndpoint.cpp:179-182): a non-IP host or an
-// out-of-range / non-numeric port is dropped, while the bare-host and
-// ip:port forms (including the port-0 canonical) are accepted.
+// TestValidGossipAddress covers canonical IP endpoint forms and rejects
+// ambiguous or malformed peer-provided resource gossip addresses.
 func TestValidGossipAddress(t *testing.T) {
 	cases := []struct {
 		name string
@@ -349,7 +346,7 @@ func TestValidGossipAddress(t *testing.T) {
 		{"bare ipv4", "203.0.113.7", true},
 		{"ipv4 port zero", "203.0.113.7:0", true},
 		{"ipv4 high port", "203.0.113.7:51235", true},
-		{"ipv4 trailing colon", "203.0.113.7:", true},
+		{"ipv4 trailing colon", "203.0.113.7:", false},
 		{"ipv4 surrounding whitespace", " 203.0.113.7 ", true},
 		{"non-ip host", "not-an-address", false},
 		{"out-of-range port", "203.0.113.7:99999", false},

@@ -122,7 +122,7 @@ func resourceLocalBalance(t *testing.T, manager *resource.Manager, address strin
 	require.NotNil(t, consumer)
 	defer consumer.Release()
 	for _, entry := range manager.Snapshot(0) {
-		if entry.Address == address && entry.Type == resource.KindInbound.String() {
+		if entry.Address == "IP Address: "+address && entry.Type == resource.KindInbound.String() {
 			return uint32(entry.Local)
 		}
 	}

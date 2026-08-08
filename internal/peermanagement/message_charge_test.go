@@ -24,7 +24,7 @@ func TestMessageChargeSelectsOneFeeAndFinishesOnce(t *testing.T) {
 		charge.finish()
 		charge.finish()
 	}
-	require.Equal(t, resource.FeeInvalidData().Cost(), consumer.Balance())
+	require.Equal(t, int64(resource.FeeInvalidData().Cost()), consumer.Balance())
 }
 
 func TestMessageChargePreservesBaseAndSelectedContexts(t *testing.T) {
@@ -58,7 +58,7 @@ func TestInboundPingChargesModerateAndPongChargesTrivial(t *testing.T) {
 	for range resource.DecayWindowSeconds {
 		overlay.onMessageReceived(Event{PeerID: requestPeer.ID(), MessageType: message.TypePing, Payload: request})
 	}
-	require.Equal(t, resource.FeeModerateBurdenPeer().Cost(), requestConsumer.Balance())
+	require.Equal(t, int64(resource.FeeModerateBurdenPeer().Cost()), requestConsumer.Balance())
 
 	pongPeer := NewPeer(2, Endpoint{Host: "192.0.2.3", Port: 51235}, false, identity, nil)
 	pongConsumer := manager.NewInboundEndpoint(pongPeer.Endpoint().String())
@@ -71,7 +71,7 @@ func TestInboundPingChargesModerateAndPongChargesTrivial(t *testing.T) {
 	for range resource.DecayWindowSeconds {
 		overlay.onMessageReceived(Event{PeerID: pongPeer.ID(), MessageType: message.TypePing, Payload: pong})
 	}
-	require.Equal(t, resource.FeeTrivialPeer().Cost(), pongConsumer.Balance())
+	require.Equal(t, int64(resource.FeeTrivialPeer().Cost()), pongConsumer.Balance())
 }
 
 func TestReleaseUsagePreventsLateFallbackConsumer(t *testing.T) {
