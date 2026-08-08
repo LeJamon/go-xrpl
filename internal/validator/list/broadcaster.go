@@ -114,6 +114,10 @@ func (a *Aggregator) PeerSequence(peerID uint64, pubKey PublisherKey) uint32 {
 // newer than their recorded sequence, while per-blob manifests and the
 // collection-level manifest retain their distinct wire roles.
 func (a *Aggregator) BroadcastLatest(pubKey PublisherKey, exceptPeer uint64) {
+	a.broadcastLatest(pubKey, exceptPeer, 0)
+}
+
+func (a *Aggregator) broadcastLatest(pubKey PublisherKey, exceptPeer uint64, targetSequence uint32) {
 	a.mu.Lock()
 	bcaster := a.bcaster
 	if bcaster == nil {
@@ -170,6 +174,10 @@ func (a *Aggregator) BroadcastLatest(pubKey PublisherKey, exceptPeer uint64) {
 		}
 	}
 	collVersion := max(blobVersion, 2)
+	relaySequence := targetSequence
+	if relaySequence == 0 {
+		relaySequence = maxSeq
+	}
 	logger := a.logger
 	a.mu.Unlock()
 
@@ -181,7 +189,7 @@ func (a *Aggregator) BroadcastLatest(pubKey PublisherKey, exceptPeer uint64) {
 		}
 		if bcaster.PeerSupportsV2(peerID) {
 			peerSequence := a.PeerSequence(peerID, pubKey)
-			if peerSequence >= maxSeq {
+			if peerSequence >= relaySequence {
 				continue
 			}
 			peerBlobs := make([]BroadcastBlob, 0, len(entries))
@@ -201,7 +209,7 @@ func (a *Aggregator) BroadcastLatest(pubKey PublisherKey, exceptPeer uint64) {
 					"error", err)
 				continue
 			}
-			a.RecordPeerSequence(peerID, pubKey, maxSeq)
+			a.RecordPeerSequence(peerID, pubKey, relaySequence)
 			sent++
 			continue
 		}

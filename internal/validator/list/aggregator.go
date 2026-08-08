@@ -440,15 +440,10 @@ func New(cfg Config) (*Aggregator, error) {
 	// construction and emitted unconditionally in getJson.
 	defaultRefreshSec := int(defaultRefreshInterval / time.Second)
 	sites := make([]*siteInfoState, 0, len(cfg.SiteURIs))
-	seenSites := make(map[string]struct{}, len(cfg.SiteURIs))
 	for _, u := range cfg.SiteURIs {
 		if err := validateSiteURI(u); err != nil {
 			return nil, fmt.Errorf("invalid validator site uri %q: %w", u, err)
 		}
-		if _, ok := seenSites[u]; ok {
-			continue
-		}
-		seenSites[u] = struct{}{}
 		sites = append(sites, &siteInfoState{
 			URI:            u,
 			NextRefresh:    initialNextRefresh,
@@ -678,6 +673,32 @@ func (a *Aggregator) SetNextRefresh(uri string, nextRefresh time.Time) {
 	}
 }
 
+func (a *Aggregator) siteOccurrenceLocked(uri string, occurrence int) *siteInfoState {
+	for _, site := range a.sites {
+		if site.URI != uri {
+			continue
+		}
+		if occurrence == 0 {
+			return site
+		}
+		occurrence--
+	}
+	return nil
+}
+
+func (a *Aggregator) setNextRefreshOccurrence(uri string, occurrence int, nextRefresh time.Time) {
+	if nextRefresh.IsZero() {
+		return
+	}
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	site := a.siteOccurrenceLocked(uri, occurrence)
+	if site == nil {
+		return
+	}
+	site.NextRefresh = nextRefresh
+}
+
 // UpdateSiteState records the outcome of an HTTP poll attempt against a
 // configured publisher URL. The poller goroutine calls this after each
 // fetch attempt; the data flows through to the validator_list_sites
@@ -710,6 +731,28 @@ func (a *Aggregator) UpdateSiteState(uri string, lastFetched, lastSuccess time.T
 	}
 }
 
+func (a *Aggregator) updateSiteStateOccurrence(uri string, occurrence int, lastFetched, lastSuccess time.Time, lastErr string, lastDisp Disposition, refreshSec int, nextRefresh time.Time) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	s := a.siteOccurrenceLocked(uri, occurrence)
+	if s == nil {
+		return
+	}
+	s.LastFetched = lastFetched
+	if !lastSuccess.IsZero() {
+		s.LastSuccess = lastSuccess
+	}
+	s.LastError = lastErr
+	s.LastDisposition = lastDisp
+	s.LastDispositionSet = true
+	if refreshSec > 0 {
+		s.RefreshSeconds = refreshSec
+	}
+	if !nextRefresh.IsZero() {
+		s.NextRefresh = nextRefresh
+	}
+}
+
 // Tick performs a time-driven promotion sweep across every publisher
 // and emits OnChange if the resulting trusted union changed. Callers
 // should invoke this periodically (rippled drives it from updateTrusted
@@ -721,18 +764,25 @@ func (a *Aggregator) UpdateSiteState(uri string, lastFetched, lastSuccess time.T
 func (a *Aggregator) Tick() {
 	a.mu.Lock()
 	now := a.clock()
-	promoted := make([]PublisherKey, 0, len(a.state))
+	type promotion struct {
+		publisher PublisherKey
+		sequence  uint32
+	}
+	promoted := make([]promotion, 0, len(a.state))
 	for pubKey, s := range a.state {
-		if a.promoteRemainingLocked(s, now) {
-			promoted = append(promoted, pubKey)
+		if sequence := a.promoteRemainingLocked(s, now); sequence != 0 {
+			promoted = append(promoted, promotion{publisher: pubKey, sequence: sequence})
+		}
+		if s.Status == StatusExpired {
+			s.Validators = nil
 		}
 	}
 	a.recomputeAndEmitLocked()
 	a.mu.Unlock()
 	a.flushCacheWrites()
 	a.dispatchChanges()
-	for _, pubKey := range promoted {
-		a.BroadcastLatest(pubKey, 0)
+	for _, item := range promoted {
+		a.broadcastLatest(item.publisher, 0, item.sequence)
 	}
 }
 
@@ -740,9 +790,13 @@ func (a *Aggregator) Tick() {
 // key is revoked by a fresh manifest. Mirrors rippled's
 // removePublisherList(StatusRevoked) branch in verify(). Also clears
 // the retained wire bytes so a revoked publisher is never rebroadcast.
-func (a *Aggregator) handleRevocation(pubKey PublisherKey) {
+func (a *Aggregator) handleRevocation(pubKey PublisherKey, asyncDispatch bool) {
 	a.mu.Lock()
-	defer a.dispatchChanges()
+	if asyncDispatch {
+		defer a.dispatchChangesAsync()
+	} else {
+		defer a.dispatchChanges()
+	}
 	defer a.flushCacheWrites()
 	defer a.mu.Unlock()
 	s, ok := a.state[pubKey]
@@ -770,7 +824,11 @@ func (a *Aggregator) handleRevocation(pubKey PublisherKey) {
 // tracks every count recompute (ingest, Tick, trusted-set reads).
 func (a *Aggregator) computeValidatorCountsLocked(now time.Time) map[[33]byte]int {
 	counts := make(map[[33]byte]int, 64)
+	listedMasters := make(map[[33]byte]struct{}, 64)
 	for _, s := range a.state {
+		for _, k := range s.Validators {
+			listedMasters[k] = struct{}{}
+		}
 		if s.Status != StatusAvailable {
 			continue
 		}
@@ -791,18 +849,16 @@ func (a *Aggregator) computeValidatorCountsLocked(now time.Time) map[[33]byte]in
 			counts[k]++
 		}
 	}
-	listed := make(map[consensus.NodeID]struct{}, len(counts))
-	listedMasters := make(map[[33]byte]struct{}, len(counts))
-	for k := range counts {
+	listed := make(map[consensus.NodeID]struct{}, len(listedMasters))
+	for k := range listedMasters {
 		listed[consensus.CalcNodeID(k)] = struct{}{}
-		listedMasters[k] = struct{}{}
 	}
 	a.listed.Store(&listed)
 	a.listedMasters.Store(&listedMasters)
 	return counts
 }
 
-// IsListed reports whether node's master key appears in at least one live
+// IsListed reports whether node's master key appears in at least one retained
 // publisher list — rippled's ValidatorList::listed, one tier below trusted.
 // Lock-free (atomic snapshot) so the consensus validation path can query it
 // without ordering against a.mu.
@@ -815,7 +871,7 @@ func (a *Aggregator) IsListed(node consensus.NodeID) bool {
 	return ok
 }
 
-// IsMasterListed reports whether a validator master key appears in a live
+// IsMasterListed reports whether a validator master key appears in a retained
 // configured publisher list.
 func (a *Aggregator) IsMasterListed(master [33]byte) bool {
 	listed := a.listedMasters.Load()

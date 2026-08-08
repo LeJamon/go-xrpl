@@ -1,6 +1,7 @@
 package list_test
 
 import (
+	"encoding/base64"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -297,5 +298,53 @@ func TestSitePoller_OnChangeMayStopPoller(t *testing.T) {
 	case <-stopped:
 	case <-time.After(3 * time.Second):
 		t.Fatal("OnChange -> Stop deadlocked")
+	}
+}
+
+func TestSitePoller_RevocationOnChangeMayStopPoller(t *testing.T) {
+	pub := newPublisher(t, 0x75, 0x76)
+	blob, signature := pub.signList(t, 1, 0, time.Now().Add(24*time.Hour).Unix(), [][33]byte{derivedValidatorKey(0x77)})
+	revocation := buildRevocation(t, pub.masterPub, pub.masterPriv)
+	body, err := json.Marshal(map[string]any{
+		"manifest":  base64.StdEncoding.EncodeToString(revocation),
+		"blob":      "",
+		"signature": "",
+		"version":   1,
+	})
+	if err != nil {
+		t.Fatalf("marshal revocation envelope: %v", err)
+	}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write(body)
+	}))
+	defer srv.Close()
+	agg, err := list.New(list.Config{
+		PublisherKeys:      []list.PublisherKey{list.PublisherKey(pub.masterPub)},
+		SiteURIs:           []string{srv.URL},
+		Threshold:          1,
+		ValidatorManifests: manifest.NewCache(),
+		PublisherManifests: manifest.NewCache(),
+	})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	if disposition, _, _ := agg.ApplyList(pub.manifestB64, blob, signature, 1, "test://initial"); disposition != list.Accepted {
+		t.Fatalf("initial disposition: got %s want accepted", disposition)
+	}
+	poller, err := list.NewSitePoller([]string{srv.URL}, agg, nil)
+	if err != nil {
+		t.Fatalf("NewSitePoller: %v", err)
+	}
+	poller.SetInterval(time.Hour)
+	stopped := make(chan struct{})
+	agg.OnChange(func(_ []consensus.NodeID, _ [][33]byte) {
+		poller.Stop()
+		close(stopped)
+	})
+	poller.Start(t.Context())
+	select {
+	case <-stopped:
+	case <-time.After(3 * time.Second):
+		t.Fatal("revocation OnChange -> Stop deadlocked")
 	}
 }

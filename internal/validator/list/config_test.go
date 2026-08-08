@@ -15,11 +15,11 @@ func TestNewNormalizesAndValidatesConfig(t *testing.T) {
 		static     int
 	}{
 		{
-			name: "deduplicates keys and sites and defaults threshold",
+			name: "deduplicates keys, preserves sites, and defaults threshold",
 			cfg: Config{PublisherKeys: []PublisherKey{key1, key1, key2}, SiteURIs: []string{
 				"https://one.example", "https://one.example", "file:///tmp/lists.json",
 			}, StaticValidatorCount: -3},
-			publishers: 2, sites: 2, threshold: 1,
+			publishers: 2, sites: 3, threshold: 1,
 		},
 		{
 			name: "zero threshold without publishers is valid",

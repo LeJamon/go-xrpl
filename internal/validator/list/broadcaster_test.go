@@ -346,6 +346,10 @@ func TestAggregatorTickPromotesAndBroadcastsWithoutReadSideMutation(t *testing.T
 	if d, _, _ := agg.ApplyList(pub.manifestB64, blob10, sig10, 2, "peer://"); d != list.Pending {
 		t.Fatalf("seq=10 apply: %s", d)
 	}
+	blob15, sig15 := pub.signList(t, 15, now.Add(3*time.Hour).Unix(), expiration, [][33]byte{validator})
+	if d, _, _ := agg.ApplyList(pub.manifestB64, blob15, sig15, 2, "peer://"); d != list.Pending {
+		t.Fatalf("seq=15 apply: %s", d)
+	}
 
 	clockNow = now.Add(2 * time.Hour)
 	if got := agg.PublisherSnapshot()[0].Sequence; got != 5 {
@@ -361,6 +365,9 @@ func TestAggregatorTickPromotesAndBroadcastsWithoutReadSideMutation(t *testing.T
 	agg.Tick()
 	if got := agg.PublisherSnapshot()[0].Sequence; got != 10 {
 		t.Fatalf("Tick did not promote pending list: got sequence %d", got)
+	}
+	if got := agg.PeerSequence(2, pubKey); got != 10 {
+		t.Fatalf("promotion recorded retained maximum instead of promoted sequence: got %d", got)
 	}
 	fake.mu.Lock()
 	defer fake.mu.Unlock()

@@ -177,6 +177,71 @@ func TestSetCacheDirDisableDropsFailedMutationRetry(t *testing.T) {
 	}
 }
 
+func TestSetCacheDirWaitsForInflightWrite(t *testing.T) {
+	agg := newCacheFailureAggregator(t, nil)
+	dir := t.TempDir()
+	if err := agg.SetCacheDir(dir); err != nil {
+		t.Fatalf("SetCacheDir: %v", err)
+	}
+	pk := PublisherKey{0xed, 6}
+	path := cachePathFor(dir, pk)
+	entered := make(chan struct{})
+	release := make(chan struct{})
+	agg.cacheOps.writeFile = func(name string, body []byte, mode os.FileMode) error {
+		close(entered)
+		<-release
+		return os.WriteFile(name, body, mode)
+	}
+	queueCacheWrite(t, agg, path, pk, []byte("inflight"))
+	flushed := make(chan struct{})
+	go func() {
+		agg.flushCacheWrites()
+		close(flushed)
+	}()
+	<-entered
+	disabled := make(chan error, 1)
+	go func() { disabled <- agg.SetCacheDir("") }()
+	select {
+	case err := <-disabled:
+		t.Fatalf("SetCacheDir returned before in-flight write completed: %v", err)
+	case <-time.After(20 * time.Millisecond):
+	}
+	close(release)
+	<-flushed
+	if err := <-disabled; err != nil {
+		t.Fatalf("disable cache: %v", err)
+	}
+}
+
+func TestFlushCacheWritesDropsStaleGenerationBeforeIO(t *testing.T) {
+	agg := newCacheFailureAggregator(t, nil)
+	dir := t.TempDir()
+	if err := agg.SetCacheDir(dir); err != nil {
+		t.Fatalf("SetCacheDir: %v", err)
+	}
+	pk := PublisherKey{0xed, 7}
+	path := cachePathFor(dir, pk)
+	writes := 0
+	agg.cacheOps.writeFile = func(string, []byte, os.FileMode) error {
+		writes++
+		return nil
+	}
+	agg.mu.Lock()
+	agg.cacheWriteSeq++
+	agg.pendingCacheWrites[pk] = pendingCacheWrite{
+		path:       path,
+		body:       []byte("stale"),
+		seq:        agg.cacheWriteSeq,
+		generation: agg.cacheGeneration,
+	}
+	agg.cacheGeneration++
+	agg.mu.Unlock()
+	agg.flushCacheWrites()
+	if writes != 0 {
+		t.Fatalf("stale generation reached disk I/O: %d writes", writes)
+	}
+}
+
 func newCacheFailureAggregator(t *testing.T, logger *slog.Logger) *Aggregator {
 	t.Helper()
 	agg, err := New(Config{

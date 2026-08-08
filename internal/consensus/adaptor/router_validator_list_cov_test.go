@@ -123,6 +123,20 @@ func TestRvl_CollectionSemanticHash_EmptyBlobs(t *testing.T) {
 	assert.Equal(t, []byte{0, 0, 0, 2}, h[:4])
 }
 
+func TestRvl_CollectionSemanticHashDistinguishesManifestPresence(t *testing.T) {
+	omitted := &message.ValidatorListCollection{
+		Version:  2,
+		Manifest: []byte("m"),
+		Blobs:    []message.ValidatorBlobInfo{{Blob: []byte("b"), Signature: []byte("s")}},
+	}
+	presentEmpty := &message.ValidatorListCollection{
+		Version:  2,
+		Manifest: []byte("m"),
+		Blobs:    []message.ValidatorBlobInfo{{Manifest: []byte{}, Blob: []byte("b"), Signature: []byte("s")}},
+	}
+	assert.NotEqual(t, validatorListCollectionSemanticHash(omitted), validatorListCollectionSemanticHash(presentEmpty))
+}
+
 func TestRvl_ChargePeer_None(t *testing.T) {
 	r, rs := makeRouterWithBadDataRecorder(t)
 	chargePeerForDisposition(r, 1, "vl", validatorlist.Accepted)

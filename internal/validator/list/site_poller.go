@@ -1,6 +1,7 @@
 package list
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -47,6 +48,7 @@ const errorRetryInterval = 30 * time.Second
 // ValidatorSite.cpp::parseJsonResponse ("Missing fields in JSON
 // response") so external monitors keyed on the literal string match.
 const missingFieldsMessage = "Missing fields in JSON response"
+const missingFieldsStatusMessage = "missing fields"
 
 // envelope is the JSON shape published at vl.* publisher URLs (and the
 // equivalent file:// payloads), and the on-disk cache format the
@@ -61,20 +63,106 @@ const missingFieldsMessage = "Missing fields in JSON response"
 // by the cache file name and the refresh cadence is driven by the site
 // poller. Fields beyond these are tolerated and ignored on read.
 type envelope struct {
-	Manifest       string          `json:"manifest"`
-	PublicKey      string          `json:"public_key,omitempty"`
-	Blob           *string         `json:"blob,omitempty"`
-	Signature      *string         `json:"signature,omitempty"`
-	Version        uint32          `json:"version"`
-	BlobsV2        *[]envelopeBlob `json:"blobs_v2,omitempty"`
-	RefreshMinutes float64         `json:"refresh_interval,omitempty"`
+	Object         bool            `json:"-"`
+	Manifest       envelopeString  `json:"manifest"`
+	PublicKey      json.RawMessage `json:"public_key,omitempty"`
+	Blob           envelopeString  `json:"blob"`
+	Signature      envelopeString  `json:"signature"`
+	Version        envelopeUint32  `json:"version"`
+	BlobsV2        envelopeBlobs   `json:"blobs_v2"`
+	RefreshMinutes envelopeNumber  `json:"refresh_interval,omitempty"`
+}
+
+func (e *envelope) UnmarshalJSON(data []byte) error {
+	if trimmed := bytes.TrimSpace(data); len(trimmed) == 0 || trimmed[0] != '{' {
+		*e = envelope{}
+		return nil
+	}
+	type envelopeFields envelope
+	var decoded envelopeFields
+	if err := json.Unmarshal(data, &decoded); err != nil {
+		return err
+	}
+	*e = envelope(decoded)
+	e.Object = true
+	return nil
 }
 
 // envelopeBlob is a v2 collection entry inside the envelope.
 type envelopeBlob struct {
-	Manifest  *string `json:"manifest,omitempty"`
-	Blob      string  `json:"blob"`
-	Signature string  `json:"signature"`
+	Manifest  envelopeString `json:"manifest"`
+	Blob      envelopeString `json:"blob"`
+	Signature envelopeString `json:"signature"`
+}
+
+type envelopeString struct {
+	Value   string
+	Present bool
+	Valid   bool
+}
+
+func (s *envelopeString) UnmarshalJSON(data []byte) error {
+	*s = envelopeString{Present: true}
+	if string(data) == "null" {
+		return nil
+	}
+	if err := json.Unmarshal(data, &s.Value); err != nil {
+		return nil
+	}
+	s.Valid = true
+	return nil
+}
+
+type envelopeUint32 struct {
+	Value   uint32
+	Present bool
+	Valid   bool
+}
+
+func (v *envelopeUint32) UnmarshalJSON(data []byte) error {
+	*v = envelopeUint32{Present: true}
+	if string(data) == "null" {
+		return nil
+	}
+	var value int64
+	if err := json.Unmarshal(data, &value); err != nil || value < -2147483648 || value > 2147483647 {
+		return nil
+	}
+	v.Value = uint32(value)
+	v.Valid = true
+	return nil
+}
+
+type envelopeBlobs struct {
+	Values  []envelopeBlob
+	Present bool
+	Valid   bool
+}
+
+type envelopeNumber struct {
+	Value float64
+	Valid bool
+}
+
+func (n *envelopeNumber) UnmarshalJSON(data []byte) error {
+	*n = envelopeNumber{}
+	if err := json.Unmarshal(data, &n.Value); err != nil {
+		return nil
+	}
+	n.Valid = true
+	return nil
+}
+
+func (b *envelopeBlobs) UnmarshalJSON(data []byte) error {
+	*b = envelopeBlobs{Present: true}
+	if string(data) == "null" {
+		return nil
+	}
+	if err := json.Unmarshal(data, &b.Values); err != nil {
+		return nil
+	}
+	b.Valid = true
+	return nil
 }
 
 // toCollection builds the v2 collection view of the envelope for the
@@ -83,45 +171,50 @@ type envelopeBlob struct {
 // shared manifest otherwise.
 func (e *envelope) toCollection() *message.ValidatorListCollection {
 	coll := &message.ValidatorListCollection{
-		Version:  e.Version,
-		Manifest: []byte(e.Manifest),
+		Version:  e.Version.Value,
+		Manifest: []byte(e.Manifest.Value),
 	}
-	if e.BlobsV2 == nil {
+	if !e.BlobsV2.Present {
 		return coll
 	}
-	for _, b := range *e.BlobsV2 {
+	for _, b := range e.BlobsV2.Values {
 		var localManifest []byte
-		if b.Manifest != nil {
+		if b.Manifest.Present {
 			// Allocate even for an explicitly empty string: message
 			// ValidatorBlobInfo uses nil-vs-present to distinguish an
 			// omitted override from an explicit empty override.
-			localManifest = make([]byte, len(*b.Manifest))
-			copy(localManifest, *b.Manifest)
+			localManifest = make([]byte, len(b.Manifest.Value))
+			copy(localManifest, b.Manifest.Value)
 		}
 		coll.Blobs = append(coll.Blobs, message.ValidatorBlobInfo{
 			Manifest:  localManifest,
-			Blob:      []byte(b.Blob),
-			Signature: []byte(b.Signature),
+			Blob:      []byte(b.Blob.Value),
+			Signature: []byte(b.Signature.Value),
 		})
 	}
 	return coll
 }
 
 func (e *envelope) validateShape() error {
-	if e.Version == 0 || e.Manifest == "" {
+	if !e.Object || !e.Version.Present || !e.Version.Valid || !e.Manifest.Present || !e.Manifest.Valid {
 		return errors.New(missingFieldsMessage)
 	}
-	switch {
-	case e.Version == 1:
-		if e.Blob == nil || e.Signature == nil || *e.Blob == "" || *e.Signature == "" || e.BlobsV2 != nil {
+	if e.Version.Value == 1 {
+		if !e.Blob.Present || !e.Blob.Valid || !e.Signature.Present || !e.Signature.Valid || e.BlobsV2.Present {
 			return errors.New(missingFieldsMessage)
 		}
-	case e.Version >= 2:
-		if e.BlobsV2 == nil || len(*e.BlobsV2) == 0 || e.Blob != nil || e.Signature != nil {
-			return errors.New(missingFieldsMessage)
-		}
-	default:
+		return nil
+	}
+	if !e.BlobsV2.Present || !e.BlobsV2.Valid || len(e.BlobsV2.Values) == 0 || len(e.BlobsV2.Values) > 5 || e.Blob.Present || e.Signature.Present {
 		return errors.New(missingFieldsMessage)
+	}
+	for _, blob := range e.BlobsV2.Values {
+		if !blob.Blob.Present || !blob.Blob.Valid || !blob.Signature.Present || !blob.Signature.Valid {
+			return errors.New(missingFieldsMessage)
+		}
+		if blob.Manifest.Present && !blob.Manifest.Valid {
+			return errors.New(missingFieldsMessage)
+		}
 	}
 	return nil
 }
@@ -130,6 +223,7 @@ func (e *envelope) validateShape() error {
 // Mirrors the fields rippled's `setTimer` consults to pick the next
 // site to fetch (ValidatorSite.cpp:213-228).
 type siteState struct {
+	occurrence  int
 	uri         string
 	interval    time.Duration
 	nextRefresh time.Time
@@ -174,16 +268,13 @@ func NewSitePoller(uris []string, agg *Aggregator, logger *slog.Logger) (*SitePo
 		logger = slog.Default().With("component", "validator-list-site-poller")
 	}
 	sites := make([]*siteState, 0, len(uris))
-	seen := make(map[string]struct{}, len(uris))
+	occurrences := make(map[string]int, len(uris))
 	for _, u := range uris {
 		if err := validateSiteURI(u); err != nil {
 			return nil, fmt.Errorf("invalid validator site uri %q: %w", u, err)
 		}
-		if _, ok := seen[u]; ok {
-			continue
-		}
-		seen[u] = struct{}{}
-		sites = append(sites, &siteState{uri: u, interval: defaultRefreshInterval})
+		sites = append(sites, &siteState{occurrence: occurrences[u], uri: u, interval: defaultRefreshInterval})
+		occurrences[u]++
 	}
 	p := &SitePoller{
 		aggregator: agg,
@@ -414,7 +505,7 @@ func (p *SitePoller) fetchSite(ctx context.Context, s *siteState) {
 	// where nextRefresh is set before makeRequest. Without this the
 	// validator_list_sites RPC reports a stale, already-past
 	// next_refresh_time for the duration of an in-flight fetch.
-	p.aggregator.SetNextRefresh(uri, time.Now().UTC().Add(s.interval))
+	p.aggregator.setNextRefreshOccurrence(uri, s.occurrence, time.Now().UTC().Add(s.interval))
 
 	body, err := p.fetch(ctx, uri)
 	if err != nil {
@@ -424,8 +515,7 @@ func (p *SitePoller) fetchSite(ctx context.Context, s *siteState) {
 
 	var env envelope
 	if jsonErr := json.Unmarshal(body, &env); jsonErr != nil {
-		msg := fmt.Sprintf("envelope JSON decode: %v", jsonErr)
-		p.recordFailure(s, false, msg, msg, "uri", uri)
+		p.recordFailure(s, false, "bad json", "validator list site JSON decode failed", "uri", uri, "error", jsonErr)
 		return
 	}
 
@@ -434,7 +524,7 @@ func (p *SitePoller) fetchSite(ctx context.Context, s *siteState) {
 	// and ValidatorSite.cpp:391-410. The literal "Missing fields in
 	// JSON response" message is the rippled-faithful error text.
 	if err := env.validateShape(); err != nil {
-		p.recordFailure(s, false, missingFieldsMessage, missingFieldsMessage, "uri", uri)
+		p.recordFailure(s, false, missingFieldsStatusMessage, missingFieldsMessage, "uri", uri)
 		return
 	}
 
@@ -447,23 +537,20 @@ func (p *SitePoller) fetchSite(ctx context.Context, s *siteState) {
 	var dispList []Disposition
 	var pubKey PublisherKey
 	switch {
-	case env.Version >= 2:
+	case env.Version.Value != 1:
 		dispList, pubKey, _ = p.aggregator.applyCollectionFromSite(env.toCollection(), uri)
 		disp = bestDisposition(dispList)
-	case env.Version == 1:
+	case env.Version.Value == 1:
 		disp, pubKey, _ = p.aggregator.applyListInternal(
-			[]byte(env.Manifest),
+			[]byte(env.Manifest.Value),
 			nil,
 			false,
-			[]byte(*env.Blob),
-			[]byte(*env.Signature),
-			env.Version,
+			[]byte(env.Blob.Value),
+			[]byte(env.Signature.Value),
+			env.Version.Value,
 			uri,
 			true,
 		)
-	default:
-		p.recordFailure(s, false, missingFieldsMessage, missingFieldsMessage, "uri", uri, "version", env.Version)
-		return
 	}
 
 	// Capture time AFTER apply completes — mirrors rippled
@@ -483,7 +570,7 @@ func (p *SitePoller) fetchSite(ctx context.Context, s *siteState) {
 	// (ValidatorSite.cpp:484-489).
 	chosenInterval := p.interval
 	refreshSec := 0
-	if refreshMin := int(env.RefreshMinutes); refreshMin > 0 {
+	if refreshMin := int(env.RefreshMinutes.Value); env.RefreshMinutes.Valid && refreshMin > 0 {
 		d := time.Duration(refreshMin) * time.Minute
 		if d < defaultMinRefresh {
 			d = defaultMinRefresh
@@ -494,20 +581,14 @@ func (p *SitePoller) fetchSite(ctx context.Context, s *siteState) {
 		refreshSec = int(d / time.Second)
 	}
 
-	// rippled emits an empty `last_refresh_message` whenever the parse
-	// succeeded — the disposition itself carries the outcome
-	// (ValidatorSite.cpp:430). Stash the disposition string in the
-	// message only for dispositions that indicate the apply rejected
-	// the list (anything not ShouldRelay-eligible).
+	// A successfully parsed response has an empty status message even
+	// when semantic validation rejects the list.
 	lastSuccess := time.Time{}
-	lastErr := ""
 	if disp.ShouldRelay() {
 		lastSuccess = applyTime
-	} else {
-		lastErr = "disposition=" + disp.String()
 	}
 	nextAt := applyTime.Add(chosenInterval)
-	p.aggregator.UpdateSiteState(uri, applyTime, lastSuccess, lastErr, disp, refreshSec, nextAt)
+	p.aggregator.updateSiteStateOccurrence(uri, s.occurrence, applyTime, lastSuccess, "", disp, refreshSec, nextAt)
 
 	p.mu.Lock()
 	s.interval = chosenInterval
@@ -537,7 +618,7 @@ func (p *SitePoller) recordFailure(s *siteState, retry bool, lastErr, logMsg str
 	}
 	s.nextRefresh = nextAt
 	p.mu.Unlock()
-	p.aggregator.UpdateSiteState(s.uri, now, time.Time{}, lastErr, Malformed, 0, nextAt)
+	p.aggregator.updateSiteStateOccurrence(s.uri, s.occurrence, now, time.Time{}, lastErr, Malformed, 0, nextAt)
 }
 
 // fetch retrieves the raw envelope body from the given URI. Scheme

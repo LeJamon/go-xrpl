@@ -37,16 +37,15 @@ func TestApplyListCommitRejectsManifestStateChangedDuringVerification(t *testing
 		if err != nil {
 			t.Fatal(err)
 		}
-		hookCalled := false
+		entered := make(chan struct{})
+		release := make(chan struct{})
 		agg.beforeListCommit = func() {
-			hookCalled = true
-			parsed, err := manifest.Deserialize(revocation)
-			if err != nil {
-				t.Fatal(err)
-			}
-			if got := publisherCache.ApplyManifest(parsed); got != manifest.Accepted {
-				t.Fatalf("revocation ApplyManifest: got %s", got)
-			}
+			close(entered)
+			<-release
+		}
+		parsedRevocation, err := manifest.Deserialize(revocation)
+		if err != nil {
+			t.Fatal(err)
 		}
 		blob, signature := stateTestList(t, signingPriv, 1, masterPriv, 0x90)
 		if err := verifyBlobSignature(signing, blob, signature); err != nil {
@@ -55,10 +54,18 @@ func TestApplyListCommitRejectsManifestStateChangedDuringVerification(t *testing
 		if _, d, err := parseBlob(blob); err != nil {
 			t.Fatalf("parse blob: %s %v", d, err)
 		}
-		d, _, _ := agg.ApplyList(wire, blob, signature, 1, "test://")
-		if !hookCalled {
-			t.Fatal("commit hook was not called")
+		result := make(chan Disposition, 1)
+		go func() {
+			d, _, _ := agg.ApplyList(wire, blob, signature, 1, "test://")
+			result <- d
+		}()
+		<-entered
+		got := publisherCache.ApplyManifest(parsedRevocation)
+		close(release)
+		if got != manifest.Accepted {
+			t.Fatalf("revocation ApplyManifest: got %s", got)
 		}
+		d := <-result
 		if d != Untrusted {
 			t.Fatalf("disposition: got %s want untrusted", d)
 		}
@@ -83,17 +90,29 @@ func TestApplyListCommitRejectsManifestStateChangedDuringVerification(t *testing
 		if err != nil {
 			t.Fatal(err)
 		}
+		entered := make(chan struct{})
+		release := make(chan struct{})
 		agg.beforeListCommit = func() {
-			parsed, err := manifest.Deserialize(rotated)
-			if err != nil {
-				t.Fatal(err)
-			}
-			if got := publisherCache.ApplyManifest(parsed); got != manifest.Accepted {
-				t.Fatalf("rotation ApplyManifest: got %s", got)
-			}
+			close(entered)
+			<-release
+		}
+		parsedRotation, err := manifest.Deserialize(rotated)
+		if err != nil {
+			t.Fatal(err)
 		}
 		blob, signature := stateTestList(t, signingPriv, 1, masterPriv, 0x91)
-		d, _, _ := agg.ApplyList(wire, blob, signature, 1, "test://")
+		result := make(chan Disposition, 1)
+		go func() {
+			d, _, _ := agg.ApplyList(wire, blob, signature, 1, "test://")
+			result <- d
+		}()
+		<-entered
+		got := publisherCache.ApplyManifest(parsedRotation)
+		close(release)
+		if got != manifest.Accepted {
+			t.Fatalf("rotation ApplyManifest: got %s", got)
+		}
+		d := <-result
 		if d != Untrusted {
 			t.Fatalf("disposition: got %s want untrusted", d)
 		}

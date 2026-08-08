@@ -810,6 +810,13 @@ func TestAggregator_ApplyList_Expired_PreservesValidatorsUntilTick(t *testing.T)
 	if len(snap[0].Validators) != 1 || snap[0].Validators[0] != v1 {
 		t.Fatalf("expired publisher list was not retained: %+v", snap[0].Validators)
 	}
+	if !agg.IsMasterListed(v1) {
+		t.Fatal("directly ingested expired validator must remain listed until Tick")
+	}
+	agg.Tick()
+	if agg.IsMasterListed(v1) {
+		t.Fatal("expired validator remained listed after Tick")
+	}
 }
 
 // TestAggregator_ApplyList_Expired_SeedsEmbeddedManifests pins the
@@ -1021,6 +1028,57 @@ func TestAggregator_PendingPromotionAppliesEmbeddedManifest(t *testing.T) {
 	agg.Tick()
 	if _, ok := validatorCache.GetSigningKey(valMaster); !ok {
 		t.Fatal("pending embedded manifest was not applied at promotion")
+	}
+}
+
+func TestAggregatorExpiredPendingPromotionDoesNotApplyEmbeddedManifest(t *testing.T) {
+	pub := newPublisher(t, 0x78, 0x79)
+	valMaster32, valMasterPriv := deterministicKey(0x7a)
+	valEph32, valEphPriv := deterministicKey(0x7b)
+	var valMaster, valEph [33]byte
+	copy(valMaster[:], append([]byte{0xED}, valMaster32...))
+	copy(valEph[:], append([]byte{0xED}, valEph32...))
+	valManifest := base64.StdEncoding.EncodeToString(buildManifest(t, valMaster, valMasterPriv, valEph, valEphPriv, 1))
+
+	now := fixedClock()()
+	mutableNow := now
+	validatorCache := manifest.NewCache()
+	agg, err := list.New(list.Config{
+		PublisherKeys:      []list.PublisherKey{list.PublisherKey(pub.masterPub)},
+		Threshold:          1,
+		ValidatorManifests: validatorCache,
+		PublisherManifests: manifest.NewCache(),
+		Clock:              func() time.Time { return mutableNow },
+	})
+	require.NoError(t, err)
+	type entry struct {
+		ValidationPublicKey string `json:"validation_public_key"`
+		Manifest            string `json:"manifest,omitempty"`
+	}
+	body := struct {
+		Sequence   uint32  `json:"sequence"`
+		Expiration uint32  `json:"expiration"`
+		Effective  uint32  `json:"effective"`
+		Validators []entry `json:"validators"`
+	}{
+		Sequence:   4,
+		Expiration: uint32(now.Add(90*time.Minute).Unix() - protocol.RippleEpochUnix),
+		Effective:  uint32(now.Add(time.Hour).Unix() - protocol.RippleEpochUnix),
+		Validators: []entry{{
+			ValidationPublicKey: hex.EncodeToString(valMaster[:]),
+			Manifest:            valManifest,
+		}},
+	}
+	jsonBytes, err := json.Marshal(body)
+	require.NoError(t, err)
+	blob := []byte(base64.StdEncoding.EncodeToString(jsonBytes))
+	signature := []byte(hex.EncodeToString(ed25519.Sign(pub.ephPriv, jsonBytes)))
+	require.Equal(t, list.Pending, mustApply(t, agg, pub.manifestB64, blob, signature))
+
+	mutableNow = now.Add(2 * time.Hour)
+	agg.Tick()
+	if _, ok := validatorCache.GetSigningKey(valMaster); ok {
+		t.Fatal("expired pending list applied its embedded validator manifest")
 	}
 }
 

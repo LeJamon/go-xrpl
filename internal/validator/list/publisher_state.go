@@ -138,7 +138,7 @@ func (a *Aggregator) applyListInternal(globalManifest, localManifest []byte, loc
 		// revocation — mirrors rippled's `revoked && result == accepted`
 		// gate at ValidatorList.cpp:1373.
 		if manifestAccepted {
-			a.handleRevocation(pubKey)
+			a.handleRevocation(pubKey, asyncDispatch)
 		}
 		return Untrusted, pubKey, 0
 	}
@@ -199,95 +199,96 @@ func (a *Aggregator) applyListInternal(globalManifest, localManifest []byte, loc
 		a.beforeListCommit()
 	}
 
-	// Manifest verification and blob parsing happen outside a.mu. Recheck
-	// the per-publisher manifest generation and signing key at the commit
-	// boundary so an older apply cannot resurrect a publisher revoked or
-	// rotated while its signature was being verified.
-	if !a.publisherCommitValidLocked(masterKey, signingKey, manifestSequence, manifestSequenceSet) {
+	commit := func() (Disposition, uint32) {
+		// Match applyLists' post-apply cleanup before evaluating the next
+		// disposition. Ready entries are deliberately not promoted here: a
+		// re-arrival at a ready pending sequence must take rippled's Accepted
+		// promotion path below, rather than becoming SameSequence.
+		a.normalizeRemainingLocked(current)
+
+		// Determine disposition by sequence + time ordering. Mirrors the
+		// rippled state machine at ValidatorList.cpp:1394-1437. The
+		// SameSequence branch is intentionally unguarded by status —
+		// rippled returns same_sequence for every repeat of the current
+		// sequence regardless of `pubCollection.status`.
+		if parsedBlob.Sequence < current.Sequence {
+			return Stale, 0
+		}
+		if parsedBlob.Sequence == current.Sequence {
+			return SameSequence, current.MaxSequence
+		}
+		expired := validUntil.Before(now) || validUntil.Equal(now)
+		if expired || !validFrom.After(now) {
+			// Expired ingest runs the SAME populate path as accepted in
+			// rippled: ValidatorList.cpp:1193-1295 — the local `accepted`
+			// boolean is true for both ListDisposition::accepted AND
+			// ListDisposition::expired, so the populate block writes
+			// publisher.list and publisher.manifests, and the call to
+			// updatePublisherList at line 1294 seeds embedded validator
+			// manifests into validatorManifests_ (line 1117-1133). The only
+			// runtime differences vs accepted are the final PublisherStatus
+			// (expired vs available) and that the trusted-set recompute
+			// skips non-available publishers (see recomputeAndEmitLocked:
+			// `s.Status != StatusAvailable` filter).
+			//
+			// removePublisherList(StatusExpired) at ValidatorList.cpp:1529-1542
+			// is invoked from updateTrusted (line 1999) when a previously-
+			// available list times out at ledger close — NOT from applyList.
+			if _, pending := current.Remaining[parsedBlob.Sequence]; pending {
+				a.promotePendingSequenceLocked(current, parsedBlob.Sequence, now)
+			} else {
+				a.applyAcceptedLocked(current, parsedBlob, signingKey, validFrom, validUntil, siteURI, now, version, globalManifest, localManifest, localManifestSet, blob, signature)
+				a.recordMaxSequenceLocked(current, parsedBlob.Sequence)
+			}
+			if expired {
+				current.Status = StatusExpired
+			}
+			a.normalizeRemainingLocked(current)
+			a.writeCacheLocked(current)
+			a.recomputeAndEmitLocked()
+			if expired {
+				return Expired, current.MaxSequence
+			}
+			return Accepted, current.MaxSequence
+		}
+		if validFrom.After(now) {
+			// Future-dated. Mirrors rippled ValidatorList.cpp:1414-1432
+			// pending-vs-known_sequence: a list is "pending" the first
+			// time it lands or whenever its sequence is the largest seen,
+			// and "known_sequence" only for re-arrivals at an already-
+			// queued sequence. The queued blob is retained so the next
+			// promoteRemainingLocked pass can rotate it into `current`.
+			d := a.applyPendingLocked(current, parsedBlob, signingKey, validFrom, validUntil, siteURI, version, globalManifest, localManifest, localManifestSet, blob, signature)
+			a.normalizeRemainingLocked(current)
+			if d == Pending {
+				a.writeCacheLocked(current)
+			}
+			return d, current.MaxSequence
+		}
+
+		a.applyAcceptedLocked(current, parsedBlob, signingKey, validFrom, validUntil, siteURI, now, version, globalManifest, localManifest, localManifestSet, blob, signature)
+		a.recordMaxSequenceLocked(current, parsedBlob.Sequence)
+		a.normalizeRemainingLocked(current)
+		a.writeCacheLocked(current)
+		a.recomputeAndEmitLocked()
+		return Accepted, current.MaxSequence
+	}
+
+	if a.publisherManifests == nil {
+		disp, sequence := commit()
+		return disp, pubKey, sequence
+	}
+	if !manifestSequenceSet {
 		return Untrusted, pubKey, 0
 	}
-
-	// Match applyLists' post-apply cleanup before evaluating the next
-	// disposition. Ready entries are deliberately not promoted here: a
-	// re-arrival at a ready pending sequence must take rippled's Accepted
-	// promotion path below, rather than becoming SameSequence.
-	a.normalizeRemainingLocked(current)
-
-	// Determine disposition by sequence + time ordering. Mirrors the
-	// rippled state machine at ValidatorList.cpp:1394-1437. The
-	// SameSequence branch is intentionally unguarded by status —
-	// rippled returns same_sequence for every repeat of the current
-	// sequence regardless of `pubCollection.status`.
-	if parsedBlob.Sequence < current.Sequence {
-		return Stale, pubKey, 0
+	var disposition Disposition
+	var sequence uint32
+	if !a.publisherManifests.WithCurrent(masterKey, signingKey, manifestSequence, func() {
+		disposition, sequence = commit()
+	}) {
+		return Untrusted, pubKey, 0
 	}
-	if parsedBlob.Sequence == current.Sequence {
-		return SameSequence, pubKey, current.MaxSequence
-	}
-	expired := validUntil.Before(now) || validUntil.Equal(now)
-	if expired || !validFrom.After(now) {
-		// Expired ingest runs the SAME populate path as accepted in
-		// rippled: ValidatorList.cpp:1193-1295 — the local `accepted`
-		// boolean is true for both ListDisposition::accepted AND
-		// ListDisposition::expired, so the populate block writes
-		// publisher.list and publisher.manifests, and the call to
-		// updatePublisherList at line 1294 seeds embedded validator
-		// manifests into validatorManifests_ (line 1117-1133). The only
-		// runtime differences vs accepted are the final PublisherStatus
-		// (expired vs available) and that the trusted-set recompute
-		// skips non-available publishers (see recomputeAndEmitLocked:
-		// `s.Status != StatusAvailable` filter).
-		//
-		// removePublisherList(StatusExpired) at ValidatorList.cpp:1529-1542
-		// is invoked from updateTrusted (line 1999) when a previously-
-		// available list times out at ledger close — NOT from applyList.
-		if _, pending := current.Remaining[parsedBlob.Sequence]; pending {
-			a.promotePendingSequenceLocked(current, parsedBlob.Sequence, now)
-		} else {
-			a.applyAcceptedLocked(current, parsedBlob, signingKey, validFrom, validUntil, siteURI, now, version, globalManifest, localManifest, localManifestSet, blob, signature)
-			a.recordMaxSequenceLocked(current, parsedBlob.Sequence)
-		}
-		if expired {
-			current.Status = StatusExpired
-		}
-		a.normalizeRemainingLocked(current)
-		a.recomputeAndEmitLocked()
-		if expired {
-			return Expired, pubKey, current.MaxSequence
-		}
-		return Accepted, pubKey, current.MaxSequence
-	}
-	if validFrom.After(now) {
-		// Future-dated. Mirrors rippled ValidatorList.cpp:1414-1432
-		// pending-vs-known_sequence: a list is "pending" the first
-		// time it lands or whenever its sequence is the largest seen,
-		// and "known_sequence" only for re-arrivals at an already-
-		// queued sequence. The queued blob is retained so the next
-		// promoteRemainingLocked pass can rotate it into `current`.
-		d := a.applyPendingLocked(current, parsedBlob, signingKey, validFrom, validUntil, siteURI, version, globalManifest, localManifest, localManifestSet, blob, signature)
-		a.normalizeRemainingLocked(current)
-		return d, pubKey, current.MaxSequence
-	}
-
-	a.applyAcceptedLocked(current, parsedBlob, signingKey, validFrom, validUntil, siteURI, now, version, globalManifest, localManifest, localManifestSet, blob, signature)
-	a.recordMaxSequenceLocked(current, parsedBlob.Sequence)
-	a.normalizeRemainingLocked(current)
-	a.recomputeAndEmitLocked()
-	return Accepted, pubKey, current.MaxSequence
-}
-
-// publisherCommitValidLocked verifies that the publisher cache state used for
-// blob verification is still current. Caller must hold a.mu.
-func (a *Aggregator) publisherCommitValidLocked(masterKey [33]byte, signingKey [33]byte, sequence uint32, sequenceSet bool) bool {
-	if a.publisherManifests == nil {
-		return true
-	}
-	currentSequence, ok := a.publisherManifests.GetSequence(masterKey)
-	if !ok || (sequenceSet && currentSequence != sequence) {
-		return false
-	}
-	currentSigningKey, ok := a.publisherManifests.GetSigningKey(masterKey)
-	return ok && currentSigningKey == signingKey && !a.publisherManifests.Revoked(masterKey)
+	return disposition, pubKey, sequence
 }
 
 // updateRawBytes refreshes the retained wire-form bytes, reusing the
@@ -357,7 +358,6 @@ func (a *Aggregator) applyAcceptedLocked(s *publisherState, blob *blobJSON, sign
 	s.Validators = keys
 	a.applyEmbeddedManifestsLocked(s, blob.Validators)
 
-	a.writeCacheLocked(s)
 }
 
 // applyEmbeddedManifestsLocked applies validator manifests from an effective
@@ -480,8 +480,8 @@ func (a *Aggregator) applyPendingLocked(s *publisherState, blob *blobJSON, signi
 	if version > s.Version {
 		s.Version = version
 	}
+	s.RawManifest = append(s.RawManifest[:0], rawManifest...)
 	a.recordMaxSequenceLocked(s, blob.Sequence)
-	a.writeCacheLocked(s)
 	return Pending
 }
 
@@ -563,16 +563,16 @@ func (a *Aggregator) promotePendingSequenceLocked(s *publisherState, sequence ui
 	s.updateRawBytes(chosen.RawManifest, chosen.RawBlob, chosen.RawSignature)
 	s.updateRawLocalManifest(chosen.RawLocalManifest, chosen.RawLocalManifestSet)
 	s.Validators = append([][33]byte(nil), chosen.Validators...)
-	a.applyEmbeddedPendingManifestsLocked(s, chosen.EmbeddedManifests)
 	s.Status = StatusAvailable
 	if !chosen.Expiration.After(now) {
 		s.Status = StatusExpired
 		s.Validators = nil
+	} else {
+		a.applyEmbeddedPendingManifestsLocked(s, chosen.EmbeddedManifests)
 	}
 	delete(s.Remaining, sequence)
 	a.recordMaxSequenceLocked(s, sequence)
 	a.normalizeRemainingLocked(s)
-	a.writeCacheLocked(s)
 }
 
 // promoteRemainingLocked rotates ready Remaining entries (those whose
@@ -590,10 +590,10 @@ func (a *Aggregator) promotePendingSequenceLocked(s *publisherState, sequence ui
 // to recompute (typically immediately after the call when invoked at
 // ingest, or via Tick → recomputeAndEmitLocked on the time-driven
 // path).
-func (a *Aggregator) promoteRemainingLocked(s *publisherState, now time.Time) bool {
+func (a *Aggregator) promoteRemainingLocked(s *publisherState, now time.Time) uint32 {
 	a.normalizeRemainingLocked(s)
 	if len(s.Remaining) == 0 {
-		return false
+		return 0
 	}
 	seqs := make([]uint32, 0, len(s.Remaining))
 	for seq := range s.Remaining {
@@ -612,7 +612,7 @@ func (a *Aggregator) promoteRemainingLocked(s *publisherState, now time.Time) bo
 		break
 	}
 	if pickIdx < 0 {
-		return false
+		return 0
 	}
 
 	chosen := s.Remaining[seqs[pickIdx]]
@@ -628,7 +628,7 @@ func (a *Aggregator) promoteRemainingLocked(s *publisherState, now time.Time) bo
 	}
 	a.normalizeRemainingLocked(s)
 	a.writeCacheLocked(s)
-	return true
+	return chosen.Sequence
 }
 
 // ApplyCollection processes a v2 collection (TMValidatorListCollection),

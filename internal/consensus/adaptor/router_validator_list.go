@@ -237,6 +237,11 @@ func validatorListCollectionSemanticHash(coll *message.ValidatorListCollection) 
 	out = appendUint32BE(out, coll.Version)
 	out = appendLengthPrefixed(out, coll.Manifest)
 	for _, b := range coll.Blobs {
+		if b.HasManifest() {
+			out = append(out, 1)
+		} else {
+			out = append(out, 0)
+		}
 		out = appendLengthPrefixed(out, b.Manifest)
 		out = appendLengthPrefixed(out, b.Blob)
 		out = appendLengthPrefixed(out, b.Signature)

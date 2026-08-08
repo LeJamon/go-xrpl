@@ -25,6 +25,22 @@ const cacheRefreshIntervalMinutes = 24 * 60
 // it yields the per-publisher cache file name.
 const cacheFilePrefix = "cache."
 
+type cacheEnvelope struct {
+	Manifest       string               `json:"manifest"`
+	PublicKey      string               `json:"public_key,omitempty"`
+	Blob           *string              `json:"blob,omitempty"`
+	Signature      *string              `json:"signature,omitempty"`
+	Version        uint32               `json:"version"`
+	BlobsV2        *[]cacheEnvelopeBlob `json:"blobs_v2,omitempty"`
+	RefreshMinutes float64              `json:"refresh_interval,omitempty"`
+}
+
+type cacheEnvelopeBlob struct {
+	Manifest  *string `json:"manifest,omitempty"`
+	Blob      string  `json:"blob"`
+	Signature string  `json:"signature"`
+}
+
 // pendingCacheWrite is a marshaled cache-file mutation queued under a.mu
 // by writeCacheLocked / removeCacheLocked and flushed to disk by
 // flushCacheWrites once the lock is released, so disk latency never stalls
@@ -58,17 +74,13 @@ type cacheFileOps struct {
 // Passing an empty string disables on-disk caching. Safe to call
 // before or after Start; takes a.mu briefly.
 func (a *Aggregator) SetCacheDir(dir string) error {
-	if dir == "" {
-		a.mu.Lock()
-		a.cacheDir = ""
-		a.cacheGeneration++
-		a.pendingCacheWrites = make(map[PublisherKey]pendingCacheWrite)
-		a.mu.Unlock()
-		return nil
+	if dir != "" {
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			return fmt.Errorf("create cache dir %q: %w", dir, err)
+		}
 	}
-	if err := os.MkdirAll(dir, 0o755); err != nil {
-		return fmt.Errorf("create cache dir %q: %w", dir, err)
-	}
+	a.cacheWriteMu.Lock()
+	defer a.cacheWriteMu.Unlock()
 	a.mu.Lock()
 	if a.cacheDir != dir {
 		a.cacheGeneration++
@@ -97,7 +109,7 @@ func (a *Aggregator) writeCacheLocked(s *publisherState) {
 	if s == nil || s.Sequence == 0 || len(s.RawManifest) == 0 {
 		return
 	}
-	env := envelope{
+	env := cacheEnvelope{
 		Manifest:       string(s.RawManifest),
 		PublicKey:      hex.EncodeToString(s.MasterKey[:]),
 		Version:        s.Version,
@@ -110,7 +122,7 @@ func (a *Aggregator) writeCacheLocked(s *publisherState) {
 	if needsV2 {
 		// v2 shape — current + remaining, ordered by sequence ascending.
 		env.Version = 2
-		blobs := []envelopeBlob{{
+		blobs := []cacheEnvelopeBlob{{
 			Manifest:  optionalEnvelopeManifest(s.RawLocalManifest, s.RawLocalManifestSet),
 			Blob:      string(s.RawBlob),
 			Signature: string(s.RawSignature),
@@ -122,7 +134,7 @@ func (a *Aggregator) writeCacheLocked(s *publisherState) {
 		slices.Sort(seqs)
 		for _, seq := range seqs {
 			rb := s.Remaining[seq]
-			blobs = append(blobs, envelopeBlob{
+			blobs = append(blobs, cacheEnvelopeBlob{
 				Manifest:  optionalEnvelopeManifest(rb.RawLocalManifest, rb.RawLocalManifestSet),
 				Blob:      string(rb.RawBlob),
 				Signature: string(rb.RawSignature),
@@ -190,6 +202,9 @@ func (a *Aggregator) flushCacheWrites() {
 
 	a.cacheWriteMu.Lock()
 	defer a.cacheWriteMu.Unlock()
+	a.mu.Lock()
+	generation := a.cacheGeneration
+	a.mu.Unlock()
 	ops := a.cacheOps
 	if ops.remove == nil {
 		ops.remove = os.Remove
@@ -202,6 +217,9 @@ func (a *Aggregator) flushCacheWrites() {
 	}
 	failed := make(map[PublisherKey]pendingCacheWrite)
 	for pk, w := range pending {
+		if w.generation != generation {
+			continue
+		}
 		if w.seq <= a.cacheWritten[pk] {
 			continue
 		}
@@ -342,7 +360,7 @@ func (a *Aggregator) LoadCache() int {
 		uri := "file://" + path
 		applied := false
 		switch {
-		case env.Version >= 2:
+		case env.Version.Value != 1:
 			disps, _, _ := a.ApplyCollection(env.toCollection(), uri)
 			for _, d := range disps {
 				if d.ShouldRelay() {
@@ -350,12 +368,12 @@ func (a *Aggregator) LoadCache() int {
 					break
 				}
 			}
-		case env.Version == 1:
+		case env.Version.Value == 1:
 			disp, _, _ := a.ApplyList(
-				[]byte(env.Manifest),
-				[]byte(*env.Blob),
-				[]byte(*env.Signature),
-				env.Version,
+				[]byte(env.Manifest.Value),
+				[]byte(env.Blob.Value),
+				[]byte(env.Signature.Value),
+				env.Version.Value,
 				uri,
 			)
 			if disp.ShouldRelay() {

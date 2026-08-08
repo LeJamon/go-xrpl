@@ -41,7 +41,7 @@ func TestSitePollerFetchBoundedHTTPAndFileBodies(t *testing.T) {
 	}
 
 	path := filepath.Join(t.TempDir(), "list.json")
-	if err := os.WriteFile(path, bytes.Repeat([]byte{'f'}, maxBodySize+1), 0o600); err != nil {
+	if err := os.WriteFile(path, bytes.Repeat([]byte{'f'}, maxFileBodySize+1), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	poller := newPollerForLifecycleTest(t, "file://"+path)
@@ -56,7 +56,7 @@ func TestLoadCacheRejectsOversizeAndTrailingJSON(t *testing.T) {
 		name string
 		body []byte
 	}{
-		{name: "oversize", body: bytes.Repeat([]byte{'x'}, maxBodySize+1)},
+		{name: "oversize", body: bytes.Repeat([]byte{'x'}, maxFileBodySize+1)},
 		{name: "trailing json", body: append([]byte(`{"version":1,"manifest":"x"}`), []byte(" trailing")...)},
 	} {
 		t.Run(tc.name, func(t *testing.T) {

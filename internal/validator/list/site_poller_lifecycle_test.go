@@ -2,6 +2,7 @@ package list
 
 import (
 	"context"
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -9,6 +10,39 @@ import (
 	"testing"
 	"time"
 )
+
+func TestEnvelopeValidateShapePreservesPresenceAndType(t *testing.T) {
+	tests := []struct {
+		name string
+		body string
+		ok   bool
+	}{
+		{"v1 present empty", `{"manifest":"","blob":"","signature":"","version":1}`, true},
+		{"v1 missing blob", `{"manifest":"","signature":"","version":1}`, false},
+		{"v2 present empty", `{"manifest":"","version":2,"blobs_v2":[{"blob":"","signature":""}]}`, true},
+		{"v2 missing signature", `{"manifest":"","version":2,"blobs_v2":[{"blob":""}]}`, false},
+		{"v2 null manifest override", `{"manifest":"","version":2,"blobs_v2":[{"manifest":null,"blob":"","signature":""}]}`, false},
+		{"unknown version uses v2 shape", `{"manifest":"","version":0,"blobs_v2":[{"blob":"","signature":""}]}`, true},
+		{"missing version", `{"manifest":"","blobs_v2":[{"blob":"","signature":""}]}`, false},
+		{"non-object root", `[]`, false},
+		{"version outside signed range", `{"manifest":"","version":2147483648,"blobs_v2":[{"blob":"","signature":""}]}`, false},
+		{"wrong manifest type", `{"manifest":7,"blob":"","signature":"","version":1}`, false},
+		{"duplicate manifest ends invalid", `{"manifest":"","manifest":null,"blob":"","signature":"","version":1}`, false},
+		{"irrelevant field types", `{"manifest":"","blob":"","signature":"","version":1,"public_key":7,"refresh_interval":"later"}`, true},
+		{"more than five blobs", `{"manifest":"","version":2,"blobs_v2":[{"blob":"","signature":""},{"blob":"","signature":""},{"blob":"","signature":""},{"blob":"","signature":""},{"blob":"","signature":""},{"blob":"","signature":""}]}`, false},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			var env envelope
+			if err := json.Unmarshal([]byte(test.body), &env); err != nil {
+				t.Fatalf("Unmarshal: %v", err)
+			}
+			if got := env.validateShape() == nil; got != test.ok {
+				t.Fatalf("validateShape success = %v, want %v", got, test.ok)
+			}
+		})
+	}
+}
 
 func mustURLForTest(t *testing.T, raw string) *url.URL {
 	t.Helper()
