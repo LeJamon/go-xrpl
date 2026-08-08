@@ -788,8 +788,12 @@ func TestWebSocketCommandParamsPreservesRawReal(t *testing.T) {
 	if got := string(rawParams["real"]); got != "0.0" {
 		t.Fatalf("handler real = %s, want preserved JSON real", got)
 	}
-	if got := string(rawParams["id"]); got != `{"SeCrEt":"<masked>"}` {
-		t.Fatalf("handler id = %s, want redacted id", got)
+	var id map[string]any
+	if err := json.Unmarshal(rawParams["id"], &id); err != nil {
+		t.Fatalf("decode handler id: %v", err)
+	}
+	if len(id) != 1 || id["SeCrEt"] != maskedValue {
+		t.Fatalf("handler id = %v, want redacted id", id)
 	}
 	for _, stripped := range []string{"command", "api_version"} {
 		if _, exists := rawParams[stripped]; exists {
