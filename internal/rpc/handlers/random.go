@@ -9,7 +9,6 @@ import (
 	"github.com/LeJamon/go-xrpl/internal/rpc/types"
 )
 
-// randomMethod handles the random RPC method
 type randomMethod struct{ baseHandler }
 
 func (m *randomMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (any, *types.RpcError) {

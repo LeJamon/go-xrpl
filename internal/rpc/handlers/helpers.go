@@ -66,8 +66,6 @@ func ledgerAmendmentRules(l types.LedgerReader) (*amendment.Rules, error) {
 	return amendment.EmptyRules(), nil
 }
 
-// requireLedgerService checks that the ledger service is available
-// on the request's service container. Returns an RpcError if not.
 func requireLedgerService(services *types.ServiceContainer) *types.RpcError {
 	if services == nil || services.Ledger == nil {
 		return rpcInternalInvariantError("rpc: ledger service unavailable")

@@ -6,7 +6,6 @@ import (
 	"github.com/LeJamon/go-xrpl/internal/rpc/types"
 )
 
-// ledgerCurrentMethod handles the ledger_current RPC method
 type ledgerCurrentMethod struct{ baseHandler }
 
 func (m *ledgerCurrentMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (any, *types.RpcError) {
