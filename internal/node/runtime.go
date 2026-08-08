@@ -998,7 +998,7 @@ func (r *nodeRuntime) bindStreams() error {
 		if err != nil {
 			return fmt.Errorf("marshal accepted ledger book changes: %w", err)
 		}
-		r.wsServer.SubscriptionManager().BroadcastToStream(types.SubBookChanges, data, nil)
+		r.wsServer.SubscriptionManager().BroadcastToStream(types.SubBookChanges, data)
 
 		for _, publication := range publications {
 			r.publisher.PublishTransaction(publication.event, publication.projection.affectedAccounts)

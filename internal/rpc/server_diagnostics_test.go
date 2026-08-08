@@ -35,6 +35,13 @@ func TestServerDiagnosticsWireShape(t *testing.T) {
 			Reads: 11, FetchHits: 7, Writes: 5, ReadBytes: 101, WriteBytes: 202,
 		}}
 	}
+	services.SubscriptionMetrics = func() types.SubscriptionMetrics {
+		return types.SubscriptionMetrics{
+			Connections: 2, Items: 7, RequestLimitRejections: 3,
+			ConnectionLimitRejections: 4, GlobalLimitRejections: 5,
+			DeliveriesQueued: 11, DeliveriesDropped: 6, DeliveryDisconnects: 1,
+		}
+	}
 
 	for _, test := range []struct {
 		name   string
@@ -66,6 +73,13 @@ func TestServerDiagnosticsWireShape(t *testing.T) {
 			nodeStore := counters["nodestore"].(map[string]any)
 			if nodeStore["node_reads_total"] != "11" || nodeStore["node_reads_hit"] != "7" || nodeStore["node_writes"] != "5" || nodeStore["node_read_bytes"] != "101" || nodeStore["node_written_bytes"] != "202" {
 				t.Fatalf("nodestore = %#v", nodeStore)
+			}
+			subscriptions := counters["subscriptions"].(map[string]any)
+			if subscriptions["connections"] != "2" || subscriptions["items"] != "7" ||
+				subscriptions["request_limit_rejections"] != "3" || subscriptions["connection_limit_rejections"] != "4" ||
+				subscriptions["global_limit_rejections"] != "5" || subscriptions["deliveries_queued"] != "11" ||
+				subscriptions["deliveries_dropped"] != "6" || subscriptions["delivery_disconnects"] != "1" {
+				t.Fatalf("subscriptions = %#v", subscriptions)
 			}
 			activities := body["current_activities"].(map[string]any)
 			if len(activities["jobs"].([]map[string]any)) != 0 {

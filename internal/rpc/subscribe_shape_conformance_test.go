@@ -72,10 +72,9 @@ func TestSubscribeConformanceArrayFieldShapes(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			sm := newTestSubscriptionManager()
 			conn := newTestConnection("shape-conn")
-			sm.AddConnection(conn)
-			defer sm.RemoveConnection(conn.ID)
+			_ = testRegistration(t, sm, conn)
 
-			err := sm.HandleSubscribe(conn, mustDecodeSubscriptionRequest(t, tc.params), true)
+			err := sm.HandleSubscribe(testRegistration(t, sm, conn), mustDecodeSubscriptionRequest(t, tc.params), true)
 			if !tc.wantErr {
 				assert.Nil(t, err)
 				return
@@ -107,10 +106,9 @@ func TestUnsubscribeConformanceArrayFieldShapes(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			sm := newTestSubscriptionManager()
 			conn := newTestConnection("shape-conn")
-			sm.AddConnection(conn)
-			defer sm.RemoveConnection(conn.ID)
+			_ = testRegistration(t, sm, conn)
 
-			err := sm.HandleUnsubscribe(conn, mustDecodeSubscriptionRequest(t, tc.params), true)
+			err := sm.HandleUnsubscribe(testRegistration(t, sm, conn), mustDecodeSubscriptionRequest(t, tc.params))
 			if !tc.wantErr {
 				assert.Nil(t, err)
 				return
@@ -136,9 +134,8 @@ func TestSubscribeConformanceCurrencyParsedTo160Bit(t *testing.T) {
 		t.Helper()
 		sm := newTestSubscriptionManager()
 		conn := newTestConnection("cur-conn")
-		sm.AddConnection(conn)
-		defer sm.RemoveConnection(conn.ID)
-		return sm.HandleSubscribe(conn, mustDecodeSubscriptionRequest(t, params), true)
+		_ = testRegistration(t, sm, conn)
+		return sm.HandleSubscribe(testRegistration(t, sm, conn), mustDecodeSubscriptionRequest(t, params), true)
 	}
 
 	t.Run("3-char and 40-hex form of one currency are the same market", func(t *testing.T) {

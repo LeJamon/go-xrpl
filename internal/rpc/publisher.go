@@ -70,7 +70,7 @@ func (p *Publisher) PublishLedgerClosed(event *LedgerCloseEvent) {
 		return
 	}
 
-	p.manager.BroadcastToStream(types.SubLedger, data, nil)
+	p.manager.BroadcastToStream(types.SubLedger, data)
 }
 
 // PublishValidation broadcasts a validation event to validation stream subscribers
@@ -119,7 +119,7 @@ func (p *Publisher) PublishServerStatus(event *ServerStatusEvent) bool {
 		return false
 	}
 
-	return p.manager.BroadcastToStream(types.SubServer, data, nil) != 0
+	return p.manager.BroadcastToStream(types.SubServer, data) != 0
 }
 
 // PublishConsensusPhase broadcasts a consensus phase change event
@@ -135,7 +135,7 @@ func (p *Publisher) PublishConsensusPhase(phase string) {
 		return
 	}
 
-	p.manager.BroadcastToStream(types.SubConsensus, data, nil)
+	p.manager.BroadcastToStream(types.SubConsensus, data)
 }
 
 // PublishManifest broadcasts a manifest event to manifest stream subscribers
@@ -150,7 +150,7 @@ func (p *Publisher) PublishManifest(event *ManifestEvent) {
 		return
 	}
 
-	p.manager.BroadcastToStream(types.SubManifests, data, nil)
+	p.manager.BroadcastToStream(types.SubManifests, data)
 }
 
 // PublishPeerStatus broadcasts a peer status event to peer_status stream subscribers
@@ -165,7 +165,7 @@ func (p *Publisher) PublishPeerStatus(event *PeerStatusEvent) {
 		return
 	}
 
-	p.manager.BroadcastToStream(types.SubPeerStatus, data, nil)
+	p.manager.BroadcastToStream(types.SubPeerStatus, data)
 }
 
 // GetSubscriberCount returns the number of active subscribers for a stream type

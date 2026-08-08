@@ -18,7 +18,7 @@ func (ws *WebSocketServer) handleMessage(wsConn *websocketConnection, message []
 	// loop and drop the connection's pending subscriptions.
 	defer func() {
 		if rec := recover(); rec != nil {
-			wsLog().Error("ws message panic", "conn", wsConn.ID, "err", rec, "stack", string(debug.Stack()))
+			wsLog().Error("ws message panic", "conn", wsConn.ID(), "err", rec, "stack", string(debug.Stack()))
 			ws.sendErrorResponse(wsConn, rpcInternalError(), nil, nil, buildWSRequestEcho(message))
 		}
 	}()
@@ -237,7 +237,7 @@ func (ws *WebSocketServer) sendCommandResponse(wsConn *websocketConnection, resu
 // same drop policy.
 func (ws *WebSocketServer) deliver(wsConn *websocketConnection, data []byte) {
 	if !wsConn.TrySend(data) {
-		wsLog().Debug("WebSocket send dropped (slow consumer)", "connID", wsConn.ID)
+		wsLog().Debug("WebSocket send dropped (slow consumer)", "connID", wsConn.ID())
 	}
 }
 
