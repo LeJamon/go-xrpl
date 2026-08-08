@@ -1,7 +1,5 @@
 // Package delegate_test contains behaviour tests for delegated transactions and
-// the PermissionDelegationV1_1 amendment. Ported from rippled's Delegate_test.cpp;
-// the granular-permission base behaviour is additionally covered by the
-// app/Delegate conformance fixtures (rippled 2.6.2, which predates the amendment).
+// the PermissionDelegationV1_1 amendment.
 //
 // PermissionDelegationV1_1 replaces the removed PermissionDelegation +
 // fixDelegateV1_1 amendments, folding the delegatability restrictions in
@@ -27,9 +25,7 @@ func grantPermissions(env *jtx.TestEnv, owner, delegate *jtx.Account, perms ...s
 	ds := delegatetx.NewDelegateSet(owner.Address)
 	ds.Authorize = delegate.Address
 	for _, p := range perms {
-		ds.Permissions = append(ds.Permissions, delegatetx.Permission{
-			Permission: delegatetx.PermissionData{PermissionValue: p},
-		})
+		ds.Permissions = append(ds.Permissions, delegatetx.NewPermission(p))
 	}
 	return env.SubmitSignedWith(ds, owner)
 }
@@ -59,10 +55,15 @@ func TestDelegate_FeatureDisabled(t *testing.T) {
 			}
 			gw := jtx.NewAccount("gw")
 			alice := jtx.NewAccount("alice")
-			env.Fund(gw, alice)
+			bob := jtx.NewAccount("bob")
+			env.Fund(gw, alice, bob)
 			env.Close()
 
 			require.Equal(t, want, grantPermissions(env, gw, alice, "Payment").Code)
+			if enabled {
+				env.Close()
+			}
+			require.Equal(t, want, payDelegated(env, gw, alice, bob, tx.NewXRPAmount(1_000_000)).Code)
 		})
 	}
 }
@@ -184,6 +185,7 @@ func TestDelegate_PaymentGranularMintBurn(t *testing.T) {
 	require.Equal(t, "tesSUCCESS", grantPermissions(env, gw, bob, "PaymentBurn").Code)
 	env.Close()
 	require.Equal(t, "terNO_DELEGATE_PERMISSION", payDelegated(env, gw, bob, alice, usd50).Code)
+	require.Zero(t, env.BalanceIOU(alice, "USD", gw))
 	env.Close()
 
 	// PaymentMint granted: gw mints USD to alice on behalf via bob.
@@ -191,6 +193,7 @@ func TestDelegate_PaymentGranularMintBurn(t *testing.T) {
 	env.Close()
 	require.Equal(t, "tesSUCCESS", payDelegated(env, gw, bob, alice, usd50).Code)
 	env.Close()
+	require.Equal(t, float64(50), env.BalanceIOU(alice, "USD", gw))
 
 	// XRP is never a mint or burn.
 	require.Equal(t, "terNO_DELEGATE_PERMISSION",
@@ -219,6 +222,8 @@ func TestDelegate_PaymentBurn(t *testing.T) {
 	env.Close()
 	require.Equal(t, "tesSUCCESS",
 		payDelegated(env, alice, bob, gw, tx.NewIssuedAmountFromFloat64(30, "USD", gw.Address)).Code)
+	env.Close()
+	require.Equal(t, float64(70), env.BalanceIOU(alice, "USD", gw))
 }
 
 // TestDelegate_PaymentCrossCurrency covers the restriction that a delegate
@@ -270,6 +275,9 @@ func TestDelegate_PaymentMPT(t *testing.T) {
 	mint := paymenttx.NewPayment(gw.Address, alice.Address, m.MPTAmount(50))
 	mint.GetCommon().Delegate = bob.Address
 	require.Equal(t, "tesSUCCESS", env.SubmitSignedWith(mint, bob).Code)
+	env.Close()
+	m.RequireMPTokenAmount(alice, 50)
+	require.Equal(t, uint64(50), m.IssuanceOutstandingAmount())
 }
 
 // TestDelegate_LendingNotDelegatable covers the 3.2.0 change making the
