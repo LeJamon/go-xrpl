@@ -156,3 +156,40 @@ func TestSignTransactionJSONPreservesExplicitEmptyFields(t *testing.T) {
 		})
 	}
 }
+
+func TestSignTransactionJSONValidatesTargetBeforeTransactionPresence(t *testing.T) {
+	params := json.RawMessage(`{
+		"seed_hex":"00000000000000000000000000000000",
+		"key_type":"ed25519",
+		"signature_target":"NotASignatureField"
+	}`)
+	_, rpcErr := signTransactionJSON(
+		&types.RpcContext{Context: context.Background(), ApiVersion: types.ApiVersion2},
+		nil,
+		signCredentials{},
+		true,
+		params,
+		"NotASignatureField",
+	)
+	if rpcErr == nil || rpcErr.Code != types.RpcINVALID_PARAMS || rpcErr.Message != "NotASignatureField" {
+		t.Fatalf("unexpected error: %#v", rpcErr)
+	}
+}
+
+func TestSignTransactionJSONRejectsNonObjectTransaction(t *testing.T) {
+	params := json.RawMessage(`{
+		"seed_hex":"00000000000000000000000000000000",
+		"key_type":"ed25519"
+	}`)
+	_, rpcErr := signTransactionJSON(
+		&types.RpcContext{Context: context.Background(), ApiVersion: types.ApiVersion2},
+		json.RawMessage(`[]`),
+		signCredentials{},
+		true,
+		params,
+		"",
+	)
+	if rpcErr == nil || rpcErr.Code != types.RpcINVALID_PARAMS || rpcErr.Message != "Invalid field 'tx_json', not object." {
+		t.Fatalf("unexpected error: %#v", rpcErr)
+	}
+}

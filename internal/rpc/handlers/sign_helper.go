@@ -422,6 +422,13 @@ func signTransactionJSON(rpcCtx *types.RpcContext, txJSON json.RawMessage, creds
 	if rpcErr != nil {
 		return nil, rpcErr
 	}
+	signatureTargetPresent := jsonFieldPresent(rawParams, "signature_target")
+	if signatureTargetPresent && signatureTarget != counterpartySignatureField {
+		return nil, types.RpcErrorInvalidParams(signatureTarget)
+	}
+	if len(txJSON) == 0 {
+		return nil, types.RpcErrorMissingField("tx_json")
+	}
 
 	// Check if ledger service is available (needed for auto-filling fields)
 	// only after credentials have entered the shared signing preprocessing.
@@ -436,28 +443,24 @@ func signTransactionJSON(rpcCtx *types.RpcContext, txJSON json.RawMessage, creds
 	}
 
 	// Parse the transaction JSON
-	var txMap map[string]any
+	var txValue any
 	decoder := json.NewDecoder(bytes.NewReader(txJSON))
 	decoder.UseNumber()
-	if err := decoder.Decode(&txMap); err != nil {
+	if err := decoder.Decode(&txValue); err != nil {
 		return nil, types.RpcErrorInvalidParams(fmt.Sprintf("Invalid tx_json: %v", err))
 	}
 	var trailing any
 	if err := decoder.Decode(&trailing); err != io.EOF {
 		return nil, types.RpcErrorInvalidParams("Invalid tx_json: expected object")
 	}
-	if txMap == nil {
+	txMap, ok := txValue.(map[string]any)
+	if !ok {
 		return nil, types.RpcErrorExpectedField("tx_json", "object")
 	}
 	// signature_target directs the signature into a nested inner object instead
 	// of the top level. Only CounterpartySignature is a valid target; any other
 	// field name is rejected with the field name as the message, matching
 	// rippled TransactionSign.cpp.
-	signatureTargetPresent := jsonFieldPresent(rawParams, "signature_target")
-	if signatureTargetPresent && signatureTarget != counterpartySignatureField {
-		return nil, types.RpcErrorInvalidParams(signatureTarget)
-	}
-
 	// srcAddress is the account whose Sequence/Fee are autofilled and whose
 	// existence is checked. Without a target it is the signing key's account,
 	// which must match a supplied Account (rippled checkTxJsonFields →

@@ -1320,6 +1320,50 @@ func TestSubmitMethodEmptyCredentialIsPresent(t *testing.T) {
 	)
 }
 
+func TestSubmitMethodMissingTxJSONPreservesCredentialPrecedence(t *testing.T) {
+	mock := newMockLedgerServiceSubmit()
+	services := newSubmitTestServices(mock)
+	services.Capabilities.SigningEnabled = true
+	ctx := &types.RpcContext{
+		Context:    context.Background(),
+		Role:       types.RoleUser,
+		ApiVersion: types.ApiVersion1,
+		Services:   services,
+	}
+
+	tests := []struct {
+		name    string
+		secret  string
+		code    int
+		message string
+	}{
+		{
+			name:    "valid credential",
+			secret:  "masterpassphrase",
+			code:    types.RpcINVALID_PARAMS,
+			message: "Missing field 'tx_json'.",
+		},
+		{
+			name:    "invalid credential",
+			secret:  "",
+			code:    types.RpcBAD_SEED,
+			message: "Invalid field 'secret'.",
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			params, err := json.Marshal(map[string]any{"secret": test.secret})
+			require.NoError(t, err)
+			_, rpcErr := (&handlers.SubmitMethod{}).Handle(ctx, params)
+			require.NotNil(t, rpcErr)
+			assert.Equal(t, test.code, rpcErr.Code)
+			assert.Equal(t, test.message, rpcErr.Message)
+		})
+	}
+	assert.Zero(t, mock.submitCalls)
+}
+
 // TestSubmitMethodApiV2Response tests API v2 specific response formatting.
 // API v2 should include "hash" at the root level of the response.
 func TestSubmitMethodApiV2Response(t *testing.T) {
