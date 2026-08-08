@@ -50,6 +50,17 @@ func (a *ledgerAdapter) closedLedger(seq uint32) *ledger.Ledger {
 	return a.closedLedgers[seq]
 }
 
+func (a *ledgerAdapter) completeLedgerRange(max uint32) string {
+	min := max
+	for min > 0 && a.closedLedger(min-1) != nil {
+		min--
+	}
+	if min == max {
+		return strconv.FormatUint(uint64(max), 10)
+	}
+	return fmt.Sprintf("%d-%d", min, max)
+}
+
 // resolveLedger maps a ledgerIndex specifier to a ledger. In standalone
 // test mode the most recent closed ledger plays the role of the validated
 // one.
@@ -153,7 +164,7 @@ func (a *ledgerAdapter) GetServerInfo() types.LedgerServerInfo {
 	if closed != nil {
 		info.ClosedLedgerSeq = closed.Sequence()
 		info.ClosedLedgerHash = closed.Hash()
-		info.CompleteLedgers = strconv.FormatUint(uint64(closed.Sequence()), 10)
+		info.CompleteLedgers = a.completeLedgerRange(closed.Sequence())
 	}
 	if a.haveValidated() {
 		info.HaveValidated = true
