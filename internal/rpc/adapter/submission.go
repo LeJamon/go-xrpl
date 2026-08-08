@@ -82,8 +82,6 @@ func (a *LedgerServiceAdapter) submitTransaction(txJSON []byte, txBlobHex string
 		}
 	}
 
-	// If no signed blob was supplied, encode the parsed JSON transaction for
-	// open-ledger processing and relay.
 	if rawBlob == nil {
 		if txMap, fErr := transaction.Flatten(); fErr == nil {
 			if hexStr, eErr := binarycodec.Encode(txMap); eErr == nil {
