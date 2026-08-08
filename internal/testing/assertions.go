@@ -361,15 +361,46 @@ func RequireOwnerDirectoryContains(
 	want bool,
 ) {
 	t.Helper()
-	found := false
-	err := state.DirForEach(env.Ledger(), keylet.OwnerDir(owner.ID), func(item [32]byte) error {
-		if item == target {
-			found = true
-		}
-		return nil
-	})
+	found, err := OwnerDirectoryContains(env, owner, target)
 	require.NoError(t, err)
 	require.Equal(t, want, found, "owner directory membership mismatch for %s", owner.Name)
+}
+
+// OwnerDirectoryContains follows the directory's linked pages and rejects corrupt chains.
+func OwnerDirectoryContains(env *TestEnv, owner *Account, target [32]byte) (bool, error) {
+	visited := make(map[uint64]struct{})
+	found := false
+	for page := uint64(0); ; {
+		if _, exists := visited[page]; exists {
+			return false, fmt.Errorf("owner directory cycle at page %d", page)
+		}
+		visited[page] = struct{}{}
+
+		data, err := env.Ledger().Read(keylet.OwnerDirPage(owner.ID, page))
+		if err != nil {
+			return false, fmt.Errorf("read owner directory page %d: %w", page, err)
+		}
+		if data == nil {
+			if page == 0 {
+				return false, nil
+			}
+			return false, fmt.Errorf("owner directory continuation page %d is missing", page)
+		}
+
+		node, err := state.ParseDirectoryNode(data)
+		if err != nil {
+			return false, fmt.Errorf("parse owner directory page %d: %w", page, err)
+		}
+		for _, item := range node.Indexes {
+			if item == target {
+				found = true
+			}
+		}
+		if node.IndexNext == 0 {
+			return found, nil
+		}
+		page = node.IndexNext
+	}
 }
 
 // RequireTicketCount asserts that an account has the expected number of tickets.

@@ -6,7 +6,6 @@ import (
 	"github.com/LeJamon/go-xrpl/amendment"
 	"github.com/LeJamon/go-xrpl/internal/ledger/state"
 	"github.com/LeJamon/go-xrpl/internal/tx"
-	"github.com/LeJamon/go-xrpl/internal/tx/credential"
 	"github.com/LeJamon/go-xrpl/internal/tx/mptutil"
 	"github.com/LeJamon/go-xrpl/internal/tx/ter"
 	"github.com/LeJamon/go-xrpl/keylet"
@@ -195,79 +194,6 @@ func (v *VaultDeposit) Preclaim(view tx.LedgerView, config tx.EngineConfig) ter.
 	return ter.TesSUCCESS
 }
 
-func vaultDepositDomainCredentialIDs(view tx.LedgerView, domainIDHex string, account [20]byte) ([]string, ter.Result) {
-	domainBytes, err := hex.DecodeString(domainIDHex)
-	if err != nil || len(domainBytes) != 32 {
-		return nil, ter.TefINTERNAL
-	}
-	var domainID [32]byte
-	copy(domainID[:], domainBytes)
-	raw, err := view.Read(keylet.PermissionedDomainByID(domainID))
-	if err != nil {
-		return nil, ter.TefINTERNAL
-	}
-	if raw == nil {
-		return nil, ter.TecOBJECT_NOT_FOUND
-	}
-	domain, err := state.ParsePermissionedDomain(raw)
-	if err != nil {
-		return nil, ter.TefINTERNAL
-	}
-	ids := make([]string, 0, len(domain.AcceptedCredentials))
-	for _, accepted := range domain.AcceptedCredentials {
-		key := keylet.Credential(account, accepted.Issuer, accepted.CredentialType)
-		exists, err := view.Exists(key)
-		if err != nil {
-			return nil, ter.TefINTERNAL
-		}
-		if exists {
-			ids = append(ids, hex.EncodeToString(key.Key[:]))
-		}
-	}
-	return ids, ter.TesSUCCESS
-}
-
-func vaultDepositVerifyDomain(ctx *tx.ApplyContext, domainIDHex string, account [20]byte) ter.Result {
-	ids, result := vaultDepositDomainCredentialIDs(ctx.View, domainIDHex, account)
-	if result != ter.TesSUCCESS {
-		return result
-	}
-	foundExpired, result := credential.RemoveExpiredCredentials(ctx, ids)
-	if result != ter.TesSUCCESS {
-		return result
-	}
-	if foundExpired && account == ctx.AccountID {
-		accountRoot, err := tx.ReadAccountRoot(ctx.View, account)
-		if err != nil || accountRoot == nil {
-			return ter.TefINTERNAL
-		}
-		*ctx.Account = *accountRoot
-	}
-	for _, idHex := range ids {
-		idBytes, _ := hex.DecodeString(idHex)
-		var id [32]byte
-		copy(id[:], idBytes)
-		raw, err := ctx.View.Read(keylet.CredentialByID(id))
-		if err != nil {
-			return ter.TefINTERNAL
-		}
-		if raw == nil {
-			continue
-		}
-		cred, err := credential.ParseCredentialEntry(raw)
-		if err != nil {
-			return ter.TefINTERNAL
-		}
-		if cred.IsAccepted() {
-			return ter.TesSUCCESS
-		}
-	}
-	if foundExpired {
-		return ter.TecEXPIRED
-	}
-	return ter.TecNO_PERMISSION
-}
-
 func vaultDepositEnforceShareAuthorization(ctx *tx.ApplyContext, issuance *state.MPTokenIssuanceData, shareMPTID [24]byte) ter.Result {
 	if issuance.DomainID == nil {
 		return ter.TecNO_AUTH
@@ -276,7 +202,7 @@ func vaultDepositEnforceShareAuthorization(ctx *tx.ApplyContext, issuance *state
 	if err != nil {
 		return ter.TefINTERNAL
 	}
-	result := vaultDepositVerifyDomain(ctx, *issuance.DomainID, ctx.AccountID)
+	result := mptutil.VerifyValidDomain(ctx, *issuance.DomainID, ctx.AccountID)
 	if result != ter.TesSUCCESS {
 		if result == ter.TecEXPIRED {
 			return result
@@ -423,28 +349,4 @@ func (v *VaultDeposit) Apply(ctx *tx.ApplyContext) ter.Result {
 	}
 
 	return ter.TesSUCCESS
-}
-
-func (v *VaultDeposit) ApplyOnTec(ctx *tx.ApplyContext) {
-	vaultID, ok := v.vaultIDBytes()
-	if !ok {
-		return
-	}
-	vd, err := readVault(ctx.View, keylet.VaultByID(vaultID))
-	if err != nil || vd == nil || vd.Flags&VaultFlagPrivate == 0 || ctx.AccountID == vd.Owner {
-		return
-	}
-	raw, err := ctx.View.Read(keylet.MPTIssuance(vd.ShareMPTID))
-	if err != nil || raw == nil {
-		return
-	}
-	issuance, err := state.ParseMPTokenIssuance(raw)
-	if err != nil || issuance.DomainID == nil {
-		return
-	}
-	ids, result := vaultDepositDomainCredentialIDs(ctx.View, *issuance.DomainID, ctx.AccountID)
-	if result != ter.TesSUCCESS {
-		return
-	}
-	credential.RemoveExpiredCredentialsOnTec(ctx, ids)
 }

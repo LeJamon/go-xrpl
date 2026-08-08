@@ -134,15 +134,6 @@ func (e *EscrowFinish) CalculateBaseFee(view tx.LedgerView, config tx.EngineConf
 	return fee
 }
 
-// ApplyOnTec implements TecApplier. When tecEXPIRED is returned, this re-runs
-// credential expiration deletion against the engine's view so the side-effects
-// (credential deletion, owner count adjustment) persist even though the tx
-// sandbox is rolled back for tec results.
-// Reference: rippled Transactor.cpp - tecEXPIRED re-applies removeExpiredCredentials
-func (e *EscrowFinish) ApplyOnTec(ctx *tx.ApplyContext) {
-	credential.RemoveExpiredCredentialsOnTec(ctx, e.CredentialIDs)
-}
-
 // Apply applies an EscrowFinish transaction
 // Reference: rippled Escrow.cpp EscrowFinish::preclaim() + doApply()
 // Preclaim runs EscrowFinish's ledger-aware checks in rippled's preclaim order:
@@ -152,8 +143,8 @@ func (e *EscrowFinish) ApplyOnTec(ctx *tx.ApplyContext) {
 // auth/freeze state. Extracting these from Apply makes them visible to the
 // preclaim-only paths (TxQ admission, simulate). The FinishAfter/CancelAfter time
 // checks, the crypto-condition/fulfillment check, and the tecEXPIRED
-// expired-credential deletion (ApplyOnTec) stay in Apply, mirroring rippled which
-// keeps them in EscrowFinish::doApply. ValidCredentials never returns tecEXPIRED
+// expired-credential deletion stay in Apply, mirroring rippled which keeps them
+// in EscrowFinish::doApply. ValidCredentials never returns tecEXPIRED
 // (expiry is handled separately in Apply), so no tecEXPIRED escapes preclaim here.
 // Reference: rippled EscrowFinish.cpp preclaim().
 func (e *EscrowFinish) Preclaim(view tx.LedgerView, config tx.EngineConfig) ter.Result {

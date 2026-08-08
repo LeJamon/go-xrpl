@@ -79,15 +79,6 @@ func (a *AccountDelete) CalculateBaseFee(view tx.LedgerView, config tx.EngineCon
 
 func (a *AccountDelete) Flatten() (map[string]any, error) { return tx.ReflectFlatten(a) }
 
-// ApplyOnTec implements TecApplier. When tecEXPIRED is returned, this re-runs
-// credential expiration deletion against the engine's view so the side-effects
-// (credential deletion, owner count adjustment) persist even though the tx
-// sandbox is rolled back for tec results.
-// Reference: rippled Transactor.cpp - tecEXPIRED re-applies removeExpiredCredentials
-func (a *AccountDelete) ApplyOnTec(ctx *tx.ApplyContext) {
-	credential.RemoveExpiredCredentialsOnTec(ctx, a.CredentialIDs)
-}
-
 func (a *AccountDelete) Apply(ctx *tx.ApplyContext) ter.Result {
 	ctx.Log.Trace("account delete apply",
 		"account", a.Account,

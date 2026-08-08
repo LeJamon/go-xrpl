@@ -2,24 +2,44 @@ package credential
 
 import (
 	"encoding/hex"
-	"fmt"
+	"strconv"
 
 	jtx "github.com/LeJamon/go-xrpl/internal/testing"
+	"github.com/LeJamon/go-xrpl/internal/tx"
 	"github.com/LeJamon/go-xrpl/internal/tx/credential"
 )
 
+const defaultCredentialFee uint64 = 10
+
+type credentialBuilderOptions struct {
+	credentialType string
+	fee            uint64
+	flags          uint32
+}
+
+func newCredentialBuilderOptions(credentialType string) credentialBuilderOptions {
+	return credentialBuilderOptions{
+		credentialType: credentialType,
+		fee:            defaultCredentialFee,
+	}
+}
+
+func (o *credentialBuilderOptions) apply(common *tx.Common) {
+	common.Fee = strconv.FormatUint(o.fee, 10)
+	if o.flags != 0 {
+		common.SetFlags(o.flags)
+	}
+}
+
 // CredentialCreateBuilder provides a fluent interface for building CredentialCreate transactions.
 type CredentialCreateBuilder struct {
-	account        *jtx.Account
-	subject        *jtx.Account
-	credentialType string
-	uri            string
-	uriIsHex       bool
-	uriSet         bool
-	expiration     *uint32
-	fee            uint64
-	sequence       *uint32
-	flags          uint32
+	credentialBuilderOptions
+	account    *jtx.Account
+	subject    *jtx.Account
+	uri        string
+	uriIsHex   bool
+	uriSet     bool
+	expiration *uint32
 }
 
 func CredentialCreateText(account, subject *jtx.Account, credentialType string) *CredentialCreateBuilder {
@@ -32,10 +52,9 @@ func CredentialCreateBytes(account, subject *jtx.Account, credentialType []byte)
 
 func CredentialCreateHex(account, subject *jtx.Account, credentialTypeHex string) *CredentialCreateBuilder {
 	return &CredentialCreateBuilder{
-		account:        account,
-		subject:        subject,
-		credentialType: credentialTypeHex,
-		fee:            10, // Default fee: 10 drops
+		credentialBuilderOptions: newCredentialBuilderOptions(credentialTypeHex),
+		account:                  account,
+		subject:                  subject,
 	}
 }
 
@@ -68,12 +87,6 @@ func (b *CredentialCreateBuilder) Fee(f uint64) *CredentialCreateBuilder {
 	return b
 }
 
-// Sequence sets the sequence number explicitly.
-func (b *CredentialCreateBuilder) Sequence(seq uint32) *CredentialCreateBuilder {
-	b.sequence = &seq
-	return b
-}
-
 // Flags sets transaction flags explicitly.
 func (b *CredentialCreateBuilder) Flags(flags uint32) *CredentialCreateBuilder {
 	b.flags = flags
@@ -83,7 +96,7 @@ func (b *CredentialCreateBuilder) Flags(flags uint32) *CredentialCreateBuilder {
 // Build constructs the CredentialCreate transaction.
 func (b *CredentialCreateBuilder) Build() *credential.CredentialCreate {
 	c := credential.NewCredentialCreate(b.account.Address, b.subject.Address, b.credentialType)
-	c.Fee = fmt.Sprintf("%d", b.fee)
+	b.credentialBuilderOptions.apply(c.GetCommon())
 
 	if b.uriSet {
 		c.URI = b.uri
@@ -95,24 +108,14 @@ func (b *CredentialCreateBuilder) Build() *credential.CredentialCreate {
 	if b.expiration != nil {
 		c.Expiration = b.expiration
 	}
-	if b.sequence != nil {
-		c.SetSequence(*b.sequence)
-	}
-	if b.flags != 0 {
-		c.SetFlags(b.flags)
-	}
-
 	return c
 }
 
 // CredentialAcceptBuilder provides a fluent interface for building CredentialAccept transactions.
 type CredentialAcceptBuilder struct {
-	account        *jtx.Account
-	issuer         *jtx.Account
-	credentialType string
-	fee            uint64
-	sequence       *uint32
-	flags          uint32
+	credentialBuilderOptions
+	account *jtx.Account
+	issuer  *jtx.Account
 }
 
 func CredentialAcceptText(account, issuer *jtx.Account, credentialType string) *CredentialAcceptBuilder {
@@ -125,22 +128,15 @@ func CredentialAcceptBytes(account, issuer *jtx.Account, credentialType []byte) 
 
 func CredentialAcceptHex(account, issuer *jtx.Account, credentialTypeHex string) *CredentialAcceptBuilder {
 	return &CredentialAcceptBuilder{
-		account:        account,
-		issuer:         issuer,
-		credentialType: credentialTypeHex,
-		fee:            10, // Default fee: 10 drops
+		credentialBuilderOptions: newCredentialBuilderOptions(credentialTypeHex),
+		account:                  account,
+		issuer:                   issuer,
 	}
 }
 
 // Fee sets the transaction fee in drops.
 func (b *CredentialAcceptBuilder) Fee(f uint64) *CredentialAcceptBuilder {
 	b.fee = f
-	return b
-}
-
-// Sequence sets the sequence number explicitly.
-func (b *CredentialAcceptBuilder) Sequence(seq uint32) *CredentialAcceptBuilder {
-	b.sequence = &seq
 	return b
 }
 
@@ -153,27 +149,17 @@ func (b *CredentialAcceptBuilder) Flags(flags uint32) *CredentialAcceptBuilder {
 // Build constructs the CredentialAccept transaction.
 func (b *CredentialAcceptBuilder) Build() *credential.CredentialAccept {
 	c := credential.NewCredentialAccept(b.account.Address, b.issuer.Address, b.credentialType)
-	c.Fee = fmt.Sprintf("%d", b.fee)
-
-	if b.sequence != nil {
-		c.SetSequence(*b.sequence)
-	}
-	if b.flags != 0 {
-		c.SetFlags(b.flags)
-	}
+	b.credentialBuilderOptions.apply(c.GetCommon())
 
 	return c
 }
 
 // CredentialDeleteBuilder provides a fluent interface for building CredentialDelete transactions.
 type CredentialDeleteBuilder struct {
-	account        *jtx.Account
-	subject        *jtx.Account
-	issuer         *jtx.Account
-	credentialType string
-	fee            uint64
-	sequence       *uint32
-	flags          uint32
+	credentialBuilderOptions
+	account *jtx.Account
+	subject *jtx.Account
+	issuer  *jtx.Account
 }
 
 func CredentialDeleteText(account, subject, issuer *jtx.Account, credentialType string) *CredentialDeleteBuilder {
@@ -186,24 +172,11 @@ func CredentialDeleteBytes(account, subject, issuer *jtx.Account, credentialType
 
 func CredentialDeleteHex(account, subject, issuer *jtx.Account, credentialTypeHex string) *CredentialDeleteBuilder {
 	return &CredentialDeleteBuilder{
-		account:        account,
-		subject:        subject,
-		issuer:         issuer,
-		credentialType: credentialTypeHex,
-		fee:            10, // Default fee: 10 drops
+		credentialBuilderOptions: newCredentialBuilderOptions(credentialTypeHex),
+		account:                  account,
+		subject:                  subject,
+		issuer:                   issuer,
 	}
-}
-
-// Fee sets the transaction fee in drops.
-func (b *CredentialDeleteBuilder) Fee(f uint64) *CredentialDeleteBuilder {
-	b.fee = f
-	return b
-}
-
-// Sequence sets the sequence number explicitly.
-func (b *CredentialDeleteBuilder) Sequence(seq uint32) *CredentialDeleteBuilder {
-	b.sequence = &seq
-	return b
 }
 
 // Flags sets transaction flags explicitly.
@@ -215,7 +188,7 @@ func (b *CredentialDeleteBuilder) Flags(flags uint32) *CredentialDeleteBuilder {
 // Build constructs the CredentialDelete transaction.
 func (b *CredentialDeleteBuilder) Build() *credential.CredentialDelete {
 	c := credential.NewCredentialDelete(b.account.Address, b.credentialType)
-	c.Fee = fmt.Sprintf("%d", b.fee)
+	b.credentialBuilderOptions.apply(c.GetCommon())
 
 	if b.subject != nil {
 		c.Subject = b.subject.Address
@@ -223,12 +196,5 @@ func (b *CredentialDeleteBuilder) Build() *credential.CredentialDelete {
 	if b.issuer != nil {
 		c.Issuer = b.issuer.Address
 	}
-	if b.sequence != nil {
-		c.SetSequence(*b.sequence)
-	}
-	if b.flags != 0 {
-		c.SetFlags(b.flags)
-	}
-
 	return c
 }

@@ -12,6 +12,7 @@ import (
 	"github.com/LeJamon/go-xrpl/internal/rpc/handlers"
 	"github.com/LeJamon/go-xrpl/internal/rpc/types"
 	jtx "github.com/LeJamon/go-xrpl/internal/testing"
+	txcore "github.com/LeJamon/go-xrpl/internal/tx"
 )
 
 // Env pairs a live testing.TestEnv with the production RPC handler
@@ -21,6 +22,7 @@ type Env struct {
 	*jtx.TestEnv
 
 	t        testing.TB
+	adapter  *ledgerAdapter
 	services *types.ServiceContainer
 	registry *types.MethodRegistry
 }
@@ -42,9 +44,44 @@ func Wrap(t testing.TB, env *jtx.TestEnv) *Env {
 	return &Env{
 		TestEnv:  env,
 		t:        t,
+		adapter:  adapter,
 		services: services,
 		registry: registry,
 	}
+}
+
+func (e *Env) Close() {
+	e.TestEnv.Close()
+	e.adapter.recordClosedLedger()
+}
+
+// Submit applies a transaction and records its canonical blob for transaction-history RPCs.
+func (e *Env) Submit(transaction any) jtx.TxResult {
+	e.t.Helper()
+	result := e.TestEnv.Submit(transaction)
+	if result.Metadata == nil || (!result.Success && !result.IsClaimed()) {
+		return result
+	}
+	txn, ok := transaction.(txcore.Transaction)
+	if !ok {
+		e.t.Fatalf("rpcenv: transaction does not implement tx.Transaction")
+	}
+	txBlob, err := txcore.SerializeTransaction(txn)
+	if err != nil {
+		e.t.Fatalf("rpcenv: serialize transaction: %v", err)
+	}
+	hash, err := txcore.ComputeTransactionHash(txn)
+	if err != nil {
+		e.t.Fatalf("rpcenv: hash transaction: %v", err)
+	}
+	txWithMeta, err := txcore.CreateTxWithMetaBlob(txBlob, result.Metadata)
+	if err != nil {
+		e.t.Fatalf("rpcenv: serialize transaction metadata: %v", err)
+	}
+	if err := e.Ledger().AddTransactionWithMeta(hash, txWithMeta); err != nil {
+		e.t.Fatalf("rpcenv: record transaction: %v", err)
+	}
+	return result
 }
 
 // Services exposes the container so callers can attach additional facets
