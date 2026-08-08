@@ -1,5 +1,7 @@
 package resource
 
+import "sort"
+
 // BlacklistEntry is one endpoint's resource reputation, mirroring an entry in
 // rippled's Resource::Logic::getJson output (Logic.h:208-254).
 type BlacklistEntry struct {
@@ -30,16 +32,17 @@ func (m *Manager) Snapshot(threshold int64) []BlacklistEntry {
 			continue
 		}
 		local := e.localBalance.valueAt(now)
-		if local+e.remoteBalance < threshold {
+		if saturatingAdd(local, e.remoteBalance) < threshold {
 			continue
 		}
 		out = append(out, BlacklistEntry{
-			Address: e.k.addr,
+			Address: e.fingerprint(),
 			Local:   local,
 			Remote:  e.remoteBalance,
 			Type:    blacklistType(e.k.kind),
 		})
 	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Address < out[j].Address })
 	return out
 }
 

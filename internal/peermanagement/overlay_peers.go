@@ -616,8 +616,6 @@ func (o *Overlay) addPeerWithUsage(peer *Peer, usage *resource.Consumer) error {
 	if o.resourceManager != nil && resourceUsage == nil {
 		addr := postHandshakeEndpoint(peer, peer.Endpoint()).String()
 		switch {
-		case o.isClusterPeer(peer):
-			resourceUsage = o.resourceManager.NewUnlimitedEndpoint(addr)
 		case peer.Inbound():
 			resourceUsage = o.resourceManager.NewInboundEndpoint(addr)
 		default:

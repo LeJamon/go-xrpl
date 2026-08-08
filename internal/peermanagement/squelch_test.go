@@ -255,7 +255,7 @@ func TestPeerAddSquelch_RejectsInvalidDuration(t *testing.T) {
 
 // TestOverlay_InboundSquelch_MalformedPubkey_Charges pins R5.8: a
 // TMSquelch whose ValidatorPubKey isn't a 33-byte compressed secp256k1
-// point must charge resource.FeeInvalidData against the sending peer.
+// point must charge resource.FeeInvalidData() against the sending peer.
 // Matches rippled PeerImp.cpp:2701-2712.
 func TestOverlay_InboundSquelch_MalformedPubkey_Charges(t *testing.T) {
 	id, err := NewIdentity()

@@ -163,17 +163,16 @@ func (e *Event) inboundMessage() *InboundMessage {
 		Payload:       e.Payload,
 		ManifestFrame: e.ManifestFrame,
 		reservation:   e.reservation,
+		charge:        e.charge,
 	}
 	e.reservation = nil
+	e.charge = nil
 	e.ManifestFrame = nil
 	return msg
 }
 
 func (e *Event) manifestInboundMessage() *InboundMessage {
-	msg := e.inboundMessage()
-	msg.charge = e.charge
-	e.charge = nil
-	return msg
+	return e.inboundMessage()
 }
 
 func (e *Event) selectCharge(fee resource.Charge, chargeContext string) bool {

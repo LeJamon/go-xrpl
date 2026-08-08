@@ -16,15 +16,15 @@ func TestAdmissionBoundsConcurrentWorkPerEndpoint(t *testing.T) {
 	}
 	defer consumer.Release()
 
-	first, result := consumer.Admit(FeeHeavyBurdenRPC)
+	first, result := consumer.Admit(FeeHeavyBurdenRPC())
 	if first == nil || result != Ok {
 		t.Fatalf("first admission = (%v, %v), want admitted", first, result)
 	}
-	second, result := consumer.Admit(FeeHeavyBurdenRPC)
+	second, result := consumer.Admit(FeeHeavyBurdenRPC())
 	if second == nil || result != Ok {
 		t.Fatalf("second admission = (%v, %v), want admitted", second, result)
 	}
-	if third, result := consumer.Admit(FeeHeavyBurdenRPC); third != nil || result != Drop {
+	if third, result := consumer.Admit(FeeHeavyBurdenRPC()); third != nil || result != Drop {
 		t.Fatalf("third admission = (%v, %v), want bounded rejection", third, result)
 	}
 
@@ -33,13 +33,13 @@ func TestAdmissionBoundsConcurrentWorkPerEndpoint(t *testing.T) {
 		t.Fatal("independent consumer acquisition failed")
 	}
 	defer other.Release()
-	independent, result := other.Admit(FeeHeavyBurdenRPC)
+	independent, result := other.Admit(FeeHeavyBurdenRPC())
 	if independent == nil || result != Ok {
 		t.Fatalf("independent admission = (%v, %v), want admitted", independent, result)
 	}
 
-	first.Finish(FeeHeavyBurdenRPC, "first")
-	second.Finish(FeeReferenceRPC, "second")
+	first.Finish(FeeHeavyBurdenRPC(), "first")
+	second.Finish(FeeReferenceRPC(), "second")
 	independent.Cancel()
 	if stats := m.Stats(); stats.Inflight != 0 || stats.InflightRejections != 1 {
 		t.Fatalf("stats after completion = %+v", stats)
@@ -52,7 +52,7 @@ func TestAdmissionFinishReconcilesExactlyOnce(t *testing.T) {
 	if consumer == nil {
 		t.Fatal("consumer acquisition failed")
 	}
-	admission, result := consumer.Admit(FeeHeavyBurdenRPC)
+	admission, result := consumer.Admit(FeeHeavyBurdenRPC())
 	if admission == nil || result != Ok {
 		t.Fatalf("admission = (%v, %v), want admitted", admission, result)
 	}
@@ -65,7 +65,7 @@ func TestAdmissionFinishReconcilesExactlyOnce(t *testing.T) {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			results <- admission.Finish(FeeMediumBurdenRPC, "test")
+			results <- admission.Finish(FeeMediumBurdenRPC(), "test")
 		}()
 	}
 	wg.Wait()
@@ -88,7 +88,7 @@ func TestAdmissionFinishReconcilesExactlyOnce(t *testing.T) {
 		t.Fatal("reacquisition failed")
 	}
 	defer reacquired.Release()
-	if got, want := reacquired.Balance(), int64(FeeMediumBurdenRPC.Cost()/DecayWindowSeconds); got != want {
+	if got, want := reacquired.Balance(), int64(FeeMediumBurdenRPC().Cost()/DecayWindowSeconds); got != want {
 		t.Fatalf("balance after repeated finish = %d, want %d", got, want)
 	}
 }
@@ -107,7 +107,7 @@ func TestConsumerConcurrentReleaseLeavesSharedHandleActive(t *testing.T) {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			first.Charge(FeeReferenceRPC, "race")
+			first.Charge(FeeReferenceRPC(), "race")
 			_ = first.Balance()
 			_ = first.Disposition()
 			_ = first.Disconnect()
@@ -116,7 +116,7 @@ func TestConsumerConcurrentReleaseLeavesSharedHandleActive(t *testing.T) {
 	}
 	wg.Wait()
 
-	if result := second.Charge(FeeReferenceRPC, "shared"); result != Ok {
+	if result := second.Charge(FeeReferenceRPC(), "shared"); result != Ok {
 		t.Fatalf("shared handle charge = %v, want Ok", result)
 	}
 	if second.Balance() <= 0 {
@@ -143,7 +143,7 @@ func TestAdmissionConcurrentSameKeyIsBoundedAndDistinctKeysRemainIndependent(t *
 		go func() {
 			defer wg.Done()
 			<-start
-			admission, _ := consumer.Admit(FeeHeavyBurdenRPC)
+			admission, _ := consumer.Admit(FeeHeavyBurdenRPC())
 			results <- admission
 		}()
 	}
@@ -167,7 +167,7 @@ func TestAdmissionConcurrentSameKeyIsBoundedAndDistinctKeysRemainIndependent(t *
 		if other == nil {
 			t.Fatalf("consumer %s acquisition failed", address)
 		}
-		admission, result := other.Admit(FeeHeavyBurdenRPC)
+		admission, result := other.Admit(FeeHeavyBurdenRPC())
 		if admission == nil || result != Ok {
 			t.Fatalf("distinct-key admission %s = (%v, %v), want admitted", address, admission, result)
 		}

@@ -51,7 +51,7 @@ func TestUnifiedResourceManagerGossipsWebSocketLoadIntoHTTPAdmission(t *testing.
 	peer := managerA.NewInboundEndpoint(clientIP + ":51235")
 	require.NotNil(t, peer)
 	before := peer.Balance()
-	peer.Charge(resource.FeeInvalidData, "peer work")
+	peer.Charge(resource.FeeInvalidData(), "peer work")
 	assert.Greater(t, peer.Balance(), before, "peer and RPC work must share one endpoint balance")
 	peer.Release()
 

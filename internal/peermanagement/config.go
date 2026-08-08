@@ -534,14 +534,20 @@ func (c *Config) Validate() error {
 	}
 	limits := c.ResourceLimits
 	if limits.MaxEntries < 0 || limits.MaxImportedEntries < 0 ||
-		limits.MaxImportOrigins < 0 || limits.MaxImportItems < 0 {
+		limits.MaxImports < 0 || limits.MaxGossipItems < 0 ||
+		limits.MaxInflightPerConsumer < 0 || limits.MaxCleanupPerTick < 0 ||
+		limits.MaxEndpointLength < 0 || limits.MaxOriginLength < 0 {
 		return errors.New("resource limits cannot be negative")
 	}
-	if limits.MaxEntries > 0 && limits.MaxImportedEntries > limits.MaxEntries {
+	effectiveEntries := limits.MaxEntries
+	if effectiveEntries == 0 {
+		effectiveEntries = resource.DefaultLimits().MaxEntries
+	}
+	if limits.MaxImportedEntries > effectiveEntries {
 		return errors.New("MaxImportedEntries cannot exceed MaxEntries")
 	}
-	if limits.MaxImportItems > resource.DefaultMaxImportItems {
-		return fmt.Errorf("MaxImportItems cannot exceed %d", resource.DefaultMaxImportItems)
+	if limits.MaxGossipItems > resource.DefaultLimits().MaxGossipItems {
+		return fmt.Errorf("MaxGossipItems cannot exceed %d", resource.DefaultLimits().MaxGossipItems)
 	}
 	if c.ServerDomain != "" && !protocol.IsProperlyFormedTomlDomain(c.ServerDomain) {
 		return errors.New("invalid ServerDomain: the domain name does not appear to meet the requirements")

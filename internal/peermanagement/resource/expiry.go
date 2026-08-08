@@ -79,6 +79,7 @@ func (m *Manager) expireLocked(now time.Time, limit int) {
 			e.expiry = nil
 			if e.localRefs == 0 && e.importRefs == 0 {
 				delete(m.entries, e.k)
+				m.retainedEntries--
 				m.stats.evictions++
 			}
 		case expireImport:

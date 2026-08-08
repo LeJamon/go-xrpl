@@ -56,8 +56,8 @@ func TestConfigResourceLimits(t *testing.T) {
 	WithResourceLimits(resource.Limits{
 		MaxEntries:         10,
 		MaxImportedEntries: 11,
-		MaxImportOrigins:   1,
-		MaxImportItems:     1,
+		MaxImports:         1,
+		MaxGossipItems:     1,
 	})(&cfg)
 	if err := cfg.Validate(); err == nil {
 		t.Fatal("Validate accepted more imported entries than total entries")

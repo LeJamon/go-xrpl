@@ -45,27 +45,27 @@ func (s *Server) dispatchBatchElement(el json.RawMessage, baseCtx context.Contex
 		}
 		return batchForbiddenElement(elem)
 	}
-	defer ctx.ResourceAdmission.Finish(resource.FeeExceptionRPC, method)
+	defer ctx.ResourceAdmission.Finish(resource.FeeExceptionRPC(), method)
 
 	// rippled validates the method field and emits a distinct message per
 	// malformed shape, echoing the element's own fields at the top level
 	// (ServerHandler.cpp:764-808).
 	mv, present := elem["method"]
 	if !present || mv == nil {
-		chargeLoad(s.resourceManager, ctx, method, resource.FeeMalformedRPC, rpcLog())
+		chargeLoad(s.resourceManager, ctx, method, resource.FeeMalformedRPC(), rpcLog())
 		return batchMalformedElement(elem, "Null method")
 	}
 	method, ok := mv.(string)
 	if !ok {
-		chargeLoad(s.resourceManager, ctx, method, resource.FeeMalformedRPC, rpcLog())
+		chargeLoad(s.resourceManager, ctx, method, resource.FeeMalformedRPC(), rpcLog())
 		return batchMalformedElement(elem, "method is not string")
 	}
 	if method == "" {
-		chargeLoad(s.resourceManager, ctx, method, resource.FeeMalformedRPC, rpcLog())
+		chargeLoad(s.resourceManager, ctx, method, resource.FeeMalformedRPC(), rpcLog())
 		return batchMalformedElement(elem, "method is empty")
 	}
 	if _, valid := ripplerpcVersion(elem); !valid {
-		chargeLoad(s.resourceManager, ctx, method, resource.FeeMalformedRPC, rpcLog())
+		chargeLoad(s.resourceManager, ctx, method, resource.FeeMalformedRPC(), rpcLog())
 		return batchMalformedElement(elem, "ripplerpc is not a string")
 	}
 

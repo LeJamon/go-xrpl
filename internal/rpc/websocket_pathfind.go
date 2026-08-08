@@ -34,7 +34,7 @@ func (ws *WebSocketServer) executePathFind(wsConn *websocketConnection, ctx *typ
 
 	switch *subcommand {
 	case "create":
-		ctx.LoadCost = uint32(resource.FeeHeavyBurdenRPC.Cost())
+		ctx.LoadCost = uint32(resource.FeeHeavyBurdenRPC().Cost())
 		return ws.executePathFindCreate(wsConn, ctx, cmd)
 	case "close":
 		return ws.executePathFindClose(wsConn, ctx, cmd)

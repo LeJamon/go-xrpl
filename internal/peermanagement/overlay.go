@@ -291,6 +291,13 @@ type Overlay struct {
 	runComplete <-chan struct{}
 }
 
+func (o *Overlay) ResourceManager() *resource.Manager {
+	if o == nil {
+		return nil
+	}
+	return o.resourceManager
+}
+
 type overlayLifecycleState uint8
 
 const (
@@ -784,7 +791,7 @@ func New(opts ...Option) (*Overlay, error) {
 		clock:                    cfg.Clock,
 		inboundSem:               make(chan struct{}, inboundCap),
 		outboundSem:              make(chan struct{}, outboundCap),
-		resourceManager:          resource.NewManager(nil, nil, resource.WithLimits(cfg.ResourceLimits)),
+		resourceManager:          resource.NewManagerWithLimits(cfg.Clock, nil, cfg.ResourceLimits),
 		outboundBudget:           newOutboundBudget(cfg.OutboundRetainedBytes, cfg.MaxPeers),
 	}
 	if identity != nil {

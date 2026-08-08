@@ -306,7 +306,7 @@ func TestWSEarlyMalformedResponsesChargeWithoutLoadWarning(t *testing.T) {
 			ws := NewWebSocketServer(WebSocketServerOptions{Timeout: 2 * time.Second})
 			require.NoError(t, ws.resourceManager.ImportConsumers("warning-peer", resource.Gossip{Items: []resource.GossipItem{{
 				Address: "127.0.0.1",
-				Balance: resource.WarningThreshold - uint32(resource.FeeMalformedRPC.Cost()/resource.DecayWindowSeconds),
+				Balance: resource.WarningThreshold - uint32(resource.FeeMalformedRPC().Cost()/resource.DecayWindowSeconds),
 			}}}))
 
 			pc := &PortContext{AdminNets: []net.IPNet{mustParseCIDR("10.0.0.0/8")}}
@@ -333,7 +333,7 @@ func TestWSEarlyMalformedResponsesChargeWithoutLoadWarning(t *testing.T) {
 			if got := string(body); got != test.want {
 				t.Fatalf("response = %s, want %s", got, test.want)
 			}
-			if got, want := resourceLocalBalance(t, ws.resourceManager, "127.0.0.1"), uint32((resource.FeeMalformedRPC.Cost()+resource.FeeWarning.Cost())/resource.DecayWindowSeconds); got != want {
+			if got, want := resourceLocalBalance(t, ws.resourceManager, "127.0.0.1"), uint32((resource.FeeMalformedRPC().Cost()+resource.FeeWarning().Cost())/resource.DecayWindowSeconds); got != want {
 				t.Fatalf("local charge = %v, want %v", got, want)
 			}
 		})

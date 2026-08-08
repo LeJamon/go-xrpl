@@ -93,9 +93,12 @@ func TestOverlayOptionsFromConfig_ResourceLimits(t *testing.T) {
 		opt(&cfg)
 	}
 
-	assert.Equal(t, resource.Limits{
-		MaxEntries: 100, MaxImportedEntries: 75, MaxImportOrigins: 12, MaxImportItems: 64,
-	}, cfg.ResourceLimits)
+	want := resource.DefaultLimits()
+	want.MaxEntries = 100
+	want.MaxImportedEntries = 75
+	want.MaxImports = 12
+	want.MaxGossipItems = 64
+	assert.Equal(t, want, cfg.ResourceLimits)
 }
 
 func TestOverlayOptionsFromConfig_PartialResourceLimitsRetainDefaults(t *testing.T) {

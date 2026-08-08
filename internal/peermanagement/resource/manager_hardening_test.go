@@ -75,8 +75,8 @@ func TestExportConsumersTracksLocalActivity(t *testing.T) {
 	if err := m.ImportConsumers("origin", Gossip{Items: []GossipItem{{Address: address, Balance: 1500}}}); err != nil {
 		t.Fatal(err)
 	}
-	if got := len(m.ExportConsumers().Items); got != 0 {
-		t.Fatalf("import-pinned released export count = %d, want 0", got)
+	if got := len(m.ExportConsumers().Items); got != 1 {
+		t.Fatalf("import-pinned released export count = %d, want 1", got)
 	}
 
 	reacquired := m.NewInboundEndpoint("192.0.2.2:2000")
@@ -87,52 +87,53 @@ func TestExportConsumersTracksLocalActivity(t *testing.T) {
 }
 
 func TestDecayRetainsFractionalElapsedAndResetBoundary(t *testing.T) {
-	d := newDecayingSample(0, DecayWindowSeconds)
+	base := time.Unix(1_700_000_000, 0)
+	d := newDecayingSample(base, DecayWindowSeconds)
 	d.value = 3200
-	if got := d.valueAt(900 * time.Millisecond); got != 100 {
+	if got := d.valueAt(base.Add(900 * time.Millisecond)); got != 100 {
 		t.Fatalf("sub-second value = %d, want 100", got)
 	}
-	first := d.valueAt(1100 * time.Millisecond)
-	if d.when != time.Second {
-		t.Fatalf("anchor = %s, want 1s", d.when)
+	first := d.valueAt(base.Add(1100 * time.Millisecond))
+	if !d.when.Equal(base.Add(time.Second)) {
+		t.Fatalf("anchor = %s, want %s", d.when, base.Add(time.Second))
 	}
-	if got := d.valueAt(1900 * time.Millisecond); got != first {
+	if got := d.valueAt(base.Add(1900 * time.Millisecond)); got != first {
 		t.Fatalf("fractional elapsed was discarded: got %d want %d", got, first)
 	}
-	if got := d.valueAt(2100 * time.Millisecond); got >= first {
+	if got := d.valueAt(base.Add(2100 * time.Millisecond)); got >= first {
 		t.Fatalf("second elapsed tick did not decay: got %d previous %d", got, first)
 	}
 	anchor, value := d.when, d.value
-	d.decay(time.Second)
-	if d.when != anchor || d.value != value {
+	d.decay(base.Add(time.Second))
+	if !d.when.Equal(anchor) || d.value != value {
 		t.Fatalf("backward time changed sample: anchor=%s value=%d", d.when, d.value)
 	}
 
-	d = newDecayingSample(0, DecayWindowSeconds)
+	d = newDecayingSample(base, DecayWindowSeconds)
 	d.value = 3200
-	d.decay(time.Duration(4*DecayWindowSeconds+1) * time.Second)
+	d.decay(base.Add(time.Duration(4*DecayWindowSeconds+1) * time.Second))
 	if d.value != 0 {
 		t.Fatalf("sample beyond reset boundary = %d, want 0", d.value)
 	}
 }
 
 func TestManagerClockIsIndependentOfWallTime(t *testing.T) {
-	var monotonic time.Duration
-	m := NewManager(func() time.Duration { return monotonic }, testLogger())
+	monotonic := time.Unix(1_700_000_000, 0)
+	m := NewManager(func() time.Time { return monotonic }, testLogger())
 	c := m.NewInboundEndpoint("192.0.2.3")
 	c.Charge(NewCharge(DecayWindowSeconds*100, "seed"), "")
 	initial := c.Balance()
 	if got := c.Balance(); got != initial {
 		t.Fatalf("unchanged monotonic clock changed balance: got %d want %d", got, initial)
 	}
-	monotonic += time.Second
+	monotonic = monotonic.Add(time.Second)
 	if got := c.Balance(); got >= initial {
 		t.Fatalf("monotonic advance did not decay: got %d initial %d", got, initial)
 	}
 	c.Release()
 }
 
-func TestCanonicalEndpointIdentity(t *testing.T) {
+func TestCanonicalEndpointIdentityHardening(t *testing.T) {
 	m, _ := newTestManager()
 	pairs := [][2]string{
 		{"[2001:0DB8:0:0:0:0:0:1]:1000", "2001:db8::1"},
@@ -154,7 +155,7 @@ func TestCanonicalEndpointIdentity(t *testing.T) {
 	if got := m.Stats().Entries; got != len(pairs) {
 		t.Fatalf("canonical entry count = %d, want %d", got, len(pairs))
 	}
-	if c := m.NewInboundEndpoint("203.0.113.1:"); c != nil {
+	if c := m.NewInboundEndpoint("203.0.113.1::"); c != nil {
 		t.Fatal("malformed endpoint was accepted")
 	}
 	if c := m.NewOutboundEndpoint("2001:db8::1"); c != nil {
@@ -168,7 +169,7 @@ func TestCanonicalEndpointIdentity(t *testing.T) {
 func TestImportReplacementIsTransactional(t *testing.T) {
 	clock := newFakeClock()
 	m := NewManager(clock.Now, testLogger(), WithLimits(Limits{
-		MaxEntries: 2, MaxImportedEntries: 2, MaxImportOrigins: 1, MaxImportItems: 2,
+		MaxEntries: 2, MaxImportedEntries: 2, MaxImports: 1, MaxGossipItems: 2,
 	}))
 	if err := m.ImportConsumers("origin", Gossip{Items: []GossipItem{{Address: "192.0.2.1", Balance: 900}}}); err != nil {
 		t.Fatal(err)
@@ -201,7 +202,7 @@ func TestImportReplacementIsTransactional(t *testing.T) {
 
 func TestImportReplacementCanReuseReleasedEntryCapacity(t *testing.T) {
 	m := NewManager(nil, testLogger(), WithLimits(Limits{
-		MaxEntries: 1, MaxImportedEntries: 1, MaxImportOrigins: 1, MaxImportItems: 1,
+		MaxEntries: 1, MaxImportedEntries: 1, MaxImports: 1, MaxGossipItems: 1,
 	}))
 	if err := m.ImportConsumers("origin", Gossip{Items: []GossipItem{{Address: "192.0.2.10", Balance: 100}}}); err != nil {
 		t.Fatal(err)
@@ -216,7 +217,7 @@ func TestImportReplacementCanReuseReleasedEntryCapacity(t *testing.T) {
 
 func TestFailedCapacityPlanDoesNotPartiallyEvict(t *testing.T) {
 	m := NewManager(nil, testLogger(), WithLimits(Limits{
-		MaxEntries: 3, MaxImportedEntries: 3, MaxImportOrigins: 1, MaxImportItems: 3,
+		MaxEntries: 3, MaxImportedEntries: 3, MaxImports: 1, MaxGossipItems: 3,
 	}))
 	for _, address := range []string{"192.0.2.20", "192.0.2.21"} {
 		consumer := m.NewInboundEndpoint(address)
@@ -240,7 +241,7 @@ func TestFailedCapacityPlanDoesNotPartiallyEvict(t *testing.T) {
 func TestInactiveHighBalanceBecomesEvictableAfterDecay(t *testing.T) {
 	clock := newFakeClock()
 	m := NewManager(clock.Now, testLogger(), WithLimits(Limits{
-		MaxEntries: 1, MaxImportedEntries: 1, MaxImportOrigins: 1, MaxImportItems: 1,
+		MaxEntries: 1, MaxImportedEntries: 1, MaxImports: 1, MaxGossipItems: 1,
 	}))
 	consumer := m.NewInboundEndpoint("192.0.2.30")
 	consumer.Charge(NewCharge(WarningThreshold*DecayWindowSeconds, "high"), "")
@@ -255,30 +256,30 @@ func TestInactiveHighBalanceBecomesEvictableAfterDecay(t *testing.T) {
 
 func TestExportConsumersIsBoundedAndKeepsStrongest(t *testing.T) {
 	m := NewManager(nil, testLogger(), WithLimits(Limits{
-		MaxEntries: 4, MaxImportedEntries: 4, MaxImportOrigins: 1, MaxImportItems: 2,
+		MaxEntries: 4, MaxImportedEntries: 4, MaxImports: 1, MaxGossipItems: 2,
 	}))
 	for i, address := range []string{"192.0.2.40", "192.0.2.41", "192.0.2.42"} {
 		consumer := m.NewInboundEndpoint(address)
 		consumer.Charge(NewCharge((i+1)*MinimumGossipBalance*DecayWindowSeconds, "seed"), "")
 	}
 	items := m.ExportConsumers().Items
-	if len(items) != 2 || items[0].Address != "192.0.2.41" || items[1].Address != "192.0.2.42" {
+	if len(items) != 2 || items[0].Address != "192.0.2.42" || items[1].Address != "192.0.2.41" {
 		t.Fatalf("bounded export = %+v", items)
 	}
 
 	m.mu.Lock()
-	key, _ := canonicalKey(KindInbound, "192.0.2.42")
-	m.entries[key].localBalance.value = (int64(math.MaxUint32) + 1) * DecayWindowSeconds
+	address, _ := canonicalEndpoint(KindInbound, "192.0.2.42", DefaultLimits().MaxEndpointLength)
+	m.entries[key{kind: KindInbound, addr: address}].localBalance.value = (int64(math.MaxUint32) + 1) * DecayWindowSeconds
 	m.mu.Unlock()
 	items = m.ExportConsumers().Items
-	if items[1].Balance != math.MaxUint32 {
-		t.Fatalf("exported balance = %d, want uint32 cap", items[1].Balance)
+	if items[0].Balance != math.MaxUint32 {
+		t.Fatalf("exported balance = %d, want uint32 cap", items[0].Balance)
 	}
 }
 
 func TestRemoteBalanceAggregationDoesNotOverflow(t *testing.T) {
 	m := NewManager(nil, testLogger(), WithLimits(Limits{
-		MaxEntries: 1, MaxImportedEntries: 1, MaxImportOrigins: 3, MaxImportItems: 1,
+		MaxEntries: 1, MaxImportedEntries: 1, MaxImports: 3, MaxGossipItems: 1,
 	}))
 	for _, origin := range []string{"one", "two", "three"} {
 		if err := m.ImportConsumers(origin, Gossip{Items: []GossipItem{{Address: "192.0.2.50", Balance: math.MaxUint32}}}); err != nil {
@@ -322,7 +323,7 @@ func TestConsumerAliasAndConcurrentDisconnectAreExactlyOnce(t *testing.T) {
 
 func TestImportedEntryLimitHasDistinctError(t *testing.T) {
 	m := NewManager(nil, testLogger(), WithLimits(Limits{
-		MaxEntries: 2, MaxImportedEntries: 1, MaxImportOrigins: 2, MaxImportItems: 1,
+		MaxEntries: 2, MaxImportedEntries: 1, MaxImports: 2, MaxGossipItems: 1,
 	}))
 	if err := m.ImportConsumers("one", Gossip{Items: []GossipItem{{Address: "192.0.2.70", Balance: 1}}}); err != nil {
 		t.Fatal(err)
@@ -373,8 +374,8 @@ func TestImportValidationDeduplicationAndReplacement(t *testing.T) {
 		t.Fatalf("deduplicated import items = %d, want 1", got)
 	}
 	c := m.NewInboundEndpoint("[2001:db8::1]:9999")
-	if got := c.Balance(); got != 1500 {
-		t.Fatalf("deduplicated balance = %d, want max 1500", got)
+	if got := c.Balance(); got != 2900 {
+		t.Fatalf("deduplicated balance = %d, want sum 2900", got)
 	}
 	c.Release()
 
@@ -382,7 +383,7 @@ func TestImportValidationDeduplicationAndReplacement(t *testing.T) {
 		t.Fatal("malformed replacement accepted")
 	}
 	c = m.NewInboundEndpoint("2001:db8::1")
-	if got := c.Balance(); got != 1500 {
+	if got := c.Balance(); got != 2900 {
 		t.Fatalf("rejected replacement mutated prior balance: got %d", got)
 	}
 	c.Release()
@@ -390,7 +391,7 @@ func TestImportValidationDeduplicationAndReplacement(t *testing.T) {
 
 func TestManagerLimitsEvictOnlyLowInactiveEntries(t *testing.T) {
 	clock := newFakeClock()
-	limits := Limits{MaxEntries: 3, MaxImportedEntries: 2, MaxImportOrigins: 1, MaxImportItems: 2}
+	limits := Limits{MaxEntries: 3, MaxImportedEntries: 2, MaxImports: 1, MaxGossipItems: 2}
 	m := NewManager(clock.Now, testLogger(), WithLimits(limits))
 
 	low := m.NewInboundEndpoint("192.0.2.10")
@@ -425,7 +426,7 @@ func TestManagerLimitsEvictOnlyLowInactiveEntries(t *testing.T) {
 	}}); err != nil {
 		t.Fatal(err)
 	}
-	if err := m.ImportConsumers("two", Gossip{}); err == nil {
+	if err := m.ImportConsumers("two", Gossip{Items: []GossipItem{{Address: "198.51.100.9", Balance: 1}}}); err == nil {
 		t.Fatal("origin cap was not enforced")
 	}
 	if err := m.ImportConsumers("one", Gossip{Items: []GossipItem{
@@ -440,7 +441,7 @@ func TestManagerLimitsEvictOnlyLowInactiveEntries(t *testing.T) {
 func TestManagerRejectsWhenOnlyHighReputationRemains(t *testing.T) {
 	clock := newFakeClock()
 	m := NewManager(clock.Now, testLogger(), WithLimits(Limits{
-		MaxEntries: 1, MaxImportedEntries: 1, MaxImportOrigins: 1, MaxImportItems: 1,
+		MaxEntries: 1, MaxImportedEntries: 1, MaxImports: 1, MaxGossipItems: 1,
 	}))
 	c := m.NewInboundEndpoint("192.0.2.20")
 	c.Charge(NewCharge(WarningThreshold*DecayWindowSeconds, "high"), "")
@@ -448,7 +449,7 @@ func TestManagerRejectsWhenOnlyHighReputationRemains(t *testing.T) {
 	if got := m.NewInboundEndpoint("192.0.2.21"); got != nil {
 		t.Fatal("high-balance entry was evicted")
 	}
-	if got := m.Stats().EntryLimitDrops; got != 1 {
+	if got := m.Stats().EntryCapRejections; got != 1 {
 		t.Fatalf("entry limit drops = %d, want 1", got)
 	}
 }
@@ -481,7 +482,7 @@ func TestExpiryHeapRemainsBoundedUnderReplacementChurn(t *testing.T) {
 	for i := range 1000 {
 		if err := m.ImportConsumers("origin", Gossip{Items: []GossipItem{{
 			Address: "198.51.100.31",
-			Balance: int64(1000 + i),
+			Balance: uint32(1000 + i),
 		}}}); err != nil {
 			t.Fatal(err)
 		}

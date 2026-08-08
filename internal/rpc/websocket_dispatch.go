@@ -56,7 +56,7 @@ func (ws *WebSocketServer) handleMessage(wsConn *websocketConnection, message []
 		wsConn.closeWithPolicyViolation("threshold exceeded")
 		return
 	}
-	defer loadCtx.ResourceAdmission.Finish(resource.FeeExceptionRPC, "")
+	defer loadCtx.ResourceAdmission.Finish(resource.FeeExceptionRPC(), "")
 
 	apiVersion := types.DefaultApiVersion
 	if version, present := apiVersionFromObject(message); present {
@@ -65,7 +65,7 @@ func (ws *WebSocketServer) handleMessage(wsConn *websocketConnection, message []
 	loadCtx.ApiVersion = apiVersion
 	versionCtx := loadCtx
 	if rpcErr := validateApiVersion(versionCtx); rpcErr != nil {
-		chargeLoad(ws.resourceManager, versionCtx, "", resource.FeeMalformedRPC, wsLog())
+		chargeLoad(ws.resourceManager, versionCtx, "", resource.FeeMalformedRPC(), wsLog())
 		ws.sendErrorResponse(wsConn, rpcErr, id, nil, requestEcho)
 		return
 	}
@@ -76,7 +76,7 @@ func (ws *WebSocketServer) handleMessage(wsConn *websocketConnection, message []
 	// feeMalformedRPC (ServerHandler.cpp:446-468).
 	command, ok := resolveWSCommand(cmdMap)
 	if !ok {
-		chargeLoad(ws.resourceManager, versionCtx, "", resource.FeeMalformedRPC, wsLog())
+		chargeLoad(ws.resourceManager, versionCtx, "", resource.FeeMalformedRPC(), wsLog())
 		ws.sendMissingCommand(wsConn, cmdMap, id)
 		return
 	}
@@ -121,21 +121,21 @@ func (ws *WebSocketServer) handleMessage(wsConn *websocketConnection, message []
 	ws.handleRPCMethod(wsConn, rpcCtx, cmd)
 }
 func (ws *WebSocketServer) handleSpecialCommand(wsConn *websocketConnection, ctx *types.RpcContext, cmd types.WebSocketCommand, handler wsSpecialHandler) {
-	ctx.LoadCost = uint32(resource.FeeReferenceRPC.Cost())
+	ctx.LoadCost = uint32(resource.FeeReferenceRPC().Cost())
 	if rpcErr := handlers.RequireNotBusyClient(ctx); rpcErr != nil {
-		finalizeLoad(ws.resourceManager, ctx, cmd.Command, resource.FeeReferenceRPC, wsLog())
+		finalizeLoad(ws.resourceManager, ctx, cmd.Command, resource.FeeReferenceRPC(), wsLog())
 		ws.sendCommandError(wsConn, rpcErr, cmd)
 		return
 	}
 
 	resolution := resolveMethod(ws.methodRegistry, cmd.Command, ctx.ApiVersion)
 	if !resolution.resolved {
-		finalizeLoad(ws.resourceManager, ctx, cmd.Command, resource.FeeReferenceRPC, wsLog())
+		finalizeLoad(ws.resourceManager, ctx, cmd.Command, resource.FeeReferenceRPC(), wsLog())
 		ws.sendCommandError(wsConn, types.RpcErrorMethodNotFound(), cmd)
 		return
 	}
 	if rpcErr := conditionMet(resolution.handler.RequiredCondition(), ctx); rpcErr != nil {
-		finalizeLoad(ws.resourceManager, ctx, cmd.Command, resource.FeeReferenceRPC, wsLog())
+		finalizeLoad(ws.resourceManager, ctx, cmd.Command, resource.FeeReferenceRPC(), wsLog())
 		ws.sendCommandError(wsConn, rpcErr, cmd)
 		return
 	}
@@ -151,8 +151,8 @@ func (ws *WebSocketServer) handleSpecialCommand(wsConn *websocketConnection, ctx
 		return result, rpcErr, recovered
 	}()
 	fee := rpcCharge(ctx.LoadCost)
-	if recovered && fee == resource.FeeReferenceRPC {
-		fee = resource.FeeExceptionRPC
+	if recovered && fee == resource.FeeReferenceRPC() {
+		fee = resource.FeeExceptionRPC()
 	}
 	finalizeLoad(ws.resourceManager, ctx, cmd.Command, fee, wsLog())
 	if rpcErr != nil {

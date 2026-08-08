@@ -2,6 +2,7 @@ package resource
 
 import (
 	"container/heap"
+	"context"
 	"fmt"
 	"log/slog"
 	"math"
@@ -16,6 +17,14 @@ import (
 
 type Clock func() time.Time
 
+type Option func(*Limits)
+
+func WithLimits(limits Limits) Option {
+	return func(configured *Limits) {
+		*configured = limits
+	}
+}
+
 type key struct {
 	kind Kind
 	addr string
@@ -29,6 +38,7 @@ type entry struct {
 	reservedCost  int64
 	localBalance  decayingSample
 	remoteBalance int64
+	publicKey     string
 	lastWarning   time.Time
 	warningSet    bool
 	expiry        *expiryItem
@@ -43,6 +53,14 @@ func (e *entry) add(charge int64, now time.Time) int64 {
 }
 
 func (e *entry) isUnlimited() bool { return e.k.kind == KindUnlimited }
+
+func (e *entry) fingerprint() string {
+	fingerprint := "IP Address: " + e.k.addr
+	if e.publicKey != "" {
+		fingerprint += ", Public Key: " + e.publicKey
+	}
+	return fingerprint
+}
 
 type importRecord struct {
 	items  []importItem
@@ -61,11 +79,14 @@ type Manager struct {
 	journal *slog.Logger
 	limits  Limits
 
-	entries  map[key]*entry
-	imports  map[string]*importRecord
-	expiries expiryQueue
-	inflight int
-	stats    counters
+	entries         map[key]*entry
+	imports         map[string]*importRecord
+	expiries        expiryQueue
+	inflight        int
+	retainedEntries int
+	importedEntries int
+	importItems     int
+	stats           counters
 
 	stop     chan struct{}
 	stopped  bool
@@ -73,8 +94,14 @@ type Manager struct {
 	stopOnce sync.Once
 }
 
-func NewManager(clock Clock, journal *slog.Logger) *Manager {
-	return NewManagerWithLimits(clock, journal, DefaultLimits())
+func NewManager(clock Clock, journal *slog.Logger, options ...Option) *Manager {
+	limits := DefaultLimits()
+	for _, option := range options {
+		if option != nil {
+			option(&limits)
+		}
+	}
+	return NewManagerWithLimits(clock, journal, limits)
 }
 
 func NewManagerWithLimits(clock Clock, journal *slog.Logger, limits Limits) *Manager {
@@ -162,16 +189,21 @@ func (m *Manager) acquire(kind Kind, raw string) *Consumer {
 	e := m.entries[ek]
 	if e == nil {
 		m.expireLocked(now, 1)
-		if len(m.entries) >= m.limits.MaxEntries {
+		evictions, ok := m.planEntryEvictionsLocked(1, now, map[key]struct{}{ek: {}}, nil)
+		if !ok {
 			m.stats.entryCapRejections++
 			return nil
 		}
+		m.evictEntriesLocked(evictions)
 		e = &entry{k: ek, localBalance: newDecayingSample(now, DecayWindowSeconds)}
 		m.entries[ek] = e
 	}
+	if e.localRefs == 0 && e.importRefs == 0 && e.expiry != nil {
+		m.retainedEntries--
+	}
 	m.cancelEntryExpiryLocked(e)
 	e.localRefs++
-	return &Consumer{m: m, e: e}
+	return &Consumer{state: &consumerState{m: m, e: e}}
 }
 
 func canonicalEndpoint(kind Kind, raw string, maxLength int) (string, bool) {
@@ -215,6 +247,9 @@ func canonicalEndpoint(kind Kind, raw string, maxLength int) (string, bool) {
 			return "", false
 		}
 	}
+	if addr.Zone() != "" {
+		return "", false
+	}
 	addr = addr.Unmap()
 	if kind == KindUnlimited {
 		return netip.AddrPortFrom(addr, 1).String(), true
@@ -237,28 +272,127 @@ func (m *Manager) releaseLocalLocked(e *entry, now time.Time) {
 }
 
 func (m *Manager) scheduleIfInactiveLocked(e *entry, now time.Time) {
-	if e.localRefs == 0 && e.importRefs == 0 {
+	if e.localRefs == 0 && e.importRefs == 0 && e.expiry == nil {
+		m.retainedEntries++
 		m.scheduleEntryExpiryLocked(e, now.Add(SecondsUntilExpiration))
 	}
 }
 
-func (m *Manager) charge(e *entry, fee Charge, context string) Disposition {
+type projectedRelease struct {
+	refs    int
+	balance int64
+}
+
+func (m *Manager) planEntryEvictionsLocked(
+	needed int,
+	now time.Time,
+	protected map[key]struct{},
+	releases map[*entry]projectedRelease,
+) ([]*entry, bool) {
+	required := len(m.entries) + needed - m.limits.MaxEntries
+	if required <= 0 {
+		return nil, true
+	}
+
+	candidates := make([]*entry, 0, m.retainedEntries+len(releases))
+	for _, e := range m.entries {
+		if _, keep := protected[e.k]; keep {
+			continue
+		}
+		refs := e.localRefs + e.importRefs
+		balance := e.balance(now)
+		if release, ok := releases[e]; ok {
+			refs -= release.refs
+			balance = max(0, balance-release.balance)
+		}
+		if refs == 0 && e.inflight == 0 && balance < WarningThreshold {
+			candidates = append(candidates, e)
+		}
+	}
+	if len(candidates) < required {
+		return nil, false
+	}
+	sort.Slice(candidates, func(i, j int) bool {
+		leftExpiry := now.Add(SecondsUntilExpiration)
+		if candidates[i].expiry != nil {
+			leftExpiry = candidates[i].expiry.when
+		}
+		rightExpiry := now.Add(SecondsUntilExpiration)
+		if candidates[j].expiry != nil {
+			rightExpiry = candidates[j].expiry.when
+		}
+		if !leftExpiry.Equal(rightExpiry) {
+			return leftExpiry.Before(rightExpiry)
+		}
+		if candidates[i].k.kind != candidates[j].k.kind {
+			return candidates[i].k.kind < candidates[j].k.kind
+		}
+		return candidates[i].k.addr < candidates[j].k.addr
+	})
+	return candidates[:required], true
+}
+
+func (m *Manager) evictEntriesLocked(entries []*entry) {
+	for _, e := range entries {
+		if m.entries[e.k] != e || e.localRefs != 0 || e.importRefs != 0 || e.inflight != 0 {
+			panic("resource: invalid eviction plan")
+		}
+		if e.expiry != nil {
+			m.cancelEntryExpiryLocked(e)
+			m.retainedEntries--
+		}
+		delete(m.entries, e.k)
+		m.stats.evictions++
+	}
+}
+
+func (m *Manager) charge(e *entry, fee Charge, chargeContext string) Disposition {
 	if e.isUnlimited() {
 		return Ok
 	}
+	logContext := context.Background()
+	level := chargeLevel(fee.Cost())
+	logEnabled := m.journal.Enabled(logContext, level)
 	m.mu.Lock()
 	now := m.clock()
 	balance := e.add(int64(fee.Cost()), now)
 	result := disposition(balance)
-	endpoint := e.k.addr
+	var endpoint string
+	if logEnabled {
+		endpoint = e.fingerprint()
+	}
 	m.mu.Unlock()
-
-	if context == "" {
-		m.journal.Debug("resource charge", "endpoint", endpoint, "fee", fee.String(), "balance", balance)
-	} else {
-		m.journal.Debug("resource charge", "endpoint", endpoint, "fee", fee.String(), "balance", balance, "context", context)
+	if logEnabled {
+		m.logCharge(logContext, level, endpoint, fee, balance, chargeContext)
 	}
 	return result
+}
+
+const resourceTraceLevel = slog.LevelDebug - 4
+
+func chargeLevel(cost int) slog.Level {
+	switch {
+	case cost >= 3000:
+		return slog.LevelWarn
+	case cost >= 1000:
+		return slog.LevelInfo
+	case cost >= 100:
+		return slog.LevelDebug
+	default:
+		return resourceTraceLevel
+	}
+}
+
+func (m *Manager) logCharge(ctx context.Context, level slog.Level, endpoint string, fee Charge, balance int64, chargeContext string) {
+	attrs := []slog.Attr{
+		slog.String("endpoint", endpoint),
+		slog.String("fee", fee.String()),
+		slog.Int64("balance", balance),
+	}
+	if chargeContext != "" {
+		attrs = append(attrs, slog.String("context", chargeContext))
+	}
+	m.journal.LogAttrs(ctx, level, "resource charge", attrs...)
 }
 
 func disposition(balance int64) Disposition {
@@ -276,19 +410,26 @@ func (m *Manager) warn(e *entry) bool {
 	if e.isUnlimited() {
 		return false
 	}
+	ctx := context.Background()
+	logEnabled := m.journal.Enabled(ctx, slog.LevelInfo)
 	m.mu.Lock()
 	now := m.clock()
 	if e.balance(now) < WarningThreshold || e.warningSet && now.Sub(e.lastWarning) < time.Second {
 		m.mu.Unlock()
 		return false
 	}
-	_ = e.add(int64(FeeWarning.Cost()), now)
+	_ = e.add(int64(FeeWarning().Cost()), now)
 	e.lastWarning = now
 	e.warningSet = true
 	m.stats.warnings++
-	endpoint := e.k.addr
+	var endpoint string
+	if logEnabled {
+		endpoint = e.fingerprint()
+	}
 	m.mu.Unlock()
-	m.journal.Info("resource load warning", "endpoint", endpoint)
+	if logEnabled {
+		m.journal.LogAttrs(ctx, slog.LevelInfo, "resource load warning", slog.String("endpoint", endpoint))
+	}
 	return true
 }
 
@@ -296,17 +437,25 @@ func (m *Manager) disconnect(e *entry) bool {
 	if e.isUnlimited() {
 		return false
 	}
+	ctx := context.Background()
+	logEnabled := m.journal.Enabled(ctx, slog.LevelWarn)
 	m.mu.Lock()
 	now := m.clock()
 	if e.balance(now) < DropThreshold {
 		m.mu.Unlock()
 		return false
 	}
-	balance := e.add(int64(FeeDrop.Cost()), now)
+	balance := e.add(int64(FeeDrop().Cost()), now)
 	m.stats.drops++
-	endpoint := e.k.addr
+	var endpoint string
+	if logEnabled {
+		endpoint = e.fingerprint()
+	}
 	m.mu.Unlock()
-	m.journal.Warn("resource consumer dropped", "endpoint", endpoint, "balance", balance, "threshold", DropThreshold)
+	if logEnabled {
+		m.journal.LogAttrs(ctx, slog.LevelWarn, "resource consumer dropped",
+			slog.String("endpoint", endpoint), slog.Int64("balance", balance), slog.Int("threshold", DropThreshold))
+	}
 	return true
 }
 
@@ -316,10 +465,20 @@ func (m *Manager) balance(e *entry) int64 {
 	return e.balance(m.clock())
 }
 
+func (m *Manager) setPublicKey(e *entry, publicKey string) {
+	m.mu.Lock()
+	e.publicKey = publicKey
+	m.mu.Unlock()
+}
+
 func (m *Manager) PeriodicActivity() {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.expireLocked(m.clock(), m.limits.MaxCleanupPerTick)
+}
+
+func (m *Manager) periodicActivity() {
+	m.PeriodicActivity()
 }
 
 func (m *Manager) ExportConsumers() Gossip {
@@ -355,38 +514,81 @@ func (m *Manager) ImportConsumers(origin string, gossip Gossip) error {
 		m.mu.Lock()
 		m.stats.importRejections++
 		m.mu.Unlock()
+		m.logImportRejection(origin, err)
 		return err
 	}
 
 	now := m.clock()
 	m.mu.Lock()
-	defer m.mu.Unlock()
 	m.expireLocked(now, m.limits.MaxCleanupPerTick)
 	previous := m.imports[origin]
 	if len(items) == 0 {
 		if previous != nil {
 			m.removeImportLocked(origin, previous, now)
 		}
+		m.mu.Unlock()
 		return nil
 	}
 	if previous == nil && len(m.imports) >= m.limits.MaxImports {
 		m.stats.importRejections++
-		return fmt.Errorf("resource gossip origin cap reached")
+		m.mu.Unlock()
+		m.logImportRejection(origin, ErrImportOriginLimit)
+		return ErrImportOriginLimit
 	}
 
+	nextSet := make(map[*entry]struct{}, len(items))
+	releases := make(map[*entry]projectedRelease)
+	newImported := 0
 	newEntries := 0
 	for _, item := range items {
-		if m.entries[key{kind: KindInbound, addr: item.Address}] == nil {
+		e := m.entries[key{kind: KindInbound, addr: item.Address}]
+		if e == nil {
 			newEntries++
+			newImported++
+			continue
+		}
+		nextSet[e] = struct{}{}
+		if e.importRefs == 0 {
+			newImported++
 		}
 	}
-	if len(m.entries)+newEntries > m.limits.MaxEntries {
+	releasedImported := 0
+	if previous != nil {
+		for _, item := range previous.items {
+			release := releases[item.entry]
+			release.refs++
+			release.balance = saturatingAdd(release.balance, item.balance)
+			releases[item.entry] = release
+			if _, retained := nextSet[item.entry]; !retained && item.entry.importRefs == 1 {
+				releasedImported++
+			}
+		}
+	}
+	if m.importedEntries+newImported-releasedImported > m.limits.MaxImportedEntries {
+		m.stats.importRejections++
+		m.mu.Unlock()
+		m.logImportRejection(origin, ErrImportedEntryLimit)
+		return ErrImportedEntryLimit
+	}
+	protected := make(map[key]struct{}, len(items))
+	for _, item := range items {
+		protected[key{kind: KindInbound, addr: item.Address}] = struct{}{}
+	}
+	evictions, ok := m.planEntryEvictionsLocked(newEntries, now, protected, releases)
+	if !ok {
 		m.stats.importRejections++
 		m.stats.entryCapRejections++
-		return fmt.Errorf("resource entry cap reached")
+		m.mu.Unlock()
+		m.logImportRejection(origin, ErrEntryLimit)
+		return ErrEntryLimit
 	}
 
-	next := &importRecord{}
+	if previous != nil {
+		m.removeImportLocked(origin, previous, now)
+	}
+	m.evictEntriesLocked(evictions)
+
+	next := &importRecord{items: make([]importItem, 0, len(items))}
 	for _, item := range items {
 		ek := key{kind: KindInbound, addr: item.Address}
 		e := m.entries[ek]
@@ -394,18 +596,32 @@ func (m *Manager) ImportConsumers(origin string, gossip Gossip) error {
 			e = &entry{k: ek, localBalance: newDecayingSample(now, DecayWindowSeconds)}
 			m.entries[ek] = e
 		}
+		if e.localRefs == 0 && e.importRefs == 0 && e.expiry != nil {
+			m.retainedEntries--
+		}
 		m.cancelEntryExpiryLocked(e)
+		if e.importRefs == 0 {
+			m.importedEntries++
+		}
 		e.importRefs++
 		e.remoteBalance = saturatingAdd(e.remoteBalance, item.Balance)
 		next.items = append(next.items, importItem{entry: e, balance: item.Balance})
 	}
-	if previous != nil {
-		m.removeImportLocked(origin, previous, now)
-	}
 	next.expiry = &expiryItem{when: now.Add(GossipExpiration), kind: expireImport, origin: origin, index: -1}
 	heap.Push(&m.expiries, next.expiry)
 	m.imports[origin] = next
+	m.importItems += len(next.items)
+	m.mu.Unlock()
 	return nil
+}
+
+func (m *Manager) logImportRejection(origin string, err error) {
+	ctx := context.Background()
+	if !m.journal.Enabled(ctx, slog.LevelWarn) {
+		return
+	}
+	m.journal.LogAttrs(ctx, slog.LevelWarn, "resource import rejected",
+		slog.String("origin", origin), slog.Any("err", err))
 }
 
 type validatedGossipItem struct {
@@ -415,10 +631,10 @@ type validatedGossipItem struct {
 
 func (m *Manager) validateGossip(origin string, gossip Gossip) ([]validatedGossipItem, error) {
 	if len(origin) > m.limits.MaxOriginLength {
-		return nil, fmt.Errorf("resource gossip origin exceeds %d bytes", m.limits.MaxOriginLength)
+		return nil, fmt.Errorf("%w: origin exceeds %d bytes", ErrInvalidImport, m.limits.MaxOriginLength)
 	}
 	if len(gossip.Items) > m.limits.MaxGossipItems {
-		return nil, fmt.Errorf("resource gossip has %d items, limit %d", len(gossip.Items), m.limits.MaxGossipItems)
+		return nil, fmt.Errorf("%w: got %d items, limit %d", ErrImportItemLimit, len(gossip.Items), m.limits.MaxGossipItems)
 	}
 	dedup := make(map[string]uint64, len(gossip.Items))
 	for _, item := range gossip.Items {
@@ -427,7 +643,7 @@ func (m *Manager) validateGossip(origin string, gossip Gossip) ([]validatedGossi
 		}
 		addr, ok := canonicalEndpoint(KindInbound, item.Address, m.limits.MaxEndpointLength)
 		if !ok {
-			return nil, fmt.Errorf("invalid resource gossip endpoint %q", item.Address)
+			return nil, fmt.Errorf("%w: endpoint %q", ErrInvalidImport, item.Address)
 		}
 		total := dedup[addr] + uint64(item.Balance)
 		if total > math.MaxUint32 {
@@ -451,12 +667,16 @@ func (m *Manager) removeImportLocked(origin string, rec *importRecord, now time.
 	if rec.expiry != nil && rec.expiry.index >= 0 {
 		heap.Remove(&m.expiries, rec.expiry.index)
 	}
+	m.importItems -= len(rec.items)
 	for _, item := range rec.items {
 		item.entry.remoteBalance -= item.balance
 		if item.entry.remoteBalance < 0 {
 			item.entry.remoteBalance = 0
 		}
 		if item.entry.importRefs > 0 {
+			if item.entry.importRefs == 1 {
+				m.importedEntries--
+			}
 			item.entry.importRefs--
 		}
 		m.scheduleIfInactiveLocked(item.entry, now)
@@ -475,6 +695,11 @@ func (m *Manager) Stats() Stats {
 	defer m.mu.Unlock()
 	return Stats{
 		Entries:            len(m.entries),
+		Active:             len(m.entries) - m.retainedEntries,
+		Retained:           m.retainedEntries,
+		ImportedEntries:    m.importedEntries,
+		ImportOrigins:      len(m.imports),
+		ImportItems:        m.importItems,
 		Imports:            len(m.imports),
 		Inflight:           m.inflight,
 		Evictions:          m.stats.evictions,

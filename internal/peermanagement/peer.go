@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"math"
 	"net"
 	"net/http"
 	"slices"
@@ -137,6 +138,7 @@ type Peer struct {
 	// (PeerImp.cpp:358) and is wired by Overlay.attachUsage.
 	usage            *resource.Consumer
 	usageMu          sync.RWMutex
+	usageReleased    bool
 	onDropDisconnect func()
 	clusterOrigin    string
 	clusterOriginSet bool
@@ -1691,10 +1693,17 @@ const maxSquelchesPerPeer = 128
 // removes any prior entry) on out-of-range duration or when the cap is
 // hit by a NEW validator key. Both rejections charge bad-data fee.
 func (p *Peer) AddSquelch(validator []byte, duration time.Duration) bool {
+	ok, reason := p.addSquelch(validator, duration)
+	if !ok {
+		p.IncBadData(reason)
+	}
+	return ok
+}
+
+func (p *Peer) addSquelch(validator []byte, duration time.Duration) (bool, string) {
 	if duration < MinUnsquelchExpire || duration > MaxUnsquelchExpirePeers {
 		p.RemoveSquelch(validator)
-		p.IncBadData("squelch-duration")
-		return false
+		return false, "squelch-duration"
 	}
 	key := string(validator)
 	p.squelchMu.Lock()
@@ -1705,10 +1714,9 @@ func (p *Peer) AddSquelch(validator []byte, duration time.Duration) bool {
 	}
 	p.squelchMu.Unlock()
 	if full {
-		p.IncBadData("squelch-map-full")
-		return false
+		return false, "squelch-map-full"
 	}
-	return true
+	return true, ""
 }
 
 // attachUsage wires this peer's resource.Consumer and the
@@ -1720,8 +1728,13 @@ func (p *Peer) attachUsage(c *resource.Consumer, onDrop func()) {
 	if p.usage != nil {
 		p.usage.Release()
 	}
+	if c != nil {
+		c.SetPublicKey(p.RemotePublicKeyEncoded())
+	}
 	p.usage = c
+	p.usageReleased = false
 	p.onDropDisconnect = onDrop
+	p.chargeDropFired.Store(false)
 }
 
 func (p *Peer) releaseUsage() {
@@ -1731,6 +1744,8 @@ func (p *Peer) releaseUsage() {
 		p.usage.Release()
 		p.usage = nil
 	}
+	p.onDropDisconnect = nil
+	p.usageReleased = true
 }
 
 func (p *Peer) resourceGossipOrigin(name string) string {
@@ -1746,9 +1761,13 @@ func (p *Peer) resourceGossipOrigin(name string) string {
 func (p *Peer) usageHandle() *resource.Consumer {
 	p.usageMu.RLock()
 	c := p.usage
+	released := p.usageReleased
 	p.usageMu.RUnlock()
 	if c != nil {
 		return c
+	}
+	if released {
+		return nil
 	}
 	// Tests and embedded usages that construct a Peer outside the
 	// addPeer path still need IncBadData / Charge to work. Lazily
@@ -1763,6 +1782,9 @@ func (p *Peer) usageHandle() *resource.Consumer {
 	// fallback must not be relied on for production paths.
 	p.usageMu.Lock()
 	defer p.usageMu.Unlock()
+	if p.usageReleased {
+		return nil
+	}
 	if p.usage != nil {
 		return p.usage
 	}
@@ -1897,11 +1919,7 @@ func (p *Peer) IncBadData(reason string) uint32 {
 		return 0
 	}
 	p.Charge(chargeForReason(reason), reason)
-	bal := c.Balance()
-	if bal < 0 {
-		return 0
-	}
-	return uint32(bal)
+	return clampResourceBalance(c.Balance())
 }
 
 // BadDataCount returns the consumer's current normalized balance,
@@ -1911,11 +1929,17 @@ func (p *Peer) BadDataCount() uint32 {
 	if c == nil {
 		return 0
 	}
-	bal := c.Balance()
-	if bal < 0 {
+	return clampResourceBalance(c.Balance())
+}
+
+func clampResourceBalance(balance int64) uint32 {
+	if balance <= 0 {
 		return 0
 	}
-	return uint32(bal)
+	if balance > math.MaxUint32 {
+		return math.MaxUint32
+	}
+	return uint32(balance)
 }
 
 // Load returns the consumer's normalized balance as int64 — signed so

@@ -1000,10 +1000,10 @@ func OverlayOptionsFromConfig(appCfg *config.Config) []peermanagement.Option {
 			limits.MaxImportedEntries = configuredLimits.MaxImportedEntries
 		}
 		if configuredLimits.MaxImportOrigins != 0 {
-			limits.MaxImportOrigins = configuredLimits.MaxImportOrigins
+			limits.MaxImports = configuredLimits.MaxImportOrigins
 		}
 		if configuredLimits.MaxImportItems != 0 {
-			limits.MaxImportItems = configuredLimits.MaxImportItems
+			limits.MaxGossipItems = configuredLimits.MaxImportItems
 		}
 		if configuredLimits.MaxImportedEntries == 0 && limits.MaxImportedEntries > limits.MaxEntries {
 			limits.MaxImportedEntries = limits.MaxEntries
