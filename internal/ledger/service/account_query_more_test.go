@@ -238,6 +238,39 @@ func TestGetAccountNFTs_MarkerPagination(t *testing.T) {
 	}
 }
 
+func TestGetAccountObjects_NFTLimitWithEmptyOwnerDirectory(t *testing.T) {
+	svc := newOfferTestService(t)
+	ownerAddr, ownerID := addressFromBytes(t, 0x20)
+	insertAccountRoot(t, svc, ownerAddr, 1_000_000_000_000, 0)
+	_, issuerID := addressFromBytes(t, 0x40)
+	insertNFTokenPageEntry(t, svc, ownerAddr, []state.NFTokenData{
+		{NFTokenID: accountNFTWithOrder(issuerID, 1)},
+	})
+
+	ownerDir := keylet.OwnerDir(ownerID)
+	directoryData, err := state.SerializeDirectoryNode(&state.DirectoryNode{
+		RootIndex: ownerDir.Key,
+		Owner:     ownerID,
+	}, false)
+	if err != nil {
+		t.Fatalf("serialize empty owner directory: %v", err)
+	}
+	if err := svc.openLedger.Insert(ownerDir, directoryData); err != nil {
+		t.Fatalf("insert empty owner directory: %v", err)
+	}
+
+	result, err := svc.GetAccountObjects(context.Background(), ownerAddr, "current", "", 1, "")
+	if err != nil {
+		t.Fatalf("GetAccountObjects: %v", err)
+	}
+	if len(result.AccountObjects) != 1 || result.AccountObjects[0].LedgerEntryType != "NFTokenPage" {
+		t.Fatalf("account objects = %#v, want one NFTokenPage", result.AccountObjects)
+	}
+	if result.Marker != "" {
+		t.Fatalf("terminal marker = %q, want empty", result.Marker)
+	}
+}
+
 // insertCredentialEntry inserts a Credential ledger entry and returns its key.
 // The hex of that key is the credential ID a client passes to deposit_authorized.
 func insertCredentialEntry(t *testing.T, svc *Service, subjectID, issuerID [20]byte, credType []byte, accepted bool, expiration *uint32) [32]byte {

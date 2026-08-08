@@ -615,7 +615,9 @@ func enumerateAccountObjects(ctx context.Context, l *ledger.Ledger, accountID [2
 
 		// NFTokenPages exactly filled the limit; resume at the first dir entry.
 		if i == mlimit && mlimit < limit {
-			result.Marker = protocol.Hash256Hex(dirIndex) + "," + protocol.Hash256Hex(entries[start])
+			if start < len(entries) {
+				result.Marker = protocol.Hash256Hex(dirIndex) + "," + protocol.Hash256Hex(entries[start])
+			}
 			return nil
 		}
 
