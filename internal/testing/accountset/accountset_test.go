@@ -29,7 +29,6 @@ func TestAccountSet_NullAccountSet(t *testing.T) {
 		"Expected flags 0 for newly funded noripple account, got 0x%x", info.Flags)
 }
 
-// Tests reversible account flags and unknown no-op flag values.
 func TestAccountSet_MostFlags(t *testing.T) {
 	env := jtx.NewTestEnv(t)
 	alice := jtx.NewAccount("alice")

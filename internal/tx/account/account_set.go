@@ -275,9 +275,6 @@ func (a *AccountSet) PreflightRules(rules *amendment.Rules) error {
 	return nil
 }
 
-// validateNFTokenMinter enforces the NFTokenMinter field-presence rules for the
-// asfAuthorizedNFTokenMinter flag: the minter must be present when setting the
-// flag and absent when clearing it.
 func (a *AccountSet) validateNFTokenMinter() ter.Result {
 	if a.SetFlag != nil && *a.SetFlag == AccountSetFlagAuthorizedNFTokenMinter && a.NFTokenMinter == "" {
 		return ter.TemMALFORMED
