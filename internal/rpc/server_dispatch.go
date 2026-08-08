@@ -157,7 +157,7 @@ func admitMethod(
 	}
 	if resolution.resolved && resolution.handler.RequiredRole() == types.RoleAdmin && ctx.Role != types.RoleAdmin {
 		rpcErr := adminGate(method)
-		chargeLoad(manager, ctx, method, resource.FeeMalformedRPC, log)
+		chargeLoad(manager, ctx, method, resource.FeeMalformedRPC(), log)
 		return rpcErr
 	}
 	return nil
@@ -171,22 +171,22 @@ func dispatchResolvedMethod(
 	resolution methodResolution,
 	log xrpllog.Logger,
 ) (any, *types.RpcError) {
-	ctx.LoadCost = uint32(resource.FeeReferenceRPC.Cost())
+	ctx.LoadCost = uint32(resource.FeeReferenceRPC().Cost())
 	ctx.LoadWarning = false
 
 	if rpcErr := handlers.RequireNotBusyClient(ctx); rpcErr != nil {
-		finalizeLoad(manager, ctx, method, resource.FeeReferenceRPC, log)
+		finalizeLoad(manager, ctx, method, resource.FeeReferenceRPC(), log)
 		return nil, rpcErr
 	}
 
 	if !resolution.resolved {
 		rpcErr := types.RpcErrorMethodNotFound()
-		finalizeLoad(manager, ctx, method, resource.FeeReferenceRPC, log)
+		finalizeLoad(manager, ctx, method, resource.FeeReferenceRPC(), log)
 		return nil, rpcErr
 	}
 
 	if rpcErr := conditionMet(resolution.handler.RequiredCondition(), ctx); rpcErr != nil {
-		finalizeLoad(manager, ctx, method, resource.FeeReferenceRPC, log)
+		finalizeLoad(manager, ctx, method, resource.FeeReferenceRPC(), log)
 		return nil, rpcErr
 	}
 
@@ -198,8 +198,8 @@ func dispatchResolvedMethod(
 	result, rpcErr, recovered := invokeHandler(resolution.handler, ctx, params, method, log)
 	finishDiagnostics(recovered)
 	fee := rpcCharge(ctx.LoadCost)
-	if recovered && fee == resource.FeeReferenceRPC {
-		fee = resource.FeeExceptionRPC
+	if recovered && fee == resource.FeeReferenceRPC() {
+		fee = resource.FeeExceptionRPC()
 	}
 	finalizeLoad(manager, ctx, method, fee, log)
 	return result, rpcErr
@@ -225,15 +225,15 @@ func dispatchNestedMethod(
 		return nil, types.RpcErrorMethodNotFound()
 	}
 	if resolution.handler.RequiredRole() == types.RoleAdmin && ctx.Role != types.RoleAdmin {
-		ctx.LoadCost = uint32(resource.FeeMalformedRPC.Cost())
+		ctx.LoadCost = uint32(resource.FeeMalformedRPC().Cost())
 		return nil, types.RpcErrorForbidden(method)
 	}
 	if rpcErr := conditionMet(resolution.handler.RequiredCondition(), ctx); rpcErr != nil {
 		return nil, rpcErr
 	}
 	result, rpcErr, recovered := invokeHandler(resolution.handler, ctx, params, method, log)
-	if recovered && ctx.LoadCost == uint32(resource.FeeReferenceRPC.Cost()) {
-		ctx.LoadCost = uint32(resource.FeeExceptionRPC.Cost())
+	if recovered && ctx.LoadCost == uint32(resource.FeeReferenceRPC().Cost()) {
+		ctx.LoadCost = uint32(resource.FeeExceptionRPC().Cost())
 	}
 	return result, rpcErr
 }
@@ -412,11 +412,11 @@ func gateLoad(manager *resource.Manager, ctx *types.RpcContext, method string, l
 	var admission *resource.Admission
 	var result resource.Disposition
 	if ctx.ResourceConsumer != nil {
-		admission, result = ctx.ResourceConsumer.Admit(resource.FeeReferenceRPC)
+		admission, result = ctx.ResourceConsumer.Admit(resource.FeeReferenceRPC())
 	} else if ctx.Unlimited {
 		admission, result = manager.AdmitUnlimited(ctx.ResourceIP)
 	} else {
-		admission, result = manager.AdmitInbound(ctx.ClientIP, resource.FeeReferenceRPC)
+		admission, result = manager.AdmitInbound(ctx.ClientIP, resource.FeeReferenceRPC())
 	}
 	if admission == nil || result == resource.Drop {
 		log.Warn("rpc dropped: client over load threshold",
@@ -447,14 +447,14 @@ func finalizeLoad(manager *resource.Manager, ctx *types.RpcContext, method strin
 
 func rpcCharge(cost uint32) resource.Charge {
 	switch int(cost) {
-	case resource.FeeReferenceRPC.Cost():
-		return resource.FeeReferenceRPC
-	case resource.FeeMediumBurdenRPC.Cost():
-		return resource.FeeMediumBurdenRPC
-	case resource.FeeHeavyBurdenRPC.Cost():
-		return resource.FeeHeavyBurdenRPC
-	case resource.FeeMalformedRPC.Cost():
-		return resource.FeeMalformedRPC
+	case resource.FeeReferenceRPC().Cost():
+		return resource.FeeReferenceRPC()
+	case resource.FeeMediumBurdenRPC().Cost():
+		return resource.FeeMediumBurdenRPC()
+	case resource.FeeHeavyBurdenRPC().Cost():
+		return resource.FeeHeavyBurdenRPC()
+	case resource.FeeMalformedRPC().Cost():
+		return resource.FeeMalformedRPC()
 	default:
 		return resource.NewCharge(int(cost), "RPC")
 	}

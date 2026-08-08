@@ -1,6 +1,8 @@
 package resource
 
 import (
+	"context"
+	"log/slog"
 	"sync"
 	"time"
 )
@@ -40,6 +42,8 @@ func (m *Manager) AdmitUnlimited(addr string) (*Admission, Disposition) {
 }
 
 func (m *Manager) admit(e *entry, reservation Charge) (*Admission, Disposition) {
+	ctx := context.Background()
+	logEnabled := m.journal.Enabled(ctx, slog.LevelWarn)
 	m.mu.Lock()
 	now := m.clock()
 	if e.isUnlimited() {
@@ -51,11 +55,17 @@ func (m *Manager) admit(e *entry, reservation Charge) (*Admission, Disposition) 
 
 	balance := e.balance(now)
 	if balance >= DropThreshold {
-		balance = e.add(int64(FeeDrop.Cost()), now)
+		balance = e.add(int64(FeeDrop().Cost()), now)
 		m.stats.drops++
-		endpoint := e.k.addr
+		var endpoint string
+		if logEnabled {
+			endpoint = e.fingerprint()
+		}
 		m.mu.Unlock()
-		m.journal.Warn("resource admission dropped", "endpoint", endpoint, "balance", balance, "threshold", DropThreshold)
+		if logEnabled {
+			m.journal.LogAttrs(ctx, slog.LevelWarn, "resource admission dropped",
+				slog.String("endpoint", endpoint), slog.Int64("balance", balance), slog.Int("threshold", DropThreshold))
+		}
 		return nil, Drop
 	}
 
@@ -77,12 +87,12 @@ func (m *Manager) admit(e *entry, reservation Charge) (*Admission, Disposition) 
 	return &Admission{manager: m, entry: e, reserved: reserved}, disposition(projected)
 }
 
-func (a *Admission) Finish(actual Charge, context string) Completion {
+func (a *Admission) Finish(actual Charge, chargeContext string) Completion {
 	if a == nil || a.manager == nil || a.entry == nil {
 		return Completion{Disposition: Ok}
 	}
 	a.once.Do(func() {
-		a.result = a.manager.finishAdmission(a.entry, a.reserved, actual, context)
+		a.result = a.manager.finishAdmission(a.entry, a.reserved, actual, chargeContext)
 	})
 	return a.result
 }
@@ -91,7 +101,11 @@ func (a *Admission) Cancel() Completion {
 	return a.Finish(Charge{}, "")
 }
 
-func (m *Manager) finishAdmission(e *entry, reserved int64, actual Charge, context string) Completion {
+func (m *Manager) finishAdmission(e *entry, reserved int64, actual Charge, chargeContext string) Completion {
+	ctx := context.Background()
+	level := chargeLevel(actual.Cost())
+	chargeLogEnabled := actual.Cost() != 0 && m.journal.Enabled(ctx, level)
+	warningLogEnabled := m.journal.Enabled(ctx, slog.LevelInfo)
 	m.mu.Lock()
 	now := m.clock()
 	result := Completion{Disposition: Ok}
@@ -107,26 +121,25 @@ func (m *Manager) finishAdmission(e *entry, reserved int64, actual Charge, conte
 		result.Balance = e.add(int64(actual.Cost()), now)
 		result.Disposition = disposition(result.Balance)
 		if result.Balance >= WarningThreshold && (!e.warningSet || now.Sub(e.lastWarning) >= time.Second) {
-			result.Balance = e.add(int64(FeeWarning.Cost()), now)
+			result.Balance = e.add(int64(FeeWarning().Cost()), now)
 			e.lastWarning = now
 			e.warningSet = true
 			result.Warning = true
 			m.stats.warnings++
 		}
 	}
-	endpoint := e.k.addr
+	var endpoint string
+	if chargeLogEnabled || result.Warning && warningLogEnabled {
+		endpoint = e.fingerprint()
+	}
 	m.releaseLocalLocked(e, now)
 	m.mu.Unlock()
 
-	if actual.Cost() != 0 {
-		if context == "" {
-			m.journal.Debug("resource charge", "endpoint", endpoint, "fee", actual.String(), "balance", result.Balance)
-		} else {
-			m.journal.Debug("resource charge", "endpoint", endpoint, "fee", actual.String(), "balance", result.Balance, "context", context)
-		}
+	if chargeLogEnabled {
+		m.logCharge(ctx, level, endpoint, actual, result.Balance, chargeContext)
 	}
-	if result.Warning {
-		m.journal.Info("resource load warning", "endpoint", endpoint)
+	if result.Warning && warningLogEnabled {
+		m.journal.LogAttrs(ctx, slog.LevelInfo, "resource load warning", slog.String("endpoint", endpoint))
 	}
 	return result
 }

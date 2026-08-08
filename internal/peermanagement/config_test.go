@@ -3,6 +3,8 @@ package peermanagement
 import (
 	"net"
 	"testing"
+
+	"github.com/LeJamon/go-xrpl/internal/peermanagement/resource"
 )
 
 func TestWithPublicIPCopiesCallerValue(t *testing.T) {
@@ -42,6 +44,23 @@ func TestConfigValidateServerDomain(t *testing.T) {
 				t.Fatalf("Validate returned error: %v", err)
 			}
 		})
+	}
+}
+
+func TestConfigResourceLimits(t *testing.T) {
+	cfg := DefaultConfig()
+	if cfg.ResourceLimits != resource.DefaultLimits() {
+		t.Fatalf("resource limits = %+v, want defaults %+v", cfg.ResourceLimits, resource.DefaultLimits())
+	}
+
+	WithResourceLimits(resource.Limits{
+		MaxEntries:         10,
+		MaxImportedEntries: 11,
+		MaxImports:         1,
+		MaxGossipItems:     1,
+	})(&cfg)
+	if err := cfg.Validate(); err == nil {
+		t.Fatal("Validate accepted more imported entries than total entries")
 	}
 }
 

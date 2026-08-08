@@ -725,6 +725,25 @@ func TestOverlayConfig_InboundRetainedBytesValidation(t *testing.T) {
 	assert.Contains(t, err.Error(), "inbound_retained_bytes")
 }
 
+func TestOverlayConfig_ResourceLimitsValidation(t *testing.T) {
+	valid := OverlayConfig{ResourceLimits: ResourceLimitsConfig{
+		MaxEntries: 200, MaxImportedEntries: 100, MaxImportOrigins: 10, MaxImportItems: 50,
+	}}
+	require.NoError(t, valid.Validate())
+
+	tests := []ResourceLimitsConfig{
+		{MaxEntries: -1},
+		{MaxEntries: 10, MaxImportedEntries: 11},
+		{MaxImportOrigins: -1},
+		{MaxImportItems: 1025},
+	}
+	for _, limits := range tests {
+		err := (&OverlayConfig{ResourceLimits: limits}).Validate()
+		require.Error(t, err, "limits=%+v", limits)
+		assert.Contains(t, err.Error(), "resource_limits")
+	}
+}
+
 func TestConfigValidation_CompleteConfig(t *testing.T) {
 	assert.NoError(t, ValidateConfig(validCompleteConfig()))
 }

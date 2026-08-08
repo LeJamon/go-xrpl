@@ -255,7 +255,7 @@ func TestPeerAddSquelch_RejectsInvalidDuration(t *testing.T) {
 
 // TestOverlay_InboundSquelch_MalformedPubkey_Charges pins R5.8: a
 // TMSquelch whose ValidatorPubKey isn't a 33-byte compressed secp256k1
-// point must charge resource.FeeInvalidData against the sending peer.
+// point must charge resource.FeeInvalidData() against the sending peer.
 // Matches rippled PeerImp.cpp:2701-2712.
 func TestOverlay_InboundSquelch_MalformedPubkey_Charges(t *testing.T) {
 	id, err := NewIdentity()
@@ -308,7 +308,7 @@ func TestOverlay_InboundSquelch_MalformedPubkey_Charges(t *testing.T) {
 // pubkey must be dropped WITHOUT installing a squelch — otherwise a
 // hostile peer could silence our own validator's traffic on the
 // RelayFromValidator path. Matches rippled PeerImp.cpp:2715-2721.
-// The peer is charged "squelch-targets-self" so repeat offenders evict.
+// Rippled logs and ignores this case without selecting a bad-data fee.
 func TestHandleSquelchMessage_DropsSelfTargetingSquelch(t *testing.T) {
 	id, err := NewIdentity()
 	require.NoError(t, err)
@@ -353,8 +353,8 @@ func TestHandleSquelchMessage_DropsSelfTargetingSquelch(t *testing.T) {
 		"self-targeted squelch must not have installed a squelch entry")
 
 	// Peer is charged for attempting to silence our own validator.
-	assert.Greater(t, peer.BadDataCount(), uint32(0),
-		"self-targeting TMSquelch must charge bad-data (squelch-targets-self)")
+	assert.Equal(t, uint32(0), peer.BadDataCount(),
+		"self-targeting TMSquelch must not select a bad-data fee")
 }
 
 // TestHandleSquelchMessage_AllowsOtherValidatorSquelch is the

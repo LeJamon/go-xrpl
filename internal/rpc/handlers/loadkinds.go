@@ -6,13 +6,13 @@ import (
 )
 
 func setLoadReference(ctx *types.RpcContext) {
-	ctx.LoadCost = uint32(resource.FeeReferenceRPC.Cost())
+	ctx.LoadCost = uint32(resource.FeeReferenceRPC().Cost())
 }
 
 func setLoadMedium(ctx *types.RpcContext) {
-	ctx.LoadCost = uint32(resource.FeeMediumBurdenRPC.Cost())
+	ctx.LoadCost = uint32(resource.FeeMediumBurdenRPC().Cost())
 }
 
 func setLoadHeavy(ctx *types.RpcContext) {
-	ctx.LoadCost = uint32(resource.FeeHeavyBurdenRPC.Cost())
+	ctx.LoadCost = uint32(resource.FeeHeavyBurdenRPC().Cost())
 }

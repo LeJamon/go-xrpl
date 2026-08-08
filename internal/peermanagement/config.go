@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/LeJamon/go-xrpl/internal/peermanagement/message"
+	"github.com/LeJamon/go-xrpl/internal/peermanagement/resource"
 	"github.com/LeJamon/go-xrpl/protocol"
 )
 
@@ -207,6 +208,7 @@ type Config struct {
 	// (the [overlay] verify_endpoints = 0 knob) accepts them, for local
 	// dev networks — a security risk on a public network.
 	VerifyEndpoints bool
+	ResourceLimits  resource.Limits
 
 	// Clock function for testing
 	Clock func() time.Time
@@ -246,6 +248,7 @@ func DefaultConfig() Config {
 		// Endpoint verification is on by default; only a local dev
 		// network (verify_endpoints = 0) turns it off.
 		VerifyEndpoints: true,
+		ResourceLimits:  resource.DefaultLimits(),
 
 		Clock: time.Now,
 	}
@@ -449,6 +452,12 @@ func WithVerifyEndpoints(enabled bool) Option {
 	}
 }
 
+func WithResourceLimits(limits resource.Limits) Option {
+	return func(c *Config) {
+		c.ResourceLimits = limits
+	}
+}
+
 // WithEventBufferSize sets the internal event channel buffer size.
 func WithEventBufferSize(size int) Option {
 	return func(c *Config) {
@@ -522,6 +531,23 @@ func (c *Config) Validate() error {
 	}
 	if c.Clock == nil {
 		return errors.New("Clock function cannot be nil")
+	}
+	limits := c.ResourceLimits
+	if limits.MaxEntries < 0 || limits.MaxImportedEntries < 0 ||
+		limits.MaxImports < 0 || limits.MaxGossipItems < 0 ||
+		limits.MaxInflightPerConsumer < 0 || limits.MaxCleanupPerTick < 0 ||
+		limits.MaxEndpointLength < 0 || limits.MaxOriginLength < 0 {
+		return errors.New("resource limits cannot be negative")
+	}
+	effectiveEntries := limits.MaxEntries
+	if effectiveEntries == 0 {
+		effectiveEntries = resource.DefaultLimits().MaxEntries
+	}
+	if limits.MaxImportedEntries > effectiveEntries {
+		return errors.New("MaxImportedEntries cannot exceed MaxEntries")
+	}
+	if limits.MaxGossipItems > resource.DefaultLimits().MaxGossipItems {
+		return fmt.Errorf("MaxGossipItems cannot exceed %d", resource.DefaultLimits().MaxGossipItems)
 	}
 	if c.ServerDomain != "" && !protocol.IsProperlyFormedTomlDomain(c.ServerDomain) {
 		return errors.New("invalid ServerDomain: the domain name does not appear to meet the requirements")

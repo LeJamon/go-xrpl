@@ -49,7 +49,7 @@ func TestTransportConstructorsShareInjectedResourceManager(t *testing.T) {
 	require.Same(t, manager, wsServer.resourceManager)
 	consumer := manager.NewInboundEndpoint("192.0.2.1")
 	require.NotNil(t, consumer)
-	consumer.Charge(resource.FeeMalformedRPC, "shared-client")
+	consumer.Charge(resource.FeeMalformedRPC(), "shared-client")
 	assert.Greater(t, consumer.Balance(), int64(0))
 	consumer.Release()
 
@@ -122,7 +122,7 @@ func resourceLocalBalance(t *testing.T, manager *resource.Manager, address strin
 	require.NotNil(t, consumer)
 	defer consumer.Release()
 	for _, entry := range manager.Snapshot(0) {
-		if entry.Address == address && entry.Type == resource.KindInbound.String() {
+		if entry.Address == "IP Address: "+address && entry.Type == resource.KindInbound.String() {
 			return uint32(entry.Local)
 		}
 	}
@@ -203,7 +203,7 @@ func TestHTTPAdmissionOrderingAtTransportBoundary(t *testing.T) {
 				assert.Equal(t, http.StatusServiceUnavailable, recorder.Code)
 				assert.Equal(t, "Server is overloaded\r\n", recorder.Body.String())
 			}
-			assert.Equal(t, uint32(resource.FeeDrop.Cost()/resource.DecayWindowSeconds), transportRegressionLocalBalance(t, server.resourceManager))
+			assert.Equal(t, uint32(resource.FeeDrop().Cost()/resource.DecayWindowSeconds), transportRegressionLocalBalance(t, server.resourceManager))
 		})
 	}
 }
@@ -233,7 +233,7 @@ func TestHTTPForbiddenPrecedesMalformedTransportFields(t *testing.T) {
 				assert.Equal(t, http.StatusForbidden, recorder.Code)
 				assert.Equal(t, "Forbidden\r\n", recorder.Body.String())
 			}
-			assert.Equal(t, uint32(resource.FeeMalformedRPC.Cost()/resource.DecayWindowSeconds), transportRegressionLocalBalance(t, server.resourceManager))
+			assert.Equal(t, uint32(resource.FeeMalformedRPC().Cost()/resource.DecayWindowSeconds), transportRegressionLocalBalance(t, server.resourceManager))
 		})
 	}
 }
@@ -257,7 +257,7 @@ func TestHTTPMalformedAndForbiddenExactLoadCharge(t *testing.T) {
 
 			postTransportRegressionRequest(t, server, test.body)
 
-			assert.Equal(t, uint32(resource.FeeMalformedRPC.Cost()/resource.DecayWindowSeconds), transportRegressionLocalBalance(t, server.resourceManager))
+			assert.Equal(t, uint32(resource.FeeMalformedRPC().Cost()/resource.DecayWindowSeconds), transportRegressionLocalBalance(t, server.resourceManager))
 		})
 	}
 }
@@ -312,7 +312,7 @@ func TestHTTPEarlyDispatchErrorsChargeReferenceAndWarn(t *testing.T) {
 				}
 				assert.Equal(t, test.token, result["error"])
 				assert.Equal(t, "load", result["warning"])
-				assert.Equal(t, uint32((resource.FeeReferenceRPC.Cost()+resource.FeeWarning.Cost())/resource.DecayWindowSeconds), transportRegressionLocalBalance(t, server.resourceManager))
+				assert.Equal(t, uint32((resource.FeeReferenceRPC().Cost()+resource.FeeWarning().Cost())/resource.DecayWindowSeconds), transportRegressionLocalBalance(t, server.resourceManager))
 			})
 		}
 	}

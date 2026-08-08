@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/LeJamon/go-xrpl/internal/peermanagement/peertls"
+	"github.com/LeJamon/go-xrpl/internal/peermanagement/resource"
 )
 
 // inboundBacklogSlack caps the accept-side goroutine count to
@@ -125,15 +126,26 @@ func readHandshakeBody(req *http.Request) error {
 // it is already over budget. Always admitted when no resource manager is
 // wired.
 func (o *Overlay) admitInboundEndpoint(addr string) bool {
+	consumer, admitted := o.acquireInboundUsage(addr)
+	if consumer != nil {
+		consumer.Release()
+	}
+	return admitted
+}
+
+func (o *Overlay) acquireInboundUsage(addr string) (*resource.Consumer, bool) {
 	if o.resourceManager == nil {
-		return true
+		return nil, true
 	}
 	c := o.resourceManager.NewInboundEndpoint(addr)
 	if c == nil {
-		return false
+		return nil, false
 	}
-	defer c.Release()
-	return !c.Disconnect()
+	if c.Disconnect() {
+		c.Release()
+		return nil, false
+	}
+	return c, true
 }
 
 // startListener creates the TCP/TLS listener without publishing it. Run owns
@@ -233,12 +245,18 @@ func (o *Overlay) handleInbound(ctx context.Context, conn net.Conn) {
 	remoteAddr := conn.RemoteAddr().String()
 	endpoint, _ := ParseEndpoint(remoteAddr)
 
-	if !o.admitInboundEndpoint(endpoint.String()) {
+	inboundUsage, admitted := o.acquireInboundUsage(endpoint.String())
+	if !admitted {
 		slog.Info("Inbound rejected: endpoint over resource drop threshold",
 			"t", "Overlay", "remote", remoteAddr)
 		conn.Close()
 		return
 	}
+	defer func() {
+		if inboundUsage != nil {
+			inboundUsage.Release()
+		}
+	}()
 
 	peerID := PeerID(o.nextID.Add(1))
 	peer := NewPeer(peerID, endpoint, true, o.identity, o.events)
@@ -298,11 +316,12 @@ func (o *Overlay) handleInbound(ctx context.Context, conn net.Conn) {
 	peer.setState(PeerStateConnected)
 	slog.Info("Inbound peer connected", "t", "Overlay", "remote", remoteAddr)
 
-	if err := o.addPeer(peer); err != nil {
+	if err := o.addPeerWithUsage(peer, inboundUsage); err != nil {
 		slog.Info("Inbound rejected after handshake", "t", "Overlay", "remote", remoteAddr, "err", err)
 		conn.Close()
 		return
 	}
+	inboundUsage = nil
 	added = true
 
 	o.peerWG.Add(1)

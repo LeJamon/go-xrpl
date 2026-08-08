@@ -87,7 +87,7 @@ func TestHTTPAdminDenialChargesFeeMalformed(t *testing.T) {
 	// The malformed bucket is 100; the reference bucket is 20. Allow for a hair
 	// of decay between the charge and this read, but confirm it is the malformed
 	// charge, not a cheaper one.
-	if got, want := resourceLocalBalance(t, srv.resourceManager, "198.51.100.7"), uint32(resource.FeeMalformedRPC.Cost()/resource.DecayWindowSeconds); got != want {
+	if got, want := resourceLocalBalance(t, srv.resourceManager, "198.51.100.7"), uint32(resource.FeeMalformedRPC().Cost()/resource.DecayWindowSeconds); got != want {
 		t.Fatalf("forbidden admin denial charged %v, want %v", got, want)
 	}
 

@@ -5,6 +5,7 @@ import (
 	"sync"
 	"testing"
 
+	"github.com/LeJamon/go-xrpl/internal/peermanagement/resource"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -103,6 +104,35 @@ func TestOverlayRejectsDuplicateResolvedEndpoint(t *testing.T) {
 	require.NoError(t, o.addPeer(first))
 	assert.ErrorIs(t, o.addPeer(second), ErrAlreadyConnected)
 	o.removePeer(first.ID())
+}
+
+func TestAddPeerCarriesOutboundResourceHandle(t *testing.T) {
+	o, err := New(WithDataDir(t.TempDir()))
+	require.NoError(t, err)
+	remote, err := GenerateIdentity()
+	require.NoError(t, err)
+	endpoint := Endpoint{Host: "192.0.2.35", Port: 51235}
+	peer := newPeerWithRemoteKey(t, o, 9, endpoint, remote)
+	usage := o.resourceManager.NewOutboundEndpoint(endpoint.String())
+	require.NotNil(t, usage)
+	usage.Charge(resource.NewCharge(resource.DecayWindowSeconds*100, "pre-dial"), "")
+
+	require.NoError(t, o.addPeerWithUsage(peer, usage))
+	entries := o.resourceManager.Snapshot(0)
+	require.Len(t, entries, 1)
+	assert.Equal(t, "outbound", entries[0].Type)
+	assert.Equal(t,
+		"IP Address: 192.0.2.35:51235, Public Key: "+remote.EncodedPublicKey(),
+		entries[0].Address,
+	)
+	assert.Positive(t, entries[0].Local)
+
+	o.removePeer(peer.ID())
+	assert.Equal(t, 1, o.resourceManager.Stats().Retained)
+	reacquired := o.resourceManager.NewOutboundEndpoint(endpoint.String())
+	require.NotNil(t, reacquired)
+	assert.Positive(t, reacquired.Balance())
+	reacquired.Release()
 }
 
 func TestOverlayInboundIPLimit(t *testing.T) {

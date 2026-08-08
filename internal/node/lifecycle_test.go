@@ -52,7 +52,7 @@ func TestBindRPCWiresExplicitSharedServices(t *testing.T) {
 	consumer := runtime.resourceManager.NewInboundEndpoint("192.0.2.25")
 	consumer.Charge(resource.NewCharge(resource.WarningThreshold*resource.DecayWindowSeconds, "test"), "")
 	defer consumer.Release()
-	if got := runtime.services.ResourceBlacklist(nil); got["192.0.2.25"] == nil {
+	if got := runtime.services.ResourceBlacklist(nil); got["IP Address: 192.0.2.25"] == nil {
 		t.Fatalf("standalone resource blacklist = %+v", got)
 	}
 }

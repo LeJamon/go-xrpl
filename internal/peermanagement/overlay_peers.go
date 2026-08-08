@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"net"
 	"net/netip"
 	"time"
 
@@ -65,6 +66,24 @@ func (o *Overlay) connectReservedContext(connectCtx context.Context, addr string
 	if baseCtx == nil {
 		return errors.New("overlay: Connect called before Run")
 	}
+	attemptCtx := baseCtx
+	var cancelAttempt context.CancelFunc
+	var stopOverlayCancel func() bool
+	if connectCtx != nil {
+		attemptCtx, cancelAttempt = context.WithCancel(connectCtx)
+		stopOverlayCancel = context.AfterFunc(baseCtx, cancelAttempt)
+		defer func() {
+			stopOverlayCancel()
+			cancelAttempt()
+		}()
+	}
+	ctx, cancel := context.WithTimeout(attemptCtx, o.cfg.ConnectTimeout)
+	defer cancel()
+
+	endpoint, err = o.resolveOutboundEndpoint(ctx, endpoint)
+	if err != nil {
+		return err
+	}
 
 	// Check if already connected
 	if o.isConnectedTo(endpoint) {
@@ -106,20 +125,6 @@ func (o *Overlay) connectReservedContext(connectCtx context.Context, addr string
 	peer.onRedirect = func(peerIPs []string) {
 		o.ingestRedirectEndpoints(peerIPs, peerID)
 	}
-
-	attemptCtx := baseCtx
-	var cancelAttempt context.CancelFunc
-	var stopOverlayCancel func() bool
-	if connectCtx != nil {
-		attemptCtx, cancelAttempt = context.WithCancel(connectCtx)
-		stopOverlayCancel = context.AfterFunc(baseCtx, cancelAttempt)
-		defer func() {
-			stopOverlayCancel()
-			cancelAttempt()
-		}()
-	}
-	ctx, cancel := context.WithTimeout(attemptCtx, o.cfg.ConnectTimeout)
-	defer cancel()
 
 	certPEM, keyPEM, err := o.identity.TLSCertificatePEM()
 	if err != nil {
@@ -199,6 +204,30 @@ func (o *Overlay) connectReservedContext(connectCtx context.Context, addr string
 	}()
 
 	return nil
+}
+
+func (o *Overlay) resolveOutboundEndpoint(ctx context.Context, endpoint Endpoint) (Endpoint, error) {
+	if addr, err := netip.ParseAddr(endpoint.Host); err == nil && addr.Zone() == "" {
+		endpoint.Host = addr.Unmap().String()
+		return endpoint, nil
+	}
+	lookupIP := net.DefaultResolver.LookupIPAddr
+	if o.discovery != nil && o.discovery.lookupIP != nil {
+		lookupIP = o.discovery.lookupIP
+	}
+	addresses, err := lookupIP(ctx, endpoint.Host)
+	if err != nil {
+		return Endpoint{}, fmt.Errorf("%w: resolve %q: %v", ErrInvalidEndpoint, endpoint.Host, err)
+	}
+	for _, candidate := range addresses {
+		addr, ok := netip.AddrFromSlice(candidate.IP)
+		if !ok || addr.Zone() != "" {
+			continue
+		}
+		endpoint.Host = addr.Unmap().String()
+		return endpoint, nil
+	}
+	return Endpoint{}, fmt.Errorf("%w: hostname %q has no IP addresses", ErrInvalidEndpoint, endpoint.Host)
 }
 
 func (o *Overlay) delayPeerRetry(addr string, bootstrap bool, err error, stopping bool) {
@@ -587,8 +616,6 @@ func (o *Overlay) addPeerWithUsage(peer *Peer, usage *resource.Consumer) error {
 	if o.resourceManager != nil && resourceUsage == nil {
 		addr := postHandshakeEndpoint(peer, peer.Endpoint()).String()
 		switch {
-		case o.isClusterPeer(peer):
-			resourceUsage = o.resourceManager.NewUnlimitedEndpoint(addr)
 		case peer.Inbound():
 			resourceUsage = o.resourceManager.NewInboundEndpoint(addr)
 		default:

@@ -31,7 +31,7 @@ func prepareAccountHistorySubscribe(ctx *types.RpcContext, request types.Subscri
 		return nil, types.RpcErrorNotEnabled("")
 	}
 	if ctx != nil {
-		ctx.LoadCost = uint32(resource.FeeMediumBurdenRPC.Cost())
+		ctx.LoadCost = uint32(resource.FeeMediumBurdenRPC().Cost())
 	}
 	account, _, rpcErr := parseAccountHistoryRequest(request, false)
 	if rpcErr != nil {

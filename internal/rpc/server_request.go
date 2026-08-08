@@ -123,12 +123,12 @@ func (s *Server) handlePostRequest(w http.ResponseWriter, r *http.Request) {
 		}
 		return
 	}
-	defer ctx.ResourceAdmission.Finish(resource.FeeExceptionRPC, method)
+	defer ctx.ResourceAdmission.Finish(resource.FeeExceptionRPC(), method)
 
 	var methodErr string
 	method, methodErr = decodeMethodField(request.Method)
 	if methodErr != "" {
-		chargeLoad(s.resourceManager, ctx, method, resource.FeeMalformedRPC, rpcLog())
+		chargeLoad(s.resourceManager, ctx, method, resource.FeeMalformedRPC(), rpcLog())
 		writePlainHTTPError(w, http.StatusBadRequest, methodErr)
 		return
 	}
@@ -138,7 +138,7 @@ func (s *Server) handlePostRequest(w http.ResponseWriter, r *http.Request) {
 	if len(request.Params) > 0 && !rawJSONNull(request.Params) {
 		var arr []json.RawMessage
 		if err := json.Unmarshal(request.Params, &arr); err != nil || len(arr) != 1 {
-			chargeLoad(s.resourceManager, ctx, method, resource.FeeMalformedRPC, rpcLog())
+			chargeLoad(s.resourceManager, ctx, method, resource.FeeMalformedRPC(), rpcLog())
 			writePlainHTTPError(w, http.StatusBadRequest, "params unparseable")
 			return
 		}
@@ -146,7 +146,7 @@ func (s *Server) handlePostRequest(w http.ResponseWriter, r *http.Request) {
 		if !rawJSONNull(params) {
 			var object map[string]any
 			if err := json.Unmarshal(params, &object); err != nil || object == nil {
-				chargeLoad(s.resourceManager, ctx, method, resource.FeeMalformedRPC, rpcLog())
+				chargeLoad(s.resourceManager, ctx, method, resource.FeeMalformedRPC(), rpcLog())
 				writePlainHTTPError(w, http.StatusBadRequest, "params unparseable")
 				return
 			}
@@ -155,7 +155,7 @@ func (s *Server) handlePostRequest(w http.ResponseWriter, r *http.Request) {
 
 	requestObj := buildRequestEcho(method, params)
 	if _, valid := ripplerpcVersion(requestObj); !valid {
-		chargeLoad(s.resourceManager, ctx, method, resource.FeeMalformedRPC, rpcLog())
+		chargeLoad(s.resourceManager, ctx, method, resource.FeeMalformedRPC(), rpcLog())
 		writePlainHTTPError(w, http.StatusBadRequest, "ripplerpc is not a string")
 		return
 	}

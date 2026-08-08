@@ -18,12 +18,22 @@ import (
 //     0 skips validation for local dev networks — a security risk on a
 //     public network
 type OverlayConfig struct {
-	PublicIP             string `toml:"public_ip" mapstructure:"public_ip"`
-	IPLimit              int    `toml:"ip_limit" mapstructure:"ip_limit"`
-	MaxUnknownTime       int    `toml:"max_unknown_time" mapstructure:"max_unknown_time"`
-	MaxDivergedTime      int    `toml:"max_diverged_time" mapstructure:"max_diverged_time"`
-	VerifyEndpoints      *int   `toml:"verify_endpoints" mapstructure:"verify_endpoints"`
-	InboundRetainedBytes int64  `toml:"inbound_retained_bytes" mapstructure:"inbound_retained_bytes"`
+	PublicIP             string               `toml:"public_ip" mapstructure:"public_ip"`
+	IPLimit              int                  `toml:"ip_limit" mapstructure:"ip_limit"`
+	MaxUnknownTime       int                  `toml:"max_unknown_time" mapstructure:"max_unknown_time"`
+	MaxDivergedTime      int                  `toml:"max_diverged_time" mapstructure:"max_diverged_time"`
+	VerifyEndpoints      *int                 `toml:"verify_endpoints" mapstructure:"verify_endpoints"`
+	InboundRetainedBytes int64                `toml:"inbound_retained_bytes" mapstructure:"inbound_retained_bytes"`
+	ResourceLimits       ResourceLimitsConfig `toml:"resource_limits" mapstructure:"resource_limits"`
+}
+
+// ResourceLimitsConfig bounds peer reputation and cluster-gossip state.
+// Zero values retain the built-in limits.
+type ResourceLimitsConfig struct {
+	MaxEntries         int `toml:"max_entries" mapstructure:"max_entries"`
+	MaxImportedEntries int `toml:"max_imported_entries" mapstructure:"max_imported_entries"`
+	MaxImportOrigins   int `toml:"max_import_origins" mapstructure:"max_import_origins"`
+	MaxImportItems     int `toml:"max_import_items" mapstructure:"max_import_items"`
 }
 
 // TransactionQueueConfig represents the [transaction_queue] section (EXPERIMENTAL).
@@ -74,6 +84,30 @@ func (o *OverlayConfig) Validate() error {
 	}
 	if o.InboundRetainedBytes != 0 && o.InboundRetainedBytes < 3*64*1024*1024 {
 		return fmt.Errorf("inbound_retained_bytes must be at least %d, got %d", 3*64*1024*1024, o.InboundRetainedBytes)
+	}
+	limits := o.ResourceLimits
+	for _, limit := range []struct {
+		name  string
+		value int
+	}{
+		{"resource_limits.max_entries", limits.MaxEntries},
+		{"resource_limits.max_imported_entries", limits.MaxImportedEntries},
+		{"resource_limits.max_import_origins", limits.MaxImportOrigins},
+		{"resource_limits.max_import_items", limits.MaxImportItems},
+	} {
+		if err := validateNonNegative(limit.name, limit.value); err != nil {
+			return err
+		}
+	}
+	effectiveEntries := limits.MaxEntries
+	if effectiveEntries == 0 {
+		effectiveEntries = 32768
+	}
+	if limits.MaxImportedEntries != 0 && limits.MaxImportedEntries > effectiveEntries {
+		return fmt.Errorf("resource_limits.max_imported_entries (%d) exceeds max_entries (%d)", limits.MaxImportedEntries, effectiveEntries)
+	}
+	if limits.MaxImportItems > 1024 {
+		return fmt.Errorf("resource_limits.max_import_items must not exceed 1024, got %d", limits.MaxImportItems)
 	}
 
 	return nil

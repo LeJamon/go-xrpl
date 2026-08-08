@@ -336,7 +336,7 @@ func TestHandlerPanicRecovered(t *testing.T) {
 	if strings.Contains(rr.Body.String(), panicCause) || strings.Contains(rr.Body.String(), "private seed") {
 		t.Fatalf("panic response leaked private details: %s", rr.Body.String())
 	}
-	if got, want := transportRegressionLocalBalance(t, srv.resourceManager), uint32(resource.FeeExceptionRPC.Cost()/resource.DecayWindowSeconds); got != want {
+	if got, want := transportRegressionLocalBalance(t, srv.resourceManager), uint32(resource.FeeExceptionRPC().Cost()/resource.DecayWindowSeconds); got != want {
 		t.Fatalf("panic charged %v, want %v", got, want)
 	}
 }
@@ -442,7 +442,7 @@ func TestSecureGatewayPromotesToIdentifiedWithUser(t *testing.T) {
 type heavyStub struct{ stubHandler }
 
 func (s *heavyStub) Handle(ctx *types.RpcContext, params json.RawMessage) (any, *types.RpcError) {
-	ctx.LoadCost = uint32(resource.FeeHeavyBurdenRPC.Cost())
+	ctx.LoadCost = uint32(resource.FeeHeavyBurdenRPC().Cost())
 	return s.stubHandler.Handle(ctx, params)
 }
 

@@ -473,6 +473,18 @@ func TestInboundVerificationErrorsWriteBadRequest(t *testing.T) {
 }
 
 func TestOutboundResourceAdmissionPrecedesDial(t *testing.T) {
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+	defer listener.Close()
+	accepted := make(chan struct{}, 1)
+	go func() {
+		connection, acceptErr := listener.Accept()
+		if acceptErr == nil {
+			connection.Close()
+			accepted <- struct{}{}
+		}
+	}()
+
 	o := newLifecycleTestOverlay(t, WithListenAddr(""))
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan error, 1)
@@ -483,9 +495,9 @@ func TestOutboundResourceAdmissionPrecedesDial(t *testing.T) {
 		t.Fatal("overlay did not become ready")
 	}
 
-	const addr = "127.0.0.1:1"
+	addr := listener.Addr().String()
 	consumer := o.resourceManager.NewOutboundEndpoint(addr)
-	for consumer.Disposition() != resource.Drop {
+	for {
 		if consumer.Charge(resource.NewCharge(resource.DropThreshold+1, "test"), "") == resource.Drop {
 			break
 		}
@@ -494,10 +506,27 @@ func TestOutboundResourceAdmissionPrecedesDial(t *testing.T) {
 	if err := o.Connect(addr); !errors.Is(err, ErrEndpointBanned) {
 		t.Fatalf("Connect error = %v, want ErrEndpointBanned before dial", err)
 	}
+	select {
+	case <-accepted:
+		t.Fatal("banned endpoint was dialed before resource admission")
+	case <-time.After(100 * time.Millisecond):
+	}
 	cancel()
 	select {
 	case <-done:
 	case <-time.After(2 * time.Second):
 		t.Fatal("overlay Run did not stop")
 	}
+}
+
+func TestResolveOutboundEndpointSupportsHostnames(t *testing.T) {
+	o := &Overlay{discovery: &Discovery{}}
+	o.discovery.lookupIP = func(_ context.Context, host string) ([]net.IPAddr, error) {
+		require.Equal(t, "peer.example", host)
+		return []net.IPAddr{{IP: net.ParseIP("192.0.2.80")}}, nil
+	}
+
+	endpoint, err := o.resolveOutboundEndpoint(t.Context(), Endpoint{Host: "peer.example", Port: 51235})
+	require.NoError(t, err)
+	require.Equal(t, Endpoint{Host: "192.0.2.80", Port: 51235}, endpoint)
 }

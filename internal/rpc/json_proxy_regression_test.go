@@ -34,7 +34,7 @@ func TestJSONProxyUsesSingleDispatchAccounting(t *testing.T) {
 		handle: func(ctx *types.RpcContext, _ json.RawMessage) (any, *types.RpcError) {
 			targetCalls++
 			assert.Equal(t, types.MaxJobQueueClients, services.ClientLoad.InFlight())
-			ctx.LoadCost = uint32(resource.FeeHeavyBurdenRPC.Cost())
+			ctx.LoadCost = uint32(resource.FeeHeavyBurdenRPC().Cost())
 			return map[string]any{"proxied": true}, nil
 		},
 	})
@@ -50,7 +50,7 @@ func TestJSONProxyUsesSingleDispatchAccounting(t *testing.T) {
 	require.Equal(t, 1, targetCalls)
 	assert.Equal(t, types.MaxJobQueueClients-1, services.ClientLoad.InFlight())
 	assert.Equal(t,
-		uint32(resource.FeeHeavyBurdenRPC.Cost()/resource.DecayWindowSeconds),
+		uint32(resource.FeeHeavyBurdenRPC().Cost()/resource.DecayWindowSeconds),
 		transportRegressionLocalBalance(t, server.resourceManager),
 	)
 

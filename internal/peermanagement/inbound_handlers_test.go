@@ -334,11 +334,6 @@ func TestHandleClusterMessage_ReimportReplacesPriorGossip(t *testing.T) {
 	assert.Equal(t, 1, rm.Stats().Imports, "one peer must retain one stable gossip origin")
 }
 
-// TestValidGossipAddress pins the load-source name filter against rippled's
-// beast::IP::Endpoint::from_string + `!= Endpoint()` guard
-// (PeerImp.cpp:1166-1168, IPEndpoint.cpp:179-182): a non-IP host or an
-// out-of-range / non-numeric port is dropped, while the bare-host and
-// ip:port forms (including the port-0 canonical) are accepted.
 func TestValidGossipAddress(t *testing.T) {
 	cases := []struct {
 		name string
@@ -349,18 +344,39 @@ func TestValidGossipAddress(t *testing.T) {
 		{"bare ipv4", "203.0.113.7", true},
 		{"ipv4 port zero", "203.0.113.7:0", true},
 		{"ipv4 high port", "203.0.113.7:51235", true},
-		{"ipv4 trailing colon", "203.0.113.7:", true},
+		{"ipv4 trailing colon", "203.0.113.7:", false},
 		{"ipv4 surrounding whitespace", " 203.0.113.7 ", true},
 		{"non-ip host", "not-an-address", false},
 		{"out-of-range port", "203.0.113.7:99999", false},
 		{"non-numeric port", "203.0.113.7:abc", false},
 		{"bare ipv6", "2001:db8::1", true},
+		{"bracketed bare ipv6", "[2001:db8::1]", true},
 		{"bracketed ipv6 with port", "[2001:db8::1]:51235", true},
+		{"legacy ipv4 port", "203.0.113.7 51235", true},
+		{"legacy ipv6 port", "2001:db8::1 51235", true},
+		{"trimmed", " 203.0.113.7:51235 ", true},
+		{"zone scoped", "fe80::1%en0", false},
+		{"zone scoped with port", "[fe80::1%en0]:51235", false},
+		{"whitespace before colon", "203.0.113.7 :51235", false},
+		{"too long", "2001:0db8:0000:0000:0000:0000:0000:0001 0000000000000000000051235", false},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			assert.Equal(t, tc.want, validGossipAddress(tc.in))
 		})
+	}
+}
+
+func TestCanonicalGossipAddress(t *testing.T) {
+	tests := map[string]string{
+		" 203.0.113.7:51235 ": "203.0.113.7:51235",
+		"2001:0DB8::1 51235":  "[2001:db8::1]:51235",
+		"[2001:0DB8::1]":      "2001:db8::1",
+	}
+	for input, want := range tests {
+		got, ok := canonicalGossipAddress(input)
+		require.True(t, ok)
+		assert.Equal(t, want, got)
 	}
 }
 
@@ -915,6 +931,20 @@ func TestHandleEndpoints_ChargesMalformedEntry(t *testing.T) {
 	defer o.discovery.mu.RUnlock()
 	require.Len(t, o.discovery.peers, 1)
 	assert.Contains(t, o.discovery.peers, "10.0.0.9:51235")
+}
+
+func TestHandleEndpoints_AggregatesMalformedEntryFees(t *testing.T) {
+	o, peer := newEndpointsTestOverlay(t, PeerID(115))
+	payload := encodeEndpoints(t, 2, []message.Endpointv2{
+		{Endpoint: "not-an-endpoint", Hops: 1},
+		{Endpoint: "also-invalid", Hops: 1},
+	})
+	o.onMessageReceived(Event{
+		PeerID: peer.ID(), MessageType: message.TypeEndpoints, Payload: payload,
+	})
+
+	want := uint32((2 * resource.FeeInvalidData().Cost()) / resource.DecayWindowSeconds)
+	assert.Equal(t, want, peer.BadDataCount())
 }
 
 // TestHandleEndpoints_RejectsOversizedFrame pins PeerImp.cpp:1206-1210: a

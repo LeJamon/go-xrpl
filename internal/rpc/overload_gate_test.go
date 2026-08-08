@@ -112,7 +112,7 @@ func TestGateLoadKeysUnlimitedHTTPBySocketPeer(t *testing.T) {
 	}
 	defer ctx.ResourceAdmission.Cancel()
 	entries := manager.Snapshot(0)
-	if len(entries) != 1 || entries[0].Address != "203.0.113.5:1" || entries[0].Type != "admin" {
+	if len(entries) != 1 || entries[0].Address != "IP Address: 203.0.113.5:1" || entries[0].Type != "admin" {
 		t.Fatalf("unlimited entries = %+v", entries)
 	}
 }
@@ -129,7 +129,7 @@ func TestGateLoadKeepsWebSocketConnectionConsumer(t *testing.T) {
 	}
 	defer ctx.ResourceAdmission.Cancel()
 	entries := manager.Snapshot(0)
-	if len(entries) != 1 || entries[0].Address != "198.51.100.7" || entries[0].Type != "inbound" {
+	if len(entries) != 1 || entries[0].Address != "IP Address: 198.51.100.7" || entries[0].Type != "inbound" {
 		t.Fatalf("WebSocket entries = %+v", entries)
 	}
 }
@@ -150,7 +150,7 @@ func TestWebSocketHandshakeSelectsUnlimitedConsumer(t *testing.T) {
 	}
 	defer client.Close()
 	entries := manager.Snapshot(0)
-	if len(entries) != 1 || entries[0].Address != "127.0.0.1:1" || entries[0].Type != "admin" {
+	if len(entries) != 1 || entries[0].Address != "IP Address: 127.0.0.1:1" || entries[0].Type != "admin" {
 		t.Fatalf("handshake entries = %+v", entries)
 	}
 }
@@ -306,7 +306,7 @@ func TestWSEarlyMalformedResponsesChargeWithoutLoadWarning(t *testing.T) {
 			ws := NewWebSocketServer(WebSocketServerOptions{Timeout: 2 * time.Second})
 			require.NoError(t, ws.resourceManager.ImportConsumers("warning-peer", resource.Gossip{Items: []resource.GossipItem{{
 				Address: "127.0.0.1",
-				Balance: resource.WarningThreshold - uint32(resource.FeeMalformedRPC.Cost()/resource.DecayWindowSeconds),
+				Balance: resource.WarningThreshold - uint32(resource.FeeMalformedRPC().Cost()/resource.DecayWindowSeconds),
 			}}}))
 
 			pc := &PortContext{AdminNets: []net.IPNet{mustParseCIDR("10.0.0.0/8")}}
@@ -333,7 +333,7 @@ func TestWSEarlyMalformedResponsesChargeWithoutLoadWarning(t *testing.T) {
 			if got := string(body); got != test.want {
 				t.Fatalf("response = %s, want %s", got, test.want)
 			}
-			if got, want := resourceLocalBalance(t, ws.resourceManager, "127.0.0.1"), uint32((resource.FeeMalformedRPC.Cost()+resource.FeeWarning.Cost())/resource.DecayWindowSeconds); got != want {
+			if got, want := resourceLocalBalance(t, ws.resourceManager, "127.0.0.1"), uint32((resource.FeeMalformedRPC().Cost()+resource.FeeWarning().Cost())/resource.DecayWindowSeconds); got != want {
 				t.Fatalf("local charge = %v, want %v", got, want)
 			}
 		})

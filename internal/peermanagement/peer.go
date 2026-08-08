@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"math"
 	"net"
 	"net/http"
 	"slices"
@@ -137,6 +138,7 @@ type Peer struct {
 	// (PeerImp.cpp:358) and is wired by Overlay.attachUsage.
 	usage            *resource.Consumer
 	usageMu          sync.RWMutex
+	usageReleased    bool
 	onDropDisconnect func()
 	clusterOrigin    string
 	clusterOriginSet bool
@@ -1691,10 +1693,17 @@ const maxSquelchesPerPeer = 128
 // removes any prior entry) on out-of-range duration or when the cap is
 // hit by a NEW validator key. Both rejections charge bad-data fee.
 func (p *Peer) AddSquelch(validator []byte, duration time.Duration) bool {
+	ok, reason := p.addSquelch(validator, duration)
+	if !ok {
+		p.IncBadData(reason)
+	}
+	return ok
+}
+
+func (p *Peer) addSquelch(validator []byte, duration time.Duration) (bool, string) {
 	if duration < MinUnsquelchExpire || duration > MaxUnsquelchExpirePeers {
 		p.RemoveSquelch(validator)
-		p.IncBadData("squelch-duration")
-		return false
+		return false, "squelch-duration"
 	}
 	key := string(validator)
 	p.squelchMu.Lock()
@@ -1705,10 +1714,9 @@ func (p *Peer) AddSquelch(validator []byte, duration time.Duration) bool {
 	}
 	p.squelchMu.Unlock()
 	if full {
-		p.IncBadData("squelch-map-full")
-		return false
+		return false, "squelch-map-full"
 	}
-	return true
+	return true, ""
 }
 
 // attachUsage wires this peer's resource.Consumer and the
@@ -1720,8 +1728,13 @@ func (p *Peer) attachUsage(c *resource.Consumer, onDrop func()) {
 	if p.usage != nil {
 		p.usage.Release()
 	}
+	if c != nil {
+		c.SetPublicKey(p.RemotePublicKeyEncoded())
+	}
 	p.usage = c
+	p.usageReleased = false
 	p.onDropDisconnect = onDrop
+	p.chargeDropFired.Store(false)
 }
 
 func (p *Peer) releaseUsage() {
@@ -1731,6 +1744,8 @@ func (p *Peer) releaseUsage() {
 		p.usage.Release()
 		p.usage = nil
 	}
+	p.onDropDisconnect = nil
+	p.usageReleased = true
 }
 
 func (p *Peer) resourceGossipOrigin(name string) string {
@@ -1746,9 +1761,13 @@ func (p *Peer) resourceGossipOrigin(name string) string {
 func (p *Peer) usageHandle() *resource.Consumer {
 	p.usageMu.RLock()
 	c := p.usage
+	released := p.usageReleased
 	p.usageMu.RUnlock()
 	if c != nil {
 		return c
+	}
+	if released {
+		return nil
 	}
 	// Tests and embedded usages that construct a Peer outside the
 	// addPeer path still need IncBadData / Charge to work. Lazily
@@ -1763,6 +1782,9 @@ func (p *Peer) usageHandle() *resource.Consumer {
 	// fallback must not be relied on for production paths.
 	p.usageMu.Lock()
 	defer p.usageMu.Unlock()
+	if p.usageReleased {
+		return nil
+	}
 	if p.usage != nil {
 		return p.usage
 	}
@@ -1774,8 +1796,7 @@ func (p *Peer) usageHandle() *resource.Consumer {
 	return p.usage
 }
 
-// Charge applies fee to this peer's Consumer and tears the peer down
-// on Drop. Mirrors rippled PeerImp::charge at PeerImp.cpp:351-361.
+// Charge applies fee to this peer's Consumer and tears the peer down on Drop.
 func (p *Peer) Charge(fee resource.Charge, context string) resource.Disposition {
 	c := p.usageHandle()
 	if c == nil {
@@ -1788,7 +1809,8 @@ func (p *Peer) Charge(fee resource.Charge, context string) resource.Disposition 
 		if p.chargeDropFired.CompareAndSwap(false, true) {
 			slog.Warn("peer disconnect by resource charge",
 				"t", "Peer", "peer", p.id,
-				"endpoint", p.endpoint.String(), "fee", fee.String(), "context", context)
+				"endpoint", p.endpoint.String(), "public_key", p.RemotePublicKeyEncoded(),
+				"fee", fee.String(), "context", context)
 			p.usageMu.RLock()
 			hook := p.onDropDisconnect
 			p.usageMu.RUnlock()
@@ -1809,8 +1831,10 @@ func chargeForReason(reason string) resource.Charge {
 	switch reason {
 	case "proposal-malformed-sig-size",
 		"proposal-malformed-pubkey-size",
+		"proposal-malformed-pubkey-type",
+		"validation-invalid-signature",
 		"validation-malformed-sig-size":
-		return resource.FeeInvalidSignature
+		return resource.FeeInvalidSignature()
 	case "replay-delta-verify",
 		"ledger-data-base",
 		"ledger-data-state",
@@ -1820,11 +1844,13 @@ func chargeForReason(reason string) resource.Charge {
 		"decompress-lz4-failed",
 		"message-too-large",
 		"wire-invalid":
-		return resource.FeeInvalidData
-	case "endpoints-too-large":
-		return resource.FeeUselessData
+		return resource.FeeInvalidData()
+	case "endpoints-too-large",
+		"cluster-no-pubkey",
+		"cluster-not-member":
+		return resource.FeeUselessData()
 	case "manifests-oversize":
-		return resource.FeeModerateBurdenPeer
+		return resource.FeeModerateBurdenPeer()
 	case "proposal-malformed-prev-ledger-size",
 		"proposal-malformed-txset-size",
 		"validation-malformed-ledger-hash-zero",
@@ -1842,34 +1868,38 @@ func chargeForReason(reason string) resource.Charge {
 		"replay-delta-resp-unnegotiated",
 		"proof-path-resp-unnegotiated",
 		"compression-unnegotiated",
+		"get-objects-txn-unnegotiated",
 		"get-objects-transactions-oversize",
 		"get-objects-ledgerhash",
+		"have-transactions-unnegotiated",
+		"have-transactions-hashsize",
+		"transactions-batch-unnegotiated",
 		"have-set-hashsize",
 		"proposal-decode",
 		"validation-decode",
 		"validation-parse",
 		"ledger-data-decode",
 		"squelch-ignored":
-		return resource.FeeMalformedRequest
+		return resource.FeeMalformedRequest()
 	case "no-reply":
-		return resource.FeeRequestNoReply
+		return resource.FeeRequestNoReply()
 	}
 	switch {
 	case reason == "vl-coll-no-blobs",
 		strings.Contains(reason, "-heavy-"):
-		return resource.FeeHeavyBurdenPeer
+		return resource.FeeHeavyBurdenPeer()
 	case strings.Contains(reason, "-badsig-"):
-		return resource.FeeInvalidSignature
+		return resource.FeeInvalidSignature()
 	case strings.Contains(reason, "-baddata-"),
 		strings.HasSuffix(reason, "-wrong-version"),
 		strings.HasSuffix(reason, "-decode"):
-		return resource.FeeInvalidData
+		return resource.FeeInvalidData()
 	case strings.Contains(reason, "-useless-"),
 		strings.HasSuffix(reason, "-duplicate"),
 		strings.HasSuffix(reason, "-unsupported-peer"):
-		return resource.FeeUselessData
+		return resource.FeeUselessData()
 	}
-	return resource.FeeInvalidData
+	return resource.FeeInvalidData()
 }
 
 func wirePreflightChargeReason(err error) string {
@@ -1897,11 +1927,7 @@ func (p *Peer) IncBadData(reason string) uint32 {
 		return 0
 	}
 	p.Charge(chargeForReason(reason), reason)
-	bal := c.Balance()
-	if bal < 0 {
-		return 0
-	}
-	return uint32(bal)
+	return clampResourceBalance(c.Balance())
 }
 
 // BadDataCount returns the consumer's current normalized balance,
@@ -1911,11 +1937,17 @@ func (p *Peer) BadDataCount() uint32 {
 	if c == nil {
 		return 0
 	}
-	bal := c.Balance()
-	if bal < 0 {
+	return clampResourceBalance(c.Balance())
+}
+
+func clampResourceBalance(balance int64) uint32 {
+	if balance <= 0 {
 		return 0
 	}
-	return uint32(bal)
+	if balance > math.MaxUint32 {
+		return math.MaxUint32
+	}
+	return uint32(balance)
 }
 
 // Load returns the consumer's normalized balance as int64 — signed so

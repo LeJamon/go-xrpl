@@ -10,6 +10,7 @@ import (
 	"log/slog"
 	"math/rand/v2"
 	"net"
+	"net/netip"
 	"strconv"
 	"strings"
 	"sync"
@@ -171,11 +172,12 @@ func (o *Overlay) handleClusterMessage(evt Event) {
 	if o.resourceManager != nil && len(cm.LoadSources) != 0 {
 		gossip := resource.Gossip{Items: make([]resource.GossipItem, 0, len(cm.LoadSources))}
 		for _, src := range cm.LoadSources {
-			if !validGossipAddress(src.Name) {
+			address, ok := canonicalGossipAddress(src.Name)
+			if !ok {
 				continue
 			}
 			gossip.Items = append(gossip.Items, resource.GossipItem{
-				Address: src.Name,
+				Address: address,
 				Balance: src.Cost,
 			})
 		}
@@ -185,32 +187,58 @@ func (o *Overlay) handleClusterMessage(evt Event) {
 	}
 }
 
-// validGossipAddress reports whether name parses as the IP endpoint that
-// a TMLoadSource carries. Mirrors rippled's
-// beast::IP::Endpoint::from_string + `!= Endpoint()` guard at
-// PeerImp.cpp:1166-1168, which silently drops a load source whose name
-// is not a valid endpoint. Both the rippled "ip:port" form (its exported
-// keys canonicalise to port 0) and go-xrpl's bare-host form (resource
-// keys strip the inbound port — see resource.normalizeAddr) round-trip.
-// The port is range-checked as a uint16 to match from_string, which
-// parses it into a uint16 and fails on an out-of-range or non-numeric
-// port (IPEndpoint.cpp:179-182); net.ParseIP already rejects anything
-// longer than from_string_checked's 64-char cap, so no separate guard.
 func validGossipAddress(name string) bool {
+	_, ok := canonicalGossipAddress(name)
+	return ok
+}
+
+func canonicalGossipAddress(name string) (string, bool) {
+	if len(name) > 64 {
+		return "", false
+	}
 	name = strings.TrimSpace(name)
 	if name == "" {
-		return false
+		return "", false
 	}
-	host := name
-	if h, port, err := net.SplitHostPort(name); err == nil {
-		if port != "" {
-			if _, err := strconv.ParseUint(port, 10, 16); err != nil {
-				return false
-			}
+
+	if addr, err := netip.ParseAddr(name); err == nil {
+		if addr.Zone() != "" {
+			return "", false
 		}
-		host = h
+		return addr.Unmap().String(), true
 	}
-	return net.ParseIP(host) != nil
+	if strings.HasPrefix(name, "[") && strings.HasSuffix(name, "]") {
+		if addr, err := netip.ParseAddr(name[1 : len(name)-1]); err == nil && addr.Zone() == "" {
+			return addr.Unmap().String(), true
+		}
+	}
+	if endpoint, err := netip.ParseAddrPort(name); err == nil {
+		if endpoint.Addr().Zone() != "" {
+			return "", false
+		}
+		return netip.AddrPortFrom(endpoint.Addr().Unmap(), endpoint.Port()).String(), true
+	}
+
+	fields := strings.Fields(name)
+	if len(fields) != 2 {
+		return "", false
+	}
+	host := fields[0]
+	if strings.HasPrefix(host, "[") || strings.HasSuffix(host, "]") {
+		if !strings.HasPrefix(host, "[") || !strings.HasSuffix(host, "]") || len(host) < 3 {
+			return "", false
+		}
+		host = host[1 : len(host)-1]
+	}
+	addr, err := netip.ParseAddr(host)
+	if err != nil || addr.Zone() != "" {
+		return "", false
+	}
+	port, err := strconv.ParseUint(fields[1], 10, 16)
+	if err != nil {
+		return "", false
+	}
+	return netip.AddrPortFrom(addr.Unmap(), uint16(port)).String(), true
 }
 
 // handleGetObjectsMessage processes mtGET_OBJECTS from a peer. Mirrors
@@ -259,7 +287,7 @@ func (o *Overlay) handleGetObjectsMessage(evt Event) {
 		case message.ObjectTypeFetchPack:
 			if len(gob.LedgerHash) != 32 {
 				if peerOK {
-					peer.Charge(resource.FeeMalformedRequest, "fetch pack ledger hash")
+					peer.Charge(resource.FeeMalformedRequest(), "fetch pack ledger hash")
 				}
 				return
 			}
@@ -294,7 +322,7 @@ func (o *Overlay) handleGetObjectsMessage(evt Event) {
 				o.IncPeerBadData(evt.PeerID, "get-objects-txn-unnegotiated")
 				return
 			}
-			o.submitRetainedServe(evt, resource.FeeModerateBurdenPeer,
+			o.submitRetainedServe(evt, resource.FeeModerateBurdenPeer(),
 				func(ctx context.Context) { o.serveDoTransactionsContext(ctx, evt.PeerID, gob) })
 			return
 		}
@@ -308,11 +336,11 @@ func (o *Overlay) handleGetObjectsMessage(evt Event) {
 		}
 		if len(gob.Objects) > hardMaxReplyNodes {
 			if peer, ok := o.getPeer(evt.PeerID); ok {
-				peer.Charge(resource.FeeInvalidData, "oversized get object request")
+				peer.Charge(resource.FeeInvalidData(), "oversized get object request")
 			}
 			return
 		}
-		o.submitRetainedServe(evt, resource.FeeModerateBurdenPeer,
+		o.submitRetainedServe(evt, resource.FeeModerateBurdenPeer(),
 			func(ctx context.Context) { o.serveGetObjectsContext(ctx, evt.PeerID, gob) })
 		return
 	}
@@ -388,7 +416,7 @@ func (o *Overlay) serveFetchPackContext(ctx context.Context, peerID PeerID, req 
 		return
 	}
 	if len(req.LedgerHash) != 32 {
-		o.chargeServePeer(peerID, resource.FeeMalformedRequest, "fetch pack ledger hash")
+		o.chargeServePeer(peerID, resource.FeeMalformedRequest(), "fetch pack ledger hash")
 		return
 	}
 
@@ -408,19 +436,19 @@ func (o *Overlay) serveFetchPackContext(ctx context.Context, peerID PeerID, req 
 	// Charge only after the provider has passed its local busy/stale guard.
 	// Unknown ledgers and other unavailable outcomes still incur the heavy
 	// request cost followed by the protocol's no-reply charge.
-	o.chargeServePeer(peerID, resource.FeeHeavyBurdenPeer, "fetch pack request")
+	o.chargeServePeer(peerID, resource.FeeHeavyBurdenPeer(), "fetch pack request")
 	if err != nil {
 		if errors.Is(err, ErrFetchPackTooEarly) || errors.Is(err, ErrFetchPackOpen) {
-			o.chargeServePeer(peerID, resource.FeeMalformedRequest, "fetch pack malformed request")
+			o.chargeServePeer(peerID, resource.FeeMalformedRequest(), "fetch pack malformed request")
 		} else if !errors.Is(err, context.Canceled) && !errors.Is(err, context.DeadlineExceeded) {
-			o.chargeServePeer(peerID, resource.FeeRequestNoReply, "fetch pack request unavailable")
+			o.chargeServePeer(peerID, resource.FeeRequestNoReply(), "fetch pack request unavailable")
 		}
 		slog.Debug("fetch-pack build failed",
 			"t", "Overlay", "peer", peerID, "err", err)
 		return
 	}
 	if len(objects) == 0 {
-		o.chargeServePeer(peerID, resource.FeeRequestNoReply, "fetch pack request unavailable")
+		o.chargeServePeer(peerID, resource.FeeRequestNoReply(), "fetch pack request unavailable")
 		return
 	}
 	objects = limitIndexedObjectsToReplyBudget(objects, req.LedgerHash)
@@ -439,7 +467,7 @@ func (o *Overlay) serveFetchPackContext(ctx context.Context, peerID PeerID, req 
 	}
 	frame, err := message.EncodeFrame(reply)
 	if err != nil || len(frame) > message.MaxMessageSize {
-		o.chargeServePeer(peerID, resource.FeeRequestNoReply, "fetch pack response oversized")
+		o.chargeServePeer(peerID, resource.FeeRequestNoReply(), "fetch pack response oversized")
 		return
 	}
 	if err := peer.SendPriority(frame); err != nil {
@@ -760,7 +788,7 @@ func (o *Overlay) serveDoTransactionsContext(ctx context.Context, peerID PeerID,
 func (o *Overlay) chargeMalformedTransactionRequest(peerID PeerID, reason string) {
 	peer, ok := o.getPeer(peerID)
 	if ok {
-		peer.Charge(resource.FeeMalformedRequest, reason)
+		peer.Charge(resource.FeeMalformedRequest(), reason)
 	}
 }
 
@@ -859,7 +887,7 @@ func (o *Overlay) serveGetObjects(peerID PeerID, req *message.GetObjectByHash) {
 		(len(req.LedgerHash) == 0 || len(req.LedgerHash) == 32) &&
 		len(req.Objects) <= hardMaxReplyNodes {
 		if peer, ok := o.getPeer(peerID); ok {
-			peer.Charge(resource.FeeModerateBurdenPeer, "get object by hash request")
+			peer.Charge(resource.FeeModerateBurdenPeer(), "get object by hash request")
 		}
 	}
 	o.serveGetObjectsContext(context.Background(), peerID, req)
@@ -889,7 +917,7 @@ func (o *Overlay) serveGetObjectsContext(ctx context.Context, peerID PeerID, req
 	// charges feeMalformedRequest "ledger hash" on a wrong-sized field
 	// and returns (PeerImp.cpp:2492-2501).
 	if len(req.LedgerHash) != 0 && len(req.LedgerHash) != 32 {
-		peer.Charge(resource.FeeMalformedRequest, "get object ledger hash")
+		peer.Charge(resource.FeeMalformedRequest(), "get object ledger hash")
 		return
 	}
 
@@ -898,7 +926,7 @@ func (o *Overlay) serveGetObjectsContext(ctx context.Context, peerID PeerID, req
 	// is far below this cap; anything past it is non-conforming and is
 	// charged feeInvalidData (PeerImp.cpp:2500-2506).
 	if len(req.Objects) > hardMaxReplyNodes {
-		peer.Charge(resource.FeeInvalidData, "oversized get object request")
+		peer.Charge(resource.FeeInvalidData(), "oversized get object request")
 		return
 	}
 

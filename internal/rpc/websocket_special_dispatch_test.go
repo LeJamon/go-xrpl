@@ -34,7 +34,7 @@ func newSpecialDispatchHarness(t *testing.T) (*WebSocketServer, *websocketConnec
 	t.Cleanup(consumer.Release)
 	conn.resourceConsumer = consumer
 	ctx.ResourceConsumer = consumer
-	ctx.ResourceAdmission, _ = consumer.Admit(resource.FeeReferenceRPC)
+	ctx.ResourceAdmission, _ = consumer.Admit(resource.FeeReferenceRPC())
 	require.NotNil(t, ctx.ResourceAdmission)
 	return ws, conn, ctx
 }
@@ -174,7 +174,7 @@ func TestWebSocketSpecialDispatchRecoversPanic(t *testing.T) {
 	if strings.Contains(string(encoded), "private panic detail") {
 		t.Fatalf("panic response leaked private detail: %s", encoded)
 	}
-	if got, want := resourceLocalBalance(t, ws.resourceManager, ctx.ClientIP), uint32(resource.FeeExceptionRPC.Cost()/resource.DecayWindowSeconds); got != want {
+	if got, want := resourceLocalBalance(t, ws.resourceManager, ctx.ClientIP), uint32(resource.FeeExceptionRPC().Cost()/resource.DecayWindowSeconds); got != want {
 		t.Fatalf("panic charge = %v, want %v", got, want)
 	}
 	if got := ws.services.ClientLoad.InFlight(); got != 0 {
@@ -191,12 +191,12 @@ func TestWebSocketPathFindDynamicLoadCost(t *testing.T) {
 		subcommand string
 		want       int
 	}{
-		{subcommand: "create", want: resource.FeeHeavyBurdenRPC.Cost()},
-		{subcommand: "close", want: resource.FeeReferenceRPC.Cost()},
-		{subcommand: "status", want: resource.FeeReferenceRPC.Cost()},
+		{subcommand: "create", want: resource.FeeHeavyBurdenRPC().Cost()},
+		{subcommand: "close", want: resource.FeeReferenceRPC().Cost()},
+		{subcommand: "status", want: resource.FeeReferenceRPC().Cost()},
 	} {
 		t.Run(test.subcommand, func(t *testing.T) {
-			ctx.LoadCost = uint32(resource.FeeReferenceRPC.Cost())
+			ctx.LoadCost = uint32(resource.FeeReferenceRPC().Cost())
 			cmd := specialDispatchCommand("path_find")
 			cmd.Params = json.RawMessage(`{"subcommand":"` + test.subcommand + `"}`)
 			_, _ = ws.executePathFind(conn, ctx, cmd)
@@ -250,15 +250,15 @@ func TestWebSocketSubscribeSnapshotLoadCostAfterValidation(t *testing.T) {
 		want      int
 		wantError bool
 	}{
-		{name: "validated snapshot", params: validSnapshot, want: resource.FeeMediumBurdenRPC.Cost()},
-		{name: "validated state_now", params: validStateNow, want: resource.FeeMediumBurdenRPC.Cost()},
-		{name: "invalid snapshot", params: invalidSnapshot, want: resource.FeeReferenceRPC.Cost(), wantError: true},
-		{name: "later invalid book retains snapshot load", params: validThenInvalidSnapshot, want: resource.FeeMediumBurdenRPC.Cost(), wantError: true},
-		{name: "no snapshot", params: `{}`, want: resource.FeeReferenceRPC.Cost()},
+		{name: "validated snapshot", params: validSnapshot, want: resource.FeeMediumBurdenRPC().Cost()},
+		{name: "validated state_now", params: validStateNow, want: resource.FeeMediumBurdenRPC().Cost()},
+		{name: "invalid snapshot", params: invalidSnapshot, want: resource.FeeReferenceRPC().Cost(), wantError: true},
+		{name: "later invalid book retains snapshot load", params: validThenInvalidSnapshot, want: resource.FeeMediumBurdenRPC().Cost(), wantError: true},
+		{name: "no snapshot", params: `{}`, want: resource.FeeReferenceRPC().Cost()},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			ws, conn, ctx := newSpecialDispatchHarness(t)
-			ctx.LoadCost = uint32(resource.FeeReferenceRPC.Cost())
+			ctx.LoadCost = uint32(resource.FeeReferenceRPC().Cost())
 			cmd := specialDispatchCommand("subscribe")
 			cmd.Params = json.RawMessage(test.params)
 			_, rpcErr := ws.executeSubscribe(conn, ctx, cmd)

@@ -16,27 +16,27 @@ func TestLoadCostEarlyErrorTiming(t *testing.T) {
 		params  json.RawMessage
 		want    int
 	}{
-		{"sign", &SignMethod{}, json.RawMessage(`{}`), resource.FeeHeavyBurdenRPC.Cost()},
-		{"sign_for", &SignForMethod{}, json.RawMessage(`{}`), resource.FeeHeavyBurdenRPC.Cost()},
-		{"submit_multisigned", &SubmitMultisignedMethod{}, json.RawMessage(`{}`), resource.FeeHeavyBurdenRPC.Cost()},
-		{"submit", &SubmitMethod{}, json.RawMessage(`{}`), resource.FeeMediumBurdenRPC.Cost()},
-		{"simulate", &SimulateMethod{}, json.RawMessage(`{"binary":"invalid"}`), resource.FeeMediumBurdenRPC.Cost()},
-		{"account_tx", &AccountTxMethod{}, json.RawMessage(`{}`), resource.FeeReferenceRPC.Cost()},
-		{"gateway_balances", &GatewayBalancesMethod{}, json.RawMessage(`{}`), resource.FeeReferenceRPC.Cost()},
-		{"account_lines", &AccountLinesMethod{}, json.RawMessage(`{}`), resource.FeeReferenceRPC.Cost()},
-		{"account_objects", &AccountObjectsMethod{}, json.RawMessage(`{}`), resource.FeeReferenceRPC.Cost()},
-		{"account_offers", &AccountOffersMethod{}, json.RawMessage(`{}`), resource.FeeReferenceRPC.Cost()},
-		{"account_channels", &AccountChannelsMethod{}, json.RawMessage(`{}`), resource.FeeReferenceRPC.Cost()},
-		{"account_nfts", &AccountNftsMethod{}, json.RawMessage(`{}`), resource.FeeReferenceRPC.Cost()},
-		{"ledger_data", &LedgerDataMethod{}, json.RawMessage(`{}`), resource.FeeReferenceRPC.Cost()},
-		{"noripple_check", &NoRippleCheckMethod{}, json.RawMessage(`{}`), resource.FeeReferenceRPC.Cost()},
+		{"sign", &SignMethod{}, json.RawMessage(`{}`), resource.FeeHeavyBurdenRPC().Cost()},
+		{"sign_for", &SignForMethod{}, json.RawMessage(`{}`), resource.FeeHeavyBurdenRPC().Cost()},
+		{"submit_multisigned", &SubmitMultisignedMethod{}, json.RawMessage(`{}`), resource.FeeHeavyBurdenRPC().Cost()},
+		{"submit", &SubmitMethod{}, json.RawMessage(`{}`), resource.FeeMediumBurdenRPC().Cost()},
+		{"simulate", &SimulateMethod{}, json.RawMessage(`{"binary":"invalid"}`), resource.FeeMediumBurdenRPC().Cost()},
+		{"account_tx", &AccountTxMethod{}, json.RawMessage(`{}`), resource.FeeReferenceRPC().Cost()},
+		{"gateway_balances", &GatewayBalancesMethod{}, json.RawMessage(`{}`), resource.FeeReferenceRPC().Cost()},
+		{"account_lines", &AccountLinesMethod{}, json.RawMessage(`{}`), resource.FeeReferenceRPC().Cost()},
+		{"account_objects", &AccountObjectsMethod{}, json.RawMessage(`{}`), resource.FeeReferenceRPC().Cost()},
+		{"account_offers", &AccountOffersMethod{}, json.RawMessage(`{}`), resource.FeeReferenceRPC().Cost()},
+		{"account_channels", &AccountChannelsMethod{}, json.RawMessage(`{}`), resource.FeeReferenceRPC().Cost()},
+		{"account_nfts", &AccountNftsMethod{}, json.RawMessage(`{}`), resource.FeeReferenceRPC().Cost()},
+		{"ledger_data", &LedgerDataMethod{}, json.RawMessage(`{}`), resource.FeeReferenceRPC().Cost()},
+		{"noripple_check", &NoRippleCheckMethod{}, json.RawMessage(`{}`), resource.FeeReferenceRPC().Cost()},
 	}
 
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			ctx := &types.RpcContext{
 				Context:  context.Background(),
-				LoadCost: uint32(resource.FeeReferenceRPC.Cost()),
+				LoadCost: uint32(resource.FeeReferenceRPC().Cost()),
 				Services: &types.ServiceContainer{Capabilities: types.RPCCapabilities{SigningEnabled: true}},
 			}
 			_, rpcErr := test.handler.Handle(ctx, test.params)
@@ -57,7 +57,7 @@ func TestRipplePathFindBusyAdmissionIsHeavy(t *testing.T) {
 	}
 	ctx := &types.RpcContext{
 		Context:  context.Background(),
-		LoadCost: uint32(resource.FeeReferenceRPC.Cost()),
+		LoadCost: uint32(resource.FeeReferenceRPC().Cost()),
 		Services: &types.ServiceContainer{
 			Ledger:       &loadAdmissionLedger{serverInfo: &types.LedgerServerInfo{Standalone: true}},
 			ClientLoad:   shedder,
@@ -69,7 +69,7 @@ func TestRipplePathFindBusyAdmissionIsHeavy(t *testing.T) {
 	if rpcErr == nil {
 		t.Fatal("expected busy path-find request to fail admission")
 	}
-	if got := int(ctx.LoadCost); got != resource.FeeHeavyBurdenRPC.Cost() {
-		t.Fatalf("load cost = %d, want %d", got, resource.FeeHeavyBurdenRPC.Cost())
+	if got := int(ctx.LoadCost); got != resource.FeeHeavyBurdenRPC().Cost() {
+		t.Fatalf("load cost = %d, want %d", got, resource.FeeHeavyBurdenRPC().Cost())
 	}
 }

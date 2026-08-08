@@ -1,7 +1,18 @@
 package resource
 
+import "errors"
+
+var (
+	ErrEntryLimit         = errors.New("resource entry cap reached")
+	ErrImportedEntryLimit = errors.New("resource imported entry cap reached")
+	ErrImportOriginLimit  = errors.New("resource gossip origin cap reached")
+	ErrImportItemLimit    = errors.New("resource gossip item cap reached")
+	ErrInvalidImport      = errors.New("invalid resource gossip")
+)
+
 const (
 	defaultMaxEntries             = 65_536
+	defaultMaxImportedEntries     = 32_768
 	defaultMaxImports             = 1_024
 	defaultMaxGossipItems         = 1_024
 	defaultMaxInflightPerConsumer = 16
@@ -12,6 +23,7 @@ const (
 
 type Limits struct {
 	MaxEntries             int
+	MaxImportedEntries     int
 	MaxImports             int
 	MaxGossipItems         int
 	MaxInflightPerConsumer int
@@ -23,6 +35,7 @@ type Limits struct {
 func DefaultLimits() Limits {
 	return Limits{
 		MaxEntries:             defaultMaxEntries,
+		MaxImportedEntries:     defaultMaxImportedEntries,
 		MaxImports:             defaultMaxImports,
 		MaxGossipItems:         defaultMaxGossipItems,
 		MaxInflightPerConsumer: defaultMaxInflightPerConsumer,
@@ -37,11 +50,14 @@ func (l Limits) withDefaults() Limits {
 	if l.MaxEntries > 0 {
 		d.MaxEntries = l.MaxEntries
 	}
+	if l.MaxImportedEntries > 0 {
+		d.MaxImportedEntries = l.MaxImportedEntries
+	}
 	if l.MaxImports > 0 {
 		d.MaxImports = l.MaxImports
 	}
 	if l.MaxGossipItems > 0 {
-		d.MaxGossipItems = l.MaxGossipItems
+		d.MaxGossipItems = min(l.MaxGossipItems, defaultMaxGossipItems)
 	}
 	if l.MaxInflightPerConsumer > 0 {
 		d.MaxInflightPerConsumer = l.MaxInflightPerConsumer
@@ -55,11 +71,17 @@ func (l Limits) withDefaults() Limits {
 	if l.MaxOriginLength > 0 {
 		d.MaxOriginLength = l.MaxOriginLength
 	}
+	d.MaxImportedEntries = min(d.MaxImportedEntries, d.MaxEntries)
 	return d
 }
 
 type Stats struct {
 	Entries            int
+	Active             int
+	Retained           int
+	ImportedEntries    int
+	ImportOrigins      int
+	ImportItems        int
 	Imports            int
 	Inflight           int
 	Evictions          uint64

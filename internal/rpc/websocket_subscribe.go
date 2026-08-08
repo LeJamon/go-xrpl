@@ -141,7 +141,7 @@ func (ws *WebSocketServer) finishUnsubscribe(wsConn *websocketConnection, reques
 func setSubscriptionLoadCost(ctx *types.RpcContext, request types.SubscriptionRequest) {
 	for _, book := range request.Books {
 		if book.Snapshot || book.StateNow {
-			ctx.LoadCost = uint32(resource.FeeMediumBurdenRPC.Cost())
+			ctx.LoadCost = uint32(resource.FeeMediumBurdenRPC().Cost())
 			return
 		}
 	}

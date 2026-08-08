@@ -285,7 +285,7 @@ func (h *LedgerSyncHandler) handleProofPathRequest(ctx context.Context, peerID P
 	// rippled's ordering at LedgerReplayMsgHandler.cpp:46-54.
 	if len(req.Key) != 32 || len(req.LedgerHash) != 32 ||
 		(req.MapType != message.LedgerMapTransaction && req.MapType != message.LedgerMapAccountState) {
-		h.charge(peerID, resource.FeeMalformedRequest, "proof path request")
+		h.charge(peerID, resource.FeeMalformedRequest(), "proof path request")
 		return ErrPeerBadRequest
 	}
 
@@ -294,7 +294,7 @@ func (h *LedgerSyncHandler) handleProofPathRequest(ctx context.Context, peerID P
 	h.mu.RUnlock()
 
 	if provider == nil {
-		h.charge(peerID, resource.FeeRequestNoReply, "proof path request unavailable")
+		h.charge(peerID, resource.FeeRequestNoReply(), "proof path request unavailable")
 		return nil
 	}
 
@@ -316,13 +316,13 @@ func (h *LedgerSyncHandler) handleProofPathRequest(ctx context.Context, peerID P
 	}
 	switch {
 	case errors.Is(err, ErrLedgerNotFound):
-		h.charge(peerID, resource.FeeRequestNoReply, "proof path request no ledger")
+		h.charge(peerID, resource.FeeRequestNoReply(), "proof path request no ledger")
 		return nil
 	case errors.Is(err, ErrKeyNotFound):
 		// Rippled does not pack the header on the no-node path —
 		// LedgerReplayMsgHandler.cpp:84-90 returns before the header is
 		// serialized at line 92. Mirror that here.
-		h.charge(peerID, resource.FeeRequestNoReply, "proof path request no node")
+		h.charge(peerID, resource.FeeRequestNoReply(), "proof path request no node")
 		return nil
 	case err != nil:
 		slog.Warn("ProofPath provider error",
@@ -332,12 +332,12 @@ func (h *LedgerSyncHandler) handleProofPathRequest(ctx context.Context, peerID P
 		)
 		// Provider returned an unexpected error; the fault is ours, not the
 		// peer's, so charge the no-reply fee without signaling bad input.
-		h.charge(peerID, resource.FeeRequestNoReply, "proof path request provider error")
+		h.charge(peerID, resource.FeeRequestNoReply(), "proof path request provider error")
 		return nil
 	}
 
 	if proofPathResponseOversized(req, header, path) {
-		h.charge(peerID, resource.FeeRequestNoReply, "proof path response oversized")
+		h.charge(peerID, resource.FeeRequestNoReply(), "proof path response oversized")
 		return nil
 	}
 
@@ -373,7 +373,7 @@ func (h *LedgerSyncHandler) sendProofPathResponse(ctx context.Context, peerID Pe
 		return
 	}
 	if len(frame) > MaxProofPathResponseBytes {
-		h.charge(peerID, resource.FeeRequestNoReply, "proof path response oversized")
+		h.charge(peerID, resource.FeeRequestNoReply(), "proof path response oversized")
 		return
 	}
 	h.mu.RLock()
@@ -383,7 +383,7 @@ func (h *LedgerSyncHandler) sendProofPathResponse(ctx context.Context, peerID Pe
 	if prioritySender != nil {
 		if err := prioritySender(ctx, peerID, frame); err != nil && ctx.Err() == nil {
 			h.droppedResponses.Add(1)
-			h.charge(peerID, resource.FeeRequestNoReply, "proof path response send failed")
+			h.charge(peerID, resource.FeeRequestNoReply(), "proof path response send failed")
 			slog.Debug("ProofPath priority response failed", "t", "LedgerSync", "peer", peerID, "err", err)
 		}
 		return
@@ -437,7 +437,7 @@ func (h *LedgerSyncHandler) handleReplayDeltaRequest(ctx context.Context, peerID
 	// Validate ledger_hash length first — this check is independent of any
 	// configured provider, matching the rippled ordering.
 	if len(req.LedgerHash) != 32 {
-		h.charge(peerID, resource.FeeMalformedRequest, "replay delta request")
+		h.charge(peerID, resource.FeeMalformedRequest(), "replay delta request")
 		return ErrPeerBadRequest
 	}
 
@@ -446,7 +446,7 @@ func (h *LedgerSyncHandler) handleReplayDeltaRequest(ctx context.Context, peerID
 	h.mu.RUnlock()
 
 	if provider == nil {
-		h.charge(peerID, resource.FeeRequestNoReply, "replay delta request unavailable")
+		h.charge(peerID, resource.FeeRequestNoReply(), "replay delta request unavailable")
 		return nil
 	}
 
@@ -467,7 +467,7 @@ func (h *LedgerSyncHandler) handleReplayDeltaRequest(ctx context.Context, peerID
 		return err
 	}
 	if err != nil || len(header) == 0 {
-		h.charge(peerID, resource.FeeRequestNoReply, "replay delta request no ledger")
+		h.charge(peerID, resource.FeeRequestNoReply(), "replay delta request no ledger")
 		return nil
 	}
 
@@ -480,7 +480,7 @@ func (h *LedgerSyncHandler) handleReplayDeltaRequest(ctx context.Context, peerID
 			"size", len(header),
 			"limit", message.MaxMessageSize,
 		)
-		h.charge(peerID, resource.FeeRequestNoReply, "replay delta response oversized")
+		h.charge(peerID, resource.FeeRequestNoReply(), "replay delta response oversized")
 		return nil
 	}
 
@@ -522,7 +522,7 @@ func (h *LedgerSyncHandler) sendReplayDeltaResponse(ctx context.Context, peerID 
 	if prioritySender != nil {
 		if err := prioritySender(ctx, peerID, frame); err != nil && ctx.Err() == nil {
 			h.droppedResponses.Add(1)
-			h.charge(peerID, resource.FeeRequestNoReply, "replay delta response send failed")
+			h.charge(peerID, resource.FeeRequestNoReply(), "replay delta response send failed")
 			slog.Debug("ReplayDelta priority response failed", "t", "LedgerSync", "peer", peerID, "err", err)
 		}
 		return

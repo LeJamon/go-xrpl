@@ -6,6 +6,7 @@ import (
 
 	addresscodec "github.com/LeJamon/go-xrpl/codec/addresscodec"
 	"github.com/LeJamon/go-xrpl/internal/peermanagement/cluster"
+	"github.com/LeJamon/go-xrpl/internal/peermanagement/resource"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -126,6 +127,49 @@ func TestPeersJSON_NoClusterConfigured(t *testing.T) {
 	require.Len(t, out, 1)
 	assert.NotContains(t, out[0], "cluster")
 	assert.NotContains(t, out[0], "name")
+}
+
+func TestClusterPeerRetainsDirectionalResourceAccounting(t *testing.T) {
+	clusterID, err := NewIdentity()
+	require.NoError(t, err)
+	clusterPub, err := addresscodec.EncodeNodePublicKey(clusterID.PublicKey())
+	require.NoError(t, err)
+
+	o, err := New(WithDataDir(t.TempDir()), WithClusterNodes(clusterPub+" trusted"))
+	require.NoError(t, err)
+	peer := newPeerWithRemoteKey(t, o, 1, Endpoint{Host: "192.0.2.31", Port: 51235}, clusterID)
+	peer.inbound = true
+	require.NoError(t, o.addPeer(peer))
+	require.True(t, o.isClusterPeer(peer))
+
+	entries := o.resourceManager.Snapshot(0)
+	require.Len(t, entries, 1)
+	assert.Equal(t, "inbound", entries[0].Type)
+	assert.Equal(t,
+		"IP Address: 192.0.2.31, Public Key: "+clusterID.EncodedPublicKey(),
+		entries[0].Address,
+	)
+
+	removed := make(chan struct{})
+	go func() {
+		<-peer.closeCh
+		o.removePeer(peer.ID())
+		close(removed)
+	}()
+	fee := resource.NewCharge(resource.DropThreshold+1, "cluster abuse")
+	for range 100 {
+		if peer.Charge(fee, "cluster abuse") == resource.Drop {
+			break
+		}
+	}
+	select {
+	case <-removed:
+	case <-time.After(time.Second):
+		t.Fatal("cluster peer was not removed after resource drop")
+	}
+	_, exists := o.getPeer(peer.ID())
+	assert.False(t, exists)
+	assert.Equal(t, uint64(1), o.PeerDisconnectsResources())
 }
 
 // TestClusterJSON_ExcludesSelfAndShapesEntries mirrors rippled

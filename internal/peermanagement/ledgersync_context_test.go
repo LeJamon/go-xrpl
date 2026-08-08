@@ -70,14 +70,14 @@ func TestLedgerSyncChargesMalformedAndUnavailable(t *testing.T) {
 	if err := h.HandleMessage(context.Background(), 1, &message.ReplayDeltaRequest{LedgerHash: []byte{1}}); !errors.Is(err, ErrPeerBadRequest) {
 		t.Fatalf("malformed request error = %v, want ErrPeerBadRequest", err)
 	}
-	if len(charges) != 1 || charges[0] != resource.FeeMalformedRequest {
+	if len(charges) != 1 || charges[0] != resource.FeeMalformedRequest() {
 		t.Fatalf("malformed charges = %#v, want FeeMalformedRequest", charges)
 	}
 	charges = nil
 	if err := h.HandleMessage(context.Background(), 1, &message.ReplayDeltaRequest{LedgerHash: make([]byte, 32)}); err != nil {
 		t.Fatalf("unavailable provider error = %v", err)
 	}
-	if len(charges) != 1 || charges[0] != resource.FeeRequestNoReply {
+	if len(charges) != 1 || charges[0] != resource.FeeRequestNoReply() {
 		t.Fatalf("unavailable charges = %#v, want FeeRequestNoReply", charges)
 	}
 }

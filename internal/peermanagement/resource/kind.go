@@ -1,7 +1,5 @@
 package resource
 
-// Kind classifies a Consumer. Mirrors rippled's
-// ripple::Resource::Kind.
 type Kind int
 
 const (
@@ -11,9 +9,8 @@ const (
 	// KindOutbound is a peer connection initiated by this node.
 	KindOutbound
 
-	// KindUnlimited is a privileged endpoint (e.g. cluster member,
-	// admin) for which Charge is a no-op — balance stays at zero and
-	// disposition is always Ok.
+	// KindUnlimited is a privileged administrative endpoint for which
+	// Charge is a no-op.
 	KindUnlimited
 )
 

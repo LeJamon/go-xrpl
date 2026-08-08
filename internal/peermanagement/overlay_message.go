@@ -98,6 +98,11 @@ func (o *Overlay) onPeerFailed(evt Event) {
 }
 
 func (o *Overlay) onMessageReceived(evt Event) {
+	if evt.charge == nil {
+		if peer, ok := o.getPeer(evt.PeerID); ok {
+			evt.charge = newMessageCharge(peer, evt.MessageType.String())
+		}
+	}
 	defer evt.release()
 	msgType := evt.MessageType
 
@@ -158,9 +163,7 @@ func (o *Overlay) onMessageReceived(evt Event) {
 		if !o.peerNegotiatedLedgerReplay(evt.PeerID) {
 			slog.Debug("ReplayDeltaRequest from peer without ledgerreplay feature; dropping",
 				"t", "Overlay", "peer", evt.PeerID)
-			if peer, ok := o.getPeer(evt.PeerID); ok {
-				peer.Charge(resource.FeeMalformedRequest, "replay delta request disabled")
-			}
+			o.selectMessageCharge(&evt, resource.FeeMalformedRequest(), "replay delta request disabled")
 			return
 		}
 		o.dispatchReplayDeltaRequest(evt)
@@ -174,9 +177,7 @@ func (o *Overlay) onMessageReceived(evt Event) {
 		if !o.peerNegotiatedLedgerReplay(evt.PeerID) {
 			slog.Debug("ProofPathRequest from peer without ledgerreplay feature; dropping",
 				"t", "Overlay", "peer", evt.PeerID)
-			if peer, ok := o.getPeer(evt.PeerID); ok {
-				peer.Charge(resource.FeeMalformedRequest, "proof path request disabled")
-			}
+			o.selectMessageCharge(&evt, resource.FeeMalformedRequest(), "proof path request disabled")
 			return
 		}
 		o.dispatchProofPathRequest(evt)
@@ -192,9 +193,7 @@ func (o *Overlay) onMessageReceived(evt Event) {
 		if !o.peerNegotiatedLedgerReplay(evt.PeerID) {
 			slog.Debug("TMReplayDeltaResponse from peer without ledgerreplay feature; dropping",
 				"t", "Overlay", "peer", evt.PeerID)
-			if peer, ok := o.getPeer(evt.PeerID); ok {
-				peer.Charge(resource.FeeMalformedRequest, "replay delta response disabled")
-			}
+			o.selectMessageCharge(&evt, resource.FeeMalformedRequest(), "replay delta response disabled")
 			return
 		}
 	}
@@ -202,9 +201,7 @@ func (o *Overlay) onMessageReceived(evt Event) {
 		if !o.peerNegotiatedLedgerReplay(evt.PeerID) {
 			slog.Debug("TMProofPathResponse from peer without ledgerreplay feature; dropping",
 				"t", "Overlay", "peer", evt.PeerID)
-			if peer, ok := o.getPeer(evt.PeerID); ok {
-				peer.Charge(resource.FeeMalformedRequest, "proof path response disabled")
-			}
+			o.selectMessageCharge(&evt, resource.FeeMalformedRequest(), "proof path response disabled")
 			return
 		}
 	}
@@ -362,8 +359,11 @@ func (o *Overlay) PeerDisconnectsResources() uint64 {
 	return o.peerDisconnectsCharges.Load()
 }
 
-func (o *Overlay) ResourceManager() *resource.Manager {
-	return o.resourceManager
+func (o *Overlay) ResourceStats() resource.Stats {
+	if o.resourceManager == nil {
+		return resource.Stats{}
+	}
+	return o.resourceManager.Stats()
 }
 
 // DroppedEvents returns the cumulative count of events dropped
@@ -419,14 +419,14 @@ func (o *Overlay) dispatchReplayDeltaRequest(evt Event) {
 	decoded, err := message.Decode(message.TypeReplayDeltaReq, evt.Payload)
 	if err != nil {
 		slog.Debug("ReplayDeltaRequest decode failed", "t", "Overlay", "peer", evt.PeerID, "err", err)
-		o.IncPeerBadData(evt.PeerID, "replay-delta-req-decode")
+		o.selectMessageChargeReason(&evt, "replay-delta-req-decode")
 		return
 	}
 	req, ok := decoded.(*message.ReplayDeltaRequest)
 	if !ok {
 		return
 	}
-	o.submitRetainedServe(evt, resource.FeeModerateBurdenPeer,
+	o.submitRetainedServe(evt, resource.FeeModerateBurdenPeer(),
 		func(ctx context.Context) {
 			if err := o.ledgerSync.HandleMessage(ctx, evt.PeerID, req); err != nil &&
 				!errors.Is(err, context.Canceled) && !errors.Is(err, context.DeadlineExceeded) {
@@ -446,14 +446,14 @@ func (o *Overlay) dispatchProofPathRequest(evt Event) {
 	decoded, err := message.Decode(message.TypeProofPathReq, evt.Payload)
 	if err != nil {
 		slog.Debug("ProofPathRequest decode failed", "t", "Overlay", "peer", evt.PeerID, "err", err)
-		o.IncPeerBadData(evt.PeerID, "proof-path-req-decode")
+		o.selectMessageChargeReason(&evt, "proof-path-req-decode")
 		return
 	}
 	req, ok := decoded.(*message.ProofPathRequest)
 	if !ok {
 		return
 	}
-	o.submitRetainedServe(evt, resource.FeeModerateBurdenPeer,
+	o.submitRetainedServe(evt, resource.FeeModerateBurdenPeer(),
 		func(ctx context.Context) {
 			if err := o.ledgerSync.HandleMessage(ctx, evt.PeerID, req); err != nil &&
 				!errors.Is(err, context.Canceled) && !errors.Is(err, context.DeadlineExceeded) {
@@ -559,7 +559,7 @@ func (o *Overlay) handleSquelchMessage(evt Event) {
 	decoded, err := message.Decode(message.TypeSquelch, evt.Payload)
 	if err != nil {
 		slog.Debug("Squelch decode failed", "t", "Overlay", "peer", evt.PeerID, "err", err)
-		o.IncPeerBadData(evt.PeerID, "squelch-malformed-pubkey")
+		o.selectMessageChargeReason(&evt, "squelch-malformed-pubkey")
 		return
 	}
 	sq, ok := decoded.(*message.Squelch)
@@ -572,20 +572,16 @@ func (o *Overlay) handleSquelchMessage(evt Event) {
 	if len(sq.ValidatorPubKey) != 33 {
 		slog.Debug("Squelch malformed pubkey",
 			"t", "Overlay", "peer", evt.PeerID, "len", len(sq.ValidatorPubKey))
-		o.IncPeerBadData(evt.PeerID, "squelch-malformed-pubkey")
+		o.selectMessageChargeReason(&evt, "squelch-malformed-pubkey")
 		return
 	}
 
 	// Drop any inbound squelch whose target pubkey is our own
 	// validator — otherwise a peer could silence our own traffic on
-	// the RelayFromValidator path (self-silencing DoS). go-xrpl
-	// additionally charges the sending peer a bad-data event so
-	// repeated attempts feed the eviction threshold; rippled just
-	// logs-and-returns there.
+	// the RelayFromValidator path (self-silencing DoS).
 	if ownPubKey := o.localValidatorPubKey(); len(ownPubKey) == 33 && bytes.Equal(sq.ValidatorPubKey, ownPubKey) {
 		slog.Debug("Squelch dropped: targets local validator",
 			"t", "Overlay", "peer", evt.PeerID)
-		o.IncPeerBadData(evt.PeerID, "squelch-targets-self")
 		return
 	}
 
@@ -599,7 +595,8 @@ func (o *Overlay) handleSquelchMessage(evt Event) {
 		return
 	}
 	duration := time.Duration(sq.SquelchDuration) * time.Second
-	if !peer.AddSquelch(sq.ValidatorPubKey, duration) {
+	if ok, reason := peer.addSquelch(sq.ValidatorPubKey, duration); !ok {
+		o.selectMessageChargeReason(&evt, reason)
 		slog.Debug("Squelch ignored: invalid duration", "t", "Overlay", "peer", evt.PeerID, "duration", sq.SquelchDuration)
 	}
 }
@@ -616,6 +613,7 @@ func (o *Overlay) handlePing(evt Event) bool {
 
 	switch ping.PType {
 	case message.PingTypePing:
+		o.selectMessageCharge(&evt, resource.FeeModerateBurdenPeer(), "ping request")
 		pong := *ping
 		pong.PType = message.PingTypePong
 		wireMsg, err := message.EncodeFrame(&pong)

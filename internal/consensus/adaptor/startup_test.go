@@ -7,6 +7,7 @@ import (
 
 	"github.com/LeJamon/go-xrpl/config"
 	"github.com/LeJamon/go-xrpl/internal/peermanagement"
+	"github.com/LeJamon/go-xrpl/internal/peermanagement/resource"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -80,6 +81,38 @@ func TestOverlayOptionsFromConfig_InboundRetainedBytes(t *testing.T) {
 	}
 
 	assert.EqualValues(t, budget, cfg.InboundRetainedBytes)
+}
+
+func TestOverlayOptionsFromConfig_ResourceLimits(t *testing.T) {
+	cfg := peermanagement.DefaultConfig()
+	for _, opt := range OverlayOptionsFromConfig(&config.Config{
+		Overlay: config.OverlayConfig{ResourceLimits: config.ResourceLimitsConfig{
+			MaxEntries: 100, MaxImportedEntries: 75, MaxImportOrigins: 12, MaxImportItems: 64,
+		}},
+	}) {
+		opt(&cfg)
+	}
+
+	want := resource.DefaultLimits()
+	want.MaxEntries = 100
+	want.MaxImportedEntries = 75
+	want.MaxImports = 12
+	want.MaxGossipItems = 64
+	assert.Equal(t, want, cfg.ResourceLimits)
+}
+
+func TestOverlayOptionsFromConfig_PartialResourceLimitsRetainDefaults(t *testing.T) {
+	cfg := peermanagement.DefaultConfig()
+	for _, opt := range OverlayOptionsFromConfig(&config.Config{
+		Overlay: config.OverlayConfig{ResourceLimits: config.ResourceLimitsConfig{MaxEntries: 100}},
+	}) {
+		opt(&cfg)
+	}
+
+	want := resource.DefaultLimits()
+	want.MaxEntries = 100
+	want.MaxImportedEntries = 100
+	assert.Equal(t, want, cfg.ResourceLimits)
 }
 
 func TestOverlayOptionsFromConfig_BootstrapPrecedence(t *testing.T) {
