@@ -1377,7 +1377,6 @@ func TestBadOuterFee(t *testing.T) {
 // =============================================================================
 // Test 12: testBatchDelegate
 // Reference: rippled Batch_test.cpp testBatchDelegate()
-// Skipped: Requires Delegate transaction type which is not yet implemented
 // =============================================================================
 
 func TestBatchDelegate(t *testing.T) {

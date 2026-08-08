@@ -348,11 +348,7 @@ func (e *TestEnv) SetDelegate(owner, authorized *Account, permissions []string) 
 	ds := delegate.NewDelegateSet(owner.Address)
 	ds.Authorize = authorized.Address
 	for _, perm := range permissions {
-		ds.Permissions = append(ds.Permissions, delegate.Permission{
-			Permission: delegate.PermissionData{
-				PermissionValue: perm,
-			},
-		})
+		ds.Permissions = append(ds.Permissions, delegate.NewPermission(perm))
 	}
 
 	result := e.Submit(ds)

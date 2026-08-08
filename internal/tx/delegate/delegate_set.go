@@ -68,10 +68,15 @@ type PermissionData struct {
 	PermissionValue string `json:"PermissionValue,omitempty"`
 }
 
+func NewPermission(permissionValue string) Permission {
+	return Permission{Permission: PermissionData{PermissionValue: permissionValue}}
+}
+
 // NewDelegateSet creates a new DelegateSet transaction
 func NewDelegateSet(account string) *DelegateSet {
 	return &DelegateSet{
-		BaseTx: *tx.NewBaseTx(tx.TypeDelegateSet, account),
+		BaseTx:      *tx.NewBaseTx(tx.TypeDelegateSet, account),
+		Permissions: make([]Permission, 0),
 	}
 }
 
@@ -93,6 +98,10 @@ func (d *DelegateSet) Validate() error {
 		return err
 	}
 
+	if d.Permissions == nil {
+		return ter.Errorf(ter.TemMALFORMED, "Permissions is required")
+	}
+
 	// Check permissions array size.
 	// Reference: rippled DelegateSet.cpp preflight() — permissions.size() > permissionMaxSize
 	if len(d.Permissions) > permissionMaxSize {
@@ -107,16 +116,14 @@ func (d *DelegateSet) Validate() error {
 
 	// Check for duplicate permission values.
 	// Reference: rippled DelegateSet.cpp preflight() — permissionSet.insert check
-	seen := make(map[string]bool)
+	seen := make(map[uint32]struct{}, len(d.Permissions))
 	for _, p := range d.Permissions {
-		pv := p.Permission.PermissionValue
-		if pv == "" {
-			continue
+		name := p.Permission.PermissionValue
+		value := state.LookupPermissionValue(name)
+		if _, exists := seen[value]; exists {
+			return ter.Errorf(ter.TemMALFORMED, "duplicate permission value %q", name)
 		}
-		if seen[pv] {
-			return ter.Errorf(ter.TemMALFORMED, "duplicate permission value %q", pv)
-		}
-		seen[pv] = true
+		seen[value] = struct{}{}
 	}
 
 	return nil
@@ -134,7 +141,7 @@ func (d *DelegateSet) Flatten() (map[string]any, error) {
 		m["Authorize"] = d.Authorize
 	}
 
-	if len(d.Permissions) > 0 {
+	if d.Permissions != nil {
 		permsArray := make([]map[string]any, len(d.Permissions))
 		for i, p := range d.Permissions {
 			// Convert the string permission name to its numeric value
@@ -217,7 +224,7 @@ func (d *DelegateSet) Apply(ctx *tx.ApplyContext) ter.Result {
 	if delegateExists {
 		// Empty permissions -- delete the delegate entry.
 		if len(permValues) == 0 {
-			return deleteDelegate(ctx, delegateKey, ctx.AccountID)
+			return DeleteDelegate(ctx, delegateKey, existingData)
 		}
 
 		// Update the existing delegate with new permissions, preserving the
@@ -281,37 +288,54 @@ func (d *DelegateSet) Apply(ctx *tx.ApplyContext) ter.Result {
 	return ter.TesSUCCESS
 }
 
-// deleteDelegate removes an existing delegate entry from the ledger.
-// Reference: rippled DelegateSet.cpp deleteDelegate()
-func deleteDelegate(ctx *tx.ApplyContext, delegateKey keylet.Keylet, account [20]byte) ter.Result {
-	// Read the existing entry to get OwnerNode
-	existingData, err := ctx.View.Read(delegateKey)
-	if err != nil || existingData == nil {
-		return ter.TefINTERNAL
-	}
-
+// DeleteDelegate removes a Delegate entry, both directory links, and the
+// delegator's owner count.
+func DeleteDelegate(ctx *tx.ApplyContext, delegateKey keylet.Keylet, existingData []byte) ter.Result {
 	existingEntry, parseErr := state.ParseDelegate(existingData)
 	if parseErr != nil {
-		return ter.TefINTERNAL
+		return ter.TefBAD_LEDGER
 	}
 
-	// Remove from the delegating account's owner directory.
-	state.DirRemove(ctx.View, keylet.OwnerDir(account), existingEntry.OwnerNode, delegateKey.Key, false)
+	removed, err := state.DirRemove(ctx.View, keylet.OwnerDir(existingEntry.Account), existingEntry.OwnerNode, delegateKey.Key, false)
+	if err != nil || removed == nil || !removed.Success {
+		return ter.TefBAD_LEDGER
+	}
 
-	// Remove from the authorized account's owner directory, if linked there.
 	if existingEntry.HasDestinationNode {
-		state.DirRemove(ctx.View, keylet.OwnerDir(existingEntry.Authorize), existingEntry.DestinationNode, delegateKey.Key, false)
+		removed, err = state.DirRemove(ctx.View, keylet.OwnerDir(existingEntry.Authorize), existingEntry.DestinationNode, delegateKey.Key, false)
+		if err != nil || removed == nil || !removed.Success {
+			return ter.TefBAD_LEDGER
+		}
 	}
 
-	// Erase the delegate entry
+	if existingEntry.Account == ctx.AccountID {
+		if ctx.Account.OwnerCount > 0 {
+			ctx.Account.OwnerCount--
+		}
+	} else {
+		accountKey := keylet.Account(existingEntry.Account)
+		accountData, err := ctx.View.Read(accountKey)
+		if err != nil || accountData == nil {
+			return ter.TecINTERNAL
+		}
+		account, err := state.ParseAccountRoot(accountData)
+		if err != nil {
+			return ter.TefINTERNAL
+		}
+		if account.OwnerCount > 0 {
+			account.OwnerCount--
+		}
+		accountData, err = state.SerializeAccountRoot(account)
+		if err != nil {
+			return ter.TefINTERNAL
+		}
+		if err := ctx.View.Update(accountKey, accountData); err != nil {
+			return ter.TefINTERNAL
+		}
+	}
+
 	if err := ctx.View.Erase(delegateKey); err != nil {
-		ctx.Log.Error("delegate set: unable to delete delegate from owner")
 		return ter.TefINTERNAL
-	}
-
-	// Only the delegating account's owner count was incremented on creation.
-	if ctx.Account.OwnerCount > 0 {
-		ctx.Account.OwnerCount--
 	}
 
 	return ter.TesSUCCESS

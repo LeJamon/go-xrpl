@@ -5,6 +5,7 @@ import (
 	"github.com/LeJamon/go-xrpl/internal/ledger/state"
 	"github.com/LeJamon/go-xrpl/internal/tx"
 	"github.com/LeJamon/go-xrpl/internal/tx/credential"
+	"github.com/LeJamon/go-xrpl/internal/tx/delegate"
 	"github.com/LeJamon/go-xrpl/internal/tx/oracle"
 	"github.com/LeJamon/go-xrpl/internal/tx/ter"
 	"github.com/LeJamon/go-xrpl/keylet"
@@ -386,19 +387,8 @@ func deleteSignerList(ctx *tx.ApplyContext, ownerDirKey, ik keylet.Keylet, data 
 	return ter.TesSUCCESS
 }
 
-func deleteDelegate(ctx *tx.ApplyContext, ownerDirKey, ik keylet.Keylet, data []byte) ter.Result {
-	dd, err := state.ParseDelegate(data)
-	if err != nil {
-		return ter.TefBAD_LEDGER
-	}
-	if !removeFromDir(ctx, ownerDirKey, dd.OwnerNode, ik.Key, false) {
-		return ter.TefBAD_LEDGER
-	}
-	if err := ctx.View.Erase(ik); err != nil {
-		return ter.TefBAD_LEDGER
-	}
-	decrementOwnerCount(ctx)
-	return ter.TesSUCCESS
+func deleteDelegate(ctx *tx.ApplyContext, _ keylet.Keylet, ik keylet.Keylet, data []byte) ter.Result {
+	return delegate.DeleteDelegate(ctx, ik, data)
 }
 
 // deleteCredential and deleteOracle delegate to helpers that own their full
