@@ -1,275 +1,385 @@
-// Package watchdog implements an out-of-band stall detector for the node's
-// long-running event loops.
-//
-// The consensus engine's in-band missedHeartbeats counter (rcl/engine.go)
-// cannot catch a true deadlock: it lives inside the goroutine it watches, so
-// a timerEntry that never returns to its select loop also never increments the
-// counter. This watchdog runs on its own goroutine with its own ticker. Each
-// monitored loop is handed a Pinger and stamps a heartbeat once per iteration;
-// the watchdog measures the gap between now and the most recent heartbeat of
-// every registered loop and escalates as the gap grows.
-//
-// Behaviour mirrors rippled's LoadManager (LoadManager.cpp): warn at >=10s
-// without a heartbeat (repeated every reporting interval), fatal log at
-// >=90s, and process abort at >=600s with a full goroutine dump as the
-// terminal evidence. Like LoadManager, only loop LIVENESS is monitored —
-// never ledger-close progress — so a live node that is behind or resyncing
-// is left to self-heal. The abort path drains the async log queue and fsyncs
-// the stdout/stderr/file descriptors so the final abort record survives
-// os.Exit, which skips deferred Sync hooks. Only the stall-detection half of
-// LoadManager is reproduced here; the local-fee raise/lower half already
-// lives in internal/feetrack.
+// Package watchdog detects stalled node event loops and guarantees terminal
+// recovery when a stall reaches the abort threshold.
 package watchdog
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
 	"os"
 	"runtime"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	xrpllog "github.com/LeJamon/go-xrpl/log"
 )
 
 const (
-	// DefaultWarn is the rippled reportingIntervalSeconds: warn once the
-	// quietest loop has been silent this long, and repeat every interval.
-	DefaultWarn = 10 * time.Second
-
-	// DefaultFatal is the rippled stallFatalLogMessageTimeLimit: escalate the
-	// periodic report from warn to fatal once the stall reaches this long.
-	DefaultFatal = 90 * time.Second
-
-	// DefaultAbort is the rippled stallLogicErrorTimeLimit: the stall-recovery
-	// code is considered to have failed, so abort the process.
-	DefaultAbort = 600 * time.Second
-
-	// tickInterval matches rippled's 1s LoadManager cadence.
-	tickInterval = time.Second
+	tickInterval          = time.Second
+	terminalRecoveryGrace = 5 * time.Second
+	maxStackDumpBytes     = 8 << 20
 )
 
-// Config tunes the watchdog thresholds. The zero value is invalid; use
-// DefaultConfig and override as needed, or build one from config.WatchdogConfig.
-type Config struct {
-	// Warn is the silence threshold at which a warning is logged (and repeated).
-	Warn time.Duration
-	// Fatal is the silence threshold at which the periodic report becomes fatal.
-	Fatal time.Duration
-	// Abort is the silence threshold at which the process is aborted.
-	Abort time.Duration
+var (
+	errNoRegistrations = errors.New("watchdog has no active registrations")
+	errAlreadyStarted  = errors.New("watchdog is already started")
+)
+
+type thresholds struct {
+	warn  time.Duration
+	fatal time.Duration
+	abort time.Duration
 }
 
-// DefaultConfig returns the rippled-matching thresholds.
-func DefaultConfig() Config {
-	return Config{Warn: DefaultWarn, Fatal: DefaultFatal, Abort: DefaultAbort}
+type heartbeat struct {
+	generation     uint64
+	last           time.Time
+	reportedBucket int64
+	fatalReported  bool
 }
 
-// ConfigFromSeconds builds a Config from threshold values expressed in seconds,
-// the form the [watchdog] config section stores. Non-positive values fall back
-// to the rippled defaults via New.
-func ConfigFromSeconds(warn, fatal, abort int) Config {
-	return Config{
-		Warn:  time.Duration(warn) * time.Second,
-		Fatal: time.Duration(fatal) * time.Second,
-		Abort: time.Duration(abort) * time.Second,
+// Registration owns one generation of a named heartbeat.
+type Registration struct {
+	watchdog   *Watchdog
+	loop       string
+	generation uint64
+}
+
+// Ping records progress while this registration still owns the loop name.
+func (r *Registration) Ping() {
+	if r == nil || r.watchdog == nil {
+		return
 	}
+	w := r.watchdog
+	now := w.now()
+	w.mu.Lock()
+	state, ok := w.heartbeats[r.loop]
+	if ok && state.generation == r.generation {
+		if now.After(state.last) {
+			state.last = now
+			state.reportedBucket = 0
+			state.fatalReported = false
+		}
+		w.heartbeats[r.loop] = state
+	}
+	w.mu.Unlock()
 }
 
-// Pinger is the tiny surface a monitored loop holds. Each loop calls Ping once
-// per iteration to record that it is still making progress.
-type Pinger func()
+// Close releases the loop name if this registration still owns it.
+func (r *Registration) Close() {
+	if r == nil || r.watchdog == nil {
+		return
+	}
+	w := r.watchdog
+	w.mu.Lock()
+	if state, ok := w.heartbeats[r.loop]; ok && state.generation == r.generation {
+		delete(w.heartbeats, r.loop)
+	}
+	w.mu.Unlock()
+}
 
-// Watchdog tracks per-loop heartbeats and escalates when a loop goes silent.
-// It is safe for concurrent use: loops Ping from their own goroutines while the
-// Run goroutine reads heartbeats.
+type scheduleFunc func(time.Duration, func()) func()
+
+// Watchdog owns heartbeat registrations and its monitoring goroutine.
 type Watchdog struct {
-	cfg    Config
+	cfg    thresholds
 	logger *slog.Logger
 
-	// now, sync, and exit are injectable so tests can drive a virtual clock and
-	// observe the abort path without terminating the test process. In production
-	// now is time.Now, sync best-effort fsyncs the log descriptors, and exit is
-	// os.Exit(1). sync runs before exit on the abort path.
-	now  func() time.Time
-	sync func()
-	exit func()
+	now           func() time.Time
+	sync          func()
+	exit          func()
+	stack         func([]byte) int
+	stackSink     io.Writer
+	schedule      scheduleFunc
+	terminalGrace time.Duration
+	report        func(observation)
+	reporting     atomic.Bool
 
-	// stack captures all goroutine stacks right before an abort. Injectable so
-	// tests can assert it fires without parsing a real dump.
-	stack func() string
+	mu             sync.Mutex
+	heartbeats     map[string]heartbeat
+	nextGeneration uint64
 
-	// stackSink receives the full goroutine dump verbatim, bypassing the
-	// structured logger whose per-attribute cap truncates a large dump.
-	// Defaults to os.Stderr; tests point it at a buffer.
-	stackSink io.Writer
+	lifecycleMu sync.Mutex
+	cancel      context.CancelFunc
+	done        chan struct{}
 
-	mu         sync.Mutex
-	heartbeats map[string]time.Time
+	terminal  atomic.Bool
+	abortOnce sync.Once
 }
 
-// New builds a Watchdog with the given thresholds and logger. A nil logger
-// falls back to slog.Default. Thresholds that are non-positive are replaced
-// with their defaults so a partially-filled Config still produces a sane
-// watchdog.
-func New(cfg Config, logger *slog.Logger) *Watchdog {
-	if cfg.Warn <= 0 {
-		cfg.Warn = DefaultWarn
+// New constructs a watchdog with validated positive, ordered thresholds.
+func New(warn, fatal, abort time.Duration, logger *slog.Logger) (*Watchdog, error) {
+	if warn <= 0 || fatal <= 0 || abort <= 0 {
+		return nil, fmt.Errorf("watchdog thresholds must be positive")
 	}
-	if cfg.Fatal <= 0 {
-		cfg.Fatal = DefaultFatal
-	}
-	if cfg.Abort <= 0 {
-		cfg.Abort = DefaultAbort
+	if !(warn < fatal && fatal < abort) {
+		return nil, fmt.Errorf("watchdog thresholds must satisfy warn < fatal < abort, got %s < %s < %s", warn, fatal, abort)
 	}
 	if logger == nil {
 		logger = slog.Default()
 	}
 	w := &Watchdog{
-		cfg:        cfg,
-		logger:     logger.With("component", "watchdog"),
-		now:        time.Now,
-		sync:       syncLogDescriptors,
-		stack:      allGoroutineStacks,
-		stackSink:  os.Stderr,
-		heartbeats: make(map[string]time.Time),
+		cfg: thresholds{
+			warn:  warn,
+			fatal: fatal,
+			abort: abort,
+		},
+		logger:        logger.With("component", "watchdog"),
+		now:           time.Now,
+		sync:          syncLogDescriptors,
+		exit:          func() { os.Exit(1) },
+		stack:         allGoroutineStacks,
+		stackSink:     os.Stderr,
+		schedule:      scheduleAfter,
+		terminalGrace: terminalRecoveryGrace,
+		heartbeats:    make(map[string]heartbeat),
 	}
-	// exit terminates the process so an orchestrator can restart the wedged node
-	// — rippled's LogicError abort. sync (called by check before exit) drains the
-	// async log queue and fsyncs the descriptors so the abort record survives
-	// os.Exit, which under async logging would otherwise leave it still queued.
-	w.exit = func() { os.Exit(1) }
-	return w
+	w.report = w.logStallAsync
+	return w, nil
 }
 
-// Register adds a loop and stamps its first heartbeat as now, so a loop that
-// has not yet ticked is treated as healthy until its first expected iteration
-// rather than tripping the moment the watchdog arms. Returns a Pinger bound to
-// that loop. Registering the same name twice returns a fresh Pinger for it.
-func (w *Watchdog) Register(loop string) Pinger {
-	w.mu.Lock()
-	w.heartbeats[loop] = w.now()
-	w.mu.Unlock()
-	return func() { w.ping(loop) }
-}
-
-func (w *Watchdog) ping(loop string) {
-	now := w.now()
-	w.mu.Lock()
-	w.heartbeats[loop] = now
-	w.mu.Unlock()
-}
-
-// stalled returns the loop with the largest silence and that silence duration.
-// A watchdog with no registered loops reports zero stall.
-func (w *Watchdog) stalled() (loop string, silence time.Duration) {
-	now := w.now()
-	w.mu.Lock()
-	defer w.mu.Unlock()
-	for name, last := range w.heartbeats {
-		if d := now.Sub(last); d > silence {
-			silence, loop = d, name
-		}
+// Register replaces any prior generation for loop and returns its new owner.
+func (w *Watchdog) Register(loop string) (*Registration, error) {
+	if loop == "" {
+		return nil, errors.New("watchdog loop name is empty")
 	}
-	return loop, silence
+	w.mu.Lock()
+	now := w.now()
+	w.nextGeneration++
+	if w.nextGeneration == 0 {
+		w.nextGeneration++
+	}
+	generation := w.nextGeneration
+	w.heartbeats[loop] = heartbeat{generation: generation, last: now}
+	w.mu.Unlock()
+	return &Registration{watchdog: w, loop: loop, generation: generation}, nil
 }
 
-// Run drives the detection ticker until ctx is cancelled. It blocks, so callers
-// launch it in its own goroutine. The watchdog must already have its loops
-// registered (and ideally pinged once) before Run arms — mirroring rippled
-// arming activateStallDetector only at full start.
-func (w *Watchdog) Run(ctx context.Context) {
-	w.run(ctx, tickInterval)
+// Start begins monitoring. At least one active registration is required.
+func (w *Watchdog) Start(ctx context.Context) error {
+	if ctx == nil {
+		return errors.New("watchdog start context is nil")
+	}
+	if err := ctx.Err(); err != nil {
+		return fmt.Errorf("watchdog start context: %w", err)
+	}
+	w.lifecycleMu.Lock()
+	defer w.lifecycleMu.Unlock()
+	if w.done != nil {
+		return errAlreadyStarted
+	}
+	if w.terminal.Load() {
+		return errors.New("watchdog has already entered terminal recovery")
+	}
+	w.mu.Lock()
+	if len(w.heartbeats) == 0 {
+		w.mu.Unlock()
+		return errNoRegistrations
+	}
+	now := w.now()
+	for name, state := range w.heartbeats {
+		state.last = now
+		state.reportedBucket = 0
+		state.fatalReported = false
+		w.heartbeats[name] = state
+	}
+	w.mu.Unlock()
+
+	runCtx, cancel := context.WithCancel(ctx)
+	done := make(chan struct{})
+	w.cancel = cancel
+	w.done = done
+	go func() {
+		defer close(done)
+		w.run(runCtx, tickInterval)
+	}()
+	w.logger.Info("stall watchdog armed",
+		"warn_s", int64(w.cfg.warn/time.Second),
+		"fatal_s", int64(w.cfg.fatal/time.Second),
+		"abort_s", int64(w.cfg.abort/time.Second),
+	)
+	return nil
+}
+
+// Stop cancels monitoring and waits for the goroutine to finish.
+func (w *Watchdog) Stop() {
+	w.lifecycleMu.Lock()
+	cancel, done := w.cancel, w.done
+	if done == nil {
+		w.lifecycleMu.Unlock()
+		return
+	}
+	cancel()
+	w.lifecycleMu.Unlock()
+
+	<-done
+
+	w.lifecycleMu.Lock()
+	if w.done == done {
+		w.cancel = nil
+		w.done = nil
+	}
+	w.lifecycleMu.Unlock()
 }
 
 func (w *Watchdog) run(ctx context.Context, interval time.Duration) {
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
-
 	for {
 		select {
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
-			w.check(interval)
+			if w.check() {
+				return
+			}
 		}
 	}
 }
 
-// check performs one detection pass. It reports on each whole reporting-interval
-// boundary (rippled's `timeSpentStalled % reportingIntervalSeconds == 0` gate),
-// escalating from warn to a fatal-level log once the stall reaches Fatal, and
-// aborts once it reaches Abort with a full goroutine dump as the terminal
-// evidence. The dump is deliberately abort-only: runtime.Stack(all) stops the
-// world, which would aggravate a merely-slow node at the 10s warn.
-func (w *Watchdog) check(tick time.Duration) {
-	loop, silence := w.stalled()
-	if silence < w.cfg.Warn {
+type observation struct {
+	loop       string
+	silence    time.Duration
+	shouldLog  bool
+	fatalLevel bool
+}
+
+func (w *Watchdog) observe() observation {
+	now := w.now()
+	w.mu.Lock()
+	defer w.mu.Unlock()
+
+	var result observation
+	for name, state := range w.heartbeats {
+		silence := now.Sub(state.last)
+		if silence > result.silence || (silence == result.silence && (result.loop == "" || name < result.loop)) {
+			result.loop = name
+			result.silence = silence
+		}
+	}
+	if result.loop == "" || result.silence < w.cfg.warn {
+		return result
+	}
+
+	state := w.heartbeats[result.loop]
+	bucket := int64(result.silence / w.cfg.warn)
+	if bucket > state.reportedBucket {
+		state.reportedBucket = bucket
+		result.shouldLog = true
+	}
+	if result.silence >= w.cfg.fatal {
+		result.fatalLevel = true
+		if !state.fatalReported {
+			state.fatalReported = true
+			result.shouldLog = true
+		}
+	}
+	w.heartbeats[result.loop] = state
+	return result
+}
+
+// check performs one detection pass and reports whether terminal recovery began.
+func (w *Watchdog) check() bool {
+	if w.terminal.Load() {
+		return true
+	}
+	result := w.observe()
+	if result.loop == "" || result.silence < w.cfg.warn {
+		return false
+	}
+	if result.silence >= w.cfg.abort {
+		w.terminal.Store(true)
+		w.abortOnce.Do(func() { w.terminate(result) })
+		return true
+	}
+	if result.shouldLog {
+		w.report(result)
+	}
+	return false
+}
+
+func (w *Watchdog) logStallAsync(result observation) {
+	if !w.reporting.CompareAndSwap(false, true) {
 		return
 	}
-
-	// Fire only when the elapsed-tick count is a whole multiple of the warn
-	// interval, so the report cadence is the warn interval rather than the tick.
-	// When the tick is coarser than the warn interval every pass reports.
-	warnTicks := max(w.cfg.Warn/tick, 1)
-	if (silence/tick)%warnTicks == 0 {
-		secs := int64(silence / time.Second)
-		if silence < w.cfg.Fatal {
-			w.logger.Warn("server loop stalled",
-				"loop", loop, "stalled_s", secs)
-		} else {
-			// slog has no Fatal level; the level=fatal attr is the fatal marker,
-			// matching the log package's canonical "fatal" name (LevelName).
-			w.logger.Error("server loop stalled",
-				"loop", loop, "stalled_s", secs, "level", "fatal")
-		}
-	}
-
-	if silence >= w.cfg.Abort {
-		secs := int64(silence / time.Second)
-		// Straight to the sink, which the logger's attribute cap would
-		// otherwise truncate.
-		w.dumpToSink(loop, secs, w.stack())
-		w.logger.Error("fatal server stall detected — aborting",
-			"loop", loop, "stalled_s", secs)
-		w.sync()
-		w.exit()
-	}
+	go func() {
+		defer w.reporting.Store(false)
+		w.logStall(result)
+	}()
 }
 
-// dumpToSink writes the full goroutine dump verbatim to stackSink, framed by a
-// greppable banner so a post-mortem can locate it.
-func (w *Watchdog) dumpToSink(loop string, secs int64, dump string) {
+func (w *Watchdog) logStall(result observation) {
+	args := []any{"loop", result.loop, "stalled_s", int64(result.silence / time.Second)}
+	if result.fatalLevel {
+		w.logger.Log(context.Background(), xrpllog.LevelFatal, "server loop stalled", args...)
+		return
+	}
+	w.logger.Warn("server loop stalled", args...)
+}
+
+func (w *Watchdog) terminate(result observation) {
+	var exitOnce sync.Once
+	hardExit := func() { exitOnce.Do(w.exit) }
+	stopFallback := w.schedule(w.terminalGrace, hardExit)
+	defer func() {
+		if stopFallback != nil {
+			stopFallback()
+		}
+		hardExit()
+		_ = recover()
+	}()
+
+	if result.shouldLog {
+		w.logStall(result)
+	}
+	seconds := int64(result.silence / time.Second)
+	w.logger.Log(context.Background(), xrpllog.LevelFatal, "fatal server stall detected — aborting",
+		"loop", result.loop,
+		"stalled_s", seconds,
+	)
+
+	buffer := make([]byte, maxStackDumpBytes)
+	n := w.stack(buffer)
+	if n < 0 {
+		n = 0
+	}
+	if n > len(buffer) {
+		n = len(buffer)
+	}
+	w.dumpToSink(result.loop, seconds, buffer[:n], n == len(buffer))
+	w.sync()
+}
+
+func (w *Watchdog) dumpToSink(loop string, seconds int64, dump []byte, truncated bool) {
 	if w.stackSink == nil {
 		return
 	}
-	fmt.Fprintf(w.stackSink,
-		"\n=== watchdog fatal-stall goroutine dump (loop=%s stalled_s=%d) ===\n%s\n=== end watchdog dump ===\n",
-		loop, secs, dump)
+	_, _ = fmt.Fprintf(w.stackSink,
+		"\n=== watchdog fatal-stall goroutine dump (loop=%s stalled_s=%d) ===\n",
+		loop,
+		seconds,
+	)
+	_, _ = w.stackSink.Write(dump)
+	if truncated {
+		_, _ = io.WriteString(w.stackSink, "\n=== watchdog dump truncated ===")
+	}
+	_, _ = io.WriteString(w.stackSink, "\n=== end watchdog dump ===\n")
 }
 
-// syncLogDescriptors best-effort flushes the node's logs so the final abort
-// record survives os.Exit, which does not flush kernel-buffered output.
-// xrpllog.Sync runs first: it drains the async log queue into the destination
-// (and fsyncs a file-backed [logging] output). The stdout/stderr fsyncs then
-// cover the default and "stderr" config outputs. All errors are ignored — the
-// process is aborting regardless.
+func scheduleAfter(delay time.Duration, callback func()) func() {
+	timer := time.AfterFunc(delay, callback)
+	return func() { timer.Stop() }
+}
+
 func syncLogDescriptors() {
 	_ = xrpllog.Sync()
 	_ = os.Stderr.Sync()
 	_ = os.Stdout.Sync()
 }
 
-// allGoroutineStacks returns a dump of every goroutine's stack. The buffer
-// grows until the whole dump fits: runtime.Stack silently truncates to the
-// buffer length, and a wedged node under load can exceed a fixed 1 MiB.
-func allGoroutineStacks() string {
-	for size := 1 << 20; ; size *= 2 {
-		buf := make([]byte, size)
-		if n := runtime.Stack(buf, true); n < size {
-			return string(buf[:n])
-		}
-	}
+func allGoroutineStacks(buffer []byte) int {
+	return runtime.Stack(buffer, true)
 }

@@ -1,84 +1,117 @@
 package config
 
 import (
+	"strconv"
 	"strings"
 	"testing"
+	"time"
 )
 
-func TestWatchdogConfig_Defaults(t *testing.T) {
-	var w WatchdogConfig // zero value
-	if !w.IsEnabled() {
-		t.Fatal("zero WatchdogConfig should be enabled")
+func TestWatchdogConfigDefaults(t *testing.T) {
+	var config WatchdogConfig
+	if !config.IsEnabled() {
+		t.Fatal("zero watchdog config should be enabled")
 	}
-	if err := w.Validate(); err != nil {
-		t.Fatalf("zero WatchdogConfig should validate: %v", err)
+	if err := config.Validate(); err != nil {
+		t.Fatalf("zero watchdog config should validate: %v", err)
 	}
-	if w.WarnSecondsResolved() != 10 || w.FatalSecondsResolved() != 90 || w.AbortSecondsResolved() != 600 {
-		t.Fatalf("unexpected defaults: %d/%d/%d",
-			w.WarnSecondsResolved(), w.FatalSecondsResolved(), w.AbortSecondsResolved())
+	warn, fatal, abort, err := config.Thresholds()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if warn != 10*time.Second || fatal != 90*time.Second || abort != 600*time.Second {
+		t.Fatalf("unexpected defaults: %s/%s/%s", warn, fatal, abort)
 	}
 }
 
-func TestWatchdogConfig_Disabled(t *testing.T) {
-	// A disabled watchdog validates even with otherwise-broken thresholds.
-	w := WatchdogConfig{Disabled: true, WarnSeconds: 99, FatalSeconds: 5}
-	if w.IsEnabled() {
+func TestWatchdogConfigDisabled(t *testing.T) {
+	config := WatchdogConfig{Disabled: true, WarnSeconds: -1, FatalSeconds: 5}
+	if config.IsEnabled() {
 		t.Fatal("disabled watchdog reports enabled")
 	}
-	if err := w.Validate(); err != nil {
-		t.Fatalf("disabled watchdog should validate: %v", err)
+	if err := config.Validate(); err != nil {
+		t.Fatalf("disabled watchdog should ignore thresholds: %v", err)
 	}
 }
 
-func TestWatchdogConfig_Overrides(t *testing.T) {
-	w := WatchdogConfig{WarnSeconds: 2, FatalSeconds: 4, AbortSeconds: 8}
-	if err := w.Validate(); err != nil {
-		t.Fatalf("valid overrides rejected: %v", err)
+func TestWatchdogConfigOverridesAndPartialDefaults(t *testing.T) {
+	tests := []struct {
+		name               string
+		config             WatchdogConfig
+		warn, fatal, abort time.Duration
+	}{
+		{
+			name:   "all overrides",
+			config: WatchdogConfig{WarnSeconds: 2, FatalSeconds: 4, AbortSeconds: 8},
+			warn:   2 * time.Second,
+			fatal:  4 * time.Second,
+			abort:  8 * time.Second,
+		},
+		{
+			name:   "partial override",
+			config: WatchdogConfig{WarnSeconds: 5},
+			warn:   5 * time.Second,
+			fatal:  90 * time.Second,
+			abort:  600 * time.Second,
+		},
 	}
-	if w.WarnSecondsResolved() != 2 || w.FatalSecondsResolved() != 4 || w.AbortSecondsResolved() != 8 {
-		t.Fatalf("overrides not applied")
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			warn, fatal, abort, err := test.config.Thresholds()
+			if err != nil {
+				t.Fatalf("thresholds: %v", err)
+			}
+			if warn != test.warn || fatal != test.fatal || abort != test.abort {
+				t.Fatalf("thresholds = %s/%s/%s", warn, fatal, abort)
+			}
+		})
 	}
 }
 
-func TestWatchdogConfig_PartialOverrideUsesDefaults(t *testing.T) {
-	// Only the warn override set; fatal/abort fall back to defaults.
-	w := WatchdogConfig{WarnSeconds: 5}
-	if err := w.Validate(); err != nil {
-		t.Fatalf("partial override rejected: %v", err)
+func TestWatchdogConfigRejectsInvalidThresholds(t *testing.T) {
+	tests := []WatchdogConfig{
+		{WarnSeconds: -1},
+		{WarnSeconds: 90, FatalSeconds: 10, AbortSeconds: 600},
+		{WarnSeconds: 10, FatalSeconds: 600, AbortSeconds: 90},
+		{WarnSeconds: 10, FatalSeconds: 10, AbortSeconds: 600},
 	}
-	if w.WarnSecondsResolved() != 5 || w.FatalSecondsResolved() != 90 || w.AbortSecondsResolved() != 600 {
-		t.Fatalf("partial resolve wrong: %d/%d/%d",
-			w.WarnSecondsResolved(), w.FatalSecondsResolved(), w.AbortSecondsResolved())
-	}
-}
-
-func TestWatchdogConfig_RejectsUnordered(t *testing.T) {
-	cases := []WatchdogConfig{
-		{WarnSeconds: 90, FatalSeconds: 10, AbortSeconds: 600}, // warn > fatal
-		{WarnSeconds: 10, FatalSeconds: 600, AbortSeconds: 90}, // fatal > abort
-		{WarnSeconds: 10, FatalSeconds: 10, AbortSeconds: 600}, // warn == fatal
-	}
-	for i, w := range cases {
-		if err := w.Validate(); err == nil {
-			t.Errorf("case %d: expected ordering error, got nil", i)
+	for index, config := range tests {
+		if err := config.Validate(); err == nil {
+			t.Errorf("case %d: invalid thresholds accepted", index)
 		}
 	}
 }
 
-func TestWatchdogConfig_RejectsNegative(t *testing.T) {
-	w := WatchdogConfig{WarnSeconds: -1}
-	if err := w.Validate(); err == nil {
-		t.Fatal("negative threshold accepted")
+func TestWatchdogConfigDurationBounds(t *testing.T) {
+	if strconv.IntSize < 64 {
+		t.Skip("overflow boundary exceeds 32-bit int")
+	}
+	maximum := int(maxDurationSeconds)
+	valid := WatchdogConfig{
+		WarnSeconds:  maximum - 2,
+		FatalSeconds: maximum - 1,
+		AbortSeconds: maximum,
+	}
+	if _, _, _, err := valid.Thresholds(); err != nil {
+		t.Fatalf("maximum safe thresholds rejected: %v", err)
+	}
+
+	tests := []WatchdogConfig{
+		{WarnSeconds: maximum + 1, FatalSeconds: maximum + 2, AbortSeconds: maximum + 3},
+		{WarnSeconds: 1, FatalSeconds: maximum + 1, AbortSeconds: maximum + 2},
+		{WarnSeconds: 1, FatalSeconds: 2, AbortSeconds: maximum + 1},
+	}
+	for index, config := range tests {
+		if _, _, _, err := config.Thresholds(); err == nil || !strings.Contains(err.Error(), "exceeds maximum duration") {
+			t.Errorf("case %d: overflow error = %v", index, err)
+		}
 	}
 }
 
-func TestValidateConfig_IncludesWatchdog(t *testing.T) {
-	// ValidateConfig joins all section errors; assert the watchdog error is
-	// among them when its thresholds are misordered. Other sections of this
-	// bare config also fail, which is fine — we only check ours is surfaced.
-	cfg := &Config{Watchdog: WatchdogConfig{WarnSeconds: 100, FatalSeconds: 10, AbortSeconds: 600}}
-	err := ValidateConfig(cfg)
+func TestValidateConfigIncludesWatchdog(t *testing.T) {
+	config := &Config{Watchdog: WatchdogConfig{WarnSeconds: 100, FatalSeconds: 10, AbortSeconds: 600}}
+	err := ValidateConfig(config)
 	if err == nil || !strings.Contains(err.Error(), "watchdog:") {
-		t.Fatalf("ValidateConfig did not surface the watchdog error: %v", err)
+		t.Fatalf("ValidateConfig did not surface watchdog error: %v", err)
 	}
 }

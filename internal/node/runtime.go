@@ -68,7 +68,7 @@ type nodeRuntime struct {
 	retentionFloor func() uint32
 	shutdownCh     chan struct{}
 	stopSampler    func()
-	cancelWatchdog context.CancelFunc
+	stopWatchdog   func()
 }
 
 func newNodeRuntime(
@@ -116,6 +116,7 @@ func (r *nodeRuntime) run() (runErr error) {
 		r.configureLedger,
 		r.configureMaintenance,
 		r.configureConsensus,
+		r.configureWatchdog,
 		r.bindRPC,
 		r.bindStreams,
 		r.bindTransports,
@@ -978,19 +979,38 @@ func (r *nodeRuntime) bindStreams() error {
 		)
 		return nil
 	}))
+	return nil
+}
 
-	if !r.standalone && r.appConfig.Watchdog.IsEnabled() {
-		wdCfg := watchdog.ConfigFromSeconds(
-			r.appConfig.Watchdog.WarnSecondsResolved(),
-			r.appConfig.Watchdog.FatalSecondsResolved(),
-			r.appConfig.Watchdog.AbortSecondsResolved(),
-		)
-		r.watchdog = watchdog.New(wdCfg, nil)
-		if r.consensus != nil {
-			if sp, ok := r.consensus.Engine.(stallPinger); ok {
-				sp.SetStallPing(r.watchdog.Register("consensus"))
-			}
-		}
+func (r *nodeRuntime) configureWatchdog() error {
+	if r.standalone || !r.appConfig.Watchdog.IsEnabled() {
+		return nil
+	}
+	warn, fatal, abort, err := r.appConfig.Watchdog.Thresholds()
+	if err != nil {
+		return fmt.Errorf("configure watchdog: %w", err)
+	}
+	wd, err := watchdog.New(warn, fatal, abort, nil)
+	if err != nil {
+		return fmt.Errorf("configure watchdog: %w", err)
+	}
+	if r.consensus == nil || r.consensus.Engine == nil {
+		return errors.New("configure watchdog: consensus heartbeat is unavailable")
+	}
+	target, ok := r.consensus.Engine.(stallPinger)
+	if !ok {
+		return fmt.Errorf("configure watchdog: consensus engine %T does not support stall heartbeats", r.consensus.Engine)
+	}
+	registration, err := wd.Register("consensus")
+	if err != nil {
+		return fmt.Errorf("configure watchdog: %w", err)
+	}
+	target.SetStallPing(registration.Ping)
+	r.watchdog = wd
+	r.stopWatchdog = func() {
+		target.SetStallPing(nil)
+		registration.Close()
+		wd.Stop()
 	}
 	return nil
 }
@@ -1044,24 +1064,10 @@ func (r *nodeRuntime) start() error {
 		r.serverLog.Info("gRPC server started", "name", r.transports.grpc.name, "addr", r.transports.grpc.address)
 	}
 
-	// Arm the out-of-band stall watchdog now that the server is up and
-	// servicing its event loops. Mirrors rippled arming activateStallDetector
-	// only at full start, and only outside standalone (ApplicationImp::run:
-	// guarded by !config_->standalone()). Standalone closes ledgers solely on
-	// the ledger_accept RPC, so an idle node produces no heartbeat and would
-	// otherwise self-abort; consensus mode drives a periodic heartbeat. The
-	// watchdog runs on its own goroutine and aborts the process if a monitored
-	// loop wedges, so a deadlocked node screams and can be restarted instead of
-	// going quiet.
 	if r.watchdog != nil {
-		wdCtx, cancelWatchdog := context.WithCancel(ctx)
-		r.cancelWatchdog = cancelWatchdog
-		go r.watchdog.Run(wdCtx)
-		r.serverLog.Info("Stall watchdog armed",
-			"warn_s", r.appConfig.Watchdog.WarnSecondsResolved(),
-			"fatal_s", r.appConfig.Watchdog.FatalSecondsResolved(),
-			"abort_s", r.appConfig.Watchdog.AbortSecondsResolved(),
-		)
+		if err := r.watchdog.Start(ctx); err != nil {
+			return fmt.Errorf("start watchdog: %w", err)
+		}
 	}
 	return nil
 }
@@ -1089,8 +1095,8 @@ func (r *nodeRuntime) wait() error {
 }
 
 func (r *nodeRuntime) stopRuntime() {
-	if r.cancelWatchdog != nil {
-		r.cancelWatchdog()
+	if r.stopWatchdog != nil {
+		r.stopWatchdog()
 	}
 	if r.stopSampler != nil {
 		r.stopSampler()

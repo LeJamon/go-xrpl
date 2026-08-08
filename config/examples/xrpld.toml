@@ -219,8 +219,8 @@ minimum_last_ledger_buffer = 2
 # in_memory_ledgers  = 256    # tracker eviction window
 
 # Stall watchdog (optional). An out-of-band goroutine that detects a wedged
-# event loop (consensus timer or ledger close) and escalates: warn + goroutine
-# dump, fatal log, then process abort so an orchestrator can restart the node.
+# consensus event loop and escalates: warning, fatal log, then process abort
+# with a bounded goroutine dump so an orchestrator can restart the node.
 # Enabled by default with rippled's 10/90/600s thresholds.
 # [watchdog]
 # disabled = false       # set true to turn the watchdog off entirely

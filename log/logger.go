@@ -39,14 +39,14 @@ func (l *logger) Error(msg string, args ...any) {
 	l.inner.Error(msg, args...)
 }
 
-// Fatal emits an Error record then exits. Sync runs before exit so the final
+// Fatal emits a Fatal record then exits. Sync runs before exit so the final
 // record reaches the destination even under async logging, where the record
 // would otherwise still be queued when defaultExit calls os.Exit (which skips
 // deferred Sync hooks). It does not fsync the os-level descriptor; callers that
 // need the file flushed to stable storage rely on Sync's file path or the
 // watchdog abort path's descriptor fsync.
 func (l *logger) Fatal(msg string, args ...any) {
-	l.inner.Error(msg, args...)
+	l.inner.Log(bgCtx, LevelFatal, msg, args...)
 	_ = Sync()
 	defaultExit()
 }

@@ -265,6 +265,14 @@ output = "stdout" # stdout | stderr | /path/to/logfile
 # LedgerConsensus = "debug"
 # NodeStore       = "debug"
 
+# Stall watchdog (optional). Monitors consensus-loop liveness; stack capture is
+# reserved for the abort path.
+# [watchdog]
+# disabled = false
+# warn_seconds = 10
+# fatal_seconds = 90
+# abort_seconds = 600
+
 # =============================================================================
 # Server Configuration
 # =============================================================================

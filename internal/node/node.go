@@ -498,10 +498,7 @@ type validatorConfigLoader func(config.Paths) (*config.Config, error)
 
 const validatorReloadTimeout = 5 * time.Second
 
-// stallPinger is the optional surface the stall watchdog installs on the
-// consensus engine. Kept off the core consensus.Engine interface so test
-// mocks and alternative engines need not implement it; *rcl.Engine satisfies
-// it. Mirrors the optional-extension pattern of consensus.WireableAdaptor.
+// stallPinger is the heartbeat surface required when the watchdog is enabled.
 type stallPinger interface {
 	SetStallPing(ping func())
 }

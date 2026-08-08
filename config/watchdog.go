@@ -1,6 +1,9 @@
 package config
 
-import "fmt"
+import (
+	"fmt"
+	"time"
+)
 
 // WatchdogConfig represents the [watchdog] section: the out-of-band stall
 // detector that mirrors rippled's LoadManager deadlock detector. The zero value
@@ -25,14 +28,8 @@ func (w *WatchdogConfig) Validate() error {
 	if w.Disabled {
 		return nil
 	}
-	if w.WarnSeconds < 0 || w.FatalSeconds < 0 || w.AbortSeconds < 0 {
-		return fmt.Errorf("threshold seconds must be non-negative")
-	}
-	warn, fatal, abort := w.thresholds()
-	if !(warn < fatal && fatal < abort) {
-		return fmt.Errorf("thresholds must satisfy warn < fatal < abort, got %d < %d < %d", warn, fatal, abort)
-	}
-	return nil
+	_, _, _, err := w.Thresholds()
+	return err
 }
 
 // IsEnabled reports whether the watchdog should be armed.
@@ -44,6 +41,7 @@ const (
 	defaultWatchdogWarnSeconds  = 10
 	defaultWatchdogFatalSeconds = 90
 	defaultWatchdogAbortSeconds = 600
+	maxDurationSeconds          = int64(1<<63-1) / int64(time.Second)
 )
 
 // thresholds resolves the configured overrides against the rippled defaults.
@@ -61,20 +59,45 @@ func (w *WatchdogConfig) thresholds() (warn, fatal, abort int) {
 	return warn, fatal, abort
 }
 
-// WarnSecondsResolved returns the effective warn threshold in seconds.
-func (w *WatchdogConfig) WarnSecondsResolved() int {
-	warn, _, _ := w.thresholds()
-	return warn
-}
-
-// FatalSecondsResolved returns the effective fatal threshold in seconds.
-func (w *WatchdogConfig) FatalSecondsResolved() int {
-	_, fatal, _ := w.thresholds()
-	return fatal
-}
-
-// AbortSecondsResolved returns the effective abort threshold in seconds.
-func (w *WatchdogConfig) AbortSecondsResolved() int {
-	_, _, abort := w.thresholds()
-	return abort
+// Thresholds returns the validated effective watchdog thresholds.
+func (w *WatchdogConfig) Thresholds() (warn, fatal, abort time.Duration, err error) {
+	rawValues := []struct {
+		name    string
+		seconds int
+	}{
+		{name: "warn_seconds", seconds: w.WarnSeconds},
+		{name: "fatal_seconds", seconds: w.FatalSeconds},
+		{name: "abort_seconds", seconds: w.AbortSeconds},
+	}
+	for _, value := range rawValues {
+		if value.seconds < 0 {
+			return 0, 0, 0, fmt.Errorf("%s must be non-negative", value.name)
+		}
+	}
+	warnSeconds, fatalSeconds, abortSeconds := w.thresholds()
+	values := []struct {
+		name    string
+		seconds int
+	}{
+		{name: "warn_seconds", seconds: warnSeconds},
+		{name: "fatal_seconds", seconds: fatalSeconds},
+		{name: "abort_seconds", seconds: abortSeconds},
+	}
+	for _, value := range values {
+		if int64(value.seconds) > maxDurationSeconds {
+			return 0, 0, 0, fmt.Errorf("%s exceeds maximum duration (%d seconds)", value.name, maxDurationSeconds)
+		}
+	}
+	if !(warnSeconds < fatalSeconds && fatalSeconds < abortSeconds) {
+		return 0, 0, 0, fmt.Errorf(
+			"thresholds must satisfy warn < fatal < abort, got %d < %d < %d",
+			warnSeconds,
+			fatalSeconds,
+			abortSeconds,
+		)
+	}
+	return time.Duration(warnSeconds) * time.Second,
+		time.Duration(fatalSeconds) * time.Second,
+		time.Duration(abortSeconds) * time.Second,
+		nil
 }

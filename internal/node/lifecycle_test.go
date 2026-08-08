@@ -419,7 +419,7 @@ func TestNodeRuntimeStopOrder(t *testing.T) {
 	runtime := &nodeRuntime{
 		ctx:    ctx,
 		cancel: cancel,
-		cancelWatchdog: func() {
+		stopWatchdog: func() {
 			order = append(order, "watchdog")
 		},
 		stopSampler: func() {
