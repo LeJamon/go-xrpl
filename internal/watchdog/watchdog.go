@@ -82,21 +82,23 @@ func (r *Registration) Close() {
 }
 
 type scheduleFunc func(time.Duration, func()) func()
+type reportToken byte
 
 // Watchdog owns heartbeat registrations and its monitoring goroutine.
 type Watchdog struct {
 	cfg    thresholds
 	logger *slog.Logger
 
-	now           func() time.Time
-	sync          func()
-	exit          func()
-	stack         func([]byte) int
-	stackSink     io.Writer
-	schedule      scheduleFunc
-	terminalGrace time.Duration
-	report        func(observation)
-	reporting     atomic.Bool
+	now            func() time.Time
+	sync           func()
+	exit           func()
+	stack          func([]byte) int
+	stackSink      io.Writer
+	schedule       scheduleFunc
+	terminalGrace  time.Duration
+	report         func(observation)
+	warnReporting  atomic.Pointer[reportToken]
+	fatalReporting atomic.Pointer[reportToken]
 
 	mu             sync.Mutex
 	heartbeats     map[string]heartbeat
@@ -187,6 +189,7 @@ func (w *Watchdog) Start(ctx context.Context) error {
 		w.heartbeats[name] = state
 	}
 	w.mu.Unlock()
+	w.resetReportSlots()
 
 	runCtx, cancel := context.WithCancel(ctx)
 	done := make(chan struct{})
@@ -241,10 +244,11 @@ func (w *Watchdog) run(ctx context.Context, interval time.Duration) {
 }
 
 type observation struct {
-	loop       string
-	silence    time.Duration
-	shouldLog  bool
-	fatalLevel bool
+	loop          string
+	silence       time.Duration
+	shouldLog     bool
+	fatalLevel    bool
+	terminalOwner bool
 }
 
 func (w *Watchdog) observe() observation {
@@ -277,6 +281,9 @@ func (w *Watchdog) observe() observation {
 			result.shouldLog = true
 		}
 	}
+	if result.silence >= w.cfg.abort {
+		result.terminalOwner = w.terminal.CompareAndSwap(false, true)
+	}
 	w.heartbeats[result.loop] = state
 	return result
 }
@@ -287,13 +294,14 @@ func (w *Watchdog) check() bool {
 		return true
 	}
 	result := w.observe()
+	if w.terminal.Load() {
+		if result.terminalOwner {
+			w.abortOnce.Do(func() { w.terminate(result) })
+		}
+		return true
+	}
 	if result.loop == "" || result.silence < w.cfg.warn {
 		return false
-	}
-	if result.silence >= w.cfg.abort {
-		w.terminal.Store(true)
-		w.abortOnce.Do(func() { w.terminate(result) })
-		return true
 	}
 	if result.shouldLog {
 		w.report(result)
@@ -302,13 +310,23 @@ func (w *Watchdog) check() bool {
 }
 
 func (w *Watchdog) logStallAsync(result observation) {
-	if !w.reporting.CompareAndSwap(false, true) {
+	reporting := &w.warnReporting
+	if result.fatalLevel {
+		reporting = &w.fatalReporting
+	}
+	token := new(reportToken)
+	if !reporting.CompareAndSwap(nil, token) {
 		return
 	}
 	go func() {
-		defer w.reporting.Store(false)
+		defer reporting.CompareAndSwap(token, nil)
 		w.logStall(result)
 	}()
+}
+
+func (w *Watchdog) resetReportSlots() {
+	w.warnReporting.Store(nil)
+	w.fatalReporting.Store(nil)
 }
 
 func (w *Watchdog) logStall(result observation) {

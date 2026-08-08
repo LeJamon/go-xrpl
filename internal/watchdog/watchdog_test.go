@@ -321,6 +321,21 @@ func TestRegistrationGenerationOwnership(t *testing.T) {
 	}
 }
 
+func TestReplacementBeforeAbortObservationWins(t *testing.T) {
+	w, clock, _, exits, _ := newTestWatchdog(t)
+	mustRegister(t, w, "ledger")
+	clock.advance(600 * time.Second)
+	current := mustRegister(t, w, "ledger")
+
+	if w.check() {
+		t.Fatal("stale generation triggered terminal recovery")
+	}
+	if exits.Load() != 0 {
+		t.Fatalf("exit called %d times", exits.Load())
+	}
+	current.Close()
+}
+
 func TestWatchdogDeterministicTiedStall(t *testing.T) {
 	w, clock, logBuffer, _, _ := newTestWatchdog(t)
 	mustRegister(t, w, "zeta")
@@ -439,6 +454,17 @@ func TestWatchdogTerminalRecoveryIsSingleShot(t *testing.T) {
 	}
 }
 
+func TestAbortObservationClaimsTerminal(t *testing.T) {
+	w, clock, _, _, _ := newTestWatchdog(t)
+	mustRegister(t, w, "ledger")
+	clock.advance(600 * time.Second)
+
+	result := w.observe()
+	if !result.terminalOwner || !w.terminal.Load() {
+		t.Fatalf("abort observation did not claim terminal recovery: %+v", result)
+	}
+}
+
 func TestWatchdogTerminalDiagnosticPanicStillExits(t *testing.T) {
 	w, clock, _, exits, _ := newTestWatchdog(t)
 	w.stack = func([]byte) int { panic("stack capture failed") }
@@ -468,14 +494,18 @@ type blockingHandler struct {
 	started chan struct{}
 	release chan struct{}
 	blocked atomic.Bool
+	records chan slog.Record
 }
 
 func (h *blockingHandler) Enabled(context.Context, slog.Level) bool { return true }
 
-func (h *blockingHandler) Handle(context.Context, slog.Record) error {
+func (h *blockingHandler) Handle(_ context.Context, record slog.Record) error {
 	if h.blocked.CompareAndSwap(false, true) {
 		close(h.started)
 		<-h.release
+	}
+	if h.records != nil {
+		h.records <- record.Clone()
 	}
 	return nil
 }
@@ -532,6 +562,59 @@ func TestBlockedWarningLoggerCannotPreventTerminalRecovery(t *testing.T) {
 	case <-done:
 	case <-time.After(time.Second):
 		t.Fatal("terminal recovery did not finish after logger release")
+	}
+}
+
+func TestBlockedWarningDoesNotSuppressFirstFatalReport(t *testing.T) {
+	w, clock, _, _, _ := newTestWatchdog(t)
+	started := make(chan struct{})
+	release := make(chan struct{})
+	records := make(chan slog.Record, 2)
+	defer close(release)
+	w.logger = slog.New(&blockingHandler{started: started, release: release, records: records})
+	w.report = w.logStallAsync
+	mustRegister(t, w, "ledger")
+
+	clock.advance(10 * time.Second)
+	w.check()
+	<-started
+	clock.advance(80 * time.Second)
+	w.check()
+
+	select {
+	case record := <-records:
+		if record.Level != xrpllog.LevelFatal {
+			t.Fatalf("level = %v, want %v", record.Level, xrpllog.LevelFatal)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("fatal report was suppressed by blocked warning")
+	}
+}
+
+func TestResetReportSlotsAllowsNewWarningWhileOldLoggerBlocked(t *testing.T) {
+	w, clock, _, _, _ := newTestWatchdog(t)
+	started := make(chan struct{})
+	release := make(chan struct{})
+	records := make(chan slog.Record, 2)
+	defer close(release)
+	w.logger = slog.New(&blockingHandler{started: started, release: release, records: records})
+	w.report = w.logStallAsync
+	mustRegister(t, w, "ledger")
+
+	clock.advance(10 * time.Second)
+	w.check()
+	<-started
+	w.resetReportSlots()
+	clock.advance(10 * time.Second)
+	w.check()
+
+	select {
+	case record := <-records:
+		if record.Level != slog.LevelWarn {
+			t.Fatalf("level = %v, want %v", record.Level, slog.LevelWarn)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("new warning was suppressed by an old blocked report")
 	}
 }
 
