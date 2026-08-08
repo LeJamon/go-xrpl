@@ -12,7 +12,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/LeJamon/go-xrpl/internal/rpc/loadtrack"
+	"github.com/LeJamon/go-xrpl/internal/peermanagement/resource"
 	"github.com/LeJamon/go-xrpl/internal/rpc/types"
 )
 
@@ -228,6 +228,28 @@ func TestTrustedProxyAttributesClientIPButNotAdmin(t *testing.T) {
 	}
 }
 
+func TestTrustedProxyMalformedIdentityFallsBackToPeer(t *testing.T) {
+	var observedClientIP string
+	srv := newHardeningServer(t, time.Second, "ping", &stubHandler{
+		handle: func(ctx *types.RpcContext, _ json.RawMessage) (any, *types.RpcError) {
+			observedClientIP = ctx.ClientIP
+			return map[string]any{"ok": true}, nil
+		},
+	})
+	_, gateway, _ := net.ParseCIDR("203.0.113.0/24")
+	pc := &PortContext{SecureGatewayNets: []net.IPNet{*gateway}}
+	req := httptest.NewRequest("POST", "/", strings.NewReader(`{"method":"ping","params":[{}]}`))
+	req.RemoteAddr = "203.0.113.5:1234"
+	req.Header.Set("X-Real-IP", "not-an-ip")
+	req = req.WithContext(WithPortContext(req.Context(), pc))
+	rr := httptest.NewRecorder()
+	srv.ServeHTTP(rr, req)
+
+	if rr.Code != http.StatusOK || observedClientIP != "203.0.113.5" {
+		t.Fatalf("status=%d client=%q body=%s", rr.Code, observedClientIP, rr.Body.String())
+	}
+}
+
 // TestCredentialsMaskedInErrorEnvelope ensures secret/seed/passphrase values
 // supplied in params are replaced with the literal "<masked>" in the error
 // response echo (matching rippled ServerHandler.cpp:535-542) and that the
@@ -296,7 +318,7 @@ func TestHandlerPanicRecovered(t *testing.T) {
 			panic(panicCause)
 		},
 	})
-	srv.loadTracker = loadtrack.New()
+	srv.resourceManager = resource.NewManager(nil, nil)
 
 	req := httptest.NewRequest("POST", "/", strings.NewReader(`{"method":"panic","params":[{"secret":"private seed"}]}`))
 	req.RemoteAddr = "203.0.113.5:1234"
@@ -314,7 +336,7 @@ func TestHandlerPanicRecovered(t *testing.T) {
 	if strings.Contains(rr.Body.String(), panicCause) || strings.Contains(rr.Body.String(), "private seed") {
 		t.Fatalf("panic response leaked private details: %s", rr.Body.String())
 	}
-	if got, want := srv.loadTracker.Balance("203.0.113.5"), float64(loadtrack.ChargeException/uint32(loadtrack.DecayWindow/time.Second)); got != want {
+	if got, want := transportRegressionLocalBalance(t, srv.resourceManager), uint32(resource.FeeExceptionRPC.Cost()/resource.DecayWindowSeconds); got != want {
 		t.Fatalf("panic charged %v, want %v", got, want)
 	}
 }
@@ -420,16 +442,16 @@ func TestSecureGatewayPromotesToIdentifiedWithUser(t *testing.T) {
 type heavyStub struct{ stubHandler }
 
 func (s *heavyStub) Handle(ctx *types.RpcContext, params json.RawMessage) (any, *types.RpcError) {
-	ctx.LoadCost = loadtrack.ChargeHeavy
+	ctx.LoadCost = uint32(resource.FeeHeavyBurdenRPC.Cost())
 	return s.stubHandler.Handle(ctx, params)
 }
 
 // Once the per-IP balance crosses DropThreshold, the overload-admission gate
 // (gateLoad) rejects with rippled's canonical HTTP 503 "Server is overloaded"
 // bare-string body (ServerHandler.cpp:739), not the slowDown result envelope.
-func TestLoadTracker_RejectsAfterDropThreshold(t *testing.T) {
+func TestResourceManagerRejectsAfterDropThreshold(t *testing.T) {
 	srv := newHardeningServer(t, time.Second, "path_find", &heavyStub{stubHandler{}})
-	srv.loadTracker = loadtrack.New()
+	srv.resourceManager = resource.NewManager(nil, nil)
 
 	var lastBody string
 	for range 400 {
@@ -452,9 +474,9 @@ func TestLoadTracker_RejectsAfterDropThreshold(t *testing.T) {
 	t.Fatalf("never received HTTP 503 after 400 heavy invocations; last body %s", lastBody)
 }
 
-func TestLoadTracker_AdminBypassesCharge(t *testing.T) {
+func TestResourceManagerAdminBypassesCharge(t *testing.T) {
 	srv := newHardeningServer(t, time.Second, "path_find", &heavyStub{stubHandler{}})
-	srv.loadTracker = loadtrack.New()
+	srv.resourceManager = resource.NewManager(nil, nil)
 
 	for i := range 50 {
 		req := httptest.NewRequest("POST", "/", strings.NewReader(`{"method":"path_find","params":[{}]}`))
@@ -482,6 +504,10 @@ func TestForwardedForParser(t *testing.T) {
 		{"forwarded for token semicolon", "Forwarded", `for=198.51.100.7;proto=https`, "198.51.100.7"},
 		{"forwarded for ipv6 quoted bracketed", "Forwarded", `for="[2001:db8::1]:9000"`, "2001:db8::1"},
 		{"forwarded prefers Forwarded over xff", "Forwarded", `for=198.51.100.7`, "198.51.100.7"},
+		{"forwarded directive boundary", "Forwarded", `notfor=192.0.2.1; for=198.51.100.7`, "198.51.100.7"},
+		{"forwarded rejects embedded token", "Forwarded", `notfor=192.0.2.1`, ""},
+		{"forwarded rejects invalid IP", "Forwarded", `for=not-an-ip`, ""},
+		{"xff rejects invalid IP", "X-Forwarded-For", `not-an-ip`, ""},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

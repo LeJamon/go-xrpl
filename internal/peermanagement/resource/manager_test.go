@@ -400,7 +400,7 @@ func TestDecay_AgesUnderSubSecondChargeRate(t *testing.T) {
 
 	// Without decay the balance would normalize to charges*cost/window.
 	undecayed := charges * cost / DecayWindowSeconds
-	if bal >= undecayed/2 {
+	if bal >= int64(undecayed/2) {
 		t.Fatalf("balance=%d did not decay (undecayed accumulation=%d): sub-second charges are not aging", bal, undecayed)
 	}
 	if bal <= 0 {

@@ -8,8 +8,8 @@ import (
 	"sync"
 	"time"
 
+	"github.com/LeJamon/go-xrpl/internal/peermanagement/resource"
 	"github.com/LeJamon/go-xrpl/internal/rpc/handlers"
-	"github.com/LeJamon/go-xrpl/internal/rpc/loadtrack"
 	"github.com/LeJamon/go-xrpl/internal/rpc/subscription"
 	"github.com/LeJamon/go-xrpl/internal/rpc/types"
 	xrpllog "github.com/LeJamon/go-xrpl/log"
@@ -55,7 +55,7 @@ type WebSocketServer struct {
 	services            *types.ServiceContainer
 	urlSubs             *urlSubscriptionRegistry
 	peerSourceHolder
-	loadTracker       *loadtrack.Tracker
+	resourceManager   *resource.Manager
 	pathFindRefreshMu sync.Mutex
 	pathFindRefresh   *pathFindRefreshManager
 	// pingInterval is how often pingLoop sends a keepalive ping, selected at
@@ -76,7 +76,7 @@ type WebSocketServer struct {
 type WebSocketServerOptions struct {
 	Timeout             time.Duration
 	Services            *types.ServiceContainer
-	LoadTracker         *loadtrack.Tracker
+	ResourceManager     *resource.Manager
 	PeerSource          types.PeerSource
 	PingInterval        time.Duration
 	LedgerInfoProvider  types.LedgerInfoProvider
@@ -103,16 +103,17 @@ type websocketConnection struct {
 	// resolveWSClientIP when the upgrade socket peer is in the per-port
 	// SecureGatewayNets allowlist. Mirrors rippled's
 	// WSInfoSub::forwarded_for (ServerHandler.cpp:497-501, :580).
-	forwardedFor string
-	closeOnce    sync.Once
+	forwardedFor     string
+	resourceConsumer *resource.Consumer
+	closeOnce        sync.Once
 }
 
 // NewWebSocketServer creates a new WebSocket RPC server. All method handlers
 // are registered before the constructor returns.
 func NewWebSocketServer(options WebSocketServerOptions) *WebSocketServer {
-	tracker := options.LoadTracker
-	if tracker == nil {
-		tracker = loadtrack.New()
+	resourceManager := options.ResourceManager
+	if resourceManager == nil {
+		resourceManager = resource.NewManager(nil, nil)
 	}
 	manager := options.SubscriptionManager
 	if manager == nil {
@@ -134,7 +135,7 @@ func NewWebSocketServer(options WebSocketServerOptions) *WebSocketServer {
 		connections:         make(map[string]*websocketConnection),
 		timeout:             options.Timeout,
 		services:            options.Services,
-		loadTracker:         tracker,
+		resourceManager:     resourceManager,
 		pingInterval:        pingInterval,
 		ledgerInfoProvider:  options.LedgerInfoProvider,
 		closeDone:           make(chan struct{}),
@@ -164,6 +165,30 @@ func (ws *WebSocketServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		wsLog().Error("invalid WebSocket send queue limit", "err", err)
 		return
 	}
+	var fwd string
+	if f := forwardedForHeader(r); f != "" {
+		fwd = f
+	} else if xri := r.Header.Get("X-Real-IP"); xri != "" {
+		fwd = strings.TrimSpace(xri)
+	}
+	clientIP := resolveWSClientIP(remoteAddrIP(r.RemoteAddr), fwd, portCtx)
+	var resourceConsumer *resource.Consumer
+	handshakeRole := roleForRequest(remoteAddrIP(r.RemoteAddr), userHeader(r), nil, portCtx)
+	if handshakeRole.IsUnlimited() {
+		resourceConsumer = ws.resourceManager.NewUnlimitedEndpoint(remoteAddrIP(r.RemoteAddr))
+	} else if clientIP != "" {
+		resourceConsumer = ws.resourceManager.NewInboundEndpoint(clientIP)
+	}
+	if resourceConsumer == nil {
+		writePlainHTTPError(w, http.StatusServiceUnavailable, "Server is overloaded")
+		return
+	}
+	consumerTransferred := false
+	defer func() {
+		if !consumerTransferred {
+			resourceConsumer.Release()
+		}
+	}()
 
 	ws.connectionsMutex.Lock()
 	if ws.closing {
@@ -185,31 +210,21 @@ func (ws *WebSocketServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Use Background() not r.Context() because the WebSocket connection
-	// lives beyond the HTTP request lifecycle.
-	// Capture proxy-attribution headers at upgrade time. They are only
-	// consulted when the upgrade socket peer is in the per-port
-	// SecureGatewayNets set — see resolveWSClientIP.
-	var fwd string
-	if f := forwardedForHeader(r); f != "" {
-		fwd = f
-	} else if xri := r.Header.Get("X-Real-IP"); xri != "" {
-		fwd = strings.TrimSpace(xri)
-	}
-
 	connection := types.NewConnection(generateConnectionID(), make(chan []byte, sendQueueLimit))
 	wsConn := &websocketConnection{
-		Connection:   connection,
-		conn:         conn,
-		portCtx:      portCtx,
-		user:         userHeader(r),
-		forwardedFor: fwd,
+		Connection:       connection,
+		conn:             conn,
+		portCtx:          portCtx,
+		user:             userHeader(r),
+		forwardedFor:     fwd,
+		resourceConsumer: resourceConsumer,
 	}
 
 	if !ws.attachConnection(wsConn) {
 		wsConn.closeSocket()
 		return
 	}
+	consumerTransferred = true
 
 	go func() {
 		defer ws.wg.Done()

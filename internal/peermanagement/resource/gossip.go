@@ -4,7 +4,7 @@ package resource
 // rippled's ripple::Resource::Gossip::Item.
 type GossipItem struct {
 	Address string
-	Balance int
+	Balance uint32
 }
 
 // Gossip is a snapshot of consumer balances suitable for sharing across

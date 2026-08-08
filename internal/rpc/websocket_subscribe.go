@@ -4,7 +4,7 @@ import (
 	"encoding/json"
 	"slices"
 
-	"github.com/LeJamon/go-xrpl/internal/rpc/loadtrack"
+	"github.com/LeJamon/go-xrpl/internal/peermanagement/resource"
 	"github.com/LeJamon/go-xrpl/internal/rpc/types"
 )
 
@@ -141,7 +141,7 @@ func (ws *WebSocketServer) finishUnsubscribe(wsConn *websocketConnection, reques
 func setSubscriptionLoadCost(ctx *types.RpcContext, request types.SubscriptionRequest) {
 	for _, book := range request.Books {
 		if book.Snapshot || book.StateNow {
-			ctx.LoadCost = uint32(loadtrack.LoadMedium)
+			ctx.LoadCost = uint32(resource.FeeMediumBurdenRPC.Cost())
 			return
 		}
 	}

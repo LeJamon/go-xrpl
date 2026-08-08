@@ -8,8 +8,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/LeJamon/go-xrpl/internal/rpc/loadtrack"
+	"github.com/LeJamon/go-xrpl/internal/peermanagement/resource"
 	"github.com/LeJamon/go-xrpl/internal/rpc/types"
+	"github.com/stretchr/testify/require"
 )
 
 func newSpecialDispatchHarness(t *testing.T) (*WebSocketServer, *websocketConnection, *types.RpcContext) {
@@ -19,7 +20,8 @@ func newSpecialDispatchHarness(t *testing.T) (*WebSocketServer, *websocketConnec
 		RPCDiagnostics: NewRPCDiagnostics(),
 		Capabilities:   types.RPCCapabilities{PathSearchMax: 3},
 	}
-	ws := NewWebSocketServer(WebSocketServerOptions{Timeout: time.Second, Services: services, LoadTracker: loadtrack.New()})
+	manager := resource.NewManager(nil, nil)
+	ws := NewWebSocketServer(WebSocketServerOptions{Timeout: time.Second, Services: services, ResourceManager: manager})
 	ws.methodRegistry.Register("subscribe", &stubHandler{})
 	ws.methodRegistry.Register("path_find", &stubHandler{})
 	send := make(chan []byte, 1)
@@ -27,6 +29,13 @@ func newSpecialDispatchHarness(t *testing.T) (*WebSocketServer, *websocketConnec
 		Connection: types.NewConnectionWithContext(context.Background(), "special-dispatch", send),
 	}
 	ctx := newRpcContext(context.Background(), types.RoleGuest, types.DefaultApiVersion, "192.0.2.1", nil, services)
+	consumer := manager.NewInboundEndpoint(ctx.ClientIP)
+	require.NotNil(t, consumer)
+	t.Cleanup(consumer.Release)
+	conn.resourceConsumer = consumer
+	ctx.ResourceConsumer = consumer
+	ctx.ResourceAdmission, _ = consumer.Admit(resource.FeeReferenceRPC)
+	require.NotNil(t, ctx.ResourceAdmission)
 	return ws, conn, ctx
 }
 
@@ -69,10 +78,10 @@ func TestWebSocketSpecialDispatchBusyBoundary(t *testing.T) {
 				ws.services.ClientLoad.Begin()
 			}
 			if !test.wantCalled {
-				ws.loadTracker.Import("peer", loadtrack.Gossip{Items: []loadtrack.GossipItem{{
-					Key:     ctx.ClientIP,
-					Balance: loadtrack.WarningThreshold,
-				}}})
+				require.NoError(t, ws.resourceManager.ImportConsumers("peer", resource.Gossip{Items: []resource.GossipItem{{
+					Address: ctx.ClientIP,
+					Balance: resource.WarningThreshold,
+				}}}))
 			}
 			called := false
 			ws.handleSpecialCommand(conn, ctx, specialDispatchCommand("subscribe"), func(_ *websocketConnection, _ *types.RpcContext, _ types.WebSocketCommand) (any, *types.RpcError) {
@@ -122,10 +131,10 @@ func TestWebSocketSpecialDispatchWarningVisibility(t *testing.T) {
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			ws, conn, ctx := newSpecialDispatchHarness(t)
-			ws.loadTracker.Import("peer", loadtrack.Gossip{Items: []loadtrack.GossipItem{{
-				Key:     ctx.ClientIP,
-				Balance: loadtrack.WarningThreshold,
-			}}})
+			require.NoError(t, ws.resourceManager.ImportConsumers("peer", resource.Gossip{Items: []resource.GossipItem{{
+				Address: ctx.ClientIP,
+				Balance: resource.WarningThreshold,
+			}}}))
 
 			ws.handleSpecialCommand(conn, ctx, specialDispatchCommand("subscribe"), test.handler)
 			response := specialDispatchResponse(t, conn)
@@ -165,7 +174,7 @@ func TestWebSocketSpecialDispatchRecoversPanic(t *testing.T) {
 	if strings.Contains(string(encoded), "private panic detail") {
 		t.Fatalf("panic response leaked private detail: %s", encoded)
 	}
-	if got, want := ws.loadTracker.LocalBalance(ctx.ClientIP), float64(loadtrack.ChargeException/uint32(loadtrack.DecayWindow/time.Second)); got != want {
+	if got, want := resourceLocalBalance(t, ws.resourceManager, ctx.ClientIP), uint32(resource.FeeExceptionRPC.Cost()/resource.DecayWindowSeconds); got != want {
 		t.Fatalf("panic charge = %v, want %v", got, want)
 	}
 	if got := ws.services.ClientLoad.InFlight(); got != 0 {
@@ -180,18 +189,18 @@ func TestWebSocketPathFindDynamicLoadCost(t *testing.T) {
 	ws, conn, ctx := newSpecialDispatchHarness(t)
 	for _, test := range []struct {
 		subcommand string
-		want       loadtrack.LoadKind
+		want       int
 	}{
-		{subcommand: "create", want: loadtrack.LoadHeavy},
-		{subcommand: "close", want: loadtrack.LoadReference},
-		{subcommand: "status", want: loadtrack.LoadReference},
+		{subcommand: "create", want: resource.FeeHeavyBurdenRPC.Cost()},
+		{subcommand: "close", want: resource.FeeReferenceRPC.Cost()},
+		{subcommand: "status", want: resource.FeeReferenceRPC.Cost()},
 	} {
 		t.Run(test.subcommand, func(t *testing.T) {
-			ctx.LoadCost = uint32(loadtrack.LoadReference)
+			ctx.LoadCost = uint32(resource.FeeReferenceRPC.Cost())
 			cmd := specialDispatchCommand("path_find")
 			cmd.Params = json.RawMessage(`{"subcommand":"` + test.subcommand + `"}`)
 			_, _ = ws.executePathFind(conn, ctx, cmd)
-			if got := loadtrack.LoadKind(ctx.LoadCost); got != test.want {
+			if got := int(ctx.LoadCost); got != test.want {
 				t.Fatalf("load kind = %d, want %d", got, test.want)
 			}
 		})
@@ -238,25 +247,25 @@ func TestWebSocketSubscribeSnapshotLoadCostAfterValidation(t *testing.T) {
 	for _, test := range []struct {
 		name      string
 		params    string
-		want      loadtrack.LoadKind
+		want      int
 		wantError bool
 	}{
-		{name: "validated snapshot", params: validSnapshot, want: loadtrack.LoadMedium},
-		{name: "validated state_now", params: validStateNow, want: loadtrack.LoadMedium},
-		{name: "invalid snapshot", params: invalidSnapshot, want: loadtrack.LoadReference, wantError: true},
-		{name: "later invalid book retains snapshot load", params: validThenInvalidSnapshot, want: loadtrack.LoadMedium, wantError: true},
-		{name: "no snapshot", params: `{}`, want: loadtrack.LoadReference},
+		{name: "validated snapshot", params: validSnapshot, want: resource.FeeMediumBurdenRPC.Cost()},
+		{name: "validated state_now", params: validStateNow, want: resource.FeeMediumBurdenRPC.Cost()},
+		{name: "invalid snapshot", params: invalidSnapshot, want: resource.FeeReferenceRPC.Cost(), wantError: true},
+		{name: "later invalid book retains snapshot load", params: validThenInvalidSnapshot, want: resource.FeeMediumBurdenRPC.Cost(), wantError: true},
+		{name: "no snapshot", params: `{}`, want: resource.FeeReferenceRPC.Cost()},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			ws, conn, ctx := newSpecialDispatchHarness(t)
-			ctx.LoadCost = uint32(loadtrack.LoadReference)
+			ctx.LoadCost = uint32(resource.FeeReferenceRPC.Cost())
 			cmd := specialDispatchCommand("subscribe")
 			cmd.Params = json.RawMessage(test.params)
 			_, rpcErr := ws.executeSubscribe(conn, ctx, cmd)
 			if (rpcErr != nil) != test.wantError {
 				t.Fatalf("error = %v, wantError %t", rpcErr, test.wantError)
 			}
-			if got := loadtrack.LoadKind(ctx.LoadCost); got != test.want {
+			if got := int(ctx.LoadCost); got != test.want {
 				t.Fatalf("load kind = %d, want %d", got, test.want)
 			}
 		})

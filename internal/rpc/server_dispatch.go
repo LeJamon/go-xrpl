@@ -9,8 +9,8 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/LeJamon/go-xrpl/internal/peermanagement/resource"
 	"github.com/LeJamon/go-xrpl/internal/rpc/handlers"
-	"github.com/LeJamon/go-xrpl/internal/rpc/loadtrack"
 	"github.com/LeJamon/go-xrpl/internal/rpc/types"
 	xrpllog "github.com/LeJamon/go-xrpl/log"
 )
@@ -32,6 +32,7 @@ func newRpcContext(ctx context.Context, role types.Role, apiVersion int, clientI
 		IsAdmin:    role == types.RoleAdmin,
 		Unlimited:  role.IsUnlimited(),
 		ClientIP:   clientIP,
+		ResourceIP: clientIP,
 		PeerSource: peers,
 		Services:   services,
 	}
@@ -112,7 +113,7 @@ func (s *Server) executeMethod(method string, params json.RawMessage, ctx *types
 	// make_json_error(forbidden), WS rpcError(rpcFORBIDDEN) (ServerHandler.cpp:482-486,
 	// 750-762). The writers special-case IsForbidden; in-handler permission
 	// denials keep returning rpcNO_PERMISSION on the normal result envelope.
-	return dispatchMethod(s.registry, s.loadTracker, s.services, ctx, method, params, types.RpcErrorForbidden, rpcLog())
+	return dispatchMethod(s.registry, s.resourceManager, s.services, ctx, method, params, types.RpcErrorForbidden, rpcLog())
 }
 func resolveMethod(registry *types.MethodRegistry, method string, apiVersion int) methodResolution {
 	handler, exists := registry.Get(method)
@@ -123,7 +124,7 @@ func resolveMethod(registry *types.MethodRegistry, method string, apiVersion int
 }
 func dispatchMethod(
 	registry *types.MethodRegistry,
-	tracker *loadtrack.Tracker,
+	manager *resource.Manager,
 	services *types.ServiceContainer,
 	ctx *types.RpcContext,
 	method string,
@@ -135,13 +136,13 @@ func dispatchMethod(
 		return nil, rpcErr
 	}
 	resolution := resolveMethod(registry, method, ctx.ApiVersion)
-	if rpcErr := admitMethod(tracker, ctx, method, resolution, adminGate, true, log); rpcErr != nil {
+	if rpcErr := admitMethod(manager, ctx, method, resolution, adminGate, true, log); rpcErr != nil {
 		return nil, rpcErr
 	}
-	return dispatchResolvedMethod(tracker, services, ctx, method, params, resolution, log)
+	return dispatchResolvedMethod(manager, services, ctx, method, params, resolution, log)
 }
 func admitMethod(
-	tracker *loadtrack.Tracker,
+	manager *resource.Manager,
 	ctx *types.RpcContext,
 	method string,
 	resolution methodResolution,
@@ -150,19 +151,19 @@ func admitMethod(
 	log xrpllog.Logger,
 ) *types.RpcError {
 	if checkLoad {
-		if rpcErr := gateLoad(tracker, ctx, method, log); rpcErr != nil {
+		if rpcErr := gateLoad(manager, ctx, method, log); rpcErr != nil {
 			return rpcErr
 		}
 	}
 	if resolution.resolved && resolution.handler.RequiredRole() == types.RoleAdmin && ctx.Role != types.RoleAdmin {
 		rpcErr := adminGate(method)
-		chargeLoad(tracker, ctx, method, loadtrack.LoadMalformed, log)
+		chargeLoad(manager, ctx, method, resource.FeeMalformedRPC, log)
 		return rpcErr
 	}
 	return nil
 }
 func dispatchResolvedMethod(
-	tracker *loadtrack.Tracker,
+	manager *resource.Manager,
 	services *types.ServiceContainer,
 	ctx *types.RpcContext,
 	method string,
@@ -170,22 +171,22 @@ func dispatchResolvedMethod(
 	resolution methodResolution,
 	log xrpllog.Logger,
 ) (any, *types.RpcError) {
-	ctx.LoadCost = loadtrack.ChargeReference
+	ctx.LoadCost = uint32(resource.FeeReferenceRPC.Cost())
 	ctx.LoadWarning = false
 
 	if rpcErr := handlers.RequireNotBusyClient(ctx); rpcErr != nil {
-		finalizeLoad(tracker, ctx, method, loadtrack.LoadReference, log)
+		finalizeLoad(manager, ctx, method, resource.FeeReferenceRPC, log)
 		return nil, rpcErr
 	}
 
 	if !resolution.resolved {
 		rpcErr := types.RpcErrorMethodNotFound()
-		finalizeLoad(tracker, ctx, method, loadtrack.LoadReference, log)
+		finalizeLoad(manager, ctx, method, resource.FeeReferenceRPC, log)
 		return nil, rpcErr
 	}
 
 	if rpcErr := conditionMet(resolution.handler.RequiredCondition(), ctx); rpcErr != nil {
-		finalizeLoad(tracker, ctx, method, loadtrack.LoadReference, log)
+		finalizeLoad(manager, ctx, method, resource.FeeReferenceRPC, log)
 		return nil, rpcErr
 	}
 
@@ -196,11 +197,11 @@ func dispatchResolvedMethod(
 	finishDiagnostics := startRPCDiagnostics(services, method)
 	result, rpcErr, recovered := invokeHandler(resolution.handler, ctx, params, method, log)
 	finishDiagnostics(recovered)
-	kind := loadtrack.LoadKind(ctx.LoadCost)
-	if recovered && kind == loadtrack.LoadReference {
-		kind = loadtrack.LoadException
+	fee := rpcCharge(ctx.LoadCost)
+	if recovered && fee == resource.FeeReferenceRPC {
+		fee = resource.FeeExceptionRPC
 	}
-	finalizeLoad(tracker, ctx, method, kind, log)
+	finalizeLoad(manager, ctx, method, fee, log)
 	return result, rpcErr
 }
 func startRPCDiagnostics(services *types.ServiceContainer, method string) func(bool) {
@@ -224,15 +225,15 @@ func dispatchNestedMethod(
 		return nil, types.RpcErrorMethodNotFound()
 	}
 	if resolution.handler.RequiredRole() == types.RoleAdmin && ctx.Role != types.RoleAdmin {
-		ctx.LoadCost = loadtrack.ChargeMalformed
+		ctx.LoadCost = uint32(resource.FeeMalformedRPC.Cost())
 		return nil, types.RpcErrorForbidden(method)
 	}
 	if rpcErr := conditionMet(resolution.handler.RequiredCondition(), ctx); rpcErr != nil {
 		return nil, rpcErr
 	}
 	result, rpcErr, recovered := invokeHandler(resolution.handler, ctx, params, method, log)
-	if recovered && ctx.LoadCost == loadtrack.ChargeReference {
-		ctx.LoadCost = loadtrack.ChargeException
+	if recovered && ctx.LoadCost == uint32(resource.FeeReferenceRPC.Cost()) {
+		ctx.LoadCost = uint32(resource.FeeExceptionRPC.Cost())
 	}
 	return result, rpcErr
 }
@@ -404,39 +405,57 @@ func notSyncedError(apiVersion int, failure syncFailure) *types.RpcError {
 	return types.NewRpcError(types.RpcNOT_SYNCED, "notSynced", "notSynced",
 		"Not synced to the network.")
 }
-func gateLoad(tracker *loadtrack.Tracker, ctx *types.RpcContext, method string, log xrpllog.Logger) *types.RpcError {
-	if tracker == nil || ctx == nil || ctx.Unlimited {
+func gateLoad(manager *resource.Manager, ctx *types.RpcContext, method string, log xrpllog.Logger) *types.RpcError {
+	if manager == nil || ctx == nil || ctx.ClientIP == "" {
 		return nil
 	}
-	if tracker.Disconnect(ctx.ClientIP) {
+	var admission *resource.Admission
+	var result resource.Disposition
+	if ctx.ResourceConsumer != nil {
+		admission, result = ctx.ResourceConsumer.Admit(resource.FeeReferenceRPC)
+	} else if ctx.Unlimited {
+		admission, result = manager.AdmitUnlimited(ctx.ResourceIP)
+	} else {
+		admission, result = manager.AdmitInbound(ctx.ClientIP, resource.FeeReferenceRPC)
+	}
+	if admission == nil || result == resource.Drop {
 		log.Warn("rpc dropped: client over load threshold",
-			"client", ctx.ClientIP, "method", method, "balance", tracker.Balance(ctx.ClientIP))
+			"client", ctx.ClientIP, "method", method)
 		return types.RpcErrorOverloaded()
 	}
+	ctx.ResourceAdmission = admission
 	return nil
 }
-func chargeLoad(tracker *loadtrack.Tracker, ctx *types.RpcContext, method string, kind loadtrack.LoadKind, log xrpllog.Logger) {
-	if tracker == nil || ctx == nil || ctx.Unlimited {
+func chargeLoad(_ *resource.Manager, ctx *types.RpcContext, method string, fee resource.Charge, log xrpllog.Logger) {
+	if ctx == nil || ctx.ResourceAdmission == nil {
 		return
 	}
-	switch tracker.Charge(ctx.ClientIP, kind) {
-	case loadtrack.OutcomeDrop:
+	completion := ctx.ResourceAdmission.Finish(fee, method)
+	ctx.LoadWarning = completion.Warning
+	switch completion.Disposition {
+	case resource.Drop:
 		log.Warn("rpc client crossed drop threshold (post-charge)",
-			"client", ctx.ClientIP, "method", method, "balance", tracker.Balance(ctx.ClientIP))
-	case loadtrack.OutcomeWarn:
+			"client", ctx.ClientIP, "method", method, "balance", completion.Balance)
+	case resource.Warn:
 		log.Info("rpc client over warn threshold",
-			"client", ctx.ClientIP, "method", method, "balance", tracker.Balance(ctx.ClientIP))
+			"client", ctx.ClientIP, "method", method, "balance", completion.Balance)
 	}
 }
-func finalizeLoad(tracker *loadtrack.Tracker, ctx *types.RpcContext, method string, kind loadtrack.LoadKind, log xrpllog.Logger) {
-	chargeLoad(tracker, ctx, method, kind, log)
-	warnLoad(tracker, ctx, method, log)
+func finalizeLoad(manager *resource.Manager, ctx *types.RpcContext, method string, fee resource.Charge, log xrpllog.Logger) {
+	chargeLoad(manager, ctx, method, fee, log)
 }
-func warnLoad(tracker *loadtrack.Tracker, ctx *types.RpcContext, method string, log xrpllog.Logger) {
-	if tracker == nil || ctx == nil || ctx.Unlimited || !tracker.Warn(ctx.ClientIP) {
-		return
+
+func rpcCharge(cost uint32) resource.Charge {
+	switch int(cost) {
+	case resource.FeeReferenceRPC.Cost():
+		return resource.FeeReferenceRPC
+	case resource.FeeMediumBurdenRPC.Cost():
+		return resource.FeeMediumBurdenRPC
+	case resource.FeeHeavyBurdenRPC.Cost():
+		return resource.FeeHeavyBurdenRPC
+	case resource.FeeMalformedRPC.Cost():
+		return resource.FeeMalformedRPC
+	default:
+		return resource.NewCharge(int(cost), "RPC")
 	}
-	ctx.LoadWarning = true
-	log.Info("rpc load warning issued",
-		"client", ctx.ClientIP, "method", method, "balance", tracker.Balance(ctx.ClientIP))
 }

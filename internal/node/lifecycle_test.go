@@ -15,6 +15,7 @@ import (
 	"github.com/LeJamon/go-xrpl/internal/consensus"
 	"github.com/LeJamon/go-xrpl/internal/consensus/adaptor"
 	"github.com/LeJamon/go-xrpl/internal/ledger/service"
+	"github.com/LeJamon/go-xrpl/internal/peermanagement/resource"
 	"github.com/LeJamon/go-xrpl/internal/rpc"
 	"github.com/LeJamon/go-xrpl/internal/rpc/types"
 	xrpllog "github.com/LeJamon/go-xrpl/log"
@@ -44,6 +45,15 @@ func TestBindRPCWiresExplicitSharedServices(t *testing.T) {
 	}
 	if runtime.services.ClientLoad == nil {
 		t.Fatal("bindRPC lost the configured client-load shedder")
+	}
+	if runtime.resourceManager == nil || !runtime.ownsResourceManager {
+		t.Fatal("standalone RPC binding did not own a resource manager")
+	}
+	consumer := runtime.resourceManager.NewInboundEndpoint("192.0.2.25")
+	consumer.Charge(resource.NewCharge(resource.WarningThreshold*resource.DecayWindowSeconds, "test"), "")
+	defer consumer.Release()
+	if got := runtime.services.ResourceBlacklist(nil); got["192.0.2.25"] == nil {
+		t.Fatalf("standalone resource blacklist = %+v", got)
 	}
 }
 

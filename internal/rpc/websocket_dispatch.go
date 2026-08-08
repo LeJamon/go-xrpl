@@ -6,8 +6,8 @@ import (
 	"encoding/json"
 	"runtime/debug"
 
+	"github.com/LeJamon/go-xrpl/internal/peermanagement/resource"
 	"github.com/LeJamon/go-xrpl/internal/rpc/handlers"
-	"github.com/LeJamon/go-xrpl/internal/rpc/loadtrack"
 	"github.com/LeJamon/go-xrpl/internal/rpc/types"
 )
 
@@ -51,18 +51,21 @@ func (ws *WebSocketServer) handleMessage(wsConn *websocketConnection, message []
 	clientIP := resolveWSClientIP(peerIP, wsConn.forwardedFor, wsConn.portCtx)
 	role := roleForRequest(peerIP, wsConn.user, cmdMap, wsConn.portCtx)
 	loadCtx := newRpcContext(wsConn.Context(), role, types.DefaultApiVersion, clientIP, ws.loadPeerSource(), ws.services)
-	if rpcErr := gateLoad(ws.loadTracker, loadCtx, "", wsLog()); rpcErr != nil {
+	loadCtx.ResourceConsumer = wsConn.resourceConsumer
+	if rpcErr := gateLoad(ws.resourceManager, loadCtx, "", wsLog()); rpcErr != nil {
 		wsConn.closeWithPolicyViolation("threshold exceeded")
 		return
 	}
+	defer loadCtx.ResourceAdmission.Finish(resource.FeeExceptionRPC, "")
 
 	apiVersion := types.DefaultApiVersion
 	if version, present := apiVersionFromObject(message); present {
 		apiVersion = version
 	}
-	versionCtx := newRpcContext(wsConn.Context(), role, apiVersion, clientIP, ws.loadPeerSource(), ws.services)
+	loadCtx.ApiVersion = apiVersion
+	versionCtx := loadCtx
 	if rpcErr := validateApiVersion(versionCtx); rpcErr != nil {
-		chargeLoad(ws.loadTracker, versionCtx, "", loadtrack.LoadMalformed, wsLog())
+		chargeLoad(ws.resourceManager, versionCtx, "", resource.FeeMalformedRPC, wsLog())
 		ws.sendErrorResponse(wsConn, rpcErr, id, nil, requestEcho)
 		return
 	}
@@ -73,7 +76,7 @@ func (ws *WebSocketServer) handleMessage(wsConn *websocketConnection, message []
 	// feeMalformedRPC (ServerHandler.cpp:446-468).
 	command, ok := resolveWSCommand(cmdMap)
 	if !ok {
-		chargeLoad(ws.loadTracker, versionCtx, "", loadtrack.LoadMalformed, wsLog())
+		chargeLoad(ws.resourceManager, versionCtx, "", resource.FeeMalformedRPC, wsLog())
 		ws.sendMissingCommand(wsConn, cmdMap, id)
 		return
 	}
@@ -100,7 +103,8 @@ func (ws *WebSocketServer) handleMessage(wsConn *websocketConnection, message []
 		dispatchCtx, cancel = context.WithTimeout(wsConn.Context(), ws.timeout)
 		defer cancel()
 	}
-	rpcCtx := newRpcContext(dispatchCtx, role, apiVersion, clientIP, ws.loadPeerSource(), ws.services)
+	rpcCtx := versionCtx
+	rpcCtx.Context = dispatchCtx
 
 	switch cmd.Command {
 	case "subscribe":
@@ -117,21 +121,21 @@ func (ws *WebSocketServer) handleMessage(wsConn *websocketConnection, message []
 	ws.handleRPCMethod(wsConn, rpcCtx, cmd)
 }
 func (ws *WebSocketServer) handleSpecialCommand(wsConn *websocketConnection, ctx *types.RpcContext, cmd types.WebSocketCommand, handler wsSpecialHandler) {
-	ctx.LoadCost = uint32(loadtrack.LoadReference)
+	ctx.LoadCost = uint32(resource.FeeReferenceRPC.Cost())
 	if rpcErr := handlers.RequireNotBusyClient(ctx); rpcErr != nil {
-		finalizeLoad(ws.loadTracker, ctx, cmd.Command, loadtrack.LoadReference, wsLog())
+		finalizeLoad(ws.resourceManager, ctx, cmd.Command, resource.FeeReferenceRPC, wsLog())
 		ws.sendCommandError(wsConn, rpcErr, cmd)
 		return
 	}
 
 	resolution := resolveMethod(ws.methodRegistry, cmd.Command, ctx.ApiVersion)
 	if !resolution.resolved {
-		finalizeLoad(ws.loadTracker, ctx, cmd.Command, loadtrack.LoadReference, wsLog())
+		finalizeLoad(ws.resourceManager, ctx, cmd.Command, resource.FeeReferenceRPC, wsLog())
 		ws.sendCommandError(wsConn, types.RpcErrorMethodNotFound(), cmd)
 		return
 	}
 	if rpcErr := conditionMet(resolution.handler.RequiredCondition(), ctx); rpcErr != nil {
-		finalizeLoad(ws.loadTracker, ctx, cmd.Command, loadtrack.LoadReference, wsLog())
+		finalizeLoad(ws.resourceManager, ctx, cmd.Command, resource.FeeReferenceRPC, wsLog())
 		ws.sendCommandError(wsConn, rpcErr, cmd)
 		return
 	}
@@ -146,11 +150,11 @@ func (ws *WebSocketServer) handleSpecialCommand(wsConn *websocketConnection, ctx
 		finishDiagnostics(recovered)
 		return result, rpcErr, recovered
 	}()
-	kind := loadtrack.LoadKind(ctx.LoadCost)
-	if recovered && kind == loadtrack.LoadReference {
-		kind = loadtrack.LoadException
+	fee := rpcCharge(ctx.LoadCost)
+	if recovered && fee == resource.FeeReferenceRPC {
+		fee = resource.FeeExceptionRPC
 	}
-	finalizeLoad(ws.loadTracker, ctx, cmd.Command, kind, wsLog())
+	finalizeLoad(ws.resourceManager, ctx, cmd.Command, fee, wsLog())
 	if rpcErr != nil {
 		// Error responses deliberately omit warnings produced by the final charge.
 		ws.sendCommandError(wsConn, rpcErr, cmd)
@@ -178,12 +182,11 @@ func (ws *WebSocketServer) handleRPCMethod(wsConn *websocketConnection, ctx *typ
 	// Role::FORBID for an admin-required command, rippled writes
 	// rpcError(rpcFORBIDDEN) before doCommand ever runs.
 	resolution := resolveMethod(ws.methodRegistry, cmd.Command, ctx.ApiVersion)
-	if rpcErr := admitMethod(ws.loadTracker, ctx, cmd.Command, resolution, types.RpcErrorForbidden, false, wsLog()); rpcErr != nil {
-		warnLoad(ws.loadTracker, ctx, cmd.Command, wsLog())
+	if rpcErr := admitMethod(ws.resourceManager, ctx, cmd.Command, resolution, types.RpcErrorForbidden, false, wsLog()); rpcErr != nil {
 		ws.sendErrorResponse(wsConn, rpcErr, cmd.ID, nil, cmd.Request)
 		return
 	}
-	result, rpcErr := dispatchResolvedMethod(ws.loadTracker, ws.services, ctx, cmd.Command, cmd.Params, resolution, wsLog())
+	result, rpcErr := dispatchResolvedMethod(ws.resourceManager, ws.services, ctx, cmd.Command, cmd.Params, resolution, wsLog())
 	if rpcErr != nil {
 		ws.sendErrorResponse(wsConn, rpcErr, cmd.ID, nil, cmd.Request)
 		return

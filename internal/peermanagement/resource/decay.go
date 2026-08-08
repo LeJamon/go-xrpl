@@ -6,22 +6,26 @@ import "time"
 // window. Mirrors basics::DecayingSample<Window, Clock> at
 // rippled/include/xrpl/basics/DecayingSample.h.
 type decayingSample struct {
-	windowSeconds int
-	value         int
+	windowSeconds int64
+	value         int64
 	when          time.Time
 }
 
 func newDecayingSample(now time.Time, windowSeconds int) decayingSample {
-	return decayingSample{windowSeconds: windowSeconds, when: now.Truncate(time.Second)}
+	return decayingSample{windowSeconds: int64(windowSeconds), when: now}
 }
 
-func (d *decayingSample) add(v int, now time.Time) int {
+func (d *decayingSample) add(v int64, now time.Time) int64 {
 	d.decay(now)
-	d.value += v
+	if v > 0 && d.value > int64(^uint64(0)>>1)-v {
+		d.value = int64(^uint64(0) >> 1)
+	} else {
+		d.value += v
+	}
 	return d.value / d.windowSeconds
 }
 
-func (d *decayingSample) valueAt(now time.Time) int {
+func (d *decayingSample) valueAt(now time.Time) int64 {
 	d.decay(now)
 	return d.value / d.windowSeconds
 }
@@ -45,24 +49,22 @@ func (d *decayingSample) valueAt(now time.Time) int {
 // within the same second are no-ops, and the anchor only advances on a
 // genuine second boundary.
 func (d *decayingSample) decay(now time.Time) {
-	now = now.Truncate(time.Second)
-	if now.Equal(d.when) {
-		return
-	}
-	if !now.After(d.when) {
-		// Clock went backwards. Don't reverse-age; just resync.
-		d.when = now
+	elapsed := int64(now.Sub(d.when) / time.Second)
+	if elapsed <= 0 {
 		return
 	}
 	if d.value != 0 {
-		elapsed := int(now.Sub(d.when) / time.Second)
 		if elapsed > 4*d.windowSeconds {
 			d.value = 0
 		} else {
 			for range elapsed {
-				d.value -= (d.value + d.windowSeconds - 1) / d.windowSeconds
+				decrement := d.value / d.windowSeconds
+				if d.value%d.windowSeconds != 0 {
+					decrement++
+				}
+				d.value -= decrement
 			}
 		}
 	}
-	d.when = now
+	d.when = d.when.Add(time.Duration(elapsed) * time.Second)
 }
