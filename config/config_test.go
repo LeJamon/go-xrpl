@@ -278,7 +278,7 @@ protocol = "peer"
 [port_override]
 port = 51236
 ip = "127.0.0.1"
-protocol = "peer"
+protocol = "http"
 ssl_ciphers = "port-ciphers"
 
 [node_db]
