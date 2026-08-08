@@ -63,6 +63,7 @@ func (ws *WebSocketServer) executePathFindCreate(wsConn *websocketConnection, ct
 		return nil, types.NewRpcError(types.RpcNO_CURRENT, "noCurrent", "noCurrent",
 			"No closed ledger available")
 	}
+	session.setSearchLevelMax(ctx.Services.Capabilities.PathSearchMax)
 	view, err := ctx.Services.Ledger.GetClosedLedgerView()
 	if err != nil {
 		return nil, types.NewRpcError(types.RpcNO_CURRENT, "noCurrent", "noCurrent",

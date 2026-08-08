@@ -16,10 +16,11 @@ import (
 // Each WebSocket connection can have at most one active session (matching rippled).
 // Reference: rippled PathRequest class + PathFind.cpp handler
 type PathFindSession struct {
-	mu        sync.Mutex
-	computeMu sync.Mutex
-	computeFn func(tx.LedgerView) *pathfinder.PathRequestResult
-	request   *pathfinder.PathRequest
+	mu             sync.Mutex
+	computeMu      sync.Mutex
+	computeFn      func(tx.LedgerView) *pathfinder.PathRequestResult
+	request        *pathfinder.PathRequest
+	searchLevelMax int
 
 	// Request parameters (immutable after creation)
 	srcAccount    [20]byte
@@ -222,20 +223,30 @@ func ParseAndCreateSession(params json.RawMessage, id any) (*PathFindSession, *r
 	pathRequest.SetSearchLevel(0)
 
 	session := &PathFindSession{
-		request:       pathRequest,
-		srcAccount:    srcAccount,
-		dstAccount:    dstAccount,
-		dstAmount:     dstAmount,
-		sendMax:       sendMax,
-		srcCurrencies: srcCurrencies,
-		convertAll:    convertAll,
-		domainID:      domainID,
-		srcAccountStr: state.EncodeAccountIDSafe(srcAccount),
-		dstAccountStr: state.EncodeAccountIDSafe(dstAccount),
-		id:            id,
+		request:        pathRequest,
+		srcAccount:     srcAccount,
+		dstAccount:     dstAccount,
+		dstAmount:      dstAmount,
+		sendMax:        sendMax,
+		srcCurrencies:  srcCurrencies,
+		convertAll:     convertAll,
+		domainID:       domainID,
+		searchLevelMax: pathfinder.SearchLevelMax,
+		srcAccountStr:  state.EncodeAccountIDSafe(srcAccount),
+		dstAccountStr:  state.EncodeAccountIDSafe(dstAccount),
+		id:             id,
 	}
 
 	return session, nil
+}
+
+func (s *PathFindSession) setSearchLevelMax(level int) {
+	s.computeMu.Lock()
+	defer s.computeMu.Unlock()
+	s.searchLevelMax = level
+	if s.request != nil {
+		s.request.SetSearchLevelMax(level)
+	}
 }
 
 // Compute runs pathfinding while serializing computations for this session.
@@ -255,6 +266,7 @@ func (s *PathFindSession) Compute(view tx.LedgerView, fast bool) *pathfinder.Pat
 		)
 		s.request.SetDomainID(s.domainID)
 		s.request.SetSearchLevel(0)
+		s.request.SetSearchLevelMax(s.searchLevelMax)
 	}
 	return s.request.ExecuteUpdate(view, fast, false)
 }
