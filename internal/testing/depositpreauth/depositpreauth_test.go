@@ -3,19 +3,23 @@
 package depositpreauth_test
 
 import (
+	"bytes"
 	"encoding/hex"
 	"fmt"
+	"sort"
 	"testing"
-	"time"
 
 	jtx "github.com/LeJamon/go-xrpl/internal/testing"
 	"github.com/LeJamon/go-xrpl/internal/testing/credential"
 	dp "github.com/LeJamon/go-xrpl/internal/testing/depositpreauth"
+	"github.com/LeJamon/go-xrpl/internal/testing/escrow"
 	"github.com/LeJamon/go-xrpl/internal/testing/payment"
 	"github.com/LeJamon/go-xrpl/internal/testing/trustset"
 	"github.com/LeJamon/go-xrpl/internal/tx"
 	"github.com/LeJamon/go-xrpl/internal/tx/depositpreauth"
 	paymentPkg "github.com/LeJamon/go-xrpl/internal/tx/payment"
+	"github.com/LeJamon/go-xrpl/keylet"
+	ledgerentry "github.com/LeJamon/go-xrpl/ledger/entry"
 	"github.com/stretchr/testify/require"
 )
 
@@ -181,25 +185,53 @@ func TestDepositPreauth_Invalid(t *testing.T) {
 		env.Close()
 	})
 
-	// alice successfully authorizes becky.
-	t.Run("SuccessfulAuth", func(t *testing.T) {
-		jtx.RequireOwnerCount(t, env, alice, 0)
-		jtx.RequireOwnerCount(t, env, becky, 0)
+	t.Run("AuthorizationLifecycle", func(t *testing.T) {
+		lifecycleEnv := jtx.NewTestEnv(t)
+		lifecycleEnv.FundAmount(alice, uint64(jtx.XRP(10000)))
+		lifecycleEnv.FundAmount(becky, uint64(jtx.XRP(10000)))
+		lifecycleEnv.Close()
+		preauthKey := keylet.DepositPreauth(alice.ID, becky.ID)
+		initialBalance := lifecycleEnv.Balance(alice)
 
-		result := env.Submit(dp.Auth(alice, becky).Build())
+		jtx.RequireOwnerCount(t, lifecycleEnv, alice, 0)
+		result := lifecycleEnv.Submit(dp.Auth(alice, becky).Build())
 		jtx.RequireTxSuccess(t, result)
-		env.Close()
-		jtx.RequireOwnerCount(t, env, alice, 1)
-		jtx.RequireOwnerCount(t, env, becky, 0)
-	})
+		lifecycleEnv.Close()
+		jtx.RequireLedgerEntryExists(t, lifecycleEnv, preauthKey)
+		jtx.RequireOwnerDirectoryContains(t, lifecycleEnv, alice, preauthKey.Key, true)
+		jtx.RequireOwnerCount(t, lifecycleEnv, alice, 1)
+		data, err := lifecycleEnv.LedgerEntry(preauthKey)
+		require.NoError(t, err)
+		stored := &ledgerentry.DepositPreauth{}
+		require.NoError(t, stored.Decode(data))
+		require.Equal(t, alice.Address, stored.Account)
+		require.Equal(t, becky.Address, stored.Authorize)
+		require.Equal(t, "0", stored.OwnerNode)
+		require.Equal(t, initialBalance-lifecycleEnv.BaseFee(), lifecycleEnv.Balance(alice))
+		availableAfterCreate := lifecycleEnv.Balance(alice) - reserve(lifecycleEnv, 1)
 
-	// Duplicate authorization.
-	t.Run("DuplicateAuth", func(t *testing.T) {
-		result := env.Submit(dp.Auth(alice, becky).Build())
+		result = lifecycleEnv.Submit(dp.Auth(alice, becky).Build())
 		require.Equal(t, "tecDUPLICATE", result.Code)
-		env.Close()
-		jtx.RequireOwnerCount(t, env, alice, 1)
-		jtx.RequireOwnerCount(t, env, becky, 0)
+		lifecycleEnv.Close()
+		jtx.RequireLedgerEntryExists(t, lifecycleEnv, preauthKey)
+		jtx.RequireOwnerCount(t, lifecycleEnv, alice, 1)
+
+		result = lifecycleEnv.Submit(dp.Unauth(alice, becky).Build())
+		jtx.RequireTxSuccess(t, result)
+		lifecycleEnv.Close()
+		jtx.RequireLedgerEntryNotExists(t, lifecycleEnv, preauthKey)
+		jtx.RequireOwnerDirectoryContains(t, lifecycleEnv, alice, preauthKey.Key, false)
+		jtx.RequireOwnerCount(t, lifecycleEnv, alice, 0)
+		require.Equal(t, initialBalance-3*lifecycleEnv.BaseFee(), lifecycleEnv.Balance(alice))
+		require.Equal(t,
+			availableAfterCreate+lifecycleEnv.ReserveIncrement()-2*lifecycleEnv.BaseFee(),
+			lifecycleEnv.Balance(alice)-reserve(lifecycleEnv, 0),
+		)
+
+		result = lifecycleEnv.Submit(dp.Unauth(alice, becky).Build())
+		require.Equal(t, "tecNO_ENTRY", result.Code)
+		lifecycleEnv.Close()
+		jtx.RequireOwnerCount(t, lifecycleEnv, alice, 0)
 	})
 
 	// Insufficient reserve.
@@ -233,30 +265,12 @@ func TestDepositPreauth_Invalid(t *testing.T) {
 		env.Close()
 		jtx.RequireOwnerCount(t, env, carol, 1)
 		jtx.RequireOwnerCount(t, env, becky, 0)
-		jtx.RequireOwnerCount(t, env, alice, 1)
+		jtx.RequireOwnerCount(t, env, alice, 0)
 	})
 
 	// Remove non-existent authorization.
 	t.Run("RemoveNonExistent", func(t *testing.T) {
 		result := env.Submit(dp.Unauth(alice, carol).Build())
-		require.Equal(t, "tecNO_ENTRY", result.Code)
-		env.Close()
-		jtx.RequireOwnerCount(t, env, alice, 1)
-		jtx.RequireOwnerCount(t, env, becky, 0)
-	})
-
-	// Successfully remove authorization.
-	t.Run("SuccessfulUnauth", func(t *testing.T) {
-		result := env.Submit(dp.Unauth(alice, becky).Build())
-		jtx.RequireTxSuccess(t, result)
-		env.Close()
-		jtx.RequireOwnerCount(t, env, alice, 0)
-		jtx.RequireOwnerCount(t, env, becky, 0)
-	})
-
-	// Remove again — should fail.
-	t.Run("RemoveAgain", func(t *testing.T) {
-		result := env.Submit(dp.Unauth(alice, becky).Build())
 		require.Equal(t, "tecNO_ENTRY", result.Code)
 		env.Close()
 		jtx.RequireOwnerCount(t, env, alice, 0)
@@ -398,24 +412,24 @@ func testPayment(t *testing.T, supportsCredentials bool) {
 
 		// becky sets up credential-based preauth.
 		result = env.Submit(dp.AuthCredentials(becky, []dp.AuthorizeCredentials{
-			{Issuer: carol, CredType: credType},
+			{Issuer: carol, CredTypeText: credType},
 		}).Build())
 		require.Equal(t, expectDP, result.Code)
 		env.Close()
 
 		// carol creates credential for gw (subject=gw, issuer=carol).
-		result = env.Submit(credential.CredentialCreate(carol, gw, credType).Build())
+		result = env.Submit(credential.CredentialCreateText(carol, gw, credType).Build())
 		require.Equal(t, expectCredentials, result.Code)
 		env.Close()
 		// gw accepts the credential from carol.
-		result = env.Submit(credential.CredentialAccept(gw, carol, credType).Build())
+		result = env.Submit(credential.CredentialAcceptText(gw, carol, credType).Build())
 		require.Equal(t, expectCredentials, result.Code)
 		env.Close()
 
 		// Compute credential index (subject=gw, issuer=carol).
 		var credIdx string
 		if supportsCredentials {
-			credIdx = dp.CredentialIndex(gw, carol, credType)
+			credIdx = dp.CredentialIndexHex(gw, carol, credType)
 		} else {
 			credIdx = "48004829F915654A81B11C4AB8218D96FED67F209B58328A72314FB6EA288BE4"
 		}
@@ -578,7 +592,7 @@ func TestDepositPreauth_CredentialsPayment(t *testing.T) {
 
 		// Setup credential-based DepositPreauth fails — amendment not supported.
 		result := env.Submit(dp.AuthCredentials(bob, []dp.AuthorizeCredentials{
-			{Issuer: issuer, CredType: credType},
+			{Issuer: issuer, CredTypeText: credType},
 		}).Build())
 		require.Equal(t, "temDISABLED", result.Code)
 		env.Close()
@@ -610,12 +624,12 @@ func TestDepositPreauth_CredentialsPayment(t *testing.T) {
 		env.Close()
 
 		// Issuer creates credential for Alice, Alice hasn't accepted yet.
-		result := env.Submit(credential.CredentialCreate(issuer, alice, credType).Build())
+		result := env.Submit(credential.CredentialCreateText(issuer, alice, credType).Build())
 		jtx.RequireTxSuccess(t, result)
 		env.Close()
 
 		// Get the credential index.
-		credIdx := dp.CredentialIndex(alice, issuer, credType)
+		credIdx := dp.CredentialIndexHex(alice, issuer, credType)
 
 		// Bob requires preauthorization.
 		env.EnableDepositAuth(bob)
@@ -623,7 +637,7 @@ func TestDepositPreauth_CredentialsPayment(t *testing.T) {
 
 		// Bob accepts payments from accounts with credentials signed by 'issuer'.
 		result = env.Submit(dp.AuthCredentials(bob, []dp.AuthorizeCredentials{
-			{Issuer: issuer, CredType: credType},
+			{Issuer: issuer, CredTypeText: credType},
 		}).Build())
 		jtx.RequireTxSuccess(t, result)
 		env.Close()
@@ -647,7 +661,7 @@ func TestDepositPreauth_CredentialsPayment(t *testing.T) {
 		env.Close()
 
 		// Alice accepts the credentials.
-		result = env.Submit(credential.CredentialAccept(alice, issuer, credType).Build())
+		result = env.Submit(credential.CredentialAcceptText(alice, issuer, credType).Build())
 		jtx.RequireTxSuccess(t, result)
 		env.Close()
 
@@ -693,14 +707,14 @@ func TestDepositPreauth_CredentialsPayment(t *testing.T) {
 		env.Close()
 
 		// Issuer creates credential for alice, then alice accepts.
-		result := env.Submit(credential.CredentialCreate(issuer, alice, credType).Build())
+		result := env.Submit(credential.CredentialCreateText(issuer, alice, credType).Build())
 		jtx.RequireTxSuccess(t, result)
 		env.Close()
-		result = env.Submit(credential.CredentialAccept(alice, issuer, credType).Build())
+		result = env.Submit(credential.CredentialAcceptText(alice, issuer, credType).Build())
 		jtx.RequireTxSuccess(t, result)
 		env.Close()
 
-		credIdx := dp.CredentialIndex(alice, issuer, credType)
+		credIdx := dp.CredentialIndexHex(alice, issuer, credType)
 
 		// Success: destination didn't enable preauthorization, so valid credentials won't fail.
 		result = env.Submit(
@@ -724,14 +738,14 @@ func TestDepositPreauth_CredentialsPayment(t *testing.T) {
 
 		// Bob tries to setup DepositPreauth with duplicates — not allowed.
 		result = env.Submit(dp.AuthCredentials(bob, []dp.AuthorizeCredentials{
-			{Issuer: issuer, CredType: credType},
-			{Issuer: issuer, CredType: credType},
+			{Issuer: issuer, CredTypeText: credType},
+			{Issuer: issuer, CredTypeText: credType},
 		}).Build())
 		require.Equal(t, "temMALFORMED", result.Code)
 
 		// Bob sets up DepositPreauth correctly.
 		result = env.Submit(dp.AuthCredentials(bob, []dp.AuthorizeCredentials{
-			{Issuer: issuer, CredType: credType},
+			{Issuer: issuer, CredTypeText: credType},
 		}).Build())
 		jtx.RequireTxSuccess(t, result)
 		env.Close()
@@ -755,14 +769,14 @@ func TestDepositPreauth_CredentialsPayment(t *testing.T) {
 
 		// Create another valid credential for alice with different type.
 		credType2 := "fghij"
-		result = env.Submit(credential.CredentialCreate(issuer, alice, credType2).Build())
+		result = env.Submit(credential.CredentialCreateText(issuer, alice, credType2).Build())
 		jtx.RequireTxSuccess(t, result)
 		env.Close()
-		result = env.Submit(credential.CredentialAccept(alice, issuer, credType2).Build())
+		result = env.Submit(credential.CredentialAcceptText(alice, issuer, credType2).Build())
 		jtx.RequireTxSuccess(t, result)
 		env.Close()
 
-		credIdx2 := dp.CredentialIndex(alice, issuer, credType2)
+		credIdx2 := dp.CredentialIndexHex(alice, issuer, credType2)
 
 		// Alice can't pay with invalid set of valid credentials (wrong combination).
 		result = env.Submit(
@@ -898,7 +912,7 @@ func TestDepositPreauth_CredentialsCreation(t *testing.T) {
 	// Empty credential type.
 	t.Run("EmptyCredType", func(t *testing.T) {
 		result := env.Submit(dp.AuthCredentials(bob, []dp.AuthorizeCredentials{
-			{Issuer: issuer, CredType: ""},
+			{Issuer: issuer, CredTypeText: ""},
 		}).Build())
 		require.Equal(t, "temMALFORMED", result.Code)
 	})
@@ -914,7 +928,7 @@ func TestDepositPreauth_CredentialsCreation(t *testing.T) {
 
 		creds := make([]dp.AuthorizeCredentials, 9)
 		for i, acc := range accounts {
-			creds[i] = dp.AuthorizeCredentials{Issuer: acc, CredType: credType}
+			creds[i] = dp.AuthorizeCredentials{Issuer: acc, CredTypeText: credType}
 		}
 		result := env.Submit(dp.AuthCredentials(bob, creds).Build())
 		require.Equal(t, "temARRAY_TOO_LARGE", result.Code)
@@ -924,7 +938,7 @@ func TestDepositPreauth_CredentialsCreation(t *testing.T) {
 	t.Run("NonExistingIssuer", func(t *testing.T) {
 		rick := jtx.NewAccount("rick")
 		result := env.Submit(dp.AuthCredentials(bob, []dp.AuthorizeCredentials{
-			{Issuer: rick, CredType: credType},
+			{Issuer: rick, CredTypeText: credType},
 		}).Build())
 		require.Equal(t, "tecNO_ISSUER", result.Code)
 		env.Close()
@@ -937,7 +951,7 @@ func TestDepositPreauth_CredentialsCreation(t *testing.T) {
 		env.Close()
 
 		result := env.Submit(dp.AuthCredentials(john, []dp.AuthorizeCredentials{
-			{Issuer: issuer, CredType: credType},
+			{Issuer: issuer, CredTypeText: credType},
 		}).Build())
 		require.Equal(t, "tecINSUFFICIENT_RESERVE", result.Code)
 	})
@@ -945,33 +959,52 @@ func TestDepositPreauth_CredentialsCreation(t *testing.T) {
 	// No deposit object exists for unauthorize.
 	t.Run("NoEntryForUnauth", func(t *testing.T) {
 		result := env.Submit(dp.UnauthCredentials(bob, []dp.AuthorizeCredentials{
-			{Issuer: issuer, CredType: credType},
+			{Issuer: issuer, CredTypeText: credType},
 		}).Build())
 		require.Equal(t, "tecNO_ENTRY", result.Code)
 	})
 
-	// Create DepositPreauth object with credentials.
-	t.Run("CreateCredentialPreauth", func(t *testing.T) {
+	t.Run("CredentialAuthorizationLifecycle", func(t *testing.T) {
+		preauthKey := keylet.DepositPreauthCredentials(bob.ID, []keylet.CredentialPair{{
+			Issuer: issuer.ID, CredentialType: []byte(credType),
+		}})
+		jtx.RequireOwnerCount(t, env, bob, 0)
 		result := env.Submit(dp.AuthCredentials(bob, []dp.AuthorizeCredentials{
-			{Issuer: issuer, CredType: credType},
+			{Issuer: issuer, CredTypeText: credType},
 		}).Build())
 		jtx.RequireTxSuccess(t, result)
 		env.Close()
+		jtx.RequireLedgerEntryExists(t, env, preauthKey)
+		jtx.RequireOwnerDirectoryContains(t, env, bob, preauthKey.Key, true)
+		jtx.RequireOwnerCount(t, env, bob, 1)
+		data, err := env.LedgerEntry(preauthKey)
+		require.NoError(t, err)
+		stored := &ledgerentry.DepositPreauth{}
+		require.NoError(t, stored.Decode(data))
+		require.Equal(t, bob.Address, stored.Account)
+		require.Equal(t, "0", stored.OwnerNode)
+		require.Equal(t, []any{map[string]any{
+			"Credential": map[string]any{
+				"Issuer": issuer.Address, "CredentialType": hex.EncodeToString([]byte(credType)),
+			},
+		}}, stored.AuthorizeCredentials)
 
-		// Can't create duplicate.
 		result = env.Submit(dp.AuthCredentials(bob, []dp.AuthorizeCredentials{
-			{Issuer: issuer, CredType: credType},
+			{Issuer: issuer, CredTypeText: credType},
 		}).Build())
 		require.Equal(t, "tecDUPLICATE", result.Code)
-	})
+		env.Close()
+		jtx.RequireLedgerEntryExists(t, env, preauthKey)
+		jtx.RequireOwnerCount(t, env, bob, 1)
 
-	// Delete DepositPreauth object with credentials.
-	t.Run("DeleteCredentialPreauth", func(t *testing.T) {
-		result := env.Submit(dp.UnauthCredentials(bob, []dp.AuthorizeCredentials{
-			{Issuer: issuer, CredType: credType},
+		result = env.Submit(dp.UnauthCredentials(bob, []dp.AuthorizeCredentials{
+			{Issuer: issuer, CredTypeText: credType},
 		}).Build())
 		jtx.RequireTxSuccess(t, result)
 		env.Close()
+		jtx.RequireLedgerEntryNotExists(t, env, preauthKey)
+		jtx.RequireOwnerDirectoryContains(t, env, bob, preauthKey.Key, false)
+		jtx.RequireOwnerCount(t, env, bob, 0)
 	})
 }
 
@@ -1003,7 +1036,7 @@ func TestDepositPreauth_ExpiredCreds(t *testing.T) {
 		now := env.NowRipple()
 		expiration := now + 60
 		result := env.Submit(
-			credential.CredentialCreate(issuer, alice, credType).
+			credential.CredentialCreateText(issuer, alice, credType).
 				Expiration(expiration).
 				Build(),
 		)
@@ -1011,28 +1044,28 @@ func TestDepositPreauth_ExpiredCreds(t *testing.T) {
 		env.Close()
 
 		// Alice accepts credentials.
-		result = env.Submit(credential.CredentialAccept(alice, issuer, credType).Build())
+		result = env.Submit(credential.CredentialAcceptText(alice, issuer, credType).Build())
 		jtx.RequireTxSuccess(t, result)
 		env.Close()
 
 		// Issuer creates non-expiring credential for alice (expiration far in the future).
 		now = env.NowRipple()
 		result = env.Submit(
-			credential.CredentialCreate(issuer, alice, credType2).
+			credential.CredentialCreateText(issuer, alice, credType2).
 				Expiration(now + 1000).
 				Build(),
 		)
 		jtx.RequireTxSuccess(t, result)
 		env.Close()
-		result = env.Submit(credential.CredentialAccept(alice, issuer, credType2).Build())
+		result = env.Submit(credential.CredentialAcceptText(alice, issuer, credType2).Build())
 		jtx.RequireTxSuccess(t, result)
 		env.Close()
 
 		jtx.RequireOwnerCount(t, env, issuer, 0)
 		jtx.RequireOwnerCount(t, env, alice, 2)
 
-		credIdx := dp.CredentialIndex(alice, issuer, credType)
-		credIdx2 := dp.CredentialIndex(alice, issuer, credType2)
+		credIdx := dp.CredentialIndexHex(alice, issuer, credType)
+		credIdx2 := dp.CredentialIndexHex(alice, issuer, credType2)
 
 		// Bob requires preauthorization.
 		env.EnableDepositAuth(bob)
@@ -1040,8 +1073,8 @@ func TestDepositPreauth_ExpiredCreds(t *testing.T) {
 
 		// Bob sets up credential-based preauth for both credential types.
 		result = env.Submit(dp.AuthCredentials(bob, []dp.AuthorizeCredentials{
-			{Issuer: issuer, CredType: credType},
-			{Issuer: issuer, CredType: credType2},
+			{Issuer: issuer, CredTypeText: credType},
+			{Issuer: issuer, CredTypeText: credType2},
 		}).Build())
 		jtx.RequireTxSuccess(t, result)
 		env.Close()
@@ -1081,17 +1114,17 @@ func TestDepositPreauth_ExpiredCreds(t *testing.T) {
 		// Additional test: issuer creates credential for gw with short expiration.
 		now = env.NowRipple()
 		result = env.Submit(
-			credential.CredentialCreate(issuer, gw, credType).
+			credential.CredentialCreateText(issuer, gw, credType).
 				Expiration(now + 40).
 				Build(),
 		)
 		jtx.RequireTxSuccess(t, result)
 		env.Close()
-		result = env.Submit(credential.CredentialAccept(gw, issuer, credType).Build())
+		result = env.Submit(credential.CredentialAcceptText(gw, issuer, credType).Build())
 		jtx.RequireTxSuccess(t, result)
 		env.Close()
 
-		gwCredIdx := dp.CredentialIndex(gw, issuer, credType)
+		gwCredIdx := dp.CredentialIndexHex(gw, issuer, credType)
 
 		jtx.RequireOwnerCount(t, env, issuer, 0)
 		jtx.RequireOwnerCount(t, env, gw, 1)
@@ -1133,7 +1166,7 @@ func TestDepositPreauth_ExpiredCreds(t *testing.T) {
 		// Issuer creates credential for zelda with short expiration.
 		now := env.NowRipple()
 		result := env.Submit(
-			credential.CredentialCreate(issuer, zelda, credType).
+			credential.CredentialCreateText(issuer, zelda, credType).
 				Expiration(now + 50).
 				Build(),
 		)
@@ -1141,11 +1174,11 @@ func TestDepositPreauth_ExpiredCreds(t *testing.T) {
 		env.Close()
 
 		// Zelda accepts credentials.
-		result = env.Submit(credential.CredentialAccept(zelda, issuer, credType).Build())
+		result = env.Submit(credential.CredentialAcceptText(zelda, issuer, credType).Build())
 		jtx.RequireTxSuccess(t, result)
 		env.Close()
 
-		credIdx := dp.CredentialIndex(zelda, issuer, credType)
+		credIdx := dp.CredentialIndexHex(zelda, issuer, credType)
 
 		// Bob requires preauthorization.
 		env.EnableDepositAuth(bob)
@@ -1153,44 +1186,59 @@ func TestDepositPreauth_ExpiredCreds(t *testing.T) {
 
 		// Bob sets up credential-based preauth.
 		result = env.Submit(dp.AuthCredentials(bob, []dp.AuthorizeCredentials{
-			{Issuer: issuer, CredType: credType},
+			{Issuer: issuer, CredTypeText: credType},
 		}).Build())
 		jtx.RequireTxSuccess(t, result)
 		env.Close()
 
-		// Create escrow from alice to bob.
-		// Note: This test requires escrow support. The escrow is created with
-		// a finish time 1 second in the future so zelda can try to finish it
-		// with credentials.
 		aliceSeq := env.Seq(alice)
-		finishTime := env.Now().Add(1 * time.Second)
-		_ = aliceSeq
-		_ = finishTime
-		// TODO: Integrate with escrow builder when available.
-		// For now, test the credential validation logic directly.
-
-		// zelda can't finish escrow with empty credentials.
-		// env(escrow::finish(zelda, alice, seq), credentials::ids({}), ter(temMALFORMED))
-
-		// zelda can't finish with invalid credentials.
-		// invalidIdx := "0E0B04ED60588A758B67E21FBBE95AC5A63598BA951761DC0EC9C08D7E01E034"
-		// env(escrow::finish(zelda, alice, seq), credentials::ids({invalidIdx}), ter(tecBAD_CREDENTIALS))
-
-		// Advance time past expiration.
-		env.AdvanceTime(60 * time.Second)
+		escrowKey := keylet.Escrow(alice.ID, aliceSeq)
+		bobBalance := env.Balance(bob)
+		result = env.Submit(
+			escrow.EscrowCreate(alice, bob, jtx.XRP(1000)).
+				FinishAfter(env.NowRipple() + 1).
+				Build(),
+		)
+		jtx.RequireTxSuccess(t, result)
 		env.Close()
+		require.True(t, env.LedgerEntryExists(escrowKey))
+		jtx.RequireOwnerCount(t, env, alice, 1)
+		require.Equal(t, bobBalance, env.Balance(bob))
+
+		result = env.Submit(
+			escrow.EscrowFinish(zelda, alice, aliceSeq).
+				CredentialIDs([]string{}).
+				Build(),
+		)
+		require.Equal(t, "temMALFORMED", result.Code)
+		env.Close()
+		require.True(t, env.LedgerEntryExists(escrowKey))
+
+		invalidIdx := "0E0B04ED60588A758B67E21FBBE95AC5A63598BA951761DC0EC9C08D7E01E034"
+		result = env.Submit(
+			escrow.EscrowFinish(zelda, alice, aliceSeq).
+				CredentialIDs([]string{invalidIdx}).
+				Build(),
+		)
+		require.Equal(t, "tecBAD_CREDENTIALS", result.Code)
+		env.Close()
+		require.True(t, env.LedgerEntryExists(escrowKey))
+
+		result = env.Submit(
+			escrow.EscrowFinish(zelda, alice, aliceSeq).
+				CredentialIDs([]string{credIdx}).
+				Fee(1500).
+				Build(),
+		)
+		require.Equal(t, "tecEXPIRED", result.Code)
 		env.Close()
 
-		// zelda's credentials are now expired. Using them should return tecEXPIRED
-		// and the expired credentials should be deleted.
-		_ = credIdx
-
-		// Verify expired credentials were deleted.
 		zeldaCredKey := jtx.CredentialKeylet(zelda, issuer, credType)
-		// After the escrow finish attempt with expired creds, the credential should be deleted.
-		// Since we can't fully test escrow here, at least verify the credential still exists
-		// (it will be deleted when a transaction attempts to use it after expiration).
-		_ = zeldaCredKey
+		require.False(t, env.LedgerEntryExists(zeldaCredKey))
+		require.True(t, env.LedgerEntryExists(escrowKey))
+		jtx.RequireOwnerCount(t, env, zelda, 0)
+		jtx.RequireOwnerCount(t, env, alice, 1)
+		require.Equal(t, bobBalance, env.Balance(bob))
 	})
 }
 
@@ -1223,17 +1271,29 @@ func TestDepositPreauth_SortingCredentials(t *testing.T) {
 	credentials := make([]dp.AuthorizeCredentials, 8)
 	for i := range credentials {
 		credentials[i] = dp.AuthorizeCredentials{
-			Issuer:   issuers[i],
-			CredType: credTypes[i],
+			Issuer:       issuers[i],
+			CredTypeText: credTypes[i],
 		}
 	}
+	credentials[1].Issuer = credentials[0].Issuer
+	expectedCredentials := append([]dp.AuthorizeCredentials(nil), credentials...)
+	sort.Slice(expectedCredentials, func(i, j int) bool {
+		if cmp := bytes.Compare(expectedCredentials[i].Issuer.ID[:], expectedCredentials[j].Issuer.ID[:]); cmp != 0 {
+			return cmp < 0
+		}
+		return expectedCredentials[i].CredTypeText < expectedCredentials[j].CredTypeText
+	})
+	credentialPairs := make([]keylet.CredentialPair, len(credentials))
+	for i, credential := range credentials {
+		credentialPairs[i] = keylet.CredentialPair{
+			Issuer:         credential.Issuer.ID,
+			CredentialType: []byte(credential.CredTypeText),
+		}
+	}
+	preauthKey := keylet.DepositPreauthCredentials(stock.ID, credentialPairs)
 
 	// Sorting in ledger object: credentials should be sorted regardless of input order.
 	t.Run("SortingInObject", func(t *testing.T) {
-		// Shuffle and create, verify sorted in ledger.
-		// Since we can't easily read the ledger entry's AuthorizeCredentials field
-		// in Go (unlike rippled's ledger_entry RPC), we verify that creation and
-		// deletion work correctly regardless of input order.
 		for i := range 10 {
 			// Rotate the credentials array to get different orderings.
 			rotated := make([]dp.AuthorizeCredentials, len(credentials))
@@ -1247,10 +1307,31 @@ func TestDepositPreauth_SortingCredentials(t *testing.T) {
 			jtx.RequireTxSuccess(t, result)
 			env.Close()
 
-			// Delete with original order should also work (sorted internally).
-			result = env.Submit(dp.UnauthCredentials(stock, rotated).Build())
+			data, err := env.LedgerEntry(preauthKey)
+			require.NoError(t, err)
+			stored := &ledgerentry.DepositPreauth{}
+			require.NoError(t, stored.Decode(data))
+			require.Len(t, stored.AuthorizeCredentials, len(expectedCredentials))
+			for index, value := range stored.AuthorizeCredentials {
+				wrapper, ok := value.(map[string]any)
+				require.True(t, ok)
+				credential, ok := wrapper["Credential"].(map[string]any)
+				require.True(t, ok)
+				require.Equal(t, expectedCredentials[index].Issuer.Address, credential["Issuer"])
+				require.Equal(t,
+					hex.EncodeToString([]byte(expectedCredentials[index].CredTypeText)),
+					credential["CredentialType"],
+				)
+			}
+
+			deleteOrder := make([]dp.AuthorizeCredentials, len(credentials))
+			for j := range deleteOrder {
+				deleteOrder[j] = credentials[(len(credentials)-1-j+i)%len(credentials)]
+			}
+			result = env.Submit(dp.UnauthCredentials(stock, deleteOrder).Build())
 			jtx.RequireTxSuccess(t, result)
 			env.Close()
+			require.False(t, env.LedgerEntryExists(preauthKey))
 		}
 	})
 
@@ -1272,6 +1353,11 @@ func TestDepositPreauth_SortingCredentials(t *testing.T) {
 			result := env.Submit(dp.AuthCredentials(stock, rotated).Build())
 			require.Equal(t, "tecDUPLICATE", result.Code)
 		}
+
+		result = env.Submit(dp.UnauthCredentials(stock, credentials).Build())
+		jtx.RequireTxSuccess(t, result)
+		env.Close()
+		require.False(t, env.LedgerEntryExists(preauthKey))
 	})
 
 	// Duplicate credentials in DepositPreauth params.
@@ -1294,14 +1380,14 @@ func TestDepositPreauth_SortingCredentials(t *testing.T) {
 		// Create credentials for alice and save their hashes.
 		credentialIDs := make([]string, len(credentials))
 		for i, c := range credentials {
-			result := env.Submit(credential.CredentialCreate(c.Issuer, alice, c.CredType).Build())
+			result := env.Submit(credential.CredentialCreateText(c.Issuer, alice, c.CredTypeText).Build())
 			jtx.RequireTxSuccess(t, result)
 			env.Close()
-			result = env.Submit(credential.CredentialAccept(alice, c.Issuer, c.CredType).Build())
+			result = env.Submit(credential.CredentialAcceptText(alice, c.Issuer, c.CredTypeText).Build())
 			jtx.RequireTxSuccess(t, result)
 			env.Close()
 
-			credentialIDs[i] = dp.CredentialIndex(alice, c.Issuer, c.CredType)
+			credentialIDs[i] = dp.CredentialIndexHex(alice, c.Issuer, c.CredTypeText)
 		}
 
 		// Check duplicates in payment params.

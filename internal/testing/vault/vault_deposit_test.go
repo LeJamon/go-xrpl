@@ -111,25 +111,25 @@ func TestVaultDeposit_PrivateDomainAuthorizationAndExpiredCleanup(t *testing.T) 
 	jtx.RequireTxClaimed(t, env.Submit(deposit()), jtx.TecNO_AUTH)
 
 	jtx.RequireTxSuccess(t, env.Submit(
-		credentialtest.CredentialCreate(validIssuer, depositor, credentialType).Build(),
+		credentialtest.CredentialCreateText(validIssuer, depositor, credentialType).Build(),
 	))
 	jtx.RequireTxSuccess(t, env.Submit(
-		credentialtest.CredentialAccept(depositor, validIssuer, credentialType).Build(),
+		credentialtest.CredentialAcceptText(depositor, validIssuer, credentialType).Build(),
 	))
 	jtx.RequireTxSuccess(t, env.Submit(deposit()))
 
 	jtx.RequireTxSuccess(t, env.Submit(
-		credentialtest.CredentialDelete(validIssuer, depositor, validIssuer, credentialType).Build(),
+		credentialtest.CredentialDeleteText(validIssuer, depositor, validIssuer, credentialType).Build(),
 	))
 
 	const expiration uint32 = 2_000_000_000
 	jtx.RequireTxSuccess(t, env.Submit(
-		credentialtest.CredentialCreate(expiredIssuer, depositor, credentialType).
+		credentialtest.CredentialCreateText(expiredIssuer, depositor, credentialType).
 			Expiration(expiration).
 			Build(),
 	))
 	jtx.RequireTxSuccess(t, env.Submit(
-		credentialtest.CredentialAccept(depositor, expiredIssuer, credentialType).Build(),
+		credentialtest.CredentialAcceptText(depositor, expiredIssuer, credentialType).Build(),
 	))
 	expiredKey := jtx.CredentialKeylet(depositor, expiredIssuer, credentialType)
 	if !env.LedgerEntryExists(expiredKey) {

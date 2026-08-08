@@ -1158,13 +1158,13 @@ func TestPayChan_DepositAuthCreds(t *testing.T) {
 		// Create credentials with expiration
 		{
 			expTime := ToRippleTime(env.Now()) + 100
-			result := env.Submit(credential.CredentialCreate(carol, alice, credType).
+			result := env.Submit(credential.CredentialCreateText(carol, alice, credType).
 				Expiration(expTime).Build())
 			jtx.RequireTxSuccess(t, result)
 			env.Close()
 		}
 
-		credIdx := depositpreauth.CredentialIndex(alice, carol, credType)
+		credIdx := depositpreauth.CredentialIndexHex(alice, carol, credType)
 
 		// Bob requires preauthorization
 		env.EnableDepositAuth(bob)
@@ -1177,7 +1177,7 @@ func TestPayChan_DepositAuthCreds(t *testing.T) {
 		env.Close()
 
 		// Accept credentials
-		result = env.Submit(credential.CredentialAccept(alice, carol, credType).Build())
+		result = env.Submit(credential.CredentialAcceptText(alice, carol, credType).Build())
 		jtx.RequireTxSuccess(t, result)
 		env.Close()
 
@@ -1189,7 +1189,7 @@ func TestPayChan_DepositAuthCreds(t *testing.T) {
 
 		// Setup deposit authorization with credentials
 		result = env.Submit(depositpreauth.AuthCredentials(bob, []depositpreauth.AuthorizeCredentials{
-			{Issuer: carol, CredType: credType},
+			{Issuer: carol, CredTypeText: credType},
 		}).Build())
 		jtx.RequireTxSuccess(t, result)
 		env.Close()
@@ -1228,15 +1228,15 @@ func TestPayChan_DepositAuthCreds(t *testing.T) {
 
 		// Create credentials once more (without expiration)
 		{
-			result := env.Submit(credential.CredentialCreate(carol, alice, credType).Build())
+			result := env.Submit(credential.CredentialCreateText(carol, alice, credType).Build())
 			jtx.RequireTxSuccess(t, result)
 			env.Close()
 
-			result = env.Submit(credential.CredentialAccept(alice, carol, credType).Build())
+			result = env.Submit(credential.CredentialAcceptText(alice, carol, credType).Build())
 			jtx.RequireTxSuccess(t, result)
 			env.Close()
 
-			credIdx2 := depositpreauth.CredentialIndex(alice, carol, credType)
+			credIdx2 := depositpreauth.CredentialIndexHex(alice, carol, credType)
 
 			// Success
 			result = env.Submit(ChannelClaim(alice, chanIDHex).
@@ -1274,15 +1274,15 @@ func TestPayChan_DepositAuthCreds(t *testing.T) {
 		delta := xrp(500)
 
 		// Create and accept credentials
-		result = env.Submit(credential.CredentialCreate(carol, alice, credType).Build())
+		result = env.Submit(credential.CredentialCreateText(carol, alice, credType).Build())
 		jtx.RequireTxSuccess(t, result)
 		env.Close()
 
-		result = env.Submit(credential.CredentialAccept(alice, carol, credType).Build())
+		result = env.Submit(credential.CredentialAcceptText(alice, carol, credType).Build())
 		jtx.RequireTxSuccess(t, result)
 		env.Close()
 
-		credIdx := depositpreauth.CredentialIndex(alice, carol, credType)
+		credIdx := depositpreauth.CredentialIndexHex(alice, carol, credType)
 
 		// Succeed, lsfDepositAuth is not set
 		result = env.Submit(ChannelClaim(alice, chanIDHex).
@@ -1826,19 +1826,19 @@ func TestPayChan_CredentialExpirySemantics(t *testing.T) {
 
 	expiration := ToRippleTime(env.Now()) + 1000
 	jtx.RequireTxSuccess(t, env.Submit(
-		credential.CredentialCreate(carol, alice, credType).Expiration(expiration).Build()))
+		credential.CredentialCreateText(carol, alice, credType).Expiration(expiration).Build()))
 	env.Close()
-	jtx.RequireTxSuccess(t, env.Submit(credential.CredentialAccept(alice, carol, credType).Build()))
+	jtx.RequireTxSuccess(t, env.Submit(credential.CredentialAcceptText(alice, carol, credType).Build()))
 	env.Close()
 
-	credIdx := depositpreauth.CredentialIndex(alice, carol, credType)
+	credIdx := depositpreauth.CredentialIndexHex(alice, carol, credType)
 	credK := keylet.Credential(alice.ID, carol.ID, []byte(credType))
 
 	// Bob requires deposit authorization, satisfied via the credential.
 	env.EnableDepositAuth(bob)
 	env.Close()
 	jtx.RequireTxSuccess(t, env.Submit(depositpreauth.AuthCredentials(bob, []depositpreauth.AuthorizeCredentials{
-		{Issuer: carol, CredType: credType},
+		{Issuer: carol, CredTypeText: credType},
 	}).Build()))
 	env.Close()
 
@@ -1895,12 +1895,12 @@ func TestPayChan_ExpiredCredentialWithoutBalanceClaim(t *testing.T) {
 
 	expiration := ToRippleTime(env.Now()) + 20
 	jtx.RequireTxSuccess(t, env.Submit(
-		credential.CredentialCreate(carol, alice, credType).Expiration(expiration).Build()))
+		credential.CredentialCreateText(carol, alice, credType).Expiration(expiration).Build()))
 	env.Close()
-	jtx.RequireTxSuccess(t, env.Submit(credential.CredentialAccept(alice, carol, credType).Build()))
+	jtx.RequireTxSuccess(t, env.Submit(credential.CredentialAcceptText(alice, carol, credType).Build()))
 	env.Close()
 
-	credIdx := depositpreauth.CredentialIndex(alice, carol, credType)
+	credIdx := depositpreauth.CredentialIndexHex(alice, carol, credType)
 	credK := keylet.Credential(alice.ID, carol.ID, []byte(credType))
 
 	// Advance well past the credential expiration.

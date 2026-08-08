@@ -246,20 +246,23 @@ func ParseDepositPreauth(data []byte) (*DepositPreauthEntry, error) {
 		return nil, fmt.Errorf("failed to decode DepositPreauth: decoder has type %T", decoded)
 	}
 
-	entry := &DepositPreauthEntry{}
-	var err error
-	if wire.Account != "" {
-		entry.Account, err = DecodeAccountID(wire.Account)
-		if err != nil {
-			return nil, fmt.Errorf("failed to decode DepositPreauth: invalid Account: %w", err)
-		}
+	if wire.Account == "" {
+		return nil, fmt.Errorf("failed to decode DepositPreauth: missing Account")
 	}
-	if wire.OwnerNode != "" {
-		entry.OwnerNode, err = strconv.ParseUint(wire.OwnerNode, 16, 64)
-		if err != nil {
-			return nil, fmt.Errorf("failed to decode DepositPreauth: invalid OwnerNode: %w", err)
-		}
+	if wire.OwnerNode == "" {
+		return nil, fmt.Errorf("failed to decode DepositPreauth: missing OwnerNode")
 	}
 
-	return entry, nil
+	parsed := &DepositPreauthEntry{}
+	var err error
+	parsed.Account, err = DecodeAccountID(wire.Account)
+	if err != nil {
+		return nil, fmt.Errorf("failed to decode DepositPreauth: invalid Account: %w", err)
+	}
+	parsed.OwnerNode, err = strconv.ParseUint(wire.OwnerNode, 16, 64)
+	if err != nil {
+		return nil, fmt.Errorf("failed to decode DepositPreauth: invalid OwnerNode: %w", err)
+	}
+
+	return parsed, nil
 }

@@ -23,7 +23,7 @@ func TestCredentialCreate_Meta_NewFields(t *testing.T) {
 	env.Close()
 
 	const credTypeHex = "6162636465" // "abcde"
-	res := env.Submit(credential.CredentialCreate(alice, bob, credTypeHex).Build())
+	res := env.Submit(credential.CredentialCreateHex(alice, bob, credTypeHex).Build())
 	jtx.RequireTxSuccess(t, res)
 	require.NotNil(t, res.Metadata)
 

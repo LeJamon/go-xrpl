@@ -7,6 +7,7 @@ import (
 	dp "github.com/LeJamon/go-xrpl/internal/testing/depositpreauth"
 	"github.com/LeJamon/go-xrpl/internal/tx"
 	"github.com/LeJamon/go-xrpl/internal/tx/depositpreauth"
+	"github.com/LeJamon/go-xrpl/keylet"
 )
 
 // TestDepositPreauth_Precedence_FullyCanonicalSigAllowed pins finding #1: a
@@ -24,7 +25,7 @@ func TestDepositPreauth_Precedence_FullyCanonicalSigAllowed(t *testing.T) {
 
 	result := env.Submit(dp.Auth(alice, becky).Flags(tx.TfFullyCanonicalSig).Build())
 	jtx.RequireTxSuccess(t, result)
-	jtx.RequireLedgerEntryExists(t, env, dp.DepositPreauthKeylet(alice, becky))
+	jtx.RequireLedgerEntryExists(t, env, keylet.DepositPreauth(alice.ID, becky.ID))
 }
 
 // TestDepositPreauth_Precedence_EmptyCredentialsDisabledAmendment pins finding #6:

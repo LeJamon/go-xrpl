@@ -10,54 +10,103 @@ import (
 	"fmt"
 
 	jtx "github.com/LeJamon/go-xrpl/internal/testing"
-	"github.com/LeJamon/go-xrpl/internal/tx"
 	"github.com/LeJamon/go-xrpl/internal/tx/depositpreauth"
 	"github.com/LeJamon/go-xrpl/keylet"
 )
 
-// AuthorizeCredentials describes a single credential requirement for
-// credential-based deposit preauthorization.
-// Reference: rippled jtx::deposit::AuthorizeCredentials
 type AuthorizeCredentials struct {
-	Issuer   *jtx.Account
-	CredType string // raw credential type (will be hex-encoded if needed)
+	Issuer       *jtx.Account
+	CredTypeText string
+	CredTypeHex  *string
 }
 
-// -----------------------------------------------------------------------
-// AuthBuilder – builds DepositPreauth with Authorize field set.
-// Reference: rippled deposit::auth(account, auth)
-// -----------------------------------------------------------------------
-
-// AuthBuilder provides a fluent interface for building a DepositPreauth
-// transaction that authorizes an account.
-type AuthBuilder struct {
-	owner      *jtx.Account
-	authorized *jtx.Account
-	fee        uint64
-	sequence   *uint32
-	flags      *uint32
-	ticketSeq  *uint32
+func AuthorizeCredentialText(issuer *jtx.Account, credentialType string) AuthorizeCredentials {
+	return AuthorizeCredentials{Issuer: issuer, CredTypeText: credentialType}
 }
 
-// Auth creates a new AuthBuilder for deposit preauthorization.
-func Auth(owner, authorized *jtx.Account) *AuthBuilder {
-	return &AuthBuilder{
-		owner:      owner,
-		authorized: authorized,
-		fee:        10,
+func AuthorizeCredentialBytes(issuer *jtx.Account, credentialType []byte) AuthorizeCredentials {
+	return AuthorizeCredentialText(issuer, string(append([]byte(nil), credentialType...)))
+}
+
+func AuthorizeCredentialHex(issuer *jtx.Account, credentialTypeHex string) (AuthorizeCredentials, error) {
+	if _, err := hex.DecodeString(credentialTypeHex); err != nil {
+		return AuthorizeCredentials{}, fmt.Errorf("invalid credential type hex: %w", err)
 	}
+	encoded := credentialTypeHex
+	return AuthorizeCredentials{Issuer: issuer, CredTypeHex: &encoded}, nil
 }
 
-func (b *AuthBuilder) Fee(f uint64) *AuthBuilder         { b.fee = f; return b }
-func (b *AuthBuilder) Sequence(seq uint32) *AuthBuilder  { b.sequence = &seq; return b }
-func (b *AuthBuilder) Flags(flags uint32) *AuthBuilder   { b.flags = &flags; return b }
-func (b *AuthBuilder) TicketSeq(seq uint32) *AuthBuilder { b.ticketSeq = &seq; return b }
+type builderKind uint8
 
-// Build constructs the DepositPreauth transaction.
-func (b *AuthBuilder) Build() tx.Transaction {
+const (
+	authorizeAccount builderKind = iota
+	unauthorizeAccount
+	authorizeCredentials
+	unauthorizeCredentials
+)
+
+type Builder struct {
+	kind        builderKind
+	owner       *jtx.Account
+	account     *jtx.Account
+	credentials []AuthorizeCredentials
+	fee         uint64
+	sequence    *uint32
+	flags       *uint32
+	ticketSeq   *uint32
+}
+
+func Auth(owner, authorized *jtx.Account) *Builder {
+	return &Builder{kind: authorizeAccount, owner: owner, account: authorized, fee: 10}
+}
+
+func Unauth(owner, unauthorized *jtx.Account) *Builder {
+	return &Builder{kind: unauthorizeAccount, owner: owner, account: unauthorized, fee: 10}
+}
+
+func AuthCredentials(owner *jtx.Account, credentials []AuthorizeCredentials) *Builder {
+	return &Builder{kind: authorizeCredentials, owner: owner, credentials: credentials, fee: 10}
+}
+
+func UnauthCredentials(owner *jtx.Account, credentials []AuthorizeCredentials) *Builder {
+	return &Builder{kind: unauthorizeCredentials, owner: owner, credentials: credentials, fee: 10}
+}
+
+func (b *Builder) Fee(f uint64) *Builder {
+	b.fee = f
+	return b
+}
+
+func (b *Builder) Sequence(sequence uint32) *Builder {
+	b.sequence = &sequence
+	return b
+}
+
+func (b *Builder) Flags(flags uint32) *Builder {
+	b.flags = &flags
+	return b
+}
+
+func (b *Builder) TicketSeq(ticketSequence uint32) *Builder {
+	b.ticketSeq = &ticketSequence
+	return b
+}
+
+func (b *Builder) Build() *depositpreauth.DepositPreauth {
 	dp := depositpreauth.NewDepositPreauth(b.owner.Address)
-	dp.SetAuthorize(b.authorized.Address)
 	dp.Fee = fmt.Sprintf("%d", b.fee)
+
+	switch b.kind {
+	case authorizeAccount:
+		dp.SetAuthorize(b.account.Address)
+	case unauthorizeAccount:
+		dp.SetUnauthorize(b.account.Address)
+	case authorizeCredentials:
+		dp.AuthorizeCredentials = credentialWrappers(b.credentials)
+	case unauthorizeCredentials:
+		dp.UnauthorizeCredentials = credentialWrappers(b.credentials)
+	}
+
 	if b.sequence != nil {
 		dp.SetSequence(*b.sequence)
 	}
@@ -72,205 +121,22 @@ func (b *AuthBuilder) Build() tx.Transaction {
 	return dp
 }
 
-// BuildDepositPreauth returns the concrete *depositpreauth.DepositPreauth type.
-func (b *AuthBuilder) BuildDepositPreauth() *depositpreauth.DepositPreauth {
-	return b.Build().(*depositpreauth.DepositPreauth)
-}
-
-// -----------------------------------------------------------------------
-// UnauthBuilder – builds DepositPreauth with Unauthorize field set.
-// Reference: rippled deposit::unauth(account, unauth)
-// -----------------------------------------------------------------------
-
-// UnauthBuilder provides a fluent interface for building a DepositPreauth
-// transaction that removes authorization for an account.
-type UnauthBuilder struct {
-	owner        *jtx.Account
-	unauthorized *jtx.Account
-	fee          uint64
-	sequence     *uint32
-	flags        *uint32
-	ticketSeq    *uint32
-}
-
-// Unauth creates a new UnauthBuilder for removing deposit preauthorization.
-func Unauth(owner, unauthorized *jtx.Account) *UnauthBuilder {
-	return &UnauthBuilder{
-		owner:        owner,
-		unauthorized: unauthorized,
-		fee:          10,
-	}
-}
-
-func (b *UnauthBuilder) Fee(f uint64) *UnauthBuilder         { b.fee = f; return b }
-func (b *UnauthBuilder) Sequence(seq uint32) *UnauthBuilder  { b.sequence = &seq; return b }
-func (b *UnauthBuilder) Flags(flags uint32) *UnauthBuilder   { b.flags = &flags; return b }
-func (b *UnauthBuilder) TicketSeq(seq uint32) *UnauthBuilder { b.ticketSeq = &seq; return b }
-
-// Build constructs the DepositPreauth (unauthorize) transaction.
-func (b *UnauthBuilder) Build() tx.Transaction {
-	dp := depositpreauth.NewDepositPreauth(b.owner.Address)
-	dp.SetUnauthorize(b.unauthorized.Address)
-	dp.Fee = fmt.Sprintf("%d", b.fee)
-	if b.sequence != nil {
-		dp.SetSequence(*b.sequence)
-	}
-	if b.flags != nil {
-		dp.SetFlags(*b.flags)
-	}
-	if b.ticketSeq != nil {
-		zero := uint32(0)
-		dp.Sequence = &zero
-		dp.TicketSequence = b.ticketSeq
-	}
-	return dp
-}
-
-// BuildDepositPreauth returns the concrete *depositpreauth.DepositPreauth type.
-func (b *UnauthBuilder) BuildDepositPreauth() *depositpreauth.DepositPreauth {
-	return b.Build().(*depositpreauth.DepositPreauth)
-}
-
-// -----------------------------------------------------------------------
-// AuthCredentialsBuilder – builds DepositPreauth with AuthorizeCredentials.
-// Reference: rippled deposit::authCredentials(account, credentials)
-// -----------------------------------------------------------------------
-
-// AuthCredentialsBuilder provides a fluent interface for building a
-// DepositPreauth transaction that authorizes deposits using credentials.
-type AuthCredentialsBuilder struct {
-	owner       *jtx.Account
-	credentials []AuthorizeCredentials
-	fee         uint64
-	sequence    *uint32
-	flags       *uint32
-}
-
-// AuthCredentials creates a new AuthCredentialsBuilder.
-func AuthCredentials(owner *jtx.Account, credentials []AuthorizeCredentials) *AuthCredentialsBuilder {
-	return &AuthCredentialsBuilder{
-		owner:       owner,
-		credentials: credentials,
-		fee:         10,
-	}
-}
-
-func (b *AuthCredentialsBuilder) Fee(f uint64) *AuthCredentialsBuilder { b.fee = f; return b }
-func (b *AuthCredentialsBuilder) Sequence(seq uint32) *AuthCredentialsBuilder {
-	b.sequence = &seq
-	return b
-}
-func (b *AuthCredentialsBuilder) Flags(flags uint32) *AuthCredentialsBuilder {
-	b.flags = &flags
-	return b
-}
-
-// Build constructs the DepositPreauth transaction with AuthorizeCredentials.
-func (b *AuthCredentialsBuilder) Build() tx.Transaction {
-	dp := depositpreauth.NewDepositPreauth(b.owner.Address)
-	dp.Fee = fmt.Sprintf("%d", b.fee)
-
-	wrappers := make([]depositpreauth.CredentialWrapper, len(b.credentials))
-	for i, c := range b.credentials {
-		credType := c.CredType
-		if !isHexEncoded(credType) {
-			credType = hex.EncodeToString([]byte(credType))
+func credentialWrappers(credentials []AuthorizeCredentials) []depositpreauth.CredentialWrapper {
+	wrapper := make([]depositpreauth.CredentialWrapper, len(credentials))
+	for i, credential := range credentials {
+		credentialType := hex.EncodeToString([]byte(credential.CredTypeText))
+		if credential.CredTypeHex != nil {
+			credentialType = *credential.CredTypeHex
 		}
-		wrappers[i] = depositpreauth.CredentialWrapper{
+		wrapper[i] = depositpreauth.CredentialWrapper{
 			Credential: depositpreauth.CredentialSpec{
-				Issuer:         c.Issuer.Address,
-				CredentialType: credType,
+				Issuer:         credential.Issuer.Address,
+				CredentialType: credentialType,
 			},
 		}
 	}
-	dp.AuthorizeCredentials = wrappers
-
-	if b.sequence != nil {
-		dp.SetSequence(*b.sequence)
-	}
-	if b.flags != nil {
-		dp.SetFlags(*b.flags)
-	}
-	return dp
+	return wrapper
 }
-
-// BuildDepositPreauth returns the concrete *depositpreauth.DepositPreauth type.
-func (b *AuthCredentialsBuilder) BuildDepositPreauth() *depositpreauth.DepositPreauth {
-	return b.Build().(*depositpreauth.DepositPreauth)
-}
-
-// -----------------------------------------------------------------------
-// UnauthCredentialsBuilder – builds DepositPreauth with UnauthorizeCredentials.
-// Reference: rippled deposit::unauthCredentials(account, credentials)
-// -----------------------------------------------------------------------
-
-// UnauthCredentialsBuilder provides a fluent interface for building a
-// DepositPreauth transaction that removes credential-based authorization.
-type UnauthCredentialsBuilder struct {
-	owner       *jtx.Account
-	credentials []AuthorizeCredentials
-	fee         uint64
-	sequence    *uint32
-	flags       *uint32
-}
-
-// UnauthCredentials creates a new UnauthCredentialsBuilder.
-func UnauthCredentials(owner *jtx.Account, credentials []AuthorizeCredentials) *UnauthCredentialsBuilder {
-	return &UnauthCredentialsBuilder{
-		owner:       owner,
-		credentials: credentials,
-		fee:         10,
-	}
-}
-
-func (b *UnauthCredentialsBuilder) Fee(f uint64) *UnauthCredentialsBuilder { b.fee = f; return b }
-func (b *UnauthCredentialsBuilder) Sequence(seq uint32) *UnauthCredentialsBuilder {
-	b.sequence = &seq
-	return b
-}
-func (b *UnauthCredentialsBuilder) Flags(flags uint32) *UnauthCredentialsBuilder {
-	b.flags = &flags
-	return b
-}
-
-// Build constructs the DepositPreauth transaction with UnauthorizeCredentials.
-func (b *UnauthCredentialsBuilder) Build() tx.Transaction {
-	dp := depositpreauth.NewDepositPreauth(b.owner.Address)
-	dp.Fee = fmt.Sprintf("%d", b.fee)
-
-	wrappers := make([]depositpreauth.CredentialWrapper, len(b.credentials))
-	for i, c := range b.credentials {
-		credType := c.CredType
-		if !isHexEncoded(credType) {
-			credType = hex.EncodeToString([]byte(credType))
-		}
-		wrappers[i] = depositpreauth.CredentialWrapper{
-			Credential: depositpreauth.CredentialSpec{
-				Issuer:         c.Issuer.Address,
-				CredentialType: credType,
-			},
-		}
-	}
-	dp.UnauthorizeCredentials = wrappers
-
-	if b.sequence != nil {
-		dp.SetSequence(*b.sequence)
-	}
-	if b.flags != nil {
-		dp.SetFlags(*b.flags)
-	}
-	return dp
-}
-
-// BuildDepositPreauth returns the concrete *depositpreauth.DepositPreauth type.
-func (b *UnauthCredentialsBuilder) BuildDepositPreauth() *depositpreauth.DepositPreauth {
-	return b.Build().(*depositpreauth.DepositPreauth)
-}
-
-// -----------------------------------------------------------------------
-// RawDepositPreauthBuilder – builds a raw DepositPreauth transaction
-// allowing arbitrary field combinations for negative testing.
-// -----------------------------------------------------------------------
 
 // RawBuilder provides direct access to all DepositPreauth fields for
 // constructing invalid transactions for negative testing.
@@ -300,38 +166,11 @@ func (b *RawBuilder) UnauthorizeCredentials(c []depositpreauth.CredentialWrapper
 // Build returns the DepositPreauth transaction.
 func (b *RawBuilder) Build() *depositpreauth.DepositPreauth { return b.dp }
 
-// -----------------------------------------------------------------------
-// Helpers
-// -----------------------------------------------------------------------
+func CredentialIndexHex(subject, issuer *jtx.Account, credentialType string) string {
+	return CredentialBytesIndexHex(subject, issuer, []byte(credentialType))
+}
 
-// CredentialIndex computes the ledger entry hash for a credential.
-// This matches rippled's credentials::ledgerEntry index.
-func CredentialIndex(subject, issuer *jtx.Account, credType string) string {
-	rawCredType := credType
-	if isHexEncoded(credType) {
-		decoded, err := hex.DecodeString(credType)
-		if err == nil {
-			rawCredType = string(decoded)
-		}
-	}
-	k := keylet.Credential(subject.ID, issuer.ID, []byte(rawCredType))
+func CredentialBytesIndexHex(subject, issuer *jtx.Account, credentialType []byte) string {
+	k := keylet.Credential(subject.ID, issuer.ID, credentialType)
 	return fmt.Sprintf("%X", k.Key)
-}
-
-// DepositPreauthKeylet returns the keylet for a basic (account-based) deposit preauth.
-func DepositPreauthKeylet(owner, authorized *jtx.Account) keylet.Keylet {
-	return keylet.DepositPreauth(owner.ID, authorized.ID)
-}
-
-// isHexEncoded checks if a string appears to be hex-encoded.
-func isHexEncoded(s string) bool {
-	if len(s)%2 != 0 || len(s) == 0 {
-		return false
-	}
-	for _, c := range s {
-		if !((c >= '0' && c <= '9') || (c >= 'a' && c <= 'f') || (c >= 'A' && c <= 'F')) {
-			return false
-		}
-	}
-	return true
 }

@@ -353,6 +353,25 @@ func RequireLedgerEntryNotExists(t testing.TB, env *TestEnv, key keylet.Keylet) 
 		"Expected ledger entry to NOT exist at keylet %v", key)
 }
 
+func RequireOwnerDirectoryContains(
+	t testing.TB,
+	env *TestEnv,
+	owner *Account,
+	target [32]byte,
+	want bool,
+) {
+	t.Helper()
+	found := false
+	err := state.DirForEach(env.Ledger(), keylet.OwnerDir(owner.ID), func(item [32]byte) error {
+		if item == target {
+			found = true
+		}
+		return nil
+	})
+	require.NoError(t, err)
+	require.Equal(t, want, found, "owner directory membership mismatch for %s", owner.Name)
+}
+
 // RequireTicketCount asserts that an account has the expected number of tickets.
 // This iterates the owner directory and counts entries of type Ticket (0x0054),
 // matching rippled's owner_count<ltTICKET> behavior.

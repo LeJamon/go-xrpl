@@ -87,12 +87,12 @@ func SetupPermissionedDEX(t *testing.T, env *jtx.TestEnv) *PermissionedDEXEnv {
 	// Issue and accept credentials for alice, bob, carol, gw
 	members := []*jtx.Account{alice, bob, carol, gw}
 	for _, member := range members {
-		result = env.Submit(cred.CredentialCreate(domainOwner, member, credType).Build())
+		result = env.Submit(cred.CredentialCreateHex(domainOwner, member, credType).Build())
 		if !result.Success {
 			t.Fatalf("SetupPermissionedDEX: credential create for %s: %s %s", member.Name, result.Code, result.Message)
 		}
 		env.Close()
-		result = env.Submit(cred.CredentialAccept(member, domainOwner, credType).Build())
+		result = env.Submit(cred.CredentialAcceptHex(member, domainOwner, credType).Build())
 		if !result.Success {
 			t.Fatalf("SetupPermissionedDEX: credential accept for %s: %s %s", member.Name, result.Code, result.Message)
 		}

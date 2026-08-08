@@ -5,7 +5,6 @@ import (
 	"fmt"
 
 	jtx "github.com/LeJamon/go-xrpl/internal/testing"
-	"github.com/LeJamon/go-xrpl/internal/tx"
 	"github.com/LeJamon/go-xrpl/internal/tx/credential"
 )
 
@@ -15,19 +14,27 @@ type CredentialCreateBuilder struct {
 	subject        *jtx.Account
 	credentialType string
 	uri            string
+	uriIsHex       bool
+	uriSet         bool
 	expiration     *uint32
 	fee            uint64
 	sequence       *uint32
 	flags          uint32
 }
 
-// CredentialCreate creates a new CredentialCreateBuilder.
-// The account (issuer) creates a credential for the subject.
-func CredentialCreate(account, subject *jtx.Account, credentialType string) *CredentialCreateBuilder {
+func CredentialCreateText(account, subject *jtx.Account, credentialType string) *CredentialCreateBuilder {
+	return CredentialCreateBytes(account, subject, []byte(credentialType))
+}
+
+func CredentialCreateBytes(account, subject *jtx.Account, credentialType []byte) *CredentialCreateBuilder {
+	return CredentialCreateHex(account, subject, hex.EncodeToString(credentialType))
+}
+
+func CredentialCreateHex(account, subject *jtx.Account, credentialTypeHex string) *CredentialCreateBuilder {
 	return &CredentialCreateBuilder{
 		account:        account,
 		subject:        subject,
-		credentialType: credentialType,
+		credentialType: credentialTypeHex,
 		fee:            10, // Default fee: 10 drops
 	}
 }
@@ -36,12 +43,16 @@ func CredentialCreate(account, subject *jtx.Account, credentialType string) *Cre
 // The URI will be hex-encoded when building the transaction.
 func (b *CredentialCreateBuilder) URI(uri string) *CredentialCreateBuilder {
 	b.uri = uri
+	b.uriIsHex = false
+	b.uriSet = true
 	return b
 }
 
 // URIHex sets the URI from an already hex-encoded string.
 func (b *CredentialCreateBuilder) URIHex(uriHex string) *CredentialCreateBuilder {
 	b.uri = uriHex
+	b.uriIsHex = true
+	b.uriSet = true
 	return b
 }
 
@@ -70,22 +81,16 @@ func (b *CredentialCreateBuilder) Flags(flags uint32) *CredentialCreateBuilder {
 }
 
 // Build constructs the CredentialCreate transaction.
-func (b *CredentialCreateBuilder) Build() tx.Transaction {
-	// Hex-encode the credential type if not already hex
-	credType := b.credentialType
-	if !isHexEncoded(credType) {
-		credType = hex.EncodeToString([]byte(credType))
-	}
-
-	c := credential.NewCredentialCreate(b.account.Address, b.subject.Address, credType)
+func (b *CredentialCreateBuilder) Build() *credential.CredentialCreate {
+	c := credential.NewCredentialCreate(b.account.Address, b.subject.Address, b.credentialType)
 	c.Fee = fmt.Sprintf("%d", b.fee)
 
-	if b.uri != "" {
-		if !isHexEncoded(b.uri) {
+	if b.uriSet {
+		c.URI = b.uri
+		if !b.uriIsHex {
 			c.URI = hex.EncodeToString([]byte(b.uri))
-		} else {
-			c.URI = b.uri
 		}
+		c.Common.SetPresentFields(map[string]bool{"URI": true})
 	}
 	if b.expiration != nil {
 		c.Expiration = b.expiration
@@ -100,11 +105,6 @@ func (b *CredentialCreateBuilder) Build() tx.Transaction {
 	return c
 }
 
-// BuildCredentialCreate is a convenience method that returns the concrete *credential.CredentialCreate type.
-func (b *CredentialCreateBuilder) BuildCredentialCreate() *credential.CredentialCreate {
-	return b.Build().(*credential.CredentialCreate)
-}
-
 // CredentialAcceptBuilder provides a fluent interface for building CredentialAccept transactions.
 type CredentialAcceptBuilder struct {
 	account        *jtx.Account
@@ -115,13 +115,19 @@ type CredentialAcceptBuilder struct {
 	flags          uint32
 }
 
-// CredentialAccept creates a new CredentialAcceptBuilder.
-// The account (subject) accepts a credential issued by the issuer.
-func CredentialAccept(account, issuer *jtx.Account, credentialType string) *CredentialAcceptBuilder {
+func CredentialAcceptText(account, issuer *jtx.Account, credentialType string) *CredentialAcceptBuilder {
+	return CredentialAcceptBytes(account, issuer, []byte(credentialType))
+}
+
+func CredentialAcceptBytes(account, issuer *jtx.Account, credentialType []byte) *CredentialAcceptBuilder {
+	return CredentialAcceptHex(account, issuer, hex.EncodeToString(credentialType))
+}
+
+func CredentialAcceptHex(account, issuer *jtx.Account, credentialTypeHex string) *CredentialAcceptBuilder {
 	return &CredentialAcceptBuilder{
 		account:        account,
 		issuer:         issuer,
-		credentialType: credentialType,
+		credentialType: credentialTypeHex,
 		fee:            10, // Default fee: 10 drops
 	}
 }
@@ -145,14 +151,8 @@ func (b *CredentialAcceptBuilder) Flags(flags uint32) *CredentialAcceptBuilder {
 }
 
 // Build constructs the CredentialAccept transaction.
-func (b *CredentialAcceptBuilder) Build() tx.Transaction {
-	// Hex-encode the credential type if not already hex
-	credType := b.credentialType
-	if !isHexEncoded(credType) {
-		credType = hex.EncodeToString([]byte(credType))
-	}
-
-	c := credential.NewCredentialAccept(b.account.Address, b.issuer.Address, credType)
+func (b *CredentialAcceptBuilder) Build() *credential.CredentialAccept {
+	c := credential.NewCredentialAccept(b.account.Address, b.issuer.Address, b.credentialType)
 	c.Fee = fmt.Sprintf("%d", b.fee)
 
 	if b.sequence != nil {
@@ -163,11 +163,6 @@ func (b *CredentialAcceptBuilder) Build() tx.Transaction {
 	}
 
 	return c
-}
-
-// BuildCredentialAccept is a convenience method that returns the concrete *credential.CredentialAccept type.
-func (b *CredentialAcceptBuilder) BuildCredentialAccept() *credential.CredentialAccept {
-	return b.Build().(*credential.CredentialAccept)
 }
 
 // CredentialDeleteBuilder provides a fluent interface for building CredentialDelete transactions.
@@ -181,14 +176,20 @@ type CredentialDeleteBuilder struct {
 	flags          uint32
 }
 
-// CredentialDelete creates a new CredentialDeleteBuilder.
-// The account submits the delete. Subject and issuer identify the credential.
-func CredentialDelete(account, subject, issuer *jtx.Account, credentialType string) *CredentialDeleteBuilder {
+func CredentialDeleteText(account, subject, issuer *jtx.Account, credentialType string) *CredentialDeleteBuilder {
+	return CredentialDeleteBytes(account, subject, issuer, []byte(credentialType))
+}
+
+func CredentialDeleteBytes(account, subject, issuer *jtx.Account, credentialType []byte) *CredentialDeleteBuilder {
+	return CredentialDeleteHex(account, subject, issuer, hex.EncodeToString(credentialType))
+}
+
+func CredentialDeleteHex(account, subject, issuer *jtx.Account, credentialTypeHex string) *CredentialDeleteBuilder {
 	return &CredentialDeleteBuilder{
 		account:        account,
 		subject:        subject,
 		issuer:         issuer,
-		credentialType: credentialType,
+		credentialType: credentialTypeHex,
 		fee:            10, // Default fee: 10 drops
 	}
 }
@@ -212,14 +213,8 @@ func (b *CredentialDeleteBuilder) Flags(flags uint32) *CredentialDeleteBuilder {
 }
 
 // Build constructs the CredentialDelete transaction.
-func (b *CredentialDeleteBuilder) Build() tx.Transaction {
-	// Hex-encode the credential type if not already hex
-	credType := b.credentialType
-	if !isHexEncoded(credType) {
-		credType = hex.EncodeToString([]byte(credType))
-	}
-
-	c := credential.NewCredentialDelete(b.account.Address, credType)
+func (b *CredentialDeleteBuilder) Build() *credential.CredentialDelete {
+	c := credential.NewCredentialDelete(b.account.Address, b.credentialType)
 	c.Fee = fmt.Sprintf("%d", b.fee)
 
 	if b.subject != nil {
@@ -236,23 +231,4 @@ func (b *CredentialDeleteBuilder) Build() tx.Transaction {
 	}
 
 	return c
-}
-
-// BuildCredentialDelete is a convenience method that returns the concrete *credential.CredentialDelete type.
-func (b *CredentialDeleteBuilder) BuildCredentialDelete() *credential.CredentialDelete {
-	return b.Build().(*credential.CredentialDelete)
-}
-
-// isHexEncoded checks if a string appears to be hex-encoded.
-// Returns true if the string has even length and contains only hex characters.
-func isHexEncoded(s string) bool {
-	if len(s)%2 != 0 {
-		return false
-	}
-	for _, c := range s {
-		if !((c >= '0' && c <= '9') || (c >= 'a' && c <= 'f') || (c >= 'A' && c <= 'F')) {
-			return false
-		}
-	}
-	return len(s) > 0
 }
