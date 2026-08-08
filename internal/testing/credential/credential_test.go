@@ -197,7 +197,6 @@ func TestCredentialsDelete(t *testing.T) {
 	})
 
 	// Reference: rippled testCredentialsDelete "Delete issuer before accept"
-	// AccountDelete cascade-deletes the issuer's credential.
 	t.Run("DeleteIssuerBeforeAccept", func(t *testing.T) {
 		env, issuer, subject, other := newEnv(t)
 		ct := "delibacc"

@@ -366,7 +366,6 @@ func RequireOwnerDirectoryContains(
 	require.Equal(t, want, found, "owner directory membership mismatch for %s", owner.Name)
 }
 
-// OwnerDirectoryContains follows the directory's linked pages and rejects corrupt chains.
 func OwnerDirectoryContains(env *TestEnv, owner *Account, target [32]byte) (bool, error) {
 	visited := make(map[uint64]struct{})
 	found := false

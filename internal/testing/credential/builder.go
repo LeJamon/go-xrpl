@@ -31,7 +31,6 @@ func (o *credentialBuilderOptions) apply(common *tx.Common) {
 	}
 }
 
-// CredentialCreateBuilder provides a fluent interface for building CredentialCreate transactions.
 type CredentialCreateBuilder struct {
 	credentialBuilderOptions
 	account    *jtx.Account

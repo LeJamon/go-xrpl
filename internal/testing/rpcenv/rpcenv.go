@@ -55,7 +55,6 @@ func (e *Env) Close() {
 	e.adapter.recordClosedLedger()
 }
 
-// Submit applies a transaction and records its canonical blob for transaction-history RPCs.
 func (e *Env) Submit(transaction any) jtx.TxResult {
 	e.t.Helper()
 	result := e.TestEnv.Submit(transaction)
