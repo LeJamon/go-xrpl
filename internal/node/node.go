@@ -498,7 +498,6 @@ type validatorConfigLoader func(config.Paths) (*config.Config, error)
 
 const validatorReloadTimeout = 5 * time.Second
 
-// stallPinger is the heartbeat surface required when the watchdog is enabled.
 type stallPinger interface {
 	SetStallPing(ping func())
 }

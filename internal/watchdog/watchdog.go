@@ -84,7 +84,6 @@ func (r *Registration) Close() {
 type scheduleFunc func(time.Duration, func()) func()
 type reportToken byte
 
-// Watchdog owns heartbeat registrations and its monitoring goroutine.
 type Watchdog struct {
 	cfg    thresholds
 	logger *slog.Logger
@@ -288,7 +287,6 @@ func (w *Watchdog) observe() observation {
 	return result
 }
 
-// check performs one detection pass and reports whether terminal recovery began.
 func (w *Watchdog) check() bool {
 	if w.terminal.Load() {
 		return true
