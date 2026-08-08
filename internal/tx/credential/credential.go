@@ -199,6 +199,12 @@ func (c *CredentialAccept) Apply(ctx *tx.ApplyContext) ter.Result {
 	// where subject = ctx.AccountID (the transaction sender)
 	credKeylet := keylet.Credential(ctx.AccountID, issuerID, credTypeBytes)
 
+	// The reserve check precedes expiration handling. An expired credential is
+	// left in place when the subject cannot afford to accept it.
+	if result := ctx.CheckReserveWithFee(ctx.Account.OwnerCount + 1); result != ter.TesSUCCESS {
+		return result
+	}
+
 	// Read the credential (Preclaim guaranteed it exists and is unaccepted; the
 	// entry is needed here for the expiry check and the accept mutation).
 	credData, err := ctx.View.Read(credKeylet)
@@ -220,12 +226,6 @@ func (c *CredentialAccept) Apply(ctx *tx.ApplyContext) ter.Result {
 			return result
 		}
 		return ter.TecEXPIRED
-	}
-
-	// Check reserve for subject (ctx.Account) using the prior balance (before the
-	// actual fee was deducted), matching rippled's mPriorBalance comparison.
-	if result := ctx.CheckReserveWithFee(ctx.Account.OwnerCount + 1); result != ter.TesSUCCESS {
-		return result
 	}
 
 	cred.SetAccepted()

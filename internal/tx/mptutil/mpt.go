@@ -423,52 +423,45 @@ func isIOUFrozen(view state.LedgerView, account [20]byte, asset tx.Asset) bool {
 }
 
 func ValidDomain(view state.LedgerView, domainIDHex string, account [20]byte, parentCloseTime uint32) ter.Result {
-	domainBytes, err := hex.DecodeString(domainIDHex)
-	if err != nil || len(domainBytes) != 32 {
+	domainID, ok := decodeDomainID(domainIDHex)
+	if !ok {
 		return ter.TefINTERNAL
 	}
-	var domainID [32]byte
-	copy(domainID[:], domainBytes)
-	raw, err := view.Read(keylet.PermissionedDomainByID(domainID))
-	if err != nil {
-		return ter.TefINTERNAL
-	}
-	if raw == nil {
-		return ter.TecOBJECT_NOT_FOUND
-	}
-	domain, err := state.ParsePermissionedDomain(raw)
-	if err != nil {
-		return ter.TefINTERNAL
-	}
-	foundExpired := false
-	for _, accepted := range domain.AcceptedCredentials {
-		credentialRaw, err := view.Read(keylet.Credential(account, accepted.Issuer, accepted.CredentialType))
-		if err != nil {
-			return ter.TefINTERNAL
-		}
-		if credentialRaw == nil {
-			continue
-		}
-		credentialEntry, err := credential.ParseCredentialEntry(credentialRaw)
-		if err != nil {
-			return ter.TefINTERNAL
-		}
-		if credential.CheckCredentialExpired(credentialEntry, parentCloseTime) {
-			foundExpired = true
-			continue
-		}
-		if credentialEntry.IsAccepted() {
-			return ter.TesSUCCESS
-		}
-	}
-	if foundExpired {
-		return ter.TecEXPIRED
-	}
-	return ter.TecNO_AUTH
+	return credential.ValidDomain(view, domainID, account, parentCloseTime)
 }
 
 func validDomain(view state.LedgerView, domainIDHex string, account [20]byte, parentCloseTime uint32) ter.Result {
 	return ValidDomain(view, domainIDHex, account, parentCloseTime)
+}
+
+// VerifyValidDomain is the apply-time counterpart to ValidDomain. It deletes
+// expired credentials before deciding whether the account remains authorized.
+func VerifyValidDomain(ctx *tx.ApplyContext, domainIDHex string, account [20]byte) ter.Result {
+	domainID, ok := decodeDomainID(domainIDHex)
+	if !ok {
+		return ter.TefINTERNAL
+	}
+	return credential.VerifyValidDomain(ctx, account, domainID)
+}
+
+// RemoveExpiredDomainCredentialsOnTec reapplies the cleanup performed by
+// VerifyValidDomain after a tecEXPIRED sandbox rollback.
+func RemoveExpiredDomainCredentialsOnTec(ctx *tx.ApplyContext, domainIDHex string, account [20]byte) {
+	domainID, ok := decodeDomainID(domainIDHex)
+	if !ok {
+		return
+	}
+	credential.RemoveExpiredDomainCredentialsOnTec(ctx, account, domainID)
+}
+
+func decodeDomainID(domainIDHex string) ([32]byte, bool) {
+	var domainID [32]byte
+	domainBytes, err := hex.DecodeString(domainIDHex)
+	if err != nil || len(domainBytes) != len(domainID) {
+		return domainID, false
+	}
+	copy(domainID[:], domainBytes)
+	return domainID, true
 }
 
 func CanTrade(view state.LedgerView, id [24]byte) ter.Result {
