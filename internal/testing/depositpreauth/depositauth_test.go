@@ -74,7 +74,6 @@ func TestDepositAuth_PayIOU(t *testing.T) {
 	result = env.Submit(payment.PayIssued(gw, alice, usd150).Build())
 	jtx.RequireTxSuccess(t, result)
 
-	// carol creates an offer: sell XRP(100) for USD(100)
 	usd100Offer := tx.NewIssuedAmountFromFloat64(100, "USD", gw.Address)
 	xrp100Offer := tx.NewXRPAmount(jtx.XRP(100))
 	result = env.CreateOffer(carol, xrp100Offer, usd100Offer)
