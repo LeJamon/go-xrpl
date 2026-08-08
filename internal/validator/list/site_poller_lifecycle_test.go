@@ -25,6 +25,7 @@ func TestEnvelopeValidateShapePreservesPresenceAndType(t *testing.T) {
 		{"unknown version uses v2 shape", `{"manifest":"","version":0,"blobs_v2":[{"blob":"","signature":""}]}`, true},
 		{"missing version", `{"manifest":"","blobs_v2":[{"blob":"","signature":""}]}`, false},
 		{"non-object root", `[]`, false},
+		{"negative version", `{"manifest":"","version":-1,"blobs_v2":[{"blob":"","signature":""}]}`, false},
 		{"version outside signed range", `{"manifest":"","version":2147483648,"blobs_v2":[{"blob":"","signature":""}]}`, false},
 		{"wrong manifest type", `{"manifest":7,"blob":"","signature":"","version":1}`, false},
 		{"duplicate manifest ends invalid", `{"manifest":"","manifest":null,"blob":"","signature":"","version":1}`, false},

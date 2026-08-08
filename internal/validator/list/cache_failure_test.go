@@ -260,7 +260,12 @@ func queueCacheWrite(t *testing.T, agg *Aggregator, path string, pk PublisherKey
 	t.Helper()
 	agg.mu.Lock()
 	agg.cacheWriteSeq++
-	agg.pendingCacheWrites[pk] = pendingCacheWrite{path: path, body: body, seq: agg.cacheWriteSeq}
+	agg.pendingCacheWrites[pk] = pendingCacheWrite{
+		path:       path,
+		body:       body,
+		seq:        agg.cacheWriteSeq,
+		generation: agg.cacheGeneration,
+	}
 	agg.mu.Unlock()
 }
 

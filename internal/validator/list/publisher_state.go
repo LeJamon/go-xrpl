@@ -164,6 +164,7 @@ func (a *Aggregator) applyListInternal(globalManifest, localManifest []byte, loc
 	// invariant break — surface it loudly rather than silently re-create.
 	current := a.state[pubKey]
 	if current == nil {
+		a.logger.Error("validator list: trusted publisher state missing", "publisher", hex.EncodeToString(pubKey[:]))
 		return Untrusted, pubKey, 0
 	}
 	if a.beforeListCommit != nil {
@@ -434,7 +435,7 @@ func (a *Aggregator) applyPendingLocked(s *publisherState, blob *blobJSON, signi
 	if version > s.Version {
 		s.Version = version
 	}
-	s.RawManifest = append(s.RawManifest[:0], rawManifest...)
+	s.RawManifest = append([]byte(nil), rawManifest...)
 	a.recordMaxSequenceLocked(s, blob.Sequence)
 	return Pending
 }

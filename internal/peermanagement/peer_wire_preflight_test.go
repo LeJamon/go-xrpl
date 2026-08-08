@@ -78,6 +78,9 @@ func TestPeerWirePreflightChargesAndDropsBeforeDispatch(t *testing.T) {
 
 	for i, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
+			preflightErr := message.Preflight(test.msgType, test.payload)
+			require.Equal(t, test.reason, wirePreflightChargeReason(preflightErr))
+
 			frame, err := message.BuildWireMessage(test.msgType, test.payload)
 			require.NoError(t, err)
 			if test.compress {

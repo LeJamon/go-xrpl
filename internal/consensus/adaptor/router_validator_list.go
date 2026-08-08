@@ -489,6 +489,12 @@ func splitValidatorListCollection(coll *message.ValidatorListCollection, maxSize
 	if err != nil && !errors.Is(err, message.ErrMessageTooLarge) {
 		return nil, fmt.Errorf("encode TMValidatorListCollection: %w", err)
 	}
+	if begin == end {
+		if err != nil {
+			return nil, fmt.Errorf("encode TMValidatorListCollection: empty collection exceeds message limit: %w", err)
+		}
+		return nil, fmt.Errorf("encode TMValidatorListCollection: empty collection frame is %d bytes, limit %d", len(frame), maxSize)
+	}
 	if end-begin == 1 {
 		return splitValidatorListCollection(coll, maxSize, begin, end, true)
 	}

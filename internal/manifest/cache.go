@@ -323,7 +323,8 @@ func (c *Cache) GetSequence(masterKey [33]byte) (uint32, bool) {
 }
 
 // WithCurrent runs fn while the identified non-revoked manifest remains
-// current. The callback must not call methods on this Cache.
+// current. The callback must be brief and must not call methods on this Cache
+// or acquire locks ordered before this cache's mutex.
 func (c *Cache) WithCurrent(masterKey, signingKey [33]byte, sequence uint32, fn func()) bool {
 	c.mu.RLock()
 	defer c.mu.RUnlock()

@@ -113,7 +113,7 @@ func (v *envelopeUint32) UnmarshalJSON(data []byte) error {
 		return nil
 	}
 	var value int64
-	if err := json.Unmarshal(data, &value); err != nil || value < -2147483648 || value > 2147483647 {
+	if err := json.Unmarshal(data, &value); err != nil || value < 0 || value > 2147483647 {
 		return nil
 	}
 	v.Value = uint32(value)

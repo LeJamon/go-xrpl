@@ -33,17 +33,16 @@ func TestChangeDispatcherReentryPanicAndOrder(t *testing.T) {
 }
 
 func TestChangeDispatcherSlowCallbackDoesNotBlockAggregator(t *testing.T) {
-	var d changeDispatcher
 	agg := &Aggregator{}
 	entered := make(chan struct{})
 	release := make(chan struct{})
-	d.enqueue(changeEvent{callback: func(_ []consensus.NodeID, _ [][33]byte) {
+	agg.changes.enqueue(changeEvent{callback: func(_ []consensus.NodeID, _ [][33]byte) {
 		close(entered)
 		<-release
 	}})
 	done := make(chan struct{})
 	go func() {
-		d.drain(nil)
+		agg.dispatchChanges()
 		close(done)
 	}()
 	select {

@@ -562,6 +562,15 @@ func TestRvl_SendCollection_EmptyBlobs(t *testing.T) {
 	assert.Len(t, ts.getCalls(), 1)
 }
 
+func TestRvl_SendCollection_OversizeEmptyBlobs(t *testing.T) {
+	ts := &rvl_trackingSender{}
+	b := NewRouterBroadcaster(nil, ts)
+	b.maxCollectionFrameSize = 1
+	err := b.SendCollection(33, []byte("manifest"), nil, 2)
+	require.Error(t, err)
+	assert.Empty(t, ts.getCalls())
+}
+
 func TestRvl_SendCollection_SuppressionDedup(t *testing.T) {
 	ts := &rvl_trackingSender{}
 	r, _ := makeRouterWithBadDataRecorder(t)
