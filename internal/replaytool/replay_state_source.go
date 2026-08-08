@@ -2,6 +2,7 @@ package replaytool
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -12,11 +13,11 @@ import (
 	"github.com/LeJamon/go-xrpl/shamap/backend"
 )
 
-// StateSource loads the seed account-state SHAMap for a ledger. It exists so
+// stateSource loads the seed account-state SHAMap for a ledger. It exists so
 // the SHAMap's backing — fully in-memory versus nodestore-lazy — is swappable
 // without touching the replay loop, as the mainnet-replay design requires
 // ("load state behind an interface, not loadInitialState's Put loop").
-type StateSource interface {
+type stateSource interface {
 	// Load returns the verified seed state map for the ledger, its snapshot,
 	// and the fee schedule extracted from the state.
 	Load(ctx context.Context, ledgerIndex uint32) (*shamap.SHAMap, *statecompare.LedgerSnapshot, drops.Fees, error)
@@ -50,6 +51,7 @@ type nodestoreStateSource struct {
 	overlay        *backend.NodeStore
 	overlayDir     string
 	opened         []*backend.NodeStore
+	closed         bool
 }
 
 // baseNodeCacheItems / overlayNodeCacheItems size the positive node LRU (a count
@@ -74,8 +76,8 @@ func newNodestoreStateSource(client *statecompare.Client, dir string, baseCacheM
 	}
 	overlay, err := backend.OpenPebble(overlayDir, overlayCacheMB, overlayNodeCacheItems)
 	if err != nil {
-		os.RemoveAll(overlayDir)
-		return nil, fmt.Errorf("opening overlay nodestore: %w", err)
+		cleanupErr := os.RemoveAll(overlayDir)
+		return nil, errors.Join(fmt.Errorf("opening overlay nodestore: %w", err), cleanupErr)
 	}
 	return &nodestoreStateSource{
 		client:         client,
@@ -109,21 +111,28 @@ func (s *nodestoreStateSource) Load(ctx context.Context, ledgerIndex uint32) (*s
 	}
 
 	// Targeted lookup; lazily fetches only the FeeSettings path, not the tree.
-	fees := extractFeesFromSHAMap(stateMap)
+	fees, err := feesFromStateMap(stateMap)
+	if err != nil {
+		return nil, nil, drops.Fees{}, err
+	}
 	return stateMap, snapshot, fees, nil
 }
 
 func (s *nodestoreStateSource) Close() error {
-	var firstErr error
+	if s.closed {
+		return nil
+	}
+	s.closed = true
+	var closeErr error
 	for _, fam := range s.opened {
-		if err := fam.Close(); err != nil && firstErr == nil {
-			firstErr = err
+		if err := fam.Close(); err != nil {
+			closeErr = errors.Join(closeErr, err)
 		}
 	}
-	if err := os.RemoveAll(s.overlayDir); err != nil && firstErr == nil {
-		firstErr = err
+	if err := os.RemoveAll(s.overlayDir); err != nil {
+		closeErr = errors.Join(closeErr, err)
 	}
-	return firstErr
+	return closeErr
 }
 
 // buildOrOpenLazyState returns a state SHAMap whose backing is a shared
@@ -149,7 +158,7 @@ func buildOrOpenLazyState(
 		return nil, fmt.Errorf("probing base nodestore: %w", err)
 	}
 	if root != nil {
-		return shamap.NewFromRootHash(shamap.TypeState, accountHash, shamap.NewOverlayFamily(base, overlay))
+		return shamap.NewFromRootHashContext(ctx, shamap.TypeState, accountHash, shamap.NewOverlayFamily(base, overlay))
 	}
 
 	// Cold path: build the derived nodestore once, streaming the raw entries.
@@ -190,7 +199,7 @@ func buildOrOpenLazyState(
 		return nil, fmt.Errorf("seed state account_hash mismatch: built root %x != expected %x (incomplete or corrupt state import)", builtRoot[:8], accountHash[:8])
 	}
 
-	return shamap.NewFromRootHash(shamap.TypeState, accountHash, shamap.NewOverlayFamily(base, overlay))
+	return shamap.NewFromRootHashContext(ctx, shamap.TypeState, accountHash, shamap.NewOverlayFamily(base, overlay))
 }
 
 // flushToFamily flushes the map's dirty nodes into fam, releasing child
@@ -213,7 +222,7 @@ func flushToFamily(ctx context.Context, m *shamap.SHAMap, fam shamap.Family) err
 // the in-memory source. baseCacheMB / overlayCacheMB size the Pebble block
 // caches of the nodestore base and overlay; they are ignored by the in-memory
 // source.
-func newStateSource(client *statecompare.Client, nodestoreDir string, baseCacheMB, overlayCacheMB int) (StateSource, error) {
+func newStateSource(client *statecompare.Client, nodestoreDir string, baseCacheMB, overlayCacheMB int) (stateSource, error) {
 	if nodestoreDir == "" {
 		return &memoryStateSource{client: client}, nil
 	}

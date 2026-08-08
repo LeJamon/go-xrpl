@@ -2,6 +2,7 @@ package replaytool
 
 import (
 	"bytes"
+	"context"
 	"encoding/hex"
 	"maps"
 	"slices"
@@ -9,9 +10,12 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/LeJamon/go-xrpl/amendment"
 	binarycodec "github.com/LeJamon/go-xrpl/codec/binarycodec"
 	"github.com/LeJamon/go-xrpl/internal/ledger/state"
 	"github.com/LeJamon/go-xrpl/keylet"
+	ledgerentry "github.com/LeJamon/go-xrpl/ledger/entry"
+	entryschema "github.com/LeJamon/go-xrpl/ledger/entry/schema"
 	"github.com/LeJamon/go-xrpl/protocol"
 	"github.com/LeJamon/go-xrpl/shamap"
 )
@@ -22,6 +26,28 @@ const testAccount = "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh"
 // sequence the reconstruction threads into PreviousTxnID / PreviousTxnLgrSeq.
 const testTxHashHex = "AABBCCDDEEFF00112233445566778899AABBCCDDEEFF00112233445566778899"
 const testLedgerSeq = uint32(90000000)
+
+func reconstructionTestRules() *amendment.Rules {
+	builder := amendment.NewRulesBuilder()
+	builder.Enable(amendment.FeatureFixPreviousTxnID)
+	return builder.Build()
+}
+
+func reconstructFromMeta(preState *shamap.SHAMap, metas []metaTx, ledgerIndex uint32) (*shamap.SHAMap, error) {
+	return reconstructFromMetaWithRules(preState, metas, ledgerIndex, reconstructionTestRules())
+}
+
+func applyAffectedNode(
+	stateMap *shamap.SHAMap,
+	node any,
+	txHash [32]byte,
+	ledgerSeq uint32,
+	deltas map[[32]byte]*dirDelta,
+	deletedDirs map[[32]byte]bool,
+	brokerAccounts map[[32]byte][20]byte,
+) error {
+	return applyAffectedNodeWithRules(stateMap, node, txHash, ledgerSeq, reconstructionTestRules(), deltas, deletedDirs, make(map[[32]byte]struct{}), brokerAccounts)
+}
 
 func encodeSLE(t *testing.T, m map[string]any) []byte {
 	t.Helper()
@@ -202,22 +228,32 @@ func TestReconstructFromMeta_CreateAndDelete(t *testing.T) {
 	}
 }
 
-func TestReconstructFromMeta_EmptyMetaLeavesStateUnchanged(t *testing.T) {
+func TestReconstructFromMeta_RejectsEmptyMetadata(t *testing.T) {
 	idx := mustIndex(t, "00000000000000000000000000000000000000000000000000000000000000FF")
 	obj := encodeSLE(t, map[string]any{
 		"LedgerEntryType": "AccountRoot", "Account": testAccount,
 		"Balance": "7", "Flags": 0, "OwnerCount": 0, "Sequence": 1,
 	})
 	preState := putAll(t, map[[32]byte][]byte{idx: obj})
-	preRoot, _ := preState.Hash()
-
-	corrected, err := reconstructFromMeta(preState, []metaTx{{Blob: nil}, {Blob: []byte{}}}, testLedgerSeq)
-	if err != nil {
-		t.Fatalf("reconstructFromMeta: %v", err)
+	if _, err := reconstructFromMeta(preState, []metaTx{{Blob: nil}}, testLedgerSeq); err == nil || !strings.Contains(err.Error(), "metadata for tx 0 is empty") {
+		t.Fatalf("reconstructFromMeta error = %v", err)
 	}
-	gotRoot, _ := corrected.Hash()
-	if gotRoot != preRoot {
-		t.Fatalf("empty meta changed root: %x != %x", gotRoot[:8], preRoot[:8])
+}
+
+func TestReconstructFromMetaRejectsMissingRequiredLedgerField(t *testing.T) {
+	idxHex := "00000000000000000000000000000000000000000000000000000000000000FE"
+	meta := encodeMeta(t, map[string]any{
+		"CreatedNode": map[string]any{
+			"LedgerEntryType": "AccountRoot",
+			"LedgerIndex":     idxHex,
+			"NewFields": map[string]any{
+				"Balance": "1",
+			},
+		},
+	})
+	_, err := reconstructFromMeta(shamap.New(shamap.TypeState), []metaTx{{Blob: meta}}, testLedgerSeq)
+	if err == nil || !strings.Contains(err.Error(), "validating AccountRoot object") {
+		t.Fatalf("reconstructFromMeta error = %v", err)
 	}
 }
 
@@ -255,6 +291,31 @@ func TestDivergingObjects(t *testing.T) {
 	d, ok = byIndex[hex.EncodeToString(idxOnlyGo[:])]
 	if !ok || d.GoXRPL == "" || d.Mainnet != "" {
 		t.Fatalf("go-only object should have empty mainnet side: %+v", d)
+	}
+}
+
+func TestDivergingObjectsAreBounded(t *testing.T) {
+	left := shamap.New(shamap.TypeState)
+	right := shamap.New(shamap.TypeState)
+	for i := 0; i < maxDiagnosticObjects+1; i++ {
+		var key [32]byte
+		key[28] = byte(i >> 24)
+		key[29] = byte(i >> 16)
+		key[30] = byte(i >> 8)
+		key[31] = byte(i)
+		if err := left.Put(key, append([]byte{1}, make([]byte, 11)...)); err != nil {
+			t.Fatal(err)
+		}
+		if err := right.Put(key, append([]byte{2}, make([]byte, 11)...)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	objects, complete, err := divergingObjectsContext(context.Background(), left, right)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if complete || len(objects) != maxDiagnosticObjects {
+		t.Fatalf("complete=%v objects=%d", complete, len(objects))
 	}
 }
 
@@ -651,6 +712,145 @@ func TestReconstructFromMeta_DirectoryIndexes(t *testing.T) {
 		"PreviousTxnLgrSeq": testLedgerSeq,
 	})
 	assertEntryBytes(t, corrected, bookRoot, wantBook, "order book directory")
+}
+
+func TestFillCreatedDefaults_CredentialSubjectRules(t *testing.T) {
+	const distinctSubject = "rrrrrrrrrrrrrrrrrrrrBZbvji"
+
+	self := map[string]any{
+		"Issuer": testAccount, "Subject": testAccount, "Flags": ledgerentry.LsfAccepted,
+	}
+	if err := fillCreatedDefaults(self, "Credential"); err != nil {
+		t.Fatal(err)
+	}
+	if _, present := self["SubjectNode"]; present {
+		t.Fatal("self-issued credential gained SubjectNode")
+	}
+	if self["IssuerNode"] != "0" {
+		t.Fatalf("IssuerNode = %v", self["IssuerNode"])
+	}
+
+	distinct := map[string]any{"Issuer": testAccount, "Subject": distinctSubject}
+	if err := fillCreatedDefaults(distinct, "Credential"); err != nil {
+		t.Fatal(err)
+	}
+	if distinct["SubjectNode"] != "0" || distinct["IssuerNode"] != "0" {
+		t.Fatalf("credential directory nodes = %v/%v", distinct["IssuerNode"], distinct["SubjectNode"])
+	}
+
+	invalid := map[string]any{"Issuer": testAccount, "Subject": testAccount, "Flags": 0}
+	if err := fillCreatedDefaults(invalid, "Credential"); err == nil {
+		t.Fatal("self-issued credential without accepted flag was accepted")
+	}
+}
+
+func TestDirectoryPlacements_DelegateBothOwners(t *testing.T) {
+	const authorized = "rrrrrrrrrrrrrrrrrrrrBZbvji"
+	accountID, _ := state.DecodeAccountID(testAccount)
+	authorizedID, _ := state.DecodeAccountID(authorized)
+
+	for _, tt := range []struct {
+		name string
+		page string
+	}{
+		{name: "page zero", page: "0"},
+		{name: "nonzero page", page: "2"},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			placements, err := directoryPlacements(shamap.New(shamap.TypeState), "Delegate", map[string]any{
+				"Account": testAccount, "Authorize": authorized,
+				"OwnerNode": tt.page, "DestinationNode": tt.page,
+			}, nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			want := [][32]byte{
+				keylet.OwnerDirPage(accountID, metaUint64(tt.page)).Key,
+				keylet.OwnerDirPage(authorizedID, metaUint64(tt.page)).Key,
+			}
+			if len(placements) != len(want) || placements[0].Key != want[0] || placements[1].Key != want[1] {
+				t.Fatalf("placements = %+v, want %x/%x", placements, want[0], want[1])
+			}
+		})
+	}
+}
+
+func TestFillBookDirectoryDefaults_MPTSides(t *testing.T) {
+	const mpt = "000000010F8285BE96FB1972BC582434283C22113532FAB5"
+	for _, tt := range []struct {
+		name   string
+		fields map[string]any
+	}{
+		{name: "MPT pays XRP", fields: map[string]any{"ExchangeRate": "1", "TakerPaysMPT": mpt}},
+		{name: "XRP pays MPT", fields: map[string]any{"ExchangeRate": "1", "TakerGetsMPT": mpt}},
+		{name: "MPT pays IOU", fields: map[string]any{
+			"ExchangeRate": "1", "TakerPaysMPT": mpt,
+			"TakerGetsCurrency": strings.Repeat("1", 40), "TakerGetsIssuer": strings.Repeat("2", 40),
+		}},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			if err := fillBookDirectoryDefaults(tt.fields, "DirectoryNode"); err != nil {
+				t.Fatal(err)
+			}
+			for _, side := range []string{"Pays", "Gets"} {
+				if _, mptSide := tt.fields["Taker"+side+"MPT"]; mptSide {
+					if _, present := tt.fields["Taker"+side+"Currency"]; present {
+						t.Fatalf("MPT %s side gained currency", side)
+					}
+					if _, present := tt.fields["Taker"+side+"Issuer"]; present {
+						t.Fatalf("MPT %s side gained issuer", side)
+					}
+				}
+			}
+		})
+	}
+}
+
+func TestThreadPreviousTxnUsesParentRules(t *testing.T) {
+	withoutFix := amendment.EmptyRules()
+	withFixBuilder := amendment.NewRulesBuilder()
+	withFixBuilder.Enable(amendment.FeatureFixPreviousTxnID)
+
+	without := map[string]any{}
+	threadPreviousTxn(without, "DirectoryNode", mustIndex(t, testTxHashHex), testLedgerSeq, withoutFix)
+	if _, present := without["PreviousTxnID"]; present {
+		t.Fatal("DirectoryNode threaded with fixPreviousTxnID disabled")
+	}
+	with := map[string]any{}
+	threadPreviousTxn(with, "DirectoryNode", mustIndex(t, testTxHashHex), testLedgerSeq, withFixBuilder.Build())
+	if with["PreviousTxnID"] != testTxHashHex || with["PreviousTxnLgrSeq"] != testLedgerSeq {
+		t.Fatalf("threaded fields = %+v", with)
+	}
+}
+
+func TestReconstructionTablesMatchCanonicalEntrySchema(t *testing.T) {
+	specs := make(map[string]map[string]entryschema.Style, len(entryschema.Specs))
+	for _, spec := range entryschema.Specs {
+		fields := make(map[string]entryschema.Style, len(spec.Fields))
+		for _, field := range spec.Fields {
+			fields[field.Name] = field.Style
+		}
+		specs[spec.Name] = fields
+		_, hasPreviousTxn := fields["PreviousTxnID"]
+		if threadedEntryTypes[spec.Name] != hasPreviousTxn {
+			t.Errorf("threading schema mismatch for %s", spec.Name)
+		}
+	}
+	for entryType, defaults := range requiredDefaults {
+		fields, exists := specs[entryType]
+		if !exists {
+			t.Errorf("required defaults contain unknown entry type %s", entryType)
+			continue
+		}
+		for _, field := range defaults {
+			if field.Name == "Flags" {
+				continue
+			}
+			if fields[field.Name] != entryschema.StyleRequired {
+				t.Errorf("%s.%s default is not canonical required field", entryType, field.Name)
+			}
+		}
+	}
 }
 
 func TestFillCreatedDefaults_EscrowDirectoryNodes(t *testing.T) {
@@ -1530,7 +1730,11 @@ func assertDirectoryMembers(t *testing.T, m *shamap.SHAMap, key [32]byte, want .
 	if err != nil {
 		t.Fatalf("decode directory: %v", err)
 	}
-	if got := decodeIndexes(obj["Indexes"]); !slices.Equal(got, want) {
+	got, err := decodeIndexes(obj["Indexes"], false)
+	if err != nil {
+		t.Fatalf("decode directory indexes: %v", err)
+	}
+	if !slices.Equal(got, want) {
 		t.Fatalf("directory members = %X, want %X", got, want)
 	}
 }

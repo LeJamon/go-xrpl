@@ -136,14 +136,12 @@ func NewClient(cfg Config, blobCfg BlobStoreConfig) (*Client, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	if err := db.PingContext(ctx); err != nil {
-		db.Close()
-		return nil, fmt.Errorf("connecting to database: %w", err)
+		return nil, errors.Join(fmt.Errorf("connecting to database: %w", err), db.Close())
 	}
 
 	blobs, err := newBlobStore(blobCfg)
 	if err != nil {
-		db.Close()
-		return nil, fmt.Errorf("initializing blob store: %w", err)
+		return nil, errors.Join(fmt.Errorf("initializing blob store: %w", err), db.Close())
 	}
 
 	return &Client{db: db, blobs: blobs}, nil
@@ -266,7 +264,7 @@ func (c *Client) StateEntries(ctx context.Context, seq uint32) ([]StateEntry, er
 // never materializes the whole pack or the full entry slice, so seeding a
 // multi-gigabyte mainnet checkpoint stays within a bounded memory footprint.
 // seq must be a checkpoint ledger; a non-checkpoint seq returns ErrNotFound.
-func (c *Client) StreamStateEntries(ctx context.Context, seq uint32, fn func(StateEntry) error) error {
+func (c *Client) StreamStateEntries(ctx context.Context, seq uint32, fn func(StateEntry) error) (returnErr error) {
 	var blobKey string
 	err := c.db.QueryRowContext(ctx,
 		`SELECT blob_key FROM checkpoints WHERE seq = $1`, seq,
@@ -282,9 +280,13 @@ func (c *Client) StreamStateEntries(ctx context.Context, seq uint32, fn func(Sta
 	if err != nil {
 		return fmt.Errorf("fetching state pack %q: %w", blobKey, err)
 	}
-	defer r.Close()
+	defer func() {
+		if err := r.Close(); err != nil {
+			returnErr = errors.Join(returnErr, fmt.Errorf("closing state pack %q: %w", blobKey, err))
+		}
+	}()
 
-	packSeq, _, err := unpackStateStream(r, func(index [32]byte, data []byte) error {
+	packSeq, _, err := unpackStateStreamContext(ctx, r, func(index [32]byte, data []byte) error {
 		return fn(StateEntry{Index: index, Data: data})
 	})
 	if err != nil {
@@ -395,7 +397,7 @@ func metaTransactionIndex(meta []byte) (uint32, error) {
 //
 // Implemented as a single range query rather than N round-trips so validating
 // a multi-thousand-ledger range stays cheap.
-func (c *Client) ValidateRange(ctx context.Context, from, to uint32) (bool, uint32, error) {
+func (c *Client) ValidateRange(ctx context.Context, from, to uint32) (valid bool, missing uint32, returnErr error) {
 	if from > to {
 		return true, 0, nil
 	}
@@ -408,24 +410,28 @@ func (c *Client) ValidateRange(ctx context.Context, from, to uint32) (bool, uint
 	if err != nil {
 		return false, from, fmt.Errorf("querying ledger range: %w", err)
 	}
-	defer rows.Close()
+	defer func() {
+		if err := rows.Close(); err != nil {
+			returnErr = errors.Join(returnErr, fmt.Errorf("closing ledger range rows: %w", err))
+		}
+	}()
 
-	expected := from
+	expected := uint64(from)
 	for rows.Next() {
 		var idx uint32
 		if err := rows.Scan(&idx); err != nil {
-			return false, expected, fmt.Errorf("scanning ledger seq: %w", err)
+			return false, uint32(expected), fmt.Errorf("scanning ledger seq: %w", err)
 		}
-		if idx != expected {
-			return false, expected, nil
+		if uint64(idx) != expected {
+			return false, uint32(expected), nil
 		}
 		expected++
 	}
 	if err := rows.Err(); err != nil {
-		return false, expected, fmt.Errorf("iterating ledger range: %w", err)
+		return false, uint32(expected), fmt.Errorf("iterating ledger range: %w", err)
 	}
-	if expected <= to {
-		return false, expected, nil
+	if expected <= uint64(to) {
+		return false, uint32(expected), nil
 	}
 	return true, 0, nil
 }

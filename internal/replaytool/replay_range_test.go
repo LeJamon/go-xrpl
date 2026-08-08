@@ -1,6 +1,7 @@
 package replaytool
 
 import (
+	"context"
 	"os"
 	"path/filepath"
 	"testing"
@@ -80,7 +81,7 @@ func TestVerifyStateRoot(t *testing.T) {
 }
 
 func TestLoadRulesFromState_Empty(t *testing.T) {
-	// A state with no Amendments entry yields EmptyRules().
+	// A state with no Amendments entry still enables retired rules permanently.
 	sm := buildReplayStateMap(t, map[[32]byte][]byte{
 		{0x01}: entry(0xaa),
 	})
@@ -88,8 +89,13 @@ func TestLoadRulesFromState_Empty(t *testing.T) {
 	if err != nil {
 		t.Fatalf("loadRulesFromState: %v", err)
 	}
-	if rules.Enabled(amendment.FeatureID("Flow")) {
-		t.Fatal("expected no amendments enabled for empty state")
+	if rules.Enabled(amendment.FeatureFixCleanup3_2_0) {
+		t.Fatal("empty state enabled a non-permanent amendment")
+	}
+	for _, id := range amendment.PermanentlyEnabledIDs() {
+		if !rules.Enabled(id) {
+			t.Fatalf("permanent amendment %x is disabled", id)
+		}
 	}
 }
 
@@ -231,11 +237,11 @@ func TestCheckpointRoundTrip(t *testing.T) {
 	}
 
 	dir := t.TempDir()
-	if err := writeCheckpoint(dir, seq, sm); err != nil {
+	if err := writeCheckpoint(context.Background(), dir, seq, sm); err != nil {
 		t.Fatalf("writeCheckpoint: %v", err)
 	}
 
-	loaded, gotSeq, err := loadCheckpoint(filepath.Join(dir, "checkpoint_99230000.dat"))
+	loaded, gotSeq, err := loadCheckpoint(context.Background(), filepath.Join(dir, "checkpoint_99230000.dat"))
 	if err != nil {
 		t.Fatalf("loadCheckpoint: %v", err)
 	}
@@ -267,7 +273,7 @@ func TestLoadCheckpoint_BadMagic(t *testing.T) {
 	if err := os.WriteFile(path, []byte("NOTACKPTxxxxxxxx"), 0o644); err != nil {
 		t.Fatalf("seeding bad file: %v", err)
 	}
-	if _, _, err := loadCheckpoint(path); err == nil {
+	if _, _, err := loadCheckpoint(context.Background(), path); err == nil {
 		t.Fatal("expected error for bad magic, got nil")
 	}
 }

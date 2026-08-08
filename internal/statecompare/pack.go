@@ -2,6 +2,7 @@ package statecompare
 
 import (
 	"bufio"
+	"context"
 	"encoding/binary"
 	"errors"
 	"fmt"
@@ -28,6 +29,8 @@ const (
 	packHeaderLen = 6 // 4-byte magic + version (u8) + kind (u8)
 	indexLen      = 32
 	hashLen       = 32
+
+	maxPackBlobSize = 16 << 20
 )
 
 // errPack signals a malformed or truncated pack; callers wrap it with context.
@@ -72,6 +75,9 @@ func getBytes(blob []byte, off int) ([]byte, int, error) {
 	}
 	n := int(binary.BigEndian.Uint32(blob[off:]))
 	off += 4
+	if n > maxPackBlobSize {
+		return nil, 0, fmt.Errorf("%w: byte run length %d exceeds %d", errPack, n, maxPackBlobSize)
+	}
 	end := off + n
 	if end > len(blob) {
 		return nil, 0, fmt.Errorf("%w: truncated blob (length prefix overruns buffer)", errPack)
@@ -92,6 +98,10 @@ func unpackState(blob []byte) (uint64, []StateEntry, error) {
 	off += 8
 	count := binary.BigEndian.Uint32(blob[off:])
 	off += 4
+	maxCount := (len(blob) - off) / (indexLen + 4)
+	if uint64(count) > uint64(maxCount) {
+		return 0, nil, fmt.Errorf("%w: state count %d cannot fit in %d bytes", errPack, count, len(blob)-off)
+	}
 
 	entries := make([]StateEntry, 0, count)
 	for range count {
@@ -115,6 +125,10 @@ func unpackState(blob []byte) (uint64, []StateEntry, error) {
 // the whole pack or the full entry slice in memory. It returns the checkpoint
 // seq and entry count from the header.
 func unpackStateStream(r io.Reader, fn func(index [32]byte, data []byte) error) (uint64, uint32, error) {
+	return unpackStateStreamContext(context.Background(), r, fn)
+}
+
+func unpackStateStreamContext(ctx context.Context, r io.Reader, fn func(index [32]byte, data []byte) error) (uint64, uint32, error) {
 	br := bufio.NewReaderSize(r, 1<<20)
 
 	var head [packHeaderLen]byte
@@ -135,13 +149,20 @@ func unpackStateStream(r io.Reader, fn func(index [32]byte, data []byte) error) 
 	var index [32]byte
 	var lenBuf [4]byte
 	for range count {
+		if err := ctx.Err(); err != nil {
+			return 0, 0, err
+		}
 		if _, err := io.ReadFull(br, index[:]); err != nil {
 			return 0, 0, fmt.Errorf("%w: truncated state index", errPack)
 		}
 		if _, err := io.ReadFull(br, lenBuf[:]); err != nil {
 			return 0, 0, fmt.Errorf("%w: truncated data length", errPack)
 		}
-		data := make([]byte, binary.BigEndian.Uint32(lenBuf[:]))
+		dataLen := binary.BigEndian.Uint32(lenBuf[:])
+		if dataLen > maxPackBlobSize {
+			return 0, 0, fmt.Errorf("%w: state data length %d exceeds %d", errPack, dataLen, maxPackBlobSize)
+		}
+		data := make([]byte, int(dataLen))
 		if _, err := io.ReadFull(br, data); err != nil {
 			return 0, 0, fmt.Errorf("%w: truncated data", errPack)
 		}
@@ -170,6 +191,10 @@ func readOneLedger(blob []byte, off int) (ledgerBlob, int, error) {
 	}
 	txCount := binary.BigEndian.Uint32(blob[off:])
 	off += 4
+	maxTxCount := (len(blob) - off) / (hashLen + 4 + 4)
+	if uint64(txCount) > uint64(maxTxCount) {
+		return ledgerBlob{}, 0, fmt.Errorf("%w: transaction count %d cannot fit in %d bytes", errPack, txCount, len(blob)-off)
+	}
 
 	lb.txs = make([]txRecord, 0, txCount)
 	for range txCount {

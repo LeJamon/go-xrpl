@@ -100,7 +100,10 @@ func (l *localBlobStore) get(_ context.Context, key string) ([]byte, error) {
 	return data, nil
 }
 
-func (l *localBlobStore) getReader(_ context.Context, key string) (io.ReadCloser, error) {
+func (l *localBlobStore) getReader(ctx context.Context, key string) (io.ReadCloser, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	path := filepath.Join(l.root, filepath.FromSlash(key))
 	f, err := os.Open(path)
 	if err != nil {
@@ -160,12 +163,12 @@ func newS3BlobStore(cfg BlobStoreConfig) (*s3BlobStore, error) {
 // content hash for an unsigned-payload GET.
 const emptyPayloadSHA256 = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
 
-func (s *s3BlobStore) get(ctx context.Context, key string) ([]byte, error) {
+func (s *s3BlobStore) get(ctx context.Context, key string) (_ []byte, returnErr error) {
 	r, err := s.getReader(ctx, key)
 	if err != nil {
 		return nil, err
 	}
-	defer r.Close()
+	defer func() { returnErr = errors.Join(returnErr, r.Close()) }()
 	data, err := io.ReadAll(r)
 	if err != nil {
 		return nil, fmt.Errorf("reading blob %q: %w", key, err)

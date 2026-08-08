@@ -2,6 +2,7 @@ package statecompare
 
 import (
 	"bytes"
+	"context"
 	"encoding/binary"
 	"encoding/hex"
 	"errors"
@@ -276,5 +277,46 @@ func TestReadLedgerAtOutOfRange(t *testing.T) {
 	}
 	if _, err := readLedgerAt(blob, 0); !errors.Is(err, errPack) {
 		t.Errorf("offset inside header: err = %v, want errPack", err)
+	}
+}
+
+func TestPackDecodersRejectUnboundedLengthsAndCounts(t *testing.T) {
+	state := []byte(packMagic)
+	state = append(state, packVersion, kindState)
+	state = binary.BigEndian.AppendUint64(state, 1)
+	state = binary.BigEndian.AppendUint32(state, 1)
+	state = append(state, make([]byte, indexLen)...)
+	state = binary.BigEndian.AppendUint32(state, ^uint32(0))
+	if _, _, err := unpackStateStream(bytes.NewReader(state), nil); !errors.Is(err, errPack) {
+		t.Fatalf("stream oversized length error = %v, want errPack", err)
+	}
+	if _, _, err := unpackState(state); !errors.Is(err, errPack) {
+		t.Fatalf("buffered oversized length error = %v, want errPack", err)
+	}
+
+	stateCount := []byte(packMagic)
+	stateCount = append(stateCount, packVersion, kindState)
+	stateCount = binary.BigEndian.AppendUint64(stateCount, 1)
+	stateCount = binary.BigEndian.AppendUint32(stateCount, ^uint32(0))
+	if _, _, err := unpackState(stateCount); !errors.Is(err, errPack) {
+		t.Fatalf("oversized state count error = %v, want errPack", err)
+	}
+
+	ledger := []byte(packMagic)
+	ledger = append(ledger, packVersion, kindLedger)
+	ledger = binary.BigEndian.AppendUint64(ledger, 1)
+	ledger = binary.BigEndian.AppendUint32(ledger, 0)
+	ledger = binary.BigEndian.AppendUint32(ledger, ^uint32(0))
+	if _, err := readLedgerAt(ledger, packHeaderLen); !errors.Is(err, errPack) {
+		t.Fatalf("oversized transaction count error = %v, want errPack", err)
+	}
+}
+
+func TestUnpackStateStreamContextCancellation(t *testing.T) {
+	blob := packState(1, []StateEntry{{Index: idx(1), Data: []byte("abcdefghijkl")}})
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if _, _, err := unpackStateStreamContext(ctx, bytes.NewReader(blob), nil); !errors.Is(err, context.Canceled) {
+		t.Fatalf("canceled stream error = %v, want %v", err, context.Canceled)
 	}
 }

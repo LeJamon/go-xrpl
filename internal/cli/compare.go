@@ -12,7 +12,7 @@ import (
 
 	binarycodec "github.com/LeJamon/go-xrpl/codec/binarycodec"
 	"github.com/LeJamon/go-xrpl/internal/cmdexit"
-	"github.com/LeJamon/go-xrpl/internal/replaytool"
+	"github.com/LeJamon/go-xrpl/internal/statecompare"
 	"github.com/spf13/cobra"
 )
 
@@ -99,7 +99,10 @@ func runCompare(cmd *cobra.Command, args []string, options *compareOptions) erro
 	fmt.Fprintln(w)
 
 	// Find differences
-	added, removed, modified, unchanged := compareStates(map1, map2)
+	added, removed, modified, unchanged, err := compareStates(map1, map2)
+	if err != nil {
+		return fmt.Errorf("comparing states: %w", err)
+	}
 
 	// Apply filter if specified
 	if options.filterType != "" {
@@ -197,7 +200,7 @@ func parseStateEntries(data []byte) ([]stateFileEntry, error) {
 	return entries, nil
 }
 
-type stateEntry = replaytool.ComparableStateEntry
+type stateEntry = statecompare.ComparableStateEntry
 
 func normalizeStateEntries(entries []stateFileEntry) (map[string]stateEntry, error) {
 	result := make(map[string]stateEntry, len(entries))
@@ -260,11 +263,14 @@ func decodeStateData(hexData string) map[string]any {
 	return decoded
 }
 
-type modifiedEntry = replaytool.StateModification
+type modifiedEntry = statecompare.StateModification
 
-func compareStates(map1, map2 map[string]stateEntry) (added, removed []stateEntry, modified []modifiedEntry, unchanged []stateEntry) {
-	comparison := replaytool.CompareStates(map1, map2)
-	return comparison.Added, comparison.Removed, comparison.Modified, comparison.Unchanged
+func compareStates(map1, map2 map[string]stateEntry) (added, removed []stateEntry, modified []modifiedEntry, unchanged []stateEntry, err error) {
+	comparison, err := statecompare.CompareStates(map1, map2)
+	if err != nil {
+		return nil, nil, nil, nil, err
+	}
+	return comparison.Added, comparison.Removed, comparison.Modified, comparison.Unchanged, nil
 }
 
 func filterByType(entries []stateEntry, entryType string) []stateEntry {
