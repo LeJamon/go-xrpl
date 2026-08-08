@@ -1377,7 +1377,6 @@ func TestBadOuterFee(t *testing.T) {
 // =============================================================================
 // Test 12: testBatchDelegate
 // Reference: rippled Batch_test.cpp testBatchDelegate()
-// Delegation coverage for Batch outer and inner transactions.
 // =============================================================================
 
 func TestBatchDelegate(t *testing.T) {

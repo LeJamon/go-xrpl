@@ -68,8 +68,6 @@ type PermissionData struct {
 	PermissionValue string `json:"PermissionValue,omitempty"`
 }
 
-// NewPermission creates a DelegateSet permission from its protocol name or
-// decimal numeric value.
 func NewPermission(permissionValue string) Permission {
 	return Permission{Permission: PermissionData{PermissionValue: permissionValue}}
 }
