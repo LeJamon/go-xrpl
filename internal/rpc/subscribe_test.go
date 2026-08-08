@@ -216,7 +216,6 @@ func TestSubscribeAccounts(t *testing.T) {
 	for _, acc := range validAccounts {
 		assert.Contains(t, accounts, acc)
 	}
-
 }
 
 // TestSubscribeAccountsProposed tests subscribing to proposed transactions for accounts
@@ -236,7 +235,6 @@ func TestSubscribeAccountsProposed(t *testing.T) {
 
 	err := sm.HandleSubscribe(testRegistration(t, sm, conn), request, true)
 	require.Nil(t, err, "Expected no error for valid accounts_proposed")
-
 }
 
 // TestSubscribeAccountInvalidFormat tests subscribing with invalid account formats
@@ -327,7 +325,6 @@ func TestSubscribeAccountInvalidFormat(t *testing.T) {
 			} else {
 				require.Nil(t, err, "Expected no error for valid account: %s", tc.account)
 			}
-
 		})
 	}
 }
@@ -347,7 +344,6 @@ func TestSubscribeAccountsProposedInvalidFormat(t *testing.T) {
 	assert.Equal(t, types.RpcACT_MALFORMED, err.Code)
 	assert.Equal(t, "actMalformed", err.ErrorString)
 	assert.Equal(t, "Account malformed.", err.Message)
-
 }
 
 // Book Subscription Tests
@@ -382,7 +378,6 @@ func TestSubscribeBooks(t *testing.T) {
 
 	// Verify subscription was recorded
 	assert.Equal(t, 1, testRegistration(t, sm, conn).Snapshot().BookCount())
-
 }
 
 // TestSubscribeBooksWithSnapshot tests the snapshot flag for initial order book state
@@ -413,7 +408,6 @@ func TestSubscribeBooksWithSnapshot(t *testing.T) {
 	require.Nil(t, err, "Expected no error for book subscription with snapshot")
 
 	assert.Equal(t, 1, testRegistration(t, sm, conn).Snapshot().BookCount())
-
 }
 
 // TestSubscribeBooksWithBoth tests the both flag for both sides of order book
@@ -444,7 +438,6 @@ func TestSubscribeBooksWithBoth(t *testing.T) {
 	require.Nil(t, err, "Expected no error for book subscription with both")
 
 	assert.Equal(t, 2, testRegistration(t, sm, conn).Snapshot().BookCount())
-
 }
 
 // TestSubscribeBooksInvalidCurrency pins the per-site book errors of
@@ -607,7 +600,6 @@ func TestSubscribeBooksInvalidCurrency(t *testing.T) {
 			assert.Equal(t, tc.wantCode, err.Code)
 			assert.Equal(t, tc.wantError, err.ErrorString)
 			assert.Equal(t, tc.wantMsg, err.Message)
-
 		})
 	}
 }
@@ -722,7 +714,6 @@ func TestSubscribeBooksMultiple(t *testing.T) {
 	require.Nil(t, err, "Expected no error for multiple valid books")
 
 	assert.Equal(t, 2, testRegistration(t, sm, conn).Snapshot().BookCount())
-
 }
 
 // Unsubscribe Tests
@@ -755,7 +746,6 @@ func TestUnsubscribeFromStreams(t *testing.T) {
 	// Verify other subscriptions remain
 	assert.True(t, testRegistration(t, sm, conn).Snapshot().Has(types.SubTransactions))
 	assert.True(t, testRegistration(t, sm, conn).Snapshot().Has(types.SubValidations))
-
 }
 
 // TestUnsubscribeFromAccounts tests unsubscribing from accounts
@@ -792,7 +782,6 @@ func TestUnsubscribeFromAccounts(t *testing.T) {
 	assert.NotContains(t, remaining, "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh")
 	assert.Contains(t, remaining, "rPMh7Pi9ct699iZUTWaytJUoHcJ7cgyziK")
 	assert.Contains(t, remaining, "rH4KEcG9dEwGwpn6AyoWK9cZPLL4RLSmWW")
-
 }
 
 // TestUnsubscribeFromAllAccounts tests unsubscribing from all accounts removes the subscription
@@ -822,7 +811,6 @@ func TestUnsubscribeFromAllAccounts(t *testing.T) {
 
 	// Verify accounts subscription is completely removed
 	assert.False(t, testRegistration(t, sm, conn).Snapshot().Has(types.SubAccounts))
-
 }
 
 // TestUnsubscribeFromBooks tests unsubscribing from order books
@@ -862,7 +850,6 @@ func TestUnsubscribeFromBooks(t *testing.T) {
 
 	// Verify book subscription is removed
 	assert.False(t, testRegistration(t, sm, conn).Snapshot().Has(types.SubBook))
-
 }
 
 // TestUnsubscribeFromNonSubscribedStream tests that unsubscribing from a non-subscribed stream succeeds silently
@@ -890,7 +877,6 @@ func TestUnsubscribeFromNonSubscribedStream(t *testing.T) {
 
 	// Ledger subscription should still exist
 	assert.True(t, testRegistration(t, sm, conn).Snapshot().Has(types.SubLedger))
-
 }
 
 // TestUnsubscribeFromNonSubscribedAccount tests unsubscribing from a non-subscribed account
@@ -917,7 +903,6 @@ func TestUnsubscribeFromNonSubscribedAccount(t *testing.T) {
 
 	// Original account subscription should still exist
 	assert.Contains(t, testRegistration(t, sm, conn).Snapshot().Accounts(types.SubAccounts), "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh")
-
 }
 
 // Additional Error Cases
@@ -948,7 +933,6 @@ func TestSubscribeMissingTakerPays(t *testing.T) {
 	assert.Equal(t, types.RpcINVALID_PARAMS, err.Code)
 	assert.Equal(t, "invalidParams", err.ErrorString)
 	assert.Equal(t, "Invalid parameters.", err.Message)
-
 }
 
 // TestSubscribeMissingTakerGets tests book subscription without taker_gets
@@ -977,7 +961,6 @@ func TestSubscribeMissingTakerGets(t *testing.T) {
 	assert.Equal(t, types.RpcINVALID_PARAMS, err.Code)
 	assert.Equal(t, "invalidParams", err.ErrorString)
 	assert.Equal(t, "Invalid parameters.", err.Message)
-
 }
 
 // TestSubscribeInvalidTakerPaysJSON tests book subscription with invalid JSON in taker_pays
@@ -1006,7 +989,6 @@ func TestSubscribeInvalidTakerPaysJSON(t *testing.T) {
 	assert.Equal(t, types.RpcINVALID_PARAMS, err.Code)
 	assert.Equal(t, "invalidParams", err.ErrorString)
 	assert.Equal(t, "Invalid parameters.", err.Message)
-
 }
 
 // TestSubscribeInvalidTakerGetsJSON tests book subscription with invalid JSON in taker_gets
@@ -1036,7 +1018,6 @@ func TestSubscribeInvalidTakerGetsJSON(t *testing.T) {
 	assert.Equal(t, types.RpcINVALID_PARAMS, err.Code)
 	assert.Equal(t, "invalidParams", err.ErrorString)
 	assert.Equal(t, "Invalid parameters.", err.Message)
-
 }
 
 // Subscription Manager State Tests
@@ -1333,7 +1314,6 @@ func TestBroadcastToStream(t *testing.T) {
 	default:
 		// Expected - no message
 	}
-
 }
 
 // TestBroadcastToAccounts tests broadcasting to account subscribers
@@ -1372,7 +1352,6 @@ func TestBroadcastToAccounts(t *testing.T) {
 	default:
 		// Expected
 	}
-
 }
 
 // Duplicate Subscription Tests
@@ -1395,7 +1374,6 @@ func TestSubscribeDuplicateStreamIdempotent(t *testing.T) {
 	err = sm.HandleSubscribe(testRegistration(t, sm, conn), request, true)
 	require.Nil(t, err)
 	assert.Equal(t, 1, testRegistration(t, sm, conn).Snapshot().ItemCount()) // Should still be 1
-
 }
 
 // TestSubscribeDuplicateAccountsMerged tests that duplicate accounts are merged
@@ -1430,7 +1408,6 @@ func TestSubscribeDuplicateAccountsMerged(t *testing.T) {
 	require.Nil(t, err)
 
 	assert.Len(t, testRegistration(t, sm, conn).Snapshot().Accounts(types.SubAccounts), 2)
-
 }
 
 // Mixed Subscription Tests
@@ -1456,7 +1433,6 @@ func TestSubscribeMixedStreamsAndAccounts(t *testing.T) {
 	accounts := testRegistration(t, sm, conn).Snapshot().Accounts(types.SubAccounts)
 	assert.Len(t, accounts, 1)
 	assert.Contains(t, accounts, "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh")
-
 }
 
 // TestSubscribeMixedStreamsAccountsAndBooks tests subscribing to streams, accounts, and books
@@ -1487,7 +1463,6 @@ func TestSubscribeMixedStreamsAccountsAndBooks(t *testing.T) {
 	assert.True(t, testRegistration(t, sm, conn).Snapshot().Has(types.SubLedger))
 	assert.True(t, testRegistration(t, sm, conn).Snapshot().Has(types.SubAccounts))
 	assert.True(t, testRegistration(t, sm, conn).Snapshot().Has(types.SubBook))
-
 }
 
 // URL (RPCSub) subscription tests live in rpcsub_test.go: URL requests are
