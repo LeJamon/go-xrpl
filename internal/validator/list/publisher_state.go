@@ -357,7 +357,6 @@ func (a *Aggregator) applyAcceptedLocked(s *publisherState, blob *blobJSON, sign
 	keys := a.extractValidatorKeys(blob, "validator list: skipping invalid validator entry")
 	s.Validators = keys
 	a.applyEmbeddedManifestsLocked(s, blob.Validators)
-
 }
 
 // applyEmbeddedManifestsLocked applies validator manifests from an effective
