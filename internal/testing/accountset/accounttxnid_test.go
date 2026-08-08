@@ -1,69 +1,75 @@
 package accountset
 
 import (
+	"strconv"
 	"testing"
 
 	"github.com/stretchr/testify/require"
 
 	"github.com/LeJamon/go-xrpl/internal/ledger/state"
 	jtx "github.com/LeJamon/go-xrpl/internal/testing"
+	"github.com/LeJamon/go-xrpl/internal/testing/payment"
+	"github.com/LeJamon/go-xrpl/internal/tx"
 	accounttx "github.com/LeJamon/go-xrpl/internal/tx/account"
 	"github.com/LeJamon/go-xrpl/keylet"
 )
 
-// Regression for the seq-N account_hash fork found in the mixed soak:
-// enabling asfAccountTxnID must make sfAccountTxnID PRESENT with value zero
-// (rippled SetAccount.cpp makeFieldPresent(sfAccountTxnID)), and the account's
-// next transaction must update that present-zero field to the tx id (rippled
-// Transactor::apply isFieldPresent(sfAccountTxnID), Transactor.cpp:568-569).
-//
-// go-xrpl previously tracked presence as "non-zero", setting AccountTxnID to
-// the enabling tx's hash and updating only when non-zero. That both diverged
-// from rippled's present-zero value at enable time AND silently dropped the
-// update for a present-zero field adopted from a rippled-built ledger — forking
-// account_hash while transaction_hash matched.
-func TestAccountSet_AccountTxnID_PresentZeroAndUpdate(t *testing.T) {
+func TestAccountSet_AccountTxnIDTransitions(t *testing.T) {
 	env := jtx.NewTestEnv(t)
 	alice := jtx.NewAccount("alice")
-	env.FundNoRipple(alice)
+	ghost := jtx.NewAccount("ghost")
+	env.FundAmount(alice, uint64(jtx.XRP(10000)))
 	env.Close()
 
-	readAR := func() *state.AccountRoot {
+	readAccount := func() *state.AccountRoot {
 		t.Helper()
 		data, err := env.LedgerEntry(keylet.Account(alice.ID))
 		require.NoError(t, err)
-		ar, err := state.ParseAccountRoot(data)
+		account, err := state.ParseAccountRoot(data)
 		require.NoError(t, err)
-		return ar
+		return account
 	}
+
+	origFlags := readAccount().Flags
 	var zero [32]byte
 
-	// Enable asfAccountTxnID → field present, value zero.
-	r := env.Submit(AccountSet(alice).SetFlag(accounttx.AccountSetFlagAccountTxnID).Build())
-	jtx.RequireTxSuccess(t, r)
+	result := env.Submit(AccountSet(alice).SetFlag(accounttx.AccountSetFlagAccountTxnID).Build())
+	jtx.RequireTxSuccess(t, result)
 	env.Close()
+	account := readAccount()
+	require.True(t, account.HasAccountTxnID)
+	require.Equal(t, zero, account.AccountTxnID)
+	require.Equal(t, origFlags, account.Flags)
 
-	ar := readAR()
-	require.True(t, ar.HasAccountTxnID, "enable must make sfAccountTxnID present")
-	require.Equal(t, zero, ar.AccountTxnID,
-		"enable must leave AccountTxnID zero, not the enabling tx hash (rippled makeFieldPresent)")
-
-	// Next transaction must update the present-zero field to the tx id.
-	r = env.Submit(AccountSet(alice).Build()) // noop AccountSet
-	jtx.RequireTxSuccess(t, r)
+	update := AccountSet(alice).Build()
+	result = env.Submit(update)
+	jtx.RequireTxSuccess(t, result)
+	expectedHash, err := tx.ComputeTransactionHash(update)
+	require.NoError(t, err)
 	env.Close()
+	account = readAccount()
+	require.True(t, account.HasAccountTxnID)
+	require.Equal(t, expectedHash, account.AccountTxnID)
 
-	ar = readAR()
-	require.True(t, ar.HasAccountTxnID, "AccountTxnID must remain present after the update")
-	require.NotEqual(t, zero, ar.AccountTxnID,
-		"the account's next tx must update present-zero AccountTxnID to the tx id")
-
-	// Clearing removes the field entirely.
-	r = env.Submit(AccountSet(alice).ClearFlag(accounttx.AccountSetFlagAccountTxnID).Build())
-	jtx.RequireTxSuccess(t, r)
+	balanceBefore := env.Balance(alice)
+	sequenceBefore := env.Seq(alice)
+	claimed := payment.Pay(alice, ghost, uint64(jtx.XRP(1))).Build()
+	result = env.Submit(claimed)
+	jtx.RequireTxFail(t, result, "tecNO_DST_INSUF_XRP")
+	fee, err := strconv.ParseUint(claimed.GetCommon().Fee, 10, 64)
+	require.NoError(t, err)
 	env.Close()
+	require.Equal(t, balanceBefore-fee, env.Balance(alice))
+	require.Equal(t, sequenceBefore+1, env.Seq(alice))
+	account = readAccount()
+	require.True(t, account.HasAccountTxnID)
+	require.Equal(t, expectedHash, account.AccountTxnID)
 
-	ar = readAR()
-	require.False(t, ar.HasAccountTxnID, "clear must remove sfAccountTxnID")
-	require.Equal(t, zero, ar.AccountTxnID)
+	result = env.Submit(AccountSet(alice).ClearFlag(accounttx.AccountSetFlagAccountTxnID).Build())
+	jtx.RequireTxSuccess(t, result)
+	env.Close()
+	account = readAccount()
+	require.False(t, account.HasAccountTxnID)
+	require.Equal(t, zero, account.AccountTxnID)
+	require.Equal(t, origFlags, account.Flags)
 }

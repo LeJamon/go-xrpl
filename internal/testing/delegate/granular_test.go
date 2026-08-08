@@ -52,7 +52,7 @@ func TestDelegate_AccountDomainGranularEffect(t *testing.T) {
 	require.Equal(t, "tesSUCCESS", grantPermissions(env, alice, bob, "AccountDomainSet").Code)
 	env.Close()
 
-	set := accountset.AccountSet(alice).Domain("6578616D706C652E636F6D").BuildAccountSet()
+	set := accountset.AccountSet(alice).Domain("6578616D706C652E636F6D").Build()
 	set.Delegate = bob.Address
 	jtx.RequireTxSuccess(t, env.SubmitSignedWith(set, bob))
 	env.Close()

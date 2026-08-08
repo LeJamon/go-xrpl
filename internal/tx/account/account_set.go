@@ -12,10 +12,23 @@ import (
 	"github.com/LeJamon/go-xrpl/protocol"
 )
 
-const qualityOne uint32 = 1000000000
+const (
+	qualityOne     uint32 = 1000000000
+	zeroHash128Hex        = "00000000000000000000000000000000"
+)
 
 func isZeroHash256(s string) bool {
 	return strings.Trim(s, "0") == ""
+}
+
+func parseHash128(s string) ([16]byte, bool) {
+	var value [16]byte
+	decoded, err := hex.DecodeString(s)
+	if err != nil || len(decoded) != len(value) {
+		return value, false
+	}
+	copy(value[:], decoded)
+	return value, true
 }
 
 // AccountSet modifies the properties of an account in the XRP Ledger.
@@ -227,9 +240,20 @@ func (a *AccountSet) Validate() error {
 
 	// Domain length validation
 	// Reference: rippled SetAccount.cpp:170-175
-	// Domain is stored as hex, so max hex length is 2*256 = 512
-	if a.Domain != nil && len(*a.Domain) > MaxDomainLength*2 {
-		return ter.Errorf(ter.TelBAD_DOMAIN, "domain too long")
+	if a.Domain != nil {
+		domain, err := hex.DecodeString(*a.Domain)
+		if err != nil {
+			return ter.Errorf(ter.TelBAD_DOMAIN, "invalid domain encoding")
+		}
+		if len(domain) > MaxDomainLength {
+			return ter.Errorf(ter.TelBAD_DOMAIN, "domain too long")
+		}
+	}
+
+	if a.EmailHash != "" {
+		if _, ok := parseHash128(a.EmailHash); !ok {
+			return ter.Errorf(ter.TemMALFORMED, "invalid email hash")
+		}
 	}
 
 	return nil
@@ -242,24 +266,18 @@ func (a *AccountSet) GetFlagsMask(rules *amendment.Rules) uint32 {
 	return AccountSetTxFlagMask
 }
 
-// PreflightRules runs the amendment-gated NFTokenMinter field-pairing check as
-// part of the preflight body, before any ledger-state check.
-// Reference: rippled SetAccount.cpp:174-184.
+// PreflightRules runs the NFTokenMinter field-pairing check as part of the
+// preflight body, before any ledger-state check.
 func (a *AccountSet) PreflightRules(rules *amendment.Rules) error {
-	if rules.Enabled(amendment.FeatureNonFungibleTokensV1) {
-		if r := a.validateNFTokenMinter(); r != ter.TesSUCCESS {
-			return ter.Errorf(r, "invalid NFTokenMinter field pairing")
-		}
+	if r := a.validateNFTokenMinter(); r != ter.TesSUCCESS {
+		return ter.Errorf(r, "invalid NFTokenMinter field pairing")
 	}
 	return nil
 }
 
 // validateNFTokenMinter enforces the NFTokenMinter field-presence rules for the
 // asfAuthorizedNFTokenMinter flag: the minter must be present when setting the
-// flag and absent when clearing it. rippled gates these checks on
-// featureNonFungibleTokensV1, so callers invoke it only once that amendment is
-// enabled.
-// Reference: rippled SetAccount.cpp:177-187
+// flag and absent when clearing it.
 func (a *AccountSet) validateNFTokenMinter() ter.Result {
 	if a.SetFlag != nil && *a.SetFlag == AccountSetFlagAuthorizedNFTokenMinter && a.NFTokenMinter == "" {
 		return ter.TemMALFORMED
@@ -271,7 +289,14 @@ func (a *AccountSet) validateNFTokenMinter() ter.Result {
 }
 
 func (a *AccountSet) Flatten() (map[string]any, error) {
-	return tx.ReflectFlatten(a)
+	fields, err := tx.ReflectFlatten(a)
+	if err != nil {
+		return nil, err
+	}
+	if a.EmailHash == "" && a.HasField("EmailHash") {
+		fields["EmailHash"] = zeroHash128Hex
+	}
+	return fields, nil
 }
 
 // EnableRequireDest enables the require destination tag flag
@@ -531,18 +556,26 @@ func (a *AccountSet) Apply(ctx *tx.ApplyContext) ter.Result {
 		if *a.Domain == "" {
 			account.Domain = ""
 		} else {
-			// Domain is stored as hex in the transaction; decode to plain text
 			decoded, err := hex.DecodeString(*a.Domain)
-			if err == nil {
-				account.Domain = string(decoded)
+			if err != nil || len(decoded) > MaxDomainLength {
+				return ter.TelBAD_DOMAIN
 			}
+			account.Domain = string(decoded)
 		}
 	}
 
 	// EmailHash
 	// Reference: rippled SetAccount.cpp lines 508-522 — zero hash → makeFieldAbsent
-	if a.EmailHash != "" {
-		if a.EmailHash == "00000000000000000000000000000000" {
+	if a.EmailHash != "" || a.HasField("EmailHash") {
+		var emailHash [16]byte
+		if a.EmailHash != "" {
+			var ok bool
+			emailHash, ok = parseHash128(a.EmailHash)
+			if !ok {
+				return ter.TemMALFORMED
+			}
+		}
+		if emailHash == ([16]byte{}) {
 			account.EmailHash = ""
 		} else {
 			account.EmailHash = a.EmailHash
