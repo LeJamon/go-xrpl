@@ -16,6 +16,7 @@ import (
 	"io"
 	"math/big"
 	"net"
+	"os"
 	"sync"
 	"testing"
 	"time"
@@ -591,6 +592,42 @@ type scriptedRawConn struct {
 	closed    bool
 }
 
+type readStartedConn struct {
+	net.Conn
+	started chan struct{}
+	once    sync.Once
+}
+
+type writeStartedConn struct {
+	net.Conn
+	started chan struct{}
+	once    sync.Once
+}
+
+func (c *writeStartedConn) Write(p []byte) (int, error) {
+	c.once.Do(func() { close(c.started) })
+	return c.Conn.Write(p)
+}
+
+func (c *readStartedConn) Read(p []byte) (int, error) {
+	c.once.Do(func() { close(c.started) })
+	return c.Conn.Read(p)
+}
+
+type writeWantReadEngine struct {
+	scriptedEngine
+	started chan struct{}
+	once    sync.Once
+}
+
+func (e *writeWantReadEngine) Write(p []byte) (int, error) {
+	n, err := e.scriptedEngine.Write(p)
+	if errors.Is(err, shim.ErrWantRead) {
+		e.once.Do(func() { close(e.started) })
+	}
+	return n, err
+}
+
 func (c *scriptedRawConn) Read(p []byte) (int, error) {
 	if len(c.reads) == 0 {
 		return 0, io.EOF
@@ -804,6 +841,170 @@ func TestOutputFlushIsLosslessAndAccountsPlaintext(t *testing.T) {
 	})
 	if n, err := c.Write([]byte("x")); n != 1 || !errors.Is(err, io.ErrNoProgress) {
 		t.Fatalf("zero raw-write progress = (%d, %v)", n, err)
+	}
+}
+
+func TestCrossDirectionIOHonorsOperationDeadline(t *testing.T) {
+	t.Run("write waiting for read", func(t *testing.T) {
+		raw, peer := net.Pipe()
+		defer peer.Close()
+		c := readyScriptedConn(raw, &scriptedEngine{
+			writes: []engineResult{{err: shim.ErrWantRead}},
+		})
+		defer c.Close()
+		requireDeadline(t, c.SetWriteDeadline(time.Now().Add(25*time.Millisecond)))
+
+		n, err := c.Write([]byte("x"))
+		if n != 0 || !errors.Is(err, os.ErrDeadlineExceeded) {
+			t.Fatalf("Write = (%d, %v), want deadline exceeded", n, err)
+		}
+	})
+
+	t.Run("read waiting for write", func(t *testing.T) {
+		raw, peer := net.Pipe()
+		defer peer.Close()
+		c := readyScriptedConn(raw, &scriptedEngine{
+			reads: []engineResult{{err: shim.ErrWantWrite, out: []byte("control")}},
+		})
+		defer c.Close()
+		requireDeadline(t, c.SetReadDeadline(time.Now().Add(25*time.Millisecond)))
+
+		n, err := c.Read(make([]byte, 1))
+		if n != 0 || !errors.Is(err, os.ErrDeadlineExceeded) {
+			t.Fatalf("Read = (%d, %v), want deadline exceeded", n, err)
+		}
+	})
+
+	t.Run("read waiting for input owner", func(t *testing.T) {
+		rawConn, peer := net.Pipe()
+		defer peer.Close()
+		raw := &readStartedConn{Conn: rawConn, started: make(chan struct{})}
+		c := readyScriptedConn(raw, &scriptedEngine{
+			reads:  []engineResult{{err: shim.ErrWantRead}},
+			writes: []engineResult{{err: shim.ErrWantRead}},
+		})
+		defer c.Close()
+		requireDeadline(t, c.SetWriteDeadline(time.Now().Add(time.Second)))
+
+		writeDone := make(chan error, 1)
+		go func() {
+			_, err := c.Write([]byte("x"))
+			writeDone <- err
+		}()
+		select {
+		case <-raw.started:
+		case <-time.After(time.Second):
+			t.Fatal("Write did not start cross-direction input")
+		}
+		requireDeadline(t, c.SetReadDeadline(time.Now().Add(25*time.Millisecond)))
+
+		n, err := c.Read(make([]byte, 1))
+		if n != 0 || !errors.Is(err, os.ErrDeadlineExceeded) {
+			t.Fatalf("Read = (%d, %v), want deadline exceeded", n, err)
+		}
+		_ = c.Close()
+		select {
+		case <-writeDone:
+		case <-time.After(time.Second):
+			t.Fatal("Write did not unblock after Close")
+		}
+	})
+
+	t.Run("write waiting for output owner", func(t *testing.T) {
+		rawConn, peer := net.Pipe()
+		defer peer.Close()
+		raw := &writeStartedConn{Conn: rawConn, started: make(chan struct{})}
+		c := readyScriptedConn(raw, &scriptedEngine{
+			reads:  []engineResult{{err: shim.ErrWantWrite, out: []byte("control")}},
+			writes: []engineResult{{n: 1}},
+		})
+		defer c.Close()
+		requireDeadline(t, c.SetReadDeadline(time.Now().Add(time.Second)))
+
+		readDone := make(chan error, 1)
+		go func() {
+			_, err := c.Read(make([]byte, 1))
+			readDone <- err
+		}()
+		select {
+		case <-raw.started:
+		case <-time.After(time.Second):
+			t.Fatal("Read did not start cross-direction output")
+		}
+		requireDeadline(t, c.SetWriteDeadline(time.Now().Add(25*time.Millisecond)))
+
+		n, err := c.Write([]byte("x"))
+		if n != 0 || !errors.Is(err, os.ErrDeadlineExceeded) {
+			t.Fatalf("Write = (%d, %v), want deadline exceeded", n, err)
+		}
+		_ = c.Close()
+		select {
+		case <-readDone:
+		case <-time.After(time.Second):
+			t.Fatal("Read did not unblock after Close")
+		}
+	})
+}
+
+func TestWriteWantReadProgressesWithBlockedApplicationRead(t *testing.T) {
+	rawConn, peer := net.Pipe()
+	defer peer.Close()
+	raw := &readStartedConn{Conn: rawConn, started: make(chan struct{})}
+	engine := &writeWantReadEngine{
+		scriptedEngine: scriptedEngine{
+			reads:  []engineResult{{err: shim.ErrWantRead}, {err: shim.ErrWantRead}},
+			writes: []engineResult{{err: shim.ErrWantRead}, {n: 1}},
+		},
+		started: make(chan struct{}),
+	}
+	c := readyScriptedConn(raw, engine)
+	defer c.Close()
+	requireDeadline(t, c.SetWriteDeadline(time.Now().Add(time.Second)))
+
+	readDone := make(chan error, 1)
+	go func() {
+		_, err := c.Read(make([]byte, 1))
+		readDone <- err
+	}()
+	select {
+	case <-raw.started:
+	case <-time.After(time.Second):
+		t.Fatal("Read did not start raw input")
+	}
+
+	writeDone := make(chan error, 1)
+	go func() {
+		_, err := c.Write([]byte("x"))
+		writeDone <- err
+	}()
+	select {
+	case <-engine.started:
+	case <-time.After(time.Second):
+		t.Fatal("Write did not request TLS input")
+	}
+	if _, err := peer.Write([]byte("control")); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case err := <-writeDone:
+		if err != nil {
+			t.Fatalf("Write error = %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("Write remained blocked after control-only input")
+	}
+	_ = c.Close()
+	select {
+	case <-readDone:
+	case <-time.After(time.Second):
+		t.Fatal("Read did not unblock after Close")
+	}
+}
+
+func requireDeadline(t *testing.T, err error) {
+	t.Helper()
+	if err != nil {
+		t.Fatalf("set deadline: %v", err)
 	}
 }
 
@@ -1052,6 +1253,17 @@ type shutdownBarrierEngine struct {
 	once    sync.Once
 }
 
+type shutdownSignalEngine struct {
+	scriptedEngine
+	started chan struct{}
+	once    sync.Once
+}
+
+func (e *shutdownSignalEngine) Shutdown() error {
+	e.once.Do(func() { close(e.started) })
+	return nil
+}
+
 func (e *shutdownBarrierEngine) Shutdown() error {
 	e.once.Do(func() { close(e.started) })
 	<-e.release
@@ -1083,6 +1295,30 @@ func TestShutdownContextConcurrentClose(t *testing.T) {
 	}
 	if !engine.freed || c.ssl != nil {
 		t.Fatalf("TLS engine not freed: freed=%v, ssl=%v", engine.freed, c.ssl)
+	}
+}
+
+func TestShutdownContextWaitsForActiveWrite(t *testing.T) {
+	engine := &shutdownSignalEngine{started: make(chan struct{})}
+	c := readyScriptedConn(&scriptedRawConn{}, engine)
+	c.writeMu.Lock()
+
+	done := make(chan error, 1)
+	go func() { done <- c.ShutdownContext(context.Background()) }()
+	select {
+	case <-engine.started:
+		t.Fatal("shutdown entered TLS while a Write was active")
+	case <-time.After(20 * time.Millisecond):
+	}
+	c.writeMu.Unlock()
+
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("shutdown did not proceed after Write completed")
 	}
 }
 

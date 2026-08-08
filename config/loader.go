@@ -267,4 +267,7 @@ func applyServerDefaults(portViper *viper.Viper, serverDefaults ServerConfig) {
 	if len(serverDefaults.AllowedOrigins) > 0 {
 		portViper.SetDefault("allowed_origins", serverDefaults.AllowedOrigins)
 	}
+	if serverDefaults.SSLCiphers != "" {
+		portViper.SetDefault("ssl_ciphers", serverDefaults.SSLCiphers)
+	}
 }
