@@ -57,7 +57,7 @@ type Logger interface {
 	Warn(msg string, args ...any)
 	// Error logs at Error level. For operation failures.
 	Error(msg string, args ...any)
-	// Fatal logs at Error level then calls os.Exit(1).
+	// Fatal logs at Fatal level then calls os.Exit(1).
 	Fatal(msg string, args ...any)
 
 	// With returns a new Logger with the given key-value pairs baked into every record.

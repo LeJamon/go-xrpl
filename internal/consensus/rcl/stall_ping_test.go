@@ -50,3 +50,57 @@ func TestEngine_StallPingNilIsSafe(t *testing.T) {
 
 	time.Sleep(50 * time.Millisecond) // a few ticks; must not panic
 }
+
+func TestEngine_StallPingCanBeClearedWhileRunning(t *testing.T) {
+	adaptor := newMockAdaptor()
+	cfg := DefaultConfig()
+	cfg.Timing.LedgerMinClose = 10 * time.Millisecond
+	engine := NewEngine(adaptor, cfg)
+
+	started := make(chan struct{})
+	release := make(chan struct{})
+	returned := make(chan struct{})
+	var oldPings atomic.Int64
+	engine.SetStallPing(func() {
+		if oldPings.Add(1) == 1 {
+			close(started)
+			<-release
+			close(returned)
+		}
+	})
+	if err := engine.Start(t.Context()); err != nil {
+		t.Fatalf("start engine: %v", err)
+	}
+	defer func() { _ = engine.Stop() }()
+
+	select {
+	case <-started:
+	case <-time.After(2 * time.Second):
+		t.Fatal("stall ping did not start")
+	}
+	engine.SetStallPing(nil)
+	close(release)
+	select {
+	case <-returned:
+	case <-time.After(time.Second):
+		t.Fatal("in-flight stall ping did not return")
+	}
+
+	replacementPings := make(chan struct{}, 2)
+	engine.SetStallPing(func() {
+		select {
+		case replacementPings <- struct{}{}:
+		default:
+		}
+	})
+	for range 2 {
+		select {
+		case <-replacementPings:
+		case <-time.After(2 * time.Second):
+			t.Fatal("replacement stall ping did not run")
+		}
+	}
+	if oldPings.Load() != 1 {
+		t.Fatalf("cleared stall ping ran %d times", oldPings.Load())
+	}
+}
