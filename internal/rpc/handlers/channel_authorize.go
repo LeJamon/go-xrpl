@@ -27,6 +27,10 @@ type channelAuthorizeRequest struct {
 }
 
 func (m *ChannelAuthorizeMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (any, *types.RpcError) {
+	if rpcErr := rejectDisabledSigning(ctx); rpcErr != nil {
+		return nil, rpcErr
+	}
+
 	var request channelAuthorizeRequest
 
 	if params != nil {
@@ -121,7 +125,5 @@ func signMessage(message []byte, privateKeyHex string, keyType string) (string, 
 }
 
 func (m *ChannelAuthorizeMethod) RequiredRole() types.Role {
-	// Note: rippled requires admin role OR signing enabled
-	// For now, allow user role since we're implementing the signing functionality
 	return types.RoleUser
 }
