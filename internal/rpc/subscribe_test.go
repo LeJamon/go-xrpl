@@ -127,7 +127,6 @@ func TestSubscribeMultipleStreams(t *testing.T) {
 	assert.True(t, testRegistration(t, sm, conn).Snapshot().Has(types.SubLedger))
 	assert.True(t, testRegistration(t, sm, conn).Snapshot().Has(types.SubTransactions))
 	assert.True(t, testRegistration(t, sm, conn).Snapshot().Has(types.SubValidations))
-
 }
 
 // TestSubscribeInvalidStreamName tests subscribing to an invalid stream name
@@ -184,7 +183,6 @@ func TestSubscribeInvalidStreamName(t *testing.T) {
 				assert.Equal(t, "malformedStream", err.ErrorString)
 				assert.Equal(t, "Stream malformed.", err.Message)
 			}
-
 		})
 	}
 }

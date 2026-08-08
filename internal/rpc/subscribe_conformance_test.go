@@ -459,7 +459,6 @@ func TestSubscribeConformanceConcurrentAccess(t *testing.T) {
 		}
 	}
 	wg.Wait()
-
 }
 
 // Unsubscribe From Invalid Stream Tests

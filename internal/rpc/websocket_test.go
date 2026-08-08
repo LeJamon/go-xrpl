@@ -744,7 +744,7 @@ func TestWebSocketRedactsIDAndPreservesItInHandlerParams(t *testing.T) {
 		},
 	})
 
-	body := wsRawRoundTrip(t, ws, `{"command":"capture","method":"capture","api_version":1,"id":{"SeCrEt":"private-id"},"payload":"kept"}`)
+	body := wsRawRoundTrip(t, ws, `{"command":"capture","method":"capture","api_version":1,"id":{"SeCrEt":"private-id"},"payload":"kept","real":0.0}`)
 	const want = `{"api_version":1,"id":{"SeCrEt":"<masked>"},"result":{"ok":true},"status":"success","type":"response"}`
 	if got := string(body); got != want {
 		t.Fatalf("response = %s, want %s", got, want)
@@ -753,8 +753,16 @@ func TestWebSocketRedactsIDAndPreservesItInHandlerParams(t *testing.T) {
 		t.Fatalf("response leaked id credential: %s", body)
 	}
 
+	receivedParams := <-received
+	var rawParams map[string]json.RawMessage
+	if err := json.Unmarshal(receivedParams, &rawParams); err != nil {
+		t.Fatalf("decode handler params: %v", err)
+	}
+	if got := string(rawParams["real"]); got != "0.0" {
+		t.Fatalf("handler real = %s, want preserved JSON real", got)
+	}
 	var params map[string]any
-	if err := json.Unmarshal(<-received, &params); err != nil {
+	if err := json.Unmarshal(receivedParams, &params); err != nil {
 		t.Fatalf("decode handler params: %v", err)
 	}
 	id, ok := params["id"].(map[string]any)
