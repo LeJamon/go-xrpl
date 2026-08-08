@@ -1,22 +1,10 @@
 package resource
 
-// Fee schedule. Values mirror rippled's
-// rippled/src/libxrpl/resource/Fees.cpp so existing operator intuition
-// transfers directly. Charge labels are reused verbatim.
-var (
-	FeeMalformedRequest   = NewCharge(200, "malformed request")
-	FeeRequestNoReply     = NewCharge(10, "unsatisfiable request")
-	FeeInvalidSignature   = NewCharge(2000, "invalid signature")
-	FeeUselessData        = NewCharge(150, "useless data")
-	FeeInvalidData        = NewCharge(400, "invalid data")
-	FeeMalformedRPC       = NewCharge(100, "malformed RPC")
-	FeeReferenceRPC       = NewCharge(20, "reference RPC")
-	FeeExceptionRPC       = NewCharge(100, "exceptioned RPC")
-	FeeMediumBurdenRPC    = NewCharge(400, "medium RPC")
-	FeeHeavyBurdenRPC     = NewCharge(3000, "heavy RPC")
-	FeeTrivialPeer        = NewCharge(1, "trivial peer request")
-	FeeModerateBurdenPeer = NewCharge(250, "moderate peer request")
-	FeeHeavyBurdenPeer    = NewCharge(2000, "heavy peer request")
-	FeeWarning            = NewCharge(4000, "received warning")
-	FeeDrop               = NewCharge(6000, "dropped")
-)
+func FeeMalformedRequest() Charge   { return NewCharge(200, "malformed request") }
+func FeeRequestNoReply() Charge     { return NewCharge(10, "unsatisfiable request") }
+func FeeInvalidSignature() Charge   { return NewCharge(2000, "invalid signature") }
+func FeeUselessData() Charge        { return NewCharge(150, "useless data") }
+func FeeInvalidData() Charge        { return NewCharge(400, "invalid data") }
+func FeeModerateBurdenPeer() Charge { return NewCharge(250, "moderate peer request") }
+func FeeHeavyBurdenPeer() Charge    { return NewCharge(2000, "heavy peer request") }
+func FeeDrop() Charge               { return NewCharge(6000, "dropped") }

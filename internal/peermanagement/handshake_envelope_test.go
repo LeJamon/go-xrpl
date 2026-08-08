@@ -485,7 +485,7 @@ func TestOutboundResourceAdmissionPrecedesDial(t *testing.T) {
 
 	const addr = "127.0.0.1:1"
 	consumer := o.resourceManager.NewOutboundEndpoint(addr)
-	for consumer.Disposition() != resource.Drop {
+	for {
 		if consumer.Charge(resource.NewCharge(resource.DropThreshold+1, "test"), "") == resource.Drop {
 			break
 		}

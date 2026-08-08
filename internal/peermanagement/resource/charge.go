@@ -1,6 +1,4 @@
-// Package resource implements per-endpoint load tracking and
-// charge-based disconnect, mirroring rippled's Resource::Manager
-// (rippled/include/xrpl/resource and src/libxrpl/resource).
+// Package resource implements bounded per-endpoint peer load tracking.
 //
 // A Manager owns a table of Consumers keyed by endpoint. Callers
 // (typically peers) hold a Consumer and apply Charges to it for known
@@ -16,10 +14,7 @@ package resource
 
 import "fmt"
 
-// Charge is a load cost with a human-readable label. Charges are value
-// types: callers compose them in package-level vars (see Fees) and pass
-// them by value into Consumer.Charge. Mirrors rippled's
-// ripple::Resource::Charge.
+// Charge is a load cost with a human-readable label.
 type Charge struct {
 	cost  int
 	label string
@@ -34,9 +29,6 @@ func NewCharge(cost int, label string) Charge {
 
 func (c Charge) Cost() int { return c.cost }
 
-func (c Charge) Label() string { return c.label }
-
-// String matches rippled's `label ($cost)` format.
 func (c Charge) String() string {
 	return fmt.Sprintf("%s ($%d)", c.label, c.cost)
 }

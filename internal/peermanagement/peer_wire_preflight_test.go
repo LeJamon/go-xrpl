@@ -43,7 +43,7 @@ func TestPeerWirePreflightChargesAndDropsBeforeDispatch(t *testing.T) {
 			msgType:  message.TypeEndpoints,
 			payload:  peerRepeatedMessageField(3, 1_024),
 			reason:   "endpoints-too-large",
-			charge:   resource.FeeUselessData,
+			charge:   resource.FeeUselessData(),
 			compress: true,
 		},
 		{
@@ -51,21 +51,21 @@ func TestPeerWirePreflightChargesAndDropsBeforeDispatch(t *testing.T) {
 			msgType: message.TypeManifests,
 			payload: peerRepeatedMessageField(1, 101),
 			reason:  "manifests-oversize",
-			charge:  resource.FeeModerateBurdenPeer,
+			charge:  resource.FeeModerateBurdenPeer(),
 		},
 		{
 			name:    "transactions",
 			msgType: message.TypeTransactions,
 			payload: peerRepeatedMessageField(1, 10_001),
 			reason:  "wire-invalid",
-			charge:  resource.FeeInvalidData,
+			charge:  resource.FeeInvalidData(),
 		},
 		{
 			name:    "get object transactions",
 			msgType: message.TypeGetObjects,
 			payload: peerGetObjectTransactionsPayload(10_001),
 			reason:  "get-objects-transactions-oversize",
-			charge:  resource.FeeMalformedRequest,
+			charge:  resource.FeeMalformedRequest(),
 		},
 		{
 			name:    "validator list collection",
@@ -116,5 +116,5 @@ func TestPeerWirePreflightChargesAndDropsBeforeDispatch(t *testing.T) {
 func TestPeerWirePreflightMalformedUsesInvalidDataClass(t *testing.T) {
 	reason := wirePreflightChargeReason(errors.Join(message.ErrMalformedWire, errors.New("bad tag")))
 	require.Equal(t, "wire-invalid", reason)
-	require.Equal(t, resource.FeeInvalidData, chargeForReason(reason))
+	require.Equal(t, resource.FeeInvalidData(), chargeForReason(reason))
 }

@@ -1,7 +1,6 @@
 package resource
 
-// Disposition is the result of charging a Consumer. Mirrors rippled's
-// ripple::Resource::Disposition.
+// Disposition is the result of charging a Consumer.
 type Disposition int
 
 const (
@@ -18,18 +17,3 @@ const (
 	// caller must tear down the endpoint.
 	Drop
 )
-
-// String returns the lowercase disposition name (matches rippled's
-// enum stringification used in logs).
-func (d Disposition) String() string {
-	switch d {
-	case Ok:
-		return "ok"
-	case Warn:
-		return "warn"
-	case Drop:
-		return "drop"
-	default:
-		return "unknown"
-	}
-}

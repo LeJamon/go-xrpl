@@ -159,7 +159,7 @@ func (o *Overlay) onMessageReceived(evt Event) {
 			slog.Debug("ReplayDeltaRequest from peer without ledgerreplay feature; dropping",
 				"t", "Overlay", "peer", evt.PeerID)
 			if peer, ok := o.getPeer(evt.PeerID); ok {
-				peer.Charge(resource.FeeMalformedRequest, "replay delta request disabled")
+				peer.Charge(resource.FeeMalformedRequest(), "replay delta request disabled")
 			}
 			return
 		}
@@ -175,7 +175,7 @@ func (o *Overlay) onMessageReceived(evt Event) {
 			slog.Debug("ProofPathRequest from peer without ledgerreplay feature; dropping",
 				"t", "Overlay", "peer", evt.PeerID)
 			if peer, ok := o.getPeer(evt.PeerID); ok {
-				peer.Charge(resource.FeeMalformedRequest, "proof path request disabled")
+				peer.Charge(resource.FeeMalformedRequest(), "proof path request disabled")
 			}
 			return
 		}
@@ -193,7 +193,7 @@ func (o *Overlay) onMessageReceived(evt Event) {
 			slog.Debug("TMReplayDeltaResponse from peer without ledgerreplay feature; dropping",
 				"t", "Overlay", "peer", evt.PeerID)
 			if peer, ok := o.getPeer(evt.PeerID); ok {
-				peer.Charge(resource.FeeMalformedRequest, "replay delta response disabled")
+				peer.Charge(resource.FeeMalformedRequest(), "replay delta response disabled")
 			}
 			return
 		}
@@ -203,7 +203,7 @@ func (o *Overlay) onMessageReceived(evt Event) {
 			slog.Debug("TMProofPathResponse from peer without ledgerreplay feature; dropping",
 				"t", "Overlay", "peer", evt.PeerID)
 			if peer, ok := o.getPeer(evt.PeerID); ok {
-				peer.Charge(resource.FeeMalformedRequest, "proof path response disabled")
+				peer.Charge(resource.FeeMalformedRequest(), "proof path response disabled")
 			}
 			return
 		}
@@ -362,8 +362,11 @@ func (o *Overlay) PeerDisconnectsResources() uint64 {
 	return o.peerDisconnectsCharges.Load()
 }
 
-func (o *Overlay) ResourceManager() *resource.Manager {
-	return o.resourceManager
+func (o *Overlay) ResourceStats() resource.Stats {
+	if o.resourceManager == nil {
+		return resource.Stats{}
+	}
+	return o.resourceManager.Stats()
 }
 
 // DroppedEvents returns the cumulative count of events dropped
@@ -426,7 +429,7 @@ func (o *Overlay) dispatchReplayDeltaRequest(evt Event) {
 	if !ok {
 		return
 	}
-	o.submitRetainedServe(evt, resource.FeeModerateBurdenPeer,
+	o.submitRetainedServe(evt, resource.FeeModerateBurdenPeer(),
 		func(ctx context.Context) {
 			if err := o.ledgerSync.HandleMessage(ctx, evt.PeerID, req); err != nil &&
 				!errors.Is(err, context.Canceled) && !errors.Is(err, context.DeadlineExceeded) {
@@ -453,7 +456,7 @@ func (o *Overlay) dispatchProofPathRequest(evt Event) {
 	if !ok {
 		return
 	}
-	o.submitRetainedServe(evt, resource.FeeModerateBurdenPeer,
+	o.submitRetainedServe(evt, resource.FeeModerateBurdenPeer(),
 		func(ctx context.Context) {
 			if err := o.ledgerSync.HandleMessage(ctx, evt.PeerID, req); err != nil &&
 				!errors.Is(err, context.Canceled) && !errors.Is(err, context.DeadlineExceeded) {

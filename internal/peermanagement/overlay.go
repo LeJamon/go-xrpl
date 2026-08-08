@@ -768,7 +768,7 @@ func New(opts ...Option) (*Overlay, error) {
 		clock:                    cfg.Clock,
 		inboundSem:               make(chan struct{}, inboundCap),
 		outboundSem:              make(chan struct{}, outboundCap),
-		resourceManager:          resource.NewManager(nil, nil),
+		resourceManager:          resource.NewManager(nil, nil, resource.WithLimits(cfg.ResourceLimits)),
 		outboundBudget:           newOutboundBudget(cfg.OutboundRetainedBytes, cfg.MaxPeers),
 	}
 	if identity != nil {
@@ -1193,7 +1193,7 @@ func (o *Overlay) submitServeForPeerOwned(
 	if lifecycleState == overlayLifecycleStopping || lifecycleState == overlayLifecycleStopped {
 		o.droppedServeJobs.Add(1)
 		if exists {
-			peer.Charge(resource.FeeRequestNoReply, "serve scheduler stopped")
+			peer.Charge(resource.FeeRequestNoReply(), "serve scheduler stopped")
 		}
 		return false
 	}
@@ -1206,7 +1206,7 @@ func (o *Overlay) submitServeForPeerOwned(
 	}
 	o.droppedServeJobs.Add(1)
 	if exists {
-		peer.Charge(resource.FeeRequestNoReply, "serve scheduler saturated")
+		peer.Charge(resource.FeeRequestNoReply(), "serve scheduler saturated")
 	}
 	slog.Debug("serve job dropped: scheduler saturated", "t", "Overlay", "peer", peerID)
 	return false

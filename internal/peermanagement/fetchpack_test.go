@@ -125,7 +125,7 @@ func TestServeFetchPack_EmptyPackNoReply(t *testing.T) {
 	if _, ok := takeOutboundFrame(peer); ok {
 		t.Fatal("an empty pack must not produce a reply")
 	}
-	assert.Equal(t, []resource.Charge{resource.FeeHeavyBurdenPeer, resource.FeeRequestNoReply}, charges,
+	assert.Equal(t, []resource.Charge{resource.FeeHeavyBurdenPeer(), resource.FeeRequestNoReply()}, charges,
 		"an unavailable valid request must receive heavy and no-reply charges")
 }
 
@@ -144,7 +144,7 @@ func TestServeFetchPack_TooEarlyAddsMalformedCharge(t *testing.T) {
 	})
 
 	require.Equal(t, 1, prov.calls)
-	assert.Equal(t, []resource.Charge{resource.FeeHeavyBurdenPeer, resource.FeeMalformedRequest}, charges)
+	assert.Equal(t, []resource.Charge{resource.FeeHeavyBurdenPeer(), resource.FeeMalformedRequest()}, charges)
 	if _, ok := takeOutboundFrame(peer); ok {
 		t.Fatal("a too-early fetch pack must not produce a reply")
 	}

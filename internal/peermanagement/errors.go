@@ -38,6 +38,7 @@ var (
 	ErrPeerNotFound    = errors.New("peer not found")
 	ErrInvalidEndpoint = errors.New("invalid endpoint")
 	ErrEndpointBanned  = errors.New("endpoint is banned")
+	ErrResourceLimit   = errors.New("resource reputation capacity reached")
 
 	// Message errors
 	ErrInvalidMessage  = errors.New("invalid message")

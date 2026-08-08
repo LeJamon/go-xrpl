@@ -1774,8 +1774,7 @@ func (p *Peer) usageHandle() *resource.Consumer {
 	return p.usage
 }
 
-// Charge applies fee to this peer's Consumer and tears the peer down
-// on Drop. Mirrors rippled PeerImp::charge at PeerImp.cpp:351-361.
+// Charge applies fee to this peer's Consumer and tears the peer down on Drop.
 func (p *Peer) Charge(fee resource.Charge, context string) resource.Disposition {
 	c := p.usageHandle()
 	if c == nil {
@@ -1788,7 +1787,8 @@ func (p *Peer) Charge(fee resource.Charge, context string) resource.Disposition 
 		if p.chargeDropFired.CompareAndSwap(false, true) {
 			slog.Warn("peer disconnect by resource charge",
 				"t", "Peer", "peer", p.id,
-				"endpoint", p.endpoint.String(), "fee", fee.String(), "context", context)
+				"endpoint", p.endpoint.String(), "public_key", p.RemotePublicKeyEncoded(),
+				"fee", fee.String(), "context", context)
 			p.usageMu.RLock()
 			hook := p.onDropDisconnect
 			p.usageMu.RUnlock()
@@ -1810,7 +1810,7 @@ func chargeForReason(reason string) resource.Charge {
 	case "proposal-malformed-sig-size",
 		"proposal-malformed-pubkey-size",
 		"validation-malformed-sig-size":
-		return resource.FeeInvalidSignature
+		return resource.FeeInvalidSignature()
 	case "replay-delta-verify",
 		"ledger-data-base",
 		"ledger-data-state",
@@ -1820,11 +1820,11 @@ func chargeForReason(reason string) resource.Charge {
 		"decompress-lz4-failed",
 		"message-too-large",
 		"wire-invalid":
-		return resource.FeeInvalidData
+		return resource.FeeInvalidData()
 	case "endpoints-too-large":
-		return resource.FeeUselessData
+		return resource.FeeUselessData()
 	case "manifests-oversize":
-		return resource.FeeModerateBurdenPeer
+		return resource.FeeModerateBurdenPeer()
 	case "proposal-malformed-prev-ledger-size",
 		"proposal-malformed-txset-size",
 		"validation-malformed-ledger-hash-zero",
@@ -1850,26 +1850,26 @@ func chargeForReason(reason string) resource.Charge {
 		"validation-parse",
 		"ledger-data-decode",
 		"squelch-ignored":
-		return resource.FeeMalformedRequest
+		return resource.FeeMalformedRequest()
 	case "no-reply":
-		return resource.FeeRequestNoReply
+		return resource.FeeRequestNoReply()
 	}
 	switch {
 	case reason == "vl-coll-no-blobs",
 		strings.Contains(reason, "-heavy-"):
-		return resource.FeeHeavyBurdenPeer
+		return resource.FeeHeavyBurdenPeer()
 	case strings.Contains(reason, "-badsig-"):
-		return resource.FeeInvalidSignature
+		return resource.FeeInvalidSignature()
 	case strings.Contains(reason, "-baddata-"),
 		strings.HasSuffix(reason, "-wrong-version"),
 		strings.HasSuffix(reason, "-decode"):
-		return resource.FeeInvalidData
+		return resource.FeeInvalidData()
 	case strings.Contains(reason, "-useless-"),
 		strings.HasSuffix(reason, "-duplicate"),
 		strings.HasSuffix(reason, "-unsupported-peer"):
-		return resource.FeeUselessData
+		return resource.FeeUselessData()
 	}
-	return resource.FeeInvalidData
+	return resource.FeeInvalidData()
 }
 
 func wirePreflightChargeReason(err error) string {
