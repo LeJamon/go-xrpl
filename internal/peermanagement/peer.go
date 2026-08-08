@@ -1831,6 +1831,8 @@ func chargeForReason(reason string) resource.Charge {
 	switch reason {
 	case "proposal-malformed-sig-size",
 		"proposal-malformed-pubkey-size",
+		"proposal-malformed-pubkey-type",
+		"validation-invalid-signature",
 		"validation-malformed-sig-size":
 		return resource.FeeInvalidSignature()
 	case "replay-delta-verify",
@@ -1843,7 +1845,9 @@ func chargeForReason(reason string) resource.Charge {
 		"message-too-large",
 		"wire-invalid":
 		return resource.FeeInvalidData()
-	case "endpoints-too-large":
+	case "endpoints-too-large",
+		"cluster-no-pubkey",
+		"cluster-not-member":
 		return resource.FeeUselessData()
 	case "manifests-oversize":
 		return resource.FeeModerateBurdenPeer()
@@ -1864,8 +1868,12 @@ func chargeForReason(reason string) resource.Charge {
 		"replay-delta-resp-unnegotiated",
 		"proof-path-resp-unnegotiated",
 		"compression-unnegotiated",
+		"get-objects-txn-unnegotiated",
 		"get-objects-transactions-oversize",
 		"get-objects-ledgerhash",
+		"have-transactions-unnegotiated",
+		"have-transactions-hashsize",
+		"transactions-batch-unnegotiated",
 		"have-set-hashsize",
 		"proposal-decode",
 		"validation-decode",
