@@ -265,8 +265,6 @@ func TestHandleClusterMessage_ImportsLoadSourceGossip(t *testing.T) {
 	assert.Equal(t, 2, rm.EntryCount(),
 		"only parseable load-source addresses must be imported")
 
-	// The imported remote balance lands on the matching inbound
-	// consumer, so the port-9999 reconnect inherits the canonical host key.
 	c := rm.NewInboundEndpoint("203.0.113.7:9999")
 	defer c.Release()
 	assert.Equal(t, int64(balance), c.Balance(),

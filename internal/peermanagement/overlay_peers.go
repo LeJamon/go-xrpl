@@ -831,9 +831,6 @@ func (o *Overlay) ShouldShedLedgerRequest(peerID PeerID, loadedLocal bool) bool 
 	return loadedLocal && !o.isClusterPeer(peer)
 }
 
-// isClusterPeer reports whether peer's node public key matches a
-// cluster registry entry. Cluster members are bound to an unlimited
-// Consumer so charges are no-ops.
 func (o *Overlay) isClusterPeer(peer *Peer) bool {
 	if o.cluster == nil {
 		return false

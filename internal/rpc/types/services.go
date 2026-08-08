@@ -336,8 +336,7 @@ type ServiceContainer struct {
 	// reputation table filtered by an optional threshold (nil applies the
 	// WarningThreshold default), backing the admin `black_list` RPC
 	// (rippled BlackList.cpp → ResourceManager::getJson). Keyed by endpoint
-	// address with {local, remote, type} values. Nil when the overlay isn't
-	// wired — the handler returns an empty object.
+	// address with {local, remote, type} values.
 	ResourceBlacklist func(threshold *int) map[string]any
 
 	// StateAccounting returns the operating-mode state-machine
