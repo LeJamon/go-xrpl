@@ -52,6 +52,7 @@ func TestTxQConfigFromTuning_OverridesReachQueueConfig(t *testing.T) {
 		MinimumTxnInLedgerStandalone:   500,
 		TargetTxnInLedger:              128,
 		MaximumTxnInLedger:             4096,
+		MaximumTxnInLedgerSet:          true,
 		NormalConsensusIncreasePercent: 30,
 		SlowConsensusDecreasePercent:   60,
 		MaximumTxnPerAccount:           50,
@@ -106,6 +107,16 @@ func TestTxQConfigFromTuning_MaximumBelowEffectiveMinimum(t *testing.T) {
 	}, false)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "minimum_txn_in_ledger_standalone")
+}
+
+func TestTxQConfigFromTuning_ExplicitZeroMaximumIsPresent(t *testing.T) {
+	_, err := TxQConfigFromTuning(config.TransactionQueueConfig{MaximumTxnInLedger: intPtr(0)}, false)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "minimum_txn_in_ledger")
+
+	got, err := TxQConfigFromTuning(config.TransactionQueueConfig{}, false)
+	require.NoError(t, err)
+	assert.False(t, got.MaximumTxnInLedgerSet)
 }
 
 // TestServiceNew_UsesTxQOverride proves the configured values actually

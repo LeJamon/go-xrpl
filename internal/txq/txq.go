@@ -4,9 +4,7 @@ import (
 	"bytes"
 	"sort"
 	"sync"
-	"sync/atomic"
 
-	"github.com/LeJamon/go-xrpl/internal/tx"
 	"github.com/LeJamon/go-xrpl/internal/tx/ter"
 )
 
@@ -14,28 +12,35 @@ import (
 // be included in a ledger. It manages fee escalation, per-account queuing,
 // and transaction selection based on fee level.
 type TxQ struct {
+	// mu serializes mutations. State readers never take it, so callbacks may
+	// query the queue reentrantly while a mutation is in progress. Mutation
+	// callbacks are intentionally not reentrant; state is protected separately
+	// by stateMu and callbacks are invoked outside stateMu. Production callers
+	// acquire their ledger writer lock before entering the queue; queue code does
+	// not acquire an outer ledger lock while holding either queue lock.
 	mu         sync.Mutex
+	stateMu    sync.RWMutex
 	config     Config
-	feeMetrics *FeeMetrics
+	feeMetrics *feeMetrics
 
 	// byFee holds all candidates sorted by fee level (descending).
 	// This is used for iterating from highest fee to lowest when accepting
 	// transactions into the open ledger.
-	byFee []*Candidate
+	byFee []*candidate
 
 	// byID is the authoritative transaction lookup used by reduce-relay
 	// backfill. It is maintained alongside byFee so a request for many hashes
 	// does not rescan the fee-ordered queue for every object.
-	byID map[[32]byte]*Candidate
+	byID map[[32]byte]*candidate
 
 	// byAccount maps account ID to their AccountQueue.
 	// This allows efficient lookup and enforcement of per-account limits.
-	byAccount map[[20]byte]*AccountQueue
+	byAccount map[[20]byte]*accountQueue
 
 	// maxSize is the dynamic maximum queue size.
 	// nil means no limit (before the first processClosedLedger call).
 	// Reference: rippled uses std::optional<size_t> maxSize_ which starts as nullopt.
-	maxSize *uint32
+	maxSize *uint64
 
 	// parentHash is used to pseudo-randomly order transactions with the same fee.
 	// This ensures different validators build similar queues.
@@ -48,33 +53,39 @@ type TxQ struct {
 	// surface it either (conflating it with jq_trans_overflow misled
 	// operators pre-#494; the rippled-shape signal lives at the
 	// overlay, see Overlay.DroppedTransactions).
-	txqFull atomic.Uint64
+	txqFull uint64
 }
 
 // New creates a new transaction queue with the given configuration.
-func New(config Config) *TxQ {
+func New(config Config) (*TxQ, error) {
+	effective, err := config.normalize()
+	if err != nil {
+		return nil, err
+	}
 	return &TxQ{
-		config:     config,
-		feeMetrics: NewFeeMetrics(config),
-		byFee:      make([]*Candidate, 0),
-		byID:       make(map[[32]byte]*Candidate),
-		byAccount:  make(map[[20]byte]*AccountQueue),
+		config:     effective,
+		feeMetrics: newFeeMetrics(effective),
+		byFee:      make([]*candidate, 0),
+		byID:       make(map[[32]byte]*candidate),
+		byAccount:  make(map[[20]byte]*accountQueue),
 		// maxSize starts as nil (no limit) matching rippled's std::optional nullopt.
 		// It gets set on the first processClosedLedger call.
-	}
+	}, nil
 }
 
 // Config returns the configuration the queue was constructed with.
 func (q *TxQ) Config() Config {
+	q.stateMu.RLock()
+	defer q.stateMu.RUnlock()
 	return q.config
 }
 
 // Metrics holds queue metrics for monitoring and RPC.
 type Metrics struct {
-	TxCount               uint32
-	TxQMaxSize            *uint32 // nil means no limit
-	TxInLedger            uint32
-	TxPerLedger           uint32
+	TxCount               uint64
+	TxQMaxSize            *uint64 // nil means no limit
+	TxInLedger            uint64
+	TxPerLedger           uint64
 	ReferenceFeeLevel     uint64
 	MinProcessingFeeLevel uint64
 	MedFeeLevel           uint64
@@ -83,16 +94,22 @@ type Metrics struct {
 }
 
 func (q *TxQ) incTxQFull() {
-	q.txqFull.Add(1)
+	q.txqFull++
+}
+
+func (q *TxQ) withStateUnlocked(fn func()) {
+	q.stateMu.Unlock()
+	defer q.stateMu.Lock()
+	fn()
 }
 
 // Metrics returns the current queue metrics.
 func (q *TxQ) Metrics(txInLedger uint32) Metrics {
-	q.mu.Lock()
-	defer q.mu.Unlock()
+	q.stateMu.RLock()
+	defer q.stateMu.RUnlock()
 
-	snapshot := q.feeMetrics.Snapshot()
-	openLedgerFeeLevel := ScaleFeeLevel(snapshot, txInLedger)
+	snapshot := q.feeMetrics.snapshot()
+	openLedgerFeeLevel := scaleFeeLevel(snapshot, txInLedger)
 
 	minProcessingFeeLevel := BaseLevel
 	if q.isFull() && len(q.byFee) > 0 {
@@ -101,22 +118,22 @@ func (q *TxQ) Metrics(txInLedger uint32) Metrics {
 
 	// Snapshot maxSize by value rather than handing out the interior pointer,
 	// so callers can't observe a later in-place mutation through it.
-	var maxSize *uint32
+	var maxSize *uint64
 	if q.maxSize != nil {
 		v := *q.maxSize
 		maxSize = &v
 	}
 
 	return Metrics{
-		TxCount:               uint32(len(q.byFee)),
+		TxCount:               uint64(len(q.byFee)),
 		TxQMaxSize:            maxSize,
-		TxInLedger:            txInLedger,
+		TxInLedger:            uint64(txInLedger),
 		TxPerLedger:           snapshot.TxnsExpected,
 		ReferenceFeeLevel:     BaseLevel,
 		MinProcessingFeeLevel: minProcessingFeeLevel,
 		MedFeeLevel:           snapshot.EscalationMultiplier,
 		OpenLedgerFeeLevel:    uint64(openLedgerFeeLevel),
-		TxQFull:               q.txqFull.Load(),
+		TxQFull:               q.txqFull,
 	}
 }
 
@@ -125,7 +142,7 @@ func (q *TxQ) Metrics(txInLedger uint32) Metrics {
 // Reference: rippled returns maxSize_ && byFee_.size() >= *maxSize_
 // Caller must hold the lock.
 func (q *TxQ) isFull() bool {
-	return q.maxSize != nil && uint32(len(q.byFee)) >= *q.maxSize
+	return q.maxSize != nil && uint64(len(q.byFee)) >= *q.maxSize
 }
 
 // isFullPct returns true if the queue is at least fillPct percent full.
@@ -133,13 +150,25 @@ func (q *TxQ) isFull() bool {
 // Reference: rippled isFull<fillPercentage>() returns false when maxSize_ is nullopt.
 // Caller must hold the lock.
 func (q *TxQ) isFullPct(fillPct uint32) bool {
-	return q.maxSize != nil && uint32(len(q.byFee)) >= (*q.maxSize*fillPct/100)
+	if q.maxSize == nil {
+		return false
+	}
+	// Avoid maxSize*fillPct overflow while preserving integer truncation.
+	if fillPct == 0 {
+		return true
+	}
+	if fillPct >= 100 {
+		return uint64(len(q.byFee)) >= *q.maxSize
+	}
+	threshold := *q.maxSize / 100 * uint64(fillPct)
+	threshold += (*q.maxSize % 100) * uint64(fillPct) / 100
+	return uint64(len(q.byFee)) >= threshold
 }
 
 // Size returns the number of transactions in the queue.
 func (q *TxQ) Size() int {
-	q.mu.Lock()
-	defer q.mu.Unlock()
+	q.stateMu.RLock()
+	defer q.stateMu.RUnlock()
 	return len(q.byFee)
 }
 
@@ -148,16 +177,16 @@ func (q *TxQ) Size() int {
 // terQUEUED transaction is not present in the open-ledger view yet, but peers
 // must still be able to fetch it by hash.
 func (q *TxQ) GetTxBlob(txID [32]byte) ([]byte, bool) {
-	q.mu.Lock()
-	defer q.mu.Unlock()
+	q.stateMu.RLock()
+	defer q.stateMu.RUnlock()
 	if q.byID == nil {
-		q.rebuildByID()
-	}
-	candidate := q.byID[txID]
-	if candidate == nil || candidate.Txn == nil {
 		return nil, false
 	}
-	raw := candidate.Txn.GetRawBytes()
+	candidate := q.byID[txID]
+	if candidate == nil {
+		return nil, false
+	}
+	raw := candidate.rawBlob()
 	if len(raw) == 0 {
 		return nil, false
 	}
@@ -167,22 +196,22 @@ func (q *TxQ) GetTxBlob(txID [32]byte) ([]byte, bool) {
 // RequiredFeeLevel returns the fee level required to bypass the queue
 // and get directly into the open ledger.
 func (q *TxQ) RequiredFeeLevel(txInLedger uint32) FeeLevel {
-	q.mu.Lock()
-	defer q.mu.Unlock()
+	q.stateMu.RLock()
+	defer q.stateMu.RUnlock()
 
-	snapshot := q.feeMetrics.Snapshot()
-	return ScaleFeeLevel(snapshot, txInLedger)
+	snapshot := q.feeMetrics.snapshot()
+	return scaleFeeLevel(snapshot, txInLedger)
 }
 
 // insertByFee inserts a candidate into the byFee slice, maintaining descending order by fee.
 // Candidates with the same fee are ordered by txID XOR parentHash for deterministic ordering.
 // Caller must hold the lock.
-func (q *TxQ) insertByFee(c *Candidate) {
+func (q *TxQ) insertByFee(c *candidate) {
 	if c == nil {
 		return
 	}
 	if q.byID == nil {
-		q.byID = make(map[[32]byte]*Candidate)
+		q.byID = make(map[[32]byte]*candidate)
 	}
 	pos := q.findInsertPosition(c)
 	q.byFee = append(q.byFee, nil)
@@ -194,7 +223,7 @@ func (q *TxQ) insertByFee(c *Candidate) {
 // findInsertPosition finds where to insert a candidate to maintain order.
 // Order is: descending by fee level, then ascending by (txID XOR parentHash).
 // Caller must hold the lock.
-func (q *TxQ) findInsertPosition(c *Candidate) int {
+func (q *TxQ) findInsertPosition(c *candidate) int {
 	lo, hi := 0, len(q.byFee)
 	for lo < hi {
 		mid := (lo + hi) / 2
@@ -209,7 +238,7 @@ func (q *TxQ) findInsertPosition(c *Candidate) int {
 
 // candidateLess returns true if a should come before b in the fee-ordered list.
 // Higher fees come first. For same fees, use XOR with parentHash for determinism.
-func (q *TxQ) candidateLess(a, b *Candidate) bool {
+func (q *TxQ) candidateLess(a, b *candidate) bool {
 	if a.FeeLevel != b.FeeLevel {
 		return a.FeeLevel > b.FeeLevel // Higher fee first
 	}
@@ -231,7 +260,10 @@ func xorHash(a, b [32]byte) [32]byte {
 
 // removeByFee removes a candidate from the byFee slice.
 // Caller must hold the lock.
-func (q *TxQ) removeByFee(c *Candidate) {
+func (q *TxQ) removeByFee(c *candidate) {
+	if c == nil {
+		return
+	}
 	for i, candidate := range q.byFee {
 		if candidate == c {
 			q.byFee = append(q.byFee[:i], q.byFee[i+1:]...)
@@ -246,11 +278,19 @@ func (q *TxQ) removeByFee(c *Candidate) {
 // erase removes a candidate while retaining its AccountQueue until the next
 // closed-ledger cleanup.
 // Caller must hold the lock.
-func (q *TxQ) erase(c *Candidate) {
+func (q *TxQ) erase(c *candidate) {
+	if c == nil {
+		return
+	}
 	q.removeByFee(c)
 
 	if aq, exists := q.byAccount[c.Account]; exists {
-		aq.Remove(c.SeqProxy)
+		aq.removeCandidate(c)
+	}
+	if q.byID != nil && q.byID[c.TxID] == c {
+		// A missing account queue is corruption. Remove the orphaned byID
+		// index entry immediately rather than retaining a ghost transaction.
+		delete(q.byID, c.TxID)
 	}
 }
 
@@ -258,12 +298,12 @@ func (q *TxQ) erase(c *Candidate) {
 // Called after changing parentHash to reorder same-fee transactions.
 // Caller must hold the lock.
 //
-// Walks accounts in sorted order and candidates via GetSortedCandidates
+// Walks accounts in sorted order and candidates by sequence proxy
 // so the rebuilt byFee slice is bit-identical across validators.
 func (q *TxQ) rebuildByFee() {
 	capacity := len(q.byFee)
-	q.byFee = make([]*Candidate, 0, capacity)
-	q.byID = make(map[[32]byte]*Candidate, capacity)
+	q.byFee = make([]*candidate, 0, capacity)
+	q.byID = make(map[[32]byte]*candidate, capacity)
 
 	accounts := make([][20]byte, 0, len(q.byAccount))
 	for a := range q.byAccount {
@@ -280,22 +320,10 @@ func (q *TxQ) rebuildByFee() {
 	}
 }
 
-// rebuildByID reconstructs the transaction lookup from byFee. It is used only
-// for zero-value/test queues; production queues maintain the index on every
-// insertion and removal.
-func (q *TxQ) rebuildByID() {
-	q.byID = make(map[[32]byte]*Candidate, len(q.byFee))
-	for _, candidate := range q.byFee {
-		if candidate != nil {
-			q.byID[candidate.TxID] = candidate
-		}
-	}
-}
-
 // AccountTxs returns details of all queued transactions for an account.
 func (q *TxQ) AccountTxs(account [20]byte) []*CandidateDetails {
-	q.mu.Lock()
-	defer q.mu.Unlock()
+	q.stateMu.RLock()
+	defer q.stateMu.RUnlock()
 
 	aq, exists := q.byAccount[account]
 	if !exists || aq.Empty() {
@@ -304,19 +332,23 @@ func (q *TxQ) AccountTxs(account [20]byte) []*CandidateDetails {
 
 	result := make([]*CandidateDetails, 0, aq.Count())
 	for _, c := range aq.SortedCandidates() {
-		result = append(result, candidateDetails(c))
+		if c != nil {
+			result = append(result, candidateDetails(c))
+		}
 	}
 	return result
 }
 
 // AllTxs returns details of all queued transactions, ordered by fee (highest first).
 func (q *TxQ) AllTxs() []*CandidateDetails {
-	q.mu.Lock()
-	defer q.mu.Unlock()
+	q.stateMu.RLock()
+	defer q.stateMu.RUnlock()
 
 	result := make([]*CandidateDetails, 0, len(q.byFee))
 	for _, c := range q.byFee {
-		result = append(result, candidateDetails(c))
+		if c != nil {
+			result = append(result, candidateDetails(c))
+		}
 	}
 	return result
 }
@@ -325,7 +357,7 @@ func (q *TxQ) AllTxs() []*CandidateDetails {
 // surfaced by account_info and ledger queue_data. AuthChange mirrors
 // rippled's tx.consequences.isBlocker(); Fee/PotentialSpend feed the
 // per-tx fee and max_spend_drops emits (AccountInfo.cpp:251-256).
-func candidateDetails(c *Candidate) *CandidateDetails {
+func candidateDetails(c *candidate) *CandidateDetails {
 	return &CandidateDetails{
 		TxID:             c.TxID,
 		Account:          c.Account,
@@ -339,7 +371,7 @@ func candidateDetails(c *Candidate) *CandidateDetails {
 		Fee:              c.Consequences.Fee,
 		PotentialSpend:   c.Consequences.PotentialSpend,
 		AuthChange:       c.Consequences.IsBlocker,
-		Txn:              c.Txn,
+		TxBlob:           c.rawBlob(),
 	}
 }
 
@@ -361,5 +393,7 @@ type CandidateDetails struct {
 	Fee             uint64
 	PotentialSpend  uint64
 	AuthChange      bool
-	Txn             tx.Transaction
+	// TxBlob is a private-to-the-queue copy of the canonical submission. Query
+	// callers can parse their own copy; no mutable transaction object escapes.
+	TxBlob []byte
 }

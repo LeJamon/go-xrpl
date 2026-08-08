@@ -3,6 +3,7 @@ package txq
 import (
 	"sort"
 
+	"github.com/LeJamon/go-xrpl/amendment"
 	"github.com/LeJamon/go-xrpl/internal/tx"
 	"github.com/LeJamon/go-xrpl/internal/tx/ter"
 )
@@ -42,8 +43,11 @@ func (s SeqProxy) Less(other SeqProxy) bool {
 
 // Candidate represents a transaction that may be applied to the open ledger.
 // It holds all the information needed to attempt application and track retries.
-type Candidate struct {
+type candidate struct {
+	// Txn is only populated by same-package synthetic tests. Production
+	// admission stores the canonical blob and never retains the caller object.
 	Txn              tx.Transaction
+	blob             []byte
 	TxID             [32]byte
 	Account          [20]byte
 	FeeLevel         FeeLevel
@@ -53,11 +57,14 @@ type Candidate struct {
 	LastResult       ter.Result
 	// PreflightResult holds the result from the preflight check.
 	PreflightResult ter.Result
-	Consequences    TxConsequences
+	Flags           tx.ApplyFlags
+	PreflightFlags  tx.ApplyFlags
+	PreflightRules  *amendment.Rules
+	Consequences    txConsequences
 }
 
 // TxConsequences describes the potential impact of applying a transaction.
-type TxConsequences struct {
+type txConsequences struct {
 	Fee uint64
 
 	// PotentialSpend is the maximum XRP that could be spent beyond the fee.
@@ -70,23 +77,21 @@ type TxConsequences struct {
 
 	// FollowingSeq is the sequence number that should follow this transaction.
 	// For regular transactions this is Sequence + 1.
-	// For TicketCreate this is Sequence + 1 + TicketCount (to account for the gap).
+	// For TicketCreate this is Sequence + TicketCount.
 	FollowingSeq SeqProxy
 }
 
 // NewCandidate creates a new Candidate for a transaction.
-func NewCandidate(
-	txn tx.Transaction,
+func newCandidate(
 	txID [32]byte,
 	account [20]byte,
 	feeLevel FeeLevel,
 	seqProxy SeqProxy,
 	lastValid uint32,
 	preflightResult ter.Result,
-	consequences TxConsequences,
-) *Candidate {
-	return &Candidate{
-		Txn:              txn,
+	consequences txConsequences,
+) *candidate {
+	return &candidate{
 		TxID:             txID,
 		Account:          account,
 		FeeLevel:         feeLevel,
@@ -98,10 +103,23 @@ func NewCandidate(
 	}
 }
 
+func (c *candidate) rawBlob() []byte {
+	if c == nil {
+		return nil
+	}
+	if len(c.blob) > 0 {
+		return append([]byte(nil), c.blob...)
+	}
+	if c.Txn != nil {
+		return append([]byte(nil), c.Txn.GetRawBytes()...)
+	}
+	return nil
+}
+
 // AccountQueue tracks queued transactions for a single account.
-type AccountQueue struct {
+type accountQueue struct {
 	Account      [20]byte
-	Transactions map[SeqProxy]*Candidate
+	Transactions map[SeqProxy]*candidate
 
 	// RetryPenalty is set when a transaction has exhausted its retries.
 	// Other transactions for this account will have reduced retry allowance.
@@ -114,21 +132,21 @@ type AccountQueue struct {
 }
 
 // NewAccountQueue creates a new AccountQueue for an account.
-func NewAccountQueue(account [20]byte) *AccountQueue {
-	return &AccountQueue{
+func newAccountQueue(account [20]byte) *accountQueue {
+	return &accountQueue{
 		Account:      account,
-		Transactions: make(map[SeqProxy]*Candidate),
+		Transactions: make(map[SeqProxy]*candidate),
 	}
 }
 
 // Add adds a candidate to this account's queue.
-func (aq *AccountQueue) Add(c *Candidate) {
+func (aq *accountQueue) Add(c *candidate) {
 	aq.Transactions[c.SeqProxy] = c
 }
 
 // Remove removes a candidate with the given SeqProxy.
 // Returns true if a candidate was removed.
-func (aq *AccountQueue) Remove(seqProxy SeqProxy) bool {
+func (aq *accountQueue) Remove(seqProxy SeqProxy) bool {
 	if _, exists := aq.Transactions[seqProxy]; exists {
 		delete(aq.Transactions, seqProxy)
 		return true
@@ -136,20 +154,31 @@ func (aq *AccountQueue) Remove(seqProxy SeqProxy) bool {
 	return false
 }
 
+func (aq *accountQueue) removeCandidate(c *candidate) bool {
+	if aq == nil || c == nil {
+		return false
+	}
+	if existing, ok := aq.Transactions[c.SeqProxy]; ok && existing == c {
+		delete(aq.Transactions, c.SeqProxy)
+		return true
+	}
+	return false
+}
+
 // Count returns the number of transactions queued for this account.
-func (aq *AccountQueue) Count() int {
+func (aq *accountQueue) Count() int {
 	return len(aq.Transactions)
 }
 
 // Empty returns true if there are no queued transactions.
-func (aq *AccountQueue) Empty() bool {
+func (aq *accountQueue) Empty() bool {
 	return len(aq.Transactions) == 0
 }
 
 // PrevTx finds the transaction that precedes the given SeqProxy.
 // Returns nil if there is no preceding transaction.
-func (aq *AccountQueue) PrevTx(seqProxy SeqProxy) *Candidate {
-	var prev *Candidate
+func (aq *accountQueue) PrevTx(seqProxy SeqProxy) *candidate {
+	var prev *candidate
 	for sp, c := range aq.Transactions {
 		if sp.Less(seqProxy) {
 			if prev == nil || prev.SeqProxy.Less(sp) {
@@ -160,8 +189,8 @@ func (aq *AccountQueue) PrevTx(seqProxy SeqProxy) *Candidate {
 	return prev
 }
 
-func (aq *AccountQueue) GetNextTx(seqProxy SeqProxy) *Candidate {
-	var next *Candidate
+func (aq *accountQueue) GetNextTx(seqProxy SeqProxy) *candidate {
+	var next *candidate
 	for sp, c := range aq.Transactions {
 		if seqProxy.Less(sp) {
 			if next == nil || sp.Less(next.SeqProxy) {
@@ -174,8 +203,8 @@ func (aq *AccountQueue) GetNextTx(seqProxy SeqProxy) *Candidate {
 
 // FirstSeqTx returns the first sequence-based transaction (lowest sequence).
 // Returns nil if there are no sequence-based transactions.
-func (aq *AccountQueue) FirstSeqTx() *Candidate {
-	var first *Candidate
+func (aq *accountQueue) FirstSeqTx() *candidate {
+	var first *candidate
 	for _, c := range aq.Transactions {
 		if !c.SeqProxy.IsTicket {
 			if first == nil || c.SeqProxy.Value < first.SeqProxy.Value {
@@ -191,7 +220,7 @@ func (aq *AccountQueue) FirstSeqTx() *Candidate {
 // sequence-based transactions that slipped into the ledger while the queue wasn't
 // watching.
 // Reference: TxQ.cpp:809-830
-func (aq *AccountQueue) RelevantCount(acctSeqProx SeqProxy) int {
+func (aq *accountQueue) RelevantCount(acctSeqProx SeqProxy) int {
 	count := 0
 	for sp := range aq.Transactions {
 		if !sp.Less(acctSeqProx) { // sp >= acctSeqProx
@@ -204,8 +233,8 @@ func (aq *AccountQueue) RelevantCount(acctSeqProx SeqProxy) int {
 // FirstRelevant returns the first (lowest) relevant transaction with seqProxy >= acctSeqProx.
 // Returns nil if no relevant transactions exist.
 // Reference: TxQ.cpp:818 lower_bound(acctSeqProx)
-func (aq *AccountQueue) FirstRelevant(acctSeqProx SeqProxy) *Candidate {
-	var first *Candidate
+func (aq *accountQueue) FirstRelevant(acctSeqProx SeqProxy) *candidate {
+	var first *candidate
 	for sp, c := range aq.Transactions {
 		if !sp.Less(acctSeqProx) { // sp >= acctSeqProx
 			if first == nil || sp.Less(first.SeqProxy) {
@@ -220,9 +249,9 @@ func (aq *AccountQueue) FirstRelevant(acctSeqProx SeqProxy) *Candidate {
 // acctSeqProx, sorted ascending by SeqProxy. Stale sequence-based entries that
 // slipped into the ledger are excluded, mirroring rippled's lower_bound(
 // acctSeqProx) range (TxQ.cpp:818).
-func (aq *AccountQueue) RelevantSortedCandidates(acctSeqProx SeqProxy) []*Candidate {
+func (aq *accountQueue) RelevantSortedCandidates(acctSeqProx SeqProxy) []*candidate {
 	sorted := aq.SortedCandidates()
-	relevant := make([]*Candidate, 0, len(sorted))
+	relevant := make([]*candidate, 0, len(sorted))
 	for _, c := range sorted {
 		if !c.SeqProxy.Less(acctSeqProx) {
 			relevant = append(relevant, c)
@@ -232,8 +261,8 @@ func (aq *AccountQueue) RelevantSortedCandidates(acctSeqProx SeqProxy) []*Candid
 }
 
 // SortedCandidates returns all candidates sorted by SeqProxy.
-func (aq *AccountQueue) SortedCandidates() []*Candidate {
-	result := make([]*Candidate, 0, len(aq.Transactions))
+func (aq *accountQueue) SortedCandidates() []*candidate {
+	result := make([]*candidate, 0, len(aq.Transactions))
 	for _, c := range aq.Transactions {
 		result = append(result, c)
 	}

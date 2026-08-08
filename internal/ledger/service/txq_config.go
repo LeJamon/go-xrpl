@@ -2,6 +2,7 @@ package service
 
 import (
 	"fmt"
+	"math"
 
 	"github.com/LeJamon/go-xrpl/config"
 	"github.com/LeJamon/go-xrpl/internal/txq"
@@ -14,37 +15,44 @@ import (
 // consensus percentages are clamped to rippled's ranges, and an explicit
 // maximum_txn_in_ledger below the effective minimums is a hard error.
 //
-// maximum_txn_in_ledger keeps its "0 = no maximum" meaning, which is
-// also the default.
+// An absent maximum leaves the limit unset; an explicit zero remains present
+// and fails the minimum cross-check.
 func TxQConfigFromTuning(t config.TransactionQueueConfig, standalone bool) (txq.Config, error) {
+	if err := t.Validate(); err != nil {
+		return txq.Config{}, err
+	}
 	cfg := txq.DefaultConfig()
 	if standalone {
 		cfg = txq.StandaloneConfig()
 	}
 
-	if t.LedgersInQueue != nil {
-		cfg.LedgersInQueue = uint32(*t.LedgersInQueue)
+	var err error
+	if cfg.LedgersInQueue, err = optionalUint32("ledgers_in_queue", t.LedgersInQueue, cfg.LedgersInQueue); err != nil {
+		return txq.Config{}, err
 	}
-	if t.MinimumQueueSize != nil {
-		cfg.QueueSizeMin = uint32(*t.MinimumQueueSize)
+	if cfg.QueueSizeMin, err = optionalUint32("minimum_queue_size", t.MinimumQueueSize, cfg.QueueSizeMin); err != nil {
+		return txq.Config{}, err
 	}
-	if t.RetrySequencePercent != nil {
-		cfg.RetrySequencePercent = uint32(*t.RetrySequencePercent)
+	if cfg.RetrySequencePercent, err = optionalUint32("retry_sequence_percent", t.RetrySequencePercent, cfg.RetrySequencePercent); err != nil {
+		return txq.Config{}, err
 	}
 	if t.MinimumEscalationMultiplier != nil {
 		cfg.MinimumEscalationMultiplier = uint64(*t.MinimumEscalationMultiplier)
 	}
-	if t.MinimumTxnInLedger != nil {
-		cfg.MinimumTxnInLedger = uint32(*t.MinimumTxnInLedger)
+	if cfg.MinimumTxnInLedger, err = optionalUint32("minimum_txn_in_ledger", t.MinimumTxnInLedger, cfg.MinimumTxnInLedger); err != nil {
+		return txq.Config{}, err
 	}
-	if t.MinimumTxnInLedgerStandalone != nil {
-		cfg.MinimumTxnInLedgerStandalone = uint32(*t.MinimumTxnInLedgerStandalone)
+	if cfg.MinimumTxnInLedgerStandalone, err = optionalUint32("minimum_txn_in_ledger_standalone", t.MinimumTxnInLedgerStandalone, cfg.MinimumTxnInLedgerStandalone); err != nil {
+		return txq.Config{}, err
 	}
-	if t.TargetTxnInLedger != nil {
-		cfg.TargetTxnInLedger = uint32(*t.TargetTxnInLedger)
+	if cfg.TargetTxnInLedger, err = optionalUint32("target_txn_in_ledger", t.TargetTxnInLedger, cfg.TargetTxnInLedger); err != nil {
+		return txq.Config{}, err
 	}
 	if t.MaximumTxnInLedger != nil {
-		cfg.MaximumTxnInLedger = uint32(*t.MaximumTxnInLedger)
+		if cfg.MaximumTxnInLedger, err = optionalUint32("maximum_txn_in_ledger", t.MaximumTxnInLedger, cfg.MaximumTxnInLedger); err != nil {
+			return txq.Config{}, err
+		}
+		cfg.MaximumTxnInLedgerSet = true
 	}
 	if t.NormalConsensusIncreasePercent != nil {
 		cfg.NormalConsensusIncreasePercent = clampUint32(*t.NormalConsensusIncreasePercent, 0, 1000)
@@ -52,16 +60,14 @@ func TxQConfigFromTuning(t config.TransactionQueueConfig, standalone bool) (txq.
 	if t.SlowConsensusDecreasePercent != nil {
 		cfg.SlowConsensusDecreasePercent = clampUint32(*t.SlowConsensusDecreasePercent, 0, 100)
 	}
-	if t.MaximumTxnPerAccount != nil {
-		cfg.MaximumTxnPerAccount = uint32(*t.MaximumTxnPerAccount)
+	if cfg.MaximumTxnPerAccount, err = optionalUint32("maximum_txn_per_account", t.MaximumTxnPerAccount, cfg.MaximumTxnPerAccount); err != nil {
+		return txq.Config{}, err
 	}
-	if t.MinimumLastLedgerBuffer != nil {
-		cfg.MinimumLastLedgerBuffer = uint32(*t.MinimumLastLedgerBuffer)
+	if cfg.MinimumLastLedgerBuffer, err = optionalUint32("minimum_last_ledger_buffer", t.MinimumLastLedgerBuffer, cfg.MinimumLastLedgerBuffer); err != nil {
+		return txq.Config{}, err
 	}
 
-	// Mirror rippled's hard errors when an explicit maximum is below the
-	// effective minimums (TxQ.cpp:1930-1951).
-	if cfg.MaximumTxnInLedger > 0 {
+	if cfg.MaximumTxnInLedgerSet {
 		if cfg.MinimumTxnInLedger > cfg.MaximumTxnInLedger {
 			return txq.Config{}, fmt.Errorf(
 				"transaction_queue: minimum_txn_in_ledger (%d) exceeds maximum_txn_in_ledger (%d)",
@@ -73,8 +79,17 @@ func TxQConfigFromTuning(t config.TransactionQueueConfig, standalone bool) (txq.
 				cfg.MinimumTxnInLedgerStandalone, cfg.MaximumTxnInLedger)
 		}
 	}
-
 	return cfg, nil
+}
+
+func optionalUint32(name string, value *int, fallback uint32) (uint32, error) {
+	if value == nil {
+		return fallback, nil
+	}
+	if *value < 0 || uint64(*value) > math.MaxUint32 {
+		return 0, fmt.Errorf("%s is outside uint32 range: %d", name, *value)
+	}
+	return uint32(*value), nil
 }
 
 func clampUint32(v, lo, hi int) uint32 {

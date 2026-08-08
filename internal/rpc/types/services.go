@@ -1044,10 +1044,10 @@ type TxQServerMetrics struct {
 // `fee` handler needs txCount / txPerLedger / txInLedger / median /
 // queue-max in addition to the load_factor levels.
 type TxQFeeMetrics struct {
-	TxCount               uint32
-	TxQMaxSize            *uint32 // nil → no limit, omits max_queue_size
-	TxInLedger            uint32
-	TxPerLedger           uint32
+	TxCount               uint64
+	TxQMaxSize            *uint64 // nil → no limit, omits max_queue_size
+	TxInLedger            uint64
+	TxPerLedger           uint64
 	ReferenceFeeLevel     uint64
 	MinProcessingFeeLevel uint64
 	MedFeeLevel           uint64

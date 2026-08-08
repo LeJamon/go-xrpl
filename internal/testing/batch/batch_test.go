@@ -1786,7 +1786,7 @@ func TestBatchTxQueue(t *testing.T) {
 		// Closed ledger had: 3 noops + 1 batch outer + 2 inner = 6 txns.
 		// With NormalConsensusIncreasePercent=0, txnsExpected = 6.
 		// maxSize = 6 * 2 = 12. txInLedger = 1 (carol's noop from queue).
-		maxSize := uint32(12)
+		maxSize := uint64(12)
 		checkMetrics(t, env, 0, &maxSize, 1, 6)
 	})
 
@@ -1868,7 +1868,7 @@ func makeNoopWithFee(acc *jtx.Account, fee uint64) *accounttx.AccountSet {
 // checkMetrics asserts TxQ metrics match expected values.
 // maxSize nil means skip that assertion (matches rippled's std::nullopt).
 // Reference: rippled test/jtx/TestHelpers.h checkMetrics()
-func checkMetrics(t *testing.T, env *jtx.TestEnv, expectedQueueSize uint32, expectedMaxSize *uint32, expectedTxInLedger uint32, expectedTxPerLedger uint32) {
+func checkMetrics(t *testing.T, env *jtx.TestEnv, expectedQueueSize uint64, expectedMaxSize *uint64, expectedTxInLedger uint64, expectedTxPerLedger uint64) {
 	t.Helper()
 	metrics := env.TxQMetrics()
 

@@ -16,6 +16,15 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func mustNew(t *testing.T, cfg txq.Config) *txq.TxQ {
+	t.Helper()
+	q, err := txq.New(cfg)
+	if err != nil {
+		t.Fatalf("txq.New: %v", err)
+	}
+	return q
+}
+
 // mockClosedLedgerContext implements txq.ClosedLedgerContext for testing.
 type mockClosedLedgerContext struct {
 	ledgerSeq uint32
@@ -35,7 +44,7 @@ func makeConfig() txq.Config {
 		MinimumLastLedgerBuffer:        2,
 		QueueSizeMin:                   10,
 		MaximumTxnPerAccount:           10,
-		MinimumTxnInLedgerStandalone:   100,
+		MinimumTxnInLedgerStandalone:   10,
 		NormalConsensusIncreasePercent: 20,
 		SlowConsensusDecreasePercent:   50,
 		Standalone:                     false,
@@ -45,7 +54,7 @@ func makeConfig() txq.Config {
 // TestTxQ_Config tests that TxQ initializes with the correct config.
 func TestTxQ_Config(t *testing.T) {
 	cfg := makeConfig()
-	q := txq.New(cfg)
+	q := mustNew(t, cfg)
 	require.NotNil(t, q)
 	require.Equal(t, 0, q.Size())
 }
@@ -54,18 +63,18 @@ func TestTxQ_Config(t *testing.T) {
 // Reference: rippled TxQ_test.cpp testBasics (checkMetrics(0,nullopt,0,3))
 func TestTxQ_InitialMetrics(t *testing.T) {
 	cfg := makeConfig()
-	q := txq.New(cfg)
+	q := mustNew(t, cfg)
 
 	metrics := q.Metrics(0)
-	require.Equal(t, uint32(0), metrics.TxCount)
-	require.Equal(t, uint32(3), metrics.TxPerLedger) // minimumTxnInLedger
+	require.Equal(t, uint64(0), metrics.TxCount)
+	require.Equal(t, uint64(3), metrics.TxPerLedger) // minimumTxnInLedger
 }
 
 // TestTxQ_GetRequiredFeeLevel tests fee level calculation.
 // Reference: rippled TxQ_test.cpp testBasics (escalation)
 func TestTxQ_GetRequiredFeeLevel(t *testing.T) {
 	cfg := makeConfig()
-	q := txq.New(cfg)
+	q := mustNew(t, cfg)
 
 	// With 0 txns in ledger, required fee level should be base (256)
 	feeLevel := q.RequiredFeeLevel(0)
@@ -76,24 +85,18 @@ func TestTxQ_GetRequiredFeeLevel(t *testing.T) {
 // TestTxQ_MaxSize tests queue max size behavior.
 func TestTxQ_MaxSize(t *testing.T) {
 	cfg := makeConfig()
-	q := txq.New(cfg)
+	q := mustNew(t, cfg)
 
-	q.SetMaxSize(20)
-	require.Equal(t, 0, q.Size())
-}
-
-// TestTxQ_Clear tests that Clear empties the queue.
-func TestTxQ_Clear(t *testing.T) {
-	cfg := makeConfig()
-	q := txq.New(cfg)
-	q.Clear()
-	require.Equal(t, 0, q.Size())
+	q.ProcessClosedLedger(&mockClosedLedgerContext{ledgerSeq: 2}, false)
+	metrics := q.Metrics(0)
+	require.NotNil(t, metrics.TxQMaxSize)
+	require.Equal(t, uint64(60), *metrics.TxQMaxSize)
 }
 
 // TestTxQ_GetAccountTxs tests per-account query on empty queue.
 func TestTxQ_GetAccountTxs(t *testing.T) {
 	cfg := makeConfig()
-	q := txq.New(cfg)
+	q := mustNew(t, cfg)
 
 	var account [20]byte
 	copy(account[:], []byte("alice"))
@@ -104,7 +107,7 @@ func TestTxQ_GetAccountTxs(t *testing.T) {
 // TestTxQ_AllTxs_EmptyQueue tests that GetAllTxs returns empty on empty queue.
 func TestTxQ_AllTxs_EmptyQueue(t *testing.T) {
 	cfg := makeConfig()
-	q := txq.New(cfg)
+	q := mustNew(t, cfg)
 
 	txs := q.AllTxs()
 	require.Empty(t, txs)
@@ -113,7 +116,7 @@ func TestTxQ_AllTxs_EmptyQueue(t *testing.T) {
 // TestTxQ_NextQueuableSeq tests sequence number for next queueable tx.
 func TestTxQ_NextQueuableSeq(t *testing.T) {
 	cfg := makeConfig()
-	q := txq.New(cfg)
+	q := mustNew(t, cfg)
 
 	var account [20]byte
 	copy(account[:], []byte("alice"))
@@ -123,25 +126,12 @@ func TestTxQ_NextQueuableSeq(t *testing.T) {
 	require.Equal(t, uint32(5), nextSeq)
 }
 
-// TestTxQ_FeeAndSeq tests GetTxRequiredFeeAndSeq returns correct info.
-func TestTxQ_FeeAndSeq(t *testing.T) {
-	cfg := makeConfig()
-	q := txq.New(cfg)
-
-	var account [20]byte
-	copy(account[:], []byte("alice"))
-
-	info := q.TxRequiredFeeAndSeq(account, 5, 10, 0)
-	t.Logf("FeeAndSeq: RequiredFee=%d, AvailableSeq=%d", info.RequiredFee, info.AvailableSeq)
-	require.True(t, info.RequiredFee > 0, "Required fee should be positive")
-	require.Equal(t, uint32(5), info.AvailableSeq)
-}
-
 // TestTxQ_StandaloneConfig tests standalone mode configuration.
 func TestTxQ_StandaloneConfig(t *testing.T) {
 	cfg := makeConfig()
 	cfg.Standalone = true
-	q := txq.New(cfg)
+	cfg.MaximumTxnInLedger = cfg.MinimumTxnInLedgerStandalone
+	q := mustNew(t, cfg)
 
 	metrics := q.Metrics(0)
 	// In standalone mode, txPerLedger should use StandaloneTxnInLedger
@@ -154,7 +144,7 @@ func TestTxQ_StandaloneConfig(t *testing.T) {
 // Reference: rippled TxQ_test.cpp testBasics (fee escalation)
 func TestTxQ_FeeEscalation(t *testing.T) {
 	cfg := makeConfig()
-	q := txq.New(cfg)
+	q := mustNew(t, cfg)
 
 	level0 := q.RequiredFeeLevel(0)
 	level3 := q.RequiredFeeLevel(3) // at minimumTxnInLedger
@@ -176,7 +166,7 @@ func TestTxQ_FeeEscalation(t *testing.T) {
 // Reference: rippled TxQ_test.cpp testProcessClosedLedger
 func TestTxQ_ProcessClosedLedger(t *testing.T) {
 	cfg := makeConfig()
-	q := txq.New(cfg)
+	q := mustNew(t, cfg)
 
 	// Initialize fee levels with base level (256) for 5 txns
 	feeLevels := make([]txq.FeeLevel, 5)
@@ -199,7 +189,7 @@ func TestTxQ_ProcessClosedLedger(t *testing.T) {
 // Reference: rippled TxQ_test.cpp testTimeLeap
 func TestTxQ_TimeLeap_ResetsMetrics(t *testing.T) {
 	cfg := makeConfig()
-	q := txq.New(cfg)
+	q := mustNew(t, cfg)
 
 	// Process a normal close
 	feeLevels := make([]txq.FeeLevel, 8)

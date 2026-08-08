@@ -256,7 +256,11 @@ func NewTestEnv(t testing.TB) *TestEnv {
 func NewTestEnvWithTxQ(t testing.TB, cfg txq.Config) *TestEnv {
 	t.Helper()
 	env := NewTestEnv(t)
-	env.txQueue = txq.New(cfg)
+	queue, err := txq.New(cfg)
+	if err != nil {
+		t.Fatalf("invalid transaction queue configuration: %v", err)
+	}
+	env.txQueue = queue
 	return env
 }
 
@@ -265,7 +269,11 @@ func NewTestEnvWithTxQ(t testing.TB, cfg txq.Config) *TestEnv {
 func NewTestEnvWithTxQAndConfig(t testing.TB, txqCfg txq.Config, genesisCfg genesis.Config) *TestEnv {
 	t.Helper()
 	env := NewTestEnvWithConfig(t, genesisCfg)
-	env.txQueue = txq.New(txqCfg)
+	queue, err := txq.New(txqCfg)
+	if err != nil {
+		t.Fatalf("invalid transaction queue configuration: %v", err)
+	}
+	env.txQueue = queue
 	return env
 }
 
@@ -384,14 +392,15 @@ func (e *TestEnv) SetInvariantViolationHook(hook txengine.InvariantViolationHook
 	e.invariantViolationHook = hook
 }
 
-// ResetTxQMaxSize resets the TxQ's maxSize to nil (no limit).
-// This matches rippled's initial state where maxSize_ is std::nullopt
-// before the first user-initiated processClosedLedger call. In rippled,
-// the genesis close (startGenesisLedger) does NOT call processClosedLedger,
-// so maxSize_ remains nullopt until the first env.close() in the test.
-func (e *TestEnv) ResetTxQMaxSize() {
+// ReinitializeTxQ replaces the test queue with a fresh queue using the same
+// configuration. Callers must use it before submitting transactions.
+func (e *TestEnv) ReinitializeTxQ() {
 	if e.txQueue != nil {
-		e.txQueue.ResetMaxSize()
+		queue, err := txq.New(e.txQueue.Config())
+		if err != nil {
+			e.t.Fatalf("reset transaction queue: %v", err)
+		}
+		e.txQueue = queue
 	}
 }
 

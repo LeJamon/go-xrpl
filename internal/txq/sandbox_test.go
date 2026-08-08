@@ -1,8 +1,10 @@
 package txq
 
 import (
+	"errors"
 	"testing"
 
+	"github.com/LeJamon/go-xrpl/amendment"
 	"github.com/LeJamon/go-xrpl/internal/tx"
 	"github.com/LeJamon/go-xrpl/internal/tx/ter"
 )
@@ -18,6 +20,7 @@ func (m *mockTx) Flatten() (map[string]any, error) { return map[string]any{}, ni
 func (m *mockTx) GetRawBytes() []byte              { return []byte{m.id} }
 func (m *mockTx) SetRawBytes([]byte)               {}
 func (m *mockTx) RequiredAmendments() [][32]byte   { return nil }
+func (*mockTx) txqSynthetic()                      {}
 
 // mockSandbox records what was applied and whether the batch was committed.
 type mockSandbox struct {
@@ -27,6 +30,7 @@ type mockSandbox struct {
 	}
 	appliedTo []*mockTx
 	committed bool
+	commitErr error
 }
 
 func (s *mockSandbox) ApplyTransaction(txn tx.Transaction) (ter.Result, bool) {
@@ -36,9 +40,13 @@ func (s *mockSandbox) ApplyTransaction(txn tx.Transaction) (ter.Result, bool) {
 	return r.res, r.applied
 }
 
+func (s *mockSandbox) ApplyTransactionWithFlags(txn tx.Transaction, _ tx.ApplyFlags) (ter.Result, bool) {
+	return s.ApplyTransaction(txn)
+}
+
 func (s *mockSandbox) Commit() error {
 	s.committed = true
-	return nil
+	return s.commitErr
 }
 
 // mockClearCtx is an ApplyContext whose only meaningful method is NewSandbox.
@@ -71,7 +79,17 @@ func (c *mockClearCtx) PreflightTransaction(tx.Transaction) ter.Result { return 
 func (c *mockClearCtx) PreclaimTransaction(tx.Transaction, [20]byte, uint64, uint32) ter.Result {
 	return 0
 }
-func (c *mockClearCtx) GetApplyFlags() tx.ApplyFlags { return 0 }
+func (c *mockClearCtx) GetApplyFlags() tx.ApplyFlags  { return 0 }
+func (*mockClearCtx) RulesIdentity() *amendment.Rules { return nil }
+func (c *mockClearCtx) ApplyTransactionWithFlags(txn tx.Transaction, _ tx.ApplyFlags) (ter.Result, bool) {
+	return c.ApplyTransaction(txn)
+}
+func (c *mockClearCtx) PreflightTransactionWithFlags(txn tx.Transaction, _ tx.ApplyFlags) ter.Result {
+	return c.PreflightTransaction(txn)
+}
+func (c *mockClearCtx) PreclaimTransactionWithFlags(txn tx.Transaction, account [20]byte, balance uint64, seq uint32, _ tx.ApplyFlags) ter.Result {
+	return c.PreclaimTransaction(txn, account, balance, seq)
+}
 func (c *mockClearCtx) NewSandbox() (SandboxContext, error) {
 	return c.sandbox, c.newErr
 }
@@ -82,7 +100,7 @@ func (c *mockClearCtx) NewSandbox() (SandboxContext, error) {
 // series requirement so tryClearAccountQueue always advances to the apply
 // stage.
 func setupClearQueue() (*TxQ, *AccountQueue, *Candidate, *mockTx, [20]byte, SeqProxy) {
-	q := New(DefaultConfig())
+	q := mustNew(DefaultConfig())
 	account := [20]byte{1}
 	aq := NewAccountQueue(account)
 
@@ -137,7 +155,7 @@ func TestTryClearAccountQueue_RollbackOnPrecedingFailure(t *testing.T) {
 	)}
 	ctx := &mockClearCtx{sandbox: sb}
 
-	result := q.tryClearAccountQueue(ctx, aq, newTx, seqProxy, FeeLevel(1_000_000), 4, 1)
+	result := q.tryClearAccountQueue(ctx, aq, newTx, seqProxy, FeeLevel(1_000_000), 4, 1, tx.TapNONE)
 
 	if result != nil {
 		t.Fatalf("expected nil (fall through to queuing), got %+v", *result)
@@ -173,7 +191,7 @@ func TestTryClearAccountQueue_RollbackOnNewTxFailure(t *testing.T) {
 	)}
 	ctx := &mockClearCtx{sandbox: sb}
 
-	result := q.tryClearAccountQueue(ctx, aq, newTx, seqProxy, FeeLevel(1_000_000), 4, 1)
+	result := q.tryClearAccountQueue(ctx, aq, newTx, seqProxy, FeeLevel(1_000_000), 4, 1, tx.TapNONE)
 
 	if result != nil {
 		t.Fatalf("expected nil (fall through to queuing) when the new tx fails, got %+v", *result)
@@ -207,7 +225,7 @@ func TestTryClearAccountQueue_CommitOnFullSuccess(t *testing.T) {
 	)}
 	ctx := &mockClearCtx{sandbox: sb}
 
-	result := q.tryClearAccountQueue(ctx, aq, newTx, seqProxy, FeeLevel(1_000_000), 4, 1)
+	result := q.tryClearAccountQueue(ctx, aq, newTx, seqProxy, FeeLevel(1_000_000), 4, 1, tx.TapNONE)
 
 	if result == nil || !result.Applied {
 		t.Fatalf("expected an applied result, got %v", result)
@@ -229,6 +247,40 @@ func TestTryClearAccountQueue_CommitOnFullSuccess(t *testing.T) {
 	q.ProcessClosedLedger(&stubClosedLedgerCtx{}, false)
 	if _, exists := q.byAccount[account]; exists {
 		t.Error("empty account queue must be removed after a closed ledger")
+	}
+}
+
+func TestTryClearAccountQueue_CommitFailureKeepsQueue(t *testing.T) {
+	q, aq, preceding, newTx, _, seqProxy := setupClearQueue()
+	sb := &mockSandbox{
+		results: mkResults(
+			struct {
+				tx      *mockTx
+				res     ter.Result
+				applied bool
+			}{preceding.Txn.(*mockTx), ter.TesSUCCESS, true},
+			struct {
+				tx      *mockTx
+				res     ter.Result
+				applied bool
+			}{newTx, ter.TesSUCCESS, true},
+		),
+		commitErr: errors.New("commit failed"),
+	}
+	ctx := &mockClearCtx{sandbox: sb}
+
+	result := q.tryClearAccountQueue(ctx, aq, newTx, seqProxy, FeeLevel(1_000_000), 4, 1, tx.TapNONE)
+	if result == nil || result.Result != ter.TefINTERNAL || result.Applied || result.Queued {
+		t.Fatalf("commit failure result = %#v, want tefINTERNAL and no queue/apply", result)
+	}
+	if !sb.committed {
+		t.Fatal("sandbox Commit must be attempted")
+	}
+	if _, ok := aq.Transactions[preceding.SeqProxy]; !ok {
+		t.Fatal("preceding candidate removed after commit failure")
+	}
+	if len(q.byFee) != 1 || q.byFee[0] != preceding {
+		t.Fatalf("queue changed after commit failure: %#v", q.byFee)
 	}
 }
 
@@ -285,6 +337,7 @@ func TestTryClearAccountQueue_CommitRemovesReplacement(t *testing.T) {
 
 			result := q.tryClearAccountQueue(
 				&mockClearCtx{sandbox: sb}, aq, newTx, seqProxy, FeeLevel(1_000_000), 4, 1,
+				tx.TapNONE,
 			)
 
 			if result == nil || !result.Applied {
