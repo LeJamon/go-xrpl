@@ -142,7 +142,12 @@ func TestNonEmptyCredentialArrayKeepsCanonicalSTArrayShape(t *testing.T) {
 
 func TestCredentialArrayAbsenceRoundTrips(t *testing.T) {
 	registerWireTests.Do(Register)
+	_, publicKey, err := ed25519.Algorithm{}.DeriveKeypair([]byte("depositpreauth-field-absence"), false)
+	require.NoError(t, err)
 	txn := NewDepositPreauth("rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh")
+	txn.Fee = "10"
+	txn.SetSequence(1)
+	txn.SigningPubKey = publicKey
 	flat, err := txn.Flatten()
 	require.NoError(t, err)
 	require.NotContains(t, flat, "AuthorizeCredentials")
