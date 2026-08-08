@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"net"
+	"runtime"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -124,7 +125,13 @@ func newContext(cfg *Config, isServer bool) (*shim.Ctx, error) {
 	if cfg == nil || len(cfg.CertPEM) == 0 || len(cfg.KeyPEM) == 0 {
 		return nil, errors.New("peertls: Config requires CertPEM and KeyPEM")
 	}
-	ctx, err := shim.NewCtx(isServer)
+	var ctx *shim.Ctx
+	var err error
+	if cfg.CipherList == "" {
+		ctx, err = shim.NewCtx(isServer)
+	} else {
+		ctx, err = shim.NewCtxWithCipherList(isServer, cfg.CipherList)
+	}
 	if err != nil {
 		return nil, err
 	}
@@ -192,6 +199,7 @@ func (l *listener) Addr() net.Addr { return l.inner.Addr() }
 // Locks:
 //   - sslMu owns the engine, TLS state, and terminal TLS error.
 //   - inMu owns raw reads, pendingIn, and pendingReadErr.
+//   - writeMu serializes complete application Write calls.
 //   - outMu owns raw writes, pendingOut, and outputErr.
 //   - queuedOutMu owns TLS records waiting for the raw writer.
 //
@@ -209,6 +217,7 @@ type conn struct {
 	pendingIn      []byte
 	pendingReadErr error
 
+	writeMu    sync.Mutex
 	outMu      sync.Mutex
 	pendingOut []byte
 	outputErr  error
@@ -418,7 +427,7 @@ func (c *conn) pumpInboundLocked() error {
 
 func (c *conn) feedPendingInputLocked() error {
 	c.sslMu.Lock()
-	if c.state == stateClosed || c.state == stateShuttingDown || c.closed.Load() || c.ssl == nil {
+	if c.state == stateClosed || c.closed.Load() || c.ssl == nil {
 		c.sslMu.Unlock()
 		return net.ErrClosed
 	}
@@ -434,7 +443,7 @@ func (c *conn) feedPendingInputLocked() error {
 		return c.failTLS(err)
 	}
 	if n == 0 {
-		return c.failTLS(io.ErrNoProgress)
+		return io.ErrNoProgress
 	}
 	return nil
 }
@@ -636,13 +645,28 @@ func (c *conn) Read(b []byte) (int, error) {
 				if errors.As(err, &timeoutErr) && timeoutErr.Timeout() {
 					return 0, err
 				}
-				return 0, c.failTLS(err)
+				return 0, c.failTLS(fmt.Errorf("peertls: read ciphertext: %w", err))
 			}
 		case errors.Is(err, shim.ErrWantWrite):
-			if len(out) == 0 {
-				return 0, c.failTLS(io.ErrNoProgress)
+			if c.outMu.TryLock() {
+				flushErr := c.flushOutputLocked()
+				c.outMu.Unlock()
+				if flushErr != nil {
+					return 0, flushErr
+				}
+				continue
 			}
-			continue
+			if err := c.pumpInboundLocked(); err != nil {
+				if errors.Is(err, io.ErrNoProgress) {
+					runtime.Gosched()
+					continue
+				}
+				var timeoutErr net.Error
+				if errors.As(err, &timeoutErr) && timeoutErr.Timeout() {
+					return 0, err
+				}
+				return 0, c.failTLS(fmt.Errorf("peertls: read ciphertext while write pending: %w", err))
+			}
 		case errors.Is(err, shim.ErrZeroRet):
 			return 0, io.EOF
 		case err == nil:
@@ -654,8 +678,15 @@ func (c *conn) Read(b []byte) (int, error) {
 }
 
 func (c *conn) Write(b []byte) (int, error) {
+	c.writeMu.Lock()
+	defer c.writeMu.Unlock()
 	c.outMu.Lock()
-	defer c.releaseOutputLock()
+	outputLocked := true
+	defer func() {
+		if outputLocked {
+			c.releaseOutputLock()
+		}
+	}()
 	if err := c.operationStatus(); err != nil {
 		return 0, err
 	}
@@ -693,12 +724,26 @@ func (c *conn) Write(b []byte) (int, error) {
 		}
 		switch {
 		case errors.Is(err, shim.ErrWantWrite):
-			if n == 0 && len(out) == 0 {
-				return written, c.failTLS(io.ErrNoProgress)
-			}
 			continue
 		case errors.Is(err, shim.ErrWantRead):
-			return written, c.failTLS(errors.New("peertls: unexpected WANT_READ from SSL_write"))
+			c.releaseOutputLock()
+			outputLocked = false
+			c.inMu.Lock()
+			pumpErr := c.pumpInboundLocked()
+			c.inMu.Unlock()
+			c.outMu.Lock()
+			outputLocked = true
+			if pumpErr != nil {
+				var timeoutErr net.Error
+				if errors.As(pumpErr, &timeoutErr) && timeoutErr.Timeout() {
+					return written, pumpErr
+				}
+				return written, c.failTLS(pumpErr)
+			}
+			if flushErr := c.flushOutputLocked(); flushErr != nil {
+				return written, flushErr
+			}
+			continue
 		default:
 			return written, c.failTLS(err)
 		}
@@ -714,6 +759,8 @@ func (c *conn) ShutdownContext(ctx context.Context) (retErr error) {
 		_ = c.Close()
 		close(lockWaitDone)
 	})
+	c.inMu.Lock()
+	defer c.inMu.Unlock()
 	c.outMu.Lock()
 	defer c.releaseOutputLock()
 	defer func() {
@@ -762,9 +809,15 @@ func (c *conn) ShutdownContext(ctx context.Context) (retErr error) {
 			err = flushErr
 			break
 		}
-		if err == nil || errors.Is(err, shim.ErrWantRead) {
+		if err == nil {
 			err = nil
 			break
+		}
+		if errors.Is(err, shim.ErrWantRead) {
+			if err = c.pumpInboundLocked(); err != nil {
+				break
+			}
+			continue
 		}
 		if errors.Is(err, shim.ErrWantWrite) && len(out) == 0 {
 			err = io.ErrNoProgress

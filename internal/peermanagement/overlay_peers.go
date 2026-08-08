@@ -103,8 +103,9 @@ func (o *Overlay) connectReserved(addr string, bootstrapLease *bootstrapLease) e
 	}
 	cfg := PeerConfig{
 		PeerTLSConfig: &peertls.Config{
-			CertPEM: certPEM,
-			KeyPEM:  keyPEM,
+			CertPEM:    certPEM,
+			KeyPEM:     keyPEM,
+			CipherList: o.cfg.SSLCiphers,
 		},
 	}
 

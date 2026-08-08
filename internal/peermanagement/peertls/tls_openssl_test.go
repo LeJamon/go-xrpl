@@ -12,6 +12,7 @@ import (
 	"crypto/x509/pkix"
 	"encoding/pem"
 	"errors"
+	"fmt"
 	"io"
 	"math/big"
 	"net"
@@ -55,7 +56,33 @@ func newTestConnPair(t testing.TB) (PeerConn, PeerConn) {
 	t.Helper()
 	clientCert, clientKey := generateTestCert(t)
 	serverCert, serverKey := generateTestCert(t)
-	clientWire, serverWire := net.Pipe()
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("Listen: %v", err)
+	}
+	acceptResult := make(chan struct {
+		conn net.Conn
+		err  error
+	}, 1)
+	go func() {
+		conn, acceptErr := listener.Accept()
+		acceptResult <- struct {
+			conn net.Conn
+			err  error
+		}{conn: conn, err: acceptErr}
+	}()
+	clientWire, err := net.Dial("tcp", listener.Addr().String())
+	if err != nil {
+		_ = listener.Close()
+		t.Fatalf("Dial: %v", err)
+	}
+	accepted := <-acceptResult
+	_ = listener.Close()
+	if accepted.err != nil {
+		_ = clientWire.Close()
+		t.Fatalf("Accept: %v", accepted.err)
+	}
+	serverWire := accepted.conn
 
 	clientConn, err := Client(clientWire, &Config{CertPEM: clientCert, KeyPEM: clientKey})
 	if err != nil {
@@ -100,7 +127,11 @@ func TestHandshake_SessionSigRoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Listen: %v", err)
 	}
-	serverConfig := &Config{CertPEM: serverCert, KeyPEM: serverKey}
+	serverConfig := &Config{
+		CertPEM:    serverCert,
+		KeyPEM:     serverKey,
+		CipherList: "TLSv1.2:!CBC:!DSS:!PSK:!eNULL:!aNULL",
+	}
 	wrapped, err := NewListener(ln, serverConfig)
 	if err != nil {
 		_ = ln.Close()
@@ -109,6 +140,7 @@ func TestHandshake_SessionSigRoundTrip(t *testing.T) {
 	defer wrapped.Close()
 	serverConfig.CertPEM = []byte("mutated")
 	serverConfig.KeyPEM = []byte("mutated")
+	serverConfig.CipherList = "not-a-real-cipher"
 
 	dialer := &net.Dialer{Timeout: 2 * time.Second}
 	tcpClient, err := dialer.Dial("tcp", ln.Addr().String())
@@ -361,12 +393,18 @@ func TestHandshake_LargeConcurrentRoundTrip(t *testing.T) {
 		if err == nil && n != len(clientPayload) {
 			err = io.ErrShortWrite
 		}
+		if err != nil {
+			err = fmt.Errorf("client Write: %w", err)
+		}
 		errCh <- err
 	}()
 	go func() {
 		n, err := serverConn.Write(serverPayload)
 		if err == nil && n != len(serverPayload) {
 			err = io.ErrShortWrite
+		}
+		if err != nil {
+			err = fmt.Errorf("server Write: %w", err)
 		}
 		errCh <- err
 	}()
@@ -376,6 +414,9 @@ func TestHandshake_LargeConcurrentRoundTrip(t *testing.T) {
 		if err == nil && !bytes.Equal(got, serverPayload) {
 			err = errors.New("client received corrupted payload")
 		}
+		if err != nil {
+			err = fmt.Errorf("client Read: %w", err)
+		}
 		errCh <- err
 	}()
 	go func() {
@@ -384,13 +425,20 @@ func TestHandshake_LargeConcurrentRoundTrip(t *testing.T) {
 		if err == nil && !bytes.Equal(got, clientPayload) {
 			err = errors.New("server received corrupted payload")
 		}
+		if err != nil {
+			err = fmt.Errorf("server Read: %w", err)
+		}
 		errCh <- err
 	}()
 
+	var operationErrors []error
 	for range 4 {
 		if err := <-errCh; err != nil {
-			t.Fatal(err)
+			operationErrors = append(operationErrors, err)
 		}
+	}
+	for _, err := range operationErrors {
+		t.Error(err)
 	}
 }
 
@@ -706,6 +754,15 @@ func TestOutputFlushIsLosslessAndAccountsPlaintext(t *testing.T) {
 	}
 
 	raw = &scriptedRawConn{}
+	c = readyScriptedConn(raw, &scriptedEngine{reads: []engineResult{
+		{err: shim.ErrWantWrite, out: []byte("write-progress")}, {n: 1},
+	}})
+	if n, err := c.Read(make([]byte, 1)); n != 1 || err != nil ||
+		!bytes.Equal(raw.written, []byte("write-progress")) {
+		t.Fatalf("Read progressing pending Write = (%d, %v), output=%q", n, err, raw.written)
+	}
+
+	raw = &scriptedRawConn{}
 	c = readyScriptedConn(raw, &scriptedEngine{writes: []engineResult{
 		{err: shim.ErrWantWrite, out: []byte("flight")},
 		{n: 1, out: []byte("record")},
@@ -720,6 +777,26 @@ func TestOutputFlushIsLosslessAndAccountsPlaintext(t *testing.T) {
 	})
 	if _, err := c.Write([]byte("x")); !errors.Is(err, io.ErrNoProgress) {
 		t.Fatalf("zero-progress WANT_WRITE error = %v", err)
+	}
+
+	raw = &scriptedRawConn{reads: []rawRead{{data: []byte("peer-control")}}}
+	engine := &scriptedEngine{writes: []engineResult{{err: shim.ErrWantRead}, {n: 1}}}
+	c = readyScriptedConn(raw, engine)
+	if n, err := c.Write([]byte("x")); n != 1 || err != nil ||
+		!bytes.Equal(engine.in, []byte("peer-control")) {
+		t.Fatalf("WANT_READ Write = (%d, %v), input=%q", n, err, engine.in)
+	}
+
+	timeoutErr := refreshableTimeoutError{}
+	raw = &scriptedRawConn{reads: []rawRead{{err: timeoutErr}}}
+	c = readyScriptedConn(raw, &scriptedEngine{writes: []engineResult{
+		{err: shim.ErrWantRead}, {n: 1},
+	}})
+	if n, err := c.Write([]byte("x")); n != 0 || !errors.As(err, &timeoutErr) {
+		t.Fatalf("WANT_READ Write timeout = (%d, %v)", n, err)
+	}
+	if n, err := c.Write([]byte("x")); n != 1 || err != nil {
+		t.Fatalf("Write after timeout = (%d, %v)", n, err)
 	}
 
 	c = readyScriptedConn(&scriptedRawConn{writes: []engineResult{{n: 0}}}, &scriptedEngine{
@@ -914,6 +991,12 @@ func TestClosedStateAndConstructorValidation(t *testing.T) {
 		t.Fatalf("NewListener malformed config = %v, closed=%v", err, ln.closed)
 	}
 	ln = &trackingListener{}
+	if _, err := NewListener(ln, &Config{
+		CertPEM: cert, KeyPEM: key, CipherList: "not-a-real-cipher",
+	}); err == nil || ln.closed {
+		t.Fatalf("NewListener invalid cipher config = %v, closed=%v", err, ln.closed)
+	}
+	ln = &trackingListener{}
 	listener, err := NewListener(ln, &Config{CertPEM: cert, KeyPEM: key})
 	if err != nil {
 		t.Fatal(err)
@@ -1013,7 +1096,12 @@ func TestShutdownContextSendsCloseNotify(t *testing.T) {
 		if n, err := server.Read(make([]byte, 1)); n != 0 || !errors.Is(err, io.EOF) {
 			t.Fatalf("peer Read after graceful shutdown = (%d, %v)", n, err)
 		}
+		peerDone := make(chan error, 1)
+		go func() { peerDone <- server.(GracefulConn).ShutdownContext(ctx) }()
 		if err := <-done; err != nil {
+			t.Fatal(err)
+		}
+		if err := <-peerDone; err != nil {
 			t.Fatal(err)
 		}
 	})
@@ -1023,8 +1111,20 @@ func TestShutdownContextSendsCloseNotify(t *testing.T) {
 		if err := client.Close(); err != nil {
 			t.Fatal(err)
 		}
-		if n, err := server.Read(make([]byte, 1)); n != 0 || !errors.Is(err, io.ErrUnexpectedEOF) {
+		if n, err := server.Read(make([]byte, 1)); n != 0 || err == nil || errors.Is(err, io.EOF) {
 			t.Fatalf("peer Read after abrupt close = (%d, %v)", n, err)
 		}
 	})
+}
+
+func TestShutdownContextWaitsForPeerAlert(t *testing.T) {
+	client, _ := newTestConnPair(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	defer cancel()
+	err := client.(GracefulConn).ShutdownContext(ctx)
+	var timeout net.Error
+	if !errors.Is(err, context.DeadlineExceeded) &&
+		(!errors.As(err, &timeout) || !timeout.Timeout()) {
+		t.Fatalf("ShutdownContext without peer alert = %v", err)
+	}
 }

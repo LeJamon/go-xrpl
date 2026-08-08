@@ -901,7 +901,10 @@ func OverlayOptionsFromConfig(appCfg *config.Config) []peermanagement.Option {
 	// Listen address from peer port config
 	_, peerPort, hasPeerPort := appCfg.PeerPort()
 	if hasPeerPort {
-		opts = append(opts, peermanagement.WithListenAddr(peerPort.BindAddress()))
+		opts = append(opts,
+			peermanagement.WithListenAddr(peerPort.BindAddress()),
+			peermanagement.WithSSLCiphers(peerPort.SSLCiphers),
+		)
 	} else {
 		opts = append(opts, peermanagement.WithListenAddr(""))
 	}

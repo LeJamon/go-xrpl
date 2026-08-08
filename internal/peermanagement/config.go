@@ -94,6 +94,7 @@ type Config struct {
 	ListenAddr string
 	NetworkID  uint32
 	UserAgent  string
+	SSLCiphers string
 
 	// Peer limits
 	MaxPeers    int
@@ -257,6 +258,13 @@ type Option func(*Config)
 func WithListenAddr(addr string) Option {
 	return func(c *Config) {
 		c.ListenAddr = addr
+	}
+}
+
+// WithSSLCiphers sets the OpenSSL cipher-list expression used for peer TLS.
+func WithSSLCiphers(cipherList string) Option {
+	return func(c *Config) {
+		c.SSLCiphers = cipherList
 	}
 }
 

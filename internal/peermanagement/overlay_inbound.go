@@ -154,8 +154,9 @@ func (o *Overlay) startListener(ctx context.Context) (net.Listener, error) {
 	}
 
 	tlsListener, err := peertls.NewListener(tcpListener, &peertls.Config{
-		CertPEM: certPEM,
-		KeyPEM:  keyPEM,
+		CertPEM:    certPEM,
+		KeyPEM:     keyPEM,
+		CipherList: o.cfg.SSLCiphers,
 	})
 	if err != nil {
 		_ = tcpListener.Close()
