@@ -318,7 +318,7 @@ func TestDrop_BlacklistAndReadmit(t *testing.T) {
 	// the new Consumer is already Drop-ranked.
 	m.periodicActivity()
 	c2 := m.NewInboundEndpoint(addr)
-	if got := disposition(int64(c2.Balance())); got != Drop {
+	if got := disposition(c2.Balance()); got != Drop {
 		t.Fatalf("dropped consumer not blacklisted on immediate reconnect: %v", got)
 	}
 	c2.Release()
@@ -332,7 +332,7 @@ func TestDrop_BlacklistAndReadmit(t *testing.T) {
 		clk.Advance(time.Second)
 		m.periodicActivity()
 		c3 := m.NewInboundEndpoint(addr)
-		d := disposition(int64(c3.Balance()))
+		d := disposition(c3.Balance())
 		c3.Release()
 		if d != Drop {
 			readmitted = true

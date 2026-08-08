@@ -171,10 +171,6 @@ func (e *Event) inboundMessage() *InboundMessage {
 	return msg
 }
 
-func (e *Event) manifestInboundMessage() *InboundMessage {
-	return e.inboundMessage()
-}
-
 func (e *Event) selectCharge(fee resource.Charge, chargeContext string) bool {
 	if e == nil || e.charge == nil {
 		return false
