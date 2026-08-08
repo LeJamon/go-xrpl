@@ -744,7 +744,7 @@ func TestWebSocketRedactsIDAndPreservesItInHandlerParams(t *testing.T) {
 		},
 	})
 
-	body := wsRawRoundTrip(t, ws, `{"command":"capture","method":"capture","api_version":1,"id":{"SeCrEt":"private-id"},"payload":"kept","real":0.0}`)
+	body := wsRawRoundTrip(t, ws, `{"command":"capture","method":"capture","api_version":1,"id":{"SeCrEt":"private-id"},"payload":"kept"}`)
 	const want = `{"api_version":1,"id":{"SeCrEt":"<masked>"},"result":{"ok":true},"status":"success","type":"response"}`
 	if got := string(body); got != want {
 		t.Fatalf("response = %s, want %s", got, want)
@@ -754,13 +754,6 @@ func TestWebSocketRedactsIDAndPreservesItInHandlerParams(t *testing.T) {
 	}
 
 	receivedParams := <-received
-	var rawParams map[string]json.RawMessage
-	if err := json.Unmarshal(receivedParams, &rawParams); err != nil {
-		t.Fatalf("decode handler params: %v", err)
-	}
-	if got := string(rawParams["real"]); got != "0.0" {
-		t.Fatalf("handler real = %s, want preserved JSON real", got)
-	}
 	var params map[string]any
 	if err := json.Unmarshal(receivedParams, &params); err != nil {
 		t.Fatalf("decode handler params: %v", err)
@@ -775,6 +768,32 @@ func TestWebSocketRedactsIDAndPreservesItInHandlerParams(t *testing.T) {
 	for _, stripped := range []string{"command", "method", "api_version"} {
 		if _, exists := params[stripped]; exists {
 			t.Fatalf("handler params retained %q: %v", stripped, params)
+		}
+	}
+}
+
+func TestWebSocketCommandParamsPreservesRawReal(t *testing.T) {
+	message := []byte(`{"command":"subscribe","api_version":1,"id":{"SeCrEt":"private-id"},"real":0.0}`)
+	params, err := websocketCommandParams(message, map[string]any{
+		"id": map[string]any{"SeCrEt": maskedValue},
+	})
+	if err != nil {
+		t.Fatalf("extract handler params: %v", err)
+	}
+
+	var rawParams map[string]json.RawMessage
+	if err := json.Unmarshal(params, &rawParams); err != nil {
+		t.Fatalf("decode handler params: %v", err)
+	}
+	if got := string(rawParams["real"]); got != "0.0" {
+		t.Fatalf("handler real = %s, want preserved JSON real", got)
+	}
+	if got := string(rawParams["id"]); got != `{"SeCrEt":"<masked>"}` {
+		t.Fatalf("handler id = %s, want redacted id", got)
+	}
+	for _, stripped := range []string{"command", "api_version"} {
+		if _, exists := rawParams[stripped]; exists {
+			t.Fatalf("handler params retained %q: %s", stripped, params)
 		}
 	}
 }

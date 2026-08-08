@@ -5,7 +5,6 @@ import (
 	"context"
 	"encoding/json"
 	"runtime/debug"
-	"sort"
 
 	"github.com/LeJamon/go-xrpl/internal/peermanagement/resource"
 	"github.com/LeJamon/go-xrpl/internal/rpc/handlers"
@@ -138,29 +137,7 @@ func websocketCommandParams(message []byte, requestEcho map[string]any) (json.Ra
 	if len(params) == 0 {
 		return nil, nil
 	}
-	keys := make([]string, 0, len(params))
-	for key := range params {
-		keys = append(keys, key)
-	}
-	sort.Strings(keys)
-
-	var encoded bytes.Buffer
-	encoded.Grow(len(message))
-	encoded.WriteByte('{')
-	for i, key := range keys {
-		if i > 0 {
-			encoded.WriteByte(',')
-		}
-		encodedKey, err := json.Marshal(key)
-		if err != nil {
-			return nil, err
-		}
-		encoded.Write(encodedKey)
-		encoded.WriteByte(':')
-		encoded.Write(params[key])
-	}
-	encoded.WriteByte('}')
-	return encoded.Bytes(), nil
+	return json.Marshal(params)
 }
 
 func (ws *WebSocketServer) handleSpecialCommand(wsConn *websocketConnection, ctx *types.RpcContext, cmd types.WebSocketCommand, handler wsSpecialHandler) {
