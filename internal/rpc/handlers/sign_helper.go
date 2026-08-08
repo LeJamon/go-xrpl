@@ -223,7 +223,6 @@ func jsonFieldPresent(params json.RawMessage, field string) bool {
 	return ok
 }
 
-// checkPayment validates and normalizes payment fields shared by signing and submission.
 func checkPayment(txMap map[string]any, params json.RawMessage, doPath bool, rpcCtx *types.RpcContext) *types.RpcError {
 	if txMap["TransactionType"] != "Payment" {
 		return nil

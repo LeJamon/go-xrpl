@@ -215,7 +215,6 @@ func (m *SimulateMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (
 	if err != nil {
 		return nil, rpcInternalError("simulate: transaction flattening failed", err)
 	}
-	// Marshal the canonical transaction for the ledger service call.
 	txJSON, err := json.Marshal(canonicalMap)
 	if err != nil {
 		return nil, rpcInternalError("simulate: transaction marshaling failed", err)
