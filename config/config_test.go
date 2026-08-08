@@ -258,6 +258,39 @@ path = "/tmp/test/db"
 	assert.Equal(t, []string{"10.0.0.0/8", "192.168.0.0/16"}, port.SecureGateway)
 }
 
+func TestLoadConfig_ServerSSLCipherDefaults(t *testing.T) {
+	tempDir := t.TempDir()
+	mainConfigPath := writeConfig(t, tempDir, "xrpld.toml", `
+database_path = "/tmp/test/db"
+network_id = "main"
+debug_logfile = "/tmp/test/debug.log"
+
+[server]
+ports = ["port_inherited", "port_override"]
+ssl_ciphers = "server-ciphers"
+
+[port_inherited]
+port = 51235
+ip = "127.0.0.1"
+protocol = "peer"
+
+[port_override]
+port = 51236
+ip = "127.0.0.1"
+protocol = "http"
+ssl_ciphers = "port-ciphers"
+
+[node_db]
+type = "pebble"
+path = "/tmp/test/db"
+`)
+
+	cfg, err := LoadConfig(Paths{Main: mainConfigPath})
+	require.NoError(t, err)
+	assert.Equal(t, "server-ciphers", cfg.Ports["port_inherited"].SSLCiphers)
+	assert.Equal(t, "port-ciphers", cfg.Ports["port_override"].SSLCiphers)
+}
+
 // TestLoadConfig_MinimalConfig verifies that the optional tuning sections
 // ([overlay], [transaction_queue], [sqlite], ledger_history, fetch_depth,
 // node_size, relay_*, max_transactions) may be omitted entirely.

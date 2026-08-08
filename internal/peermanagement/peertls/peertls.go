@@ -1,4 +1,4 @@
-// Package peertls provides the TLS 1.2 transport used by XRPL peers.
+// Package peertls provides the TLS 1.2-or-newer transport used by XRPL peers.
 package peertls
 
 import (
@@ -24,8 +24,9 @@ type GracefulConn interface {
 }
 
 type Config struct {
-	CertPEM []byte
-	KeyPEM  []byte
+	CertPEM    []byte
+	KeyPEM     []byte
+	CipherList string
 }
 
 // ErrSessionSigUnsupported reports that the build cannot provide XRPL's

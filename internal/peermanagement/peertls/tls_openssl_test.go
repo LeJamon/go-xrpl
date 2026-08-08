@@ -12,9 +12,11 @@ import (
 	"crypto/x509/pkix"
 	"encoding/pem"
 	"errors"
+	"fmt"
 	"io"
 	"math/big"
 	"net"
+	"os"
 	"sync"
 	"testing"
 	"time"
@@ -55,7 +57,33 @@ func newTestConnPair(t testing.TB) (PeerConn, PeerConn) {
 	t.Helper()
 	clientCert, clientKey := generateTestCert(t)
 	serverCert, serverKey := generateTestCert(t)
-	clientWire, serverWire := net.Pipe()
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("Listen: %v", err)
+	}
+	acceptResult := make(chan struct {
+		conn net.Conn
+		err  error
+	}, 1)
+	go func() {
+		conn, acceptErr := listener.Accept()
+		acceptResult <- struct {
+			conn net.Conn
+			err  error
+		}{conn: conn, err: acceptErr}
+	}()
+	clientWire, err := net.Dial("tcp", listener.Addr().String())
+	if err != nil {
+		_ = listener.Close()
+		t.Fatalf("Dial: %v", err)
+	}
+	accepted := <-acceptResult
+	_ = listener.Close()
+	if accepted.err != nil {
+		_ = clientWire.Close()
+		t.Fatalf("Accept: %v", accepted.err)
+	}
+	serverWire := accepted.conn
 
 	clientConn, err := Client(clientWire, &Config{CertPEM: clientCert, KeyPEM: clientKey})
 	if err != nil {
@@ -100,7 +128,11 @@ func TestHandshake_SessionSigRoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Listen: %v", err)
 	}
-	serverConfig := &Config{CertPEM: serverCert, KeyPEM: serverKey}
+	serverConfig := &Config{
+		CertPEM:    serverCert,
+		KeyPEM:     serverKey,
+		CipherList: "TLSv1.2:!CBC:!DSS:!PSK:!eNULL:!aNULL",
+	}
 	wrapped, err := NewListener(ln, serverConfig)
 	if err != nil {
 		_ = ln.Close()
@@ -109,6 +141,7 @@ func TestHandshake_SessionSigRoundTrip(t *testing.T) {
 	defer wrapped.Close()
 	serverConfig.CertPEM = []byte("mutated")
 	serverConfig.KeyPEM = []byte("mutated")
+	serverConfig.CipherList = "not-a-real-cipher"
 
 	dialer := &net.Dialer{Timeout: 2 * time.Second}
 	tcpClient, err := dialer.Dial("tcp", ln.Addr().String())
@@ -361,12 +394,18 @@ func TestHandshake_LargeConcurrentRoundTrip(t *testing.T) {
 		if err == nil && n != len(clientPayload) {
 			err = io.ErrShortWrite
 		}
+		if err != nil {
+			err = fmt.Errorf("client Write: %w", err)
+		}
 		errCh <- err
 	}()
 	go func() {
 		n, err := serverConn.Write(serverPayload)
 		if err == nil && n != len(serverPayload) {
 			err = io.ErrShortWrite
+		}
+		if err != nil {
+			err = fmt.Errorf("server Write: %w", err)
 		}
 		errCh <- err
 	}()
@@ -376,6 +415,9 @@ func TestHandshake_LargeConcurrentRoundTrip(t *testing.T) {
 		if err == nil && !bytes.Equal(got, serverPayload) {
 			err = errors.New("client received corrupted payload")
 		}
+		if err != nil {
+			err = fmt.Errorf("client Read: %w", err)
+		}
 		errCh <- err
 	}()
 	go func() {
@@ -384,13 +426,20 @@ func TestHandshake_LargeConcurrentRoundTrip(t *testing.T) {
 		if err == nil && !bytes.Equal(got, clientPayload) {
 			err = errors.New("server received corrupted payload")
 		}
+		if err != nil {
+			err = fmt.Errorf("server Read: %w", err)
+		}
 		errCh <- err
 	}()
 
+	var operationErrors []error
 	for range 4 {
 		if err := <-errCh; err != nil {
-			t.Fatal(err)
+			operationErrors = append(operationErrors, err)
 		}
+	}
+	for _, err := range operationErrors {
+		t.Error(err)
 	}
 }
 
@@ -541,6 +590,42 @@ type scriptedRawConn struct {
 	written   []byte
 	deadlines []time.Time
 	closed    bool
+}
+
+type readStartedConn struct {
+	net.Conn
+	started chan struct{}
+	once    sync.Once
+}
+
+type writeStartedConn struct {
+	net.Conn
+	started chan struct{}
+	once    sync.Once
+}
+
+func (c *writeStartedConn) Write(p []byte) (int, error) {
+	c.once.Do(func() { close(c.started) })
+	return c.Conn.Write(p)
+}
+
+func (c *readStartedConn) Read(p []byte) (int, error) {
+	c.once.Do(func() { close(c.started) })
+	return c.Conn.Read(p)
+}
+
+type writeWantReadEngine struct {
+	scriptedEngine
+	started chan struct{}
+	once    sync.Once
+}
+
+func (e *writeWantReadEngine) Write(p []byte) (int, error) {
+	n, err := e.scriptedEngine.Write(p)
+	if errors.Is(err, shim.ErrWantRead) {
+		e.once.Do(func() { close(e.started) })
+	}
+	return n, err
 }
 
 func (c *scriptedRawConn) Read(p []byte) (int, error) {
@@ -706,6 +791,15 @@ func TestOutputFlushIsLosslessAndAccountsPlaintext(t *testing.T) {
 	}
 
 	raw = &scriptedRawConn{}
+	c = readyScriptedConn(raw, &scriptedEngine{reads: []engineResult{
+		{err: shim.ErrWantWrite, out: []byte("write-progress")}, {n: 1},
+	}})
+	if n, err := c.Read(make([]byte, 1)); n != 1 || err != nil ||
+		!bytes.Equal(raw.written, []byte("write-progress")) {
+		t.Fatalf("Read progressing pending Write = (%d, %v), output=%q", n, err, raw.written)
+	}
+
+	raw = &scriptedRawConn{}
 	c = readyScriptedConn(raw, &scriptedEngine{writes: []engineResult{
 		{err: shim.ErrWantWrite, out: []byte("flight")},
 		{n: 1, out: []byte("record")},
@@ -722,11 +816,195 @@ func TestOutputFlushIsLosslessAndAccountsPlaintext(t *testing.T) {
 		t.Fatalf("zero-progress WANT_WRITE error = %v", err)
 	}
 
+	raw = &scriptedRawConn{reads: []rawRead{{data: []byte("peer-control")}}}
+	engine := &scriptedEngine{writes: []engineResult{{err: shim.ErrWantRead}, {n: 1}}}
+	c = readyScriptedConn(raw, engine)
+	if n, err := c.Write([]byte("x")); n != 1 || err != nil ||
+		!bytes.Equal(engine.in, []byte("peer-control")) {
+		t.Fatalf("WANT_READ Write = (%d, %v), input=%q", n, err, engine.in)
+	}
+
+	timeoutErr := refreshableTimeoutError{}
+	raw = &scriptedRawConn{reads: []rawRead{{err: timeoutErr}}}
+	c = readyScriptedConn(raw, &scriptedEngine{writes: []engineResult{
+		{err: shim.ErrWantRead}, {n: 1},
+	}})
+	if n, err := c.Write([]byte("x")); n != 0 || !errors.As(err, &timeoutErr) {
+		t.Fatalf("WANT_READ Write timeout = (%d, %v)", n, err)
+	}
+	if n, err := c.Write([]byte("x")); n != 1 || err != nil {
+		t.Fatalf("Write after timeout = (%d, %v)", n, err)
+	}
+
 	c = readyScriptedConn(&scriptedRawConn{writes: []engineResult{{n: 0}}}, &scriptedEngine{
 		writes: []engineResult{{n: 1, out: []byte("record")}},
 	})
 	if n, err := c.Write([]byte("x")); n != 1 || !errors.Is(err, io.ErrNoProgress) {
 		t.Fatalf("zero raw-write progress = (%d, %v)", n, err)
+	}
+}
+
+func TestCrossDirectionIOHonorsOperationDeadline(t *testing.T) {
+	t.Run("write waiting for read", func(t *testing.T) {
+		raw, peer := net.Pipe()
+		defer peer.Close()
+		c := readyScriptedConn(raw, &scriptedEngine{
+			writes: []engineResult{{err: shim.ErrWantRead}},
+		})
+		defer c.Close()
+		requireDeadline(t, c.SetWriteDeadline(time.Now().Add(25*time.Millisecond)))
+
+		n, err := c.Write([]byte("x"))
+		if n != 0 || !errors.Is(err, os.ErrDeadlineExceeded) {
+			t.Fatalf("Write = (%d, %v), want deadline exceeded", n, err)
+		}
+	})
+
+	t.Run("read waiting for write", func(t *testing.T) {
+		raw, peer := net.Pipe()
+		defer peer.Close()
+		c := readyScriptedConn(raw, &scriptedEngine{
+			reads: []engineResult{{err: shim.ErrWantWrite, out: []byte("control")}},
+		})
+		defer c.Close()
+		requireDeadline(t, c.SetReadDeadline(time.Now().Add(25*time.Millisecond)))
+
+		n, err := c.Read(make([]byte, 1))
+		if n != 0 || !errors.Is(err, os.ErrDeadlineExceeded) {
+			t.Fatalf("Read = (%d, %v), want deadline exceeded", n, err)
+		}
+	})
+
+	t.Run("read waiting for input owner", func(t *testing.T) {
+		rawConn, peer := net.Pipe()
+		defer peer.Close()
+		raw := &readStartedConn{Conn: rawConn, started: make(chan struct{})}
+		c := readyScriptedConn(raw, &scriptedEngine{
+			reads:  []engineResult{{err: shim.ErrWantRead}},
+			writes: []engineResult{{err: shim.ErrWantRead}},
+		})
+		defer c.Close()
+		requireDeadline(t, c.SetWriteDeadline(time.Now().Add(time.Second)))
+
+		writeDone := make(chan error, 1)
+		go func() {
+			_, err := c.Write([]byte("x"))
+			writeDone <- err
+		}()
+		select {
+		case <-raw.started:
+		case <-time.After(time.Second):
+			t.Fatal("Write did not start cross-direction input")
+		}
+		requireDeadline(t, c.SetReadDeadline(time.Now().Add(25*time.Millisecond)))
+
+		n, err := c.Read(make([]byte, 1))
+		if n != 0 || !errors.Is(err, os.ErrDeadlineExceeded) {
+			t.Fatalf("Read = (%d, %v), want deadline exceeded", n, err)
+		}
+		_ = c.Close()
+		select {
+		case <-writeDone:
+		case <-time.After(time.Second):
+			t.Fatal("Write did not unblock after Close")
+		}
+	})
+
+	t.Run("write waiting for output owner", func(t *testing.T) {
+		rawConn, peer := net.Pipe()
+		defer peer.Close()
+		raw := &writeStartedConn{Conn: rawConn, started: make(chan struct{})}
+		c := readyScriptedConn(raw, &scriptedEngine{
+			reads:  []engineResult{{err: shim.ErrWantWrite, out: []byte("control")}},
+			writes: []engineResult{{n: 1}},
+		})
+		defer c.Close()
+		requireDeadline(t, c.SetReadDeadline(time.Now().Add(time.Second)))
+
+		readDone := make(chan error, 1)
+		go func() {
+			_, err := c.Read(make([]byte, 1))
+			readDone <- err
+		}()
+		select {
+		case <-raw.started:
+		case <-time.After(time.Second):
+			t.Fatal("Read did not start cross-direction output")
+		}
+		requireDeadline(t, c.SetWriteDeadline(time.Now().Add(25*time.Millisecond)))
+
+		n, err := c.Write([]byte("x"))
+		if n != 0 || !errors.Is(err, os.ErrDeadlineExceeded) {
+			t.Fatalf("Write = (%d, %v), want deadline exceeded", n, err)
+		}
+		_ = c.Close()
+		select {
+		case <-readDone:
+		case <-time.After(time.Second):
+			t.Fatal("Read did not unblock after Close")
+		}
+	})
+}
+
+func TestWriteWantReadProgressesWithBlockedApplicationRead(t *testing.T) {
+	rawConn, peer := net.Pipe()
+	defer peer.Close()
+	raw := &readStartedConn{Conn: rawConn, started: make(chan struct{})}
+	engine := &writeWantReadEngine{
+		scriptedEngine: scriptedEngine{
+			reads:  []engineResult{{err: shim.ErrWantRead}, {err: shim.ErrWantRead}},
+			writes: []engineResult{{err: shim.ErrWantRead}, {n: 1}},
+		},
+		started: make(chan struct{}),
+	}
+	c := readyScriptedConn(raw, engine)
+	defer c.Close()
+	requireDeadline(t, c.SetWriteDeadline(time.Now().Add(time.Second)))
+
+	readDone := make(chan error, 1)
+	go func() {
+		_, err := c.Read(make([]byte, 1))
+		readDone <- err
+	}()
+	select {
+	case <-raw.started:
+	case <-time.After(time.Second):
+		t.Fatal("Read did not start raw input")
+	}
+
+	writeDone := make(chan error, 1)
+	go func() {
+		_, err := c.Write([]byte("x"))
+		writeDone <- err
+	}()
+	select {
+	case <-engine.started:
+	case <-time.After(time.Second):
+		t.Fatal("Write did not request TLS input")
+	}
+	if _, err := peer.Write([]byte("control")); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case err := <-writeDone:
+		if err != nil {
+			t.Fatalf("Write error = %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("Write remained blocked after control-only input")
+	}
+	_ = c.Close()
+	select {
+	case <-readDone:
+	case <-time.After(time.Second):
+		t.Fatal("Read did not unblock after Close")
+	}
+}
+
+func requireDeadline(t *testing.T, err error) {
+	t.Helper()
+	if err != nil {
+		t.Fatalf("set deadline: %v", err)
 	}
 }
 
@@ -914,6 +1192,12 @@ func TestClosedStateAndConstructorValidation(t *testing.T) {
 		t.Fatalf("NewListener malformed config = %v, closed=%v", err, ln.closed)
 	}
 	ln = &trackingListener{}
+	if _, err := NewListener(ln, &Config{
+		CertPEM: cert, KeyPEM: key, CipherList: "not-a-real-cipher",
+	}); err == nil || ln.closed {
+		t.Fatalf("NewListener invalid cipher config = %v, closed=%v", err, ln.closed)
+	}
+	ln = &trackingListener{}
 	listener, err := NewListener(ln, &Config{CertPEM: cert, KeyPEM: key})
 	if err != nil {
 		t.Fatal(err)
@@ -969,6 +1253,17 @@ type shutdownBarrierEngine struct {
 	once    sync.Once
 }
 
+type shutdownSignalEngine struct {
+	scriptedEngine
+	started chan struct{}
+	once    sync.Once
+}
+
+func (e *shutdownSignalEngine) Shutdown() error {
+	e.once.Do(func() { close(e.started) })
+	return nil
+}
+
 func (e *shutdownBarrierEngine) Shutdown() error {
 	e.once.Do(func() { close(e.started) })
 	<-e.release
@@ -1003,6 +1298,30 @@ func TestShutdownContextConcurrentClose(t *testing.T) {
 	}
 }
 
+func TestShutdownContextWaitsForActiveWrite(t *testing.T) {
+	engine := &shutdownSignalEngine{started: make(chan struct{})}
+	c := readyScriptedConn(&scriptedRawConn{}, engine)
+	c.writeMu.Lock()
+
+	done := make(chan error, 1)
+	go func() { done <- c.ShutdownContext(context.Background()) }()
+	select {
+	case <-engine.started:
+		t.Fatal("shutdown entered TLS while a Write was active")
+	case <-time.After(20 * time.Millisecond):
+	}
+	c.writeMu.Unlock()
+
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("shutdown did not proceed after Write completed")
+	}
+}
+
 func TestShutdownContextSendsCloseNotify(t *testing.T) {
 	t.Run("clean", func(t *testing.T) {
 		client, server := newTestConnPair(t)
@@ -1013,7 +1332,12 @@ func TestShutdownContextSendsCloseNotify(t *testing.T) {
 		if n, err := server.Read(make([]byte, 1)); n != 0 || !errors.Is(err, io.EOF) {
 			t.Fatalf("peer Read after graceful shutdown = (%d, %v)", n, err)
 		}
+		peerDone := make(chan error, 1)
+		go func() { peerDone <- server.(GracefulConn).ShutdownContext(ctx) }()
 		if err := <-done; err != nil {
+			t.Fatal(err)
+		}
+		if err := <-peerDone; err != nil {
 			t.Fatal(err)
 		}
 	})
@@ -1023,8 +1347,20 @@ func TestShutdownContextSendsCloseNotify(t *testing.T) {
 		if err := client.Close(); err != nil {
 			t.Fatal(err)
 		}
-		if n, err := server.Read(make([]byte, 1)); n != 0 || !errors.Is(err, io.ErrUnexpectedEOF) {
+		if n, err := server.Read(make([]byte, 1)); n != 0 || err == nil || errors.Is(err, io.EOF) {
 			t.Fatalf("peer Read after abrupt close = (%d, %v)", n, err)
 		}
 	})
+}
+
+func TestShutdownContextWaitsForPeerAlert(t *testing.T) {
+	client, _ := newTestConnPair(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	defer cancel()
+	err := client.(GracefulConn).ShutdownContext(ctx)
+	var timeout net.Error
+	if !errors.Is(err, context.DeadlineExceeded) &&
+		(!errors.As(err, &timeout) || !timeout.Timeout()) {
+		t.Fatalf("ShutdownContext without peer alert = %v", err)
+	}
 }

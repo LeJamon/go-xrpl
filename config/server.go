@@ -22,6 +22,7 @@ type ServerConfig struct {
 	AdminPassword  string   `toml:"admin_password" mapstructure:"admin_password"`
 	AllowedOrigins []string `toml:"allowed_origins" mapstructure:"allowed_origins"` // Exact browser origins allowed on HTTP/WS ports
 	SecureGateway  []string `toml:"secure_gateway" mapstructure:"secure_gateway"`   // Default trusted proxy networks
+	SSLCiphers     string   `toml:"ssl_ciphers" mapstructure:"ssl_ciphers"`
 	// MaxConnections is the process-wide ceiling on concurrent HTTP + WebSocket
 	// connections. 0 keeps the bounded built-in default; a negative value
 	// disables the global cap (per-port limits still apply).

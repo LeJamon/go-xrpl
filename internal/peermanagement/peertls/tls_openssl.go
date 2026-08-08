@@ -8,6 +8,8 @@ import (
 	"fmt"
 	"io"
 	"net"
+	"os"
+	"runtime"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -124,7 +126,13 @@ func newContext(cfg *Config, isServer bool) (*shim.Ctx, error) {
 	if cfg == nil || len(cfg.CertPEM) == 0 || len(cfg.KeyPEM) == 0 {
 		return nil, errors.New("peertls: Config requires CertPEM and KeyPEM")
 	}
-	ctx, err := shim.NewCtx(isServer)
+	var ctx *shim.Ctx
+	var err error
+	if cfg.CipherList == "" {
+		ctx, err = shim.NewCtx(isServer)
+	} else {
+		ctx, err = shim.NewCtxWithCipherList(isServer, cfg.CipherList)
+	}
 	if err != nil {
 		return nil, err
 	}
@@ -191,9 +199,12 @@ func (l *listener) Addr() net.Addr { return l.inner.Addr() }
 
 // Locks:
 //   - sslMu owns the engine, TLS state, and terminal TLS error.
+//   - readMu serializes complete application Read calls.
 //   - inMu owns raw reads, pendingIn, and pendingReadErr.
+//   - writeMu serializes complete application Write calls.
 //   - outMu owns raw writes, pendingOut, and outputErr.
 //   - queuedOutMu owns TLS records waiting for the raw writer.
+//   - deadlineMu owns logical deadlines and cross-direction deadline state.
 //
 // No lock is held across raw I/O except its directional lock. Close closes the
 // raw connection before taking sslMu so blocked operations are interrupted.
@@ -205,20 +216,50 @@ type conn struct {
 	state       connState
 	terminalErr error
 
-	inMu           sync.Mutex
+	readMu         sync.Mutex
+	inMu           operationMutex
 	pendingIn      []byte
 	pendingReadErr error
+	inputVersion   atomic.Uint64
 
-	outMu      sync.Mutex
+	writeMu    sync.Mutex
+	outMu      operationMutex
 	pendingOut []byte
 	outputErr  error
 
 	queuedOutMu sync.Mutex
 	queuedOut   []byte
 
+	deadlineMu      sync.Mutex
+	readDeadline    time.Time
+	writeDeadline   time.Time
+	deadlineChanged chan struct{}
+	writeReading    bool
+	readWriting     bool
+
 	closed    atomic.Bool
 	closeOnce sync.Once
 	closeErr  error
+}
+
+type operationMutex chan struct{}
+
+func newOperationMutex() operationMutex {
+	m := make(operationMutex, 1)
+	m <- struct{}{}
+	return m
+}
+
+func (m operationMutex) Lock()   { <-m }
+func (m operationMutex) Unlock() { m <- struct{}{} }
+
+func (m operationMutex) TryLock() bool {
+	select {
+	case <-m:
+		return true
+	default:
+		return false
+	}
 }
 
 func newConn(inner net.Conn, cfg *Config, isServer bool) (*conn, error) {
@@ -238,7 +279,14 @@ func newConn(inner net.Conn, cfg *Config, isServer bool) (*conn, error) {
 }
 
 func newConnWithEngine(inner net.Conn, ssl tlsEngine) *conn {
-	return &conn{inner: inner, ssl: ssl, state: stateNew}
+	return &conn{
+		inner:           inner,
+		ssl:             ssl,
+		state:           stateNew,
+		inMu:            newOperationMutex(),
+		outMu:           newOperationMutex(),
+		deadlineChanged: make(chan struct{}),
+	}
 }
 
 // HandshakeContext performs the TLS handshake. A successful handshake is
@@ -383,7 +431,7 @@ func (c *conn) installContextDeadline(ctx context.Context) (func() error, error)
 		}
 		// net.Conn exposes no deadline getter. A context deadline necessarily
 		// overwrites any prior deadline and is cleared after this operation.
-		return c.inner.SetDeadline(time.Time{})
+		return c.SetDeadline(time.Time{})
 	}, nil
 }
 
@@ -418,7 +466,7 @@ func (c *conn) pumpInboundLocked() error {
 
 func (c *conn) feedPendingInputLocked() error {
 	c.sslMu.Lock()
-	if c.state == stateClosed || c.state == stateShuttingDown || c.closed.Load() || c.ssl == nil {
+	if c.state == stateClosed || c.closed.Load() || c.ssl == nil {
 		c.sslMu.Unlock()
 		return net.ErrClosed
 	}
@@ -429,12 +477,13 @@ func (c *conn) feedPendingInputLocked() error {
 	}
 	if n > 0 {
 		c.pendingIn = c.pendingIn[n:]
+		c.inputVersion.Add(1)
 	}
 	if err != nil {
 		return c.failTLS(err)
 	}
 	if n == 0 {
-		return c.failTLS(io.ErrNoProgress)
+		return io.ErrNoProgress
 	}
 	return nil
 }
@@ -588,9 +637,133 @@ func (c *conn) operationStatusLocked() error {
 	return nil
 }
 
-func (c *conn) Read(b []byte) (int, error) {
-	c.inMu.Lock()
+func (c *conn) lockDirection(m operationMutex, forWrite bool) error {
+	for {
+		c.deadlineMu.Lock()
+		deadline := c.readDeadline
+		if forWrite {
+			deadline = c.writeDeadline
+		}
+		changed := c.deadlineChanged
+		c.deadlineMu.Unlock()
+
+		if deadline.IsZero() {
+			select {
+			case <-m:
+				return nil
+			case <-changed:
+				continue
+			}
+		}
+
+		wait := time.Until(deadline)
+		if wait <= 0 {
+			return os.ErrDeadlineExceeded
+		}
+		timer := time.NewTimer(wait)
+		select {
+		case <-m:
+			if !timer.Stop() {
+				select {
+				case <-timer.C:
+				default:
+				}
+			}
+			return nil
+		case <-changed:
+			if !timer.Stop() {
+				select {
+				case <-timer.C:
+				default:
+				}
+			}
+		case <-timer.C:
+			select {
+			case <-changed:
+				continue
+			default:
+				return os.ErrDeadlineExceeded
+			}
+		}
+	}
+}
+
+func (c *conn) lockInputForRead() error  { return c.lockDirection(c.inMu, false) }
+func (c *conn) lockInputForWrite() error { return c.lockDirection(c.inMu, true) }
+func (c *conn) lockOutputForWrite() error {
+	return c.lockDirection(c.outMu, true)
+}
+
+func (c *conn) pumpInboundForRead() error {
+	if err := c.lockInputForRead(); err != nil {
+		return err
+	}
 	defer c.inMu.Unlock()
+	return c.pumpInboundLocked()
+}
+
+func (c *conn) beginWriteRead() error {
+	c.deadlineMu.Lock()
+	defer c.deadlineMu.Unlock()
+	c.writeReading = true
+	return c.inner.SetReadDeadline(c.writeDeadline)
+}
+
+func (c *conn) endWriteRead() error {
+	c.deadlineMu.Lock()
+	defer c.deadlineMu.Unlock()
+	c.writeReading = false
+	return c.inner.SetReadDeadline(c.readDeadline)
+}
+
+func (c *conn) pumpInboundForWrite(inputVersion uint64) error {
+	if err := c.lockInputForWrite(); err != nil {
+		return err
+	}
+	defer c.inMu.Unlock()
+	if c.inputVersion.Load() != inputVersion {
+		return nil
+	}
+	if err := c.beginWriteRead(); err != nil {
+		_ = c.endWriteRead()
+		return err
+	}
+	err := c.pumpInboundLocked()
+	if restoreErr := c.endWriteRead(); err == nil {
+		err = restoreErr
+	}
+	return err
+}
+
+func (c *conn) beginReadWrite() error {
+	c.deadlineMu.Lock()
+	defer c.deadlineMu.Unlock()
+	c.readWriting = true
+	return c.inner.SetWriteDeadline(c.readDeadline)
+}
+
+func (c *conn) endReadWrite() error {
+	c.deadlineMu.Lock()
+	defer c.deadlineMu.Unlock()
+	c.readWriting = false
+	return c.inner.SetWriteDeadline(c.writeDeadline)
+}
+
+func (c *conn) flushReadOutputLocked(drainErr error) error {
+	if err := c.beginReadWrite(); err != nil {
+		_ = c.endReadWrite()
+		return err
+	}
+	err := c.flushStepOutputLocked(drainErr)
+	if restoreErr := c.endReadWrite(); err == nil {
+		err = restoreErr
+	}
+	return err
+}
+
+func (c *conn) Read(b []byte) (int, error) {
+	c.readMu.Lock()
+	defer c.readMu.Unlock()
 	if err := c.operationStatus(); err != nil {
 		return 0, err
 	}
@@ -615,7 +788,7 @@ func (c *conn) Read(b []byte) (int, error) {
 		var flushErr error
 		if len(out) > 0 || drainErr != nil {
 			if c.outMu.TryLock() {
-				flushErr = c.flushStepOutputLocked(drainErr)
+				flushErr = c.flushReadOutputLocked(drainErr)
 				c.outMu.Unlock()
 			} else {
 				if drainErr != nil {
@@ -631,18 +804,35 @@ func (c *conn) Read(b []byte) (int, error) {
 		}
 		switch {
 		case errors.Is(err, shim.ErrWantRead):
-			if err := c.pumpInboundLocked(); err != nil {
+			pumpErr := c.pumpInboundForRead()
+			if pumpErr != nil {
 				var timeoutErr net.Error
-				if errors.As(err, &timeoutErr) && timeoutErr.Timeout() {
-					return 0, err
+				if errors.As(pumpErr, &timeoutErr) && timeoutErr.Timeout() {
+					return 0, pumpErr
 				}
-				return 0, c.failTLS(err)
+				return 0, c.failTLS(fmt.Errorf("peertls: read ciphertext: %w", pumpErr))
 			}
 		case errors.Is(err, shim.ErrWantWrite):
-			if len(out) == 0 {
-				return 0, c.failTLS(io.ErrNoProgress)
+			if c.outMu.TryLock() {
+				flushErr := c.flushReadOutputLocked(nil)
+				c.outMu.Unlock()
+				if flushErr != nil {
+					return 0, flushErr
+				}
+				continue
 			}
-			continue
+			pumpErr := c.pumpInboundForRead()
+			if pumpErr != nil {
+				if errors.Is(pumpErr, io.ErrNoProgress) {
+					runtime.Gosched()
+					continue
+				}
+				var timeoutErr net.Error
+				if errors.As(pumpErr, &timeoutErr) && timeoutErr.Timeout() {
+					return 0, pumpErr
+				}
+				return 0, c.failTLS(fmt.Errorf("peertls: read ciphertext while write pending: %w", pumpErr))
+			}
 		case errors.Is(err, shim.ErrZeroRet):
 			return 0, io.EOF
 		case err == nil:
@@ -654,8 +844,18 @@ func (c *conn) Read(b []byte) (int, error) {
 }
 
 func (c *conn) Write(b []byte) (int, error) {
-	c.outMu.Lock()
-	defer c.releaseOutputLock()
+	c.writeMu.Lock()
+	defer c.writeMu.Unlock()
+	outputLocked := false
+	defer func() {
+		if outputLocked {
+			c.releaseOutputLock()
+		}
+	}()
+	if err := c.lockOutputForWrite(); err != nil {
+		return 0, err
+	}
+	outputLocked = true
 	if err := c.operationStatus(); err != nil {
 		return 0, err
 	}
@@ -668,6 +868,7 @@ func (c *conn) Write(b []byte) (int, error) {
 
 	written := 0
 	for written < len(b) {
+		inputVersion := c.inputVersion.Load()
 		c.sslMu.Lock()
 		if err := c.operationStatusLocked(); err != nil {
 			c.sslMu.Unlock()
@@ -693,12 +894,26 @@ func (c *conn) Write(b []byte) (int, error) {
 		}
 		switch {
 		case errors.Is(err, shim.ErrWantWrite):
-			if n == 0 && len(out) == 0 {
-				return written, c.failTLS(io.ErrNoProgress)
-			}
 			continue
 		case errors.Is(err, shim.ErrWantRead):
-			return written, c.failTLS(errors.New("peertls: unexpected WANT_READ from SSL_write"))
+			c.releaseOutputLock()
+			outputLocked = false
+			pumpErr := c.pumpInboundForWrite(inputVersion)
+			if lockErr := c.lockOutputForWrite(); lockErr != nil {
+				return written, lockErr
+			}
+			outputLocked = true
+			if pumpErr != nil {
+				var timeoutErr net.Error
+				if errors.As(pumpErr, &timeoutErr) && timeoutErr.Timeout() {
+					return written, pumpErr
+				}
+				return written, c.failTLS(pumpErr)
+			}
+			if flushErr := c.flushOutputLocked(); flushErr != nil {
+				return written, flushErr
+			}
+			continue
 		default:
 			return written, c.failTLS(err)
 		}
@@ -714,6 +929,12 @@ func (c *conn) ShutdownContext(ctx context.Context) (retErr error) {
 		_ = c.Close()
 		close(lockWaitDone)
 	})
+	c.readMu.Lock()
+	defer c.readMu.Unlock()
+	c.writeMu.Lock()
+	defer c.writeMu.Unlock()
+	c.inMu.Lock()
+	defer c.inMu.Unlock()
 	c.outMu.Lock()
 	defer c.releaseOutputLock()
 	defer func() {
@@ -762,9 +983,15 @@ func (c *conn) ShutdownContext(ctx context.Context) (retErr error) {
 			err = flushErr
 			break
 		}
-		if err == nil || errors.Is(err, shim.ErrWantRead) {
+		if err == nil {
 			err = nil
 			break
+		}
+		if errors.Is(err, shim.ErrWantRead) {
+			if err = c.pumpInboundLocked(); err != nil {
+				break
+			}
+			continue
 		}
 		if errors.Is(err, shim.ErrWantWrite) && len(out) == 0 {
 			err = io.ErrNoProgress
@@ -806,9 +1033,49 @@ func (c *conn) Close() error {
 func (c *conn) LocalAddr() net.Addr  { return c.inner.LocalAddr() }
 func (c *conn) RemoteAddr() net.Addr { return c.inner.RemoteAddr() }
 
-func (c *conn) SetDeadline(t time.Time) error      { return c.inner.SetDeadline(t) }
-func (c *conn) SetReadDeadline(t time.Time) error  { return c.inner.SetReadDeadline(t) }
-func (c *conn) SetWriteDeadline(t time.Time) error { return c.inner.SetWriteDeadline(t) }
+func (c *conn) notifyDeadlineChangeLocked() {
+	close(c.deadlineChanged)
+	c.deadlineChanged = make(chan struct{})
+}
+
+func (c *conn) SetDeadline(t time.Time) error {
+	c.deadlineMu.Lock()
+	defer c.deadlineMu.Unlock()
+	c.readDeadline = t
+	c.writeDeadline = t
+	c.notifyDeadlineChangeLocked()
+	return c.inner.SetDeadline(t)
+}
+
+func (c *conn) SetReadDeadline(t time.Time) error {
+	c.deadlineMu.Lock()
+	defer c.deadlineMu.Unlock()
+	c.readDeadline = t
+	c.notifyDeadlineChangeLocked()
+	var errs []error
+	if !c.writeReading {
+		errs = append(errs, c.inner.SetReadDeadline(t))
+	}
+	if c.readWriting {
+		errs = append(errs, c.inner.SetWriteDeadline(t))
+	}
+	return errors.Join(errs...)
+}
+
+func (c *conn) SetWriteDeadline(t time.Time) error {
+	c.deadlineMu.Lock()
+	defer c.deadlineMu.Unlock()
+	c.writeDeadline = t
+	c.notifyDeadlineChangeLocked()
+	var errs []error
+	if !c.readWriting {
+		errs = append(errs, c.inner.SetWriteDeadline(t))
+	}
+	if c.writeReading {
+		errs = append(errs, c.inner.SetReadDeadline(t))
+	}
+	return errors.Join(errs...)
+}
 
 func (c *conn) SharedValue() ([]byte, error) {
 	localCopy, peerCopy, err := c.snapshotFinishedLocked()

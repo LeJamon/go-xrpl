@@ -599,7 +599,10 @@ func TestStup_OverlayOptionsFromConfig_NetworkID(t *testing.T) {
 func TestStup_OverlayOptionsFromConfig_PeerPort(t *testing.T) {
 	cfg := &config.Config{
 		Ports: map[string]config.PortConfig{
-			"peer": {Port: 51235, IP: "0.0.0.0", Protocol: "peer"},
+			"peer": {
+				Port: 51235, IP: "0.0.0.0", Protocol: "peer",
+				SSLCiphers: "DHE-RSA-AES128-GCM-SHA256",
+			},
 		},
 	}
 	pcfg := peermanagement.DefaultConfig()
@@ -607,6 +610,7 @@ func TestStup_OverlayOptionsFromConfig_PeerPort(t *testing.T) {
 		opt(&pcfg)
 	}
 	assert.Contains(t, pcfg.ListenAddr, "51235")
+	assert.Equal(t, "DHE-RSA-AES128-GCM-SHA256", pcfg.SSLCiphers)
 }
 
 func TestStup_OverlayOptionsFromConfig_BootstrapAndFixed(t *testing.T) {
