@@ -1,5 +1,3 @@
-/* shim.h - thin OpenSSL shim for XRPL peer TLS. */
-
 #ifndef PEERTLS_SHIM_H
 #define PEERTLS_SHIM_H
 
@@ -52,7 +50,6 @@ int peertls_bio_write(peertls_ssl* s, const void* buf, size_t len,
 size_t peertls_get_finished(peertls_ssl* s, void* buf, size_t len);
 size_t peertls_get_peer_finished(peertls_ssl* s, void* buf, size_t len);
 
-/* Narrow state inspection used by direct shim tests. */
 int           peertls_ctx_protocol_bounds(peertls_ctx* ctx,
                                           int* min_version,
                                           int* max_version);

@@ -261,7 +261,6 @@ func WithListenAddr(addr string) Option {
 	}
 }
 
-// WithSSLCiphers sets the OpenSSL cipher-list expression used for peer TLS.
 func WithSSLCiphers(cipherList string) Option {
 	return func(c *Config) {
 		c.SSLCiphers = cipherList
