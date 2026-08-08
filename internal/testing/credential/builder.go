@@ -90,6 +90,7 @@ func (b *CredentialCreateBuilder) Build() *credential.CredentialCreate {
 		if !b.uriIsHex {
 			c.URI = hex.EncodeToString([]byte(b.uri))
 		}
+		c.Common.SetPresentFields(map[string]bool{"URI": true})
 	}
 	if b.expiration != nil {
 		c.Expiration = b.expiration

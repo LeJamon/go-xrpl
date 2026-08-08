@@ -489,28 +489,10 @@ func TestCreateFailed(t *testing.T) {
 	})
 
 	// Reference: rippled "Credentials fail, URI empty."
-	// An explicitly present but zero-length URI should fail with temMALFORMED.
 	t.Run("EmptyURI", func(t *testing.T) {
-		// Construct directly to set a present-but-empty URI field
-		credTypeHex := hex.EncodeToString([]byte(credType))
-		cc := credtx.NewCredentialCreate(issuer.Address, subject.Address, credTypeHex)
-		cc.Fee = "10"
-		// Set URI to a valid hex string that decodes to empty bytes
-		// The builder's URIHex("") results in no URI field; we need an explicitly empty VL.
-		// In rippled, credentials::uri("") sets the field to an empty blob.
-		// In Go, an empty string URI is treated as absent. We need to test the
-		// case where the URI hex is set but decodes to zero-length.
-		// Setting URI to "" won't trigger the check since omitempty skips it.
-		// This matches the Go behavior where absent URI is valid.
-		// When URI field IS present but empty, it should fail.
-		cc.URI = "00" // A 1-byte URI is valid, but truly empty ("") is absent
-		// For the actual empty-URI case, we need the hex to decode to empty
-		// The Go validation checks: len(decoded) == 0 → ErrCredentialURIEmpty
-		// But cc.URI = "" would skip the check due to `if c.URI != ""`
-		// This is a difference from rippled where the field can be present-but-empty.
-		// Test what we can: a present but 0-decoded URI
-		t.Log("Go treats empty URI string as absent (not present), which is valid. " +
-			"Rippled can have a present-but-empty VL field which fails with temMALFORMED.")
+		tx := credential.CredentialCreateText(issuer, subject, credType).URI("").Build()
+		result := env.Submit(tx)
+		jtx.RequireTxFail(t, result, jtx.TemMALFORMED)
 	})
 
 	// Reference: rippled "Credentials fail, expiration in the past."

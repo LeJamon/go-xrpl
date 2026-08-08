@@ -1275,6 +1275,7 @@ func TestDepositPreauth_SortingCredentials(t *testing.T) {
 			CredTypeText: credTypes[i],
 		}
 	}
+	credentials[1].Issuer = credentials[0].Issuer
 	expectedCredentials := append([]dp.AuthorizeCredentials(nil), credentials...)
 	sort.Slice(expectedCredentials, func(i, j int) bool {
 		if cmp := bytes.Compare(expectedCredentials[i].Issuer.ID[:], expectedCredentials[j].Issuer.ID[:]); cmp != 0 {

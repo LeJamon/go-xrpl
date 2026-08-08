@@ -141,11 +141,29 @@ func TestNonEmptyCredentialArrayKeepsCanonicalSTArrayShape(t *testing.T) {
 }
 
 func TestCredentialArrayAbsenceRoundTrips(t *testing.T) {
+	registerWireTests.Do(Register)
 	txn := NewDepositPreauth("rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh")
 	flat, err := txn.Flatten()
 	require.NoError(t, err)
 	require.NotContains(t, flat, "AuthorizeCredentials")
 	require.NotContains(t, flat, "UnauthorizeCredentials")
+
+	jsonBytes, err := txcore.ToJSON(txn)
+	require.NoError(t, err)
+	fromJSON, err := txcore.ParseJSON(jsonBytes)
+	require.NoError(t, err)
+	jsonTxn := fromJSON.(*DepositPreauth)
+	require.False(t, jsonTxn.GetCommon().HasField("AuthorizeCredentials"))
+	require.False(t, jsonTxn.GetCommon().HasField("UnauthorizeCredentials"))
+
+	blob, err := binarycodec.EncodeBytes(flat)
+	require.NoError(t, err)
+	fromBinary, err := txcore.ParseFromBinary(blob)
+	require.NoError(t, err)
+	binaryTxn := fromBinary.(*DepositPreauth)
+	require.False(t, binaryTxn.GetCommon().HasField("AuthorizeCredentials"))
+	require.False(t, binaryTxn.GetCommon().HasField("UnauthorizeCredentials"))
+
 	require.NoError(t, txn.CheckExtraFeatures(amendment.EmptyRules()))
 	validationErr := txn.Validate()
 	resultErr, ok := ter.AsResultError(validationErr)

@@ -18,6 +18,18 @@ func TestCredentialTypeBuildersUseExplicitRepresentations(t *testing.T) {
 	wire := CredentialCreateHex(issuer, subject, "DeAdBeEf").Build()
 	require.Equal(t, "DeAdBeEf", wire.CredentialType)
 
+	omittedURI := CredentialCreateText(issuer, subject, "credential").Build()
+	require.False(t, omittedURI.HasField("URI"))
+
+	for _, emptyURI := range []*CredentialCreateBuilder{
+		CredentialCreateText(issuer, subject, "credential").URI(""),
+		CredentialCreateText(issuer, subject, "credential").URIHex(""),
+	} {
+		built := emptyURI.Build()
+		require.True(t, built.HasField("URI"))
+		require.Error(t, built.Validate())
+	}
+
 	require.Error(t, CredentialCreateHex(issuer, subject, "abc").Build().Validate())
 	require.Error(t, CredentialCreateHex(issuer, subject, "not-hex").Build().Validate())
 	require.Error(t, CredentialCreateText(issuer, subject, "").Build().Validate())

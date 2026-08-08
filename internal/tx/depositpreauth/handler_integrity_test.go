@@ -3,6 +3,7 @@ package depositpreauth
 import (
 	"bytes"
 	"errors"
+	"math"
 	"sort"
 	"testing"
 
@@ -22,6 +23,7 @@ import (
 type faultView struct {
 	data        map[[32]byte][]byte
 	readErrors  map[[32]byte]error
+	insertError map[[32]byte]error
 	updateError map[[32]byte]error
 	eraseError  map[[32]byte]error
 	rules       *amendment.Rules
@@ -31,6 +33,7 @@ func newFaultView() *faultView {
 	return &faultView{
 		data:        make(map[[32]byte][]byte),
 		readErrors:  make(map[[32]byte]error),
+		insertError: make(map[[32]byte]error),
 		updateError: make(map[[32]byte]error),
 		eraseError:  make(map[[32]byte]error),
 		rules:       amendment.AllSupportedRules(),
@@ -53,6 +56,9 @@ func (v *faultView) Exists(k keylet.Keylet) (bool, error) {
 }
 
 func (v *faultView) Insert(k keylet.Keylet, data []byte) error {
+	if err := v.insertError[k.Key]; err != nil {
+		return err
+	}
 	v.data[k.Key] = bytes.Clone(data)
 	return nil
 }
@@ -77,6 +83,7 @@ func (v *faultView) ApplyAtomically(apply func(ledgercore.Writer) error) error {
 	staged := newFaultView()
 	staged.rules = v.rules
 	staged.readErrors = v.readErrors
+	staged.insertError = v.insertError
 	staged.updateError = v.updateError
 	staged.eraseError = v.eraseError
 	for key, data := range v.data {
@@ -165,6 +172,234 @@ func TestAuthorizationDirectoryFailuresAreClassified(t *testing.T) {
 				require.Equal(t, uint32(0), ctx.Account.OwnerCount)
 			})
 		}
+	}
+}
+
+func TestPreclaimReadFailuresDoNotClaimFee(t *testing.T) {
+	ownerID := [20]byte{1}
+	owner, err := state.EncodeAccountID(ownerID)
+	require.NoError(t, err)
+	targetID := [20]byte{2}
+	target, err := state.EncodeAccountID(targetID)
+	require.NoError(t, err)
+	credentials := []CredentialWrapper{{Credential: CredentialSpec{
+		Issuer: target, CredentialType: "61",
+	}}}
+	credentialPairs := toKeyletPairs(makeSorted(credentials))
+	accountPreauthKey := keylet.DepositPreauth(ownerID, targetID)
+	credentialPreauthKey := keylet.DepositPreauthCredentials(ownerID, credentialPairs)
+	targetAccountKey := keylet.Account(targetID)
+
+	for _, tc := range []struct {
+		name    string
+		make    func() *DepositPreauth
+		readKey keylet.Keylet
+		setup   func(*faultView)
+	}{
+		{
+			name: "authorize target",
+			make: func() *DepositPreauth {
+				txn := NewDepositPreauth(owner)
+				txn.Authorize = target
+				return txn
+			},
+			readKey: targetAccountKey,
+		},
+		{
+			name: "authorize entry",
+			make: func() *DepositPreauth {
+				txn := NewDepositPreauth(owner)
+				txn.Authorize = target
+				return txn
+			},
+			readKey: accountPreauthKey,
+			setup: func(view *faultView) {
+				view.data[targetAccountKey.Key] = []byte{1}
+			},
+		},
+		{
+			name: "unauthorize entry",
+			make: func() *DepositPreauth {
+				txn := NewDepositPreauth(owner)
+				txn.Unauthorize = target
+				return txn
+			},
+			readKey: accountPreauthKey,
+		},
+		{
+			name: "authorize credentials issuer",
+			make: func() *DepositPreauth {
+				txn := NewDepositPreauth(owner)
+				txn.AuthorizeCredentials = credentials
+				return txn
+			},
+			readKey: targetAccountKey,
+		},
+		{
+			name: "authorize credentials entry",
+			make: func() *DepositPreauth {
+				txn := NewDepositPreauth(owner)
+				txn.AuthorizeCredentials = credentials
+				return txn
+			},
+			readKey: credentialPreauthKey,
+			setup: func(view *faultView) {
+				view.data[targetAccountKey.Key] = []byte{1}
+			},
+		},
+		{
+			name: "unauthorize credentials entry",
+			make: func() *DepositPreauth {
+				txn := NewDepositPreauth(owner)
+				txn.UnauthorizeCredentials = credentials
+				return txn
+			},
+			readKey: credentialPreauthKey,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			view := newFaultView()
+			accountData, err := state.SerializeAccountRoot(&state.AccountRoot{
+				Account: owner, Balance: 1_000_000_000, Sequence: 1,
+			})
+			require.NoError(t, err)
+			view.data[keylet.Account(ownerID).Key] = accountData
+			if tc.setup != nil {
+				tc.setup(view)
+			}
+			before := make(map[[32]byte][]byte, len(view.data))
+			for key, data := range view.data {
+				before[key] = bytes.Clone(data)
+			}
+			view.readErrors[tc.readKey.Key] = errors.New("storage failure")
+
+			txn := tc.make()
+			txn.Fee = "10"
+			txn.SetSequence(1)
+			result := engine.NewEngine(view, tx.EngineConfig{
+				BaseFee:                   10,
+				LedgerSequence:            1,
+				ReserveBase:               10_000_000,
+				ReserveIncrement:          2_000_000,
+				Rules:                     amendment.AllSupportedRules(),
+				SkipSignatureVerification: true,
+			}).Apply(txn)
+
+			require.Equal(t, ter.TefEXCEPTION, result.Result)
+			require.False(t, result.Applied)
+			require.Zero(t, result.Fee)
+			require.Equal(t, before, view.data)
+		})
+	}
+}
+
+func TestAuthorizationConfinesOwnerCountOverflow(t *testing.T) {
+	ownerID := [20]byte{1}
+	owner, err := state.EncodeAccountID(ownerID)
+	require.NoError(t, err)
+	targetID := [20]byte{2}
+	target, err := state.EncodeAccountID(targetID)
+	require.NoError(t, err)
+
+	for _, form := range []struct {
+		name string
+		make func() *DepositPreauth
+	}{
+		{
+			name: "account",
+			make: func() *DepositPreauth {
+				txn := NewDepositPreauth(owner)
+				txn.Authorize = target
+				return txn
+			},
+		},
+		{
+			name: "credentials",
+			make: func() *DepositPreauth {
+				txn := NewDepositPreauth(owner)
+				txn.AuthorizeCredentials = []CredentialWrapper{{Credential: CredentialSpec{
+					Issuer: target, CredentialType: "61",
+				}}}
+				return txn
+			},
+		},
+	} {
+		t.Run(form.name, func(t *testing.T) {
+			view := newFaultView()
+			ctx := applyContext(view, ownerID, math.MaxUint32)
+
+			require.Equal(t, ter.TesSUCCESS, form.make().Apply(ctx))
+			require.Equal(t, uint32(math.MaxUint32), ctx.Account.OwnerCount)
+		})
+	}
+}
+
+func TestAuthorizationCommitFailureRollsBackAllLedgerChanges(t *testing.T) {
+	ownerID := [20]byte{1}
+	owner, err := state.EncodeAccountID(ownerID)
+	require.NoError(t, err)
+	targetID := [20]byte{2}
+	target, err := state.EncodeAccountID(targetID)
+	require.NoError(t, err)
+	credentials := []CredentialWrapper{{Credential: CredentialSpec{
+		Issuer: target, CredentialType: "61",
+	}}}
+
+	for _, form := range []struct {
+		name       string
+		make       func() *DepositPreauth
+		preauthKey keylet.Keylet
+	}{
+		{
+			name: "account",
+			make: func() *DepositPreauth {
+				txn := NewDepositPreauth(owner)
+				txn.Authorize = target
+				return txn
+			},
+			preauthKey: keylet.DepositPreauth(ownerID, targetID),
+		},
+		{
+			name: "credentials",
+			make: func() *DepositPreauth {
+				txn := NewDepositPreauth(owner)
+				txn.AuthorizeCredentials = credentials
+				return txn
+			},
+			preauthKey: keylet.DepositPreauthCredentials(ownerID, toKeyletPairs(makeSorted(credentials))),
+		},
+	} {
+		t.Run(form.name, func(t *testing.T) {
+			view := newFaultView()
+			accountData, err := state.SerializeAccountRoot(&state.AccountRoot{
+				Account: owner, Balance: 1_000_000_000, Sequence: 1,
+			})
+			require.NoError(t, err)
+			view.data[keylet.Account(ownerID).Key] = accountData
+			view.data[keylet.Account(targetID).Key] = []byte{1}
+			before := make(map[[32]byte][]byte, len(view.data))
+			for key, data := range view.data {
+				before[key] = bytes.Clone(data)
+			}
+			view.insertError[form.preauthKey.Key] = errors.New("storage failure")
+
+			txn := form.make()
+			txn.Fee = "10"
+			txn.SetSequence(1)
+			result := engine.NewEngine(view, tx.EngineConfig{
+				BaseFee:                   10,
+				LedgerSequence:            1,
+				ReserveBase:               10_000_000,
+				ReserveIncrement:          2_000_000,
+				Rules:                     amendment.AllSupportedRules(),
+				SkipSignatureVerification: true,
+			}).Apply(txn)
+
+			require.Equal(t, ter.TefINTERNAL, result.Result)
+			require.False(t, result.Applied)
+			require.Zero(t, result.Fee)
+			require.Equal(t, before, view.data)
+		})
 	}
 }
 

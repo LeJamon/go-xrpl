@@ -307,10 +307,18 @@ func (d *DepositPreauth) Preclaim(view tx.LedgerView, config tx.EngineConfig) te
 		if derr != nil {
 			return ter.TemINVALID
 		}
-		if exists, _ := view.Exists(keylet.Account(authorizedID)); !exists {
+		exists, err := view.Exists(keylet.Account(authorizedID))
+		if err != nil {
+			return ter.TefEXCEPTION
+		}
+		if !exists {
 			return ter.TecNO_TARGET
 		}
-		if exists, _ := view.Exists(keylet.DepositPreauth(accountID, authorizedID)); exists {
+		exists, err = view.Exists(keylet.DepositPreauth(accountID, authorizedID))
+		if err != nil {
+			return ter.TefEXCEPTION
+		}
+		if exists {
 			return ter.TecDUPLICATE
 		}
 	case d.Unauthorize != "":
@@ -318,7 +326,11 @@ func (d *DepositPreauth) Preclaim(view tx.LedgerView, config tx.EngineConfig) te
 		if derr != nil {
 			return ter.TemINVALID
 		}
-		if exists, _ := view.Exists(keylet.DepositPreauth(accountID, unauthorizedID)); !exists {
+		exists, err := view.Exists(keylet.DepositPreauth(accountID, unauthorizedID))
+		if err != nil {
+			return ter.TefEXCEPTION
+		}
+		if !exists {
 			return ter.TecNO_ENTRY
 		}
 	case len(d.AuthorizeCredentials) > 0:
@@ -327,11 +339,19 @@ func (d *DepositPreauth) Preclaim(view tx.LedgerView, config tx.EngineConfig) te
 			return ter.TefINTERNAL
 		}
 		for _, p := range sorted {
-			if exists, _ := view.Exists(keylet.Account(p.issuer)); !exists {
+			exists, err := view.Exists(keylet.Account(p.issuer))
+			if err != nil {
+				return ter.TefEXCEPTION
+			}
+			if !exists {
 				return ter.TecNO_ISSUER
 			}
 		}
-		if exists, _ := view.Exists(keylet.DepositPreauthCredentials(accountID, toKeyletPairs(sorted))); exists {
+		exists, err := view.Exists(keylet.DepositPreauthCredentials(accountID, toKeyletPairs(sorted)))
+		if err != nil {
+			return ter.TefEXCEPTION
+		}
+		if exists {
 			return ter.TecDUPLICATE
 		}
 	case len(d.UnauthorizeCredentials) > 0:
@@ -339,7 +359,11 @@ func (d *DepositPreauth) Preclaim(view tx.LedgerView, config tx.EngineConfig) te
 		if sorted == nil {
 			return ter.TefINTERNAL
 		}
-		if exists, _ := view.Exists(keylet.DepositPreauthCredentials(accountID, toKeyletPairs(sorted))); !exists {
+		exists, err := view.Exists(keylet.DepositPreauthCredentials(accountID, toKeyletPairs(sorted)))
+		if err != nil {
+			return ter.TefEXCEPTION
+		}
+		if !exists {
 			return ter.TecNO_ENTRY
 		}
 	}
@@ -411,7 +435,7 @@ func (d *DepositPreauth) applyAuthorize(ctx *tx.ApplyContext) ter.Result {
 		return ter.TefINTERNAL
 	}
 
-	ctx.Account.OwnerCount++
+	ctx.Account.OwnerCount = tx.ConfineOwnerCount(ctx.Account.OwnerCount, 1)
 	return ter.TesSUCCESS
 }
 
@@ -481,7 +505,7 @@ func (d *DepositPreauth) applyAuthorizeCredentials(ctx *tx.ApplyContext) ter.Res
 		return ter.TefINTERNAL
 	}
 
-	ctx.Account.OwnerCount++
+	ctx.Account.OwnerCount = tx.ConfineOwnerCount(ctx.Account.OwnerCount, 1)
 	return ter.TesSUCCESS
 }
 
