@@ -480,7 +480,7 @@ func splitValidatorListCollection(coll *message.ValidatorListCollection, maxSize
 		Blobs:    append([]message.ValidatorBlobInfo(nil), coll.Blobs[begin:end]...),
 	}
 	frame, err := message.EncodeFrame(part)
-	if err == nil && (len(frame) <= maxSize || begin == end) {
+	if err == nil && len(frame) <= maxSize {
 		return []validatorListFrame{{
 			frame: frame,
 			hash:  sha512half.Sum(validatorListCollectionSemanticHash(part)),
