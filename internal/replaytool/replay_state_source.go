@@ -2,9 +2,12 @@ package replaytool
 
 import (
 	"context"
+	"encoding/hex"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/LeJamon/go-xrpl/drops"
 	"github.com/LeJamon/go-xrpl/internal/statecompare"
@@ -60,6 +63,7 @@ type nodestoreStateSource struct {
 const (
 	baseNodeCacheItems    = 262144
 	overlayNodeCacheItems = 65536
+	baseCompleteMarker    = "statecompare.complete"
 )
 
 func newNodestoreStateSource(client *statecompare.Client, dir string, baseCacheMB, overlayCacheMB int) (*nodestoreStateSource, error) {
@@ -95,17 +99,16 @@ func (s *nodestoreStateSource) Load(ctx context.Context, ledgerIndex uint32) (*s
 	}
 
 	basePath := filepath.Join(s.dir, fmt.Sprintf("ckpt-%d", ledgerIndex))
-	base, err := backend.OpenPebble(basePath, s.baseCacheMB, baseNodeCacheItems)
-	if err != nil {
-		return nil, nil, drops.Fees{}, fmt.Errorf("opening base nodestore %s: %w", basePath, err)
-	}
-	s.opened = append(s.opened, base)
-
-	stateMap, err := buildOrOpenLazyState(ctx, base, s.overlay, snapshot.AccountHash, func(fn func(statecompare.StateEntry) error) error {
-		return s.client.StreamStateEntries(ctx, ledgerIndex, fn)
+	base, err := s.openOrBuildBase(ctx, basePath, snapshot.AccountHash, func(fn func(statecompare.StateEntry) error) error {
+		return s.client.StreamStateEntries(ctx, snapshot, fn)
 	})
 	if err != nil {
 		return nil, nil, drops.Fees{}, err
+	}
+	s.opened = append(s.opened, base)
+	stateMap, err := shamap.NewFromRootHash(shamap.TypeState, snapshot.AccountHash, shamap.NewOverlayFamily(base, s.overlay))
+	if err != nil {
+		return nil, nil, drops.Fees{}, fmt.Errorf("opening checkpoint %d state root: %w", ledgerIndex, err)
 	}
 
 	// Targeted lookup; lazily fetches only the FeeSettings path, not the tree.
@@ -113,17 +116,122 @@ func (s *nodestoreStateSource) Load(ctx context.Context, ledgerIndex uint32) (*s
 	return stateMap, snapshot, fees, nil
 }
 
-func (s *nodestoreStateSource) Close() error {
-	var firstErr error
-	for _, fam := range s.opened {
-		if err := fam.Close(); err != nil && firstErr == nil {
-			firstErr = err
+func (s *nodestoreStateSource) openOrBuildBase(
+	ctx context.Context,
+	basePath string,
+	accountHash [32]byte,
+	streamEntries func(func(statecompare.StateEntry) error) error,
+) (*backend.NodeStore, error) {
+	complete, err := baseIsComplete(basePath, accountHash)
+	if err != nil {
+		return nil, err
+	}
+	if complete {
+		return openVerifiedBase(ctx, basePath, s.baseCacheMB, accountHash)
+	}
+	if _, err := os.Stat(basePath); err == nil {
+		if err := os.RemoveAll(basePath); err != nil {
+			return nil, fmt.Errorf("removing incomplete base nodestore %s: %w", basePath, err)
 		}
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return nil, fmt.Errorf("inspecting base nodestore %s: %w", basePath, err)
 	}
-	if err := os.RemoveAll(s.overlayDir); err != nil && firstErr == nil {
-		firstErr = err
+
+	stagePath, err := os.MkdirTemp(s.dir, ".checkpoint-build-")
+	if err != nil {
+		return nil, fmt.Errorf("creating staged base nodestore: %w", err)
 	}
-	return firstErr
+	removeStage := true
+	defer func() {
+		if removeStage {
+			_ = os.RemoveAll(stagePath)
+		}
+	}()
+
+	stage, err := backend.OpenPebble(stagePath, s.baseCacheMB, baseNodeCacheItems)
+	if err != nil {
+		return nil, fmt.Errorf("opening staged base nodestore: %w", err)
+	}
+	_, buildErr := buildOrOpenLazyState(ctx, stage, s.overlay, accountHash, streamEntries)
+	if buildErr == nil {
+		buildErr = stage.Sync(ctx)
+	}
+	buildErr = errors.Join(buildErr, stage.Close())
+	if buildErr != nil {
+		return nil, fmt.Errorf("building staged base nodestore: %w", buildErr)
+	}
+	if err := writeBaseMarker(stagePath, accountHash); err != nil {
+		return nil, err
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	if err := os.Rename(stagePath, basePath); err != nil {
+		if complete, checkErr := baseIsComplete(basePath, accountHash); checkErr == nil && complete {
+			return openVerifiedBase(ctx, basePath, s.baseCacheMB, accountHash)
+		}
+		return nil, fmt.Errorf("publishing base nodestore %s: %w", basePath, err)
+	}
+	removeStage = false
+	if err := syncDirectory(s.dir); err != nil {
+		return nil, err
+	}
+	return openVerifiedBase(ctx, basePath, s.baseCacheMB, accountHash)
+}
+
+func baseIsComplete(path string, accountHash [32]byte) (bool, error) {
+	marker, err := os.ReadFile(filepath.Join(path, baseCompleteMarker))
+	if errors.Is(err, os.ErrNotExist) {
+		return false, nil
+	}
+	if err != nil {
+		return false, fmt.Errorf("reading base nodestore marker: %w", err)
+	}
+	return strings.TrimSpace(string(marker)) == hex.EncodeToString(accountHash[:]), nil
+}
+
+func writeBaseMarker(path string, accountHash [32]byte) error {
+	markerPath := filepath.Join(path, baseCompleteMarker)
+	file, err := os.OpenFile(markerPath, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600)
+	if err != nil {
+		return fmt.Errorf("creating base nodestore marker: %w", err)
+	}
+	_, writeErr := fmt.Fprintln(file, hex.EncodeToString(accountHash[:]))
+	if writeErr == nil {
+		writeErr = file.Sync()
+	}
+	return errors.Join(writeErr, file.Close(), syncDirectory(path))
+}
+
+func syncDirectory(path string) error {
+	dir, err := os.Open(path)
+	if err != nil {
+		return fmt.Errorf("opening directory %s for sync: %w", path, err)
+	}
+	return errors.Join(dir.Sync(), dir.Close())
+}
+
+func openVerifiedBase(ctx context.Context, path string, cacheMB int, accountHash [32]byte) (*backend.NodeStore, error) {
+	base, err := backend.OpenPebble(path, cacheMB, baseNodeCacheItems)
+	if err != nil {
+		return nil, fmt.Errorf("opening base nodestore %s: %w", path, err)
+	}
+	root, fetchErr := base.Fetch(ctx, accountHash)
+	if fetchErr != nil {
+		return nil, errors.Join(fmt.Errorf("verifying base nodestore %s root: %w", path, fetchErr), base.Close())
+	}
+	if root == nil {
+		return nil, errors.Join(fmt.Errorf("verifying base nodestore %s: root is missing", path), base.Close())
+	}
+	return base, nil
+}
+
+func (s *nodestoreStateSource) Close() error {
+	var closeErr error
+	for _, fam := range s.opened {
+		closeErr = errors.Join(closeErr, fam.Close())
+	}
+	return errors.Join(closeErr, os.RemoveAll(s.overlayDir))
 }
 
 // buildOrOpenLazyState returns a state SHAMap whose backing is a shared

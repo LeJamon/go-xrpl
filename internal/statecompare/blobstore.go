@@ -9,112 +9,135 @@ import (
 	"fmt"
 	"io"
 	"io/fs"
+	"net"
 	"net/http"
 	"net/url"
 	"os"
-	"path/filepath"
+	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 )
 
-// blobStore reads the immutable pack objects the lab writes to object storage.
-// Two backends mirror the lab's core/blobstore.py: a local directory for
-// dev/test, and S3/MinIO for production cross-pod blob sharing.
+type blobObject struct {
+	io.ReadCloser
+	size int64
+}
+
 type blobStore interface {
-	get(ctx context.Context, key string) ([]byte, error)
-	// getReader returns the object as a stream so a large pack is consumed
-	// incrementally rather than buffered whole. The caller owns the reader and
-	// must Close it.
-	getReader(ctx context.Context, key string) (io.ReadCloser, error)
+	open(ctx context.Context, key string) (*blobObject, error)
+	Close() error
 }
 
-// BlobStoreConfig selects and configures the blob backend. Field defaults and
-// env-var names match the lab's BlobStoreConfig so the same deployment env
-// drives both the Python workers and this Go reader.
-type BlobStoreConfig struct {
-	Backend     string // "local", "s3", or "minio"
-	EndpointURL string
-	AccessKey   string
-	SecretKey   string
-	Bucket      string
-	Region      string
-	Secure      bool
-	LocalRoot   string
+type blobStoreConfig struct {
+	backend     string
+	endpointURL string
+	accessKey   string
+	secretKey   string
+	bucket      string
+	region      string
+	secure      bool
+	localRoot   string
 }
 
-// BlobStoreConfigFromEnv builds a BlobStoreConfig from the environment.
-func BlobStoreConfigFromEnv() BlobStoreConfig {
-	return BlobStoreConfig{
-		Backend:     strings.ToLower(strings.TrimSpace(getEnvOrDefault("BLOBSTORE_BACKEND", "local"))),
-		EndpointURL: getEnvOrDefault("MINIO_ENDPOINT_URL", "http://localhost:9000"),
-		AccessKey:   getEnvOrDefault("MINIO_ACCESS_KEY", "minioadmin"),
-		SecretKey:   getEnvOrDefault("MINIO_SECRET_KEY", "minioadmin"),
-		Bucket:      getEnvOrDefault("MINIO_BUCKET", "xrpl-replay"),
-		Region:      getEnvOrDefault("MINIO_REGION", "us-east-1"),
-		Secure:      getBoolEnv("MINIO_SECURE", false),
-		LocalRoot:   getEnvOrDefault("BLOBSTORE_LOCAL_ROOT", "./.blobstore"),
+func blobStoreConfigFromEnv() (blobStoreConfig, error) {
+	secure, err := getBoolEnv("MINIO_SECURE", false)
+	if err != nil {
+		return blobStoreConfig{}, err
 	}
+	return blobStoreConfig{
+		backend:     strings.ToLower(strings.TrimSpace(getEnvOrDefault("BLOBSTORE_BACKEND", "local"))),
+		endpointURL: getEnvOrDefault("MINIO_ENDPOINT_URL", "http://localhost:9000"),
+		accessKey:   getEnvOrDefault("MINIO_ACCESS_KEY", "minioadmin"),
+		secretKey:   getEnvOrDefault("MINIO_SECRET_KEY", "minioadmin"),
+		bucket:      getEnvOrDefault("MINIO_BUCKET", "xrpl-replay"),
+		region:      getEnvOrDefault("MINIO_REGION", "us-east-1"),
+		secure:      secure,
+		localRoot:   getEnvOrDefault("BLOBSTORE_LOCAL_ROOT", "./.blobstore"),
+	}, nil
 }
 
-// getBoolEnv parses a truthy env var the same way the lab's _bool helper does.
-func getBoolEnv(key string, defaultValue bool) bool {
+func getBoolEnv(key string, defaultValue bool) (bool, error) {
 	raw := strings.TrimSpace(strings.ToLower(os.Getenv(key)))
 	if raw == "" {
-		return defaultValue
+		return defaultValue, nil
 	}
 	switch raw {
 	case "1", "true", "yes", "on":
-		return true
+		return true, nil
+	case "0", "false", "no", "off":
+		return false, nil
 	default:
-		return false
+		return false, fmt.Errorf("statecompare: %s must be a boolean, got %q", key, os.Getenv(key))
 	}
 }
 
-// newBlobStore constructs the backend selected by cfg.Backend.
-func newBlobStore(cfg BlobStoreConfig) (blobStore, error) {
-	switch cfg.Backend {
+func newBlobStore(cfg blobStoreConfig) (blobStore, error) {
+	switch strings.ToLower(strings.TrimSpace(cfg.backend)) {
 	case "local":
-		return &localBlobStore{root: cfg.LocalRoot}, nil
+		if strings.TrimSpace(cfg.localRoot) == "" {
+			return nil, errors.New("statecompare: BLOBSTORE_LOCAL_ROOT is empty")
+		}
+		root, err := os.OpenRoot(cfg.localRoot)
+		if err != nil {
+			return nil, fmt.Errorf("statecompare: opening blobstore root %q: %w", cfg.localRoot, err)
+		}
+		return &localBlobStore{root: root}, nil
 	case "s3", "minio":
 		return newS3BlobStore(cfg)
 	default:
-		return nil, fmt.Errorf("statecompare: unknown blobstore backend %q", cfg.Backend)
+		return nil, fmt.Errorf("statecompare: unknown blobstore backend %q", cfg.backend)
 	}
 }
 
-// localBlobStore reads packs from a directory tree, needing no running service.
 type localBlobStore struct {
-	root string
+	root *os.Root
 }
 
-func (l *localBlobStore) get(_ context.Context, key string) ([]byte, error) {
-	path := filepath.Join(l.root, filepath.FromSlash(key))
-	data, err := os.ReadFile(path)
+func (l *localBlobStore) open(ctx context.Context, key string) (*blobObject, error) {
+	if _, _, err := parseBlobKey(key); err != nil {
+		return nil, err
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	file, err := l.root.Open(key)
 	if err != nil {
 		if errors.Is(err, fs.ErrNotExist) {
-			return nil, fmt.Errorf("blob %q: %w", key, ErrNotFound)
+			return nil, fmt.Errorf("blob %q: %w", key, errNotFound)
 		}
-		return nil, fmt.Errorf("reading blob %q: %w", key, err)
+		return nil, fmt.Errorf("opening blob %q: %w", key, err)
 	}
-	return data, nil
-}
-
-func (l *localBlobStore) getReader(_ context.Context, key string) (io.ReadCloser, error) {
-	path := filepath.Join(l.root, filepath.FromSlash(key))
-	f, err := os.Open(path)
+	info, err := file.Stat()
 	if err != nil {
-		if errors.Is(err, fs.ErrNotExist) {
-			return nil, fmt.Errorf("blob %q: %w", key, ErrNotFound)
-		}
-		return nil, fmt.Errorf("reading blob %q: %w", key, err)
+		return nil, errors.Join(fmt.Errorf("stating blob %q: %w", key, err), file.Close())
 	}
-	return f, nil
+	if !info.Mode().IsRegular() {
+		return nil, errors.Join(fmt.Errorf("blob %q is not a regular file", key), file.Close())
+	}
+	return &blobObject{
+		ReadCloser: &contextReadCloser{ctx: ctx, ReadCloser: file},
+		size:       info.Size(),
+	}, nil
 }
 
-// s3BlobStore fetches packs from S3/MinIO over plain HTTP, signing each GET
-// with AWS Signature Version 4. Path-style addressing (the MinIO default) is
-// used: the object URL is <endpoint>/<bucket>/<key>.
+func (l *localBlobStore) Close() error {
+	return l.root.Close()
+}
+
+type contextReadCloser struct {
+	ctx context.Context
+	io.ReadCloser
+}
+
+func (r *contextReadCloser) Read(p []byte) (int, error) {
+	if err := r.ctx.Err(); err != nil {
+		return 0, err
+	}
+	return r.ReadCloser.Read(p)
+}
+
 type s3BlobStore struct {
 	endpoint  *url.URL
 	bucket    string
@@ -124,59 +147,93 @@ type s3BlobStore struct {
 	client    *http.Client
 }
 
-func newS3BlobStore(cfg BlobStoreConfig) (*s3BlobStore, error) {
-	ep := cfg.EndpointURL
-	if !strings.Contains(ep, "://") {
-		scheme := "http"
-		if cfg.Secure {
-			scheme = "https"
-		}
-		ep = scheme + "://" + ep
-	}
-	u, err := url.Parse(ep)
-	if err != nil {
-		return nil, fmt.Errorf("statecompare: invalid MINIO_ENDPOINT_URL %q: %w", cfg.EndpointURL, err)
-	}
-	if u.Host == "" {
-		return nil, fmt.Errorf("statecompare: MINIO_ENDPOINT_URL %q has no host", cfg.EndpointURL)
-	}
-	region := cfg.Region
-	if region == "" {
-		region = "us-east-1"
-	}
-	return &s3BlobStore{
-		endpoint:  u,
-		bucket:    cfg.Bucket,
-		accessKey: cfg.AccessKey,
-		secretKey: cfg.SecretKey,
-		region:    region,
-		// No client-wide timeout: packs are large and the caller's context
-		// governs the deadline. The default transport handles connection reuse.
-		client: &http.Client{},
-	}, nil
-}
+var (
+	bucketPattern = regexp.MustCompile(`^[a-z0-9][a-z0-9.-]{1,61}[a-z0-9]$`)
+	regionPattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9-]*$`)
+)
 
-// emptyPayloadSHA256 is the SHA-256 of an empty body, used as the signed
-// content hash for an unsigned-payload GET.
-const emptyPayloadSHA256 = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
-
-func (s *s3BlobStore) get(ctx context.Context, key string) ([]byte, error) {
-	r, err := s.getReader(ctx, key)
+func newS3BlobStore(cfg blobStoreConfig) (*s3BlobStore, error) {
+	u, err := validateS3Config(cfg)
 	if err != nil {
 		return nil, err
 	}
-	defer r.Close()
-	data, err := io.ReadAll(r)
-	if err != nil {
-		return nil, fmt.Errorf("reading blob %q: %w", key, err)
-	}
-	return data, nil
+	transport := http.DefaultTransport.(*http.Transport).Clone()
+	transport.DialContext = (&net.Dialer{Timeout: 10 * time.Second, KeepAlive: 30 * time.Second}).DialContext
+	transport.TLSHandshakeTimeout = 10 * time.Second
+	transport.ResponseHeaderTimeout = 30 * time.Second
+	transport.IdleConnTimeout = 90 * time.Second
+	return &s3BlobStore{
+		endpoint:  u,
+		bucket:    cfg.bucket,
+		accessKey: cfg.accessKey,
+		secretKey: cfg.secretKey,
+		region:    cfg.region,
+		client: &http.Client{
+			Transport: transport,
+			CheckRedirect: func(*http.Request, []*http.Request) error {
+				return http.ErrUseLastResponse
+			},
+		},
+	}, nil
 }
 
-func (s *s3BlobStore) getReader(ctx context.Context, key string) (io.ReadCloser, error) {
+func validateS3Config(cfg blobStoreConfig) (*url.URL, error) {
+	endpoint := strings.TrimSpace(cfg.endpointURL)
+	if endpoint == "" {
+		return nil, errors.New("statecompare: MINIO_ENDPOINT_URL is empty")
+	}
+	if !strings.Contains(endpoint, "://") {
+		scheme := "http"
+		if cfg.secure {
+			scheme = "https"
+		}
+		endpoint = scheme + "://" + endpoint
+	}
+	u, err := url.Parse(endpoint)
+	if err != nil {
+		return nil, fmt.Errorf("statecompare: invalid MINIO_ENDPOINT_URL %q: %w", cfg.endpointURL, err)
+	}
+	if u.Scheme != "http" && u.Scheme != "https" {
+		return nil, fmt.Errorf("statecompare: MINIO_ENDPOINT_URL scheme %q is not http or https", u.Scheme)
+	}
+	if (u.Scheme == "https") != cfg.secure {
+		return nil, fmt.Errorf("statecompare: MINIO_SECURE=%t conflicts with endpoint scheme %q", cfg.secure, u.Scheme)
+	}
+	if u.Host == "" || u.Hostname() == "" {
+		return nil, fmt.Errorf("statecompare: MINIO_ENDPOINT_URL %q has no host", cfg.endpointURL)
+	}
+	if u.User != nil || (u.Path != "" && u.Path != "/") || u.RawQuery != "" || u.Fragment != "" {
+		return nil, fmt.Errorf("statecompare: MINIO_ENDPOINT_URL %q must not contain credentials, path, query, or fragment", cfg.endpointURL)
+	}
+	if !validBucket(cfg.bucket) {
+		return nil, fmt.Errorf("statecompare: invalid MINIO_BUCKET %q", cfg.bucket)
+	}
+	if strings.TrimSpace(cfg.accessKey) == "" || strings.TrimSpace(cfg.secretKey) == "" {
+		return nil, errors.New("statecompare: MINIO_ACCESS_KEY and MINIO_SECRET_KEY must be non-empty")
+	}
+	if !regionPattern.MatchString(cfg.region) {
+		return nil, fmt.Errorf("statecompare: invalid MINIO_REGION %q", cfg.region)
+	}
+	u.Path = ""
+	return u, nil
+}
+
+func validBucket(bucket string) bool {
+	if !bucketPattern.MatchString(bucket) || strings.Contains(bucket, "..") ||
+		strings.Contains(bucket, ".-") || strings.Contains(bucket, "-.") {
+		return false
+	}
+	return net.ParseIP(bucket) == nil
+}
+
+const emptyPayloadSHA256 = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+
+func (s *s3BlobStore) open(ctx context.Context, key string) (*blobObject, error) {
+	if _, _, err := parseBlobKey(key); err != nil {
+		return nil, err
+	}
 	reqURL := *s.endpoint
 	reqURL.Path = "/" + s.bucket + "/" + key
-
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, reqURL.String(), nil)
 	if err != nil {
 		return nil, fmt.Errorf("building request for blob %q: %w", key, err)
@@ -188,24 +245,60 @@ func (s *s3BlobStore) getReader(ctx context.Context, key string) (io.ReadCloser,
 	if err != nil {
 		return nil, fmt.Errorf("fetching blob %q: %w", key, err)
 	}
-
 	switch resp.StatusCode {
 	case http.StatusOK:
-		return resp.Body, nil
+		if resp.ContentLength < 0 {
+			return nil, errors.Join(fmt.Errorf("fetching blob %q: response has no Content-Length", key), resp.Body.Close())
+		}
+		return &blobObject{ReadCloser: resp.Body, size: resp.ContentLength}, nil
 	case http.StatusNotFound:
-		resp.Body.Close()
-		return nil, fmt.Errorf("blob %q: %w", key, ErrNotFound)
+		return nil, errors.Join(fmt.Errorf("blob %q: %w", key, errNotFound), resp.Body.Close())
 	default:
-		body, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
-		resp.Body.Close()
-		return nil, fmt.Errorf("fetching blob %q: status %s: %s", key, resp.Status, strings.TrimSpace(string(body)))
+		body, readErr := io.ReadAll(io.LimitReader(resp.Body, 512))
+		closeErr := resp.Body.Close()
+		return nil, errors.Join(
+			fmt.Errorf("fetching blob %q: status %s: %s", key, resp.Status, strings.TrimSpace(string(body))),
+			readErr,
+			closeErr,
+		)
 	}
 }
 
-// signV4 signs req in place with AWS Signature Version 4 for service "s3",
-// setting the x-amz-date, x-amz-content-sha256 and Authorization headers. It
-// signs the Host header plus every header already present on req, so callers
-// that set extra headers (e.g. Range) get them covered.
+func (s *s3BlobStore) Close() error {
+	s.client.CloseIdleConnections()
+	return nil
+}
+
+func parseBlobKey(key string) (kind byte, seq uint32, err error) {
+	parts := strings.Split(key, "/")
+	if len(parts) != 2 || parts[0] == "" || parts[1] == "" || strings.Contains(key, "\\") {
+		return 0, 0, fmt.Errorf("statecompare: invalid blob key %q", key)
+	}
+	name := parts[1]
+	var number string
+	switch parts[0] {
+	case "state":
+		kind = kindState
+		if !strings.HasPrefix(name, "ckpt-") || !strings.HasSuffix(name, ".pack") {
+			return 0, 0, fmt.Errorf("statecompare: invalid state blob key %q", key)
+		}
+		number = strings.TrimSuffix(strings.TrimPrefix(name, "ckpt-"), ".pack")
+	case "ledger":
+		kind = kindLedger
+		if !strings.HasSuffix(name, ".pack") {
+			return 0, 0, fmt.Errorf("statecompare: invalid ledger blob key %q", key)
+		}
+		number = strings.TrimSuffix(name, ".pack")
+	default:
+		return 0, 0, fmt.Errorf("statecompare: invalid blob key prefix %q", parts[0])
+	}
+	value, parseErr := strconv.ParseUint(number, 10, 32)
+	if parseErr != nil || strconv.FormatUint(value, 10) != number {
+		return 0, 0, fmt.Errorf("statecompare: invalid blob key sequence in %q", key)
+	}
+	return kind, uint32(value), nil
+}
+
 func signV4(req *http.Request, payloadSHA256 string, t time.Time, region, accessKey, secretKey string) {
 	const (
 		algorithm = "AWS4-HMAC-SHA256"
@@ -213,7 +306,6 @@ func signV4(req *http.Request, payloadSHA256 string, t time.Time, region, access
 	)
 	amzDate := t.Format("20060102T150405Z")
 	dateStamp := t.Format("20060102")
-
 	req.Header.Set("x-amz-date", amzDate)
 	req.Header.Set("x-amz-content-sha256", payloadSHA256)
 
@@ -221,12 +313,9 @@ func signV4(req *http.Request, payloadSHA256 string, t time.Time, region, access
 	if host == "" {
 		host = req.URL.Host
 	}
-
-	// Canonical + signed headers: host plus everything currently on the
-	// request, lowercased and sorted by name.
 	headers := map[string]string{"host": host}
-	for name, vals := range req.Header {
-		headers[strings.ToLower(name)] = strings.TrimSpace(strings.Join(vals, ","))
+	for name, values := range req.Header {
+		headers[strings.ToLower(name)] = strings.TrimSpace(strings.Join(values, ","))
 	}
 	names := make([]string, 0, len(headers))
 	for name := range headers {
@@ -242,7 +331,6 @@ func signV4(req *http.Request, payloadSHA256 string, t time.Time, region, access
 		canonicalHeaders.WriteByte('\n')
 	}
 	signedHeaders := strings.Join(names, ";")
-
 	canonicalRequest := strings.Join([]string{
 		req.Method,
 		canonicalURI(req.URL.Path),
@@ -251,7 +339,6 @@ func signV4(req *http.Request, payloadSHA256 string, t time.Time, region, access
 		signedHeaders,
 		payloadSHA256,
 	}, "\n")
-
 	scope := strings.Join([]string{dateStamp, region, service, "aws4_request"}, "/")
 	stringToSign := strings.Join([]string{
 		algorithm,
@@ -259,7 +346,6 @@ func signV4(req *http.Request, payloadSHA256 string, t time.Time, region, access
 		scope,
 		hex.EncodeToString(sha256Sum([]byte(canonicalRequest))),
 	}, "\n")
-
 	signingKey := hmacSHA256(
 		hmacSHA256(
 			hmacSHA256(
@@ -268,38 +354,31 @@ func signV4(req *http.Request, payloadSHA256 string, t time.Time, region, access
 			service),
 		"aws4_request")
 	signature := hex.EncodeToString(hmacSHA256(signingKey, stringToSign))
-
 	req.Header.Set("Authorization", fmt.Sprintf(
 		"%s Credential=%s/%s, SignedHeaders=%s, Signature=%s",
 		algorithm, accessKey, scope, signedHeaders, signature,
 	))
 }
 
-// canonicalURI URI-encodes each path segment per RFC 3986 while preserving the
-// '/' separators, as S3's SigV4 canonical URI requires.
 func canonicalURI(path string) string {
 	if path == "" {
 		return "/"
 	}
 	segments := strings.Split(path, "/")
-	for i, seg := range segments {
-		segments[i] = uriEncode(seg)
+	for i, segment := range segments {
+		segments[i] = uriEncode(segment)
 	}
 	return strings.Join(segments, "/")
 }
 
-// uriEncode percent-encodes a single path segment, leaving the RFC 3986
-// unreserved set untouched (S3 also treats '/' specially, handled by the
-// caller).
-func uriEncode(s string) string {
+func uriEncode(value string) string {
 	const unreserved = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-._~"
 	var b strings.Builder
-	for i := 0; i < len(s); i++ {
-		c := s[i]
-		if strings.IndexByte(unreserved, c) >= 0 {
+	for i := 0; i < len(value); i++ {
+		if c := value[i]; strings.IndexByte(unreserved, c) >= 0 {
 			b.WriteByte(c)
 		} else {
-			fmt.Fprintf(&b, "%%%02X", c)
+			fmt.Fprintf(&b, "%%%02X", value[i])
 		}
 	}
 	return b.String()
@@ -312,6 +391,6 @@ func sha256Sum(data []byte) []byte {
 
 func hmacSHA256(key []byte, data string) []byte {
 	h := hmac.New(sha256.New, key)
-	h.Write([]byte(data))
+	_, _ = h.Write([]byte(data))
 	return h.Sum(nil)
 }

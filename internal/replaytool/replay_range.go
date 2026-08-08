@@ -223,7 +223,7 @@ func (r *replayRangeRunner) run(parentCtx context.Context) (runErr error) {
 	fmt.Fprintln(r.out, "================================================================================")
 	fmt.Fprintln(r.out, "                    XRPL Continuous State Replay")
 	fmt.Fprintln(r.out, "================================================================================")
-	fmt.Fprintf(r.out, "Range:      %d -> %d (%d blocks)\n", r.from, r.to, r.to-r.from)
+	fmt.Fprintf(r.out, "Range:      %d -> %d (%d blocks)\n", r.from, r.to, uint64(r.to)-uint64(r.from))
 	switch {
 	case !r.legacyPayChanDirGate:
 		fmt.Fprintln(r.out, "Compatibility: post-fix fixPayChanRecipientOwnerDir semantics for every target ledger (rippled v3.2.0)")
@@ -237,11 +237,11 @@ func (r *replayRangeRunner) run(parentCtx context.Context) (runErr error) {
 
 	// Connect to database
 	fmt.Fprintln(r.out, "[1/3] Connecting to database...")
-	client, err := statecompare.NewClientFromEnv()
+	client, err := statecompare.NewClientFromEnv(ctx)
 	if err != nil {
 		return fmt.Errorf("connecting to database: %w", err)
 	}
-	defer client.Close()
+	defer func() { runErr = errors.Join(runErr, client.Close()) }()
 	fmt.Fprintln(r.out, "      Connected to PostgreSQL")
 
 	// Validate range exists
@@ -253,13 +253,13 @@ func (r *replayRangeRunner) run(parentCtx context.Context) (runErr error) {
 	if !valid {
 		return fmt.Errorf("ledger %d not found in database; run 'python main.py sync-range %d %d' first", missingLedger, startLedger, r.to)
 	}
-	fmt.Fprintf(r.out, "      All %d ledgers present in database\n", r.to-startLedger+1)
+	fmt.Fprintf(r.out, "      All %d ledgers present in database\n", uint64(r.to)-uint64(startLedger)+1)
 
 	source, err := newStateSource(client, r.nodestoreDir, r.baseCacheMB, r.overlayCacheMB)
 	if err != nil {
 		return fmt.Errorf("initializing state source: %w", err)
 	}
-	defer source.Close()
+	defer func() { runErr = errors.Join(runErr, source.Close()) }()
 
 	var findings *findingsWriter
 	if r.continueOnDivergence {
@@ -267,7 +267,7 @@ func (r *replayRangeRunner) run(parentCtx context.Context) (runErr error) {
 		if err != nil {
 			return fmt.Errorf("opening findings file: %w", err)
 		}
-		defer findings.Close()
+		defer func() { runErr = errors.Join(runErr, findings.Close()) }()
 	}
 
 	var stateMap *shamap.SHAMap
@@ -301,7 +301,8 @@ func (r *replayRangeRunner) run(parentCtx context.Context) (runErr error) {
 	currentStateMap := stateMap
 	previousSnapshot := preSnapshot
 
-	for targetLedger := startLedger + 1; targetLedger <= r.to; targetLedger++ {
+	for seq := uint64(startLedger) + 1; seq <= uint64(r.to); seq++ {
+		targetLedger := uint32(seq)
 		blockStart := time.Now()
 
 		// Process this block
@@ -447,7 +448,7 @@ func recordDivergenceAndReset(
 	result *BlockResult,
 	preState, goxrplPost *shamap.SHAMap,
 ) (*shamap.SHAMap, error) {
-	corrected, verified, err := reconstructMainnetState(ctx, client, preState, ledgerIndex, result.ExpectedAccountHash)
+	corrected, verified, err := reconstructMainnetState(ctx, client, preState, result.PostSnapshot)
 	if err != nil {
 		return nil, fmt.Errorf("reconstructing mainnet state: %w", err)
 	}
@@ -495,7 +496,7 @@ func loadInitialState(ctx context.Context, client *statecompare.Client, ledgerIn
 	// Stream the state pack into the map so the whole pack and the full entry
 	// slice are never materialized in RAM at once.
 	stateMap := shamap.New(shamap.TypeState)
-	if err := client.StreamStateEntries(ctx, ledgerIndex, func(entry statecompare.StateEntry) error {
+	if err := client.StreamStateEntries(ctx, snapshot, func(entry statecompare.StateEntry) error {
 		if err := stateMap.Put(entry.Index, entry.Data); err != nil {
 			return fmt.Errorf("injecting entry: %w", err)
 		}
@@ -627,7 +628,7 @@ func (r *replayRangeRunner) processBlock(
 	result.ExpectedTotalCoins = postSnapshot.TotalCoins
 
 	// Get transactions for this ledger
-	txs, err := client.Transactions(ctx, targetLedger)
+	txs, err := client.Transactions(ctx, postSnapshot)
 	if err != nil {
 		return nil, nil, fmt.Errorf("getting transactions: %w", err)
 	}
@@ -725,7 +726,7 @@ func (r *replayRangeRunner) processBlock(
 	wantTxDetail := r.verbose || r.dumpDir != ""
 	for _, txEntry := range txs {
 		txInfo := TxApplyInfo{
-			Index: txEntry.TxIndex,
+			Index: int(txEntry.TxIndex),
 			Hash:  hex.EncodeToString(txEntry.TxHash[:]),
 		}
 
@@ -781,7 +782,7 @@ func (r *replayRangeRunner) processBlock(
 	accountHashMatch := result.AccountHash == result.ExpectedAccountHash
 	txHashMatch := result.TransactionHash == result.ExpectedTransactionHash
 
-	result.Success = ledgerHashMatch && accountHashMatch && txHashMatch && len(result.Errors) == 0
+	result.Success = ledgerHashMatch && accountHashMatch && txHashMatch && result.TotalCoins == result.ExpectedTotalCoins && len(result.Errors) == 0
 
 	// Get the new state map for next iteration
 	newStateMap, err := openLedger.StateMapSnapshot()

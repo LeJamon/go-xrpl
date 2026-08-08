@@ -2,12 +2,79 @@ package replaytool
 
 import (
 	"context"
+	"errors"
+	"os"
+	"path/filepath"
 	"testing"
 
 	"github.com/LeJamon/go-xrpl/internal/statecompare"
 	"github.com/LeJamon/go-xrpl/shamap"
 	"github.com/LeJamon/go-xrpl/shamap/backend"
 )
+
+func TestOpenOrBuildBasePublishesOnlyVerifiedImport(t *testing.T) {
+	entries, root := syntheticEntries(t, 4)
+	dir := t.TempDir()
+	source := &nodestoreStateSource{
+		dir:         dir,
+		baseCacheMB: 8,
+		overlay:     backend.NewMemory(),
+	}
+	basePath := filepath.Join(dir, "ckpt-1")
+	callbackErr := errors.New("stream failed")
+	if _, err := source.openOrBuildBase(context.Background(), basePath, root, func(fn func(statecompare.StateEntry) error) error {
+		if err := fn(entries[0]); err != nil {
+			return err
+		}
+		return callbackErr
+	}); !errors.Is(err, callbackErr) {
+		t.Fatalf("openOrBuildBase error = %v", err)
+	}
+	if _, err := os.Stat(basePath); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("failed import was published: %v", err)
+	}
+
+	base, err := source.openOrBuildBase(context.Background(), basePath, root, streamAll(entries))
+	if err != nil {
+		t.Fatalf("openOrBuildBase valid: %v", err)
+	}
+	if err := base.Close(); err != nil {
+		t.Fatal(err)
+	}
+	complete, err := baseIsComplete(basePath, root)
+	if err != nil || !complete {
+		t.Fatalf("baseIsComplete = %t, %v", complete, err)
+	}
+
+	called := false
+	base, err = source.openOrBuildBase(context.Background(), basePath, root, func(func(statecompare.StateEntry) error) error {
+		called = true
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("openOrBuildBase warm: %v", err)
+	}
+	if called {
+		t.Fatal("warm open streamed checkpoint again")
+	}
+	if err := base.Close(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestOpenOrBuildBaseRejectsWrongRootWithoutPublication(t *testing.T) {
+	entries, root := syntheticEntries(t, 2)
+	root[0] ^= 0xff
+	dir := t.TempDir()
+	source := &nodestoreStateSource{dir: dir, baseCacheMB: 8, overlay: backend.NewMemory()}
+	basePath := filepath.Join(dir, "ckpt-2")
+	if _, err := source.openOrBuildBase(context.Background(), basePath, root, streamAll(entries)); err == nil {
+		t.Fatal("wrong root accepted")
+	}
+	if _, err := os.Stat(basePath); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("wrong-root import was published: %v", err)
+	}
+}
 
 // syntheticEntries returns n state entries with distinct keys and >=12-byte
 // data, plus the account_hash they hash to (the in-memory state root).

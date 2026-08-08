@@ -149,6 +149,11 @@ func (f *NodeStore) StoreBatch(ctx context.Context, entries []shamap.FlushEntry)
 	return f.db.StoreBatch(ctx, nodes)
 }
 
+// Sync persists all preceding writes to stable storage.
+func (f *NodeStore) Sync(ctx context.Context) error {
+	return f.db.Sync(ctx)
+}
+
 // SetMinimumLedgerSeq waits for older writes to finish, then rejects new
 // writes below the online-delete boundary.
 func (f *NodeStore) SetMinimumLedgerSeq(seq uint32) {
