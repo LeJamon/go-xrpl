@@ -1249,7 +1249,6 @@ func sortHeldBySequence(txns []tx.Transaction) {
 	})
 }
 
-// computeTxID returns the canonical transaction hash used by the queue.
 func (e *TestEnv) computeTxID(txn tx.Transaction) [32]byte {
 	id, err := tx.ComputeTransactionHash(txn)
 	if err != nil {

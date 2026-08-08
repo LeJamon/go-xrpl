@@ -13,8 +13,6 @@ func mustNew(cfg Config) *TxQ {
 	return q
 }
 
-// These aliases keep legacy same-package fixtures readable without exporting
-// the queue's traversal types from production code.
 type Candidate = candidate
 type TxConsequences = txConsequences
 type AccountQueue = accountQueue

@@ -111,7 +111,6 @@ func (c Config) normalize() (Config, error) {
 	return c, nil
 }
 
-// Validate returns an error if cfg cannot be used to construct a queue.
 func (c Config) Validate() error {
 	_, err := c.normalize()
 	return err

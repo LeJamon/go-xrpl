@@ -53,8 +53,6 @@ type ApplyContext interface {
 	// GetLedgerSequence returns the current ledger sequence.
 	GetLedgerSequence() uint32
 
-	// ApplyTransactionWithFlags attempts to apply a transaction to the open
-	// ledger using the flags captured for this submission.
 	ApplyTransactionWithFlags(txn tx.Transaction, flags tx.ApplyFlags) (ter.Result, bool)
 
 	// PreflightTransactionWithFlags runs the preflight pipeline (syntax,
@@ -72,7 +70,6 @@ type ApplyContext interface {
 	// (tesSUCCESS) if preclaim passes, or the failing TER code.
 	PreclaimTransactionWithFlags(txn tx.Transaction, account [20]byte, adjustedBalance uint64, adjustedSeq uint32, flags tx.ApplyFlags) ter.Result
 
-	// GetApplyFlags returns the engine ApplyFlags driving this submission.
 	GetApplyFlags() tx.ApplyFlags
 	RulesIdentity() *amendment.Rules
 
@@ -90,8 +87,6 @@ type ApplyContext interface {
 // when the whole batch succeeds to fold the accumulated state back into the
 // parent view. If Commit is never called the sandbox is simply discarded.
 type SandboxContext interface {
-	// ApplyTransactionWithFlags applies txn to the sandbox view with the
-	// submission's flags, returning the result and whether it was applied.
 	ApplyTransactionWithFlags(txn tx.Transaction, flags tx.ApplyFlags) (ter.Result, bool)
 
 	// Commit folds the sandbox's accumulated state back into the parent view.
@@ -709,7 +704,6 @@ func (q *TxQ) tryClearAccountQueue(
 	return &ApplyResult{Result: result, Applied: true}
 }
 
-// canBeHeld checks the constraints that only apply when holding a transaction.
 func (q *TxQ) canBeHeld(common *tx.Common, flags tx.ApplyFlags, ledgerSeq uint32, aq *accountQueue, replacingCandidate *candidate, seqProxy SeqProxy, acctSeq uint32) (bool, ApplyResult) {
 	if common.HasField("PreviousTxnID") || common.AccountTxnID != "" || flags&tx.TapFAIL_HARD != 0 {
 		return true, ApplyResult{Result: ter.TelCAN_NOT_QUEUE, Applied: false}
