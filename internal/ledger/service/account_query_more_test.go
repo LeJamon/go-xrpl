@@ -255,9 +255,10 @@ func TestGetAccountObjects_NFTLimitWithEmptyOwnerDirectory(t *testing.T) {
 
 	ownerDir := keylet.OwnerDir(ownerID)
 	rootData, err := state.SerializeDirectoryNode(&state.DirectoryNode{
-		RootIndex: ownerDir.Key,
-		IndexNext: 1,
-		Owner:     ownerID,
+		RootIndex:     ownerDir.Key,
+		IndexNext:     1,
+		IndexPrevious: 1,
+		Owner:         ownerID,
 	}, false)
 	if err != nil {
 		t.Fatalf("serialize empty owner directory: %v", err)
