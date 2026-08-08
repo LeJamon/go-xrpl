@@ -369,6 +369,7 @@ func RequireOwnerDirectoryContains(
 // OwnerDirectoryContains follows the directory's linked pages and rejects corrupt chains.
 func OwnerDirectoryContains(env *TestEnv, owner *Account, target [32]byte) (bool, error) {
 	visited := make(map[uint64]struct{})
+	found := false
 	for page := uint64(0); ; {
 		if _, exists := visited[page]; exists {
 			return false, fmt.Errorf("owner directory cycle at page %d", page)
@@ -392,11 +393,11 @@ func OwnerDirectoryContains(env *TestEnv, owner *Account, target [32]byte) (bool
 		}
 		for _, item := range node.Indexes {
 			if item == target {
-				return true, nil
+				found = true
 			}
 		}
 		if node.IndexNext == 0 {
-			return false, nil
+			return found, nil
 		}
 		page = node.IndexNext
 	}

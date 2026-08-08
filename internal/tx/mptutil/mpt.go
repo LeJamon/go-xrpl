@@ -444,16 +444,6 @@ func VerifyValidDomain(ctx *tx.ApplyContext, domainIDHex string, account [20]byt
 	return credential.VerifyValidDomain(ctx, account, domainID)
 }
 
-// RemoveExpiredDomainCredentialsOnTec reapplies the cleanup performed by
-// VerifyValidDomain after a tecEXPIRED sandbox rollback.
-func RemoveExpiredDomainCredentialsOnTec(ctx *tx.ApplyContext, domainIDHex string, account [20]byte) {
-	domainID, ok := decodeDomainID(domainIDHex)
-	if !ok {
-		return
-	}
-	credential.RemoveExpiredDomainCredentialsOnTec(ctx, account, domainID)
-}
-
 func decodeDomainID(domainIDHex string) ([32]byte, bool) {
 	var domainID [32]byte
 	domainBytes, err := hex.DecodeString(domainIDHex)

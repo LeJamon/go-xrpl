@@ -13,9 +13,7 @@ import (
 
 func TestCredentialCreateDirectorySaturationIsAtomic(t *testing.T) {
 	for _, fixEnabled := range []bool{false, true} {
-		fixEnabled := fixEnabled
 		for _, fullOwner := range []string{"issuer", "subject"} {
-			fullOwner := fullOwner
 			t.Run(fmt.Sprintf("fixDirectoryLimit=%t/%s", fixEnabled, fullOwner), func(t *testing.T) {
 				issuer := jtx.NewAccount("issuer")
 				subject := jtx.NewAccount("subject")

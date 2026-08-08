@@ -135,3 +135,65 @@ func TestCredentialLifecycleMetadata(t *testing.T) {
 	}, subjectDeleteNode.PreviousFields)
 	require.Equal(t, uint32(0), metatesting.ToUint32(subjectDeleteNode.FinalFields["OwnerCount"]))
 }
+
+func TestCredentialExpiredAcceptMetadata(t *testing.T) {
+	issuer := jtx.NewAccount("issuer")
+	subject := jtx.NewAccount("subject")
+	env := jtx.NewTestEnv(t)
+	env.Fund(issuer, subject)
+	env.Close()
+
+	const credentialType = "expired-meta"
+	const credentialTypeHex = "657870697265642D6D657461"
+	expiration := env.NowRipple() + 20
+	credentialKey := jtx.CredentialKeylet(subject, issuer, credentialType)
+	credentialIndex := fmt.Sprintf("%X", credentialKey.Key)
+	jtx.RequireTxSuccess(t, env.Submit(
+		credential.CredentialCreateText(issuer, subject, credentialType).
+			Expiration(expiration).
+			Build(),
+	))
+	for env.NowRipple() <= expiration {
+		env.Close()
+	}
+
+	subjectBalance := env.Balance(subject)
+	subjectSequence := env.Seq(subject)
+	result := env.Submit(credential.CredentialAcceptText(subject, issuer, credentialType).Build())
+	jtx.RequireTxClaimed(t, result, jtx.TecEXPIRED)
+	require.NotNil(t, result.Metadata)
+	metatesting.CheckNodeCount(t, result, 5)
+
+	deletedCredential := metatesting.FindNode(result.Metadata, "DeletedNode", "Credential")
+	require.NotNil(t, deletedCredential)
+	require.Equal(t, credentialIndex, deletedCredential.LedgerIndex)
+	require.Equal(t, credentialTypeHex, deletedCredential.FinalFields["CredentialType"])
+	require.Equal(t, expiration, metatesting.ToUint32(deletedCredential.FinalFields["Expiration"]))
+	require.Equal(t, uint32(0), metatesting.ToUint32(deletedCredential.FinalFields["Flags"]))
+	require.Equal(t, issuer.Address, deletedCredential.FinalFields["Issuer"])
+	require.Equal(t, subject.Address, deletedCredential.FinalFields["Subject"])
+	require.Equal(t, "0", deletedCredential.FinalFields["IssuerNode"])
+	require.Equal(t, "0", deletedCredential.FinalFields["SubjectNode"])
+	require.Nil(t, deletedCredential.PreviousFields)
+
+	deletedDirectories := metatesting.FindNodes(result.Metadata, "DeletedNode", "DirectoryNode")
+	require.Len(t, deletedDirectories, 2)
+	for _, directory := range deletedDirectories {
+		require.Equal(t, uint32(0), metatesting.ToUint32(directory.FinalFields["Flags"]))
+		require.Equal(t, directory.LedgerIndex, directory.FinalFields["RootIndex"])
+		require.Nil(t, directory.PreviousFields)
+	}
+
+	issuerNode := metatesting.FindNodeByAccount(result.Metadata, issuer.Address)
+	require.NotNil(t, issuerNode)
+	require.Equal(t, map[string]any{"OwnerCount": uint32(1)}, issuerNode.PreviousFields)
+	require.Equal(t, uint32(0), metatesting.ToUint32(issuerNode.FinalFields["OwnerCount"]))
+
+	subjectNode := metatesting.FindNodeByAccount(result.Metadata, subject.Address)
+	require.NotNil(t, subjectNode)
+	require.Equal(t, map[string]any{
+		"Balance":  fmt.Sprintf("%d", subjectBalance),
+		"Sequence": subjectSequence,
+	}, subjectNode.PreviousFields)
+	require.Equal(t, uint32(0), metatesting.ToUint32(subjectNode.FinalFields["OwnerCount"]))
+}

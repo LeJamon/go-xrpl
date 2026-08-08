@@ -350,23 +350,3 @@ func (v *VaultDeposit) Apply(ctx *tx.ApplyContext) ter.Result {
 
 	return ter.TesSUCCESS
 }
-
-func (v *VaultDeposit) ApplyOnTec(ctx *tx.ApplyContext) {
-	vaultID, ok := v.vaultIDBytes()
-	if !ok {
-		return
-	}
-	vd, err := readVault(ctx.View, keylet.VaultByID(vaultID))
-	if err != nil || vd == nil || vd.Flags&VaultFlagPrivate == 0 || ctx.AccountID == vd.Owner {
-		return
-	}
-	raw, err := ctx.View.Read(keylet.MPTIssuance(vd.ShareMPTID))
-	if err != nil || raw == nil {
-		return
-	}
-	issuance, err := state.ParseMPTokenIssuance(raw)
-	if err != nil || issuance.DomainID == nil {
-		return
-	}
-	mptutil.RemoveExpiredDomainCredentialsOnTec(ctx, *issuance.DomainID, ctx.AccountID)
-}

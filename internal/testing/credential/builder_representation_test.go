@@ -99,10 +99,8 @@ func TestCredentialTypeBuildersUseExplicitRepresentations(t *testing.T) {
 	}
 
 	for _, builder := range builders {
-		builder := builder
 		t.Run(builder.name+"/text", func(t *testing.T) {
 			for _, tc := range textCases {
-				tc := tc
 				t.Run(tc.name, func(t *testing.T) {
 					got, err := builder.text(tc.input)
 					require.Equal(t, tc.want, got)
@@ -117,7 +115,6 @@ func TestCredentialTypeBuildersUseExplicitRepresentations(t *testing.T) {
 
 		t.Run(builder.name+"/bytes", func(t *testing.T) {
 			for _, tc := range textCases {
-				tc := tc
 				t.Run(tc.name, func(t *testing.T) {
 					got, err := builder.bytes([]byte(tc.input))
 					require.Equal(t, tc.want, got)
@@ -132,7 +129,6 @@ func TestCredentialTypeBuildersUseExplicitRepresentations(t *testing.T) {
 
 		t.Run(builder.name+"/hex", func(t *testing.T) {
 			for _, tc := range hexCases {
-				tc := tc
 				t.Run(tc.name, func(t *testing.T) {
 					got, err := builder.hex(tc.input)
 					require.Equal(t, tc.want, got)
@@ -176,7 +172,6 @@ func TestCredentialCreateURIRepresentations(t *testing.T) {
 	}
 
 	for _, tc := range cases {
-		tc := tc
 		t.Run(tc.name, func(t *testing.T) {
 			built := tc.apply(CredentialCreateText(issuer, subject, "credential")).Build()
 			require.Equal(t, tc.want, built.URI)
@@ -307,7 +302,6 @@ func TestCredentialBuildersFlattenAndWireFields(t *testing.T) {
 	}
 
 	for _, tc := range cases {
-		tc := tc
 		t.Run(tc.name, func(t *testing.T) {
 			flattened, err := tc.build()
 			require.NoError(t, err)

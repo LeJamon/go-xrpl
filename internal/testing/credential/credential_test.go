@@ -924,7 +924,6 @@ func TestDeleteFailed(t *testing.T) {
 // Reference: rippled Credentials_test.cpp testFeatureFailed
 func TestEnabled(t *testing.T) {
 	for _, operation := range []string{"create", "accept", "delete"} {
-		operation := operation
 		t.Run(operation, func(t *testing.T) {
 			issuer := jtx.NewAccount("issuer")
 			subject := jtx.NewAccount("subject")

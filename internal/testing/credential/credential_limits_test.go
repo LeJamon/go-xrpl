@@ -10,9 +10,7 @@ import (
 
 func TestCredentialTypeRawByteBoundaries(t *testing.T) {
 	for _, operation := range []string{"create", "accept", "delete"} {
-		operation := operation
 		for _, size := range []int{0, 1, 64, 65} {
-			size := size
 			t.Run(fmt.Sprintf("%s/%d", operation, size), func(t *testing.T) {
 				issuer := jtx.NewAccount("issuer")
 				subject := jtx.NewAccount("subject")
@@ -53,7 +51,6 @@ func TestCredentialTypeRawByteBoundaries(t *testing.T) {
 
 func TestCredentialURIRawByteBoundaries(t *testing.T) {
 	for _, size := range []int{0, 1, 256, 257} {
-		size := size
 		t.Run(fmt.Sprintf("%d", size), func(t *testing.T) {
 			issuer := jtx.NewAccount("issuer")
 			subject := jtx.NewAccount("subject")

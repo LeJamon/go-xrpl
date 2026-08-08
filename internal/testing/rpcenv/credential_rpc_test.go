@@ -21,6 +21,7 @@ func TestCredentialRPCViews(t *testing.T) {
 	jtx.RequireTxSuccess(t, env.Submit(
 		credential.CredentialCreateText(issuer, subject, credentialType).Build(),
 	))
+	env.Close()
 	jtx.RequireTxSuccess(t, env.Submit(
 		credential.CredentialAcceptText(subject, issuer, credentialType).Build(),
 	))

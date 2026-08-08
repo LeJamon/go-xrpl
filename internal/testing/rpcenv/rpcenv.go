@@ -22,6 +22,7 @@ type Env struct {
 	*jtx.TestEnv
 
 	t        testing.TB
+	adapter  *ledgerAdapter
 	services *types.ServiceContainer
 	registry *types.MethodRegistry
 }
@@ -43,9 +44,15 @@ func Wrap(t testing.TB, env *jtx.TestEnv) *Env {
 	return &Env{
 		TestEnv:  env,
 		t:        t,
+		adapter:  adapter,
 		services: services,
 		registry: registry,
 	}
+}
+
+func (e *Env) Close() {
+	e.TestEnv.Close()
+	e.adapter.recordClosedLedger()
 }
 
 // Submit applies a transaction and records its canonical blob for transaction-history RPCs.

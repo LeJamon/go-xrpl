@@ -371,15 +371,6 @@ func VerifyValidDomain(ctx *tx.ApplyContext, subject [20]byte, domainID [32]byte
 	return ter.TecNO_PERMISSION
 }
 
-// RemoveExpiredDomainCredentialsOnTec reapplies permissioned-domain credential
-// cleanup after a tecEXPIRED sandbox rollback.
-func RemoveExpiredDomainCredentialsOnTec(ctx *tx.ApplyContext, subject [20]byte, domainID [32]byte) {
-	ids, result := domainCredentialIDs(ctx.View, domainID, subject)
-	if result == ter.TesSUCCESS {
-		RemoveExpiredCredentialsOnTec(ctx, ids)
-	}
-}
-
 // removeExpired is the shared per-credential deletion loop. anyExpired reports
 // whether any credential was expired; failTER is the first failing deletion TER
 // (tesSUCCESS if none failed). When stopOnFailure is true it returns immediately
@@ -442,18 +433,10 @@ func RemoveExpiredCredentials(ctx *tx.ApplyContext, credentialIDs []string) (boo
 	return anyExpired, ter.TesSUCCESS
 }
 
-// RemoveExpiredCredentialsOnTec runs the tec-recovery cleanup: every expired
-// credential is deleted and a deletion failure is only logged, never propagated,
-// matching rippled Transactor::removeExpiredCredentials. This path is unchanged
-// by fixCleanup3_1_3.
-func RemoveExpiredCredentialsOnTec(ctx *tx.ApplyContext, credentialIDs []string) {
-	removeExpired(ctx, credentialIDs, false)
-}
-
 // VerifyDepositPreauth enforces deposit authorization for a transaction
 // moving funds from src to dst. Expired credentials in credentialIDs are
 // deleted first, failing the transaction with tecEXPIRED if any were expired
-// (the deletion is re-applied on the tec path via ApplyOnTec). If dst has
+// (the engine replays the erased credential keys on the tec path). If dst has
 // lsfDepositAuth set and src != dst, the deposit must be preauthorized by
 // dst, either by account or by the supplied credentials.
 // Reference: rippled CredentialHelpers.cpp verifyDepositPreauth()

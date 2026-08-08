@@ -10,10 +10,8 @@ import (
 
 func TestCredentialInvalidFlagsAmendmentMatrix(t *testing.T) {
 	for _, fixEnabled := range []bool{false, true} {
-		fixEnabled := fixEnabled
 		t.Run(fmt.Sprintf("fixInvalidTxFlags=%t", fixEnabled), func(t *testing.T) {
 			for _, operation := range []string{"create", "accept", "delete"} {
-				operation := operation
 				t.Run(operation, func(t *testing.T) {
 					issuer := jtx.NewAccount("issuer")
 					subject := jtx.NewAccount("subject")

@@ -45,18 +45,18 @@ func TestOwnerDirectoryContainsFollowsLinksAndFailsClosed(t *testing.T) {
 		env := NewTestEnv(t)
 		owner := NewAccount("owner")
 		rootKey := keylet.OwnerDir(owner.ID)
+		target := [32]byte{0x42}
 		root := &state.DirectoryNode{Owner: owner.ID}
 		root.SetIndexNext(9)
 		root.SetIndexPrevious(9)
 		putDirectoryNode(t, env, rootKey, root)
-		page := &state.DirectoryNode{RootIndex: rootKey.Key}
+		page := &state.DirectoryNode{RootIndex: rootKey.Key, Indexes: [][32]byte{target}}
 		page.SetIndexNext(9)
 		putDirectoryNode(t, env, keylet.OwnerDirPage(owner.ID, 9), page)
 
-		_, err := OwnerDirectoryContains(env, owner, [32]byte{0x42})
+		_, err := OwnerDirectoryContains(env, owner, target)
 		require.ErrorContains(t, err, "cycle at page 9")
 	})
-
 }
 
 func putDirectoryNode(t *testing.T, env *TestEnv, key keylet.Keylet, node *state.DirectoryNode) {
