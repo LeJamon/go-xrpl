@@ -255,8 +255,6 @@ func TestRvl_HandleVL_DecodeError(t *testing.T) {
 	assert.Equal(t, "vl-decode", calls[0].reason)
 }
 
-// Empty publisher manifests are malformed signatures and charge the peer as
-// bad signature data.
 func TestRvl_HandleVL_MalformedPublisherManifest(t *testing.T) {
 	r, rs := rvl_newRouterWithVL(t)
 	vl := &message.ValidatorList{Version: 1, Manifest: []byte("m"), Blob: []byte("b"), Signature: []byte("s")}
@@ -299,7 +297,6 @@ func TestRvl_HandleVL_NilMsgSeen(t *testing.T) {
 	r.handleValidatorList(&peermanagement.InboundMessage{PeerID: 50, Type: message.TypeValidatorList, Payload: payload})
 	r.handleValidatorList(&peermanagement.InboundMessage{PeerID: 51, Type: message.TypeValidatorList, Payload: payload})
 
-	// Both processed independently — two malformed-signature charges, no duplicate charge.
 	calls := rs.getBadDataCalls()
 	assert.Len(t, calls, 2)
 	for _, c := range calls {

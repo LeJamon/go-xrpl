@@ -59,8 +59,8 @@ type PeerBroadcaster interface {
 // The aggregator constructs a slice of these from the publisher's
 // current + Remaining state for v2 broadcasts.
 type BroadcastBlob struct {
-	// Manifest is the per-blob manifest override; empty for blobs that
-	// use the collection's shared publisher manifest.
+	// A nil Manifest uses the shared publisher manifest; non-nil preserves an
+	// explicit per-blob override, including an empty one.
 	Manifest []byte
 	// Blob is the base64-encoded blob bytes as originally received.
 	Blob []byte

@@ -55,9 +55,6 @@ type pendingCacheWrite struct {
 	generation uint64
 }
 
-// cacheFileOps isolates the three filesystem mutations used by the cache
-// writer. The production zero value uses os, while same-package tests can
-// inject deterministic failures without relying on permissions or timing.
 type cacheFileOps struct {
 	remove    func(string) error
 	writeFile func(string, []byte, os.FileMode) error
@@ -72,7 +69,7 @@ type cacheFileOps struct {
 // rippled/src/xrpld/app/misc/detail/ValidatorList.cpp:368-396.
 //
 // Passing an empty string disables on-disk caching. Safe to call
-// before or after Start; takes a.mu briefly.
+// before or after Start.
 func (a *Aggregator) SetCacheDir(dir string) error {
 	if dir != "" {
 		if err := os.MkdirAll(dir, 0o755); err != nil {
@@ -186,8 +183,8 @@ func (a *Aggregator) removeCacheLocked(pk PublisherKey) {
 // drain the queue, then performs the syscalls under cacheWriteMu. The
 // per-publisher seq stamp lets a superseded mutation be dropped, so two
 // concurrent flushers cannot leave a stale cache file as the winner.
-// Cheap no-op when nothing is queued. Errors are logged, not surfaced — a
-// failed cache mutations are requeued with their original sequence so a
+// Cheap no-op when nothing is queued. Errors are logged, not surfaced.
+// Failed cache mutations are requeued with their original sequence so a
 // later Tick or flush can retry them without allowing an older write to
 // overtake a newer mutation.
 func (a *Aggregator) flushCacheWrites() {

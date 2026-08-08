@@ -65,7 +65,6 @@ func (s PublisherStatus) String() string {
 	}
 }
 
-// publisherState is the per-publisher state the aggregator maintains.
 // Tracks the current accepted list plus a queue of future-dated
 // "remaining" lists (rippled's PublisherList.remaining at
 // ValidatorList.h:75-83) so a publisher rotation announced ahead of
@@ -140,8 +139,6 @@ type publisherState struct {
 	// promoteRemainingLocked. Empty when no rotation is pending.
 	Remaining map[uint32]*pendingList
 
-	// MaxSequence is the largest sequence ever accepted or stored in
-	// `Remaining`.
 	// Mirrors rippled's PublisherListCollection.maxSequence; combined
 	// with `Remaining` it drives the pending-vs-known_sequence decision
 	// at applyList (ValidatorList.cpp:1414-1432).
@@ -154,9 +151,6 @@ type publisherState struct {
 	MaxSequenceSet bool
 }
 
-// pendingList is one entry in publisherState.Remaining — a fully-verified
-// future-dated list that will become current at validFrom. Wire bytes are
-// retained so the post-promotion broadcast can re-emit the canonical form.
 type pendingList struct {
 	Sequence            uint32
 	Effective           time.Time
@@ -182,8 +176,6 @@ type pendingEmbeddedManifest struct {
 	Raw []byte
 }
 
-// siteInfoState is the per-URL polling state surfaced via the
-// validator_list_sites RPC.
 type siteInfoState struct {
 	URI             string
 	LastFetched     time.Time
@@ -237,7 +229,6 @@ type PublisherInfo struct {
 	MaxSequenceSet      bool
 }
 
-// SiteInfo is the immutable value projection of one configured polling site.
 type SiteInfo struct {
 	URI                string
 	LastFetched        time.Time
@@ -381,8 +372,6 @@ type Aggregator struct {
 	cacheWriteMu sync.Mutex
 	cacheWritten map[PublisherKey]uint64
 
-	// cacheOps is an optional per-aggregator filesystem seam used by the
-	// cache retry tests. A zero value selects the os-backed operations.
 	cacheOps cacheFileOps
 
 	changes changeDispatcher

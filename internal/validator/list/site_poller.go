@@ -50,18 +50,6 @@ const errorRetryInterval = 30 * time.Second
 const missingFieldsMessage = "Missing fields in JSON response"
 const missingFieldsStatusMessage = "missing fields"
 
-// envelope is the JSON shape published at vl.* publisher URLs (and the
-// equivalent file:// payloads), and the on-disk cache format the
-// aggregator writes. Its field names and types match rippled's
-// buildFileData layout (ValidatorList.cpp:304-366) so a cache file is
-// schema-compatible with rippled; field order is not significant because
-// the file is only ever read back via JSON unmarshal, never compared
-// byte-for-byte.
-//
-// public_key and refresh_interval are emitted for that schema
-// compatibility but are not consumed on read: the publisher is identified
-// by the cache file name and the refresh cadence is driven by the site
-// poller. Fields beyond these are tolerated and ignored on read.
 type envelope struct {
 	Object         bool            `json:"-"`
 	Manifest       envelopeString  `json:"manifest"`

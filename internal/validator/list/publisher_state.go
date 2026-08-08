@@ -10,30 +10,13 @@ import (
 	"github.com/LeJamon/go-xrpl/internal/peermanagement/message"
 )
 
-// ApplyList ingests a single (manifest, blob, signature) triple and
-// returns the resulting disposition along with the publisher master
-// key (when extractable) and the blob's sequence (when extractable).
-// Wraps the rippled-faithful applyList algorithm: verify the publisher
-// manifest, look up its current ephemeral signing key, verify the blob
-// signature, JSON-parse the blob, then update per-publisher state and
-// trigger an OnChange if the trusted union changed.
+// ApplyList ingests a single (manifest, blob, signature) triple and returns
+// its disposition, publisher master key, and sequence when extractable.
 //
 // `manifestBytes` and `blob` carry the WIRE-FORM ascii strings as
 // received in TMValidatorList / TMValidatorListCollection (base64-
 // encoded). `signature` carries the WIRE-FORM hex string. `version`
 // is the protocol version negotiated at the message level.
-//
-// `siteURI` is recorded on the per-publisher state for RPC visibility
-// — pass "peer:<id>" for gossip-sourced lists and the URL for
-// HTTP-polled ones.
-//
-// Returns the publisher master key on every disposition where it's
-// extractable (i.e. the manifest decoded), so the caller can attribute
-// metrics / bad-data charges with publisher-level granularity even on
-// failure paths. Returns the zero PublisherKey when the manifest
-// itself could not be parsed. The sequence return is non-zero only
-// when the blob was decoded; the router uses it to record per-peer
-// publisher sequences regardless of accept/expired/pending outcome.
 func (a *Aggregator) ApplyList(manifestBytes, blob, signature []byte, version uint32, siteURI string) (Disposition, PublisherKey, uint32) {
 	return a.applyListInternal(manifestBytes, nil, false, blob, signature, version, siteURI, false)
 }
@@ -52,8 +35,6 @@ func (a *Aggregator) applyListInternal(globalManifest, localManifest []byte, loc
 		manifestBytes = localManifest
 	}
 
-	// Decode the publisher manifest. The manifest is base64-encoded on
-	// the wire; the inner STObject is what manifest.Deserialize wants.
 	manifestRaw, err := decodeBase64Tolerant(manifestBytes)
 	if err != nil {
 		a.logger.Debug("validator list: manifest base64 decode failed", "error", err, "site", siteURI)
@@ -78,11 +59,6 @@ func (a *Aggregator) applyListInternal(globalManifest, localManifest []byte, loc
 		return Untrusted, pubKey, 0
 	}
 
-	// Apply the publisher manifest to the manifest cache. This both
-	// caches the manifest for later use and gives us the current
-	// ephemeral signing key. A revoked manifest invalidates the
-	// publisher entirely.
-	//
 	// Track the cache disposition so revocation only flips publisher
 	// state when the manifest cache actually accepted the revocation.
 	// Mirrors rippled ValidatorList.cpp:1373-1378 — `removePublisherList`
@@ -97,9 +73,6 @@ func (a *Aggregator) applyListInternal(globalManifest, localManifest []byte, loc
 		case manifest.Accepted:
 			manifestAccepted = true
 		case manifest.Stale:
-			// Already had this or a newer one — cache state is
-			// unchanged; don't let an old revocation manifest flip
-			// the publisher's status.
 		case manifest.Invalid:
 			// The manifest was structurally valid, but its signatures or
 			// cache invariants were not. Rippled maps this path to
@@ -124,8 +97,6 @@ func (a *Aggregator) applyListInternal(globalManifest, localManifest []byte, loc
 		if err := parsed.Verify(); err != nil {
 			return Untrusted, pubKey, 0
 		}
-		// No cache means every fresh verify is "accepted" for the
-		// purpose of the revocation gate.
 		manifestAccepted = true
 	}
 
@@ -291,8 +262,6 @@ func (a *Aggregator) applyListInternal(globalManifest, localManifest []byte, loc
 	return disposition, pubKey, sequence
 }
 
-// updateRawBytes refreshes the retained wire-form bytes, reusing the
-// existing backing arrays so the caller may keep its own slices.
 func (s *publisherState) updateRawBytes(manifest, blob, signature []byte) {
 	s.RawManifest = append(s.RawManifest[:0], manifest...)
 	s.RawBlob = append(s.RawBlob[:0], blob...)
@@ -304,9 +273,6 @@ func (s *publisherState) updateRawLocalManifest(raw []byte, present bool) {
 	s.RawLocalManifestSet = present
 }
 
-// extractValidatorKeys decodes and canonically sorts the validator
-// master keys from a parsed blob. logMsg is the debug message emitted
-// for skipped entries.
 func (a *Aggregator) extractValidatorKeys(blob *blobJSON, logMsg string) [][33]byte {
 	keys := make([][33]byte, 0, len(blob.Validators))
 	for i, v := range blob.Validators {
@@ -330,15 +296,6 @@ func (a *Aggregator) extractValidatorKeys(blob *blobJSON, logMsg string) [][33]b
 	return keys
 }
 
-// applyAcceptedLocked materializes the parsed blob into the
-// publisher's state. Caller must hold a.mu. Does NOT emit OnChange —
-// that's done by recomputeAndEmitLocked once the caller has decided
-// the disposition warrants a trusted-set recompute.
-//
-// rawManifest / rawBlob / rawSignature are the wire-form bytes from
-// the original TMValidatorList / envelope; they are copied (not
-// referenced) so the caller may reuse its slices safely. Used later
-// by BroadcastLatest to re-emit the canonical accepted form to peers.
 func (a *Aggregator) applyAcceptedLocked(s *publisherState, blob *blobJSON, signingKey [33]byte, validFrom, validUntil time.Time, siteURI string, now time.Time, version uint32, rawManifest, rawLocalManifest []byte, rawLocalManifestSet bool, rawBlob, rawSignature []byte) {
 	s.Sequence = blob.Sequence
 	s.Effective = validFrom
@@ -444,8 +401,6 @@ func (a *Aggregator) applyPendingLocked(s *publisherState, blob *blobJSON, signi
 		if _, hit := s.Remaining[blob.Sequence]; hit {
 			known = true
 		} else if blob.Sequence <= s.MaxSequence {
-			// New sequence below max — pending only if it lands ahead
-			// of the current max-stored validFrom (out-of-order).
 			if maxEntry, ok := s.Remaining[s.MaxSequence]; !ok || !validFrom.Before(maxEntry.Effective) {
 				known = true
 			}
@@ -600,7 +555,6 @@ func (a *Aggregator) promoteRemainingLocked(s *publisherState, now time.Time) ui
 	}
 	slices.Sort(seqs)
 
-	// Find the LAST entry that is ready to promote.
 	pickIdx := -1
 	for i, seq := range seqs {
 		p := s.Remaining[seq]
@@ -631,14 +585,9 @@ func (a *Aggregator) promoteRemainingLocked(s *publisherState, now time.Time) ui
 }
 
 // ApplyCollection processes a v2 collection (TMValidatorListCollection),
-// applying each blob individually with the collection's shared
-// publisher manifest. Returns the per-blob dispositions in the same
-// order as the collection's blob array, plus the publisher key once
-// the manifest decoded and the highest sequence observed across the
-// collection. The router uses the dispositions to decide whether to
-// charge the sender (any Invalid / Malformed) and whether to relay
-// (at least one Accepted), and uses the max-sequence value to update
-// the per-peer publisherListSequences entry.
+// applying each blob individually with the collection's shared publisher
+// manifest. Results preserve blob order and include the publisher key and
+// highest observed sequence when extractable.
 //
 // Mirrors rippled's applyLists at ValidatorList.cpp:998-1070.
 func (a *Aggregator) ApplyCollection(coll *message.ValidatorListCollection, siteURI string) ([]Disposition, PublisherKey, uint32) {
