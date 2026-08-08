@@ -468,7 +468,7 @@ func TestWebSocketServer_ConcurrentWrites_NoRace(t *testing.T) {
 	ws := NewWebSocketServer(WebSocketServerOptions{Timeout: 30 * time.Second})
 	ws.pingInterval = time.Millisecond // hammer the ping path during the test
 
-	httpSrv := httptest.NewServer(http.HandlerFunc(ws.ServeHTTP))
+	httpSrv := httptest.NewServer(PortMiddleware(&PortContext{SendQueue: 256}, http.HandlerFunc(ws.ServeHTTP)))
 	defer httpSrv.Close()
 	wsURL := "ws" + strings.TrimPrefix(httpSrv.URL, "http")
 
@@ -509,8 +509,12 @@ func TestWebSocketServer_ConcurrentWrites_NoRace(t *testing.T) {
 
 	// Feed handleSend a steady stream of data frames while pingLoop fires.
 	for range 100 {
-		if !wsConn.TrySend([]byte(`{"type":"race-probe"}`)) {
-			t.Fatal("send channel stalled")
+		deadline := time.Now().Add(time.Second)
+		for !wsConn.TrySend([]byte(`{"type":"race-probe"}`)) {
+			if time.Now().After(deadline) {
+				t.Fatal("send channel stalled")
+			}
+			time.Sleep(time.Millisecond)
 		}
 	}
 
@@ -546,6 +550,9 @@ func TestWebSocketRegistrationRejectsDuplicateAndStaleOwner(t *testing.T) {
 	ws.connectionsMutex.RUnlock()
 	if current != second {
 		t.Fatal("stale owner removed its replacement")
+	}
+	if second.registration == nil {
+		t.Fatal("replacement registration is nil")
 	}
 	if second.registration.Snapshot().ItemCount() != 0 {
 		t.Fatal("unexpected replacement subscriptions")

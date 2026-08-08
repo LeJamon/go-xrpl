@@ -106,7 +106,7 @@ func ServerSubscriptionState(services *types.ServiceContainer, admin bool) map[s
 			status = info.ServerState
 		}
 		if standalone {
-			status = "standalone"
+			status = "full"
 		} else if !admin && (status == "proposing" || status == "validating") {
 			status = "full"
 		}

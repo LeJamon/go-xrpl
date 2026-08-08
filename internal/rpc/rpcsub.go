@@ -189,7 +189,7 @@ func (r *urlSubscriptionRegistry) Subscribe(ctx *types.RpcContext, request types
 		return fail(rpcErr)
 	}
 	history.apply(lookup.sub.conn)
-	if rpcErr := applySubscriptionBooks(request.WireArrays().Books, func(bookRequest types.SubscriptionRequest) *types.RpcError {
+	if rpcErr := applyRequestBooks(request, func(bookRequest types.SubscriptionRequest) *types.RpcError {
 		bookRequest.ApiVersion = request.ApiVersion
 		if rpcErr := r.ws.subscriptionManager.HandleSubscribeScoped(lookup.sub.registration, scope, bookRequest, true); rpcErr != nil {
 			return rpcErr
@@ -237,7 +237,7 @@ func (r *urlSubscriptionRegistry) Unsubscribe(ctx *types.RpcContext, request typ
 		return nil, rpcErr
 	}
 	history.apply(sub.conn)
-	if rpcErr := applySubscriptionBooks(request.WireArrays().Books, func(bookRequest types.SubscriptionRequest) *types.RpcError {
+	if rpcErr := applyRequestBooks(request, func(bookRequest types.SubscriptionRequest) *types.RpcError {
 		return r.ws.subscriptionManager.HandleUnsubscribeScoped(sub.registration, scope, bookRequest)
 	}); rpcErr != nil {
 		r.mu.Unlock()
@@ -311,13 +311,13 @@ func (r *urlSubscriptionRegistry) findOrCreateLocked(request types.SubscriptionR
 			metrics.recordDropped(key)
 		}
 	})
+	sub.conn.SetDisconnect(func() { go r.retire(sub) })
 	registration, attached := r.ws.subscriptionManager.Attach(sub.conn)
 	if !attached {
 		subCancel()
 		return rpcSubLookup{}, types.RpcErrorInternal()
 	}
 	sub.registration = registration
-	sub.conn.SetDisconnect(func() { go r.retire(sub) })
 	r.subs[key] = sub
 	r.principalCounts[principal]++
 	r.principalWorkers[principal]++

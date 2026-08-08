@@ -77,6 +77,23 @@ func TestConnectionSlowConsumerDisconnectsExactlyOnce(t *testing.T) {
 	})
 }
 
+func TestConnectionCustomDropLimit(t *testing.T) {
+	connection := NewConnection("websocket", make(chan []byte, 1))
+	connection.SetDropLimit(1)
+	if !connection.TrySend([]byte("queued")) {
+		t.Fatal("initial send was rejected")
+	}
+	var disconnects atomic.Int32
+	connection.SetDisconnect(func() { disconnects.Add(1) })
+	if connection.TrySend([]byte("overflow")) {
+		t.Fatal("overflow send unexpectedly succeeded")
+	}
+	stats := connection.Stats()
+	if !stats.Terminal || stats.Drops != 1 || stats.Disconnects != 1 || disconnects.Load() != 1 {
+		t.Fatalf("stats = %+v, callbacks = %d", stats, disconnects.Load())
+	}
+}
+
 func TestConnectionCancelFencesBlockedEncode(t *testing.T) {
 	connection := NewConnection("blocked", make(chan []byte, 2))
 	encodeEntered := make(chan struct{})

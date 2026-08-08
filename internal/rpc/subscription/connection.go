@@ -18,6 +18,7 @@ type Connection struct {
 	disconnect       func()
 	encodeOutbound   func([]byte) []byte
 	sendObserver     func(queued bool)
+	dropLimit        int32
 	consecutiveDrops atomic.Int32
 	totalDrops       atomic.Uint64
 	disconnects      atomic.Uint64
@@ -49,7 +50,7 @@ func NewConnectionWithContext(parent context.Context, id string, sendChannel cha
 		parent = context.Background()
 	}
 	ctx, cancel := context.WithCancel(parent) //nolint:gosec // stored on Connection and invoked by Cancel
-	return &Connection{id: id, sendChannel: sendChannel, ctx: ctx, cancel: cancel}
+	return &Connection{id: id, sendChannel: sendChannel, ctx: ctx, cancel: cancel, dropLimit: MaxConsecutiveDrops}
 }
 
 func (c *Connection) ID() string {
@@ -93,8 +94,20 @@ func (c *Connection) Outbound() <-chan []byte {
 }
 
 func (c *Connection) SetDisconnect(callback func()) {
+	if c == nil {
+		return
+	}
 	c.sendMu.Lock()
 	c.disconnect = callback
+	c.sendMu.Unlock()
+}
+
+func (c *Connection) SetDropLimit(limit int32) {
+	if c == nil || limit < 1 {
+		return
+	}
+	c.sendMu.Lock()
+	c.dropLimit = limit
 	c.sendMu.Unlock()
 }
 
@@ -159,7 +172,7 @@ func (c *Connection) trySend(data []byte) sendOutcome {
 	default:
 		drops := c.consecutiveDrops.Add(1)
 		c.totalDrops.Add(1)
-		disconnect := drops >= MaxConsecutiveDrops
+		disconnect := drops >= c.dropLimit
 		if disconnect {
 			c.terminal = true
 			c.disconnects.Add(1)

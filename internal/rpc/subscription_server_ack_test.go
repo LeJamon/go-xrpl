@@ -50,7 +50,7 @@ func TestServerSubscriptionInitialAcknowledgement(t *testing.T) {
 	ledger.standalone = true
 	standalone := ws.buildSubscribeAck(&types.RpcContext{Services: services}, request)
 	require.Equal(t, true, standalone["stand_alone"])
-	require.Equal(t, "standalone", standalone["server_status"])
+	require.Equal(t, "full", standalone["server_status"])
 }
 
 func TestServerSubscriptionInitialLoadExcludesTxQEscalation(t *testing.T) {

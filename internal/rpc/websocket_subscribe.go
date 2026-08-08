@@ -50,7 +50,7 @@ func (ws *WebSocketServer) executeSubscribe(wsConn *websocketConnection, ctx *ty
 	if rpcErr != nil {
 		return nil, rpcErr
 	}
-	if rpcErr := applySubscriptionBooks(request.WireArrays().Books, func(bookRequest types.SubscriptionRequest) *types.RpcError {
+	if rpcErr := applyRequestBooks(request, func(bookRequest types.SubscriptionRequest) *types.RpcError {
 		bookRequest.ApiVersion = ctx.ApiVersion
 		if rpcErr := ws.subscriptionManager.HandleSubscribeScoped(wsConn.registration, scope, bookRequest, ctx.IsAdmin); rpcErr != nil {
 			return rpcErr
@@ -124,6 +124,20 @@ func applySubscriptionBooks(raw json.RawMessage, apply func(types.SubscriptionRe
 	}
 	return nil
 }
+
+func applyRequestBooks(request types.SubscriptionRequest, apply func(types.SubscriptionRequest) *types.RpcError) *types.RpcError {
+	wire := request.WireArrays()
+	if wire.Present {
+		return applySubscriptionBooks(wire.Books, apply)
+	}
+	for _, book := range request.Books {
+		if rpcErr := apply(types.SubscriptionRequest{Books: []types.BookRequest{book}}); rpcErr != nil {
+			return rpcErr
+		}
+	}
+	return nil
+}
+
 func subscriptionRequestForBooks(books json.RawMessage) (types.SubscriptionRequest, error) {
 	data, err := json.Marshal(map[string]json.RawMessage{"books": books})
 	if err != nil {
@@ -145,7 +159,7 @@ func (ws *WebSocketServer) finishUnsubscribe(wsConn *websocketConnection, reques
 	if rpcErr := applyAccountHistoryUnsubscribe(ctx, wsConn.Connection, request); rpcErr != nil {
 		return rpcErr
 	}
-	return applySubscriptionBooks(request.WireArrays().Books, func(bookRequest types.SubscriptionRequest) *types.RpcError {
+	return applyRequestBooks(request, func(bookRequest types.SubscriptionRequest) *types.RpcError {
 		return ws.subscriptionManager.HandleUnsubscribeScoped(wsConn.registration, scope, bookRequest)
 	})
 }

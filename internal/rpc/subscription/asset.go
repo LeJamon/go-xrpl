@@ -162,11 +162,11 @@ func parseAsset(raw json.RawMessage, isPays bool) (asset, *types.RpcError) {
 			if json.Unmarshal(rawIssuer, &issuer) != nil {
 				return asset{}, issuerErr()
 			}
-			_, bytes, err := addresscodec.DecodeClassicAddressToAccountID(issuer)
-			if err != nil {
+			issuerID, ok := parseIssuer(issuer)
+			if !ok {
 				return asset{}, issuerErr()
 			}
-			copy(canonicalAsset.issuer[:], bytes)
+			canonicalAsset.issuer = issuerID
 			if canonicalAsset.issuer == noAccountID {
 				return asset{}, issuerErr()
 			}
@@ -197,8 +197,10 @@ func parseAsset(raw json.RawMessage, isPays bool) (asset, *types.RpcError) {
 }
 
 func jsonStringLike(raw json.RawMessage) (string, bool) {
+	decoder := json.NewDecoder(strings.NewReader(string(raw)))
+	decoder.UseNumber()
 	var value any
-	if json.Unmarshal(raw, &value) != nil {
+	if decoder.Decode(&value) != nil {
 		return "", false
 	}
 	switch v := value.(type) {
@@ -208,14 +210,47 @@ func jsonStringLike(raw json.RawMessage) (string, bool) {
 		return v, true
 	case bool:
 		return strconv.FormatBool(v), true
-	case float64:
-		if v == 0 {
-			return "0", true
+	case json.Number:
+		number := v.String()
+		if strings.ContainsAny(number, ".eE") {
+			real, err := strconv.ParseFloat(number, 64)
+			if err != nil {
+				return "", false
+			}
+			return strconv.FormatFloat(real, 'f', 6, 64), true
 		}
-		return strconv.FormatFloat(v, 'f', -1, 64), true
+		if strings.HasPrefix(number, "-") {
+			integer, err := strconv.ParseInt(number, 10, 64)
+			if err != nil {
+				return "", false
+			}
+			return strconv.FormatInt(integer, 10), true
+		}
+		integer, err := strconv.ParseUint(number, 10, 64)
+		if err != nil {
+			return "", false
+		}
+		return strconv.FormatUint(integer, 10), true
 	default:
 		return "", false
 	}
+}
+
+func parseIssuer(value string) ([20]byte, bool) {
+	var issuer [20]byte
+	if value == "0" {
+		return issuer, true
+	}
+	if decoded, err := hex.DecodeString(value); err == nil && len(decoded) == len(issuer) {
+		copy(issuer[:], decoded)
+		return issuer, true
+	}
+	_, decoded, err := addresscodec.DecodeClassicAddressToAccountID(value)
+	if err != nil {
+		return [20]byte{}, false
+	}
+	copy(issuer[:], decoded)
+	return issuer, true
 }
 
 func parseDomain(value string, domain *[32]byte) bool {
@@ -265,16 +300,20 @@ func assetFromSpec(spec types.CurrencySpec) (asset, bool) {
 		}
 		return asset{kind: assetMPT, mpt: id}, true
 	}
-	if !keylet.IsValidCurrencyCode(spec.Currency) {
+	currency := spec.Currency
+	if currency == "0" {
+		currency = ""
+	}
+	if !keylet.IsValidCurrencyCode(currency) {
 		return asset{}, false
 	}
-	canonicalAsset := asset{kind: assetIssue, currency: keylet.CurrencyBytes(spec.Currency)}
+	canonicalAsset := asset{kind: assetIssue, currency: keylet.CurrencyBytes(currency)}
 	if spec.Issuer != "" {
-		_, bytes, err := addresscodec.DecodeClassicAddressToAccountID(spec.Issuer)
-		if err != nil {
+		issuer, ok := parseIssuer(spec.Issuer)
+		if !ok {
 			return asset{}, false
 		}
-		copy(canonicalAsset.issuer[:], bytes)
+		canonicalAsset.issuer = issuer
 		if canonicalAsset.issuer == noAccountID {
 			return asset{}, false
 		}

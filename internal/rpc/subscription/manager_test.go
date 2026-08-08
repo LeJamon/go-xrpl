@@ -1,12 +1,15 @@
 package subscription
 
 import (
+	"encoding/hex"
 	"encoding/json"
 	"runtime"
 	"strconv"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/LeJamon/go-xrpl/internal/rpc/types"
 	"github.com/stretchr/testify/assert"
@@ -134,6 +137,66 @@ func TestSnapshotBookUsesCanonicalAssets(t *testing.T) {
 	pays, _, _, rpcErr = SnapshotBook(negativeZero.Books[0])
 	require.Nil(t, rpcErr)
 	assert.Equal(t, "XRP", pays.Currency)
+}
+
+func TestBookNumericRealZeroIsMalformed(t *testing.T) {
+	for _, test := range []struct {
+		name string
+		body string
+		code int
+	}{
+		{"currency zero", `{"books":[{"taker_pays":{"currency":0.0},"taker_gets":{"currency":"USD","issuer":"` + testIssuer + `"}}]}`, types.RpcSRC_CUR_MALFORMED},
+		{"negative currency zero", `{"books":[{"taker_pays":{"currency":-0.0},"taker_gets":{"currency":"USD","issuer":"` + testIssuer + `"}}]}`, types.RpcSRC_CUR_MALFORMED},
+		{"mpt zero", `{"books":[{"taker_pays":{"mpt_issuance_id":0.0},"taker_gets":{"currency":"XRP"}}]}`, types.RpcSRC_CUR_MALFORMED},
+		{"negative mpt zero", `{"books":[{"taker_pays":{"mpt_issuance_id":-0.0},"taker_gets":{"currency":"XRP"}}]}`, types.RpcSRC_CUR_MALFORMED},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			manager := NewManager()
+			_, registration := attach(t, manager, test.name, 1)
+			rpcErr := manager.HandleSubscribe(registration, decodeRequest(t, test.body), true)
+			require.NotNil(t, rpcErr)
+			assert.Equal(t, test.code, rpcErr.Code)
+		})
+	}
+}
+
+func TestBookIssuerHexForms(t *testing.T) {
+	issuerID, ok := parseIssuer(testIssuer)
+	require.True(t, ok)
+	hexIssuer := strings.ToUpper(hex.EncodeToString(issuerID[:]))
+
+	manager := NewManager()
+	_, registration := attach(t, manager, "hex-issuer", 1)
+	for _, issuer := range []string{"0", strings.Repeat("0", 40)} {
+		request := decodeRequest(t, `{"books":[{"taker_pays":{"currency":"XRP","issuer":"`+issuer+`"},"taker_gets":{"currency":"USD","issuer":"`+testIssuer+`"}}]}`)
+		require.Nil(t, manager.HandleSubscribe(registration, request, true))
+	}
+	request := decodeRequest(t, `{"books":[{"taker_pays":{"currency":"USD","issuer":"`+hexIssuer+`"},"taker_gets":{"currency":"XRP"}}]}`)
+	require.Nil(t, manager.HandleSubscribe(registration, request, true))
+	assert.Equal(t, 2, registration.Snapshot().BookCount())
+
+	noAccount := strings.Repeat("0", 39) + "1"
+	malformed := decodeRequest(t, `{"books":[{"taker_pays":{"currency":"USD","issuer":"`+noAccount+`"},"taker_gets":{"currency":"XRP"}}]}`)
+	rpcErr := manager.HandleSubscribe(registration, malformed, true)
+	require.NotNil(t, rpcErr)
+	assert.Equal(t, types.RpcSRC_ISR_MALFORMED, rpcErr.Code)
+}
+
+func TestOrderBookSpecNormalizesZeroCurrency(t *testing.T) {
+	manager := NewManager()
+	connection, registration := attach(t, manager, "zero-currency", 1)
+	request := decodeRequest(t, `{"books":[{"taker_pays":{"currency":"XRP"},"taker_gets":{"currency":"USD","issuer":"`+testIssuer+`"}}]}`)
+	require.Nil(t, manager.HandleSubscribe(registration, request, true))
+	manager.BroadcastToOrderBooksVersioned([]byte("matched"), []byte("matched"), []types.OrderBookSpec{{
+		TakerPays: types.CurrencySpec{Currency: "0", Issuer: "0"},
+		TakerGets: types.CurrencySpec{Currency: "USD", Issuer: testIssuer},
+	}})
+	select {
+	case message := <-connection.Outbound():
+		assert.Equal(t, []byte("matched"), message)
+	case <-time.After(time.Second):
+		t.Fatal("normalized XRP book did not receive publication")
+	}
 }
 
 func TestCanonicalBookIdentityAndDomainPresence(t *testing.T) {

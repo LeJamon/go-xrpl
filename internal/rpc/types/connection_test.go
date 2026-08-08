@@ -48,3 +48,24 @@ func TestBookRequestUnmarshalResetsOptionalStrings(t *testing.T) {
 		t.Fatalf("omitted optional strings retained: taker=%q domain=%q", request.Taker, request.Domain)
 	}
 }
+
+func TestBookRequestUnmarshalReplacesRawSides(t *testing.T) {
+	var request BookRequest
+	if err := json.Unmarshal([]byte(`{"taker_pays":{"currency":"USD"},"taker_gets":{"currency":"XRP"}}`), &request); err != nil {
+		t.Fatal(err)
+	}
+	previousPays := append(json.RawMessage(nil), request.TakerPays...)
+	previousGets := append(json.RawMessage(nil), request.TakerGets...)
+	if err := json.Unmarshal([]byte(`{"taker_gets":{"mpt_issuance_id":"0"}}`), &request); err != nil {
+		t.Fatal(err)
+	}
+	if request.TakerPays != nil {
+		t.Fatalf("omitted taker_pays = %s, want nil", request.TakerPays)
+	}
+	if got := string(request.TakerGets); got != `{"mpt_issuance_id":"0"}` {
+		t.Fatalf("taker_gets = %s", got)
+	}
+	if string(previousPays) != `{"currency":"USD"}` || string(previousGets) != `{"currency":"XRP"}` {
+		t.Fatalf("previous raw sides were mutated: pays=%s gets=%s", previousPays, previousGets)
+	}
+}

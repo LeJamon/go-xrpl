@@ -273,7 +273,7 @@ func TestRPCSubBooksApplyIncrementally(t *testing.T) {
 
 	_, rpcErr := method.Handle(ctx, json.RawMessage(params))
 	require.NotNil(t, rpcErr)
-	assert.Equal(t, uint32(resource.FeeMediumBurdenRPC.Cost()), ctx.LoadCost, "the accepted earlier snapshot is charged before a later book fails")
+	assert.Equal(t, uint32(resource.FeeMediumBurdenRPC().Cost()), ctx.LoadCost, "the accepted earlier snapshot is charged before a later book fails")
 
 	ws.urlSubs.mu.Lock()
 	sub := ws.urlSubs.subs[sink.srv.URL]
@@ -315,6 +315,34 @@ func TestRPCSubMPTBookFlow(t *testing.T) {
 	}})
 	event := sink.next(t)
 	require.Equal(t, "event", event.Method)
+}
+
+func TestRPCSubTypedBookFlow(t *testing.T) {
+	const account = "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh"
+	ws, services := newRPCSubTestServer(t)
+	sink := newRPCSubSink(t)
+	request := types.SubscriptionRequest{
+		URL: sink.srv.URL,
+		Books: []types.BookRequest{{
+			TakerPays: json.RawMessage(`{"currency":"XRP"}`),
+			TakerGets: json.RawMessage(`{"currency":"USD","issuer":"` + account + `"}`),
+		}},
+	}
+
+	_, rpcErr := ws.urlSubs.Subscribe(adminCtx(services), request)
+	require.Nil(t, rpcErr)
+	NewPublisher(ws.SubscriptionManager()).PublishOrderBookChange(publisherTestTransactionEvent(), []types.OrderBookSpec{{
+		TakerPays: types.CurrencySpec{Currency: "XRP"},
+		TakerGets: types.CurrencySpec{Currency: "USD", Issuer: account},
+	}})
+	event := sink.next(t)
+	require.Equal(t, "event", event.Method)
+
+	_, rpcErr = ws.urlSubs.Unsubscribe(adminCtx(services), request)
+	require.Nil(t, rpcErr)
+	ws.urlSubs.mu.Lock()
+	require.Empty(t, ws.urlSubs.subs)
+	ws.urlSubs.mu.Unlock()
 }
 
 func TestRPCSub_EmptyHostRejectedAtSubscribe(t *testing.T) {

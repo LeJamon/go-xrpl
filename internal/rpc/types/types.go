@@ -471,8 +471,8 @@ func (b *BookRequest) UnmarshalJSON(data []byte) error {
 	if err := json.Unmarshal(data, &raw); err != nil {
 		return err
 	}
-	b.TakerPays = append(b.TakerPays[:0], raw["taker_pays"]...)
-	b.TakerGets = append(b.TakerGets[:0], raw["taker_gets"]...)
+	b.TakerPays = append(json.RawMessage(nil), raw["taker_pays"]...)
+	b.TakerGets = append(json.RawMessage(nil), raw["taker_gets"]...)
 	b.Taker = ""
 	b.Domain = ""
 	b.wire = &BookRequestWire{

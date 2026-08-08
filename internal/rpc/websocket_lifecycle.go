@@ -8,12 +8,15 @@ import (
 	"github.com/gorilla/websocket"
 )
 
+const slowConsumerPolicyReason = "Policy error: client is too slow."
+
 // attachConnection is the single point at which a new WS connection becomes
 // visible to both the per-server connection map and the subscription manager.
 // Pairing this with detachConnection keeps the two registries synchronized.
 func (ws *WebSocketServer) attachConnection(wsConn *websocketConnection) bool {
 	ws.bindPathFindRefreshManager(wsConn)
-	wsConn.SetDisconnect(wsConn.closeSocket)
+	wsConn.SetDropLimit(1)
+	wsConn.SetDisconnect(func() { wsConn.closeWithPolicyViolation(slowConsumerPolicyReason) })
 
 	ws.connectionsMutex.Lock()
 	if ws.closing {
@@ -63,11 +66,13 @@ func (c *websocketConnection) closeSocket() {
 }
 func (c *websocketConnection) closeWithPolicyViolation(reason string) {
 	c.Cancel()
-	_ = c.conn.WriteControl(
-		websocket.CloseMessage,
-		websocket.FormatCloseMessage(websocket.ClosePolicyViolation, reason),
-		time.Now().Add(time.Second),
-	)
+	if c.conn != nil {
+		_ = c.conn.WriteControl(
+			websocket.CloseMessage,
+			websocket.FormatCloseMessage(websocket.ClosePolicyViolation, reason),
+			time.Now().Add(time.Second),
+		)
+	}
 	c.closeSocket()
 }
 func (ws *WebSocketServer) closeConnection(wsConn *websocketConnection) {

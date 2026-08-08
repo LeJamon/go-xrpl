@@ -138,3 +138,34 @@ func TestWebSocketSendQueueLimitInvalidConfigFailsBeforeUpgrade(t *testing.T) {
 		})
 	}
 }
+
+func TestWebSocketPolicyCloseForSlowConsumer(t *testing.T) {
+	ws := NewWebSocketServer(WebSocketServerOptions{Timeout: time.Second})
+	httpServer := httptest.NewServer(http.HandlerFunc(ws.ServeHTTP))
+	t.Cleanup(func() {
+		httpServer.Close()
+		_ = ws.Close(context.Background())
+	})
+
+	client, _, err := websocket.DefaultDialer.Dial("ws"+strings.TrimPrefix(httpServer.URL, "http"), nil)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = client.Close() })
+
+	var connection *websocketConnection
+	require.Eventually(t, func() bool {
+		ws.connectionsMutex.RLock()
+		defer ws.connectionsMutex.RUnlock()
+		for _, candidate := range ws.connections {
+			connection = candidate
+			return true
+		}
+		return false
+	}, time.Second, time.Millisecond)
+
+	connection.closeWithPolicyViolation(slowConsumerPolicyReason)
+	_, _, err = client.ReadMessage()
+	var closeErr *websocket.CloseError
+	require.ErrorAs(t, err, &closeErr)
+	require.Equal(t, websocket.ClosePolicyViolation, closeErr.Code)
+	require.Equal(t, slowConsumerPolicyReason, closeErr.Text)
+}
