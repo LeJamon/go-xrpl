@@ -1844,7 +1844,7 @@ func chargeForReason(reason string) resource.Charge {
 	}
 	switch {
 	case reason == "vl-coll-no-blobs",
-		strings.HasSuffix(reason, "-heavy-no-blobs"):
+		strings.Contains(reason, "-heavy-"):
 		return resource.FeeHeavyBurdenPeer
 	case strings.Contains(reason, "-badsig-"):
 		return resource.FeeInvalidSignature
@@ -1870,6 +1870,8 @@ func wirePreflightChargeReason(err error) string {
 			return "manifests-oversize"
 		case message.WireLimitGetObjectTransactions:
 			return "get-objects-transactions-oversize"
+		case message.WireLimitValidatorBlobs:
+			return "vl-coll-heavy-too-many-blobs"
 		}
 	}
 	return "wire-invalid"

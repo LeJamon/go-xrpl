@@ -20,14 +20,14 @@ func TestAggregator_IsUNLBlocked(t *testing.T) {
 	newAgg := func(now *time.Time, pubs ...PublisherKey) *Aggregator {
 		a := &Aggregator{
 			publishers: map[PublisherKey]struct{}{},
-			state:      map[PublisherKey]*PublisherState{},
+			state:      map[PublisherKey]*publisherState{},
 			threshold:  1,
 			clock:      func() time.Time { return *now },
 			logger:     slog.Default(),
 		}
 		for _, p := range pubs {
 			a.publishers[p] = struct{}{}
-			a.state[p] = &PublisherState{MasterKey: p, Status: StatusUnavailable}
+			a.state[p] = &publisherState{MasterKey: p, Status: StatusUnavailable}
 		}
 		return a
 	}
@@ -75,7 +75,7 @@ func TestAggregator_IsUNLBlocked(t *testing.T) {
 		now := time.Unix(1000, 0)
 		a := newAgg(&now, pk1)
 		a.staticValidatorCount = 1
-		a.state[pk1] = &PublisherState{
+		a.state[pk1] = &publisherState{
 			MasterKey:  pk1,
 			Status:     StatusAvailable,
 			Validators: val,
@@ -285,7 +285,7 @@ func TestAggregator_UNLBlockChangeEmitsWithoutTrustChange(t *testing.T) {
 	validator := [][33]byte{{9}}
 	a := &Aggregator{
 		publishers: map[PublisherKey]struct{}{pk1: {}, pk2: {}},
-		state: map[PublisherKey]*PublisherState{
+		state: map[PublisherKey]*publisherState{
 			pk1: {MasterKey: pk1, Status: StatusAvailable, Validators: validator, Expiration: now.Add(2 * time.Hour)},
 			pk2: {MasterKey: pk2, Status: StatusAvailable, Validators: validator, Expiration: now.Add(time.Hour)},
 		},

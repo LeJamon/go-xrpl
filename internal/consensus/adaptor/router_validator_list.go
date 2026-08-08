@@ -2,6 +2,7 @@ package adaptor
 
 import (
 	"encoding/binary"
+	"errors"
 	"fmt"
 	"strconv"
 
@@ -174,11 +175,6 @@ func (r *Router) handleValidatorListCollection(msg *peermanagement.InboundMessag
 
 	chargePeerForDisposition(r, msg.PeerID, "vl-coll", worst)
 
-	if worst.IsBadData() {
-		// Don't relay a frame containing a poison blob.
-		return
-	}
-
 	// Record per-peer sequence using the highest blob sequence observed
 	// across the collection.
 	if pubKey != (validatorlist.PublisherKey{}) && maxSeq > 0 && anyRelay {
@@ -241,6 +237,11 @@ func validatorListCollectionSemanticHash(coll *message.ValidatorListCollection) 
 	out = appendUint32BE(out, coll.Version)
 	out = appendLengthPrefixed(out, coll.Manifest)
 	for _, b := range coll.Blobs {
+		if b.HasManifest() {
+			out = append(out, 1)
+		} else {
+			out = append(out, 0)
+		}
 		out = appendLengthPrefixed(out, b.Manifest)
 		out = appendLengthPrefixed(out, b.Blob)
 		out = appendLengthPrefixed(out, b.Signature)
@@ -313,6 +314,10 @@ type peerFrameSender interface {
 type RouterBroadcaster struct {
 	overlay *peermanagement.Overlay
 	sender  peerFrameSender
+	// maxCollectionFrameSize is a test seam for exercising rippled's
+	// deterministic collection splitting without allocating 64 MB frames.
+	// Zero uses the protocol maximum.
+	maxCollectionFrameSize int
 	// suppression is the optional shared hash registry. When wired,
 	// SendList / SendCollection record each (hash, peer) pair after a
 	// successful send so future inbound from that peer with the same
@@ -405,6 +410,34 @@ func (b *RouterBroadcaster) SendCollection(peerID uint64, manifestBytes []byte, 
 	if b == nil || b.sender == nil {
 		return fmt.Errorf("router broadcaster: nil sender")
 	}
+	maxSize := b.maxCollectionFrameSize
+	if maxSize <= 0 || maxSize > message.MaxMessageSize {
+		maxSize = message.MaxMessageSize
+	}
+	frames, err := buildValidatorListCollectionFrames(manifestBytes, blobs, version, maxSize)
+	if err != nil {
+		return err
+	}
+	for _, outgoing := range frames {
+		if b.suppression != nil && b.suppression.peerHasHash(outgoing.hash, peerID) {
+			continue
+		}
+		if err := b.sender.SendToPeer(peerID, outgoing.frame); err != nil {
+			return err
+		}
+		if b.suppression != nil {
+			b.suppression.recordPeer(outgoing.hash, peerID)
+		}
+	}
+	return nil
+}
+
+type validatorListFrame struct {
+	frame []byte
+	hash  [32]byte
+}
+
+func buildValidatorListCollectionFrames(manifestBytes []byte, blobs []validatorlist.BroadcastBlob, version uint32, maxSize int) ([]validatorListFrame, error) {
 	coll := &message.ValidatorListCollection{
 		Version:  version,
 		Manifest: manifestBytes,
@@ -416,19 +449,63 @@ func (b *RouterBroadcaster) SendCollection(peerID uint64, manifestBytes []byte, 
 			Signature: blob.Signature,
 		})
 	}
-	frame, err := message.EncodeFrame(coll)
+	return splitValidatorListCollection(coll, maxSize, 0, len(coll.Blobs), false)
+}
+
+func splitValidatorListCollection(coll *message.ValidatorListCollection, maxSize, begin, end int, splitting bool) ([]validatorListFrame, error) {
+	if splitting && end-begin == 1 {
+		blob := coll.Blobs[begin]
+		manifest := coll.Manifest
+		if blob.HasManifest() {
+			manifest = blob.Manifest
+		}
+		vl := &message.ValidatorList{
+			Manifest:  manifest,
+			Blob:      blob.Blob,
+			Signature: blob.Signature,
+			Version:   1,
+		}
+		frame, err := message.EncodeFrame(vl)
+		if err != nil {
+			return nil, fmt.Errorf("encode split TMValidatorList: %w", err)
+		}
+		return []validatorListFrame{{
+			frame: frame,
+			hash:  sha512half.Sum(validatorListSemanticHash(vl)),
+		}}, nil
+	}
+	part := &message.ValidatorListCollection{
+		Version:  coll.Version,
+		Manifest: coll.Manifest,
+		Blobs:    append([]message.ValidatorBlobInfo(nil), coll.Blobs[begin:end]...),
+	}
+	frame, err := message.EncodeFrame(part)
+	if err == nil && len(frame) <= maxSize {
+		return []validatorListFrame{{
+			frame: frame,
+			hash:  sha512half.Sum(validatorListCollectionSemanticHash(part)),
+		}}, nil
+	}
+	if err != nil && !errors.Is(err, message.ErrMessageTooLarge) {
+		return nil, fmt.Errorf("encode TMValidatorListCollection: %w", err)
+	}
+	if begin == end {
+		if err != nil {
+			return nil, fmt.Errorf("encode TMValidatorListCollection: empty collection exceeds message limit: %w", err)
+		}
+		return nil, fmt.Errorf("encode TMValidatorListCollection: empty collection frame is %d bytes, limit %d", len(frame), maxSize)
+	}
+	if end-begin == 1 {
+		return splitValidatorListCollection(coll, maxSize, begin, end, true)
+	}
+	mid := (begin + end) / 2
+	left, err := splitValidatorListCollection(coll, maxSize, begin, mid, true)
 	if err != nil {
-		return fmt.Errorf("encode TMValidatorListCollection: %w", err)
+		return nil, err
 	}
-	hash := sha512half.Sum(validatorListCollectionSemanticHash(coll))
-	if b.suppression != nil && b.suppression.peerHasHash(hash, peerID) {
-		return nil
+	right, err := splitValidatorListCollection(coll, maxSize, mid, end, true)
+	if err != nil {
+		return nil, err
 	}
-	if err := b.sender.SendToPeer(peerID, frame); err != nil {
-		return err
-	}
-	if b.suppression != nil {
-		b.suppression.recordPeer(hash, peerID)
-	}
-	return nil
+	return append(left, right...), nil
 }

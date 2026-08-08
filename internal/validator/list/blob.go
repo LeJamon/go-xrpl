@@ -28,14 +28,17 @@ func validatorKeyValid(raw []byte) bool {
 // accepts. Version 1 is the original single-blob format; version 2 adds
 // the blobs_v2 collection used for forward-dated lists. Anything else
 // is treated as UnsupportedVersion.
-var SupportedVersions = []uint32{1, 2}
+const (
+	supportedVersionV1 uint32 = 1
+	supportedVersionV2 uint32 = 2
+)
 
 // MaxSupportedBlobs caps how many per-blob entries a v2 collection may
 // carry. Matches rippled ValidatorList.h:272
 // `static constexpr std::size_t maxSupportedBlobs = 5;`. A peer that
 // sends more than this is treated as Malformed before any signature
 // verification work.
-const MaxSupportedBlobs = 5
+const maxSupportedBlobs = 5
 
 // blobJSON is the schema published in vl.ripple.com-style envelopes and
 // embedded in TMValidatorList / TMValidatorListCollection messages.
