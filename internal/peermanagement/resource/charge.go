@@ -14,7 +14,6 @@ package resource
 
 import "fmt"
 
-// Charge is a load cost with a human-readable label.
 type Charge struct {
 	cost  int
 	label string

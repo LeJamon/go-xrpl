@@ -2,7 +2,6 @@ package resource
 
 import "time"
 
-// Peer reputation thresholds and decay tuning.
 const (
 	// WarningThreshold is the balance at which a Consumer should be
 	// warned that load is high.

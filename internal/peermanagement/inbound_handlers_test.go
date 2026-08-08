@@ -334,8 +334,6 @@ func TestHandleClusterMessage_ReimportReplacesPriorGossip(t *testing.T) {
 	assert.Equal(t, 1, rm.Stats().Imports, "one peer must retain one stable gossip origin")
 }
 
-// TestValidGossipAddress covers canonical IP endpoint forms and rejects
-// ambiguous or malformed peer-provided resource gossip addresses.
 func TestValidGossipAddress(t *testing.T) {
 	cases := []struct {
 		name string

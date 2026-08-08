@@ -187,8 +187,6 @@ func (o *Overlay) handleClusterMessage(evt Event) {
 	}
 }
 
-// validGossipAddress accepts the literal-IP forms used by load-source gossip,
-// including the legacy whitespace-separated port syntax.
 func validGossipAddress(name string) bool {
 	_, ok := canonicalGossipAddress(name)
 	return ok

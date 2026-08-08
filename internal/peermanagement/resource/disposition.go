@@ -1,6 +1,5 @@
 package resource
 
-// Disposition is the result of charging a Consumer.
 type Disposition int
 
 const (

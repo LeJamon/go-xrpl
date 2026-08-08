@@ -1,6 +1,5 @@
 package resource
 
-// Kind classifies a Consumer.
 type Kind int
 
 const (

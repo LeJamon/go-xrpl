@@ -9,7 +9,6 @@ import (
 	"time"
 )
 
-// fakeClock is a deterministic clock for driving decay windows in tests.
 type fakeClock struct {
 	mu  sync.Mutex
 	now time.Time
@@ -116,8 +115,6 @@ func TestUnlimited_NeverDrops(t *testing.T) {
 	c := m.NewUnlimitedEndpoint("10.0.0.1")
 	defer c.Release()
 
-	// Even at synthetic over-budget cost, an unlimited consumer returns Ok,
-	// never disconnects, and retains a zero balance.
 	for range 50 {
 		if d := c.Charge(NewCharge(DropThreshold+1, "huge"), ""); d != Ok {
 			t.Fatalf("unlimited returned %v, want Ok", d)
@@ -288,7 +285,6 @@ func TestStartAfterStopIsNoop(t *testing.T) {
 	}
 }
 
-// TestDrop_BlacklistAndReadmit verifies retained reputation and eventual expiry.
 func TestDrop_BlacklistAndReadmit(t *testing.T) {
 	m, clk := newTestManager()
 	const addr = "192.0.2.70:51235"
@@ -344,8 +340,6 @@ func TestDrop_BlacklistAndReadmit(t *testing.T) {
 	}
 }
 
-// TestImport_ReplacesPriorContributionFromSameOrigin verifies that the latest
-// snapshot replaces, rather than accumulates with, the prior contribution.
 func TestImport_ReplacesPriorContributionFromSameOrigin(t *testing.T) {
 	m, _ := newTestManager()
 	const addr = "192.0.2.80"
