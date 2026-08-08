@@ -22,6 +22,9 @@ func (b *Blob) FromJSON(json any) ([]byte, error) {
 	if !ok {
 		return nil, fmt.Errorf("blob: expected a hex string but got %T", json)
 	}
+	if len(s)%2 != 0 {
+		s = "0" + s
+	}
 	v, err := hex.DecodeString(s)
 	if err != nil {
 		return nil, err

@@ -52,7 +52,10 @@ func (d *DIDDelete) Apply(ctx *tx.ApplyContext) ter.Result {
 	didKey := keylet.DID(ctx.AccountID)
 
 	existingData, err := ctx.View.Read(didKey)
-	if err != nil || existingData == nil {
+	if err != nil {
+		return ctx.Internal("DIDDelete.Read", err)
+	}
+	if existingData == nil {
 		return ter.TecNO_ENTRY
 	}
 
@@ -61,20 +64,20 @@ func (d *DIDDelete) Apply(ctx *tx.ApplyContext) ter.Result {
 		return ter.TefINTERNAL
 	}
 
-	// Remove from owner directory, using the page recorded in sfOwnerNode so a
-	// DID on a paginated owner directory (page > 0) is correctly unlinked.
-	// Reference: rippled DID.cpp:207-208 dirRemove(ownerDir, (*sle)[sfOwnerNode], key, true).
 	ownerDirKey := keylet.OwnerDir(ctx.AccountID)
-	state.DirRemove(ctx.View, ownerDirKey, did.OwnerNode, didKey.Key, true)
+	if result := tx.DirRemoveOrBadLedger(ctx.View, ownerDirKey, did.OwnerNode, didKey.Key); result != ter.TesSUCCESS {
+		return result
+	}
 
 	if err := ctx.View.Erase(didKey); err != nil {
 		ctx.Log.Error("did delete: unable to delete DID from owner")
 		return ter.TefINTERNAL
 	}
 
-	if ctx.Account.OwnerCount > 0 {
-		ctx.Account.OwnerCount--
+	if ctx.Account.OwnerCount == 0 {
+		ctx.Log.Error("did delete: owner count underflow", "account", d.Account)
 	}
+	ctx.Account.OwnerCount = tx.ConfineOwnerCount(ctx.Account.OwnerCount, -1)
 
 	return ter.TesSUCCESS
 }

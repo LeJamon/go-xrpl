@@ -13,6 +13,7 @@ import (
 	binarycodec "github.com/LeJamon/go-xrpl/codec/binarycodec"
 	"github.com/LeJamon/go-xrpl/internal/ledger/service/svcerr"
 	"github.com/LeJamon/go-xrpl/internal/ledger/state"
+	"github.com/LeJamon/go-xrpl/internal/tx"
 	"github.com/LeJamon/go-xrpl/keylet"
 	"github.com/LeJamon/go-xrpl/protocol"
 )
@@ -235,6 +236,69 @@ func TestGetAccountNFTs_MarkerPagination(t *testing.T) {
 		if _, err := svc.GetAccountNFTs(context.Background(), ownerAddr, "current", 2, marker); !errors.Is(err, svcerr.ErrInvalidMarker) {
 			t.Errorf("marker %q: got %v, want ErrInvalidMarker", marker, err)
 		}
+	}
+}
+
+func TestGetAccountObjects_NFTLimitWithEmptyOwnerDirectory(t *testing.T) {
+	svc := newOfferTestService(t)
+	ownerAddr, ownerID := addressFromBytes(t, 0x20)
+	insertAccountRoot(t, svc, ownerAddr, 1_000_000_000_000, 0)
+	issuerAddr, issuerID := addressFromBytes(t, 0x40)
+	insertAccountRoot(t, svc, issuerAddr, 1_000_000_000_000, 0)
+	offerKey := insertOffer(t, svc, ownerAddr, 1,
+		state.NewIssuedAmountFromFloat64(1, "USD", issuerAddr),
+		tx.NewXRPAmount(1_000_000),
+	)
+	insertNFTokenPageEntry(t, svc, ownerAddr, []state.NFTokenData{
+		{NFTokenID: accountNFTWithOrder(issuerID, 1)},
+	})
+
+	ownerDir := keylet.OwnerDir(ownerID)
+	rootData, err := state.SerializeDirectoryNode(&state.DirectoryNode{
+		RootIndex:     ownerDir.Key,
+		IndexNext:     1,
+		IndexPrevious: 1,
+		Owner:         ownerID,
+	}, false)
+	if err != nil {
+		t.Fatalf("serialize empty owner directory: %v", err)
+	}
+	if err := svc.openLedger.Update(ownerDir, rootData); err != nil {
+		t.Fatalf("update empty owner directory: %v", err)
+	}
+	pageKey := keylet.DirPage(ownerDir.Key, 1)
+	pageData, err := state.SerializeDirectoryNode(&state.DirectoryNode{
+		RootIndex: ownerDir.Key,
+		Indexes:   [][32]byte{offerKey},
+	}, false)
+	if err != nil {
+		t.Fatalf("serialize owner directory page: %v", err)
+	}
+	if err := svc.openLedger.Insert(pageKey, pageData); err != nil {
+		t.Fatalf("insert owner directory page: %v", err)
+	}
+
+	result, err := svc.GetAccountObjects(context.Background(), ownerAddr, "current", "", 1, "")
+	if err != nil {
+		t.Fatalf("GetAccountObjects: %v", err)
+	}
+	if len(result.AccountObjects) != 1 || result.AccountObjects[0].LedgerEntryType != "NFTokenPage" {
+		t.Fatalf("account objects = %#v, want one NFTokenPage", result.AccountObjects)
+	}
+	wantMarker := protocol.Hash256Hex(pageKey.Key) + "," + protocol.Hash256Hex(offerKey)
+	if result.Marker != wantMarker {
+		t.Fatalf("marker = %q, want %q", result.Marker, wantMarker)
+	}
+
+	next, err := svc.GetAccountObjects(context.Background(), ownerAddr, "current", "", 1, result.Marker)
+	if err != nil {
+		t.Fatalf("GetAccountObjects resumed: %v", err)
+	}
+	if len(next.AccountObjects) != 1 || next.AccountObjects[0].Index != protocol.Hash256Hex(offerKey) {
+		t.Fatalf("resumed account objects = %#v, want offer %X", next.AccountObjects, offerKey)
+	}
+	if next.Marker != "" {
+		t.Fatalf("terminal marker = %q, want empty", next.Marker)
 	}
 }
 

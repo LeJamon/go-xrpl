@@ -41,11 +41,7 @@ func TestAccountDelete_Basics(t *testing.T) {
 
 		d := acctx.NewAccountDelete(alice.Address, alice.Address)
 		d.Fee = fmt.Sprintf("%d", acctDelFee)
-		result := env.Submit(d)
-		// go-xrpl returns temINVALID for self-delete; rippled returns temDST_IS_SRC
-		if result.Code != jtx.TemDST_IS_SRC && result.Code != jtx.TemINVALID {
-			t.Errorf("expected temDST_IS_SRC or temINVALID, got %s", result.Code)
-		}
+		jtx.RequireTxFail(t, env.Submit(d), jtx.TemDST_IS_SRC)
 	})
 
 	t.Run("TooSoon_SequenceNotFarEnough", func(t *testing.T) {
@@ -305,16 +301,13 @@ func TestAccountDelete_Resurrection(t *testing.T) {
 	// Resurrect alice by sending enough XRP to cover reserve.
 	// Payment to non-existent account requires at least reserve base (10 XRP).
 	reserveBase := env.ReserveBase()
+	expectedSequence := env.LedgerSeq()
 	jtx.RequireTxSuccess(t, env.Submit(payment.Pay(becky, alice, reserveBase).Build()))
 	env.Close()
 
 	jtx.RequireAccountExists(t, env, alice)
 
-	// Alice's new sequence should start at 1
-	seq := env.Seq(alice)
-	if seq != 1 {
-		t.Logf("Note: resurrected alice has seq=%d (expected 1, may differ due to ledger seq accounting)", seq)
-	}
+	require.Equal(t, expectedSequence, env.Seq(alice))
 
 	if alice.Address != aliceAddr {
 		t.Errorf("resurrected alice should have same address")

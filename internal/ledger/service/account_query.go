@@ -421,46 +421,47 @@ type AccountObjectItem struct {
 // type-filter matches, so a filtered page can come back short with a marker.
 func (s *Service) GetAccountObjects(ctx context.Context, account string, ledgerIndex string, objType string, limit uint32, marker string) (*AccountObjectsResult, error) {
 	return withAccountQuery(s, ctx, account, ledgerIndex, func(targetLedger *ledger.Ledger, accountID [20]byte, validated bool) (*AccountObjectsResult, error) {
-		// account_objects returns actNotFound for a missing account, not empty.
-		accountKey := keylet.Account(accountID)
-		exists, err := targetLedger.ExistsContext(ctx, accountKey)
-		if err != nil {
-			return nil, fmt.Errorf("failed to check account existence: %w", err)
-		}
-		if !exists {
-			return nil, svcerr.ErrAccountNotFound
-		}
-
-		// Normalize type filter from rippled's snake_case to PascalCase
-		objType = normalizeObjectType(objType)
-
-		// Default an unset limit; the caller (handler ClampLimit) owns the upper bound.
-		if limit == 0 {
-			limit = 200
-		}
-
-		var dirIndex, entryIndex [32]byte
-		if marker != "" {
-			di, ei, ok := parseAccountObjectsMarker(marker)
-			if !ok {
-				return nil, svcerr.ErrInvalidMarker
-			}
-			dirIndex, entryIndex = di, ei
-		}
-
-		result := &AccountObjectsResult{
-			Account:        account,
-			AccountObjects: make([]AccountObjectItem, 0),
-			LedgerIndex:    targetLedger.Sequence(),
-			LedgerHash:     targetLedger.Hash(),
-			Validated:      validated,
-		}
-
-		if err := enumerateAccountObjects(ctx, targetLedger, accountID, objType, dirIndex, entryIndex, limit, result); err != nil {
-			return nil, err
-		}
-		return result, nil
+		return QueryAccountObjects(ctx, targetLedger, account, accountID, validated, objType, limit, marker)
 	})
+}
+
+// QueryAccountObjects executes account_objects against an already selected ledger.
+func QueryAccountObjects(ctx context.Context, targetLedger *ledger.Ledger, account string, accountID [20]byte, validated bool, objType string, limit uint32, marker string) (*AccountObjectsResult, error) {
+	accountKey := keylet.Account(accountID)
+	exists, err := targetLedger.ExistsContext(ctx, accountKey)
+	if err != nil {
+		return nil, fmt.Errorf("failed to check account existence: %w", err)
+	}
+	if !exists {
+		return nil, svcerr.ErrAccountNotFound
+	}
+
+	objType = normalizeObjectType(objType)
+	if limit == 0 {
+		limit = 200
+	}
+
+	var dirIndex, entryIndex [32]byte
+	if marker != "" {
+		di, ei, ok := parseAccountObjectsMarker(marker)
+		if !ok {
+			return nil, svcerr.ErrInvalidMarker
+		}
+		dirIndex, entryIndex = di, ei
+	}
+
+	result := &AccountObjectsResult{
+		Account:        account,
+		AccountObjects: make([]AccountObjectItem, 0),
+		LedgerIndex:    targetLedger.Sequence(),
+		LedgerHash:     targetLedger.Hash(),
+		Validated:      validated,
+	}
+
+	if err := enumerateAccountObjects(ctx, targetLedger, accountID, objType, dirIndex, entryIndex, limit, result); err != nil {
+		return nil, err
+	}
+	return result, nil
 }
 
 // parseAccountObjectsMarker splits an account_objects marker into its
@@ -613,7 +614,7 @@ func enumerateAccountObjects(ctx context.Context, l *ledger.Ledger, accountID [2
 		}
 
 		// NFTokenPages exactly filled the limit; resume at the first dir entry.
-		if i == mlimit && mlimit < limit {
+		if i == mlimit && mlimit < limit && start < len(entries) {
 			result.Marker = protocol.Hash256Hex(dirIndex) + "," + protocol.Hash256Hex(entries[start])
 			return nil
 		}
