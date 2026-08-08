@@ -16,9 +16,8 @@ import (
 // Pathfinding search levels mirror rippled's config defaults
 // (Config.h: PATH_SEARCH_FAST=2, PATH_SEARCH=2, PATH_SEARCH_MAX=3).
 // A fast update runs at SearchLevelFast and a full update at
-// SearchLevelDefault; repeated updates never exceed SearchLevelMax
-// (PathRequest::doUpdate). Tests ported from rippled's Path_test raise
-// the level to 7, matching that suite's pathTestEnv configuration.
+// SearchLevelDefault. SearchLevelMax is the default ceiling for repeated
+// updates.
 const (
 	SearchLevelFast    = 2
 	SearchLevelDefault = 2
@@ -58,6 +57,7 @@ type PathRequest struct {
 	convertAll       bool
 	maxPaths         int
 	searchLevel      int
+	searchLevelMax   int
 	domainID         *[32]byte
 	lastSuccess      bool
 	context          map[payment.Issue][][]payment.PathStep
@@ -99,6 +99,7 @@ func NewPathRequest(
 		convertAll:       convertAll,
 		maxPaths:         maxReturnedPaths,
 		searchLevel:      SearchLevelDefault,
+		searchLevelMax:   SearchLevelMax,
 		context:          make(map[payment.Issue][][]payment.PathStep),
 	}
 }
@@ -108,6 +109,11 @@ func NewPathRequest(
 // uses 7).
 func (pr *PathRequest) SetSearchLevel(level int) {
 	pr.searchLevel = level
+}
+
+// SetSearchLevelMax sets the ceiling for adaptive persistent searches.
+func (pr *PathRequest) SetSearchLevelMax(level int) {
+	pr.searchLevelMax = level
 }
 
 // SetDomainID restricts pathfinding and liquidity calculation to one
@@ -142,7 +148,7 @@ func (pr *PathRequest) adjustSearchLevel(fast, loaded bool) {
 		if pr.searchLevel > SearchLevelDefault || loaded && pr.searchLevel > SearchLevelFast {
 			pr.searchLevel--
 		}
-	case !loaded && pr.searchLevel < SearchLevelMax:
+	case !loaded && pr.searchLevel < pr.searchLevelMax:
 		pr.searchLevel++
 	case loaded && pr.searchLevel > SearchLevelFast:
 		pr.searchLevel--

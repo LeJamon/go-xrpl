@@ -11,7 +11,7 @@ import (
 )
 
 // TxHistoryMethod handles the tx_history RPC method
-type TxHistoryMethod struct{ BaseHandler }
+type TxHistoryMethod struct{ baseHandler }
 
 func (m *TxHistoryMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (any, *types.RpcError) {
 	var request struct {
@@ -20,12 +20,12 @@ func (m *TxHistoryMethod) Handle(ctx *types.RpcContext, params json.RawMessage) 
 
 	// notEnabled takes precedence over any parameter validation, matching
 	// rippled's useTxTables() gate as the first statement of doTxHistory.
-	if err := RequireTxTables(ctx.Services); err != nil {
+	if err := requireTxTables(ctx.Services); err != nil {
 		return nil, err
 	}
 	setLoadMedium(ctx)
 
-	if err := ParseParams(params, &request); err != nil {
+	if err := parseParams(params, &request); err != nil {
 		return nil, err
 	}
 

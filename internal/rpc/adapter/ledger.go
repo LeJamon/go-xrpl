@@ -142,6 +142,19 @@ func (a *LedgerServiceAdapter) GetClosedLedgerView() (types.LedgerStateView, err
 	return l, nil
 }
 
+// GetOpenLedgerView returns an immutable snapshot of the current open ledger.
+func (a *LedgerServiceAdapter) GetOpenLedgerView() (types.LedgerStateView, error) {
+	l := a.svc.GetOpenLedger()
+	if l == nil {
+		return nil, fmt.Errorf("no open ledger available")
+	}
+	snapshot, err := l.Snapshot()
+	if err != nil {
+		return nil, err
+	}
+	return snapshot, nil
+}
+
 // GetLedgerViewBySeq returns a state view of the ledger with the given
 // sequence, plus its metadata reader.
 func (a *LedgerServiceAdapter) GetLedgerViewBySeq(seq uint32) (types.LedgerStateView, types.LedgerReader, error) {

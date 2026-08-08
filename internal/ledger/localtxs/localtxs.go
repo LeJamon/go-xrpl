@@ -187,6 +187,22 @@ func (l *LocalTxs) GetTxSet() []openledger.PendingTx {
 	return snapshot
 }
 
+// Get returns an owned copy of a held transaction by hash. Unlike GetTxSet it
+// does not sort or scan the pool, so query paths can inspect a single entry
+// without turning the bounded held pool into an O(n log n) lookup.
+func (l *LocalTxs) Get(hash [32]byte) (openledger.PendingTx, bool) {
+	l.mu.RLock()
+	entry, ok := l.txs[hash]
+	if ok {
+		entry.Ptx = clonePendingTx(entry.Ptx)
+	}
+	l.mu.RUnlock()
+	if !ok {
+		return openledger.PendingTx{}, false
+	}
+	return entry.Ptx, true
+}
+
 func (l *LocalTxs) Size() int {
 	l.mu.RLock()
 	defer l.mu.RUnlock()

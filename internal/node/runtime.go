@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"path/filepath"
 	"time"
 
 	"github.com/LeJamon/go-xrpl/config"
@@ -54,7 +55,8 @@ type nodeRuntime struct {
 	cleanerSource *ledgerCleanerSource
 	rotator       *shamapstore.Rotator
 
-	consensus *adaptor.Components
+	consensus            *adaptor.Components
+	peerConnectScheduler *peerConnectScheduler
 
 	services      *types.ServiceContainer
 	ledgerAdapter *rpcadapter.LedgerServiceAdapter
@@ -251,13 +253,10 @@ func (r *nodeRuntime) configureMaintenance() error {
 	r.stopSampler = sampler.Stop
 
 	r.ledgerAdapter = rpcadapter.NewLedgerServiceAdapter(r.ledger)
-	r.services = types.NewServiceContainer(r.ledgerAdapter)
-	r.services.ClientLoad = types.NewClientLoadShedder()
-	r.services.ServerInfoConfig = serverInfoConfigSnapshot(r.appConfig)
-
-	// Gate the beta RPC API (api_version 3) on the operator's beta_rpc_api
-	// knob, mirroring rippled Config::BETA_RPC_API.
-	r.services.BetaRPCAPI = r.appConfig.BetaRPCAPI != 0
+	r.services = newRPCServiceContainer(r.ledgerAdapter, r.appConfig)
+	if err := r.configureStandaloneNodeIdentity(); err != nil {
+		return err
+	}
 
 	// Advisory-delete state (can_delete RPC). Available in both standalone and
 	// consensus modes; gated by node_db advisory_delete and persisted under
@@ -426,6 +425,10 @@ func (r *nodeRuntime) configureMaintenance() error {
 		ft := ledgerSvcRef.FeeTrack()
 		return ft != nil && ft.IsLoadedCluster()
 	}
+	r.services.IsLoadedLocal = func() bool {
+		ft := ledgerSvcRef.FeeTrack()
+		return ft != nil && ft.IsLoadedLocal()
+	}
 
 	// Background ledger-integrity verification requires the same durable SHAMap
 	// family used by the ledger service. A private in-memory fallback cannot
@@ -454,6 +457,22 @@ func (r *nodeRuntime) configureMaintenance() error {
 			return toCleanerStatus(cleanerRef.Status())
 		}
 	}
+	return nil
+}
+
+func (r *nodeRuntime) configureStandaloneNodeIdentity() error {
+	if !r.standalone {
+		return nil
+	}
+	dataDir := r.appConfig.LocalStateDir()
+	if dataDir != "" {
+		dataDir = filepath.Join(dataDir, "peers")
+	}
+	identity, err := peermanagement.LoadOrCreateIdentity(dataDir)
+	if err != nil {
+		return fmt.Errorf("load node identity: %w", err)
+	}
+	r.services.NodePublicKey = identity.EncodedPublicKey()
 	return nil
 }
 
@@ -678,7 +697,16 @@ func (r *nodeRuntime) configureConsensus() error {
 				return out
 			}
 		}
-		r.services.PeerConnect = overlayRef.Connect
+		r.peerConnectScheduler = newPeerConnectScheduler(
+			r.ctx,
+			overlayRef.ConnectContext,
+			defaultPeerConnectWorkers,
+			defaultPeerConnectQueue,
+			func(addr string, err error) {
+				r.serverLog.Warn("Peer connection attempt failed", "addr", addr, "err", err)
+			},
+		)
+		r.services.PeerConnect = r.peerConnectScheduler.Enqueue
 		r.services.ResourceBlacklist = overlayRef.BlacklistJSON
 		acctRef := r.consensus.Adaptor
 		r.services.StateAccounting = func() types.StateAccountingSnapshot {
@@ -953,10 +981,15 @@ func (r *nodeRuntime) bindStreams() error {
 		// adapter store cannot drop the announce when the ledger isn't
 		// yet visible to GetLedgerBySequence.
 		bookView := newAcceptedLedgerView(*event.LedgerInfo)
-		payload := handlers.ComputeBookChangesFromTransactions(bookView, bookTransactions)
-		if data, err := json.Marshal(payload); err == nil {
-			r.wsServer.SubscriptionManager().BroadcastToStream(types.SubBookChanges, data, nil)
+		payload, err := handlers.ComputeBookChangesFromTransactionsStrict(bookView, bookTransactions)
+		if err != nil {
+			return fmt.Errorf("compute accepted ledger book changes: %w", err)
 		}
+		data, err := json.Marshal(payload)
+		if err != nil {
+			return fmt.Errorf("marshal accepted ledger book changes: %w", err)
+		}
+		r.wsServer.SubscriptionManager().BroadcastToStream(types.SubBookChanges, data, nil)
 
 		for _, publication := range publications {
 			r.publisher.PublishTransaction(publication.event, publication.projection.affectedAccounts)
@@ -1151,6 +1184,22 @@ func (r *nodeRuntime) shutdownWithin(timeout time.Duration) error {
 			errs = append(errs, err)
 		} else {
 			r.serverLog.Info("Ledger cleaner stopped")
+		}
+	}
+	if r.peerConnectScheduler != nil {
+		completed, err := runShutdownPhaseWithin(ctx, producerShutdownGrace, "stop peer connect scheduler", func() error {
+			r.peerConnectScheduler.Close()
+			return nil
+		})
+		producersStopped = producersStopped && completed
+		if err != nil {
+			errs = append(errs, err)
+		} else {
+			r.serverLog.Info("Peer connect scheduler stopped")
+		}
+		if !completed {
+			errs = append(errs, errors.New("shutdown incomplete: consensus left running because peer connect scheduler did not stop"))
+			return errors.Join(errs...)
 		}
 	}
 	if r.consensus != nil {

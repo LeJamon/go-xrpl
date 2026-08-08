@@ -74,15 +74,18 @@ func TestPathFindMPTSourceAndFormatting(t *testing.T) {
 }
 
 func TestPathFindMPTSourceRejectsConflictingMembers(t *testing.T) {
-	for _, sourceCurrencies := range []string{
-		`[{"mpt_issuance_id":"` + rpcMPTID + `","currency":null}]`,
-		`[{"mpt_issuance_id":"` + rpcMPTID + `","issuer":null}]`,
+	for _, tc := range []struct {
+		sourceCurrencies string
+		want             string
+	}{
+		{`[{"mpt_issuance_id":"` + rpcMPTID + `","currency":null}]`, "srcCurMalformed"},
+		{`[{"mpt_issuance_id":"` + rpcMPTID + `","issuer":null}]`, "srcIsrMalformed"},
 	} {
 		_, rpcErr := parseSourceCurrencies(map[string]json.RawMessage{
-			"source_currencies": json.RawMessage(sourceCurrencies),
+			"source_currencies": json.RawMessage(tc.sourceCurrencies),
 		}, [20]byte{1}, nil)
 		require.NotNil(t, rpcErr)
-		require.Equal(t, "srcCurMalformed", rpcErr.ErrorString)
+		require.Equal(t, tc.want, rpcErr.ErrorString)
 	}
 }
 

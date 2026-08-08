@@ -14,7 +14,7 @@ import (
 // Parameters (all optional, mirroring rippled): ledger (single sequence,
 // forces a deep check), min_ledger, max_ledger, full (bool, deep check),
 // check_nodes (bool, walk every node), stop (bool, halt an in-progress run).
-type LedgerCleanerMethod struct{ AdminHandler }
+type LedgerCleanerMethod struct{ adminHandler }
 
 // RequiredCondition mirrors rippled's handler-table entry
 // {"ledger_cleaner", …, NEEDS_NETWORK_CONNECTION} (Handler.cpp:121-124): the

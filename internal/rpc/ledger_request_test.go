@@ -39,7 +39,7 @@ func (m *ledgerRequestMock) GetLedgerBySequence(seq uint32) (types.LedgerReader,
 func TestLedgerRequest_ServesLocalLedgerByHash(t *testing.T) {
 	var hash [32]byte
 	hash[0], hash[31] = 0xAB, 0xCD
-	lr := &mockLedgerReader{seq: 5, hash: hash, closed: true, validated: true, totalDrops: 99000000}
+	lr := &mockLedgerReader{seq: 5, hash: hash, closed: true, validated: true, totalDrops: 99000000, closeTime: 776000030}
 
 	mock := &ledgerRequestMock{
 		mockLedgerService: newMockLedgerService(),
@@ -63,6 +63,8 @@ func TestLedgerRequest_ServesLocalLedgerByHash(t *testing.T) {
 	require.True(t, ok)
 	assert.Equal(t, strings.ToUpper(hex.EncodeToString(hash[:])), ledger["ledger_hash"])
 	assert.Equal(t, "5", ledger["ledger_index"])
+	assert.Equal(t, "2024-Aug-03 11:33:50 UTC", ledger["close_time_human"])
+	assert.Equal(t, "2024-08-03T11:33:50Z", ledger["close_time_iso"])
 }
 
 func TestLedgerRequest_ServesLocalLedgerByIndex(t *testing.T) {
@@ -88,6 +90,10 @@ func TestLedgerRequest_ServesLocalLedgerByIndex(t *testing.T) {
 	resp, ok := result.(map[string]any)
 	require.True(t, ok)
 	assert.Equal(t, uint32(1), resp["ledger_index"])
+	ledger, ok := resp["ledger"].(map[string]any)
+	require.True(t, ok)
+	assert.NotContains(t, ledger, "close_time_human")
+	assert.NotContains(t, ledger, "close_time_iso")
 }
 
 // TestLedgerRequest_AcquiringTargetReturnsBareSnapshot covers rippled's common

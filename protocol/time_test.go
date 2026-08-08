@@ -69,3 +69,22 @@ func TestFormatCloseTimeISO(t *testing.T) {
 		})
 	}
 }
+
+func TestFormatCloseTimeHuman(t *testing.T) {
+	tests := []struct {
+		name string
+		in   time.Time
+		want string
+	}{
+		{name: "zero", want: "2000-Jan-01 00:00:00 UTC"},
+		{name: "fraction discarded", in: time.Date(2026, time.August, 3, 12, 5, 6, 789012345, time.FixedZone("test", 2*60*60)), want: "2026-Aug-03 10:05:06 UTC"},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			if got := FormatCloseTimeHuman(test.in); got != test.want {
+				t.Fatalf("FormatCloseTimeHuman(%v) = %q, want %q", test.in, got, test.want)
+			}
+		})
+	}
+}

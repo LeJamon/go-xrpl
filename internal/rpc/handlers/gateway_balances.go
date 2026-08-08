@@ -10,10 +10,10 @@ import (
 )
 
 // GatewayBalancesMethod handles the gateway_balances RPC method
-type GatewayBalancesMethod struct{ BaseHandler }
+type GatewayBalancesMethod struct{ baseHandler }
 
 func (m *GatewayBalancesMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (any, *types.RpcError) {
-	if err := RequireLedgerService(ctx.Services); err != nil {
+	if err := requireLedgerService(ctx.Services); err != nil {
 		return nil, err
 	}
 
@@ -25,7 +25,7 @@ func (m *GatewayBalancesMethod) Handle(ctx *types.RpcContext, params json.RawMes
 	if selErr != nil {
 		return nil, selErr
 	}
-	ledger, validated, lookupErr := LookupLedger(ctx, parsedLedgerSpec)
+	ledger, validated, lookupErr := lookupLedger(ctx, parsedLedgerSpec)
 	if lookupErr != nil {
 		return nil, lookupErr
 	}
@@ -55,7 +55,7 @@ func (m *GatewayBalancesMethod) Handle(ctx *types.RpcContext, params json.RawMes
 		HotWallet json.RawMessage `json:"hotwallet,omitempty"`
 	}
 
-	if err := ParseParams(params, &request); err != nil {
+	if err := parseParams(params, &request); err != nil {
 		return nil, err
 	}
 	if !types.IsValidClassicAddress(account) {

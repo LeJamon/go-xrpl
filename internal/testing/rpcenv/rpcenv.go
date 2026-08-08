@@ -37,10 +37,12 @@ func Wrap(t testing.TB, env *jtx.TestEnv) *Env {
 	registry := types.NewMethodRegistry()
 	handlers.RegisterAll(registry)
 	adapter := newLedgerAdapter(env)
+	services := types.NewServiceContainer(adapter)
+	services.Capabilities.PathSearchMax = 3
 	return &Env{
 		TestEnv:  env,
 		t:        t,
-		services: types.NewServiceContainer(adapter),
+		services: services,
 		registry: registry,
 	}
 }

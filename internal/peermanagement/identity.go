@@ -185,6 +185,33 @@ func LoadIdentity(dataDir string) (*Identity, error) {
 	return NewIdentityFromPrivateKey(string(data))
 }
 
+// LoadOrCreateIdentity loads the durable node identity or creates it when the
+// configured directory has no usable key.
+func LoadOrCreateIdentity(dataDir string) (*Identity, error) {
+	if dataDir == "" {
+		return GenerateIdentity()
+	}
+	id, err := LoadIdentity(dataDir)
+	if err == nil {
+		return id, nil
+	}
+	if !errors.Is(err, os.ErrNotExist) && !errors.Is(err, ErrInvalidPrivateKey) {
+		return nil, err
+	}
+	id, err = GenerateIdentity()
+	if err != nil {
+		return nil, err
+	}
+	if err := id.Save(dataDir); err != nil {
+		return nil, fmt.Errorf("save identity: %w", err)
+	}
+	return id, nil
+}
+
+func loadOrCreateIdentity(dataDir string) (*Identity, error) {
+	return LoadOrCreateIdentity(dataDir)
+}
+
 func (i *Identity) Save(dataDir string) error {
 	if err := os.MkdirAll(dataDir, 0700); err != nil {
 		return fmt.Errorf("failed to create data directory: %w", err)

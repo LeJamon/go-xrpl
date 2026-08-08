@@ -14,7 +14,11 @@ import (
 
 func newSpecialDispatchHarness(t *testing.T) (*WebSocketServer, *websocketConnection, *types.RpcContext) {
 	t.Helper()
-	services := &types.ServiceContainer{ClientLoad: types.NewClientLoadShedder()}
+	services := &types.ServiceContainer{
+		ClientLoad:     types.NewClientLoadShedder(),
+		RPCDiagnostics: NewRPCDiagnostics(),
+		Capabilities:   types.RPCCapabilities{PathSearchMax: 3},
+	}
 	ws := NewWebSocketServer(WebSocketServerOptions{Timeout: time.Second, Services: services, LoadTracker: loadtrack.New()})
 	ws.methodRegistry.Register("subscribe", &stubHandler{})
 	ws.methodRegistry.Register("path_find", &stubHandler{})
@@ -167,6 +171,9 @@ func TestWebSocketSpecialDispatchRecoversPanic(t *testing.T) {
 	if got := ws.services.ClientLoad.InFlight(); got != 0 {
 		t.Fatalf("in-flight leaked after panic: %d", got)
 	}
+	if stats := ws.services.RPCDiagnostics.Snapshot().Methods["subscribe"]; stats.Started != 1 || stats.Finished != 0 || stats.Errored != 1 {
+		t.Fatalf("diagnostics = %#v", stats)
+	}
 }
 
 func TestWebSocketPathFindDynamicLoadCost(t *testing.T) {
@@ -186,6 +193,38 @@ func TestWebSocketPathFindDynamicLoadCost(t *testing.T) {
 			_, _ = ws.executePathFind(conn, ctx, cmd)
 			if got := loadtrack.LoadKind(ctx.LoadCost); got != test.want {
 				t.Fatalf("load kind = %d, want %d", got, test.want)
+			}
+		})
+	}
+}
+
+func TestWebSocketPathFindCapabilityPrecedesSubcommandValidation(t *testing.T) {
+	ws, conn, ctx := newSpecialDispatchHarness(t)
+	ctx.Services.Capabilities.PathSearchMax = 0
+	_, rpcErr := ws.executePathFind(conn, ctx, types.WebSocketCommand{Params: json.RawMessage(`{not json`)})
+	if rpcErr == nil || rpcErr.ErrorString != "notSupported" {
+		t.Fatalf("disabled path_find error = %v, want notSupported", rpcErr)
+	}
+}
+
+func TestWebSocketPathFindCreateDoesNotUseLegacyBusyGate(t *testing.T) {
+	ws, conn, ctx := newSpecialDispatchHarness(t)
+	ctx.Services.IsLoadedLocal = func() bool { return true }
+	_, rpcErr := ws.executePathFind(conn, ctx, types.WebSocketCommand{
+		Params: json.RawMessage(`{"subcommand":"create"}`),
+	})
+	if rpcErr == nil || rpcErr.ErrorString != "invalidParams" || rpcErr.Message != "Missing field 'source_account'." {
+		t.Fatalf("path_find create error = %v, want field validation after admission", rpcErr)
+	}
+}
+
+func TestWebSocketPathFindSubcommandValidationUsesCanonicalParams(t *testing.T) {
+	for _, params := range []string{`{}`, `{"subcommand":7}`, `{"subcommand":"future"}`, `{not json`} {
+		t.Run(params, func(t *testing.T) {
+			ws, conn, ctx := newSpecialDispatchHarness(t)
+			_, rpcErr := ws.executePathFind(conn, ctx, types.WebSocketCommand{Params: json.RawMessage(params)})
+			if rpcErr == nil || rpcErr.ErrorString != "invalidParams" || rpcErr.Message != "Invalid parameters." {
+				t.Fatalf("path_find error = %v, want canonical invalidParams", rpcErr)
 			}
 		})
 	}

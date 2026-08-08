@@ -22,7 +22,7 @@ import (
 )
 
 // AMMInfoMethod handles the amm_info RPC method
-type AMMInfoMethod struct{ BaseHandler }
+type AMMInfoMethod struct{ baseHandler }
 
 func (m *AMMInfoMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (any, *types.RpcError) {
 	var request struct {
@@ -32,7 +32,7 @@ func (m *AMMInfoMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (a
 		Account    json.RawMessage `json:"account,omitempty"`
 	}
 
-	if err := ParseParams(params, &request); err != nil {
+	if err := parseParams(params, &request); err != nil {
 		return nil, err
 	}
 
@@ -47,7 +47,7 @@ func (m *AMMInfoMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (a
 	// amm_account) must be given.
 	invalidCombination := hasAsset != hasAsset2 || hasAsset == hasAMMAccount
 
-	if err := RequireLedgerService(ctx.Services); err != nil {
+	if err := requireLedgerService(ctx.Services); err != nil {
 		return nil, err
 	}
 

@@ -13,7 +13,7 @@ import (
 // per-url subscriber whose events are delivered as outbound JSON-RPC
 // "event" calls. Without url this is rippled's "Must be a JSON-RPC call."
 // branch (rpcINVALID_PARAMS); url from a non-admin is rpcNO_PERMISSION.
-type SubscribeMethod struct{ BaseHandler }
+type SubscribeMethod struct{ baseHandler }
 
 // urlSubscriptionRequest applies the shared subscribe/unsubscribe gating
 // for plain JSON-RPC calls described on SubscribeMethod and resolves the

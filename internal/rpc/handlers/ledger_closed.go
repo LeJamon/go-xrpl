@@ -7,10 +7,10 @@ import (
 )
 
 // LedgerClosedMethod handles the ledger_closed RPC method
-type LedgerClosedMethod struct{ BaseHandler }
+type LedgerClosedMethod struct{ baseHandler }
 
 func (m *LedgerClosedMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (any, *types.RpcError) {
-	if err := RequireLedgerService(ctx.Services); err != nil {
+	if err := requireLedgerService(ctx.Services); err != nil {
 		return nil, err
 	}
 

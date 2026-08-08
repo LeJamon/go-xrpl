@@ -2,6 +2,9 @@ package tx
 
 import (
 	"encoding/hex"
+	"fmt"
+	"math"
+	"math/bits"
 	"strconv"
 
 	"github.com/LeJamon/go-xrpl/amendment"
@@ -553,4 +556,65 @@ func AccountFunds(view LedgerView, accountID [20]byte, amount Amount, fhZeroIfFr
 	}
 
 	return state.NewIssuedAmountFromValue(balance.IOU().Mantissa(), balance.IOU().Exponent(), amount.Currency, amount.Issuer)
+}
+
+// AccountFundsNoFreezeStrict returns owner funds without applying freeze
+// rules. Missing account or trust-line entries are a zero balance; storage,
+// decoding, and reserve-arithmetic failures are returned to the caller.
+func AccountFundsNoFreezeStrict(view LedgerView, accountID [20]byte, amount Amount, reserveBase, reserveIncrement uint64) (Amount, error) {
+	if view == nil {
+		return Amount{}, fmt.Errorf("account funds: nil ledger view")
+	}
+	if amount.IsNative() {
+		account, err := ReadAccountRoot(view, accountID)
+		if err != nil {
+			return Amount{}, fmt.Errorf("account funds: read account root: %w", err)
+		}
+		if account == nil {
+			return NewXRPAmount(0), nil
+		}
+		ownerCount := account.OwnerCount
+		if hook, ok := view.(ownerCountReadHookView); ok {
+			ownerCount = hook.OwnerCountHook(accountID, ownerCount)
+		}
+		high, reserveProduct := bits.Mul64(uint64(ownerCount), reserveIncrement)
+		if high != 0 {
+			return Amount{}, fmt.Errorf("account funds: reserve multiplication overflow")
+		}
+		reserve, carry := bits.Add64(reserveBase, reserveProduct, 0)
+		if carry != 0 {
+			return Amount{}, fmt.Errorf("account funds: reserve addition overflow")
+		}
+		if account.Balance <= reserve {
+			return NewXRPAmount(0), nil
+		}
+		liquid := account.Balance - reserve
+		if liquid > math.MaxInt64 {
+			return Amount{}, fmt.Errorf("account funds: liquid XRP exceeds int64")
+		}
+		return NewXRPAmount(int64(liquid)), nil
+	}
+
+	issuerID, err := state.DecodeAccountID(amount.Issuer)
+	if err != nil {
+		return Amount{}, fmt.Errorf("account funds: decode issuer: %w", err)
+	}
+	if accountID == issuerID {
+		return NewIssuedAmount(state.MaxMantissa, 0, amount.Currency, amount.Issuer), nil
+	}
+	line, err := ReadRippleState(view, accountID, issuerID, amount.Currency)
+	if err != nil {
+		return Amount{}, fmt.Errorf("account funds: read trust line: %w", err)
+	}
+	if line == nil {
+		return NewIssuedAmount(0, 0, amount.Currency, amount.Issuer), nil
+	}
+	balance := line.Balance
+	if state.CompareAccountIDs(accountID, issuerID) >= 0 {
+		balance = balance.Negate()
+	}
+	if balance.Signum() <= 0 {
+		return NewIssuedAmount(0, 0, amount.Currency, amount.Issuer), nil
+	}
+	return state.NewIssuedAmountFromValue(balance.IOU().Mantissa(), balance.IOU().Exponent(), amount.Currency, amount.Issuer), nil
 }

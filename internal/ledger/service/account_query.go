@@ -626,7 +626,12 @@ func enumerateAccountObjects(ctx context.Context, l *ledger.Ledger, accountID [2
 				return rerr
 			}
 			if data != nil {
-				if t, err := state.DecodeType(data); err == nil && wantType(t) {
+				t, derr := state.DecodeType(data)
+				if derr != nil {
+					if objTypeID == entry.TypeSignerList {
+						return derr
+					}
+				} else if wantType(t) {
 					result.AccountObjects = append(result.AccountObjects, AccountObjectItem{
 						Index:           protocol.Hash256Hex(itemKey),
 						LedgerEntryType: t.String(),

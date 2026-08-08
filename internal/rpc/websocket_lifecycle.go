@@ -33,6 +33,7 @@ func (ws *WebSocketServer) detachConnection(wsConn *websocketConnection) {
 	delete(ws.connections, wsConn.ID)
 	ws.connectionsMutex.Unlock()
 	ws.subscriptionManager.RemoveConnection(wsConn.ID)
+	removeAccountHistoryConnection(ws.services, wsConn.Connection)
 }
 
 // closeSocket cancels the connection context and closes the underlying

@@ -42,6 +42,7 @@ var (
 	ErrInvalidLedgerIndex = svcerr.ErrInvalidLedgerIndex
 	ErrInvalidLedgerHash  = svcerr.ErrInvalidLedgerHash
 	ErrTxnNotFound        = svcerr.ErrTxnNotFound
+	ErrTxnDataCorrupt     = svcerr.ErrTxnDataCorrupt
 )
 
 var (

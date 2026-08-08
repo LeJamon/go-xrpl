@@ -11,7 +11,7 @@ import (
 
 // NoRippleCheckMethod handles the noripple_check RPC method
 // Reference: rippled/src/xrpld/rpc/handlers/NoRippleCheck.cpp
-type NoRippleCheckMethod struct{ BaseHandler }
+type NoRippleCheckMethod struct{ baseHandler }
 
 func (m *NoRippleCheckMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (any, *types.RpcError) {
 	rawFields, fieldsErr := rawJSONFields(params)
@@ -35,7 +35,7 @@ func (m *NoRippleCheckMethod) Handle(ctx *types.RpcContext, params json.RawMessa
 		return nil, types.RpcErrorInvalidField("role")
 	}
 
-	limit, limitErr := ReadLimitField(params, LimitNoRippleCheck, ctx.Unlimited)
+	limit, limitErr := readLimitField(params, limitNoRippleCheck, ctx.Unlimited)
 	if limitErr != nil {
 		return nil, limitErr
 	}
@@ -53,7 +53,7 @@ func (m *NoRippleCheckMethod) Handle(ctx *types.RpcContext, params json.RawMessa
 		}
 	}
 
-	if err := RequireLedgerService(ctx.Services); err != nil {
+	if err := requireLedgerService(ctx.Services); err != nil {
 		return nil, err
 	}
 
@@ -63,7 +63,7 @@ func (m *NoRippleCheckMethod) Handle(ctx *types.RpcContext, params json.RawMessa
 	if ledgerSpecErr != nil {
 		return nil, ledgerSpecErr
 	}
-	ledger, validated, lookupErr := LookupLedger(ctx, parsedLedgerSpec)
+	ledger, validated, lookupErr := lookupLedger(ctx, parsedLedgerSpec)
 	if lookupErr != nil {
 		return nil, lookupErr
 	}

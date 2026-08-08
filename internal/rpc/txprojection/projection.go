@@ -9,6 +9,14 @@ import (
 	"strings"
 )
 
+// Path identifies the response contract that owns transaction projection.
+type Path uint8
+
+const (
+	PathSigned Path = iota
+	PathCanonical
+)
+
 // ProjectJSON returns a projected copy of a transaction JSON object. The
 // source map and all values reachable through it are left untouched.
 func ProjectJSON(txJSON map[string]any, hash string, apiVersion int) map[string]any {
@@ -19,6 +27,42 @@ func ProjectJSON(txJSON map[string]any, hash string, apiVersion int) map[string]
 		projected["hash"] = strings.ToUpper(hash)
 	}
 	return projected
+}
+
+// ProjectJSONForPath returns an immutable transaction copy using the endpoint
+// and API-version-specific response contract. Values reachable through the
+// source map are never changed by the projection.
+func ProjectJSONForPath(txJSON map[string]any, hash string, apiVersion int, path Path) map[string]any {
+	projected := make(map[string]any, len(txJSON)+1)
+	maps.Copy(projected, txJSON)
+
+	// Hash is a response field, not a serialized transaction field. Remove any
+	// source copy before applying the path-specific placement below.
+	delete(projected, "hash")
+	if path != PathCanonical {
+		InjectDeliverMax(projected, apiVersion)
+	}
+
+	if hash == "" {
+		return projected
+	}
+	hash = strings.ToUpper(hash)
+	if path == PathCanonical || apiVersion == 1 {
+		projected["hash"] = hash
+	}
+	return projected
+}
+
+// FormatResult builds a transaction response without mutating the source map.
+func FormatResult(txJSON map[string]any, txBlob, hash string, apiVersion int, path Path) map[string]any {
+	response := map[string]any{
+		"tx_blob": txBlob,
+		"tx_json": ProjectJSONForPath(txJSON, hash, apiVersion, path),
+	}
+	if path != PathCanonical && apiVersion > 1 && hash != "" {
+		response["hash"] = strings.ToUpper(hash)
+	}
+	return response
 }
 
 // ProjectRaw applies the API-specific transaction projection to raw JSON

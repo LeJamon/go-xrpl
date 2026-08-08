@@ -23,3 +23,16 @@ func TestAdapterLedgerSelectionPropagatesStorageErrors(t *testing.T) {
 	_, err = adapter.GetLedgerByHashContext(context.Background(), [32]byte{2})
 	require.Error(t, err)
 }
+
+func TestAdapterOpenLedgerViewReturnsSnapshot(t *testing.T) {
+	svc, err := service.New(service.Config{Standalone: true, GenesisConfig: genesis.DefaultConfig()})
+	require.NoError(t, err)
+	require.NoError(t, svc.Start())
+	t.Cleanup(svc.Stop)
+
+	view, err := NewLedgerServiceAdapter(svc).GetOpenLedgerView()
+	require.NoError(t, err)
+	require.NotNil(t, view)
+	require.NotNil(t, view.Rules())
+	require.NotZero(t, view.LedgerSeq())
+}

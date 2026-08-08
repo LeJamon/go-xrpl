@@ -36,12 +36,16 @@ func (ws *WebSocketServer) executeSubscribe(wsConn *websocketConnection, ctx *ty
 	// The embedded canonical connection is the same object the subscription
 	// manager already tracks and carries the bounded queue and disconnect
 	// callback.
-	prefix, err := subscriptionRequestExcluding(cmd.Params, "books")
+	prefix, err := subscriptionRequestExcluding(cmd.Params, "books", "account_history_tx_stream")
 	if err != nil {
 		return nil, types.RpcErrorInvalidParams("Invalid subscription parameters.")
 	}
 	prefix.ApiVersion = ctx.ApiVersion
 	if rpcErr := ws.subscriptionManager.HandleSubscribe(wsConn.Connection, prefix, ctx.IsAdmin); rpcErr != nil {
+		return nil, rpcErr
+	}
+	historyWarning, rpcErr := applyAccountHistorySubscribe(ctx, wsConn.Connection, request)
+	if rpcErr != nil {
 		return nil, rpcErr
 	}
 	if rpcErr := applySubscriptionBooks(request.WireArrays().Books, func(bookRequest types.SubscriptionRequest) *types.RpcError {
@@ -56,6 +60,9 @@ func (ws *WebSocketServer) executeSubscribe(wsConn *websocketConnection, ctx *ty
 	}
 
 	result := ws.buildSubscribeAck(ctx, request)
+	if historyWarning != "" {
+		result["warning"] = historyWarning
+	}
 	return result, nil
 }
 func subscriptionRequestExcluding(params json.RawMessage, fields ...string) (types.SubscriptionRequest, error) {
@@ -116,16 +123,19 @@ func subscriptionRequestForBooks(books json.RawMessage) (types.SubscriptionReque
 	err = json.Unmarshal(data, &request)
 	return request, err
 }
-func (ws *WebSocketServer) finishUnsubscribe(wsConn *websocketConnection, request types.SubscriptionRequest, params json.RawMessage, isAdmin bool) *types.RpcError {
-	prefix, err := subscriptionRequestExcluding(params, "books")
+func (ws *WebSocketServer) finishUnsubscribe(wsConn *websocketConnection, request types.SubscriptionRequest, params json.RawMessage, ctx *types.RpcContext) *types.RpcError {
+	prefix, err := subscriptionRequestExcluding(params, "books", "account_history_tx_stream")
 	if err != nil {
 		return types.RpcErrorInvalidParams("Invalid unsubscription parameters.")
 	}
-	if rpcErr := ws.subscriptionManager.HandleUnsubscribe(wsConn.Connection, prefix, isAdmin); rpcErr != nil {
+	if rpcErr := ws.subscriptionManager.HandleUnsubscribe(wsConn.Connection, prefix, ctx.IsAdmin); rpcErr != nil {
+		return rpcErr
+	}
+	if rpcErr := applyAccountHistoryUnsubscribe(ctx, wsConn.Connection, request); rpcErr != nil {
 		return rpcErr
 	}
 	return applySubscriptionBooks(request.WireArrays().Books, func(bookRequest types.SubscriptionRequest) *types.RpcError {
-		return ws.subscriptionManager.HandleUnsubscribe(wsConn.Connection, bookRequest, isAdmin)
+		return ws.subscriptionManager.HandleUnsubscribe(wsConn.Connection, bookRequest, ctx.IsAdmin)
 	})
 }
 func setSubscriptionLoadCost(ctx *types.RpcContext, request types.SubscriptionRequest) {
@@ -155,7 +165,7 @@ func (ws *WebSocketServer) executeUnsubscribe(wsConn *websocketConnection, ctx *
 		return result, nil
 	}
 
-	if rpcErr := ws.finishUnsubscribe(wsConn, request, cmd.Params, ctx.IsAdmin); rpcErr != nil {
+	if rpcErr := ws.finishUnsubscribe(wsConn, request, cmd.Params, ctx); rpcErr != nil {
 		return nil, rpcErr
 	}
 

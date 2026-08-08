@@ -6,8 +6,6 @@ import (
 	"errors"
 	"testing"
 
-	"time"
-
 	"github.com/LeJamon/go-xrpl/internal/ledger/service/svcerr"
 	"github.com/LeJamon/go-xrpl/internal/rpc/handlers"
 	"github.com/LeJamon/go-xrpl/internal/rpc/types"
@@ -54,9 +52,6 @@ func (m *mockAccountCurrenciesLedgerService) GetValidatedLedgerIndex() uint32 {
 	return m.validatedLedgerIndex
 }
 func (m *mockAccountCurrenciesLedgerService) AcceptLedger(context.Context) (uint32, error) {
-	return m.closedLedgerIndex + 1, nil
-}
-func (m *mockAccountCurrenciesLedgerService) AcceptLedgerAt(context.Context, time.Time) (uint32, error) {
 	return m.closedLedgerIndex + 1, nil
 }
 func (m *mockAccountCurrenciesLedgerService) IsStandalone() bool { return m.standalone }
@@ -317,6 +312,13 @@ func TestAccountCurrenciesBadInput(t *testing.T) {
 			if tc.expectedToken != "" {
 				assert.Equal(t, tc.expectedToken, rpcErr.ErrorString,
 					"Error token should match expected")
+			}
+			if tc.expectedCode == types.RpcACT_NOT_FOUND {
+				assert.Equal(t, map[string]any{
+					"error":         "actNotFound",
+					"error_code":    types.RpcACT_NOT_FOUND,
+					"error_message": "Account not found.",
+				}, rpcErr.ResponseFields())
 			}
 		})
 	}

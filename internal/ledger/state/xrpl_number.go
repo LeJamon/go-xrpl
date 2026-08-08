@@ -317,6 +317,14 @@ func NewXRPLNumber(mantissa int64, exponent int) XRPLNumber {
 	return newNumber(mantissa, exponent, MantissaScaleSmall, RoundToNearest)
 }
 
+// NewXRPLNumberFromUint creates a positive small-scale Number from the full
+// uint64 mantissa domain.
+func NewXRPLNumberFromUint(mantissa uint64, exponent int) XRPLNumber {
+	n := XRPLNumber{mantissa: mantissa, exponent: exponent, scale: MantissaScaleSmall}
+	n.normalize(RoundToNearest)
+	return n
+}
+
 // NewXRPLNumberRounded creates a small-scale Number normalized under mode.
 func NewXRPLNumberRounded(mantissa int64, exponent int, mode RoundingMode) XRPLNumber {
 	return newNumber(mantissa, exponent, MantissaScaleSmall, mode)

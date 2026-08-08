@@ -260,9 +260,22 @@ func buildProjectedValidatedTransactionEvent(
 		txFields["date"] = uint32(closeTime)
 	}
 	if event.Ledger != nil {
-		_, reserveBase, reserveInc := service.FeesFromLedger(event.Ledger)
-		if funds, ok := handlers.TransactionOwnerFunds(txFields, event.Ledger, reserveBase, reserveInc); ok {
-			txFields["owner_funds"] = funds
+		applicable, needsReserves := handlers.TransactionOwnerFundsRequirements(txFields)
+		var reserveBase, reserveInc uint64
+		if applicable && needsReserves {
+			_, reserveBase, reserveInc, err = service.FeesFromLedgerStrict(event.Ledger)
+			if err != nil {
+				return nil, ter.TemMALFORMED, fmt.Errorf("read accepted ledger fees: %w", err)
+			}
+		}
+		if applicable {
+			funds, ok, fundsErr := handlers.TransactionOwnerFunds(txFields, event.Ledger, reserveBase, reserveInc)
+			if fundsErr != nil {
+				return nil, ter.TemMALFORMED, fmt.Errorf("compute accepted transaction owner funds: %w", fundsErr)
+			}
+			if ok {
+				txFields["owner_funds"] = funds
+			}
 		}
 	}
 	encoded, err := json.Marshal(txFields)

@@ -27,7 +27,7 @@ import (
 // transitions/durations) are rendered as decimal strings to match rippled's
 // std::to_string convention (NetworkOPs.cpp:2986-2991, 4843-4846) and go-xrpl's
 // own server_info; sequence numbers and proposer/converge counts stay numeric.
-type PrintMethod struct{ AdminHandler }
+type PrintMethod struct{ adminHandler }
 
 type outboundCriticalQueueFailureSource interface {
 	OutboundCriticalQueueFailures() (local, shared uint64)
@@ -145,7 +145,23 @@ func printSection(params json.RawMessage) string {
 // "never" (0), "always" (max uint32), or "now" (the last rotated ledger,
 // notReady if none). The method returns notEnabled unless advisory_delete is
 // configured, matching rippled's getSHAMapStore().advisoryDelete() gate.
-type CanDeleteMethod struct{ AdminHandler }
+type CanDeleteMethod struct{ adminHandler }
+
+type canDeleteParam json.RawMessage
+
+func (p *canDeleteParam) UnmarshalJSON(data []byte) error {
+	var number uint32
+	if err := json.Unmarshal(data, &number); err == nil {
+		*p = append((*p)[:0], data...)
+		return nil
+	}
+	var text string
+	if err := json.Unmarshal(data, &text); err != nil {
+		return err
+	}
+	*p = append((*p)[:0], data...)
+	return nil
+}
 
 func (m *CanDeleteMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (any, *types.RpcError) {
 	if ctx.Services == nil {
@@ -157,17 +173,17 @@ func (m *CanDeleteMethod) Handle(ctx *types.RpcContext, params json.RawMessage) 
 	}
 
 	var request struct {
-		CanDelete json.RawMessage `json:"can_delete,omitempty"`
+		CanDelete requestField[canDeleteParam] `json:"can_delete"`
 	}
-	if params != nil {
-		_ = json.Unmarshal(params, &request)
+	if rpcErr := decodeRequestObject(params, &request); rpcErr != nil {
+		return nil, rpcErr
 	}
 
-	if len(request.CanDelete) == 0 {
+	if !request.CanDelete.present {
 		return map[string]any{"can_delete": store.GetCanDelete()}, nil
 	}
 
-	seq, rpcErr := resolveCanDeleteSeq(ctx, store, request.CanDelete)
+	seq, rpcErr := resolveCanDeleteSeq(ctx, store, json.RawMessage(request.CanDelete.value))
 	if rpcErr != nil {
 		return nil, rpcErr
 	}
@@ -254,7 +270,7 @@ func isAllDigits(s string) bool {
 // omitted rather than fabricated. The node_* counters are emitted as decimal
 // strings to match rippled's NodeStore::Database::getCountsJson
 // (Database.cpp:283-288), which stringifies them via std::to_string.
-type GetCountsMethod struct{ AdminHandler }
+type GetCountsMethod struct{ adminHandler }
 
 // uptimeText renders a duration the way rippled's GetCounts.cpp textTime does:
 // the largest non-zero units in descending order, comma-separated and
@@ -341,7 +357,7 @@ func (m *GetCountsMethod) Handle(ctx *types.RpcContext, params json.RawMessage) 
 // ever instantiated (Logs::partition_severities), most at the base level;
 // go-xrpl has no lazy sink registry and lists only partitions with an
 // explicit override.
-type LogLevelMethod struct{ AdminHandler }
+type LogLevelMethod struct{ adminHandler }
 
 // rippledSeverityName maps a log level to rippled's severity naming
 // (Logs::toString): Trace, Debug, Info, Warning, Error, Fatal.
@@ -364,16 +380,16 @@ func rippledSeverityName(l xrpllog.Level) string {
 
 func (m *LogLevelMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (any, *types.RpcError) {
 	var request struct {
-		Severity  string `json:"severity,omitempty"`
-		Partition string `json:"partition,omitempty"`
+		Severity  jsonCppStringField `json:"severity"`
+		Partition jsonCppStringField `json:"partition"`
 	}
 
-	if params != nil {
-		_ = json.Unmarshal(params, &request)
+	if rpcErr := decodeRequestObject(params, &request); rpcErr != nil {
+		return nil, rpcErr
 	}
 
 	// GET: return current levels snapshot
-	if request.Severity == "" {
+	if !request.Severity.present {
 		global, partitions := xrpllog.Levels()
 		levels := map[string]string{
 			"base": rippledSeverityName(global),
@@ -385,13 +401,13 @@ func (m *LogLevelMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (
 	}
 
 	// SET: parse and apply the new level
-	lvl, ok := xrpllog.ParseLevel(request.Severity)
+	lvl, ok := xrpllog.ParseLevel(request.Severity.value)
 	if !ok {
 		return nil, types.RpcErrorInvalidParams("Invalid parameters.")
 	}
 
-	if request.Partition != "" && !strings.EqualFold(request.Partition, "base") {
-		xrpllog.SetPartitionLevel(request.Partition, lvl)
+	if request.Partition.present && !strings.EqualFold(request.Partition.value, "base") {
+		xrpllog.SetPartitionLevel(request.Partition.value, lvl)
 	} else {
 		xrpllog.SetLevel(lvl)
 	}
@@ -403,7 +419,7 @@ func (m *LogLevelMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (
 // Mirrors rippled LogRotate.cpp: closes and reopens the log file so external
 // rotation tools can rename it and have writes continue against a fresh file.
 // When logging is not file-backed (stdout/stderr) there is nothing to rotate.
-type LogRotateMethod struct{ AdminHandler }
+type LogRotateMethod struct{ adminHandler }
 
 func (m *LogRotateMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (any, *types.RpcError) {
 	if err := xrpllog.Rotate(); err != nil {

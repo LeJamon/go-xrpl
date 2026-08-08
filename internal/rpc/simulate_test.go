@@ -2,8 +2,10 @@ package rpc
 
 import (
 	"context"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -11,6 +13,7 @@ import (
 
 	"github.com/LeJamon/go-xrpl/amendment"
 	addresscodec "github.com/LeJamon/go-xrpl/codec/addresscodec"
+	binarycodec "github.com/LeJamon/go-xrpl/codec/binarycodec"
 	"github.com/LeJamon/go-xrpl/internal/ledger/service/svcerr"
 	"github.com/LeJamon/go-xrpl/internal/rpc/handlers"
 	"github.com/LeJamon/go-xrpl/internal/rpc/types"
@@ -497,9 +500,44 @@ func TestSimulateMethod_BatchRejection(t *testing.T) {
 
 	_, rpcErr := method.Handle(ctx, paramsJSON)
 	require.NotNil(t, rpcErr)
-	assert.Equal(t, types.RpcNOT_IMPL, rpcErr.Code)
-	assert.Equal(t, "notImpl", rpcErr.ErrorString)
-	assert.Equal(t, "Not implemented.", rpcErr.Message)
+	assert.Equal(t, types.RpcINVALID_PARAMS, rpcErr.Code)
+	assert.Equal(t, "invalidTransaction", rpcErr.ErrorString)
+	assert.NotEmpty(t, rpcErr.ErrorException)
+
+	batch := func(transactionType any) map[string]any {
+		inner := func(sequence int) map[string]any {
+			return map[string]any{
+				"RawTransaction": map[string]any{
+					"TransactionType": "AccountSet",
+					"Account":         validAccountAddress,
+					"Fee":             "10",
+					"Sequence":        sequence,
+					"SigningPubKey":   "",
+				},
+			}
+		}
+		return map[string]any{
+			"TransactionType": transactionType,
+			"Account":         validAccountAddress,
+			"Fee":             "10",
+			"Sequence":        1,
+			"SigningPubKey":   "",
+			"Flags":           0x00080000,
+			"RawTransactions": []any{inner(1), inner(2)},
+		}
+	}
+	for _, transactionType := range []any{"Batch", 71} {
+		t.Run(fmt.Sprint(transactionType), func(t *testing.T) {
+			params := map[string]any{"tx_json": batch(transactionType)}
+			paramsJSON, err := json.Marshal(params)
+			require.NoError(t, err)
+			_, rpcErr := method.Handle(ctx, paramsJSON)
+			require.NotNil(t, rpcErr)
+			assert.Equal(t, types.RpcNOT_IMPL, rpcErr.Code)
+			assert.Equal(t, "notImpl", rpcErr.ErrorString)
+			assert.Equal(t, "Not implemented.", rpcErr.Message)
+		})
+	}
 }
 
 func TestSimulateMethod_SuccessfulSimulation(t *testing.T) {
@@ -543,6 +581,78 @@ func TestSimulateMethod_SuccessfulSimulation(t *testing.T) {
 	assert.Equal(t, validAccountAddress, txJSON["Account"])
 	assert.Equal(t, "", txJSON["SigningPubKey"])
 	assert.Equal(t, "", txJSON["TxnSignature"])
+}
+
+func TestSimulateMethodCanonicalBlobAndHashProjection(t *testing.T) {
+	baseTx := map[string]any{
+		"TransactionType": "AccountSet",
+		"Account":         validAccountAddress,
+		"Fee":             "10",
+		"Sequence":        1,
+		"SigningPubKey":   "",
+		"TxnSignature":    "",
+	}
+	blob, err := binarycodec.Encode(baseTx)
+	require.NoError(t, err)
+
+	for _, test := range []struct {
+		name   string
+		api    int
+		binary bool
+		params map[string]any
+	}{
+		{
+			name:   "binary blob",
+			api:    types.ApiVersion2,
+			binary: true,
+			params: map[string]any{"tx_blob": strings.ToLower(blob), "binary": true},
+		},
+		{
+			name:   "json v1",
+			api:    types.ApiVersion1,
+			params: map[string]any{"tx_json": baseTx},
+		},
+		{
+			name:   "json v2",
+			api:    types.ApiVersion2,
+			params: map[string]any{"tx_json": baseTx},
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			mock := newMockLedgerServiceSimulate()
+			ctx := &types.RpcContext{
+				Context:    context.Background(),
+				Role:       types.RoleUser,
+				ApiVersion: test.api,
+				Services:   newSimulateTestServices(mock),
+			}
+			paramsJSON, err := json.Marshal(test.params)
+			require.NoError(t, err)
+
+			result, rpcErr := (&handlers.SimulateMethod{}).Handle(ctx, paramsJSON)
+			require.Nil(t, rpcErr)
+			response, ok := result.(map[string]any)
+			require.True(t, ok)
+
+			assert.NotContains(t, response, "hash")
+
+			if test.binary {
+				canonicalBlob, ok := response["tx_blob"].(string)
+				require.True(t, ok)
+				decoded, err := hex.DecodeString(canonicalBlob)
+				require.NoError(t, err)
+				assert.NotEmpty(t, decoded)
+				return
+			}
+
+			txJSON, ok := response["tx_json"].(map[string]any)
+			require.True(t, ok)
+			assert.Equal(t, "AccountSet", txJSON["TransactionType"])
+			assert.Equal(t, "", txJSON["SigningPubKey"])
+			assert.Equal(t, "", txJSON["TxnSignature"])
+			assert.Equal(t, handlers.CalculateTxHash(blob), txJSON["hash"])
+		})
+	}
 }
 
 func TestSimulateMethod_MPTokensV2UsesCurrentRules(t *testing.T) {

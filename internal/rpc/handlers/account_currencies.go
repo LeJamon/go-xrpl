@@ -11,7 +11,7 @@ import (
 
 // AccountCurrenciesMethod handles account_currencies: it reports the
 // currencies the account can send and receive, derived from its trust lines.
-type AccountCurrenciesMethod struct{ BaseHandler }
+type AccountCurrenciesMethod struct{ baseHandler }
 
 func (m *AccountCurrenciesMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (any, *types.RpcError) {
 	rawFields, fieldsErr := rawJSONFields(params)
@@ -36,10 +36,10 @@ func (m *AccountCurrenciesMethod) Handle(ctx *types.RpcContext, params json.RawM
 		return nil, types.RpcErrorMissingField("account")
 	}
 
-	if err := RequireLedgerService(ctx.Services); err != nil {
+	if err := requireLedgerService(ctx.Services); err != nil {
 		return nil, err
 	}
-	ledger, validated, lookupErr := LookupLedger(ctx, params)
+	ledger, validated, lookupErr := lookupLedger(ctx, params)
 	if lookupErr != nil {
 		return nil, lookupErr
 	}
@@ -60,7 +60,7 @@ func (m *AccountCurrenciesMethod) Handle(ctx *types.RpcContext, params json.RawM
 			return nil, rerr
 		}
 		if errors.Is(err, svcerr.ErrAccountNotFound) {
-			return nil, types.RpcErrorActNotFound("Account not found.").WithExtra(ledgerFields)
+			return nil, types.RpcErrorActNotFound("Account not found.")
 		}
 		if errors.Is(err, svcerr.ErrAccountMalformed) {
 			return nil, types.RpcErrorActMalformed("Account malformed.")

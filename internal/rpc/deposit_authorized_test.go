@@ -7,8 +7,6 @@ import (
 	"fmt"
 	"testing"
 
-	"time"
-
 	"github.com/LeJamon/go-xrpl/internal/ledger/service/svcerr"
 	"github.com/LeJamon/go-xrpl/internal/rpc/handlers"
 	"github.com/LeJamon/go-xrpl/internal/rpc/types"
@@ -78,9 +76,6 @@ func (m *mockDepositAuthorizedLedgerService) GetValidatedLedgerIndex() uint32 {
 	return m.validatedLedgerIndex
 }
 func (m *mockDepositAuthorizedLedgerService) AcceptLedger(context.Context) (uint32, error) {
-	return m.closedLedgerIndex + 1, nil
-}
-func (m *mockDepositAuthorizedLedgerService) AcceptLedgerAt(context.Context, time.Time) (uint32, error) {
 	return m.closedLedgerIndex + 1, nil
 }
 func (m *mockDepositAuthorizedLedgerService) IsStandalone() bool { return m.standalone }

@@ -1,5 +1,7 @@
 package txq
 
+import "math"
+
 // ClosedLedgerContext provides the context from a closed ledger for updating fee metrics.
 type ClosedLedgerContext interface {
 	// GetLedgerSequence returns the closed ledger's sequence number.
@@ -100,4 +102,41 @@ func (q *TxQ) NextQueuableSeq(account [20]byte, acctSeq uint32) uint32 {
 	}
 
 	return q.getNextQueuableSeq(aq, acctSeq)
+}
+
+// GetFeeAndSeq returns the required fee and next sequence for a transaction.
+// This is useful for RPC methods that help users construct transactions.
+type FeeAndSeq struct {
+	// RequiredFee is the minimum fee in drops to bypass the queue
+	RequiredFee uint64
+
+	// AccountSeq is the account's current sequence number
+	AccountSeq uint32
+
+	// AvailableSeq is the next queueable sequence number
+	AvailableSeq uint32
+}
+
+// TxRequiredFeeAndSeq returns fee and sequence information for constructing transactions.
+func (q *TxQ) TxRequiredFeeAndSeq(account [20]byte, acctSeq uint32, baseFee uint64, txInLedger uint32) FeeAndSeq {
+	q.stateMu.RLock()
+	defer q.stateMu.RUnlock()
+
+	snapshot := q.feeMetrics.snapshot()
+	feeLevel := scaleFeeLevel(snapshot, txInLedger)
+	requiredFee := feeLevel.ToDrops(baseFee)
+	if requiredFee > math.MaxInt64 {
+		requiredFee = math.MaxInt64
+	}
+
+	availableSeq := acctSeq
+	if aq, exists := q.byAccount[account]; exists {
+		availableSeq = q.getNextQueuableSeq(aq, acctSeq)
+	}
+
+	return FeeAndSeq{
+		RequiredFee:  requiredFee,
+		AccountSeq:   acctSeq,
+		AvailableSeq: availableSeq,
+	}
 }

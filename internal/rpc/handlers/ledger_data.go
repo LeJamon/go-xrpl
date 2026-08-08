@@ -18,14 +18,14 @@ import (
 )
 
 // LedgerDataMethod handles the ledger_data RPC method
-type LedgerDataMethod struct{ BaseHandler }
+type LedgerDataMethod struct{ baseHandler }
 
 func (m *LedgerDataMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (any, *types.RpcError) {
 	parsedLedgerSpec, _, ledgerSpecErr := parseLedgerSpecifier(params)
 	if ledgerSpecErr != nil {
 		return nil, ledgerSpecErr
 	}
-	targetLedger, lookupValidated, lookupErr := LookupLedger(ctx, parsedLedgerSpec)
+	targetLedger, lookupValidated, lookupErr := lookupLedger(ctx, parsedLedgerSpec)
 	if lookupErr != nil {
 		return nil, lookupErr
 	}
@@ -156,9 +156,9 @@ func (m *LedgerDataMethod) Handle(ctx *types.RpcContext, params json.RawMessage)
 }
 
 func ledgerDataLimit(params map[string]json.RawMessage, binary, unlimited bool) (uint32, *types.RpcError) {
-	maxLimit := uint64(LimitLedgerData.Default)
+	maxLimit := uint64(limitLedgerData.Default)
 	if binary {
-		maxLimit = uint64(LimitLedgerDataBinary.Default)
+		maxLimit = uint64(limitLedgerDataBinary.Default)
 	}
 	raw, ok := params["limit"]
 	if !ok {

@@ -69,11 +69,6 @@ func (a *LedgerServiceAdapter) SearchTransaction(ctx context.Context, txHash [32
 	return response, nil
 }
 
-// StoreTransaction stores a transaction in the current ledger
-func (a *LedgerServiceAdapter) StoreTransaction(txHash [32]byte, txData []byte) error {
-	return a.svc.StoreTransaction(txHash, txData)
-}
-
 // GetTransactionHistory retrieves recent transactions
 func (a *LedgerServiceAdapter) GetTransactionHistory(ctx context.Context, startIndex uint32) (*types.TxHistoryResult, error) {
 	result, err := a.svc.GetTransactionHistory(ctx, startIndex)

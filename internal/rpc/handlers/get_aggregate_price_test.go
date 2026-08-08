@@ -2,6 +2,7 @@ package handlers
 
 import (
 	"encoding/json"
+	"math"
 	"testing"
 )
 
@@ -45,8 +46,8 @@ func TestAggregatePriceSTAmountAndNumberStats(t *testing.T) {
 	if got := mean.text(); got != "74.45" {
 		t.Fatalf("mean = %s, want 74.45", got)
 	}
-	if got := standardDeviation.String(); got != "0.3027650354097492" {
-		t.Fatalf("standard deviation = %s, want 0.3027650354097492", got)
+	if got := standardDeviation.String(); got != "0.3027650354097491666" {
+		t.Fatalf("standard deviation = %s, want 0.3027650354097491666", got)
 	}
 	if got := aggregatePriceMedian(prices).text(); got != "74.45" {
 		t.Fatalf("median = %s, want 74.45", got)
@@ -56,7 +57,64 @@ func TestAggregatePriceSTAmountAndNumberStats(t *testing.T) {
 	if got := trimmedMean.text(); got != "74.45" {
 		t.Fatalf("trimmed mean = %s, want 74.45", got)
 	}
-	if got := trimmedStandardDeviation.String(); got != "0.187082869338697" {
-		t.Fatalf("trimmed standard deviation = %s, want 0.187082869338697", got)
+	if got := trimmedStandardDeviation.String(); got != "0.1870828693386970693" {
+		t.Fatalf("trimmed standard deviation = %s, want 0.1870828693386970693", got)
+	}
+}
+
+func TestAggregatePriceUnsignedBoundaries(t *testing.T) {
+	tests := []struct {
+		name     string
+		price    uint64
+		scale    int
+		want     string
+		wantSign int
+	}{
+		{name: "max int64", price: math.MaxInt64, want: "9223372036854776e3", wantSign: 1},
+		{name: "max int64 plus one", price: uint64(math.MaxInt64) + 1, want: "9223372036854776e3", wantSign: 1},
+		{name: "max uint64", price: math.MaxUint64, want: "1844674407370955e4", wantSign: 1},
+		{name: "minimum STAmount exponent", price: math.MaxUint64, scale: 100, want: "1844674407370955e-96", wantSign: 1},
+		{name: "below minimum STAmount exponent", price: math.MaxUint64, scale: 101, want: "0", wantSign: 0},
+		{name: "max scale underflows STAmount", price: math.MaxUint64, scale: 255, want: "0", wantSign: 0},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			amount := newAggregatePriceAmountUnsigned(test.price, -test.scale)
+			if got := amount.text(); got != test.want {
+				t.Fatalf("price = %s, want %s", got, test.want)
+			}
+			if got := amount.number.Signum(); got != test.wantSign {
+				t.Fatalf("sign = %d, want %d", got, test.wantSign)
+			}
+		})
+	}
+}
+
+func TestAggregatePriceUnsignedStats(t *testing.T) {
+	prices := []aggregatePricePoint{
+		{price: newAggregatePriceAmountUnsigned(math.MaxInt64, 0)},
+		{price: newAggregatePriceAmountUnsigned(uint64(math.MaxInt64)+1, 0)},
+		{price: newAggregatePriceAmountUnsigned(math.MaxUint64, 0)},
+		{price: newAggregatePriceAmountUnsigned(math.MaxUint64, 0)},
+	}
+
+	mean, standardDeviation := aggregatePriceStats(prices)
+	if got := mean.text(); got != "1383505805528216e4" {
+		t.Fatalf("mean = %s, want 1383505805528216e4", got)
+	}
+	if got := standardDeviation.String(); got != "5325116328314170655" {
+		t.Fatalf("standard deviation = %s, want 5325116328314170655", got)
+	}
+	if got := aggregatePriceMedian(prices).text(); got != "1383505805528217e4" {
+		t.Fatalf("median = %s, want 1383505805528217e4", got)
+	}
+
+	trimmedMean, trimmedStandardDeviation := aggregatePriceStats(prices[1:3])
+	if got := trimmedMean.text(); got != "1383505805528217e4" {
+		t.Fatalf("trimmed mean = %s, want 1383505805528217e4", got)
+	}
+	if got := trimmedStandardDeviation.String(); got != "6521908912666389825" {
+		t.Fatalf("trimmed standard deviation = %s, want 6521908912666389825", got)
 	}
 }

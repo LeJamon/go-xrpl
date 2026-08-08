@@ -154,10 +154,12 @@ as the liveness endpoint, but it is still subject to the configured per-port
 Origin and HTTP Basic Auth policy. Arbitrary GET query parameters are never
 dispatched as RPC commands.
 
-`server_info` and `server_state` omit rippled's optional job-queue `load`,
-requested `counters`, and `current_activities` fields. go-xrpl does not yet have
-equivalent job/performance instrumentation, so these fields remain unsupported
-rather than reporting placeholder data.
+`server_info` and `server_state` accept `counters` and report shared HTTP/WebSocket
+RPC timings, current RPC activity, and the node-store counters available from the
+configured backend. The required `job_queue` and current `jobs` containers are
+empty because go-xrpl has no central rippled-style JobQueue. For the same reason,
+the admin-only `load` field is omitted rather than populated with unrelated
+goroutine or client-admission statistics.
 
 ### TLS and reverse proxies
 

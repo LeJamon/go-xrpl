@@ -1,6 +1,7 @@
 package service
 
 import (
+	"context"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
@@ -14,6 +15,7 @@ import (
 	"github.com/LeJamon/go-xrpl/internal/ledger/state"
 	txcore "github.com/LeJamon/go-xrpl/internal/tx"
 	"github.com/LeJamon/go-xrpl/internal/tx/mptutil"
+	"github.com/LeJamon/go-xrpl/internal/tx/ter"
 )
 
 const invalidTransactionIndex = ^uint32(0)
@@ -761,30 +763,33 @@ func extractMentionedAccounts(rawSTTx []byte) []string {
 	return accounts
 }
 
-func proposedOwnerFunds(rawSTTx []byte, view *ledger.Ledger) string {
+func proposedOwnerFunds(rawSTTx []byte, view *ledger.Ledger) (string, bool, error) {
 	if len(rawSTTx) == 0 || view == nil {
-		return ""
+		return "", false, nil
 	}
 	txJSON, err := binarycodec.Decode(hex.EncodeToString(rawSTTx))
-	if err != nil || txJSON["TransactionType"] != "OfferCreate" {
-		return ""
+	if err != nil {
+		return "", false, fmt.Errorf("decode proposed transaction: %w", err)
+	}
+	if txJSON["TransactionType"] != "OfferCreate" {
+		return "", false, nil
 	}
 	account, _ := txJSON["Account"].(string)
 	if account == "" {
-		return ""
+		return "", false, nil
 	}
 	encodedAmount, err := json.Marshal(txJSON["TakerGets"])
 	if err != nil {
-		return ""
+		return "", false, nil
 	}
 	amount, err := state.AmountFromJSON(encodedAmount)
 	if err != nil {
-		return ""
+		return "", false, nil
 	}
 
 	_, accountBytes, err := addresscodec.DecodeClassicAddressToAccountID(account)
 	if err != nil || len(accountBytes) != 20 {
-		return ""
+		return "", false, nil
 	}
 	var accountID [20]byte
 	copy(accountID[:], accountBytes)
@@ -792,14 +797,31 @@ func proposedOwnerFunds(rawSTTx []byte, view *ledger.Ledger) string {
 	if amount.IsMPT() {
 		id, decodeErr := mptutil.DecodeID(amount.MPTIssuanceID())
 		if decodeErr != nil || accountID == mptutil.Issuer(id) {
-			return ""
+			return "", false, nil
 		}
-		funds, _ := mptutil.Funds(view, id, accountID, false)
-		return state.NewMPTAmountWithIssuanceID(funds, "", amount.MPTIssuanceID()).Value()
+		funds, result := mptutil.Funds(view, id, accountID, false)
+		switch result {
+		case ter.TesSUCCESS:
+		case ter.TecOBJECT_NOT_FOUND, ter.TecNO_AUTH:
+			funds = 0
+		default:
+			return "", true, fmt.Errorf("proposed owner funds: MPT funds failed: %s", result)
+		}
+		return state.NewMPTAmountWithIssuanceID(funds, "", amount.MPTIssuanceID()).Value(), true, nil
 	}
 	if !amount.IsNative() && amount.Issuer == account {
-		return ""
+		return "", false, nil
 	}
-	_, reserveBase, reserveInc := readFeesFromLedger(view)
-	return txcore.AccountFunds(view, accountID, amount, false, reserveBase, reserveInc).Value()
+	var reserveBase, reserveInc uint64
+	if amount.IsNative() {
+		_, reserveBase, reserveInc, err = readFeesFromLedgerContext(context.Background(), view)
+		if err != nil {
+			return "", true, fmt.Errorf("proposed owner funds: read fees: %w", err)
+		}
+	}
+	funds, err := txcore.AccountFundsNoFreezeStrict(view, accountID, amount, reserveBase, reserveInc)
+	if err != nil {
+		return "", true, err
+	}
+	return funds.Value(), true, nil
 }

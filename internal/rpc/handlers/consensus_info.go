@@ -13,7 +13,7 @@ import (
 // standalone / RPC-only mode there is no consensus engine wired, so the
 // handler returns an empty info object — matching rippled's behavior on a
 // node that is not participating in consensus.
-type ConsensusInfoMethod struct{ AdminHandler }
+type ConsensusInfoMethod struct{ adminHandler }
 
 func (m *ConsensusInfoMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (any, *types.RpcError) {
 	info := map[string]any{}

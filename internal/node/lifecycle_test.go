@@ -12,12 +12,15 @@ import (
 	"time"
 
 	"github.com/LeJamon/go-xrpl/config"
+	"github.com/LeJamon/go-xrpl/internal/consensus"
+	"github.com/LeJamon/go-xrpl/internal/consensus/adaptor"
 	"github.com/LeJamon/go-xrpl/internal/ledger/service"
 	"github.com/LeJamon/go-xrpl/internal/rpc"
 	"github.com/LeJamon/go-xrpl/internal/rpc/types"
 	xrpllog "github.com/LeJamon/go-xrpl/log"
 	"github.com/LeJamon/go-xrpl/storage/nodestore"
 	"github.com/LeJamon/go-xrpl/storage/relationaldb"
+	"github.com/stretchr/testify/require"
 )
 
 func TestBindRPCWiresExplicitSharedServices(t *testing.T) {
@@ -438,3 +441,86 @@ func TestNodeRuntimeStopOrder(t *testing.T) {
 		t.Fatalf("stop order = %v, want %v", order, want)
 	}
 }
+
+func TestNodeRuntimeStopsPeerConnectSchedulerBeforeConsensus(t *testing.T) {
+	var mu sync.Mutex
+	var order []string
+	started := make(chan struct{})
+	appendOrder := func(name string) {
+		mu.Lock()
+		order = append(order, name)
+		mu.Unlock()
+	}
+	scheduler := newPeerConnectScheduler(context.Background(), func(ctx context.Context, _ string) error {
+		close(started)
+		<-ctx.Done()
+		appendOrder("peer-connect")
+		return ctx.Err()
+	}, 1, 1, nil)
+	if err := scheduler.Enqueue("blocked"); err != nil {
+		t.Fatalf("enqueue blocked peer = %v", err)
+	}
+	select {
+	case <-started:
+	case <-time.After(time.Second):
+		t.Fatal("peer connect worker did not start")
+	}
+	runtime := &nodeRuntime{
+		peerConnectScheduler: scheduler,
+		consensus: &adaptor.Components{Engine: &lifecycleShutdownEngine{onStop: func() error {
+			appendOrder("consensus")
+			return nil
+		}}},
+		serverLog: xrpllog.Discard(),
+	}
+	if err := runtime.shutdownWithin(time.Second); err != nil {
+		t.Fatalf("shutdown error = %v", err)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if len(order) != 2 || order[0] != "peer-connect" || order[1] != "consensus" {
+		t.Fatalf("shutdown order = %v, want peer-connect then consensus", order)
+	}
+}
+
+func TestNodeRuntimeDoesNotStopConsensusWhilePeerConnectIsRunning(t *testing.T) {
+	started := make(chan struct{})
+	release := make(chan struct{})
+	scheduler := newPeerConnectScheduler(context.Background(), func(context.Context, string) error {
+		close(started)
+		<-release
+		return nil
+	}, 1, 1, nil)
+	require.NoError(t, scheduler.Enqueue("blocked"))
+	select {
+	case <-started:
+	case <-time.After(time.Second):
+		t.Fatal("peer connect worker did not start")
+	}
+	var consensusStopped atomic.Bool
+	runtime := &nodeRuntime{
+		peerConnectScheduler: scheduler,
+		consensus: &adaptor.Components{Engine: &lifecycleShutdownEngine{onStop: func() error {
+			consensusStopped.Store(true)
+			return nil
+		}}},
+		serverLog: xrpllog.Discard(),
+	}
+	err := runtime.shutdownWithin(25 * time.Millisecond)
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("shutdown error = %v, want deadline exceeded", err)
+	}
+	if consensusStopped.Load() {
+		t.Fatal("consensus stopped while peer connect worker was still running")
+	}
+	close(release)
+	scheduler.Close()
+	require.ErrorIs(t, scheduler.Enqueue("after-close"), types.ErrPeerConnectClosed)
+}
+
+type lifecycleShutdownEngine struct {
+	consensus.Engine
+	onStop func() error
+}
+
+func (e *lifecycleShutdownEngine) Stop() error { return e.onStop() }

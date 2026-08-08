@@ -17,11 +17,28 @@ import (
 
 // Test vectors from rippled's RPCCall_test.cpp and PayChan_test.cpp
 
+func channelAuthorizeTestContext(apiVersion int) *types.RpcContext {
+	return &types.RpcContext{
+		ApiVersion: apiVersion,
+		Services: &types.ServiceContainer{
+			Capabilities: types.RPCCapabilities{SigningEnabled: true},
+		},
+	}
+}
+
+func TestChannelAuthorizeSigningDisabledPrecedesValidation(t *testing.T) {
+	_, rpcErr := (&handlers.ChannelAuthorizeMethod{}).Handle(
+		&types.RpcContext{ApiVersion: types.ApiVersion2, Services: &types.ServiceContainer{}},
+		json.RawMessage(`{}`),
+	)
+	require.NotNil(t, rpcErr)
+	assert.Equal(t, types.RpcNOT_SUPPORTED, rpcErr.Code)
+	assert.Equal(t, "Signing is not supported by this server.", rpcErr.Message)
+}
+
 func TestChannelAuthorize_MissingChannelID(t *testing.T) {
 	handler := &handlers.ChannelAuthorizeMethod{}
-	ctx := &types.RpcContext{
-		ApiVersion: types.ApiVersion1,
-	}
+	ctx := channelAuthorizeTestContext(types.ApiVersion1)
 
 	params := json.RawMessage(`{
 		"secret": "snoPBrXtMeMyMHUVTgbuqAfg1SUTb",
@@ -36,9 +53,7 @@ func TestChannelAuthorize_MissingChannelID(t *testing.T) {
 
 func TestChannelAuthorize_MissingAmount(t *testing.T) {
 	handler := &handlers.ChannelAuthorizeMethod{}
-	ctx := &types.RpcContext{
-		ApiVersion: types.ApiVersion1,
-	}
+	ctx := channelAuthorizeTestContext(types.ApiVersion1)
 
 	params := json.RawMessage(`{
 		"secret": "snoPBrXtMeMyMHUVTgbuqAfg1SUTb",
@@ -53,9 +68,7 @@ func TestChannelAuthorize_MissingAmount(t *testing.T) {
 
 func TestChannelAuthorize_MissingSecret(t *testing.T) {
 	handler := &handlers.ChannelAuthorizeMethod{}
-	ctx := &types.RpcContext{
-		ApiVersion: types.ApiVersion1,
-	}
+	ctx := channelAuthorizeTestContext(types.ApiVersion1)
 
 	params := json.RawMessage(`{
 		"channel_id": "0123456789ABCDEF0123456789ABCDEF0123456789ABCDEF0123456789ABCDEF",
@@ -70,7 +83,7 @@ func TestChannelAuthorize_MissingSecret(t *testing.T) {
 
 func TestChannelAuthorize_PresentEmptyRequiredFields(t *testing.T) {
 	handler := &handlers.ChannelAuthorizeMethod{}
-	ctx := &types.RpcContext{ApiVersion: types.ApiVersion2}
+	ctx := channelAuthorizeTestContext(types.ApiVersion2)
 	const channelID = "0123456789ABCDEF0123456789ABCDEF0123456789ABCDEF0123456789ABCDEF"
 	const secret = "snoPBrXtMeMyMHUVTgbuqAfg1SUTb"
 
@@ -102,9 +115,7 @@ func TestChannelAuthorize_PresentEmptyRequiredFields(t *testing.T) {
 
 func TestChannelAuthorize_MultipleSecrets(t *testing.T) {
 	handler := &handlers.ChannelAuthorizeMethod{}
-	ctx := &types.RpcContext{
-		ApiVersion: types.ApiVersion1,
-	}
+	ctx := channelAuthorizeTestContext(types.ApiVersion1)
 
 	params := json.RawMessage(`{
 		"secret": "snoPBrXtMeMyMHUVTgbuqAfg1SUTb",
@@ -121,9 +132,7 @@ func TestChannelAuthorize_MultipleSecrets(t *testing.T) {
 
 func TestChannelAuthorize_SecretNotAllowedWithKeyType(t *testing.T) {
 	handler := &handlers.ChannelAuthorizeMethod{}
-	ctx := &types.RpcContext{
-		ApiVersion: types.ApiVersion1,
-	}
+	ctx := channelAuthorizeTestContext(types.ApiVersion1)
 
 	params := json.RawMessage(`{
 		"secret": "snoPBrXtMeMyMHUVTgbuqAfg1SUTb",
@@ -140,9 +149,7 @@ func TestChannelAuthorize_SecretNotAllowedWithKeyType(t *testing.T) {
 
 func TestChannelAuthorize_BadKeyType(t *testing.T) {
 	handler := &handlers.ChannelAuthorizeMethod{}
-	ctx := &types.RpcContext{
-		ApiVersion: types.ApiVersion2,
-	}
+	ctx := channelAuthorizeTestContext(types.ApiVersion2)
 
 	params := json.RawMessage(`{
 		"seed": "snoPBrXtMeMyMHUVTgbuqAfg1SUTb",
@@ -159,9 +166,7 @@ func TestChannelAuthorize_BadKeyType(t *testing.T) {
 
 func TestChannelAuthorize_ChannelIDTooShort(t *testing.T) {
 	handler := &handlers.ChannelAuthorizeMethod{}
-	ctx := &types.RpcContext{
-		ApiVersion: types.ApiVersion1,
-	}
+	ctx := channelAuthorizeTestContext(types.ApiVersion1)
 
 	params := json.RawMessage(`{
 		"secret": "snoPBrXtMeMyMHUVTgbuqAfg1SUTb",
@@ -177,9 +182,7 @@ func TestChannelAuthorize_ChannelIDTooShort(t *testing.T) {
 
 func TestChannelAuthorize_ChannelIDTooLong(t *testing.T) {
 	handler := &handlers.ChannelAuthorizeMethod{}
-	ctx := &types.RpcContext{
-		ApiVersion: types.ApiVersion1,
-	}
+	ctx := channelAuthorizeTestContext(types.ApiVersion1)
 
 	params := json.RawMessage(`{
 		"secret": "snoPBrXtMeMyMHUVTgbuqAfg1SUTb",
@@ -194,9 +197,7 @@ func TestChannelAuthorize_ChannelIDTooLong(t *testing.T) {
 
 func TestChannelAuthorize_ChannelIDNotHex(t *testing.T) {
 	handler := &handlers.ChannelAuthorizeMethod{}
-	ctx := &types.RpcContext{
-		ApiVersion: types.ApiVersion1,
-	}
+	ctx := channelAuthorizeTestContext(types.ApiVersion1)
 
 	params := json.RawMessage(`{
 		"secret": "snoPBrXtMeMyMHUVTgbuqAfg1SUTb",
@@ -211,9 +212,7 @@ func TestChannelAuthorize_ChannelIDNotHex(t *testing.T) {
 
 func TestChannelAuthorize_NegativeAmount(t *testing.T) {
 	handler := &handlers.ChannelAuthorizeMethod{}
-	ctx := &types.RpcContext{
-		ApiVersion: types.ApiVersion1,
-	}
+	ctx := channelAuthorizeTestContext(types.ApiVersion1)
 
 	params := json.RawMessage(`{
 		"secret": "snoPBrXtMeMyMHUVTgbuqAfg1SUTb",
@@ -229,9 +228,7 @@ func TestChannelAuthorize_NegativeAmount(t *testing.T) {
 
 func TestChannelAuthorize_AmountOverflow(t *testing.T) {
 	handler := &handlers.ChannelAuthorizeMethod{}
-	ctx := &types.RpcContext{
-		ApiVersion: types.ApiVersion1,
-	}
+	ctx := channelAuthorizeTestContext(types.ApiVersion1)
 
 	params := json.RawMessage(`{
 		"secret": "snoPBrXtMeMyMHUVTgbuqAfg1SUTb",
@@ -246,9 +243,7 @@ func TestChannelAuthorize_AmountOverflow(t *testing.T) {
 
 func TestChannelAuthorize_ValidWithSecret(t *testing.T) {
 	handler := &handlers.ChannelAuthorizeMethod{}
-	ctx := &types.RpcContext{
-		ApiVersion: types.ApiVersion1,
-	}
+	ctx := channelAuthorizeTestContext(types.ApiVersion1)
 
 	// Use masterpassphrase seed which generates a known keypair
 	params := json.RawMessage(`{
@@ -270,7 +265,7 @@ func TestChannelAuthorize_ValidWithSecret(t *testing.T) {
 
 func TestChannelAuthorize_LegacyRFC1751Secret(t *testing.T) {
 	handler := &handlers.ChannelAuthorizeMethod{}
-	ctx := &types.RpcContext{ApiVersion: types.ApiVersion1}
+	ctx := channelAuthorizeTestContext(types.ApiVersion1)
 	base := map[string]any{
 		"channel_id": strings.Repeat("A", 64),
 		"amount":     "1",
@@ -302,9 +297,7 @@ func TestChannelAuthorize_LegacyRFC1751Secret(t *testing.T) {
 
 func TestChannelAuthorize_ValidWithSeed(t *testing.T) {
 	handler := &handlers.ChannelAuthorizeMethod{}
-	ctx := &types.RpcContext{
-		ApiVersion: types.ApiVersion1,
-	}
+	ctx := channelAuthorizeTestContext(types.ApiVersion1)
 
 	params := json.RawMessage(`{
 		"seed": "snoPBrXtMeMyMHUVTgbuqAfg1SUTb",
@@ -324,9 +317,7 @@ func TestChannelAuthorize_ValidWithSeed(t *testing.T) {
 
 func TestChannelAuthorize_ValidWithPassphrase(t *testing.T) {
 	handler := &handlers.ChannelAuthorizeMethod{}
-	ctx := &types.RpcContext{
-		ApiVersion: types.ApiVersion1,
-	}
+	ctx := channelAuthorizeTestContext(types.ApiVersion1)
 
 	params := json.RawMessage(`{
 		"passphrase": "masterpassphrase",
@@ -346,9 +337,7 @@ func TestChannelAuthorize_ValidWithPassphrase(t *testing.T) {
 
 func TestChannelAuthorize_ValidWithSeedHex(t *testing.T) {
 	handler := &handlers.ChannelAuthorizeMethod{}
-	ctx := &types.RpcContext{
-		ApiVersion: types.ApiVersion1,
-	}
+	ctx := channelAuthorizeTestContext(types.ApiVersion1)
 
 	// masterpassphrase SHA512Half first 16 bytes = DEDCE9CE67B451D852FD4E846FCDE31C
 	params := json.RawMessage(`{
@@ -369,9 +358,7 @@ func TestChannelAuthorize_ValidWithSeedHex(t *testing.T) {
 
 func TestChannelAuthorize_ValidEd25519(t *testing.T) {
 	handler := &handlers.ChannelAuthorizeMethod{}
-	ctx := &types.RpcContext{
-		ApiVersion: types.ApiVersion1,
-	}
+	ctx := channelAuthorizeTestContext(types.ApiVersion1)
 
 	// Ed25519 seed
 	params := json.RawMessage(`{
@@ -394,9 +381,7 @@ func TestChannelAuthorize_ValidEd25519(t *testing.T) {
 
 func TestChannelAuthorize_MaxAmount(t *testing.T) {
 	handler := &handlers.ChannelAuthorizeMethod{}
-	ctx := &types.RpcContext{
-		ApiVersion: types.ApiVersion1,
-	}
+	ctx := channelAuthorizeTestContext(types.ApiVersion1)
 
 	// Max uint64 value
 	params := json.RawMessage(`{
@@ -427,9 +412,7 @@ func TestChannelAuthorizeAndVerify_Integration(t *testing.T) {
 
 	// Authorize
 	authorizeHandler := &handlers.ChannelAuthorizeMethod{}
-	authorizeCtx := &types.RpcContext{
-		ApiVersion: types.ApiVersion1,
-	}
+	authorizeCtx := channelAuthorizeTestContext(types.ApiVersion1)
 
 	authorizeParams := json.RawMessage(`{
 		"passphrase": "masterpassphrase",
@@ -479,9 +462,7 @@ func TestChannelAuthorizeAndVerify_IntegrationEd25519(t *testing.T) {
 
 	// Authorize
 	authorizeHandler := &handlers.ChannelAuthorizeMethod{}
-	authorizeCtx := &types.RpcContext{
-		ApiVersion: types.ApiVersion1,
-	}
+	authorizeCtx := channelAuthorizeTestContext(types.ApiVersion1)
 
 	authorizeParams := json.RawMessage(`{
 		"passphrase": "masterpassphrase",
@@ -544,9 +525,7 @@ func TestChannelAuthorize_MessageFormat(t *testing.T) {
 
 func TestChannelAuthorize_BadSeed(t *testing.T) {
 	handler := &handlers.ChannelAuthorizeMethod{}
-	ctx := &types.RpcContext{
-		ApiVersion: types.ApiVersion1,
-	}
+	ctx := channelAuthorizeTestContext(types.ApiVersion1)
 
 	params := json.RawMessage(`{
 		"seed": "invalid_seed",

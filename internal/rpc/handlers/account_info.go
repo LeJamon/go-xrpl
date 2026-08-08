@@ -37,7 +37,7 @@ const (
 )
 
 // AccountInfoMethod handles the account_info RPC method.
-type AccountInfoMethod struct{ BaseHandler }
+type AccountInfoMethod struct{ baseHandler }
 
 func (m *AccountInfoMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (any, *types.RpcError) {
 	rawFields, fieldsErr := rawJSONFields(params)
@@ -62,11 +62,11 @@ func (m *AccountInfoMethod) Handle(ctx *types.RpcContext, params json.RawMessage
 		return nil, types.RpcErrorMissingField("account")
 	}
 
-	if err := RequireLedgerService(ctx.Services); err != nil {
+	if err := requireLedgerService(ctx.Services); err != nil {
 		return nil, err
 	}
 
-	ledger, lookupValidated, lookupErr := LookupLedger(ctx, params)
+	ledger, lookupValidated, lookupErr := lookupLedger(ctx, params)
 	if lookupErr != nil {
 		return nil, lookupErr
 	}
@@ -176,7 +176,13 @@ func (m *AccountInfoMethod) Handle(ctx *types.RpcContext, params json.RawMessage
 
 	// Load signer lists if requested
 	if signerLists {
-		signerListEntries := m.loadSignerLists(ctx.Context, ctx.Services, canonicalAccount, ledgerIndex)
+		signerListEntries, signerListErr := m.loadSignerLists(ctx.Context, ctx.Services, canonicalAccount, ledgerIndex)
+		if signerListErr != nil {
+			if errors.Is(signerListErr, svcerr.ErrLedgerNotFound) {
+				return nil, types.RpcErrorLgrNotFound("Ledger not found.")
+			}
+			return nil, rpcInternalError("account_info: signer list lookup failed", signerListErr)
+		}
 		if ctx.ApiVersion > 1 {
 			// API v2: signer_lists at top level
 			response["signer_lists"] = signerListEntries
@@ -357,25 +363,37 @@ func buildAccountQueueData(services *types.ServiceContainer, account string) map
 }
 
 // loadSignerLists retrieves signer list objects for an account
-func (m *AccountInfoMethod) loadSignerLists(ctx context.Context, services *types.ServiceContainer, account string, ledgerIndex string) []any {
-	result, err := services.Ledger.GetAccountObjects(ctx, account, ledgerIndex, "SignerList", 10, "")
-	if err != nil || len(result.AccountObjects) == 0 {
-		return []any{}
-	}
-
-	var signerLists []any
-	for _, obj := range result.AccountObjects {
-		// Decode the raw SLE binary to JSON
-		hexData := hex.EncodeToString(obj.Data)
-		decoded, err := binarycodec.Decode(hexData)
+func (m *AccountInfoMethod) loadSignerLists(ctx context.Context, services *types.ServiceContainer, account string, ledgerIndex string) ([]any, error) {
+	signerLists := make([]any, 0, 1)
+	marker := ""
+	seenMarkers := make(map[string]struct{})
+	for {
+		result, err := services.Ledger.GetAccountObjects(ctx, account, ledgerIndex, "SignerList", 10, marker)
 		if err != nil {
-			continue
+			return nil, err
 		}
-		decoded["index"] = strings.ToUpper(obj.Index)
-		signerLists = append(signerLists, decoded)
+		if result == nil {
+			return nil, errors.New("account_info: signer list query returned nil result")
+		}
+		for _, obj := range result.AccountObjects {
+			hexData := hex.EncodeToString(obj.Data)
+			decoded, err := binarycodec.Decode(hexData)
+			if err != nil {
+				return nil, err
+			}
+			if decoded == nil {
+				return nil, errors.New("account_info: signer list query returned nil decoded object")
+			}
+			decoded["index"] = strings.ToUpper(obj.Index)
+			signerLists = append(signerLists, decoded)
+		}
+		if result.Marker == "" {
+			return signerLists, nil
+		}
+		if _, repeated := seenMarkers[result.Marker]; repeated {
+			return nil, errors.New("account_info: signer list query returned repeated marker")
+		}
+		seenMarkers[result.Marker] = struct{}{}
+		marker = result.Marker
 	}
-	if signerLists == nil {
-		return []any{}
-	}
-	return signerLists
 }

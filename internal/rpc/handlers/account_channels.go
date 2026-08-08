@@ -11,14 +11,14 @@ import (
 // AccountChannelsMethod handles account_channels: it lists the payment
 // channels where the account is the source, optionally filtered by
 // destination_account.
-type AccountChannelsMethod struct{ BaseHandler }
+type AccountChannelsMethod struct{ baseHandler }
 
 func (m *AccountChannelsMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (any, *types.RpcError) {
 	fields, account, parseErr := accountPageParams(params)
 	if parseErr != nil {
 		return nil, parseErr
 	}
-	if err := RequireLedgerService(ctx.Services); err != nil {
+	if err := requireLedgerService(ctx.Services); err != nil {
 		return nil, err
 	}
 	ledgerIndex, ledgerFields, selErr := preflightAccountPage(ctx, params, account, "Failed to get account information", false)
@@ -38,7 +38,7 @@ func (m *AccountChannelsMethod) Handle(ctx *types.RpcContext, params json.RawMes
 		return nil, types.RpcErrorActMalformed("Account malformed.")
 	}
 
-	limit, limitErr := ReadLimitField(params, LimitAccountChannels, ctx.Unlimited)
+	limit, limitErr := readLimitField(params, limitAccountChannels, ctx.Unlimited)
 	if limitErr != nil {
 		return nil, limitErr
 	}

@@ -1,8 +1,19 @@
 package txq
 
 import (
+	"math"
 	"testing"
 )
+
+func TestTxRequiredFeeAndSeqSaturatesAtMaxXRPAmount(t *testing.T) {
+	queue := mustNew(DefaultConfig())
+
+	result := queue.TxRequiredFeeAndSeq([20]byte{}, 1, math.MaxUint64, 0)
+
+	if result.RequiredFee != math.MaxInt64 {
+		t.Fatalf("RequiredFee = %d, want %d", result.RequiredFee, uint64(math.MaxInt64))
+	}
+}
 
 // TestNew tests TxQ creation with various configurations
 func TestNew(t *testing.T) {

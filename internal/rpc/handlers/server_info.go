@@ -12,6 +12,7 @@ import (
 
 	"github.com/LeJamon/go-xrpl/amendment"
 	"github.com/LeJamon/go-xrpl/codec/addresscodec"
+	"github.com/LeJamon/go-xrpl/crypto/rfc1751"
 	"github.com/LeJamon/go-xrpl/internal/observability"
 	"github.com/LeJamon/go-xrpl/internal/rpc/types"
 	"github.com/LeJamon/go-xrpl/protocol"
@@ -77,20 +78,118 @@ func resolveHostID() string {
 	return "go-xrpl"
 }
 
+func serverHostID(services *types.ServiceContainer, admin bool) string {
+	if admin {
+		return cachedHostID
+	}
+	if services != nil {
+		key, err := addresscodec.DecodeNodePublicKey(services.NodePublicKey)
+		if err == nil && len(key) == addresscodec.NodePublicKeyLength {
+			return rfc1751.WordFromBlob(key)
+		}
+	}
+	return "go-xrpl"
+}
+
+func serverSystemTime(services *types.ServiceContainer) time.Time {
+	if services != nil && services.SystemTime != nil {
+		return services.SystemTime()
+	}
+	return time.Now()
+}
+
+func formatServerTime(t time.Time) string {
+	return t.UTC().Format("2006-Jan-02 15:04:05.000000 UTC")
+}
+
 // ServerInfoMethod handles the server_info RPC method.
 // This is the "human-readable" variant (rippled human=true).
-type ServerInfoMethod struct{ BaseHandler }
+type ServerInfoMethod struct{ baseHandler }
 
 func (m *ServerInfoMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (any, *types.RpcError) {
-	if err := RequireLedgerService(ctx.Services); err != nil {
+	if err := requireLedgerService(ctx.Services); err != nil {
 		return nil, err
 	}
 
 	info := buildServerInfo(ctx, true)
+	if serverCountersRequested(params) {
+		addServerDiagnostics(info, ctx.Services)
+	}
 	if warnings := buildServerWarnings(ctx.Services, ctx.IsAdmin); len(warnings) > 0 {
 		info["warnings"] = warnings
 	}
 	return map[string]any{"info": info}, nil
+}
+
+func serverCountersRequested(params json.RawMessage) bool {
+	if len(params) == 0 {
+		return false
+	}
+	var object map[string]json.RawMessage
+	if json.Unmarshal(params, &object) != nil || object == nil {
+		return false
+	}
+	return jsonCppBoolRaw(object["counters"])
+}
+
+func addServerDiagnostics(info map[string]any, services *types.ServiceContainer) {
+	rpcCounters := make(map[string]any)
+	var snapshot types.RPCDiagnosticsSnapshot
+	if services != nil && services.RPCDiagnostics != nil {
+		snapshot = services.RPCDiagnostics.Snapshot()
+	}
+	methods := make([]map[string]any, 0, len(snapshot.Current))
+
+	var total types.RPCMethodDiagnostics
+	for method, stats := range snapshot.Methods {
+		if stats.Started == 0 {
+			continue
+		}
+		rpcCounters[method] = rpcDiagnosticsJSON(stats)
+		total.Started += stats.Started
+		total.Finished += stats.Finished
+		total.Errored += stats.Errored
+		total.DurationUs += stats.DurationUs
+	}
+	if total.Started != 0 {
+		rpcCounters["total"] = rpcDiagnosticsJSON(total)
+	}
+	for _, activity := range snapshot.Current {
+		methods = append(methods, map[string]any{
+			"method":      activity.Method,
+			"duration_us": strconv.FormatUint(activity.DurationUs, 10),
+		})
+	}
+
+	nodeStore := make(map[string]any)
+	if services != nil && services.GetCounts != nil {
+		if counts := services.GetCounts().NodeStore; counts != nil {
+			nodeStore["node_writes"] = strconv.FormatUint(counts.Writes, 10)
+			nodeStore["node_reads_total"] = strconv.FormatUint(counts.Reads, 10)
+			nodeStore["node_reads_hit"] = strconv.FormatUint(counts.FetchHits, 10)
+			nodeStore["node_written_bytes"] = strconv.FormatUint(counts.WriteBytes, 10)
+			nodeStore["node_read_bytes"] = strconv.FormatUint(counts.ReadBytes, 10)
+		}
+	}
+
+	info["counters"] = map[string]any{
+		"rpc":       rpcCounters,
+		"job_queue": map[string]any{},
+		"nodestore": nodeStore,
+	}
+	info["current_activities"] = map[string]any{
+		"jobs":    []map[string]any{},
+		"methods": methods,
+	}
+}
+
+func rpcDiagnosticsJSON(stats types.RPCMethodDiagnostics) map[string]any {
+	return map[string]any{
+		"started":     strconv.FormatUint(stats.Started, 10),
+		"finished":    strconv.FormatUint(stats.Finished, 10),
+		"errored":     strconv.FormatUint(stats.Errored, 10),
+		"duration_us": strconv.FormatUint(stats.DurationUs, 10),
+	}
 }
 
 func buildServerWarnings(services *types.ServiceContainer, isAdmin bool) []types.WarningObject {
@@ -139,6 +238,7 @@ func buildServerWarnings(services *types.ServiceContainer, isAdmin bool) []types
 // When human is false it produces the server_state format (drops integers, converge_time, load_base, etc.).
 func buildServerInfo(ctx *types.RpcContext, human bool) map[string]any {
 	services := ctx.Services
+	now := serverSystemTime(services)
 	serverInfo := services.Ledger.GetServerInfo()
 	configSnapshot := services.ServerInfoConfig
 	baseFee, reserveBase, reserveIncrement := services.Ledger.GetCurrentFees()
@@ -231,7 +331,7 @@ func buildServerInfo(ctx *types.RpcContext, human bool) map[string]any {
 	// (human) and server_state (machine) like rippled's shared getServerInfo.
 	if ctx.IsAdmin {
 		info["pubkey_validator"] = resolveValidatorPubKey(services)
-		validatorList := resolveValidatorListSnapshot(services, time.Now())
+		validatorList := resolveValidatorListSnapshot(services, now)
 		if human {
 			info["validator_list"] = validatorList.summary
 		} else {
@@ -241,17 +341,10 @@ func buildServerInfo(ctx *types.RpcContext, human bool) map[string]any {
 
 	// hostid: only in human mode (server_info), matching rippled
 	if human {
-		info["hostid"] = cachedHostID
+		info["hostid"] = serverHostID(services, ctx.IsAdmin)
 	}
 
-	// time: rippled uses different formats for human vs machine
-	if human {
-		// rippled human format: "2024-Jan-15 12:34:56.789012 UTC"
-		info["time"] = time.Now().UTC().Format("2006-Jan-02 15:04:05.000000 UTC")
-	} else {
-		// rippled machine format: ISO 8601
-		info["time"] = time.Now().UTC().Format(time.RFC3339)
-	}
+	info["time"] = formatServerTime(now)
 
 	// last_close: converge_time_s (float seconds) for human, converge_time (int ms) for machine
 	proposers := 0
@@ -364,7 +457,6 @@ func buildServerInfo(ctx *types.RpcContext, human bool) map[string]any {
 	}
 
 	if haveLedger {
-		now := time.Now()
 		age, ageOK := ledgerAge(ledgerCloseTime, now)
 		if human {
 			baseFeeXRP := float64(baseFee) / 1_000_000.0

@@ -6,7 +6,6 @@ import (
 	"errors"
 	"fmt"
 	"strconv"
-	"time"
 
 	"github.com/LeJamon/go-xrpl/amendment"
 	"github.com/LeJamon/go-xrpl/codec/addresscodec"
@@ -103,10 +102,6 @@ func (a *ledgerAdapter) GetValidatedLedgerIndex() uint32 {
 func (a *ledgerAdapter) AcceptLedger(ctx context.Context) (uint32, error) {
 	a.env.Close()
 	return a.GetClosedLedgerIndex(), nil
-}
-
-func (a *ledgerAdapter) AcceptLedgerAt(ctx context.Context, _ time.Time) (uint32, error) {
-	return a.AcceptLedger(ctx)
 }
 
 func (a *ledgerAdapter) IsStandalone() bool { return true }

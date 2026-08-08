@@ -22,7 +22,7 @@ func signOffline(t *testing.T, params json.RawMessage) map[string]any {
 	t.Helper()
 	handler := &handlers.SignMethod{}
 	ctx := &types.RpcContext{Context: context.Background(), ApiVersion: types.ApiVersion1}
-	result, rpcErr := handler.Handle(ctx, params)
+	result, rpcErr := handler.Handle(signingEnabledContext(ctx), params)
 	require.Nil(t, rpcErr)
 	require.NotNil(t, result)
 	return result.(map[string]any)
@@ -113,7 +113,7 @@ func TestSign_SignatureTarget_Invalid(t *testing.T) {
 		"offline": true,
 		"signature_target": "NotAValidField"
 	}`)
-	_, err := handler.Handle(ctx, params)
+	_, err := handler.Handle(signingEnabledContext(ctx), params)
 	require.NotNil(t, err)
 	assert.Equal(t, types.RpcINVALID_PARAMS, err.Code)
 	assert.Contains(t, err.Message, "NotAValidField")
@@ -136,7 +136,7 @@ func TestSign_SignatureTarget_RequiresTopLevelSigningPubKey(t *testing.T) {
 		"offline": true,
 		"signature_target": "CounterpartySignature"
 	}`)
-	_, err := handler.Handle(ctx, params)
+	_, err := handler.Handle(signingEnabledContext(ctx), params)
 	require.NotNil(t, err)
 	assert.Equal(t, types.RpcINVALID_PARAMS, err.Code)
 	assert.Contains(t, err.Message, "SigningPubKey")
@@ -160,7 +160,7 @@ func TestSign_SignatureTarget_DisallowedForTransaction(t *testing.T) {
 		"offline": true,
 		"signature_target": "CounterpartySignature"
 	}`)
-	_, err := handler.Handle(ctx, params)
+	_, err := handler.Handle(signingEnabledContext(ctx), params)
 	require.NotNil(t, err)
 	assert.Equal(t, types.RpcINVALID_PARAMS, err.Code)
 	assert.Contains(t, err.Message, "disallowed location")
@@ -198,7 +198,7 @@ func TestSignFor_SignatureTarget(t *testing.T) {
 		"signature_target": "CounterpartySignature",
 	})
 	require.NoError(t, err)
-	result, rpcErr := handler.Handle(ctx, params)
+	result, rpcErr := handler.Handle(signingEnabledContext(ctx), params)
 	require.Nil(t, rpcErr)
 	response := result.(map[string]any)
 	resTx := response["tx_json"].(map[string]any)
@@ -244,7 +244,7 @@ func TestSignFor_SignatureTarget_DisallowedForTransaction(t *testing.T) {
 		"key_type": "secp256k1",
 		"signature_target": "CounterpartySignature"
 	}`)
-	_, err := handler.Handle(ctx, params)
+	_, err := handler.Handle(signingEnabledContext(ctx), params)
 	require.NotNil(t, err)
 	assert.Equal(t, types.RpcINVALID_PARAMS, err.Code)
 	assert.Contains(t, err.Message, "disallowed location")
@@ -267,7 +267,7 @@ func TestSignFor_SignatureTarget_Invalid(t *testing.T) {
 		"key_type": "secp256k1",
 		"signature_target": "Memo"
 	}`)
-	_, err := handler.Handle(ctx, params)
+	_, err := handler.Handle(signingEnabledContext(ctx), params)
 	require.NotNil(t, err)
 	assert.Equal(t, types.RpcINVALID_PARAMS, err.Code)
 	assert.Contains(t, err.Message, "Memo")
@@ -277,7 +277,7 @@ func TestSignatureTarget_ExplicitEmptyRejected(t *testing.T) {
 	t.Run("sign", func(t *testing.T) {
 		handler := &handlers.SignMethod{}
 		ctx := &types.RpcContext{Context: context.Background(), ApiVersion: types.ApiVersion1}
-		_, rpcErr := handler.Handle(ctx, json.RawMessage(`{
+		_, rpcErr := handler.Handle(signingEnabledContext(ctx), json.RawMessage(`{
 			"tx_json": {
 				"TransactionType": "LoanSet",
 				"Account": "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh",
@@ -298,7 +298,7 @@ func TestSignatureTarget_ExplicitEmptyRejected(t *testing.T) {
 	t.Run("sign_for", func(t *testing.T) {
 		handler := &handlers.SignForMethod{}
 		ctx := &types.RpcContext{Context: context.Background(), ApiVersion: types.ApiVersion1}
-		_, rpcErr := handler.Handle(ctx, json.RawMessage(`{
+		_, rpcErr := handler.Handle(signingEnabledContext(ctx), json.RawMessage(`{
 			"account": "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh",
 			"tx_json": {
 				"TransactionType": "Payment",
@@ -320,7 +320,7 @@ func TestSignatureTarget_ExplicitEmptyRejected(t *testing.T) {
 func TestSignFor_RejectsTopLevelTxnSignature(t *testing.T) {
 	handler := &handlers.SignForMethod{}
 	ctx := &types.RpcContext{Context: context.Background(), ApiVersion: types.ApiVersion1}
-	_, rpcErr := handler.Handle(ctx, json.RawMessage(`{
+	_, rpcErr := handler.Handle(signingEnabledContext(ctx), json.RawMessage(`{
 		"account": "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh",
 		"tx_json": {
 			"TransactionType": "LoanSet",
@@ -343,7 +343,7 @@ func TestSignFor_RejectsTopLevelTxnSignature(t *testing.T) {
 func TestSignFor_TxnSignatureDoesNotMaskMissingAccount(t *testing.T) {
 	handler := &handlers.SignForMethod{}
 	ctx := &types.RpcContext{Context: context.Background(), ApiVersion: types.ApiVersion1}
-	_, rpcErr := handler.Handle(ctx, json.RawMessage(`{
+	_, rpcErr := handler.Handle(signingEnabledContext(ctx), json.RawMessage(`{
 		"account": "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh",
 		"tx_json": {
 			"TransactionType": "LoanSet",
@@ -366,7 +366,7 @@ func TestSignFor_TxnSignatureDoesNotMaskMissingAccount(t *testing.T) {
 func TestSignFor_TxnSignatureDoesNotMaskMissingSequence(t *testing.T) {
 	handler := &handlers.SignForMethod{}
 	ctx := &types.RpcContext{Context: context.Background(), ApiVersion: types.ApiVersion1}
-	_, rpcErr := handler.Handle(ctx, json.RawMessage(`{
+	_, rpcErr := handler.Handle(signingEnabledContext(ctx), json.RawMessage(`{
 		"account": "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh",
 		"tx_json": {
 			"TransactionType": "LoanSet",
@@ -419,7 +419,7 @@ func TestSignFor_MissingSequencePrecedesLaterValidation(t *testing.T) {
 				`"PrincipalRequested":"1","Fee":"10"}` + test.extra + `}`)
 			handler := &handlers.SignForMethod{}
 			ctx := &types.RpcContext{Context: context.Background(), ApiVersion: types.ApiVersion1}
-			_, rpcErr := handler.Handle(ctx, params)
+			_, rpcErr := handler.Handle(signingEnabledContext(ctx), params)
 			require.NotNil(t, rpcErr)
 			assert.Equal(t, types.RpcINVALID_PARAMS, rpcErr.Code)
 			assert.Equal(t, "Missing field 'tx_json.Sequence'.", rpcErr.Message)
@@ -430,7 +430,7 @@ func TestSignFor_MissingSequencePrecedesLaterValidation(t *testing.T) {
 func TestSignFor_TxnSignatureDoesNotMaskNonEmptySigningPubKey(t *testing.T) {
 	handler := &handlers.SignForMethod{}
 	ctx := &types.RpcContext{Context: context.Background(), ApiVersion: types.ApiVersion1}
-	_, rpcErr := handler.Handle(ctx, json.RawMessage(`{
+	_, rpcErr := handler.Handle(signingEnabledContext(ctx), json.RawMessage(`{
 		"account": "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh",
 		"tx_json": {
 			"TransactionType": "Payment",
@@ -453,7 +453,7 @@ func TestSignFor_TxnSignatureDoesNotMaskNonEmptySigningPubKey(t *testing.T) {
 func TestSignFor_TargetTxnSignaturePrecedesTargetLocationValidation(t *testing.T) {
 	handler := &handlers.SignForMethod{}
 	ctx := &types.RpcContext{Context: context.Background(), ApiVersion: types.ApiVersion1}
-	_, rpcErr := handler.Handle(ctx, json.RawMessage(`{
+	_, rpcErr := handler.Handle(signingEnabledContext(ctx), json.RawMessage(`{
 		"account": "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh",
 		"tx_json": {
 			"TransactionType": "Payment",
@@ -476,7 +476,7 @@ func TestSignFor_TargetTxnSignaturePrecedesTargetLocationValidation(t *testing.T
 func TestSignFor_MissingFeePrecedesTxnSignature(t *testing.T) {
 	handler := &handlers.SignForMethod{}
 	ctx := &types.RpcContext{Context: context.Background(), ApiVersion: types.ApiVersion1}
-	_, rpcErr := handler.Handle(ctx, json.RawMessage(`{
+	_, rpcErr := handler.Handle(signingEnabledContext(ctx), json.RawMessage(`{
 		"account": "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh",
 		"tx_json": {
 			"TransactionType": "Payment",
@@ -623,7 +623,7 @@ func TestSignFor_PaymentFieldsPrecedeTxnSignature(t *testing.T) {
 func TestSign_SignatureTargetRejectsTopLevelSigners(t *testing.T) {
 	handler := &handlers.SignMethod{}
 	ctx := &types.RpcContext{Context: context.Background(), ApiVersion: types.ApiVersion1}
-	_, rpcErr := handler.Handle(ctx, json.RawMessage(`{
+	_, rpcErr := handler.Handle(signingEnabledContext(ctx), json.RawMessage(`{
 		"tx_json": {
 			"TransactionType": "LoanSet",
 			"Account": "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh",
@@ -645,7 +645,7 @@ func TestSign_SignatureTargetRejectsTopLevelSigners(t *testing.T) {
 func TestSign_SignersDoesNotMaskInvalidAccount(t *testing.T) {
 	handler := &handlers.SignMethod{}
 	ctx := &types.RpcContext{Context: context.Background(), ApiVersion: types.ApiVersion1}
-	_, rpcErr := handler.Handle(ctx, json.RawMessage(`{
+	_, rpcErr := handler.Handle(signingEnabledContext(ctx), json.RawMessage(`{
 		"tx_json": {
 			"TransactionType": "LoanSet",
 			"Account": "not-an-account",
@@ -746,7 +746,7 @@ func callSignFor(t *testing.T, txJSON map[string]any, account string) (map[strin
 	require.NoError(t, err)
 	handler := &handlers.SignForMethod{}
 	ctx := &types.RpcContext{Context: context.Background(), ApiVersion: types.ApiVersion1}
-	result, rpcErr := handler.Handle(ctx, params)
+	result, rpcErr := handler.Handle(signingEnabledContext(ctx), params)
 	if rpcErr != nil {
 		return nil, rpcErr
 	}
@@ -765,7 +765,7 @@ func callTargetSignFor(t *testing.T, txJSON map[string]any) *types.RpcError {
 	require.NoError(t, err)
 	handler := &handlers.SignForMethod{}
 	ctx := &types.RpcContext{Context: context.Background(), ApiVersion: types.ApiVersion1}
-	_, rpcErr := handler.Handle(ctx, params)
+	_, rpcErr := handler.Handle(signingEnabledContext(ctx), params)
 	return rpcErr
 }
 

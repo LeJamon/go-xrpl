@@ -6,6 +6,7 @@ import (
 	"fmt"
 
 	binarycodec "github.com/LeJamon/go-xrpl/codec/binarycodec"
+	ledgerService "github.com/LeJamon/go-xrpl/internal/ledger/service"
 	"github.com/LeJamon/go-xrpl/internal/rpc/types"
 	"github.com/LeJamon/go-xrpl/internal/tx"
 	"github.com/LeJamon/go-xrpl/internal/tx/ter"
@@ -44,22 +45,73 @@ func internalSubmitResult() *types.SubmitResult {
 	return errorSubmitResult(ter.TefINTERNAL)
 }
 
-func (a *LedgerServiceAdapter) submitTransaction(txJSON []byte, txBlobHex string, failHard bool) (*types.SubmitResult, error) {
-	// Parse the transaction from JSON
-	transaction, err := tx.ParseJSON(txJSON)
-	if err != nil {
-		return malformedSubmitResult(), nil
+func adaptSubmitResult(result *ledgerService.SubmitResult, broadcast, failHard bool) *types.SubmitResult {
+	if result == nil {
+		return nil
 	}
+	rpcResult := &types.SubmitResult{
+		EngineResult:           result.Result.String(),
+		EngineResultCode:       int(result.Result),
+		EngineResultMessage:    result.Message,
+		Applied:                result.Applied,
+		Broadcast:              broadcast,
+		Queued:                 result.Result == ter.TerQUEUED,
+		Kept:                   (!failHard || result.Result == ter.TesSUCCESS) && result.Result != ter.TefALREADY,
+		Fee:                    result.Fee,
+		CurrentLedger:          result.CurrentLedger,
+		CurrentLedgerCloseTime: result.CurrentLedgerCloseTime,
+		ValidatedLedger:        result.ValidatedLedger,
+	}
+	if result.CurrentLedgerState != nil {
+		state := *result.CurrentLedgerState
+		rpcResult.CurrentLedgerState = &types.SubmitLedgerState{
+			ValidatedLedgerIndex:     state.ValidatedLedgerIndex,
+			OpenLedgerCost:           state.OpenLedgerCost,
+			AccountSequenceNext:      state.AccountSequenceNext,
+			AccountSequenceAvailable: state.AccountSequenceAvailable,
+		}
+	}
+	return rpcResult
+}
 
-	// Use the original signed blob if provided, otherwise re-encode
+func (a *LedgerServiceAdapter) submitTransaction(txJSON []byte, txBlobHex string, failHard bool) (*types.SubmitResult, error) {
+	// Parse and canonicalize a supplied blob before handing it to the ledger.
+	// STTx serialization orders fields canonically, so accepted non-canonical
+	// input must not change the transaction ID or relayed bytes.
 	var rawBlob []byte
+	var transaction tx.Transaction
 	if txBlobHex != "" {
 		var decodeErr error
 		rawBlob, decodeErr = hex.DecodeString(txBlobHex)
 		if decodeErr != nil {
 			return nil, fmt.Errorf("decode tx_blob: %w", decodeErr)
 		}
+		var parseErr error
+		transaction, parseErr = tx.ParseFromBinary(rawBlob)
+		if parseErr != nil {
+			return malformedSubmitResult(), nil
+		}
+		fields, canonicalErr := binarycodec.DecodeBytes(rawBlob)
+		if canonicalErr != nil {
+			return malformedSubmitResult(), nil
+		}
+		canonicalHex, canonicalErr := binarycodec.Encode(fields)
+		if canonicalErr != nil {
+			return malformedSubmitResult(), nil
+		}
+		rawBlob, canonicalErr = hex.DecodeString(canonicalHex)
+		if canonicalErr != nil {
+			return nil, fmt.Errorf("decode canonical tx_blob: %w", canonicalErr)
+		}
+		transaction.SetRawBytes(rawBlob)
+	} else {
+		var parseErr error
+		transaction, parseErr = tx.ParseJSON(txJSON)
+		if parseErr != nil {
+			return malformedSubmitResult(), nil
+		}
 	}
+
 	if rawBlob == nil {
 		if txMap, fErr := transaction.Flatten(); fErr == nil {
 			if hexStr, eErr := binarycodec.Encode(txMap); eErr == nil {
@@ -102,23 +154,5 @@ func (a *LedgerServiceAdapter) submitTransaction(txJSON []byte, txBlobHex string
 		broadcast = true
 	}
 
-	// Keep regular submissions except duplicate transactions. Fail-hard keeps
-	// only an applied result.
-	queued := result.Result == ter.TerQUEUED
-	kept := (!failHard || result.Result == ter.TesSUCCESS) &&
-		result.Result != ter.TefALREADY
-
-	return &types.SubmitResult{
-		EngineResult:           result.Result.String(),
-		EngineResultCode:       int(result.Result),
-		EngineResultMessage:    result.Message,
-		Applied:                result.Applied,
-		Broadcast:              broadcast,
-		Queued:                 queued,
-		Kept:                   kept,
-		Fee:                    result.Fee,
-		CurrentLedger:          result.CurrentLedger,
-		CurrentLedgerCloseTime: result.CurrentLedgerCloseTime,
-		ValidatedLedger:        result.ValidatedLedger,
-	}, nil
+	return adaptSubmitResult(result, broadcast, failHard), nil
 }

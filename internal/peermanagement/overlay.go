@@ -6,7 +6,6 @@ import (
 	"encoding/binary"
 	"errors"
 	"fmt"
-	"io/fs"
 	"log/slog"
 	mrand "math/rand/v2"
 	"net"
@@ -831,34 +830,6 @@ func (o *Overlay) OutboundCriticalQueueFailures() (local, shared uint64) {
 // IncPeerBadData is a single map lookup + atomic add.
 func (o *Overlay) chargeIgnoredSquelch(peerID PeerID) {
 	o.IncPeerBadData(peerID, "squelch-ignored")
-}
-
-// loadOrCreateIdentity loads existing identity or creates a new one.
-func loadOrCreateIdentity(dataDir string) (*Identity, error) {
-	if dataDir == "" {
-		return GenerateIdentity()
-	}
-
-	// Try to load existing identity
-	id, err := LoadIdentity(dataDir)
-	if err == nil {
-		return id, nil
-	}
-	if !errors.Is(err, fs.ErrNotExist) && !errors.Is(err, ErrInvalidPrivateKey) {
-		return nil, err
-	}
-
-	// Generate new identity
-	id, err = GenerateIdentity()
-	if err != nil {
-		return nil, err
-	}
-
-	if err := id.Save(dataDir); err != nil {
-		return nil, fmt.Errorf("save identity: %w", err)
-	}
-
-	return id, nil
 }
 
 // Run starts the overlay and blocks until the context is cancelled. An

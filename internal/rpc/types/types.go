@@ -268,13 +268,15 @@ const (
 
 // Subscription request structure
 type SubscriptionRequest struct {
-	Streams          []SubscriptionType `json:"streams,omitempty"`
-	Accounts         []string           `json:"accounts,omitempty"`
-	AccountsProposed []string           `json:"accounts_proposed,omitempty"`
-	Books            []BookRequest      `json:"books,omitempty"`
-	URL              string             `json:"url,omitempty"`
-	URLUsername      string             `json:"url_username,omitempty"`
-	URLPassword      string             `json:"url_password,omitempty"`
+	Streams          []SubscriptionType                 `json:"streams,omitempty"`
+	Accounts         []string                           `json:"accounts,omitempty"`
+	AccountsProposed []string                           `json:"accounts_proposed,omitempty"`
+	RTAccounts       []string                           `json:"rt_accounts,omitempty"`
+	AccountHistory   *AccountHistorySubscriptionRequest `json:"account_history_tx_stream,omitempty"`
+	Books            []BookRequest                      `json:"books,omitempty"`
+	URL              string                             `json:"url,omitempty"`
+	URLUsername      string                             `json:"url_username,omitempty"`
+	URLPassword      string                             `json:"url_password,omitempty"`
 	// Username / Password are the deprecated aliases rippled still accepts
 	// for url_username / url_password. When present they take precedence,
 	// and they alone trigger credential updates on an already-registered
@@ -285,8 +287,8 @@ type SubscriptionRequest struct {
 	// subscription payload. A zero value uses DefaultApiVersion.
 	ApiVersion int `json:"-"`
 
-	// wire holds the as-received JSON of the array-valued fields, captured at
-	// decode time. The typed slices above collapse the four shapes rippled
+	// wire holds the as-received JSON of shape-sensitive fields, captured at
+	// decode time. Typed values collapse the shapes rippled
 	// distinguishes via isMember/isArray — absent, null, non-array, and empty
 	// array — into a single nil-or-empty slice, so the subscription manager
 	// reads wire to reproduce rippled's per-shape error codes. nil when the
@@ -300,6 +302,8 @@ type wireSubscriptionArrays struct {
 	streams          json.RawMessage
 	accounts         json.RawMessage
 	accountsProposed json.RawMessage
+	rtAccounts       json.RawMessage
+	accountHistory   json.RawMessage
 	books            json.RawMessage
 	url              json.RawMessage
 	username         json.RawMessage
@@ -307,13 +311,15 @@ type wireSubscriptionArrays struct {
 }
 
 // WireSubscriptionArrays exposes the raw JSON the wire carried for the
-// array-valued subscription fields. Present is false when the request was not
+// shape-sensitive subscription fields. Present is false when the request was not
 // decoded from JSON, in which case the manager falls back to the typed slices.
 type WireSubscriptionArrays struct {
 	Present          bool
 	Streams          json.RawMessage
 	Accounts         json.RawMessage
 	AccountsProposed json.RawMessage
+	RTAccounts       json.RawMessage
+	AccountHistory   json.RawMessage
 	Books            json.RawMessage
 }
 
@@ -327,8 +333,23 @@ func (r *SubscriptionRequest) WireArrays() WireSubscriptionArrays {
 		Streams:          r.wire.streams,
 		Accounts:         r.wire.accounts,
 		AccountsProposed: r.wire.accountsProposed,
+		RTAccounts:       r.wire.rtAccounts,
+		AccountHistory:   r.wire.accountHistory,
 		Books:            r.wire.books,
 	}
+}
+
+// WithoutAccountHistory returns a copy that preserves every wire field except
+// account_history_tx_stream. The transport handles that field through the
+// optional history-stream capability rather than the ordinary stream manager.
+func (r SubscriptionRequest) WithoutAccountHistory() SubscriptionRequest {
+	r.AccountHistory = nil
+	if r.wire != nil {
+		wire := *r.wire
+		wire.accountHistory = nil
+		r.wire = &wire
+	}
+	return r
 }
 
 // WithoutBooks returns a copy that preserves every wire field except books.
@@ -342,7 +363,7 @@ func (r SubscriptionRequest) WithoutBooks() SubscriptionRequest {
 	return r
 }
 
-// UnmarshalJSON captures the raw JSON of the array-valued fields before
+// UnmarshalJSON captures the raw JSON of shape-sensitive fields before
 // decoding the typed fields, so the subscription manager can apply rippled's
 // per-field, per-shape error codes — a typed slice cannot tell an absent field
 // from a null, an empty array, or a non-array value. Shape mismatches on the
@@ -357,6 +378,8 @@ func (r *SubscriptionRequest) UnmarshalJSON(data []byte) error {
 		streams:          m["streams"],
 		accounts:         m["accounts"],
 		accountsProposed: m["accounts_proposed"],
+		rtAccounts:       m["rt_accounts"],
+		accountHistory:   m["account_history_tx_stream"],
 		books:            m["books"],
 		url:              m["url"],
 		username:         m["username"],
@@ -365,6 +388,8 @@ func (r *SubscriptionRequest) UnmarshalJSON(data []byte) error {
 	_ = json.Unmarshal(m["streams"], &r.Streams)
 	_ = json.Unmarshal(m["accounts"], &r.Accounts)
 	_ = json.Unmarshal(m["accounts_proposed"], &r.AccountsProposed)
+	_ = json.Unmarshal(m["rt_accounts"], &r.RTAccounts)
+	_ = json.Unmarshal(m["account_history_tx_stream"], &r.AccountHistory)
 	_ = json.Unmarshal(m["books"], &r.Books)
 	_ = json.Unmarshal(m["url"], &r.URL)
 	_ = json.Unmarshal(m["url_username"], &r.URLUsername)
@@ -372,6 +397,14 @@ func (r *SubscriptionRequest) UnmarshalJSON(data []byte) error {
 	_ = json.Unmarshal(m["username"], &r.Username)
 	_ = json.Unmarshal(m["password"], &r.Password)
 	return nil
+}
+
+// AccountHistorySubscriptionRequest is the nested request carried by
+// account_history_tx_stream. StopHistoryTxOnly is meaningful only for
+// unsubscribe; its exact wire type and presence are validated from WireArrays.
+type AccountHistorySubscriptionRequest struct {
+	Account           string `json:"account"`
+	StopHistoryTxOnly bool   `json:"stop_history_tx_only,omitempty"`
 }
 
 // HasURL reports whether the request selects rippled's url (RPCSub) branch.

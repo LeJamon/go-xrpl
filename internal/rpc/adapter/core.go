@@ -2,7 +2,6 @@ package adapter
 
 import (
 	"context"
-	"time"
 
 	"github.com/LeJamon/go-xrpl/internal/ledger/service"
 	"github.com/LeJamon/go-xrpl/internal/rpc/types"
@@ -25,6 +24,7 @@ var _ types.RangedTransactionLookup = (*LedgerServiceAdapter)(nil)
 var _ types.TransactionSearcher = (*LedgerServiceAdapter)(nil)
 var _ types.LedgerContextReader = (*LedgerServiceAdapter)(nil)
 var _ types.LedgerViewSource = (*LedgerServiceAdapter)(nil)
+var _ types.OpenLedgerViewSource = (*LedgerServiceAdapter)(nil)
 var _ types.TransactionRulesSource = (*LedgerServiceAdapter)(nil)
 
 // NewLedgerServiceAdapter creates a new adapter
@@ -56,11 +56,6 @@ func (a *LedgerServiceAdapter) GetValidatedLedgerIndex() uint32 {
 // AcceptLedger closes the current open ledger (standalone mode only)
 func (a *LedgerServiceAdapter) AcceptLedger(ctx context.Context) (uint32, error) {
 	return a.svc.AcceptLedger(ctx)
-}
-
-// AcceptLedgerAt is AcceptLedger with an explicit close_time.
-func (a *LedgerServiceAdapter) AcceptLedgerAt(ctx context.Context, closeTime time.Time) (uint32, error) {
-	return a.svc.AcceptLedgerAt(ctx, closeTime)
 }
 
 // IsStandalone returns true if running in standalone mode

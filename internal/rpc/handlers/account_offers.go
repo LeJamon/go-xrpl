@@ -10,14 +10,14 @@ import (
 
 // AccountOffersMethod handles account_offers: it lists the Offer ledger
 // entries the account currently owns.
-type AccountOffersMethod struct{ BaseHandler }
+type AccountOffersMethod struct{ baseHandler }
 
 func (m *AccountOffersMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (any, *types.RpcError) {
 	fields, account, parseErr := accountPageParams(params)
 	if parseErr != nil {
 		return nil, parseErr
 	}
-	if err := RequireLedgerService(ctx.Services); err != nil {
+	if err := requireLedgerService(ctx.Services); err != nil {
 		return nil, err
 	}
 	ledgerIndex, ledgerFields, selErr := preflightAccountPage(ctx, params, account, "Failed to get account information", true)
@@ -25,7 +25,7 @@ func (m *AccountOffersMethod) Handle(ctx *types.RpcContext, params json.RawMessa
 		return nil, selErr
 	}
 
-	limit, limitErr := ReadLimitField(params, LimitAccountOffers, ctx.Unlimited)
+	limit, limitErr := readLimitField(params, limitAccountOffers, ctx.Unlimited)
 	if limitErr != nil {
 		return nil, limitErr
 	}

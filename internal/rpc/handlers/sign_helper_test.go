@@ -57,13 +57,24 @@ func TestFormatSignResult(t *testing.T) {
 		t.Run(test.name, func(t *testing.T) {
 			txMap := map[string]any{"TransactionType": "Payment", "Amount": "10", "hash": "HASH"}
 			response := formatSignResult(signResult{TxMap: txMap, TxBlob: "BLOB"}, test.apiVersion)
-			if response["tx_blob"] != "BLOB" || txMap["DeliverMax"] != "10" {
+			if response["tx_blob"] != "BLOB" {
 				t.Fatalf("unexpected response: %#v", response)
 			}
 			_, hasRootHash := response["hash"]
-			_, hasAmount := txMap["Amount"]
-			if hasRootHash != (test.apiVersion > 1) || hasAmount != (test.apiVersion == 1) {
+			txJSON, ok := response["tx_json"].(map[string]any)
+			if !ok {
+				t.Fatalf("missing tx_json: %#v", response)
+			}
+			_, sourceHasDeliverMax := txMap["DeliverMax"]
+			_, sourceHasHash := txMap["hash"]
+			_, hasAmount := txJSON["Amount"]
+			_, hasDeliverMax := txJSON["DeliverMax"]
+			_, hasNestedHash := txJSON["hash"]
+			if sourceHasDeliverMax || !sourceHasHash || hasRootHash != (test.apiVersion > 1) || hasAmount != (test.apiVersion == 1) || !hasDeliverMax || hasNestedHash != (test.apiVersion == 1) {
 				t.Fatalf("api %d response = %#v", test.apiVersion, response)
+			}
+			if test.apiVersion > 1 && response["hash"] != "HASH" {
+				t.Fatalf("api %d root hash = %#v", test.apiVersion, response["hash"])
 			}
 		})
 	}
@@ -143,5 +154,42 @@ func TestSignTransactionJSONPreservesExplicitEmptyFields(t *testing.T) {
 				t.Fatalf("verify signed transaction: %v", err)
 			}
 		})
+	}
+}
+
+func TestSignTransactionJSONValidatesTargetBeforeTransactionPresence(t *testing.T) {
+	params := json.RawMessage(`{
+		"seed_hex":"00000000000000000000000000000000",
+		"key_type":"ed25519",
+		"signature_target":"NotASignatureField"
+	}`)
+	_, rpcErr := signTransactionJSON(
+		&types.RpcContext{Context: context.Background(), ApiVersion: types.ApiVersion2},
+		nil,
+		signCredentials{},
+		true,
+		params,
+		"NotASignatureField",
+	)
+	if rpcErr == nil || rpcErr.Code != types.RpcINVALID_PARAMS || rpcErr.Message != "NotASignatureField" {
+		t.Fatalf("unexpected error: %#v", rpcErr)
+	}
+}
+
+func TestSignTransactionJSONRejectsNonObjectTransaction(t *testing.T) {
+	params := json.RawMessage(`{
+		"seed_hex":"00000000000000000000000000000000",
+		"key_type":"ed25519"
+	}`)
+	_, rpcErr := signTransactionJSON(
+		&types.RpcContext{Context: context.Background(), ApiVersion: types.ApiVersion2},
+		json.RawMessage(`[]`),
+		signCredentials{},
+		true,
+		params,
+		"",
+	)
+	if rpcErr == nil || rpcErr.Code != types.RpcINVALID_PARAMS || rpcErr.Message != "Invalid field 'tx_json', not object." {
+		t.Fatalf("unexpected error: %#v", rpcErr)
 	}
 }

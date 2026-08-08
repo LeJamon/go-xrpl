@@ -18,12 +18,12 @@ import (
 // standalone only). Pending txs are re-applied in CanonicalTXSet order on a fresh
 // copy of the LCL.
 func (s *Service) AcceptLedger(ctx context.Context) (uint32, error) {
-	return s.AcceptLedgerAt(ctx, time.Time{})
+	return s.acceptLedgerAt(ctx, time.Time{})
 }
 
-// AcceptLedgerAt is AcceptLedger with an explicit close_time (zero → time.Now()),
-// used by replay tests to keep close_time byte-identical.
-func (s *Service) AcceptLedgerAt(ctx context.Context, explicitCloseTime time.Time) (uint32, error) {
+// acceptLedgerAt lets replay tests keep close_time byte-identical without
+// exposing deterministic clock control through the RPC service or wire.
+func (s *Service) acceptLedgerAt(ctx context.Context, explicitCloseTime time.Time) (uint32, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.historyComponent.mu.Lock()

@@ -18,7 +18,7 @@ import (
 
 // WalletProposeMethod handles the wallet_propose RPC method
 // This generates a new random keypair or derives one from a provided seed/passphrase
-type WalletProposeMethod struct{ AdminHandler }
+type WalletProposeMethod struct{ adminHandler }
 
 // walletProposeRequest represents the request parameters
 type walletProposeRequest struct {

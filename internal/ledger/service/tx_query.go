@@ -13,6 +13,7 @@ import (
 	"github.com/LeJamon/go-xrpl/drops"
 	"github.com/LeJamon/go-xrpl/internal/feetrack"
 	"github.com/LeJamon/go-xrpl/internal/ledger"
+	"github.com/LeJamon/go-xrpl/internal/ledger/localtxs"
 	"github.com/LeJamon/go-xrpl/internal/ledger/openledger"
 	"github.com/LeJamon/go-xrpl/internal/ledger/service/svcerr"
 	"github.com/LeJamon/go-xrpl/internal/ledger/state"
@@ -48,6 +49,21 @@ type SubmitResult struct {
 
 	// ValidatedLedger is the highest validated ledger sequence
 	ValidatedLedger uint32
+
+	// CurrentLedgerState is the immutable state snapshot captured at submit
+	// time. It is nil when no validated ledger exists or the authoritative
+	// account/fee state could not be derived.
+	CurrentLedgerState *SubmitLedgerState
+}
+
+// SubmitLedgerState contains the current-ledger values returned by submit.
+// The pointer on SubmitResult distinguishes an unavailable snapshot from
+// valid zero-valued fields.
+type SubmitLedgerState struct {
+	ValidatedLedgerIndex     uint32
+	OpenLedgerCost           uint64
+	AccountSequenceNext      uint32
+	AccountSequenceAvailable uint32
 }
 
 // SubmitTransaction is the RPC entry point for tx ingress. It mirrors
@@ -120,6 +136,7 @@ func (s *Service) SubmitTransaction(transaction tx.Transaction, rawBlob []byte, 
 			CurrentLedger: s.openLedgerView.Current().Sequence(),
 		}, nil
 	}
+	preprocessValid := sign.CheckSTTxSignature(ptx.Parsed, cfg.Rules, !cfg.SkipSignatureVerification) == ""
 	// Verify the signature before SubmitDetailed acquires the apply mutex so the
 	// in-strand check reuses the cached verdict (#1105). Skipped in standalone
 	// mode, matching cfg.SkipSignatureVerification above.
@@ -129,7 +146,8 @@ func (s *Service) SubmitTransaction(transaction tx.Transaction, rawBlob []byte, 
 
 	outcome := s.openLedgerView.SubmitDetailed(ptx, cfg, s.txQueue)
 
-	currentSeq := s.openLedgerView.Current().Sequence()
+	current := s.openLedgerView.Current()
+	currentSeq := current.Sequence()
 	result := &SubmitResult{
 		Result:        outcome.Result,
 		Applied:       outcome.Applied,
@@ -140,6 +158,7 @@ func (s *Service) SubmitTransaction(transaction tx.Transaction, rawBlob []byte, 
 	}
 	if s.validatedLedger != nil {
 		result.ValidatedLedger = s.validatedLedger.Sequence()
+		result.CurrentLedgerState = s.submitLedgerStateLocked(current, ptx.Parsed, cfg)
 	}
 	if outcome.Class == openledger.ResultSuccess {
 		s.rememberRelayTransaction(ptx.Hash, ptx.Blob, outcome.Queued)
@@ -166,14 +185,14 @@ func (s *Service) SubmitTransaction(transaction tx.Transaction, rawBlob []byte, 
 	// enforceFailHard (NetworkOPs.cpp:1674) suppresses both this push (1677)
 	// and relay (1685-1689) so the caller learns about the failure
 	// immediately without a delayed re-application.
-	if rawBlob != nil && s.localTxs != nil {
+	if preprocessValid && rawBlob != nil && s.localTxs != nil {
 		tr := outcome.Result
 		if (!failHard || tr == ter.TesSUCCESS) && tr != ter.TefALREADY {
 			s.localTxs.PushBack(currentSeq, ptx)
 		}
 	}
 
-	// Standalone-mode close (AcceptLedgerAt) still drains pendingTxs
+	// Standalone-mode close still drains pendingTxs
 	// for the canonical re-sort. Append on apply so the legacy path
 	// keeps working alongside the openLedgerView ingress.
 	if outcome.Applied && rawBlob != nil {
@@ -186,6 +205,74 @@ func (s *Service) SubmitTransaction(transaction tx.Transaction, rawBlob []byte, 
 	}
 
 	return result, nil
+}
+
+// submitLedgerStateLocked derives the four submit-state fields from the same
+// post-submit view and TxQ snapshot while the service lock is held. Any read or
+// decode failure omits the complete snapshot rather than returning mixed state.
+func (s *Service) submitLedgerStateLocked(
+	current *ledger.Ledger,
+	parsedTx tx.Transaction,
+	cfg openledger.ApplyConfig,
+) *SubmitLedgerState {
+	if current == nil || parsedTx == nil {
+		return nil
+	}
+
+	common := parsedTx.GetCommon()
+	if common == nil {
+		return nil
+	}
+	accountID, err := state.DecodeAccountID(common.Account)
+	if err != nil {
+		return nil
+	}
+	account, err := state.ReadAccountRoot(current, accountID)
+	if err != nil {
+		return nil
+	}
+	accountSeq := uint32(0)
+	if account != nil {
+		accountSeq = account.Sequence
+	}
+
+	baseFee, reserveBase, reserveIncrement, err := readFeesFromLedgerContext(context.Background(), current)
+	if err != nil {
+		return nil
+	}
+	feeConfig := tx.EngineConfig{
+		BaseFee:                   baseFee,
+		ReserveBase:               reserveBase,
+		ReserveIncrement:          reserveIncrement,
+		LedgerSequence:            current.Sequence(),
+		ParentCloseTime:           cfg.ParentCloseTime,
+		ApplicationCloseTime:      cfg.ApplicationCloseTime,
+		ApplicationCloseTimeSet:   cfg.ApplicationCloseTimeSet,
+		ParentHash:                current.ParentHash(),
+		NetworkID:                 s.config.NetworkID,
+		SkipSignatureVerification: cfg.SkipSignatureVerification,
+		ApplyFlags:                cfg.ApplyFlags,
+		ViewOpen:                  cfg.Mode == openledger.OpenLedgerMode,
+		Standalone:                s.config.Standalone,
+		Rules:                     cfg.Rules,
+		FeeTrack:                  s.feeTrack,
+		Logger:                    s.config.Logger,
+	}
+	baseFeeForTx := computeBaseFeeForTx(current, parsedTx, feeConfig)
+	availableSeq := accountSeq
+	openLedgerCost := baseFeeForTx
+	if s.txQueue != nil {
+		feeAndSeq := s.txQueue.TxRequiredFeeAndSeq(accountID, accountSeq, baseFeeForTx, current.TxCount())
+		openLedgerCost = feeAndSeq.RequiredFee
+		availableSeq = feeAndSeq.AvailableSeq
+	}
+
+	return &SubmitLedgerState{
+		ValidatedLedgerIndex:     s.validatedLedger.Sequence(),
+		OpenLedgerCost:           openLedgerCost,
+		AccountSequenceNext:      accountSeq,
+		AccountSequenceAvailable: availableSeq,
+	}
 }
 
 // dispatchProposedTransaction publishes only transactions committed to the
@@ -201,12 +288,17 @@ func (s *Service) dispatchProposedTransaction(
 		!mayPublishProposedTransaction(ptx.Parsed.GetCommon().GetFlags()) {
 		return
 	}
+	ownerFunds, _, err := proposedOwnerFunds(rawBlob, current)
+	if err != nil {
+		s.logger.Error("failed to compute proposed transaction owner funds", "hash", fmt.Sprintf("%X", ptx.Hash), "err", err)
+		return
+	}
 	s.eventPublisher.dispatchSubmittedTxEvent(SubmittedTxEvent{
 		RawBlob:          append([]byte(nil), rawBlob...),
 		TxHash:           ptx.Hash,
 		AffectedAccounts: extractMentionedAccounts(rawBlob),
 		CurrentLedger:    current.Sequence(),
-		OwnerFunds:       proposedOwnerFunds(rawBlob, current),
+		OwnerFunds:       ownerFunds,
 		Result: Result{
 			Code:    int(outcome.Result),
 			Name:    outcome.Result.String(),
@@ -254,7 +346,7 @@ func readFeesFromLedgerContext(ctx context.Context, l *ledger.Ledger) (baseFee, 
 
 	feeSettings, err := state.ParseFeeSettings(data)
 	if err != nil {
-		return uint64(fees.Base), uint64(fees.Reserve), uint64(fees.Increment), nil
+		return 0, 0, 0, fmt.Errorf("parse FeeSettings: %w", err)
 	}
 	fees = mergeFeeSettings(fees, feeSettings)
 	return uint64(fees.Base), uint64(fees.Reserve), uint64(fees.Increment), nil
@@ -264,6 +356,13 @@ func readFeesFromLedgerContext(ctx context.Context, l *ledger.Ledger) (baseFee, 
 // ledger, falling back to the protocol defaults when its FeeSettings entry is unavailable.
 func FeesFromLedger(l *ledger.Ledger) (baseFee, reserveBase, reserveIncrement uint64) {
 	return readFeesFromLedger(l)
+}
+
+// FeesFromLedgerStrict returns the fee settings carried by l while preserving
+// storage and decoding failures. A missing FeeSettings entry uses the ledger's
+// configured fee values.
+func FeesFromLedgerStrict(l *ledger.Ledger) (baseFee, reserveBase, reserveIncrement uint64, err error) {
+	return readFeesFromLedgerContext(context.Background(), l)
 }
 
 // GetCurrentFees returns the current fee settings read from the FeeSettings
@@ -506,8 +605,117 @@ type LedgerContext struct {
 	CloseTime int64
 }
 
-// GetTransaction retrieves a transaction by its hash
+// getOpenTransactionLocked looks up an accepted transaction in the
+// authoritative open-ledger view. The caller must hold s.mu.RLock or s.mu.
+// Open leaves are always transaction+metadata records; validate and split the
+// complete leaf before exposing the transaction-only bytes to RPC callers.
+func (s *Service) getOpenTransactionLocked(txHash [32]byte) (*TransactionResult, bool, error) {
+	if s.openLedgerView == nil {
+		return nil, false, nil
+	}
+	current := s.openLedgerView.Current()
+	if current == nil {
+		return nil, false, errors.New("open ledger view has no current ledger")
+	}
+
+	data, found, err := current.GetTransaction(txHash)
+	if err != nil {
+		return nil, false, fmt.Errorf("%w: get open-ledger transaction: %v", svcerr.ErrTxnDataCorrupt, err)
+	}
+	if !found {
+		return nil, false, nil
+	}
+
+	accepted := ParseAcceptedTransaction(data)
+	if err := accepted.ParseError(); err != nil {
+		return nil, false, fmt.Errorf("%w: decode open-ledger transaction: %v", svcerr.ErrTxnDataCorrupt, err)
+	}
+	result, err := transactionResultFromRawBlob(accepted.TransactionBlob(), txHash, "open-ledger")
+	if err != nil {
+		return nil, false, err
+	}
+	return result, true, nil
+}
+
+func transactionResultFromRawBlob(blob []byte, txHash [32]byte, source string) (*TransactionResult, error) {
+	parsed, err := tx.ParseFromBinary(blob)
+	if err != nil {
+		return nil, fmt.Errorf("%w: parse %s transaction: %v", svcerr.ErrTxnDataCorrupt, source, err)
+	}
+	computedHash, err := tx.ComputeTransactionHash(parsed)
+	if err != nil {
+		return nil, fmt.Errorf("%w: hash %s transaction: %v", svcerr.ErrTxnDataCorrupt, source, err)
+	}
+	if computedHash != txHash {
+		return nil, fmt.Errorf("%w: %s transaction hash mismatch: key=%x computed=%x", svcerr.ErrTxnDataCorrupt, source, txHash, computedHash)
+	}
+	txData, err := tx.EncodeWithVL(blob)
+	if err != nil {
+		return nil, fmt.Errorf("%w: encode %s transaction: %v", svcerr.ErrTxnDataCorrupt, source, err)
+	}
+	return &TransactionResult{
+		TxData: txData,
+		// Transactions outside a closed ledger are not validated and have no
+		// ledger metadata. Keep the closed-ledger fields at zero/invalid values.
+		TxIndex: invalidTransactionIndex,
+	}, nil
+}
+
+func (s *Service) getPendingTransaction(queue *txq.TxQ, locals *localtxs.LocalTxs, txHash [32]byte) (*TransactionResult, bool, error) {
+	if queue != nil {
+		if blob, ok := queue.GetTxBlob(txHash); ok {
+			result, err := transactionResultFromRawBlob(blob, txHash, "queued")
+			return result, true, err
+		}
+	}
+	blob, _, _, ok := s.relayCacheGet(txHash)
+	if ok {
+		result, err := transactionResultFromRawBlob(blob, txHash, "relay-cache")
+		return result, true, err
+	}
+	if locals != nil {
+		if pending, ok := locals.Get(txHash); ok {
+			result, err := transactionResultFromRawBlob(pending.Blob, txHash, "held")
+			return result, true, err
+		}
+	}
+	return nil, false, nil
+}
+
+// GetTransaction retrieves a transaction by its hash. The current open view
+// is checked first, before historical/index lookups, matching rippled's
+// transaction-cache behavior.
 func (s *Service) GetTransaction(txHash [32]byte) (*TransactionResult, error) {
+	s.mu.RLock()
+	openResult, found, openErr := s.getOpenTransactionLocked(txHash)
+	queue := s.txQueue
+	locals := s.localTxs
+	s.mu.RUnlock()
+	if openErr != nil {
+		return nil, openErr
+	}
+	if found {
+		return openResult, nil
+	}
+
+	historyResult, historyErr := s.getHistoricalTransaction(txHash)
+	if historyErr == nil {
+		return historyResult, nil
+	}
+	if !errors.Is(historyErr, svcerr.ErrTxnNotFound) {
+		return nil, historyErr
+	}
+	queuedResult, found, queuedErr := s.getPendingTransaction(queue, locals, txHash)
+	if queuedErr != nil {
+		return nil, queuedErr
+	}
+	if found {
+		return queuedResult, nil
+	}
+	return nil, svcerr.ErrTxnNotFound
+}
+
+func (s *Service) getHistoricalTransaction(txHash [32]byte) (*TransactionResult, error) {
 	s.historyComponent.mu.RLock()
 	defer s.historyComponent.mu.RUnlock()
 
@@ -547,16 +755,23 @@ func (s *Service) GetTransaction(txHash [32]byte) (*TransactionResult, error) {
 }
 
 func (s *Service) SearchTransaction(ctx context.Context, txHash [32]byte, ledgerRange *relationaldb.LedgerRange) (*TransactionSearchResult, error) {
+	cached, cacheErr := s.GetTransaction(txHash)
+	if cacheErr != nil && !errors.Is(cacheErr, svcerr.ErrTxnNotFound) {
+		return nil, cacheErr
+	}
+
 	s.mu.RLock()
 	db := s.relationalDB
 	s.mu.RUnlock()
+	if cacheErr == nil && !cached.Validated {
+		return &TransactionSearchResult{Transaction: cached, Searched: relationaldb.TxSearchAll}, nil
+	}
 
-	if db == nil {
-		result, err := s.GetTransaction(txHash)
-		if err != nil {
-			return nil, err
+	if db == nil || db.Transaction() == nil {
+		if cacheErr != nil {
+			return nil, cacheErr
 		}
-		return &TransactionSearchResult{Transaction: result, Searched: relationaldb.TxSearchUnknown}, nil
+		return &TransactionSearchResult{Transaction: cached, Searched: relationaldb.TxSearchUnknown}, nil
 	}
 
 	info, searched, err := db.Transaction().GetTransaction(ctx, relationaldb.Hash(txHash), ledgerRange)
@@ -624,23 +839,24 @@ func (s *Service) GetLedgerContext(ctx context.Context, sequence uint32) (*Ledge
 	}, nil
 }
 
-// GetTransactionWithRange preserves the in-memory lookup fast path, then uses
-// the relational transaction table to report rippled-compatible searched-all
-// semantics when the hash is absent. The hash lookup itself is deliberately
-// unrestricted by the supplied range.
+// GetTransactionWithRange returns an unvalidated in-memory transaction before
+// consulting the relational transaction table for the requested range.
 func (s *Service) GetTransactionWithRange(ctx context.Context, txHash [32]byte, minLedger, maxLedger uint32) (*TransactionResult, relationaldb.TxSearchResult, error) {
-	result, cacheErr := s.GetTransaction(txHash)
-	if cacheErr == nil {
-		return result, relationaldb.TxSearchAll, nil
-	}
-	if !errors.Is(cacheErr, svcerr.ErrTxnNotFound) {
+	cached, cacheErr := s.GetTransaction(txHash)
+	if cacheErr != nil && !errors.Is(cacheErr, svcerr.ErrTxnNotFound) {
 		return nil, relationaldb.TxSearchUnknown, cacheErr
 	}
-	if s.relationalDB == nil || s.relationalDB.Transaction() == nil {
-		return nil, relationaldb.TxSearchUnknown, cacheErr
+	s.mu.RLock()
+	db := s.relationalDB
+	s.mu.RUnlock()
+	if cacheErr == nil && !cached.Validated {
+		return cached, relationaldb.TxSearchAll, nil
+	}
+	if db == nil || db.Transaction() == nil {
+		return cached, relationaldb.TxSearchUnknown, cacheErr
 	}
 
-	dbResult, searched, err := s.relationalDB.Transaction().GetTransaction(ctx, relationaldb.Hash(txHash), &relationaldb.LedgerRange{
+	dbResult, searched, err := db.Transaction().GetTransaction(ctx, relationaldb.Hash(txHash), &relationaldb.LedgerRange{
 		Min: relationaldb.LedgerIndex(minLedger),
 		Max: relationaldb.LedgerIndex(maxLedger),
 	})
@@ -671,7 +887,7 @@ func (s *Service) GetTransactionWithRange(ctx context.Context, txHash [32]byte, 
 	var ledgerHash [32]byte
 	var closeTime int64
 	validated := false
-	if ledgerRepo := s.relationalDB.Ledger(); ledgerRepo != nil && dbResult.LedgerSeq != 0 {
+	if ledgerRepo := db.Ledger(); ledgerRepo != nil && dbResult.LedgerSeq != 0 {
 		ledgerInfo, ledgerErr := ledgerRepo.GetLedgerInfoBySeq(ctx, dbResult.LedgerSeq)
 		if ledgerErr != nil {
 			return nil, searched, fmt.Errorf("get transaction ledger: %w", ledgerErr)
@@ -692,28 +908,6 @@ func (s *Service) GetTransactionWithRange(ctx context.Context, txHash [32]byte, 
 		TxIndex:     txIndex,
 		CloseTime:   closeTime,
 	}, searched, nil
-}
-
-// StoreTransaction stores a transaction in the current open ledger
-func (s *Service) StoreTransaction(txHash [32]byte, txData []byte) error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	s.historyComponent.mu.Lock()
-	defer s.historyComponent.mu.Unlock()
-
-	if s.openLedger == nil {
-		return ErrNoOpenLedger
-	}
-
-	// Add to the open ledger's transaction map
-	if err := s.openLedger.AddTransaction(txHash, txData); err != nil {
-		return err
-	}
-
-	// Index the transaction to the current open ledger sequence
-	s.txIndex[txHash] = s.openLedger.Sequence()
-
-	return nil
 }
 
 // SimulateTransaction runs a transaction against a snapshot of the open ledger

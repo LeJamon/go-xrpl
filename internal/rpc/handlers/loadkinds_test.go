@@ -37,6 +37,7 @@ func TestLoadCostEarlyErrorTiming(t *testing.T) {
 			ctx := &types.RpcContext{
 				Context:  context.Background(),
 				LoadCost: uint32(loadtrack.LoadReference),
+				Services: &types.ServiceContainer{Capabilities: types.RPCCapabilities{SigningEnabled: true}},
 			}
 			_, rpcErr := test.handler.Handle(ctx, test.params)
 			if rpcErr == nil {
@@ -57,10 +58,14 @@ func TestRipplePathFindBusyAdmissionIsHeavy(t *testing.T) {
 	ctx := &types.RpcContext{
 		Context:  context.Background(),
 		LoadCost: uint32(loadtrack.LoadReference),
-		Services: &types.ServiceContainer{ClientLoad: shedder},
+		Services: &types.ServiceContainer{
+			Ledger:       &loadAdmissionLedger{serverInfo: &types.LedgerServerInfo{Standalone: true}},
+			ClientLoad:   shedder,
+			Capabilities: types.RPCCapabilities{PathSearchMax: 3},
+		},
 	}
 
-	_, rpcErr := (&RipplePathFindMethod{}).Handle(ctx, json.RawMessage(`{}`))
+	_, rpcErr := (&ripplePathFindMethod{}).Handle(ctx, json.RawMessage(`{}`))
 	if rpcErr == nil {
 		t.Fatal("expected busy path-find request to fail admission")
 	}

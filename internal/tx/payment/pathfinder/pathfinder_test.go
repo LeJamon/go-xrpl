@@ -1676,7 +1676,7 @@ func TestNewPathRequest_Defaults(t *testing.T) {
 }
 
 func TestPathRequestAdjustsPersistentSearchLevel(t *testing.T) {
-	request := &PathRequest{}
+	request := &PathRequest{searchLevelMax: SearchLevelMax}
 
 	request.adjustSearchLevel(true, false)
 	require.Equal(t, SearchLevelFast, request.searchLevel)
@@ -1691,6 +1691,17 @@ func TestPathRequestAdjustsPersistentSearchLevel(t *testing.T) {
 	request.lastSuccess = true
 	request.adjustSearchLevel(false, false)
 	require.Equal(t, SearchLevelDefault, request.searchLevel)
+}
+
+func TestPathRequestAdjustsToConfiguredSearchLevelMax(t *testing.T) {
+	request := &PathRequest{searchLevel: SearchLevelDefault + 1, searchLevelMax: 5}
+
+	request.adjustSearchLevel(false, false)
+	require.Equal(t, 4, request.searchLevel)
+	request.adjustSearchLevel(false, false)
+	require.Equal(t, 5, request.searchLevel)
+	request.adjustSearchLevel(false, false)
+	require.Equal(t, 5, request.searchLevel)
 }
 
 func TestNewPathRequest_WithSendMax(t *testing.T) {

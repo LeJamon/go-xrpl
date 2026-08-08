@@ -46,17 +46,15 @@ type pathAlternativeJSON struct {
 	SourceAmount      any                  `json:"source_amount"`
 }
 
-// RipplePathFindMethod handles the ripple_path_find RPC method.
+// ripplePathFindMethod handles the ripple_path_find RPC method.
 // Reference: rippled RipplePathFind.cpp + PathRequest::parseJson/isValid.
-type RipplePathFindMethod struct{ BaseHandler }
+type ripplePathFindMethod struct{ baseHandler }
 
-func (m *RipplePathFindMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (any, *types.RpcError) {
-	setLoadHeavy(ctx)
-	release, rpcErr := AcquirePathfind(ctx)
-	if rpcErr != nil {
+func (m *ripplePathFindMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (any, *types.RpcError) {
+	if rpcErr := RequirePathSearch(ctx); rpcErr != nil {
 		return nil, rpcErr
 	}
-	defer release()
+	setLoadHeavy(ctx)
 
 	probe := map[string]json.RawMessage{}
 	if params != nil {
@@ -68,13 +66,33 @@ func (m *RipplePathFindMethod) Handle(ctx *types.RpcContext, params json.RawMess
 	if ledgerSpecErr != nil {
 		return nil, ledgerSpecErr
 	}
+	if rpcErr := requireLedgerService(ctx.Services); rpcErr != nil {
+		return nil, rpcErr
+	}
 	var view types.LedgerStateView
 	var meta *pathFindLedgerMeta
+	var rpcErr *types.RpcError
 	standalone := ctx != nil && ctx.Services != nil && ctx.Services.Ledger != nil &&
 		ctx.Services.Ledger.GetServerInfo().Standalone
 	usesLookup := hasLedgerSelector || standalone
 	if usesLookup {
 		view, meta, rpcErr = resolvePathFindLedger(ctx, ledgerSpec, true)
+		if rpcErr != nil {
+			return nil, rpcErr
+		}
+		release, rpcErr := acquirePathfind(ctx)
+		if rpcErr != nil {
+			return nil, rpcErr
+		}
+		defer release()
+	} else {
+		if types.ValidatedLedgerStale(ctx.Services.Ledger.GetServerInfo()) {
+			if ctx.ApiVersion == types.ApiVersion1 {
+				return nil, types.RpcErrorNoNetwork("")
+			}
+			return nil, types.RpcErrorNotSynced("")
+		}
+		view, meta, rpcErr = resolvePathFindLedger(ctx, types.LedgerSpecifier{}, false)
 		if rpcErr != nil {
 			return nil, rpcErr
 		}
@@ -141,23 +159,19 @@ func (m *RipplePathFindMethod) Handle(ctx *types.RpcContext, params json.RawMess
 			return nil, types.RpcErrorDomainMalformed("Domain is malformed.")
 		}
 	}
-
-	// Ledger selection: an explicit ledger_hash/ledger_index resolves a
-	// specific ledger and merges its metadata into the response, mirroring
-	// rippled's RPC::lookupLedger merge; otherwise the closed ledger is used
-	// with no ledger fields in the reply.
-	if !usesLookup {
-		view, meta, rpcErr = resolvePathFindLedger(ctx, types.LedgerSpecifier{}, false)
-		if rpcErr != nil {
-			return nil, rpcErr
-		}
+	if view == nil {
+		return nil, types.NewRpcError(types.RpcNO_CURRENT, "noCurrent", "noCurrent", "Current ledger is unavailable.")
 	}
 
 	// Existence checks. Reference: rippled PathRequest::isValid.
-	if exists, _ := view.Exists(keylet.Account(srcAccount)); !exists {
+	if exists, err := view.Exists(keylet.Account(srcAccount)); err != nil {
+		return nil, rpcInternalError("ripple_path_find: source account lookup failed", err)
+	} else if !exists {
 		return nil, types.RpcErrorSrcActNotFound("Source account not found.")
 	}
-	if exists, _ := view.Exists(keylet.Account(dstAccount)); !exists {
+	if exists, err := view.Exists(keylet.Account(dstAccount)); err != nil {
+		return nil, rpcInternalError("ripple_path_find: destination account lookup failed", err)
+	} else if !exists {
 		// Only XRP can be sent to a non-existent account, and the payment
 		// must meet the account reserve.
 		if !dstAmount.IsNative() {
@@ -180,6 +194,13 @@ func (m *RipplePathFindMethod) Handle(ctx *types.RpcContext, params json.RawMess
 	}
 
 	// Run pathfinding at the production search level (rippled PATH_SEARCH).
+	if !usesLookup {
+		release, rpcErr := waitPathfind(ctx)
+		if rpcErr != nil {
+			return nil, rpcErr
+		}
+		defer release()
+	}
 	pr := pathfinder.NewPathRequest(srcAccount, dstAccount, dstAmount, sendMax, srcCurrencies, convertAll)
 	pr.SetDomainID(domainID)
 	result := pr.Execute(view)
@@ -246,10 +267,6 @@ func (m *RipplePathFindMethod) Handle(ctx *types.RpcContext, params json.RawMess
 	return flat, nil
 }
 
-func (m *RipplePathFindMethod) RequiredCondition() types.Condition {
-	return types.NeedsCurrentLedger
-}
-
 // decodeAccountRaw decodes a JSON string into an AccountID. Returns false
 // for non-string values or malformed addresses.
 func decodeAccountRaw(raw json.RawMessage) ([20]byte, bool) {
@@ -306,8 +323,11 @@ func parseSourceCurrencies(
 		rawCurrency, hasCurrency := fields["currency"]
 		rawMPT, hasMPT := fields["mpt_issuance_id"]
 		_, hasIssuer := fields["issuer"]
-		if hasCurrency == hasMPT || hasMPT && hasIssuer {
+		if hasCurrency == hasMPT {
 			return nil, types.RpcErrorSrcCurMalformed("Source currency is malformed.")
+		}
+		if hasMPT && hasIssuer {
+			return nil, types.RpcErrorSrcIsrMalformed("Source issuer is malformed.")
 		}
 		if hasMPT {
 			var mptID string

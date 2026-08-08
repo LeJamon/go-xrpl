@@ -15,17 +15,20 @@ type pathFindUpdateTarget struct {
 }
 
 func (ws *WebSocketServer) executePathFind(wsConn *websocketConnection, ctx *types.RpcContext, cmd types.WebSocketCommand) (any, *types.RpcError) {
+	if rpcErr := handlers.RequirePathSearch(ctx); rpcErr != nil {
+		return nil, rpcErr
+	}
 	var params map[string]json.RawMessage
 	if len(cmd.Params) == 0 || json.Unmarshal(cmd.Params, &params) != nil {
 		return nil, types.RpcErrorInvalidParams("Invalid parameters.")
 	}
 	rawSubcommand, exists := params["subcommand"]
 	if !exists {
-		return nil, types.RpcErrorInvalidParams("Invalid field 'subcommand'.")
+		return nil, types.RpcErrorInvalidParams("Invalid parameters.")
 	}
 	var subcommand *string
 	if err := json.Unmarshal(rawSubcommand, &subcommand); err != nil || subcommand == nil {
-		return nil, types.RpcErrorInvalidParams("Invalid field 'subcommand'.")
+		return nil, types.RpcErrorInvalidParams("Invalid parameters.")
 	}
 	wsConn.SetAPIVersion(ctx.ApiVersion)
 
@@ -38,7 +41,7 @@ func (ws *WebSocketServer) executePathFind(wsConn *websocketConnection, ctx *typ
 	case "status":
 		return ws.executePathFindStatus(wsConn, ctx, cmd)
 	default:
-		return nil, types.RpcErrorInvalidParams("Invalid field 'subcommand'.")
+		return nil, types.RpcErrorInvalidParams("Invalid parameters.")
 	}
 }
 
@@ -47,12 +50,6 @@ func (ws *WebSocketServer) executePathFind(wsConn *websocketConnection, ctx *typ
 func (ws *WebSocketServer) executePathFindCreate(wsConn *websocketConnection, ctx *types.RpcContext, cmd types.WebSocketCommand) (any, *types.RpcError) {
 	ws.bindPathFindRefreshManager(wsConn)
 	wsConn.clearPathFindSession()
-
-	release, rpcErr := handlers.AcquirePathfind(ctx)
-	if rpcErr != nil {
-		return nil, rpcErr
-	}
-	defer release()
 
 	session, rpcErr := ParseAndCreateSession(cmd.Params, cmd.ID)
 	if rpcErr != nil {
@@ -63,6 +60,7 @@ func (ws *WebSocketServer) executePathFindCreate(wsConn *websocketConnection, ct
 		return nil, types.NewRpcError(types.RpcNO_CURRENT, "noCurrent", "noCurrent",
 			"No closed ledger available")
 	}
+	session.setSearchLevelMax(ctx.Services.Capabilities.PathSearchMax)
 	view, err := ctx.Services.Ledger.GetClosedLedgerView()
 	if err != nil {
 		return nil, types.NewRpcError(types.RpcNO_CURRENT, "noCurrent", "noCurrent",
