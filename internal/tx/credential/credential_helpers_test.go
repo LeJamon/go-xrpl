@@ -122,3 +122,160 @@ func TestRemoveExpiredCredentials_DeletionFailure(t *testing.T) {
 		require.Equal(t, ter.TecINTERNAL, result)
 	})
 }
+
+func TestDeleteSLEMissingEntry(t *testing.T) {
+	require.Equal(t, ter.TecNO_ENTRY, DeleteSLE(nil, keylet.Keylet{}, nil))
+}
+
+func TestVerifyValidDomainDeletesExpiredCredential(t *testing.T) {
+	view := newMapView()
+	var subject, domainOwner [20]byte
+	subject[19] = 1
+	domainOwner[19] = 2
+	domainID := [32]byte{3}
+	credentialType := []byte("KYC")
+	credentialKey := keylet.Credential(subject, subject, credentialType)
+
+	account := &state.AccountRoot{
+		Account:    state.EncodeAccountIDSafe(subject),
+		Balance:    1_000_000_000,
+		Sequence:   1,
+		OwnerCount: 1,
+	}
+	accountRaw, err := state.SerializeAccountRoot(account)
+	require.NoError(t, err)
+	require.NoError(t, view.Insert(keylet.Account(subject), accountRaw))
+
+	dir, err := state.DirInsert(view, keylet.OwnerDir(subject), credentialKey.Key, false, func(node *state.DirectoryNode) {
+		node.Owner = subject
+	})
+	require.NoError(t, err)
+	expiration := uint32(100)
+	credentialRaw, err := serializeCredentialEntry(&CredentialEntry{
+		Subject:        subject,
+		Issuer:         subject,
+		CredentialType: credentialType,
+		Expiration:     &expiration,
+		Flags:          LsfCredentialAccepted,
+		IssuerNode:     dir.Page,
+	})
+	require.NoError(t, err)
+	require.NoError(t, view.Insert(credentialKey, credentialRaw))
+
+	domainRaw, err := state.SerializePermissionedDomain(&state.PermissionedDomainData{
+		Owner:    domainOwner,
+		Sequence: 1,
+		AcceptedCredentials: []state.PermissionedDomainCredential{{
+			Issuer: subject, CredentialType: credentialType,
+		}},
+	}, state.EncodeAccountIDSafe(domainOwner))
+	require.NoError(t, err)
+	require.NoError(t, view.Insert(keylet.PermissionedDomainByID(domainID), domainRaw))
+
+	const closeTime = uint32(101)
+	require.Equal(t, ter.TecEXPIRED, ValidDomain(view, domainID, subject, closeTime))
+	exists, err := view.Exists(credentialKey)
+	require.NoError(t, err)
+	require.True(t, exists, "read-only validation must not delete expired credentials")
+
+	ctx := &tx.ApplyContext{
+		View:      view,
+		Account:   account,
+		AccountID: subject,
+		Config: tx.EngineConfig{
+			Rules:           amendment.AllSupportedRules(),
+			ParentCloseTime: closeTime,
+		},
+		Metadata: &tx.Metadata{},
+		Log:      xrpllog.Discard(),
+		Ctx:      context.Background(),
+	}
+	require.Equal(t, ter.TecEXPIRED, VerifyValidDomain(ctx, subject, domainID))
+	exists, err = view.Exists(credentialKey)
+	require.NoError(t, err)
+	require.False(t, exists)
+	require.Zero(t, ctx.Account.OwnerCount)
+}
+
+func TestVerifyValidDomainDeletionFailureAmendmentArms(t *testing.T) {
+	var subject, issuer [20]byte
+	subject[19] = 1
+	issuer[19] = 2
+	domainID := [32]byte{3}
+	credentialType := []byte("KYC")
+	credentialKey := keylet.Credential(subject, issuer, credentialType)
+
+	build := func(rules *amendment.Rules) (*tx.ApplyContext, *mapView) {
+		view := newMapView()
+		account := &state.AccountRoot{
+			Account:  state.EncodeAccountIDSafe(subject),
+			Balance:  1_000_000_000,
+			Sequence: 1,
+		}
+		accountRaw, err := state.SerializeAccountRoot(account)
+		require.NoError(t, err)
+		require.NoError(t, view.Insert(keylet.Account(subject), accountRaw))
+
+		expiration := uint32(100)
+		credentialRaw, err := serializeCredentialEntry(&CredentialEntry{
+			Subject:        subject,
+			Issuer:         issuer,
+			CredentialType: credentialType,
+			Expiration:     &expiration,
+			Flags:          LsfCredentialAccepted,
+			HasSubjectNode: true,
+		})
+		require.NoError(t, err)
+		require.NoError(t, view.Insert(credentialKey, credentialRaw))
+
+		domainRaw, err := state.SerializePermissionedDomain(&state.PermissionedDomainData{
+			Owner:    subject,
+			Sequence: 1,
+			AcceptedCredentials: []state.PermissionedDomainCredential{{
+				Issuer: issuer, CredentialType: credentialType,
+			}},
+		}, state.EncodeAccountIDSafe(subject))
+		require.NoError(t, err)
+		require.NoError(t, view.Insert(keylet.PermissionedDomainByID(domainID), domainRaw))
+
+		return &tx.ApplyContext{
+			View:      view,
+			Account:   account,
+			AccountID: subject,
+			Config: tx.EngineConfig{
+				Rules:           rules,
+				ParentCloseTime: 101,
+			},
+			Metadata: &tx.Metadata{},
+			Log:      xrpllog.Discard(),
+			Ctx:      context.Background(),
+		}, view
+	}
+
+	fixOn := amendment.NewRulesBuilder().
+		FromPreset(amendment.PresetAllSupported).
+		Enable(amendment.FeatureFixCleanup3_1_3).
+		Build()
+	fixOff := amendment.NewRulesBuilder().
+		FromPreset(amendment.PresetAllSupported).
+		Disable(amendment.FeatureFixCleanup3_1_3).
+		Build()
+
+	tests := []struct {
+		name  string
+		rules *amendment.Rules
+		want  ter.Result
+	}{
+		{name: "before fix", rules: fixOff, want: ter.TesSUCCESS},
+		{name: "after fix", rules: fixOn, want: ter.TecINTERNAL},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			ctx, view := build(test.rules)
+			require.Equal(t, test.want, VerifyValidDomain(ctx, subject, domainID))
+			exists, err := view.Exists(credentialKey)
+			require.NoError(t, err)
+			require.True(t, exists)
+		})
+	}
+}

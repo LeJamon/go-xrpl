@@ -1,14 +1,17 @@
 package engine
 
 import (
+	"bytes"
 	"context"
 	"fmt"
+	"sort"
 
 	"github.com/LeJamon/go-xrpl/drops"
 	txcore "github.com/LeJamon/go-xrpl/internal/tx"
 
 	"github.com/LeJamon/go-xrpl/internal/ledger/state"
 	"github.com/LeJamon/go-xrpl/internal/tx/applystate"
+	"github.com/LeJamon/go-xrpl/internal/tx/credential"
 	"github.com/LeJamon/go-xrpl/internal/tx/invariants"
 	"github.com/LeJamon/go-xrpl/internal/tx/ter"
 	"github.com/LeJamon/go-xrpl/keylet"
@@ -356,6 +359,7 @@ func (e *Engine) applyTecRecovery(st *applyState, result ter.Result) ter.Result 
 	removedOfferKeys := collectErasedKeysOfType(st.table, entry.TypeOffer, result == ter.TecOVERSIZE || result == ter.TecKILLED, 1000)
 	removedTrustLineKeys := collectErasedKeysOfType(st.table, entry.TypeRippleState, result == ter.TecINCOMPLETE, 512)
 	expiredNFTokenOfferKeys := collectErasedKeysOfType(st.table, entry.TypeNFTokenOffer, result == ter.TecEXPIRED, 256)
+	expiredCredentialKeys := collectErasedKeysOfType(st.table, entry.TypeCredential, result == ter.TecEXPIRED, 0)
 
 	// Discard the transaction table — all doApply() side effects are lost.
 	// Reference: rippled Transactor.cpp — reset() discards the sandbox.
@@ -415,21 +419,31 @@ func (e *Engine) applyTecRecovery(st *applyState, result ter.Result) ter.Result 
 			deleteNFTokenOfferOnView(tecTable, offerKL)
 		}
 
-		// Credential deletion via TecApplier
-		if tecApplier, ok := st.tx.(txcore.TecApplier); ok {
-			tecCtx := &txcore.ApplyContext{
-				View:             tecTable,
-				Account:          recoveredAccount,
-				AccountID:        st.accountID,
-				SourceFeeCharged: st.sourceFeeCharged(),
-				Config:           e.config,
-				TxHash:           st.txHash,
-				Metadata:         st.metadata,
-				InnerInvariants:  e,
-				Log:              e.logger,
-				Ctx:              st.ctx,
+		tecCtx := &txcore.ApplyContext{
+			View:             tecTable,
+			Account:          recoveredAccount,
+			AccountID:        st.accountID,
+			SourceFeeCharged: st.sourceFeeCharged(),
+			Config:           e.config,
+			TxHash:           st.txHash,
+			Metadata:         st.metadata,
+			InnerInvariants:  e,
+			Log:              e.logger,
+			Ctx:              st.ctx,
+		}
+		for _, credentialKey := range expiredCredentialKeys {
+			credentialKL := keylet.Keylet{Key: credentialKey}
+			credentialData, err := tecTable.Read(credentialKL)
+			if err != nil || credentialData == nil {
+				continue
 			}
-			tecApplier.ApplyOnTec(tecCtx)
+			credentialEntry, err := credential.ParseCredentialEntry(credentialData)
+			if err != nil {
+				continue
+			}
+			if result := credential.DeleteSLE(tecCtx, credentialKL, credentialEntry); result != ter.TesSUCCESS {
+				e.logger.Error("failed to re-delete expired credential", "result", result)
+			}
 		}
 	}
 
@@ -461,9 +475,9 @@ func (e *Engine) applyTecRecovery(st *applyState, result ter.Result) ter.Result 
 }
 
 // collectErasedKeysOfType walks the ApplyStateTable and collects up to `limit`
-// keys whose entries are erased ledger entries of the given type. When
-// `enabled` is false, returns nil. Used by tec recovery to re-apply specific
-// deletions after the sandbox is discarded.
+// keys whose entries are erased ledger entries of the given type. A non-positive
+// limit collects every matching key. When enabled is false, it returns nil.
+// Used by tec recovery to re-apply specific deletions after the sandbox is discarded.
 func collectErasedKeysOfType(table *applystate.ApplyStateTable, entryType entry.Type, enabled bool, limit int) [][32]byte {
 	if !enabled {
 		return nil
@@ -479,11 +493,14 @@ func collectErasedKeysOfType(table *applystate.ApplyStateTable, entryType entry.
 		}
 		if err == nil && t == entryType {
 			keys = append(keys, key)
-			if len(keys) >= limit {
+			if limit > 0 && len(keys) >= limit {
 				break
 			}
 		}
 	}
+	sort.Slice(keys, func(i, j int) bool {
+		return bytes.Compare(keys[i][:], keys[j][:]) < 0
+	})
 	return keys
 }
 

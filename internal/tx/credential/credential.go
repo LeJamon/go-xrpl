@@ -91,49 +91,6 @@ func (c *CredentialAccept) RequiredAmendments() [][32]byte {
 	return [][32]byte{amendment.FeatureCredentials}
 }
 
-// ApplyOnTec applies side-effects for tecEXPIRED: delete the expired credential and adjust owner count.
-// Reference: rippled Transactor.cpp removeExpiredCredentials()
-func (c *CredentialAccept) ApplyOnTec(ctx *tx.ApplyContext) {
-	if c.Issuer == "" || c.CredentialType == "" {
-		return
-	}
-
-	issuerID, err := state.DecodeAccountID(c.Issuer)
-	if err != nil {
-		return
-	}
-
-	credTypeBytes, err := hex.DecodeString(c.CredentialType)
-	if err != nil {
-		return
-	}
-
-	// credential(subject=sender, issuer, credType)
-	credKeylet := keylet.Credential(ctx.AccountID, issuerID, credTypeBytes)
-
-	// Check the credential exists and is expired
-	credData, err := ctx.View.Read(credKeylet)
-	if err != nil || credData == nil {
-		return
-	}
-
-	cred, err := ParseCredentialEntry(credData)
-	if err != nil {
-		return
-	}
-
-	if !CheckCredentialExpired(cred, ctx.Config.ParentCloseTime) {
-		return
-	}
-
-	// Use DeleteSLE to properly clean up directories and owner counts.
-	// Failures here cannot change the transaction result; rippled's
-	// removal helpers only log them.
-	if result := DeleteSLE(ctx, credKeylet, cred); result != ter.TesSUCCESS {
-		ctx.Log.Warn("failed to delete expired credential", "result", result)
-	}
-}
-
 // Preclaim verifies the issuer account exists (tecNO_ISSUER), the credential
 // exists (tecNO_ENTRY), and it is not already accepted (tecDUPLICATE), matching
 // rippled CredentialAccept::preclaim. The expiry check (tecEXPIRED, with the
@@ -199,6 +156,12 @@ func (c *CredentialAccept) Apply(ctx *tx.ApplyContext) ter.Result {
 	// where subject = ctx.AccountID (the transaction sender)
 	credKeylet := keylet.Credential(ctx.AccountID, issuerID, credTypeBytes)
 
+	// The reserve check precedes expiration handling. An expired credential is
+	// left in place when the subject cannot afford to accept it.
+	if result := ctx.CheckReserveWithFee(ctx.Account.OwnerCount + 1); result != ter.TesSUCCESS {
+		return result
+	}
+
 	// Read the credential (Preclaim guaranteed it exists and is unaccepted; the
 	// entry is needed here for the expiry check and the accept mutation).
 	credData, err := ctx.View.Read(credKeylet)
@@ -220,12 +183,6 @@ func (c *CredentialAccept) Apply(ctx *tx.ApplyContext) ter.Result {
 			return result
 		}
 		return ter.TecEXPIRED
-	}
-
-	// Check reserve for subject (ctx.Account) using the prior balance (before the
-	// actual fee was deducted), matching rippled's mPriorBalance comparison.
-	if result := ctx.CheckReserveWithFee(ctx.Account.OwnerCount + 1); result != ter.TesSUCCESS {
-		return result
 	}
 
 	cred.SetAccepted()
