@@ -20,7 +20,7 @@ func TestAggregator_IsListed(t *testing.T) {
 
 	a := &Aggregator{
 		publishers: map[PublisherKey]struct{}{pk1: {}, pk2: {}},
-		state: map[PublisherKey]*PublisherState{
+		state: map[PublisherKey]*publisherState{
 			pk1: {MasterKey: pk1, Status: StatusUnavailable},
 			pk2: {MasterKey: pk2, Status: StatusUnavailable},
 		},

@@ -764,12 +764,9 @@ func (r *nodeRuntime) configureConsensus() error {
 					listed[mk] = struct{}{}
 				}
 				if vlAgg != nil {
-					for _, p := range vlAgg.PublisherSnapshot() {
-						if p.Status != validatorlist.StatusAvailable {
-							continue
-						}
-						for _, mk := range p.Validators {
-							listed[mk] = struct{}{}
+					for master := range snap {
+						if vlAgg.IsMasterListed(master) {
+							listed[master] = struct{}{}
 						}
 					}
 				}

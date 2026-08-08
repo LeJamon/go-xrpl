@@ -33,9 +33,19 @@ const cacheFilePrefix = "cache."
 // flushCacheWrites to drop a mutation that a newer one for the same
 // publisher has already superseded on disk.
 type pendingCacheWrite struct {
-	path string
-	body []byte
-	seq  uint64
+	path       string
+	body       []byte
+	seq        uint64
+	generation uint64
+}
+
+// cacheFileOps isolates the three filesystem mutations used by the cache
+// writer. The production zero value uses os, while same-package tests can
+// inject deterministic failures without relying on permissions or timing.
+type cacheFileOps struct {
+	remove    func(string) error
+	writeFile func(string, []byte, os.FileMode) error
+	rename    func(string, string) error
 }
 
 // SetCacheDir wires the on-disk cache directory for accepted
@@ -51,6 +61,8 @@ func (a *Aggregator) SetCacheDir(dir string) error {
 	if dir == "" {
 		a.mu.Lock()
 		a.cacheDir = ""
+		a.cacheGeneration++
+		a.pendingCacheWrites = make(map[PublisherKey]pendingCacheWrite)
 		a.mu.Unlock()
 		return nil
 	}
@@ -58,6 +70,10 @@ func (a *Aggregator) SetCacheDir(dir string) error {
 		return fmt.Errorf("create cache dir %q: %w", dir, err)
 	}
 	a.mu.Lock()
+	if a.cacheDir != dir {
+		a.cacheGeneration++
+		a.pendingCacheWrites = make(map[PublisherKey]pendingCacheWrite)
+	}
 	a.cacheDir = dir
 	a.mu.Unlock()
 	return nil
@@ -74,7 +90,7 @@ func (a *Aggregator) SetCacheDir(dir string) error {
 // or the validators RPC read path. The eventual write is atomic via
 // tmp + rename. rippled likewise logs-and-ignores cache write failures
 // (ValidatorList.cpp:390-395).
-func (a *Aggregator) writeCacheLocked(s *PublisherState) {
+func (a *Aggregator) writeCacheLocked(s *publisherState) {
 	if a.cacheDir == "" {
 		return
 	}
@@ -90,13 +106,15 @@ func (a *Aggregator) writeCacheLocked(s *PublisherState) {
 	if env.Version == 0 {
 		env.Version = 1
 	}
-	if len(s.Remaining) > 0 {
+	needsV2 := s.Version >= 2 || s.RawLocalManifestSet || len(s.Remaining) > 0
+	if needsV2 {
 		// v2 shape — current + remaining, ordered by sequence ascending.
 		env.Version = 2
-		env.BlobsV2 = append(env.BlobsV2, envelopeBlob{
+		blobs := []envelopeBlob{{
+			Manifest:  optionalEnvelopeManifest(s.RawLocalManifest, s.RawLocalManifestSet),
 			Blob:      string(s.RawBlob),
 			Signature: string(s.RawSignature),
-		})
+		}}
 		seqs := make([]uint32, 0, len(s.Remaining))
 		for seq := range s.Remaining {
 			seqs = append(seqs, seq)
@@ -104,14 +122,18 @@ func (a *Aggregator) writeCacheLocked(s *PublisherState) {
 		slices.Sort(seqs)
 		for _, seq := range seqs {
 			rb := s.Remaining[seq]
-			env.BlobsV2 = append(env.BlobsV2, envelopeBlob{
+			blobs = append(blobs, envelopeBlob{
+				Manifest:  optionalEnvelopeManifest(rb.RawLocalManifest, rb.RawLocalManifestSet),
 				Blob:      string(rb.RawBlob),
 				Signature: string(rb.RawSignature),
 			})
 		}
+		env.BlobsV2 = &blobs
 	} else {
-		env.Blob = string(s.RawBlob)
-		env.Signature = string(s.RawSignature)
+		blob := string(s.RawBlob)
+		signature := string(s.RawSignature)
+		env.Blob = &blob
+		env.Signature = &signature
 	}
 	body, err := json.Marshal(env)
 	if err != nil {
@@ -122,9 +144,10 @@ func (a *Aggregator) writeCacheLocked(s *PublisherState) {
 	}
 	a.cacheWriteSeq++
 	a.pendingCacheWrites[s.MasterKey] = pendingCacheWrite{
-		path: cachePathFor(a.cacheDir, s.MasterKey),
-		body: body,
-		seq:  a.cacheWriteSeq,
+		path:       cachePathFor(a.cacheDir, s.MasterKey),
+		body:       body,
+		seq:        a.cacheWriteSeq,
+		generation: a.cacheGeneration,
 	}
 }
 
@@ -139,9 +162,10 @@ func (a *Aggregator) removeCacheLocked(pk PublisherKey) {
 	}
 	a.cacheWriteSeq++
 	a.pendingCacheWrites[pk] = pendingCacheWrite{
-		path: cachePathFor(a.cacheDir, pk),
-		body: nil,
-		seq:  a.cacheWriteSeq,
+		path:       cachePathFor(a.cacheDir, pk),
+		body:       nil,
+		seq:        a.cacheWriteSeq,
+		generation: a.cacheGeneration,
 	}
 }
 
@@ -151,7 +175,9 @@ func (a *Aggregator) removeCacheLocked(pk PublisherKey) {
 // per-publisher seq stamp lets a superseded mutation be dropped, so two
 // concurrent flushers cannot leave a stale cache file as the winner.
 // Cheap no-op when nothing is queued. Errors are logged, not surfaced — a
-// failed cache write is recoverable and self-corrects on the next list.
+// failed cache mutations are requeued with their original sequence so a
+// later Tick or flush can retry them without allowing an older write to
+// overtake a newer mutation.
 func (a *Aggregator) flushCacheWrites() {
 	a.mu.Lock()
 	if len(a.pendingCacheWrites) == 0 {
@@ -164,36 +190,91 @@ func (a *Aggregator) flushCacheWrites() {
 
 	a.cacheWriteMu.Lock()
 	defer a.cacheWriteMu.Unlock()
+	ops := a.cacheOps
+	if ops.remove == nil {
+		ops.remove = os.Remove
+	}
+	if ops.writeFile == nil {
+		ops.writeFile = os.WriteFile
+	}
+	if ops.rename == nil {
+		ops.rename = os.Rename
+	}
+	failed := make(map[PublisherKey]pendingCacheWrite)
 	for pk, w := range pending {
 		if w.seq <= a.cacheWritten[pk] {
 			continue
 		}
 		if w.body == nil {
-			if err := os.Remove(w.path); err != nil && !os.IsNotExist(err) {
-				a.logger.Debug("validator list: cache remove failed",
+			if err := ops.remove(w.path); err != nil && !os.IsNotExist(err) {
+				a.logger.Error("validator list: cache remove failed",
 					"publisher", hex.EncodeToString(pk[:]),
+					"retry", true,
 					"error", err)
+				failed[pk] = w
 				continue
 			}
 			a.cacheWritten[pk] = w.seq
 			continue
 		}
 		tmp := w.path + ".tmp"
-		if err := os.WriteFile(tmp, w.body, 0o600); err != nil {
-			a.logger.Debug("validator list: cache write failed",
+		if err := ops.writeFile(tmp, w.body, 0o600); err != nil {
+			a.logger.Error("validator list: cache write failed",
 				"publisher", hex.EncodeToString(pk[:]),
+				"retry", true,
 				"error", err)
+			if cleanupErr := ops.remove(tmp); cleanupErr != nil && !os.IsNotExist(cleanupErr) {
+				a.logger.Error("validator list: cache temporary-file cleanup failed",
+					"publisher", hex.EncodeToString(pk[:]),
+					"error", cleanupErr)
+			}
+			failed[pk] = w
 			continue
 		}
-		if err := os.Rename(tmp, w.path); err != nil {
-			a.logger.Debug("validator list: cache rename failed",
+		if err := ops.rename(tmp, w.path); err != nil {
+			a.logger.Error("validator list: cache rename failed",
 				"publisher", hex.EncodeToString(pk[:]),
+				"retry", true,
 				"error", err)
-			_ = os.Remove(tmp)
+			if cleanupErr := ops.remove(tmp); cleanupErr != nil && !os.IsNotExist(cleanupErr) {
+				a.logger.Error("validator list: cache temporary-file cleanup failed",
+					"publisher", hex.EncodeToString(pk[:]),
+					"error", cleanupErr)
+			}
+			failed[pk] = w
 			continue
 		}
 		a.cacheWritten[pk] = w.seq
 	}
+	if len(failed) == 0 {
+		return
+	}
+	// Keep cacheWriteMu held while checking cacheWritten and merging failed
+	// entries back under a.mu. This lock order prevents a concurrent flush
+	// from applying a newer mutation and then allowing an older failure to be
+	// requeued behind it.
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	for pk, w := range failed {
+		if w.generation != a.cacheGeneration {
+			continue
+		}
+		if w.seq <= a.cacheWritten[pk] {
+			continue
+		}
+		if current, ok := a.pendingCacheWrites[pk]; ok && current.seq >= w.seq {
+			continue
+		}
+		a.pendingCacheWrites[pk] = w
+	}
+}
+
+func optionalEnvelopeManifest(raw []byte, present bool) *string {
+	if !present {
+		return nil
+	}
+	value := string(raw)
+	return &value
 }
 
 // LoadCache rehydrates publisher state from the on-disk cache. For
@@ -236,7 +317,7 @@ func (a *Aggregator) LoadCache() int {
 	loaded := 0
 	for _, pk := range pubs {
 		path := cachePathFor(dir, pk)
-		body, err := os.ReadFile(path)
+		body, err := readBoundedFile(path)
 		if err != nil {
 			if !os.IsNotExist(err) {
 				a.logger.Debug("validator list: cache read failed",
@@ -252,12 +333,16 @@ func (a *Aggregator) LoadCache() int {
 				"error", err)
 			continue
 		}
-		if env.Version == 0 || env.Manifest == "" {
+		if err := env.validateShape(); err != nil {
+			a.logger.Debug("validator list: invalid cache envelope",
+				"publisher", hex.EncodeToString(pk[:]),
+				"error", err)
 			continue
 		}
 		uri := "file://" + path
 		applied := false
-		if len(env.BlobsV2) > 0 {
+		switch {
+		case env.Version >= 2:
 			disps, _, _ := a.ApplyCollection(env.toCollection(), uri)
 			for _, d := range disps {
 				if d.ShouldRelay() {
@@ -265,11 +350,11 @@ func (a *Aggregator) LoadCache() int {
 					break
 				}
 			}
-		} else if env.Blob != "" && env.Signature != "" {
+		case env.Version == 1:
 			disp, _, _ := a.ApplyList(
 				[]byte(env.Manifest),
-				[]byte(env.Blob),
-				[]byte(env.Signature),
+				[]byte(*env.Blob),
+				[]byte(*env.Signature),
 				env.Version,
 				uri,
 			)

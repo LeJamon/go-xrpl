@@ -29,15 +29,13 @@ package list
 // ValidatorList.cpp:973. Re-arranging this iota would silently flip the
 // relay set.
 //
-// Malformed is a go-xrpl-only summary disposition emitted exclusively
-// by the HTTP site poller for wire-level envelope failures (HTTP
-// transport error, JSON body undecodable, required envelope fields
-// absent). The aggregator itself never returns Malformed: a corrupt
-// publisher manifest folds into Untrusted (rippled
-// ValidatorList.cpp:1363-1366) and a corrupt blob envelope folds into
-// Invalid (rippled ValidatorList.cpp:1386-1392). Malformed is folded
-// back to "invalid" by the RPC adapter so external consumers see only
-// rippled-emitted labels.
+// Malformed is a go-xrpl-only summary disposition for HTTP/site or
+// collection-envelope failures (transport error, undecodable JSON, absent
+// required envelope fields, or an invalid collection shape). A malformed
+// publisher manifest is Invalid, matching rippled's deserialize failure at
+// ValidatorList.cpp:1128-1135; a structurally valid but untrusted or
+// cache-invalid manifest is Untrusted. Malformed is folded back to
+// "invalid" by the RPC adapter so external consumers see only rippled labels.
 type Disposition uint8
 
 const (
@@ -94,7 +92,7 @@ const (
 // dispositions that warrant rebroadcasting the originating frame.
 // Mirrors rippled's `disposition <= ListDisposition::known_sequence`
 // gate at ValidatorList.cpp:973.
-const MaxValidRelaySeverity = KnownSequence
+const maxValidRelaySeverity = KnownSequence
 
 // String returns a short, lowercase label suitable for logs and metrics.
 func (d Disposition) String() string {
@@ -195,5 +193,5 @@ func (d Disposition) Charge() ChargeCategory {
 // and KnownSequence all relay. Per-peer filtering (skip peers already
 // at the same sequence) is done at broadcast time, not here.
 func (d Disposition) ShouldRelay() bool {
-	return d.Severity() <= MaxValidRelaySeverity.Severity()
+	return d.Severity() <= maxValidRelaySeverity.Severity()
 }

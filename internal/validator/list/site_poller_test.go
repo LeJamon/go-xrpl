@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/LeJamon/go-xrpl/internal/consensus"
 	"github.com/LeJamon/go-xrpl/internal/manifest"
 	"github.com/LeJamon/go-xrpl/internal/validator/list"
 )
@@ -261,5 +262,40 @@ func TestSitePoller_RestartAfterStop(t *testing.T) {
 	case <-served:
 	case <-time.After(3 * time.Second):
 		t.Fatal("Start after Stop did not resume polling")
+	}
+}
+
+func TestSitePoller_OnChangeMayStopPoller(t *testing.T) {
+	pub := newPublisher(t, 0x69, 0x6a)
+	body := validV1Envelope(t, pub, [][33]byte{derivedValidatorKey(0x74)})
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write(body)
+	}))
+	defer srv.Close()
+	agg, err := list.New(list.Config{
+		PublisherKeys:      []list.PublisherKey{list.PublisherKey(pub.masterPub)},
+		SiteURIs:           []string{srv.URL},
+		Threshold:          1,
+		ValidatorManifests: manifest.NewCache(),
+		PublisherManifests: manifest.NewCache(),
+	})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	poller, err := list.NewSitePoller([]string{srv.URL}, agg, nil)
+	if err != nil {
+		t.Fatalf("NewSitePoller: %v", err)
+	}
+	poller.SetInterval(time.Hour)
+	stopped := make(chan struct{})
+	agg.OnChange(func(_ []consensus.NodeID, _ [][33]byte) {
+		poller.Stop()
+		close(stopped)
+	})
+	poller.Start(t.Context())
+	select {
+	case <-stopped:
+	case <-time.After(3 * time.Second):
+		t.Fatal("OnChange -> Stop deadlocked")
 	}
 }
