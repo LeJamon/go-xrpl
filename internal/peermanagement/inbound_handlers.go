@@ -11,6 +11,7 @@ import (
 	"math/rand/v2"
 	"net"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -114,6 +115,7 @@ func (o *Overlay) handleClusterMessage(evt Event) {
 		o.IncPeerBadData(evt.PeerID, "cluster-not-member")
 		return
 	}
+	origin := peer.resourceGossipOrigin(member.Name)
 
 	decoded, err := message.Decode(message.TypeCluster, evt.Payload)
 	if err != nil {
@@ -177,7 +179,7 @@ func (o *Overlay) handleClusterMessage(evt Event) {
 				Balance: src.Cost,
 			})
 		}
-		if err := o.resourceManager.ImportConsumers(member.Name, gossip); err != nil {
+		if err := o.resourceManager.ImportConsumers(origin, gossip); err != nil {
 			slog.Warn("Cluster load-source snapshot rejected", "t", "Overlay", "peer", evt.PeerID, "err", err)
 		}
 	}
@@ -195,6 +197,7 @@ func (o *Overlay) handleClusterMessage(evt Event) {
 // port (IPEndpoint.cpp:179-182); net.ParseIP already rejects anything
 // longer than from_string_checked's 64-char cap, so no separate guard.
 func validGossipAddress(name string) bool {
+	name = strings.TrimSpace(name)
 	if name == "" {
 		return false
 	}

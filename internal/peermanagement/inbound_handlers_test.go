@@ -304,8 +304,17 @@ func TestHandleClusterMessage_ReimportReplacesPriorGossip(t *testing.T) {
 	peer.remotePubKey = peerToken
 	o.peers[peer.ID()] = peer
 
-	send := func(cost uint32) {
-		cm := &message.Cluster{LoadSources: []message.LoadSource{{Name: "203.0.113.7", Cost: cost}}}
+	reportTime := time.Now().UTC().Truncate(time.Second)
+	send := func(cost uint32, advertisedName string) {
+		reportTime = reportTime.Add(time.Second)
+		cm := &message.Cluster{
+			ClusterNodes: []message.ClusterNode{{
+				PublicKey:  peerNodePubEncoded,
+				NodeName:   advertisedName,
+				ReportTime: protocol.ToRippleTime(reportTime),
+			}},
+			LoadSources: []message.LoadSource{{Name: "203.0.113.7", Cost: cost}},
+		}
 		payload, err := message.Encode(cm)
 		require.NoError(t, err)
 		o.onMessageReceived(Event{
@@ -317,13 +326,14 @@ func TestHandleClusterMessage_ReimportReplacesPriorGossip(t *testing.T) {
 
 	const first = resource.MinimumGossipBalance * 2
 	const second = resource.MinimumGossipBalance * 5
-	send(first)
-	send(second)
+	send(first, "renamed-on-wire-a")
+	send(second, "renamed-on-wire-b")
 
 	c := rm.NewInboundEndpoint("203.0.113.7:9999")
 	defer c.Release()
 	assert.Equal(t, int64(second), c.Balance(),
 		"re-import from the same member must replace, not stack, the gossip balance")
+	assert.Equal(t, 1, rm.Stats().Imports, "one peer must retain one stable gossip origin")
 }
 
 // TestValidGossipAddress pins the load-source name filter against rippled's
@@ -342,6 +352,7 @@ func TestValidGossipAddress(t *testing.T) {
 		{"ipv4 port zero", "203.0.113.7:0", true},
 		{"ipv4 high port", "203.0.113.7:51235", true},
 		{"ipv4 trailing colon", "203.0.113.7:", true},
+		{"ipv4 surrounding whitespace", " 203.0.113.7 ", true},
 		{"non-ip host", "not-an-address", false},
 		{"out-of-range port", "203.0.113.7:99999", false},
 		{"non-numeric port", "203.0.113.7:abc", false},

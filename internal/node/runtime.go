@@ -865,6 +865,7 @@ func (r *nodeRuntime) bindRPC() error {
 		r.resourceManager = resource.NewManager(nil, nil)
 		r.ownsResourceManager = true
 	}
+	r.services.ResourceBlacklist = r.resourceManager.BlacklistJSON
 	var peerSource types.PeerSource
 	if r.consensus != nil && r.consensus.Overlay != nil {
 		peerSource = r.consensus.Overlay

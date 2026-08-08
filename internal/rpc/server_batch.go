@@ -13,7 +13,7 @@ import (
 // request params ("params = jsonRPC", ServerHandler.cpp:681-683), with
 // api_version taken from params[0] when present and otherwise from the
 // element's top level (ServerHandler.cpp:668-683).
-func (s *Server) dispatchBatchElement(el json.RawMessage, baseCtx context.Context, role types.Role, clientIP string) map[string]any {
+func (s *Server) dispatchBatchElement(el json.RawMessage, baseCtx context.Context, role types.Role, clientIP, resourceIP string) map[string]any {
 	var elem map[string]any
 	if err := decodeJSONUseNumber(el, &elem); err != nil || elem == nil {
 		// Non-object element: echo it under "request" with a method_not_found
@@ -26,6 +26,7 @@ func (s *Server) dispatchBatchElement(el json.RawMessage, baseCtx context.Contex
 		}
 	}
 	ctx := newRpcContext(baseCtx, role, types.DefaultApiVersion, clientIP, s.loadPeerSource(), s.services)
+	ctx.ResourceIP = resourceIP
 	if ver, ok := apiVersionFromBatchElement(el); ok {
 		ctx.ApiVersion = ver
 	}

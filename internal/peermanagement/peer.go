@@ -138,6 +138,8 @@ type Peer struct {
 	usage            *resource.Consumer
 	usageMu          sync.RWMutex
 	onDropDisconnect func()
+	clusterOrigin    string
+	clusterOriginSet bool
 	// chargeDropFired CAS-gates the once-per-peer onDropDisconnect
 	// callback and disconnect log line. Rippled serialises this via
 	// the peer strand (PeerImp.cpp:355); goxrpl has no strand, so
@@ -1731,6 +1733,16 @@ func (p *Peer) releaseUsage() {
 	}
 }
 
+func (p *Peer) resourceGossipOrigin(name string) string {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if !p.clusterOriginSet {
+		p.clusterOrigin = name
+		p.clusterOriginSet = true
+	}
+	return p.clusterOrigin
+}
+
 func (p *Peer) usageHandle() *resource.Consumer {
 	p.usageMu.RLock()
 	c := p.usage
@@ -1911,7 +1923,7 @@ func (p *Peer) Load() int64 {
 	if c == nil {
 		return 0
 	}
-	return int64(c.Balance())
+	return c.Balance()
 }
 
 func (p *Peer) RemoveSquelch(validator []byte) {

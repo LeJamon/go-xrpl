@@ -43,6 +43,22 @@ func (m *Manager) Snapshot(threshold int64) []BlacklistEntry {
 	return out
 }
 
+func (m *Manager) BlacklistJSON(threshold *int) map[string]any {
+	t := int64(WarningThreshold)
+	if threshold != nil {
+		t = int64(*threshold)
+	}
+	result := make(map[string]any)
+	for _, entry := range m.Snapshot(t) {
+		result[entry.Address] = map[string]any{
+			"local":  entry.Local,
+			"remote": entry.Remote,
+			"type":   entry.Type,
+		}
+	}
+	return result
+}
+
 // blacklistType maps a Kind to rippled's getJson "type" label. KindUnlimited
 // corresponds to rippled's admin_ table.
 func blacklistType(k Kind) string {

@@ -46,5 +46,9 @@ func resolveWSClientIP(peerIP, upgradeForwardedFor string, portCtx *PortContext)
 	if parsed == nil || !config.IPInNets(parsed, portCtx.SecureGatewayNets) {
 		return peerIP
 	}
-	return upgradeForwardedFor
+	ip := net.ParseIP(upgradeForwardedFor)
+	if ip == nil {
+		return peerIP
+	}
+	return ip.String()
 }

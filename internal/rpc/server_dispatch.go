@@ -32,6 +32,7 @@ func newRpcContext(ctx context.Context, role types.Role, apiVersion int, clientI
 		IsAdmin:    role == types.RoleAdmin,
 		Unlimited:  role.IsUnlimited(),
 		ClientIP:   clientIP,
+		ResourceIP: clientIP,
 		PeerSource: peers,
 		Services:   services,
 	}
@@ -410,10 +411,10 @@ func gateLoad(manager *resource.Manager, ctx *types.RpcContext, method string, l
 	}
 	var admission *resource.Admission
 	var result resource.Disposition
-	if ctx.Unlimited {
-		admission, result = manager.AdmitUnlimited(ctx.ClientIP)
-	} else if ctx.ResourceConsumer != nil {
+	if ctx.ResourceConsumer != nil {
 		admission, result = ctx.ResourceConsumer.Admit(resource.FeeReferenceRPC)
+	} else if ctx.Unlimited {
+		admission, result = manager.AdmitUnlimited(ctx.ResourceIP)
 	} else {
 		admission, result = manager.AdmitInbound(ctx.ClientIP, resource.FeeReferenceRPC)
 	}

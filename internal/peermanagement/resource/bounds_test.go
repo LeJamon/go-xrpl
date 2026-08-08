@@ -65,6 +65,55 @@ func TestCanonicalEndpointIdentity(t *testing.T) {
 		invalid.Release()
 		t.Fatal("invalid endpoint was retained")
 	}
+
+	hostname := m.NewOutboundEndpoint(" R.RIPPLE.COM.:51235 ")
+	canonicalHostname := m.NewOutboundEndpoint("r.ripple.com:51235")
+	if hostname == nil || canonicalHostname == nil {
+		t.Fatal("DNS endpoint acquisition failed")
+	}
+	defer hostname.Release()
+	defer canonicalHostname.Release()
+	if hostname.Endpoint() != "r.ripple.com:51235" || canonicalHostname.Endpoint() != hostname.Endpoint() {
+		t.Fatalf("outbound DNS endpoints = %q and %q", hostname.Endpoint(), canonicalHostname.Endpoint())
+	}
+
+	trailingColon := m.NewInboundEndpoint(" 192.0.2.10: ")
+	if trailingColon == nil || trailingColon.Endpoint() != "192.0.2.10" {
+		t.Fatalf("trailing-colon endpoint = %v", trailingColon)
+	}
+	trailingColon.Release()
+}
+
+func TestImportedActiveEntryExportsLocalBalance(t *testing.T) {
+	clock := newFakeClock()
+	m := NewManager(clock.Now, nil)
+	consumer := m.NewInboundEndpoint("192.0.2.60")
+	consumer.Charge(NewCharge(MinimumGossipBalance*DecayWindowSeconds, "export"), "")
+	consumer.Release()
+
+	if err := m.ImportConsumers("cluster-a", Gossip{Items: []GossipItem{{Address: "192.0.2.60", Balance: 1}}}); err != nil {
+		t.Fatal(err)
+	}
+	items := m.ExportConsumers().Items
+	if len(items) != 1 || items[0].Address != "192.0.2.60" {
+		t.Fatalf("import-retained export = %+v", items)
+	}
+	if err := m.ImportConsumers("cluster-a", Gossip{}); err != nil {
+		t.Fatal(err)
+	}
+	if items := m.ExportConsumers().Items; len(items) != 0 {
+		t.Fatalf("inactive export = %+v", items)
+	}
+}
+
+func TestDecaySaturationDoesNotOverflow(t *testing.T) {
+	now := time.Unix(1_000, 0)
+	sample := newDecayingSample(now, DecayWindowSeconds)
+	sample.value = math.MaxInt64
+	want := int64(math.MaxInt64 - math.MaxInt64/DecayWindowSeconds - 1)
+	if got := sample.valueAt(now.Add(time.Second)) * DecayWindowSeconds; got < 0 || sample.value != want {
+		t.Fatalf("decayed saturated sample = %d (normalized %d), want %d", sample.value, got, want)
+	}
 }
 
 func TestExportIsBounded(t *testing.T) {

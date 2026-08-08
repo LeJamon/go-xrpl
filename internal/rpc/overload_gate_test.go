@@ -1,6 +1,7 @@
 package rpc
 
 import (
+	"context"
 	"encoding/json"
 	"net"
 	"net/http"
@@ -99,6 +100,58 @@ func TestHTTPOverloadAdminUnlimitedBypass(t *testing.T) {
 	}
 	if result := decodeEnvelope(t, rr.Body.Bytes()); result["status"] != "success" {
 		t.Fatalf("admin caller: status = %v, want success", result["status"])
+	}
+}
+
+func TestGateLoadKeysUnlimitedHTTPBySocketPeer(t *testing.T) {
+	manager := resource.NewManager(nil, nil)
+	ctx := newRpcContext(context.Background(), types.RoleIdentified, types.DefaultApiVersion, "198.51.100.7", nil, nil)
+	ctx.ResourceIP = "203.0.113.5"
+	if rpcErr := gateLoad(manager, ctx, "ping", rpcLog()); rpcErr != nil {
+		t.Fatal(rpcErr)
+	}
+	defer ctx.ResourceAdmission.Cancel()
+	entries := manager.Snapshot(0)
+	if len(entries) != 1 || entries[0].Address != "203.0.113.5:1" || entries[0].Type != "admin" {
+		t.Fatalf("unlimited entries = %+v", entries)
+	}
+}
+
+func TestGateLoadKeepsWebSocketConnectionConsumer(t *testing.T) {
+	manager := resource.NewManager(nil, nil)
+	consumer := manager.NewInboundEndpoint("198.51.100.7")
+	defer consumer.Release()
+	ctx := newRpcContext(context.Background(), types.RoleAdmin, types.DefaultApiVersion, "198.51.100.7", nil, nil)
+	ctx.ResourceIP = "203.0.113.5"
+	ctx.ResourceConsumer = consumer
+	if rpcErr := gateLoad(manager, ctx, "stop", rpcLog()); rpcErr != nil {
+		t.Fatal(rpcErr)
+	}
+	defer ctx.ResourceAdmission.Cancel()
+	entries := manager.Snapshot(0)
+	if len(entries) != 1 || entries[0].Address != "198.51.100.7" || entries[0].Type != "inbound" {
+		t.Fatalf("WebSocket entries = %+v", entries)
+	}
+}
+
+func TestWebSocketHandshakeSelectsUnlimitedConsumer(t *testing.T) {
+	manager := resource.NewManager(nil, nil)
+	ws := NewWebSocketServer(WebSocketServerOptions{Timeout: time.Second, ResourceManager: manager})
+	pc := &PortContext{SecureGatewayNets: []net.IPNet{mustParseCIDR("127.0.0.0/8")}}
+	httpServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		ws.ServeHTTP(w, r.WithContext(WithPortContext(r.Context(), pc)))
+	}))
+	defer httpServer.Close()
+
+	headers := http.Header{"X-User": []string{"identified-client"}}
+	client, _, err := websocket.DefaultDialer.Dial("ws"+strings.TrimPrefix(httpServer.URL, "http"), headers)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer client.Close()
+	entries := manager.Snapshot(0)
+	if len(entries) != 1 || entries[0].Address != "127.0.0.1:1" || entries[0].Type != "admin" {
+		t.Fatalf("handshake entries = %+v", entries)
 	}
 }
 

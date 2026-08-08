@@ -92,7 +92,7 @@ func (s *Server) handlePostRequest(w http.ResponseWriter, r *http.Request) {
 		replies := make([]map[string]any, len(elements))
 		for i, el := range elements {
 			role := roleForRequest(peerIP, user, roleParamsFromBatchElement(el), portCtx)
-			replies[i] = s.dispatchBatchElement(el, dispatchCtx, role, clientIP)
+			replies[i] = s.dispatchBatchElement(el, dispatchCtx, role, clientIP, peerIP)
 		}
 		w.Header().Set("Content-Type", jsonContentType)
 		w.WriteHeader(http.StatusOK)
@@ -108,6 +108,7 @@ func (s *Server) handlePostRequest(w http.ResponseWriter, r *http.Request) {
 		apiVersion = version
 	}
 	versionCtx := newRpcContext(dispatchCtx, role, apiVersion, clientIP, s.loadPeerSource(), s.services)
+	versionCtx.ResourceIP = peerIP
 	if rpcErr := validateApiVersion(versionCtx); rpcErr != nil {
 		writeInvalidApiVersionHTTP(w)
 		return

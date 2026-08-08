@@ -96,6 +96,7 @@ type RpcContext struct {
 	// isUnlimited() in Role.cpp.
 	Unlimited  bool
 	ClientIP   string
+	ResourceIP string
 	PeerSource PeerSource
 	// Services is the per-request service container handlers read to
 	// reach the ledger service, dispatcher, manifest cache, etc. The

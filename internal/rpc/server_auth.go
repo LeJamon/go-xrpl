@@ -94,7 +94,9 @@ func resolveClientIP(r *http.Request, portCtx *PortContext) string {
 		return fwd
 	}
 	if xri := r.Header.Get("X-Real-IP"); xri != "" {
-		return strings.TrimSpace(xri)
+		if ip := validatedForwardedIP(xri); ip != "" {
+			return ip
+		}
 	}
 	return peer
 }
@@ -114,7 +116,7 @@ func forwardedForHeader(r *http.Request) string {
 		if before, _, ok := strings.Cut(xff, ","); ok {
 			first = before
 		}
-		return extractIPAddrFromField(first)
+		return validatedForwardedIP(first)
 	}
 	return ""
 }
@@ -124,15 +126,30 @@ func forwardedForHeader(r *http.Request) string {
 // value is terminated by `,` or `;` per the RFC.
 func extractForwardedFor(value string) string {
 	lower := strings.ToLower(value)
-	idx := strings.Index(lower, "for=")
-	if idx < 0 {
+	for offset := 0; offset < len(lower); {
+		idx := strings.Index(lower[offset:], "for=")
+		if idx < 0 {
+			return ""
+		}
+		idx += offset
+		if idx == 0 || strings.ContainsRune(",; \t", rune(value[idx-1])) {
+			rest := value[idx+len("for="):]
+			if i := strings.IndexAny(rest, ",;"); i >= 0 {
+				rest = rest[:i]
+			}
+			return validatedForwardedIP(rest)
+		}
+		offset = idx + 1
+	}
+	return ""
+}
+
+func validatedForwardedIP(field string) string {
+	ip := net.ParseIP(extractIPAddrFromField(field))
+	if ip == nil {
 		return ""
 	}
-	rest := value[idx+len("for="):]
-	if i := strings.IndexAny(rest, ",;"); i >= 0 {
-		rest = rest[:i]
-	}
-	return extractIPAddrFromField(rest)
+	return ip.String()
 }
 
 // extractIPAddrFromField strips whitespace, surrounding double quotes,

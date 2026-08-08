@@ -5,8 +5,11 @@ import (
 	"fmt"
 	"log/slog"
 	"math"
+	"net"
 	"net/netip"
 	"sort"
+	"strconv"
+	"strings"
 	"sync"
 	"time"
 )
@@ -172,15 +175,31 @@ func (m *Manager) acquire(kind Kind, raw string) *Consumer {
 }
 
 func canonicalEndpoint(kind Kind, raw string, maxLength int) (string, bool) {
-	if raw == "" || len(raw) > maxLength {
+	if len(raw) > maxLength {
+		return "", false
+	}
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
 		return "", false
 	}
 	if kind == KindOutbound {
-		endpoint, err := netip.ParseAddrPort(raw)
+		if endpoint, err := netip.ParseAddrPort(raw); err == nil {
+			return netip.AddrPortFrom(endpoint.Addr().Unmap(), endpoint.Port()).String(), true
+		}
+		host, portText, err := net.SplitHostPort(raw)
+		if err != nil || strings.TrimSpace(host) != host || host == "" {
+			return "", false
+		}
+		port, err := strconv.ParseUint(portText, 10, 16)
 		if err != nil {
 			return "", false
 		}
-		return netip.AddrPortFrom(endpoint.Addr().Unmap(), endpoint.Port()).String(), true
+		host = strings.TrimSuffix(strings.ToLower(host), ".")
+		if host == "" {
+			return "", false
+		}
+		endpoint := net.JoinHostPort(host, strconv.FormatUint(port, 10))
+		return endpoint, len(endpoint) <= maxLength
 	}
 
 	var addr netip.Addr
@@ -189,6 +208,9 @@ func canonicalEndpoint(kind Kind, raw string, maxLength int) (string, bool) {
 	} else {
 		var parseErr error
 		addr, parseErr = netip.ParseAddr(raw)
+		if parseErr != nil && strings.HasSuffix(raw, ":") {
+			addr, parseErr = netip.ParseAddr(strings.TrimSuffix(raw, ":"))
+		}
 		if parseErr != nil {
 			return "", false
 		}
@@ -306,7 +328,7 @@ func (m *Manager) ExportConsumers() Gossip {
 	now := m.clock()
 	items := make([]GossipItem, 0)
 	for _, e := range m.entries {
-		if e.k.kind != KindInbound || e.localRefs == 0 {
+		if e.k.kind != KindInbound || e.localRefs == 0 && e.importRefs == 0 {
 			continue
 		}
 		balance := e.localBalance.valueAt(now)

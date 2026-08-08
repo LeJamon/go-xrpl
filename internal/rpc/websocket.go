@@ -173,12 +173,15 @@ func (ws *WebSocketServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	clientIP := resolveWSClientIP(remoteAddrIP(r.RemoteAddr), fwd, portCtx)
 	var resourceConsumer *resource.Consumer
-	if clientIP != "" {
+	handshakeRole := roleForRequest(remoteAddrIP(r.RemoteAddr), userHeader(r), nil, portCtx)
+	if handshakeRole.IsUnlimited() {
+		resourceConsumer = ws.resourceManager.NewUnlimitedEndpoint(remoteAddrIP(r.RemoteAddr))
+	} else if clientIP != "" {
 		resourceConsumer = ws.resourceManager.NewInboundEndpoint(clientIP)
-		if resourceConsumer == nil {
-			writePlainHTTPError(w, http.StatusServiceUnavailable, "Server is overloaded")
-			return
-		}
+	}
+	if resourceConsumer == nil {
+		writePlainHTTPError(w, http.StatusServiceUnavailable, "Server is overloaded")
+		return
 	}
 	consumerTransferred := false
 	defer func() {

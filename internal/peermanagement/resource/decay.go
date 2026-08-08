@@ -58,7 +58,11 @@ func (d *decayingSample) decay(now time.Time) {
 			d.value = 0
 		} else {
 			for range elapsed {
-				d.value -= (d.value + d.windowSeconds - 1) / d.windowSeconds
+				decrement := d.value / d.windowSeconds
+				if d.value%d.windowSeconds != 0 {
+					decrement++
+				}
+				d.value -= decrement
 			}
 		}
 	}
