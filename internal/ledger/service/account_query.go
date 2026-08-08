@@ -660,8 +660,10 @@ func enumerateAccountObjects(ctx context.Context, l *ledger.Ledger, accountID [2
 		if err != nil {
 			return err
 		}
-		if i == mlimit && len(dir.Indexes) > 0 {
-			result.Marker = protocol.Hash256Hex(dirIndex) + "," + protocol.Hash256Hex(dir.Indexes[0])
+		if i == mlimit {
+			if len(dir.Indexes) > 0 {
+				result.Marker = protocol.Hash256Hex(dirIndex) + "," + protocol.Hash256Hex(dir.Indexes[0])
+			}
 			return nil
 		}
 	}
