@@ -20,10 +20,10 @@ import (
 	"github.com/LeJamon/go-xrpl/internal/observability"
 	"github.com/LeJamon/go-xrpl/internal/peermanagement"
 	"github.com/LeJamon/go-xrpl/internal/peermanagement/message"
+	"github.com/LeJamon/go-xrpl/internal/peermanagement/resource"
 	"github.com/LeJamon/go-xrpl/internal/rpc"
 	rpcadapter "github.com/LeJamon/go-xrpl/internal/rpc/adapter"
 	"github.com/LeJamon/go-xrpl/internal/rpc/handlers"
-	"github.com/LeJamon/go-xrpl/internal/rpc/loadtrack"
 	"github.com/LeJamon/go-xrpl/internal/rpc/subscription"
 	"github.com/LeJamon/go-xrpl/internal/rpc/types"
 	validatorlist "github.com/LeJamon/go-xrpl/internal/validator/list"
@@ -57,6 +57,8 @@ type nodeRuntime struct {
 
 	consensus            *adaptor.Components
 	peerConnectScheduler *peerConnectScheduler
+	resourceManager      *resource.Manager
+	ownsResourceManager  bool
 
 	services      *types.ServiceContainer
 	ledgerAdapter *rpcadapter.LedgerServiceAdapter
@@ -478,6 +480,10 @@ func (r *nodeRuntime) configureStandaloneNodeIdentity() error {
 
 func (r *nodeRuntime) configureConsensus() error {
 	ctx := r.ctx
+	if r.standalone {
+		r.resourceManager = resource.NewManager(nil, nil)
+		r.ownsResourceManager = true
+	}
 	if !r.standalone {
 		var compErr error
 		var validationRepo relationaldb.ValidationRepository
@@ -496,6 +502,7 @@ func (r *nodeRuntime) configureConsensus() error {
 		if compErr != nil {
 			return fmt.Errorf("create consensus components: %w", compErr)
 		}
+		r.resourceManager = r.consensus.Overlay.ResourceManager()
 		if r.rotator != nil {
 			ageThreshold := 60 * time.Second
 			if r.appConfig.NodeDB.AgeThresholdSeconds > 0 {
@@ -854,7 +861,10 @@ func (r *nodeRuntime) configureConsensus() error {
 }
 
 func (r *nodeRuntime) bindRPC() error {
-	transportLoad := loadtrack.New()
+	if r.resourceManager == nil {
+		r.resourceManager = resource.NewManager(nil, nil)
+		r.ownsResourceManager = true
+	}
 	var peerSource types.PeerSource
 	if r.consensus != nil && r.consensus.Overlay != nil {
 		peerSource = r.consensus.Overlay
@@ -865,10 +875,10 @@ func (r *nodeRuntime) bindRPC() error {
 	// the transport WriteTimeout (see httpWriteTimeout) so a timed-out request
 	// can still serialize its error envelope.
 	r.httpServer = rpc.NewServer(rpc.ServerOptions{
-		Timeout:     rpcDispatchTimeout,
-		Services:    r.services,
-		LoadTracker: transportLoad,
-		PeerSource:  peerSource,
+		Timeout:         rpcDispatchTimeout,
+		Services:        r.services,
+		ResourceManager: r.resourceManager,
+		PeerSource:      peerSource,
 	})
 	r.services.Dispatcher = r.httpServer
 
@@ -876,7 +886,7 @@ func (r *nodeRuntime) bindRPC() error {
 	r.wsServer = rpc.NewWebSocketServer(rpc.WebSocketServerOptions{
 		Timeout:             rpcDispatchTimeout,
 		Services:            r.services,
-		LoadTracker:         transportLoad,
+		ResourceManager:     r.resourceManager,
 		PeerSource:          peerSource,
 		PingInterval:        pingInterval,
 		LedgerInfoProvider:  &ledgerInfoAdapter{ledgerService: r.ledger},
@@ -1062,6 +1072,9 @@ func (r *nodeRuntime) bindTransports() error {
 
 func (r *nodeRuntime) start() error {
 	ctx := r.ctx
+	if r.ownsResourceManager {
+		r.resourceManager.Start()
+	}
 	if r.consensus != nil {
 		if err := r.consensus.Start(ctx); err != nil {
 			return fmt.Errorf("start consensus components: %w", err)
@@ -1235,6 +1248,10 @@ func (r *nodeRuntime) shutdownWithin(timeout time.Duration) error {
 		if completed {
 			r.serverLog.Info("Consensus components stopped")
 		}
+	}
+	if r.ownsResourceManager && r.resourceManager != nil {
+		r.resourceManager.Stop()
+		r.serverLog.Info("Resource manager stopped")
 	}
 
 	if !producersStopped {

@@ -45,6 +45,9 @@ func TestBindRPCWiresExplicitSharedServices(t *testing.T) {
 	if runtime.services.ClientLoad == nil {
 		t.Fatal("bindRPC lost the configured client-load shedder")
 	}
+	if runtime.resourceManager == nil || !runtime.ownsResourceManager {
+		t.Fatal("standalone RPC binding did not own a resource manager")
+	}
 }
 
 func TestRunReturnsCanceledContextBeforeStartup(t *testing.T) {

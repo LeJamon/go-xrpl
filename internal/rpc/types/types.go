@@ -9,6 +9,7 @@ import (
 	"sync/atomic"
 
 	addresscodec "github.com/LeJamon/go-xrpl/codec/addresscodec"
+	"github.com/LeJamon/go-xrpl/internal/peermanagement/resource"
 )
 
 // XRPL API Version constants
@@ -107,6 +108,11 @@ type RpcContext struct {
 	// Dispatch initializes it to the reference cost; handlers raise it only
 	// after reaching the equivalent rippled work boundary.
 	LoadCost uint32
+	// ResourceConsumer is the connection-scoped consumer used by WebSocket
+	// requests. HTTP requests leave it nil and acquire a short-lived consumer.
+	ResourceConsumer *resource.Consumer
+	// ResourceAdmission owns the request's atomic in-flight reservation.
+	ResourceAdmission *resource.Admission
 	// LoadWarning is set by the post-dispatch load charge when the caller
 	// crosses the resource warn threshold. Transport writers surface it as
 	// the top-level warning:"load" field, mirroring rippled's

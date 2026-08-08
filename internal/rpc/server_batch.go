@@ -4,7 +4,7 @@ import (
 	"context"
 	"encoding/json"
 
-	"github.com/LeJamon/go-xrpl/internal/rpc/loadtrack"
+	"github.com/LeJamon/go-xrpl/internal/peermanagement/resource"
 	"github.com/LeJamon/go-xrpl/internal/rpc/types"
 )
 
@@ -38,36 +38,37 @@ func (s *Server) dispatchBatchElement(el json.RawMessage, baseCtx context.Contex
 	}
 	method, _ := elem["method"].(string)
 	resolution := resolveMethod(s.registry, method, ctx.ApiVersion)
-	if rpcErr := admitMethod(s.loadTracker, ctx, method, resolution, types.RpcErrorForbidden, true, rpcLog()); rpcErr != nil {
+	if rpcErr := admitMethod(s.resourceManager, ctx, method, resolution, types.RpcErrorForbidden, true, rpcLog()); rpcErr != nil {
 		if rpcErr.IsOverloaded() {
 			return batchOverloadedElement(elem)
 		}
 		return batchForbiddenElement(elem)
 	}
+	defer ctx.ResourceAdmission.Finish(resource.FeeExceptionRPC, method)
 
 	// rippled validates the method field and emits a distinct message per
 	// malformed shape, echoing the element's own fields at the top level
 	// (ServerHandler.cpp:764-808).
 	mv, present := elem["method"]
 	if !present || mv == nil {
-		chargeLoad(s.loadTracker, ctx, method, loadtrack.LoadMalformed, rpcLog())
+		chargeLoad(s.resourceManager, ctx, method, resource.FeeMalformedRPC, rpcLog())
 		return batchMalformedElement(elem, "Null method")
 	}
 	method, ok := mv.(string)
 	if !ok {
-		chargeLoad(s.loadTracker, ctx, method, loadtrack.LoadMalformed, rpcLog())
+		chargeLoad(s.resourceManager, ctx, method, resource.FeeMalformedRPC, rpcLog())
 		return batchMalformedElement(elem, "method is not string")
 	}
 	if method == "" {
-		chargeLoad(s.loadTracker, ctx, method, loadtrack.LoadMalformed, rpcLog())
+		chargeLoad(s.resourceManager, ctx, method, resource.FeeMalformedRPC, rpcLog())
 		return batchMalformedElement(elem, "method is empty")
 	}
 	if _, valid := ripplerpcVersion(elem); !valid {
-		chargeLoad(s.loadTracker, ctx, method, loadtrack.LoadMalformed, rpcLog())
+		chargeLoad(s.resourceManager, ctx, method, resource.FeeMalformedRPC, rpcLog())
 		return batchMalformedElement(elem, "ripplerpc is not a string")
 	}
 
-	result, rpcErr := dispatchResolvedMethod(s.loadTracker, s.services, ctx, method, el, resolution, rpcLog())
+	result, rpcErr := dispatchResolvedMethod(s.resourceManager, s.services, ctx, method, el, resolution, rpcLog())
 
 	echo := redactedRequestMap(elem)
 	echo["command"] = method

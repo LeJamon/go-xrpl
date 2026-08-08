@@ -7,7 +7,7 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/LeJamon/go-xrpl/internal/rpc/loadtrack"
+	"github.com/LeJamon/go-xrpl/internal/peermanagement/resource"
 	"github.com/LeJamon/go-xrpl/internal/rpc/types"
 	xrpllog "github.com/LeJamon/go-xrpl/log"
 )
@@ -33,19 +33,19 @@ func rpcLog() xrpllog.Logger { return xrpllog.Named(xrpllog.PartitionRPC) }
 
 type Server struct {
 	peerSourceHolder
-	registry    *types.MethodRegistry
-	timeout     time.Duration
-	services    *types.ServiceContainer
-	loadTracker *loadtrack.Tracker
+	registry        *types.MethodRegistry
+	timeout         time.Duration
+	services        *types.ServiceContainer
+	resourceManager *resource.Manager
 }
 
 // ServerOptions controls construction of an HTTP JSON-RPC server.
 // Services may be nil for routing-only tests; constructors never mutate it.
 type ServerOptions struct {
-	Timeout     time.Duration
-	Services    *types.ServiceContainer
-	LoadTracker *loadtrack.Tracker
-	PeerSource  types.PeerSource
+	Timeout         time.Duration
+	Services        *types.ServiceContainer
+	ResourceManager *resource.Manager
+	PeerSource      types.PeerSource
 }
 
 var _ types.MethodDispatcher = (*Server)(nil)
@@ -74,15 +74,15 @@ func (h *peerSourceHolder) loadPeerSource() types.PeerSource {
 // NewServer creates a new RPC server. The service container is read by
 // handlers through ctx.Services and is never changed by this constructor.
 func NewServer(options ServerOptions) *Server {
-	tracker := options.LoadTracker
-	if tracker == nil {
-		tracker = loadtrack.New()
+	manager := options.ResourceManager
+	if manager == nil {
+		manager = resource.NewManager(nil, nil)
 	}
 	server := &Server{
-		registry:    types.NewMethodRegistry(),
-		timeout:     options.Timeout,
-		services:    options.Services,
-		loadTracker: tracker,
+		registry:        types.NewMethodRegistry(),
+		timeout:         options.Timeout,
+		services:        options.Services,
+		resourceManager: manager,
 	}
 	server.setPeerSource(options.PeerSource)
 

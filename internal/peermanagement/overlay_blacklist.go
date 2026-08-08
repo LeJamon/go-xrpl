@@ -7,9 +7,9 @@ import "github.com/LeJamon/go-xrpl/internal/peermanagement/resource"
 // (doBlackList): endpoint address → {local, remote, type}. A nil threshold
 // applies resource.WarningThreshold, matching rippled's getJson() default.
 func (o *Overlay) BlacklistJSON(threshold *int) map[string]any {
-	t := resource.WarningThreshold
+	t := int64(resource.WarningThreshold)
 	if threshold != nil {
-		t = *threshold
+		t = int64(*threshold)
 	}
 	ret := make(map[string]any)
 	for _, e := range o.resourceManager.Snapshot(t) {

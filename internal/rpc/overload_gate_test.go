@@ -2,7 +2,6 @@ package rpc
 
 import (
 	"encoding/json"
-	"math"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -10,23 +9,21 @@ import (
 	"testing"
 	"time"
 
-	"github.com/LeJamon/go-xrpl/internal/rpc/loadtrack"
+	"github.com/LeJamon/go-xrpl/internal/peermanagement/resource"
 	"github.com/LeJamon/go-xrpl/internal/rpc/types"
 	"github.com/gorilla/websocket"
+	"github.com/stretchr/testify/require"
 )
 
 // pushOverDropThreshold charges key until the tracker reports it is over the
 // per-IP drop threshold, so a single subsequent request is admission-rejected
 // deterministically rather than after a probabilistic number of heavy calls.
-func pushOverDropThreshold(t *testing.T, tr *loadtrack.Tracker, key string) {
+func pushOverDropThreshold(t *testing.T, manager *resource.Manager, key string) {
 	t.Helper()
-	for range 1000 {
-		if tr.OverDropThreshold(key) {
-			return
-		}
-		tr.Charge(key, loadtrack.LoadHeavy)
-	}
-	t.Fatalf("could not push %s over DropThreshold", key)
+	require.NoError(t, manager.ImportConsumers("overload-test", resource.Gossip{Items: []resource.GossipItem{{
+		Address: key,
+		Balance: resource.DropThreshold,
+	}}}))
 }
 
 // TestHTTPOverloadBeforeForbid pins issue #975: a forbidden admin command from a
@@ -36,8 +33,8 @@ func pushOverDropThreshold(t *testing.T, tr *loadtrack.Tracker, key string) {
 // (ServerHandler.cpp:735 ahead of :750).
 func TestHTTPOverloadBeforeForbid(t *testing.T) {
 	srv := newHardeningServer(t, time.Second, "stop", &stubHandler{role: types.RoleAdmin})
-	srv.loadTracker = loadtrack.New()
-	pushOverDropThreshold(t, srv.loadTracker, "203.0.113.5")
+	srv.resourceManager = resource.NewManager(nil, nil)
+	pushOverDropThreshold(t, srv.resourceManager, "203.0.113.5")
 
 	req := httptest.NewRequest("POST", "/", strings.NewReader(`{"method":"stop","params":[{}]}`))
 	req.RemoteAddr = "203.0.113.5:1234" // non-local peer, no AdminNets → RoleGuest
@@ -66,8 +63,8 @@ func TestHTTPOverloadBeforeForbid(t *testing.T) {
 // it to only the admin path.
 func TestHTTPOverloadOpenMethod(t *testing.T) {
 	srv := newHardeningServer(t, time.Second, "ping", echoHandler())
-	srv.loadTracker = loadtrack.New()
-	pushOverDropThreshold(t, srv.loadTracker, "198.51.100.7")
+	srv.resourceManager = resource.NewManager(nil, nil)
+	pushOverDropThreshold(t, srv.resourceManager, "198.51.100.7")
 
 	req := httptest.NewRequest("POST", "/", strings.NewReader(`{"method":"ping","params":[{}]}`))
 	req.RemoteAddr = "198.51.100.7:1234"
@@ -88,8 +85,8 @@ func TestHTTPOverloadOpenMethod(t *testing.T) {
 // disconnects.
 func TestHTTPOverloadAdminUnlimitedBypass(t *testing.T) {
 	srv := newHardeningServer(t, time.Second, "stop", &stubHandler{role: types.RoleAdmin})
-	srv.loadTracker = loadtrack.New()
-	pushOverDropThreshold(t, srv.loadTracker, "127.0.0.1")
+	srv.resourceManager = resource.NewManager(nil, nil)
+	pushOverDropThreshold(t, srv.resourceManager, "127.0.0.1")
 
 	req := httptest.NewRequest("POST", "/", strings.NewReader(`{"method":"stop","params":[{}]}`))
 	req.RemoteAddr = "127.0.0.1:1234"
@@ -111,8 +108,8 @@ func TestHTTPOverloadAdminUnlimitedBypass(t *testing.T) {
 // supplying an out-of-range api_version gets invalid_API_version, not 503.
 func TestHTTPApiVersionPrecedesOverload(t *testing.T) {
 	srv := newHardeningServer(t, time.Second, "ping", echoHandler())
-	srv.loadTracker = loadtrack.New()
-	pushOverDropThreshold(t, srv.loadTracker, "198.51.100.7")
+	srv.resourceManager = resource.NewManager(nil, nil)
+	pushOverDropThreshold(t, srv.resourceManager, "198.51.100.7")
 
 	req := httptest.NewRequest("POST", "/", strings.NewReader(`{"method":"ping","params":[{"api_version":99}]}`))
 	req.RemoteAddr = "198.51.100.7:1234"
@@ -135,14 +132,14 @@ func TestHTTPApiVersionPrecedesOverload(t *testing.T) {
 // element and an ordinary element — never the forbidden (-32605) object.
 func TestHTTPBatchOverloadElement(t *testing.T) {
 	srv := &Server{
-		registry:    types.NewMethodRegistry(),
-		timeout:     time.Second,
-		services:    types.NewServiceContainer(nil),
-		loadTracker: loadtrack.New(),
+		registry:        types.NewMethodRegistry(),
+		timeout:         time.Second,
+		services:        types.NewServiceContainer(nil),
+		resourceManager: resource.NewManager(nil, nil),
 	}
 	srv.registry.Register("stop", &stubHandler{role: types.RoleAdmin})
 	srv.registry.Register("ping", echoHandler())
-	pushOverDropThreshold(t, srv.loadTracker, "10.0.0.1") // postBatch posts from 10.0.0.1
+	pushOverDropThreshold(t, srv.resourceManager, "10.0.0.1") // postBatch posts from 10.0.0.1
 
 	body := `{"method":"batch","params":[
 		{"method":"stop","value":7},
@@ -196,10 +193,10 @@ func TestWSOverloadClosesBeforeRequestValidation(t *testing.T) {
 	}
 	for _, request := range tests {
 		t.Run(request, func(t *testing.T) {
-			ws := NewWebSocketServer(WebSocketServerOptions{Timeout: 2 * time.Second})
+			manager := resource.NewManager(nil, nil)
+			ws := NewWebSocketServer(WebSocketServerOptions{Timeout: 2 * time.Second, ResourceManager: manager})
 			ws.methodRegistry.Register("stop", &stubHandler{role: types.RoleAdmin})
-			ws.loadTracker = loadtrack.New()
-			pushOverDropThreshold(t, ws.loadTracker, "127.0.0.1")
+			pushOverDropThreshold(t, manager, "127.0.0.1")
 
 			_, adminNet, _ := net.ParseCIDR("10.0.0.0/8")
 			pc := &PortContext{AdminNets: []net.IPNet{*adminNet}}
@@ -254,10 +251,10 @@ func TestWSEarlyMalformedResponsesChargeWithoutLoadWarning(t *testing.T) {
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			ws := NewWebSocketServer(WebSocketServerOptions{Timeout: 2 * time.Second})
-			ws.loadTracker.Import("warning-peer", loadtrack.Gossip{Items: []loadtrack.GossipItem{{
-				Key:     "127.0.0.1",
-				Balance: loadtrack.WarningThreshold - int(loadtrack.ChargeMalformed/uint32(loadtrack.DecayWindow/time.Second)),
-			}}})
+			require.NoError(t, ws.resourceManager.ImportConsumers("warning-peer", resource.Gossip{Items: []resource.GossipItem{{
+				Address: "127.0.0.1",
+				Balance: resource.WarningThreshold - uint32(resource.FeeMalformedRPC.Cost()/resource.DecayWindowSeconds),
+			}}}))
 
 			pc := &PortContext{AdminNets: []net.IPNet{mustParseCIDR("10.0.0.0/8")}}
 			httpSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -283,7 +280,7 @@ func TestWSEarlyMalformedResponsesChargeWithoutLoadWarning(t *testing.T) {
 			if got := string(body); got != test.want {
 				t.Fatalf("response = %s, want %s", got, test.want)
 			}
-			if got, want := math.Round(ws.loadTracker.LocalBalance("127.0.0.1")), float64(loadtrack.ChargeMalformed/uint32(loadtrack.DecayWindow/time.Second)); got != want {
+			if got, want := resourceLocalBalance(t, ws.resourceManager, "127.0.0.1"), uint32((resource.FeeMalformedRPC.Cost()+resource.FeeWarning.Cost())/resource.DecayWindowSeconds); got != want {
 				t.Fatalf("local charge = %v, want %v", got, want)
 			}
 		})

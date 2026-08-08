@@ -174,10 +174,12 @@ func (o *Overlay) handleClusterMessage(evt Event) {
 			}
 			gossip.Items = append(gossip.Items, resource.GossipItem{
 				Address: src.Name,
-				Balance: int(src.Cost),
+				Balance: src.Cost,
 			})
 		}
-		o.resourceManager.ImportConsumers(member.Name, gossip)
+		if err := o.resourceManager.ImportConsumers(member.Name, gossip); err != nil {
+			slog.Warn("Cluster load-source snapshot rejected", "t", "Overlay", "peer", evt.PeerID, "err", err)
+		}
 	}
 }
 

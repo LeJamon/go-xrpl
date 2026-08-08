@@ -8,8 +8,8 @@ import (
 	"sync"
 	"testing"
 
+	"github.com/LeJamon/go-xrpl/internal/peermanagement/resource"
 	"github.com/LeJamon/go-xrpl/internal/rpc/handlers"
-	"github.com/LeJamon/go-xrpl/internal/rpc/loadtrack"
 	"github.com/LeJamon/go-xrpl/internal/rpc/subscription"
 	"github.com/LeJamon/go-xrpl/internal/rpc/types"
 	"github.com/stretchr/testify/assert"
@@ -179,14 +179,14 @@ func TestAccountHistorySubscribeCapabilityAndValidation(t *testing.T) {
 		ws, conn, ctx := newSpecialDispatchHarness(t)
 		ctx.Services.Ledger = &txTablesOffLedger{newMockLedgerService()}
 		ctx.Services.AccountHistorySubscriptions = newHistorySubscriptionProvider()
-		ctx.LoadCost = uint32(loadtrack.LoadReference)
+		ctx.LoadCost = uint32(resource.FeeReferenceRPC.Cost())
 
 		_, rpcErr := ws.executeSubscribe(conn, ctx, types.WebSocketCommand{
 			Params: json.RawMessage(`{"streams":["ledger"],"account_history_tx_stream":false}`),
 		})
 		require.NotNil(t, rpcErr)
 		assert.Equal(t, "notEnabled", rpcErr.ErrorString)
-		assert.Equal(t, uint32(loadtrack.LoadReference), ctx.LoadCost)
+		assert.Equal(t, uint32(resource.FeeReferenceRPC.Cost()), ctx.LoadCost)
 		_, streamAdded := conn.Subscriptions[types.SubLedger]
 		assert.True(t, streamAdded)
 	})
@@ -206,7 +206,7 @@ func TestAccountHistorySubscribeCapabilityAndValidation(t *testing.T) {
 		provider := newHistorySubscriptionProvider()
 		ctx.Services.Ledger = newMockLedgerService()
 		ctx.Services.AccountHistorySubscriptions = provider
-		ctx.LoadCost = uint32(loadtrack.LoadReference)
+		ctx.LoadCost = uint32(resource.FeeReferenceRPC.Cost())
 		command := types.WebSocketCommand{
 			Params: json.RawMessage(`{"account_history_tx_stream":{"account":"` + historyAccountA + `"}}`),
 		}
@@ -214,7 +214,7 @@ func TestAccountHistorySubscribeCapabilityAndValidation(t *testing.T) {
 		result, rpcErr := ws.executeSubscribe(conn, ctx, command)
 		require.Nil(t, rpcErr)
 		assert.Equal(t, accountHistoryWarning, result.(map[string]any)["warning"])
-		assert.Equal(t, uint32(loadtrack.LoadMedium), ctx.LoadCost)
+		assert.Equal(t, uint32(resource.FeeMediumBurdenRPC.Cost()), ctx.LoadCost)
 		present, replaying := provider.state(conn.Connection, historyAccountA)
 		assert.True(t, present)
 		assert.True(t, replaying)
@@ -228,14 +228,14 @@ func TestAccountHistorySubscribeCapabilityAndValidation(t *testing.T) {
 		ws, conn, ctx := newSpecialDispatchHarness(t)
 		ctx.Services.Ledger = newMockLedgerService()
 		ctx.Services.AccountHistorySubscriptions = newHistorySubscriptionProvider()
-		ctx.LoadCost = uint32(loadtrack.LoadReference)
+		ctx.LoadCost = uint32(resource.FeeReferenceRPC.Cost())
 
 		_, rpcErr := ws.executeSubscribe(conn, ctx, types.WebSocketCommand{
 			Params: json.RawMessage(`{"account_history_tx_stream":{"account":"not-an-account"}}`),
 		})
 		require.NotNil(t, rpcErr)
 		assert.Equal(t, "invalidParams", rpcErr.ErrorString)
-		assert.Equal(t, uint32(loadtrack.LoadMedium), ctx.LoadCost)
+		assert.Equal(t, uint32(resource.FeeMediumBurdenRPC.Cost()), ctx.LoadCost)
 	})
 }
 
@@ -395,7 +395,7 @@ func TestAccountHistoryURLValidationIsOrderedAndAtomic(t *testing.T) {
 	assert.False(t, ws.subscriptionManager.IsSubscribed(conn.ID, types.SubLedger))
 
 	provider.subscribeErr = nil
-	ctx.LoadCost = uint32(loadtrack.LoadReference)
+	ctx.LoadCost = uint32(resource.FeeReferenceRPC.Cost())
 	var malformed types.SubscriptionRequest
 	require.NoError(t, json.Unmarshal([]byte(`{
 		"url":"`+sink.URL+`",
@@ -405,7 +405,7 @@ func TestAccountHistoryURLValidationIsOrderedAndAtomic(t *testing.T) {
 	_, rpcErr = ws.urlSubs.Subscribe(ctx, malformed)
 	require.NotNil(t, rpcErr)
 	assert.Equal(t, "malformedStream", rpcErr.ErrorString)
-	assert.Equal(t, uint32(loadtrack.LoadReference), ctx.LoadCost)
+	assert.Equal(t, uint32(resource.FeeReferenceRPC.Cost()), ctx.LoadCost)
 
 	_, rpcErr = ws.urlSubs.Subscribe(ctx, types.SubscriptionRequest{
 		URL:            sink.URL,

@@ -79,6 +79,9 @@ func (o *Overlay) connectReservedContext(connectCtx context.Context, addr string
 	var outboundUsage *resource.Consumer
 	if o.resourceManager != nil {
 		outboundUsage = o.resourceManager.NewOutboundEndpoint(endpoint.String())
+		if outboundUsage == nil {
+			return ErrMaxPeersReached
+		}
 		if outboundUsage.Disconnect() {
 			outboundUsage.Release()
 			return ErrEndpointBanned
@@ -574,20 +577,46 @@ func (o *Overlay) addPeer(peer *Peer) error {
 }
 
 func (o *Overlay) addPeerWithUsage(peer *Peer, usage *resource.Consumer) error {
+	resourceUsage := usage
+	acquiredUsage := false
+	if o.resourceManager != nil && resourceUsage == nil {
+		addr := postHandshakeEndpoint(peer, peer.Endpoint()).String()
+		switch {
+		case o.isClusterPeer(peer):
+			resourceUsage = o.resourceManager.NewUnlimitedEndpoint(addr)
+		case peer.Inbound():
+			resourceUsage = o.resourceManager.NewInboundEndpoint(addr)
+		default:
+			resourceUsage = o.resourceManager.NewOutboundEndpoint(addr)
+		}
+		if resourceUsage == nil {
+			return ErrMaxPeersReached
+		}
+		acquiredUsage = true
+	}
+	releaseAcquiredUsage := func() {
+		if acquiredUsage {
+			resourceUsage.Release()
+		}
+	}
+
 	key, hasKey := remotePeerKey(peer)
 	endpoint := endpointKey(postHandshakeEndpoint(peer, peer.Endpoint()))
 	o.peersMu.Lock()
 	if _, exists := o.peers[peer.ID()]; exists {
 		o.peersMu.Unlock()
+		releaseAcquiredUsage()
 		return ErrAlreadyConnected
 	}
 	if owner, exists := o.peerEndpoints[endpoint]; exists && owner != peer.ID() {
 		o.peersMu.Unlock()
+		releaseAcquiredUsage()
 		return ErrAlreadyConnected
 	}
 	if hasKey {
 		if owner, exists := o.peerKeys[key]; exists && owner != peer.ID() {
 			o.peersMu.Unlock()
+			releaseAcquiredUsage()
 			return ErrAlreadyConnected
 		}
 		o.peerKeys[key] = peer.ID()
@@ -599,18 +628,7 @@ func (o *Overlay) addPeerWithUsage(peer *Peer, usage *resource.Consumer) error {
 	o.peersMu.Unlock()
 
 	if o.resourceManager != nil {
-		addr := peer.Endpoint().String()
-		c := usage
-		if c == nil {
-			if o.isClusterPeer(peer) {
-				c = o.resourceManager.NewUnlimitedEndpoint(addr)
-			} else if peer.Inbound() {
-				c = o.resourceManager.NewInboundEndpoint(addr)
-			} else {
-				c = o.resourceManager.NewOutboundEndpoint(addr)
-			}
-		}
-		peer.attachUsage(c, o.bumpPeerDisconnectCharges)
+		peer.attachUsage(resourceUsage, o.bumpPeerDisconnectCharges)
 	}
 	if !peer.Inbound() {
 		o.discovery.MarkConnected(peer.Endpoint().String(), peer.ID())

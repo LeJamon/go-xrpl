@@ -12,7 +12,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/LeJamon/go-xrpl/internal/rpc/loadtrack"
+	"github.com/LeJamon/go-xrpl/internal/peermanagement/resource"
 	"github.com/LeJamon/go-xrpl/internal/rpc/types"
 )
 
@@ -296,7 +296,7 @@ func TestHandlerPanicRecovered(t *testing.T) {
 			panic(panicCause)
 		},
 	})
-	srv.loadTracker = loadtrack.New()
+	srv.resourceManager = resource.NewManager(nil, nil)
 
 	req := httptest.NewRequest("POST", "/", strings.NewReader(`{"method":"panic","params":[{"secret":"private seed"}]}`))
 	req.RemoteAddr = "203.0.113.5:1234"
@@ -314,7 +314,7 @@ func TestHandlerPanicRecovered(t *testing.T) {
 	if strings.Contains(rr.Body.String(), panicCause) || strings.Contains(rr.Body.String(), "private seed") {
 		t.Fatalf("panic response leaked private details: %s", rr.Body.String())
 	}
-	if got, want := srv.loadTracker.Balance("203.0.113.5"), float64(loadtrack.ChargeException/uint32(loadtrack.DecayWindow/time.Second)); got != want {
+	if got, want := transportRegressionLocalBalance(t, srv.resourceManager), uint32(resource.FeeExceptionRPC.Cost()/resource.DecayWindowSeconds); got != want {
 		t.Fatalf("panic charged %v, want %v", got, want)
 	}
 }
@@ -420,16 +420,16 @@ func TestSecureGatewayPromotesToIdentifiedWithUser(t *testing.T) {
 type heavyStub struct{ stubHandler }
 
 func (s *heavyStub) Handle(ctx *types.RpcContext, params json.RawMessage) (any, *types.RpcError) {
-	ctx.LoadCost = loadtrack.ChargeHeavy
+	ctx.LoadCost = uint32(resource.FeeHeavyBurdenRPC.Cost())
 	return s.stubHandler.Handle(ctx, params)
 }
 
 // Once the per-IP balance crosses DropThreshold, the overload-admission gate
 // (gateLoad) rejects with rippled's canonical HTTP 503 "Server is overloaded"
 // bare-string body (ServerHandler.cpp:739), not the slowDown result envelope.
-func TestLoadTracker_RejectsAfterDropThreshold(t *testing.T) {
+func TestResourceManagerRejectsAfterDropThreshold(t *testing.T) {
 	srv := newHardeningServer(t, time.Second, "path_find", &heavyStub{stubHandler{}})
-	srv.loadTracker = loadtrack.New()
+	srv.resourceManager = resource.NewManager(nil, nil)
 
 	var lastBody string
 	for range 400 {
@@ -452,9 +452,9 @@ func TestLoadTracker_RejectsAfterDropThreshold(t *testing.T) {
 	t.Fatalf("never received HTTP 503 after 400 heavy invocations; last body %s", lastBody)
 }
 
-func TestLoadTracker_AdminBypassesCharge(t *testing.T) {
+func TestResourceManagerAdminBypassesCharge(t *testing.T) {
 	srv := newHardeningServer(t, time.Second, "path_find", &heavyStub{stubHandler{}})
-	srv.loadTracker = loadtrack.New()
+	srv.resourceManager = resource.NewManager(nil, nil)
 
 	for i := range 50 {
 		req := httptest.NewRequest("POST", "/", strings.NewReader(`{"method":"path_find","params":[{}]}`))

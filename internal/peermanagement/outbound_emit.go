@@ -159,7 +159,7 @@ func (o *Overlay) sendClusterUpdate() {
 		for _, item := range o.resourceManager.ExportConsumers().Items {
 			clusterMsg.LoadSources = append(clusterMsg.LoadSources, message.LoadSource{
 				Name: item.Address,
-				Cost: uint32(item.Balance),
+				Cost: item.Balance,
 			})
 		}
 	}

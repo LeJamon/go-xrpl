@@ -8,7 +8,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/LeJamon/go-xrpl/internal/rpc/loadtrack"
+	"github.com/LeJamon/go-xrpl/internal/peermanagement/resource"
 	"github.com/LeJamon/go-xrpl/internal/rpc/types"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -34,7 +34,7 @@ func TestJSONProxyUsesSingleDispatchAccounting(t *testing.T) {
 		handle: func(ctx *types.RpcContext, _ json.RawMessage) (any, *types.RpcError) {
 			targetCalls++
 			assert.Equal(t, types.MaxJobQueueClients, services.ClientLoad.InFlight())
-			ctx.LoadCost = loadtrack.ChargeHeavy
+			ctx.LoadCost = uint32(resource.FeeHeavyBurdenRPC.Cost())
 			return map[string]any{"proxied": true}, nil
 		},
 	})
@@ -50,8 +50,8 @@ func TestJSONProxyUsesSingleDispatchAccounting(t *testing.T) {
 	require.Equal(t, 1, targetCalls)
 	assert.Equal(t, types.MaxJobQueueClients-1, services.ClientLoad.InFlight())
 	assert.Equal(t,
-		float64(loadtrack.ChargeHeavy/uint32(loadtrack.DecayWindow/time.Second)),
-		server.loadTracker.LocalBalance(transportRegressionClientIP),
+		uint32(resource.FeeHeavyBurdenRPC.Cost()/resource.DecayWindowSeconds),
+		transportRegressionLocalBalance(t, server.resourceManager),
 	)
 
 	result := decodeEnvelope(t, response.Body.Bytes())

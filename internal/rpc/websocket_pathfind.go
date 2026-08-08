@@ -3,8 +3,8 @@ package rpc
 import (
 	"encoding/json"
 
+	"github.com/LeJamon/go-xrpl/internal/peermanagement/resource"
 	"github.com/LeJamon/go-xrpl/internal/rpc/handlers"
-	"github.com/LeJamon/go-xrpl/internal/rpc/loadtrack"
 	"github.com/LeJamon/go-xrpl/internal/rpc/types"
 )
 
@@ -34,7 +34,7 @@ func (ws *WebSocketServer) executePathFind(wsConn *websocketConnection, ctx *typ
 
 	switch *subcommand {
 	case "create":
-		ctx.LoadCost = uint32(loadtrack.LoadHeavy)
+		ctx.LoadCost = uint32(resource.FeeHeavyBurdenRPC.Cost())
 		return ws.executePathFindCreate(wsConn, ctx, cmd)
 	case "close":
 		return ws.executePathFindClose(wsConn, ctx, cmd)

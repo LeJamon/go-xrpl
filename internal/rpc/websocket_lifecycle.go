@@ -61,6 +61,7 @@ func (c *websocketConnection) closeWithPolicyViolation(reason string) {
 }
 func (ws *WebSocketServer) closeConnection(wsConn *websocketConnection) {
 	wsConn.Cancel()
+	wsConn.resourceConsumer.Release()
 
 	wsConn.clearPathFindSession()
 

@@ -129,6 +129,9 @@ func (o *Overlay) admitInboundEndpoint(addr string) bool {
 		return true
 	}
 	c := o.resourceManager.NewInboundEndpoint(addr)
+	if c == nil {
+		return false
+	}
 	defer c.Release()
 	return !c.Disconnect()
 }

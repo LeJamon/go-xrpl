@@ -26,6 +26,9 @@ type Charge struct {
 }
 
 func NewCharge(cost int, label string) Charge {
+	if cost < 0 {
+		cost = 0
+	}
 	return Charge{cost: cost, label: label}
 }
 

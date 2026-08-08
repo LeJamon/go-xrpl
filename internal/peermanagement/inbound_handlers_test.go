@@ -266,11 +266,10 @@ func TestHandleClusterMessage_ImportsLoadSourceGossip(t *testing.T) {
 		"only parseable load-source addresses must be imported")
 
 	// The imported remote balance lands on the matching inbound
-	// consumer — the "ip:port" key is normalised to its bare host by
-	// resource.normalizeAddr, so the port-9999 reconnect inherits it.
+	// consumer, so the port-9999 reconnect inherits the canonical host key.
 	c := rm.NewInboundEndpoint("203.0.113.7:9999")
 	defer c.Release()
-	assert.Equal(t, int(balance), c.Balance(),
+	assert.Equal(t, int64(balance), c.Balance(),
 		"imported gossip balance must show up on the inbound consumer")
 }
 
@@ -323,7 +322,7 @@ func TestHandleClusterMessage_ReimportReplacesPriorGossip(t *testing.T) {
 
 	c := rm.NewInboundEndpoint("203.0.113.7:9999")
 	defer c.Release()
-	assert.Equal(t, int(second), c.Balance(),
+	assert.Equal(t, int64(second), c.Balance(),
 		"re-import from the same member must replace, not stack, the gossip balance")
 }
 
