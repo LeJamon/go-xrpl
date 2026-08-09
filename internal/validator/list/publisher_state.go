@@ -37,7 +37,7 @@ func (a *Aggregator) applyListInternal(globalManifest, localManifest []byte, loc
 
 	if len(manifestBytes) > manifest.MaxManifestBase64 {
 		a.logger.Debug("validator list: manifest exceeds maximum base64 size", "site", siteURI)
-		return Untrusted, PublisherKey{}, 0
+		return Invalid, PublisherKey{}, 0
 	}
 	manifestRaw, err := decodeBase64Tolerant(manifestBytes)
 	if err != nil {

@@ -377,6 +377,18 @@ func TestAggregator_ApplyList_BadManifest(t *testing.T) {
 	}
 }
 
+func TestAggregator_ApplyList_OversizedManifest(t *testing.T) {
+	agg, _ := list.New(list.Config{
+		PublisherKeys: []list.PublisherKey{{0xED, 1, 2, 3}},
+		Threshold:     1,
+		Clock:         fixedClock(),
+	})
+	d, _, _ := agg.ApplyList(bytes.Repeat([]byte{'A'}, manifest.MaxManifestBase64+1), []byte("blob"), []byte("00"), 1, "test://")
+	if d != list.Invalid {
+		t.Fatalf("disposition: got %s want Invalid", d)
+	}
+}
+
 // TestAggregator_ApplyList_MissingRequiredField pins the rippled-faithful
 // blob-validation requirement that `sequence`, `expiration`, and
 // `validators` are JSON-present (rippled ValidatorList.cpp:1394-1397

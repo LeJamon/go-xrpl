@@ -7,6 +7,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/spf13/viper"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -817,6 +818,26 @@ func TestLoadConfig_ManifestCountTypedAndBoundaryValues(t *testing.T) {
 			path := writeConfig(t, t.TempDir(), "xrpld.toml", minimalTestConfig()+"\n[overlay]\nmax_untrusted_count = "+value+"\n")
 			_, err := LoadConfig(Paths{Main: path})
 			require.Error(t, err)
+		})
+	}
+}
+
+func TestValidateManifestCountsRejectsOutOfRangeIntegers(t *testing.T) {
+	tests := []struct {
+		name  string
+		value any
+	}{
+		{name: "signed", value: int64(1<<32 + MinManifestCount)},
+		{name: "unsigned", value: uint64(1<<32 + MinManifestCount)},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			v := viper.New()
+			v.Set("overlay.max_untrusted_count", test.value)
+			err := validateManifestCounts(v)
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), "max_untrusted_count")
 		})
 	}
 }
