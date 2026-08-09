@@ -50,16 +50,23 @@ func checkValidPseudoAccounts(entries []InvariantEntry, rules *amendment.Rules) 
 			continue
 		}
 
-		if v := validatePseudoAccount(e.Before, after); v != nil {
+		hasSponsorship, err := accountRootHasSponsorshipFields(e.After)
+		if err != nil {
+			return &InvariantViolation{
+				Name:    "ValidPseudoAccounts",
+				Message: fmt.Sprintf("could not inspect AccountRoot sponsorship fields: %v", err),
+			}
+		}
+		if v := validatePseudoAccount(e.Before, after, hasSponsorship); v != nil {
 			return v
 		}
 	}
 	return nil
 }
 
-// validatePseudoAccount enforces the four pseudo-account invariants against a
+// validatePseudoAccount enforces the pseudo-account invariants against a
 // modified/created AccountRoot. before is the prior image (nil on creation).
-func validatePseudoAccount(before []byte, after *state.AccountRoot) *InvariantViolation {
+func validatePseudoAccount(before []byte, after *state.AccountRoot, sponsorshipPresent ...bool) *InvariantViolation {
 	if n := after.PseudoAccountFieldCount(); n != 1 {
 		return &InvariantViolation{
 			Name:    "ValidPseudoAccounts",
@@ -88,6 +95,18 @@ func validatePseudoAccount(before []byte, after *state.AccountRoot) *InvariantVi
 		return &InvariantViolation{
 			Name:    "ValidPseudoAccounts",
 			Message: "pseudo-account has a regular key",
+		}
+	}
+
+	hasSponsorship := after.SponsoredOwnerCount != 0 ||
+		after.SponsoringOwnerCount != 0 ||
+		after.SponsoringAccountCount != 0 ||
+		after.HasSponsor ||
+		(len(sponsorshipPresent) > 0 && sponsorshipPresent[0])
+	if hasSponsorship {
+		return &InvariantViolation{
+			Name:    "ValidPseudoAccounts",
+			Message: "pseudo-account has a sponsorship field",
 		}
 	}
 

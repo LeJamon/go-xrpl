@@ -22,12 +22,17 @@ const InitialXRP uint64 = 100_000_000_000_000_000
 
 // InvariantEntry represents a single ledger entry modification to be checked by invariants.
 // Before is nil for newly created entries; After is nil for deleted entries.
+// DeleteFinal retains the final pre-erase image for deleted entries. It is
+// separate from Before because metadata and most invariants need the original
+// image, while cleanup and sponsorship invariants inspect the image immediately
+// before the erase.
 type InvariantEntry struct {
-	Key       [32]byte // ledger key of the entry (for invariants like ValidNFTokenPage that need to inspect the key)
-	EntryType entry.Type
-	Before    []byte // serialized SLE before the transaction (nil for inserts)
-	After     []byte // serialized SLE after the transaction (nil for deletes)
-	IsDelete  bool   // true if the entry was deleted
+	Key         [32]byte // ledger key of the entry (for invariants like ValidNFTokenPage that need to inspect the key)
+	EntryType   entry.Type
+	Before      []byte // serialized SLE before the transaction (nil for inserts)
+	After       []byte // serialized SLE after the transaction (nil for deletes)
+	DeleteFinal []byte // serialized SLE immediately before deletion (nil for non-deletes)
+	IsDelete    bool   // true if the entry was deleted
 }
 
 // InvariantViolation holds the name and description of a detected invariant violation.
@@ -166,6 +171,7 @@ func CheckInvariants(tx Transaction, result Result, fee uint64, txDeclaredFee ui
 		func() *InvariantViolation { return checkXRPNotCreated(result, fee, entries) },
 		func() *InvariantViolation { return checkAccountRootsNotDeleted(txType, result, entries) },
 		func() *InvariantViolation { return checkLedgerEntryTypesMatch(entries) },
+		func() *InvariantViolation { return checkSponsorship(entries) },
 		func() *InvariantViolation { return checkNoXRPTrustLines(entries) },
 		func() *InvariantViolation {
 			return checkNoDeepFreezeTrustLinesWithoutFreeze(entries)
