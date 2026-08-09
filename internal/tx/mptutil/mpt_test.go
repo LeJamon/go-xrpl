@@ -64,8 +64,8 @@ func (v *mptTestView) Rules() *amendment.Rules {
 	}
 	return amendment.AllSupportedRules()
 }
-func (v *mptTestView) AdjustOwnerCount(_ [20]byte, current, next uint32) {
-	v.adjustments = append(v.adjustments, [3]uint32{current, next})
+func (v *mptTestView) AdjustOwnerCount(_ [20]byte, current, next tx.OwnerCounts) {
+	v.adjustments = append(v.adjustments, [3]uint32{current.Count(), next.Count()})
 }
 
 func TestMPTReadsPropagateStorageErrors(t *testing.T) {

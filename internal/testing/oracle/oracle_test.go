@@ -1192,11 +1192,16 @@ func TestDelete(t *testing.T) {
 			ProviderHex(32).
 			AssetClassHex(8).
 			AddPrice("XRP", "EUR", 740, 1).
+			AddPrice("BTC", "EUR", 740, 1).
+			AddPrice("ETH", "EUR", 740, 1).
+			AddPrice("CAN", "EUR", 740, 1).
+			AddPrice("YAN", "EUR", 740, 1).
+			AddPrice("GBP", "EUR", 740, 1).
 			Fee(env.BaseFee()).
 			Build())
 		jtx.RequireTxSuccess(t, result)
 
-		require.Equal(t, uint32(2), env.OwnerCount(owner))
+		require.Equal(t, uint32(3), env.OwnerCount(owner))
 		require.True(t, oracleExists(t, env, owner, 1))
 		require.True(t, oracleExists(t, env, owner, 2))
 

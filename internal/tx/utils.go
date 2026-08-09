@@ -458,7 +458,11 @@ func LPTokenFrozenForIssuer(view LedgerView, accountID, issuerID [20]byte) LPTok
 // This prevents an account from using reserve freed by objects it deleted
 // earlier in the same transaction.
 type ownerCountReadHookView interface {
-	OwnerCountHook(account [20]byte, count uint32) uint32
+	OwnerCountHook(account [20]byte, counts OwnerCounts) OwnerCounts
+}
+
+type xrpBalanceHookView interface {
+	BalanceHook(account, issuer [20]byte, amount Amount) Amount
 }
 
 // XRPLiquid returns the amount of XRP an account can spend (balance minus reserve).
@@ -470,15 +474,22 @@ func XRPLiquid(view LedgerView, accountID [20]byte, ownerCountAdj int64, reserve
 		return NewXRPAmount(0)
 	}
 
-	ownerCount := account.OwnerCount
+	ownerCounts := NewOwnerCounts(account)
 	if h, ok := view.(ownerCountReadHookView); ok {
-		ownerCount = h.OwnerCountHook(accountID, ownerCount)
+		ownerCounts = h.OwnerCountHook(accountID, ownerCounts)
 	}
 
-	confinedOwnerCount := max(int64(ownerCount)+ownerCountAdj, 0)
-	reserve := reserveBase + uint64(confinedOwnerCount)*reserveIncrement
-	if account.Balance > reserve {
-		return NewXRPAmount(int64(account.Balance - reserve))
+	var reserve uint64
+	if !account.IsPseudoAccount() {
+		reserve = uint64(AccountCountForReserve(account))*reserveBase +
+			uint64(ownerCounts.AdjustedCount(ownerCountAdj))*reserveIncrement
+	}
+	balance := NewXRPAmount(int64(account.Balance))
+	if hook, ok := view.(xrpBalanceHookView); ok {
+		balance = hook.BalanceHook(accountID, [20]byte{}, balance)
+	}
+	if balance.Drops() > 0 && uint64(balance.Drops()) > reserve {
+		return NewXRPAmount(balance.Drops() - int64(reserve))
 	}
 	return NewXRPAmount(0)
 }
@@ -573,15 +584,22 @@ func AccountFundsNoFreezeStrict(view LedgerView, accountID [20]byte, amount Amou
 		if account == nil {
 			return NewXRPAmount(0), nil
 		}
-		ownerCount := account.OwnerCount
+		ownerCounts := NewOwnerCounts(account)
 		if hook, ok := view.(ownerCountReadHookView); ok {
-			ownerCount = hook.OwnerCountHook(accountID, ownerCount)
+			ownerCounts = hook.OwnerCountHook(accountID, ownerCounts)
 		}
-		high, reserveProduct := bits.Mul64(uint64(ownerCount), reserveIncrement)
+		if account.IsPseudoAccount() {
+			return NewXRPAmount(int64(account.Balance)), nil
+		}
+		high, ownerReserve := bits.Mul64(uint64(ownerCounts.Count()), reserveIncrement)
 		if high != 0 {
 			return Amount{}, fmt.Errorf("account funds: reserve multiplication overflow")
 		}
-		reserve, carry := bits.Add64(reserveBase, reserveProduct, 0)
+		high, accountReserve := bits.Mul64(uint64(AccountCountForReserve(account)), reserveBase)
+		if high != 0 {
+			return Amount{}, fmt.Errorf("account funds: reserve multiplication overflow")
+		}
+		reserve, carry := bits.Add64(accountReserve, ownerReserve, 0)
 		if carry != 0 {
 			return Amount{}, fmt.Errorf("account funds: reserve addition overflow")
 		}

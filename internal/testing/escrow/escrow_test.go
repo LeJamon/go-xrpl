@@ -35,6 +35,58 @@ func fund5000(env *jtx.TestEnv, accounts ...*jtx.Account) {
 	}
 }
 
+func setEscrowOwnerCount(t *testing.T, env *jtx.TestEnv, account *jtx.Account, count uint32) {
+	t.Helper()
+	accountKey := keylet.Account(account.ID)
+	data, err := env.Ledger().Read(accountKey)
+	require.NoError(t, err)
+	root, err := state.ParseAccountRoot(data)
+	require.NoError(t, err)
+	root.OwnerCount = count
+	data, err = state.SerializeAccountRoot(root)
+	require.NoError(t, err)
+	require.NoError(t, env.Ledger().Update(accountKey, data))
+}
+
+func TestEscrowDeleteOwnerCountUnderflowFailsClosed(t *testing.T) {
+	for _, sponsorEnabled := range []bool{false, true} {
+		featureName := "SponsorOff"
+		if sponsorEnabled {
+			featureName = "SponsorOn"
+		}
+		for _, operation := range []string{"Finish", "Cancel"} {
+			t.Run(featureName+operation, func(t *testing.T) {
+				env := jtx.NewTestEnv(t)
+				if sponsorEnabled {
+					env.EnableFeature("Sponsor")
+				}
+				alice := jtx.NewAccount("alice")
+				bob := jtx.NewAccount("bob")
+				fund5000(env, alice, bob)
+				env.Close()
+				sequence := env.Seq(alice)
+				finishAfter := env.NowRipple() + 1
+				create := escrow.EscrowCreate(alice, bob, xrp(1)).FinishAfter(finishAfter)
+				if operation == "Cancel" {
+					create.CancelAfter(finishAfter + 1)
+				}
+				jtx.RequireTxSuccess(t, env.Submit(create.Build()))
+				env.Close()
+				setEscrowOwnerCount(t, env, alice, 0)
+
+				var result jtx.TxResult
+				if operation == "Finish" {
+					result = env.Submit(escrow.EscrowFinish(bob, alice, sequence).Build())
+				} else {
+					result = env.Submit(escrow.EscrowCancel(alice, alice, sequence).Build())
+				}
+				require.Equal(t, "tefBAD_LEDGER", result.Code)
+				require.True(t, env.LedgerEntryExists(keylet.Escrow(alice.ID, sequence)))
+			})
+		}
+	}
+}
+
 // --------------------------------------------------------------------------
 // TestEscrow_Enablement
 // Reference: rippled Escrow_test.cpp testEnablement (lines 38-74)

@@ -53,7 +53,7 @@ type issuerSelfDebitHookMPT interface {
 }
 
 type ownerCountHook interface {
-	AdjustOwnerCount(account [20]byte, current, next uint32)
+	AdjustOwnerCount(account [20]byte, current, next tx.OwnerCounts)
 }
 
 func DecodeID(value string) ([24]byte, error) {
@@ -759,10 +759,10 @@ func EnsureHolding(view state.LedgerView, id [24]byte, holder [20]byte, flags ui
 		return ter.TefINTERNAL
 	}
 	if adjustOwnerCount {
-		current := account.OwnerCount
+		current := tx.NewOwnerCounts(account)
 		account.OwnerCount++
 		if hook, ok := view.(ownerCountHook); ok {
-			hook.AdjustOwnerCount(holder, current, account.OwnerCount)
+			hook.AdjustOwnerCount(holder, current, tx.NewOwnerCounts(account))
 		}
 		data, err = state.SerializeAccountRoot(account)
 		if err != nil || view.Update(accountKey, data) != nil {
@@ -817,12 +817,12 @@ func RemoveHolding(view state.LedgerView, id [24]byte, holder [20]byte, adjustOw
 	if err != nil {
 		return ter.TefINTERNAL
 	}
-	current := account.OwnerCount
+	current := tx.NewOwnerCounts(account)
 	if account.OwnerCount > 0 {
 		account.OwnerCount--
 	}
 	if hook, ok := view.(ownerCountHook); ok {
-		hook.AdjustOwnerCount(holder, current, account.OwnerCount)
+		hook.AdjustOwnerCount(holder, current, tx.NewOwnerCounts(account))
 	}
 	data, err := state.SerializeAccountRoot(account)
 	if err != nil || view.Update(accountKey, data) != nil {

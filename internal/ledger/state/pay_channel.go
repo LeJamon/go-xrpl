@@ -25,6 +25,8 @@ type PayChannelData struct {
 	OwnerNode       uint64
 	DestinationNode uint64
 	HasDestNode     bool
+	Sponsor         string
+	HasSponsor      bool
 
 	// Sequence records the creating tx/ticket sequence (a keylet input),
 	// stored once fixIncludeKeyletFields is active.
@@ -64,6 +66,9 @@ func SerializePayChannelFromData(channel *PayChannelData) ([]byte, error) {
 	entry.SetOwnerNode(fmt.Sprintf("%x", channel.OwnerNode))
 	entry.SetFlags(0)
 	entry.SetPublicKey(channel.PublicKey)
+	if channel.HasSponsor || channel.Sponsor != "" {
+		entry.SetSponsor(channel.Sponsor)
+	}
 
 	if channel.CancelAfter > 0 {
 		entry.SetCancelAfter(channel.CancelAfter)
@@ -108,6 +113,8 @@ func ParsePayChannel(data []byte) (*PayChannelData, error) {
 		HasSourceTag:      fields["SourceTag"] != nil,
 		HasDestTag:        fields["DestinationTag"] != nil,
 		HasDestNode:       fields["DestinationNode"] != nil,
+		Sponsor:           entry.Sponsor,
+		HasSponsor:        fields["Sponsor"] != nil,
 		Sequence:          entry.Sequence,
 		HasSequence:       fields["Sequence"] != nil,
 		PreviousTxnLgrSeq: entry.PreviousTxnLgrSeq,

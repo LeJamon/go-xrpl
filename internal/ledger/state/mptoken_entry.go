@@ -32,6 +32,7 @@ type MPTokenIssuanceData struct {
 	ReferenceHolding  *string // hex-encoded 32-byte hash (vault share underlying), nil if not set
 	Flags             uint32
 	ImmutableFlags    uint32 // soeDEFAULT: immutable capability and field bits, 0 when absent
+	Sponsor           string
 
 	// Threading fields. MPTokenIssuance is a threaded type, so these must
 	// survive a parse→serialize round-trip — otherwise a re-serialize during
@@ -52,6 +53,7 @@ type MPTokenData struct {
 	MPTAmount         uint64
 	LockedAmount      *uint64
 	Flags             uint32
+	Sponsor           string
 
 	// Threading fields — see MPTokenIssuanceData. Dropping them on round-trip
 	// makes MPTokenIssuanceSet on a holder token (lock/unlock) emit a spurious
@@ -81,6 +83,7 @@ func ParseMPTokenIssuance(data []byte) (*MPTokenIssuanceData, error) {
 		MPTokenMetadata:   strings.ToLower(wire.MPTokenMetadata),
 		Flags:             wire.Flags,
 		ImmutableFlags:    wire.ImmutableFlags,
+		Sponsor:           wire.Sponsor,
 		PreviousTxnLgrSeq: wire.PreviousTxnLgrSeq,
 	}
 	var err error
@@ -163,6 +166,9 @@ func SerializeMPTokenIssuance(issuance *MPTokenIssuanceData) ([]byte, error) {
 	}
 
 	entry.SetImmutableFlags(issuance.ImmutableFlags)
+	if issuance.Sponsor != "" {
+		entry.SetSponsor(issuance.Sponsor)
+	}
 
 	var zeroHash [32]byte
 	if issuance.PreviousTxnID != zeroHash {
@@ -189,6 +195,7 @@ func ParseMPToken(data []byte) (*MPTokenData, error) {
 
 	token := &MPTokenData{
 		Flags:             wire.Flags,
+		Sponsor:           wire.Sponsor,
 		PreviousTxnLgrSeq: wire.PreviousTxnLgrSeq,
 	}
 	var err error
@@ -271,6 +278,9 @@ func SerializeMPToken(token *MPTokenData) ([]byte, error) {
 	entry.SetMPTokenIssuanceID(strings.ToUpper(hex.EncodeToString(token.MPTokenIssuanceID[:])))
 	entry.SetOwnerNode(fmt.Sprintf("%x", token.OwnerNode))
 	entry.SetMPTAmount(fmt.Sprintf("%d", token.MPTAmount))
+	if token.Sponsor != "" {
+		entry.SetSponsor(token.Sponsor)
+	}
 
 	if token.LockedAmount != nil {
 		entry.SetLockedAmount(fmt.Sprintf("%d", *token.LockedAmount))

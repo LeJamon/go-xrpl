@@ -30,6 +30,7 @@ type CredentialEntry struct {
 	Expiration     *uint32  // Optional expiration time
 	URI            []byte   // Optional URI (max 256 bytes)
 	Flags          uint32   // Credential flags (lsfAccepted)
+	Sponsor        string
 
 	// Directory node hints
 	IssuerNode     uint64
@@ -83,6 +84,7 @@ func ParseCredentialEntry(data []byte) (*CredentialEntry, error) {
 		Flags:             decoded.Flags,
 		IssuerNode:        issuerNode,
 		PreviousTxnLgrSeq: decoded.PreviousTxnLgrSeq,
+		Sponsor:           decoded.Sponsor,
 	}
 
 	if _, ok := fields["Expiration"]; ok {
@@ -151,6 +153,9 @@ func serializeCredentialEntry(cred *CredentialEntry) ([]byte, error) {
 	sle.SetCredentialType(hex.EncodeToString(cred.CredentialType))
 	sle.SetIssuerNode(tx.FormatUint64Hex(cred.IssuerNode))
 	sle.SetFlags(cred.Flags)
+	if cred.Sponsor != "" {
+		sle.SetSponsor(cred.Sponsor)
+	}
 
 	if cred.Expiration != nil {
 		sle.SetExpiration(*cred.Expiration)
@@ -541,8 +546,24 @@ func DeleteSLE(ctx *tx.ApplyContext, credKey keylet.Keylet, cred *CredentialEntr
 			return ter.TefBAD_LEDGER
 		}
 		if isOwner {
-			if err := tx.AdjustOwnerCount(ctx.View, account, -1); err != nil {
-				return ter.TefBAD_LEDGER
+			accountRoot, err := tx.ReadAccountRoot(ctx.View, account)
+			if err != nil || accountRoot == nil {
+				return ter.TecINTERNAL
+			}
+			if account == ctx.AccountID {
+				accountRoot = ctx.Account
+			}
+			objectData, err := serializeCredentialEntry(cred)
+			if err != nil {
+				return ter.TefINTERNAL
+			}
+			if result := tx.DecreaseOwnerCountForObject(ctx, account, accountRoot, objectData, "Sponsor", 1); result != ter.TesSUCCESS {
+				return result
+			}
+			if account == ctx.AccountID {
+				if result := ctx.UpdateAccountRoot(account, accountRoot); result != ter.TesSUCCESS {
+					return result
+				}
 			}
 		}
 		return ter.TesSUCCESS

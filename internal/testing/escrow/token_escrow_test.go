@@ -13,6 +13,7 @@ import (
 	"github.com/LeJamon/go-xrpl/internal/testing/payment"
 	"github.com/LeJamon/go-xrpl/internal/testing/trustset"
 	"github.com/LeJamon/go-xrpl/internal/tx"
+	sponsortx "github.com/LeJamon/go-xrpl/internal/tx/sponsor"
 	"github.com/LeJamon/go-xrpl/keylet"
 	"github.com/stretchr/testify/require"
 )
@@ -1010,6 +1011,47 @@ func TestIOUEscrow_FinishTrustLine(t *testing.T) {
 		require.True(t, env.TrustLineExists(bob, gw, "USD"), "destination trust line must be auto-created")
 		requireTrustLineLimitValue(t, env, bob, gw, "USD", "0")
 		require.Equal(t, usd(1, gw), *env.IOUBalance(bob, gw, "USD"))
+	})
+
+	t.Run("SponsorReserveReleasedBeforeDestinationLineCreate", func(t *testing.T) {
+		env, gw, alice, bob := newFinishEnv(t, uint64(jtx.XRP(5000)), "10000", 10000)
+		env.EnableFeature("Sponsor")
+		reserveSponsor := jtx.NewAccount("escrow-reserve-sponsor")
+		env.FundAmount(reserveSponsor, env.ReserveBase()+3*env.ReserveIncrement()+2*env.BaseFee())
+		env.Close()
+
+		setRelation := func(sponsee *jtx.Account) {
+			remaining := int32(1)
+			relation := sponsortx.NewSponsorshipSet(reserveSponsor.Address)
+			relation.Sponsee = sponsee.Address
+			relation.RemainingOwnerCountDelta = &remaining
+			jtx.RequireTxSuccess(t, env.Submit(relation))
+		}
+		setRelation(alice)
+		setRelation(bob)
+
+		seq := env.Seq(alice)
+		create := escrow.EscrowCreate(alice, bob, 0).
+			IOUAmount(usd(1, gw)).
+			Condition(escrow.TestCondition1()).
+			FinishTime(env.Now().Add(time.Second)).
+			Fee(env.BaseFee() * 150).
+			Build()
+		create.Sponsor = reserveSponsor.Address
+		reserve := tx.SpfSponsorReserve
+		create.SponsorFlags = &reserve
+		jtx.RequireTxSuccess(t, env.Submit(create))
+		env.Close()
+
+		finishTx := escrow.EscrowFinish(bob, alice, seq).
+			Condition(escrow.TestCondition1()).
+			Fulfillment(escrow.TestFulfillment1()).
+			Fee(env.BaseFee() * 150).
+			Build()
+		finishTx.Sponsor = reserveSponsor.Address
+		finishTx.SponsorFlags = &reserve
+		jtx.RequireTxSuccess(t, env.Submit(finishTx))
+		require.True(t, env.TrustLineExists(bob, gw, "USD"))
 	})
 }
 

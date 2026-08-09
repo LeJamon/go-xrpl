@@ -18,6 +18,8 @@ type SignerListInfo struct {
 	SignerQuorum  uint32
 	Flags         uint32
 	OwnerNode     uint64
+	Sponsor       string
+	HasSponsor    bool
 	SignerEntries []AccountSignerEntry
 }
 
@@ -69,6 +71,8 @@ func parseSignerList(data []byte, legacy bool) (*SignerListInfo, error) {
 		SignerListID: wire.SignerListID,
 		SignerQuorum: wire.SignerQuorum,
 		Flags:        wire.Flags,
+		Sponsor:      wire.Sponsor,
+		HasSponsor:   wire.ToMap()["Sponsor"] != nil,
 	}
 	if wire.OwnerNode != "" {
 		ownerNode, err := strconv.ParseUint(wire.OwnerNode, 16, 64)
@@ -126,7 +130,7 @@ func signerEntriesFromGenerated(values []any) ([]AccountSignerEntry, error) {
 // owner is non-nil only when fixIncludeKeyletFields is active, in which case
 // sfOwner (a keylet input) is stored.
 // Reference: rippled SetSignerList.cpp writeSignersToSLE()
-func SerializeSignerList(quorum uint32, entries []SignerEntry, flags uint32, expandedSignerList bool, ownerNode uint64, owner *[20]byte) ([]byte, error) {
+func SerializeSignerList(quorum uint32, entries []SignerEntry, flags uint32, expandedSignerList bool, ownerNode uint64, owner *[20]byte, sponsor ...string) ([]byte, error) {
 	ledgerEntry := &entry.SignerList{}
 	ledgerEntry.SetSignerQuorum(quorum)
 	ledgerEntry.SetOwnerNode(strconv.FormatUint(ownerNode, 16))
@@ -139,6 +143,9 @@ func SerializeSignerList(quorum uint32, entries []SignerEntry, flags uint32, exp
 			return nil, fmt.Errorf("failed to encode signer list owner address: %w", err)
 		}
 		ledgerEntry.SetOwner(ownerAddr)
+	}
+	if len(sponsor) > 0 && sponsor[0] != "" {
+		ledgerEntry.SetSponsor(sponsor[0])
 	}
 
 	signerEntries := make([]any, len(entries))
@@ -173,7 +180,7 @@ func SerializeTicket(ownerID [20]byte, ticketSeq uint32, ownerNode uint64) ([]by
 }
 
 // SerializeDepositPreauth serializes a DepositPreauth ledger entry.
-func SerializeDepositPreauth(ownerID, authorizedID [20]byte, ownerNode uint64) ([]byte, error) {
+func SerializeDepositPreauth(ownerID, authorizedID [20]byte, ownerNode uint64, sponsor ...string) ([]byte, error) {
 	ownerAddress, err := addresscodec.EncodeAccountIDToClassicAddress(ownerID[:])
 	if err != nil {
 		return nil, fmt.Errorf("failed to encode owner address: %w", err)
@@ -189,6 +196,9 @@ func SerializeDepositPreauth(ownerID, authorizedID [20]byte, ownerNode uint64) (
 	entry.SetAuthorize(authorizedAddress)
 	entry.SetOwnerNode(strconv.FormatUint(ownerNode, 16))
 	entry.SetFlags(0)
+	if len(sponsor) > 0 && sponsor[0] != "" {
+		entry.SetSponsor(sponsor[0])
+	}
 	return entry.Encode()
 }
 
@@ -201,7 +211,7 @@ type DepositPreauthCredential struct {
 // SerializeDepositPreauthCredentials serializes a credential-based DepositPreauth ledger entry.
 // The credentials should already be sorted.
 // Reference: rippled DepositPreauth.cpp doApply() sfAuthorizeCredentials branch
-func SerializeDepositPreauthCredentials(ownerID [20]byte, credentials []DepositPreauthCredential, ownerNode uint64) ([]byte, error) {
+func SerializeDepositPreauthCredentials(ownerID [20]byte, credentials []DepositPreauthCredential, ownerNode uint64, sponsor ...string) ([]byte, error) {
 	ownerAddress, err := addresscodec.EncodeAccountIDToClassicAddress(ownerID[:])
 	if err != nil {
 		return nil, fmt.Errorf("failed to encode owner address: %w", err)
@@ -222,13 +232,18 @@ func SerializeDepositPreauthCredentials(ownerID [20]byte, credentials []DepositP
 	entry.SetAuthorizeCredentials(credArray)
 	entry.SetOwnerNode(strconv.FormatUint(ownerNode, 16))
 	entry.SetFlags(0)
+	if len(sponsor) > 0 && sponsor[0] != "" {
+		entry.SetSponsor(sponsor[0])
+	}
 	return entry.Encode()
 }
 
 // DepositPreauthEntry holds parsed fields from a DepositPreauth ledger entry.
 type DepositPreauthEntry struct {
-	Account   [20]byte
-	OwnerNode uint64
+	Account    [20]byte
+	OwnerNode  uint64
+	Sponsor    string
+	HasSponsor bool
 }
 
 // ParseDepositPreauth parses a DepositPreauth ledger entry from binary data.
@@ -253,7 +268,10 @@ func ParseDepositPreauth(data []byte) (*DepositPreauthEntry, error) {
 		return nil, fmt.Errorf("failed to decode DepositPreauth: missing OwnerNode")
 	}
 
-	parsed := &DepositPreauthEntry{}
+	parsed := &DepositPreauthEntry{
+		Sponsor:    wire.Sponsor,
+		HasSponsor: wire.ToMap()["Sponsor"] != nil,
+	}
 	var err error
 	parsed.Account, err = DecodeAccountID(wire.Account)
 	if err != nil {

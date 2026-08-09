@@ -424,16 +424,23 @@ func (c *Clawback) applyIOU(ctx *tx.ApplyContext) ter.Result {
 			return ter.TefBAD_LEDGER
 		}
 
-		if err := ctx.View.Erase(trustKey); err != nil {
-			return ter.TefINTERNAL
+		lowAccount, highAccount := holderAccount, ctx.Account
+		if issuerIsLow {
+			lowAccount, highAccount = ctx.Account, holderAccount
+		}
+		if rs.Flags&state.LsfLowReserve != 0 {
+			if result := tx.DecreaseOwnerCountForObject(ctx, lowAccountID, lowAccount, trustData, "LowSponsor", 1); result != ter.TesSUCCESS {
+				return result
+			}
+		}
+		if rs.Flags&state.LsfHighReserve != 0 {
+			if result := tx.DecreaseOwnerCountForObject(ctx, highAccountID, highAccount, trustData, "HighSponsor", 1); result != ter.TesSUCCESS {
+				return result
+			}
 		}
 
-		// Decrement OwnerCount for both sides
-		if ctx.Account.OwnerCount > 0 {
-			ctx.Account.OwnerCount--
-		}
-		if holderAccount.OwnerCount > 0 {
-			holderAccount.OwnerCount--
+		if err := ctx.View.Erase(trustKey); err != nil {
+			return ter.TefINTERNAL
 		}
 
 		if result := ctx.UpdateAccountRoot(holderID, holderAccount); result != ter.TesSUCCESS {

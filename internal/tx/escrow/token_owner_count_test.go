@@ -9,6 +9,7 @@ import (
 	addresscodec "github.com/LeJamon/go-xrpl/codec/addresscodec"
 	"github.com/LeJamon/go-xrpl/drops"
 	"github.com/LeJamon/go-xrpl/internal/ledger/state"
+	"github.com/LeJamon/go-xrpl/internal/tx"
 	"github.com/LeJamon/go-xrpl/internal/tx/ter"
 	"github.com/LeJamon/go-xrpl/keylet"
 )
@@ -40,50 +41,6 @@ func (m *mapView) TxExists([32]byte) (bool, error)               { return false,
 func (m *mapView) Rules() *amendment.Rules                       { return nil }
 func (m *mapView) LedgerSeq() uint32                             { return 0 }
 
-// TestAdjustOwnerCountViaView_PreservesPresentZeroAccountTxnID is a regression
-// for the #741 account_hash fork. A token-escrow finish that creates the
-// destination's trust line / MPToken bumps the destination's OwnerCount via
-// adjustOwnerCountViaView, which re-serializes its AccountRoot. The previous
-// hand-rolled serializer emitted sfAccountTxnID only when non-zero, so a
-// present-but-zero AccountTxnID (asfAccountTxnID enabled, account not used
-// since — rippled makeFieldPresent semantics) was silently dropped, forking
-// account_hash from rippled, which keeps every present field. The fix delegates
-// to the canonical tx.AdjustOwnerCount / state.SerializeAccountRoot, which key
-// on presence.
-func TestAdjustOwnerCountViaView_PreservesPresentZeroAccountTxnID(t *testing.T) {
-	view := newMapView()
-	var dest [20]byte
-	dest[0], dest[19] = 0xab, 0xcd
-	addr, err := addresscodec.EncodeAccountIDToClassicAddress(dest[:])
-	require.NoError(t, err)
-	key := keylet.Account(dest)
-
-	acct := &state.AccountRoot{
-		Account:         addr,
-		Balance:         100_000_000,
-		Sequence:        7,
-		OwnerCount:      2,
-		HasAccountTxnID: true,       // present...
-		AccountTxnID:    [32]byte{}, // ...but still zero (rippled makeFieldPresent)
-	}
-	blob, err := state.SerializeAccountRoot(acct)
-	require.NoError(t, err)
-	require.NoError(t, view.Insert(key, blob))
-
-	// The token-escrow finish trust-line / MPToken create path.
-	require.Equal(t, ter.TesSUCCESS, adjustOwnerCountViaView(view, dest, 1))
-
-	out, err := view.Read(key)
-	require.NoError(t, err)
-	got, err := state.ParseAccountRoot(out)
-	require.NoError(t, err)
-
-	require.Equal(t, uint32(3), got.OwnerCount, "owner count must increment")
-	require.True(t, got.HasAccountTxnID,
-		"present-zero sfAccountTxnID must survive the owner-count write-back (#741 account_hash fork)")
-	require.Equal(t, [32]byte{}, got.AccountTxnID, "the preserved value stays zero")
-}
-
 // seedAccountForEscrow inserts a minimal AccountRoot into the view and returns
 // its classic address.
 func seedAccountForEscrow(t *testing.T, v *mapView, id [20]byte, ownerCount uint32) string {
@@ -110,6 +67,14 @@ func ownerCountOf(t *testing.T, v *mapView, id [20]byte) uint32 {
 	return got.OwnerCount
 }
 
+func escrowCreateContext(t *testing.T, view *mapView, owner [20]byte) (*tx.ApplyContext, *state.AccountRoot) {
+	t.Helper()
+	account, err := tx.ReadAccountRoot(view, owner)
+	require.NoError(t, err)
+	require.NotNil(t, account)
+	return &tx.ApplyContext{View: view, Config: tx.EngineConfig{Rules: amendment.NewRules(nil)}}, account
+}
+
 // TestEscrowTokenCreate_OwnerCountBumpGate is a regression for the EscrowCancel
 // account_hash fork. When a token escrow is finished, the destination account
 // gains the re-created trust line / MPToken and rippled bumps its OwnerCount
@@ -132,9 +97,10 @@ func TestEscrowTokenCreate_OwnerCountBumpGate(t *testing.T) {
 		seedAccountForEscrow(t, v, holder, 5)
 		issuanceKey, err := mptIssuanceKeyFromHex(mptHexID)
 		require.NoError(t, err)
+		ctx, account := escrowCreateContext(t, v, holder)
 
 		require.Equal(t, ter.TesSUCCESS,
-			createMPTokenForEscrow(v, issuanceKey, mptHexID, holder, holder, true))
+			createMPTokenForEscrow(ctx, nil, issuanceKey, mptHexID, holder, account, true))
 
 		require.Equal(t, uint32(6), ownerCountOf(t, v, holder),
 			"finish bumps the destination's OwnerCount for the new MPToken")
@@ -147,9 +113,10 @@ func TestEscrowTokenCreate_OwnerCountBumpGate(t *testing.T) {
 		seedAccountForEscrow(t, v, holder, 5)
 		issuanceKey, err := mptIssuanceKeyFromHex(mptHexID)
 		require.NoError(t, err)
+		ctx, account := escrowCreateContext(t, v, holder)
 
 		require.Equal(t, ter.TesSUCCESS,
-			createMPTokenForEscrow(v, issuanceKey, mptHexID, holder, holder, false))
+			createMPTokenForEscrow(ctx, nil, issuanceKey, mptHexID, holder, account, false))
 
 		require.Equal(t, uint32(5), ownerCountOf(t, v, holder),
 			"cancel must not charge the creator's OwnerCount (rippled bumps the erased escrow SLE)")
@@ -164,8 +131,9 @@ func TestEscrowTokenCreate_OwnerCountBumpGate(t *testing.T) {
 		vf := newMapView()
 		seedAccountForEscrow(t, vf, holder, 5)
 		seedAccountForEscrow(t, vf, issuer, 0)
+		finishCtx, finishAccount := escrowCreateContext(t, vf, holder)
 		require.Equal(t, ter.TesSUCCESS,
-			createTrustLineForEscrow(vf, issuer, holder, "USD", holder, recvLow, true))
+			createTrustLineForEscrow(finishCtx, nil, issuer, holder, "USD", finishAccount, recvLow, true))
 		require.Equal(t, uint32(6), ownerCountOf(t, vf, holder),
 			"finish bumps the destination's OwnerCount for the new trust line")
 
@@ -173,8 +141,9 @@ func TestEscrowTokenCreate_OwnerCountBumpGate(t *testing.T) {
 		vc := newMapView()
 		seedAccountForEscrow(t, vc, holder, 5)
 		seedAccountForEscrow(t, vc, issuer, 0)
+		cancelCtx, cancelAccount := escrowCreateContext(t, vc, holder)
 		require.Equal(t, ter.TesSUCCESS,
-			createTrustLineForEscrow(vc, issuer, holder, "USD", holder, recvLow, false))
+			createTrustLineForEscrow(cancelCtx, nil, issuer, holder, "USD", cancelAccount, recvLow, false))
 		require.Equal(t, uint32(5), ownerCountOf(t, vc, holder),
 			"cancel must not charge the creator's OwnerCount for the re-created trust line")
 	})

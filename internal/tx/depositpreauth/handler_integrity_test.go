@@ -327,6 +327,7 @@ func TestAuthorizationConfinesOwnerCountOverflow(t *testing.T) {
 		t.Run(form.name, func(t *testing.T) {
 			view := newFaultView()
 			ctx := applyContext(view, ownerID, math.MaxUint32)
+			ctx.Account.Balance = math.MaxUint64
 
 			require.Equal(t, ter.TesSUCCESS, form.make().Apply(ctx))
 			require.Equal(t, uint32(math.MaxUint32), ctx.Account.OwnerCount)

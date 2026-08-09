@@ -208,10 +208,10 @@ func (m *MPTokenIssuanceCreate) Apply(ctx *tx.ApplyContext) ter.Result {
 	)
 
 	// Reserve check against the prior balance (before fee deduction).
-	if result := ctx.CheckReserveWithFee(ctx.Account.OwnerCount + 1); result != ter.TesSUCCESS {
+	if result := tx.CheckReserve(ctx, m.GetCommon(), ctx.AccountID, ctx.Account, ctx.PriorBalance(), tx.ReserveAdjustment{OwnerCountDelta: 1}, ter.TecINSUFFICIENT_RESERVE); result != ter.TesSUCCESS {
 		ctx.Log.Warn("mptoken issuance create: insufficient reserve",
 			"priorBalance", ctx.PriorBalance(),
-			"reserve", ctx.AccountReserve(ctx.Account.OwnerCount+1),
+			"reserve", tx.RequiredReserve(ctx, ctx.Account, tx.ReserveAdjustment{OwnerCountDelta: 1}),
 		)
 		return result
 	}
@@ -259,6 +259,11 @@ func (m *MPTokenIssuanceCreate) Apply(ctx *tx.ApplyContext) ter.Result {
 		return ter.TecDIR_FULL
 	}
 	issuanceData.OwnerNode = dirResult.Page
+	sponsor, result := tx.IncreaseOwnerCount(ctx, m.GetCommon(), ctx.AccountID, ctx.Account, 1)
+	if result != ter.TesSUCCESS {
+		return result
+	}
+	issuanceData.Sponsor = sponsor
 
 	// Serialize and insert into ledger
 	data, err := state.SerializeMPTokenIssuance(issuanceData)
@@ -271,6 +276,5 @@ func (m *MPTokenIssuanceCreate) Apply(ctx *tx.ApplyContext) ter.Result {
 		return ter.TefINTERNAL
 	}
 
-	ctx.Account.OwnerCount++
 	return ter.TesSUCCESS
 }

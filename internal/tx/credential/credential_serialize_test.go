@@ -63,6 +63,28 @@ func TestSerializeCredentialSubjectNodePresence(t *testing.T) {
 	})
 }
 
+func TestSerializeCredentialSponsorRoundTrip(t *testing.T) {
+	sponsor, err := state.EncodeAccountID([20]byte{0x09})
+	require.NoError(t, err)
+	cred := &CredentialEntry{
+		Subject:        [20]byte{0x02},
+		Issuer:         [20]byte{0x01},
+		CredentialType: []byte{0xab, 0xcd},
+		IssuerNode:     4,
+		SubjectNode:    7,
+		HasSubjectNode: true,
+		Sponsor:        sponsor,
+	}
+	data, err := serializeCredentialEntry(cred)
+	require.NoError(t, err)
+	parsed, err := ParseCredentialEntry(data)
+	require.NoError(t, err)
+	require.Equal(t, sponsor, parsed.Sponsor)
+	reencoded, err := serializeCredentialEntry(parsed)
+	require.NoError(t, err)
+	require.Equal(t, data, reencoded)
+}
+
 func TestSerializeCredentialGeneratedPathMatchesReference(t *testing.T) {
 	expiration := uint32(0)
 	cred := &CredentialEntry{

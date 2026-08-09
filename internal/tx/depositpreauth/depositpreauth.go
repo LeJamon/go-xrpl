@@ -405,7 +405,7 @@ func (d *DepositPreauth) applyAuthorize(ctx *tx.ApplyContext) ter.Result {
 
 	// Check reserve using the prior balance (before the actual fee was
 	// deducted), matching rippled's mPriorBalance comparison.
-	if result := ctx.CheckReserveWithFee(ctx.Account.OwnerCount + 1); result != ter.TesSUCCESS {
+	if result := tx.CheckReserve(ctx, d.GetCommon(), ctx.AccountID, ctx.Account, ctx.PriorBalance(), tx.ReserveAdjustment{OwnerCountDelta: 1}, ter.TecINSUFFICIENT_RESERVE); result != ter.TesSUCCESS {
 		ctx.Log.Warn("deposit preauth authorize: insufficient reserve")
 		return result
 	}
@@ -429,13 +429,20 @@ func (d *DepositPreauth) applyAuthorize(ctx *tx.ApplyContext) ter.Result {
 		ctx.Log.Error("deposit preauth authorize: failed to serialize preauth entry", "error", err)
 		return ter.TefINTERNAL
 	}
+	sponsorAddress, result := tx.IncreaseOwnerCount(ctx, d.GetCommon(), ctx.AccountID, ctx.Account, 1)
+	if result != ter.TesSUCCESS {
+		return result
+	}
+	preauthData, err = tx.SetLedgerEntrySponsor(preauthData, "Sponsor", sponsorAddress)
+	if err != nil {
+		return ctx.Internal("DepositPreauth.Authorize.SetSponsor", err)
+	}
 
 	if err := ctx.View.Insert(preauthKey, preauthData); err != nil {
 		ctx.Log.Error("deposit preauth authorize: failed to insert preauth entry", "error", err)
 		return ter.TefINTERNAL
 	}
 
-	ctx.Account.OwnerCount = tx.ConfineOwnerCount(ctx.Account.OwnerCount, 1)
 	return ter.TesSUCCESS
 }
 
@@ -462,7 +469,7 @@ func (d *DepositPreauth) applyAuthorizeCredentials(ctx *tx.ApplyContext) ter.Res
 
 	// Check reserve using the prior balance (before the actual fee was
 	// deducted), matching rippled's mPriorBalance comparison.
-	if result := ctx.CheckReserveWithFee(ctx.Account.OwnerCount + 1); result != ter.TesSUCCESS {
+	if result := tx.CheckReserve(ctx, d.GetCommon(), ctx.AccountID, ctx.Account, ctx.PriorBalance(), tx.ReserveAdjustment{OwnerCountDelta: 1}, ter.TecINSUFFICIENT_RESERVE); result != ter.TesSUCCESS {
 		ctx.Log.Warn("deposit preauth authorize credentials: insufficient reserve")
 		return result
 	}
@@ -499,13 +506,20 @@ func (d *DepositPreauth) applyAuthorizeCredentials(ctx *tx.ApplyContext) ter.Res
 		ctx.Log.Error("deposit preauth authorize credentials: failed to serialize preauth entry", "error", err)
 		return ter.TefINTERNAL
 	}
+	sponsorAddress, result := tx.IncreaseOwnerCount(ctx, d.GetCommon(), ctx.AccountID, ctx.Account, 1)
+	if result != ter.TesSUCCESS {
+		return result
+	}
+	preauthData, err = tx.SetLedgerEntrySponsor(preauthData, "Sponsor", sponsorAddress)
+	if err != nil {
+		return ctx.Internal("DepositPreauth.AuthorizeCredentials.SetSponsor", err)
+	}
 
 	if err := ctx.View.Insert(preauthKey, preauthData); err != nil {
 		ctx.Log.Error("deposit preauth authorize credentials: failed to insert preauth entry", "error", err)
 		return ter.TefINTERNAL
 	}
 
-	ctx.Account.OwnerCount = tx.ConfineOwnerCount(ctx.Account.OwnerCount, 1)
 	return ter.TesSUCCESS
 }
 
@@ -547,15 +561,14 @@ func removeFromLedger(ctx *tx.ApplyContext, preauthKey keylet.Keylet) ter.Result
 	if ctx.Account == nil {
 		return ctx.Internal("DepositPreauth.Remove.Owner", errors.New("owner account missing"))
 	}
-	if ctx.Account.OwnerCount == 0 {
-		ctx.Log.Error("deposit preauth remove: owner count underflow")
-	}
-
 	ownerDirKey := keylet.OwnerDir(entry.Account)
 	res, err := state.DirRemove(ctx.View, ownerDirKey, entry.OwnerNode, preauthKey.Key, false)
 	if err != nil || !res.Success {
 		ctx.Log.Error("deposit preauth remove: failed to remove from owner directory", "error", err)
 		return ter.TefBAD_LEDGER
+	}
+	if result := tx.DecreaseOwnerCountForObject(ctx, entry.Account, ctx.Account, preauthData, "Sponsor", 1); result != ter.TesSUCCESS {
+		return result
 	}
 
 	// Erase the entry
@@ -563,8 +576,6 @@ func removeFromLedger(ctx *tx.ApplyContext, preauthKey keylet.Keylet) ter.Result
 		ctx.Log.Error("deposit preauth remove: failed to erase entry", "error", err)
 		return ter.TefINTERNAL
 	}
-
-	ctx.Account.OwnerCount = tx.ConfineOwnerCount(ctx.Account.OwnerCount, -1)
 
 	return ter.TesSUCCESS
 }

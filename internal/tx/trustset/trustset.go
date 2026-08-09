@@ -283,16 +283,17 @@ func (t *TrustSet) Apply(ctx *tx.ApplyContext) ter.Result {
 	// Capture the initial owner count and compute the reserve once,
 	// matching rippled's SetTrust.cpp:385-407 which reads uOwnerCount
 	// and computes reserveCreate before any modifications.
-	uOwnerCount := ctx.Account.OwnerCount
+	uOwnerCount := tx.OwnerCountForReserve(ctx.Account, ctx.Rules())
 	var reserveCreate uint64
 	if uOwnerCount < 2 {
 		reserveCreate = 0
 	} else {
-		reserveCreate = ctx.AccountReserve(uOwnerCount + 1)
+		reserveCreate = tx.RequiredReserve(ctx, ctx.Account, tx.ReserveAdjustment{OwnerCountDelta: 1})
 	}
 	// mPriorBalance is the balance BEFORE fee deduction, matching rippled's
 	// Transactor::mPriorBalance (set before doApply is called).
 	mPriorBalance := ctx.PriorBalance()
+	freeTrustLine := !tx.TransactionHasReserveSponsor(t.GetCommon()) && uOwnerCount < 2
 
 	// Determine low/high accounts (for consistent trust line ordering)
 	bHigh := state.CompareAccountIDs(accountID, issuerAccountID) > 0
@@ -426,14 +427,20 @@ func (t *TrustSet) Apply(ctx *tx.ApplyContext) ter.Result {
 			return ter.TecNO_LINE_REDUNDANT
 		}
 
-		// Check account has reserve for new trust line
-		// Reference: rippled SetTrust.cpp line 710: mPriorBalance < reserveCreate
-		if mPriorBalance < reserveCreate {
+		if reserveResult := tx.CheckReserve(
+			ctx,
+			t.GetCommon(),
+			accountID,
+			ctx.Account,
+			mPriorBalance,
+			tx.ReserveAdjustment{OwnerCountDelta: 1},
+			ter.TecNO_LINE_INSUF_RESERVE,
+		); !freeTrustLine && reserveResult != ter.TesSUCCESS {
 			ctx.Log.Warn("trust set: insufficient reserve for new trust line",
 				"balance", mPriorBalance,
 				"reserve", reserveCreate,
 			)
-			return ter.TecNO_LINE_INSUF_RESERVE
+			return reserveResult
 		}
 
 		// Create the trust line through the shared canonical creator. The sender
@@ -465,7 +472,32 @@ func (t *TrustSet) Apply(ctx *tx.ApplyContext) ter.Result {
 			return result
 		}
 
-		ctx.Account.OwnerCount++
+		reserveSponsor, result := tx.IncreaseOwnerCount(ctx, t.GetCommon(), accountID, ctx.Account, 1)
+		if result != ter.TesSUCCESS {
+			return result
+		}
+		if reserveSponsor != "" {
+			lineData, err := ctx.View.Read(trustLineKey)
+			if err != nil || lineData == nil {
+				return ter.TefINTERNAL
+			}
+			line, err := state.ParseRippleState(lineData)
+			if err != nil {
+				return ter.TefINTERNAL
+			}
+			if bHigh {
+				line.HighSponsor = reserveSponsor
+			} else {
+				line.LowSponsor = reserveSponsor
+			}
+			lineData, err = state.SerializeRippleState(line)
+			if err != nil {
+				return ter.TefINTERNAL
+			}
+			if err := ctx.View.Update(trustLineKey, lineData); err != nil {
+				return ter.TefINTERNAL
+			}
+		}
 	} else {
 		// Modify existing trust line
 		trustLineData, err := ctx.View.Read(trustLineKey)
@@ -619,44 +651,59 @@ func (t *TrustSet) Apply(ctx *tx.ApplyContext) ter.Result {
 
 		bDefault := !bLowReserveSet && !bHighReserveSet
 		badCurrency := keylet.CurrencyBytes(t.LimitAmount.Currency) == keylet.BadCurrency()
-		bReserveIncrease := false
+		lowID, highID := accountID, issuerAccountID
+		lowAccount, highAccount := ctx.Account, issuerAccount
+		if bHigh {
+			lowID, highID = issuerAccountID, accountID
+			lowAccount, highAccount = issuerAccount, ctx.Account
+		}
 
 		if bLowReserveSet && !bLowReserved {
-			rs.Flags |= state.LsfLowReserve
-			if !bHigh {
-				ctx.Account.OwnerCount++
-				bReserveIncrease = true
-			} else {
-				issuerAccount.OwnerCount++
-			}
-		} else if !bLowReserveSet && bLowReserved {
-			rs.Flags &^= state.LsfLowReserve
-			if !bHigh {
-				if ctx.Account.OwnerCount > 0 {
-					ctx.Account.OwnerCount--
+			if lowID == accountID && !freeTrustLine {
+				if result := tx.CheckReserve(ctx, t.GetCommon(), lowID, lowAccount, mPriorBalance, tx.ReserveAdjustment{OwnerCountDelta: 1}, ter.TecINSUF_RESERVE_LINE); result != ter.TesSUCCESS {
+					return result
 				}
-			} else if issuerAccount.OwnerCount > 0 {
-				issuerAccount.OwnerCount--
 			}
+			reserveSponsor, result := tx.IncreaseOwnerCount(ctx, t.GetCommon(), lowID, lowAccount, 1)
+			if result != ter.TesSUCCESS {
+				return result
+			}
+			rs.Flags |= state.LsfLowReserve
+			rs.LowSponsor = reserveSponsor
+		} else if !bLowReserveSet && bLowReserved {
+			lineData, err := state.SerializeRippleState(rs)
+			if err != nil {
+				return ter.TefINTERNAL
+			}
+			if result := tx.DecreaseOwnerCountForObject(ctx, lowID, lowAccount, lineData, "LowSponsor", 1); result != ter.TesSUCCESS {
+				return result
+			}
+			rs.Flags &^= state.LsfLowReserve
+			rs.LowSponsor = ""
 		}
 
 		if bHighReserveSet && !bHighReserved {
-			rs.Flags |= state.LsfHighReserve
-			if bHigh {
-				ctx.Account.OwnerCount++
-				bReserveIncrease = true
-			} else {
-				issuerAccount.OwnerCount++
-			}
-		} else if !bHighReserveSet && bHighReserved {
-			rs.Flags &^= state.LsfHighReserve
-			if bHigh {
-				if ctx.Account.OwnerCount > 0 {
-					ctx.Account.OwnerCount--
+			if highID == accountID && !freeTrustLine {
+				if result := tx.CheckReserve(ctx, t.GetCommon(), highID, highAccount, mPriorBalance, tx.ReserveAdjustment{OwnerCountDelta: 1}, ter.TecINSUF_RESERVE_LINE); result != ter.TesSUCCESS {
+					return result
 				}
-			} else if issuerAccount.OwnerCount > 0 {
-				issuerAccount.OwnerCount--
 			}
+			reserveSponsor, result := tx.IncreaseOwnerCount(ctx, t.GetCommon(), highID, highAccount, 1)
+			if result != ter.TesSUCCESS {
+				return result
+			}
+			rs.Flags |= state.LsfHighReserve
+			rs.HighSponsor = reserveSponsor
+		} else if !bHighReserveSet && bHighReserved {
+			lineData, err := state.SerializeRippleState(rs)
+			if err != nil {
+				return ter.TefINTERNAL
+			}
+			if result := tx.DecreaseOwnerCountForObject(ctx, highID, highAccount, lineData, "HighSponsor", 1); result != ter.TesSUCCESS {
+				return result
+			}
+			rs.Flags &^= state.LsfHighReserve
+			rs.HighSponsor = ""
 		}
 
 		issuerChanged := (bLowReserveSet && !bLowReserved && bHigh) ||
@@ -710,12 +757,6 @@ func (t *TrustSet) Apply(ctx *tx.ApplyContext) ter.Result {
 				}
 			}
 		} else {
-			// Check reserve increase affordability
-			// Reference: rippled SetTrust.cpp line 681: mPriorBalance < reserveCreate
-			if bReserveIncrease && mPriorBalance < reserveCreate {
-				return ter.TecINSUF_RESERVE_LINE
-			}
-
 			// Write issuer account back if its OwnerCount changed
 			if issuerChanged {
 				issuerUpdatedData, serErr := state.SerializeAccountRoot(issuerAccount)

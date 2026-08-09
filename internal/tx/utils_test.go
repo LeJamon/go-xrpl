@@ -44,6 +44,37 @@ func TestAccountFundsNoFreezeStrictRejectsReserveOverflow(t *testing.T) {
 	}
 }
 
+func TestXRPLiquidUsesSponsorReserveCounts(t *testing.T) {
+	tests := []struct {
+		name    string
+		account state.AccountRoot
+		want    int64
+	}{
+		{"sponsored object", state.AccountRoot{OwnerCount: 1, SponsoredOwnerCount: 1}, 900},
+		{"sponsoring object", state.AccountRoot{SponsoringOwnerCount: 1}, 890},
+		{"sponsored account", state.AccountRoot{HasSponsor: true}, 1_000},
+		{"sponsoring accounts", state.AccountRoot{SponsoringAccountCount: 2}, 700},
+		{"vault pseudo account", state.AccountRoot{OwnerCount: 100, VaultID: [32]byte{1}}, 1_000},
+	}
+	for i, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			var accountID [20]byte
+			accountID[19] = byte(i + 1)
+			test.account.Account = state.EncodeAccountIDSafe(accountID)
+			test.account.Balance = 1_000
+			data, err := state.SerializeAccountRoot(&test.account)
+			if err != nil {
+				t.Fatalf("SerializeAccountRoot: %v", err)
+			}
+			view := newMockBaseView()
+			view.data[keylet.Account(accountID).Key] = data
+			if got := XRPLiquid(view, accountID, 0, 100, 10).Drops(); got != test.want {
+				t.Fatalf("XRPLiquid = %d, want %d", got, test.want)
+			}
+		})
+	}
+}
+
 // TestLPTokenFrozenForIssuer_AMMUnresolvable covers the corrupt-ledger arm: an
 // issuer AccountRoot carrying sfAMMID whose referenced AMM SLE is absent. rippled
 // returns tecINTERNAL from checkFreeze here (StepChecks.h:71-72, LCOV_EXCL_LINE)

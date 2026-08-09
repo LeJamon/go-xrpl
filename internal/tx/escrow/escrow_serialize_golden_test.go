@@ -90,6 +90,38 @@ func TestEscrowSerializeGolden(t *testing.T) {
 	}
 }
 
+func TestEscrowSponsorRoundTrip(t *testing.T) {
+	sponsor, err := state.EncodeAccountID([20]byte{0x09})
+	if err != nil {
+		t.Fatal(err)
+	}
+	data, err := state.SerializeEscrow(
+		escOwnerID, escDestID, tx.NewXRPAmount(1_000_000), 0,
+		3, 0, false, 0, false, nil, nil, "", nil, nil, nil, sponsor,
+	)
+	if err != nil {
+		t.Fatalf("state.SerializeEscrow: %v", err)
+	}
+	parsed, err := state.ParseEscrow(data)
+	if err != nil {
+		t.Fatalf("state.ParseEscrow: %v", err)
+	}
+	if parsed.Sponsor != sponsor {
+		t.Fatalf("Sponsor = %q, want %q", parsed.Sponsor, sponsor)
+	}
+	reencoded, err := state.SerializeEscrow(
+		parsed.Account, parsed.DestinationID, tx.NewXRPAmount(int64(parsed.Amount)), parsed.TransferRate,
+		parsed.OwnerNode, parsed.DestinationNode, parsed.HasDestNode, parsed.IssuerNode, parsed.HasIssuerNode,
+		nil, nil, parsed.Condition, nil, nil, nil, parsed.Sponsor,
+	)
+	if err != nil {
+		t.Fatalf("re-serialize Escrow: %v", err)
+	}
+	if hexUpper(reencoded) != hexUpper(data) {
+		t.Fatalf("Escrow sponsor round-trip changed bytes\nwant=%s\n got=%s", hexUpper(data), hexUpper(reencoded))
+	}
+}
+
 func hexUpper(b []byte) string {
 	const h = "0123456789ABCDEF"
 	out := make([]byte, len(b)*2)

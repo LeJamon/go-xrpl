@@ -86,7 +86,7 @@ func newPayChannelData(pcTx *PaymentChannelCreate, ownerID, destID [20]byte, amo
 // closeChannel closes a payment channel: removes from directories, returns remaining funds
 // to owner, decrements OwnerCount, and erases the channel SLE.
 // Reference: rippled PayChan.cpp closeChannel() (lines 116-164)
-func closeChannel(ctx *tx.ApplyContext, channelKey keylet.Keylet, channel *state.PayChannelData) ter.Result {
+func closeChannel(ctx *tx.ApplyContext, channelKey keylet.Keylet, channel *state.PayChannelData, objectData []byte) ter.Result {
 	// 1. Remove from owner directory
 	ownerDirKey := keylet.OwnerDir(channel.Account)
 	if result := tx.DirRemoveOrBadLedger(ctx.View, ownerDirKey, channel.OwnerNode, channelKey.Key); result != ter.TesSUCCESS {
@@ -107,8 +107,8 @@ func closeChannel(ctx *tx.ApplyContext, channelKey keylet.Keylet, channel *state
 	if channel.Account == ctx.AccountID {
 		// Owner is the sender — use ctx.Account (engine writes it back)
 		ctx.Account.Balance += remaining
-		if ctx.Account.OwnerCount > 0 {
-			ctx.Account.OwnerCount--
+		if result := tx.DecreaseOwnerCountForObject(ctx, channel.Account, ctx.Account, objectData, "Sponsor", 1); result != ter.TesSUCCESS {
+			return result
 		}
 	} else {
 		// Owner is not the sender (dest is closing) — read and update owner directly
@@ -122,15 +122,8 @@ func closeChannel(ctx *tx.ApplyContext, channelKey keylet.Keylet, channel *state
 			return ter.TefINTERNAL
 		}
 		ownerAccount.Balance += remaining
-		if ownerAccount.OwnerCount > 0 {
-			ownerAccount.OwnerCount--
-		}
-		ownerUpdated, err := state.SerializeAccountRoot(ownerAccount)
-		if err != nil {
-			return ter.TefINTERNAL
-		}
-		if err := ctx.View.Update(ownerKey, ownerUpdated); err != nil {
-			return ter.TefINTERNAL
+		if result := tx.DecreaseOwnerCountForObject(ctx, channel.Account, ownerAccount, objectData, "Sponsor", 1); result != ter.TesSUCCESS {
+			return result
 		}
 	}
 

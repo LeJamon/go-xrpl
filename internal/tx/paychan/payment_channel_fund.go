@@ -139,7 +139,7 @@ func (p *PaymentChannelFund) Apply(ctx *tx.ApplyContext) ter.Result {
 	closeTime := ctx.Config.ParentCloseTime
 	if isChannelExpired(rules, closeTime, channel.CancelAfter) ||
 		isChannelExpired(rules, closeTime, channel.Expiration) {
-		return closeChannel(ctx, channelKey, channel)
+		return closeChannel(ctx, channelKey, channel, channelData)
 	}
 
 	// Verify sender is the channel owner
@@ -174,15 +174,23 @@ func (p *PaymentChannelFund) Apply(ctx *tx.ApplyContext) ter.Result {
 	// Reserve check
 	// Reference: rippled PayChan.cpp doApply() lines 383-387
 	amount := uint64(p.Amount.Drops())
-	reserve := ctx.AccountReserve(ctx.Account.OwnerCount)
-	if ctx.Account.Balance < reserve {
+	adjustment := tx.ReserveAdjustment{}
+	if result := tx.CheckReserve(
+		ctx,
+		p.GetCommon(),
+		ctx.AccountID,
+		ctx.Account,
+		ctx.Account.Balance,
+		adjustment,
+		ter.TecINSUFFICIENT_RESERVE,
+	); result != ter.TesSUCCESS {
 		ctx.Log.Warn("payment channel fund: insufficient reserve",
 			"balance", ctx.Account.Balance,
-			"reserve", reserve,
 		)
-		return ter.TecINSUFFICIENT_RESERVE
+		return result
 	}
-	if ctx.Account.Balance-reserve < amount {
+	reserve := tx.RequiredReserve(ctx, ctx.Account, adjustment)
+	if ctx.Account.Balance < amount || ctx.Account.Balance-amount < reserve {
 		ctx.Log.Warn("payment channel fund: unfunded",
 			"balance", ctx.Account.Balance,
 			"needed", reserve+amount,

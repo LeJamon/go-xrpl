@@ -3,6 +3,7 @@ package sponsor_test
 import (
 	"encoding/hex"
 	"sort"
+	"strconv"
 	"testing"
 
 	"github.com/LeJamon/go-xrpl/codec/binarycodec"
@@ -11,10 +12,17 @@ import (
 	"github.com/LeJamon/go-xrpl/internal/tx"
 	accounttx "github.com/LeJamon/go-xrpl/internal/tx/account"
 	checktx "github.com/LeJamon/go-xrpl/internal/tx/check"
+	credentialtx "github.com/LeJamon/go-xrpl/internal/tx/credential"
 	delegatetx "github.com/LeJamon/go-xrpl/internal/tx/delegate"
+	depositpreauthtx "github.com/LeJamon/go-xrpl/internal/tx/depositpreauth"
+	escrowtx "github.com/LeJamon/go-xrpl/internal/tx/escrow"
+	mpttx "github.com/LeJamon/go-xrpl/internal/tx/mpt"
+	paychantx "github.com/LeJamon/go-xrpl/internal/tx/paychan"
 	paymenttx "github.com/LeJamon/go-xrpl/internal/tx/payment"
 	signtx "github.com/LeJamon/go-xrpl/internal/tx/sign"
+	signerlisttx "github.com/LeJamon/go-xrpl/internal/tx/signerlist"
 	sponsortx "github.com/LeJamon/go-xrpl/internal/tx/sponsor"
+	trustsettx "github.com/LeJamon/go-xrpl/internal/tx/trustset"
 	"github.com/LeJamon/go-xrpl/keylet"
 	"github.com/stretchr/testify/require"
 )
@@ -38,16 +46,16 @@ func sponsorEnv(t *testing.T) (*jtx.TestEnv, *jtx.Account, *jtx.Account, *jtx.Ac
 func setSponsorship(
 	env *jtx.TestEnv,
 	sponsor, sponsee *jtx.Account,
-	feeDrops uint64,
-	remaining *uint32,
+	feeDeltaDrops int64,
+	remainingDelta *int32,
 ) jtx.TxResult {
 	txn := sponsortx.NewSponsorshipSet(sponsor.Address)
 	txn.Sponsee = sponsee.Address
-	if feeDrops > 0 {
-		amount := tx.NewXRPAmount(int64(feeDrops))
-		txn.FeeAmount = &amount
+	if feeDeltaDrops != 0 {
+		amount := tx.NewXRPAmount(feeDeltaDrops)
+		txn.FeeAmountDelta = &amount
 	}
-	txn.RemainingOwnerCount = remaining
+	txn.RemainingOwnerCountDelta = remainingDelta
 	return env.Submit(txn)
 }
 
@@ -59,7 +67,7 @@ func setFeeSponsorship(
 	txn := sponsortx.NewSponsorshipSet(sponsor.Address)
 	txn.Sponsee = sponsee.Address
 	feeAmount := tx.NewXRPAmount(int64(feeDrops))
-	txn.FeeAmount = &feeAmount
+	txn.FeeAmountDelta = &feeAmount
 	if maxFeeDrops != 0 {
 		maxFee := tx.NewXRPAmount(int64(maxFeeDrops))
 		txn.MaxFee = &maxFee
@@ -258,7 +266,7 @@ func TestSponsorshipSetCreateUpdateDelete(t *testing.T) {
 	env, sponsee, _, sponsor, _ := sponsorEnv(t)
 
 	initialBalance := env.Balance(sponsor)
-	remaining := uint32(3)
+	remaining := int32(3)
 	created := setSponsorship(env, sponsor, sponsee, 1_000, &remaining)
 	require.Equal(t, "tesSUCCESS", created.Code)
 	requireAffectedNodes(t, created,
@@ -278,12 +286,12 @@ func TestSponsorshipSetCreateUpdateDelete(t *testing.T) {
 	require.Equal(t, uint32(1), env.OwnerCount(sponsor))
 	require.Equal(t, initialBalance-1_000-10, env.Balance(sponsor))
 
-	updatedFee := tx.NewXRPAmount(400)
-	updatedRemaining := uint32(2)
+	updatedFee := tx.NewXRPAmount(-600)
+	updatedRemaining := int32(-1)
 	update := sponsortx.NewSponsorshipSet(sponsor.Address)
 	update.Sponsee = sponsee.Address
-	update.FeeAmount = &updatedFee
-	update.RemainingOwnerCount = &updatedRemaining
+	update.FeeAmountDelta = &updatedFee
+	update.RemainingOwnerCountDelta = &updatedRemaining
 	update.SetFlags(sponsortx.SponsorshipSetFlagRequireSignForReserve)
 	updated := env.Submit(update)
 	require.Equal(t, "tesSUCCESS", updated.Code)
@@ -317,10 +325,65 @@ func TestSponsorshipSetCreateUpdateDelete(t *testing.T) {
 	require.Equal(t, initialBalance-20, env.Balance(sponsor), "sponsee pays the delete fee; prefund is refunded")
 }
 
+func TestSponsorshipSetDeltaBounds(t *testing.T) {
+	const maxInt32 = int32(1<<31 - 1)
+
+	t.Run("count overflow is rejected", func(t *testing.T) {
+		env, sponsee, _, sponsor, _ := sponsorEnv(t)
+		max := maxInt32
+		require.Equal(t, "tesSUCCESS", setSponsorship(env, sponsor, sponsee, 0, &max).Code)
+		require.Equal(t, uint32(maxInt32), sponsorshipEntry(t, env, sponsor, sponsee).RemainingOwnerCount)
+
+		require.Equal(t, "tesSUCCESS", setSponsorship(env, sponsor, sponsee, 0, &max).Code)
+		require.Equal(t, uint32(maxInt32)*2, sponsorshipEntry(t, env, sponsor, sponsee).RemainingOwnerCount)
+
+		overflow := int32(2)
+		require.Equal(t, "tecLIMIT_EXCEEDED", setSponsorship(env, sponsor, sponsee, 0, &overflow).Code)
+		require.Equal(t, uint32(maxInt32)*2, sponsorshipEntry(t, env, sponsor, sponsee).RemainingOwnerCount)
+	})
+
+	t.Run("count underflow clamps when fee budget remains", func(t *testing.T) {
+		env, sponsee, _, sponsor, _ := sponsorEnv(t)
+		remaining := int32(10)
+		require.Equal(t, "tesSUCCESS", setSponsorship(env, sponsor, sponsee, 100, &remaining).Code)
+
+		underflow := int32(-20)
+		require.Equal(t, "tesSUCCESS", setSponsorship(env, sponsor, sponsee, 0, &underflow).Code)
+		entry := sponsorshipEntry(t, env, sponsor, sponsee)
+		require.Equal(t, uint32(0), entry.RemainingOwnerCount)
+		require.True(t, entry.HasFeeAmount)
+		require.Equal(t, uint64(100), entry.FeeAmount)
+	})
+
+	t.Run("count underflow is rejected when budget empties", func(t *testing.T) {
+		env, sponsee, _, sponsor, _ := sponsorEnv(t)
+		remaining := int32(10)
+		require.Equal(t, "tesSUCCESS", setSponsorship(env, sponsor, sponsee, 0, &remaining).Code)
+
+		underflow := int32(-20)
+		require.Equal(t, "tecNO_PERMISSION", setSponsorship(env, sponsor, sponsee, 0, &underflow).Code)
+		require.Equal(t, uint32(10), sponsorshipEntry(t, env, sponsor, sponsee).RemainingOwnerCount)
+	})
+
+	t.Run("clamped negative fee delta still checks reserve", func(t *testing.T) {
+		env, sponsee, _, sponsor, _ := sponsorEnv(t)
+		remaining := int32(1)
+		require.Equal(t, "tesSUCCESS", setSponsorship(env, sponsor, sponsee, 0, &remaining).Code)
+
+		setAccountBalance(t, env, sponsor, env.ReserveBase()+env.ReserveIncrement()-1)
+		negative := tx.NewXRPAmount(-1)
+		update := sponsortx.NewSponsorshipSet(sponsor.Address)
+		update.Sponsee = sponsee.Address
+		update.FeeAmountDelta = &negative
+		require.Equal(t, "tecUNFUNDED", env.Submit(update).Code)
+		require.False(t, sponsorshipEntry(t, env, sponsor, sponsee).HasFeeAmount)
+	})
+}
+
 func TestSponsorshipSetPreclaimMatrix(t *testing.T) {
 	env, sponsee, _, sponsor, _ := sponsorEnv(t)
 	missing := jtx.NewAccount("missing-sponsor-party")
-	remaining := uint32(1)
+	remaining := int32(1)
 
 	require.Equal(t, "tecNO_DST", setSponsorship(env, sponsor, missing, 0, &remaining).Code)
 
@@ -334,11 +397,11 @@ func TestSponsorshipSetPreclaimMatrix(t *testing.T) {
 	missingObject.SetFlags(sponsortx.SponsorshipSetFlagDelete)
 	require.Equal(t, "tecNO_ENTRY", env.Submit(missingObject).Code)
 
-	require.Equal(t, "tecNO_PERMISSION", setSponsorship(env, sponsor, sponsee, 0, nil).Code)
+	require.Equal(t, "temREDUNDANT", setSponsorship(env, sponsor, sponsee, 0, nil).Code)
 	require.False(t, env.LedgerEntryExists(keylet.Sponsorship(sponsor.ID, sponsee.ID)))
 
 	setPseudoAccount(t, env, sponsee)
-	require.Equal(t, "tecNO_PERMISSION", setSponsorship(env, sponsor, sponsee, 0, &remaining).Code)
+	require.Equal(t, "tecPSEUDO_ACCOUNT", setSponsorship(env, sponsor, sponsee, 0, &remaining).Code)
 	require.False(t, env.LedgerEntryExists(keylet.Sponsorship(sponsor.ID, sponsee.ID)))
 
 	pseudoSponsorEnv, ordinarySponsee, _, pseudoSponsor, _ := sponsorEnv(t)
@@ -346,7 +409,7 @@ func TestSponsorshipSetPreclaimMatrix(t *testing.T) {
 	deleteFromSponsee := sponsortx.NewSponsorshipSet(ordinarySponsee.Address)
 	deleteFromSponsee.CounterpartySponsor = pseudoSponsor.Address
 	deleteFromSponsee.SetFlags(sponsortx.SponsorshipSetFlagDelete)
-	require.Equal(t, "tecNO_PERMISSION", pseudoSponsorEnv.Submit(deleteFromSponsee).Code)
+	require.Equal(t, "tecPSEUDO_ACCOUNT", pseudoSponsorEnv.Submit(deleteFromSponsee).Code)
 	require.False(t, pseudoSponsorEnv.LedgerEntryExists(keylet.Sponsorship(pseudoSponsor.ID, ordinarySponsee.ID)))
 }
 
@@ -358,8 +421,8 @@ func TestSponsorshipTransferObjectCreateReassignEnd(t *testing.T) {
 	require.Equal(t, "tesSUCCESS", env.Submit(createCheck).Code)
 	checkKey := keylet.Check(sponsee.ID, checkSequence)
 
-	remaining1 := uint32(2)
-	remaining2 := uint32(2)
+	remaining1 := int32(2)
+	remaining2 := int32(2)
 	require.Equal(t, "tesSUCCESS", setSponsorship(env, sponsor1, sponsee, 0, &remaining1).Code)
 	require.Equal(t, "tesSUCCESS", setSponsorship(env, sponsor2, sponsee, 0, &remaining2).Code)
 
@@ -420,6 +483,271 @@ func TestSponsorshipTransferObjectCreateReassignEnd(t *testing.T) {
 	require.Equal(t, uint32(0), accountState(t, env, sponsor2).SponsoringOwnerCount)
 	require.Equal(t, uint32(1), sponsorshipEntry(t, env, sponsor2, sponsee).RemainingOwnerCount,
 		"ending sponsorship does not refund prefunded reserve capacity")
+}
+
+func TestSponsoredTrustLineCreateAndDelete(t *testing.T) {
+	env, sponsee, issuer, sponsor, _ := sponsorEnv(t)
+	remaining := int32(1)
+	require.Equal(t, "tesSUCCESS", setSponsorship(env, sponsor, sponsee, 0, &remaining).Code)
+
+	create := trustsettx.NewTrustSet(sponsee.Address, issuer.IOU("USD", 100))
+	create.Sponsor = sponsor.Address
+	flags := tx.SpfSponsorReserve
+	create.SponsorFlags = &flags
+	require.Equal(t, "tesSUCCESS", env.Submit(create).Code)
+
+	lineKey := keylet.Line(sponsee.ID, issuer.ID, "USD")
+	raw, err := env.Ledger().Read(lineKey)
+	require.NoError(t, err)
+	line, err := state.ParseRippleState(raw)
+	require.NoError(t, err)
+	if keylet.IsLowAccount(sponsee.ID, issuer.ID) {
+		require.Equal(t, sponsor.Address, line.LowSponsor)
+	} else {
+		require.Equal(t, sponsor.Address, line.HighSponsor)
+	}
+	require.Equal(t, uint32(1), accountState(t, env, sponsee).SponsoredOwnerCount)
+	require.Equal(t, uint32(1), accountState(t, env, sponsor).SponsoringOwnerCount)
+	require.Zero(t, sponsorshipEntry(t, env, sponsor, sponsee).RemainingOwnerCount)
+
+	remove := trustsettx.NewTrustSet(sponsee.Address, issuer.IOU("USD", 0))
+	require.Equal(t, "tesSUCCESS", env.Submit(remove).Code)
+	require.False(t, env.LedgerEntryExists(lineKey))
+	require.Zero(t, accountState(t, env, sponsee).SponsoredOwnerCount)
+	require.Zero(t, accountState(t, env, sponsor).SponsoringOwnerCount)
+}
+
+func TestCredentialAcceptPreservesLiveSponsorAccount(t *testing.T) {
+	env, issuer, subject, _, _ := sponsorEnv(t)
+	remaining := int32(1)
+	require.Equal(t, "tesSUCCESS", setSponsorship(env, subject, issuer, 0, &remaining).Code)
+
+	create := credentialtx.NewCredentialCreate(issuer.Address, subject.Address, "4142")
+	create.Sponsor = subject.Address
+	reserve := tx.SpfSponsorReserve
+	create.SponsorFlags = &reserve
+	require.Equal(t, "tesSUCCESS", env.Submit(create).Code)
+	require.Equal(t, uint32(1), accountState(t, env, issuer).SponsoredOwnerCount)
+	require.Equal(t, uint32(1), accountState(t, env, subject).SponsoringOwnerCount)
+
+	balanceBefore := env.Balance(subject)
+	accept := credentialtx.NewCredentialAccept(subject.Address, issuer.Address, "4142")
+	require.Equal(t, "tesSUCCESS", env.Submit(accept).Code)
+	require.Equal(t, balanceBefore-10, env.Balance(subject))
+	require.Zero(t, accountState(t, env, issuer).SponsoredOwnerCount)
+	require.Zero(t, accountState(t, env, subject).SponsoringOwnerCount)
+	require.Equal(t, uint32(2), env.OwnerCount(subject))
+}
+
+func TestSelfIssuedCredentialAcceptPreservesLiveAccount(t *testing.T) {
+	env, subject, _, sponsor, _ := sponsorEnv(t)
+	remaining := int32(1)
+	require.Equal(t, "tesSUCCESS", setSponsorship(env, sponsor, subject, 0, &remaining).Code)
+
+	create := credentialtx.NewCredentialCreate(subject.Address, subject.Address, "4142")
+	create.Sponsor = sponsor.Address
+	reserve := tx.SpfSponsorReserve
+	create.SponsorFlags = &reserve
+	require.Equal(t, "tesSUCCESS", env.Submit(create).Code)
+	require.Equal(t, uint32(1), accountState(t, env, subject).SponsoredOwnerCount)
+	require.Equal(t, uint32(1), accountState(t, env, sponsor).SponsoringOwnerCount)
+	credentialKey := keylet.Credential(subject.ID, subject.ID, []byte{0x41, 0x42})
+	credentialData, err := env.LedgerEntry(credentialKey)
+	require.NoError(t, err)
+	credentialFields, err := binarycodec.DecodeBytes(credentialData)
+	require.NoError(t, err)
+	credentialFields["Flags"] = uint32(0)
+	credentialData, err = binarycodec.EncodeBytes(credentialFields)
+	require.NoError(t, err)
+	require.NoError(t, env.Ledger().Update(credentialKey, credentialData))
+
+	balanceBefore := env.Balance(subject)
+	accept := credentialtx.NewCredentialAccept(subject.Address, subject.Address, "4142")
+	require.Equal(t, "tesSUCCESS", env.Submit(accept).Code)
+	require.Equal(t, balanceBefore-env.BaseFee(), env.Balance(subject))
+	require.Equal(t, uint32(1), env.OwnerCount(subject))
+	require.Zero(t, accountState(t, env, subject).SponsoredOwnerCount)
+	require.Zero(t, accountState(t, env, sponsor).SponsoringOwnerCount)
+}
+
+func TestPaymentChannelFundUsesEffectiveOwnerCount(t *testing.T) {
+	env, source, destination, sponsor, _ := sponsorEnv(t)
+	remaining := int32(1)
+	require.Equal(t, "tesSUCCESS", setSponsorship(env, sponsor, source, 0, &remaining).Code)
+
+	sequence := env.Seq(source)
+	create := paychantx.NewPaymentChannelCreate(
+		source.Address,
+		destination.Address,
+		tx.NewXRPAmount(1),
+		3600,
+		source.PublicKeyHex(),
+	)
+	create.Sponsor = sponsor.Address
+	reserve := tx.SpfSponsorReserve
+	create.SponsorFlags = &reserve
+	require.Equal(t, "tesSUCCESS", env.Submit(create).Code)
+	require.Equal(t, uint32(1), accountState(t, env, source).SponsoredOwnerCount)
+
+	fundAmount := uint64(1_000)
+	setAccountBalance(t, env, source, env.ReserveBase()+fundAmount+env.BaseFee())
+	channelKey := keylet.PayChannel(source.ID, destination.ID, sequence)
+	fund := paychantx.NewPaymentChannelFund(
+		source.Address,
+		hex.EncodeToString(channelKey.Key[:]),
+		tx.NewXRPAmount(int64(fundAmount)),
+	)
+	require.Equal(t, "tesSUCCESS", env.Submit(fund).Code)
+	require.Equal(t, env.ReserveBase(), env.Balance(source))
+}
+
+func TestSponsoredObjectLifecyclePaths(t *testing.T) {
+	type lifecycle struct {
+		name         string
+		build        func(*jtx.TestEnv, *jtx.Account, *jtx.Account) (tx.Transaction, keylet.Keylet, tx.Transaction)
+		beforeDelete func(*jtx.TestEnv)
+	}
+	tests := []lifecycle{
+		{
+			name: "Check",
+			build: func(env *jtx.TestEnv, owner, destination *jtx.Account) (tx.Transaction, keylet.Keylet, tx.Transaction) {
+				sequence := env.Seq(owner)
+				object := keylet.Check(owner.ID, sequence)
+				return checktx.NewCheckCreate(owner.Address, destination.Address, tx.NewXRPAmount(1)), object,
+					checktx.NewCheckCancel(owner.Address, hex.EncodeToString(object.Key[:]))
+			},
+		},
+		{
+			name: "Delegate",
+			build: func(env *jtx.TestEnv, owner, destination *jtx.Account) (tx.Transaction, keylet.Keylet, tx.Transaction) {
+				env.EnableFeature("PermissionDelegationV1_1")
+				env.Close()
+				create := delegatetx.NewDelegateSet(owner.Address)
+				create.Authorize = destination.Address
+				create.Permissions = []delegatetx.Permission{delegatetx.NewPermission("Payment")}
+				remove := delegatetx.NewDelegateSet(owner.Address)
+				remove.Authorize = destination.Address
+				return create, keylet.Delegate(owner.ID, destination.ID), remove
+			},
+		},
+		{
+			name: "DepositPreauth",
+			build: func(_ *jtx.TestEnv, owner, destination *jtx.Account) (tx.Transaction, keylet.Keylet, tx.Transaction) {
+				create := depositpreauthtx.NewDepositPreauth(owner.Address)
+				create.Authorize = destination.Address
+				remove := depositpreauthtx.NewDepositPreauth(owner.Address)
+				remove.Unauthorize = destination.Address
+				return create, keylet.DepositPreauth(owner.ID, destination.ID), remove
+			},
+		},
+		{
+			name: "Escrow",
+			build: func(env *jtx.TestEnv, owner, destination *jtx.Account) (tx.Transaction, keylet.Keylet, tx.Transaction) {
+				sequence := env.Seq(owner)
+				finishAfter := env.NowRipple() + 1
+				create := escrowtx.NewEscrowCreate(owner.Address, destination.Address, tx.NewXRPAmount(1))
+				create.FinishAfter = &finishAfter
+				return create, keylet.Escrow(owner.ID, sequence), escrowtx.NewEscrowFinish(destination.Address, owner.Address, sequence)
+			},
+			beforeDelete: func(env *jtx.TestEnv) { env.Close() },
+		},
+		{
+			name: "MPTokenIssuance",
+			build: func(env *jtx.TestEnv, owner, _ *jtx.Account) (tx.Transaction, keylet.Keylet, tx.Transaction) {
+				id := keylet.MakeMPTID(env.Seq(owner), owner.ID)
+				idHex := hex.EncodeToString(id[:])
+				return mpttx.NewMPTokenIssuanceCreate(owner.Address), keylet.MPTIssuance(id),
+					mpttx.NewMPTokenIssuanceDestroy(owner.Address, idHex)
+			},
+		},
+		{
+			name: "PayChannel",
+			build: func(env *jtx.TestEnv, owner, destination *jtx.Account) (tx.Transaction, keylet.Keylet, tx.Transaction) {
+				sequence := env.Seq(owner)
+				object := keylet.PayChannel(owner.ID, destination.ID, sequence)
+				claim := paychantx.NewPaymentChannelClaim(destination.Address, hex.EncodeToString(object.Key[:]))
+				claim.SetClose()
+				return paychantx.NewPaymentChannelCreate(owner.Address, destination.Address, tx.NewXRPAmount(1), 3600, owner.PublicKeyHex()), object, claim
+			},
+		},
+		{
+			name: "SignerList",
+			build: func(_ *jtx.TestEnv, owner, destination *jtx.Account) (tx.Transaction, keylet.Keylet, tx.Transaction) {
+				create := signerlisttx.NewSignerListSet(owner.Address, 1)
+				create.SignerEntries = []signerlisttx.SignerEntry{{SignerEntry: signerlisttx.SignerEntryData{
+					Account: destination.Address, SignerWeight: 1,
+				}}}
+				return create, keylet.SignerList(owner.ID), signerlisttx.NewSignerListSet(owner.Address, 0)
+			},
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			env, owner, destination, sponsor, _ := sponsorEnv(t)
+			remaining := int32(1)
+			require.Equal(t, "tesSUCCESS", setSponsorship(env, sponsor, owner, 0, &remaining).Code)
+			create, object, remove := test.build(env, owner, destination)
+			flags := tx.SpfSponsorReserve
+			common := create.GetCommon()
+			common.Sponsor = sponsor.Address
+			common.SponsorFlags = &flags
+			require.Equal(t, "tesSUCCESS", env.Submit(create).Code)
+			gotSponsor, present := objectSponsor(t, env, object)
+			require.True(t, present)
+			require.Equal(t, sponsor.Address, gotSponsor)
+			require.Equal(t, uint32(1), accountState(t, env, owner).SponsoredOwnerCount)
+			require.Equal(t, uint32(1), accountState(t, env, sponsor).SponsoringOwnerCount)
+			require.Zero(t, sponsorshipEntry(t, env, sponsor, owner).RemainingOwnerCount)
+
+			if test.beforeDelete != nil {
+				test.beforeDelete(env)
+			}
+			require.Equal(t, "tesSUCCESS", env.Submit(remove).Code)
+			require.False(t, env.LedgerEntryExists(object))
+			require.Zero(t, accountState(t, env, owner).SponsoredOwnerCount)
+			require.Zero(t, accountState(t, env, sponsor).SponsoringOwnerCount)
+
+			rollbackEnv, rollbackOwner, rollbackDestination, rollbackSponsor, _ := sponsorEnv(t)
+			require.Equal(t, "tesSUCCESS", setSponsorship(rollbackEnv, rollbackSponsor, rollbackOwner, 100, nil).Code)
+			rollbackCreate, rollbackObject, _ := test.build(rollbackEnv, rollbackOwner, rollbackDestination)
+			rollbackFlags := tx.SpfSponsorReserve
+			rollbackCommon := rollbackCreate.GetCommon()
+			rollbackCommon.Sponsor = rollbackSponsor.Address
+			rollbackCommon.SponsorFlags = &rollbackFlags
+			require.NotEqual(t, "tesSUCCESS", rollbackEnv.Submit(rollbackCreate).Code)
+			require.False(t, rollbackEnv.LedgerEntryExists(rollbackObject))
+			require.Zero(t, accountState(t, rollbackEnv, rollbackOwner).SponsoredOwnerCount)
+			require.Zero(t, accountState(t, rollbackEnv, rollbackSponsor).SponsoringOwnerCount)
+			require.Zero(t, sponsorshipEntry(t, rollbackEnv, rollbackSponsor, rollbackOwner).RemainingOwnerCount)
+		})
+	}
+}
+
+func TestSponsoredTrustLineHasNoFreeReserveTier(t *testing.T) {
+	env, sponsee, issuer, sponsor, _ := sponsorEnv(t)
+	remaining := int32(1)
+	require.Equal(t, "tesSUCCESS", setSponsorship(env, sponsor, sponsee, 0, &remaining).Code)
+	flags := tx.SpfSponsorReserve
+	trust := func() *trustsettx.TrustSet {
+		txn := trustsettx.NewTrustSet(sponsee.Address, issuer.IOU("USD", 100))
+		txn.Sponsor = sponsor.Address
+		txn.SponsorFlags = &flags
+		return txn
+	}
+
+	required := env.ReserveBase() + 2*env.ReserveIncrement()
+	setAccountBalance(t, env, sponsor, required-1)
+	require.Equal(t, "tecNO_LINE_INSUF_RESERVE", env.Submit(trust()).Code)
+	require.False(t, env.LedgerEntryExists(keylet.Line(sponsee.ID, issuer.ID, "USD")))
+	require.Zero(t, accountState(t, env, sponsee).SponsoredOwnerCount)
+	require.Zero(t, accountState(t, env, sponsor).SponsoringOwnerCount)
+	require.Equal(t, uint32(1), sponsorshipEntry(t, env, sponsor, sponsee).RemainingOwnerCount)
+
+	setAccountBalance(t, env, sponsor, required)
+	require.Equal(t, "tesSUCCESS", env.Submit(trust()).Code)
+	require.Equal(t, uint32(1), accountState(t, env, sponsee).SponsoredOwnerCount)
+	require.Equal(t, uint32(1), accountState(t, env, sponsor).SponsoringOwnerCount)
 }
 
 func TestSponsorshipTransferCosignedObjectReserveBoundary(t *testing.T) {
@@ -545,6 +873,33 @@ func TestSponsorshipTransferAccountSponsorReserveBoundary(t *testing.T) {
 	require.Equal(t, uint32(1), accountState(t, env, sponsor).SponsoringAccountCount)
 }
 
+func TestSponsoredAccountDeleteRequiresSponsorDestination(t *testing.T) {
+	env, sponsee, other, sponsor, _ := sponsorEnv(t)
+	create := sponsortx.NewSponsorshipTransfer(sponsee.Address)
+	create.SetFlags(sponsortx.SponsorshipTransferFlagCreate)
+	create.Sponsor = sponsor.Address
+	flags := tx.SpfSponsorReserve
+	create.SponsorFlags = &flags
+	create.SponsorSignature = &tx.SponsorSignature{}
+	require.Equal(t, "tesSUCCESS", env.Submit(create).Code)
+	require.Equal(t, uint32(1), accountState(t, env, sponsor).SponsoringAccountCount)
+
+	for range 260 {
+		env.Close()
+	}
+	wrongDestination := accounttx.NewAccountDelete(sponsee.Address, other.Address)
+	wrongDestination.Fee = strconv.FormatUint(env.ReserveIncrement(), 10)
+	require.Equal(t, "tecNO_SPONSOR_PERMISSION", env.Submit(wrongDestination).Code)
+	require.True(t, env.LedgerEntryExists(keylet.Account(sponsee.ID)))
+	require.Equal(t, uint32(1), accountState(t, env, sponsor).SponsoringAccountCount)
+
+	deleteToSponsor := accounttx.NewAccountDelete(sponsee.Address, sponsor.Address)
+	deleteToSponsor.Fee = strconv.FormatUint(env.ReserveIncrement(), 10)
+	require.Equal(t, "tesSUCCESS", env.Submit(deleteToSponsor).Code)
+	require.False(t, env.LedgerEntryExists(keylet.Account(sponsee.ID)))
+	require.Zero(t, accountState(t, env, sponsor).SponsoringAccountCount)
+}
+
 func TestSponsorshipTransferAuthorizationLimitAndRollback(t *testing.T) {
 	env, sponsee, destination, sponsor, _ := sponsorEnv(t)
 	checkSequence := env.Seq(sponsee)
@@ -569,10 +924,10 @@ func TestSponsorshipTransferAuthorizationLimitAndRollback(t *testing.T) {
 	require.Equal(t, sponsorBefore.SponsoringOwnerCount, accountState(t, env, sponsor).SponsoringOwnerCount)
 	require.Equal(t, uint32(0), sponsorshipEntry(t, env, sponsor, sponsee).RemainingOwnerCount)
 
-	remaining := uint32(1)
+	remaining := int32(1)
 	requireSignature := sponsortx.NewSponsorshipSet(sponsor.Address)
 	requireSignature.Sponsee = sponsee.Address
-	requireSignature.RemainingOwnerCount = &remaining
+	requireSignature.RemainingOwnerCountDelta = &remaining
 	requireSignature.SetFlags(sponsortx.SponsorshipSetFlagRequireSignForReserve)
 	require.Equal(t, "tesSUCCESS", env.Submit(requireSignature).Code)
 
@@ -1068,7 +1423,7 @@ func TestDelegatedTransactionRejectsReserveSponsor(t *testing.T) {
 			env, source, destination, sponsor, delegate := sponsorEnv(t)
 			grantDelegatePermission(t, env, source, delegate, "CheckCreate")
 			if testCase.prefunded {
-				remaining := uint32(1)
+				remaining := int32(1)
 				require.Equal(t, "tesSUCCESS", setSponsorship(env, sponsor, delegate, 0, &remaining).Code)
 			}
 			env.Close()
@@ -1234,7 +1589,7 @@ func TestSponsorshipSetDirectoryFailureRollsBackFirstInsert(t *testing.T) {
 	}
 	require.NoError(t, env.Ledger().Insert(keylet.OwnerDir(sponsee.ID), malformedDirectory))
 
-	remaining := uint32(1)
+	remaining := int32(1)
 	result := setSponsorship(env, sponsor, sponsee, 0, &remaining)
 	require.Equal(t, "tefINTERNAL", result.Code)
 	require.False(t, env.LedgerEntryExists(keylet.Sponsorship(sponsor.ID, sponsee.ID)))
@@ -1245,11 +1600,13 @@ func TestSponsorshipSetDirectoryFailureRollsBackFirstInsert(t *testing.T) {
 
 func TestSponsorAmendmentGate(t *testing.T) {
 	env := jtx.NewTestEnv(t)
+	env.DisableFeature("Sponsor")
+	env.Close()
 	sponsor := jtx.NewAccount("gate-sponsor")
 	sponsee := jtx.NewAccount("gate-sponsee")
 	destination := jtx.NewAccount("gate-destination")
 	env.Fund(sponsor, sponsee)
-	remaining := uint32(1)
+	remaining := int32(1)
 	require.Equal(t, "temDISABLED", setSponsorship(env, sponsor, sponsee, 0, &remaining).Code)
 
 	payment := paymenttx.NewPayment(sponsee.Address, destination.Address, tx.NewXRPAmount(1))

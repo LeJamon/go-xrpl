@@ -26,6 +26,7 @@ func TestParseMPTokenIssuanceGeneratedDecoder(t *testing.T) {
 		ReferenceHolding:  &referenceHolding,
 		Flags:             7,
 		ImmutableFlags:    9,
+		Sponsor:           walkerTestAccount,
 		PreviousTxnID:     previousTxnID,
 		PreviousTxnLgrSeq: 23,
 	}
@@ -41,7 +42,7 @@ func TestParseMPTokenIssuanceGeneratedDecoder(t *testing.T) {
 	if got.Issuer != want.Issuer || got.Sequence != want.Sequence || got.OwnerNode != want.OwnerNode ||
 		got.OutstandingAmount != want.OutstandingAmount || got.TransferFee != want.TransferFee ||
 		got.AssetScale != want.AssetScale || got.Flags != want.Flags || got.ImmutableFlags != want.ImmutableFlags ||
-		got.PreviousTxnID != want.PreviousTxnID || got.PreviousTxnLgrSeq != want.PreviousTxnLgrSeq {
+		got.Sponsor != want.Sponsor || got.PreviousTxnID != want.PreviousTxnID || got.PreviousTxnLgrSeq != want.PreviousTxnLgrSeq {
 		t.Fatalf("fixed fields differ:\n got  %+v\n want %+v", got, want)
 	}
 	if got.MaximumAmount == nil || *got.MaximumAmount != 0 {
@@ -65,6 +66,7 @@ func TestParseMPTokenGeneratedDecoder(t *testing.T) {
 		MPTAmount:         123,
 		LockedAmount:      &zero,
 		Flags:             3,
+		Sponsor:           walkerTestAccount,
 		PreviousTxnID:     [32]byte{10, 11, 12},
 		PreviousTxnLgrSeq: 29,
 	}
@@ -79,7 +81,7 @@ func TestParseMPTokenGeneratedDecoder(t *testing.T) {
 	}
 	if got.Account != want.Account || got.MPTokenIssuanceID != want.MPTokenIssuanceID ||
 		got.OwnerNode != want.OwnerNode || got.MPTAmount != want.MPTAmount || got.Flags != want.Flags ||
-		got.PreviousTxnID != want.PreviousTxnID || got.PreviousTxnLgrSeq != want.PreviousTxnLgrSeq {
+		got.Sponsor != want.Sponsor || got.PreviousTxnID != want.PreviousTxnID || got.PreviousTxnLgrSeq != want.PreviousTxnLgrSeq {
 		t.Fatalf("fixed fields differ:\n got  %+v\n want %+v", got, want)
 	}
 	if got.LockedAmount == nil || *got.LockedAmount != 0 {

@@ -278,13 +278,11 @@ func (e *EscrowCreate) Apply(ctx *tx.ApplyContext) ter.Result {
 	// Reserve and funding checks run before the destination checks, matching
 	// rippled's doApply order (reserve/unfunded then the destination block).
 	// Reference: rippled Escrow.cpp:496-509
-	reserve := ctx.AccountReserve(ctx.Account.OwnerCount + 1)
-	if ctx.Account.Balance < reserve {
+	if result := tx.CheckReserve(ctx, e.GetCommon(), ctx.AccountID, ctx.Account, ctx.Account.Balance, tx.ReserveAdjustment{OwnerCountDelta: 1}, ter.TecINSUFFICIENT_RESERVE); result != ter.TesSUCCESS {
 		ctx.Log.Warn("escrow create: insufficient reserve",
 			"balance", ctx.Account.Balance,
-			"reserve", reserve,
 		)
-		return ter.TecINSUFFICIENT_RESERVE
+		return result
 	}
 
 	// For XRP escrows, also check that the sender can afford the amount
@@ -296,10 +294,16 @@ func (e *EscrowCreate) Apply(ctx *tx.ApplyContext) ter.Result {
 		if drops <= 0 {
 			return ter.TemINVALID
 		}
-		if ctx.Account.Balance < reserve+uint64(drops) {
+		adjustment := tx.ReserveAdjustment{OwnerCountDelta: 1}
+		if tx.TransactionHasReserveSponsor(e.GetCommon()) {
+			adjustment.OwnerCountDelta = 0
+		}
+		sourceReserve := tx.RequiredReserve(ctx, ctx.Account, adjustment)
+		amount := uint64(drops)
+		if ctx.Account.Balance < amount || ctx.Account.Balance-amount < sourceReserve {
 			ctx.Log.Warn("escrow create: unfunded",
 				"balance", ctx.Account.Balance,
-				"needed", reserve+uint64(drops),
+				"amount", amount,
 			)
 			return ter.TecUNFUNDED
 		}
@@ -455,6 +459,14 @@ func (e *EscrowCreate) Apply(ctx *tx.ApplyContext) ter.Result {
 	if err != nil {
 		return ctx.Internal("SerializeEscrow", err)
 	}
+	sponsorAddress, result := tx.IncreaseOwnerCount(ctx, e.GetCommon(), accountID, ctx.Account, 1)
+	if result != ter.TesSUCCESS {
+		return result
+	}
+	escrowData, err = tx.SetLedgerEntrySponsor(escrowData, "Sponsor", sponsorAddress)
+	if err != nil {
+		return ctx.Internal("EscrowCreate.SetSponsor", err)
+	}
 
 	// Insert escrow - creation tracked automatically by ApplyStateTable
 	if err := ctx.View.Insert(escrowKey, escrowData); err != nil {
@@ -492,9 +504,6 @@ func (e *EscrowCreate) Apply(ctx *tx.ApplyContext) ter.Result {
 			return lockResult
 		}
 	}
-
-	// Increase owner count for the escrow creator
-	ctx.Account.OwnerCount = tx.ConfineOwnerCount(ctx.Account.OwnerCount, 1)
 
 	return ter.TesSUCCESS
 }

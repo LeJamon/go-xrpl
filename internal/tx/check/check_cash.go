@@ -330,7 +330,8 @@ func (c *CheckCash) applyCashXRP(ctx *tx.ApplyContext, check *state.CheckData, c
 	// rippled's accountFunds(value) + fees().increment guard, which returns
 	// tecPATH_PARTIAL when the writer is at or above their reserve.
 	// Reference: CashCheck.cpp L162-185.
-	if requestedDrops > xrpAvailableFunds(creatorAccount, ctx) {
+	sponsored := check.HasSponsor && check.Sponsor != ""
+	if requestedDrops > xrpAvailableFunds(creatorAccount, ctx, sponsored) {
 		return ter.TecPATH_PARTIAL
 	}
 
@@ -339,7 +340,7 @@ func (c *CheckCash) applyCashXRP(ctx *tx.ApplyContext, check *state.CheckData, c
 	// where rippled returns tecUNFUNDED_PAYMENT. For DeliverMin, xrpDeliver
 	// collapses to DeliverMin in the underfunded case (min(sendMax, srcLiquid)
 	// never exceeds srcLiquid). Reference: CashCheck.cpp L304-319.
-	srcLiquid := xrpLiquidAfterCheck(creatorAccount, ctx)
+	srcLiquid := xrpLiquidAfterCheck(creatorAccount, ctx, sponsored)
 	if srcLiquid < requestedDrops {
 		return ter.TecUNFUNDED_PAYMENT
 	}
@@ -364,13 +365,11 @@ func (c *CheckCash) applyCashXRP(ctx *tx.ApplyContext, check *state.CheckData, c
 		return result
 	}
 
-	// Decrease creator's owner count
-	if creatorAccount.OwnerCount > 0 {
-		creatorAccount.OwnerCount--
+	objectData, err := state.SerializeCheckFromData(check)
+	if err != nil {
+		return ter.TefINTERNAL
 	}
-
-	// Update creator account
-	if result := ctx.UpdateAccountRoot(check.Account, creatorAccount); result != ter.TesSUCCESS {
+	if result := tx.DecreaseOwnerCountForObject(ctx, check.Account, creatorAccount, objectData, "Sponsor", 1); result != ter.TesSUCCESS {
 		return result
 	}
 
@@ -387,29 +386,46 @@ func (c *CheckCash) applyCashXRP(ctx *tx.ApplyContext, check *state.CheckData, c
 // reserve increment, since cashing the check releases its reserve.
 // Mirrors rippled's accountFunds(value) + fees().increment for native amounts.
 // Reference: CashCheck.cpp L162-185, View.cpp xrpLiquid (zero-clamp).
-func xrpAvailableFunds(creator *state.AccountRoot, ctx *tx.ApplyContext) uint64 {
-	reserve := ctx.AccountReserve(creator.OwnerCount)
+func xrpAvailableFunds(creator *state.AccountRoot, ctx *tx.ApplyContext, sponsored bool) uint64 {
+	reserve := accountReserveAt(ctx, creator, creator.OwnerCount)
 	var liquid uint64
 	if creator.Balance > reserve {
 		liquid = creator.Balance - reserve
 	}
-	return liquid + ctx.Config.ReserveIncrement
+	if !sponsored {
+		liquid += ctx.Config.ReserveIncrement
+	}
+	return liquid
 }
 
 // xrpLiquidAfterCheck returns the writer's zero-clamped liquid XRP computed with
 // the check's reserve already released (owner count minus one), matching
 // rippled's xrpLiquid(psb, srcId, -1). This is the amount actually available to
 // fund the transfer in doApply. Reference: CashCheck.cpp L304, View.cpp xrpLiquid.
-func xrpLiquidAfterCheck(creator *state.AccountRoot, ctx *tx.ApplyContext) uint64 {
+func xrpLiquidAfterCheck(creator *state.AccountRoot, ctx *tx.ApplyContext, sponsored bool) uint64 {
 	ownerCount := creator.OwnerCount
-	if ownerCount > 0 {
+	if !sponsored && ownerCount > 0 {
 		ownerCount--
 	}
-	reserve := ctx.AccountReserve(ownerCount)
+	reserve := accountReserveAt(ctx, creator, ownerCount)
 	if creator.Balance > reserve {
 		return creator.Balance - reserve
 	}
 	return 0
+}
+
+func accountReserveAt(ctx *tx.ApplyContext, account *state.AccountRoot, ownerCount uint32) uint64 {
+	if account == nil || !ctx.Rules().Enabled(amendment.FeatureSponsor) {
+		return ctx.Config.AccountReserve(ownerCount)
+	}
+	delta := int64(ownerCount) - int64(account.OwnerCount)
+	delta += int64(account.SponsoringOwnerCount) - int64(account.SponsoredOwnerCount)
+	effectiveOwnerCount := tx.ConfineOwnerCount(account.OwnerCount, int(delta))
+	effectiveAccountCount := account.SponsoringAccountCount
+	if !account.HasSponsor && effectiveAccountCount < ^uint32(0) {
+		effectiveAccountCount++
+	}
+	return ctx.Config.AccountReserveWithCounts(effectiveOwnerCount, effectiveAccountCount)
 }
 
 func (c *CheckCash) applyCashMPTAmount(ctx *tx.ApplyContext, check *state.CheckData, checkKey keylet.Keylet, requestedAmount tx.Amount, isDeliverMin bool) ter.Result {
@@ -470,13 +486,12 @@ func (c *CheckCash) applyCashMPTAmount(ctx *tx.ApplyContext, check *state.CheckD
 		if exists, err := ctx.View.Exists(keylet.MPTokenByID(mptID, dstID)); err != nil {
 			return ter.TefINTERNAL
 		} else if !exists {
-			if ctx.PriorBalance() < ctx.AccountReserve(ctx.Account.OwnerCount+1) {
-				return ter.TecINSUFFICIENT_RESERVE
-			}
-			if result := mptutil.EnsureHolding(ctx.View, mptID, dstID, 0, true); result != ter.TesSUCCESS {
+			if result := tx.CheckReserve(ctx, c.GetCommon(), ctx.AccountID, ctx.Account, ctx.PriorBalance(), tx.ReserveAdjustment{OwnerCountDelta: 1}, ter.TecINSUFFICIENT_RESERVE); result != ter.TesSUCCESS {
 				return result
 			}
-			ctx.SyncSenderOwnerCount()
+			if result := ensureSponsoredMPTCheckHolding(ctx, c.GetCommon(), mptID, dstID); result != ter.TesSUCCESS {
+				return result
+			}
 		}
 	}
 
@@ -541,10 +556,11 @@ func (c *CheckCash) applyCashMPTAmount(ctx *tx.ApplyContext, check *state.CheckD
 	if err != nil {
 		return ter.TefINTERNAL
 	}
-	if creatorAccount.OwnerCount > 0 {
-		creatorAccount.OwnerCount--
+	objectData, err := state.SerializeCheckFromData(check)
+	if err != nil {
+		return ter.TefINTERNAL
 	}
-	if result := ctx.UpdateAccountRoot(srcID, creatorAccount); result != ter.TesSUCCESS {
+	if result := tx.DecreaseOwnerCountForObject(ctx, srcID, creatorAccount, objectData, "Sponsor", 1); result != ter.TesSUCCESS {
 		return result
 	}
 	if err := ctx.View.Erase(checkKey); err != nil {
@@ -665,15 +681,13 @@ func (c *CheckCash) applyCashIOUAmount(ctx *tx.ApplyContext, check *state.CheckD
 		if !trustLineExists {
 			// Check reserve for creating trust line
 			// Reference: CashCheck.cpp L373-378
-			feeDrops := parseFee(c.Fee)
-			priorBalance := ctx.Account.Balance + feeDrops
-			reserve := ctx.AccountReserve(ctx.Account.OwnerCount + 1)
-			if priorBalance < reserve {
-				return ter.TecNO_LINE_INSUF_RESERVE
+			priorBalance := ctx.PriorBalance()
+			if result := tx.CheckReserve(ctx, c.GetCommon(), ctx.AccountID, ctx.Account, priorBalance, tx.ReserveAdjustment{OwnerCountDelta: 1}, ter.TecNO_LINE_INSUF_RESERVE); result != ter.TesSUCCESS {
+				return result
 			}
 
 			// Create trust line
-			if result := createTrustLineForCheckCash(ctx, accountID, issuerID, sendMax.Currency); result != ter.TesSUCCESS {
+			if result := createTrustLineForCheckCash(ctx, c.GetCommon(), accountID, issuerID, sendMax.Currency); result != ter.TesSUCCESS {
 				return result
 			}
 		}
@@ -812,11 +826,11 @@ func (c *CheckCash) applyCashIOUAmount(ctx *tx.ApplyContext, check *state.CheckD
 		return ter.TefINTERNAL
 	}
 
-	if creatorAccount.OwnerCount > 0 {
-		creatorAccount.OwnerCount--
+	objectData, err := state.SerializeCheckFromData(check)
+	if err != nil {
+		return ter.TefINTERNAL
 	}
-
-	if result := ctx.UpdateAccountRoot(srcID, creatorAccount); result != ter.TesSUCCESS {
+	if result := tx.DecreaseOwnerCountForObject(ctx, srcID, creatorAccount, objectData, "Sponsor", 1); result != ter.TesSUCCESS {
 		return result
 	}
 
@@ -854,7 +868,7 @@ func isIssuerFrozenForAccount(view tx.LedgerView, accountID, issuerID [20]byte, 
 // transaction sender, so its OwnerCount is bumped on ctx.Account, which the
 // engine writes back.
 // Reference: CashCheck.cpp L349-412, View.cpp trustCreate L1329-1445
-func createTrustLineForCheckCash(ctx *tx.ApplyContext, destID, issuerID [20]byte, currency string) ter.Result {
+func createTrustLineForCheckCash(ctx *tx.ApplyContext, common *tx.Common, destID, issuerID [20]byte, currency string) ter.Result {
 	trustLineKey := keylet.Line(destID, issuerID, currency)
 
 	destStr, err := state.EncodeAccountID(destID)
@@ -890,10 +904,52 @@ func createTrustLineForCheckCash(ctx *tx.ApplyContext, destID, issuerID [20]byte
 	if result != ter.TesSUCCESS {
 		return result
 	}
+	sponsorAddress, result := tx.IncreaseOwnerCount(ctx, common, ctx.AccountID, ctx.Account, 1)
+	if result != ter.TesSUCCESS {
+		return result
+	}
+	trustLineData, err := ctx.View.Read(trustLineKey)
+	if err != nil || trustLineData == nil {
+		return ter.TefINTERNAL
+	}
+	sponsorField := "HighSponsor"
+	if destLow {
+		sponsorField = "LowSponsor"
+	}
+	trustLineData, err = tx.SetLedgerEntrySponsor(trustLineData, sponsorField, sponsorAddress)
+	if err != nil {
+		return ctx.Internal("CheckCash.TrustLine.SetSponsor", err)
+	}
+	if err := ctx.View.Update(trustLineKey, trustLineData); err != nil {
+		return ter.TefINTERNAL
+	}
 
-	// The casher owns the new line and pays its reserve.
-	ctx.Account.OwnerCount++
+	return ter.TesSUCCESS
+}
 
+func ensureSponsoredMPTCheckHolding(ctx *tx.ApplyContext, common *tx.Common, id [24]byte, holder [20]byte) ter.Result {
+	if holder != ctx.AccountID {
+		return ter.TefINTERNAL
+	}
+	if result := mptutil.EnsureHolding(ctx.View, id, holder, 0, false); result != ter.TesSUCCESS {
+		return result
+	}
+	tokenKey := keylet.MPTokenByID(id, holder)
+	raw, err := ctx.View.Read(tokenKey)
+	if err != nil || raw == nil {
+		return ter.TefINTERNAL
+	}
+	sponsorAddress, result := tx.IncreaseOwnerCount(ctx, common, holder, ctx.Account, 1)
+	if result != ter.TesSUCCESS {
+		return result
+	}
+	raw, err = tx.SetLedgerEntrySponsor(raw, "Sponsor", sponsorAddress)
+	if err != nil {
+		return ctx.Internal("CheckCash.MPToken.SetSponsor", err)
+	}
+	if err := ctx.View.Update(tokenKey, raw); err != nil {
+		return ter.TefINTERNAL
+	}
 	return ter.TesSUCCESS
 }
 

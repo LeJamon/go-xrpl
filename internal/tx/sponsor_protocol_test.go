@@ -39,9 +39,9 @@ func TestSponsorTransactionFormats(t *testing.T) {
 			want: []FormatField{
 				{Name: "CounterpartySponsor", Style: 1},
 				{Name: "Sponsee", Style: 1},
-				{Name: "FeeAmount", Style: 1},
+				{Name: "FeeAmountDelta", Style: 1},
 				{Name: "MaxFee", Style: 1},
-				{Name: "RemainingOwnerCount", Style: 1},
+				{Name: "RemainingOwnerCountDelta", Style: 1},
 			},
 		},
 	}
@@ -95,18 +95,18 @@ func TestSponsorTransactionCodecRoundTrip(t *testing.T) {
 		},
 		{
 			fields: map[string]any{
-				"TransactionType":     "SponsorshipSet",
-				"Account":             testAccount,
-				"Sequence":            uint32(1),
-				"Fee":                 "10",
-				"SigningPubKey":       "",
-				"CounterpartySponsor": testDestination,
-				"Sponsee":             testAccount,
-				"FeeAmount":           "1000",
-				"MaxFee":              "100",
-				"RemainingOwnerCount": uint32(2),
+				"TransactionType":          "SponsorshipSet",
+				"Account":                  testAccount,
+				"Sequence":                 uint32(1),
+				"Fee":                      "10",
+				"SigningPubKey":            "",
+				"CounterpartySponsor":      testDestination,
+				"Sponsee":                  testAccount,
+				"FeeAmountDelta":           "1000",
+				"MaxFee":                   "100",
+				"RemainingOwnerCountDelta": int(2),
 			},
-			golden: "12005B240000000120490000000268400000000000000A602040000000000003E86021400000000000006473008114B5F762798A53D543A014CAF8B297CFF8F2F937E8801E14F51DFC2A09D62CBBA1DFBDD4691DAC96AD98B90F801F14B5F762798A53D543A014CAF8B297CFF8F2F937E8",
+			golden: "12005B240000000168400000000000000A60214000000000000064602240000000000003E873008114B5F762798A53D543A014CAF8B297CFF8F2F937E8801E14F51DFC2A09D62CBBA1DFBDD4691DAC96AD98B90F801F14B5F762798A53D543A014CAF8B297CFF8F2F937E8A200000002",
 		},
 	}
 	for _, test := range tests {
@@ -145,6 +145,29 @@ func TestSponsorTransactionCodecRoundTrip(t *testing.T) {
 				t.Fatal("ParseFromBinary did not preserve canonical bytes")
 			}
 		})
+	}
+}
+
+func TestSponsorSignedDeltaCodec(t *testing.T) {
+	fields := baseCommon("SponsorshipSet")
+	fields["CounterpartySponsor"] = testDestination
+	fields["Sponsee"] = testAccount
+	fields["FeeAmountDelta"] = "-1000"
+	fields["RemainingOwnerCountDelta"] = int(-2)
+
+	encoded, err := binarycodec.Encode(fields)
+	if err != nil {
+		t.Fatalf("Encode: %v", err)
+	}
+	decoded, err := binarycodec.Decode(encoded)
+	if err != nil {
+		t.Fatalf("Decode: %v", err)
+	}
+	if got := decoded["FeeAmountDelta"]; got != "-1000" {
+		t.Fatalf("FeeAmountDelta round-trip = %#v, want -1000", got)
+	}
+	if got := decoded["RemainingOwnerCountDelta"]; got != int(-2) {
+		t.Fatalf("RemainingOwnerCountDelta round-trip = %#v, want -2", got)
 	}
 }
 

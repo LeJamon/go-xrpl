@@ -44,7 +44,7 @@ func TestSponsorFieldsAmendmentGate(t *testing.T) {
 		t.Run(test.name, func(t *testing.T) {
 			disabled := newAccountSet(precedenceSourceAddr)
 			test.mutate(disabled.GetCommon())
-			if got := preflightEngine(allRules()).preflight(disabled); got != ter.TemDISABLED {
+			if got := preflightEngine(rulesWithout("Sponsor")).preflight(disabled); got != ter.TemDISABLED {
 				t.Fatalf("preflight with Sponsor disabled = %v, want temDISABLED", got)
 			}
 		})
@@ -60,7 +60,7 @@ func TestSponsorFieldsAmendmentGate(t *testing.T) {
 
 	inner := newAccountSet(precedenceSourceAddr)
 	inner.Sponsor = precedenceGenesisAddr
-	if got := preflightEngine(allRules()).preflightInner(inner); got != ter.TemDISABLED {
+	if got := preflightEngine(rulesWithout("Sponsor")).preflightInner(inner); got != ter.TemDISABLED {
 		t.Fatalf("inner preflight with Sponsor disabled = %v, want temDISABLED", got)
 	}
 }

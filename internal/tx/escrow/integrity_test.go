@@ -5,7 +5,6 @@ import (
 	"testing"
 
 	"github.com/LeJamon/go-xrpl/internal/ledger/state"
-	"github.com/LeJamon/go-xrpl/internal/tx"
 	"github.com/LeJamon/go-xrpl/internal/tx/ter"
 	"github.com/LeJamon/go-xrpl/keylet"
 	"github.com/stretchr/testify/require"
@@ -62,64 +61,6 @@ func TestMapDirInsertErrorOnlyReportsDirectoryFull(t *testing.T) {
 	require.Equal(t, ter.TecDIR_FULL, mapDirInsertError(state.ErrDirFull))
 	require.Equal(t, ter.TecDIR_FULL, mapDirInsertError(errors.Join(errors.New("wrapped"), state.ErrDirFull)))
 	require.Equal(t, ter.TefINTERNAL, mapDirInsertError(errors.New("write failed")))
-}
-
-func TestAdjustOwnerCountViaViewFailsClosed(t *testing.T) {
-	var accountID [20]byte
-	accountID[0] = 2
-	accountKey := keylet.Account(accountID)
-
-	t.Run("missing account", func(t *testing.T) {
-		require.Equal(t, ter.TefBAD_LEDGER, adjustOwnerCountViaView(newFaultView(), accountID, 1))
-	})
-
-	t.Run("read error", func(t *testing.T) {
-		view := newFaultView()
-		view.readErrors[accountKey.Key] = errors.New("read failed")
-		require.Equal(t, ter.TefINTERNAL, adjustOwnerCountViaView(view, accountID, 1))
-	})
-
-	t.Run("corrupt account", func(t *testing.T) {
-		view := newFaultView()
-		require.NoError(t, view.Insert(accountKey, []byte{0xff}))
-		require.Equal(t, ter.TefINTERNAL, adjustOwnerCountViaView(view, accountID, 1))
-	})
-
-	t.Run("underflow", func(t *testing.T) {
-		view := newFaultView()
-		seedAccountForEscrow(t, view.mapView, accountID, 0)
-		require.Equal(t, ter.TefBAD_LEDGER, adjustOwnerCountViaView(view, accountID, -1))
-		require.Equal(t, uint32(0), ownerCountOf(t, view.mapView, accountID))
-	})
-
-	t.Run("update error", func(t *testing.T) {
-		view := newFaultView()
-		seedAccountForEscrow(t, view.mapView, accountID, 1)
-		view.updateErrors[accountKey.Key] = errors.New("update failed")
-		require.Equal(t, ter.TefINTERNAL, adjustOwnerCountViaView(view, accountID, -1))
-		require.Equal(t, uint32(1), ownerCountOf(t, view.mapView, accountID))
-	})
-}
-
-func TestResyncSelfOwnerCountFailsClosed(t *testing.T) {
-	var accountID [20]byte
-	accountID[0] = 7
-	accountKey := keylet.Account(accountID)
-	view := newFaultView()
-	ctx := &tx.ApplyContext{View: view, AccountID: accountID, Account: &state.AccountRoot{OwnerCount: 1}}
-
-	require.Equal(t, ter.TefBAD_LEDGER, resyncSelfOwnerCount(ctx))
-	view.readErrors[accountKey.Key] = errors.New("read failed")
-	require.Equal(t, ter.TefINTERNAL, resyncSelfOwnerCount(ctx))
-
-	delete(view.readErrors, accountKey.Key)
-	require.NoError(t, view.Insert(accountKey, []byte{0xff}))
-	require.Equal(t, ter.TefINTERNAL, resyncSelfOwnerCount(ctx))
-
-	require.NoError(t, view.Erase(accountKey))
-	seedAccountForEscrow(t, view.mapView, accountID, 4)
-	require.Equal(t, ter.TesSUCCESS, resyncSelfOwnerCount(ctx))
-	require.Equal(t, uint32(4), ctx.Account.OwnerCount)
 }
 
 func TestComputeMPTTransferFeeFailsClosedOnIssuanceLookup(t *testing.T) {

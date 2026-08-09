@@ -107,11 +107,11 @@ func TestFeatureIDMatches(t *testing.T) {
 	if got := sponsor.ID[:]; !bytes.Equal(got, want) {
 		t.Errorf("Sponsor ID = %X, want %s", got, sponsorID)
 	}
-	if sponsor.Supported != SupportedNo || sponsor.Vote != VoteDefaultNo {
-		t.Errorf("Sponsor support/vote = (%v, %v), want (SupportedNo, VoteDefaultNo)", sponsor.Supported, sponsor.Vote)
+	if sponsor.Supported != SupportedYes || sponsor.Vote != VoteDefaultNo {
+		t.Errorf("Sponsor support/vote = (%v, %v), want (SupportedYes, VoteDefaultNo)", sponsor.Supported, sponsor.Vote)
 	}
-	if AllSupportedRules().Enabled(FeatureSponsor) {
-		t.Error("unsupported Sponsor amendment must not be enabled by the all-supported preset")
+	if !AllSupportedRules().Enabled(FeatureSponsor) {
+		t.Error("supported Sponsor amendment must be enabled by the all-supported preset")
 	}
 }
 

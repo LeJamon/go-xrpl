@@ -244,8 +244,8 @@ func (m *MPTokenAuthorize) holderUnauthorize(ctx *tx.ApplyContext, tokenKey keyl
 		return ter.TefINTERNAL
 	}
 
-	if ctx.Account.OwnerCount > 0 {
-		ctx.Account.OwnerCount--
+	if result := tx.DecreaseOwnerCountForObject(ctx, ctx.AccountID, ctx.Account, tokenRaw, "Sponsor", 1); result != ter.TesSUCCESS {
+		return result
 	}
 
 	return ter.TesSUCCESS
@@ -257,13 +257,13 @@ func (m *MPTokenAuthorize) holderAuthorize(ctx *tx.ApplyContext, mptID [24]byte,
 	// Reserve check against the prior balance (before fee deduction).
 	// The first 2 MPT objects are free, like trust lines, so
 	// ReserveForNewObject returns 0 when fewer than 2 objects are owned.
-	reserveNeeded := ctx.ReserveForNewObject(ctx.Account.OwnerCount)
-	if ctx.PriorBalance() < reserveNeeded {
+	ownerCount := tx.OwnerCountForReserve(ctx.Account, ctx.Rules())
+	freeHolding := !tx.TransactionHasReserveSponsor(m.GetCommon()) && ownerCount < 2
+	if result := tx.CheckReserve(ctx, m.GetCommon(), ctx.AccountID, ctx.Account, ctx.PriorBalance(), tx.ReserveAdjustment{OwnerCountDelta: 1}, ter.TecINSUFFICIENT_RESERVE); !freeHolding && result != ter.TesSUCCESS {
 		ctx.Log.Warn("mptoken authorize: insufficient reserve",
 			"priorBalance", ctx.PriorBalance(),
-			"reserve", reserveNeeded,
 		)
-		return ter.TecINSUFFICIENT_RESERVE
+		return result
 	}
 
 	// Build MPToken entry
@@ -285,6 +285,11 @@ func (m *MPTokenAuthorize) holderAuthorize(ctx *tx.ApplyContext, mptID [24]byte,
 		return ter.TecDIR_FULL
 	}
 	tokenData.OwnerNode = dirResult.Page
+	sponsor, result := tx.IncreaseOwnerCount(ctx, m.GetCommon(), ctx.AccountID, ctx.Account, 1)
+	if result != ter.TesSUCCESS {
+		return result
+	}
+	tokenData.Sponsor = sponsor
 
 	// Serialize and insert
 	data, err := state.SerializeMPToken(tokenData)
@@ -297,7 +302,6 @@ func (m *MPTokenAuthorize) holderAuthorize(ctx *tx.ApplyContext, mptID [24]byte,
 		return ter.TefINTERNAL
 	}
 
-	ctx.Account.OwnerCount++
 	return ter.TesSUCCESS
 }
 

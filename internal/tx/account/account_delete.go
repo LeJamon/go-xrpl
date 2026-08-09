@@ -120,6 +120,14 @@ func (a *AccountDelete) Apply(ctx *tx.ApplyContext) ter.Result {
 			return ter.TecHAS_OBLIGATIONS
 		}
 	}
+	if rules.Enabled(amendment.FeatureSponsor) {
+		if ctx.Account.HasSponsor && a.Destination != ctx.Account.Sponsor {
+			return ter.TecNO_SPONSOR_PERMISSION
+		}
+		if ctx.Account.SponsoringOwnerCount != 0 || ctx.Account.SponsoringAccountCount != 0 {
+			return ter.TecHAS_OBLIGATIONS
+		}
+	}
 	// Check minimum ledger gap: account sequence must be far enough behind the ledger.
 	// Uses addition (seq + 255 > ledgerSeq) instead of subtraction to avoid uint32 underflow.
 	// Reference: rippled DeleteAccount.cpp preclaim():
@@ -217,6 +225,22 @@ func (a *AccountDelete) Apply(ctx *tx.ApplyContext) ter.Result {
 	}
 	if r := ctx.UpdateAccountRoot(destID, destAccount); r != ter.TesSUCCESS {
 		return r
+	}
+	if rules.Enabled(amendment.FeatureSponsor) && ctx.Account.HasSponsor {
+		sponsorID, err := state.DecodeAccountID(ctx.Account.Sponsor)
+		if err != nil {
+			return ter.TefINTERNAL
+		}
+		sponsorAccount, err := tx.ReadAccountRoot(ctx.View, sponsorID)
+		if err != nil || sponsorAccount == nil || sponsorAccount.SponsoringAccountCount == 0 {
+			return ter.TefINTERNAL
+		}
+		sponsorAccount.SponsoringAccountCount--
+		if r := ctx.UpdateAccountRoot(sponsorID, sponsorAccount); r != ter.TesSUCCESS {
+			return r
+		}
+		ctx.Account.Sponsor = ""
+		ctx.Account.HasSponsor = false
 	}
 	if r := ctx.UpdateAccountRoot(ctx.AccountID, ctx.Account); r != ter.TesSUCCESS {
 		return r
@@ -335,10 +359,12 @@ func deleteDepositPreauth(ctx *tx.ApplyContext, ownerDirKey, ik keylet.Keylet, d
 	if !removeFromDir(ctx, ownerDirKey, pe.OwnerNode, ik.Key, false) {
 		return ter.TefBAD_LEDGER
 	}
+	if result := tx.DecreaseOwnerCountForObject(ctx, ctx.AccountID, ctx.Account, data, "Sponsor", 1); result != ter.TesSUCCESS {
+		return result
+	}
 	if err := ctx.View.Erase(ik); err != nil {
 		return ter.TefBAD_LEDGER
 	}
-	decrementOwnerCount(ctx)
 	return ter.TesSUCCESS
 }
 
@@ -365,16 +391,18 @@ func deleteSignerList(ctx *tx.ApplyContext, ownerDirKey, ik keylet.Keylet, data 
 	if !removeFromDir(ctx, ownerDirKey, signerList.OwnerNode, ik.Key, false) {
 		return ter.TefBAD_LEDGER
 	}
-	if err := ctx.View.Erase(ik); err != nil {
-		return ter.TefBAD_LEDGER
-	}
 	// A post-MultiSignReserve list (lsfOneOwnerCount) costs a single owner unit;
 	// a legacy list costs 2 plus one per signer entry.
 	removeCount := uint32(1)
 	if signerList.Flags&state.LsfOneOwnerCount == 0 {
 		removeCount = 2 + uint32(len(signerList.SignerEntries))
 	}
-	decrementOwnerCountBy(ctx, removeCount)
+	if result := tx.DecreaseOwnerCountForObject(ctx, ctx.AccountID, ctx.Account, data, "Sponsor", removeCount); result != ter.TesSUCCESS {
+		return result
+	}
+	if err := ctx.View.Erase(ik); err != nil {
+		return ter.TefBAD_LEDGER
+	}
 	return ter.TesSUCCESS
 }
 
@@ -404,6 +432,11 @@ func deleteOracle(ctx *tx.ApplyContext, ownerDirKey, ik keylet.Keylet, data []by
 	if r := oracle.DeleteOracleFromView(ctx.View, ik, od, ctx.AccountID, nil); r != ter.TesSUCCESS {
 		return ter.TefBAD_LEDGER
 	}
+	removeCount := uint32(1)
+	if len(od.PriceDataSeries) > 5 {
+		removeCount = 2
+	}
+	decrementOwnerCountBy(ctx, removeCount)
 	return ter.TesSUCCESS
 }
 

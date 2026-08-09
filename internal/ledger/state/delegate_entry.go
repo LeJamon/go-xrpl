@@ -24,6 +24,8 @@ type DelegateData struct {
 	DestinationNode    uint64
 	HasDestinationNode bool
 	Permissions        []uint32 // Permission values (txType+1 or granular permission)
+	Sponsor            string
+	HasSponsor         bool
 	// Round-trips so a no-op modify re-serializes byte-identically and the apply
 	// layer's unchanged-entry guard prunes it (ApplyStateTable.cpp:154-157).
 	PreviousTxnID     [32]byte
@@ -42,6 +44,8 @@ func ParseDelegate(data []byte) (*DelegateData, error) {
 	entry := &DelegateData{
 		HasDestinationNode: fields["DestinationNode"] != nil,
 		PreviousTxnLgrSeq:  decoded.PreviousTxnLgrSeq,
+		Sponsor:            decoded.Sponsor,
+		HasSponsor:         fields["Sponsor"] != nil,
 	}
 
 	var err error
@@ -123,7 +127,7 @@ func decodeDelegatePermissions(values []any) ([]uint32, error) {
 // destinationNode is the (optional) page in the authorized account's owner
 // directory; pass nil to omit the field, matching its soeOPTIONAL status.
 // Reference: rippled DelegateSet.cpp doApply()
-func SerializeDelegate(account, authorize [20]byte, permissions []uint32, ownerNode uint64, destinationNode *uint64, prevTxnID [32]byte, prevTxnLgrSeq uint32) ([]byte, error) {
+func SerializeDelegate(account, authorize [20]byte, permissions []uint32, ownerNode uint64, destinationNode *uint64, sponsor string, prevTxnID [32]byte, prevTxnLgrSeq uint32) ([]byte, error) {
 	accountAddr, err := addresscodec.EncodeAccountIDToClassicAddress(account[:])
 	if err != nil {
 		return nil, fmt.Errorf("failed to encode account address: %w", err)
@@ -149,6 +153,9 @@ func SerializeDelegate(account, authorize [20]byte, permissions []uint32, ownerN
 	entry.SetPermissions(permsArray)
 	entry.SetOwnerNode(fmt.Sprintf("%X", ownerNode))
 	entry.SetFlags(0)
+	if sponsor != "" {
+		entry.SetSponsor(sponsor)
+	}
 
 	if destinationNode != nil {
 		entry.SetDestinationNode(fmt.Sprintf("%X", *destinationNode))

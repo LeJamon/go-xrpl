@@ -132,18 +132,23 @@ func (p *PaymentChannelCreate) Apply(ctx *tx.ApplyContext) ter.Result {
 	// PriorBalance, else a fee straddling reserve(OwnerCount+1) flips the TER.
 	// Reference: rippled PayChan.cpp preclaim() lines 204-214.
 	priorBalance := ctx.PriorBalance()
-	reserve := ctx.AccountReserve(ctx.Account.OwnerCount + 1)
-	if priorBalance < reserve {
+	if result := tx.CheckReserve(ctx, p.GetCommon(), ctx.AccountID, ctx.Account, priorBalance, tx.ReserveAdjustment{OwnerCountDelta: 1}, ter.TecINSUFFICIENT_RESERVE); result != ter.TesSUCCESS {
 		ctx.Log.Warn("payment channel create: insufficient reserve",
 			"balance", priorBalance,
-			"reserve", reserve,
 		)
-		return ter.TecINSUFFICIENT_RESERVE
+		return result
 	}
-	if priorBalance-reserve < amount {
+	ownerDelta := int32(1)
+	if p.Sponsor != "" && p.SponsorFlags != nil && *p.SponsorFlags&tx.SpfSponsorReserve != 0 {
+		ownerDelta = 0
+	}
+	reserveCommon := *p.GetCommon()
+	reserveCommon.Sponsor = ""
+	reserveCommon.SponsorFlags = nil
+	if priorBalance < amount || tx.CheckReserve(ctx, &reserveCommon, ctx.AccountID, ctx.Account, priorBalance-amount, tx.ReserveAdjustment{OwnerCountDelta: ownerDelta}, ter.TecUNFUNDED) != ter.TesSUCCESS {
 		ctx.Log.Warn("payment channel create: unfunded",
 			"balance", priorBalance,
-			"needed", reserve+amount,
+			"amount", amount,
 		)
 		return ter.TecUNFUNDED
 	}
@@ -239,6 +244,13 @@ func (p *PaymentChannelCreate) Apply(ctx *tx.ApplyContext) ter.Result {
 		channelSLE.HasDestNode = true
 	}
 
+	sponsorAddress, result := tx.IncreaseOwnerCount(ctx, p.GetCommon(), accountID, ctx.Account, 1)
+	if result != ter.TesSUCCESS {
+		return result
+	}
+	channelSLE.Sponsor = sponsorAddress
+	channelSLE.HasSponsor = sponsorAddress != ""
+
 	// Re-serialize with updated OwnerNode/DestinationNode
 	updatedData, err := state.SerializePayChannelFromData(channelSLE)
 	if err != nil {
@@ -248,9 +260,8 @@ func (p *PaymentChannelCreate) Apply(ctx *tx.ApplyContext) ter.Result {
 		return ctx.Internal("update pay channel", err)
 	}
 
-	// Deduct amount from account and increment OwnerCount
+	// Deduct amount from account.
 	ctx.Account.Balance -= amount
-	ctx.Account.OwnerCount++
 
 	return ter.TesSUCCESS
 }

@@ -157,8 +157,8 @@ func (m *MPTokenIssuanceDestroy) Apply(ctx *tx.ApplyContext) ter.Result {
 		return ter.TefINTERNAL
 	}
 
-	if ctx.Account.OwnerCount > 0 {
-		ctx.Account.OwnerCount--
+	if result := tx.DecreaseOwnerCountForObject(ctx, ctx.AccountID, ctx.Account, issuanceRaw, "Sponsor", 1); result != ter.TesSUCCESS {
+		return result
 	}
 
 	return ter.TesSUCCESS

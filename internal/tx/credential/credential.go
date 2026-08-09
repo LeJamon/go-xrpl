@@ -150,15 +150,13 @@ func (c *CredentialAccept) Apply(ctx *tx.ApplyContext) ter.Result {
 		return ter.TemINVALID
 	}
 
-	issuerAccountKeylet := keylet.Account(issuerID)
-
 	// Compute correct keylet: credential(subject, issuer, credType)
 	// where subject = ctx.AccountID (the transaction sender)
 	credKeylet := keylet.Credential(ctx.AccountID, issuerID, credTypeBytes)
 
 	// The reserve check precedes expiration handling. An expired credential is
 	// left in place when the subject cannot afford to accept it.
-	if result := ctx.CheckReserveWithFee(ctx.Account.OwnerCount + 1); result != ter.TesSUCCESS {
+	if result := tx.CheckReserve(ctx, c.GetCommon(), ctx.AccountID, ctx.Account, ctx.PriorBalance(), tx.ReserveAdjustment{OwnerCountDelta: 1}, ter.TecINSUFFICIENT_RESERVE); result != ter.TesSUCCESS {
 		return result
 	}
 
@@ -186,6 +184,22 @@ func (c *CredentialAccept) Apply(ctx *tx.ApplyContext) ter.Result {
 	}
 
 	cred.SetAccepted()
+	issuerAccount := ctx.Account
+	if issuerID != ctx.AccountID {
+		issuerAccount, err = tx.ReadAccountRoot(ctx.View, issuerID)
+		if err != nil || issuerAccount == nil {
+			return ter.TefINTERNAL
+		}
+	}
+	if result := tx.DecreaseOwnerCountForObject(ctx, issuerID, issuerAccount, credData, "Sponsor", 1); result != ter.TesSUCCESS {
+		return result
+	}
+
+	sponsorAddress, result := tx.IncreaseOwnerCount(ctx, c.GetCommon(), ctx.AccountID, ctx.Account, 1)
+	if result != ter.TesSUCCESS {
+		return result
+	}
+	cred.Sponsor = sponsorAddress
 
 	// Serialize and update the credential
 	updatedCredData, err := serializeCredentialEntry(cred)
@@ -196,31 +210,6 @@ func (c *CredentialAccept) Apply(ctx *tx.ApplyContext) ter.Result {
 	if err := ctx.View.Update(credKeylet, updatedCredData); err != nil {
 		return ter.TefINTERNAL
 	}
-
-	// Transfer ownership: decrease issuer's owner count, increase subject's owner count
-	// Read issuer account
-	issuerData, err := ctx.View.Read(issuerAccountKeylet)
-	if err != nil || issuerData == nil {
-		return ter.TefINTERNAL
-	}
-
-	issuerAccount, err := state.ParseAccountRoot(issuerData)
-	if err != nil {
-		return ter.TefINTERNAL
-	}
-
-	// Decrease issuer's owner count
-	if issuerAccount.OwnerCount > 0 {
-		issuerAccount.OwnerCount--
-	}
-
-	// Serialize and update issuer account
-	if result := ctx.UpdateAccountRoot(issuerID, issuerAccount); result != ter.TesSUCCESS {
-		return result
-	}
-
-	// Increase subject's owner count
-	ctx.Account.OwnerCount++
 
 	return ter.TesSUCCESS
 }

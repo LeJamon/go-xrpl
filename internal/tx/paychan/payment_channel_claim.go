@@ -257,7 +257,7 @@ func (p *PaymentChannelClaim) Apply(ctx *tx.ApplyContext) ter.Result {
 	closeTime := ctx.Config.ParentCloseTime
 	if isChannelExpired(rules, closeTime, channel.CancelAfter) ||
 		isChannelExpired(rules, closeTime, channel.Expiration) {
-		return closeChannel(ctx, channelKey, channel)
+		return closeChannel(ctx, channelKey, channel, channelData)
 	}
 
 	accountID, _ := state.DecodeAccountID(p.Account)
@@ -385,7 +385,7 @@ func (p *PaymentChannelClaim) Apply(ctx *tx.ApplyContext) ter.Result {
 		// Channel is dry (Balance == Amount) → close immediately.
 		// Otherwise owner must wait settle delay.
 		if isDest || channel.Balance == channel.Amount {
-			return closeChannel(ctx, channelKey, channel)
+			return closeChannel(ctx, channelKey, channel, channelData)
 		}
 
 		// Owner closing: set expiration to closeTime + SettleDelay

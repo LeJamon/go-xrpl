@@ -25,6 +25,8 @@ type CheckData struct {
 	OwnerNode         uint64
 	DestinationNode   uint64
 	HasDestNode       bool
+	Sponsor           string
+	HasSponsor        bool
 	PreviousTxnID     [32]byte
 	PreviousTxnLgrSeq uint32
 }
@@ -46,6 +48,8 @@ func ParseCheck(data []byte) (*CheckData, error) {
 		HasDestTag:        fields["DestinationTag"] != nil,
 		HasDestNode:       fields["DestinationNode"] != nil,
 		HasInvoiceID:      fields["InvoiceID"] != nil,
+		Sponsor:           entry.Sponsor,
+		HasSponsor:        fields["Sponsor"] != nil,
 	}
 
 	var err error
@@ -119,6 +123,9 @@ func SerializeCheckFromData(check *CheckData) ([]byte, error) {
 	entry.SetOwnerNode(fmt.Sprintf("%x", check.OwnerNode))
 	entry.SetDestinationNode(fmt.Sprintf("%x", check.DestinationNode))
 	entry.SetFlags(0)
+	if check.HasSponsor || check.Sponsor != "" {
+		entry.SetSponsor(check.Sponsor)
+	}
 
 	if check.IsNativeSendMax {
 		entry.SetSendMax(fmt.Sprintf("%d", check.SendMax))

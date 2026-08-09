@@ -18,7 +18,7 @@ import (
 func SerializeEscrow(ownerID, destID [20]byte, amount Amount, transferRate uint32,
 	ownerNode, destNode uint64, hasDestNode bool, issuerNode uint64, hasIssuerNode bool,
 	finishAfter, cancelAfter *uint32, condition string,
-	sourceTag, destinationTag *uint32, sequence *uint32) ([]byte, error) {
+	sourceTag, destinationTag *uint32, sequence *uint32, sponsor ...string) ([]byte, error) {
 	ownerAddress, err := addresscodec.EncodeAccountIDToClassicAddress(ownerID[:])
 	if err != nil {
 		return nil, fmt.Errorf("failed to encode owner address: %w", err)
@@ -85,6 +85,9 @@ func SerializeEscrow(ownerID, destID [20]byte, amount Amount, transferRate uint3
 	if sequence != nil {
 		entry.SetSequence(*sequence)
 	}
+	if len(sponsor) > 0 && sponsor[0] != "" {
+		entry.SetSponsor(sponsor[0])
+	}
 
 	return entry.Encode()
 }
@@ -113,6 +116,7 @@ type EscrowData struct {
 	TransferRate    uint32
 	HasTransferRate bool
 	Flags           uint32
+	Sponsor         string
 }
 
 // ParseEscrow parses an Escrow ledger entry from binary data
@@ -135,6 +139,7 @@ func ParseEscrow(data []byte) (*EscrowData, error) {
 		TransferRate:    entry.TransferRate,
 		HasTransferRate: fields["TransferRate"] != nil,
 		Flags:           entry.Flags,
+		Sponsor:         entry.Sponsor,
 	}
 
 	var err error

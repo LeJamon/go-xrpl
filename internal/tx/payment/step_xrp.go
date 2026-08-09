@@ -280,48 +280,14 @@ func (s *XRPEndpointStep) ValidFwd(sb *PaymentSandbox, afView *PaymentSandbox, i
 
 // xrpLiquid returns the available XRP balance for the account (balance - reserve)
 func (s *XRPEndpointStep) xrpLiquid(sb *PaymentSandbox) int64 {
-	accountKey := keylet.Account(s.account)
-	data, err := sb.Read(accountKey)
-	if err != nil || data == nil {
-		return 0
-	}
-
-	accountRoot, err := state.ParseAccountRoot(data)
-	if err != nil {
-		return 0
-	}
-
-	ownerCount := sb.OwnerCountHook(s.account, accountRoot.OwnerCount)
-
-	// Apply reserveReduction (for offer crossing when trust line doesn't exist yet).
-	// This is rippled's confineOwnerCount: adjusted = ownerCount + reserveReduction,
-	// clamped to 0 on underflow.
-	// Reference: rippled View.cpp confineOwnerCount() + xrpLiquid()
-	adjustedOwnerCount := max(int32(ownerCount)+s.reserveReduction, 0)
-
-	// AMM pseudo-accounts (sfAMMID present) have no reserve requirement.
-	// Reference: rippled View.cpp xrpLiquid() lines 631-633.
-	var reserve uint64
-	if !accountRoot.HasAMMID() {
-		baseReserve, ownerReserve := GetLedgerReserves(sb)
-		reserve = uint64(baseReserve) + uint64(adjustedOwnerCount)*uint64(ownerReserve)
-	}
-
-	// Apply the deferred-credit balance hook to the full balance. XRP credited to
-	// this account earlier in the same payment must not be counted as spendable
-	// liquidity, otherwise the same drops could be moved twice through the strand.
-	// Reference: rippled View.cpp xrpLiquid() line 637:
-	//   balance = view.balanceHook(id, xrpAccount(), fullBalance)
-	fullBalance := tx.NewXRPAmount(int64(accountRoot.Balance))
-	balance := sb.BalanceHook(s.account, [20]byte{}, fullBalance).Drops()
-	if balance < 0 {
-		balance = 0
-	}
-
-	if uint64(balance) < reserve {
-		return 0
-	}
-	return balance - int64(reserve)
+	baseReserve, ownerReserve := GetLedgerReserves(sb)
+	return tx.XRPLiquid(
+		sb,
+		s.account,
+		int64(s.reserveReduction),
+		uint64(baseReserve),
+		uint64(ownerReserve),
+	).Drops()
 }
 
 // accountSend transfers XRP between accounts in the sandbox

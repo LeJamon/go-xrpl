@@ -482,15 +482,15 @@ func escrowLockMPT(view tx.LedgerView, senderID [20]byte, amount tx.Amount) ter.
 // Reference: rippled Escrow.cpp escrowUnlockApplyHelper<Issue> lines 809-942
 func escrowUnlockIOU(
 	view tx.LedgerView,
+	ctx *tx.ApplyContext,
+	common *tx.Common,
 	lockedRate uint32,
 	destBalance uint64,
-	destOwnerCount uint32,
 	destID [20]byte,
 	amount tx.Amount,
 	senderID, receiverID [20]byte,
 	createAsset bool,
 	bumpDestOwnerCount bool,
-	reserveBase, reserveIncrement uint64,
 	numberContext state.NumberContext,
 ) ter.Result {
 	issuerID, err := state.DecodeAccountID(amount.Issuer)
@@ -529,12 +529,18 @@ func escrowUnlockIOU(
 		if !bumpDestOwnerCount {
 			return ter.TefEXCEPTION
 		}
-		reserve := reserveBase + uint64(destOwnerCount+1)*reserveIncrement
-		if destBalance < reserve {
-			return ter.TecNO_LINE_INSUF_RESERVE
+		destAccount, err := tx.ReadAccountRoot(view, destID)
+		if err != nil || destAccount == nil {
+			return ter.TefINTERNAL
+		}
+		if destID == ctx.AccountID {
+			destAccount = ctx.Account
+		}
+		if result := tx.CheckReserve(ctx, common, destID, destAccount, destBalance, tx.ReserveAdjustment{OwnerCountDelta: 1}, ter.TecNO_LINE_INSUF_RESERVE); result != ter.TesSUCCESS {
+			return result
 		}
 
-		if tr := createTrustLineForEscrow(view, issuerID, receiverID, amount.Currency, destID, recvLow, bumpDestOwnerCount); tr != ter.TesSUCCESS {
+		if tr := createTrustLineForEscrow(ctx, common, issuerID, receiverID, amount.Currency, destAccount, recvLow, bumpDestOwnerCount); tr != ter.TesSUCCESS {
 			return tr
 		}
 		// Re-read after creation
@@ -623,16 +629,16 @@ func escrowUnlockIOU(
 // fee stays permanently locked and no supply is burned (legacy behaviour).
 func escrowUnlockMPT(
 	view tx.LedgerView,
+	ctx *tx.ApplyContext,
+	common *tx.Common,
 	senderID, receiverID [20]byte,
 	finalAmount uint64,
 	grossAmount uint64,
 	mptHexID string,
 	createAsset bool,
 	destBalance uint64,
-	destOwnerCount uint32,
 	destID [20]byte,
 	bumpDestOwnerCount bool,
-	reserveBase, reserveIncrement uint64,
 ) ter.Result {
 	issuanceKey, err := mptIssuanceKeyFromHex(mptHexID)
 	if err != nil {
@@ -672,12 +678,18 @@ func escrowUnlockMPT(
 			if !bumpDestOwnerCount {
 				return ter.TefEXCEPTION
 			}
-			reserve := reserveBase + uint64(destOwnerCount+1)*reserveIncrement
-			if destBalance < reserve {
-				return ter.TecINSUFFICIENT_RESERVE
+			destAccount, err := tx.ReadAccountRoot(view, destID)
+			if err != nil || destAccount == nil {
+				return ter.TefINTERNAL
+			}
+			if destID == ctx.AccountID {
+				destAccount = ctx.Account
+			}
+			if result := tx.CheckReserve(ctx, common, destID, destAccount, destBalance, tx.ReserveAdjustment{OwnerCountDelta: 1}, ter.TecINSUFFICIENT_RESERVE); result != ter.TesSUCCESS {
+				return result
 			}
 
-			if tr := createMPTokenForEscrow(view, issuanceKey, mptHexID, receiverID, destID, bumpDestOwnerCount); tr != ter.TesSUCCESS {
+			if tr := createMPTokenForEscrow(ctx, common, issuanceKey, mptHexID, receiverID, destAccount, bumpDestOwnerCount); tr != ter.TesSUCCESS {
 				return tr
 			}
 		}
@@ -1108,10 +1120,11 @@ func mptIssuerFromIssuanceID(hexID string) string {
 // peer. The receiver owns the new line, so its OwnerCount is bumped via the view.
 // Reference: rippled Escrow.cpp lines 837-877 (calls trustCreate)
 func createTrustLineForEscrow(
-	view tx.LedgerView,
+	ctx *tx.ApplyContext,
+	common *tx.Common,
 	issuerID, receiverID [20]byte,
 	currency string,
-	destID [20]byte,
+	receiverAcct *state.AccountRoot,
 	recvLow bool,
 	bumpOwnerCount bool,
 ) ter.Result {
@@ -1125,17 +1138,9 @@ func createTrustLineForEscrow(
 	// The account-being-set's (receiver's) noRipple is derived from its own
 	// lsfDefaultRipple, exactly as rippled's escrow trustCreate call.
 	// Reference: rippled Escrow.cpp:862 (sleDest->getFlags() & lsfDefaultRipple) == 0.
-	receiverAcctData, err := view.Read(keylet.Account(receiverID))
-	if err != nil || receiverAcctData == nil {
-		return ter.TefINTERNAL
-	}
-	receiverAcct, err := state.ParseAccountRoot(receiverAcctData)
-	if err != nil {
-		return ter.TefINTERNAL
-	}
 	receiverNoRipple := receiverAcct.Flags&state.LsfDefaultRipple == 0
 
-	result := tx.TrustCreate(view, tx.TrustCreateParams{
+	result := tx.TrustCreate(ctx.View, tx.TrustCreateParams{
 		SrcHigh:     recvLow,
 		Src:         issuerID,
 		Dst:         receiverID,
@@ -1153,8 +1158,23 @@ func createTrustLineForEscrow(
 	// rippled bumps the soon-erased escrow SLE instead of a real account, so the
 	// caller passes bumpOwnerCount=false and no account is charged for the line.
 	if bumpOwnerCount {
-		if result := adjustOwnerCountViaView(view, destID, 1); result != ter.TesSUCCESS {
+		sponsor, result := tx.IncreaseOwnerCount(ctx, common, receiverID, receiverAcct, 1)
+		if result != ter.TesSUCCESS {
 			return result
+		}
+		if sponsor != "" {
+			lineData, err := ctx.View.Read(trustLineKey)
+			if err != nil || lineData == nil {
+				return ter.TefINTERNAL
+			}
+			field := "HighSponsor"
+			if recvLow {
+				field = "LowSponsor"
+			}
+			lineData, err = tx.SetLedgerEntrySponsor(lineData, field, sponsor)
+			if err != nil || ctx.View.Update(trustLineKey, lineData) != nil {
+				return ter.TefINTERNAL
+			}
 		}
 	}
 
@@ -1330,11 +1350,12 @@ func divideAmountByRate(
 // createMPTokenForEscrow creates a new MPToken SLE for holderID during escrow unlock.
 // Reference: rippled MPTokenAuthorize::createMPToken pattern
 func createMPTokenForEscrow(
-	view tx.LedgerView,
+	ctx *tx.ApplyContext,
+	common *tx.Common,
 	issuanceKey keylet.Keylet,
 	mptHexID string,
 	holderID [20]byte,
-	destID [20]byte,
+	holderAccount *state.AccountRoot,
 	bumpOwnerCount bool,
 ) ter.Result {
 	// Decode MPT issuance ID to [24]byte
@@ -1357,7 +1378,7 @@ func createMPTokenForEscrow(
 	// Insert into owner directory first so sfOwnerNode records the actual page.
 	// Reference: rippled MPTokenAuthorize.cpp:161-171 (mirrored by createMPToken).
 	ownerDirKey := keylet.OwnerDir(holderID)
-	dirResult, err := state.DirInsert(view, ownerDirKey, tokenKey.Key, false, func(dir *state.DirectoryNode) {
+	dirResult, err := state.DirInsert(ctx.View, ownerDirKey, tokenKey.Key, false, func(dir *state.DirectoryNode) {
 		dir.Owner = holderID
 	})
 	if err != nil {
@@ -1365,22 +1386,23 @@ func createMPTokenForEscrow(
 	}
 	tokenData.OwnerNode = dirResult.Page
 
+	if bumpOwnerCount {
+		sponsor, result := tx.IncreaseOwnerCount(ctx, common, holderID, holderAccount, 1)
+		if result != ter.TesSUCCESS {
+			return result
+		}
+		tokenData.Sponsor = sponsor
+	}
 	data, err := state.SerializeMPToken(tokenData)
 	if err != nil {
 		return ter.TefINTERNAL
 	}
-	if err := view.Insert(tokenKey, data); err != nil {
+	if err := ctx.View.Insert(tokenKey, data); err != nil {
 		return ter.TefINTERNAL
 	}
 
 	// On the cancel path rippled bumps the soon-erased escrow SLE rather than a
 	// real account, so the caller passes bumpOwnerCount=false.
-	if bumpOwnerCount {
-		if result := adjustOwnerCountViaView(view, destID, 1); result != ter.TesSUCCESS {
-			return result
-		}
-	}
-
 	return ter.TesSUCCESS
 }
 
@@ -1441,32 +1463,6 @@ func accountHoldsMPT(view tx.LedgerView, issuanceKey keylet.Keylet, accountID [2
 	}
 
 	return int64(token.MPTAmount), ter.TesSUCCESS
-}
-
-func adjustOwnerCountViaView(view tx.LedgerView, accountID [20]byte, adj int) ter.Result {
-	data, err := view.Read(keylet.Account(accountID))
-	if err != nil {
-		return ter.TefINTERNAL
-	}
-	if data == nil {
-		return ter.TefBAD_LEDGER
-	}
-	account, err := state.ParseAccountRoot(data)
-	if err != nil {
-		return ter.TefINTERNAL
-	}
-	if adj < 0 && account.OwnerCount < uint32(-adj) {
-		return ter.TefBAD_LEDGER
-	}
-	account.OwnerCount = tx.ConfineOwnerCount(account.OwnerCount, adj)
-	updated, err := state.SerializeAccountRoot(account)
-	if err != nil {
-		return ter.TefINTERNAL
-	}
-	if err := view.Update(keylet.Account(accountID), updated); err != nil {
-		return ter.TefINTERNAL
-	}
-	return ter.TesSUCCESS
 }
 
 func mapDirInsertError(err error) ter.Result {

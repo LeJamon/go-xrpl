@@ -639,33 +639,8 @@ func (s *BookStep) getOfferFundedAmount(sb *PaymentSandbox, offer *state.LedgerO
 	offerTakerGets := s.offerTakerGets(offer)
 
 	if s.book.Out.IsXRP() {
-		accountKey := keylet.Account(offerOwner)
-		accountData, err := sb.Read(accountKey)
-		if err != nil || accountData == nil {
-			return ZeroXRPEitherAmount()
-		}
-
-		account, err := state.ParseAccountRoot(accountData)
-		if err != nil {
-			return ZeroXRPEitherAmount()
-		}
-
-		// Use OwnerCountHook to get adjusted owner count (accounts for pending changes)
-		// Reference: rippled View.cpp xrpLiquid() line 627-628
-		ownerCount := sb.OwnerCountHook(offerOwner, account.OwnerCount)
-
-		// Read reserve values from ledger's FeeSettings
-		// Reference: rippled View.cpp xrpLiquid() reads reserves from fees keylet
 		baseReserve, incrementReserve := GetLedgerReserves(sb)
-		reserve := baseReserve + int64(ownerCount)*incrementReserve
-
-		// Use BalanceHook to get adjusted balance (accounts for pending credits)
-		// Reference: rippled View.cpp xrpLiquid() line 637
-		// For XRP, issuer is the zero account (xrpAccount)
-		xrpIssuer := [20]byte{}
-		xrpAmount := tx.NewXRPAmount(int64(account.Balance))
-		adjustedBalance := sb.BalanceHook(offerOwner, xrpIssuer, xrpAmount)
-		available := adjustedBalance.Drops() - reserve
+		available := tx.XRPLiquid(sb, offerOwner, 0, uint64(baseReserve), uint64(incrementReserve)).Drops()
 
 		if available <= 0 {
 			return ZeroXRPEitherAmount()
