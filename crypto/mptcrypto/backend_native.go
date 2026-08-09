@@ -77,12 +77,14 @@ func ConvertBackContext(account [20]byte, issuance [24]byte, sequence, version u
 	return out, ok
 }
 
+// SendContext derives the proof context for a confidential send transaction.
 func SendContext(account [20]byte, issuance [24]byte, sequence uint32, destination [20]byte, version uint32) ([32]byte, bool) {
 	var out [32]byte
 	ok := C.go_mpt_send_context(bytePtr(account[:]), bytePtr(issuance[:]), C.uint32_t(sequence), bytePtr(destination[:]), C.uint32_t(version), bytePtr(out[:])) == 1
 	return out, ok
 }
 
+// ClawbackContext derives the proof context for a confidential clawback transaction.
 func ClawbackContext(account [20]byte, issuance [24]byte, sequence uint32, holder [20]byte) ([32]byte, bool) {
 	var out [32]byte
 	ok := C.go_mpt_clawback_context(bytePtr(account[:]), bytePtr(issuance[:]), C.uint32_t(sequence), bytePtr(holder[:]), bytePtr(out[:])) == 1
@@ -120,6 +122,7 @@ func VerifyConvertBack(proof, pub, spending, commitment []byte, amount uint64, c
 	return len(proof) == ConvertBackProofSize && len(pub) == PublicKeySize && len(spending) == CiphertextSize && len(commitment) == CommitmentSize && C.go_mpt_verify_convert_back(bytePtr(proof), bytePtr(pub), bytePtr(spending), bytePtr(commitment), C.uint64_t(amount), bytePtr(context[:])) == 1
 }
 
+// VerifySend verifies a confidential send proof.
 func VerifySend(proof []byte, sender, destination, issuer Participant, auditor *Participant, spending, amountCommitment, balanceCommitment []byte, context [32]byte) bool {
 	if len(proof) != SendProofSize || !validParticipant(sender) || !validParticipant(destination) || !validParticipant(issuer) || len(spending) != CiphertextSize || len(amountCommitment) != CommitmentSize || len(balanceCommitment) != CommitmentSize {
 		return false
@@ -140,10 +143,12 @@ func VerifySend(proof []byte, sender, destination, issuer Participant, auditor *
 	return C.go_mpt_verify_send(bytePtr(proof), bytePtr(pubs[:]), bytePtr(ciphertexts[:]), C.uint8_t(len(participants)), bytePtr(spending), bytePtr(amountCommitment), bytePtr(balanceCommitment), bytePtr(context[:])) == 1
 }
 
+// VerifyClawback verifies a confidential clawback proof.
 func VerifyClawback(proof, pub, ciphertext []byte, amount uint64, context [32]byte) bool {
 	return len(proof) == ClawbackProofSize && len(pub) == PublicKeySize && len(ciphertext) == CiphertextSize && C.go_mpt_verify_clawback(bytePtr(proof), C.uint64_t(amount), bytePtr(pub), bytePtr(ciphertext), bytePtr(context[:])) == 1
 }
 
+// RerandomizeCiphertext rerandomizes a ciphertext with the supplied public key and randomness.
 func RerandomizeCiphertext(ciphertext, pub []byte, randomness [32]byte) ([]byte, bool) {
 	if len(ciphertext) != CiphertextSize || len(pub) != PublicKeySize {
 		return nil, false
@@ -152,6 +157,7 @@ func RerandomizeCiphertext(ciphertext, pub []byte, randomness [32]byte) ([]byte,
 	return out, C.go_mpt_rerandomize(bytePtr(ciphertext), bytePtr(pub), bytePtr(randomness[:]), bytePtr(out)) == 1
 }
 
+// GenerateKeyPair generates an MPT-crypto private and public key pair.
 func GenerateKeyPair() ([32]byte, []byte, bool) {
 	var private [32]byte
 	public := make([]byte, PublicKeySize)
@@ -159,12 +165,14 @@ func GenerateKeyPair() ([32]byte, []byte, bool) {
 	return private, public, ok
 }
 
+// GenerateBlindingFactor generates a blinding factor for MPT-crypto commitments.
 func GenerateBlindingFactor() ([32]byte, bool) {
 	var blind [32]byte
 	ok := C.go_mpt_generate_blinding(bytePtr(blind[:])) == 1
 	return blind, ok
 }
 
+// EncryptAmount encrypts an amount for the supplied public key and blinding factor.
 func EncryptAmount(amount uint64, public []byte, blind [32]byte) ([]byte, bool) {
 	if len(public) != PublicKeySize {
 		return nil, false
@@ -173,6 +181,7 @@ func EncryptAmount(amount uint64, public []byte, blind [32]byte) ([]byte, bool) 
 	return out, C.go_mpt_encrypt(C.uint64_t(amount), bytePtr(public), bytePtr(blind[:]), bytePtr(out)) == 1
 }
 
+// GenerateConvertProof generates a confidential convert proof.
 func GenerateConvertProof(public []byte, private [32]byte, context [32]byte) ([]byte, bool) {
 	if len(public) != PublicKeySize {
 		return nil, false
@@ -181,11 +190,13 @@ func GenerateConvertProof(public []byte, private [32]byte, context [32]byte) ([]
 	return out, C.go_mpt_generate_convert_proof(bytePtr(public), bytePtr(private[:]), bytePtr(context[:]), bytePtr(out)) == 1
 }
 
+// PedersenCommitment generates a Pedersen commitment for an amount and blinding factor.
 func PedersenCommitment(amount uint64, blind [32]byte) ([]byte, bool) {
 	out := make([]byte, CommitmentSize)
 	return out, C.go_mpt_commitment(C.uint64_t(amount), bytePtr(blind[:]), bytePtr(out)) == 1
 }
 
+// GenerateConvertBackProof generates a confidential convert-back proof.
 func GenerateConvertBackProof(private [32]byte, public []byte, context [32]byte, amount uint64, balanceCommitment []byte, balance uint64, spending []byte, balanceBlind [32]byte) ([]byte, bool) {
 	if len(public) != PublicKeySize || len(balanceCommitment) != CommitmentSize || len(spending) != CiphertextSize {
 		return nil, false
@@ -195,6 +206,7 @@ func GenerateConvertBackProof(private [32]byte, public []byte, context [32]byte,
 	return out, ok
 }
 
+// GenerateSendProof generates a confidential send proof.
 func GenerateSendProof(private [32]byte, amount uint64, participants []Participant, transactionBlind [32]byte, context [32]byte, amountCommitment, balanceCommitment []byte, balance uint64, spending []byte, balanceBlind [32]byte) ([]byte, bool) {
 	if (len(participants) != 3 && len(participants) != 4) || len(amountCommitment) != CommitmentSize || len(balanceCommitment) != CommitmentSize || len(spending) != CiphertextSize {
 		return nil, false
@@ -213,6 +225,7 @@ func GenerateSendProof(private [32]byte, amount uint64, participants []Participa
 	return out, ok
 }
 
+// GenerateClawbackProof generates a confidential clawback proof.
 func GenerateClawbackProof(private [32]byte, public []byte, context [32]byte, amount uint64, ciphertext []byte) ([]byte, bool) {
 	if len(public) != PublicKeySize || len(ciphertext) != CiphertextSize {
 		return nil, false
