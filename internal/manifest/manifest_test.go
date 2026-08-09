@@ -176,6 +176,7 @@ func TestManifest_CappedCapacityUpdatesAndPromotion(t *testing.T) {
 	badSecondWire[len(badSecondWire)-1] ^= 0x01
 	badSecond, err := manifest.Deserialize(badSecondWire)
 	require.NoError(t, err)
+	require.Equal(t, manifest.UntrustedCapacity, cache.ApplyManifest(badSecond, manifest.ManifestRateLimitCapPolicy(255)))
 	require.Equal(t, manifest.UntrustedCapacity, cache.ApplyManifest(badSecond, manifest.Capped))
 	require.Equal(t, 1, cache.UntrustedCount())
 	_, ok := cache.GetManifest(secondMaster)

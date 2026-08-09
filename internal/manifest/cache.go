@@ -57,9 +57,6 @@ const (
 	Uncapped
 )
 
-// ApplyPolicy is a concise alias for ManifestRateLimitCapPolicy.
-type ApplyPolicy = ManifestRateLimitCapPolicy
-
 // String returns a debug-friendly label for the disposition.
 func (d Disposition) String() string {
 	switch d {
@@ -166,7 +163,7 @@ func (c *Cache) ApplyManifest(m *Manifest, policies ...ManifestRateLimitCapPolic
 	if len(policies) > 0 {
 		policy = policies[0]
 	}
-	capped := policy == Capped
+	capped := policy != Uncapped
 
 	c.applyMu.Lock()
 
