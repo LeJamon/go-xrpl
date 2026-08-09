@@ -56,7 +56,6 @@ func (r Role) IsUnlimited() bool {
 	return r == RoleAdmin || r == RoleIdentified
 }
 
-// IsAdmin reports whether the role has administrator privileges.
 func (r Role) IsAdmin() bool {
 	return r == RoleAdmin
 }
