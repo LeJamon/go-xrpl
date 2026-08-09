@@ -17,11 +17,15 @@ var (
 	// ErrSigningClaimFieldNotFound is returned when the channel and amount fields are not both present.
 	ErrSigningClaimFieldNotFound = errors.New("channel and amount fields are required")
 	// ErrBatchFlagsFieldNotFound is returned when the flags field is missing.
-	ErrBatchFlagsFieldNotFound    = errors.New("missing flags field")
-	ErrBatchAccountFieldNotFound  = errors.New("missing account field")
+	ErrBatchFlagsFieldNotFound = errors.New("missing flags field")
+	// ErrBatchAccountFieldNotFound is returned when the batch account field is missing.
+	ErrBatchAccountFieldNotFound = errors.New("missing account field")
+	// ErrBatchSequenceFieldNotFound is returned when the batch sequence field is missing.
 	ErrBatchSequenceFieldNotFound = errors.New("missing sequence field")
-	ErrBatchAccountNotString      = errors.New("account field must be a string")
-	ErrBatchSequenceNotUInt32     = errors.New("sequence field must be a uint32")
+	// ErrBatchAccountNotString is returned when the batch account field is not a string.
+	ErrBatchAccountNotString = errors.New("account field must be a string")
+	// ErrBatchSequenceNotUInt32 is returned when the batch sequence is not a uint32.
+	ErrBatchSequenceNotUInt32 = errors.New("sequence field must be a uint32")
 	// ErrBatchTxIDsFieldNotFound is returned when the txIDs field is missing.
 	ErrBatchTxIDsFieldNotFound = errors.New("missing txIDs field")
 	// ErrBatchTxIDsNotArray is returned when the txIDs field is not an array.
@@ -32,7 +36,8 @@ var (
 	ErrBatchFlagsNotUInt32 = errors.New("flags field must be a uint32")
 	// ErrBatchTxIDsLengthTooLong is returned when the txIDs field is too long.
 	ErrBatchTxIDsLengthTooLong = errors.New("txIDs length exceeds maximum uint32 value")
-	ErrBatchTooManyTxIDs       = errors.New("txIDs length exceeds maximum batch size")
+	// ErrBatchTooManyTxIDs is returned when the batch contains too many txIDs.
+	ErrBatchTooManyTxIDs = errors.New("txIDs length exceeds maximum batch size")
 	// ErrUnknownField is returned when Encode receives a JSON key with no
 	// matching field definition. Silently dropping unknown keys masks typos
 	// (e.g. "Acount" vs "Account") that produce different binary transactions.
