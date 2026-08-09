@@ -867,7 +867,7 @@ func TestAggregator_ApplyList_EffectiveSet_Sentinel(t *testing.T) {
 
 // Direct expired-list ingest populates the publisher list and preserves it
 // for the RPC projection even though it does not contribute to trust.
-func TestAggregator_ApplyList_Expired_PreservesValidatorsUntilTick(t *testing.T) {
+func TestAggregator_ApplyList_Expired_PreservesValidatorsAcrossTick(t *testing.T) {
 	pub := newPublisher(t, 0x01, 0x02)
 	v1 := derivedValidatorKey(0x10)
 
@@ -892,12 +892,70 @@ func TestAggregator_ApplyList_Expired_PreservesValidatorsUntilTick(t *testing.T)
 		t.Fatalf("expired publisher list was not retained: %+v", snap[0].Validators)
 	}
 	if !agg.IsMasterListed(v1) {
-		t.Fatal("directly ingested expired validator must remain listed until Tick")
+		t.Fatal("directly ingested expired validator must remain listed")
 	}
 	agg.Tick()
-	if agg.IsMasterListed(v1) {
-		t.Fatal("expired validator remained listed after Tick")
+	if !agg.IsMasterListed(v1) {
+		t.Fatal("directly ingested expired validator must remain listed after Tick")
 	}
+}
+
+func TestAggregator_ApplyList_EmbeddedManifestUsesExpiredListingAfterTick(t *testing.T) {
+	expiredPublisher := newPublisher(t, 0x01, 0x02)
+	currentPublisher := newPublisher(t, 0x03, 0x04)
+	valMaster32, valMasterPriv := deterministicKey(0x20)
+	valEph32, valEphPriv := deterministicKey(0x21)
+	var valMaster, valEph [33]byte
+	copy(valMaster[:], append([]byte{0xED}, valMaster32...))
+	copy(valEph[:], append([]byte{0xED}, valEph32...))
+	valManifestRaw := buildManifest(t, valMaster, valMasterPriv, valEph, valEphPriv, 1)
+
+	validatorCache := manifest.NewCache()
+	agg, err := list.New(list.Config{
+		PublisherKeys: []list.PublisherKey{
+			list.PublisherKey(expiredPublisher.masterPub),
+			list.PublisherKey(currentPublisher.masterPub),
+		},
+		Threshold:          2,
+		ValidatorManifests: validatorCache,
+		PublisherManifests: manifest.NewCache(),
+		Clock:              fixedClock(),
+	})
+	require.NoError(t, err)
+
+	now := fixedClock()()
+	expiredBlob, expiredSig := expiredPublisher.signList(t, 1, 0, now.Add(-time.Hour).Unix(), [][33]byte{valMaster})
+	disposition, _, _ := agg.ApplyList(expiredPublisher.manifestB64, expiredBlob, expiredSig, 1, "expired://")
+	require.Equal(t, list.Expired, disposition)
+	agg.Tick()
+	require.True(t, agg.IsMasterListed(valMaster))
+
+	type entry struct {
+		ValidationPublicKey string `json:"validation_public_key"`
+		Manifest            string `json:"manifest,omitempty"`
+	}
+	otherValidator := derivedValidatorKey(0x30)
+	body := struct {
+		Sequence   uint32  `json:"sequence"`
+		Expiration uint32  `json:"expiration"`
+		Validators []entry `json:"validators"`
+	}{
+		Sequence:   1,
+		Expiration: uint32(now.Add(time.Hour).Unix() - protocol.RippleEpochUnix),
+		Validators: []entry{{
+			ValidationPublicKey: hex.EncodeToString(otherValidator[:]),
+			Manifest:            base64.StdEncoding.EncodeToString(valManifestRaw),
+		}},
+	}
+	jsonBytes, err := json.Marshal(body)
+	require.NoError(t, err)
+	blob := []byte(base64.StdEncoding.EncodeToString(jsonBytes))
+	sig := []byte(hex.EncodeToString(ed25519.Sign(currentPublisher.ephPriv, jsonBytes)))
+
+	disposition, _, _ = agg.ApplyList(currentPublisher.manifestB64, blob, sig, 1, "current://")
+	require.Equal(t, list.Accepted, disposition)
+	_, ok := validatorCache.GetSigningKey(valMaster)
+	require.True(t, ok)
 }
 
 // TestAggregator_ApplyList_Expired_SeedsEmbeddedManifests pins the
@@ -1064,11 +1122,15 @@ func TestAggregator_PendingPromotionAppliesEmbeddedManifest(t *testing.T) {
 	var valMaster, valEph [33]byte
 	copy(valMaster[:], append([]byte{0xED}, valMaster32...))
 	copy(valEph[:], append([]byte{0xED}, valEph32...))
-	valManifest := base64.StdEncoding.EncodeToString(buildManifest(t, valMaster, valMasterPriv, valEph, valEphPriv, 1))
+	valManifestRaw := buildManifest(t, valMaster, valMasterPriv, valEph, valEphPriv, 1)
+	valManifest := base64.StdEncoding.EncodeToString(valManifestRaw)
 
 	now := fixedClock()()
 	mutableNow := now
-	validatorCache := manifest.NewCache()
+	validatorCache := manifest.NewCache(1)
+	parsedManifest, err := manifest.Deserialize(valManifestRaw)
+	require.NoError(t, err)
+	require.Equal(t, manifest.Accepted, validatorCache.ApplyManifest(parsedManifest, manifest.Capped))
 	agg, err := list.New(list.Config{
 		PublisherKeys:      []list.PublisherKey{list.PublisherKey(pub.masterPub)},
 		Threshold:          1,
@@ -1101,15 +1163,16 @@ func TestAggregator_PendingPromotionAppliesEmbeddedManifest(t *testing.T) {
 	blob := []byte(base64.StdEncoding.EncodeToString(jsonBytes))
 	signature := []byte(hex.EncodeToString(ed25519.Sign(pub.ephPriv, jsonBytes)))
 	require.Equal(t, list.Pending, mustApply(t, agg, pub.manifestB64, blob, signature))
-	if _, ok := validatorCache.GetSigningKey(valMaster); ok {
-		t.Fatal("pending embedded manifest applied before promotion")
-	}
+	require.True(t, validatorCache.IsUntrusted(valMaster))
 
 	mutableNow = now.Add(3 * time.Hour)
 	agg.Tick()
 	if _, ok := validatorCache.GetSigningKey(valMaster); !ok {
 		t.Fatal("pending embedded manifest was not applied at promotion")
 	}
+	require.True(t, agg.IsMasterListed(valMaster))
+	require.False(t, validatorCache.IsUntrusted(valMaster))
+	require.Zero(t, validatorCache.UntrustedCount())
 }
 
 func TestAggregatorExpiredPendingPromotionDoesNotApplyEmbeddedManifest(t *testing.T) {
@@ -1119,11 +1182,15 @@ func TestAggregatorExpiredPendingPromotionDoesNotApplyEmbeddedManifest(t *testin
 	var valMaster, valEph [33]byte
 	copy(valMaster[:], append([]byte{0xED}, valMaster32...))
 	copy(valEph[:], append([]byte{0xED}, valEph32...))
-	valManifest := base64.StdEncoding.EncodeToString(buildManifest(t, valMaster, valMasterPriv, valEph, valEphPriv, 1))
+	valManifestRaw := buildManifest(t, valMaster, valMasterPriv, valEph, valEphPriv, 1)
+	valManifest := base64.StdEncoding.EncodeToString(valManifestRaw)
 
 	now := fixedClock()()
 	mutableNow := now
-	validatorCache := manifest.NewCache()
+	validatorCache := manifest.NewCache(1)
+	parsedManifest, err := manifest.Deserialize(valManifestRaw)
+	require.NoError(t, err)
+	require.Equal(t, manifest.Accepted, validatorCache.ApplyManifest(parsedManifest, manifest.Capped))
 	agg, err := list.New(list.Config{
 		PublisherKeys:      []list.PublisherKey{list.PublisherKey(pub.masterPub)},
 		Threshold:          1,
@@ -1158,9 +1225,9 @@ func TestAggregatorExpiredPendingPromotionDoesNotApplyEmbeddedManifest(t *testin
 
 	mutableNow = now.Add(2 * time.Hour)
 	agg.Tick()
-	if _, ok := validatorCache.GetSigningKey(valMaster); ok {
-		t.Fatal("expired pending list applied its embedded validator manifest")
-	}
+	require.False(t, agg.IsMasterListed(valMaster))
+	require.True(t, validatorCache.IsUntrusted(valMaster))
+	require.Equal(t, 1, validatorCache.UntrustedCount())
 }
 
 func TestAggregatorOnChangeCallbackBoundaries(t *testing.T) {
