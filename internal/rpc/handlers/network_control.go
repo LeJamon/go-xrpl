@@ -10,6 +10,8 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/LeJamon/go-xrpl/internal/rpc/rpcerrors"
+
 	addresscodec "github.com/LeJamon/go-xrpl/codec/addresscodec"
 	"github.com/LeJamon/go-xrpl/internal/rpc/types"
 )
@@ -22,7 +24,7 @@ import (
 // rippled's behavior too.
 type FetchInfoMethod struct{ adminHandler }
 
-func (m *FetchInfoMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (any, *types.RpcError) {
+func (m *FetchInfoMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (any, *rpcerrors.RpcError) {
 	var request struct {
 		Clear jsonCppBoolField `json:"clear"`
 	}
@@ -60,7 +62,7 @@ func (m *FetchInfoMethod) Handle(ctx *types.RpcContext, params json.RawMessage) 
 // overlay is wired (standalone / RPC-only).
 type TxReduceRelayMethod struct{ baseHandler }
 
-func (m *TxReduceRelayMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (any, *types.RpcError) {
+func (m *TxReduceRelayMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (any, *rpcerrors.RpcError) {
 	var metrics types.TxReduceRelayMetrics
 	if ctx.Services != nil && ctx.Services.TxReduceRelayMetrics() != nil {
 		metrics = ctx.Services.TxReduceRelayMetrics()()
@@ -76,7 +78,7 @@ func (m *TxReduceRelayMethod) RequiredRole() types.Role {
 // request to its bounded peer-connect scheduler and returns immediately.
 type ConnectMethod struct{ adminHandler }
 
-func (m *ConnectMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (any, *types.RpcError) {
+func (m *ConnectMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (any, *rpcerrors.RpcError) {
 	// The ledger invariant and standalone guard intentionally precede request
 	// decoding. This preserves rippled's notSynced result for every standalone
 	// request, including malformed parameters.
@@ -84,7 +86,7 @@ func (m *ConnectMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (a
 		return nil, rpcInternalInvariantError("connect: ledger service unavailable")
 	}
 	if ctx.Services.Ledger().IsStandalone() {
-		return nil, types.RpcErrorNotSynced("")
+		return nil, rpcerrors.RpcErrorNotSynced("")
 	}
 
 	request, rpcErr := decodeConnectRequest(params)
@@ -96,16 +98,16 @@ func (m *ConnectMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (a
 		return connectMessage(request.ip, request.port), nil
 	}
 	if ctx.Services.PeerConnect() == nil {
-		return nil, types.RpcErrorNotEnabled("")
+		return nil, rpcerrors.RpcErrorNotEnabled("")
 	}
 
 	addr := netip.AddrPortFrom(ip, uint16(request.port)).String()
 	if err := ctx.Services.PeerConnect()(addr); err != nil {
 		switch {
 		case errors.Is(err, types.ErrPeerConnectQueueFull):
-			return nil, types.RpcErrorTooBusy()
+			return nil, rpcerrors.RpcErrorTooBusy()
 		case errors.Is(err, types.ErrPeerConnectClosed), errors.Is(err, types.ErrPeerConnectUnavailable):
-			return nil, types.RpcErrorNotEnabled("")
+			return nil, rpcerrors.RpcErrorNotEnabled("")
 		default:
 			return nil, rpcInternalError("connect: enqueue failed", err)
 		}
@@ -179,22 +181,22 @@ type connectRequest struct {
 	port int
 }
 
-func decodeConnectRequest(params json.RawMessage) (connectRequest, *types.RpcError) {
+func decodeConnectRequest(params json.RawMessage) (connectRequest, *rpcerrors.RpcError) {
 	fields := make(map[string]json.RawMessage)
 	if len(bytes.TrimSpace(params)) != 0 {
 		if err := json.Unmarshal(params, &fields); err != nil {
-			return connectRequest{}, types.RpcErrorInvalidParams("Invalid parameters.")
+			return connectRequest{}, rpcerrors.RpcErrorInvalidParams("Invalid parameters.")
 		}
 	}
 
 	rawIP, ok := fields["ip"]
 	if !ok {
-		return connectRequest{}, types.RpcErrorMissingField("ip")
+		return connectRequest{}, rpcerrors.RpcErrorMissingField("ip")
 	}
 
 	port := 51235
 	if rawPort, supplied := fields["port"]; supplied {
-		var rpcErr *types.RpcError
+		var rpcErr *rpcerrors.RpcError
 		port, rpcErr = parseConnectPort(rawPort)
 		if rpcErr != nil {
 			return connectRequest{}, rpcErr
@@ -207,12 +209,12 @@ func decodeConnectRequest(params json.RawMessage) (connectRequest, *types.RpcErr
 	return connectRequest{ip: ip, port: port}, nil
 }
 
-func parseConnectIP(raw json.RawMessage) (string, *types.RpcError) {
+func parseConnectIP(raw json.RawMessage) (string, *rpcerrors.RpcError) {
 	decoder := json.NewDecoder(bytes.NewReader(raw))
 	decoder.UseNumber()
 	var value any
 	if err := decoder.Decode(&value); err != nil {
-		return "", types.RpcErrorInvalidParams("Invalid parameters.")
+		return "", rpcerrors.RpcErrorInvalidParams("Invalid parameters.")
 	}
 	switch value := value.(type) {
 	case nil:
@@ -227,7 +229,7 @@ func parseConnectIP(raw json.RawMessage) (string, *types.RpcError) {
 		}
 		number, err := strconv.ParseFloat(value.String(), 64)
 		if err != nil {
-			return "", types.RpcErrorInvalidParams("Invalid parameters.")
+			return "", rpcerrors.RpcErrorInvalidParams("Invalid parameters.")
 		}
 		return strconv.FormatFloat(number, 'f', 6, 64), nil
 	default:
@@ -235,12 +237,12 @@ func parseConnectIP(raw json.RawMessage) (string, *types.RpcError) {
 	}
 }
 
-func parseConnectPort(raw json.RawMessage) (int, *types.RpcError) {
+func parseConnectPort(raw json.RawMessage) (int, *rpcerrors.RpcError) {
 	decoder := json.NewDecoder(bytes.NewReader(raw))
 	decoder.UseNumber()
 	var value any
 	if err := decoder.Decode(&value); err != nil {
-		return 0, types.RpcErrorInvalidParams("Invalid parameters.")
+		return 0, rpcerrors.RpcErrorInvalidParams("Invalid parameters.")
 	}
 	switch value := value.(type) {
 	case nil:
@@ -255,14 +257,14 @@ func parseConnectPort(raw json.RawMessage) (int, *types.RpcError) {
 			if port >= math.MinInt32 && port <= math.MaxInt32 {
 				return int(port), nil
 			}
-			return 0, types.RpcErrorInvalidParams("Invalid parameters.")
+			return 0, rpcerrors.RpcErrorInvalidParams("Invalid parameters.")
 		}
 		if port, err := strconv.ParseFloat(value.String(), 64); err == nil &&
 			port >= math.MinInt32 && port <= math.MaxInt32 {
 			return int(port), nil
 		}
 	}
-	return 0, types.RpcErrorInvalidParams("Invalid parameters.")
+	return 0, rpcerrors.RpcErrorInvalidParams("Invalid parameters.")
 }
 
 // connectMessage formats the reply rippled returns from doConnect
@@ -280,7 +282,7 @@ func connectMessage(ip string, port int) map[string]any {
 // no publisher-trust subsystem configured (e.g. standalone) the list is empty.
 type UnlListMethod struct{ adminHandler }
 
-func (m *UnlListMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (any, *types.RpcError) {
+func (m *UnlListMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (any, *rpcerrors.RpcError) {
 	unl := make([]any, 0)
 	if ctx.Services != nil && ctx.Services.ValidatorList() != nil {
 		for _, v := range ctx.Services.ValidatorList().ListedValidators() {
@@ -307,13 +309,13 @@ func (m *UnlListMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (a
 // object directly). Empty when no overlay is wired (standalone / RPC-only).
 type BlackListMethod struct{ adminHandler }
 
-func (m *BlackListMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (any, *types.RpcError) {
+func (m *BlackListMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (any, *rpcerrors.RpcError) {
 	var request struct {
 		Threshold *int `json:"threshold,omitempty"`
 	}
 	if params != nil {
 		if err := json.Unmarshal(params, &request); err != nil {
-			return nil, types.RpcErrorInvalidParams(fmt.Sprintf("Invalid parameters: %v", err))
+			return nil, rpcerrors.RpcErrorInvalidParams(fmt.Sprintf("Invalid parameters: %v", err))
 		}
 	}
 

@@ -10,6 +10,8 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/LeJamon/go-xrpl/internal/rpc/rpcerrors"
+
 	binarycodec "github.com/LeJamon/go-xrpl/codec/binarycodec"
 	"github.com/LeJamon/go-xrpl/internal/ledger/service/svcerr"
 	"github.com/LeJamon/go-xrpl/internal/rpc/txprojection"
@@ -21,7 +23,7 @@ import (
 // TxMethod handles the tx RPC method
 type TxMethod struct{ baseHandler }
 
-func (m *TxMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (any, *types.RpcError) {
+func (m *TxMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (any, *rpcerrors.RpcError) {
 	// notEnabled takes precedence over any parameter validation, matching
 	// rippled's useTxTables() gate as the first statement of doTxJson.
 	if err := requireTxTables(ctx.Services); err != nil {
@@ -31,13 +33,13 @@ func (m *TxMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (any, *
 	var fields map[string]json.RawMessage
 	if params != nil {
 		if err := json.Unmarshal(params, &fields); err != nil {
-			return nil, types.RpcErrorInvalidParams("Invalid parameters.")
+			return nil, rpcerrors.RpcErrorInvalidParams("Invalid parameters.")
 		}
 	}
 	transactionRaw, hasTransaction := fields["transaction"]
 	ctidRaw, hasCTID := fields["ctid"]
 	if hasTransaction && hasCTID {
-		return nil, types.RpcErrorInvalidParams("Invalid parameters.")
+		return nil, rpcerrors.RpcErrorInvalidParams("Invalid parameters.")
 	}
 
 	var transaction, ctid string
@@ -46,15 +48,15 @@ func (m *TxMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (any, *
 	case hasTransaction:
 		transaction, valid = jsonCppStringRaw(transactionRaw)
 		if !valid {
-			return nil, types.RpcErrorInvalidParams("Invalid parameters.")
+			return nil, rpcerrors.RpcErrorInvalidParams("Invalid parameters.")
 		}
 	case hasCTID:
 		ctid, valid = jsonCppStringRaw(ctidRaw)
 		if !valid {
-			return nil, types.RpcErrorInvalidParams("Invalid parameters.")
+			return nil, rpcerrors.RpcErrorInvalidParams("Invalid parameters.")
 		}
 	default:
-		return nil, types.RpcErrorInvalidParams("Invalid parameters.")
+		return nil, rpcerrors.RpcErrorInvalidParams("Invalid parameters.")
 	}
 
 	var txHash [32]byte
@@ -65,16 +67,16 @@ func (m *TxMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (any, *
 		var err error
 		ctidLedgerSeq, ctidTxIndex, ctidNetworkID, err = parseCTID(ctid)
 		if err != nil {
-			return nil, types.RpcErrorInvalidParams("Invalid parameters.")
+			return nil, rpcerrors.RpcErrorInvalidParams("Invalid parameters.")
 		}
 		if nodeNet := ctx.Services.Ledger().GetServerInfo().NetworkID; uint32(ctidNetworkID) != nodeNet {
-			return nil, types.RpcErrorWrongNetwork(fmt.Sprintf(
+			return nil, rpcerrors.RpcErrorWrongNetwork(fmt.Sprintf(
 				"Wrong network. You should submit this request to a node running on NetworkID: %d", ctidNetworkID))
 		}
 	} else {
 		txHashBytes, err := hex.DecodeString(transaction)
 		if err != nil || len(txHashBytes) != 32 {
-			return nil, types.RpcErrorNotImpl()
+			return nil, rpcerrors.RpcErrorNotImpl()
 		}
 		copy(txHash[:], txHashBytes)
 	}
@@ -91,10 +93,10 @@ func (m *TxMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (any, *
 			minLedger, minOK := txUint32Raw(minRaw)
 			maxLedger, maxOK := txUint32Raw(maxRaw)
 			if !minOK || !maxOK || maxLedger < minLedger {
-				return nil, types.RpcErrorInvalidLgrRange()
+				return nil, rpcerrors.RpcErrorInvalidLgrRange()
 			}
 			if maxLedger-minLedger > 1000 {
-				return nil, types.RpcErrorExcessiveLgrRange()
+				return nil, rpcerrors.RpcErrorExcessiveLgrRange()
 			}
 			rangeMin, rangeMax, hasLedgerRange = minLedger, maxLedger, true
 		}
@@ -145,8 +147,8 @@ func (m *TxMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (any, *
 	return m.buildResponse(ctx, storedTx, txInfo, strings.ToUpper(transaction), closeTimeSec, binaryMode), nil
 }
 
-func txNotFoundForSearch(hasRange bool, searched types.TxSearchResult) *types.RpcError {
-	err := types.RpcErrorTxnNotFound("Transaction not found.")
+func txNotFoundForSearch(hasRange bool, searched types.TxSearchResult) *rpcerrors.RpcError {
+	err := rpcerrors.RpcErrorTxnNotFound("Transaction not found.")
 	if !hasRange || searched == types.TxSearchUnknown {
 		return err
 	}
@@ -319,10 +321,10 @@ func (m *TxMethod) buildResponseV2(
 }
 
 // lookupByCTID looks up a transaction using a CTID (Compact Transaction ID)
-func (m *TxMethod) lookupByCTID(ctx *types.RpcContext, ledgerSeq uint32, txIndex uint16, binary bool) (any, *types.RpcError) {
+func (m *TxMethod) lookupByCTID(ctx *types.RpcContext, ledgerSeq uint32, txIndex uint16, binary bool) (any, *rpcerrors.RpcError) {
 	ledger, err := ctx.Services.Ledger().GetLedgerBySequence(ledgerSeq)
 	if err != nil {
-		return nil, types.RpcErrorTxnNotFound("Transaction not found.")
+		return nil, rpcerrors.RpcErrorTxnNotFound("Transaction not found.")
 	}
 
 	// SHAMap iteration order differs from the metadata's transaction order.
@@ -343,7 +345,7 @@ func (m *TxMethod) lookupByCTID(ctx *types.RpcContext, ledgerSeq uint32, txIndex
 	})
 
 	if !found {
-		return nil, types.RpcErrorTxnNotFound("Transaction not found.")
+		return nil, rpcerrors.RpcErrorTxnNotFound("Transaction not found.")
 	}
 
 	hashStr := protocol.Hash256Hex(foundHash)

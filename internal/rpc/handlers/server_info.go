@@ -12,6 +12,8 @@ import (
 	"time"
 	"unicode"
 
+	"github.com/LeJamon/go-xrpl/internal/rpc/rpcerrors"
+
 	"github.com/LeJamon/go-xrpl/amendment"
 	"github.com/LeJamon/go-xrpl/codec/addresscodec"
 	"github.com/LeJamon/go-xrpl/crypto/rfc1751"
@@ -143,7 +145,7 @@ func formatServerTime(t time.Time) string {
 // This is the "human-readable" variant (rippled human=true).
 type ServerInfoMethod struct{ baseHandler }
 
-func (m *ServerInfoMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (any, *types.RpcError) {
+func (m *ServerInfoMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (any, *rpcerrors.RpcError) {
 	if err := requireLedgerService(ctx.Services); err != nil {
 		return nil, err
 	}

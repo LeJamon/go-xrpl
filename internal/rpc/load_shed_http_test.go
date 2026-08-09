@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/LeJamon/go-xrpl/internal/rpc/handlers"
+	"github.com/LeJamon/go-xrpl/internal/rpc/rpcerrors"
 	"github.com/LeJamon/go-xrpl/internal/rpc/types"
 )
 
@@ -63,8 +64,8 @@ func TestRpcTooBusyUsesLegacyHTTP200(t *testing.T) {
 	if result["error"] != "tooBusy" {
 		t.Errorf(`result.error = %v, want "tooBusy"`, result["error"])
 	}
-	if code, _ := result["error_code"].(float64); int(code) != types.RpcTOO_BUSY {
-		t.Errorf("result.error_code = %v, want %d", result["error_code"], types.RpcTOO_BUSY)
+	if code, _ := result["error_code"].(float64); int(code) != rpcerrors.RpcTOO_BUSY {
+		t.Errorf("result.error_code = %v, want %d", result["error_code"], rpcerrors.RpcTOO_BUSY)
 	}
 	if msg, _ := result["error_message"].(string); msg != "The server is too busy to help you now." {
 		t.Errorf("result.error_message = %q, want rippled-canonical", msg)

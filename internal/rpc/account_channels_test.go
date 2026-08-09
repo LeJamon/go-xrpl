@@ -6,6 +6,8 @@ import (
 	"errors"
 	"testing"
 
+	"github.com/LeJamon/go-xrpl/internal/rpc/rpcerrors"
+
 	"github.com/LeJamon/go-xrpl/internal/ledger/service/svcerr"
 	"github.com/LeJamon/go-xrpl/internal/rpc/handlers"
 	"github.com/LeJamon/go-xrpl/internal/rpc/types"
@@ -203,13 +205,13 @@ func TestAccountChannelsErrorValidation(t *testing.T) {
 			name:          "Missing account field - empty params",
 			params:        map[string]any{},
 			expectedError: "Missing field 'account'.",
-			expectedCode:  types.RpcINVALID_PARAMS,
+			expectedCode:  rpcerrors.RpcINVALID_PARAMS,
 		},
 		{
 			name:          "Missing account field - nil params",
 			params:        nil,
 			expectedError: "Missing field 'account'.",
-			expectedCode:  types.RpcINVALID_PARAMS,
+			expectedCode:  rpcerrors.RpcINVALID_PARAMS,
 		},
 		{
 			name: "Invalid account type - integer",
@@ -217,7 +219,7 @@ func TestAccountChannelsErrorValidation(t *testing.T) {
 				"account": 12345,
 			},
 			expectedError: "Invalid field 'account'.",
-			expectedCode:  types.RpcINVALID_PARAMS,
+			expectedCode:  rpcerrors.RpcINVALID_PARAMS,
 		},
 		{
 			name: "Invalid account type - boolean",
@@ -225,7 +227,7 @@ func TestAccountChannelsErrorValidation(t *testing.T) {
 				"account": true,
 			},
 			expectedError: "Invalid field 'account'.",
-			expectedCode:  types.RpcINVALID_PARAMS,
+			expectedCode:  rpcerrors.RpcINVALID_PARAMS,
 		},
 		{
 			// Test case from rippled: malformed account using node public key format
@@ -234,7 +236,7 @@ func TestAccountChannelsErrorValidation(t *testing.T) {
 				"account": "n9MJkEKHDhy5eTLuHUQeAAjo382frHNbFK4C8hcwN4nwM2SrLdBj",
 			},
 			expectedError: "Account malformed.",
-			expectedCode:  types.RpcACT_MALFORMED,
+			expectedCode:  rpcerrors.RpcACT_MALFORMED,
 		},
 		{
 			// Test case from rippled: account not found (unfunded account)
@@ -243,7 +245,7 @@ func TestAccountChannelsErrorValidation(t *testing.T) {
 				"account": "rPMh7Pi9ct699iZUTWaytJUoHcJ7cgyziK",
 			},
 			expectedError: "Account not found.",
-			expectedCode:  types.RpcACT_NOT_FOUND,
+			expectedCode:  rpcerrors.RpcACT_NOT_FOUND,
 			setupMock: func() {
 				mock.accountChannelsErr = svcerr.ErrAccountNotFound
 			},
@@ -921,7 +923,7 @@ func TestAccountChannelsServiceUnavailable(t *testing.T) {
 
 	assert.Nil(t, result)
 	require.NotNil(t, rpcErr)
-	assert.Equal(t, types.RpcINTERNAL, rpcErr.Code)
+	assert.Equal(t, rpcerrors.RpcINTERNAL, rpcErr.Code)
 	assert.Equal(t, "Internal error.", rpcErr.Message)
 }
 

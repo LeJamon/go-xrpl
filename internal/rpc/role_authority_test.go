@@ -9,6 +9,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/LeJamon/go-xrpl/internal/rpc/rpcerrors"
+
 	"github.com/LeJamon/go-xrpl/internal/rpc/types"
 	"github.com/gorilla/websocket"
 	"github.com/stretchr/testify/require"
@@ -70,7 +72,7 @@ func TestHTTPRoleContextCarriesDerivedPrivileges(t *testing.T) {
 		t.Run(test.name, func(t *testing.T) {
 			observed := make(chan *types.RpcContext, 1)
 			srv := newHardeningServer(t, time.Second, "ping", &stubHandler{
-				handle: func(ctx *types.RpcContext, _ json.RawMessage) (any, *types.RpcError) {
+				handle: func(ctx *types.RpcContext, _ json.RawMessage) (any, *rpcerrors.RpcError) {
 					observed <- ctx
 					return map[string]any{"ok": true}, nil
 				},
@@ -131,7 +133,7 @@ func TestWebSocketRoleContextCarriesDerivedPrivileges(t *testing.T) {
 				Timeout: time.Second,
 				Registry: mustTestMethodRegistry(t, map[string]types.MethodHandler{
 					"ping": &stubHandler{
-						handle: func(ctx *types.RpcContext, _ json.RawMessage) (any, *types.RpcError) {
+						handle: func(ctx *types.RpcContext, _ json.RawMessage) (any, *rpcerrors.RpcError) {
 							observed <- ctx
 							return map[string]any{"ok": true}, nil
 						},

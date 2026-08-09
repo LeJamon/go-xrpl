@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"testing"
 
+	"github.com/LeJamon/go-xrpl/internal/rpc/rpcerrors"
+
 	"github.com/LeJamon/go-xrpl/amendment"
 	"github.com/LeJamon/go-xrpl/internal/rpc/types"
 	xrpllog "github.com/LeJamon/go-xrpl/log"
@@ -64,7 +66,7 @@ func TestStrictRequestObjects(t *testing.T) {
 			result, rpcErr := test.handler.Handle(ctx, test.params)
 			require.Nil(t, result)
 			require.NotNil(t, rpcErr)
-			require.Equal(t, types.RpcINVALID_PARAMS, rpcErr.Code)
+			require.Equal(t, rpcerrors.RpcINVALID_PARAMS, rpcErr.Code)
 			require.Equal(t, "invalidParams", rpcErr.ErrorString)
 			require.Equal(t, "Invalid parameters.", rpcErr.Message)
 		})
@@ -192,7 +194,7 @@ func TestCanDeleteNotEnabledPrecedesDecode(t *testing.T) {
 		json.RawMessage(`{"can_delete":`),
 	)
 	require.NotNil(t, rpcErr)
-	require.Equal(t, types.RpcNOT_ENABLED, rpcErr.Code)
+	require.Equal(t, rpcerrors.RpcNOT_ENABLED, rpcErr.Code)
 }
 
 func TestCanDeleteStrictRequestObjects(t *testing.T) {
@@ -212,7 +214,7 @@ func TestCanDeleteStrictRequestObjects(t *testing.T) {
 				test.params,
 			)
 			require.NotNil(t, rpcErr)
-			require.Equal(t, types.RpcINVALID_PARAMS, rpcErr.Code)
+			require.Equal(t, rpcerrors.RpcINVALID_PARAMS, rpcErr.Code)
 			require.Equal(t, "Invalid parameters.", rpcErr.Message)
 			require.Zero(t, store.getCalls)
 			require.Zero(t, store.setCalls)
@@ -238,5 +240,5 @@ func TestRequestObjectPreservesJsonCppIntegerRange(t *testing.T) {
 		json.RawMessage(`{"unknown":4294967296}`),
 	)
 	require.NotNil(t, rpcErr)
-	require.Equal(t, types.RpcINVALID_PARAMS, rpcErr.Code)
+	require.Equal(t, rpcerrors.RpcINVALID_PARAMS, rpcErr.Code)
 }

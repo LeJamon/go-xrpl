@@ -10,6 +10,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/LeJamon/go-xrpl/internal/rpc/rpcerrors"
+
 	"github.com/LeJamon/go-xrpl/internal/peermanagement/resource"
 	"github.com/LeJamon/go-xrpl/internal/rpc/types"
 	"github.com/gorilla/websocket"
@@ -172,8 +174,8 @@ func TestHTTPApiVersionPrecedesOverload(t *testing.T) {
 	if rr.Code != http.StatusBadRequest {
 		t.Fatalf("expected 400 (api-version before overload), got %d\nbody: %s", rr.Code, rr.Body.String())
 	}
-	if got := strings.TrimSpace(rr.Body.String()); got != types.InvalidApiVersionToken {
-		t.Fatalf("body = %q, want %q", got, types.InvalidApiVersionToken)
+	if got := strings.TrimSpace(rr.Body.String()); got != rpcerrors.InvalidApiVersionToken {
+		t.Fatalf("body = %q, want %q", got, rpcerrors.InvalidApiVersionToken)
 	}
 }
 

@@ -1,7 +1,7 @@
 package unsafe_direct
 
-import rpctypes "github.com/LeJamon/go-xrpl/internal/rpc/types"
+import "github.com/LeJamon/go-xrpl/internal/rpc/rpcerrors"
 
-func Build(message string) *rpctypes.RpcError {
-	return rpctypes.NewRpcError(72+1, "internal", "internal", message)
+func Build(message string) *rpcerrors.RpcError {
+	return rpcerrors.NewRpcError(72+1, "internal", "internal", message)
 }

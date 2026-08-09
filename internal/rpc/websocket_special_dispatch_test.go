@@ -8,6 +8,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/LeJamon/go-xrpl/internal/rpc/rpcerrors"
+
 	"github.com/LeJamon/go-xrpl/internal/peermanagement/resource"
 	"github.com/LeJamon/go-xrpl/internal/rpc/subscription"
 	"github.com/LeJamon/go-xrpl/internal/rpc/types"
@@ -108,7 +110,7 @@ func TestWebSocketSpecialDispatchBusyBoundary(t *testing.T) {
 				}}}))
 			}
 			called := false
-			ws.handleSpecialCommand(conn, ctx, specialDispatchCommand("subscribe"), func(_ *websocketConnection, _ *types.RpcContext, _ types.WebSocketCommand) (any, *types.RpcError) {
+			ws.handleSpecialCommand(conn, ctx, specialDispatchCommand("subscribe"), func(_ *websocketConnection, _ *types.RpcContext, _ types.WebSocketCommand) (any, *rpcerrors.RpcError) {
 				called = true
 				if got := ws.services.ClientLoad().InFlight(); got != int64(test.inFlight+1) {
 					t.Fatalf("in-flight inside handler = %d, want %d", got, test.inFlight+1)
@@ -141,15 +143,15 @@ func TestWebSocketSpecialDispatchWarningVisibility(t *testing.T) {
 	}{
 		{
 			name: "success exposes warning",
-			handler: func(_ *websocketConnection, _ *types.RpcContext, _ types.WebSocketCommand) (any, *types.RpcError) {
+			handler: func(_ *websocketConnection, _ *types.RpcContext, _ types.WebSocketCommand) (any, *rpcerrors.RpcError) {
 				return map[string]any{}, nil
 			},
 			wantWarning: true,
 		},
 		{
 			name: "error suppresses warning",
-			handler: func(_ *websocketConnection, _ *types.RpcContext, _ types.WebSocketCommand) (any, *types.RpcError) {
-				return nil, types.RpcErrorInvalidParams("Invalid parameters.")
+			handler: func(_ *websocketConnection, _ *types.RpcContext, _ types.WebSocketCommand) (any, *rpcerrors.RpcError) {
+				return nil, rpcerrors.RpcErrorInvalidParams("Invalid parameters.")
 			},
 		},
 	} {
@@ -174,7 +176,7 @@ func TestWebSocketSpecialDispatchWarningVisibility(t *testing.T) {
 
 func TestWebSocketSpecialDispatchRecoversPanic(t *testing.T) {
 	ws, conn, ctx := newSpecialDispatchHarness(t)
-	ws.handleSpecialCommand(conn, ctx, specialDispatchCommand("subscribe"), func(_ *websocketConnection, _ *types.RpcContext, _ types.WebSocketCommand) (any, *types.RpcError) {
+	ws.handleSpecialCommand(conn, ctx, specialDispatchCommand("subscribe"), func(_ *websocketConnection, _ *types.RpcContext, _ types.WebSocketCommand) (any, *rpcerrors.RpcError) {
 		panic("private panic detail")
 	})
 
@@ -183,7 +185,7 @@ func TestWebSocketSpecialDispatchRecoversPanic(t *testing.T) {
 		"type":          "response",
 		"status":        "error",
 		"error":         "internal",
-		"error_code":    float64(types.RpcINTERNAL),
+		"error_code":    float64(rpcerrors.RpcINTERNAL),
 		"error_message": "Internal error.",
 		"id":            float64(7),
 		"request":       map[string]any{"command": "subscribe", "id": float64(7)},

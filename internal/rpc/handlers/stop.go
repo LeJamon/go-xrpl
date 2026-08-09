@@ -3,6 +3,7 @@ package handlers
 import (
 	"encoding/json"
 
+	"github.com/LeJamon/go-xrpl/internal/rpc/rpcerrors"
 	"github.com/LeJamon/go-xrpl/internal/rpc/types"
 )
 
@@ -11,7 +12,7 @@ import (
 // Reference: rippled Stop.cpp
 type StopMethod struct{ adminHandler }
 
-func (m *StopMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (any, *types.RpcError) {
+func (m *StopMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (any, *rpcerrors.RpcError) {
 	if ctx == nil || ctx.Services == nil {
 		return nil, rpcInternalInvariantError("stop: shutdown function unavailable")
 	}

@@ -3,6 +3,8 @@ package handlers
 import (
 	"encoding/json"
 
+	"github.com/LeJamon/go-xrpl/internal/rpc/rpcerrors"
+
 	"github.com/LeJamon/go-xrpl/internal/rpc/types"
 )
 
@@ -23,7 +25,7 @@ type VersionMethod struct{ baseHandler }
 // RPCHelpers.cpp:1001-1003).
 const semanticVersion1 = "1.0.0"
 
-func (m *VersionMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (any, *types.RpcError) {
+func (m *VersionMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (any, *rpcerrors.RpcError) {
 	var version map[string]any
 	if ctx.ApiVersion == types.ApiVersion1 {
 		version = map[string]any{

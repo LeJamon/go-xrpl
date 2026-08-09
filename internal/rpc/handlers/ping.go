@@ -3,13 +3,15 @@ package handlers
 import (
 	"encoding/json"
 
+	"github.com/LeJamon/go-xrpl/internal/rpc/rpcerrors"
+
 	"github.com/LeJamon/go-xrpl/internal/rpc/types"
 )
 
 // PingMethod handles the ping RPC method
 type PingMethod struct{ baseHandler }
 
-func (m *PingMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (any, *types.RpcError) {
+func (m *PingMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (any, *rpcerrors.RpcError) {
 	response := map[string]any{}
 
 	// Add role info based on RPC context (matches rippled Ping.cpp)

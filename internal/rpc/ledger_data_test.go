@@ -8,6 +8,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/LeJamon/go-xrpl/internal/rpc/rpcerrors"
+
 	"github.com/LeJamon/go-xrpl/internal/ledger/service/svcerr"
 	"github.com/LeJamon/go-xrpl/internal/rpc/handlers"
 	"github.com/LeJamon/go-xrpl/internal/rpc/types"
@@ -284,7 +286,7 @@ func TestLedgerDataLimitClamping(t *testing.T) {
 		result, rpcErr := method.Handle(ctx, json.RawMessage(`{"ledger_index":"current","limit":2147483648}`))
 		assert.Nil(t, result)
 		require.NotNil(t, rpcErr)
-		assert.Equal(t, types.RpcINVALID_PARAMS, rpcErr.Code)
+		assert.Equal(t, rpcerrors.RpcINVALID_PARAMS, rpcErr.Code)
 	})
 }
 
@@ -426,7 +428,7 @@ func TestLedgerDataTypeFilter(t *testing.T) {
 			result, rpcErr := method.Handle(ctx, json.RawMessage(input))
 			assert.Nil(t, result)
 			require.NotNil(t, rpcErr)
-			assert.Equal(t, types.RpcINVALID_PARAMS, rpcErr.Code)
+			assert.Equal(t, rpcerrors.RpcINVALID_PARAMS, rpcErr.Code)
 		})
 	}
 }
@@ -606,7 +608,7 @@ func TestLedgerDataServiceUnavailable(t *testing.T) {
 		result, rpcErr := method.Handle(ctx, nil)
 		assert.Nil(t, result)
 		require.NotNil(t, rpcErr)
-		assert.Equal(t, types.RpcINTERNAL, rpcErr.Code)
+		assert.Equal(t, rpcerrors.RpcINTERNAL, rpcErr.Code)
 		assert.Equal(t, "Internal error.", rpcErr.Message)
 	})
 
@@ -621,7 +623,7 @@ func TestLedgerDataServiceUnavailable(t *testing.T) {
 		result, rpcErr := method.Handle(ctx, nil)
 		assert.Nil(t, result)
 		require.NotNil(t, rpcErr)
-		assert.Equal(t, types.RpcINTERNAL, rpcErr.Code)
+		assert.Equal(t, rpcerrors.RpcINTERNAL, rpcErr.Code)
 		assert.Equal(t, "Internal error.", rpcErr.Message)
 	})
 
@@ -647,7 +649,7 @@ func TestLedgerDataServiceUnavailable(t *testing.T) {
 		result, rpcErr := method.Handle(ctx, paramsJSON)
 		assert.Nil(t, result)
 		require.NotNil(t, rpcErr)
-		assert.Equal(t, types.RpcINTERNAL, rpcErr.Code)
+		assert.Equal(t, rpcerrors.RpcINTERNAL, rpcErr.Code)
 	})
 }
 
@@ -839,7 +841,7 @@ func TestLedgerDataMarkerValidation(t *testing.T) {
 		result, rpcErr := method.Handle(ctx, paramsJSON)
 		assert.Nil(t, result)
 		require.NotNil(t, rpcErr)
-		assert.Equal(t, types.RpcINVALID_PARAMS, rpcErr.Code)
+		assert.Equal(t, rpcerrors.RpcINVALID_PARAMS, rpcErr.Code)
 		assert.Equal(t, "Invalid field 'marker', not valid.", rpcErr.Message)
 	})
 
@@ -862,7 +864,7 @@ func TestLedgerDataMarkerValidation(t *testing.T) {
 		result, rpcErr := method.Handle(ctx, paramsJSON)
 		assert.Nil(t, result)
 		require.NotNil(t, rpcErr)
-		assert.Equal(t, types.RpcINVALID_PARAMS, rpcErr.Code)
+		assert.Equal(t, rpcerrors.RpcINVALID_PARAMS, rpcErr.Code)
 		assert.Equal(t, "Invalid field 'marker', not valid.", rpcErr.Message)
 		assert.False(t, called, "service must not be called for a non-string marker")
 	})
@@ -888,7 +890,7 @@ func TestLedgerDataMarkerValidation(t *testing.T) {
 		result, rpcErr := method.Handle(ctx, paramsJSON)
 		assert.Nil(t, result)
 		require.NotNil(t, rpcErr)
-		assert.Equal(t, types.RpcINVALID_PARAMS, rpcErr.Code)
+		assert.Equal(t, rpcerrors.RpcINVALID_PARAMS, rpcErr.Code)
 		assert.Equal(t, "Invalid field 'marker', not valid.", rpcErr.Message)
 		assert.False(t, called, "service must not be called for a present null marker")
 	})
@@ -914,7 +916,7 @@ func TestLedgerDataMarkerValidation(t *testing.T) {
 		result, rpcErr := method.Handle(ctx, paramsJSON)
 		assert.Nil(t, result)
 		require.NotNil(t, rpcErr)
-		assert.Equal(t, types.RpcINVALID_PARAMS, rpcErr.Code)
+		assert.Equal(t, rpcerrors.RpcINVALID_PARAMS, rpcErr.Code)
 		assert.Equal(t, "Invalid field 'marker', not valid.", rpcErr.Message)
 		assert.False(t, called, "service must not be called for a present empty marker")
 	})

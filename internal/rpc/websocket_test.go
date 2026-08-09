@@ -14,6 +14,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/LeJamon/go-xrpl/internal/rpc/rpcerrors"
+
 	"github.com/LeJamon/go-xrpl/internal/rpc/subscription"
 	"github.com/LeJamon/go-xrpl/internal/rpc/types"
 	"github.com/gorilla/websocket"
@@ -687,13 +689,13 @@ func TestWebSocketErrorProjectorPreservesExtrasAndCanonicalFields(t *testing.T) 
 		"type":            "spoofed",
 		"index":           7,
 	}
-	ws.sendErrorResponse(wsConn, types.RpcErrorInvalidParams("").WithExtra(fields), 1, nil, nil)
+	ws.sendErrorResponse(wsConn, rpcerrors.RpcErrorInvalidParams("").WithExtra(fields), 1, nil, nil)
 
 	var response map[string]any
 	if err := json.Unmarshal(<-outbound, &response); err != nil {
 		t.Fatal(err)
 	}
-	if response["status"] != "error" || response["error"] != "invalidParams" || response["error_code"] != float64(types.RpcINVALID_PARAMS) || response["error_message"] != "Invalid parameters." {
+	if response["status"] != "error" || response["error"] != "invalidParams" || response["error_code"] != float64(rpcerrors.RpcINVALID_PARAMS) || response["error_message"] != "Invalid parameters." {
 		t.Fatalf("canonical WS error = %#v", response)
 	}
 	if response["index"] != float64(7) {
@@ -708,7 +710,7 @@ func TestWebSocketErrorProjectorPreservesExtrasAndCanonicalFields(t *testing.T) 
 		}
 	}
 
-	bare := types.RpcErrorEntryNotFoundBare("").WithExtra(map[string]any{
+	bare := rpcerrors.RpcErrorEntryNotFoundBare("").WithExtra(map[string]any{
 		"error_code":    999,
 		"error_message": "spoofed",
 		"index":         9,
@@ -727,7 +729,7 @@ func TestWebSocketErrorProjectorPreservesExtrasAndCanonicalFields(t *testing.T) 
 		}
 	}
 
-	exception := types.RpcErrorInvalidTransaction("decode failed").WithExtra(map[string]any{
+	exception := rpcerrors.RpcErrorInvalidTransaction("decode failed").WithExtra(map[string]any{
 		"error":           "spoofed",
 		"error_code":      999,
 		"error_message":   "spoofed",
@@ -753,7 +755,7 @@ func TestWebSocketHandlerPanicWireEnvelope(t *testing.T) {
 	const panicCause = "websocket panic must stay private"
 	ws := NewWebSocketServer(WebSocketServerOptions{Timeout: 30 * time.Second, Registry: mustTestMethodRegistry(t, map[string]types.MethodHandler{
 		"panic": &stubHandler{
-			handle: func(*types.RpcContext, json.RawMessage) (any, *types.RpcError) {
+			handle: func(*types.RpcContext, json.RawMessage) (any, *rpcerrors.RpcError) {
 				panic(panicCause)
 			},
 		}})})
@@ -799,7 +801,7 @@ func TestWebSocketHandlerPanicWireEnvelope(t *testing.T) {
 func TestWebSocketOrdinaryErrorWireEnvelope(t *testing.T) {
 	ws := NewWebSocketServer(WebSocketServerOptions{Timeout: 30 * time.Second, Registry: mustTestMethodRegistry(t, map[string]types.MethodHandler{
 		"fail": &stubHandler{
-			handle: func(*types.RpcContext, json.RawMessage) (any, *types.RpcError) {
+			handle: func(*types.RpcContext, json.RawMessage) (any, *rpcerrors.RpcError) {
 				return nil, rpcInternalError()
 			},
 		}})})
@@ -815,7 +817,7 @@ func TestWebSocketRedactsIDAndPreservesItInHandlerParams(t *testing.T) {
 	received := make(chan json.RawMessage, 1)
 	ws := NewWebSocketServer(WebSocketServerOptions{Timeout: 30 * time.Second, Registry: mustTestMethodRegistry(t, map[string]types.MethodHandler{
 		"capture": &stubHandler{
-			handle: func(_ *types.RpcContext, params json.RawMessage) (any, *types.RpcError) {
+			handle: func(_ *types.RpcContext, params json.RawMessage) (any, *rpcerrors.RpcError) {
 				received <- append(json.RawMessage(nil), params...)
 				return map[string]any{"ok": true}, nil
 			},
@@ -1032,8 +1034,8 @@ func TestWebSocketJSONIntegerBounds(t *testing.T) {
 func TestWebSocketErrorExceptionWireEnvelope(t *testing.T) {
 	ws := NewWebSocketServer(WebSocketServerOptions{Timeout: 30 * time.Second, Registry: mustTestMethodRegistry(t, map[string]types.MethodHandler{
 		"simulate": &stubHandler{
-			handle: func(*types.RpcContext, json.RawMessage) (any, *types.RpcError) {
-				return nil, types.RpcErrorInvalidTransaction("invalid transaction detail")
+			handle: func(*types.RpcContext, json.RawMessage) (any, *rpcerrors.RpcError) {
+				return nil, rpcerrors.RpcErrorInvalidTransaction("invalid transaction detail")
 			},
 		}})})
 

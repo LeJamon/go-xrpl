@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"slices"
 
+	"github.com/LeJamon/go-xrpl/internal/rpc/rpcerrors"
+
 	"github.com/LeJamon/go-xrpl/internal/peermanagement/resource"
 	"github.com/LeJamon/go-xrpl/internal/rpc/handlers"
 	"github.com/LeJamon/go-xrpl/internal/rpc/subscription"
@@ -15,18 +17,18 @@ import (
 // subscribe acknowledgement so a noisy market cannot exceed the frame limit.
 const defaultBookSnapshotLimit uint32 = 60
 
-func (ws *WebSocketServer) executeSubscribe(wsConn *websocketConnection, ctx *types.RpcContext, cmd types.WebSocketCommand) (any, *types.RpcError) {
+func (ws *WebSocketServer) executeSubscribe(wsConn *websocketConnection, ctx *types.RpcContext, cmd types.WebSocketCommand) (any, *rpcerrors.RpcError) {
 	var request types.SubscriptionRequest
 	if len(cmd.Params) > 0 {
 		if err := json.Unmarshal(cmd.Params, &request); err != nil {
-			return nil, types.RpcErrorInvalidParams("Invalid subscription parameters.")
+			return nil, rpcerrors.RpcErrorInvalidParams("Invalid subscription parameters.")
 		}
 	}
 	// url requests are server-to-server (RPCSub) subscriptions: events go
 	// to the url's subscriber, not to this WebSocket connection.
 	if request.HasURL() {
 		if !ctx.Role.IsAdmin() {
-			return nil, types.RpcErrorNoPermission("subscribe")
+			return nil, rpcerrors.RpcErrorNoPermission("subscribe")
 		}
 		result, rpcErr := ws.urlSubscriptions.Subscribe(ctx, request)
 		if rpcErr != nil {
@@ -39,7 +41,7 @@ func (ws *WebSocketServer) executeSubscribe(wsConn *websocketConnection, ctx *ty
 
 	prefix, err := subscriptionRequestExcluding(cmd.Params, "books", "account_history_tx_stream")
 	if err != nil {
-		return nil, types.RpcErrorInvalidParams("Invalid subscription parameters.")
+		return nil, rpcerrors.RpcErrorInvalidParams("Invalid subscription parameters.")
 	}
 	prefix.ApiVersion = ctx.ApiVersion
 	scope := ws.subscriptionManager.NewRequestScope()
@@ -50,7 +52,7 @@ func (ws *WebSocketServer) executeSubscribe(wsConn *websocketConnection, ctx *ty
 	if rpcErr != nil {
 		return nil, rpcErr
 	}
-	if rpcErr := applyRequestBooks(request, func(bookRequest types.SubscriptionRequest) *types.RpcError {
+	if rpcErr := applyRequestBooks(request, func(bookRequest types.SubscriptionRequest) *rpcerrors.RpcError {
 		bookRequest.ApiVersion = ctx.ApiVersion
 		if rpcErr := ws.subscriptionManager.HandleSubscribeScoped(wsConn.registration, scope, bookRequest, ctx.Role.IsAdmin()); rpcErr != nil {
 			return rpcErr
@@ -86,14 +88,14 @@ func subscriptionRequestExcluding(params json.RawMessage, fields ...string) (typ
 	err = json.Unmarshal(data, &request)
 	return request, err
 }
-func applySubscriptionBooks(raw json.RawMessage, apply func(types.SubscriptionRequest) *types.RpcError) *types.RpcError {
+func applySubscriptionBooks(raw json.RawMessage, apply func(types.SubscriptionRequest) *rpcerrors.RpcError) *rpcerrors.RpcError {
 	if raw == nil {
 		return nil
 	}
 	if rawJSONNull(raw) {
 		request, err := subscriptionRequestForBooks(raw)
 		if err != nil {
-			return types.RpcErrorInvalidParams("Invalid subscription parameters.")
+			return rpcerrors.RpcErrorInvalidParams("Invalid subscription parameters.")
 		}
 		return apply(request)
 	}
@@ -102,30 +104,30 @@ func applySubscriptionBooks(raw json.RawMessage, apply func(types.SubscriptionRe
 	if err != nil || token != json.Delim('[') {
 		request, decodeErr := subscriptionRequestForBooks(raw)
 		if decodeErr != nil {
-			return types.RpcErrorInvalidParams("Invalid subscription parameters.")
+			return rpcerrors.RpcErrorInvalidParams("Invalid subscription parameters.")
 		}
 		return apply(request)
 	}
 	for decoder.More() {
 		var book json.RawMessage
 		if err := decoder.Decode(&book); err != nil {
-			return types.RpcErrorInvalidParams("Invalid subscription parameters.")
+			return rpcerrors.RpcErrorInvalidParams("Invalid subscription parameters.")
 		}
 		request, err := subscriptionRequestForBooks(json.RawMessage("[" + string(book) + "]"))
 		if err != nil {
-			return types.RpcErrorInvalidParams("Invalid subscription parameters.")
+			return rpcerrors.RpcErrorInvalidParams("Invalid subscription parameters.")
 		}
 		if rpcErr := apply(request); rpcErr != nil {
 			return rpcErr
 		}
 	}
 	if _, err := decoder.Token(); err != nil {
-		return types.RpcErrorInvalidParams("Invalid subscription parameters.")
+		return rpcerrors.RpcErrorInvalidParams("Invalid subscription parameters.")
 	}
 	return nil
 }
 
-func applyRequestBooks(request types.SubscriptionRequest, apply func(types.SubscriptionRequest) *types.RpcError) *types.RpcError {
+func applyRequestBooks(request types.SubscriptionRequest, apply func(types.SubscriptionRequest) *rpcerrors.RpcError) *rpcerrors.RpcError {
 	wire := request.WireArrays()
 	if wire.Present {
 		return applySubscriptionBooks(wire.Books, apply)
@@ -147,10 +149,10 @@ func subscriptionRequestForBooks(books json.RawMessage) (types.SubscriptionReque
 	err = json.Unmarshal(data, &request)
 	return request, err
 }
-func (ws *WebSocketServer) finishUnsubscribe(wsConn *websocketConnection, request types.SubscriptionRequest, params json.RawMessage, ctx *types.RpcContext) *types.RpcError {
+func (ws *WebSocketServer) finishUnsubscribe(wsConn *websocketConnection, request types.SubscriptionRequest, params json.RawMessage, ctx *types.RpcContext) *rpcerrors.RpcError {
 	prefix, err := subscriptionRequestExcluding(params, "books", "account_history_tx_stream")
 	if err != nil {
-		return types.RpcErrorInvalidParams("Invalid unsubscription parameters.")
+		return rpcerrors.RpcErrorInvalidParams("Invalid unsubscription parameters.")
 	}
 	scope := ws.subscriptionManager.NewRequestScope()
 	if rpcErr := ws.subscriptionManager.HandleUnsubscribeScoped(wsConn.registration, scope, prefix); rpcErr != nil {
@@ -159,7 +161,7 @@ func (ws *WebSocketServer) finishUnsubscribe(wsConn *websocketConnection, reques
 	if rpcErr := applyAccountHistoryUnsubscribe(ctx, wsConn.Connection, request); rpcErr != nil {
 		return rpcErr
 	}
-	return applyRequestBooks(request, func(bookRequest types.SubscriptionRequest) *types.RpcError {
+	return applyRequestBooks(request, func(bookRequest types.SubscriptionRequest) *rpcerrors.RpcError {
 		return ws.subscriptionManager.HandleUnsubscribeScoped(wsConn.registration, scope, bookRequest)
 	})
 }
@@ -171,17 +173,17 @@ func setSubscriptionLoadCost(ctx *types.RpcContext, request types.SubscriptionRe
 		}
 	}
 }
-func (ws *WebSocketServer) executeUnsubscribe(wsConn *websocketConnection, ctx *types.RpcContext, cmd types.WebSocketCommand) (any, *types.RpcError) {
+func (ws *WebSocketServer) executeUnsubscribe(wsConn *websocketConnection, ctx *types.RpcContext, cmd types.WebSocketCommand) (any, *rpcerrors.RpcError) {
 	var request types.SubscriptionRequest
 	if len(cmd.Params) > 0 {
 		if err := json.Unmarshal(cmd.Params, &request); err != nil {
-			return nil, types.RpcErrorInvalidParams("Invalid unsubscription parameters.")
+			return nil, rpcerrors.RpcErrorInvalidParams("Invalid unsubscription parameters.")
 		}
 	}
 	// See handleSubscribe: url requests target the RPCSub registry.
 	if request.HasURL() {
 		if !ctx.Role.IsAdmin() {
-			return nil, types.RpcErrorNoPermission("unsubscribe")
+			return nil, rpcerrors.RpcErrorNoPermission("unsubscribe")
 		}
 		result, rpcErr := ws.urlSubscriptions.Unsubscribe(ctx, request)
 		if rpcErr != nil {

@@ -8,6 +8,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/LeJamon/go-xrpl/internal/rpc/rpcerrors"
+
 	"github.com/LeJamon/go-xrpl/internal/rpc/types"
 )
 
@@ -15,7 +17,7 @@ import (
 // tests can assert per-element dispatch and version resolution.
 func echoHandler() *stubHandler {
 	return &stubHandler{
-		handle: func(ctx *types.RpcContext, params json.RawMessage) (any, *types.RpcError) {
+		handle: func(ctx *types.RpcContext, params json.RawMessage) (any, *rpcerrors.RpcError) {
 			var p map[string]any
 			_ = json.Unmarshal(params, &p)
 			return map[string]any{

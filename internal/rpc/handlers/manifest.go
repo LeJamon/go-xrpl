@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"fmt"
 
+	"github.com/LeJamon/go-xrpl/internal/rpc/rpcerrors"
+
 	"github.com/LeJamon/go-xrpl/codec/addresscodec"
 	"github.com/LeJamon/go-xrpl/internal/rpc/types"
 )
@@ -27,29 +29,29 @@ type manifestResponse struct {
 	Details   map[string]any `json:"details,omitempty"`
 }
 
-func (m *ManifestMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (any, *types.RpcError) {
+func (m *ManifestMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (any, *rpcerrors.RpcError) {
 	var request struct {
 		PublicKey string `json:"public_key"`
 	}
 
 	if params != nil {
 		if err := json.Unmarshal(params, &request); err != nil {
-			return nil, types.RpcErrorInvalidParams(fmt.Sprintf("Invalid parameters: %v", err))
+			return nil, rpcerrors.RpcErrorInvalidParams(fmt.Sprintf("Invalid parameters: %v", err))
 		}
 	}
 
 	if request.PublicKey == "" {
-		return nil, types.RpcErrorInvalidParams("Missing required parameter: public_key")
+		return nil, rpcerrors.RpcErrorInvalidParams("Missing required parameter: public_key")
 	}
 
 	// Parse the base58 NodePublic key. rippled DoManifest.cpp:36
 	// rejects non-base58 or wrong-type inputs with rpcPUBLIC_MALFORMED.
 	rawKey, err := addresscodec.DecodeNodePublicKey(request.PublicKey)
 	if err != nil {
-		return nil, types.RpcErrorInvalidParams(fmt.Sprintf("invalid node public key: %v", err))
+		return nil, rpcerrors.RpcErrorInvalidParams(fmt.Sprintf("invalid node public key: %v", err))
 	}
 	if len(rawKey) != 33 {
-		return nil, types.RpcErrorInvalidParams("node public key must be 33 bytes")
+		return nil, rpcerrors.RpcErrorInvalidParams("node public key must be 33 bytes")
 	}
 	var keyArr [33]byte
 	copy(keyArr[:], rawKey)

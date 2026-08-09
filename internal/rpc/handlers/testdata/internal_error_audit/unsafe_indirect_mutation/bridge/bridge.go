@@ -1,7 +1,7 @@
 package bridge
 
-import "github.com/LeJamon/go-xrpl/internal/rpc/types"
+import "github.com/LeJamon/go-xrpl/internal/rpc/rpcerrors"
 
-func Error() *types.RpcError {
-	return types.RpcErrorInvalidParams("invalid")
+func Error() *rpcerrors.RpcError {
+	return rpcerrors.RpcErrorInvalidParams("invalid")
 }

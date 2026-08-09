@@ -6,6 +6,8 @@ import (
 	"errors"
 	"testing"
 
+	"github.com/LeJamon/go-xrpl/internal/rpc/rpcerrors"
+
 	"github.com/LeJamon/go-xrpl/internal/ledger/service/svcerr"
 	"github.com/LeJamon/go-xrpl/internal/rpc/handlers"
 	"github.com/LeJamon/go-xrpl/internal/rpc/types"
@@ -192,28 +194,28 @@ func TestNftBuyOffersErrorValidation(t *testing.T) {
 			params:        map[string]any{},
 			expectError:   true,
 			expectedError: "Missing field 'nft_id'",
-			expectedCode:  types.RpcINVALID_PARAMS,
+			expectedCode:  rpcerrors.RpcINVALID_PARAMS,
 		},
 		{
 			name:          "Empty nft_id field",
 			params:        map[string]any{"nft_id": ""},
 			expectError:   true,
 			expectedError: "Invalid field 'nft_id'",
-			expectedCode:  types.RpcINVALID_PARAMS,
+			expectedCode:  rpcerrors.RpcINVALID_PARAMS,
 		},
 		{
 			name:          "Invalid nft_id - too short",
 			params:        map[string]any{"nft_id": "00081388DC1AB4E7C57F8067A3AB"},
 			expectError:   true,
 			expectedError: "Invalid field 'nft_id'",
-			expectedCode:  types.RpcINVALID_PARAMS,
+			expectedCode:  rpcerrors.RpcINVALID_PARAMS,
 		},
 		{
 			name:          "Invalid nft_id - not hex",
 			params:        map[string]any{"nft_id": "00081388DC1AB4E7C57F8067A3ABGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGG"},
 			expectError:   true,
 			expectedError: "Invalid field 'nft_id'",
-			expectedCode:  types.RpcINVALID_PARAMS,
+			expectedCode:  rpcerrors.RpcINVALID_PARAMS,
 		},
 		{
 			name: "NFT not found",
@@ -225,7 +227,7 @@ func TestNftBuyOffersErrorValidation(t *testing.T) {
 			},
 			expectError:   true,
 			expectedError: "The requested object was not found.",
-			expectedCode:  types.RpcOBJECT_NOT_FOUND,
+			expectedCode:  rpcerrors.RpcOBJECT_NOT_FOUND,
 		},
 		{
 			name: "Invalid marker",
@@ -238,7 +240,7 @@ func TestNftBuyOffersErrorValidation(t *testing.T) {
 			},
 			expectError:   true,
 			expectedError: "Invalid parameters.",
-			expectedCode:  types.RpcINVALID_PARAMS,
+			expectedCode:  rpcerrors.RpcINVALID_PARAMS,
 		},
 	}
 
@@ -478,21 +480,21 @@ func TestNftSellOffersErrorValidation(t *testing.T) {
 			params:        map[string]any{},
 			expectError:   true,
 			expectedError: "Missing field 'nft_id'",
-			expectedCode:  types.RpcINVALID_PARAMS,
+			expectedCode:  rpcerrors.RpcINVALID_PARAMS,
 		},
 		{
 			name:          "Empty nft_id field",
 			params:        map[string]any{"nft_id": ""},
 			expectError:   true,
 			expectedError: "Invalid field 'nft_id'",
-			expectedCode:  types.RpcINVALID_PARAMS,
+			expectedCode:  rpcerrors.RpcINVALID_PARAMS,
 		},
 		{
 			name:          "Invalid nft_id - too short",
 			params:        map[string]any{"nft_id": "00081388DC1AB4E7C57F8067A3AB"},
 			expectError:   true,
 			expectedError: "Invalid field 'nft_id'",
-			expectedCode:  types.RpcINVALID_PARAMS,
+			expectedCode:  rpcerrors.RpcINVALID_PARAMS,
 		},
 		{
 			name: "NFT not found",
@@ -504,7 +506,7 @@ func TestNftSellOffersErrorValidation(t *testing.T) {
 			},
 			expectError:   true,
 			expectedError: "The requested object was not found.",
-			expectedCode:  types.RpcOBJECT_NOT_FOUND,
+			expectedCode:  rpcerrors.RpcOBJECT_NOT_FOUND,
 		},
 	}
 

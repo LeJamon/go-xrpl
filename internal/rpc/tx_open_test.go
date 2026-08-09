@@ -7,6 +7,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/LeJamon/go-xrpl/internal/rpc/rpcerrors"
+
 	binarycodec "github.com/LeJamon/go-xrpl/codec/binarycodec"
 	"github.com/LeJamon/go-xrpl/internal/ledger/service/svcerr"
 	"github.com/LeJamon/go-xrpl/internal/rpc/handlers"
@@ -101,7 +103,7 @@ func TestTxMethodOpenTransactionRejectsMetadata(t *testing.T) {
 	result, rpcErr := (&handlers.TxMethod{}).Handle(ctx, txRequest(hash, false))
 	assert.Nil(t, result)
 	require.NotNil(t, rpcErr)
-	assert.Equal(t, types.RpcDB_DESERIALIZATION, rpcErr.Code)
+	assert.Equal(t, rpcerrors.RpcDB_DESERIALIZATION, rpcErr.Code)
 }
 
 func TestTxMethodCorruptLookupMapsDBDeserialization(t *testing.T) {
@@ -117,7 +119,7 @@ func TestTxMethodCorruptLookupMapsDBDeserialization(t *testing.T) {
 	result, rpcErr := (&handlers.TxMethod{}).Handle(ctx, txRequest(hash, false))
 	assert.Nil(t, result)
 	require.NotNil(t, rpcErr)
-	assert.Equal(t, types.RpcDB_DESERIALIZATION, rpcErr.Code)
+	assert.Equal(t, rpcerrors.RpcDB_DESERIALIZATION, rpcErr.Code)
 }
 
 func TestTxMethodOpenTransactionBinaryIsCanonical(t *testing.T) {

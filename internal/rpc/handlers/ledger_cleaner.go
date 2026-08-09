@@ -3,6 +3,8 @@ package handlers
 import (
 	"encoding/json"
 
+	"github.com/LeJamon/go-xrpl/internal/rpc/rpcerrors"
+
 	"github.com/LeJamon/go-xrpl/internal/rpc/types"
 )
 
@@ -24,7 +26,7 @@ func (m *LedgerCleanerMethod) RequiredCondition() types.Condition {
 	return types.NeedsNetworkConnection
 }
 
-func (m *LedgerCleanerMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (any, *types.RpcError) {
+func (m *LedgerCleanerMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (any, *rpcerrors.RpcError) {
 	if ctx.Services == nil || ctx.Services.LedgerCleanerConfigure() == nil {
 		return nil, rpcInternalInvariantError("ledger_cleaner: service unavailable")
 	}
@@ -40,7 +42,7 @@ func (m *LedgerCleanerMethod) Handle(ctx *types.RpcContext, params json.RawMessa
 	}
 	if len(params) > 0 {
 		if err := json.Unmarshal(params, &req); err != nil {
-			return nil, types.RpcErrorInvalidParams("ledger_cleaner: malformed params")
+			return nil, rpcerrors.RpcErrorInvalidParams("ledger_cleaner: malformed params")
 		}
 	}
 

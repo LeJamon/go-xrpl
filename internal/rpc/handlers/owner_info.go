@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/LeJamon/go-xrpl/internal/rpc/rpcerrors"
+
 	"github.com/LeJamon/go-xrpl/codec/binarycodec"
 	"github.com/LeJamon/go-xrpl/internal/rpc/types"
 )
@@ -17,7 +19,7 @@ import (
 // NetworkOPsImp::getOwnerInfo.
 type OwnerInfoMethod struct{ baseHandler }
 
-func (m *OwnerInfoMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (any, *types.RpcError) {
+func (m *OwnerInfoMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (any, *rpcerrors.RpcError) {
 	var request struct {
 		Account *string `json:"account"`
 		Ident   *string `json:"ident"`
@@ -25,14 +27,14 @@ func (m *OwnerInfoMethod) Handle(ctx *types.RpcContext, params json.RawMessage) 
 
 	if params != nil {
 		if err := json.Unmarshal(params, &request); err != nil {
-			return nil, types.RpcErrorInvalidParams(fmt.Sprintf("Invalid parameters: %v", err))
+			return nil, rpcerrors.RpcErrorInvalidParams(fmt.Sprintf("Invalid parameters: %v", err))
 		}
 	}
 
 	// rippled OwnerInfo.cpp:37-41 — missing only when neither account nor
 	// ident is present. A present-but-empty value is handled below.
 	if request.Account == nil && request.Ident == nil {
-		return nil, types.RpcErrorMissingField("account")
+		return nil, rpcerrors.RpcErrorMissingField("account")
 	}
 	strIdent := ""
 	if request.Account != nil {
@@ -46,7 +48,7 @@ func (m *OwnerInfoMethod) Handle(ctx *types.RpcContext, params json.RawMessage) 
 	// string included) is not a top-level error: each section carries
 	// actMalformed while the overall response stays a success.
 	if !types.IsValidClassicAddress(strIdent) {
-		malformed := types.RpcErrorActMalformed("Account malformed.").ErrorObject()
+		malformed := rpcerrors.RpcErrorActMalformed("Account malformed.").ErrorObject()
 		return map[string]any{
 			"accepted": malformed,
 			"current":  malformed,
@@ -80,7 +82,7 @@ func (m *OwnerInfoMethod) Handle(ctx *types.RpcContext, params json.RawMessage) 
 // map. Mirroring rippled's getOwnerInfo, the "offers" / "ripple_lines" keys are
 // emitted only when that object type is present, so an account with no owner
 // directory yields an empty object.
-func ownerInfoSection(ctx *types.RpcContext, walker types.OwnerDirectoryReader, account, ledgerIndex string) (map[string]any, *types.RpcError) {
+func ownerInfoSection(ctx *types.RpcContext, walker types.OwnerDirectoryReader, account, ledgerIndex string) (map[string]any, *rpcerrors.RpcError) {
 	result, err := walker.GetOwnerInfo(ctx.Context, account, ledgerIndex)
 	if err != nil {
 		return nil, rpcInternalError("owner_info: ledger query failed", err)

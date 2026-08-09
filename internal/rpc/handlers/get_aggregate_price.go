@@ -10,6 +10,8 @@ import (
 	"sort"
 	"strconv"
 
+	"github.com/LeJamon/go-xrpl/internal/rpc/rpcerrors"
+
 	addresscodec "github.com/LeJamon/go-xrpl/codec/addresscodec"
 	binarycodec "github.com/LeJamon/go-xrpl/codec/binarycodec"
 	"github.com/LeJamon/go-xrpl/internal/ledger/service/svcerr"
@@ -29,7 +31,7 @@ type aggregatePricePoint struct {
 	lastUpdateTime uint32
 }
 
-func (m *GetAggregatePriceMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (any, *types.RpcError) {
+func (m *GetAggregatePriceMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (any, *rpcerrors.RpcError) {
 	if rpcErr := validateJsonCppIntegerRange(params); rpcErr != nil {
 		return nil, rpcErr
 	}
@@ -37,7 +39,7 @@ func (m *GetAggregatePriceMethod) Handle(ctx *types.RpcContext, params json.RawM
 	var raw map[string]json.RawMessage
 	if params != nil {
 		if err := json.Unmarshal(params, &raw); err != nil {
-			return nil, types.RpcErrorInvalidParams(fmt.Sprintf("Invalid parameters: %v", err))
+			return nil, rpcerrors.RpcErrorInvalidParams(fmt.Sprintf("Invalid parameters: %v", err))
 		}
 	}
 	if raw == nil {
@@ -46,23 +48,23 @@ func (m *GetAggregatePriceMethod) Handle(ctx *types.RpcContext, params json.RawM
 
 	oraclesRaw, hasOracles := raw["oracles"]
 	if !hasOracles {
-		return nil, types.RpcErrorMissingField("oracles")
+		return nil, rpcerrors.RpcErrorMissingField("oracles")
 	}
 	var oracles []json.RawMessage
 	if err := json.Unmarshal(oraclesRaw, &oracles); err != nil {
-		return nil, types.RpcErrorOracleMalformed()
+		return nil, rpcerrors.RpcErrorOracleMalformed()
 	}
 	if len(oracles) == 0 || len(oracles) > 200 {
-		return nil, types.RpcErrorOracleMalformed()
+		return nil, rpcerrors.RpcErrorOracleMalformed()
 	}
 
 	baseAssetRaw, hasBaseAsset := raw["base_asset"]
 	if !hasBaseAsset {
-		return nil, types.RpcErrorMissingField("base_asset")
+		return nil, rpcerrors.RpcErrorMissingField("base_asset")
 	}
 	quoteAssetRaw, hasQuoteAsset := raw["quote_asset"]
 	if !hasQuoteAsset {
-		return nil, types.RpcErrorMissingField("quote_asset")
+		return nil, rpcerrors.RpcErrorMissingField("quote_asset")
 	}
 
 	var trimValue uint32
@@ -71,7 +73,7 @@ func (m *GetAggregatePriceMethod) Handle(ctx *types.RpcContext, params json.RawM
 		hasTrim = true
 		value, err := parseUintParam(trimRaw)
 		if err != nil || value == 0 || value > 25 {
-			return nil, types.RpcErrorInvalidParams("Invalid parameters.")
+			return nil, rpcerrors.RpcErrorInvalidParams("Invalid parameters.")
 		}
 		trimValue = value
 	}
@@ -80,18 +82,18 @@ func (m *GetAggregatePriceMethod) Handle(ctx *types.RpcContext, params json.RawM
 	if thresholdRaw, ok := raw["time_threshold"]; ok {
 		value, err := parseUintParam(thresholdRaw)
 		if err != nil {
-			return nil, types.RpcErrorInvalidParams("Invalid parameters.")
+			return nil, rpcerrors.RpcErrorInvalidParams("Invalid parameters.")
 		}
 		timeThreshold = value
 	}
 
 	baseAsset, err := parseCurrencyParam(baseAssetRaw)
 	if err != nil {
-		return nil, types.RpcErrorInvalidParams("Invalid parameters.")
+		return nil, rpcerrors.RpcErrorInvalidParams("Invalid parameters.")
 	}
 	quoteAsset, err := parseCurrencyParam(quoteAssetRaw)
 	if err != nil {
-		return nil, types.RpcErrorInvalidParams("Invalid parameters.")
+		return nil, rpcerrors.RpcErrorInvalidParams("Invalid parameters.")
 	}
 
 	if err := requireLedgerService(ctx.Services); err != nil {
@@ -115,30 +117,30 @@ func (m *GetAggregatePriceMethod) Handle(ctx *types.RpcContext, params json.RawM
 	for _, oracleRaw := range oracles {
 		var oracleSpec map[string]json.RawMessage
 		if err := json.Unmarshal(oracleRaw, &oracleSpec); err != nil {
-			return nil, types.RpcErrorOracleMalformed().WithExtra(lookupFields)
+			return nil, rpcerrors.RpcErrorOracleMalformed().WithExtra(lookupFields)
 		}
 		accountRaw, hasAccount := oracleSpec["account"]
 		documentIDRaw, hasDocumentID := oracleSpec["oracle_document_id"]
 		if !hasAccount || !hasDocumentID {
-			return nil, types.RpcErrorOracleMalformed().WithExtra(lookupFields)
+			return nil, rpcerrors.RpcErrorOracleMalformed().WithExtra(lookupFields)
 		}
 
 		documentID, err := parseUintParam(documentIDRaw)
 		if err != nil {
-			return nil, types.RpcErrorInvalidParams("Invalid parameters.").WithExtra(lookupFields)
+			return nil, rpcerrors.RpcErrorInvalidParams("Invalid parameters.").WithExtra(lookupFields)
 		}
 		var account string
 		if err := json.Unmarshal(accountRaw, &account); err != nil {
-			return nil, types.RpcErrorInvalidParams("Invalid parameters.").WithExtra(lookupFields)
+			return nil, rpcerrors.RpcErrorInvalidParams("Invalid parameters.").WithExtra(lookupFields)
 		}
 		_, accountBytes, err := addresscodec.DecodeClassicAddressToAccountID(account)
 		if err != nil {
-			return nil, types.RpcErrorInvalidParams("Invalid parameters.").WithExtra(lookupFields)
+			return nil, rpcerrors.RpcErrorInvalidParams("Invalid parameters.").WithExtra(lookupFields)
 		}
 		var accountID [20]byte
 		copy(accountID[:], accountBytes)
 		if accountID == ([20]byte{}) {
-			return nil, types.RpcErrorInvalidParams("Invalid parameters.").WithExtra(lookupFields)
+			return nil, rpcerrors.RpcErrorInvalidParams("Invalid parameters.").WithExtra(lookupFields)
 		}
 
 		entry, err := ctx.Services.Ledger().GetLedgerEntry(ctx.Context, keylet.Oracle(accountID, documentID).Key, ledgerIndex)
@@ -171,7 +173,7 @@ func (m *GetAggregatePriceMethod) Handle(ctx *types.RpcContext, params json.RawM
 	}
 
 	if len(prices) == 0 {
-		return nil, types.RpcErrorObjectNotFound("The requested object was not found.").WithExtra(lookupFields)
+		return nil, rpcerrors.RpcErrorObjectNotFound("The requested object was not found.").WithExtra(lookupFields)
 	}
 
 	latestTime := prices[0].lastUpdateTime

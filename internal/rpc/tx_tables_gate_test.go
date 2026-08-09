@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"testing"
 
+	"github.com/LeJamon/go-xrpl/internal/rpc/rpcerrors"
+
 	"github.com/LeJamon/go-xrpl/internal/rpc/handlers"
 	"github.com/LeJamon/go-xrpl/internal/rpc/types"
 	"github.com/stretchr/testify/assert"
@@ -26,11 +28,11 @@ func newTxTablesOffContext() *types.RpcContext {
 	}
 }
 
-func assertNotEnabled(t *testing.T, result any, rpcErr *types.RpcError) {
+func assertNotEnabled(t *testing.T, result any, rpcErr *rpcerrors.RpcError) {
 	t.Helper()
 	assert.Nil(t, result)
 	require.NotNil(t, rpcErr)
-	assert.Equal(t, types.RpcNOT_ENABLED, rpcErr.Code)
+	assert.Equal(t, rpcerrors.RpcNOT_ENABLED, rpcErr.Code)
 	assert.Equal(t, "notEnabled", rpcErr.ErrorString)
 	assert.Equal(t, "Not enabled in configuration.", rpcErr.Message)
 }

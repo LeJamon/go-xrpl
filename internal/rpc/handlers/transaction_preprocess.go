@@ -8,7 +8,7 @@ import (
 
 	addresscodec "github.com/LeJamon/go-xrpl/codec/addresscodec"
 	binarycodecdefs "github.com/LeJamon/go-xrpl/codec/binarycodec/definitions"
-	"github.com/LeJamon/go-xrpl/internal/rpc/types"
+	"github.com/LeJamon/go-xrpl/internal/rpc/rpcerrors"
 	"github.com/LeJamon/go-xrpl/internal/tx"
 )
 
@@ -34,7 +34,7 @@ type transactionPreprocessOptions struct {
 func preprocessTransaction(
 	txMap map[string]any,
 	options transactionPreprocessOptions,
-) (tx.Transaction, *types.RpcError) {
+) (tx.Transaction, *rpcerrors.RpcError) {
 	var rawSigners any
 	strictSignerError := false
 	if options.preserveSigners {
@@ -45,9 +45,9 @@ func preprocessTransaction(
 
 	if message := serializedFieldParseMessage(txMap, "tx_json", binarycodecdefs.Get()); message != "" {
 		if options.preserveSigners && signerShapeMessage(message) {
-			return nil, types.RpcErrorInvalidParams("Signers array may only contain Signer entries.")
+			return nil, rpcerrors.RpcErrorInvalidParams("Signers array may only contain Signer entries.")
 		}
-		return nil, types.RpcErrorInvalidParams(message)
+		return nil, rpcerrors.RpcErrorInvalidParams(message)
 	}
 	if options.preserveSigners && rawSigners != nil {
 		strictSignerError = strictSignerExtra(rawSigners)
@@ -62,47 +62,47 @@ func preprocessTransaction(
 	}
 	transactionTypeName, err := binarycodecdefs.Get().TransactionTypeName(int32(transactionTypeCode))
 	if err != nil {
-		return nil, types.RpcErrorInvalidTransactionType(transactionTypeCode)
+		return nil, rpcerrors.RpcErrorInvalidTransactionType(transactionTypeCode)
 	}
 	txMap["TransactionType"] = transactionTypeName
 	txType, _ := tx.TypeFromName(transactionTypeName)
 
 	if err := tx.ValidateTemplateFields(txType, txMap); err != nil {
 		if options.mode == transactionPreprocessSimulate {
-			return nil, types.RpcErrorInvalidTransaction(err.Error())
+			return nil, rpcerrors.RpcErrorInvalidTransaction(err.Error())
 		}
-		return nil, types.RpcErrorInvalidParams(err.Error())
+		return nil, rpcerrors.RpcErrorInvalidParams(err.Error())
 	}
 	if options.mode != transactionPreprocessSimulate {
 		if reason := tx.TransactionMapLocalChecksFailureReason(txType, txMap); reason != "" {
-			return nil, types.RpcErrorInvalidParams(reason)
+			return nil, rpcerrors.RpcErrorInvalidParams(reason)
 		}
 	}
 
 	transaction, rpcErr := parseTransactionForSigning(txMap)
 	if rpcErr != nil {
 		if options.mode == transactionPreprocessSimulate {
-			return nil, types.RpcErrorInvalidTransaction(rpcErr.Message)
+			return nil, rpcerrors.RpcErrorInvalidTransaction(rpcErr.Message)
 		}
 		return nil, rpcErr
 	}
 	if options.rejectTxnSignature {
 		if _, present := txMap["TxnSignature"]; present {
-			return nil, types.RpcErrorSigningMalformed()
+			return nil, rpcerrors.RpcErrorSigningMalformed()
 		}
 	}
 	if strictSignerError {
-		return nil, types.RpcErrorInvalidParams("Signers array may only contain Signer entries.")
+		return nil, rpcerrors.RpcErrorInvalidParams("Signers array may only contain Signer entries.")
 	}
 	return transaction, nil
 }
 
-func parseTransactionTypeCode(value any) (uint16, *types.RpcError) {
+func parseTransactionTypeCode(value any) (uint16, *rpcerrors.RpcError) {
 	switch value := value.(type) {
 	case string:
 		code, err := binarycodecdefs.Get().TransactionTypeCode(value)
 		if err != nil {
-			return 0, types.RpcErrorInvalidParams("Field 'tx_json.TransactionType' has invalid data.")
+			return 0, rpcerrors.RpcErrorInvalidParams("Field 'tx_json.TransactionType' has invalid data.")
 		}
 		return uint16(code), nil
 	case uint16:
@@ -111,32 +111,32 @@ func parseTransactionTypeCode(value any) (uint16, *types.RpcError) {
 		return uint16(value), nil
 	case uint32:
 		if value > math.MaxUint16 {
-			return 0, types.RpcErrorInvalidParams("Field 'tx_json.TransactionType' has invalid data.")
+			return 0, rpcerrors.RpcErrorInvalidParams("Field 'tx_json.TransactionType' has invalid data.")
 		}
 		return uint16(value), nil
 	case int:
 		if value < 0 || value > math.MaxUint16 {
-			return 0, types.RpcErrorInvalidParams("Field 'tx_json.TransactionType' has invalid data.")
+			return 0, rpcerrors.RpcErrorInvalidParams("Field 'tx_json.TransactionType' has invalid data.")
 		}
 		return uint16(value), nil
 	case int64:
 		if value < 0 || value > math.MaxUint16 {
-			return 0, types.RpcErrorInvalidParams("Field 'tx_json.TransactionType' has invalid data.")
+			return 0, rpcerrors.RpcErrorInvalidParams("Field 'tx_json.TransactionType' has invalid data.")
 		}
 		return uint16(value), nil
 	case float64:
 		if value < 0 || value > math.MaxUint16 || value != math.Trunc(value) {
-			return 0, types.RpcErrorInvalidParams("Field 'tx_json.TransactionType' has invalid data.")
+			return 0, rpcerrors.RpcErrorInvalidParams("Field 'tx_json.TransactionType' has invalid data.")
 		}
 		return uint16(value), nil
 	case json.Number:
 		parsed, err := value.Int64()
 		if err != nil || parsed < 0 || parsed > math.MaxUint16 {
-			return 0, types.RpcErrorInvalidParams("Field 'tx_json.TransactionType' has invalid data.")
+			return 0, rpcerrors.RpcErrorInvalidParams("Field 'tx_json.TransactionType' has invalid data.")
 		}
 		return uint16(parsed), nil
 	default:
-		return 0, types.RpcErrorInvalidParams("Field 'tx_json.TransactionType' has invalid data.")
+		return 0, rpcerrors.RpcErrorInvalidParams("Field 'tx_json.TransactionType' has invalid data.")
 	}
 }
 
@@ -187,7 +187,7 @@ func strictSignerExtra(value any) bool {
 	return false
 }
 
-func canonicalizeAccountFields(value any) *types.RpcError {
+func canonicalizeAccountFields(value any) *rpcerrors.RpcError {
 	switch value := value.(type) {
 	case map[string]any:
 		for field, child := range value {

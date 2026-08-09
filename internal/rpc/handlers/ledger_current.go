@@ -3,19 +3,21 @@ package handlers
 import (
 	"encoding/json"
 
+	"github.com/LeJamon/go-xrpl/internal/rpc/rpcerrors"
+
 	"github.com/LeJamon/go-xrpl/internal/rpc/types"
 )
 
 type ledgerCurrentMethod struct{ baseHandler }
 
-func (m *ledgerCurrentMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (any, *types.RpcError) {
+func (m *ledgerCurrentMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (any, *rpcerrors.RpcError) {
 	if err := requireLedgerService(ctx.Services); err != nil {
 		return nil, err
 	}
 
 	seq := ctx.Services.Ledger().GetCurrentLedgerIndex()
 	if seq == 0 {
-		return nil, types.RpcErrorLgrNotFound("No current ledger")
+		return nil, rpcerrors.RpcErrorLgrNotFound("No current ledger")
 	}
 
 	response := map[string]any{

@@ -9,6 +9,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/LeJamon/go-xrpl/internal/rpc/rpcerrors"
+
 	"github.com/LeJamon/go-xrpl/internal/ledger/service/svcerr"
 	"github.com/LeJamon/go-xrpl/internal/rpc/handlers"
 	"github.com/LeJamon/go-xrpl/internal/rpc/types"
@@ -188,7 +190,7 @@ func TestTransactionEntryMissingTxHash(t *testing.T) {
 			// this case (TransactionEntry.cpp:48 / TransactionEntry_test.cpp:49),
 			// not the generic invalidParams.
 			assert.Equal(t, "fieldNotFoundTransaction", rpcErr.ErrorString)
-			assert.Equal(t, types.RpcUNKNOWN, rpcErr.Code)
+			assert.Equal(t, rpcerrors.RpcUNKNOWN, rpcErr.Code)
 		})
 	}
 }
@@ -252,7 +254,7 @@ func TestTransactionEntryInvalidTxHash(t *testing.T) {
 			assert.Nil(t, result, "Expected nil result for invalid tx_hash")
 			require.NotNil(t, rpcErr, "Expected RPC error for invalid tx_hash: %s", tc.txHash)
 			assert.Equal(t, "malformedRequest", rpcErr.ErrorString)
-			assert.Equal(t, types.RpcUNKNOWN, rpcErr.Code)
+			assert.Equal(t, rpcerrors.RpcUNKNOWN, rpcErr.Code)
 		})
 	}
 }
@@ -429,7 +431,7 @@ func TestTransactionEntryTxNotFound(t *testing.T) {
 			// rippled TransactionEntry.cpp:71 emits a bare "transactionNotFound" token
 			// (distinct from the `tx` command's "txnNotFound"=29) with no numeric code.
 			assert.Equal(t, "transactionNotFound", rpcErr.ErrorString)
-			assert.Equal(t, types.RpcUNKNOWN, rpcErr.Code)
+			assert.Equal(t, rpcerrors.RpcUNKNOWN, rpcErr.Code)
 			assert.True(t, rpcErr.IsBareToken())
 		})
 	}
@@ -459,7 +461,7 @@ func TestTransactionEntryContextReadError(t *testing.T) {
 
 	assert.Nil(t, result)
 	require.NotNil(t, rpcErr)
-	assert.Equal(t, types.RpcINTERNAL, rpcErr.Code)
+	assert.Equal(t, rpcerrors.RpcINTERNAL, rpcErr.Code)
 	assert.True(t, ledger.called)
 }
 
@@ -727,7 +729,7 @@ func TestTransactionEntryServiceUnavailable(t *testing.T) {
 
 		assert.Nil(t, result)
 		require.NotNil(t, rpcErr)
-		assert.Equal(t, types.RpcINTERNAL, rpcErr.Code)
+		assert.Equal(t, rpcerrors.RpcINTERNAL, rpcErr.Code)
 		assert.Equal(t, "Internal error.", rpcErr.Message)
 	})
 
@@ -749,7 +751,7 @@ func TestTransactionEntryServiceUnavailable(t *testing.T) {
 
 		assert.Nil(t, result)
 		require.NotNil(t, rpcErr)
-		assert.Equal(t, types.RpcINTERNAL, rpcErr.Code)
+		assert.Equal(t, rpcerrors.RpcINTERNAL, rpcErr.Code)
 		assert.Equal(t, "Internal error.", rpcErr.Message)
 	})
 }
@@ -808,7 +810,7 @@ func TestTransactionEntryInvalidLedgerHash(t *testing.T) {
 
 		assert.Nil(t, result)
 		require.NotNil(t, rpcErr)
-		assert.Equal(t, types.RpcLGR_NOT_FOUND, rpcErr.Code)
+		assert.Equal(t, rpcerrors.RpcLGR_NOT_FOUND, rpcErr.Code)
 	})
 
 	t.Run("ledger_hash malformed - too short", func(t *testing.T) {

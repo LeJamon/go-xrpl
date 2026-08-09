@@ -6,6 +6,8 @@ import (
 	"errors"
 	"testing"
 
+	"github.com/LeJamon/go-xrpl/internal/rpc/rpcerrors"
+
 	"github.com/LeJamon/go-xrpl/internal/ledger/service/svcerr"
 	"github.com/LeJamon/go-xrpl/internal/rpc/handlers"
 	"github.com/LeJamon/go-xrpl/internal/rpc/types"
@@ -207,7 +209,7 @@ func TestAccountCurrenciesBadInput(t *testing.T) {
 			name:          "Missing account field - empty params",
 			params:        map[string]any{},
 			expectedError: "Missing field 'account'.",
-			expectedCode:  types.RpcINVALID_PARAMS,
+			expectedCode:  rpcerrors.RpcINVALID_PARAMS,
 		},
 		{
 			// test account non-string (integer)
@@ -216,7 +218,7 @@ func TestAccountCurrenciesBadInput(t *testing.T) {
 				"account": 1,
 			},
 			expectedError: "Invalid field 'account'.",
-			expectedCode:  types.RpcINVALID_PARAMS,
+			expectedCode:  rpcerrors.RpcINVALID_PARAMS,
 		},
 		{
 			// test account non-string (float)
@@ -225,7 +227,7 @@ func TestAccountCurrenciesBadInput(t *testing.T) {
 				"account": 1.1,
 			},
 			expectedError: "Invalid field 'account'.",
-			expectedCode:  types.RpcINVALID_PARAMS,
+			expectedCode:  rpcerrors.RpcINVALID_PARAMS,
 		},
 		{
 			// test account non-string (boolean)
@@ -234,7 +236,7 @@ func TestAccountCurrenciesBadInput(t *testing.T) {
 				"account": true,
 			},
 			expectedError: "Invalid field 'account'.",
-			expectedCode:  types.RpcINVALID_PARAMS,
+			expectedCode:  rpcerrors.RpcINVALID_PARAMS,
 		},
 		{
 			// invalid base58 characters (llIIOO)
@@ -244,7 +246,7 @@ func TestAccountCurrenciesBadInput(t *testing.T) {
 				"account": "llIIOO",
 			},
 			expectedError: "Account malformed.",
-			expectedCode:  types.RpcACT_MALFORMED,
+			expectedCode:  rpcerrors.RpcACT_MALFORMED,
 		},
 		{
 			// Cannot use a seed as account
@@ -254,7 +256,7 @@ func TestAccountCurrenciesBadInput(t *testing.T) {
 				"account": "Bob",
 			},
 			expectedError: "Account malformed.",
-			expectedCode:  types.RpcACT_MALFORMED,
+			expectedCode:  rpcerrors.RpcACT_MALFORMED,
 		},
 		{
 			// ask for nonexistent account (actNotFound)
@@ -263,7 +265,7 @@ func TestAccountCurrenciesBadInput(t *testing.T) {
 				"account": "rPMh7Pi9ct699iZUTWaytJUoHcJ7cgyziK",
 			},
 			expectedError: "Account not found.",
-			expectedCode:  types.RpcACT_NOT_FOUND,
+			expectedCode:  rpcerrors.RpcACT_NOT_FOUND,
 			setupMock: func() {
 				mock.accountCurrenciesErr = svcerr.ErrAccountNotFound
 			},
@@ -274,7 +276,7 @@ func TestAccountCurrenciesBadInput(t *testing.T) {
 				"account": "rPMh7Pi9ct699iZUTWaytJUoHcJ7cgyziK",
 			},
 			expectedError: "Account malformed.",
-			expectedCode:  types.RpcACT_MALFORMED,
+			expectedCode:  rpcerrors.RpcACT_MALFORMED,
 			expectedToken: "actMalformed",
 			setupMock: func() {
 				mock.accountCurrenciesErr = svcerr.ErrAccountMalformed
@@ -313,10 +315,10 @@ func TestAccountCurrenciesBadInput(t *testing.T) {
 				assert.Equal(t, tc.expectedToken, rpcErr.ErrorString,
 					"Error token should match expected")
 			}
-			if tc.expectedCode == types.RpcACT_NOT_FOUND {
+			if tc.expectedCode == rpcerrors.RpcACT_NOT_FOUND {
 				assert.Equal(t, map[string]any{
 					"error":         "actNotFound",
-					"error_code":    types.RpcACT_NOT_FOUND,
+					"error_code":    rpcerrors.RpcACT_NOT_FOUND,
 					"error_message": "Account not found.",
 				}, rpcErr.ResponseFields())
 			}
@@ -603,7 +605,7 @@ func TestAccountCurrenciesServiceUnavailable(t *testing.T) {
 
 	assert.Nil(t, result)
 	require.NotNil(t, rpcErr)
-	assert.Equal(t, types.RpcINTERNAL, rpcErr.Code)
+	assert.Equal(t, rpcerrors.RpcINTERNAL, rpcErr.Code)
 	assert.Equal(t, "Internal error.", rpcErr.Message)
 }
 

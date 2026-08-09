@@ -4,6 +4,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/LeJamon/go-xrpl/internal/rpc/rpcerrors"
+
 	"github.com/LeJamon/go-xrpl/internal/rpc/types"
 	"github.com/LeJamon/go-xrpl/protocol"
 	"github.com/stretchr/testify/assert"
@@ -44,7 +46,7 @@ func TestConditionMet_AmendmentBlocked(t *testing.T) {
 	m.amendmentBlocked = true
 	rpcErr := conditionMet(types.NeedsCurrentLedger, ctxWith(types.ApiVersion1, m))
 	require.NotNil(t, rpcErr)
-	assert.Equal(t, types.RpcAMENDMENT_BLOCKED, rpcErr.Code)
+	assert.Equal(t, rpcerrors.RpcAMENDMENT_BLOCKED, rpcErr.Code)
 }
 
 func TestConditionMet_NotSynced(t *testing.T) {
@@ -54,13 +56,13 @@ func TestConditionMet_NotSynced(t *testing.T) {
 	t.Run("apiVersion1 returns noNetwork", func(t *testing.T) {
 		rpcErr := conditionMet(types.NeedsNetworkConnection, ctxWith(types.ApiVersion1, m))
 		require.NotNil(t, rpcErr)
-		assert.Equal(t, types.RpcNO_NETWORK, rpcErr.Code)
+		assert.Equal(t, rpcerrors.RpcNO_NETWORK, rpcErr.Code)
 		assert.Equal(t, "noNetwork", rpcErr.ErrorString)
 	})
 	t.Run("apiVersion2 returns notSynced", func(t *testing.T) {
 		rpcErr := conditionMet(types.NeedsNetworkConnection, ctxWith(types.ApiVersion2, m))
 		require.NotNil(t, rpcErr)
-		assert.Equal(t, types.RpcNOT_SYNCED, rpcErr.Code)
+		assert.Equal(t, rpcerrors.RpcNOT_SYNCED, rpcErr.Code)
 	})
 }
 
@@ -72,7 +74,7 @@ func TestConditionMet_NoClosedLedger(t *testing.T) {
 
 	rpcErr := conditionMet(types.NeedsCurrentLedger, ctxWith(types.ApiVersion1, m))
 	require.NotNil(t, rpcErr)
-	assert.Equal(t, types.RpcNO_CLOSED, rpcErr.Code)
+	assert.Equal(t, rpcerrors.RpcNO_CLOSED, rpcErr.Code)
 	assert.Equal(t, "noClosed", rpcErr.ErrorString)
 }
 
@@ -91,7 +93,7 @@ func TestConditionMet_NonStandaloneStaleValidated(t *testing.T) {
 	}
 	rpcErr := conditionMet(types.NeedsCurrentLedger, ctxWith(types.ApiVersion1, m))
 	require.NotNil(t, rpcErr)
-	assert.Equal(t, types.RpcNO_CURRENT, rpcErr.Code)
+	assert.Equal(t, rpcerrors.RpcNO_CURRENT, rpcErr.Code)
 }
 
 func TestConditionMet_NonStandaloneCurrentLagsValidated(t *testing.T) {
@@ -106,7 +108,7 @@ func TestConditionMet_NonStandaloneCurrentLagsValidated(t *testing.T) {
 	}
 	rpcErr := conditionMet(types.NeedsCurrentLedger, ctxWith(types.ApiVersion1, m))
 	require.NotNil(t, rpcErr)
-	assert.Equal(t, types.RpcNO_CURRENT, rpcErr.Code)
+	assert.Equal(t, rpcerrors.RpcNO_CURRENT, rpcErr.Code)
 }
 
 func TestConditionMet_UNLBlocked(t *testing.T) {
@@ -117,7 +119,7 @@ func TestConditionMet_UNLBlocked(t *testing.T) {
 	}
 	rpcErr := conditionMet(types.NeedsCurrentLedger, ctx)
 	require.NotNil(t, rpcErr)
-	assert.Equal(t, types.RpcEXPIRED_VALIDATOR_LIST, rpcErr.Code)
+	assert.Equal(t, rpcerrors.RpcEXPIRED_VALIDATOR_LIST, rpcErr.Code)
 	assert.Equal(t, "unlBlocked", rpcErr.ErrorString)
 }
 
@@ -139,7 +141,7 @@ func TestConditionMet_AmendmentBlockedBeatsUNL(t *testing.T) {
 	}
 	rpcErr := conditionMet(types.NeedsCurrentLedger, ctx)
 	require.NotNil(t, rpcErr)
-	assert.Equal(t, types.RpcAMENDMENT_BLOCKED, rpcErr.Code)
+	assert.Equal(t, rpcerrors.RpcAMENDMENT_BLOCKED, rpcErr.Code)
 }
 
 func TestConditionMet_NonStandaloneFreshPasses(t *testing.T) {

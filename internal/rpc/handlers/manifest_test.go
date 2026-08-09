@@ -8,6 +8,8 @@ import (
 	"encoding/json"
 	"testing"
 
+	"github.com/LeJamon/go-xrpl/internal/rpc/rpcerrors"
+
 	"github.com/LeJamon/go-xrpl/codec/addresscodec"
 	"github.com/LeJamon/go-xrpl/codec/binarycodec"
 	"github.com/LeJamon/go-xrpl/internal/manifest"
@@ -97,7 +99,7 @@ func servicesForCache(cache types.ManifestLookup) *types.ServiceGraph {
 	return types.NewTestServiceGraph(&types.ServiceContainer{Manifests: cache})
 }
 
-func callManifestRPC(t *testing.T, services *types.ServiceGraph, publicKey string) (map[string]any, *types.RpcError) {
+func callManifestRPC(t *testing.T, services *types.ServiceGraph, publicKey string) (map[string]any, *rpcerrors.RpcError) {
 	t.Helper()
 	var params json.RawMessage
 	if publicKey != "" {

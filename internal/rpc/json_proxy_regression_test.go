@@ -8,6 +8,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/LeJamon/go-xrpl/internal/rpc/rpcerrors"
+
 	"github.com/LeJamon/go-xrpl/internal/peermanagement/resource"
 	"github.com/LeJamon/go-xrpl/internal/rpc/types"
 	"github.com/stretchr/testify/assert"
@@ -24,7 +26,7 @@ func TestJSONProxyUsesSingleDispatchAccounting(t *testing.T) {
 		Services: graph,
 		Registry: mustTestMethodRegistryWithOverrides(t, map[string]types.MethodHandler{
 			"json_proxy_target": &stubHandler{
-				handle: func(ctx *types.RpcContext, _ json.RawMessage) (any, *types.RpcError) {
+				handle: func(ctx *types.RpcContext, _ json.RawMessage) (any, *rpcerrors.RpcError) {
 					targetCalls++
 					assert.Equal(t, types.MaxJobQueueClients, services.ClientLoad.InFlight())
 					ctx.LoadCost = uint32(resource.FeeHeavyBurdenRPC().Cost())
@@ -124,7 +126,7 @@ func TestHTTPStructuredIDRedactionAcrossDispatchShapes(t *testing.T) {
 				Services: graph,
 				Registry: mustTestMethodRegistryWithOverrides(t, map[string]types.MethodHandler{
 					"capture": &stubHandler{
-						handle: func(_ *types.RpcContext, params json.RawMessage) (any, *types.RpcError) {
+						handle: func(_ *types.RpcContext, params json.RawMessage) (any, *rpcerrors.RpcError) {
 							var received map[string]any
 							require.NoError(t, json.Unmarshal(params, &received))
 							assertMaskedStructuredID(t, received["id"])
@@ -152,8 +154,8 @@ func TestURLUserinfoIsRedactedAcrossTransportEchoes(t *testing.T) {
 	const maskedURL = `"url":"<masked>"`
 
 	fail := &stubHandler{
-		handle: func(*types.RpcContext, json.RawMessage) (any, *types.RpcError) {
-			return nil, types.RpcErrorInvalidParams("Invalid parameters.")
+		handle: func(*types.RpcContext, json.RawMessage) (any, *rpcerrors.RpcError) {
+			return nil, rpcerrors.RpcErrorInvalidParams("Invalid parameters.")
 		},
 	}
 	httpServer := NewServer(ServerOptions{

@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"strings"
 
+	"github.com/LeJamon/go-xrpl/internal/rpc/rpcerrors"
+
 	"github.com/LeJamon/go-xrpl/internal/rpc/types"
 	"github.com/LeJamon/go-xrpl/keylet"
 )
@@ -12,7 +14,7 @@ import (
 // VaultInfoMethod handles the vault_info RPC method
 type VaultInfoMethod struct{ baseHandler }
 
-func (m *VaultInfoMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (any, *types.RpcError) {
+func (m *VaultInfoMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (any, *rpcerrors.RpcError) {
 	parsedLedgerSpec, _, ledgerSpecErr := parseLedgerSpecifier(params)
 	if ledgerSpecErr != nil {
 		return nil, ledgerSpecErr
@@ -41,7 +43,7 @@ func (m *VaultInfoMethod) Handle(ctx *types.RpcContext, params json.RawMessage) 
 		if rerr := mapLedgerLookupErr(err); rerr != nil {
 			return nil, rerr.WithExtra(response)
 		}
-		return nil, types.RpcErrorEntryNotFoundBare("").WithExtra(response)
+		return nil, rpcerrors.RpcErrorEntryNotFoundBare("").WithExtra(response)
 	}
 
 	vaultDecoded, decodeErr := decodeLedgerEntryNode(vaultEntry.Node)
@@ -63,7 +65,7 @@ func (m *VaultInfoMethod) Handle(ctx *types.RpcContext, params json.RawMessage) 
 		if rerr := mapLedgerLookupErr(mptErr); rerr != nil {
 			return nil, rerr.WithExtra(response)
 		}
-		return nil, types.RpcErrorEntryNotFoundBare("").WithExtra(response)
+		return nil, rpcerrors.RpcErrorEntryNotFoundBare("").WithExtra(response)
 	}
 	mptIssuanceDecoded, mptDecodeErr := decodeLedgerEntryNode(mptIssuanceEntry.Node)
 	if mptDecodeErr != nil {
@@ -77,7 +79,7 @@ func (m *VaultInfoMethod) Handle(ctx *types.RpcContext, params json.RawMessage) 
 	return response, nil
 }
 
-func parseVaultInfoKey(params map[string]json.RawMessage) ([32]byte, *types.RpcError) {
+func parseVaultInfoKey(params map[string]json.RawMessage) ([32]byte, *rpcerrors.RpcError) {
 	vaultIDRaw, hasVaultID := params["vault_id"]
 	ownerRaw, hasOwner := params["owner"]
 	seqRaw, hasSeq := params["seq"]
@@ -92,7 +94,7 @@ func parseVaultInfoKey(params map[string]json.RawMessage) ([32]byte, *types.RpcE
 		var vaultKey [32]byte
 		copy(vaultKey[:], vaultIDBytes)
 		if vaultKey == ([32]byte{}) {
-			return [32]byte{}, types.RpcErrorMalformedRequestBare()
+			return [32]byte{}, rpcerrors.RpcErrorMalformedRequestBare()
 		}
 		return vaultKey, nil
 	}
@@ -114,18 +116,18 @@ func parseVaultInfoKey(params map[string]json.RawMessage) ([32]byte, *types.RpcE
 	return [32]byte{}, vaultInfoMalformedInvalidParams()
 }
 
-func vaultInfoMalformedInvalidParams() *types.RpcError {
-	return types.NewRpcError(
-		types.RpcINVALID_PARAMS,
+func vaultInfoMalformedInvalidParams() *rpcerrors.RpcError {
+	return rpcerrors.NewRpcError(
+		rpcerrors.RpcINVALID_PARAMS,
 		"malformedRequest",
 		"invalidParams",
 		"Invalid parameters.",
 	)
 }
 
-func vaultInfoMalformedActMalformed() *types.RpcError {
-	return types.NewRpcError(
-		types.RpcACT_MALFORMED,
+func vaultInfoMalformedActMalformed() *rpcerrors.RpcError {
+	return rpcerrors.NewRpcError(
+		rpcerrors.RpcACT_MALFORMED,
 		"malformedRequest",
 		"actMalformed",
 		"Account malformed.",

@@ -8,6 +8,7 @@ import (
 
 	addresscodec "github.com/LeJamon/go-xrpl/codec/addresscodec"
 	codecTypes "github.com/LeJamon/go-xrpl/codec/binarycodec/types"
+	"github.com/LeJamon/go-xrpl/internal/rpc/rpcerrors"
 	"github.com/LeJamon/go-xrpl/internal/rpc/types"
 	"github.com/LeJamon/go-xrpl/keylet"
 )
@@ -38,18 +39,18 @@ func (b book) reversed() book {
 	return b
 }
 
-func SnapshotBook(request types.BookRequest) (takerPays, takerGets types.Amount, domain string, rpcErr *types.RpcError) {
+func SnapshotBook(request types.BookRequest) (takerPays, takerGets types.Amount, domain string, rpcErr *rpcerrors.RpcError) {
 	book, rpcErr := parseBookRequest(request, true)
 	if rpcErr != nil {
 		return types.Amount{}, types.Amount{}, "", rpcErr
 	}
 	takerPays, ok := book.takerPays.amount()
 	if !ok {
-		return types.Amount{}, types.Amount{}, "", types.RpcErrorInternal()
+		return types.Amount{}, types.Amount{}, "", rpcerrors.RpcErrorInternal()
 	}
 	takerGets, ok = book.takerGets.amount()
 	if !ok {
-		return types.Amount{}, types.Amount{}, "", types.RpcErrorInternal()
+		return types.Amount{}, types.Amount{}, "", rpcerrors.RpcErrorInternal()
 	}
 	if book.domainPresent {
 		domain = strings.ToUpper(hex.EncodeToString(book.domain[:]))
@@ -77,7 +78,7 @@ func (asset asset) amount() (types.Amount, bool) {
 	return amount, true
 }
 
-func parseBookRequest(request types.BookRequest, includeTaker bool) (book, *types.RpcError) {
+func parseBookRequest(request types.BookRequest, includeTaker bool) (book, *rpcerrors.RpcError) {
 	if _, rpcErr := bookSideObject(request.TakerPays); rpcErr != nil {
 		return book{}, rpcErr
 	}
@@ -93,7 +94,7 @@ func parseBookRequest(request types.BookRequest, includeTaker bool) (book, *type
 		return book{}, rpcErr
 	}
 	if pays == gets {
-		return book{}, types.RpcErrorBadMarket()
+		return book{}, rpcerrors.RpcErrorBadMarket()
 	}
 
 	wire, wireDecoded := request.Wire()
@@ -101,10 +102,10 @@ func parseBookRequest(request types.BookRequest, includeTaker bool) (book, *type
 		if wireDecoded && wire.Taker != nil {
 			var taker string
 			if json.Unmarshal(wire.Taker, &taker) != nil || taker == "" || !isValidXRPLAddress(taker) {
-				return book{}, types.RpcErrorActMalformed("Account malformed.")
+				return book{}, rpcerrors.RpcErrorActMalformed("Account malformed.")
 			}
 		} else if request.Taker != "" && !isValidXRPLAddress(request.Taker) {
-			return book{}, types.RpcErrorActMalformed("Account malformed.")
+			return book{}, rpcerrors.RpcErrorActMalformed("Account malformed.")
 		}
 	}
 
@@ -112,41 +113,41 @@ func parseBookRequest(request types.BookRequest, includeTaker bool) (book, *type
 	if wireDecoded && wire.Domain != nil {
 		var domain string
 		if json.Unmarshal(wire.Domain, &domain) != nil || domain == "" || !parseDomain(domain, &canonicalBook.domain) {
-			return book{}, types.RpcErrorDomainMalformed("")
+			return book{}, rpcerrors.RpcErrorDomainMalformed("")
 		}
 		canonicalBook.domainPresent = true
 	} else if request.Domain != "" {
 		if !parseDomain(request.Domain, &canonicalBook.domain) {
-			return book{}, types.RpcErrorDomainMalformed("")
+			return book{}, rpcerrors.RpcErrorDomainMalformed("")
 		}
 		canonicalBook.domainPresent = true
 	}
 	return canonicalBook, nil
 }
 
-func parseAsset(raw json.RawMessage, isPays bool) (asset, *types.RpcError) {
-	assetErr := func() *types.RpcError {
+func parseAsset(raw json.RawMessage, isPays bool) (asset, *rpcerrors.RpcError) {
+	assetErr := func() *rpcerrors.RpcError {
 		if isPays {
-			return types.RpcErrorSrcCurMalformed("Source currency is malformed.")
+			return rpcerrors.RpcErrorSrcCurMalformed("Source currency is malformed.")
 		}
-		return types.RpcErrorDstAmtMalformed("Destination amount/currency/issuer is malformed.")
+		return rpcerrors.RpcErrorDstAmtMalformed("Destination amount/currency/issuer is malformed.")
 	}
-	issuerErr := func() *types.RpcError {
+	issuerErr := func() *rpcerrors.RpcError {
 		if isPays {
-			return types.RpcErrorSrcIsrMalformed("Source issuer is malformed.")
+			return rpcerrors.RpcErrorSrcIsrMalformed("Source issuer is malformed.")
 		}
-		return types.RpcErrorDstIsrMalformed("Destination issuer is malformed.")
+		return rpcerrors.RpcErrorDstIsrMalformed("Destination issuer is malformed.")
 	}
 
 	var side map[string]json.RawMessage
 	if raw == nil || json.Unmarshal(raw, &side) != nil {
-		return asset{}, types.RpcErrorInvalidParams("Invalid parameters.")
+		return asset{}, rpcerrors.RpcErrorInvalidParams("Invalid parameters.")
 	}
 	rawMPT, hasMPT := side["mpt_issuance_id"]
 	rawCurrency, hasCurrency := side["currency"]
 	rawIssuer, hasIssuer := side["issuer"]
 	if hasMPT && (hasCurrency || hasIssuer) {
-		return asset{}, types.RpcErrorInvalidParams("Invalid parameters.")
+		return asset{}, rpcerrors.RpcErrorInvalidParams("Invalid parameters.")
 	}
 	if hasCurrency {
 		currency, ok := jsonStringLike(rawCurrency)

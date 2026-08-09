@@ -10,6 +10,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/LeJamon/go-xrpl/internal/rpc/rpcerrors"
+
 	binarycodec "github.com/LeJamon/go-xrpl/codec/binarycodec"
 	"github.com/LeJamon/go-xrpl/crypto/ed25519"
 	"github.com/LeJamon/go-xrpl/internal/rpc/handlers"
@@ -222,7 +224,7 @@ func TestSubmitMethodAbsentBlobRequiresSigningCapability(t *testing.T) {
 	result, rpcErr := (&handlers.SubmitMethod{}).Handle(ctx, params)
 	assert.Nil(t, result)
 	require.NotNil(t, rpcErr)
-	assert.Equal(t, types.RpcNOT_SUPPORTED, rpcErr.Code)
+	assert.Equal(t, rpcerrors.RpcNOT_SUPPORTED, rpcErr.Code)
 	assert.Equal(t, "Signing is not supported by this server.", rpcErr.Message)
 	assert.NotContains(t, rpcErr.Extra, "deprecated")
 	assert.Zero(t, mock.submitCalls)
@@ -245,7 +247,7 @@ func TestSubmitMethodAbsentBlobValidatesFailHardBeforeSigningCapability(t *testi
 	result, rpcErr := (&handlers.SubmitMethod{}).Handle(ctx, params)
 	assert.Nil(t, result)
 	require.NotNil(t, rpcErr)
-	assert.Equal(t, types.RpcINVALID_PARAMS, rpcErr.Code)
+	assert.Equal(t, rpcerrors.RpcINVALID_PARAMS, rpcErr.Code)
 	assert.Equal(t, "Invalid field 'fail_hard', not boolean.", rpcErr.Message)
 	assert.NotContains(t, rpcErr.Extra, "deprecated")
 	assert.Zero(t, mock.submitCalls)
@@ -344,13 +346,13 @@ func TestSubmitMethodErrorValidation(t *testing.T) {
 			name:          "Missing tx_blob and tx_json - empty params",
 			params:        map[string]any{},
 			expectedError: "Signing is not supported by this server.",
-			expectedCode:  types.RpcNOT_SUPPORTED,
+			expectedCode:  rpcerrors.RpcNOT_SUPPORTED,
 		},
 		{
 			name:          "Missing tx_blob and tx_json - nil params",
 			params:        nil,
 			expectedError: "Signing is not supported by this server.",
-			expectedCode:  types.RpcNOT_SUPPORTED,
+			expectedCode:  rpcerrors.RpcNOT_SUPPORTED,
 		},
 		{
 			name: "Empty tx_blob",
@@ -358,7 +360,7 @@ func TestSubmitMethodErrorValidation(t *testing.T) {
 				"tx_blob": "",
 			},
 			expectedError: "Invalid parameters.",
-			expectedCode:  types.RpcINVALID_PARAMS,
+			expectedCode:  rpcerrors.RpcINVALID_PARAMS,
 		},
 		{
 			name: "Invalid tx_blob type - integer",
@@ -366,7 +368,7 @@ func TestSubmitMethodErrorValidation(t *testing.T) {
 				"tx_blob": 12345,
 			},
 			expectedError: "Invalid parameters",
-			expectedCode:  types.RpcINVALID_PARAMS,
+			expectedCode:  rpcerrors.RpcINVALID_PARAMS,
 		},
 		{
 			name: "Invalid tx_blob type - boolean",
@@ -374,7 +376,7 @@ func TestSubmitMethodErrorValidation(t *testing.T) {
 				"tx_blob": true,
 			},
 			expectedError: "Invalid parameters",
-			expectedCode:  types.RpcINVALID_PARAMS,
+			expectedCode:  rpcerrors.RpcINVALID_PARAMS,
 		},
 		{
 			name: "Invalid tx_blob type - array",
@@ -382,7 +384,7 @@ func TestSubmitMethodErrorValidation(t *testing.T) {
 				"tx_blob": []string{"hex1", "hex2"},
 			},
 			expectedError: "Invalid parameters",
-			expectedCode:  types.RpcINVALID_PARAMS,
+			expectedCode:  rpcerrors.RpcINVALID_PARAMS,
 		},
 		{
 			name: "tx_blob invalid hex",
@@ -390,7 +392,7 @@ func TestSubmitMethodErrorValidation(t *testing.T) {
 				"tx_blob": "ZZZZ",
 			},
 			expectedError: "Invalid parameters.",
-			expectedCode:  types.RpcINVALID_PARAMS,
+			expectedCode:  rpcerrors.RpcINVALID_PARAMS,
 		},
 	}
 
@@ -956,7 +958,7 @@ func TestSubmitMethodMalformedTransaction(t *testing.T) {
 			if tc.expectError {
 				assert.Nil(t, result, "Expected nil result for error case")
 				require.NotNil(t, rpcErr, "Expected RPC error")
-				assert.Equal(t, types.RpcNOT_SUPPORTED, rpcErr.Code)
+				assert.Equal(t, rpcerrors.RpcNOT_SUPPORTED, rpcErr.Code)
 				assert.Contains(t, rpcErr.Message, tc.errorMsg)
 			} else {
 				require.Nil(t, rpcErr, "Expected no error - validation in ledger service")
@@ -989,7 +991,7 @@ func TestSubmitMethodServiceUnavailable(t *testing.T) {
 
 	assert.Nil(t, result)
 	require.NotNil(t, rpcErr)
-	assert.Equal(t, types.RpcINTERNAL, rpcErr.Code)
+	assert.Equal(t, rpcerrors.RpcINTERNAL, rpcErr.Code)
 	assert.Equal(t, "Internal error.", rpcErr.Message)
 }
 
@@ -1016,7 +1018,7 @@ func TestSubmitMethodServiceNilLedger(t *testing.T) {
 
 	assert.Nil(t, result)
 	require.NotNil(t, rpcErr)
-	assert.Equal(t, types.RpcINTERNAL, rpcErr.Code)
+	assert.Equal(t, rpcerrors.RpcINTERNAL, rpcErr.Code)
 	assert.Equal(t, "Internal error.", rpcErr.Message)
 }
 
@@ -1068,7 +1070,7 @@ func TestSubmitMethodSubmitError(t *testing.T) {
 
 			assert.Nil(t, result)
 			require.NotNil(t, rpcErr)
-			assert.Equal(t, types.RpcINTERNAL, rpcErr.Code)
+			assert.Equal(t, rpcerrors.RpcINTERNAL, rpcErr.Code)
 			assert.Equal(t, "Exception occurred during transaction submission.", rpcErr.Message)
 			assert.NotContains(t, rpcErr.Message, tc.submitError.Error())
 		})
@@ -1103,7 +1105,7 @@ func TestSubmitMethodTxBlobSubmitErrorIsSanitized(t *testing.T) {
 
 	assert.Nil(t, result)
 	require.NotNil(t, rpcErr)
-	assert.Equal(t, types.RpcINTERNAL, rpcErr.Code)
+	assert.Equal(t, rpcerrors.RpcINTERNAL, rpcErr.Code)
 	assert.Equal(t, "internal", rpcErr.ErrorString)
 	assert.Equal(t, "internal", rpcErr.Type)
 	assert.Equal(t, "Exception occurred during transaction submission.", rpcErr.Message)
@@ -1368,7 +1370,7 @@ func TestSubmitMethodEmptyCredentialIsPresent(t *testing.T) {
 
 	_, rpcErr := (&handlers.SubmitMethod{}).Handle(ctx, params)
 	require.NotNil(t, rpcErr)
-	assert.Equal(t, types.RpcBAD_SEED, rpcErr.Code)
+	assert.Equal(t, rpcerrors.RpcBAD_SEED, rpcErr.Code)
 	assert.Equal(t, "Invalid field 'secret'.", rpcErr.Message)
 	assert.Equal(t,
 		"Signing support in the 'submit' command has been deprecated and will be removed in a future version of the server. Please migrate to a standalone signing tool.",
@@ -1395,13 +1397,13 @@ func TestSubmitMethodMissingTxJSONPreservesCredentialPrecedence(t *testing.T) {
 		{
 			name:    "valid credential",
 			secret:  "masterpassphrase",
-			code:    types.RpcINVALID_PARAMS,
+			code:    rpcerrors.RpcINVALID_PARAMS,
 			message: "Missing field 'tx_json'.",
 		},
 		{
 			name:    "invalid credential",
 			secret:  "",
-			code:    types.RpcBAD_SEED,
+			code:    rpcerrors.RpcBAD_SEED,
 			message: "Invalid field 'secret'.",
 		},
 	}

@@ -9,6 +9,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/LeJamon/go-xrpl/internal/rpc/rpcerrors"
+
 	"github.com/LeJamon/go-xrpl/internal/ledger/service/svcerr"
 	"github.com/LeJamon/go-xrpl/internal/rpc/handlers"
 	"github.com/LeJamon/go-xrpl/internal/rpc/types"
@@ -231,13 +233,13 @@ func TestTxMethodErrorValidation(t *testing.T) {
 			name:          "Missing transaction field - empty params",
 			params:        map[string]any{},
 			expectedError: "Invalid parameters.",
-			expectedCode:  types.RpcINVALID_PARAMS,
+			expectedCode:  rpcerrors.RpcINVALID_PARAMS,
 		},
 		{
 			name:          "Missing transaction field - nil params",
 			params:        nil,
 			expectedError: "Invalid parameters.",
-			expectedCode:  types.RpcINVALID_PARAMS,
+			expectedCode:  rpcerrors.RpcINVALID_PARAMS,
 		},
 		{
 			name: "Invalid hash format - too short",
@@ -245,7 +247,7 @@ func TestTxMethodErrorValidation(t *testing.T) {
 				"transaction": "ABC123",
 			},
 			expectedError: "Not implemented.",
-			expectedCode:  types.RpcNOT_IMPL,
+			expectedCode:  rpcerrors.RpcNOT_IMPL,
 		},
 		{
 			name: "Invalid hash format - too long (68 chars)",
@@ -253,7 +255,7 @@ func TestTxMethodErrorValidation(t *testing.T) {
 				"transaction": "A1B2C3D4E5F6A1B2C3D4E5F6A1B2C3D4E5F6A1B2C3D4E5F6A1B2C3D4E5F6A1B2C3D4",
 			},
 			expectedError: "Not implemented.",
-			expectedCode:  types.RpcNOT_IMPL,
+			expectedCode:  rpcerrors.RpcNOT_IMPL,
 		},
 		{
 			name: "Invalid hash format - 63 chars (1 short)",
@@ -261,7 +263,7 @@ func TestTxMethodErrorValidation(t *testing.T) {
 				"transaction": "E08D6E9754025BA2534A78707605E0601F03ACE063687A0CA1BDDACFCD1698C",
 			},
 			expectedError: "Not implemented.",
-			expectedCode:  types.RpcNOT_IMPL,
+			expectedCode:  rpcerrors.RpcNOT_IMPL,
 		},
 		{
 			name: "Invalid hash format - 65 chars (1 extra)",
@@ -269,7 +271,7 @@ func TestTxMethodErrorValidation(t *testing.T) {
 				"transaction": "E08D6E9754025BA2534A78707605E0601F03ACE063687A0CA1BDDACFCD1698C70",
 			},
 			expectedError: "Not implemented.",
-			expectedCode:  types.RpcNOT_IMPL,
+			expectedCode:  rpcerrors.RpcNOT_IMPL,
 		},
 		{
 			name: "Invalid hash format - not hex (contains G)",
@@ -277,7 +279,7 @@ func TestTxMethodErrorValidation(t *testing.T) {
 				"transaction": "G08D6E9754025BA2534A78707605E0601F03ACE063687A0CA1BDDACFCD1698C7",
 			},
 			expectedError: "Not implemented.",
-			expectedCode:  types.RpcNOT_IMPL,
+			expectedCode:  rpcerrors.RpcNOT_IMPL,
 		},
 		{
 			name: "Invalid hash format - not hex (contains Z)",
@@ -285,7 +287,7 @@ func TestTxMethodErrorValidation(t *testing.T) {
 				"transaction": "ZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZ",
 			},
 			expectedError: "Not implemented.",
-			expectedCode:  types.RpcNOT_IMPL,
+			expectedCode:  rpcerrors.RpcNOT_IMPL,
 		},
 		{
 			name: "Invalid hash format - special characters",
@@ -293,7 +295,7 @@ func TestTxMethodErrorValidation(t *testing.T) {
 				"transaction": "A1B2C3D4E5F6A1B2C3D4E5F6A1B2C3D4E5F6A1B2C3D4E5F6A1B2C3D4E5F6!@#$",
 			},
 			expectedError: "Not implemented.",
-			expectedCode:  types.RpcNOT_IMPL,
+			expectedCode:  rpcerrors.RpcNOT_IMPL,
 		},
 		{
 			name: "Invalid hash format - contains spaces",
@@ -301,7 +303,7 @@ func TestTxMethodErrorValidation(t *testing.T) {
 				"transaction": "E08D6E9754025BA2534A78707605E0601F03ACE063687A0CA1BDDACFCD169 C7",
 			},
 			expectedError: "Not implemented.",
-			expectedCode:  types.RpcNOT_IMPL,
+			expectedCode:  rpcerrors.RpcNOT_IMPL,
 		},
 		{
 			name: "Invalid hash format - empty string",
@@ -309,7 +311,7 @@ func TestTxMethodErrorValidation(t *testing.T) {
 				"transaction": "",
 			},
 			expectedError: "Not implemented.",
-			expectedCode:  types.RpcNOT_IMPL,
+			expectedCode:  rpcerrors.RpcNOT_IMPL,
 		},
 		{
 			name: "Transaction not found - valid hash format (txnNotFound)",
@@ -317,7 +319,7 @@ func TestTxMethodErrorValidation(t *testing.T) {
 				"transaction": "E08D6E9754025BA2534A78707605E0601F03ACE063687A0CA1BDDACFCD1698C7",
 			},
 			expectedError: "Transaction not found",
-			expectedCode:  types.RpcTXN_NOT_FOUND,
+			expectedCode:  rpcerrors.RpcTXN_NOT_FOUND,
 			setupMock: func() {
 				mock.txLookupError = svcerr.ErrTxnNotFound
 			},
@@ -329,7 +331,7 @@ func TestTxMethodErrorValidation(t *testing.T) {
 				"ctid":        "C000002D00000000",
 			},
 			expectedError: "Invalid parameters.",
-			expectedCode:  types.RpcINVALID_PARAMS,
+			expectedCode:  rpcerrors.RpcINVALID_PARAMS,
 		},
 		{
 			name: "Ambiguous - empty transaction and null ctid are still present",
@@ -338,7 +340,7 @@ func TestTxMethodErrorValidation(t *testing.T) {
 				"ctid":        nil,
 			},
 			expectedError: "Invalid parameters.",
-			expectedCode:  types.RpcINVALID_PARAMS,
+			expectedCode:  rpcerrors.RpcINVALID_PARAMS,
 		},
 		{
 			name: "Invalid transaction type - integer",
@@ -346,7 +348,7 @@ func TestTxMethodErrorValidation(t *testing.T) {
 				"transaction": 12345,
 			},
 			expectedError: "Not implemented.",
-			expectedCode:  types.RpcNOT_IMPL,
+			expectedCode:  rpcerrors.RpcNOT_IMPL,
 		},
 		{
 			name: "Invalid transaction type - boolean",
@@ -354,7 +356,7 @@ func TestTxMethodErrorValidation(t *testing.T) {
 				"transaction": true,
 			},
 			expectedError: "Not implemented.",
-			expectedCode:  types.RpcNOT_IMPL,
+			expectedCode:  rpcerrors.RpcNOT_IMPL,
 		},
 		{
 			name: "Invalid transaction type - array",
@@ -362,7 +364,7 @@ func TestTxMethodErrorValidation(t *testing.T) {
 				"transaction": []string{"hash1", "hash2"},
 			},
 			expectedError: "Invalid parameters.",
-			expectedCode:  types.RpcINVALID_PARAMS,
+			expectedCode:  rpcerrors.RpcINVALID_PARAMS,
 		},
 		{
 			name: "Invalid transaction type - object",
@@ -370,7 +372,7 @@ func TestTxMethodErrorValidation(t *testing.T) {
 				"transaction": map[string]any{"hash": "value"},
 			},
 			expectedError: "Invalid parameters",
-			expectedCode:  types.RpcINVALID_PARAMS,
+			expectedCode:  rpcerrors.RpcINVALID_PARAMS,
 		},
 		{
 			name: "Invalid transaction type - float",
@@ -378,7 +380,7 @@ func TestTxMethodErrorValidation(t *testing.T) {
 				"transaction": 123.456,
 			},
 			expectedError: "Not implemented.",
-			expectedCode:  types.RpcNOT_IMPL,
+			expectedCode:  rpcerrors.RpcNOT_IMPL,
 		},
 		{
 			name: "Invalid transaction type - null",
@@ -386,7 +388,7 @@ func TestTxMethodErrorValidation(t *testing.T) {
 				"transaction": nil,
 			},
 			expectedError: "Not implemented.",
-			expectedCode:  types.RpcNOT_IMPL,
+			expectedCode:  rpcerrors.RpcNOT_IMPL,
 		},
 	}
 
@@ -1311,14 +1313,14 @@ func TestTxMethodInvalidLedgerRange(t *testing.T) {
 		params, _ := json.Marshal(map[string]any{"transaction": validHash, "min_ledger": 100, "max_ledger": 50})
 		_, rpcErr := method.Handle(ctx, params)
 		require.NotNil(t, rpcErr)
-		assert.Equal(t, types.RpcINVALID_LGR_RANGE, rpcErr.Code)
+		assert.Equal(t, rpcerrors.RpcINVALID_LGR_RANGE, rpcErr.Code)
 	})
 
 	t.Run("span exceeds 1000", func(t *testing.T) {
 		params, _ := json.Marshal(map[string]any{"transaction": validHash, "min_ledger": 1, "max_ledger": 1002})
 		_, rpcErr := method.Handle(ctx, params)
 		require.NotNil(t, rpcErr)
-		assert.Equal(t, types.RpcEXCESSIVE_LGR_RANGE, rpcErr.Code)
+		assert.Equal(t, rpcerrors.RpcEXCESSIVE_LGR_RANGE, rpcErr.Code)
 	})
 
 	t.Run("present min_ledger 0 still forms a range", func(t *testing.T) {
@@ -1327,7 +1329,7 @@ func TestTxMethodInvalidLedgerRange(t *testing.T) {
 		params, _ := json.Marshal(map[string]any{"transaction": validHash, "min_ledger": 0, "max_ledger": 2000})
 		_, rpcErr := method.Handle(ctx, params)
 		require.NotNil(t, rpcErr)
-		assert.Equal(t, types.RpcEXCESSIVE_LGR_RANGE, rpcErr.Code)
+		assert.Equal(t, rpcerrors.RpcEXCESSIVE_LGR_RANGE, rpcErr.Code)
 	})
 
 	t.Run("single bound is ignored, not an error", func(t *testing.T) {
@@ -1576,7 +1578,7 @@ func TestTxMethodServiceUnavailable(t *testing.T) {
 
 	assert.Nil(t, result)
 	require.NotNil(t, rpcErr)
-	assert.Equal(t, types.RpcINTERNAL, rpcErr.Code)
+	assert.Equal(t, rpcerrors.RpcINTERNAL, rpcErr.Code)
 	assert.Equal(t, "Internal error.", rpcErr.Message)
 }
 
@@ -1600,7 +1602,7 @@ func TestTxMethodServiceNilLedger(t *testing.T) {
 
 	assert.Nil(t, result)
 	require.NotNil(t, rpcErr)
-	assert.Equal(t, types.RpcINTERNAL, rpcErr.Code)
+	assert.Equal(t, rpcerrors.RpcINTERNAL, rpcErr.Code)
 	assert.Equal(t, "Internal error.", rpcErr.Message)
 }
 
@@ -2081,7 +2083,7 @@ func TestTxMethodCTIDLookupSkipsMalformedLeaf(t *testing.T) {
 			result, rpcErr := (&handlers.TxMethod{}).Handle(ctx, params)
 			assert.Nil(t, result)
 			require.NotNil(t, rpcErr)
-			assert.Equal(t, types.RpcTXN_NOT_FOUND, rpcErr.Code)
+			assert.Equal(t, rpcerrors.RpcTXN_NOT_FOUND, rpcErr.Code)
 		})
 	}
 }
@@ -2315,7 +2317,7 @@ func TestTxMethodCTIDCorruptedStoredData(t *testing.T) {
 					}
 					assert.Nil(t, result)
 					require.NotNil(t, rpcErr)
-					assert.Equal(t, types.RpcTXN_NOT_FOUND, rpcErr.Code)
+					assert.Equal(t, rpcerrors.RpcTXN_NOT_FOUND, rpcErr.Code)
 				})
 			}
 		})
@@ -2348,7 +2350,7 @@ func TestTxMethodCTIDStoredDataWithoutMetadata(t *testing.T) {
 			result, rpcErr := method.Handle(ctx, params)
 			assert.Nil(t, result)
 			require.NotNil(t, rpcErr)
-			assert.Equal(t, types.RpcTXN_NOT_FOUND, rpcErr.Code)
+			assert.Equal(t, rpcerrors.RpcTXN_NOT_FOUND, rpcErr.Code)
 		})
 	}
 }
@@ -2378,7 +2380,7 @@ func TestTxMethodInternalErrors(t *testing.T) {
 
 		assert.Nil(t, result)
 		require.NotNil(t, rpcErr)
-		assert.Equal(t, types.RpcINTERNAL, rpcErr.Code)
+		assert.Equal(t, rpcerrors.RpcINTERNAL, rpcErr.Code)
 		assert.Equal(t, "Internal error.", rpcErr.Message)
 	})
 }

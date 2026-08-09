@@ -5,6 +5,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/LeJamon/go-xrpl/internal/rpc/rpcerrors"
+
 	"github.com/LeJamon/go-xrpl/internal/rpc/types"
 )
 
@@ -60,8 +62,8 @@ func TestRequireNotBusyClient_Strictness(t *testing.T) {
 	if rpcErr == nil {
 		t.Fatal("count==500 should shed")
 	}
-	if rpcErr.Code != types.RpcTOO_BUSY || rpcErr.ErrorString != "tooBusy" {
-		t.Errorf("got code=%d errorString=%q, want %d/%q", rpcErr.Code, rpcErr.ErrorString, types.RpcTOO_BUSY, "tooBusy")
+	if rpcErr.Code != rpcerrors.RpcTOO_BUSY || rpcErr.ErrorString != "tooBusy" {
+		t.Errorf("got code=%d errorString=%q, want %d/%q", rpcErr.Code, rpcErr.ErrorString, rpcerrors.RpcTOO_BUSY, "tooBusy")
 	}
 	if rpcErr.Message != "The server is too busy to help you now." {
 		t.Errorf("error_message = %q, want rippled-canonical", rpcErr.Message)

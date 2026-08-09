@@ -7,6 +7,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/LeJamon/go-xrpl/internal/rpc/rpcerrors"
+
 	addresscodec "github.com/LeJamon/go-xrpl/codec/addresscodec"
 	"github.com/LeJamon/go-xrpl/internal/feetrack"
 	"github.com/LeJamon/go-xrpl/internal/rpc/types"
@@ -79,9 +81,9 @@ func signingLoadParams(offline bool) json.RawMessage {
 	return json.RawMessage(`{"seed_hex":"` + loadAdmissionSeedHex + `","key_type":"ed25519"` + offlineField + `,"tx_json":{"TransactionType":"AccountSet","Account":"` + loadAdmissionSigningAccount + `","Sequence":1,"Fee":"10"}}`)
 }
 
-func assertTooBusy(t *testing.T, rpcErr *types.RpcError) {
+func assertTooBusy(t *testing.T, rpcErr *rpcerrors.RpcError) {
 	t.Helper()
-	if rpcErr == nil || rpcErr.Code != types.RpcTOO_BUSY || rpcErr.ErrorString != "tooBusy" {
+	if rpcErr == nil || rpcErr.Code != rpcerrors.RpcTOO_BUSY || rpcErr.ErrorString != "tooBusy" {
 		t.Fatalf("error = %#v, want rpcTOO_BUSY", rpcErr)
 	}
 }
@@ -174,7 +176,7 @@ func TestOnlineSigningRejectsStaleLedgerBeforeLoad(t *testing.T) {
 	methods := []struct {
 		name   string
 		params json.RawMessage
-		handle func(*types.RpcContext, json.RawMessage) (any, *types.RpcError)
+		handle func(*types.RpcContext, json.RawMessage) (any, *rpcerrors.RpcError)
 	}{
 		{
 			name:   "sign",
@@ -216,10 +218,10 @@ func TestOnlineSigningRejectsStaleLedgerBeforeLoad(t *testing.T) {
 				if rpcErr == nil {
 					t.Fatal("expected stale-ledger error")
 				}
-				wantCode := types.RpcNOT_SYNCED
+				wantCode := rpcerrors.RpcNOT_SYNCED
 				wantToken := "notSynced"
 				if api.version == types.ApiVersion1 {
-					wantCode = types.RpcNO_CURRENT
+					wantCode = rpcerrors.RpcNO_CURRENT
 					wantToken = "noCurrent"
 				}
 				if rpcErr.Code != wantCode || rpcErr.ErrorString != wantToken {

@@ -6,6 +6,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/LeJamon/go-xrpl/internal/rpc/rpcerrors"
+
 	"github.com/LeJamon/go-xrpl/internal/rpc/types"
 	"github.com/LeJamon/go-xrpl/keylet"
 	"github.com/LeJamon/go-xrpl/protocol"
@@ -20,7 +22,7 @@ func pathFindTestContext(pathSearchMax int) *types.RpcContext {
 func TestPathFindCapabilityPrecedesValidation(t *testing.T) {
 	for _, test := range []struct {
 		name   string
-		handle func(*types.RpcContext, json.RawMessage) (any, *types.RpcError)
+		handle func(*types.RpcContext, json.RawMessage) (any, *rpcerrors.RpcError)
 	}{
 		{name: "path_find", handle: (&pathFindMethod{}).Handle},
 		{name: "ripple_path_find", handle: (&ripplePathFindMethod{}).Handle},

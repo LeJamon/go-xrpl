@@ -8,6 +8,8 @@ import (
 	"regexp"
 	"testing"
 
+	"github.com/LeJamon/go-xrpl/internal/rpc/rpcerrors"
+
 	"github.com/LeJamon/go-xrpl/internal/rpc/handlers"
 	"github.com/LeJamon/go-xrpl/internal/rpc/subscription"
 	"github.com/LeJamon/go-xrpl/internal/rpc/types"
@@ -99,7 +101,7 @@ func TestServerSubscriptionStateIsSampledBeforeRegistration(t *testing.T) {
 				target := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}))
 				t.Cleanup(target.Close)
 				t.Cleanup(ws.urlSubs.Close)
-				var rpcErr *types.RpcError
+				var rpcErr *rpcerrors.RpcError
 				ack, rpcErr = ws.urlSubs.Subscribe(ctx, types.SubscriptionRequest{
 					URL: target.URL, Streams: []types.SubscriptionType{types.SubServer},
 				})

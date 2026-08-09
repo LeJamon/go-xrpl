@@ -1,11 +1,11 @@
 package unsafe_defined_type
 
-import "github.com/LeJamon/go-xrpl/internal/rpc/types"
+import "github.com/LeJamon/go-xrpl/internal/rpc/rpcerrors"
 
-type shadow types.RpcError
+type shadow rpcerrors.RpcError
 
-func InternalError(private string) *types.RpcError {
-	value := shadow{Code: types.RpcINTERNAL, Message: private}
-	rpcErr := types.RpcError(value)
+func InternalError(private string) *rpcerrors.RpcError {
+	value := shadow{Code: rpcerrors.RpcINTERNAL, Message: private}
+	rpcErr := rpcerrors.RpcError(value)
 	return &rpcErr
 }

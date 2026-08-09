@@ -9,6 +9,8 @@ import (
 	"encoding/json"
 	"testing"
 
+	"github.com/LeJamon/go-xrpl/internal/rpc/rpcerrors"
+
 	"github.com/LeJamon/go-xrpl/internal/rpc/handlers"
 	"github.com/LeJamon/go-xrpl/internal/rpc/types"
 	jtx "github.com/LeJamon/go-xrpl/internal/testing"
@@ -95,17 +97,17 @@ func (e *Env) Services() *types.ServiceContainer { return e.services }
 // authenticates via admin_user/admin_password (see rippled
 // RPCCall.cpp:1530). Use RPCAs to downgrade. params may be a struct, a
 // map, or a json.RawMessage — anything else is marshaled to JSON.
-func (e *Env) RPC(method string, params any) (any, *types.RpcError) {
+func (e *Env) RPC(method string, params any) (any, *rpcerrors.RpcError) {
 	return e.RPCAs(method, params, types.RoleAdmin, types.DefaultApiVersion)
 }
 
 // RPCAs is RPC with explicit role/version control.
-func (e *Env) RPCAs(method string, params any, role types.Role, apiVersion int) (any, *types.RpcError) {
+func (e *Env) RPCAs(method string, params any, role types.Role, apiVersion int) (any, *rpcerrors.RpcError) {
 	e.t.Helper()
 
 	handler, ok := e.registry.Get(method)
 	if !ok {
-		return nil, types.RpcErrorMethodNotFound()
+		return nil, rpcerrors.RpcErrorMethodNotFound()
 	}
 
 	var raw json.RawMessage
@@ -119,7 +121,7 @@ func (e *Env) RPCAs(method string, params any, role types.Role, apiVersion int) 
 	default:
 		b, err := json.Marshal(params)
 		if err != nil {
-			return nil, types.RpcErrorInvalidParams("rpcenv: marshal params: " + err.Error())
+			return nil, rpcerrors.RpcErrorInvalidParams("rpcenv: marshal params: " + err.Error())
 		}
 		raw = b
 	}

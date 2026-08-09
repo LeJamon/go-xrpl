@@ -1,11 +1,11 @@
 package unsafe_mutation
 
-import rpctypes "github.com/LeJamon/go-xrpl/internal/rpc/types"
+import "github.com/LeJamon/go-xrpl/internal/rpc/rpcerrors"
 
-type rpcErrorAlias = rpctypes.RpcError
+type rpcErrorAlias = rpcerrors.RpcError
 
 func Mutate(message string) *rpcErrorAlias {
-	rpcErr := rpctypes.RpcErrorInvalidParams(message)
+	rpcErr := rpcerrors.RpcErrorInvalidParams(message)
 	rpcErr.Code = 72 + 1
 	rpcErr.Message = message
 	return rpcErr

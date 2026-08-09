@@ -10,6 +10,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/LeJamon/go-xrpl/internal/rpc/rpcerrors"
+
 	"github.com/LeJamon/go-xrpl/amendment"
 	addresscodec "github.com/LeJamon/go-xrpl/codec/addresscodec"
 	binarycodectypes "github.com/LeJamon/go-xrpl/codec/binarycodec/types"
@@ -105,7 +107,7 @@ func TestPreprocessTransactionCanonicalizesAndValidatesSigners(t *testing.T) {
 			"Signers":         signers,
 		}
 	}
-	preprocess := func(signers any) (*types.RpcError, string) {
+	preprocess := func(signers any) (*rpcerrors.RpcError, string) {
 		transaction, rpcErr := preprocessTransaction(base(signers), transactionPreprocessOptions{
 			mode:            transactionPreprocessSubmitMultisigned,
 			preserveSigners: true,

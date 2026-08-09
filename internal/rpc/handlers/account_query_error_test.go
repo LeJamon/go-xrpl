@@ -6,7 +6,7 @@ import (
 	"testing"
 
 	"github.com/LeJamon/go-xrpl/internal/ledger/service/svcerr"
-	"github.com/LeJamon/go-xrpl/internal/rpc/types"
+	"github.com/LeJamon/go-xrpl/internal/rpc/rpcerrors"
 )
 
 func TestMapAccountQueryErr(t *testing.T) {
@@ -16,13 +16,13 @@ func TestMapAccountQueryErr(t *testing.T) {
 		want    int
 		message string
 	}{
-		{"ledger not found", svcerr.ErrLedgerNotFound, types.RpcLGR_NOT_FOUND, "ledgerNotFound"},
-		{"invalid ledger index", svcerr.ErrInvalidLedgerIndex, types.RpcINVALID_PARAMS, "ledgerIndexMalformed"},
-		{"invalid ledger hash", svcerr.ErrInvalidLedgerHash, types.RpcINVALID_PARAMS, "ledgerHashMalformed"},
-		{"account not found", svcerr.ErrAccountNotFound, types.RpcACT_NOT_FOUND, "Account not found."},
-		{"wrapped account not found", errors.Join(errors.New("query failed"), svcerr.ErrAccountNotFound), types.RpcACT_NOT_FOUND, "Account not found."},
-		{"invalid marker", svcerr.ErrInvalidMarker, types.RpcINVALID_PARAMS, "Invalid field 'marker'."},
-		{"internal", errors.New("storage failure"), types.RpcINTERNAL, "Internal error."},
+		{"ledger not found", svcerr.ErrLedgerNotFound, rpcerrors.RpcLGR_NOT_FOUND, "ledgerNotFound"},
+		{"invalid ledger index", svcerr.ErrInvalidLedgerIndex, rpcerrors.RpcINVALID_PARAMS, "ledgerIndexMalformed"},
+		{"invalid ledger hash", svcerr.ErrInvalidLedgerHash, rpcerrors.RpcINVALID_PARAMS, "ledgerHashMalformed"},
+		{"account not found", svcerr.ErrAccountNotFound, rpcerrors.RpcACT_NOT_FOUND, "Account not found."},
+		{"wrapped account not found", errors.Join(errors.New("query failed"), svcerr.ErrAccountNotFound), rpcerrors.RpcACT_NOT_FOUND, "Account not found."},
+		{"invalid marker", svcerr.ErrInvalidMarker, rpcerrors.RpcINVALID_PARAMS, "Invalid field 'marker'."},
+		{"internal", errors.New("storage failure"), rpcerrors.RpcINTERNAL, "Internal error."},
 	}
 
 	for _, test := range tests {

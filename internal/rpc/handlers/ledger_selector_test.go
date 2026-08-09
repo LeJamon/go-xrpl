@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	ledgerselector "github.com/LeJamon/go-xrpl/internal/ledger/selector"
+	"github.com/LeJamon/go-xrpl/internal/rpc/rpcerrors"
 	"github.com/LeJamon/go-xrpl/internal/rpc/types"
 )
 
@@ -63,7 +64,7 @@ func TestResolveLedgerSelector(t *testing.T) {
 		if rpcErr == nil {
 			t.Fatalf("want rpcINVALID_PARAMS, got nil")
 		}
-		if rpcErr.Code != types.RpcErrorInvalidParams("").Code {
+		if rpcErr.Code != rpcerrors.RpcErrorInvalidParams("").Code {
 			t.Errorf("error code = %d, want invalid_params", rpcErr.Code)
 		}
 		if rpcErr.Message != "Invalid field 'ledger_hash', not hex string." {

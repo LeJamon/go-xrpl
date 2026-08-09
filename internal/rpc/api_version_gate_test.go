@@ -8,6 +8,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/LeJamon/go-xrpl/internal/rpc/rpcerrors"
+
 	"github.com/LeJamon/go-xrpl/internal/rpc/types"
 	"github.com/gorilla/websocket"
 )
@@ -24,7 +26,7 @@ func versionEchoServer(t *testing.T, beta bool) *Server {
 		registry: mustTestMethodRegistry(t, map[string]types.MethodHandler{
 			"ping": &stubHandler{
 				apiVers: []int{types.ApiVersion1, types.ApiVersion2, types.ApiVersion3},
-				handle: func(ctx *types.RpcContext, _ json.RawMessage) (any, *types.RpcError) {
+				handle: func(ctx *types.RpcContext, _ json.RawMessage) (any, *rpcerrors.RpcError) {
 					return map[string]any{"api_version": ctx.ApiVersion}, nil
 				},
 			},
@@ -163,8 +165,8 @@ func TestApiVersion_BatchV3RejectedWithoutBeta(t *testing.T) {
 	if !ok {
 		t.Fatalf("batch element 0 error.error is not a JSON-RPC object: %v", outer)
 	}
-	if errObj["code"] != float64(types.WrongVersionJSONRPCCode) {
-		t.Fatalf("batch element 0 error.error.code = %v, want %d", errObj["code"], types.WrongVersionJSONRPCCode)
+	if errObj["code"] != float64(rpcerrors.WrongVersionJSONRPCCode) {
+		t.Fatalf("batch element 0 error.error.code = %v, want %d", errObj["code"], rpcerrors.WrongVersionJSONRPCCode)
 	}
 	if errObj["message"] != "invalid_API_version" {
 		t.Fatalf("batch element 0 error.error.message = %v, want invalid_API_version", errObj["message"])
@@ -188,7 +190,7 @@ func versionEchoWSServer(t *testing.T, beta bool) *WebSocketServer {
 		Registry: mustTestMethodRegistry(t, map[string]types.MethodHandler{
 			"ping": &stubHandler{
 				apiVers: []int{types.ApiVersion1, types.ApiVersion2, types.ApiVersion3},
-				handle: func(ctx *types.RpcContext, _ json.RawMessage) (any, *types.RpcError) {
+				handle: func(ctx *types.RpcContext, _ json.RawMessage) (any, *rpcerrors.RpcError) {
 					return map[string]any{"api_version": ctx.ApiVersion}, nil
 				},
 			},

@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/LeJamon/go-xrpl/internal/rpc/rpcerrors"
 	"github.com/LeJamon/go-xrpl/internal/rpc/types"
 )
 
@@ -22,7 +23,7 @@ func postTransportRequest(t *testing.T, server *Server, body string) *httptest.R
 
 func TestHTTPRipplerpcVersionedInternalError(t *testing.T) {
 	server := newHardeningServer(t, time.Second, "fail", &stubHandler{
-		handle: func(*types.RpcContext, json.RawMessage) (any, *types.RpcError) {
+		handle: func(*types.RpcContext, json.RawMessage) (any, *rpcerrors.RpcError) {
 			return nil, rpcInternalError()
 		},
 	})
@@ -78,24 +79,24 @@ func TestHTTPRipplerpcV3StatusMapping(t *testing.T) {
 	tests := []struct {
 		name    string
 		version string
-		rpcErr  *types.RpcError
+		rpcErr  *rpcerrors.RpcError
 		status  int
 	}{
-		{name: "v2 too busy remains 200", version: "2.0", rpcErr: types.RpcErrorTooBusy(), status: http.StatusOK},
-		{name: "v3 too busy", version: "3.0", rpcErr: types.RpcErrorTooBusy(), status: http.StatusServiceUnavailable},
-		{name: "v3 database deserialization", version: "3.0", rpcErr: types.RpcErrorDBDeserialization(), status: http.StatusBadGateway},
-		{name: "v3 invalid params", version: "3.0", rpcErr: types.RpcErrorInvalidParams("Invalid parameters."), status: http.StatusBadRequest},
-		{name: "v3 bad issuer", version: "3.0", rpcErr: types.NewRpcError(types.RpcBAD_ISSUER, "badIssuer", "badIssuer", "Issuer account malformed."), status: http.StatusBadRequest},
-		{name: "v3 entry not found", version: "3.0", rpcErr: types.RpcErrorEntryNotFound(""), status: http.StatusBadRequest},
-		{name: "v3 unexpected ledger type", version: "3.0", rpcErr: types.RpcErrorUnexpectedLedgerType(), status: http.StatusBadRequest},
-		{name: "v2 entry not found remains 200", version: "2.0", rpcErr: types.RpcErrorEntryNotFound(""), status: http.StatusOK},
-		{name: "v2 unexpected ledger type remains 200", version: "2.0", rpcErr: types.RpcErrorUnexpectedLedgerType(), status: http.StatusOK},
+		{name: "v2 too busy remains 200", version: "2.0", rpcErr: rpcerrors.RpcErrorTooBusy(), status: http.StatusOK},
+		{name: "v3 too busy", version: "3.0", rpcErr: rpcerrors.RpcErrorTooBusy(), status: http.StatusServiceUnavailable},
+		{name: "v3 database deserialization", version: "3.0", rpcErr: rpcerrors.RpcErrorDBDeserialization(), status: http.StatusBadGateway},
+		{name: "v3 invalid params", version: "3.0", rpcErr: rpcerrors.RpcErrorInvalidParams("Invalid parameters."), status: http.StatusBadRequest},
+		{name: "v3 bad issuer", version: "3.0", rpcErr: rpcerrors.NewRpcError(rpcerrors.RpcBAD_ISSUER, "badIssuer", "badIssuer", "Issuer account malformed."), status: http.StatusBadRequest},
+		{name: "v3 entry not found", version: "3.0", rpcErr: rpcerrors.RpcErrorEntryNotFound(""), status: http.StatusBadRequest},
+		{name: "v3 unexpected ledger type", version: "3.0", rpcErr: rpcerrors.RpcErrorUnexpectedLedgerType(), status: http.StatusBadRequest},
+		{name: "v2 entry not found remains 200", version: "2.0", rpcErr: rpcerrors.RpcErrorEntryNotFound(""), status: http.StatusOK},
+		{name: "v2 unexpected ledger type remains 200", version: "2.0", rpcErr: rpcerrors.RpcErrorUnexpectedLedgerType(), status: http.StatusOK},
 	}
 
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			server := newHardeningServer(t, time.Second, "fail", &stubHandler{
-				handle: func(*types.RpcContext, json.RawMessage) (any, *types.RpcError) {
+				handle: func(*types.RpcContext, json.RawMessage) (any, *rpcerrors.RpcError) {
 					return nil, test.rpcErr
 				},
 			})
@@ -119,13 +120,13 @@ func TestHTTPErrorProjectorPreservesExtrasAndCanonicalFields(t *testing.T) {
 		"type":            "spoofed",
 		"index":           7,
 	}
-	rpcErr := types.RpcErrorInvalidParams("").WithExtra(fields)
+	rpcErr := rpcerrors.RpcErrorInvalidParams("").WithExtra(fields)
 	fields["index"] = 8
 
 	for _, version := range []string{"1.0", "2.0", "3.0"} {
 		t.Run(version, func(t *testing.T) {
 			server := newHardeningServer(t, time.Second, "fail", &stubHandler{
-				handle: func(*types.RpcContext, json.RawMessage) (any, *types.RpcError) {
+				handle: func(*types.RpcContext, json.RawMessage) (any, *rpcerrors.RpcError) {
 					return nil, rpcErr
 				},
 			})
@@ -169,11 +170,11 @@ func TestHTTPErrorProjectorPreservesExtrasAndCanonicalFields(t *testing.T) {
 				}
 			}
 			if version == "1.0" {
-				if projected["error_code"] != float64(types.RpcINVALID_PARAMS) || projected["error_message"] != "Invalid parameters." {
+				if projected["error_code"] != float64(rpcerrors.RpcINVALID_PARAMS) || projected["error_message"] != "Invalid parameters." {
 					t.Fatalf("v1 canonical fields = %#v", projected)
 				}
 			} else {
-				if projected["code"] != float64(types.RpcINVALID_PARAMS) || projected["message"] != "Invalid parameters." {
+				if projected["code"] != float64(rpcerrors.RpcINVALID_PARAMS) || projected["message"] != "Invalid parameters." {
 					t.Fatalf("v2+ canonical fields = %#v", projected)
 				}
 				if _, ok := projected["error_message"]; ok {
@@ -226,7 +227,7 @@ func TestHTTPResponseFraming(t *testing.T) {
 func TestHTTPParamsShape(t *testing.T) {
 	var observed string
 	server := newHardeningServer(t, time.Second, "capture", &stubHandler{
-		handle: func(_ *types.RpcContext, params json.RawMessage) (any, *types.RpcError) {
+		handle: func(_ *types.RpcContext, params json.RawMessage) (any, *rpcerrors.RpcError) {
 			observed = string(params)
 			return map[string]any{"ok": true}, nil
 		},
@@ -282,8 +283,8 @@ func TestHTTPRipplerpcValidation(t *testing.T) {
 
 func TestHTTPErrorExceptionEnvelope(t *testing.T) {
 	server := newHardeningServer(t, time.Second, "simulate", &stubHandler{
-		handle: func(*types.RpcContext, json.RawMessage) (any, *types.RpcError) {
-			return nil, types.RpcErrorInvalidTransaction("invalid transaction detail")
+		handle: func(*types.RpcContext, json.RawMessage) (any, *rpcerrors.RpcError) {
+			return nil, rpcerrors.RpcErrorInvalidTransaction("invalid transaction detail")
 		},
 	})
 	recorder := postTransportRequest(t, server, `{"method":"simulate","params":[{"id":9,"secret":"private seed"}]}`)
@@ -299,17 +300,17 @@ func TestHTTPErrorExceptionEnvelope(t *testing.T) {
 func TestHTTPRipplerpcV2SparseErrorFields(t *testing.T) {
 	tests := []struct {
 		name   string
-		rpcErr *types.RpcError
+		rpcErr *rpcerrors.RpcError
 		want   string
 	}{
 		{
 			name:   "exception",
-			rpcErr: types.RpcErrorInvalidTransaction("invalid transaction detail"),
+			rpcErr: rpcerrors.RpcErrorInvalidTransaction("invalid transaction detail"),
 			want:   "{\"error\":{\"code\":null,\"error\":\"invalidTransaction\",\"error_code\":null,\"error_exception\":\"invalid transaction detail\",\"message\":null,\"status\":\"error\"},\"id\":9,\"ripplerpc\":\"2.0\"}\n\r\n",
 		},
 		{
 			name:   "bare token",
-			rpcErr: types.RpcErrorEntryNotFoundBare("Entry not found."),
+			rpcErr: rpcerrors.RpcErrorEntryNotFoundBare("Entry not found."),
 			want:   "{\"error\":{\"code\":null,\"error\":\"entryNotFound\",\"error_code\":null,\"message\":null,\"status\":\"error\"},\"id\":9,\"ripplerpc\":\"2.0\"}\n\r\n",
 		},
 	}
@@ -317,7 +318,7 @@ func TestHTTPRipplerpcV2SparseErrorFields(t *testing.T) {
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			server := newHardeningServer(t, time.Second, "fail", &stubHandler{
-				handle: func(*types.RpcContext, json.RawMessage) (any, *types.RpcError) {
+				handle: func(*types.RpcContext, json.RawMessage) (any, *rpcerrors.RpcError) {
 					return nil, test.rpcErr
 				},
 			})

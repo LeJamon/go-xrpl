@@ -7,6 +7,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/LeJamon/go-xrpl/internal/rpc/rpcerrors"
+
 	"github.com/LeJamon/go-xrpl/internal/rpc/types"
 )
 
@@ -68,10 +70,10 @@ func TestRPCDiagnosticsConcurrentAccounting(t *testing.T) {
 
 type diagnosticTestHandler struct {
 	panicValue any
-	rpcErr     *types.RpcError
+	rpcErr     *rpcerrors.RpcError
 }
 
-func (h diagnosticTestHandler) Handle(*types.RpcContext, json.RawMessage) (any, *types.RpcError) {
+func (h diagnosticTestHandler) Handle(*types.RpcContext, json.RawMessage) (any, *rpcerrors.RpcError) {
 	if h.panicValue != nil {
 		panic(h.panicValue)
 	}
@@ -95,7 +97,7 @@ func TestDispatchDiagnosticsTreatsRPCResultsAsFinished(t *testing.T) {
 		Services:   graph,
 	}
 
-	resolution := methodResolution{handler: diagnosticTestHandler{rpcErr: types.RpcErrorInvalidParams("bad request")}, resolved: true}
+	resolution := methodResolution{handler: diagnosticTestHandler{rpcErr: rpcerrors.RpcErrorInvalidParams("bad request")}, resolved: true}
 	_, _ = dispatchResolvedMethod(nil, graph, ctx, "normal_error", nil, resolution, rpcLog())
 	stats := diagnostics.Snapshot().Methods["normal_error"]
 	if stats.Finished != 1 || stats.Errored != 0 {

@@ -6,6 +6,8 @@ import (
 	"errors"
 	"testing"
 
+	"github.com/LeJamon/go-xrpl/internal/rpc/rpcerrors"
+
 	addresscodec "github.com/LeJamon/go-xrpl/codec/addresscodec"
 	"github.com/LeJamon/go-xrpl/internal/rpc/handlers"
 	"github.com/LeJamon/go-xrpl/internal/rpc/types"
@@ -59,7 +61,7 @@ func TestPeerReservationsAddValidation(t *testing.T) {
 	t.Run("missing public_key", func(t *testing.T) {
 		_, rpcErr := method.Handle(ctx, json.RawMessage(`{}`))
 		require.NotNil(t, rpcErr)
-		assert.Equal(t, types.RpcINVALID_PARAMS, rpcErr.Code)
+		assert.Equal(t, rpcerrors.RpcINVALID_PARAMS, rpcErr.Code)
 		assert.Equal(t, "Missing field 'public_key'.", rpcErr.Message)
 	})
 
@@ -68,7 +70,7 @@ func TestPeerReservationsAddValidation(t *testing.T) {
 	t.Run("malformed public_key", func(t *testing.T) {
 		_, rpcErr := method.Handle(ctx, json.RawMessage(`{"public_key":"not-a-node-key"}`))
 		require.NotNil(t, rpcErr)
-		assert.Equal(t, types.RpcPUBLIC_MALFORMED, rpcErr.Code)
+		assert.Equal(t, rpcerrors.RpcPUBLIC_MALFORMED, rpcErr.Code)
 		assert.Equal(t, "Public key is malformed.", rpcErr.Message)
 	})
 
@@ -77,7 +79,7 @@ func TestPeerReservationsAddValidation(t *testing.T) {
 	t.Run("empty public_key", func(t *testing.T) {
 		_, rpcErr := method.Handle(ctx, json.RawMessage(`{"public_key":""}`))
 		require.NotNil(t, rpcErr)
-		assert.Equal(t, types.RpcPUBLIC_MALFORMED, rpcErr.Code)
+		assert.Equal(t, rpcerrors.RpcPUBLIC_MALFORMED, rpcErr.Code)
 	})
 
 	// A 33-byte NodePublic-prefixed blob with an invalid key-type byte is
@@ -89,14 +91,14 @@ func TestPeerReservationsAddValidation(t *testing.T) {
 		body, _ := json.Marshal(map[string]any{"public_key": enc})
 		_, rpcErr := method.Handle(ctx, body)
 		require.NotNil(t, rpcErr)
-		assert.Equal(t, types.RpcPUBLIC_MALFORMED, rpcErr.Code)
+		assert.Equal(t, rpcerrors.RpcPUBLIC_MALFORMED, rpcErr.Code)
 	})
 
 	// rippled diagnoses a non-string public_key with expected_field_error.
 	t.Run("non-string public_key", func(t *testing.T) {
 		_, rpcErr := method.Handle(ctx, json.RawMessage(`{"public_key":123}`))
 		require.NotNil(t, rpcErr)
-		assert.Equal(t, types.RpcINVALID_PARAMS, rpcErr.Code)
+		assert.Equal(t, rpcerrors.RpcINVALID_PARAMS, rpcErr.Code)
 		assert.Equal(t, "Invalid field 'public_key', not a string.", rpcErr.Message)
 	})
 }
@@ -188,7 +190,7 @@ func TestPeerReservationsAddPersistenceError(t *testing.T) {
 	body, _ := json.Marshal(map[string]any{"public_key": testNodePublic(t, 3)})
 	_, rpcErr := (&handlers.PeerReservationsAddMethod{}).Handle(ctx, body)
 	require.NotNil(t, rpcErr)
-	assert.Equal(t, types.RpcINTERNAL, rpcErr.Code)
+	assert.Equal(t, rpcerrors.RpcINTERNAL, rpcErr.Code)
 }
 
 func TestPeerReservationsEmptyWhenUnwired(t *testing.T) {

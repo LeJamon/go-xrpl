@@ -7,6 +7,8 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/LeJamon/go-xrpl/internal/rpc/rpcerrors"
+
 	"github.com/LeJamon/go-xrpl/internal/peermanagement/resource"
 	"github.com/LeJamon/go-xrpl/internal/rpc/types"
 	xrpllog "github.com/LeJamon/go-xrpl/log"
@@ -199,6 +201,6 @@ const (
 // role, client IP and api version, and is charged for load under the real
 // client IP, so forwarded calls remain subject to the same per-IP charging
 // and request timeout as their parent request.
-func (s *Server) ExecuteMethod(ctx *types.RpcContext, method string, params []byte) (any, *types.RpcError) {
+func (s *Server) ExecuteMethod(ctx *types.RpcContext, method string, params []byte) (any, *rpcerrors.RpcError) {
 	return dispatchNestedMethod(s.registry, ctx, method, json.RawMessage(params), rpcLog())
 }

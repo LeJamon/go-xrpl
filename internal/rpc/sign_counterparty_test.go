@@ -7,6 +7,8 @@ import (
 	"encoding/json"
 	"testing"
 
+	"github.com/LeJamon/go-xrpl/internal/rpc/rpcerrors"
+
 	"github.com/LeJamon/go-xrpl/codec/addresscodec"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -115,7 +117,7 @@ func TestSign_SignatureTarget_Invalid(t *testing.T) {
 	}`)
 	_, err := handler.Handle(signingEnabledContext(ctx), params)
 	require.NotNil(t, err)
-	assert.Equal(t, types.RpcINVALID_PARAMS, err.Code)
+	assert.Equal(t, rpcerrors.RpcINVALID_PARAMS, err.Code)
 	assert.Contains(t, err.Message, "NotAValidField")
 }
 
@@ -138,7 +140,7 @@ func TestSign_SignatureTarget_RequiresTopLevelSigningPubKey(t *testing.T) {
 	}`)
 	_, err := handler.Handle(signingEnabledContext(ctx), params)
 	require.NotNil(t, err)
-	assert.Equal(t, types.RpcINVALID_PARAMS, err.Code)
+	assert.Equal(t, rpcerrors.RpcINVALID_PARAMS, err.Code)
 	assert.Contains(t, err.Message, "SigningPubKey")
 }
 
@@ -162,7 +164,7 @@ func TestSign_SignatureTarget_DisallowedForTransaction(t *testing.T) {
 	}`)
 	_, err := handler.Handle(signingEnabledContext(ctx), params)
 	require.NotNil(t, err)
-	assert.Equal(t, types.RpcINVALID_PARAMS, err.Code)
+	assert.Equal(t, rpcerrors.RpcINVALID_PARAMS, err.Code)
 	assert.Contains(t, err.Message, "disallowed location")
 }
 
@@ -246,7 +248,7 @@ func TestSignFor_SignatureTarget_DisallowedForTransaction(t *testing.T) {
 	}`)
 	_, err := handler.Handle(signingEnabledContext(ctx), params)
 	require.NotNil(t, err)
-	assert.Equal(t, types.RpcINVALID_PARAMS, err.Code)
+	assert.Equal(t, rpcerrors.RpcINVALID_PARAMS, err.Code)
 	assert.Contains(t, err.Message, "disallowed location")
 }
 
@@ -269,7 +271,7 @@ func TestSignFor_SignatureTarget_Invalid(t *testing.T) {
 	}`)
 	_, err := handler.Handle(signingEnabledContext(ctx), params)
 	require.NotNil(t, err)
-	assert.Equal(t, types.RpcINVALID_PARAMS, err.Code)
+	assert.Equal(t, rpcerrors.RpcINVALID_PARAMS, err.Code)
 	assert.Contains(t, err.Message, "Memo")
 }
 
@@ -292,7 +294,7 @@ func TestSignatureTarget_ExplicitEmptyRejected(t *testing.T) {
 			"signature_target": ""
 		}`))
 		require.NotNil(t, rpcErr)
-		assert.Equal(t, types.RpcINVALID_PARAMS, rpcErr.Code)
+		assert.Equal(t, rpcerrors.RpcINVALID_PARAMS, rpcErr.Code)
 	})
 
 	t.Run("sign_for", func(t *testing.T) {
@@ -313,7 +315,7 @@ func TestSignatureTarget_ExplicitEmptyRejected(t *testing.T) {
 			"signature_target": ""
 		}`))
 		require.NotNil(t, rpcErr)
-		assert.Equal(t, types.RpcINVALID_PARAMS, rpcErr.Code)
+		assert.Equal(t, rpcerrors.RpcINVALID_PARAMS, rpcErr.Code)
 	})
 }
 
@@ -337,7 +339,7 @@ func TestSignFor_RejectsTopLevelTxnSignature(t *testing.T) {
 		"signature_target": "CounterpartySignature"
 	}`))
 	require.NotNil(t, rpcErr)
-	assert.Equal(t, types.RpcALREADY_SINGLE_SIG, rpcErr.Code)
+	assert.Equal(t, rpcerrors.RpcALREADY_SINGLE_SIG, rpcErr.Code)
 }
 
 func TestSignFor_TxnSignatureDoesNotMaskMissingAccount(t *testing.T) {
@@ -359,7 +361,7 @@ func TestSignFor_TxnSignatureDoesNotMaskMissingAccount(t *testing.T) {
 		"signature_target": "CounterpartySignature"
 	}`))
 	require.NotNil(t, rpcErr)
-	assert.Equal(t, types.RpcSRC_ACT_MISSING, rpcErr.Code)
+	assert.Equal(t, rpcerrors.RpcSRC_ACT_MISSING, rpcErr.Code)
 	assert.Equal(t, "Missing field 'tx_json.Account'.", rpcErr.Message)
 }
 
@@ -382,7 +384,7 @@ func TestSignFor_TxnSignatureDoesNotMaskMissingSequence(t *testing.T) {
 		"signature_target": "CounterpartySignature"
 	}`))
 	require.NotNil(t, rpcErr)
-	assert.Equal(t, types.RpcINVALID_PARAMS, rpcErr.Code)
+	assert.Equal(t, rpcerrors.RpcINVALID_PARAMS, rpcErr.Code)
 	assert.Equal(t, "Missing field 'tx_json.Sequence'.", rpcErr.Message)
 }
 
@@ -421,7 +423,7 @@ func TestSignFor_MissingSequencePrecedesLaterValidation(t *testing.T) {
 			ctx := &types.RpcContext{Context: context.Background(), ApiVersion: types.ApiVersion1}
 			_, rpcErr := handler.Handle(signingEnabledContext(ctx), params)
 			require.NotNil(t, rpcErr)
-			assert.Equal(t, types.RpcINVALID_PARAMS, rpcErr.Code)
+			assert.Equal(t, rpcerrors.RpcINVALID_PARAMS, rpcErr.Code)
 			assert.Equal(t, "Missing field 'tx_json.Sequence'.", rpcErr.Message)
 		})
 	}
@@ -446,7 +448,7 @@ func TestSignFor_TxnSignatureDoesNotMaskNonEmptySigningPubKey(t *testing.T) {
 		"key_type": "secp256k1"
 	}`))
 	require.NotNil(t, rpcErr)
-	assert.Equal(t, types.RpcINVALID_PARAMS, rpcErr.Code)
+	assert.Equal(t, rpcerrors.RpcINVALID_PARAMS, rpcErr.Code)
 	assert.Equal(t, "When multi-signing 'tx_json.SigningPubKey' must be empty.", rpcErr.Message)
 }
 
@@ -470,7 +472,7 @@ func TestSignFor_TargetTxnSignaturePrecedesTargetLocationValidation(t *testing.T
 		"signature_target": "CounterpartySignature"
 	}`))
 	require.NotNil(t, rpcErr)
-	assert.Equal(t, types.RpcALREADY_SINGLE_SIG, rpcErr.Code)
+	assert.Equal(t, rpcerrors.RpcALREADY_SINGLE_SIG, rpcErr.Code)
 }
 
 func TestSignFor_MissingFeePrecedesTxnSignature(t *testing.T) {
@@ -492,7 +494,7 @@ func TestSignFor_MissingFeePrecedesTxnSignature(t *testing.T) {
 		"signature_target": "CounterpartySignature"
 	}`))
 	require.NotNil(t, rpcErr)
-	assert.Equal(t, types.RpcINVALID_PARAMS, rpcErr.Code)
+	assert.Equal(t, rpcerrors.RpcINVALID_PARAMS, rpcErr.Code)
 	assert.Equal(t, "Missing field 'tx_json.Fee'.", rpcErr.Message)
 }
 
@@ -508,7 +510,7 @@ func TestSignFor_PreConflictFieldOrder(t *testing.T) {
 			txJSON: map[string]any{
 				"Fee": "10", "Sequence": 1, "SigningPubKey": "", "TxnSignature": "AA",
 			},
-			expectedCode: types.RpcINVALID_PARAMS,
+			expectedCode: rpcerrors.RpcINVALID_PARAMS,
 			expectedMsg:  "Missing field 'tx_json.TransactionType'.",
 		},
 		{
@@ -517,7 +519,7 @@ func TestSignFor_PreConflictFieldOrder(t *testing.T) {
 				"TransactionType": "LoanSet", "Account": "not-an-account",
 				"Sequence": 1, "SigningPubKey": "", "TxnSignature": "AA",
 			},
-			expectedCode: types.RpcSRC_ACT_MALFORMED,
+			expectedCode: rpcerrors.RpcSRC_ACT_MALFORMED,
 			expectedMsg:  "Invalid field 'tx_json.Account'.",
 		},
 	}
@@ -567,7 +569,7 @@ func TestSignFor_TxnSignaturePrecedesFullTransactionParsing(t *testing.T) {
 		t.Run(test.name, func(t *testing.T) {
 			rpcErr := callTargetSignFor(t, test.txJSON)
 			require.NotNil(t, rpcErr)
-			assert.Equal(t, types.RpcALREADY_SINGLE_SIG, rpcErr.Code)
+			assert.Equal(t, rpcerrors.RpcALREADY_SINGLE_SIG, rpcErr.Code)
 		})
 	}
 }
@@ -614,7 +616,7 @@ func TestSignFor_PaymentFieldsPrecedeTxnSignature(t *testing.T) {
 			}
 			rpcErr := callTargetSignFor(t, txJSON)
 			require.NotNil(t, rpcErr)
-			assert.Equal(t, types.RpcINVALID_PARAMS, rpcErr.Code)
+			assert.Equal(t, rpcerrors.RpcINVALID_PARAMS, rpcErr.Code)
 			assert.Equal(t, test.expectedMsg, rpcErr.Message)
 		})
 	}
@@ -639,7 +641,7 @@ func TestSign_SignatureTargetRejectsTopLevelSigners(t *testing.T) {
 		"signature_target": "CounterpartySignature"
 	}`))
 	require.NotNil(t, rpcErr)
-	assert.Equal(t, types.RpcALREADY_MULTISIG, rpcErr.Code)
+	assert.Equal(t, rpcerrors.RpcALREADY_MULTISIG, rpcErr.Code)
 }
 
 func TestSign_SignersDoesNotMaskInvalidAccount(t *testing.T) {
@@ -662,7 +664,7 @@ func TestSign_SignersDoesNotMaskInvalidAccount(t *testing.T) {
 		"signature_target": "CounterpartySignature"
 	}`))
 	require.NotNil(t, rpcErr)
-	assert.Equal(t, types.RpcSRC_ACT_MALFORMED, rpcErr.Code)
+	assert.Equal(t, rpcerrors.RpcSRC_ACT_MALFORMED, rpcErr.Code)
 	assert.Equal(t, "Invalid field 'tx_json.Account'.", rpcErr.Message)
 }
 
@@ -713,7 +715,7 @@ func TestSignFor_RejectsDuplicateExistingSigners(t *testing.T) {
 
 	_, rpcErr := callSignFor(t, txJSON, signerAccount)
 	require.NotNil(t, rpcErr)
-	assert.Equal(t, types.RpcINVALID_PARAMS, rpcErr.Code)
+	assert.Equal(t, rpcerrors.RpcINVALID_PARAMS, rpcErr.Code)
 	assert.Contains(t, rpcErr.Message, "Duplicate Signers:Signer:Account entries")
 }
 
@@ -731,11 +733,11 @@ func TestSignFor_RejectsFeePayerSigner(t *testing.T) {
 
 	_, rpcErr := callSignFor(t, txJSON, signerAccount)
 	require.NotNil(t, rpcErr)
-	assert.Equal(t, types.RpcINVALID_PARAMS, rpcErr.Code)
+	assert.Equal(t, rpcerrors.RpcINVALID_PARAMS, rpcErr.Code)
 	assert.Contains(t, rpcErr.Message, "A Signer may not be the transaction's Account")
 }
 
-func callSignFor(t *testing.T, txJSON map[string]any, account string) (map[string]any, *types.RpcError) {
+func callSignFor(t *testing.T, txJSON map[string]any, account string) (map[string]any, *rpcerrors.RpcError) {
 	t.Helper()
 	params, err := json.Marshal(map[string]any{
 		"account":    account,
@@ -753,7 +755,7 @@ func callSignFor(t *testing.T, txJSON map[string]any, account string) (map[strin
 	return result.(map[string]any), nil
 }
 
-func callTargetSignFor(t *testing.T, txJSON map[string]any) *types.RpcError {
+func callTargetSignFor(t *testing.T, txJSON map[string]any) *rpcerrors.RpcError {
 	t.Helper()
 	params, err := json.Marshal(map[string]any{
 		"account":          "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh",

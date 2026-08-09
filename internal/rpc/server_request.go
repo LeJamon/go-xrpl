@@ -11,6 +11,7 @@ import (
 	"strings"
 
 	"github.com/LeJamon/go-xrpl/internal/peermanagement/resource"
+	"github.com/LeJamon/go-xrpl/internal/rpc/rpcerrors"
 	"github.com/LeJamon/go-xrpl/internal/rpc/types"
 )
 
@@ -115,7 +116,7 @@ func (s *Server) handlePostRequest(w http.ResponseWriter, r *http.Request) {
 	}
 	ctx := versionCtx
 	resolution := resolveMethod(s.registry, method, ctx.ApiVersion)
-	if rpcErr := admitMethod(s.resourceManager, ctx, method, resolution, types.RpcErrorForbidden, true, rpcLog()); rpcErr != nil {
+	if rpcErr := admitMethod(s.resourceManager, ctx, method, resolution, rpcerrors.RpcErrorForbidden, true, rpcLog()); rpcErr != nil {
 		if rpcErr.IsOverloaded() {
 			writePlainHTTPError(w, http.StatusServiceUnavailable, "Server is overloaded")
 		} else {
@@ -268,7 +269,7 @@ func normalizeJSONValueAtDepth(value any, depth int) (any, error) {
 // (ServerHandler.cpp:689 → HTTPReply(400, ...)). The body carries no JSON
 // envelope, matching rippled's plain-string reply.
 func writeInvalidApiVersionHTTP(w http.ResponseWriter) {
-	writePlainHTTPError(w, http.StatusBadRequest, types.InvalidApiVersionToken)
+	writePlainHTTPError(w, http.StatusBadRequest, rpcerrors.InvalidApiVersionToken)
 }
 
 // writePlainHTTPError mirrors rippled's HTTPReply(status, content): a bare

@@ -8,6 +8,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/LeJamon/go-xrpl/internal/rpc/rpcerrors"
+
 	"github.com/LeJamon/go-xrpl/internal/rpc/handlers"
 	"github.com/LeJamon/go-xrpl/internal/rpc/types"
 	xrpllog "github.com/LeJamon/go-xrpl/log"
@@ -138,7 +140,7 @@ func TestOwnerInfoMethod(t *testing.T) {
 
 		assert.Nil(t, result)
 		require.NotNil(t, rpcErr)
-		assert.Equal(t, types.RpcINVALID_PARAMS, rpcErr.Code)
+		assert.Equal(t, rpcerrors.RpcINVALID_PARAMS, rpcErr.Code)
 	})
 
 	t.Run("Empty account returns per-section actMalformed", func(t *testing.T) {
@@ -351,13 +353,13 @@ func TestLedgerRequestMethod(t *testing.T) {
 		_, rpcErr := method.Handle(newCtx(), json.RawMessage(
 			`{"ledger_hash":"`+strings.Repeat("A", 64)+`","ledger_index":1}`))
 		require.NotNil(t, rpcErr)
-		assert.Equal(t, types.RpcINVALID_PARAMS, rpcErr.Code)
+		assert.Equal(t, rpcerrors.RpcINVALID_PARAMS, rpcErr.Code)
 	})
 
 	t.Run("Rejects neither ledger_hash nor ledger_index", func(t *testing.T) {
 		_, rpcErr := method.Handle(newCtx(), json.RawMessage(`{}`))
 		require.NotNil(t, rpcErr)
-		assert.Equal(t, types.RpcINVALID_PARAMS, rpcErr.Code)
+		assert.Equal(t, rpcerrors.RpcINVALID_PARAMS, rpcErr.Code)
 	})
 
 	t.Run("Rejects ledger_index at or beyond the validated ledger", func(t *testing.T) {
@@ -365,7 +367,7 @@ func TestLedgerRequestMethod(t *testing.T) {
 		result, rpcErr := method.Handle(newCtx(), json.RawMessage(`{"ledger_index": 100}`))
 		assert.Nil(t, result)
 		require.NotNil(t, rpcErr)
-		assert.Equal(t, types.RpcINVALID_PARAMS, rpcErr.Code)
+		assert.Equal(t, rpcerrors.RpcINVALID_PARAMS, rpcErr.Code)
 	})
 
 	t.Run("Not found and no acquisition subsystem returns lgrNotFound", func(t *testing.T) {
@@ -374,7 +376,7 @@ func TestLedgerRequestMethod(t *testing.T) {
 			`{"ledger_hash":"`+strings.Repeat("0", 64)+`"}`))
 		assert.Nil(t, result)
 		require.NotNil(t, rpcErr)
-		assert.Equal(t, types.RpcLGR_NOT_FOUND, rpcErr.Code)
+		assert.Equal(t, rpcerrors.RpcLGR_NOT_FOUND, rpcErr.Code)
 	})
 
 	t.Run("RequiredRole is Admin", func(t *testing.T) {
@@ -500,7 +502,7 @@ func TestSimulateMethod(t *testing.T) {
 
 		assert.Nil(t, result)
 		require.NotNil(t, rpcErr)
-		assert.Equal(t, types.RpcINVALID_PARAMS, rpcErr.Code)
+		assert.Equal(t, rpcerrors.RpcINVALID_PARAMS, rpcErr.Code)
 	})
 
 	t.Run("Both tx_json and tx_blob returns not implemented (stub)", func(t *testing.T) {
@@ -518,7 +520,7 @@ func TestSimulateMethod(t *testing.T) {
 		assert.Nil(t, result)
 		require.NotNil(t, rpcErr)
 		// Stub returns NOT_IMPL after parameter validation passes
-		assert.True(t, rpcErr.Code == types.RpcINVALID_PARAMS || rpcErr.Code == types.RpcNOT_IMPL)
+		assert.True(t, rpcErr.Code == rpcerrors.RpcINVALID_PARAMS || rpcErr.Code == rpcerrors.RpcNOT_IMPL)
 	})
 
 	t.Run("RequiredRole is Guest", func(t *testing.T) {
@@ -624,7 +626,7 @@ func TestConnectMethod(t *testing.T) {
 
 		assert.Nil(t, result)
 		require.NotNil(t, rpcErr)
-		assert.Equal(t, types.RpcNOT_SYNCED, rpcErr.Code)
+		assert.Equal(t, rpcerrors.RpcNOT_SYNCED, rpcErr.Code)
 		assert.Equal(t, "notSynced", rpcErr.ErrorString)
 		assert.Equal(t, "Not synced to the network.", rpcErr.Message)
 	})
@@ -644,7 +646,7 @@ func TestConnectMethod(t *testing.T) {
 
 		assert.Nil(t, result)
 		require.NotNil(t, rpcErr)
-		assert.Equal(t, types.RpcNOT_SYNCED, rpcErr.Code)
+		assert.Equal(t, rpcerrors.RpcNOT_SYNCED, rpcErr.Code)
 	})
 
 	t.Run("Standalone rejects before malformed parameter decoding", func(t *testing.T) {
@@ -657,7 +659,7 @@ func TestConnectMethod(t *testing.T) {
 		result, rpcErr := method.Handle(ctx, json.RawMessage(`{not json`))
 		assert.Nil(t, result)
 		require.NotNil(t, rpcErr)
-		assert.Equal(t, types.RpcNOT_SYNCED, rpcErr.Code)
+		assert.Equal(t, rpcerrors.RpcNOT_SYNCED, rpcErr.Code)
 	})
 
 	mock.standalone = false
@@ -679,7 +681,7 @@ func TestConnectMethod(t *testing.T) {
 
 		assert.Nil(t, result)
 		require.NotNil(t, rpcErr)
-		assert.Equal(t, types.RpcINVALID_PARAMS, rpcErr.Code)
+		assert.Equal(t, rpcerrors.RpcINVALID_PARAMS, rpcErr.Code)
 	})
 
 	t.Run("Present non-address ip values return success without enqueue", func(t *testing.T) {
@@ -720,7 +722,7 @@ func TestConnectMethod(t *testing.T) {
 			result, rpcErr := method.Handle(ctx, json.RawMessage(`{"ip":`+rawIP+`}`))
 			assert.Nil(t, result)
 			require.NotNil(t, rpcErr)
-			assert.Equal(t, types.RpcINTERNAL, rpcErr.Code)
+			assert.Equal(t, rpcerrors.RpcINTERNAL, rpcErr.Code)
 		}
 	})
 
@@ -831,7 +833,7 @@ func TestConnectMethod(t *testing.T) {
 			ctx := &types.RpcContext{Context: context.Background(), Role: types.RoleAdmin, ApiVersion: types.ApiVersion1, Services: types.NewTestServiceGraph(svc)}
 			_, rpcErr := method.Handle(ctx, json.RawMessage(fmt.Sprintf(`{"ip":"10.0.0.4","port":%s}`, rawPort)))
 			require.NotNil(t, rpcErr, rawPort)
-			assert.Equal(t, types.RpcINVALID_PARAMS, rpcErr.Code, rawPort)
+			assert.Equal(t, rpcerrors.RpcINVALID_PARAMS, rpcErr.Code, rawPort)
 		}
 	})
 
@@ -840,7 +842,7 @@ func TestConnectMethod(t *testing.T) {
 		ctx := &types.RpcContext{Context: context.Background(), Role: types.RoleAdmin, ApiVersion: types.ApiVersion1, Services: types.NewTestServiceGraph(svc)}
 		_, rpcErr := method.Handle(ctx, json.RawMessage(`{"ip":[],"port":"1"}`))
 		require.NotNil(t, rpcErr)
-		assert.Equal(t, types.RpcINVALID_PARAMS, rpcErr.Code)
+		assert.Equal(t, rpcerrors.RpcINVALID_PARAMS, rpcErr.Code)
 	})
 
 	t.Run("Unavailable scheduler returns notEnabled", func(t *testing.T) {
@@ -848,7 +850,7 @@ func TestConnectMethod(t *testing.T) {
 			Services: types.NewTestServiceGraph(&types.ServiceContainer{Ledger: mock})}
 		_, rpcErr := method.Handle(ctx, json.RawMessage(`{"ip":"10.0.0.5"}`))
 		require.NotNil(t, rpcErr)
-		assert.Equal(t, types.RpcNOT_ENABLED, rpcErr.Code)
+		assert.Equal(t, rpcerrors.RpcNOT_ENABLED, rpcErr.Code)
 	})
 
 	t.Run("Admission errors map to RPC errors", func(t *testing.T) {
@@ -857,9 +859,9 @@ func TestConnectMethod(t *testing.T) {
 			err  error
 			code int
 		}{
-			{"queue full", types.ErrPeerConnectQueueFull, types.RpcTOO_BUSY},
-			{"closed", types.ErrPeerConnectClosed, types.RpcNOT_ENABLED},
-			{"unexpected", errors.New("boom"), types.RpcINTERNAL},
+			{"queue full", types.ErrPeerConnectQueueFull, rpcerrors.RpcTOO_BUSY},
+			{"closed", types.ErrPeerConnectClosed, rpcerrors.RpcNOT_ENABLED},
+			{"unexpected", errors.New("boom"), rpcerrors.RpcINTERNAL},
 		} {
 			t.Run(tc.name, func(t *testing.T) {
 				svc := &types.ServiceContainer{Ledger: mock, PeerConnect: func(string) error { return tc.err }}
@@ -1004,7 +1006,7 @@ func TestValidatorInfoMethod(t *testing.T) {
 		assert.Nil(t, result)
 		require.NotNil(t, rpcErr)
 		// Rippled's not_validator_error() = make_param_error("not a validator").
-		assert.Equal(t, types.RpcINVALID_PARAMS, rpcErr.Code)
+		assert.Equal(t, rpcerrors.RpcINVALID_PARAMS, rpcErr.Code)
 		assert.Equal(t, "not a validator", rpcErr.Message)
 	})
 
@@ -1034,7 +1036,7 @@ func TestCanDeleteMethod(t *testing.T) {
 
 		assert.Nil(t, result)
 		require.NotNil(t, rpcErr)
-		assert.Equal(t, types.RpcNOT_ENABLED, rpcErr.Code)
+		assert.Equal(t, rpcerrors.RpcNOT_ENABLED, rpcErr.Code)
 	})
 
 	t.Run("RequiredRole is Admin", func(t *testing.T) {
@@ -1069,7 +1071,7 @@ func TestGetAggregatePriceMethod(t *testing.T) {
 
 		assert.Nil(t, result)
 		require.NotNil(t, rpcErr)
-		assert.Equal(t, types.RpcINVALID_PARAMS, rpcErr.Code)
+		assert.Equal(t, rpcerrors.RpcINVALID_PARAMS, rpcErr.Code)
 		assert.Equal(t, "invalidParams", rpcErr.ErrorString)
 		assert.Equal(t, "Missing field 'oracles'.", rpcErr.Message)
 	})
@@ -1087,7 +1089,7 @@ func TestGetAggregatePriceMethod(t *testing.T) {
 
 		assert.Nil(t, result)
 		require.NotNil(t, rpcErr)
-		assert.Equal(t, types.RpcORACLE_MALFORMED, rpcErr.Code)
+		assert.Equal(t, rpcerrors.RpcORACLE_MALFORMED, rpcErr.Code)
 		assert.Equal(t, "oracleMalformed", rpcErr.ErrorString)
 	})
 
@@ -1104,7 +1106,7 @@ func TestGetAggregatePriceMethod(t *testing.T) {
 
 		assert.Nil(t, result)
 		require.NotNil(t, rpcErr)
-		assert.Equal(t, types.RpcORACLE_MALFORMED, rpcErr.Code)
+		assert.Equal(t, rpcerrors.RpcORACLE_MALFORMED, rpcErr.Code)
 		assert.Equal(t, "oracleMalformed", rpcErr.ErrorString)
 	})
 
@@ -1121,7 +1123,7 @@ func TestGetAggregatePriceMethod(t *testing.T) {
 
 		assert.Nil(t, result)
 		require.NotNil(t, rpcErr)
-		assert.Equal(t, types.RpcINVALID_PARAMS, rpcErr.Code)
+		assert.Equal(t, rpcerrors.RpcINVALID_PARAMS, rpcErr.Code)
 		assert.Equal(t, "Missing field 'base_asset'.", rpcErr.Message)
 	})
 
@@ -1138,7 +1140,7 @@ func TestGetAggregatePriceMethod(t *testing.T) {
 
 		assert.Nil(t, result)
 		require.NotNil(t, rpcErr)
-		assert.Equal(t, types.RpcINVALID_PARAMS, rpcErr.Code)
+		assert.Equal(t, rpcerrors.RpcINVALID_PARAMS, rpcErr.Code)
 		assert.Equal(t, "Missing field 'quote_asset'.", rpcErr.Message)
 	})
 
@@ -1212,7 +1214,7 @@ func TestGetAggregatePriceMethod(t *testing.T) {
 
 		assert.Nil(t, result)
 		require.NotNil(t, rpcErr)
-		assert.Equal(t, types.RpcORACLE_MALFORMED, rpcErr.Code)
+		assert.Equal(t, rpcerrors.RpcORACLE_MALFORMED, rpcErr.Code)
 		assert.Equal(t, "oracleMalformed", rpcErr.ErrorString)
 	})
 
@@ -1229,7 +1231,7 @@ func TestGetAggregatePriceMethod(t *testing.T) {
 
 		assert.Nil(t, result)
 		require.NotNil(t, rpcErr)
-		assert.Equal(t, types.RpcORACLE_MALFORMED, rpcErr.Code)
+		assert.Equal(t, rpcerrors.RpcORACLE_MALFORMED, rpcErr.Code)
 		assert.Equal(t, "oracleMalformed", rpcErr.ErrorString)
 	})
 
@@ -1421,7 +1423,7 @@ func TestLogLevelMethod(t *testing.T) {
 
 		assert.Nil(t, result)
 		require.NotNil(t, rpcErr)
-		assert.Equal(t, types.RpcINVALID_PARAMS, rpcErr.Code)
+		assert.Equal(t, rpcerrors.RpcINVALID_PARAMS, rpcErr.Code)
 		assert.Equal(t, "Invalid parameters.", rpcErr.Message)
 	})
 
@@ -1542,7 +1544,7 @@ func TestAMMInfoMethod(t *testing.T) {
 
 		assert.Nil(t, result)
 		require.NotNil(t, rpcErr)
-		assert.Equal(t, types.RpcACT_MALFORMED, rpcErr.Code)
+		assert.Equal(t, rpcerrors.RpcACT_MALFORMED, rpcErr.Code)
 		assert.Equal(t, "actMalformed", rpcErr.ErrorString)
 		assert.Equal(t, "Account malformed.", rpcErr.Message)
 	})
@@ -1562,7 +1564,7 @@ func TestAMMInfoMethod(t *testing.T) {
 
 		assert.Nil(t, result)
 		require.NotNil(t, rpcErr)
-		assert.Equal(t, types.RpcACT_MALFORMED, rpcErr.Code)
+		assert.Equal(t, rpcerrors.RpcACT_MALFORMED, rpcErr.Code)
 		assert.Equal(t, "actMalformed", rpcErr.ErrorString)
 		assert.Equal(t, "Account malformed.", rpcErr.Message)
 	})
@@ -1583,7 +1585,7 @@ func TestAMMInfoMethod(t *testing.T) {
 
 		assert.Nil(t, result)
 		require.NotNil(t, rpcErr)
-		assert.Equal(t, types.RpcACT_NOT_FOUND, rpcErr.Code)
+		assert.Equal(t, rpcerrors.RpcACT_NOT_FOUND, rpcErr.Code)
 		assert.Equal(t, "actNotFound", rpcErr.ErrorString)
 	})
 
@@ -1601,7 +1603,7 @@ func TestAMMInfoMethod(t *testing.T) {
 
 		assert.Nil(t, result)
 		require.NotNil(t, rpcErr)
-		assert.Equal(t, types.RpcINVALID_PARAMS, rpcErr.Code)
+		assert.Equal(t, rpcerrors.RpcINVALID_PARAMS, rpcErr.Code)
 	})
 
 	t.Run("Invalid parameters - both assets and amm_account", func(t *testing.T) {
@@ -1621,7 +1623,7 @@ func TestAMMInfoMethod(t *testing.T) {
 
 		assert.Nil(t, result)
 		require.NotNil(t, rpcErr)
-		assert.Equal(t, types.RpcINVALID_PARAMS, rpcErr.Code)
+		assert.Equal(t, rpcerrors.RpcINVALID_PARAMS, rpcErr.Code)
 	})
 
 	t.Run("RequiredRole is Guest", func(t *testing.T) {
@@ -1693,7 +1695,7 @@ func TestVaultInfoMethod(t *testing.T) {
 
 		assert.Nil(t, result)
 		require.NotNil(t, rpcErr)
-		assert.Equal(t, types.RpcINVALID_PARAMS, rpcErr.Code)
+		assert.Equal(t, rpcerrors.RpcINVALID_PARAMS, rpcErr.Code)
 	})
 
 	t.Run("Invalid parameters - neither vault_id nor owner+seq", func(t *testing.T) {
@@ -1709,7 +1711,7 @@ func TestVaultInfoMethod(t *testing.T) {
 
 		assert.Nil(t, result)
 		require.NotNil(t, rpcErr)
-		assert.Equal(t, types.RpcINVALID_PARAMS, rpcErr.Code)
+		assert.Equal(t, rpcerrors.RpcINVALID_PARAMS, rpcErr.Code)
 	})
 
 	t.Run("Invalid parameters - both vault_id and owner", func(t *testing.T) {
@@ -1728,7 +1730,7 @@ func TestVaultInfoMethod(t *testing.T) {
 
 		assert.Nil(t, result)
 		require.NotNil(t, rpcErr)
-		assert.Equal(t, types.RpcINVALID_PARAMS, rpcErr.Code)
+		assert.Equal(t, rpcerrors.RpcINVALID_PARAMS, rpcErr.Code)
 	})
 
 	t.Run("RequiredRole is Guest", func(t *testing.T) {
@@ -1979,7 +1981,7 @@ func TestMissingMethodsNilLedgerService(t *testing.T) {
 
 			// Should return an internal error, not panic
 			require.NotNil(t, rpcErr)
-			assert.Equal(t, types.RpcINTERNAL, rpcErr.Code)
+			assert.Equal(t, rpcerrors.RpcINTERNAL, rpcErr.Code)
 			assert.Nil(t, result)
 		})
 	}

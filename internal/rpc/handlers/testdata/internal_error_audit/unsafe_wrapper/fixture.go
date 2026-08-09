@@ -1,12 +1,12 @@
 package unsafe_wrapper
 
-import rpctypes "github.com/LeJamon/go-xrpl/internal/rpc/types"
+import "github.com/LeJamon/go-xrpl/internal/rpc/rpcerrors"
 
-func wrap(code int, message string) *rpctypes.RpcError {
-	return rpctypes.NewRpcError(code, "internal", "internal", message)
+func wrap(code int, message string) *rpcerrors.RpcError {
+	return rpcerrors.NewRpcError(code, "internal", "internal", message)
 }
 
-func Build(message string) *rpctypes.RpcError {
+func Build(message string) *rpcerrors.RpcError {
 	constructor := wrap
 	return constructor(72+1, message)
 }

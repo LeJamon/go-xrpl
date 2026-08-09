@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/LeJamon/go-xrpl/internal/rpc/rpcerrors"
 	"github.com/LeJamon/go-xrpl/internal/rpc/types"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -66,11 +67,11 @@ func TestBookAssetErrors(t *testing.T) {
 		body string
 		code int
 	}{
-		{"mixed pays", `{"books":[{"taker_pays":{"mpt_issuance_id":"` + testMPTA + `","currency":"USD"},"taker_gets":{"currency":"XRP"}}]}`, types.RpcINVALID_PARAMS},
-		{"mixed gets", `{"books":[{"taker_pays":{"currency":"XRP"},"taker_gets":{"mpt_issuance_id":"` + testMPTA + `","issuer":"` + testIssuer + `"}}]}`, types.RpcINVALID_PARAMS},
-		{"malformed pays", `{"books":[{"taker_pays":{"mpt_issuance_id":"xyz"},"taker_gets":{"currency":"XRP"}}]}`, types.RpcSRC_CUR_MALFORMED},
-		{"malformed gets", `{"books":[{"taker_pays":{"currency":"XRP"},"taker_gets":{"mpt_issuance_id":"xyz"}}]}`, types.RpcDST_AMT_MALFORMED},
-		{"same mpt", `{"books":[{"taker_pays":{"mpt_issuance_id":"` + testMPTA + `"},"taker_gets":{"mpt_issuance_id":"` + testMPTA + `"}}]}`, types.RpcBAD_MARKET},
+		{"mixed pays", `{"books":[{"taker_pays":{"mpt_issuance_id":"` + testMPTA + `","currency":"USD"},"taker_gets":{"currency":"XRP"}}]}`, rpcerrors.RpcINVALID_PARAMS},
+		{"mixed gets", `{"books":[{"taker_pays":{"currency":"XRP"},"taker_gets":{"mpt_issuance_id":"` + testMPTA + `","issuer":"` + testIssuer + `"}}]}`, rpcerrors.RpcINVALID_PARAMS},
+		{"malformed pays", `{"books":[{"taker_pays":{"mpt_issuance_id":"xyz"},"taker_gets":{"currency":"XRP"}}]}`, rpcerrors.RpcSRC_CUR_MALFORMED},
+		{"malformed gets", `{"books":[{"taker_pays":{"currency":"XRP"},"taker_gets":{"mpt_issuance_id":"xyz"}}]}`, rpcerrors.RpcDST_AMT_MALFORMED},
+		{"same mpt", `{"books":[{"taker_pays":{"mpt_issuance_id":"` + testMPTA + `"},"taker_gets":{"mpt_issuance_id":"` + testMPTA + `"}}]}`, rpcerrors.RpcBAD_MARKET},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
@@ -90,12 +91,12 @@ func TestBookOptionalFieldPresenceAndPrecedence(t *testing.T) {
 		field string
 		code  int
 	}{
-		{"null taker", `"taker":null`, types.RpcACT_MALFORMED},
-		{"empty taker", `"taker":""`, types.RpcACT_MALFORMED},
-		{"numeric taker", `"taker":1`, types.RpcACT_MALFORMED},
-		{"null domain", `"domain":null`, types.RpcDOMAIN_MALFORMED},
-		{"empty domain", `"domain":""`, types.RpcDOMAIN_MALFORMED},
-		{"numeric domain", `"domain":0`, types.RpcDOMAIN_MALFORMED},
+		{"null taker", `"taker":null`, rpcerrors.RpcACT_MALFORMED},
+		{"empty taker", `"taker":""`, rpcerrors.RpcACT_MALFORMED},
+		{"numeric taker", `"taker":1`, rpcerrors.RpcACT_MALFORMED},
+		{"null domain", `"domain":null`, rpcerrors.RpcDOMAIN_MALFORMED},
+		{"empty domain", `"domain":""`, rpcerrors.RpcDOMAIN_MALFORMED},
+		{"numeric domain", `"domain":0`, rpcerrors.RpcDOMAIN_MALFORMED},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			manager := NewManager()
@@ -117,7 +118,7 @@ func TestBookOptionalFieldPresenceAndPrecedence(t *testing.T) {
 	same := decodeRequest(t, `{"books":[{"taker_pays":{"currency":"XRP"},"taker_gets":{"currency":null},"taker":null}]}`)
 	rpcErr := manager.HandleSubscribe(registration, same, true)
 	require.NotNil(t, rpcErr)
-	assert.Equal(t, types.RpcBAD_MARKET, rpcErr.Code)
+	assert.Equal(t, rpcerrors.RpcBAD_MARKET, rpcErr.Code)
 }
 
 func TestSnapshotBookUsesCanonicalAssets(t *testing.T) {
@@ -145,10 +146,10 @@ func TestBookNumericRealZeroIsMalformed(t *testing.T) {
 		body string
 		code int
 	}{
-		{"currency zero", `{"books":[{"taker_pays":{"currency":0.0},"taker_gets":{"currency":"USD","issuer":"` + testIssuer + `"}}]}`, types.RpcSRC_CUR_MALFORMED},
-		{"negative currency zero", `{"books":[{"taker_pays":{"currency":-0.0},"taker_gets":{"currency":"USD","issuer":"` + testIssuer + `"}}]}`, types.RpcSRC_CUR_MALFORMED},
-		{"mpt zero", `{"books":[{"taker_pays":{"mpt_issuance_id":0.0},"taker_gets":{"currency":"XRP"}}]}`, types.RpcSRC_CUR_MALFORMED},
-		{"negative mpt zero", `{"books":[{"taker_pays":{"mpt_issuance_id":-0.0},"taker_gets":{"currency":"XRP"}}]}`, types.RpcSRC_CUR_MALFORMED},
+		{"currency zero", `{"books":[{"taker_pays":{"currency":0.0},"taker_gets":{"currency":"USD","issuer":"` + testIssuer + `"}}]}`, rpcerrors.RpcSRC_CUR_MALFORMED},
+		{"negative currency zero", `{"books":[{"taker_pays":{"currency":-0.0},"taker_gets":{"currency":"USD","issuer":"` + testIssuer + `"}}]}`, rpcerrors.RpcSRC_CUR_MALFORMED},
+		{"mpt zero", `{"books":[{"taker_pays":{"mpt_issuance_id":0.0},"taker_gets":{"currency":"XRP"}}]}`, rpcerrors.RpcSRC_CUR_MALFORMED},
+		{"negative mpt zero", `{"books":[{"taker_pays":{"mpt_issuance_id":-0.0},"taker_gets":{"currency":"XRP"}}]}`, rpcerrors.RpcSRC_CUR_MALFORMED},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			manager := NewManager()
@@ -179,7 +180,7 @@ func TestBookIssuerHexForms(t *testing.T) {
 	malformed := decodeRequest(t, `{"books":[{"taker_pays":{"currency":"USD","issuer":"`+noAccount+`"},"taker_gets":{"currency":"XRP"}}]}`)
 	rpcErr := manager.HandleSubscribe(registration, malformed, true)
 	require.NotNil(t, rpcErr)
-	assert.Equal(t, types.RpcSRC_ISR_MALFORMED, rpcErr.Code)
+	assert.Equal(t, rpcerrors.RpcSRC_ISR_MALFORMED, rpcErr.Code)
 }
 
 func TestOrderBookSpecNormalizesZeroCurrency(t *testing.T) {
@@ -231,7 +232,7 @@ func TestCanonicalRequestCapCountsUniqueEdgesAcrossSplits(t *testing.T) {
 	require.Nil(t, manager.HandleSubscribeScoped(registration, scope, equivalent, true))
 	rpcErr := manager.HandleSubscribeScoped(registration, scope, types.SubscriptionRequest{Streams: []types.SubscriptionType{types.SubLedger}}, true)
 	require.NotNil(t, rpcErr)
-	assert.Equal(t, types.RpcTOO_BUSY, rpcErr.Code)
+	assert.Equal(t, rpcerrors.RpcTOO_BUSY, rpcErr.Code)
 	assert.Equal(t, 2, registration.Snapshot().ItemCount())
 }
 
@@ -243,7 +244,7 @@ func TestBothBookExpansionIsAtomicAtCapacityBoundaries(t *testing.T) {
 		_, registration := attach(t, manager, "request", 1)
 		rpcErr := manager.HandleSubscribe(registration, both, true)
 		require.NotNil(t, rpcErr)
-		assert.Equal(t, types.RpcTOO_BUSY, rpcErr.Code)
+		assert.Equal(t, rpcerrors.RpcTOO_BUSY, rpcErr.Code)
 		assert.Zero(t, registration.Snapshot().BookCount())
 		assert.Zero(t, manager.items)
 		assert.Empty(t, manager.bookIndex)
@@ -264,7 +265,7 @@ func TestBothBookExpansionIsAtomicAtCapacityBoundaries(t *testing.T) {
 		require.Nil(t, manager.HandleSubscribe(registration, types.SubscriptionRequest{Books: []types.BookRequest{reverse}}, true))
 		rpcErr := manager.HandleUnsubscribe(registration, both)
 		require.NotNil(t, rpcErr)
-		assert.Equal(t, types.RpcTOO_BUSY, rpcErr.Code)
+		assert.Equal(t, rpcerrors.RpcTOO_BUSY, rpcErr.Code)
 		assert.Equal(t, 2, registration.Snapshot().BookCount())
 		assert.Equal(t, 2, manager.items)
 		assert.Len(t, manager.bookIndex, 2)
@@ -277,7 +278,7 @@ func TestBothBookExpansionIsAtomicAtCapacityBoundaries(t *testing.T) {
 		require.Nil(t, manager.HandleSubscribe(registration, types.SubscriptionRequest{Streams: []types.SubscriptionType{types.SubLedger}}, true))
 		rpcErr := manager.HandleSubscribe(registration, both, true)
 		require.NotNil(t, rpcErr)
-		assert.Equal(t, types.RpcTOO_BUSY, rpcErr.Code)
+		assert.Equal(t, rpcerrors.RpcTOO_BUSY, rpcErr.Code)
 		assert.Zero(t, registration.Snapshot().BookCount())
 		assert.Equal(t, 1, manager.items)
 		assert.Empty(t, manager.bookIndex)
@@ -292,7 +293,7 @@ func TestBothBookExpansionIsAtomicAtCapacityBoundaries(t *testing.T) {
 		_, registration := attach(t, manager, "global", 1)
 		rpcErr := manager.HandleSubscribe(registration, both, true)
 		require.NotNil(t, rpcErr)
-		assert.Equal(t, types.RpcTOO_BUSY, rpcErr.Code)
+		assert.Equal(t, rpcerrors.RpcTOO_BUSY, rpcErr.Code)
 		assert.Zero(t, registration.Snapshot().BookCount())
 		assert.Equal(t, 1, manager.items)
 		assert.Empty(t, manager.bookIndex)
@@ -315,7 +316,7 @@ func TestRawElementCapCountsDuplicatesAcrossScopedCalls(t *testing.T) {
 		Streams: []types.SubscriptionType{types.SubLedger},
 	}, true)
 	require.NotNil(t, rpcErr)
-	assert.Equal(t, types.RpcTOO_BUSY, rpcErr.Code)
+	assert.Equal(t, rpcerrors.RpcTOO_BUSY, rpcErr.Code)
 	assert.True(t, registration.Snapshot().Has(types.SubLedger))
 
 	require.Nil(t, manager.HandleSubscribe(registration, types.SubscriptionRequest{Streams: []types.SubscriptionType{types.SubServer}}, true))
@@ -329,7 +330,7 @@ func TestRawElementCapCountsDuplicatesAcrossScopedCalls(t *testing.T) {
 		Streams: []types.SubscriptionType{types.SubLedger},
 	})
 	require.NotNil(t, rpcErr)
-	assert.Equal(t, types.RpcTOO_BUSY, rpcErr.Code)
+	assert.Equal(t, rpcerrors.RpcTOO_BUSY, rpcErr.Code)
 	assert.False(t, registration.Snapshot().Has(types.SubLedger))
 	assert.True(t, registration.Snapshot().Has(types.SubServer))
 }
@@ -344,7 +345,7 @@ func TestRawElementCapRetainsEarlierFieldMutations(t *testing.T) {
 	}
 	rpcErr := manager.HandleSubscribe(registration, request, true)
 	require.NotNil(t, rpcErr)
-	assert.Equal(t, types.RpcTOO_BUSY, rpcErr.Code)
+	assert.Equal(t, rpcerrors.RpcTOO_BUSY, rpcErr.Code)
 	assert.True(t, registration.Snapshot().Has(types.SubLedger))
 	assert.Empty(t, registration.Snapshot().Accounts(types.SubAccounts))
 
@@ -357,7 +358,7 @@ func TestRawElementCapRetainsEarlierFieldMutations(t *testing.T) {
 	}
 	rpcErr = manager.HandleUnsubscribeScoped(registration, scope, book)
 	require.NotNil(t, rpcErr)
-	assert.Equal(t, types.RpcTOO_BUSY, rpcErr.Code)
+	assert.Equal(t, rpcerrors.RpcTOO_BUSY, rpcErr.Code)
 	assert.False(t, registration.Snapshot().Has(types.SubLedger))
 	assert.Zero(t, registration.Snapshot().BookCount())
 }
@@ -368,18 +369,18 @@ func TestRawWireElementCapStopsAndRetainsIncrementalMutations(t *testing.T) {
 	_, registration := attach(t, manager, "raw-wire", 1)
 	rpcErr := manager.HandleSubscribe(registration, decodeRequest(t, `{"streams":["ledger","ledger","ledger","ledger"]}`), true)
 	require.NotNil(t, rpcErr)
-	assert.Equal(t, types.RpcTOO_BUSY, rpcErr.Code)
+	assert.Equal(t, rpcerrors.RpcTOO_BUSY, rpcErr.Code)
 	assert.True(t, registration.Snapshot().Has(types.SubLedger))
 
 	bookBody := `{"taker_pays":{"currency":"USD","issuer":"` + testIssuer + `"},"taker_gets":{"currency":"XRP"}}`
 	rpcErr = manager.HandleSubscribe(registration, decodeRequest(t, `{"books":[`+bookBody+`,`+bookBody+`,`+bookBody+`,`+bookBody+`]}`), true)
 	require.NotNil(t, rpcErr)
-	assert.Equal(t, types.RpcTOO_BUSY, rpcErr.Code)
+	assert.Equal(t, rpcerrors.RpcTOO_BUSY, rpcErr.Code)
 	assert.Equal(t, 1, registration.Snapshot().BookCount())
 
 	rpcErr = manager.HandleUnsubscribe(registration, decodeRequest(t, `{"books":[`+bookBody+`,`+bookBody+`,`+bookBody+`,`+bookBody+`]}`))
 	require.NotNil(t, rpcErr)
-	assert.Equal(t, types.RpcTOO_BUSY, rpcErr.Code)
+	assert.Equal(t, rpcerrors.RpcTOO_BUSY, rpcErr.Code)
 	assert.Zero(t, registration.Snapshot().BookCount())
 	require.NoError(t, manager.checkInvariants())
 }
@@ -411,7 +412,7 @@ func TestRegistrationGenerationAndDetachFence(t *testing.T) {
 	assert.False(t, manager.Detach(old))
 	rpcErr := manager.HandleSubscribe(old, types.SubscriptionRequest{Streams: []types.SubscriptionType{types.SubLedger}}, true)
 	require.NotNil(t, rpcErr)
-	assert.Equal(t, types.RpcINTERNAL, rpcErr.Code)
+	assert.Equal(t, rpcerrors.RpcINTERNAL, rpcErr.Code)
 	require.Nil(t, manager.HandleSubscribe(replacement, types.SubscriptionRequest{Streams: []types.SubscriptionType{types.SubLedger}}, true))
 	assert.True(t, replacement.Snapshot().Has(types.SubLedger))
 }

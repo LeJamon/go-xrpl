@@ -11,6 +11,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/LeJamon/go-xrpl/internal/rpc/rpcerrors"
+
 	"github.com/LeJamon/go-xrpl/internal/rpc/types"
 	"github.com/gorilla/websocket"
 	"github.com/stretchr/testify/require"
@@ -30,7 +32,7 @@ func transportTestServer(t *testing.T, calls *atomic.Int32) *Server {
 	srv := NewServer(ServerOptions{Timeout: time.Second, Services: types.NewTestServiceGraph(types.NewServiceContainer(nil)), Registry: mustTestMethodRegistry(t, map[string]types.MethodHandler{
 		"stop": &stubHandler{
 			role: types.RoleGuest,
-			handle: func(*types.RpcContext, json.RawMessage) (any, *types.RpcError) {
+			handle: func(*types.RpcContext, json.RawMessage) (any, *rpcerrors.RpcError) {
 				calls.Add(1)
 				return map[string]any{"stopped": true}, nil
 			},

@@ -9,6 +9,8 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/LeJamon/go-xrpl/internal/rpc/rpcerrors"
+
 	"github.com/LeJamon/go-xrpl/internal/peermanagement/resource"
 	"github.com/LeJamon/go-xrpl/internal/rpc/handlers"
 	"github.com/LeJamon/go-xrpl/internal/rpc/types"
@@ -96,10 +98,10 @@ func isCredentialKey(key string) bool {
 	}
 	return false
 }
-func rpcInternalError() *types.RpcError {
-	return types.RpcErrorInternal()
+func rpcInternalError() *rpcerrors.RpcError {
+	return rpcerrors.RpcErrorInternal()
 }
-func (s *Server) executeMethod(method string, params json.RawMessage, ctx *types.RpcContext) (any, *types.RpcError) {
+func (s *Server) executeMethod(method string, params json.RawMessage, ctx *types.RpcContext) (any, *rpcerrors.RpcError) {
 	clientIP := ""
 	if ctx != nil {
 		clientIP = ctx.ClientIP
@@ -111,7 +113,7 @@ func (s *Server) executeMethod(method string, params json.RawMessage, ctx *types
 	// make_json_error(forbidden), WS rpcError(rpcFORBIDDEN) (ServerHandler.cpp:482-486,
 	// 750-762). The writers special-case IsForbidden; in-handler permission
 	// denials keep returning rpcNO_PERMISSION on the normal result envelope.
-	return dispatchMethod(s.registry, s.resourceManager, s.services, ctx, method, params, types.RpcErrorForbidden, rpcLog())
+	return dispatchMethod(s.registry, s.resourceManager, s.services, ctx, method, params, rpcerrors.RpcErrorForbidden, rpcLog())
 }
 func resolveMethod(registry *types.MethodRegistry, method string, apiVersion int) methodResolution {
 	handler, exists := registry.Get(method)
@@ -127,9 +129,9 @@ func dispatchMethod(
 	ctx *types.RpcContext,
 	method string,
 	params json.RawMessage,
-	adminGate func(string) *types.RpcError,
+	adminGate func(string) *rpcerrors.RpcError,
 	log xrpllog.Logger,
-) (any, *types.RpcError) {
+) (any, *rpcerrors.RpcError) {
 	if rpcErr := validateApiVersion(ctx); rpcErr != nil {
 		return nil, rpcErr
 	}
@@ -144,10 +146,10 @@ func admitMethod(
 	ctx *types.RpcContext,
 	method string,
 	resolution methodResolution,
-	adminGate func(string) *types.RpcError,
+	adminGate func(string) *rpcerrors.RpcError,
 	checkLoad bool,
 	log xrpllog.Logger,
-) *types.RpcError {
+) *rpcerrors.RpcError {
 	if checkLoad {
 		if rpcErr := gateLoad(manager, ctx, method, log); rpcErr != nil {
 			return rpcErr
@@ -168,7 +170,7 @@ func dispatchResolvedMethod(
 	params json.RawMessage,
 	resolution methodResolution,
 	log xrpllog.Logger,
-) (any, *types.RpcError) {
+) (any, *rpcerrors.RpcError) {
 	ctx.LoadCost = uint32(resource.FeeReferenceRPC().Cost())
 	ctx.LoadWarning = false
 
@@ -178,7 +180,7 @@ func dispatchResolvedMethod(
 	}
 
 	if !resolution.resolved {
-		rpcErr := types.RpcErrorMethodNotFound()
+		rpcErr := rpcerrors.RpcErrorMethodNotFound()
 		finalizeLoad(manager, ctx, method, resource.FeeReferenceRPC(), log)
 		return nil, rpcErr
 	}
@@ -214,17 +216,17 @@ func dispatchNestedMethod(
 	method string,
 	params json.RawMessage,
 	log xrpllog.Logger,
-) (any, *types.RpcError) {
+) (any, *rpcerrors.RpcError) {
 	if rpcErr := validateApiVersion(ctx); rpcErr != nil {
 		return nil, rpcErr
 	}
 	resolution := resolveMethod(registry, method, ctx.ApiVersion)
 	if !resolution.resolved {
-		return nil, types.RpcErrorMethodNotFound()
+		return nil, rpcerrors.RpcErrorMethodNotFound()
 	}
 	if resolution.handler.RequiredRole() == types.RoleAdmin && ctx.Role != types.RoleAdmin {
 		ctx.LoadCost = uint32(resource.FeeMalformedRPC().Cost())
-		return nil, types.RpcErrorForbidden(method)
+		return nil, rpcerrors.RpcErrorForbidden(method)
 	}
 	if rpcErr := conditionMet(resolution.handler.RequiredCondition(), ctx); rpcErr != nil {
 		return nil, rpcErr
@@ -235,7 +237,7 @@ func dispatchNestedMethod(
 	}
 	return result, rpcErr
 }
-func invokeHandler(handler types.MethodHandler, ctx *types.RpcContext, params json.RawMessage, method string, log xrpllog.Logger) (result any, rpcErr *types.RpcError, recovered bool) {
+func invokeHandler(handler types.MethodHandler, ctx *types.RpcContext, params json.RawMessage, method string, log xrpllog.Logger) (result any, rpcErr *rpcerrors.RpcError, recovered bool) {
 	defer func() {
 		if rec := recover(); rec != nil {
 			clientIP := ""
@@ -290,13 +292,13 @@ func betaEnabled(ctx *types.RpcContext) bool {
 // command resolution, exactly as rippled rejects it before reaching a handler.
 // The narrower per-handler support set is enforced separately as part of
 // command resolution — see handlerSupportsVersion.
-func validateApiVersion(ctx *types.RpcContext) *types.RpcError {
+func validateApiVersion(ctx *types.RpcContext) *rpcerrors.RpcError {
 	maxVersion := types.MaxSupportedApiVersion
 	if betaEnabled(ctx) {
 		maxVersion = types.BetaApiVersion
 	}
 	if ctx.ApiVersion < types.ApiVersion1 || ctx.ApiVersion > maxVersion {
-		return types.RpcErrorInvalidApiVersion(strconv.Itoa(ctx.ApiVersion))
+		return rpcerrors.RpcErrorInvalidApiVersion(strconv.Itoa(ctx.ApiVersion))
 	}
 	return nil
 }
@@ -322,7 +324,7 @@ func handlerSupportsVersion(handler types.MethodHandler, version int) bool {
 // rpcNO_CLOSED) and rpcNOT_SYNCED for later versions, matching rippled. The
 // rpcEXPIRED_VALIDATOR_LIST branch fires when the UNL is blocked, driven by the
 // optional ServiceContainer.UNLBlocked signal (nil ⇒ never blocked).
-func conditionMet(cond types.Condition, ctx *types.RpcContext) *types.RpcError {
+func conditionMet(cond types.Condition, ctx *types.RpcContext) *rpcerrors.RpcError {
 	if cond == types.NoCondition {
 		return nil
 	}
@@ -332,12 +334,12 @@ func conditionMet(cond types.Condition, ctx *types.RpcContext) *types.RpcError {
 	svc := ctx.Services.Ledger()
 
 	if svc.IsAmendmentBlocked() {
-		return types.NewRpcError(types.RpcAMENDMENT_BLOCKED,
+		return rpcerrors.NewRpcError(rpcerrors.RpcAMENDMENT_BLOCKED,
 			"amendmentBlocked", "amendmentBlocked", "Amendment blocked, need upgrade.")
 	}
 
 	if ctx.Services.UNLBlocked() != nil && ctx.Services.UNLBlocked()() {
-		return types.NewRpcError(types.RpcEXPIRED_VALIDATOR_LIST,
+		return rpcerrors.NewRpcError(rpcerrors.RpcEXPIRED_VALIDATOR_LIST,
 			"unlBlocked", "unlBlocked", "Validator list expired.")
 	}
 
@@ -389,21 +391,21 @@ func serverStateRank(serverState string) int {
 		return -1
 	}
 }
-func notSyncedError(apiVersion int, failure syncFailure) *types.RpcError {
+func notSyncedError(apiVersion int, failure syncFailure) *rpcerrors.RpcError {
 	if apiVersion == types.ApiVersion1 {
 		switch failure {
 		case syncFailureNoCurrent:
 			return types.CurrentLedgerUnavailable(apiVersion)
 		case syncFailureNoClosed:
-			return types.NewRpcError(types.RpcNO_CLOSED, "noClosed", "noClosed", "Closed ledger is unavailable.")
+			return rpcerrors.NewRpcError(rpcerrors.RpcNO_CLOSED, "noClosed", "noClosed", "Closed ledger is unavailable.")
 		default:
-			return types.NewRpcError(types.RpcNO_NETWORK, "noNetwork", "noNetwork", "Not synced to the network.")
+			return rpcerrors.NewRpcError(rpcerrors.RpcNO_NETWORK, "noNetwork", "noNetwork", "Not synced to the network.")
 		}
 	}
-	return types.NewRpcError(types.RpcNOT_SYNCED, "notSynced", "notSynced",
+	return rpcerrors.NewRpcError(rpcerrors.RpcNOT_SYNCED, "notSynced", "notSynced",
 		"Not synced to the network.")
 }
-func gateLoad(manager *resource.Manager, ctx *types.RpcContext, method string, log xrpllog.Logger) *types.RpcError {
+func gateLoad(manager *resource.Manager, ctx *types.RpcContext, method string, log xrpllog.Logger) *rpcerrors.RpcError {
 	if manager == nil || ctx == nil || ctx.ClientIP == "" {
 		return nil
 	}
@@ -419,7 +421,7 @@ func gateLoad(manager *resource.Manager, ctx *types.RpcContext, method string, l
 	if admission == nil || result == resource.Drop {
 		log.Warn("rpc dropped: client over load threshold",
 			"client", ctx.ClientIP, "method", method)
-		return types.RpcErrorOverloaded()
+		return rpcerrors.RpcErrorOverloaded()
 	}
 	ctx.ResourceAdmission = admission
 	return nil

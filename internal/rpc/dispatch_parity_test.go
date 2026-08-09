@@ -8,6 +8,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/LeJamon/go-xrpl/internal/rpc/rpcerrors"
+
 	"github.com/LeJamon/go-xrpl/internal/rpc/types"
 	"github.com/gorilla/websocket"
 	"github.com/stretchr/testify/assert"
@@ -20,7 +22,7 @@ type condStubHandler struct {
 	cond types.Condition
 }
 
-func (h *condStubHandler) Handle(*types.RpcContext, json.RawMessage) (any, *types.RpcError) {
+func (h *condStubHandler) Handle(*types.RpcContext, json.RawMessage) (any, *rpcerrors.RpcError) {
 	return map[string]any{"ok": true}, nil
 }
 func (h *condStubHandler) RequiredRole() types.Role           { return types.RoleGuest }
@@ -40,9 +42,9 @@ func TestDispatchMethodEnforcesConditionMet(t *testing.T) {
 			ApiVersion: types.ApiVersion1,
 			Services:   types.NewTestServiceGraph(&types.ServiceContainer{Ledger: newMockLedgerService()}), // zero serverInfo: disconnected
 		}
-		_, rpcErr := dispatchMethod(reg, nil, ctx.Services, ctx, "gated", nil, types.RpcErrorNoPermission, rpcLog())
+		_, rpcErr := dispatchMethod(reg, nil, ctx.Services, ctx, "gated", nil, rpcerrors.RpcErrorNoPermission, rpcLog())
 		require.NotNil(t, rpcErr)
-		assert.Equal(t, types.RpcNO_NETWORK, rpcErr.Code)
+		assert.Equal(t, rpcerrors.RpcNO_NETWORK, rpcErr.Code)
 		assert.Equal(t, "noNetwork", rpcErr.ErrorString)
 	})
 
@@ -51,7 +53,7 @@ func TestDispatchMethodEnforcesConditionMet(t *testing.T) {
 			ApiVersion: types.ApiVersion1,
 			Services:   types.NewTestServiceGraph(&types.ServiceContainer{Ledger: syncedStandalone()}),
 		}
-		result, rpcErr := dispatchMethod(reg, nil, ctx.Services, ctx, "gated", nil, types.RpcErrorNoPermission, rpcLog())
+		result, rpcErr := dispatchMethod(reg, nil, ctx.Services, ctx, "gated", nil, rpcerrors.RpcErrorNoPermission, rpcLog())
 		require.Nil(t, rpcErr)
 		assert.Equal(t, map[string]any{"ok": true}, result)
 	})
@@ -210,7 +212,7 @@ func TestWSCommandAliasAndMissingCommand(t *testing.T) {
 		resp := roundtrip(map[string]any{"command": "", "id": float64(6)})
 		assert.Equal(t, "error", resp["status"])
 		assert.Equal(t, "unknownCmd", resp["error"])
-		assert.Equal(t, float64(types.RpcMETHOD_NOT_FOUND), resp["error_code"])
+		assert.Equal(t, float64(rpcerrors.RpcMETHOD_NOT_FOUND), resp["error_code"])
 		assert.Equal(t, "Unknown method.", resp["error_message"])
 	})
 }

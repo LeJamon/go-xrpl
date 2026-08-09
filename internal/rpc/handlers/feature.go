@@ -6,6 +6,8 @@ import (
 	"encoding/json"
 	"strings"
 
+	"github.com/LeJamon/go-xrpl/internal/rpc/rpcerrors"
+
 	"github.com/LeJamon/go-xrpl/amendment"
 	"github.com/LeJamon/go-xrpl/internal/rpc/types"
 	"github.com/LeJamon/go-xrpl/internal/tx/pseudo"
@@ -28,7 +30,7 @@ type amendmentVoteController interface {
 	SetAmendmentVote(ctx context.Context, id [32]byte, vetoed bool) error
 }
 
-func (m *FeatureMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (any, *types.RpcError) {
+func (m *FeatureMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (any, *rpcerrors.RpcError) {
 	var request struct {
 		Feature requestField[string] `json:"feature"`
 		Vetoed  jsonCppBoolField     `json:"vetoed"`
@@ -62,16 +64,16 @@ func (m *FeatureMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (a
 
 	f := resolveFeature(request.Feature.value)
 	if f == nil {
-		return nil, types.RpcErrorBadFeature("Feature not found: " + request.Feature.value)
+		return nil, rpcerrors.RpcErrorBadFeature("Feature not found: " + request.Feature.value)
 	}
 
 	// Admin vote mutation: set or clear a veto on a specific amendment.
 	if request.Vetoed.present {
 		if !ctx.Role.IsAdmin() {
-			return nil, types.RpcErrorNoPermission("feature")
+			return nil, rpcerrors.RpcErrorNoPermission("feature")
 		}
 		if ctrl == nil || tbl == nil {
-			return nil, types.RpcErrorNotSupported("amendment voting is not available on this server")
+			return nil, rpcerrors.RpcErrorNotSupported("amendment voting is not available on this server")
 		}
 		if err := ctrl.SetAmendmentVote(ctx.Context, f.ID, request.Vetoed.value); err != nil {
 			return nil, rpcInternalError("feature: recording amendment vote failed", err)

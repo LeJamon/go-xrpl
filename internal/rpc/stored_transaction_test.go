@@ -5,7 +5,7 @@ import (
 	"testing"
 
 	binarycodec "github.com/LeJamon/go-xrpl/codec/binarycodec"
-	"github.com/LeJamon/go-xrpl/internal/rpc/types"
+	"github.com/LeJamon/go-xrpl/internal/rpc/rpcerrors"
 	txpkg "github.com/LeJamon/go-xrpl/internal/tx"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -173,23 +173,23 @@ func storedTransactionDataWithMetadata(t *testing.T) []storedTransactionDataCase
 	}
 }
 
-func requireDBDeserializationError(t *testing.T, result any, rpcErr *types.RpcError) {
+func requireDBDeserializationError(t *testing.T, result any, rpcErr *rpcerrors.RpcError) {
 	t.Helper()
 
 	assert.Nil(t, result)
 	require.NotNil(t, rpcErr)
-	assert.Equal(t, types.RpcDB_DESERIALIZATION, rpcErr.Code)
+	assert.Equal(t, rpcerrors.RpcDB_DESERIALIZATION, rpcErr.Code)
 	assert.Equal(t, "dbDeserialization", rpcErr.ErrorString)
 	assert.Equal(t, "dbDeserialization", rpcErr.Type)
 	assert.Equal(t, "Database deserialization error.", rpcErr.Message)
 }
 
-func requireCanonicalInternalError(t *testing.T, result any, rpcErr *types.RpcError) {
+func requireCanonicalInternalError(t *testing.T, result any, rpcErr *rpcerrors.RpcError) {
 	t.Helper()
 
 	assert.Nil(t, result)
 	require.NotNil(t, rpcErr)
-	assert.Equal(t, types.RpcINTERNAL, rpcErr.Code)
+	assert.Equal(t, rpcerrors.RpcINTERNAL, rpcErr.Code)
 	assert.Equal(t, "internal", rpcErr.ErrorString)
 	assert.Equal(t, "internal", rpcErr.Type)
 	assert.Equal(t, "Internal error.", rpcErr.Message)

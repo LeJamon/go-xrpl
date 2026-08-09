@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"testing"
 
+	"github.com/LeJamon/go-xrpl/internal/rpc/rpcerrors"
+
 	"github.com/LeJamon/go-xrpl/internal/ledger/service/svcerr"
 	"github.com/LeJamon/go-xrpl/internal/rpc/handlers"
 	"github.com/LeJamon/go-xrpl/internal/rpc/types"
@@ -174,7 +176,7 @@ func TestWalletPropose_InvalidKeyType(t *testing.T) {
 	params := json.RawMessage(`{"key_type": "invalid"}`)
 	_, err := handler.Handle(ctx, params)
 	require.NotNil(t, err)
-	assert.Equal(t, types.RpcBAD_KEY_TYPE, err.Code)
+	assert.Equal(t, rpcerrors.RpcBAD_KEY_TYPE, err.Code)
 	assert.Equal(t, "badKeyType", err.ErrorString)
 }
 
@@ -188,7 +190,7 @@ func TestWalletPropose_InvalidSeed(t *testing.T) {
 	params := json.RawMessage(`{"seed": "invalid_seed"}`)
 	_, err := handler.Handle(ctx, params)
 	require.NotNil(t, err)
-	assert.Equal(t, types.RpcBAD_SEED, err.Code)
+	assert.Equal(t, rpcerrors.RpcBAD_SEED, err.Code)
 	assert.Equal(t, "badSeed", err.ErrorString)
 }
 
@@ -203,7 +205,7 @@ func TestWalletPropose_InvalidSeedHex(t *testing.T) {
 	params := json.RawMessage(`{"seed_hex": "DEADBEEF"}`)
 	_, err := handler.Handle(ctx, params)
 	require.NotNil(t, err)
-	assert.Equal(t, types.RpcBAD_SEED, err.Code)
+	assert.Equal(t, rpcerrors.RpcBAD_SEED, err.Code)
 }
 
 func TestWalletPropose_SeedKeyTypeMismatch(t *testing.T) {
@@ -221,7 +223,7 @@ func TestWalletPropose_SeedKeyTypeMismatch(t *testing.T) {
 	}`)
 	_, err := handler.Handle(ctx, params)
 	require.NotNil(t, err)
-	assert.Equal(t, types.RpcBAD_SEED, err.Code)
+	assert.Equal(t, rpcerrors.RpcBAD_SEED, err.Code)
 }
 
 func TestWalletPropose_LowEntropyPassphrase(t *testing.T) {
@@ -274,7 +276,7 @@ func TestSign_MissingTxJson(t *testing.T) {
 	params := json.RawMessage(`{"secret": "sn3nxiW7v8KXzPzAqzyHXbSSKNuN9"}`)
 	_, err := handler.Handle(signingEnabledContext(ctx), params)
 	require.NotNil(t, err)
-	assert.Equal(t, types.RpcINVALID_PARAMS, err.Code)
+	assert.Equal(t, rpcerrors.RpcINVALID_PARAMS, err.Code)
 	assert.Contains(t, err.Message, "tx_json")
 }
 
@@ -299,7 +301,7 @@ func TestSign_MissingCredentials(t *testing.T) {
 	}`)
 	_, err := handler.Handle(signingEnabledContext(ctx), params)
 	require.NotNil(t, err)
-	assert.Equal(t, types.RpcINVALID_PARAMS, err.Code)
+	assert.Equal(t, rpcerrors.RpcINVALID_PARAMS, err.Code)
 	assert.Contains(t, err.Message, "Missing field 'secret'.")
 }
 
@@ -317,84 +319,84 @@ func TestSign_CredentialFieldPresence(t *testing.T) {
 			name:        "empty secret is still selected",
 			apiVersion:  types.ApiVersion1,
 			credentials: `"secret":""`,
-			code:        types.RpcBAD_SEED,
+			code:        rpcerrors.RpcBAD_SEED,
 			message:     "Invalid field 'secret'.",
 		},
 		{
 			name:        "empty secret counts alongside seed",
 			apiVersion:  types.ApiVersion1,
 			credentials: `"secret":"","seed":"snoPBrXtMeMyMHUVTgbuqAfg1SUTb"`,
-			code:        types.RpcINVALID_PARAMS,
+			code:        rpcerrors.RpcINVALID_PARAMS,
 			message:     "Exactly one of the following must be specified: passphrase, secret, seed or seed_hex",
 		},
 		{
 			name:        "empty key type is present",
 			apiVersion:  types.ApiVersion2,
 			credentials: `"seed":"snoPBrXtMeMyMHUVTgbuqAfg1SUTb","key_type":""`,
-			code:        types.RpcBAD_KEY_TYPE,
+			code:        rpcerrors.RpcBAD_KEY_TYPE,
 			message:     "Bad key type.",
 		},
 		{
 			name:        "key type must be a string",
 			apiVersion:  types.ApiVersion1,
 			credentials: `"seed":"snoPBrXtMeMyMHUVTgbuqAfg1SUTb","key_type":null`,
-			code:        types.RpcINVALID_PARAMS,
+			code:        rpcerrors.RpcINVALID_PARAMS,
 			message:     "Invalid field 'key_type', not string.",
 		},
 		{
 			name:        "key type is case sensitive",
 			apiVersion:  types.ApiVersion2,
 			credentials: `"seed":"snoPBrXtMeMyMHUVTgbuqAfg1SUTb","key_type":"SECP256K1"`,
-			code:        types.RpcBAD_KEY_TYPE,
+			code:        rpcerrors.RpcBAD_KEY_TYPE,
 			message:     "Bad key type.",
 		},
 		{
 			name:        "passphrase must be a string",
 			apiVersion:  types.ApiVersion1,
 			credentials: `"passphrase":null,"key_type":"secp256k1"`,
-			code:        types.RpcINVALID_PARAMS,
+			code:        rpcerrors.RpcINVALID_PARAMS,
 			message:     "Invalid field 'passphrase', not string.",
 		},
 		{
 			name:        "seed must be a string",
 			apiVersion:  types.ApiVersion1,
 			credentials: `"seed":1,"key_type":"secp256k1"`,
-			code:        types.RpcINVALID_PARAMS,
+			code:        rpcerrors.RpcINVALID_PARAMS,
 			message:     "Invalid field 'seed', not string.",
 		},
 		{
 			name:        "seed hex must be a string",
 			apiVersion:  types.ApiVersion1,
 			credentials: `"seed_hex":false,"key_type":"secp256k1"`,
-			code:        types.RpcINVALID_PARAMS,
+			code:        rpcerrors.RpcINVALID_PARAMS,
 			message:     "Invalid field 'seed_hex', not string.",
 		},
 		{
 			name:        "ordinary passphrase without key type uses legacy secret path",
 			apiVersion:  types.ApiVersion1,
 			credentials: `"passphrase":"masterpassphrase"`,
-			code:        types.RpcINVALID_PARAMS,
+			code:        rpcerrors.RpcINVALID_PARAMS,
 			message:     "Invalid field 'secret', not string.",
 		},
 		{
 			name:        "ordinary seed without key type uses legacy secret path",
 			apiVersion:  types.ApiVersion1,
 			credentials: `"seed":"snoPBrXtMeMyMHUVTgbuqAfg1SUTb"`,
-			code:        types.RpcINVALID_PARAMS,
+			code:        rpcerrors.RpcINVALID_PARAMS,
 			message:     "Invalid field 'secret', not string.",
 		},
 		{
 			name:        "ordinary seed hex without key type uses legacy secret path",
 			apiVersion:  types.ApiVersion1,
 			credentials: `"seed_hex":"DEDCE9CE67B451D852FD4E846FCDE31C"`,
-			code:        types.RpcINVALID_PARAMS,
+			code:        rpcerrors.RpcINVALID_PARAMS,
 			message:     "Invalid field 'secret', not string.",
 		},
 		{
 			name:        "ed seed rejects explicit secp key type",
 			apiVersion:  types.ApiVersion2,
 			credentials: `"seed":"sEdTzRkEgPoxDG1mJ6WkSucHWnMkm1H","key_type":"secp256k1"`,
-			code:        types.RpcBAD_SEED,
+			code:        rpcerrors.RpcBAD_SEED,
 			message:     "Specified seed is for an Ed25519 wallet.",
 		},
 	}
@@ -422,7 +424,7 @@ func TestSign_LegacySecretRejectsKeyTokens(t *testing.T) {
 			params := json.RawMessage(`{"tx_json":{},"offline":true,"secret":"` + secret + `"}`)
 			_, rpcErr := (&handlers.SignMethod{}).Handle(signingEnabledContext(&types.RpcContext{ApiVersion: types.ApiVersion1}), params)
 			require.NotNil(t, rpcErr)
-			assert.Equal(t, types.RpcBAD_SEED, rpcErr.Code)
+			assert.Equal(t, rpcerrors.RpcBAD_SEED, rpcErr.Code)
 			assert.Equal(t, "Invalid field 'secret'.", rpcErr.Message)
 		})
 	}
@@ -452,7 +454,7 @@ func TestSign_InvalidKeyType(t *testing.T) {
 	_, err := handler.Handle(signingEnabledContext(ctx), params)
 	require.NotNil(t, err)
 	// API v1: rippled returns invalidParams for bad key_type
-	assert.Equal(t, types.RpcINVALID_PARAMS, err.Code)
+	assert.Equal(t, rpcerrors.RpcINVALID_PARAMS, err.Code)
 }
 
 func TestSign_InvalidSeed(t *testing.T) {
@@ -509,7 +511,7 @@ func TestSign_AccountMismatch(t *testing.T) {
 	}`)
 	_, err := handler.Handle(signingEnabledContext(ctx), params)
 	require.NotNil(t, err)
-	assert.Equal(t, types.RpcBAD_SECRET, err.Code)
+	assert.Equal(t, rpcerrors.RpcBAD_SECRET, err.Code)
 	assert.Equal(t, "badSecret", err.ErrorString)
 	assert.Equal(t, "Secret does not match account.", err.Message)
 }
@@ -534,7 +536,7 @@ func TestSign_LedgerServiceUnavailable(t *testing.T) {
 	}`)
 	_, err := handler.Handle(signingEnabledContext(ctx), params)
 	require.NotNil(t, err)
-	assert.Equal(t, types.RpcINTERNAL, err.Code)
+	assert.Equal(t, rpcerrors.RpcINTERNAL, err.Code)
 	assert.Equal(t, "Internal error.", err.Message)
 }
 
@@ -607,7 +609,7 @@ func TestSign_SrcActNotFound(t *testing.T) {
 	}`)
 	_, err := handler.Handle(signingEnabledContext(ctx), params)
 	require.NotNil(t, err)
-	assert.Equal(t, types.RpcSRC_ACT_NOT_FOUND, err.Code)
+	assert.Equal(t, rpcerrors.RpcSRC_ACT_NOT_FOUND, err.Code)
 	assert.Equal(t, "srcActNotFound", err.ErrorString)
 	assert.Equal(t, "Source account not found.", err.Message)
 }
@@ -668,7 +670,7 @@ func TestSign_Offline_MissingSequence(t *testing.T) {
 	}`)
 	_, err := handler.Handle(signingEnabledContext(ctx), params)
 	require.NotNil(t, err)
-	assert.Equal(t, types.RpcINVALID_PARAMS, err.Code)
+	assert.Equal(t, rpcerrors.RpcINVALID_PARAMS, err.Code)
 	assert.Equal(t, "Missing field 'tx_json.Sequence'.", err.Message)
 }
 
@@ -695,7 +697,7 @@ func TestSign_Offline_MissingFee(t *testing.T) {
 	}`)
 	_, err := handler.Handle(signingEnabledContext(ctx), params)
 	require.NotNil(t, err)
-	assert.Equal(t, types.RpcINVALID_PARAMS, err.Code)
+	assert.Equal(t, rpcerrors.RpcINVALID_PARAMS, err.Code)
 	assert.Equal(t, "Missing field 'tx_json.Fee'.", err.Message)
 }
 
@@ -811,7 +813,7 @@ func TestSign_FeeMultMax_ZeroRejects(t *testing.T) {
 	}`)
 	_, err := handler.Handle(signingEnabledContext(ctx), params)
 	require.NotNil(t, err)
-	assert.Equal(t, types.RpcHIGH_FEE, err.Code)
+	assert.Equal(t, rpcerrors.RpcHIGH_FEE, err.Code)
 	assert.Contains(t, err.Message, "exceeds the requested tx limit")
 }
 
@@ -841,7 +843,7 @@ func TestSign_FeeDivMax_LargeRejects(t *testing.T) {
 	}`)
 	_, err := handler.Handle(signingEnabledContext(ctx), params)
 	require.NotNil(t, err)
-	assert.Equal(t, types.RpcHIGH_FEE, err.Code)
+	assert.Equal(t, rpcerrors.RpcHIGH_FEE, err.Code)
 	assert.Contains(t, err.Message, "exceeds the requested tx limit")
 }
 
@@ -872,7 +874,7 @@ func TestSign_FeeMultMax_NegativeRejectsInvalidParams(t *testing.T) {
 	}`)
 	_, err := handler.Handle(signingEnabledContext(ctx), params)
 	require.NotNil(t, err)
-	assert.Equal(t, types.RpcINVALID_PARAMS, err.Code)
+	assert.Equal(t, rpcerrors.RpcINVALID_PARAMS, err.Code)
 	assert.Contains(t, err.Message, "fee_mult_max")
 	assert.Contains(t, err.Message, "a positive integer")
 }
@@ -904,7 +906,7 @@ func TestSign_FeeDivMax_ZeroRejectsInvalidParams(t *testing.T) {
 	}`)
 	_, err := handler.Handle(signingEnabledContext(ctx), params)
 	require.NotNil(t, err)
-	assert.Equal(t, types.RpcINVALID_PARAMS, err.Code)
+	assert.Equal(t, rpcerrors.RpcINVALID_PARAMS, err.Code)
 	assert.Contains(t, err.Message, "fee_div_max")
 	assert.Contains(t, err.Message, "a positive integer")
 }
@@ -936,7 +938,7 @@ func TestSign_FeeDivMax_NegativeRejectsInvalidParams(t *testing.T) {
 	}`)
 	_, err := handler.Handle(signingEnabledContext(ctx), params)
 	require.NotNil(t, err)
-	assert.Equal(t, types.RpcINVALID_PARAMS, err.Code)
+	assert.Equal(t, rpcerrors.RpcINVALID_PARAMS, err.Code)
 	assert.Contains(t, err.Message, "fee_div_max")
 }
 
@@ -967,7 +969,7 @@ func TestSign_FeeMultMax_FloatRejectsHighFee(t *testing.T) {
 	}`)
 	_, err := handler.Handle(signingEnabledContext(ctx), params)
 	require.NotNil(t, err)
-	assert.Equal(t, types.RpcHIGH_FEE, err.Code)
+	assert.Equal(t, rpcerrors.RpcHIGH_FEE, err.Code)
 	assert.Contains(t, err.Message, "fee_mult_max")
 	assert.Contains(t, err.Message, "a positive integer")
 }
@@ -998,7 +1000,7 @@ func TestSign_FeeMultMax_StringRejectsHighFee(t *testing.T) {
 	}`)
 	_, err := handler.Handle(signingEnabledContext(ctx), params)
 	require.NotNil(t, err)
-	assert.Equal(t, types.RpcHIGH_FEE, err.Code)
+	assert.Equal(t, rpcerrors.RpcHIGH_FEE, err.Code)
 	assert.Contains(t, err.Message, "fee_mult_max")
 }
 
@@ -1218,7 +1220,7 @@ func TestSignFor_InvalidAccountAddress(t *testing.T) {
 	require.NotNil(t, err)
 	// rippled's transactionSignFor emits srcActMalformed with
 	// "Invalid field 'account'." for an unparseable signer account.
-	assert.Equal(t, types.RpcSRC_ACT_MALFORMED, err.Code)
+	assert.Equal(t, rpcerrors.RpcSRC_ACT_MALFORMED, err.Code)
 	assert.Equal(t, "srcActMalformed", err.ErrorString)
 	assert.Equal(t, "Invalid field 'account'.", err.Message)
 }
@@ -1239,7 +1241,7 @@ func TestSignFor_InvalidAccountPrecedesMissingTxJson(t *testing.T) {
 	}`)
 	_, err := handler.Handle(signingEnabledContext(ctx), params)
 	require.NotNil(t, err)
-	assert.Equal(t, types.RpcSRC_ACT_MALFORMED, err.Code)
+	assert.Equal(t, rpcerrors.RpcSRC_ACT_MALFORMED, err.Code)
 	assert.Equal(t, "srcActMalformed", err.ErrorString)
 	assert.Equal(t, "Invalid field 'account'.", err.Message)
 }
@@ -1266,7 +1268,7 @@ func TestSignFor_InvalidKeyType(t *testing.T) {
 	require.NotNil(t, err)
 	// API v1: rippled returns invalidParams for bad key_type
 	// API v2+: returns RpcBAD_KEY_TYPE
-	assert.Equal(t, types.RpcINVALID_PARAMS, err.Code)
+	assert.Equal(t, rpcerrors.RpcINVALID_PARAMS, err.Code)
 }
 
 func TestSignFor_ValidMultiSign(t *testing.T) {

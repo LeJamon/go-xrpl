@@ -4,6 +4,8 @@ import (
 	"encoding/json"
 	"sync"
 
+	"github.com/LeJamon/go-xrpl/internal/rpc/rpcerrors"
+
 	"github.com/LeJamon/go-xrpl/internal/ledger/state"
 	rpctypes "github.com/LeJamon/go-xrpl/internal/rpc/types"
 	tx "github.com/LeJamon/go-xrpl/internal/tx"
@@ -55,44 +57,44 @@ type pathFindCreateRequest struct {
 
 // ParseAndCreateSession parses a path_find create request and creates a session.
 // Returns the session and initial result, or an RPC error.
-func ParseAndCreateSession(params json.RawMessage, id any) (*PathFindSession, *rpctypes.RpcError) {
+func ParseAndCreateSession(params json.RawMessage, id any) (*PathFindSession, *rpcerrors.RpcError) {
 	var request pathFindCreateRequest
 	if err := json.Unmarshal(params, &request); err != nil {
-		return nil, rpctypes.RpcErrorInvalidParams("Invalid parameters.")
+		return nil, rpcerrors.RpcErrorInvalidParams("Invalid parameters.")
 	}
 
 	// Validate required fields
 	if request.SourceAccount == "" {
-		return nil, rpctypes.RpcErrorInvalidParams("Missing field 'source_account'.")
+		return nil, rpcerrors.RpcErrorInvalidParams("Missing field 'source_account'.")
 	}
 	if request.DestinationAccount == "" {
-		return nil, rpctypes.RpcErrorInvalidParams("Missing field 'destination_account'.")
+		return nil, rpcerrors.RpcErrorInvalidParams("Missing field 'destination_account'.")
 	}
 	if request.DestinationAmount == nil {
-		return nil, rpctypes.RpcErrorInvalidParams("Missing field 'destination_amount'.")
+		return nil, rpcerrors.RpcErrorInvalidParams("Missing field 'destination_amount'.")
 	}
 
 	// Decode accounts
 	srcAccount, err := state.DecodeAccountID(request.SourceAccount)
 	if err != nil {
-		return nil, rpctypes.NewRpcError(rpctypes.RpcACT_MALFORMED, "srcActMalformed", "invalidParams",
+		return nil, rpcerrors.NewRpcError(rpcerrors.RpcACT_MALFORMED, "srcActMalformed", "invalidParams",
 			"Source account is malformed.")
 	}
 	dstAccount, err := state.DecodeAccountID(request.DestinationAccount)
 	if err != nil {
-		return nil, rpctypes.NewRpcError(rpctypes.RpcACT_MALFORMED, "dstActMalformed", "invalidParams",
+		return nil, rpcerrors.NewRpcError(rpcerrors.RpcACT_MALFORMED, "dstActMalformed", "invalidParams",
 			"Destination account is malformed.")
 	}
 
 	dstAmount, amtErr := state.AmountFromJSON(request.DestinationAmount)
 	if amtErr != nil || !pathfinder.IsValidAsset(dstAmount) {
-		return nil, rpctypes.RpcErrorDstAmtMalformed("Destination amount/currency/issuer is malformed.")
+		return nil, rpcerrors.RpcErrorDstAmtMalformed("Destination amount/currency/issuer is malformed.")
 	}
 
 	// destination_amount of exactly -1 selects convert-all mode.
 	convertAll := dstAmount.Value() == "-1"
 	if !convertAll && dstAmount.Signum() <= 0 {
-		return nil, rpctypes.RpcErrorDstAmtMalformed("Destination amount/currency/issuer is malformed.")
+		return nil, rpcerrors.RpcErrorDstAmtMalformed("Destination amount/currency/issuer is malformed.")
 	}
 
 	// Parse optional send_max
@@ -100,11 +102,11 @@ func ParseAndCreateSession(params json.RawMessage, id any) (*PathFindSession, *r
 	if request.SendMax != nil {
 		// send_max requires destination_amount to be -1.
 		if !convertAll {
-			return nil, rpctypes.RpcErrorDstAmtMalformed("Destination amount/currency/issuer is malformed.")
+			return nil, rpcerrors.RpcErrorDstAmtMalformed("Destination amount/currency/issuer is malformed.")
 		}
 		amt, smErr := state.AmountFromJSON(request.SendMax)
 		if smErr != nil || !pathfinder.IsValidAsset(amt) || (amt.Signum() <= 0 && amt.Value() != "-1") {
-			return nil, rpctypes.RpcErrorSendMaxMalformed("SendMax amount malformed.")
+			return nil, rpcerrors.RpcErrorSendMaxMalformed("SendMax amount malformed.")
 		}
 		sendMax = &amt
 	}
@@ -114,7 +116,7 @@ func ParseAndCreateSession(params json.RawMessage, id any) (*PathFindSession, *r
 	if request.SourceCurrencies != nil {
 		var entries []json.RawMessage
 		if err := json.Unmarshal(request.SourceCurrencies, &entries); err != nil || len(entries) == 0 || len(entries) > 18 {
-			return nil, rpctypes.RpcErrorSrcCurMalformed("Source currency is malformed.")
+			return nil, rpcerrors.RpcErrorSrcCurMalformed("Source currency is malformed.")
 		}
 		var sendMaxIssue payment.Issue
 		if sendMax != nil {
@@ -131,24 +133,24 @@ func ParseAndCreateSession(params json.RawMessage, id any) (*PathFindSession, *r
 		for _, raw := range entries {
 			var fields map[string]json.RawMessage
 			if err := json.Unmarshal(raw, &fields); err != nil {
-				return nil, rpctypes.RpcErrorSrcCurMalformed("Source currency is malformed.")
+				return nil, rpcerrors.RpcErrorSrcCurMalformed("Source currency is malformed.")
 			}
 			rawCurrency, hasCurrency := fields["currency"]
 			rawMPT, hasMPT := fields["mpt_issuance_id"]
 			if hasCurrency == hasMPT {
-				return nil, rpctypes.RpcErrorSrcCurMalformed("Source currency is malformed.")
+				return nil, rpcerrors.RpcErrorSrcCurMalformed("Source currency is malformed.")
 			}
 			if hasMPT {
 				if _, hasIssuer := fields["issuer"]; hasIssuer {
-					return nil, rpctypes.RpcErrorSrcCurMalformed("Source currency is malformed.")
+					return nil, rpcerrors.RpcErrorSrcCurMalformed("Source currency is malformed.")
 				}
 				var value string
 				if err := json.Unmarshal(rawMPT, &value); err != nil {
-					return nil, rpctypes.RpcErrorSrcCurMalformed("Source currency is malformed.")
+					return nil, rpcerrors.RpcErrorSrcCurMalformed("Source currency is malformed.")
 				}
 				mptID, ok := pathfinder.ParseSourceMPTID(value)
 				if !ok {
-					return nil, rpctypes.RpcErrorSrcCurMalformed("Source currency is malformed.")
+					return nil, rpcerrors.RpcErrorSrcCurMalformed("Source currency is malformed.")
 				}
 				issue := payment.NewMPTIssue(mptID)
 				if sendMax != nil {
@@ -156,7 +158,7 @@ func ParseAndCreateSession(params json.RawMessage, id any) (*PathFindSession, *r
 						continue
 					}
 					if sendMaxIssue.Issuer != srcAccount {
-						return nil, rpctypes.RpcErrorSrcIsrMalformed("Source issuer is malformed.")
+						return nil, rpcerrors.RpcErrorSrcIsrMalformed("Source issuer is malformed.")
 					}
 				}
 				add(issue)
@@ -165,7 +167,7 @@ func ParseAndCreateSession(params json.RawMessage, id any) (*PathFindSession, *r
 
 			var currency string
 			if err := json.Unmarshal(rawCurrency, &currency); err != nil || !keylet.IsValidCurrencyCode(currency) {
-				return nil, rpctypes.RpcErrorSrcCurMalformed("Source currency is malformed.")
+				return nil, rpcerrors.RpcErrorSrcCurMalformed("Source currency is malformed.")
 			}
 			if currency == "" {
 				currency = "XRP"
@@ -174,17 +176,17 @@ func ParseAndCreateSession(params json.RawMessage, id any) (*PathFindSession, *r
 			if rawIssuer, hasIssuer := fields["issuer"]; hasIssuer {
 				var issuerString string
 				if err := json.Unmarshal(rawIssuer, &issuerString); err != nil {
-					return nil, rpctypes.RpcErrorSrcIsrMalformed("Source issuer is malformed.")
+					return nil, rpcerrors.RpcErrorSrcIsrMalformed("Source issuer is malformed.")
 				}
 				issuerID, decErr := state.DecodeAccountID(issuerString)
 				if decErr != nil {
-					return nil, rpctypes.RpcErrorSrcIsrMalformed("Source issuer is malformed.")
+					return nil, rpcerrors.RpcErrorSrcIsrMalformed("Source issuer is malformed.")
 				}
 				issuer = issuerID
 			}
 			if currency == "XRP" {
 				if issuer != [20]byte{} {
-					return nil, rpctypes.RpcErrorSrcCurMalformed("Source currency is malformed.")
+					return nil, rpcerrors.RpcErrorSrcCurMalformed("Source currency is malformed.")
 				}
 			} else if issuer == [20]byte{} {
 				issuer = srcAccount
@@ -195,7 +197,7 @@ func ParseAndCreateSession(params json.RawMessage, id any) (*PathFindSession, *r
 					continue
 				}
 				if issuer != srcAccount && sendMaxIssue.Issuer != srcAccount && issuer != sendMaxIssue.Issuer {
-					return nil, rpctypes.RpcErrorSrcIsrMalformed("Source issuer is malformed.")
+					return nil, rpcerrors.RpcErrorSrcIsrMalformed("Source issuer is malformed.")
 				}
 				if issuer == srcAccount && sendMaxIssue.Issuer != srcAccount {
 					issuer = sendMaxIssue.Issuer
@@ -210,7 +212,7 @@ func ParseAndCreateSession(params json.RawMessage, id any) (*PathFindSession, *r
 		var parsed bool
 		domainID, parsed = rpctypes.ParsePathFindDomain(request.Domain)
 		if !parsed {
-			return nil, rpctypes.RpcErrorDomainMalformed("Domain is malformed.")
+			return nil, rpcerrors.RpcErrorDomainMalformed("Domain is malformed.")
 		}
 	}
 

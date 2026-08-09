@@ -8,6 +8,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/LeJamon/go-xrpl/internal/rpc/rpcerrors"
+
 	addresscodec "github.com/LeJamon/go-xrpl/codec/addresscodec"
 	"github.com/LeJamon/go-xrpl/crypto/secp256k1"
 	"github.com/LeJamon/go-xrpl/internal/rpc/handlers"
@@ -340,7 +342,7 @@ func TestValidationCreateRejectsKeyTokens(t *testing.T) {
 	require.NoError(t, err)
 	_, rpcErr = method.Handle(ctx, params)
 	require.NotNil(t, rpcErr, "a node public key must not be accepted as a seed")
-	assert.Equal(t, types.RpcBAD_SEED, rpcErr.Code)
+	assert.Equal(t, rpcerrors.RpcBAD_SEED, rpcErr.Code)
 }
 
 // TestValidationCreateEmptySecret verifies an explicit empty secret is rejected
@@ -358,7 +360,7 @@ func TestValidationCreateEmptySecret(t *testing.T) {
 	require.NoError(t, err)
 	_, rpcErr := method.Handle(ctx, params)
 	require.NotNil(t, rpcErr, "an explicit empty secret should be rejected")
-	assert.Equal(t, types.RpcBAD_SEED, rpcErr.Code)
+	assert.Equal(t, rpcerrors.RpcBAD_SEED, rpcErr.Code)
 }
 
 // TestValidationCreateAdminOnly tests that validation_create requires admin role.
@@ -557,7 +559,7 @@ func TestStopServiceUnavailable(t *testing.T) {
 
 	assert.Nil(t, result, "Expected nil result when service unavailable")
 	require.NotNil(t, rpcErr, "Expected RPC error when service unavailable")
-	assert.Equal(t, types.RpcINTERNAL, rpcErr.Code,
+	assert.Equal(t, rpcerrors.RpcINTERNAL, rpcErr.Code,
 		"Should return internal error code")
 	assert.Equal(t, "Internal error.", rpcErr.Message,
 		"internal error text must remain canonical")
@@ -581,7 +583,7 @@ func TestStopShutdownFuncNil(t *testing.T) {
 
 	assert.Nil(t, result, "Expected nil result when shutdown func nil")
 	require.NotNil(t, rpcErr, "Expected RPC error when shutdown func nil")
-	assert.Equal(t, types.RpcINTERNAL, rpcErr.Code,
+	assert.Equal(t, rpcerrors.RpcINTERNAL, rpcErr.Code,
 		"Should return internal error code")
 	assert.Equal(t, "Internal error.", rpcErr.Message,
 		"internal error text must remain canonical")

@@ -11,7 +11,7 @@ import (
 
 	addresscodec "github.com/LeJamon/go-xrpl/codec/addresscodec"
 	binarycodec "github.com/LeJamon/go-xrpl/codec/binarycodec"
-	"github.com/LeJamon/go-xrpl/internal/rpc/types"
+	"github.com/LeJamon/go-xrpl/internal/rpc/rpcerrors"
 )
 
 // sentinelAddr returns the classic address of a reserved AccountID sentinel.
@@ -74,7 +74,7 @@ func TestArraySizeRpcError(t *testing.T) {
 
 	rpcErr := arraySizeRpcError(encErr)
 	require.NotNil(t, rpcErr)
-	assert.Equal(t, types.RpcINVALID_PARAMS, rpcErr.Code)
+	assert.Equal(t, rpcerrors.RpcINVALID_PARAMS, rpcErr.Code)
 	assert.Equal(t, "invalidParams", rpcErr.ErrorString)
 	assert.Contains(t, rpcErr.Message, "exceeds allowed JSON array size of 512 elements per field.")
 
@@ -88,7 +88,7 @@ func TestArraySizeRpcError(t *testing.T) {
 func TestReadLimitField(t *testing.T) {
 	r := limitRange{Min: 10, Default: 200, Max: 400}
 
-	check := func(t *testing.T, params string, unlimited bool) (uint32, *types.RpcError) {
+	check := func(t *testing.T, params string, unlimited bool) (uint32, *rpcerrors.RpcError) {
 		t.Helper()
 		return readLimitField(json.RawMessage(params), r, unlimited)
 	}
@@ -106,7 +106,7 @@ func TestReadLimitField(t *testing.T) {
 	t.Run("explicit 0 -> invalidParams (guest)", func(t *testing.T) {
 		_, err := check(t, `{"limit":0}`, false)
 		require.NotNil(t, err)
-		assert.Equal(t, types.RpcINVALID_PARAMS, err.Code)
+		assert.Equal(t, rpcerrors.RpcINVALID_PARAMS, err.Code)
 		assert.Equal(t, "Invalid field 'limit'.", err.Message)
 	})
 	t.Run("explicit 0 -> invalidParams (admin/unlimited)", func(t *testing.T) {

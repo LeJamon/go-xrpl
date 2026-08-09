@@ -8,6 +8,8 @@ import (
 	"sync"
 	"testing"
 
+	"github.com/LeJamon/go-xrpl/internal/rpc/rpcerrors"
+
 	"github.com/LeJamon/go-xrpl/internal/peermanagement/resource"
 	"github.com/LeJamon/go-xrpl/internal/rpc/handlers"
 	"github.com/LeJamon/go-xrpl/internal/rpc/subscription"
@@ -25,7 +27,7 @@ type historySubscriptionProvider struct {
 	mu            sync.Mutex
 	subscriptions map[types.AccountHistorySubscriptionSink]map[string]bool
 	removed       map[types.AccountHistorySubscriptionSink]bool
-	subscribeErr  *types.RpcError
+	subscribeErr  *rpcerrors.RpcError
 	streamContext context.Context
 }
 
@@ -51,14 +53,14 @@ func setHistoryServices(ws *WebSocketServer, ctx *types.RpcContext, ledger types
 	ws.services = ctx.Services
 }
 
-func (p *historySubscriptionProvider) ValidateSubscribe(conn types.AccountHistorySubscriptionSink, account string) *types.RpcError {
+func (p *historySubscriptionProvider) ValidateSubscribe(conn types.AccountHistorySubscriptionSink, account string) *rpcerrors.RpcError {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	if p.subscribeErr != nil {
 		return p.subscribeErr
 	}
 	if _, exists := p.subscriptions[conn][account]; exists {
-		return types.RpcErrorInvalidParams("Invalid parameters.")
+		return rpcerrors.RpcErrorInvalidParams("Invalid parameters.")
 	}
 	return nil
 }
@@ -393,7 +395,7 @@ func TestAccountHistoryURLValidationIsOrderedAndAtomic(t *testing.T) {
 	}
 	require.NotNil(t, conn)
 
-	provider.subscribeErr = types.RpcErrorInternal()
+	provider.subscribeErr = rpcerrors.RpcErrorInternal()
 	_, rpcErr = ws.urlSubs.Subscribe(ctx, types.SubscriptionRequest{
 		URL:            sink.URL,
 		Streams:        []types.SubscriptionType{types.SubLedger},

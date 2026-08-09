@@ -4,6 +4,8 @@ import (
 	"encoding/json"
 	"time"
 
+	"github.com/LeJamon/go-xrpl/internal/rpc/rpcerrors"
+
 	"github.com/LeJamon/go-xrpl/codec/addresscodec"
 	"github.com/LeJamon/go-xrpl/internal/rpc/types"
 	"github.com/LeJamon/go-xrpl/protocol"
@@ -29,7 +31,7 @@ import (
 // adaptor.
 type ValidatorsMethod struct{ adminHandler }
 
-func (m *ValidatorsMethod) Handle(ctx *types.RpcContext, _ json.RawMessage) (any, *types.RpcError) {
+func (m *ValidatorsMethod) Handle(ctx *types.RpcContext, _ json.RawMessage) (any, *rpcerrors.RpcError) {
 	var services *types.ServiceGraph
 	if ctx != nil {
 		services = ctx.Services
@@ -220,7 +222,7 @@ func resolveValidatorListSnapshot(services *types.ServiceGraph, now time.Time) v
 // rippled/src/xrpld/app/misc/detail/ValidatorSite.cpp:672-705.
 type validatorListSitesMethod struct{ adminHandler }
 
-func (m *validatorListSitesMethod) Handle(ctx *types.RpcContext, _ json.RawMessage) (any, *types.RpcError) {
+func (m *validatorListSitesMethod) Handle(ctx *types.RpcContext, _ json.RawMessage) (any, *rpcerrors.RpcError) {
 	sites := []map[string]any{}
 
 	if ctx != nil && ctx.Services != nil && ctx.Services.ValidatorList() != nil {

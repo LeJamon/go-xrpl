@@ -4,13 +4,15 @@ import (
 	"encoding/json"
 	"fmt"
 
+	"github.com/LeJamon/go-xrpl/internal/rpc/rpcerrors"
+
 	"github.com/LeJamon/go-xrpl/internal/rpc/types"
 )
 
 // SignMethod handles the sign RPC method
 type SignMethod struct{ baseHandler }
 
-func (m *SignMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (result any, rpcErr *types.RpcError) {
+func (m *SignMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (result any, rpcErr *rpcerrors.RpcError) {
 	if rpcErr := rejectDisabledSigning(ctx); rpcErr != nil {
 		return nil, rpcErr
 	}
@@ -23,12 +25,12 @@ func (m *SignMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (resu
 
 	if params != nil {
 		if err := json.Unmarshal(params, &request); err != nil {
-			return nil, types.RpcErrorInvalidParams(fmt.Sprintf("Invalid parameters: %v", err))
+			return nil, rpcerrors.RpcErrorInvalidParams(fmt.Sprintf("Invalid parameters: %v", err))
 		}
 	}
 
 	if len(request.TxJson) == 0 {
-		return nil, types.RpcErrorInvalidParams("Missing required parameter: tx_json")
+		return nil, rpcerrors.RpcErrorInvalidParams("Missing required parameter: tx_json")
 	}
 
 	// Sign the transaction using the shared helper

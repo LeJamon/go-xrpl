@@ -9,6 +9,8 @@ import (
 	"sync"
 	"time"
 
+	"github.com/LeJamon/go-xrpl/internal/rpc/rpcerrors"
+
 	"github.com/LeJamon/go-xrpl/internal/peermanagement/resource"
 	"github.com/LeJamon/go-xrpl/internal/rpc/subscription"
 	"github.com/LeJamon/go-xrpl/internal/rpc/types"
@@ -284,6 +286,6 @@ func (ws *WebSocketServer) URLSubscriptionService() types.URLSubscriptionService
 
 // ExecuteMethod lets the json RPC forward through the same immutable registry
 // and request context as a direct WebSocket command.
-func (ws *WebSocketServer) ExecuteMethod(ctx *types.RpcContext, method string, params []byte) (any, *types.RpcError) {
+func (ws *WebSocketServer) ExecuteMethod(ctx *types.RpcContext, method string, params []byte) (any, *rpcerrors.RpcError) {
 	return dispatchNestedMethod(ws.methodRegistry, ctx, method, params, wsLog())
 }

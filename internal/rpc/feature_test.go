@@ -7,6 +7,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/LeJamon/go-xrpl/internal/rpc/rpcerrors"
+
 	"github.com/LeJamon/go-xrpl/amendment"
 	"github.com/LeJamon/go-xrpl/internal/rpc/handlers"
 	"github.com/LeJamon/go-xrpl/internal/rpc/types"
@@ -256,7 +258,7 @@ func TestFeatureInvalidName(t *testing.T) {
 
 			assert.Nil(t, result, "Expected nil result for invalid feature name")
 			require.NotNil(t, rpcErr, "Expected error for invalid feature name")
-			assert.Equal(t, types.RpcBAD_FEATURE, rpcErr.Code, "rippled returns rpcBAD_FEATURE for an unknown feature")
+			assert.Equal(t, rpcerrors.RpcBAD_FEATURE, rpcErr.Code, "rippled returns rpcBAD_FEATURE for an unknown feature")
 			assert.Contains(t, rpcErr.Message, "Feature not found")
 		})
 	}

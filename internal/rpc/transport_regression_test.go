@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/LeJamon/go-xrpl/internal/peermanagement/resource"
+	"github.com/LeJamon/go-xrpl/internal/rpc/rpcerrors"
 	"github.com/LeJamon/go-xrpl/internal/rpc/subscription"
 	"github.com/LeJamon/go-xrpl/internal/rpc/types"
 	"github.com/stretchr/testify/assert"
@@ -41,7 +42,7 @@ func newTransportRegressionServer(t *testing.T) *Server {
 			"stop": &stubHandler{role: types.RoleAdmin},
 			"fail": &stubHandler{
 				handle: func(*types.RpcContext, json.RawMessage) (any, *types.RpcError) {
-					return nil, types.RpcErrorInvalidParams("Invalid parameters.")
+					return nil, rpcerrors.RpcErrorInvalidParams("Invalid parameters.")
 				},
 			},
 			"gated": &condStubHandler{cond: types.NeedsNetworkConnection},
@@ -219,11 +220,11 @@ func TestHTTPAdmissionOrderingAtTransportBoundary(t *testing.T) {
 			if batch {
 				assert.Equal(t, http.StatusOK, recorder.Code)
 				errorObject := batchRegressionError(t, recorder)
-				assert.Equal(t, float64(types.WrongVersionJSONRPCCode), errorObject["code"])
-				assert.Equal(t, types.InvalidApiVersionToken, errorObject["message"])
+				assert.Equal(t, float64(rpcerrors.WrongVersionJSONRPCCode), errorObject["code"])
+				assert.Equal(t, rpcerrors.InvalidApiVersionToken, errorObject["message"])
 			} else {
 				assert.Equal(t, http.StatusBadRequest, recorder.Code)
-				assert.Equal(t, types.InvalidApiVersionToken+"\r\n", recorder.Body.String())
+				assert.Equal(t, rpcerrors.InvalidApiVersionToken+"\r\n", recorder.Body.String())
 			}
 			assert.Equal(t, uint32(0), transportRegressionLocalBalance(t, server.resourceManager))
 		})

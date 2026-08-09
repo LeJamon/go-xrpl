@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"testing"
 
+	"github.com/LeJamon/go-xrpl/internal/rpc/rpcerrors"
+
 	"github.com/LeJamon/go-xrpl/internal/ledger/service/svcerr"
 	"github.com/LeJamon/go-xrpl/internal/rpc/handlers"
 	"github.com/LeJamon/go-xrpl/internal/rpc/types"
@@ -15,7 +17,7 @@ import (
 const accountPageTestAccount = "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh"
 
 type accountPageMethod interface {
-	Handle(*types.RpcContext, json.RawMessage) (any, *types.RpcError)
+	Handle(*types.RpcContext, json.RawMessage) (any, *rpcerrors.RpcError)
 }
 
 func accountPageContext(services *types.ServiceGraph) *types.RpcContext {
@@ -25,7 +27,7 @@ func accountPageContext(services *types.ServiceGraph) *types.RpcContext {
 	}
 }
 
-func accountPageCall(t *testing.T, method accountPageMethod, ctx *types.RpcContext, params map[string]any) *types.RpcError {
+func accountPageCall(t *testing.T, method accountPageMethod, ctx *types.RpcContext, params map[string]any) *rpcerrors.RpcError {
 	t.Helper()
 	raw, err := json.Marshal(params)
 	require.NoError(t, err)

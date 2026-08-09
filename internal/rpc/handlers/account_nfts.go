@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"errors"
 
+	"github.com/LeJamon/go-xrpl/internal/rpc/rpcerrors"
+
 	"github.com/LeJamon/go-xrpl/internal/ledger/service/svcerr"
 	"github.com/LeJamon/go-xrpl/internal/rpc/types"
 )
@@ -13,13 +15,13 @@ import (
 // owns, read from its NFTokenPage entries.
 type AccountNftsMethod struct{ baseHandler }
 
-func (m *AccountNftsMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (any, *types.RpcError) {
+func (m *AccountNftsMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (any, *rpcerrors.RpcError) {
 	fields, account, parseErr := accountPageParams(params)
 	if parseErr != nil {
 		return nil, parseErr
 	}
 	if !types.IsValidClassicAddress(account) {
-		return nil, types.RpcErrorActMalformed("Account malformed.")
+		return nil, rpcerrors.RpcErrorActMalformed("Account malformed.")
 	}
 	if err := requireLedgerService(ctx.Services); err != nil {
 		return nil, err
@@ -40,11 +42,11 @@ func (m *AccountNftsMethod) Handle(ctx *types.RpcContext, params json.RawMessage
 	}
 	if _, present := fields["marker"]; present {
 		if marker != "0" && len(marker) != 64 {
-			return nil, types.RpcErrorInvalidField("marker")
+			return nil, rpcerrors.RpcErrorInvalidField("marker")
 		}
 		if marker != "0" {
 			if _, err := hex.DecodeString(marker); err != nil {
-				return nil, types.RpcErrorInvalidField("marker")
+				return nil, rpcerrors.RpcErrorInvalidField("marker")
 			}
 		}
 	}
@@ -60,13 +62,13 @@ func (m *AccountNftsMethod) Handle(ctx *types.RpcContext, params json.RawMessage
 			return nil, rerr
 		}
 		if errors.Is(err, svcerr.ErrAccountNotFound) {
-			return nil, types.RpcErrorActNotFound("Account not found.")
+			return nil, rpcerrors.RpcErrorActNotFound("Account not found.")
 		}
 		if errors.Is(err, svcerr.ErrAccountMalformed) {
-			return nil, types.RpcErrorActMalformed("Account malformed.")
+			return nil, rpcerrors.RpcErrorActMalformed("Account malformed.")
 		}
 		if errors.Is(err, svcerr.ErrInvalidMarker) || errors.Is(err, svcerr.ErrStaleMarker) {
-			return nil, types.RpcErrorInvalidField("marker")
+			return nil, rpcerrors.RpcErrorInvalidField("marker")
 		}
 		return nil, rpcInternalError("account_nfts: ledger query failed", err)
 	}

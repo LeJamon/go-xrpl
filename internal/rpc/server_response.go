@@ -6,6 +6,7 @@ import (
 	"maps"
 	"net/http"
 
+	"github.com/LeJamon/go-xrpl/internal/rpc/rpcerrors"
 	"github.com/LeJamon/go-xrpl/internal/rpc/types"
 )
 
@@ -23,7 +24,7 @@ func loadWarningOpts(ctx *types.RpcContext) *jsonRPCResponseOptions {
 // buildXrplResponseBody assembles one versioned JSON-RPC response. ripplerpc
 // 1.x uses the legacy result envelope; 2.x and later move errors to the top
 // level and preserve the request metadata alongside either result or error.
-func buildXrplResponseBody(request any, result any, rpcErr *types.RpcError, opts *jsonRPCResponseOptions) map[string]any {
+func buildXrplResponseBody(request any, result any, rpcErr *rpcerrors.RpcError, opts *jsonRPCResponseOptions) map[string]any {
 	response := make(map[string]any)
 	ripplerpc, _ := ripplerpcVersion(request)
 
@@ -84,7 +85,7 @@ func buildXrplResponseBody(request any, result any, rpcErr *types.RpcError, opts
 
 	return response
 }
-func (s *Server) writeXrplResponseWithOptions(w http.ResponseWriter, request any, result any, rpcErr *types.RpcError, opts *jsonRPCResponseOptions) {
+func (s *Server) writeXrplResponseWithOptions(w http.ResponseWriter, request any, result any, rpcErr *rpcerrors.RpcError, opts *jsonRPCResponseOptions) {
 	response := buildXrplResponseBody(request, result, rpcErr, opts)
 	status := http.StatusOK
 	ripplerpc, _ := ripplerpcVersion(request)
@@ -111,5 +112,5 @@ func writeJSONRPCBody(w io.Writer, response any) error {
 	return err
 }
 func rpcErrorHTTPStatus(code int) int {
-	return types.RpcErrorHTTPStatus(code)
+	return rpcerrors.RpcErrorHTTPStatus(code)
 }

@@ -6,6 +6,8 @@ import (
 	"reflect"
 	"slices"
 
+	"github.com/LeJamon/go-xrpl/internal/rpc/rpcerrors"
+
 	"github.com/LeJamon/go-xrpl/internal/rpc/types"
 )
 
@@ -164,7 +166,7 @@ type registeredMethod struct {
 	descriptor MethodDescriptor
 }
 
-func (method registeredMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (any, *types.RpcError) {
+func (method registeredMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (any, *rpcerrors.RpcError) {
 	return method.descriptor.Handler.Handle(ctx, params)
 }
 

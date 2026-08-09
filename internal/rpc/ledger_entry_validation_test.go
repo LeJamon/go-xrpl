@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"testing"
 
+	"github.com/LeJamon/go-xrpl/internal/rpc/rpcerrors"
+
 	"github.com/LeJamon/go-xrpl/internal/rpc/handlers"
 	"github.com/LeJamon/go-xrpl/internal/rpc/types"
 	"github.com/stretchr/testify/assert"
@@ -37,42 +39,42 @@ func TestLedgerEntryLedgerSelectorValidation(t *testing.T) {
 			params:     map[string]any{"index": validIndex, "ledger_hash": 12345},
 			expectErr:  true,
 			expectMsg:  "Invalid field 'ledger_hash', not hex string.",
-			expectCode: types.RpcINVALID_PARAMS,
+			expectCode: rpcerrors.RpcINVALID_PARAMS,
 		},
 		{
 			name:       "bad-hex ledger_hash is invalidParams",
 			params:     map[string]any{"index": validIndex, "ledger_hash": "not-hex"},
 			expectErr:  true,
 			expectMsg:  "Invalid field 'ledger_hash', not hex string.",
-			expectCode: types.RpcINVALID_PARAMS,
+			expectCode: rpcerrors.RpcINVALID_PARAMS,
 		},
 		{
 			name:       "null ledger_hash is invalidParams",
 			params:     map[string]any{"index": validIndex, "ledger_hash": nil},
 			expectErr:  true,
 			expectMsg:  "Invalid field 'ledger_hash', not hex string.",
-			expectCode: types.RpcINVALID_PARAMS,
+			expectCode: rpcerrors.RpcINVALID_PARAMS,
 		},
 		{
 			name:       "object ledger_index is invalidParams",
 			params:     map[string]any{"index": validIndex, "ledger_index": map[string]any{"x": 1}},
 			expectErr:  true,
 			expectMsg:  "Invalid field 'ledger_index', not string or number.",
-			expectCode: types.RpcINVALID_PARAMS,
+			expectCode: rpcerrors.RpcINVALID_PARAMS,
 		},
 		{
 			name:       "non-integral ledger_index is invalidParams",
 			params:     map[string]any{"index": validIndex, "ledger_index": 2.5},
 			expectErr:  true,
 			expectMsg:  "Invalid field 'ledger_index', not string or number.",
-			expectCode: types.RpcINVALID_PARAMS,
+			expectCode: rpcerrors.RpcINVALID_PARAMS,
 		},
 		{
 			name:       "null ledger_index is invalidParams",
 			params:     map[string]any{"index": validIndex, "ledger_index": nil},
 			expectErr:  true,
 			expectMsg:  "Invalid field 'ledger_index', not string or number.",
-			expectCode: types.RpcINVALID_PARAMS,
+			expectCode: rpcerrors.RpcINVALID_PARAMS,
 		},
 		{
 			name:      "string ledger_index keyword still works",

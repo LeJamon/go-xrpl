@@ -10,6 +10,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/LeJamon/go-xrpl/internal/rpc/rpcerrors"
+
 	addresscodec "github.com/LeJamon/go-xrpl/codec/addresscodec"
 	"github.com/LeJamon/go-xrpl/internal/ledger/service/svcerr"
 	"github.com/LeJamon/go-xrpl/internal/ledger/state"
@@ -158,7 +160,7 @@ func TestGetAggregatePriceNilOracleResultReturnsInternal(t *testing.T) {
 	})
 	assert.Nil(t, result)
 	require.NotNil(t, rpcErr)
-	assert.Equal(t, types.RpcINTERNAL, rpcErr.Code)
+	assert.Equal(t, rpcerrors.RpcINTERNAL, rpcErr.Code)
 }
 
 func TestGetAggregatePriceLookupErrorReturnsInternal(t *testing.T) {
@@ -174,7 +176,7 @@ func TestGetAggregatePriceLookupErrorReturnsInternal(t *testing.T) {
 	})
 	assert.Nil(t, result)
 	require.NotNil(t, rpcErr)
-	assert.Equal(t, types.RpcINTERNAL, rpcErr.Code)
+	assert.Equal(t, rpcerrors.RpcINTERNAL, rpcErr.Code)
 }
 
 func TestGetAggregatePriceMalformedOracleBytesReturnsInternal(t *testing.T) {
@@ -205,7 +207,7 @@ func TestGetAggregatePriceMalformedOracleBytesReturnsInternal(t *testing.T) {
 			})
 			assert.Nil(t, result)
 			require.NotNil(t, rpcErr)
-			assert.Equal(t, types.RpcINTERNAL, rpcErr.Code)
+			assert.Equal(t, rpcerrors.RpcINTERNAL, rpcErr.Code)
 		})
 	}
 }
@@ -226,7 +228,7 @@ func TestGetAggregatePriceHistoricalLookupErrorReturnsInternal(t *testing.T) {
 	})
 	assert.Nil(t, result)
 	require.NotNil(t, rpcErr)
-	assert.Equal(t, types.RpcINTERNAL, rpcErr.Code)
+	assert.Equal(t, rpcerrors.RpcINTERNAL, rpcErr.Code)
 }
 
 func TestGetAggregatePriceMissingHistoricalTransactionReturnsObjectNotFound(t *testing.T) {
@@ -244,7 +246,7 @@ func TestGetAggregatePriceMissingHistoricalTransactionReturnsObjectNotFound(t *t
 	})
 	assert.Nil(t, result)
 	require.NotNil(t, rpcErr)
-	assert.Equal(t, types.RpcOBJECT_NOT_FOUND, rpcErr.Code)
+	assert.Equal(t, rpcerrors.RpcOBJECT_NOT_FOUND, rpcErr.Code)
 }
 
 func TestGetAggregatePriceMalformedHistoricalTransactionReturnsInternal(t *testing.T) {
@@ -266,12 +268,12 @@ func TestGetAggregatePriceMalformedHistoricalTransactionReturnsInternal(t *testi
 	})
 	assert.Nil(t, result)
 	require.NotNil(t, rpcErr)
-	assert.Equal(t, types.RpcINTERNAL, rpcErr.Code)
+	assert.Equal(t, rpcerrors.RpcINTERNAL, rpcErr.Code)
 }
 
 const ownerForAggregatePriceTest = "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh"
 
-func callAggregatePriceError(t *testing.T, service types.LedgerService, request map[string]any) (any, *types.RpcError) {
+func callAggregatePriceError(t *testing.T, service types.LedgerService, request map[string]any) (any, *rpcerrors.RpcError) {
 	t.Helper()
 	encoded, err := json.Marshal(request)
 	require.NoError(t, err)
@@ -373,7 +375,7 @@ func TestGetAggregatePriceWalksExactlyThreePriorOracleVersions(t *testing.T) {
 			if !test.wantFound {
 				assert.Nil(t, result)
 				require.NotNil(t, rpcErr)
-				assert.Equal(t, types.RpcOBJECT_NOT_FOUND, rpcErr.Code)
+				assert.Equal(t, rpcerrors.RpcOBJECT_NOT_FOUND, rpcErr.Code)
 				return
 			}
 			require.Nil(t, rpcErr)

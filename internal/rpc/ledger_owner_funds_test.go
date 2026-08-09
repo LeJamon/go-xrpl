@@ -9,6 +9,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/LeJamon/go-xrpl/internal/rpc/rpcerrors"
+
 	"github.com/LeJamon/go-xrpl/amendment"
 	addresscodec "github.com/LeJamon/go-xrpl/codec/addresscodec"
 	binarycodec "github.com/LeJamon/go-xrpl/codec/binarycodec"
@@ -390,21 +392,21 @@ func TestLedgerOwnerFundsUsesTargetLedgerReservesIncludingZero(t *testing.T) {
 	result, rpcErr = (&handlers.LedgerMethod{}).Handle(ctx, paramsJSON)
 	assert.Nil(t, result)
 	require.NotNil(t, rpcErr)
-	assert.Equal(t, types.RpcINTERNAL, rpcErr.Code)
+	assert.Equal(t, rpcerrors.RpcINTERNAL, rpcErr.Code)
 
 	view.readErrors = nil
 	view.entries[keylet.Fees()] = []byte{0x11, 0xff}
 	result, rpcErr = (&handlers.LedgerMethod{}).Handle(ctx, paramsJSON)
 	assert.Nil(t, result)
 	require.NotNil(t, rpcErr)
-	assert.Equal(t, types.RpcINTERNAL, rpcErr.Code)
+	assert.Equal(t, rpcerrors.RpcINTERNAL, rpcErr.Code)
 
 	view.entries[keylet.Fees()] = feeData
 	view.readErrors = map[keylet.Keylet]error{keylet.Account(accountID): errors.New("account read failed")}
 	result, rpcErr = (&handlers.LedgerMethod{}).Handle(ctx, paramsJSON)
 	assert.Nil(t, result)
 	require.NotNil(t, rpcErr)
-	assert.Equal(t, types.RpcINTERNAL, rpcErr.Code)
+	assert.Equal(t, rpcerrors.RpcINTERNAL, rpcErr.Code)
 }
 
 func TestTransactionOwnerFundsMPT(t *testing.T) {
@@ -563,7 +565,7 @@ func TestTransactionOwnerFundsMPT(t *testing.T) {
 	}, queueParams)
 	require.Nil(t, result)
 	require.NotNil(t, rpcErr)
-	assert.Equal(t, types.RpcINTERNAL, rpcErr.Code)
+	assert.Equal(t, rpcerrors.RpcINTERNAL, rpcErr.Code)
 	queueData := rpcErr.Extra["queue_data"].([]any)
 	require.Len(t, queueData, 2)
 	assert.Contains(t, queueData[0].(map[string]any), "tx")

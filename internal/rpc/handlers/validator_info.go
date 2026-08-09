@@ -4,8 +4,10 @@ import (
 	"encoding/base64"
 	"encoding/json"
 
-	"github.com/LeJamon/go-xrpl/codec/addresscodec"
+	"github.com/LeJamon/go-xrpl/internal/rpc/rpcerrors"
 	"github.com/LeJamon/go-xrpl/internal/rpc/types"
+
+	"github.com/LeJamon/go-xrpl/codec/addresscodec"
 )
 
 // ValidatorInfoMethod handles the `validator_info` RPC method.
@@ -28,9 +30,9 @@ type validatorInfoResponse struct {
 	Domain string  `json:"domain,omitempty"`
 }
 
-func (m *ValidatorInfoMethod) Handle(ctx *types.RpcContext, _ json.RawMessage) (any, *types.RpcError) {
+func (m *ValidatorInfoMethod) Handle(ctx *types.RpcContext, _ json.RawMessage) (any, *rpcerrors.RpcError) {
 	if ctx.Services == nil || len(ctx.Services.ValidatorPublicKey()) == 0 {
-		return nil, types.RpcErrorInvalidParams("not a validator")
+		return nil, rpcerrors.RpcErrorInvalidParams("not a validator")
 	}
 
 	validationPK := ctx.Services.ValidatorPublicKey()

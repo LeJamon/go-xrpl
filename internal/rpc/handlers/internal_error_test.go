@@ -13,7 +13,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/LeJamon/go-xrpl/internal/rpc/types"
+	"github.com/LeJamon/go-xrpl/internal/rpc/rpcerrors"
 	xrpllog "github.com/LeJamon/go-xrpl/log"
 	"github.com/stretchr/testify/require"
 	"golang.org/x/tools/go/packages"
@@ -24,7 +24,7 @@ func TestRPCInternalErrorSanitizesCause(t *testing.T) {
 
 	rpcErr := rpcInternalError("test operation failed", errors.New("backend detail"))
 
-	require.Equal(t, types.RpcINTERNAL, rpcErr.Code)
+	require.Equal(t, rpcerrors.RpcINTERNAL, rpcErr.Code)
 	require.Equal(t, "Internal error.", rpcErr.Message)
 	require.NotContains(t, rpcErr.Message, "backend detail")
 	require.Contains(t, logs.String(), "test operation failed")
@@ -37,7 +37,7 @@ func TestRPCInternalInvariantErrorIsCanonicalAndLogged(t *testing.T) {
 
 	rpcErr := rpcInternalInvariantError("test invariant failed")
 
-	require.Equal(t, types.RpcINTERNAL, rpcErr.Code)
+	require.Equal(t, rpcerrors.RpcINTERNAL, rpcErr.Code)
 	require.Equal(t, "internal", rpcErr.ErrorString)
 	require.Equal(t, "Internal error.", rpcErr.Message)
 	require.Contains(t, logs.String(), "test invariant failed")
@@ -49,7 +49,7 @@ func TestRPCTransactionSubmissionErrorPreservesFixedMessage(t *testing.T) {
 
 	rpcErr := rpcTransactionSubmissionError("test submission failed", cause)
 
-	require.Equal(t, types.RpcINTERNAL, rpcErr.Code)
+	require.Equal(t, rpcerrors.RpcINTERNAL, rpcErr.Code)
 	require.Equal(t, "internal", rpcErr.ErrorString)
 	require.Equal(t, "Exception occurred during transaction submission.", rpcErr.Message)
 	require.NotContains(t, rpcErr.Message, cause.Error())
@@ -63,7 +63,7 @@ func TestRPCDBDeserializationErrorIsCanonicalAndLogged(t *testing.T) {
 
 	rpcErr := rpcDBDeserializationError("test transaction decode failed", cause)
 
-	require.Equal(t, types.RpcDB_DESERIALIZATION, rpcErr.Code)
+	require.Equal(t, rpcerrors.RpcDB_DESERIALIZATION, rpcErr.Code)
 	require.Equal(t, "dbDeserialization", rpcErr.ErrorString)
 	require.Equal(t, "Database deserialization error.", rpcErr.Message)
 	require.NotContains(t, rpcErr.Message, cause.Error())
@@ -132,7 +132,7 @@ func TestRPCInternalErrorAuditFixtures(t *testing.T) {
 }
 
 func TestRPCFunctionIdentityRejectsMethods(t *testing.T) {
-	pkg := gotypes.NewPackage(rpcTypesPackagePath, "types")
+	pkg := gotypes.NewPackage(rpcErrorsPackagePath, "rpcerrors")
 	params := gotypes.NewTuple(gotypes.NewVar(token.NoPos, pkg, "code", gotypes.Typ[gotypes.Int]))
 	result := gotypes.NewTuple(gotypes.NewVar(token.NoPos, pkg, "result", gotypes.NewPointer(gotypes.Typ[gotypes.Int])))
 	function := gotypes.NewFunc(token.NoPos, pkg, "NewRpcError", gotypes.NewSignatureType(nil, nil, nil, params, result, false))
@@ -145,7 +145,7 @@ func TestRPCFunctionIdentityRejectsMethods(t *testing.T) {
 	require.False(t, isRPCFunction(method, "NewRpcError"))
 }
 
-const rpcTypesPackagePath = "github.com/LeJamon/go-xrpl/internal/rpc/types"
+const rpcErrorsPackagePath = "github.com/LeJamon/go-xrpl/internal/rpc/rpcerrors"
 
 type rpcInternalErrorAuditor struct {
 	findings []string
@@ -517,7 +517,7 @@ func (a *rpcInternalErrorAuditor) isRpcErrorField(pkg *packages.Package, expr as
 	if !ok {
 		return false
 	}
-	if !selected.IsField() || selected.Pkg() == nil || selected.Pkg().Path() != rpcTypesPackagePath {
+	if !selected.IsField() || selected.Pkg() == nil || selected.Pkg().Path() != rpcErrorsPackagePath {
 		return false
 	}
 	switch selected.Name() {
@@ -539,7 +539,7 @@ func isRpcErrorMutationTarget(pkg *packages.Package, expr ast.Expr) bool {
 }
 
 func (a *rpcInternalErrorAuditor) isErrorsImplementation(pkg *packages.Package, node ast.Node) bool {
-	return pkg.PkgPath == rpcTypesPackagePath && filepath.Base(pkg.Fset.Position(node.Pos()).Filename) == "errors.go"
+	return pkg.PkgPath == rpcErrorsPackagePath && filepath.Base(pkg.Fset.Position(node.Pos()).Filename) == "errors.go"
 }
 
 func (a *rpcInternalErrorAuditor) report(pkg *packages.Package, node ast.Node, message string) {
@@ -592,7 +592,7 @@ func unparen(expr ast.Expr) ast.Expr {
 }
 
 func isRPCFunction(function *gotypes.Func, name string) bool {
-	if function == nil || function.Name() != name || function.Pkg() == nil || function.Pkg().Path() != rpcTypesPackagePath || function.Parent() != function.Pkg().Scope() {
+	if function == nil || function.Name() != name || function.Pkg() == nil || function.Pkg().Path() != rpcErrorsPackagePath || function.Parent() != function.Pkg().Scope() {
 		return false
 	}
 	signature, _ := function.Type().(*gotypes.Signature)
@@ -611,7 +611,7 @@ func isRpcErrorType(value gotypes.Type) bool {
 	if !ok {
 		return false
 	}
-	if named.Obj().Name() == "RpcError" && named.Obj().Pkg() != nil && named.Obj().Pkg().Path() == rpcTypesPackagePath {
+	if named.Obj().Name() == "RpcError" && named.Obj().Pkg() != nil && named.Obj().Pkg().Path() == rpcErrorsPackagePath {
 		return true
 	}
 	structure, ok := named.Underlying().(*gotypes.Struct)

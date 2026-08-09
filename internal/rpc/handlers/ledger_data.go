@@ -9,10 +9,12 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/LeJamon/go-xrpl/internal/rpc/rpcerrors"
+	"github.com/LeJamon/go-xrpl/internal/rpc/types"
+
 	binarycodec "github.com/LeJamon/go-xrpl/codec/binarycodec"
 	"github.com/LeJamon/go-xrpl/internal/ledger/service/svcerr"
 	ledgerstate "github.com/LeJamon/go-xrpl/internal/ledger/state"
-	"github.com/LeJamon/go-xrpl/internal/rpc/types"
 	"github.com/LeJamon/go-xrpl/ledger/entry"
 	"github.com/LeJamon/go-xrpl/protocol"
 )
@@ -20,7 +22,7 @@ import (
 // LedgerDataMethod handles the ledger_data RPC method
 type LedgerDataMethod struct{ baseHandler }
 
-func (m *LedgerDataMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (any, *types.RpcError) {
+func (m *LedgerDataMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (any, *rpcerrors.RpcError) {
 	parsedLedgerSpec, _, ledgerSpecErr := parseLedgerSpecifier(params)
 	if ledgerSpecErr != nil {
 		return nil, ledgerSpecErr
@@ -33,7 +35,7 @@ func (m *LedgerDataMethod) Handle(ctx *types.RpcContext, params json.RawMessage)
 	fields := make(map[string]json.RawMessage)
 	if params != nil {
 		if err := json.Unmarshal(params, &fields); err != nil {
-			return nil, types.RpcErrorInvalidParams("Invalid parameters.")
+			return nil, rpcerrors.RpcErrorInvalidParams("Invalid parameters.")
 		}
 	}
 	markerStr := ""
@@ -41,11 +43,11 @@ func (m *LedgerDataMethod) Handle(ctx *types.RpcContext, params json.RawMessage)
 	if hasMarker {
 		var marker string
 		if err := json.Unmarshal(markerRaw, &marker); err != nil {
-			return nil, types.RpcErrorExpectedField("marker", "valid")
+			return nil, rpcerrors.RpcErrorExpectedField("marker", "valid")
 		}
 		switch marker {
 		case "":
-			return nil, types.RpcErrorExpectedField("marker", "valid")
+			return nil, rpcerrors.RpcErrorExpectedField("marker", "valid")
 		case "0":
 			markerStr = strings.Repeat("0", 64)
 		default:
@@ -58,7 +60,7 @@ func (m *LedgerDataMethod) Handle(ctx *types.RpcContext, params json.RawMessage)
 		var valid bool
 		binaryMode, valid = rawJSONBool(raw)
 		if !valid {
-			return nil, types.RpcErrorExpectedField("binary", "boolean")
+			return nil, rpcerrors.RpcErrorExpectedField("binary", "boolean")
 		}
 	}
 
@@ -80,7 +82,7 @@ func (m *LedgerDataMethod) Handle(ctx *types.RpcContext, params json.RawMessage)
 		// rippled's doLedgerData rejects a present-but-unparseable marker with
 		// expected_field_error(jss::marker, "valid").
 		if errors.Is(err, svcerr.ErrInvalidMarker) {
-			return nil, types.RpcErrorExpectedField("marker", "valid")
+			return nil, rpcerrors.RpcErrorExpectedField("marker", "valid")
 		}
 		return nil, rpcInternalError("ledger_data: ledger query failed", err)
 	}
@@ -155,7 +157,7 @@ func (m *LedgerDataMethod) Handle(ctx *types.RpcContext, params json.RawMessage)
 	return response, nil
 }
 
-func ledgerDataLimit(params map[string]json.RawMessage, binary, unlimited bool) (uint32, *types.RpcError) {
+func ledgerDataLimit(params map[string]json.RawMessage, binary, unlimited bool) (uint32, *rpcerrors.RpcError) {
 	maxLimit := uint64(limitLedgerData.Default)
 	if binary {
 		maxLimit = uint64(limitLedgerDataBinary.Default)
@@ -167,20 +169,20 @@ func ledgerDataLimit(params map[string]json.RawMessage, binary, unlimited bool) 
 
 	value := string(raw)
 	if strings.ContainsAny(value, ".eE") || value == "" || value == "null" || value == "true" || value == "false" {
-		return 0, types.RpcErrorExpectedField("limit", "integer")
+		return 0, rpcerrors.RpcErrorExpectedField("limit", "integer")
 	}
 	if strings.HasPrefix(value, "-") {
 		if _, err := strconv.ParseInt(value, 10, 64); err != nil {
-			return 0, types.RpcErrorExpectedField("limit", "integer")
+			return 0, rpcerrors.RpcErrorExpectedField("limit", "integer")
 		}
 		return uint32(maxLimit), nil
 	}
 	parsed, err := strconv.ParseUint(value, 10, 64)
 	if err != nil {
-		return 0, types.RpcErrorExpectedField("limit", "integer")
+		return 0, rpcerrors.RpcErrorExpectedField("limit", "integer")
 	}
 	if parsed > math.MaxInt32 {
-		return 0, types.RpcErrorInvalidParams("Invalid parameters.")
+		return 0, rpcerrors.RpcErrorInvalidParams("Invalid parameters.")
 	}
 	if !unlimited && parsed > maxLimit {
 		parsed = maxLimit
@@ -188,14 +190,14 @@ func ledgerDataLimit(params map[string]json.RawMessage, binary, unlimited bool) 
 	return uint32(parsed), nil
 }
 
-func ledgerDataEntryType(params map[string]json.RawMessage) (entry.Type, *types.RpcError) {
+func ledgerDataEntryType(params map[string]json.RawMessage) (entry.Type, *rpcerrors.RpcError) {
 	raw, ok := params["type"]
 	if !ok {
 		return 0, nil
 	}
 	var value string
 	if err := json.Unmarshal(raw, &value); err != nil {
-		return 0, types.RpcErrorExpectedField("type", "string")
+		return 0, rpcerrors.RpcErrorExpectedField("type", "string")
 	}
 	for _, candidate := range protocol.LedgerEntryTypes() {
 		if candidate.Deprecated || candidate.RPCName == "" {
@@ -205,7 +207,7 @@ func ledgerDataEntryType(params map[string]json.RawMessage) (entry.Type, *types.
 			return candidate.Type, nil
 		}
 	}
-	return 0, types.RpcErrorInvalidField("type")
+	return 0, rpcerrors.RpcErrorInvalidField("type")
 }
 
 // deserializeLedgerEntry converts binary ledger entry data to JSON format

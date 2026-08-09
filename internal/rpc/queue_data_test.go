@@ -6,6 +6,8 @@ import (
 	"errors"
 	"testing"
 
+	"github.com/LeJamon/go-xrpl/internal/rpc/rpcerrors"
+
 	addresscodec "github.com/LeJamon/go-xrpl/codec/addresscodec"
 	"github.com/LeJamon/go-xrpl/internal/rpc/handlers"
 	"github.com/LeJamon/go-xrpl/internal/rpc/types"
@@ -237,7 +239,7 @@ func TestLedgerQueueData_RealQueue(t *testing.T) {
 	result, rpcErr = method.Handle(ctx, paramsJSON)
 	require.Nil(t, result)
 	require.NotNil(t, rpcErr)
-	assert.Equal(t, types.RpcINVALID_PARAMS, rpcErr.Code)
+	assert.Equal(t, rpcerrors.RpcINVALID_PARAMS, rpcErr.Code)
 
 	paramsJSON = json.RawMessage(`{"queue":"yes","ledger_hash":"","ledger_index":1}`)
 	result, rpcErr = method.Handle(ctx, paramsJSON)
@@ -265,7 +267,7 @@ func TestLedgerQueueData_RealQueue(t *testing.T) {
 	result, rpcErr = method.Handle(ctx, paramsJSON)
 	require.Nil(t, result)
 	require.NotNil(t, rpcErr)
-	assert.Equal(t, types.RpcLGR_NOT_FOUND, rpcErr.Code)
+	assert.Equal(t, rpcerrors.RpcLGR_NOT_FOUND, rpcErr.Code)
 }
 
 func TestLedgerQueueDataRejectsClosedLedger(t *testing.T) {
@@ -289,7 +291,7 @@ func TestLedgerQueueDataRejectsClosedLedger(t *testing.T) {
 
 	require.Nil(t, result)
 	require.NotNil(t, rpcErr)
-	assert.Equal(t, types.RpcINVALID_PARAMS, rpcErr.Code)
+	assert.Equal(t, rpcerrors.RpcINVALID_PARAMS, rpcErr.Code)
 }
 
 // TestLedgerQueueData_EmptyOmitted verifies an empty TxQ yields no queue_data

@@ -5,6 +5,7 @@ import (
 
 	"github.com/LeJamon/go-xrpl/internal/ledger/service/svcerr"
 	"github.com/LeJamon/go-xrpl/internal/rpc/handlers"
+	"github.com/LeJamon/go-xrpl/internal/rpc/rpcerrors"
 	"github.com/LeJamon/go-xrpl/internal/rpc/types"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -122,7 +123,7 @@ func TestLedgerEntryErrorProjectionPreservesLedgerMetadata(t *testing.T) {
 		})
 		require.Nil(t, result)
 		require.NotNil(t, rpcErr)
-		assert.Equal(t, types.RpcENTRY_NOT_FOUND, rpcErr.Code)
+		assert.Equal(t, rpcerrors.RpcENTRY_NOT_FOUND, rpcErr.Code)
 		assert.Equal(t, index, rpcErr.Extra["index"])
 		assert.Equal(t, uint32(2), rpcErr.Extra["ledger_index"])
 		assert.Equal(t, validatedHash, rpcErr.Extra["ledger_hash"])
@@ -139,7 +140,7 @@ func TestLedgerEntryErrorProjectionPreservesLedgerMetadata(t *testing.T) {
 		})
 		require.Nil(t, result)
 		require.NotNil(t, rpcErr)
-		assert.Equal(t, types.RpcENTRY_NOT_FOUND, rpcErr.Code)
+		assert.Equal(t, rpcerrors.RpcENTRY_NOT_FOUND, rpcErr.Code)
 		assert.Equal(t, index, rpcErr.Extra["index"])
 		assert.Equal(t, uint32(3), rpcErr.Extra["ledger_current_index"])
 		assert.Equal(t, false, rpcErr.Extra["validated"])
@@ -158,7 +159,7 @@ func TestLedgerEntryErrorProjectionPreservesLedgerMetadata(t *testing.T) {
 		})
 		require.Nil(t, result)
 		require.NotNil(t, rpcErr)
-		assert.Equal(t, types.RpcUNEXPECTED_LEDGER_TYPE, rpcErr.Code)
+		assert.Equal(t, rpcerrors.RpcUNEXPECTED_LEDGER_TYPE, rpcErr.Code)
 		assert.Equal(t, index, rpcErr.Extra["index"])
 		assert.Equal(t, uint32(2), rpcErr.Extra["ledger_index"])
 		assert.Equal(t, validatedHash, rpcErr.Extra["ledger_hash"])

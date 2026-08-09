@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 
 	"github.com/LeJamon/go-xrpl/internal/peermanagement/resource"
+	"github.com/LeJamon/go-xrpl/internal/rpc/rpcerrors"
 	"github.com/LeJamon/go-xrpl/internal/rpc/types"
 )
 
@@ -34,12 +35,12 @@ func (s *Server) dispatchBatchElement(el json.RawMessage, baseCtx context.Contex
 		echo := redactedRequestMap(elem)
 		return map[string]any{
 			"request": echo,
-			"error":   makeBatchJSONError(types.WrongVersionJSONRPCCode, types.InvalidApiVersionToken),
+			"error":   makeBatchJSONError(rpcerrors.WrongVersionJSONRPCCode, rpcerrors.InvalidApiVersionToken),
 		}
 	}
 	method, _ := elem["method"].(string)
 	resolution := resolveMethod(s.registry, method, ctx.ApiVersion)
-	if rpcErr := admitMethod(s.resourceManager, ctx, method, resolution, types.RpcErrorForbidden, true, rpcLog()); rpcErr != nil {
+	if rpcErr := admitMethod(s.resourceManager, ctx, method, resolution, rpcerrors.RpcErrorForbidden, true, rpcLog()); rpcErr != nil {
 		if rpcErr.IsOverloaded() {
 			return batchOverloadedElement(elem)
 		}

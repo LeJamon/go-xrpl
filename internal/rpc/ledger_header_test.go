@@ -9,6 +9,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/LeJamon/go-xrpl/internal/rpc/rpcerrors"
+
 	"github.com/LeJamon/go-xrpl/internal/ledger/genesis"
 	ledgerheader "github.com/LeJamon/go-xrpl/internal/ledger/header"
 	"github.com/LeJamon/go-xrpl/internal/ledger/service"
@@ -375,7 +377,7 @@ func TestLedgerHeaderBadInput(t *testing.T) {
 		result, rpcErr := method.Handle(ctx, params)
 		assert.Nil(t, result)
 		require.NotNil(t, rpcErr)
-		assert.Equal(t, types.RpcLGR_NOT_FOUND, rpcErr.Code)
+		assert.Equal(t, rpcerrors.RpcLGR_NOT_FOUND, rpcErr.Code)
 	})
 
 	t.Run("Invalid ledger_hash - too short", func(t *testing.T) {
