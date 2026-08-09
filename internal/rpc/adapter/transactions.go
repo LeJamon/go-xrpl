@@ -5,7 +5,6 @@ import (
 
 	"github.com/LeJamon/go-xrpl/internal/ledger/service"
 	"github.com/LeJamon/go-xrpl/internal/rpc/types"
-	"github.com/LeJamon/go-xrpl/storage/relationaldb"
 )
 
 // GetTransaction retrieves a transaction by its hash
@@ -40,33 +39,6 @@ func rpcTransactionInfo(result *service.TransactionResult) *types.TransactionInf
 		TxIndex:     result.TxIndex,
 		CloseTime:   result.CloseTime,
 	}
-}
-
-func (a *LedgerServiceAdapter) SearchTransaction(ctx context.Context, txHash [32]byte, ledgerRange *types.TransactionSearchRange) (*types.TransactionSearchResult, error) {
-	var serviceRange *relationaldb.LedgerRange
-	if ledgerRange != nil {
-		serviceRange = &relationaldb.LedgerRange{
-			Min: relationaldb.LedgerIndex(ledgerRange.Min),
-			Max: relationaldb.LedgerIndex(ledgerRange.Max),
-		}
-	}
-	result, err := a.svc.SearchTransaction(ctx, txHash, serviceRange)
-	if err != nil {
-		return nil, err
-	}
-	response := &types.TransactionSearchResult{}
-	if result.Transaction != nil {
-		response.Transaction = rpcTransactionInfo(result.Transaction)
-	}
-	switch result.Searched {
-	case relationaldb.TxSearchAll:
-		searchedAll := true
-		response.SearchedAll = &searchedAll
-	case relationaldb.TxSearchSome:
-		searchedAll := false
-		response.SearchedAll = &searchedAll
-	}
-	return response, nil
 }
 
 // GetTransactionHistory retrieves recent transactions

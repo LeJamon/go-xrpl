@@ -341,7 +341,7 @@ func TestLedgerBasicRequest(t *testing.T) {
 		require.Len(t, warnings, 1)
 		warning, ok := warnings[0].(map[string]any)
 		require.True(t, ok)
-		assert.Equal(t, float64(2004), warning["id"])
+		assert.Equal(t, float64(types.WarningFieldsDeprecated), warning["id"])
 	})
 
 	t.Run("Numeric ledger_index", func(t *testing.T) {

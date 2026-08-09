@@ -144,7 +144,6 @@ func TestErrorConstructorsTokenCodePairs(t *testing.T) {
 		token string
 		code  int
 	}{
-		{RpcErrorUnknown("x"), "unknown", RpcUNKNOWN},
 		{RpcErrorInvalidParams("x"), "invalidParams", 31},
 		{RpcErrorMethodNotFound(), "unknownCmd", 32},
 		{RpcErrorLgrNotFound("x"), "lgrNotFound", 21},
@@ -162,7 +161,6 @@ func TestErrorConstructorsTokenCodePairs(t *testing.T) {
 		{RpcErrorNotEnabled(""), "notEnabled", 12},
 		{RpcErrorNotSupported(""), "notSupported", 75},
 		{RpcErrorNoEvents(""), "noEvents", 7},
-		{RpcErrorAmendmentBlocked(), "amendmentBlocked", 14},
 		{RpcErrorBadFeature("x"), "badFeature", 40},
 		{RpcErrorNoPathRequest(), "noPathRequest", 33},
 		{RpcErrorObjectNotFound("x"), "objectNotFound", 92},

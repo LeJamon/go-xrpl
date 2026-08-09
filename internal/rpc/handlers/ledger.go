@@ -288,7 +288,7 @@ func addLedgerTypeWarning(response map[string]any, params json.RawMessage) {
 		return
 	}
 	response["warnings"] = []types.WarningObject{{
-		ID: 2004,
+		ID: types.WarningFieldsDeprecated,
 		Message: "Some fields from your request are deprecated. Please check the documentation at " +
 			"https://xrpl.org/docs/references/http-websocket-apis/ and update your request. " +
 			"Field `type` is deprecated.",

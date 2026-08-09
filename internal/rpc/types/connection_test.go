@@ -49,6 +49,19 @@ func TestBookRequestUnmarshalResetsOptionalStrings(t *testing.T) {
 	}
 }
 
+func TestBookRequestUnmarshalResetsOptionalFlags(t *testing.T) {
+	var request BookRequest
+	if err := json.Unmarshal([]byte(`{"both":true,"both_sides":true,"snapshot":true,"state_now":true}`), &request); err != nil {
+		t.Fatal(err)
+	}
+	if err := json.Unmarshal([]byte(`{"taker_pays":{},"taker_gets":{}}`), &request); err != nil {
+		t.Fatal(err)
+	}
+	if request.Both || request.BothSides || request.Snapshot || request.StateNow {
+		t.Fatalf("omitted optional flags retained: both=%t both_sides=%t snapshot=%t state_now=%t", request.Both, request.BothSides, request.Snapshot, request.StateNow)
+	}
+}
+
 func TestBookRequestUnmarshalReplacesRawSides(t *testing.T) {
 	var request BookRequest
 	if err := json.Unmarshal([]byte(`{"taker_pays":{"currency":"USD"},"taker_gets":{"currency":"XRP"}}`), &request); err != nil {

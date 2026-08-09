@@ -409,10 +409,6 @@ func NewRpcError(code int, error, errorType, message string) *RpcError {
 }
 
 // Common error constructors matching rippled
-func RpcErrorUnknown(message string) *RpcError {
-	return NewRpcError(RpcUNKNOWN, "unknown", "unknown", message)
-}
-
 func RpcErrorInvalidParams(message string) *RpcError {
 	if message == "" {
 		message = rpcErrorInfoForCode(RpcINVALID_PARAMS).Message
@@ -428,10 +424,6 @@ func RpcErrorLgrNotFound(message string) *RpcError {
 	return NewRpcError(RpcLGR_NOT_FOUND, "lgrNotFound", "lgrNotFound", message)
 }
 
-func RpcErrorLgrNotValidated() *RpcError {
-	return NewRpcError(RpcLGR_NOT_VALIDATED, "lgrNotValidated", "lgrNotValidated", "Ledger not validated.")
-}
-
 func RpcErrorNoNetwork(message string) *RpcError {
 	if message == "" {
 		message = "Not synced to the network."
@@ -444,14 +436,6 @@ func RpcErrorNotSynced(message string) *RpcError {
 		message = "Not synced to the network."
 	}
 	return NewRpcError(RpcNOT_SYNCED, "notSynced", "notSynced", message)
-}
-
-func RpcErrorLgrIdxsInvalid() *RpcError {
-	return NewRpcError(RpcLGR_IDXS_INVALID, "lgrIdxsInvalid", "lgrIdxsInvalid", "Ledger indexes invalid.")
-}
-
-func RpcErrorLgrIdxMalformed() *RpcError {
-	return NewRpcError(RpcLGR_IDX_MALFORMED, "lgrIdxMalformed", "lgrIdxMalformed", "Ledger index malformed.")
 }
 
 func RpcErrorActNotFound(message string) *RpcError {
@@ -621,10 +605,6 @@ func RpcErrorNoEvents(message string) *RpcError {
 		message = "Current transport does not support events."
 	}
 	return NewRpcError(RpcNO_EVENTS, "noEvents", "noEvents", message)
-}
-
-func RpcErrorAmendmentBlocked() *RpcError {
-	return NewRpcError(RpcAMENDMENT_BLOCKED, "amendmentBlocked", "amendmentBlocked", "Amendment blocked, need upgrade.")
 }
 
 // RpcErrorBadFeature returns rippled's rpcBAD_FEATURE (code 40, token
@@ -929,13 +909,6 @@ func RpcErrorBadMarket() *RpcError {
 // stream name in subscribe/unsubscribe.
 func RpcErrorMalformedStream() *RpcError {
 	return NewRpcError(RpcSTREAM_MALFORMED, "malformedStream", "malformedStream", "Stream malformed.")
-}
-
-// RpcErrorBadIssuer matches rippled rpcBAD_ISSUER (code 41, token "badIssuer",
-// message "Issuer account malformed."), returned when a book subscription's
-// taker does not parse as an account (Subscribe.cpp:301-305).
-func RpcErrorBadIssuer() *RpcError {
-	return NewRpcError(RpcBAD_ISSUER, "badIssuer", "badIssuer", "Issuer account malformed.")
 }
 
 // RpcErrorDomainMalformed matches rippled rpcDOMAIN_MALFORMED (code 97, token

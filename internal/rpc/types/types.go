@@ -68,13 +68,13 @@ type Condition int
 
 const (
 	// NoCondition - method has no preconditions, always available even when amendment blocked
-	NoCondition Condition = iota
+	NoCondition Condition = 0
 	// NeedsNetworkConnection - method requires network sync
-	NeedsNetworkConnection
+	NeedsNetworkConnection Condition = 1
 	// NeedsCurrentLedger - method requires access to the current open ledger
-	NeedsCurrentLedger
+	NeedsCurrentLedger Condition = 1 << 1
 	// NeedsClosedLedger - method requires access to the last closed ledger
-	NeedsClosedLedger
+	NeedsClosedLedger Condition = 1 << 2
 )
 
 // PeerSource produces the data the `peers` RPC returns. PeersJSON
@@ -277,7 +277,7 @@ const (
 	WarningUnsupportedAmendmentsMajority = 1001 // Unsupported amendments have reached majority
 	WarningAmendmentBlocked              = 1002 // This server is amendment blocked
 	WarningExpiredValidatorList          = 1003 // This server has an expired validator list
-	WarningClioServer                    = 2001 // This is a clio server
+	WarningFieldsDeprecated              = 2004 // Some request fields are deprecated
 )
 
 // WarningObject represents an API warning in responses
@@ -296,22 +296,6 @@ type WebSocketCommand struct {
 	ID      any
 	Params  json.RawMessage
 	Request map[string]any
-}
-
-// WebSocketResponse represents an XRPL WebSocket API response.
-type WebSocketResponse struct {
-	Status       string          `json:"status"`
-	Type         string          `json:"type"`
-	Result       any             `json:"result,omitempty"`
-	ID           any             `json:"id,omitempty"`
-	Warning      string          `json:"warning,omitempty"`
-	Warnings     []WarningObject `json:"warnings,omitempty"`
-	Forwarded    bool            `json:"forwarded,omitempty"`
-	ApiVersion   int             `json:"api_version,omitempty"`
-	Error        string          `json:"error,omitempty"`
-	ErrorCode    int             `json:"error_code,omitempty"`
-	ErrorMessage string          `json:"error_message,omitempty"`
-	Request      any             `json:"request,omitempty"`
 }
 
 // Subscription types for WebSocket streams. Rippled's per-book stream
@@ -447,16 +431,20 @@ func (r *SubscriptionRequest) UnmarshalJSON(data []byte) error {
 	if err := json.Unmarshal(data, &m); err != nil {
 		return err
 	}
-	r.wire = &wireSubscriptionArrays{
-		streams:          m["streams"],
-		accounts:         m["accounts"],
-		accountsProposed: m["accounts_proposed"],
-		rtAccounts:       m["rt_accounts"],
-		accountHistory:   m["account_history_tx_stream"],
-		books:            m["books"],
-		url:              m["url"],
-		username:         m["username"],
-		password:         m["password"],
+	apiVersion := r.ApiVersion
+	*r = SubscriptionRequest{
+		ApiVersion: apiVersion,
+		wire: &wireSubscriptionArrays{
+			streams:          m["streams"],
+			accounts:         m["accounts"],
+			accountsProposed: m["accounts_proposed"],
+			rtAccounts:       m["rt_accounts"],
+			accountHistory:   m["account_history_tx_stream"],
+			books:            m["books"],
+			url:              m["url"],
+			username:         m["username"],
+			password:         m["password"],
+		},
 	}
 	_ = json.Unmarshal(m["streams"], &r.Streams)
 	_ = json.Unmarshal(m["accounts"], &r.Accounts)
@@ -594,33 +582,6 @@ func jsonCppBool(raw json.RawMessage) bool {
 	}
 }
 
-// Common parameter structures
-
-// Account parameter
-type AccountParam struct {
-	Account string `json:"account"`
-}
-
-// Transaction identifier
-type TransactionParam struct {
-	Transaction string `json:"transaction"`
-	Binary      bool   `json:"binary,omitempty"`
-}
-
-// Pagination parameters
-type PaginationParams struct {
-	Marker json.RawMessage `json:"marker,omitempty"`
-}
-
-// Currency specification
-type Currency struct {
-	Currency string `json:"currency"`
-	Issuer   string `json:"issuer,omitempty"`
-}
-
-// Path specification for path finding
-type Path []PathStep
-
 type PathStep struct {
 	Account       string `json:"account,omitempty"`
 	Currency      string `json:"currency"`
@@ -628,29 +589,6 @@ type PathStep struct {
 	MPTIssuanceID string `json:"mpt_issuance_id,omitempty"`
 	Type          uint8  `json:"type,omitempty"`
 	TypeHex       string `json:"type_hex,omitempty"`
-}
-
-// Quality specification
-type Quality struct {
-	Currency string `json:"currency"`
-	Issuer   string `json:"issuer,omitempty"`
-	Value    string `json:"value"`
-}
-
-// Memo structure
-type Memo struct {
-	MemoData   string `json:"MemoData,omitempty"`
-	MemoFormat string `json:"MemoFormat,omitempty"`
-	MemoType   string `json:"MemoType,omitempty"`
-}
-
-// Signer structure
-type Signer struct {
-	Signer struct {
-		Account       string `json:"Account"`
-		TxnSignature  string `json:"TxnSignature"`
-		SigningPubKey string `json:"SigningPubKey"`
-	} `json:"Signer"`
 }
 
 // CurrencySpec represents a currency specification for order book subscriptions

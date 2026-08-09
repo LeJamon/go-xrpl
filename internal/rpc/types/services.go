@@ -947,27 +947,6 @@ type TransactionSubmitter interface {
 	GetAutofillSequence(account string, hasTicketSequence bool) (sequence uint32, err error)
 }
 
-// TransactionSearchRange is the inclusive ledger interval used by tx.
-type TransactionSearchRange struct {
-	Min uint32
-	Max uint32
-}
-
-// TransactionSearchResult preserves rippled's searched_all distinction when a
-// ranged transaction lookup does not find a transaction. SearchedAll is nil
-// when the backend cannot determine whether the complete range was searched.
-type TransactionSearchResult struct {
-	Transaction *TransactionInfo
-	SearchedAll *bool
-}
-
-// TransactionSearcher is implemented by services backed by durable
-// transaction tables. Keeping it separate from LedgerService lets lightweight
-// RPC mocks continue to provide the legacy in-memory lookup.
-type TransactionSearcher interface {
-	SearchTransaction(ctx context.Context, txHash [32]byte, ledgerRange *TransactionSearchRange) (*TransactionSearchResult, error)
-}
-
 // LedgerContext contains the durable ledger fields needed to decorate
 // historical transaction rows.
 type LedgerContext struct {

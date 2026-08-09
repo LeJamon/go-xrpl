@@ -85,7 +85,7 @@ func TestHTTPRipplerpcV3StatusMapping(t *testing.T) {
 		{name: "v3 too busy", version: "3.0", rpcErr: types.RpcErrorTooBusy(), status: http.StatusServiceUnavailable},
 		{name: "v3 database deserialization", version: "3.0", rpcErr: types.RpcErrorDBDeserialization(), status: http.StatusBadGateway},
 		{name: "v3 invalid params", version: "3.0", rpcErr: types.RpcErrorInvalidParams("Invalid parameters."), status: http.StatusBadRequest},
-		{name: "v3 bad issuer", version: "3.0", rpcErr: types.RpcErrorBadIssuer(), status: http.StatusBadRequest},
+		{name: "v3 bad issuer", version: "3.0", rpcErr: types.NewRpcError(types.RpcBAD_ISSUER, "badIssuer", "badIssuer", "Issuer account malformed."), status: http.StatusBadRequest},
 		{name: "v3 entry not found", version: "3.0", rpcErr: types.RpcErrorEntryNotFound(""), status: http.StatusBadRequest},
 		{name: "v3 unexpected ledger type", version: "3.0", rpcErr: types.RpcErrorUnexpectedLedgerType(), status: http.StatusBadRequest},
 		{name: "v2 entry not found remains 200", version: "2.0", rpcErr: types.RpcErrorEntryNotFound(""), status: http.StatusOK},
