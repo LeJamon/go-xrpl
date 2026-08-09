@@ -143,6 +143,12 @@ func TestRPCConstructorsUseExplicitDependencies(t *testing.T) {
 		"wrapped":  nilWrapped,
 	} {
 		t.Run("typed nil "+name, func(t *testing.T) {
+			typedNilHTTP := NewServer(ServerOptions{
+				Services:         services,
+				URLSubscriptions: service,
+			})
+			require.Nil(t, typedNilHTTP.urlSubscriptions)
+
 			typedNilWS := NewWebSocketServer(WebSocketServerOptions{
 				Services:            services,
 				SubscriptionManager: manager,

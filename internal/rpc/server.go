@@ -81,6 +81,9 @@ func NewServer(options ServerOptions) *Server {
 	if manager == nil {
 		manager = resource.NewManager(nil, nil)
 	}
+	if isNilURLSubscriptionService(options.URLSubscriptions) {
+		options.URLSubscriptions = nil
+	}
 	server := &Server{
 		registry:         options.Registry,
 		timeout:          options.Timeout,
