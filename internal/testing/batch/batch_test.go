@@ -21,14 +21,11 @@ import (
 )
 
 // newBatchEnv builds a test environment with the Batch amendment active.
-// Batch is Supported::no upstream (rippled 3.1.1 withdrew support pending
-// fixBatchInnerSigs), so the all-supported preset no longer activates it and
-// every Batch test must opt in. EnableFeatureNow enables it from genesis,
-// matching the behaviour these tests relied on when the preset carried Batch.
+// BatchV1_1 defaults to no, so every Batch behavior test opts in explicitly.
 func newBatchEnv(t *testing.T) *jtx.TestEnv {
 	t.Helper()
 	env := jtx.NewTestEnv(t)
-	env.EnableFeatureNow("Batch")
+	env.EnableFeatureNow("BatchV1_1")
 	return env
 }
 
@@ -89,6 +86,7 @@ func TestEnabled(t *testing.T) {
 
 	t.Run("batch disabled", func(t *testing.T) {
 		env := jtx.NewTestEnv(t)
+		env.DisableFeature("BatchV1_1")
 
 		alice := jtx.NewAccount("alice")
 		bob := jtx.NewAccount("bob")
@@ -115,40 +113,19 @@ func TestEnabled(t *testing.T) {
 		env.Fund(alice, bob)
 		env.Close()
 
-		// A directly-submitted inner-flagged transaction (no signature) reaches
-		// the engine and fails with temINVALID_FLAG. Reference: rippled
-		// checkValidity short-circuits it to Valid before fixBatchInnerSigs, so
-		// it reaches the engine (Batch_test.cpp doTestInnerSubmitRPC).
+		// The flag is valid only while applying an inner transaction with a
+		// parent Batch ID.
 		p := MakeInnerPayment(alice, bob, jtx.XRP(1), env.Seq(alice))
 		p.Fee = fmt.Sprintf("%d", env.BaseFee())
 		p.SigningPubKey = "" // inner batch format, but submitted directly
 
 		result := env.SubmitWithOptions(p, jtx.SubmitOptions{SkipSignature: true})
-		jtx.RequireTxFail(t, result, "temINVALID_FLAG")
-	})
-
-	t.Run("tfInnerBatchTxn on non-batch tx - fixBatchInnerSigs enabled", func(t *testing.T) {
-		env := newBatchEnv(t)
-		env.EnableFeatureNow("fixBatchInnerSigs")
-
-		alice := jtx.NewAccount("alice")
-		bob := jtx.NewAccount("bob")
-		env.Fund(alice, bob)
-		env.Close()
-
-		// With fixBatchInnerSigs an inner-flagged transaction never has a valid
-		// signature, so it is rejected as invalid rather than reaching the
-		// engine. Reference: rippled apply.cpp checkValidity (PR #6069).
-		p := MakeInnerPayment(alice, bob, jtx.XRP(1), env.Seq(alice))
-		p.Fee = fmt.Sprintf("%d", env.BaseFee())
-		p.SigningPubKey = ""
-
-		result := env.SubmitWithOptions(p, jtx.SubmitOptions{SkipSignature: true})
-		jtx.RequireTxFail(t, result, "temINVALID")
+		jtx.RequireTxFail(t, result, "temINVALID_INNER_BATCH")
 	})
 
 	t.Run("tfInnerBatchTxn on non-batch tx - feature disabled", func(t *testing.T) {
 		env := jtx.NewTestEnv(t)
+		env.DisableFeature("BatchV1_1")
 
 		alice := jtx.NewAccount("alice")
 		bob := jtx.NewAccount("bob")
@@ -284,7 +261,7 @@ func TestPreflight(t *testing.T) {
 		require.False(t, result.Success)
 	})
 
-	t.Run("temREDUNDANT - duplicate batch signer", func(t *testing.T) {
+	t.Run("temBAD_SIGNER - duplicate batch signer", func(t *testing.T) {
 		env := newBatchEnv(t)
 		alice := jtx.NewAccount("alice")
 		bob := jtx.NewAccount("bob")
@@ -302,6 +279,32 @@ func TestPreflight(t *testing.T) {
 
 		result := env.Submit(batch)
 		require.False(t, result.Success)
+	})
+
+	t.Run("temBAD_SIGNER - unsorted batch signers", func(t *testing.T) {
+		env := newBatchEnv(t)
+		alice := jtx.NewAccount("alice")
+		bob := jtx.NewAccount("bob")
+		carol := jtx.NewAccount("carol")
+		env.Fund(alice, bob, carol)
+		env.Close()
+
+		batch := NewBatchBuilder(
+			alice,
+			env.Seq(alice),
+			CalcBatchFeeFromEnv(env, 2, 2),
+			batchtx.BatchFlagAllOrNothing,
+		).
+			AddInnerTx(MakeInnerPaymentXRP(bob, alice, 1, env.Seq(bob))).
+			AddInnerTx(MakeInnerPaymentXRP(carol, alice, 1, env.Seq(carol))).
+			AddSigner(bob, "DEADBEEF").
+			AddSigner(carol, "DEADBEEF").
+			Build()
+		require.Len(t, batch.BatchSigners, 2)
+		batch.BatchSigners[0], batch.BatchSigners[1] = batch.BatchSigners[1], batch.BatchSigners[0]
+
+		result := env.Submit(batch)
+		jtx.RequireTxFail(t, result, "temBAD_SIGNER")
 	})
 
 	t.Run("temBAD_SIGNER - signer is outer account", func(t *testing.T) {
@@ -330,11 +333,11 @@ func TestPreflight(t *testing.T) {
 		env.Close()
 
 		seq := env.Seq(alice)
-		batchFee := CalcBatchFeeFromEnv(env, 9, 2)
+		batchFee := CalcBatchFeeFromEnv(env, batchtx.MaxBatchSigners+1, 2)
 		builder := NewBatchBuilder(alice, seq, batchFee, batchtx.BatchFlagAllOrNothing).
 			AddInnerTx(MakeFakeInnerTx()).
 			AddInnerTx(MakeFakeInnerTx())
-		for i := range 9 {
+		for i := range batchtx.MaxBatchSigners + 1 {
 			signer := jtx.NewAccount(fmt.Sprintf("signer%d", i))
 			builder.AddSigner(signer, "DEADBEEF")
 		}
@@ -1729,7 +1732,7 @@ func TestBatchTxQueue(t *testing.T) {
 	t.Run("batch cannot queue", func(t *testing.T) {
 		cfg := makeSmallQueueConfig(2)
 		env := jtx.NewTestEnvWithTxQ(t, cfg)
-		env.EnableFeatureNow("Batch")
+		env.EnableFeatureNow("BatchV1_1")
 
 		alice := jtx.NewAccount("alice")
 		bob := jtx.NewAccount("bob")
@@ -1800,7 +1803,7 @@ func TestBatchTxQueue(t *testing.T) {
 		// "inner batch transactions are counter towards the ledger tx count"
 		cfg := makeSmallQueueConfig(2)
 		env := jtx.NewTestEnvWithTxQ(t, cfg)
-		env.EnableFeatureNow("Batch")
+		env.EnableFeatureNow("BatchV1_1")
 
 		alice := jtx.NewAccount("alice")
 		bob := jtx.NewAccount("bob")
@@ -3172,11 +3175,11 @@ func TestBatchCalculateBaseFee(t *testing.T) {
 
 		bob := jtx.NewAccount("bob")
 		seq := env.Seq(alice)
-		batchFee := CalcBatchFeeFromEnv(env, 9, 2)
+		batchFee := CalcBatchFeeFromEnv(env, batchtx.MaxBatchSigners+1, 2)
 		builder := NewBatchBuilder(alice, seq, batchFee, batchtx.BatchFlagAllOrNothing).
 			AddInnerTx(MakeInnerPaymentXRP(alice, bob, 1, seq+1)).
 			AddInnerTx(MakeInnerPaymentXRP(alice, bob, 1, seq+2))
-		for i := range 9 {
+		for i := range batchtx.MaxBatchSigners + 1 {
 			signer := jtx.NewAccount(fmt.Sprintf("signer%d", i))
 			builder.AddSigner(signer, "DEADBEEF")
 		}
@@ -3184,7 +3187,7 @@ func TestBatchCalculateBaseFee(t *testing.T) {
 
 		err := batch.Validate()
 		require.Error(t, err)
-		require.Contains(t, err.Error(), "exceeds 8")
+		require.Contains(t, err.Error(), "exceeds 24")
 	})
 
 	t.Run("valid batch fee calculation", func(t *testing.T) {
@@ -3303,14 +3306,14 @@ func TestBatchSigningVectors(t *testing.T) {
 		jtx.RequireTxFail(t, result, "temBAD_SIGNER")
 	})
 
-	// temBAD_SIGNATURE: signer Account is bob (required) and the signature is made
+	// temINVALID: signer Account is bob (required) and the signature is made
 	// with bob's key, but the presented SigningPubKey is alice's, so the signature
 	// fails to verify against it (Batch_test.cpp:555-579).
 	// The cryptographic BatchSigner check runs in the engine's signature stage, so
 	// it is exercised with VerifySignatures enabled (the outer batch is signed by
 	// alice). This mirrors rippled, where checkBatchSign rejects in preflight before
 	// the preclaim authorization check is reached.
-	t.Run("temBAD_SIGNATURE - signature key mismatched to signing pubkey", func(t *testing.T) {
+	t.Run("temINVALID - signature key mismatched to signing pubkey", func(t *testing.T) {
 		env := newBatchEnv(t)
 		env.VerifySignatures = true
 		alice := jtx.NewAccount("alice")
@@ -3327,12 +3330,12 @@ func TestBatchSigningVectors(t *testing.T) {
 			Build()
 
 		result := env.SubmitSigned(batch)
-		jtx.RequireTxFail(t, result, "temBAD_SIGNATURE")
+		jtx.RequireTxFail(t, result, "temINVALID")
 	})
 
-	// temBAD_SIGNATURE: bob is the required signer with his own public key but a
+	// temINVALID: bob is the required signer with his own public key but a
 	// corrupted signature that does not verify over the batch digest.
-	t.Run("temBAD_SIGNATURE - garbage signature", func(t *testing.T) {
+	t.Run("temINVALID - garbage signature", func(t *testing.T) {
 		env := newBatchEnv(t)
 		env.VerifySignatures = true
 		alice := jtx.NewAccount("alice")
@@ -3349,7 +3352,7 @@ func TestBatchSigningVectors(t *testing.T) {
 			Build()
 
 		result := env.SubmitSigned(batch)
-		jtx.RequireTxFail(t, result, "temBAD_SIGNATURE")
+		jtx.RequireTxFail(t, result, "temINVALID")
 	})
 
 	// tesSUCCESS: a single required signer (bob) signs the batch digest with his
@@ -3483,9 +3486,8 @@ func TestBatchSigningVectors(t *testing.T) {
 
 // TestBatchSignerArrayBound exercises the rules-gated upper bound on a
 // multi-signed BatchSigner's nested Signers array. rippled enforces it in
-// multiSignHelper (called from Batch::preflight with ctx.rules): 32 with
-// featureExpandedSignerList, 8 without. An over-bound array there surfaces as
-// temBAD_SIGNATURE at the checkBatchSign call site (Batch.cpp:439-444).
+// multiSignHelper (called from Batch::preflight with ctx.rules). An over-bound
+// array is a bad-signature validity result and surfaces as temINVALID.
 // Reference: rippled STTx::maxMultiSigners + Batch_test.cpp multi-sign vectors.
 func TestBatchSignerArrayBound(t *testing.T) {
 	// makeNestedSigners builds n distinct, funded signer accounts.
@@ -3526,6 +3528,6 @@ func TestBatchSignerArrayBound(t *testing.T) {
 		env.Close()
 
 		result := env.Submit(batch)
-		require.Equal(t, "temBAD_SIGNATURE", result.Code)
+		require.Equal(t, "temINVALID", result.Code)
 	})
 }

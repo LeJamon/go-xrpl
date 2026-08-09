@@ -238,7 +238,9 @@ func TestEncodeForSigningClaim_HashPrefix(t *testing.T) {
 // TestEncodeForSigningBatch_HashPrefix verifies batch signing prefix.
 func TestEncodeForSigningBatch_HashPrefix(t *testing.T) {
 	input := map[string]any{
-		"flags": uint32(1),
+		"account":  "rrrrrrrrrrrrrrrrrrrrrhoLvTp",
+		"sequence": uint32(1),
+		"flags":    uint32(1),
 		"txIDs": []string{
 			"ABE4871E9083DF66727045D49DEEDD3A6F166EB7F8D1E92FE868F02E76B2C5CA",
 		},

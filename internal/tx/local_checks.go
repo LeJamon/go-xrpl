@@ -57,12 +57,12 @@ func TransactionLocalChecksFailureReason(transaction Transaction) string {
 		return reason
 	}
 	if transaction.TxType() == TypeBatch {
-		if signers, ok := transaction.(BatchSignerProvider); ok && len(signers.GetBatchSigners()) > 8 {
+		if signers, ok := transaction.(BatchSignerProvider); ok && len(signers.GetBatchSigners()) > MaxBatchSigners {
 			return "Batch Signers array exceeds max entries."
 		}
 		if outer, ok := transaction.(interface{ InnerTransactions() []Transaction }); ok {
 			inners := outer.InnerTransactions()
-			if len(inners) > 8 {
+			if len(inners) > MaxBatchTransactions {
 				return "Raw Transactions array exceeds max entries."
 			}
 			for _, inner := range inners {
@@ -88,14 +88,14 @@ func TransactionMapLocalChecksFailureReason(txType Type, fields map[string]any) 
 		return reason
 	}
 	if txType == TypeBatch {
-		if batchSigners, ok := fields["BatchSigners"].([]any); ok && len(batchSigners) > 8 {
+		if batchSigners, ok := fields["BatchSigners"].([]any); ok && len(batchSigners) > MaxBatchSigners {
 			return "Batch Signers array exceeds max entries."
 		}
 		rawTransactions, ok := fields["RawTransactions"].([]any)
 		if !ok {
 			return ""
 		}
-		if len(rawTransactions) > 8 {
+		if len(rawTransactions) > MaxBatchTransactions {
 			return "Raw Transactions array exceeds max entries."
 		}
 		for _, raw := range rawTransactions {

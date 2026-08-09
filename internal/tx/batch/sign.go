@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/binary"
 	"encoding/hex"
+	"sort"
 
 	"github.com/LeJamon/go-xrpl/crypto/ed25519"
 	"github.com/LeJamon/go-xrpl/crypto/secp256k1"
@@ -12,15 +13,18 @@ import (
 	"github.com/LeJamon/go-xrpl/protocol"
 )
 
-// serializeBatch builds the digest signed by each BatchSigner:
+// serializeBatch builds the common portion of the data signed by each BatchSigner:
 //
-//	HashPrefix::batch || outer flags || txid count || inner txids
+//	HashPrefix::batch || outer account || sequence-or-ticket || outer flags ||
+//	inner count || ordered inner txids
 //
 // The result is the raw message slice; the signature scheme hashes it
 // internally (SHA512-Half). Reference: rippled Batch.h serializeBatch.
-func serializeBatch(flags uint32, txids [][32]byte) []byte {
-	msg := make([]byte, 0, 4+4+4+len(txids)*32)
+func serializeBatch(outerAccount [20]byte, seqValue, flags uint32, txids [][32]byte) []byte {
+	msg := make([]byte, 0, 4+20+4+4+4+len(txids)*32)
 	msg = append(msg, protocol.HashPrefixBatch().Bytes()...)
+	msg = append(msg, outerAccount[:]...)
+	msg = binary.BigEndian.AppendUint32(msg, seqValue)
 	msg = binary.BigEndian.AppendUint32(msg, flags)
 	msg = binary.BigEndian.AppendUint32(msg, uint32(len(txids)))
 	for _, txid := range txids {
@@ -29,15 +33,32 @@ func serializeBatch(flags uint32, txids [][32]byte) []byte {
 	return msg
 }
 
-// BatchSigningMessage returns the serializeBatch digest that each BatchSigner
-// signs over: HashPrefix::batch || outer flags || txid count || inner txids.
-// The returned bytes are the raw message; the signing scheme hashes them.
+// BatchSigningMessage returns the common Batch signing preimage. A single-signed
+// BatchSigner appends its AccountID. A multi-signed BatchSigner appends the
+// BatchSigner AccountID followed by the nested signer AccountID.
 func (b *Batch) BatchSigningMessage() ([]byte, error) {
+	if len(b.RawTransactions) > MaxBatchTransactions {
+		return nil, ErrBatchTooManyTxns
+	}
+	outerAccount, err := state.DecodeAccountID(b.Account)
+	if err != nil {
+		return nil, ErrBatchInvalidSignature
+	}
 	txids, err := b.batchTransactionIDs()
 	if err != nil {
 		return nil, err
 	}
-	return serializeBatch(b.GetFlags(), txids), nil
+	return serializeBatch(outerAccount, b.outerSeqValue(), b.GetFlags(), txids), nil
+}
+
+func (b *Batch) outerSeqValue() uint32 {
+	if b.Sequence != nil && *b.Sequence != 0 {
+		return *b.Sequence
+	}
+	if b.TicketSequence != nil {
+		return *b.TicketSequence
+	}
+	return 0
 }
 
 // batchTransactionIDs returns the transaction IDs of the inner transactions in
@@ -63,12 +84,15 @@ func (b *Batch) batchTransactionIDs() ([][32]byte, error) {
 // over the serializeBatch digest. Each signer is single-signed (direct
 // SigningPubKey + BatchTxnSignature) or multi-signed (nested Signers array,
 // each over the digest suffixed with the signer's account ID). Any failure
-// yields temBAD_SIGNATURE. The engine calls this from its signature-verification
-// stage so it is skipped under SkipSignatureVerification; the structural and
-// coverage checks on BatchSigners run unconditionally in Validate.
+// yields an invalid-signature error. The engine calls this from its signature-
+// verification stage so it is skipped under SkipSignatureVerification; exact
+// signer coverage is checked afterward in PreflightSigValidated.
 // Reference: rippled STTx::checkBatchSign, checkBatchSingleSign, checkBatchMultiSign.
 func (b *Batch) VerifyBatchSignatures() error {
-	digest, err := b.BatchSigningMessage()
+	if err := b.validateBatchSignerBounds(); err != nil {
+		return err
+	}
+	message, err := b.BatchSigningMessage()
 	if err != nil {
 		return err
 	}
@@ -76,12 +100,12 @@ func (b *Batch) VerifyBatchSignatures() error {
 	for i := range b.BatchSigners {
 		signer := b.BatchSigners[i].BatchSigner
 		if signer.SigningPubKey == "" {
-			if err := verifyBatchMultiSign(digest, signer); err != nil {
+			if err := verifyBatchMultiSign(message, signer); err != nil {
 				return err
 			}
 			continue
 		}
-		if err := verifyBatchSingleSign(digest, signer); err != nil {
+		if err := verifyBatchSingleSign(message, signer); err != nil {
 			return err
 		}
 	}
@@ -92,11 +116,18 @@ func (b *Batch) VerifyBatchSignatures() error {
 // validate against SigningPubKey and BatchTxnSignature. A signer that also
 // carries nested Signers is signed two ways and rejected.
 // Reference: rippled singleSignHelper.
-func verifyBatchSingleSign(digest []byte, signer BatchSignerData) error {
+func verifyBatchSingleSign(message []byte, signer BatchSignerData) error {
 	if len(signer.Signers) > 0 {
 		return ErrBatchInvalidSignature
 	}
-	if !verifyBatchSig(digest, signer.SigningPubKey, signer.BatchTxnSignature) {
+	signerID, err := state.DecodeAccountID(signer.Account)
+	if err != nil {
+		return ErrBatchInvalidSignature
+	}
+	signingData := make([]byte, 0, len(message)+len(signerID))
+	signingData = append(signingData, message...)
+	signingData = append(signingData, signerID[:]...)
+	if !verifyBatchSig(signingData, signer.SigningPubKey, signer.BatchTxnSignature) {
 		return ErrBatchInvalidSignature
 	}
 	return nil
@@ -106,7 +137,7 @@ func verifyBatchSingleSign(digest []byte, signer BatchSignerData) error {
 // signs the digest suffixed with its own account ID. Signers must be ordered by
 // account ID, contain no duplicates, and none may be the batch-signer account.
 // Reference: rippled multiSignHelper.
-func verifyBatchMultiSign(digest []byte, signer BatchSignerData) error {
+func verifyBatchMultiSign(message []byte, signer BatchSignerData) error {
 	if len(signer.Signers) == 0 {
 		return ErrBatchInvalidSignature
 	}
@@ -121,6 +152,10 @@ func verifyBatchMultiSign(digest []byte, signer BatchSignerData) error {
 	if err != nil {
 		return ErrBatchInvalidSignature
 	}
+
+	dataStart := make([]byte, 0, len(message)+20)
+	dataStart = append(dataStart, message...)
+	dataStart = append(dataStart, batchSignerID[:]...)
 
 	var lastID [20]byte
 	first := true
@@ -141,8 +176,8 @@ func verifyBatchMultiSign(digest []byte, signer BatchSignerData) error {
 		lastID = nestedID
 		first = false
 
-		msg := make([]byte, 0, len(digest)+20)
-		msg = append(msg, digest...)
+		msg := make([]byte, 0, len(dataStart)+20)
+		msg = append(msg, dataStart...)
 		msg = append(msg, nestedID[:]...)
 		if !verifyBatchSig(msg, nested.SigningPubKey, nested.TxnSignature) {
 			return ErrBatchInvalidSignature
@@ -170,34 +205,60 @@ func verifyBatchSig(msg []byte, pubKeyHex, sigHex string) bool {
 	}
 }
 
-// validateBatchSigners mirrors the structural BatchSigners checks of rippled
-// Batch::preflight (Batch.cpp:387-453): every BatchSigner account must be unique,
+// validateBatchSigners mirrors the BatchSigners checks of rippled
+// Batch::preflightSigValidated: every BatchSigner account must be unique,
 // not the outer account, and required by an inner transaction; after all signers
 // are consumed the required set must be empty. requiredSigners is the set of
 // inner-tx accounts other than the outer account. The cryptographic verification
-// of each signature lives in VerifyBatchSignatures, which the engine runs from its
-// signature stage so it honours SkipSignatureVerification.
+// of each signature lives in VerifyBatchSignatures, which the engine runs first.
 func (b *Batch) validateBatchSigners(requiredSigners map[string]struct{}) error {
-	if len(b.BatchSigners) > MaxBatchTransactions {
+	if len(b.BatchSigners) > MaxBatchSigners {
 		return ErrBatchTooManySigners
 	}
 
 	if len(b.BatchSigners) > 0 {
-		seen := make(map[string]struct{}, len(b.BatchSigners))
+		outerID, err := state.DecodeAccountID(b.Account)
+		if err != nil {
+			return ErrBatchSignerIsOuter
+		}
+		requiredIDs := make([][20]byte, 0, len(requiredSigners))
+		for account := range requiredSigners {
+			id, err := state.DecodeAccountID(account)
+			if err != nil {
+				return ErrBatchMissingSigner
+			}
+			requiredIDs = append(requiredIDs, id)
+		}
+		sort.Slice(requiredIDs, func(i, j int) bool {
+			return bytes.Compare(requiredIDs[i][:], requiredIDs[j][:]) < 0
+		})
+
+		signerIDs := make([][20]byte, len(b.BatchSigners))
+		var lastID [20]byte
 		for i := range b.BatchSigners {
 			acct := b.BatchSigners[i].BatchSigner.Account
-			if acct == b.Account {
-				return ErrBatchSignerIsOuter
-			}
-			if _, dup := seen[acct]; dup {
-				return ErrBatchDuplicateSigner
-			}
-			seen[acct] = struct{}{}
-
-			if _, required := requiredSigners[acct]; !required {
+			accountID, err := state.DecodeAccountID(acct)
+			if err != nil {
 				return ErrBatchSignerNotRequired
 			}
-			delete(requiredSigners, acct)
+			if accountID == outerID {
+				return ErrBatchSignerIsOuter
+			}
+			if i > 0 {
+				switch bytes.Compare(lastID[:], accountID[:]) {
+				case 0:
+					return ErrBatchDuplicateSigner
+				case 1:
+					return ErrBatchUnsortedSigner
+				}
+			}
+			lastID = accountID
+			signerIDs[i] = accountID
+		}
+		for i, accountID := range signerIDs {
+			if i >= len(requiredIDs) || accountID != requiredIDs[i] {
+				return ErrBatchSignerNotRequired
+			}
 		}
 
 		// Structural "signed two ways" check, mirroring checkBatchSign's presence
@@ -219,7 +280,7 @@ func (b *Batch) validateBatchSigners(requiredSigners map[string]struct{}) error 
 		}
 	}
 
-	if len(requiredSigners) != 0 {
+	if len(b.BatchSigners) != len(requiredSigners) {
 		return ErrBatchMissingSigner
 	}
 	return nil

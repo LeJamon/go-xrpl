@@ -238,7 +238,7 @@ func TestReplayDelta_Apply_RequiresExpectedBatchInnerLeaves(t *testing.T) {
 
 	rules := amendment.NewRulesBuilder().
 		FromPreset(amendment.PresetAllSupported).
-		Enable(amendment.FeatureBatch).
+		Enable(amendment.FeatureBatchV1_1).
 		Build()
 	_, err = rd.Apply(tx.EngineConfig{
 		BaseFee:                   10,

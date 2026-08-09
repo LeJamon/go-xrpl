@@ -241,18 +241,32 @@ func TestTransactionLocalChecksBatchLimits(t *testing.T) {
 		want  string
 	}{
 		{
+			name: "batch signers at limit",
+			batch: &localChecksBatch{
+				localChecksTransaction: newLocalChecksTransaction(TypeBatch, map[string]any{}),
+				signers:                make([]BatchSignerInfo, MaxBatchSigners),
+			},
+		},
+		{
 			name: "batch signers limit",
 			batch: &localChecksBatch{
 				localChecksTransaction: newLocalChecksTransaction(TypeBatch, map[string]any{}),
-				signers:                make([]BatchSignerInfo, 9),
+				signers:                make([]BatchSignerInfo, MaxBatchSigners+1),
 			},
 			want: "Batch Signers array exceeds max entries.",
+		},
+		{
+			name: "raw transactions at limit",
+			batch: &localChecksBatch{
+				localChecksTransaction: newLocalChecksTransaction(TypeBatch, map[string]any{}),
+				inners:                 make([]Transaction, MaxBatchTransactions),
+			},
 		},
 		{
 			name: "raw transactions limit",
 			batch: &localChecksBatch{
 				localChecksTransaction: newLocalChecksTransaction(TypeBatch, map[string]any{}),
-				inners:                 make([]Transaction, 9),
+				inners:                 make([]Transaction, MaxBatchTransactions+1),
 			},
 			want: "Raw Transactions array exceeds max entries.",
 		},
@@ -270,6 +284,41 @@ func TestTransactionLocalChecksBatchLimits(t *testing.T) {
 		t.Run(test.name, func(t *testing.T) {
 			if got := TransactionLocalChecksFailureReason(test.batch); got != test.want {
 				t.Fatalf("TransactionLocalChecksFailureReason = %q, want %q", got, test.want)
+			}
+		})
+	}
+}
+
+func TestTransactionMapLocalChecksBatchLimits(t *testing.T) {
+	tests := []struct {
+		name   string
+		fields map[string]any
+		want   string
+	}{
+		{
+			name:   "batch signers at limit",
+			fields: map[string]any{"BatchSigners": make([]any, MaxBatchSigners)},
+		},
+		{
+			name:   "batch signers over limit",
+			fields: map[string]any{"BatchSigners": make([]any, MaxBatchSigners+1)},
+			want:   "Batch Signers array exceeds max entries.",
+		},
+		{
+			name:   "raw transactions at limit",
+			fields: map[string]any{"RawTransactions": make([]any, MaxBatchTransactions)},
+		},
+		{
+			name:   "raw transactions over limit",
+			fields: map[string]any{"RawTransactions": make([]any, MaxBatchTransactions+1)},
+			want:   "Raw Transactions array exceeds max entries.",
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			if got := TransactionMapLocalChecksFailureReason(TypeBatch, test.fields); got != test.want {
+				t.Fatalf("TransactionMapLocalChecksFailureReason = %q, want %q", got, test.want)
 			}
 		})
 	}

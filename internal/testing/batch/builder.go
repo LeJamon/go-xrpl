@@ -10,6 +10,7 @@ import (
 
 	"github.com/LeJamon/go-xrpl/crypto/ed25519"
 	"github.com/LeJamon/go-xrpl/crypto/secp256k1"
+	"github.com/LeJamon/go-xrpl/internal/ledger/state"
 	jtx "github.com/LeJamon/go-xrpl/internal/testing"
 	"github.com/LeJamon/go-xrpl/internal/tx"
 	"github.com/LeJamon/go-xrpl/internal/tx/account"
@@ -55,6 +56,7 @@ type BatchBuilder struct {
 type signSpec struct {
 	index          int
 	multi          bool
+	batchSigner    *jtx.Account
 	signerAccounts []*jtx.Account
 	signingKeys    []*jtx.Account
 }
@@ -90,6 +92,7 @@ func (b *BatchBuilder) AddInnerTx(txn tx.Transaction) *BatchBuilder {
 func (b *BatchBuilder) AddSigner(account *jtx.Account, signature string) *BatchBuilder {
 	b.signSpecs = append(b.signSpecs, signSpec{
 		index:       len(b.signers),
+		batchSigner: account,
 		signingKeys: []*jtx.Account{account},
 	})
 	b.signers = append(b.signers, batchtx.BatchSigner{
@@ -109,6 +112,7 @@ func (b *BatchBuilder) AddSigner(account *jtx.Account, signature string) *BatchB
 func (b *BatchBuilder) AddSignerWithRegKey(account, regKey *jtx.Account, signature string) *BatchBuilder {
 	b.signSpecs = append(b.signSpecs, signSpec{
 		index:       len(b.signers),
+		batchSigner: account,
 		signingKeys: []*jtx.Account{regKey},
 	})
 	b.signers = append(b.signers, batchtx.BatchSigner{
@@ -129,6 +133,7 @@ func (b *BatchBuilder) AddSignerWithRegKey(account, regKey *jtx.Account, signatu
 func (b *BatchBuilder) AddMismatchedSigner(account, pubKey, signingKey *jtx.Account) *BatchBuilder {
 	b.signSpecs = append(b.signSpecs, signSpec{
 		index:       len(b.signers),
+		batchSigner: account,
 		signingKeys: []*jtx.Account{signingKey},
 	})
 	b.signers = append(b.signers, batchtx.BatchSigner{
@@ -182,6 +187,7 @@ func (b *BatchBuilder) AddMultiSignBatchSigner(masterAccount *jtx.Account, signe
 	b.signSpecs = append(b.signSpecs, signSpec{
 		index:          len(b.signers),
 		multi:          true,
+		batchSigner:    masterAccount,
 		signerAccounts: sorted,
 		signingKeys:    sorted,
 	})
@@ -224,6 +230,7 @@ func (b *BatchBuilder) AddMultiSignBatchSignerWithRegKeys(masterAccount *jtx.Acc
 	b.signSpecs = append(b.signSpecs, signSpec{
 		index:          len(b.signers),
 		multi:          true,
+		batchSigner:    masterAccount,
 		signerAccounts: signerAccounts,
 		signingKeys:    signingKeys,
 	})
@@ -260,6 +267,14 @@ func (b *BatchBuilder) Build() *batchtx.Batch {
 	if len(b.signers) > 0 {
 		batch.BatchSigners = b.signers
 		b.signBatchSigners(batch)
+		sort.SliceStable(batch.BatchSigners, func(i, j int) bool {
+			left, leftErr := state.DecodeAccountID(batch.BatchSigners[i].BatchSigner.Account)
+			right, rightErr := state.DecodeAccountID(batch.BatchSigners[j].BatchSigner.Account)
+			if leftErr != nil || rightErr != nil {
+				return batch.BatchSigners[i].BatchSigner.Account < batch.BatchSigners[j].BatchSigner.Account
+			}
+			return bytes.Compare(left[:], right[:]) < 0
+		})
 	}
 	return batch
 }
@@ -275,15 +290,18 @@ func (b *BatchBuilder) signBatchSigners(batch *batchtx.Batch) {
 	}
 	for _, spec := range b.signSpecs {
 		signer := &batch.BatchSigners[spec.index].BatchSigner
+		dataStart := make([]byte, 0, len(digest)+20)
+		dataStart = append(dataStart, digest...)
+		dataStart = append(dataStart, spec.batchSigner.ID[:]...)
 		if spec.multi {
 			for j, key := range spec.signingKeys {
 				nestedID := spec.signerAccounts[j].ID
-				msg := append(append([]byte{}, digest...), nestedID[:]...)
+				msg := append(append([]byte{}, dataStart...), nestedID[:]...)
 				signer.Signers[j].Signer.TxnSignature = signBatchMessage(key, msg)
 			}
 			continue
 		}
-		signer.BatchTxnSignature = signBatchMessage(spec.signingKeys[0], digest)
+		signer.BatchTxnSignature = signBatchMessage(spec.signingKeys[0], dataStart)
 	}
 }
 

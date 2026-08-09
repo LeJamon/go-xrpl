@@ -187,6 +187,12 @@ type BatchSignatureVerifier interface {
 	VerifyBatchSignatures() error
 }
 
+// CounterpartyProvider is implemented by transactions that name an account
+// whose consent is required in addition to the initiator's authorization.
+type CounterpartyProvider interface {
+	GetCounterparty() string
+}
+
 // Amount is an alias for state.Amount — represents either XRP (as drops int64) or an issued currency amount
 type Amount = state.Amount
 
