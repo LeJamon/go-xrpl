@@ -63,7 +63,7 @@ func TestGeneratedSerializerAdaptersMatchRippledCorpus(t *testing.T) {
 			if entry.HasDestinationNode {
 				destinationNode = &entry.DestinationNode
 			}
-			return SerializeDelegate(entry.Account, entry.Authorize, entry.Permissions, entry.OwnerNode, destinationNode, entry.PreviousTxnID, entry.PreviousTxnLgrSeq)
+			return SerializeDelegate(entry.Account, entry.Authorize, entry.Permissions, entry.OwnerNode, destinationNode, entry.Sponsor, entry.PreviousTxnID, entry.PreviousTxnLgrSeq)
 		},
 		"MPTokenIssuance": func(data []byte) ([]byte, error) {
 			entry, err := ParseMPTokenIssuance(data)

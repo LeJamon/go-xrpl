@@ -354,7 +354,6 @@ func (a *AMMCreate) Apply(ctx *tx.ApplyContext) ter.Result {
 	isXRP1 := isXRPAsset(sortedAsset1)
 	isXRP2 := isXRPAsset(sortedAsset2)
 
-	creatorOwnerDelta := int32(0)
 
 	// Reference: rippled AMMCreate.cpp sendAndTrustSet uses accountSend which
 	// handles issuer-as-sender (no self-trust-line debit needed).
@@ -387,11 +386,15 @@ func (a *AMMCreate) Apply(ctx *tx.ApplyContext) ter.Result {
 			if tlErr != nil {
 				return TecUNFUNDED_AMM
 			}
-			creatorOwnerDelta += int32(tlResult.SenderOwnerCountDelta)
+			if tlResult.SenderOwnerCountDelta != 0 {
+				if err := tx.DecreaseOwnerCount(ctx.View, ctx.Account, tlResult.SenderSponsor, 1); err != nil {
+					return ter.TefINTERNAL
+				}
+			}
 			// If deleting the creator's trust line also cleared the issuer's
 			// reserve on that line, decrement the issuer's owner count.
 			if tlResult.IssuerOwnerCountDelta != 0 {
-				_ = tx.AdjustOwnerCount(ctx.View, issuerID1, tlResult.IssuerOwnerCountDelta)
+				_ = tx.DecreaseOwnerCountOnView(ctx.View, issuerID1, tlResult.IssuerSponsor, 1)
 			}
 		}
 	}
@@ -423,11 +426,15 @@ func (a *AMMCreate) Apply(ctx *tx.ApplyContext) ter.Result {
 			if tlErr != nil {
 				return TecUNFUNDED_AMM
 			}
-			creatorOwnerDelta += int32(tlResult.SenderOwnerCountDelta)
+			if tlResult.SenderOwnerCountDelta != 0 {
+				if err := tx.DecreaseOwnerCount(ctx.View, ctx.Account, tlResult.SenderSponsor, 1); err != nil {
+					return ter.TefINTERNAL
+				}
+			}
 			// If deleting the creator's trust line also cleared the issuer's
 			// reserve on that line, decrement the issuer's owner count.
 			if tlResult.IssuerOwnerCountDelta != 0 {
-				_ = tx.AdjustOwnerCount(ctx.View, issuerID2, tlResult.IssuerOwnerCountDelta)
+				_ = tx.DecreaseOwnerCountOnView(ctx.View, issuerID2, tlResult.IssuerSponsor, 1)
 			}
 		}
 	}
@@ -436,8 +443,7 @@ func (a *AMMCreate) Apply(ctx *tx.ApplyContext) ter.Result {
 	// +1 for the LP token trustline, plus any adjustments from IOU trust line
 	// deletion (when the creator deposits all their IOU balance, the original
 	// trust line may be deleted, decrementing owner count).
-	newOwnerCount := max(int32(ctx.Account.OwnerCount)+1+creatorOwnerDelta, 0)
-	ctx.Account.OwnerCount = uint32(newOwnerCount)
+	ctx.Account.OwnerCount = tx.ConfineOwnerCount(ctx.Account.OwnerCount, 1)
 
 	accountKey := keylet.Account(accountID)
 	accountBytes, err := state.SerializeAccountRoot(ctx.Account)

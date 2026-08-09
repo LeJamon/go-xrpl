@@ -134,7 +134,7 @@ func TestEscrowTokenCreate_OwnerCountBumpGate(t *testing.T) {
 		require.NoError(t, err)
 
 		require.Equal(t, ter.TesSUCCESS,
-			createMPTokenForEscrow(v, issuanceKey, mptHexID, holder, holder, true))
+			createMPTokenForEscrow(v, nil, issuanceKey, mptHexID, holder, holder, true))
 
 		require.Equal(t, uint32(6), ownerCountOf(t, v, holder),
 			"finish bumps the destination's OwnerCount for the new MPToken")
@@ -149,7 +149,7 @@ func TestEscrowTokenCreate_OwnerCountBumpGate(t *testing.T) {
 		require.NoError(t, err)
 
 		require.Equal(t, ter.TesSUCCESS,
-			createMPTokenForEscrow(v, issuanceKey, mptHexID, holder, holder, false))
+			createMPTokenForEscrow(v, nil, issuanceKey, mptHexID, holder, holder, false))
 
 		require.Equal(t, uint32(5), ownerCountOf(t, v, holder),
 			"cancel must not charge the creator's OwnerCount (rippled bumps the erased escrow SLE)")
@@ -165,7 +165,7 @@ func TestEscrowTokenCreate_OwnerCountBumpGate(t *testing.T) {
 		seedAccountForEscrow(t, vf, holder, 5)
 		seedAccountForEscrow(t, vf, issuer, 0)
 		require.Equal(t, ter.TesSUCCESS,
-			createTrustLineForEscrow(vf, issuer, holder, "USD", holder, recvLow, true))
+			createTrustLineForEscrow(vf, nil, issuer, holder, "USD", holder, recvLow, true))
 		require.Equal(t, uint32(6), ownerCountOf(t, vf, holder),
 			"finish bumps the destination's OwnerCount for the new trust line")
 
@@ -174,7 +174,7 @@ func TestEscrowTokenCreate_OwnerCountBumpGate(t *testing.T) {
 		seedAccountForEscrow(t, vc, holder, 5)
 		seedAccountForEscrow(t, vc, issuer, 0)
 		require.Equal(t, ter.TesSUCCESS,
-			createTrustLineForEscrow(vc, issuer, holder, "USD", holder, recvLow, false))
+			createTrustLineForEscrow(vc, nil, issuer, holder, "USD", holder, recvLow, false))
 		require.Equal(t, uint32(5), ownerCountOf(t, vc, holder),
 			"cancel must not charge the creator's OwnerCount for the re-created trust line")
 	})

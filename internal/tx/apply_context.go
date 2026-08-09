@@ -22,6 +22,9 @@ type ApplyContext struct {
 	// AccountID is the decoded source account ID
 	AccountID [20]byte
 
+	// Common is the common field set of the transaction being applied.
+	Common *Common
+
 	// SourceFeeCharged is the fee (in drops) actually deducted from Account for
 	// this transaction: the transaction fee for a normal tx, or 0 when a
 	// delegate/sponsor pays and leaves the source untouched. Added to
@@ -220,4 +223,19 @@ func (ctx *ApplyContext) SyncSenderOwnerCount() {
 		return
 	}
 	ctx.Account.OwnerCount = account.OwnerCount
+	ctx.Account.SponsoredOwnerCount = account.SponsoredOwnerCount
+	ctx.Account.SponsoringOwnerCount = account.SponsoringOwnerCount
+	ctx.Account.SponsoringAccountCount = account.SponsoringAccountCount
+}
+
+// SyncSenderSponsorCounts refreshes the source's counters when it was the
+// persisted sponsor of an object owned by another account.
+func (ctx *ApplyContext) SyncSenderSponsorCounts(sponsorAddress string) {
+	if sponsorAddress == "" {
+		return
+	}
+	sponsorID, err := state.DecodeAccountID(sponsorAddress)
+	if err == nil && sponsorID == ctx.AccountID {
+		ctx.SyncSenderOwnerCount()
+	}
 }

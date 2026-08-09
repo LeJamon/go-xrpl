@@ -107,8 +107,8 @@ func closeChannel(ctx *tx.ApplyContext, channelKey keylet.Keylet, channel *state
 	if channel.Account == ctx.AccountID {
 		// Owner is the sender — use ctx.Account (engine writes it back)
 		ctx.Account.Balance += remaining
-		if ctx.Account.OwnerCount > 0 {
-			ctx.Account.OwnerCount--
+		if err := tx.DecreaseOwnerCount(ctx.View, ctx.Account, channel.Sponsor, 1); err != nil {
+			return ctx.Internal("PayChannel.Close.OwnerCount", err)
 		}
 	} else {
 		// Owner is not the sender (dest is closing) — read and update owner directly
@@ -122,9 +122,10 @@ func closeChannel(ctx *tx.ApplyContext, channelKey keylet.Keylet, channel *state
 			return ter.TefINTERNAL
 		}
 		ownerAccount.Balance += remaining
-		if ownerAccount.OwnerCount > 0 {
-			ownerAccount.OwnerCount--
+		if err := tx.DecreaseOwnerCount(ctx.View, ownerAccount, channel.Sponsor, 1); err != nil {
+			return ctx.Internal("PayChannel.Close.OwnerCount", err)
 		}
+		ctx.SyncSenderSponsorCounts(channel.Sponsor)
 		ownerUpdated, err := state.SerializeAccountRoot(ownerAccount)
 		if err != nil {
 			return ter.TefINTERNAL

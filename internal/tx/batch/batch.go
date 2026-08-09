@@ -657,6 +657,7 @@ func (b *Batch) applyAllOrNothing(
 		View:                   batchTable,
 		Account:                ctx.Account,
 		AccountID:              ctx.AccountID,
+		Common:                 ctx.Common,
 		Config:                 ctx.Config,
 		TxHash:                 ctx.TxHash,
 		TransactionIndex:       ctx.TransactionIndex,

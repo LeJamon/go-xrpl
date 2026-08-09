@@ -239,7 +239,7 @@ func (d *DelegateSet) Apply(ctx *tx.ApplyContext) ter.Result {
 			dn := existingEntry.DestinationNode
 			destNode = &dn
 		}
-		newData, serErr := state.SerializeDelegate(ctx.AccountID, authorizeID, permValues, existingEntry.OwnerNode, destNode, existingEntry.PreviousTxnID, existingEntry.PreviousTxnLgrSeq)
+		newData, serErr := state.SerializeDelegate(ctx.AccountID, authorizeID, permValues, existingEntry.OwnerNode, destNode, existingEntry.Sponsor, existingEntry.PreviousTxnID, existingEntry.PreviousTxnLgrSeq)
 		if serErr != nil {
 			return ter.TefINTERNAL
 		}
@@ -254,7 +254,7 @@ func (d *DelegateSet) Apply(ctx *tx.ApplyContext) ter.Result {
 	//
 	// Check reserve against the prior balance (before the actual fee was
 	// deducted), allowing the account to dip into the reserve to pay fees.
-	if result := ctx.CheckReserveWithFee(ctx.Account.OwnerCount + 1); result != ter.TesSUCCESS {
+	if result := ctx.CheckReserveFor(ctx.AccountID, ctx.Account, ctx.PriorBalance(), 1, 0, ter.TecINSUFFICIENT_RESERVE); result != ter.TesSUCCESS {
 		return result
 	}
 
@@ -276,7 +276,11 @@ func (d *DelegateSet) Apply(ctx *tx.ApplyContext) ter.Result {
 	}
 	destNode := authDir.Page
 
-	delegateData, serErr := state.SerializeDelegate(ctx.AccountID, authorizeID, permValues, ownerDir.Page, &destNode, [32]byte{}, 0)
+	sponsorAddress, result := tx.IncreaseOwnerCount(ctx, ctx.AccountID, ctx.Account, 1)
+	if result != ter.TesSUCCESS {
+		return result
+	}
+	delegateData, serErr := state.SerializeDelegate(ctx.AccountID, authorizeID, permValues, ownerDir.Page, &destNode, sponsorAddress, [32]byte{}, 0)
 	if serErr != nil {
 		return ter.TefINTERNAL
 	}
@@ -284,8 +288,6 @@ func (d *DelegateSet) Apply(ctx *tx.ApplyContext) ter.Result {
 		return ter.TefINTERNAL
 	}
 
-	// Only the delegating account's owner count is incremented on creation.
-	ctx.Account.OwnerCount++
 	return ter.TesSUCCESS
 }
 
@@ -309,30 +311,8 @@ func DeleteDelegate(ctx *tx.ApplyContext, delegateKey keylet.Keylet, existingDat
 		}
 	}
 
-	if existingEntry.Account == ctx.AccountID {
-		if ctx.Account.OwnerCount > 0 {
-			ctx.Account.OwnerCount--
-		}
-	} else {
-		accountKey := keylet.Account(existingEntry.Account)
-		accountData, err := ctx.View.Read(accountKey)
-		if err != nil || accountData == nil {
-			return ter.TecINTERNAL
-		}
-		account, err := state.ParseAccountRoot(accountData)
-		if err != nil {
-			return ter.TefINTERNAL
-		}
-		if account.OwnerCount > 0 {
-			account.OwnerCount--
-		}
-		accountData, err = state.SerializeAccountRoot(account)
-		if err != nil {
-			return ter.TefINTERNAL
-		}
-		if err := ctx.View.Update(accountKey, accountData); err != nil {
-			return ter.TefINTERNAL
-		}
+	if result := tx.DecreaseOwnerCountFor(ctx, existingEntry.Account, existingEntry.Sponsor, 1); result != ter.TesSUCCESS {
+		return result
 	}
 
 	if err := ctx.View.Erase(delegateKey); err != nil {

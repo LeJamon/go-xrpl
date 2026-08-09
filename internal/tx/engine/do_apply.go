@@ -321,6 +321,7 @@ func (e *Engine) invokeApplyInner(st *applyState) ter.Result {
 		View:             st.table,
 		Account:          st.account,
 		AccountID:        st.accountID,
+		Common:           st.common,
 		SourceFeeCharged: st.sourceFeeCharged(),
 		Config:           e.config,
 		TxHash:           st.txHash,
@@ -421,6 +422,7 @@ func (e *Engine) applyTecRecovery(st *applyState, result ter.Result) ter.Result 
 			View:             tecTable,
 			Account:          recoveredAccount,
 			AccountID:        st.accountID,
+			Common:           st.common,
 			SourceFeeCharged: st.sourceFeeCharged(),
 			Config:           e.config,
 			TxHash:           st.txHash,
@@ -579,10 +581,10 @@ func (e *Engine) removeDeletedTrustLines(tecTable *applystate.ApplyStateTable, k
 			ammLow := lowAcct.AMMID != zeroHash
 			ammHigh := highAcct.AMMID != zeroHash
 			if rs.Flags&state.LsfLowReserve != 0 && !ammLow {
-				adjustOwnerCountOnView(tecTable, lowID, -1)
+				_ = txcore.DecreaseOwnerCountOnView(tecTable, lowID, rs.LowSponsor, 1)
 			}
 			if rs.Flags&state.LsfHighReserve != 0 && !ammHigh {
-				adjustOwnerCountOnView(tecTable, highID, -1)
+				_ = txcore.DecreaseOwnerCountOnView(tecTable, highID, rs.HighSponsor, 1)
 			}
 		}
 	}

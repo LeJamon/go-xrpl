@@ -290,8 +290,8 @@ func removeDeleteAssetHolding(ctx *tx.ApplyContext, accountID [20]byte, asset tx
 	if r, e := state.DirRemove(ctx.View, keylet.OwnerDir(accountID), token.OwnerNode, tokenKey.Key, false); e != nil || !r.Success {
 		return 0, ter.TecINTERNAL
 	}
-	if err := tx.AdjustOwnerCount(ctx.View, accountID, -1); err != nil {
-		return 0, ter.TefINTERNAL
+	if result := tx.DecreaseOwnerCountFor(ctx, accountID, token.Sponsor, 1); result != ter.TesSUCCESS {
+		return 0, result
 	}
 	if err := ctx.View.Erase(tokenKey); err != nil {
 		return 0, ter.TefINTERNAL

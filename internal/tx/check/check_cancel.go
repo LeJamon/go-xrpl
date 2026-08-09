@@ -159,12 +159,17 @@ func (c *CheckCancel) Apply(ctx *tx.ApplyContext) ter.Result {
 		return result
 	}
 
+	sponsorAddress, err := tx.LedgerEntrySponsor(checkData, "Sponsor")
+	if err != nil {
+		return ter.TefINTERNAL
+	}
+
 	// Adjust creator's owner count.
 	// Reference: CancelCheck.cpp L125-126
 	if isCreator {
 		// Canceller is the creator
-		if ctx.Account.OwnerCount > 0 {
-			ctx.Account.OwnerCount--
+		if err := tx.DecreaseOwnerCount(ctx.View, ctx.Account, sponsorAddress, 1); err != nil {
+			return ter.TefINTERNAL
 		}
 	} else {
 		// Update the creator's owner count. A missing creator account is
@@ -177,9 +182,10 @@ func (c *CheckCancel) Apply(ctx *tx.ApplyContext) ter.Result {
 			if err != nil {
 				return ter.TefINTERNAL
 			}
-			if creatorAccount.OwnerCount > 0 {
-				creatorAccount.OwnerCount--
+			if err := tx.DecreaseOwnerCount(ctx.View, creatorAccount, sponsorAddress, 1); err != nil {
+				return ter.TefINTERNAL
 			}
+			ctx.SyncSenderSponsorCounts(sponsorAddress)
 			if result := ctx.UpdateAccountRoot(check.Account, creatorAccount); result != ter.TesSUCCESS {
 				return result
 			}

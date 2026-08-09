@@ -132,18 +132,28 @@ func (p *PaymentChannelCreate) Apply(ctx *tx.ApplyContext) ter.Result {
 	// PriorBalance, else a fee straddling reserve(OwnerCount+1) flips the TER.
 	// Reference: rippled PayChan.cpp preclaim() lines 204-214.
 	priorBalance := ctx.PriorBalance()
-	reserve := ctx.AccountReserve(ctx.Account.OwnerCount + 1)
-	if priorBalance < reserve {
+	if result := ctx.CheckReserveFor(ctx.AccountID, ctx.Account, priorBalance, 1, 0, ter.TecINSUFFICIENT_RESERVE); result != ter.TesSUCCESS {
 		ctx.Log.Warn("payment channel create: insufficient reserve",
 			"balance", priorBalance,
-			"reserve", reserve,
 		)
-		return ter.TecINSUFFICIENT_RESERVE
+		return result
 	}
-	if priorBalance-reserve < amount {
+	usesSponsor, result := ctx.UsesReserveSponsorFor(ctx.AccountID, ctx.Account)
+	if result != ter.TesSUCCESS {
+		return result
+	}
+	ownerDelta := 1
+	if usesSponsor {
+		ownerDelta = 0
+	}
+	sourceReserve, ok := tx.RequiredAccountReserve(ctx.Config, ctx.Account, ownerDelta, 0)
+	if !ok {
+		return ter.TefINTERNAL
+	}
+	if priorBalance < amount || priorBalance-amount < sourceReserve {
 		ctx.Log.Warn("payment channel create: unfunded",
 			"balance", priorBalance,
-			"needed", reserve+amount,
+			"amount", amount,
 		)
 		return ter.TecUNFUNDED
 	}
@@ -239,6 +249,12 @@ func (p *PaymentChannelCreate) Apply(ctx *tx.ApplyContext) ter.Result {
 		channelSLE.HasDestNode = true
 	}
 
+	sponsorAddress, result := tx.IncreaseOwnerCount(ctx, accountID, ctx.Account, 1)
+	if result != ter.TesSUCCESS {
+		return result
+	}
+	channelSLE.Sponsor = sponsorAddress
+
 	// Re-serialize with updated OwnerNode/DestinationNode
 	updatedData, err := state.SerializePayChannelFromData(channelSLE)
 	if err != nil {
@@ -248,9 +264,8 @@ func (p *PaymentChannelCreate) Apply(ctx *tx.ApplyContext) ter.Result {
 		return ctx.Internal("update pay channel", err)
 	}
 
-	// Deduct amount from account and increment OwnerCount
+	// Deduct amount from account.
 	ctx.Account.Balance -= amount
-	ctx.Account.OwnerCount++
 
 	return ter.TesSUCCESS
 }

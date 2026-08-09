@@ -840,13 +840,19 @@ func removeVaultAssetHolding(ctx *tx.ApplyContext, accountID [20]byte, asset tx.
 			return 0, ter.TefINTERNAL
 		}
 		tokenKey := keylet.MPTokenByID(id, accountID)
-		existed, err := ctx.View.Exists(tokenKey)
+		token, err := readMPToken(ctx.View, tokenKey)
 		if err != nil {
 			return 0, ter.TefINTERNAL
 		}
 		result := mptutil.RemoveHolding(ctx.View, id, accountID, false)
-		if result != ter.TesSUCCESS || !existed {
+		if result != ter.TesSUCCESS || token == nil {
 			return 0, result
+		}
+		if token.Sponsor != "" {
+			if result := tx.DecreaseOwnerCountFor(ctx, accountID, token.Sponsor, 1); result != ter.TesSUCCESS {
+				return 0, result
+			}
+			return 0, ter.TesSUCCESS
 		}
 		return -1, ter.TesSUCCESS
 	}
@@ -883,38 +889,26 @@ func removeVaultAssetHolding(ctx *tx.ApplyContext, accountID [20]byte, asset tx.
 		return 0, ter.TefINTERNAL
 	}
 	delta := int32(0)
-	adjust := func(owner [20]byte) ter.Result {
-		if owner == accountID {
+	adjust := func(owner [20]byte, sponsorAddress string) ter.Result {
+		if owner == accountID && sponsorAddress == "" {
 			delta--
 			return ter.TesSUCCESS
 		}
-		if owner == ctx.AccountID {
-			ctx.Account.OwnerCount = tx.ConfineOwnerCount(ctx.Account.OwnerCount, -1)
-			return ter.TesSUCCESS
-		}
-		exists, err := ctx.View.Exists(keylet.Account(owner))
-		if err != nil {
-			return ter.TefINTERNAL
-		}
-		if !exists {
-			return ter.TecINTERNAL
-		}
-		if err := tx.AdjustOwnerCount(ctx.View, owner, -1); err != nil {
-			return ter.TefINTERNAL
-		}
-		return ter.TesSUCCESS
+		return tx.DecreaseOwnerCountFor(ctx, owner, sponsorAddress, 1)
 	}
 	if rs.Flags&state.LsfLowReserve != 0 {
-		if result := adjust(lowID); result != ter.TesSUCCESS {
+		if result := adjust(lowID, rs.LowSponsor); result != ter.TesSUCCESS {
 			return 0, result
 		}
 		rs.Flags &^= state.LsfLowReserve
+		rs.LowSponsor = ""
 	}
 	if rs.Flags&state.LsfHighReserve != 0 {
-		if result := adjust(highID); result != ter.TesSUCCESS {
+		if result := adjust(highID, rs.HighSponsor); result != ter.TesSUCCESS {
 			return 0, result
 		}
 		rs.Flags &^= state.LsfHighReserve
+		rs.HighSponsor = ""
 	}
 	updated, serr := state.SerializeRippleState(rs)
 	if serr != nil {
@@ -970,12 +964,8 @@ func removeEmptyShareMPToken(ctx *tx.ApplyContext, holderID [20]byte, shareMPTID
 	if eerr := ctx.View.Erase(tokenKey); eerr != nil {
 		return ter.TefINTERNAL
 	}
-	if holderID == ctx.AccountID {
-		if ctx.Account.OwnerCount > 0 {
-			ctx.Account.OwnerCount--
-		}
-	} else if derr := tx.AdjustOwnerCount(ctx.View, holderID, -1); derr != nil {
-		return ter.TefINTERNAL
+	if result := tx.DecreaseOwnerCountFor(ctx, holderID, token.Sponsor, 1); result != ter.TesSUCCESS {
+		return result
 	}
 	return ter.TesSUCCESS
 }

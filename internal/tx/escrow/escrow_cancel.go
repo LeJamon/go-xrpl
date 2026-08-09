@@ -136,6 +136,10 @@ func (e *EscrowCancel) Apply(ctx *tx.ApplyContext) ter.Result {
 	}
 
 	isXRP := escrowEntry.IsXRP
+	sponsorAddress, err := tx.LedgerEntrySponsor(escrowData, "Sponsor")
+	if err != nil {
+		return ctx.Internal("EscrowCancel.Sponsor", err)
+	}
 
 	closeTime := ctx.Config.ParentCloseTime
 
@@ -227,6 +231,7 @@ func (e *EscrowCancel) Apply(ctx *tx.ApplyContext) ter.Result {
 
 			if result := escrowUnlockMPT(
 				ctx.View,
+				ctx,
 				escrowEntry.Account, escrowEntry.Account, // sender == receiver (cancel returns to creator)
 				finalAmount,
 				finalAmount, // cancel applies parityRate: gross == net, no fee to burn
@@ -254,6 +259,7 @@ func (e *EscrowCancel) Apply(ctx *tx.ApplyContext) ter.Result {
 
 			if result := escrowUnlockIOU(
 				ctx.View,
+				ctx,
 				parityRate,
 				ownerBalance,
 				ownerOwnerCount,
@@ -293,9 +299,7 @@ func (e *EscrowCancel) Apply(ctx *tx.ApplyContext) ter.Result {
 		}
 	}
 
-	// Decrement owner count
-	// Reference: rippled Escrow.cpp doApply() line 1401
-	if result := adjustOwnerCount(ctx, ownerID, -1); result != ter.TesSUCCESS {
+	if result := tx.DecreaseOwnerCountFor(ctx, ownerID, sponsorAddress, 1); result != ter.TesSUCCESS {
 		return result
 	}
 

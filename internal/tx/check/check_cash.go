@@ -364,10 +364,14 @@ func (c *CheckCash) applyCashXRP(ctx *tx.ApplyContext, check *state.CheckData, c
 		return result
 	}
 
-	// Decrease creator's owner count
-	if creatorAccount.OwnerCount > 0 {
-		creatorAccount.OwnerCount--
+	sponsorAddress, err := tx.LedgerEntrySponsorFromView(ctx.View, checkKey, "Sponsor")
+	if err != nil {
+		return ter.TefINTERNAL
 	}
+	if err := tx.DecreaseOwnerCount(ctx.View, creatorAccount, sponsorAddress, 1); err != nil {
+		return ter.TefINTERNAL
+	}
+	ctx.SyncSenderSponsorCounts(sponsorAddress)
 
 	// Update creator account
 	if result := ctx.UpdateAccountRoot(check.Account, creatorAccount); result != ter.TesSUCCESS {
@@ -470,13 +474,12 @@ func (c *CheckCash) applyCashMPTAmount(ctx *tx.ApplyContext, check *state.CheckD
 		if exists, err := ctx.View.Exists(keylet.MPTokenByID(mptID, dstID)); err != nil {
 			return ter.TefINTERNAL
 		} else if !exists {
-			if ctx.PriorBalance() < ctx.AccountReserve(ctx.Account.OwnerCount+1) {
-				return ter.TecINSUFFICIENT_RESERVE
-			}
-			if result := mptutil.EnsureHolding(ctx.View, mptID, dstID, 0, true); result != ter.TesSUCCESS {
+			if result := ctx.CheckReserveFor(ctx.AccountID, ctx.Account, ctx.PriorBalance(), 1, 0, ter.TecINSUFFICIENT_RESERVE); result != ter.TesSUCCESS {
 				return result
 			}
-			ctx.SyncSenderOwnerCount()
+			if result := mptutil.EnsureHoldingForContext(ctx, mptID, dstID, 0); result != ter.TesSUCCESS {
+				return result
+			}
 		}
 	}
 
@@ -541,9 +544,14 @@ func (c *CheckCash) applyCashMPTAmount(ctx *tx.ApplyContext, check *state.CheckD
 	if err != nil {
 		return ter.TefINTERNAL
 	}
-	if creatorAccount.OwnerCount > 0 {
-		creatorAccount.OwnerCount--
+	sponsorAddress, err := tx.LedgerEntrySponsorFromView(ctx.View, checkKey, "Sponsor")
+	if err != nil {
+		return ter.TefINTERNAL
 	}
+	if err := tx.DecreaseOwnerCount(ctx.View, creatorAccount, sponsorAddress, 1); err != nil {
+		return ter.TefINTERNAL
+	}
+	ctx.SyncSenderSponsorCounts(sponsorAddress)
 	if result := ctx.UpdateAccountRoot(srcID, creatorAccount); result != ter.TesSUCCESS {
 		return result
 	}
@@ -665,10 +673,8 @@ func (c *CheckCash) applyCashIOUAmount(ctx *tx.ApplyContext, check *state.CheckD
 		if !trustLineExists {
 			// Check reserve for creating trust line
 			// Reference: CashCheck.cpp L373-378
-			feeDrops := parseFee(c.Fee)
-			priorBalance := ctx.Account.Balance + feeDrops
-			reserve := ctx.AccountReserve(ctx.Account.OwnerCount + 1)
-			if priorBalance < reserve {
+			priorBalance := ctx.PriorBalance()
+			if result := ctx.CheckReserveFor(ctx.AccountID, ctx.Account, priorBalance, 1, 0, ter.TecNO_LINE_INSUF_RESERVE); result != ter.TesSUCCESS {
 				return ter.TecNO_LINE_INSUF_RESERVE
 			}
 
@@ -812,9 +818,14 @@ func (c *CheckCash) applyCashIOUAmount(ctx *tx.ApplyContext, check *state.CheckD
 		return ter.TefINTERNAL
 	}
 
-	if creatorAccount.OwnerCount > 0 {
-		creatorAccount.OwnerCount--
+	sponsorAddress, err := tx.LedgerEntrySponsorFromView(ctx.View, checkKey, "Sponsor")
+	if err != nil {
+		return ter.TefINTERNAL
 	}
+	if err := tx.DecreaseOwnerCount(ctx.View, creatorAccount, sponsorAddress, 1); err != nil {
+		return ter.TefINTERNAL
+	}
+	ctx.SyncSenderSponsorCounts(sponsorAddress)
 
 	if result := ctx.UpdateAccountRoot(srcID, creatorAccount); result != ter.TesSUCCESS {
 		return result
@@ -877,7 +888,11 @@ func createTrustLineForCheckCash(ctx *tx.ApplyContext, destID, issuerID [20]byte
 
 	destLow := state.CompareAccountIDs(destID, issuerID) < 0
 
-	result := tx.TrustCreate(ctx.View, tx.TrustCreateParams{
+	sponsorAddress, result := tx.IncreaseOwnerCount(ctx, ctx.AccountID, ctx.Account, 1)
+	if result != ter.TesSUCCESS {
+		return result
+	}
+	result = tx.TrustCreate(ctx.View, tx.TrustCreateParams{
 		SrcHigh:     destLow,
 		Src:         issuerID,
 		Dst:         destID,
@@ -886,13 +901,11 @@ func createTrustLineForCheckCash(ctx *tx.ApplyContext, destID, issuerID [20]byte
 		NoRipple:    destNoRipple,
 		Balance:     state.NewIssuedAmountFromValue(0, state.MinExponent, currency, state.AccountOneAddress),
 		Limit:       state.NewIssuedAmountFromValue(0, state.MinExponent, currency, destStr),
+		Sponsor:     sponsorAddress,
 	})
 	if result != ter.TesSUCCESS {
 		return result
 	}
-
-	// The casher owns the new line and pays its reserve.
-	ctx.Account.OwnerCount++
 
 	return ter.TesSUCCESS
 }

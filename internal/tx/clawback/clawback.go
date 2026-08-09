@@ -428,12 +428,27 @@ func (c *Clawback) applyIOU(ctx *tx.ApplyContext) ter.Result {
 			return ter.TefINTERNAL
 		}
 
-		// Decrement OwnerCount for both sides
-		if ctx.Account.OwnerCount > 0 {
-			ctx.Account.OwnerCount--
+		issuerSponsor, holderSponsor := rs.HighSponsor, rs.LowSponsor
+		issuerReserved, holderReserved := rs.Flags&state.LsfHighReserve != 0, rs.Flags&state.LsfLowReserve != 0
+		if issuerIsLow {
+			issuerSponsor, holderSponsor = rs.LowSponsor, rs.HighSponsor
+			issuerReserved, holderReserved = rs.Flags&state.LsfLowReserve != 0, rs.Flags&state.LsfHighReserve != 0
 		}
-		if holderAccount.OwnerCount > 0 {
-			holderAccount.OwnerCount--
+		if issuerReserved {
+			if err := tx.DecreaseOwnerCount(ctx.View, ctx.Account, issuerSponsor, 1); err != nil {
+				return ctx.Internal("Clawback.IssuerOwnerCount", err)
+			}
+		}
+		if latest, readErr := tx.ReadAccountRoot(ctx.View, holderID); readErr != nil || latest == nil {
+			return ter.TefINTERNAL
+		} else {
+			holderAccount.SponsoringOwnerCount = latest.SponsoringOwnerCount
+		}
+		if holderReserved {
+			if err := tx.DecreaseOwnerCount(ctx.View, holderAccount, holderSponsor, 1); err != nil {
+				return ctx.Internal("Clawback.HolderOwnerCount", err)
+			}
+			ctx.SyncSenderSponsorCounts(holderSponsor)
 		}
 
 		if result := ctx.UpdateAccountRoot(holderID, holderAccount); result != ter.TesSUCCESS {
