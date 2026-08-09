@@ -5,6 +5,8 @@ import (
 	"context"
 	"crypto/ed25519"
 	"encoding/hex"
+	"os"
+	"path/filepath"
 	"sync"
 	"testing"
 	"time"
@@ -168,14 +170,15 @@ func TestRouter_HandleManifests_AppliesAccepted(t *testing.T) {
 	}
 }
 
-func TestRouter_ProcessManifestSpoolAppliesAndReleasesPeer(t *testing.T) {
+func TestRouter_OversizedManifestDropsBeforeSpoolAndKeepsPeerLive(t *testing.T) {
 	connections := make(chan manifestOverlayConnection, 1)
 	source := startRunningManifestOverlay(t, peermanagement.WithCompression(false))
 	source.overlay.SetPeerConnectCallback(func(peerID peermanagement.PeerID) {
 		connections <- manifestOverlayConnection{overlay: source, peerID: peerID}
 	})
+	dataDir := t.TempDir()
 	client := startRunningManifestOverlay(t,
-		peermanagement.WithDataDir(t.TempDir()),
+		peermanagement.WithDataDir(dataDir),
 		peermanagement.WithCompression(false),
 		peermanagement.WithMaxOutbound(1),
 		peermanagement.WithFixedPeers(source.overlay.ListenAddr()),
@@ -188,9 +191,9 @@ func TestRouter_ProcessManifestSpoolAppliesAndReleasesPeer(t *testing.T) {
 		t.Fatal("manifest source did not connect")
 	}
 
-	wire := buildWireManifest(t, 1, 0x24, 0x25)
+	oversizedWire := buildWireManifest(t, 1, 0x24, 0x25)
 	payload := encodePayload(t, &message.Manifests{
-		List: []message.Manifest{{STObject: wire}},
+		List: []message.Manifest{{STObject: oversizedWire}},
 	})
 	payload = protowire.AppendTag(payload, 9, protowire.BytesType)
 	payload = protowire.AppendBytes(payload, make([]byte, 1<<20))
@@ -198,14 +201,22 @@ func TestRouter_ProcessManifestSpoolAppliesAndReleasesPeer(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, connection.overlay.overlay.Send(connection.peerID, frame))
 
+	wire := buildWireManifest(t, 1, 0x26, 0x27)
+	frame, err = message.EncodeFrame(&message.Manifests{
+		List: []message.Manifest{{STObject: wire}},
+	})
+	require.NoError(t, err)
+	require.NoError(t, connection.overlay.overlay.Send(connection.peerID, frame))
+
 	var inbound *peermanagement.InboundMessage
 	select {
 	case inbound = <-client.overlay.ManifestMessages():
 	case <-time.After(5 * time.Second):
-		t.Fatal("spooled manifest did not reach the processing lane")
+		t.Fatal("valid manifest did not reach the processing lane")
 	}
-	require.NotNil(t, inbound.ManifestFrame)
-	require.Nil(t, inbound.Payload)
+	require.Nil(t, inbound.ManifestFrame)
+	require.NotNil(t, inbound.Payload)
+	require.True(t, client.overlay.IsPeerConnected(inbound.PeerID))
 
 	router, cache, _ := routerWithCache(t, nil, 0, 0)
 	router.processManifestJob(inbound)
@@ -215,8 +226,10 @@ func TestRouter_ProcessManifestSpoolAppliesAndReleasesPeer(t *testing.T) {
 	stored, ok := cache.GetManifest(parsed.MasterKey())
 	require.True(t, ok)
 	require.Equal(t, wire, stored)
-	_, err = inbound.ManifestFrame.Materialize(context.Background())
-	require.ErrorIs(t, err, peermanagement.ErrManifestFrameClosed)
+
+	entries, err := os.ReadDir(filepath.Join(dataDir, "manifest-spool"))
+	require.NoError(t, err)
+	require.Empty(t, entries)
 }
 
 func TestRouter_ProcessManifestSpoolRejectsOversizeBeforeApply(t *testing.T) {

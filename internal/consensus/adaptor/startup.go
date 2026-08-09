@@ -987,6 +987,12 @@ func OverlayOptionsFromConfig(appCfg *config.Config) []peermanagement.Option {
 		opts = append(opts, peermanagement.WithMaxTransactions(appCfg.MaxTransactions))
 	}
 
+	maxManifestPayload := peermanagement.MaximumManifestsMessageSize(
+		appCfg.Overlay.EffectiveMaxTrustedCount(),
+		appCfg.Overlay.EffectiveMaxUntrustedCount(),
+	)
+	opts = append(opts, peermanagement.WithMaxManifestPayload(uint32(maxManifestPayload)))
+
 	// Operator domain for the Server-Domain handshake header.
 	if appCfg.ServerDomain != "" {
 		opts = append(opts, peermanagement.WithServerDomain(appCfg.ServerDomain))
