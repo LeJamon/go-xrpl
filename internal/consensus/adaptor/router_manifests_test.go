@@ -417,7 +417,7 @@ func TestRouter_HandleManifests_RelaysAcceptedEntriesToAllPeers(t *testing.T) {
 	require.Len(t, broadcasts, 2, "collections above the internal frame cap must relay as one bounded sequence")
 	require.Empty(t, broadcastsExcept)
 
-	var got [][]byte
+	got := make([][]byte, 0, acceptedCount)
 	for _, frame := range broadcasts {
 		got = append(got, frameToManifestBytes(t, frame)...)
 	}

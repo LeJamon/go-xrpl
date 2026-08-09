@@ -219,7 +219,7 @@ func TestRouter_ManifestSnapshotUsesMultipleBoundedFrames(t *testing.T) {
 
 	frames := router.cachedManifestFrames()
 	require.Len(t, frames, 2)
-	var emitted [][]byte
+	emitted := make([][]byte, 0, len(wires))
 	for _, frame := range frames {
 		emitted = append(emitted, frameToManifestBytes(t, frame)...)
 	}
