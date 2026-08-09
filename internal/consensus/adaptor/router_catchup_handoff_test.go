@@ -212,7 +212,7 @@ func TestStoredConsensusCandidateRetriesUntilEngineAccepts(t *testing.T) {
 			require.NoError(t, err)
 			require.False(t, initialCandidate)
 
-			svc.SetValidatedLedgerAt(hdr.LedgerIndex, hdr.Hash, time.Now())
+			r.onLedgerFullyValidated(hdr.LedgerIndex, hdr.Hash)
 			require.Eventually(t, func() bool {
 				r.acquisitionMu.Lock()
 				defer r.acquisitionMu.Unlock()

@@ -114,10 +114,6 @@ func (s *Service) acceptLedgerAt(ctx context.Context, explicitCloseTime time.Tim
 	// Fold the validated ledger into the amendment table.
 	s.syncTable(s.validatedLedger)
 
-	// Drain any stashed validation at this seq so it can't match a later
-	// re-close (redundant here since standalone already validated). No-op if none.
-	s.drainPendingLedgerValidationLocked(closedSeq, s.closedLedger)
-
 	s.commitTransactionResultsLocked(stagedResults)
 	var txResults []TransactionResultEvent
 	if s.hasEventSink() {
@@ -407,20 +403,10 @@ func (s *Service) SwitchToPreferredLedger(parent *ledger.Ledger) error {
 	s.mu.Lock()
 	s.historyComponent.mu.Lock()
 	previousValidated := s.validatedLedger
-	pool := s.localTxs
-	var promotedLedger *ledger.Ledger
 	defer func() {
 		notification := s.validatedLedgerNotificationLocked(previousValidated)
 		s.historyComponent.mu.Unlock()
 		s.mu.Unlock()
-		if promotedLedger != nil {
-			s.syncTable(promotedLedger)
-			if pool != nil {
-				if err := pool.Sweep(promotedLedger); err != nil {
-					s.logger.Warn("failed to sweep local transactions", "ledger_seq", promotedLedger.Sequence(), "err", err)
-				}
-			}
-		}
 		notification.notify()
 	}()
 
@@ -459,20 +445,8 @@ func (s *Service) SwitchToPreferredLedger(parent *ledger.Ledger) error {
 	if err != nil {
 		return fmt.Errorf("collect transaction results: %w", err)
 	}
-	promotedByDrain := false
-	var provisionalPromotion pendingLedgerValidationDecision
-	if replacingProvisional {
-		provisionalPromotion = s.stagePendingLedgerValidationLocked(parent.Sequence(), parent)
-		if !provisionalPromotion.promote {
-			s.commitPendingLedgerValidationLocked(provisionalPromotion)
-			return ErrPreferredChainSwitch
-		}
-	}
 	if err := s.acceptOpenLedgerViewLocked(parent, nil, false); err != nil {
 		return err
-	}
-	if replacingProvisional {
-		promotedByDrain = s.commitPendingLedgerValidationLocked(provisionalPromotion)
 	}
 
 	s.fixMismatchLocked(parent)
@@ -495,18 +469,8 @@ func (s *Service) SwitchToPreferredLedger(parent *ledger.Ledger) error {
 		s.ledgerEventMu.Unlock()
 	}
 	s.completeInitialSyncLocked()
-	if !replacingProvisional {
-		promotedByDrain = s.drainPendingLedgerValidationLocked(parent.Sequence(), parent)
-	}
 	s.commitTransactionResultsLocked(stagedResults)
-	txResults := stagedResults.results
-	if promotedByDrain {
-		s.enqueuePersist(parent)
-		event := s.validatedLedgerEventLocked(parent)
-		event.TransactionResults = txResults
-		s.dispatchLedgerEvent(event)
-		promotedLedger = parent
-	} else if parent.IsValidated() {
+	if parent.IsValidated() {
 		s.evictOldHistoryLocked(parent.Sequence())
 		s.enqueuePersist(parent)
 	}
@@ -714,19 +678,12 @@ func (s *Service) acceptConsensusResult(
 		s.putHistoryLocked(closed)
 	}
 
-	// Drain a validation that arrived before this close (tracker leading the
-	// close); fail-safe on expired/mismatch. A true return means it was promoted
-	// inline, so the event sink must fire inline below (no later
-	// SetValidatedLedger will arrive to drain a hash-keyed stash).
-	promotedByDrain := s.drainPendingLedgerValidationLocked(closedSeq, s.closedLedger)
 	s.commitTransactionResultsLocked(stagedResults)
 	var txResults []TransactionResultEvent
 	if s.hasEventSink() {
 		txResults = stagedResults.results
 	}
-	if promotedByDrain {
-		s.enqueuePersist(s.closedLedger)
-	} else if s.closedLedger.IsValidated() {
+	if s.closedLedger.IsValidated() {
 		s.enqueueValidatedHistoryPersist(s.closedLedger)
 	} else {
 		s.enqueueNodePersist(s.closedLedger)
@@ -737,17 +694,13 @@ func (s *Service) acceptConsensusResult(
 
 	// Consensus close isn't validated yet: stash the event by hash for
 	// SetValidatedLedger to fire at quorum, keeping ledgerClosed in lockstep
-	// with validated_ledger. Exception: if the drain above already promoted
-	// inline, no SetValidatedLedger will arrive — fire inline instead of
-	// orphaning the event.
+	// with validated_ledger.
 	event := &LedgerAcceptedEvent{
 		LedgerInfo:         ledgerInfo(closed),
 		Ledger:             s.closedLedger,
 		TransactionResults: txResults,
 	}
-	if promotedByDrain {
-		s.dispatchLedgerEvent(event)
-	} else if s.hasEventSink() {
+	if s.hasEventSink() {
 		s.stashPendingValidationLocked(closedLedgerHash, event)
 	}
 
@@ -801,41 +754,17 @@ func (s *Service) SetValidatedLedgerAt(seq uint32, expectedHash [32]byte, signTi
 	s.historyComponent.mu.Lock()
 	previousValidated := s.validatedLedger
 	l, ok := s.ledgerHistory[seq]
-	// rippled checkAccept is hash-keyed; our seq-keyed map splits into "no entry"
-	// or "different-hash" (same-height fork) — both stash and arm acquisition.
 	if !ok || l.Hash() != expectedHash {
-		s.stashPendingLedgerValidationLocked(seq, expectedHash, signTime)
-		// Capture handler under lock; fire when seq > last validated seq.
-		// Gating on closedSeq instead wedged recovery when the node ran ahead
-		// on a private chain (closedSeq >> the divergent canonical seq).
-		var (
-			handler func(uint32, [32]byte)
-			fire    bool
-		)
-		if s.onPendingValidationStashed != nil {
-			validatedSeq := uint32(0)
-			if s.validatedLedger != nil {
-				validatedSeq = s.validatedLedger.Sequence()
-			}
-			if seq > validatedSeq ||
-				(s.networkLedgerState == networkLedgerFastLoadProvisional && seq == validatedSeq) {
-				handler = s.onPendingValidationStashed
-				fire = true
-			}
-		}
 		s.historyComponent.mu.Unlock()
 		s.mu.Unlock()
-		if fire {
-			go handler(seq, expectedHash)
-		}
 		return
 	}
 	_ = l.SetValidated()
 	s.confirmFastLoadLocked(seq, expectedHash)
-	// The validated tip is monotonic (rippled LedgerMaster.cpp:948): a late
-	// quorum for a below-tip seq marks it validated but must not rewind the
-	// pointer — same rule as drainPendingLedgerValidationLocked.
-	if s.validatedLedger != nil && seq <= s.validatedLedger.Sequence() {
+	replaceProvisional := s.networkLedgerState == networkLedgerFastLoadProvisional &&
+		s.validatedLedger != nil && seq == s.validatedLedger.Sequence() &&
+		expectedHash != s.validatedLedger.Hash()
+	if s.validatedLedger != nil && seq <= s.validatedLedger.Sequence() && !replaceProvisional {
 		s.enqueueValidatedHistoryPersist(l)
 		s.dispatchLedgerEvent(s.validatedLedgerEventLocked(l))
 		s.historyComponent.mu.Unlock()
@@ -1125,16 +1054,6 @@ func (s *Service) IngestHistoricalLedgerWithState(ctx context.Context, h *header
 	s.putHistoryLocked(historical)
 	s.cachePersistedLedgerLocked(historical)
 	s.commitTransactionResultsLocked(stagedResults)
-	delete(s.pendingLedgerValidations, seq)
-	for i, pendingSeq := range s.pendingLedgerValidationsOrder {
-		if pendingSeq == seq {
-			s.pendingLedgerValidationsOrder = append(
-				s.pendingLedgerValidationsOrder[:i],
-				s.pendingLedgerValidationsOrder[i+1:]...,
-			)
-			break
-		}
-	}
 	s.enqueueValidatedHistoryPersist(historical)
 
 	s.logger.Info("Ingested historical ledger",
@@ -1282,16 +1201,9 @@ func (s *Service) adoptLedgerWithStateLocked(
 		return nil
 	}
 
-	// Drain a validation that arrived before this adopt; fail-safe on
-	// expired/mismatch. A true return means promoted inline → fire the callback
-	// inline below instead of stashing (see the callback block).
-	promotedByDrain := s.drainPendingLedgerValidationLocked(h.LedgerIndex, adopted)
-
 	s.commitTransactionResultsLocked(stagedResults)
 	txResults := stagedResults.results
-	if promotedByDrain {
-		s.enqueuePersist(adopted)
-	} else if adopted.IsValidated() {
+	if adopted.IsValidated() {
 		s.enqueueValidatedHistoryPersist(adopted)
 	} else {
 		s.enqueueNodePersist(adopted)
@@ -1325,17 +1237,13 @@ func (s *Service) adoptLedgerWithStateLocked(
 		}
 		// The event sink fires on *validated*, not *closed*; peer-adopt advances
 		// closedLedger only. Stash by hash for the next SetValidatedLedger to
-		// drain. Exception: if the drain above promoted inline, no
-		// SetValidatedLedger will arrive — fire inline instead of orphaning the
-		// event (and avoid a double-fire on a late-duplicate SetValidatedLedger).
+		// drain.
 		event := &LedgerAcceptedEvent{
 			LedgerInfo:         ledgerInfo,
 			Ledger:             adopted,
 			TransactionResults: txResults,
 		}
-		if promotedByDrain {
-			s.dispatchLedgerEvent(event)
-		} else if s.hasEventSink() {
+		if s.hasEventSink() {
 			s.stashPendingValidationLocked(h.Hash, event)
 		}
 	}

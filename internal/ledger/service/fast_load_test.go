@@ -571,7 +571,7 @@ func TestService_FastLoadRestoresPersistedValidatedLedger(t *testing.T) {
 	require.Equal(t, wantHash, second.GetValidatedLedger().Hash())
 }
 
-func TestService_FastLoadReplacesSameHeightOnlyAfterTrustedQuorum(t *testing.T) {
+func TestService_FastLoadSameHeightSwitchRemainsProvisionalUntilValidated(t *testing.T) {
 	ctx := context.Background()
 	db := newTestNodeStore(t, 10_000)
 	t.Cleanup(func() { require.NoError(t, db.Close()) })
@@ -637,41 +637,19 @@ func TestService_FastLoadReplacesSameHeightOnlyAfterTrustedQuorum(t *testing.T) 
 
 	replacement, err := svc.GetLedgerByHash(replacementHash)
 	require.NoError(t, err)
-	closedBefore := svc.GetClosedLedger()
-	openBefore := svc.GetOpenLedger()
-	err = svc.SwitchToPreferredLedger(replacement)
-	require.ErrorIs(t, err, ErrPreferredChainSwitch)
-	require.Same(t, closedBefore, svc.GetClosedLedger())
-	require.Same(t, openBefore, svc.GetOpenLedger())
+	require.NoError(t, svc.SwitchToPreferredLedger(replacement))
+	require.Equal(t, replacementHash, svc.GetClosedLedger().Hash())
 	require.Same(t, loaded, svc.GetValidatedLedger())
 	require.True(t, svc.IsFastLoadProvisional())
 
-	stashed := make(chan struct{}, 1)
 	validated := make(chan [32]byte, 1)
-	svc.SetOnPendingValidationStashed(func(seq uint32, hash [32]byte) {
-		if seq == replacement.Sequence() && hash == replacementHash {
-			stashed <- struct{}{}
-		}
-	})
 	svc.SetOnValidatedLedger(func(seq uint32, hash, _ [32]byte) {
 		if seq == replacement.Sequence() {
 			validated <- hash
 		}
 	})
 	signTime := loaded.CloseTime().Add(2 * time.Second)
-	svc.SetPendingValidationResolver(func(seq uint32, hash [32]byte) (time.Time, bool) {
-		return signTime, seq == replacement.Sequence() && hash == replacementHash
-	})
 	svc.SetValidatedLedgerAt(replacement.Sequence(), replacementHash, signTime)
-	select {
-	case <-stashed:
-	case <-time.After(time.Second):
-		t.Fatal("same-height provisional validation did not arm acquisition")
-	}
-	require.True(t, svc.HasPendingLedgerValidation(replacement.Sequence(), replacementHash))
-
-	require.NoError(t, svc.SwitchToPreferredLedger(replacement))
-	require.Equal(t, replacementHash, svc.GetClosedLedger().Hash())
 	require.Equal(t, replacementHash, svc.GetValidatedLedger().Hash())
 	select {
 	case hash := <-validated:
@@ -682,7 +660,6 @@ func TestService_FastLoadReplacesSameHeightOnlyAfterTrustedQuorum(t *testing.T) 
 	require.True(t, svc.GetValidatedLedger().IsValidated())
 	require.False(t, svc.IsFastLoadProvisional())
 	require.False(t, svc.NeedsInitialSync())
-	require.False(t, svc.HasPendingLedgerValidation(replacement.Sequence(), replacementHash))
 
 	svc.mu.RLock()
 	gotSignTime := svc.validatedSignTime

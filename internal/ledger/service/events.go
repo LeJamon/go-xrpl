@@ -6,7 +6,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"sort"
-	"time"
 
 	addresscodec "github.com/LeJamon/go-xrpl/codec/addresscodec"
 	binarycodec "github.com/LeJamon/go-xrpl/codec/binarycodec"
@@ -480,27 +479,6 @@ func (s *Service) SetTxRelay(fn func(blob []byte)) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.txRelay = fn
-}
-
-// SetOnPendingValidationStashed registers a handler invoked off-thread
-// when SetValidatedLedger stashes a validation that doesn't match a
-// ledger we have. Pass nil to unwire.
-func (s *Service) SetOnPendingValidationStashed(handler func(seq uint32, hash [32]byte)) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	s.onPendingValidationStashed = handler
-}
-
-// PendingValidationResolver rechecks whether a stashed validation notification
-// still has quorum when its ledger arrives and returns the current signing-time
-// median. It runs while the service mutex is held and must not call the Service.
-type PendingValidationResolver func(seq uint32, hash [32]byte) (time.Time, bool)
-
-// SetPendingValidationResolver installs the adoption-time quorum recheck.
-func (s *Service) SetPendingValidationResolver(resolver PendingValidationResolver) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	s.pendingValidationResolver = resolver
 }
 
 // SetOnValidatedLedger registers a handler invoked after the validated tip

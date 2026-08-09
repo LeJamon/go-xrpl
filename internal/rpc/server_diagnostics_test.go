@@ -43,6 +43,16 @@ func TestServerDiagnosticsWireShape(t *testing.T) {
 			DeliveriesQueued: 11, DeliveriesDropped: 6, DeliveryDisconnects: 1,
 		}
 	}
+	services.FastSyncMetrics = func() types.FastSyncMetrics {
+		return types.FastSyncMetrics{
+			CompletionRecheckAccepted:            8,
+			CompletionRecheckRejectedNoEvidence:  3,
+			CompletionRecheckRejectedBelowQuorum: 2,
+			CompletionRecheckRejectedUnavailable: 1,
+			TargetSuperseded:                     13,
+			ObsoleteAcquisitionCompleted:         5,
+		}
+	}
 
 	for _, test := range []struct {
 		name   string
@@ -81,6 +91,15 @@ func TestServerDiagnosticsWireShape(t *testing.T) {
 				subscriptions["global_limit_rejections"] != "5" || subscriptions["deliveries_queued"] != "11" ||
 				subscriptions["deliveries_dropped"] != "6" || subscriptions["delivery_disconnects"] != "1" {
 				t.Fatalf("subscriptions = %#v", subscriptions)
+			}
+			fastSync := counters["fast_sync"].(map[string]any)
+			if fastSync["completion_recheck_accepted"] != "8" ||
+				fastSync["completion_recheck_rejected_no_evidence"] != "3" ||
+				fastSync["completion_recheck_rejected_below_quorum"] != "2" ||
+				fastSync["completion_recheck_rejected_quorum_unavailable"] != "1" ||
+				fastSync["target_superseded"] != "13" ||
+				fastSync["obsolete_acquisition_completed"] != "5" {
+				t.Fatalf("fast_sync = %#v", fastSync)
 			}
 			activities := body["current_activities"].(map[string]any)
 			if len(activities["jobs"].([]map[string]any)) != 0 {

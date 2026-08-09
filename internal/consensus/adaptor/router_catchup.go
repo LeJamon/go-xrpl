@@ -300,6 +300,7 @@ func (r *Router) recordValidationCatchupTarget(
 ) {
 	r.catchupMu.Lock()
 	defer r.catchupMu.Unlock()
+	previous := r.catchup
 	// Trusted evidence replaces a peer-derived target at any sequence. Once
 	// validation-driven, only a higher sequence or same-sequence quorum can
 	// move the frontier.
@@ -309,6 +310,10 @@ func (r *Router) recordValidationCatchupTarget(
 		r.catchup = catchupTarget{seq: seq, hash: hash, peerID: peerID, source: source}
 	} else if seq == r.catchup.seq && hash == r.catchup.hash {
 		r.catchup.peerID = peerID
+	}
+	if previous.hash != ([32]byte{}) && previous.hash != r.catchup.hash &&
+		previous.source != catchupSourcePeer && r.catchup.source != catchupSourcePeer {
+		r.targetSuperseded.Add(1)
 	}
 }
 
@@ -1089,17 +1094,7 @@ func (r *Router) onLedgerFullyValidated(seq uint32, hash [32]byte) {
 	}
 	r.acquisitionMu.Unlock()
 
-	r.catchupMu.Lock()
-	if r.catchup.seq < seq {
-		r.catchup = catchupTarget{seq: seq, hash: hash, source: catchupSourceQuorum}
-	} else if r.catchup.seq == seq {
-		if r.catchup.hash == hash {
-			r.catchup.source = catchupSourceQuorum
-		} else {
-			r.catchup = catchupTarget{seq: seq, hash: hash, source: catchupSourceQuorum}
-		}
-	}
-	r.catchupMu.Unlock()
+	r.recordValidationCatchupTarget(seq, hash, 0, catchupSourceQuorum)
 
 	r.retireLegacyAcquisitions(legacy)
 	if len(removed) > 0 {
@@ -1109,6 +1104,7 @@ func (r *Router) onLedgerFullyValidated(seq uint32, hash [32]byte) {
 			"canceled", len(removed),
 		)
 	}
+	r.armValidatedLedgerAcquisition(seq, hash)
 }
 
 func (r *Router) completeHistoryBackfill(seq uint32, hash, parentHash [32]byte, peerID uint64) {
@@ -1244,6 +1240,31 @@ func (r *Router) requestHistoryAcquisition(il *inbound.Ledger, peerID uint64) {
 // fetch_info RPC. Safe to call from any goroutine.
 func (r *Router) FetchInfo() map[string]any {
 	return r.fetchTracker.Info()
+}
+
+// FastSyncMetrics returns the current bounded outcome counters.
+func (r *Router) FastSyncMetrics() FastSyncMetrics {
+	return FastSyncMetrics{
+		CompletionRecheckAccepted:            r.completionRecheckAccepted.Load(),
+		CompletionRecheckRejectedNoEvidence:  r.completionRecheckRejectedNoEvidence.Load(),
+		CompletionRecheckRejectedBelowQuorum: r.completionRecheckRejectedBelowQuorum.Load(),
+		CompletionRecheckRejectedUnavailable: r.completionRecheckRejectedUnavailable.Load(),
+		TargetSuperseded:                     r.targetSuperseded.Load(),
+		ObsoleteAcquisitionCompleted:         r.obsoleteAcquisitionCompleted.Load(),
+	}
+}
+
+func (r *Router) recordCompletionRecheck(result validationRecheckResult) {
+	switch result {
+	case validationRecheckAccepted:
+		r.completionRecheckAccepted.Add(1)
+	case validationRecheckNoEvidence:
+		r.completionRecheckRejectedNoEvidence.Add(1)
+	case validationRecheckBelowQuorum:
+		r.completionRecheckRejectedBelowQuorum.Add(1)
+	case validationRecheckUnavailable:
+		r.completionRecheckRejectedUnavailable.Add(1)
+	}
 }
 
 // ClearFetchInfo resets the acquisition counters and recent-failure history,
@@ -1551,6 +1572,13 @@ func (r *Router) adoptVerifiedLedger(l *ledger.Ledger) error {
 
 func (r *Router) completeStoredConsensusRecovery(seq uint32, hash, parentHash [32]byte, initialCandidate bool) bool {
 	r.recordSeqHash(seq, hash, parentHash, true)
+	_, result := r.adaptor.recheckFullyValidated(seq, hash)
+	r.recordCompletionRecheck(result)
+	if r.isObsoleteRecoveryCompletion(seq, hash) {
+		r.obsoleteAcquisitionCompleted.Add(1)
+		r.armConsensusCatchup()
+		return false
+	}
 	if initialCandidate {
 		accepted, rearm := r.tryInitialLedgerSwitch(seq, hash)
 		if rearm {
@@ -1574,19 +1602,40 @@ func (r *Router) completeStoredConsensusRecovery(seq uint32, hash, parentHash [3
 	return accepted
 }
 
+func (r *Router) isObsoleteRecoveryCompletion(seq uint32, hash [32]byte) bool {
+	r.acquisitionMu.Lock()
+	target := r.consensusRecovery.targetHash
+	step := r.consensusRecovery.stepHash
+	r.acquisitionMu.Unlock()
+	if target != ([32]byte{}) {
+		return target != hash && step != hash
+	}
+	r.catchupMu.Lock()
+	frontier := r.catchup
+	r.catchupMu.Unlock()
+	return frontier.source != catchupSourcePeer && frontier.hash != ([32]byte{}) &&
+		frontier.hash != hash && frontier.seq >= seq
+}
+
+func (r *Router) promoteCompletedLedger(seq uint32, hash [32]byte) {
+	signTime, result := r.adaptor.recheckFullyValidated(seq, hash)
+	if result != validationRecheckAccepted {
+		return
+	}
+	if svc := r.adaptor.LedgerService(); svc != nil {
+		svc.SetValidatedLedgerAt(seq, hash, signTime)
+	}
+}
+
 func (r *Router) shouldSwitchConsensusLedger(seq uint32, hash [32]byte) bool {
 	frontierSeq, _, _ := r.bestCatchupTarget()
-	validatedRecovery := r.isCurrentValidatedLedger(seq, hash)
 
 	r.acquisitionMu.Lock()
 	defer r.acquisitionMu.Unlock()
 
 	target := r.consensusRecovery.targetHash
 	if target != ([32]byte{}) {
-		return target == hash || validatedRecovery && seq > r.lastHandoffSeq
-	}
-	if validatedRecovery && seq > r.lastHandoffSeq {
-		return true
+		return target == hash
 	}
 	return !aheadByMoreThan(frontierSeq, seq, 1) && seq > r.lastHandoffSeq
 }
@@ -1605,6 +1654,7 @@ func (r *Router) tryConsensusLedgerSwitch(seq uint32, hash [32]byte) (accepted, 
 		r.retainConsensusLedgerSwitch(hash)
 		return false, false
 	}
+	r.promoteCompletedLedger(seq, hash)
 
 	_, rearm = r.finishConsensusRecoveryStep(seq, hash)
 	if r.adaptor.GetOperatingMode() < consensus.OpModeTracking {
@@ -1624,7 +1674,6 @@ func (r *Router) retainConsensusLedgerSwitch(hash [32]byte) {
 
 func (r *Router) finishConsensusRecoveryStep(seq uint32, hash [32]byte) (notify, rearm bool) {
 	frontierSeq, _, _ := r.bestCatchupTarget()
-	validatedRecovery := r.isCurrentValidatedLedger(seq, hash)
 
 	r.acquisitionMu.Lock()
 	defer r.acquisitionMu.Unlock()
@@ -1646,10 +1695,6 @@ func (r *Router) finishConsensusRecoveryStep(seq uint32, hash [32]byte) (notify,
 				r.consensusRecovery.anchorSeq = seq
 				r.consensusRecovery.anchorHash = hash
 			}
-			if validatedRecovery && seq > r.lastHandoffSeq {
-				r.recordConsensusHandoffLocked(seq)
-				return true, true
-			}
 			return false, true
 		}
 		r.consensusRecovery.anchorSeq = seq
@@ -1660,10 +1705,6 @@ func (r *Router) finishConsensusRecoveryStep(seq uint32, hash [32]byte) (notify,
 		return true, false
 	}
 
-	if validatedRecovery && seq > r.lastHandoffSeq {
-		r.recordConsensusHandoffLocked(seq)
-		return true, aheadByMoreThan(frontierSeq, seq, 0)
-	}
 	if aheadByMoreThan(frontierSeq, seq, 1) {
 		return false, true
 	}
@@ -1687,6 +1728,7 @@ func (r *Router) tryInitialLedgerSwitch(seq uint32, hash [32]byte) (accepted, re
 
 	rearm = r.finishInitialLedgerSwitch(seq, hash, result)
 	if result == consensus.LedgerSwitchAccepted {
+		r.promoteCompletedLedger(seq, hash)
 		if r.adaptor.GetOperatingMode() < consensus.OpModeTracking {
 			r.adaptor.SetOperatingMode(consensus.OpModeTracking)
 		}
@@ -1742,19 +1784,6 @@ func (r *Router) finishInitialLedgerSwitch(
 		aheadByMoreThan(frontierSeq, seq, 0)
 }
 
-func (r *Router) isCurrentValidatedLedger(seq uint32, hash [32]byte) bool {
-	if r.adaptor == nil {
-		return false
-	}
-	svc := r.adaptor.LedgerService()
-	if svc == nil {
-		return false
-	}
-	validated := svc.GetValidatedLedger()
-	return validated != nil && validated.Sequence() == seq && validated.Hash() == hash ||
-		svc.HasPendingLedgerValidation(seq, hash)
-}
-
 func (r *Router) recordConsensusHandoffLocked(seq uint32) {
 	if seq > r.lastHandoffSeq {
 		r.lastHandoffSeq = seq
@@ -1779,7 +1808,7 @@ func (r *Router) failConsensusRecoveryStep(hash [32]byte) {
 
 // maybeAcquireFromValidation arms inbound acquisition for a ledger attested
 // by a single TRUSTED validation, before the hash reaches quorum. It is the
-// non-quorum counterpart to armValidationStashAcquisition, acquiring the
+// non-quorum counterpart to armValidatedLedgerAcquisition, acquiring the
 // ledger on EVERY trusted current validation when we don't already have it
 // — quorum is not required. With only the quorum-gated path, a node below
 // quorum (3 of 4 trusted validators on the network tip) never fetched that
@@ -1849,13 +1878,13 @@ func (r *Router) maybeAcquireFromValidation(v *consensus.Validation, originPeer 
 	r.ensureValidationCatchupAcquisition(v.LedgerSeq, hash, originPeer)
 }
 
-// armValidationStashAcquisition arms inbound acquisition for a (seq, hash)
-// that SetValidatedLedger stashed. Prefers a peer advertising LCL >= seq,
+// armValidatedLedgerAcquisition arms inbound acquisition for a validated
+// (seq, hash) that is not available locally. Prefers a peer advertising LCL >= seq,
 // falls back to any tracked peer.
-func (r *Router) armValidationStashAcquisition(seq uint32, hash [32]byte) {
+func (r *Router) armValidatedLedgerAcquisition(seq uint32, hash [32]byte) {
 	defer func() {
 		if rv := recover(); rv != nil {
-			r.logger.Error("armValidationStashAcquisition panic recovered",
+			r.logger.Error("armValidatedLedgerAcquisition panic recovered",
 				"seq", seq,
 				"hash", fmt.Sprintf("%x", hash[:8]),
 				"panic", rv,

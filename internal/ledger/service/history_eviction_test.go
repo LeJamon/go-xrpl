@@ -3,7 +3,6 @@ package service
 import (
 	"context"
 	"testing"
-	"time"
 
 	"github.com/LeJamon/go-xrpl/drops"
 	"github.com/LeJamon/go-xrpl/internal/ledger"
@@ -162,7 +161,7 @@ func TestAcceptLedgerLoop_BoundsHistory(t *testing.T) {
 // Covers the race where SetValidatedLedger arrives before the close
 // and is drained + promoted inline — eviction must run on that path
 // because no second SetValidatedLedger arrives for the same seq.
-func TestDrainPendingValidation_EvictsHistory(t *testing.T) {
+func TestValidatedPromotionEvictsHistory(t *testing.T) {
 	svc, err := New(DefaultConfig())
 	if err != nil {
 		t.Fatalf("New: %v", err)
@@ -190,7 +189,7 @@ func TestDrainPendingValidation_EvictsHistory(t *testing.T) {
 	adoptedHeader.Hash[0] = 0x77
 	adopted := mustNewOpenWithHeader(t, adoptedHeader, adoptedState, adoptedTx)
 
-	// Seed entries below the post-eviction cutoff so the drain path has
+	// Seed entries below the post-eviction cutoff so promotion has
 	// observable work to do.
 	cutoff := adoptedSeq - historyWindow
 	for seq := uint32(1); seq <= cutoff; seq++ {
@@ -201,15 +200,16 @@ func TestDrainPendingValidation_EvictsHistory(t *testing.T) {
 	}
 
 	svc.mu.Lock()
-	svc.stashPendingLedgerValidationLocked(adoptedSeq, adopted.Hash(), time.Time{})
-	promoted := svc.drainPendingLedgerValidationLocked(adoptedSeq, adopted)
-	size := len(svc.ledgerHistory)
+	svc.historyComponent.mu.Lock()
+	svc.putHistoryLocked(adopted)
+	svc.historyComponent.mu.Unlock()
 	svc.mu.Unlock()
+	svc.SetValidatedLedger(adoptedSeq, adopted.Hash())
+	svc.historyComponent.mu.RLock()
+	size := len(svc.ledgerHistory)
+	svc.historyComponent.mu.RUnlock()
 
-	if !promoted {
-		t.Fatalf("drainPendingLedgerValidationLocked did not promote — stash setup is wrong")
-	}
 	if size > historyWindow+1 {
-		t.Errorf("inline drain-promote left ledgerHistory unbounded: got %d, want <= %d", size, historyWindow+1)
+		t.Errorf("validated promotion left ledgerHistory unbounded: got %d, want <= %d", size, historyWindow+1)
 	}
 }

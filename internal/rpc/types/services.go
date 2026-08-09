@@ -361,6 +361,8 @@ type ServiceContainer struct {
 	// map is empty until consensus is wired.
 	StateAccounting func() StateAccountingSnapshot
 
+	FastSyncMetrics func() FastSyncMetrics
+
 	// CloseTimeOffset returns the consensus-derived close-time offset
 	// from the adaptor. Surfaced as close_time_offset on the ledger
 	// object in human mode when |offset| >= 60s
@@ -1257,6 +1259,16 @@ type StateAccountingSnapshot struct {
 	// transition into Full. Zero before that transition. Surfaced as
 	// initial_sync_duration_us; rippled emits it only when non-zero.
 	InitialSyncUs uint64
+}
+
+// FastSyncMetrics is the server_info representation of fast-sync outcomes.
+type FastSyncMetrics struct {
+	CompletionRecheckAccepted            uint64
+	CompletionRecheckRejectedNoEvidence  uint64
+	CompletionRecheckRejectedBelowQuorum uint64
+	CompletionRecheckRejectedUnavailable uint64
+	TargetSuperseded                     uint64
+	ObsoleteAcquisitionCompleted         uint64
 }
 
 // SubmitResult contains the result of submitting a transaction.

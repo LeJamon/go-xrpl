@@ -175,24 +175,6 @@ type Service struct {
 	// pendingValidationOrder tracks insertion order for LRU eviction.
 	pendingValidationOrder [][32]byte
 
-	// pendingLedgerValidations stashes trusted-validation notifications by
-	// *sequence* when SetValidatedLedger arrives before that seq is adopted;
-	// drained and promoted (on hash match within TTL) when the seq lands. The
-	// opposite race to pendingValidation (which is hash-keyed accepted events).
-	pendingLedgerValidations map[uint32]pendingValidationEntry
-
-	// pendingLedgerValidationsOrder tracks insertion order for LRU
-	// eviction of pendingLedgerValidations.
-	pendingLedgerValidationsOrder []uint32
-
-	// Invoked off-thread when SetValidatedLedger stashes a validation for a seq
-	// beyond closed (arms the inbound-ledger acquisition).
-	onPendingValidationStashed func(seq uint32, hash [32]byte)
-
-	// Rechecks the current validation set before a stashed notification promotes
-	// a ledger that arrived later.
-	pendingValidationResolver PendingValidationResolver
-
 	// Invoked after the validated tip advances and after mu is released.
 	onValidatedLedger func(seq uint32, hash, parentHash [32]byte)
 
@@ -363,15 +345,14 @@ func New(cfg Config) (*Service, error) {
 			completeLedgerTokens: make(map[uint32]uint64),
 			sweepInterval:        nodeStoreSweepIntervalForSize(cfg.NodeSize),
 		},
-		pendingValidation:        make(map[[32]byte]*LedgerAcceptedEvent),
-		pendingLedgerValidations: make(map[uint32]pendingValidationEntry),
-		heldAdoptions:            make(map[uint32]*pendingAdopt),
-		txQueue:                  txQueue,
-		localTxs:                 localtxs.New(),
-		relayTxCache:             make(map[[32]byte]relayTxRecord),
-		relayTxCacheLimit:        relayTxCacheMaxBytes,
-		feeTrack:                 feetrack.New(),
-		validatedAgeNow:          time.Now,
+		pendingValidation: make(map[[32]byte]*LedgerAcceptedEvent),
+		heldAdoptions:     make(map[uint32]*pendingAdopt),
+		txQueue:           txQueue,
+		localTxs:          localtxs.New(),
+		relayTxCache:      make(map[[32]byte]relayTxRecord),
+		relayTxCacheLimit: relayTxCacheMaxBytes,
+		feeTrack:          feetrack.New(),
+		validatedAgeNow:   time.Now,
 	}
 	s.persistenceWorker.service = s
 	s.eventPublisher.service = s

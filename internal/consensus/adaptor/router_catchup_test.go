@@ -417,7 +417,7 @@ func TestRouter_OpenRoundAcquiresTargetLedger(t *testing.T) {
 	r.maybeAcquireFromValidation(&consensus.Validation{
 		NodeID: trusted, LedgerSeq: closed + 1, LedgerID: hash,
 	}, 7)
-	r.armValidationStashAcquisition(closed+1, [32]byte(hash))
+	r.armValidatedLedgerAcquisition(closed+1, [32]byte(hash))
 	r.armConsensusCatchup()
 
 	assert.Equal(t, consensus.OpModeFull, a.GetOperatingMode())
@@ -443,7 +443,7 @@ func TestRouter_ActiveBuildDoesNotAcquireItsTargetLedger(t *testing.T) {
 	r.maybeAcquireFromValidation(&consensus.Validation{
 		NodeID: trusted, LedgerSeq: closed + 1, LedgerID: hash,
 	}, 7)
-	r.armValidationStashAcquisition(closed+1, [32]byte(hash))
+	r.armValidatedLedgerAcquisition(closed+1, [32]byte(hash))
 	r.armConsensusCatchup()
 
 	assert.Zero(t, acquireCount(rs))

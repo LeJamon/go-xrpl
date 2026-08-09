@@ -649,7 +649,7 @@ func (h *recheckingHistorian) RecheckFullyValidated(
 	return h.validations, h.quorum, h.accepted
 }
 
-func TestPendingValidationResolverUsesFreshValidationSnapshot(t *testing.T) {
+func TestCompletionRecheckUsesFreshValidationSnapshot(t *testing.T) {
 	t0 := time.Unix(1_700_000_000, 0).UTC()
 	historian := &recheckingHistorian{
 		stubHistorian: &stubHistorian{},
@@ -661,17 +661,18 @@ func TestPendingValidationResolverUsesFreshValidationSnapshot(t *testing.T) {
 		accepted: true,
 	}
 
-	resolver := newPendingValidationResolver(historian)
-	signTime, accepted := resolver(7, [32]byte{0x42})
-	assert.True(t, accepted)
+	a := newTestAdaptor(t)
+	a.SetValidationHistorian(historian)
+	signTime, result := a.recheckFullyValidated(7, [32]byte{0x42})
+	assert.Equal(t, validationRecheckAccepted, result)
 	assert.Equal(t, t0.Add(5*time.Second), signTime)
 	assert.Equal(t, 1, historian.calls)
 	assert.Equal(t, consensus.LedgerID{0x42}, historian.gotLedgerID)
 	assert.Equal(t, uint32(7), historian.gotSeq)
 
 	historian.accepted = false
-	signTime, accepted = resolver(7, [32]byte{0x42})
-	assert.False(t, accepted)
+	signTime, result = a.recheckFullyValidated(7, [32]byte{0x42})
+	assert.Equal(t, validationRecheckBelowQuorum, result)
 	assert.True(t, signTime.IsZero())
 	assert.Equal(t, 2, historian.calls)
 }

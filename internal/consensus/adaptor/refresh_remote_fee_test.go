@@ -30,6 +30,11 @@ func (h *recordingFeeHistorian) GetTrustedFullValidations(id consensus.LedgerID,
 	return h.stubHistorian.GetTrustedFullValidations(id, seq)
 }
 
+func (h *recordingFeeHistorian) RecheckFullyValidated(id consensus.LedgerID, seq uint32) ([]*consensus.Validation, int, bool) {
+	validations := h.GetTrustedFullValidations(id, seq)
+	return validations, 1, len(validations) >= 1
+}
+
 func (h *recordingFeeHistorian) lookupCalls() []feeLookup {
 	h.mu.Lock()
 	defer h.mu.Unlock()
@@ -197,7 +202,7 @@ func TestRefreshRemoteFee_ValidationBeforePeerAdoption(t *testing.T) {
 	parentID := consensus.LedgerID(header.ParentHash)
 	historian := &recordingFeeHistorian{stubHistorian: &stubHistorian{
 		byLedger: map[consensus.LedgerID][]*consensus.Validation{
-			targetID: {{LoadFee: 320, LedgerSeq: header.LedgerIndex, Full: true}},
+			targetID: {{LoadFee: 320, LedgerSeq: header.LedgerIndex, SignTime: closeTime, Full: true}},
 			parentID: {{LoadFee: 500, LedgerSeq: header.LedgerIndex - 1, Full: true}, {LoadFee: 500, LedgerSeq: header.LedgerIndex - 1, Full: true}},
 		},
 	}}
@@ -222,10 +227,13 @@ func TestRefreshRemoteFee_ValidationBeforePeerAdoption(t *testing.T) {
 	case <-time.After(time.Second):
 		t.Fatal("peer adoption blocked while notifying the validated-ledger callback")
 	}
+	signTime, result := a.recheckFullyValidated(header.LedgerIndex, header.Hash)
+	require.Equal(t, validationRecheckAccepted, result)
+	svc.SetValidatedLedgerAt(header.LedgerIndex, header.Hash, signTime)
 
 	require.Equal(t, header.LedgerIndex, svc.GetValidatedLedgerIndex())
 	require.Equal(t, uint32(500), ft.RemoteFee())
-	wantLookups := []feeLookup{{id: targetID, seq: header.LedgerIndex}, {id: targetID, seq: header.LedgerIndex}, {id: parentID, seq: header.LedgerIndex - 1}}
+	wantLookups := []feeLookup{{id: targetID, seq: header.LedgerIndex}, {id: targetID, seq: header.LedgerIndex}, {id: targetID, seq: header.LedgerIndex}, {id: parentID, seq: header.LedgerIndex - 1}}
 	require.Equal(t, wantLookups, historian.lookupCalls())
 
 	a.OnLedgerFullyValidated(targetID, header.LedgerIndex)
@@ -250,7 +258,7 @@ func TestRefreshRemoteFee_ValidationBeforeConsensusClose(t *testing.T) {
 	parentID := consensus.LedgerID(expected.ParentHash())
 	historian := &recordingFeeHistorian{stubHistorian: &stubHistorian{
 		byLedger: map[consensus.LedgerID][]*consensus.Validation{
-			targetID: {{LoadFee: 320, LedgerSeq: expected.Sequence(), Full: true}},
+			targetID: {{LoadFee: 320, LedgerSeq: expected.Sequence(), SignTime: closeTime, Full: true}},
 			parentID: {{LoadFee: 500, LedgerSeq: expected.Sequence() - 1, Full: true}, {LoadFee: 500, LedgerSeq: expected.Sequence() - 1, Full: true}},
 		},
 	}}
@@ -272,11 +280,14 @@ func TestRefreshRemoteFee_ValidationBeforeConsensusClose(t *testing.T) {
 	case <-time.After(time.Second):
 		t.Fatal("consensus close blocked while notifying the validated-ledger callback")
 	}
+	signTime, result := a.recheckFullyValidated(expected.Sequence(), expected.Hash())
+	require.Equal(t, validationRecheckAccepted, result)
+	svc.SetValidatedLedgerAt(expected.Sequence(), expected.Hash(), signTime)
 
 	require.Equal(t, expected.Hash(), svc.GetClosedLedger().Hash())
 	require.Equal(t, expected.Sequence(), svc.GetValidatedLedgerIndex())
 	require.Equal(t, uint32(500), ft.RemoteFee())
-	require.Equal(t, []feeLookup{{id: targetID, seq: expected.Sequence()}, {id: targetID, seq: expected.Sequence()}, {id: parentID, seq: expected.Sequence() - 1}}, historian.lookupCalls())
+	require.Equal(t, []feeLookup{{id: targetID, seq: expected.Sequence()}, {id: targetID, seq: expected.Sequence()}, {id: targetID, seq: expected.Sequence()}, {id: parentID, seq: expected.Sequence() - 1}}, historian.lookupCalls())
 }
 
 // TestGetLoadFee_MaxLocalCluster pins RCLConsensus.cpp:872 port: the

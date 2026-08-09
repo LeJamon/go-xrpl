@@ -84,7 +84,7 @@ func TestBootstrapLedgerWithStateStagesUntilConsensusSwitch(t *testing.T) {
 	require.Equal(t, second.LedgerIndex, stored.Sequence())
 }
 
-func TestStoredLedgerDefersPendingTrustedValidationUntilConsensusSwitch(t *testing.T) {
+func TestStoredLedgerDefersValidationUntilConsensusSwitch(t *testing.T) {
 	for _, validationFirst := range []bool{true, false} {
 		t.Run(map[bool]string{true: "validation-before-store", false: "validation-after-store"}[validationFirst], func(t *testing.T) {
 			svc, err := New(DefaultConfig())
@@ -109,22 +109,15 @@ func TestStoredLedgerDefersPendingTrustedValidationUntilConsensusSwitch(t *testi
 			stored, err := svc.GetLedgerByHash(h.Hash)
 			require.NoError(t, err)
 			require.False(t, stored.IsValidated())
-			svc.mu.RLock()
-			_, pending := svc.pendingLedgerValidations[h.LedgerIndex]
-			svc.mu.RUnlock()
-			require.True(t, pending)
-
 			require.NoError(t, svc.SwitchToPreferredLedger(stored))
+			require.Equal(t, startValidated.Hash(), svc.GetValidatedLedger().Hash())
+			svc.SetValidatedLedger(h.LedgerIndex, h.Hash)
 			validated := svc.GetValidatedLedger()
 			require.NotNil(t, validated)
 			require.Equal(t, h.LedgerIndex, validated.Sequence())
 			require.Equal(t, h.Hash, validated.Hash())
 			require.True(t, validated.IsValidated())
 			require.Equal(t, h.LedgerIndex, svc.GetClosedLedgerIndex())
-			svc.mu.RLock()
-			_, pending = svc.pendingLedgerValidations[h.LedgerIndex]
-			svc.mu.RUnlock()
-			require.False(t, pending)
 		})
 	}
 }
@@ -189,12 +182,10 @@ func TestIngestHistoricalLedgerWithStatePreservesFrontiers(t *testing.T) {
 	svc.mu.RLock()
 	indexedSeq, indexed := svc.txIndex[txHash]
 	indexedPosition := svc.txPositionIndex[txHash]
-	_, pending := svc.pendingLedgerValidations[historical.LedgerIndex]
 	svc.mu.RUnlock()
 	require.True(t, indexed)
 	require.Equal(t, historical.LedgerIndex, indexedSeq)
 	require.Equal(t, uint32(7), indexedPosition)
-	require.False(t, pending)
 }
 
 func TestIngestHistoricalLedgerWithStateRejectsNonCanonicalHistory(t *testing.T) {
