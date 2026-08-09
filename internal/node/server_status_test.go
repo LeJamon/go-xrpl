@@ -156,15 +156,18 @@ func TestServerStatusPublisherDoesNotCacheWithoutSubscribers(t *testing.T) {
 	status := newServerStatusPublisher(serverStatusTestServices(svc), rpc.NewPublisher(manager))
 	status.publish(nil)
 
-	conn := &types.Connection{
-		ID:            "server-subscriber",
-		Subscriptions: map[types.SubscriptionType]types.SubscriptionConfig{types.SubServer: {}},
-		SendChannel:   make(chan []byte, 1),
+	conn := subscription.NewConnection("server-subscriber", make(chan []byte, 1))
+	registration, attached := manager.Attach(conn)
+	if !attached {
+		t.Fatal("attach server subscriber")
 	}
-	manager.AddConnection(conn)
+	t.Cleanup(func() { manager.Detach(registration) })
+	if rpcErr := manager.HandleSubscribe(registration, types.SubscriptionRequest{Streams: []types.SubscriptionType{types.SubServer}}, true); rpcErr != nil {
+		t.Fatalf("subscribe server stream: %v", rpcErr)
+	}
 	status.publish(nil)
 	select {
-	case <-conn.SendChannel:
+	case <-conn.Outbound():
 	case <-time.After(time.Second):
 		t.Fatal("first status after subscribing was suppressed")
 	}

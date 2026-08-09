@@ -18,7 +18,7 @@ func (ws *WebSocketServer) handleMessage(wsConn *websocketConnection, message []
 	// loop and drop the connection's pending subscriptions.
 	defer func() {
 		if rec := recover(); rec != nil {
-			wsLog().Error("ws message panic", "conn", wsConn.ID, "err", rec, "stack", string(debug.Stack()))
+			wsLog().Error("ws message panic", "conn", wsConn.ID(), "err", rec, "stack", string(debug.Stack()))
 			ws.sendErrorResponse(wsConn, rpcInternalError(), nil, nil, buildWSRequestEcho(message))
 		}
 	}()
@@ -87,14 +87,12 @@ func (ws *WebSocketServer) handleMessage(wsConn *websocketConnection, message []
 		Request: requestEcho,
 	}
 
-	delete(cmdMap, "command")
-	delete(cmdMap, "method")
-	delete(cmdMap, "api_version")
-
-	if len(cmdMap) > 0 {
-		paramsBytes, _ := json.Marshal(cmdMap)
-		cmd.Params = paramsBytes
+	paramsBytes, err := websocketCommandParams(message, requestEcho)
+	if err != nil {
+		ws.sendErrorResponse(wsConn, rpcInternalError(), id, nil, requestEcho)
+		return
 	}
+	cmd.Params = paramsBytes
 
 	wsLog().Debug("ws request", "cmd", cmd.Command, "remoteAddr", wsConn.conn.RemoteAddr().String(), "clientIP", clientIP, "role", role, "isAdmin", role == types.RoleAdmin)
 	dispatchCtx := wsConn.Context()
@@ -120,6 +118,28 @@ func (ws *WebSocketServer) handleMessage(wsConn *websocketConnection, message []
 
 	ws.handleRPCMethod(wsConn, rpcCtx, cmd)
 }
+
+func websocketCommandParams(message []byte, requestEcho map[string]any) (json.RawMessage, error) {
+	var params map[string]json.RawMessage
+	if err := json.Unmarshal(message, &params); err != nil {
+		return nil, err
+	}
+	delete(params, "command")
+	delete(params, "method")
+	delete(params, "api_version")
+	if id, exists := requestEcho["id"]; exists {
+		redactedID, err := json.Marshal(id)
+		if err != nil {
+			return nil, err
+		}
+		params["id"] = redactedID
+	}
+	if len(params) == 0 {
+		return nil, nil
+	}
+	return json.Marshal(params)
+}
+
 func (ws *WebSocketServer) handleSpecialCommand(wsConn *websocketConnection, ctx *types.RpcContext, cmd types.WebSocketCommand, handler wsSpecialHandler) {
 	ctx.LoadCost = uint32(resource.FeeReferenceRPC().Cost())
 	if rpcErr := handlers.RequireNotBusyClient(ctx); rpcErr != nil {
@@ -237,7 +257,7 @@ func (ws *WebSocketServer) sendCommandResponse(wsConn *websocketConnection, resu
 // same drop policy.
 func (ws *WebSocketServer) deliver(wsConn *websocketConnection, data []byte) {
 	if !wsConn.TrySend(data) {
-		wsLog().Debug("WebSocket send dropped (slow consumer)", "connID", wsConn.ID)
+		wsLog().Debug("WebSocket send dropped (slow consumer)", "connID", wsConn.ID())
 	}
 }
 

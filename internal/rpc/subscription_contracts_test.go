@@ -23,20 +23,20 @@ const (
 
 type historySubscriptionProvider struct {
 	mu            sync.Mutex
-	subscriptions map[*types.Connection]map[string]bool
-	removed       map[*types.Connection]bool
+	subscriptions map[types.AccountHistorySubscriptionSink]map[string]bool
+	removed       map[types.AccountHistorySubscriptionSink]bool
 	subscribeErr  *types.RpcError
 	streamContext context.Context
 }
 
 func newHistorySubscriptionProvider() *historySubscriptionProvider {
 	return &historySubscriptionProvider{
-		subscriptions: make(map[*types.Connection]map[string]bool),
-		removed:       make(map[*types.Connection]bool),
+		subscriptions: make(map[types.AccountHistorySubscriptionSink]map[string]bool),
+		removed:       make(map[types.AccountHistorySubscriptionSink]bool),
 	}
 }
 
-func (p *historySubscriptionProvider) ValidateSubscribe(conn *types.Connection, account string) *types.RpcError {
+func (p *historySubscriptionProvider) ValidateSubscribe(conn types.AccountHistorySubscriptionSink, account string) *types.RpcError {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	if p.subscribeErr != nil {
@@ -48,7 +48,7 @@ func (p *historySubscriptionProvider) ValidateSubscribe(conn *types.Connection, 
 	return nil
 }
 
-func (p *historySubscriptionProvider) Subscribe(conn *types.Connection, account string) {
+func (p *historySubscriptionProvider) Subscribe(conn types.AccountHistorySubscriptionSink, account string) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	p.streamContext = conn.Context()
@@ -60,7 +60,7 @@ func (p *historySubscriptionProvider) Subscribe(conn *types.Connection, account 
 	accounts[account] = true
 }
 
-func (p *historySubscriptionProvider) Unsubscribe(conn *types.Connection, account string, historyOnly bool) {
+func (p *historySubscriptionProvider) Unsubscribe(conn types.AccountHistorySubscriptionSink, account string, historyOnly bool) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	accounts := p.subscriptions[conn]
@@ -76,27 +76,27 @@ func (p *historySubscriptionProvider) Unsubscribe(conn *types.Connection, accoun
 	}
 }
 
-func (p *historySubscriptionProvider) RemoveConnection(conn *types.Connection) {
+func (p *historySubscriptionProvider) RemoveConnection(conn types.AccountHistorySubscriptionSink) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	delete(p.subscriptions, conn)
 	p.removed[conn] = true
 }
 
-func (p *historySubscriptionProvider) HasSubscriptions(conn *types.Connection) bool {
+func (p *historySubscriptionProvider) HasSubscriptions(conn types.AccountHistorySubscriptionSink) bool {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	return len(p.subscriptions[conn]) != 0
 }
 
-func (p *historySubscriptionProvider) state(conn *types.Connection, account string) (present, replaying bool) {
+func (p *historySubscriptionProvider) state(conn types.AccountHistorySubscriptionSink, account string) (present, replaying bool) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	replaying, present = p.subscriptions[conn][account]
 	return present, replaying
 }
 
-func (p *historySubscriptionProvider) wasRemoved(conn *types.Connection) bool {
+func (p *historySubscriptionProvider) wasRemoved(conn types.AccountHistorySubscriptionSink) bool {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	return p.removed[conn]
@@ -135,42 +135,41 @@ func TestRTAccountsAliasAndCanonicalPrecedence(t *testing.T) {
 	manager := subscription.NewManager()
 
 	t.Run("deprecated alias subscribes proposed accounts", func(t *testing.T) {
-		conn := types.NewConnection("rt-alias", make(chan []byte, 1))
+		conn := subscription.NewConnection("rt-alias", make(chan []byte, 1))
 		var request types.SubscriptionRequest
 		require.NoError(t, json.Unmarshal([]byte(`{"rt_accounts":["`+historyAccountA+`"]}`), &request))
-		require.Nil(t, manager.HandleSubscribe(conn, request, false))
-		assert.Equal(t, []string{historyAccountA}, conn.Subscriptions[types.SubAccountsProposed].Accounts)
+		require.Nil(t, manager.HandleSubscribe(testRegistration(t, manager, conn), request, false))
+		registration := testRegistration(t, manager, conn)
+		assert.Equal(t, []string{historyAccountA}, registration.Snapshot().Accounts(types.SubAccountsProposed))
 
 		var unsubscribe types.SubscriptionRequest
 		require.NoError(t, json.Unmarshal([]byte(`{"rt_accounts":["`+historyAccountA+`"]}`), &unsubscribe))
-		require.Nil(t, manager.HandleUnsubscribe(conn, unsubscribe, false))
-		_, exists := conn.Subscriptions[types.SubAccountsProposed]
-		assert.False(t, exists)
+		require.Nil(t, manager.HandleUnsubscribe(testRegistration(t, manager, conn), unsubscribe))
+		assert.False(t, registration.Snapshot().Has(types.SubAccountsProposed))
 	})
 
 	t.Run("canonical member wins even when alias is valid", func(t *testing.T) {
-		conn := types.NewConnection("canonical", make(chan []byte, 1))
+		conn := subscription.NewConnection("canonical", make(chan []byte, 1))
 		var request types.SubscriptionRequest
 		require.NoError(t, json.Unmarshal([]byte(`{
 			"accounts_proposed":["`+historyAccountB+`"],
 			"rt_accounts":["`+historyAccountA+`"]
 		}`), &request))
-		require.Nil(t, manager.HandleSubscribe(conn, request, false))
-		assert.Equal(t, []string{historyAccountB}, conn.Subscriptions[types.SubAccountsProposed].Accounts)
+		require.Nil(t, manager.HandleSubscribe(testRegistration(t, manager, conn), request, true))
+		assert.Equal(t, []string{historyAccountB}, testRegistration(t, manager, conn).Snapshot().Accounts(types.SubAccountsProposed))
 	})
 
 	t.Run("present malformed canonical member does not fall back", func(t *testing.T) {
-		conn := types.NewConnection("canonical-malformed", make(chan []byte, 1))
+		conn := subscription.NewConnection("canonical-malformed", make(chan []byte, 1))
 		var request types.SubscriptionRequest
 		require.NoError(t, json.Unmarshal([]byte(`{
 			"accounts_proposed":[],
 			"rt_accounts":["`+historyAccountA+`"]
 		}`), &request))
-		rpcErr := manager.HandleSubscribe(conn, request, false)
+		rpcErr := manager.HandleSubscribe(testRegistration(t, manager, conn), request, false)
 		require.NotNil(t, rpcErr)
 		assert.Equal(t, "actMalformed", rpcErr.ErrorString)
-		_, exists := conn.Subscriptions[types.SubAccountsProposed]
-		assert.False(t, exists)
+		assert.False(t, testRegistration(t, manager, conn).Snapshot().Has(types.SubAccountsProposed))
 	})
 }
 
@@ -187,8 +186,7 @@ func TestAccountHistorySubscribeCapabilityAndValidation(t *testing.T) {
 		require.NotNil(t, rpcErr)
 		assert.Equal(t, "notEnabled", rpcErr.ErrorString)
 		assert.Equal(t, uint32(resource.FeeReferenceRPC().Cost()), ctx.LoadCost)
-		_, streamAdded := conn.Subscriptions[types.SubLedger]
-		assert.True(t, streamAdded)
+		assert.True(t, conn.registration.Snapshot().Has(types.SubLedger))
 	})
 
 	t.Run("missing replay provider fails closed", func(t *testing.T) {
@@ -332,7 +330,7 @@ func TestAccountHistoryURLSubscriptionRetention(t *testing.T) {
 	assert.False(t, provider.streamDone())
 	assert.Equal(t, accountHistoryWarning, result["warning"])
 	require.Len(t, ws.urlSubs.subs, 1)
-	var conn *types.Connection
+	var conn *subscription.Connection
 	for _, sub := range ws.urlSubs.subs {
 		conn = sub.conn
 	}
@@ -378,9 +376,11 @@ func TestAccountHistoryURLValidationIsOrderedAndAtomic(t *testing.T) {
 		Streams: []types.SubscriptionType{types.SubTransactions},
 	})
 	require.Nil(t, rpcErr)
-	var conn *types.Connection
+	var conn *subscription.Connection
+	var registration *subscription.Registration
 	for _, sub := range ws.urlSubs.subs {
 		conn = sub.conn
+		registration = sub.registration
 	}
 	require.NotNil(t, conn)
 
@@ -391,8 +391,8 @@ func TestAccountHistoryURLValidationIsOrderedAndAtomic(t *testing.T) {
 		AccountHistory: &types.AccountHistorySubscriptionRequest{Account: historyAccountA},
 	})
 	require.NotNil(t, rpcErr)
-	assert.True(t, ws.subscriptionManager.IsSubscribed(conn.ID, types.SubTransactions))
-	assert.False(t, ws.subscriptionManager.IsSubscribed(conn.ID, types.SubLedger))
+	assert.True(t, registration.Snapshot().Has(types.SubTransactions))
+	assert.True(t, registration.Snapshot().Has(types.SubLedger))
 
 	provider.subscribeErr = nil
 	ctx.LoadCost = uint32(resource.FeeReferenceRPC().Cost())
@@ -421,7 +421,7 @@ func TestAccountHistoryURLValidationIsOrderedAndAtomic(t *testing.T) {
 	}`), &invalidUnsubscribe))
 	_, rpcErr = ws.urlSubs.Unsubscribe(ctx, invalidUnsubscribe)
 	require.NotNil(t, rpcErr)
-	assert.True(t, ws.subscriptionManager.IsSubscribed(conn.ID, types.SubLedger))
+	assert.False(t, registration.Snapshot().Has(types.SubLedger))
 	present, _ := provider.state(conn, historyAccountA)
 	assert.True(t, present)
 }
@@ -453,7 +453,7 @@ func TestAccountHistoryHTTPURLMethods(t *testing.T) {
 	require.Nil(t, rpcErr)
 	assert.Equal(t, accountHistoryWarning, result.(map[string]any)["warning"])
 	require.Len(t, ws.urlSubs.subs, 1)
-	var conn *types.Connection
+	var conn *subscription.Connection
 	for _, sub := range ws.urlSubs.subs {
 		conn = sub.conn
 	}

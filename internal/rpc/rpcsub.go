@@ -14,6 +14,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/LeJamon/go-xrpl/internal/rpc/subscription"
 	"github.com/LeJamon/go-xrpl/internal/rpc/types"
 )
 
@@ -144,7 +145,7 @@ func (r *urlSubscriptionRegistry) metricsSnapshot() rpcSubMetricsSnapshot {
 }
 
 // Subscribe finds or creates the url's subscriber, applies the requested
-// streams/accounts/books to it transactionally, and returns the subscribe ack.
+// streams/accounts/books, and returns the subscribe ack.
 // Mirrors doSubscribe's URL branch for credential reuse: on an existing
 // destination only deprecated username/password members update credentials.
 // The caller has already verified the admin role.
@@ -152,6 +153,7 @@ func (r *urlSubscriptionRegistry) Subscribe(ctx *types.RpcContext, request types
 	if ctx != nil {
 		request.ApiVersion = ctx.ApiVersion
 	}
+	serverState := sampleServerSubscriptionState(ctx, request)
 	principal := rpcSubPrincipal(ctx)
 	r.mu.Lock()
 	if r.closed {
@@ -171,13 +173,12 @@ func (r *urlSubscriptionRegistry) Subscribe(ctx *types.RpcContext, request types
 	}
 
 	fail := func(rpcErr *types.RpcError) (map[string]any, *types.RpcError) {
-		stopped := r.rollbackLookupLocked(key, lookup)
 		r.mu.Unlock()
-		waitRPCSub(stopped)
 		return nil, rpcErr
 	}
 	prefix := request.WithoutBooks().WithoutAccountHistory()
-	if rpcErr := r.ws.subscriptionManager.ValidateSubscribe(lookup.sub.conn, prefix, true); rpcErr != nil {
+	scope := r.ws.subscriptionManager.NewRequestScope()
+	if rpcErr := r.ws.subscriptionManager.HandleSubscribeScoped(lookup.sub.registration, scope, prefix, true); rpcErr != nil {
 		return fail(rpcErr)
 	}
 	history, rpcErr := prepareAccountHistorySubscribe(ctx, request)
@@ -187,17 +188,18 @@ func (r *urlSubscriptionRegistry) Subscribe(ctx *types.RpcContext, request types
 	if rpcErr := history.validate(lookup.sub.conn); rpcErr != nil {
 		return fail(rpcErr)
 	}
-	if rpcErr := r.validateBooks(lookup.sub.conn, request, true); rpcErr != nil {
-		return fail(rpcErr)
-	}
-	if rpcErr := r.ws.subscriptionManager.HandleSubscribeTransactional(lookup.sub.conn, request.WithoutAccountHistory(), true); rpcErr != nil {
-		return fail(rpcErr)
-	}
 	history.apply(lookup.sub.conn)
-	for _, book := range request.Books {
-		setSubscriptionLoadCost(ctx, types.SubscriptionRequest{Books: []types.BookRequest{book}})
+	if rpcErr := applyRequestBooks(request, func(bookRequest types.SubscriptionRequest) *types.RpcError {
+		bookRequest.ApiVersion = request.ApiVersion
+		if rpcErr := r.ws.subscriptionManager.HandleSubscribeScoped(lookup.sub.registration, scope, bookRequest, true); rpcErr != nil {
+			return rpcErr
+		}
+		setSubscriptionLoadCost(ctx, bookRequest)
+		return nil
+	}); rpcErr != nil {
+		return fail(rpcErr)
 	}
-	result := r.ws.buildSubscribeAck(ctx, request)
+	result := r.ws.buildSubscribeAckSampled(ctx, request, serverState)
 	if history != nil {
 		result["warning"] = accountHistoryWarning
 	}
@@ -224,7 +226,8 @@ func (r *urlSubscriptionRegistry) Unsubscribe(ctx *types.RpcContext, request typ
 		return map[string]any{}, nil
 	}
 	prefix := request.WithoutBooks().WithoutAccountHistory()
-	if rpcErr := r.ws.subscriptionManager.ValidateUnsubscribe(sub.conn, prefix, true); rpcErr != nil {
+	scope := r.ws.subscriptionManager.NewRequestScope()
+	if rpcErr := r.ws.subscriptionManager.HandleUnsubscribeScoped(sub.registration, scope, prefix); rpcErr != nil {
 		r.mu.Unlock()
 		return nil, rpcErr
 	}
@@ -233,15 +236,13 @@ func (r *urlSubscriptionRegistry) Unsubscribe(ctx *types.RpcContext, request typ
 		r.mu.Unlock()
 		return nil, rpcErr
 	}
-	if rpcErr := r.validateBooks(sub.conn, request, false); rpcErr != nil {
-		r.mu.Unlock()
-		return nil, rpcErr
-	}
-	if rpcErr := r.ws.subscriptionManager.HandleUnsubscribeTransactional(sub.conn, request.WithoutAccountHistory(), true); rpcErr != nil {
-		r.mu.Unlock()
-		return nil, rpcErr
-	}
 	history.apply(sub.conn)
+	if rpcErr := applyRequestBooks(request, func(bookRequest types.SubscriptionRequest) *types.RpcError {
+		return r.ws.subscriptionManager.HandleUnsubscribeScoped(sub.registration, scope, bookRequest)
+	}); rpcErr != nil {
+		r.mu.Unlock()
+		return nil, rpcErr
+	}
 	stopped := r.tryRemoveLocked(key)
 	r.mu.Unlock()
 	waitRPCSub(stopped)
@@ -249,37 +250,7 @@ func (r *urlSubscriptionRegistry) Unsubscribe(ctx *types.RpcContext, request typ
 }
 
 type rpcSubLookup struct {
-	sub      *rpcSub
-	created  bool
-	username string
-	password string
-}
-
-func (r *urlSubscriptionRegistry) rollbackLookupLocked(key string, lookup rpcSubLookup) *rpcSub {
-	if lookup.created {
-		r.removeLocked(key, lookup.sub)
-		return lookup.sub
-	}
-	lookup.sub.updateCredentials(lookup.username, true, lookup.password, true)
-	return nil
-}
-
-func (r *urlSubscriptionRegistry) validateBooks(conn *types.Connection, request types.SubscriptionRequest, subscribe bool) *types.RpcError {
-	validate := func(bookRequest types.SubscriptionRequest) *types.RpcError {
-		bookRequest.ApiVersion = request.ApiVersion
-		if subscribe {
-			return r.ws.subscriptionManager.ValidateSubscribe(conn, bookRequest, true)
-		}
-		return r.ws.subscriptionManager.ValidateUnsubscribe(conn, bookRequest, true)
-	}
-	wire := request.WireArrays()
-	if wire.Present {
-		return applySubscriptionBooks(wire.Books, validate)
-	}
-	if request.Books == nil {
-		return nil
-	}
-	return validate(types.SubscriptionRequest{Books: request.Books})
+	sub *rpcSub
 }
 
 func (r *urlSubscriptionRegistry) findOrCreateLocked(request types.SubscriptionRequest, key, principal string) (rpcSubLookup, *types.RpcError) {
@@ -294,12 +265,14 @@ func (r *urlSubscriptionRegistry) findOrCreateLocked(request types.SubscriptionR
 	}
 	username, password, usernameSet, passwordSet := request.URLCredentials()
 	if sub, ok := r.subs[key]; ok {
-		oldUsername, oldPassword := sub.credentials()
+		if sub.conn.Stats().Terminal {
+			return rpcSubLookup{}, r.capacityError("retiring entry", principal)
+		}
 		// Credentials on an existing URL subscription are only updated via the
 		// deprecated username/password members; url_username/url_password are
 		// ignored on reuse, exactly like doSubscribe.
 		sub.updateCredentials(username, usernameSet, password, passwordSet)
-		return rpcSubLookup{sub: sub, username: oldUsername, password: oldPassword}, nil
+		return rpcSubLookup{sub: sub}, nil
 	}
 	if r.maxEntries > 0 && len(r.subs) >= r.maxEntries {
 		return rpcSubLookup{}, r.capacityError("registry entries", principal)
@@ -326,26 +299,32 @@ func (r *urlSubscriptionRegistry) findOrCreateLocked(request types.SubscriptionR
 		metrics:   metrics,
 		username:  username,
 		password:  password,
-		conn:      types.NewConnectionWithContext(subCtx, "rpcsub:"+key, make(chan []byte, rpcSubQueueLimit)),
+		conn:      subscription.NewConnectionWithContext(subCtx, "rpcsub:"+key, make(chan []byte, rpcSubQueueLimit)),
 		done:      make(chan struct{}),
 		finished:  make(chan struct{}),
 	}
-	sub.conn.EncodeOutbound = sub.encodeOutbound
-	sub.conn.SendObserver = func(queued bool) {
+	sub.conn.SetEncodeOutbound(sub.encodeOutbound)
+	sub.conn.SetSendObserver(func(queued bool) {
 		if queued {
 			metrics.recordQueued(key)
 		} else {
 			metrics.recordDropped(key)
 		}
+	})
+	sub.conn.SetDisconnect(func() { go r.retire(sub) })
+	registration, attached := r.ws.subscriptionManager.Attach(sub.conn)
+	if !attached {
+		subCancel()
+		return rpcSubLookup{}, types.RpcErrorInternal()
 	}
+	sub.registration = registration
 	r.subs[key] = sub
 	r.principalCounts[principal]++
 	r.principalWorkers[principal]++
 	r.workers++
 	r.workerWG.Add(1)
-	r.ws.subscriptionManager.AddConnection(sub.conn)
 	go sub.run()
-	return rpcSubLookup{sub: sub, created: true}, nil
+	return rpcSubLookup{sub: sub}, nil
 }
 
 func (r *urlSubscriptionRegistry) capacityError(kind, principal string) *types.RpcError {
@@ -361,7 +340,7 @@ func (r *urlSubscriptionRegistry) tryRemoveLocked(key string) *rpcSub {
 	if !ok {
 		return nil
 	}
-	if r.ws.subscriptionManager.HasStreamSubscriptions(sub.conn.ID) {
+	if r.ws.subscriptionManager.HasStreamSubscriptions(sub.registration) {
 		return nil
 	}
 	if hasAccountHistorySubscriptions(r.ws.services, sub.conn) {
@@ -381,10 +360,17 @@ func (r *urlSubscriptionRegistry) removeLocked(key string, sub *rpcSub) *rpcSub 
 			delete(r.principalCounts, sub.principal)
 		}
 	}
-	r.ws.subscriptionManager.RemoveConnection(sub.conn.ID)
+	r.ws.subscriptionManager.Detach(sub.registration)
 	removeAccountHistoryConnection(r.ws.services, sub.conn)
 	sub.stop()
 	return sub
+}
+
+func (r *urlSubscriptionRegistry) retire(sub *rpcSub) {
+	r.mu.Lock()
+	removed := r.removeLocked(sub.endpoint, sub)
+	r.mu.Unlock()
+	waitRPCSub(removed)
 }
 
 func waitRPCSub(sub *rpcSub) {
@@ -412,7 +398,7 @@ func (r *urlSubscriptionRegistry) Close() {
 
 	r.cancel()
 	for _, sub := range subs {
-		r.ws.subscriptionManager.RemoveConnection(sub.conn.ID)
+		r.ws.subscriptionManager.Detach(sub.registration)
 		removeAccountHistoryConnection(r.ws.services, sub.conn)
 		sub.stop()
 	}
@@ -489,17 +475,18 @@ func rpcSubPrincipal(ctx *types.RpcContext) string {
 // send channel is drained by a delivery goroutine POSTing each event to the
 // url, one at a time and in order, like RPCSub::sendThread.
 type rpcSub struct {
-	endpoint  string
-	client    *http.Client
-	ctx       context.Context
-	cancel    context.CancelFunc
-	registry  *urlSubscriptionRegistry
-	principal string
-	metrics   *rpcSubMetrics
-	conn      *types.Connection
-	done      chan struct{}
-	finished  chan struct{}
-	stopOnce  sync.Once
+	endpoint     string
+	client       *http.Client
+	ctx          context.Context
+	cancel       context.CancelFunc
+	registry     *urlSubscriptionRegistry
+	principal    string
+	metrics      *rpcSubMetrics
+	conn         *subscription.Connection
+	registration *subscription.Registration
+	done         chan struct{}
+	finished     chan struct{}
+	stopOnce     sync.Once
 
 	credMu   sync.Mutex
 	username string

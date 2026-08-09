@@ -14,29 +14,29 @@ import (
 func TestPublishTransactionUsesSubscriberAPIVersion(t *testing.T) {
 	const account = "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh"
 	manager := subscription.NewManager()
-	streamV1 := addPublisherTestConnection(manager, "stream-v1")
-	streamV2 := addPublisherTestConnection(manager, "stream-v2")
-	accountV2 := addPublisherTestConnection(manager, "account-v2")
-	proposedV2 := addPublisherTestConnection(manager, "proposed-v2")
-	accountProposedV1 := addPublisherTestConnection(manager, "account-proposed-v1")
+	streamV1 := addPublisherTestConnection(t, manager, "stream-v1")
+	streamV2 := addPublisherTestConnection(t, manager, "stream-v2")
+	accountV2 := addPublisherTestConnection(t, manager, "account-v2")
+	proposedV2 := addPublisherTestConnection(t, manager, "proposed-v2")
+	accountProposedV1 := addPublisherTestConnection(t, manager, "account-proposed-v1")
 
-	require.Nil(t, manager.HandleSubscribe(streamV1, types.SubscriptionRequest{
+	require.Nil(t, manager.HandleSubscribe(testRegistration(t, manager, streamV1), types.SubscriptionRequest{
 		Streams:    []types.SubscriptionType{types.SubTransactions},
 		ApiVersion: types.ApiVersion1,
 	}, true))
-	require.Nil(t, manager.HandleSubscribe(streamV2, types.SubscriptionRequest{
+	require.Nil(t, manager.HandleSubscribe(testRegistration(t, manager, streamV2), types.SubscriptionRequest{
 		Streams:    []types.SubscriptionType{types.SubTransactions},
 		ApiVersion: types.ApiVersion2,
 	}, true))
-	require.Nil(t, manager.HandleSubscribe(accountV2, types.SubscriptionRequest{
+	require.Nil(t, manager.HandleSubscribe(testRegistration(t, manager, accountV2), types.SubscriptionRequest{
 		Accounts:   []string{account},
 		ApiVersion: types.ApiVersion2,
 	}, true))
-	require.Nil(t, manager.HandleSubscribe(proposedV2, types.SubscriptionRequest{
+	require.Nil(t, manager.HandleSubscribe(testRegistration(t, manager, proposedV2), types.SubscriptionRequest{
 		Streams:    []types.SubscriptionType{types.SubTransactionsProposed},
 		ApiVersion: types.ApiVersion2,
 	}, true))
-	require.Nil(t, manager.HandleSubscribe(accountProposedV1, types.SubscriptionRequest{
+	require.Nil(t, manager.HandleSubscribe(testRegistration(t, manager, accountProposedV1), types.SubscriptionRequest{
 		AccountsProposed: []string{account},
 		ApiVersion:       types.ApiVersion1,
 	}, true))
@@ -54,13 +54,13 @@ func TestPublishTransactionUsesSubscriberAPIVersion(t *testing.T) {
 func TestPublishProposedTransactionUsesSubscriberAPIVersion(t *testing.T) {
 	const account = "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh"
 	manager := subscription.NewManager()
-	v1 := addPublisherTestConnection(manager, "proposed-stream-v1")
-	v2 := addPublisherTestConnection(manager, "proposed-account-v2")
-	require.Nil(t, manager.HandleSubscribe(v1, types.SubscriptionRequest{
+	v1 := addPublisherTestConnection(t, manager, "proposed-stream-v1")
+	v2 := addPublisherTestConnection(t, manager, "proposed-account-v2")
+	require.Nil(t, manager.HandleSubscribe(testRegistration(t, manager, v1), types.SubscriptionRequest{
 		Streams:    []types.SubscriptionType{types.SubTransactionsProposed},
 		ApiVersion: types.ApiVersion1,
 	}, true))
-	require.Nil(t, manager.HandleSubscribe(v2, types.SubscriptionRequest{
+	require.Nil(t, manager.HandleSubscribe(testRegistration(t, manager, v2), types.SubscriptionRequest{
 		AccountsProposed: []string{account},
 		ApiVersion:       types.ApiVersion2,
 	}, true))
@@ -82,8 +82,8 @@ func TestPublishProposedTransactionUsesSubscriberAPIVersion(t *testing.T) {
 
 func TestPublishOrderBookChangeUsesSubscriberAPIVersion(t *testing.T) {
 	manager := subscription.NewManager()
-	bookV1 := addPublisherTestConnection(manager, "book-v1")
-	bookV2 := addPublisherTestConnection(manager, "book-v2")
+	bookV1 := addPublisherTestConnection(t, manager, "book-v1")
+	bookV2 := addPublisherTestConnection(t, manager, "book-v2")
 
 	issuer := "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh"
 	book := types.BookRequest{
@@ -91,14 +91,13 @@ func TestPublishOrderBookChangeUsesSubscriberAPIVersion(t *testing.T) {
 		TakerPays: json.RawMessage(`{"currency":"USD","issuer":"` + issuer + `"}`),
 	}
 	for _, tc := range []struct {
-		conn       *types.Connection
+		conn       *subscription.Connection
 		apiVersion int
 	}{
 		{conn: bookV1, apiVersion: types.ApiVersion1},
 		{conn: bookV2, apiVersion: types.ApiVersion2},
 	} {
-		tc.conn.Subscriptions[types.SubBook] = types.SubscriptionConfig{Books: []types.BookRequest{book}}
-		tc.conn.SetAPIVersion(tc.apiVersion)
+		require.Nil(t, manager.HandleSubscribe(testRegistration(t, manager, tc.conn), types.SubscriptionRequest{Books: []types.BookRequest{book}, ApiVersion: tc.apiVersion}, true))
 	}
 
 	NewPublisher(manager).PublishOrderBookChange(
@@ -115,20 +114,19 @@ func TestPublishOrderBookChangeUsesSubscriberAPIVersion(t *testing.T) {
 
 func TestPublishValidationUsesSubscriberAPIVersion(t *testing.T) {
 	manager := subscription.NewManager()
-	v1 := addPublisherTestConnection(manager, "validation-v1")
-	v2 := addPublisherTestConnection(manager, "validation-v2")
-	v3 := addPublisherTestConnection(manager, "validation-v3")
-	none := addPublisherTestConnection(manager, "validation-none")
+	v1 := addPublisherTestConnection(t, manager, "validation-v1")
+	v2 := addPublisherTestConnection(t, manager, "validation-v2")
+	v3 := addPublisherTestConnection(t, manager, "validation-v3")
+	none := addPublisherTestConnection(t, manager, "validation-none")
 	for _, test := range []struct {
-		conn    *types.Connection
+		conn    *subscription.Connection
 		version int
 	}{
 		{v1, types.ApiVersion1},
 		{v2, types.ApiVersion2},
 		{v3, types.ApiVersion3},
 	} {
-		test.conn.Subscriptions[types.SubValidations] = types.SubscriptionConfig{}
-		test.conn.SetAPIVersion(test.version)
+		require.Nil(t, manager.HandleSubscribe(testRegistration(t, manager, test.conn), types.SubscriptionRequest{Streams: []types.SubscriptionType{types.SubValidations}, ApiVersion: test.version}, true))
 	}
 
 	closeTime := uint32(0)
@@ -148,7 +146,7 @@ func TestPublishValidationUsesSubscriberAPIVersion(t *testing.T) {
 	NewPublisher(manager).PublishValidation(event)
 
 	for _, test := range []struct {
-		conn       *types.Connection
+		conn       *subscription.Connection
 		wantLedger string
 	}{
 		{v1, `"42"`},
@@ -163,7 +161,7 @@ func TestPublishValidationUsesSubscriberAPIVersion(t *testing.T) {
 		require.Equal(t, `"ABCD"`, string(payload["data"]))
 	}
 	select {
-	case <-none.SendChannel:
+	case <-none.Outbound():
 		t.Fatal("non-subscriber received validation")
 	default:
 	}
@@ -171,8 +169,8 @@ func TestPublishValidationUsesSubscriberAPIVersion(t *testing.T) {
 
 func TestPublishLedgerClosedFieldPresence(t *testing.T) {
 	manager := subscription.NewManager()
-	conn := addPublisherTestConnection(manager, "ledger")
-	conn.Subscriptions[types.SubLedger] = types.SubscriptionConfig{}
+	conn := addPublisherTestConnection(t, manager, "ledger")
+	require.Nil(t, manager.HandleSubscribe(testRegistration(t, manager, conn), types.SubscriptionRequest{Streams: []types.SubscriptionType{types.SubLedger}}, true))
 	publisher := NewPublisher(manager)
 	event := &LedgerCloseEvent{
 		Type:             "ledgerClosed",
@@ -204,10 +202,10 @@ func TestPublishOrderBookChangeDeduplicatesAcrossAffectedBooks(t *testing.T) {
 	)
 	domain := strings.Repeat("A", 64)
 	manager := subscription.NewManager()
-	listener := addPublisherTestConnection(manager, "listener")
-	other := addPublisherTestConnection(manager, "other")
+	listener := addPublisherTestConnection(t, manager, "listener")
+	other := addPublisherTestConnection(t, manager, "other")
 
-	listener.Subscriptions[types.SubBook] = types.SubscriptionConfig{Books: []types.BookRequest{
+	require.Nil(t, manager.HandleSubscribe(testRegistration(t, manager, listener), types.SubscriptionRequest{Books: []types.BookRequest{
 		{
 			TakerGets: json.RawMessage(`{"currency":"XRP"}`),
 			TakerPays: json.RawMessage(`{"currency":"USD","issuer":"` + issuer + `"}`),
@@ -217,8 +215,8 @@ func TestPublishOrderBookChangeDeduplicatesAcrossAffectedBooks(t *testing.T) {
 			TakerGets: json.RawMessage(`{"mpt_issuance_id":"` + strings.ToLower(mptID) + `"}`),
 			TakerPays: json.RawMessage(`{"currency":"XRP"}`),
 		},
-	}}
-	other.Subscriptions[types.SubBook] = types.SubscriptionConfig{Books: []types.BookRequest{
+	}}, true))
+	require.Nil(t, manager.HandleSubscribe(testRegistration(t, manager, other), types.SubscriptionRequest{Books: []types.BookRequest{
 		{
 			TakerGets: json.RawMessage(`{"currency":"XRP"}`),
 			TakerPays: json.RawMessage(`{"currency":"USD","issuer":"` + issuer + `"}`),
@@ -228,7 +226,7 @@ func TestPublishOrderBookChangeDeduplicatesAcrossAffectedBooks(t *testing.T) {
 			TakerGets: json.RawMessage(`{"mpt_issuance_id":"FFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFF"}`),
 			TakerPays: json.RawMessage(`{"currency":"XRP"}`),
 		},
-	}}
+	}}, true))
 
 	NewPublisher(manager).PublishOrderBookChange(publisherTestTransactionEvent(), []types.OrderBookSpec{
 		{
@@ -244,12 +242,12 @@ func TestPublishOrderBookChangeDeduplicatesAcrossAffectedBooks(t *testing.T) {
 
 	readPublisherTestEvent(t, listener)
 	select {
-	case <-listener.SendChannel:
+	case <-listener.Outbound():
 		t.Fatal("listener received the transaction more than once")
 	default:
 	}
 	select {
-	case <-other.SendChannel:
+	case <-other.Outbound():
 		t.Fatal("non-matching domain or MPT issuance received the transaction")
 	default:
 	}
@@ -269,13 +267,10 @@ func TestMarshalTransactionEventHandlesNullTransaction(t *testing.T) {
 	require.Equal(t, event.Hash, transaction["hash"])
 }
 
-func addPublisherTestConnection(manager *subscription.Manager, id string) *types.Connection {
-	conn := &types.Connection{
-		ID:            id,
-		Subscriptions: make(map[types.SubscriptionType]types.SubscriptionConfig),
-		SendChannel:   make(chan []byte, 2),
-	}
-	manager.AddConnection(conn)
+func addPublisherTestConnection(t testing.TB, manager *subscription.Manager, id string) *subscription.Connection {
+	t.Helper()
+	conn := subscription.NewConnection(id, make(chan []byte, 2))
+	_ = testRegistration(t, manager, conn)
 	return conn
 }
 
@@ -295,10 +290,10 @@ func publisherTestTransactionEvent() *TransactionEvent {
 	}
 }
 
-func readPublisherTestEvent(t *testing.T, conn *types.Connection) []byte {
+func readPublisherTestEvent(t *testing.T, conn *subscription.Connection) []byte {
 	t.Helper()
 	select {
-	case data := <-conn.SendChannel:
+	case data := <-conn.Outbound():
 		return data
 	case <-time.After(time.Second):
 		t.Fatal("timed out waiting for published transaction")

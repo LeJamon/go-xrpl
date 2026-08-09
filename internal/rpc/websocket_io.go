@@ -9,7 +9,7 @@ import (
 
 func (ws *WebSocketServer) handleConnection(wsConn *websocketConnection) {
 	defer ws.closeConnection(wsConn)
-	defer recoverPanic("handleConnection", wsConn.ID)
+	defer recoverPanic("handleConnection", wsConn.ID())
 
 	wsConn.conn.SetPongHandler(func(string) error {
 		wsConn.conn.SetReadDeadline(time.Now().Add(90 * time.Second))
@@ -46,7 +46,7 @@ func (ws *WebSocketServer) handleConnection(wsConn *websocketConnection) {
 	}
 }
 func (ws *WebSocketServer) pingLoop(wsConn *websocketConnection) {
-	defer recoverPanic("pingLoop", wsConn.ID)
+	defer recoverPanic("pingLoop", wsConn.ID())
 	// Fall back to the default when constructed via struct literal: a zero
 	// pingInterval would panic NewTicker. Read into a local rather than
 	// mutating the shared field from this per-connection goroutine.
@@ -74,7 +74,7 @@ func (ws *WebSocketServer) pingLoop(wsConn *websocketConnection) {
 	}
 }
 func (ws *WebSocketServer) handleSend(wsConn *websocketConnection) {
-	defer recoverPanic("handleSend", wsConn.ID)
+	defer recoverPanic("handleSend", wsConn.ID())
 	for {
 		select {
 		case <-wsConn.Done():

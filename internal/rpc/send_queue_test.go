@@ -12,6 +12,9 @@ import (
 
 	"github.com/gorilla/websocket"
 	"github.com/stretchr/testify/require"
+
+	"github.com/LeJamon/go-xrpl/internal/rpc/subscription"
+	"github.com/LeJamon/go-xrpl/internal/rpc/types"
 )
 
 func TestResolveSendQueueLimit(t *testing.T) {
@@ -43,6 +46,28 @@ func TestResolveSendQueueLimit(t *testing.T) {
 			require.Equal(t, test.want, got)
 		})
 	}
+}
+
+func TestOrdinaryWebSocketReplyDoesNotCountAsSubscriptionDelivery(t *testing.T) {
+	manager := subscription.NewManager()
+	conn := subscription.NewConnection("ordinary-reply", make(chan []byte, 2))
+	registration, ok := manager.Attach(conn)
+	require.True(t, ok)
+	t.Cleanup(func() { manager.Detach(registration) })
+
+	wsConn := &websocketConnection{Connection: conn, registration: registration}
+	(&WebSocketServer{}).deliver(wsConn, []byte(`{"result":{}}`))
+
+	metrics := manager.Metrics()
+	require.Zero(t, metrics.DeliveriesQueued)
+	require.Zero(t, metrics.DeliveriesDropped)
+	require.Zero(t, metrics.DeliveryDisconnects)
+
+	require.Nil(t, manager.HandleSubscribe(registration, types.SubscriptionRequest{
+		Streams: []types.SubscriptionType{types.SubLedger},
+	}, false))
+	require.Equal(t, 1, manager.BroadcastToStream(types.SubLedger, []byte(`{"type":"ledgerClosed"}`)))
+	require.Equal(t, uint64(1), manager.Metrics().DeliveriesQueued)
 }
 
 func TestWebSocketSendQueueLimitRealHandshake(t *testing.T) {
@@ -82,7 +107,7 @@ func TestWebSocketSendQueueLimitRealHandshake(t *testing.T) {
 				}
 				return false
 			}, time.Second, time.Millisecond)
-			require.Equal(t, test.want, cap(connection.SendChannel))
+			require.Equal(t, test.want, cap(connection.Outbound()))
 		})
 	}
 }
@@ -112,4 +137,35 @@ func TestWebSocketSendQueueLimitInvalidConfigFailsBeforeUpgrade(t *testing.T) {
 			ws.connectionsMutex.RUnlock()
 		})
 	}
+}
+
+func TestWebSocketPolicyCloseForSlowConsumer(t *testing.T) {
+	ws := NewWebSocketServer(WebSocketServerOptions{Timeout: time.Second})
+	httpServer := httptest.NewServer(http.HandlerFunc(ws.ServeHTTP))
+	t.Cleanup(func() {
+		httpServer.Close()
+		_ = ws.Close(context.Background())
+	})
+
+	client, _, err := websocket.DefaultDialer.Dial("ws"+strings.TrimPrefix(httpServer.URL, "http"), nil)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = client.Close() })
+
+	var connection *websocketConnection
+	require.Eventually(t, func() bool {
+		ws.connectionsMutex.RLock()
+		defer ws.connectionsMutex.RUnlock()
+		for _, candidate := range ws.connections {
+			connection = candidate
+			return true
+		}
+		return false
+	}, time.Second, time.Millisecond)
+
+	connection.closeWithPolicyViolation(slowConsumerPolicyReason)
+	_, _, err = client.ReadMessage()
+	var closeErr *websocket.CloseError
+	require.ErrorAs(t, err, &closeErr)
+	require.Equal(t, websocket.ClosePolicyViolation, closeErr.Code)
+	require.Equal(t, slowConsumerPolicyReason, closeErr.Text)
 }

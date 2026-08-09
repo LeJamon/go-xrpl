@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/LeJamon/go-xrpl/internal/ledger/state"
+	"github.com/LeJamon/go-xrpl/internal/rpc/subscription"
 	"github.com/LeJamon/go-xrpl/internal/rpc/types"
 	tx "github.com/LeJamon/go-xrpl/internal/tx"
 	"github.com/LeJamon/go-xrpl/internal/tx/payment/pathfinder"
@@ -24,7 +25,7 @@ func newPathFindRefreshTestServer(t *testing.T, count int) (*WebSocketServer, []
 	for i := range count {
 		id := fmt.Sprintf("conn-%02d", i)
 		conn := &websocketConnection{
-			Connection:      types.NewConnection(id, make(chan []byte, 8)),
+			Connection:      subscription.NewConnection(id, make(chan []byte, 8)),
 			pathFindRefresh: manager,
 		}
 		conn.installPathFindSession(&PathFindSession{id: id})
@@ -76,7 +77,7 @@ func TestQueuePathFindSessionsIncludesNewConnection(t *testing.T) {
 
 	computed := make(chan struct{}, 1)
 	conn := &websocketConnection{
-		Connection: types.NewConnection("new-connection", make(chan []byte, 1)),
+		Connection: subscription.NewConnection("new-connection", make(chan []byte, 1)),
 	}
 	conn.installPathFindSession(&PathFindSession{
 		computeFn: func(tx.LedgerView) *pathfinder.PathRequestResult {
@@ -249,7 +250,7 @@ func TestPathFindRefreshCloseSuppressesInFlightResult(t *testing.T) {
 		t.Fatal("in-flight refresh did not finish")
 	}
 	select {
-	case <-connections[0].SendChannel:
+	case <-connections[0].Outbound():
 		t.Fatal("closed session received a stale refresh")
 	default:
 	}
@@ -286,7 +287,7 @@ func TestPathFindRefreshReplacementStillRuns(t *testing.T) {
 		t.Fatal("replacement session did not refresh")
 	}
 	select {
-	case data := <-connections[0].SendChannel:
+	case data := <-connections[0].Outbound():
 		require.Contains(t, string(data), "replacement")
 	case <-time.After(time.Second):
 		t.Fatal("replacement result was not sent")
@@ -307,7 +308,7 @@ func TestPathFindRefreshCloseJoinsWorkers(t *testing.T) {
 	ws.UpdatePathFindSessions(func() (types.LedgerStateView, error) { return testLedgerView(), nil })
 	<-started
 	ws.connectionsMutex.Lock()
-	delete(ws.connections, connections[0].ID)
+	delete(ws.connections, connections[0].ID())
 	ws.connectionsMutex.Unlock()
 	closeDone := make(chan error, 1)
 	go func() { closeDone <- ws.Close(context.Background()) }()
@@ -342,7 +343,7 @@ func TestPathFindRefreshCloseDeadlineWithBlockedView(t *testing.T) {
 	})
 	<-viewStarted
 	ws.connectionsMutex.Lock()
-	delete(ws.connections, connections[0].ID)
+	delete(ws.connections, connections[0].ID())
 	ws.connectionsMutex.Unlock()
 
 	ctx, cancel := context.WithTimeout(context.Background(), 25*time.Millisecond)
@@ -378,7 +379,7 @@ func TestPathFindRefreshCloseDeadlineWithBlockedExecute(t *testing.T) {
 	ws.UpdatePathFindSessions(func() (types.LedgerStateView, error) { return testLedgerView(), nil })
 	<-executeStarted
 	ws.connectionsMutex.Lock()
-	delete(ws.connections, connections[0].ID)
+	delete(ws.connections, connections[0].ID())
 	ws.connectionsMutex.Unlock()
 
 	ctx, cancel := context.WithTimeout(context.Background(), 25*time.Millisecond)
@@ -432,7 +433,7 @@ func TestPathFindRefreshDoesNotCommitSupersededResult(t *testing.T) {
 	require.Empty(t, status.Alternatives, "a superseded computation must not commit")
 	close(releaseLatest)
 	select {
-	case <-connections[0].SendChannel:
+	case <-connections[0].Outbound():
 	case <-time.After(time.Second):
 		t.Fatal("latest refresh was not published")
 	}
@@ -476,7 +477,7 @@ func TestPathFindRefreshSharesPathfindAdmissionPerConnection(t *testing.T) {
 		t.Fatal("latest queued connection job did not run")
 	}
 	select {
-	case <-connections[0].SendChannel:
+	case <-connections[0].Outbound():
 	case <-time.After(time.Second):
 		t.Fatal("latest queued connection job was not published")
 	}

@@ -60,7 +60,7 @@ func extractBookPairsFromMetadataMap(metadata map[string]any) []types.OrderBookS
 			continue
 		}
 		domain, _ := fields["DomainID"].(string)
-		book := types.OrderBookSpec{TakerGets: gets, TakerPays: pays, Domain: domain}
+		book := types.OrderBookSpec{TakerPays: gets, TakerGets: pays, Domain: domain}
 		key := gets.Currency + "\x00" + gets.Issuer + "\x00" + strings.ToUpper(gets.MPTIssuanceID) + "\x00" +
 			pays.Currency + "\x00" + pays.Issuer + "\x00" + strings.ToUpper(pays.MPTIssuanceID) + "\x00" + strings.ToUpper(domain)
 		if _, ok := seen[key]; ok {

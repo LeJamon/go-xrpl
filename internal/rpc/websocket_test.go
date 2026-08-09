@@ -14,6 +14,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/LeJamon/go-xrpl/internal/rpc/subscription"
 	"github.com/LeJamon/go-xrpl/internal/rpc/types"
 	"github.com/gorilla/websocket"
 )
@@ -211,7 +212,9 @@ func TestWebSocketServer_Close_ContextInterruptsBlockedControlWrite(t *testing.T
 	}
 
 	close(serverConn.armed)
-	wsConn.SendChannel <- []byte("block the server writer")
+	if !wsConn.TrySend([]byte("block the server writer")) {
+		t.Fatal("failed to queue blocking frame")
+	}
 	select {
 	case <-serverConn.writeStarted:
 	case <-time.After(time.Second):
@@ -465,7 +468,7 @@ func TestWebSocketServer_ConcurrentWrites_NoRace(t *testing.T) {
 	ws := NewWebSocketServer(WebSocketServerOptions{Timeout: 30 * time.Second})
 	ws.pingInterval = time.Millisecond // hammer the ping path during the test
 
-	httpSrv := httptest.NewServer(http.HandlerFunc(ws.ServeHTTP))
+	httpSrv := httptest.NewServer(PortMiddleware(&PortContext{SendQueue: 256}, http.HandlerFunc(ws.ServeHTTP)))
 	defer httpSrv.Close()
 	wsURL := "ws" + strings.TrimPrefix(httpSrv.URL, "http")
 
@@ -505,11 +508,13 @@ func TestWebSocketServer_ConcurrentWrites_NoRace(t *testing.T) {
 	}
 
 	// Feed handleSend a steady stream of data frames while pingLoop fires.
-	for range 500 {
-		select {
-		case wsConn.SendChannel <- []byte(`{"type":"race-probe"}`):
-		case <-time.After(2 * time.Second):
-			t.Fatal("send channel stalled")
+	for range 100 {
+		deadline := time.Now().Add(time.Second)
+		for !wsConn.TrySend([]byte(`{"type":"race-probe"}`)) {
+			if time.Now().After(deadline) {
+				t.Fatal("send channel stalled")
+			}
+			time.Sleep(time.Millisecond)
 		}
 	}
 
@@ -522,6 +527,37 @@ func TestWebSocketServer_ConcurrentWrites_NoRace(t *testing.T) {
 
 	client.Close()
 	<-readDone
+}
+
+func TestWebSocketRegistrationRejectsDuplicateAndStaleOwner(t *testing.T) {
+	ws := NewWebSocketServer(WebSocketServerOptions{})
+	first := &websocketConnection{Connection: subscription.NewConnection("same-id", make(chan []byte, 1))}
+	second := &websocketConnection{Connection: subscription.NewConnection("same-id", make(chan []byte, 1))}
+	if !ws.attachConnection(first) {
+		t.Fatal("first owner was rejected")
+	}
+	if ws.attachConnection(second) {
+		t.Fatal("duplicate owner was accepted")
+	}
+
+	ws.detachConnection(first)
+	if !ws.attachConnection(second) {
+		t.Fatal("replacement owner was rejected")
+	}
+	ws.detachConnection(first)
+	ws.connectionsMutex.RLock()
+	current := ws.connections[second.ID()]
+	ws.connectionsMutex.RUnlock()
+	if current != second {
+		t.Fatal("stale owner removed its replacement")
+	}
+	if second.registration == nil {
+		t.Fatal("replacement registration is nil")
+	}
+	if second.registration.Snapshot().ItemCount() != 0 {
+		t.Fatal("unexpected replacement subscriptions")
+	}
+	ws.detachConnection(second)
 }
 
 // Sanity: ensure we can call NewWebSocketServer concurrently without races.
@@ -717,8 +753,9 @@ func TestWebSocketRedactsIDAndPreservesItInHandlerParams(t *testing.T) {
 		t.Fatalf("response leaked id credential: %s", body)
 	}
 
+	receivedParams := <-received
 	var params map[string]any
-	if err := json.Unmarshal(<-received, &params); err != nil {
+	if err := json.Unmarshal(receivedParams, &params); err != nil {
 		t.Fatalf("decode handler params: %v", err)
 	}
 	id, ok := params["id"].(map[string]any)
@@ -731,6 +768,36 @@ func TestWebSocketRedactsIDAndPreservesItInHandlerParams(t *testing.T) {
 	for _, stripped := range []string{"command", "method", "api_version"} {
 		if _, exists := params[stripped]; exists {
 			t.Fatalf("handler params retained %q: %v", stripped, params)
+		}
+	}
+}
+
+func TestWebSocketCommandParamsPreservesRawReal(t *testing.T) {
+	message := []byte(`{"command":"subscribe","api_version":1,"id":{"SeCrEt":"private-id"},"real":0.0}`)
+	params, err := websocketCommandParams(message, map[string]any{
+		"id": map[string]any{"SeCrEt": maskedValue},
+	})
+	if err != nil {
+		t.Fatalf("extract handler params: %v", err)
+	}
+
+	var rawParams map[string]json.RawMessage
+	if err := json.Unmarshal(params, &rawParams); err != nil {
+		t.Fatalf("decode handler params: %v", err)
+	}
+	if got := string(rawParams["real"]); got != "0.0" {
+		t.Fatalf("handler real = %s, want preserved JSON real", got)
+	}
+	var id map[string]any
+	if err := json.Unmarshal(rawParams["id"], &id); err != nil {
+		t.Fatalf("decode handler id: %v", err)
+	}
+	if len(id) != 1 || id["SeCrEt"] != maskedValue {
+		t.Fatalf("handler id = %v, want redacted id", id)
+	}
+	for _, stripped := range []string{"command", "api_version"} {
+		if _, exists := rawParams[stripped]; exists {
+			t.Fatalf("handler params retained %q: %s", stripped, params)
 		}
 	}
 }
@@ -770,7 +837,7 @@ func TestWebSocketSpecialCommandDecodeErrorsAreFixed(t *testing.T) {
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			ws := NewWebSocketServer(WebSocketServerOptions{Timeout: time.Second})
-			wsConn := &websocketConnection{Connection: types.NewConnectionWithContext(context.Background(), "decode-test", make(chan []byte, 1))}
+			wsConn := &websocketConnection{Connection: subscription.NewConnectionWithContext(context.Background(), "decode-test", make(chan []byte, 1))}
 			cmd := types.WebSocketCommand{
 				Command: test.command,
 				ID:      int32(7),
@@ -782,7 +849,7 @@ func TestWebSocketSpecialCommandDecodeErrorsAreFixed(t *testing.T) {
 				ApiVersion: types.DefaultApiVersion,
 				Services:   &types.ServiceContainer{Capabilities: types.RPCCapabilities{PathSearchMax: 3}},
 			}, cmd)
-			body := <-wsConn.SendChannel
+			body := <-wsConn.Outbound()
 			if got := string(body); got != test.want {
 				t.Fatalf("response = %s, want %s", got, test.want)
 			}

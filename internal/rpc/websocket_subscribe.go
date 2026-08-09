@@ -1,10 +1,13 @@
 package rpc
 
 import (
+	"bytes"
 	"encoding/json"
 	"slices"
 
 	"github.com/LeJamon/go-xrpl/internal/peermanagement/resource"
+	"github.com/LeJamon/go-xrpl/internal/rpc/handlers"
+	"github.com/LeJamon/go-xrpl/internal/rpc/subscription"
 	"github.com/LeJamon/go-xrpl/internal/rpc/types"
 )
 
@@ -32,25 +35,24 @@ func (ws *WebSocketServer) executeSubscribe(wsConn *websocketConnection, ctx *ty
 		setSubscriptionLoadCost(ctx, request)
 		return result, nil
 	}
+	serverState := sampleServerSubscriptionState(ctx, request)
 
-	// The embedded canonical connection is the same object the subscription
-	// manager already tracks and carries the bounded queue and disconnect
-	// callback.
 	prefix, err := subscriptionRequestExcluding(cmd.Params, "books", "account_history_tx_stream")
 	if err != nil {
 		return nil, types.RpcErrorInvalidParams("Invalid subscription parameters.")
 	}
 	prefix.ApiVersion = ctx.ApiVersion
-	if rpcErr := ws.subscriptionManager.HandleSubscribe(wsConn.Connection, prefix, ctx.IsAdmin); rpcErr != nil {
+	scope := ws.subscriptionManager.NewRequestScope()
+	if rpcErr := ws.subscriptionManager.HandleSubscribeScoped(wsConn.registration, scope, prefix, ctx.IsAdmin); rpcErr != nil {
 		return nil, rpcErr
 	}
 	historyWarning, rpcErr := applyAccountHistorySubscribe(ctx, wsConn.Connection, request)
 	if rpcErr != nil {
 		return nil, rpcErr
 	}
-	if rpcErr := applySubscriptionBooks(request.WireArrays().Books, func(bookRequest types.SubscriptionRequest) *types.RpcError {
+	if rpcErr := applyRequestBooks(request, func(bookRequest types.SubscriptionRequest) *types.RpcError {
 		bookRequest.ApiVersion = ctx.ApiVersion
-		if rpcErr := ws.subscriptionManager.HandleSubscribe(wsConn.Connection, bookRequest, ctx.IsAdmin); rpcErr != nil {
+		if rpcErr := ws.subscriptionManager.HandleSubscribeScoped(wsConn.registration, scope, bookRequest, ctx.IsAdmin); rpcErr != nil {
 			return rpcErr
 		}
 		setSubscriptionLoadCost(ctx, bookRequest)
@@ -59,7 +61,7 @@ func (ws *WebSocketServer) executeSubscribe(wsConn *websocketConnection, ctx *ty
 		return nil, rpcErr
 	}
 
-	result := ws.buildSubscribeAck(ctx, request)
+	result := ws.buildSubscribeAckSampled(ctx, request, serverState)
 	if historyWarning != "" {
 		result["warning"] = historyWarning
 	}
@@ -95,15 +97,20 @@ func applySubscriptionBooks(raw json.RawMessage, apply func(types.SubscriptionRe
 		}
 		return apply(request)
 	}
-	var books []json.RawMessage
-	if err := json.Unmarshal(raw, &books); err != nil {
+	decoder := json.NewDecoder(bytes.NewReader(raw))
+	token, err := decoder.Token()
+	if err != nil || token != json.Delim('[') {
 		request, decodeErr := subscriptionRequestForBooks(raw)
 		if decodeErr != nil {
 			return types.RpcErrorInvalidParams("Invalid subscription parameters.")
 		}
 		return apply(request)
 	}
-	for _, book := range books {
+	for decoder.More() {
+		var book json.RawMessage
+		if err := decoder.Decode(&book); err != nil {
+			return types.RpcErrorInvalidParams("Invalid subscription parameters.")
+		}
 		request, err := subscriptionRequestForBooks(json.RawMessage("[" + string(book) + "]"))
 		if err != nil {
 			return types.RpcErrorInvalidParams("Invalid subscription parameters.")
@@ -112,8 +119,25 @@ func applySubscriptionBooks(raw json.RawMessage, apply func(types.SubscriptionRe
 			return rpcErr
 		}
 	}
+	if _, err := decoder.Token(); err != nil {
+		return types.RpcErrorInvalidParams("Invalid subscription parameters.")
+	}
 	return nil
 }
+
+func applyRequestBooks(request types.SubscriptionRequest, apply func(types.SubscriptionRequest) *types.RpcError) *types.RpcError {
+	wire := request.WireArrays()
+	if wire.Present {
+		return applySubscriptionBooks(wire.Books, apply)
+	}
+	for _, book := range request.Books {
+		if rpcErr := apply(types.SubscriptionRequest{Books: []types.BookRequest{book}}); rpcErr != nil {
+			return rpcErr
+		}
+	}
+	return nil
+}
+
 func subscriptionRequestForBooks(books json.RawMessage) (types.SubscriptionRequest, error) {
 	data, err := json.Marshal(map[string]json.RawMessage{"books": books})
 	if err != nil {
@@ -128,14 +152,15 @@ func (ws *WebSocketServer) finishUnsubscribe(wsConn *websocketConnection, reques
 	if err != nil {
 		return types.RpcErrorInvalidParams("Invalid unsubscription parameters.")
 	}
-	if rpcErr := ws.subscriptionManager.HandleUnsubscribe(wsConn.Connection, prefix, ctx.IsAdmin); rpcErr != nil {
+	scope := ws.subscriptionManager.NewRequestScope()
+	if rpcErr := ws.subscriptionManager.HandleUnsubscribeScoped(wsConn.registration, scope, prefix); rpcErr != nil {
 		return rpcErr
 	}
 	if rpcErr := applyAccountHistoryUnsubscribe(ctx, wsConn.Connection, request); rpcErr != nil {
 		return rpcErr
 	}
-	return applySubscriptionBooks(request.WireArrays().Books, func(bookRequest types.SubscriptionRequest) *types.RpcError {
-		return ws.subscriptionManager.HandleUnsubscribe(wsConn.Connection, bookRequest, ctx.IsAdmin)
+	return applyRequestBooks(request, func(bookRequest types.SubscriptionRequest) *types.RpcError {
+		return ws.subscriptionManager.HandleUnsubscribeScoped(wsConn.registration, scope, bookRequest)
 	})
 }
 func setSubscriptionLoadCost(ctx *types.RpcContext, request types.SubscriptionRequest) {
@@ -186,8 +211,22 @@ func (ws *WebSocketServer) executeUnsubscribe(wsConn *websocketConnection, ctx *
 // It reuses the ledger service's GetBookOffers — the same code path the
 // book_offers RPC uses — so the snapshot a subscriber gets in the ack is
 // identical to what they would have read with a separate book_offers call.
+func sampleServerSubscriptionState(ctx *types.RpcContext, request types.SubscriptionRequest) map[string]any {
+	if !slices.Contains(request.Streams, types.SubServer) {
+		return nil
+	}
+	return handlers.ServerSubscriptionState(ctx.Services, ctx.IsAdmin)
+}
+
 func (ws *WebSocketServer) buildSubscribeAck(ctx *types.RpcContext, request types.SubscriptionRequest) map[string]any {
+	return ws.buildSubscribeAckSampled(ctx, request, sampleServerSubscriptionState(ctx, request))
+}
+
+func (ws *WebSocketServer) buildSubscribeAckSampled(ctx *types.RpcContext, request types.SubscriptionRequest, serverState map[string]any) map[string]any {
 	result := make(map[string]any)
+	for key, value := range serverState {
+		result[key] = value
+	}
 
 	if slices.Contains(request.Streams, types.SubLedger) {
 		if ws.ledgerInfoProvider != nil {
@@ -218,18 +257,13 @@ func (ws *WebSocketServer) buildSubscribeAck(ctx *types.RpcContext, request type
 		if (!book.Snapshot && !book.StateNow) || ctx.Services == nil || ctx.Services.Ledger == nil {
 			continue
 		}
-		var takerGets, takerPays types.CurrencySpec
-		if err := json.Unmarshal(book.TakerGets, &takerGets); err != nil {
+		pays, gets, domain, rpcErr := subscription.SnapshotBook(book)
+		if rpcErr != nil {
 			continue
 		}
-		if err := json.Unmarshal(book.TakerPays, &takerPays); err != nil {
-			continue
-		}
-		gets := types.Amount{Currency: takerGets.Currency, Issuer: takerGets.Issuer}
-		pays := types.Amount{Currency: takerPays.Currency, Issuer: takerPays.Issuer}
 		if book.Both || book.BothSides {
-			bids, _ := ws.snapshotBook(ctx, gets, pays, book.Taker, book.Domain)
-			asks, _ := ws.snapshotBook(ctx, pays, gets, book.Taker, book.Domain)
+			bids, _ := ws.snapshotBook(ctx, gets, pays, book.Taker, domain)
+			asks, _ := ws.snapshotBook(ctx, pays, gets, book.Taker, domain)
 			if bids != nil {
 				result["bids"] = appendOffers(result["bids"], bids)
 			}
@@ -238,7 +272,7 @@ func (ws *WebSocketServer) buildSubscribeAck(ctx *types.RpcContext, request type
 			}
 			continue
 		}
-		offers, _ := ws.snapshotBook(ctx, gets, pays, book.Taker, book.Domain)
+		offers, _ := ws.snapshotBook(ctx, gets, pays, book.Taker, domain)
 		if offers != nil {
 			result["offers"] = appendOffers(result["offers"], offers)
 		}

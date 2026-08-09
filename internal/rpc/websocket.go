@@ -70,9 +70,7 @@ type WebSocketServer struct {
 }
 
 // WebSocketServerOptions controls construction of a WebSocket RPC server.
-// The service container is read by handlers and is never changed by the
-// constructor. A nil subscription manager selects a new manager for the
-// standalone server.
+// A nil subscription manager selects a new manager for the standalone server.
 type WebSocketServerOptions struct {
 	Timeout             time.Duration
 	Services            *types.ServiceContainer
@@ -87,7 +85,8 @@ type WebSocketServerOptions struct {
 // client. Subscription and lifetime state lives in the embedded canonical
 // connection shared with the subscription manager.
 type websocketConnection struct {
-	*types.Connection
+	*subscription.Connection
+	registration       *subscription.Registration
 	conn               *websocket.Conn
 	mutex              sync.RWMutex
 	pathFindSession    *PathFindSession // At most one active path_find session per connection
@@ -142,6 +141,9 @@ func NewWebSocketServer(options WebSocketServerOptions) *WebSocketServer {
 		forceDone:           make(chan struct{}),
 	}
 	ws.pathFindRefresh = newPathFindRefreshManager(ws)
+	if ws.services != nil {
+		ws.services.SubscriptionMetrics = manager.Metrics
+	}
 	// The URL (RPCSub) registry lives on the WebSocket server because URL
 	// subscribers share its subscription manager's broadcast fan-out. Node
 	// composition installs the returned service on the shared container.
@@ -210,7 +212,7 @@ func (ws *WebSocketServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	connection := types.NewConnection(generateConnectionID(), make(chan []byte, sendQueueLimit))
+	connection := subscription.NewConnection(generateConnectionID(), make(chan []byte, sendQueueLimit))
 	wsConn := &websocketConnection{
 		Connection:       connection,
 		conn:             conn,
